@@ -514,6 +514,7 @@ class ExternSprintDataset(SprintDatasetBase):
   def _pipe_open(self):
     readend, writeend = os.pipe()
     if hasattr(os, "set_inheritable"):
+      # Python 3 by default will close all fds in subprocesses. This will avoid that.
       os.set_inheritable(readend, True)
       os.set_inheritable(writeend, True)
     readend = os.fdopen(readend, "rb", 0)

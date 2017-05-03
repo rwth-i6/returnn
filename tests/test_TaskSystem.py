@@ -101,3 +101,22 @@ def test_AsyncTask():
   assert_equal(proc.conn.recv(), "hello c2p")
   proc.conn.send("hello p2c")
   proc.join()
+
+
+def test_AsyncTask_chdir():
+  os.chdir("/")
+  def func(asyncTask):
+    """
+    :type asyncTask: AsyncTask
+    """
+    print("Hello Async")
+    asyncTask.conn.send("hello c2p")
+    assert_equal(asyncTask.conn.recv(), "hello p2c")
+  proc = AsyncTask(
+    func=func,
+    name="AsyncTask proc",
+    mustExec=True,
+    env_update={})
+  assert_equal(proc.conn.recv(), "hello c2p")
+  proc.conn.send("hello p2c")
+  proc.join()

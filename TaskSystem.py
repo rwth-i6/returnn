@@ -9,6 +9,7 @@ from threading import Lock, currentThread
 import sys
 PY3 = sys.version_info[0] >= 3
 import os
+import io
 if PY3:
   from io import BytesIO
 else:
@@ -23,6 +24,12 @@ from importlib import import_module
 import errno
 import time
 import numpy
+try:
+  from _multiprocessing import Connection
+except ImportError:
+  from multiprocessing.connection import Connection
+
+_abs_mod_file = os.path.abspath(__file__)
 
 
 def execInMainProc(func):
@@ -758,6 +765,12 @@ class Pickler(_BasePickler):
     self.write(pickle.REDUCE)
   dispatch[numpy.ndarray] = save_ndarray
 
+  def save_iobuffer_dummy(self, obj):
+    # Not supported but we want to not fail and just store None.
+    self.save_none(None)
+  dispatch[io.BufferedReader] = save_iobuffer_dummy
+  dispatch[io.BufferedWriter] = save_iobuffer_dummy
+
   # Overwrite to avoid the broken pickle.whichmodule() which might return "__main__".
   def save_global(self, obj, name=None):
     assert obj
@@ -863,6 +876,10 @@ class ExecingProcess:
     assert self.exit_status is None
     def pipeOpen():
       readend, writeend = os.pipe()
+      if hasattr(os, "set_inheritable"):
+        # Python 3 by default will close all fds in subprocesses. This will avoid that.
+        os.set_inheritable(readend, True)
+        os.set_inheritable(writeend, True)
       readend = os.fdopen(readend, "rb")
       writeend = os.fdopen(writeend, "wb")
       return readend, writeend
@@ -879,12 +896,12 @@ class ExecingProcess:
     else:
       flags['base_compiledir'] = '/tmp/theano/' + self.name.replace(' ','_')
     os.environ["THEANO_FLAGS"] = ",".join(["=".join(x) for x in flags.items()])
-    if pid == 0: # child
+    if pid == 0:  # child
       try:
         sys.stdin.close()  # Force no tty stdin.
         self.pipe_c2p[0].close()
         self.pipe_p2c[1].close()
-        py_mod_file = os.path.splitext(__file__)[0] + ".py"
+        py_mod_file = os.path.splitext(_abs_mod_file)[0] + ".py"
         assert os.path.exists(py_mod_file)
         args = [sys.executable,
                 py_mod_file,
@@ -900,7 +917,7 @@ class ExecingProcess:
         sys.exit(1)
       finally:
         sys.exit()
-    else: # parent
+    else:  # parent
       self.pipe_c2p[1].close()
       self.pipe_p2c[0].close()
       self.pid = pid
@@ -992,22 +1009,24 @@ class ProcConnectionDied(Exception):
 
 class ExecingProcess_ConnectionWrapper(object):
   """
-  Wrapper around _multiprocessing.Connection.
+  Wrapper around multiprocessing.connection.Connection.
   This is needed to use our own Pickler.
   """
 
   def __init__(self, fd=None, conn=None):
     self.fd = fd
     if self.fd:
-      try:
-        from _multiprocessing import Connection
-      except ImportError:
-        from multiprocessing.connection import _ConnectionBase as Connection
       self.conn = Connection(fd)
     elif conn:
       self.conn = conn
     else:
       self.conn = None
+
+  def __repr__(self):
+    if self.conn is not None:
+      return "<ExecingProcess_ConnectionWrapper fileno=%r>" % self.conn.fileno()
+    else:
+      return "<ExecingProcess_ConnectionWrapper None>"
 
   def __getstate__(self):
     if self.fd is not None:
@@ -1016,17 +1035,24 @@ class ExecingProcess_ConnectionWrapper(object):
       return {"conn": self.conn}  # Try to pickle the connection.
     else:
       return {}
+
   def __setstate__(self, state):
     self.__init__(**state)
 
-  def __getattr__(self, attr): return getattr(self.conn, attr)
+  def __getattr__(self, attr):
+    return getattr(self.conn, attr)
 
   def _check_closed(self):
-    if self.conn.closed: raise ProcConnectionDied("connection closed")
+    if self.conn.closed:
+      raise ProcConnectionDied("connection closed")
+
   def _check_writable(self):
-    if not self.conn.writable: raise ProcConnectionDied("connection not writeable")
+    if not self.conn.writable:
+      raise ProcConnectionDied("connection not writeable")
+
   def _check_readable(self):
-    if not self.conn.readable: raise ProcConnectionDied("connection not readable")
+    if not self.conn.readable:
+      raise ProcConnectionDied("connection not readable")
 
   def poll(self, *args, **kwargs):
     while True:
@@ -1083,10 +1109,17 @@ def ExecingProcess_Pipe():
   """
   import socket
   s1, s2 = socket.socketpair()
-  c1 = ExecingProcess_ConnectionWrapper(os.dup(s1.fileno()))
-  c2 = ExecingProcess_ConnectionWrapper(os.dup(s2.fileno()))
+  # We duplicate the fds because the socket objects will close the fds after they go out of scope.
+  fd1 = os.dup(s1.fileno())
+  fd2 = os.dup(s2.fileno())
   s1.close()
   s2.close()
+  if hasattr(os, "set_inheritable"):
+    # Python 3 by default will close all fds in subprocesses. This will avoid that.
+    os.set_inheritable(fd1, True)
+    os.set_inheritable(fd2, True)
+  c1 = ExecingProcess_ConnectionWrapper(fd1)
+  c2 = ExecingProcess_ConnectionWrapper(fd2)
   return c1, c2
 
 
@@ -1204,8 +1237,15 @@ class AsyncTask:
   @staticmethod
   def _asyncCall(self):
     assert self.isChild
-    self.parent_conn.close()
-    self.conn = self.child_conn # we are the child
+    assert isinstance(self.parent_conn, (ExecingProcess_ConnectionWrapper, Connection))
+    parent_conn_handle = self.parent_conn.fileno()
+    try:
+      self.parent_conn.close()
+    except Exception:
+      # Print this here because in the backtrace, the handle will likely be reset already.
+      print("parent connection close failed; file handle was: %r" % parent_conn_handle)
+      raise
+    self.conn = self.child_conn  # we are the child
     if not self.mustExec and sys.platform != "win32":
       global isFork
       isFork = True
