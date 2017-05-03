@@ -85,6 +85,18 @@ def test_pickle_inst_anon_class():
   assert inst.f(42) == 42
 
 
+class DemoClass:
+  def method(self):
+    return 42
+
+
+def test_pickle():
+  obj = DemoClass()
+  s = pickle_dumps(obj.method)
+  inst = pickle_loads(s)
+  assert_equal(inst(), 42)
+
+
 def test_AsyncTask():
   def func(asyncTask):
     """

@@ -687,7 +687,10 @@ class Pickler(_BasePickler):
       pass
     assert type(obj) is types.MethodType
     self.save(types.MethodType)
-    self.save((obj.im_func, obj.im_self, obj.im_class))
+    if PY3:
+      self.save((obj.__func__, obj.__self__))
+    else:
+      self.save((obj.im_func, obj.im_self, obj.im_class))
     self.write(pickle.REDUCE)
     self.memoize(obj)
   dispatch[types.MethodType] = save_method
