@@ -1,4 +1,6 @@
 
+from __future__ import print_function
+
 import theano
 import numpy
 import os
@@ -168,31 +170,31 @@ class Updater:
       self.momentum = 0.0
       self.nesterov_momentum = 0.0
       self.momentum2 = 0.0
-      print >> log.v4, "using adadelta with decay", self.adadelta_decay, ", offset", self.adadelta_offset
+      print("using adadelta with decay", self.adadelta_decay, ", offset", self.adadelta_offset, file=log.v4)
     if self.adagrad:
-      print >> log.v4, "using adagrad"
+      print("using adagrad", file=log.v4)
     if self.momentum:
-      print >> log.v4, "using momentum %f" % self.momentum
+      print("using momentum %f" % self.momentum, file=log.v4)
     if self.nesterov_momentum:
-      print >> log.v4, "using simplified nesterov momentum %f" % self.nesterov_momentum
+      print("using simplified nesterov momentum %f" % self.nesterov_momentum, file=log.v4)
     if self.momentum2:
-      print >> log.v4, "using reverted momentum %f" % self.momentum2
+      print("using reverted momentum %f" % self.momentum2, file=log.v4)
     if self.gradient_clip > 0:
-      print >> log.v4, "using gradient clipping %f" % self.gradient_clip
+      print("using gradient clipping %f" % self.gradient_clip, file=log.v4)
     if self.update_clip > 0:
-      print >> log.v4, "using update clipping %f" % self.update_clip
+      print("using update clipping %f" % self.update_clip, file=log.v4)
     if self.rmsprop:
-      print >> log.v4, "using RMSProp with rho = %f" % self.rmsprop
+      print("using RMSProp with rho = %f" % self.rmsprop, file=log.v4)
     if self.smorms3:
-      print >> log.v4, "using SMORMS3"
+      print("using SMORMS3", file=log.v4)
     if self.adamax:
-      print >> log.v4, "using AdaMax with b1 = 0.9 and b2 = 0.999"
+      print("using AdaMax with b1 = 0.9 and b2 = 0.999", file=log.v4)
     if self.adam:
-      print >> log.v4, "using adam"
+      print("using adam", file=log.v4)
     if self.nadam:
-      print >> log.v4, "using adam with nag and momentum schedule"
+      print("using adam with nag and momentum schedule", file=log.v4)
     if self.eve:
-      print >> log.v4, "using eve optimizer (Adam with feedback)"
+      print("using eve optimizer (Adam with feedback)", file=log.v4)
 
   def initVars(self, network, net_param_deltas):
     """
@@ -337,12 +339,12 @@ class Updater:
           if W not in self.network.train_params_vars: all_in_train = False
           if s.attrs['sparse']: sparse_input = True
         if not all_in_train:
-          print >>log.v4, "Mean-normalized SGD: layer", layer_name, "not trained"
+          print("Mean-normalized SGD: layer", layer_name, "not trained", file=log.v4)
           continue
         if sparse_input:
-          print >>log.v4, "Mean-normalized SGD: layer", layer_name, "has sparse input, not supported yet"
+          print("Mean-normalized SGD: layer", layer_name, "has sparse input, not supported yet", file=log.v4)
           continue
-        print >>log.v4, "Mean-normalized SGD: used for W_in of layer", layer_name
+        print("Mean-normalized SGD: used for W_in of layer", layer_name, file=log.v4)
         avg_f = numpy.float32(self.mean_normalized_sgd_average_interpolation)
         delta_b = grads[layer.b]
         for s, W_in in zip(layer.sources, layer.W_in):
@@ -1059,7 +1061,7 @@ class Updater:
         ps += [p]
         upd = upd * T.tri(p.shape[0], p.shape[1], dtype="float32")
         updates[i] = (p, upd)
-      print >>log.v4, "enforce_triangular_matrix_zero for:", ps
+      print("enforce_triangular_matrix_zero for:", ps, file=log.v4)
 
     #for u in updates:
     #  print ">>>>", u
