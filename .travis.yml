@@ -54,6 +54,7 @@ env:
   - TEST=SprintInterface
   - TEST=TaskSystem
   - TEST=TaskSystem_SharedMem
+  - TEST=TFEngine
   - TEST=TFNativeOp
   - TEST=TFNetworkLayer
   - TEST=TFUtil
