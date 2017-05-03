@@ -49,7 +49,7 @@ def theano_op_multi_batch_beam_grad(array, start_idxs, batch_lens, beam_width, w
   output_grad = T.as_tensor(output_grad)
   op = MultiBatchBeamOp(wrap_mode, idx_dim, batch_dim)
   D_array, D_start_idxs, D_batch_lens, D_beam_width, D_pad_left, D_pad_right = op.grad((array, start_idxs, batch_lens, beam_width, pad_left, pad_right), (output_grad, ))
-  return map(_eval_or_None, [D_array, D_pad_left, D_pad_right])
+  return list(map(_eval_or_None, [D_array, D_pad_left, D_pad_right]))
 
 def theano_cpu_multi_batch_beam_grad(array, start_idxs, batch_lens, beam_width, wrap_mode, pad_left=0, pad_right=0, idx_dim=0, batch_dim=1, output_grad=None):
   array = T.as_tensor(array)
@@ -61,7 +61,7 @@ def theano_cpu_multi_batch_beam_grad(array, start_idxs, batch_lens, beam_width, 
   output_grad = T.as_tensor(output_grad)
   res = MultiBatchBeam._theano_cpu_multi_batch_beam(array, start_idxs, batch_lens, beam_width, wrap_mode, pad_left, pad_right, idx_dim, batch_dim)
   D_array, D_pad_left, D_pad_right = T.grad(None, wrt=[array, pad_left, pad_right], known_grads={res: output_grad}, disconnected_inputs="ignore", return_disconnected="Disconnected")
-  return map(_eval_or_None, [D_array, D_pad_left, D_pad_right])
+  return list(map(_eval_or_None, [D_array, D_pad_left, D_pad_right]))
 
 
 def compare_implementations(*args, **kwargs):
@@ -164,7 +164,7 @@ def test_numpy_perform_1():
   n_time = 11
   n_batch = 5
   n_dim = 3
-  array = numpy.array([42,43,44] + range(n_time * n_batch * n_dim)[:-3]).reshape(n_time, n_batch, n_dim) + 0.1
+  array = numpy.array([42,43,44] + list(range(n_time * n_batch * n_dim))[:-3]).reshape(n_time, n_batch, n_dim) + 0.1
   print("array shape:", array.shape)
   start_idxs = numpy.array([1, -2, 10, 0, 1])
   batch_lens = numpy.array([11, 2, 11, 2, 11])
@@ -173,7 +173,7 @@ def test_numpy_perform_1():
 
 
 def test_numpy_perform_2_wrap():
-  array = numpy.array([range(10)]).T
+  array = numpy.array([list(range(10))]).T
   start_idxs = numpy.array([-2])
   batch_lens = numpy.array([array.shape[0]])
   beam_width = 4
@@ -183,7 +183,7 @@ def test_numpy_perform_2_wrap():
 
 
 def test_grad_simple():
-  array = numpy.array([range(10)], dtype="float32").T
+  array = numpy.array([list(range(10))], dtype="float32").T
   print("array shape:", array.shape)
   n_batch = array.shape[1]
   assert n_batch == 1
@@ -203,7 +203,7 @@ def test_random_wrap():
   beam_width = 20
   numpy.random.seed(123)
   array = numpy.random.random(n_time * n_batch * n_dim).reshape(n_time, n_batch, n_dim)
-  batch_lens = numpy.array([numpy.random.randint(n_time / 5, n_time) for i in range(n_batch)])
+  batch_lens = numpy.array([numpy.random.randint(n_time // 5, n_time) for i in range(n_batch)])
   start_idxs = numpy.array([numpy.random.randint(-n_time, n_time) for i in range(n_batch)])
   beam = compare_implementations(array, start_idxs, batch_lens, beam_width, "wrap_around")
   D_beam = numpy.random.random(beam.shape)
@@ -219,7 +219,7 @@ def test_random_pad():
   pad_right = -17
   numpy.random.seed(123)
   array = numpy.random.random(n_time * n_batch * n_dim).reshape(n_time, n_batch, n_dim)
-  batch_lens = numpy.array([numpy.random.randint(n_time / 5, n_time) for i in range(n_batch)])
+  batch_lens = numpy.array([numpy.random.randint(n_time // 5, n_time) for i in range(n_batch)])
   start_idxs = numpy.array([numpy.random.randint(-n_time, n_time) for i in range(n_batch)])
   beam = compare_implementations(array, start_idxs, batch_lens, beam_width, wrap_mode, pad_left, pad_right)
   D_beam = numpy.random.random(beam.shape)
@@ -238,7 +238,7 @@ def test_inplace_grad_add_simple_on_zero():
   beam_width = 3
   wrap_mode = "pad"
   numpy.random.seed(123)
-  batch_lens = numpy.array([numpy.random.randint(n_time / 5, n_time) for i in range(n_batch)])
+  batch_lens = numpy.array([numpy.random.randint(n_time // 5, n_time) for i in range(n_batch)])
   start_idxs = numpy.array([numpy.random.randint(-n_time, n_time) for i in range(n_batch)])
   D_beam = numpy.random.random((beam_width, n_batch, n_dim)).astype("float32")
   batch_lens = T.as_tensor_variable(batch_lens, name="batch_lens")
@@ -340,7 +340,7 @@ def test_inplace_grad_add():
   wrap_mode = "pad"
   numpy.random.seed(123)
   array = numpy.random.random(n_time * n_batch * n_dim).astype("float32").reshape(n_time, n_batch, n_dim)
-  batch_lens = numpy.array([numpy.random.randint(n_time / 5, n_time) for i in range(n_batch)])
+  batch_lens = numpy.array([numpy.random.randint(n_time // 5, n_time) for i in range(n_batch)])
   start_idxss = numpy.array([numpy.random.randint(-n_time, n_time) for i in range(n_batch * n_time)]).reshape(n_time, n_batch)
   D_beams = numpy.random.random((n_time, beam_width, n_batch, n_dim)).astype("float32")
   array = theano.shared(array, name="array")
