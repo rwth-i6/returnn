@@ -129,8 +129,8 @@ def initDevices():
   if BackendEngine.is_tensorflow_selected():
     if os.environ.get("TF_DEVICE"):
       config.set("device", os.environ.get("TF_DEVICE"))
-      print("Devices: Use %s via TF_DEVICE instead of %s." % \
-                       (os.environ.get("TF_DEVICE"), oldDeviceConfig), file=log.v4)
+      print("Devices: Use %s via TF_DEVICE instead of %s." %
+            (os.environ.get("TF_DEVICE"), oldDeviceConfig), file=log.v4)
   if not BackendEngine.is_theano_selected():
     return None
   if config.value("task", "train") == "nop":
@@ -473,6 +473,8 @@ def main(argv):
   except KeyboardInterrupt:
     return_code = 1
     print("KeyboardInterrupt", file=getattr(log, "v3", sys.stderr))
+    if getattr(log, "verbose", [False] * 6)[5]:
+      sys.excepthook(*sys.exc_info())
   finalize()
   if return_code:
     sys.exit(return_code)

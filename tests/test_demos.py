@@ -59,7 +59,7 @@ def run_and_parse_last_fer(*args):
 
 def run_config_get_fer(config_filename):
   cleanup_tmp_models(config_filename)
-  fer = run_and_parse_last_fer(py, "rnn.py", config_filename)
+  fer = run_and_parse_last_fer(py, "rnn.py", config_filename, "++log_verbosity", 5)
   cleanup_tmp_models(config_filename)
   return fer
 

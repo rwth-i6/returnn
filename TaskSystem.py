@@ -525,8 +525,22 @@ else:
 def makeFuncCell(value):
   return get_func_closure((lambda: value))[0]
 
-def getModuleDict(modname):
-  mod = import_module(modname)
+def getModuleDict(modname, path=None):
+  """
+  :param str modname: such that "import <modname>" would work
+  :param list[str] path: sys.path
+  :return: the dict of the mod
+  :rtype: dict[str]
+  """
+  try:
+    mod = import_module(modname)
+  except ImportError:
+    # Try again with extended sys.path.
+    assert path
+    for p in path:
+      if p not in sys.path:
+        sys.path.append(p)
+    mod = import_module(modname)
   return mod.__dict__
 
 def getModNameForModDict(obj):
@@ -693,7 +707,7 @@ class Pickler(_BasePickler):
     modname = getModNameForModDict(obj)
     if modname:
       self.save(getModuleDict)
-      self.save((modname,))
+      self.save((modname, sys.path))
       self.write(pickle.REDUCE)
       self.memoize(obj)
       return
@@ -985,7 +999,10 @@ class ExecingProcess_ConnectionWrapper(object):
   def __init__(self, fd=None, conn=None):
     self.fd = fd
     if self.fd:
-      from _multiprocessing import Connection
+      try:
+        from _multiprocessing import Connection
+      except ImportError:
+        from multiprocessing.connection import _ConnectionBase as Connection
       self.conn = Connection(fd)
     elif conn:
       self.conn = conn

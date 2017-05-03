@@ -8,6 +8,7 @@ except ImportError:  # Python 3
   from io import BytesIO as StringIO
 from TaskSystem import *
 import inspect
+from nose.tools import assert_equal, assert_is_instance
 import better_exchook
 better_exchook.replace_traceback_format_tb()
 
@@ -82,3 +83,21 @@ def test_pickle_inst_anon_class():
   assert inst.a == "hello"
   assert inst.b == "foo"
   assert inst.f(42) == 42
+
+
+def test_AsyncTask():
+  def func(asyncTask):
+    """
+    :type asyncTask: AsyncTask
+    """
+    print("Hello Async")
+    asyncTask.conn.send("hello c2p")
+    assert_equal(asyncTask.conn.recv(), "hello p2c")
+  proc = AsyncTask(
+    func=func,
+    name="AsyncTask proc",
+    mustExec=True,
+    env_update={})
+  assert_equal(proc.conn.recv(), "hello c2p")
+  proc.conn.send("hello p2c")
+  proc.join()

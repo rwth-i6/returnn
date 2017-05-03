@@ -322,7 +322,17 @@ class Device(object):
       async_str = "async (pid %i, ppid %i)" % (os.getpid(), os.getppid())
     return "<Device %s %s>" % (self.name, async_str)
 
-  def startProc(self, device_tag):
+  def startProc(self, *args, **kwargs):
+    try:
+      self._startProc(*args, **kwargs)
+    except BaseException:
+      try:
+        sys.excepthook(*sys.exc_info())
+      finally:
+        # Exceptions are fatal. Stop now.
+        interrupt_main()
+
+  def _startProc(self, device_tag):
     assert not self.blocking
     # Note that we want a really new separate process, i.e. fork+exec, not just a fork.
     # This is to avoid many potential bugs, e.g. in Numpy or Theano.
@@ -352,15 +362,11 @@ class Device(object):
       theano_flags["device"] = self.name
     theano_flags["force_device"] = True
     env_update = {"THEANO_FLAGS": ",".join(["%s=%s" % (key, value) for (key, value) in sorted(theano_flags.items())])}
-    try:
-      self.proc = AsyncTask(
-        func=self.process,
-        name="Device %s proc" % self.name,
-        mustExec=True,
-        env_update=env_update)
-    except Exception:
-      interrupt_main()
-      raise
+    self.proc = AsyncTask(
+      func=self.process,
+      name="Device %s proc" % self.name,
+      mustExec=True,
+      env_update=env_update)
     # The connection (duplex pipe) is managed by AsyncTask.
     self.input_queue = self.output_queue = self.proc.conn
 

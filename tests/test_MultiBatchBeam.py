@@ -1,4 +1,6 @@
 
+from __future__ import print_function
+
 import sys
 sys.path += ["."]  # Python 3 hack
 
@@ -74,8 +76,8 @@ def compare_implementations(*args, **kwargs):
       results[method] = res
   assert len(results) > 1
   for k, v in sorted(results.items()):
-    print "fwd %s:" % k
-    print v
+    print("fwd %s:" % k)
+    print(v)
   reference = sorted(results.keys())[0]
   for k in sorted(results.keys())[1:]:
     assert_equal(results[k].shape, results[reference].shape)
@@ -95,8 +97,8 @@ def compare_grad_implementations(*args, **kwargs):
       results[method] = res
   assert len(results) > 1
   for k, v in sorted(results.items()):
-    print "bwd %s:" % k
-    print v
+    print("bwd %s:" % k)
+    print(v)
   reference = sorted(results.keys())[0]
   for k in sorted(results.keys())[1:]:
     assert_equal(len(results[k]), len(results[reference]))
@@ -163,7 +165,7 @@ def test_numpy_perform_1():
   n_batch = 5
   n_dim = 3
   array = numpy.array([42,43,44] + range(n_time * n_batch * n_dim)[:-3]).reshape(n_time, n_batch, n_dim) + 0.1
-  print "array shape:", array.shape
+  print("array shape:", array.shape)
   start_idxs = numpy.array([1, -2, 10, 0, 1])
   batch_lens = numpy.array([11, 2, 11, 2, 11])
   beam_width = 5
@@ -182,7 +184,7 @@ def test_numpy_perform_2_wrap():
 
 def test_grad_simple():
   array = numpy.array([range(10)], dtype="float32").T
-  print "array shape:", array.shape
+  print("array shape:", array.shape)
   n_batch = array.shape[1]
   assert n_batch == 1
   start_idxs = numpy.array([-2])
@@ -248,24 +250,24 @@ def test_inplace_grad_add_simple_on_zero():
   D_array_and_pad_1 = MultiBatchBeamGradAddOp(wrap_mode)(D_array_and_pad_0, start_idxs, batch_lens, beam_width, D_beam)
   D_array_and_pad_2 = MultiBatchBeamGradAddOp(wrap_mode)(D_array_and_pad_1, start_idxs, batch_lens, beam_width, D_beam)
 
-  print "\ngraph for D_array_and_pad (unoptimized):"
+  print("\ngraph for D_array_and_pad (unoptimized):")
   theano.printing.debugprint(D_array_and_pad_2)
 
   f = theano.function(inputs=[], outputs=[D_array_and_pad_2], mode="FAST_RUN")
 
-  print "\ngraph for function (optimized):"
+  print("\ngraph for function (optimized):")
   theano.printing.debugprint(f.maker.fgraph)
 
-  print "\ngraph toposort:"
+  print("\ngraph toposort:")
   pprint(f.maker.fgraph.toposort())
 
   assert_is_instance(f.maker.fgraph, theano.gof.fg.FunctionGraph)
   out0 = f.maker.fgraph.outputs[0]
-  print "\nout0:", out0, type(out0)
+  print("\nout0:", out0, type(out0))
   assert_is_instance(out0, T.TensorVariable)
   assert_is_instance(out0.owner, theano.Apply)
   assert_is_instance(out0.owner.op, MultiBatchBeamGradAddOp)
-  print "\nfinal op in fgraph:", out0.owner.op
+  print("\nfinal op in fgraph:", out0.owner.op)
   assert_is(out0.owner.op.inplace, True)
 
 def test_simple_inplace_scan():
@@ -297,26 +299,26 @@ def test_simple_inplace_scan():
   o_last = T.tensor_copy(o[-1])
   f = theano.function(inputs=[], outputs=[o_last], mode="FAST_RUN")
 
-  print "result:", f()
-  print "f:"
+  print("result:", f())
+  print("f:")
   theano.printing.debugprint(f)
 
   o_last_opt = f.maker.fgraph.outputs[0]
-  print "o_last_opt:", o_last_opt.owner
+  print("o_last_opt:", o_last_opt.owner)
   scan_v = o_last_opt.owner.inputs[0]
   assert isinstance(scan_v.owner.op, theano.scan_module.scan_op.Scan)
-  print "scan:", scan_v
-  print "scan destroy_map:", scan_v.owner.op.destroy_map
-  print "scan inner func:", scan_v.owner.op.fn
+  print("scan:", scan_v)
+  print("scan destroy_map:", scan_v.owner.op.destroy_map)
+  print("scan inner func:", scan_v.owner.op.fn)
 
   node = scan_v.owner.op.fn.maker
 
-  print "inner fgraph inputs:", node.fgraph.inputs
+  print("inner fgraph inputs:", node.fgraph.inputs)
   protected_inputs = [
       f.protected for f in node.fgraph._features if
       isinstance(f, theano.compile.function_module.Supervisor)]
   protected_inputs = sum(protected_inputs, [])  # flatten the list
-  print "inner protected inputs:", protected_inputs, node.fgraph.outputs
+  print("inner protected inputs:", protected_inputs, node.fgraph.outputs)
 
   #raise Exception("stop")
 
@@ -366,14 +368,14 @@ def test_inplace_grad_add():
   D_w, = T.grad(None, wrt=[w], known_grads={beams: D_beams})
   f = theano.function(inputs=[], outputs=[D_w], mode="FAST_RUN")
 
-  print "\ngraph for first output (unoptimized):"
+  print("\ngraph for first output (unoptimized):")
   theano.printing.debugprint(f.outputs[0])
 
-  print "\ngraph for function (optimized):"
+  print("\ngraph for function (optimized):")
   theano.printing.debugprint(f.maker.fgraph)
 
   loop_apply = f.maker.fgraph.outputs[0].owner.inputs[0].owner
-  print "loop_apply", loop_apply
+  print("loop_apply", loop_apply)
 
   #assert_is_instance(loop_apply.op, theano.scan_module.scan_op.Scan)
 
