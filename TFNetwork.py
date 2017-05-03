@@ -134,6 +134,7 @@ class TFNetwork(object):
     self.used_data_keys = set()
     self.rnd_seed = rnd_seed
     self.random = numpy.random.RandomState(rnd_seed)
+    assert isinstance(train_flag, (bool, tf.Tensor))
     self.train_flag = train_flag
     self.search_flag = search_flag
     self.parent = parent

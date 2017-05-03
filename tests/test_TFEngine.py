@@ -82,6 +82,30 @@ def test_DataProvider():
   assert_equal(classes.tolist(), [[1, 2, 0, 1, 2]])
 
 
+def test_engine_train():
+  from GeneratingDataset import DummyDataset
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 3
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
+  train_data.init_seq_order(epoch=1)
+  cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  cv_data.init_seq_order(epoch=1)
+
+  config = Config()
+  config.update({
+    "model": "/tmp/model",
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": {"output": {"class": "softmax", "loss": "ce"}},
+    "start_epoch": 1,
+    "num_epochs": 2
+  })
+  engine = Engine(config=config)
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
+  engine.train()
+
+
 def test_engine_analyze():
   from GeneratingDataset import DummyDataset
   seq_len = 5

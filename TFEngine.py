@@ -229,7 +229,8 @@ class Runner(object):
       dataset=dataset, batches=batches)
     self._should_train = train
     self._should_eval = eval
-    self.store_metadata_mod_step = False  # 500
+    self.store_metadata_mod_step = engine.config.int("store_metadata_mod_step", 0)
+    self.reset_updater_vars_mod_step = engine.config.int("reset_updater_vars_mod_step", 0)
     self.finalized = False
     self.num_steps = None
     self.device_crash_batch = None
@@ -421,9 +422,12 @@ class Runner(object):
       feed_dict = None
       while self.data_provider.have_more_data():
         feed_dict = self.data_provider.get_feed_dict(previous_feed_dict=feed_dict)
-        if self.engine.network.train_flag is not False:
+        if isinstance(self.engine.network.train_flag, tf.Tensor):
           feed_dict[self.engine.network.train_flag] = self._should_train
         start_time = time.time()
+        if self._should_train and self.reset_updater_vars_mod_step and step % self.reset_updater_vars_mod_step == 0:
+          print("Reset updater vars in step %i." % step, file=log.v5)
+          self.engine.updater.init_optimizer_vars()
         if self.store_metadata_mod_step and step % self.store_metadata_mod_step == 0:
           # Slow run that stores extra information for debugging.
           print('Storing metadata', file=log.v5)
