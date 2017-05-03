@@ -189,6 +189,14 @@ class SharedMem:
       errstr = os.strerror(errno)
       raise cls.CCallException("SharedMem: %s failed with error %i (%s)" % (f, errno, errstr))
 
+  @classmethod
+  def is_shmget_functioning(cls):
+    shmid = cls.shmget(cls.IPC_PRIVATE, 4 * 1024 * 1024, 0o600)
+    if shmid <= 0:
+      return False
+    cls.shmctl(shmid, cls.IPC_RMID, 0)
+    return True
+
   def __init__(self, size, shmid=None):
     self.size = size
     self.shmid = None
@@ -212,7 +220,7 @@ class SharedMem:
     if self.ptr:
       self.shmdt(self.ptr)
       self.ptr = None
-    if self.shmid:
+    if self.shmid and self.shmid > 0:
       if self.is_creator:
         print("SharedMem[pid %i]: Removing shmid %i (size %i)" % (os.getpid(), self.shmid, self.size))
         self.shmctl(self.shmid, self.IPC_RMID, 0)
