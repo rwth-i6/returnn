@@ -26,6 +26,7 @@ class TaskThread(threading.Thread):
       :param str report_prefix: such as epoch or so. only for reporting
       """
       threading.Thread.__init__(self, name="TaskThread %s" % task)
+      assert len(devices) > 0
       if eval_batch_size == 0:
         eval_batch_size = sys.maxsize
       self.share_batches = share_batches
@@ -417,6 +418,7 @@ class TaskThread(threading.Thread):
       run_frames = NumbersDict(0)
 
       crashed = False
+      assert num_device_runs > 0
 
       while True:
         if getattr(sys, "exited", False):
@@ -427,7 +429,7 @@ class TaskThread(threading.Thread):
           break
 
         for i in range(num_device_runs):
-          if deviceRuns[i].crashed:
+          if deviceRuns[i].crashed or not deviceRuns[i].is_alive():
             crashed = True
             break
           if deviceRuns[i].finished:
