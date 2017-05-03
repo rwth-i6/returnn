@@ -506,7 +506,7 @@ def lstm(z, i, W_re, W_out_proj=None, W_re_proj=None, W_peep_i=None, W_peep_f=No
   # W_peep_*: (n_cells,) or None
   n_batch = z.shape[1]
   assert W_re.ndim == 2
-  n_cells = W_re.shape[1] / 4
+  n_cells = W_re.shape[1] // 4
   n_out = W_re.shape[0]  # normally the same as n_cells, but with W_proj, can be different
   if W_re_proj:
     n_out = W_re_proj.shape[0]

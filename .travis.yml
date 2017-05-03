@@ -38,6 +38,7 @@ env:
   - TEST=hdf_dump
   - TEST=HDFDataset
   - TEST=LearningRateControl
+  - TEST=Log
   - TEST=multi_target
   - TEST=MultiBatchBeam
   - TEST=NativeOp

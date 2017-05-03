@@ -133,6 +133,8 @@ def initDevices():
                        (os.environ.get("TF_DEVICE"), oldDeviceConfig), file=log.v4)
   if not BackendEngine.is_theano_selected():
     return None
+  if config.value("task", "nop"):
+    return []
   if "device" in TheanoFlags:
     # This is important because Theano likely already has initialized that device.
     config.set("device", TheanoFlags["device"])
@@ -337,9 +339,10 @@ def finalize():
     if engine:
       engine.finalize()
 
+
 def needData():
   task = config.value('task', 'train')
-  if task == 'theano_graph':
+  if task in ['theano_graph', "nop"]:
     return False
   return True
 
@@ -403,6 +406,8 @@ def executeMainTask():
   elif task == "daemon":
     engine.init_network_from_config(config)
     engine.daemon()
+  elif task == "nop":
+    print("Task: No-operation", file=log.v1)
   else:
     assert False, "unknown task: %s" % task
 

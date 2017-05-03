@@ -33,6 +33,7 @@ def build_env():
 
 def run(*args):
   args = list(args)
+  print("run:", args)
   # crnn by default outputs on stderr, so just merge both together
   p = Popen(args, stdout=PIPE, stderr=STDOUT, env=build_env())
   out, _ = p.communicate()
