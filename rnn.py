@@ -133,7 +133,7 @@ def initDevices():
                        (os.environ.get("TF_DEVICE"), oldDeviceConfig), file=log.v4)
   if not BackendEngine.is_theano_selected():
     return None
-  if config.value("task", "nop"):
+  if config.value("task", "train") == "nop":
     return []
   if "device" in TheanoFlags:
     # This is important because Theano likely already has initialized that device.
