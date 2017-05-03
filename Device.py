@@ -1377,6 +1377,7 @@ class Device(object):
     self.result_called_count += 1
     if self.blocking:
       assert self.result_called_count == self.run_called_count
+      self.wait_for_result_call = False
       return self.output, self.outputs_format
     else:
       assert self.main_pid == os.getpid()
