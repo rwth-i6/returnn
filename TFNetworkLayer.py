@@ -2232,24 +2232,36 @@ class RecLayer(_ConcatInputLayer):
       init_net_vars = cell.get_init_loop_vars(batch_dim=batch_dim)
       init_i = tf.constant(0)
       min_out_len = max_out_len
-      # Create a tensor array to store the intermediate values for each step i, e.g. of shape (batch, dim).
-      init_acc_ta = tf.TensorArray(
-        name="acc_ta",
-        dtype=cell.layer_data_templates["output"].output.dtype,
-        element_shape=tf.TensorShape(cell.layer_data_templates["output"].output.batch_shape),
-        size=min_out_len,
-        dynamic_size=True,  # we will automatically grow it when needed
-        infer_shape=True)
 
-    def body(i, net_vars, acc_ta):
+      from collections import namedtuple
+      OutputToAccumulate = namedtuple("OutputToAccumulate", ["name", "dtype", "element_shape", "get"])
+      outputs_to_accumulate = [
+        OutputToAccumulate(
+          name="output",
+          dtype=cell.layer_data_templates["output"].output.dtype,
+          element_shape=cell.layer_data_templates["output"].output.batch_shape,
+          get=lambda: cell.net.layers["output"].output.placeholder)]
+
+      # Create a tensor array to store the intermediate values for each step i, e.g. of shape (batch, dim).
+      init_acc_tas = [
+        tf.TensorArray(
+          name="acc_ta_%s" % out.name,
+          dtype=out.dtype,
+          element_shape=tf.TensorShape(out.element_shape),
+          size=min_out_len,
+          dynamic_size=True,  # we will automatically grow it when needed
+          infer_shape=True)
+        for out in outputs_to_accumulate]
+
+    def body(i, net_vars, acc_tas):
       """
       The loop body of scan.
 
       :param tf.Tensor i: loop counter, scalar
       :param net_vars: the accumulator values
-      :param tf.TensorArray acc_ta: the output accumulator TensorArray
+      :param list[tf.TensorArray] acc_tas: the output accumulator TensorArray
       :return: [i + 1, a_flat, tas]: the updated counter + new accumulator values + updated TensorArrays
-      :rtype: (tf.Tensor, object, tf.TensorArray)
+      :rtype: (tf.Tensor, object, list[tf.TensorArray])
 
       Raises:
         TypeError: if initializer and fn() output structure do not match
@@ -2262,15 +2274,21 @@ class RecLayer(_ConcatInputLayer):
           data=x_ta.read(i) if x_ta else None,
           classes=y_ta.read(i) if y_ta else None,
           i=i)
-        acc_ta = acc_ta.write(i, cell.net.layers["output"].output.placeholder)
-        return i + 1, net_vars, acc_ta
+        assert len(acc_tas) == len(outputs_to_accumulate)
+        acc_tas = [
+          acc_ta.write(i, out.get())
+          for (acc_ta, out) in zip(acc_tas, outputs_to_accumulate)]
+        return i + 1, net_vars, acc_tas
 
     def cond(i, net_vars, acc_ta):
       return tf.less(i, max_out_len)
 
-    _, _, final_acc_ta = tf.while_loop(cond=cond, body=body, loop_vars=(init_i, init_net_vars, init_acc_ta))
-    result = final_acc_ta.stack()  # e.g. (time, batch, dim)
-    return result
+    _, _, final_acc_tas = tf.while_loop(cond=cond, body=body, loop_vars=(init_i, init_net_vars, init_acc_tas))
+    assert len(final_acc_tas) == len(outputs_to_accumulate)
+    final_outputs = {
+      out.name: final_acc_ta.stack()  # e.g. (time, batch, dim)
+      for (final_acc_ta, out) in zip(final_acc_tas, outputs_to_accumulate)}
+    return final_outputs["output"]
 
   def get_last_hidden_state(self):
     assert self._last_hidden_state is not None, (
