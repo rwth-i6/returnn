@@ -1337,10 +1337,12 @@ class ChoiceLayer(LayerBase):
     assert self.sources[0].output.dim == self.output.dim
     assert self.sources[0].output.shape == (self.output.dim,)
     assert self.target
+    self.choice_base_layer = self.network.get_search_choices(sources=self.sources)
     self.choice_scores = None
     self.choice_source_batches = None
     if self.network.search_flag:
-      scores_base = self._get_source_scores()  # (batch,)
+      assert self.choice_base_layer  # not implemented yet...
+      scores_base = self.choice_base_layer.rec_vars_outputs["choice_scores"]  # (batch,)
       scores_base = tf.expand_dims(scores_base, axis=-1)  # (batch, dim)
       scores_in = self.sources[0].output.placeholder  # (batch, dim)
       scores_in += scores_base  # (batch, dim)
@@ -1354,7 +1356,6 @@ class ChoiceLayer(LayerBase):
       self.choice_source_batches = labels // scores_in_batch  # (beam_size,) -> scores_in batch idx
       labels = labels % scores_in_batch  # (beam_size,) -> dim idx
       self.choice_scores = scores  # (beam_size,) -> log score
-      self.rec_vars_outputs["choice_source_batches"] = self.choice_source_batches
       self.rec_vars_outputs["choice_scores"] = scores
       self.output = Data(
         name="%s_choice_output" % self.name,
@@ -1370,11 +1371,6 @@ class ChoiceLayer(LayerBase):
         target=self.target, network=self.network,
         mark_data_key_as_used=True)
 
-  def _get_source_scores(self):
-    src = self.network.get_search_choices(sources=self.sources)
-    assert src is not None
-    return src.choice_scores
-
   @classmethod
   def get_out_data_from_opts(cls, target, network, **kwargs):
     return cls._static_get_target_value(
@@ -1382,12 +1378,10 @@ class ChoiceLayer(LayerBase):
       mark_data_key_as_used=False)
 
   @classmethod
-  def get_rec_initial_extra_outputs(cls, network, **kwargs):
+  def get_rec_initial_extra_outputs(cls, network, beam_size, **kwargs):
     if not network.search_flag:
       return {}
-    return {
-      "choice_source_batches": tf.zeros([1], dtype=tf.int32),  # not used
-      "choice_scores": tf.zeros([1])}
+    return {"choice_scores": tf.zeros([beam_size])}
 
 
 class RnnCellLayer(_ConcatInputLayer):
@@ -1945,7 +1939,11 @@ class RecLayer(_ConcatInputLayer):
       self.parent = parent
       self.net_dict = deepcopy(net_dict)
       from TFNetwork import TFNetwork, ExternData
-      self.net = TFNetwork(extern_data=ExternData(), train_flag=parent.network.train_flag, parent=parent)
+      self.net = TFNetwork(
+        extern_data=ExternData(),
+        train_flag=parent.network.train_flag,
+        search_flag=parent.network.search_flag,
+        parent=parent)
       if parent.input_data:
         self.net.extern_data.data["source"] = \
           parent.input_data.copy_template_excluding_time_dim()
@@ -2241,6 +2239,17 @@ class RecLayer(_ConcatInputLayer):
           dtype=cell.layer_data_templates["output"].output.dtype,
           element_shape=cell.layer_data_templates["output"].output.batch_shape,
           get=lambda: cell.net.layers["output"].output.placeholder)]
+
+      if self.network.search_flag:
+        for layer in cell.layer_data_templates.values():
+          if isinstance(layer, ChoiceLayer):
+            outputs_to_accumulate += [
+              OutputToAccumulate(
+                name="choice_%s" % layer.name,
+                dtype=tf.int32,
+                element_shape=(layer._kwargs["beam_size"],),
+                get=(lambda name:
+                  lambda: cell.net.layers[name].choice_source_batches)(layer.name))]
 
       # Create a tensor array to store the intermediate values for each step i, e.g. of shape (batch, dim).
       init_acc_tas = [

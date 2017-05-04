@@ -577,27 +577,33 @@ class TFNetwork(object):
     from TFUtil import cond
     return cond(self.train_flag, fn_train, fn_eval)
 
-  def get_search_choices(self, sources=None, src=None):
+  def get_search_choices(self, sources=None, src=None, _visited=None):
     """
     Recursively searches through all sources,
     and if there is a ChoiceLayer, returns it.
 
-    :param LayerBase src:
-    :param list[LayerBase] sources:
+    :param LayerBase|None src:
+    :param list[LayerBase]|None sources:
+    :param set[LayerBase]|None _visited: keep track about visited layers in case there are circular deps
     :return: (direct or indirect) source ChoiceLayer
     :rtype: TFNetworkLayer.ChoiceLayer|None
     """
     assert sources is None or src is None, "don't provide both"
     from TFNetworkLayer import ChoiceLayer
-    if isinstance(src, ChoiceLayer):
-      return src
-    if sources:
-      layers = [self.get_search_source_scores(src=src) for src in sources]
-      layers = [layer for layer in layers if layer is not None]
-      layers = set(layers)
-      assert len(layers) <= 1, "multiple choice layers not supported yet"
-      if len(layers) == 1:
-        return list(layers)[0]
+    if src is not None:
+      if isinstance(src, ChoiceLayer):
+        return src
+      sources = src.sources
+    if _visited is None:
+      _visited = set()
+    sources = [src for src in sources if src not in _visited]
+    _visited.update(sources)
+    layers = [self.get_search_choices(src=src, _visited=_visited) for src in sources]
+    layers = [layer for layer in layers if layer is not None]
+    layers = set(layers)
+    assert len(layers) <= 1, "multiple choice layers not supported yet"
+    if len(layers) == 1:
+      return list(layers)[0]
     return None
 
 
