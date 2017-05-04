@@ -151,6 +151,37 @@ def test_engine_forward_single():
   engine.forward_single(dataset=dataset, seq_idx=0)
 
 
+def test_engine_rec_subnet_count():
+  from GeneratingDataset import DummyDataset
+  seq_len = 5
+  # The dataset is actually not used.
+  n_data_dim = 2
+  n_classes_dim = 3
+  dataset = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  dataset.init_seq_order(epoch=1)
+
+  config = Config()
+  config.update({
+    "model": "/tmp/model",
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": {
+      "output": {"class": "rec", "unit": {
+        "output": {
+          "class": "activation", "activation": "identity + 1",
+          "from": ["prev:output"], "initial_output": 0,
+          "out_type": {"dim": 1, "dtype": "int32"}}
+      }}}
+  })
+  engine = Engine(config=config)
+  engine.init_train_from_config(config=config, train_data=dataset, dev_data=None, eval_data=None)
+
+  out = engine.forward_single(dataset=dataset, seq_idx=0)
+  assert_equal(out.shape, (5, 1))
+  assert_equal(out.dtype, numpy.int32)
+  assert_equal(list(out[:,0]), [1, 2, 3, 4, 5])
+
+
 def test_engine_search():
   from GeneratingDataset import DummyDataset
   seq_len = 5

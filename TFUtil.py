@@ -895,7 +895,10 @@ def _get_act_func_with_op(s):
     v = v.strip()
     from Util import str_is_number
     if str_is_number(v):
-      v = float(v)
+      try:
+        v = int(v)
+      except ValueError:
+        v = float(v)
       return lambda x: v
     else:
       return get_activation_function(v)
@@ -915,7 +918,7 @@ def get_activation_function(s):
   :param str|None s:
   :rtype: (tf.Tensor) -> tf.Tensor
   """
-  if not s or s == "none":
+  if not s or s in ["none", "identity"]:
     return identity
   if any(k in s for k in _bin_ops):
     return _get_act_func_with_op(s)

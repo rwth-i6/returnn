@@ -598,7 +598,9 @@ class CopyLayer(_ConcatInputLayer):
     self.output = self.input_data
 
   @classmethod
-  def get_out_data_from_opts(cls, sources=(), **kwargs):
+  def get_out_data_from_opts(cls, sources=(), out_type=None, n_out=None, **kwargs):
+    if out_type or n_out:
+      return super(CopyLayer, cls).get_out_data_from_opts(out_type=out_type, n_out=n_out, sources=sources, **kwargs)
     return get_concat_sources_data_template(sources)
 
 
@@ -1809,7 +1811,6 @@ class RecLayer(_ConcatInputLayer):
       self.output.batch_dim_axis = 1
       self.output.placeholder = y
       params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope_name_prefix)
-      assert params
       self.params.update({p.name[len(scope_name_prefix):-2]: p for p in params})
 
   @classmethod

@@ -956,7 +956,7 @@ class Engine(object):
     :param Dataset.Dataset dataset:
     :param int seq_idx:
     :param str|None output_layer_name: e.g. "output". if not set, will read from config "forward_output_layer"
-    :return: numpy array, output in time major format (time,batch,dim)
+    :return: numpy array, output in time major format (time,dim)
     :rtype: numpy.ndarray
     """
     if not output_layer_name:
@@ -982,7 +982,8 @@ class Engine(object):
     feed_dict = data_provider.get_feed_dict(previous_feed_dict=None, single_threaded=True)
     output_data = self.network.layers[output_layer_name].output
     output_value = self.tf_session.run(output_data.get_placeholder_as_time_major(), feed_dict=feed_dict)
-    return output_value
+    assert output_value.shape[1] == 1  # batch-dim
+    return output_value[:, 0]  # remove batch-dim
 
   def analyze(self, data, statistics):
     """
