@@ -166,10 +166,13 @@ def test_engine_rec_subnet_count():
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {
-      "output": {"class": "rec", "unit": {
+      "output": {
+        "class": "rec",
+        "from": ["data"],  # actually not used, except that it defines the length
+        "unit": {
         "output": {
           "class": "activation", "activation": "identity + 1",
-          "from": ["prev:output"], "initial_output": 0,
+          "from": ["prev:output"], "initial_output": 0,  # note: initial output is for t == -1
           "out_type": {"dim": 1, "dtype": "int32"}}
       }}}
   })
@@ -177,9 +180,9 @@ def test_engine_rec_subnet_count():
   engine.init_train_from_config(config=config, train_data=dataset, dev_data=None, eval_data=None)
 
   out = engine.forward_single(dataset=dataset, seq_idx=0)
-  assert_equal(out.shape, (5, 1))
+  assert_equal(out.shape, (seq_len, 1))
   assert_equal(out.dtype, numpy.int32)
-  assert_equal(list(out[:,0]), [1, 2, 3, 4, 5])
+  assert_equal(list(out[:,0]), list(range(1, seq_len + 1)))
 
 
 def test_engine_search():
