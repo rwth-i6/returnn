@@ -59,7 +59,7 @@ class LayerBase(object):
         network=network, name=name, target=target, size_target=size_target,
         sources=sources, loss=loss)
     self.output_before_activation = None  # type: None|OutputWithActivation
-    self.extra_outputs = {}  # type: dict[str,tf.Tensor]
+    self.rec_vars_outputs = {}  # type: dict[str,tf.Tensor]
     self._initial_output = initial_output
     self._rec_previous_layer = rec_previous_layer
     self.sources = sources
@@ -1354,8 +1354,8 @@ class ChoiceLayer(LayerBase):
       self.choice_source_batches = labels // scores_in_batch  # (beam_size,) -> scores_in batch idx
       labels = labels % scores_in_batch  # (beam_size,) -> dim idx
       self.choice_scores = scores  # (beam_size,) -> log score
-      self.extra_outputs["choice_source_batches"] = self.choice_source_batches
-      self.extra_outputs["choice_scores"] = scores
+      self.rec_vars_outputs["choice_source_batches"] = self.choice_source_batches
+      self.rec_vars_outputs["choice_scores"] = scores
       self.output = Data(
         name="%s_choice_output" % self.name,
         batch_dim_axis=0,
@@ -1417,10 +1417,10 @@ class RnnCellLayer(_ConcatInputLayer):
       self.cell = self._get_cell(n_out=n_out, unit=unit, unit_opts=unit_opts)
       self.output.time_dim_axis = None
       self.output.batch_dim_axis = 0
-      prev_state = self._rec_previous_layer.extra_outputs["state"]
+      prev_state = self._rec_previous_layer.rec_vars_outputs["state"]
       self.output.placeholder, state = self.cell(self.input_data.placeholder, prev_state)
       self._hidden_state = state
-      self.extra_outputs["state"] = state
+      self.rec_vars_outputs["state"] = state
       params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope_name_prefix)
       assert params
       self.params.update({p.name[len(scope_name_prefix):-2]: p for p in params})
@@ -2082,7 +2082,7 @@ class RecLayer(_ConcatInputLayer):
           layer = prev_layers[name] = self.layer_data_templates[name].copy(template_type="prev")
         else:
           layer = prev_layers[name]
-        layer.extra_outputs = prev_extra[name]
+        layer.rec_vars_outputs = prev_extra[name]
 
       from copy import deepcopy
       net_dict = deepcopy(self.net_dict)
@@ -2151,9 +2151,9 @@ class RecLayer(_ConcatInputLayer):
         self._construct(prev_outputs=prev_outputs, prev_extra=prev_extra, data=data, classes=classes, i=i)
       outputs_flat = [self.net.layers[k].output.placeholder for k in sorted(self.prev_layers_needed)]
       extra_flat = [
-        sorted_values_from_dict(self.net.layers[k].extra_outputs)
+        sorted_values_from_dict(self.net.layers[k].rec_vars_outputs)
         for k in sorted(self.layer_data_templates)
-        if self.net.layers[k].extra_outputs]
+        if self.net.layers[k].rec_vars_outputs]
       return outputs_flat, extra_flat
 
     def get_init_loop_vars(self, batch_dim):
