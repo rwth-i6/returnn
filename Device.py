@@ -662,6 +662,38 @@ class Device(object):
           assert p_y_given_x.ndim == 3
           source.append(
             T.switch(T.cast(index, "float32").dimshuffle(0, 1, 'x'), p_y_given_x, numpy.float32(0)))
+        elif extract == "win_post":
+          layer = self.testnet.get_layer(output_layer_name)
+          p_y_given_x = getattr(layer, "p_y_given_x", layer.output)
+          w = layer.sources[0].base[0].attrs['win']
+          t = layer.sources[0].base[0].timesteps
+          b = layer.sources[0].base[0].batches
+          fullind = layer.sources[0].fullind.T#.flatten()
+          p_y_given_x = p_y_given_x.reshape((p_y_given_x.shape[0]*p_y_given_x.shape[1],p_y_given_x.shape[2]))
+          zer = T.zeros((p_y_given_x.shape[1],1))
+          fullind1 = fullind.repeat(p_y_given_x.shape[1]).reshape((fullind.flatten().shape[0],p_y_given_x.shape[1]))
+          p_y_given_x1 = T.switch(fullind1>=0, p_y_given_x, 0)
+          p_y_given_x1 = p_y_given_x1.reshape((t*b,w*p_y_given_x1.shape[1]))
+          p_y_given_x1 = p_y_given_x1.reshape((b,t,p_y_given_x1.shape[1])).dimshuffle(1,0,2)
+          assert p_y_given_x1.ndim == 3
+          source.append(p_y_given_x1)
+        elif extract == "win_post_full":
+          layer = self.testnet.get_layer(output_layer_name)
+          p_y_given_x = layer.z
+          w = layer.sources[0].base[0].attrs['win']
+          t = layer.sources[0].base[0].timesteps
+          b = layer.sources[0].base[0].batches
+          fullind = layer.sources[0].fullind.T#.flatten()
+          p_y_given_x = p_y_given_x.reshape((p_y_given_x.shape[0]*p_y_given_x.shape[1],p_y_given_x.shape[2]))
+          zer = T.zeros((p_y_given_x.shape[1],1))
+          fullind1 = fullind.repeat(p_y_given_x.shape[1]).reshape((fullind.flatten().shape[0],p_y_given_x.shape[1]))
+          min_p = T.min(p_y_given_x,axis=-1).repeat(p_y_given_x.shape[1]).reshape((p_y_given_x.shape[0],p_y_given_x.shape[1]))
+          p_y_given_x1 = T.switch(fullind1>=0, p_y_given_x, min_p)
+          p_y_given_x1 = p_y_given_x1.reshape((t*b,w*p_y_given_x1.shape[1]))
+          py_win = T.nnet.softmax(p_y_given_x1)
+          py_win = py_win.reshape((b,t,py_win.shape[1])).dimshuffle(1,0,2)
+          assert py_win.ndim == 3
+          source.append(py_win)
         elif extract == "posteriors-sum":
           layer = self.testnet.get_layer(output_layer_name)
           p_y_given_x = layer.p_y_given_x
