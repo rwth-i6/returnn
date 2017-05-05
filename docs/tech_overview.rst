@@ -87,7 +87,7 @@ The construction itself can be found for TensorFlow in :py:func:`TFNetwork.TFNet
 which starts from the output layers goes over the sources of a layer, which are defined by `"from"`.
 If a layer does not define `"from"`, it will automatically get the input from the dataset data.
 
-Here a 2 layer unidirectional LSTM network:
+Here is a 2 layer unidirectional LSTM network:
 
 .. code-block:: python
 
@@ -100,7 +100,7 @@ Here a 2 layer unidirectional LSTM network:
 In TensorFlow, that would use the layer class :py:class:`TFNetworkLayer.RecLayer`
 which will handle the argument `unit`.
 
-And here a 5 layer bidirectional LSTM network:
+And here is a 5 layer bidirectional LSTM network:
 
 .. code-block:: python
 
