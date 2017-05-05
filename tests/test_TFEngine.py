@@ -9,6 +9,8 @@ import sys
 sys.path += ["."]  # Python 3 hack
 from TFEngine import *
 import Util
+import TFUtil
+TFUtil.debugRegisterBetterRepr()
 from Config import Config
 from nose.tools import assert_equal, assert_is_instance
 import numpy
@@ -19,7 +21,6 @@ import better_exchook
 better_exchook.replace_traceback_format_tb()
 from Log import log
 log.initialize(verbosity=[5])
-
 
 session = tf.InteractiveSession()
 

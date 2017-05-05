@@ -40,7 +40,8 @@ class Data(object):
       e.g. shape=(time,...), 0 -> (batch,time,...), 1 -> (time,batch,...)
     :param int|None time_dim_axis: where we have the time dim axis, after we added the batch-dim.
       this is often 1. however, can be None if there is no time-dim.
-    :param dict[int,tf.Tensor] tf.Tensor size_placeholder: for every None in shape, this will describe the size
+    :param dict[int,tf.Tensor] tf.Tensor size_placeholder: for every None in shape, this will describe the size.
+      The size is always a tensor of shape (batch,), i.e. the size can be different for each sequence in a batch.
     """
     self.name = name
     if sparse is None:
@@ -55,7 +56,7 @@ class Data(object):
         shape = (None,)  # assume common (time,)
       else:
         shape = (None, dim)  # assume common (time,feat)
-    self.shape = tuple(shape)  # excluding batch-dim. see self.batch_shape
+    self.shape = tuple(shape)  # type: tuple[int|None]  # excluding batch-dim. see self.batch_shape
     if dtype is None:
       if sparse:
         dtype = "int32"
@@ -64,8 +65,8 @@ class Data(object):
     if dim is None and len(shape):
       assert not sparse, "need dim"
       dim = shape[-1]
-    self.dim = dim
-    self.batch_dim_axis = batch_dim_axis
+    self.dim = dim  # type: int
+    self.batch_dim_axis = batch_dim_axis  # type: int
     if time_dim_axis is NotSpecified:
       if (sparse and len(shape) >= 1) or ((not sparse) and len(shape) >= 2):
         if batch_dim_axis >= 1:
@@ -74,12 +75,12 @@ class Data(object):
           time_dim_axis = 1
       else:
         time_dim_axis = None
-    self.time_dim_axis = time_dim_axis
-    self.dtype = dtype
+    self.time_dim_axis = time_dim_axis  # type: int|None  # counted with batch-dim
+    self.dtype = dtype  # type: str
     if placeholder is None and auto_create_placeholders:
       with tf.name_scope("extern_data/placeholders/%s/" % name):
         placeholder = tf.placeholder(name=name, dtype=dtype, shape=self.batch_shape)
-    self.placeholder = placeholder
+    self.placeholder = placeholder  # type: tf.Tensor  # this will hold the data value itself
     # The size_placeholder is for each variable length dimension in shape, i.e. excluding the batch-dim.
     if size_placeholder is None and auto_create_placeholders:
       size_placeholder = {}  # type: dict[int,tf.Tensor]
@@ -91,7 +92,7 @@ class Data(object):
               name="%s_dim%i_size" % (name, i), dtype=self.size_dtype, shape=(None,))
     if not size_placeholder and self.ndim_dense <= 1:
       size_placeholder = {}
-    self.size_placeholder = size_placeholder
+    self.size_placeholder = size_placeholder  # type: dict[int,tf.Tensor]  # axis w.o. batch -> size of shape (batch,)
 
   def get_kwargs(self):
     keys = ["name", "shape", "dtype", "sparse", "dim", "batch_dim_axis", "time_dim_axis"]
@@ -699,10 +700,11 @@ def check_shape_equal(x, y):
       return tf.identity(x, "identity_with_shape_equal_check")
 
 
-def get_shape_dim(x, axis):
+def get_shape_dim(x, axis, name="shape_dim"):
   """
   :param tf.Tensor x:
   :param int axis: which axis
+  :param str name:
   :return: x.shape[axis] either as a static int or otherwise as an expression
   :rtype: int|tf.Tensor
   """
@@ -711,7 +713,8 @@ def get_shape_dim(x, axis):
     if dyn_shape.dims[axis].value is not None:
       return dyn_shape.dims[axis].value
   # Need to fall-back to runtime.
-  return tf.shape(x)[axis]
+  with tf.name_scope(name):
+    return tf.shape(x)[axis]
 
 
 def get_shape(x):
@@ -1688,10 +1691,20 @@ def debugRegisterBetterRepr():
     """
     return "<tf.Variable %r initial_value=%r>" % (x.name, x.initial_value)
 
+  def tensorarray_repr(x):
+    """
+    :param tf.TensorArray x:
+    :rtype: str 
+    """
+    op = x.handle.op
+    assert isinstance(op, tf.Operation)
+    return "<tf.TensorArray %r>" % op.name
+
   for cl, f in [
         (tf.IndexedSlices, indexed_slices_repr),
         (tf.Operation, op_repr),
-        (tf.Variable, var_repr)]:
+        (tf.Variable, var_repr),
+        (tf.TensorArray, tensorarray_repr)]:
     if getattr(cl, "__repr__") is object.__repr__:
       setattr(cl, "__repr__", f)
 

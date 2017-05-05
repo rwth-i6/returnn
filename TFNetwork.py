@@ -581,6 +581,7 @@ class TFNetwork(object):
     """
     Recursively searches through all sources,
     and if there is a ChoiceLayer, returns it.
+    Could also go to the parent network.
 
     :param LayerBase|None src:
     :param list[LayerBase]|None sources:
@@ -604,7 +605,31 @@ class TFNetwork(object):
     assert len(layers) <= 1, "multiple choice layers not supported yet"
     if len(layers) == 1:
       return list(layers)[0]
+    if self.parent:
+      return self.parent.network.get_search_choices(sources=self.parent.sources)
     return None
+
+  def get_batch_dim(self):
+    """
+    Get the batch-dim size, i.e. amount of sequences in the current batch.
+    Consider that the data tensor is usually of shape [batch, time, dim],
+    this would return shape(data)[0].
+
+    The code currently assumes that the batch-dim can be taken from the extern data.
+    If it does not have that available for some reason (e.g. some subnetwork),
+    it will try some alternative sources and assumes that they have the correct batch-dim.
+
+    :return: int scalar tensor which states the batch-dim
+    :rtype: int|tf.Tensor
+    """
+    from TFUtil import get_shape_dim
+    # First check parent because there we might get the true batch dim.
+    if self.parent:
+      return self.parent.network.get_batch_dim()
+    for _, data in sorted(self.extern_data.data.items()):
+      assert isinstance(data, Data)
+      return get_shape_dim(data.placeholder, data.batch_dim_axis, name="batch_dim")
+    raise Exception("We cannot tell the batch dim.")
 
 
 class TFNetworkParamsSerialized(object):
