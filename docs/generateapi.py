@@ -11,6 +11,8 @@ Generate stuff like:
     :members:
     :undoc-members:
 
+This will automatically get called by conf.py.
+
 """
 
 import os

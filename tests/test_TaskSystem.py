@@ -1,7 +1,17 @@
 
-from StringIO import StringIO
+import sys
+sys.path += ["."]  # Python 3 hack
+
+try:
+  from StringIO import StringIO
+except ImportError:  # Python 3
+  from io import BytesIO as StringIO
 from TaskSystem import *
 import inspect
+from nose.tools import assert_equal, assert_is_instance
+import better_exchook
+better_exchook.replace_traceback_format_tb()
+
 
 def pickle_dumps(obj):
   sio = StringIO()
@@ -73,3 +83,52 @@ def test_pickle_inst_anon_class():
   assert inst.a == "hello"
   assert inst.b == "foo"
   assert inst.f(42) == 42
+
+
+class DemoClass:
+  def method(self):
+    return 42
+
+
+def test_pickle():
+  obj = DemoClass()
+  s = pickle_dumps(obj.method)
+  inst = pickle_loads(s)
+  assert_equal(inst(), 42)
+
+
+def test_AsyncTask():
+  def func(asyncTask):
+    """
+    :type asyncTask: AsyncTask
+    """
+    print("Hello Async")
+    asyncTask.conn.send("hello c2p")
+    assert_equal(asyncTask.conn.recv(), "hello p2c")
+  proc = AsyncTask(
+    func=func,
+    name="AsyncTask proc",
+    mustExec=True,
+    env_update={})
+  assert_equal(proc.conn.recv(), "hello c2p")
+  proc.conn.send("hello p2c")
+  proc.join()
+
+
+def test_AsyncTask_chdir():
+  os.chdir("/")
+  def func(asyncTask):
+    """
+    :type asyncTask: AsyncTask
+    """
+    print("Hello Async")
+    asyncTask.conn.send("hello c2p")
+    assert_equal(asyncTask.conn.recv(), "hello p2c")
+  proc = AsyncTask(
+    func=func,
+    name="AsyncTask proc",
+    mustExec=True,
+    env_update={})
+  assert_equal(proc.conn.recv(), "hello c2p")
+  proc.conn.send("hello p2c")
+  proc.join()

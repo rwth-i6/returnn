@@ -204,6 +204,8 @@ class Updater(object):
     self.loss = network.get_objective()
     self.optimizer = None  # type: tf.train.Optimizer
     self.optim_op = None  # type: tf.Operation
+    self.optimizer_vars = []  # type: list[tf.Variable]
+    self.optimizer_init_vars_op = None  # type: tf.Operation
 
   def reset_optim_op(self):
     """
@@ -273,6 +275,11 @@ class Updater(object):
     self.reset_optim_op()
 
   def create_optim_op(self):
+    # Keep track of all current available vars.
+    # The optimizer could add some, even some which are not so-called "slot-vars",
+    # and we want to keep track about them.
+    all_vars = tf.global_variables()  # type: list[tf.Variable]
+
     if not self.optimizer:
       self.create_optimizer()
 
@@ -303,6 +310,9 @@ class Updater(object):
         assert grad_clip_global_norm > 0
         grads_clipped, _ = tf.clip_by_global_norm([grad for (grad, _) in grads_and_vars], grad_clip_global_norm)
         grads_and_vars = zip(grads_clipped, [var for (_, var) in grads_and_vars])
+      if self.config.bool("gradient_nan_inf_filter", False):
+        from TFUtil import nan_to_num
+        grads_and_vars = [(nan_to_num(grad), var) for (grad, var) in grads_and_vars]
       apply_grads = self.optimizer.apply_gradients(grads_and_vars)
       incr_step_op = tf.assign_add(self.network.global_train_step, 1, name="global_train_step_increment")
       self.optim_op = tf.group(apply_grads, incr_step_op, name="optim_and_step_incr")
@@ -313,8 +323,23 @@ class Updater(object):
       for v in self.trainable_vars:
         slot_var = self.optimizer.get_slot(var=v, name=slot_name)
         assert slot_var is not None
+        assert isinstance(slot_var, tf.Variable)
         slot_vars.append(slot_var)
-    self.tf_session.run(tf.variables_initializer(slot_vars, name="init_optim_slot_vars"))
+    self.optimizer_vars = slot_vars
+
+    # Check if there were any other variables added.
+    other_new_vars = []
+    for v in tf.global_variables():
+      if v in all_vars:
+        continue
+      if v in self.optimizer_vars:
+        continue
+      other_new_vars.append(v)
+    if other_new_vars:
+      print("These additional variable were created by the optimizer: %s." % other_new_vars, file=log.v3)
+      self.optimizer_vars += other_new_vars
+    self.optimizer_init_vars_op = tf.variables_initializer(self.optimizer_vars, name="init_optim_slot_vars")
+    self.init_optimizer_vars()
 
   def get_optim_op(self, callback_on_new=None):
     """
@@ -326,3 +351,6 @@ class Updater(object):
       if callback_on_new:
         callback_on_new()
     return self.optim_op
+
+  def init_optimizer_vars(self):
+    self.tf_session.run(self.optimizer_init_vars_op)

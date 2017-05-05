@@ -36,12 +36,12 @@ class HDFDataset(CachedDataset):
     """
     fin = h5py.File(filename, "r")
     if 'targets' in fin:
-      self.labels = { k : [ item.split('\0')[0] for item in fin["targets/labels"][k][...].tolist() ] for k in fin['targets/labels'] }
+      self.labels = { k : [ item.decode("utf8").split('\0')[0] for item in fin["targets/labels"][k][...].tolist() ] for k in fin['targets/labels'] }
     if not self.labels:
       labels = [ item.split('\0')[0] for item in fin["labels"][...].tolist() ]; """ :type: list[str] """
       self.labels = { 'classes' : labels }
       assert len(self.labels['classes']) == len(labels), "expected " + str(len(self.labels['classes'])) + " got " + str(len(labels))
-    tags = [ item.split('\0')[0] for item in fin["seqTags"][...].tolist() ]; """ :type: list[str] """
+    tags = [ item.decode("utf8").split('\0')[0] for item in fin["seqTags"][...].tolist() ]; """ :type: list[str] """
     self.files.append(filename)
     if 'times' in fin:
       self.timestamps.extend(fin[attr_times][...].tolist())

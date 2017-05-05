@@ -1,12 +1,24 @@
 
+from __future__ import print_function
+
+import sys
+sys.path += ["."]  # Python 3 hack
+
 import threading
 from TaskSystem import *
+import unittest
 import gc
+import better_exchook
+better_exchook.replace_traceback_format_tb()
 
 SharedMemNumpyConfig["enabled"] = True
 SharedMemNumpyConfig["auto_pickling_min_size"] = 1
 
-from StringIO import StringIO
+try:
+  from StringIO import StringIO
+except ImportError:  # Python 3
+  from io import BytesIO as StringIO
+
 
 def pickle_dumps(obj):
   sio = StringIO()
@@ -28,6 +40,23 @@ def find_numpy_shared_by_shmid(shmid):
   return None
 
 
+_have_working_shmget = None
+
+
+def have_working_shmget():
+  global _have_working_shmget
+  if _have_working_shmget is None:
+    _have_working_shmget = SharedMem.is_shmget_functioning()
+  print("shmget functioning:", _have_working_shmget)
+  return _have_working_shmget
+
+
+@unittest.skipIf(not have_working_shmget(), "shmget does not work")
+def test_shmget_functioning():
+  assert SharedMem.is_shmget_functioning()
+
+
+@unittest.skipIf(not have_working_shmget(), "shmget does not work")
 def test_pickle_numpy():
   m = numpy.random.randn(10, 10)
   p = pickle_dumps(m)
@@ -48,6 +77,7 @@ def test_pickle_numpy():
   assert shared_client.mem is None
 
 
+@unittest.skipIf(not have_working_shmget(), "shmget does not work")
 def test_pickle_numpy_scalar():
   # Note that a scalar really does not work because numpy.array(float) will always own its data.
   m = numpy.array([numpy.random.randn()])
@@ -72,6 +102,7 @@ def test_pickle_numpy_scalar():
   assert shared_client.mem is None
 
 
+@unittest.skipIf(not have_working_shmget(), "shmget does not work")
 def test_pickle_gc_aggressive():
   m = numpy.random.randn(10, 10)
   p = pickle_dumps(m)
@@ -89,6 +120,7 @@ def test_pickle_gc_aggressive():
   gc.collect()
 
 
+@unittest.skipIf(not have_working_shmget(), "shmget does not work")
 def test_pickle_multiple():
   for i in range(20):
     ms = [numpy.random.randn(10, 10) for i in range(i % 3 + 1)]
@@ -100,6 +132,7 @@ def test_pickle_multiple():
       assert isinstance(m2.base, SharedNumpyArray)
 
 
+@unittest.skipIf(not have_working_shmget(), "shmget does not work")
 def test_pickle_unpickle_auto_unused():
   old_num_servers = None
   for i in range(10):

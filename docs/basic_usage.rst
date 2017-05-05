@@ -101,3 +101,4 @@ See the code for more details.
 All config params can also be passed as command line params.
 See the code for some usage. The generic form is ``++param value``.
 
+See :ref:`tech_overview` for more details and an overview how it all works.

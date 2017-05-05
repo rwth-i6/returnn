@@ -1,4 +1,8 @@
 
+# start test like this:  nosetests-2.7  tests/test_TFUtil.py  --nologcapture
+
+import logging
+logging.getLogger('tensorflow').disabled = True
 import tensorflow as tf
 import sys
 sys.path += ["."]  # Python 3 hack
@@ -123,3 +127,121 @@ def test_reuse_name_scope():
 
       c2 = tf.Variable(name="c", initial_value=tf.zeros((2,)))
       assert_equal(c2.name, "lstm0/rec/c_1:0")
+
+
+def test_reuse_var_scope():
+  with tf.variable_scope("v1"):
+    assert_equal(get_current_var_scope_name(), "v1")
+    assert_equal(get_current_name_scope(), "v1")
+    with tf.variable_scope("v2") as scope:
+      assert_equal(get_current_var_scope_name(), "v1/v2")
+      assert_equal(get_current_name_scope(), "v1/v2")
+      with tf.name_scope("v3"):
+        assert_equal(get_current_name_scope(), "v1/v2/v3")
+        assert_equal(get_current_var_scope_name(), "v1/v2")
+        assert_equal(scope.name, "v1/v2")
+        # Note: tf.variable_scope(scope) is broken here.
+        with reuse_name_scope(scope):
+          assert_equal(get_current_var_scope_name(), "v1/v2")
+          assert_equal(get_current_name_scope(), "v1/v2")
+
+
+def test_name_var_scope_mixing():
+  with tf.variable_scope("mv1"):
+    assert_equal(get_current_var_scope_name(), "mv1")
+    assert_equal(get_current_name_scope(), "mv1")
+    with tf.variable_scope("v2") as scope:
+      assert_equal(get_current_var_scope_name(), "mv1/v2")
+      assert_equal(get_current_name_scope(), "mv1/v2")
+      with tf.name_scope("v3"):
+        assert_equal(get_current_name_scope(), "mv1/v2/v3")
+        assert_equal(get_current_var_scope_name(), "mv1/v2")
+        assert_equal(scope.name, "mv1/v2")
+        # Note: tf.variable_scope("v4") is broken here.
+        with reuse_name_scope("v4"):
+          assert_equal(get_current_var_scope_name(), "mv1/v2/v3/v4")
+          assert_equal(get_current_name_scope(), "mv1/v2/v3/v4")
+          with reuse_name_scope(scope):
+            assert_equal(get_current_var_scope_name(), "mv1/v2")
+            assert_equal(get_current_name_scope(), "mv1/v2")
+
+
+def test_loop_var_creation():
+  # Related TF bugs:
+  # https://github.com/tensorflow/tensorflow/issues/3114
+  # https://github.com/tensorflow/tensorflow/issues/4478
+  # https://github.com/tensorflow/tensorflow/issues/8604
+
+  # tf.reset_default_graph()  # Strange, this does not work.
+  i = tf.constant(0)
+
+  def body(i):
+    # None of these works, with error:
+    # InvalidArgumentError: The node 'while/w/Assign' has inputs from different frames.
+    # The input 'while/j' is in frame 'while/while/'. The input 'while/w' is in frame ''.
+    # w = tf.Variable(tf.constant(1))
+    # w = tf.Variable(tf.constant_initializer(value=1, dtype=tf.int32)(shape=()))
+    # However, resetting the control dependencies will also reset the frame.
+    with var_creation_scope():
+      w = tf.Variable(tf.constant(1))
+    return [i + w]
+
+  loop = tf.while_loop(lambda i: tf.less(i, 5), body, [i])
+  session.run(tf.global_variables_initializer())
+
+
+def test_gather_nd_grad():
+  # https://github.com/tensorflow/tensorflow/issues/9406
+  # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/gather_nd_op.cc
+  # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/scatter_nd_op.cc
+  # Fixed in TF 1.1.0.
+  assert [int(i) for i in tf.__version__.split(".")[:2]] >= [1, 1]
+  n_base_time = 5
+  n_in = 7
+  n_beam = 3
+  n_batch = 1
+  base = tf.ones((n_base_time, n_batch, n_in))  # (base_time,batch,n_in)
+  idxs_exp = tf.constant(0, shape=(n_beam, n_batch, 2), name="idxs_exp")  # (beam,batch,2), where the 2 stands for (base_time,batch)
+  # Thus K == 2. gather_nd out will be idxs_exp.shape[:2] + params.shape[2:] = (beam,batch,n_in).
+  gathered = tf.gather_nd(base, idxs_exp)  # (beam,batch,n_in)
+  gathered_shape, _ = session.run([tf.shape(gathered), gathered])
+  assert_equal(list(gathered_shape), [n_beam, n_batch, n_in])
+
+  base_grad = tf.gradients(gathered, base)
+  assert base_grad is not None
+  session.run(base_grad)
+
+
+def test_scatter_nd():
+  # https://github.com/tensorflow/tensorflow/issues/9406
+  # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/scatter_nd_op.cc
+  # Fixed in TF 1.1.0.
+  assert [int(i) for i in tf.__version__.split(".")[:2]] >= [1, 1]
+  n_base_time = 5
+  n_in = 7
+  n_beam = 3
+  n_batch = 1
+  ref_grad = tf.scatter_nd(
+    indices=tf.zeros((n_beam, n_batch, 2), dtype=tf.int32),
+    updates=tf.ones((n_beam, n_batch, n_in)),
+    shape=(n_base_time, n_batch, n_in))
+  session.run(ref_grad)
+
+
+def test_dimshuffle():
+  x = tf.zeros((2, 3, 5))
+  assert_equal(list(session.run(tf.shape(x))), [2, 3, 5])
+  assert_equal(list(session.run(tf.shape(dimshuffle(x, (1, 2, 0))))), [3, 5, 2])
+  assert_equal(list(session.run(tf.shape(dimshuffle(x, ('x', 1, 2, 0))))), [1, 3, 5, 2])
+  assert_equal(list(session.run(tf.shape(dimshuffle(x, ('x', 1, 'x', 2, 'x', 0, 'x'))))), [1, 3, 1, 5, 1, 2, 1])
+  x = tf.zeros((2, 1, 3))
+  assert_equal(list(session.run(tf.shape(dimshuffle(x, (2, 0))))), [3, 2])
+  assert_equal(list(session.run(tf.shape(dimshuffle(x, (2, 'x', 'x', 0))))), [3, 1, 1, 2])
+
+
+def test_expand_multiple_dims():
+  x = tf.zeros((2, 3, 5))
+  assert_equal(list(session.run(tf.shape(x))), [2, 3, 5])
+  assert_equal(list(session.run(tf.shape(expand_multiple_dims(x, (1, 2))))), [2, 1, 1, 3, 5])
+  assert_equal(list(session.run(tf.shape(expand_multiple_dims(x, (1, 4))))), [2, 1, 3, 5, 1])
+  assert_equal(list(session.run(tf.shape(expand_multiple_dims(x, (1, 3, 5))))), [2, 1, 3, 1, 5, 1])

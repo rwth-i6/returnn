@@ -105,6 +105,40 @@ class Config:
     """
     return key in self.typed_dict
 
+  def is_true(self, key, default=False):
+    """
+    :param str key:
+    :param bool default:
+    :return: bool(value) if it is set or default
+    :rtype: bool
+    """
+    if self.is_typed(key):
+      return bool(self.typed_dict[key])
+    return self.bool(key, default=default)
+
+  def is_of_type(self, key, types):
+    """
+    :param str key:
+    :param type|list[type] types: for isinstance() check
+    :return: whether is_typed(key) is True and isinstance(value, types) is True
+    :rtype: bool
+    """
+    if key in self.typed_dict:
+      return isinstance(self.typed_dict[key], types)
+    return False
+
+  def get_of_type(self, key, types, default=None):
+    """
+    :param str key:
+    :param type|list[type]|T types: for isinstance() check
+    :param T|None default:
+    :return: if is_of_type(key, types) is True, returns the value, otherwise default 
+    :rtype: T
+    """
+    if self.is_of_type(key, types):
+      return self.typed_dict[key]
+    return default
+
   def set(self, key, value):
     """
     :type key: str

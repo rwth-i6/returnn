@@ -1,4 +1,7 @@
 
+import sys
+sys.path += ["."]  # Python 3 hack
+
 from hdf_dump import *
 import os
 from Log import log

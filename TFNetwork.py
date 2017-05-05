@@ -39,6 +39,32 @@ class ExternData(object):
       self.data[key] = Data(name=key, auto_create_placeholders=True, **init_args)
     self.default_target = config.value('target', 'classes')
 
+  def init_from_dataset(self, dataset):
+    """
+    :param Dataset.Dataset dataset: 
+    """
+    target_keys = list(dataset.get_target_list())
+    if target_keys:
+      if "classes" in target_keys:
+        self.default_target = "classes"
+      else:
+        self.default_target = target_keys[0]
+    data_keys = list(dataset.get_data_keys())
+    input_keys = [key for key in data_keys if key not in target_keys]
+    if input_keys:
+      if "data" in input_keys:
+        self.default_input = "data"
+      else:
+        self.default_input = input_keys[0]
+    for key in data_keys:
+      dim = dataset.get_data_dim(key)
+      shape = [None] + list(dataset.get_data_shape(key))
+      sparse = dataset.is_data_sparse(key)
+      dtype = dataset.get_data_dtype(key)
+      self.data[key] = Data(
+        name=key, auto_create_placeholders=True, batch_dim_axis=0, time_dim_axis=1,
+        shape=shape, dim=dim, sparse=sparse, dtype=dtype)
+
   def register_data_from_dict(self, data):
     """
     :param dict[str,dict[str]] data: init kwargs for Data
@@ -90,7 +116,7 @@ class ExternData(object):
 
 
 class TFNetwork(object):
-  def __init__(self, config=None, extern_data=None, rnd_seed=42, train_flag=False, parent=None):
+  def __init__(self, config=None, extern_data=None, rnd_seed=42, train_flag=False, search_flag=False, parent=None):
     """
     :param Config.Config config: only needed to init extern_data if not specified explicitly
     :param ExternData|None extern_data:
@@ -108,7 +134,9 @@ class TFNetwork(object):
     self.used_data_keys = set()
     self.rnd_seed = rnd_seed
     self.random = numpy.random.RandomState(rnd_seed)
+    assert isinstance(train_flag, (bool, tf.Tensor))
     self.train_flag = train_flag
+    self.search_flag = search_flag
     self.parent = parent
     self._selected_train_layers = None
     self.layers_desc = {}  # type: dict[str,dict[str]]
@@ -191,7 +219,7 @@ class TFNetwork(object):
     layer_desc = layer_desc.copy()
     class_name = layer_desc.pop("class")
     layer_class = get_layer_class(class_name)
-    layer_class.transform_config_dict(layer_desc, get_layer=get_layer)
+    layer_class.transform_config_dict(layer_desc, network=self, get_layer=get_layer)
     return add_layer(name=name, layer_class=layer_class, **layer_desc)
 
   def add_layer(self, name, layer_class, **layer_desc):
@@ -241,9 +269,9 @@ class TFNetwork(object):
           error = layer.get_error_value()
           constraints = layer.get_constraints_value()
           if loss is not None:
-            tf.summary.scalar("loss_%s" % layer.name, loss)
+            tf.summary.scalar("loss_%s" % layer.name, loss * layer.get_loss_normalization_factor())
           if error is not None:
-            tf.summary.scalar("error_%s" % layer.name, error)
+            tf.summary.scalar("error_%s" % layer.name, error * layer.get_loss_normalization_factor())
         if loss is not None:
           self.loss_by_layer[name] = loss
           self.total_loss += loss
@@ -548,6 +576,35 @@ class TFNetwork(object):
     """
     from TFUtil import cond
     return cond(self.train_flag, fn_train, fn_eval)
+
+  def get_search_choices(self, sources=None, src=None, _visited=None):
+    """
+    Recursively searches through all sources,
+    and if there is a ChoiceLayer, returns it.
+
+    :param LayerBase|None src:
+    :param list[LayerBase]|None sources:
+    :param set[LayerBase]|None _visited: keep track about visited layers in case there are circular deps
+    :return: (direct or indirect) source ChoiceLayer
+    :rtype: TFNetworkLayer.ChoiceLayer|None
+    """
+    assert sources is None or src is None, "don't provide both"
+    from TFNetworkLayer import ChoiceLayer
+    if src is not None:
+      if isinstance(src, ChoiceLayer):
+        return src
+      sources = src.sources
+    if _visited is None:
+      _visited = set()
+    sources = [src for src in sources if src not in _visited]
+    _visited.update(sources)
+    layers = [self.get_search_choices(src=src, _visited=_visited) for src in sources]
+    layers = [layer for layer in layers if layer is not None]
+    layers = set(layers)
+    assert len(layers) <= 1, "multiple choice layers not supported yet"
+    if len(layers) == 1:
+      return list(layers)[0]
+    return None
 
 
 class TFNetworkParamsSerialized(object):

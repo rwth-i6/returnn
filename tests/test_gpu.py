@@ -1,4 +1,6 @@
 
+from __future__ import print_function
+
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_in, assert_true, assert_false
 import unittest
 from Device import have_gpu
@@ -23,5 +25,5 @@ def test_cuda():
     raise Exception("Theano CUDA support seems broken: %s" % exc)
   id = cuda.active_device_number(); """ :type: int """
   device_name = cuda.active_device_name(); """ :type: str """
-  print("id: %i", id)
+  print("id: %i" % id)
   print("dev name: %s" % device_name)

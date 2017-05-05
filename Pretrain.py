@@ -5,7 +5,7 @@ from Network import LayerNetwork
 from NetworkBaseLayer import Layer
 from NetworkCopyUtils import intelli_copy_layer, LayerDoNotMatchForCopy
 from Log import log
-from Util import unicode
+from Util import unicode, long
 
 
 class WrapEpochValue:
@@ -432,6 +432,9 @@ def demo():
     print("example usage: python %s ++pretrain default ++pretrain_construction_algo from_input" % __file__)
   rnn.initConfig(commandLineOptions=sys.argv[1:])
   rnn.config._hack_value_reading_debug()
+  rnn.config.update({"log": []})
+  rnn.initLog()
+  rnn.initBackendEngine()
   if not rnn.config.value("pretrain", ""):
     print("config option 'pretrain' not set, will set it for this demo to 'default'")
     rnn.config.set("pretrain", "default")
