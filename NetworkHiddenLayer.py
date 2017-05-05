@@ -3335,46 +3335,6 @@ class InvAlignSegmentationLayer2(_NoOpLayer):
     self.make_output(result)
     self.index = T.ones((self.output.shape[0], self.output.shape[1]), 'int8')
 
-class ReshapeLayer6(ForwardLayer):
-  layer_class = "reshape6"
-
-  def __init__(self, base=None, **kwargs):
-    target = kwargs['target']
-    kwargs['n_out'] = kwargs['y_in'][target].n_out
-    super(ReshapeLayer6, self).__init__(**kwargs)
-    self.set_attr('n_out',kwargs['n_out'])
-    assert len(self.sources) == 1
-    assert base is not None
-    self.base = base
-
-    if self.eval_flag:
-      t = base[0].sources[0].output.shape[0]
-      b = base[0].sources[0].output.shape[1]
-      w = base[0].attrs['win']
-      d = self.attrs['n_out']
-      #take the final state and reshape to TBD
-      zfinal = self.z[-1,:,:]
-      zfinal = zfinal.reshape((b,t,zfinal.shape[1])).dimshuffle(1,0,2)
-      self.index = base[0].sources[0].index
-      ze = self.z.reshape((self.z.shape[0]*self.z.shape[1],self.z.shape[2]))
-      p_y_given_x = T.nnet.softmax(ze)
-      fullind = base[0].fullind
-      p_y_given_x = T.concatenate([p_y_given_x,T.zeros((1,p_y_given_x.shape[1]))],axis=0)
-      ze = T.concatenate([ze,T.zeros((1,ze.shape[1]))],axis=0)
-      for i in range(w):
-        fullind = T.set_subtensor(fullind[i],T.roll(fullind[i],i))
-        if i>0:
-            fullind = T.inc_subtensor(fullind[i],T.where(fullind[i]>0,i*t*b-i,0))
-      #fullind = theano.printing.Print('%s fullind'%self.name,attrs=['__str__','shape'])(fullind)
-      p_y_given_x_new = p_y_given_x[fullind.T.flatten()].reshape((t * b, w * d))
-      p_y_given_x_new = p_y_given_x_new.reshape((b,t,p_y_given_x_new.shape[1])).dimshuffle(1,0,2)
-      self.p_y_given_x = p_y_given_x_new
-    else:
-      zfinal = self.z
-      self.index = self.sources[0].index
-    self.make_output(zfinal)
-    self.act = [self.output, T.zeros_like(self.output)]
-
 class ReshapeLayer(StateVector):
   layer_class = "reshape"
 
@@ -3383,76 +3343,25 @@ class ReshapeLayer(StateVector):
     assert base is not None
     self.base = base
     if self.eval_flag:
-      #t = base[0].sources[0].output.shape[0]
-      #b = base[0].sources[0].output.shape[1]
       #get the original timesteps, batches and window parameter
       t = base[0].timesteps
       b = base[0].batches
       w = base[0].attrs['win']
       d = self.attrs['n_out']
-      #take the final state and reshape to TBD
       z = T.concatenate([s.output for s in self.sources],axis=-1)
-      #z = theano.printing.Print('%s z'%self.name,attrs=['shape'])(z)
-      ze = z.reshape((z.shape[0]*z.shape[1],z.shape[2]))
-      fullind = base[0].fullind
+      ze = z.reshape((z.shape[0]*z.shape[1],z.shape[2])) #T*B,D
+      fullind = base[0].fullind#full index from invalignsegment layer
       ze = T.concatenate([ze,T.zeros((1,ze.shape[1]))],axis=0)
       for i in range(w):
         fullind = T.set_subtensor(fullind[i],T.roll(fullind[i],i))
         if i>0:
             fullind = T.inc_subtensor(fullind[i],T.where(fullind[i]>0,i*t*b-i,0))
       self.fullind = fullind
-      #fullind = theano.printing.Print('%s fullind'%self.name,attrs=['__str__','shape'])(fullind)
       zfinal = ze[fullind.T.flatten()].dimshuffle('x',0,1)
-      #zfinal = theano.printing.Print('%s zfinal'%self.name,attrs=['shape'])(zfinal)
       self.make_output(zfinal)
       self.act = [self.output, T.zeros_like(self.output)]
       self.index = T.ones((1,self.output.shape[1]),'int8')
 
-class Reshape3Layer(_NoOpLayer):
-  layer_class = "reshape3"
-
-  def __init__(self, base=None, **kwargs):
-    super(Reshape3Layer, self).__init__(**kwargs)
-    kwargs['n_out'] = sum([s.attrs['n_out'] for s in kwargs['sources']])
-    self.set_attr('n_out',kwargs['n_out'])
-    assert base is not None
-    self.base = base
-    if self.eval_flag:
-      t = base[0].sources[0].output.shape[0]
-      b = base[0].sources[0].output.shape[1]
-      w = base[0].attrs['win']
-      d = self.attrs['n_out']
-      #take the final state and reshape to TBD
-      z = T.concatenate([s.output for s in self.sources],axis=-1)
-      #z = theano.printing.Print('%s z'%self.name,attrs=['shape'])(z)
-      ze = z.reshape((z.shape[0]*z.shape[1],z.shape[2]))
-      #zfinal = zfinal.reshape((b,t,zfinal.shape[1])).dimshuffle(1,0,2)
-      #self.index = base[0].sources[0].index
-      #ze = self.z.reshape((self.z.shape[0]*self.z.shape[1],self.z.shape[2]))
-      #p_y_given_x = T.nnet.softmax(ze)
-      fullind = base[0].fullind
-      #p_y_given_x = T.concatenate([p_y_given_x,T.zeros((1,p_y_given_x.shape[1]))],axis=0)
-      ze = T.concatenate([ze,T.zeros((1,ze.shape[1]))],axis=0)
-      for i in range(w):
-        fullind = T.set_subtensor(fullind[i],T.roll(fullind[i],i))
-        if i>0:
-            fullind = T.inc_subtensor(fullind[i],T.where(fullind[i]>0,i*t*b-i,0))
-      #fullind = theano.printing.Print('%s fullind'%self.name,attrs=['__str__','shape'])(fullind)
-      zfinal = ze[fullind.T.flatten()].dimshuffle('x',0,1)
-      #zfinal = theano.printing.Print('%s zfinal'%self.name,attrs=['shape'])(zfinal)
-      #zfinal = zfinal.reshape((b,t,p_y_given_x_new.shape[1])).dimshuffle(1,0,2)
-      #p_y_given_x_new = p_y_given_x[fullind.T.flatten()].reshape((t * b, w * d))
-      #p_y_given_x_new = p_y_given_x_new.reshape((b,t,p_y_given_x_new.shape[1])).dimshuffle(1,0,2)
-      #self.p_y_given_x = p_y_given_x_new
-      self.make_output(zfinal)
-      #self.act = [self.output, T.zeros_like(self.output)]
-      #self.index = T.ones((1,self.output.shape[1]),'int8')
-    else:
-      z = T.concatenate([s.output for s in self.sources],axis=-1)
-      zfinal = z[-1,:,:]
-      self.make_output(zfinal.dimshuffle('x',0,1))
-    self.act = [self.output, T.zeros_like(self.output)]
-    self.index = T.ones((self.output.shape[0],self.output.shape[1]),'int8')
 
 class SegmentFinalStateLayer(_NoOpLayer):
   layer_class = "segfinal"
