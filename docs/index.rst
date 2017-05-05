@@ -18,7 +18,7 @@ Features include:
 - Memory management for large data sets
 - Work distribution across multiple devices
 
-See :ref:`basic_usage`.
+See :ref:`basic_usage` and :ref:`tech_overview`.
 
 There are some example demos in ``/demos``
 which work on artifically generated data,
@@ -35,20 +35,21 @@ User guide
 ----------
 
 .. toctree::
-	:maxdepth: 2
+    :maxdepth: 2
 
-	installation
-	basic_usage
+    installation
+    basic_usage
+    tech_overview
 
 
 API Reference
 -------------
 
 .. toctree::
-	:maxdepth: 2
-	:glob:
+    :maxdepth: 2
+    :glob:
 
-	api
+    api
 
 
 Refs
