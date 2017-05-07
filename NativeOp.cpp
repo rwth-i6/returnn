@@ -333,6 +333,8 @@ static void _cudaHandleError(cublasStatus_t status, const char *file, int line) 
 		real *alpha, real *a, integer *lda,
 		real *b, integer *ldb, real *beta,
 		real *c, integer *ldc);
+
+	Cast to (float*) because we might have the C-style declaration incorrectly in the C++ scope.
 */
 #define Ndarray_sgemm(\
 	transpose_A, transpose_B, \
@@ -341,7 +343,7 @@ static void _cudaHandleError(cublasStatus_t status, const char *file, int line) 
 		char transa = transpose_A, transb = transpose_B; \
 		int m_ = m, n_ = n, k_ = k, lda_ = lda, ldb_ = ldb, ldc_ = ldc; \
 		sgemm_(&transa, &transb, \
-			&m_, &n_, &k_, alpha, A, &lda_, B, &ldb_, beta, C, &ldc_); \
+			&m_, &n_, &k_, alpha, (float*) A, &lda_, (float*) B, &ldb_, beta, C, &ldc_); \
 	}
 #endif
 

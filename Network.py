@@ -1,5 +1,7 @@
 #! /usr/bin/python2.7
 
+from __future__ import print_function
+
 import json
 import h5py
 
@@ -136,14 +138,14 @@ class LayerNetwork(object):
         var = config.network_topology_json[start_var+8:end_var]
         assert config.has(var), "could not find variable " + var
         config.network_topology_json = config.network_topology_json[:start_var] + config.value(var,"") + config.network_topology_json[end_var+1:]
-        print >> log.v4, "substituting variable %s with %s" % (var,config.value(var,""))
+        print("substituting variable %s with %s" % (var,config.value(var,"")), file=log.v4)
         start_var = config.network_topology_json.find('(config:', start_var+1)
       try:
         json_content = json.loads(config.network_topology_json)
       except ValueError as e:
-        print >> log.v3, "----- BEGIN JSON CONTENT -----"
-        print >> log.v3, config.network_topology_json
-        print >> log.v3, "------ END JSON CONTENT ------"
+        print("----- BEGIN JSON CONTENT -----", file=log.v3)
+        print(config.network_topology_json, file=log.v3)
+        print("------ END JSON CONTENT ------", file=log.v3)
         assert False, "invalid json content, %r" % e
       assert isinstance(json_content, dict)
       if 'network' in json_content:
@@ -261,7 +263,7 @@ class LayerNetwork(object):
     if i == 0: return self
     if i <= len(self.calc_steps):
       return self.calc_steps[i - 1]
-    print >> log.v4, "creating calc steps up to %i" % i
+    print("creating calc steps up to %i" % i, file=log.v4)
     while i > len(self.calc_steps):
       base_network = self
       if self.calc_steps: base_network = self.calc_steps[-1]
@@ -408,7 +410,7 @@ class LayerNetwork(object):
       if layer_name in network.hidden or layer_name in network.output:
         continue
       if layer_name == "data":
-        print >>log.v3, "warning: layer with name 'data' will be ignored (this name is reserved)"
+        print("warning: layer with name 'data' will be ignored (this name is reserved)", file=log.v3)
         continue
       trg = target
       if 'target' in json_content[layer_name]:
@@ -565,7 +567,7 @@ class LayerNetwork(object):
       self.known_grads.update(cost[1])
     if len(cost) > 2:
       if self.ctc_priors:
-        print >> log.v3, "multiple ctc_priors, second one from layer %s" % layer.name
+        print("multiple ctc_priors, second one from layer %s" % layer.name, file=log.v3)
       else:
         self.ctc_priors = cost[2]
       assert self.ctc_priors is not None
@@ -735,7 +737,7 @@ class LayerNetwork(object):
     """
     for name in self.hidden:
       if not name in model:
-        print >> log.v2, "unable to load layer", name
+        print("unable to load layer", name, file=log.v2)
       else:
         self.hidden[name].load(model)
     for name in self.output:
@@ -765,15 +767,15 @@ class LayerNetwork(object):
     return epoch
 
   def print_network_info(self, name="Network"):
-    print >> log.v2, "%s layer topology:" % name
-    print >> log.v2, "  input #:", self.n_in
+    print("%s layer topology:" % name, file=log.v2)
+    print("  input #:", self.n_in, file=log.v2)
     for layer_name, layer in sorted(self.hidden.items()):
-      print >> log.v2, "  hidden %s %r #: %i" % (layer.layer_class, layer_name, layer.attrs["n_out"])
+      print("  hidden %s %r #: %i" % (layer.layer_class, layer_name, layer.attrs["n_out"]), file=log.v2)
     if not self.hidden:
-      print >> log.v2, "  (no hidden layers)"
+      print("  (no hidden layers)", file=log.v2)
     for layer_name, layer in sorted(self.output.items()):
-      print >> log.v2, "  output %s %r #: %i" % (layer.layer_class, layer_name, layer.attrs["n_out"])
+      print("  output %s %r #: %i" % (layer.layer_class, layer_name, layer.attrs["n_out"]), file=log.v2)
     if not self.output:
-      print >> log.v2, "  (no output layers)"
-    print >> log.v2, "net params #:", self.num_params()
-    print >> log.v2, "net trainable params:", self.train_params_vars
+      print("  (no output layers)", file=log.v2)
+    print("net params #:", self.num_params(), file=log.v2)
+    print("net trainable params:", self.train_params_vars, file=log.v2)

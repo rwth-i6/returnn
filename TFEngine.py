@@ -34,7 +34,7 @@ class DataProvider(object):
 
   def __init__(self, tf_session, dataset, batches, extern_data, data_keys=None, capacity=10, have_fixed_batch_size=False):
     """
-    :param tf.Session tf_session:
+    :param tf.Session|tf.InteractiveSession tf_session:
     :param Dataset.Dataset dataset:
     :param BatchSetGenerator batches:
     :param ExternData extern_data:
@@ -229,7 +229,8 @@ class Runner(object):
       dataset=dataset, batches=batches)
     self._should_train = train
     self._should_eval = eval
-    self.store_metadata_mod_step = False  # 500
+    self.store_metadata_mod_step = engine.config.int("store_metadata_mod_step", 0)
+    self.reset_updater_vars_mod_step = engine.config.int("reset_updater_vars_mod_step", 0)
     self.finalized = False
     self.num_steps = None
     self.device_crash_batch = None
@@ -259,7 +260,10 @@ class Runner(object):
         d["size:%s:%i" % (key, dim)] = v
     if self._should_train or self._should_eval:
       # These values are cached internally and the graph nodes are created on the first call.
-      d["loss"] = self.engine.network.get_objective()
+      loss = self.engine.network.get_objective()
+      if loss is 0:
+        loss = self.engine.get_const_tensor(key="zero_loss", value=0.0)
+      d["loss"] = loss
       for layer_name, loss in self.engine.network.loss_by_layer.items():
         d["cost:%s" % layer_name] = loss
       for layer_name, error in self.engine.network.error_by_layer.items():
@@ -418,9 +422,12 @@ class Runner(object):
       feed_dict = None
       while self.data_provider.have_more_data():
         feed_dict = self.data_provider.get_feed_dict(previous_feed_dict=feed_dict)
-        if self.engine.network.train_flag is not False:
+        if isinstance(self.engine.network.train_flag, tf.Tensor):
           feed_dict[self.engine.network.train_flag] = self._should_train
         start_time = time.time()
+        if self._should_train and self.reset_updater_vars_mod_step and step % self.reset_updater_vars_mod_step == 0:
+          print("Reset updater vars in step %i." % step, file=log.v5)
+          self.engine.updater.init_optimizer_vars()
         if self.store_metadata_mod_step and step % self.store_metadata_mod_step == 0:
           # Slow run that stores extra information for debugging.
           print('Storing metadata', file=log.v5)
@@ -467,6 +474,7 @@ class Runner(object):
       self.device_crash_batch = step
 
     finally:
+      writer.close()
       coord.request_stop()
       coord.join(threads)
       self.data_provider.stop_thread()
@@ -493,6 +501,8 @@ class Engine(object):
     self.train_data = None; " :type: Dataset.Dataset "
     self.start_epoch = None
     self.use_dynamic_train_flag = False
+    self.use_search_flag = False
+    self._const_cache = {}  # type: dict[str,tf.Tensor]
 
   def finalize(self):
     self._close_tf_session()
@@ -500,6 +510,11 @@ class Engine(object):
     self.network = None
     self.updater = None
     self._merge_all_summaries = None
+
+  def get_const_tensor(self, key, value):
+    if key not in self._const_cache:
+      self._const_cache[key] = tf.constant(value=value, name="const_%s" % key)
+    return self._const_cache[key]
 
   def _get_devices_config(self):
     """
@@ -564,20 +579,25 @@ class Engine(object):
     tf.reset_default_graph()
     self._checked_uninitialized_vars = False
     self._merge_all_summaries = None
+    self._const_cache.clear()
 
   get_train_start_epoch_batch = TheanoEngine.get_train_start_epoch_batch
   config_get_final_epoch = TheanoEngine.config_get_final_epoch
   get_epoch_model = TheanoEngine.get_epoch_model
   epoch_model_filename = TheanoEngine.epoch_model_filename
 
-  def get_epoch_model_filename(self):
-    return self.epoch_model_filename(self.model_filename, self.epoch, self.is_pretrain_epoch())
+  def get_epoch_model_filename(self, epoch=None):
+    if not epoch:
+      epoch = self.epoch
+    return self.epoch_model_filename(self.model_filename, epoch, self.is_pretrain_epoch(epoch=epoch))
 
   def get_epoch_str(self):
     return ("pretrain " if self.is_pretrain_epoch() else "") + "epoch %s" % self.epoch
 
-  def is_pretrain_epoch(self):
-    return self.pretrain and self.epoch <= self.pretrain.get_train_num_epochs()
+  def is_pretrain_epoch(self, epoch=None):
+    if not epoch:
+      epoch = self.epoch
+    return self.pretrain and epoch <= self.pretrain.get_train_num_epochs()
 
   def is_first_epoch_after_pretrain(self):
     return self.pretrain and self.epoch == self.pretrain.get_train_num_epochs() + 1
@@ -588,6 +608,18 @@ class Engine(object):
       if not dataset: continue
       eval_datasets[name] = dataset
     return eval_datasets
+
+  def load_model(self, epoch=None, filename=None):
+    """
+    :param int epoch: 
+    :param str filename: 
+    """
+    assert epoch or filename
+    if epoch:
+      assert not filename
+      filename = self.get_epoch_model_filename(epoch=epoch)
+    print("Load model %s" % (filename,), file=log.v4)
+    self.network.load_params_from_file(filename, session=self.tf_session)
 
   def save_model(self, filename):
     """
@@ -666,9 +698,11 @@ class Engine(object):
     self._make_tf_session()
     tf.set_random_seed(42)
     network = TFNetwork(
+      config=self.config,
       rnd_seed=epoch,
       train_flag=tf.placeholder(tf.bool, shape=(), name="train_flag")
-      if self.use_dynamic_train_flag else False)
+      if self.use_dynamic_train_flag else False,
+      search_flag=self.use_search_flag)
     network.construct_from_dict(net_desc)
     network.initialize_params(session=self.tf_session)
     network.layers_desc = net_desc
@@ -694,8 +728,7 @@ class Engine(object):
     self.network.set_params_by_serialized(old_network_params, session=self.tf_session)
 
   def train(self):
-    if self.start_epoch:
-      print("start training at epoch %i and step %i" % (self.start_epoch, self.start_batch), file=log.v3)
+    print("start training at epoch %i and step %i" % (self.start_epoch, self.start_batch), file=log.v3)
     print("using batch size: %i, max seqs: %i" % (self.batch_size, self.max_seqs), file=log.v4)
     print("learning rate control:", self.learning_rate_control, file=log.v4)
     print("pretrain:", self.pretrain, file=log.v4)
@@ -753,6 +786,8 @@ class Engine(object):
       if self.epoch != self.final_epoch:
         print("Stopped after epoch %i and not %i as planned." % (self.epoch, self.final_epoch), file=log.v3)
 
+    print("Finished training in epoch %i." % self.epoch, file=log.v3)
+
   def init_train_epoch(self):
     if self.is_pretrain_epoch():
       new_network_desc = self.pretrain.get_network_json_for_epoch(self.epoch)
@@ -773,6 +808,34 @@ class Engine(object):
       self.network.declare_train_params()
 
     self.updater.set_trainable_vars(self.network.get_trainable_params())
+
+    self._maybe_use_better_last_model()
+
+  def _maybe_use_better_last_model(self):
+    if not self.config.is_true("use_last_best_model"):
+      return
+    if self.is_pretrain_epoch():
+      return
+    opts = self.config.get_of_type("use_last_best_model", dict, default={}).copy()
+    if self.epoch % opts.pop("modulo", 1) != 0:
+      # Normally we would filter those out. One maybe sensible exception is if the last score was really bad.
+      if (self.learning_rate_control.getEpochErrorValue(self.epoch - 1) or 0) \
+           <= opts.get("filter_score", float("inf")):
+        return
+    # Check if the previous epoch model is the best and otherwise take the best last model params.
+    last_best_epoch = self.learning_rate_control.getLastBestEpoch(
+      last_epoch=self.epoch - 1,
+      first_epoch=self.pretrain.get_train_num_epochs() if self.pretrain else 1,
+      **opts)
+    if last_best_epoch and last_best_epoch != self.epoch - 1:
+      print("Last epoch %i (score: %f) is not the optimal model" %
+            (self.epoch -1, self.learning_rate_control.getEpochErrorValue(self.epoch -1))
+            + " but epoch %i has better score %f (%r), will use that model." %
+            (last_best_epoch, self.learning_rate_control.getEpochErrorValue(last_best_epoch),
+             self.learning_rate_control.getEpochErrorDict(last_best_epoch)),
+            file=log.v2)
+      self.load_model(epoch=last_best_epoch)
+      self.updater.init_optimizer_vars()  # reset the optimizer vars
 
   def train_epoch(self):
     print("start", self.get_epoch_str(), "with learning rate", self.learning_rate, "...", file=log.v4)
@@ -801,6 +864,7 @@ class Engine(object):
     if not trainer.finalized:
       if trainer.device_crash_batch is not None:  # Otherwise we got an unexpected exception - a bug in our code.
         self.save_model(self.get_epoch_model_filename() + ".crash_%i" % trainer.device_crash_batch)
+      print("Trainer not finalized, quitting.", file=log.v4)
       sys.exit(1)
 
     assert not any(numpy.isinf(list(trainer.score.values()))) or any(numpy.isnan(list(trainer.score.values()))), \
@@ -892,7 +956,7 @@ class Engine(object):
     :param Dataset.Dataset dataset:
     :param int seq_idx:
     :param str|None output_layer_name: e.g. "output". if not set, will read from config "forward_output_layer"
-    :return: numpy array, output in time major format (time,batch,dim)
+    :return: numpy array, output in time major format (time,dim)
     :rtype: numpy.ndarray
     """
     if not output_layer_name:
@@ -918,7 +982,8 @@ class Engine(object):
     feed_dict = data_provider.get_feed_dict(previous_feed_dict=None, single_threaded=True)
     output_data = self.network.layers[output_layer_name].output
     output_value = self.tf_session.run(output_data.get_placeholder_as_time_major(), feed_dict=feed_dict)
-    return output_value
+    assert output_value.shape[1] == 1  # batch-dim
+    return output_value[:, 0]  # remove batch-dim
 
   def analyze(self, data, statistics):
     """
@@ -968,3 +1033,27 @@ class Engine(object):
     if not analyzer.finalized:
       print("WARNING: Did not finished through the whole epoch.", file=log.v1)
       sys.exit(1)
+
+  def search(self, dataset):
+    """
+    :param Dataset.Dataset dataset: 
+    """
+    if not self.use_search_flag:
+      self.use_search_flag = True
+      if self.network:
+        print("Reinit network with search flag.", file=log.v3)
+      self.init_network_from_config(self.config)
+    else:
+      if not self.network:
+        self.init_network_from_config(self.config)
+    batches = dataset.generate_batches(
+      recurrent_net=self.network.recurrent,
+      batch_size=self.batch_size,
+      max_seqs=1,
+      max_seq_length=int(self.max_seq_length),
+      used_data_keys=self.network.used_data_keys)
+    runner = Runner(engine=self, dataset=dataset, batches=batches, train=False)
+    runner.run(report_prefix=self.get_epoch_str() + " search")
+    assert runner.finalized
+    print("search: score %s error %s" % (
+      self.format_score(runner.score), self.format_score(runner.error)))

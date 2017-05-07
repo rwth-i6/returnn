@@ -5,7 +5,7 @@ Welcome to RETURNN
 `RETURNN paper <https://arxiv.org/abs/1608.00895>`_.
 
 RETURNN - RWTH extensible training framework for universal recurrent neural networks,
-is a Theano-based implementation of modern recurrent neural network architectures.
+is a Theano/TensorFlow-based implementation of modern recurrent neural network architectures.
 It is optimized for fast and reliable training of recurrent neural networks in a multi-GPU environment.
 
 Features include:
@@ -13,11 +13,12 @@ Features include:
 - Mini-batch training of feed-forward neural networks
 - Sequence-chunking based batch training for recurrent neural networks
 - Long short-term memory recurrent neural networks
+  including our own fast CUDA kernel
 - Multidimensional LSTM (GPU only, there is no CPU version)
 - Memory management for large data sets
 - Work distribution across multiple devices
 
-See :ref:`basic_usage`.
+See :ref:`basic_usage` and :ref:`tech_overview`.
 
 There are some example demos in ``/demos``
 which work on artifically generated data,
@@ -34,20 +35,21 @@ User guide
 ----------
 
 .. toctree::
-	:maxdepth: 2
+    :maxdepth: 2
 
-	installation
-	basic_usage
+    installation
+    basic_usage
+    tech_overview
 
 
 API Reference
 -------------
 
 .. toctree::
-	:maxdepth: 2
-	:glob:
+    :maxdepth: 2
+    :glob:
 
-	api
+    api
 
 
 Refs

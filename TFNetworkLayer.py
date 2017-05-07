@@ -15,6 +15,8 @@ class LayerBase(object):
                L2=None, is_output_layer=None,
                batch_norm=False,
                spatial_smoothing=0.0,
+               initial_output=None,
+               rec_previous_layer=None,
                trainable=True):
     """
     :param str name:
@@ -30,6 +32,8 @@ class LayerBase(object):
     :param float|None L2: for constraints
     :param bool|None is_output_layer:
     :param bool|dict batch_norm:
+    :param str|float initial_output: used for recurrent layer, see self.get_rec_initial_output()
+    :param LayerBase|None rec_previous_layer: via the recurrent layer, layer (template) which represents the past of us
     :param bool trainable: whether the parameters of this layer will be trained
     """
     self.name = name
@@ -55,6 +59,9 @@ class LayerBase(object):
         network=network, name=name, target=target, size_target=size_target,
         sources=sources, loss=loss)
     self.output_before_activation = None  # type: None|OutputWithActivation
+    self.rec_vars_outputs = {}  # type: dict[str,tf.Tensor]
+    self._initial_output = initial_output
+    self._rec_previous_layer = rec_previous_layer
     self.sources = sources
     self.params = {}  # type: dict[str,tf.Variable]
     self.L2 = L2
@@ -207,6 +214,14 @@ class LayerBase(object):
     if self.name == "output":
       return True
     return False
+
+  def get_dep_layers(self):
+    """
+    :return: list of layers this layer depends on.
+      normally this is just self.sources but e.g. the attention layer in addition has a base, etc.
+    :rtype: list[LayerBase]
+    """
+    return list(self.sources)
 
   def add_param(self, param):
     """
@@ -423,6 +438,35 @@ class LayerBase(object):
       return hidden_states[0]
     return tf.concat(hidden_states, axis=1, name="concat_hidden_states")
 
+  @classmethod
+  def get_rec_initial_output(cls, batch_dim, name, output, initial_output=None, **kwargs):
+    v = initial_output
+    data = output
+    if isinstance(v, tf.Tensor):
+      return v
+    if v is None and data.sparse:
+      raise Exception(
+        ("You must explicitly provide an initial output value for sparse data %r." % data) +
+        (" E.g. '%s': {'initial_output': 'zeros'}." % name))
+    if v is None:
+      v = "zeros"
+    assert all([d is not None for d in data.shape])
+    shape = [batch_dim] + list(data.shape)
+    if isinstance(v, (float, int)):
+      with tf.name_scope("init_%s_const" % name):
+        return tf.ones(shape, dtype=data.dtype) * v
+    assert isinstance(v, str)
+    if v == "zeros":
+      return tf.zeros(shape, dtype=data.dtype, name="init_%s_zeros" % name)
+    elif v == "ones":
+      return tf.ones(shape, dtype=data.dtype, name="init_%s_ones" % name)
+    else:
+      raise Exception("invalid initial output type %r for sub-layer %r" % (v, name))
+
+  @classmethod
+  def get_rec_initial_extra_outputs(cls, batch_dim, **kwargs):
+    return {}
+
 
 class SourceLayer(LayerBase):
   layer_class = "source"
@@ -562,7 +606,9 @@ class CopyLayer(_ConcatInputLayer):
     self.output = self.input_data
 
   @classmethod
-  def get_out_data_from_opts(cls, sources=(), **kwargs):
+  def get_out_data_from_opts(cls, sources=(), out_type=None, n_out=None, **kwargs):
+    if out_type or n_out:
+      return super(CopyLayer, cls).get_out_data_from_opts(out_type=out_type, n_out=n_out, sources=sources, **kwargs)
     return get_concat_sources_data_template(sources)
 
 
@@ -1276,6 +1322,86 @@ class GetLastHiddenStateLayer(LayerBase):
       out_type={"shape": (n_out,), "dim": n_out, "batch_dim_axis": 0, "time_dim_axis": None}, **kwargs)
 
 
+class ChoiceLayer(LayerBase):
+  """
+  This layer represents a choice to be made in search during inference,
+  such as choosing the top-k outputs from a log-softmax for beam search.
+  During training, this layer can return the true label.
+  This is supposed to be used inside the rec layer.
+  This can be extended in various ways.
+  
+  Assume that we get input (batch,dim) from a log-softmax.
+  Assume that each batch is already a choice via search.
+  In search with a beam size of N, we would output
+  sparse (batch=N,) and scores for each. 
+  """
+  layer_class = "choice"
+
+  def __init__(self, beam_size, **kwargs):
+    super(ChoiceLayer, self).__init__(**kwargs)
+    # We assume log-softmax here, inside the rec layer.
+    assert len(self.sources) == 1
+    assert not self.sources[0].output.sparse
+    assert self.sources[0].output.dim == self.output.dim
+    assert self.sources[0].output.shape == (self.output.dim,)
+    assert self.target
+    self.beam_size = beam_size
+    self.choice_base_layer = self.network.get_search_choices(sources=self.sources)
+    self.choice_scores = None
+    self.choice_source_beams = None
+    if self.network.search_flag:
+      net_batch_dim = self.network.get_batch_dim()
+      assert self.choice_base_layer  # not implemented yet...
+      scores_base = self.choice_base_layer.rec_vars_outputs["choice_scores"]  # (batch, beam_in)
+      assert scores_base.get_shape().ndims == 2
+      beam_in = tf.shape(scores_base)[1]
+      scores_base = tf.expand_dims(scores_base, axis=-1)  # (batch, beam_in, dim)
+      scores_in = self.sources[0].output.placeholder  # (batch * beam_in, dim)
+      scores_in_dim = self.sources[0].output.dim
+      scores_in = tf.reshape(scores_in, [net_batch_dim, beam_in, scores_in_dim])  # (batch, beam_in, dim)
+      scores_in += scores_base  # (batch, beam_in, dim)
+      scores_in_flat = tf.reshape(scores_in, [net_batch_dim, beam_in * scores_in_dim])  # (batch, beam_in * dim)
+      # We get scores/labels of shape (batch, beam) with indices in [0..beam_in*dim-1].
+      scores, labels = tf.nn.top_k(scores_in_flat, k=beam_size)
+      self.choice_source_beams = labels // beam_in  # (batch, beam) -> scores_in batch idx
+      labels = labels % beam_in  # (batch, beam) -> dim idx
+      labels = tf.reshape(labels, [net_batch_dim * beam_size])  # (batch * beam)
+      self.choice_scores = scores  # (batch, beam) -> log score
+      self.rec_vars_outputs["choice_scores"] = scores
+      self.output = Data(
+        name="%s_choice_output" % self.name,
+        batch_dim_axis=0,
+        shape=(),
+        sparse=True,
+        dim=self.output.dim,
+        placeholder=labels)
+    else:
+      # Note: If you want to do forwarding, without having the reference,
+      # that wont work. You must do search in that case.
+      self.output = self._static_get_target_value(
+        target=self.target, network=self.network,
+        mark_data_key_as_used=True)
+
+  @classmethod
+  def get_out_data_from_opts(cls, target, network, **kwargs):
+    return cls._static_get_target_value(
+      target=target, network=network,
+      mark_data_key_as_used=False)
+
+  # noinspection PyMethodOverriding
+  @classmethod
+  def get_rec_initial_extra_outputs(cls, network, beam_size, **kwargs):
+    """
+    :param TFNetwork.TFNetwork network:
+    :param int beam_size:
+    :rtype: dict[str,tf.Tensor]
+    """
+    if not network.search_flag:
+      return {}
+    batch_dim = network.get_batch_dim()
+    return {"choice_scores": tf.zeros([batch_dim, beam_size])}
+
+
 class RnnCellLayer(_ConcatInputLayer):
   """
   Wrapper around tf.contrib.rnn.RNNCell.
@@ -1285,14 +1411,15 @@ class RnnCellLayer(_ConcatInputLayer):
 
   layer_class = "rnn_cell"
 
-  def __init__(self, n_out, unit, prev_state, unit_opts=None, **kwargs):
+  def __init__(self, n_out, unit, initial_state=None, unit_opts=None, **kwargs):
     """
     :param int n_out: so far, only output shape (batch,n_out) supported
     :param str|tf.contrib.rnn.RNNCell unit: e.g. "BasicLSTM" or "LSTMBlock"
-    :param tf.Tensor prev_state:
+    :param str|float|LayerBase initial_state: see self.get_rec_initial_state()
     :param dict[str]|None unit_opts:
     """
     super(RnnCellLayer, self).__init__(**kwargs)
+    self._initial_state = initial_state
     with tf.variable_scope(
           "rec",
           initializer=tf.contrib.layers.xavier_initializer(
@@ -1302,8 +1429,10 @@ class RnnCellLayer(_ConcatInputLayer):
       self.cell = self._get_cell(n_out=n_out, unit=unit, unit_opts=unit_opts)
       self.output.time_dim_axis = None
       self.output.batch_dim_axis = 0
+      prev_state = self._rec_previous_layer.rec_vars_outputs["state"]
       self.output.placeholder, state = self.cell(self.input_data.placeholder, prev_state)
       self._hidden_state = state
+      self.rec_vars_outputs["state"] = state
       params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope_name_prefix)
       assert params
       self.params.update({p.name[len(scope_name_prefix):-2]: p for p in params})
@@ -1339,6 +1468,12 @@ class RnnCellLayer(_ConcatInputLayer):
       time_dim_axis=None,
       size_placeholder={})
 
+  def get_dep_layers(self):
+    l = super(RnnCellLayer, self).get_dep_layers()
+    if isinstance(self._initial_state, LayerBase):
+      l += [self._initial_state]
+    return l
+
   @classmethod
   def get_hidden_state_size(cls, n_out, unit, unit_opts=None, **kwargs):
     cell = cls._get_cell(unit=unit, unit_opts=unit_opts, n_out=n_out)
@@ -1354,6 +1489,35 @@ class RnnCellLayer(_ConcatInputLayer):
     if nest.is_sequence(self._hidden_state):
       return tf.concat(self._hidden_state, axis=1)
     return self._hidden_state
+
+  @classmethod
+  def _get_rec_initial_state(cls, batch_dim, name, initial_state=None, **kwargs):
+    v = initial_state
+    if isinstance(v, LayerBase):
+      return v.get_last_hidden_state()
+    dim = cls.get_hidden_state_size(**kwargs)
+
+    def make(d):
+      assert isinstance(d, int)
+      shape = [batch_dim, d]
+      if v == "zeros" or not v:
+        return tf.zeros(shape)
+      elif v == "ones" or v == 1:
+        return tf.ones(shape)
+      else:
+        raise Exception("invalid initial state type %r for sub-layer %r" % (v, name))
+
+    if isinstance(dim, (tuple, list)):
+      s = [make(d) for d in dim]
+      # Make it the same type because nest.assert_same_structure() will complain otherwise.
+      if isinstance(dim, tuple) and type(dim) is not tuple:  # assume namedtuple
+        return type(dim)(*s)
+      return type(dim)(s)
+    return make(dim)
+
+  @classmethod
+  def get_rec_initial_extra_outputs(cls, **kwargs):
+    return {"state": cls._get_rec_initial_state(**kwargs)}
 
 
 class AttentionBaseLayer(_ConcatInputLayer):
@@ -1382,6 +1546,9 @@ class AttentionBaseLayer(_ConcatInputLayer):
     super(AttentionBaseLayer, self).__init__(**kwargs)
     self.base = base
 
+  def get_dep_layers(self):
+    return super(AttentionBaseLayer, self).get_dep_layers() + [self.base]
+
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
     super(AttentionBaseLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
@@ -1409,6 +1576,9 @@ class GlobalAttentionContextBaseLayer(AttentionBaseLayer):
     """
     super(GlobalAttentionContextBaseLayer, self).__init__(**kwargs)
     self.base_ctx = base_ctx
+
+  def get_dep_layers(self):
+    return super(GlobalAttentionContextBaseLayer, self).get_dep_layers() + [self.base_ctx]
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
@@ -1556,6 +1726,138 @@ class GaussWindowAttentionLayer(AttentionBaseLayer):
 class RecLayer(_ConcatInputLayer):
   layer_class = "rec"
   recurrent = True
+
+  def __init__(self,
+               unit="lstm",
+               direction=None, input_projection=True,
+               initial_state=None,
+               **kwargs):
+    """
+    :param str|dict[str,dict[str]] unit: the RNNCell/etc name, e.g. "nativelstm". see comment below.
+      alternatively a whole subnetwork, which will be executed step by step,
+      and which can include "prev" in addition to "from" to refer to previous steps.
+    :param int|None direction: None|1 -> forward, -1 -> backward
+    :param bool input_projection: True -> input is multiplied with matrix. False only works if same input dim
+    :param LayerBase|None initial_state:
+    :param dict[str]|bool output_feed_back: feedback mode opts, see OutputFeedback
+    :param dict[str]|bool attention: attention opts, see Attention
+    :param dict[str] kwargs: passed on to base class
+    """
+    super(RecLayer, self).__init__(**kwargs)
+    import tensorflow.contrib.rnn as rnn_contrib
+    import TFNativeOp
+    if direction is not None:
+      assert direction in [-1, 1]
+    self._last_hidden_state = None
+    self._direction = direction
+    self._initial_state_src = initial_state
+    self._initial_state = initial_state.get_last_hidden_state() if initial_state else None
+    self._input_projection = input_projection
+    # If we do search, and there are choice-layers in the subnet of our recurrence,
+    # for the output layer, shape [time, batch, beam] -> src beam idx
+    # Note that in this case, our output will be of shape [time, batch * beam, dim].
+    self.choices = None  # type: tf.Tensor
+    with tf.variable_scope(
+          "rec",
+          initializer=tf.contrib.layers.xavier_initializer(
+            seed=self.network.random.randint(2**31))) as scope:
+      assert isinstance(scope, tf.VariableScope)
+      self._rec_scope = scope
+      scope_name_prefix = scope.name + "/"  # e.g. "layer1/rec/"
+      self.cell = self._get_cell(unit)
+      if isinstance(self.cell, (rnn_contrib.RNNCell, rnn_contrib.FusedRNNCell)):
+        y = self._get_output_cell(self.cell)
+      elif isinstance(self.cell, TFNativeOp.RecSeqCellOp):
+        y = self._get_output_native_rec_op(self.cell)
+      elif isinstance(self.cell, self.SubnetworkCell):
+        y = self._get_output_subnet_unit(self.cell)
+      else:
+        raise Exception("invalid type: %s" % type(self.cell))
+      self.output.time_dim_axis = 0
+      self.output.batch_dim_axis = 1
+      self.output.placeholder = y
+      params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope_name_prefix)
+      self.params.update({p.name[len(scope_name_prefix):-2]: p for p in params})
+
+  def get_dep_layers(self):
+    l = super(RecLayer, self).get_dep_layers()
+    if self._initial_state_src:
+      l += [self._initial_state_src]
+    if isinstance(self.cell, self.SubnetworkCell):
+      for _, layer in sorted(self.cell.net.layers.items()):
+        assert isinstance(layer, LayerBase)
+        for dep in layer.get_dep_layers():
+          # Usually dep.network is self.cell.net but it could reference to our own net,
+          # e.g. if this is an attention layer like
+          # {"class": "dot_attention", "base": "base:encoder", ...}.
+          if dep.network is self.network:
+            if dep not in l:
+              l += [dep]
+    return l
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d: will modify inplace
+    :param TFNetwork.TFNetwork network:
+    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
+    """
+    super(RecLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    initial_state = d.pop("initial_state", None)
+    if initial_state:
+      d["initial_state"] = get_layer(initial_state)
+    if isinstance(d.get("unit"), dict):
+      def sub_get_layer(name):
+        if name.startswith("base:"):
+          return get_layer(name[len("base:"):])
+      for sub in d["unit"].values():
+        assert isinstance(sub, dict)
+        if "initial_state" in sub:
+          assert isinstance(sub["initial_state"], str)
+          if sub["initial_state"].startswith("base:"):
+            sub["initial_state"] = get_layer(sub["initial_state"][len("base:"):])
+        if "class" in sub:
+          class_name = sub["class"]
+          cl = get_layer_class(class_name)
+          # Operate on a copy because we will transform the dict later.
+          # We only need this to resolve any other layer dependencies in the main network.
+          cl.transform_config_dict(sub.copy(), network=network, get_layer=sub_get_layer)
+
+  @classmethod
+  def get_out_data_from_opts(cls, unit, **kwargs):
+    n_out = kwargs.get("n_out", None)
+    out_type = kwargs.get("out_type", None)
+    target = kwargs.get("target", None)
+    loss = kwargs.get("loss", None)
+    if out_type or n_out or target or loss:
+      if out_type:
+        assert out_type.get("time_dim_axis", 0) == 0
+        assert out_type.get("batch_dim_axis", 1) == 1
+      out = super(RecLayer, cls).get_out_data_from_opts(**kwargs)
+    else:
+      out = None
+    if isinstance(unit, dict):  # subnetwork
+      if "n_out" in unit["output"] or "out_type" in unit["output"] or "target" in unit["output"] or "loss" in unit["output"]:
+        sub_out_type = unit["output"].get("out_type")
+        if sub_out_type and "shape" in sub_out_type:
+          sub_out_type = sub_out_type.copy()
+          sub_out_type["shape"] = (None,) + tuple(sub_out_type["shape"])  # add time-dim
+        sub_opts = kwargs.copy()
+        sub_opts.setdefault("n_out", unit["output"].get("n_out"))
+        sub_opts.setdefault("out_type", sub_out_type)
+        sub_opts.setdefault("target", unit["output"].get("target"))
+        sub_opts.setdefault("loss", unit["output"].get("loss"))
+        sub_out = cls._base_get_out_data_from_opts(**sub_opts)
+        if out:
+          assert sub_out.dim == out.dim
+          assert sub_out.shape == out.shape
+        else:
+          out = sub_out
+    assert out
+    out.time_dim_axis = 0
+    out.batch_dim_axis = 1
+    return out
+
   _rnn_cells_dict = {}
 
   @classmethod
@@ -1585,116 +1887,6 @@ class RecLayer(_ConcatInputLayer):
       cls._create_rnn_cells_dict()
     return cls._rnn_cells_dict[name.lower()]
 
-  @classmethod
-  def transform_config_dict(cls, d, network, get_layer):
-    """
-    :param dict[str] d: will modify inplace
-    :param TFNetwork.TFNetwork network:
-    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
-    """
-    super(RecLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
-    initial_state = d.pop("initial_state", None)
-    if initial_state:
-      if not isinstance(initial_state, (list, tuple)):
-        initial_state = [initial_state]
-      assert len(initial_state) > 0
-      sources = [get_layer(s).get_last_hidden_state() for s in initial_state]
-      if len(sources) == 1:
-        d["initial_state"] = sources[0]
-      else:
-        d["initial_state"] = tf.concat(sources, axis=1, name="concat_hidden_state")
-    if isinstance(d.get("unit"), dict):
-      def sub_get_layer(name):
-        if name.startswith("base:"):
-          return get_layer(name[len("base:"):])
-      for sub in d["unit"].values():
-        assert isinstance(sub, dict)
-        if "initial_state" in sub:
-          assert isinstance(sub["initial_state"], str)
-          if sub["initial_state"].startswith("base:"):
-            sub["initial_state"] = get_layer(sub["initial_state"][len("base:"):]).get_last_hidden_state()
-        if "class" in sub:
-          class_name = sub["class"]
-          cl = get_layer_class(class_name)
-          # Operate on a copy because we will transform the dict later.
-          # We only need this to resolve any other layer dependencies in the main network.
-          cl.transform_config_dict(sub.copy(), network=network, get_layer=sub_get_layer)
-
-  def __init__(self,
-               unit="lstm",
-               direction=None, input_projection=True,
-               initial_state=None,
-               **kwargs):
-    """
-    :param str|dict[str,dict[str]] unit: the RNNCell/etc name, e.g. "nativelstm". see comment below.
-      alternatively a whole subnetwork, which will be executed step by step,
-      and which can include "prev" in addition to "from" to refer to previous steps.
-    :param int|None direction: None|1 -> forward, -1 -> backward
-    :param bool input_projection: True -> input is multiplied with matrix. False only works if same input dim
-    :param tf.Tensor|None initial_state:
-    :param dict[str]|bool output_feed_back: feedback mode opts, see OutputFeedback
-    :param dict[str]|bool attention: attention opts, see Attention
-    :param dict[str] kwargs: passed on to base class
-    """
-    super(RecLayer, self).__init__(**kwargs)
-    import tensorflow.contrib.rnn as rnn_contrib
-    import TFNativeOp
-    if direction is not None:
-      assert direction in [-1, 1]
-    self._last_hidden_state = None
-    self._direction = direction
-    self._initial_state = initial_state
-    self._input_projection = input_projection
-    with tf.variable_scope(
-          "rec",
-          initializer=tf.contrib.layers.xavier_initializer(
-            seed=self.network.random.randint(2**31))) as scope:
-      assert isinstance(scope, tf.VariableScope)
-      self._rec_scope = scope
-      scope_name_prefix = scope.name + "/"  # e.g. "layer1/rec/"
-      self.cell = self._get_cell(unit)
-      if isinstance(self.cell, (rnn_contrib.RNNCell, rnn_contrib.FusedRNNCell)):
-        y = self._get_output_cell(self.cell)
-      elif isinstance(self.cell, TFNativeOp.RecSeqCellOp):
-        y = self._get_output_native_rec_op(self.cell)
-      elif isinstance(self.cell, self.SubnetworkCell):
-        y = self._get_output_subnet_unit(self.cell)
-      else:
-        raise Exception("invalid type: %s" % type(self.cell))
-      self.output.time_dim_axis = 0
-      self.output.batch_dim_axis = 1
-      self.output.placeholder = y
-      params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope_name_prefix)
-      assert params
-      self.params.update({p.name[len(scope_name_prefix):-2]: p for p in params})
-
-  @classmethod
-  def get_out_data_from_opts(cls, unit, n_out=None, out_type=None, **kwargs):
-    if out_type or n_out:
-      if out_type:
-        assert out_type.get("time_dim_axis", 0) == 0
-        assert out_type.get("batch_dim_axis", 1) == 1
-      out = super(RecLayer, cls).get_out_data_from_opts(n_out=n_out, out_type=out_type, **kwargs)
-    else:
-      out = None
-    if isinstance(unit, dict):  # subnetwork
-      if "n_out" in unit["output"] or "out_type" in unit["output"]:
-        sub_n_out = unit["output"].get("n_out")
-        sub_out_type = unit["output"].get("out_type")
-        if sub_out_type and "shape" in sub_out_type:
-          sub_out_type = sub_out_type.copy()
-          sub_out_type["shape"] = (None,) + tuple(sub_out_type["shape"])  # add time-dim
-        sub_out = cls._base_get_out_data_from_opts(n_out=sub_n_out, out_type=sub_out_type, **kwargs)
-        if out:
-          assert sub_out.dim == out.dim
-          assert sub_out.shape == out.shape
-        else:
-          out = sub_out
-    assert out
-    out.time_dim_axis = 0
-    out.batch_dim_axis = 1
-    return out
-
   def _get_input(self):
     """
     :return: (x, seq_len), where x is (time,batch,...,dim) and seq_len is (batch,)
@@ -1711,6 +1903,10 @@ class RecLayer(_ConcatInputLayer):
     return x, seq_len
 
   def _get_cell(self, unit):
+    """
+    :param str|dict[str] unit:
+    :rtype: RecLayer.SubnetworkCell|tensorflow.contrib.rnn.RNNCell|tensorflow.contrib.rnn.FusedRNNCell|TFNativeOp.RecSeqCellOp
+    """
     import tensorflow.contrib.rnn as rnn_contrib
     import TFNativeOp
     if isinstance(unit, dict):
@@ -1734,6 +1930,11 @@ class RecLayer(_ConcatInputLayer):
     return cell
 
   def _get_output_cell(self, cell):
+    """
+    :param tensorflow.contrib.rnn.RNNCell|tensorflow.contrib.rnn.FusedRNNCell cell:
+    :return: output of shape (time, batch, dim)
+    :rtype: tf.Tensor
+    """
     from tensorflow.python.ops import rnn
     import tensorflow.contrib.rnn as rnn_contrib
     assert self.input_data
@@ -1760,6 +1961,11 @@ class RecLayer(_ConcatInputLayer):
     return y
 
   def _get_output_native_rec_op(self, cell):
+    """
+    :param TFNativeOp.RecSeqCellOp cell:
+    :return: output of shape (time, batch, dim)
+    :rtype: tf.Tensor
+    """
     from TFUtil import dot, sequence_mask_time_major, directed
     assert self.input_data
     x, seq_len = self._get_input()
@@ -1791,10 +1997,12 @@ class RecLayer(_ConcatInputLayer):
       from copy import deepcopy
       self.parent = parent
       self.net_dict = deepcopy(net_dict)
-      self._net_dict_extra = {}  # type: dict[str,dict[str]]
-      self._extract_extra()
       from TFNetwork import TFNetwork, ExternData
-      self.net = TFNetwork(extern_data=ExternData(), train_flag=parent.network.train_flag, parent=parent)
+      self.net = TFNetwork(
+        extern_data=ExternData(),
+        train_flag=parent.network.train_flag,
+        search_flag=parent.network.search_flag,
+        parent=parent)
       if parent.input_data:
         self.net.extern_data.data["source"] = \
           parent.input_data.copy_template_excluding_time_dim()
@@ -1803,21 +2011,22 @@ class RecLayer(_ConcatInputLayer):
           parent.network.extern_data.data[parent.target].copy_template_excluding_time_dim()
       self.layer_data_templates = {}  # type: dict[str,RecLayer.SubnetworkCell.TemplateLayer]
       self.prev_layers_needed = set()  # type: set[str]
-      self.layers_with_hidden_state = set()  # type: set[str]
       self._construct_template()
-
-    def _extract_extra(self):
-      keys = ["initial_state", "initial_output"]
-      for name, d in list(self.net_dict.items()):
-        assert isinstance(d, dict)
-        self._net_dict_extra[name] = {}
-        for k in keys:
-          if k in d:
-            self._net_dict_extra[name][k] = d.pop(k)
-        if not d:
-          del self.net_dict[name]
+      self._initial_outputs = None  # type: dict[str,tf.Tensor]
+      self._initial_extra_outputs = None  # type: dict[str,dict[str,tf.Tensor|tuple[tf.Tensor]]]
 
     class TemplateLayer(LayerBase):
+      _sub_class_cache = {}
+
+      @classmethod
+      def _get_sub_class(cls, layer_class):
+        if layer_class in cls._sub_class_cache:
+          return cls._sub_class_cache[layer_class]
+        class SubTemplateLayer(cls, layer_class):
+          pass
+        cls._sub_class_cache[layer_class] = SubTemplateLayer
+        return SubTemplateLayer
+
       def __init__(self, network, name):
         """
         :param TFNetwork.TFNetwork network:
@@ -1828,8 +2037,8 @@ class RecLayer(_ConcatInputLayer):
           out_type={"shape": ()}, name=name, network=network)
         self.output.size_placeholder = {}  # must be initialized
         self.layer_class = ":uninitialized-template"
-        self._layer_class = None
-        self._kwargs = None
+        self.layer_class_type = None  # type: type[LayerBase]|LayerBase
+        self.kwargs = None  # type: dict[str]
 
       def init(self, output, layer_class, template_type="template", **kwargs):
         """
@@ -1837,13 +2046,14 @@ class RecLayer(_ConcatInputLayer):
         :param type[LayerBase]|LayerBase layer_class: 
         :param str template_type: 
         """
+        self.__class__ = self._get_sub_class(layer_class)
         self.layer_class = ":%s:%s" % (template_type, layer_class.layer_class)
         self.output = output
         if not self.output.size_placeholder:
           self.output.size_placeholder = {}
-        self._layer_class = layer_class
-        self._kwargs = kwargs
-        self._kwargs["output"] = output
+        self.layer_class_type = layer_class
+        self.kwargs = kwargs
+        self.kwargs["output"] = output
 
       def copy(self, template_type):
         """
@@ -1851,8 +2061,8 @@ class RecLayer(_ConcatInputLayer):
         :return: new _TemplateLayer
         :rtype: RecLayer.SubnetworkCell.TemplateLayer
         """
-        l = self.__class__(network=self.network, name=self.name)
-        l.init(layer_class=self._layer_class, template_type=template_type, **self._kwargs)
+        l = RecLayer.SubnetworkCell.TemplateLayer(network=self.network, name=self.name)
+        l.init(layer_class=self.layer_class_type, template_type=template_type, **self.kwargs)
         return l
 
     class StepIndexLayer(LayerBase):
@@ -1879,8 +2089,6 @@ class RecLayer(_ConcatInputLayer):
         layer_desc["name"] = name
         layer_desc["network"] = self.net
         output = layer_class.get_out_data_from_opts(**layer_desc)
-        if issubclass(layer_class, RnnCellLayer):
-          self.layers_with_hidden_state.add(name)
         layer.init(layer_class=layer_class, output=output, **layer_desc)
         return self.layer_data_templates[name]
 
@@ -1897,7 +2105,7 @@ class RecLayer(_ConcatInputLayer):
         if name.startswith("base:"):
           return self.parent.network.layers[name[len("base:"):]]
         # Need to create layer instance here now to not run into recursive loops.
-        # We will extend it later in add_layer().
+        # We will extend it later in add_templated_layer().
         self.layer_data_templates[name] = self.TemplateLayer(name=name, network=self.net)
         return self.net._construct_layer(
           self.net_dict, name, get_layer=get_templated_layer, add_layer=add_templated_layer)
@@ -1906,10 +2114,10 @@ class RecLayer(_ConcatInputLayer):
       get_templated_layer("output")
       assert "output" in self.layer_data_templates
 
-    def _construct(self, prev_outputs, prev_states, data=None, classes=None, i=None):
+    def _construct(self, prev_outputs, prev_extra, data=None, classes=None, i=None):
       """
       :param dict[str,tf.Tensor] prev_outputs: outputs of the layers from the previous step
-      :param dict[str,tf.Tensor] prev_states: hidden states of the previous step for layers who need it
+      :param dict[str,dict[str,tf.Tensor]] prev_extra: extra output / hidden states of the previous step for layers
       :param tf.Tensor|None data: optional source data, shape e.g. (batch,dim)
       :param tf.Tensor|None classes: optional target classes, shape e.g. (batch,) if it is sparse
       :param tf.Tensor|None i: loop counter
@@ -1924,12 +2132,20 @@ class RecLayer(_ConcatInputLayer):
         layer = prev_layers[name] = self.layer_data_templates[name].copy(template_type="prev")
         layer.output.placeholder = prev_outputs[name]
         layer.output.placeholder.set_shape(tf.TensorShape(layer.output.batch_shape))
+        assert layer.output.placeholder.dtype is tf.as_dtype(layer.output.dtype)
         layer.output.size_placeholder = {}  # must be set
+      for name in prev_extra.keys():
+        if name not in prev_layers:
+          layer = prev_layers[name] = self.layer_data_templates[name].copy(template_type="prev")
+        else:
+          layer = prev_layers[name]
+        layer.rec_vars_outputs = prev_extra[name]
 
       from copy import deepcopy
       net_dict = deepcopy(self.net_dict)
-      for name in prev_states.keys():
-        net_dict[name]["prev_state"] = prev_states[name]
+      for name in net_dict.keys():
+        if name in prev_layers:
+          net_dict[name]["rec_previous_layer"] = prev_layers[name]
 
       def get_layer(name):
         if name.startswith("prev:"):
@@ -1953,54 +2169,18 @@ class RecLayer(_ConcatInputLayer):
       :param tf.Tensor batch_dim:
       :rtype: tf.Tensor
       """
-      data = self.layer_data_templates[name].output
-      # Warning: Should we silently allow this and use the default (0) for sparse data?
-      v = self._net_dict_extra.get(name, {}).get("initial_output", None)
-      if isinstance(v, tf.Tensor):
-        return v
-      if v is None and data.sparse:
-        raise Exception(
-          ("You must explicitly provide an initial output value for sparse data %r." % data) +
-          (" E.g. '%s': {'initial_output': 'zeros'}." % name))
-      if v is None:
-        v = "zeros"
-      shape = [batch_dim] + list(data.shape)
-      if isinstance(v, (float, int)):
-        with tf.name_scope("init_%s_const" % name):
-          return tf.ones(shape) * v
-      assert isinstance(v, str)
-      if v == "zeros":
-        return tf.zeros(shape, dtype=data.dtype, name="init_%s_zeros" % name)
-      elif v == "ones":
-        return tf.ones(shape, dtype=data.dtype, name="init_%s_ones" % name)
-      else:
-        raise Exception("invalid initial output type %r for sub-layer %r" % (v, name))
+      cl = self.layer_data_templates[name].layer_class_type
+      return cl.get_rec_initial_output(batch_dim=batch_dim, **self.layer_data_templates[name].kwargs)
 
-    def _get_init_state(self, name, batch_dim):
+    def _get_init_extra_outputs(self, name, batch_dim):
       """
       :param str name: layer name
       :param tf.Tensor batch_dim:
       :rtype: tf.Tensor|tuple[tf.Tensor]
       """
-      v = self._net_dict_extra[name].get("initial_state", "zeros")
-      if isinstance(v, tf.Tensor):
-        return v
-      assert isinstance(v, str)
-      cl = self.layer_data_templates[name]._layer_class
-      assert issubclass(cl, RnnCellLayer)
-      dim = cl.get_hidden_state_size(**self.layer_data_templates[name]._kwargs)
-      def make(d):
-        assert isinstance(d, int)
-        shape = [batch_dim, d]
-        if v == "zeros":
-          return tf.zeros(shape)
-        elif v == "ones":
-          return tf.ones(shape)
-        else:
-          raise Exception("invalid initial state type %r for sub-layer %r" % (v, name))
-      if isinstance(dim, (tuple, list)):
-        return tuple([make(d) for d in dim])
-      return make(dim)
+      cl = self.layer_data_templates[name].layer_class_type
+      d = cl.get_rec_initial_extra_outputs(batch_dim=batch_dim, **self.layer_data_templates[name].kwargs)
+      return d
 
     def get_next_loop_vars(self, loop_vars, data=None, classes=None, i=None):
       """
@@ -2012,20 +2192,26 @@ class RecLayer(_ConcatInputLayer):
       :rtype: (list[tf.Tensor],list[tf.Tensor|tuple[tf.Tensor]])
       """
       from TFUtil import identity_op_nested
-      prev_outputs_flat, prev_hidden_states_flat = loop_vars
+      from Util import sorted_values_from_dict, dict_zip
+      prev_outputs_flat, prev_extra_flat = loop_vars
       assert len(prev_outputs_flat) == len(self.prev_layers_needed)
       prev_outputs = {k: v for (k, v) in zip(sorted(self.prev_layers_needed), prev_outputs_flat)}
       with tf.name_scope("prev_outputs"):
         prev_outputs = {k: tf.identity(v, name=k) for (k, v) in prev_outputs.items()}
-      assert len(prev_hidden_states_flat) == len(self.layers_with_hidden_state)
-      prev_states = {k: v for (k, v) in zip(sorted(self.layers_with_hidden_state), prev_hidden_states_flat)}
-      with tf.name_scope("prev_states"):
-        prev_states = {k: identity_op_nested(v, name=k) for (k, v) in prev_states.items()}
+      assert len(prev_extra_flat) == len(self._initial_extra_outputs)
+      prev_extra = {
+        k: dict_zip(sorted(self._initial_extra_outputs[k]), v)
+        for (k, v) in zip(sorted(self._initial_extra_outputs), prev_extra_flat)}
+      with tf.name_scope("prev_extra"):
+        prev_extra = identity_op_nested(prev_extra)
       with reuse_name_scope(self.parent._rec_scope):
-        self._construct(prev_outputs=prev_outputs, prev_states=prev_states, data=data, classes=classes, i=i)
+        self._construct(prev_outputs=prev_outputs, prev_extra=prev_extra, data=data, classes=classes, i=i)
       outputs_flat = [self.net.layers[k].output.placeholder for k in sorted(self.prev_layers_needed)]
-      states_flat = [self.net.layers[k].get_hidden_state() for k in sorted(self.layers_with_hidden_state)]
-      return outputs_flat, states_flat
+      extra_flat = [
+        sorted_values_from_dict(self.net.layers[k].rec_vars_outputs)
+        for k in sorted(self.layer_data_templates)
+        if self.net.layers[k].rec_vars_outputs]
+      return outputs_flat, extra_flat
 
     def get_init_loop_vars(self, batch_dim):
       """
@@ -2033,13 +2219,20 @@ class RecLayer(_ConcatInputLayer):
       :return: initial loop_vars. see self.get_next_loop_vars()
       :rtype: (list[tf.Tensor],list[tf.Tensor|tuple[tf.Tensor]])
       """
-      init_outputs_flat = [self._get_init_output(k, batch_dim=batch_dim) for k in sorted(self.prev_layers_needed)]
-      init_states_flat = [self._get_init_state(k, batch_dim=batch_dim) for k in sorted(self.layers_with_hidden_state)]
-      return init_outputs_flat, init_states_flat
+      self._initial_outputs = {k: self._get_init_output(k, batch_dim=batch_dim) for k in self.prev_layers_needed}
+      self._initial_extra_outputs = {
+        k: self._get_init_extra_outputs(k, batch_dim=batch_dim) for k in self.layer_data_templates.keys()}
+      self._initial_extra_outputs = {k: v for (k, v) in self._initial_extra_outputs.items() if v}
+      from Util import sorted_values_from_dict
+      init_outputs_flat = sorted_values_from_dict(self._initial_outputs)
+      init_extra_flat = [sorted_values_from_dict(v) for (k, v) in sorted(self._initial_extra_outputs.items())]
+      return init_outputs_flat, init_extra_flat
 
   def _get_output_subnet_unit(self, cell):
     """
     :param RecLayer.SubnetworkCell cell:
+    :return: output of shape (time, batch, dim)
+    :rtype: tf.Tensor
     """
     with tf.name_scope("subnet_base"):
       if self.input_data:
@@ -2098,24 +2291,53 @@ class RecLayer(_ConcatInputLayer):
       init_net_vars = cell.get_init_loop_vars(batch_dim=batch_dim)
       init_i = tf.constant(0)
       min_out_len = max_out_len
-      # Create a tensor array to store the intermediate values for each step i, e.g. of shape (batch, dim).
-      init_acc_ta = tf.TensorArray(
-        name="acc_ta",
-        dtype=cell.layer_data_templates["output"].output.dtype,
-        element_shape=tf.TensorShape(cell.layer_data_templates["output"].output.batch_shape),
-        size=min_out_len,
-        dynamic_size=True,  # we will automatically grow it when needed
-        infer_shape=True)
 
-    def body(i, net_vars, acc_ta):
+      from collections import namedtuple
+      OutputToAccumulate = namedtuple("OutputToAccumulate", ["name", "dtype", "element_shape", "get"])
+      outputs_to_accumulate = [
+        OutputToAccumulate(
+          name="output",
+          dtype=cell.layer_data_templates["output"].output.dtype,
+          element_shape=cell.layer_data_templates["output"].output.batch_shape,
+          get=lambda: cell.net.layers["output"].output.placeholder)]
+
+      if self.network.search_flag:
+        for layer in cell.layer_data_templates.values():
+          if isinstance(layer, ChoiceLayer):
+            assert isinstance(layer, self.SubnetworkCell.TemplateLayer)  # it's both
+            def get_derived(name):
+              def get_choice_source_batches():
+                layer = cell.net.layers[name]
+                assert isinstance(layer, ChoiceLayer)
+                return layer.choice_source_beams
+              return get_choice_source_batches
+            outputs_to_accumulate += [
+              OutputToAccumulate(
+                name="choice_%s" % layer.name,
+                dtype=tf.int32,
+                element_shape=(None, layer.kwargs["beam_size"]),  # (batch, beam_size)
+                get=get_derived(layer.name))]
+
+      # Create a tensor array to store the intermediate values for each step i, e.g. of shape (batch, dim).
+      init_acc_tas = [
+        tf.TensorArray(
+          name="acc_ta_%s" % out.name,
+          dtype=out.dtype,
+          element_shape=tf.TensorShape(out.element_shape),
+          size=min_out_len,
+          dynamic_size=True,  # we will automatically grow it when needed
+          infer_shape=True)
+        for out in outputs_to_accumulate]
+
+    def body(i, net_vars, acc_tas):
       """
       The loop body of scan.
 
       :param tf.Tensor i: loop counter, scalar
       :param net_vars: the accumulator values
-      :param tf.TensorArray acc_ta: the output accumulator TensorArray
+      :param list[tf.TensorArray] acc_tas: the output accumulator TensorArray
       :return: [i + 1, a_flat, tas]: the updated counter + new accumulator values + updated TensorArrays
-      :rtype: (tf.Tensor, object, tf.TensorArray)
+      :rtype: (tf.Tensor, object, list[tf.TensorArray])
 
       Raises:
         TypeError: if initializer and fn() output structure do not match
@@ -2128,15 +2350,21 @@ class RecLayer(_ConcatInputLayer):
           data=x_ta.read(i) if x_ta else None,
           classes=y_ta.read(i) if y_ta else None,
           i=i)
-        acc_ta = acc_ta.write(i, cell.net.layers["output"].output.placeholder)
-        return i + 1, net_vars, acc_ta
+        assert len(acc_tas) == len(outputs_to_accumulate)
+        acc_tas = [
+          acc_ta.write(i, out.get())
+          for (acc_ta, out) in zip(acc_tas, outputs_to_accumulate)]
+        return i + 1, net_vars, acc_tas
 
     def cond(i, net_vars, acc_ta):
       return tf.less(i, max_out_len)
 
-    _, _, final_acc_ta = tf.while_loop(cond=cond, body=body, loop_vars=(init_i, init_net_vars, init_acc_ta))
-    result = final_acc_ta.stack()  # e.g. (time, batch, dim)
-    return result
+    _, _, final_acc_tas = tf.while_loop(cond=cond, body=body, loop_vars=(init_i, init_net_vars, init_acc_tas))
+    assert len(final_acc_tas) == len(outputs_to_accumulate)
+    final_outputs = {
+      out.name: final_acc_ta.stack()  # e.g. (time, batch, dim)
+      for (final_acc_ta, out) in zip(final_acc_tas, outputs_to_accumulate)}
+    return final_outputs["output"]
 
   def get_last_hidden_state(self):
     assert self._last_hidden_state is not None, (
@@ -2463,6 +2691,7 @@ class Loss(object):
           self.output_before_softmax_flat = flatten_with_seq_len_mask(output_with_activation.x, self.output_seq_lens, time_major=output.is_time_major)
         else:
           self.output_flat = flatten_with_seq_len_mask(output.placeholder, self.output_seq_lens, time_major=output.is_time_major)
+          self.output_flat.set_shape(tf.TensorShape(output.shape))
       else:
         self.loss_norm_factor = 1.0
       self.target_flat = flatten_with_seq_len_mask(target.placeholder, self.target_seq_lens, time_major=target.is_time_major)

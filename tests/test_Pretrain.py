@@ -1,4 +1,7 @@
 
+import sys
+sys.path += ["."]  # Python 3 hack
+
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_in, assert_true, assert_false
 from Pretrain import Pretrain, pretrainFromConfig
 from Config import Config
@@ -59,9 +62,9 @@ def test_config1():
   config.update(config1_dict)
   pretrain = pretrainFromConfig(config)
   assert_equal(pretrain.get_train_num_epochs(), 2)
-  net1_json = pretrain._get_network_json_for_epoch(1)
-  net2_json = pretrain._get_network_json_for_epoch(2)
-  net3_json = pretrain._get_network_json_for_epoch(3)
+  net1_json = pretrain.get_network_json_for_epoch(1)
+  net2_json = pretrain.get_network_json_for_epoch(2)
+  net3_json = pretrain.get_network_json_for_epoch(3)
   assert_in("hidden_0", net1_json)
   assert_not_in("hidden_1", net1_json)
   assert_in("hidden_0", net2_json)

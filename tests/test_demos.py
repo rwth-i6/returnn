@@ -1,10 +1,18 @@
 
-from subprocess import Popen, PIPE, STDOUT
+import sys
+sys.path += ["."]  # Python 3 hack
+
+from subprocess import Popen, PIPE, STDOUT, CalledProcessError
 import re
 import os
 import sys
 from glob import glob
 from nose.tools import assert_less, assert_in
+import better_exchook
+better_exchook.replace_traceback_format_tb()
+
+
+py = sys.executable
 
 
 def build_env():
@@ -27,13 +35,15 @@ def build_env():
 
 def run(*args):
   args = list(args)
-  assert os.path.exists(args[0]), "not found: %s" % args[0]
-  args[0] = os.path.abspath(args[0])
+  print("run:", args)
   # crnn by default outputs on stderr, so just merge both together
   p = Popen(args, stdout=PIPE, stderr=STDOUT, env=build_env())
   out, _ = p.communicate()
-  assert p.returncode == 0, "Return code is %i, std out/err: %s\n" % (p.returncode, out)
-  return out
+  if p.returncode != 0:
+    print("Return code is %i" % p.returncode)
+    print("std out/err:\n---\n%s\n---\n" % out.decode("utf8"))
+    raise CalledProcessError(cmd=args, returncode=p.returncode, output=out)
+  return out.decode("utf8")
 
 
 def run_and_parse_last_fer(*args):
@@ -51,7 +61,7 @@ def run_and_parse_last_fer(*args):
 
 def run_config_get_fer(config_filename):
   cleanup_tmp_models(config_filename)
-  fer = run_and_parse_last_fer("rnn.py", config_filename)
+  fer = run_and_parse_last_fer(py, "rnn.py", config_filename, "++log_verbosity", "5")
   cleanup_tmp_models(config_filename)
   return fer
 
@@ -82,5 +92,5 @@ class TestDemos(object):
 
   def test_demo_iter_dataset_task12ax(self):
     cleanup_tmp_models("demos/demo-task12ax.config")
-    out = run("demos/demo-iter-dataset.py", "demos/demo-task12ax.config")
+    out = run(py, "demos/demo-iter-dataset.py", "demos/demo-task12ax.config")
     assert_in("Epoch 5.", out.splitlines())

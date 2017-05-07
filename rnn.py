@@ -33,7 +33,7 @@ from Util import initThreadJoinHack, custom_exec, describe_crnn_version, describ
 
 
 config = None; """ :type: Config """
-engine = None; """ :type: Engine | TFEngine.Engine """
+engine = None; """ :type: TFEngine.Engine | Engine """
 train_data = None; """ :type: Dataset """
 dev_data = None; """ :type: Dataset """
 eval_data = None; """ :type: Dataset """
@@ -129,10 +129,12 @@ def initDevices():
   if BackendEngine.is_tensorflow_selected():
     if os.environ.get("TF_DEVICE"):
       config.set("device", os.environ.get("TF_DEVICE"))
-      print("Devices: Use %s via TF_DEVICE instead of %s." % \
-                       (os.environ.get("TF_DEVICE"), oldDeviceConfig), file=log.v4)
+      print("Devices: Use %s via TF_DEVICE instead of %s." %
+            (os.environ.get("TF_DEVICE"), oldDeviceConfig), file=log.v4)
   if not BackendEngine.is_theano_selected():
     return None
+  if config.value("task", "train") == "nop":
+    return []
   if "device" in TheanoFlags:
     # This is important because Theano likely already has initialized that device.
     config.set("device", TheanoFlags["device"])
@@ -325,6 +327,7 @@ def init(configFilename=None, commandLineOptions=()):
 
 
 def finalize():
+  print("Quitting", file=getattr(log, "v4", sys.stderr))
   global quit
   quit = True
   sys.exited = True
@@ -336,9 +339,10 @@ def finalize():
     if engine:
       engine.finalize()
 
+
 def needData():
   task = config.value('task', 'train')
-  if task == 'theano_graph':
+  if task in ['theano_graph', "nop"]:
     return False
   return True
 
@@ -402,6 +406,8 @@ def executeMainTask():
   elif task == "daemon":
     engine.init_network_from_config(config)
     engine.daemon(config)
+  elif task == "nop":
+    print("Task: No-operation", file=log.v1)
   else:
     assert False, "unknown task: %s" % task
 
@@ -467,6 +473,8 @@ def main(argv):
   except KeyboardInterrupt:
     return_code = 1
     print("KeyboardInterrupt", file=getattr(log, "v3", sys.stderr))
+    if getattr(log, "verbose", [False] * 6)[5]:
+      sys.excepthook(*sys.exc_info())
   finalize()
   if return_code:
     sys.exit(return_code)

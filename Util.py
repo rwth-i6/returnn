@@ -284,10 +284,13 @@ def model_epoch_from_filename(filename):
 
 
 def terminal_size(): # this will probably work on linux only
-  import os, sys
+  import os, sys, io
   if not hasattr(sys.stdout, "fileno"):
     return -1, -1
-  if not os.isatty(sys.stdout.fileno()):
+  try:
+    if not os.isatty(sys.stdout.fileno()):
+      return -1, -1
+  except io.UnsupportedOperation:
     return -1, -1
   env = os.environ
   def ioctl_GWINSZ(fd):
@@ -992,10 +995,15 @@ class NumbersDict:
 
 def collect_class_init_kwargs(cls):
   kwargs = set()
+  if PY3:
+    getargspec = inspect.getfullargspec
+  else:
+    getargspec = inspect.getargspec
   for cls_ in inspect.getmro(cls):
-    if not inspect.ismethod(cls_.__init__):  # Python function. could be builtin func or so
+    # Check Python function. Could be builtin func or so. Python 2 getargspec does not work in that case.
+    if not inspect.ismethod(cls_.__init__) and not inspect.isfunction(cls_.__init__):
       continue
-    arg_spec = inspect.getargspec(cls_.__init__)
+    arg_spec = getargspec(cls_.__init__)
     kwargs.update(arg_spec.args[1:])  # first arg is self, ignore
   return kwargs
 
@@ -1389,3 +1397,80 @@ def str_is_number(s):
     return True
   except ValueError:
     return False
+
+
+def sorted_values_from_dict(d):
+  assert isinstance(d, dict)
+  return [v for (k, v) in sorted(d.items())]
+
+
+def dict_zip(keys, values):
+  assert len(keys) == len(values)
+  return dict(zip(keys, values))
+
+
+def parse_ld_conf_file(fn):
+  """  
+  Via https://github.com/albertz/system-tools/blob/master/bin/find-lib-in-path.py.
+  :param str fn: e.g. "/etc/ld.so.conf" 
+  :return: list of paths for libs
+  :rtype: list[str]
+  """
+  from glob import glob
+  paths = []
+  for l in open(fn).read().splitlines():
+    l = l.strip()
+    if not l:
+      continue
+    if l.startswith("#"):
+      continue
+    if l.startswith("include "):
+      for sub_fn in glob(l[len("include "):]):
+        paths.extend(parse_ld_conf_file(sub_fn))
+      continue
+    paths.append(l)
+  return paths
+
+
+def get_ld_paths():
+  """
+  To be very correct, see man-page of ld.so.
+  And here: http://unix.stackexchange.com/questions/354295/what-is-the-default-value-of-ld-library-path/354296
+  Short version, not specific to an executable, in this order:
+  - LD_LIBRARY_PATH
+  - /etc/ld.so.cache (instead we will parse /etc/ld.so.conf)
+  - /lib, /usr/lib (or maybe /lib64, /usr/lib64)  
+  Via https://github.com/albertz/system-tools/blob/master/bin/find-lib-in-path.py.
+  
+  :rtype: list[str]
+  :return: list of paths to search for libs (*.so files) 
+  """
+  paths = []
+  if "LD_LIBRARY_PATH" in os.environ:
+    paths.extend(os.environ["LD_LIBRARY_PATH"].split(":"))
+  if os.path.exists("/etc/ld.so.conf"):
+    paths.extend(parse_ld_conf_file("/etc/ld.so.conf"))
+  paths.extend(["/lib", "/usr/lib", "/lib64", "/usr/lib64"])
+  return paths
+
+
+def find_lib(lib_name):
+  """
+  :param str lib_name: without postfix/prefix, e.g. "cudart" or "blas"
+  :return: returns full path to lib or None
+  :rtype: str|None
+  """
+  if sys.platform == "darwin":
+    prefix = "lib"
+    postfix = ".dylib"
+  elif sys.platform == "win32":
+    prefix = ""
+    postfix = ".dll"
+  else:
+    prefix = "lib"
+    postfix = ".so"
+  for path in get_ld_paths():
+    fn = "%s/%s%s%s" % (path, prefix, lib_name, postfix)
+    if os.path.exists(fn):
+      return fn
+  return None

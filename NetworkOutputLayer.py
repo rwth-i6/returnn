@@ -118,26 +118,20 @@ class OutputLayer(Layer):
       self.norm = T.sum(self.index, dtype='float32') / T.sum(copy_output.index, dtype='float32')
       self.index = copy_output.index
       self.y = y = copy_output.y_out
-    if self.eval_flag:
-      reshape_target = False
     if y is None:
       self.y_data_flat = None
     elif isinstance(y, T.Variable):
       if reshape_target:
-        if not self.eval_flag:
           if copy_output:
-            ind = self.index.T.flatten()
+            ind = copy_output.reduced_index.T.flatten()
             self.y_data_flat = y.T.flatten()
             self.y_data_flat = self.y_data_flat[(ind > 0).nonzero()]
-            src_index = self.sources[0].index
-            self.index = src_index
+            self.index = T.ones((self.z.shape[0], self.z.shape[1]), 'int8')
           else:
             src_index = self.sources[0].index
             self.index = src_index
             self.y_data_flat = y.T.flatten()
             self.y_data_flat = self.y_data_flat[(self.y_data_flat >= 0).nonzero()]
-        else:
-          self.y_data_flat = time_batch_make_flat(y)
       else:
         self.y_data_flat = time_batch_make_flat(y)
     else:

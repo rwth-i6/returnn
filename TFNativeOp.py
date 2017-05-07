@@ -67,7 +67,7 @@ class OpMaker(object):
   @classmethod
   def _cls_init(cls):
     if cls.with_cuda is None:
-      cls.with_cuda = bool(TFUtil.CudaEnv.get_instance())
+      cls.with_cuda = TFUtil.CudaEnv.get_instance().is_available()
       if cls.with_cuda:
         cls._load_cuda_blas_gemm()
 
@@ -347,11 +347,39 @@ class OpMaker(object):
   def _make_mod(self):
     if self.cache_key in self.mod_cache:
       return self.mod_cache[self.cache_key]
+    from Util import find_lib
+    # Note about BLAS linkage:
+    # TensorFlow (or its Eigen lib) likely has linked against some BLAS lib itself.
+    # For our CPU code, we directly call some BLAS functions such as `sgemm_`.
+    # On platforms where there is a flat namespace (e.g. Mac),
+    # it probably is not needed to explicitly link it again for this module.
+    # In other cases, it's probably needed, but it's not so clear which lib has the
+    # right symbols (e.g. the `sgemm_` symbol).
+    # The current solution is just to link against blas/f77blas
+    # (both can potentially have the symbol) if it finds the lib.
+    ld_flags = []
+    if find_lib("blas"):
+      ld_flags += ["-lblas"]
+    if find_lib("f77blas"):
+      ld_flags += ["-lf77blas"]
+    # Another option to find some BLAS lib.
+    import numpy
+    numpy_dir = os.path.dirname(numpy.__file__)
+    if os.path.exists("%s/.libs" % numpy_dir):
+      ld_flags += ["-L%s/.libs" % numpy_dir]
+      from glob import glob
+      for f in glob("%s/.libs/*.so" % numpy_dir):
+        f = os.path.basename(f)
+        if f.startswith("lib"):
+          f = f[3:]
+        if f.endswith(".so"):
+          f = f[:-3]
+        ld_flags += ["-l%s" % f]
     comp = TFUtil.OpCodeCompiler(
       base_name=self.name, code_version=self.description.code_version,
       code=self._make_code(),
       include_deps=[self.support_native_op_cpp_filename],
-      ld_flags=["-lblas", "-lf77blas"],
+      ld_flags=ld_flags,
       **dict(self.compiler_opts))
     mod = comp.load_module()
     self.mod_cache[self.cache_key] = mod

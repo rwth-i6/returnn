@@ -1,4 +1,7 @@
 
+import sys
+sys.path += ["."]  # Python 3 hack
+
 import NativeOp
 import numpy
 from numpy.testing.utils import assert_almost_equal

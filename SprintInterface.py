@@ -377,7 +377,8 @@ def initBase(configfile=None, targetMode=None, epoch=None):
     assert len(fns_existing) == 1, "%s not found" % fns
     model_epoch_filename = fns_existing[0]
     config.set('load', model_epoch_filename)
-    assert Engine.get_epoch_model(config)[1] == model_epoch_filename
+    assert Engine.get_epoch_model(config)[1] == model_epoch_filename, \
+      "%r != %r" % (Engine.get_epoch_model(config), model_epoch_filename)
 
   global engine
   if not engine:

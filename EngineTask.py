@@ -1,4 +1,6 @@
 
+from __future__ import print_function
+
 import numpy
 import sys
 import threading
@@ -24,6 +26,7 @@ class TaskThread(threading.Thread):
       :param str report_prefix: such as epoch or so. only for reporting
       """
       threading.Thread.__init__(self, name="TaskThread %s" % task)
+      assert len(devices) > 0
       if eval_batch_size == 0:
         eval_batch_size = sys.maxsize
       self.share_batches = share_batches
@@ -235,7 +238,7 @@ class TaskThread(threading.Thread):
         device_results, outputs_format = self.device_collect_results()
         if device_results is None:
           if not getattr(sys, "exited", False):
-            print >> log.v3, "device crashed on batch", self.run_start_batch_idx
+            print("device crashed on batch", self.run_start_batch_idx, file=log.v3)
           self.parent.device_crash_batch = self.run_start_batch_idx
           self.crashed = True
           return False
@@ -258,7 +261,7 @@ class TaskThread(threading.Thread):
               if q.shape == p.get_value().shape:
                 gparams[p] = q
               elif q.shape:
-                print >> log.v2, "warning: shape for gradient does not match:", p.get_value().shape, q.shape
+                print("warning: shape for gradient does not match:", p.get_value().shape, q.shape, file=log.v2)
             self.parent.updater.setNetParamDeltas(gparams)
             self.parent.updater.update()
             self.alloc_devices[i].set_net_params(self.parent.network)
@@ -297,15 +300,15 @@ class TaskThread(threading.Thread):
         assert len(self.alloc_devices) == len(self.devices_batches)
         for device, batches in zip(self.alloc_devices, self.devices_batches):
           if self.parent.network.recurrent:
-            print >> log.v5, "running", device.targets["data"].shape[1], \
-                             "sequence slices (%i nts)" % (device.targets["data"].shape[0] * device.targets["data"].shape[1]),
+            print("running", device.targets["data"].shape[1], \
+                             "sequence slices (%i nts)" % (device.targets["data"].shape[0] * device.targets["data"].shape[1]), end=' ', file=log.v5)
           else:
-            print >> log.v5, "running", device.targets["data"].shape[0] * device.targets["data"].shape[1], "frames",
+            print("running", device.targets["data"].shape[0] * device.targets["data"].shape[1], "frames", end=' ', file=log.v5)
           if device.num_batches == 1:
-            print >> log.v5, "of batch %i" % batch_idx,
+            print("of batch %i" % batch_idx, end=' ', file=log.v5)
           else:
-            print >> log.v5, "of batches %i-%i" % (batch_idx, batch_idx + device.num_batches - 1),
-          print >> log.v5, "on device", device.name
+            print("of batches %i-%i" % (batch_idx, batch_idx + device.num_batches - 1), end=' ', file=log.v5)
+          print("on device", device.name, file=log.v5)
           device.run(self.parent.task)
       #if not self.share batch_idx += device.num_batches
 
@@ -362,7 +365,7 @@ class TaskThread(threading.Thread):
             "complete %.02f%%" % (complete * 100)]
           if mem_usage:
             info += ["memory %s" % mem_usage]
-          print >> log.v5, ", ".join(filter(None, info))
+          print(", ".join(filter(None, info)), file=log.v5)
         if self.parent.interactive:
           progress_bar(complete, hms(remaining_estimated))
 
@@ -374,7 +377,7 @@ class TaskThread(threading.Thread):
       except ProcConnectionDied:
         if not getattr(sys, "exited", False):
           # Normally we should have caught that in run_inner(), so somewhat unexpected.
-          print >> log.v4, "%s. Some device proc crashed unexpectedly." % self
+          print("%s. Some device proc crashed unexpectedly." % self, file=log.v4)
         # Just pass on. We have self.finalized == False which indicates the problem.
       except Exception:
         # Catch all standard exceptions.
@@ -384,7 +387,7 @@ class TaskThread(threading.Thread):
         # when it is exiting. It's never by the user because SIGINT will always
         # trigger KeyboardInterrupt in the main thread only.
         try:
-          print >> log.v1, "%s failed" % self.name
+          print("%s failed" % self.name, file=log.v1)
           if log.v[4]:
             sys.excepthook(*sys.exc_info())
             print("")
@@ -399,7 +402,7 @@ class TaskThread(threading.Thread):
       self.initialize()
       terminal_width, _ = terminal_size()
       self.interactive = (log.v[3] and terminal_width >= 0)
-      print >> log.v5, "starting task", self.task
+      print("starting task", self.task, file=log.v5)
 
       for device in self.devices:
         device.eval_batch_idx = -1
@@ -415,17 +418,18 @@ class TaskThread(threading.Thread):
       run_frames = NumbersDict(0)
 
       crashed = False
+      assert num_device_runs > 0
 
       while True:
         if getattr(sys, "exited", False):
           # This happens when we exit Python.
           # Without this check, this thread would keep running until all exit handlers of Python are done.
-          print >> log.v5, "%s stopped" % self
+          print("%s stopped" % self, file=log.v5)
           crashed = True
           break
 
         for i in range(num_device_runs):
-          if deviceRuns[i].crashed:
+          if deviceRuns[i].crashed or not deviceRuns[i].is_alive():
             crashed = True
             break
           if deviceRuns[i].finished:
@@ -545,9 +549,9 @@ class TrainTaskThread(TaskThread):
   def save_ctc_priors(self, filename, epoch_str):
     assert self.ctc_priors is not None
     with open(filename, 'a') as f:
-      print >> f, epoch_str
+      print(epoch_str, file=f)
       numpy.savetxt(f, self.ctc_priors, newline=" ")
-      print >> f
+      print(file=f)
 
   class CopyManager():
     class CopyThread(threading.Thread):
@@ -618,7 +622,7 @@ class TrainTaskThread(TaskThread):
           if tot_updates:
             consnet[i] = basenet[i].get_value() + numpy.sum([ (net[i] - basenet[i].get_value()) * (float(num_updates[dev.name]) / tot_updates) for net,dev in zip(hypnets,self.devices) if dev.name in num_updates ], axis = 0)
           else:
-            print >> log.v3, "warning: no update available for parameter", basenet[i]
+            print("warning: no update available for parameter", basenet[i], file=log.v3)
             consnet[i] = basenet[i].get_value()
           #consnet[i] = basenet[i].get_value() + ndevs * numpy.sum([ (net[i] - basenet[i].get_value()) * (float(device.num_frames) / nframes) for net,dev in zip(hypnets,self.devices) ], axis = 0)
       self.network.update_step = sum([ dev.get_num_updates() for dev in self.devices ]) / len(self.devices)
@@ -631,7 +635,7 @@ class TrainTaskThread(TaskThread):
         for device in self.devices:
           device.set_net_encoded_params(encoded)
     except Exception as e:
-      print >> log.v3, "network synchronization failed: ", e.message
+      print("network synchronization failed: ", e.message, file=log.v3)
       if log.v4:
         sys.excepthook(*sys.exc_info())
 
@@ -733,7 +737,7 @@ class HDFForwardTaskThread(TaskThread):
           seqfeats = features[
                        seq.batch_frame_offset["data"]:seq.batch_frame_offset["data"] + seq.frame_length["data"],
                        seq.batch_slice]
-        print >> log.v5, "extracting", seqfeats.shape[-1], "features over", seqfeats.shape[0], "time steps for sequence", self.data.get_tag(seq_idx)
+        print("extracting", seqfeats.shape[-1], "features over", seqfeats.shape[0], "time steps for sequence", self.data.get_tag(seq_idx), file=log.v5)
         self.cache.attrs['numTimesteps'] += seqfeats.shape[0]
         tt += seqfeats.shape[0]
         #self.seq_dims[seq_idx] = [seqfeats.shape[1]]
@@ -780,13 +784,13 @@ class PriorEstimationTaskThread(TaskThread):
       assert extract_type in ["log-posteriors", "log-posteriors-sum", "posteriors", "posteriors-sum"]
       self.num_outputs = network.n_out[target][0]
       self.sum_posteriors = numpy.zeros(int(self.num_outputs))
-      print >> log.v1, "Prior estimation via posteriors of %r. output dimension = %i" % (target, self.num_outputs)
+      print("Prior estimation via posteriors of %r. output dimension = %i" % (target, self.num_outputs), file=log.v1)
       if not extract_type.endswith("-sum"):
-        print >>log.v1, "HINT: You can set extract=posteriors-sum in your config to speed up the estimation."
+        print("HINT: You can set extract=posteriors-sum in your config to speed up the estimation.", file=log.v1)
       if extract_type.startswith("log-"):
-        print >>log.v1, "NOTE: Posteriors are averaged in log-space. std-space might be better. Set extract=posteriors-sum."
+        print("NOTE: Posteriors are averaged in log-space. std-space might be better. Set extract=posteriors-sum.", file=log.v1)
       if data.chunk_size > 0:
-        print >>log.v1, "WARNING: Dataset uses chunking. You might want to disable that."
+        print("WARNING: Dataset uses chunking. You might want to disable that.", file=log.v1)
 
     def evaluate(self, batchess, results, result_format, num_frames):
       if self.extract_type.endswith("-sum"):
@@ -805,17 +809,17 @@ class PriorEstimationTaskThread(TaskThread):
             self.sum_posteriors += numpy.sum(res, axis=(0, 1))
 
     def finalize(self):
-      print >>log.v1, "Dumping priors in +log-space to file", self.priori_file
-      print >>log.v1, "Frames in total:", self.num_frames
+      print("Dumping priors in +log-space to file", self.priori_file, file=log.v1)
+      print("Frames in total:", self.num_frames, file=log.v1)
       average_posterior = self.sum_posteriors / self.num_frames[self.target]
       if self.extract_type.startswith("log-"):
-        print >>log.v1, "Posterior average was calculated in log-space"
+        print("Posterior average was calculated in log-space", file=log.v1)
         # We need to renormalize.
         average_posterior -= numpy.log(numpy.sum(numpy.exp(average_posterior)))
       else:
         average_posterior = numpy.log(average_posterior)
-        print >>log.v1, "Posterior average was calculated in std-space"
+        print("Posterior average was calculated in std-space", file=log.v1)
       numpy.savetxt(self.priori_file, average_posterior, delimiter=' ')
       avg_sum = numpy.sum(numpy.exp(average_posterior))
-      print >>log.v1, "Prior sum in std-space (should be close to 1.0):", avg_sum
+      print("Prior sum in std-space (should be close to 1.0):", avg_sum, file=log.v1)
 

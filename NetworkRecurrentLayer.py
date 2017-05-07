@@ -71,6 +71,43 @@ class Unit(Container):
                              outputs_info = outputs_info)
     return outputs
 
+  def scan_seg(self, x, z, att, non_sequences, i, outputs_info, W_re, W_in, b, go_backwards=False, truncate_gradient=-1):
+    """
+    Executes the iteration over the time axis (usually with theano.scan)
+    :param step: python function to be executed
+    :param x: unmapped input tensor in (time,batch,dim) shape
+    :param z: same as x but already transformed to self.n_in
+    :param non_sequences: see theano.scan
+    :param i: index vector in (time, batch) shape
+    :param outputs_info: see theano.scan
+    :param W_re: recurrent weight matrix
+    :param W_in: input weight matrix
+    :param b: input bias
+    :param go_backwards: whether to scan the sequence from 0 to T or from T to 0
+    :param truncate_gradient: see theano.scan
+    :return:
+    """
+    self.outputs_info = outputs_info
+    self.non_sequences = non_sequences
+    self.W_re = W_re
+    self.W_in = W_in
+    self.b = b
+    self.go_backwards = go_backwards
+    self.truncate_gradient = truncate_gradient
+    try:
+      self.xc = z if not x else T.concatenate([s.output for s in x], axis = -1)
+    except Exception:
+      self.xc = z if not x else T.concatenate(x, axis = -1)
+
+    outputs, _ = theano.scan(self.step,
+                             #strict = True,
+                             truncate_gradient = truncate_gradient,
+                             go_backwards = go_backwards,
+                             sequences = [i,self.xc,z,att],
+                             non_sequences = non_sequences,
+                             outputs_info = outputs_info)
+    return outputs
+
 
 class VANILLA(Unit):
   """
@@ -124,6 +161,52 @@ class LSTME(Unit):
     forgetgate = T.nnet.sigmoid(z_t[:,partition:2*partition])
     outgate = T.nnet.sigmoid(z_t[:,2*partition:3*partition])
     input = T.tanh(z_t[:,3*partition:4*partition])
+    c_t = forgetgate * c_p + ingate * input
+    y_t = outgate * T.tanh(c_t)
+    i_output = T.outer(i_t, self.o_output)
+    i_h = T.outer(i_t, self.o_h)
+    # return: next outputs (# unit.n_act, y_t, c_t, ...)
+    return (y_t * i_output, c_t * i_h + c_p * (1 - i_h)) + tuple(other_outputs)
+
+class LSTMS(Unit):
+  """
+  A theano based LSTM implementation
+  """
+  def __init__(self, n_units, **kwargs):
+    super(LSTMS, self).__init__(
+      n_units=n_units,
+      n_in=n_units * 4,  # input gate, forget gate, output gate, net input
+      n_out=n_units,
+      n_re=n_units * 4,
+      n_act=2  # output, cell state
+    )
+    self.o_output = T.as_tensor(numpy.ones((n_units,), dtype='float32'))
+    self.o_h = T.as_tensor(numpy.ones((n_units,), dtype='float32'))
+
+  def step(self, i_t, x_t, z_t, att_p, y_p, c_p, *other_args):
+    # See Unit.scan() for seqs.
+    # args: seqs (x_t = unit.xc, z_t, i_t), outputs (# unit.n_act, y_p, c_p, ...), non_seqs (none)
+    other_outputs = []
+    #att_p = theano.printing.Print('att in lstms', attrs=['__str__'])(att_p)
+    if self.recurrent_transform:
+      state_vars = other_args[:len(self.recurrent_transform.state_vars)]
+      self.recurrent_transform.set_sorted_state_vars(state_vars)
+      z_r, r_updates = self.recurrent_transform.step(y_p)
+      z_t += z_r
+      for v in self.recurrent_transform.get_sorted_state_vars():
+        other_outputs += [r_updates[v]]
+    maxatt = T.max(att_p, axis=-1).repeat(z_t.shape[1]).reshape((z_t.shape[0],z_t.shape[1]))#.dimshuffle(1,0)
+    #maxatt = theano.printing.Print('maxatt',attrs=['__str__','shape'])(maxatt)
+    z_t = T.switch(maxatt>0,z_t,z_t + T.dot(y_p, self.W_re))
+    #z_t += T.dot(y_p, self.W_re)
+    #z_t = theano.printing.Print('z_t lstms',attrs=['shape'])(z_t)
+
+    partition = z_t.shape[1] // 4
+    ingate = T.nnet.sigmoid(z_t[:,:partition])
+    forgetgate = ((T.nnet.sigmoid(z_t[:,partition:2*partition])).T * (1.-T.max(att_p,axis=-1))).T
+    outgate = T.nnet.sigmoid(z_t[:,2*partition:3*partition])
+    input = T.tanh(z_t[:,3*partition:4*partition])
+    #c_t = ((forgetgate * c_p + ingate * input).T * (1.-T.max(att_p,axis=-1))).T
     c_t = forgetgate * c_p + ingate * input
     y_t = outgate * T.tanh(c_t)
     i_output = T.outer(i_t, self.o_output)
@@ -428,6 +511,7 @@ class RecurrentUnitLayer(Layer):
                forward_weights_init=None,
                bias_random_init_forget_shift=0.0,
                copy_weights_from_base=False,
+               segment_input=False,
                **kwargs):
     """
     :param n_out: number of cells
@@ -472,6 +556,8 @@ class RecurrentUnitLayer(Layer):
         unit = 'lstmc'
     elif unit in ("lstmc", "lstmp") and not is_using_gpu():
       unit = "lstme"
+    if segment_input:
+      unit = "lstms"
     if n_out is None:
       assert encoder
       n_out = sum([enc.attrs['n_out'] for enc in encoder])
@@ -521,6 +607,16 @@ class RecurrentUnitLayer(Layer):
     self.set_attr('attention_memory', attention_memory)
     self.set_attr('attention_loss', attention_loss)
     self.set_attr('n_dec', n_dec)
+    self.set_attr('segment_input', segment_input)
+    if segment_input:
+      #inv_att = self.sources[0].attention.dimshuffle(2, 1, 0)
+      if isinstance(self.sources[0],RecurrentUnitLayer):
+        self.inv_att = self.sources[0].inv_att
+      else:
+        self.inv_att = self.sources[0].attention
+      #inv_att = self.inv_att.dimshuffle(2, 1, 0)
+      inv_att = T.roll(self.inv_att.dimshuffle(2, 1, 0),1,axis=0)
+      inv_att = T.set_subtensor(inv_att[0],T.zeros((inv_att.shape[1],inv_att.shape[2])))
     if encoder and hasattr(encoder[0],'act'):
       self.set_attr('encoder', ",".join([e.name for e in encoder]))
     if base:
@@ -663,7 +759,6 @@ class RecurrentUnitLayer(Layer):
     assert isinstance(recurrent_transform_inst, RecurrentTransform.RecurrentTransformBase)
     unit.recurrent_transform = recurrent_transform_inst
     self.recurrent_transform = recurrent_transform_inst
-
     # scan over sequence
     for s in range(self.attrs['sampling']):
       index = self.index[s::self.attrs['sampling']]
@@ -693,7 +788,20 @@ class RecurrentUnitLayer(Layer):
 
       index_f = T.cast(index, theano.config.floatX)
       unit.set_parent(self)
-      outputs = unit.scan(x=sources,
+      if segment_input:
+        outputs = unit.scan_seg(x=sources,
+                            z=sequences[s::self.attrs['sampling']],
+                            att = inv_att,
+                            non_sequences=non_sequences,
+                            i=index_f,
+                            outputs_info=outputs_info,
+                            W_re=self.W_re,
+                            W_in=self.W_in,
+                            b=self.b,
+                            go_backwards=direction == -1,
+                            truncate_gradient=self.attrs['truncation'])
+      else:
+        outputs = unit.scan(x=sources,
                           z=sequences[s::self.attrs['sampling']],
                           non_sequences=non_sequences,
                           i=index_f,
@@ -797,4 +905,3 @@ class LinearRecurrentLayer(HiddenLayer):
     h, _ = theano.scan(step, sequences=[x, i], outputs_info=[h_initial], go_backwards=go_backwards)
     h = h[::direction]
     self.output = self.activation(h)
-

@@ -416,8 +416,8 @@ class ExternSprintDataset(SprintDatasetBase):
 
   def __init__(self, sprintTrainerExecPath, sprintConfigStr, partitionEpoch=1, *args, **kwargs):
     """
-    :type sprintTrainerExecPath: str
-    :type sprintConfigStr: str
+    :param str|list[str] sprintTrainerExecPath:
+    :param str | list[str] | ()->str | list[()->str] | ()->list[str] | ()->list[()->str] sprintConfigStr: via eval_shell_str
     """
     super(ExternSprintDataset, self).__init__(*args, **kwargs)
     self.add_data_thread_id = None
@@ -468,15 +468,23 @@ class ExternSprintDataset(SprintDatasetBase):
 
     pid = os.fork()
     if pid == 0:  # child
+      # In case we are in some test environment or so, recover the original stdout/stderr.
+      sys.stdin = sys.__stdin__
+      sys.stdout = sys.__stdout__
+      sys.stderr = sys.__stderr__
+      import better_exchook
+      better_exchook.install()
       try:
         sys.stdin.close()  # Force no tty stdin.
         self.pipe_c2p[0].close()
         self.pipe_p2c[1].close()
         os.execv(args[0], args)  # Does not return if successful.
+        print("ExternSprintDataset child exec failed.")
       except BaseException:
-        print("ExternSprintDataset: Error when starting Sprint %r." % args, file=log.v1)
+        print("ExternSprintDataset child: Error when starting Sprint %r." % args)
         sys.excepthook(*sys.exc_info())
       finally:
+        print("ExternSprintDataset child: exit")
         os._exit(1)
         return  # Not reached.
 
@@ -494,6 +502,8 @@ class ExternSprintDataset(SprintDatasetBase):
     except Exception:
       print("ExternSprintDataset: Sprint child process (%r) caused an exception." % args, file=log.v1)
       sys.excepthook(*sys.exc_info())
+      self._join_child()
+      self.child_pid = None
       raise Exception("ExternSprintDataset Sprint init failed")
 
     self.reader_thread = Thread(target=self.reader_thread_proc, args=(pid, epoch,),
@@ -503,6 +513,10 @@ class ExternSprintDataset(SprintDatasetBase):
 
   def _pipe_open(self):
     readend, writeend = os.pipe()
+    if hasattr(os, "set_inheritable"):
+      # Python 3 by default will close all fds in subprocesses. This will avoid that.
+      os.set_inheritable(readend, True)
+      os.set_inheritable(writeend, True)
     readend = os.fdopen(readend, "rb", 0)
     writeend = os.fdopen(writeend, "wb", 0)
     return readend, writeend
@@ -517,8 +531,11 @@ class ExternSprintDataset(SprintDatasetBase):
     if TaskSystem.SharedMemNumpyConfig["enabled"]:
       config_str += ",EnableAutoNumpySharedMemPickling:True"
     epoch = self.crnnEpoch or 1
-    args = [
-      self.sprintTrainerExecPath,
+    if isinstance(self.sprintTrainerExecPath, (list, tuple)):
+      args = list(self.sprintTrainerExecPath)
+    else:
+      args = [self.sprintTrainerExecPath]
+    args += [
       "--*.seed=%i" % (epoch // self.partitionEpoch)]
     if self.partitionEpoch > 1:
       args += [

@@ -39,6 +39,32 @@ class ExternData(object):
       self.data[key] = Data(name=key, auto_create_placeholders=True, **init_args)
     self.default_target = config.value('target', 'classes')
 
+  def init_from_dataset(self, dataset):
+    """
+    :param Dataset.Dataset dataset: 
+    """
+    target_keys = list(dataset.get_target_list())
+    if target_keys:
+      if "classes" in target_keys:
+        self.default_target = "classes"
+      else:
+        self.default_target = target_keys[0]
+    data_keys = list(dataset.get_data_keys())
+    input_keys = [key for key in data_keys if key not in target_keys]
+    if input_keys:
+      if "data" in input_keys:
+        self.default_input = "data"
+      else:
+        self.default_input = input_keys[0]
+    for key in data_keys:
+      dim = dataset.get_data_dim(key)
+      shape = [None] + list(dataset.get_data_shape(key))
+      sparse = dataset.is_data_sparse(key)
+      dtype = dataset.get_data_dtype(key)
+      self.data[key] = Data(
+        name=key, auto_create_placeholders=True, batch_dim_axis=0, time_dim_axis=1,
+        shape=shape, dim=dim, sparse=sparse, dtype=dtype)
+
   def register_data_from_dict(self, data):
     """
     :param dict[str,dict[str]] data: init kwargs for Data
@@ -90,7 +116,7 @@ class ExternData(object):
 
 
 class TFNetwork(object):
-  def __init__(self, config=None, extern_data=None, rnd_seed=42, train_flag=False, parent=None):
+  def __init__(self, config=None, extern_data=None, rnd_seed=42, train_flag=False, search_flag=False, parent=None):
     """
     :param Config.Config config: only needed to init extern_data if not specified explicitly
     :param ExternData|None extern_data:
@@ -108,7 +134,9 @@ class TFNetwork(object):
     self.used_data_keys = set()
     self.rnd_seed = rnd_seed
     self.random = numpy.random.RandomState(rnd_seed)
+    assert isinstance(train_flag, (bool, tf.Tensor))
     self.train_flag = train_flag
+    self.search_flag = search_flag
     self.parent = parent
     self._selected_train_layers = None
     self.layers_desc = {}  # type: dict[str,dict[str]]
@@ -548,6 +576,60 @@ class TFNetwork(object):
     """
     from TFUtil import cond
     return cond(self.train_flag, fn_train, fn_eval)
+
+  def get_search_choices(self, sources=None, src=None, _visited=None):
+    """
+    Recursively searches through all sources,
+    and if there is a ChoiceLayer, returns it.
+    Could also go to the parent network.
+
+    :param LayerBase|None src:
+    :param list[LayerBase]|None sources:
+    :param set[LayerBase]|None _visited: keep track about visited layers in case there are circular deps
+    :return: (direct or indirect) source ChoiceLayer
+    :rtype: TFNetworkLayer.ChoiceLayer|None
+    """
+    assert sources is None or src is None, "don't provide both"
+    from TFNetworkLayer import ChoiceLayer
+    if src is not None:
+      if isinstance(src, ChoiceLayer):
+        return src
+      sources = src.sources
+    if _visited is None:
+      _visited = set()
+    sources = [src for src in sources if src not in _visited]
+    _visited.update(sources)
+    layers = [self.get_search_choices(src=src, _visited=_visited) for src in sources]
+    layers = [layer for layer in layers if layer is not None]
+    layers = set(layers)
+    assert len(layers) <= 1, "multiple choice layers not supported yet"
+    if len(layers) == 1:
+      return list(layers)[0]
+    if self.parent:
+      return self.parent.network.get_search_choices(sources=self.parent.sources)
+    return None
+
+  def get_batch_dim(self):
+    """
+    Get the batch-dim size, i.e. amount of sequences in the current batch.
+    Consider that the data tensor is usually of shape [batch, time, dim],
+    this would return shape(data)[0].
+
+    The code currently assumes that the batch-dim can be taken from the extern data.
+    If it does not have that available for some reason (e.g. some subnetwork),
+    it will try some alternative sources and assumes that they have the correct batch-dim.
+
+    :return: int scalar tensor which states the batch-dim
+    :rtype: int|tf.Tensor
+    """
+    from TFUtil import get_shape_dim
+    # First check parent because there we might get the true batch dim.
+    if self.parent:
+      return self.parent.network.get_batch_dim()
+    for _, data in sorted(self.extern_data.data.items()):
+      assert isinstance(data, Data)
+      return get_shape_dim(data.placeholder, data.batch_dim_axis, name="batch_dim")
+    raise Exception("We cannot tell the batch dim.")
 
 
 class TFNetworkParamsSerialized(object):

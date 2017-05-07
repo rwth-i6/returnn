@@ -398,6 +398,8 @@ class Container(object):
     for k in attrs.keys():
       if isinstance(attrs[k], numpy.bool_):
         attrs[k] = True if attrs[k] else False
+      if isinstance(attrs[k], bytes):
+        attrs[k] = attrs[k].decode("utf8")
     if 'from' in attrs:
       if attrs['from'] == 'data':
         attrs.pop('from', None)

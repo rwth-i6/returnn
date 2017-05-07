@@ -4,6 +4,8 @@
 # This is useful for tests.
 # To generate data, we can use the GeneratingDataset code.
 
+from __future__ import print_function
+
 import sys
 import os
 from importlib import import_module
@@ -46,7 +48,7 @@ class ArgParser:
 
 
 def main(argv):
-  print "DummySprintExec init", argv
+  print("DummySprintExec init", argv)
   args = ArgParser()
   args.parse(argv[1:])
 
@@ -86,7 +88,7 @@ def main(argv):
       else:
         raise NotImplementedError("targetMode = %s" % targetMode)
 
-  print "DummySprintExec exit"
+  print("DummySprintExec exit")
   SprintAPI.exit()
 
 
