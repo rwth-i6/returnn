@@ -1,4 +1,9 @@
 
+from __future__ import print_function
+
+import sys
+sys.path += ["."]  # Python 3 hack
+
 import unittest
 import theano
 import theano.tensor as T
@@ -54,7 +59,7 @@ def test_does_not_crash():
 
   Y_val = numpy.asarray(f(Z_val, c_val, y0_val, i_val, W_re_val, W_att_in_val))
   #print Y_val
-  print "success"
+  print("success")
 
 @unittest.skipIf(not have_gpu(), "no gpu on this system")
 def test_fwd_pass_compatible_with_OpLSTM():
@@ -89,7 +94,7 @@ def test_fwd_pass_compatible_with_OpLSTM():
   Y_val = numpy.asarray(f(Z_val, c_val, y0_val, i_val, W_re_val, W_att_in_val))
   Y2_val = numpy.asarray(g(Z_val, W_re_val, c_val, y0_val, i_val, W_att_in_val))
   assert numpy.allclose(Y_val, Y2_val)
-  print "success"
+  print("success")
 
 @unittest.skipIf(not have_gpu(), "no gpu on this system")
 def test_bwd_pass_compatible_with_OpLSTM():
@@ -143,7 +148,7 @@ def test_bwd_pass_compatible_with_OpLSTM():
   assert numpy.allclose(Dc_val, Dc2_val)
   assert numpy.allclose(Dy0_val, Dy02_val)
   assert numpy.allclose(DW_att_in_val, DW_att_in2_val, atol=5e-7, rtol=1e-4)
-  print "success"
+  print("success")
 
 @unittest.skipIf(not have_gpu(), "no gpu on this system")
 def test_grads():
@@ -160,7 +165,7 @@ def test_grads():
   #i_val = numpy.ones((n_T, n_batch), dtype='int8')
   i_val = numpy.array([[1,1,1,1,1], [0,0,1,1,1], [0,0,1,1,1], [0,0,1,0,0]], dtype='int8').T
 
-  print "verifying grads..."
+  print("verifying grads...")
 
   #ignore W_att_in atm
   def LSTMCustomOp_Z_onlyZ(Z):
@@ -172,14 +177,14 @@ def test_grads():
   def LSTMCustomOp_d(Z, c, y0, W_re, W_att_in):
     return LSTMCustomTestOpNoInplaceInstance(Z, c, y0, i_val, W_re, W_att_in)[2]
 
-  print "verifying grad of Z (only w.r.t. Z)"
+  print("verifying grad of Z (only w.r.t. Z)")
   theano.tests.unittest_tools.verify_grad(LSTMCustomOp_Z_onlyZ, [Z_val])
-  print "verifying grad of Z"
+  print("verifying grad of Z")
   theano.tests.unittest_tools.verify_grad(LSTMCustomOp_Z, [Z_val, c_val, y0_val, W_re_val, W_att_in_val])
-  print "verifying grad of d"
+  print("verifying grad of d")
   theano.tests.unittest_tools.verify_grad(LSTMCustomOp_d, [Z_val, c_val, y0_val, W_re_val, W_att_in_val], eps=1e-3)
 
-  print "success"
+  print("success")
 
 #---- attention functions
 
@@ -214,7 +219,7 @@ def test_attention_dot_does_not_crash():
 
   Y_val = numpy.asarray(f(Z_val, B_val, c_val, y0_val, i_val, W_re_val, W_att_in_val, W_att_quadr_val))
   #print Y_val
-  print "success"
+  print("success")
 
 @unittest.skipIf(not have_gpu(), "no gpu on this system")
 def test_attention_dot_grads():
@@ -234,7 +239,7 @@ def test_attention_dot_grads():
   #i_val = numpy.ones((n_T, n_batch), dtype='int8')
   i_val = numpy.array([[1,1,1,1,1], [0,0,1,1,1], [0,0,1,1,1], [0,0,1,0,0]], dtype='int8').T
 
-  print "verifying grads..."
+  print("verifying grads...")
 
   def LSTMCustomOp_Z(Z, c, y0, W_re, B, W_att_in, W_att_quadr):
     return LSTMCustomDotAttentionOpNoInplaceInstance(Z, c, y0, i_val, W_re, B, W_att_in, W_att_quadr)[0]
@@ -242,12 +247,12 @@ def test_attention_dot_grads():
   def LSTMCustomOp_d(Z, c, y0, W_re, B, W_att_in, W_att_quadr):
     return LSTMCustomDotAttentionOpNoInplaceInstance(Z, c, y0, i_val, W_re, B, W_att_in, W_att_quadr)[2]
 
-  print "verifying grad of Z"
+  print("verifying grad of Z")
   theano.tests.unittest_tools.verify_grad(LSTMCustomOp_Z, [Z_val, c_val, y0_val, W_re_val, B_val, W_att_in_val, W_att_quadr_val])
-  print "verifying grad of d"
+  print("verifying grad of d")
   theano.tests.unittest_tools.verify_grad(LSTMCustomOp_d, [Z_val, c_val, y0_val, W_re_val, B_val, W_att_in_val, W_att_quadr_val], eps=1e-3)
 
-  print "success"
+  print("success")
 
 
 @unittest.skipIf(not have_gpu(), "no gpu on this system")
@@ -283,10 +288,10 @@ def test_attention_time_gauss():
   custom_vars = att.get_sorted_custom_vars()
   initial_state_vars = att.get_sorted_state_vars_initial()
   custom_op_inputs = [Z, c, y0, i, W_re] + custom_vars + initial_state_vars
-  print "input args num:", len(custom_op_inputs)
-  print "input args:", custom_op_inputs
+  print("input args num:", len(custom_op_inputs))
+  print("input args:", custom_op_inputs)
   custom_op_outputs = custom_op(*custom_op_inputs)
-  print "output args num:", len(custom_op_outputs)
+  print("output args num:", len(custom_op_outputs))
   custom_op_outputs = [cuda.host_from_gpu(v) for v in custom_op_outputs]
   f = theano.function(inputs=[Z, c, y0, i, W_re], outputs=custom_op_outputs)
 
@@ -303,24 +308,24 @@ def test_attention_time_gauss():
   # f = theano.function(inputs=[], outputs=custom_op_outputs)
   # res = f()
 
-  print res
+  print(res)
 
   assert False
 
 
 if __name__ == '__main__':
   #tests with attention
-  print "calling test_attention_dot_does_not_crash()"
+  print("calling test_attention_dot_does_not_crash()")
   test_attention_dot_does_not_crash()
-  print "calling test_attention_dot_grads"
+  print("calling test_attention_dot_grads")
   test_attention_dot_grads()
 
   #tests without attention
-  print "calling test_does_not_crash()"
+  print("calling test_does_not_crash()")
   test_does_not_crash()
-  print "calling test_fwd_pass_compatible_with_OpLSTM()"
+  print("calling test_fwd_pass_compatible_with_OpLSTM()")
   test_fwd_pass_compatible_with_OpLSTM()
-  print "calling test_bwd_pass_compatible_with_OpLSTM()"
+  print("calling test_bwd_pass_compatible_with_OpLSTM()")
   test_bwd_pass_compatible_with_OpLSTM()
-  print "calling test_grads()"
+  print("calling test_grads()")
   test_grads()

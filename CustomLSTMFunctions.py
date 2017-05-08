@@ -1,4 +1,6 @@
 
+from __future__ import print_function
+
 import os
 import theano
 import theano.tensor as T
@@ -79,7 +81,7 @@ def make_bwd_fun(recurrent_transform):
 
 
 def print_wt(op,x):
-  print x.argmax(axis=0)
+  print(x.argmax(axis=0))
 
 
 functions = {}
@@ -88,7 +90,7 @@ def setup_parent_functions(fn, recurrent_transform_id):
   import RecurrentTransform
   fn = "_".join(fn.split('_')[:-2])
   if fn in functions: return
-  print >> log.v4, "loading function", fn, "(pid %i)" % os.getpid()
+  print("loading function", fn, "(pid %i)" % os.getpid(), file=log.v4)
   transform = RecurrentTransform.transforms_by_id[recurrent_transform_id]
   # New instance for the custom op.
   transform = transform.copy_for_custom()
@@ -118,7 +120,7 @@ def debug_make_theano_function_wrapper(f, name, hook, other_values):
     return str(v)
   def theano_func_wrapped(*args):
     res = f(*args)
-    print "called", name, "args:", to_str(args), "res:", to_str(res), "other:", to_str(other_values)
+    print("called", name, "args:", to_str(args), "res:", to_str(res), "other:", to_str(other_values))
     if hook and hook is not True:
       hook(f=f, name=name, args=args, res=res)
     return res

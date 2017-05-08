@@ -826,7 +826,7 @@ def get_dummy_recurrent_transform(recurrent_transform_name, n_out=5, n_batches=2
   x_out = theano.shared(numpy.array([[[1.0] * n_input_dim] * n_batches] * n_input_t, dtype="float32"), name="x")
   layer = RecurrentUnitLayer(n_out=n_out, index=index, sources=[],
                              base=[SourceLayer(n_out=x_out.get_value().shape[2], x_out=x_out, index=index)],
-                             attention=recurrent_transform_name)
+                             recurrent_transform=recurrent_transform_name)
   assert isinstance(layer.recurrent_transform, cls)
   return layer.recurrent_transform
 
