@@ -33,6 +33,12 @@
 # https://github.com/albertz/py_better_exchook
 
 import sys, os, os.path
+try:
+    from traceback import StackSummary, FrameSummary
+except ImportError:
+    class _Dummy:
+        pass
+    StackSummary = FrameSummary = _Dummy
 
 _cur_pwd = os.getcwd()
 
@@ -334,9 +340,7 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
     import inspect
     import traceback
     def isstacksummary(_tb):
-        if not hasattr(traceback, "StackSummary"):
-            return False
-        return isinstance(_tb, traceback.StackSummary)
+        return isinstance(_tb, StackSummary)
     isframe = inspect.isframe
     if withTitle:
         if isframe(tb) or isstacksummary(tb): output('Traceback (most recent call first)')
@@ -364,7 +368,11 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
                 return prefix + "!" + e.__class__.__name__ + ": " + str(e)
         while _tb is not None and (limit is None or n < limit):
             if isframe(_tb): f = _tb
-            elif isstacksummary(_tb): f = _tb[0].tb_frame
+            elif isstacksummary(_tb):
+                if isinstance(_tb[0], ExtendedFrameSummary):
+                    f = _tb[0].tb_frame
+                else:
+                    f = DummyFrame.from_frame_summary(_tb[0])
             else: f = _tb.tb_frame
             if allLocals is not None: allLocals.update(f.f_locals)
             if allGlobals is not None: allGlobals.update(f.f_globals)
@@ -384,20 +392,23 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
             if source_code:
                 source_code = remove_indent_lines(replace_tab_indents(source_code)).rstrip()
                 output('    line: ', source_code)
-                output('    locals:')
-                alreadyPrintedLocals = set()
-                for tokenstr in grep_full_py_identifiers(parse_py_statement(source_code)):
-                    splittedtoken = tuple(tokenstr.split("."))
-                    for token in [splittedtoken[0:i] for i in range(1, len(splittedtoken) + 1)]:
-                        if token in alreadyPrintedLocals: continue
-                        tokenvalue = None
-                        tokenvalue = _trySet(tokenvalue, "<local> ", lambda: pretty_print(_resolveIdentifier(f.f_locals, token)))
-                        tokenvalue = _trySet(tokenvalue, "<global> ", lambda: pretty_print(_resolveIdentifier(f.f_globals, token)))
-                        tokenvalue = _trySet(tokenvalue, "<builtin> ", lambda: pretty_print(_resolveIdentifier(f.f_builtins, token)))
-                        tokenvalue = tokenvalue or "<not found>"
-                        output('      ' + ".".join(token) + " = ", tokenvalue)
-                        alreadyPrintedLocals.add(token)
-                if len(alreadyPrintedLocals) == 0: output("       no locals")
+                if isinstance(f, DummyFrame) and not f.have_vars_available:
+                    pass
+                else:
+                    output('    locals:')
+                    alreadyPrintedLocals = set()
+                    for tokenstr in grep_full_py_identifiers(parse_py_statement(source_code)):
+                        splittedtoken = tuple(tokenstr.split("."))
+                        for token in [splittedtoken[0:i] for i in range(1, len(splittedtoken) + 1)]:
+                            if token in alreadyPrintedLocals: continue
+                            tokenvalue = None
+                            tokenvalue = _trySet(tokenvalue, "<local> ", lambda: pretty_print(_resolveIdentifier(f.f_locals, token)))
+                            tokenvalue = _trySet(tokenvalue, "<global> ", lambda: pretty_print(_resolveIdentifier(f.f_globals, token)))
+                            tokenvalue = _trySet(tokenvalue, "<builtin> ", lambda: pretty_print(_resolveIdentifier(f.f_builtins, token)))
+                            tokenvalue = tokenvalue or "<not found>"
+                            output('      ' + ".".join(token) + " = ", tokenvalue)
+                            alreadyPrintedLocals.add(token)
+                    if len(alreadyPrintedLocals) == 0: output("       no locals")
             else:
                 output('    -- code not available --')
             if isframe(_tb):
@@ -467,6 +478,41 @@ def install():
     sys.excepthook = better_exchook
 
 
+class ExtendedFrameSummary(FrameSummary):
+    def __init__(self, frame, **kwargs):
+        FrameSummary.__init__(self, **kwargs)
+        self.tb_frame = frame
+
+
+class DummyFrame:
+    """
+    This class has the same attributes as a code and a frame object
+    and is intended to be used as a dummy replacement.
+    """
+
+    @classmethod
+    def from_frame_summary(cls, f):
+        """
+        :param FrameSummary f:
+        :rtype: DummyFrame
+        """
+        return cls(filename=f.filename, lineno=f.lineno, name=f.name, f_locals=f.locals)
+
+    def __init__(self, filename, lineno, name, f_locals=None, f_globals=None, f_builtins=None):
+        self.lineno = lineno
+        self.tb_lineno = lineno
+        self.f_lineno = lineno
+        self.f_code = self
+        self.filename = filename
+        self.co_filename = filename
+        self.name = name
+        self.co_name = name
+        self.f_locals = f_locals or {}
+        self.f_globals = f_globals or {}
+        self.f_builtins = f_builtins or {}
+        self.have_vars_available = (f_locals is not None or f_globals is not None or f_builtins is not None)
+
+
 def _StackSummary_extract(frame_gen, limit=None, lookup_lines=True, capture_locals=False):
     """Create a StackSummary from a traceback or stack object.
     Very simplified copy of the original StackSummary.extract().
@@ -483,11 +529,6 @@ def _StackSummary_extract(frame_gen, limit=None, lookup_lines=True, capture_loca
     :param capture_locals: If True, the local variables from each frame will
         be captured as object representations into the FrameSummary.
     """
-    from traceback import StackSummary, FrameSummary
-    class ExtendedFrameSummary(FrameSummary):
-        def __init__(self, frame, **kwargs):
-            FrameSummary.__init__(self, **kwargs)
-            self.tb_frame = frame
     result = StackSummary()
     for f, lineno in frame_gen:
         co = f.f_code
