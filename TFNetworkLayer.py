@@ -156,6 +156,8 @@ class LayerBase(object):
       output.size_placeholder = cls._static_get_target_value(
         target=target or size_target, network=network,
         mark_data_key_as_used=network.train_flag is not False).size_placeholder.copy()
+    if any([not src.output.available_for_inference for src in sources]):
+      output.available_for_inference = False
     return output
 
   def __repr__(self):

@@ -1152,14 +1152,14 @@ def dimshuffle(x, axes, name="dimshuffle"):
     return x
 
 
-def sparse_labels(x, seq_lens, dtype=tf.int32, collapse_repeated=False):
+def sparse_labels_with_seq_lens(x, seq_lens, dtype=tf.int32, collapse_repeated=False):
   """
   :param tf.Tensor x: shape (batch,time) -> index, some int type
   :param tf.Tensor|None seq_lens: shape (batch,) of int32|int64
   :param tf.DType|None dtype: if given, will cast the `x` values to this type. ctc_loss() wants int32
   :param bool collapse_repeated: like uniq() behavior
-  :return: SparseTensor, e.g. input for tf.nn.ctc_loss()
-  :rtype: tf.SparseTensor
+  :return: SparseTensor, e.g. input for tf.nn.ctc_loss(), and seq_lens of shape (batch,)
+  :rtype: (tf.SparseTensor, tf.Tensor)
   """
   with tf.name_scope("sparse_labels"):
     x = check_input_ndim(x, ndim=2)
@@ -1202,7 +1202,20 @@ def sparse_labels(x, seq_lens, dtype=tf.int32, collapse_repeated=False):
     #   indices: A 2-D int64 tensor of shape `[N, ndims]`.
     #   values: A 1-D tensor of any type and shape `[N]`.
     #   shape: A 1-D int64 tensor of shape `[ndims]`.
-    return tf.SparseTensor(flat_idxs, flat_x, shape)
+    return tf.SparseTensor(flat_idxs, flat_x, shape), seq_lens
+
+
+def sparse_labels(x, seq_lens, dtype=tf.int32, collapse_repeated=False):
+  """
+  :param tf.Tensor x: shape (batch,time) -> index, some int type
+  :param tf.Tensor|None seq_lens: shape (batch,) of int32|int64
+  :param tf.DType|None dtype: if given, will cast the `x` values to this type. ctc_loss() wants int32
+  :param bool collapse_repeated: like uniq() behavior
+  :return: SparseTensor, e.g. input for tf.nn.ctc_loss()
+  :rtype: tf.SparseTensor
+  """
+  y, _ = sparse_labels_with_seq_lens(x=x, seq_lens=seq_lens, dtype=dtype, collapse_repeated=collapse_repeated)
+  return y
 
 
 def uniq(x):
@@ -1210,12 +1223,25 @@ def uniq(x):
   :param tf.Tensor x: 1D shape (time,) -> index, some int type
   :return: like numpy.uniq. unlike tf.unique which will never repeat entries.
   Example: uniq([0, 0, 1, 1, 0, 0]) == [0, 1, 0], tf.unique([0, 0, 1, 1, 0, 0]) == [0, 1].
-  For a batched variant, see sparse_labels() with option collapse_repeated.
+  For a batched variant, see batched_uniq, or sparse_labels() with option collapse_repeated.
   """
   diffs = tf.concat(0, [tf.ones_like(x[:1]), x[1:] - x[:-1]])
   nonzero_idx = tf.where(diffs)
   x_uniq = tf.gather_nd(x, nonzero_idx)
   return x_uniq
+
+
+def batched_uniq(x, seq_lens):
+  """
+  :param tf.Tensor x: shape (batch,time) -> index, some int type
+  :param tf.Tensor|None seq_lens: shape (batch,) of int32|int64
+  :return: tuple (z, new_seq_lens), where z is of shape (batch, max_new_time),
+    max_new_time = max(new_seq_lens), seq_lens is of shape (batch,).
+  :rtype: (tf.Tensor, tf.Tensor)
+  """
+  y, new_seq_lens = sparse_labels_with_seq_lens(x, seq_lens=seq_lens, collapse_repeated=True)
+  z = tf.sparse_to_dense(sparse_indices=y.indices, sparse_values=y.values, output_shape=y.dense_shape)
+  return z, new_seq_lens
 
 
 class VariableAssigner(object):
