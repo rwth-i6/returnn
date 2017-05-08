@@ -62,3 +62,29 @@ def test_rec_subnet_with_choice():
     })
     network = TFNetwork(config=config, train_flag=True)
     network.construct_from_dict(config.typed_dict["network"])
+
+
+def test_layer_base_get_out_data_from_opts():
+  with tf.Session():
+    config = Config()
+    config.update({
+      "num_inputs": 4,
+      "num_outputs": 3
+    })
+    network = TFNetwork(config=config)
+    input_data = network.extern_data.data["data"]
+    target_data = network.extern_data.data["classes"]
+    assert input_data.dim == 4
+    assert input_data.shape == (None, 4)
+    assert not input_data.sparse
+    assert input_data.dtype == "float32"
+    assert target_data.dim == 3
+    assert target_data.shape == (None,)
+    assert target_data.sparse
+    assert target_data.dtype == "int32"
+    out = LayerBase._base_get_out_data_from_opts(network=network, name="output", target="classes")
+    # Output data type is a non-sparse version of the targets by default.
+    assert out.dim == target_data.dim
+    assert out.shape == target_data.shape_dense
+    assert not out.sparse
+    assert out.dtype == "float32"

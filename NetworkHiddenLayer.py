@@ -3203,6 +3203,8 @@ class InvAlignSegmentationLayer(_NoOpLayer):
     self.set_attr('window', window)
     self.set_attr('win', win)
     assert len(self.sources) == 1
+    source_index = self.sources[0].reduced_index.T.flatten().nonzero()
+    y_out = self.sources[0].y_out.T.flatten()[source_index]
     if not self.eval_flag:
       assert self.sources[0].attention is not None
       b = self.sources[0].attention.shape[1]
@@ -3262,6 +3264,8 @@ class InvAlignSegmentationLayer(_NoOpLayer):
       self.fullind = fullind
     self.z = result
     self.make_output(result)
+    y_out = y_out[:result.shape[1]]
+    self.y_out = y_out.repeat(result.shape[0]).reshape((result.shape[1],result.shape[0])).T
     self.index = T.ones((self.output.shape[0], self.output.shape[1]), 'int8')
 
 class InvAlignSegmentationLayer2(_NoOpLayer):

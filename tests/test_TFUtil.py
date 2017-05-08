@@ -1,5 +1,8 @@
 
-# start test like this:  nosetests-2.7  tests/test_TFUtil.py  --nologcapture
+# start test like this:  nosetests-2.7  tests/test_TFUtil.py
+
+from __future__ import print_function
+
 
 import logging
 logging.getLogger('tensorflow').disabled = True
@@ -14,6 +17,11 @@ better_exchook.replace_traceback_format_tb()
 
 
 session = tf.InteractiveSession()
+
+
+def test_tf_version_tuple():
+  print("TF version:", tf.__version__)
+  print("TF version tuple:", tf_version_tuple())
 
 
 def test_single_strided_slice():
@@ -195,7 +203,7 @@ def test_gather_nd_grad():
   # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/gather_nd_op.cc
   # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/scatter_nd_op.cc
   # Fixed in TF 1.1.0.
-  assert [int(i) for i in tf.__version__.split(".")[:2]] >= [1, 1]
+  assert_min_tf_version((1, 1), "tf.gather_nd")
   n_base_time = 5
   n_in = 7
   n_beam = 3
@@ -216,7 +224,7 @@ def test_scatter_nd():
   # https://github.com/tensorflow/tensorflow/issues/9406
   # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/scatter_nd_op.cc
   # Fixed in TF 1.1.0.
-  assert [int(i) for i in tf.__version__.split(".")[:2]] >= [1, 1]
+  assert_min_tf_version((1, 1), "tf.scatter_nd")
   n_base_time = 5
   n_in = 7
   n_beam = 3
