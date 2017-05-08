@@ -595,7 +595,7 @@ class TFNetwork(object):
     :rtype: TFNetworkLayer.ChoiceLayer|None
     """
     assert sources is None or src is None, "don't provide both"
-    from TFNetworkLayer import ChoiceLayer
+    from TFNetworkRecLayer import ChoiceLayer
     if src is not None:
       if isinstance(src, ChoiceLayer):
         return src

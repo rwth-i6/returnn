@@ -12,7 +12,7 @@ In all cases, the code itself should be checked for details and comments.
 
 So far, there are two calculation backends: Theano and TensorFlow,
 where Theano was the first backend, thus Theano-specific code files are currently not prefix
-but TensorFlow specific files are prefixed with `TF`.
+but TensorFlow specific files are prefixed with ``TF``.
 This is implemented separately for both Theano and TensorFlow:
 
 - The engine for high-level logic, although a bit is shared.
@@ -24,7 +24,7 @@ This is implemented separately for both Theano and TensorFlow:
   :mod:`Updater`, :mod:`TFUpdater`.
 - All the individual layer implementations.
   :mod:`NetworkLayer`, :mod:`NetworkBaseLayer`, :mod:`NetworkHiddenLayer`, :mod:`NetworkRecurrentLayer` etc for Theano
-  and :mod:`TFNetworkLayer` for TensorFlow.
+  and :mod:`TFNetworkLayer`, :mod:`TFNetworkRecLayer` for TensorFlow.
   This also means that Theano and TensorFlow don't support the same layers and
   even parameters can be different.
 - Some utilities :mod:`TheanoUtil` and :mod:`TFUtil`.
@@ -49,13 +49,13 @@ Execution guide
 
 - :py:func:`rnn.main` will parse command line arguments and read in a config.
 - Then logging :mod:`Log` is initialized, based on verbosity and other settings.
-- Then it initializes the datasets (`train`, `dev`, `eval` in config),
+- Then it initializes the datasets (``train``, ``dev``, ``eval`` in config),
   i.e. :py:class:`Dataset` instances.
 - Theano-only: :py:class:`Device` instances.
 - The engine, i.e. a :py:class:`Engine` or :py:class:`TFEngine` instance.
-- Depending on the `task` option, some engine initialization
+- Depending on the ``task`` option, some engine initialization
   which also initializes the network computation graph, :ref:`tech_net_construct`.
-- Then, depending on the `task` option, it might start `engine.train`, `engine.forward` etc.
+- Then, depending on the ``task`` option, it might start ``engine.train``, ``engine.forward`` etc.
   (:py:func:`Engine.Engine.train` or :py:func:`TFEngine.Engine.train`), :ref:`tech_engine_train`.
 
 
@@ -64,7 +64,7 @@ Execution guide
 Network structure construction
 ------------------------------
 
-The network structure which defines the model topology is defined by the config `network` option,
+The network structure which defines the model topology is defined by the config ``network`` option,
 which is a dict, where each entry is a layer specification, which itself is a dict containing
 the kwargs for the specific layer class. E.g.:
 
@@ -76,16 +76,16 @@ the kwargs for the specific layer class. E.g.:
         "output": {"class": "softmax", "loss": "ce", "from": ["fw2"]}
     }
 
-The `"class"` key will get extracted from the layer arguments and the specific layer class will be used.
+The ``"class"`` key will get extracted from the layer arguments and the specific layer class will be used.
 For Theano, the base layer class is :py:class:`NetworkBaseLayer.Container` and :py:class:`NetworkBaseLayer.Layer`;
 for TensorFlow, it is :py:class:`TFNetworkLayer.LayerBase`.
 E.g. that would use the :py:class:`TFNetworkLayer.LinearLayer` class,
-and the `LinearLayer.__init__` will accepts arguments like `activation`.
+and the ``LinearLayer.__init__`` will accepts arguments like ``activation``.
 In the given example, all the remaining arguments will get handled by the base layer.
 
 The construction itself can be found for TensorFlow in :py:func:`TFNetwork.TFNetwork.construct_from_dict`,
-which starts from the output layers goes over the sources of a layer, which are defined by `"from"`.
-If a layer does not define `"from"`, it will automatically get the input from the dataset data.
+which starts from the output layers goes over the sources of a layer, which are defined by ``"from"``.
+If a layer does not define ``"from"``, it will automatically get the input from the dataset data.
 
 Here is a 2 layer unidirectional LSTM network:
 
@@ -97,10 +97,10 @@ Here is a 2 layer unidirectional LSTM network:
         "output": {"class": "softmax", "loss": "ce", "from": ["lstm2"]}
     }
 
-In TensorFlow, that would use the layer class :py:class:`TFNetworkLayer.RecLayer`
-which will handle the argument `unit`.
+In TensorFlow, that would use the layer class :py:class:`TFNetworkRecLayer.RecLayer`
+which will handle the argument ``unit``.
 
-And here is a 5 layer bidirectional LSTM network:
+And here is a 3 layer bidirectional LSTM network:
 
 .. code-block:: python
 
@@ -114,13 +114,7 @@ And here is a 5 layer bidirectional LSTM network:
     "lstm2_fw" : { "class": "rec", "unit": "lstmp", "n_out" : 500, "dropout": 0.1, "L2": 0.01, "direction": 1, "from" : ["lstm1_fw", "lstm1_bw"] },
     "lstm2_bw" : { "class": "rec", "unit": "lstmp", "n_out" : 500, "dropout": 0.1, "L2": 0.01, "direction": -1, "from" : ["lstm1_fw", "lstm1_bw"] },
 
-    "lstm3_fw" : { "class": "rec", "unit": "lstmp", "n_out" : 500, "dropout": 0.1, "L2": 0.01, "direction": 1, "from" : ["lstm2_fw", "lstm2_bw"] },
-    "lstm3_bw" : { "class": "rec", "unit": "lstmp", "n_out" : 500, "dropout": 0.1, "L2": 0.01, "direction": -1, "from" : ["lstm2_fw", "lstm2_bw"] },
-
-    "lstm4_fw" : { "class": "rec", "unit": "lstmp", "n_out" : 500, "dropout": 0.1, "L2": 0.01, "direction": 1, "from" : ["lstm3_fw", "lstm3_bw"] },
-    "lstm4_bw" : { "class": "rec", "unit": "lstmp", "n_out" : 500, "dropout": 0.1, "L2": 0.01, "direction": -1, "from" : ["lstm3_fw", "lstm3_bw"] },
-
-    "output" :   { "class" : "softmax", "loss" : "ce", "from" : ["lstm4_fw", "lstm4_bw"] }
+    "output" :   { "class" : "softmax", "loss" : "ce", "from" : ["lstm2_fw", "lstm2_bw"] }
     }
 
 
