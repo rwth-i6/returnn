@@ -276,7 +276,8 @@ class DownsampleLayer(_NoOpLayer):
     assert len(factor) == len(axis)
     self.set_attr("factor", factor)
     z, z_dim = concat_sources(self.sources, unsparse=False)
-    self.y_out = kwargs['y_in'][self.attrs.get('target','classes')]
+    target = self.attrs.get('target','classes')
+    self.y_out = kwargs['y_in'][target]
     n_out = z_dim
     import theano.ifelse
     for f, a in zip(factor, axis):
@@ -297,6 +298,8 @@ class DownsampleLayer(_NoOpLayer):
         if padding:
           self.index = T.concatenate([self.index, T.zeros((f-T.mod(self.index.shape[a], f), self.index.shape[1]), 'int8')], axis=0)
         self.index = TheanoUtil.downsample(self.index, axis=0, factor=f, method="max")
+        if sample_target:
+          self.output_index = TheanoUtil.downsample(self.network.j[target], axis=0, factor=f, method="max")
       elif a == 2:
         n_out = int(n_out / f)
     output = z

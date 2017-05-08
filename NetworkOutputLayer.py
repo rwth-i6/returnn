@@ -116,7 +116,10 @@ class OutputLayer(Layer):
       self.norm = numpy.float32(1)
     else:
       self.norm = T.sum(self.index, dtype='float32') / T.sum(copy_output.index, dtype='float32')
-      self.index = copy_output.index
+      if hasattr(copy_output, 'output_index'):
+        self.index = copy_output.output_index
+      else:
+        self.index = copy_output.index
       self.y = y = copy_output.y_out
     if y is None:
       self.y_data_flat = None
