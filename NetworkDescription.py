@@ -138,7 +138,8 @@ class LayerNetworkDescription:
     num_inputs, num_outputs = cls.num_inputs_outputs_from_config(config)
     data_dims = num_outputs.copy()
     sparse_input = config.bool("sparse_input", False)
-    data_dims.setdefault("data", (num_inputs, 1 if sparse_input else 2))
+    input_data_key = "data"
+    data_dims.setdefault(input_data_key, (num_inputs, 1 if sparse_input else 2))
     data = {}
     for key, data_type in data_dims.items():
       if isinstance(data_type, dict):
@@ -160,6 +161,11 @@ class LayerNetworkDescription:
       # This is also what we use here, i.e.:
       # batch_dim_axis=0, time_dim_axis=1. See TFEngine.DataProvider._get_next_batch().
       data[key] = init_args
+    for key, v in data.items():
+      if key == input_data_key:
+        v.setdefault("available_for_inference", True)
+      else:
+        v.setdefault("available_for_inference", False)
     return data
 
   @classmethod

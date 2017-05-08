@@ -9,6 +9,24 @@ import sys
 from Util import NotSpecified
 
 
+def tf_version_tuple():
+  """
+  :return: version tuple, e.g. (1, 1, 0), parsed from tf.__version__
+  :rtype: tuple[int]
+  """
+  return tuple([int(i) for i in tf.__version__.split(".")])
+
+
+def assert_min_tf_version(version, reason):
+  """
+  :param tuple[int] version:
+  :param str reason:
+  """
+  tf_version = tf_version_tuple()
+  assert len(version) <= len(tf_version)
+  assert tf_version >= version, "Your TF version %r is too old (older than %r). %s" % (tf_version, version, reason)
+
+
 class Data(object):
   """
   This class is to describe a tensor,
@@ -28,10 +46,12 @@ class Data(object):
                size_placeholder=None,
                batch_dim_axis=0,
                time_dim_axis=NotSpecified,
+               available_for_inference=True,
                auto_create_placeholders=False):
     """
     :param str name:
-    :param tuple[int|None] shape: including time-dim (can be None). excluding batch-dim. e.g. (time,feat)=(None,128)
+    :param tuple[int|None]|list[int|None] shape: including time-dim (can be None). excluding batch-dim.
+      e.g. (time,feat)=(None,128)
     :param str dtype: e.g. "float32" or "int64"
     :param tf.Tensor|None placeholder: with added batch-dim
     :param bool sparse: whether to treat the value as an index. do not confuse with tf.SparseTensor
@@ -40,7 +60,9 @@ class Data(object):
       e.g. shape=(time,...), 0 -> (batch,time,...), 1 -> (time,batch,...)
     :param int|None time_dim_axis: where we have the time dim axis, after we added the batch-dim.
       this is often 1. however, can be None if there is no time-dim.
-    :param dict[int,tf.Tensor] tf.Tensor size_placeholder: for every None in shape, this will describe the size
+    :param dict[int,tf.Tensor] tf.Tensor size_placeholder: for every None in shape, this will describe the size.
+      The size is always a tensor of shape (batch,), i.e. the size can be different for each sequence in a batch.
+    :param bool available_for_inference: e.g. the extern data "classes" is usually not available for inference
     """
     self.name = name
     if sparse is None:
@@ -55,7 +77,7 @@ class Data(object):
         shape = (None,)  # assume common (time,)
       else:
         shape = (None, dim)  # assume common (time,feat)
-    self.shape = tuple(shape)  # excluding batch-dim. see self.batch_shape
+    self.shape = tuple(shape)  # type: tuple[int|None]  # excluding batch-dim. see self.batch_shape
     if dtype is None:
       if sparse:
         dtype = "int32"
@@ -64,8 +86,8 @@ class Data(object):
     if dim is None and len(shape):
       assert not sparse, "need dim"
       dim = shape[-1]
-    self.dim = dim
-    self.batch_dim_axis = batch_dim_axis
+    self.dim = dim  # type: int
+    self.batch_dim_axis = batch_dim_axis  # type: int
     if time_dim_axis is NotSpecified:
       if (sparse and len(shape) >= 1) or ((not sparse) and len(shape) >= 2):
         if batch_dim_axis >= 1:
@@ -74,12 +96,12 @@ class Data(object):
           time_dim_axis = 1
       else:
         time_dim_axis = None
-    self.time_dim_axis = time_dim_axis
-    self.dtype = dtype
+    self.time_dim_axis = time_dim_axis  # type: int|None  # counted with batch-dim
+    self.dtype = dtype  # type: str
     if placeholder is None and auto_create_placeholders:
       with tf.name_scope("extern_data/placeholders/%s/" % name):
         placeholder = tf.placeholder(name=name, dtype=dtype, shape=self.batch_shape)
-    self.placeholder = placeholder
+    self.placeholder = placeholder  # type: tf.Tensor  # this will hold the data value itself
     # The size_placeholder is for each variable length dimension in shape, i.e. excluding the batch-dim.
     if size_placeholder is None and auto_create_placeholders:
       size_placeholder = {}  # type: dict[int,tf.Tensor]
@@ -91,10 +113,13 @@ class Data(object):
               name="%s_dim%i_size" % (name, i), dtype=self.size_dtype, shape=(None,))
     if not size_placeholder and self.ndim_dense <= 1:
       size_placeholder = {}
-    self.size_placeholder = size_placeholder
+    self.size_placeholder = size_placeholder  # type: dict[int,tf.Tensor]  # axis w.o. batch -> size of shape (batch,)
+    self.available_for_inference = available_for_inference
 
   def get_kwargs(self):
     keys = ["name", "shape", "dtype", "sparse", "dim", "batch_dim_axis", "time_dim_axis"]
+    if not self.available_for_inference:
+      keys += ["available_for_inference"]
     return {key: getattr(self, key) for key in keys}
 
   def copy(self):
@@ -176,6 +201,8 @@ class Data(object):
       keys.insert(0, "name")
     if with_placeholder:
       keys.append("placeholder")
+    if not self.available_for_inference:
+      keys.append("available_for_inference")
     return "Data(%s)" % ", ".join(["%s=%r" % (key, getattr(self, key)) for key in keys])
 
   def __repr__(self):
@@ -699,10 +726,11 @@ def check_shape_equal(x, y):
       return tf.identity(x, "identity_with_shape_equal_check")
 
 
-def get_shape_dim(x, axis):
+def get_shape_dim(x, axis, name="shape_dim"):
   """
   :param tf.Tensor x:
   :param int axis: which axis
+  :param str name:
   :return: x.shape[axis] either as a static int or otherwise as an expression
   :rtype: int|tf.Tensor
   """
@@ -711,7 +739,8 @@ def get_shape_dim(x, axis):
     if dyn_shape.dims[axis].value is not None:
       return dyn_shape.dims[axis].value
   # Need to fall-back to runtime.
-  return tf.shape(x)[axis]
+  with tf.name_scope(name):
+    return tf.shape(x)[axis]
 
 
 def get_shape(x):
@@ -1688,10 +1717,20 @@ def debugRegisterBetterRepr():
     """
     return "<tf.Variable %r initial_value=%r>" % (x.name, x.initial_value)
 
+  def tensorarray_repr(x):
+    """
+    :param tf.TensorArray x:
+    :rtype: str 
+    """
+    op = x.handle.op
+    assert isinstance(op, tf.Operation)
+    return "<tf.TensorArray %r>" % op.name
+
   for cl, f in [
         (tf.IndexedSlices, indexed_slices_repr),
         (tf.Operation, op_repr),
-        (tf.Variable, var_repr)]:
+        (tf.Variable, var_repr),
+        (tf.TensorArray, tensorarray_repr)]:
     if getattr(cl, "__repr__") is object.__repr__:
       setattr(cl, "__repr__", f)
 
@@ -1879,3 +1918,25 @@ def identity_op_nested(x, name="identity"):
     return [identity_op_nested(x[i], name="%s_%i" % (name, i)) for i in range(len(x))]
   assert isinstance(x, tf.Tensor)
   return tf.identity(x, name=name)
+
+
+def nd_indices(indices, batch_axis=0):
+  """
+  :param tf.Tensor indices: e.g. (batch, ...) -> index
+  :return: extended indices with batch-idx which can be used for tf.gather_nd,
+    i.e. in the example of shape (batch, ..., 2) where the 2-tuple represents (batch_idx, index).
+  """
+  assert indices.get_shape().ndims >= 1
+  assert batch_axis < indices.get_shape().ndims
+  with tf.name_scope("nd_indices"):
+    batches_idxs = tf.range(tf.shape(indices)[batch_axis], dtype=indices.dtype, name="batches_idxs")  # (batch,)
+    for axis in range(indices.get_shape().ndims):
+      if axis == batch_axis:
+        continue
+      batches_idxs = expand_dims_unbroadcast(batches_idxs, axis=axis, dim=tf.shape(indices)[axis],
+                                             name="batches_idxs_bc")  # (batch, ...)
+    batches_idxs.set_shape(indices.get_shape())
+    idxs_exp = tf.stack([batches_idxs, indices], axis=-1,
+                        name="idxs_exp")  # (batch,...,2), where the 2 stands for (batch_idx, index)
+    return idxs_exp
+
