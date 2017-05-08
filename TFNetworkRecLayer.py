@@ -354,7 +354,7 @@ class RecLayer(_ConcatInputLayer):
         for layer in cell.layer_data_templates.values():
           if isinstance(layer, ChoiceLayer):
             collected_choices += [layer.name]
-            assert isinstance(layer, _SubnetworkRecCell.TemplateLayer)  # it's both
+            assert isinstance(layer, _TemplateLayer)  # it's both
             def get_derived(name):
               def get_choice_source_batches():
                 layer = cell.net.layers[name]
@@ -470,7 +470,7 @@ class RecLayer(_ConcatInputLayer):
                 acc_tas_dict["output"] = acc_tas_dict["output"].write(i, output)
 
             assert choice_base.choice_base_layer is not None  # must be one, e.g. from prev time frame
-            if isinstance(choice_base.choice_base_layer, _SubnetworkRecCell.TemplateLayer):
+            if isinstance(choice_base.choice_base_layer, _TemplateLayer):
               assert choice_base.choice_base_layer.is_prev_time_frame
               return i - 1, src_choice_beams, [acc_tas_dict[out.name] for out in outputs_to_accumulate]
             is_output_choice = False
@@ -519,75 +519,11 @@ class _SubnetworkRecCell(object):
     if parent.target:
       self.net.extern_data.data[parent.target] = \
         parent.network.extern_data.data[parent.target].copy_template_excluding_time_dim()
-    self.layer_data_templates = {}  # type: dict[str,_SubnetworkRecCell.TemplateLayer]
+    self.layer_data_templates = {}  # type: dict[str,_TemplateLayer]
     self.prev_layers_needed = set()  # type: set[str]
     self._construct_template()
     self._initial_outputs = None  # type: dict[str,tf.Tensor]
     self._initial_extra_outputs = None  # type: dict[str,dict[str,tf.Tensor|tuple[tf.Tensor]]]
-
-  class TemplateLayer(LayerBase):
-    _sub_class_cache = {}
-
-    @classmethod
-    def _get_sub_class(cls, layer_class):
-      if layer_class in cls._sub_class_cache:
-        return cls._sub_class_cache[layer_class]
-      class SubTemplateLayer(cls, layer_class):
-        pass
-      cls._sub_class_cache[layer_class] = SubTemplateLayer
-      return SubTemplateLayer
-
-    def __init__(self, network, name):
-      """
-      :param TFNetwork.TFNetwork network:
-      :param str name:
-      """
-      # Init with some dummy.
-      super(_SubnetworkRecCell.TemplateLayer, self).__init__(
-        out_type={"shape": ()}, name=name, network=network)
-      self.output.size_placeholder = {}  # must be initialized
-      self.layer_class = ":uninitialized-template"
-      self.is_data_template = False
-      self.is_prev_time_frame = False
-      self.layer_class_type = None  # type: type[LayerBase]|LayerBase
-      self.kwargs = None  # type: dict[str]
-
-    def init(self, output, layer_class, template_type="template", **kwargs):
-      """
-      :param Data output: 
-      :param type[LayerBase]|LayerBase layer_class: 
-      :param str template_type: 
-      """
-      # Overwrite self.__class__ so that checks like isinstance(layer, ChoiceLayer) work.
-      # Not sure if this is the nicest way -- probably not, so I guess this will go away later.
-      self.__class__ = self._get_sub_class(layer_class)
-      self.is_prev_time_frame = (template_type == "prev")
-      self.is_data_template = (template_type == "template")
-      assert self.is_prev_time_frame or self.is_data_template
-      self.layer_class = ":%s:%s" % (template_type, layer_class.layer_class)
-      self.output = output
-      if not self.output.size_placeholder:
-        self.output.size_placeholder = {}
-      self.layer_class_type = layer_class
-      self.kwargs = kwargs
-      self.kwargs["output"] = output
-
-    def copy_as_prev_time_frame(self):
-      """
-      :return: new _TemplateLayer
-      :rtype: RecLayer.SubnetworkCell.TemplateLayer
-      """
-      l = _SubnetworkRecCell.TemplateLayer(network=self.network, name=self.name)
-      l.init(layer_class=self.layer_class_type, template_type="prev", **self.kwargs)
-      return l
-
-  class StepIndexLayer(LayerBase):
-    layer_class = ":i"
-
-    def __init__(self, i, **kwargs):
-      super(_SubnetworkRecCell.StepIndexLayer, self).__init__(
-        output=Data(name="i", shape=(), dtype="int32", sparse=False, placeholder=tf.expand_dims(i, axis=0)),
-        **kwargs)
 
   def _construct_template(self):
     """
@@ -611,7 +547,7 @@ class _SubnetworkRecCell(object):
     def get_templated_layer(name):
       """
       :param str name:
-      :rtype: RecLayer.SubnetworkCell.TemplateLayer|LayerBase
+      :rtype: _TemplateLayer|LayerBase
       """
       if name.startswith("prev:"):
         name = name[len("prev:"):]
@@ -622,7 +558,7 @@ class _SubnetworkRecCell(object):
         return self.parent.network.layers[name[len("base:"):]]
       # Need to create layer instance here now to not run into recursive loops.
       # We will extend it later in add_templated_layer().
-      self.layer_data_templates[name] = self.TemplateLayer(name=name, network=self.net)
+      self.layer_data_templates[name] = _TemplateLayer(name=name, network=self.net)
       return self.net._construct_layer(
         self.net_dict, name, get_layer=get_templated_layer, add_layer=add_templated_layer)
 
@@ -643,7 +579,7 @@ class _SubnetworkRecCell(object):
     if classes is not None:
       self.net.extern_data.data[self.parent.target].placeholder = classes
 
-    prev_layers = {}  # type: dict[str,_SubnetworkRecCell.TemplateLayer]
+    prev_layers = {}  # type: dict[str,_TemplateLayer]
     for name in prev_outputs.keys():
       layer = prev_layers[name] = self.layer_data_templates[name].copy_as_prev_time_frame()
       layer.output.placeholder = prev_outputs[name]
@@ -672,7 +608,7 @@ class _SubnetworkRecCell(object):
 
     assert not self.net.layers, "do not call this multiple times"
     if i is not None:
-      self.net.layers[":i"] = self.StepIndexLayer(i=i, name=":i", network=self.net)
+      self.net.layers[":i"] = _StepIndexLayer(i=i, name=":i", network=self.net)
     get_layer("output")
     assert "output" in self.net.layers
     # Might not be resolved otherwise:
@@ -751,6 +687,83 @@ class _SubnetworkRecCell(object):
     init_outputs_flat = sorted_values_from_dict(self._initial_outputs)
     init_extra_flat = [sorted_values_from_dict(v) for (k, v) in sorted(self._initial_extra_outputs.items())]
     return init_outputs_flat, init_extra_flat
+
+
+class _TemplateLayer(LayerBase):
+  """
+  Used by _SubnetworkRecCell.
+  In a first pass, it creates template layers with only the meta information about the Data.
+  All "prev:" layers also stay instances of _TemplateLayer in the real computation graph.
+  """
+
+  _sub_class_cache = {}
+
+  @classmethod
+  def _get_sub_class(cls, layer_class):
+    if layer_class in cls._sub_class_cache:
+      return cls._sub_class_cache[layer_class]
+    class SubTemplateLayer(cls, layer_class):
+      pass
+    cls._sub_class_cache[layer_class] = SubTemplateLayer
+    return SubTemplateLayer
+
+  def __init__(self, network, name):
+    """
+    :param TFNetwork.TFNetwork network:
+    :param str name:
+    """
+    # Init with some dummy.
+    super(_TemplateLayer, self).__init__(
+      out_type={"shape": ()}, name=name, network=network)
+    self.output.size_placeholder = {}  # must be initialized
+    self.layer_class = ":uninitialized-template"
+    self.is_data_template = False
+    self.is_prev_time_frame = False
+    self.layer_class_type = None  # type: type[LayerBase]|LayerBase
+    self.kwargs = None  # type: dict[str]
+
+  def init(self, output, layer_class, template_type="template", **kwargs):
+    """
+    :param Data output: 
+    :param type[LayerBase]|LayerBase layer_class: 
+    :param str template_type: 
+    """
+    # Overwrite self.__class__ so that checks like isinstance(layer, ChoiceLayer) work.
+    # Not sure if this is the nicest way -- probably not, so I guess this will go away later.
+    self.__class__ = self._get_sub_class(layer_class)
+    self.is_prev_time_frame = (template_type == "prev")
+    self.is_data_template = (template_type == "template")
+    assert self.is_prev_time_frame or self.is_data_template
+    self.layer_class = ":%s:%s" % (template_type, layer_class.layer_class)
+    self.output = output
+    if not self.output.size_placeholder:
+      self.output.size_placeholder = {}
+    self.layer_class_type = layer_class
+    self.kwargs = kwargs
+    self.kwargs["output"] = output
+
+  def copy_as_prev_time_frame(self):
+    """
+    :return: new _TemplateLayer
+    :rtype: _TemplateLayer
+    """
+    l = _TemplateLayer(network=self.network, name=self.name)
+    l.init(layer_class=self.layer_class_type, template_type="prev", **self.kwargs)
+    return l
+
+
+class _StepIndexLayer(LayerBase):
+  """
+  Used by _SubnetworkRecCell.
+  Represents the current step number.
+  """
+
+  layer_class = ":i"
+
+  def __init__(self, i, **kwargs):
+    super(_StepIndexLayer, self).__init__(
+      output=Data(name="i", shape=(), dtype="int32", sparse=False, placeholder=tf.expand_dims(i, axis=0)),
+      **kwargs)
 
 
 class RnnCellLayer(_ConcatInputLayer):
