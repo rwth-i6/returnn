@@ -57,13 +57,18 @@ class ExternData(object):
       else:
         self.default_input = input_keys[0]
     for key in data_keys:
+      if key in dataset.get_target_list():
+        available_for_inference = False
+      else:
+        available_for_inference = True
       dim = dataset.get_data_dim(key)
       shape = [None] + list(dataset.get_data_shape(key))
       sparse = dataset.is_data_sparse(key)
       dtype = dataset.get_data_dtype(key)
       self.data[key] = Data(
         name=key, auto_create_placeholders=True, batch_dim_axis=0, time_dim_axis=1,
-        shape=shape, dim=dim, sparse=sparse, dtype=dtype)
+        shape=shape, dim=dim, sparse=sparse, dtype=dtype,
+        available_for_inference=available_for_inference)
 
   def register_data_from_dict(self, data):
     """
@@ -594,9 +599,11 @@ class TFNetwork(object):
     if src is not None:
       if isinstance(src, ChoiceLayer):
         return src
-      sources = src.sources
+      assert isinstance(src, LayerBase)
+      sources = src.get_dep_layers()
     if _visited is None:
       _visited = set()
+    assert sources is not None
     sources = [src for src in sources if src not in _visited]
     _visited.update(sources)
     layers = [self.get_search_choices(src=src, _visited=_visited) for src in sources]
@@ -606,7 +613,7 @@ class TFNetwork(object):
     if len(layers) == 1:
       return list(layers)[0]
     if self.parent:
-      return self.parent.network.get_search_choices(sources=self.parent.sources)
+      return self.parent.network.get_search_choices(sources=self.parent.get_dep_layers())
     return None
 
   def get_batch_dim(self):
@@ -628,7 +635,8 @@ class TFNetwork(object):
       return self.parent.network.get_batch_dim()
     for _, data in sorted(self.extern_data.data.items()):
       assert isinstance(data, Data)
-      return get_shape_dim(data.placeholder, data.batch_dim_axis, name="batch_dim")
+      if data.available_for_inference:
+        return get_shape_dim(data.placeholder, data.batch_dim_axis, name="batch_dim")
     raise Exception("We cannot tell the batch dim.")
 
 
