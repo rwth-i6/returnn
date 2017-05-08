@@ -378,7 +378,9 @@ class Runner(object):
     for key in keys:
       value = fetches_results[key]
       target = self._get_target_for_key(key)
-      eval_info[key] = value / float(self._step_seq_len(fetches_results=fetches_results, data_key=target))
+      if value:
+        value /= float(self._step_seq_len(fetches_results=fetches_results, data_key=target))
+      eval_info[key] = value
 
     # Add raw stats.
     for k, v in fetches_results.items():

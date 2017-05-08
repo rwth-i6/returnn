@@ -121,13 +121,16 @@ class ExternData(object):
 
 
 class TFNetwork(object):
-  def __init__(self, config=None, extern_data=None, rnd_seed=42, train_flag=False, search_flag=False, parent=None):
+  def __init__(self, config=None, extern_data=None, rnd_seed=42,
+               train_flag=False, search_flag=False,
+               parent_layer=None, parent_net=None):
     """
     :param Config.Config config: only needed to init extern_data if not specified explicitly
     :param ExternData|None extern_data:
     :param int rnd_seed:
     :param bool|tf.Tensor train_flag: True if we want to use this model in training, False if in eval, or dynamic
-    :param TFNetworkLayer.LayerBase|None parent:
+    :param TFNetworkLayer.LayerBase|None parent_layer:
+    :param TFNetwork parent_net:
     """
     if extern_data is None:
       extern_data = ExternData()
@@ -142,7 +145,10 @@ class TFNetwork(object):
     assert isinstance(train_flag, (bool, tf.Tensor))
     self.train_flag = train_flag
     self.search_flag = search_flag
-    self.parent = parent
+    self.parent_layer = parent_layer
+    if not parent_net and parent_layer:
+      parent_net = parent_layer.network
+    self.parent_net = parent_net
     self._selected_train_layers = None
     self.layers_desc = {}  # type: dict[str,dict[str]]
     self.layers = {}  # type: dict[str,LayerBase]
@@ -151,8 +157,11 @@ class TFNetwork(object):
     self.total_loss = None  # type: tf.Tensor
     self.total_constraints = None  # type: tf.Tensor
     self.total_objective = None  # type: tf.Tensor
-    self.global_train_step = tf.Variable(
-      name="global_step", initial_value=0, dtype="int64", collections=[tf.GraphKeys.GLOBAL_STEP], trainable=False)
+    if parent_net:
+      self.global_train_step = parent_net.global_train_step
+    else:
+      self.global_train_step = tf.Variable(
+        name="global_step", initial_value=0, dtype="int64", collections=[tf.GraphKeys.GLOBAL_STEP], trainable=False)
     self.saver = None  # type: tf.train.Saver
     self.recurrent = False
     self._assigner_cache = {}  # type: dict[tf.Variable,VariableAssigner]
@@ -612,8 +621,8 @@ class TFNetwork(object):
     assert len(layers) <= 1, "multiple choice layers not supported yet"
     if len(layers) == 1:
       return list(layers)[0]
-    if self.parent:
-      return self.parent.network.get_search_choices(sources=self.parent.get_dep_layers())
+    if self.parent_layer:
+      return self.parent_layer.network.get_search_choices(sources=self.parent_layer.get_dep_layers())
     return None
 
   def get_batch_dim(self):
@@ -631,8 +640,8 @@ class TFNetwork(object):
     """
     from TFUtil import get_shape_dim
     # First check parent because there we might get the true batch dim.
-    if self.parent:
-      return self.parent.network.get_batch_dim()
+    if self.parent_net:
+      return self.parent_net.get_batch_dim()
     for _, data in sorted(self.extern_data.data.items()):
       assert isinstance(data, Data)
       if data.available_for_inference:

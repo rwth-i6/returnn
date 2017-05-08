@@ -143,6 +143,12 @@ class LayerBase(object):
       out_type.setdefault("batch_dim_axis", sources[0].output.batch_dim_axis)
       out_type.setdefault("time_dim_axis", sources[0].output.time_dim_axis)
     output = Data(**out_type)
+    cls._post_init_output(
+      output=output, network=network, target=target, size_target=size_target, sources=sources, **kwargs)
+    return output
+
+  @classmethod
+  def _post_init_output(cls, output, network, target=None, size_target=None, sources=(), **kwargs):
     # You are supposed to set self.output.placeholder to the value which you want to return by the layer.
     # Normally you are also supposed to set self.output.size_placeholder explicitly, just like self.output.placeholder.
     # However, in many cases, this will just be {0: time-lengths} and the same as from the input.
@@ -156,9 +162,8 @@ class LayerBase(object):
       output.size_placeholder = cls._static_get_target_value(
         target=target or size_target, network=network,
         mark_data_key_as_used=network.train_flag is not False).size_placeholder.copy()
-    if any([not src.output.available_for_inference for src in sources]):
+    if any([(not src.output.available_for_inference) for src in sources]):
       output.available_for_inference = False
-    return output
 
   def __repr__(self):
     return "%s{class=%s, out_type=%s}" % (
@@ -1397,7 +1402,7 @@ class SubnetworkLayer(LayerBase):
       rnd_seed=self.network.random.randint(2**31),
       train_flag=self.network.train_flag,
       extern_data=sub_extern_data,
-      parent=self)
+      parent_layer=self)
     net.construct_from_dict(subnetwork)
     self.subnetwork = net
     self.output = net.get_default_output_layer().output

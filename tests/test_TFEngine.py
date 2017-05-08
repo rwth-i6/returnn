@@ -200,7 +200,7 @@ def test_engine_search():
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {
-      "output": {"class": "rec", "target": "classes", "unit": {
+      "output": {"class": "rec", "unit": {
         "prob": {"class": "softmax", "from": ["prev:output"], "loss": "ce", "target": "classes"},
         "output": {"class": "choice", "beam_size": 4, "from": ["prob"], "target": "classes", "initial_output": 0}
       }},

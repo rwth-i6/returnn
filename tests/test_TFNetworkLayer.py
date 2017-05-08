@@ -54,7 +54,7 @@ def test_rec_subnet_with_choice():
       "num_outputs": 3,
       "num_inputs": 4,
       "network": {
-        "output": {"class": "rec", "target": "classes", "unit": {
+        "output": {"class": "rec", "unit": {
           "prob": {"class": "softmax", "from": ["prev:output"], "loss": "ce", "target": "classes"},
           "output": {"class": "choice", "beam_size": 4, "from": ["prob"], "target": "classes", "initial_output": 0}
         }},

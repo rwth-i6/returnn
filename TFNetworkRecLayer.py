@@ -120,31 +120,18 @@ class RecLayer(_ConcatInputLayer):
     else:
       out = None
     if isinstance(unit, dict):  # subnetwork
-      # Note that this is not very nice currently.
-      # But to have it correct would imply that we have to create the subnetwork template here.
-      # If it gets too ugly, maybe we should just do that.
-      if "n_out" in unit["output"] or "out_type" in unit["output"] or "target" in unit["output"] or "loss" in unit["output"]:
-        sub_out_type = unit["output"].get("out_type", {})
-        if sub_out_type and "shape" in sub_out_type:
-          sub_out_type = sub_out_type.copy()
-          sub_out_type["shape"] = (None,) + tuple(sub_out_type["shape"])  # add time-dim
-        if unit["output"]["class"] == "choice":  # very ugly at the moment
-          sub_out_type.setdefault("sparse", True)
-        sub_opts = kwargs.copy()
-        sub_opts.setdefault("n_out", unit["output"].get("n_out"))
-        sub_opts.setdefault("out_type", sub_out_type)
-        sub_opts.setdefault("target", unit["output"].get("target"))
-        sub_opts.setdefault("loss", unit["output"].get("loss"))
-        sub_out = cls._base_get_out_data_from_opts(**sub_opts)
-        print("out %r opts %r " % (sub_out, sub_opts))
-        if out:
-          assert sub_out.dim == out.dim
-          assert sub_out.shape == out.shape
-        else:
-          out = sub_out
+      subnet = _SubnetworkRecCell(parent_net=kwargs["network"], net_dict=unit)
+      sub_out = subnet.layer_data_templates["output"].output.copy_template_adding_time_dim(
+        name="%s_output" % kwargs["name"], time_dim_axis=0)
+      if out:
+        assert sub_out.dim == out.dim
+        assert sub_out.shape == out.shape
+      else:
+        out = sub_out
     assert out
     out.time_dim_axis = 0
     out.batch_dim_axis = 1
+    cls._post_init_output(output=out, **kwargs)
     return out
 
   _rnn_cells_dict = {}
@@ -199,7 +186,7 @@ class RecLayer(_ConcatInputLayer):
     import tensorflow.contrib.rnn as rnn_contrib
     import TFNativeOp
     if isinstance(unit, dict):
-      return _SubnetworkRecCell(parent=self, net_dict=unit)
+      return _SubnetworkRecCell(parent_rec_layer=self, net_dict=unit)
     else:
       assert isinstance(unit, str)
       if unit.lower() in ["lstmp", "lstm"]:
@@ -308,6 +295,7 @@ class RecLayer(_ConcatInputLayer):
       # Maybe more generic via sampling options later.
       y_ta = None
       if self.target and self.network.train_flag is not False:
+        # TODO check subnet, which extern data keys are used...
         y_data = self.network.get_extern_data(self.target, mark_data_key_as_used=True)
         y = y_data.get_placeholder_as_time_major()
         y_max_len = tf.shape(y)[0]
@@ -499,26 +487,34 @@ class RecLayer(_ConcatInputLayer):
 
 
 class _SubnetworkRecCell(object):
-  def __init__(self, parent, net_dict):
+  def __init__(self, net_dict, parent_rec_layer=None, parent_net=None, source_data=None):
     """
-    :param RecLayer parent:
     :param dict[str] net_dict:
+    :param RecLayer parent_rec_layer:
+    :param TFNetwork.TFNetwork parent_net:
+    :param Data|None source_data: usually concatenated input from the rec-layer
     """
     from copy import deepcopy
-    self.parent = parent
+    if parent_net is None and parent_rec_layer:
+      parent_net = parent_rec_layer.network
+    if source_data is None and parent_rec_layer:
+      source_data = parent_rec_layer.input_data
+    self.parent_rec_layer = parent_rec_layer
+    self.parent_net = parent_net
     self.net_dict = deepcopy(net_dict)
     from TFNetwork import TFNetwork, ExternData
     self.net = TFNetwork(
       extern_data=ExternData(),
-      train_flag=parent.network.train_flag,
-      search_flag=parent.network.search_flag,
-      parent=parent)
-    if parent.input_data:
+      train_flag=parent_net.train_flag,
+      search_flag=parent_net.search_flag,
+      parent_layer=parent_rec_layer,
+      parent_net=parent_net)
+    if source_data:
       self.net.extern_data.data["source"] = \
-        parent.input_data.copy_template_excluding_time_dim()
-    if parent.target:
-      self.net.extern_data.data[parent.target] = \
-        parent.network.extern_data.data[parent.target].copy_template_excluding_time_dim()
+        parent_rec_layer.input_data.copy_template_excluding_time_dim()
+    for key in parent_net.extern_data.data.keys():
+      self.net.extern_data.data[key] = \
+        parent_net.extern_data.data[key].copy_template_excluding_time_dim()
     self.layer_data_templates = {}  # type: dict[str,_TemplateLayer]
     self.prev_layers_needed = set()  # type: set[str]
     self._construct_template()
@@ -555,7 +551,7 @@ class _SubnetworkRecCell(object):
       if name in self.layer_data_templates:
         return self.layer_data_templates[name]
       if name.startswith("base:"):
-        return self.parent.network.layers[name[len("base:"):]]
+        return self.parent_net.layers[name[len("base:"):]]
       # Need to create layer instance here now to not run into recursive loops.
       # We will extend it later in add_templated_layer().
       self.layer_data_templates[name] = _TemplateLayer(name=name, network=self.net)
@@ -577,7 +573,7 @@ class _SubnetworkRecCell(object):
     if data is not None:
       self.net.extern_data.data["source"].placeholder = data
     if classes is not None:
-      self.net.extern_data.data[self.parent.target].placeholder = classes
+      self.net.extern_data.data[self.parent_rec_layer.target].placeholder = classes
 
     prev_layers = {}  # type: dict[str,_TemplateLayer]
     for name in prev_outputs.keys():
@@ -603,7 +599,7 @@ class _SubnetworkRecCell(object):
       if name.startswith("prev:"):
         return prev_layers[name[len("prev:"):]]
       if name.startswith("base:"):
-        return self.parent.network.layers[name[len("base:"):]]
+        return self.parent_net.layers[name[len("base:"):]]
       return self.net._construct_layer(net_dict, name=name, get_layer=get_layer)
 
     assert not self.net.layers, "do not call this multiple times"
@@ -636,10 +632,10 @@ class _SubnetworkRecCell(object):
 
   def check_output_template_shape(self):
     output_template = self.layer_data_templates["output"]
-    assert output_template.output.dim == self.parent.output.dim
-    assert self.parent.output.time_dim_axis == 0
+    assert output_template.output.dim == self.parent_rec_layer.output.dim
+    assert self.parent_rec_layer.output.time_dim_axis == 0
     assert output_template.output.time_dim_axis is None
-    assert output_template.output.batch_shape == self.parent.output.batch_shape[1:], (
+    assert output_template.output.batch_shape == self.parent_rec_layer.output.batch_shape[1:], (
       "see RecLayer.get_out_data_from_opts()")
 
   def get_next_loop_vars(self, loop_vars, data=None, classes=None, i=None):
@@ -664,7 +660,7 @@ class _SubnetworkRecCell(object):
       for (k, v) in zip(sorted(self._initial_extra_outputs), prev_extra_flat)}
     with tf.name_scope("prev_extra"):
       prev_extra = identity_op_nested(prev_extra)
-    with reuse_name_scope(self.parent._rec_scope):
+    with reuse_name_scope(self.parent_rec_layer._rec_scope):
       self._construct(prev_outputs=prev_outputs, prev_extra=prev_extra, data=data, classes=classes, i=i)
     outputs_flat = [self.net.layers[k].output.placeholder for k in sorted(self.prev_layers_needed)]
     extra_flat = [
@@ -981,13 +977,16 @@ class ChoiceLayer(LayerBase):
       # that wont work. You must do search in that case.
       self.output = self._static_get_target_value(
         target=self.target, network=self.network,
-        mark_data_key_as_used=True)
+        mark_data_key_as_used=True).copy()
+      self.output.available_for_inference = True  # in inference, we should do search
 
   @classmethod
   def get_out_data_from_opts(cls, target, network, **kwargs):
-    return cls._static_get_target_value(
+    out = cls._static_get_target_value(
       target=target, network=network,
       mark_data_key_as_used=False)
+    out.available_for_inference = True  # in inference, we would do search
+    return out
 
   # noinspection PyMethodOverriding
   @classmethod

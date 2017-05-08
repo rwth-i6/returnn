@@ -165,6 +165,26 @@ class Data(object):
       kwargs["name"] = name
     return Data(**kwargs)
 
+  def copy_template_adding_time_dim(self, name=None, time_dim_axis=0):
+    """
+    :param str|None name: if set, this will be the new name
+    :param int time_dim_axis: the new time-dim-axis index
+    :return: copy of myself adding the time-dimension without placeholder 
+    """
+    assert self.time_dim_axis is None
+    new_shape = list(self.shape)
+    new_shape.insert(time_dim_axis, None)
+    kwargs = self.get_kwargs()
+    kwargs["batch_dim_axis"] = (
+      self.batch_dim_axis
+      if (self.batch_dim_axis < time_dim_axis)
+      else (self.batch_dim_axis + 1))
+    kwargs["time_dim_axis"] = time_dim_axis
+    kwargs["shape"] = new_shape
+    if name:
+      kwargs["name"] = name
+    return Data(**kwargs)
+
   def _get_variable_dim_pattern(self):
     """
     :return: tuple with bools specifying which dims of the shape (excluding batch-dim) are of variable length.
