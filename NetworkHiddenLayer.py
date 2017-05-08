@@ -259,7 +259,7 @@ class DownsampleLayer(_NoOpLayer):
   """
   layer_class = "downsample"
 
-  def __init__(self, factor, axis, method="average", padding=False, **kwargs):
+  def __init__(self, factor, axis, method="average", padding=False, sample_target=False, **kwargs):
     super(DownsampleLayer, self).__init__(**kwargs)
     self.set_attr("method", method)
     if isinstance(axis, (str, unicode)):
@@ -276,6 +276,7 @@ class DownsampleLayer(_NoOpLayer):
     assert len(factor) == len(axis)
     self.set_attr("factor", factor)
     z, z_dim = concat_sources(self.sources, unsparse=False)
+    self.y_out = kwargs['y_in'][self.attrs.get('target','classes')]
     n_out = z_dim
     import theano.ifelse
     for f, a in zip(factor, axis):
@@ -285,8 +286,12 @@ class DownsampleLayer(_NoOpLayer):
         if padding:
           z = T.concatenate([z,T.zeros((f-T.mod(z.shape[a], f), z.shape[1], z.shape[2]), 'float32')],axis=0)
         z = TheanoUtil.downsample(z, axis=a, factor=f, method=method)
+        if sample_target:
+          self.y_out = TheanoUtil.downsample(self.y_out, axis=a, factor=f, method=method)
       else:
         z = TheanoUtil.downsample(z, axis=a, factor=f, method=method)
+        if a < self.y_out.ndim:
+          self.y_out = TheanoUtil.downsample(self.y_out, axis=a, factor=f, method=method)
       if a == 0:
         self.index = self.sources[0].index
         if padding:
@@ -2993,7 +2998,7 @@ class CAlignmentLayer(ForwardLayer):
     else:
       self.output = self.z if output_z else x_in
       self.index = self.sources[0].index
-    
+
     self.reduced_index = index
 
     if output_z:
