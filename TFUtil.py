@@ -146,10 +146,21 @@ class Data(object):
       data.batch_dim_axis = 0
     return data
 
+  def copy_template(self, name=None):
+    """
+    :return: copy of myself, using self.get_kwargs(), without placeholder
+    :rtype: Data
+    """
+    kwargs = self.get_kwargs()
+    if name:
+      kwargs["name"] = name
+    return Data(**kwargs)
+
   def copy_template_excluding_time_dim(self, name=None):
     """
     :param str|None name: if set, this will be the new name
-    :return: copy of myself excluding the time-dimension without placeholder 
+    :return: copy of myself excluding the time-dimension without placeholder
+    :rtype: Data
     """
     assert self.time_dim_axis is not None
     new_shape = list(self.shape)
@@ -169,7 +180,8 @@ class Data(object):
     """
     :param str|None name: if set, this will be the new name
     :param int time_dim_axis: the new time-dim-axis index
-    :return: copy of myself adding the time-dimension without placeholder 
+    :return: copy of myself adding the time-dimension without placeholder
+    :rtype: Data
     """
     assert self.time_dim_axis is None
     new_shape = list(self.shape)
@@ -1971,6 +1983,7 @@ def nd_indices(indices, batch_axis=0):
   :param tf.Tensor indices: e.g. (batch, ...) -> index
   :return: extended indices with batch-idx which can be used for tf.gather_nd,
     i.e. in the example of shape (batch, ..., 2) where the 2-tuple represents (batch_idx, index).
+  :rtype: tf.Tensor
   """
   assert indices.get_shape().ndims >= 1
   assert batch_axis < indices.get_shape().ndims

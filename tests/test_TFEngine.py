@@ -204,6 +204,7 @@ def test_engine_search():
         "prob": {"class": "softmax", "from": ["prev:output"], "loss": "ce", "target": "classes"},
         "output": {"class": "choice", "beam_size": 4, "from": ["prob"], "target": "classes", "initial_output": 0}
       }},
+      "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance"}
     }
   })
   engine = Engine(config=config)

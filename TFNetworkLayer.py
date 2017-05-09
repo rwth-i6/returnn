@@ -477,11 +477,12 @@ class LayerBase(object):
 
 
 class SearchChoices(object):
-  def __init__(self, owner, src_beams=None, beam_size=None):
+  def __init__(self, owner, src_beams=None, beam_size=None, is_decided=False):
     """
     :param LayerBase owner:
     :param tf.Tensor|None src_beams: (batch, beam) -> src beam index
     :param int|None beam_size:
+    :param bool is_decided: by decide layer
     """
     self.owner = owner
     self._done_src_layer = False
@@ -489,6 +490,7 @@ class SearchChoices(object):
     self.src_beams = src_beams
     self.beam_size = beam_size
     self.beam_scores = None  # type: tf.Tensor
+    self.is_decided = is_decided
 
   @property
   def src_layer(self):
@@ -1879,6 +1881,60 @@ class CtcLoss(Loss):
 
   def get_auto_output_layer_dim(self, target_dim):
     return target_dim + 1  # one added for blank
+
+
+class EditDistanceLoss(Loss):
+  """
+  Note that this loss is not differentiable, thus it's only for keeping statistics.
+  """
+  class_name = "edit_distance"
+  recurrent = True
+
+  def __init__(self, **kwargs):
+    super(EditDistanceLoss, self).__init__(**kwargs)
+    self._output_sparse_labels = None
+    self._target_sparse_labels = None
+
+  def init(self, output, output_with_activation=None, target=None):
+    """
+    :param Data output: generated output
+    :param OutputWithActivation|None output_with_activation:
+    :param Data target: reference target from dataset
+    """
+    super(EditDistanceLoss, self).init(
+      output=output, output_with_activation=output_with_activation, target=target)
+    assert output.sparse
+    assert target.sparse
+    assert output.shape == target.shape
+    assert output.dim == target.dim
+    self._output_sparse_labels = None
+    self._target_sparse_labels = None
+
+  def _get_output_sparse_labels(self):
+    if self._output_sparse_labels is not None:
+      return self._output_sparse_labels
+    from TFUtil import sparse_labels
+    labels = sparse_labels(self.output.placeholder, seq_lens=self.output_seq_lens)
+    self._output_sparse_labels = labels
+    return labels
+
+  def _get_target_sparse_labels(self):
+    if self._target_sparse_labels is not None:
+      return self._target_sparse_labels
+    from TFUtil import sparse_labels
+    labels = sparse_labels(self.target.placeholder, seq_lens=self.target_seq_lens)
+    self._target_sparse_labels = labels
+    return labels
+
+  def get_error(self):
+    output = self._get_output_sparse_labels()
+    labels = self._get_target_sparse_labels()
+    error = tf.edit_distance(hypothesis=output, truth=labels, normalize=False)
+    return self.reduce_func(error)
+
+  def get_value(self):
+    # Just use the error as the loss. Note that this is not differentiable.
+    return self.get_error()
 
 
 _LossClassDict = {}  # type: dict[str,type(Loss)]

@@ -607,6 +607,8 @@ class TFNetwork(object):
     if src is not None:
       assert isinstance(src, LayerBase)
       if src.search_choices:
+        if src.search_choices.is_decided:
+          return None
         return src
       sources = src.get_dep_layers()
     if _visited is None:
@@ -633,6 +635,12 @@ class TFNetwork(object):
     The code currently assumes that the batch-dim can be taken from the extern data.
     If it does not have that available for some reason (e.g. some subnetwork),
     it will try some alternative sources and assumes that they have the correct batch-dim.
+
+    Note that the batch-dim usually stays always the same across the whole network
+    and also every individual batch sequence will stay related.
+    One notable exception of this is the choice layer, where the
+    batch-dim will get expanded by the beam search if search is used,
+    as well as in all following layers, until there is a decide layer.
 
     :return: int scalar tensor which states the batch-dim
     :rtype: int|tf.Tensor

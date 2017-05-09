@@ -407,7 +407,8 @@ class RecLayer(_ConcatInputLayer):
       loop_vars=(init_i, init_net_vars, init_acc_tas))
     assert isinstance(final_acc_tas, list)
     assert isinstance(final_acc_tas[0], tf.TensorArray)
-    self.output.size_placeholder[0] = seq_len  # maybe we changed it? not really implemented yet...
+    # TODO: maybe we changed it? not really implemented yet... also must be of shape (batch * beam,) ...
+    self.output.size_placeholder[0] = seq_len
 
     # Check if collected_choices has all the right layers.
     # At the moment, _TemplateLayer.has_search_choices() might be incomplete, that is why we check here.
@@ -1043,6 +1044,72 @@ class ChoiceLayer(LayerBase):
       return {}
     batch_dim = network.get_batch_dim()
     return {"choice_scores": tf.zeros([batch_dim, beam_size])}
+
+
+class DecideLayer(LayerBase):
+  """
+  This is kind of the counter-part to the choice layer.
+  This only has an effect in search mode.
+  E.g. assume that the input is of shape (batch * beam, time, dim)
+  and has search_sources set.
+  Then this will output (batch, time, dim) where the beam with the highest score is selected.
+  Thus, this will do a decision based on the scores.
+  In will convert the data to batch-major mode. 
+  """
+  layer_class = "decide"
+
+  def __init__(self, **kwargs):
+    super(DecideLayer, self).__init__(**kwargs)
+    # If not in search, this will already be set via self.get_out_data_from_opts().
+    if self.network.search_flag:
+      assert len(self.sources) == 1
+      src = self.sources[0]
+      self.decide(src=src, output=self.output)
+      self.search_choices = SearchChoices(owner=self, is_decided=True)
+
+  @classmethod
+  def decide(cls, src, output=None, name=None):
+    """
+    :param LayerBase src: with search_choices set. e.g. input of shape (batch * beam, time, dim) 
+    :param Data|None output:
+    :param str|None name:
+    :return: best beam selected from input, e.g. shape (batch, time, dim)
+    :rtype: Data 
+    """
+    assert src.search_choices
+    if not output:
+      output = src.output.copy_template(name="%s_output" % (name or src.name)).copy_as_batch_major()
+    assert output.batch_dim_axis == 0
+    batch_dim = src.network.get_batch_dim()
+    src_data = src.output.copy_as_batch_major()
+    src_output = tf.reshape(
+      src_data.placeholder,
+      [batch_dim, src.search_choices.beam_size] + list(src_data.shape))  # (batch, beam, [time], [dim])
+    # beam_scores is of shape (batch, beam) -> log score.
+    beam_idxs = tf.argmax(src.search_choices.beam_scores, axis=1)  # (batch,)
+    from TFUtil import assert_min_tf_version, nd_indices
+    assert_min_tf_version((1, 1), "gather_nd")
+    beam_idxs_ext = nd_indices(beam_idxs)
+    output.placeholder = tf.gather_nd(src_output, indices=beam_idxs_ext)  # (batch, [time], [dim])
+    output.size_placeholder = {}
+    for i, size in src_data.size_placeholder.items():
+      size = tf.reshape(size, [batch_dim, src.search_choices.beam_size])  # (batch, beam)
+      output.size_placeholder[i] = tf.gather_nd(size, indices=beam_idxs_ext)  # (batch,)
+    return output
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, network, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :param TFNetwork.TFNetwork network:
+    :rtype: Data
+    """
+    assert len(sources) == 1
+    if network.search_flag:
+      return sources[0].output.copy_template(name="%s_output" % name).copy_as_batch_major()
+    else:
+      return sources[0].output
 
 
 class AttentionBaseLayer(_ConcatInputLayer):
