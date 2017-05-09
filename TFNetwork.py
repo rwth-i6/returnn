@@ -600,15 +600,14 @@ class TFNetwork(object):
     :param LayerBase|None src:
     :param list[LayerBase]|None sources:
     :param set[LayerBase]|None _visited: keep track about visited layers in case there are circular deps
-    :return: (direct or indirect) source ChoiceLayer
-    :rtype: TFNetworkLayer.ChoiceLayer|None
+    :return: (direct or indirect) source LayerBase which has search_choices, or None
+    :rtype: LayerBase|None
     """
     assert sources is None or src is None, "don't provide both"
-    from TFNetworkRecLayer import ChoiceLayer
     if src is not None:
-      if isinstance(src, ChoiceLayer):
-        return src
       assert isinstance(src, LayerBase)
+      if src.search_choices:
+        return src
       sources = src.get_dep_layers()
     if _visited is None:
       _visited = set()
@@ -616,7 +615,7 @@ class TFNetwork(object):
     sources = [src for src in sources if src not in _visited]
     _visited.update(sources)
     layers = [self.get_search_choices(src=src, _visited=_visited) for src in sources]
-    layers = [layer for layer in layers if layer is not None]
+    layers = [layer for layer in layers if layer is not None]  # type: list[LayerBase]
     layers = set(layers)
     assert len(layers) <= 1, "multiple choice layers not supported yet"
     if len(layers) == 1:

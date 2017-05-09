@@ -2,7 +2,7 @@
 from __future__ import print_function
 
 import tensorflow as tf
-from TFNetworkLayer import LayerBase, _ConcatInputLayer
+from TFNetworkLayer import LayerBase, _ConcatInputLayer, SearchChoices
 from TFUtil import Data, reuse_name_scope
 
 
@@ -36,10 +36,6 @@ class RecLayer(_ConcatInputLayer):
     self._initial_state_src = initial_state
     self._initial_state = initial_state.get_last_hidden_state() if initial_state else None
     self._input_projection = input_projection
-    # If we do search, and there are choice-layers in the subnet of our recurrence,
-    # for the output layer, shape [time, batch, beam] -> src beam idx
-    # Note that in this case, our output will be of shape [time, batch * beam, dim].
-    self.choices = None  # type: tf.Tensor
     with tf.variable_scope(
           "rec",
           initializer=tf.contrib.layers.xavier_initializer(
@@ -340,20 +336,20 @@ class RecLayer(_ConcatInputLayer):
       collected_choices = []  # type: list[str]  # layer names
       if self.network.search_flag:
         for layer in cell.layer_data_templates.values():
-          if isinstance(layer, ChoiceLayer):
+          assert isinstance(layer, _TemplateLayer)
+          # Note: layer is a non-initialized template layer, so search_choices is not set.
+          if layer.has_search_choices():
             collected_choices += [layer.name]
-            assert isinstance(layer, _TemplateLayer)  # it's both
             def get_derived(name):
               def get_choice_source_batches():
                 layer = cell.net.layers[name]
-                assert isinstance(layer, ChoiceLayer)
-                return layer.choice_source_beams
+                return layer.search_choices.src_beams
               return get_choice_source_batches
             outputs_to_accumulate += [
               OutputToAccumulate(
                 name="choice_%s" % layer.name,
                 dtype=tf.int32,
-                element_shape=(None, layer.kwargs["beam_size"]),  # (batch, beam_size)
+                element_shape=(None, layer.get_search_choices_beam_size()),  # (batch, beam)
                 get=get_derived(layer.name))]
 
       # Create a tensor array to store the intermediate values for each step i, e.g. of shape (batch, dim).
@@ -391,6 +387,11 @@ class RecLayer(_ConcatInputLayer):
         # We could use tf.cond() to return the previous or so, and min_seq_len
         # to avoid the check if not needed. However, just filtering the result
         # outside the loop is likely faster.
+        if collected_choices:
+          # For the search choices, we do it here so that we can easily get out the final beam scores.
+          seq_filter_cond = tf.less(i, seq_len)  # (batch,)
+          for name in collected_choices:
+            cell.net.layers[name].search_choices.filter_seqs(seq_filter_cond)
         assert len(acc_tas) == len(outputs_to_accumulate)
         acc_tas = [
           acc_ta.write(i, out.get())
@@ -400,16 +401,29 @@ class RecLayer(_ConcatInputLayer):
     def cond(i, net_vars, acc_ta):
       return tf.less(i, max_seq_len)
 
-    _, _, final_acc_tas = tf.while_loop(cond=cond, body=body, loop_vars=(init_i, init_net_vars, init_acc_tas))
+    _, final_net_vars, final_acc_tas = tf.while_loop(
+      cond=cond,
+      body=body,
+      loop_vars=(init_i, init_net_vars, init_acc_tas))
     assert isinstance(final_acc_tas, list)
     assert isinstance(final_acc_tas[0], tf.TensorArray)
     self.output.size_placeholder[0] = seq_len  # maybe we changed it? not really implemented yet...
 
+    # Check if collected_choices has all the right layers.
+    # At the moment, _TemplateLayer.has_search_choices() might be incomplete, that is why we check here.
+    for layer in cell.net.layers.values():
+      if layer.search_choices:
+        assert layer.name in collected_choices
+    for name in collected_choices:
+      layer = cell.net.layers[name]
+      assert layer.search_choices
+
     if collected_choices:
       # Find next choice layer. Then iterate through it's source choice layers through time
       # and resolve the output over time to be in line with the final output search choices.
-      output_choice_base = self.cell.net.get_search_choices(src=self.cell.net.layers["output"])
-      output_beam_size = output_choice_base.beam_size
+      output_choice_base = cell.net.get_search_choices(src=self.cell.net.layers["output"])
+      assert isinstance(output_choice_base, LayerBase)
+      output_beam_size = output_choice_base.search_choices.beam_size
       initial_beam_choices = tf.range(0, output_beam_size)  # (beam_out,)
       from TFUtil import expand_dims_unbroadcast
       initial_beam_choices = expand_dims_unbroadcast(
@@ -421,27 +435,21 @@ class RecLayer(_ConcatInputLayer):
         # choice_beams are from the previous step, shape (batch, beam_out) -> beam idx of output,
         # output is of shape (batch * beam, n_out).
         with reuse_name_scope(self._rec_scope.name + "/while_loop_search_body", absolute=True):
-          seq_filter_cond = tf.less(i, seq_len)  # (batch,)
-          seq_filter_cond_bc = expand_dims_unbroadcast(seq_filter_cond, axis=1, dim=output_beam_size)  # (batch, beam_out)
           assert len(acc_tas) == len(outputs_to_accumulate)
           acc_tas_dict = {out.name: acc_ta for (acc_ta, out) in zip(acc_tas, outputs_to_accumulate)}
           choice_base = output_choice_base
           is_output_choice = True
           while True:
-            assert isinstance(choice_base, ChoiceLayer)
-            assert choice_base.network is self.cell.net
+            assert choice_base.network is self.cell.net, "not yet implemented otherwise"
 
             src_choice_beams = acc_tas_dict["choice_%s" % choice_base.name].read(i)  # (batch, beam) -> beam_in idx
             assert src_choice_beams.get_shape().ndims == 2
 
-            # Note that gather_nd is broken up to TF 1.0 for this use case (see test_TFUtil.py),
-            # so you need TF >=1.1 here.
             with tf.name_scope("choice_beams"):
-              from TFUtil import nd_indices, tf_version_tuple
-              assert tf_version_tuple()[:2] >= (1, 1)
+              from TFUtil import nd_indices, assert_min_tf_version
+              assert_min_tf_version((1, 1), "gather_nd")
               idxs_exp = nd_indices(choice_beams)  # (batch, beam_out, 2) -> (batch idx, beam idx)
               src_choice_beams = tf.gather_nd(src_choice_beams, idxs_exp)  # (batch, beam_out)
-              src_choice_beams = tf.where(seq_filter_cond_bc, src_choice_beams, initial_beam_choices)
             if is_output_choice:
               with tf.name_scope("output"):
                 output = acc_tas_dict["output"].read(i)  # (batch * beam, [n_out])
@@ -457,12 +465,14 @@ class RecLayer(_ConcatInputLayer):
                   [batch_dim * output_beam_size] + out_shape[1:])  # (batch * beam_par, [n_out])
                 acc_tas_dict["output"] = acc_tas_dict["output"].write(i, output)
 
-            assert choice_base.choice_base_layer is not None  # must be one, e.g. from prev time frame
-            if isinstance(choice_base.choice_base_layer, _TemplateLayer):
-              assert choice_base.choice_base_layer.is_prev_time_frame
+            assert choice_base.search_choices
+            src_choice_layer = choice_base.search_choices.src_layer
+            assert src_choice_layer is not None  # must be one, e.g. from prev time frame
+            if isinstance(src_choice_layer, _TemplateLayer):
+              assert src_choice_layer.is_prev_time_frame
               return i - 1, src_choice_beams, [acc_tas_dict[out.name] for out in outputs_to_accumulate]
             is_output_choice = False
-            choice_base = choice_base.choice_base_layer
+            choice_base = src_choice_layer
             choice_beams = src_choice_beams
 
       _, _, final_acc_tas = tf.while_loop(
@@ -472,6 +482,16 @@ class RecLayer(_ConcatInputLayer):
           final_acc_tas[0].size() - 1,  # initial i. we go backwards
           initial_beam_choices,
           final_acc_tas))
+
+      # Collect the search choices for the rec layer itself.
+      # Our output will be of shape (time, batch * beam, dim).
+      # The beam scores will be of shape (batch, beam).
+      self.search_choices = SearchChoices(owner=self, beam_size=output_beam_size)
+      # TODO search_choices.src_beams, not really supported currently
+      final_choice_rec_vars = cell.get_layer_rec_var_from_loop_vars(
+        loop_vars=final_net_vars,
+        layer_name=output_choice_base.name)
+      self.search_choices.set_beam_scores_from_rec(final_choice_rec_vars)
 
     assert len(final_acc_tas) == len(outputs_to_accumulate)
     final_acc_tas_dict = {
@@ -576,18 +596,10 @@ class _SubnetworkRecCell(object):
       self.net.extern_data.data[self.parent_rec_layer.target].placeholder = classes
 
     prev_layers = {}  # type: dict[str,_TemplateLayer]
-    for name in prev_outputs.keys():
-      layer = prev_layers[name] = self.layer_data_templates[name].copy_as_prev_time_frame()
-      layer.output.placeholder = prev_outputs[name]
-      layer.output.placeholder.set_shape(tf.TensorShape(layer.output.batch_shape))
-      assert layer.output.placeholder.dtype is tf.as_dtype(layer.output.dtype)
-      layer.output.size_placeholder = {}  # must be set
-    for name in prev_extra.keys():
-      if name not in prev_layers:
-        layer = prev_layers[name] = self.layer_data_templates[name].copy_as_prev_time_frame()
-      else:
-        layer = prev_layers[name]
-      layer.rec_vars_outputs = prev_extra[name]
+    for name in set(list(prev_outputs.keys()) + list(prev_extra.keys())):
+      prev_layers[name] = self.layer_data_templates[name].copy_as_prev_time_frame(
+        prev_output=prev_outputs.get(name, None),
+        rec_vars_prev_outputs=prev_extra.get(name, None))
 
     from copy import deepcopy
     net_dict = deepcopy(self.net_dict)
@@ -684,6 +696,22 @@ class _SubnetworkRecCell(object):
     init_extra_flat = [sorted_values_from_dict(v) for (k, v) in sorted(self._initial_extra_outputs.items())]
     return init_outputs_flat, init_extra_flat
 
+  def get_layer_rec_var_from_loop_vars(self, loop_vars, layer_name):
+    """
+    :param (list[tf.Tensor],list[tf.Tensor]) loop_vars: loop_vars like in self.get_next_loop_vars()
+    :param str layer_name:
+    :return: layer rec_vars_outputs
+    :rtype: dict[str,tf.Tensor]
+    """
+    prev_outputs_flat, prev_extra_flat = loop_vars
+    assert len(prev_outputs_flat) == len(self.prev_layers_needed)
+    assert len(prev_extra_flat) == len(self._initial_extra_outputs)
+    from Util import dict_zip
+    prev_extra = {
+      k: dict_zip(sorted(self._initial_extra_outputs[k]), v)
+      for (k, v) in zip(sorted(self._initial_extra_outputs), prev_extra_flat)}
+    return prev_extra[layer_name]
+
 
 class _TemplateLayer(LayerBase):
   """
@@ -691,17 +719,6 @@ class _TemplateLayer(LayerBase):
   In a first pass, it creates template layers with only the meta information about the Data.
   All "prev:" layers also stay instances of _TemplateLayer in the real computation graph.
   """
-
-  _sub_class_cache = {}
-
-  @classmethod
-  def _get_sub_class(cls, layer_class):
-    if layer_class in cls._sub_class_cache:
-      return cls._sub_class_cache[layer_class]
-    class SubTemplateLayer(cls, layer_class):
-      pass
-    cls._sub_class_cache[layer_class] = SubTemplateLayer
-    return SubTemplateLayer
 
   def __init__(self, network, name):
     """
@@ -726,7 +743,6 @@ class _TemplateLayer(LayerBase):
     """
     # Overwrite self.__class__ so that checks like isinstance(layer, ChoiceLayer) work.
     # Not sure if this is the nicest way -- probably not, so I guess this will go away later.
-    self.__class__ = self._get_sub_class(layer_class)
     self.is_prev_time_frame = (template_type == "prev")
     self.is_data_template = (template_type == "template")
     assert self.is_prev_time_frame or self.is_data_template
@@ -738,14 +754,43 @@ class _TemplateLayer(LayerBase):
     self.kwargs = kwargs
     self.kwargs["output"] = output
 
-  def copy_as_prev_time_frame(self):
+  def copy_as_prev_time_frame(self, prev_output=None, rec_vars_prev_outputs=None):
     """
+    :param tf.Tensor|None prev_output:
+    :param dict[str,tf.Tensor]|None rec_vars_prev_outputs:
     :return: new _TemplateLayer
     :rtype: _TemplateLayer
     """
-    l = _TemplateLayer(network=self.network, name=self.name)
+    l = _TemplateLayer(network=self.network, name="prev:%s" % self.name)
     l.init(layer_class=self.layer_class_type, template_type="prev", **self.kwargs)
+    if prev_output is not None:
+      l.output.placeholder = prev_output
+      l.output.placeholder.set_shape(tf.TensorShape(l.output.batch_shape))
+      assert l.output.placeholder.dtype is tf.as_dtype(l.output.dtype)
+      l.output.size_placeholder = {}  # must be set
+    if rec_vars_prev_outputs is not None:
+      l.rec_vars_outputs = rec_vars_prev_outputs
+    if l.has_search_choices():
+      l.search_choices = SearchChoices(owner=l)
+      l.search_choices.set_beam_scores_from_own_rec()
     return l
+
+  def has_search_choices(self):
+    """
+    :return: whether an instance of this class has search_choices set
+    :rtype: bool
+    """
+    # TODO: extend if this is a subnet or whatever
+    if not self.network.search_flag:
+      return False
+    return issubclass(self.layer_class_type, ChoiceLayer)
+
+  def get_search_choices_beam_size(self):
+    """
+    Only valid if self.has_search_choices() is True.
+    :rtype: int
+    """
+    return self.kwargs["beam_size"]
 
 
 class _StepIndexLayer(LayerBase):
@@ -942,14 +987,13 @@ class ChoiceLayer(LayerBase):
     assert self.sources[0].output.dim == self.output.dim
     assert self.sources[0].output.shape == (self.output.dim,)
     assert self.target
-    self.beam_size = beam_size
-    self.choice_base_layer = self.network.get_search_choices(sources=self.sources)
-    self.choice_scores = None
-    self.choice_source_beams = None
     if self.network.search_flag:
+      self.search_choices = SearchChoices(
+        owner=self,
+        beam_size=beam_size)
       net_batch_dim = self.network.get_batch_dim()
-      assert self.choice_base_layer  # not implemented yet... in rec-layer, this should always be the case
-      scores_base = self.choice_base_layer.rec_vars_outputs["choice_scores"]  # (batch, beam_in)
+      assert self.search_choices.src_layer  # not implemented yet... in rec-layer, this should always be the case
+      scores_base = self.search_choices.src_layer.search_choices.beam_scores  # (batch, beam_in)
       assert scores_base.get_shape().ndims == 2
       beam_in = tf.shape(scores_base)[1]
       scores_base = tf.expand_dims(scores_base, axis=-1)  # (batch, beam_in, dim)
@@ -960,11 +1004,10 @@ class ChoiceLayer(LayerBase):
       scores_in_flat = tf.reshape(scores_in, [net_batch_dim, beam_in * scores_in_dim])  # (batch, beam_in * dim)
       # We get scores/labels of shape (batch, beam) with indices in [0..beam_in*dim-1].
       scores, labels = tf.nn.top_k(scores_in_flat, k=beam_size)
-      self.choice_source_beams = labels // beam_in  # (batch, beam) -> scores_in batch idx
+      self.search_choices.src_beams = labels // beam_in  # (batch, beam) -> scores_in batch idx
       labels = labels % beam_in  # (batch, beam) -> dim idx
       labels = tf.reshape(labels, [net_batch_dim * beam_size])  # (batch * beam)
-      self.choice_scores = scores  # (batch, beam) -> log score
-      self.rec_vars_outputs["choice_scores"] = scores
+      self.search_choices.set_beam_scores(scores)  # (batch, beam) -> log score
       self.output = Data(
         name="%s_choice_output" % self.name,
         batch_dim_axis=0,

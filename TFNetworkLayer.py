@@ -60,6 +60,7 @@ class LayerBase(object):
         sources=sources, loss=loss)
     self.output_before_activation = None  # type: None|OutputWithActivation
     self.rec_vars_outputs = {}  # type: dict[str,tf.Tensor]
+    self.search_choices = None  # type: SearchChoices
     self._initial_output = initial_output
     self._rec_previous_layer = rec_previous_layer
     self.sources = sources
@@ -473,6 +474,65 @@ class LayerBase(object):
   @classmethod
   def get_rec_initial_extra_outputs(cls, batch_dim, **kwargs):
     return {}
+
+
+class SearchChoices(object):
+  def __init__(self, owner, src_beams=None, beam_size=None):
+    """
+    :param LayerBase owner:
+    :param tf.Tensor|None src_beams: (batch, beam) -> src beam index
+    :param int|None beam_size:
+    """
+    self.owner = owner
+    self._done_src_layer = False
+    self._src_layer = None  # type: LayerBase
+    self.src_beams = src_beams
+    self.beam_size = beam_size
+    self.beam_scores = None  # type: tf.Tensor
+
+  @property
+  def src_layer(self):
+    """
+    :rtype: LayerBase 
+    """
+    if not self._done_src_layer:
+      self._src_layer = self.owner.network.get_search_choices(sources=self.owner.sources)
+      self._done_src_layer = True
+    return self._src_layer
+
+  def set_beam_scores_from_own_rec(self):
+    self.set_beam_scores_from_rec(self.owner.rec_vars_outputs)
+
+  def set_beam_scores_from_rec(self, rev_vars_outputs):
+    """
+    :param dict[str,tf.Tensor] rev_vars_outputs:
+    """
+    self.beam_scores = rev_vars_outputs["choice_scores"]  # (batch, beam)
+    if self.src_beams is not None:
+      self.beam_scores.set_shape(self.src_beams.get_shape())
+
+  def set_beam_scores(self, scores):
+    """
+    :param tf.Tensor scores: (batch, beam) -> log score 
+     """
+    self.beam_scores = scores
+    self.owner.rec_vars_outputs["choice_scores"] = scores
+
+  def filter_seqs(self, seq_filter):
+    """
+    :param tf.Tensor seq_filter: (batch,)
+    """
+    with tf.name_scope("search_filter_seqs"):
+      from TFUtil import expand_dims_unbroadcast, get_shape_dim
+      beam_size = get_shape_dim(self.beam_scores, axis=-1)
+      seq_filter = expand_dims_unbroadcast(seq_filter, axis=1, dim=beam_size)  # (batch, beam)
+      src_layer = self.src_layer
+      src_search = src_layer.search_choices
+      self.beam_scores = tf.where(seq_filter, self.beam_scores, src_search.beam_scores)
+      initial_src_beams = tf.range(0, beam_size, dtype=self.src_beams.dtype)  # (beam,)
+      initial_src_beams = expand_dims_unbroadcast(
+        initial_src_beams, axis=0, dim=get_shape_dim(self.beam_scores, axis=0))  # (batch, beam)
+      self.src_beams = tf.where(seq_filter, self.src_beams, initial_src_beams)
 
 
 class SourceLayer(LayerBase):
