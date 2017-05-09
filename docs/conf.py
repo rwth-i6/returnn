@@ -104,6 +104,9 @@ exclude_patterns = ['_build', "crnn"]
 # http://stackoverflow.com/questions/5599254/how-to-use-sphinxs-autodoc-to-document-a-classs-init-self-method
 autoclass_content = 'both'
 
+# http://stackoverflow.com/questions/4692865/autodoc-params
+autodoc_member_order = 'bysource'
+
 # The name of the Pygments (syntax highlighting) style to use.
 pygments_style = 'sphinx'
 
