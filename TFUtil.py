@@ -1144,6 +1144,22 @@ def expand_multiple_dims(x, axes, name="expand_multiple_dims"):
     return x
 
 
+def constant_with_shape(x, shape, name="constant_with_shape"):
+  """
+  :param tf.Tensor|float|int x: scalar
+  :param list[tf.Tensor|int]|tuple[tf.Tensor|int] shape:
+  :param str name:
+  :return: x of the specified shape
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope(name):
+    x = tf.convert_to_tensor(x)
+    ones = tf.ones(shape, dtype=x.dtype)
+    if x.dtype == tf.bool:
+      return tf.logical_and(x, ones)
+    return tf.multiply(x, ones)
+
+
 def dimshuffle(x, axes, name="dimshuffle"):
   """
   Like Theanos dimshuffle.

@@ -275,3 +275,25 @@ def test_expand_multiple_dims():
   assert_equal(list(session.run(tf.shape(expand_multiple_dims(x, (1, 2))))), [2, 1, 1, 3, 5])
   assert_equal(list(session.run(tf.shape(expand_multiple_dims(x, (1, 4))))), [2, 1, 3, 5, 1])
   assert_equal(list(session.run(tf.shape(expand_multiple_dims(x, (1, 3, 5))))), [2, 1, 3, 1, 5, 1])
+
+
+def test_constant_with_shape():
+  x = session.run(constant_with_shape(3, [2, 3]))
+  assert_equal(x.shape, (2, 3))
+  assert_equal(x.dtype, numpy.int32)
+  assert_equal(x.flatten().tolist(), [3] * 2 * 3)
+
+  x = session.run(constant_with_shape(7.0, [2, 3]))
+  assert_equal(x.shape, (2, 3))
+  assert_equal(x.dtype, numpy.float32)
+  assert_equal(x.flatten().tolist(), [7.0] * 2 * 3)
+
+  x = session.run(constant_with_shape(False, [2, 3]))
+  assert_equal(x.shape, (2, 3))
+  assert_equal(x.dtype, numpy.bool_)
+  assert_equal(x.flatten().tolist(), [False] * 2 * 3)
+
+  x = session.run(constant_with_shape(True, [2, 3]))
+  assert_equal(x.shape, (2, 3))
+  assert_equal(x.dtype, numpy.bool_)
+  assert_equal(x.flatten().tolist(), [True] * 2 * 3)
