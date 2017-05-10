@@ -1474,3 +1474,11 @@ def find_lib(lib_name):
     if os.path.exists(fn):
       return fn
   return None
+
+
+def try_and_ignore_exception(f):
+  try:
+    f()
+  except Exception as exc:
+    print("try_and_ignore_exception: %r failed: %s" % (f, exc))
+    sys.excepthook(*sys.exc_info())

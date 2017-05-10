@@ -2000,3 +2000,29 @@ def nd_indices(indices, batch_axis=0):
                         name="idxs_exp")  # (batch,...,2), where the 2 stands for (batch_idx, index)
     return idxs_exp
 
+
+def stop_event_writer_thread(event_writer):
+  """
+  There is a bug in TensorFlow (at least 1.1.0) (https://github.com/tensorflow/tensorflow/issues/4820)
+  that the event writer thread is never stopped.
+  This will try to stop it. Only do it if you don't use the event writer anymore.
+  
+  :param tensorflow.python.summary.writer.event_file_writer.EventFileWriter event_writer:
+  """
+  from tensorflow.python.summary.writer.event_file_writer import EventFileWriter, _EventLoggerThread
+  assert isinstance(event_writer, EventFileWriter)
+  if not event_writer._worker:  # maybe fixed already?
+    return
+
+  # This solution is very ugly and dependent on TF internal code.
+  class DummyStopThread:
+    @classmethod
+    def WriteEvent(cls, *args, **kwargs):
+      raise SystemExit  # stop the thread
+
+  assert isinstance(event_writer._worker, _EventLoggerThread)
+  worker = event_writer._worker
+  worker._ev_writer = DummyStopThread
+  worker._queue.put(None)
+  worker.join()
+

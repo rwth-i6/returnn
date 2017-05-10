@@ -476,10 +476,13 @@ class Runner(object):
       self.device_crash_batch = step
 
     finally:
-      writer.close()
-      coord.request_stop()
-      coord.join(threads)
-      self.data_provider.stop_thread()
+      from Util import try_and_ignore_exception
+      from TFUtil import stop_event_writer_thread
+      try_and_ignore_exception(writer.close)
+      try_and_ignore_exception(lambda: stop_event_writer_thread(writer.event_writer))
+      try_and_ignore_exception(coord.request_stop)
+      try_and_ignore_exception(lambda: coord.join(threads))
+      try_and_ignore_exception(self.data_provider.stop_thread)
       self.elapsed = time.time() - self.start_time
 
 

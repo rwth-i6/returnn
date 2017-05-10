@@ -24,6 +24,28 @@ def test_tf_version_tuple():
   print("TF version tuple:", tf_version_tuple())
 
 
+def test_close_event_writer_thread():
+  import threading
+  import tempfile
+  from tensorflow.python.summary.writer.event_file_writer import EventFileWriter, _EventLoggerThread
+
+  def count_event_logger_threads():
+    return len([t for t in threading.enumerate() if isinstance(t, _EventLoggerThread)])
+
+  tmp_dir = tempfile.mkdtemp()
+  writer = tf.summary.FileWriter(tmp_dir)
+  assert_equal(count_event_logger_threads(), 1)
+  assert isinstance(writer.event_writer, EventFileWriter)
+  assert isinstance(writer.event_writer._worker, _EventLoggerThread)
+  writer.close()
+
+  # https://github.com/tensorflow/tensorflow/issues/4820
+  # The _EventLoggerThread is still running (at least in TF 1.1.0).
+  if writer and writer.event_writer and writer.event_writer._worker.is_alive():
+    stop_event_writer_thread(writer.event_writer)
+    assert_equal(count_event_logger_threads(), 0)
+
+
 def test_single_strided_slice():
   x = tf.expand_dims(tf.range(10), axis=0)
   assert_equal(list(tf.shape(x).eval()), [1, 10])

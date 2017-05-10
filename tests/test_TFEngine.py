@@ -221,6 +221,8 @@ def test_engine_search():
   assert engine.network.total_objective is not None
   assert "decision" in engine.network.error_by_layer
 
+  engine.finalize()
+
 
 if __name__ == "__main__":
   try:
@@ -234,5 +236,8 @@ if __name__ == "__main__":
   finally:
     session.close()
     del session
-    print("Threads at exit:")
-    better_exchook.dump_all_thread_tracebacks()
+    tf.reset_default_graph()
+    import threading
+    if len(list(threading.enumerate())) > 1:
+      print("Warning, more than one thread at exit:")
+      better_exchook.dump_all_thread_tracebacks()
