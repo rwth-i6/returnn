@@ -220,3 +220,19 @@ def test_engine_search():
   pprint(engine.network.error_by_layer)
   assert engine.network.total_objective is not None
   assert "decision" in engine.network.error_by_layer
+
+
+if __name__ == "__main__":
+  try:
+    assert len(sys.argv) >= 2
+    for arg in sys.argv[1:]:
+      print("Executing: %s" % arg)
+      if arg in globals():
+        globals()[arg]()  # assume function and execute
+      else:
+        eval(arg)  # assume Python code and execute
+  finally:
+    session.close()
+    del session
+    print("Threads at exit:")
+    better_exchook.dump_all_thread_tracebacks()
