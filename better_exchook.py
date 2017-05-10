@@ -32,6 +32,8 @@
 
 # https://github.com/albertz/py_better_exchook
 
+from __future__ import print_function
+
 import sys, os, os.path
 try:
     from traceback import StackSummary, FrameSummary
@@ -472,6 +474,39 @@ def better_exchook(etype, value, tb, debugshell=False, autodebugshell=True, file
         output("---------- DEBUG SHELL -----------")
         debug_shell(user_ns=allLocals, user_global_ns=allGlobals, traceback=tb)
     file.flush()
+
+
+def dump_all_thread_tracebacks(exclude_thread_ids=set(), file=None):
+    if not file:
+        file = sys.stdout
+    import threading
+
+    if hasattr(sys, "_current_frames"):
+        print("", file=file)
+        threads = {t.ident: t for t in threading.enumerate()}
+        for tid, stack in sys._current_frames().items():
+            if tid in exclude_thread_ids: continue
+            # This is a bug in earlier Python versions.
+            # http://bugs.python.org/issue17094
+            # Note that this leaves out all threads not created via the threading module.
+            if tid not in threads: continue
+            tags = []
+            thread = threads.get(tid)
+            if thread:
+                assert isinstance(thread, threading.Thread)
+                if thread is threading.currentThread():
+                    tags += ["current"]
+                if isinstance(thread, threading._MainThread):
+                    tags += ["main"]
+                tags += [str(thread)]
+            else:
+                tags += ["unknown with id %i" % tid]
+            print("Thread %s:" % ", ".join(tags), file=file)
+            print_tb(stack, file=file)
+            print("", file=file)
+        print("That were all threads.", file=file)
+    else:
+        print("Does not have sys._current_frames, cannot get thread tracebacks.", file=file)
 
 
 def install():
