@@ -47,6 +47,45 @@ def test_subnetwork_layer_net_construct():
     assert_equal(network.layers["sub"].output.dim, 2)
 
 
+def test_constant_layer():
+  config = Config()
+  config.update({
+    "num_outputs": 3,
+    "num_inputs": 2,
+    "network": {
+      "output": {"class": "constant", "value": 42, "from": []}
+    }
+  })
+  network = TFNetwork(config=config, train_flag=True)
+  network.construct_from_dict(config.typed_dict["network"])
+  out = network.get_default_output_layer(must_exist=True)
+  with tf.Session() as session:
+    v = session.run(out.output.placeholder)
+    assert_equal(v.shape, (1,))  # (batch,), where batch==1 for broadcasting
+    assert_equal(v[0], 42)
+
+
+def test_compare_layer():
+  config = Config()
+  config.update({
+    "model": "/tmp/model",
+    "num_outputs": 3,
+    "num_inputs": 2,
+    "network": {
+      "const": {"class": "constant", "value": 3, "from": []},
+      "output": {"class": "compare", "from": ["const"], "value": 3}
+    }
+  })
+  network = TFNetwork(config=config, train_flag=True)
+  network.construct_from_dict(config.typed_dict["network"])
+  out = network.get_default_output_layer(must_exist=True)
+  with tf.Session() as session:
+    v = session.run(out.output.placeholder)
+    assert_equal(v.shape, (1,))  # (batch,), where batch==1 for broadcasting
+    assert_equal(v.dtype, numpy.dtype("bool"))
+    assert_equal(v[0], True)
+
+
 def test_rec_subnet_with_choice():
   with tf.Session():
     config = Config()

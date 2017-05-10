@@ -893,8 +893,8 @@ class SoftmaxLayer(LinearLayer):
 class ConstantLayer(LayerBase):
   layer_class = "constant"
 
-  def __init__(self, sources, value=0, dtype="float32", **kwargs):
-    assert not sources
+  def __init__(self, sources, value=0, dtype=None, **kwargs):
+    assert not sources, "constant layer cannot have sources"
     super(ConstantLayer, self).__init__(**kwargs)
     # Add batch-dim to the constant.
     self.output.placeholder = tf.expand_dims(tf.constant(value, dtype=dtype), axis=0)
@@ -902,7 +902,7 @@ class ConstantLayer(LayerBase):
   @classmethod
   def get_out_data_from_opts(cls, name, dtype="float32", **kwargs):
     return Data(
-      name="%s_const", shape=(), batch_dim_axis=0, time_dim_axis=None, dtype=dtype)
+      name="%s_const" % name, shape=(), batch_dim_axis=0, time_dim_axis=None, dtype=dtype)
 
 
 class GatingLayer(_ConcatInputLayer):
@@ -1449,6 +1449,54 @@ class CombineLayer(LayerBase):
       out_type = sources[0].output.get_kwargs()
       out_type["name"] = "%s_output" % kwargs["name"]
     return super(CombineLayer, cls).get_out_data_from_opts(n_out=n_out, out_type=out_type, sources=sources, **kwargs)
+
+
+class CompareLayer(LayerBase):
+  layer_class = "compare"
+
+  def _check_same_dense_dim(self, sources):
+    """
+    :param list[LayerBase] sources:
+    """
+    assert not self.output.sparse
+    for source in sources:
+      assert not source.output.sparse
+      assert source.output.dim == self.output.dim
+
+  def __init__(self, kind="equal", value=None, **kwargs):
+    """
+    :param str kind: e.g. "equal"
+    :param float|int|None value: if specified, will also compare to this
+    """
+    super(CompareLayer, self).__init__(**kwargs)
+    assert len(self.sources) >= 1
+    if value is None:
+      assert len(self.sources) >= 2
+    self._check_same_dense_dim(self.sources)
+    op = getattr(tf, kind)  # e.g. tf.equal
+    from TFUtil import swapaxes
+    x = self.sources[0].output.placeholder
+    batch_axis = self.sources[0].output.batch_dim_axis
+    r_last = None
+    if value is not None:
+      r_last = op(x, value)
+    for source in self.sources[1:]:
+      x2 = source.output.placeholder
+      if source.output.batch_dim_axis != batch_axis:
+        x2 = swapaxes(x2, batch_axis, source.output.batch_dim_axis)
+      r = op(x, x2)
+      if r_last is not None:
+        r = tf.logical_and(r_last, r)
+      r_last = r
+    self.output.placeholder = r_last
+
+  @classmethod
+  def get_out_data_from_opts(cls, n_out=None, out_type=None, sources=(), **kwargs):
+    if not n_out and not out_type:
+      out_type = sources[0].output.get_kwargs()
+      out_type["name"] = "%s_output" % kwargs["name"]
+      out_type["dtype"] = "bool"
+    return super(CompareLayer, cls).get_out_data_from_opts(n_out=n_out, out_type=out_type, sources=sources, **kwargs)
 
 
 class SubnetworkLayer(LayerBase):
