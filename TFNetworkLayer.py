@@ -231,6 +231,17 @@ class LayerBase(object):
     """
     return list(self.sources)
 
+  def get_search_beam_size(self):
+    """
+    :return: beam size if there was a choice layer and we do search
+    :rtype: int|None
+    """
+    if self.network.search_flag:
+      choices = self.network.get_search_choices(src=self)
+      if choices:
+        return choices.search_choices.beam_size
+    return None
+
   def get_batch_dim(self):
     """
     The batch dim by this layer, not taken from our output but calculated.
@@ -240,10 +251,9 @@ class LayerBase(object):
     :rtype: tf.Tensor
     """
     batch_dim = self.network.get_batch_dim()
-    if self.network.search_flag:
-      choices = self.network.get_search_choices(src=self)
-      if choices:
-        batch_dim *= choices.search_choices.beam_size
+    beam_size = self.get_search_beam_size()
+    if beam_size is not None:
+      batch_dim *= beam_size
     return batch_dim
 
   def add_param(self, param):
@@ -477,7 +487,8 @@ class LayerBase(object):
     shape = [batch_dim] + list(data.shape)
     if isinstance(v, (float, int)):
       with tf.name_scope("init_%s_const" % name):
-        return tf.ones(shape, dtype=data.dtype) * v
+        from TFUtil import constant_with_shape
+        return tf.cast(constant_with_shape(v, shape=shape), dtype=data.dtype)
     assert isinstance(v, str)
     if v == "zeros":
       return tf.zeros(shape, dtype=data.dtype, name="init_%s_zeros" % name)
@@ -537,12 +548,11 @@ class SearchChoices(object):
 
   def filter_seqs(self, seq_filter):
     """
-    :param tf.Tensor seq_filter: (batch,)
+    :param tf.Tensor seq_filter: (batch, beam) of type bool
     """
     with tf.name_scope("search_filter_seqs"):
       from TFUtil import expand_dims_unbroadcast, get_shape_dim
       beam_size = get_shape_dim(self.beam_scores, axis=-1)
-      seq_filter = expand_dims_unbroadcast(seq_filter, axis=1, dim=beam_size)  # (batch, beam)
       src_layer = self.src_layer
       src_search = src_layer.search_choices
       self.beam_scores = tf.where(seq_filter, self.beam_scores, src_search.beam_scores)
@@ -1454,15 +1464,6 @@ class CombineLayer(LayerBase):
 class CompareLayer(LayerBase):
   layer_class = "compare"
 
-  def _check_same_dense_dim(self, sources):
-    """
-    :param list[LayerBase] sources:
-    """
-    assert not self.output.sparse
-    for source in sources:
-      assert not source.output.sparse
-      assert source.output.dim == self.output.dim
-
   def __init__(self, kind="equal", value=None, **kwargs):
     """
     :param str kind: e.g. "equal"
@@ -1472,7 +1473,6 @@ class CompareLayer(LayerBase):
     assert len(self.sources) >= 1
     if value is None:
       assert len(self.sources) >= 2
-    self._check_same_dense_dim(self.sources)
     op = getattr(tf, kind)  # e.g. tf.equal
     from TFUtil import swapaxes
     x = self.sources[0].output.placeholder
@@ -1495,6 +1495,8 @@ class CompareLayer(LayerBase):
     if not n_out and not out_type:
       out_type = sources[0].output.get_kwargs()
       out_type["name"] = "%s_output" % kwargs["name"]
+      if out_type.get("sparse", False):
+        out_type["dim"] = 2  # True or False
       out_type["dtype"] = "bool"
     return super(CompareLayer, cls).get_out_data_from_opts(n_out=n_out, out_type=out_type, sources=sources, **kwargs)
 

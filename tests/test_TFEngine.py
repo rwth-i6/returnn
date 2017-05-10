@@ -201,9 +201,10 @@ def test_engine_search():
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {
-      "output": {"class": "rec", "unit": {
+      "output": {"class": "rec", "from": [], "max_seq_len": 10, "unit": {
         "prob": {"class": "softmax", "from": ["prev:output"], "loss": "ce", "target": "classes"},
-        "output": {"class": "choice", "beam_size": 4, "from": ["prob"], "target": "classes", "initial_output": 0}
+        "output": {"class": "choice", "beam_size": 4, "from": ["prob"], "target": "classes", "initial_output": 0},
+        "end": {"class": "compare", "from": ["output"], "value": 0}
       }},
       "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance"}
     }
@@ -226,6 +227,7 @@ def test_engine_search():
 
 if __name__ == "__main__":
   try:
+    better_exchook.install()
     assert len(sys.argv) >= 2
     for arg in sys.argv[1:]:
       print("Executing: %s" % arg)

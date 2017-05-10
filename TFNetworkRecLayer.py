@@ -14,6 +14,7 @@ class RecLayer(_ConcatInputLayer):
                unit="lstm",
                direction=None, input_projection=True,
                initial_state=None,
+               max_seq_len=None,
                **kwargs):
     """
     :param str|dict[str,dict[str]] unit: the RNNCell/etc name, e.g. "nativelstm". see comment below.
@@ -22,9 +23,7 @@ class RecLayer(_ConcatInputLayer):
     :param int|None direction: None|1 -> forward, -1 -> backward
     :param bool input_projection: True -> input is multiplied with matrix. False only works if same input dim
     :param LayerBase|None initial_state:
-    :param dict[str]|bool output_feed_back: feedback mode opts, see OutputFeedback
-    :param dict[str]|bool attention: attention opts, see Attention
-    :param dict[str] kwargs: passed on to base class
+    :param int max_seq_len: if unit is a subnetwork
     """
     super(RecLayer, self).__init__(**kwargs)
     import tensorflow.contrib.rnn as rnn_contrib
@@ -36,6 +35,7 @@ class RecLayer(_ConcatInputLayer):
     self._initial_state_src = initial_state
     self._initial_state = initial_state.get_last_hidden_state() if initial_state else None
     self._input_projection = input_projection
+    self._max_seq_len = max_seq_len
     with tf.variable_scope(
           "rec",
           initializer=tf.contrib.layers.xavier_initializer(
@@ -209,6 +209,7 @@ class RecLayer(_ConcatInputLayer):
     """
     from tensorflow.python.ops import rnn
     import tensorflow.contrib.rnn as rnn_contrib
+    assert self._max_seq_len is None
     assert self.input_data
     assert not self.input_data.sparse
     x, seq_len = self._get_input()
@@ -239,6 +240,7 @@ class RecLayer(_ConcatInputLayer):
     :rtype: tf.Tensor
     """
     from TFUtil import dot, sequence_mask_time_major, directed
+    assert self._max_seq_len is None
     assert self.input_data
     x, seq_len = self._get_input()
     if self._input_projection:
@@ -283,9 +285,16 @@ class RecLayer(_ConcatInputLayer):
           x_ta = x_ta.unstack(x)
       else:
         x_ta = None
-        seq_len = self.output.size_placeholder[0]  # see BaseLayer.__init__()
-      max_seq_len = tf.reduce_max(seq_len)
-      min_seq_len = tf.reduce_min(seq_len)
+        if self.output.size_placeholder:
+          # see LayerBase._post_init_output(). could be set via target or size_target...
+          seq_len = self.output.size_placeholder[0]
+        else:
+          seq_len = None
+      if seq_len is not None:
+        max_seq_len = tf.reduce_max(seq_len)
+      else:
+        assert self._max_seq_len, "must specify max_seq_len in rec layer"
+        max_seq_len = self._max_seq_len
 
       # TODO: Better check for train_flag.
       # Maybe more generic via sampling options later.
@@ -295,11 +304,12 @@ class RecLayer(_ConcatInputLayer):
         y_data = self.network.get_extern_data(self.target, mark_data_key_as_used=True)
         y = y_data.get_placeholder_as_time_major()
         y_max_len = tf.shape(y)[0]
-        with tf.control_dependencies([tf.assert_equal(max_seq_len, y_max_len,
-            ["RecLayer %r with sources %r." % (self.name, self.sources),
-             " The length of the sources (", max_seq_len,
-             ") differ from the length of the target (", y_max_len, ")."])]):
-          y_max_len = tf.identity(y_max_len)
+        if seq_len is not None:
+          with tf.control_dependencies([tf.assert_equal(max_seq_len, y_max_len,
+              ["RecLayer %r with sources %r." % (self.name, self.sources),
+               " The length of the sources (", max_seq_len,
+               ") differ from the length of the target (", y_max_len, ")."])]):
+            y_max_len = tf.identity(y_max_len)
         y_ta = tf.TensorArray(
           name="y_ta",
           dtype=y_data.dtype,
@@ -322,7 +332,10 @@ class RecLayer(_ConcatInputLayer):
 
       init_net_vars = cell.get_init_loop_vars()
       init_i = tf.constant(0)
-      min_loop_len = max_seq_len  # could be unclear in search. not yet implemented.
+      if seq_len is None:
+        min_loop_len = 0
+      else:
+        min_loop_len = max_seq_len
 
       from collections import namedtuple
       OutputToAccumulate = namedtuple("OutputToAccumulate", ["name", "dtype", "element_shape", "get"])
@@ -333,6 +346,7 @@ class RecLayer(_ConcatInputLayer):
           element_shape=cell.layer_data_templates["output"].output.batch_shape,
           get=lambda: cell.net.layers["output"].output.placeholder)]
 
+      output_beam_size = None
       collected_choices = []  # type: list[str]  # layer names
       if self.network.search_flag:
         for layer in cell.layer_data_templates.values():
@@ -351,6 +365,20 @@ class RecLayer(_ConcatInputLayer):
                 element_shape=(None, layer.search_choices.beam_size),  # (batch, beam)
                 get=get_derived(layer.name))]
 
+        if collected_choices:
+          output_beam_size = cell.layer_data_templates["output"].get_search_beam_size()
+          assert output_beam_size is not None
+          if seq_len is not None:
+            seq_len = tf.tile(seq_len, [output_beam_size])  # (batch * beam,)
+
+      if seq_len is None:
+        assert "end" in cell.layer_data_templates, (
+          "You need to have an 'end' layer in your rec subnet if the generated seq len is unknown.")
+        end_template = cell.layer_data_templates["end"]
+        assert tf.as_dtype(end_template.output.dtype) is tf.bool
+        assert end_template.output.batch_shape == (None,)  # (batch*beam,)
+        assert end_template.output.sparse
+
       # Create a tensor array to store the intermediate values for each step i, e.g. of shape (batch, dim).
       init_acc_tas = [
         tf.TensorArray(
@@ -362,13 +390,14 @@ class RecLayer(_ConcatInputLayer):
           infer_shape=True)
         for out in outputs_to_accumulate]
 
-    def body(i, net_vars, acc_tas):
+    def body(i, net_vars, acc_tas, seq_len_info=None):
       """
       The loop body of scan.
 
       :param tf.Tensor i: loop counter, scalar
       :param net_vars: the accumulator values
       :param list[tf.TensorArray] acc_tas: the output accumulator TensorArray
+      :param (tf.Tensor,tf.Tensor)|None seq_len_info:
       :return: [i + 1, a_flat, tas]: the updated counter + new accumulator values + updated TensorArrays
       :rtype: (tf.Tensor, object, list[tf.TensorArray])
 
@@ -383,27 +412,64 @@ class RecLayer(_ConcatInputLayer):
           data=x_ta.read(i) if x_ta else None,
           classes=y_ta.read(i) if y_ta else None,
           i=i)
+        if seq_len_info is not None:
+          end_flag, dyn_seq_len = seq_len_info
+          end_flag = tf.logical_or(end_flag, cell.net.layers["end"].output.placeholder)
+          dyn_seq_len += tf.where(
+            end_flag,
+            constant_with_shape(0, shape=tf.shape(end_flag)),
+            constant_with_shape(1, shape=tf.shape(end_flag)))
+          seq_len_info = (end_flag, dyn_seq_len)
+        else:
+          end_flag = None
         # We could use tf.cond() to return the previous or so, and min_seq_len
         # to avoid the check if not needed. However, just filtering the result
         # outside the loop is likely faster.
         if collected_choices:
           # For the search choices, we do it here so that we can easily get out the final beam scores.
-          seq_filter_cond = tf.less(i, seq_len)  # (batch,)
+          if seq_len is not None:
+            seq_filter_cond = tf.less(i, seq_len)  # (batch * beam,)
+          else:
+            assert end_flag is not None
+            seq_filter_cond = tf.logical_not(end_flag)
           for name in collected_choices:
             cell.net.layers[name].search_choices.filter_seqs(seq_filter_cond)
         assert len(acc_tas) == len(outputs_to_accumulate)
         acc_tas = [
           acc_ta.write(i, out.get())
           for (acc_ta, out) in zip(acc_tas, outputs_to_accumulate)]
-        return i + 1, net_vars, acc_tas
+        res = (i + 1, net_vars, acc_tas)
+        if seq_len_info is not None:
+          res += (seq_len_info,)
+        return res
 
-    def cond(i, net_vars, acc_ta):
-      return tf.less(i, max_seq_len)
+    def cond(i, net_vars, acc_ta, seq_len_info=None):
+      res = tf.less(i, max_seq_len)
+      if seq_len_info is not None:
+        end_flag, _ = seq_len_info
+        res = tf.logical_and(res, tf.reduce_any(tf.logical_not(end_flag)))
+      return res
 
-    _, final_net_vars, final_acc_tas = tf.while_loop(
+    from TFUtil import constant_with_shape
+    init_loop_vars = (init_i, init_net_vars, init_acc_tas)
+    if seq_len is None:
+      # See body().
+      out_batch_dim = cell.layer_data_templates["end"].get_batch_dim()
+      init_seq_len_info = (
+        constant_with_shape(False, shape=[out_batch_dim], name="initial_end"),
+        constant_with_shape(0, shape=[out_batch_dim], name="initial_seq_len"))
+      init_loop_vars += (init_seq_len_info,)
+    final_loop_vars = tf.while_loop(
       cond=cond,
       body=body,
-      loop_vars=(init_i, init_net_vars, init_acc_tas))
+      loop_vars=init_loop_vars)
+    if seq_len is not None:
+      _, final_net_vars, final_acc_tas = final_loop_vars
+    else:
+      _, final_net_vars, final_acc_tas, (_, seq_len) = final_loop_vars
+      if self.output.size_placeholder is None:
+        self.output.size_placeholder = {}
+      self.output.size_placeholder[0] = seq_len
     assert isinstance(final_acc_tas, list)
     assert isinstance(final_acc_tas[0], tf.TensorArray)
 
@@ -421,14 +487,11 @@ class RecLayer(_ConcatInputLayer):
       # and resolve the output over time to be in line with the final output search choices.
       output_choice_base = cell.net.get_search_choices(src=self.cell.net.layers["output"])
       assert isinstance(output_choice_base, LayerBase)
-      output_beam_size = output_choice_base.search_choices.beam_size
+      assert output_beam_size == output_choice_base.search_choices.beam_size
       initial_beam_choices = tf.range(0, output_beam_size)  # (beam_out,)
       from TFUtil import expand_dims_unbroadcast
       initial_beam_choices = expand_dims_unbroadcast(
         initial_beam_choices, axis=0, dim=batch_dim)  # (batch, beam_out)
-
-      # TODO: maybe we changed it? not really implemented yet... also must be of shape (batch * beam,) ...
-      self.output.size_placeholder[0] = tf.tile(seq_len, [output_beam_size])
 
       new_acc_output_ta = tf.TensorArray(
         name="new_acc_output_ta",
@@ -610,6 +673,9 @@ class _SubnetworkRecCell(object):
     assert "output" in self.layer_data_templates
     assert not construct_ctx.layers
 
+    if "end" in self.net_dict:  # used to specify ending of a sequence
+      get_templated_layer("end")
+
   def _construct(self, prev_outputs, prev_extra, data=None, classes=None, i=None):
     """
     :param dict[str,tf.Tensor] prev_outputs: outputs of the layers from the previous step
@@ -650,6 +716,8 @@ class _SubnetworkRecCell(object):
     # Might not be resolved otherwise:
     for name in self.prev_layers_needed:
       get_layer(name)
+    if "end" in self.net_dict:  # used to specify ending of a sequence
+      get_layer("end")
 
   def _get_init_output(self, name):
     """
@@ -659,6 +727,10 @@ class _SubnetworkRecCell(object):
     template_layer = self.layer_data_templates[name]
     cl = template_layer.layer_class_type
     batch_dim = template_layer.get_batch_dim()
+    if name == "end" and template_layer.kwargs.get("initial_output", None) is None:
+      # Special case for the 'end' layer.
+      from TFUtil import constant_with_shape
+      return constant_with_shape(False, shape=[batch_dim], name="initial_end")
     return cl.get_rec_initial_output(batch_dim=batch_dim, **self.layer_data_templates[name].kwargs)
 
   def _get_init_extra_outputs(self, name):

@@ -1147,7 +1147,7 @@ def expand_multiple_dims(x, axes, name="expand_multiple_dims"):
 def constant_with_shape(x, shape, name="constant_with_shape"):
   """
   :param tf.Tensor|float|int x: scalar
-  :param list[tf.Tensor|int]|tuple[tf.Tensor|int] shape:
+  :param list[tf.Tensor|int]|tuple[tf.Tensor|int]|tf.Tensor shape:
   :param str name:
   :return: x of the specified shape
   :rtype: tf.Tensor

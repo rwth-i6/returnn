@@ -651,9 +651,10 @@ class TFNetwork(object):
     # First check parent because there we might get the true batch dim.
     if self.parent_net:
       return self.parent_net.get_batch_dim()
-    for _, data in sorted(self.extern_data.data.items()):
+    for key, data in sorted(self.extern_data.data.items()):
       assert isinstance(data, Data)
       if data.available_for_inference:
+        self.used_data_keys.add(key)
         return get_shape_dim(data.placeholder, data.batch_dim_axis, name="batch_dim")
     raise Exception("We cannot tell the batch dim.")
 
