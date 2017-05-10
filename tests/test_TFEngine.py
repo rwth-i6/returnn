@@ -197,6 +197,7 @@ def test_engine_search():
   config = Config()
   config.update({
     "model": "/tmp/model",
+    "batch_size": 5000,
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {
@@ -209,5 +210,13 @@ def test_engine_search():
   })
   engine = Engine(config=config)
   engine.init_train_from_config(config=config, train_data=dataset, dev_data=None, eval_data=None)
+  print("network:")
+  pprint(engine.network.layers)
+  assert "output" in engine.network.layers
+  assert "decision" in engine.network.layers
 
   engine.search(dataset=dataset)
+  print("error keys:")
+  pprint(engine.network.error_by_layer)
+  assert engine.network.total_objective is not None
+  assert "decision" in engine.network.error_by_layer

@@ -231,6 +231,21 @@ class LayerBase(object):
     """
     return list(self.sources)
 
+  def get_batch_dim(self):
+    """
+    The batch dim by this layer, not taken from our output but calculated.
+    Normally it is self.network.get_batch_dim()
+    but if we do search and there was a choice layer, it it multiplied by the beam size.
+    :return: batch dim * beam size
+    :rtype: tf.Tensor
+    """
+    batch_dim = self.network.get_batch_dim()
+    if self.network.search_flag:
+      choices = self.network.get_search_choices(src=self)
+      if choices:
+        batch_dim *= choices.search_choices.beam_size
+    return batch_dim
+
   def add_param(self, param):
     """
     :param tf.Variable param:

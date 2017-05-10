@@ -202,7 +202,9 @@ class TFNetwork(object):
     :param dict[str,dict[str]] net_dict:
     """
     for name, layer_desc in sorted(net_dict.items()):
-      if name == "output" or "target" in layer_desc or "is_output_layer" in layer_desc:
+      assert isinstance(name, str)
+      assert isinstance(layer_desc, dict)
+      if name == "output" or "target" in layer_desc or "loss" in layer_desc or layer_desc.get("is_output_layer", False):
         self._construct_layer(net_dict, name)
 
   def _construct_layer(self, net_dict, name, get_layer=None, add_layer=None):

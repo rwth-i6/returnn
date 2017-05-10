@@ -1988,7 +1988,8 @@ def nd_indices(indices, batch_axis=0):
   assert indices.get_shape().ndims >= 1
   assert batch_axis < indices.get_shape().ndims
   with tf.name_scope("nd_indices"):
-    batches_idxs = tf.range(tf.shape(indices)[batch_axis], dtype=indices.dtype, name="batches_idxs")  # (batch,)
+    batches_idxs = tf.range(tf.shape(indices)[batch_axis], name="batches_idxs")  # (batch,)
+    batches_idxs = tf.cast(batches_idxs, dtype=indices.dtype)
     for axis in range(indices.get_shape().ndims):
       if axis == batch_axis:
         continue

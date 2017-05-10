@@ -1054,7 +1054,7 @@ class Engine(object):
       max_seqs=1,
       max_seq_length=int(self.max_seq_length),
       used_data_keys=self.network.used_data_keys)
-    runner = Runner(engine=self, dataset=dataset, batches=batches, train=False)
+    runner = Runner(engine=self, dataset=dataset, batches=batches, train=False, eval=True)
     runner.run(report_prefix=self.get_epoch_str() + " search")
     assert runner.finalized
     print("search: score %s error %s" % (
