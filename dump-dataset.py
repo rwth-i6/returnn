@@ -53,6 +53,7 @@ def init(configFilename, commandLineOptions):
   rnn.initConfig(configFilename, commandLineOptions)
   global config
   config = rnn.config
+  config.set("log", None)
   rnn.initLog()
   print("CRNN dump-dataset starting up.", file=log.v1)
   rnn.initFaulthandler()

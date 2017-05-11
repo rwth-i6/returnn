@@ -282,6 +282,8 @@ class Config:
       default = []
     if key in self.typed_dict:
       value = self.typed_value(key, default=default)
+      if value is None:
+        return default
       if not isinstance(value, (tuple,list)):
         value = [value]
       return list(value)
@@ -299,6 +301,8 @@ class Config:
       default = []
     if key in self.typed_dict:
       value = self.typed_value(key, default=default)
+      if value is None:
+        return default
       if not isinstance(value, (tuple,list)):
         value = [value]
       for x in value:
@@ -316,6 +320,8 @@ class Config:
       default = []
     if key in self.typed_dict:
       value = self.typed_value(key, default=default)
+      if value is None:
+        return default
       if not isinstance(value, (tuple,list)):
         value = [value]
       for x in value:
