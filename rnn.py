@@ -303,11 +303,21 @@ def initBackendEngine():
     raise NotImplementedError
 
 
-def init(configFilename=None, commandLineOptions=()):
+def init(configFilename=None, commandLineOptions=(), config_updates=None, extra_greeting=None):
+  """
+  :param str|None configFilename:
+  :param tuple[str]|list[str]|None commandLineOptions:
+  :param dict[str]|None config_updates:
+  :param str|None extra_greeting:
+  """
   initBetterExchook()
   initThreadJoinHack()
   initConfig(configFilename=configFilename, commandLineOptions=commandLineOptions)
+  if config_updates:
+    config.update(config_updates)
   initLog()
+  if extra_greeting:
+    print(extra_greeting, file=log.v1)
   crnnGreeting(configFilename=configFilename, commandLineOptions=commandLineOptions)
   initBackendEngine()
   initFaulthandler()

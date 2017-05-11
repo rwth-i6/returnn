@@ -24,7 +24,7 @@ from Dataset import Dataset, DatasetSeq
 from CachedDataset2 import CachedDataset2
 from Log import log
 from TaskSystem import Unpickler, numpy_copy_and_set_unused
-from Util import eval_shell_str, interrupt_main
+from Util import eval_shell_str, interrupt_main, unicode
 
 
 class SprintDatasetBase(Dataset):
@@ -425,7 +425,7 @@ class ExternSprintDataset(SprintDatasetBase):
     self.sprintConfig = sprintConfigStr
     self.partitionEpoch = partitionEpoch
     self._num_seqs = None
-    self.child_pid = None
+    self.child_pid = None  # type: int|None
     self.parent_pid = os.getpid()
     self.seq_list_file = None
     self.useMultipleEpochs()

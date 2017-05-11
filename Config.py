@@ -142,7 +142,7 @@ class Config:
   def set(self, key, value):
     """
     :type key: str
-    :type value: list[str] | str | int | float | bool
+    :type value: list[str] | str | int | float | bool | None
     """
     self.typed_dict[key] = value
 

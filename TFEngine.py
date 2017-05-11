@@ -956,6 +956,39 @@ class Engine(object):
         self.tf_session.run(tf.variables_initializer(uninitialized_vars))
       self._checked_uninitialized_vars = True
 
+  def get_specific_feed_dict(self, dataset, seq_idx):
+    """
+    :param Dataset.Dataset dataset:
+    :param int seq_idx:
+    :return: feed_dict for self.tf_session.run()
+    :rtype: dict[str,numpy.ndarray]
+    """
+    # No Runner instance here but a very simplified version of Runner.run().
+    # First we need a custom DataProvider with a custom BatchSetGenerator
+    # which will yield only one single batch for the provided sequence idx.
+    batch = Batch()
+    batch.add_frames(seq_idx=seq_idx, seq_start_frame=0, length=dataset.get_seq_length(seq_idx))
+    batch_generator = iter([batch])
+    batches = BatchSetGenerator(dataset, generator=batch_generator)
+    data_provider = DataProvider(
+      tf_session=self.tf_session, extern_data=self.network.extern_data,
+      data_keys=self.network.used_data_keys,
+      dataset=dataset, batches=batches)
+    feed_dict = data_provider.get_feed_dict(previous_feed_dict=None, single_threaded=True)
+    return feed_dict
+
+  def eval_single(self, dataset, seq_idx, output_dict):
+    """
+    :param Dataset.Dataset dataset:
+    :param int seq_idx:
+    :param dict[str,tf.Tensor] output_dict: key -> tf.Tensor
+    :return: output_dict but values evaluated
+    :rtype: dict[str,numpy.ndarray]
+    """
+    feed_dict = self.get_specific_feed_dict(dataset=dataset, seq_idx=seq_idx)
+    self.check_uninitialized_vars()  # Maybe some new uninitialized vars. Last check.
+    return self.tf_session.run(output_dict, feed_dict=feed_dict)
+
   def forward_single(self, dataset, seq_idx, output_layer_name=None):
     """
     :param Dataset.Dataset dataset:
@@ -968,25 +1001,10 @@ class Engine(object):
       output_layer_name = self.config.value("forward_output_layer", self.network.get_default_output_layer_name())
       assert output_layer_name, "output layer not defined. set forward_output_layer in config"
     assert output_layer_name in self.network.layers, "output layer %r not found" % output_layer_name
-
-    # No Runner instance here but a very simplified version of Runner.run().
-    # First we need a custom DataProvider with a custom BatchSetGenerator
-    # which will yield only one single batch for the provided sequence idx.
-    batch = Batch()
-    batch.add_frames(seq_idx=seq_idx, seq_start_frame=0, length=dataset.get_seq_length(seq_idx))
-    batch_generator = iter([batch])
-    batches = BatchSetGenerator(dataset, generator=batch_generator)
-    data_provider = DataProvider(
-      tf_session=self.tf_session, extern_data=self.network.extern_data,
-      data_keys=self.network.used_data_keys,
-      dataset=dataset, batches=batches)
-
-    # Maybe some new uninitialized vars. Last check.
-    self.check_uninitialized_vars()
-
-    feed_dict = data_provider.get_feed_dict(previous_feed_dict=None, single_threaded=True)
     output_data = self.network.layers[output_layer_name].output
-    output_value = self.tf_session.run(output_data.get_placeholder_as_time_major(), feed_dict=feed_dict)
+    out = output_data.get_placeholder_as_time_major()
+    out_d = self.eval_single(dataset=dataset, seq_idx=seq_idx, output_dict={"out": out})
+    output_value = out_d["out"]
     assert output_value.shape[1] == 1  # batch-dim
     return output_value[:, 0]  # remove batch-dim
 
@@ -1043,14 +1061,11 @@ class Engine(object):
     """
     :param Dataset.Dataset dataset: 
     """
-    if not self.use_search_flag:
+    if not self.use_search_flag or not self.network:
       self.use_search_flag = True
       if self.network:
         print("Reinit network with search flag.", file=log.v3)
       self.init_network_from_config(self.config)
-    else:
-      if not self.network:
-        self.init_network_from_config(self.config)
     batches = dataset.generate_batches(
       recurrent_net=self.network.recurrent,
       batch_size=self.batch_size,

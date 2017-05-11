@@ -431,6 +431,11 @@ class Data(object):
       return axis
     return axis - 1
 
+  def get_batch_axis(self, axis):
+    if axis >= self.batch_dim_axis:
+      return axis + 1
+    return axis
+
   def have_tim_axis(self):
     return self.time_dim_axis is not None
 
