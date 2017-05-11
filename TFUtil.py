@@ -2047,3 +2047,18 @@ def stop_event_writer_thread(event_writer):
   worker._queue.put(None)
   worker.join()
 
+
+def optional_add(*args):
+  """
+  :param list[tf.Tensor|None]|tf.Tensor args:
+  :rtype: tf.Tensor|None
+  :return: sums all non-None values, or returns None if there are none
+  """
+  y = None
+  for v in args:
+    if v is not None:
+      if y is None:
+        y = v
+      else:
+        y = y + v
+  return y

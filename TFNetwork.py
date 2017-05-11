@@ -309,12 +309,28 @@ class TFNetwork(object):
     return self.loss_by_layer
 
   def get_all_errors(self):
+    """
+    :rtype: dict[str|tf.Tensor]
+    :return: layer-name -> error dict. contains only the layers which have some error value
+    """
     self.maybe_construct_objective()
     return self.error_by_layer
 
   def get_objective(self):
     self.maybe_construct_objective()
     return self.total_objective
+
+  def get_total_loss(self):
+    """
+    :rtype: int|tf.Tensor
+    :return: 0 if no loss, or tf.Tensor
+    """
+    self.maybe_construct_objective()
+    return self.total_loss
+
+  def get_total_constraints(self):
+    self.maybe_construct_objective()
+    return self.total_constraints
 
   def get_used_targets(self):
     """

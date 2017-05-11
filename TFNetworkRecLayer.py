@@ -4,6 +4,7 @@ from __future__ import print_function
 import tensorflow as tf
 from TFNetworkLayer import LayerBase, _ConcatInputLayer, SearchChoices
 from TFUtil import Data, reuse_name_scope
+from Log import log
 
 
 class RecLayer(_ConcatInputLayer):
@@ -36,6 +37,8 @@ class RecLayer(_ConcatInputLayer):
     self._initial_state = initial_state.get_last_hidden_state() if initial_state else None
     self._input_projection = input_projection
     self._max_seq_len = max_seq_len
+    self._sub_loss = None
+    self._sub_error = None
     with tf.variable_scope(
           "rec",
           initializer=tf.contrib.layers.xavier_initializer(
@@ -173,6 +176,26 @@ class RecLayer(_ConcatInputLayer):
       x = swapaxes(x, 0, 1)  # (time,batch,[dim])
     seq_len = self.input_data.size_placeholder[0]
     return x, seq_len
+
+  def get_loss_value(self):
+    v = super(RecLayer, self).get_loss_value()
+    from TFUtil import optional_add
+    return optional_add(v, self._sub_loss)
+
+  def get_error_value(self):
+    v = super(RecLayer, self).get_error_value()
+    if v is not None:
+      return v
+    return self._sub_error
+
+  def get_constraints_value(self):
+    v = super(RecLayer, self).get_constraints_value()
+    from TFUtil import optional_add
+    if isinstance(self.cell, _SubnetworkRecCell):
+      v2 = self.cell.net.get_total_constraints()
+      if v2 is not 0:
+        v = optional_add(v, v2)
+    return v
 
   def _get_cell(self, unit):
     """
@@ -339,12 +362,30 @@ class RecLayer(_ConcatInputLayer):
 
       from collections import namedtuple
       OutputToAccumulate = namedtuple("OutputToAccumulate", ["name", "dtype", "element_shape", "get"])
-      outputs_to_accumulate = [
-        OutputToAccumulate(
-          name="output",
-          dtype=cell.layer_data_templates["output"].output.dtype,
-          element_shape=cell.layer_data_templates["output"].output.batch_shape,
-          get=lambda: cell.net.layers["output"].output.placeholder)]
+      outputs_to_accumulate = []  # type: list[OutputToAccumulate]
+
+      def add_output_to_acc(layer_name):
+        name = "output_%s" % layer_name
+        if any([out.name == name for out in outputs_to_accumulate]):
+          return
+        outputs_to_accumulate.append(OutputToAccumulate(
+          name=name,
+          dtype=cell.layer_data_templates[layer_name].output.dtype,
+          element_shape=cell.layer_data_templates[layer_name].output.batch_shape,
+          get=lambda: cell.net.layers[layer_name].output.placeholder))
+      add_output_to_acc("output")
+
+      layer_with_loss = None
+      if self.network.train_flag is not False:
+        layer_with_losses = [
+          layer.name for layer in cell.layer_data_templates.values()
+          if "loss" in layer.kwargs]
+        if layer_with_losses:
+          if len(layer_with_losses) > 1:
+            raise Exception("rec layer %r, multiple subnet losses not supported (yet): %r" % (
+              self.name, layer_with_losses))
+          layer_with_loss = layer_with_losses[0]
+          add_output_to_acc(layer_with_loss)
 
       output_beam_size = None
       collected_choices = []  # type: list[str]  # layer names
@@ -473,6 +514,28 @@ class RecLayer(_ConcatInputLayer):
     assert isinstance(final_acc_tas, list)
     assert isinstance(final_acc_tas[0], tf.TensorArray)
 
+    if layer_with_loss:
+      layer_with_loss_inst = cell.net.layers[layer_with_loss]
+      final_acc_tas_dict = {
+        out.name: final_acc_ta
+        for (final_acc_ta, out) in zip(final_acc_tas, outputs_to_accumulate)}
+      out = final_acc_tas_dict["%s_output" % layer_with_loss].stack()  # e.g. (time, batch, dim)
+      out_data = layer_with_loss_inst.output.copy_template_adding_time_dim(time_dim_axis=0)
+      out_data.placeholder = out
+      out_data.size_placeholder = {0: seq_len}
+      loss = layer_with_loss_inst.loss
+      from TFNetworkLayer import Loss
+      assert isinstance(loss, Loss)
+      loss.init(
+        output=out_data,
+        output_with_activation=None,  # we could also collect that but not implemented yet...
+        target=self._static_get_target_value(
+          target=layer_with_loss_inst.target,
+          network=self.network,
+          mark_data_key_as_used=True))
+      self._sub_loss = loss.get_value()
+      self._sub_error = loss.get_error()
+
     # Check if collected_choices has all the right layers.
     # At the moment, _TemplateLayer.has_search_choices() might be incomplete, that is why we check here.
     for layer in cell.net.layers.values():
@@ -571,9 +634,9 @@ class RecLayer(_ConcatInputLayer):
 
     assert len(final_acc_tas) == len(outputs_to_accumulate)
     final_acc_tas_dict = {
-      out.name: final_acc_ta  # e.g. (time, batch, dim)
+      out.name: final_acc_ta
       for (final_acc_ta, out) in zip(final_acc_tas, outputs_to_accumulate)}
-    output = final_acc_tas_dict["output"].stack()
+    output = final_acc_tas_dict["output_output"].stack()  # e.g. (time, batch, dim)
     return output
 
   def get_last_hidden_state(self):

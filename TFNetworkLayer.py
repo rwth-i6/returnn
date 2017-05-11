@@ -1561,21 +1561,18 @@ class SubnetworkLayer(LayerBase):
     return layer_class.get_out_data_from_opts(**layer_desc)
 
   def get_constraints_value(self):
-    self.subnetwork.maybe_construct_objective()
-    v = self.subnetwork.total_constraints
+    v = self.subnetwork.get_total_constraints()
     if v is 0:
       return None
     return v
 
   def get_loss_value(self):
-    self.subnetwork.maybe_construct_objective()
-    v = self.subnetwork.total_loss
+    v = self.subnetwork.get_total_loss()
     if v is 0:
       return None
     return v
 
   def get_error_value(self):
-    self.subnetwork.maybe_construct_objective()
     errors = self.subnetwork.get_all_errors()
     if not errors:
       return None
