@@ -25,6 +25,9 @@ class ExternData(object):
     if data:
       self.register_data_from_dict(data)
 
+  def __repr__(self):
+    return "<ExternData data=%r>" % self.data
+
   def init_from_config(self, config):
     """
     :param Config.Config config:
@@ -123,7 +126,8 @@ class ExternData(object):
 class TFNetwork(object):
   def __init__(self, config=None, extern_data=None, rnd_seed=42,
                train_flag=False, search_flag=False,
-               parent_layer=None, parent_net=None):
+               parent_layer=None, parent_net=None,
+               name=None):
     """
     :param Config.Config config: only needed to init extern_data if not specified explicitly
     :param ExternData|None extern_data:
@@ -131,7 +135,12 @@ class TFNetwork(object):
     :param bool|tf.Tensor train_flag: True if we want to use this model in training, False if in eval, or dynamic
     :param TFNetworkLayer.LayerBase|None parent_layer:
     :param TFNetwork parent_net:
+    :param str name: only for debugging
     """
+    if not name:
+      from Util import try_get_caller_name
+      name = "<network via %s>" % try_get_caller_name(fallback="<unknown>")
+    self.name = name
     if extern_data is None:
       extern_data = ExternData()
       if not config:
@@ -166,6 +175,20 @@ class TFNetwork(object):
     self.recurrent = False
     self._assigner_cache = {}  # type: dict[tf.Variable,VariableAssigner]
     self.concat_sources_dropout_cache = {}  # type: dict[(tuple[LayerBase],float),Data]
+
+  def __repr__(self):
+    s = "TFNetwork %r" % self.name
+    if self.parent_layer:
+      s += " parent_layer=%r" % self.parent_layer
+    elif self.parent_net:
+      s += " parent_net=%r" % self.parent_net
+    if self.train_flag is True:
+      s += " train"
+    elif self.train_flag is not None:
+      s += " train=%r" % self.train_flag
+    if self.search_flag is True:
+      s += " search"
+    return "<%s>" % s
 
   def construct_from(self, list_or_dict):
     """

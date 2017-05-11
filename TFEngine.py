@@ -703,6 +703,7 @@ class Engine(object):
     self._make_tf_session()
     tf.set_random_seed(42)
     network = TFNetwork(
+      name="root",
       config=self.config,
       rnd_seed=epoch,
       train_flag=tf.placeholder(tf.bool, shape=(), name="train_flag")

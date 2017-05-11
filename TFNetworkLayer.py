@@ -83,6 +83,10 @@ class LayerBase(object):
         opts = self.use_batch_norm
       self.output.placeholder = self.batch_norm(self.output, **opts)
 
+  def __repr__(self):
+    return "<%s %r out_type=%s>" % (
+      self.__class__.__name__, self.name, self.output.get_description(with_name=False))
+
   @classmethod
   def get_out_data_from_opts(cls, **kwargs):
     """
@@ -165,10 +169,6 @@ class LayerBase(object):
         mark_data_key_as_used=network.train_flag is not False).size_placeholder.copy()
     if any([(not src.output.available_for_inference) for src in sources]):
       output.available_for_inference = False
-
-  def __repr__(self):
-    return "%s{class=%s, out_type=%s}" % (
-      self.name, self.layer_class, self.output.get_description(with_name=False))
 
   @classmethod
   def cls_get_tf_scope_name(cls, name):
@@ -1526,6 +1526,7 @@ class SubnetworkLayer(LayerBase):
         assert isinstance(source, LayerBase)
         sub_extern_data.data[source.name] = source.output
     net = TFNetwork(
+      name="%s/%s:subnet" % (self.network.name, self.name),
       rnd_seed=self.network.random.randint(2**31),
       train_flag=self.network.train_flag,
       extern_data=sub_extern_data,
@@ -1976,7 +1977,7 @@ class EditDistanceLoss(Loss):
     if self._output_sparse_labels is not None:
       return self._output_sparse_labels
     from TFUtil import sparse_labels
-    labels = sparse_labels(self.output.placeholder, seq_lens=self.output_seq_lens)
+    labels = sparse_labels(self.output.get_placeholder_as_batch_major(), seq_lens=self.output_seq_lens)
     self._output_sparse_labels = labels
     return labels
 
@@ -1984,7 +1985,7 @@ class EditDistanceLoss(Loss):
     if self._target_sparse_labels is not None:
       return self._target_sparse_labels
     from TFUtil import sparse_labels
-    labels = sparse_labels(self.target.placeholder, seq_lens=self.target_seq_lens)
+    labels = sparse_labels(self.target.get_placeholder_as_batch_major(), seq_lens=self.target_seq_lens)
     self._target_sparse_labels = labels
     return labels
 

@@ -696,6 +696,7 @@ class _SubnetworkRecCell(object):
     self.net_dict = deepcopy(net_dict)
     from TFNetwork import TFNetwork, ExternData
     self.net = TFNetwork(
+      name="%s/%s:rec-subnet" % (parent_net.name, parent_rec_layer.name if parent_rec_layer else "?"),
       extern_data=ExternData(),
       train_flag=parent_net.train_flag,
       search_flag=parent_net.search_flag,

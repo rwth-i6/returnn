@@ -1482,3 +1482,17 @@ def try_and_ignore_exception(f):
   except Exception as exc:
     print("try_and_ignore_exception: %r failed: %s" % (f, exc))
     sys.excepthook(*sys.exc_info())
+
+
+def try_get_caller_name(depth=1, fallback=None):
+  """
+  :param int depth:
+  :param str|None fallback: this is returned if we fail for some reason
+  :rtype: str|None
+  :return: caller function name. this is just for debugging 
+  """
+  try:
+    frame = sys._getframe(depth + 1)  # one more to count ourselves
+    return frame.f_code.co_name
+  except Exception:
+    return fallback

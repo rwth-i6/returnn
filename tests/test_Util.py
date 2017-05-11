@@ -80,3 +80,9 @@ def test_collect_class_init_kwargs():
 
 def test_terminal_size():
   terminal_size()
+
+
+def test_try_get_caller_name():
+  def sub():
+    return try_get_caller_name()
+  assert_equal(sub(), "test_try_get_caller_name")
