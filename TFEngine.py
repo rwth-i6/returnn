@@ -616,8 +616,8 @@ class Engine(object):
 
   def load_model(self, epoch=None, filename=None):
     """
-    :param int epoch: 
-    :param str filename: 
+    :param int epoch:
+    :param str filename:
     """
     assert epoch or filename
     if epoch:
@@ -633,7 +633,7 @@ class Engine(object):
     print("Save model under %s" % (filename,), file=log.v4)
     self.network.save_params_to_file(filename, session=self.tf_session)
 
-  def init_train_from_config(self, config, train_data, dev_data, eval_data):
+  def init_train_from_config(self, config, train_data, dev_data=None, eval_data=None):
     """
     :type config: Config.Config
     :type train_data: Dataset.Dataset

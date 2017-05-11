@@ -42,6 +42,8 @@ def init(configFilename, commandLineOptions):
     configFilename=configFilename, commandLineOptions=commandLineOptions,
     config_updates={"log": None},
     extra_greeting="CRNN dump-forward starting up.")
+  rnn.engine.init_train_from_config(config=rnn.config, train_data=rnn.train_data)
+  # rnn.engine.init_network_from_config(rnn.config)
 
 
 def main(argv):
