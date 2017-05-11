@@ -689,6 +689,8 @@ class _SubnetworkRecCell(object):
     if classes is not None:
       self.net.extern_data.data[self.parent_rec_layer.target].placeholder = classes
     for data_key, data in self.net.extern_data.data.items():
+      if data_key not in self.net.used_data_keys:
+        continue
       if data.placeholder is None:
         raise Exception("rec layer %r subnet data key %r is not set" % (self.parent_rec_layer.name, data_key))
 
