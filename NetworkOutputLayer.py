@@ -116,8 +116,8 @@ class OutputLayer(Layer):
       self.norm = numpy.float32(1)
     else:
       self.norm = T.sum(self.index, dtype='float32') / T.sum(copy_output.index, dtype='float32')
-      if hasattr(copy_output, 'output_index'):
-        self.index = copy_output.output_index
+      if hasattr(copy_output, 'index_out'):
+        self.index = copy_output.index_out
       else:
         self.index = copy_output.index
       self.y = y = copy_output.y_out

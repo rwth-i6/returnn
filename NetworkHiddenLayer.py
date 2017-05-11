@@ -299,7 +299,9 @@ class DownsampleLayer(_NoOpLayer):
           self.index = T.concatenate([self.index, T.zeros((f-T.mod(self.index.shape[a], f), self.index.shape[1]), 'int8')], axis=0)
         self.index = TheanoUtil.downsample(self.index, axis=0, factor=f, method="max")
         if sample_target:
-          self.output_index = TheanoUtil.downsample(self.network.j[target], axis=0, factor=f, method="max")
+          self.index_out = TheanoUtil.downsample(self.network.j[target], axis=0, factor=f, method="max")
+        else:
+          self.index_out = self.index
       elif a == 2:
         n_out = int(n_out / f)
     output = z
