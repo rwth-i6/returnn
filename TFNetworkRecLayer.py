@@ -39,6 +39,7 @@ class RecLayer(_ConcatInputLayer):
     self._max_seq_len = max_seq_len
     self._sub_loss = None
     self._sub_error = None
+    self._sub_loss_normalization_factor = None
     with tf.variable_scope(
           "rec",
           initializer=tf.contrib.layers.xavier_initializer(
@@ -188,13 +189,18 @@ class RecLayer(_ConcatInputLayer):
       return v
     return self._sub_error
 
+  def get_loss_normalization_factor(self):
+    v = super(RecLayer, self).get_loss_normalization_factor()
+    if v is not None:
+      return v
+    return self._sub_loss_normalization_factor
+
   def get_constraints_value(self):
     v = super(RecLayer, self).get_constraints_value()
     from TFUtil import optional_add
     if isinstance(self.cell, _SubnetworkRecCell):
-      v2 = self.cell.net.get_total_constraints()
-      if v2 is not 0:
-        v = optional_add(v, v2)
+      for layer in self.cell.net.layers.values():
+        v = optional_add(v, layer.get_constraints_value())
     return v
 
   def _get_cell(self, unit):
@@ -315,9 +321,13 @@ class RecLayer(_ConcatInputLayer):
           seq_len = None
       if seq_len is not None:
         max_seq_len = tf.reduce_max(seq_len)
+        have_known_seq_len = True
+        known_seq_len = seq_len
       else:
         assert self._max_seq_len, "must specify max_seq_len in rec layer"
         max_seq_len = self._max_seq_len
+        have_known_seq_len = False
+        known_seq_len = None
 
       # TODO: Better check for train_flag.
       # Maybe more generic via sampling options later.
@@ -355,10 +365,10 @@ class RecLayer(_ConcatInputLayer):
 
       init_net_vars = cell.get_init_loop_vars()
       init_i = tf.constant(0)
-      if seq_len is None:
-        min_loop_len = 0
-      else:
+      if have_known_seq_len:
         min_loop_len = max_seq_len
+      else:
+        min_loop_len = 0
 
       from collections import namedtuple
       OutputToAccumulate = namedtuple("OutputToAccumulate", ["name", "dtype", "element_shape", "get"])
@@ -366,7 +376,7 @@ class RecLayer(_ConcatInputLayer):
 
       def add_output_to_acc(layer_name):
         name = "output_%s" % layer_name
-        if any([out.name == name for out in outputs_to_accumulate]):
+        if any([(out.name == name) for out in outputs_to_accumulate]):
           return
         outputs_to_accumulate.append(OutputToAccumulate(
           name=name,
@@ -412,7 +422,7 @@ class RecLayer(_ConcatInputLayer):
           if seq_len is not None:
             seq_len = tf.tile(seq_len, [output_beam_size])  # (batch * beam,)
 
-      if seq_len is None:
+      if not have_known_seq_len:
         assert "end" in cell.layer_data_templates, (
           "You need to have an 'end' layer in your rec subnet if the generated seq len is unknown.")
         end_template = cell.layer_data_templates["end"]
@@ -455,12 +465,14 @@ class RecLayer(_ConcatInputLayer):
           i=i)
         if seq_len_info is not None:
           end_flag, dyn_seq_len = seq_len_info
-          end_flag = tf.logical_or(end_flag, cell.net.layers["end"].output.placeholder)
-          dyn_seq_len += tf.where(
-            end_flag,
-            constant_with_shape(0, shape=tf.shape(end_flag)),
-            constant_with_shape(1, shape=tf.shape(end_flag)))
-          seq_len_info = (end_flag, dyn_seq_len)
+          with tf.name_scope("end_flag"):
+            end_flag = tf.logical_or(end_flag, cell.net.layers["end"].output.placeholder)  # (batch * beam,)
+          with tf.name_scope("dyn_seq_len"):
+            dyn_seq_len += tf.where(
+              end_flag,
+              constant_with_shape(0, shape=tf.shape(end_flag)),
+              constant_with_shape(1, shape=tf.shape(end_flag)))  # (batch * beam,)
+            seq_len_info = (end_flag, dyn_seq_len)
         else:
           end_flag = None
         # We could use tf.cond() to return the previous or so, and min_seq_len
@@ -468,13 +480,16 @@ class RecLayer(_ConcatInputLayer):
         # outside the loop is likely faster.
         if collected_choices:
           # For the search choices, we do it here so that we can easily get out the final beam scores.
-          if seq_len is not None:
-            seq_filter_cond = tf.less(i, seq_len)  # (batch * beam,)
-          else:
-            assert end_flag is not None
-            seq_filter_cond = tf.logical_not(end_flag)
+          with tf.name_scope("seq_filter_cond"):
+            if known_seq_len is not None:
+              seq_filter_cond = tf.less(i, known_seq_len)  # (batch * beam,)
+            else:
+              assert end_flag is not None
+              seq_filter_cond = tf.logical_not(end_flag)
+            seq_filter_cond = tf.reshape(seq_filter_cond, [batch_dim, output_beam_size])  # (batch, beam)
           for name in collected_choices:
-            cell.net.layers[name].search_choices.filter_seqs(seq_filter_cond)
+            with reuse_name_scope(name):
+              cell.net.layers[name].search_choices.filter_seqs(seq_filter_cond)
         assert len(acc_tas) == len(outputs_to_accumulate)
         acc_tas = [
           acc_ta.write(i, out.get())
@@ -493,7 +508,7 @@ class RecLayer(_ConcatInputLayer):
 
     from TFUtil import constant_with_shape
     init_loop_vars = (init_i, init_net_vars, init_acc_tas)
-    if seq_len is None:
+    if not have_known_seq_len:
       # See body().
       out_batch_dim = cell.layer_data_templates["end"].get_batch_dim()
       init_seq_len_info = (
@@ -504,7 +519,7 @@ class RecLayer(_ConcatInputLayer):
       cond=cond,
       body=body,
       loop_vars=init_loop_vars)
-    if seq_len is not None:
+    if have_known_seq_len:
       _, final_net_vars, final_acc_tas = final_loop_vars
     else:
       _, final_net_vars, final_acc_tas, (_, seq_len) = final_loop_vars
@@ -513,28 +528,50 @@ class RecLayer(_ConcatInputLayer):
       self.output.size_placeholder[0] = seq_len
     assert isinstance(final_acc_tas, list)
     assert isinstance(final_acc_tas[0], tf.TensorArray)
+    assert len(final_acc_tas) == len(outputs_to_accumulate)
+    final_acc_tas_dict = {
+      out.name: final_acc_ta
+      for (final_acc_ta, out) in zip(final_acc_tas, outputs_to_accumulate)}  # type: dict[str,tf.TensorArray]
 
     if layer_with_loss:
-      layer_with_loss_inst = cell.net.layers[layer_with_loss]
-      final_acc_tas_dict = {
-        out.name: final_acc_ta
-        for (final_acc_ta, out) in zip(final_acc_tas, outputs_to_accumulate)}
-      out = final_acc_tas_dict["%s_output" % layer_with_loss].stack()  # e.g. (time, batch, dim)
-      out_data = layer_with_loss_inst.output.copy_template_adding_time_dim(time_dim_axis=0)
-      out_data.placeholder = out
-      out_data.size_placeholder = {0: seq_len}
-      loss = layer_with_loss_inst.loss
-      from TFNetworkLayer import Loss
-      assert isinstance(loss, Loss)
-      loss.init(
-        output=out_data,
-        output_with_activation=None,  # we could also collect that but not implemented yet...
-        target=self._static_get_target_value(
+      with tf.name_scope("sub_net_loss"):
+        layer_with_loss_inst = cell.net.layers[layer_with_loss]
+        out = final_acc_tas_dict["output_%s" % layer_with_loss].stack()  # e.g. (time, batch, dim)
+        if not have_known_seq_len:
+          with tf.name_scope("loss_output_sub_slice"):
+            out = out[:tf.reduce_max(seq_len)]
+        out_data = layer_with_loss_inst.output.copy_template_adding_time_dim(time_dim_axis=0)
+        out_data.placeholder = out
+        out_data.size_placeholder = {0: seq_len}
+        target_data = self._static_get_target_value(
           target=layer_with_loss_inst.target,
           network=self.network,
-          mark_data_key_as_used=True))
-      self._sub_loss = loss.get_value()
-      self._sub_error = loss.get_error()
+          mark_data_key_as_used=True)
+        if not have_known_seq_len:
+          # Target will have the real target length.
+          # This is by definition a frame-wise loss, and we only use the generated frames.
+          with tf.name_scope("target_sub_slice"):
+            target_data = target_data.copy_as_time_major()
+            target_data.size_placeholder[0] = seq_len  # generated seq len
+            target_data.placeholder = target_data.placeholder[:tf.reduce_max(seq_len)]
+        loss_beam_size = layer_with_loss_inst.get_search_beam_size()
+        if loss_beam_size is not None:
+          # Output batch is with beam, so the target must be tiled accordingly.
+          with tf.name_scope("target_beam_tiled"):
+            target_data = target_data.copy()
+            tile_multiples = [1] * target_data.batch_ndim
+            tile_multiples[target_data.batch_dim_axis] = loss_beam_size
+            target_data.placeholder = tf.tile(target_data.placeholder, multiples=tile_multiples)
+        loss = layer_with_loss_inst.loss
+        from TFNetworkLayer import Loss
+        assert isinstance(loss, Loss)
+        loss.init(
+          output=out_data,
+          output_with_activation=None,  # we could also collect that but not implemented yet...
+          target=target_data)
+        self._sub_loss = loss.get_value()
+        self._sub_error = loss.get_error()
+        self._sub_loss_normalization_factor = loss.get_normalization_factor()
 
     # Check if collected_choices has all the right layers.
     # At the moment, _TemplateLayer.has_search_choices() might be incomplete, that is why we check here.
@@ -546,7 +583,7 @@ class RecLayer(_ConcatInputLayer):
       assert layer.search_choices
 
     if collected_choices:
-      # Find next choice layer. Then iterate through it's source choice layers through time
+      # Find next choice layer. Then iterate through its source choice layers through time
       # and resolve the output over time to be in line with the final output search choices.
       output_choice_base = cell.net.get_search_choices(src=self.cell.net.layers["output"])
       assert isinstance(output_choice_base, LayerBase)
@@ -563,20 +600,18 @@ class RecLayer(_ConcatInputLayer):
         size=final_acc_tas[0].size(),
         infer_shape=True)
 
-      def search_resolve_body(i, choice_beams, acc_tas, new_acc_output_ta):
+      def search_resolve_body(i, choice_beams, new_acc_output_ta):
         # This loops goes backwards through time.
         # This starts at i == seq_len - 1.
         # choice_beams are from the previous step, shape (batch, beam_out) -> beam idx of output,
         # output is of shape (batch * beam, n_out).
         with reuse_name_scope(self._rec_scope.name + "/while_loop_search_body", absolute=True):
-          assert len(acc_tas) == len(outputs_to_accumulate)
-          acc_tas_dict = {out.name: acc_ta for (acc_ta, out) in zip(acc_tas, outputs_to_accumulate)}
           choice_base = output_choice_base
           is_output_choice = True
           while True:
             assert choice_base.network is self.cell.net, "not yet implemented otherwise"
 
-            src_choice_beams = acc_tas_dict["choice_%s" % choice_base.name].read(i)  # (batch, beam) -> beam_in idx
+            src_choice_beams = final_acc_tas_dict["choice_%s" % choice_base.name].read(i)  # (batch, beam) -> beam_in idx
             assert src_choice_beams.get_shape().ndims == 2
 
             with tf.name_scope("choice_beams"):
@@ -586,7 +621,7 @@ class RecLayer(_ConcatInputLayer):
               src_choice_beams = tf.gather_nd(src_choice_beams, idxs_exp)  # (batch, beam_out)
             if is_output_choice:
               with tf.name_scope("output"):
-                output = acc_tas_dict["output"].read(i)  # (batch * beam, [n_out])
+                output = final_acc_tas_dict["output_output"].read(i)  # (batch * beam, [n_out])
                 out_shape = list(self.output.batch_shape[1:])  # without time-dim
                 output.set_shape(tf.TensorShape(out_shape))
                 output = tf.reshape(
@@ -607,20 +642,19 @@ class RecLayer(_ConcatInputLayer):
               return (
                 i - 1,
                 src_choice_beams,
-                [acc_tas_dict[out.name] for out in outputs_to_accumulate],
                 new_acc_output_ta)
             is_output_choice = False
             choice_base = src_choice_layer
             choice_beams = src_choice_beams
 
-      _, _, final_acc_tas, new_acc_output_ta = tf.while_loop(
+      _, _, new_acc_output_ta = tf.while_loop(
         cond=(lambda i, *args: tf.greater_equal(i, 0)),
         body=search_resolve_body,
         loop_vars=(
           final_acc_tas[0].size() - 1,  # initial i. we go backwards
           initial_beam_choices,
-          final_acc_tas,
           new_acc_output_ta))
+      final_acc_tas_dict["output_output"] = new_acc_output_ta
 
       # Collect the search choices for the rec layer itself.
       # Our output will be of shape (time, batch * beam, dim).
@@ -632,11 +666,10 @@ class RecLayer(_ConcatInputLayer):
         layer_name=output_choice_base.name)
       self.search_choices.set_beam_scores_from_rec(final_choice_rec_vars)
 
-    assert len(final_acc_tas) == len(outputs_to_accumulate)
-    final_acc_tas_dict = {
-      out.name: final_acc_ta
-      for (final_acc_ta, out) in zip(final_acc_tas, outputs_to_accumulate)}
     output = final_acc_tas_dict["output_output"].stack()  # e.g. (time, batch, dim)
+    if not have_known_seq_len:
+      with tf.name_scope("output_sub_slice"):
+        output = output[:tf.reduce_max(seq_len)]  # usually one less
     return output
 
   def get_last_hidden_state(self):
@@ -1266,7 +1299,10 @@ class DecideLayer(LayerBase):
     from TFUtil import assert_min_tf_version, nd_indices
     assert_min_tf_version((1, 1), "gather_nd")
     beam_idxs_ext = nd_indices(beam_idxs)
-    output.placeholder = tf.gather_nd(src_output, indices=beam_idxs_ext)  # (batch, [time], [dim])
+    output.placeholder = tf.cond(
+      tf.greater(tf.size(src_output), 0),  # can happen to be empty
+      lambda: tf.gather_nd(src_output, indices=beam_idxs_ext),
+      lambda: src_output[:, 0])  # (batch, [time], [dim])
     output.size_placeholder = {}
     for i, size in src_data.size_placeholder.items():
       size = tf.reshape(size, [batch_dim, src.search_choices.beam_size])  # (batch, beam)

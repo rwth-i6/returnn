@@ -129,7 +129,8 @@ class Data(object):
     """
     data = Data(**self.get_kwargs())
     data.placeholder = self.placeholder
-    data.size_placeholder = self.size_placeholder
+    if self.size_placeholder is not None:
+      data.size_placeholder = self.size_placeholder.copy()
     return data
 
   def copy_as_batch_major(self):
@@ -144,6 +145,21 @@ class Data(object):
       if data.time_dim_axis is not None and data.time_dim_axis <= data.batch_dim_axis:
         data.time_dim_axis += 1
       data.batch_dim_axis = 0
+    return data
+
+  def copy_as_time_major(self):
+    """
+    :return: copy of myself with time_dim_axis == 0
+    :rtype: Data
+    """
+    assert self.time_dim_axis is not None
+    data = self.copy()
+    if data.time_dim_axis != 0:
+      if data.placeholder is not None:
+        data.placeholder = swapaxes(data.placeholder, 0, data.time_dim_axis)
+      if data.batch_dim_axis <= data.time_dim_axis:
+        data.batch_dim_axis += 1
+      data.time_dim_axis = 0
     return data
 
   def copy_template(self, name=None):
