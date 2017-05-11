@@ -288,11 +288,11 @@ class DownsampleLayer(_NoOpLayer):
           z = T.concatenate([z,T.zeros((f-T.mod(z.shape[a], f), z.shape[1], z.shape[2]), 'float32')],axis=0)
         z = TheanoUtil.downsample(z, axis=a, factor=f, method=method)
         if sample_target:
-          self.y_out = TheanoUtil.downsample(self.y_out, axis=a, factor=f, method=method)
+          self.y_out = TheanoUtil.downsample(self.y_out, axis=a, factor=f, method='max')
       else:
         z = TheanoUtil.downsample(z, axis=a, factor=f, method=method)
         if a < self.y_out.ndim:
-          self.y_out = TheanoUtil.downsample(self.y_out, axis=a, factor=f, method=method)
+          self.y_out = TheanoUtil.downsample(self.y_out, axis=a, factor=f, method='max')
       if a == 0:
         self.index = self.sources[0].index
         if padding:
