@@ -1777,7 +1777,7 @@ class Loss(object):
   def get_value(self):
     """
     :return: loss as a scalar value
-    :rtype: tf.Tensor
+    :rtype: tf.Tensor|None
     """
     raise NotImplementedError
 
@@ -1996,8 +1996,7 @@ class EditDistanceLoss(Loss):
     return self.reduce_func(error)
 
   def get_value(self):
-    # Just use the error as the loss. Note that this is not differentiable.
-    return self.get_error()
+    return None
 
 
 _LossClassDict = {}  # type: dict[str,type(Loss)]
