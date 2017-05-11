@@ -281,10 +281,12 @@ class SprintDatasetBase(Dataset):
         v = v.encode("utf8")
       if isinstance(v, (str, bytes)):
         v = list(map(ord, v))
-        if self.str_add_final_zero:
-          v += [0]
         v = numpy.array(v, dtype="uint8")
         targets[key] = v
+        if self.str_add_final_zero:
+          v = numpy.append(v, numpy.array([0], dtype=v.dtype))
+          assert key + "0" not in targets
+          targets[key + "0"] = v
         continue
       print("SprintDataset, we will ignore the target %r because it is not a numpy array: %r" % (key, v), file=log.v3)
       self._target_black_list += [key]
