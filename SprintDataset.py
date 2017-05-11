@@ -50,7 +50,7 @@ class SprintDatasetBase(Dataset):
   SprintCachedSeqsMax = 200
   SprintCachedSeqsMin = 100
 
-  def __init__(self, window=1, target_maps=None, **kwargs):
+  def __init__(self, window=1, target_maps=None, str_add_final_zero=False, **kwargs):
     assert window == 1
     super(SprintDatasetBase, self).__init__(**kwargs)
     if target_maps:
@@ -62,6 +62,7 @@ class SprintDatasetBase(Dataset):
         assert isinstance(tmap, dict)  # dict[str,int]
         target_maps[key] = tmap
     self.target_maps = target_maps
+    self.str_add_final_zero = str_add_final_zero
     self.cond = Condition(lock=self.lock)
     self.add_data_thread_id = thread.get_ident()  # This will be created in the Sprint thread.
     self.ready_for_data = False
@@ -279,7 +280,9 @@ class SprintDatasetBase(Dataset):
       if isinstance(v, unicode):
         v = v.encode("utf8")
       if isinstance(v, (str, bytes)):
-        v = map(ord, v)
+        v = list(map(ord, v))
+        if self.str_add_final_zero:
+          v += [0]
         v = numpy.array(v, dtype="uint8")
         targets[key] = v
         continue
@@ -414,12 +417,12 @@ class ExternSprintDataset(SprintDatasetBase):
   The Sprint subprocess will use SprintExternInterface to communicate with us.
   """
 
-  def __init__(self, sprintTrainerExecPath, sprintConfigStr, partitionEpoch=1, *args, **kwargs):
+  def __init__(self, sprintTrainerExecPath, sprintConfigStr, partitionEpoch=1, **kwargs):
     """
     :param str|list[str] sprintTrainerExecPath:
     :param str | list[str] | ()->str | list[()->str] | ()->list[str] | ()->list[()->str] sprintConfigStr: via eval_shell_str
     """
-    super(ExternSprintDataset, self).__init__(*args, **kwargs)
+    super(ExternSprintDataset, self).__init__(**kwargs)
     self.add_data_thread_id = None
     self.sprintTrainerExecPath = sprintTrainerExecPath
     self.sprintConfig = sprintConfigStr
