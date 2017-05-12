@@ -119,7 +119,7 @@ class Config:
   def is_of_type(self, key, types):
     """
     :param str key:
-    :param type|list[type] types: for isinstance() check
+    :param type|tuple[type] types: for isinstance() check
     :return: whether is_typed(key) is True and isinstance(value, types) is True
     :rtype: bool
     """

@@ -188,7 +188,7 @@ def load_data(config, cache_byte_size, files_config_key, **kwargs):
   :param Config config:
   :param int cache_byte_size:
   :param str files_config_key: such as "train" or "dev"
-  :param dict[str] kwargs: passed on to init_dataset() or init_dataset_via_str()
+  :param kwargs: passed on to init_dataset() or init_dataset_via_str()
   :rtype: (Dataset,int)
   :returns the dataset, and the cache byte size left over if we cache the whole dataset.
   """
@@ -225,10 +225,10 @@ def initData():
   elif config.value('chunking', "0") == "1": # MLP mode
     chunking = "1"
   global train_data, dev_data, eval_data
-  dev_data, extra_cache_bytes_dev = load_data(config, cache_byte_sizes[1], 'dev', chunking=chunking,
-                                         seq_ordering="sorted", shuffle_frames_of_nseqs=0)
-  eval_data, extra_cache_bytes_eval = load_data(config, cache_byte_sizes[2], 'eval', chunking=chunking,
-                                           seq_ordering="sorted", shuffle_frames_of_nseqs=0)
+  dev_data, extra_cache_bytes_dev = load_data(
+    config, cache_byte_sizes[1], 'dev', chunking=chunking, seq_ordering="sorted", shuffle_frames_of_nseqs=0)
+  eval_data, extra_cache_bytes_eval = load_data(
+    config, cache_byte_sizes[2], 'eval', chunking=chunking, seq_ordering="sorted", shuffle_frames_of_nseqs=0)
   train_cache_bytes = cache_byte_sizes[0]
   if train_cache_bytes >= 0:
     # Maybe we have left over cache from dev/eval if dev/eval have cached everything.
@@ -257,9 +257,9 @@ def printTaskProperties(devices=None):
     print("Devices:", file=log.v3)
     for device in devices:
       print("  %s: %s" % (device.name, device.device_name), end=' ', file=log.v3)
-      print("(units:", device.get_device_shaders(), \
-                       "clock: %.02fGhz" % (device.get_device_clock() / 1024.0), \
-                       "memory: %.01f" % (device.get_device_memory() / float(1024 * 1024 * 1024)) + "GB)", end=' ', file=log.v3)
+      print("(units:", device.get_device_shaders(),
+            "clock: %.02fGhz" % (device.get_device_clock() / 1024.0),
+            "memory: %.01f" % (device.get_device_memory() / float(1024 * 1024 * 1024)) + "GB)", end=' ', file=log.v3)
       print("working on", device.num_batches, "batches" if device.num_batches > 1 else "batch", end=' ', file=log.v3)
       print("(update on device)" if device.update_specs['update_rule'] != 'none' else "(update on host)", file=log.v3)
 
@@ -379,6 +379,14 @@ def executeMainTask():
     engine.forward_to_hdf(
       data=eval_data, output_file=output_file, combine_labels=combine_labels,
       batch_size=config.int('forward_batch_size', 0))
+  elif task == "search":
+    engine.init_network_from_config(config)
+    if config.value("search_data", "eval") in ["train", "dev", "eval"]:
+      data = {"train": train_data, "dev": dev_data, "eval": eval_data}[config.value("search_data", "eval")]
+      assert data, "set search_data"
+    else:
+      data = init_dataset(config.typed_value("search_data"))
+    engine.search(data)
   elif task == 'compute_priors':
     assert train_data is not None, 'train data for priors should be provided'
     engine.init_network_from_config(config)

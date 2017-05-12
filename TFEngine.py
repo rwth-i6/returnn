@@ -1062,6 +1062,7 @@ class Engine(object):
     """
     :param Dataset.Dataset dataset: 
     """
+    print("Search with network on %r." % dataset, file=log.v1)
     if not self.use_search_flag or not self.network:
       self.use_search_flag = True
       if self.network:

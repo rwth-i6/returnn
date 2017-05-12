@@ -210,6 +210,7 @@ def test_engine_search():
     }
   })
   engine = Engine(config=config)
+  # Normally init_network can be used. We only do init_train here to randomly initialize the network.
   engine.init_train_from_config(config=config, train_data=dataset, dev_data=None, eval_data=None)
   print("network:")
   pprint(engine.network.layers)
