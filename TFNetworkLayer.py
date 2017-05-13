@@ -518,10 +518,19 @@ class SearchChoices(object):
     self.beam_scores = None  # type: tf.Tensor
     self.is_decided = is_decided
 
+  def __repr__(self):
+    s = " beam_size=%r" % self.beam_size
+    if self._done_src_layer:
+      s += " src_layer=%r" % self._src_layer
+    s += " beam_scores=%r" % self.beam_scores
+    if self.is_decided:
+      s += " is_decided"
+    return "<SearchChoices owner=%r%s>" % (self.owner, s)
+
   @property
   def src_layer(self):
     """
-    :rtype: LayerBase 
+    :rtype: LayerBase
     """
     if not self._done_src_layer:
       self._src_layer = self.owner.network.get_search_choices(sources=self.owner.sources)
@@ -541,7 +550,7 @@ class SearchChoices(object):
 
   def set_beam_scores(self, scores):
     """
-    :param tf.Tensor scores: (batch, beam) -> log score 
+    :param tf.Tensor scores: (batch, beam) -> log score
      """
     self.beam_scores = scores
     self.owner.rec_vars_outputs["choice_scores"] = scores

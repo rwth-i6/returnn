@@ -380,6 +380,7 @@ def executeMainTask():
       data=eval_data, output_file=output_file, combine_labels=combine_labels,
       batch_size=config.int('forward_batch_size', 0))
   elif task == "search":
+    engine.use_search_flag = True
     engine.init_network_from_config(config)
     if config.value("search_data", "eval") in ["train", "dev", "eval"]:
       data = {"train": train_data, "dev": dev_data, "eval": eval_data}[config.value("search_data", "eval")]

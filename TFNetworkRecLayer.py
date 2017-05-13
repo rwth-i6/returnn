@@ -1185,7 +1185,7 @@ class ChoiceLayer(LayerBase):
   Assume that we get input (batch,dim) from a log-softmax.
   Assume that each batch is already a choice via search.
   In search with a beam size of N, we would output
-  sparse (batch=N,) and scores for each. 
+  sparse (batch=N,) and scores for each.
   """
   layer_class = "choice"
 
@@ -1204,7 +1204,7 @@ class ChoiceLayer(LayerBase):
       net_batch_dim = self.network.get_batch_dim()
       assert self.search_choices.src_layer  # not implemented yet... in rec-layer, this should always be the case
       scores_base = self.search_choices.src_layer.search_choices.beam_scores  # (batch, beam_in)
-      assert scores_base.get_shape().ndims == 2
+      assert scores_base.get_shape().ndims == 2, "%r invalid" % self.search_choices.src_layer.search_choices
       beam_in = tf.shape(scores_base)[1]
       scores_base = tf.expand_dims(scores_base, axis=-1)  # (batch, beam_in, dim)
       scores_in = self.sources[0].output.placeholder  # (batch * beam_in, dim)
