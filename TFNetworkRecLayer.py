@@ -939,6 +939,11 @@ class _TemplateLayer(LayerBase):
     self.kwargs = None  # type: dict[str]
     self.dependencies = set()  # type: set[LayerBase]
 
+  def __repr__(self):
+    return "<%s(%s)(%s) %r out_type=%s>" % (
+      self.__class__.__name__, self.layer_class_type.__name__, self.layer_class,
+      self.name, self.output.get_description(with_name=False))
+
   def init(self, output, layer_class, template_type="template", **kwargs):
     """
     :param Data output: 

@@ -544,6 +544,7 @@ class SearchChoices(object):
     """
     :param dict[str,tf.Tensor] rev_vars_outputs:
     """
+    assert rev_vars_outputs.get("choice_scores", None) is not None
     self.beam_scores = rev_vars_outputs["choice_scores"]  # (batch, beam)
     if self.src_beams is not None:
       self.beam_scores.set_shape(self.src_beams.get_shape())
