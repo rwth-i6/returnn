@@ -401,6 +401,8 @@ class Runner(object):
     logdir += "/%s" % self.data_provider.dataset.name
     if not self._should_train:  # like eval
       logdir += "-%i" % self.engine.epoch
+    if self.engine.use_search_flag:
+      logdir += "-search"
     writer = tf.summary.FileWriter(logdir)
     writer.add_graph(sess.graph)
     run_metadata = tf.RunMetadata()
@@ -1060,7 +1062,7 @@ class Engine(object):
 
   def search(self, dataset):
     """
-    :param Dataset.Dataset dataset: 
+    :param Dataset.Dataset dataset:
     """
     print("Search with network on %r." % dataset, file=log.v1)
     if not self.use_search_flag or not self.network:
@@ -1070,9 +1072,9 @@ class Engine(object):
       self.init_network_from_config(self.config)
     batches = dataset.generate_batches(
       recurrent_net=self.network.recurrent,
-      batch_size=self.batch_size,
-      max_seqs=1,
-      max_seq_length=int(self.max_seq_length),
+      batch_size=self.config.int('batch_size', 1),
+      max_seqs=self.config.int('max_seqs', -1),
+      max_seq_length=int(self.config.float('max_seq_length', 0)),
       used_data_keys=self.network.used_data_keys)
     runner = Runner(engine=self, dataset=dataset, batches=batches, train=False, eval=True)
     runner.run(report_prefix=self.get_epoch_str() + " search")

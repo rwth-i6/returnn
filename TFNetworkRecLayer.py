@@ -576,6 +576,8 @@ class RecLayer(_ConcatInputLayer):
     # Check if collected_choices has all the right layers.
     # At the moment, _TemplateLayer.has_search_choices() might be incomplete, that is why we check here.
     for layer in cell.net.layers.values():
+      if layer.name.startswith("prev:"):
+        continue
       if layer.search_choices:
         assert layer.name in collected_choices
     for name in collected_choices:
@@ -781,6 +783,7 @@ class _SubnetworkRecCell(object):
     :param tf.Tensor|None classes: optional target classes, shape e.g. (batch,) if it is sparse
     :param tf.Tensor|None i: loop counter
     """
+    assert not self.net.layers, "do not call this multiple times"
     if data is not None:
       self.net.extern_data.data["source"].placeholder = data
     if classes is not None:
@@ -793,7 +796,7 @@ class _SubnetworkRecCell(object):
 
     prev_layers = {}  # type: dict[str,_TemplateLayer]
     for name in set(list(prev_outputs.keys()) + list(prev_extra.keys())):
-      prev_layers[name] = self.layer_data_templates[name].copy_as_prev_time_frame(
+      self.net.layers["prev:%s" % name] = prev_layers[name] = self.layer_data_templates[name].copy_as_prev_time_frame(
         prev_output=prev_outputs.get(name, None),
         rec_vars_prev_outputs=prev_extra.get(name, None))
 
@@ -810,7 +813,6 @@ class _SubnetworkRecCell(object):
         return self.parent_net.layers[name[len("base:"):]]
       return self.net._construct_layer(net_dict, name=name, get_layer=get_layer)
 
-    assert not self.net.layers, "do not call this multiple times"
     if i is not None:
       self.net.layers[":i"] = _StepIndexLayer(i=i, name=":i", network=self.net)
     get_layer("output")
@@ -938,6 +940,7 @@ class _TemplateLayer(LayerBase):
     self.layer_class_type = None  # type: type[LayerBase]|LayerBase
     self.kwargs = None  # type: dict[str]
     self.dependencies = set()  # type: set[LayerBase]
+    self._template_base = None  # type: _TemplateLayer
 
   def __repr__(self):
     return "<%s(%s)(%s) %r out_type=%s>" % (
@@ -946,9 +949,9 @@ class _TemplateLayer(LayerBase):
 
   def init(self, output, layer_class, template_type="template", **kwargs):
     """
-    :param Data output: 
-    :param type[LayerBase]|LayerBase layer_class: 
-    :param str template_type: 
+    :param Data output:
+    :param type[LayerBase]|LayerBase layer_class:
+    :param str template_type:
     """
     # Overwrite self.__class__ so that checks like isinstance(layer, ChoiceLayer) work.
     # Not sure if this is the nicest way -- probably not, so I guess this will go away later.
@@ -973,6 +976,7 @@ class _TemplateLayer(LayerBase):
     :rtype: _TemplateLayer
     """
     l = _TemplateLayer(network=self.network, name="prev:%s" % self.name)
+    l._template_base = self
     l.dependencies = self.dependencies
     l.init(layer_class=self.layer_class_type, template_type="prev", **self.kwargs)
     if prev_output is not None:
@@ -988,7 +992,7 @@ class _TemplateLayer(LayerBase):
     return l
 
   def get_dep_layers(self):
-    return list(self.dependencies)
+    return [self.network.layers.get("prev:%s" % l.name, l) for l in self.dependencies]
 
   def _has_search_choices(self):
     """
