@@ -2918,6 +2918,7 @@ class CAlignmentLayer(ForwardLayer):
     n_out = sum([s.attrs['n_out'] for s in self.sources])
     x_in = T.concatenate([s.output for s in self.sources],axis=2)
     self.set_attr('n_out', n_out)
+    self.set_attr('max_skip', max_skip)
     if tdps is None:
       tdps = [0.]
     if len(tdps) - 2 < max_skip:
@@ -3052,6 +3053,7 @@ class CAlignmentLayer(ForwardLayer):
 
   def errors(self):
     return self.error_val
+
 
 class InvBacktrackLayer(_NoOpLayer):
   layer_class = "ibt"

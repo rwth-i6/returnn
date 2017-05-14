@@ -646,16 +646,49 @@ class AttentionAlign(AttentionBase):
   """
   name = "attention_align"
   def create_vars(self):
-    super(AttentionList, self).create_vars()
-    values = numpy.zeros((n,), dtype=theano.config.floatX)
+    super(AttentionAlign, self).create_vars()
+    assert len(self.base) == 1
+    assert self.base[0].layer_class.endswith('align')
+    max_skip = self.base[0].attrs['max_skip']
+    self.B = self.add_input(self.base[0].output, 'B')
+    #self.I = self.add_input(T.cast(self.layer.index[::self.layer.attrs['direction']],'float32'), 'I')
+
+    values = numpy.zeros((max_skip,), dtype=theano.config.floatX)
     self.T_b = self.add_param(self.layer.shared(value=values, borrow=True, name="T_b"), name="T_b")
-    max_skip = self.layer.attrs.get('attention_skip', 50)
     l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + max_skip)
     values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l,
-                                                  size=(self.layer.attrs['n_out'], max_skip)),
-                                                  dtype=theano.config.floatX)
-    self.T_W = self.add_param(self.layer.shared(value=values, borrow=True, name="T_W"), name="T_W")
+                                                  size=(self.base[0].attrs['n_out'], self.layer.unit.n_in)),
+                           dtype=theano.config.floatX)
+    self.W_att_in = self.add_param(self.layer.shared(value=values, borrow=True, name="W_att_in"), name="W_att_in")
 
+    self.T_W = self.add_var(self.layer.T_W, name="T_W")
+    self.T_b = self.add_var(self.layer.T_b, name="T_b")
+
+    #y_t = T.dot(self.base[0].attention, T.arange(self.base[0].output.shape[0], dtype='float32'))  # NB
+    #y_t = T.concatenate([T.zeros_like(y_t[:1]), y_t], axis=0)  # (N+1)B
+    #y_t = y_t[1:] - y_t[:-1] # NB
+    self.y_t = self.add_input(self.layer.y_t, "y_t")
+
+    lens = T.sum(self.base[0].index,axis=0,dtype='float32')
+    self.t = self.add_state_var(lens - numpy.float32(1), "t")
+    #self.cost_sum = self.add_state_var(T.zeros((1,), 'float32'), "cost_sum")
+
+
+  def attend(self, y_p):
+    inp, updates = 0, {}
+    z = T.dot(y_p,self.T_W) + self.T_b
+    #idx = self.I[self.n[0]]
+    #y_out = T.cast(self.y_t[self.n[0]],'int32')
+    #nll, _ = T.nnet.crossentropy_softmax_1hot(x=z[idx], y_idx=y_out[idx])
+    smooth = T.constant(self.attrs['smooth'], 'float32')
+    n = T.cast(self.n[0],'int32')
+    t = smooth * self.y_t[n] + (numpy.float32(1) - smooth) * T.cast(T.argmax(z,axis=1),dtype='float32')
+    pos = T.cast(T.maximum(T.round(self.t),numpy.float32(0)), 'int32')
+
+    inp = T.dot(self.B[pos,T.arange(pos.shape[0])], self.W_att_in)
+    #updates[self.cost_sum] = T.sum(nll,dtype='float32').dimshuffle('x').repeat(1,axis=0)
+    updates[self.t] = self.t - t
+    return inp, updates
 
 
 class AttentionTime(AttentionList):

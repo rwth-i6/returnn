@@ -495,7 +495,6 @@ class RecurrentUnitLayer(Layer):
                attention_nbest = 0,
                attention_store = False,
                attention_smooth = False,
-               attention_align = False,
                attention_glimpse = 1,
                attention_filters = 1,
                attention_accumulator = 'sum',
@@ -597,7 +596,6 @@ class RecurrentUnitLayer(Layer):
     self.set_attr('attention_store', attention_store)
     self.set_attr('attention_smooth', attention_smooth)
     self.set_attr('attention_momentum', attention_momentum.encode('utf8'))
-    self.set_attr('attention_align', attention_align)
     self.set_attr('attention_glimpse', attention_glimpse)
     self.set_attr('attention_filters', attention_filters)
     self.set_attr('attention_lm', attention_lm)
@@ -755,6 +753,19 @@ class RecurrentUnitLayer(Layer):
       zz = T.exp(T.tanh(T.dot(self.xc, self.W_att_xc))) # TB1
       self.zc = T.dot(T.sum(self.xc * (zz / T.sum(zz, axis=0, keepdims=True)).repeat(self.xc.shape[2],axis=2), axis=0, keepdims=True), self.W_att_in)
       recurrent_transform = 'none'
+    elif recurrent_transform == 'attention_align':
+      max_skip = base[0].attrs['max_skip']
+      values = numpy.zeros((max_skip,), dtype=theano.config.floatX)
+      self.T_b = self.add_param(self.shared(value=values, borrow=True, name="T_b"), name="T_b")
+      l = sqrt(6.) / sqrt(self.attrs['n_out'] + max_skip)
+      values = numpy.asarray(self.rng.uniform(
+        low=-l, high=l, size=(self.attrs['n_out'], max_skip)), dtype=theano.config.floatX)
+      self.T_W = self.add_param(self.shared(value=values, borrow=True, name="T_W"), name="T_W")
+      y_t = T.dot(self.base[0].attention, T.arange(self.base[0].output.shape[0], dtype='float32'))  # NB
+      y_t = T.concatenate([T.zeros_like(y_t[:1]), y_t], axis=0)  # (N+1)B
+      y_t = y_t[1:] - y_t[:-1]  # NB
+      self.y_t = y_t[::-1]
+
     recurrent_transform_inst = RecurrentTransform.transform_classes[recurrent_transform](layer=self)
     assert isinstance(recurrent_transform_inst, RecurrentTransform.RecurrentTransformBase)
     unit.recurrent_transform = recurrent_transform_inst
@@ -835,16 +846,14 @@ class RecurrentUnitLayer(Layer):
         last = vec.dimshuffle(1, 'x', 0).repeat(self.index.shape[1], axis=1)
         self.attention[i] = T.concatenate([self.attention[i][1:],last],axis=0)[::direction]
 
-    if self.attrs['attention_align']:
-      bp = [ self.aux[i] for i,v in enumerate(sorted(unit.recurrent_transform.state_vars.keys())) if v.startswith('K_') ]
-      def backtrace(k,i_p):
-        return i_p - k[i_p,T.arange(k.shape[1],dtype='int32')]
-      self.alignment = []
-      for K in bp: # K: NTB
-        aln, _ = theano.scan(backtrace, sequences=[T.cast(K,'int32').dimshuffle(1,0,2)],
-                             outputs_info=[T.cast(self.index.shape[0] - 1,'int32') + T.zeros((K.shape[2],),'int32')])
-        aln = theano.printing.Print("aln")(aln)
-        self.alignment.append(aln) # TB
+    self.cost_val = numpy.float32(0)
+    if recurrent_transform == 'attention_align':
+      z = T.dot(self.act[0],self.T_W) + self.T_b
+      z = z.reshape((z.shape[0]*z.shape[1],z.shape[2]))
+      idx = (self.index.flatten() > 0).nonzero()
+      y_out = T.cast(self.y_t,'int32').flatten()
+      nll, _ = T.nnet.crossentropy_softmax_1hot(x=z[idx], y_idx=y_out[idx])
+      self.cost_val = T.sum(nll)
 
     if recurrent_transform == 'batch_norm':
       self.params['sample_mean_batch_norm'].custom_update = T.dot(T.mean(self.act[0],axis=[0,1]),self.W_re)
@@ -858,9 +867,12 @@ class RecurrentUnitLayer(Layer):
     :rtype: (theano.Variable | None, dict[theano.Variable,theano.Variable] | None)
     :returns: cost, known_grads
     """
+    cost_val = self.cost_val
     if self.unit.recurrent_transform:
-      return self.unit.recurrent_transform.cost(), None
-    return None, None
+      transform_cost = self.unit.recurrent_transform.cost()
+      if transform_cost is not None:
+        cost_val += transform_cost
+    return cost_val, {}
 
 
 class RecurrentUpsampleLayer(RecurrentUnitLayer):
