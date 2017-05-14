@@ -640,6 +640,24 @@ class AttentionList(AttentionBase):
     return val
 
 
+class AttentionAlign(AttentionBase):
+  """
+  alignment controlled attention
+  """
+  name = "attention_align"
+  def create_vars(self):
+    super(AttentionList, self).create_vars()
+    values = numpy.zeros((n,), dtype=theano.config.floatX)
+    self.T_b = self.add_param(self.layer.shared(value=values, borrow=True, name="T_b"), name="T_b")
+    max_skip = self.layer.attrs.get('attention_skip', 50)
+    l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + max_skip)
+    values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l,
+                                                  size=(self.layer.attrs['n_out'], max_skip)),
+                                                  dtype=theano.config.floatX)
+    self.T_W = self.add_param(self.layer.shared(value=values, borrow=True, name="T_W"), name="T_W")
+
+
+
 class AttentionTime(AttentionList):
   """
   Concatenate time-aligned base element into single list element
