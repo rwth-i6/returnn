@@ -848,19 +848,21 @@ class RecurrentUnitLayer(Layer):
 
     self.cost_val = numpy.float32(0)
     if recurrent_transform == 'attention_align':
-      z = T.dot(self.act[0],self.T_W) + self.T_b
-      z = z.reshape((z.shape[0]*z.shape[1],z.shape[2]))[:-1]
+      z = T.dot(self.act[0],self.T_W)[1:] + self.T_b
+      z = z.reshape((z.shape[0]*z.shape[1],z.shape[2]))
       idx = (self.index[1::-1].flatten() > 0).nonzero()
       y_out = T.cast(self.y_t,'int32').flatten()
       nll, _ = T.nnet.crossentropy_softmax_1hot(x=z[idx], y_idx=y_out[idx])
       self.cost_val = T.sum(nll)
-      skips = T.dot(T.nnet.softmax(z), T.arange(z.shape[1],dtype='float32'))
-      shift = T.arange(skips.shape[1],dtype='float32') * T.cast(skips.shape[0])
-      idx = shift + T.concatenate(T.zeros_like(skips[:1]),T.cumsum(skips, axis=0, dtype='float32'))
-      idx = (idx > 0).nonzero()
-      x_out = base[0].output
-      x_out = x_out.reshape((x_out.shape[0]*x_out.shape[1],x_out.shape[2]))
-      self.output = x_out[idx].reshape((self.index.shape[0],self.index.shape[1],x_out.shape[2]))
+      skips = T.dot(T.nnet.softmax(z), T.arange(z.shape[1], dtype='float32')).reshape(self.index[1:].shape)
+      shift = T.arange(self.index.shape[1], dtype='float32') * T.cast(self.base[0].index.shape[0], 'float32')
+      idx = shift + T.cumsum(skips, axis=0)
+      idx = (idx.flatten() > 0).nonzero()
+      x_out = base[0].output[::-1]
+      x_out = x_out.reshape((x_out.shape[0]*x_out.shape[1],x_out.shape[2]))[idx]
+      x_out = x_out.reshape((self.index.shape[0] - 1, self.index.shape[1], x_out.shape[1]))
+      self.output = T.concatenate([base[0].output[-1:], x_out], axis=0)[::-1]
+      self.attrs['n_out'] = base[0].attrs['n_out'] 
       self.params.update(unit.params)
       return
 
