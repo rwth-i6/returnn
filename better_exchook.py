@@ -293,9 +293,20 @@ def get_source_code(filename, lineno, module_globals):
         source_code = "".join([linecache.getline(filename, lineno, module_globals), source_code])
     return source_code
 
-def add_indent_lines(prefix, s, prefix_len=None):
+def str_visible_len(s):
+    """
+    :param str s: 
+    :return: len without escape chars
+    :rtype: int
+    """
+    import re
+    # via: https://github.com/chalk/ansi-regex/blob/master/index.js
+    s = re.sub("[\x1b\x9b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-PRZcf-nqry=><]", "", s)
+    return len(s)
+
+def add_indent_lines(prefix, s):
     if not s: return prefix
-    if prefix_len is None: prefix_len = len(prefix)
+    prefix_len = str_visible_len(prefix)
     lines = s.splitlines(True)
     return "".join([prefix + lines[0]] + [" " * prefix_len + l for l in lines[1:]])
 
@@ -382,16 +393,84 @@ class Color:
     def __call__(self, *args, **kwargs):
         return self.color(*args, **kwargs)
 
+    def py_syntax_highlight(self, s):
+        if not self.enable:
+            return s
+        state = 0
+        spaces = " \t\n"
+        ops = ".,;:+-*/%&!=|(){}[]^<>"
+        i = 0
+        curtoken = ""
+        color_args = {0: {}, len(s): {}}  # type: dict[int,dict[str]] # i -> color kwargs
+        def finish_identifier():
+            if curtoken in pykeywords:
+                color_args[max([k for k in color_args.keys() if k < i])] = {"color": "blue"}
+        while i < len(s):
+            c = s[i]
+            i += 1
+            if c == "\n":
+                if state == 3: finish_identifier()
+                color_args[i] = {}; state = 0
+            elif state == 0:
+                if c in spaces: pass
+                elif c in ops: color_args[i - 1] = {"color": "blue"}; color_args[i] = {}
+                elif c == "#": color_args[i - 1] = {"color": "white"}; state = 6
+                elif c == '"': color_args[i - 1] = {"color": "cyan"}; state = 1
+                elif c == "'": color_args[i - 1] = {"color": "cyan"}; state = 2
+                else:
+                    curtoken = c
+                    color_args[i - 1] = {}
+                    state = 3
+            elif state == 1:  # string via "
+                if c == "\\": state = 4
+                elif c == "\"":
+                    color_args[i] = {}
+                    state = 0
+            elif state == 2:  # string via '
+                if c == "\\": state = 5
+                elif c == "'":
+                    color_args[i] = {}
+                    state = 0
+            elif state == 3:  # identifier
+                if c in spaces + ops + "#\"'":
+                    finish_identifier()
+                    color_args[i] = {}
+                    state = 0
+                    i -= 1
+                else:
+                    curtoken += c
+            elif state == 4:  # escape in "
+                state = 1
+            elif state == 5:  # escape in '
+                state = 2
+            elif state == 6:  # comment
+                pass
+        if state == 3: finish_identifier()
+        out = ""
+        i = 0
+        while i < len(s):
+            j = min([k for k in color_args.keys() if k > i])
+            out += self.color(s[i:j], **color_args[i])
+            i = j
+        return out
+
 def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=False, with_color=None):
     color = Color(enable=with_color)
     out = []
     def output(s1, s2=None, **kwargs):
-        s1_ = s1
         if kwargs:
             s1 = color(s1, **kwargs)
         if s2 is not None:
-            s1 = add_indent_lines(s1, s2, prefix_len=len(s1_))
+            s1 = add_indent_lines(s1, s2)
         out.append(s1 + "\n")
+    def format_filename(s):
+        base = os.path.basename(s)
+        return (
+            color('"' + s[:-len(base)], "cyan") +
+            color(base, "cyan", bold=True) +
+            color('"', "cyan"))
+    def format_py_obj(obj):
+        return color.py_syntax_highlight(pretty_print(obj))
     if tb is None:
         try:
             tb = sys._getframe()
@@ -448,19 +527,19 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
             name = co.co_name
             output("".join([
                 '  ',
-                color("File ", "blue", bold=True), color('"%s"' % filename, "cyan"), ", ",
+                color("File ", "blue", bold=True), format_filename(filename), ", ",
                 color("line ", "blue"), color("%d" % lineno, "magenta"), ", ",
                 color("in ", "blue"), name]))
             if not os.path.isfile(filename):
                 altfn = fallback_findfile(filename)
                 if altfn:
                     output(color("    -- couldn't find file, trying this instead: ", "blue") +
-                           color('"%s"' % altfn, "cyan"))
+                           format_filename(altfn))
                     filename = altfn
             source_code = get_source_code(filename, lineno, f.f_globals)
             if source_code:
                 source_code = remove_indent_lines(replace_tab_indents(source_code)).rstrip()
-                output("    line: ", source_code, color="blue")
+                output("    line: ", color.py_syntax_highlight(source_code), color="blue")
                 if isinstance(f, DummyFrame) and not f.have_vars_available:
                     pass
                 else:
@@ -471,13 +550,15 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
                         for token in [splittedtoken[0:i] for i in range(1, len(splittedtoken) + 1)]:
                             if token in alreadyPrintedLocals: continue
                             tokenvalue = None
-                            tokenvalue = _trySet(tokenvalue, color("<local> ", "blue"), lambda: pretty_print(_resolveIdentifier(f.f_locals, token)))
-                            tokenvalue = _trySet(tokenvalue, color("<global> ", "blue"), lambda: pretty_print(_resolveIdentifier(f.f_globals, token)))
-                            tokenvalue = _trySet(tokenvalue, color("<builtin> ", "blue"), lambda: pretty_print(_resolveIdentifier(f.f_builtins, token)))
-                            tokenvalue = tokenvalue or "<not found>"
-                            output('      ' + ".".join(token) + color(" = ", "blue"), tokenvalue)
+                            tokenvalue = _trySet(tokenvalue, color("<local> ", "blue"), lambda: format_py_obj(_resolveIdentifier(f.f_locals, token)))
+                            tokenvalue = _trySet(tokenvalue, color("<global> ", "blue"), lambda: format_py_obj(_resolveIdentifier(f.f_globals, token)))
+                            tokenvalue = _trySet(tokenvalue, color("<builtin> ", "blue"), lambda: format_py_obj(_resolveIdentifier(f.f_builtins, token)))
+                            tokenvalue = tokenvalue or color("<not found>", "blue")
+                            prefix = '      %s ' % color(".", "blue", bold=True).join(token) + color("= ", "blue", bold=True)
+                            output(prefix, tokenvalue)
                             alreadyPrintedLocals.add(token)
-                    if len(alreadyPrintedLocals) == 0: output(color("       no locals", "blue"))
+                    if len(alreadyPrintedLocals) == 0:
+                        output(color("       no locals", "blue"))
             else:
                 output(color('    -- code not available --', "blue"))
             if isframe(_tb):
@@ -514,7 +595,7 @@ def better_exchook(etype, value, tb, debugshell=False, autodebugshell=True, file
     output(color("EXCEPTION", "red", bold=True))
     allLocals,allGlobals = {},{}
     if tb is not None:
-        print_tb(tb, allLocals=allLocals, allGlobals=allGlobals, file=file, withTitle=True, with_color=with_color)
+        print_tb(tb, allLocals=allLocals, allGlobals=allGlobals, file=file, withTitle=True, with_color=color.enable)
     else:
         output(color("better_exchook: traceback unknown", "red"))
 
@@ -705,6 +786,17 @@ if __name__ == "__main__":
     try:
         (lambda x: None)(__name__,
                          42)  # multiline
+    except Exception:
+        better_exchook(*sys.exc_info())
+
+    try:
+        class Obj:
+            def __repr__(self):
+                return (
+                    "<Obj multi-\n" +
+                    "     line repr>")
+        obj = Obj()
+        assert not obj
     except Exception:
         better_exchook(*sys.exc_info())
 
