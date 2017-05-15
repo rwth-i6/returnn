@@ -154,6 +154,13 @@ class LayerBase(object):
 
   @classmethod
   def _post_init_output(cls, output, network, target=None, size_target=None, sources=(), **kwargs):
+    """
+    :param Data output:
+    :param TFNetwork.TFNetwork network: 
+    :param str|None target: 
+    :param str|None size_target: 
+    :param list[LayerBase] sources: 
+    """
     # You are supposed to set self.output.placeholder to the value which you want to return by the layer.
     # Normally you are also supposed to set self.output.size_placeholder explicitly, just like self.output.placeholder.
     # However, in many cases, this will just be {0: time-lengths} and the same as from the input.
@@ -199,7 +206,9 @@ class LayerBase(object):
       if not src_name == "none"]
     if d.get("loss"):
       loss_class = get_loss_class(d["loss"])
-      d["loss"] = loss_class(**d.pop("loss_opts", {}))
+      loss = loss_class(**d.pop("loss_opts", {}))
+      assert isinstance(loss, Loss)
+      d["loss"] = loss
     if d.get("target"):
       # Not resolving this in the dict, but call get_layer to make it available.
       assert isinstance(d["target"], str)

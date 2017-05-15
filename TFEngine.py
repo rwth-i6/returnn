@@ -1060,7 +1060,7 @@ class Engine(object):
       print("WARNING: Did not finished through the whole epoch.", file=log.v1)
       sys.exit(1)
 
-  def search(self, dataset):
+  def search(self, dataset, do_eval=True):
     """
     :param Dataset.Dataset dataset:
     """
@@ -1070,13 +1070,16 @@ class Engine(object):
       if self.network:
         print("Reinit network with search flag.", file=log.v3)
       self.init_network_from_config(self.config)
+    if do_eval:
+      # It's constructed lazily and it will set used_data_keys, so make sure that we have it now.
+      self.network.get_all_errors()
     batches = dataset.generate_batches(
       recurrent_net=self.network.recurrent,
       batch_size=self.config.int('batch_size', 1),
       max_seqs=self.config.int('max_seqs', -1),
       max_seq_length=int(self.config.float('max_seq_length', 0)),
       used_data_keys=self.network.used_data_keys)
-    runner = Runner(engine=self, dataset=dataset, batches=batches, train=False, eval=True)
+    runner = Runner(engine=self, dataset=dataset, batches=batches, train=False, eval=do_eval)
     runner.run(report_prefix=self.get_epoch_str() + " search")
     assert runner.finalized
     print("search: score %s error %s" % (
