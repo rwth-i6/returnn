@@ -162,11 +162,12 @@ class LayerBase(object):
     if sources and sources[0].output.matches_var_dim_pattern(output):
       output.size_placeholder = sources[0].output.size_placeholder.copy()
     elif target or size_target:
-      # TODO: In training, this is ok. Maybe as well as for eval but not clear.
-      # In forward, mark_data_key_as_used=False should be used and anyway that target value is not available.
-      output.size_placeholder = cls._static_get_target_value(
-        target=target or size_target, network=network,
-        mark_data_key_as_used=network.train_flag is not False).size_placeholder.copy()
+      if network.train_flag is not False:
+        # TODO: In training, this is ok. Maybe as well as for eval but not clear.
+        # In forward, mark_data_key_as_used=False should be used and anyway that target value is not available.
+        output.size_placeholder = cls._static_get_target_value(
+          target=target or size_target, network=network,
+          mark_data_key_as_used=network.train_flag is not False).size_placeholder.copy()
     if any([(not src.output.available_for_inference) for src in sources]):
       output.available_for_inference = False
 
