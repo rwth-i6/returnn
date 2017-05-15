@@ -682,9 +682,9 @@ class AttentionAlign(AttentionBase):
     #nll, _ = T.nnet.crossentropy_softmax_1hot(x=z[idx], y_idx=y_out[idx])
     smooth = T.constant(self.attrs['smooth'], 'float32')
     n = T.cast(self.n[0],'int32')
-    t = smooth * self.y_t[n] + (numpy.float32(1) - smooth) * T.cast(T.argmax(z,axis=1),dtype='float32')
+    t = T.dot(T.nnet.softmax(z), T.arange(self.base[0].attrs['max_skip'],dtype='float32'))
+    t = smooth * self.y_t[n] + (numpy.float32(1) - smooth) * t
     pos = T.cast(T.maximum(T.round(self.t),numpy.float32(0)), 'int32')
-
     inp = T.dot(self.B[pos,T.arange(pos.shape[0])], self.W_att_in)
     #updates[self.cost_sum] = T.sum(nll,dtype='float32').dimshuffle('x').repeat(1,axis=0)
     updates[self.t] = self.t - t
