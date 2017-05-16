@@ -151,7 +151,6 @@ class OutputLayer(Layer):
       out_arg, out_max = max_and_argmax_sparse(s0, s1, weight, mask, out_arg, out_max)
       assert out_arg.ndim == 2
       self.y_data_flat = out_arg.astype("int32")
-
     self.target_index = self.index
     if time_limit == 'inf':
       num = T.cast(T.sum(self.index), 'float32')

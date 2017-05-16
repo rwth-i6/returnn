@@ -3283,59 +3283,22 @@ class InvAlignSegmentationLayer2(_NoOpLayer):
         kwargs['n_out'] = base[0].attrs['n_out']
         self.set_attr('n_out', base[0].attrs['n_out'])
     else:
-        kwargs['n_out'] = self.sources[0].y_in[self.sources[0].attrs['target']].n_out
-        self.set_attr('n_out', self.sources[0].y_in[self.sources[0].attrs['target']].n_out)
+        kwargs['n_out'] = self.sources[0].attrs['n_out']
+        self.set_attr('n_out', self.sources[0].attrs['n_out'])
     self.set_attr('window', window)
     self.set_attr('win', win)
+    self.attention = self.sources[0].attention
     assert len(self.sources) == 1
     if not self.eval_flag:
-      assert self.sources[0].attention is not None
-      b = self.sources[0].attention.shape[1]
-      t = self.sources[0].attention.shape[2]
-      att = self.sources[0].attention.argmax(axis=2)
-      att = T.switch(self.sources[0].index > 0, att + (T.arange(b) * t), att)
-      att = att.T
-      if window:
-          maxlen = T.cast(window/2,'int32')
-          att = att.nonzero_values()
-          cond = T.arange(-maxlen,maxlen).repeat(att.shape[0]).reshape((2*maxlen,att.shape[0]))
-          att_rep = att.repeat(T.cast(2*maxlen,'int32')).reshape((att.shape[0],T.cast(2*maxlen,'int32'))).T #repeat att maxlen times
-          finalcond = T.maximum(att_rep + cond,-1)
-          finalcond = T.switch(T.lt(finalcond,T.max(att)),finalcond,-1)
-      else:
-          maxlen = T.concatenate([T.stack(att[0,0]),T.extra_ops.diff(att).flatten().sort()])[-1]
-          avglen = T.mean(T.concatenate([T.stack(att[0,0]),T.extra_ops.diff(att).flatten()]))
-          # concatenate first index in each row, i.e., if att is [[3,5,8],[15,17,20]], make it  [[0,3,5,8],[12,15,17,20]]
-          att_with_firstindex = T.concatenate([T.maximum(0,att[:,0].dimshuffle(0,'x')-maxlen),att],axis=1)
-          att_sorted = att_with_firstindex.sort() #sort the rows so that [0,3,5,8,0,0,0] becomes [0,0,0,0,3,5,8]
-          att_wo_lastcol = T.concatenate([[0],att_sorted[:,:att_sorted.shape[1]-1].flatten().nonzero_values()])
-          ind = att_wo_lastcol.shape[0] - T.sum(T.extra_ops.diff(att_with_firstindex).flatten()>0)
-          att_wo_lastcol = att_wo_lastcol[ind:]
-          att_rep = att_wo_lastcol.repeat(T.cast(maxlen,'int32')).reshape((att_wo_lastcol.shape[0],T.cast(maxlen,'int32'))).T #repeat att maxlen times
-          incr = T.arange(1,maxlen+1).repeat(att_wo_lastcol.shape[0]).reshape((T.cast(maxlen,'int32'),att_wo_lastcol.shape[0])) #range of maxlen repeated att(shape) times
-          maskarr = T.extra_ops.diff(att_with_firstindex).flatten() #diff array
-          maskarr = T.clip(maskarr,0,T.max(maskarr)).nonzero_values() #clip negative values to 0 and remove zeroes
-          # repeat maxlen times (this now contains the length of each segment)
-          maskarr = maskarr.repeat(T.cast(maxlen,'int32')).reshape((att_wo_lastcol.shape[0],T.cast(maxlen,'int32'))).dimshuffle(1,0)
-          #comparing incr and maskarr, you get the value to be added to att_rep at each row and column.
-          # If incr > maskarr, then cond has -att_rep-1 so that when it is subtracted from att_rep,
-          #we get -1. Later z is concatenated with a row of 0s at the end so that this is retreived when z[-1] is encountered (to simulate [3,4,0,0] for example)
-          cond     = T.switch(T.lt(incr, maskarr+1), incr, -att_rep - 1)
-          finalcond = att_rep + cond
-      finalcond = finalcond.sort(axis=0)
-      if base:
-          z = base[0].output.dimshuffle(1,0,2).reshape((base[0].output.shape[0]*base[0].output.shape[1],base[0].output.shape[2]))
-      else:
-          z = self.sources[0].z.dimshuffle(1, 0, 2).reshape((self.sources[0].z.shape[0] * self.sources[0].z.shape[1], self.sources[0].z.shape[2]))
-      z = T.concatenate([z,T.zeros((1,z.shape[1]))],axis=0)
-      result = z[T.cast(finalcond,'int32')]
+      result = T.concatenate([s.output for s in self.sources],axis=-1)
+      self.index = self.sources[0].index
     else:
-      timesteps = self.sources[0].sources[0].output.shape[0]
-      batches = self.sources[0].sources[0].output.shape[1]
+      timesteps = self.sources[0].output.shape[0]
+      batches = self.sources[0].output.shape[1]
       self.timesteps = timesteps
       self.batches = batches
-      z = self.sources[0].sources[0].output.dimshuffle(1, 0, 2).reshape(
-        (self.sources[0].sources[0].output.shape[0] * self.sources[0].sources[0].output.shape[1], self.sources[0].sources[0].output.shape[2]))
+      z = self.sources[0].output.dimshuffle(1, 0, 2).reshape(
+        (self.sources[0].output.shape[0] * self.sources[0].output.shape[1], self.sources[0].output.shape[2]))
       att = T.arange(timesteps).repeat(win).reshape((timesteps, win)) + T.arange(win)
       att = att.T
       att = T.where(att >= timesteps, -timesteps * batches, att)
@@ -3345,9 +3308,9 @@ class InvAlignSegmentationLayer2(_NoOpLayer):
       z = T.concatenate([z, T.zeros((1, z.shape[1]))], axis=0)
       result = z[fullind]
       self.fullind = fullind
+      self.index = T.ones((result.shape[0], result.shape[1]), 'int8')
     self.z = result
     self.make_output(result)
-    self.index = T.ones((self.output.shape[0], self.output.shape[1]), 'int8')
 
 class ReshapeLayer(StateVector):
   layer_class = "reshape"
@@ -3384,17 +3347,39 @@ class SegmentFinalStateLayer(_NoOpLayer):
     super(SegmentFinalStateLayer, self).__init__(**kwargs)
     kwargs['n_out'] = sum([s.attrs['n_out'] for s in kwargs['sources']])
     self.set_attr('n_out',kwargs['n_out'])
-    if hasattr(self.sources[0],'inv_att'):
-      inv_att = self.sources[0].inv_att.dimshuffle(2,1,0) #TBN
+    if not self.eval_flag:
+      if hasattr(self.sources[0],'inv_att'):
+        inv_att = self.sources[0].inv_att.dimshuffle(2,1,0) #TBN
+      else:
+        assert base
+        inv_att = base[0].inv_att.dimshuffle(2,1,0) #TBN
+      z = self.sources[0].output.dimshuffle(1,0,2).reshape((self.sources[0].output.shape[0]*self.sources[0].output.shape[1],self.sources[0].output.shape[2]))
+      max_att = T.max(inv_att,axis=-1).T.flatten().nonzero()
+      z_aln = z[max_att]
+      z_aln = z_aln.dimshuffle('x',0,1)
+      self.make_output(z_aln)
+      self.index = T.ones((self.output.shape[0],self.output.shape[1]))
     else:
-      assert base
-      inv_att = base[0].inv_att.dimshuffle(2,1,0) #TBN
-    z = self.sources[0].output.dimshuffle(1,0,2).reshape((self.sources[0].output.shape[0]*self.sources[0].output.shape[1],self.sources[0].output.shape[2]))
-    max_att = T.max(inv_att,axis=-1).T.flatten().nonzero()
-    z_aln = z[max_att]
-    z_aln = z_aln.dimshuffle('x',0,1)
-    self.make_output(z_aln)
-    self.index = T.ones((self.output.shape[0],self.output.shape[1]))
+      assert base is not None
+      self.base = base
+      #get the original timesteps, batches and window parameter
+      t = base[0].timesteps
+      b = base[0].batches
+      w = base[0].attrs['win']
+      d = self.attrs['n_out']
+      z = T.concatenate([s.output for s in self.sources],axis=-1)
+      ze = z.reshape((z.shape[0]*z.shape[1],z.shape[2])) #T*B,D
+      fullind = base[0].fullind#full index from invalignsegment layer
+      ze = T.concatenate([ze,T.zeros((1,ze.shape[1]))],axis=0)
+      for i in range(w):
+        fullind = T.set_subtensor(fullind[i],T.roll(fullind[i],i))
+        if i>0:
+            fullind = T.inc_subtensor(fullind[i],T.where(fullind[i]>0,i*t*b-i,0))
+      self.fullind = fullind
+      zfinal = ze[fullind.T.flatten()].dimshuffle('x',0,1)
+      self.make_output(zfinal)
+      self.act = [self.output, T.zeros_like(self.output)]
+      self.index = T.ones((1,self.output.shape[1]),'int8')
 
 class ScaleGradientOp(theano.gof.Op):
   view_map = {0: [0]}
