@@ -1045,6 +1045,21 @@ def swapaxes(x, axis1, axis2):
     return tf.transpose(x, perm=perm)
 
 
+def move_axis(x, old_axis, new_axis):
+  """
+  :param tf.Tensor x: 
+  :param int old_axis: 
+  :param int new_axis: 
+  """
+  with tf.name_scope("move_axis"):
+    ndim = x.get_shape().ndims
+    assert ndim is not None, "not supported currently: %r" % x
+    perm = list(range(ndim))
+    old = perm.pop(old_axis)
+    perm.insert(new_axis, old)
+    return tf.transpose(x, perm)
+
+
 def sequence_mask(lengths, **kwargs):
   """
   Wraps around tf.sequence_mask().
@@ -2080,34 +2095,50 @@ def optional_add(*args):
   return y
 
 
-def windowed_batch(source, window, merge_window_dim=False):
+def windowed_batch(source, window, time_axis=1, new_window_axis=2):
   """
-  :param tf.Tensor source: 3d tensor of shape (n_time, n_batch, n_dim)
+  :param tf.Tensor source: N-D tensor of shape (..., n_time, ...)
   :param int|tf.Tensor window: window size
-  :return: tensor of shape (n_time, n_batch, window, n_dim) (optionally last two dims merged)
+  :param int time_axis:
+  :param int new_window_axis:
+  :return: tensor of shape (..., n_time, ..., window, ...)
   :rtype: tf.Tensor
   """
   with tf.name_scope("windowed_batch"):
-    n_time = source.shape[0]
-    n_batch = source.shape[1]
-    n_dim = source.shape[2]
+    if time_axis != 0:
+      source = move_axis(source, time_axis, 0)  # (n_time,...)
+    source_shape = tf.shape(source)
+    n_time = source_shape[0]
     w_right = window // 2
     w_left = window - w_right - 1
-    pad_left = tf.zeros((w_left, n_batch, n_dim), dtype=source.dtype)
-    pad_right = tf.zeros((w_right, n_batch, n_dim), dtype=source.dtype)
+    pad_left = tf.zeros(tf.concat([[w_left], source_shape[1:]], axis=0), dtype=source.dtype)
+    pad_right = tf.zeros(tf.concat([[w_left], source_shape[1:]], axis=0), dtype=source.dtype)
     padded = tf.concat([pad_left, source, pad_right], axis=0)  # shape[0] == n_time + window - 1
-    tiled_dimshuffle = expand_dims_unbroadcast(padded, axis=0, dim=window)  # (window,n_time+window-1,batch,dim)
+    tiled_dimshuffle = expand_dims_unbroadcast(padded, axis=0, dim=window)  # (window,n_time+window-1,...)
     # We want to shift every dim*time block by one to the left.
     # To do this, we interpret that we have one more time frame (i.e. n_time+window).
     # We have to do some dimshuffling so that we get the right layout, then we can flatten,
     # add some padding, and then dimshuffle it back.
     # Then we can take out the first n_time frames.
     tiled_flat = tf.reshape(tiled_dimshuffle, [-1])
-    rem = n_batch * n_dim * window
+    rem = window * tf.reduce_prod(source_shape[1:])
     tiled_flat_pad_right = tf.concat([tiled_flat, tf.zeros((rem,), dtype=source.dtype)], axis=0)
-    tiled_reshape_shift = tf.reshape(tiled_flat_pad_right, (window, n_time + window, n_batch, n_dim))  # add time frame
-    final_dimshuffle = tf.transpose(tiled_reshape_shift, (1, 2, 0, 3))  # (n_time+window,batch,window,dim)
-    final_sub = final_dimshuffle[:n_time]  # (n_time,batch,window,dim)
-    if merge_window_dim:
-      final_sub = tf.reshape(final_sub, (n_time, n_batch, window * n_dim))
-    return final_sub
+    tiled_reshape_shift = tf.reshape(
+      tiled_flat_pad_right,
+      tf.concat([(window, n_time + window),
+                 source_shape[1:]], axis=0))  # add time frame, (window,n_time+window,...)
+    final = tiled_reshape_shift
+    if new_window_axis != 0:
+      final = move_axis(final, 0, new_window_axis)  # (n_time+window,...,window,...)
+      final = final[:n_time]  # (n_time,...,window,...)
+    else:
+      final = final[:, :n_time]  # (window,n_time,...)
+    # Move time-axis back to its original place.
+    if new_window_axis <= time_axis:
+      time_axis += 1  # New window axis was inserted before.
+    if time_axis != 0:
+      if new_window_axis != 0:
+        final = move_axis(final, 0, time_axis)
+      else:
+        final = move_axis(final, 1, time_axis)
+    return final

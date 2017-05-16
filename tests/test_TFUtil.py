@@ -277,6 +277,15 @@ def test_expand_multiple_dims():
   assert_equal(list(session.run(tf.shape(expand_multiple_dims(x, (1, 3, 5))))), [2, 1, 3, 1, 5, 1])
 
 
+def test_move_axis():
+  x = tf.zeros((2, 3, 5))
+  assert_equal(list(session.run(tf.shape(x))), [2, 3, 5])
+  assert_equal(list(session.run(tf.shape(move_axis(x, old_axis=0, new_axis=1)))), [3, 2, 5])
+  assert_equal(list(session.run(tf.shape(move_axis(x, old_axis=0, new_axis=2)))), [3, 5, 2])
+  assert_equal(list(session.run(tf.shape(move_axis(x, old_axis=2, new_axis=0)))), [5, 2, 3])
+  assert_equal(list(session.run(tf.shape(move_axis(x, old_axis=2, new_axis=1)))), [2, 5, 3])
+
+
 def test_constant_with_shape():
   x = session.run(constant_with_shape(3, [2, 3]))
   assert_equal(x.shape, (2, 3))
@@ -310,10 +319,10 @@ def naive_windowed_batch(source, window):
   pad_left = numpy.zeros((w_left, n_batch, n_dim), dtype=dtype)
   pad_right = numpy.zeros((w_right, n_batch, n_dim), dtype=dtype)
   padded = numpy.concatenate([pad_left, source, pad_right], axis=0)
-  final = numpy.zeros((n_time, n_batch, window, n_dim), dtype=dtype)
+  final = numpy.zeros((n_time, window, n_batch, n_dim), dtype=dtype)
   for t in range(n_time):
     for w in range(window):
-      final[t, :, w] = padded[t + w]
+      final[t, w] = padded[t + w]
   return final
 
 
@@ -326,7 +335,7 @@ def test_windowed_batch_small():
   print("source:")
   print(source)
   naive = naive_windowed_batch(source, window=window)
-  real = windowed_batch(source, window=window).eval()
+  real = windowed_batch(source, window=window, time_axis=0, new_window_axis=1).eval()
   print("naive:")
   print(naive)
   print("real:")
@@ -342,5 +351,5 @@ def test_windowed_batch_big():
   numpy.random.seed(123)
   source = numpy.random.random((n_time, n_batch, n_dim)).astype("float32")
   naive = naive_windowed_batch(source, window=window)
-  real = windowed_batch(source, window=window).eval()
+  real = windowed_batch(source, window=window, time_axis=0, new_window_axis=1).eval()
   numpy.testing.assert_almost_equal(naive, real)
