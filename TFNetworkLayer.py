@@ -1007,15 +1007,15 @@ class MergeDimsLayer(_ConcatInputLayer):
   """
   layer_class = "merge_dims"
 
-  def __init__(self, axes, **kwargs):
+  def __init__(self, axes, n_out=None, **kwargs):
     """
-    :param str|list[str]|list[int] axes: see Data.get_axes_from_description()  
+    :param str|list[str]|list[int] axes: see Data.get_axes_from_description()
+    :param int|None n_out:
     """
     super(MergeDimsLayer, self).__init__(**kwargs)
     axes = self.input_data.get_axes_from_description(axes)
-    if len(axes) <= 1:
-      self.output.placeholder = self.input_data.placeholder
-    else:
+    x = self.input_data.placeholder
+    if len(axes) > 1:
       axes = sorted(axes)
       # Transpose so that all axes are behind each other.
       perm = list(range(self.input_data.batch_ndim))
@@ -1023,7 +1023,7 @@ class MergeDimsLayer(_ConcatInputLayer):
       for i, a in enumerate(axes[1:]):
         perm.remove(a)
         perm.insert(i0 + i + 1, a)
-      x = tf.transpose(self.input_data.placeholder, perm)
+      x = tf.transpose(x, perm)
       # Now merge all dims with a reshape.
       shape = tf.shape(x)
       i1 = i0 + len(axes)
@@ -1033,10 +1033,14 @@ class MergeDimsLayer(_ConcatInputLayer):
           shape[:i0],
           tf.reduce_prod(shape[i0:i1]),
           shape[i1:]], axis=0))
-      self.output.placeholder = x
+    if n_out is not None and not self.output.sparse:
+      from TFUtil import check_input_dim
+      x = check_input_dim(x, axis=-1, dim=n_out)
+    self.output.placeholder = x
 
   @classmethod
-  def get_out_data_from_opts(cls, axes, sources=(), **kwargs):
+  def get_out_data_from_opts(cls, name, axes, sources=(), n_out=None, out_type=None, **kwargs):
+    assert not out_type, "currently ignored"
     data = get_concat_sources_data_template(sources)
     axes = data.get_axes_from_description(axes)
     if len(axes) <= 1:
@@ -1044,10 +1048,21 @@ class MergeDimsLayer(_ConcatInputLayer):
     axes = sorted(axes)
     import numpy
     new_shape = list(data.shape)
+    res_dim = None
     if all([data.batch_shape[i] is not None for i in axes]):
-      new_shape[data.get_batch_axis_excluding_batch(axes[0])] = numpy.prod([data.batch_shape[i] for i in axes])
-    else:
-      new_shape[data.get_batch_axis_excluding_batch(axes[0])] = None
+      res_dim = numpy.prod([data.batch_shape[i] for i in axes])
+    if not data.sparse and (data.batch_ndim - 1) in axes:  # will also merge the feature dim
+      assert axes == list(range(axes[0], data.batch_ndim)), "not supported currently with holes"
+      if res_dim is not None and n_out is not None:
+        assert res_dim == n_out
+      elif res_dim is not None and n_out is None:
+        pass
+      elif res_dim is None and n_out is not None:
+        res_dim = n_out
+      else:
+        raise Exception("you need to provide n_out for layer %r" % name)
+      data.dim = res_dim
+    new_shape[data.get_batch_axis_excluding_batch(axes[0])] = res_dim
     for i in reversed(axes[1:]):
       new_shape.pop(i)
       if data.batch_dim_axis >= i:
