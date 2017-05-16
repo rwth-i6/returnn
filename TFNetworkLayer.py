@@ -999,6 +999,65 @@ class WindowLayer(_ConcatInputLayer):
     return data
 
 
+class MergeDimsLayer(_ConcatInputLayer):
+  """
+  Merges a list of axes into a single one.
+  E.g. input is (batch, width, height, dim) and axes=(1,2), then we get (batch, width*height, dim).
+  Or input is (batch, time, height, dim) and axes="except_time", then we get (batch, time, height*dim).
+  """
+  layer_class = "merge_dims"
+
+  def __init__(self, axes, **kwargs):
+    """
+    :param str|list[str]|list[int] axes: see Data.get_axes_from_description()  
+    """
+    super(MergeDimsLayer, self).__init__(**kwargs)
+    axes = self.input_data.get_axes_from_description(axes)
+    if len(axes) <= 1:
+      self.output.placeholder = self.input_data.placeholder
+    else:
+      axes = sorted(axes)
+      # Transpose so that all axes are behind each other.
+      perm = list(range(self.input_data.batch_ndim))
+      i0 = axes[0]
+      for i, a in enumerate(axes[1:]):
+        perm.remove(a)
+        perm.insert(i0 + i + 1, a)
+      x = tf.transpose(self.input_data.placeholder, perm)
+      # Now merge all dims with a reshape.
+      shape = tf.shape(x)
+      i1 = i0 + len(axes)
+      x = tf.reshape(
+        x,
+        shape=tf.concat([
+          shape[:i0],
+          tf.reduce_prod(shape[i0:i1]),
+          shape[i1:]], axis=0))
+      self.output.placeholder = x
+
+  @classmethod
+  def get_out_data_from_opts(cls, axes, sources=(), **kwargs):
+    data = get_concat_sources_data_template(sources)
+    axes = data.get_axes_from_description(axes)
+    if len(axes) <= 1:
+      return data
+    axes = sorted(axes)
+    import numpy
+    new_shape = list(data.shape)
+    if all([data.batch_shape[i] is not None for i in axes]):
+      new_shape[data.get_batch_axis_excluding_batch(axes[0])] = numpy.prod([data.batch_shape[i] for i in axes])
+    else:
+      new_shape[data.get_batch_axis_excluding_batch(axes[0])] = None
+    for i in reversed(axes[1:]):
+      new_shape.pop(i)
+      if data.batch_dim_axis >= i:
+        data.batch_dim_axis -= 1
+      if data.time_dim_axis is not None and data.time_dim_axis >= i:
+        data.time_dim_axis -= 1
+    data.shape = tuple(new_shape)
+    return data
+
+
 class ConvLayer(_ConcatInputLayer):
   """
   A generic convolution layer which supports 1D, 2D and 3D convolution.

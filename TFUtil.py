@@ -402,7 +402,7 @@ class Data(object):
     if isinstance(axes, str):
       axes = axes.lower()
       if axes in ["b", "batch"]:
-        axes = 0
+        axes = self.batch_dim_axis
       elif axes == "spatial":
         axes = self.get_dynamic_batch_axes()
         axes.remove(self.batch_dim_axis)
@@ -414,6 +414,11 @@ class Data(object):
       elif axes in ["t", "time"]:
         assert self.time_dim_axis is not None
         axes = self.time_dim_axis
+      elif axes == "except_time":
+        axes = list(range(self.batch_ndim))
+        axes.remove(self.batch_dim_axis)
+        assert self.time_dim_axis is not None
+        axes.remove(self.time_dim_axis)
       elif axes in ["f", "feature", "non_spatial"]:
         axes = self.get_non_dynamic_batch_axes()
       else:
@@ -429,7 +434,11 @@ class Data(object):
         assert isinstance(i, (str, tuple, list))
         flat_axes += self.get_axes_from_description(i)
     flat_axes = [i % self.batch_ndim for i in flat_axes]
-    return flat_axes
+    res = []
+    for i in flat_axes:
+      if i not in res:
+        res.append(i)
+    return res
 
   def get_axis_from_description(self, axis):
     """
