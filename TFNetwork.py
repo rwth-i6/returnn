@@ -277,7 +277,7 @@ class TFNetwork(object):
       output = layer_class.get_out_data_from_opts(**layer_desc)
       layer = layer_class(output=output, **layer_desc)
       layer.post_init()
-      if self._config.bool("debug_print_layer_output_shape", False):
+      if self._config and self._config.bool("debug_print_layer_output_shape", False):
         layer.output.placeholder = tf.Print(
           layer.output.placeholder, [layer_class.cls_get_tf_scope_name(name), "shape:", tf.shape(layer.output.placeholder)],
           summarize=10, name="debug_print_layer_output_shape")
