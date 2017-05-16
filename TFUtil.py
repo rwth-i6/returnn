@@ -2095,10 +2095,11 @@ def optional_add(*args):
   return y
 
 
-def windowed_nd(source, window, time_axis=1, new_window_axis=2):
+def windowed_nd(source, window, padding="same", time_axis=1, new_window_axis=2):
   """
   :param tf.Tensor source: N-D tensor of shape (..., n_time, ...)
   :param int|tf.Tensor window: window size
+  :param str padding: "same" or "valid"
   :param int time_axis:
   :param int new_window_axis:
   :return: tensor of shape (..., n_time, ..., window, ...)
@@ -2109,12 +2110,18 @@ def windowed_nd(source, window, time_axis=1, new_window_axis=2):
       source = move_axis(source, time_axis, 0)  # (n_time,...)
     source_shape = tf.shape(source)
     n_time = source_shape[0]
-    w_right = window // 2
-    w_left = window - w_right - 1
-    pad_left = tf.zeros(tf.concat([[w_left], source_shape[1:]], axis=0), dtype=source.dtype)
-    pad_right = tf.zeros(tf.concat([[w_left], source_shape[1:]], axis=0), dtype=source.dtype)
-    padded = tf.concat([pad_left, source, pad_right], axis=0)  # shape[0] == n_time + window - 1
-    tiled_dimshuffle = expand_dims_unbroadcast(padded, axis=0, dim=window)  # (window,n_time+window-1,...)
+    if padding == "same":
+      n_out_time = n_time
+      w_right = window // 2
+      w_left = window - w_right - 1
+      pad_left = tf.zeros(tf.concat([[w_left], source_shape[1:]], axis=0), dtype=source.dtype)
+      pad_right = tf.zeros(tf.concat([[w_left], source_shape[1:]], axis=0), dtype=source.dtype)
+      source = tf.concat([pad_left, source, pad_right], axis=0)  # shape[0] == n_time + window - 1
+    elif padding == "valid":
+      n_out_time = n_time - window + 1
+    else:
+      raise Exception("invalid padding %r" % padding)
+    tiled_dimshuffle = expand_dims_unbroadcast(source, axis=0, dim=window)  # (window,n_time+window-1,...)
     # We want to shift every dim*time block by one to the left.
     # To do this, we interpret that we have one more time frame (i.e. n_time+window).
     # We have to do some dimshuffling so that we get the right layout, then we can flatten,
@@ -2130,9 +2137,9 @@ def windowed_nd(source, window, time_axis=1, new_window_axis=2):
     final = tiled_reshape_shift
     if new_window_axis != 0:
       final = move_axis(final, 0, new_window_axis)  # (n_time+window,...,window,...)
-      final = final[:n_time]  # (n_time,...,window,...)
+      final = final[:n_out_time]  # (n_out_time,...,window,...)
     else:
-      final = final[:, :n_time]  # (window,n_time,...)
+      final = final[:, :n_out_time]  # (window,n_out_time,...)
     # Move time-axis back to its original place.
     if new_window_axis <= time_axis:
       time_axis += 1  # New window axis was inserted before.

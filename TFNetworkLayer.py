@@ -964,6 +964,41 @@ class GatingLayer(_ConcatInputLayer):
       time_dim_axis=input_data.time_dim_axis)
 
 
+class WindowLayer(_ConcatInputLayer):
+  """
+  Adds a window dimension.
+  By default, uses the time axis and goes over it with a sliding window.
+  The new axis for the window is created right after the time axis.
+  Will always return as batch major mode.
+  E.g. if the input is (batch, time, dim), the output is (batch, time, window_size, dim).
+  """
+  layer_class = "window"
+  recurrent = True  # we must not allow any shuffling in the time-dim or so
+
+  def __init__(self, window_size, axis="T", padding="same", **kwargs):
+    """
+    :param int window_size: 
+    :param str|int axis: see Data.get_axis_from_description()
+    :param str padding: "same" or "valid"
+    :param kwargs: 
+    """
+    super(WindowLayer, self).__init__(**kwargs)
+    data = self.input_data.copy_as_batch_major()
+    axis = data.get_axis_from_description(axis)
+    from TFUtil import windowed_nd
+    self.output.placeholder = windowed_nd(
+      data.placeholder,
+      window=window_size, padding=padding, time_axis=axis, new_window_axis=axis + 1)
+
+  @classmethod
+  def get_out_data_from_opts(cls, axis="T", sources=(), **kwargs):
+    data = get_concat_sources_data_template(sources)
+    data = data.copy_as_batch_major()
+    axis = data.get_axis_from_description(axis)
+    data.shape = data.shape[:axis] + (None,) + data.shape[axis:]  # add new axis right after
+    return data
+
+
 class ConvLayer(_ConcatInputLayer):
   """
   A generic convolution layer which supports 1D, 2D and 3D convolution.
