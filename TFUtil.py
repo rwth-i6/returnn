@@ -2078,3 +2078,36 @@ def optional_add(*args):
       else:
         y = y + v
   return y
+
+
+def windowed_batch(source, window, merge_window_dim=False):
+  """
+  :param tf.Tensor source: 3d tensor of shape (n_time, n_batch, n_dim)
+  :param int|tf.Tensor window: window size
+  :return: tensor of shape (n_time, n_batch, window, n_dim) (optionally last two dims merged)
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope("windowed_batch"):
+    n_time = source.shape[0]
+    n_batch = source.shape[1]
+    n_dim = source.shape[2]
+    w_right = window // 2
+    w_left = window - w_right - 1
+    pad_left = tf.zeros((w_left, n_batch, n_dim), dtype=source.dtype)
+    pad_right = tf.zeros((w_right, n_batch, n_dim), dtype=source.dtype)
+    padded = tf.concat([pad_left, source, pad_right], axis=0)  # shape[0] == n_time + window - 1
+    tiled_dimshuffle = expand_dims_unbroadcast(padded, axis=0, dim=window)  # (window,n_time+window-1,batch,dim)
+    # We want to shift every dim*time block by one to the left.
+    # To do this, we interpret that we have one more time frame (i.e. n_time+window).
+    # We have to do some dimshuffling so that we get the right layout, then we can flatten,
+    # add some padding, and then dimshuffle it back.
+    # Then we can take out the first n_time frames.
+    tiled_flat = tf.reshape(tiled_dimshuffle, [-1])
+    rem = n_batch * n_dim * window
+    tiled_flat_pad_right = tf.concat([tiled_flat, tf.zeros((rem,), dtype=source.dtype)], axis=0)
+    tiled_reshape_shift = tf.reshape(tiled_flat_pad_right, (window, n_time + window, n_batch, n_dim))  # add time frame
+    final_dimshuffle = tf.transpose(tiled_reshape_shift, (1, 2, 0, 3))  # (n_time+window,batch,window,dim)
+    final_sub = final_dimshuffle[:n_time]  # (n_time,batch,window,dim)
+    if merge_window_dim:
+      final_sub = tf.reshape(final_sub, (n_time, n_batch, window * n_dim))
+    return final_sub
