@@ -1073,6 +1073,62 @@ class MergeDimsLayer(_ConcatInputLayer):
     return data
 
 
+class ExpandDimsLayer(_ConcatInputLayer):
+  """
+  Adds some axis.
+  """
+  layer_class = "expand_dims"
+
+  def __init__(self, axis, dim=1, **kwargs):
+    """
+    :param str|int axis: axis to add, e.g. "F"|"feature" or "spatial".
+      if this is an integer, the input data is first converted into batch-major mode,
+      and then this is counted with batch-dim.
+    :param int dim: dimension of new axis (1 by default)
+    """
+    super(ExpandDimsLayer, self).__init__(**kwargs)
+    data = self.input_data
+    if isinstance(axis, int):
+      data = data.copy_as_batch_major()
+    axis = self._get_axis(data=data, axis=axis)
+    from TFUtil import expand_dims_unbroadcast
+    self.output.placeholder = expand_dims_unbroadcast(data.placeholder, axis=axis, dim=dim)
+
+  @classmethod
+  def _get_axis(cls, data, axis):
+    """
+    :param Data data:
+    :param str axis: e.g. "F"|"feature" or "spatial" 
+    :return: axis as int for data.placeholder
+    :rtype: int
+    """
+    if isinstance(axis, int):
+      return axis
+    assert isinstance(axis, str)
+    axis = axis.lower()
+    if axis in ["f", "feature"]:
+      assert not data.sparse
+      return data.batch_ndim
+    elif axis == "spatial":
+      if data.sparse:
+        return data.batch_ndim
+      else:
+        return data.batch_ndim - 1
+    else:
+      raise Exception("invalid axis %r" % axis)
+
+  @classmethod
+  def get_out_data_from_opts(cls, axis, dim=1, sources=(), **kwargs):
+    data = get_concat_sources_data_template(sources)
+    if isinstance(axis, int):
+      data = data.copy_as_batch_major()
+    axis = cls._get_axis(data=data, axis=axis)
+    if axis == data.batch_ndim and not data.sparse:
+      data.dim = dim
+    data.shape = data.shape[:axis] + (dim,) + data.shape[axis:]
+    return data
+
+
 class ConvLayer(_ConcatInputLayer):
   """
   A generic convolution layer which supports 1D, 2D and 3D convolution.
