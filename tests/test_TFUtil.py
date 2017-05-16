@@ -326,7 +326,7 @@ def naive_windowed_batch(source, window):
   return final
 
 
-def test_windowed_batch_small():
+def test_windowed_nd_small():
   n_time = 2
   n_batch = 2
   n_dim = 2
@@ -335,7 +335,7 @@ def test_windowed_batch_small():
   print("source:")
   print(source)
   naive = naive_windowed_batch(source, window=window)
-  real = windowed_batch(source, window=window, time_axis=0, new_window_axis=1).eval()
+  real = windowed_nd(source, window=window, time_axis=0, new_window_axis=1).eval()
   print("naive:")
   print(naive)
   print("real:")
@@ -343,7 +343,7 @@ def test_windowed_batch_small():
   numpy.testing.assert_almost_equal(naive, real)
 
 
-def test_windowed_batch_big():
+def test_windowed_nd_big():
   n_time = 11
   n_batch = 5
   n_dim = 7
@@ -351,5 +351,5 @@ def test_windowed_batch_big():
   numpy.random.seed(123)
   source = numpy.random.random((n_time, n_batch, n_dim)).astype("float32")
   naive = naive_windowed_batch(source, window=window)
-  real = windowed_batch(source, window=window, time_axis=0, new_window_axis=1).eval()
+  real = windowed_nd(source, window=window, time_axis=0, new_window_axis=1).eval()
   numpy.testing.assert_almost_equal(naive, real)

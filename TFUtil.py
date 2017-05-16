@@ -2095,7 +2095,7 @@ def optional_add(*args):
   return y
 
 
-def windowed_batch(source, window, time_axis=1, new_window_axis=2):
+def windowed_nd(source, window, time_axis=1, new_window_axis=2):
   """
   :param tf.Tensor source: N-D tensor of shape (..., n_time, ...)
   :param int|tf.Tensor window: window size
