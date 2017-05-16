@@ -1093,12 +1093,13 @@ class ExpandDimsLayer(_ConcatInputLayer):
     axis = self._get_axis(data=data, axis=axis)
     from TFUtil import expand_dims_unbroadcast
     self.output.placeholder = expand_dims_unbroadcast(data.placeholder, axis=axis, dim=dim)
+    self.output.size_placeholder = {(i if (data.get_batch_axis(i) < axis) else i + 1): v for (i, v) in data.size_placeholder.items()}
 
   @classmethod
   def _get_axis(cls, data, axis):
     """
     :param Data data:
-    :param str axis: e.g. "F"|"feature" or "spatial" 
+    :param str axis: e.g. "F"|"feature" or "spatial"
     :return: axis as int for data.placeholder
     :rtype: int
     """
@@ -1909,8 +1910,6 @@ class Loss(object):
       # Flat variants are with batch,time collapsed into one, masked via seq_lens.
       self.output_flat = None
       self.output_before_softmax_flat = None
-      if output_with_activation:
-        assert output_with_activation.y is output.placeholder
       if self.output.have_tim_axis():
         self.loss_norm_factor = 1.0 / tf.cast(tf.reduce_sum(self.target_seq_lens), tf.float32)
         time_and_batch_dims = (self.output.time_dim_axis, self.output.batch_dim_axis)
