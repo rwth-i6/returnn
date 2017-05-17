@@ -494,7 +494,7 @@ class RecLayer(_ConcatInputLayer):
               cell.net.layers[name].search_choices.filter_seqs(seq_filter_cond)
         assert len(acc_tas) == len(outputs_to_accumulate)
         acc_tas = [
-          acc_ta.write(i, out.get())
+          acc_ta.write(i, out.get(), name="%s_acc_ta_write" % out.name)
           for (acc_ta, out) in zip(acc_tas, outputs_to_accumulate)]
         res = (i + 1, net_vars, acc_tas)
         if seq_len_info is not None:
@@ -1257,14 +1257,18 @@ class ChoiceLayer(LayerBase):
       self.search_choices.src_beams = labels // scores_in_dim  # (batch, beam) -> scores_in batch idx
       labels = labels % scores_in_dim  # (batch, beam) -> dim idx
       labels = tf.reshape(labels, [net_batch_dim * beam_size])  # (batch * beam)
+      labels = tf.cast(labels, self.output.dtype)
       self.search_choices.set_beam_scores(scores)  # (batch, beam) -> log score
       self.output = Data(
         name="%s_choice_output" % self.name,
         batch_dim_axis=0,
-        shape=(),
+        shape=self.output.shape,
         sparse=True,
         dim=self.output.dim,
-        placeholder=labels)
+        dtype=self.output.dtype,
+        placeholder=labels,
+        available_for_inference=True,
+        beam_size=beam_size)
     else:
       # Note: If you want to do forwarding, without having the reference,
       # that wont work. You must do search in that case.
