@@ -67,15 +67,7 @@ class RecLayer(_ConcatInputLayer):
     if self._initial_state_src:
       l += [self._initial_state_src]
     if isinstance(self.cell, _SubnetworkRecCell):
-      for _, layer in sorted(self.cell.net.layers.items()):
-        assert isinstance(layer, LayerBase)
-        for dep in layer.get_dep_layers():
-          # Usually dep.network is self.cell.net but it could reference to our own net,
-          # e.g. if this is an attention layer like
-          # {"class": "dot_attention", "base": "base:encoder", ...}.
-          if dep.network is self.network:
-            if dep not in l:
-              l += [dep]
+      l += self.cell.get_parent_deps()
     return l
 
   @classmethod
@@ -93,7 +85,7 @@ class RecLayer(_ConcatInputLayer):
       def sub_get_layer(name):
         if name.startswith("base:"):
           return get_layer(name[len("base:"):])
-      for sub in d["unit"].values():
+      for sub in d["unit"].values():  # iterate over the layers of the subnet
         assert isinstance(sub, dict)
         if "initial_state" in sub:
           assert isinstance(sub["initial_state"], str)
@@ -108,10 +100,13 @@ class RecLayer(_ConcatInputLayer):
           cl.transform_config_dict(sub.copy(), network=network, get_layer=sub_get_layer)
 
   @classmethod
-  def get_out_data_from_opts(cls, unit, **kwargs):
+  def get_out_data_from_opts(cls, unit, sources=(), initial_state=None, **kwargs):
     n_out = kwargs.get("n_out", None)
     out_type = kwargs.get("out_type", None)
     loss = kwargs.get("loss", None)
+    deps = list(sources)  # type: list[LayerBase]
+    if initial_state:
+      deps += [initial_state]
     if out_type or n_out or loss:
       if out_type:
         assert out_type.get("time_dim_axis", 0) == 0
@@ -126,12 +121,14 @@ class RecLayer(_ConcatInputLayer):
       if out:
         assert sub_out.dim == out.dim
         assert sub_out.shape == out.shape
-      else:
-        out = sub_out
+      out = sub_out
+      deps += subnet.get_parent_deps()
     assert out
     out.time_dim_axis = 0
     out.batch_dim_axis = 1
-    cls._post_init_output(output=out, **kwargs)
+    cls._post_init_output(output=out, sources=sources, **kwargs)
+    for dep in deps:
+      out.beam_size = out.beam_size or dep.output.beam_size
     return out
 
   _rnn_cells_dict = {}
@@ -298,9 +295,11 @@ class RecLayer(_ConcatInputLayer):
     :rtype: tf.Tensor
     """
     cell.check_output_template_shape()
+    from TFUtil import check_input_dim
 
     with tf.name_scope("subnet_base"):
       batch_dim = self.network.get_batch_dim()
+      input_beam_size = None  # type: int | None
       if self.input_data:
         with tf.name_scope("x_tensor_array"):
           x, seq_len = self._get_input()  # x will be (time,batch,..,dim)
@@ -312,6 +311,9 @@ class RecLayer(_ConcatInputLayer):
             size=x_shape[0],
             infer_shape=True)
           x_ta = x_ta.unstack(x)
+        input_search_choices = self.network.get_search_choices(sources=self.sources)
+        if input_search_choices:
+          input_beam_size = input_search_choices.search_choices.beam_size
       else:
         x_ta = None
         if self.output.size_placeholder:
@@ -320,14 +322,14 @@ class RecLayer(_ConcatInputLayer):
         else:
           seq_len = None
       if seq_len is not None:
+        with tf.name_scope("check_seq_len_batch_size"):
+          seq_len = check_input_dim(seq_len, axis=0, dim=batch_dim * (input_beam_size or 1))
         max_seq_len = tf.reduce_max(seq_len)
         have_known_seq_len = True
-        known_seq_len = seq_len
       else:
         assert self._max_seq_len, "must specify max_seq_len in rec layer"
         max_seq_len = self._max_seq_len
         have_known_seq_len = False
-        known_seq_len = None
 
       # TODO: Better check for train_flag.
       # Maybe more generic via sampling options later.
@@ -481,8 +483,8 @@ class RecLayer(_ConcatInputLayer):
         if collected_choices:
           # For the search choices, we do it here so that we can easily get out the final beam scores.
           with tf.name_scope("seq_filter_cond"):
-            if known_seq_len is not None:
-              seq_filter_cond = tf.less(i, known_seq_len)  # (batch * beam,)
+            if seq_len is not None:
+              seq_filter_cond = tf.less(i, seq_len)  # (batch * beam,)
             else:
               assert end_flag is not None
               seq_filter_cond = tf.logical_not(end_flag)
@@ -523,9 +525,9 @@ class RecLayer(_ConcatInputLayer):
       _, final_net_vars, final_acc_tas = final_loop_vars
     else:
       _, final_net_vars, final_acc_tas, (_, seq_len) = final_loop_vars
-      if self.output.size_placeholder is None:
-        self.output.size_placeholder = {}
-      self.output.size_placeholder[0] = seq_len
+    if self.output.size_placeholder is None:
+      self.output.size_placeholder = {}
+    self.output.size_placeholder[0] = seq_len
     assert isinstance(final_acc_tas, list)
     assert isinstance(final_acc_tas[0], tf.TensorArray)
     assert len(final_acc_tas) == len(outputs_to_accumulate)
@@ -554,14 +556,6 @@ class RecLayer(_ConcatInputLayer):
             target_data = target_data.copy_as_time_major()
             target_data.size_placeholder[0] = seq_len  # generated seq len
             target_data.placeholder = target_data.placeholder[:tf.reduce_max(seq_len)]
-        loss_beam_size = layer_with_loss_inst.get_search_beam_size()
-        if loss_beam_size is not None:
-          # Output batch is with beam, so the target must be tiled accordingly.
-          with tf.name_scope("target_beam_tiled"):
-            target_data = target_data.copy()
-            tile_multiples = [1] * target_data.batch_ndim
-            tile_multiples[target_data.batch_dim_axis] = loss_beam_size
-            target_data.placeholder = tf.tile(target_data.placeholder, multiples=tile_multiples)
         loss = layer_with_loss_inst.loss
         from TFNetworkLayer import Loss
         assert isinstance(loss, Loss)
@@ -667,6 +661,7 @@ class RecLayer(_ConcatInputLayer):
         loop_vars=final_net_vars,
         layer_name=output_choice_base.name)
       self.search_choices.set_beam_scores_from_rec(final_choice_rec_vars)
+      assert output_beam_size == self.get_search_beam_size()
 
     output = final_acc_tas_dict["output_output"].stack()  # e.g. (time, batch, dim)
     if not have_known_seq_len:
@@ -799,6 +794,7 @@ class _SubnetworkRecCell(object):
       self.net.layers["prev:%s" % name] = prev_layers[name] = self.layer_data_templates[name].copy_as_prev_time_frame(
         prev_output=prev_outputs.get(name, None),
         rec_vars_prev_outputs=prev_extra.get(name, None))
+    extended_layers = {}
 
     from copy import deepcopy
     net_dict = deepcopy(self.net_dict)
@@ -810,7 +806,17 @@ class _SubnetworkRecCell(object):
       if name.startswith("prev:"):
         return prev_layers[name[len("prev:"):]]
       if name.startswith("base:"):
-        return self.parent_net.layers[name[len("base:"):]]
+        if name in extended_layers:
+          return extended_layers[name]
+        l = self.parent_net.layers[name[len("base:"):]]
+        if self.parent_net.search_flag:
+          needed_beam_size = self.layer_data_templates["output"].output.beam_size
+          if needed_beam_size:
+            if l.output.beam_size != needed_beam_size:
+              from TFNetworkLayer import InternalLayer
+              l = InternalLayer(name=name, network=self.net, output=l.output.copy_extend_with_beam(needed_beam_size))
+              extended_layers[name] = l
+        return l
       return self.net._construct_layer(net_dict, name=name, get_layer=get_layer)
 
     if i is not None:
@@ -917,6 +923,26 @@ class _SubnetworkRecCell(object):
       for (k, v) in zip(sorted(self._initial_extra_outputs), prev_extra_flat)}
     return prev_extra[layer_name]
 
+  def get_parent_deps(self):
+    """
+    :return: list of dependencies to the parent network
+    :rtype: list[LayerBase]
+    """
+    l = []
+    layers = self.net.layers
+    if not layers:  # happens only during initialization
+      layers = self.layer_data_templates
+    for _, layer in sorted(layers.items()):
+      assert isinstance(layer, LayerBase)
+      for dep in layer.get_dep_layers():
+        # Usually dep.network is self.cell.net but it could reference to our own net,
+        # e.g. if this is an attention layer like
+        # {"class": "dot_attention", "base": "base:encoder", ...}.
+        if dep.network is self.parent_net:
+          if dep not in l:
+            l += [dep]
+    return l
+
 
 class _TemplateLayer(LayerBase):
   """
@@ -989,6 +1015,7 @@ class _TemplateLayer(LayerBase):
     if self.search_choices:
       l.search_choices = SearchChoices(owner=l, beam_size=self.search_choices.beam_size)
       l.search_choices.set_beam_scores_from_own_rec()
+      l.output.beam_size = self.search_choices.beam_size
     return l
 
   def get_dep_layers(self):
@@ -1084,13 +1111,17 @@ class RnnCellLayer(_ConcatInputLayer):
     return cell
 
   @classmethod
-  def get_out_data_from_opts(cls, n_out, name, **kwargs):
+  def get_out_data_from_opts(cls, n_out, name, sources=(), **kwargs):
+    beam_size = None
+    for dep in sources:
+      beam_size = beam_size or dep.output.beam_size
     return Data(
       name="%s_output" % name,
       shape=(n_out,), dim=n_out,
       batch_dim_axis=0,
       time_dim_axis=None,
-      size_placeholder={})
+      size_placeholder={},
+      beam_size=beam_size)
 
   def get_dep_layers(self):
     l = super(RnnCellLayer, self).get_dep_layers()
@@ -1243,11 +1274,13 @@ class ChoiceLayer(LayerBase):
       self.output.available_for_inference = True  # in inference, we should do search
 
   @classmethod
-  def get_out_data_from_opts(cls, target, network, **kwargs):
+  def get_out_data_from_opts(cls, target, network, beam_size, **kwargs):
     out = cls._static_get_target_value(
       target=target, network=network,
-      mark_data_key_as_used=False)
+      mark_data_key_as_used=False).copy()
     out.available_for_inference = True  # in inference, we would do search
+    if network.search_flag:
+      out.beam_size = beam_size
     return out
 
   # noinspection PyMethodOverriding
@@ -1329,7 +1362,9 @@ class DecideLayer(LayerBase):
     """
     assert len(sources) == 1
     if network.search_flag:
-      return sources[0].output.copy_template(name="%s_output" % name).copy_as_batch_major()
+      data = sources[0].output.copy_template(name="%s_output" % name).copy_as_batch_major()
+      data.beam_size = None
+      return data
     else:
       return sources[0].output
 

@@ -85,7 +85,7 @@ class LayerBase(object):
 
   def __repr__(self):
     return "<%s %r out_type=%s>" % (
-      self.__class__.__name__, self.name, self.output.get_description(with_name=False))
+      self.__class__.__name__, self.name, self.output.get_description(with_name=False) if self.output else None)
 
   @classmethod
   def get_out_data_from_opts(cls, **kwargs):
@@ -147,6 +147,10 @@ class LayerBase(object):
     if sources and "batch_dim_axis" not in out_type:
       out_type.setdefault("batch_dim_axis", sources[0].output.batch_dim_axis)
       out_type.setdefault("time_dim_axis", sources[0].output.time_dim_axis)
+    beam_size = None
+    for src in sources:
+      beam_size = beam_size or src.output.beam_size
+    out_type.setdefault("beam_size", beam_size)
     output = Data(**out_type)
     cls._post_init_output(
       output=output, network=network, target=target, size_target=size_target, sources=sources, **kwargs)
@@ -644,10 +648,12 @@ def get_concat_sources_data_template(src_layers):
   """
   assert src_layers, "need source layers"
   dim = 0
+  beam_size = None
   for layer in src_layers:
     shape = layer.output.shape
     assert shape[-1], "source last-dim must be specified of layer %r" % layer
     dim += shape[-1]
+    beam_size = beam_size or layer.output.beam_size
   data = Data(
     name="concat_sources",
     shape=src_layers[0].output.shape[:-1] + (dim,),
@@ -655,7 +661,8 @@ def get_concat_sources_data_template(src_layers):
     sparse=False,
     batch_dim_axis=src_layers[0].output.batch_dim_axis,
     time_dim_axis=src_layers[0].output.time_dim_axis,
-    dtype=src_layers[0].output.dtype)
+    dtype=src_layers[0].output.dtype,
+    beam_size=beam_size)
   return data
 
 
@@ -676,6 +683,7 @@ def concat_sources_with_opt_dropout(src_layers, dropout=0):
     return data
   if (tuple(src_layers), float(dropout)) in network.concat_sources_dropout_cache:
     return network.concat_sources_dropout_cache[(tuple(src_layers), float(dropout))].copy()
+  data = data.copy()
   assert 0.0 < dropout < 1.0
   fn_train = lambda: tf.nn.dropout(
       data.placeholder,
@@ -724,6 +732,13 @@ class CopyLayer(_ConcatInputLayer):
     if out_type or n_out:
       return super(CopyLayer, cls).get_out_data_from_opts(out_type=out_type, n_out=n_out, sources=sources, **kwargs)
     return get_concat_sources_data_template(sources)
+
+
+class InternalLayer(LayerBase):
+  """
+  This is not supposed to be used by the user.
+  It is used by some code to construct a wrapper layer or so.
+  """
 
 
 class ActivationLayer(CopyLayer):
@@ -961,7 +976,8 @@ class GatingLayer(_ConcatInputLayer):
       shape=input_data.shape[:-1] + (dim,),
       sparse=False,
       batch_dim_axis=input_data.batch_dim_axis,
-      time_dim_axis=input_data.time_dim_axis)
+      time_dim_axis=input_data.time_dim_axis,
+      beam_size=input_data.beam_size)
 
 
 class WindowLayer(_ConcatInputLayer):
@@ -1004,6 +1020,7 @@ class MergeDimsLayer(_ConcatInputLayer):
   Merges a list of axes into a single one.
   E.g. input is (batch, width, height, dim) and axes=(1,2), then we get (batch, width*height, dim).
   Or input is (batch, time, height, dim) and axes="except_time", then we get (batch, time, height*dim).
+  See also CombineDimsLayer.
   """
   layer_class = "merge_dims"
 
@@ -1327,7 +1344,8 @@ class PoolLayer(_ConcatInputLayer):
       dim=input_data.dim,
       dtype=input_data.dtype,
       sparse=False,
-      batch_dim_axis=0)
+      batch_dim_axis=0,
+      beam_size=input_data.beam_size)
 
 
 class ReduceLayer(_ConcatInputLayer):
@@ -1410,7 +1428,8 @@ class ReduceLayer(_ConcatInputLayer):
       shape=tuple(y_shape[:enforce_batch_dim_axis] + y_shape[enforce_batch_dim_axis + 1:]),
       batch_dim_axis=enforce_batch_dim_axis,
       dtype=input_data.dtype,
-      sparse=False)
+      sparse=False,
+      beam_size=input_data.beam_size)
 
 
 class SqueezeLayer(_ConcatInputLayer):
@@ -1511,6 +1530,9 @@ class ResizeLayer(_ConcatInputLayer):
 
 
 class CombineDimsLayer(_ConcatInputLayer):
+  """
+  See also MergeDimsLayer.
+  """
   layer_class = "combine_dims"
 
   def __init__(self, axes, **kwargs):
@@ -1903,6 +1925,12 @@ class Loss(object):
     """
     from TFUtil import flatten_with_seq_len_mask
     with tf.name_scope("loss_init"):
+      if target:
+        if output.beam_size:
+          if target.beam_size != output.beam_size:
+            target = target.copy_extend_with_beam(output.beam_size)
+        else:
+          assert not target.beam_size
       self.output = output
       self.output_with_activation = output_with_activation
       self.output_seq_lens = output.size_placeholder[0]

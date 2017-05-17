@@ -47,7 +47,8 @@ class Data(object):
                batch_dim_axis=0,
                time_dim_axis=NotSpecified,
                available_for_inference=True,
-               auto_create_placeholders=False):
+               auto_create_placeholders=False,
+               beam_size=None):
     """
     :param str name:
     :param tuple[int|None]|list[int|None] shape: including time-dim (can be None). excluding batch-dim.
@@ -63,6 +64,7 @@ class Data(object):
     :param dict[int,tf.Tensor] tf.Tensor size_placeholder: for every None in shape, this will describe the size.
       The size is always a tensor of shape (batch,), i.e. the size can be different for each sequence in a batch.
     :param bool available_for_inference: e.g. the extern data "classes" is usually not available for inference
+    :param int|None beam_size: the batch-dim could be extended by a beam-size
     """
     self.name = name
     if sparse is None:
@@ -115,11 +117,14 @@ class Data(object):
       size_placeholder = {}
     self.size_placeholder = size_placeholder  # type: dict[int,tf.Tensor]  # axis w.o. batch -> size of shape (batch,)
     self.available_for_inference = available_for_inference
+    self.beam_size = beam_size
 
   def get_kwargs(self):
     keys = ["name", "shape", "dtype", "sparse", "dim", "batch_dim_axis", "time_dim_axis"]
     if not self.available_for_inference:
       keys += ["available_for_inference"]
+    if self.beam_size is not None:
+      keys += ["beam_size"]
     return {key: getattr(self, key) for key in keys}
 
   def copy(self):
@@ -161,6 +166,24 @@ class Data(object):
         data.batch_dim_axis += 1
       data.time_dim_axis = 0
     return data
+
+  def copy_extend_with_beam(self, beam_size):
+    """
+    :param int beam_size:
+    :return: copy of myself where the batch-dim is extended/multiplied by beam_size, using tf.tile
+    :rtype: Data
+    """
+    with tf.name_scope("data_extend_with_beam"):
+      data = self.copy()
+      if data.beam_size and data.beam_size == beam_size:
+        return data
+      assert data.beam_size is None, "incompatible beam sizes (%r vs %r)" % (data.beam_size, beam_size)
+      tile_multiples = [1] * data.batch_ndim
+      tile_multiples[data.batch_dim_axis] = beam_size
+      data.placeholder = tf.tile(data.placeholder, multiples=tile_multiples)
+      data.size_placeholder = {i: tf.tile(v, [beam_size]) for (i, v) in data.size_placeholder.items()}
+      data.beam_size = beam_size * (data.beam_size or 1)
+      return data
 
   def copy_template(self, name=None):
     """
@@ -718,19 +741,19 @@ def check_input_dim(x, axis, dim):
   """
   :param tf.Tensor x:
   :param int axis: which axis to check
-  :param int dim:
+  :param int|tf.Tensor dim:
   :return: x with check added
   :rtype: tf.Tensor
   """
   dyn_shape = x.get_shape()
-  if dyn_shape.ndims is not None:
+  if dyn_shape.ndims is not None and isinstance(dim, int):
     if dyn_shape.dims[axis].value is not None:
       assert dyn_shape.dims[axis].value == dim
       return x
   # Need to fall-back to runtime check.
   with reuse_name_scope("checks"):
     with tf.control_dependencies(
-      [tf.assert_equal(tf.shape(x)[axis], dim, data=["shape[%i] not %i" % (axis, dim), tf.shape(x)])]):
+      [tf.assert_equal(tf.shape(x)[axis], dim, data=["shape[%i] not dim" % (axis,), dim, tf.shape(x)])]):
       return tf.identity(x, "identity_with_dim_check")
 
 
