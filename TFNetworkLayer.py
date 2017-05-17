@@ -1392,6 +1392,7 @@ class ReduceLayer(_ConcatInputLayer):
   @classmethod
   def get_out_data_from_opts(cls, name, sources, axis, keep_dims=False, enforce_batch_dim_axis=0, **kwargs):
     input_data = get_concat_sources_data_template(sources)
+    assert not input_data.sparse
     axis = cls.get_axes(axis=axis, input_data=input_data)
     y_shape = list(input_data.batch_shape)
     if input_data.batch_dim_axis != enforce_batch_dim_axis:
