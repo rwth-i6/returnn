@@ -235,13 +235,19 @@ class Updater(object):
     momentum = self.config.float("momentum", 0.0)
     optim_config = self.config.typed_value("optimizer")
     if optim_config:
+      if isinstance(optim_config, str):
+        optim_config = {"class": optim_config}
       assert isinstance(optim_config, dict)
       optim_config = optim_config.copy()
       optim_class_name = optim_config.pop("class")
       optim_class = get_optimizer_class(optim_class_name)
-      optim_config.setdefault("epsilon", epsilon)
-      if momentum:
+      from Util import collect_class_init_kwargs
+      optim_class_kwargs = collect_class_init_kwargs(optim_class)
+      if "epsilon" in optim_class_kwargs:
+        optim_config.setdefault("epsilon", epsilon)
+      if "momentum" in optim_class_kwargs and momentum:
         optim_config.setdefault("momentum", momentum)
+      assert "learning_rate" not in optim_config, "learning_rate will be set implicitely"
       optim_config["learning_rate"] = lr
       print("Create optimizer %s with options %r." % (optim_class, optim_config), file=log.v2)
       optimizer = optim_class(**optim_config)
