@@ -7,8 +7,15 @@ from TFUtil import Data, OutputWithActivation, reuse_name_scope, var_creation_sc
 
 
 class LayerBase(object):
-  layer_class = None
-  recurrent = False
+  """
+  This is the base class for all layers.
+  Every layer by default has a list of source layers `sources` and defines `self.output` which is of type Data.
+  It shares some common functionality across all layers, such as explicitly defining the output format,
+  some parameter regularization, and more.
+  """
+
+  layer_class = None  # type: str|None  # for get_layer_class()
+  recurrent = False  # if the order in the time-dimension is relevant
 
   def __init__(self, name, network, output=None, n_out=None, out_type=None, sources=(),
                target=None, loss=None, size_target=None,
@@ -31,7 +38,7 @@ class LayerBase(object):
     :param Loss|None loss: via self.transform_config_dict()
     :param float|None L2: for constraints
     :param bool|None is_output_layer:
-    :param bool|dict batch_norm:
+    :param bool|dict batch_norm: see self.batch_norm()
     :param str|float initial_output: used for recurrent layer, see self.get_rec_initial_output()
     :param LayerBase|None rec_previous_layer: via the recurrent layer, layer (template) which represents the past of us
     :param bool trainable: whether the parameters of this layer will be trained
@@ -699,6 +706,14 @@ def concat_sources_with_opt_dropout(src_layers, dropout=0):
 
 
 class _ConcatInputLayer(LayerBase):
+  """
+  Base layer which concatenates all incoming source layers in the feature dimension,
+  and provides that as `self.input_data`.
+  This is the most common thing what many layers do with the input sources.
+  If there is only a single source, will not do anything.
+  This layer also optionally can do dropout on the input.
+  """
+
   def __init__(self, dropout=0, mask=None, **kwargs):
     """
     :param float dropout: 0.0 means to apply no dropout. dropout will only be applied during training
@@ -764,9 +779,16 @@ class ActivationLayer(CopyLayer):
 
 
 class BatchNormLayer(CopyLayer):
+  """
+  Implements batch-normalization (http://arxiv.org/abs/1502.03167) as a separate layer.
+  """
   layer_class = "batch_norm"
 
   def __init__(self, **kwargs):
+    """
+    All kwargs which are present in our base class are passed to our base class.
+    All remaining kwargs are used for self.batch_norm().
+    """
     kwargs = kwargs.copy()
     import inspect
     batch_norm_kwargs = inspect.getargspec(self.batch_norm).args[1:]  # first is self, ignore
@@ -777,6 +799,9 @@ class BatchNormLayer(CopyLayer):
 
 
 class SliceLayer(_ConcatInputLayer):
+  """
+  Slicing on the input, i.e. x[start:end:step] in some axis.
+  """
   layer_class = "slice"
 
   def __init__(self, axis=None, axis_kind=None,
@@ -859,6 +884,11 @@ class SliceLayer(_ConcatInputLayer):
 
 
 class LinearLayer(_ConcatInputLayer):
+  """
+  Linear/forward/fully-connected/1x1-conv layer.
+  Does a linear transformation on the feature-dimension of the input
+  with an optional bias term and an optional activation function.
+  """
   layer_class = "linear"
 
   def __init__(self, activation, with_bias=True, grad_filter=None, **kwargs):
@@ -899,6 +929,7 @@ class LinearLayer(_ConcatInputLayer):
       if self.input_data.sparse:
         if x.dtype in [tf.uint8, tf.int8, tf.uint16, tf.int16]:
           x = tf.cast(x, tf.int32)
+        # Maybe optionally we could also use tf.contrib.layers.safe_embedding_lookup_sparse().
         x = tf.nn.embedding_lookup(W, x)
         ndim += 1
       else:
@@ -929,6 +960,9 @@ class LinearLayer(_ConcatInputLayer):
 
 
 class SoftmaxLayer(LinearLayer):
+  """
+  Just a LinearLayer with activation="softmax" by default.
+  """
   layer_class = "softmax"
 
   def __init__(self, activation="softmax", **kwargs):
@@ -936,6 +970,9 @@ class SoftmaxLayer(LinearLayer):
 
 
 class ConstantLayer(LayerBase):
+  """
+  Output is a constant value.
+  """
   layer_class = "constant"
 
   def __init__(self, sources, value=0, dtype=None, **kwargs):
@@ -951,6 +988,12 @@ class ConstantLayer(LayerBase):
 
 
 class GatingLayer(_ConcatInputLayer):
+  """
+  Splits the output into two equal parts, applies the gate_activation (sigmoid by default)
+  on the one part, some other activation (e.g. tanh) on the other part and then
+  element-wise multiplies them.
+  Thus, the output dimension is input-dimension / 2.
+  """
   layer_class = "gating"
 
   def __init__(self, activation, gate_activation="sigmoid", **kwargs):
@@ -1349,6 +1392,10 @@ class PoolLayer(_ConcatInputLayer):
 
 
 class ReduceLayer(_ConcatInputLayer):
+  """
+  This reduces some axis by using "sum" or "max".
+  It's basically a wrapper around tf.reduce_sum or tf.reduce_max.
+  """
   layer_class = "reduce"
 
   def __init__(self, mode, axis, keep_dims=False, enforce_batch_dim_axis=0, **kwargs):
@@ -1433,6 +1480,10 @@ class ReduceLayer(_ConcatInputLayer):
 
 
 class SqueezeLayer(_ConcatInputLayer):
+  """
+  Removes an axis with dimension 1.
+  This is basically a wrapper around tf.squeeze.
+  """
   layer_class = "squeeze"
 
   def __init__(self, axis, enforce_batch_dim_axis=0, **kwargs):
@@ -1477,6 +1528,10 @@ class PrefixInTimeLayer(CopyLayer):
 
 
 class ResizeLayer(_ConcatInputLayer):
+  """
+  Resizes the input, i.e. upsampling or downsampling.
+  Supports different kinds, such as linear interpolation or nearest-neighbor.
+  """
   layer_class = "resize"
 
   def __init__(self, factor, axis, kind="nn", **kwargs):
@@ -1531,6 +1586,7 @@ class ResizeLayer(_ConcatInputLayer):
 
 class CombineDimsLayer(_ConcatInputLayer):
   """
+  Combines multiple dimensions.
   See also MergeDimsLayer.
   """
   layer_class = "combine_dims"
@@ -1597,6 +1653,9 @@ class FsaLayer(LayerBase):
 
 
 class CombineLayer(LayerBase):
+  """
+  Applies some binary operation on all sources, such as addition.
+  """
   layer_class = "combine"
 
   def _check_same_dense_dim(self, sources):
@@ -1671,6 +1730,9 @@ class CombineLayer(LayerBase):
 
 
 class CompareLayer(LayerBase):
+  """
+  Compares (e.g. equality check) all the sources element-wise.
+  """
   layer_class = "compare"
 
   def __init__(self, kind="equal", value=None, **kwargs):
@@ -1801,6 +1863,10 @@ class SubnetworkLayer(LayerBase):
 
 
 class FramewiseStatisticsLayer(LayerBase):
+  """
+  Collects various statistics (such as FER, etc) on the sources.
+  The tensors will get stored in self.stats which will be collected by TFEngine.
+  """
   layer_class = "framewise_statistics"
 
   def __init__(self, sil_label_idx, histogram_num_bins=20, **kwargs):
@@ -1899,7 +1965,10 @@ class FramewiseStatisticsLayer(LayerBase):
 
 
 class Loss(object):
-  class_name = None
+  """
+  Base class for all losses.
+  """
+  class_name = None  # type: str  # used by get_loss_class()
   recurrent = False  # if this is a frame-wise criteria, this will be False
 
   def __init__(self):
@@ -2011,6 +2080,9 @@ class Loss(object):
 
 
 class CrossEntropyLoss(Loss):
+  """
+  Cross-Entropy loss. Basically sum(target * log(output)). 
+  """
   class_name = "ce"
 
   def get_value(self):
@@ -2090,6 +2162,10 @@ class GenericCELoss(Loss):
 
 
 class CtcLoss(Loss):
+  """
+  Connectionist Temporal Classification (CTC) loss.
+  Basically a wrapper around tf.nn.ctc_loss.
+  """
   class_name = "ctc"
   recurrent = True
 
@@ -2230,7 +2306,7 @@ _LossClassDict = {}  # type: dict[str,type(Loss)]
 def get_loss_class(loss):
   """
   :param str loss: loss type such as "ce"
-  :rtype: () -> Loss
+  :rtype: () -> Loss | type[Loss] | Loss
   """
   if not _LossClassDict:
     for v in globals().values():
@@ -2256,7 +2332,7 @@ def _init_layer_class_dict():
 def get_layer_class(name):
   """
   :param str name: matches layer_class
-  :rtype: (() -> LayerBase) | LayerBase
+  :rtype: (() -> LayerBase) | type[LayerBase] | LayerBase
   """
   if not _LayerClassDict:
     _init_layer_class_dict()
