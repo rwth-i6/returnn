@@ -262,6 +262,9 @@ class Updater(object):
       assert not momentum
       print("Create Adagrad optimizer.", file=log.v2)
       optimizer = tf.train.AdagradOptimizer(learning_rate=lr)
+    elif self.config.is_of_type("rmsprop", float):
+      print("Create RMSProp optimizer. With Decay %f" % (self.config.float("rmsprop", 0.9)), file=log.v2)
+      optimizer = tf.train.RMSPropOptimizer(decay=self.config.float("rmsprop", 0.9), learning_rate=lr, momentum=momentum, epsilon=epsilon)
     elif self.config.bool("rmsprop", False):
       print("Create RMSProp optimizer.", file=log.v2)
       optimizer = tf.train.RMSPropOptimizer(learning_rate=lr, momentum=momentum, epsilon=epsilon)
