@@ -1309,7 +1309,7 @@ class DecideLayer(LayerBase):
   and has search_sources set.
   Then this will output (batch, time, dim) where the beam with the highest score is selected.
   Thus, this will do a decision based on the scores.
-  In will convert the data to batch-major mode. 
+  In will convert the data to batch-major mode.
   """
   layer_class = "decide"
 
@@ -1325,11 +1325,11 @@ class DecideLayer(LayerBase):
   @classmethod
   def decide(cls, src, output=None, name=None):
     """
-    :param LayerBase src: with search_choices set. e.g. input of shape (batch * beam, time, dim) 
+    :param LayerBase src: with search_choices set. e.g. input of shape (batch * beam, time, dim)
     :param Data|None output:
     :param str|None name:
     :return: best beam selected from input, e.g. shape (batch, time, dim)
-    :rtype: Data 
+    :rtype: Data
     """
     assert src.search_choices
     if not output:

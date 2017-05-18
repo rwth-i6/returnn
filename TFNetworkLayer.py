@@ -160,10 +160,10 @@ class LayerBase(object):
   def _post_init_output(cls, output, network, target=None, size_target=None, sources=(), **kwargs):
     """
     :param Data output:
-    :param TFNetwork.TFNetwork network: 
-    :param str|None target: 
-    :param str|None size_target: 
-    :param list[LayerBase] sources: 
+    :param TFNetwork.TFNetwork network:
+    :param str|None target:
+    :param str|None size_target:
+    :param list[LayerBase] sources:
     """
     # You are supposed to set self.output.placeholder to the value which you want to return by the layer.
     # Normally you are also supposed to set self.output.size_placeholder explicitly, just like self.output.placeholder.
@@ -2166,10 +2166,11 @@ class EditDistanceLoss(Loss):
   class_name = "edit_distance"
   recurrent = True
 
-  def __init__(self, **kwargs):
+  def __init__(self, debug_print=False, **kwargs):
     super(EditDistanceLoss, self).__init__(**kwargs)
     self._output_sparse_labels = None
     self._target_sparse_labels = None
+    self._debug_print = debug_print
 
   def init(self, output, output_with_activation=None, target=None):
     """
@@ -2202,10 +2203,22 @@ class EditDistanceLoss(Loss):
     self._target_sparse_labels = labels
     return labels
 
+  def _debug_print_out(self):
+    def get_first_seq(data):
+      x = data.get_placeholder_as_batch_major()
+      seq = x[0][:data.size_placeholder[0][0]]
+      return seq
+    output = get_first_seq(self.output)
+    target = get_first_seq(self.target)
+    from TFUtil import encode_raw
+    return ["output", tf.size(output), encode_raw(output), "target", tf.size(target), encode_raw(target)]
+
   def get_error(self):
     output = self._get_output_sparse_labels()
     labels = self._get_target_sparse_labels()
     error = tf.edit_distance(hypothesis=output, truth=labels, normalize=False)
+    if self._debug_print:
+      error = tf.Print(error, self._debug_print_out(), summarize=10)
     return self.reduce_func(error)
 
   def get_value(self):
