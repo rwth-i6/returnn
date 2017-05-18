@@ -10,7 +10,7 @@ import tensorflow as tf
 import sys
 sys.path += ["."]  # Python 3 hack
 from TFUtil import *
-from nose.tools import assert_equal, assert_is_instance
+from nose.tools import assert_equal, assert_is_instance, assert_is
 import numpy.testing
 import better_exchook
 better_exchook.replace_traceback_format_tb()
@@ -353,3 +353,38 @@ def test_windowed_nd_big():
   naive = naive_windowed_batch(source, window=window)
   real = windowed_nd(source, window=window, time_axis=0, new_window_axis=1).eval()
   numpy.testing.assert_almost_equal(naive, real)
+
+
+def test_global_tensor():
+  class C:
+    i = 0
+  def f():
+    C.i += 1
+    return tf.constant(42, name="hello")
+  x = global_tensor(f, name="hello")
+  x2 = global_tensor(f, name="hello")
+  x3 = global_tensor(f, name="hello")
+  assert_equal(C.i, 1)
+  assert_is(x, x2)
+  assert_is(x, x3)
+  assert_equal(x.eval(), 42)
+
+
+def test_encode_raw_direct():
+  raw = tf.decode_raw(tf.constant("ABC"), tf.uint8)
+  assert_equal(list(raw.eval()), [65, 66, 67])
+
+
+def test_encode_raw_simple():
+  raw = tf.decode_raw(tf.constant("hello"), tf.uint8)
+  back = encode_raw(raw)
+  assert_equal(back.eval(), b"hello")
+
+
+def test_encode_raw_seq_lens():
+  strs = ["hello", "world", "a    "]  # all same lengths for tf.decode_raw
+  strs_stripped = [s.strip() for s in strs]
+  raw = tf.decode_raw(tf.constant(strs), tf.uint8)
+  seq_lens = tf.constant([len(s) for s in strs_stripped])
+  back = encode_raw(raw, seq_lens=seq_lens)
+  assert_equal(list(back.eval()), [s.encode("utf8") for s in strs_stripped])

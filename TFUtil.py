@@ -2183,3 +2183,56 @@ def windowed_nd(source, window, padding="same", time_axis=1, new_window_axis=2):
       else:
         final = move_axis(final, 1, time_axis)
     return final
+
+
+def global_tensor(f, name):
+  """
+  This creates a global accessible tensor in the graph to be reused later,
+  i.e. on the second call given a unique name, it will not create a new tensor
+  but return the previously created tensor.
+  This is for the current graph, i.e. if there is a new graph, it will recreate the tensor. 
+  
+  :param () -> tf.Tensor f: callable which creates the tensor
+  :param str name: global reference name for the tensor
+  :return: the tensor
+  :rtype: tf.Tensor
+  """
+  graph = tf.get_default_graph()
+  assert isinstance(graph, tf.Graph)
+  abs_graph_name = "globals/%s:0" % name
+  try:
+    return graph.get_tensor_by_name(abs_graph_name)
+  except KeyError:  # does not exist yet
+    pass
+  with tf.name_scope("global_tensor_%s" % name):  # relative to the current scope
+    v = f()
+  with tf.name_scope("globals/"):  # enter the absolute scope
+    v = tf.identity(v, name=name)
+  assert isinstance(v, tf.Tensor)
+  assert v.name == abs_graph_name
+  assert graph.get_tensor_by_name(abs_graph_name) is v
+  return v
+
+
+def encode_raw(x, axis=-1, seq_lens=None):
+  """
+  The inverse function of tf.decode_raw().
+  Also see: https://stackoverflow.com/questions/43403147/how-to-create-a-encode-raw-tensorflow-function
+
+  :param tf.Tensor x: of integer types [0,255], will get casted to uint8
+  :param int axis: the axis to reduce-join the string. decode_raw has added it at the end
+  :param tf.Tensor|None seq_lens: must have same shape as x after reduce-joining.
+    Note that using seq_lens will make our output not compatible with tf.decode_raw() anymore
+    because tf.decode_raw() requires all strings to be of the same length.
+  :return: string tensor
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope("encode_raw"):
+    character_lookup = global_tensor(
+      lambda: tf.constant([chr(i) for i in range(256)]), name="character_lookup")
+    raw_bytes = tf.bitcast(x, tf.uint8, name="raw_bytes")
+    chars = tf.gather(character_lookup, indices=tf.cast(raw_bytes, tf.int32), name="chars")
+    strings = tf.reduce_join(chars, axis=axis, name="strings")
+    if seq_lens is not None:
+      strings = tf.substr(strings, pos=tf.zeros_like(seq_lens), len=seq_lens)
+    return strings
