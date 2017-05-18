@@ -10,7 +10,7 @@ import tensorflow as tf
 import sys
 sys.path += ["."]  # Python 3 hack
 from TFUtil import *
-from nose.tools import assert_equal, assert_is_instance
+from nose.tools import assert_equal, assert_is_instance, assert_is
 import numpy.testing
 import better_exchook
 better_exchook.replace_traceback_format_tb()
@@ -277,6 +277,15 @@ def test_expand_multiple_dims():
   assert_equal(list(session.run(tf.shape(expand_multiple_dims(x, (1, 3, 5))))), [2, 1, 3, 1, 5, 1])
 
 
+def test_move_axis():
+  x = tf.zeros((2, 3, 5))
+  assert_equal(list(session.run(tf.shape(x))), [2, 3, 5])
+  assert_equal(list(session.run(tf.shape(move_axis(x, old_axis=0, new_axis=1)))), [3, 2, 5])
+  assert_equal(list(session.run(tf.shape(move_axis(x, old_axis=0, new_axis=2)))), [3, 5, 2])
+  assert_equal(list(session.run(tf.shape(move_axis(x, old_axis=2, new_axis=0)))), [5, 2, 3])
+  assert_equal(list(session.run(tf.shape(move_axis(x, old_axis=2, new_axis=1)))), [2, 5, 3])
+
+
 def test_constant_with_shape():
   x = session.run(constant_with_shape(3, [2, 3]))
   assert_equal(x.shape, (2, 3))
@@ -310,14 +319,14 @@ def naive_windowed_batch(source, window):
   pad_left = numpy.zeros((w_left, n_batch, n_dim), dtype=dtype)
   pad_right = numpy.zeros((w_right, n_batch, n_dim), dtype=dtype)
   padded = numpy.concatenate([pad_left, source, pad_right], axis=0)
-  final = numpy.zeros((n_time, n_batch, window, n_dim), dtype=dtype)
+  final = numpy.zeros((n_time, window, n_batch, n_dim), dtype=dtype)
   for t in range(n_time):
     for w in range(window):
-      final[t, :, w] = padded[t + w]
+      final[t, w] = padded[t + w]
   return final
 
 
-def test_windowed_batch_small():
+def test_windowed_nd_small():
   n_time = 2
   n_batch = 2
   n_dim = 2
@@ -326,7 +335,7 @@ def test_windowed_batch_small():
   print("source:")
   print(source)
   naive = naive_windowed_batch(source, window=window)
-  real = windowed_batch(source, window=window).eval()
+  real = windowed_nd(source, window=window, time_axis=0, new_window_axis=1).eval()
   print("naive:")
   print(naive)
   print("real:")
@@ -334,7 +343,7 @@ def test_windowed_batch_small():
   numpy.testing.assert_almost_equal(naive, real)
 
 
-def test_windowed_batch_big():
+def test_windowed_nd_big():
   n_time = 11
   n_batch = 5
   n_dim = 7
@@ -342,5 +351,40 @@ def test_windowed_batch_big():
   numpy.random.seed(123)
   source = numpy.random.random((n_time, n_batch, n_dim)).astype("float32")
   naive = naive_windowed_batch(source, window=window)
-  real = windowed_batch(source, window=window).eval()
+  real = windowed_nd(source, window=window, time_axis=0, new_window_axis=1).eval()
   numpy.testing.assert_almost_equal(naive, real)
+
+
+def test_global_tensor():
+  class C:
+    i = 0
+  def f():
+    C.i += 1
+    return tf.constant(42, name="hello")
+  x = global_tensor(f, name="hello")
+  x2 = global_tensor(f, name="hello")
+  x3 = global_tensor(f, name="hello")
+  assert_equal(C.i, 1)
+  assert_is(x, x2)
+  assert_is(x, x3)
+  assert_equal(x.eval(), 42)
+
+
+def test_encode_raw_direct():
+  raw = tf.decode_raw(tf.constant("ABC"), tf.uint8)
+  assert_equal(list(raw.eval()), [65, 66, 67])
+
+
+def test_encode_raw_simple():
+  raw = tf.decode_raw(tf.constant("hello"), tf.uint8)
+  back = encode_raw(raw)
+  assert_equal(back.eval(), b"hello")
+
+
+def test_encode_raw_seq_lens():
+  strs = ["hello", "world", "a    "]  # all same lengths for tf.decode_raw
+  strs_stripped = [s.strip() for s in strs]
+  raw = tf.decode_raw(tf.constant(strs), tf.uint8)
+  seq_lens = tf.constant([len(s) for s in strs_stripped])
+  back = encode_raw(raw, seq_lens=seq_lens)
+  assert_equal(list(back.eval()), [s.encode("utf8") for s in strs_stripped])

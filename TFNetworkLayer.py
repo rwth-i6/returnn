@@ -7,8 +7,15 @@ from TFUtil import Data, OutputWithActivation, reuse_name_scope, var_creation_sc
 
 
 class LayerBase(object):
-  layer_class = None
-  recurrent = False
+  """
+  This is the base class for all layers.
+  Every layer by default has a list of source layers `sources` and defines `self.output` which is of type Data.
+  It shares some common functionality across all layers, such as explicitly defining the output format,
+  some parameter regularization, and more.
+  """
+
+  layer_class = None  # type: str|None  # for get_layer_class()
+  recurrent = False  # if the order in the time-dimension is relevant
 
   def __init__(self, name, network, output=None, n_out=None, out_type=None, sources=(),
                target=None, loss=None, size_target=None,
@@ -31,7 +38,7 @@ class LayerBase(object):
     :param Loss|None loss: via self.transform_config_dict()
     :param float|None L2: for constraints
     :param bool|None is_output_layer:
-    :param bool|dict batch_norm:
+    :param bool|dict batch_norm: see self.batch_norm()
     :param str|float initial_output: used for recurrent layer, see self.get_rec_initial_output()
     :param LayerBase|None rec_previous_layer: via the recurrent layer, layer (template) which represents the past of us
     :param bool trainable: whether the parameters of this layer will be trained
@@ -85,7 +92,7 @@ class LayerBase(object):
 
   def __repr__(self):
     return "<%s %r out_type=%s>" % (
-      self.__class__.__name__, self.name, self.output.get_description(with_name=False))
+      self.__class__.__name__, self.name, self.output.get_description(with_name=False) if self.output else None)
 
   @classmethod
   def get_out_data_from_opts(cls, **kwargs):
@@ -147,6 +154,10 @@ class LayerBase(object):
     if sources and "batch_dim_axis" not in out_type:
       out_type.setdefault("batch_dim_axis", sources[0].output.batch_dim_axis)
       out_type.setdefault("time_dim_axis", sources[0].output.time_dim_axis)
+    beam_size = None
+    for src in sources:
+      beam_size = beam_size or src.output.beam_size
+    out_type.setdefault("beam_size", beam_size)
     output = Data(**out_type)
     cls._post_init_output(
       output=output, network=network, target=target, size_target=size_target, sources=sources, **kwargs)
@@ -156,10 +167,10 @@ class LayerBase(object):
   def _post_init_output(cls, output, network, target=None, size_target=None, sources=(), **kwargs):
     """
     :param Data output:
-    :param TFNetwork.TFNetwork network: 
-    :param str|None target: 
-    :param str|None size_target: 
-    :param list[LayerBase] sources: 
+    :param TFNetwork.TFNetwork network:
+    :param str|None target:
+    :param str|None size_target:
+    :param list[LayerBase] sources:
     """
     # You are supposed to set self.output.placeholder to the value which you want to return by the layer.
     # Normally you are also supposed to set self.output.size_placeholder explicitly, just like self.output.placeholder.
@@ -644,10 +655,12 @@ def get_concat_sources_data_template(src_layers):
   """
   assert src_layers, "need source layers"
   dim = 0
+  beam_size = None
   for layer in src_layers:
     shape = layer.output.shape
     assert shape[-1], "source last-dim must be specified of layer %r" % layer
     dim += shape[-1]
+    beam_size = beam_size or layer.output.beam_size
   data = Data(
     name="concat_sources",
     shape=src_layers[0].output.shape[:-1] + (dim,),
@@ -655,7 +668,8 @@ def get_concat_sources_data_template(src_layers):
     sparse=False,
     batch_dim_axis=src_layers[0].output.batch_dim_axis,
     time_dim_axis=src_layers[0].output.time_dim_axis,
-    dtype=src_layers[0].output.dtype)
+    dtype=src_layers[0].output.dtype,
+    beam_size=beam_size)
   return data
 
 
@@ -676,6 +690,7 @@ def concat_sources_with_opt_dropout(src_layers, dropout=0):
     return data
   if (tuple(src_layers), float(dropout)) in network.concat_sources_dropout_cache:
     return network.concat_sources_dropout_cache[(tuple(src_layers), float(dropout))].copy()
+  data = data.copy()
   assert 0.0 < dropout < 1.0
   fn_train = lambda: tf.nn.dropout(
       data.placeholder,
@@ -691,6 +706,14 @@ def concat_sources_with_opt_dropout(src_layers, dropout=0):
 
 
 class _ConcatInputLayer(LayerBase):
+  """
+  Base layer which concatenates all incoming source layers in the feature dimension,
+  and provides that as `self.input_data`.
+  This is the most common thing what many layers do with the input sources.
+  If there is only a single source, will not do anything.
+  This layer also optionally can do dropout on the input.
+  """
+
   def __init__(self, dropout=0, mask=None, **kwargs):
     """
     :param float dropout: 0.0 means to apply no dropout. dropout will only be applied during training
@@ -726,6 +749,13 @@ class CopyLayer(_ConcatInputLayer):
     return get_concat_sources_data_template(sources)
 
 
+class InternalLayer(LayerBase):
+  """
+  This is not supposed to be used by the user.
+  It is used by some code to construct a wrapper layer or so.
+  """
+
+
 class ActivationLayer(CopyLayer):
   """
   This layer just applies an activation function.
@@ -749,9 +779,16 @@ class ActivationLayer(CopyLayer):
 
 
 class BatchNormLayer(CopyLayer):
+  """
+  Implements batch-normalization (http://arxiv.org/abs/1502.03167) as a separate layer.
+  """
   layer_class = "batch_norm"
 
   def __init__(self, **kwargs):
+    """
+    All kwargs which are present in our base class are passed to our base class.
+    All remaining kwargs are used for self.batch_norm().
+    """
     kwargs = kwargs.copy()
     import inspect
     batch_norm_kwargs = inspect.getargspec(self.batch_norm).args[1:]  # first is self, ignore
@@ -762,6 +799,9 @@ class BatchNormLayer(CopyLayer):
 
 
 class SliceLayer(_ConcatInputLayer):
+  """
+  Slicing on the input, i.e. x[start:end:step] in some axis.
+  """
   layer_class = "slice"
 
   def __init__(self, axis=None, axis_kind=None,
@@ -844,6 +884,11 @@ class SliceLayer(_ConcatInputLayer):
 
 
 class LinearLayer(_ConcatInputLayer):
+  """
+  Linear/forward/fully-connected/1x1-conv layer.
+  Does a linear transformation on the feature-dimension of the input
+  with an optional bias term and an optional activation function.
+  """
   layer_class = "linear"
 
   def __init__(self, activation, with_bias=True, grad_filter=None, **kwargs):
@@ -884,6 +929,7 @@ class LinearLayer(_ConcatInputLayer):
       if self.input_data.sparse:
         if x.dtype in [tf.uint8, tf.int8, tf.uint16, tf.int16]:
           x = tf.cast(x, tf.int32)
+        # Maybe optionally we could also use tf.contrib.layers.safe_embedding_lookup_sparse().
         x = tf.nn.embedding_lookup(W, x)
         ndim += 1
       else:
@@ -914,6 +960,9 @@ class LinearLayer(_ConcatInputLayer):
 
 
 class SoftmaxLayer(LinearLayer):
+  """
+  Just a LinearLayer with activation="softmax" by default.
+  """
   layer_class = "softmax"
 
   def __init__(self, activation="softmax", **kwargs):
@@ -921,6 +970,9 @@ class SoftmaxLayer(LinearLayer):
 
 
 class ConstantLayer(LayerBase):
+  """
+  Output is a constant value.
+  """
   layer_class = "constant"
 
   def __init__(self, sources, value=0, dtype=None, **kwargs):
@@ -936,6 +988,12 @@ class ConstantLayer(LayerBase):
 
 
 class GatingLayer(_ConcatInputLayer):
+  """
+  Splits the output into two equal parts, applies the gate_activation (sigmoid by default)
+  on the one part, some other activation (e.g. tanh) on the other part and then
+  element-wise multiplies them.
+  Thus, the output dimension is input-dimension / 2.
+  """
   layer_class = "gating"
 
   def __init__(self, activation, gate_activation="sigmoid", **kwargs):
@@ -961,7 +1019,175 @@ class GatingLayer(_ConcatInputLayer):
       shape=input_data.shape[:-1] + (dim,),
       sparse=False,
       batch_dim_axis=input_data.batch_dim_axis,
-      time_dim_axis=input_data.time_dim_axis)
+      time_dim_axis=input_data.time_dim_axis,
+      beam_size=input_data.beam_size)
+
+
+class WindowLayer(_ConcatInputLayer):
+  """
+  Adds a window dimension.
+  By default, uses the time axis and goes over it with a sliding window.
+  The new axis for the window is created right after the time axis.
+  Will always return as batch major mode.
+  E.g. if the input is (batch, time, dim), the output is (batch, time, window_size, dim).
+  """
+  layer_class = "window"
+  recurrent = True  # we must not allow any shuffling in the time-dim or so
+
+  def __init__(self, window_size, axis="T", padding="same", **kwargs):
+    """
+    :param int window_size: 
+    :param str|int axis: see Data.get_axis_from_description()
+    :param str padding: "same" or "valid"
+    :param kwargs: 
+    """
+    super(WindowLayer, self).__init__(**kwargs)
+    data = self.input_data.copy_as_batch_major()
+    axis = data.get_axis_from_description(axis)
+    from TFUtil import windowed_nd
+    self.output.placeholder = windowed_nd(
+      data.placeholder,
+      window=window_size, padding=padding, time_axis=axis, new_window_axis=axis + 1)
+
+  @classmethod
+  def get_out_data_from_opts(cls, axis="T", sources=(), **kwargs):
+    data = get_concat_sources_data_template(sources)
+    data = data.copy_as_batch_major()
+    axis = data.get_axis_from_description(axis)
+    data.shape = data.shape[:axis] + (None,) + data.shape[axis:]  # add new axis right after
+    return data
+
+
+class MergeDimsLayer(_ConcatInputLayer):
+  """
+  Merges a list of axes into a single one.
+  E.g. input is (batch, width, height, dim) and axes=(1,2), then we get (batch, width*height, dim).
+  Or input is (batch, time, height, dim) and axes="except_time", then we get (batch, time, height*dim).
+  See also CombineDimsLayer.
+  """
+  layer_class = "merge_dims"
+
+  def __init__(self, axes, n_out=None, **kwargs):
+    """
+    :param str|list[str]|list[int] axes: see Data.get_axes_from_description()
+    :param int|None n_out:
+    """
+    super(MergeDimsLayer, self).__init__(**kwargs)
+    axes = self.input_data.get_axes_from_description(axes)
+    x = self.input_data.placeholder
+    if len(axes) > 1:
+      axes = sorted(axes)
+      # Transpose so that all axes are behind each other.
+      perm = list(range(self.input_data.batch_ndim))
+      i0 = axes[0]
+      for i, a in enumerate(axes[1:]):
+        perm.remove(a)
+        perm.insert(i0 + i + 1, a)
+      x = tf.transpose(x, perm)
+      # Now merge all dims with a reshape.
+      shape = tf.shape(x)
+      i1 = i0 + len(axes)
+      x = tf.reshape(
+        x,
+        shape=tf.concat([
+          shape[:i0],
+          tf.reduce_prod(shape[i0:i1]),
+          shape[i1:]], axis=0))
+    if n_out is not None and not self.output.sparse:
+      from TFUtil import check_input_dim
+      x = check_input_dim(x, axis=-1, dim=n_out)
+    self.output.placeholder = x
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, axes, sources=(), n_out=None, out_type=None, **kwargs):
+    assert not out_type, "currently ignored"
+    data = get_concat_sources_data_template(sources)
+    axes = data.get_axes_from_description(axes)
+    if len(axes) <= 1:
+      return data
+    axes = sorted(axes)
+    import numpy
+    new_shape = list(data.shape)
+    res_dim = None
+    if all([data.batch_shape[i] is not None for i in axes]):
+      res_dim = numpy.prod([data.batch_shape[i] for i in axes])
+    if not data.sparse and (data.batch_ndim - 1) in axes:  # will also merge the feature dim
+      assert axes == list(range(axes[0], data.batch_ndim)), "not supported currently with holes"
+      if res_dim is not None and n_out is not None:
+        assert res_dim == n_out
+      elif res_dim is not None and n_out is None:
+        pass
+      elif res_dim is None and n_out is not None:
+        res_dim = n_out
+      else:
+        raise Exception("you need to provide n_out for layer %r" % name)
+      data.dim = res_dim
+    new_shape[data.get_batch_axis_excluding_batch(axes[0])] = res_dim
+    for i in reversed(axes[1:]):
+      new_shape.pop(i)
+      if data.batch_dim_axis >= i:
+        data.batch_dim_axis -= 1
+      if data.time_dim_axis is not None and data.time_dim_axis >= i:
+        data.time_dim_axis -= 1
+    data.shape = tuple(new_shape)
+    return data
+
+
+class ExpandDimsLayer(_ConcatInputLayer):
+  """
+  Adds some axis.
+  """
+  layer_class = "expand_dims"
+
+  def __init__(self, axis, dim=1, **kwargs):
+    """
+    :param str|int axis: axis to add, e.g. "F"|"feature" or "spatial".
+      if this is an integer, the input data is first converted into batch-major mode,
+      and then this is counted with batch-dim.
+    :param int dim: dimension of new axis (1 by default)
+    """
+    super(ExpandDimsLayer, self).__init__(**kwargs)
+    data = self.input_data
+    if isinstance(axis, int):
+      data = data.copy_as_batch_major()
+    axis = self._get_axis(data=data, axis=axis)
+    from TFUtil import expand_dims_unbroadcast
+    self.output.placeholder = expand_dims_unbroadcast(data.placeholder, axis=axis, dim=dim)
+    self.output.size_placeholder = {(i if (data.get_batch_axis(i) < axis) else i + 1): v for (i, v) in data.size_placeholder.items()}
+
+  @classmethod
+  def _get_axis(cls, data, axis):
+    """
+    :param Data data:
+    :param str axis: e.g. "F"|"feature" or "spatial"
+    :return: axis as int for data.placeholder
+    :rtype: int
+    """
+    if isinstance(axis, int):
+      return axis
+    assert isinstance(axis, str)
+    axis = axis.lower()
+    if axis in ["f", "feature"]:
+      assert not data.sparse
+      return data.batch_ndim
+    elif axis == "spatial":
+      if data.sparse:
+        return data.batch_ndim
+      else:
+        return data.batch_ndim - 1
+    else:
+      raise Exception("invalid axis %r" % axis)
+
+  @classmethod
+  def get_out_data_from_opts(cls, axis, dim=1, sources=(), **kwargs):
+    data = get_concat_sources_data_template(sources)
+    if isinstance(axis, int):
+      data = data.copy_as_batch_major()
+    axis = cls._get_axis(data=data, axis=axis)
+    if axis == data.batch_ndim and not data.sparse:
+      data.dim = dim
+    data.shape = data.shape[:axis] + (dim,) + data.shape[axis:]
+    return data
 
 
 class ConvLayer(_ConcatInputLayer):
@@ -1161,10 +1387,15 @@ class PoolLayer(_ConcatInputLayer):
       dim=input_data.dim,
       dtype=input_data.dtype,
       sparse=False,
-      batch_dim_axis=0)
+      batch_dim_axis=0,
+      beam_size=input_data.beam_size)
 
 
 class ReduceLayer(_ConcatInputLayer):
+  """
+  This reduces some axis by using "sum" or "max".
+  It's basically a wrapper around tf.reduce_sum or tf.reduce_max.
+  """
   layer_class = "reduce"
 
   def __init__(self, mode, axis, keep_dims=False, enforce_batch_dim_axis=0, **kwargs):
@@ -1226,6 +1457,7 @@ class ReduceLayer(_ConcatInputLayer):
   @classmethod
   def get_out_data_from_opts(cls, name, sources, axis, keep_dims=False, enforce_batch_dim_axis=0, **kwargs):
     input_data = get_concat_sources_data_template(sources)
+    assert not input_data.sparse
     axis = cls.get_axes(axis=axis, input_data=input_data)
     y_shape = list(input_data.batch_shape)
     if input_data.batch_dim_axis != enforce_batch_dim_axis:
@@ -1243,10 +1475,15 @@ class ReduceLayer(_ConcatInputLayer):
       shape=tuple(y_shape[:enforce_batch_dim_axis] + y_shape[enforce_batch_dim_axis + 1:]),
       batch_dim_axis=enforce_batch_dim_axis,
       dtype=input_data.dtype,
-      sparse=False)
+      sparse=False,
+      beam_size=input_data.beam_size)
 
 
 class SqueezeLayer(_ConcatInputLayer):
+  """
+  Removes an axis with dimension 1.
+  This is basically a wrapper around tf.squeeze.
+  """
   layer_class = "squeeze"
 
   def __init__(self, axis, enforce_batch_dim_axis=0, **kwargs):
@@ -1291,6 +1528,10 @@ class PrefixInTimeLayer(CopyLayer):
 
 
 class ResizeLayer(_ConcatInputLayer):
+  """
+  Resizes the input, i.e. upsampling or downsampling.
+  Supports different kinds, such as linear interpolation or nearest-neighbor.
+  """
   layer_class = "resize"
 
   def __init__(self, factor, axis, kind="nn", **kwargs):
@@ -1344,6 +1585,10 @@ class ResizeLayer(_ConcatInputLayer):
 
 
 class CombineDimsLayer(_ConcatInputLayer):
+  """
+  Combines multiple dimensions.
+  See also MergeDimsLayer.
+  """
   layer_class = "combine_dims"
 
   def __init__(self, axes, **kwargs):
@@ -1408,6 +1653,9 @@ class FsaLayer(LayerBase):
 
 
 class CombineLayer(LayerBase):
+  """
+  Applies some binary operation on all sources, such as addition.
+  """
   layer_class = "combine"
 
   def _check_same_dense_dim(self, sources):
@@ -1482,6 +1730,9 @@ class CombineLayer(LayerBase):
 
 
 class CompareLayer(LayerBase):
+  """
+  Compares (e.g. equality check) all the sources element-wise.
+  """
   layer_class = "compare"
 
   def __init__(self, kind="equal", value=None, **kwargs):
@@ -1612,6 +1863,10 @@ class SubnetworkLayer(LayerBase):
 
 
 class FramewiseStatisticsLayer(LayerBase):
+  """
+  Collects various statistics (such as FER, etc) on the sources.
+  The tensors will get stored in self.stats which will be collected by TFEngine.
+  """
   layer_class = "framewise_statistics"
 
   def __init__(self, sil_label_idx, histogram_num_bins=20, **kwargs):
@@ -1710,7 +1965,10 @@ class FramewiseStatisticsLayer(LayerBase):
 
 
 class Loss(object):
-  class_name = None
+  """
+  Base class for all losses.
+  """
+  class_name = None  # type: str  # used by get_loss_class()
   recurrent = False  # if this is a frame-wise criteria, this will be False
 
   def __init__(self):
@@ -1737,6 +1995,12 @@ class Loss(object):
     """
     from TFUtil import flatten_with_seq_len_mask
     with tf.name_scope("loss_init"):
+      if target:
+        if output.beam_size:
+          if target.beam_size != output.beam_size:
+            target = target.copy_extend_with_beam(output.beam_size)
+        else:
+          assert not target.beam_size
       self.output = output
       self.output_with_activation = output_with_activation
       self.output_seq_lens = output.size_placeholder[0]
@@ -1745,8 +2009,6 @@ class Loss(object):
       # Flat variants are with batch,time collapsed into one, masked via seq_lens.
       self.output_flat = None
       self.output_before_softmax_flat = None
-      if output_with_activation:
-        assert output_with_activation.y is output.placeholder
       if self.output.have_tim_axis():
         self.loss_norm_factor = 1.0 / tf.cast(tf.reduce_sum(self.target_seq_lens), tf.float32)
         time_and_batch_dims = (self.output.time_dim_axis, self.output.batch_dim_axis)
@@ -1819,6 +2081,9 @@ class Loss(object):
 
 
 class CrossEntropyLoss(Loss):
+  """
+  Cross-Entropy loss. Basically sum(target * log(output)). 
+  """
   class_name = "ce"
 
   def get_value(self):
@@ -1898,6 +2163,10 @@ class GenericCELoss(Loss):
 
 
 class CtcLoss(Loss):
+  """
+  Connectionist Temporal Classification (CTC) loss.
+  Basically a wrapper around tf.nn.ctc_loss.
+  """
   class_name = "ctc"
   recurrent = True
 
@@ -1974,10 +2243,11 @@ class EditDistanceLoss(Loss):
   class_name = "edit_distance"
   recurrent = True
 
-  def __init__(self, **kwargs):
+  def __init__(self, debug_print=False, **kwargs):
     super(EditDistanceLoss, self).__init__(**kwargs)
     self._output_sparse_labels = None
     self._target_sparse_labels = None
+    self._debug_print = debug_print
 
   def init(self, output, output_with_activation=None, target=None):
     """
@@ -2010,10 +2280,22 @@ class EditDistanceLoss(Loss):
     self._target_sparse_labels = labels
     return labels
 
+  def _debug_print_out(self):
+    def get_first_seq(data):
+      x = data.get_placeholder_as_batch_major()
+      seq = x[0][:data.size_placeholder[0][0]]
+      return seq
+    output = get_first_seq(self.output)
+    target = get_first_seq(self.target)
+    from TFUtil import encode_raw
+    return ["output", tf.size(output), encode_raw(output), "target", tf.size(target), encode_raw(target)]
+
   def get_error(self):
     output = self._get_output_sparse_labels()
     labels = self._get_target_sparse_labels()
     error = tf.edit_distance(hypothesis=output, truth=labels, normalize=False)
+    if self._debug_print:
+      error = tf.Print(error, self._debug_print_out(), summarize=10)
     return self.reduce_func(error)
 
   def get_value(self):
@@ -2056,7 +2338,7 @@ def _init_loss_class_dict():
 def get_loss_class(loss):
   """
   :param str loss: loss type such as "ce"
-  :rtype: () -> Loss
+  :rtype: () -> Loss | type[Loss] | Loss
   """
   if not _LossClassDict:
     _init_loss_class_dict()
@@ -2081,7 +2363,7 @@ def _init_layer_class_dict():
 def get_layer_class(name):
   """
   :param str name: matches layer_class
-  :rtype: (() -> LayerBase) | LayerBase
+  :rtype: (() -> LayerBase) | type[LayerBase] | LayerBase
   """
   if not _LayerClassDict:
     _init_layer_class_dict()
