@@ -2018,8 +2018,30 @@ class EditDistanceLoss(Loss):
   def get_value(self):
     return None
 
+class BinaryCrossEntropy(Loss):
+  """
+  """
+  class_name = "bin_ce"
+
+  def get_value(self):
+    """
+    """
+    pass
+    #TBD !!! -> implement the following part of theano code
+    #    elif self.loss == 'sse_sigmoid':
+    #      return 1.0 / 2.0 * T.nnet.binary_crossentropy(T.clip(self.p_y_given_x_flat[self.i], 1.e-38, 1.0 - 1.e-5), self.y_data_flat[self.i]).mean(), known_grads
+
 
 _LossClassDict = {}  # type: dict[str,type(Loss)]
+
+def _init_loss_class_dict():
+  for v in globals().values():
+    if isinstance(v, type) and issubclass(v, Loss) and v.class_name:
+      assert v.class_name not in _LossClassDict
+      _LossClassDict[v.class_name] = v
+  for alias, v in {"sse_sigmoid": BinaryCrossEntropy}.items():
+      _LossClassDict[alias] = v
+    
 
 def get_loss_class(loss):
   """
@@ -2027,10 +2049,9 @@ def get_loss_class(loss):
   :rtype: () -> Loss
   """
   if not _LossClassDict:
-    for v in globals().values():
-      if isinstance(v, type) and issubclass(v, Loss) and v.class_name:
-        assert v.class_name not in _LossClassDict
-        _LossClassDict[v.class_name] = v
+    _init_loss_class_dict()
+  if loss not in _LossClassDict:
+    raise Exception("unknown loss class %r" % loss)
   return _LossClassDict[loss]
 
 
