@@ -437,6 +437,7 @@ class Runner(object):
           print('Storing metadata', file=log.v5)
           run_options = tf.RunOptions(
             trace_level=tf.RunOptions.FULL_TRACE)
+          # We could use tfdbg.add_debug_tensor_watch here.
           fetches_results = sess.run(
             fetches_dict,
             feed_dict=feed_dict,
@@ -580,6 +581,7 @@ class Engine(object):
     print("Setup tf.Session with options %r ..." % opts, file=log.v2)
     config = tf.ConfigProto(**opts)
     # config.gpu_options.allow_growth=True
+    # For debugging, see tfdbg.LocalCLIDebugWrapperSession.
     self.tf_session = tf.Session(config=config)
 
   def _reset_graph(self):
