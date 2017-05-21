@@ -36,7 +36,7 @@ def test_generate_batches_recurrent():
 def test_iterate_seqs_no_chunking_1():
   dataset = DummyDataset(input_dim=2, output_dim=3, num_seqs=2, seq_len=11)
   dataset.init_seq_order(1)
-  seqs = list(dataset._iterate_seqs(chunk_size=0, chunk_step=0, used_data_keys=None))
+  seqs = list(dataset.iterate_seqs(chunk_size=0, chunk_step=0, used_data_keys=None))
   assert_equal(len(seqs), 2)
   assert_equal(seqs[0], (0, 0, 11))  # seq-idx, start-frame, end-frame
   assert_equal(seqs[1], (1, 0, 11))
@@ -45,7 +45,7 @@ def test_iterate_seqs_no_chunking_1():
 def test_iterate_seqs_chunking_1():
   dataset = DummyDataset(input_dim=2, output_dim=3, num_seqs=2, seq_len=11)
   dataset.init_seq_order(1)
-  seqs = list(dataset._iterate_seqs(chunk_size=10, chunk_step=5, used_data_keys=None))
+  seqs = list(dataset.iterate_seqs(chunk_size=10, chunk_step=5, used_data_keys=None))
   for s in seqs:
     print(s)
   assert_equal(len(seqs), 6)

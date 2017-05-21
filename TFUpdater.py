@@ -235,13 +235,19 @@ class Updater(object):
     momentum = self.config.float("momentum", 0.0)
     optim_config = self.config.typed_value("optimizer")
     if optim_config:
+      if isinstance(optim_config, str):
+        optim_config = {"class": optim_config}
       assert isinstance(optim_config, dict)
       optim_config = optim_config.copy()
       optim_class_name = optim_config.pop("class")
       optim_class = get_optimizer_class(optim_class_name)
-      optim_config.setdefault("epsilon", epsilon)
-      if momentum:
+      from Util import collect_class_init_kwargs
+      optim_class_kwargs = collect_class_init_kwargs(optim_class)
+      if "epsilon" in optim_class_kwargs:
+        optim_config.setdefault("epsilon", epsilon)
+      if "momentum" in optim_class_kwargs and momentum:
         optim_config.setdefault("momentum", momentum)
+      assert "learning_rate" not in optim_config, "learning_rate will be set implicitely"
       optim_config["learning_rate"] = lr
       print("Create optimizer %s with options %r." % (optim_class, optim_config), file=log.v2)
       optimizer = optim_class(**optim_config)
@@ -262,6 +268,9 @@ class Updater(object):
       assert not momentum
       print("Create Adagrad optimizer.", file=log.v2)
       optimizer = tf.train.AdagradOptimizer(learning_rate=lr)
+    elif self.config.is_of_type("rmsprop", float):
+      print("Create RMSProp optimizer. With Decay %f" % (self.config.float("rmsprop", 0.9)), file=log.v2)
+      optimizer = tf.train.RMSPropOptimizer(decay=self.config.float("rmsprop", 0.9), learning_rate=lr, momentum=momentum, epsilon=epsilon)
     elif self.config.bool("rmsprop", False):
       print("Create RMSProp optimizer.", file=log.v2)
       optimizer = tf.train.RMSPropOptimizer(learning_rate=lr, momentum=momentum, epsilon=epsilon)

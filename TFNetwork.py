@@ -44,7 +44,7 @@ class ExternData(object):
 
   def init_from_dataset(self, dataset):
     """
-    :param Dataset.Dataset dataset: 
+    :param Dataset.Dataset dataset:
     """
     target_keys = list(dataset.get_target_list())
     if target_keys:
@@ -148,6 +148,7 @@ class TFNetwork(object):
         config = get_global_config()
       extern_data.init_from_config(config)
     self.extern_data = extern_data
+    self._config = config
     self.used_data_keys = set()
     self.rnd_seed = rnd_seed
     self.random = numpy.random.RandomState(rnd_seed)
@@ -276,6 +277,10 @@ class TFNetwork(object):
       output = layer_class.get_out_data_from_opts(**layer_desc)
       layer = layer_class(output=output, **layer_desc)
       layer.post_init()
+      if self._config and self._config.bool("debug_print_layer_output_shape", False):
+        layer.output.placeholder = tf.Print(
+          layer.output.placeholder, [layer_class.cls_get_tf_scope_name(name), "shape:", tf.shape(layer.output.placeholder)],
+          summarize=10, name="debug_print_layer_output_shape")
     assert layer.output
     assert layer.output.placeholder is not None
     assert layer.output.size_placeholder is not None

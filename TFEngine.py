@@ -32,7 +32,7 @@ class DataProvider(object):
   It will run a background thread which reads the data from a dataset and puts it into a queue.
   """
 
-  def __init__(self, tf_session, dataset, batches, extern_data, data_keys=None, capacity=10, have_fixed_batch_size=False):
+  def __init__(self, tf_session, dataset, batches, extern_data, data_keys=None, capacity=10, use_tf_queues=False, seed=1):
     """
     :param tf.Session|tf.InteractiveSession tf_session:
     :param Dataset.Dataset dataset:
@@ -48,20 +48,32 @@ class DataProvider(object):
     self.extern_data = extern_data
     if data_keys is None:
       data_keys = extern_data.data.keys()
-    self.data_keys = sorted(data_keys)
+    self.data_keys = sorted(data_keys)  # type: list[str]
     self.state_change_cond = Condition()
     self.queue = None  # type: Queue
     self.tf_queue = None  # type: tf.FIFOQueue
-    self._have_fixed_batch_size = have_fixed_batch_size
-    if have_fixed_batch_size:
+    self._have_tf_queues = use_tf_queues
+    if use_tf_queues:
       # TODO... also cache this ....
       self.tf_queue = tf.FIFOQueue(capacity=capacity, **extern_data.get_queue_args(with_batch_dim=True))
+      # TF recommendation: capacity = min_after_dequeue + (num_threads + a small safety margin) * batch_size
+      # TODO, do it like I describe it here:
+      # http://stackoverflow.com/questions/41187745/tensorflow-how-can-i-evaluate-a-validation-data-queue-multiple-times-during-tra/44067467#44067467
+      # I.e. we need two separate queues, one for training (RandomShuffleQueue) and one for eval (FIFOQueue),
+      # and switch between the dequeue via tf.cond.
+      self.tf_queue = tf.RandomShuffleQueue(
+        capacity=capacity, min_after_dequeue=int(capacity * 0.8),
+        names=self.data_keys, dtypes=self._dtypes(),
+        seed=seed)
     else:
       self.queue = Queue(maxsize=capacity)
     self.thread = None  # type: Thread
     self.num_frames = NumbersDict(0)
     self.thread_finished = False
     self.reached_end = False
+
+  def _dtypes(self):
+    return [self.extern_data.data[key].dtype for key in self.data_keys]
 
   def start_thread(self):
     thread = Thread(target=self.thread_main, name="DataProvider thread")
@@ -78,7 +90,6 @@ class DataProvider(object):
 
   def _get_next_batch(self):
     """
-    :param Dataset.Batch batch:
     :returns (batch-data-value-dict, batch-seq-lens)
     :rtype: (dict[str,numpy.ndarray], dict[str,numpy.ndarray])
     """
@@ -187,7 +198,7 @@ class DataProvider(object):
     :returns: we dequeue one batch from the queue and provide it for all placeholders of our external data
     :rtype: dict[tf.Tensor,tf.Tensor]
     """
-    if previous_feed_dict and self._have_fixed_batch_size:
+    if previous_feed_dict and self._have_tf_queues:
       # We can reuse the same feed dict every time.
       # It is based on the tf_queue.dequeue() which is symbolic.
       assert self.tf_queue and not self.queue
@@ -226,7 +237,8 @@ class Runner(object):
     self.data_provider = DataProvider(
       tf_session=engine.tf_session, extern_data=engine.network.extern_data,
       data_keys=engine.network.used_data_keys,
-      dataset=dataset, batches=batches)
+      dataset=dataset, batches=batches,
+      seed=self.engine.epoch)
     self._should_train = train
     self._should_eval = eval
     self.store_metadata_mod_step = engine.config.int("store_metadata_mod_step", 0)
@@ -437,6 +449,7 @@ class Runner(object):
           print('Storing metadata', file=log.v5)
           run_options = tf.RunOptions(
             trace_level=tf.RunOptions.FULL_TRACE)
+          # We could use tfdbg.add_debug_tensor_watch here.
           fetches_results = sess.run(
             fetches_dict,
             feed_dict=feed_dict,
@@ -580,6 +593,7 @@ class Engine(object):
     print("Setup tf.Session with options %r ..." % opts, file=log.v2)
     config = tf.ConfigProto(**opts)
     # config.gpu_options.allow_growth=True
+    # For debugging, see tfdbg.LocalCLIDebugWrapperSession.
     self.tf_session = tf.Session(config=config)
 
   def _reset_graph(self):
@@ -1060,7 +1074,7 @@ class Engine(object):
       print("WARNING: Did not finished through the whole epoch.", file=log.v1)
       sys.exit(1)
 
-  def search(self, dataset):
+  def search(self, dataset, do_eval=True):
     """
     :param Dataset.Dataset dataset:
     """
@@ -1070,13 +1084,16 @@ class Engine(object):
       if self.network:
         print("Reinit network with search flag.", file=log.v3)
       self.init_network_from_config(self.config)
+    if do_eval:
+      # It's constructed lazily and it will set used_data_keys, so make sure that we have it now.
+      self.network.get_all_errors()
     batches = dataset.generate_batches(
       recurrent_net=self.network.recurrent,
       batch_size=self.config.int('batch_size', 1),
       max_seqs=self.config.int('max_seqs', -1),
       max_seq_length=int(self.config.float('max_seq_length', 0)),
       used_data_keys=self.network.used_data_keys)
-    runner = Runner(engine=self, dataset=dataset, batches=batches, train=False, eval=True)
+    runner = Runner(engine=self, dataset=dataset, batches=batches, train=False, eval=do_eval)
     runner.run(report_prefix=self.get_epoch_str() + " search")
     assert runner.finalized
     print("search: score %s error %s" % (
