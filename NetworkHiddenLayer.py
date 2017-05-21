@@ -3352,7 +3352,10 @@ class SegmentFinalStateLayer(_NoOpLayer):
         inv_att = self.sources[0].inv_att.dimshuffle(2,1,0) #TBN
       else:
         assert base
-        inv_att = base[0].inv_att.dimshuffle(2,1,0) #TBN
+        if isinstance(base[0],CAlignmentLayer):
+          inv_att = base[0].attention.dimshuffle(2,1,0) #TBN
+        else:
+          inv_att = base[0].inv_att.dimshuffle(2,1,0) #TBN
       z = self.sources[0].output.dimshuffle(1,0,2).reshape((self.sources[0].output.shape[0]*self.sources[0].output.shape[1],self.sources[0].output.shape[2]))
       max_att = T.max(inv_att,axis=-1).T.flatten().nonzero()
       z_aln = z[max_att]
