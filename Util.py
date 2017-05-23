@@ -783,7 +783,10 @@ def json_remove_comments(string, strip_space=True):
 
 def unicode_to_str_json(input):
   if isinstance(input, dict):
-    return {unicode_to_str_json(key): unicode_to_str_json(value) for key, value in input.iteritems()}
+    if PY3:
+        return {unicode_to_str_json(key): unicode_to_str_json(value) for key, value in input.items()}
+    else:
+        return {unicode_to_str_json(key): unicode_to_str_json(value) for key, value in input.iteritems()}
   elif isinstance(input, list):
     return [unicode_to_str_json(element) for element in input]
   elif isinstance(input, unicode):
