@@ -7,6 +7,7 @@ from NetworkBaseLayer import Container, Layer
 from ActivationFunctions import strtoact
 from math import sqrt
 from OpLSTM import LSTMOpInstance
+from OpLSTM import LSTMSOpInstance
 from OpBLSTM import BLSTMOpInstance
 import RecurrentTransform
 import json
@@ -363,6 +364,17 @@ class LSTMP(Unit):
     result = LSTMOpInstance(z[::-(2 * go_backwards - 1)], W_re, outputs_info[1], i[::-(2 * go_backwards - 1)])
     return [ result[0], result[2].dimshuffle('x',0,1) ]
 
+class LSTMPS(Unit):
+  """
+  Very fast custom LSTM implementation for segment encoding
+  """
+  def __init__(self, n_units, **kwargs):
+    super(LSTMPS, self).__init__(n_units, n_units * 4, n_units, n_units * 4, 2)
+
+  def scan_seg(self, x, z, non_sequences, i, att, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
+    z = T.inc_subtensor(z[-1 if go_backwards else 0], T.dot(outputs_info[0],W_re))
+    result = LSTMSOpInstance(z[::-(2 * go_backwards - 1)], W_re, outputs_info[1], i[::-(2 * go_backwards - 1)], att)
+    return [ result[0], result[2].dimshuffle('x',0,1) ]
 
 class LSTMB(Unit):
   """
@@ -556,7 +568,7 @@ class RecurrentUnitLayer(Layer):
     elif unit in ("lstmc", "lstmp") and not is_using_gpu():
       unit = "lstme"
     if segment_input:
-      unit = "lstms"
+      unit = "lstmps"
     if n_out is None:
       assert encoder
       n_out = sum([enc.attrs['n_out'] for enc in encoder])
@@ -607,14 +619,16 @@ class RecurrentUnitLayer(Layer):
     self.set_attr('n_dec', n_dec)
     self.set_attr('segment_input', segment_input)
     if segment_input:
-      #inv_att = self.sources[0].attention.dimshuffle(2, 1, 0)
-      if isinstance(self.sources[0],RecurrentUnitLayer):
-        self.inv_att = self.sources[0].inv_att
+      if not self.eval_flag:
+        if isinstance(self.sources[0],RecurrentUnitLayer):
+          self.inv_att = self.sources[0].inv_att #NBT
+        else:
+          self.inv_att = self.sources[0].attention #NBT
+        inv_att = T.roll(self.inv_att.dimshuffle(2, 1, 0),1,axis=0)#TBN
+        inv_att = T.set_subtensor(inv_att[0],T.zeros((inv_att.shape[1],inv_att.shape[2])))
+        inv_att = T.max(inv_att,axis=-1)
       else:
-        self.inv_att = self.sources[0].attention
-      #inv_att = self.inv_att.dimshuffle(2, 1, 0)
-      inv_att = T.roll(self.inv_att.dimshuffle(2, 1, 0),1,axis=0)
-      inv_att = T.set_subtensor(inv_att[0],T.zeros((inv_att.shape[1],inv_att.shape[2])))
+        inv_att = T.zeros((self.sources[0].output.shape[0],self.sources[0].output.shape[1],1))
     if encoder and hasattr(encoder[0],'act'):
       self.set_attr('encoder', ",".join([e.name for e in encoder]))
     if base:

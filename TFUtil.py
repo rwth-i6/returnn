@@ -47,7 +47,8 @@ class Data(object):
                batch_dim_axis=0,
                time_dim_axis=NotSpecified,
                available_for_inference=True,
-               auto_create_placeholders=False):
+               auto_create_placeholders=False,
+               beam_size=None):
     """
     :param str name:
     :param tuple[int|None]|list[int|None] shape: including time-dim (can be None). excluding batch-dim.
@@ -63,6 +64,7 @@ class Data(object):
     :param dict[int,tf.Tensor] tf.Tensor size_placeholder: for every None in shape, this will describe the size.
       The size is always a tensor of shape (batch,), i.e. the size can be different for each sequence in a batch.
     :param bool available_for_inference: e.g. the extern data "classes" is usually not available for inference
+    :param int|None beam_size: the batch-dim could be extended by a beam-size
     """
     self.name = name
     if sparse is None:
@@ -115,11 +117,14 @@ class Data(object):
       size_placeholder = {}
     self.size_placeholder = size_placeholder  # type: dict[int,tf.Tensor]  # axis w.o. batch -> size of shape (batch,)
     self.available_for_inference = available_for_inference
+    self.beam_size = beam_size
 
   def get_kwargs(self):
     keys = ["name", "shape", "dtype", "sparse", "dim", "batch_dim_axis", "time_dim_axis"]
     if not self.available_for_inference:
       keys += ["available_for_inference"]
+    if self.beam_size is not None:
+      keys += ["beam_size"]
     return {key: getattr(self, key) for key in keys}
 
   def copy(self):
@@ -161,6 +166,24 @@ class Data(object):
         data.batch_dim_axis += 1
       data.time_dim_axis = 0
     return data
+
+  def copy_extend_with_beam(self, beam_size):
+    """
+    :param int beam_size:
+    :return: copy of myself where the batch-dim is extended/multiplied by beam_size, using tf.tile
+    :rtype: Data
+    """
+    with tf.name_scope("data_extend_with_beam"):
+      data = self.copy()
+      if data.beam_size and data.beam_size == beam_size:
+        return data
+      assert data.beam_size is None, "incompatible beam sizes (%r vs %r)" % (data.beam_size, beam_size)
+      tile_multiples = [1] * data.batch_ndim
+      tile_multiples[data.batch_dim_axis] = beam_size
+      data.placeholder = tf.tile(data.placeholder, multiples=tile_multiples)
+      data.size_placeholder = {i: tf.tile(v, [beam_size]) for (i, v) in data.size_placeholder.items()}
+      data.beam_size = beam_size * (data.beam_size or 1)
+      return data
 
   def copy_template(self, name=None):
     """
@@ -402,7 +425,7 @@ class Data(object):
     if isinstance(axes, str):
       axes = axes.lower()
       if axes in ["b", "batch"]:
-        axes = 0
+        axes = self.batch_dim_axis
       elif axes == "spatial":
         axes = self.get_dynamic_batch_axes()
         axes.remove(self.batch_dim_axis)
@@ -414,6 +437,11 @@ class Data(object):
       elif axes in ["t", "time"]:
         assert self.time_dim_axis is not None
         axes = self.time_dim_axis
+      elif axes == "except_time":
+        axes = list(range(self.batch_ndim))
+        axes.remove(self.batch_dim_axis)
+        assert self.time_dim_axis is not None
+        axes.remove(self.time_dim_axis)
       elif axes in ["f", "feature", "non_spatial"]:
         axes = self.get_non_dynamic_batch_axes()
       else:
@@ -429,7 +457,11 @@ class Data(object):
         assert isinstance(i, (str, tuple, list))
         flat_axes += self.get_axes_from_description(i)
     flat_axes = [i % self.batch_ndim for i in flat_axes]
-    return flat_axes
+    res = []
+    for i in flat_axes:
+      if i not in res:
+        res.append(i)
+    return res
 
   def get_axis_from_description(self, axis):
     """
@@ -709,19 +741,19 @@ def check_input_dim(x, axis, dim):
   """
   :param tf.Tensor x:
   :param int axis: which axis to check
-  :param int dim:
+  :param int|tf.Tensor dim:
   :return: x with check added
   :rtype: tf.Tensor
   """
   dyn_shape = x.get_shape()
-  if dyn_shape.ndims is not None:
+  if dyn_shape.ndims is not None and isinstance(dim, int):
     if dyn_shape.dims[axis].value is not None:
       assert dyn_shape.dims[axis].value == dim
       return x
   # Need to fall-back to runtime check.
   with reuse_name_scope("checks"):
     with tf.control_dependencies(
-      [tf.assert_equal(tf.shape(x)[axis], dim, data=["shape[%i] not %i" % (axis, dim), tf.shape(x)])]):
+      [tf.assert_equal(tf.shape(x)[axis], dim, data=["shape[%i] not dim" % (axis,), dim, tf.shape(x)])]):
       return tf.identity(x, "identity_with_dim_check")
 
 
@@ -1045,6 +1077,21 @@ def swapaxes(x, axis1, axis2):
     return tf.transpose(x, perm=perm)
 
 
+def move_axis(x, old_axis, new_axis):
+  """
+  :param tf.Tensor x: 
+  :param int old_axis: 
+  :param int new_axis: 
+  """
+  with tf.name_scope("move_axis"):
+    ndim = x.get_shape().ndims
+    assert ndim is not None, "not supported currently: %r" % x
+    perm = list(range(ndim))
+    old = perm.pop(old_axis)
+    perm.insert(new_axis, old)
+    return tf.transpose(x, perm)
+
+
 def sequence_mask(lengths, **kwargs):
   """
   Wraps around tf.sequence_mask().
@@ -1145,9 +1192,11 @@ def expand_dims_unbroadcast(x, axis, dim, name="expand_dims_unbroadcast"):
   """
   with tf.name_scope(name):
     x = tf.expand_dims(x, axis)
-    new_ndim = x.get_shape().ndims
-    assert new_ndim is not None
-    x = tf.tile(x, [dim if (axis == i) else 1 for i in range(new_ndim)])
+    if dim is not 1:
+      new_ndim = x.get_shape().ndims
+      assert new_ndim is not None, "not implemented otherwise yet"
+      assert isinstance(axis, int), "not implemented otherwise yet"
+      x = tf.tile(x, [dim if (axis == i) else 1 for i in range(new_ndim)])
     return x
 
 
@@ -2078,3 +2127,112 @@ def optional_add(*args):
       else:
         y = y + v
   return y
+
+
+def windowed_nd(source, window, padding="same", time_axis=1, new_window_axis=2):
+  """
+  :param tf.Tensor source: N-D tensor of shape (..., n_time, ...)
+  :param int|tf.Tensor window: window size
+  :param str padding: "same" or "valid"
+  :param int time_axis:
+  :param int new_window_axis:
+  :return: tensor of shape (..., n_time, ..., window, ...)
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope("windowed_batch"):
+    if time_axis != 0:
+      source = move_axis(source, time_axis, 0)  # (n_time,...)
+    source_shape = tf.shape(source)
+    n_time = source_shape[0]
+    if padding == "same":
+      n_out_time = n_time
+      w_right = window // 2
+      w_left = window - w_right - 1
+      pad_left = tf.zeros(tf.concat([[w_left], source_shape[1:]], axis=0), dtype=source.dtype)
+      pad_right = tf.zeros(tf.concat([[w_left], source_shape[1:]], axis=0), dtype=source.dtype)
+      source = tf.concat([pad_left, source, pad_right], axis=0)  # shape[0] == n_time + window - 1
+    elif padding == "valid":
+      n_out_time = n_time - window + 1
+    else:
+      raise Exception("invalid padding %r" % padding)
+    tiled_dimshuffle = expand_dims_unbroadcast(source, axis=0, dim=window)  # (window,n_time+window-1,...)
+    # We want to shift every dim*time block by one to the left.
+    # To do this, we interpret that we have one more time frame (i.e. n_time+window).
+    # We have to do some dimshuffling so that we get the right layout, then we can flatten,
+    # add some padding, and then dimshuffle it back.
+    # Then we can take out the first n_time frames.
+    tiled_flat = tf.reshape(tiled_dimshuffle, [-1])
+    rem = window * tf.reduce_prod(source_shape[1:])
+    tiled_flat_pad_right = tf.concat([tiled_flat, tf.zeros((rem,), dtype=source.dtype)], axis=0)
+    tiled_reshape_shift = tf.reshape(
+      tiled_flat_pad_right,
+      tf.concat([(window, n_time + window),
+                 source_shape[1:]], axis=0))  # add time frame, (window,n_time+window,...)
+    final = tiled_reshape_shift
+    if new_window_axis != 0:
+      final = move_axis(final, 0, new_window_axis)  # (n_time+window,...,window,...)
+      final = final[:n_out_time]  # (n_out_time,...,window,...)
+    else:
+      final = final[:, :n_out_time]  # (window,n_out_time,...)
+    # Move time-axis back to its original place.
+    if new_window_axis <= time_axis:
+      time_axis += 1  # New window axis was inserted before.
+    if time_axis != 0:
+      if new_window_axis != 0:
+        final = move_axis(final, 0, time_axis)
+      else:
+        final = move_axis(final, 1, time_axis)
+    return final
+
+
+def global_tensor(f, name):
+  """
+  This creates a global accessible tensor in the graph to be reused later,
+  i.e. on the second call given a unique name, it will not create a new tensor
+  but return the previously created tensor.
+  This is for the current graph, i.e. if there is a new graph, it will recreate the tensor. 
+  
+  :param () -> tf.Tensor f: callable which creates the tensor
+  :param str name: global reference name for the tensor
+  :return: the tensor
+  :rtype: tf.Tensor
+  """
+  graph = tf.get_default_graph()
+  assert isinstance(graph, tf.Graph)
+  abs_graph_name = "globals/%s:0" % name
+  try:
+    return graph.get_tensor_by_name(abs_graph_name)
+  except KeyError:  # does not exist yet
+    pass
+  with tf.name_scope("global_tensor_%s" % name):  # relative to the current scope
+    v = f()
+  with tf.name_scope("globals/"):  # enter the absolute scope
+    v = tf.identity(v, name=name)
+  assert isinstance(v, tf.Tensor)
+  assert v.name == abs_graph_name
+  assert graph.get_tensor_by_name(abs_graph_name) is v
+  return v
+
+
+def encode_raw(x, axis=-1, seq_lens=None):
+  """
+  The inverse function of tf.decode_raw().
+  Also see: https://stackoverflow.com/questions/43403147/how-to-create-a-encode-raw-tensorflow-function
+
+  :param tf.Tensor x: of integer types [0,255], will get casted to uint8
+  :param int axis: the axis to reduce-join the string. decode_raw has added it at the end
+  :param tf.Tensor|None seq_lens: must have same shape as x after reduce-joining.
+    Note that using seq_lens will make our output not compatible with tf.decode_raw() anymore
+    because tf.decode_raw() requires all strings to be of the same length.
+  :return: string tensor
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope("encode_raw"):
+    character_lookup = global_tensor(
+      lambda: tf.constant([chr(i) for i in range(256)]), name="character_lookup")
+    raw_bytes = tf.bitcast(x, tf.uint8, name="raw_bytes")
+    chars = tf.gather(character_lookup, indices=tf.cast(raw_bytes, tf.int32), name="chars")
+    strings = tf.reduce_join(chars, axis=axis, name="strings")
+    if seq_lens is not None:
+      strings = tf.substr(strings, pos=tf.zeros_like(seq_lens), len=seq_lens)
+    return strings

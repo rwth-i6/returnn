@@ -191,6 +191,51 @@ __global__ void lstm_kernel(float * data, const float * old_state, bool old_stat
 	}
 }
 
+__global__ void lstms_kernel(float * data, const float * old_state, bool old_state_strided,
+ float * output, float * state_out, int n_cells, int n_batch, const float * i, const float * att)
+{
+        //layout:
+        //data[0*n_cells..1*n_cells-1] : input gate
+        //data[1*n_cells..2*n_cells-1] : forget gate
+        //data[2*n_cells..3*n_cells-1] : output gate
+        //data[3*n_cells..4*n_cells-1] : cell state
+        //output[0*n_cells..1*n_cells-1]: cell output
+        //repeated for every mini-batch
+
+        int idx = threadIdx.x + blockDim.x * blockIdx.x;
+        while (idx < n_cells * n_batch)
+        {
+            int batch_idx = idx / n_cells;
+                int start = batch_idx * 4 * n_cells + idx % n_cells;
+                float i_batch = i[batch_idx];
+                float att_batch = att[batch_idx];
+                //input, forget and output gates
+                float inpGate = 1.f / (1.f + expf(-data[start]));
+                float fgtGate = (1.f / (1.f + expf(-data[start + n_cells])))*(1.f - att_batch);
+                //printf("%d \n",fgtGate);
+                float outGate = 1.f / (1.f + expf(-data[start + 2 * n_cells]));
+                float state = inpGate * tanhf(data[start + 3 * n_cells]);
+                float old_state_batch = old_state_strided ? old_state[start] : old_state[idx];
+
+                state += fgtGate * old_state_batch;
+                state = state * i_batch + old_state_batch * (1.f - i_batch);
+
+                //cell output
+                output[idx] = outGate * tanhf(state) * i_batch;
+
+                data[start] = inpGate;
+                data[start + n_cells] = fgtGate;
+                data[start + 2 * n_cells] = outGate;
+                data[start + 3 * n_cells] = state;
+                if(state_out)
+                {
+                    state_out[idx] = state;
+                }
+
+                idx += gridDim.x * blockDim.x;
+        }
+}
+
 __global__ void lstm_bwd_kernel(float * delta, float * epsilon, const float * next_epsilon, const float * old_state,
   bool old_state_strided, const float * Y, int n_cells, int n_batch, const float * i)
 {
@@ -434,6 +479,24 @@ void do_lstm(CudaNdarray * H, CudaNdarray * out, const CudaNdarray * prev, float
 	const float * data_i = CudaNdarray_DEV_DATA(i) + x * n_batch;
 	//TODO tune launch configuration
 	lstm_kernel<<<DIM_GRID, DIM_BLOCK>>>(data_H, data_old_state, x > 0, data_out, state_out, n_cells, n_batch, data_i);
+}
+
+void do_lstms(CudaNdarray * H, CudaNdarray * out, const CudaNdarray * prev, float * state_out, int y, int x, const CudaNdarray * i, const CudaNdarray * att)
+{
+        assert(y == 0 && "2d LSTM not supported yet");
+        int dims[2], dims_att[2];
+        lastTwoDims(H, dims);
+        assert(dims[1] % 4 == 0); //3 gates + cell
+        int n_cells = dims[1] / 4;
+        int n_batch = dims[0];
+        float * data_H = data_ptr(H, y, x);
+        const float * data_prev = CudaNdarray_DEV_DATA(prev);
+        const float * data_old_state = x > 0 ? data_ptr(H, y, x - 1) + 3 * n_cells : data_prev;
+        float * data_out = data_ptr(out, y, x);
+        const float * data_i = CudaNdarray_DEV_DATA(i) + x * n_batch;
+        const float * data_att = CudaNdarray_DEV_DATA(att) + x * n_batch;
+        //TODO tune launch configuration
+        lstms_kernel<<<DIM_GRID, DIM_BLOCK>>>(data_H, data_old_state, x > 0, data_out, state_out, n_cells, n_batch, data_i, data_att);
 }
 
 //epsilon are the derivates w.r.t. Z, delta stores the gate and cell activations and will store the derivatives later
