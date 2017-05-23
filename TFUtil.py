@@ -120,6 +120,11 @@ class Data(object):
     return dict(name=self.name, dtype=self.dtype, shape=self.batch_shape if with_batch else self.shape)
 
   def get_axes_with_size(self):
+    """
+    :return: list of axes which can vary in size for each entry of the batch-dim, e.g. the time-dim-axis.
+      The axis index is counted without the batch-dim.
+    :rtype: list[int]
+    """
     return [i for (i, dim) in enumerate(self.shape) if dim is None]
 
   def get_size_placeholder_kwargs(self, axis, with_batch=True):
@@ -1897,11 +1902,11 @@ def cond(pred, fn1, fn2, name=None):
   If pred can is constant at the call, only the corresponding fn will be called.
 
   :param tf.Tensor|bool pred:
-  :param ()->tf.Tensor fn1:
-  :param ()->tf.Tensor fn2:
+  :param ()->(tf.Tensor|list[tf.Tensor]) fn1:
+  :param ()->(tf.Tensor|list[tf.Tensor]) fn2:
   :param str name:
   :return: fn1() if pred else fn2()
-  :rtype: tf.Tensor
+  :rtype: tf.Tensor|list[tf.Tensor]
   """
   if not callable(fn1):
     raise TypeError("fn1 must be callable.")

@@ -45,62 +45,61 @@ class TFDataQueues(object):
     # http://stackoverflow.com/questions/41187745/tensorflow-how-can-i-evaluate-a-validation-data-queue-multiple-times-during-tra/44067467#44067467
     # I.e. we need two separate queues, one for training (RandomShuffleQueue) and one for eval (FIFOQueue),
     # and switch between the dequeue via tf.cond.
-    from TFUtil import cond, global_tensor, get_global_train_flag_placeholder
+    from TFUtil import cond, get_global_train_flag_placeholder
     self.train_flag = get_global_train_flag_placeholder()
-    queue_names = list(self.data_keys)
-    queue_dtypes = [self.extern_data.data[key].dtype for key in self.data_keys]
+    self.names = list(self.data_keys)
+    self.dtypes = [self.extern_data.data[key].dtype for key in self.data_keys]
+    self.shapes = {
+      key: data.batch_shape if with_batch else data.shape
+      for (key, data) in self.extern_data.data.items()}
+    for key, data in self.extern_data.data.items():
+      for axis in data.get_axes_with_size():
+        self.shapes["%s/size%i" % (key, axis)] = (None,) if with_batch else ()
 
     self.enqueue_placeholders = None
     if not self.enqueue_data:
       self.enqueue_placeholders = {
-        key: global_tensor(
-          lambda: tf.placeholder(**self.extern_data.data[key].get_placeholder_kwargs(with_batch=with_batch)),
-          name="queue_enqueue_placeholder_%s" % key)
+        key: tf.placeholder(**self.extern_data.data[key].get_placeholder_kwargs(with_batch=with_batch))
         for key in self.data_keys}
       for key in self.data_keys:
         for axis in self.extern_data.data[key].get_axes_with_size():
           name = "%s/size%i" % (key, axis)
-          queue_names += [name]
-          queue_dtypes += [self.extern_data.data[key].size_dtype]
-          self.enqueue_placeholders[name] = global_tensor(
-            lambda: tf.placeholder(**self.extern_data.data[key].get_size_placeholder_kwargs(
-              axis, with_batch=with_batch)),
-            name=name)
+          self.names += [name]
+          self.dtypes += [self.extern_data.data[key].size_dtype]
+          self.enqueue_placeholders[name] = tf.placeholder(
+            **self.extern_data.data[key].get_size_placeholder_kwargs(axis, with_batch=with_batch))
       self.enqueue_data = self.enqueue_placeholders
 
-    def make_train_queue():
-      # TF recommendation: capacity = min_after_dequeue + (num_threads + a small safety margin) * batch_size
-      return tf.RandomShuffleQueue(
-        capacity=capacity, min_after_dequeue=int(capacity * 0.8),
-        names=queue_names, dtypes=queue_dtypes,
-        seed=seed).queue_ref
-
-    def make_eval_queue():
-      return tf.FIFOQueue(
-        capacity=capacity, names=queue_names, dtypes=queue_dtypes).queue_ref
-
-    self.train_queue = tf.QueueBase(
-      names=queue_names,
-      dtypes=queue_dtypes,
-      shapes=None,
-      queue_ref=global_tensor(make_train_queue, "train_queue"))
-    self.eval_queue = tf.QueueBase(
-      names=queue_names,
-      dtypes=queue_dtypes,
-      shapes=None,
-      queue_ref=global_tensor(make_eval_queue, "eval_queue"))
-    self.have_more_op = global_tensor(
-      lambda: tf.greater(cond(self.train_flag, self.train_queue.size(), self.eval_queue.size()), 0),
+    # TF recommendation: capacity = min_after_dequeue + (num_threads + a small safety margin) * batch_size
+    self.train_queue = tf.RandomShuffleQueue(
+      capacity=capacity, min_after_dequeue=int(capacity * 0.8),
+      names=self.names, dtypes=self.dtypes,
+      seed=seed, name="train_queue")
+    self.eval_queue = tf.FIFOQueue(
+      capacity=capacity, names=self.names, dtypes=self.dtypes, name="eval_queue")
+    self.have_more_op = tf.greater(
+      cond(self.train_flag, lambda: self.train_queue.size(), lambda: self.eval_queue.size()), 0,
       name="queue_have_more")
-    self.enqueue_op = global_tensor(
-      lambda: cond(
-        self.train_flag,
-        self.train_queue.enqueue(self.enqueue_data),
-        self.eval_queue.enqueue(self.enqueue_data)),
+    self.enqueue_op = cond(
+      self.train_flag,
+      lambda: self.train_queue.enqueue(self.enqueue_data),
+      lambda: self.eval_queue.enqueue(self.enqueue_data),
       name="queue_enqueue")
-    self.dequeue_op = global_tensor(
-      lambda: cond(self.train_flag, self.train_queue.dequeue(), self.eval_queue.dequeue()),
-      name="queue_dequeue")
+    def as_list(x):
+      assert len(x) == len(self.names)
+      return [x[key] for key in self.names]
+    def as_dict(x):
+      """
+      :param list[T] x:
+      :rtype: dict[str,T]
+      """
+      assert len(x) == len(self.names)
+      return dict(zip(self.names, x))
+    self.dequeue_op = as_dict(cond(
+      self.train_flag,
+      lambda: as_list(self.train_queue.dequeue()),
+      lambda: as_list(self.eval_queue.dequeue()),
+      name="queue_dequeue"))
 
   def have_more(self, tf_session):
     """
@@ -123,6 +122,98 @@ class TFDataQueues(object):
       tf_session.run(self.enqueue_op)
 
 
+class TFBatchingQueue(object):
+  """
+  Like tf.PaddingFIFOQueue but with more control.
+  Gets in data via TFDataQueues without batch-dim, and adds the batch-dim,
+  according to batch_size and max_seqs.
+  Output can be accessed via self.output_as_extern_data.
+  """
+  def __init__(self, data_queues, batch_size, max_seqs, capacity=10):
+    """
+    :param TFDataQueues data_queues:
+    """
+    assert not data_queues.with_batch
+    self.data_queues = data_queues
+    self.batch_size = batch_size
+    self.max_seqs = max_seqs
+    self.shapes = {key: data.batch_shape for (key, data) in data_queues.extern_data.data.items()}
+    for key, data in data_queues.extern_data.data.items():
+      assert data.batch_dim_axis == 0, "batch-dim currently is always added at axis 0"
+      for axis in data.get_axes_with_size():
+        self.shapes["%s/size%i" % (key, axis)] = (None,)  # (batch,)
+    self._tf_out_queue = tf.PaddingFIFOQueue(
+      capacity=capacity, name="TFBatchingQueue",
+      names=data_queues.names, dtypes=data_queues.dtypes,
+      shapes=[self.data_queues.shapes[key] for key in data_queues.names])
+    self._tf_batch_nums = tf.FIFOQueue(
+      capacity=capacity, dtypes=[tf.int32], shapes=[()])
+    self._cur_batch_num = tf.Variable(initial_value=0, dtype=tf.int32, trainable=False, name="batch_num")
+    self._cur_max_seq_len = tf.Variable(initial_value=0, dtype=tf.int32, trainable=False, name="max_seq_len")
+    self._tf_enqueue_loop_op = self._make_enqueue_loop_op()
+    from TFUtil import Data
+    self.output_as_extern_data = ExternData(
+      default_input=data_queues.extern_data.default_input,
+      default_target=data_queues.extern_data.default_target,
+      data={key: Data(**data.get_kwargs()) for (key, data) in data_queues.extern_data.data.items()})
+    dequeue_op = self._tf_out_queue.dequeue_up_to(n=self._tf_batch_nums.dequeue())
+    for key, data in self.output_as_extern_data.data.items():
+      data.placeholder = dequeue_op[key]
+      data.size_placeholder = {
+        axis: dequeue_op["%s/size%i" % (key, axis)]
+        for axis in data.get_axes_with_size()}
+
+  def _make_enqueue_op(self):
+    default_key = self.data_queues.extern_data.default_input
+    v = self.data_queues.dequeue_op
+    seq_len = tf.shape(v[default_key])[self.data_queues.extern_data.data[default_key].time_dim_axis_excluding_batch]
+    cur_batch_num = self._cur_batch_num
+    cur_max_seq_len = self._cur_max_seq_len
+    cur_batch_num = tf.assign_add(cur_batch_num, 1)
+    cur_max_seq_len = tf.assign(cur_max_seq_len, tf.maximum(cur_max_seq_len, seq_len))
+    maybe_enqueue_batch_num_op = tf.cond(
+      tf.greater_equal(cur_batch_num, self.max_seqs),
+      lambda: tf.group([
+        self._tf_batch_nums.enqueue(cur_batch_num),
+        tf.assign(cur_batch_num, 0),
+        tf.assign(cur_max_seq_len, 0)]),
+      tf.cond(
+        tf.logical_and(
+          tf.greater_equal(cur_batch_num, 2),
+          tf.greater(cur_max_seq_len * cur_batch_num, self.batch_size)),
+        lambda: tf.group([
+          self._tf_batch_nums.enqueue(cur_batch_num - 1),
+          tf.assign(cur_batch_num, 1),
+          tf.assign(cur_max_seq_len, seq_len)]),
+        lambda: tf.no_op()))
+    op = tf.group([
+      maybe_enqueue_batch_num_op,
+      self._tf_out_queue.enqueue(v)])
+    return op
+
+  def _make_enqueue_loop_op(self):
+    """
+    This will be an endless loop as a TF op.
+    """
+    def body(last):
+      with tf.control_dependencies([last]):
+        return self._make_enqueue_op()
+    return tf.while_loop(
+      cond=lambda: tf.constant(True),
+      body=body,
+      loop_vars=[tf.no_op()],
+      parallel_iterations=1, back_prop=False)
+
+  def loop(self, tf_session, coord):
+    """
+    :param tf.Session tf_session:
+    :param tf.train.Coordinator coord:
+    """
+    with coord.stop_on_exception():
+      while True:
+        tf_session.run(self._tf_enqueue_loop_op)
+
+
 class DataProvider(object):
   """
   This class will fill all the placeholders used for training or forwarding or evaluation etc.
@@ -138,7 +229,7 @@ class DataProvider(object):
     :param ExternData extern_data:
     :param set(str)|None data_keys:
     :param int capacity:
-    :param TFDataQueue|None tf_queue:
+    :param TFDataQueues|None tf_queue:
     """
     self.tf_session = tf_session
     self.coord = tf.train.Coordinator()
