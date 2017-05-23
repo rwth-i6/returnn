@@ -24,7 +24,6 @@ from TFNetwork import TFNetwork, ExternData
 from TFUpdater import Updater
 from Util import hms, NumbersDict
 
-
 class DataProvider(object):
   """
   This class will fill all the placeholders used for training or forwarding or evaluation etc.
@@ -1027,16 +1026,27 @@ class Engine(object):
 
   def forward_to_hdf(self, data, output_file, combine_labels='', batch_size=0):
     """
+    Is aiming at recreating the same interface and output as engine.forward_to_hdf
+
     :type data: Dataset.Dataset
     :type output_file: str
     :type combine_labels: str
     """
+    import h5py
+    forwarding_outputs = []
+    seq_tags = []
+    for seq_idx in range(data.num_seqs):
+        forwarding_outputs.append(self.forward_single(data, seq_idx))
+        seq_tags.append(data.get_tag(seq_idx))
+    #write to hdf file
     cache = h5py.File(output_file, "w")
-    batches = data.generate_batches(recurrent_net=self.network.recurrent, batch_size=batch_size, max_seqs=self.max_seqs)
-    forwarder = HDFForwardTaskThread(self.network, self.devices, data, batches, cache,
-                                     "gzip" if self.compression else None)
-    forwarder.join()
+    cache.create_dataset('inputs', data=numpy.concatenate(forwarding_outputs, axis=0))
+    cache.create_dataset('seqLengths', data=numpy.asarray([fo.shape[0] for fo in forwarding_outputs], dtype='int32'))
+    cache.create_dataset('seqTags', data=numpy.asarray(seq_tags, dtype='|S5'))
+    seqDims = numpy.asarray([0 for fo in forwarding_outputs], dtype='int32')
+    cache.create_dataset('seqDims', data=numpy.reshape(seqDims, (seqDims.shape[0], 1)))
     cache.close()
+
   def analyze(self, data, statistics):
     """
     :param Dataset.Dataset data:
