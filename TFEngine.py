@@ -1011,6 +1011,18 @@ class Engine(object):
     assert output_value.shape[1] == 1  # batch-dim
     return output_value[:, 0]  # remove batch-dim
 
+  def forward_to_hdf(self, data, output_file, combine_labels='', batch_size=0):
+    """
+    :type data: Dataset.Dataset
+    :type output_file: str
+    :type combine_labels: str
+    """
+    cache = h5py.File(output_file, "w")
+    batches = data.generate_batches(recurrent_net=self.network.recurrent, batch_size=batch_size, max_seqs=self.max_seqs)
+    forwarder = HDFForwardTaskThread(self.network, self.devices, data, batches, cache,
+                                     "gzip" if self.compression else None)
+    forwarder.join()
+    cache.close()
   def analyze(self, data, statistics):
     """
     :param Dataset.Dataset data:
