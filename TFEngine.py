@@ -28,6 +28,37 @@ from Util import hms, NumbersDict
 class TFDataQueues(object):
   """
   Provides the data. Use this instead of feed_dict.
+
+  Use case:
+    Conv net training. For every sequence, window around every frame for context.
+    Window must belong together, no unnecessary zero padding should be done introduced by chunking.
+    Or formulated differently: Chunking with step 1, output for a chunk is a single frame.
+    If we feed in a whole sequence, must return the whole sequence,
+    in recog, forwarding, search or eval.
+    What is the input-format? In training, (batch, time, window_time, ...), where the time-dim might be one,
+      or (batch, chunk_size|window_time|time, ...), and conv would use padding="valid",
+      then output is (batch, time - context_size, ...).
+    Conv should use padding="valid" anyway to save computation time,
+      and only explicitly pad zeros where needed.
+    In recog, the input-format is (batch, time, window_time, ...), where the batch-dim might be one,
+      or (batch, time + context_size, ...) which is zero-padded by context_size additional frames.
+    So, have context_size as an additional global option for the network
+      (could be set explicitly in config, or calculated automatically at construction).
+    When chunking for such case, we also should have chunks with such zero-paddings so that recog matches.
+      So, basically, a preprocessing step, before chunking, in both training and recog, is to add
+      zero-padding of size context_size to the input, then we get the output of the expected size.
+    Thus, one thread which goes over the Dataset.
+      No need for different training/eval queue, no random-shuffle-queue, seq-shuffling is done by the Dataset.
+      Here we can also handle the logic to add the context_size padding to the input.
+      After that, chunking can be done (can be done in the same thread just at the final step).
+    Another thread TFBatchingQueue, which collects seqs or chunks and prepares batches.  
+
+    It depends on whether the full network is recurrent or not.
+  
+  Sequence: Windowing?
+  Where do we do the chunking?
+  
+  
   """
   def __init__(self, extern_data, capacity=100, seed=1, with_batch=False, enqueue_data=None):
     """
@@ -85,20 +116,25 @@ class TFDataQueues(object):
       lambda: self.train_queue.enqueue(self.enqueue_data),
       lambda: self.eval_queue.enqueue(self.enqueue_data),
       name="queue_enqueue")
-    def as_list(x):
-      assert len(x) == len(self.names)
-      return [x[key] for key in self.names]
-    def as_dict(x):
-      """
-      :param list[T] x:
-      :rtype: dict[str,T]
-      """
-      assert len(x) == len(self.names)
-      return dict(zip(self.names, x))
-    self.dequeue_op = as_dict(cond(
+
+  def _as_list(self, x):
+    assert len(x) == len(self.names)
+    return [x[key] for key in self.names]
+
+  def _as_dict(self, x):
+    """
+    :param list[T] x:
+    :rtype: dict[str,T]
+    """
+    assert len(x) == len(self.names)
+    return dict(zip(self.names, x))
+
+  def make_dequeue_op(self):
+    from TFUtil import cond
+    return self._as_dict(cond(
       self.train_flag,
-      lambda: as_list(self.train_queue.dequeue()),
-      lambda: as_list(self.eval_queue.dequeue()),
+      lambda: self._as_list(self.train_queue.dequeue()),
+      lambda: self._as_list(self.eval_queue.dequeue()),
       name="queue_dequeue"))
 
   def have_more(self, tf_session):
@@ -121,10 +157,19 @@ class TFDataQueues(object):
       assert data is None
       tf_session.run(self.enqueue_op)
 
+  def enqueue_end_epoch_signal(self, tf_session):
+    """
+    :param tf.Session tf_session:
+    """
+    dtypes = dict(zip(self.names, self.dtypes))
+    feed_dict = {
+      self.enqueue_data[key]: tf.zeros([(d or 0) for d in self.shapes[key]], dtype=dtypes[key])
+      for key in self.names}
+
 
 class TFBatchingQueue(object):
   """
-  Like tf.PaddingFIFOQueue but with more control.
+  Wrapper around tf.PaddingFIFOQueue with more control.
   Gets in data via TFDataQueues without batch-dim, and adds the batch-dim,
   according to batch_size and max_seqs.
   Output can be accessed via self.output_as_extern_data.
@@ -132,6 +177,9 @@ class TFBatchingQueue(object):
   def __init__(self, data_queues, batch_size, max_seqs, capacity=10):
     """
     :param TFDataQueues data_queues:
+    :param int batch_size:
+    :param int max_seqs:
+    :param int capacity:
     """
     assert not data_queues.with_batch
     self.data_queues = data_queues
@@ -150,6 +198,7 @@ class TFBatchingQueue(object):
       capacity=capacity, dtypes=[tf.int32], shapes=[()])
     self._cur_batch_num = tf.Variable(initial_value=0, dtype=tf.int32, trainable=False, name="batch_num")
     self._cur_max_seq_len = tf.Variable(initial_value=0, dtype=tf.int32, trainable=False, name="max_seq_len")
+    self._init_op = tf.variables_initializer([self._cur_batch_num, self._cur_max_seq_len])
     self._tf_enqueue_loop_op = self._make_enqueue_loop_op()
     from TFUtil import Data
     self.output_as_extern_data = ExternData(
@@ -165,7 +214,7 @@ class TFBatchingQueue(object):
 
   def _make_enqueue_op(self):
     default_key = self.data_queues.extern_data.default_input
-    v = self.data_queues.dequeue_op
+    v = self.data_queues.make_dequeue_op()
     seq_len = tf.shape(v[default_key])[self.data_queues.extern_data.data[default_key].time_dim_axis_excluding_batch]
     cur_batch_num = self._cur_batch_num
     cur_max_seq_len = self._cur_max_seq_len
@@ -210,6 +259,7 @@ class TFBatchingQueue(object):
     :param tf.train.Coordinator coord:
     """
     with coord.stop_on_exception():
+      tf_session.run(self._init_op)
       while True:
         tf_session.run(self._tf_enqueue_loop_op)
 
