@@ -259,7 +259,7 @@ class DownsampleLayer(_NoOpLayer):
   """
   layer_class = "downsample"
 
-  def __init__(self, factor, axis, method="average", padding=False, sample_target=False, **kwargs):
+  def __init__(self, factor, axis, method="average", padding=False, sample_target=False, base=None, **kwargs):
     super(DownsampleLayer, self).__init__(**kwargs)
     self.set_attr("method", method)
     if isinstance(axis, (str, unicode)):
@@ -277,7 +277,8 @@ class DownsampleLayer(_NoOpLayer):
     self.set_attr("factor", factor)
     z, z_dim = concat_sources(self.sources, unsparse=False)
     target = self.attrs.get('target','classes')
-    self.y_out = kwargs['y_in'][target]
+    self.y_out = kwargs['y_in'][target] if base is None else base[0].y_out
+    self.index_out =  self.network.j[target] if base is None else base[0].index_out
     n_out = z_dim
     import theano.ifelse
     for f, a in zip(factor, axis):
@@ -299,9 +300,9 @@ class DownsampleLayer(_NoOpLayer):
           self.index = T.concatenate([self.index, T.zeros((f-T.mod(self.index.shape[a], f), self.index.shape[1]), 'int8')], axis=0)
         self.index = TheanoUtil.downsample(self.index, axis=0, factor=f, method="max")
         if sample_target:
-          self.index_out = TheanoUtil.downsample(self.network.j[target], axis=0, factor=f, method="max")
+          self.index_out = TheanoUtil.downsample(self.index_out, axis=0, factor=f, method="max")
         else:
-          self.index_out = self.index
+          self.index_out = self.index if base is None else base[0].index_out
       elif a == 2:
         n_out = int(n_out / f)
     output = z
