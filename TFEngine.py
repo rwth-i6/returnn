@@ -1205,18 +1205,22 @@ class Engine(object):
 
   def forward_to_hdf(self, data, output_file, combine_labels='', batch_size=0):
     """
-    Is aiming at recreating the same interface and output as engine.forward_to_hdf
+    Is aiming at recreating the same interface and output as Engine.forward_to_hdf.
 
     :type data: Dataset.Dataset
     :type output_file: str
     :type combine_labels: str
     """
+    # TODO: current implementation will blow up the memory, should write seq by seq into the dataset.
+    # TODO: should use Runner instead of self.forward_single().
     import h5py
     forwarding_outputs = []
     seq_tags = []
-    for seq_idx in range(data.num_seqs):
-        forwarding_outputs.append(self.forward_single(data, seq_idx))
-        seq_tags.append(data.get_tag(seq_idx))
+    seq_idx = 0
+    while data.is_less_than_num_seqs(seq_idx):
+      forwarding_outputs.append(self.forward_single(data, seq_idx))
+      seq_tags.append(data.get_tag(seq_idx))
+      seq_idx += 1
     #write to hdf file
     cache = h5py.File(output_file, "w")
     cache.create_dataset('inputs', data=numpy.concatenate(forwarding_outputs, axis=0))
