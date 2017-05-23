@@ -455,15 +455,19 @@ class Dataset(object):
       i += 1
     return numpy.array(priori / self.get_num_timesteps(), dtype=theano.config.floatX)
 
-  def _iterate_seqs(self, chunk_size, chunk_step, used_data_keys):
+  def iterate_seqs(self, chunk_size=None, chunk_step=None, used_data_keys=None):
     """
     Takes chunking into consideration.
-    :type chunk_size: int
-    :type chunk_step: int
+    :param int chunk_size:
+    :param int chunk_step:
     :param set(str)|None used_data_keys:
-    :return: index, and seq start, seq end
+    :return: generator which yields tuples (seq index, seq start, seq end)
     :rtype: list[(int,NumbersDict,NumbersDict)]
     """
+    if chunk_size is None:
+      chunk_size = self.chunk_size
+    if chunk_step is None:
+      chunk_step = self.chunk_step
     s = 0
     while self.is_less_than_num_seqs(s):
       length = self.get_seq_length(s)
@@ -520,7 +524,7 @@ class Dataset(object):
         print("Non-recurrent network, chunk size %i:%i ignored" % (chunk_size, chunk_step), file=log.v4)
         chunk_size = 0
     batch = Batch()
-    for seq_idx, t_start, t_end in self._iterate_seqs(chunk_size=chunk_size, chunk_step=chunk_step, used_data_keys=used_data_keys):
+    for seq_idx, t_start, t_end in self.iterate_seqs(chunk_size=chunk_size, chunk_step=chunk_step, used_data_keys=used_data_keys):
       if recurrent_net:
         length = t_end - t_start
         if max_seq_length < 0 and length['classes'] > -max_seq_length:
