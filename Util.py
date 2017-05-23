@@ -781,6 +781,15 @@ def json_remove_comments(string, strip_space=True):
   new_str.append(string[index:])
   return ''.join(new_str)
 
+def unicode_to_str_json(input):
+  if isinstance(input, dict):
+    return {unicode_to_str_json(key): unicode_to_str_json(value) for key, value in input.iteritems()}
+  elif isinstance(input, list):
+    return [unicode_to_str_json(element) for element in input]
+  elif isinstance(input, unicode):
+    return input.encode('utf-8')
+  else:
+    return input
 
 def load_json(filename=None, content=None):
   if content:
@@ -790,7 +799,7 @@ def load_json(filename=None, content=None):
   import json
   content = json_remove_comments(content)
   try:
-    json_content = json.loads(content)
+    json_content = unicode_to_str_json(json.loads(content))
   except ValueError as e:
     raise Exception("config looks like JSON but invalid json content, %r" % e)
   return json_content
