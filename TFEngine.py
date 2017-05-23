@@ -24,6 +24,105 @@ from TFNetwork import TFNetwork, ExternData
 from TFUpdater import Updater
 from Util import hms, NumbersDict
 
+
+class TFDataQueues(object):
+  """
+  Provides the data. Use this instead of feed_dict.
+  """
+  def __init__(self, extern_data, capacity=100, seed=1, with_batch=False, enqueue_data=None):
+    """
+    :param ExternData extern_data: this specifies the data keys
+    :param int capacity:
+    :param int seed:
+    :param bool with_batch: whether we have the batch-dim in input/output
+    :param dict[str,tf.Tensor] enqueue_data: if provided, will be the input
+    """
+    self.extern_data = extern_data
+    self.data_keys = extern_data.data.keys()
+    self.with_batch = with_batch
+    self.enqueue_data = enqueue_data
+
+    # http://stackoverflow.com/questions/41187745/tensorflow-how-can-i-evaluate-a-validation-data-queue-multiple-times-during-tra/44067467#44067467
+    # I.e. we need two separate queues, one for training (RandomShuffleQueue) and one for eval (FIFOQueue),
+    # and switch between the dequeue via tf.cond.
+    from TFUtil import cond, global_tensor, get_global_train_flag_placeholder
+    self.train_flag = get_global_train_flag_placeholder()
+    queue_names = list(self.data_keys)
+    queue_dtypes = [self.extern_data.data[key].dtype for key in self.data_keys]
+
+    self.enqueue_placeholders = None
+    if not self.enqueue_data:
+      self.enqueue_placeholders = {
+        key: global_tensor(
+          lambda: tf.placeholder(**self.extern_data.data[key].get_placeholder_kwargs(with_batch=with_batch)),
+          name="queue_enqueue_placeholder_%s" % key)
+        for key in self.data_keys}
+      for key in self.data_keys:
+        for axis in self.extern_data.data[key].get_axes_with_size():
+          name = "%s/size%i" % (key, axis)
+          queue_names += [name]
+          queue_dtypes += [self.extern_data.data[key].size_dtype]
+          self.enqueue_placeholders[name] = global_tensor(
+            lambda: tf.placeholder(**self.extern_data.data[key].get_size_placeholder_kwargs(
+              axis, with_batch=with_batch)),
+            name=name)
+      self.enqueue_data = self.enqueue_placeholders
+
+    def make_train_queue():
+      # TF recommendation: capacity = min_after_dequeue + (num_threads + a small safety margin) * batch_size
+      return tf.RandomShuffleQueue(
+        capacity=capacity, min_after_dequeue=int(capacity * 0.8),
+        names=queue_names, dtypes=queue_dtypes,
+        seed=seed).queue_ref
+
+    def make_eval_queue():
+      return tf.FIFOQueue(
+        capacity=capacity, names=queue_names, dtypes=queue_dtypes).queue_ref
+
+    self.train_queue = tf.QueueBase(
+      names=queue_names,
+      dtypes=queue_dtypes,
+      shapes=None,
+      queue_ref=global_tensor(make_train_queue, "train_queue"))
+    self.eval_queue = tf.QueueBase(
+      names=queue_names,
+      dtypes=queue_dtypes,
+      shapes=None,
+      queue_ref=global_tensor(make_eval_queue, "eval_queue"))
+    self.have_more_op = global_tensor(
+      lambda: tf.greater(cond(self.train_flag, self.train_queue.size(), self.eval_queue.size()), 0),
+      name="queue_have_more")
+    self.enqueue_op = global_tensor(
+      lambda: cond(
+        self.train_flag,
+        self.train_queue.enqueue(self.enqueue_data),
+        self.eval_queue.enqueue(self.enqueue_data)),
+      name="queue_enqueue")
+    self.dequeue_op = global_tensor(
+      lambda: cond(self.train_flag, self.train_queue.dequeue(), self.eval_queue.dequeue()),
+      name="queue_dequeue")
+
+  def have_more(self, tf_session):
+    """
+    :param tf.Session tf_session:
+    """
+    return tf_session.run(self.have_more_op)
+
+  def enqueue(self, tf_session, data=None):
+    """
+    :param tf.Session tf_session:
+    :param dict[str,numpy.ndarray]|None data: needed iff self.with_feed_input
+    """
+    if self.enqueue_placeholders:
+      assert data is not None
+      tf_session.run(self.enqueue_op, feed_dict={
+        self.enqueue_placeholders[key]: v
+        for (key, v) in data.items()})
+    else:
+      assert data is None
+      tf_session.run(self.enqueue_op)
+
+
 class DataProvider(object):
   """
   This class will fill all the placeholders used for training or forwarding or evaluation etc.
@@ -31,7 +130,7 @@ class DataProvider(object):
   It will run a background thread which reads the data from a dataset and puts it into a queue.
   """
 
-  def __init__(self, tf_session, dataset, batches, extern_data, data_keys=None, capacity=10, use_tf_queues=False, seed=1):
+  def __init__(self, tf_session, dataset, batches, extern_data, data_keys=None, capacity=10, tf_queue=None):
     """
     :param tf.Session|tf.InteractiveSession tf_session:
     :param Dataset.Dataset dataset:
@@ -39,6 +138,7 @@ class DataProvider(object):
     :param ExternData extern_data:
     :param set(str)|None data_keys:
     :param int capacity:
+    :param TFDataQueue|None tf_queue:
     """
     self.tf_session = tf_session
     self.coord = tf.train.Coordinator()
@@ -50,29 +150,13 @@ class DataProvider(object):
     self.data_keys = sorted(data_keys)  # type: list[str]
     self.state_change_cond = Condition()
     self.queue = None  # type: Queue
-    self.tf_queue = None  # type: tf.FIFOQueue
-    self._have_tf_queues = use_tf_queues
-    if use_tf_queues:
-      # TODO... also cache this ....
-      self.tf_queue = tf.FIFOQueue(capacity=capacity, **extern_data.get_queue_args(with_batch_dim=True))
-      # TF recommendation: capacity = min_after_dequeue + (num_threads + a small safety margin) * batch_size
-      # TODO, do it like I describe it here:
-      # http://stackoverflow.com/questions/41187745/tensorflow-how-can-i-evaluate-a-validation-data-queue-multiple-times-during-tra/44067467#44067467
-      # I.e. we need two separate queues, one for training (RandomShuffleQueue) and one for eval (FIFOQueue),
-      # and switch between the dequeue via tf.cond.
-      self.tf_queue = tf.RandomShuffleQueue(
-        capacity=capacity, min_after_dequeue=int(capacity * 0.8),
-        names=self.data_keys, dtypes=self._dtypes(),
-        seed=seed)
-    else:
+    self.tf_queue = tf_queue
+    if not self.tf_queue:
       self.queue = Queue(maxsize=capacity)
     self.thread = None  # type: Thread
     self.num_frames = NumbersDict(0)
     self.thread_finished = False
     self.reached_end = False
-
-  def _dtypes(self):
-    return [self.extern_data.data[key].dtype for key in self.data_keys]
 
   def start_thread(self):
     thread = Thread(target=self.thread_main, name="DataProvider thread")
@@ -139,7 +223,7 @@ class DataProvider(object):
         if self.queue:
           self.queue.put(enqueue_args)
         else:
-          self.tf_session.run(self.tf_queue.enqueue(enqueue_args))  # TODO cache op
+          self.tf_queue.enqueue(enqueue_args)
         with self.state_change_cond:
           self.state_change_cond.notifyAll()
         self.batches.advance(1)
@@ -166,7 +250,7 @@ class DataProvider(object):
         # First check if there is still data in the queue to be processed.
         if self.queue and not self.queue.empty():
           return True
-        if self.tf_queue and self.tf_queue.size().eval(session=self.tf_session) > 0:  # TODO cache op
+        if self.tf_queue and self.tf_queue.have_more(self.tf_session):
           return True
         if self.thread_finished:
           return False
@@ -197,16 +281,13 @@ class DataProvider(object):
     :returns: we dequeue one batch from the queue and provide it for all placeholders of our external data
     :rtype: dict[tf.Tensor,tf.Tensor]
     """
-    if previous_feed_dict and self._have_tf_queues:
-      # We can reuse the same feed dict every time.
-      # It is based on the tf_queue.dequeue() which is symbolic.
-      assert self.tf_queue and not self.queue
-      return previous_feed_dict
+    if self.tf_queue:
+      return {}  # not needed to feed anything, it gets it via the queues
     if single_threaded:
       assert self.batches.has_more()
       output = self.get_next_batch()
     else:
-      output = self.queue.get() if self.queue else self.tf_queue.dequeue()  # TODO cache dequeue op
+      output = self.queue.get()
     assert isinstance(output, dict)
     # The data itself.
     d = {self.extern_data.get_data(k).placeholder: output[k] for k in self.data_keys}
@@ -236,8 +317,7 @@ class Runner(object):
     self.data_provider = DataProvider(
       tf_session=engine.tf_session, extern_data=engine.network.extern_data,
       data_keys=engine.network.used_data_keys,
-      dataset=dataset, batches=batches,
-      seed=self.engine.epoch)
+      dataset=dataset, batches=batches)
     self._should_train = train
     self._should_eval = eval
     self.store_metadata_mod_step = engine.config.int("store_metadata_mod_step", 0)
@@ -517,7 +597,7 @@ class Engine(object):
     self._checked_uninitialized_vars = False
     self._merge_all_summaries = None
     self.dataset_batches = {}  # type: dict[str,BatchSetGenerator]
-    self.train_data = None; " :type: Dataset.Dataset "
+    self.train_data = None  # type: Dataset.Dataset
     self.start_epoch = None
     self.use_dynamic_train_flag = False
     self.use_search_flag = False
@@ -717,12 +797,20 @@ class Engine(object):
     # The new session will by default use the newly created default graph.
     self._make_tf_session()
     tf.set_random_seed(42)
+    from TFUtil import get_global_train_flag_placeholder
+    if self.use_dynamic_train_flag:
+      train_flag = get_global_train_flag_placeholder()
+    else:
+      train_flag = False
+    if False:
+      extern_data = ExternData()
+      extern_data.init_from_config(self.config)
+      tf_queues = TFDataQueues(extern_data=extern_data)
     network = TFNetwork(
       name="root",
       config=self.config,
       rnd_seed=epoch,
-      train_flag=tf.placeholder(tf.bool, shape=(), name="train_flag")
-      if self.use_dynamic_train_flag else False,
+      train_flag=train_flag,
       search_flag=self.use_search_flag)
     network.construct_from_dict(net_desc)
     network.initialize_params(session=self.tf_session)
