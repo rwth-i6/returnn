@@ -102,22 +102,35 @@ class Data(object):
     self.dtype = dtype  # type: str
     if placeholder is None and auto_create_placeholders:
       with tf.name_scope("extern_data/placeholders/%s/" % name):
-        placeholder = tf.placeholder(name=name, dtype=dtype, shape=self.batch_shape)
+        placeholder = tf.placeholder(**self.get_placeholder_kwargs(with_batch=True))
     self.placeholder = placeholder  # type: tf.Tensor  # this will hold the data value itself
     # The size_placeholder is for each variable length dimension in shape, i.e. excluding the batch-dim.
     if size_placeholder is None and auto_create_placeholders:
       size_placeholder = {}  # type: dict[int,tf.Tensor]
       with tf.name_scope("extern_data/placeholders/%s/" % name):
-        for i, dim in enumerate(shape):
-          if dim is None:
-            # For each batch a separate size.
-            size_placeholder[i] = tf.placeholder(
-              name="%s_dim%i_size" % (name, i), dtype=self.size_dtype, shape=(None,))
+        for axis in self.get_axes_with_size():
+          size_placeholder[axis] = tf.placeholder(**self.get_size_placeholder_kwargs(axis))
     if not size_placeholder and self.ndim_dense <= 1:
       size_placeholder = {}
     self.size_placeholder = size_placeholder  # type: dict[int,tf.Tensor]  # axis w.o. batch -> size of shape (batch,)
     self.available_for_inference = available_for_inference
     self.beam_size = beam_size
+
+  def get_placeholder_kwargs(self, with_batch=True):
+    return dict(name=self.name, dtype=self.dtype, shape=self.batch_shape if with_batch else self.shape)
+
+  def get_axes_with_size(self):
+    """
+    :return: list of axes which can vary in size for each entry of the batch-dim, e.g. the time-dim-axis.
+      The axis index is counted without the batch-dim.
+    :rtype: list[int]
+    """
+    return [i for (i, dim) in enumerate(self.shape) if dim is None]
+
+  def get_size_placeholder_kwargs(self, axis, with_batch=True):
+    # For each batch a separate size.
+    return dict(name="%s_dim%i_size" % (self.name, axis), dtype=self.size_dtype,
+                shape=(None,) if with_batch else ())
 
   def get_kwargs(self):
     keys = ["name", "shape", "dtype", "sparse", "dim", "batch_dim_axis", "time_dim_axis"]
@@ -126,6 +139,28 @@ class Data(object):
     if self.beam_size is not None:
       keys += ["beam_size"]
     return {key: getattr(self, key) for key in keys}
+
+  def get_description(self, with_name=True, with_placeholder=False):
+    keys = ["shape", "dtype"]
+    if self.sparse:
+      keys.append("sparse")
+      keys.append("dim")
+    if self.batch_dim_axis != 0:
+      keys.append("batch_dim_axis")
+    if self.time_dim_axis is None or self.time_dim_axis >= 2:
+      keys.append("time_dim_axis")
+    if with_name:
+      keys.insert(0, "name")
+    if with_placeholder:
+      keys.append("placeholder")
+    if not self.available_for_inference:
+      keys.append("available_for_inference")
+    if self.beam_size is not None:
+      keys.append("beam_size")
+    return "Data(%s)" % ", ".join(["%s=%r" % (key, getattr(self, key)) for key in keys])
+
+  def __repr__(self):
+    return self.get_description()
 
   def copy(self):
     """
@@ -258,26 +293,6 @@ class Data(object):
     if self.time_dim_axis_excluding_batch != other.time_dim_axis_excluding_batch:
       return False
     return self._get_var_len_axes() == other._get_var_len_axes()
-
-  def get_description(self, with_name=True, with_placeholder=False):
-    keys = ["shape", "dtype"]
-    if self.sparse:
-      keys.append("sparse")
-      keys.append("dim")
-    if self.batch_dim_axis != 0:
-      keys.append("batch_dim_axis")
-    if self.time_dim_axis is None or self.time_dim_axis >= 2:
-      keys.append("time_dim_axis")
-    if with_name:
-      keys.insert(0, "name")
-    if with_placeholder:
-      keys.append("placeholder")
-    if not self.available_for_inference:
-      keys.append("available_for_inference")
-    return "Data(%s)" % ", ".join(["%s=%r" % (key, getattr(self, key)) for key in keys])
-
-  def __repr__(self):
-    return self.get_description()
 
   @property
   def batch_shape(self):
@@ -1887,11 +1902,11 @@ def cond(pred, fn1, fn2, name=None):
   If pred can is constant at the call, only the corresponding fn will be called.
 
   :param tf.Tensor|bool pred:
-  :param ()->tf.Tensor fn1:
-  :param ()->tf.Tensor fn2:
+  :param ()->(tf.Tensor|list[tf.Tensor]) fn1:
+  :param ()->(tf.Tensor|list[tf.Tensor]) fn2:
   :param str name:
   :return: fn1() if pred else fn2()
-  :rtype: tf.Tensor
+  :rtype: tf.Tensor|list[tf.Tensor]
   """
   if not callable(fn1):
     raise TypeError("fn1 must be callable.")
@@ -2212,6 +2227,16 @@ def global_tensor(f, name):
   assert v.name == abs_graph_name
   assert graph.get_tensor_by_name(abs_graph_name) is v
   return v
+
+
+def get_global_train_flag_placeholder():
+  """
+  :return: bool scalar tensor
+  :rtype: tf.Tensor
+  """
+  return global_tensor(
+    lambda: tf.placeholder(tf.bool, shape=(), name="train_flag"),
+    name="train_flag")
 
 
 def encode_raw(x, axis=-1, seq_lens=None):

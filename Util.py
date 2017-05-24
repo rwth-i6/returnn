@@ -782,6 +782,17 @@ def json_remove_comments(string, strip_space=True):
   return ''.join(new_str)
 
 
+def unicode_to_str_recursive(s):
+  if isinstance(s, dict):
+    return {unicode_to_str_recursive(key): unicode_to_str_recursive(value) for key, value in s.items()}
+  elif isinstance(s, list):
+    return [unicode_to_str_recursive(element) for element in s]
+  elif isinstance(s, unicode):
+    return s.encode('utf-8')
+  else:
+    return s
+
+
 def load_json(filename=None, content=None):
   if content:
     assert not filename
@@ -793,6 +804,8 @@ def load_json(filename=None, content=None):
     json_content = json.loads(content)
   except ValueError as e:
     raise Exception("config looks like JSON but invalid json content, %r" % e)
+  if not PY3:
+    json_content = unicode_to_str_recursive(json_content)
   return json_content
 
 
