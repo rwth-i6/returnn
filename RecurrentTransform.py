@@ -735,8 +735,9 @@ class AttentionInverted(AttentionBase):
     q = T.exp(T.max(p * e, axis=2))
     q = q / q.sum(axis=0,keepdims=True)
     updates[self.t] = T.clip(self.t - self.max_skip[0] + T.cast(q.argmax(axis=0),'float32'),numpy.float32(0),self.t)
-    q = q.dimshuffle(0,1,'x').repeat(x.shape[2],axis=2)
-    inp = T.dot(T.sum(x * q, axis=0), self.W_in)
+    inp = T.dot(x[q.argmax(axis=0),T.arange(x.shape[1])], self.W_in)
+    #q = q.dimshuffle(0,1,'x').repeat(x.shape[2],axis=2)
+    #inp = T.dot(T.sum(x * q, axis=0), self.W_in)
     return inp, updates
 
 
