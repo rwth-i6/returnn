@@ -46,8 +46,13 @@ Generic pipeline
 
 #. We could implement another sequence shuffling with tf.RandomShuffleQueue in training.  
 
+#. Optionally some post processing on sequence level.
+   E.g. addind some zero frames before and after to the input data such that if we e.g. use windowing or convolution
+   with padding="valid", the output will match that of the targets. 
+
 #. We do chunking of the data of each sequence, i.e. selecting chunks of chunk size frames,
    iterating over the frames of a sequence with stride = chunk step.
+   If we added some zero frames, we must consider this.
 
 #. We can do chunk shuffling with another tf.RandomShuffleQueue in training. 
 
@@ -76,26 +81,34 @@ Some use case
 
 Conv net training. For every sequence, window around every frame for context.
 Window must belong together, no unnecessary zero padding should be done introduced by chunking.
-Or formulated differently: Chunking with step 1, output for a chunk is a single frame.
-If we feed in a whole sequence, must return the whole sequence,
-in recog, forwarding, search or eval.
-What is the input-format? In training, (batch, time, window_time, ...), where the time-dim might be one,
-  or (batch, chunk_size|window_time|time, ...), and conv would use padding="valid",
-  then output is (batch, time - context_size, ...).
-Conv should use padding="valid" anyway to save computation time,
-  and only explicitly pad zeros where needed.
-In recog, the input-format is (batch, time, window_time, ...), where the batch-dim might be one,
-  or (batch, time + context_size, ...) which is zero-padded by context_size additional frames.
+Thus, windowing must be done before chunking, or additional zero-padding must be added before chunking.
+Then formulated differently: Chunking with step 1, output for a chunk is a single frame.
+It also means that the windowing can not be part of the network because we will get only chunks there,
+or the windowing makes only sense with padding="valid", otherwise we would get way too much zero-padding
+also at the border of every chunk.
+The same is true for convolution, pooling and others. I.e. padding in time should always be in "valid" mode.
+If we feed in a whole sequence, must return the whole sequence, in recog, forwarding, search or eval.
+With padding="valid", the output has less time frames, exactly context-size less frames.
+Conv should use padding="valid" anyway to save computation time, and only explicitly pad zeros where needed.
+In recog, the input-format is (batch, time + context_size, ...) which is zero-padded by context_size additional frames.
 So, have context_size as an additional global option for the network
   (could be set explicitly in config, or calculated automatically at construction).
 When chunking for such case, we also should have chunks with such zero-paddings so that recog matches.
   So, basically, a preprocessing step, before chunking, in both training and recog, is to add
   zero-padding of size context_size to the input, then we get the output of the expected size.
-Thus, one thread which goes over the Dataset.
-  No need for different training/eval queue, no random-shuffle-queue, seq-shuffling is done by the Dataset.
-  Here we can also handle the logic to add the context_size padding to the input.
-  After that, chunking can be done (can be done in the same thread just at the final step).
-Another thread TFBatchingQueue, which collects seqs or chunks and prepares batches.  
+
+
+Pipeline implementation
+-----------------------
+
+#. One thread which goes over the Dataset.
+   No need for different training/eval queue, no random-shuffle-queue, seq-shuffling is done by the Dataset.
+   Here we can also handle the logic to add the context_size padding to the input.
+   Maybe use Dataset.iterate_seqs which gets us the offsets for each chunk.
+   We can then just add the context_size to each.
+   After that, chunking can be done (can be done in the same thread just at the final step).
+
+#. Another thread TFBatchingQueue, which collects seqs or chunks and prepares batches.  
 
 It depends on whether the full network is recurrent or not.
 
@@ -103,12 +116,12 @@ It depends on whether the full network is recurrent or not.
 
 from __future__ import print_function
 
-import os
 import sys
-import time
 try:
+  # noinspection PyCompatibility
   from Queue import Queue
 except ImportError:
+  # noinspection PyCompatibility
   from queue import Queue
 from threading import Thread, Condition
 
