@@ -52,12 +52,13 @@ def test_DataProvider():
   batch.add_frames(seq_idx=seq_idx, seq_start_frame=0, length=dataset.get_seq_length(seq_idx))
   batch_generator = iter([batch])
   batches = BatchSetGenerator(dataset, generator=batch_generator)
+  from TFDataPipeline import DataProvider
   data_provider = DataProvider(
     tf_session=session, extern_data=extern_data,
     data_keys=["data", "classes"],
     dataset=dataset, batches=batches)
 
-  feed_dict = data_provider.get_feed_dict(previous_feed_dict=None, single_threaded=True)
+  feed_dict = data_provider.get_feed_dict(single_threaded=True)
   print(feed_dict)
   assert_is_instance(feed_dict, dict)
   assert extern_data.data["data"].placeholder in feed_dict
