@@ -685,6 +685,61 @@ class AttentionAlign(AttentionBase):
     return inp, updates
 
 
+class AttentionInverted(AttentionBase):
+  """
+  alignment controlled attention
+  """
+  name = "attention_inverted"
+  def create_vars(self):
+    super(AttentionInverted, self).create_vars()
+    assert len(self.base) == 1
+    assert self.base[0].layer_class.endswith('align')
+    align = self.base[0]
+    self.max_skip = numpy.int32(self.layer.base[0].attrs['max_skip'])
+    p_in = T.concatenate([T.zeros_like(align.p_y_given_x[:self.max_skip]), align.p_y_given_x], axis=0)
+    x_in = T.concatenate([T.zeros_like(align.x_in[:self.max_skip]), align.x_in], axis=0)
+    self.P = self.add_input(p_in, 'P')
+    self.X = self.add_input(x_in, 'X')
+    l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + self.layer.unit.n_in)
+    values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l,
+                                                  size=(self.layer.attrs['n_out'], align.n_cls)),
+                                                  dtype=theano.config.floatX)
+    self.W_cls = self.add_param(self.layer.shared(value=values, borrow=True, name="W_cls"), name="W_cls")
+    values = numpy.zeros((align.n_cls,), 'float32')
+    self.b_cls = self.add_param(self.layer.shared(value=values, borrow=True, name='b_cls'), name='b_cls')
+    values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l,
+                           size=(align.attrs['n_out'], self.layer.unit.n_in)),
+                           dtype=theano.config.floatX)
+    self.W_in = self.add_param(self.layer.shared(value=values, borrow=True, name="W_in"), name="W_in")
+
+    lens = T.sum(self.base[0].index,axis=0,dtype='float32')
+    self.t = self.add_state_var(lens - numpy.float32(1), "t")
+    self.max_skip = self.add_var(T.zeros((1,),'float32') + numpy.float32(self.max_skip),'max_skip')
+    #nlens = T.sum(self.layer.index,axis=0,dtype='float32')
+    #self.ns = self.add_state_var(nlens - numpy.float32(1), "ns")
+    #self.cost_sum = self.add_state_var(T.zeros((1,), 'float32'), "cost_sum")
+
+
+  def attend(self, y_p):
+    inp, updates = 0, {}
+    c = T.nnet.softmax(T.dot(y_p, self.W_cls) + self.b_cls) # BC
+    tau = T.cast(self.t,'int32')[0]
+    max_skip = T.cast(self.max_skip, 'int32')[0]
+    #max_skip = numpy.int32(self.layer.base[0].attrs['max_skip'])
+    #max_skip = 12
+    p = self.P[tau:tau + max_skip] # MBC
+    x = self.X[tau:tau + max_skip]
+    e = T.exp(-T.sum(c.dimshuffle('x',0,1).repeat(p.shape[0],axis=0) * p, axis=2)) # MB
+    e = e / e.sum(axis=0,keepdims=True)
+    e = e.dimshuffle(0,1,'x').repeat(p.shape[2],axis=2)
+    q = T.exp(T.max(p * e, axis=2))
+    q = q / q.sum(axis=0,keepdims=True)
+    updates[self.t] = T.clip(self.t - self.max_skip[0] + T.cast(q.argmax(axis=0),'float32'),numpy.float32(0),self.t)
+    q = q.dimshuffle(0,1,'x').repeat(x.shape[2],axis=2)
+    inp = T.dot(T.sum(x * q, axis=0), self.W_in)
+    return inp, updates
+
+
 class AttentionTime(AttentionList):
   """
   Concatenate time-aligned base element into single list element

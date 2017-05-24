@@ -2903,7 +2903,7 @@ class CAlignmentLayer(ForwardLayer):
     if base is None:
       base = []
     kwargs['n_out'] = kwargs['y_in'][target].n_out #+ blank
-    n_cls = kwargs['y_in'][target].n_out
+    self.n_cls = kwargs['y_in'][target].n_out
     super(CAlignmentLayer, self).__init__(**kwargs)
     self.index = self.network.j[target]
     self.cost_scale_val = numpy.float32(1)
@@ -2918,6 +2918,7 @@ class CAlignmentLayer(ForwardLayer):
     self.set_attr('search', search)
     n_out = sum([s.attrs['n_out'] for s in self.sources])
     x_in = T.concatenate([s.output for s in self.sources],axis=2)
+    self.x_in = x_in
     self.set_attr('n_out', n_out)
     self.set_attr('max_skip', max_skip)
     if tdps is None:
@@ -2932,7 +2933,7 @@ class CAlignmentLayer(ForwardLayer):
     if nil is None:
       nil = -1
     elif nil < 0:
-      nil = n_cls + nil
+      nil = self.n_cls + nil
     self.cost_val = T.constant(0)
     self.error_val = T.constant(0)
     if self.eval_flag:
@@ -2976,6 +2977,7 @@ class CAlignmentLayer(ForwardLayer):
     if reduce_output:
       self.output = z_out if output_z else x_out
       self.index = index
+      self.p_y_given_x = T.nnet.softmax(z_out.reshape((z_out.shape[0]*z_out.shape[1],z_out.shape[2]))).reshape(z_out.shape)
       if train_emission: #  and not self.train_flag:
         def encode(x_t,q_t,x_p,q_p,i_p):
           q_c = q_t + q_p
@@ -3005,13 +3007,12 @@ class CAlignmentLayer(ForwardLayer):
     else:
       self.output = self.z if output_z else x_in
       self.index = self.sources[0].index
+      self.p_y_given_x = p_in
 
     self.reduced_index = index
 
     if output_z:
-      self.attrs['n_out'] = n_cls
-
-    self.p_y_given_x = p_in
+      self.attrs['n_out'] = self.n_cls
 
     idx = (rindex.flatten() > 0).nonzero()
     if train_skips:
@@ -3038,7 +3039,7 @@ class CAlignmentLayer(ForwardLayer):
       #self.output *= z_out[:, :, 1].dimshuffle(0, 1, 'x').repeat(self.output.shape[2], axis=2)
       z_out = q_in.reshape((q_in.shape[0] * q_in.shape[1], q_in.shape[2])) # (TB)2
       self.cost_val = norm * -T.sum(y_out[idx] * T.log(z_out[idx]))
-      self.error_val = norm * T.sum(T.ge(T.sqr(z_out[idx,1]-y_out[idx,1]),numpy.float32(1./n_cls)))
+      self.error_val = norm * T.sum(T.ge(T.sqr(z_out[idx,1]-y_out[idx,1]),numpy.float32(1./self.n_cls)))
       return
     else:
       y_out = self.y_out
