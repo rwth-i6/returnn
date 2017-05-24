@@ -1,3 +1,4 @@
+from __future__ import print_function
 
 import theano
 import numpy
@@ -24,7 +25,7 @@ from Log import log
 from cuda_implementation.FractionalMaxPoolingOp import fmp
 from math import ceil
 from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
-from TheanoUtil import print_to_file
+from TheanoUtil import print_to_file, DumpOp
 
 class HiddenLayer(Layer):
   def __init__(self, activation="sigmoid", **kwargs):
@@ -570,7 +571,7 @@ class SubnetworkLayer(_NoOpLayer):
         sub_n_out[k] = [s.attrs["n_out"], s.output.ndim - 1]
         data_map_d[k] = s.output
         data_map_di[k] = s.index
-    print >>log.v2, "New subnetwork", self.name, "with data", {k: s.name for (k, s) in zip(data_map, self.sources)}, sub_n_out
+    print("New subnetwork", self.name, "with data", {k: s.name for (k, s) in zip(data_map, self.sources)}, sub_n_out, file=log.v2)
     self.subnetwork = self.network.new_subnetwork(
       json_content=subnetwork, n_out=sub_n_out, data_map=data_map_d, data_map_i=data_map_di)
     self.subnetwork.print_network_info(name="layer %r subnetwork" % self.name)
@@ -578,18 +579,18 @@ class SubnetworkLayer(_NoOpLayer):
     if trainable:
       self.params.update(self.subnetwork.get_params_shared_flat_dict())
     if load == "<random>":
-      print >>log.v2, "subnetwork with random initialization"
+      print("subnetwork with random initialization", file=log.v2)
     else:
       from Config import get_global_config
       config = get_global_config()  # this is a bit hacky but works fine in all my cases...
       model_filename = load % {"self": self,
                                "global_config_load": config.value("load", None),
                                "global_config_epoch": config.int("epoch", 0)}
-      print >>log.v2, "loading subnetwork weights from", model_filename
+      print("loading subnetwork weights from", model_filename, file=log.v2)
       import h5py
       model_hdf = h5py.File(model_filename, "r")
       self.subnetwork.load_hdf(model_hdf)
-      print >>log.v2, "done loading subnetwork weights for", self.name
+      print("done loading subnetwork weights for", self.name, file=log.v2)
     self.output = self.subnetwork.output["output"].output
 
   def cost(self):
@@ -640,7 +641,7 @@ class ClusterDependentSubnetworkLayer(_NoOpLayer):
     self.trainable = trainable
     self.set_attr("n_clusters", n_clusters)
     self.n_clusters = n_clusters
-    print >> log.v2, "ClusterDependentSubnetworkLayer: have %s clusters" % self.n_clusters
+    print("ClusterDependentSubnetworkLayer: have %s clusters" % self.n_clusters, file=log.v2)
     assert len(self.sources) >= 2, "need input, ..., cluster_map"
     sources, cluster_map_source = self.sources[:-1], self.sources[-1]
     if concat_sources:
@@ -667,25 +668,25 @@ class ClusterDependentSubnetworkLayer(_NoOpLayer):
         data_map_di[k] = s.index
     self.subnetworks = []
     for idx in range(0, self.n_clusters):
-      print >>log.v2, "New subnetwork", self.name, "with data", {k: s.name for (k, s) in zip(data_map, sources)}, sub_n_out
+      print("New subnetwork", self.name, "with data", {k: s.name for (k, s) in zip(data_map, sources)}, sub_n_out, file=log.v2)
       self.subnetworks.append(self.network.new_subnetwork(
         json_content=subnetwork, n_out=sub_n_out, data_map=data_map_d, data_map_i=data_map_di))
       assert self.subnetworks[idx].output["output"].attrs['n_out'] == n_out
       if trainable:
         self.params.update(self.subnetworks[idx].get_params_shared_flat_dict())
       if load == "<random>":
-        print >>log.v2, "subnetwork with random initialization"
+        print("subnetwork with random initialization", file=log.v2)
       else:
         from Config import get_global_config
         config = get_global_config()  # this is a bit hacky but works fine in all my cases...
         model_filename = load % {"self": self,
                                  "global_config_load": config.value("load", None),
                                  "global_config_epoch": config.int("epoch", 0)}
-        print >>log.v2, "loading subnetwork weights from", model_filename
+        print("loading subnetwork weights from", model_filename, file=log.v2)
         import h5py
         model_hdf = h5py.File(model_filename, "r")
         self.subnetworks[idx].load_hdf(model_hdf)
-        print >>log.v2, "done loading subnetwork weights for", self.name
+        print("done loading subnetwork weights for", self.name, file=log.v2)
     self.ref = cluster_map_source.output[0]
 
     ## generate output lists and sums with ifelse to only compute specified paths
@@ -707,7 +708,7 @@ class ClusterDependentSubnetworkLayer(_NoOpLayer):
     # TODO for each TheanoVar in dict do the ifelse thing
     self.output_grads = {}
     if not self.subnetworks[0].known_grads:
-      print >> log.v5, "known grads is empty"
+      print("known grads is empty", file=log.v5)
     else:
       raise NotImplementedError
 
@@ -2711,7 +2712,6 @@ class DumpLayer(_NoOpLayer):
     self.set_attr("with_grad", with_grad)
 
     if self.train_flag:
-      from TheanoUtil import DumpOp
       self.output = DumpOp(filename, container=self.global_debug_container, with_grad=with_grad)(self.output)
       self.index = DumpOp(filename + ".index", container=self.global_debug_container, with_grad=False)(self.index)
 
