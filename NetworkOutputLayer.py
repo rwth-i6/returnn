@@ -409,7 +409,9 @@ class FramewiseOutputLayer(OutputLayer):
         else:
           nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y_data_flat[self.i])
       else:
-        nll = -T.dot(T.log(T.clip(self.p_y_given_x_flat[self.i], 1.e-38, 1.e20)), self.y_data_flat[self.i].T)
+        target  = self.y_data_flat[self.i]
+        output = T.clip(self.p_y_given_x_flat[self.i], 1.e-38, 1.e20)
+        nll = -T.log(output) * target
       if self.attrs.get("auto_fix_target_length"):
         return self.norm * theano.ifelse.ifelse(T.eq(self.index.sum(),0), 0.0, T.sum(nll)), known_grads
       else:
