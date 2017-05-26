@@ -2261,3 +2261,43 @@ def encode_raw(x, axis=-1, seq_lens=None):
     if seq_lens is not None:
       strings = tf.substr(strings, pos=tf.zeros_like(seq_lens), len=seq_lens)
     return strings
+
+
+def pad_zeros_in_axis(x, before=0, after=0, axis=0):
+  """
+  :param tf.Tensor x:
+  :param int|tf.Tensor before:
+  :param int|tf.Tensor after:
+  :param int axis:
+  :return:   
+  """
+  with tf.name_scope("pad_zeros_in_axis"):
+    paddings = [[0, 0] for i in range(x.get_shape().ndims)]
+    paddings[axis] = [before, after]
+    return tf.pad(x, paddings=paddings)
+
+
+def slice_pad_zeros(x, begin, end, axis=0):
+  """
+  :param tf.Tensor x: of shape (..., time, ...)
+  :param int|tf.Tensor begin:
+  :param int|tf.Tensor end:
+  :param int axis:
+  :return: basically x[begin:end] (with axis==0) but if begin < 0 or end > x.shape[0],
+   it will not discard these frames but pad zeros, such that the resulting shape[0] == end - begin.
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope("slice_pad_zeros"):
+    min_frame = tf.minimum(begin, end)
+    left_rem = -min_frame
+    x, begin, end = tf.cond(
+      tf.less_equal(left_rem, 0),
+      [x, begin, end],
+      [pad_zeros_in_axis(x, before=left_rem, axis=axis), begin + left_rem, end + left_rem])
+    max_frame = tf.maximum(begin, end)
+    right_rem = max_frame - tf.shape(x)[axis]
+    x = tf.cond(
+      tf.less_equal(right_rem, 0),
+      x,
+      pad_zeros_in_axis(x, after=right_rem, axis=axis))
+    return single_strided_slice(x, axis=axis, begin=begin, end=end)

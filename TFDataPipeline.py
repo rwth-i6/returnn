@@ -42,18 +42,17 @@ Generic pipeline
    We get the data for each data key (e.g. "data" or "classes") as Numpy arrays
    with any shape. They don't need to have the same number of time frames,
    although in the common case where we have a frame-wise alignment of class labels, they would have.
-   In any case, we basically have dict[str,numpy.ndarray].
+   In any case, we basically have dict[str,numpy.ndarray], the seq_idx and also a seq_tag.
 
 #. We could implement another sequence shuffling with tf.RandomShuffleQueue in training.  
 
-#. Optionally some post processing on sequence level.
-   E.g. addind some zero frames before and after to the input data such that if we e.g. use windowing or convolution
-   with padding="valid", the output will match that of the targets. 
-
 #. We do chunking of the data of each sequence, i.e. selecting chunks of chunk size frames,
    iterating over the frames of a sequence with stride = chunk step.
-   If we added some zero frames, we must consider this.
-
+   While doing chunking, we could add more context around each chunk (zero padding at the borders) if needed,
+   e.g. if we use windowing or convolution with padding="valid",
+   such that the output of the net will match that of the targets.
+   However, this depends on where the data is used in the network; maybe it is used at multiple points?
+  
 #. We can do chunk shuffling with another tf.RandomShuffleQueue in training. 
 
 #. We build up batches from the chunks.
@@ -92,10 +91,10 @@ With padding="valid", the output has less time frames, exactly context-size less
 Conv should use padding="valid" anyway to save computation time, and only explicitly pad zeros where needed.
 In recog, the input-format is (batch, time + context_size, ...) which is zero-padded by context_size additional frames.
 So, have context_size as an additional global option for the network
-  (could be set explicitly in config, or calculated automatically at construction).
+(could be set explicitly in config, or calculated automatically at construction).
 When chunking for such case, we also should have chunks with such zero-paddings so that recog matches.
-  So, basically, a preprocessing step, before chunking, in both training and recog, is to add
-  zero-padding of size context_size to the input, then we get the output of the expected size.
+So, basically, a preprocessing step, before chunking, in both training and recog, is to add
+zero-padding of size context_size to the input, then we get the output of the expected size.
 
 
 Pipeline implementation
@@ -128,10 +127,53 @@ from threading import Thread, Condition
 import numpy
 import tensorflow as tf
 
-from Dataset import Batch, BatchSetGenerator
+from Dataset import Dataset, Batch, BatchSetGenerator
 from Log import log
 from TFNetwork import ExternData
 from Util import hms, NumbersDict
+
+
+class DatasetReader(object):
+  """
+  Reads from Dataset into a queue.
+  """
+  def __init__(self, extern_data, dataset, coord, feed_callback, with_seq_tag=False, with_seq_idx=False):
+    """
+    :param ExternData extern_data:
+    :param Dataset dataset:
+    :param tf.train.Coordinator coord:
+    :param feed_callback:
+    :param bool with_seq_tag:
+    :param bool with_seq_idx:
+    """
+    self.extern_data = extern_data
+    self.dataset = dataset
+    self.coord = coord
+    self.feed_callback = feed_callback
+    self.with_seq_tag = with_seq_tag
+    self.with_seq_idx = with_seq_idx
+
+  def loop(self):
+    with self.coord.stop_on_exception():
+      seq_idx = 0
+      while True:
+        if not self.dataset.is_less_than_num_seqs(seq_idx):
+          break
+        if self.coord.should_stop():
+          break
+        d = {}  # type: dict[str,numpy.ndarray|int|str]
+        for key, data in self.extern_data.data.items():
+          if key in ["seq_tag", "seq_idx"]:
+            continue  # handled below
+          d[key] = self.dataset.get_data(seq_idx, key=key)  # type: numpy.ndarray
+          for axis in data.get_axes_with_size():
+            d["%s/size%i" % (key, axis)] = d[key].shape[axis]  # type: int
+        if self.with_seq_tag:
+          d["seq_tag"] = self.dataset.get_tag(seq_idx)  # type: str
+        if self.with_seq_idx:
+          d["seq_idx"] = seq_idx  # type: int
+        self.feed_callback(d)
+        seq_idx += 1
 
 
 class TFDataQueues(object):
@@ -245,6 +287,82 @@ class TFDataQueues(object):
       for key in self.names}
 
 
+class TFChunkingQueue(object):
+  """
+  Implements chunking in pure TF.
+  I.e. we get full sequences of varying lengths as input (from a queue),
+  and we go over it with stride = chunk step,
+  and extract a window of chunk size at each position,
+  which we feed into the target queue.
+  Optionally, for each chunk, we can add more frames (context window) around the chunk.
+  """
+  def __init__(self, extern_data, make_dequeue_op, target_queue, chunk_size, chunk_step, context_window):
+    """
+    :param ExternData extern_data:
+    :param ()->dict[str,tf.Tensor] make_dequeue_op:
+    :param tf.QueueBase target_queue:
+    :param int|None chunk_size:
+    :param int|None chunk_step:
+    :param int|NumbersDict|None context_window:
+    """
+    default_key = "data"
+    if context_window is None:
+      context_window = NumbersDict(0)
+    elif isinstance(context_window, int):
+      context_window = NumbersDict(broadcast_value=0, numbers_dict={default_key: context_window})
+    assert isinstance(context_window, NumbersDict)
+    if chunk_step is None:
+      chunk_step = 1
+
+    # This is basically a pure TF implementation of Dataset.iterate_seqs.
+    def seq_loop_body(last):
+      seq_item = make_dequeue_op()
+      assert default_key in seq_item
+      assert default_key in extern_data.data
+      assert extern_data.data[default_key].time_dim_axis_excluding_batch == 0
+      default_data = seq_item[default_key]
+
+      if chunk_size is None:
+        # Chunking is not enabled. Just forward the whole sequence.
+        return target_queue.enqueue(seq_item)
+
+      def chunk_loop_body(seq_start):
+        chunk = {}
+        for key, data in extern_data.data.items():
+          if "/size" in key:
+            # will be corrected maybe below, copy here
+            chunk[key] = seq_item[key]
+        for key, data in extern_data.data.items():
+          if "/size" in key:
+            continue  # will be corrected maybe below
+          assert key in seq_item
+          if extern_data.data[key].time_dim_axis is None:
+            chunk[key] = seq_item[key]
+          else:
+            assert extern_data.data[key].time_dim_axis == 0
+            from TFUtil import slice_pad_zeros
+            chunk[key] = slice_pad_zeros(
+              seq_item[key],
+              begin=seq_start - context_window[key],
+              end=seq_start + chunk_size + context_window[key])
+            chunk["%s/size0" % key] = chunk_size + 2 * context_window[key]
+
+        target_queue.enqueue(chunk)
+        return seq_start + chunk_step
+
+      return tf.while_loop(
+        cond=lambda seq_start: tf.less(seq_start - context_window[default_data], tf.shape(default_data)[0]),
+        body=chunk_loop_body,
+        loop_vars=[0],  # initial seq_start
+        parallel_iterations=1, back_prop=False)
+
+    self.loop_op = tf.while_loop(
+      cond=lambda _: tf.constant(True),
+      body=seq_loop_body,
+      loop_vars=[0],  # initial seq_start
+      parallel_iterations=1, back_prop=False)
+
+
 class TFBatchingQueue(object):
   """
   Wrapper around tf.PaddingFIFOQueue with more control.
@@ -326,7 +444,7 @@ class TFBatchingQueue(object):
       with tf.control_dependencies([last]):
         return self._make_enqueue_op()
     return tf.while_loop(
-      cond=lambda: tf.constant(True),
+      cond=lambda _: tf.constant(True),
       body=body,
       loop_vars=[tf.no_op()],
       parallel_iterations=1, back_prop=False)
@@ -342,7 +460,7 @@ class TFBatchingQueue(object):
         tf_session.run(self._tf_enqueue_loop_op)
 
 
-class DataProvider(object):
+class FeedDictDataProvider(object):
   """
   This class will fill all the placeholders used for training or forwarding or evaluation etc.
   of a `TFNetwork.Network`.
@@ -520,3 +638,21 @@ class DataProvider(object):
             "dataset currently does not support variable shape in other dimensions than the first. "
             "dim=%i, placeholder=%r" % (dim, len_placeholder))
     return d
+
+
+class QueueDataProvider(object):
+  def __init__(self, extern_data, coord, train_dataset):
+    """
+    :param ExternData extern_data:
+    :param tf.train.Coordinator coord:
+    :param Dataset train_dataset:
+    """
+    self.extern_data = extern_data
+    self.coord = coord
+    self.seq_queue = TFDataQueues(extern_data=extern_data, with_batch=False)
+    self.train_dataset_reader = None
+
+  def init_train_dataset(self, session, train_dataset):
+    self.train_dataset_reader = DatasetReader(
+      extern_data=self.extern_data, dataset=train_dataset, coord=self.coord,
+      feed_callback=lambda d: self.seq_queue.enqueue(session, d))

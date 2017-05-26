@@ -1,3 +1,14 @@
+"""
+TensorFlow engine
+=================
+
+The basic engine for the TensorFlow backend is implemented here,
+i.e. the high-level logic to train, i.e. looping over epochs,
+holding the network instance, creating the TensorFlow session,
+managing the data pipeline, etc.
+
+See :ref:`tech_overview` for an overview how it fits all together.
+"""
 
 from __future__ import print_function
 
@@ -5,16 +16,17 @@ import os
 import sys
 import time
 try:
+  # noinspection PyCompatibility
   from Queue import Queue
 except ImportError:
+  # noinspection PyCompatibility
   from queue import Queue
-from threading import Thread, Condition
 
 import numpy
 import tensorflow as tf
 from tensorflow.python.client import timeline
 
-from Dataset import Batch, BatchSetGenerator
+from Dataset import Dataset, Batch, BatchSetGenerator
 from Engine import Engine as TheanoEngine
 from LearningRateControl import loadLearningRateControlFromConfig
 from Log import log
@@ -34,9 +46,9 @@ class Runner(object):
     :param bool train: whether to do updates on the model
     :param bool eval: whether to evaluate (i.e. calculate loss/error)
     """
-    from TFDataPipeline import DataProvider
+    from TFDataPipeline import FeedDictDataProvider
     self.engine = engine
-    self.data_provider = DataProvider(
+    self.data_provider = FeedDictDataProvider(
       tf_session=engine.tf_session, extern_data=engine.network.extern_data,
       data_keys=engine.network.used_data_keys,
       dataset=dataset, batches=batches)
@@ -46,7 +58,7 @@ class Runner(object):
     self.reset_updater_vars_mod_step = engine.config.int("reset_updater_vars_mod_step", 0)
     self.finalized = False
     self.num_steps = None
-    self.device_crash_batch = None
+    self.device_crash_batch = None  # type: int|None
     self.start_time = None
     self.elapsed = None
     self._results_accumulated = {}  # type: dict[str,float]  # entries like "cost:output" or "loss"
@@ -318,7 +330,7 @@ class Engine(object):
     self._checked_uninitialized_vars = False
     self._merge_all_summaries = None
     self.dataset_batches = {}  # type: dict[str,BatchSetGenerator]
-    self.train_data = None  # type: Dataset.Dataset
+    self.train_data = None  # type: Dataset
     self.start_epoch = None
     self.use_dynamic_train_flag = False
     self.use_search_flag = False
@@ -588,7 +600,7 @@ class Engine(object):
       if epoch % self.seq_drop_freq == 0:
         if self.seq_drop > 0.0:
           rebatch = True
-      self.epoch = epoch
+      self.epoch = epoch  # type: int
 
       if 'train' in self.dataset_batches:
         if rebatch:
@@ -797,8 +809,8 @@ class Engine(object):
     batch.add_frames(seq_idx=seq_idx, seq_start_frame=0, length=dataset.get_seq_length(seq_idx))
     batch_generator = iter([batch])
     batches = BatchSetGenerator(dataset, generator=batch_generator)
-    from TFDataPipeline import DataProvider
-    data_provider = DataProvider(
+    from TFDataPipeline import FeedDictDataProvider
+    data_provider = FeedDictDataProvider(
       tf_session=self.tf_session, extern_data=self.network.extern_data,
       data_keys=self.network.used_data_keys,
       dataset=dataset, batches=batches)

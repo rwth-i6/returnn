@@ -1,7 +1,12 @@
 #!/usr/bin/env python2.7
 
 """
+Main entry point
+================
+
 This is the main entry point. You can execute this file.
+See :func:`rnn.initConfig` for some arguments, or just run ``./rnn.py --help``.
+See :ref:`tech_overview` for a technical overview.
 """
 
 from __future__ import print_function
