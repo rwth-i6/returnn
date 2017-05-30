@@ -11,10 +11,9 @@ from OpNumpyAlign import NumpyAlignOp
 from NativeOp import FastBaumWelchOp
 from NetworkBaseLayer import Layer
 from SprintErrorSignals import sprint_loss_and_error_signal, SprintAlignmentAutomataOp
-from TheanoUtil import time_batch_make_flat, grad_discard_out_of_bound
+from TheanoUtil import time_batch_make_flat, grad_discard_out_of_bound, DumpOp
 from Util import as_str
 from Log import log
-
 
 class OutputLayer(Layer):
   layer_class = "softmax"
@@ -412,6 +411,7 @@ class FramewiseOutputLayer(OutputLayer):
         target  = self.y_data_flat[self.i]
         output = T.clip(self.p_y_given_x_flat[self.i], 1.e-38, 1.e20)
         nll = -T.log(output) * target
+        self.norm *= self.p_y_given_x.shape[1] * T.inv(T.sum(self.index))
       if self.attrs.get("auto_fix_target_length"):
         return self.norm * theano.ifelse.ifelse(T.eq(self.index.sum(),0), 0.0, T.sum(nll)), known_grads
       else:

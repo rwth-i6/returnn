@@ -3645,3 +3645,145 @@ class RNNBlockLayer(ForwardLayer):
 
 from NativeOp import FastBaumWelchOp
 from SprintErrorSignals import sprint_loss_and_error_signal, SprintAlignmentAutomataOp
+
+
+class SegmentInputLayer(_NoOpLayer):
+  layer_class = 'segment_input'
+
+  def __init__(self, window=15, **kwargs):
+    super(SegmentInputLayer, self).__init__(**kwargs)
+
+    assert len(self.sources) == 1
+    self.set_attr('n_out', self.sources[0].attrs['n_out'])
+    self.set_attr('window', window)
+
+    src_out   = self.sources[0].output
+    src_index = self.sources[0].index
+
+    f = src_out.shape[0]  # number of frames
+    b = src_out.shape[1]  # number of batches
+    d = src_out.shape[2]  # feature dimension
+
+    rs = src_out.dimshuffle(1, 0, 2).reshape((f * b, d))
+    rs_idx = src_index.dimshuffle(1, 0).flatten()
+
+    frames_idx = T.arange(f * b)[(rs_idx>0).nonzero()]\
+                  .repeat(self.attrs['window'])\
+                  .reshape((rs_idx.sum(), self.attrs['window']))\
+                 + T.arange(self.attrs['window'])
+
+    # this filter has entries smaller than -1 for all elements that do not belong to the same sequence as the first frame
+    frame_filter_1 = (f - 1
+                      - (frames_idx[:,0] % f)\
+                         .repeat(self.attrs['window'])\
+                         .reshape((rs_idx.sum(), self.attrs['window']))\
+                      - T.arange(self.attrs['window'])) * 2
+
+    # this filter has entries 0 for all elements that are discarded by self.index, 1 otherwise
+    frame_filter_2 = T.concatenate([rs_idx, T.zeros((self.attrs['window'],), dtype='int8')])[frames_idx.flatten()].reshape((rs_idx.sum(), self.attrs['window']))
+
+    frames_idx = T.switch(frame_filter_1 + frame_filter_2 >= 0, frames_idx, -1).dimshuffle(1, 0)
+
+    # we add an additional vector with zeros s.t. the invalid entries from the filters above result in a feature vector of zeros
+    self.z = T.concatenate([rs, T.zeros((1, src_out.shape[2]))], axis=0)[frames_idx]
+
+    self.make_output(self.z)
+    self.index = T.cast((frame_filter_1 - frame_filter_2).clip(0, 1), 'int8').reshape((self.attrs['window'], rs_idx.sum()))
+
+class UnsegmentInputLayer(_NoOpLayer):
+  layer_class = 'unsegment_input'
+
+  class UnsegmentInputOp(theano.Op):
+    itypes = (T.ftensor3, T.bmatrix)
+    otypes = (T.ftensor3,)
+
+    def perform(self, node, inputs, output_storage):
+      post  = inputs[0]
+      index = inputs[1]
+
+      num_frames  = index.shape[0]
+      num_batches = index.shape[1]
+      window_size = post.shape[0]
+      dim         = post.shape[2]
+
+      out = numpy.zeros((num_frames, num_batches, window_size, dim), dtype='float32')
+
+      cur = 0
+      for b in range(num_batches):
+        for f in range(num_frames):
+          if index[f, b] == 0:
+            continue
+
+          cur_seq_num_frames = min(window_size, num_frames - f)
+          for w in range(cur_seq_num_frames):
+            out[f + w, b, w, :] = post[w, cur, :]
+
+          cur += 1
+
+      out = out.reshape((out.shape[0], out.shape[1], out.shape[2] * out.shape[3]))
+      output_storage[0][0] = out
+
+  def __init__(self, original_output, **kwargs):
+    super(UnsegmentInputLayer, self).__init__(**kwargs)
+
+    assert len(self.sources) == 1
+
+    self.set_attr('original_output', original_output)
+
+    self.index = self.network.get_layer(original_output).index
+    out = self.UnsegmentInputOp()(self.sources[0].p_y_given_x, self.index)
+    self.make_output(out)
+
+class SegmentClassTargets(_NoOpLayer):
+  layer_class = 'segment_class_targets'
+
+  class BuildClassesOp(theano.Op):
+    itypes = (T.iscalar, T.iscalar, T.imatrix, T.bmatrix)
+    otypes = (T.ftensor3, T.bmatrix)
+
+    def perform(self, node, inputs, output_storage):
+      num_classes = inputs[0]
+      window      = inputs[1]
+      classes     = inputs[2]
+      index       = inputs[3]
+
+      assert classes.shape == index.shape
+
+      num_frames = classes.shape[0]
+      num_batches = classes.shape[1]
+      num_start_frames = index.sum()
+
+      out = numpy.zeros((window, num_start_frames, num_classes), dtype='float32')
+      out_index = numpy.zeros((window, num_start_frames), dtype='int8')
+      cur = 0
+      for b in range(num_batches):
+        for f in range(num_frames):
+          if index[f, b] != 1:
+            continue
+
+          cur_seq_num_frames = min(window, num_frames - f)
+          out_index[0:cur_seq_num_frames, cur] = 1
+          for w in range(cur_seq_num_frames):
+            c = classes[f + w, b]
+            out[w:,cur,c] += 1.0
+
+          cur += 1
+
+      out /= numpy.arange(1, window + 1).reshape((window, 1, 1))
+
+      output_storage[0][0] = out
+      output_storage[1][0] = out_index
+
+  def __init__(self, num_classes, window=15, **kwargs):
+    super(SegmentClassTargets, self).__init__(**kwargs)
+
+    assert len(self.sources) == 1
+    self.set_attr('n_out', self.sources[0].attrs['n_out'])
+    self.set_attr('num_classes', num_classes)
+    self.set_attr('window', window)
+
+    self.y_out, self.index = SegmentClassTargets.BuildClassesOp()(T.TensorConstant(theano.tensor.iscalar, self.attrs['num_classes']),
+                                                                  T.TensorConstant(theano.tensor.iscalar, self.attrs['window']),
+                                                                  self.sources[0].output, self.sources[0].index)
+    self.output = self.y_out
+
