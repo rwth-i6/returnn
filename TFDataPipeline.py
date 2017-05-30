@@ -9,6 +9,7 @@ Some related documents:
 
 https://www.tensorflow.org/programmers_guide/reading_data
 https://www.tensorflow.org/programmers_guide/threading_and_queues
+https://www.tensorflow.org/performance/performance_models
 https://www.tensorflow.org/api_guides/python/io_ops
 https://www.tensorflow.org/versions/r1.2/api_docs/python/tf/contrib/data
 https://github.com/tensorflow/tensorflow/issues/4535
@@ -137,14 +138,16 @@ class DatasetReader(object):
   """
   Reads from Dataset into a queue.
   """
-  def __init__(self, extern_data, dataset, coord, feed_callback, with_seq_tag=False, with_seq_idx=False):
+  def __init__(self, extern_data, dataset, coord, feed_callback,
+               with_seq_tag=False, with_seq_idx=False, with_epoch_end=False):
     """
     :param ExternData extern_data:
     :param Dataset dataset:
     :param tf.train.Coordinator coord:
-    :param feed_callback:
+    :param (dict[str,numpy.ndarray|str|int])->None feed_callback:
     :param bool with_seq_tag:
     :param bool with_seq_idx:
+    :param bool with_epoch_end:
     """
     self.extern_data = extern_data
     self.dataset = dataset
@@ -152,12 +155,72 @@ class DatasetReader(object):
     self.feed_callback = feed_callback
     self.with_seq_tag = with_seq_tag
     self.with_seq_idx = with_seq_idx
+    self.with_epoch_end = with_epoch_end
+    self.dict_keys = self._get_keys()
+
+  def _get_keys(self):
+    keys = set()
+    for key, data in self.extern_data.data.items():
+      if key in ["seq_tag", "seq_idx", "epoch_end"]:
+        continue  # handled below
+      keys.add(keys)
+      for axis in data.get_axes_with_size():
+        keys.add("%s/size%i" % (key, axis))
+    if self.with_seq_tag:
+      keys.add("seq_tag")
+    if self.with_seq_idx:
+      keys.add("seq_idx")
+    if self.with_epoch_end:
+      keys.add("epoch_end")
+    return keys
+
+  def get_dtype_for_key(self, key):
+    """
+    :param str key:
+    :rtype: str
+    """
+    if key in self.extern_data.data:
+      return self.extern_data.data[key].dtype
+    if key == "seq_tag":
+      return "string"
+    if key == "seq_idx":
+      return "int32"
+    if key == "epoch_end":
+      return "bool"
+    if "/size" in key:
+      return self.extern_data.data[key.split("/")[0]].size_dtype
+    raise Exception("invalid key %r" % key)
+
+  def get_shape_for_key(self, key):
+    if key in self.extern_data.data:
+      return self.extern_data.data[key].shape
+    if key in ("seq_tag", "seq_idx", "epoch_end"):
+      return ()
+    if "/size" in key:
+      return ()
+    raise Exception("invalid key %r" % key)
+
+  def _make_end_of_epoch_dict(self, seq_idx):
+    d = {}
+    for key in self.dict_keys:
+      dtype = self.get_dtype_for_key(key)
+      shape = self.get_shape_for_key(key)
+      if dtype == "string":
+        d[key] = ""
+      else:
+        d[key] = numpy.zeros(shape, dtype=dtype)
+    if self.with_seq_idx:
+      d["seq_idx"] = seq_idx  # type: int
+    d["epoch_end"] = True
+    return d
 
   def loop(self):
     with self.coord.stop_on_exception():
       seq_idx = 0
       while True:
         if not self.dataset.is_less_than_num_seqs(seq_idx):
+          if self.with_epoch_end:
+            self.feed_callback(self._make_end_of_epoch_dict(seq_idx=seq_idx))
           break
         if self.coord.should_stop():
           break
@@ -172,6 +235,8 @@ class DatasetReader(object):
           d["seq_tag"] = self.dataset.get_tag(seq_idx)  # type: str
         if self.with_seq_idx:
           d["seq_idx"] = seq_idx  # type: int
+        if self.with_epoch_end:
+          d["epoch_end"] = False
         self.feed_callback(d)
         seq_idx += 1
 
@@ -287,7 +352,7 @@ class TFDataQueues(object):
       for key in self.names}
 
 
-class TFChunkingQueue(object):
+class TFChunkingQueueRunner(object):
   """
   Implements chunking in pure TF.
   I.e. we get full sequences of varying lengths as input (from a queue),
@@ -296,7 +361,9 @@ class TFChunkingQueue(object):
   which we feed into the target queue.
   Optionally, for each chunk, we can add more frames (context window) around the chunk.
   """
-  def __init__(self, extern_data, make_dequeue_op, target_queue, chunk_size, chunk_step, context_window):
+  def __init__(self, extern_data, make_dequeue_op, target_queue,
+               chunk_size=None, chunk_step=None, context_window=None,
+               source_has_epoch_end_signal=False):
     """
     :param ExternData extern_data:
     :param ()->dict[str,tf.Tensor] make_dequeue_op:
@@ -304,6 +371,7 @@ class TFChunkingQueue(object):
     :param int|None chunk_size:
     :param int|None chunk_step:
     :param int|NumbersDict|None context_window:
+    :param bool source_has_epoch_end_signal:
     """
     default_key = "data"
     if context_window is None:
@@ -315,12 +383,19 @@ class TFChunkingQueue(object):
       chunk_step = 1
 
     # This is basically a pure TF implementation of Dataset.iterate_seqs.
-    def seq_loop_body(last):
-      seq_item = make_dequeue_op()
+    def seq_loop_body(last_stop, last_op):
+      """
+      :param tf.Tensor last_stop: bool scalar 
+      :param tf.Operation last_op:
+      :return: (cont, seq_idx, op), cont is whether to continue, checked by the condition
+      :rtype: (tf.Tensor, tf.Operation)
+      """
+      with tf.control_dependencies([last_op]):
+        seq_item = make_dequeue_op()
       assert default_key in seq_item
       assert default_key in extern_data.data
       assert extern_data.data[default_key].time_dim_axis_excluding_batch == 0
-      default_data = seq_item[default_key]
+      default_data_seq_len = tf.shape(seq_item[default_key])[0]
 
       if chunk_size is None:
         # Chunking is not enabled. Just forward the whole sequence.
@@ -340,26 +415,32 @@ class TFChunkingQueue(object):
             chunk[key] = seq_item[key]
           else:
             assert extern_data.data[key].time_dim_axis == 0
+            seq_end = tf.minimum(seq_start + chunk_size, tf.shape(seq_item[key])[0])
             from TFUtil import slice_pad_zeros
             chunk[key] = slice_pad_zeros(
               seq_item[key],
               begin=seq_start - context_window[key],
-              end=seq_start + chunk_size + context_window[key])
-            chunk["%s/size0" % key] = chunk_size + 2 * context_window[key]
+              end=seq_end + context_window[key])
+            chunk["%s/size0" % key] = seq_end - seq_start + 2 * context_window[key]
 
         target_queue.enqueue(chunk)
         return seq_start + chunk_step
 
-      return tf.while_loop(
-        cond=lambda seq_start: tf.less(seq_start - context_window[default_data], tf.shape(default_data)[0]),
+      op = tf.while_loop(
+        cond=lambda seq_start: tf.less(seq_start, default_data_seq_len),
         body=chunk_loop_body,
         loop_vars=[0],  # initial seq_start
         parallel_iterations=1, back_prop=False)
+      if source_has_epoch_end_signal:
+        stop = seq_item["epoch_end"]
+      else:
+        stop = False
+      return stop, op
 
-    self.loop_op = tf.while_loop(
-      cond=lambda _: tf.constant(True),
+    _, _, self.loop_op = tf.while_loop(
+      cond=(lambda stop, *args: tf.logical_not(stop)),
       body=seq_loop_body,
-      loop_vars=[0],  # initial seq_start
+      loop_vars=[False, tf.no_op()],  # stop, op
       parallel_iterations=1, back_prop=False)
 
 
@@ -392,6 +473,7 @@ class TFBatchingQueue(object):
       shapes=[self.data_queues.shapes[key] for key in data_queues.names])
     self._tf_batch_nums = tf.FIFOQueue(
       capacity=capacity, dtypes=[tf.int32], shapes=[()])
+    self._tf_epoch_end_signals = tf.FIFOQueue(capacity=capacity, dtypes=[tf.bool], shapes=[()])
     self._cur_batch_num = tf.Variable(initial_value=0, dtype=tf.int32, trainable=False, name="batch_num")
     self._cur_max_seq_len = tf.Variable(initial_value=0, dtype=tf.int32, trainable=False, name="max_seq_len")
     self._init_op = tf.variables_initializer([self._cur_batch_num, self._cur_max_seq_len])
@@ -407,46 +489,62 @@ class TFBatchingQueue(object):
       data.size_placeholder = {
         axis: dequeue_op["%s/size%i" % (key, axis)]
         for axis in data.get_axes_with_size()}
+    self.epoch_end_signal = self._tf_epoch_end_signals.dequeue()
 
   def _make_enqueue_op(self):
+    """
+    :return: (stop, op)
+    :rtype: (tf.Tensor, tf.Operation)
+    """
     default_key = self.data_queues.extern_data.default_input
     v = self.data_queues.make_dequeue_op()
+    stop = v["epoch_end"]
     seq_len = tf.shape(v[default_key])[self.data_queues.extern_data.data[default_key].time_dim_axis_excluding_batch]
     cur_batch_num = self._cur_batch_num
     cur_max_seq_len = self._cur_max_seq_len
-    cur_batch_num = tf.assign_add(cur_batch_num, 1)
+    cur_batch_num = tf.cond(stop, lambda: cur_batch_num, lambda: tf.assign_add(cur_batch_num, 1))
     cur_max_seq_len = tf.assign(cur_max_seq_len, tf.maximum(cur_max_seq_len, seq_len))
-    maybe_enqueue_batch_num_op = tf.cond(
-      tf.greater_equal(cur_batch_num, self.max_seqs),
-      lambda: tf.group([
+    def enqueue_cur():
+      return tf.group([
         self._tf_batch_nums.enqueue(cur_batch_num),
         tf.assign(cur_batch_num, 0),
-        tf.assign(cur_max_seq_len, 0)]),
-      tf.cond(
+        tf.assign(cur_max_seq_len, 0)])
+    maybe_enqueue_batch_num_op = tf.cond(
+      # if
+      tf.greater_equal(cur_batch_num, self.max_seqs),
+      # then
+      enqueue_cur,
+      # else
+      lambda: tf.cond(
+        # if
         tf.logical_and(
           tf.greater_equal(cur_batch_num, 2),
           tf.greater(cur_max_seq_len * cur_batch_num, self.batch_size)),
+        # then
         lambda: tf.group([
           self._tf_batch_nums.enqueue(cur_batch_num - 1),
           tf.assign(cur_batch_num, 1),
           tf.assign(cur_max_seq_len, seq_len)]),
+        # else
         lambda: tf.no_op()))
+    maybe_enqueue_batch_num_op = tf.cond(stop, enqueue_cur, lambda: maybe_enqueue_batch_num_op)
     op = tf.group([
+      cur_batch_num, cur_max_seq_len,
       maybe_enqueue_batch_num_op,
       self._tf_out_queue.enqueue(v)])
-    return op
+    return stop, op
 
   def _make_enqueue_loop_op(self):
     """
     This will be an endless loop as a TF op.
     """
-    def body(last):
-      with tf.control_dependencies([last]):
+    def body(last_stop, last_op):
+      with tf.control_dependencies([last_op]):
         return self._make_enqueue_op()
     return tf.while_loop(
-      cond=lambda _: tf.constant(True),
+      cond=lambda stop, _: tf.logical_not(stop),
       body=body,
-      loop_vars=[tf.no_op()],
+      loop_vars=[False, tf.no_op()],  # stop, op
       parallel_iterations=1, back_prop=False)
 
   def loop(self, tf_session, coord):
@@ -641,18 +739,81 @@ class FeedDictDataProvider(object):
 
 
 class QueueDataProvider(object):
-  def __init__(self, extern_data, coord, train_dataset):
+  """
+  This class is supposed to encapsulate all the logic of this module and to be used by the TF engine.
+  It gets the train and dev dataset instances.
+  """
+  def __init__(self, extern_data, coord, shuffle_train_seqs=False):
     """
     :param ExternData extern_data:
     :param tf.train.Coordinator coord:
-    :param Dataset train_dataset:
+    
+    Creates the queues and connector instances (which will be the queue runners).
+    Thus this will be created in the current TF graph,
+    and you need to create a new instance of this class for a new TF graph.
     """
     self.extern_data = extern_data
     self.coord = coord
-    self.seq_queue = TFDataQueues(extern_data=extern_data, with_batch=False)
+
+    # First we need to create the queues on each level because they can be created independently from each other.
+    # Then we create the connectors, the queue runners, which do some operation and connect the queues.
+    # We treat train and eval dataset separately.
+    # The train dataset will use random-shuffling-queue at some places and also is supposed to run indefinitely.
+    # There can be multiple eval datasets and it is supposed to go exactly over all sequences from one epoch,
+    # thus we use only fifo-queues and count exactly when we are at the end.
+
+    # Queues for sequences, separated for train/eval dataset.
+    if shuffle_train_seqs:
+      self.train_seq_queue = tf.RandomShuffleQueue(
+        name="train_seq_queue",
+        capacity=10,
+        min_after_dequeue=8,
+        **extern_data.get_queue_args(with_batch_dim=False))
+    else:
+      self.train_seq_queue = tf.FIFOQueue(
+        name="train_seq_queue",
+        capacity=10,
+        **extern_data.get_queue_args(with_batch_dim=False))
+    self.eval_seq_queue = tf.FIFOQueue(
+      name="eval_seq_queue",
+      capacity=10,
+      **extern_data.get_queue_args(with_batch_dim=False))
+
+    # Will have separate queues for train and eval.
+    self.chunk_queue = TFDataQueues(
+      extern_data=extern_data, with_batch=False,
+      capacity=100)
+
+    # Now we create the connectors.
+    self.train_chunker = TFChunkingQueueRunner(
+      extern_data=extern_data,
+      make_dequeue_op=self.train_seq_queue.dequeue,
+      target_queue=self.chunk_queue.train_queue,
+      chunk_size=50, chunk_step=25,
+      context_window=5)
+    self.eval_chunker = TFChunkingQueueRunner(
+      extern_data=extern_data,
+      make_dequeue_op=self.eval_seq_queue.dequeue,
+      target_queue=self.chunk_queue.eval_queue,
+      context_window=5)
+
+    # This is both the final queue (tf.PaddingFIFOQueue) as well as the connector to it.
+    self.batch_queue = TFBatchingQueue(
+      data_queues=self.chunk_queue,
+      batch_size=5000, max_seqs=40,
+      capacity=10)
+
     self.train_dataset_reader = None
+    self.eval_dataset_reader = None
 
   def init_train_dataset(self, session, train_dataset):
+    """
+    :param tf.Session session:
+    :param Dataset train_dataset:
+    """
     self.train_dataset_reader = DatasetReader(
       extern_data=self.extern_data, dataset=train_dataset, coord=self.coord,
-      feed_callback=lambda d: self.seq_queue.enqueue(session, d))
+      feed_callback=lambda d: session.run(self.train_seq_queue.enqueue(d)))
+
+  def init_eval_dataset(self, session):
+    pass
