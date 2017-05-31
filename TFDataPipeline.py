@@ -45,7 +45,7 @@ Generic pipeline
    although in the common case where we have a frame-wise alignment of class labels, they would have.
    In any case, we basically have dict[str,numpy.ndarray], the seq_idx and also a seq_tag.
 
-#. We could implement another sequence shuffling with tf.RandomShuffleQueue in training.  
+#. We could implement another sequence shuffling with tf.RandomShuffleQueue in training.
 
 #. We do chunking of the data of each sequence, i.e. selecting chunks of chunk size frames,
    iterating over the frames of a sequence with stride = chunk step.
@@ -53,8 +53,8 @@ Generic pipeline
    e.g. if we use windowing or convolution with padding="valid",
    such that the output of the net will match that of the targets.
    However, this depends on where the data is used in the network; maybe it is used at multiple points?
-  
-#. We can do chunk shuffling with another tf.RandomShuffleQueue in training. 
+
+#. We can do chunk shuffling with another tf.RandomShuffleQueue in training.
 
 #. We build up batches from the chunks.
 
@@ -63,7 +63,7 @@ First the simple method via feed_dict and placeholders
 ------------------------------------------------------
 
 The input data which (and optionally the targets) can be represented with tf.placeholder
-and feed via feed_dict from tf.Session.run which does one train/eval/forward step. 
+and feed via feed_dict from tf.Session.run which does one train/eval/forward step.
 In this case, any preprocessing such as chunking and batching must be done beforehand via Numpy.
 This was the initial implementation and is also the standard implementation for the Theano backend.
 
@@ -108,7 +108,7 @@ Pipeline implementation
    We can then just add the context_size to each.
    After that, chunking can be done (can be done in the same thread just at the final step).
 
-#. Another thread TFBatchingQueue, which collects seqs or chunks and prepares batches.  
+#. Another thread TFBatchingQueue, which collects seqs or chunks and prepares batches.
 
 It depends on whether the full network is recurrent or not.
 
@@ -121,23 +121,25 @@ try:
   # noinspection PyCompatibility
   from Queue import Queue
 except ImportError:
-  # noinspection PyCompatibility
+  # noinspection PyCompatibility,PyUnresolvedReferences
   from queue import Queue
 from threading import Thread, Condition
 
 import numpy
 import tensorflow as tf
 
-from Dataset import Dataset, Batch, BatchSetGenerator
-from Log import log
+from Dataset import Dataset, BatchSetGenerator
 from TFNetwork import ExternData
-from Util import hms, NumbersDict
+from Util import NumbersDict
 
 
 class DatasetReader(object):
   """
   Reads from Dataset into a queue.
   """
+
+  SpecialKeys = ("seq_tag", "seq_idx", "epoch_end")
+
   def __init__(self, extern_data, dataset, coord, feed_callback,
                with_seq_tag=False, with_seq_idx=False, with_epoch_end=False):
     """
@@ -157,11 +159,13 @@ class DatasetReader(object):
     self.with_seq_idx = with_seq_idx
     self.with_epoch_end = with_epoch_end
     self.dict_keys = self._get_keys()
+    self.finished_iterating_seqs = False
+    self.final_num_seqs = None
 
   def _get_keys(self):
     keys = set()
     for key, data in self.extern_data.data.items():
-      if key in ["seq_tag", "seq_idx", "epoch_end"]:
+      if key in self.SpecialKeys:
         continue  # handled below
       keys.add(keys)
       for axis in data.get_axes_with_size():
@@ -192,13 +196,25 @@ class DatasetReader(object):
     raise Exception("invalid key %r" % key)
 
   def get_shape_for_key(self, key):
+    """
+    :param str key:
+    :return: shape without batch-dim
+    :rtype: tuple[int | None]
+    """
     if key in self.extern_data.data:
       return self.extern_data.data[key].shape
-    if key in ("seq_tag", "seq_idx", "epoch_end"):
+    if key in self.SpecialKeys:
       return ()
     if "/size" in key:
       return ()
     raise Exception("invalid key %r" % key)
+
+  def get_queue_kwargs(self):
+    names = sorted(self.dict_keys)
+    return {
+      "names": names,
+      "dtypes": [self.get_dtype_for_key(name) for name in names],
+      "shapes": [self.get_shape_for_key(name) for name in names]}
 
   def _make_end_of_epoch_dict(self, seq_idx):
     d = {}
@@ -219,14 +235,16 @@ class DatasetReader(object):
       seq_idx = 0
       while True:
         if not self.dataset.is_less_than_num_seqs(seq_idx):
+          self.finished_iterating_seqs = True
+          self.final_num_seqs = seq_idx
           if self.with_epoch_end:
             self.feed_callback(self._make_end_of_epoch_dict(seq_idx=seq_idx))
           break
         if self.coord.should_stop():
           break
-        d = {}  # type: dict[str,numpy.ndarray|int|str]
+        d = {}  # type: dict[str, numpy.ndarray|int|str]
         for key, data in self.extern_data.data.items():
-          if key in ["seq_tag", "seq_idx"]:
+          if key in self.SpecialKeys:
             continue  # handled below
           d[key] = self.dataset.get_data(seq_idx, key=key)  # type: numpy.ndarray
           for axis in data.get_axes_with_size():
@@ -385,7 +403,7 @@ class TFChunkingQueueRunner(object):
     # This is basically a pure TF implementation of Dataset.iterate_seqs.
     def seq_loop_body(last_stop, last_op):
       """
-      :param tf.Tensor last_stop: bool scalar 
+      :param tf.Tensor last_stop: bool scalar
       :param tf.Operation last_op:
       :return: (cont, seq_idx, op), cont is whether to continue, checked by the condition
       :rtype: (tf.Tensor, tf.Operation)
@@ -473,7 +491,6 @@ class TFBatchingQueue(object):
       shapes=[self.data_queues.shapes[key] for key in data_queues.names])
     self._tf_batch_nums = tf.FIFOQueue(
       capacity=capacity, dtypes=[tf.int32], shapes=[()])
-    self._tf_epoch_end_signals = tf.FIFOQueue(capacity=capacity, dtypes=[tf.bool], shapes=[()])
     self._cur_batch_num = tf.Variable(initial_value=0, dtype=tf.int32, trainable=False, name="batch_num")
     self._cur_max_seq_len = tf.Variable(initial_value=0, dtype=tf.int32, trainable=False, name="max_seq_len")
     self._init_op = tf.variables_initializer([self._cur_batch_num, self._cur_max_seq_len])
@@ -484,12 +501,23 @@ class TFBatchingQueue(object):
       default_target=data_queues.extern_data.default_target,
       data={key: Data(**data.get_kwargs()) for (key, data) in data_queues.extern_data.data.items()})
     dequeue_op = self._tf_out_queue.dequeue_up_to(n=self._tf_batch_nums.dequeue())
+    self.last_seq_idx_var = tf.Variable(initial_value=0, dtype=tf.int32, trainable=False, name="last_seq_idx")
+    self.seq_counter = tf.Variable(initial_value=0, dtype=tf.int32, trainable=False, name="seq_counter")
+    self.batch_counter = tf.Variable(initial_value=0, dtype=tf.int32, trainable=False, name="batch_counter")
+    default_input_key = self.output_as_extern_data.default_input
+    default_input_value = dequeue_op[default_input_key]
+    default_input_data = self.output_as_extern_data.data[default_input_key]
+    last_batch_size = tf.shape(default_input_value)[default_input_data.batch_dim_axis]
+    updates = [
+      tf.assign(self.last_seq_idx_var, tf.maximum(self.last_seq_idx_var, tf.reduce_max(dequeue_op["seq_idx"]))),
+      tf.assign_add(self.seq_counter, last_batch_size),
+      tf.assign_add(self.batch_counter, 1)]
     for key, data in self.output_as_extern_data.data.items():
-      data.placeholder = dequeue_op[key]
+      with tf.control_dependencies(updates):  # make sure we apply the update
+        data.placeholder = tf.identity(dequeue_op[key], name=key)
       data.size_placeholder = {
         axis: dequeue_op["%s/size%i" % (key, axis)]
         for axis in data.get_axes_with_size()}
-    self.epoch_end_signal = self._tf_epoch_end_signals.dequeue()
 
   def _make_enqueue_op(self):
     """
@@ -502,7 +530,7 @@ class TFBatchingQueue(object):
     seq_len = tf.shape(v[default_key])[self.data_queues.extern_data.data[default_key].time_dim_axis_excluding_batch]
     cur_batch_num = self._cur_batch_num
     cur_max_seq_len = self._cur_max_seq_len
-    cur_batch_num = tf.cond(stop, lambda: cur_batch_num, lambda: tf.assign_add(cur_batch_num, 1))
+    cur_batch_num = tf.assign_add(cur_batch_num, tf.where(stop, 0, 1))
     cur_max_seq_len = tf.assign(cur_max_seq_len, tf.maximum(cur_max_seq_len, seq_len))
     def enqueue_cur():
       return tf.group([
@@ -558,14 +586,88 @@ class TFBatchingQueue(object):
         tf_session.run(self._tf_enqueue_loop_op)
 
 
-class FeedDictDataProvider(object):
+class DataProviderBase(object):
+  """
+  Base class which wraps up the logic in this class. See derived classes.
+  """
+
+  def __init__(self, extern_data, data_keys):
+    """
+    :param ExternData extern_data:
+    :param set(str)|None data_keys:
+    """
+    self.coord = tf.train.Coordinator()
+    self.extern_data = extern_data
+    if data_keys is None:
+      data_keys = extern_data.data.keys()
+    self.data_keys = sorted(data_keys)  # type: list[str]
+
+  def start_threads(self):
+    raise NotImplementedError
+
+  def stop_threads(self):
+    raise NotImplementedError
+
+  def have_more_data(self, session):
+    """
+    It is supposed to return True as long as we want to continue with the current epoch
+    in the current dataset (train or eval).
+    This is called from the same thread which runs the main computation graph (e.g. train steps).
+
+    :param tf.Session session:
+    :return: whether the next session.run() can run in the current epoch & dataset
+    :rtype: bool
+    """
+    raise NotImplementedError
+
+  def get_feed_dict(self, single_threaded=False):
+    """
+    Gets the feed dict for TF session run().
+    Note that this will block if there is nothing in the queue.
+    The queue gets filled by the other thread, via self.thread_main().
+
+    :param bool single_threaded: whether to not use the queue
+    :returns: we dequeue one batch from the queue and provide it for all placeholders of our external data
+    :rtype: dict[tf.Tensor,tf.Tensor]
+    """
+    raise NotImplementedError
+
+  def have_reached_end(self):
+    """
+    :returns: whether the current dataset says that we reached the end.
+    :rtype: bool
+    """
+    raise NotImplementedError
+
+  def get_dataset_name(self):
+    """
+    :return: current dataset name, e.g. "train" or "dev"
+    :rtype: str
+    """
+    raise NotImplementedError
+
+  def get_complete_frac(self):
+    """
+    :return: by how much we are through the current dataset, number between 0 and 1, for visual feedback
+    :rtype: float
+    """
+    raise NotImplementedError
+
+  def get_num_frames(self):
+    """
+    :rtype: NumbersDict
+    """
+    raise NotImplementedError
+
+
+class FeedDictDataProvider(DataProviderBase):
   """
   This class will fill all the placeholders used for training or forwarding or evaluation etc.
   of a `TFNetwork.Network`.
   It will run a background thread which reads the data from a dataset and puts it into a queue.
   """
 
-  def __init__(self, tf_session, dataset, batches, extern_data, data_keys=None, capacity=10, tf_queue=None):
+  def __init__(self, tf_session, dataset, batches, capacity=10, tf_queue=None, **kwargs):
     """
     :param tf.Session|tf.InteractiveSession tf_session:
     :param Dataset.Dataset dataset:
@@ -575,14 +677,10 @@ class FeedDictDataProvider(object):
     :param int capacity:
     :param TFDataQueues|None tf_queue:
     """
+    super(FeedDictDataProvider, self).__init__(**kwargs)
     self.tf_session = tf_session
-    self.coord = tf.train.Coordinator()
     self.dataset = dataset
     self.batches = batches
-    self.extern_data = extern_data
-    if data_keys is None:
-      data_keys = extern_data.data.keys()
-    self.data_keys = sorted(data_keys)  # type: list[str]
     self.state_change_cond = Condition()
     self.queue = None  # type: Queue
     self.tf_queue = tf_queue
@@ -593,13 +691,13 @@ class FeedDictDataProvider(object):
     self.thread_finished = False
     self.reached_end = False
 
-  def start_thread(self):
+  def start_threads(self):
     thread = Thread(target=self.thread_main, name="DataProvider thread")
     thread.daemon = True  # Thread will close when parent quits.
     thread.start()
     self.thread = thread
 
-  def stop_thread(self):
+  def stop_threads(self):
     if not self.thread:
       return
     self.coord.request_stop()
@@ -674,7 +772,7 @@ class FeedDictDataProvider(object):
         self.thread_finished = True
         self.state_change_cond.notifyAll()
 
-  def have_more_data(self):
+  def have_more_data(self, session):
     """
     :return: when we go through an epoch and finished reading, this will return False
     If this returns True, you can definitely read another item from the queue.
@@ -699,7 +797,7 @@ class FeedDictDataProvider(object):
     This is supposed to be called by the consumer thread after a call to coord.request_stop().
     The data provider thread (self.thread_main()) could currently block in the queue put if it was full.
     """
-    while self.have_more_data():
+    while self.have_more_data(None):
       if self.queue:
         self.queue.get()
       else:
@@ -737,23 +835,33 @@ class FeedDictDataProvider(object):
             "dim=%i, placeholder=%r" % (dim, len_placeholder))
     return d
 
+  def get_dataset_name(self):
+    return self.dataset.name
 
-class QueueDataProvider(object):
+  def have_reached_end(self):
+    return self.reached_end
+
+  def get_complete_frac(self):
+    return self.batches.completed_frac()
+
+  def get_num_frames(self):
+    return self.num_frames
+
+
+class QueueDataProvider(DataProviderBase):
   """
   This class is supposed to encapsulate all the logic of this module and to be used by the TF engine.
   It gets the train and dev dataset instances.
   """
-  def __init__(self, extern_data, coord, shuffle_train_seqs=False):
+  def __init__(self, shuffle_train_seqs=False, **kwargs):
     """
-    :param ExternData extern_data:
-    :param tf.train.Coordinator coord:
-    
     Creates the queues and connector instances (which will be the queue runners).
     Thus this will be created in the current TF graph,
     and you need to create a new instance of this class for a new TF graph.
+    This is also only intended to be recreated when we create a new TF graph,
+    so all other things must be created while it exists.
     """
-    self.extern_data = extern_data
-    self.coord = coord
+    super(QueueDataProvider, self).__init__(**kwargs)
 
     # First we need to create the queues on each level because they can be created independently from each other.
     # Then we create the connectors, the queue runners, which do some operation and connect the queues.
@@ -768,31 +876,31 @@ class QueueDataProvider(object):
         name="train_seq_queue",
         capacity=10,
         min_after_dequeue=8,
-        **extern_data.get_queue_args(with_batch_dim=False))
+        **self.extern_data.get_queue_args(with_batch_dim=False))
     else:
       self.train_seq_queue = tf.FIFOQueue(
         name="train_seq_queue",
         capacity=10,
-        **extern_data.get_queue_args(with_batch_dim=False))
+        **self.extern_data.get_queue_args(with_batch_dim=False))
     self.eval_seq_queue = tf.FIFOQueue(
       name="eval_seq_queue",
       capacity=10,
-      **extern_data.get_queue_args(with_batch_dim=False))
+      **self.extern_data.get_queue_args(with_batch_dim=False))
 
     # Will have separate queues for train and eval.
     self.chunk_queue = TFDataQueues(
-      extern_data=extern_data, with_batch=False,
+      extern_data=self.extern_data, with_batch=False,
       capacity=100)
 
     # Now we create the connectors.
     self.train_chunker = TFChunkingQueueRunner(
-      extern_data=extern_data,
+      extern_data=self.extern_data,
       make_dequeue_op=self.train_seq_queue.dequeue,
       target_queue=self.chunk_queue.train_queue,
       chunk_size=50, chunk_step=25,
       context_window=5)
     self.eval_chunker = TFChunkingQueueRunner(
-      extern_data=extern_data,
+      extern_data=self.extern_data,
       make_dequeue_op=self.eval_seq_queue.dequeue,
       target_queue=self.chunk_queue.eval_queue,
       context_window=5)
@@ -803,17 +911,58 @@ class QueueDataProvider(object):
       batch_size=5000, max_seqs=40,
       capacity=10)
 
-    self.train_dataset_reader = None
-    self.eval_dataset_reader = None
+    self.cur_dataset_reader = None  # type: DatasetReader
+    self._last_seq_idx = None
 
-  def init_train_dataset(self, session, train_dataset):
+  def _update_last_seq_idx(self, session):
     """
     :param tf.Session session:
-    :param Dataset train_dataset:
     """
-    self.train_dataset_reader = DatasetReader(
-      extern_data=self.extern_data, dataset=train_dataset, coord=self.coord,
-      feed_callback=lambda d: session.run(self.train_seq_queue.enqueue(d)))
+    self._last_seq_idx = session.run(self.batch_queue.last_seq_idx_var)
 
-  def init_eval_dataset(self, session):
+  def have_more_data(self, session):
+    """
+    It is supposed to return True as long as we want to continue with the current epoch
+    in the current dataset (train or eval).
+    This is called from the same thread which runs the main computation graph (e.g. train steps).
+
+    :param tf.Session session:
+    :return: whether the next session.run() can run in the current epoch & dataset
+    :rtype: bool
+    """
+    assert self.cur_dataset_reader
+    if self.cur_dataset_reader.final_num_seqs is None:
+      return True
+    self._update_last_seq_idx(session=session)
+    is_at_end = self._last_seq_idx + 1 >= self.cur_dataset_reader.final_num_seqs
+    return not is_at_end
+
+  def get_feed_dict(self, single_threaded=False):
+    return {}
+
+  def init_dataset(self, session, dataset, is_train_dataset):
+    """
+    :param tf.Session session:
+    :param Dataset dataset:
+    :param bool is_train_dataset:
+    """
+    def feed_callback(d):
+      """
+      :param dict[str,numpy.ndarray|str|int] d:
+      """
+      if is_train_dataset:
+        session.run(self.train_seq_queue.enqueue(d))
+      else:
+        session.run(self.eval_seq_queue.enqueue(d))
+    self.cur_dataset_reader = DatasetReader(
+      extern_data=self.extern_data, dataset=dataset, coord=self.coord, feed_callback=feed_callback)
+
+  def get_threads(self):
     pass
+
+  def start_threads(self):
+    pass
+
+  def stop_threads(self):
+    pass
+

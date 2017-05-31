@@ -109,7 +109,7 @@ class Runner(object):
     if not self._show_interactive_process_bar and not log.v[5]:
       return
     start_elapsed = time.time() - self.start_time
-    complete = self.data_provider.batches.completed_frac()
+    complete = self.data_provider.get_complete_frac()
     assert complete > 0
     total_time_estimated = start_elapsed / complete
     remaining_estimated = total_time_estimated - start_elapsed
@@ -154,15 +154,15 @@ class Runner(object):
     """
     target = self._get_target_for_key(key)
     # Default: Normalize by number of frames.
-    return 1.0 / float(self.data_provider.num_frames[target])
+    return 1.0 / float(self.data_provider.get_num_frames()[target])
 
   def _finalize(self, num_steps):
     """
     Called at the end of an epoch.
     :param int num_steps: number of steps we did for this epoch
     """
-    assert not self.data_provider.have_more_data()
-    assert self.data_provider.num_frames["data"] > 0
+    assert not self.data_provider.have_more_data(session=self.engine.tf_session)
+    assert self.data_provider.get_num_frames()["data"] > 0
     results = {key: value * self._epoch_norm_factor_for_result(key)
                for (key, value) in self._results_accumulated.items()}
     self.results = results
@@ -223,7 +223,7 @@ class Runner(object):
     """
     sess = self.engine.tf_session
     logdir = os.path.dirname(self.engine.model_filename) or os.getcwd()
-    logdir += "/%s" % self.data_provider.dataset.name
+    logdir += "/%s" % self.data_provider.get_dataset_name()
     if not self._should_train:  # like eval
       logdir += "-%i" % self.engine.epoch
     if self.engine.use_search_flag:
@@ -239,7 +239,7 @@ class Runner(object):
     coord = self.data_provider.coord
 
     threads = tf.train.start_queue_runners(sess=sess, coord=coord)
-    self.data_provider.start_thread()
+    self.data_provider.start_threads()
     self.start_time = time.time()
     step = None
     try:
@@ -248,7 +248,7 @@ class Runner(object):
       fetches_dict = self._get_fetches_dict()
       # After get_fetches_dict, maybe some new uninitialized vars. Last check.
       self.engine.check_uninitialized_vars()
-      while self.data_provider.have_more_data():
+      while self.data_provider.have_more_data(session=sess):
         feed_dict = self.data_provider.get_feed_dict()
         if isinstance(self.engine.network.train_flag, tf.Tensor):
           feed_dict[self.engine.network.train_flag] = self._should_train
@@ -285,7 +285,7 @@ class Runner(object):
 
       self._print_finish_process()
 
-      if not self.data_provider.reached_end:
+      if not self.data_provider.have_reached_end():
         raise Exception("Did not successfully reached the end of the dataset.")
 
       if self._should_train:
@@ -309,7 +309,7 @@ class Runner(object):
       try_and_ignore_exception(lambda: stop_event_writer_thread(writer.event_writer))
       try_and_ignore_exception(coord.request_stop)
       try_and_ignore_exception(lambda: coord.join(threads))
-      try_and_ignore_exception(self.data_provider.stop_thread)
+      try_and_ignore_exception(self.data_provider.stop_threads)
       self.elapsed = time.time() - self.start_time
 
 
@@ -912,7 +912,7 @@ class Engine(object):
     print("Finished analyzing of the dataset %r." % data, file=log.v1)
     print("elapsed:", hms(analyzer.elapsed), file=log.v1)
     print("num mini-batches:", analyzer.num_steps, file=log.v1)
-    print("total num_frames:", analyzer.data_provider.num_frames, file=log.v1)
+    print("total num_frames:", analyzer.data_provider.get_num_frames(), file=log.v1)
     print("score:", self.format_score(analyzer.score), file=log.v1)
     print("error:", self.format_score(analyzer.error), file=log.v1)
     for k, v in sorted(analyzer.stats.items()):
