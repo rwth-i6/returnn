@@ -1,3 +1,14 @@
+"""
+TensorFlow engine
+=================
+
+The basic engine for the TensorFlow backend is implemented here,
+i.e. the high-level logic to train, i.e. looping over epochs,
+holding the network instance, creating the TensorFlow session,
+managing the data pipeline, etc.
+
+See :ref:`tech_overview` for an overview how it fits all together.
+"""
 
 from __future__ import print_function
 
@@ -5,16 +16,17 @@ import os
 import sys
 import time
 try:
+  # noinspection PyCompatibility
   from Queue import Queue
 except ImportError:
+  # noinspection PyCompatibility
   from queue import Queue
-from threading import Thread, Condition
 
 import numpy
 import tensorflow as tf
 from tensorflow.python.client import timeline
 
-from Dataset import Batch, BatchSetGenerator
+from Dataset import Dataset, Batch, BatchSetGenerator
 from Engine import Engine as TheanoEngine
 from LearningRateControl import loadLearningRateControlFromConfig
 from Log import log
@@ -23,205 +35,6 @@ from Pretrain import pretrainFromConfig
 from TFNetwork import TFNetwork, ExternData
 from TFUpdater import Updater
 from Util import hms, NumbersDict
-
-
-class DataProvider(object):
-  """
-  This class will fill all the placeholders used for training or forwarding or evaluation etc.
-  of a `TFNetwork.Network`.
-  It will run a background thread which reads the data from a dataset and puts it into a queue.
-  """
-
-  def __init__(self, tf_session, dataset, batches, extern_data, data_keys=None, capacity=10, use_tf_queues=False, seed=1):
-    """
-    :param tf.Session|tf.InteractiveSession tf_session:
-    :param Dataset.Dataset dataset:
-    :param BatchSetGenerator batches:
-    :param ExternData extern_data:
-    :param set(str)|None data_keys:
-    :param int capacity:
-    """
-    self.tf_session = tf_session
-    self.coord = tf.train.Coordinator()
-    self.dataset = dataset
-    self.batches = batches
-    self.extern_data = extern_data
-    if data_keys is None:
-      data_keys = extern_data.data.keys()
-    self.data_keys = sorted(data_keys)  # type: list[str]
-    self.state_change_cond = Condition()
-    self.queue = None  # type: Queue
-    self.tf_queue = None  # type: tf.FIFOQueue
-    self._have_tf_queues = use_tf_queues
-    if use_tf_queues:
-      # TODO... also cache this ....
-      self.tf_queue = tf.FIFOQueue(capacity=capacity, **extern_data.get_queue_args(with_batch_dim=True))
-      # TF recommendation: capacity = min_after_dequeue + (num_threads + a small safety margin) * batch_size
-      # TODO, do it like I describe it here:
-      # http://stackoverflow.com/questions/41187745/tensorflow-how-can-i-evaluate-a-validation-data-queue-multiple-times-during-tra/44067467#44067467
-      # I.e. we need two separate queues, one for training (RandomShuffleQueue) and one for eval (FIFOQueue),
-      # and switch between the dequeue via tf.cond.
-      self.tf_queue = tf.RandomShuffleQueue(
-        capacity=capacity, min_after_dequeue=int(capacity * 0.8),
-        names=self.data_keys, dtypes=self._dtypes(),
-        seed=seed)
-    else:
-      self.queue = Queue(maxsize=capacity)
-    self.thread = None  # type: Thread
-    self.num_frames = NumbersDict(0)
-    self.thread_finished = False
-    self.reached_end = False
-
-  def _dtypes(self):
-    return [self.extern_data.data[key].dtype for key in self.data_keys]
-
-  def start_thread(self):
-    thread = Thread(target=self.thread_main, name="DataProvider thread")
-    thread.daemon = True  # Thread will close when parent quits.
-    thread.start()
-    self.thread = thread
-
-  def stop_thread(self):
-    if not self.thread:
-      return
-    self.coord.request_stop()
-    self._flush_all_data()
-    self.thread.join()
-
-  def _get_next_batch(self):
-    """
-    :returns (batch-data-value-dict, batch-seq-lens)
-    :rtype: (dict[str,numpy.ndarray], dict[str,numpy.ndarray])
-    """
-    # See EngineUtil.assign_dev_data() for reference.
-    batch, = self.batches.peek_next_n(1)
-    # In Returnn with Theano, we usually have the shape (time,batch,feature).
-    # In TensorFlow, the default is (batch,time,feature).
-    # This is also what we use here, i.e. batch_dim_first=True.
-    # This must match the Data specification in TFNetwork.ExternData.init_from_config().
-    shapes = self.dataset.shapes_for_batches([batch], data_keys=self.data_keys, batch_dim_first=True)
-    data = {k: numpy.zeros(shape=shapes[k], dtype=self.extern_data.get_data(k).dtype)
-            for k in self.data_keys}
-    seq_lens = {k: numpy.zeros(shape=(shapes[k][0],), dtype=self.extern_data.get_data(k).size_dtype)
-                for k in self.data_keys}
-    self.dataset.load_seqs(batch.start_seq, batch.end_seq)
-    self.num_frames += batch.get_total_num_frames()
-    with self.dataset.lock:
-      for seq in batch.seqs:
-        o = seq.batch_frame_offset
-        q = seq.batch_slice
-        l = seq.frame_length
-        # input-data, input-index will also be set in this loop. That is data-key "data".
-        for k in self.data_keys:
-          if l[k] == 0: continue
-          v = self.dataset.get_data_slice(seq.seq_idx, k, seq.seq_start_frame[k], seq.seq_end_frame[k])
-          ls = v.shape[0]
-          if ls != l[k]:
-            raise Exception("got shape[0]: %i, expected: %i, start/end: %r/%r, seq_idx: %i, seq len: %r" % (
-              ls, l[k], seq.seq_start_frame, seq.seq_end_frame, seq.seq_idx, self.dataset.get_seq_length(seq.seq_idx)))
-          data[k][q, o[k]:o[k] + ls] = v
-          seq_lens[k][q] = max(seq_lens[k][q], o[k] + ls)
-    return data, seq_lens
-
-  def get_next_batch(self):
-    data, seq_lens = self._get_next_batch()
-    enqueue_args = data.copy()
-    for k in data.keys():
-      enqueue_args["%s_seq_lens" % k] = seq_lens[k]
-    return enqueue_args
-
-  def thread_main(self):
-    try:
-      import better_exchook
-      better_exchook.install()
-
-      while self.batches.has_more() and not self.coord.should_stop():
-        enqueue_args = self.get_next_batch()
-        if self.queue:
-          self.queue.put(enqueue_args)
-        else:
-          self.tf_session.run(self.tf_queue.enqueue(enqueue_args))  # TODO cache op
-        with self.state_change_cond:
-          self.state_change_cond.notifyAll()
-        self.batches.advance(1)
-
-      self.reached_end = not self.batches.has_more()
-
-    except Exception as exc:
-      print("Exception in DataProvider thread: %r" % exc)
-      sys.excepthook(*sys.exc_info())
-
-    finally:
-      with self.state_change_cond:
-        self.thread_finished = True
-        self.state_change_cond.notifyAll()
-
-  def have_more_data(self):
-    """
-    :return: when we go through an epoch and finished reading, this will return False
-    If this returns True, you can definitely read another item from the queue.
-    Threading safety: This assumes that there is no other consumer thread for the queue.
-    """
-    with self.state_change_cond:
-      while True:
-        # First check if there is still data in the queue to be processed.
-        if self.queue and not self.queue.empty():
-          return True
-        if self.tf_queue and self.tf_queue.size().eval(session=self.tf_session) > 0:  # TODO cache op
-          return True
-        if self.thread_finished:
-          return False
-        if not self.thread.is_alive:
-          return False
-        # The thread is alive and working. Wait for a change.
-        self.state_change_cond.wait()
-
-  def _flush_all_data(self):
-    """
-    This is supposed to be called by the consumer thread after a call to coord.request_stop().
-    The data provider thread (self.thread_main()) could currently block in the queue put if it was full.
-    """
-    while self.have_more_data():
-      if self.queue:
-        self.queue.get()
-      else:
-        raise NotImplementedError
-
-  def get_feed_dict(self, previous_feed_dict, single_threaded=False):
-    """
-    Gets the feed dict for TF session run().
-    Note that this will block if there is nothing in the queue.
-    The queue gets filled by the other thread, via self.thread_main().
-
-    :param dict[tf.Tensor,tf.Tensor]|None previous_feed_dict:
-    :param bool single_threaded: whether to not use the queue
-    :returns: we dequeue one batch from the queue and provide it for all placeholders of our external data
-    :rtype: dict[tf.Tensor,tf.Tensor]
-    """
-    if previous_feed_dict and self._have_tf_queues:
-      # We can reuse the same feed dict every time.
-      # It is based on the tf_queue.dequeue() which is symbolic.
-      assert self.tf_queue and not self.queue
-      return previous_feed_dict
-    if single_threaded:
-      assert self.batches.has_more()
-      output = self.get_next_batch()
-    else:
-      output = self.queue.get() if self.queue else self.tf_queue.dequeue()  # TODO cache dequeue op
-    assert isinstance(output, dict)
-    # The data itself.
-    d = {self.extern_data.get_data(k).placeholder: output[k] for k in self.data_keys}
-    # And seq lengths info.
-    for k in self.data_keys:
-      data = self.extern_data.get_data(k)
-      for dim, len_placeholder in data.size_placeholder.items():
-        if dim == 0:  # time-dim
-          d[len_placeholder] = output["%s_seq_lens" % k]
-        else:
-          raise Exception(
-            "dataset currently does not support variable shape in other dimensions than the first. "
-            "dim=%i, placeholder=%r" % (dim, len_placeholder))
-    return d
 
 
 class Runner(object):
@@ -233,19 +46,19 @@ class Runner(object):
     :param bool train: whether to do updates on the model
     :param bool eval: whether to evaluate (i.e. calculate loss/error)
     """
+    from TFDataPipeline import FeedDictDataProvider
     self.engine = engine
-    self.data_provider = DataProvider(
+    self.data_provider = FeedDictDataProvider(
       tf_session=engine.tf_session, extern_data=engine.network.extern_data,
       data_keys=engine.network.used_data_keys,
-      dataset=dataset, batches=batches,
-      seed=self.engine.epoch)
+      dataset=dataset, batches=batches)
     self._should_train = train
     self._should_eval = eval
     self.store_metadata_mod_step = engine.config.int("store_metadata_mod_step", 0)
     self.reset_updater_vars_mod_step = engine.config.int("reset_updater_vars_mod_step", 0)
     self.finalized = False
     self.num_steps = None
-    self.device_crash_batch = None
+    self.device_crash_batch = None  # type: int|None
     self.start_time = None
     self.elapsed = None
     self._results_accumulated = {}  # type: dict[str,float]  # entries like "cost:output" or "loss"
@@ -435,9 +248,8 @@ class Runner(object):
       fetches_dict = self._get_fetches_dict()
       # After get_fetches_dict, maybe some new uninitialized vars. Last check.
       self.engine.check_uninitialized_vars()
-      feed_dict = None
       while self.data_provider.have_more_data():
-        feed_dict = self.data_provider.get_feed_dict(previous_feed_dict=feed_dict)
+        feed_dict = self.data_provider.get_feed_dict()
         if isinstance(self.engine.network.train_flag, tf.Tensor):
           feed_dict[self.engine.network.train_flag] = self._should_train
         start_time = time.time()
@@ -518,7 +330,7 @@ class Engine(object):
     self._checked_uninitialized_vars = False
     self._merge_all_summaries = None
     self.dataset_batches = {}  # type: dict[str,BatchSetGenerator]
-    self.train_data = None; " :type: Dataset.Dataset "
+    self.train_data = None  # type: Dataset
     self.start_epoch = None
     self.use_dynamic_train_flag = False
     self.use_search_flag = False
@@ -718,12 +530,22 @@ class Engine(object):
     # The new session will by default use the newly created default graph.
     self._make_tf_session()
     tf.set_random_seed(42)
+    from TFUtil import get_global_train_flag_placeholder
+    if self.use_dynamic_train_flag:
+      train_flag = get_global_train_flag_placeholder()
+    else:
+      train_flag = False
+    if False:  # TODO ...
+      extern_data = ExternData()
+      extern_data.init_from_config(self.config)
+      from TFDataPipeline import TFDataQueues
+      tf_queues = TFDataQueues(extern_data=extern_data)
+      # TODO...
     network = TFNetwork(
       name="root",
       config=self.config,
       rnd_seed=epoch,
-      train_flag=tf.placeholder(tf.bool, shape=(), name="train_flag")
-      if self.use_dynamic_train_flag else False,
+      train_flag=train_flag,
       search_flag=self.use_search_flag)
     network.construct_from_dict(net_desc)
     network.initialize_params(session=self.tf_session)
@@ -778,7 +600,7 @@ class Engine(object):
       if epoch % self.seq_drop_freq == 0:
         if self.seq_drop > 0.0:
           rebatch = True
-      self.epoch = epoch
+      self.epoch = epoch  # type: int
 
       if 'train' in self.dataset_batches:
         if rebatch:
@@ -987,11 +809,12 @@ class Engine(object):
     batch.add_frames(seq_idx=seq_idx, seq_start_frame=0, length=dataset.get_seq_length(seq_idx))
     batch_generator = iter([batch])
     batches = BatchSetGenerator(dataset, generator=batch_generator)
-    data_provider = DataProvider(
+    from TFDataPipeline import FeedDictDataProvider
+    data_provider = FeedDictDataProvider(
       tf_session=self.tf_session, extern_data=self.network.extern_data,
       data_keys=self.network.used_data_keys,
       dataset=dataset, batches=batches)
-    feed_dict = data_provider.get_feed_dict(previous_feed_dict=None, single_threaded=True)
+    feed_dict = data_provider.get_feed_dict(single_threaded=True)
     return feed_dict
 
   def eval_single(self, dataset, seq_idx, output_dict):
@@ -1024,6 +847,33 @@ class Engine(object):
     output_value = out_d["out"]
     assert output_value.shape[1] == 1  # batch-dim
     return output_value[:, 0]  # remove batch-dim
+
+  def forward_to_hdf(self, data, output_file, combine_labels='', batch_size=0):
+    """
+    Is aiming at recreating the same interface and output as Engine.forward_to_hdf.
+
+    :type data: Dataset.Dataset
+    :type output_file: str
+    :type combine_labels: str
+    """
+    # TODO: current implementation will blow up the memory, should write seq by seq into the dataset.
+    # TODO: should use Runner instead of self.forward_single().
+    import h5py
+    forwarding_outputs = []
+    seq_tags = []
+    seq_idx = 0
+    while data.is_less_than_num_seqs(seq_idx):
+      forwarding_outputs.append(self.forward_single(data, seq_idx))
+      seq_tags.append(data.get_tag(seq_idx))
+      seq_idx += 1
+    #write to hdf file
+    cache = h5py.File(output_file, "w")
+    cache.create_dataset('inputs', data=numpy.concatenate(forwarding_outputs, axis=0))
+    cache.create_dataset('seqLengths', data=numpy.asarray([fo.shape[0] for fo in forwarding_outputs], dtype='int32'))
+    cache.create_dataset('seqTags', data=numpy.asarray(seq_tags, dtype='|S5'))
+    seqDims = numpy.asarray([0 for fo in forwarding_outputs], dtype='int32')
+    cache.create_dataset('seqDims', data=numpy.reshape(seqDims, (seqDims.shape[0], 1)))
+    cache.close()
 
   def analyze(self, data, statistics):
     """

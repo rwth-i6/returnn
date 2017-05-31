@@ -11,7 +11,7 @@ from OpLSTM import LSTMSOpInstance
 from OpBLSTM import BLSTMOpInstance
 import RecurrentTransform
 import json
-
+from TheanoUtil import print_to_file
 
 class Unit(Container):
   """
@@ -783,7 +783,7 @@ class RecurrentUnitLayer(Layer):
       y_t = T.dot(self.base[0].attention, T.arange(self.base[0].output.shape[0], dtype='float32'))  # NB
       y_t = T.concatenate([T.zeros_like(y_t[:1]), y_t], axis=0)  # (N+1)B
       y_t = y_t[1:] - y_t[:-1]  # NB
-      self.y_t = y_t[::-1]
+      self.y_t = y_t # T.clip(y_t,numpy.float32(0),numpy.float32(max_skip - 1))
 
     recurrent_transform_inst = RecurrentTransform.transform_classes[recurrent_transform](layer=self)
     assert isinstance(recurrent_transform_inst, RecurrentTransform.RecurrentTransformBase)
@@ -867,19 +867,60 @@ class RecurrentUnitLayer(Layer):
 
     self.cost_val = numpy.float32(0)
     if recurrent_transform == 'attention_align':
-      z = T.dot(self.act[0],self.T_W)[1:] + self.T_b
+      z = T.dot(self.act[0],self.T_W)[:-1] + self.T_b
       z = z.reshape((z.shape[0]*z.shape[1],z.shape[2]))
-      idx = (self.index[1::-1].flatten() > 0).nonzero()
-      y_out = T.cast(self.y_t,'int32').flatten()
-      nll, _ = T.nnet.crossentropy_softmax_1hot(x=z[idx], y_idx=y_out[idx])
+      idx = (self.index[1:].flatten() > 0).nonzero()
+      idy = (self.index[1:][::-1].flatten() > 0).nonzero()
+      y_out = T.cast(self.y_t[1:][::-1],'int32').flatten()
+      nll, _ = T.nnet.crossentropy_softmax_1hot(x=z[idx], y_idx=y_out[idy])
       self.cost_val = T.sum(nll)
+      recog = T.argmax(z[idx],axis=1)
+      real = y_out[idy]
+      recog = print_to_file('recog', recog)
+      #real = print_to_file('real', real)
+      self.errors = lambda: T.sum(T.neq(recog, real))
+      back = T.ceil(self.aux[sorted(unit.recurrent_transform.state_vars.keys()).index('t')])
+      #from TheanoUtil import print_to_file
+      #back = print_to_file('back', back)
+
+      def make_output(base, trace, length):
+        length = T.cast(length, 'int32')
+        idx = T.cast(trace[:length][::-1],'int32')
+        return T.concatenate([base[idx],T.zeros((self.index.shape[0] + 1 - length, base.shape[1]), 'float32')])
+
+      output, _ = theano.map(make_output,
+                             sequences = [base[0].output.dimshuffle(1,0,2),
+                                          back.dimshuffle(1,0),
+                                          T.sum(self.index,axis=0,dtype='float32')])
+      self.attrs['n_out'] = base[0].attrs['n_out']
+      self.params.update(unit.params)
+      self.output = output.dimshuffle(1,0,2)[:-1]
+      return
+
+      back += T.arange(self.index.shape[1], dtype='float32') * T.cast(self.base[0].index.shape[0], 'float32')
+      idx = (self.index[:-1].flatten() > 0).nonzero()
+      idx = T.cast(back[::-1].flatten()[idx],'int32')
+      x_out = base[0].output
+      #x_out = x_out.dimshuffle(1,0,2).reshape((x_out.shape[0] * x_out.shape[1], x_out.shape[2]))[idx]
+      #x_out = x_out.reshape((self.index.shape[1], self.index.shape[0] - 1, x_out.shape[1])).dimshuffle(1,0,2)
+      x_out = x_out.reshape((x_out.shape[0] * x_out.shape[1], x_out.shape[2]))[idx]
+      x_out = x_out.reshape((self.index.shape[0] - 1, self.index.shape[1], x_out.shape[1]))
+      self.output = T.concatenate([x_out, base[0].output[1:]],axis=0)
+      self.attrs['n_out'] = base[0].attrs['n_out']
+      self.params.update(unit.params)
+      return
+
+
       skips = T.dot(T.nnet.softmax(z), T.arange(z.shape[1], dtype='float32')).reshape(self.index[1:].shape)
       shift = T.arange(self.index.shape[1], dtype='float32') * T.cast(self.base[0].index.shape[0], 'float32')
+      skips = T.concatenate([T.zeros_like(self.y_t[:1]),self.y_t[:-1]],axis=0)
       idx = shift + T.cumsum(skips, axis=0)
-      idx = (idx.flatten() > 0).nonzero()
+      idx = T.cast(idx[:-1].flatten(),'int32')
+      #idx = (idx.flatten() > 0).nonzero()
+      #idx = base[0].attention.flatten()
       x_out = base[0].output[::-1]
-      x_out = x_out.reshape((x_out.shape[0]*x_out.shape[1],x_out.shape[2]))[idx]
-      x_out = x_out.reshape((self.index.shape[0] - 1, self.index.shape[1], x_out.shape[1]))
+      x_out = x_out.reshape((x_out.shape[0] * x_out.shape[1], x_out.shape[2]))[idx]
+      x_out = x_out.reshape((self.index.shape[0], self.index.shape[1], x_out.shape[1]))
       self.output = T.concatenate([base[0].output[-1:], x_out], axis=0)[::-1]
       self.attrs['n_out'] = base[0].attrs['n_out']
       self.params.update(unit.params)

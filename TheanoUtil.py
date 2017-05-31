@@ -690,7 +690,7 @@ class DumpOp(theano.Op):
     dout = T.as_tensor_variable(dout)
     if self.with_grad:
       # Note: This assumes that there will be only one such gradient.
-      dout = DumpOp(filename=self.filename + ".grad", parent=self, container=self.container)(dout)
+      dout = DumpOp(filename=self.filename + ".grad", container=self.container, parent=self, step=self.step)(dout)
     return [dout]
 
   def dump(self, x):

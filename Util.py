@@ -782,6 +782,17 @@ def json_remove_comments(string, strip_space=True):
   return ''.join(new_str)
 
 
+def unicode_to_str_recursive(s):
+  if isinstance(s, dict):
+    return {unicode_to_str_recursive(key): unicode_to_str_recursive(value) for key, value in s.items()}
+  elif isinstance(s, list):
+    return [unicode_to_str_recursive(element) for element in s]
+  elif isinstance(s, unicode):
+    return s.encode('utf-8')
+  else:
+    return s
+
+
 def load_json(filename=None, content=None):
   if content:
     assert not filename
@@ -793,6 +804,8 @@ def load_json(filename=None, content=None):
     json_content = json.loads(content)
   except ValueError as e:
     raise Exception("config looks like JSON but invalid json content, %r" % e)
+  if not PY3:
+    json_content = unicode_to_str_recursive(json_content)
   return json_content
 
 
@@ -860,6 +873,14 @@ class NumbersDict:
   def has_values(self):
     return bool(self.dict) or self.value is not None
 
+  def unary_op(self, op):
+    res = NumbersDict()
+    if self.value is not None:
+      res.value = op(self.value)
+    for k, v in self.dict.items():
+      res.dict[k] = op(v)
+    return res
+
   @classmethod
   def bin_op_scalar_optional(cls, self, other, zero, op):
     if self is None and other is None:
@@ -917,6 +938,14 @@ class NumbersDict:
 
   def __idiv__(self, other):
     return self.bin_op(self, other, op=lambda a, b: a / b, zero=1, result=self)
+
+  def __neg__(self):
+    return self.unary_op(op=lambda a: -a)
+
+  def __bool__(self):
+    return any(self.values())
+
+  __nonzero__ = __bool__  # Python 2
 
   def elem_eq(self, other, result_with_default=False):
     """

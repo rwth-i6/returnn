@@ -12,10 +12,9 @@ from NativeOp import FastBaumWelchOp
 from NetworkBaseLayer import Layer
 from NetworkHiddenLayer import CAlignmentLayer
 from SprintErrorSignals import sprint_loss_and_error_signal, SprintAlignmentAutomataOp
-from TheanoUtil import time_batch_make_flat, grad_discard_out_of_bound
+from TheanoUtil import time_batch_make_flat, grad_discard_out_of_bound, DumpOp
 from Util import as_str
 from Log import log
-
 
 class OutputLayer(Layer):
   layer_class = "softmax"
@@ -116,10 +115,11 @@ class OutputLayer(Layer):
       self.y = y
       self.norm = numpy.float32(1)
     else:
-      self.norm = T.sum(self.index, dtype='float32') / T.sum(copy_output.index, dtype='float32')
       if hasattr(copy_output, 'index_out'):
+        self.norm = T.sum(self.index, dtype='float32') / T.sum(copy_output.index_out, dtype='float32')
         self.index = copy_output.index_out
       else:
+        self.norm = T.sum(self.index, dtype='float32') / T.sum(copy_output.index, dtype='float32')
         self.index = copy_output.index
       self.y = y = copy_output.y_out
     if y is None:
@@ -413,7 +413,10 @@ class FramewiseOutputLayer(OutputLayer):
         else:
           nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y_data_flat[self.i])
       else:
-        nll = -T.dot(T.log(T.clip(self.p_y_given_x_flat[self.i], 1.e-38, 1.e20)), self.y_data_flat[self.i].T)
+        target  = self.y_data_flat[self.i]
+        output = T.clip(self.p_y_given_x_flat[self.i], 1.e-38, 1.e20)
+        nll = -T.log(output) * target
+        self.norm *= self.p_y_given_x.shape[1] * T.inv(T.sum(self.index))
       if self.attrs.get("auto_fix_target_length"):
         return self.norm * theano.ifelse.ifelse(T.eq(self.index.sum(),0), 0.0, T.sum(nll)), known_grads
       else:

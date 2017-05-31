@@ -161,6 +161,8 @@ public:
                   if(attention(s+1, t) != 0)
                     cout << "warning: attention at " << s+1 << " " << t << " has value " << attention(s+1,t) << endl;
                   attention(s+1, t) = 1;
+                  //attention(s + 1, t) = exp(-fwd_(s + 1, t + M - 1));
+                  //cerr << attention(s + 1, t) << endl;
                 }
             }
             else if(focus == FOCUS_MAX)

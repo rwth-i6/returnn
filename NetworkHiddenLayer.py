@@ -1,3 +1,4 @@
+from __future__ import print_function
 
 import theano
 import numpy
@@ -24,7 +25,7 @@ from Log import log
 from cuda_implementation.FractionalMaxPoolingOp import fmp
 from math import ceil
 from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
-from TheanoUtil import print_to_file
+from TheanoUtil import print_to_file, DumpOp
 
 class HiddenLayer(Layer):
   def __init__(self, activation="sigmoid", **kwargs):
@@ -259,7 +260,7 @@ class DownsampleLayer(_NoOpLayer):
   """
   layer_class = "downsample"
 
-  def __init__(self, factor, axis, method="average", padding=False, sample_target=False, **kwargs):
+  def __init__(self, factor, axis, method="average", padding=False, sample_target=False, base=None, **kwargs):
     super(DownsampleLayer, self).__init__(**kwargs)
     self.set_attr("method", method)
     if isinstance(axis, (str, unicode)):
@@ -277,7 +278,8 @@ class DownsampleLayer(_NoOpLayer):
     self.set_attr("factor", factor)
     z, z_dim = concat_sources(self.sources, unsparse=False)
     target = self.attrs.get('target','classes')
-    self.y_out = kwargs['y_in'][target]
+    self.y_out = kwargs['y_in'][target] if base is None else base[0].y_out
+    self.index_out =  self.network.j[target] if base is None else base[0].index_out
     n_out = z_dim
     import theano.ifelse
     for f, a in zip(factor, axis):
@@ -299,9 +301,9 @@ class DownsampleLayer(_NoOpLayer):
           self.index = T.concatenate([self.index, T.zeros((f-T.mod(self.index.shape[a], f), self.index.shape[1]), 'int8')], axis=0)
         self.index = TheanoUtil.downsample(self.index, axis=0, factor=f, method="max")
         if sample_target:
-          self.index_out = TheanoUtil.downsample(self.network.j[target], axis=0, factor=f, method="max")
+          self.index_out = TheanoUtil.downsample(self.index_out, axis=0, factor=f, method="max")
         else:
-          self.index_out = self.index
+          self.index_out = self.index if base is None else base[0].index_out
       elif a == 2:
         n_out = int(n_out / f)
     output = z
@@ -569,7 +571,7 @@ class SubnetworkLayer(_NoOpLayer):
         sub_n_out[k] = [s.attrs["n_out"], s.output.ndim - 1]
         data_map_d[k] = s.output
         data_map_di[k] = s.index
-    print >>log.v2, "New subnetwork", self.name, "with data", {k: s.name for (k, s) in zip(data_map, self.sources)}, sub_n_out
+    print("New subnetwork", self.name, "with data", {k: s.name for (k, s) in zip(data_map, self.sources)}, sub_n_out, file=log.v2)
     self.subnetwork = self.network.new_subnetwork(
       json_content=subnetwork, n_out=sub_n_out, data_map=data_map_d, data_map_i=data_map_di)
     self.subnetwork.print_network_info(name="layer %r subnetwork" % self.name)
@@ -577,18 +579,18 @@ class SubnetworkLayer(_NoOpLayer):
     if trainable:
       self.params.update(self.subnetwork.get_params_shared_flat_dict())
     if load == "<random>":
-      print >>log.v2, "subnetwork with random initialization"
+      print("subnetwork with random initialization", file=log.v2)
     else:
       from Config import get_global_config
       config = get_global_config()  # this is a bit hacky but works fine in all my cases...
       model_filename = load % {"self": self,
                                "global_config_load": config.value("load", None),
                                "global_config_epoch": config.int("epoch", 0)}
-      print >>log.v2, "loading subnetwork weights from", model_filename
+      print("loading subnetwork weights from", model_filename, file=log.v2)
       import h5py
       model_hdf = h5py.File(model_filename, "r")
       self.subnetwork.load_hdf(model_hdf)
-      print >>log.v2, "done loading subnetwork weights for", self.name
+      print("done loading subnetwork weights for", self.name, file=log.v2)
     self.output = self.subnetwork.output["output"].output
 
   def cost(self):
@@ -639,7 +641,7 @@ class ClusterDependentSubnetworkLayer(_NoOpLayer):
     self.trainable = trainable
     self.set_attr("n_clusters", n_clusters)
     self.n_clusters = n_clusters
-    print >> log.v2, "ClusterDependentSubnetworkLayer: have %s clusters" % self.n_clusters
+    print("ClusterDependentSubnetworkLayer: have %s clusters" % self.n_clusters, file=log.v2)
     assert len(self.sources) >= 2, "need input, ..., cluster_map"
     sources, cluster_map_source = self.sources[:-1], self.sources[-1]
     if concat_sources:
@@ -666,25 +668,25 @@ class ClusterDependentSubnetworkLayer(_NoOpLayer):
         data_map_di[k] = s.index
     self.subnetworks = []
     for idx in range(0, self.n_clusters):
-      print >>log.v2, "New subnetwork", self.name, "with data", {k: s.name for (k, s) in zip(data_map, sources)}, sub_n_out
+      print("New subnetwork", self.name, "with data", {k: s.name for (k, s) in zip(data_map, sources)}, sub_n_out, file=log.v2)
       self.subnetworks.append(self.network.new_subnetwork(
         json_content=subnetwork, n_out=sub_n_out, data_map=data_map_d, data_map_i=data_map_di))
       assert self.subnetworks[idx].output["output"].attrs['n_out'] == n_out
       if trainable:
         self.params.update(self.subnetworks[idx].get_params_shared_flat_dict())
       if load == "<random>":
-        print >>log.v2, "subnetwork with random initialization"
+        print("subnetwork with random initialization", file=log.v2)
       else:
         from Config import get_global_config
         config = get_global_config()  # this is a bit hacky but works fine in all my cases...
         model_filename = load % {"self": self,
                                  "global_config_load": config.value("load", None),
                                  "global_config_epoch": config.int("epoch", 0)}
-        print >>log.v2, "loading subnetwork weights from", model_filename
+        print("loading subnetwork weights from", model_filename, file=log.v2)
         import h5py
         model_hdf = h5py.File(model_filename, "r")
         self.subnetworks[idx].load_hdf(model_hdf)
-        print >>log.v2, "done loading subnetwork weights for", self.name
+        print("done loading subnetwork weights for", self.name, file=log.v2)
     self.ref = cluster_map_source.output[0]
 
     ## generate output lists and sums with ifelse to only compute specified paths
@@ -706,7 +708,7 @@ class ClusterDependentSubnetworkLayer(_NoOpLayer):
     # TODO for each TheanoVar in dict do the ifelse thing
     self.output_grads = {}
     if not self.subnetworks[0].known_grads:
-      print >> log.v5, "known grads is empty"
+      print("known grads is empty", file=log.v5)
     else:
       raise NotImplementedError
 
@@ -2710,7 +2712,6 @@ class DumpLayer(_NoOpLayer):
     self.set_attr("with_grad", with_grad)
 
     if self.train_flag:
-      from TheanoUtil import DumpOp
       self.output = DumpOp(filename, container=self.global_debug_container, with_grad=with_grad)(self.output)
       self.index = DumpOp(filename + ".index", container=self.global_debug_container, with_grad=False)(self.index)
 
@@ -2902,7 +2903,7 @@ class CAlignmentLayer(ForwardLayer):
     if base is None:
       base = []
     kwargs['n_out'] = kwargs['y_in'][target].n_out #+ blank
-    n_cls = kwargs['y_in'][target].n_out
+    self.n_cls = kwargs['y_in'][target].n_out
     super(CAlignmentLayer, self).__init__(**kwargs)
     self.index = self.network.j[target]
     self.cost_scale_val = numpy.float32(1)
@@ -2917,6 +2918,7 @@ class CAlignmentLayer(ForwardLayer):
     self.set_attr('search', search)
     n_out = sum([s.attrs['n_out'] for s in self.sources])
     x_in = T.concatenate([s.output for s in self.sources],axis=2)
+    self.x_in = x_in
     self.set_attr('n_out', n_out)
     self.set_attr('max_skip', max_skip)
     if tdps is None:
@@ -2931,7 +2933,7 @@ class CAlignmentLayer(ForwardLayer):
     if nil is None:
       nil = -1
     elif nil < 0:
-      nil = n_cls + nil
+      nil = self.n_cls + nil
     self.cost_val = T.constant(0)
     self.error_val = T.constant(0)
     if self.eval_flag:
@@ -2975,6 +2977,7 @@ class CAlignmentLayer(ForwardLayer):
     if reduce_output:
       self.output = z_out if output_z else x_out
       self.index = index
+      self.p_y_given_x = T.nnet.softmax(z_out.reshape((z_out.shape[0]*z_out.shape[1],z_out.shape[2]))).reshape(z_out.shape)
       if train_emission: #  and not self.train_flag:
         def encode(x_t,q_t,x_p,q_p,i_p):
           q_c = q_t + q_p
@@ -3004,13 +3007,12 @@ class CAlignmentLayer(ForwardLayer):
     else:
       self.output = self.z if output_z else x_in
       self.index = self.sources[0].index
+      self.p_y_given_x = p_in
 
     self.reduced_index = index
 
     if output_z:
-      self.attrs['n_out'] = n_cls
-
-    self.p_y_given_x = p_in
+      self.attrs['n_out'] = self.n_cls
 
     idx = (rindex.flatten() > 0).nonzero()
     if train_skips:
@@ -3037,7 +3039,7 @@ class CAlignmentLayer(ForwardLayer):
       #self.output *= z_out[:, :, 1].dimshuffle(0, 1, 'x').repeat(self.output.shape[2], axis=2)
       z_out = q_in.reshape((q_in.shape[0] * q_in.shape[1], q_in.shape[2])) # (TB)2
       self.cost_val = norm * -T.sum(y_out[idx] * T.log(z_out[idx]))
-      self.error_val = norm * T.sum(T.ge(T.sqr(z_out[idx,1]-y_out[idx,1]),numpy.float32(1./n_cls)))
+      self.error_val = norm * T.sum(T.ge(T.sqr(z_out[idx,1]-y_out[idx,1]),numpy.float32(1./self.n_cls)))
       return
     else:
       y_out = self.y_out
@@ -3684,3 +3686,145 @@ class RNNBlockLayer(ForwardLayer):
 
 from NativeOp import FastBaumWelchOp
 from SprintErrorSignals import sprint_loss_and_error_signal, SprintAlignmentAutomataOp
+
+
+class SegmentInputLayer(_NoOpLayer):
+  layer_class = 'segment_input'
+
+  def __init__(self, window=15, **kwargs):
+    super(SegmentInputLayer, self).__init__(**kwargs)
+
+    assert len(self.sources) == 1
+    self.set_attr('n_out', self.sources[0].attrs['n_out'])
+    self.set_attr('window', window)
+
+    src_out   = self.sources[0].output
+    src_index = self.sources[0].index
+
+    f = src_out.shape[0]  # number of frames
+    b = src_out.shape[1]  # number of batches
+    d = src_out.shape[2]  # feature dimension
+
+    rs = src_out.dimshuffle(1, 0, 2).reshape((f * b, d))
+    rs_idx = src_index.dimshuffle(1, 0).flatten()
+
+    frames_idx = T.arange(f * b)[(rs_idx>0).nonzero()]\
+                  .repeat(self.attrs['window'])\
+                  .reshape((rs_idx.sum(), self.attrs['window']))\
+                 + T.arange(self.attrs['window'])
+
+    # this filter has entries smaller than -1 for all elements that do not belong to the same sequence as the first frame
+    frame_filter_1 = (f - 1
+                      - (frames_idx[:,0] % f)\
+                         .repeat(self.attrs['window'])\
+                         .reshape((rs_idx.sum(), self.attrs['window']))\
+                      - T.arange(self.attrs['window'])) * 2
+
+    # this filter has entries 0 for all elements that are discarded by self.index, 1 otherwise
+    frame_filter_2 = T.concatenate([rs_idx, T.zeros((self.attrs['window'],), dtype='int8')])[frames_idx.flatten()].reshape((rs_idx.sum(), self.attrs['window']))
+
+    frames_idx = T.switch(frame_filter_1 + frame_filter_2 >= 0, frames_idx, -1).dimshuffle(1, 0)
+
+    # we add an additional vector with zeros s.t. the invalid entries from the filters above result in a feature vector of zeros
+    self.z = T.concatenate([rs, T.zeros((1, src_out.shape[2]))], axis=0)[frames_idx]
+
+    self.make_output(self.z)
+    self.index = T.cast((frame_filter_1 - frame_filter_2).clip(0, 1), 'int8').reshape((self.attrs['window'], rs_idx.sum()))
+
+class UnsegmentInputLayer(_NoOpLayer):
+  layer_class = 'unsegment_input'
+
+  class UnsegmentInputOp(theano.Op):
+    itypes = (T.ftensor3, T.bmatrix)
+    otypes = (T.ftensor3,)
+
+    def perform(self, node, inputs, output_storage):
+      post  = inputs[0]
+      index = inputs[1]
+
+      num_frames  = index.shape[0]
+      num_batches = index.shape[1]
+      window_size = post.shape[0]
+      dim         = post.shape[2]
+
+      out = numpy.zeros((num_frames, num_batches, window_size, dim), dtype='float32')
+
+      cur = 0
+      for b in range(num_batches):
+        for f in range(num_frames):
+          if index[f, b] == 0:
+            continue
+
+          cur_seq_num_frames = min(window_size, num_frames - f)
+          for w in range(cur_seq_num_frames):
+            out[f + w, b, w, :] = post[w, cur, :]
+
+          cur += 1
+
+      out = out.reshape((out.shape[0], out.shape[1], out.shape[2] * out.shape[3]))
+      output_storage[0][0] = out
+
+  def __init__(self, original_output, **kwargs):
+    super(UnsegmentInputLayer, self).__init__(**kwargs)
+
+    assert len(self.sources) == 1
+
+    self.set_attr('original_output', original_output)
+
+    self.index = self.network.get_layer(original_output).index
+    out = self.UnsegmentInputOp()(self.sources[0].p_y_given_x, self.index)
+    self.make_output(out)
+
+class SegmentClassTargets(_NoOpLayer):
+  layer_class = 'segment_class_targets'
+
+  class BuildClassesOp(theano.Op):
+    itypes = (T.iscalar, T.iscalar, T.imatrix, T.bmatrix)
+    otypes = (T.ftensor3, T.bmatrix)
+
+    def perform(self, node, inputs, output_storage):
+      num_classes = inputs[0]
+      window      = inputs[1]
+      classes     = inputs[2]
+      index       = inputs[3]
+
+      assert classes.shape == index.shape
+
+      num_frames = classes.shape[0]
+      num_batches = classes.shape[1]
+      num_start_frames = index.sum()
+
+      out = numpy.zeros((window, num_start_frames, num_classes), dtype='float32')
+      out_index = numpy.zeros((window, num_start_frames), dtype='int8')
+      cur = 0
+      for b in range(num_batches):
+        for f in range(num_frames):
+          if index[f, b] != 1:
+            continue
+
+          cur_seq_num_frames = min(window, num_frames - f)
+          out_index[0:cur_seq_num_frames, cur] = 1
+          for w in range(cur_seq_num_frames):
+            c = classes[f + w, b]
+            out[w:,cur,c] += 1.0
+
+          cur += 1
+
+      out /= numpy.arange(1, window + 1).reshape((window, 1, 1))
+
+      output_storage[0][0] = out
+      output_storage[1][0] = out_index
+
+  def __init__(self, num_classes, window=15, **kwargs):
+    super(SegmentClassTargets, self).__init__(**kwargs)
+
+    assert len(self.sources) == 1
+    self.set_attr('n_out', self.sources[0].attrs['n_out'])
+    self.set_attr('num_classes', num_classes)
+    self.set_attr('window', window)
+
+    self.y_out, self.index = SegmentClassTargets.BuildClassesOp()(T.TensorConstant(theano.tensor.iscalar, self.attrs['num_classes']),
+                                                                  T.TensorConstant(theano.tensor.iscalar, self.attrs['window']),
+                                                                  self.sources[0].output, self.sources[0].index)
+    self.output = self.y_out
+
