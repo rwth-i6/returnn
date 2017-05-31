@@ -3291,7 +3291,10 @@ class InvAlignSegmentationLayer2(_NoOpLayer):
     self.set_attr('win', win)
     self.attention = self.sources[0].attention
     assert len(self.sources) == 1
+    self.inv_att = self.sources[0].attention
+    source_index = self.sources[0].reduced_index.T.flatten().nonzero()
     if not self.eval_flag:
+#    if self.eval_flag:
       result = T.concatenate([s.output for s in self.sources],axis=-1)
       self.index = self.sources[0].index
     else:
@@ -3313,6 +3316,43 @@ class InvAlignSegmentationLayer2(_NoOpLayer):
       self.index = T.ones((result.shape[0], result.shape[1]), 'int8')
     self.z = result
     self.make_output(result)
+
+    # code to create y_out for frame-wise classification within the segments
+    y_out = self.sources[0].y_out.T
+    y_out = T.concatenate([y_out,T.zeros((y_out.shape[0],1))-numpy.int32(1)],axis=1) #adding -1 at the end to account for unused timesteps at the end of the sequence
+    diffarr,maxlen = self.find_diff_array(self.sources[0].attention.argmax(axis=2))
+    y_outrep = self.set_yout(y_out,diffarr.flatten(),T.cast(maxlen,'int32'))
+    self.y_out = T.cast(y_outrep.reshape((self.output.shape[1],self.output.shape[0])).T,'int32')
+
+  def find_diff_array(self, att):
+    att = att.T
+    att = T.concatenate([T.zeros((att.shape[0], numpy.int32(1))), att], axis=1)
+    maxlen = T.concatenate([T.stack(att[0, 0]), T.extra_ops.diff(att).flatten().sort()])[-1] + \
+             numpy.int32(1)  # maxlen for the segments
+    att = att[:, 1:]
+    att = T.switch(self.sources[0].reduced_index > 0,
+                   att.T + (T.arange(self.sources[0].attention.shape[1]) * self.sources[0].attention.shape[2]),
+                   att.T)  # scale the indices of batches according to the batch number
+    att = att.T
+    last_index = (T.arange(att.shape[0]) + numpy.int32(1)) * self.output.shape[0] - \
+                 numpy.int32(1)  # last index for at that denotes the last timestep
+    att = T.switch(att > 0, att, last_index.dimshuffle(0, 'x'))
+    att_with_firstindex = T.concatenate([T.maximum((T.arange(att.shape[0]) * self.output.shape[0]).dimshuffle(0, 'x'),
+                                                   att[:, 0].dimshuffle(0, 'x') - maxlen), att], axis=1)
+    att_with_first_and_last_index = T.concatenate([att_with_firstindex, last_index.dimshuffle(0, 'x')], axis=1)
+    maxlen = T.extra_ops.diff(att_with_first_and_last_index).flatten().sort()[-1] + \
+             numpy.int32(1)  # maxlen for the segments including unused timesteps
+    diffarr = T.extra_ops.diff(att_with_first_and_last_index)
+    diffarr = T.inc_subtensor(diffarr[:, 0], numpy.int32(1))  # add 1 to differences in the first row to include the first timestep as well
+    return diffarr,maxlen
+
+  def set_yout(self,y_out,diff,maxdiff):
+    newdiff = T.cast((diff.repeat(maxdiff).reshape((diff.shape[0],maxdiff))+(T.arange(diff.shape[0])*maxdiff).dimshuffle(0,'x')).flatten(),'int32')
+    res = T.cast(newdiff-T.arange(newdiff.shape[0])-1,'int32')
+    res_1hot = (res>=0).flatten().nonzero()
+    y_out_rep = y_out.repeat(maxdiff)
+    y_out_rep = y_out_rep[res_1hot]
+    return y_out_rep
 
 class ReshapeLayer(StateVector):
   layer_class = "reshape"
@@ -3350,6 +3390,7 @@ class SegmentFinalStateLayer(_NoOpLayer):
     kwargs['n_out'] = sum([s.attrs['n_out'] for s in kwargs['sources']])
     self.set_attr('n_out',kwargs['n_out'])
     if not self.eval_flag:
+#    if self.eval_flag:
       if hasattr(self.sources[0],'inv_att'):
         inv_att = self.sources[0].inv_att.dimshuffle(2,1,0) #TBN
       else:

@@ -196,7 +196,7 @@ class LSTMS(Unit):
       z_t += z_r
       for v in self.recurrent_transform.get_sorted_state_vars():
         other_outputs += [r_updates[v]]
-    maxatt = T.max(att_p, axis=-1).repeat(z_t.shape[1]).reshape((z_t.shape[0],z_t.shape[1]))#.dimshuffle(1,0)
+    maxatt = att_p.repeat(z_t.shape[1]).reshape((z_t.shape[0],z_t.shape[1]))#.dimshuffle(1,0)
     #maxatt = theano.printing.Print('maxatt',attrs=['__str__','shape'])(maxatt)
     z_t = T.switch(maxatt>0,z_t,z_t + T.dot(y_p, self.W_re))
     #z_t += T.dot(y_p, self.W_re)
@@ -204,7 +204,7 @@ class LSTMS(Unit):
 
     partition = z_t.shape[1] // 4
     ingate = T.nnet.sigmoid(z_t[:,:partition])
-    forgetgate = ((T.nnet.sigmoid(z_t[:,partition:2*partition])).T * (1.-T.max(att_p,axis=-1))).T
+    forgetgate = ((T.nnet.sigmoid(z_t[:,partition:2*partition])).T * (1.-att_p)).T
     outgate = T.nnet.sigmoid(z_t[:,2*partition:3*partition])
     input = T.tanh(z_t[:,3*partition:4*partition])
     #c_t = ((forgetgate * c_p + ingate * input).T * (1.-T.max(att_p,axis=-1))).T
@@ -523,6 +523,7 @@ class RecurrentUnitLayer(Layer):
                bias_random_init_forget_shift=0.0,
                copy_weights_from_base=False,
                segment_input=False,
+               sample_segment=None,
                **kwargs):
     """
     :param n_out: number of cells
@@ -568,7 +569,10 @@ class RecurrentUnitLayer(Layer):
     elif unit in ("lstmc", "lstmp") and not is_using_gpu():
       unit = "lstme"
     if segment_input:
-      unit = "lstmps"
+      if is_using_gpu():
+        unit = "lstmps"
+      else:
+        unit = "lstms"
     if n_out is None:
       assert encoder
       n_out = sum([enc.attrs['n_out'] for enc in encoder])
@@ -620,6 +624,7 @@ class RecurrentUnitLayer(Layer):
     self.set_attr('segment_input', segment_input)
     if segment_input:
       if not self.eval_flag:
+      #if self.eval_flag:
         if isinstance(self.sources[0],RecurrentUnitLayer):
           self.inv_att = self.sources[0].inv_att #NBT
         else:
@@ -628,7 +633,7 @@ class RecurrentUnitLayer(Layer):
         inv_att = T.set_subtensor(inv_att[0],T.zeros((inv_att.shape[1],inv_att.shape[2])))
         inv_att = T.max(inv_att,axis=-1)
       else:
-        inv_att = T.zeros((self.sources[0].output.shape[0],self.sources[0].output.shape[1],1))
+        inv_att = T.zeros((self.sources[0].output.shape[0],self.sources[0].output.shape[1]))
     if encoder and hasattr(encoder[0],'act'):
       self.set_attr('encoder', ",".join([e.name for e in encoder]))
     if base:
@@ -876,7 +881,7 @@ class RecurrentUnitLayer(Layer):
       x_out = x_out.reshape((x_out.shape[0]*x_out.shape[1],x_out.shape[2]))[idx]
       x_out = x_out.reshape((self.index.shape[0] - 1, self.index.shape[1], x_out.shape[1]))
       self.output = T.concatenate([base[0].output[-1:], x_out], axis=0)[::-1]
-      self.attrs['n_out'] = base[0].attrs['n_out'] 
+      self.attrs['n_out'] = base[0].attrs['n_out']
       self.params.update(unit.params)
       return
 

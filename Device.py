@@ -691,7 +691,7 @@ class Device(object):
           p_y_given_x1 = p_y_given_x1.reshape((t*b,w*p_y_given_x1.shape[1]))
           p_y_given_x1 = p_y_given_x1.reshape((b,t,p_y_given_x1.shape[1])).dimshuffle(1,0,2)
           assert p_y_given_x1.ndim == 3
-          source.append(p_y_given_x1)
+          source.append(T.log(p_y_given_x1))
         elif extract == "win_post_full":
           layer = self.testnet.get_layer(output_layer_name)
           p_y_given_x = layer.z
@@ -774,6 +774,12 @@ class Device(object):
             param = 'output'
           hidden = self.testnet.output[extract]
           signal = getattr(hidden, param)
+          if param == 'attention' and extract == 'aln':
+            n = signal.shape[0]
+            b = signal.shape[1]
+            t = signal.shape[2]
+            signal = signal.dimshuffle(1,0,2).reshape((signal.shape[0],signal.shape[1]*signal.shape[2])).argmax(axis=-1).reshape((n,b))
+            signal = signal.dimshuffle(0,1,'x')
           assert signal.ndim == 3, "extraction variable has to be of shape (time,batch,dimension)"
           source.append(signal)
         elif extract == 'input':

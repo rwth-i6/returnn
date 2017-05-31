@@ -10,6 +10,7 @@ from TwoStateHMMOp import TwoStateHMMOp
 from OpNumpyAlign import NumpyAlignOp
 from NativeOp import FastBaumWelchOp
 from NetworkBaseLayer import Layer
+from NetworkHiddenLayer import CAlignmentLayer
 from SprintErrorSignals import sprint_loss_and_error_signal, SprintAlignmentAutomataOp
 from TheanoUtil import time_batch_make_flat, grad_discard_out_of_bound
 from Util import as_str
@@ -126,10 +127,14 @@ class OutputLayer(Layer):
     elif isinstance(y, T.Variable):
       if reshape_target:
           if copy_output:
-            ind = copy_output.reduced_index.T.flatten()
-            self.y_data_flat = y.T.flatten()
-            self.y_data_flat = self.y_data_flat[(ind > 0).nonzero()]
-            self.index = T.ones((self.z.shape[0], self.z.shape[1]), 'int8')
+            if isinstance(copy_output,CAlignmentLayer):
+              ind = copy_output.reduced_index.T.flatten()
+              self.y_data_flat = y.T.flatten()
+              self.y_data_flat = self.y_data_flat[(ind > 0).nonzero()]
+              self.index = T.ones((self.z.shape[0], self.z.shape[1]), 'int8')
+            else:
+              self.y_data_flat = time_batch_make_flat(y)
+              #self.y_data_flat = theano.printing.Print('ydataflat',attrs=['shape'])(self.y_data_flat)
           else:
             src_index = self.sources[0].index
             self.index = src_index
