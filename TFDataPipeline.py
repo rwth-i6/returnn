@@ -127,6 +127,7 @@ from threading import Thread, Condition
 
 import numpy
 import tensorflow as tf
+from tensorflow.python.ops.data_flow_ops import StagingArea
 
 from Dataset import Dataset, BatchSetGenerator
 from TFNetwork import ExternData
@@ -468,6 +469,7 @@ class TFBatchingQueue(object):
   Gets in data via TFDataQueues without batch-dim, and adds the batch-dim,
   according to batch_size and max_seqs.
   Output can be accessed via self.output_as_extern_data.
+  This will represent the final output used by the network, controlled by QueueDataProvider.
   """
   def __init__(self, data_queues, batch_size, max_seqs, capacity=10):
     """
@@ -491,6 +493,8 @@ class TFBatchingQueue(object):
       shapes=[self.data_queues.shapes[key] for key in data_queues.names])
     self._tf_batch_nums = tf.FIFOQueue(
       capacity=capacity, dtypes=[tf.int32], shapes=[()])
+    self._tf_staging_area = StagingArea(  # for async CPU->GPU transfer
+      dtypes=self._tf_out_queue.dtypes, shapes=self._tf_out_queue.shapes, names=self._tf_out_queue.names)
     self._cur_batch_num = tf.Variable(initial_value=0, dtype=tf.int32, trainable=False, name="batch_num")
     self._cur_max_seq_len = tf.Variable(initial_value=0, dtype=tf.int32, trainable=False, name="max_seq_len")
     self._init_op = tf.variables_initializer([self._cur_batch_num, self._cur_max_seq_len])
@@ -501,17 +505,19 @@ class TFBatchingQueue(object):
       default_target=data_queues.extern_data.default_target,
       data={key: Data(**data.get_kwargs()) for (key, data) in data_queues.extern_data.data.items()})
     dequeue_op = self._tf_out_queue.dequeue_up_to(n=self._tf_batch_nums.dequeue())
-    self.last_seq_idx_var = tf.Variable(initial_value=0, dtype=tf.int32, trainable=False, name="last_seq_idx")
-    self.seq_counter = tf.Variable(initial_value=0, dtype=tf.int32, trainable=False, name="seq_counter")
-    self.batch_counter = tf.Variable(initial_value=0, dtype=tf.int32, trainable=False, name="batch_counter")
-    default_input_key = self.output_as_extern_data.default_input
-    default_input_value = dequeue_op[default_input_key]
-    default_input_data = self.output_as_extern_data.data[default_input_key]
-    last_batch_size = tf.shape(default_input_value)[default_input_data.batch_dim_axis]
-    updates = [
-      tf.assign(self.last_seq_idx_var, tf.maximum(self.last_seq_idx_var, tf.reduce_max(dequeue_op["seq_idx"]))),
-      tf.assign_add(self.seq_counter, last_batch_size),
-      tf.assign_add(self.batch_counter, 1)]
+    stage_put_op = self._tf_staging_area.put(dequeue_op)
+    stage_get_op = self._tf_staging_area.get()
+    with tf.device("/cpu:0"):
+      self.last_seq_idx_var = tf.Variable(initial_value=0, dtype=tf.int32, trainable=False, name="last_seq_idx")
+      self.seq_counter = tf.Variable(initial_value=0, dtype=tf.int32, trainable=False, name="seq_counter")
+      self.batch_counter = tf.Variable(initial_value=0, dtype=tf.int32, trainable=False, name="batch_counter")
+      default_input_key = self.output_as_extern_data.default_input
+      default_input_data = self.output_as_extern_data.data[default_input_key]
+      last_batch_size = tf.shape(dequeue_op[default_input_key])[default_input_data.batch_dim_axis]
+      updates = [
+        tf.assign(self.last_seq_idx_var, tf.maximum(self.last_seq_idx_var, tf.reduce_max(dequeue_op["seq_idx"]))),
+        tf.assign_add(self.seq_counter, last_batch_size),
+        tf.assign_add(self.batch_counter, 1)]
     for key, data in self.output_as_extern_data.data.items():
       with tf.control_dependencies(updates):  # make sure we apply the update
         data.placeholder = tf.identity(dequeue_op[key], name=key)
@@ -946,6 +952,7 @@ class QueueDataProvider(DataProviderBase):
     :param Dataset dataset:
     :param bool is_train_dataset:
     """
+    assert not self.cur_dataset_reader
     def feed_callback(d):
       """
       :param dict[str,numpy.ndarray|str|int] d:
