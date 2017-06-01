@@ -122,6 +122,7 @@ class OutputLayer(Layer):
         self.norm = T.sum(self.index, dtype='float32') / T.sum(copy_output.index, dtype='float32')
         self.index = copy_output.index
       self.y = y = copy_output.y_out
+      self.copy_output = copy_output
     if y is None:
       self.y_data_flat = None
     elif isinstance(y, T.Variable):

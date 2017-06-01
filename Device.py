@@ -680,11 +680,20 @@ class Device(object):
         elif extract == "win_post":
           layer = self.testnet.get_layer(output_layer_name)
           p_y_given_x = getattr(layer, "p_y_given_x", layer.output)
-          w = layer.sources[0].base[0].attrs['win']
-          t = layer.sources[0].base[0].timesteps
-          b = layer.sources[0].base[0].batches
-          fullind = layer.sources[0].fullind.T#.flatten()
-          p_y_given_x = p_y_given_x.reshape((p_y_given_x.shape[0]*p_y_given_x.shape[1],p_y_given_x.shape[2]))
+          from NetworkHiddenLayer import SegmentFinalStateLayer
+          if isinstance(layer.sources[0],SegmentFinalStateLayer):
+            w = layer.sources[0].base[0].attrs['win']
+            t = layer.sources[0].base[0].timesteps
+            b = layer.sources[0].base[0].batches
+            fullind = layer.sources[0].fullind.T
+          else:
+            w = layer.copy_output.attrs['win']
+            t = layer.copy_output.timesteps
+            b = layer.copy_output.batches
+            from TheanoUtil import window_batch_timewise
+            fullind = window_batch_timewise(t,b,w,layer.copy_output.fullind)
+            fullind = fullind.T
+          p_y_given_x = p_y_given_x.reshape((p_y_given_x.shape[0]*p_y_given_x.shape[1],p_y_given_x.shape[2]))[fullind.flatten()]
           zer = T.zeros((p_y_given_x.shape[1],1))
           fullind1 = fullind.repeat(p_y_given_x.shape[1]).reshape((fullind.flatten().shape[0],p_y_given_x.shape[1]))
           p_y_given_x1 = T.switch(fullind1>=0, p_y_given_x, 0)
