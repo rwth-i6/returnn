@@ -532,20 +532,22 @@ class TFBatchingQueue(object):
       default_target=data_queues.extern_data.default_target,
       data={key: Data(**data.get_kwargs()) for (key, data) in data_queues.extern_data.data.items()})
     self.batch_queue_size = self._tf_batch_nums.size()
-    self.batch_dequeue_op = self._tf_out_queue.dequeue_up_to(n=self._tf_batch_nums.dequeue())
+    batch_dequeue_op = self._tf_out_queue.dequeue_up_to(n=self._tf_batch_nums.dequeue())
     self.last_seq_idx = tf.Variable(initial_value=0, dtype=tf.int32, trainable=False, name="last_seq_idx")
     self.seq_counter = tf.Variable(initial_value=0, dtype=tf.int32, trainable=False, name="seq_counter")
     self.batch_counter = tf.Variable(initial_value=0, dtype=tf.int32, trainable=False, name="batch_counter")
     default_input_key = self.output_as_extern_data.default_input
     default_input_data = self.output_as_extern_data.data[default_input_key]
     last_batch_size = tf.shape(self.batch_dequeue_op[default_input_key])[default_input_data.batch_dim_axis]
-    self.updates = [
+    updates = [
       tf.assign(self.last_seq_idx, tf.maximum(self.last_seq_idx, tf.reduce_max(self.batch_dequeue_op["seq_idx"]))),
       tf.assign_add(self.seq_counter, last_batch_size),
       tf.assign_add(self.batch_counter, 1)]
     self._init_op = tf.variables_initializer([
       self._cur_batch_num, self._cur_max_seq_len,
       self.last_seq_idx, self.seq_counter, self.batch_counter])
+    from TFUtil import post_control_dependencies
+    self.batch_dequeue_op = post_control_dependencies(batch_dequeue_op, updates=updates)
 
   def _make_enqueue_op(self):
     """
@@ -614,16 +616,26 @@ class TFBatchingQueue(object):
         tf_session.run(self._tf_enqueue_loop_op)
 
 
+class QueueOutput(object):
+  def get_data(self):
+    """
+    :rtype: dict[str,tf.Tensor] 
+    """
+  def have_data(self):
+    pass
+
+
 class CpuToDefaultDevStage(object):
-  def __init__(self, input_data, updates, names, dtypes, extern_data, data_keys):
+  def __init__(self, input_data, names, dtypes, extern_data, data_keys):
     """
     :param dict[str,tf.Tensor] input_data:
-    :param list[tf.Operation] updates: updates to apply after the make_dequeue_op()
     :param list[str] names: data_keys + extra info
     :param list[tf.DType|str] dtypes: corresponds to names
     :param ExternData extern_data:
     :param list[str] data_keys:
     """
+    from TFUtil import post_control_dependencies
+
     # The device-scope when this gets called is the default device,
     # so everywhere where we want to do it on CPU, we have to specify it explicitly.
     # StagingArea can be used for async CPU->GPU transfer.
@@ -633,18 +645,18 @@ class CpuToDefaultDevStage(object):
     with tf.device("/cpu:0"):
       self.staging_size = tf.Variable(0, trainable=False, dtype=tf.int32, name="staging_size")
       self._staging_size_init = tf.variables_initializer([self.staging_size])
-      tf.is_variable_initialized()
-      with tf.control_dependencies(updates + [tf.assign_add(self.staging_size, 1)]):
+      with tf.control_dependencies([tf.assign_add(self.staging_size, 1)]):
         self.stage_put_op = self._tf_staging_area.put(input_data)
-    self.stage_get_op = self._tf_staging_area.get()
+      get_updates = [tf.assign_sub(self.staging_size, 1)]
+    # This should run on the default device (GPU).
+    self.stage_get_op = post_control_dependencies(self._tf_staging_area.get(), updates=get_updates)
 
     self.output_as_extern_data = ExternData(
       default_input=extern_data.default_input,
       default_target=extern_data.default_target,
       data={key: Data(**data.get_kwargs()) for (key, data) in data_keys})
     for key, data in self.output_as_extern_data.data.items():
-      with tf.control_dependencies(updates):  # make sure we apply the update
-        data.placeholder = tf.identity(self.stage_get_op[key], name=key)
+      data.placeholder = self.stage_get_op[key]
       data.size_placeholder = {
         axis: self.stage_get_op["%s/size%i" % (key, axis)]
         for axis in data.get_axes_with_size()}
@@ -1000,7 +1012,7 @@ class QueueDataProvider(DataProviderBase):
 
     # This does the async CPU->GPU copy. This prepares the final data used for the network.
     self.final_stage = CpuToDefaultDevStage(
-      input_data=self.batch_queue.batch_dequeue_op, updates=self.batch_queue.updates,
+      input_data=self.batch_queue.batch_dequeue_op,
       names=self.chunk_queue.names, dtypes=self.chunk_queue.dtypes,
       extern_data=self.extern_data, data_keys=self.data_keys)
     self.output = self.final_stage.output_as_extern_data
@@ -1030,15 +1042,19 @@ class QueueDataProvider(DataProviderBase):
     if not self.cur_dataset_reader:
       return False
     if self.cur_dataset_reader.final_num_seqs is None:
-      is_at_end = False
-    else:
+      is_at_end = False  # we don't know
+    elif not self.cur_dataset_is_train:
       self._update_last_seq_idx(session=session)
       is_at_end = self._last_seq_idx + 1 >= self.cur_dataset_reader.final_num_seqs
+    else:
+      is_at_end = False  # seqs/chunks can be shuffled in train
     if is_at_end:
       return False
     if self.cur_dataset_is_train:
       # There can be multiple RandomShuffleQueues which all need a certain buffer of min_after_dequeue.
       while True:
+        if session.run(self.final_stage.staging_size) > 0:
+          return True
         if session.run(self.batch_queue.batch_queue_size) > 0:
           return True
         if session.run(self.chunk_queue.train_queue_size) > self.chunk_queue.train_queue_min_after_dequeue:

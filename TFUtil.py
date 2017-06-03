@@ -1900,6 +1900,7 @@ def cond(pred, fn1, fn2, name=None):
   This will be a branched execution, i.e. either fn1() or fn2() will be executed,
   or at least the resulting graph will be evaluated.
   If pred can is constant at the call, only the corresponding fn will be called.
+  This is similar as the TF internal _smart_cond().
 
   :param tf.Tensor|bool pred:
   :param ()->(tf.Tensor|list[tf.Tensor]) fn1:
@@ -2301,3 +2302,23 @@ def slice_pad_zeros(x, begin, end, axis=0):
       x,
       pad_zeros_in_axis(x, after=right_rem, axis=axis))
     return single_strided_slice(x, axis=axis, begin=begin, end=end)
+
+
+def post_control_dependencies(x, updates):
+  """
+  :param tf.Tensor|list[tf.Tensor]|dict[str,tf.Tensor] x:
+  :param list[tf.Operation] updates:
+  :return: identity(x) with control_dependencies(updates)
+  :rtype: tf.Tensor|list[tf.Tensor]|dict[str,tf.Tensor]
+  """
+  with tf.name_scope("post_control_dependencies"):
+    with tf.control_dependencies(updates):
+      if isinstance(x, tf.Tensor):
+        return tf.identity(x)
+      elif isinstance(x, (tuple, list)):
+        return [tf.identity(v) for v in x]
+      elif isinstance(x, dict):
+        return {k: tf.identity(v) for (k, v) in x.items()}
+      else:
+        raise ValueError("type of %r not expected" % x)
+
