@@ -301,7 +301,7 @@ class Updater(object):
       grad_clip = self.config.float("gradient_clip", 0.0)
       grad_clip_global_norm = self.config.float("gradient_clip_global_norm", 0.0)
 
-      # Extended self.optimizer.minimize() to optinally modify gradients.
+      # Extended self.optimizer.minimize() to optionally modify gradients.
       grads_and_vars = self.optimizer.compute_gradients(
         self.loss, var_list=self.trainable_vars,
         aggregation_method=aggregation_method)
@@ -337,6 +337,10 @@ class Updater(object):
     self.optimizer_vars = slot_vars
 
     # Check if there were any other variables added.
+    # E.g. currently (TF 1.0) the `AdamOptimizer` creates these additional vars
+    # `[<tf.Variable 'optimize/beta1_power:0' shape=() dtype=float32_ref>,
+    #   <tf.Variable 'optimize/beta2_power:0' shape=() dtype=float32_ref>]`
+    # which do not correspond to trainable vars, thus we did not get them as slot vars above.
     other_new_vars = []
     for v in tf.global_variables():
       if v in all_vars:

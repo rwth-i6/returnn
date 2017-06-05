@@ -1231,7 +1231,7 @@ def expand_multiple_dims(x, axes, name="expand_multiple_dims"):
 
 def constant_with_shape(x, shape, name="constant_with_shape"):
   """
-  :param tf.Tensor|float|int x: scalar
+  :param tf.Tensor|float|int|bool x: scalar
   :param list[tf.Tensor|int]|tuple[tf.Tensor|int]|tf.Tensor shape:
   :param str name:
   :return: x of the specified shape
@@ -2321,4 +2321,140 @@ def post_control_dependencies(x, updates):
         return {k: tf.identity(v) for (k, v) in x.items()}
       else:
         raise ValueError("type of %r not expected" % x)
+
+
+def global_queue(name, queue_type, capacity, dtypes, shapes=None, names=None):
+  """
+  :param (args)->tf.QueueBase queue_type: some function which creates a queue
+  :param str name: global name
+  :param list[tf.DType|str] dtypes:
+  :param list[tf.TensorShape|tuple[int|None]]|None shapes:
+  :param list[str]|None names:
+  :rtype: tf.QueueBase
+  """
+  queue_ref = global_tensor(
+    name=name,
+    f=lambda: queue_type(capacity=capacity, dtypes=dtypes, shapes=shapes, names=names).queue_ref)
+  queue = tf.QueueBase(dtypes=dtypes, shapes=shapes, names=names, queue_ref=queue_ref)
+  return queue
+
+
+def global_true_once(name):
+  """
+  :param str name: 
+  :return: a global tensor which will be True once and then always False
+    Internally, this is done by a global variable.
+  :rtype: tf.Tensor
+  """
+  def true_once():
+    v = tf.Variable(initial_value=True, trainable=False, name="true_once_var")
+
+    def make_init():
+      # Cannot use tf.variables_initializer(), see here: https://stackoverflow.com/questions/44354964/
+      with tf.control_dependencies([tf.assign(v, True)]):
+        return tf.no_op()
+
+    maybe_init = tf.cond(
+      tf.is_variable_initialized(v),
+      lambda: tf.no_op(),
+      make_init,
+      name="init")
+
+    with tf.control_dependencies([maybe_init]):
+      # Cannot use tf.identity because that would give us a reference to the var but we want to copy it now.
+      x = tf.where(v.read_value(), True, False)
+      with tf.control_dependencies([x]):
+        x = tf.identity(x)
+        reset = tf.assign(v, False)
+        with tf.control_dependencies([x, reset]):
+          x = tf.identity(x)
+    return x
+
+  return global_tensor(name=name, f=true_once)
+
+
+def raise_OutOfRangeError():
+  """
+  :return: an op which raises an OutOfRangeError
+  :rtype: tf.Operation
+  """
+  # Kind of hacky. We create some dummy queue, close it and every time we call dequeue on it,
+  # it will raise the desired exception.
+  with tf.name_scope("raise_OutOfRangeError"):
+    queue = global_queue(name="raise_exception/queue", queue_type=tf.FIFOQueue, capacity=1, dtypes=[tf.bool])
+    # We must only close it once, otherwise we could get a CancelledError.
+    queue_open = global_true_once("raise_exception/queue_open")
+    with tf.control_dependencies([tf.cond(queue_open, lambda: queue.close(), lambda: tf.no_op())]):
+      return queue.dequeue()
+
+
+class ExplicitRandomShuffleQueue(object):
+  """
+  This is intended to behave very much like tf.RandomShuffleQueue,
+  except that it's implemented by other TF native ops / data structures,
+  and you can change min_after_dequeue at runtime.
+  This means that if you have your own logic about when to end,
+  you can set min_after_dequeue=0 and dequeue all the remaining entries from the queue,
+  and then later increase min_after_dequeue again.
+  You can also start with a small min_after_dequeue and increase the number steadily.
+  The original tf.RandomShuffleQueue had the effect of a reset min_after_dequeue=0
+  after you closed the queue. However, there was no way to reopen the queue.
+  That is the whole reason this implementation exists.
+  
+  One way to implement this is in pure TF.  
+  We need some TF container type which supports having entries of different shapes
+  (where the shape can differ where-ever we specified None).
+  We also need some TF container which we can access by index.
+  tf.TensorArray can handle that.
+  
+  Another way to implement this is by multiple stateful tf.py_func which all reference this instance.
+  """
+
+  def __init__(self, capacity, min_after_dequeue=0, dtypes=None, shapes=None,
+               names=None, seed=None, shared_name=None,
+               name="explicit_random_shuffle_queue"):
+    """
+    :param int capacity:
+    :param int|tf.Tensor min_after_dequeue:
+    :param list[str|tf.DType] dtypes:
+    :param list[tuple[int|tf.Tensor|None]] shapes:
+    :param list[str]|None names:
+    :param int seed:
+    :param str|None shared_name:
+    :param str name:
+    """
+    assert dtypes
+    self.capacity = capacity
+    self.min_after_dequeue = min_after_dequeue
+    assert not shared_name, "not supported yet"
+    assert isinstance(dtypes, list)
+    self.dtypes = dtypes
+    if shapes is None:
+      shapes = [None] * len(dtypes)
+    assert isinstance(shapes, list)
+    self.shapes = shapes
+    assert len(shapes) == len(dtypes)
+    if names is not None:
+      assert isinstance(names, list)
+      assert len(names) == len(dtypes)
+    self.names = names
+    self._name = name
+
+    with tf.name_scope(self._name):
+      self._tas = [
+        tf.TensorArray(
+          dtype=dtype, size=capacity, dynamic_size=True, clear_after_read=True,
+          element_shape=shape, name="%s_TensorArray")
+        for (dtype, shape) in zip(self.dtypes, self.shapes)]
+      assert len(self._tas) == len(self.dtypes)
+
+      # We need a list of indices.
+      self._init_index_list()
+    # TODO...
+
+  def _init_index_list(self):
+    self._free_mask = constant_with_shape(True, shape=(self.min_after_dequeue,))
+    self._index_list = tf.range(0, self.min_after_dequeue)
+
+  # TODO ...
 
