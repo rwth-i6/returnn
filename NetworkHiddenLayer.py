@@ -3324,6 +3324,7 @@ class InvAlignSegmentationLayer2(_NoOpLayer):
     y_out = T.concatenate([y_out,T.zeros((y_out.shape[0],1))-numpy.int32(1)],axis=1) #adding -1 at the end to account for unused timesteps at the end of the sequence
     diffarr,maxlen = self.find_diff_array(self.sources[0].attention.argmax(axis=2))
     y_outrep = self.set_yout(y_out,diffarr.flatten(),T.cast(maxlen,'int32'))
+    y_outrep = y_outrep[:self.output.shape[0]*self.output.shape[1]]
     self.y_out = T.cast(y_outrep.reshape((self.output.shape[1],self.output.shape[0])).T,'int32')
 
   def find_diff_array(self, att):
@@ -3411,23 +3412,27 @@ class SegmentFinalStateLayer(_NoOpLayer):
       assert base is not None
       self.base = base
       #get the original timesteps, batches and window parameter
-      t = base[0].timesteps
-      b = base[0].batches
-      w = base[0].attrs['win']
-      d = self.attrs['n_out']
-      z = T.concatenate([s.output for s in self.sources],axis=-1)
-      ze = z.reshape((z.shape[0]*z.shape[1],z.shape[2])) #T*B,D
-      fullind = base[0].fullind#full index from invalignsegment layer
-      ze = T.concatenate([ze,T.zeros((1,ze.shape[1]))],axis=0)
-      for i in range(w):
-        fullind = T.set_subtensor(fullind[i],T.roll(fullind[i],i))
-        if i>0:
-            fullind = T.inc_subtensor(fullind[i],T.where(fullind[i]>0,i*t*b-i,0))
-      self.fullind = fullind
-      zfinal = ze[fullind.T.flatten()].dimshuffle('x',0,1)
-      self.make_output(zfinal)
-      self.act = [self.output, T.zeros_like(self.output)]
-      self.index = T.ones((1,self.output.shape[1]),'int8')
+      if isinstance(base[0],CAlignmentLayer):
+        self.make_output(self.sources[0].output)
+        self.index = self.sources[0].index
+      else:
+        t = base[0].timesteps
+        b = base[0].batches
+        w = base[0].attrs['win']
+        d = self.attrs['n_out']
+        z = T.concatenate([s.output for s in self.sources],axis=-1)
+        ze = z.reshape((z.shape[0]*z.shape[1],z.shape[2])) #T*B,D
+        fullind = base[0].fullind#full index from invalignsegment layer
+        ze = T.concatenate([ze,T.zeros((1,ze.shape[1]))],axis=0)
+        for i in range(w):
+          fullind = T.set_subtensor(fullind[i],T.roll(fullind[i],i))
+          if i>0:
+              fullind = T.inc_subtensor(fullind[i],T.where(fullind[i]>0,i*t*b-i,0))
+        self.fullind = fullind
+        zfinal = ze[fullind.T.flatten()].dimshuffle('x',0,1)
+        self.make_output(zfinal)
+        self.act = [self.output, T.zeros_like(self.output)]
+        self.index = T.ones((1,self.output.shape[1]),'int8')
 
 class ScaleGradientOp(theano.gof.Op):
   view_map = {0: [0]}
