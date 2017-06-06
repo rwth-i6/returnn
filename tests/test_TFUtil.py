@@ -388,3 +388,29 @@ def test_encode_raw_seq_lens():
   seq_lens = tf.constant([len(s) for s in strs_stripped])
   back = encode_raw(raw, seq_lens=seq_lens)
   assert_equal(list(back.eval()), [s.encode("utf8") for s in strs_stripped])
+
+
+def test_global_true_once():
+  x = global_true_once(name="test_global_true_once")
+  assert_equal(x.eval(), True)
+  assert_equal(x.eval(), False)
+  assert_equal(x.eval(), False)
+  assert_equal(x.eval(), False)
+  x2 = global_true_once(name="test_global_true_once")  # should get the same
+  assert x2 is x
+  assert_equal(x2.eval(), False)
+  x3 = global_true_once(name="test_global_true_once_2")
+  assert x3 is not x
+  assert_equal(x3.eval(), True)
+  assert_equal(x3.eval(), False)
+
+
+def test_raise_OutOfRangeError():
+  for j in range(2):
+    x = raise_OutOfRangeError()
+    for i in range(3):
+      try:
+        session.run(x)
+        assert False, "should have raised OutOfRangeError"
+      except tf.errors.OutOfRangeError:
+        pass
