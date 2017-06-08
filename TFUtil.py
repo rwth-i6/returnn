@@ -2524,6 +2524,336 @@ class Condition(object):
           return self.lock.lock()
 
 
+class GlobalTensorArrayOpMaker:
+  # Note: This whole implementation will not work when tensor_array.h is not available.
+  # https://github.com/tensorflow/tensorflow/issues/10527
+
+  code = """
+    #include "tensorflow/core/framework/op_kernel.h"
+    #include "tensorflow/core/framework/register_types.h"
+    #include "tensorflow/core/framework/resource_mgr.h"
+    #include "tensorflow/core/framework/tensor.h"
+    #include "tensorflow/core/framework/tensor_shape.h"
+    #include "tensorflow/core/framework/types.h"
+    #include "tensorflow/core/kernels/bounds_check.h"
+    #include "tensorflow/core/kernels/tensor_array.h"
+    #include "tensorflow/core/lib/core/errors.h"
+    #include "tensorflow/core/lib/core/refcount.h"
+    #include "tensorflow/core/lib/strings/strcat.h"
+    #include "tensorflow/core/platform/dynamic_annotations.h"
+    #include "tensorflow/core/platform/logging.h"
+    #include "tensorflow/core/platform/thread_annotations.h"
+    #include "tensorflow/core/platform/types.h"
+
+    using namespace tensorflow;
+  
+    // Adopted from https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/ops/data_flow_ops.cc.
+    REGISTER_OP("GlobalTensorArray")
+    .Input("size: int32")
+    .Attr("container: string = ''")
+    .Attr("shared_name: string = ''")
+    .Attr("dtype: type")
+    .Attr("element_shape: shape = { unknown_rank: true }")
+    .Attr("dynamic_size: bool = false")
+    .Attr("clear_after_read: bool = true")
+    .Attr("tensor_array_name: string = ''")
+    .Output("handle: resource")
+    .Output("flow: float")
+    .SetIsStateful()
+    .SetShapeFn([](InferenceContext* c) {
+      ShapeHandle unused;
+      TF_RETURN_IF_ERROR(c->WithRank(c->input(0), 0, &unused));
+      c->set_output(0, c->Vector(2));
+      c->set_output(1, c->Scalar());
+      return Status::OK();
+    })
+    .Doc("GlobalTensorArray, persistent across runs");
+    
+    // Copied from https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/tensor_array_ops.cc,
+    // and https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/resource_op_kernel.h.
+    // The original TensorArrayOp used the per-run ("per-step") resource manager container
+    // but we use the standard container which persists across runs.
+    class GlobalTensorArrayOp : public OpKernel {
+     public:
+      explicit GlobalTensorArrayOp(OpKernelConstruction* context)
+          : OpKernel(context), device_type_(context->device_type()) {
+        OP_REQUIRES_OK(context, context->GetAttr("dtype", &dtype_));
+        OP_REQUIRES_OK(context, context->GetAttr("element_shape", &element_shape_));
+        OP_REQUIRES_OK(context, context->GetAttr("dynamic_size", &dynamic_size_));
+        OP_REQUIRES_OK(context,
+                       context->GetAttr("clear_after_read", &clear_after_read_));
+        OP_REQUIRES_OK(context,
+                       context->GetAttr("tensor_array_name", &tensor_array_name_));
+        if (tensor_array_name_.empty()) tensor_array_name_ = name();
+
+        AllocatorAttributes alloc_attr;
+        alloc_attr.set_on_host(true);
+        OP_REQUIRES_OK(context, context->allocate_persistent(
+                                tensorflow::DT_STRING, tensorflow::TensorShape({2}),
+                                &handle_, alloc_attr));
+      }
+    
+      ~GlobalTensorArrayOp() {
+        if (resource_ != nullptr) {
+          resource_->Unref();
+          if (cinfo_.resource_is_private_to_kernel()) {
+            if (!cinfo_.resource_manager()
+                     ->template Delete<T>(cinfo_.container(), cinfo_.name())
+                     .ok()) {
+              // Do nothing; the resource can have been deleted by session resets.
+            }
+          }
+        }
+      }
+    
+      void Compute(OpKernelContext* ctx) override {
+        mutex_lock l(mu_);
+        if (resource_ == nullptr) {
+          ResourceMgr* mgr = ctx->resource_manager();
+          OP_REQUIRES(ctx, mgr != nullptr, errors::Internal("No resource manager."));
+          OP_REQUIRES_OK(ctx, cinfo_.Init(mgr, def()));
+          auto h = handle_.AccessTensor(ctx)->template flat<string>();
+          h(0) = cinfo_.container();
+          h(1) = cinfo_.name();
+          OP_REQUIRES_OK(ctx, CreateTensorArray(ctx, rm, &handle_, &resource_));
+        }
+
+        Tensor* handle;
+        OP_REQUIRES_OK(ctx, ctx->allocate_output(0, TensorShape({}), &handle));
+        handle->flat<ResourceHandle>()(0) =
+            resource_->resource_handle(ctx);            
+        if (ctx->num_outputs() == 2) {
+          // Create the flow output.
+          Tensor* flow;
+          OP_REQUIRES_OK(ctx, ctx->allocate_output(1, TensorShape({}), &flow));
+          if (device_type_ == DEVICE_CPU) {
+            // Value doesn't matter, but this makes msan not complaint about
+            // copying an uninitialized value. To do this on GPU would require
+            // a kernel launch or a host->device memcpy, so we avoid that.
+            flow->flat<float>()(0) = 0;
+          }
+        }
+      }
+    
+     private:
+      Status CreateTensorArray(OpKernelContext* ctx, ResourceMgr* rm,
+                               Tensor* tensor_array_output_handle,
+                               TensorArray** output_tensor_array) EXCLUSIVE_LOCKS_REQUIRED(mu_) {
+        const Tensor* tensor_size;
+        TF_RETURN_IF_ERROR(ctx->input("size", &tensor_size));
+    
+        if (!TensorShapeUtils::IsScalar(tensor_size->shape())) {
+          return errors::InvalidArgument(
+              "TensorArray size must be scalar, but had shape: ",
+              tensor_size->shape().DebugString());
+        }
+        const int32 size = tensor_size->scalar<int32>()();
+        if (size < 0) {
+          return errors::InvalidArgument("Size should be >= 0.");
+        }
+    
+        TensorArray* tensor_array = new TensorArray(
+            cinfo_.name(), dtype_, *tensor_array_output_handle, size, element_shape_,
+            dynamic_size_, false /* multiple_writes_aggregate */,
+            false /* is_grad */, -1 /* marked_size */, clear_after_read_);
+    
+        // TODO: could use LookupOrCreate instead...
+        TF_RETURN_IF_ERROR(
+            rm->Create(cinfo_.container(), cinfo_.name(), tensor_array));
+    
+        *output_tensor_array = tensor_array;
+    
+        return Status::OK();
+      }
+
+      mutex mu_;
+      ContainerInfo cinfo_ GUARDED_BY(mu_);
+      PersistentTensor handle_ GUARDED_BY(mu_);
+      TensorArray* resource_ GUARDED_BY(mu_) = nullptr;
+      
+      const DeviceType device_type_;
+      DataType dtype_;
+      PartialTensorShape element_shape_;
+      bool dynamic_size_;
+      bool clear_after_read_;
+      string tensor_array_name_;  // The name used to create the TensorArray.
+      
+      TF_DISALLOW_COPY_AND_ASSIGN(GlobalTensorArrayOp);
+    };
+    
+    REGISTER_KERNEL_BUILDER(Name("GlobalTensorArray").Device(DEVICE_CPU), GlobalTensorArrayOp);
+
+  """
+
+  def __init__(self):
+    self._mod = None
+
+  def _make_mod(self):
+    if self._mod:
+      return self._mod
+
+    comp = OpCodeCompiler(
+      base_name="GlobalTensorArray",
+      code_version=1,  # code also ends up in hash, thus this doesn't always needs to be increased
+      code=self.code,
+      include_deps=[],
+      ld_flags=[])
+
+    mod = comp.load_module()
+    self._mod = mod
+    return mod
+
+  def get_op(self):
+    mod = self._make_mod()
+    from Util import camel_case_to_snake_case
+    op = getattr(mod, camel_case_to_snake_case("GlobalTensorArray"))
+    return op
+
+
+class TFArrayContainer(object):
+  code = """
+    #include <vector>
+    
+    // For Eigen::ThreadPoolDevice.
+    #define EIGEN_USE_THREADS 1
+
+    #include "tensorflow/core/framework/op.h"
+    #include "tensorflow/core/framework/shape_inference.h"
+    #include "tensorflow/core/framework/op_kernel.h"
+    #include "tensorflow/core/framework/resource_mgr.h"
+    #include "tensorflow/core/framework/resource_op_kernel.h"
+    #include "tensorflow/core/framework/tensor.h"
+    #include "tensorflow/core/framework/tensor_shape.h"
+    #include "tensorflow/core/framework/types.h"
+    #include "tensorflow/core/platform/macros.h"
+    #include "tensorflow/core/platform/mutex.h"
+    #include "tensorflow/core/platform/types.h"
+
+    using namespace tensorflow;
+
+    REGISTER_OP("ArrayContainerCreate")
+    .Attr("T: type")
+    .Attr("container: string = ''")
+    .Attr("shared_name: string = ''")
+    .Output("resource: resource")
+    .SetIsStateful()
+    .SetShapeFn(shape_inference::ScalarShape)
+    .Doc(R"doc(Array container, random index access)doc");
+    
+    REGISTER_OP("ArrayContainerGet")
+    .Attr("T: type")
+    .Input("handle: resource")
+    .Input("index: int32")
+    .Output("out: T")
+    ;
+
+    REGISTER_OP("ArrayContainerGet")
+    .Attr("T: type")
+    .Input("handle: resource")
+    .Input("index: int32")
+    .Input("value: T")
+    ;
+    
+    // https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/resource_mgr.h
+    struct ArrayContainer : public ResourceBase {
+      ArrayContainer(const DataType& dtype) : dtype_(dtype) {}
+      
+      string DebugString() override { return "ArrayContainer"; }
+      int64 MemoryUsed() const override { return 0; };
+      
+      mutex mu_;
+      DataType dtype_;
+      std::vector<PersistentTensor> data_;
+      
+      
+    };
+    
+    // https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/resource_op_kernel.h
+    class ArrayContainerCreateOp : public ResourceOpKernel<ArrayContainer> {
+    public:
+      explicit ArrayContainerCreateOp(OpKernelConstruction* context) : ResourceOpKernel(context) {
+        OP_REQUIRES_OK(context, context->GetAttr("T", &dtype_));
+      }
+
+    private:
+      virtual bool IsCancellable() const { return false; }
+      virtual void Cancel() {}
+
+      Status CreateResource(ArrayContainer** ret) override EXCLUSIVE_LOCKS_REQUIRED(mu_) {
+        *ret = new ArrayContainer(dtype_);
+        if(*ret == nullptr)
+          return errors::ResourceExhausted("Failed to allocate");
+        return Status::OK();
+      }
+      
+      DataType dtype_;
+    };
+    REGISTER_KERNEL_BUILDER(Name("ArrayContainerCreate").Device(DEVICE_CPU), ArrayContainerCreateOp);
+    
+    class ArrayContainerGetOp : public OpKernel {
+    public:
+      using OpKernel::OpKernel;
+
+      void Compute(OpKernelContext* context) override {
+        ArrayContainer* ar;
+        OP_REQUIRES_OK(context, GetResourceFromContext(context, "handle", &ar));
+        //TODO...
+        
+        ar->Unref();
+      }
+    };
+    
+    class ArrayContainerSetOp : public OpKernel {
+    public:
+      using OpKernel::OpKernel;
+
+      void Compute(OpKernelContext* context) override {
+        ArrayContainer* ar;
+        OP_REQUIRES_OK(context, GetResourceFromContext(context, "handle", &ar));
+        core::ScopedUnref unref(ar);
+
+        const Tensor* tensor_index;
+        const Tensor* tensor_value;
+        OP_REQUIRES_OK(ctx, ctx->input("index", &tensor_index));
+        OP_REQUIRES_OK(ctx, ctx->input("value", &tensor_value));
+    
+        OP_REQUIRES(ctx, TensorShapeUtils::IsScalar(tensor_index->shape()),
+                    errors::InvalidArgument(
+                        "TensorArray index must be scalar, but had shape: ",
+                        tensor_index->shape().DebugString()));
+        const int32 index = tensor_index->scalar<int32>()();
+        
+        // TODO...
+      }
+    };
+
+    
+  """
+
+  def __init__(self):
+    self._mod = None
+
+  def _make_mod(self):
+    if self._mod:
+      return self._mod
+
+    comp = OpCodeCompiler(
+      base_name="TFArrayContainer",
+      code_version=1,  # code also ends up in hash, thus this doesn't always needs to be increased
+      code=self.code,
+      include_deps=[],
+      ld_flags=[])
+
+    mod = comp.load_module()
+    self._mod = mod
+    return mod
+
+    op = getattr(mod, camel_case_to_snake_case(self.op_name))
+    self.op_cache[self.cache_key] = op
+
+    tf.resource
+
+
 class ExplicitRandomShuffleQueue(object):
   """
   This is intended to behave very much like tf.RandomShuffleQueue,

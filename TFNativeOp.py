@@ -1,16 +1,12 @@
 
 from __future__ import print_function
 
+import os
 import tensorflow as tf
+
 import NativeOp
 import TFUtil
-import os
-import re
-
-
-def _camel_case_to_snake_case(name):
-  s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
-  return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
+from Util import camel_case_to_snake_case
 
 
 class OpDescription(NativeOp.NativeOpBaseMixin):
@@ -107,7 +103,7 @@ class OpMaker(object):
     # int n_inputs; int n_outputs;
     # Ndarray* inputs[n_inputs]; Ndarray** outputs[n_outputs];
     # Reference:
-    # https://www.tensorflow.org/versions/master/how_tos/adding_an_op/
+    # https://www.tensorflow.org/extend/adding_an_op
     # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/g3doc/how_tos/adding_an_op/
     # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/op_kernel.h
     # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/op_def_builder.h
@@ -389,7 +385,7 @@ class OpMaker(object):
     if self.cache_key in self.op_cache:
       return self.op_cache[self.cache_key]
     mod = self._make_mod()
-    op = getattr(mod, _camel_case_to_snake_case(self.op_name))
+    op = getattr(mod, camel_case_to_snake_case(self.op_name))
     self.op_cache[self.cache_key] = op
 
     if self.description.is_grad_defined:

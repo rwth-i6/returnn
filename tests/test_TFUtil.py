@@ -471,6 +471,15 @@ def test_Condition():
   session.run(cond.lock.unlock())
 
 
+@unittest.skip("needs tensor_array.h, see https://github.com/tensorflow/tensorflow/issues/10527")
+def test_GlobalTensorArray():
+  GlobalTensorArrayOpMaker().get_op()
+
+
+def test_TFArrayContainer():
+  pass
+
+
 @unittest.skip("does not work")
 def test_TensorArray():
   # see https://stackoverflow.com/questions/44418036/
