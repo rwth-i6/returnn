@@ -2,7 +2,7 @@
 import numpy
 from theano import tensor as T
 import theano
-from NetworkHiddenLayer import HiddenLayer
+from NetworkHiddenLayer import HiddenLayer, CAlignmentLayer
 from NetworkBaseLayer import Container, Layer
 from ActivationFunctions import strtoact
 from math import sqrt
@@ -523,6 +523,7 @@ class RecurrentUnitLayer(Layer):
                bias_random_init_forget_shift=0.0,
                copy_weights_from_base=False,
                segment_input=False,
+               join_states=False,
                sample_segment=None,
                **kwargs):
     """
@@ -628,7 +629,12 @@ class RecurrentUnitLayer(Layer):
         if isinstance(self.sources[0],RecurrentUnitLayer):
           self.inv_att = self.sources[0].inv_att #NBT
         else:
-          self.inv_att = self.sources[0].attention #NBT
+          if not join_states:
+            self.inv_att = self.sources[0].attention #NBT
+          else:
+            assert hasattr(self.sources[0], "nstates"), "source does not have number of states!"
+            ns = self.sources[0].nstates
+            self.inv_att = self.sources[0].attention[(ns-1)::ns]
         inv_att = T.roll(self.inv_att.dimshuffle(2, 1, 0),1,axis=0)#TBN
         inv_att = T.set_subtensor(inv_att[0],T.zeros((inv_att.shape[1],inv_att.shape[2])))
         inv_att = T.max(inv_att,axis=-1)

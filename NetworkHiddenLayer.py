@@ -2921,6 +2921,7 @@ class CAlignmentLayer(ForwardLayer):
     self.x_in = x_in
     self.set_attr('n_out', n_out)
     self.set_attr('max_skip', max_skip)
+    self.set_attr('nstates', nstates)
     if tdps is None:
       tdps = [0.]
     if len(tdps) - 2 < max_skip:
@@ -3280,7 +3281,7 @@ class InvAlignSegmentationLayer(_NoOpLayer):
 class InvAlignSegmentationLayer2(_NoOpLayer):
   layer_class = "invalignsegment2"
 
-  def __init__(self, window=0, win=20,base=None, **kwargs):
+  def __init__(self, window=0, win=20,base=None, join_states=False, **kwargs):
 
     super(InvAlignSegmentationLayer2, self).__init__(**kwargs)
     if base:
@@ -3292,6 +3293,7 @@ class InvAlignSegmentationLayer2(_NoOpLayer):
     self.set_attr('window', window)
     self.set_attr('win', win)
     self.attention = self.sources[0].attention
+    self.nstates = self.sources[0].attrs['nstates']
     assert len(self.sources) == 1
     self.inv_att = self.sources[0].attention
     source_index = self.sources[0].reduced_index.T.flatten().nonzero()
@@ -3388,7 +3390,7 @@ class ReshapeLayer(StateVector):
 class SegmentFinalStateLayer(_NoOpLayer):
   layer_class = "segfinal"
 
-  def __init__(self, base=None, **kwargs):
+  def __init__(self, base=None, use_full_label=False, **kwargs):
     super(SegmentFinalStateLayer, self).__init__(**kwargs)
     kwargs['n_out'] = sum([s.attrs['n_out'] for s in kwargs['sources']])
     self.set_attr('n_out',kwargs['n_out'])
@@ -3403,7 +3405,10 @@ class SegmentFinalStateLayer(_NoOpLayer):
         else:
           inv_att = base[0].inv_att.dimshuffle(2,1,0) #TBN
       z = self.sources[0].output.dimshuffle(1,0,2).reshape((self.sources[0].output.shape[0]*self.sources[0].output.shape[1],self.sources[0].output.shape[2]))
-      max_att = T.max(inv_att,axis=-1).T.flatten().nonzero()
+      if not use_full_label:
+        max_att = T.max(inv_att,axis=-1).T.flatten().nonzero()
+      else:
+        max_att = T.max(base[0].sources[0].attention.dimshuffle(2,1,0),axis=-1).T.flatten().nonzero()
       z_aln = z[max_att]
       z_aln = z_aln.dimshuffle('x',0,1)
       self.make_output(z_aln)
