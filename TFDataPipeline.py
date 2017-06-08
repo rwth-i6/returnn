@@ -435,7 +435,7 @@ class TFChunkingQueueRunner(object):
     def seq_loop_body(last_stop, last_op):
       """
       :param tf.Tensor last_stop: bool scalar
-      :param tf.Operation last_op:
+      :param tf.Operation|tf.Tensor last_op:
       :return: (cont, seq_idx, op), cont is whether to continue, checked by the condition
       :rtype: (tf.Tensor, tf.Operation)
       """
@@ -486,10 +486,10 @@ class TFChunkingQueueRunner(object):
         stop = False
       return stop, op
 
-    _, _, self.loop_op = tf.while_loop(
+    _, self.loop_op = tf.while_loop(
       cond=(lambda stop, *args: tf.logical_not(stop)),
       body=seq_loop_body,
-      loop_vars=[False, tf.no_op()],  # stop, op
+      loop_vars=[False, 0],  # stop
       parallel_iterations=1, back_prop=False)
 
 
@@ -596,13 +596,20 @@ class TFBatchingQueue(object):
     """
     This will be an endless loop as a TF op.
     """
+    def loop_cond(last_stop, last_op):
+      with tf.control_dependencies([last_op]):
+        return tf.logical_not(last_stop)
+
     def body(last_stop, last_op):
       with tf.control_dependencies([last_op]):
-        return self._make_enqueue_op()
+        stop, op = self._make_enqueue_op()
+        with tf.control_dependencies([op]):
+          return stop, tf.identity(last_op)
+
     return tf.while_loop(
-      cond=lambda stop, _: tf.logical_not(stop),
+      cond=loop_cond,
       body=body,
-      loop_vars=[False, tf.no_op()],  # stop, op
+      loop_vars=[False, 0],  # stop, op
       parallel_iterations=1, back_prop=False)
 
   def loop(self, tf_session, coord):
@@ -619,7 +626,7 @@ class TFBatchingQueue(object):
 class QueueOutput(object):
   def get_data(self):
     """
-    :rtype: dict[str,tf.Tensor] 
+    :rtype: dict[str,tf.Tensor]
     """
   def have_data(self):
     pass

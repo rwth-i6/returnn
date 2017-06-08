@@ -480,8 +480,8 @@ class Data(object):
 
   def get_axis_from_description(self, axis):
     """
-    :param int|str axis: 
-    :return: 
+    :param int|str axis:
+    :return:
     """
     axes = self.get_axes_from_description(axis)
     assert len(axes) == 1, "%r is not a unique axis but %r" % (axis, axes)
@@ -990,7 +990,7 @@ def dot(a, b):
 
 def identity(x):
   """
-  :param tf.Tensor x: 
+  :param tf.Tensor x:
   :rtype: tf.Tensor
   """
   return x
@@ -1094,9 +1094,9 @@ def swapaxes(x, axis1, axis2):
 
 def move_axis(x, old_axis, new_axis):
   """
-  :param tf.Tensor x: 
-  :param int old_axis: 
-  :param int new_axis: 
+  :param tf.Tensor x:
+  :param int old_axis:
+  :param int new_axis:
   """
   with tf.name_scope("move_axis"):
     ndim = x.get_shape().ndims
@@ -1229,16 +1229,17 @@ def expand_multiple_dims(x, axes, name="expand_multiple_dims"):
     return x
 
 
-def constant_with_shape(x, shape, name="constant_with_shape"):
+def constant_with_shape(x, shape, dtype=None, name="constant_with_shape"):
   """
   :param tf.Tensor|float|int|bool x: scalar
   :param list[tf.Tensor|int]|tuple[tf.Tensor|int]|tf.Tensor shape:
+  :param tf.DType dtype:
   :param str name:
   :return: x of the specified shape
   :rtype: tf.Tensor
   """
   with tf.name_scope(name):
-    x = tf.convert_to_tensor(x)
+    x = tf.convert_to_tensor(x, dtype=dtype)
     ones = tf.ones(shape, dtype=x.dtype)
     if x.dtype == tf.bool:
       return tf.logical_and(x, ones)
@@ -1249,7 +1250,7 @@ def dimshuffle(x, axes, name="dimshuffle"):
   """
   Like Theanos dimshuffle.
   Combines tf.transpose, tf.expand_dims and tf.squeeze.
-  
+
   :param tf.Tensor x:
   :param list[int|str]|tuple[int|str] axes:
   :param str name: scope name
@@ -1879,7 +1880,7 @@ def debugRegisterBetterRepr():
   def tensorarray_repr(x):
     """
     :param tf.TensorArray x:
-    :rtype: str 
+    :rtype: str
     """
     op = x.handle.op
     assert isinstance(op, tf.Operation)
@@ -2045,11 +2046,11 @@ def spatial_smoothing_energy(x, dim, use_circular_conv=True):
 def nan_to_num(x, nan_num=0, inf_num=1e30):
   """
   Like numpy.nan_to_num().
-  
-  :param tf.Tensor x: 
-  :param float|tf.Tensor nan_num: 
-  :param float|tf.Tensor inf_num: 
-  :return: x with replaced nan and inf 
+
+  :param tf.Tensor x:
+  :param float|tf.Tensor nan_num:
+  :param float|tf.Tensor inf_num:
+  :return: x with replaced nan and inf
   """
   with tf.name_scope("nan_to_num"):
     nan_num = tf.convert_to_tensor(nan_num, dtype=x.dtype)
@@ -2068,8 +2069,8 @@ def nan_to_num(x, nan_num=0, inf_num=1e30):
 
 def identity_op_nested(x, name="identity"):
   """
-  :param tf.Tensor|list[tf.Tensor]|dict[str,tf.Tensor] x: 
-  :param str name: 
+  :param tf.Tensor|list[tf.Tensor]|dict[str,tf.Tensor] x:
+  :param str name:
   :rtype tf.Tensor|list[tf.Tensor]|dict[str,tf.Tensor]
   """
   if isinstance(x, dict):
@@ -2108,7 +2109,7 @@ def stop_event_writer_thread(event_writer):
   There is a bug in TensorFlow (at least 1.1.0) (https://github.com/tensorflow/tensorflow/issues/4820)
   that the event writer thread is never stopped.
   This will try to stop it. Only do it if you don't use the event writer anymore.
-  
+
   :param tensorflow.python.summary.writer.event_file_writer.EventFileWriter event_writer:
   """
   from tensorflow.python.summary.writer.event_file_writer import EventFileWriter, _EventLoggerThread
@@ -2206,8 +2207,8 @@ def global_tensor(f, name):
   This creates a global accessible tensor in the graph to be reused later,
   i.e. on the second call given a unique name, it will not create a new tensor
   but return the previously created tensor.
-  This is for the current graph, i.e. if there is a new graph, it will recreate the tensor. 
-  
+  This is for the current graph, i.e. if there is a new graph, it will recreate the tensor.
+
   :param () -> tf.Tensor f: callable which creates the tensor
   :param str name: global reference name for the tensor
   :return: the tensor
@@ -2270,7 +2271,7 @@ def pad_zeros_in_axis(x, before=0, after=0, axis=0):
   :param int|tf.Tensor before:
   :param int|tf.Tensor after:
   :param int axis:
-  :return:   
+  :return:
   """
   with tf.name_scope("pad_zeros_in_axis"):
     paddings = [[0, 0] for i in range(x.get_shape().ndims)]
@@ -2323,6 +2324,22 @@ def post_control_dependencies(x, updates):
         raise ValueError("type of %r not expected" % x)
 
 
+@contextlib.contextmanager
+def sequential_control_dependencies(l):
+  """
+  tf.control_dependencies but each operation will be created such that it is executed
+  after the ones coming before in the list, i.e. l[0] is executed first, l[-1] is executed last.
+
+  :param list[()->(tf.Operation|tf.Tensor)] l:
+  """
+  with tf.control_dependencies([l[0]()]) as dep:
+    if len(l) > 1:
+      with sequential_control_dependencies(l[1:]) as dep2:
+        yield dep2
+    else:
+      yield dep
+
+
 def global_queue(name, queue_type, capacity, dtypes, shapes=None, names=None):
   """
   :param (args)->tf.QueueBase queue_type: some function which creates a queue
@@ -2339,38 +2356,51 @@ def global_queue(name, queue_type, capacity, dtypes, shapes=None, names=None):
   return queue
 
 
-def global_true_once(name):
+def init_variable_if_needed(v):
   """
-  :param str name: 
-  :return: a global tensor which will be True once and then always False
-    Internally, this is done by a global variable.
+  :param tf.Variable v:
+  :rtype: tf.Operation
+  """
+  def make_init():
+    # Cannot use tf.variables_initializer(), see here: https://stackoverflow.com/questions/44354964/
+    with tf.control_dependencies([tf.assign(v, v.initial_value)]):
+      return tf.no_op()
+
+  maybe_init = tf.cond(
+    tf.is_variable_initialized(v),
+    lambda: tf.no_op(),
+    make_init,
+    name="maybe_init")
+
+  return maybe_init
+
+
+def auto_init_var(v):
+  """
+  :param tf.Variable v:
+  :return: a reference to the var via tf.identity
   :rtype: tf.Tensor
   """
-  def true_once():
-    v = tf.Variable(initial_value=True, trainable=False, name="true_once_var")
+  with tf.control_dependencies(init_variable_if_needed(v)):
+    return tf.identity(v)
 
-    def make_init():
-      # Cannot use tf.variables_initializer(), see here: https://stackoverflow.com/questions/44354964/
-      with tf.control_dependencies([tf.assign(v, True)]):
-        return tf.no_op()
 
-    maybe_init = tf.cond(
-      tf.is_variable_initialized(v),
-      lambda: tf.no_op(),
-      make_init,
-      name="init")
-
-    with tf.control_dependencies([maybe_init]):
-      # Cannot use tf.identity because that would give us a reference to the var but we want to copy it now.
-      x = tf.where(v.read_value(), True, False)
-      with tf.control_dependencies([x]):
+def true_once():
+  """
+  :return: tensor which will be True once and then always False
+    Internally, this creates a non-trainable variable as a helper.
+  :rtype: tf.Tensor
+  """
+  v = tf.Variable(initial_value=True, trainable=False, name="true_once_var")
+  with tf.control_dependencies([init_variable_if_needed(v)]):
+    # Cannot use tf.identity because that would give us a reference to the var but we want to copy it now.
+    x = tf.where(v.read_value(), True, False)
+    with tf.control_dependencies([x]):
+      x = tf.identity(x)
+      reset = tf.assign(v, False)
+      with tf.control_dependencies([x, reset]):
         x = tf.identity(x)
-        reset = tf.assign(v, False)
-        with tf.control_dependencies([x, reset]):
-          x = tf.identity(x)
-    return x
-
-  return global_tensor(name=name, f=true_once)
+  return x
 
 
 def raise_OutOfRangeError():
@@ -2383,9 +2413,115 @@ def raise_OutOfRangeError():
   with tf.name_scope("raise_OutOfRangeError"):
     queue = global_queue(name="raise_exception/queue", queue_type=tf.FIFOQueue, capacity=1, dtypes=[tf.bool])
     # We must only close it once, otherwise we could get a CancelledError.
-    queue_open = global_true_once("raise_exception/queue_open")
+    queue_open = global_tensor(f=true_once, name="raise_exception/queue_open")
     with tf.control_dependencies([tf.cond(queue_open, lambda: queue.close(), lambda: tf.no_op())]):
       return queue.dequeue()
+
+
+def copy(x):
+  """
+  :param tf.Tensor|tf.Variable x:
+  :return: copy of input, i.e. enforces that this is not a ref
+  """
+  with tf.name_scope("copy"):
+    zero = x.dtype.as_numpy_dtype()
+    return tf.add(x, zero)
+
+
+class Lock(object):
+  """
+  A pure TensorFlow implementation of a mutex / lock.
+  """
+  def __init__(self, name="Lock"):
+    self._name = name
+    with tf.name_scope(self._name):
+      from tensorflow.python.ops.data_flow_ops import StagingArea
+      self._queue = StagingArea(dtypes=[tf.bool])
+      self._queue_init = self._queue.put([True])
+
+  def init(self):
+    return self._queue_init
+
+  def lock(self):
+    """
+    On first call, just returns. Any further call will block, unless there is an unlock() call.
+    """
+    with tf.name_scope("%s/lock" % self._name):
+      return self._queue.get()
+
+  def unlock(self):
+    """
+    Must be called after lock().
+    """
+    with tf.name_scope("%s/unlock" % self._name):
+      return self._queue.put([True])
+
+
+class Condition(object):
+  """
+  A pure TensorFlow implementation of a condition.
+  """
+  def __init__(self, lock=None, name="Condition"):
+    self._name = name
+    with tf.variable_scope(name):
+      self._init_ops = []
+      if not lock:
+        lock = Lock()
+        self._init_ops += [lock.init()]
+      self.lock = lock
+      self._waiting_counter = tf.Variable(initial_value=0, trainable=False, name="waiting_counter")
+      self._waiter_queue = tf.FIFOQueue(capacity=1, dtypes=[tf.bool], name="waiter_queue")
+      self._init_ops += [self._waiting_counter.initializer]
+
+  def init(self):
+    return tf.group(*self._init_ops)
+
+  def wait(self):
+    """
+    Must be called with the lock held, will unlock while waiting for a signal.
+    """
+    with tf.name_scope("%s/wait" % self._name):
+      with sequential_control_dependencies([
+        lambda: self._waiting_counter.assign_add(1, use_locking=True),
+        lambda: self.lock.unlock(),
+        lambda: self._waiter_queue.dequeue(),
+        lambda: self.lock.lock(),
+        lambda: self._waiting_counter.assign_sub(1, use_locking=True)
+      ]):
+        return tf.no_op()
+
+  def wait_counter(self):
+    return copy(self._waiting_counter.read_value())
+
+  def signal(self):
+    """
+    Must be called with the lock held.
+    Emits one signal.
+    """
+    with tf.name_scope("%s/signal" % self._name):
+      def on_waiting_counter():
+        return self._waiter_queue.enqueue(True)
+      return tf.cond(tf.greater(self._waiting_counter.read_value(), 0), on_waiting_counter, lambda: tf.no_op())
+
+  def signal_all(self):
+    """
+    Must be called with the lock held.
+    Emits as many signals as they are waiters.
+    """
+    with tf.name_scope("%s/signal_all" % self._name):
+      count = self.wait_counter()
+      with sequential_control_dependencies([lambda: count, lambda: self.lock.unlock()]):
+        # We must unlock because we could have to do multiple signals but the waiter-queue has only capacity 1,
+        # i.e. we would (dead)lock otherwise.
+        def body(i):
+          with tf.control_dependencies([i]):
+            with tf.control_dependencies([self._waiter_queue.enqueue(False)]):
+              return i + 1
+        loop = tf.while_loop(
+          cond=lambda i: tf.less(i, count),
+          body=body, parallel_iterations=1, back_prop=False, loop_vars=[0])
+        with tf.control_dependencies([loop]):
+          return self.lock.lock()
 
 
 class ExplicitRandomShuffleQueue(object):
@@ -2400,13 +2536,15 @@ class ExplicitRandomShuffleQueue(object):
   The original tf.RandomShuffleQueue had the effect of a reset min_after_dequeue=0
   after you closed the queue. However, there was no way to reopen the queue.
   That is the whole reason this implementation exists.
-  
-  One way to implement this is in pure TF.  
+
+  One difference of this implementation is that you must call the init() op once before usage.
+
+  One way to implement this is in pure TF.
   We need some TF container type which supports having entries of different shapes
   (where the shape can differ where-ever we specified None).
   We also need some TF container which we can access by index.
   tf.TensorArray can handle that.
-  
+
   Another way to implement this is by multiple stateful tf.py_func which all reference this instance.
   """
 
@@ -2424,8 +2562,6 @@ class ExplicitRandomShuffleQueue(object):
     :param str name:
     """
     assert dtypes
-    self.capacity = capacity
-    self.min_after_dequeue = min_after_dequeue
     assert not shared_name, "not supported yet"
     assert isinstance(dtypes, list)
     self.dtypes = dtypes
@@ -2439,22 +2575,161 @@ class ExplicitRandomShuffleQueue(object):
       assert len(names) == len(dtypes)
     self.names = names
     self._name = name
+    self._seed = seed
 
     with tf.name_scope(self._name):
+      self._lock = Lock()
+      self._is_full_cond = Condition(lock=self._lock)
+      self._min_after_dequeue_cond = Condition(lock=self._lock)
+
+      self.capacity = capacity
+      self._min_after_dequeue = tf.Variable(
+        initial_value=min_after_dequeue, dtype=tf.int32, trainable=False, name="min_after_dequeue")
+
+      self._is_written = tf.Variable(
+        initial_value=tf.zeros(shape=(self.capacity,), dtype=tf.int8), trainable=False, name="free_mask")
+
+      with tf.control_dependencies([self._min_after_dequeue.initializer]):
+        self._init_ops = tf.group(self._is_written.initializer)
+      self._init_ops = tf.group(
+        self._init_ops, self._lock.init(), self._is_full_cond.init(), self._min_after_dequeue_cond.init())
+
+      # TODO Seems like we cannot use tf.TensorArray for what we need here...
+      # see test_TensorArray() and https://stackoverflow.com/questions/44418036/
       self._tas = [
         tf.TensorArray(
-          dtype=dtype, size=capacity, dynamic_size=True, clear_after_read=True,
-          element_shape=shape, name="%s_TensorArray")
-        for (dtype, shape) in zip(self.dtypes, self.shapes)]
+          dtype=dtype, size=capacity, clear_after_read=True,
+          element_shape=shape, name="%s_TensorArray" % name)
+        for (dtype, shape, name) in zip(self.dtypes, self.shapes, self.names or ["unk"] * len(self.dtypes))]
+      self._flows = [tf.Variable(initial_value=ta.flow) for ta in self._tas]
+      self._init_ops = tf.group(self._init_ops, *[flow.initializer for flow in self._flows])
       assert len(self._tas) == len(self.dtypes)
+      self._tas_dict = {name: ta for (name, ta) in zip(self.names, self._tas)} if self.names else None
 
-      # We need a list of indices.
-      self._init_index_list()
-    # TODO...
+  def init(self):
+    """
+    :rtype: tf.Operation
+    """
+    return self._init_ops
 
-  def _init_index_list(self):
-    self._free_mask = constant_with_shape(True, shape=(self.min_after_dequeue,))
-    self._index_list = tf.range(0, self.min_after_dequeue)
+  def size(self):
+    """
+    :rtype: tf.Tensor
+    """
+    with reuse_name_scope("%s/size" % self._name):
+      return tf.count_nonzero(self._is_written, dtype=tf.int32)
 
-  # TODO ...
+  def min_after_dequeue_read(self):
+    return copy(self._min_after_dequeue.read_value())
 
+  def min_after_dequeue_assign(self, min_after_dequeue):
+    """
+    :param tf.Tensor min_after_dequeue:
+    :rtype: tf.Operation
+    """
+    with sequential_control_dependencies([
+      lambda: self._lock.lock(),
+      lambda: self._min_after_dequeue.assign(min_after_dequeue, use_locking=True),
+      lambda: self._min_after_dequeue_cond.signal_all(),
+      lambda: self._lock.unlock()
+    ]):
+      return tf.no_op()
+
+  def _get_cur_tensor_array(self, idx):
+    ta = self._tas[idx]
+    return tf.TensorArray(dtype=ta.dtype, handle=ta.handle, flow=copy(self._flows[idx].read_value()))
+
+  def _get_cur_tas(self):
+    return [self._get_cur_tensor_array(i) for i in range(len(self._tas))]
+
+  def _tas_write(self, index, vs):
+    tas = self._get_cur_tas()
+    assert len(vs) == len(tas)
+    tas_flows = [ta.write(index, v).flow for (ta, v) in zip(tas, vs)]
+    return [tf.assign(flow_var, flow) for (flow_var, flow) in zip(self._flows, tas_flows)]
+
+  def _tas_read(self, index):
+    tas = self._get_cur_tas()
+    return [ta.read(index) for ta in tas]
+
+  def enqueue(self, v):
+    """
+    :param list[tf.Tensor]|dict[str,tf.Tensor]|tf.Tensor v:
+    :rtype: tf.Operation
+    """
+    if self.names:
+      assert isinstance(v, dict)
+      v = [v[name] for name in self.names]
+    elif not isinstance(v, list) and len(self.dtypes) == 1:
+      v = [v]
+    assert isinstance(v, list)
+    assert len(v) == len(self.dtypes)
+    with reuse_name_scope("%s/enqueue" % self._name):
+      with tf.control_dependencies([self._lock.lock()]):
+        with tf.control_dependencies([self._loop_while_full()]):
+          index = tf.cast(tf.arg_min(self._is_written, dimension=0), tf.int32)
+          with tf.control_dependencies([tf.scatter_update(self._is_written, index, 1)]):
+            with tf.control_dependencies(self._tas_write(index=index, vs=v)):
+              with tf.control_dependencies([self._maybe_signal_min_after_dequeue()]):
+                return self._lock.unlock()
+
+  def _is_full(self):
+    return tf.greater_equal(self.size(), self.capacity)
+
+  def _loop_while_full(self):
+    """
+    Called with lock held.
+    """
+    def loop_cond(last):
+      with tf.control_dependencies([last]):
+        return self._is_full()
+
+    def body(last):
+      # This gets only executed if the queue is full. We still have the lock.
+      with tf.control_dependencies([last]):
+        with tf.control_dependencies([self._is_full_cond.wait()]):
+          return tf.identity(last)
+
+    return tf.while_loop(cond=loop_cond, body=body, loop_vars=[0], parallel_iterations=1, back_prop=False)
+
+  def _have_min_after_dequeue(self):
+    return tf.greater_equal(self.size(), self._min_after_dequeue)
+
+  def _maybe_signal_min_after_dequeue(self):
+    return tf.cond(self._have_min_after_dequeue(), lambda: self._min_after_dequeue_cond.signal(), lambda: tf.no_op())
+
+  def _loop_while_not_min_after_dequeue(self):
+    """
+    Called with lock held.
+    """
+    def loop_cond(last):
+      with tf.control_dependencies([last]):
+        return tf.logical_not(self._have_min_after_dequeue())
+
+    def body(last):
+      # This gets only executed if we not have min-after-dequeue. We still have the lock.
+      with tf.control_dependencies([last]):
+        with tf.control_dependencies([self._min_after_dequeue_cond.wait()]):
+          return tf.identity(last)
+
+    return tf.while_loop(cond=loop_cond, body=body, loop_vars=[0], parallel_iterations=1, back_prop=False)
+
+  def dequeue(self):
+    with reuse_name_scope("%s/dequeue" % self._name):
+      with tf.control_dependencies([self._lock.lock()]):
+        with tf.control_dependencies([self._loop_while_not_min_after_dequeue()]):
+          free_idxs = tf.cast(tf.where(tf.equal(self._is_written, 1)), tf.int32)  # (num_true, 1)
+          free_idxs = tf.random_shuffle(free_idxs, seed=self._seed)
+          index = free_idxs[0][0]
+          vs = self._tas_read(index)
+          with tf.control_dependencies(vs):
+            with tf.control_dependencies([tf.scatter_update(self._is_written, index, 0)]):
+              with tf.control_dependencies([self._is_full_cond.signal()]):
+                with tf.control_dependencies([self._lock.unlock()]):
+                  vs = [tf.identity(v) for v in vs]
+                  if self.names:
+                    return {name: v for (name, v) in zip(self.names, vs)}
+                  elif len(vs) == 1:
+                    return vs[0]
+                  else:
+                    return vs
