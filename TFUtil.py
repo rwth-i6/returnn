@@ -2324,6 +2324,22 @@ def post_control_dependencies(x, updates):
         raise ValueError("type of %r not expected" % x)
 
 
+@contextlib.contextmanager
+def sequential_control_dependencies(l):
+  """
+  tf.control_dependencies but each operation will be created such that it is executed
+  after the ones coming before in the list, i.e. l[0] is executed first, l[-1] is executed last.
+
+  :param list[()->(tf.Operation|tf.Tensor)] l:
+  """
+  with tf.control_dependencies([l[0]()]) as dep:
+    if len(l) > 1:
+      with sequential_control_dependencies(l[1:]) as dep2:
+        yield dep2
+    else:
+      yield dep
+
+
 def global_queue(name, queue_type, capacity, dtypes, shapes=None, names=None):
   """
   :param (args)->tf.QueueBase queue_type: some function which creates a queue
@@ -2402,14 +2418,25 @@ def raise_OutOfRangeError():
       return queue.dequeue()
 
 
-class Mutex(object):
+def copy(x):
+  """
+  :param tf.Tensor|tf.Variable x:
+  :return: copy of input, i.e. enforces that this is not a ref
+  """
+  with tf.name_scope("copy"):
+    zero = x.dtype.as_numpy_dtype()
+    return tf.add(x, zero)
+
+
+class Lock(object):
   """
   A pure TensorFlow implementation of a mutex / lock.
   """
-  def __init__(self, name="mutex"):
+  def __init__(self, name="Lock"):
     self._name = name
     with tf.name_scope(self._name):
-      self._queue = tf.StagingArea(dtypes=[tf.bool])
+      from tensorflow.python.ops.data_flow_ops import StagingArea
+      self._queue = StagingArea(dtypes=[tf.bool])
       self._queue_init = self._queue.put([True])
 
   def init(self):
@@ -2419,15 +2446,82 @@ class Mutex(object):
     """
     On first call, just returns. Any further call will block, unless there is an unlock() call.
     """
-    with tf.name_scope("%s/lock"):
+    with tf.name_scope("%s/lock" % self._name):
       return self._queue.get()
 
   def unlock(self):
     """
     Must be called after lock().
     """
-    with tf.name_scope("%s/unlock"):
+    with tf.name_scope("%s/unlock" % self._name):
       return self._queue.put([True])
+
+
+class Condition(object):
+  """
+  A pure TensorFlow implementation of a condition.
+  """
+  def __init__(self, lock=None, name="Condition"):
+    self._name = name
+    with tf.variable_scope(name):
+      self._init_ops = []
+      if not lock:
+        lock = Lock()
+        self._init_ops += [lock.init()]
+      self.lock = lock
+      self._waiting_counter = tf.Variable(initial_value=0, trainable=False, name="waiting_counter")
+      self._waiter_queue = tf.FIFOQueue(capacity=1, dtypes=[tf.bool], name="waiter_queue")
+      self._init_ops += [self._waiting_counter.initializer]
+
+  def init(self):
+    return tf.group(*self._init_ops)
+
+  def wait(self):
+    """
+    Must be called with the lock held, will unlock while waiting for a signal.
+    """
+    with tf.name_scope("%s/wait" % self._name):
+      with sequential_control_dependencies([
+        lambda: self._waiting_counter.assign_add(1, use_locking=True),
+        lambda: self.lock.unlock(),
+        lambda: self._waiter_queue.dequeue(),
+        lambda: self.lock.lock(),
+        lambda: self._waiting_counter.assign_sub(1, use_locking=True)
+      ]):
+        return tf.no_op()
+
+  def wait_counter(self):
+    return copy(self._waiting_counter.read_value())
+
+  def signal(self):
+    """
+    Must be called with the lock held.
+    Emits one signal.
+    """
+    with tf.name_scope("%s/signal" % self._name):
+      def on_waiting_counter():
+        return self._waiter_queue.enqueue(True)
+      return tf.cond(tf.greater(self._waiting_counter.read_value(), 0), on_waiting_counter, lambda: tf.no_op())
+
+  def signal_all(self):
+    """
+    Must be called with the lock held.
+    Emits as many signals as they are waiters.
+    """
+    with tf.name_scope("%s/signal_all" % self._name):
+      count = self.wait_counter()
+      with sequential_control_dependencies([lambda: count, lambda: self.lock.unlock()]):
+        # We must unlock because we could have to do multiple signals but the waiter-queue has only capacity 1,
+        # i.e. we would (dead)lock otherwise.
+        def body(i):
+          with tf.control_dependencies([i]):
+            with tf.control_dependencies([self._waiter_queue.enqueue(False)]):
+              return i + 1
+        loop = tf.while_loop(
+          cond=lambda i: tf.less(i, count),
+          body=body, parallel_iterations=1, back_prop=False, loop_vars=[0])
+        with tf.control_dependencies([loop]):
+          return self.lock.lock()
 
 
 class ExplicitRandomShuffleQueue(object):
@@ -2484,39 +2578,79 @@ class ExplicitRandomShuffleQueue(object):
     self._seed = seed
 
     with tf.name_scope(self._name):
-      self._lock = Mutex()
+      self._lock = Lock()
+      self._is_full_cond = Condition(lock=self._lock)
+      self._min_after_dequeue_cond = Condition(lock=self._lock)
 
-      self.capacity = tf.Variable(
-        initial_value=capacity, dtype=tf.int32, trainable=False, name="capacity")
-      self.min_after_dequeue = tf.Variable(
+      self.capacity = capacity
+      self._min_after_dequeue = tf.Variable(
         initial_value=min_after_dequeue, dtype=tf.int32, trainable=False, name="min_after_dequeue")
 
-      self._free_mask = tf.Variable(
-        initial_value=constant_with_shape(1, shape=(self.capacity,), dtype=tf.int8), trainable=False, name="free_mask")
-      self._index_list = tf.Variable(
-        initial_value=tf.range(0, self.capacity, dtype=tf.int32), trainable=False, name="index_list")
-      with tf.control_dependencies([self.capacity.initializer, self.min_after_dequeue.initializer]):
-        self._init_ops = tf.group(self._free_mask.initializer, self._index_list.initializer)
-      self._init_ops = tf.group(self._lock.init(), self._init_ops)
+      self._is_written = tf.Variable(
+        initial_value=tf.zeros(shape=(self.capacity,), dtype=tf.int8), trainable=False, name="free_mask")
 
+      with tf.control_dependencies([self._min_after_dequeue.initializer]):
+        self._init_ops = tf.group(self._is_written.initializer)
+      self._init_ops = tf.group(
+        self._init_ops, self._lock.init(), self._is_full_cond.init(), self._min_after_dequeue_cond.init())
+
+      # TODO Seems like we cannot use tf.TensorArray for what we need here...
+      # see test_TensorArray() and https://stackoverflow.com/questions/44418036/
       self._tas = [
         tf.TensorArray(
-          dtype=dtype, size=capacity, dynamic_size=True, clear_after_read=True,
-          element_shape=shape, name="%s_TensorArray")
-        for (dtype, shape) in zip(self.dtypes, self.shapes)]
+          dtype=dtype, size=capacity, clear_after_read=True,
+          element_shape=shape, name="%s_TensorArray" % name)
+        for (dtype, shape, name) in zip(self.dtypes, self.shapes, self.names or ["unk"] * len(self.dtypes))]
+      self._flows = [tf.Variable(initial_value=ta.flow) for ta in self._tas]
+      self._init_ops = tf.group(self._init_ops, *[flow.initializer for flow in self._flows])
       assert len(self._tas) == len(self.dtypes)
       self._tas_dict = {name: ta for (name, ta) in zip(self.names, self._tas)} if self.names else None
 
   def init(self):
+    """
+    :rtype: tf.Operation
+    """
     return self._init_ops
 
   def size(self):
+    """
+    :rtype: tf.Tensor
+    """
     with reuse_name_scope("%s/size" % self._name):
-      return tf.size(self._free_mask) - tf.count_nonzero(self._free_mask)
+      return tf.count_nonzero(self._is_written, dtype=tf.int32)
 
-  def _shuffle(self):
-    with tf.name_scope("shuffle"):
-      return tf.assign(self._index_list, tf.random_shuffle(self._index_list, seed=self._seed))
+  def min_after_dequeue_read(self):
+    return copy(self._min_after_dequeue.read_value())
+
+  def min_after_dequeue_assign(self, min_after_dequeue):
+    """
+    :param tf.Tensor min_after_dequeue:
+    :rtype: tf.Operation
+    """
+    with sequential_control_dependencies([
+      lambda: self._lock.lock(),
+      lambda: self._min_after_dequeue.assign(min_after_dequeue, use_locking=True),
+      lambda: self._min_after_dequeue_cond.signal_all(),
+      lambda: self._lock.unlock()
+    ]):
+      return tf.no_op()
+
+  def _get_cur_tensor_array(self, idx):
+    ta = self._tas[idx]
+    return tf.TensorArray(dtype=ta.dtype, handle=ta.handle, flow=copy(self._flows[idx].read_value()))
+
+  def _get_cur_tas(self):
+    return [self._get_cur_tensor_array(i) for i in range(len(self._tas))]
+
+  def _tas_write(self, index, vs):
+    tas = self._get_cur_tas()
+    assert len(vs) == len(tas)
+    tas_flows = [ta.write(index, v).flow for (ta, v) in zip(tas, vs)]
+    return [tf.assign(flow_var, flow) for (flow_var, flow) in zip(self._flows, tas_flows)]
+
+  def _tas_read(self, index):
+    tas = self._get_cur_tas()
+    return [ta.read(index) for ta in tas]
 
   def enqueue(self, v):
     """
@@ -2529,22 +2663,73 @@ class ExplicitRandomShuffleQueue(object):
     elif not isinstance(v, list) and len(self.dtypes) == 1:
       v = [v]
     assert isinstance(v, list)
-    assert len(v) == len(self._tas)
+    assert len(v) == len(self.dtypes)
     with reuse_name_scope("%s/enqueue" % self._name):
       with tf.control_dependencies([self._lock.lock()]):
-        index = tf.arg_max(self._free_mask, dimension=0)
-        with tf.control_dependencies([tf.scatter_update(self._free_mask, index, 0)]):
-          with tf.control_dependencies([ta.write(index, v_) for (ta, v_) in zip(self._tas, v)]):
-            return self._lock.unlock()
+        with tf.control_dependencies([self._loop_while_full()]):
+          index = tf.cast(tf.arg_min(self._is_written, dimension=0), tf.int32)
+          with tf.control_dependencies([tf.scatter_update(self._is_written, index, 1)]):
+            with tf.control_dependencies(self._tas_write(index=index, vs=v)):
+              with tf.control_dependencies([self._maybe_signal_min_after_dequeue()]):
+                return self._lock.unlock()
+
+  def _is_full(self):
+    return tf.greater_equal(self.size(), self.capacity)
+
+  def _loop_while_full(self):
+    """
+    Called with lock held.
+    """
+    def loop_cond(last):
+      with tf.control_dependencies([last]):
+        return self._is_full()
+
+    def body(last):
+      # This gets only executed if the queue is full. We still have the lock.
+      with tf.control_dependencies([last]):
+        with tf.control_dependencies([self._is_full_cond.wait()]):
+          return tf.identity(last)
+
+    return tf.while_loop(cond=loop_cond, body=body, loop_vars=[0], parallel_iterations=1, back_prop=False)
+
+  def _have_min_after_dequeue(self):
+    return tf.greater_equal(self.size(), self._min_after_dequeue)
+
+  def _maybe_signal_min_after_dequeue(self):
+    return tf.cond(self._have_min_after_dequeue(), lambda: self._min_after_dequeue_cond.signal(), lambda: tf.no_op())
+
+  def _loop_while_not_min_after_dequeue(self):
+    """
+    Called with lock held.
+    """
+    def loop_cond(last):
+      with tf.control_dependencies([last]):
+        return tf.logical_not(self._have_min_after_dequeue())
+
+    def body(last):
+      # This gets only executed if we not have min-after-dequeue. We still have the lock.
+      with tf.control_dependencies([last]):
+        with tf.control_dependencies([self._min_after_dequeue_cond.wait()]):
+          return tf.identity(last)
+
+    return tf.while_loop(cond=loop_cond, body=body, loop_vars=[0], parallel_iterations=1, back_prop=False)
 
   def dequeue(self):
     with reuse_name_scope("%s/dequeue" % self._name):
-      # TODO block if less than min_after_dequeue
       with tf.control_dependencies([self._lock.lock()]):
-        free_idxs = tf.where(tf.equal(self._free_mask, 0))  # (num_true, 1)
-        free_idxs = tf.random_shuffle(free_idxs, seed=self._seed)
-        index = free_idxs[0][0]
-        vs = [ta.read(index) for ta in self._tas]
-        with tf.control_dependencies(vs):
-          with tf.control_dependencies([tf.scatter_update(self._free_mask, index, 1)]):
-            return self._lock.unlock()
+        with tf.control_dependencies([self._loop_while_not_min_after_dequeue()]):
+          free_idxs = tf.cast(tf.where(tf.equal(self._is_written, 1)), tf.int32)  # (num_true, 1)
+          free_idxs = tf.random_shuffle(free_idxs, seed=self._seed)
+          index = free_idxs[0][0]
+          vs = self._tas_read(index)
+          with tf.control_dependencies(vs):
+            with tf.control_dependencies([tf.scatter_update(self._is_written, index, 0)]):
+              with tf.control_dependencies([self._is_full_cond.signal()]):
+                with tf.control_dependencies([self._lock.unlock()]):
+                  vs = [tf.identity(v) for v in vs]
+                  if self.names:
+                    return {name: v for (name, v) in zip(self.names, vs)}
+                  elif len(vs) == 1:
+                    return vs[0]
+                  else:
+                    return vs

@@ -10,7 +10,8 @@ import tensorflow as tf
 import sys
 sys.path += ["."]  # Python 3 hack
 from TFUtil import *
-from nose.tools import assert_equal, assert_is_instance, assert_is
+from nose.tools import assert_equal, assert_is_instance, assert_is, assert_in
+import unittest
 import numpy.testing
 import better_exchook
 better_exchook.replace_traceback_format_tb()
@@ -390,6 +391,17 @@ def test_encode_raw_seq_lens():
   assert_equal(list(back.eval()), [s.encode("utf8") for s in strs_stripped])
 
 
+def test_sequential_control_dependencies():
+  v = tf.Variable(initial_value=2, trainable=False, name="test_sequential_control_dependencies")
+  with sequential_control_dependencies([
+    lambda: v.initializer,
+    lambda: tf.assign(v, 3),
+    lambda: tf.assign(v, v.read_value() + 5)
+  ]):
+    x = v.read_value()
+  assert_equal(x.eval(), 3 + 5)
+
+
 def test_true_once():
   x = true_once()
   assert_equal(x.eval(), True)
@@ -407,3 +419,100 @@ def test_raise_OutOfRangeError():
         assert False, "should have raised OutOfRangeError"
       except tf.errors.OutOfRangeError:
         pass
+
+
+def test_copy():
+  v = tf.Variable(initial_value=2, trainable=False, name="test_copy")
+  with tf.control_dependencies([v.initializer]):
+    a = tf.identity(v.read_value())
+    b = copy(v.read_value())
+    with tf.control_dependencies([a, b]):
+      with tf.control_dependencies([tf.assign(v, 3)]):
+        # `a` is a ref to v, thus also 3 now.
+        # `b` is a copy, thus 2, as initially.
+        x = tf.add(0, [a, b, v.read_value()])
+  assert_equal(list(x.eval()), [3, 2, 3])
+
+
+def test_Lock():
+  lock = Lock()
+  session.run(lock.init())
+  v = tf.Variable(initial_value=0, trainable=False, name="test_Lock")
+  session.run(v.initializer)
+  with tf.control_dependencies([lock.lock()]):
+    with tf.control_dependencies([v.assign_add(1)]):
+      x = copy(v)
+      with tf.control_dependencies([x, lock.unlock()]):
+        x = tf.identity(x)
+  # Just checking lock + unlock, not really the behavior.
+  for i in range(5):
+    assert_equal(x.eval(), i + 1)
+    assert_equal(v.eval(), i + 1)
+
+
+def test_Condition():
+  cond = Condition()
+  v = tf.Variable(initial_value=0, trainable=False, name="test_Condition")
+  session.run([cond.init(), v.initializer])
+  with sequential_control_dependencies([
+    lambda: cond.lock.lock(),
+    lambda: v.assign_add(2),
+    lambda: cond.signal(),
+    lambda: cond.lock.unlock()
+  ]):
+    s = tf.no_op()
+  session.run(cond.lock.lock())
+  from threading import Thread
+  t = Thread(target=lambda: session.run(s))
+  t.start()
+  session.run(cond.wait())
+  assert_equal(v.eval(), 2)
+  t.join()
+  session.run(cond.lock.unlock())
+
+
+@unittest.skip("does not work")
+def test_TensorArray():
+  # see https://stackoverflow.com/questions/44418036/
+  ta = tf.TensorArray(tf.int32, size=3)
+  index = tf.placeholder(tf.int32)
+  value = tf.placeholder(tf.int32)
+  flow = tf.placeholder(tf.float32)
+  ta_new = tf.TensorArray(dtype=ta.dtype, handle=ta.handle, flow=flow)
+  write = ta_new.write(index, value).flow
+  read = ta_new.read(index)
+  f = 0
+  f = session.run(write, feed_dict={index: 0, value: 1, flow: f})
+  f = session.run(write, feed_dict={index: 1, value: 2, flow: f})
+  assert_equal(session.run(read, feed_dict={index: 0, flow: f}), 1)
+  assert_equal(session.run(read, feed_dict={index: 1, flow: f}), 2)
+
+
+@unittest.skip("does not work")
+def test_ExplicitRandomShuffleQueue():
+  # see test_TensorArray, which is internally used by ExplicitRandomShuffleQueue
+  queue = ExplicitRandomShuffleQueue(capacity=3, min_after_dequeue=2, dtypes=[tf.int32])
+  placeholder = tf.placeholder(tf.int32, shape=())
+  session.run(queue.init())
+  enqueue = queue.enqueue(placeholder)
+  dequeue = queue.dequeue()
+  size = queue.size()
+  session.run(enqueue, feed_dict={placeholder: 1})
+  session.run(enqueue, feed_dict={placeholder: 2})
+  session.run(enqueue, feed_dict={placeholder: 3})
+  pool = {1, 2, 3}
+  for i in range(3):
+    d = session.run(dequeue)
+    assert_in(d, pool)
+    pool.remove(d)
+    session.run(enqueue, feed_dict={placeholder: i + 4})
+    pool.add(i + 4)
+    assert_equal(session.run(size), len(pool))
+  session.run(queue.min_after_dequeue_assign(0))
+  while pool:
+    d = session.run(dequeue)
+    assert_in(d, pool)
+    pool.remove(d)
+  assert_equal(session.run(size), 0)
+  session.run(enqueue, feed_dict={placeholder: 17})
+  assert_equal(session.run(dequeue), 17)
