@@ -476,8 +476,19 @@ def test_GlobalTensorArray():
   GlobalTensorArrayOpMaker().get_op()
 
 
+@unittest.skip("remove this when it works")
 def test_TFArrayContainer():
-  pass
+  # TODO...
+  # https://stackoverflow.com/questions/44455722/create-my-own-resource-types-tf-resource
+  # https://github.com/tensorflow/tensorflow/issues/1419
+  ta = TFArrayContainer(dtype=tf.int32)
+  print(ta._mod)
+  print(ta._mod.array_container_create.__doc__)
+  assert_equal(ta.get_size().eval(), 0)
+  session.run(ta.set_size(3))
+  assert_equal(ta.get_size().eval(), 3)
+  session.run(ta.set(1, [1, 2, 3]))
+  assert_equal(list(ta.get(1).eval()), [1, 2, 3])
 
 
 @unittest.skip("does not work")

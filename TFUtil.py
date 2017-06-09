@@ -1632,7 +1632,7 @@ class OpCodeCompiler(object):
       "code_hash": self._code_hash,
       "c_macro_defines": self.c_macro_defines,
       "ld_flags": self.ld_flags,
-      "with_cuda": self._cuda_env.is_available()
+      "with_cuda": self._cuda_env and self._cuda_env.is_available()
     }
 
   def _make_code_hash(self):
@@ -1702,7 +1702,7 @@ class OpCodeCompiler(object):
       common_opts += ["-undefined", "dynamic_lookup"]
     common_opts += ["-I", self._include_path]
     compiler_opts = ["-fPIC"]
-    if self._cuda_env.is_available():
+    if self._cuda_env and self._cuda_env.is_available():
       common_opts += self._cuda_env.get_compiler_opts()
       common_opts += ["-DGOOGLE_CUDA=1"]
       for opt in compiler_opts:
@@ -1714,7 +1714,7 @@ class OpCodeCompiler(object):
     opts = common_opts + [self._cc_filename, "-o", self._so_filename]
     opts += self.ld_flags
     cmd_bin = "g++"
-    if self._cuda_env.is_available():
+    if self._cuda_env and self._cuda_env.is_available():
       cmd_bin = self._cuda_env.get_compiler_bin()
     cmd_args = [cmd_bin] + opts
     from subprocess import Popen, PIPE, STDOUT, CalledProcessError
@@ -2713,7 +2713,7 @@ class GlobalTensorArrayOpMaker:
 class TFArrayContainer(object):
   code = """
     #include <vector>
-    
+
     // For Eigen::ThreadPoolDevice.
     #define EIGEN_USE_THREADS 1
 
@@ -2739,7 +2739,19 @@ class TFArrayContainer(object):
     .SetIsStateful()
     .SetShapeFn(shape_inference::ScalarShape)
     .Doc(R"doc(Array container, random index access)doc");
-    
+
+    REGISTER_OP("ArrayContainerGetSize")
+    .Input("handle: resource")
+    .Output("out: int32")
+    .SetShapeFn(shape_inference::ScalarShape)
+    ;
+
+    REGISTER_OP("ArrayContainerSetSize")
+    .Attr("T: type")
+    .Input("handle: resource")
+    .Input("size: int32")
+    ;
+
     REGISTER_OP("ArrayContainerGet")
     .Attr("T: type")
     .Input("handle: resource")
@@ -2747,27 +2759,82 @@ class TFArrayContainer(object):
     .Output("out: T")
     ;
 
-    REGISTER_OP("ArrayContainerGet")
+    REGISTER_OP("ArrayContainerSet")
     .Attr("T: type")
     .Input("handle: resource")
     .Input("index: int32")
     .Input("value: T")
     ;
-    
+
     // https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/resource_mgr.h
     struct ArrayContainer : public ResourceBase {
       ArrayContainer(const DataType& dtype) : dtype_(dtype) {}
-      
+
       string DebugString() override { return "ArrayContainer"; }
       int64 MemoryUsed() const override { return 0; };
-      
+
       mutex mu_;
-      DataType dtype_;
-      std::vector<PersistentTensor> data_;
-      
-      
+      const DataType dtype_;
+      std::vector<PersistentTensor> data_ GUARDED_BY(mu_);
+
+      int32 get_size() {
+        mutex_lock l(mu_);
+        return (int32) data_.size();
+      }
+
+      Status set_size(int32 size) {
+        if(size < 0)
+          return errors::InvalidArgument("size ", size, " must be >= 0");
+        mutex_lock l(mu_);
+        data_.resize((size_t) size);
+        return Status::OK();
+      }
+
+      Status get(OpKernelContext* ctx, int32 idx, PersistentTensor* v) {
+        mutex_lock l(mu_);
+        if(idx < 0)
+          return errors::InvalidArgument("idx ", idx, " must be >= 0");
+        if((size_t)idx >= data_.size())
+          return errors::InvalidArgument("idx ", idx, " must be < size ", data_.size());
+        PersistentTensor& t = data_[(size_t)idx];
+        if(!t.IsInitialized())
+          return errors::InvalidArgument("tensor at idx ", idx, " must have been set before");
+        *v = t;
+        return Status::OK();
+      }
+
+      Status set(OpKernelContext* ctx, int32 idx, const Tensor& v) {
+        mutex_lock l(mu_);
+        if(idx < 0)
+          return errors::InvalidArgument("idx ", idx, " must be >= 0");
+        if((size_t)idx >= data_.size())
+          return errors::InvalidArgument("idx ", idx, " must be < size ", data_.size());
+        data_[idx] = PersistentTensor(v);
+        return Status::OK();
+      }
+
     };
-    
+
+    ResourceHandle OwnMakeResourceHandle(OpKernelContext* ctx, const string& container,
+                                         const string& name,
+                                         const TypeIndex& type_index) {
+      ResourceHandle result;
+      result.set_device(ctx->device()->attributes().name());
+      printf("make dev %s\\n", result.device().c_str());
+      string actual_container;
+      if (!container.empty()) {
+        actual_container = container;
+      } else {
+        actual_container = ctx->resource_manager()->default_container();
+      }
+      result.set_container(actual_container);
+      result.set_name(name);
+      result.set_hash_code(type_index.hash_code());
+      result.set_maybe_type_name(type_index.name());
+      printf("make dev %s\\n", result.device().c_str());
+      return result;
+    }
+
     // https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/resource_op_kernel.h
     class ArrayContainerCreateOp : public ResourceOpKernel<ArrayContainer> {
     public:
@@ -2775,6 +2842,21 @@ class TFArrayContainer(object):
         OP_REQUIRES_OK(context, context->GetAttr("T", &dtype_));
       }
 
+      void Compute(OpKernelContext* context) override {
+        ResourceOpKernel<ArrayContainer>::Compute(context);
+        mutex_lock l(mu_);
+        ResourceHandle rhandle = OwnMakeResourceHandle(context, cinfo_.container(), cinfo_.name(), MakeTypeIndex<ArrayContainer>());
+        printf("created. device: %s\\n", rhandle.device().c_str());
+        printf("container: %s\\n", rhandle.container().c_str());
+        printf("name: %s\\n", rhandle.name().c_str());
+        printf("actual device: %s\\n", context->device()->attributes().name().c_str());
+        printf("actual name: %s\\n", cinfo_.name().c_str());
+        rhandle.set_device("foo");
+        printf("now device: %s\\n", rhandle.device().c_str());
+        ResourceHandle cpy = rhandle;
+        printf("cpy device: %s\\n", cpy.device().c_str());
+      }
+      
     private:
       virtual bool IsCancellable() const { return false; }
       virtual void Cancel() {}
@@ -2785,25 +2867,44 @@ class TFArrayContainer(object):
           return errors::ResourceExhausted("Failed to allocate");
         return Status::OK();
       }
-      
+
+      Status VerifyResource(ArrayContainer* ar) override {
+        if(ar->dtype_ != dtype_)
+          return errors::InvalidArgument("Data type mismatch: expected ", DataTypeString(dtype_),
+                                         " but got ", DataTypeString(ar->dtype_), ".");
+        return Status::OK();
+      }
+  
       DataType dtype_;
     };
     REGISTER_KERNEL_BUILDER(Name("ArrayContainerCreate").Device(DEVICE_CPU), ArrayContainerCreateOp);
-    
-    class ArrayContainerGetOp : public OpKernel {
+
+    class ArrayContainerGetSizeOp : public OpKernel {
     public:
       using OpKernel::OpKernel;
 
       void Compute(OpKernelContext* context) override {
         ArrayContainer* ar;
-        OP_REQUIRES_OK(context, GetResourceFromContext(context, "handle", &ar));
-        //TODO...
         
-        ar->Unref();
+        const Tensor* handle;
+        OP_REQUIRES_OK(context, context->input("handle", &handle));
+        const ResourceHandle& rhandle = handle->scalar<ResourceHandle>()();
+        printf("device: %s\\n", rhandle.device().c_str());
+        printf("container: %s\\n", rhandle.container().c_str());
+        printf("name: %s\\n", rhandle.name().c_str());
+        
+        OP_REQUIRES_OK(context, GetResourceFromContext(context, "handle", &ar));
+        core::ScopedUnref unref(ar);
+
+        int32 size = ar->get_size();
+        Tensor* tensor_size = nullptr;
+        OP_REQUIRES_OK(context, context->allocate_output(0, TensorShape({}), &tensor_size));
+        tensor_size->flat<int32>().setConstant(size);
       }
     };
-    
-    class ArrayContainerSetOp : public OpKernel {
+    REGISTER_KERNEL_BUILDER(Name("ArrayContainerGetSize").Device(DEVICE_CPU), ArrayContainerGetSizeOp);
+
+    class ArrayContainerSetSizeOp : public OpKernel {
     public:
       using OpKernel::OpKernel;
 
@@ -2812,46 +2913,177 @@ class TFArrayContainer(object):
         OP_REQUIRES_OK(context, GetResourceFromContext(context, "handle", &ar));
         core::ScopedUnref unref(ar);
 
+        const Tensor* tensor_size;
+        OP_REQUIRES_OK(context, context->input("size", &tensor_size));
+        OP_REQUIRES(context, TensorShapeUtils::IsScalar(tensor_size->shape()),
+                    errors::InvalidArgument(
+                        "TensorArray index must be scalar, but had shape: ",
+                        tensor_size->shape().DebugString()));
+        const int32 size = tensor_size->scalar<int32>()();
+        OP_REQUIRES_OK(context, ar->set_size(size));
+      }
+    };
+    REGISTER_KERNEL_BUILDER(Name("ArrayContainerSetSize").Device(DEVICE_CPU), ArrayContainerSetSizeOp);
+
+    class ArrayContainerGetOp : public OpKernel {
+    public:
+      explicit ArrayContainerGetOp(OpKernelConstruction* context) : OpKernel(context) {
+        OP_REQUIRES_OK(context, context->GetAttr("T", &dtype_));
+      }
+
+      void Compute(OpKernelContext* context) override {
+        ArrayContainer* ar;
+        OP_REQUIRES_OK(context, GetResourceFromContext(context, "handle", &ar));
+        core::ScopedUnref unref(ar);
+
         const Tensor* tensor_index;
-        const Tensor* tensor_value;
-        OP_REQUIRES_OK(ctx, ctx->input("index", &tensor_index));
-        OP_REQUIRES_OK(ctx, ctx->input("value", &tensor_value));
-    
-        OP_REQUIRES(ctx, TensorShapeUtils::IsScalar(tensor_index->shape()),
+        OP_REQUIRES_OK(context, context->input("index", &tensor_index));
+        OP_REQUIRES(context, TensorShapeUtils::IsScalar(tensor_index->shape()),
                     errors::InvalidArgument(
                         "TensorArray index must be scalar, but had shape: ",
                         tensor_index->shape().DebugString()));
         const int32 index = tensor_index->scalar<int32>()();
-        
-        // TODO...
-      }
-    };
 
+        PersistentTensor value;
+        OP_REQUIRES_OK(context, ar->get(context, index, &value));
+        context->set_output(0, *value.AccessTensor(context));
+      }
+
+    private:
+      DataType dtype_;
+    };
+    REGISTER_KERNEL_BUILDER(Name("ArrayContainerGet").Device(DEVICE_CPU), ArrayContainerGetOp);
+
+    class ArrayContainerSetOp : public OpKernel {
+    public:
+      explicit ArrayContainerSetOp(OpKernelConstruction* context) : OpKernel(context) {
+        OP_REQUIRES_OK(context, context->GetAttr("T", &dtype_));
+      }
+
+      void Compute(OpKernelContext* context) override {
+        ArrayContainer* ar;
+        OP_REQUIRES_OK(context, GetResourceFromContext(context, "handle", &ar));
+        core::ScopedUnref unref(ar);
+
+        const Tensor* tensor_index;
+        const Tensor* tensor_value;
+        OP_REQUIRES_OK(context, context->input("index", &tensor_index));
+        OP_REQUIRES_OK(context, context->input("value", &tensor_value));
     
+        OP_REQUIRES(context, TensorShapeUtils::IsScalar(tensor_index->shape()),
+                    errors::InvalidArgument(
+                        "index must be scalar, but had shape: ",
+                        tensor_index->shape().DebugString()));
+        const int32 index = tensor_index->scalar<int32>()();
+        OP_REQUIRES(context, tensor_value->IsInitialized(), errors::InvalidArgument("value must be initialized"));
+
+        OP_REQUIRES_OK(context, ar->set(context, index, *tensor_value));
+      }
+
+    private:
+      DataType dtype_;
+    };
+    REGISTER_KERNEL_BUILDER(Name("ArrayContainerSet").Device(DEVICE_CPU), ArrayContainerSetOp);
   """
 
-  def __init__(self):
-    self._mod = None
+  _mod = None
 
-  def _make_mod(self):
-    if self._mod:
-      return self._mod
+  def __init__(self, dtype, handle=None, container=None, shared_name=None, name="array_container"):
+    """
+    :param tf.DType dtype:
+    :param str container:
+    :param str shared_name:
+    :param str name:
+    :param tf.resource handle: existing handle to reuse. otherwise we will create a new one
+    """
+    self.dtype = dtype
+    if handle is not None:
+      self.handle = handle
+    else:
+      self.handle = self._create(dtype=dtype, container=container, shared_name=shared_name, name=name)
+
+  def __repr__(self):
+    return "<%s %r %r>" % (self.__class__.__name__, self.dtype, self.handle)
+
+  @classmethod
+  def _make_mod(cls):
+    if cls._mod:
+      return cls._mod
+
+    # Fix for undefined symbol: _ZN6google8protobuf8internal26fixed_address_empty_stringE.
+    # https://github.com/tensorflow/tensorflow/issues/1419
+    from google.protobuf.pyext import _message as msg
+    lib = msg.__file__
+    #lib = "/u/zeyer/.local/lib/python2.7/site-packages/tensorflow/python/_pywrap_tensorflow_internal.so"
+    #lib = "/u/zeyer/.local/lib/python2.7/site-packages/tensorflow/contrib/tfprof/python/tools/tfprof/_pywrap_tensorflow_print_model_analysis_lib.so"
+    #lib = "/u/zeyer/.local/lib/python2.7/site-packages/google/protobuf/pyext/_message.so"
+    #lib = "/u/zeyer/.local/lib/python2.7/site-packages/external/protobuf/python/google/protobuf/pyext/_message.so"
 
     comp = OpCodeCompiler(
       base_name="TFArrayContainer",
       code_version=1,  # code also ends up in hash, thus this doesn't always needs to be increased
-      code=self.code,
+      code=cls.code,
       include_deps=[],
-      ld_flags=[])
+      ld_flags=[
+        "-Xlinker", "-rpath", "-Xlinker", os.path.dirname(lib),
+        "-L", os.path.dirname(lib), "-l", ":" + os.path.basename(lib)])
 
     mod = comp.load_module()
-    self._mod = mod
+    cls._mod = mod
     return mod
 
-    op = getattr(mod, camel_case_to_snake_case(self.op_name))
-    self.op_cache[self.cache_key] = op
+  def _get_op(self, k):
+    mod = self._make_mod()
+    from Util import camel_case_to_snake_case
+    return getattr(mod, camel_case_to_snake_case(k))
 
-    tf.resource
+  def _create(self, dtype, container=None, shared_name=None, name="array_container"):
+    """
+    :param tf.DType dtype:
+    :param str container:
+    :param str shared_name:
+    :param str name:
+    :return: handle to ArrayContainer
+    :rtype: tf.resource
+    """
+    op = self._get_op("ArrayContainerCreate")
+    return op(T=dtype, container=container, shared_name=shared_name, name=name)
+
+  def get_size(self):
+    """
+    :return: size int32 scalar
+    :rtype: tf.Tensor
+    """
+    op = self._get_op("ArrayContainerGetSize")
+    return op(handle=self.handle)
+
+  def set_size(self, size):
+    """
+    :param tf.Tensor size:
+    :return: operation
+    :rtype: tf.Operation
+    """
+    op = self._get_op("ArrayContainerSetSize")
+    return op(handle=self.handle, size=size)
+
+  def get(self, index):
+    """
+    :param tf.Tensor index: >= 0 and < size
+    :return: tensor at that index
+    :rtype: tf.Tensor
+    """
+    op = self._get_op("ArrayContainerGet")
+    return op(T=self.dtype, handle=self.handle, index=index)
+
+  def set(self, index, value):
+    """
+    :param tf.Tensor index: >= 0 and < size
+    :param tf.Tensor value:
+    :return: operation
+    :rtype: tf.Operation
+    """
+    op = self._get_op("ArrayContainerSet")
+    return op(T=self.dtype, handle=self.handle, index=index, value=value)
 
 
 class ExplicitRandomShuffleQueue(object):
