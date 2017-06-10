@@ -3843,7 +3843,6 @@ class RNNBlockLayer(ForwardLayer):
 from NativeOp import FastBaumWelchOp
 from SprintErrorSignals import sprint_loss_and_error_signal, SprintAlignmentAutomataOp
 
-<<<<<<< HEAD
 class SequenceValue(ForwardLayer):
   layer_class = 'seqval'
 
