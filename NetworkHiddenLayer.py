@@ -1,3 +1,4 @@
+from __future__ import print_function
 
 import theano
 import numpy
@@ -24,7 +25,7 @@ from Log import log
 from cuda_implementation.FractionalMaxPoolingOp import fmp
 from math import ceil
 from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
-from TheanoUtil import print_to_file
+from TheanoUtil import print_to_file, DumpOp
 
 class HiddenLayer(Layer):
   def __init__(self, activation="sigmoid", **kwargs):
@@ -570,7 +571,7 @@ class SubnetworkLayer(_NoOpLayer):
         sub_n_out[k] = [s.attrs["n_out"], s.output.ndim - 1]
         data_map_d[k] = s.output
         data_map_di[k] = s.index
-    print >>log.v2, "New subnetwork", self.name, "with data", {k: s.name for (k, s) in zip(data_map, self.sources)}, sub_n_out
+    print("New subnetwork", self.name, "with data", {k: s.name for (k, s) in zip(data_map, self.sources)}, sub_n_out, file=log.v2)
     self.subnetwork = self.network.new_subnetwork(
       json_content=subnetwork, n_out=sub_n_out, data_map=data_map_d, data_map_i=data_map_di)
     self.subnetwork.print_network_info(name="layer %r subnetwork" % self.name)
@@ -578,18 +579,18 @@ class SubnetworkLayer(_NoOpLayer):
     if trainable:
       self.params.update(self.subnetwork.get_params_shared_flat_dict())
     if load == "<random>":
-      print >>log.v2, "subnetwork with random initialization"
+      print("subnetwork with random initialization", file=log.v2)
     else:
       from Config import get_global_config
       config = get_global_config()  # this is a bit hacky but works fine in all my cases...
       model_filename = load % {"self": self,
                                "global_config_load": config.value("load", None),
                                "global_config_epoch": config.int("epoch", 0)}
-      print >>log.v2, "loading subnetwork weights from", model_filename
+      print("loading subnetwork weights from", model_filename, file=log.v2)
       import h5py
       model_hdf = h5py.File(model_filename, "r")
       self.subnetwork.load_hdf(model_hdf)
-      print >>log.v2, "done loading subnetwork weights for", self.name
+      print("done loading subnetwork weights for", self.name, file=log.v2)
     self.output = self.subnetwork.output["output"].output
 
   def cost(self):
@@ -640,7 +641,7 @@ class ClusterDependentSubnetworkLayer(_NoOpLayer):
     self.trainable = trainable
     self.set_attr("n_clusters", n_clusters)
     self.n_clusters = n_clusters
-    print >> log.v2, "ClusterDependentSubnetworkLayer: have %s clusters" % self.n_clusters
+    print("ClusterDependentSubnetworkLayer: have %s clusters" % self.n_clusters, file=log.v2)
     assert len(self.sources) >= 2, "need input, ..., cluster_map"
     sources, cluster_map_source = self.sources[:-1], self.sources[-1]
     if concat_sources:
@@ -667,25 +668,25 @@ class ClusterDependentSubnetworkLayer(_NoOpLayer):
         data_map_di[k] = s.index
     self.subnetworks = []
     for idx in range(0, self.n_clusters):
-      print >>log.v2, "New subnetwork", self.name, "with data", {k: s.name for (k, s) in zip(data_map, sources)}, sub_n_out
+      print("New subnetwork", self.name, "with data", {k: s.name for (k, s) in zip(data_map, sources)}, sub_n_out, file=log.v2)
       self.subnetworks.append(self.network.new_subnetwork(
         json_content=subnetwork, n_out=sub_n_out, data_map=data_map_d, data_map_i=data_map_di))
       assert self.subnetworks[idx].output["output"].attrs['n_out'] == n_out
       if trainable:
         self.params.update(self.subnetworks[idx].get_params_shared_flat_dict())
       if load == "<random>":
-        print >>log.v2, "subnetwork with random initialization"
+        print("subnetwork with random initialization", file=log.v2)
       else:
         from Config import get_global_config
         config = get_global_config()  # this is a bit hacky but works fine in all my cases...
         model_filename = load % {"self": self,
                                  "global_config_load": config.value("load", None),
                                  "global_config_epoch": config.int("epoch", 0)}
-        print >>log.v2, "loading subnetwork weights from", model_filename
+        print("loading subnetwork weights from", model_filename, file=log.v2)
         import h5py
         model_hdf = h5py.File(model_filename, "r")
         self.subnetworks[idx].load_hdf(model_hdf)
-        print >>log.v2, "done loading subnetwork weights for", self.name
+        print("done loading subnetwork weights for", self.name, file=log.v2)
     self.ref = cluster_map_source.output[0]
 
     ## generate output lists and sums with ifelse to only compute specified paths
@@ -707,7 +708,7 @@ class ClusterDependentSubnetworkLayer(_NoOpLayer):
     # TODO for each TheanoVar in dict do the ifelse thing
     self.output_grads = {}
     if not self.subnetworks[0].known_grads:
-      print >> log.v5, "known grads is empty"
+      print("known grads is empty", file=log.v5)
     else:
       raise NotImplementedError
 
@@ -2711,7 +2712,6 @@ class DumpLayer(_NoOpLayer):
     self.set_attr("with_grad", with_grad)
 
     if self.train_flag:
-      from TheanoUtil import DumpOp
       self.output = DumpOp(filename, container=self.global_debug_container, with_grad=with_grad)(self.output)
       self.index = DumpOp(filename + ".index", container=self.global_debug_container, with_grad=False)(self.index)
 
@@ -2921,6 +2921,7 @@ class CAlignmentLayer(ForwardLayer):
     self.x_in = x_in
     self.set_attr('n_out', n_out)
     self.set_attr('max_skip', max_skip)
+    self.set_attr('nstates', nstates)
     if tdps is None:
       tdps = [0.]
     if len(tdps) - 2 < max_skip:
@@ -3426,7 +3427,7 @@ class InvAlignSegmentationLayer(_NoOpLayer):
 class InvAlignSegmentationLayer2(_NoOpLayer):
   layer_class = "invalignsegment2"
 
-  def __init__(self, window=0, win=20,base=None, **kwargs):
+  def __init__(self, window=0, win=20,base=None, join_states=False, **kwargs):
 
     super(InvAlignSegmentationLayer2, self).__init__(**kwargs)
     if base:
@@ -3438,8 +3439,12 @@ class InvAlignSegmentationLayer2(_NoOpLayer):
     self.set_attr('window', window)
     self.set_attr('win', win)
     self.attention = self.sources[0].attention
+    self.nstates = self.sources[0].attrs['nstates']
     assert len(self.sources) == 1
+    self.inv_att = self.sources[0].attention
+    source_index = self.sources[0].reduced_index.T.flatten().nonzero()
     if not self.eval_flag:
+#    if self.eval_flag:
       result = T.concatenate([s.output for s in self.sources],axis=-1)
       self.index = self.sources[0].index
     else:
@@ -3461,6 +3466,44 @@ class InvAlignSegmentationLayer2(_NoOpLayer):
       self.index = T.ones((result.shape[0], result.shape[1]), 'int8')
     self.z = result
     self.make_output(result)
+
+    # code to create y_out for frame-wise classification within the segments
+    y_out = self.sources[0].y_out.T
+    y_out = T.concatenate([y_out,T.zeros((y_out.shape[0],1))-numpy.int32(1)],axis=1) #adding -1 at the end to account for unused timesteps at the end of the sequence
+    diffarr,maxlen = self.find_diff_array(self.sources[0].attention.argmax(axis=2))
+    y_outrep = self.set_yout(y_out,diffarr.flatten(),T.cast(maxlen,'int32'))
+    y_outrep = y_outrep[:self.output.shape[0]*self.output.shape[1]]
+    self.y_out = T.cast(y_outrep.reshape((self.output.shape[1],self.output.shape[0])).T,'int32')
+
+  def find_diff_array(self, att):
+    att = att.T
+    att = T.concatenate([T.zeros((att.shape[0], numpy.int32(1))), att], axis=1)
+    maxlen = T.concatenate([T.stack(att[0, 0]), T.extra_ops.diff(att).flatten().sort()])[-1] + \
+             numpy.int32(1)  # maxlen for the segments
+    att = att[:, 1:]
+    att = T.switch(self.sources[0].reduced_index > 0,
+                   att.T + (T.arange(self.sources[0].attention.shape[1]) * self.sources[0].attention.shape[2]),
+                   att.T)  # scale the indices of batches according to the batch number
+    att = att.T
+    last_index = (T.arange(att.shape[0]) + numpy.int32(1)) * self.output.shape[0] - \
+                 numpy.int32(1)  # last index for at that denotes the last timestep
+    att = T.switch(att > 0, att, last_index.dimshuffle(0, 'x'))
+    att_with_firstindex = T.concatenate([T.maximum((T.arange(att.shape[0]) * self.output.shape[0]).dimshuffle(0, 'x'),
+                                                   att[:, 0].dimshuffle(0, 'x') - maxlen), att], axis=1)
+    att_with_first_and_last_index = T.concatenate([att_with_firstindex, last_index.dimshuffle(0, 'x')], axis=1)
+    maxlen = T.extra_ops.diff(att_with_first_and_last_index).flatten().sort()[-1] + \
+             numpy.int32(1)  # maxlen for the segments including unused timesteps
+    diffarr = T.extra_ops.diff(att_with_first_and_last_index)
+    diffarr = T.inc_subtensor(diffarr[:, 0], numpy.int32(1))  # add 1 to differences in the first row to include the first timestep as well
+    return diffarr,maxlen
+
+  def set_yout(self,y_out,diff,maxdiff):
+    newdiff = T.cast((diff.repeat(maxdiff).reshape((diff.shape[0],maxdiff))+(T.arange(diff.shape[0])*maxdiff).dimshuffle(0,'x')).flatten(),'int32')
+    res = T.cast(newdiff-T.arange(newdiff.shape[0])-1,'int32')
+    res_1hot = (res>=0).flatten().nonzero()
+    y_out_rep = y_out.repeat(maxdiff)
+    y_out_rep = y_out_rep[res_1hot]
+    return y_out_rep
 
 class ReshapeLayer(StateVector):
   layer_class = "reshape"
@@ -3493,11 +3536,12 @@ class ReshapeLayer(StateVector):
 class SegmentFinalStateLayer(_NoOpLayer):
   layer_class = "segfinal"
 
-  def __init__(self, base=None, **kwargs):
+  def __init__(self, base=None, use_full_label=False, **kwargs):
     super(SegmentFinalStateLayer, self).__init__(**kwargs)
     kwargs['n_out'] = sum([s.attrs['n_out'] for s in kwargs['sources']])
     self.set_attr('n_out',kwargs['n_out'])
     if not self.eval_flag:
+#    if self.eval_flag:
       if hasattr(self.sources[0],'inv_att'):
         inv_att = self.sources[0].inv_att.dimshuffle(2,1,0) #TBN
       else:
@@ -3507,7 +3551,10 @@ class SegmentFinalStateLayer(_NoOpLayer):
         else:
           inv_att = base[0].inv_att.dimshuffle(2,1,0) #TBN
       z = self.sources[0].output.dimshuffle(1,0,2).reshape((self.sources[0].output.shape[0]*self.sources[0].output.shape[1],self.sources[0].output.shape[2]))
-      max_att = T.max(inv_att,axis=-1).T.flatten().nonzero()
+      if not use_full_label:
+        max_att = T.max(inv_att,axis=-1).T.flatten().nonzero()
+      else:
+        max_att = T.max(base[0].sources[0].attention.dimshuffle(2,1,0),axis=-1).T.flatten().nonzero()
       z_aln = z[max_att]
       z_aln = z_aln.dimshuffle('x',0,1)
       self.make_output(z_aln)
@@ -3516,23 +3563,27 @@ class SegmentFinalStateLayer(_NoOpLayer):
       assert base is not None
       self.base = base
       #get the original timesteps, batches and window parameter
-      t = base[0].timesteps
-      b = base[0].batches
-      w = base[0].attrs['win']
-      d = self.attrs['n_out']
-      z = T.concatenate([s.output for s in self.sources],axis=-1)
-      ze = z.reshape((z.shape[0]*z.shape[1],z.shape[2])) #T*B,D
-      fullind = base[0].fullind#full index from invalignsegment layer
-      ze = T.concatenate([ze,T.zeros((1,ze.shape[1]))],axis=0)
-      for i in range(w):
-        fullind = T.set_subtensor(fullind[i],T.roll(fullind[i],i))
-        if i>0:
-            fullind = T.inc_subtensor(fullind[i],T.where(fullind[i]>0,i*t*b-i,0))
-      self.fullind = fullind
-      zfinal = ze[fullind.T.flatten()].dimshuffle('x',0,1)
-      self.make_output(zfinal)
-      self.act = [self.output, T.zeros_like(self.output)]
-      self.index = T.ones((1,self.output.shape[1]),'int8')
+      if isinstance(base[0],CAlignmentLayer):
+        self.make_output(self.sources[0].output)
+        self.index = self.sources[0].index
+      else:
+        t = base[0].timesteps
+        b = base[0].batches
+        w = base[0].attrs['win']
+        d = self.attrs['n_out']
+        z = T.concatenate([s.output for s in self.sources],axis=-1)
+        ze = z.reshape((z.shape[0]*z.shape[1],z.shape[2])) #T*B,D
+        fullind = base[0].fullind#full index from invalignsegment layer
+        ze = T.concatenate([ze,T.zeros((1,ze.shape[1]))],axis=0)
+        for i in range(w):
+          fullind = T.set_subtensor(fullind[i],T.roll(fullind[i],i))
+          if i>0:
+              fullind = T.inc_subtensor(fullind[i],T.where(fullind[i]>0,i*t*b-i,0))
+        self.fullind = fullind
+        zfinal = ze[fullind.T.flatten()].dimshuffle('x',0,1)
+        self.make_output(zfinal)
+        self.act = [self.output, T.zeros_like(self.output)]
+        self.index = T.ones((1,self.output.shape[1]),'int8')
 
 class ScaleGradientOp(theano.gof.Op):
   view_map = {0: [0]}
@@ -3792,6 +3843,7 @@ class RNNBlockLayer(ForwardLayer):
 from NativeOp import FastBaumWelchOp
 from SprintErrorSignals import sprint_loss_and_error_signal, SprintAlignmentAutomataOp
 
+<<<<<<< HEAD
 class SequenceValue(ForwardLayer):
   layer_class = 'seqval'
 
@@ -3876,4 +3928,144 @@ class SignalValue(ForwardLayer):
 
   def errors(self):
     return self.error_val
+
+class SegmentInputLayer(_NoOpLayer):
+  layer_class = 'segment_input'
+
+  def __init__(self, window=15, **kwargs):
+    super(SegmentInputLayer, self).__init__(**kwargs)
+
+    assert len(self.sources) == 1
+    self.set_attr('n_out', self.sources[0].attrs['n_out'])
+    self.set_attr('window', window)
+
+    src_out   = self.sources[0].output
+    src_index = self.sources[0].index
+
+    f = src_out.shape[0]  # number of frames
+    b = src_out.shape[1]  # number of batches
+    d = src_out.shape[2]  # feature dimension
+
+    rs = src_out.dimshuffle(1, 0, 2).reshape((f * b, d))
+    rs_idx = src_index.dimshuffle(1, 0).flatten()
+
+    frames_idx = T.arange(f * b)[(rs_idx>0).nonzero()]\
+                  .repeat(self.attrs['window'])\
+                  .reshape((rs_idx.sum(), self.attrs['window']))\
+                 + T.arange(self.attrs['window'])
+
+    # this filter has entries smaller than -1 for all elements that do not belong to the same sequence as the first frame
+    frame_filter_1 = (f - 1
+                      - (frames_idx[:,0] % f)\
+                         .repeat(self.attrs['window'])\
+                         .reshape((rs_idx.sum(), self.attrs['window']))\
+                      - T.arange(self.attrs['window'])) * 2
+
+    # this filter has entries 0 for all elements that are discarded by self.index, 1 otherwise
+    frame_filter_2 = T.concatenate([rs_idx, T.zeros((self.attrs['window'],), dtype='int8')])[frames_idx.flatten()].reshape((rs_idx.sum(), self.attrs['window']))
+
+    frames_idx = T.switch(frame_filter_1 + frame_filter_2 >= 0, frames_idx, -1).dimshuffle(1, 0)
+
+    # we add an additional vector with zeros s.t. the invalid entries from the filters above result in a feature vector of zeros
+    self.z = T.concatenate([rs, T.zeros((1, src_out.shape[2]))], axis=0)[frames_idx]
+
+    self.make_output(self.z)
+    self.index = T.cast((frame_filter_1 - frame_filter_2).clip(0, 1), 'int8').reshape((self.attrs['window'], rs_idx.sum()))
+
+class UnsegmentInputLayer(_NoOpLayer):
+  layer_class = 'unsegment_input'
+
+  class UnsegmentInputOp(theano.Op):
+    itypes = (T.ftensor3, T.bmatrix)
+    otypes = (T.ftensor3,)
+
+    def perform(self, node, inputs, output_storage):
+      post  = inputs[0]
+      index = inputs[1]
+
+      num_frames  = index.shape[0]
+      num_batches = index.shape[1]
+      window_size = post.shape[0]
+      dim         = post.shape[2]
+
+      out = numpy.zeros((num_frames, num_batches, window_size, dim), dtype='float32')
+
+      cur = 0
+      for b in range(num_batches):
+        for f in range(num_frames):
+          if index[f, b] == 0:
+            continue
+
+          cur_seq_num_frames = min(window_size, num_frames - f)
+          for w in range(cur_seq_num_frames):
+            out[f + w, b, w, :] = post[w, cur, :]
+
+          cur += 1
+
+      out = out.reshape((out.shape[0], out.shape[1], out.shape[2] * out.shape[3]))
+      output_storage[0][0] = out
+
+  def __init__(self, original_output, **kwargs):
+    super(UnsegmentInputLayer, self).__init__(**kwargs)
+
+    assert len(self.sources) == 1
+
+    self.set_attr('original_output', original_output)
+
+    self.index = self.network.get_layer(original_output).index
+    out = self.UnsegmentInputOp()(self.sources[0].p_y_given_x, self.index)
+    self.make_output(out)
+
+class SegmentClassTargets(_NoOpLayer):
+  layer_class = 'segment_class_targets'
+
+  class BuildClassesOp(theano.Op):
+    itypes = (T.iscalar, T.iscalar, T.imatrix, T.bmatrix)
+    otypes = (T.ftensor3, T.bmatrix)
+
+    def perform(self, node, inputs, output_storage):
+      num_classes = inputs[0]
+      window      = inputs[1]
+      classes     = inputs[2]
+      index       = inputs[3]
+
+      assert classes.shape == index.shape
+
+      num_frames = classes.shape[0]
+      num_batches = classes.shape[1]
+      num_start_frames = index.sum()
+
+      out = numpy.zeros((window, num_start_frames, num_classes), dtype='float32')
+      out_index = numpy.zeros((window, num_start_frames), dtype='int8')
+      cur = 0
+      for b in range(num_batches):
+        for f in range(num_frames):
+          if index[f, b] != 1:
+            continue
+
+          cur_seq_num_frames = min(window, num_frames - f)
+          out_index[0:cur_seq_num_frames, cur] = 1
+          for w in range(cur_seq_num_frames):
+            c = classes[f + w, b]
+            out[w:,cur,c] += 1.0
+
+          cur += 1
+
+      out /= numpy.arange(1, window + 1).reshape((window, 1, 1))
+
+      output_storage[0][0] = out
+      output_storage[1][0] = out_index
+
+  def __init__(self, num_classes, window=15, **kwargs):
+    super(SegmentClassTargets, self).__init__(**kwargs)
+
+    assert len(self.sources) == 1
+    self.set_attr('n_out', self.sources[0].attrs['n_out'])
+    self.set_attr('num_classes', num_classes)
+    self.set_attr('window', window)
+
+    self.y_out, self.index = SegmentClassTargets.BuildClassesOp()(T.TensorConstant(theano.tensor.iscalar, self.attrs['num_classes']),
+                                                                  T.TensorConstant(theano.tensor.iscalar, self.attrs['window']),
+                                                                  self.sources[0].output, self.sources[0].index)
+    self.output = self.y_out
 

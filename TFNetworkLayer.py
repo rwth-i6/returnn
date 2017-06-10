@@ -2312,7 +2312,8 @@ class BinaryCrossEntropy(Loss):
     assert not self.target.sparse, "sparse is not supported yet"
     with tf.name_scope("loss_bin_ce"):
       out = 0.5 * tf.nn.sigmoid_cross_entropy_with_logits(logits = self.output_flat, labels = self.target_flat)
-      return self.reduce_func(out)
+      #return self.reduce_func(out)
+      return tf.reduce_mean(out)
     #TBD !!! -> implement the following part of theano code
     #    elif self.loss == 'sse_sigmoid':
     #      return 1.0 / 2.0 * T.nnet.binary_crossentropy(T.clip(self.p_y_given_x_flat[self.i], 1.e-38, 1.0 - 1.e-5), self.y_data_flat[self.i]).mean(), known_grads

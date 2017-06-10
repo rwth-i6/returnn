@@ -117,9 +117,10 @@ class ExternData(object):
     dtypes = [self.data[name].dtype for name in names]
     # And add seq_lens for each.
     for name in list(names):
-      names.append("%s_seq_lens" % name)
-      shapes.append((fixed_batch_dim,) if with_batch_dim else ())
-      dtypes.append(self.data[name].size_dtype)
+      for axis in self.data[name].get_axes_with_size():
+        names.append("%s/size%i" % (name, axis))
+        shapes.append((fixed_batch_dim,) if with_batch_dim else ())
+        dtypes.append(self.data[name].size_dtype)
     return {"names": names, "shapes": shapes, "dtypes": dtypes}
 
 

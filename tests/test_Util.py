@@ -86,3 +86,7 @@ def test_try_get_caller_name():
   def sub():
     return try_get_caller_name()
   assert_equal(sub(), "test_try_get_caller_name")
+
+
+def test_camel_case_to_snake_case():
+  assert_equal(camel_case_to_snake_case("CamelCaseOp"), "camel_case_op")

@@ -301,13 +301,16 @@ class Updater(object):
       grad_clip = self.config.float("gradient_clip", 0.0)
       grad_clip_global_norm = self.config.float("gradient_clip_global_norm", 0.0)
 
-      # Extended self.optimizer.minimize() to optinally modify gradients.
+      # Extended self.optimizer.minimize() to optionally modify gradients.
       grads_and_vars = self.optimizer.compute_gradients(
         self.loss, var_list=self.trainable_vars,
         aggregation_method=aggregation_method)
       if not [v for g, v in grads_and_vars if g is not None]:
         raise Exception("no single variable to train")
       # Also see tf.contrib.layers.optimizers.optimize_loss() for reference.
+      if self.config.bool("gradient_nan_inf_filter", False):
+        from TFUtil import nan_to_num
+        grads_and_vars = [(nan_to_num(grad), var) for (grad, var) in grads_and_vars]
       if grad_noise:
         assert grad_noise > 0
         from TFUtil import add_scaled_noise_to_gradients
@@ -319,9 +322,6 @@ class Updater(object):
         assert grad_clip_global_norm > 0
         grads_clipped, _ = tf.clip_by_global_norm([grad for (grad, _) in grads_and_vars], grad_clip_global_norm)
         grads_and_vars = zip(grads_clipped, [var for (_, var) in grads_and_vars])
-      if self.config.bool("gradient_nan_inf_filter", False):
-        from TFUtil import nan_to_num
-        grads_and_vars = [(nan_to_num(grad), var) for (grad, var) in grads_and_vars]
       apply_grads = self.optimizer.apply_gradients(grads_and_vars)
       incr_step_op = tf.assign_add(self.network.global_train_step, 1, name="global_train_step_increment")
       self.optim_op = tf.group(apply_grads, incr_step_op, name="optim_and_step_incr")
@@ -337,6 +337,10 @@ class Updater(object):
     self.optimizer_vars = slot_vars
 
     # Check if there were any other variables added.
+    # E.g. currently (TF 1.0) the `AdamOptimizer` creates these additional vars
+    # `[<tf.Variable 'optimize/beta1_power:0' shape=() dtype=float32_ref>,
+    #   <tf.Variable 'optimize/beta2_power:0' shape=() dtype=float32_ref>]`
+    # which do not correspond to trainable vars, thus we did not get them as slot vars above.
     other_new_vars = []
     for v in tf.global_variables():
       if v in all_vars:

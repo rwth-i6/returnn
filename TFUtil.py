@@ -480,8 +480,8 @@ class Data(object):
 
   def get_axis_from_description(self, axis):
     """
-    :param int|str axis: 
-    :return: 
+    :param int|str axis:
+    :return:
     """
     axes = self.get_axes_from_description(axis)
     assert len(axes) == 1, "%r is not a unique axis but %r" % (axis, axes)
@@ -990,7 +990,7 @@ def dot(a, b):
 
 def identity(x):
   """
-  :param tf.Tensor x: 
+  :param tf.Tensor x:
   :rtype: tf.Tensor
   """
   return x
@@ -1094,9 +1094,9 @@ def swapaxes(x, axis1, axis2):
 
 def move_axis(x, old_axis, new_axis):
   """
-  :param tf.Tensor x: 
-  :param int old_axis: 
-  :param int new_axis: 
+  :param tf.Tensor x:
+  :param int old_axis:
+  :param int new_axis:
   """
   with tf.name_scope("move_axis"):
     ndim = x.get_shape().ndims
@@ -1229,16 +1229,17 @@ def expand_multiple_dims(x, axes, name="expand_multiple_dims"):
     return x
 
 
-def constant_with_shape(x, shape, name="constant_with_shape"):
+def constant_with_shape(x, shape, dtype=None, name="constant_with_shape"):
   """
-  :param tf.Tensor|float|int x: scalar
+  :param tf.Tensor|float|int|bool x: scalar
   :param list[tf.Tensor|int]|tuple[tf.Tensor|int]|tf.Tensor shape:
+  :param tf.DType dtype:
   :param str name:
   :return: x of the specified shape
   :rtype: tf.Tensor
   """
   with tf.name_scope(name):
-    x = tf.convert_to_tensor(x)
+    x = tf.convert_to_tensor(x, dtype=dtype)
     ones = tf.ones(shape, dtype=x.dtype)
     if x.dtype == tf.bool:
       return tf.logical_and(x, ones)
@@ -1249,7 +1250,7 @@ def dimshuffle(x, axes, name="dimshuffle"):
   """
   Like Theanos dimshuffle.
   Combines tf.transpose, tf.expand_dims and tf.squeeze.
-  
+
   :param tf.Tensor x:
   :param list[int|str]|tuple[int|str] axes:
   :param str name: scope name
@@ -1631,7 +1632,7 @@ class OpCodeCompiler(object):
       "code_hash": self._code_hash,
       "c_macro_defines": self.c_macro_defines,
       "ld_flags": self.ld_flags,
-      "with_cuda": self._cuda_env.is_available()
+      "with_cuda": self._cuda_env and self._cuda_env.is_available()
     }
 
   def _make_code_hash(self):
@@ -1701,7 +1702,7 @@ class OpCodeCompiler(object):
       common_opts += ["-undefined", "dynamic_lookup"]
     common_opts += ["-I", self._include_path]
     compiler_opts = ["-fPIC"]
-    if self._cuda_env.is_available():
+    if self._cuda_env and self._cuda_env.is_available():
       common_opts += self._cuda_env.get_compiler_opts()
       common_opts += ["-DGOOGLE_CUDA=1"]
       for opt in compiler_opts:
@@ -1713,7 +1714,7 @@ class OpCodeCompiler(object):
     opts = common_opts + [self._cc_filename, "-o", self._so_filename]
     opts += self.ld_flags
     cmd_bin = "g++"
-    if self._cuda_env.is_available():
+    if self._cuda_env and self._cuda_env.is_available():
       cmd_bin = self._cuda_env.get_compiler_bin()
     cmd_args = [cmd_bin] + opts
     from subprocess import Popen, PIPE, STDOUT, CalledProcessError
@@ -1879,7 +1880,7 @@ def debugRegisterBetterRepr():
   def tensorarray_repr(x):
     """
     :param tf.TensorArray x:
-    :rtype: str 
+    :rtype: str
     """
     op = x.handle.op
     assert isinstance(op, tf.Operation)
@@ -1900,6 +1901,7 @@ def cond(pred, fn1, fn2, name=None):
   This will be a branched execution, i.e. either fn1() or fn2() will be executed,
   or at least the resulting graph will be evaluated.
   If pred can is constant at the call, only the corresponding fn will be called.
+  This is similar as the TF internal _smart_cond().
 
   :param tf.Tensor|bool pred:
   :param ()->(tf.Tensor|list[tf.Tensor]) fn1:
@@ -2044,11 +2046,11 @@ def spatial_smoothing_energy(x, dim, use_circular_conv=True):
 def nan_to_num(x, nan_num=0, inf_num=1e30):
   """
   Like numpy.nan_to_num().
-  
-  :param tf.Tensor x: 
-  :param float|tf.Tensor nan_num: 
-  :param float|tf.Tensor inf_num: 
-  :return: x with replaced nan and inf 
+
+  :param tf.Tensor x:
+  :param float|tf.Tensor nan_num:
+  :param float|tf.Tensor inf_num:
+  :return: x with replaced nan and inf
   """
   with tf.name_scope("nan_to_num"):
     nan_num = tf.convert_to_tensor(nan_num, dtype=x.dtype)
@@ -2067,8 +2069,8 @@ def nan_to_num(x, nan_num=0, inf_num=1e30):
 
 def identity_op_nested(x, name="identity"):
   """
-  :param tf.Tensor|list[tf.Tensor]|dict[str,tf.Tensor] x: 
-  :param str name: 
+  :param tf.Tensor|list[tf.Tensor]|dict[str,tf.Tensor] x:
+  :param str name:
   :rtype tf.Tensor|list[tf.Tensor]|dict[str,tf.Tensor]
   """
   if isinstance(x, dict):
@@ -2107,7 +2109,7 @@ def stop_event_writer_thread(event_writer):
   There is a bug in TensorFlow (at least 1.1.0) (https://github.com/tensorflow/tensorflow/issues/4820)
   that the event writer thread is never stopped.
   This will try to stop it. Only do it if you don't use the event writer anymore.
-  
+
   :param tensorflow.python.summary.writer.event_file_writer.EventFileWriter event_writer:
   """
   from tensorflow.python.summary.writer.event_file_writer import EventFileWriter, _EventLoggerThread
@@ -2205,8 +2207,8 @@ def global_tensor(f, name):
   This creates a global accessible tensor in the graph to be reused later,
   i.e. on the second call given a unique name, it will not create a new tensor
   but return the previously created tensor.
-  This is for the current graph, i.e. if there is a new graph, it will recreate the tensor. 
-  
+  This is for the current graph, i.e. if there is a new graph, it will recreate the tensor.
+
   :param () -> tf.Tensor f: callable which creates the tensor
   :param str name: global reference name for the tensor
   :return: the tensor
@@ -2261,3 +2263,1035 @@ def encode_raw(x, axis=-1, seq_lens=None):
     if seq_lens is not None:
       strings = tf.substr(strings, pos=tf.zeros_like(seq_lens), len=seq_lens)
     return strings
+
+
+def pad_zeros_in_axis(x, before=0, after=0, axis=0):
+  """
+  :param tf.Tensor x:
+  :param int|tf.Tensor before:
+  :param int|tf.Tensor after:
+  :param int axis:
+  :return:
+  """
+  with tf.name_scope("pad_zeros_in_axis"):
+    paddings = [[0, 0] for i in range(x.get_shape().ndims)]
+    paddings[axis] = [before, after]
+    return tf.pad(x, paddings=paddings)
+
+
+def slice_pad_zeros(x, begin, end, axis=0):
+  """
+  :param tf.Tensor x: of shape (..., time, ...)
+  :param int|tf.Tensor begin:
+  :param int|tf.Tensor end:
+  :param int axis:
+  :return: basically x[begin:end] (with axis==0) but if begin < 0 or end > x.shape[0],
+   it will not discard these frames but pad zeros, such that the resulting shape[0] == end - begin.
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope("slice_pad_zeros"):
+    min_frame = tf.minimum(begin, end)
+    left_rem = -min_frame
+    x, begin, end = tf.cond(
+      tf.less_equal(left_rem, 0),
+      [x, begin, end],
+      [pad_zeros_in_axis(x, before=left_rem, axis=axis), begin + left_rem, end + left_rem])
+    max_frame = tf.maximum(begin, end)
+    right_rem = max_frame - tf.shape(x)[axis]
+    x = tf.cond(
+      tf.less_equal(right_rem, 0),
+      x,
+      pad_zeros_in_axis(x, after=right_rem, axis=axis))
+    return single_strided_slice(x, axis=axis, begin=begin, end=end)
+
+
+def post_control_dependencies(x, updates):
+  """
+  :param tf.Tensor|list[tf.Tensor]|dict[str,tf.Tensor] x:
+  :param list[tf.Operation] updates:
+  :return: identity(x) with control_dependencies(updates)
+  :rtype: tf.Tensor|list[tf.Tensor]|dict[str,tf.Tensor]
+  """
+  with tf.name_scope("post_control_dependencies"):
+    with tf.control_dependencies(updates):
+      if isinstance(x, tf.Tensor):
+        return tf.identity(x)
+      elif isinstance(x, (tuple, list)):
+        return [tf.identity(v) for v in x]
+      elif isinstance(x, dict):
+        return {k: tf.identity(v) for (k, v) in x.items()}
+      else:
+        raise ValueError("type of %r not expected" % x)
+
+
+@contextlib.contextmanager
+def sequential_control_dependencies(l):
+  """
+  tf.control_dependencies but each operation will be created such that it is executed
+  after the ones coming before in the list, i.e. l[0] is executed first, l[-1] is executed last.
+
+  :param list[()->(tf.Operation|tf.Tensor)] l:
+  """
+  with tf.control_dependencies([l[0]()]) as dep:
+    if len(l) > 1:
+      with sequential_control_dependencies(l[1:]) as dep2:
+        yield dep2
+    else:
+      yield dep
+
+
+def global_queue(name, queue_type, capacity, dtypes, shapes=None, names=None):
+  """
+  :param (args)->tf.QueueBase queue_type: some function which creates a queue
+  :param str name: global name
+  :param list[tf.DType|str] dtypes:
+  :param list[tf.TensorShape|tuple[int|None]]|None shapes:
+  :param list[str]|None names:
+  :rtype: tf.QueueBase
+  """
+  queue_ref = global_tensor(
+    name=name,
+    f=lambda: queue_type(capacity=capacity, dtypes=dtypes, shapes=shapes, names=names).queue_ref)
+  queue = tf.QueueBase(dtypes=dtypes, shapes=shapes, names=names, queue_ref=queue_ref)
+  return queue
+
+
+def init_variable_if_needed(v):
+  """
+  :param tf.Variable v:
+  :rtype: tf.Operation
+  """
+  def make_init():
+    # Cannot use tf.variables_initializer(), see here: https://stackoverflow.com/questions/44354964/
+    with tf.control_dependencies([tf.assign(v, v.initial_value)]):
+      return tf.no_op()
+
+  maybe_init = tf.cond(
+    tf.is_variable_initialized(v),
+    lambda: tf.no_op(),
+    make_init,
+    name="maybe_init")
+
+  return maybe_init
+
+
+def auto_init_var(v):
+  """
+  :param tf.Variable v:
+  :return: a reference to the var via tf.identity
+  :rtype: tf.Tensor
+  """
+  with tf.control_dependencies(init_variable_if_needed(v)):
+    return tf.identity(v)
+
+
+def true_once():
+  """
+  :return: tensor which will be True once and then always False
+    Internally, this creates a non-trainable variable as a helper.
+  :rtype: tf.Tensor
+  """
+  v = tf.Variable(initial_value=True, trainable=False, name="true_once_var")
+  with tf.control_dependencies([init_variable_if_needed(v)]):
+    # Cannot use tf.identity because that would give us a reference to the var but we want to copy it now.
+    x = tf.where(v.read_value(), True, False)
+    with tf.control_dependencies([x]):
+      x = tf.identity(x)
+      reset = tf.assign(v, False)
+      with tf.control_dependencies([x, reset]):
+        x = tf.identity(x)
+  return x
+
+
+def raise_OutOfRangeError():
+  """
+  :return: an op which raises an OutOfRangeError
+  :rtype: tf.Operation
+  """
+  # Kind of hacky. We create some dummy queue, close it and every time we call dequeue on it,
+  # it will raise the desired exception.
+  with tf.name_scope("raise_OutOfRangeError"):
+    queue = global_queue(name="raise_exception/queue", queue_type=tf.FIFOQueue, capacity=1, dtypes=[tf.bool])
+    # We must only close it once, otherwise we could get a CancelledError.
+    queue_open = global_tensor(f=true_once, name="raise_exception/queue_open")
+    with tf.control_dependencies([tf.cond(queue_open, lambda: queue.close(), lambda: tf.no_op())]):
+      return queue.dequeue()
+
+
+def copy(x):
+  """
+  :param tf.Tensor|tf.Variable x:
+  :return: copy of input, i.e. enforces that this is not a ref
+  """
+  with tf.name_scope("copy"):
+    zero = x.dtype.as_numpy_dtype()
+    return tf.add(x, zero)
+
+
+class Lock(object):
+  """
+  A pure TensorFlow implementation of a mutex / lock.
+  """
+  def __init__(self, name="Lock"):
+    self._name = name
+    with tf.name_scope(self._name):
+      from tensorflow.python.ops.data_flow_ops import StagingArea
+      self._queue = StagingArea(dtypes=[tf.bool])
+      self._queue_init = self._queue.put([True])
+
+  def init(self):
+    return self._queue_init
+
+  def lock(self):
+    """
+    On first call, just returns. Any further call will block, unless there is an unlock() call.
+    """
+    with tf.name_scope("%s/lock" % self._name):
+      return self._queue.get()
+
+  def unlock(self):
+    """
+    Must be called after lock().
+    """
+    with tf.name_scope("%s/unlock" % self._name):
+      return self._queue.put([True])
+
+
+class Condition(object):
+  """
+  A pure TensorFlow implementation of a condition.
+  """
+  def __init__(self, lock=None, name="Condition"):
+    self._name = name
+    with tf.variable_scope(name):
+      self._init_ops = []
+      if not lock:
+        lock = Lock()
+        self._init_ops += [lock.init()]
+      self.lock = lock
+      self._waiting_counter = tf.Variable(initial_value=0, trainable=False, name="waiting_counter")
+      self._waiter_queue = tf.FIFOQueue(capacity=1, dtypes=[tf.bool], name="waiter_queue")
+      self._init_ops += [self._waiting_counter.initializer]
+
+  def init(self):
+    return tf.group(*self._init_ops)
+
+  def wait(self):
+    """
+    Must be called with the lock held, will unlock while waiting for a signal.
+    """
+    with tf.name_scope("%s/wait" % self._name):
+      with sequential_control_dependencies([
+        lambda: self._waiting_counter.assign_add(1, use_locking=True),
+        lambda: self.lock.unlock(),
+        lambda: self._waiter_queue.dequeue(),
+        lambda: self.lock.lock(),
+        lambda: self._waiting_counter.assign_sub(1, use_locking=True)
+      ]):
+        return tf.no_op()
+
+  def wait_counter(self):
+    return copy(self._waiting_counter.read_value())
+
+  def signal(self):
+    """
+    Must be called with the lock held.
+    Emits one signal.
+    """
+    with tf.name_scope("%s/signal" % self._name):
+      def on_waiting_counter():
+        return self._waiter_queue.enqueue(True)
+      return tf.cond(tf.greater(self._waiting_counter.read_value(), 0), on_waiting_counter, lambda: tf.no_op())
+
+  def signal_all(self):
+    """
+    Must be called with the lock held.
+    Emits as many signals as they are waiters.
+    """
+    with tf.name_scope("%s/signal_all" % self._name):
+      count = self.wait_counter()
+      with sequential_control_dependencies([lambda: count, lambda: self.lock.unlock()]):
+        # We must unlock because we could have to do multiple signals but the waiter-queue has only capacity 1,
+        # i.e. we would (dead)lock otherwise.
+        def body(i):
+          with tf.control_dependencies([i]):
+            with tf.control_dependencies([self._waiter_queue.enqueue(False)]):
+              return i + 1
+        loop = tf.while_loop(
+          cond=lambda i: tf.less(i, count),
+          body=body, parallel_iterations=1, back_prop=False, loop_vars=[0])
+        with tf.control_dependencies([loop]):
+          return self.lock.lock()
+
+
+class GlobalTensorArrayOpMaker:
+  # Note: This whole implementation will not work when tensor_array.h is not available.
+  # https://github.com/tensorflow/tensorflow/issues/10527
+
+  code = """
+    #include "tensorflow/core/framework/op_kernel.h"
+    #include "tensorflow/core/framework/register_types.h"
+    #include "tensorflow/core/framework/resource_mgr.h"
+    #include "tensorflow/core/framework/tensor.h"
+    #include "tensorflow/core/framework/tensor_shape.h"
+    #include "tensorflow/core/framework/types.h"
+    #include "tensorflow/core/kernels/bounds_check.h"
+    #include "tensorflow/core/kernels/tensor_array.h"
+    #include "tensorflow/core/lib/core/errors.h"
+    #include "tensorflow/core/lib/core/refcount.h"
+    #include "tensorflow/core/lib/strings/strcat.h"
+    #include "tensorflow/core/platform/dynamic_annotations.h"
+    #include "tensorflow/core/platform/logging.h"
+    #include "tensorflow/core/platform/thread_annotations.h"
+    #include "tensorflow/core/platform/types.h"
+
+    using namespace tensorflow;
+  
+    // Adopted from https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/ops/data_flow_ops.cc.
+    REGISTER_OP("GlobalTensorArray")
+    .Input("size: int32")
+    .Attr("container: string = ''")
+    .Attr("shared_name: string = ''")
+    .Attr("dtype: type")
+    .Attr("element_shape: shape = { unknown_rank: true }")
+    .Attr("dynamic_size: bool = false")
+    .Attr("clear_after_read: bool = true")
+    .Attr("tensor_array_name: string = ''")
+    .Output("handle: resource")
+    .Output("flow: float")
+    .SetIsStateful()
+    .SetShapeFn([](InferenceContext* c) {
+      ShapeHandle unused;
+      TF_RETURN_IF_ERROR(c->WithRank(c->input(0), 0, &unused));
+      c->set_output(0, c->Vector(2));
+      c->set_output(1, c->Scalar());
+      return Status::OK();
+    })
+    .Doc("GlobalTensorArray, persistent across runs");
+    
+    // Copied from https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/tensor_array_ops.cc,
+    // and https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/resource_op_kernel.h.
+    // The original TensorArrayOp used the per-run ("per-step") resource manager container
+    // but we use the standard container which persists across runs.
+    class GlobalTensorArrayOp : public OpKernel {
+     public:
+      explicit GlobalTensorArrayOp(OpKernelConstruction* context)
+          : OpKernel(context), device_type_(context->device_type()) {
+        OP_REQUIRES_OK(context, context->GetAttr("dtype", &dtype_));
+        OP_REQUIRES_OK(context, context->GetAttr("element_shape", &element_shape_));
+        OP_REQUIRES_OK(context, context->GetAttr("dynamic_size", &dynamic_size_));
+        OP_REQUIRES_OK(context,
+                       context->GetAttr("clear_after_read", &clear_after_read_));
+        OP_REQUIRES_OK(context,
+                       context->GetAttr("tensor_array_name", &tensor_array_name_));
+        if (tensor_array_name_.empty()) tensor_array_name_ = name();
+
+        AllocatorAttributes alloc_attr;
+        alloc_attr.set_on_host(true);
+        OP_REQUIRES_OK(context, context->allocate_persistent(
+                                tensorflow::DT_STRING, tensorflow::TensorShape({2}),
+                                &handle_, alloc_attr));
+      }
+    
+      ~GlobalTensorArrayOp() {
+        if (resource_ != nullptr) {
+          resource_->Unref();
+          if (cinfo_.resource_is_private_to_kernel()) {
+            if (!cinfo_.resource_manager()
+                     ->template Delete<T>(cinfo_.container(), cinfo_.name())
+                     .ok()) {
+              // Do nothing; the resource can have been deleted by session resets.
+            }
+          }
+        }
+      }
+    
+      void Compute(OpKernelContext* ctx) override {
+        mutex_lock l(mu_);
+        if (resource_ == nullptr) {
+          ResourceMgr* mgr = ctx->resource_manager();
+          OP_REQUIRES(ctx, mgr != nullptr, errors::Internal("No resource manager."));
+          OP_REQUIRES_OK(ctx, cinfo_.Init(mgr, def()));
+          auto h = handle_.AccessTensor(ctx)->template flat<string>();
+          h(0) = cinfo_.container();
+          h(1) = cinfo_.name();
+          OP_REQUIRES_OK(ctx, CreateTensorArray(ctx, rm, &handle_, &resource_));
+        }
+
+        Tensor* handle;
+        OP_REQUIRES_OK(ctx, ctx->allocate_output(0, TensorShape({}), &handle));
+        handle->flat<ResourceHandle>()(0) =
+            resource_->resource_handle(ctx);            
+        if (ctx->num_outputs() == 2) {
+          // Create the flow output.
+          Tensor* flow;
+          OP_REQUIRES_OK(ctx, ctx->allocate_output(1, TensorShape({}), &flow));
+          if (device_type_ == DEVICE_CPU) {
+            // Value doesn't matter, but this makes msan not complaint about
+            // copying an uninitialized value. To do this on GPU would require
+            // a kernel launch or a host->device memcpy, so we avoid that.
+            flow->flat<float>()(0) = 0;
+          }
+        }
+      }
+    
+     private:
+      Status CreateTensorArray(OpKernelContext* ctx, ResourceMgr* rm,
+                               Tensor* tensor_array_output_handle,
+                               TensorArray** output_tensor_array) EXCLUSIVE_LOCKS_REQUIRED(mu_) {
+        const Tensor* tensor_size;
+        TF_RETURN_IF_ERROR(ctx->input("size", &tensor_size));
+    
+        if (!TensorShapeUtils::IsScalar(tensor_size->shape())) {
+          return errors::InvalidArgument(
+              "TensorArray size must be scalar, but had shape: ",
+              tensor_size->shape().DebugString());
+        }
+        const int32 size = tensor_size->scalar<int32>()();
+        if (size < 0) {
+          return errors::InvalidArgument("Size should be >= 0.");
+        }
+    
+        TensorArray* tensor_array = new TensorArray(
+            cinfo_.name(), dtype_, *tensor_array_output_handle, size, element_shape_,
+            dynamic_size_, false /* multiple_writes_aggregate */,
+            false /* is_grad */, -1 /* marked_size */, clear_after_read_);
+    
+        // TODO: could use LookupOrCreate instead...
+        TF_RETURN_IF_ERROR(
+            rm->Create(cinfo_.container(), cinfo_.name(), tensor_array));
+    
+        *output_tensor_array = tensor_array;
+    
+        return Status::OK();
+      }
+
+      mutex mu_;
+      ContainerInfo cinfo_ GUARDED_BY(mu_);
+      PersistentTensor handle_ GUARDED_BY(mu_);
+      TensorArray* resource_ GUARDED_BY(mu_) = nullptr;
+      
+      const DeviceType device_type_;
+      DataType dtype_;
+      PartialTensorShape element_shape_;
+      bool dynamic_size_;
+      bool clear_after_read_;
+      string tensor_array_name_;  // The name used to create the TensorArray.
+      
+      TF_DISALLOW_COPY_AND_ASSIGN(GlobalTensorArrayOp);
+    };
+    
+    REGISTER_KERNEL_BUILDER(Name("GlobalTensorArray").Device(DEVICE_CPU), GlobalTensorArrayOp);
+
+  """
+
+  def __init__(self):
+    self._mod = None
+
+  def _make_mod(self):
+    if self._mod:
+      return self._mod
+
+    comp = OpCodeCompiler(
+      base_name="GlobalTensorArray",
+      code_version=1,  # code also ends up in hash, thus this doesn't always needs to be increased
+      code=self.code,
+      include_deps=[],
+      ld_flags=[])
+
+    mod = comp.load_module()
+    self._mod = mod
+    return mod
+
+  def get_op(self):
+    mod = self._make_mod()
+    from Util import camel_case_to_snake_case
+    op = getattr(mod, camel_case_to_snake_case("GlobalTensorArray"))
+    return op
+
+
+class TFArrayContainer(object):
+  code = """
+    #include <vector>
+
+    // For Eigen::ThreadPoolDevice.
+    #define EIGEN_USE_THREADS 1
+
+    #include "tensorflow/core/framework/op.h"
+    #include "tensorflow/core/framework/shape_inference.h"
+    #include "tensorflow/core/framework/op_kernel.h"
+    #include "tensorflow/core/framework/resource_mgr.h"
+    #include "tensorflow/core/framework/resource_op_kernel.h"
+    #include "tensorflow/core/framework/tensor.h"
+    #include "tensorflow/core/framework/tensor_shape.h"
+    #include "tensorflow/core/framework/types.h"
+    #include "tensorflow/core/platform/macros.h"
+    #include "tensorflow/core/platform/mutex.h"
+    #include "tensorflow/core/platform/types.h"
+
+    using namespace tensorflow;
+
+    REGISTER_OP("ArrayContainerCreate")
+    .Attr("T: type")
+    .Attr("container: string = ''")
+    .Attr("shared_name: string = ''")
+    .Output("resource: resource")
+    .SetIsStateful()
+    .SetShapeFn(shape_inference::ScalarShape)
+    .Doc(R"doc(Array container, random index access)doc");
+
+    REGISTER_OP("ArrayContainerGetSize")
+    .Input("handle: resource")
+    .Output("out: int32")
+    .SetShapeFn(shape_inference::ScalarShape)
+    ;
+
+    REGISTER_OP("ArrayContainerSetSize")
+    .Attr("T: type")
+    .Input("handle: resource")
+    .Input("size: int32")
+    ;
+
+    REGISTER_OP("ArrayContainerGet")
+    .Attr("T: type")
+    .Input("handle: resource")
+    .Input("index: int32")
+    .Output("out: T")
+    ;
+
+    REGISTER_OP("ArrayContainerSet")
+    .Attr("T: type")
+    .Input("handle: resource")
+    .Input("index: int32")
+    .Input("value: T")
+    ;
+
+    // https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/resource_mgr.h
+    struct ArrayContainer : public ResourceBase {
+      ArrayContainer(const DataType& dtype) : dtype_(dtype) {}
+
+      string DebugString() override { return "ArrayContainer"; }
+      int64 MemoryUsed() const override { return 0; };
+
+      mutex mu_;
+      const DataType dtype_;
+      std::vector<PersistentTensor> data_ GUARDED_BY(mu_);
+
+      int32 get_size() {
+        mutex_lock l(mu_);
+        return (int32) data_.size();
+      }
+
+      Status set_size(int32 size) {
+        if(size < 0)
+          return errors::InvalidArgument("size ", size, " must be >= 0");
+        mutex_lock l(mu_);
+        data_.resize((size_t) size);
+        return Status::OK();
+      }
+
+      Status get(OpKernelContext* ctx, int32 idx, PersistentTensor* v) {
+        mutex_lock l(mu_);
+        if(idx < 0)
+          return errors::InvalidArgument("idx ", idx, " must be >= 0");
+        if((size_t)idx >= data_.size())
+          return errors::InvalidArgument("idx ", idx, " must be < size ", data_.size());
+        PersistentTensor& t = data_[(size_t)idx];
+        if(!t.IsInitialized())
+          return errors::InvalidArgument("tensor at idx ", idx, " must have been set before");
+        *v = t;
+        return Status::OK();
+      }
+
+      Status set(OpKernelContext* ctx, int32 idx, const Tensor& v) {
+        mutex_lock l(mu_);
+        if(idx < 0)
+          return errors::InvalidArgument("idx ", idx, " must be >= 0");
+        if((size_t)idx >= data_.size())
+          return errors::InvalidArgument("idx ", idx, " must be < size ", data_.size());
+        data_[idx] = PersistentTensor(v);
+        return Status::OK();
+      }
+
+    };
+
+    ResourceHandle OwnMakeResourceHandle(OpKernelContext* ctx, const string& container,
+                                         const string& name,
+                                         const TypeIndex& type_index) {
+      ResourceHandle result;
+      result.set_device(ctx->device()->attributes().name());
+      printf("make dev %s\\n", result.device().c_str());
+      string actual_container;
+      if (!container.empty()) {
+        actual_container = container;
+      } else {
+        actual_container = ctx->resource_manager()->default_container();
+      }
+      result.set_container(actual_container);
+      result.set_name(name);
+      result.set_hash_code(type_index.hash_code());
+      result.set_maybe_type_name(type_index.name());
+      printf("make dev %s\\n", result.device().c_str());
+      return result;
+    }
+
+    // https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/resource_op_kernel.h
+    class ArrayContainerCreateOp : public ResourceOpKernel<ArrayContainer> {
+    public:
+      explicit ArrayContainerCreateOp(OpKernelConstruction* context) : ResourceOpKernel(context) {
+        OP_REQUIRES_OK(context, context->GetAttr("T", &dtype_));
+      }
+
+      void Compute(OpKernelContext* context) override {
+        ResourceOpKernel<ArrayContainer>::Compute(context);
+        mutex_lock l(mu_);
+        ResourceHandle rhandle = OwnMakeResourceHandle(context, cinfo_.container(), cinfo_.name(), MakeTypeIndex<ArrayContainer>());
+        printf("created. device: %s\\n", rhandle.device().c_str());
+        printf("container: %s\\n", rhandle.container().c_str());
+        printf("name: %s\\n", rhandle.name().c_str());
+        printf("actual device: %s\\n", context->device()->attributes().name().c_str());
+        printf("actual name: %s\\n", cinfo_.name().c_str());
+        rhandle.set_device("foo");
+        printf("now device: %s\\n", rhandle.device().c_str());
+        ResourceHandle cpy = rhandle;
+        printf("cpy device: %s\\n", cpy.device().c_str());
+      }
+      
+    private:
+      virtual bool IsCancellable() const { return false; }
+      virtual void Cancel() {}
+
+      Status CreateResource(ArrayContainer** ret) override EXCLUSIVE_LOCKS_REQUIRED(mu_) {
+        *ret = new ArrayContainer(dtype_);
+        if(*ret == nullptr)
+          return errors::ResourceExhausted("Failed to allocate");
+        return Status::OK();
+      }
+
+      Status VerifyResource(ArrayContainer* ar) override {
+        if(ar->dtype_ != dtype_)
+          return errors::InvalidArgument("Data type mismatch: expected ", DataTypeString(dtype_),
+                                         " but got ", DataTypeString(ar->dtype_), ".");
+        return Status::OK();
+      }
+  
+      DataType dtype_;
+    };
+    REGISTER_KERNEL_BUILDER(Name("ArrayContainerCreate").Device(DEVICE_CPU), ArrayContainerCreateOp);
+
+    class ArrayContainerGetSizeOp : public OpKernel {
+    public:
+      using OpKernel::OpKernel;
+
+      void Compute(OpKernelContext* context) override {
+        ArrayContainer* ar;
+        
+        const Tensor* handle;
+        OP_REQUIRES_OK(context, context->input("handle", &handle));
+        const ResourceHandle& rhandle = handle->scalar<ResourceHandle>()();
+        printf("device: %s\\n", rhandle.device().c_str());
+        printf("container: %s\\n", rhandle.container().c_str());
+        printf("name: %s\\n", rhandle.name().c_str());
+        
+        OP_REQUIRES_OK(context, GetResourceFromContext(context, "handle", &ar));
+        core::ScopedUnref unref(ar);
+
+        int32 size = ar->get_size();
+        Tensor* tensor_size = nullptr;
+        OP_REQUIRES_OK(context, context->allocate_output(0, TensorShape({}), &tensor_size));
+        tensor_size->flat<int32>().setConstant(size);
+      }
+    };
+    REGISTER_KERNEL_BUILDER(Name("ArrayContainerGetSize").Device(DEVICE_CPU), ArrayContainerGetSizeOp);
+
+    class ArrayContainerSetSizeOp : public OpKernel {
+    public:
+      using OpKernel::OpKernel;
+
+      void Compute(OpKernelContext* context) override {
+        ArrayContainer* ar;
+        OP_REQUIRES_OK(context, GetResourceFromContext(context, "handle", &ar));
+        core::ScopedUnref unref(ar);
+
+        const Tensor* tensor_size;
+        OP_REQUIRES_OK(context, context->input("size", &tensor_size));
+        OP_REQUIRES(context, TensorShapeUtils::IsScalar(tensor_size->shape()),
+                    errors::InvalidArgument(
+                        "TensorArray index must be scalar, but had shape: ",
+                        tensor_size->shape().DebugString()));
+        const int32 size = tensor_size->scalar<int32>()();
+        OP_REQUIRES_OK(context, ar->set_size(size));
+      }
+    };
+    REGISTER_KERNEL_BUILDER(Name("ArrayContainerSetSize").Device(DEVICE_CPU), ArrayContainerSetSizeOp);
+
+    class ArrayContainerGetOp : public OpKernel {
+    public:
+      explicit ArrayContainerGetOp(OpKernelConstruction* context) : OpKernel(context) {
+        OP_REQUIRES_OK(context, context->GetAttr("T", &dtype_));
+      }
+
+      void Compute(OpKernelContext* context) override {
+        ArrayContainer* ar;
+        OP_REQUIRES_OK(context, GetResourceFromContext(context, "handle", &ar));
+        core::ScopedUnref unref(ar);
+
+        const Tensor* tensor_index;
+        OP_REQUIRES_OK(context, context->input("index", &tensor_index));
+        OP_REQUIRES(context, TensorShapeUtils::IsScalar(tensor_index->shape()),
+                    errors::InvalidArgument(
+                        "TensorArray index must be scalar, but had shape: ",
+                        tensor_index->shape().DebugString()));
+        const int32 index = tensor_index->scalar<int32>()();
+
+        PersistentTensor value;
+        OP_REQUIRES_OK(context, ar->get(context, index, &value));
+        context->set_output(0, *value.AccessTensor(context));
+      }
+
+    private:
+      DataType dtype_;
+    };
+    REGISTER_KERNEL_BUILDER(Name("ArrayContainerGet").Device(DEVICE_CPU), ArrayContainerGetOp);
+
+    class ArrayContainerSetOp : public OpKernel {
+    public:
+      explicit ArrayContainerSetOp(OpKernelConstruction* context) : OpKernel(context) {
+        OP_REQUIRES_OK(context, context->GetAttr("T", &dtype_));
+      }
+
+      void Compute(OpKernelContext* context) override {
+        ArrayContainer* ar;
+        OP_REQUIRES_OK(context, GetResourceFromContext(context, "handle", &ar));
+        core::ScopedUnref unref(ar);
+
+        const Tensor* tensor_index;
+        const Tensor* tensor_value;
+        OP_REQUIRES_OK(context, context->input("index", &tensor_index));
+        OP_REQUIRES_OK(context, context->input("value", &tensor_value));
+    
+        OP_REQUIRES(context, TensorShapeUtils::IsScalar(tensor_index->shape()),
+                    errors::InvalidArgument(
+                        "index must be scalar, but had shape: ",
+                        tensor_index->shape().DebugString()));
+        const int32 index = tensor_index->scalar<int32>()();
+        OP_REQUIRES(context, tensor_value->IsInitialized(), errors::InvalidArgument("value must be initialized"));
+
+        OP_REQUIRES_OK(context, ar->set(context, index, *tensor_value));
+      }
+
+    private:
+      DataType dtype_;
+    };
+    REGISTER_KERNEL_BUILDER(Name("ArrayContainerSet").Device(DEVICE_CPU), ArrayContainerSetOp);
+  """
+
+  _mod = None
+
+  def __init__(self, dtype, handle=None, container=None, shared_name=None, name="array_container"):
+    """
+    :param tf.DType dtype:
+    :param str container:
+    :param str shared_name:
+    :param str name:
+    :param tf.resource handle: existing handle to reuse. otherwise we will create a new one
+    """
+    self.dtype = dtype
+    if handle is not None:
+      self.handle = handle
+    else:
+      self.handle = self._create(dtype=dtype, container=container, shared_name=shared_name, name=name)
+
+  def __repr__(self):
+    return "<%s %r %r>" % (self.__class__.__name__, self.dtype, self.handle)
+
+  @classmethod
+  def _make_mod(cls):
+    if cls._mod:
+      return cls._mod
+
+    # Fix for undefined symbol: _ZN6google8protobuf8internal26fixed_address_empty_stringE.
+    # https://github.com/tensorflow/tensorflow/issues/1419
+    from google.protobuf.pyext import _message as msg
+    lib = msg.__file__
+    #lib = "/u/zeyer/.local/lib/python2.7/site-packages/tensorflow/python/_pywrap_tensorflow_internal.so"
+    #lib = "/u/zeyer/.local/lib/python2.7/site-packages/tensorflow/contrib/tfprof/python/tools/tfprof/_pywrap_tensorflow_print_model_analysis_lib.so"
+    #lib = "/u/zeyer/.local/lib/python2.7/site-packages/google/protobuf/pyext/_message.so"
+    #lib = "/u/zeyer/.local/lib/python2.7/site-packages/external/protobuf/python/google/protobuf/pyext/_message.so"
+
+    comp = OpCodeCompiler(
+      base_name="TFArrayContainer",
+      code_version=1,  # code also ends up in hash, thus this doesn't always needs to be increased
+      code=cls.code,
+      include_deps=[],
+      ld_flags=[
+        "-Xlinker", "-rpath", "-Xlinker", os.path.dirname(lib),
+        "-L", os.path.dirname(lib), "-l", ":" + os.path.basename(lib)])
+
+    mod = comp.load_module()
+    cls._mod = mod
+    return mod
+
+  def _get_op(self, k):
+    mod = self._make_mod()
+    from Util import camel_case_to_snake_case
+    return getattr(mod, camel_case_to_snake_case(k))
+
+  def _create(self, dtype, container=None, shared_name=None, name="array_container"):
+    """
+    :param tf.DType dtype:
+    :param str container:
+    :param str shared_name:
+    :param str name:
+    :return: handle to ArrayContainer
+    :rtype: tf.resource
+    """
+    op = self._get_op("ArrayContainerCreate")
+    return op(T=dtype, container=container, shared_name=shared_name, name=name)
+
+  def get_size(self):
+    """
+    :return: size int32 scalar
+    :rtype: tf.Tensor
+    """
+    op = self._get_op("ArrayContainerGetSize")
+    return op(handle=self.handle)
+
+  def set_size(self, size):
+    """
+    :param tf.Tensor size:
+    :return: operation
+    :rtype: tf.Operation
+    """
+    op = self._get_op("ArrayContainerSetSize")
+    return op(handle=self.handle, size=size)
+
+  def get(self, index):
+    """
+    :param tf.Tensor index: >= 0 and < size
+    :return: tensor at that index
+    :rtype: tf.Tensor
+    """
+    op = self._get_op("ArrayContainerGet")
+    return op(T=self.dtype, handle=self.handle, index=index)
+
+  def set(self, index, value):
+    """
+    :param tf.Tensor index: >= 0 and < size
+    :param tf.Tensor value:
+    :return: operation
+    :rtype: tf.Operation
+    """
+    op = self._get_op("ArrayContainerSet")
+    return op(T=self.dtype, handle=self.handle, index=index, value=value)
+
+
+class ExplicitRandomShuffleQueue(object):
+  """
+  This is intended to behave very much like tf.RandomShuffleQueue,
+  except that it's implemented by other TF native ops / data structures,
+  and you can change min_after_dequeue at runtime.
+  This means that if you have your own logic about when to end,
+  you can set min_after_dequeue=0 and dequeue all the remaining entries from the queue,
+  and then later increase min_after_dequeue again.
+  You can also start with a small min_after_dequeue and increase the number steadily.
+  The original tf.RandomShuffleQueue had the effect of a reset min_after_dequeue=0
+  after you closed the queue. However, there was no way to reopen the queue.
+  That is the whole reason this implementation exists.
+
+  One difference of this implementation is that you must call the init() op once before usage.
+
+  One way to implement this is in pure TF.
+  We need some TF container type which supports having entries of different shapes
+  (where the shape can differ where-ever we specified None).
+  We also need some TF container which we can access by index.
+  tf.TensorArray can handle that.
+
+  Another way to implement this is by multiple stateful tf.py_func which all reference this instance.
+  """
+
+  def __init__(self, capacity, min_after_dequeue=0, dtypes=None, shapes=None,
+               names=None, seed=None, shared_name=None,
+               name="explicit_random_shuffle_queue"):
+    """
+    :param int capacity:
+    :param int|tf.Tensor min_after_dequeue:
+    :param list[str|tf.DType] dtypes:
+    :param list[tuple[int|tf.Tensor|None]] shapes:
+    :param list[str]|None names:
+    :param int seed:
+    :param str|None shared_name:
+    :param str name:
+    """
+    assert dtypes
+    assert not shared_name, "not supported yet"
+    assert isinstance(dtypes, list)
+    self.dtypes = dtypes
+    if shapes is None:
+      shapes = [None] * len(dtypes)
+    assert isinstance(shapes, list)
+    self.shapes = shapes
+    assert len(shapes) == len(dtypes)
+    if names is not None:
+      assert isinstance(names, list)
+      assert len(names) == len(dtypes)
+    self.names = names
+    self._name = name
+    self._seed = seed
+
+    with tf.name_scope(self._name):
+      self._lock = Lock()
+      self._is_full_cond = Condition(lock=self._lock)
+      self._min_after_dequeue_cond = Condition(lock=self._lock)
+
+      self.capacity = capacity
+      self._min_after_dequeue = tf.Variable(
+        initial_value=min_after_dequeue, dtype=tf.int32, trainable=False, name="min_after_dequeue")
+
+      self._is_written = tf.Variable(
+        initial_value=tf.zeros(shape=(self.capacity,), dtype=tf.int8), trainable=False, name="free_mask")
+
+      with tf.control_dependencies([self._min_after_dequeue.initializer]):
+        self._init_ops = tf.group(self._is_written.initializer)
+      self._init_ops = tf.group(
+        self._init_ops, self._lock.init(), self._is_full_cond.init(), self._min_after_dequeue_cond.init())
+
+      # TODO Seems like we cannot use tf.TensorArray for what we need here...
+      # see test_TensorArray() and https://stackoverflow.com/questions/44418036/
+      self._tas = [
+        tf.TensorArray(
+          dtype=dtype, size=capacity, clear_after_read=True,
+          element_shape=shape, name="%s_TensorArray" % name)
+        for (dtype, shape, name) in zip(self.dtypes, self.shapes, self.names or ["unk"] * len(self.dtypes))]
+      self._flows = [tf.Variable(initial_value=ta.flow) for ta in self._tas]
+      self._init_ops = tf.group(self._init_ops, *[flow.initializer for flow in self._flows])
+      assert len(self._tas) == len(self.dtypes)
+      self._tas_dict = {name: ta for (name, ta) in zip(self.names, self._tas)} if self.names else None
+
+  def init(self):
+    """
+    :rtype: tf.Operation
+    """
+    return self._init_ops
+
+  def size(self):
+    """
+    :rtype: tf.Tensor
+    """
+    with reuse_name_scope("%s/size" % self._name):
+      return tf.count_nonzero(self._is_written, dtype=tf.int32)
+
+  def min_after_dequeue_read(self):
+    return copy(self._min_after_dequeue.read_value())
+
+  def min_after_dequeue_assign(self, min_after_dequeue):
+    """
+    :param tf.Tensor min_after_dequeue:
+    :rtype: tf.Operation
+    """
+    with sequential_control_dependencies([
+      lambda: self._lock.lock(),
+      lambda: self._min_after_dequeue.assign(min_after_dequeue, use_locking=True),
+      lambda: self._min_after_dequeue_cond.signal_all(),
+      lambda: self._lock.unlock()
+    ]):
+      return tf.no_op()
+
+  def _get_cur_tensor_array(self, idx):
+    ta = self._tas[idx]
+    return tf.TensorArray(dtype=ta.dtype, handle=ta.handle, flow=copy(self._flows[idx].read_value()))
+
+  def _get_cur_tas(self):
+    return [self._get_cur_tensor_array(i) for i in range(len(self._tas))]
+
+  def _tas_write(self, index, vs):
+    tas = self._get_cur_tas()
+    assert len(vs) == len(tas)
+    tas_flows = [ta.write(index, v).flow for (ta, v) in zip(tas, vs)]
+    return [tf.assign(flow_var, flow) for (flow_var, flow) in zip(self._flows, tas_flows)]
+
+  def _tas_read(self, index):
+    tas = self._get_cur_tas()
+    return [ta.read(index) for ta in tas]
+
+  def enqueue(self, v):
+    """
+    :param list[tf.Tensor]|dict[str,tf.Tensor]|tf.Tensor v:
+    :rtype: tf.Operation
+    """
+    if self.names:
+      assert isinstance(v, dict)
+      v = [v[name] for name in self.names]
+    elif not isinstance(v, list) and len(self.dtypes) == 1:
+      v = [v]
+    assert isinstance(v, list)
+    assert len(v) == len(self.dtypes)
+    with reuse_name_scope("%s/enqueue" % self._name):
+      with tf.control_dependencies([self._lock.lock()]):
+        with tf.control_dependencies([self._loop_while_full()]):
+          index = tf.cast(tf.arg_min(self._is_written, dimension=0), tf.int32)
+          with tf.control_dependencies([tf.scatter_update(self._is_written, index, 1)]):
+            with tf.control_dependencies(self._tas_write(index=index, vs=v)):
+              with tf.control_dependencies([self._maybe_signal_min_after_dequeue()]):
+                return self._lock.unlock()
+
+  def _is_full(self):
+    return tf.greater_equal(self.size(), self.capacity)
+
+  def _loop_while_full(self):
+    """
+    Called with lock held.
+    """
+    def loop_cond(last):
+      with tf.control_dependencies([last]):
+        return self._is_full()
+
+    def body(last):
+      # This gets only executed if the queue is full. We still have the lock.
+      with tf.control_dependencies([last]):
+        with tf.control_dependencies([self._is_full_cond.wait()]):
+          return tf.identity(last)
+
+    return tf.while_loop(cond=loop_cond, body=body, loop_vars=[0], parallel_iterations=1, back_prop=False)
+
+  def _have_min_after_dequeue(self):
+    return tf.greater_equal(self.size(), self._min_after_dequeue)
+
+  def _maybe_signal_min_after_dequeue(self):
+    return tf.cond(self._have_min_after_dequeue(), lambda: self._min_after_dequeue_cond.signal(), lambda: tf.no_op())
+
+  def _loop_while_not_min_after_dequeue(self):
+    """
+    Called with lock held.
+    """
+    def loop_cond(last):
+      with tf.control_dependencies([last]):
+        return tf.logical_not(self._have_min_after_dequeue())
+
+    def body(last):
+      # This gets only executed if we not have min-after-dequeue. We still have the lock.
+      with tf.control_dependencies([last]):
+        with tf.control_dependencies([self._min_after_dequeue_cond.wait()]):
+          return tf.identity(last)
+
+    return tf.while_loop(cond=loop_cond, body=body, loop_vars=[0], parallel_iterations=1, back_prop=False)
+
+  def dequeue(self):
+    with reuse_name_scope("%s/dequeue" % self._name):
+      with tf.control_dependencies([self._lock.lock()]):
+        with tf.control_dependencies([self._loop_while_not_min_after_dequeue()]):
+          free_idxs = tf.cast(tf.where(tf.equal(self._is_written, 1)), tf.int32)  # (num_true, 1)
+          free_idxs = tf.random_shuffle(free_idxs, seed=self._seed)
+          index = free_idxs[0][0]
+          vs = self._tas_read(index)
+          with tf.control_dependencies(vs):
+            with tf.control_dependencies([tf.scatter_update(self._is_written, index, 0)]):
+              with tf.control_dependencies([self._is_full_cond.signal()]):
+                with tf.control_dependencies([self._lock.unlock()]):
+                  vs = [tf.identity(v) for v in vs]
+                  if self.names:
+                    return {name: v for (name, v) in zip(self.names, vs)}
+                  elif len(vs) == 1:
+                    return vs[0]
+                  else:
+                    return vs
