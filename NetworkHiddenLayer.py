@@ -3057,18 +3057,164 @@ class CAlignmentLayer(ForwardLayer):
     return self.error_val
 
 
-class InvBacktrackLayer(_NoOpLayer):
+class InvBacktrackLayer(ForwardLayer):
   layer_class = "ibt"
 
-  def __init__(self, **kwargs):
+  def __init__(self, direction='inv', tdps=None, nstates=1, nstep=1, min_skip=1, max_skip=30, search='align', train_skips=False, train_emission=False, clip_emission=1.0,
+               base=None, coverage=0, output_z=False, reduce_output=True, blank=None, nil = None, focus='last', mode='viterbi', **kwargs):
+    assert direction == 'inv'
     target = kwargs['target'] if 'target' in kwargs else 'classes'
-    kwargs['n_out'] = kwargs['y_in'][target].n_out  # + blank
-    n_cls = kwargs['y_in'][target].n_out
+    if base is None:
+      base = []
+    kwargs['n_out'] = kwargs['y_in'][target].n_out #+ blank
+    self.n_cls = kwargs['y_in'][target].n_out
     super(InvBacktrackLayer, self).__init__(**kwargs)
     self.index = self.network.j[target]
     self.cost_scale_val = numpy.float32(1)
+    if base:
+      if base[0].layer_class == 'calign':
+        self.params = {}
+        self.W_in = base[0].W_in
+        self.b = base[0].b
+        self.z = self.get_linear_forward_output()
+      elif base[0].layer_class == 'disc':
+        self.cost_scale_val = (base[0].gen_error_val / T.sum(base[0].index,dtype='float32')) * (base[0].real_error_val / T.sum(base[0].index,dtype='float32'))
+    self.set_attr('search', search)
+    n_out = sum([s.attrs['n_out'] for s in self.sources])
+    x_in = T.concatenate([s.output for s in self.sources],axis=2)
+    self.x_in = x_in
+    self.set_attr('n_out', n_out)
+    self.set_attr('max_skip', max_skip)
+    if tdps is None:
+      tdps = [0.]
+    if len(tdps) - 2 < max_skip:
+      tdps += [tdps[-1]] * (max_skip - len(tdps) + 2)
+    for i in range(len(tdps)):
+      if i % nstep != 0:
+        tdps[i] = 1e30
+    if min_skip > 0:
+      tdps[:min_skip] = [1e30] * min_skip
+    if nil is None:
+      nil = -1
+    elif nil < 0:
+      nil = self.n_cls + nil
+    self.cost_val = T.constant(0)
+    self.error_val = T.constant(0)
+    if self.eval_flag:
+      if search == 'time':
+        self.index = self.sources[0].index
+        self.output = x_in
+        self.y_out = self.y_in[target].reshape(self.index.shape)
+        return
+    else:
+      if search == 'time':
+        search = 'align'
+    z_in = self.z.reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))
+    p_in = T.nnet.softmax(z_in).reshape(self.z.shape)
+    y_in = self.y_in[target].reshape(self.index.shape)
+    from theano.tensor.extra_ops import cpu_contiguous
+    from Inv import InvOpBackTrace
+    self.attention, self.backtrace = InvOpBackTrace(min_skip, max_skip, nstates,
+                                                    focus, nil, coverage, mode)(-T.log(p_in), cpu_contiguous(y_in),
+                                                                                 T.sum(self.sources[0].index, axis=0,
+                                                                                       dtype='int32'),
+                                                                                 T.sum(self.index, axis=0,
+                                                                                       dtype='int32'))
+    self.attention = theano.gradient.disconnected_grad(self.attention)  # NBT
+    self.backtrace = theano.gradient.disconnected_grad(self.backtrace)  # NBT
+    self.y_out = y_in.dimshuffle(0, 'x', 1).repeat(nstates, axis=1).reshape(
+      (self.index.shape[0] * nstates, self.index.shape[1]))
+    rindex = self.index.dimshuffle(0, 'x', 1).repeat(nstates, axis=1).reshape(
+      (self.index.shape[0] * nstates, self.index.shape[1]))
+    index = theano.gradient.disconnected_grad(rindex)
+    norm = numpy.float32(1. / nstates)
 
-    q_in = self.sources[0].q_in
+    x_out = T.batched_dot(x_in.dimshuffle(1, 2, 0), self.attention.dimshuffle(1, 2, 0)).dimshuffle(2, 0, 1)  # NBD
+    #z_out = T.batched_dot(self.z.dimshuffle(1, 2, 0), self.attention.dimshuffle(1, 2, 0)).dimshuffle(2, 0, 1) # NBC
+    z_out = self.b + T.dot(x_out,T.concatenate(self.W_in,axis=0))
+
+    if train_emission:
+      W_skip = self.add_param(self.create_forward_weights(n_out, 2, name="W_skip_%s" % self.name))
+      b_skip = self.add_param(self.create_bias(2, name='b_skip_%s' % self.name))
+      q_in = T.dot(x_in, W_skip) + b_skip
+      q_in = T.nnet.softmax(q_in.reshape((q_in.shape[0] * q_in.shape[1], q_in.shape[2]))).reshape(q_in.shape)
+
+
+    if reduce_output:
+      self.output = z_out if output_z else x_out
+      self.index = index
+      self.p_y_given_x = T.nnet.softmax(z_out.reshape((z_out.shape[0]*z_out.shape[1],z_out.shape[2]))).reshape(z_out.shape)
+      if train_emission: #  and not self.train_flag:
+        def encode(x_t,q_t,x_p,q_p,i_p):
+          q_c = q_t + q_p
+          write_flag = T.ge(q_c, numpy.float32(clip_emission))
+          q = T.switch(write_flag, q_c - numpy.float32(clip_emission), q_c)
+          x = x_t * q_t.dimshuffle(0,'x').repeat(x_t.shape[1],axis=1)
+          x += T.switch(write_flag.dimshuffle(0,'x').repeat(x_t.shape[1],axis=1), T.zeros_like(x_p), x_p)
+          #x = x_t #* T.cast(write_flag.dimshuffle(0, 'x').repeat(x_t.shape[1], axis=1),'float32')
+          return x, q, T.cast(write_flag,'float32')
+
+        out, _ = theano.scan(encode, sequences=[x_in,q_in[:,:,1]],
+                             outputs_info=[T.zeros_like(x_in[0]), T.zeros((q_in.shape[1],),'float32'), T.zeros((q_in.shape[1],),'float32')])
+        x, q, i = out[:3]
+        def select(x_b,i_b,L):
+          idx = (i_b > 0).nonzero()
+          len = T.cast(T.sum(i_b),'int32')
+          buf = T.zeros((L,x_b.shape[1]),'float32')
+          buf = T.set_subtensor(buf[:len],x_b[idx])
+          ind = T.zeros((L, ), 'float32')
+          ind = T.set_subtensor(ind[:len], numpy.float32(1))
+          return buf, ind
+
+        out, _ = theano.map(select, sequences=[x.dimshuffle(1,0,2), i.dimshuffle(1,0)],
+                            non_sequences=[T.max(T.sum(i,axis=0,dtype='int32'))+numpy.int32(1)])
+        self.output = out[0].dimshuffle(1,0,2)[:-1]
+        self.index = T.cast(out[1].dimshuffle(1,0),'int8')[:-1]
+    else:
+      self.output = self.z if output_z else x_in
+      self.index = self.sources[0].index
+      self.p_y_given_x = p_in
+
+    self.reduced_index = index
+
+    if output_z:
+      self.attrs['n_out'] = self.n_cls
+
+    idx = (rindex.flatten() > 0).nonzero()
+    if train_skips:
+      y_out = T.dot(self.attention, T.arange(x_in.shape[0],dtype='float32')) # NB
+      y_out = T.concatenate([T.zeros_like(y_out[:1]), y_out],axis=0) # (N+1)B
+      y_out = T.cast(T.round(y_out[1:] - y_out[:-1]) * T.cast(self.index,'float32'),'int32') # NB
+
+      W_skip = self.add_param(self.create_forward_weights(n_out, max_skip, name="W_skip_%s" % self.name))
+      b_skip = self.add_param(self.create_bias(max_skip, name='b_skip_%s' % self.name))
+      z_out = T.dot(x_out, W_skip) + b_skip
+      self.q_in = T.nnet.softmax(self.z.reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))).reshape(self.z.shape)
+    elif train_emission:
+      idx = (self.sources[0].index.flatten() > 0).nonzero()
+      norm = T.sum(self.network.j[target],dtype='float32') / T.sum(self.sources[0].index,dtype='float32')
+      #W_skip = self.add_param(self.create_forward_weights(n_out, 2, name="W_skip_%s" % self.name))
+      #b_skip = self.add_param(self.create_bias(2, name='b_skip_%s' % self.name))
+      y_out = T.sum(self.attention,axis=0).dimshuffle(1,0)
+
+      #y_out = y_out / y_out.sum(axis=0,keepdims=True)
+      y_out = y_out.flatten().dimshuffle(0, 'x') # (TB)
+      y_out = T.concatenate([numpy.float32(1) - y_out, y_out], axis=1) # (TB)2
+      #z_out = T.dot(x_in, W_skip) + b_skip # TB2
+      #z_out = T.nnet.softmax(z_out.reshape((z_out.shape[0] * z_out.shape[1], z_out.shape[2]))).reshape(z_out.shape)
+      #self.output *= z_out[:, :, 1].dimshuffle(0, 1, 'x').repeat(self.output.shape[2], axis=2)
+      z_out = q_in.reshape((q_in.shape[0] * q_in.shape[1], q_in.shape[2])) # (TB)2
+      self.cost_val = norm * -T.sum(y_out[idx] * T.log(z_out[idx]))
+      self.error_val = norm * T.sum(T.ge(T.sqr(z_out[idx,1]-y_out[idx,1]),numpy.float32(1./self.n_cls)))
+      return
+    else:
+      y_out = self.y_out
+
+    y_out = y_out.flatten()
+    z_out = z_out.reshape((z_out.shape[0] * z_out.shape[1], z_out.shape[2]))
+    nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
+    self.cost_val = norm * T.sum(nll)
+    self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
 
   def cost(self):
     return self.cost_val * self.cost_scale_val, None
@@ -3645,3 +3791,89 @@ class RNNBlockLayer(ForwardLayer):
 
 from NativeOp import FastBaumWelchOp
 from SprintErrorSignals import sprint_loss_and_error_signal, SprintAlignmentAutomataOp
+
+class SequenceValue(ForwardLayer):
+  layer_class = 'seqval'
+
+  def __init__(self, begin=24, **kwargs):
+    kwargs['n_out'] = 3
+    super(SequenceValue, self).__init__(**kwargs)
+    self.params = {}
+    self.error_val = T.constant(0)
+    self.known_grads = {}
+    if not 'target' in self.attrs:
+      self.attrs['target'] = 'classes'
+
+    z = self.get_linear_forward_output()
+    p = T.nnet.softmax(z.reshape((z.shape[0] * z.shape[1],z.shape[2]))).reshape(z.shape)
+    r = self.network.y[self.attrs['target']].reshape((p.shape[0],p.shape[1],3))
+    p = p[begin:]
+    r = r[begin:]
+    self.index = self.index[begin:]
+    v = T.alloc(numpy.cast[theano.config.floatX](1), r.shape[1], 2)
+
+    def accumulate(p, r, vp):
+      vc = p[:,1:] * vp
+      ac = T.stack([vc[:,1] * r[:,0], vc[:,0] / r[:,0]]).dimshuffle(1,0)
+      return vp - vc + ac
+
+    c, _ = theano.reduce(accumulate,sequences=[p,r],outputs_info=[v])
+    c = (c[:,0] / r[-1,:,0] + c[:,1] - numpy.float32(1) / r[-1,:,0] - numpy.float32(1)) * T.sum(self.index,axis=0,dtype='float32')
+    m = T.sum(self.index,dtype='float32')
+    self.error_val = T.sum(c)
+    self.cost_val = T.sum(T.exp(-c / m) * m) / T.cast(self.index.shape[1],'float32')
+    self.p_y_given_y = p
+    self.output = p
+
+  def cost(self):
+    return self.cost_val, self.known_grads
+
+  #def cost_scale(self):
+  #  return self.cost_scale_val * T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
+
+  def errors(self):
+    return self.error_val
+
+
+class SignalValue(ForwardLayer):
+  layer_class = 'sigval'
+
+  def __init__(self, begin=24, **kwargs):
+    kwargs['n_out'] = 1
+    super(SignalValue, self).__init__(**kwargs)
+    self.params = {}
+    self.error_val = T.constant(0)
+    self.known_grads = {}
+    if not 'target' in self.attrs:
+      self.attrs['target'] = 'classes'
+
+    z = self.get_linear_forward_output()
+    p = T.nnet.sigmoid(z)
+    r = self.network.y[self.attrs['target']].reshape((p.shape[0],p.shape[1],3))
+    p = p[begin:,:,0]
+    r = r[begin:,:,0]
+    self.index = self.index[begin:]
+    v = T.alloc(numpy.cast[theano.config.floatX](1), r.shape[1], 2)
+
+    def accumulate(p, r, vp):
+      vc = T.stack([p,T.constant(1)-p]).dimshuffle(1,0) * vp
+      ac = T.stack([vc[:,1] * r, vc[:,0] / r]).dimshuffle(1,0)
+      return vp - vc + ac
+
+    c, _ = theano.reduce(accumulate,sequences=[p,r],outputs_info=[v])
+    c = (c[:,0] / r[-1] + c[:,1] - numpy.float32(1) / r[-1] - numpy.float32(1)) * T.sum(self.index,axis=0,dtype='float32')
+    m = T.sum(self.index,dtype='float32')
+    self.error_val = T.sum(c)
+    self.cost_val = T.sum(T.exp(-c / m) * m) / T.cast(self.index.shape[1],'float32')
+    self.p_y_given_y = p
+    self.output = p
+
+  def cost(self):
+    return self.cost_val, self.known_grads
+
+  #def cost_scale(self):
+  #  return self.cost_scale_val * T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
+
+  def errors(self):
+    return self.error_val
+

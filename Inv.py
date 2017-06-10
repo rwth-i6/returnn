@@ -96,7 +96,7 @@ class InvOp(theano.Op):
   #def c_code_cache_version(self):
   #  return (1.01,)
 
-class InvOpFull(theano.Op):
+class InvOpBackTrace(theano.Op):
   __props__ = ('min_skip', 'max_skip', 'nstates', 'focus', 'mode')
 
   def __eq__(self, other):
@@ -108,12 +108,14 @@ class InvOpFull(theano.Op):
   def __str__(self):
     return self.__class__.__name__
 
-  def __init__(self, min_skip, max_skip, nstates, focus='last', mode='viterbi'):
+  def __init__(self, min_skip, max_skip, nstates, focus='last', nil=-1, coverage=0, mode='viterbi'):
     self.min_skip = min_skip
     self.max_skip = max_skip
     self.focus = ['last', 'max'].index(focus)
     self.nstates = nstates
     self.mode = ['viterbi', 'full'].index(mode)
+    self.nil = nil
+    self.coverage = coverage
 
   def make_node(self, x, y, len_x, len_y):
     x = theano.tensor.as_tensor_variable(x)
@@ -127,7 +129,7 @@ class InvOpFull(theano.Op):
     assert len_y.ndim == 1  # vector of seqs lengths
     assert len_y.dtype == "int32"
 
-    return theano.Apply(self, [x, y, len_x, len_y], [T.ftensor3()])
+    return theano.Apply(self, [x, y, len_x, len_y], [T.ftensor3(),T.itensor3()])
 
   def c_support_code(self):
     src = ""
@@ -144,21 +146,27 @@ class InvOpFull(theano.Op):
   def c_code(self, node, name, inp, out, sub):
     x, y, len_x, len_y = inp
     attention = out[0] # (N*S,B,T)
+    backtrace = out[1]  # (N*S,B,T)
     nstates = self.nstates
     min_skip = self.min_skip
     max_skip = self.max_skip
     mode = self.mode
     focus = self.focus
+    nil=self.nil
+    coverage=self.coverage
     fail = sub['fail']
     return """
             Py_XDECREF(%(attention)s);
+            Py_XDECREF(%(backtrace)s);
             npy_intp ydims[] = {PyArray_DIM(%(y)s,0) * %(nstates)s, PyArray_DIM(%(y)s,1), PyArray_DIM(%(x)s,0)};
             //npy_intp ydims[] = {PyArray_DIM(%(x)s,2), PyArray_DIM(%(y)s,1), PyArray_DIM(%(x)s,0)};
             %(attention)s = (PyArrayObject*) PyArray_Zeros(PyArray_NDIM(%(x)s), ydims, PyArray_DescrFromType(NPY_FLOAT32), 0);
+            %(backtrace)s = (PyArrayObject*) PyArray_Zeros(PyArray_NDIM(%(x)s), ydims, PyArray_DescrFromType(NPY_INT32), 0);
             if (!%(attention)s)
                 %(fail)s;
             {
               ArrayF attentionWr(%(attention)s);
+              ArrayI backtraceWr(%(backtrace)s);
               ArrayF xWr(%(x)s);
               ArrayI yWr(%(y)s);
               CArrayI len_xWr(%(len_x)s);
@@ -170,7 +178,9 @@ class InvOpFull(theano.Op):
               {
                   Inv cls;
                   SArrayF attentionSWr(attentionWr, 1, i);
-                  cls.full(CSArrayF(xWr, 1, i), CSArrayI(yWr, 1, i), len_xWr(i), len_yWr(i), %(nstates)s, %(min_skip)s, %(max_skip)s, %(focus)s, attentionSWr);
+                  SArrayI backtraceSWr(backtraceWr, 1, i);
+                  cls.viterbi_backtrace(CSArrayF(xWr, 1, i), CSArrayI(yWr, 1, i), len_xWr(i), len_yWr(i), %(nstates)s, 
+                                %(min_skip)s, %(max_skip)s, %(focus)s, %(nil)s, %(coverage)s, attentionSWr, backtraceSWr);
               }
             }
         """ % locals()

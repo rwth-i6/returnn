@@ -611,7 +611,7 @@ class Engine:
           if not hash in workers:
             workers[hash] = ClassificationTaskThread(network, devices, data, batches)
             workers[hash].json_params = params
-            print >> log.v3, "worker started:", hash
+            print("worker started:", hash, file=log.v3)
           ret['result'] = { 'hash' : hash }
       return ret
 
@@ -686,7 +686,7 @@ class Engine:
 
     port = config.int('daemon.port', 3333)
     httpd = ThreadingServer(("", port), RequestHandler)
-    print >> log.v3, "httpd listening on port", port
+    print("httpd listening on port", port, file=log.v3)
     try:
       from jsonrpclib.SimpleJSONRPCServer import SimpleJSONRPCServer # https://pypi.python.org/pypi/jsonrpclib/0.1.6
     except Exception:

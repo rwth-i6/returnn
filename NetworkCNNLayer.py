@@ -116,7 +116,7 @@ class CNN(_NoOpLayer):
         if d_row == -1:
           d_row = dimension
         else:
-          stack_size = dimension
+          stack_size = dimension / d_row
       elif d_row == -1:
         d_row = int(sqrt(dimension))
 
@@ -426,7 +426,7 @@ class ConcatConv(CNN):
     this class is for the CNN that processes an entire line image as the input by concatenated several frames by time axis.
   '''
 
-  def __init__(self, **kwargs):
+  def __init__(self, padding=False, **kwargs):
     super(ConcatConv, self).__init__(**kwargs)
 
     inputs = T.concatenate([s.output for s in self.sources], axis=2)  # (time, batch, input-dim = row * features)
@@ -444,7 +444,7 @@ class ConcatConv(CNN):
       self.input = inputs2.dimshuffle(1, 3, 2, 0)  # (batch, stack_size, row, time)
     self.input.name = "conv_layer_input_final"
 
-    if self.pool_params[0][1] > 1:
+    if self.pool_params[0][1] > 1 and padding:
       xp = T.constant(self.pool_params[0][1], 'int32')
       self.input = T.concatenate([self.input, T.zeros((batch, self.filter_shape[1], self.input.shape[2],
                                                        xp - T.mod(self.input.shape[3], xp)), 'float32')], axis=3)
