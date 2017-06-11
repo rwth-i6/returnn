@@ -3916,7 +3916,8 @@ class SignalValue(ForwardLayer):
 
     c, _ = theano.reduce(accumulate,sequences=[p,r,q],outputs_info=[v])
     acc = (c[:,0] / r[-1] + c[:,1] - numpy.float32(1) / r[-1] - numpy.float32(1)) * T.sum(self.index,axis=0,dtype='float32')
-    acc += (c[:,2] / q[-1] + c[:,3] - numpy.float32(1) / q[-1] - numpy.float32(1)) * T.sum(self.index,axis=0,dtype='float32')
+    quot = q[-1] / r[-1]
+    acc += (c[:,2] / r[-1] + c[:,3] * quot - numpy.float32(1) / r[-1] - quot) * T.sum(self.index,axis=0,dtype='float32')
     m = T.sum(self.index,dtype='float32')
     self.error_val = T.sum(acc)
     self.cost_val = numpy.float32(0.5) * T.sum(T.exp(-acc / m) * m) / T.cast(self.index.shape[1],'float32')
