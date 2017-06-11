@@ -3890,7 +3890,7 @@ class SignalValue(ForwardLayer):
   layer_class = 'sigval'
 
   def __init__(self, begin=24, **kwargs):
-    kwargs['n_out'] = 1
+    kwargs['n_out'] = 2
     super(SignalValue, self).__init__(**kwargs)
     self.params = {}
     self.error_val = T.constant(0)
@@ -3902,20 +3902,24 @@ class SignalValue(ForwardLayer):
     p = T.nnet.sigmoid(z)
     r = self.network.y[self.attrs['target']].reshape((p.shape[0],p.shape[1],3))
     p = p[begin:,:,0]
+    q = r[begin:,:,1]
     r = r[begin:,:,0]
     self.index = self.index[begin:]
-    v = T.alloc(numpy.cast[theano.config.floatX](1), r.shape[1], 2)
+    v = T.alloc(numpy.cast[theano.config.floatX](1), r.shape[1], 4)
 
-    def accumulate(p, r, vp):
-      vc = T.stack([p,T.constant(1)-p]).dimshuffle(1,0) * vp
+    def accumulate(p, r, q, vp):
+      vc = T.stack([p,T.constant(1)-p]).dimshuffle(1,0) * vp[:,:2]
       ac = T.stack([vc[:,1] * r, vc[:,0] / r]).dimshuffle(1,0)
-      return vp - vc + ac
+      vq = T.stack([q,T.constant(1)-q]).dimshuffle(1,0) * vp[:,2:]
+      aq = T.stack([vq[:,1] * q, vq[:,0] / q]).dimshuffle(1,0)
+      return T.concatenate([vp[:,:2] - vc + ac,vp[:,2:] - vq + aq],axis=1)
 
-    c, _ = theano.reduce(accumulate,sequences=[p,r],outputs_info=[v])
-    c = (c[:,0] / r[-1] + c[:,1] - numpy.float32(1) / r[-1] - numpy.float32(1)) * T.sum(self.index,axis=0,dtype='float32')
+    c, _ = theano.reduce(accumulate,sequences=[p,r,q],outputs_info=[v])
+    acc = (c[:,0] / r[-1] + c[:,1] - numpy.float32(1) / r[-1] - numpy.float32(1)) * T.sum(self.index,axis=0,dtype='float32')
+    acc += (c[:,2] / q[-1] + c[:,3] - numpy.float32(1) / q[-1] - numpy.float32(1)) * T.sum(self.index,axis=0,dtype='float32')
     m = T.sum(self.index,dtype='float32')
-    self.error_val = T.sum(c)
-    self.cost_val = T.sum(T.exp(-c / m) * m) / T.cast(self.index.shape[1],'float32')
+    self.error_val = T.sum(acc)
+    self.cost_val = numpy.float32(0.5) * T.sum(T.exp(-acc / m) * m) / T.cast(self.index.shape[1],'float32')
     self.p_y_given_y = p
     self.output = p
 
