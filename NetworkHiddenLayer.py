@@ -3889,8 +3889,8 @@ class SignalValue(ForwardLayer):
     self.error_val = T.sum(c) #* T.sum(self.index,axis=0,dtype='float32'))
     #self.cost_val = T.sum(T.exp(-c) * T.sum(self.index,axis=0,dtype='float32')) / T.cast(self.index.shape[1],'float32')
     self.cost_val = T.sum(T.sum(self.index,axis=0,dtype='float32')**2 - c/T.sum(self.index,axis=0,dtype='float32')**2) # T.sum(T.exp(-c) * m)
-    self.p_y_given_y = p
-    self.output = p
+    self.p_y_given_y = p.dimshuffle(0,1,'x')
+    self.output = p.dimshuffle(0,1,'x')
 
   def cost(self):
     return self.cost_val, self.known_grads

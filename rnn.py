@@ -35,7 +35,10 @@ from HDFDataset import HDFDataset
 from Debug import initIPythonKernel, initBetterExchook, initFaulthandler, initCudaNotInMainProcCheck
 from Util import initThreadJoinHack, custom_exec, describe_crnn_version, describe_theano_version, \
   describe_tensorflow_version, BackendEngine, get_tensorflow_version_tuple
-import Server
+try:
+  import Server
+except ImportError:
+  pass
 
 
 config = None; """ :type: Config """
@@ -340,7 +343,7 @@ def init(configFilename=None, commandLineOptions=(), config_updates=None, extra_
   if needData():
     initData()
   printTaskProperties(devices)
-  if config.value('task','train') == 'daemon':
+  if config.value('task','train') == 'server':
     server = Server(devices=devices)
   else:
     initEngine(devices)
@@ -434,9 +437,8 @@ def executeMainTask():
     engine.init_network_from_config(config)
     engine.classify(engine.devices[0], eval_data, label_file)
   elif task == "daemon":
-    #engine.init_network_from_config(config)
-    #engine.daemon(config)
-    pass
+    engine.init_network_from_config(config)
+    engine.daemon(config)
   elif task == "nop":
     print("Task: No-operation", file=log.v1)
   else:
