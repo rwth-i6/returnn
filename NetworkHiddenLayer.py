@@ -3843,12 +3843,12 @@ class RNNBlockLayer(ForwardLayer):
 from NativeOp import FastBaumWelchOp
 from SprintErrorSignals import sprint_loss_and_error_signal, SprintAlignmentAutomataOp
 
-class SequenceValue(ForwardLayer):
-  layer_class = 'seqval'
+class SignalValue(ForwardLayer):
+  layer_class = 'sigval'
 
-  def __init__(self, begin=24, **kwargs):
-    kwargs['n_out'] = 3
-    super(SequenceValue, self).__init__(**kwargs)
+  def __init__(self, begin=24, sidx=0, **kwargs):
+    kwargs['n_out'] = 1
+    super(SignalValue, self).__init__(**kwargs)
     self.params = {}
     self.error_val = T.constant(0)
     self.known_grads = {}
@@ -3856,23 +3856,39 @@ class SequenceValue(ForwardLayer):
       self.attrs['target'] = 'classes'
 
     z = self.get_linear_forward_output()
-    p = T.nnet.softmax(z.reshape((z.shape[0] * z.shape[1],z.shape[2]))).reshape(z.shape)
+    p = T.nnet.sigmoid(z)
     r = self.network.y[self.attrs['target']].reshape((p.shape[0],p.shape[1],3))
-    p = p[begin:]
-    r = r[begin:]
+    p = p[begin:,:,0]
+    r = r[begin:,:,sidx]
     self.index = self.index[begin:]
-    v = T.alloc(numpy.cast[theano.config.floatX](1), r.shape[1], 2)
+    #v = T.alloc(numpy.cast[theano.config.floatX](1), r.shape[1], 2)
+    #v = T.set_subtensor(v[:,1], v[:,1] / r[0])
+    #v = print_to_file('v',v)
+    step = numpy.float32(1) / T.sum(self.index,axis=0,dtype='float32')
+    def accumulate(p, r, bp, ep):
+      q = T.constant(1)-p
+      bp += step
+      ep += step / r
+      bd, ed = p * bp / numpy.float32(2), q * ep / numpy.float32(2)
+      ba, ea = ed / r, bd * r
+      return bp - bd + ba, ep - ed + ea
+      #vc = T.stack([p,T.constant(1)-p]).dimshuffle(1,0)[::-1] * vp * numpy.float32(0.5)
+      #ac = T.stack([vc[:,1] * r, vc[:,0] / r]).dimshuffle(1,0)
+      #return vp - vc + ac
 
-    def accumulate(p, r, vp):
-      vc = p[:,1:] * vp
-      ac = T.stack([vc[:,1] * r[:,0], vc[:,0] / r[:,0]]).dimshuffle(1,0)
-      return vp - vc + ac
+    c, _ = theano.scan(accumulate,sequences=[p,r],
+                       outputs_info=[T.alloc(numpy.cast[theano.config.floatX](0), r.shape[1]),
+                                     T.alloc(numpy.cast[theano.config.floatX](0), r.shape[1])])
+    c = T.mean(c[0] + c[1] * r - step / r - step, axis=0)
+    #c = c #* T.sum(self.index,axis=0,dtype='float32')
+    #c, _ = theano.scan(accumulate,sequences=[p,r],outputs_info=[v])
+    #c = T.mean(c[:,:,0] + c[:,:,1] * r, axis=0) - T.mean(r,axis=0) - T.constant(1, 'float32')
+    #c = c
 
-    c, _ = theano.reduce(accumulate,sequences=[p,r],outputs_info=[v])
-    c = (c[:,0] / r[-1,:,0] + c[:,1] - numpy.float32(1) / r[-1,:,0] - numpy.float32(1)) * T.sum(self.index,axis=0,dtype='float32')
-    m = T.sum(self.index,dtype='float32')
-    self.error_val = T.sum(c)
-    self.cost_val = T.sum(T.exp(-c / m) * m) / T.cast(self.index.shape[1],'float32')
+    m = T.sum(self.index,dtype='float32',axis=0)
+    self.error_val = T.sum(c) #* T.sum(self.index,axis=0,dtype='float32'))
+    #self.cost_val = T.sum(T.exp(-c) * T.sum(self.index,axis=0,dtype='float32')) / T.cast(self.index.shape[1],'float32')
+    self.cost_val = T.sum(T.sum(self.index,axis=0,dtype='float32')**2 - c/T.sum(self.index,axis=0,dtype='float32')**2) # T.sum(T.exp(-c) * m)
     self.p_y_given_y = p
     self.output = p
 
@@ -3886,12 +3902,12 @@ class SequenceValue(ForwardLayer):
     return self.error_val
 
 
-class SignalValue(ForwardLayer):
-  layer_class = 'sigval'
+class DSignalValue(ForwardLayer):
+  layer_class = 'dsigval'
 
   def __init__(self, begin=24, **kwargs):
     kwargs['n_out'] = 2
-    super(SignalValue, self).__init__(**kwargs)
+    super(DSignalValue, self).__init__(**kwargs)
     self.params = {}
     self.error_val = T.constant(0)
     self.known_grads = {}
