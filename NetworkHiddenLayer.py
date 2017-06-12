@@ -278,7 +278,7 @@ class DownsampleLayer(_NoOpLayer):
     self.set_attr("factor", factor)
     z, z_dim = concat_sources(self.sources, unsparse=False)
     target = self.attrs.get('target','classes')
-    self.y_out = kwargs['y_in'][target] if base is None else base[0].y_out
+    self.y_out = self.network.y[target] if base is None else base[0].y_out
     self.index_out =  self.network.j[target] if base is None else base[0].index_out
     n_out = z_dim
     import theano.ifelse
