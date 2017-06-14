@@ -52,8 +52,8 @@ def test_DataProvider():
   batch.add_frames(seq_idx=seq_idx, seq_start_frame=0, length=dataset.get_seq_length(seq_idx))
   batch_generator = iter([batch])
   batches = BatchSetGenerator(dataset, generator=batch_generator)
-  from TFDataPipeline import DataProvider
-  data_provider = DataProvider(
+  from TFDataPipeline import FeedDictDataProvider
+  data_provider = FeedDictDataProvider(
     tf_session=session, extern_data=extern_data,
     data_keys=["data", "classes"],
     dataset=dataset, batches=batches)

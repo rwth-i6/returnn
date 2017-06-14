@@ -1,7 +1,12 @@
 #!/usr/bin/env python2.7
 
 """
+Main entry point
+================
+
 This is the main entry point. You can execute this file.
+See :func:`rnn.initConfig` for some arguments, or just run ``./rnn.py --help``.
+See :ref:`tech_overview` for a technical overview.
 """
 
 from __future__ import print_function
@@ -30,6 +35,10 @@ from HDFDataset import HDFDataset
 from Debug import initIPythonKernel, initBetterExchook, initFaulthandler, initCudaNotInMainProcCheck
 from Util import initThreadJoinHack, custom_exec, describe_crnn_version, describe_theano_version, \
   describe_tensorflow_version, BackendEngine, get_tensorflow_version_tuple
+try:
+  import Server
+except ImportError:
+  pass
 
 
 config = None; """ :type: Config """
@@ -38,6 +47,7 @@ train_data = None; """ :type: Dataset """
 dev_data = None; """ :type: Dataset """
 eval_data = None; """ :type: Dataset """
 quit = False
+server = None; """:type: Server"""
 
 
 def initConfig(configFilename=None, commandLineOptions=()):
@@ -333,7 +343,11 @@ def init(configFilename=None, commandLineOptions=(), config_updates=None, extra_
   if needData():
     initData()
   printTaskProperties(devices)
-  initEngine(devices)
+  if config.value('task','train') == 'server':
+    server = Server(devices=devices)
+  else:
+    initEngine(devices)
+
 
 
 def finalize():

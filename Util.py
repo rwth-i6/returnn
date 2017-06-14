@@ -874,6 +874,14 @@ class NumbersDict:
   def has_values(self):
     return bool(self.dict) or self.value is not None
 
+  def unary_op(self, op):
+    res = NumbersDict()
+    if self.value is not None:
+      res.value = op(self.value)
+    for k, v in self.dict.items():
+      res.dict[k] = op(v)
+    return res
+
   @classmethod
   def bin_op_scalar_optional(cls, self, other, zero, op):
     if self is None and other is None:
@@ -931,6 +939,14 @@ class NumbersDict:
 
   def __idiv__(self, other):
     return self.bin_op(self, other, op=lambda a, b: a / b, zero=1, result=self)
+
+  def __neg__(self):
+    return self.unary_op(op=lambda a: -a)
+
+  def __bool__(self):
+    return any(self.values())
+
+  __nonzero__ = __bool__  # Python 2
 
   def elem_eq(self, other, result_with_default=False):
     """
@@ -1329,7 +1345,7 @@ def get_temp_dir():
 class LockFile(object):
   def __init__(self, directory, name="lock_file", lock_timeout=1 * 60 * 60):
     """
-    :param str directory: 
+    :param str directory:
     :param int|float lock_timeout: in seconds
     """
     self.directory = directory
@@ -1402,7 +1418,7 @@ class LockFile(object):
 
 def str_is_number(s):
   """
-  :param str s: e.g. "1", ".3" or "x" 
+  :param str s: e.g. "1", ".3" or "x"
   :return: whether s can be casted to float or int
   :rtype: bool
   """
@@ -1424,9 +1440,9 @@ def dict_zip(keys, values):
 
 
 def parse_ld_conf_file(fn):
-  """  
+  """
   Via https://github.com/albertz/system-tools/blob/master/bin/find-lib-in-path.py.
-  :param str fn: e.g. "/etc/ld.so.conf" 
+  :param str fn: e.g. "/etc/ld.so.conf"
   :return: list of paths for libs
   :rtype: list[str]
   """
@@ -1453,11 +1469,11 @@ def get_ld_paths():
   Short version, not specific to an executable, in this order:
   - LD_LIBRARY_PATH
   - /etc/ld.so.cache (instead we will parse /etc/ld.so.conf)
-  - /lib, /usr/lib (or maybe /lib64, /usr/lib64)  
+  - /lib, /usr/lib (or maybe /lib64, /usr/lib64)
   Via https://github.com/albertz/system-tools/blob/master/bin/find-lib-in-path.py.
-  
+
   :rtype: list[str]
-  :return: list of paths to search for libs (*.so files) 
+  :return: list of paths to search for libs (*.so files)
   """
   paths = []
   if "LD_LIBRARY_PATH" in os.environ:
@@ -1503,10 +1519,20 @@ def try_get_caller_name(depth=1, fallback=None):
   :param int depth:
   :param str|None fallback: this is returned if we fail for some reason
   :rtype: str|None
-  :return: caller function name. this is just for debugging 
+  :return: caller function name. this is just for debugging
   """
   try:
     frame = sys._getframe(depth + 1)  # one more to count ourselves
     return frame.f_code.co_name
   except Exception:
     return fallback
+
+
+def camel_case_to_snake_case(name):
+  """
+  :param str name: e.g. "CamelCase"
+  :return: e.g. "camel_case"
+  :rtype: str
+  """
+  s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
+  return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()

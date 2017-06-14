@@ -10,7 +10,7 @@ def relu(z):
   # https://github.com/Lasagne/Lasagne/pull/163#issuecomment-81806482
   return (z + abs(z)) / 2.0
 
-def clipped01lu(z):
+def clipped01lu(z):    
   """
   0 for x <= 0
   x for 0 <= x <= 1

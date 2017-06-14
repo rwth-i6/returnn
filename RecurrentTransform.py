@@ -641,7 +641,7 @@ class AttentionAlign(AttentionBase):
   def create_vars(self):
     super(AttentionAlign, self).create_vars()
     assert len(self.base) == 1
-    assert self.base[0].layer_class.endswith('align')
+    #assert self.base[0].layer_class.endswith('align')
     max_skip = self.base[0].attrs['max_skip']
     self.B = self.add_input(self.base[0].output, 'B')
     l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + max_skip)
@@ -676,7 +676,7 @@ class AttentionAlign(AttentionBase):
     n = T.cast(self.ns, 'int32')
     t = T.dot(T.nnet.softmax(z), T.arange(self.base[0].attrs['max_skip'],dtype='float32')) #+ numpy.float32(1)
     #t = T.cast(T.argmax(z,axis=1), 'float32' )
-    t = smooth * self.y_t[n,T.arange(self.y_t.shape[1])] + (numpy.float32(1) - smooth) * t
+    t = smooth * self.y_t[n,T.arange(self.y_t.shape[1]),T.cast(self.t,'int32')] + (numpy.float32(1) - smooth) * t
     pos = T.cast(T.ceil(self.t), 'int32')
     inp = T.dot(self.B[pos,T.arange(pos.shape[0])], self.W_att_in)
     #updates[self.cost_sum] = T.sum(nll,dtype='float32').dimshuffle('x').repeat(1,axis=0)
@@ -695,11 +695,15 @@ class AttentionInverted(AttentionBase):
     assert len(self.base) == 1
     assert self.base[0].layer_class.endswith('align')
     align = self.base[0]
+    dir = -self.layer.attrs['direction']
     self.max_skip = numpy.int32(self.layer.base[0].attrs['max_skip'])
-    p_in = T.concatenate([T.zeros_like(align.p_y_given_x[:self.max_skip]), align.p_y_given_x], axis=0)
-    x_in = T.concatenate([T.zeros_like(align.x_in[:self.max_skip]), align.x_in], axis=0)
+    p_in = T.concatenate([T.zeros_like(align.p_y_given_x[:self.max_skip]), align.p_y_given_x[::dir]], axis=0)
+    x_in = T.concatenate([T.zeros_like(align.x_in[:self.max_skip]), align.x_in[::dir]], axis=0)
+    a_in = T.concatenate([T.zeros_like(align.attention.dimshuffle(2,1,0)[:self.max_skip]),
+                          align.attention.dimshuffle(2,1,0)[::dir]], axis=0)
     self.P = self.add_input(p_in, 'P')
     self.X = self.add_input(x_in, 'X')
+    self.A = self.add_input(a_in, 'A')
     l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + self.layer.unit.n_in)
     values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l,
                                                   size=(self.layer.attrs['n_out'], align.n_cls)),
@@ -713,31 +717,45 @@ class AttentionInverted(AttentionBase):
     self.W_in = self.add_param(self.layer.shared(value=values, borrow=True, name="W_in"), name="W_in")
 
     lens = T.sum(self.base[0].index,axis=0,dtype='float32')
-    self.t = self.add_state_var(lens - numpy.float32(1), "t")
+    self.t = self.add_state_var(lens - numpy.float32(self.max_skip), "t")
     self.max_skip = self.add_var(T.zeros((1,),'float32') + numpy.float32(self.max_skip),'max_skip')
-    #nlens = T.sum(self.layer.index,axis=0,dtype='float32')
-    #self.ns = self.add_state_var(nlens - numpy.float32(1), "ns")
-    #self.cost_sum = self.add_state_var(T.zeros((1,), 'float32'), "cost_sum")
-
+    nlens = T.sum(self.layer.index,axis=0,dtype='float32')
+    self.ns = self.add_state_var(nlens - numpy.float32(1), "ns")
 
   def attend(self, y_p):
     inp, updates = 0, {}
     c = T.nnet.softmax(T.dot(y_p, self.W_cls) + self.b_cls) # BC
+    n = T.cast(self.ns - numpy.float32(1),'int32')[0]
     tau = T.cast(self.t,'int32')[0]
     max_skip = T.cast(self.max_skip, 'int32')[0]
     #max_skip = numpy.int32(self.layer.base[0].attrs['max_skip'])
     #max_skip = 12
     p = self.P[tau:tau + max_skip] # MBC
     x = self.X[tau:tau + max_skip]
-    e = T.exp(-T.sum(c.dimshuffle('x',0,1).repeat(p.shape[0],axis=0) * p, axis=2)) # MB
+    a = self.A[tau:tau + max_skip,T.arange(x.shape[1]),n] # MB
+    a = self.A[:,T.arange(x.shape[1]),n]
+    e = T.exp(T.sum(c.dimshuffle('x',0,1).repeat(p.shape[0],axis=0) * p, axis=2)) # MB
     e = e / e.sum(axis=0,keepdims=True)
-    e = e.dimshuffle(0,1,'x').repeat(p.shape[2],axis=2)
-    q = T.exp(T.max(p * e, axis=2))
+
+    w = a
+
+    #e = e.dimshuffle(0,1,'x').repeat(p.shape[2],axis=2)
+    q = T.exp(p.max(axis=2) * w)
     q = q / q.sum(axis=0,keepdims=True)
-    updates[self.t] = T.clip(self.t - self.max_skip[0] + T.cast(q.argmax(axis=0),'float32'),numpy.float32(0),self.t)
-    inp = T.dot(x[q.argmax(axis=0),T.arange(x.shape[1])], self.W_in)
+
+    q = w
+    from TheanoUtil import print_to_file
+    #q = print_to_file('q', q)
+    dt = q.argmax(axis=0) - T.cast(self.t,'int32') #+ max_skip
+
+    pos = T.argmax(self.A[:,T.arange(x.shape[1]),n],axis=0)
+    inp = T.dot(self.X[pos,T.arange(x.shape[1])], self.W_in)
     #q = q.dimshuffle(0,1,'x').repeat(x.shape[2],axis=2)
     #inp = T.dot(T.sum(x * q, axis=0), self.W_in)
+    #updates[self.t] = T.maximum(self.t - self.max_skip[0] + T.cast(dt, 'float32'), T.zeros_like(self.t))
+    n = T.cast(self.ns - numpy.float32(1), 'int32')[0]
+    updates[self.t] = T.cast(T.argmax(self.A[:,T.arange(x.shape[1]),n],axis=0),'float32')
+    updates[self.ns] = self.ns - numpy.float32(1)
     return inp, updates
 
 

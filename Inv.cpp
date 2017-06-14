@@ -209,6 +209,200 @@ public:
         }
     }
 
+    void viterbi_backtrace(CSArrayF& activs, CSArrayI& labellings,
+    int T, int N, int S, int min_skip, int max_skip, int focus, int nil, int coverage, SArrayF& attention, SArrayI& bt)
+    {
+        int M = max_skip;
+        if(AUTO_INCREASE_SKIP)
+        {
+          if(M > T - S)
+          {
+              M = T - S + 1;
+              if(M < 1)
+              {
+                 M = 1;
+              }
+          }
+          if(min_skip > M)
+          {
+              min_skip = M;
+          }
+          if(M == 0)
+          {
+            M = T / (N * S) + min_skip + 1;
+            min_skip = M - 2 * min_skip;
+          }
+          else if((T - M) / (N * S) > M)
+          {
+              M = (T - M) / (N * S) + 1;
+              static int max_skip_warning_limit = 0;
+              if(VERBOSE && M > max_skip_warning_limit)
+              {
+                  max_skip_warning_limit = M;
+                  cout << "warning: increasing max skip to " << M << " in order to avoid empty alignment" << endl;
+              }
+          }
+        }
+
+        fwd_.resize(N * S, T + M - 1);
+        bt_.resize(N * S, T + M - 1);
+        score_.resize(N * S, T + M - 1);
+
+        for(int t=0; t < T + M - 1; ++t)
+            for(int s=0; s < N * S; ++s)
+            {
+                score_(s,t) = fwd_(s,t) = INF;
+                bt_(s,t) = min_skip;
+            }
+
+        for(int t=0; t < T; ++t)
+            for(int s=0; s < N * S; ++s)
+                score_(s,t+M-1) = activs(t, labellings(s / S));
+
+        for(int m = M-1; m < 2*M-2; ++m)
+        {
+            fwd_(0, m) = score_(0, m);
+            bt_(0, m) = m - M + 2;
+        }
+
+        for(int s=1; s < N * S; ++s)
+        {
+            int start = T - (N * S - s) * M;
+            if(start < 0)
+                start = 0;
+            start = 0;
+            start = s + 1;
+            int cur_min_skip = min_skip;
+            //if(labellings(s / S) == nil)
+            //  cur_min_skip = 0;
+            for(int t=start; t < T; ++t)
+            {
+                int cur_max_skip = M;
+                //if(labellings(s / S) == nil)
+                //  cur_max_skip = T - t;
+                float score = score_(s, t + M - 1);
+                float min_score = INF;
+                int min_index = cur_max_skip;
+                for(int m=t + min_skip; m < t + cur_max_skip - 1; ++m)
+                {
+                    float prev = fwd_(s - 1, m);
+                    if(prev < min_score)
+                    {
+                        min_score = prev;
+                        min_index = m - t;
+                    }
+                }
+
+                //cerr << s << " " << t << " " << min_score << " " << min_index << endl;
+
+                if(min_score == INF)
+                {
+                  fwd_(s, t + M - 1) = INF;
+                  bt_(s, t + M - 1) = cur_min_skip;
+                }
+                else
+                {
+                  fwd_(s, t + M - 1) = min_score + score;
+                  bt_(s, t + M - 1) = cur_max_skip - 1 - min_index;
+                }
+            }
+        }
+
+        int t = T - 1;
+        for(int s=N*S-2;s>=-1;--s)
+        {
+            int next = t - bt_(s+1, t + M - 1);
+            for(int tt=0;tt<T;++tt)
+                bt(s+1, tt) = bt_(s+1, tt + M - 1);
+            //cout << s+1 << ": " << t << " -> " << next << " (" << T << "," << N << ")" << endl;
+            if(next > t)
+            {
+                cout << "warning: backward trace detected at " << s+1 << ": " << t << " -> " << next << endl;
+            }
+            if(next == t)
+            {
+                cout << "warning: loop in inverted alignment detected at " << s+1 << " " << t << endl;
+            }
+            if(t < 0)
+            {
+                cout << "warning: negative time index detected" << endl;
+            }
+            if(next < 0)
+                next = -1;
+            if(focus == FOCUS_LAST)
+            {
+                if(labellings((s+1) / S) == nil)
+                {
+                  for(int i=t;i>next;--i)
+                    attention(s+1,i) = 1. /((float)(t-next));
+                }
+                else if(coverage > 0)
+                {
+                  for(int i=t;i>next;--i)
+                  {
+                    switch(coverage)
+                    {
+                        case COVERAGE_UNIFORM: attention(s+1,i) = 1./((float)(t-next));break;
+                        case COVERAGE_EXPONENTIAL: attention(s+1,i) = 1./((float)(t-i+1));break;
+                        case COVERAGE_CONSTANT: attention(s+1,i) = 1;break;
+                        case COVERAGE_DENSE: attention(0,i) = labellings((s+1) / S);break;
+                        default: cout << "unknown coverage flag: " << coverage << endl;break;
+                    }
+                  }
+                }
+                else
+                {
+                  if(attention(s+1, t) != 0)
+                    cout << "warning: attention at " << s+1 << " " << t << " has value " << attention(s+1,t) << endl;
+                  attention(s+1, t) = 1;
+                  //attention(s + 1, t) = exp(-fwd_(s + 1, t + M - 1));
+                  //cerr << attention(s + 1, t) << endl;
+                }
+            }
+            else if(focus == FOCUS_MAX)
+            {
+                float min_score = INF;
+                int min_index = t;
+                int upper = T - 1;
+                if(s < N*S-2)
+                    upper = t + bt_(s+2, t+M-1);
+                upper = t;
+                //cout << upper << "--" << T-1<<endl;
+                for(int u=upper;u>next;--u)
+                {
+                    for(int c=0;c<N;++c)
+                    {
+                        if(min_score > activs(u,c))
+                        {
+                            min_score = activs(u,c);
+                            min_index = u;
+                        }
+                    }
+                }
+                attention(s+1, min_index) = 1;
+            }
+            t = next;
+        }
+
+        if(DEBUG)
+        {
+          for(int s=N*S-2;s>=-1;--s)
+          {
+              float sum = 0;
+              for(int t=0;t<T;++t)
+              {
+                  sum += attention(s+1,t);
+                  if(sum>1)
+                  {
+                      cout << "warning: multiple alignment points on single frame at " << s << " " << t << endl;
+                      throw std::out_of_range("alignment error");
+                      break;
+                  }
+              }
+          }
+        }
+    }
+
     void full(CSArrayF& activs, CSArrayI& labellings,
     int T, int N, int S, int min_skip, int max_skip, int focus, SArrayF& attention)
     {
@@ -333,7 +527,7 @@ public:
         */
     }
 
-private:
+public:
     TwoDArray<float> fwd_;
     TwoDArray<float> bwd_;
     TwoDArray<float> score_;

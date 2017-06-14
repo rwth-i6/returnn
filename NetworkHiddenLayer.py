@@ -278,7 +278,7 @@ class DownsampleLayer(_NoOpLayer):
     self.set_attr("factor", factor)
     z, z_dim = concat_sources(self.sources, unsparse=False)
     target = self.attrs.get('target','classes')
-    self.y_out = kwargs['y_in'][target] if base is None else base[0].y_out
+    self.y_out = self.network.y[target] if base is None else base[0].y_out
     self.index_out =  self.network.j[target] if base is None else base[0].index_out
     n_out = z_dim
     import theano.ifelse
@@ -290,7 +290,10 @@ class DownsampleLayer(_NoOpLayer):
           z = T.concatenate([z,T.zeros((f-T.mod(z.shape[a], f), z.shape[1], z.shape[2]), 'float32')],axis=0)
         z = TheanoUtil.downsample(z, axis=a, factor=f, method=method)
         if sample_target:
-          self.y_out = TheanoUtil.downsample(self.y_out, axis=a, factor=f, method='max')
+          if self.y_out.dtype == 'float32':
+            self.y_out = TheanoUtil.downsample(self.y_out, axis=a, factor=f, method=method)
+          else:
+            self.y_out = TheanoUtil.downsample(self.y_out, axis=a, factor=f, method='max')
       else:
         z = TheanoUtil.downsample(z, axis=a, factor=f, method=method)
         if a < self.y_out.ndim:
@@ -2921,6 +2924,7 @@ class CAlignmentLayer(ForwardLayer):
     self.x_in = x_in
     self.set_attr('n_out', n_out)
     self.set_attr('max_skip', max_skip)
+    self.set_attr('nstates', nstates)
     if tdps is None:
       tdps = [0.]
     if len(tdps) - 2 < max_skip:
@@ -3057,18 +3061,164 @@ class CAlignmentLayer(ForwardLayer):
     return self.error_val
 
 
-class InvBacktrackLayer(_NoOpLayer):
+class InvBacktrackLayer(ForwardLayer):
   layer_class = "ibt"
 
-  def __init__(self, **kwargs):
+  def __init__(self, direction='inv', tdps=None, nstates=1, nstep=1, min_skip=1, max_skip=30, search='align', train_skips=False, train_emission=False, clip_emission=1.0,
+               base=None, coverage=0, output_z=False, reduce_output=True, blank=None, nil = None, focus='last', mode='viterbi', **kwargs):
+    assert direction == 'inv'
     target = kwargs['target'] if 'target' in kwargs else 'classes'
-    kwargs['n_out'] = kwargs['y_in'][target].n_out  # + blank
-    n_cls = kwargs['y_in'][target].n_out
+    if base is None:
+      base = []
+    kwargs['n_out'] = kwargs['y_in'][target].n_out #+ blank
+    self.n_cls = kwargs['y_in'][target].n_out
     super(InvBacktrackLayer, self).__init__(**kwargs)
     self.index = self.network.j[target]
     self.cost_scale_val = numpy.float32(1)
+    if base:
+      if base[0].layer_class == 'calign':
+        self.params = {}
+        self.W_in = base[0].W_in
+        self.b = base[0].b
+        self.z = self.get_linear_forward_output()
+      elif base[0].layer_class == 'disc':
+        self.cost_scale_val = (base[0].gen_error_val / T.sum(base[0].index,dtype='float32')) * (base[0].real_error_val / T.sum(base[0].index,dtype='float32'))
+    self.set_attr('search', search)
+    n_out = sum([s.attrs['n_out'] for s in self.sources])
+    x_in = T.concatenate([s.output for s in self.sources],axis=2)
+    self.x_in = x_in
+    self.set_attr('n_out', n_out)
+    self.set_attr('max_skip', max_skip)
+    if tdps is None:
+      tdps = [0.]
+    if len(tdps) - 2 < max_skip:
+      tdps += [tdps[-1]] * (max_skip - len(tdps) + 2)
+    for i in range(len(tdps)):
+      if i % nstep != 0:
+        tdps[i] = 1e30
+    if min_skip > 0:
+      tdps[:min_skip] = [1e30] * min_skip
+    if nil is None:
+      nil = -1
+    elif nil < 0:
+      nil = self.n_cls + nil
+    self.cost_val = T.constant(0)
+    self.error_val = T.constant(0)
+    if self.eval_flag:
+      if search == 'time':
+        self.index = self.sources[0].index
+        self.output = x_in
+        self.y_out = self.y_in[target].reshape(self.index.shape)
+        return
+    else:
+      if search == 'time':
+        search = 'align'
+    z_in = self.z.reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))
+    p_in = T.nnet.softmax(z_in).reshape(self.z.shape)
+    y_in = self.y_in[target].reshape(self.index.shape)
+    from theano.tensor.extra_ops import cpu_contiguous
+    from Inv import InvOpBackTrace
+    self.attention, self.backtrace = InvOpBackTrace(min_skip, max_skip, nstates,
+                                                    focus, nil, coverage, mode)(-T.log(p_in), cpu_contiguous(y_in),
+                                                                                 T.sum(self.sources[0].index, axis=0,
+                                                                                       dtype='int32'),
+                                                                                 T.sum(self.index, axis=0,
+                                                                                       dtype='int32'))
+    self.attention = theano.gradient.disconnected_grad(self.attention)  # NBT
+    self.backtrace = theano.gradient.disconnected_grad(self.backtrace)  # NBT
+    self.y_out = y_in.dimshuffle(0, 'x', 1).repeat(nstates, axis=1).reshape(
+      (self.index.shape[0] * nstates, self.index.shape[1]))
+    rindex = self.index.dimshuffle(0, 'x', 1).repeat(nstates, axis=1).reshape(
+      (self.index.shape[0] * nstates, self.index.shape[1]))
+    index = theano.gradient.disconnected_grad(rindex)
+    norm = numpy.float32(1. / nstates)
 
-    q_in = self.sources[0].q_in
+    x_out = T.batched_dot(x_in.dimshuffle(1, 2, 0), self.attention.dimshuffle(1, 2, 0)).dimshuffle(2, 0, 1)  # NBD
+    #z_out = T.batched_dot(self.z.dimshuffle(1, 2, 0), self.attention.dimshuffle(1, 2, 0)).dimshuffle(2, 0, 1) # NBC
+    z_out = self.b + T.dot(x_out,T.concatenate(self.W_in,axis=0))
+
+    if train_emission:
+      W_skip = self.add_param(self.create_forward_weights(n_out, 2, name="W_skip_%s" % self.name))
+      b_skip = self.add_param(self.create_bias(2, name='b_skip_%s' % self.name))
+      q_in = T.dot(x_in, W_skip) + b_skip
+      q_in = T.nnet.softmax(q_in.reshape((q_in.shape[0] * q_in.shape[1], q_in.shape[2]))).reshape(q_in.shape)
+
+
+    if reduce_output:
+      self.output = z_out if output_z else x_out
+      self.index = index
+      self.p_y_given_x = T.nnet.softmax(z_out.reshape((z_out.shape[0]*z_out.shape[1],z_out.shape[2]))).reshape(z_out.shape)
+      if train_emission: #  and not self.train_flag:
+        def encode(x_t,q_t,x_p,q_p,i_p):
+          q_c = q_t + q_p
+          write_flag = T.ge(q_c, numpy.float32(clip_emission))
+          q = T.switch(write_flag, q_c - numpy.float32(clip_emission), q_c)
+          x = x_t * q_t.dimshuffle(0,'x').repeat(x_t.shape[1],axis=1)
+          x += T.switch(write_flag.dimshuffle(0,'x').repeat(x_t.shape[1],axis=1), T.zeros_like(x_p), x_p)
+          #x = x_t #* T.cast(write_flag.dimshuffle(0, 'x').repeat(x_t.shape[1], axis=1),'float32')
+          return x, q, T.cast(write_flag,'float32')
+
+        out, _ = theano.scan(encode, sequences=[x_in,q_in[:,:,1]],
+                             outputs_info=[T.zeros_like(x_in[0]), T.zeros((q_in.shape[1],),'float32'), T.zeros((q_in.shape[1],),'float32')])
+        x, q, i = out[:3]
+        def select(x_b,i_b,L):
+          idx = (i_b > 0).nonzero()
+          len = T.cast(T.sum(i_b),'int32')
+          buf = T.zeros((L,x_b.shape[1]),'float32')
+          buf = T.set_subtensor(buf[:len],x_b[idx])
+          ind = T.zeros((L, ), 'float32')
+          ind = T.set_subtensor(ind[:len], numpy.float32(1))
+          return buf, ind
+
+        out, _ = theano.map(select, sequences=[x.dimshuffle(1,0,2), i.dimshuffle(1,0)],
+                            non_sequences=[T.max(T.sum(i,axis=0,dtype='int32'))+numpy.int32(1)])
+        self.output = out[0].dimshuffle(1,0,2)[:-1]
+        self.index = T.cast(out[1].dimshuffle(1,0),'int8')[:-1]
+    else:
+      self.output = self.z if output_z else x_in
+      self.index = self.sources[0].index
+      self.p_y_given_x = p_in
+
+    self.reduced_index = index
+
+    if output_z:
+      self.attrs['n_out'] = self.n_cls
+
+    idx = (rindex.flatten() > 0).nonzero()
+    if train_skips:
+      y_out = T.dot(self.attention, T.arange(x_in.shape[0],dtype='float32')) # NB
+      y_out = T.concatenate([T.zeros_like(y_out[:1]), y_out],axis=0) # (N+1)B
+      y_out = T.cast(T.round(y_out[1:] - y_out[:-1]) * T.cast(self.index,'float32'),'int32') # NB
+
+      W_skip = self.add_param(self.create_forward_weights(n_out, max_skip, name="W_skip_%s" % self.name))
+      b_skip = self.add_param(self.create_bias(max_skip, name='b_skip_%s' % self.name))
+      z_out = T.dot(x_out, W_skip) + b_skip
+      self.q_in = T.nnet.softmax(self.z.reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))).reshape(self.z.shape)
+    elif train_emission:
+      idx = (self.sources[0].index.flatten() > 0).nonzero()
+      norm = T.sum(self.network.j[target],dtype='float32') / T.sum(self.sources[0].index,dtype='float32')
+      #W_skip = self.add_param(self.create_forward_weights(n_out, 2, name="W_skip_%s" % self.name))
+      #b_skip = self.add_param(self.create_bias(2, name='b_skip_%s' % self.name))
+      y_out = T.sum(self.attention,axis=0).dimshuffle(1,0)
+
+      #y_out = y_out / y_out.sum(axis=0,keepdims=True)
+      y_out = y_out.flatten().dimshuffle(0, 'x') # (TB)
+      y_out = T.concatenate([numpy.float32(1) - y_out, y_out], axis=1) # (TB)2
+      #z_out = T.dot(x_in, W_skip) + b_skip # TB2
+      #z_out = T.nnet.softmax(z_out.reshape((z_out.shape[0] * z_out.shape[1], z_out.shape[2]))).reshape(z_out.shape)
+      #self.output *= z_out[:, :, 1].dimshuffle(0, 1, 'x').repeat(self.output.shape[2], axis=2)
+      z_out = q_in.reshape((q_in.shape[0] * q_in.shape[1], q_in.shape[2])) # (TB)2
+      self.cost_val = norm * -T.sum(y_out[idx] * T.log(z_out[idx]))
+      self.error_val = norm * T.sum(T.ge(T.sqr(z_out[idx,1]-y_out[idx,1]),numpy.float32(1./self.n_cls)))
+      return
+    else:
+      y_out = self.y_out
+
+    y_out = y_out.flatten()
+    z_out = z_out.reshape((z_out.shape[0] * z_out.shape[1], z_out.shape[2]))
+    nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
+    self.cost_val = norm * T.sum(nll)
+    self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
 
   def cost(self):
     return self.cost_val * self.cost_scale_val, None
@@ -3280,7 +3430,7 @@ class InvAlignSegmentationLayer(_NoOpLayer):
 class InvAlignSegmentationLayer2(_NoOpLayer):
   layer_class = "invalignsegment2"
 
-  def __init__(self, window=0, win=20,base=None, **kwargs):
+  def __init__(self, window=0, win=20,base=None, join_states=False, **kwargs):
 
     super(InvAlignSegmentationLayer2, self).__init__(**kwargs)
     if base:
@@ -3292,8 +3442,12 @@ class InvAlignSegmentationLayer2(_NoOpLayer):
     self.set_attr('window', window)
     self.set_attr('win', win)
     self.attention = self.sources[0].attention
+    self.nstates = self.sources[0].attrs['nstates']
     assert len(self.sources) == 1
+    self.inv_att = self.sources[0].attention
+    source_index = self.sources[0].reduced_index.T.flatten().nonzero()
     if not self.eval_flag:
+#    if self.eval_flag:
       result = T.concatenate([s.output for s in self.sources],axis=-1)
       self.index = self.sources[0].index
     else:
@@ -3315,6 +3469,44 @@ class InvAlignSegmentationLayer2(_NoOpLayer):
       self.index = T.ones((result.shape[0], result.shape[1]), 'int8')
     self.z = result
     self.make_output(result)
+
+    # code to create y_out for frame-wise classification within the segments
+    y_out = self.sources[0].y_out.T
+    y_out = T.concatenate([y_out,T.zeros((y_out.shape[0],1))-numpy.int32(1)],axis=1) #adding -1 at the end to account for unused timesteps at the end of the sequence
+    diffarr,maxlen = self.find_diff_array(self.sources[0].attention.argmax(axis=2))
+    y_outrep = self.set_yout(y_out,diffarr.flatten(),T.cast(maxlen,'int32'))
+    y_outrep = y_outrep[:self.output.shape[0]*self.output.shape[1]]
+    self.y_out = T.cast(y_outrep.reshape((self.output.shape[1],self.output.shape[0])).T,'int32')
+
+  def find_diff_array(self, att):
+    att = att.T
+    att = T.concatenate([T.zeros((att.shape[0], numpy.int32(1))), att], axis=1)
+    maxlen = T.concatenate([T.stack(att[0, 0]), T.extra_ops.diff(att).flatten().sort()])[-1] + \
+             numpy.int32(1)  # maxlen for the segments
+    att = att[:, 1:]
+    att = T.switch(self.sources[0].reduced_index > 0,
+                   att.T + (T.arange(self.sources[0].attention.shape[1]) * self.sources[0].attention.shape[2]),
+                   att.T)  # scale the indices of batches according to the batch number
+    att = att.T
+    last_index = (T.arange(att.shape[0]) + numpy.int32(1)) * self.output.shape[0] - \
+                 numpy.int32(1)  # last index for at that denotes the last timestep
+    att = T.switch(att > 0, att, last_index.dimshuffle(0, 'x'))
+    att_with_firstindex = T.concatenate([T.maximum((T.arange(att.shape[0]) * self.output.shape[0]).dimshuffle(0, 'x'),
+                                                   att[:, 0].dimshuffle(0, 'x') - maxlen), att], axis=1)
+    att_with_first_and_last_index = T.concatenate([att_with_firstindex, last_index.dimshuffle(0, 'x')], axis=1)
+    maxlen = T.extra_ops.diff(att_with_first_and_last_index).flatten().sort()[-1] + \
+             numpy.int32(1)  # maxlen for the segments including unused timesteps
+    diffarr = T.extra_ops.diff(att_with_first_and_last_index)
+    diffarr = T.inc_subtensor(diffarr[:, 0], numpy.int32(1))  # add 1 to differences in the first row to include the first timestep as well
+    return diffarr,maxlen
+
+  def set_yout(self,y_out,diff,maxdiff):
+    newdiff = T.cast((diff.repeat(maxdiff).reshape((diff.shape[0],maxdiff))+(T.arange(diff.shape[0])*maxdiff).dimshuffle(0,'x')).flatten(),'int32')
+    res = T.cast(newdiff-T.arange(newdiff.shape[0])-1,'int32')
+    res_1hot = (res>=0).flatten().nonzero()
+    y_out_rep = y_out.repeat(maxdiff)
+    y_out_rep = y_out_rep[res_1hot]
+    return y_out_rep
 
 class ReshapeLayer(StateVector):
   layer_class = "reshape"
@@ -3347,11 +3539,12 @@ class ReshapeLayer(StateVector):
 class SegmentFinalStateLayer(_NoOpLayer):
   layer_class = "segfinal"
 
-  def __init__(self, base=None, **kwargs):
+  def __init__(self, base=None, use_full_label=False, **kwargs):
     super(SegmentFinalStateLayer, self).__init__(**kwargs)
     kwargs['n_out'] = sum([s.attrs['n_out'] for s in kwargs['sources']])
     self.set_attr('n_out',kwargs['n_out'])
     if not self.eval_flag:
+#    if self.eval_flag:
       if hasattr(self.sources[0],'inv_att'):
         inv_att = self.sources[0].inv_att.dimshuffle(2,1,0) #TBN
       else:
@@ -3361,7 +3554,10 @@ class SegmentFinalStateLayer(_NoOpLayer):
         else:
           inv_att = base[0].inv_att.dimshuffle(2,1,0) #TBN
       z = self.sources[0].output.dimshuffle(1,0,2).reshape((self.sources[0].output.shape[0]*self.sources[0].output.shape[1],self.sources[0].output.shape[2]))
-      max_att = T.max(inv_att,axis=-1).T.flatten().nonzero()
+      if not use_full_label:
+        max_att = T.max(inv_att,axis=-1).T.flatten().nonzero()
+      else:
+        max_att = T.max(base[0].sources[0].attention.dimshuffle(2,1,0),axis=-1).T.flatten().nonzero()
       z_aln = z[max_att]
       z_aln = z_aln.dimshuffle('x',0,1)
       self.make_output(z_aln)
@@ -3370,23 +3566,27 @@ class SegmentFinalStateLayer(_NoOpLayer):
       assert base is not None
       self.base = base
       #get the original timesteps, batches and window parameter
-      t = base[0].timesteps
-      b = base[0].batches
-      w = base[0].attrs['win']
-      d = self.attrs['n_out']
-      z = T.concatenate([s.output for s in self.sources],axis=-1)
-      ze = z.reshape((z.shape[0]*z.shape[1],z.shape[2])) #T*B,D
-      fullind = base[0].fullind#full index from invalignsegment layer
-      ze = T.concatenate([ze,T.zeros((1,ze.shape[1]))],axis=0)
-      for i in range(w):
-        fullind = T.set_subtensor(fullind[i],T.roll(fullind[i],i))
-        if i>0:
-            fullind = T.inc_subtensor(fullind[i],T.where(fullind[i]>0,i*t*b-i,0))
-      self.fullind = fullind
-      zfinal = ze[fullind.T.flatten()].dimshuffle('x',0,1)
-      self.make_output(zfinal)
-      self.act = [self.output, T.zeros_like(self.output)]
-      self.index = T.ones((1,self.output.shape[1]),'int8')
+      if isinstance(base[0],CAlignmentLayer):
+        self.make_output(self.sources[0].output)
+        self.index = self.sources[0].index
+      else:
+        t = base[0].timesteps
+        b = base[0].batches
+        w = base[0].attrs['win']
+        d = self.attrs['n_out']
+        z = T.concatenate([s.output for s in self.sources],axis=-1)
+        ze = z.reshape((z.shape[0]*z.shape[1],z.shape[2])) #T*B,D
+        fullind = base[0].fullind#full index from invalignsegment layer
+        ze = T.concatenate([ze,T.zeros((1,ze.shape[1]))],axis=0)
+        for i in range(w):
+          fullind = T.set_subtensor(fullind[i],T.roll(fullind[i],i))
+          if i>0:
+              fullind = T.inc_subtensor(fullind[i],T.where(fullind[i]>0,i*t*b-i,0))
+        self.fullind = fullind
+        zfinal = ze[fullind.T.flatten()].dimshuffle('x',0,1)
+        self.make_output(zfinal)
+        self.act = [self.output, T.zeros_like(self.output)]
+        self.index = T.ones((1,self.output.shape[1]),'int8')
 
 class ScaleGradientOp(theano.gof.Op):
   view_map = {0: [0]}
@@ -3645,3 +3845,241 @@ class RNNBlockLayer(ForwardLayer):
 
 from NativeOp import FastBaumWelchOp
 from SprintErrorSignals import sprint_loss_and_error_signal, SprintAlignmentAutomataOp
+
+class SignalValue(ForwardLayer):
+  layer_class = 'sigval'
+
+  def __init__(self, begin=24, sidx=0, copy_output=None, **kwargs):
+    kwargs['n_out'] = 1
+    super(SignalValue, self).__init__(**kwargs)
+    self.params = {}
+    self.error_val = T.constant(0)
+    self.known_grads = {}
+    if not 'target' in self.attrs:
+      self.attrs['target'] = 'classes'
+
+    z = self.get_linear_forward_output()
+    p = T.nnet.sigmoid(z)
+    r = copy_output.y_out if copy_output is not None else self.network.y[self.attrs['target']]
+    r = r.reshape((p.shape[0],p.shape[1],3))
+    p = p[begin:,:,0]
+    r = r[begin:,:,sidx]
+    self.index = self.index[begin:]
+
+    step = numpy.float32(1) / T.sum(self.index,axis=0,dtype='float32')
+    def accumulate(p, r, bp, ep):
+      q = T.constant(1)-p
+      bp += step
+      ep += step / r
+      bd, ed = p * bp, q * ep
+      ba, ea = ed * r, bd / r
+      return bp - bd + ba, ep - ed + ea
+
+    c, _ = theano.reduce(accumulate,sequences=[p,r],
+                         outputs_info=[T.alloc(numpy.cast[theano.config.floatX](0), r.shape[1]),
+                                       T.alloc(numpy.cast[theano.config.floatX](0), r.shape[1])])
+    c = c[0] + c[1] * r - numpy.float32(2)
+    m = T.sum(self.index,dtype='float32',axis=0)
+    self.error_val = T.sum(c * T.sum(self.index,axis=0,dtype='float32'))
+    self.cost_val = T.sum(T.exp(-c)) # / T.cast(self.index.shape[1],'float32')
+    #self.cost_val = T.sum(T.sum(self.index,axis=0,dtype='float32') - c) # T.sum(T.exp(-c) * m)
+    self.p_y_given_y = p.dimshuffle(0,1,'x')
+    self.output = p.dimshuffle(0,1,'x')
+
+  def cost(self):
+    return self.cost_val, self.known_grads
+
+  #def cost_scale(self):
+  #  return self.cost_scale_val * T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
+
+  def errors(self):
+    return self.error_val
+
+
+class DSignalValue(ForwardLayer):
+  layer_class = 'dsigval'
+
+  def __init__(self, begin=24, **kwargs):
+    kwargs['n_out'] = 2
+    super(DSignalValue, self).__init__(**kwargs)
+    self.params = {}
+    self.error_val = T.constant(0)
+    self.known_grads = {}
+    if not 'target' in self.attrs:
+      self.attrs['target'] = 'classes'
+
+    z = self.get_linear_forward_output()
+    p = T.nnet.sigmoid(z)
+    r = self.network.y[self.attrs['target']].reshape((p.shape[0],p.shape[1],3))
+    p = p[begin:,:,0]
+    q = r[begin:,:,1]
+    r = r[begin:,:,0]
+    self.index = self.index[begin:]
+    v = T.alloc(numpy.cast[theano.config.floatX](1), r.shape[1], 4)
+
+    def accumulate(p, r, q, vp):
+      vc = T.stack([p,T.constant(1)-p]).dimshuffle(1,0) * vp[:,:2]
+      ac = T.stack([vc[:,1] * r, vc[:,0] / r]).dimshuffle(1,0)
+      vq = T.stack([q,T.constant(1)-q]).dimshuffle(1,0) * vp[:,2:]
+      aq = T.stack([vq[:,1] * q, vq[:,0] / q]).dimshuffle(1,0)
+      return T.concatenate([vp[:,:2] - vc + ac,vp[:,2:] - vq + aq],axis=1)
+
+    c, _ = theano.reduce(accumulate,sequences=[p,r,q],outputs_info=[v])
+    acc = (c[:,0] / r[-1] + c[:,1] - numpy.float32(1) / r[-1] - numpy.float32(1)) * T.sum(self.index,axis=0,dtype='float32')
+    quot = q[-1] / r[-1]
+    acc += (c[:,2] / r[-1] + c[:,3] * quot - numpy.float32(1) / r[-1] - quot) * T.sum(self.index,axis=0,dtype='float32')
+    m = T.sum(self.index,dtype='float32')
+    self.error_val = T.sum(acc)
+    self.cost_val = numpy.float32(0.5) * T.sum(T.exp(-acc / m) * m) / T.cast(self.index.shape[1],'float32')
+    self.p_y_given_y = p
+    self.output = p
+
+  def cost(self):
+    return self.cost_val, self.known_grads
+
+  #def cost_scale(self):
+  #  return self.cost_scale_val * T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
+
+  def errors(self):
+    return self.error_val
+
+class SegmentInputLayer(_NoOpLayer):
+  layer_class = 'segment_input'
+
+  def __init__(self, window=15, **kwargs):
+    super(SegmentInputLayer, self).__init__(**kwargs)
+
+    assert len(self.sources) == 1
+    self.set_attr('n_out', self.sources[0].attrs['n_out'])
+    self.set_attr('window', window)
+
+    src_out   = self.sources[0].output
+    src_index = self.sources[0].index
+
+    f = src_out.shape[0]  # number of frames
+    b = src_out.shape[1]  # number of batches
+    d = src_out.shape[2]  # feature dimension
+
+    rs = src_out.dimshuffle(1, 0, 2).reshape((f * b, d))
+    rs_idx = src_index.dimshuffle(1, 0).flatten()
+
+    frames_idx = T.arange(f * b)[(rs_idx>0).nonzero()]\
+                  .repeat(self.attrs['window'])\
+                  .reshape((rs_idx.sum(), self.attrs['window']))\
+                 + T.arange(self.attrs['window'])
+
+    # this filter has entries smaller than -1 for all elements that do not belong to the same sequence as the first frame
+    frame_filter_1 = (f - 1
+                      - (frames_idx[:,0] % f)\
+                         .repeat(self.attrs['window'])\
+                         .reshape((rs_idx.sum(), self.attrs['window']))\
+                      - T.arange(self.attrs['window'])) * 2
+
+    # this filter has entries 0 for all elements that are discarded by self.index, 1 otherwise
+    frame_filter_2 = T.concatenate([rs_idx, T.zeros((self.attrs['window'],), dtype='int8')])[frames_idx.flatten()].reshape((rs_idx.sum(), self.attrs['window']))
+
+    frames_idx = T.switch(frame_filter_1 + frame_filter_2 >= 0, frames_idx, -1).dimshuffle(1, 0)
+
+    # we add an additional vector with zeros s.t. the invalid entries from the filters above result in a feature vector of zeros
+    self.z = T.concatenate([rs, T.zeros((1, src_out.shape[2]))], axis=0)[frames_idx]
+
+    self.make_output(self.z)
+    self.index = T.cast((frame_filter_1 - frame_filter_2).clip(0, 1), 'int8').reshape((self.attrs['window'], rs_idx.sum()))
+
+class UnsegmentInputLayer(_NoOpLayer):
+  layer_class = 'unsegment_input'
+
+  class UnsegmentInputOp(theano.Op):
+    itypes = (T.ftensor3, T.bmatrix)
+    otypes = (T.ftensor3,)
+
+    def perform(self, node, inputs, output_storage):
+      post  = inputs[0]
+      index = inputs[1]
+
+      num_frames  = index.shape[0]
+      num_batches = index.shape[1]
+      window_size = post.shape[0]
+      dim         = post.shape[2]
+
+      out = numpy.zeros((num_frames, num_batches, window_size, dim), dtype='float32')
+
+      cur = 0
+      for b in range(num_batches):
+        for f in range(num_frames):
+          if index[f, b] == 0:
+            continue
+
+          cur_seq_num_frames = min(window_size, num_frames - f)
+          for w in range(cur_seq_num_frames):
+            out[f + w, b, w, :] = post[w, cur, :]
+
+          cur += 1
+
+      out = out.reshape((out.shape[0], out.shape[1], out.shape[2] * out.shape[3]))
+      output_storage[0][0] = out
+
+  def __init__(self, original_output, **kwargs):
+    super(UnsegmentInputLayer, self).__init__(**kwargs)
+
+    assert len(self.sources) == 1
+
+    self.set_attr('original_output', original_output)
+
+    self.index = self.network.get_layer(original_output).index
+    out = self.UnsegmentInputOp()(self.sources[0].p_y_given_x, self.index)
+    self.make_output(out)
+
+class SegmentClassTargets(_NoOpLayer):
+  layer_class = 'segment_class_targets'
+
+  class BuildClassesOp(theano.Op):
+    itypes = (T.iscalar, T.iscalar, T.imatrix, T.bmatrix)
+    otypes = (T.ftensor3, T.bmatrix)
+
+    def perform(self, node, inputs, output_storage):
+      num_classes = inputs[0]
+      window      = inputs[1]
+      classes     = inputs[2]
+      index       = inputs[3]
+
+      assert classes.shape == index.shape
+
+      num_frames = classes.shape[0]
+      num_batches = classes.shape[1]
+      num_start_frames = index.sum()
+
+      out = numpy.zeros((window, num_start_frames, num_classes), dtype='float32')
+      out_index = numpy.zeros((window, num_start_frames), dtype='int8')
+      cur = 0
+      for b in range(num_batches):
+        for f in range(num_frames):
+          if index[f, b] != 1:
+            continue
+
+          cur_seq_num_frames = min(window, num_frames - f)
+          out_index[0:cur_seq_num_frames, cur] = 1
+          for w in range(cur_seq_num_frames):
+            c = classes[f + w, b]
+            out[w:,cur,c] += 1.0
+
+          cur += 1
+
+      out /= numpy.arange(1, window + 1).reshape((window, 1, 1))
+
+      output_storage[0][0] = out
+      output_storage[1][0] = out_index
+
+  def __init__(self, num_classes, window=15, **kwargs):
+    super(SegmentClassTargets, self).__init__(**kwargs)
+
+    assert len(self.sources) == 1
+    self.set_attr('n_out', self.sources[0].attrs['n_out'])
+    self.set_attr('num_classes', num_classes)
+    self.set_attr('window', window)
+
+    self.y_out, self.index = SegmentClassTargets.BuildClassesOp()(T.TensorConstant(theano.tensor.iscalar, self.attrs['num_classes']),
+                                                                  T.TensorConstant(theano.tensor.iscalar, self.attrs['window']),
+                                                                  self.sources[0].output, self.sources[0].index)
+    self.output = self.y_out
+

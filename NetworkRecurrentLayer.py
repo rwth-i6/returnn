@@ -2,7 +2,7 @@
 import numpy
 from theano import tensor as T
 import theano
-from NetworkHiddenLayer import HiddenLayer
+from NetworkHiddenLayer import HiddenLayer, CAlignmentLayer
 from NetworkBaseLayer import Container, Layer
 from ActivationFunctions import strtoact
 from math import sqrt
@@ -196,7 +196,7 @@ class LSTMS(Unit):
       z_t += z_r
       for v in self.recurrent_transform.get_sorted_state_vars():
         other_outputs += [r_updates[v]]
-    maxatt = T.max(att_p, axis=-1).repeat(z_t.shape[1]).reshape((z_t.shape[0],z_t.shape[1]))#.dimshuffle(1,0)
+    maxatt = att_p.repeat(z_t.shape[1]).reshape((z_t.shape[0],z_t.shape[1]))#.dimshuffle(1,0)
     #maxatt = theano.printing.Print('maxatt',attrs=['__str__','shape'])(maxatt)
     z_t = T.switch(maxatt>0,z_t,z_t + T.dot(y_p, self.W_re))
     #z_t += T.dot(y_p, self.W_re)
@@ -204,7 +204,7 @@ class LSTMS(Unit):
 
     partition = z_t.shape[1] // 4
     ingate = T.nnet.sigmoid(z_t[:,:partition])
-    forgetgate = ((T.nnet.sigmoid(z_t[:,partition:2*partition])).T * (1.-T.max(att_p,axis=-1))).T
+    forgetgate = ((T.nnet.sigmoid(z_t[:,partition:2*partition])).T * (1.-att_p)).T
     outgate = T.nnet.sigmoid(z_t[:,2*partition:3*partition])
     input = T.tanh(z_t[:,3*partition:4*partition])
     #c_t = ((forgetgate * c_p + ingate * input).T * (1.-T.max(att_p,axis=-1))).T
@@ -523,6 +523,8 @@ class RecurrentUnitLayer(Layer):
                bias_random_init_forget_shift=0.0,
                copy_weights_from_base=False,
                segment_input=False,
+               join_states=False,
+               sample_segment=None,
                **kwargs):
     """
     :param n_out: number of cells
@@ -568,7 +570,10 @@ class RecurrentUnitLayer(Layer):
     elif unit in ("lstmc", "lstmp") and not is_using_gpu():
       unit = "lstme"
     if segment_input:
-      unit = "lstmps"
+      if is_using_gpu():
+        unit = "lstmps"
+      else:
+        unit = "lstms"
     if n_out is None:
       assert encoder
       n_out = sum([enc.attrs['n_out'] for enc in encoder])
@@ -620,15 +625,21 @@ class RecurrentUnitLayer(Layer):
     self.set_attr('segment_input', segment_input)
     if segment_input:
       if not self.eval_flag:
+      #if self.eval_flag:
         if isinstance(self.sources[0],RecurrentUnitLayer):
           self.inv_att = self.sources[0].inv_att #NBT
         else:
-          self.inv_att = self.sources[0].attention #NBT
+          if not join_states:
+            self.inv_att = self.sources[0].attention #NBT
+          else:
+            assert hasattr(self.sources[0], "nstates"), "source does not have number of states!"
+            ns = self.sources[0].nstates
+            self.inv_att = self.sources[0].attention[(ns-1)::ns]
         inv_att = T.roll(self.inv_att.dimshuffle(2, 1, 0),1,axis=0)#TBN
         inv_att = T.set_subtensor(inv_att[0],T.zeros((inv_att.shape[1],inv_att.shape[2])))
         inv_att = T.max(inv_att,axis=-1)
       else:
-        inv_att = T.zeros((self.sources[0].output.shape[0],self.sources[0].output.shape[1],1))
+        inv_att = T.zeros((self.sources[0].output.shape[0],self.sources[0].output.shape[1]))
     if encoder and hasattr(encoder[0],'act'):
       self.set_attr('encoder', ",".join([e.name for e in encoder]))
     if base:
@@ -780,6 +791,8 @@ class RecurrentUnitLayer(Layer):
       y_t = y_t[1:] - y_t[:-1]  # NB
       self.y_t = y_t # T.clip(y_t,numpy.float32(0),numpy.float32(max_skip - 1))
 
+      self.y_t = T.cast(self.base[0].backtrace,'float32')
+
     recurrent_transform_inst = RecurrentTransform.transform_classes[recurrent_transform](layer=self)
     assert isinstance(recurrent_transform_inst, RecurrentTransform.RecurrentTransformBase)
     unit.recurrent_transform = recurrent_transform_inst
@@ -862,34 +875,34 @@ class RecurrentUnitLayer(Layer):
 
     self.cost_val = numpy.float32(0)
     if recurrent_transform == 'attention_align':
-      z = T.dot(self.act[0],self.T_W)[:-1] + self.T_b
-      z = z.reshape((z.shape[0]*z.shape[1],z.shape[2]))
-      idx = (self.index[1:].flatten() > 0).nonzero()
-      idy = (self.index[1:][::-1].flatten() > 0).nonzero()
-      y_out = T.cast(self.y_t[1:][::-1],'int32').flatten()
-      nll, _ = T.nnet.crossentropy_softmax_1hot(x=z[idx], y_idx=y_out[idy])
-      self.cost_val = T.sum(nll)
-      recog = T.argmax(z[idx],axis=1)
-      real = y_out[idy]
-      recog = print_to_file('recog', recog)
-      #real = print_to_file('real', real)
-      self.errors = lambda: T.sum(T.neq(recog, real))
       back = T.ceil(self.aux[sorted(unit.recurrent_transform.state_vars.keys()).index('t')])
-      #from TheanoUtil import print_to_file
-      #back = print_to_file('back', back)
-
-      def make_output(base, trace, length):
+      def make_output(base, yout, trace, length):
         length = T.cast(length, 'int32')
         idx = T.cast(trace[:length][::-1],'int32')
-        return T.concatenate([base[idx],T.zeros((self.index.shape[0] + 1 - length, base.shape[1]), 'float32')])
+        x_out = T.concatenate([base[idx],T.zeros((self.index.shape[0] + 1 - length, base.shape[1]), 'float32')],axis=0)
+        y_out = T.concatenate([yout[idx,T.arange(length)],T.zeros((self.index.shape[0] + 1 - length, ), 'float32')],axis=0)
+        return x_out, y_out
 
       output, _ = theano.map(make_output,
                              sequences = [base[0].output.dimshuffle(1,0,2),
+                                          self.y_t.dimshuffle(1,2,0),
                                           back.dimshuffle(1,0),
                                           T.sum(self.index,axis=0,dtype='float32')])
       self.attrs['n_out'] = base[0].attrs['n_out']
       self.params.update(unit.params)
-      self.output = output.dimshuffle(1,0,2)[:-1]
+      self.output = output[0].dimshuffle(1,0,2)[:-1]
+
+      z = T.dot(self.act[0], self.T_W)[:-1] + self.T_b
+      z = z.reshape((z.shape[0] * z.shape[1], z.shape[2]))
+      idx = (self.index[1:].flatten() > 0).nonzero()
+      idy = (self.index[1:][::-1].flatten() > 0).nonzero()
+      y_out = T.cast(output[1],'int32').dimshuffle(1, 0)[:-1].flatten()
+      nll, _ = T.nnet.crossentropy_softmax_1hot(x=z[idx], y_idx=y_out[idy])
+      self.cost_val = T.sum(nll)
+      recog = T.argmax(z[idx], axis=1)
+      real = y_out[idy]
+      self.errors = lambda: T.sum(T.neq(recog, real))
+
       return
 
       back += T.arange(self.index.shape[1], dtype='float32') * T.cast(self.base[0].index.shape[0], 'float32')
