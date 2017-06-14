@@ -204,7 +204,8 @@ def get_tensorflow_version_tuple():
   :rtype: tuple[int]
   """
   import tensorflow as tf
-  return tuple([int(s) for s in tf.__version__.split(".")])
+  import re
+  return tuple([int(re.sub('-rc[0-9]', '', )s) for s in tf.__version__.split(".")])
 
 def eval_shell_env(token):
   if token.startswith("$"):
