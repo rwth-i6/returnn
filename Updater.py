@@ -606,6 +606,7 @@ class Updater:
         self.delta_clip = 50.0
         self.gamma_clip = 2.5 #1.8
         eps = numpy.float32(1e-7)
+        eps = numpy.float32(1e-7)
         if not self.gradient_l2_norm:
           deltas = deltas / (deltas.norm(2) + eps)
         if self.use_adagrad:

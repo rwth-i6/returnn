@@ -193,7 +193,6 @@ class CopyLayer(_NoOpLayer):
     if activation:
       self.set_attr('activation', activation.encode("utf8"))
     act_f = strtoact_single_joined(activation)
-
     self.z, n_out = concat_sources(self.sources, masks=self.masks, mass=self.mass, unsparse=True)
     self.set_attr('n_out', n_out)
     self.make_output(act_f(self.z))
@@ -3849,7 +3848,7 @@ from SprintErrorSignals import sprint_loss_and_error_signal, SprintAlignmentAuto
 class SignalValue(ForwardLayer):
   layer_class = 'sigval'
 
-  def __init__(self, begin=24, sidx=0, copy_output=None, **kwargs):
+  def __init__(self, begin=24, sidx=0, margin=0.0, copy_output=None, **kwargs):
     kwargs['n_out'] = 1
     super(SignalValue, self).__init__(**kwargs)
     self.params = {}
@@ -3861,87 +3860,46 @@ class SignalValue(ForwardLayer):
     z = self.get_linear_forward_output()
     p = T.nnet.sigmoid(z)
     r = copy_output.y_out if copy_output is not None else self.network.y[self.attrs['target']]
-    r = r.reshape((p.shape[0],p.shape[1],3))
+    r = r.reshape((p.shape[0],p.shape[1],4))
     p = p[begin:,:,0]
-    r = r[begin:,:,sidx]
+    rb = r[begin:,:,sidx]
+    rs = r[begin:,:,sidx+1]
     self.index = self.index[begin:]
+    margin = numpy.float32(margin)
 
-    step = numpy.float32(1) / T.sum(self.index,axis=0,dtype='float32')
-    def accumulate(p, r, bp, ep):
-      q = T.constant(1)-p
-      bp += step
-      ep += step / r
-      bd, ed = p * bp, q * ep
-      ba, ea = ed * r, bd / r
+    stash = numpy.float32(100)
+    step = stash / T.sum(self.index,axis=0,dtype='float32')
+    def accumulate(p, rb, rs, bp, ep):
+      wb = T.maximum(p - numpy.float32(0.5 + margin), numpy.float32(0)) / numpy.float32(0.5 - margin)
+      ws = T.maximum(numpy.float32(0.5 - margin) - p, numpy.float32(0)) / numpy.float32(0.5 - margin)
+      #wb = numpy.float32(2) * T.maximum(p - numpy.float32(0.5), numpy.float32(0))
+      #ws = numpy.float32(2) * T.maximum(numpy.float32(0.5) - p, numpy.float32(0))
+      #bp += step
+      #ep += step / rs
+      bd, ed = wb * bp, ws * ep
+      ba, ea = ed * rs, bd / rb
       return bp - bd + ba, ep - ed + ea
 
-    c, _ = theano.reduce(accumulate,sequences=[p,r],
-                         outputs_info=[T.alloc(numpy.cast[theano.config.floatX](0), r.shape[1]),
-                                       T.alloc(numpy.cast[theano.config.floatX](0), r.shape[1])])
-    c = c[0] + c[1] * r - numpy.float32(2)
+    c, _ = theano.reduce(accumulate,sequences=[p,rb,rs],
+                         outputs_info=[T.alloc(numpy.cast[theano.config.floatX](stash), r.shape[1]),
+                                       T.alloc(numpy.cast[theano.config.floatX](stash), r.shape[1]) / rs[0]])
+    c = c[0] + c[1] * rs[-1] - numpy.float32(2) * stash
     m = T.sum(self.index,dtype='float32',axis=0)
-    self.error_val = T.sum(c * T.sum(self.index,axis=0,dtype='float32'))
-    self.cost_val = T.sum(T.exp(-c)) # / T.cast(self.index.shape[1],'float32')
-    #self.cost_val = T.sum(T.sum(self.index,axis=0,dtype='float32') - c) # T.sum(T.exp(-c) * m)
+    self.error_val = T.sum(c * m / (numpy.float32(2) * stash))
+    self.cost_scale_val = numpy.float32(1)
+    self.cost_val = -T.sum(c * m)
     self.p_y_given_y = p.dimshuffle(0,1,'x')
     self.output = p.dimshuffle(0,1,'x')
 
   def cost(self):
     return self.cost_val, self.known_grads
 
-  #def cost_scale(self):
-  #  return self.cost_scale_val * T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
+  def cost_scale(self):
+    return self.cost_scale_val * T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
 
   def errors(self):
     return self.error_val
 
-
-class DSignalValue(ForwardLayer):
-  layer_class = 'dsigval'
-
-  def __init__(self, begin=24, **kwargs):
-    kwargs['n_out'] = 2
-    super(DSignalValue, self).__init__(**kwargs)
-    self.params = {}
-    self.error_val = T.constant(0)
-    self.known_grads = {}
-    if not 'target' in self.attrs:
-      self.attrs['target'] = 'classes'
-
-    z = self.get_linear_forward_output()
-    p = T.nnet.sigmoid(z)
-    r = self.network.y[self.attrs['target']].reshape((p.shape[0],p.shape[1],3))
-    p = p[begin:,:,0]
-    q = r[begin:,:,1]
-    r = r[begin:,:,0]
-    self.index = self.index[begin:]
-    v = T.alloc(numpy.cast[theano.config.floatX](1), r.shape[1], 4)
-
-    def accumulate(p, r, q, vp):
-      vc = T.stack([p,T.constant(1)-p]).dimshuffle(1,0) * vp[:,:2]
-      ac = T.stack([vc[:,1] * r, vc[:,0] / r]).dimshuffle(1,0)
-      vq = T.stack([q,T.constant(1)-q]).dimshuffle(1,0) * vp[:,2:]
-      aq = T.stack([vq[:,1] * q, vq[:,0] / q]).dimshuffle(1,0)
-      return T.concatenate([vp[:,:2] - vc + ac,vp[:,2:] - vq + aq],axis=1)
-
-    c, _ = theano.reduce(accumulate,sequences=[p,r,q],outputs_info=[v])
-    acc = (c[:,0] / r[-1] + c[:,1] - numpy.float32(1) / r[-1] - numpy.float32(1)) * T.sum(self.index,axis=0,dtype='float32')
-    quot = q[-1] / r[-1]
-    acc += (c[:,2] / r[-1] + c[:,3] * quot - numpy.float32(1) / r[-1] - quot) * T.sum(self.index,axis=0,dtype='float32')
-    m = T.sum(self.index,dtype='float32')
-    self.error_val = T.sum(acc)
-    self.cost_val = numpy.float32(0.5) * T.sum(T.exp(-acc / m) * m) / T.cast(self.index.shape[1],'float32')
-    self.p_y_given_y = p
-    self.output = p
-
-  def cost(self):
-    return self.cost_val, self.known_grads
-
-  #def cost_scale(self):
-  #  return self.cost_scale_val * T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
-
-  def errors(self):
-    return self.error_val
 
 class SegmentInputLayer(_NoOpLayer):
   layer_class = 'segment_input'
