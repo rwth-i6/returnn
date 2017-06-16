@@ -3866,7 +3866,7 @@ class SignalValue(ForwardLayer):
     rs = r[begin:,:,sidx+1]
     self.index = self.index[begin:]
     margin = numpy.float32(margin)
-    step = numpy.float32(1) / T.sum(self.index,axis=0,dtype='float32')
+    step = T.ones((self.index.shape[1],),'float32') #numpy.float32(1) / T.sum(self.index,axis=0,dtype='float32')
     def accumulate(p, rb, rs, bp, ep):
       wb = T.maximum(p - numpy.float32(0.5 + margin), numpy.float32(0)) / numpy.float32(0.5 - margin)
       ws = T.maximum(numpy.float32(0.5 - margin) - p, numpy.float32(0)) / numpy.float32(0.5 - margin)
@@ -3877,14 +3877,14 @@ class SignalValue(ForwardLayer):
       return bp - bd + ba, ep - ed + ea
 
     c, _ = theano.scan(accumulate,sequences=[p,rb,rs],
-                       outputs_info=[T.alloc(numpy.cast[theano.config.floatX](1), r.shape[1]),
-                                     T.alloc(numpy.cast[theano.config.floatX](1), r.shape[1]) / rs[0]])
+                       outputs_info=[T.alloc(numpy.cast[theano.config.floatX](0), r.shape[1]),
+                                     T.alloc(numpy.cast[theano.config.floatX](0), r.shape[1])])
 
-    stepcost = rs * T.extra_ops.cumsum(step / rs, axis=0)
-    basecost = T.extra_ops.cumsum(step.dimshuffle('x',0).repeat(c[0].shape[0],axis=0), axis=0)
-    cost = numpy.float32(0.25) * T.sum(c[0] + c[1] * rs - basecost - stepcost - numpy.float32(1) - rs / rs[0])
-    self.error_val = numpy.float32(2) * cost
-    self.cost_val = numpy.float32(2) * (T.sum(self.index,dtype='float32') - cost)
+    bcost = T.extra_ops.cumsum(step.dimshuffle('x',0).repeat(c[0].shape[0],axis=0), axis=0)
+    ecost = rs * T.extra_ops.cumsum(step / rs, axis=0)
+    cost = numpy.float32(0.5) * T.sum(c[0] + c[1] * rs - bcost - ecost)
+    self.error_val = cost
+    self.cost_val = numpy.float32(2) * T.sum(self.index,dtype='float32') - cost
 
     self.cost_scale_val = numpy.float32(1)
     self.p_y_given_y = p.dimshuffle(0,1,'x')
