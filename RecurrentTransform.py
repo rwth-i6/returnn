@@ -758,6 +758,57 @@ class AttentionInverted(AttentionBase):
     updates[self.ns] = self.ns - numpy.float32(1)
     return inp, updates
 
+class AttentionSegment(AttentionBase):
+  """
+  alignment controlled attention over segments
+  """
+  name = "attention_segment"
+
+  def create_bias(self, n, name, i=-1):
+    if i >= 0: name += '_%d' % i
+    values = numpy.zeros((n,), dtype=theano.config.floatX)
+    return self.add_param(self.layer.shared(value=values, borrow=True, name=name), name=name)
+
+  def create_weights(self, n, m, name, i=-1):
+    if i >= 0: name += '_%d' % i
+    l = sqrt(6.) / sqrt(n + m)
+    values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(n, m)), dtype=theano.config.floatX)
+    return self.add_param(self.layer.shared(value=values, borrow=True, name=name), name=name)
+
+  def create_vars(self):
+    super(AttentionSegment, self).create_vars()
+    assert len(self.base) == 1
+    #assert self.base[0].layer_class.endswith('align')
+    self.B = self.add_input(self.base[0].output, 'B')
+    self.W_att_in = self.create_weights(self.base[0].attrs['n_out'], self.layer.unit.n_in, "W_att_in")
+    self.b_att_in = self.create_bias(self.layer.unit.n_in, 'b_att_in')
+    self.rec_transform_enc = self.add_input(T.cast(self.layer.rec_transform_enc,'float32'),"rec_transform_enc")
+    self.rec_transform_index = self.add_input(T.cast(self.layer.rec_transform_index,'float32'), "rec_transform_index")
+    self.I = self.add_input(T.cast(self.base[0].output_index(), 'float32'), 'I')
+    #self.cost_sum = self.add_state_var(T.zeros((1,), 'float32'), "cost_sum")
+
+  def attend(self, y_p):
+    inp, updates = 0, {}
+    H = T.tanh(y_p)
+    #H = theano.printing.Print('H',attrs=['shape'])(H)
+    curr_enc_block = self.rec_transform_enc[T.cast(self.n[0],'int32')]#(max_diff)B
+    b = self.B.dimshuffle(1,0,2).reshape((self.B.shape[0]*self.B.shape[1],self.B.shape[2]))
+    b = T.concatenate([b,T.zeros((1,b.shape[1]))],axis=0)
+    #curr_enc_block = theano.printing.Print('curr enc block',attrs=['shape','__str__'])(curr_enc_block)
+    C = b[T.cast(curr_enc_block,'int32')]#(max_diff)BD
+    #C = theano.printing.Print('context vec',attrs=['shape'])(C)
+    e = self.distance(C, H)
+    #e = theano.printing.Print('energy vec',attrs=['shape'])(e)
+    #self.rec_transform_index = theano.printing.Print('rec index',attrs=['shape','__str__'])(self.rec_transform_index[T.cast(self.n[0],'int32')])
+    att_w = self.softmax(e,self.rec_transform_index[T.cast(self.n[0],'int32')])
+    #att_w = theano.printing.Print('att_w',attrs=['shape','__str__'])(att_w)
+    z = T.sum(C * att_w.dimshuffle(0, 1, 'x').repeat(C.shape[2], axis=2), axis=0)
+    #z = theano.printing.Print('z',attrs=['shape'])(z)
+    W_att_in = self.custom_vars['W_att_in'] if 'W_att_in' in self.custom_vars.keys() else self.state_vars['W_att_in']
+    b_att_in = self.custom_vars['b_att_in'] if 'b_att_in' in self.custom_vars.keys() else self.state_vars['b_att_in']
+    inp = T.dot(z, W_att_in) + b_att_in
+    #inp = theano.printing.Print('attend return',attrs=['shape'])(inp)
+    return inp, updates
 
 class AttentionTime(AttentionList):
   """
