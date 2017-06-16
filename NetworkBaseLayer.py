@@ -476,7 +476,7 @@ class Layer(Container):
                L1=0.0, L2=0.0, L2_eye=None, varreg=0.0,
                output_L2_reg=0.0, output_entropy_reg=0.0, output_entropy_exp_reg=0.0,
                with_bias=True,
-               mask="unity", dropout=0.0, batch_drop=False, batch_norm=False, layer_drop=0.0, residual=False,
+               mask="unity", dropout=0.0, batch_drop=False, batch_norm=False, bn_use_sample=False, layer_drop=0.0, residual=False,
                carry=False,
                sparse_filtering=False, gradient_scale=1.0, trainable=True, device=None,
                dtype='float32',
@@ -498,6 +498,7 @@ class Layer(Container):
     self.set_attr('mask', mask)
     self.set_attr('dropout', dropout)
     self.set_attr('sparse', sparse)
+    self.set_attr('bn_use_sample', bn_use_sample)
     self.set_attr('sparse_filtering', sparse_filtering)
     if not trainable:
       self.set_attr('trainable', trainable)  # only store if not default
@@ -751,7 +752,7 @@ class Layer(Container):
       if self.attrs['consensus'] == 'flat':
         self.attrs['n_out'] *= self.depth
     if self.attrs['batch_norm']:
-      self.output = self.batch_norm(self.output, self.attrs['n_out'], sample_mean=sample_mean, gamma=gamma)
+      self.output = self.batch_norm(self.output, self.attrs['n_out'], sample_mean=sample_mean, gamma=gamma, use_sample=self.attrs['bn_use_sample'])
     if self.attrs['residual']:
       from NetworkHiddenLayer import concat_sources
       z, n_in = concat_sources(self.sources, unsparse=True, expect_source=False)
