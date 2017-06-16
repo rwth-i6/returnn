@@ -3866,28 +3866,27 @@ class SignalValue(ForwardLayer):
     rs = r[begin:,:,sidx+1]
     self.index = self.index[begin:]
     margin = numpy.float32(margin)
-
-    stash = numpy.float32(100)
-    step = stash / T.sum(self.index,axis=0,dtype='float32')
+    step = numpy.float32(1) / T.sum(self.index,axis=0,dtype='float32')
     def accumulate(p, rb, rs, bp, ep):
       wb = T.maximum(p - numpy.float32(0.5 + margin), numpy.float32(0)) / numpy.float32(0.5 - margin)
       ws = T.maximum(numpy.float32(0.5 - margin) - p, numpy.float32(0)) / numpy.float32(0.5 - margin)
-      #wb = numpy.float32(2) * T.maximum(p - numpy.float32(0.5), numpy.float32(0))
-      #ws = numpy.float32(2) * T.maximum(numpy.float32(0.5) - p, numpy.float32(0))
-      #bp += step
-      #ep += step / rs
+      bp = bp + step
+      ep = ep + step / rs
       bd, ed = wb * bp, ws * ep
       ba, ea = ed * rs, bd / rb
       return bp - bd + ba, ep - ed + ea
 
-    c, _ = theano.reduce(accumulate,sequences=[p,rb,rs],
-                         outputs_info=[T.alloc(numpy.cast[theano.config.floatX](stash), r.shape[1]),
-                                       T.alloc(numpy.cast[theano.config.floatX](stash), r.shape[1]) / rs[0]])
-    c = c[0] + c[1] * rs[-1] - numpy.float32(2) * stash
-    m = T.sum(self.index,dtype='float32',axis=0)
-    self.error_val = T.sum(c * m / (numpy.float32(2) * stash))
+    c, _ = theano.scan(accumulate,sequences=[p,rb,rs],
+                       outputs_info=[T.alloc(numpy.cast[theano.config.floatX](1), r.shape[1]),
+                                     T.alloc(numpy.cast[theano.config.floatX](1), r.shape[1]) / rs[0]])
+
+    stepcost = rs * T.extra_ops.cumsum(step / rs, axis=0)
+    basecost = T.extra_ops.cumsum(step.dimshuffle('x',0).repeat(c[0].shape[0],axis=0), axis=0)
+    cost = numpy.float32(0.25) * T.sum(c[0] + c[1] * rs - basecost - stepcost - numpy.float32(1) - rs / rs[0])
+    self.error_val = numpy.float32(2) * cost
+    self.cost_val = numpy.float32(2) * (T.sum(self.index,dtype='float32') - cost)
+
     self.cost_scale_val = numpy.float32(1)
-    self.cost_val = -T.sum(c * m)
     self.p_y_given_y = p.dimshuffle(0,1,'x')
     self.output = p.dimshuffle(0,1,'x')
 

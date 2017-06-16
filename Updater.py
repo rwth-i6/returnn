@@ -599,13 +599,12 @@ class Updater:
         self.use_adam = False
         self.use_adagrad = False
         self.use_adadelta = False
-        self.skip_nan_inf = False
-        self.start_var_reduction = 0
+        self.skip_nan_inf = True
+        self.start_var_reduction = 1
         self.use_corrected_grad = True
         self.decay = 0.75
         self.delta_clip = 50.0
-        self.gamma_clip = 2.5 #1.8
-        eps = numpy.float32(1e-7)
+        self.gamma_clip = 1.8
         eps = numpy.float32(1e-7)
         if not self.gradient_l2_norm:
           deltas = deltas / (deltas.norm(2) + eps)
