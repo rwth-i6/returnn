@@ -193,7 +193,6 @@ class CopyLayer(_NoOpLayer):
     if activation:
       self.set_attr('activation', activation.encode("utf8"))
     act_f = strtoact_single_joined(activation)
-
     self.z, n_out = concat_sources(self.sources, masks=self.masks, mass=self.mass, unsparse=True)
     self.set_attr('n_out', n_out)
     self.make_output(act_f(self.z))
@@ -278,7 +277,7 @@ class DownsampleLayer(_NoOpLayer):
     self.set_attr("factor", factor)
     z, z_dim = concat_sources(self.sources, unsparse=False)
     target = self.attrs.get('target','classes')
-    self.y_out = kwargs['y_in'][target] if base is None else base[0].y_out
+    self.y_out = self.network.y[target] if base is None else base[0].y_out
     self.index_out =  self.network.j[target] if base is None else base[0].index_out
     n_out = z_dim
     import theano.ifelse
@@ -290,7 +289,10 @@ class DownsampleLayer(_NoOpLayer):
           z = T.concatenate([z,T.zeros((f-T.mod(z.shape[a], f), z.shape[1], z.shape[2]), 'float32')],axis=0)
         z = TheanoUtil.downsample(z, axis=a, factor=f, method=method)
         if sample_target:
-          self.y_out = TheanoUtil.downsample(self.y_out, axis=a, factor=f, method='max')
+          if self.y_out.dtype == 'float32':
+            self.y_out = TheanoUtil.downsample(self.y_out, axis=a, factor=f, method=method)
+          else:
+            self.y_out = TheanoUtil.downsample(self.y_out, axis=a, factor=f, method='max')
       else:
         z = TheanoUtil.downsample(z, axis=a, factor=f, method=method)
         if a < self.y_out.ndim:
@@ -3843,53 +3845,10 @@ class RNNBlockLayer(ForwardLayer):
 from NativeOp import FastBaumWelchOp
 from SprintErrorSignals import sprint_loss_and_error_signal, SprintAlignmentAutomataOp
 
-class SequenceValue(ForwardLayer):
-  layer_class = 'seqval'
-
-  def __init__(self, begin=24, **kwargs):
-    kwargs['n_out'] = 3
-    super(SequenceValue, self).__init__(**kwargs)
-    self.params = {}
-    self.error_val = T.constant(0)
-    self.known_grads = {}
-    if not 'target' in self.attrs:
-      self.attrs['target'] = 'classes'
-
-    z = self.get_linear_forward_output()
-    p = T.nnet.softmax(z.reshape((z.shape[0] * z.shape[1],z.shape[2]))).reshape(z.shape)
-    r = self.network.y[self.attrs['target']].reshape((p.shape[0],p.shape[1],3))
-    p = p[begin:]
-    r = r[begin:]
-    self.index = self.index[begin:]
-    v = T.alloc(numpy.cast[theano.config.floatX](1), r.shape[1], 2)
-
-    def accumulate(p, r, vp):
-      vc = p[:,1:] * vp
-      ac = T.stack([vc[:,1] * r[:,0], vc[:,0] / r[:,0]]).dimshuffle(1,0)
-      return vp - vc + ac
-
-    c, _ = theano.reduce(accumulate,sequences=[p,r],outputs_info=[v])
-    c = (c[:,0] / r[-1,:,0] + c[:,1] - numpy.float32(1) / r[-1,:,0] - numpy.float32(1)) * T.sum(self.index,axis=0,dtype='float32')
-    m = T.sum(self.index,dtype='float32')
-    self.error_val = T.sum(c)
-    self.cost_val = T.sum(T.exp(-c / m) * m) / T.cast(self.index.shape[1],'float32')
-    self.p_y_given_y = p
-    self.output = p
-
-  def cost(self):
-    return self.cost_val, self.known_grads
-
-  #def cost_scale(self):
-  #  return self.cost_scale_val * T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
-
-  def errors(self):
-    return self.error_val
-
-
 class SignalValue(ForwardLayer):
   layer_class = 'sigval'
 
-  def __init__(self, begin=24, **kwargs):
+  def __init__(self, begin=24, sidx=0, margin=0.0, copy_output=None, **kwargs):
     kwargs['n_out'] = 1
     super(SignalValue, self).__init__(**kwargs)
     self.params = {}
@@ -3900,33 +3859,46 @@ class SignalValue(ForwardLayer):
 
     z = self.get_linear_forward_output()
     p = T.nnet.sigmoid(z)
-    r = self.network.y[self.attrs['target']].reshape((p.shape[0],p.shape[1],3))
+    r = copy_output.y_out if copy_output is not None else self.network.y[self.attrs['target']]
+    r = r.reshape((p.shape[0],p.shape[1],4))
     p = p[begin:,:,0]
-    r = r[begin:,:,0]
+    rb = r[begin:,:,sidx]
+    rs = r[begin:,:,sidx+1]
     self.index = self.index[begin:]
-    v = T.alloc(numpy.cast[theano.config.floatX](1), r.shape[1], 2)
+    margin = numpy.float32(margin)
+    step = numpy.float32(1) / T.sum(self.index,axis=0,dtype='float32')
+    def accumulate(p, rb, rs, bp, ep):
+      wb = T.maximum(p - numpy.float32(0.5 + margin), numpy.float32(0)) / numpy.float32(0.5 - margin)
+      ws = T.maximum(numpy.float32(0.5 - margin) - p, numpy.float32(0)) / numpy.float32(0.5 - margin)
+      bp = bp + step
+      ep = ep + step / rs
+      bd, ed = wb * bp, ws * ep
+      ba, ea = ed * rs, bd / rb
+      return bp - bd + ba, ep - ed + ea
 
-    def accumulate(p, r, vp):
-      vc = T.stack([p,T.constant(1)-p]).dimshuffle(1,0) * vp
-      ac = T.stack([vc[:,1] * r, vc[:,0] / r]).dimshuffle(1,0)
-      return vp - vc + ac
+    c, _ = theano.scan(accumulate,sequences=[p,rb,rs],
+                       outputs_info=[T.alloc(numpy.cast[theano.config.floatX](1), r.shape[1]),
+                                     T.alloc(numpy.cast[theano.config.floatX](1), r.shape[1]) / rs[0]])
 
-    c, _ = theano.reduce(accumulate,sequences=[p,r],outputs_info=[v])
-    c = (c[:,0] / r[-1] + c[:,1] - numpy.float32(1) / r[-1] - numpy.float32(1)) * T.sum(self.index,axis=0,dtype='float32')
-    m = T.sum(self.index,dtype='float32')
-    self.error_val = T.sum(c)
-    self.cost_val = T.sum(T.exp(-c / m) * m) / T.cast(self.index.shape[1],'float32')
-    self.p_y_given_y = p
-    self.output = p
+    stepcost = rs * T.extra_ops.cumsum(step / rs, axis=0)
+    basecost = T.extra_ops.cumsum(step.dimshuffle('x',0).repeat(c[0].shape[0],axis=0), axis=0)
+    cost = numpy.float32(0.25) * T.sum(c[0] + c[1] * rs - basecost - stepcost - numpy.float32(1) - rs / rs[0])
+    self.error_val = numpy.float32(2) * cost
+    self.cost_val = numpy.float32(2) * (T.sum(self.index,dtype='float32') - cost)
+
+    self.cost_scale_val = numpy.float32(1)
+    self.p_y_given_y = p.dimshuffle(0,1,'x')
+    self.output = p.dimshuffle(0,1,'x')
 
   def cost(self):
     return self.cost_val, self.known_grads
 
-  #def cost_scale(self):
-  #  return self.cost_scale_val * T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
+  def cost_scale(self):
+    return self.cost_scale_val * T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
 
   def errors(self):
     return self.error_val
+
 
 class SegmentInputLayer(_NoOpLayer):
   layer_class = 'segment_input'
