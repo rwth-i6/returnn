@@ -3854,9 +3854,12 @@ class SignalValue(ForwardLayer):
     self.params = {}
     self.error_val = T.constant(0)
     self.known_grads = {}
+    self.set_attr('begin', begin)
+    self.set_attr('sidx', sidx)
+    self.set_attr('margin', margin)
     if not 'target' in self.attrs:
       self.attrs['target'] = 'classes'
-
+    norm = (T.sum(self.index, axis=0, dtype='float32') - numpy.float32(begin)) / T.sum(self.index, axis=0, dtype='float32')
     z = self.get_linear_forward_output()
     p = T.nnet.sigmoid(z)
     r = copy_output.y_out if copy_output is not None else self.network.y[self.attrs['target']]
@@ -3882,9 +3885,10 @@ class SignalValue(ForwardLayer):
 
     bcost = T.extra_ops.cumsum(step.dimshuffle('x',0).repeat(c[0].shape[0],axis=0), axis=0)
     ecost = rs * T.extra_ops.cumsum(step / rs, axis=0)
-    cost = numpy.float32(0.5) * T.sum(c[0] + c[1] * rs - bcost - ecost)
-    self.error_val = cost
-    self.cost_val = numpy.float32(2) * T.sum(self.index,dtype='float32') - cost
+    total = c[0] + c[1] * rs - bcost - ecost
+    cost = T.sum(norm * T.sum(total,axis=0))
+    self.error_val = T.sum(norm * T.sum(T.lt(total,numpy.float32(0)),dtype='float32',axis=0))
+    self.cost_val = T.sum(T.sum(self.index,dtype='float32',axis=0) / norm) - cost
 
     self.cost_scale_val = numpy.float32(1)
     self.p_y_given_y = p.dimshuffle(0,1,'x')
