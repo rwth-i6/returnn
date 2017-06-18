@@ -153,6 +153,15 @@ class Fsa:
       print("No finite state automaton matches to chosen type")
       sys.exit(-1)
 
+  def set_lexicon(self, lexicon_name=None):
+    """
+    sets a new lexicon
+    :param str lexicon_name: lexicon path
+    """
+    if isinstance(lexicon_name, str):
+      self.lexicon_name = lexicon_name
+      self._load_lexicon()
+
   def run(self):
     if self.fsa_type == 'asg':
       if self.label_conversion == True:
@@ -422,16 +431,15 @@ class Fsa:
     where:
       lex.lemmas and lex.phonemes important
     '''
+    from os.path import isfile
+    from Log import log
     from LmDataset import Lexicon
 
-    if not isinstance(self.lexicon, Lexicon):
-      from os.path import isfile
-      from Log import log
+    assert isfile(self.lexicon_name), "Lexicon does not exists"
 
-      assert isfile(self.lexicon_name), "Lexicon does not exists"
+    log.initialize(verbosity=[5])
 
-      log.initialize(verbosity=[5])
-      self.lexicon = Lexicon(self.lexicon_name)
+    self.lexicon = Lexicon(self.lexicon_name)
 
   def _find_allo_seq_in_lex(self):
     '''
