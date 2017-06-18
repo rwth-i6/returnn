@@ -290,7 +290,7 @@ class Fsa:
       except Exception:
         label_pos = None
       if self.fsa_type == 'hmm':
-        edge_n = [state, state, self.edges[edges_included[0]][2], 0., None]
+        edge_n = [state, state, self.edges[edges_included[0]][2], 0., self.edges[edges_included[0]][4]]
         assert len(edge_n) == 5,  "length of edge wrong"
       else:
         edge_n = [state, state, self.edges[edges_included[0]][2], 0.]
