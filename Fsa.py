@@ -272,8 +272,8 @@ class Fsa:
         label_pos = self.edges[edges_included[0]][4]
       except Exception:
         label_pos = None
-      edge_n = [state, state, self.edges[edges_included[0]][2], 0., label_pos]
-      assert len(edge_n) == 5, "length of edge wrong"
+      edge_n = [state, state, self.edges[edges_included[0]][2], 0.]
+      assert len(edge_n) == 4, "length of edge wrong"
       self.edges.append(edge_n)
 
   def _check_for_repetitions_for_asg(self):
@@ -328,7 +328,7 @@ class Fsa:
       # if to remove skips if two equal labels follow each other
       if self.lemma[label_index] != self.lemma[label_index - 1]:
         n = 2 * label_index
-        self.edges.append((n, n + 2, self.lemma[label_index], 1.))
+        self.edges.append([n, n + 2, self.lemma[label_index], 1.])
 
   def _adds_blank_states_for_ctc(self):
     """
@@ -339,8 +339,8 @@ class Fsa:
     # adds blank labels to fsa
     for label_index in range(0, len(self.lemma)):
       label_blank_idx = 2 * label_index + 1
-      self.edges.append((label_blank_idx - 1, label_blank_idx, self._BLANK, 1.))
-      self.edges.append((label_blank_idx, label_blank_idx + 1, self.lemma[label_index], 1.))
+      self.edges.append([label_blank_idx - 1, label_blank_idx, self._BLANK, 1.])
+      self.edges.append([label_blank_idx, label_blank_idx + 1, self.lemma[label_index], 1.])
     self.final_states.append(label_blank_idx + 1)
 
   def _adds_last_state_for_ctc(self):
@@ -349,9 +349,9 @@ class Fsa:
     """
     print("Add final states and edges...")
     i = self.num_states
-    self.edges.append((i - 3, i, self._BLANK, 1.))
-    self.edges.append((i, i + 1, self.lemma[-1], 1.))
-    self.edges.append((i + 1, i + 2, self._BLANK, 1.))
+    self.edges.append([i - 3, i, self._BLANK, 1.])
+    self.edges.append([i, i + 1, self.lemma[-1], 1.])
+    self.edges.append([i + 1, i + 2, self._BLANK, 1.])
     self.num_states += 3
     self.final_states.append(self.num_states - 1)
 
@@ -371,7 +371,7 @@ class Fsa:
       for fstate in self.final_states:
         edges_fstate = [edge_index for edge_index, edge in enumerate(self.edges) if (edge[1] == fstate)]
         for fstate_edge in edges_fstate:
-          self.edges.append((self.edges[fstate_edge][0], self.num_states - 1, self.edges[fstate_edge][2], 1.))
+          self.edges.append([self.edges[fstate_edge][0], self.num_states - 1, self.edges[fstate_edge][2], 1.])
 
   def _lemma_acceptor_for_hmm_fsa(self):
     """
