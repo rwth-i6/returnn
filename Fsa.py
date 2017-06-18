@@ -48,6 +48,8 @@ class Fsa:
 
     self.filename = 'fsa'
 
+    self.single_state = False
+
     # needed by ASG
     self.asg_repetition = 2
 
@@ -75,7 +77,8 @@ class Fsa:
                  depth=6,
                  allo_num_states=3,
                  lexicon_name='',
-                 state_tying_name=''):
+                 state_tying_name='',
+                 single_state=False):
     """
     sets the parameters for FSA generator
     checks if needed params for fsa type available otherwise erquests user input
@@ -91,10 +94,14 @@ class Fsa:
     :param int allo_num_states: umber of allophone states
     :param str lexicon: lexicon file name
     :param str state_tying: state tyting file name
+    :param bool single_state: produce additional fsa: single node
     :return:
     """
     print("Setting parameters for", self.fsa_type)
     self.filename = filename
+
+    self.single_state = single_state
+    print("Single state set to:", self.single_state)
 
     if not isinstance(label_conversion, bool):
       print("Set label conversion option:")
@@ -862,6 +869,9 @@ def main():
   arg_parser.set_defaults(lexicon='recog.150k.final.lex.gz')
   arg_parser.add_argument("--state_tying", type=str)
   arg_parser.set_defaults(state_tying='state-tying.txt')
+  arg_parser.add_argument("--single_state_on", dest="single_state", action="store_true")
+  arg_parser.add_argument("--single_state_off", dest="single_state", action="store_false")
+  arg_parser.set_defaults(single_state=False)
   args = arg_parser.parse_args()
 
   fsa_gen = Fsa(args.label_seq, args.fsa)
@@ -873,7 +883,8 @@ def main():
                      depth=args.depth,
                      allo_num_states=args.allo_num_states,
                      lexicon_name=args.lexicon,
-                     state_tying_name=args.state_tying)
+                     state_tying_name=args.state_tying,
+                     single_state=args.single_state)
 
   fsa_gen.run()
 
