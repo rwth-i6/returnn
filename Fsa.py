@@ -322,7 +322,7 @@ class Fsa:
     """
     creates states from label sequence, skips repetitions
     """
-    print("Creating nodes and edges from label sequence...")
+    print("Create nodes and edges from label sequence...")
     # go through the whole label sequence and create the state for each label
     for label_index in range(0, len(self.lemma)):
       # if to remove skips if two equal labels follow each other
@@ -334,7 +334,7 @@ class Fsa:
     """
     adds blank edges and repetitions to ctc
     """
-    print("Adding blank states and edges...")
+    print("Add blank states and edges...")
     label_blank_idx = 0
     # adds blank labels to fsa
     for label_index in range(0, len(self.lemma)):
@@ -347,7 +347,7 @@ class Fsa:
     """
     adds last states for ctc
     """
-    print("Adds final states and edges...")
+    print("Add final states and edges...")
     i = self.num_states
     self.edges.append((i - 3, i, self._BLANK, 1.))
     self.edges.append((i, i + 1, self.lemma[-1], 1.))
@@ -363,7 +363,7 @@ class Fsa:
       - for all edge which ended in a former final node:
       - create new edge from stating node to new single final node with the same label
     """
-    print("Creates single final state...")
+    print("Create single final state...")
     if len(self.final_states) == 1 and self.final_states[0] == self.num_states - 1:  # nothing to change
       pass
     else:
