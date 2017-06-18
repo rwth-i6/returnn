@@ -422,14 +422,16 @@ class Fsa:
     where:
       lex.lemmas and lex.phonemes important
     '''
-    from os.path import isfile
-    from Log import log
     from LmDataset import Lexicon
 
-    assert isfile(self.lexicon_name), "Lexicon does not exists"
+    if not isinstance(self.lexicon, Lexicon):
+      from os.path import isfile
+      from Log import log
 
-    log.initialize(verbosity=[5])
-    self.lexicon = Lexicon(self.lexicon_name)
+      assert isfile(self.lexicon_name), "Lexicon does not exists"
+
+      log.initialize(verbosity=[5])
+      self.lexicon = Lexicon(self.lexicon_name)
 
   def _find_allo_seq_in_lex(self):
     '''
