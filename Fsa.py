@@ -36,6 +36,12 @@ class Fsa:
     """
     # needed by ASG, CTC and HMM
     self.num_states = 0
+
+    # 0: starting node
+    # 1: ending node
+    # 2: label
+    # 3: weight
+    # 4: label position
     self.edges = []
 
     assert isinstance(fsa_type, str), "FSA type input not a string"
