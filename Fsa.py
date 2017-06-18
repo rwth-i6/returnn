@@ -280,8 +280,12 @@ class Fsa:
         label_pos = self.edges[edges_included[0]][4]
       except Exception:
         label_pos = None
-      edge_n = [state, state, self.edges[edges_included[0]][2], 0.]
-      assert len(edge_n) == 4, "length of edge wrong"
+      if self.fsa_type == 'hmm':
+        edge_n = [state, state, self.edges[edges_included[0]][2], 0., None]
+        assert len(edge_n) == 5,  "length of edge wrong"
+      else:
+        edge_n = [state, state, self.edges[edges_included[0]][2], 0.]
+        assert len(edge_n) == 4, "length of edge wrong"
       self.edges.append(edge_n)
 
   def _check_for_repetitions_for_asg(self):
@@ -739,7 +743,7 @@ class Fsa:
 
     while (edges_t):
       edge_t = edges_t.pop(0)
-      assert len(edge_t) == 5, "edge length != 5"
+      assert len(edge_t) == 5, ("edge length != 5", edge_t)
       label = edge_t[2]
       pos = edge_t[4]
 
@@ -764,12 +768,14 @@ class Fsa:
       statetying.allo_map important
     '''
     from os.path import isfile
+    from Log import log
     from LmDataset import StateTying
 
     print("Loading state tying file:", self.state_tying_name)
 
     assert isfile(self.state_tying_name), "State tying file does not exists"
 
+    log.initialize(verbosity=[5])
     self.state_tying = StateTying(self.state_tying_name)
 
     print("Finished state tying mapping:", len(self.state_tying.allo_map), "allos to int")
