@@ -43,6 +43,7 @@ class Fsa:
     # 3: weight
     # 4: label position
     self.edges = []
+    self.edges_single_state = []
 
     assert isinstance(fsa_type, str), "FSA type input not a string"
     self.fsa_type = fsa_type.lower()
@@ -250,6 +251,13 @@ class Fsa:
       label_indices.append(label_index)
 
     self.lemma = label_indices
+
+  def reduce_node_num(self):
+    """
+    takes the edges and nodes, then reduces all to one node
+    """
+    if (self.num_states > 1 and self.single_state == True):
+      self.edges_single_state = [(0, 0, edge[2], edge[3])for edge in self.edges]
 
   def _adds_loop_edges(self):
     """
@@ -895,6 +903,10 @@ def main():
   fsa_gen.run()
 
   fsa_to_dot_format(file=fsa_gen.filename, num_states=fsa_gen.num_states, edges=fsa_gen.edges)
+
+  if (fsa_gen.single_state == True):
+    fsa_gen.reduce_node_num()
+    fsa_to_dot_format(file=fsa_gen.filename + "_single_state", num_states=1, edges=fsa_gen.edges_single_state)
 
 
 if __name__ == "__main__":
