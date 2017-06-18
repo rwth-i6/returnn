@@ -3848,8 +3848,8 @@ from SprintErrorSignals import sprint_loss_and_error_signal, SprintAlignmentAuto
 class SignalValue(ForwardLayer):
   layer_class = 'sigval'
 
-  def __init__(self, begin=24, sidx=0, margin=0.0, copy_output=None, **kwargs):
-    kwargs['n_out'] = 1
+  def __init__(self, begin=0, sidx=0, margin=0.0, copy_output=None, **kwargs):
+    kwargs['n_out'] = 2
     super(SignalValue, self).__init__(**kwargs)
     self.params = {}
     self.error_val = T.constant(0)
@@ -3859,27 +3859,42 @@ class SignalValue(ForwardLayer):
     self.set_attr('margin', margin)
     if not 'target' in self.attrs:
       self.attrs['target'] = 'classes'
-    norm = (T.sum(self.index, axis=0, dtype='float32') - numpy.float32(begin)) / T.sum(self.index, axis=0, dtype='float32')
+    norm = T.sum(self.index[begin:], axis=0, dtype='float32') / T.sum(self.index, axis=0, dtype='float32')
     z = self.get_linear_forward_output()
-    p = T.nnet.sigmoid(z)
+
+    q = T.nnet.sigmoid(z)
+    margin = q[:,:,1] # * numpy.float32(margin)
+    p = q[:,:,0]
+    kwargs['n_out'] = 1
+
+    #n_in = sum([s.attrs['n_out'] for s in self.sources])
+    #x_in = self.sources[0].output if len(self.sources) == 1 else T.concatenate([s.output for s in self.sources], axis=2)
+    #W_margin = self.add_param(self.create_forward_weights(n_in, 1, name="W_margin_%s" % self.name))
+    #b_margin = self.add_param(self.create_bias(1, name='b_margin_%s' % self.name))
+    #margin = T.nnet.sigmoid(T.dot(x_in, W_margin) + b_margin)[:,:,0] * numpy.float32(margin)
+
+    #p = T.nnet.sigmoid(z)
     r = copy_output.y_out if copy_output is not None else self.network.y[self.attrs['target']]
     r = r.reshape((p.shape[0],p.shape[1],4))
-    p = p[begin:,:,0]
+    p = p[begin:,:]
     rb = r[begin:,:,sidx]
     rs = r[begin:,:,sidx+1]
+    #rn = rb.max(axis=0, keepdims=True)
+    #rb /= rn
+    #rs /= rn
     self.index = self.index[begin:]
-    margin = numpy.float32(margin)
+    #margin = numpy.float32(margin)
     step = T.ones((self.index.shape[1],),'float32') #numpy.float32(1) / T.sum(self.index,axis=0,dtype='float32')
-    def accumulate(p, rb, rs, bp, ep):
-      wb = T.maximum(p - numpy.float32(0.5 + margin), numpy.float32(0)) / numpy.float32(0.5 - margin)
-      ws = T.maximum(numpy.float32(0.5 - margin) - p, numpy.float32(0)) / numpy.float32(0.5 - margin)
+    def accumulate(p, m, rb, rs, bp, ep):
+      wb = T.maximum(p - m, numpy.float32(0)) / (numpy.float32(1.00001) - m)
+      ws = T.maximum(numpy.float32(1.0) - p - m, numpy.float32(0)) / (numpy.float32(1.00001) - m)
       bp = bp + step
       ep = ep + step / rs
       bd, ed = wb * bp, ws * ep
       ba, ea = ed * rs, bd / rb
       return bp - bd + ba, ep - ed + ea
 
-    c, _ = theano.scan(accumulate,sequences=[p,rb,rs],
+    c, _ = theano.scan(accumulate,sequences=[p,margin,rb,rs],
                        outputs_info=[T.alloc(numpy.cast[theano.config.floatX](0), r.shape[1]),
                                      T.alloc(numpy.cast[theano.config.floatX](0), r.shape[1])])
 
