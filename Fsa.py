@@ -438,21 +438,26 @@ class Fsa:
         self.edges.append([start_node + 1, end_node + 1, i, 0.])
         self.num_states += 1
 
-  def _load_lexicon(self):
+  def _load_lexicon(self, reload = False):
     '''
-    loads a lexicon from a file, loads the xml and returns its conent
+    loads a lexicon from a file, loads the xml and returns its content
     where:
       lex.lemmas and lex.phonemes important
+    :param bool reload: should lexicon be reloaded
     '''
-    from os.path import isfile
-    from Log import log
     from LmDataset import Lexicon
+    if not isinstance(self.lexicon, Lexicon):
+      reload = True
 
-    assert isfile(self.lexicon_name), "Lexicon does not exists"
+    if reload:
+      from os.path import isfile
+      from Log import log
 
-    log.initialize(verbosity=[5])
+      assert isfile(self.lexicon_name), "Lexicon does not exists"
 
-    self.lexicon = Lexicon(self.lexicon_name)
+      log.initialize(verbosity=[5])
+
+      self.lexicon = Lexicon(self.lexicon_name)
 
   def _find_allo_seq_in_lex(self):
     '''
