@@ -153,6 +153,19 @@ class Fsa:
       print("No finite state automaton matches to chosen type")
       sys.exit(-1)
 
+  def set_fsa_type(self, fsa_type=None):
+    if isinstance(fsa_type, str):
+      self.fsa_type = fsa_type
+
+  def set_lemma(self, lemma=None):
+    if isinstance(lemma, str):
+      self.lemma_orig = lemma
+      self.lemma = None
+
+  def set_filename(self, filename=None):
+    if isinstance(filename, str):
+      self.filename = filename
+
   def set_lexicon(self, lexicon_name=None):
     """
     sets a new lexicon
