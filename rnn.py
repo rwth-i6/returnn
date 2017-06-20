@@ -343,8 +343,8 @@ def init(configFilename=None, commandLineOptions=(), config_updates=None, extra_
   if needData():
     initData()
   printTaskProperties(devices)
-  if config.value('task','train') == 'server':
-    server = Server(devices=devices)
+  if config.value('task', 'train') == 'server':
+    server = Server.Server()
   else:
     initEngine(devices)
 
@@ -439,6 +439,8 @@ def executeMainTask():
   elif task == "daemon":
     engine.init_network_from_config(config)
     engine.daemon(config)
+  elif task == "server":
+    print("Server Initiating")
   elif task == "nop":
     print("Task: No-operation", file=log.v1)
   else:
