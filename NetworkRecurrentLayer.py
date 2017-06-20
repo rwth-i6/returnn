@@ -961,32 +961,24 @@ class RecurrentUnitLayer(Layer):
     assert aligner,"please provide an inverted aligner!"
     t = self.base[0].output.shape[0]
     b = self.base[0].output.shape[1]
-    max_timestep_per_batch = (T.arange(b) + 1) * t
-    att_with_first_index = T.concatenate([T.zeros((1,att.shape[1]))-1,att],axis=0) #(N+1)B
-    #att_with_first_index = theano.printing.Print('att with first ind',attrs=['__str__','shape'])(att_with_first_index)
-    max_diff = T.minimum(T.cast(T.extra_ops.diff(att_with_first_index,axis=0).flatten().sort()[-1],'int32'), aligner.attrs['max_skip'])
-    #max_diff = theano.printing.Print('maxdiff',attrs=['__str__'])(max_diff)
+    att_with_first_index = T.concatenate([T.zeros((1,att.shape[1]))-numpy.float32(1),att],axis=0) #(N+1)B
+    max_diff = T.cast(T.extra_ops.diff(att_with_first_index,axis=0).flatten().sort()[-1],'int32')
     reduced_index = aligner.reduced_index.repeat(max_diff).reshape((aligner.reduced_index.shape[0], aligner.reduced_index.shape[1],max_diff)) #NB(max_diff)
     att_wo_last_ind = att_with_first_index[:-1] #NB
     att_wo_last_ind = T.inc_subtensor(att_wo_last_ind[0],numpy.int32(1))
-    att_rep = att_wo_last_ind.repeat(max_diff)
-    att_rep = att_rep.reshape((att_wo_last_ind.shape[0],att_wo_last_ind.shape[1],max_diff))#NB(max_diff)
-    #reduced_index = theano.printing.Print('reduced ind',attrs=['__str__','shape'])(reduced_index)
-    att_rep = T.switch(reduced_index>0, att_rep + T.arange(max_diff),-1)
+    att_rep = att_wo_last_ind.repeat(max_diff).reshape((att_wo_last_ind.shape[0],att_wo_last_ind.shape[1],max_diff))#NB(max_diff)
+    att_rep = T.switch(reduced_index>0, att_rep + T.arange(max_diff),T.zeros((1,),'float32')-numpy.float32(1))
     att_rep = att_rep.dimshuffle(0,2,1) #N(max_diff)B
     reduced_index = reduced_index.dimshuffle(0,2,1) #N(max_diff)B
-    att_rep = T.switch(reduced_index > 0,att_rep + (T.arange(b) * t),-1)
-    att_rep = T.switch(att_rep >= max_timestep_per_batch, -1, att_rep)
-    att_rep = T.switch(att_rep <= (t*b-1),att_rep,-1) #set values outside time*batch range to -1
-    #att_rep = att_rep.dimshuffle(0,2,1) #N(max_diff)B
-    #reduced_index = reduced_index.dimshuffle(0,2,1)
-    numpy.set_printoptions(threshold=numpy.nan)
-    #from TheanoUtil import print_to_file
-    #max_diff = print_to_file('att_rep',max_diff)
-    #att_rep = print_to_file('att_rep',att_rep)
-    #reduced_index = print_to_file('att_rep',reduced_index)
+    att_rep = T.switch(reduced_index > 0,att_rep + (T.arange(b) * t),T.zeros((1,),'float32')-numpy.float32(1))
+    att_rep = att_rep.clip(0,(t*b-1))
+    diff_arr = att_with_first_index[1:]-att_with_first_index[:-1]
+    diff_arr = diff_arr.clip(0,max_diff) - numpy.float32(1)#NB
+    mask = diff_arr.dimshuffle(0,'x',1).repeat(max_diff,axis=1) - T.arange(max_diff).dimshuffle('x',0,'x')
+    ind = T.cast(T.where(T.lt(mask,numpy.float32(0)),T.zeros((1,),'float32'),numpy.float32(1)),'int8')
     self.rec_transform_enc = att_rep
-    self.rec_transform_index = reduced_index
+    self.rec_transform_index = ind
+
 
 class RecurrentUpsampleLayer(RecurrentUnitLayer):
   layer_class = 'recurrent_upsample'
