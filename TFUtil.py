@@ -1522,7 +1522,8 @@ class OpCodeCompiler(object):
   """
 
   def __init__(self, base_name, code_version, code, c_macro_defines=None, ld_flags=None, include_deps=None,
-               static_version_name=None, should_cleanup_old_all=True, should_cleanup_old_mydir=False):
+               static_version_name=None, should_cleanup_old_all=True, should_cleanup_old_mydir=False,
+               use_cuda_if_available=True):
     """
     :param str base_name: base name for the module, e.g. "zero_out"
     :param int|tuple[int] code_version: check for the cache whether to reuse
@@ -1547,7 +1548,7 @@ class OpCodeCompiler(object):
     self.ld_flags = ld_flags or []
     self.include_deps = include_deps
     self.static_version_name = static_version_name
-    self._cuda_env = CudaEnv.get_instance()
+    self._cuda_env = use_cuda_if_available and CudaEnv.get_instance()
     self._code_hash = self._make_code_hash()
     self._info_dict = self._make_info_dict()
     self._hash = self._make_hash()
@@ -3024,6 +3025,7 @@ class TFArrayContainer(object):
       code_version=1,  # code also ends up in hash, thus this doesn't always needs to be increased
       code=cls.code,
       include_deps=[],
+      use_cuda_if_available=False,
       ld_flags=[
         "-Xlinker", "-rpath", "-Xlinker", os.path.dirname(lib),
         "-L", os.path.dirname(lib), "-l", ":" + os.path.basename(lib)])

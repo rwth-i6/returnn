@@ -476,7 +476,7 @@ def test_GlobalTensorArray():
   GlobalTensorArrayOpMaker().get_op()
 
 
-@unittest.skip("remove this when it works")
+@unittest.skip("remove this when it works. see https://github.com/tensorflow/tensorflow/issues/10950")
 def test_TFArrayContainer():
   # TODO...
   # https://stackoverflow.com/questions/44455722/create-my-own-resource-types-tf-resource
