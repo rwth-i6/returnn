@@ -946,6 +946,7 @@ class QueueDataProvider(DataProviderBase):
   This class is supposed to encapsulate all the logic of this module and to be used by the TF engine.
   It gets the train and dev dataset instances.
   """
+
   def __init__(self, shuffle_train_seqs=False, **kwargs):
     """
     Creates the queues and connector instances (which will be the queue runners).
@@ -1028,6 +1029,9 @@ class QueueDataProvider(DataProviderBase):
     self.cur_dataset_reader = None  # type: DatasetReader
     self._last_seq_idx = None
 
+  def get_feed_dict(self, single_threaded=False):
+    return {}
+
   def _update_last_seq_idx(self, session):
     """
     :param tf.Session session:
@@ -1070,8 +1074,14 @@ class QueueDataProvider(DataProviderBase):
       pass
     return True
 
-  def get_feed_dict(self, single_threaded=False):
-    return {}
+  def have_reached_end(self):
+    pass  # TODO
+
+  def get_complete_frac(self):
+    pass  # TODO
+
+  def get_num_frames(self):
+    pass  # TODO
 
   def init_dataset(self, session, dataset, is_train_dataset):
     """
@@ -1093,12 +1103,15 @@ class QueueDataProvider(DataProviderBase):
     self.cur_dataset_reader = DatasetReader(
       extern_data=self.extern_data, dataset=dataset, coord=self.coord, feed_callback=feed_callback)
 
+  def get_dataset_name(self):
+    assert self.cur_dataset_reader
+    return self.cur_dataset_reader.dataset.name
+
   def get_threads(self):
-    pass
+    pass  # TODO
 
   def start_threads(self):
-    pass
+    pass  # TODO
 
   def stop_threads(self):
-    pass
-
+    pass  # TODO

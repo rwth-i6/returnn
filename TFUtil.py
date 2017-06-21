@@ -2526,8 +2526,16 @@ class Condition(object):
 
 
 class GlobalTensorArrayOpMaker:
-  # Note: This whole implementation will not work when tensor_array.h is not available.
-  # https://github.com/tensorflow/tensorflow/issues/10527
+  """
+  Creates a TensorArray which does not use the per-run ("per-step") resource manager container
+  but uses the standard container which persists across runs.
+  This TensorArray resource handle is then just a standard TensorArray resource handle which
+  can be used with all TensorArray related functions/ops.
+
+  Note: This whole implementation currently does not work because tensor_array.h is not available.
+  See https://github.com/tensorflow/tensorflow/issues/10527
+  and test_GlobalTensorArray().
+  """
 
   code = """
     #include "tensorflow/core/framework/op_kernel.h"
@@ -2712,6 +2720,14 @@ class GlobalTensorArrayOpMaker:
 
 
 class TFArrayContainer(object):
+  """
+  Array container, like std::vector, with random index access.
+
+  Currently does not work.
+  See https://github.com/tensorflow/tensorflow/issues/10950,
+  and test_TFArrayContainer().
+  """
+
   code = """
     #include <vector>
 
@@ -3160,6 +3176,8 @@ class ExplicitRandomShuffleQueue(object):
 
       # TODO Seems like we cannot use tf.TensorArray for what we need here...
       # see test_TensorArray() and https://stackoverflow.com/questions/44418036/
+      # Solutions are GlobalTensorArrayOpMaker or TFArrayContainer which also both currently do not work.
+      # Thus at the moment, I don't see any good way to make this work...
       self._tas = [
         tf.TensorArray(
           dtype=dtype, size=capacity, clear_after_read=True,
