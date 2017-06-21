@@ -2314,6 +2314,21 @@ class BinaryCrossEntropy(Loss):
       out = 0.5 * tf.nn.sigmoid_cross_entropy_with_logits(logits = self.output_flat, labels = self.target_flat)
       return tf.reduce_mean(out)
 
+class MeanSquaredError(Loss):
+  """
+  The generic mean squared error loss function
+  """
+  class_name = "mse"
+
+  def get_value(self):
+    """
+    """
+    assert not self.target.sparse, "sparse is not supported yet"
+    with tf.name_scope("loss_mse"):
+      out = tf.reduce_mean(tf.squared_difference(self.output_flat, self.target_flat)) 
+      return out
+
+
 _LossClassDict = {}  # type: dict[str,type(Loss)]
 
 def _init_loss_class_dict():
