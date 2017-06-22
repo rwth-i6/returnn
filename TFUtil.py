@@ -1483,15 +1483,6 @@ class CudaEnv(object):
         return p
     return None
 
-  def __nonzero__(self):
-    """
-    :return: whether this is a valid usable CUDA env
-    :rtype: bool
-    """
-    return self.is_available()
-
-  __bool__ = __nonzero__  # Python 3
-
   def is_available(self):
     return bool(self.cuda_path)
 
@@ -1633,7 +1624,7 @@ class OpCodeCompiler(object):
       "code_hash": self._code_hash,
       "c_macro_defines": self.c_macro_defines,
       "ld_flags": self.ld_flags,
-      "with_cuda": self._cuda_env and self._cuda_env.is_available()
+      "with_cuda": bool(self._cuda_env and self._cuda_env.is_available())
     }
 
   def _make_code_hash(self):

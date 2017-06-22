@@ -46,7 +46,7 @@ class OpMaker(object):
   """
   https://www.tensorflow.org/versions/master/how_tos/adding_an_op/
   """
-  with_cuda = None
+  with_cuda = None  # type: None|bool
   mod_cache = {}  # cache_key -> mod
   op_cache = {}  # cache_key -> op
 
@@ -376,6 +376,7 @@ class OpMaker(object):
       code=self._make_code(),
       include_deps=[self.support_native_op_cpp_filename],
       ld_flags=ld_flags,
+      use_cuda_if_available=self.with_cuda,
       **dict(self.compiler_opts))
     mod = comp.load_module()
     self.mod_cache[self.cache_key] = mod
