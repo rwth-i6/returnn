@@ -2295,14 +2295,14 @@ def slice_pad_zeros(x, begin, end, axis=0):
     left_rem = -min_frame
     x, begin, end = tf.cond(
       tf.less_equal(left_rem, 0),
-      [x, begin, end],
-      [pad_zeros_in_axis(x, before=left_rem, axis=axis), begin + left_rem, end + left_rem])
+      lambda: [x, begin, end],
+      lambda: [pad_zeros_in_axis(x, before=left_rem, axis=axis), begin + left_rem, end + left_rem])
     max_frame = tf.maximum(begin, end)
     right_rem = max_frame - tf.shape(x)[axis]
     x = tf.cond(
       tf.less_equal(right_rem, 0),
-      x,
-      pad_zeros_in_axis(x, after=right_rem, axis=axis))
+      lambda: x,
+      lambda: pad_zeros_in_axis(x, after=right_rem, axis=axis))
     return single_strided_slice(x, axis=axis, begin=begin, end=end)
 
 

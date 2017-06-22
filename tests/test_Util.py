@@ -30,6 +30,13 @@ def test_uniq():
   assert (uniq(np.array([0, 1, 1, 1, 2, 2])) == np.array([0, 1, 2])).all()
 
 
+def test_slice_pad_zeros():
+  assert_equal(list(slice_pad_zeros(np.array([1, 2, 3, 4]), begin=1, end=3)), [2, 3])
+  assert_equal(list(slice_pad_zeros(np.array([1, 2, 3, 4]), begin=-2, end=2)), [0, 0, 1, 2])
+  assert_equal(list(slice_pad_zeros(np.array([1, 2, 3, 4]), begin=-2, end=6)), [0, 0, 1, 2, 3, 4, 0, 0])
+  assert_equal(list(slice_pad_zeros(np.array([1, 2, 3, 4]), begin=2, end=6)), [3, 4, 0, 0])
+
+
 def test_parse_orthography_into_symbols():
   assert_equal(list("hi"), parse_orthography_into_symbols("hi"))
   assert_equal(list(" hello "), parse_orthography_into_symbols(" hello "))

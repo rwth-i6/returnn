@@ -38,6 +38,7 @@ class Dataset(object):
         kwargs[key] = value
     set_or_remove("window", None)
     set_or_remove("chunking", config.value("chunking", None))
+    set_or_remove("context_window", config.typed_value("context_window"))
     set_or_remove("seq_ordering", config.value("batching", None))
     set_or_remove("shuffle_frames_of_nseqs", config.int('shuffle_frames_of_nseqs', 0) or None)
 
@@ -51,7 +52,10 @@ class Dataset(object):
     cls.kwargs_update_from_config(config, kwargs)
     return cls(**kwargs)
 
-  def __init__(self, name="dataset", window=1, chunking="0", seq_ordering='default', shuffle_frames_of_nseqs=0, estimated_num_seqs=None):
+  def __init__(self, name="dataset",
+               window=1, chunking="0", context_window=None,
+               seq_ordering='default', shuffle_frames_of_nseqs=0,
+               estimated_num_seqs=None,):
     self.name = name
     self.lock = RLock()  # Used when manipulating our data potentially from multiple threads.
     self.num_inputs = 0
@@ -73,6 +77,14 @@ class Dataset(object):
     else:
       self.chunk_step = self.chunk_size
     assert self.chunk_size >= 0, "chunk size must not be negative"
+    if context_window is None:
+      context_window = NumbersDict(0)
+    elif isinstance(context_window, int):
+      context_window = NumbersDict(broadcast_value=0, numbers_dict={"data": context_window})
+    elif isinstance(context_window, dict):
+      context_window = NumbersDict(broadcast_value=0, numbers_dict=context_window)
+    assert isinstance(context_window, NumbersDict)
+    self.context_window = context_window
     self.shuffle_frames_of_nseqs = shuffle_frames_of_nseqs
     self.epoch = None
 
@@ -525,6 +537,9 @@ class Dataset(object):
         chunk_size = 0
     batch = Batch()
     for seq_idx, t_start, t_end in self.iterate_seqs(chunk_size=chunk_size, chunk_step=chunk_step, used_data_keys=used_data_keys):
+      if self.context_window:
+        t_start -= self.context_window
+        t_end += self.context_window
       if recurrent_net:
         length = t_end - t_start
         if max_seq_length < 0 and length['classes'] > -max_seq_length:

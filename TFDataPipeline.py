@@ -892,6 +892,7 @@ class FeedDictDataProvider(DataProviderBase):
                 for k in self.data_keys}
     self.dataset.load_seqs(batch.start_seq, batch.end_seq)
     self.num_frames += batch.get_total_num_frames()
+    from Util import slice_pad_zeros
     with self.dataset.lock:
       for seq in batch.seqs:
         o = seq.batch_frame_offset
@@ -900,7 +901,8 @@ class FeedDictDataProvider(DataProviderBase):
         # input-data, input-index will also be set in this loop. That is data-key "data".
         for k in self.data_keys:
           if l[k] == 0: continue
-          v = self.dataset.get_data_slice(seq.seq_idx, k, seq.seq_start_frame[k], seq.seq_end_frame[k])
+          v = self.dataset.get_data(seq.seq_idx, k)
+          v = slice_pad_zeros(v, begin=seq.seq_start_frame[k], end=seq.seq_end_frame[k])
           ls = v.shape[0]
           if ls != l[k]:
             raise Exception("got shape[0]: %i, expected: %i, start/end: %r/%r, seq_idx: %i, seq len: %r" % (

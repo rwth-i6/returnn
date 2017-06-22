@@ -60,6 +60,14 @@ def test_single_strided_slice():
   assert_equal(list(tf.squeeze(single_strided_slice(x2, axis=tf.constant(0), end=1), axis=0).eval()), [0, 1, 2])
 
 
+def test_slice_pad_zeros():
+  x = tf.constant([1, 2, 3, 4])
+  assert_equal(list(slice_pad_zeros(x, begin=1, end=3).eval()), [2, 3])
+  assert_equal(list(slice_pad_zeros(x, begin=-2, end=2).eval()), [0, 0, 1, 2])
+  assert_equal(list(slice_pad_zeros(x, begin=-2, end=6).eval()), [0, 0, 1, 2, 3, 4, 0, 0])
+  assert_equal(list(slice_pad_zeros(x, begin=2, end=6).eval()), [3, 4, 0, 0])
+
+
 def test_circular_pad():
   x = tf.reshape(tf.range(9), (3, 3))
   assert_equal(list(x[0].eval()), [0, 1, 2])
