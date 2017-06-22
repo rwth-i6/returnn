@@ -36,9 +36,9 @@ class Dataset(object):
         del kwargs[key]
       if value is not None and key not in kwargs:
         kwargs[key] = value
-    set_or_remove("window", None)
-    set_or_remove("chunking", config.value("chunking", None))
+    set_or_remove("window", config.int('window', None))
     set_or_remove("context_window", config.typed_value("context_window"))
+    set_or_remove("chunking", config.value("chunking", None))
     set_or_remove("seq_ordering", config.value("batching", None))
     set_or_remove("shuffle_frames_of_nseqs", config.int('shuffle_frames_of_nseqs', 0) or None)
 
@@ -53,9 +53,20 @@ class Dataset(object):
     return cls(**kwargs)
 
   def __init__(self, name="dataset",
-               window=1, chunking="0", context_window=None,
+               window=1, context_window=None, chunking="0",
                seq_ordering='default', shuffle_frames_of_nseqs=0,
                estimated_num_seqs=None,):
+    """
+    :param str name: e.g. "train" or "eval"
+    :param int window: features will be of dimension window * feature_dim, as we add a context-window around.
+      not all datasets support this option.
+    :param None|int|dict|NumbersDict context_window: will add this context for each chunk
+    :param str chunking: "chunk_size:chunk_step"
+    :param str seq_ordering: "batching"-option in config. e.g. "default", "sorted" or "random".
+      See self.get_seq_order_for_epoch() for more details.
+    :param int shuffle_frames_of_nseqs: shuffles the frames. not always supported
+    :param None|int estimated_num_seqs: for progress reporting in case the real num_seqs is unknown
+    """
     self.name = name
     self.lock = RLock()  # Used when manipulating our data potentially from multiple threads.
     self.num_inputs = 0
@@ -96,12 +107,13 @@ class Dataset(object):
     :type xr: numpy.ndarray
     :rtype: numpy.ndarray
     """
-    from numpy.lib.stride_tricks import as_strided as ast
+    from numpy.lib.stride_tricks import as_strided
     x = numpy.concatenate([self.zpad, xr, self.zpad])
-    return ast(x,
-               shape=(x.shape[0] - self.window + 1, 1, self.window, self.num_inputs),
-               strides=(x.strides[0], x.strides[1] * self.num_inputs) + x.strides
-               ).reshape((xr.shape[0], self.num_inputs * self.window))
+    return as_strided(
+      x,
+      shape=(x.shape[0] - self.window + 1, 1, self.window, self.num_inputs),
+      strides=(x.strides[0], x.strides[1] * self.num_inputs) + x.strides
+      ).reshape((xr.shape[0], self.num_inputs * self.window))
 
   def preprocess(self, seq):
     """
@@ -117,7 +129,8 @@ class Dataset(object):
     :rtype: bool
     :returns whether we have the full range (start,end) of sorted seq idx.
     """
-    if start == end: return True  # Empty.
+    if start == end:
+      return True  # Empty.
     assert start < end
     return False
 
@@ -279,7 +292,7 @@ class Dataset(object):
     self.nbytes = numpy.array([], dtype=theano.config.floatX).itemsize * (self.num_inputs * self.window + 1 + 1)
 
     if self.window > 1:
-      self.zpad = numpy.zeros((int(self.window) / 2, self.num_inputs), dtype=theano.config.floatX)
+      self.zpad = numpy.zeros((int(self.window) // 2, self.num_inputs), dtype=theano.config.floatX)
 
     self.init_seq_order()
 
@@ -738,8 +751,8 @@ def init_dataset_via_str(config_str, config=None, cache_byte_size=None, **kwargs
   :rtype: Dataset
   """
   kwargs = kwargs.copy()
-  if not 'window' in kwargs and config and config.has('window'):
-    kwargs['window'] = config.int('window',1)
+  if 'window' not in kwargs and config and config.has('window'):
+    kwargs['window'] = config.int('window', 1)
   from HDFDataset import HDFDataset
   if config_str.startswith("sprint:"):
     kwargs["sprintConfigStr"] = config_str[len("sprint:"):]
