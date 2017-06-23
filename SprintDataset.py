@@ -50,8 +50,7 @@ class SprintDatasetBase(Dataset):
   SprintCachedSeqsMax = 200
   SprintCachedSeqsMin = 100
 
-  def __init__(self, window=1, target_maps=None, str_add_final_zero=False, **kwargs):
-    assert window == 1
+  def __init__(self, target_maps=None, str_add_final_zero=False, **kwargs):
     super(SprintDatasetBase, self).__init__(**kwargs)
     if target_maps:
       assert isinstance(target_maps, dict)
@@ -94,6 +93,7 @@ class SprintDatasetBase(Dataset):
     self.num_outputs = {"data": [inputDim, 2]}
     if outputDim > 0:
       self.num_outputs["classes"] = [outputDim, 1]
+    self._base_init()
     # At this point, we are ready for data. In case we don't use the Sprint PythonSegmentOrdering
     # (SprintInterface.getSegmentList()), we must call this at least once.
     if not self.multiple_epochs:
@@ -249,6 +249,9 @@ class SprintDatasetBase(Dataset):
     # must be in format: (time,feature)
     features = features.transpose()
     assert features.shape == (T, self.num_inputs)
+    if self.window > 1:
+      features = self.sliding_window(features)
+      assert features.shape == (T, self.num_inputs * self.window)
 
     if targets is None:
       targets = {}
@@ -738,7 +741,7 @@ class SprintCacheDataset(CachedDataset2):
 
     def read(self, name):
       """
-      :param str name: content-filename for sprint cache 
+      :param str name: content-filename for sprint cache
       :return: numpy array of shape (time, [num_labels])
       :rtype: numpy.ndarray
       """
@@ -762,7 +765,7 @@ class SprintCacheDataset(CachedDataset2):
 
   def __init__(self, data, **kwargs):
     """
-    :param dict[str,dict[str]] data: data-key -> dict which keys such as filename, see Data constructor  
+    :param dict[str,dict[str]] data: data-key -> dict which keys such as filename, see Data constructor
     """
     super(SprintCacheDataset, self).__init__(**kwargs)
     self.data = {key: self.Data(data_key=key, **opts) for (key, opts) in data.items()}

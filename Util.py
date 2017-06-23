@@ -618,6 +618,30 @@ def uniq(seq):
   return seq[idx]
 
 
+def slice_pad_zeros(x, begin, end, axis=0):
+  """
+  :param numpy.ndarray x: of shape (..., time, ...)
+  :param int begin:
+  :param int end:
+  :param int axis:
+  :return: basically x[begin:end] (with axis==0) but if begin < 0 or end > x.shape[0],
+   it will not discard these frames but pad zeros, such that the resulting shape[0] == end - begin.
+  :rtype: numpy.ndarray
+  """
+  assert axis == 0, "not yet fully implemented otherwise"
+  pad_left, pad_right = 0, 0
+  if begin < 0:
+    pad_left = -begin
+    begin = 0
+  elif begin >= x.shape[axis]:
+    return np.zeros((end - begin,) + x.shape[1:], dtype=x.dtype)
+  assert end >= begin
+  if end > x.shape[axis]:
+    pad_right = end - x.shape[axis]
+    end = x.shape[axis]
+  return np.pad(x[begin:end], [(pad_left, pad_right)] + [(0, 0)] * (x.ndim - 1), mode="constant")
+
+
 _have_inplace_increment = None
 _native_inplace_increment = None
 

@@ -48,12 +48,23 @@ def test_dummy():
   #assert False
 
 
-def test_make_lstm_op():
+def test_make_lstm_op_auto_cuda():
   try:
     make_lstm_op()
   except tf.errors.NotFoundError:
     dump_info()
     raise
+
+
+def test_make_lstm_op_no_cuda():
+  try:
+    OpMaker.with_cuda = False
+    make_lstm_op()
+  except tf.errors.NotFoundError:
+    dump_info()
+    raise
+  finally:
+    OpMaker.with_cuda = None
 
 
 def test_NativeLstmCell():

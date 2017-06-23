@@ -1483,15 +1483,6 @@ class CudaEnv(object):
         return p
     return None
 
-  def __nonzero__(self):
-    """
-    :return: whether this is a valid usable CUDA env
-    :rtype: bool
-    """
-    return self.is_available()
-
-  __bool__ = __nonzero__  # Python 3
-
   def is_available(self):
     return bool(self.cuda_path)
 
@@ -1522,7 +1513,8 @@ class OpCodeCompiler(object):
   """
 
   def __init__(self, base_name, code_version, code, c_macro_defines=None, ld_flags=None, include_deps=None,
-               static_version_name=None, should_cleanup_old_all=True, should_cleanup_old_mydir=False):
+               static_version_name=None, should_cleanup_old_all=True, should_cleanup_old_mydir=False,
+               use_cuda_if_available=True):
     """
     :param str base_name: base name for the module, e.g. "zero_out"
     :param int|tuple[int] code_version: check for the cache whether to reuse
@@ -1547,7 +1539,7 @@ class OpCodeCompiler(object):
     self.ld_flags = ld_flags or []
     self.include_deps = include_deps
     self.static_version_name = static_version_name
-    self._cuda_env = CudaEnv.get_instance()
+    self._cuda_env = use_cuda_if_available and CudaEnv.get_instance()
     self._code_hash = self._make_code_hash()
     self._info_dict = self._make_info_dict()
     self._hash = self._make_hash()
@@ -1632,7 +1624,7 @@ class OpCodeCompiler(object):
       "code_hash": self._code_hash,
       "c_macro_defines": self.c_macro_defines,
       "ld_flags": self.ld_flags,
-      "with_cuda": self._cuda_env and self._cuda_env.is_available()
+      "with_cuda": bool(self._cuda_env and self._cuda_env.is_available())
     }
 
   def _make_code_hash(self):
@@ -2294,14 +2286,14 @@ def slice_pad_zeros(x, begin, end, axis=0):
     left_rem = -min_frame
     x, begin, end = tf.cond(
       tf.less_equal(left_rem, 0),
-      [x, begin, end],
-      [pad_zeros_in_axis(x, before=left_rem, axis=axis), begin + left_rem, end + left_rem])
+      lambda: [x, begin, end],
+      lambda: [pad_zeros_in_axis(x, before=left_rem, axis=axis), begin + left_rem, end + left_rem])
     max_frame = tf.maximum(begin, end)
     right_rem = max_frame - tf.shape(x)[axis]
     x = tf.cond(
       tf.less_equal(right_rem, 0),
-      x,
-      pad_zeros_in_axis(x, after=right_rem, axis=axis))
+      lambda: x,
+      lambda: pad_zeros_in_axis(x, after=right_rem, axis=axis))
     return single_strided_slice(x, axis=axis, begin=begin, end=end)
 
 
@@ -2525,8 +2517,16 @@ class Condition(object):
 
 
 class GlobalTensorArrayOpMaker:
-  # Note: This whole implementation will not work when tensor_array.h is not available.
-  # https://github.com/tensorflow/tensorflow/issues/10527
+  """
+  Creates a TensorArray which does not use the per-run ("per-step") resource manager container
+  but uses the standard container which persists across runs.
+  This TensorArray resource handle is then just a standard TensorArray resource handle which
+  can be used with all TensorArray related functions/ops.
+
+  Note: This whole implementation currently does not work because tensor_array.h is not available.
+  See https://github.com/tensorflow/tensorflow/issues/10527
+  and test_GlobalTensorArray().
+  """
 
   code = """
     #include "tensorflow/core/framework/op_kernel.h"
@@ -2711,6 +2711,14 @@ class GlobalTensorArrayOpMaker:
 
 
 class TFArrayContainer(object):
+  """
+  Array container, like std::vector, with random index access.
+
+  Currently does not work.
+  See https://github.com/tensorflow/tensorflow/issues/10950,
+  and test_TFArrayContainer().
+  """
+
   code = """
     #include <vector>
 
@@ -3024,6 +3032,7 @@ class TFArrayContainer(object):
       code_version=1,  # code also ends up in hash, thus this doesn't always needs to be increased
       code=cls.code,
       include_deps=[],
+      use_cuda_if_available=False,
       ld_flags=[
         "-Xlinker", "-rpath", "-Xlinker", os.path.dirname(lib),
         "-L", os.path.dirname(lib), "-l", ":" + os.path.basename(lib)])
@@ -3158,6 +3167,8 @@ class ExplicitRandomShuffleQueue(object):
 
       # TODO Seems like we cannot use tf.TensorArray for what we need here...
       # see test_TensorArray() and https://stackoverflow.com/questions/44418036/
+      # Solutions are GlobalTensorArrayOpMaker or TFArrayContainer which also both currently do not work.
+      # Thus at the moment, I don't see any good way to make this work...
       self._tas = [
         tf.TensorArray(
           dtype=dtype, size=capacity, clear_after_read=True,

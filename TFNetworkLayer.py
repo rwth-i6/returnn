@@ -2312,17 +2312,21 @@ class BinaryCrossEntropy(Loss):
     assert not self.target.sparse, "sparse is not supported yet"
     with tf.name_scope("loss_bin_ce"):
       out = 0.5 * tf.nn.sigmoid_cross_entropy_with_logits(logits = self.output_flat, labels = self.target_flat)
-      #return self.reduce_func(out)
       return tf.reduce_mean(out)
-    #TBD !!! -> implement the following part of theano code
-    #    elif self.loss == 'sse_sigmoid':
-    #      return 1.0 / 2.0 * T.nnet.binary_crossentropy(T.clip(self.p_y_given_x_flat[self.i], 1.e-38, 1.0 - 1.e-5), self.y_data_flat[self.i]).mean(), known_grads
-    # with:
-    #  self.p_y_given_x = T.nnet.sigmoid(self.z)
-    # with:
-    #  self.z += self.dot(source_output, W)
-    # Notes:
-    #  - use tensoflow function tf.nn.sigmoid_cross_entropy_with_logits
+
+class MeanSquaredError(Loss):
+  """
+  The generic mean squared error loss function
+  """
+  class_name = "mse"
+
+  def get_value(self):
+    """
+    """
+    assert not self.target.sparse, "sparse is not supported yet"
+    with tf.name_scope("loss_mse"):
+      out = tf.reduce_mean(tf.squared_difference(self.output_flat, self.target_flat)) 
+      return out
 
 
 _LossClassDict = {}  # type: dict[str,type(Loss)]

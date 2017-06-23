@@ -46,12 +46,13 @@ class Runner(object):
     :param bool train: whether to do updates on the model
     :param bool eval: whether to evaluate (i.e. calculate loss/error)
     """
-    from TFDataPipeline import FeedDictDataProvider
+    from TFDataPipeline import FeedDictDataProvider, DataProviderBase
     self.engine = engine
     self.data_provider = FeedDictDataProvider(
       tf_session=engine.tf_session, extern_data=engine.network.extern_data,
       data_keys=engine.network.used_data_keys,
       dataset=dataset, batches=batches)
+    assert isinstance(self.data_provider, DataProviderBase)
     self._should_train = train
     self._should_eval = eval
     self.store_metadata_mod_step = engine.config.int("store_metadata_mod_step", 0)
@@ -538,8 +539,6 @@ class Engine(object):
     if False:  # TODO ...
       extern_data = ExternData()
       extern_data.init_from_config(self.config)
-      from TFDataPipeline import TFDataQueues
-      tf_queues = TFDataQueues(extern_data=extern_data)
       # TODO...
     network = TFNetwork(
       name="root",

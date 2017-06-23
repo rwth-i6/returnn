@@ -344,7 +344,7 @@ def init(configFilename=None, commandLineOptions=(), config_updates=None, extra_
     initData()
   printTaskProperties(devices)
   if config.value('task', 'train') == 'server':
-    server = Server.Server(devices=devices)
+    server = Server.Server()
   else:
     initEngine(devices)
 
