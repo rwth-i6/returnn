@@ -36,7 +36,7 @@ class Dataset(object):
         del kwargs[key]
       if value is not None and key not in kwargs:
         kwargs[key] = value
-    set_or_remove("window", config.int('window', None))
+    set_or_remove("window", config.int('window', 0) or None)
     set_or_remove("context_window", config.typed_value("context_window"))
     set_or_remove("chunking", config.value("chunking", None))
     set_or_remove("seq_ordering", config.value("batching", None))
