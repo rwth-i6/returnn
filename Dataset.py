@@ -276,11 +276,7 @@ class Dataset(object):
     self.rnd_seq_drop = Random(epoch or 1)
     return False
 
-  def initialize(self):
-    """
-    Does the main initialization before it can be used.
-    This needs to be called before self.load_seqs() can be used.
-    """
+  def _base_init(self):
     # We expect that the following attributes are already set elsewhere, by a derived class.
     assert self.num_inputs > 0
     assert self.num_outputs
@@ -294,6 +290,12 @@ class Dataset(object):
     if self.window > 1:
       self.zpad = numpy.zeros((int(self.window) // 2, self.num_inputs), dtype=theano.config.floatX)
 
+  def initialize(self):
+    """
+    Does the main initialization before it can be used.
+    This needs to be called before self.load_seqs() can be used.
+    """
+    self._base_init()
     self.init_seq_order()
 
   def get_times(self, sorted_seq_idx):
@@ -737,8 +739,12 @@ def init_dataset(kwargs):
     raise Exception("Dataset class %r not found" % clazz_name)
   files = kwargs.pop("files", [])
   obj = clazz(**kwargs)
-  for f in files:
-    obj.add_file(f)
+  assert isinstance(obj, Dataset)
+  if files:
+    from HDFDataset import HDFDataset
+    assert isinstance(obj, HDFDataset)
+    for f in files:
+      obj.add_file(f)
   obj.initialize()
   return obj
 
