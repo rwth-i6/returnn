@@ -274,11 +274,15 @@ class TFNetwork(object):
     assert "output" not in layer_desc
     layer_desc["name"] = name
     layer_desc["network"] = self
+    debug_print_layer_output_template = self._config and self._config.bool("debug_print_layer_output_template", False)
+    debug_print_layer_output_shape = self._config and self._config.bool("debug_print_layer_output_shape", False)
     with reuse_name_scope(layer_class.cls_get_tf_scope_name(name)):
       output = layer_class.get_out_data_from_opts(**layer_desc)
+      if debug_print_layer_output_template:
+        print("layer %r output: %r" % (name, output))
       layer = layer_class(output=output, **layer_desc)
       layer.post_init()
-      if self._config and self._config.bool("debug_print_layer_output_shape", False):
+      if debug_print_layer_output_shape:
         layer.output.placeholder = tf.Print(
           layer.output.placeholder, [layer_class.cls_get_tf_scope_name(name), "shape:", tf.shape(layer.output.placeholder)],
           summarize=10, name="debug_print_layer_output_shape")

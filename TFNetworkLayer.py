@@ -893,8 +893,8 @@ class LinearLayer(_ConcatInputLayer):
 
   def __init__(self, activation, with_bias=True, grad_filter=None, **kwargs):
     """
-    :param str|None activation: e.g. "relu", or None 
-    :param bool with_bias: 
+    :param str|None activation: e.g. "relu", or None
+    :param bool with_bias:
     :param float|None grad_filter: if grad norm is higher than this threshold (before activation), the grad is removed
     """
     super(LinearLayer, self).__init__(**kwargs)
@@ -1036,10 +1036,10 @@ class WindowLayer(_ConcatInputLayer):
 
   def __init__(self, window_size, axis="T", padding="same", **kwargs):
     """
-    :param int window_size: 
+    :param int window_size:
     :param str|int axis: see Data.get_axis_from_description()
     :param str padding: "same" or "valid"
-    :param kwargs: 
+    :param kwargs:
     """
     super(WindowLayer, self).__init__(**kwargs)
     data = self.input_data.copy_as_batch_major()
@@ -1069,19 +1069,26 @@ class MergeDimsLayer(_ConcatInputLayer):
 
   def __init__(self, axes, n_out=None, **kwargs):
     """
-    :param str|list[str]|list[int] axes: see Data.get_axes_from_description()
+    :param str|list[str]|list[int] axes: see Data.get_axes_from_description(), e.g. "except_time"
     :param int|None n_out:
     """
     super(MergeDimsLayer, self).__init__(**kwargs)
     axes = self.input_data.get_axes_from_description(axes)
+    if self.input_data.batch_dim_axis not in axes:
+      merge_target_axis = axes[0]
+    else:
+      # In case we also merge the batch-dim-axis, we will merge everything into
+      merge_target_axis = self.input_data.batch_dim_axis
     x = self.input_data.placeholder
     if len(axes) > 1:
       axes = sorted(axes)
       # Transpose so that all axes are behind each other.
       perm = list(range(self.input_data.batch_ndim))
-      i0 = axes[0]
-      for i, a in enumerate(axes[1:]):
+      i0 = merge_target_axis
+      for i, a in enumerate([a for a in axes if a != i0]):
         perm.remove(a)
+        if a < i0:
+          i0 -= 1
         perm.insert(i0 + i + 1, a)
       x = tf.transpose(x, perm)
       # Now merge all dims with a reshape.
@@ -1091,17 +1098,41 @@ class MergeDimsLayer(_ConcatInputLayer):
         x,
         shape=tf.concat([
           shape[:i0],
-          tf.reduce_prod(shape[i0:i1]),
+          tf.reduce_prod(shape[i0:i1], keep_dims=True),
           shape[i1:]], axis=0))
     if n_out is not None and not self.output.sparse:
       from TFUtil import check_input_dim
       x = check_input_dim(x, axis=-1, dim=n_out)
     self.output.placeholder = x
+    self.output.size_placeholder = self._get_output_sizes(axes=axes, target_axis=merge_target_axis)
+
+  def _get_output_sizes(self, axes, target_axis):
+    """
+    :param list[int] axes:
+    :param int target_axis:
+    """
+    removed_axes = [a for a in axes if a != target_axis]
+    assert len(removed_axes) == len(axes) - 1
+    d = {}
+    for i, v in sorted(self.input_data.size_placeholder.items()):
+      axis = self.input_data.get_batch_axis(i)
+      if axis in axes and axis != target_axis:
+        continue
+      axis -= len([a for a in axes if a < axis])
+      if axis == self.input_data.batch_dim_axis:
+        continue
+      j = self.input_data.get_batch_axis_excluding_batch(axis)
+      if j in d:
+        d[j] *= v
+      else:
+        d[j] = v
+    return d
 
   @classmethod
   def get_out_data_from_opts(cls, name, axes, sources=(), n_out=None, out_type=None, **kwargs):
     assert not out_type, "currently ignored"
     data = get_concat_sources_data_template(sources)
+    data.name = "%s_output" % name
     axes = data.get_axes_from_description(axes)
     if len(axes) <= 1:
       return data
@@ -1111,7 +1142,7 @@ class MergeDimsLayer(_ConcatInputLayer):
     res_dim = None
     if all([data.batch_shape[i] is not None for i in axes]):
       res_dim = numpy.prod([data.batch_shape[i] for i in axes])
-    if not data.sparse and (data.batch_ndim - 1) in axes:  # will also merge the feature dim
+    if not data.sparse and data.feature_dim_axis in axes:  # will also merge the feature dim
       assert axes == list(range(axes[0], data.batch_ndim)), "not supported currently with holes"
       if res_dim is not None and n_out is not None:
         assert res_dim == n_out
@@ -1120,16 +1151,136 @@ class MergeDimsLayer(_ConcatInputLayer):
       elif res_dim is None and n_out is not None:
         res_dim = n_out
       else:
-        raise Exception("you need to provide n_out for layer %r" % name)
+        raise Exception(
+          "you need to provide n_out for layer %r, we are merging axes %r with dims %r" % (
+          name, axes, [data.batch_shape[i] for i in axes]))
       data.dim = res_dim
-    new_shape[data.get_batch_axis_excluding_batch(axes[0])] = res_dim
-    for i in reversed(axes[1:]):
-      new_shape.pop(i)
+    if data.batch_dim_axis not in axes:
+      merge_target_axis = axes[0]
+      new_shape[data.get_batch_axis_excluding_batch(merge_target_axis)] = res_dim
+    else:
+      # In case we also merge the batch-dim-axis, we will merge everything into
+      merge_target_axis = data.batch_dim_axis
+    for i in reversed(axes):
+      if i == merge_target_axis:
+        continue
+      if i == data.batch_dim_axis:
+        continue
+      new_shape.pop(data.get_batch_axis_excluding_batch(i))
       if data.batch_dim_axis >= i:
         data.batch_dim_axis -= 1
       if data.time_dim_axis is not None and data.time_dim_axis >= i:
         data.time_dim_axis -= 1
     data.shape = tuple(new_shape)
+    return data
+
+
+class SplitDimsLayer(_ConcatInputLayer):
+  """
+  Splits one axis into multiple axes.
+  E.g. if you know that your feature-dim is composed by a window,
+  i.e. the input is (batch, time, window * feature),
+  you can set axis="F", dims=(window, -1),
+  and you will get the output (batch, time, window, feature).
+  """
+  layer_class = "split_dims"
+
+  def __init__(self, axis, dims, **kwargs):
+    """
+    :param str axis: e.g. "F"
+    :param tuple[int] dims: what the axis should be split into. e.g. (window, -1)
+    """
+    super(SplitDimsLayer, self).__init__(**kwargs)
+    data = self.input_data
+    if isinstance(axis, int):
+      data = data.copy_as_batch_major()
+    old_shape = tf.shape(data.placeholder)
+    old_shape = [old_shape[i] for i in range(data.batch_ndim)]
+    axis = data.get_axis_from_description(axis)
+    new_shape = old_shape[:axis] + list(dims) + old_shape[axis + 1:]
+    self.output.placeholder = tf.reshape(data.placeholder, shape=new_shape)
+    self.output.size_placeholder = {
+      (i if (data.get_batch_axis(i) < axis) else i + len(dims) - 1): v
+      for (i, v) in data.size_placeholder.items()}
+    assert axis != data.time_dim_axis, "size not yet implemented correctly..."
+
+  @classmethod
+  def _resolve_dims(cls, old_dim, new_dims):
+    """
+    :param int old_dim:
+    :param tuple[int] new_dims:
+    :return: new_dims with -1 resolved
+    :rtype: tuple[int]
+    """
+    import numpy
+    if all([d > 0 for d in new_dims]):
+      new_dims_resolved = new_dims
+    else:
+      assert all([d != 0 or d == -1 or d > 0 for d in new_dims])
+      assert len([d for d in new_dims if d == -1]) == 1
+      new_pos_dims = [d for d in new_dims if d > 0]
+      n = numpy.prod(new_pos_dims)
+      assert old_dim % n == 0
+      rem = old_dim // n
+      new_dims_resolved = tuple([(d if (d > 0) else rem) for d in new_dims])
+    assert numpy.prod(new_dims_resolved) == old_dim
+    return new_dims_resolved
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, axis, dims, sources=(), **kwargs):
+    data = get_concat_sources_data_template(sources)
+    data.name = "%s_output" % name
+    if isinstance(axis, int):
+      data = data.copy_as_batch_major()
+    axis = data.get_axis_from_description(axis)
+    assert axis != data.batch_dim_axis
+    if data.batch_shape[axis] is not None:
+      resolved_shape_dims = cls._resolve_dims(old_dim=data.batch_shape[axis], new_dims=dims)
+    else:
+      resolved_shape_dims = tuple([(d if (d >= 0) else None) for d in dims])
+    if axis == data.feature_dim_axis:
+      data.dim = cls._resolve_dims(old_dim=data.dim, new_dims=dims)[-1]
+    axis_wb = data.get_batch_axis_excluding_batch(axis)
+    data.shape = data.shape[:axis_wb] + resolved_shape_dims + data.shape[axis_wb + 1:]
+    return data
+
+
+class SplitBatchTimeLayer(_ConcatInputLayer):
+  """
+  A very specific layer which expects to get input of shape (batch * time, ...)
+  and converts it into (batch, time, ...), where it recovers the seq-lens from some other layer.
+  """
+  layer_class = "split_batch_time"
+
+  def __init__(self, base, **kwargs):
+    """
+    :param LayerBase base:
+    """
+    super(SplitBatchTimeLayer, self).__init__(**kwargs)
+    assert base.output.time_dim_axis is not None
+    base_shape = tf.shape(base.output.placeholder)
+    batch_dim = base_shape[base.output.batch_dim_axis]
+    time_dim = tf.shape(base.output.placeholder)[base.output.time_dim_axis]
+    seq_lens = base.output.get_sequence_lengths()
+    assert self.input_data.batch_dim_axis == 0
+    input_shape = tf.shape(self.input_data.placeholder)
+    input_shape = [input_shape[i] for i in range(self.input_data.batch_ndim)]
+    self.output.placeholder = tf.reshape(self.input_data.placeholder, shape=[batch_dim, time_dim] + input_shape[1:])
+    self.output.size_placeholder = {i + 1: v for (i, v) in self.input_data.size_placeholder.items()}
+    self.output.size_placeholder[0] = seq_lens
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    super(SplitBatchTimeLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    d["base"] = get_layer(d.get("base", "data"))
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, base, sources=(), **kwargs):
+    data = get_concat_sources_data_template(sources)
+    data.name = "%s_output" % name
+    assert data.batch_dim_axis == 0
+    data.time_dim_axis = 1
+    data.shape = (None,) + data.shape
     return data
 
 
@@ -1153,11 +1304,16 @@ class ExpandDimsLayer(_ConcatInputLayer):
     axis = self._get_axis(data=data, axis=axis)
     from TFUtil import expand_dims_unbroadcast
     self.output.placeholder = expand_dims_unbroadcast(data.placeholder, axis=axis, dim=dim)
-    self.output.size_placeholder = {(i if (data.get_batch_axis(i) < axis) else i + 1): v for (i, v) in data.size_placeholder.items()}
+    self.output.size_placeholder = {
+      (i if (data.get_batch_axis(i) < axis) else i + 1): v
+      for (i, v) in data.size_placeholder.items()}
 
   @classmethod
   def _get_axis(cls, data, axis):
     """
+    This returns where to add the new axis.
+    This is supposed to be after the specified axis, e.g. after the feature-dim.
+
     :param Data data:
     :param str axis: e.g. "F"|"feature" or "spatial"
     :return: axis as int for data.placeholder
@@ -1179,8 +1335,9 @@ class ExpandDimsLayer(_ConcatInputLayer):
       raise Exception("invalid axis %r" % axis)
 
   @classmethod
-  def get_out_data_from_opts(cls, axis, dim=1, sources=(), **kwargs):
+  def get_out_data_from_opts(cls, name, axis, dim=1, sources=(), **kwargs):
     data = get_concat_sources_data_template(sources)
+    data.name = "%s_output" % name
     if isinstance(axis, int):
       data = data.copy_as_batch_major()
     axis = cls._get_axis(data=data, axis=axis)
@@ -1310,10 +1467,25 @@ class ConvLayer(_ConcatInputLayer):
       assert False
 
   @classmethod
-  def _get_out_type_from_opts(cls, n_out, filter_size, **kwargs):
+  def _get_out_type_from_opts(cls, name, n_out, filter_size, padding, sources,
+                              input_expand_dims=0, input_add_feature_dim=False, input_split_feature_dim=None, **kwargs):
+    shape = [None] * len(filter_size) + [n_out]
+    padding = padding.upper()
+    if input_expand_dims == 0 and not input_add_feature_dim and not input_split_feature_dim:
+      # Maybe we have a chance to correctly define the output shapes.
+      data = get_concat_sources_data_template(sources)
+      for i, w in enumerate(filter_size):
+        if data.shape[i] is not None:
+          if padding == "VALID":
+            shape[i] = data.shape[i] - w + 1
+            assert shape[i] > 0
+          elif padding == "SAME":
+            shape[i] = data.shape[i]
+          else:
+            raise Exception("conv layer %r: invalid padding %r" % (name, padding))
     return {
       "dim": n_out,
-      "shape": [None] * len(filter_size) + [n_out],
+      "shape": shape,
       "batch_dim_axis": 0,
       "sparse": False}
 
@@ -2082,7 +2254,7 @@ class Loss(object):
 
 class CrossEntropyLoss(Loss):
   """
-  Cross-Entropy loss. Basically sum(target * log(output)). 
+  Cross-Entropy loss. Basically sum(target * log(output)).
   """
   class_name = "ce"
 
@@ -2325,7 +2497,7 @@ class MeanSquaredError(Loss):
     """
     assert not self.target.sparse, "sparse is not supported yet"
     with tf.name_scope("loss_mse"):
-      out = tf.reduce_mean(tf.squared_difference(self.output_flat, self.target_flat)) 
+      out = tf.reduce_mean(tf.squared_difference(self.output_flat, self.target_flat))
       return out
 
 
@@ -2338,7 +2510,7 @@ def _init_loss_class_dict():
       _LossClassDict[v.class_name] = v
   for alias, v in {"sse_sigmoid": BinaryCrossEntropy}.items():
       _LossClassDict[alias] = v
-    
+
 
 def get_loss_class(loss):
   """

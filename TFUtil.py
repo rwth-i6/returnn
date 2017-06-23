@@ -415,6 +415,12 @@ class Data(object):
         x = tf.expand_dims(x, axis=1)
     return x
 
+  @property
+  def feature_dim_axis(self):
+    if self.sparse:
+      return None
+    return self.batch_ndim - 1
+
   def get_axes(self, exclude_time=False, exclude_batch=False):
     """
     :param bool exclude_time: will filter out the time-axis
@@ -431,10 +437,10 @@ class Data(object):
 
   def get_axes_from_description(self, axes):
     """
-    :param int|list[int]|str axes: one axis or multiple axis to reduce.
+    :param int|list[int]|str|list[str] axes: one axis or multiple axis to reduce.
       this is counted with batch-dim, which by default is axis 0 (see enforce_batch_dim_axis).
       it also accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature"
-    :return: list of axes
+    :return: list of axes, counted with batch-dim
     :rtype: list[int]
     """
     if isinstance(axes, str):
@@ -459,6 +465,8 @@ class Data(object):
         axes.remove(self.time_dim_axis)
       elif axes in ["f", "feature", "non_spatial"]:
         axes = self.get_non_dynamic_batch_axes()
+      elif all([a in "btf" for a in axes]):
+        return self.get_axes_from_description(list(axes))
       else:
         raise Exception("invalid axis mode %r" % axes)
     if isinstance(axes, int):
@@ -481,7 +489,8 @@ class Data(object):
   def get_axis_from_description(self, axis):
     """
     :param int|str axis:
-    :return:
+    :return: axis, counted with batch-dim
+    :rtype: int
     """
     axes = self.get_axes_from_description(axis)
     assert len(axes) == 1, "%r is not a unique axis but %r" % (axis, axes)
@@ -501,6 +510,14 @@ class Data(object):
 
   def have_tim_axis(self):
     return self.time_dim_axis is not None
+
+  def get_sequence_lengths(self):
+    """
+    :return: seq lens tensor of shape (batch,) of dtype int32
+    :rtype: tf.Tensor
+    """
+    assert self.time_dim_axis is not None
+    return self.size_placeholder[self.time_dim_axis_excluding_batch]
 
   def get_dynamic_batch_axes(self):
     """
