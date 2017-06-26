@@ -964,9 +964,12 @@ class NumbersDict:
     return self.bin_op(self, other, op=lambda a, b: a / b, zero=1)
 
   __rdiv__ = __div__
+  __truediv__ = __div__
 
   def __idiv__(self, other):
     return self.bin_op(self, other, op=lambda a, b: a / b, zero=1, result=self)
+
+  __itruediv__ = __idiv__
 
   def __floordiv__(self, other):
     return self.bin_op(self, other, op=lambda a, b: a // b, zero=1)
