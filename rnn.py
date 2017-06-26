@@ -113,6 +113,11 @@ def initConfig(configFilename=None, commandLineOptions=()):
   if config.bool("EnableAutoNumpySharedMemPickling", False):
     import TaskSystem
     TaskSystem.SharedMemNumpyConfig["enabled"] = True
+  #Server default options
+  if config.value('task', 'train') == 'server':
+    config.set('num_inputs', 2)
+    config.set('num_outputs', 1)
+    #config.set('network', [{'out': {'loss': 'ce', 'class': 'softmax', 'target': 'classes'}}])
 
 
 def initLog():
@@ -344,7 +349,7 @@ def init(configFilename=None, commandLineOptions=(), config_updates=None, extra_
     initData()
   printTaskProperties(devices)
   if config.value('task', 'train') == 'server':
-    server = Server.Server()
+    server = Server.Server(config)
   else:
     initEngine(devices)
 
