@@ -1,4 +1,5 @@
 
+import random
 from Util import NumbersDict
 
 
@@ -36,6 +37,10 @@ class BatchSeqCopyPart:
   def frame_length(self):
     return self.seq_end_frame - self.seq_start_frame
 
+  def __repr__(self):
+    keys = ("seq_idx", "seq_start_frame", "seq_end_frame", "batch_slice", "batch_frame_offset")
+    return "<BatchSeqCopyPart %s>" % " ".join(["%s=%r" % (k, getattr(self, k)) for k in keys])
+
 
 class Batch:
   """
@@ -48,7 +53,7 @@ class Batch:
     self.num_slices = 0
     # original data_shape = [0, 0], format (time,batch/slice)
     #          data_shape = [max_num_frames_per_slice, num_slices]
-    self.seqs = []; " :type: list[BatchSeqCopyPart] "
+    self.seqs = []  # type: list[BatchSeqCopyPart]
 
   def __repr__(self):
     return "<Batch start_seq:%r, #seqs:%i>" % (self.start_seq, len(self.seqs))
@@ -124,8 +129,6 @@ class Batch:
     if not self.seqs:
       return 0
     return self.end_seq - self.start_seq
-
-import random
 
 
 class BatchSetGenerator:

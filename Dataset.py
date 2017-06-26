@@ -499,14 +499,11 @@ class Dataset(object):
     while self.is_less_than_num_seqs(s):
       length = self.get_seq_length(s)
       if chunk_size == 0:
-        yield (s, NumbersDict(0), length)
+        yield (s, length.constant_like(0), length)
       else:
         if used_data_keys is not None:
-          length = length.copy()
-          for key in list(length.keys()):
-            if key not in used_data_keys:
-              del length[key]
-        t = 0
+          length = NumbersDict({k: length[k] for k in used_data_keys})
+        t = length.constant_like(0)
         default_key = "data"
         # There are usually the 'data' (input) and 'classes' (targets) data-keys in `length` but there can be others.
         # We expect them all of the same length so that we can do chunking.
@@ -520,13 +517,15 @@ class Dataset(object):
             keys_with_full_seqs.append(key)
             continue
           raise Exception("Chunking with multiple data-keys of different length: %r" % length)
-        while t < length[default_key]:
-          l = min(t + chunk_size, length[default_key])
+        while t[default_key] < length[default_key]:
           chunk_start = NumbersDict(t)
-          chunk_end = NumbersDict(l)
+          chunk_end = NumbersDict.min([t + chunk_size, length])
           for key in keys_with_full_seqs:
             chunk_start[key] = 0
             chunk_end[key] = length[key]
+          if length.value is None:
+            chunk_start.value = None
+            chunk_end.value = None
           yield (s, chunk_start, chunk_end)
           t += chunk_step
       s += 1
@@ -551,10 +550,16 @@ class Dataset(object):
         print("Non-recurrent network, chunk size %i:%i ignored" % (chunk_size, chunk_step), file=log.v4)
         chunk_size = 0
     batch = Batch()
+    if self.context_window:
+      ctx_lr = NumbersDict.max([self.context_window, 1]) - 1
+      ctx_left = ctx_lr // 2
+      ctx_right = ctx_lr - ctx_left
+    else:
+      ctx_left, ctx_right = 0, 0
     for seq_idx, t_start, t_end in self.iterate_seqs(chunk_size=chunk_size, chunk_step=chunk_step, used_data_keys=used_data_keys):
-      if self.context_window:
-        t_start -= self.context_window
-        t_end += self.context_window
+      if ctx_left or ctx_right:
+        t_start -= ctx_left
+        t_end += ctx_right
       if recurrent_net:
         length = t_end - t_start
         if max_seq_length < 0 and length['classes'] > -max_seq_length:

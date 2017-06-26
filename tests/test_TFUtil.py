@@ -11,6 +11,7 @@ import sys
 sys.path += ["."]  # Python 3 hack
 from TFUtil import *
 from nose.tools import assert_equal, assert_is_instance, assert_is, assert_in
+from numpy.testing.utils import assert_almost_equal
 import unittest
 import numpy.testing
 import better_exchook
@@ -544,3 +545,21 @@ def test_ExplicitRandomShuffleQueue():
   assert_equal(session.run(size), 0)
   session.run(enqueue, feed_dict={placeholder: 17})
   assert_equal(session.run(dequeue), 17)
+
+
+def test_tfconv1d_evensize():
+  filters = tf.constant([[[2.0]], [[3.0]]])  # [filter_width, in_channels, out_channels]
+  assert isinstance(filters, tf.Tensor)
+  assert_equal(filters.get_shape().as_list(), [2, 1, 1])
+  value = tf.constant([[[5.0], [7.0]]])  # (batch, time, dim)
+  assert isinstance(value, tf.Tensor)
+  assert_equal(value.get_shape().as_list(), [1, 2, 1])
+  res = tf.nn.conv1d(value, filters=filters, stride=1, padding="SAME", data_format="NHWC")
+  resv = res.eval()
+  assert isinstance(resv, numpy.ndarray)
+  assert_equal(resv.shape, (1, 2, 1))  # (batch, time, dim)
+  # Tests that the kernel-size of 2 is applied on current-frame + right-frame.
+  # Note that in the Dataset with context_window = 2, it will do the corresponding thing,
+  # i.e. adds one right-frame and no left-frame, such that if you use padding="VALID",
+  # it will match the right frames.
+  assert_almost_equal(resv, [[[2*5.0+3*7.0], [2*7.0]]])

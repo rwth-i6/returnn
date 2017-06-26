@@ -863,6 +863,11 @@ class NumbersDict:
   def copy(self):
     return NumbersDict(self)
 
+  def constant_like(self, number):
+    return NumbersDict(
+      broadcast_value=number if (self.value is not None) else None,
+      numbers_dict={k: number for k in self.dict.keys()})
+
   @property
   def keys_set(self):
     return set(self.dict.keys())
@@ -958,11 +963,16 @@ class NumbersDict:
   def __div__(self, other):
     return self.bin_op(self, other, op=lambda a, b: a / b, zero=1)
 
-  def __rdiv__(self, other):
-    return self.bin_op(self, other, op=lambda a, b: b / a, zero=1)
+  __rdiv__ = __div__
 
   def __idiv__(self, other):
     return self.bin_op(self, other, op=lambda a, b: a / b, zero=1, result=self)
+
+  def __floordiv__(self, other):
+    return self.bin_op(self, other, op=lambda a, b: a // b, zero=1)
+
+  def __ifloordiv__(self, other):
+    return self.bin_op(self, other, op=lambda a, b: a // b, zero=1, result=self)
 
   def __neg__(self):
     return self.unary_op(op=lambda a: -a)
@@ -972,17 +982,23 @@ class NumbersDict:
 
   __nonzero__ = __bool__  # Python 2
 
-  def elem_eq(self, other, result_with_default=False):
+  def elem_eq(self, other, result_with_default=True):
     """
     Element-wise equality check with other.
     Note about broadcast default value: Consider some key which is neither in self nor in other.
       This means that self[key] == self.default, other[key] == other.default.
       Thus, in case that self.default != other.default, we get res.default == False.
       Then, all(res.values()) == False, even when all other values are True.
-      This is often not what we want.
+      This is sometimes not what we want.
       You can control the behavior via result_with_default.
     """
-    res = self.bin_op(self, other, op=lambda a, b: a == b, zero=None)
+    def op(a, b):
+      if a is None:
+        return None
+      if b is None:
+        return None
+      return a == b
+    res = self.bin_op(self, other, op=op, zero=None)
     if not result_with_default:
       res.value = None
     return res
@@ -1002,11 +1018,12 @@ class NumbersDict:
   def max(cls, items):
     """
     Element-wise maximum for item in items.
+    :param list[NumbersDict|int|float] items:
+    :rtype: NumbersDict
     """
-    if not items:
-      return None
+    assert items
     if len(items) == 1:
-      return items[0]
+      return NumbersDict(items[0])
     if len(items) == 2:
       # max(x, None) == x, so this works.
       return cls.bin_op(items[0], items[1], op=max, zero=None)
@@ -1016,11 +1033,12 @@ class NumbersDict:
   def min(cls, items):
     """
     Element-wise minimum for item in items.
+    :param list[NumbersDict|int|float] items:
+    :rtype: NumbersDict
     """
-    if not items:
-      return None
+    assert items
     if len(items) == 1:
-      return items[0]
+      return NumbersDict(items[0])
     if len(items) == 2:
       return cls.bin_op(items[0], items[1], op=min, zero=None)
     return cls.min([items[0], cls.min(items[1:])])
