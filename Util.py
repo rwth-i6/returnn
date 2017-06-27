@@ -1017,6 +1017,24 @@ class NumbersDict:
     # and it would just confuse.
     raise Exception("%s.__cmp__ is undefined" % self.__class__.__name__)
 
+  @staticmethod
+  def _max(*args):
+    args = [a for a in args if a is not None]
+    if not args:
+      return None
+    if len(args) == 1:
+      return args[0]
+    return max(*args)
+
+  @staticmethod
+  def _min(*args):
+    args = [a for a in args if a is not None]
+    if not args:
+      return None
+    if len(args) == 1:
+      return args[0]
+    return min(*args)
+
   @classmethod
   def max(cls, items):
     """
@@ -1028,8 +1046,7 @@ class NumbersDict:
     if len(items) == 1:
       return NumbersDict(items[0])
     if len(items) == 2:
-      # max(x, None) == x, so this works.
-      return cls.bin_op(items[0], items[1], op=max, zero=None)
+      return cls.bin_op(items[0], items[1], op=cls._max, zero=None)
     return cls.max([items[0], cls.max(items[1:])])
 
   @classmethod
@@ -1043,7 +1060,7 @@ class NumbersDict:
     if len(items) == 1:
       return NumbersDict(items[0])
     if len(items) == 2:
-      return cls.bin_op(items[0], items[1], op=min, zero=None)
+      return cls.bin_op(items[0], items[1], op=cls._min, zero=None)
     return cls.min([items[0], cls.min(items[1:])])
 
   @staticmethod
