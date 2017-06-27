@@ -647,9 +647,10 @@ def concat_sources(src_layers):
   return data
 
 
-def get_concat_sources_data_template(src_layers):
+def get_concat_sources_data_template(src_layers, name="concat_sources"):
   """
   :param list[LayerBase] src_layers:
+  :param str name: name of the Data
   :return: data with no placeholders set
   :rtype: Data
   """
@@ -662,7 +663,7 @@ def get_concat_sources_data_template(src_layers):
     dim += shape[-1]
     beam_size = beam_size or layer.output.beam_size
   data = Data(
-    name="concat_sources",
+    name=name,
     shape=src_layers[0].output.shape[:-1] + (dim,),
     dim=dim,
     sparse=False,
@@ -743,10 +744,10 @@ class CopyLayer(_ConcatInputLayer):
     self.output = self.input_data
 
   @classmethod
-  def get_out_data_from_opts(cls, sources=(), out_type=None, n_out=None, **kwargs):
+  def get_out_data_from_opts(cls, name, sources=(), out_type=None, n_out=None, **kwargs):
     if out_type or n_out:
       return super(CopyLayer, cls).get_out_data_from_opts(out_type=out_type, n_out=n_out, sources=sources, **kwargs)
-    return get_concat_sources_data_template(sources)
+    return get_concat_sources_data_template(sources, name="%s_output" % name)
 
 
 class InternalLayer(LayerBase):
@@ -804,30 +805,28 @@ class SliceLayer(_ConcatInputLayer):
   """
   layer_class = "slice"
 
-  def __init__(self, axis=None, axis_kind=None,
-               slice_start=None, slice_end=None, slice_step=None,
-               **kwargs):
+  def __init__(self, axis, slice_start=None, slice_end=None, slice_step=None, **kwargs):
     """
-    :param int|None axis:
+    :param int|str axis:
     :param str|None axis_kind: "T" for time, "B" for batch, "F" for feature
     :param int|None slice_start:
     :param int|None slice_end:
     :param int|None slice_step:
-    :param int|None n_out:
     """
-    super(SliceLayer, self).__init__( **kwargs)
-    axis = self._get_axis(axis=axis, axis_kind=axis_kind, input_data=self.input_data)
+    super(SliceLayer, self).__init__(**kwargs)
+    axis = self.input_data.get_axis_from_description(axis)
     dim_slice = slice(slice_start, slice_end, slice_step)
     slices = [slice(None, None)] * axis + [dim_slice]
     axis_wo_batch = self.input_data.get_batch_axis_excluding_batch(axis)
-    self.output.size_placeholder = self.input_data.size_placeholder
+    self.output.size_placeholder = self.input_data.size_placeholder.copy()
     if axis == self.input_data.time_dim_axis:
       if slice_start:
         assert slice_start > 0
         self.output.size_placeholder[self.input_data.time_dim_axis_excluding_batch] = \
           tf.maximum(0, self.output.size_placeholder[self.input_data.time_dim_axis_excluding_batch] - slice_start)
-      if slice_end:
-        assert slice_end > 0
+      if slice_end is not None:
+        if slice_end < 0:
+          slice_end = tf.shape(self.input_data.placeholder)[self.input_data.time_dim_axis] + slice_end
         self.output.size_placeholder[self.input_data.time_dim_axis_excluding_batch] = \
           tf.minimum(
             tf.shape(self.input_data.placeholder)[self.input_data.time_dim_axis] - slice_end,
@@ -839,39 +838,13 @@ class SliceLayer(_ConcatInputLayer):
     self.output.placeholder = self.input_data.placeholder[slices]
 
   @classmethod
-  def _get_axis(cls, axis, axis_kind, input_data):
-    """
-    :param int|None axis:
-    :param str|None axis_kind: "T" for time, "B" for batch, "F" for feature
-    :param Data input_data:
-    :return: axis
-    :rtype: int
-    """
-    if axis is not None:
-      assert not axis_kind
-      assert 0 <= axis < len(input_data.batch_shape)
-    else:
-      assert axis_kind
-      axis_kind = axis_kind.upper()
-      if axis_kind == "T":
-        assert input_data.time_dim_axis is not None
-        axis = input_data.time_dim_axis
-      elif axis_kind == "B":
-        assert input_data.batch_dim_axis is not None
-        axis = input_data.batch_dim_axis
-      elif axis_kind == "F":
-        axes = input_data.get_axes(exclude_time=True, exclude_batch=True)
-        assert len(axes) == 1
-        axis = axes[0]
-    return axis
-
-  @classmethod
   def get_out_data_from_opts(
-        cls, axis=None, axis_kind=None, sources=(),
+        cls, name, axis, sources=(),
         slice_start=None, slice_end=None, slice_step=None, **kwargs):
     input_data = get_concat_sources_data_template(sources)
-    axis = cls._get_axis(axis=axis, axis_kind=axis_kind, input_data=input_data)
+    axis = input_data.get_axis_from_description(axis)
     out_type = input_data.get_kwargs()
+    out_type["name"] = "%s_output" % name
     axis_wo_batch = input_data.get_batch_axis_excluding_batch(axis)
     dim_slice = slice(slice_start, slice_end, slice_step)
     if axis_wo_batch is not None:
@@ -879,6 +852,7 @@ class SliceLayer(_ConcatInputLayer):
       if out_type["shape"][axis_wo_batch] is not None:
         out_type["shape"][axis_wo_batch] = len(range(out_type["shape"][axis_wo_batch])[dim_slice])
       if axis_wo_batch == len(out_type["shape"]) - 1 and not out_type["sparse"]:
+        assert out_type["shape"][axis_wo_batch]
         out_type["dim"] = out_type["shape"][axis_wo_batch]
     return Data(**out_type)
 
@@ -1528,19 +1502,35 @@ class ConvLayer(_ConcatInputLayer):
       i: self.input_data.size_placeholder[i]
       for i in dyn_axes
       if i in self.input_data.size_placeholder}
-    if padding == "SAME":
-      pass
-    elif padding == "VALID":
-      for i in list(self.output.size_placeholder.keys()):
-        self.output.size_placeholder[i] -= filter_size[i] - 1
-    else:
-      assert False
     for i in list(self.output.size_placeholder.keys()):
-      if strides[i] > 1:
-        self.output.size_placeholder[i] //= strides[i]
+      self.output.size_placeholder[i] = self.calc_out_dim(
+        in_dim=self.output.size_placeholder[i],
+        filter_size=filter_size[i], stride=strides[i], dilation_rate=dilation_rate[i], padding=padding)
 
   @classmethod
-  def _get_out_type_from_opts(cls, name, n_out, filter_size, strides, padding, sources,
+  def calc_out_dim(cls, in_dim, filter_size, stride, padding, dilation_rate=1):
+    """
+    :param int|tf.Tensor in_dim: dimension in some axis
+    :param int filter_size: e.g. 2, for the corresponding axis
+    :param int stride: e.g. 1, for the corresponding axis
+    :param int dilation_rate: e.g. 1
+    :param str padding: "valid" or "same"
+    :return: the output dimension
+    :rtype: int
+    """
+    def ceildiv(a, b):
+      return -(-a // b)
+    padding = padding.upper()
+    # See tf.nn.convolution() documentation for more.
+    if padding == "SAME":
+      return ceildiv(in_dim, stride)
+    elif padding == "VALID":
+      return ceildiv((in_dim - (filter_size - 1) * dilation_rate), stride)
+    else:
+      raise Exception("invalid padding %r" % padding)
+
+  @classmethod
+  def _get_out_type_from_opts(cls, name, n_out, filter_size, padding, strides=1, dilation_rate=1, sources=(),
                               input_expand_dims=0, input_add_feature_dim=False, input_split_feature_dim=None, **kwargs):
     shape = [None] * len(filter_size) + [n_out]
     if isinstance(strides, int):
@@ -1548,21 +1538,20 @@ class ConvLayer(_ConcatInputLayer):
     else:
       strides = list(strides)
     assert len(strides) == len(filter_size)
+    if isinstance(dilation_rate, int):
+      dilation_rate = [dilation_rate] * len(filter_size)
+    else:
+      dilation_rate = list(dilation_rate)
+    assert len(dilation_rate) == len(filter_size)
     padding = padding.upper()
     if input_expand_dims == 0 and not input_add_feature_dim and not input_split_feature_dim:
       # Maybe we have a chance to correctly define the output shapes.
       data = get_concat_sources_data_template(sources)
-      for i, w in enumerate(filter_size):
+      for i in range(len(filter_size)):
         if data.shape[i] is not None:
-          if padding == "VALID":
-            shape[i] = data.shape[i] - w + 1
-            assert shape[i] > 0
-          elif padding == "SAME":
-            shape[i] = data.shape[i]
-          else:
-            raise Exception("conv layer %r: invalid padding %r" % (name, padding))
-          if strides[i] > 1:
-            shape[i] //= strides[i]
+          shape[i] = cls.calc_out_dim(
+            in_dim=data.shape[i],
+            filter_size=filter_size[i], stride=strides[i], dilation_rate=dilation_rate[i], padding=padding)
     return {
       "dim": n_out,
       "shape": shape,
@@ -1622,39 +1611,34 @@ class PoolLayer(_ConcatInputLayer):
       i: self.input_data.size_placeholder[i]
       for i in range(len(pool_size))
       if i in self.input_data.size_placeholder}
-    if padding == "SAME":
-      pass
-    elif padding == "VALID":
-      for i in list(self.output.size_placeholder.keys()):
-        self.output.size_placeholder[i] -= pool_size[i] - 1
-    else:
-      assert False
     for i in list(self.output.size_placeholder.keys()):
-      if strides[i] > 1:
-        self.output.size_placeholder[i] //= strides[i]
+      self.output.size_placeholder[i] = ConvLayer.calc_out_dim(
+        in_dim=self.output.size_placeholder[i],
+        filter_size=pool_size[i], stride=strides[i], dilation_rate=dilation_rate[i], padding=padding)
 
   @classmethod
-  def get_out_data_from_opts(cls, name, pool_size, strides, sources, padding="VALID", **kwargs):
+  def get_out_data_from_opts(cls, name, pool_size, strides=None, dilation_rate=1, sources=(), padding="VALID", **kwargs):
     # y shape is [batch] + spatial_dims + [n_out].
     data = get_concat_sources_data_template(sources)
     shape = [None] * len(pool_size) + [data.dim]
+    if strides is None:
+      strides = pool_size
     if isinstance(strides, int):
       strides = [strides] * len(pool_size)
     else:
       strides = list(strides)
     assert len(strides) == len(pool_size)
+    if isinstance(dilation_rate, int):
+      dilation_rate = [dilation_rate] * len(pool_size)
+    else:
+      dilation_rate = list(dilation_rate)
+    assert len(dilation_rate) == len(pool_size)
     padding = padding.upper()
-    for i, w in enumerate(pool_size):
+    for i in range(len(pool_size)):
       if data.shape[i] is not None:
-        if padding == "VALID":
-          shape[i] = data.shape[i] - w + 1
-          assert shape[i] > 0
-        elif padding == "SAME":
-          shape[i] = data.shape[i]
-        else:
-          raise Exception("conv layer %r: invalid padding %r" % (name, padding))
-        if strides[i] > 1:
-          shape[i] //= strides[i]
+        shape[i] = ConvLayer.calc_out_dim(
+          in_dim=data.shape[i],
+          filter_size=pool_size[i], stride=strides[i], dilation_rate=dilation_rate[i], padding=padding)
     return Data(
       name="%s_output" % name,
       shape=tuple(shape),
@@ -1970,7 +1954,7 @@ class CombineLayer(LayerBase):
 
   def __init__(self, kind, sources, activation=None, with_bias=False, **kwargs):
     """
-    :param str kind: e.g. "average"
+    :param str kind: e.g. "average" or "add"
     :param list[LayerBase] sources:
     :param str|None activation: if provided, activation function to apply, e.g. "tanh" or "relu"
     :param bool with_bias: if given , will add a bias
