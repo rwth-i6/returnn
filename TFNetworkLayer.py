@@ -426,7 +426,7 @@ class LayerBase(object):
       if sample_mean is None:
         with var_creation_scope():
           sample_mean = self.add_param(tf.Variable(
-            initial_value=tf.zeros(data.non_dynamic_batch_shape),
+            initial_value=tf.zeros(data.get_bc_spatial_batch_shape()),
             name="%s_%s_mean" % (self.name, data.name),
             trainable=False))
         # Use exponential moving average of batch mean.
@@ -436,7 +436,7 @@ class LayerBase(object):
         # Note: Our Theano implementation does not use a moving average for this.
         with var_creation_scope():
           sample_variance = self.add_param(tf.Variable(
-            initial_value=tf.ones(data.non_dynamic_batch_shape),
+            initial_value=tf.ones(data.get_bc_spatial_batch_shape()),
             name="%s_%s_variance" % (self.name, data.name),
             trainable=False))
         sample_variance = tf.assign_add(sample_variance, (variance - sample_variance) * momentum)
@@ -449,7 +449,7 @@ class LayerBase(object):
         if gamma is None:
           with var_creation_scope():
             gamma = self.add_param(tf.Variable(
-              initial_value=tf.ones(data.non_dynamic_batch_shape),
+              initial_value=tf.ones(data.get_bc_spatial_batch_shape()),
               name="%s_%s_gamma" % (self.name, data.name),
               trainable=True))
         bn *= gamma
@@ -457,7 +457,7 @@ class LayerBase(object):
         if beta is None:
           with var_creation_scope():
             beta = self.add_param(tf.Variable(
-              initial_value=tf.zeros(data.non_dynamic_batch_shape),
+              initial_value=tf.zeros(data.get_bc_spatial_batch_shape()),
               name="%s_%s_beta" % (self.name, data.name),
               trainable=True))
         bn += beta
@@ -697,7 +697,7 @@ def concat_sources_with_opt_dropout(src_layers, dropout=0):
       keep_prob=1 - dropout,
       # noise_shape is like old behavior for now:
       # all dynamic dimensions (batch,time) will use the same dropout-mask broadcasted.
-      noise_shape=data.non_dynamic_batch_shape,
+      noise_shape=data.get_bc_spatial_batch_shape(),
       seed=network.random.randint(2 ** 31))
   fn_eval = lambda: data.placeholder
   data.placeholder = network.cond_on_train(fn_train, fn_eval)
@@ -1058,6 +1058,74 @@ class WindowLayer(_ConcatInputLayer):
     return data
 
 
+class PadLayer(_ConcatInputLayer):
+  """
+  Adds (e.g. zero) padding in some axis or axes.
+  """
+  layer_class = "pad"
+
+  def __init__(self, axes, padding, value=None, mode="constant", **kwargs):
+    """
+    :param str|list[str] axes: e.g. "F" etc. see :func:`Dataset.get_axes_from_description`.
+    :param list[(int,int)]|(int,int)|int padding: how much to pad left/right in each axis
+    :param int|float value: what constant value to pad, with mode=="constant"
+    :param str mode: "constant", "reflect" or "symmetric"
+    """
+    super(PadLayer, self).__init__(**kwargs)
+    axes = self.input_data.get_axes_from_description(axes)
+    padding = self._transform_padding(padding=padding, axes=axes)
+    paddings = [(0, 0)] * len(range(self.input_data.batch_ndim))
+    for i, a in enumerate(axes):
+      paddings[a] = padding[i]
+    mode = mode.upper()
+    if mode == "CONSTANT":
+      assert value is None or value == 0, "not yet implemented otherwise..."
+    else:
+      assert value is None
+    self.output.placeholder = tf.pad(self.input_data.placeholder, paddings=paddings, mode=mode)
+    self.output.size_placeholder = {}
+    for a in axes:
+      p = sum(paddings[a])
+      a = self.input_data.get_batch_axis_excluding_batch(a)
+      if a is None:
+        continue
+      if a not in self.input_data.size_placeholder:
+        continue
+      self.output.size_placeholder[a] = self.input_data.size_placeholder[a] + p
+
+  @classmethod
+  def _transform_padding(cls, padding, axes):
+    """
+    :param list[(int,int)]|(int,int)|int padding:
+    :param list[int] axes:
+    :rtype: list[(int,int)]
+    """
+    if isinstance(padding, (list, tuple)):
+      if isinstance(padding[0], (list, tuple)):
+        assert len(padding[0]) == 2
+        assert len(padding) == len(axes)
+      else:
+        assert len(padding) == 2
+        padding = [tuple(padding)] * len(axes)
+    else:
+      padding = [(padding, padding)] * len(axes)
+    return padding
+
+  @classmethod
+  def get_out_data_from_opts(cls, axes, padding, sources=(), **kwargs):
+    data = get_concat_sources_data_template(sources)
+    axes = data.get_axes_from_description(axes)
+    padding = cls._transform_padding(padding=padding, axes=axes)
+    for i, a in enumerate(axes):
+      a = data.get_batch_axis_excluding_batch(a)
+      if a is None:
+        continue
+      if data.shape[a] is None:
+        continue
+      data.shape = data.shape[:a] + (data.shape[a] + padding[i],) + data.shape[a + 1:]
+    return data
+
+
 class MergeDimsLayer(_ConcatInputLayer):
   """
   Merges a list of axes into a single one.
@@ -1401,8 +1469,8 @@ class ConvLayer(_ConcatInputLayer):
     x = self.input_data.get_placeholder_as_batch_major()
     x = check_input_dim(x, -1, self.input_data.dim)
     input_num_features = self.input_data.dim
-    dyn_axes = self.input_data.get_dynamic_axes()  # conv-dims, or also called spatial dims
-    static_axes = self.input_data.get_non_dynamic_axes()  # feature-dims
+    dyn_axes = self.input_data.get_spatial_axes()  # conv-dims, or also called spatial dims
+    static_axes = self.input_data.get_feature_axes()  # feature-dims
     assert dyn_axes + static_axes == list(range(self.input_data.ndim)), (
       "we expect the static dims at the end. input data is: %r" % self.input_data.get_description())
     if input_split_feature_dim:

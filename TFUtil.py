@@ -378,17 +378,16 @@ class Data(object):
     :param bool keep_dims: if set, it will add broadcast dimensions after the flattening behind the first axis
     :rtype: tf.Tensor
     :return: placeholder where all dynamic axes are flattened into a single axis.
-      e.g. for the usual case (batch, time, dim), it becomes (time', dim),
-      or (batch, time, height, dim) will also become (time', dim).
-      with keep_dims, (batch, time, height, dim) will become (time', 1, 1, dim).
+      e.g. for the usual case (batch, time, dim), it becomes (batch'|time', dim),
+      or (batch, time, height, dim) will also become (batch'|time', dim).
+      with keep_dims, (batch, time, height, dim) will become (batch'|time', 1, 1, dim).
     """
     x = self.placeholder
-    dyn_axes = self.get_dynamic_batch_axes()
-    if not dyn_axes:
+    dyn_axes = self.get_spatial_batch_axes() + [self.batch_dim_axis]
+    if dyn_axes == [self.batch_dim_axis]:
       return x
     assert 0 in dyn_axes, "would need some transpose, not supported at the moment"
-    if len(dyn_axes) == 1:
-      return x
+    assert len(dyn_axes) > 1
     orig_num_dyn_axes = len(dyn_axes)
     ndim = len(self.batch_shape)
     if self.have_tim_axis():
@@ -437,22 +436,27 @@ class Data(object):
 
   def get_axes_from_description(self, axes):
     """
-    :param int|list[int]|str|list[str] axes: one axis or multiple axis to reduce.
-      this is counted with batch-dim, which by default is axis 0 (see enforce_batch_dim_axis).
-      it also accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature"
+    :param int|list[int]|str|list[str] axes: one axis or multiple axis.
+      This is counted with batch-dim, which by default is axis 0 (see enforce_batch_dim_axis).
+      It also accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature",
+      and more (see the code).
     :return: list of axes, counted with batch-dim
     :rtype: list[int]
     """
     if isinstance(axes, str):
+      import re
       axes = axes.lower()
       if axes in ["b", "batch"]:
         axes = self.batch_dim_axis
       elif axes == "spatial":
-        axes = self.get_dynamic_batch_axes()
-        axes.remove(self.batch_dim_axis)
+        axes = self.get_spatial_batch_axes()
+      elif re.match("(s|spatial):-?\\d+$", axes):
+        s = int(axes.split(":")[1])
+        axes = self.get_spatial_batch_axes()
+        assert s < len(axes)
+        axes = axes[s]
       elif axes == "spatial_except_time":
-        axes = self.get_dynamic_batch_axes()
-        axes.remove(self.batch_dim_axis)
+        axes = self.get_spatial_batch_axes()
         assert self.time_dim_axis is not None
         axes.remove(self.time_dim_axis)
       elif axes in ["t", "time"]:
@@ -464,7 +468,7 @@ class Data(object):
         assert self.time_dim_axis is not None
         axes.remove(self.time_dim_axis)
       elif axes in ["f", "feature", "non_spatial"]:
-        axes = self.get_non_dynamic_batch_axes()
+        axes = self.get_feature_batch_axes()
       elif all([a in "btf" for a in axes]):
         return self.get_axes_from_description(list(axes))
       else:
@@ -519,51 +523,44 @@ class Data(object):
     assert self.time_dim_axis is not None
     return self.size_placeholder[self.time_dim_axis_excluding_batch]
 
-  def get_dynamic_batch_axes(self):
+  def get_spatial_batch_axes(self):
     """
     :rtype: list[int]
-    :return: list of axes which have dynamic shape, such as time and batch, and maybe others.
-      such other dynamic axes are currently defined as such where self.batch_shape[i] is None.
+    :return: list of axes which are not feature and batch axes, counted with batch-dim.
     """
     return [axis
-            for axis, dim in enumerate(self.batch_shape)
-            if (dim is None or axis in [self.batch_dim_axis, self.time_dim_axis])]
+            for axis in range(self.batch_ndim)
+            if (axis not in [self.batch_dim_axis, self.feature_dim_axis])]
 
-  def get_dynamic_axes(self):
+  def get_spatial_axes(self):
     """
     :rtype: list[int]
-    :return: like self.get_dynamic_batch_axes() but counted without batch-dim
+    :return: list of axes which are not feature and batch axes, counted without batch-dim.
     """
-    return [self.get_batch_axis_excluding_batch(axis)
-            for axis in self.get_dynamic_batch_axes()
-            if not axis == self.batch_dim_axis]
+    return [self.get_batch_axis_excluding_batch(axis) for axis in self.get_spatial_batch_axes()]
 
-  def get_non_dynamic_batch_axes(self):
+  def get_feature_batch_axes(self):
     """
     :rtype: list[int]
-    :return: axes counted with batch-dim which are not dynamic. opposite of self.get_dynamic_batch_axes()
+    :return: list of axes which are feature axes, counted with batch-dim. currently there is only one or zero such axis.
     """
-    all_axes = self.get_axes(exclude_batch=True)
-    dyn_axes = self.get_dynamic_batch_axes()
-    return [axis
-            for axis in all_axes
-            if axis not in dyn_axes]
+    if self.feature_dim_axis is not None:
+      return [self.feature_dim_axis]
+    return []
 
-  def get_non_dynamic_axes(self):
+  def get_feature_axes(self):
     """
     :rtype: list[int]
-    :return: axes counted without batch-dim which are not dynamic. opposite of self.get_dynamic_axes()
+    :return: list of axes which are feature axes, counted without batch-dim.
     """
-    return [self.get_batch_axis_excluding_batch(axis)
-            for axis in self.get_non_dynamic_batch_axes()]
+    return [self.get_batch_axis_excluding_batch(axis) for axis in self.get_feature_batch_axes()]
 
-  @property
-  def non_dynamic_batch_shape(self):
+  def get_bc_spatial_batch_shape(self):
     """
-    :return: shape which will broadcast along all dynamic dimensions and time/batch dim
+    :return: shape which will broadcast along all spatial dimensions and time/batch dim
     :rtype: tuple[int]
     """
-    dyn_axes = self.get_dynamic_batch_axes()
+    dyn_axes = self.get_spatial_batch_axes() + [self.batch_dim_axis]
     return [1 if (axis in dyn_axes) else dim
             for axis, dim in enumerate(self.batch_shape)]
 
