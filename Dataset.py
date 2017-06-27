@@ -551,7 +551,12 @@ class Dataset(object):
         chunk_size = 0
     batch = Batch()
     if self.context_window:
+      # One less because the original frame also counts, and context_window=1 means that we just have that single frame.
+      # ctx_lr is how much frames we add additionally.
       ctx_lr = NumbersDict.max([self.context_window, 1]) - 1
+      # In case ctx_lr is odd / context_window is even, we have to decide where to put one more frame.
+      # To keep it consistent with e.g. 1D convolution with a kernel of even size, we add one more to the right.
+      # See test_tfconv1d_evensize().
       ctx_left = ctx_lr // 2
       ctx_right = ctx_lr - ctx_left
     else:

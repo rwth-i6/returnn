@@ -924,9 +924,12 @@ class NumbersDict:
   @classmethod
   def bin_op(cls, self, other, op, zero, result=None):
     if not isinstance(self, NumbersDict):
-      self = NumbersDict(self)
+      if isinstance(other, NumbersDict):
+        self = other.constant_like(self)
+      else:
+        self = NumbersDict(self)
     if not isinstance(other, NumbersDict):
-      other = NumbersDict(other)
+      other = self.constant_like(other)
     if result is None:
       result = NumbersDict()
     assert isinstance(result, NumbersDict)
