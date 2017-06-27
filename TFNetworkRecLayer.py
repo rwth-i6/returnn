@@ -970,7 +970,7 @@ class _TemplateLayer(LayerBase):
 
   def __repr__(self):
     return "<%s(%s)(%s) %r out_type=%s>" % (
-      self.__class__.__name__, self.layer_class_type.__name__, self.layer_class,
+      self.__class__.__name__, self.layer_class_type.__name__ if self.layer_class_type else None, self.layer_class,
       self.name, self.output.get_description(with_name=False))
 
   def init(self, output, layer_class, template_type="template", **kwargs):
@@ -1489,7 +1489,7 @@ class GaussWindowAttentionLayer(AttentionBaseLayer):
     :param float std: standard deviation for Gauss
     :param int|None inner_size: if given, the output will have an additional dimension of this size,
       where t is shifted by +/- inner_size_step around.
-      e.g. [t-1,t-0.5,t,t+0.5,t+1] would be the locations with inner_size=5 and inner_size_step=0.5. 
+      e.g. [t-1,t-0.5,t,t+0.5,t+1] would be the locations with inner_size=5 and inner_size_step=0.5.
     :param float inner_size_step: see inner_size above
     """
     super(GaussWindowAttentionLayer, self).__init__(**kwargs)
