@@ -275,6 +275,7 @@ class TFNetwork(object):
     layer_desc["name"] = name
     layer_desc["network"] = self
     debug_print_layer_output_template = self._config and self._config.bool("debug_print_layer_output_template", False)
+    debug_print_layer_output_sizes = self._config and self._config.bool("debug_print_layer_output_sizes", False)
     debug_print_layer_output_shape = self._config and self._config.bool("debug_print_layer_output_shape", False)
     with reuse_name_scope(layer_class.cls_get_tf_scope_name(name)):
       output = layer_class.get_out_data_from_opts(**layer_desc)
@@ -282,6 +283,8 @@ class TFNetwork(object):
         print("layer %r output: %r" % (name, output))
       layer = layer_class(output=output, **layer_desc)
       layer.post_init()
+      if debug_print_layer_output_sizes:
+        print("layer %r output sizes: %r" % (name, output.size_placeholder))
       if debug_print_layer_output_shape:
         layer.output.placeholder = tf.Print(
           layer.output.placeholder, [layer_class.cls_get_tf_scope_name(name), "shape:", tf.shape(layer.output.placeholder)],

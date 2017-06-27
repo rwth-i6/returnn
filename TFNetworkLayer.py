@@ -1083,15 +1083,15 @@ class PadLayer(_ConcatInputLayer):
     else:
       assert value is None
     self.output.placeholder = tf.pad(self.input_data.placeholder, paddings=paddings, mode=mode)
-    self.output.size_placeholder = {}
+    self.output.size_placeholder = self.input_data.size_placeholder.copy()
     for a in axes:
       p = sum(paddings[a])
       a = self.input_data.get_batch_axis_excluding_batch(a)
       if a is None:
         continue
-      if a not in self.input_data.size_placeholder:
+      if a not in self.output.size_placeholder:
         continue
-      self.output.size_placeholder[a] = self.input_data.size_placeholder[a] + p
+      self.output.size_placeholder[a] += p
 
   @classmethod
   def _transform_padding(cls, padding, axes):
@@ -1112,8 +1112,9 @@ class PadLayer(_ConcatInputLayer):
     return padding
 
   @classmethod
-  def get_out_data_from_opts(cls, axes, padding, sources=(), **kwargs):
+  def get_out_data_from_opts(cls, name, axes, padding, sources=(), **kwargs):
     data = get_concat_sources_data_template(sources)
+    data.name = "%s_output" % name
     axes = data.get_axes_from_description(axes)
     padding = cls._transform_padding(padding=padding, axes=axes)
     for i, a in enumerate(axes):
@@ -1122,7 +1123,7 @@ class PadLayer(_ConcatInputLayer):
         continue
       if data.shape[a] is None:
         continue
-      data.shape = data.shape[:a] + (data.shape[a] + padding[i],) + data.shape[a + 1:]
+      data.shape = data.shape[:a] + (data.shape[a] + sum(padding[i]),) + data.shape[a + 1:]
     return data
 
 
@@ -1524,20 +1525,29 @@ class ConvLayer(_ConcatInputLayer):
     y = self.output_before_activation.y
     self.output.placeholder = y
     self.output.size_placeholder = {
-      i: (self.input_data.size_placeholder[i] if i in self.input_data.size_placeholder else tf.shape(y)[i + 1])
-      for i in dyn_axes}
+      i: self.input_data.size_placeholder[i]
+      for i in dyn_axes
+      if i in self.input_data.size_placeholder}
     if padding == "SAME":
       pass
     elif padding == "VALID":
-      for i, s in list(self.output.size_placeholder.items()):
-        self.output.size_placeholder[i] = s - filter_size[i] + 1
+      for i in list(self.output.size_placeholder.keys()):
+        self.output.size_placeholder[i] -= filter_size[i] - 1
     else:
       assert False
+    for i in list(self.output.size_placeholder.keys()):
+      if strides[i] > 1:
+        self.output.size_placeholder[i] //= strides[i]
 
   @classmethod
-  def _get_out_type_from_opts(cls, name, n_out, filter_size, padding, sources,
+  def _get_out_type_from_opts(cls, name, n_out, filter_size, strides, padding, sources,
                               input_expand_dims=0, input_add_feature_dim=False, input_split_feature_dim=None, **kwargs):
     shape = [None] * len(filter_size) + [n_out]
+    if isinstance(strides, int):
+      strides = [strides] * len(filter_size)
+    else:
+      strides = list(strides)
+    assert len(strides) == len(filter_size)
     padding = padding.upper()
     if input_expand_dims == 0 and not input_add_feature_dim and not input_split_feature_dim:
       # Maybe we have a chance to correctly define the output shapes.
@@ -1551,6 +1561,8 @@ class ConvLayer(_ConcatInputLayer):
             shape[i] = data.shape[i]
           else:
             raise Exception("conv layer %r: invalid padding %r" % (name, padding))
+          if strides[i] > 1:
+            shape[i] //= strides[i]
     return {
       "dim": n_out,
       "shape": shape,
@@ -1607,28 +1619,50 @@ class PoolLayer(_ConcatInputLayer):
     # y shape is [batch] + spatial_dims + [n_out].
     self.output.placeholder = y
     self.output.size_placeholder = {
-      i: (self.input_data.size_placeholder[i] if i in self.input_data.size_placeholder else tf.shape(y)[i + 1])
-      for i in range(len(pool_size))}
+      i: self.input_data.size_placeholder[i]
+      for i in range(len(pool_size))
+      if i in self.input_data.size_placeholder}
     if padding == "SAME":
       pass
     elif padding == "VALID":
-      for i, s in list(self.output.size_placeholder.items()):
-        self.output.size_placeholder[i] = s - pool_size[i] + 1
+      for i in list(self.output.size_placeholder.keys()):
+        self.output.size_placeholder[i] -= pool_size[i] - 1
     else:
       assert False
+    for i in list(self.output.size_placeholder.keys()):
+      if strides[i] > 1:
+        self.output.size_placeholder[i] //= strides[i]
 
   @classmethod
-  def get_out_data_from_opts(cls, name, pool_size, sources, **kwargs):
+  def get_out_data_from_opts(cls, name, pool_size, strides, sources, padding="VALID", **kwargs):
     # y shape is [batch] + spatial_dims + [n_out].
-    input_data = get_concat_sources_data_template(sources)
+    data = get_concat_sources_data_template(sources)
+    shape = [None] * len(pool_size) + [data.dim]
+    if isinstance(strides, int):
+      strides = [strides] * len(pool_size)
+    else:
+      strides = list(strides)
+    assert len(strides) == len(pool_size)
+    padding = padding.upper()
+    for i, w in enumerate(pool_size):
+      if data.shape[i] is not None:
+        if padding == "VALID":
+          shape[i] = data.shape[i] - w + 1
+          assert shape[i] > 0
+        elif padding == "SAME":
+          shape[i] = data.shape[i]
+        else:
+          raise Exception("conv layer %r: invalid padding %r" % (name, padding))
+        if strides[i] > 1:
+          shape[i] //= strides[i]
     return Data(
       name="%s_output" % name,
-      shape=(None,) * len(pool_size) + (input_data.dim,),
-      dim=input_data.dim,
-      dtype=input_data.dtype,
+      shape=tuple(shape),
+      dim=data.dim,
+      dtype=data.dtype,
       sparse=False,
       batch_dim_axis=0,
-      beam_size=input_data.beam_size)
+      beam_size=data.beam_size)
 
 
 class ReduceLayer(_ConcatInputLayer):
