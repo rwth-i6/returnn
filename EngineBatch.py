@@ -103,6 +103,15 @@ class Batch:
                                    batch_slice=0,
                                    batch_frame_offset=batch_frame_offset)]
 
+  def init_with_one_full_sequence(self, seq_idx, dataset):
+    """
+    :param int seq_idx:
+    :param Dataset.Dataset dataset:
+    """
+    assert not self.seqs
+    start, end = dataset.get_start_end_frames_full_seq(seq_idx)
+    self.add_frames(seq_idx=seq_idx, seq_start_frame=start, length=end - start)
+
   def get_all_slices_num_frames(self):
     """
     Note that this is only an upper limit in case of data_shape[1] > 1

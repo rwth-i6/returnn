@@ -19,26 +19,24 @@ __maintainer__ = "Patrick Doetsch"
 __email__ = "doetsch@i6.informatik.rwth-aachen.de"
 
 
-import re
 import os
 import sys
 import time
-import json
 import numpy
 from optparse import OptionParser
 from Log import log
-from Device import Device, get_num_devices, TheanoFlags, getDevicesInitArgs
+from Device import Device, TheanoFlags, getDevicesInitArgs
 from Config import Config
 from Engine import Engine
-from Dataset import Dataset, init_dataset, init_dataset_via_str, get_dataset_class
+from Dataset import Dataset, init_dataset, init_dataset_via_str
 from HDFDataset import HDFDataset
 from Debug import initIPythonKernel, initBetterExchook, initFaulthandler, initCudaNotInMainProcCheck
-from Util import initThreadJoinHack, custom_exec, describe_crnn_version, describe_theano_version, \
+from Util import initThreadJoinHack, describe_crnn_version, describe_theano_version, \
   describe_tensorflow_version, BackendEngine, get_tensorflow_version_tuple
 try:
   import Server
 except ImportError:
-  pass
+  Server = None
 
 
 config = None; """ :type: Config """

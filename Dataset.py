@@ -530,6 +530,38 @@ class Dataset(object):
           t += chunk_step
       s += 1
 
+  def _get_context_window_left_right(self):
+    """
+    :return: (ctx_left, ctx_right)
+    :rtype: None|(NumbersDict,NumbersDict)
+    """
+    if self.context_window:
+      # One less because the original frame also counts, and context_window=1 means that we just have that single frame.
+      # ctx_total is how much frames we add additionally.
+      ctx_total = NumbersDict.max([self.context_window, 1]) - 1
+      # In case ctx_total is odd / context_window is even, we have to decide where to put one more frame.
+      # To keep it consistent with e.g. 1D convolution with a kernel of even size, we add one more to the right.
+      # See test_tfconv1d_evensize().
+      ctx_left = ctx_total // 2
+      ctx_right = ctx_total - ctx_left
+      return ctx_left, ctx_right
+    else:
+      return None
+
+  def get_start_end_frames_full_seq(self, seq_idx):
+    """
+    :param int seq_idx:
+    :return: (start,end) frame, taking context_window into account
+    :rtype: (NumbersDict,NumbersDict)
+    """
+    end = self.get_seq_length(seq_idx)
+    start = end.constant_like(0)
+    ctx_lr = self._get_context_window_left_right()
+    if ctx_lr:
+      start -= ctx_lr[0]
+      end += ctx_lr[1]
+    return start, end
+
   def _generate_batches(self, recurrent_net, batch_size, max_seqs=-1, seq_drop=0.0, max_seq_length=sys.maxsize, used_data_keys=None):
     """
     :param bool recurrent_net: If True, the batch might have a batch seq dimension > 1.
@@ -550,21 +582,11 @@ class Dataset(object):
         print("Non-recurrent network, chunk size %i:%i ignored" % (chunk_size, chunk_step), file=log.v4)
         chunk_size = 0
     batch = Batch()
-    if self.context_window:
-      # One less because the original frame also counts, and context_window=1 means that we just have that single frame.
-      # ctx_lr is how much frames we add additionally.
-      ctx_lr = NumbersDict.max([self.context_window, 1]) - 1
-      # In case ctx_lr is odd / context_window is even, we have to decide where to put one more frame.
-      # To keep it consistent with e.g. 1D convolution with a kernel of even size, we add one more to the right.
-      # See test_tfconv1d_evensize().
-      ctx_left = ctx_lr // 2
-      ctx_right = ctx_lr - ctx_left
-    else:
-      ctx_left, ctx_right = 0, 0
+    ctx_lr = self._get_context_window_left_right()
     for seq_idx, t_start, t_end in self.iterate_seqs(chunk_size=chunk_size, chunk_step=chunk_step, used_data_keys=used_data_keys):
-      if ctx_left or ctx_right:
-        t_start -= ctx_left
-        t_end += ctx_right
+      if ctx_lr:
+        t_start -= ctx_lr[0]
+        t_end += ctx_lr[1]
       if recurrent_net:
         length = t_end - t_start
         if max_seq_length < 0 and length['classes'] > -max_seq_length:

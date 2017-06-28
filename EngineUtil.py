@@ -1,8 +1,9 @@
 
+from __future__ import print_function
+
 import numpy
 from EngineBatch import Batch
 from Log import log
-from Util import NumbersDict
 
 
 def assign_dev_data(device, dataset, batches, load_seqs=True):
@@ -88,7 +89,7 @@ def assign_dev_data_single_seq(device, dataset, seq, load_seqs=True):
   :rtype: bool
   """
   batch = Batch()
-  batch.add_frames(seq_idx=seq, seq_start_frame=0, length=dataset.get_seq_length(seq))
+  batch.init_with_one_full_sequence(seq_idx=seq, dataset=dataset)
   success, _ = assign_dev_data(device, dataset, [batch], load_seqs=load_seqs)
   return success
 
@@ -102,9 +103,9 @@ def maybe_subtract_priors(network, train, config):
   if config.bool('subtract_priors', False):
     prior_scale = config.float('prior_scale', 0.0)
     priors = train.calculate_priori()
-    priors[priors == 0] = 1e-10 #avoid priors of zero which would yield a bias of inf
+    priors[priors == 0] = 1e-10  # avoid priors of zero which would yield a bias of inf
     l = [p for p in network.train_params_vars if p.name == 'b_output']
     assert len(l) == 1, len(l)
     b_softmax = l[0]
     b_softmax.set_value(b_softmax.get_value() - prior_scale * numpy.log(priors))
-    print >> log.v3, "subtracting priors with prior_scale", prior_scale
+    print("subtracting priors with prior_scale", prior_scale, file=log.v3)
