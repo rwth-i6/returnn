@@ -1911,6 +1911,44 @@ class WeightedSumLayer(_ConcatInputLayer):
     return data
 
 
+class ElemwiseProdLayer(_ConcatInputLayer):
+  """
+  Element-wise product in some axes.
+  Microsoft calls this "static attention", in Deep Conv. NN with Layer-wise Context Expansion and Attention (LACE).
+  """
+  layer_class = "elemwise_prod"
+
+  def __init__(self, axes, size=None, **kwargs):
+    """
+    :param str|list[str] axes: e.g. "spatial", but all those axes must be of fixed dimension
+    :param tuple[int] size: for double-checking, you can explicitly provide the size
+    """
+    super(ElemwiseProdLayer, self).__init__(**kwargs)
+    axes = self.input_data.get_axes_from_description(axes)
+    axes = list(sorted(axes))
+    shape_size = [None] * len(axes)
+    for i, a in enumerate(axes):
+      assert self.input_data.batch_shape[a] is not None
+      shape_size[i] = self.input_data.batch_shape[a]
+    if size is None:
+      size = shape_size
+    else:
+      assert isinstance(size, (list, tuple))
+      assert tuple(size) == tuple(shape_size), "wrong size %r with input_data %r" % (size, self.input_data)
+    with var_creation_scope():
+      w = self.add_param(tf.Variable(name="W", initial_value=tf.constant(1.0, shape=size)))
+    w_full_shape = [self.input_data.batch_shape[a] if (a in axes) else 1
+                    for a in range(self.input_data.batch_ndim)]
+    w = tf.reshape(w, shape=w_full_shape)
+    self.output.placeholder = tf.multiply(self.input_data.placeholder, w)
+    self.output.size_placeholder = self.input_data.size_placeholder.copy()
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, **kwargs):
+    # Just the same as the input.
+    return get_concat_sources_data_template(sources, name="%s_output" % name)
+
+
 class PrefixInTimeLayer(CopyLayer):
   layer_class = "prefix_in_time"
 
