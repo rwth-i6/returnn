@@ -28,6 +28,7 @@ from SprintDataset import SprintDatasetBase
 from Log import log
 from Device import get_gpu_names
 import rnn
+from Engine import Engine
 from EngineUtil import assign_dev_data_single_seq
 import Debug
 from Util import interrupt_main, to_bool, BackendEngine
@@ -47,7 +48,7 @@ Task = "train"
 
 config = None; """ :type: rnn.Config """
 sprintDataset = None; """ :type: SprintDatasetBase """
-engine = None; """ :type: TFEngine.Engine|Engine.Engine """
+engine = None; """ :type: TFEngine.Engine|Engine """
 
 
 # Start Sprint PythonSegmentOrder interface. {

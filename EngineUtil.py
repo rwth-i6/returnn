@@ -29,8 +29,13 @@ def assign_dev_data(device, dataset, batches, load_seqs=True):
         q = seq.batch_slice + offset_slice
         l = seq.frame_length
         # input-data, input-index will also be set in this loop. That is data-key "data".
+        # targets are usually data-key "classes".
         for k in device.used_data_keys:
-          if l[k] == 0: continue
+          # device.used_data_keys are set by the train-net, but we will also get here during forward-only,
+          # e.g. via SprintInterface, where we don't have e.g. the "classes" data.
+          # In that case, l[k] should be None. In some earlier code, l[k] could also be 0 in that case.
+          if l[k] in [0, None]:
+            continue
           data = dataset.get_data_slice(seq.seq_idx, k, seq.seq_start_frame[k], seq.seq_end_frame[k])
           ls = data.shape[0]
           if "[sparse:" in k:
