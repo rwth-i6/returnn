@@ -12,6 +12,30 @@ class LayerBase(object):
   Every layer by default has a list of source layers `sources` and defines `self.output` which is of type Data.
   It shares some common functionality across all layers, such as explicitly defining the output format,
   some parameter regularization, and more.
+
+  If you want to implement your own layer::
+
+      class YourOwnLayer(_ConcatInputLayer):  # e.g. either _ConcatInputLayer or LayerBase as a base
+          " some docstring "
+          layer_class = "your_layer_name"
+
+          def __init__(self, your_kwarg1, your_opt_kwarg2=None, **kwargs):
+              " docstring, document the args! "
+              super(YourOwnLayer, self).__init__(**kwargs)
+              # Now we need to set self.output, which must be of type :class:`Data`.
+              # It is set at this point to whatever we got from `selfget_out_data_from_opts()`,
+              # so it is enough if we set self.output.placeholder and self.output.size_placeholder,
+              # but we could also reset self.output.
+              self.output.placeholder = self.input_data.placeholder + 42  # whatever you want to do
+              # If you don't modify the sizes (e.g. sequence-length), just copy the input sizes.
+              self.output.size_placeholder = self.input_data.size_placeholder.copy()
+
+          @classmethod
+          def get_out_data_from_opts(cls, **kwargs):
+              " This is supposed to return a :class:`Data` instance as a template, given the arguments. "
+              # example, just the same as the input:
+              return get_concat_sources_data_template(kwargs["sources"], name="%s_output" % kwargs["name"])
+
   """
 
   layer_class = None  # type: str|None  # for get_layer_class()
@@ -1762,6 +1786,129 @@ class SqueezeLayer(_ConcatInputLayer):
   @classmethod
   def get_out_data_from_opts(cls, **kwargs):
     return ReduceLayer.get_out_data_from_opts(keep_dims=False, **kwargs)
+
+
+class WeightedSumLayer(_ConcatInputLayer):
+  """
+  Calculates a weighted sum, either over a complete axis of fixed dimension, or over some window.
+  Can also do that for multiple axes.
+  """
+  layer_class = "weighted_sum"
+
+  def __init__(self, axes, padding=None, size=None, keep_dims=None, **kwargs):
+    """
+    :param str|list[str] axes: the axes to do the weighted-sum over
+    :param str padding: "valid" or "same", in case of keep_dims=True
+    :param None|tuple[int] size: the kernel-size. if left away, the axes must be of fixed dimension,
+      and we will use keep_dims=False, padding="valid" by default.
+      Otherwise, if given, you must also provide padding and keep_dims=True by default.
+    :param bool keep_dims: if False, the axes will be squeezed away. see also `size`.
+    """
+    super(WeightedSumLayer, self).__init__(**kwargs)
+    import numpy
+    axes, padding, size, keep_dims = self._resolve_opts(
+      input_data=self.input_data, axes=axes, padding=padding, size=size, keep_dims=keep_dims)
+    assert len(axes) in [1, 2, 3]  # not supported otherwise
+    axes = list(sorted(axes))
+    # We want to transpose the input such that we get the axes in order [all axes which are not in axes] + axes.
+    other_axes = [i for i in range(self.input_data.batch_ndim) if i not in axes]
+    perm = other_axes + axes
+    x = tf.transpose(self.input_data.placeholder, perm=perm)
+    # Now merge all other_axes together, and add one new axis at the end, so that we get the shape
+    # [new_batch_dim] + [shape(x)[a] for a in axes] + [1].
+    x_shape = tf.shape(x)
+    new_batch_dim = tf.reduce_prod(x_shape[:len(other_axes)])
+    axes_shape = [x_shape[i] for i in range(len(other_axes), self.input_data.batch_ndim)]
+    x = tf.reshape(x, shape=[new_batch_dim] + axes_shape + [1])
+    with var_creation_scope():
+      filters = self.add_param(tf.Variable(
+        name="W",
+        initial_value=tf.constant(1.0 / numpy.prod(size), shape=size)))
+    filters = tf.reshape(filters, shape=list(size) + [1, 1])
+    y = tf.nn.convolution(x, filter=filters, padding=padding)  # result: (new_batch_dim, ..., 1)
+    if keep_dims:
+      y_shape = tf.shape(y)
+      # Now split new_batch_dim again into the other_axes.
+      y = tf.reshape(
+        y, shape=[x_shape[i] for i in range(len(other_axes))] +
+                 [y_shape[i + 1] for i in range(len(axes))])  # [shape of other_axes] + [shape of axes]
+      # And revert the initial axes permutation.
+      inv_perm = numpy.argsort(perm)
+      y = tf.transpose(y, perm=inv_perm)  # original shape with maybe some less in the axes if padding="valid"
+      self.output.placeholder = y
+      self.output.size_placeholder = self.input_data.size_placeholder.copy()
+      if padding == "valid":
+        assert self.input_data.time_dim_axis not in axes, "size not yet implemented correctly..."
+    else:  # not keep_dims
+      # We expect that all the remaining shape of the axes can be reduced/squeezed, i.e. is all 1.
+      # Thus, we can reshape it to just the shape of the other_axes.
+      y = tf.reshape(y, shape=[x_shape[i] for i in range(len(other_axes))])
+      # The axes are all in the right order already now, so no need to permute/transpose the axes.
+      # We are ready.
+      self.output.placeholder = y
+      self.output.size_placeholder = {
+        i - len([a for a in axes if a < self.input_data.get_batch_axis(i)]): v
+        for (i, v) in self.input_data.size_placeholder.items()
+        if self.input_data.get_batch_axis(i) not in axes}
+
+  @classmethod
+  def _resolve_opts(cls, input_data, axes, padding=None, size=None, keep_dims=None):
+    """
+    :param Data input_data:
+    :param str|list[str] axes:
+    :param None|str padding:
+    :param None|tuple[int] size:
+    :param None|bool keep_dims:
+    :return: (axes, padding, size, keep_dims)
+    :rtype: (list[int], str, tuple[int], bool)
+    """
+    axes = input_data.get_axes_from_description(axes)
+    if size is None:
+      size = [None] * len(axes)
+      for i, a in enumerate(axes):
+        assert input_data.batch_shape[a] is not None
+        size[i] = input_data.batch_shape[a]
+      if keep_dims is None:
+        keep_dims = False
+      if padding is None:
+        padding = "valid"
+    else:
+      assert isinstance(size, (list, tuple))
+      assert len(size) == len(axes)
+      if keep_dims is None:
+        keep_dims = True
+      assert padding is not None
+    return axes, padding, tuple(size), keep_dims
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, axes, padding=None, size=None, keep_dims=None, **kwargs):
+    data = get_concat_sources_data_template(sources, name="%s_output" % name)
+    assert not data.sparse
+    axes, padding, size, keep_dims = cls._resolve_opts(
+      input_data=data, axes=axes, padding=padding, size=size, keep_dims=keep_dims)
+    padding = padding.lower()
+    res_dims = [data.batch_shape[a] for a in axes]
+    if padding == "same":
+      pass
+    elif padding == "valid":
+      for i in range(len(axes)):
+        if res_dims[i] is not None:
+          res_dims[i] -= size[i] - 1
+          assert res_dims[i] > 0
+    else:
+      raise Exception("invalid padding %r" % padding)
+    if keep_dims:
+      shape = list(data.shape)
+      assert data.batch_dim_axis not in axes
+      for i, a in enumerate(axes):
+        shape[data.get_batch_axis_excluding_batch(a)] = res_dims[i]
+      data.shape = tuple(shape)
+    else:
+      assert all([d == 1 for d in res_dims])
+      assert data.batch_dim_axis not in axes
+      data.shape = tuple([d for (i, d) in enumerate(data.shape) if data.get_batch_axis(i) not in axes])
+    data.dim = data.shape[data.get_batch_axis_excluding_batch(data.feature_dim_axis)]
+    return data
 
 
 class PrefixInTimeLayer(CopyLayer):
