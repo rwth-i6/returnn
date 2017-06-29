@@ -343,6 +343,14 @@ class Data(object):
     return self.time_dim_axis == 0
 
   @property
+  def is_batch_major(self):
+    """
+    :return: whether this is in batch-major format, i.e. (batch,...)
+    :rtype: bool
+    """
+    return self.batch_dim_axis == 0
+
+  @property
   def time_dim_axis_excluding_batch(self):
     if self.time_dim_axis is None:
       return None
@@ -367,7 +375,7 @@ class Data(object):
     return swapaxes(self.placeholder, batch_dim_axis, self.batch_dim_axis)
 
   def get_placeholder_time_flattened(self):
-    assert self.have_tim_axis()
+    assert self.have_time_axis()
     # flatten_with_seq_len_mask only works for these two cases at the moment:
     assert (self.time_dim_axis, self.batch_dim_axis) == (0, 1) or (self.time_dim_axis, self.batch_dim_axis) == (1, 0)
     seq_lens = self.size_placeholder[self.time_dim_axis_excluding_batch]
@@ -390,7 +398,7 @@ class Data(object):
     assert len(dyn_axes) > 1
     orig_num_dyn_axes = len(dyn_axes)
     ndim = len(self.batch_shape)
-    if self.have_tim_axis():
+    if self.have_time_axis():
       x = self.get_placeholder_time_flattened()
       removed_axis = max(self.time_dim_axis, self.batch_dim_axis)
       dyn_axes.remove(removed_axis)
@@ -512,7 +520,7 @@ class Data(object):
       return axis + 1
     return axis
 
-  def have_tim_axis(self):
+  def have_time_axis(self):
     return self.time_dim_axis is not None
 
   def get_sequence_lengths(self):

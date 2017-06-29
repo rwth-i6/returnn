@@ -14,7 +14,8 @@ def assign_dev_data(device, dataset, batches, load_seqs=True):
   :returns successful and how much batch idx to advance.
   :rtype: (bool,int)
   """
-  shapes = dataset.shapes_for_batches(batches, data_keys=device.used_data_keys)
+  from Dataset import shapes_for_batches
+  shapes = shapes_for_batches(batches, data_keys=device.used_data_keys, dataset=dataset)
   if shapes is None:
     return False, len(batches)
   device.alloc_data(shapes=shapes, max_ctc_length=dataset.get_max_ctc_length())

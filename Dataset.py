@@ -659,36 +659,6 @@ class Dataset(object):
       shuffle_batches=shuffle_batches,
       cache_whole_epoch=self.batch_set_generator_cache_whole_epoch())
 
-  def shapes_for_batches(self, batches, data_keys, batch_dim_first=False):
-    """
-    :type batches: list[EngineBatch.Batch]
-    :rtype: dict[str,list[int]] | None
-    """
-    all_data_keys = set(data_keys) | {"data"}
-
-    # The final device.data.shape is in format (time,batch,feature).
-    shape = [NumbersDict(0), 0]  # time,batch
-    for batch in batches:
-      shape = [NumbersDict.max([shape[0], batch.max_num_frames_per_slice]), shape[1] + batch.num_slices]
-    if shape[1] == 0:
-      return None
-    assert shape[0].max_value() > 0
-    # Theano has some buggy behaviour with tensors with some shape of zero.
-    # We will just use one dummy frame in that case.
-    # The index will stay zero in that case. (see EngineUtil.assign_dev_data())
-    # However, also see the OutputLayer.output_index() behavior for forwarding.
-    for k in all_data_keys:
-      shape[0][k] = max(shape[0][k], 1)
-
-    d = {k: [shape[0][k], shape[1]] for k in all_data_keys}
-    for k in d:
-      d[k] += self.get_data_shape(k)
-
-    if batch_dim_first:
-      # Just flip the first two dimensions.
-      d = {k: [shape[1], shape[0]] + shape[2:] for (k, shape) in d.items()}
-    return d
-
   @classmethod
   def index_shape_for_batches(cls, batches, data_key="data"):
     shape = [0, 0]  # time,batch
@@ -847,3 +817,45 @@ def convert_data_dims(data_dims, leave_dict_as_is=False):
     assert isinstance(v[1], int)
     assert 1 <= v[1] <= 2
   return data_dims
+
+
+def shapes_for_batches(batches, data_keys, dataset=None, extern_data=None):
+  """
+  :param list[EngineBatch.Batch] batches:
+  :param list[str] data_keys:
+  :param Dataset dataset:
+  :param TFNetwork.ExternData extern_data: detailed data description. only used for TensorFlow
+  :rtype: dict[str,list[int]] | None
+  """
+  assert dataset or extern_data
+  all_data_keys = set(data_keys) | {"data"}
+
+  # The final device.data.shape is in format (time,batch,feature) in case of Theano.
+  shape = [NumbersDict(0), 0]  # time,batch
+  for batch in batches:
+    shape = [NumbersDict.max([shape[0], batch.max_num_frames_per_slice]), shape[1] + batch.num_slices]
+  if shape[1] == 0:
+    return None
+  assert shape[0].max_value() > 0
+  # Theano has some buggy behaviour with tensors with some shape of zero.
+  # We will just use one dummy frame in that case.
+  # The index will stay zero in that case. (see EngineUtil.assign_dev_data())
+  # However, also see the OutputLayer.output_index() behavior for forwarding.
+  if not extern_data:  # not needed if TensorFlow is used
+    for k in all_data_keys:
+      shape[0][k] = max(shape[0][k], 1)
+
+  if extern_data:
+    d = {}
+    for k in all_data_keys:
+      data_shape = list(extern_data.data[k].batch_shape)
+      data_shape[extern_data.data[k].batch_dim_axis] = shape[1]
+      if extern_data.data[k].have_time_axis():
+        data_shape[extern_data.data[k].time_dim_axis] = shape[0][k]
+      assert all([n is not None for n in data_shape])
+      d[k] = data_shape
+  else:  # shape via dataset
+    d = {k: [shape[0][k], shape[1]] for k in all_data_keys}
+    for k in all_data_keys:
+      d[k] += dataset.get_data_shape(k)
+  return d

@@ -306,6 +306,10 @@ class TFNetwork(object):
     """
     if mark_data_key_as_used:
       self.used_data_keys.add(key)
+    if key == "seq_idx" and key not in self.extern_data.data:
+      self.extern_data.data[key] = Data(name="seq_idx", shape=(), dtype="int32", sparse=False, auto_create_placeholders=True)
+    if key == "seq_tag" and key not in self.extern_data.data:
+      self.extern_data.data[key] = Data(name="seq_tag", shape=(), dtype="string", auto_create_placeholders=True)
     return self.extern_data.get_data(key)
 
   def construct_objective(self):

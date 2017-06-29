@@ -401,7 +401,7 @@ class LayerBase(object):
   def get_output_spatial_smoothing_energy(self):
     from TFUtil import spatial_smoothing_energy, flatten_with_seq_len_mask
     energy = spatial_smoothing_energy(self.output.placeholder, dim=self.output.dim)  # (batch,time)
-    assert self.output.have_tim_axis()
+    assert self.output.have_time_axis()
     energy = flatten_with_seq_len_mask(
       energy,
       seq_lens=self.output.size_placeholder[self.output.time_dim_axis_excluding_batch],
@@ -635,6 +635,11 @@ class SourceLayer(LayerBase):
 
   @classmethod
   def get_out_data_from_opts(cls, network, data_key=None, **kwargs):
+    """
+    :param TFNetwork.TFNetwork network:
+    :param str|None data_key:
+    :rtype: Data
+    """
     if data_key is None:
       data_key = network.extern_data.default_input
     return network.get_extern_data(data_key, mark_data_key_as_used=False)
@@ -2452,7 +2457,7 @@ class Loss(object):
       # Flat variants are with batch,time collapsed into one, masked via seq_lens.
       self.output_flat = None
       self.output_before_softmax_flat = None
-      if self.output.have_tim_axis():
+      if self.output.have_time_axis():
         self.loss_norm_factor = 1.0 / tf.cast(tf.reduce_sum(self.target_seq_lens), tf.float32)
         time_and_batch_dims = (self.output.time_dim_axis, self.output.batch_dim_axis)
         assert time_and_batch_dims in [(0, 1), (1, 0)], "output time-batch-dim unexpected: %s" % self.output
