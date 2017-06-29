@@ -592,7 +592,7 @@ class ExternSprintDataset(SprintDatasetBase):
       self.initSprintEpoch(epoch)
       haveSeenTheWhole = False
 
-      while not self.python_exit:
+      while not self.python_exit and self.child_pid:
         try:
           dataType, args = self._read_next_raw()
         except (IOError, EOFError):
@@ -600,14 +600,14 @@ class ExternSprintDataset(SprintDatasetBase):
             if epoch != self.crnnEpoch:
               # We have passed on to a new epoch. This is a valid reason that the child has been killed.
               break
-            if self.python_exit:
+            if self.python_exit or not self.child_pid:
               break
           raise
 
         with self.lock:
           if epoch != self.crnnEpoch:
             break
-          if self.python_exit:
+          if self.python_exit or not self.child_pid:
             break
 
           if dataType == "data":
@@ -627,7 +627,7 @@ class ExternSprintDataset(SprintDatasetBase):
         finally:
           self.seq_list_file = None
 
-      if not self.python_exit:
+      if not self.python_exit and self.child_pid:
         with self.lock:
           self.finishSprintEpoch()
           if haveSeenTheWhole:
@@ -635,17 +635,18 @@ class ExternSprintDataset(SprintDatasetBase):
       print("ExternSprintDataset finished reading epoch %i" % epoch, file=log.v5)
 
     except Exception:
-      # Catch all standard exceptions.
-      # Don't catch KeyboardInterrupt here because that will get send by the main thread
-      # when it is exiting. It's never by the user because SIGINT will always
-      # trigger KeyboardInterrupt in the main thread only.
-      try:
-        print("ExternSprintDataset reader failed", file=log.v1)
-        sys.excepthook(*sys.exc_info())
-        print("")
-      finally:
-        # Exceptions are fatal. If we can recover, we should handle it in run_inner().
-        interrupt_main()
+      if not self.python_exit:
+        # Catch all standard exceptions.
+        # Don't catch KeyboardInterrupt here because that will get send by the main thread
+        # when it is exiting. It's never by the user because SIGINT will always
+        # trigger KeyboardInterrupt in the main thread only.
+        try:
+          print("ExternSprintDataset reader failed", file=log.v1)
+          sys.excepthook(*sys.exc_info())
+          print("")
+        finally:
+          # Exceptions are fatal. If we can recover, we should handle it in run_inner().
+          interrupt_main()
 
   def exit_handler(self):
     assert os.getpid() == self.parent_pid
