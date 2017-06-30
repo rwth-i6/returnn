@@ -7,6 +7,8 @@ This Sprint interface is to be used for ExternSprintDataset, which should automa
 
 from __future__ import print_function
 
+import better_exchook
+import sys
 import os
 import TaskSystem
 from TaskSystem import Pickler, Unpickler
@@ -47,9 +49,14 @@ def getSegmentList(corpusName, segmentList, **kwargs):
 
 isInitialized = False
 
+def exchook(exc_type, exc_obj, exc_tb):
+  if exc_type is KeyboardInterrupt:
+    print("SprintExternInterface[pid %i]: KeyboardInterrupt" % (os.getpid(),))
+    sys.exit(1)
+  better_exchook.better_exchook(exc_type, exc_obj, exc_tb)
+
 def init(**kwargs):
-  import better_exchook
-  better_exchook.install()
+  sys.excepthook = exchook
   # This module can also be used for Sprint PythonControl, which will also call init().
   # We need to catch these cases.
   if "name" in kwargs and kwargs["name"] == "Sprint.PythonControl":

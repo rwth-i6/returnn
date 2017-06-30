@@ -1039,6 +1039,8 @@ class Engine(object):
         "seq_tag": self.network.get_extern_data("seq_tag", mark_data_key_as_used=True)},
       extra_fetches_callback=extra_fetches_callback)
     runner.run(report_prefix=self.get_epoch_str() + " search")
-    assert runner.finalized
+    if not runner.finalized:
+      print("Error happened. Exit now.")
+      sys.exit(1)
     print("Search done. Final: score %s error %s" % (
       self.format_score(runner.score), self.format_score(runner.error)), file=log.v1)
