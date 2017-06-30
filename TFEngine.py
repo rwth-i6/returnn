@@ -983,10 +983,11 @@ class Engine(object):
       print("WARNING: Did not finished through the whole epoch.", file=log.v1)
       sys.exit(1)
 
-  def search(self, dataset, do_eval=True):
+  def search(self, dataset, do_eval=True, output_layer_name="output"):
     """
     :param Dataset.Dataset dataset:
     :param bool do_eval: calculate errors. can only be done if we have the reference target
+    :param str output_layer_name:
     """
     print("Search with network on %r." % dataset, file=log.v1)
     if not self.use_search_flag or not self.network:
@@ -1004,7 +1005,7 @@ class Engine(object):
       max_seq_length=int(self.config.float('max_seq_length', 0)),
       used_data_keys=self.network.used_data_keys)
 
-    output_layer = self.network.get_default_output_layer()
+    output_layer = self.network.layers[output_layer_name]
     out_beam_size = output_layer.output.beam_size
     if out_beam_size is None:
       print("Given output is after decision (no beam).", file=log.v1)
@@ -1020,6 +1021,9 @@ class Engine(object):
       n_batch = len(seq_idx)
       assert n_batch == len(seq_tag)
       assert n_batch * (out_beam_size or 1) == len(output)
+      if output_layer.output.dim == 256 and output_layer.output.sparse:
+        # Interpret output as bytes/utf8-string.
+        output = [bytearray(o).decode("utf8") for o in output]
       for i in range(len(seq_idx)):
         if out_beam_size is None:
           print("seq_idx: %i, seq_tag: %r, output: %r" % (seq_idx[i], seq_tag[i], output[i]), file=log.v1)
