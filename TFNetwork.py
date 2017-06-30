@@ -623,7 +623,33 @@ class TFNetwork(object):
     """
     if not self.saver:
       self._create_saver()
-    self.saver.restore(sess=session, save_path=filename)
+    try:
+      self.saver.restore(sess=session, save_path=filename)
+    except tf.errors.NotFoundError as exc:
+      print("Error, some entry is missing in the checkpoint %r: %s: %s" % (filename, type(exc), exc), file=log.v1)
+      reader = tf.train.NewCheckpointReader(filename)
+      print("All variables in checkpoint:")
+      print(reader.debug_string())
+      net_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES) + tf.get_collection(tf.GraphKeys.SAVEABLE_OBJECTS)
+      print("All variables to restore:")
+      for v in net_vars:
+        print(v)
+      print()
+      vars_ckpt = set(reader.get_variable_to_shape_map())
+      vars_net = set([v.name[:-2] for v in net_vars])
+      print("Variables to restore which are not in checkpoint:")
+      for v in sorted(vars_net):
+        if v in vars_ckpt:
+          continue
+        print(v)
+      print()
+      print("Variables in checkpoint which are not needed for restore:")
+      for v in sorted(vars_ckpt):
+        if v in vars_net:
+          continue
+        print(v)
+      print()
+      raise exc
 
   def print_network_info(self, name="Network"):
     print("%s layer topology:" % name, file=log.v2)

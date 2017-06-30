@@ -573,7 +573,11 @@ class Engine(object):
 
     if model_epoch_filename:
       print("loading weights from", model_epoch_filename, file=log.v2)
-      self.network.load_params_from_file(model_epoch_filename, session=self.tf_session)
+      try:
+        self.network.load_params_from_file(model_epoch_filename, session=self.tf_session)
+      except tf.errors.NotFoundError:
+        print("Exiting now because model cannot be loaded.", file=log.v1)
+        sys.exit(1)
 
   def _init_network(self, net_desc, epoch=None):
     if epoch is None:
