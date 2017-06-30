@@ -2432,7 +2432,7 @@ def raise_OutOfRangeError():
       return queue.dequeue()
 
 
-def copy(x):
+def enforce_copy(x):
   """
   :param tf.Tensor|tf.Variable x:
   :return: copy of input, i.e. enforces that this is not a ref
@@ -2505,7 +2505,7 @@ class Condition(object):
         return tf.no_op()
 
   def wait_counter(self):
-    return copy(self._waiting_counter.read_value())
+    return enforce_copy(self._waiting_counter.read_value())
 
   def signal(self):
     """
@@ -3215,7 +3215,7 @@ class ExplicitRandomShuffleQueue(object):
       return tf.count_nonzero(self._is_written, dtype=tf.int32)
 
   def min_after_dequeue_read(self):
-    return copy(self._min_after_dequeue.read_value())
+    return enforce_copy(self._min_after_dequeue.read_value())
 
   def min_after_dequeue_assign(self, min_after_dequeue):
     """
@@ -3232,7 +3232,7 @@ class ExplicitRandomShuffleQueue(object):
 
   def _get_cur_tensor_array(self, idx):
     ta = self._tas[idx]
-    return tf.TensorArray(dtype=ta.dtype, handle=ta.handle, flow=copy(self._flows[idx].read_value()))
+    return tf.TensorArray(dtype=ta.dtype, handle=ta.handle, flow=enforce_copy(self._flows[idx].read_value()))
 
   def _get_cur_tas(self):
     return [self._get_cur_tensor_array(i) for i in range(len(self._tas))]

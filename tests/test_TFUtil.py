@@ -432,12 +432,12 @@ def test_raise_OutOfRangeError():
         pass
 
 
-def test_copy():
+def test_enforce_copy():
   v = tf.Variable(initial_value=2, trainable=False, name="test_copy")
   # with tf.control_dependencies([v.initializer]) does not work?
   session.run(v.initializer)
   a = tf.identity(v.read_value())
-  b = copy(v.read_value())
+  b = enforce_copy(v.read_value())
   with tf.control_dependencies([a, b]):
     with tf.control_dependencies([tf.assign(v, 3)]):
       # `a` is a ref to v, thus also 3 now.
@@ -453,7 +453,7 @@ def test_Lock():
   session.run(v.initializer)
   with tf.control_dependencies([lock.lock()]):
     with tf.control_dependencies([v.assign_add(1)]):
-      x = copy(v)
+      x = enforce_copy(v)
       with tf.control_dependencies([x, lock.unlock()]):
         x = tf.identity(x)
   # Just checking lock + unlock, not really the behavior.
