@@ -1406,9 +1406,33 @@ class AttentionBaseLayer(_ConcatInputLayer):
     """
     super(AttentionBaseLayer, self).__init__(**kwargs)
     self.base = base
+    self.base_weights = None  # type: None|tf.Tensor  # (batch, base_time), see self.get_base_weights()
 
   def get_dep_layers(self):
     return super(AttentionBaseLayer, self).get_dep_layers() + [self.base]
+
+  def get_base_weights(self):
+    """
+    We can formulate most attentions as some weighted sum over the base time-axis.
+
+    :return: the weighting of shape (batch, base_time), in case it is defined
+    :rtype: tf.Tensor|None
+    """
+    return self.base_weights
+
+  def get_base_weight_last_frame(self):
+    """
+    From the base weights (see self.get_base_weights(), must return not None)
+    takes the weighting of the last frame in the time-axis (according to sequence lengths).
+
+    :return: shape (batch,) -> float (number 0..1)
+    :rtype: tf.Tensor
+    """
+    last_frame_idxs = tf.maximum(self.base.output.get_sequence_lengths() - 1, 0)  # (batch,)
+    from TFUtil import assert_min_tf_version, nd_indices
+    assert_min_tf_version((1, 1), "gather_nd")
+    last_frame_idxs_ext = nd_indices(last_frame_idxs)
+    return tf.gather_nd(self.get_base_weights(), indices=last_frame_idxs_ext)  # (batch,)
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
@@ -1467,14 +1491,18 @@ class DotAttentionLayer(GlobalAttentionContextBaseLayer):
     with tf.name_scope("att_energy"):
       # Get base of shape (batch, base_time, inner).
       base = self.base.output.get_placeholder_as_batch_major()  # (batch, base_time, n_out)
+      base_seq_lens = self.base.output.get_sequence_lengths()
       base_ctx = self.base_ctx.output.get_placeholder_as_batch_major()  # (batch, base_time, inner)
       # Get source of shape (batch, inner, 1).
       source = tf.expand_dims(self.input_data.placeholder, axis=2)
       energy = tf.matmul(base_ctx, source)
       energy.set_shape(tf.TensorShape([None, None, 1]))  # (batch, base_time, 1)
       energy = tf.squeeze(energy, axis=2)  # (batch, base_time)
-      base_weights = tf.nn.softmax(energy)  # (batch, base_time)
-      base_weights_bc = tf.expand_dims(base_weights, axis=1)  # (batch, 1, base_time)
+      # We must mask all values behind base_seq_lens. Set them to -inf, because we use softmax afterwards.
+      energy_mask = tf.sequence_mask(base_seq_lens, maxlen=tf.shape(energy)[1])
+      energy = tf.where(energy_mask, energy, float("-inf") * tf.ones_like(energy))
+      self.base_weights = tf.nn.softmax(energy)  # (batch, base_time)
+      base_weights_bc = tf.expand_dims(self.base_weights, axis=1)  # (batch, 1, base_time)
       out = tf.matmul(base_weights_bc, base)  # (batch, 1, n_out)
       out.set_shape(tf.TensorShape([None, 1, self.output.dim]))
       out = tf.squeeze(out, axis=1)  # (batch, n_out)
