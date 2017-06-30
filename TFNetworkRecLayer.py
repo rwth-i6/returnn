@@ -422,7 +422,8 @@ class RecLayer(_ConcatInputLayer):
           output_beam_size = cell.layer_data_templates["output"].get_search_beam_size()
           assert output_beam_size is not None
           if seq_len is not None:
-            seq_len = tf.tile(seq_len, [output_beam_size])  # (batch * beam,)
+            from TFUtil import tile_transposed
+            seq_len = tile_transposed(seq_len, axis=0, multiples=output_beam_size)  # (batch * beam,)
 
       if not have_known_seq_len:
         assert "end" in cell.layer_data_templates, (
@@ -816,6 +817,7 @@ class _SubnetworkRecCell(object):
               from TFNetworkLayer import InternalLayer
               l = InternalLayer(name=name, network=self.net, output=l.output.copy_extend_with_beam(needed_beam_size))
               extended_layers[name] = l
+          assert l.output.beam_size == needed_beam_size
         return l
       return self.net._construct_layer(net_dict, name=name, get_layer=get_layer)
 

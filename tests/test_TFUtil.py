@@ -584,6 +584,22 @@ def test_tf_tile():
     assert_equal(list(r[beam]), [1, 2, 3])
 
 
+def test_tile_transposed():
+  batch_size = 3
+  beam_size = 5
+  v = tf.constant([1, 2, 3])  # (batch,)
+  v.set_shape((batch_size,))
+  v2 = tile_transposed(v, axis=0, multiples=beam_size)  # (batch*beam,)
+  v2.set_shape((batch_size * beam_size,))
+  print(v2.eval())
+  v3 = tf.reshape(v2, [batch_size, beam_size])  # (batch,beam)
+  r = v3.eval()
+  print(r)
+  assert isinstance(r, numpy.ndarray)
+  for beam in range(beam_size):
+    assert_equal(list(r[:, beam]), [1, 2, 3])
+
+
 def test_expand_dims_unbroadcast_instead_of_tf_tile():
   batch_size = 3
   beam_size = 5
