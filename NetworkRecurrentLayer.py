@@ -807,7 +807,12 @@ class RecurrentUnitLayer(Layer):
       sequences = z
       sources = self.sources
       if encoder:
-        if hasattr(encoder[0],'act'):
+        if recurrent_transform == "attention_segment":
+          if hasattr(encoder[0],'act'):
+            seg_pts_first = (self.base[0].inv_att.argmax(axis=2) + (T.arange(self.base[0].inv_att.shape[1]) * self.base[0].inv_att.shape[2]))[0] #B (first alignment points from all the batches)
+            outputs_info = [T.concatenate([e.act[i][-1] for e in encoder], axis=1) for i in range(unit.n_act)]
+            outputs_info[0] = encoder[0].act[0].dimshuffle(1,0,2).reshape((encoder[0].act[0].shape[0]*encoder[0].act[0].shape[1],encoder[0].act[0].shape[2]))[seg_pts_first]
+        elif hasattr(encoder[0],'act'):
           outputs_info = [ T.concatenate([e.act[i][-1] for e in encoder], axis=1) for i in range(unit.n_act) ]
         else:
           outputs_info = [ T.concatenate([e[i] for e in encoder], axis=1) for i in range(unit.n_act) ]
@@ -965,7 +970,7 @@ class RecurrentUnitLayer(Layer):
     max_diff = T.cast(T.extra_ops.diff(att_with_first_index,axis=0).flatten().sort()[-1],'int32')
     reduced_index = aligner.reduced_index.repeat(max_diff).reshape((aligner.reduced_index.shape[0], aligner.reduced_index.shape[1],max_diff)) #NB(max_diff)
     att_wo_last_ind = att_with_first_index[:-1] #NB
-    att_wo_last_ind = T.inc_subtensor(att_wo_last_ind[0],numpy.int32(1))
+    att_wo_last_ind +=numpy.int32(1)
     att_rep = att_wo_last_ind.repeat(max_diff).reshape((att_wo_last_ind.shape[0],att_wo_last_ind.shape[1],max_diff))#NB(max_diff)
     att_rep = T.switch(reduced_index>0, att_rep + T.arange(max_diff),T.zeros((1,),'float32')-numpy.float32(1))
     att_rep = att_rep.dimshuffle(0,2,1) #N(max_diff)B
