@@ -274,11 +274,18 @@ class TFNetwork(object):
     assert "output" not in layer_desc
     layer_desc["name"] = name
     layer_desc["network"] = self
+    debug_print_layer_output_template = self._config and self._config.bool("debug_print_layer_output_template", False)
+    debug_print_layer_output_sizes = self._config and self._config.bool("debug_print_layer_output_sizes", False)
+    debug_print_layer_output_shape = self._config and self._config.bool("debug_print_layer_output_shape", False)
     with reuse_name_scope(layer_class.cls_get_tf_scope_name(name)):
       output = layer_class.get_out_data_from_opts(**layer_desc)
+      if debug_print_layer_output_template:
+        print("layer %r output: %r" % (name, output))
       layer = layer_class(output=output, **layer_desc)
       layer.post_init()
-      if self._config and self._config.bool("debug_print_layer_output_shape", False):
+      if debug_print_layer_output_sizes:
+        print("layer %r output sizes: %r" % (name, output.size_placeholder))
+      if debug_print_layer_output_shape:
         layer.output.placeholder = tf.Print(
           layer.output.placeholder, [layer_class.cls_get_tf_scope_name(name), "shape:", tf.shape(layer.output.placeholder)],
           summarize=10, name="debug_print_layer_output_shape")
@@ -299,6 +306,10 @@ class TFNetwork(object):
     """
     if mark_data_key_as_used:
       self.used_data_keys.add(key)
+    if key == "seq_idx" and key not in self.extern_data.data:
+      self.extern_data.data[key] = Data(name="seq_idx", shape=(), dtype="int32", sparse=False, auto_create_placeholders=True)
+    if key == "seq_tag" and key not in self.extern_data.data:
+      self.extern_data.data[key] = Data(name="seq_tag", shape=(), dtype="string", auto_create_placeholders=True)
     return self.extern_data.get_data(key)
 
   def construct_objective(self):
@@ -612,7 +623,33 @@ class TFNetwork(object):
     """
     if not self.saver:
       self._create_saver()
-    self.saver.restore(sess=session, save_path=filename)
+    try:
+      self.saver.restore(sess=session, save_path=filename)
+    except tf.errors.NotFoundError as exc:
+      print("Error, some entry is missing in the checkpoint %r: %s: %s" % (filename, type(exc), exc), file=log.v1)
+      reader = tf.train.NewCheckpointReader(filename)
+      print("All variables in checkpoint:")
+      print(reader.debug_string())
+      net_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES) + tf.get_collection(tf.GraphKeys.SAVEABLE_OBJECTS)
+      print("All variables to restore:")
+      for v in net_vars:
+        print(v)
+      print()
+      vars_ckpt = set(reader.get_variable_to_shape_map())
+      vars_net = set([v.name[:-2] for v in net_vars])
+      print("Variables to restore which are not in checkpoint:")
+      for v in sorted(vars_net):
+        if v in vars_ckpt:
+          continue
+        print(v)
+      print()
+      print("Variables in checkpoint which are not needed for restore:")
+      for v in sorted(vars_ckpt):
+        if v in vars_net:
+          continue
+        print(v)
+      print()
+      raise exc
 
   def print_network_info(self, name="Network"):
     print("%s layer topology:" % name, file=log.v2)

@@ -38,20 +38,26 @@ from Util import hms, NumbersDict
 
 
 class Runner(object):
-  def __init__(self, engine, dataset, batches, train, eval=True):
+  def __init__(self, engine, dataset, batches, train, eval=True, extra_fetches=None, extra_fetches_callback=None):
     """
     :param Engine engine:
     :param Dataset.Dataset dataset:
     :param BatchSetGenerator batches:
     :param bool train: whether to do updates on the model
     :param bool eval: whether to evaluate (i.e. calculate loss/error)
+    :param dict[str,tf.Tensor|TFUtil.Data|TFNetworkLayer.LayerBase]|None extra_fetches: additional fetches per step.
+      `extra_fetches_callback` will be called with these. In case of Data/LayerBase, it will return a list,
+      where each item corresponds to the batch-seq.
+      It might also be useful to add `network.get_extern_data("seq_idx")` and `network.get_extern_data("seq_tag")`.
+    :param (**dict[str,numpy.ndarray|str|list[numpy.ndarray|str])->None extra_fetches_callback: called if extra_fetches
     """
-    from TFDataPipeline import FeedDictDataProvider
+    from TFDataPipeline import FeedDictDataProvider, DataProviderBase
     self.engine = engine
     self.data_provider = FeedDictDataProvider(
       tf_session=engine.tf_session, extern_data=engine.network.extern_data,
       data_keys=engine.network.used_data_keys,
       dataset=dataset, batches=batches)
+    assert isinstance(self.data_provider, DataProviderBase)
     self._should_train = train
     self._should_eval = eval
     self.store_metadata_mod_step = engine.config.int("store_metadata_mod_step", 0)
@@ -66,6 +72,10 @@ class Runner(object):
     self.score = {}  # type: dict[str,float]  # entries like "cost:output"
     self.error = {}  # type: dict[str,float]  # entries like "error:output"
     self.stats = {}  # type: dict[str,float]  # entries like "stats:..."
+    self.extra_fetches = extra_fetches
+    if extra_fetches is not None:
+      assert extra_fetches_callback
+    self.extra_fetches_callback = extra_fetches_callback
 
     from Util import terminal_size
     terminal_width, _ = terminal_size()
@@ -102,6 +112,19 @@ class Runner(object):
         # Force a new check.
         self.engine._checked_uninitialized_vars = False
       d["optim_op"] = self.engine.updater.get_optim_op(callback_on_new=callback_on_new)
+    if self.extra_fetches is not None:
+      from TFNetworkLayer import LayerBase
+      from TFUtil import Data
+      for k, v in self.extra_fetches.items():
+        if isinstance(v, tf.Tensor):
+          d["extra:%s" % k] = v
+          continue
+        if isinstance(v, LayerBase):
+          v = v.output
+        assert isinstance(v, Data)
+        d["extra:%s" % k] = v.placeholder
+        for i, s in v.size_placeholder.items():
+          d["extra:%s:size_%i" % (k, i)] = s
     d["summary"] = self.engine.get_all_merged_summaries()
     return d
 
@@ -217,6 +240,35 @@ class Runner(object):
 
     return eval_info
 
+  def _maybe_handle_extra_fetches(self, fetches_results):
+    """
+    :param dict[str,numpy.ndarray|str] fetches_results: results of calculations, see self._get_fetches_dict()
+    """
+    if self.extra_fetches is None:
+      return
+    d = {}
+    from TFNetworkLayer import LayerBase
+    from TFUtil import Data
+    for k, v in self.extra_fetches.items():
+      r = fetches_results["extra:%s" % k]
+      if isinstance(v, tf.Tensor):
+        d[k] = r
+        continue
+      if isinstance(v, LayerBase):
+        v = v.output
+      assert isinstance(v, Data)
+      if v.batch_dim_axis != 0:
+        r = numpy.moveaxis(r, v.batch_dim_axis, 0)
+      if v.have_time_axis():
+        assert v.time_dim_axis_excluding_batch == 0
+        assert list(v.size_placeholder.keys()) == [0]
+        seq_lens = fetches_results["extra:%s:size_0" % k]  # shape: (batch,)
+        assert seq_lens.shape == (r.shape[0],)
+        d[k] = [r[i, :seq_lens[i]] for i in range(seq_lens.shape[0])]
+      else:
+        d[k] = list(r)
+    self.extra_fetches_callback(**d)
+
   def run(self, report_prefix):
     """
     :param str report_prefix: prefix for logging
@@ -266,7 +318,7 @@ class Runner(object):
             fetches_dict,
             feed_dict=feed_dict,
             options=run_options,
-            run_metadata=run_metadata)
+            run_metadata=run_metadata)  # type: dict[str,numpy.ndarray|str]
           writer.add_summary(fetches_results["summary"], step + step_offset)
           writer.add_run_metadata(run_metadata, 'step_{:04d}'.format(step + step_offset))
           tl = timeline.Timeline(run_metadata.step_stats)
@@ -274,10 +326,11 @@ class Runner(object):
           with open(timeline_path, 'w') as f:
             f.write(tl.generate_chrome_trace_format(show_memory=True))
         else:
-          fetches_results = sess.run(fetches_dict, feed_dict=feed_dict)
+          fetches_results = sess.run(fetches_dict, feed_dict=feed_dict) # type: dict[str,numpy.ndarray|str]
           writer.add_summary(fetches_results["summary"], step + step_offset)
 
         eval_info = self._collect_eval_info(fetches_results=fetches_results)
+        self._maybe_handle_extra_fetches(fetches_results)
         duration = time.time() - start_time
         self._print_process(report_prefix=report_prefix, step=step, step_duration=duration,
                             eval_info=eval_info)
@@ -520,7 +573,11 @@ class Engine(object):
 
     if model_epoch_filename:
       print("loading weights from", model_epoch_filename, file=log.v2)
-      self.network.load_params_from_file(model_epoch_filename, session=self.tf_session)
+      try:
+        self.network.load_params_from_file(model_epoch_filename, session=self.tf_session)
+      except tf.errors.NotFoundError:
+        print("Exiting now because model cannot be loaded.", file=log.v1)
+        sys.exit(1)
 
   def _init_network(self, net_desc, epoch=None):
     if epoch is None:
@@ -538,8 +595,6 @@ class Engine(object):
     if False:  # TODO ...
       extern_data = ExternData()
       extern_data.init_from_config(self.config)
-      from TFDataPipeline import TFDataQueues
-      tf_queues = TFDataQueues(extern_data=extern_data)
       # TODO...
     network = TFNetwork(
       name="root",
@@ -766,6 +821,10 @@ class Engine(object):
           self.eval_model()
 
   def get_all_merged_summaries(self):
+    """
+    :return: merged summaries, serialized string
+    :rtype: tf.Tensor
+    """
     # Note: This assumes that the summaries never change.
     # Both both training and evaluation on the CV dataset, this is the case.
     if self._merge_all_summaries is None:
@@ -806,7 +865,7 @@ class Engine(object):
     # First we need a custom DataProvider with a custom BatchSetGenerator
     # which will yield only one single batch for the provided sequence idx.
     batch = Batch()
-    batch.add_frames(seq_idx=seq_idx, seq_start_frame=0, length=dataset.get_seq_length(seq_idx))
+    batch.init_with_one_full_sequence(seq_idx=seq_idx, dataset=dataset)
     batch_generator = iter([batch])
     batches = BatchSetGenerator(dataset, generator=batch_generator)
     from TFDataPipeline import FeedDictDataProvider
@@ -924,9 +983,11 @@ class Engine(object):
       print("WARNING: Did not finished through the whole epoch.", file=log.v1)
       sys.exit(1)
 
-  def search(self, dataset, do_eval=True):
+  def search(self, dataset, do_eval=True, output_layer_name="output"):
     """
     :param Dataset.Dataset dataset:
+    :param bool do_eval: calculate errors. can only be done if we have the reference target
+    :param str output_layer_name:
     """
     print("Search with network on %r." % dataset, file=log.v1)
     if not self.use_search_flag or not self.network:
@@ -943,8 +1004,43 @@ class Engine(object):
       max_seqs=self.config.int('max_seqs', -1),
       max_seq_length=int(self.config.float('max_seq_length', 0)),
       used_data_keys=self.network.used_data_keys)
-    runner = Runner(engine=self, dataset=dataset, batches=batches, train=False, eval=do_eval)
+
+    output_layer = self.network.layers[output_layer_name]
+    out_beam_size = output_layer.output.beam_size
+    if out_beam_size is None:
+      print("Given output is after decision (no beam).", file=log.v1)
+    else:
+      print("Given output has beam size %i." % out_beam_size)
+
+    def extra_fetches_callback(seq_idx, seq_tag, output):
+      """
+      :param list[int] seq_idx: of length batch
+      :param list[str] seq_tag: of length batch
+      :param list[numpy.ndarray] output: of length batch
+      """
+      n_batch = len(seq_idx)
+      assert n_batch == len(seq_tag)
+      assert n_batch * (out_beam_size or 1) == len(output)
+      if output_layer.output.dim == 256 and output_layer.output.sparse:
+        # Interpret output as bytes/utf8-string.
+        output = [bytearray(o).decode("utf8") for o in output]
+      for i in range(len(seq_idx)):
+        if out_beam_size is None:
+          print("seq_idx: %i, seq_tag: %r, output: %r" % (seq_idx[i], seq_tag[i], output[i]), file=log.v1)
+        else:
+          print("seq_idx: %i, seq_tag: %r, outputs: %r" % (
+            seq_idx[i], seq_tag[i], output[i * out_beam_size:(i + 1)*out_beam_size]), file=log.v1)
+
+    runner = Runner(
+      engine=self, dataset=dataset, batches=batches, train=False, eval=do_eval,
+      extra_fetches={
+        "output": output_layer,
+        "seq_idx": self.network.get_extern_data("seq_idx", mark_data_key_as_used=True),
+        "seq_tag": self.network.get_extern_data("seq_tag", mark_data_key_as_used=True)},
+      extra_fetches_callback=extra_fetches_callback)
     runner.run(report_prefix=self.get_epoch_str() + " search")
-    assert runner.finalized
-    print("search: score %s error %s" % (
-      self.format_score(runner.score), self.format_score(runner.error)))
+    if not runner.finalized:
+      print("Error happened. Exit now.")
+      sys.exit(1)
+    print("Search done. Final: score %s error %s" % (
+      self.format_score(runner.score), self.format_score(runner.error)), file=log.v1)

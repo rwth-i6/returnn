@@ -40,15 +40,15 @@ startTime = None
 isInitialized = False
 isTrainThreadStarted = False
 isExited = False
-InputDim = None
-OutputDim = None
+InputDim = None  # type: int
+OutputDim = None  # type: int
 MaxSegmentLength = 1
 TargetMode = None
 Task = "train"
 
 config = None; """ :type: rnn.Config """
 sprintDataset = None; """ :type: SprintDatasetBase """
-engine = None; """ :type: Engine | TFEngine.Engine """
+engine = None; """ :type: TFEngine.Engine|Engine """
 
 
 # Start Sprint PythonSegmentOrder interface. {
@@ -597,7 +597,7 @@ class Criterion(theano.Op):
     assert seq_lengths.ndim == 1  # vector of seqs lengths
     return theano.Apply(op=self, inputs=[posteriors, seq_lengths], outputs=[T.fvector(), posteriors.type()])
 
-  def perform(self, node, inputs, outputs):
+  def perform(self, node, inputs, output_storage, params=None):
     posteriors, seq_lengths = inputs
     nTimeFrames = posteriors.shape[0]
     seq_lengths = numpy.array([nTimeFrames])  # TODO: fix or so?
@@ -616,8 +616,8 @@ class Criterion(theano.Op):
     loss, errsig = self.error, self.errorSignal
     assert errsig.shape[0] == nTimeFrames
 
-    outputs[0][0] = loss
-    outputs[1][0] = errsig
+    output_storage[0][0] = loss
+    output_storage[1][0] = errsig
 
     print('avg frame loss for segments:', loss.sum() / seq_lengths.sum(), end=" ", file=log.v5)
     print('time-frames:', seq_lengths.sum(), file=log.v5)
@@ -642,6 +642,7 @@ def demo():
   errorSignal = numpy.load("output-error-signal.npy")  # dumped via dump.py
   finishError(error=error, errorSignal=errorSignal, naturalPairingType="softmax")
   exit()
+
 
 if __name__ == "__main__":
   Debug.debug_shell(user_ns=locals(), user_global_ns=globals())

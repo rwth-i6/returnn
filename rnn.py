@@ -19,26 +19,24 @@ __maintainer__ = "Patrick Doetsch"
 __email__ = "doetsch@i6.informatik.rwth-aachen.de"
 
 
-import re
 import os
 import sys
 import time
-import json
 import numpy
 from optparse import OptionParser
 from Log import log
-from Device import Device, get_num_devices, TheanoFlags, getDevicesInitArgs
+from Device import Device, TheanoFlags, getDevicesInitArgs
 from Config import Config
 from Engine import Engine
-from Dataset import Dataset, init_dataset, init_dataset_via_str, get_dataset_class
+from Dataset import Dataset, init_dataset, init_dataset_via_str
 from HDFDataset import HDFDataset
 from Debug import initIPythonKernel, initBetterExchook, initFaulthandler, initCudaNotInMainProcCheck
-from Util import initThreadJoinHack, custom_exec, describe_crnn_version, describe_theano_version, \
+from Util import initThreadJoinHack, describe_crnn_version, describe_theano_version, \
   describe_tensorflow_version, BackendEngine, get_tensorflow_version_tuple
 try:
   import Server
 except ImportError:
-  pass
+  Server = None
 
 
 config = None; """ :type: Config """
@@ -113,6 +111,11 @@ def initConfig(configFilename=None, commandLineOptions=()):
   if config.bool("EnableAutoNumpySharedMemPickling", False):
     import TaskSystem
     TaskSystem.SharedMemNumpyConfig["enabled"] = True
+  #Server default options
+  if config.value('task', 'train') == 'server':
+    config.set('num_inputs', 2)
+    config.set('num_outputs', 1)
+    #config.set('network', [{'out': {'loss': 'ce', 'class': 'softmax', 'target': 'classes'}}])
 
 
 def initLog():
@@ -344,7 +347,7 @@ def init(configFilename=None, commandLineOptions=(), config_updates=None, extra_
     initData()
   printTaskProperties(devices)
   if config.value('task', 'train') == 'server':
-    server = Server.Server()
+    server = Server.Server(config)
   else:
     initEngine(devices)
 
@@ -401,7 +404,7 @@ def executeMainTask():
       assert data, "set search_data"
     else:
       data = init_dataset(config.typed_value("search_data"))
-    engine.search(data)
+    engine.search(data, output_layer_name=config.value("search_output_layer", "output"))
   elif task == 'compute_priors':
     assert train_data is not None, 'train data for priors should be provided'
     engine.init_network_from_config(config)

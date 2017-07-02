@@ -64,7 +64,8 @@ class Data(object):
     :param dict[int,tf.Tensor] tf.Tensor size_placeholder: for every None in shape, this will describe the size.
       The size is always a tensor of shape (batch,), i.e. the size can be different for each sequence in a batch.
     :param bool available_for_inference: e.g. the extern data "classes" is usually not available for inference
-    :param int|None beam_size: the batch-dim could be extended by a beam-size
+    :param int|None beam_size: the batch-dim could be extended by a beam-size,
+      such that it represents the merged dims [batch, beam_size].
     """
     self.name = name
     if sparse is None:
@@ -205,7 +206,7 @@ class Data(object):
   def copy_extend_with_beam(self, beam_size):
     """
     :param int beam_size:
-    :return: copy of myself where the batch-dim is extended/multiplied by beam_size, using tf.tile
+    :return: copy of myself where the batch-dim is extended/multiplied by beam_size, using tile_transposed
     :rtype: Data
     """
     with tf.name_scope("data_extend_with_beam"):
@@ -213,10 +214,9 @@ class Data(object):
       if data.beam_size and data.beam_size == beam_size:
         return data
       assert data.beam_size is None, "incompatible beam sizes (%r vs %r)" % (data.beam_size, beam_size)
-      tile_multiples = [1] * data.batch_ndim
-      tile_multiples[data.batch_dim_axis] = beam_size
-      data.placeholder = tf.tile(data.placeholder, multiples=tile_multiples)
-      data.size_placeholder = {i: tf.tile(v, [beam_size]) for (i, v) in data.size_placeholder.items()}
+      data.placeholder = tile_transposed(data.placeholder, axis=data.batch_dim_axis, multiples=beam_size)
+      data.size_placeholder = {
+        i: tile_transposed(v, axis=0, multiples=beam_size) for (i, v) in data.size_placeholder.items()}
       data.beam_size = beam_size * (data.beam_size or 1)
       return data
 
@@ -343,6 +343,14 @@ class Data(object):
     return self.time_dim_axis == 0
 
   @property
+  def is_batch_major(self):
+    """
+    :return: whether this is in batch-major format, i.e. (batch,...)
+    :rtype: bool
+    """
+    return self.batch_dim_axis == 0
+
+  @property
   def time_dim_axis_excluding_batch(self):
     if self.time_dim_axis is None:
       return None
@@ -367,7 +375,7 @@ class Data(object):
     return swapaxes(self.placeholder, batch_dim_axis, self.batch_dim_axis)
 
   def get_placeholder_time_flattened(self):
-    assert self.have_tim_axis()
+    assert self.have_time_axis()
     # flatten_with_seq_len_mask only works for these two cases at the moment:
     assert (self.time_dim_axis, self.batch_dim_axis) == (0, 1) or (self.time_dim_axis, self.batch_dim_axis) == (1, 0)
     seq_lens = self.size_placeholder[self.time_dim_axis_excluding_batch]
@@ -378,20 +386,19 @@ class Data(object):
     :param bool keep_dims: if set, it will add broadcast dimensions after the flattening behind the first axis
     :rtype: tf.Tensor
     :return: placeholder where all dynamic axes are flattened into a single axis.
-      e.g. for the usual case (batch, time, dim), it becomes (time', dim),
-      or (batch, time, height, dim) will also become (time', dim).
-      with keep_dims, (batch, time, height, dim) will become (time', 1, 1, dim).
+      e.g. for the usual case (batch, time, dim), it becomes (batch'|time', dim),
+      or (batch, time, height, dim) will also become (batch'|time', dim).
+      with keep_dims, (batch, time, height, dim) will become (batch'|time', 1, 1, dim).
     """
     x = self.placeholder
-    dyn_axes = self.get_dynamic_batch_axes()
-    if not dyn_axes:
+    dyn_axes = self.get_spatial_batch_axes() + [self.batch_dim_axis]
+    if dyn_axes == [self.batch_dim_axis]:
       return x
     assert 0 in dyn_axes, "would need some transpose, not supported at the moment"
-    if len(dyn_axes) == 1:
-      return x
+    assert len(dyn_axes) > 1
     orig_num_dyn_axes = len(dyn_axes)
     ndim = len(self.batch_shape)
-    if self.have_tim_axis():
+    if self.have_time_axis():
       x = self.get_placeholder_time_flattened()
       removed_axis = max(self.time_dim_axis, self.batch_dim_axis)
       dyn_axes.remove(removed_axis)
@@ -415,6 +422,12 @@ class Data(object):
         x = tf.expand_dims(x, axis=1)
     return x
 
+  @property
+  def feature_dim_axis(self):
+    if self.sparse:
+      return None
+    return self.batch_ndim - 1
+
   def get_axes(self, exclude_time=False, exclude_batch=False):
     """
     :param bool exclude_time: will filter out the time-axis
@@ -431,22 +444,27 @@ class Data(object):
 
   def get_axes_from_description(self, axes):
     """
-    :param int|list[int]|str axes: one axis or multiple axis to reduce.
-      this is counted with batch-dim, which by default is axis 0 (see enforce_batch_dim_axis).
-      it also accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature"
-    :return: list of axes
+    :param int|list[int]|str|list[str] axes: one axis or multiple axis.
+      This is counted with batch-dim, which by default is axis 0 (see enforce_batch_dim_axis).
+      It also accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature",
+      and more (see the code).
+    :return: list of axes, counted with batch-dim
     :rtype: list[int]
     """
     if isinstance(axes, str):
+      import re
       axes = axes.lower()
       if axes in ["b", "batch"]:
         axes = self.batch_dim_axis
       elif axes == "spatial":
-        axes = self.get_dynamic_batch_axes()
-        axes.remove(self.batch_dim_axis)
+        axes = self.get_spatial_batch_axes()
+      elif re.match("(s|spatial):-?\\d+$", axes):
+        s = int(axes.split(":")[1])
+        axes = self.get_spatial_batch_axes()
+        assert s < len(axes)
+        axes = axes[s]
       elif axes == "spatial_except_time":
-        axes = self.get_dynamic_batch_axes()
-        axes.remove(self.batch_dim_axis)
+        axes = self.get_spatial_batch_axes()
         assert self.time_dim_axis is not None
         axes.remove(self.time_dim_axis)
       elif axes in ["t", "time"]:
@@ -458,7 +476,9 @@ class Data(object):
         assert self.time_dim_axis is not None
         axes.remove(self.time_dim_axis)
       elif axes in ["f", "feature", "non_spatial"]:
-        axes = self.get_non_dynamic_batch_axes()
+        axes = self.get_feature_batch_axes()
+      elif all([a in "btf" for a in axes]):
+        return self.get_axes_from_description(list(axes))
       else:
         raise Exception("invalid axis mode %r" % axes)
     if isinstance(axes, int):
@@ -481,7 +501,8 @@ class Data(object):
   def get_axis_from_description(self, axis):
     """
     :param int|str axis:
-    :return:
+    :return: axis, counted with batch-dim
+    :rtype: int
     """
     axes = self.get_axes_from_description(axis)
     assert len(axes) == 1, "%r is not a unique axis but %r" % (axis, axes)
@@ -499,54 +520,55 @@ class Data(object):
       return axis + 1
     return axis
 
-  def have_tim_axis(self):
+  def have_time_axis(self):
     return self.time_dim_axis is not None
 
-  def get_dynamic_batch_axes(self):
+  def get_sequence_lengths(self):
+    """
+    :return: seq lens tensor of shape (batch,) of dtype int32
+    :rtype: tf.Tensor
+    """
+    assert self.time_dim_axis is not None
+    return self.size_placeholder[self.time_dim_axis_excluding_batch]
+
+  def get_spatial_batch_axes(self):
     """
     :rtype: list[int]
-    :return: list of axes which have dynamic shape, such as time and batch, and maybe others.
-      such other dynamic axes are currently defined as such where self.batch_shape[i] is None.
+    :return: list of axes which are not feature and batch axes, counted with batch-dim.
     """
     return [axis
-            for axis, dim in enumerate(self.batch_shape)
-            if (dim is None or axis in [self.batch_dim_axis, self.time_dim_axis])]
+            for axis in range(self.batch_ndim)
+            if (axis not in [self.batch_dim_axis, self.feature_dim_axis])]
 
-  def get_dynamic_axes(self):
+  def get_spatial_axes(self):
     """
     :rtype: list[int]
-    :return: like self.get_dynamic_batch_axes() but counted without batch-dim
+    :return: list of axes which are not feature and batch axes, counted without batch-dim.
     """
-    return [self.get_batch_axis_excluding_batch(axis)
-            for axis in self.get_dynamic_batch_axes()
-            if not axis == self.batch_dim_axis]
+    return [self.get_batch_axis_excluding_batch(axis) for axis in self.get_spatial_batch_axes()]
 
-  def get_non_dynamic_batch_axes(self):
+  def get_feature_batch_axes(self):
     """
     :rtype: list[int]
-    :return: axes counted with batch-dim which are not dynamic. opposite of self.get_dynamic_batch_axes()
+    :return: list of axes which are feature axes, counted with batch-dim. currently there is only one or zero such axis.
     """
-    all_axes = self.get_axes(exclude_batch=True)
-    dyn_axes = self.get_dynamic_batch_axes()
-    return [axis
-            for axis in all_axes
-            if axis not in dyn_axes]
+    if self.feature_dim_axis is not None:
+      return [self.feature_dim_axis]
+    return []
 
-  def get_non_dynamic_axes(self):
+  def get_feature_axes(self):
     """
     :rtype: list[int]
-    :return: axes counted without batch-dim which are not dynamic. opposite of self.get_dynamic_axes()
+    :return: list of axes which are feature axes, counted without batch-dim.
     """
-    return [self.get_batch_axis_excluding_batch(axis)
-            for axis in self.get_non_dynamic_batch_axes()]
+    return [self.get_batch_axis_excluding_batch(axis) for axis in self.get_feature_batch_axes()]
 
-  @property
-  def non_dynamic_batch_shape(self):
+  def get_bc_spatial_batch_shape(self):
     """
-    :return: shape which will broadcast along all dynamic dimensions and time/batch dim
+    :return: shape which will broadcast along all spatial dimensions and time/batch dim
     :rtype: tuple[int]
     """
-    dyn_axes = self.get_dynamic_batch_axes()
+    dyn_axes = self.get_spatial_batch_axes() + [self.batch_dim_axis]
     return [1 if (axis in dyn_axes) else dim
             for axis, dim in enumerate(self.batch_shape)]
 
@@ -1229,6 +1251,24 @@ def expand_multiple_dims(x, axes, name="expand_multiple_dims"):
     return x
 
 
+def tile_transposed(x, axis, multiples):
+  """
+  Example: x with shape (D,), tf.tile(x, [N]) can be reshaped into (N,D),
+  while tile_transposed(x, axis=0, multiples=N) can be reshaped into (D,N).
+
+  :param tf.Tensor x:
+  :param int axis:
+  :param int|tf.Tensor multiples:
+  :return: tensor with shape[axis] == x.shape[axis] * multiples
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope("tile_transposed"):
+    ndim = x.get_shape().ndims
+    shape = tf.shape(x)
+    x = expand_dims_unbroadcast(x, axis=axis + 1, dim=multiples)
+    return tf.reshape(x, [shape[i] for i in range(axis)] + [-1] + [shape[i] for i in range(axis + 1, ndim)])
+
+
 def constant_with_shape(x, shape, dtype=None, name="constant_with_shape"):
   """
   :param tf.Tensor|float|int|bool x: scalar
@@ -1483,15 +1523,6 @@ class CudaEnv(object):
         return p
     return None
 
-  def __nonzero__(self):
-    """
-    :return: whether this is a valid usable CUDA env
-    :rtype: bool
-    """
-    return self.is_available()
-
-  __bool__ = __nonzero__  # Python 3
-
   def is_available(self):
     return bool(self.cuda_path)
 
@@ -1522,7 +1553,8 @@ class OpCodeCompiler(object):
   """
 
   def __init__(self, base_name, code_version, code, c_macro_defines=None, ld_flags=None, include_deps=None,
-               static_version_name=None, should_cleanup_old_all=True, should_cleanup_old_mydir=False):
+               static_version_name=None, should_cleanup_old_all=True, should_cleanup_old_mydir=False,
+               use_cuda_if_available=True):
     """
     :param str base_name: base name for the module, e.g. "zero_out"
     :param int|tuple[int] code_version: check for the cache whether to reuse
@@ -1547,7 +1579,7 @@ class OpCodeCompiler(object):
     self.ld_flags = ld_flags or []
     self.include_deps = include_deps
     self.static_version_name = static_version_name
-    self._cuda_env = CudaEnv.get_instance()
+    self._cuda_env = use_cuda_if_available and CudaEnv.get_instance()
     self._code_hash = self._make_code_hash()
     self._info_dict = self._make_info_dict()
     self._hash = self._make_hash()
@@ -1632,7 +1664,7 @@ class OpCodeCompiler(object):
       "code_hash": self._code_hash,
       "c_macro_defines": self.c_macro_defines,
       "ld_flags": self.ld_flags,
-      "with_cuda": self._cuda_env and self._cuda_env.is_available()
+      "with_cuda": bool(self._cuda_env and self._cuda_env.is_available())
     }
 
   def _make_code_hash(self):
@@ -2294,14 +2326,14 @@ def slice_pad_zeros(x, begin, end, axis=0):
     left_rem = -min_frame
     x, begin, end = tf.cond(
       tf.less_equal(left_rem, 0),
-      [x, begin, end],
-      [pad_zeros_in_axis(x, before=left_rem, axis=axis), begin + left_rem, end + left_rem])
+      lambda: [x, begin, end],
+      lambda: [pad_zeros_in_axis(x, before=left_rem, axis=axis), begin + left_rem, end + left_rem])
     max_frame = tf.maximum(begin, end)
     right_rem = max_frame - tf.shape(x)[axis]
     x = tf.cond(
       tf.less_equal(right_rem, 0),
-      x,
-      pad_zeros_in_axis(x, after=right_rem, axis=axis))
+      lambda: x,
+      lambda: pad_zeros_in_axis(x, after=right_rem, axis=axis))
     return single_strided_slice(x, axis=axis, begin=begin, end=end)
 
 
@@ -2418,7 +2450,7 @@ def raise_OutOfRangeError():
       return queue.dequeue()
 
 
-def copy(x):
+def enforce_copy(x):
   """
   :param tf.Tensor|tf.Variable x:
   :return: copy of input, i.e. enforces that this is not a ref
@@ -2491,7 +2523,7 @@ class Condition(object):
         return tf.no_op()
 
   def wait_counter(self):
-    return copy(self._waiting_counter.read_value())
+    return enforce_copy(self._waiting_counter.read_value())
 
   def signal(self):
     """
@@ -2525,8 +2557,16 @@ class Condition(object):
 
 
 class GlobalTensorArrayOpMaker:
-  # Note: This whole implementation will not work when tensor_array.h is not available.
-  # https://github.com/tensorflow/tensorflow/issues/10527
+  """
+  Creates a TensorArray which does not use the per-run ("per-step") resource manager container
+  but uses the standard container which persists across runs.
+  This TensorArray resource handle is then just a standard TensorArray resource handle which
+  can be used with all TensorArray related functions/ops.
+
+  Note: This whole implementation currently does not work because tensor_array.h is not available.
+  See https://github.com/tensorflow/tensorflow/issues/10527
+  and test_GlobalTensorArray().
+  """
 
   code = """
     #include "tensorflow/core/framework/op_kernel.h"
@@ -2711,6 +2751,14 @@ class GlobalTensorArrayOpMaker:
 
 
 class TFArrayContainer(object):
+  """
+  Array container, like std::vector, with random index access.
+
+  Currently does not work.
+  See https://github.com/tensorflow/tensorflow/issues/10950,
+  and test_TFArrayContainer().
+  """
+
   code = """
     #include <vector>
 
@@ -3024,6 +3072,7 @@ class TFArrayContainer(object):
       code_version=1,  # code also ends up in hash, thus this doesn't always needs to be increased
       code=cls.code,
       include_deps=[],
+      use_cuda_if_available=False,
       ld_flags=[
         "-Xlinker", "-rpath", "-Xlinker", os.path.dirname(lib),
         "-L", os.path.dirname(lib), "-l", ":" + os.path.basename(lib)])
@@ -3158,6 +3207,8 @@ class ExplicitRandomShuffleQueue(object):
 
       # TODO Seems like we cannot use tf.TensorArray for what we need here...
       # see test_TensorArray() and https://stackoverflow.com/questions/44418036/
+      # Solutions are GlobalTensorArrayOpMaker or TFArrayContainer which also both currently do not work.
+      # Thus at the moment, I don't see any good way to make this work...
       self._tas = [
         tf.TensorArray(
           dtype=dtype, size=capacity, clear_after_read=True,
@@ -3182,7 +3233,7 @@ class ExplicitRandomShuffleQueue(object):
       return tf.count_nonzero(self._is_written, dtype=tf.int32)
 
   def min_after_dequeue_read(self):
-    return copy(self._min_after_dequeue.read_value())
+    return enforce_copy(self._min_after_dequeue.read_value())
 
   def min_after_dequeue_assign(self, min_after_dequeue):
     """
@@ -3199,7 +3250,7 @@ class ExplicitRandomShuffleQueue(object):
 
   def _get_cur_tensor_array(self, idx):
     ta = self._tas[idx]
-    return tf.TensorArray(dtype=ta.dtype, handle=ta.handle, flow=copy(self._flows[idx].read_value()))
+    return tf.TensorArray(dtype=ta.dtype, handle=ta.handle, flow=enforce_copy(self._flows[idx].read_value()))
 
   def _get_cur_tas(self):
     return [self._get_cur_tensor_array(i) for i in range(len(self._tas))]

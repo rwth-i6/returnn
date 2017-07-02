@@ -280,13 +280,21 @@ def test_engine_search_attention():
 if __name__ == "__main__":
   try:
     better_exchook.install()
-    assert len(sys.argv) >= 2
-    for arg in sys.argv[1:]:
-      print("Executing: %s" % arg)
-      if arg in globals():
-        globals()[arg]()  # assume function and execute
-      else:
-        eval(arg)  # assume Python code and execute
+    if len(sys.argv) <= 1:
+      for k, v in sorted(globals().items()):
+        if k.startswith("test_"):
+          print("-" * 40)
+          print("Executing: %s" % k)
+          v()
+          print("-" * 40)
+    else:
+      assert len(sys.argv) >= 2
+      for arg in sys.argv[1:]:
+        print("Executing: %s" % arg)
+        if arg in globals():
+          globals()[arg]()  # assume function and execute
+        else:
+          eval(arg)  # assume Python code and execute
   finally:
     session.close()
     del session

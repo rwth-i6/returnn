@@ -3848,7 +3848,7 @@ from SprintErrorSignals import sprint_loss_and_error_signal, SprintAlignmentAuto
 class SignalValue(ForwardLayer):
   layer_class = 'sigval'
 
-  def __init__(self, begin=0, sidx=0, margin=0.0, copy_output=None, **kwargs):
+  def __init__(self, begin=0, sidx=0, reduce=False, copy_output=None, **kwargs):
     kwargs['n_out'] = 2
     super(SignalValue, self).__init__(**kwargs)
     self.params = {}
@@ -3856,7 +3856,6 @@ class SignalValue(ForwardLayer):
     self.known_grads = {}
     self.set_attr('begin', begin)
     self.set_attr('sidx', sidx)
-    self.set_attr('margin', margin)
     if not 'target' in self.attrs:
       self.attrs['target'] = 'classes'
     norm = T.sum(self.index[begin:], axis=0, dtype='float32') / T.sum(self.index, axis=0, dtype='float32')
@@ -3865,7 +3864,7 @@ class SignalValue(ForwardLayer):
     q = T.nnet.sigmoid(z)
     margin = q[:,:,1] # * numpy.float32(margin)
     p = q[:,:,0]
-    kwargs['n_out'] = 1
+    kwargs['n_out'] = 2
 
     #n_in = sum([s.attrs['n_out'] for s in self.sources])
     #x_in = self.sources[0].output if len(self.sources) == 1 else T.concatenate([s.output for s in self.sources], axis=2)
@@ -3884,7 +3883,10 @@ class SignalValue(ForwardLayer):
     #rs /= rn
     self.index = self.index[begin:]
     #margin = numpy.float32(margin)
-    step = T.ones((self.index.shape[1],),'float32') #numpy.float32(1) / T.sum(self.index,axis=0,dtype='float32')
+    step = numpy.float32(0) * T.ones((self.index.shape[1],),'float32') #/ T.sum(self.index,axis=0,dtype='float32')#numpy.float32(1) / T.sum(self.index,axis=0,dtype='float32')
+    stash = numpy.float32(1) # T.cast(p.shape[0], 'float32')
+    risk = numpy.float32(0.5)
+
     def accumulate(p, m, rb, rs, bp, ep):
       wb = T.maximum(p - m, numpy.float32(0)) / (numpy.float32(1.00001) - m)
       ws = T.maximum(numpy.float32(1.0) - p - m, numpy.float32(0)) / (numpy.float32(1.00001) - m)
@@ -3894,20 +3896,27 @@ class SignalValue(ForwardLayer):
       ba, ea = ed * rs, bd / rb
       return bp - bd + ba, ep - ed + ea
 
-    c, _ = theano.scan(accumulate,sequences=[p,margin,rb,rs],
-                       outputs_info=[T.alloc(numpy.cast[theano.config.floatX](0), r.shape[1]),
-                                     T.alloc(numpy.cast[theano.config.floatX](0), r.shape[1])])
+    binit = T.ones((p.shape[1],), dtype='float32') * stash
+    einit = (T.ones((p.shape[1],), dtype='float32') * stash) / rs[0]
+
+    c, _ = theano.scan(accumulate,sequences=[p,margin,rb,rs],outputs_info=[binit,einit])
 
     bcost = T.extra_ops.cumsum(step.dimshuffle('x',0).repeat(c[0].shape[0],axis=0), axis=0)
     ecost = rs * T.extra_ops.cumsum(step / rs, axis=0)
-    total = c[0] + c[1] * rs - bcost - ecost
+    tcost = bcost + ecost + stash + stash #* rs / rs[0]
+    total = (c[0] + c[1] * rs) / tcost - numpy.float32(1)
+    #steps = T.arange(total.shape[0], dtype='float32').dimshuffle(0,'x').repeat(total.shape[1],axis=1)
+    #total = total * steps / T.sum(steps,axis=0,keepdims=True)
     cost = T.sum(norm * T.sum(total,axis=0))
-    self.error_val = T.sum(norm * T.sum(T.lt(total,numpy.float32(0)),dtype='float32',axis=0))
+    self.error_val = T.sum((numpy.float32(1.) - total[-1]) * T.cast(total.shape[0],'float32') / norm) #T.sum(T.lt(total,numpy.float32(0)),dtype='float32',axis=0))
     self.cost_val = T.sum(T.sum(self.index,dtype='float32',axis=0) / norm) - cost
 
-    self.cost_scale_val = numpy.float32(1)
-    self.p_y_given_y = p.dimshuffle(0,1,'x')
-    self.output = p.dimshuffle(0,1,'x')
+    #self.cost_scale_val = numpy.float32(1)
+    self.cost_scale_val = T.mean(T.cast(T.argmax(total[::-1],axis=0),'float32') + numpy.float32(1)) / T.cast(total.shape[0],'float32') #numpy.float32(1)
+    out = T.concatenate([p.dimshuffle(0,1,'x'), margin.dimshuffle(0,1,'x')],axis=2)
+    self.p_y_given_y = out #p.dimshuffle(0,1,'x')
+    self.output = out #p.dimshuffle(0,1,'x')
+    self.margin = margin
 
   def cost(self):
     return self.cost_val, self.known_grads
@@ -3921,6 +3930,13 @@ class SignalValue(ForwardLayer):
 
 class SegmentInputLayer(_NoOpLayer):
   layer_class = 'segment_input'
+
+  class ReinterpretCastOp(theano.Op):
+    itypes = (T.imatrix,)
+    otypes = (T.fmatrix,)
+
+    def perform(self, node, inputs, output_storage):
+      output_storage[0][0] = inputs[0].view(dtype='float32')
 
   def __init__(self, window=15, **kwargs):
     super(SegmentInputLayer, self).__init__(**kwargs)
@@ -3944,23 +3960,28 @@ class SegmentInputLayer(_NoOpLayer):
                   .reshape((rs_idx.sum(), self.attrs['window']))\
                  + T.arange(self.attrs['window'])
 
-    # this filter has entries smaller than -1 for all elements that do not belong to the same sequence as the first frame
-    frame_filter_1 = (f - 1
+    # this filter has entries <= -1 for all elements that do not belong to the same sequence as the first frame
+    frame_filter_1 = (f
                       - (frames_idx[:,0] % f)\
                          .repeat(self.attrs['window'])\
                          .reshape((rs_idx.sum(), self.attrs['window']))\
-                      - T.arange(self.attrs['window'])) * 2
+                      - T.arange(self.attrs['window']))
 
     # this filter has entries 0 for all elements that are discarded by self.index, 1 otherwise
-    frame_filter_2 = T.concatenate([rs_idx, T.zeros((self.attrs['window'],), dtype='int8')])[frames_idx.flatten()].reshape((rs_idx.sum(), self.attrs['window']))
+    frame_filter_2 = T.concatenate([rs_idx, T.zeros((self.attrs['window'] * b,), dtype='int8')])[frames_idx.flatten()].reshape((rs_idx.sum(), self.attrs['window']))
 
-    frames_idx = T.switch(frame_filter_1 + frame_filter_2 >= 0, frames_idx, -1).dimshuffle(1, 0)
+    frames_idx = T.switch(frame_filter_1 * frame_filter_2 > 0, frames_idx, -1).dimshuffle(1, 0)
 
     # we add an additional vector with zeros s.t. the invalid entries from the filters above result in a feature vector of zeros
     self.z = T.concatenate([rs, T.zeros((1, src_out.shape[2]))], axis=0)[frames_idx]
-
     self.make_output(self.z)
-    self.index = T.cast((frame_filter_1 - frame_filter_2).clip(0, 1), 'int8').reshape((self.attrs['window'], rs_idx.sum()))
+
+    self.index = T.cast((frame_filter_1 * frame_filter_2).clip(0, 1), 'int8').T
+
+    inv_batch_idx   = frames_idx[0,:]
+    batch_idx       = -T.ones((f * b,), dtype='int32')
+    batch_idx       = T.set_subtensor(batch_idx[inv_batch_idx], T.arange(inv_batch_idx.size, dtype='int32')).reshape((b, f)).T
+    self.batch_idxs = self.ReinterpretCastOp()(batch_idx)
 
 class UnsegmentInputLayer(_NoOpLayer):
   layer_class = 'unsegment_input'

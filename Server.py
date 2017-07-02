@@ -20,17 +20,17 @@ from Device import Device, get_num_devices, TheanoFlags, getDevicesInitArgs
 import time
 from EngineTask import ClassificationTaskThread
 from tornado.concurrent import run_on_executor
-#from concurrent.futures import ThreadPoolExecutor #`pip install futures` for python2
-
+from concurrent.futures import ThreadPoolExecutor
 
 
 _engines = {}
 _devices = {}
 _classify_cache = {}
 
+
 class Server:
 
-    def __init__(self):
+    def __init__(self, global_config):
         """
             :type devices: list[Device.Device]
         """
@@ -39,30 +39,29 @@ class Server:
           (r"/classify", ClassifyHandler),
           (r"/loadconfig", ConfigHandler)
         ], debug=True)
-    
-        print("Starting server", file=log.v3)
-        application.listen(3033)
+        
+        application.listen(int(global_config.value('port', '3033')))
+        
+        print("Starting server on port: " + global_config.value('port', '3033'), file=log.v3)
         IOLoop.instance().start()
 
 
-#TODO: implement  classification handler
 class ClassifyHandler(tornado.web.RequestHandler):
     
     MAX_WORKERS = 4
-    #executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
+    executor = ThreadPoolExecutor(max_workers=MAX_WORKERS)
     
-    #@run_on_executor
-    #def classification_task(self, network, devices, data, batches):
-    #    #This will be executed in `executor` pool
-    #    td = ClassificationTaskThread(network, devices, data, batches)
-    #    td.join()
-    #    return td
+    @run_on_executor
+    def classification_task(self, network, devices, data, batches):
+        #This will be executed in `executor` pool
+        td = ClassificationTaskThread(network, devices, data, batches)
+        td.join()
+        return td
 
     @tornado.web.asynchronous
     @tornado.gen.coroutine
     def post(self, *args, **kwargs):
         #TODO: Make this batch over a specific time period
-        #TODO: finish this
     
         params = json.loads(self.request.body)
         output_dim = {}
@@ -71,7 +70,7 @@ class ClassifyHandler(tornado.web.RequestHandler):
         #first get meta data
         engine_hash = params['engine_hash']
         
-        print('Got engine hash: ', engine_hash, file=log.v3)
+        print('Received engine hash: ', engine_hash, file=log.v4)
         
         #delete unneccessary stuff so that the rest works
         del params['engine_hash']
@@ -98,8 +97,6 @@ class ClassifyHandler(tornado.web.RequestHandler):
                     ret['error'] = 'unable to convert %s to an array from value %s' % (k, str(params[k]))
                 break
         if not 'error' in ret:
-            #data = StaticDataset(data=[params], output_dim=output_dim)
-            #data.init_seq_order()
             try:
                 data = StaticDataset(data=[params], output_dim=output_dim)
                 data.init_seq_order()
@@ -111,18 +108,17 @@ class ClassifyHandler(tornado.web.RequestHandler):
                 batches = data.generate_batches(recurrent_net=network.recurrent,
                                                 batch_size=sys.maxsize, max_seqs=1)
                 if not hash_temp in _classify_cache:
-                    #if we haven't yet processed this exact request, and saved it in the cache
-                    #async
-                    #_classify_cache[hash_temp] = yield self.classification_task(network=network,
-                    #                                                            devices=devices,
-                    #                                                            data=data, batches=batches)
                     print('Starting classification', file=log.v3)
-                    _classify_cache[hash_temp] = yield ClassificationTaskThread(network, devices, data, batches).join()
-                    _classify_cache[hash_temp].json_params = params
+                    #if we haven't yet processed this exact request, and saved it in the cache
+                    _classify_cache[hash_temp] = yield self.classification_task(network=network,
+                                                                                devices=devices,
+                                                                                data=data, batches=batches)
 
                 ret = {'result':
                      {k: _classify_cache[hash_temp].result[k].tolist() for k in _classify_cache[hash_temp].result}}
-            
+        
+        print("Finished processing classification with ID: ", hash_temp, file=log.v4)
+        
         self.write(ret)
         
 

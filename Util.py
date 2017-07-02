@@ -618,6 +618,30 @@ def uniq(seq):
   return seq[idx]
 
 
+def slice_pad_zeros(x, begin, end, axis=0):
+  """
+  :param numpy.ndarray x: of shape (..., time, ...)
+  :param int begin:
+  :param int end:
+  :param int axis:
+  :return: basically x[begin:end] (with axis==0) but if begin < 0 or end > x.shape[0],
+   it will not discard these frames but pad zeros, such that the resulting shape[0] == end - begin.
+  :rtype: numpy.ndarray
+  """
+  assert axis == 0, "not yet fully implemented otherwise"
+  pad_left, pad_right = 0, 0
+  if begin < 0:
+    pad_left = -begin
+    begin = 0
+  elif begin >= x.shape[axis]:
+    return np.zeros((end - begin,) + x.shape[1:], dtype=x.dtype)
+  assert end >= begin
+  if end > x.shape[axis]:
+    pad_right = end - x.shape[axis]
+    end = x.shape[axis]
+  return np.pad(x[begin:end], [(pad_left, pad_right)] + [(0, 0)] * (x.ndim - 1), mode="constant")
+
+
 _have_inplace_increment = None
 _native_inplace_increment = None
 
@@ -839,6 +863,11 @@ class NumbersDict:
   def copy(self):
     return NumbersDict(self)
 
+  def constant_like(self, number):
+    return NumbersDict(
+      broadcast_value=number if (self.value is not None) else None,
+      numbers_dict={k: number for k in self.dict.keys()})
+
   @property
   def keys_set(self):
     return set(self.dict.keys())
@@ -895,9 +924,12 @@ class NumbersDict:
   @classmethod
   def bin_op(cls, self, other, op, zero, result=None):
     if not isinstance(self, NumbersDict):
-      self = NumbersDict(self)
+      if isinstance(other, NumbersDict):
+        self = other.constant_like(self)
+      else:
+        self = NumbersDict(self)
     if not isinstance(other, NumbersDict):
-      other = NumbersDict(other)
+      other = self.constant_like(other)
     if result is None:
       result = NumbersDict()
     assert isinstance(result, NumbersDict)
@@ -934,11 +966,19 @@ class NumbersDict:
   def __div__(self, other):
     return self.bin_op(self, other, op=lambda a, b: a / b, zero=1)
 
-  def __rdiv__(self, other):
-    return self.bin_op(self, other, op=lambda a, b: b / a, zero=1)
+  __rdiv__ = __div__
+  __truediv__ = __div__
 
   def __idiv__(self, other):
     return self.bin_op(self, other, op=lambda a, b: a / b, zero=1, result=self)
+
+  __itruediv__ = __idiv__
+
+  def __floordiv__(self, other):
+    return self.bin_op(self, other, op=lambda a, b: a // b, zero=1)
+
+  def __ifloordiv__(self, other):
+    return self.bin_op(self, other, op=lambda a, b: a // b, zero=1, result=self)
 
   def __neg__(self):
     return self.unary_op(op=lambda a: -a)
@@ -948,17 +988,23 @@ class NumbersDict:
 
   __nonzero__ = __bool__  # Python 2
 
-  def elem_eq(self, other, result_with_default=False):
+  def elem_eq(self, other, result_with_default=True):
     """
     Element-wise equality check with other.
     Note about broadcast default value: Consider some key which is neither in self nor in other.
       This means that self[key] == self.default, other[key] == other.default.
       Thus, in case that self.default != other.default, we get res.default == False.
       Then, all(res.values()) == False, even when all other values are True.
-      This is often not what we want.
+      This is sometimes not what we want.
       You can control the behavior via result_with_default.
     """
-    res = self.bin_op(self, other, op=lambda a, b: a == b, zero=None)
+    def op(a, b):
+      if a is None:
+        return None
+      if b is None:
+        return None
+      return a == b
+    res = self.bin_op(self, other, op=op, zero=None)
     if not result_with_default:
       res.value = None
     return res
@@ -974,31 +1020,50 @@ class NumbersDict:
     # and it would just confuse.
     raise Exception("%s.__cmp__ is undefined" % self.__class__.__name__)
 
+  @staticmethod
+  def _max(*args):
+    args = [a for a in args if a is not None]
+    if not args:
+      return None
+    if len(args) == 1:
+      return args[0]
+    return max(*args)
+
+  @staticmethod
+  def _min(*args):
+    args = [a for a in args if a is not None]
+    if not args:
+      return None
+    if len(args) == 1:
+      return args[0]
+    return min(*args)
+
   @classmethod
   def max(cls, items):
     """
     Element-wise maximum for item in items.
+    :param list[NumbersDict|int|float] items:
+    :rtype: NumbersDict
     """
-    if not items:
-      return None
+    assert items
     if len(items) == 1:
-      return items[0]
+      return NumbersDict(items[0])
     if len(items) == 2:
-      # max(x, None) == x, so this works.
-      return cls.bin_op(items[0], items[1], op=max, zero=None)
+      return cls.bin_op(items[0], items[1], op=cls._max, zero=None)
     return cls.max([items[0], cls.max(items[1:])])
 
   @classmethod
   def min(cls, items):
     """
     Element-wise minimum for item in items.
+    :param list[NumbersDict|int|float] items:
+    :rtype: NumbersDict
     """
-    if not items:
-      return None
+    assert items
     if len(items) == 1:
-      return items[0]
+      return NumbersDict(items[0])
     if len(items) == 2:
-      return cls.bin_op(items[0], items[1], op=min, zero=None)
+      return cls.bin_op(items[0], items[1], op=cls._min, zero=None)
     return cls.min([items[0], cls.min(items[1:])])
 
   @staticmethod

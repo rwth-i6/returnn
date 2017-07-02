@@ -422,7 +422,8 @@ class RecLayer(_ConcatInputLayer):
           output_beam_size = cell.layer_data_templates["output"].get_search_beam_size()
           assert output_beam_size is not None
           if seq_len is not None:
-            seq_len = tf.tile(seq_len, [output_beam_size])  # (batch * beam,)
+            from TFUtil import tile_transposed
+            seq_len = tile_transposed(seq_len, axis=0, multiples=output_beam_size)  # (batch * beam,)
 
       if not have_known_seq_len:
         assert "end" in cell.layer_data_templates, (
@@ -816,6 +817,7 @@ class _SubnetworkRecCell(object):
               from TFNetworkLayer import InternalLayer
               l = InternalLayer(name=name, network=self.net, output=l.output.copy_extend_with_beam(needed_beam_size))
               extended_layers[name] = l
+          assert l.output.beam_size == needed_beam_size
         return l
       return self.net._construct_layer(net_dict, name=name, get_layer=get_layer)
 
@@ -970,7 +972,7 @@ class _TemplateLayer(LayerBase):
 
   def __repr__(self):
     return "<%s(%s)(%s) %r out_type=%s>" % (
-      self.__class__.__name__, self.layer_class_type.__name__, self.layer_class,
+      self.__class__.__name__, self.layer_class_type.__name__ if self.layer_class_type else None, self.layer_class,
       self.name, self.output.get_description(with_name=False))
 
   def init(self, output, layer_class, template_type="template", **kwargs):
@@ -1062,12 +1064,13 @@ class RnnCellLayer(_ConcatInputLayer):
 
   layer_class = "rnn_cell"
 
-  def __init__(self, n_out, unit, initial_state=None, unit_opts=None, **kwargs):
+  def __init__(self, n_out, unit, initial_state=None, unit_opts=None, _var_names=None, **kwargs):
     """
     :param int n_out: so far, only output shape (batch,n_out) supported
     :param str|tf.contrib.rnn.RNNCell unit: e.g. "BasicLSTM" or "LSTMBlock"
     :param str|float|LayerBase initial_state: see self.get_rec_initial_state()
-    :param dict[str]|None unit_opts:
+    :param dict[str]|None unit_opts: passed to the cell.__init__
+    :param dict[str,str] _var_names: hack for LSTMBlockCell to overwrite var names
     """
     super(RnnCellLayer, self).__init__(**kwargs)
     self._initial_state = initial_state
@@ -1078,6 +1081,13 @@ class RnnCellLayer(_ConcatInputLayer):
       assert isinstance(scope, tf.VariableScope)
       scope_name_prefix = scope.name + "/"  # e.g. "layer1/rec/"
       self.cell = self._get_cell(n_out=n_out, unit=unit, unit_opts=unit_opts)
+      if _var_names:
+        # https://github.com/tensorflow/tensorflow/issues/11168
+        import tensorflow.contrib.rnn as rnn_contrib
+        assert isinstance(self.cell, rnn_contrib.LSTMBlockCell)
+        for k, v in _var_names.items():
+          assert k in self.cell._names
+          self.cell._names[k] = v
       self.output.time_dim_axis = None
       self.output.batch_dim_axis = 0
       prev_state = self._rec_previous_layer.rec_vars_outputs["state"]
@@ -1398,9 +1408,33 @@ class AttentionBaseLayer(_ConcatInputLayer):
     """
     super(AttentionBaseLayer, self).__init__(**kwargs)
     self.base = base
+    self.base_weights = None  # type: None|tf.Tensor  # (batch, base_time), see self.get_base_weights()
 
   def get_dep_layers(self):
     return super(AttentionBaseLayer, self).get_dep_layers() + [self.base]
+
+  def get_base_weights(self):
+    """
+    We can formulate most attentions as some weighted sum over the base time-axis.
+
+    :return: the weighting of shape (batch, base_time), in case it is defined
+    :rtype: tf.Tensor|None
+    """
+    return self.base_weights
+
+  def get_base_weight_last_frame(self):
+    """
+    From the base weights (see self.get_base_weights(), must return not None)
+    takes the weighting of the last frame in the time-axis (according to sequence lengths).
+
+    :return: shape (batch,) -> float (number 0..1)
+    :rtype: tf.Tensor
+    """
+    last_frame_idxs = tf.maximum(self.base.output.get_sequence_lengths() - 1, 0)  # (batch,)
+    from TFUtil import assert_min_tf_version, nd_indices
+    assert_min_tf_version((1, 1), "gather_nd")
+    last_frame_idxs_ext = nd_indices(last_frame_idxs)
+    return tf.gather_nd(self.get_base_weights(), indices=last_frame_idxs_ext)  # (batch,)
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
@@ -1459,14 +1493,18 @@ class DotAttentionLayer(GlobalAttentionContextBaseLayer):
     with tf.name_scope("att_energy"):
       # Get base of shape (batch, base_time, inner).
       base = self.base.output.get_placeholder_as_batch_major()  # (batch, base_time, n_out)
+      base_seq_lens = self.base.output.get_sequence_lengths()
       base_ctx = self.base_ctx.output.get_placeholder_as_batch_major()  # (batch, base_time, inner)
       # Get source of shape (batch, inner, 1).
       source = tf.expand_dims(self.input_data.placeholder, axis=2)
       energy = tf.matmul(base_ctx, source)
       energy.set_shape(tf.TensorShape([None, None, 1]))  # (batch, base_time, 1)
       energy = tf.squeeze(energy, axis=2)  # (batch, base_time)
-      base_weights = tf.nn.softmax(energy)  # (batch, base_time)
-      base_weights_bc = tf.expand_dims(base_weights, axis=1)  # (batch, 1, base_time)
+      # We must mask all values behind base_seq_lens. Set them to -inf, because we use softmax afterwards.
+      energy_mask = tf.sequence_mask(base_seq_lens, maxlen=tf.shape(energy)[1])
+      energy = tf.where(energy_mask, energy, float("-inf") * tf.ones_like(energy))
+      self.base_weights = tf.nn.softmax(energy)  # (batch, base_time)
+      base_weights_bc = tf.expand_dims(self.base_weights, axis=1)  # (batch, 1, base_time)
       out = tf.matmul(base_weights_bc, base)  # (batch, 1, n_out)
       out.set_shape(tf.TensorShape([None, 1, self.output.dim]))
       out = tf.squeeze(out, axis=1)  # (batch, n_out)
@@ -1489,7 +1527,7 @@ class GaussWindowAttentionLayer(AttentionBaseLayer):
     :param float std: standard deviation for Gauss
     :param int|None inner_size: if given, the output will have an additional dimension of this size,
       where t is shifted by +/- inner_size_step around.
-      e.g. [t-1,t-0.5,t,t+0.5,t+1] would be the locations with inner_size=5 and inner_size_step=0.5. 
+      e.g. [t-1,t-0.5,t,t+0.5,t+1] would be the locations with inner_size=5 and inner_size_step=0.5.
     :param float inner_size_step: see inner_size above
     """
     super(GaussWindowAttentionLayer, self).__init__(**kwargs)

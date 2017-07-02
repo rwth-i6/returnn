@@ -1235,7 +1235,7 @@ class Device(object):
     """
     if self.is_device_proc():
       return  # Nothing to do.
-    self.used_data_keys = self._generic_exec_on_dev("_host__get_used_targets")
+    self.used_data_keys = self._generic_exec_on_dev("_host__get_used_targets")  # type: list[str]
 
   def alloc_data(self, shapes, max_ctc_length=0):
     """

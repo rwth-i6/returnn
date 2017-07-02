@@ -479,8 +479,8 @@ class TaskVariableAssignmentDataset(GeneratingDataset):
 class DummyDataset(GeneratingDataset):
 
   def __init__(self, input_dim, output_dim, num_seqs, seq_len=2,
-               input_max_value=10.0, input_shift=None, input_scale=None):
-    super(DummyDataset, self).__init__(input_dim=input_dim, output_dim=output_dim, num_seqs=num_seqs)
+               input_max_value=10.0, input_shift=None, input_scale=None, **kwargs):
+    super(DummyDataset, self).__init__(input_dim=input_dim, output_dim=output_dim, num_seqs=num_seqs, **kwargs)
     self.seq_len = seq_len
     self.input_max_value = input_max_value
     if input_shift is None: input_shift = -input_max_value / 2.0
