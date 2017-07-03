@@ -2,11 +2,10 @@
 from __future__ import print_function
 
 import tensorflow as tf
-from tensorflow.python.framework import ops
 
 from Log import log
 from TFNetwork import TFNetwork
-
+from TFUtil import tf_version_tuple, assert_min_tf_version
 
 _OptimizerClassesDict = {}  # type: dict[str,()->tf.train.Optimizer]
 
@@ -17,7 +16,12 @@ def get_optimizer_class(class_name):
   :return:
   """
   if not _OptimizerClassesDict:
-    for name, v in list(vars(tf.train).items()) + list(globals().items()):
+    potential_list = list(vars(tf.train).items())
+    if tf_version_tuple() >= (1, 2, 0):
+      import tensorflow.contrib.opt.python.training.nadam_optimizer as nadam
+      potential_list += list(vars(nadam).items())
+    for name, v in potential_list:
+      assert isinstance(name, str)
       if name.endswith("Optimizer"):
         name = name[:-len("Optimizer")]
       else:
@@ -28,165 +32,6 @@ def get_optimizer_class(class_name):
       assert name not in _OptimizerClassesDict
       _OptimizerClassesDict[name] = v
   return _OptimizerClassesDict[class_name.lower()]
-
-
-class NadamOptimizer(tf.train.Optimizer):
-  def __init__(self, learning_rate=0.001, beta1=0.9, beta2=0.999, epsilon=1e-8, use_locking=False, name="Nadam"):
-    """
-    :param tf.Tensor|tf.Variable|float learning_rate:
-    :param float beta1:
-    :param float beta2:
-    :param float epsilon:
-    :param bool use_locking:
-    :param str name:
-
-    Nadam is Adam with Nesterov momentum, by Timothy Dozat (http://web.stanford.edu/~tdozat/).
-    http://cs229.stanford.edu/proj2015/054_report.pdf
-
-    Also see tf.train.AdamOptimizer for reference.
-    For Nadam code, see also Theano Updater.
-    Also see here, from the original author of Nadam:
-    https://github.com/tdozat/Optimization/blob/master/tensorflow/nadam.py
-    """
-    super(NadamOptimizer, self).__init__(use_locking=use_locking, name=name)
-
-    self._lr = learning_rate
-    self._beta1 = beta1
-    self._beta2 = beta2
-    self._epsilon = epsilon
-
-    # Tensor scalar versions of the constructor arguments, created in _prepare().
-    self._lr_t = None
-    self._beta1_t = None
-    self._beta2_t = None
-    self._epsilon_t = None
-
-    # Helper scalars, created in _prepare().
-    self._mu_t = None
-    self._mu_t_next = None
-
-    # Scalar variables to accumulate the powers of the beta parameters.
-    # Created in _create_slots when we know the variables to optimize.
-    self._beta1_power = None
-    self._beta2_power = None
-    self._mu_prod = None
-
-  def _create_slots(self, var_list):
-    # This get's called before self.prepare().
-    t = tf.cast(tf.train.get_global_step(), "float32") + 1
-    # Create the beta1 and beta2 accumulators on the same device as the first variable.
-    if self._beta1_power is None or self._beta1_power.graph is not var_list[0].graph:
-      with ops.colocate_with(var_list[0]):
-        self._beta1_power = tf.Variable(self._beta1 ** t, name="beta1_power", trainable=False)
-        self._beta2_power = tf.Variable(self._beta2 ** t, name="beta2_power", trainable=False)
-        self._mu_prod = tf.Variable(1.0, name="mu_prod", trainable=False)
-    # Create slots for the first and second moments.
-    for v in var_list:
-      self._zeros_slot(v, "m", self._name)
-      self._zeros_slot(v, "v", self._name)
-
-  def _prepare(self):
-    self._lr_t = ops.convert_to_tensor(self._lr, name="learning_rate")
-    self._beta1_t = ops.convert_to_tensor(self._beta1, name="beta1")
-    self._beta2_t = ops.convert_to_tensor(self._beta2, name="beta2")
-    self._epsilon_t = ops.convert_to_tensor(self._epsilon, name="epsilon")
-
-    self._t = tf.cast(tf.train.get_global_step(), "float32") + 1
-
-    # momentum schedule, http://www.cs.toronto.edu/~fritz/absps/momentum.pdf
-    nadam_decay = 0.004  # Magical 250.0 denominator in nesterov scaling of i_t
-    self._mu_t = (self._beta1_t * (1 - 0.5 * 0.96 ** (self._t * nadam_decay)))
-    self._mu_t_next = self._beta1_t * (1 - 0.5 * 0.96 ** ((self._t + 1) * nadam_decay))  # for simplified NAG
-
-    self._mu_prod_t_next = self._mu_prod * self._mu_t
-    self._mu_prod_t_next2 = self._mu_prod_t_next * self._mu_t_next
-
-  def _apply_dense(self, grad, var):
-    """
-    :param tf.Tensor grad:
-    :param tf.Variable var:
-    :return: group of update operations
-    :rtype: tf.Operation
-    """
-    m_prev = self.get_slot(var, "m")
-    v_prev = self.get_slot(var, "v")
-
-    # called m_t in paper
-    m = self._beta1_t * m_prev + (1 - self._beta1_t) * grad
-    m_ = m / (1 - self._mu_prod_t_next2)  # bias correction (with momentum schedule (include the next t+1))
-
-    # called n_t in paper
-    v = self._beta2_t * v_prev + (1 - self._beta2_t) * (grad * grad)
-    v_ = v / (1 - self._beta2_power)
-
-    grad_ = grad / (1 - self._mu_prod_t_next)
-    m__ = (1 - self._mu_t) * grad_ + self._mu_t_next * m_
-
-    step = self._lr_t * m__ / (tf.sqrt(v_) + self._epsilon_t)
-    var_update = tf.assign_sub(var, step, use_locking=self._use_locking)
-
-    return tf.group(
-      var_update,
-      tf.assign(m_prev, m, use_locking=self._use_locking),
-      tf.assign(v_prev, v, use_locking=self._use_locking))
-
-  def _apply_sparse(self, grad, var):
-    """
-    :param tf.IndexedSlices grad:
-    :param tf.Variable var:
-    :return: group of update operations
-    :rtype: tf.Operation
-    """
-    beta2_power = tf.cast(self._beta2_power, var.dtype.base_dtype)
-    lr_t = tf.cast(self._lr_t, var.dtype.base_dtype)
-    beta1_t = tf.cast(self._beta1_t, var.dtype.base_dtype)
-    beta2_t = tf.cast(self._beta2_t, var.dtype.base_dtype)
-    epsilon_t = tf.cast(self._epsilon_t, var.dtype.base_dtype)
-    mu_t = tf.cast(self._mu_t, var.dtype.base_dtype)
-    mu_t_next = tf.cast(self._mu_t_next, var.dtype.base_dtype)
-    mu_prod_t_next = tf.cast(self._mu_prod_t_next, var.dtype.base_dtype)
-    mu_prod_t_next2 = tf.cast(self._mu_prod_t_next2, var.dtype.base_dtype)
-
-    m_prev = self.get_slot(var, "m")
-    v_prev = self.get_slot(var, "v")
-
-    # called m_t in paper
-    m = beta1_t * m_prev
-    m = tf.assign(m_prev, m, use_locking=self._use_locking)
-    m = tf.scatter_add(m, grad.indices, (1 - beta1_t) * grad.values, use_locking=self._use_locking)
-    m_update = m
-    m_ = m / (1 - mu_prod_t_next2)  # bias correction (with momentum schedule (include the next t+1))
-
-    # called n_t in paper
-    v = beta2_t * v_prev
-    v = tf.assign(v_prev, v, use_locking=self._use_locking)
-    v = tf.scatter_add(v, grad.indices, (1 - beta2_t) * (grad.values * grad.values), use_locking=self._use_locking)
-    v_update = v
-    v_ = v / (1 - beta2_power)
-
-    m__ = tf.sparse_add(
-      mu_t_next * m_,
-      tf.IndexedSlices((1 - mu_t) * grad.values / (1 - mu_prod_t_next), grad.indices, grad.dense_shape))
-
-    step = lr_t * m__ / (tf.sqrt(v_) + epsilon_t)
-    var_update = tf.assign_sub(var, step, use_locking=self._use_locking)
-
-    return tf.group(var_update, m_update, v_update)
-
-  def _finish(self, update_ops, name_scope):
-    # Update the power accumulators.
-    with ops.control_dependencies(update_ops):
-      with ops.colocate_with(self._beta1_power):
-        update_beta1 = self._beta1_power.assign(
-            self._beta1_power * self._beta1_t,
-            use_locking=self._use_locking)
-        update_beta2 = self._beta2_power.assign(
-            self._beta2_power * self._beta2_t,
-            use_locking=self._use_locking)
-        update_mu_prod = self._mu_prod.assign(
-            self._mu_prod_t_next,
-            use_locking=self._use_locking)
-    return tf.group(*update_ops + [update_beta1, update_beta2, update_mu_prod], name=name_scope)
 
 
 class Updater(object):
@@ -257,8 +102,10 @@ class Updater(object):
       print("Create Adam optimizer.", file=log.v2)
       optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=epsilon)
     elif self.config.bool("nadam", False):
+      assert_min_tf_version((1, 2, 0), "NadamOptimizer introduced in TF 1.2.0")
       assert not momentum
       print("Create NAdam optimizer.", file=log.v2)
+      from tensorflow.contrib.opt.python.training.nadam_optimizer import NadamOptimizer
       optimizer = NadamOptimizer(learning_rate=lr, epsilon=epsilon)
     elif self.config.bool("adadelta", False):
       assert not momentum

@@ -19,7 +19,7 @@ def tf_version_tuple():
 
 def assert_min_tf_version(version, reason):
   """
-  :param tuple[int] version:
+  :param tuple[int] version: e.g. (1,2,0) or (1,2)
   :param str reason:
   """
   tf_version = tf_version_tuple()
