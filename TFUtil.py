@@ -1264,9 +1264,14 @@ def tile_transposed(x, axis, multiples):
   """
   with tf.name_scope("tile_transposed"):
     ndim = x.get_shape().ndims
+    assert ndim is not None
     shape = tf.shape(x)
-    x = expand_dims_unbroadcast(x, axis=axis + 1, dim=multiples)
-    return tf.reshape(x, [shape[i] for i in range(axis)] + [-1] + [shape[i] for i in range(axis + 1, ndim)])
+    x = expand_dims_unbroadcast(x, axis=axis + 1, dim=multiples)  # new axis after `axis`
+    return tf.reshape(
+      x,
+      [shape[i] for i in range(axis)] +
+      [shape[axis] * multiples] +
+      [shape[i] for i in range(axis + 1, ndim)])
 
 
 def constant_with_shape(x, shape, dtype=None, name="constant_with_shape"):

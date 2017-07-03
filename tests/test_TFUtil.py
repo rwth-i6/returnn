@@ -400,6 +400,7 @@ def test_encode_raw_seq_lens():
   assert_equal(list(back.eval()), [s.encode("utf8") for s in strs_stripped])
 
 
+@unittest.skip("broken? https://github.com/tensorflow/tensorflow/issues/11240")
 def test_sequential_control_dependencies():
   v = tf.Variable(initial_value=2, trainable=False, name="test_sequential_control_dependencies")
   with sequential_control_dependencies([
@@ -411,7 +412,15 @@ def test_sequential_control_dependencies():
   assert_equal(x.eval(), 3 + 5)
 
 
-@unittest.skip("broken?")  # TODO...
+@unittest.skip("broken? https://github.com/tensorflow/tensorflow/issues/11240")
+def test_var_init():
+  v = tf.Variable(initial_value=2, trainable=False, name="test_var_init")
+  with tf.control_dependencies([v.initializer]):
+    x = v.read_value()
+  assert_equal(x.eval(), 2)
+
+
+@unittest.skip("broken? see also test_var_init")  # TODO...
 def test_true_once():
   x = true_once()
   assert_equal(x.eval(), True)
@@ -576,6 +585,7 @@ def test_tf_tile():
   v2 = tf.tile(v, [beam_size])  # (beam*batch,)
   v2.set_shape((beam_size * batch_size,))
   print(v2.eval())
+  assert_equal(list(v2.eval()), [1, 2, 3] * 5)
   v3 = tf.reshape(v2, [beam_size, batch_size])  # (beam,batch)
   r = v3.eval()
   print(r)
@@ -592,6 +602,7 @@ def test_tile_transposed():
   v2 = tile_transposed(v, axis=0, multiples=beam_size)  # (batch*beam,)
   v2.set_shape((batch_size * beam_size,))
   print(v2.eval())
+  assert_equal(list(v2.eval()), [1] * 5 + [2] * 5 + [3] * 5)
   v3 = tf.reshape(v2, [batch_size, beam_size])  # (batch,beam)
   r = v3.eval()
   print(r)
