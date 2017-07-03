@@ -27,7 +27,12 @@ class RecLayer(_ConcatInputLayer):
     :param int max_seq_len: if unit is a subnetwork
     """
     super(RecLayer, self).__init__(**kwargs)
+    from TFUtil import is_gpu_available
     import tensorflow.contrib.rnn as rnn_contrib
+    if is_gpu_available():
+      import tensorflow.contrib.cudnn_rnn as cudnn_rnn
+    else:
+      cudnn_rnn = None
     import TFNativeOp
     if direction is not None:
       assert direction in [-1, 1]
@@ -50,6 +55,8 @@ class RecLayer(_ConcatInputLayer):
       self.cell = self._get_cell(unit)
       if isinstance(self.cell, (rnn_contrib.RNNCell, rnn_contrib.FusedRNNCell)):
         y = self._get_output_cell(self.cell)
+      elif cudnn_rnn and isinstance(self.cell, (cudnn_rnn.CudnnLSTM, cudnn_rnn.CudnnGRU)):
+        y = self._get_output_cudnn(self.cell)
       elif isinstance(self.cell, TFNativeOp.RecSeqCellOp):
         y = self._get_output_native_rec_op(self.cell)
       elif isinstance(self.cell, _SubnetworkRecCell):
@@ -135,10 +142,17 @@ class RecLayer(_ConcatInputLayer):
 
   @classmethod
   def _create_rnn_cells_dict(cls):
+    from TFUtil import is_gpu_available
     import tensorflow.contrib.rnn as rnn_contrib
     import TFNativeOp
+    allowed_types = (rnn_contrib.RNNCell, rnn_contrib.FusedRNNCell, TFNativeOp.RecSeqCellOp)
+    if is_gpu_available():
+      import tensorflow.contrib.cudnn_rnn as cudnn_rnn
+      allowed_types += (cudnn_rnn.CudnnLSTM, cudnn_rnn.CudnnGRU)
+    else:
+      cudnn_rnn = None
     def maybe_add(key, v):
-      if isinstance(v, type) and issubclass(v, (rnn_contrib.RNNCell, rnn_contrib.FusedRNNCell, TFNativeOp.RecSeqCellOp)):
+      if isinstance(v, type) and issubclass(v, allowed_types):
         name = key
         if name.endswith("Cell"):
           name = name[:-len("Cell")]
@@ -149,6 +163,11 @@ class RecLayer(_ConcatInputLayer):
       maybe_add(key, v)
     for key, v in vars(TFNativeOp).items():
       maybe_add(key, v)
+    if is_gpu_available():
+      for key, v in vars(cudnn_rnn).items():
+        maybe_add(key, v)
+
+  _warn_msg_once_for_cell_name = set()
 
   @classmethod
   def get_rnn_cell_class(cls, name):
@@ -158,6 +177,15 @@ class RecLayer(_ConcatInputLayer):
     """
     if not cls._rnn_cells_dict:
       cls._create_rnn_cells_dict()
+    from TFUtil import is_gpu_available
+    if not is_gpu_available():
+      m = {"cudnnlstm": "LSTMBlockFused", "cudnngru": "GRUBlock"}
+      if name.lower() in m:
+        if name.lower() not in cls._warn_msg_once_for_cell_name:
+          print("You have selected unit %r in a rec layer which is for GPU only, so we are using %r instead." %
+                (name, m[name.lower()]), file=log.v2)
+          cls._warn_msg_once_for_cell_name.add(name.lower())
+        name = m[name.lower()]
     return cls._rnn_cells_dict[name.lower()]
 
   def _get_input(self):
@@ -205,23 +233,31 @@ class RecLayer(_ConcatInputLayer):
     :param str|dict[str] unit:
     :rtype: RecLayer.SubnetworkCell|tensorflow.contrib.rnn.RNNCell|tensorflow.contrib.rnn.FusedRNNCell|TFNativeOp.RecSeqCellOp
     """
+    from TFUtil import is_gpu_available
     import tensorflow.contrib.rnn as rnn_contrib
     import TFNativeOp
     if isinstance(unit, dict):
       return _SubnetworkRecCell(parent_rec_layer=self, net_dict=unit)
-    else:
-      assert isinstance(unit, str)
-      if unit.lower() in ["lstmp", "lstm"]:
-        # Some possible LSTM implementations are (in all cases for both CPU and GPU):
-        # * BasicLSTM (the cell), via official TF, pure TF implementation
-        # * LSTMBlock (the cell), via tf.contrib.rnn.
-        # * LSTMBlockFused, via tf.contrib.rnn. should be much faster than BasicLSTM
-        # * NativeLSTM, our own native LSTM. should be faster than LSTMBlockFused
-        # We default to the fastest one, i.e. NativeLSTM.
-        # Note that they are currently not compatible to each other, i.e. the way the parameters are represented.
-        unit = "nativelstm"  # TFNativeOp.NativeLstmCell
+    assert isinstance(unit, str)
+    if unit.lower() in ["lstmp", "lstm"]:
+      # Some possible LSTM implementations are (in all cases for both CPU and GPU):
+      # * BasicLSTM (the cell), via official TF, pure TF implementation
+      # * LSTMBlock (the cell), via tf.contrib.rnn.
+      # * LSTMBlockFused, via tf.contrib.rnn. should be much faster than BasicLSTM
+      # * NativeLSTM, our own native LSTM. should be faster than LSTMBlockFused
+      # * CudnnLSTM, via tf.contrib.cudnn_rnn. This is experimental yet.
+      # We default to the current tested fastest one, i.e. NativeLSTM.
+      # Note that they are currently not compatible to each other, i.e. the way the parameters are represented.
+      unit = "nativelstm"  # TFNativeOp.NativeLstmCell
     rnn_cell_class = self.get_rnn_cell_class(unit)
     n_hidden = self.output.dim
+    if is_gpu_available():
+      import tensorflow.contrib.cudnn_rnn as cudnn_rnn
+      if issubclass(rnn_cell_class, (cudnn_rnn.CudnnLSTM, cudnn_rnn.CudnnGRU)):
+        cell = rnn_cell_class(
+          num_layers=1, num_units=n_hidden, input_size=n_hidden,
+          input_mode='linear_input', direction='unidirectional', dropout=0.0)
+        return cell
     cell = rnn_cell_class(n_hidden)
     assert isinstance(
       cell, (rnn_contrib.RNNCell, rnn_contrib.FusedRNNCell, TFNativeOp.RecSeqCellOp))  # e.g. BasicLSTMCell
@@ -255,6 +291,39 @@ class RecLayer(_ConcatInputLayer):
       self._last_hidden_state = final_state
     else:
       raise Exception("invalid type: %s" % type(cell))
+    if self._direction == -1:
+      y = tf.reverse_sequence(y, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
+    return y
+
+  def _get_output_cudnn(self, cell):
+    """
+    :param tensorflow.contrib.cudnn_rnn.CudnnLSTM|tensorflow.contrib.cudnn_rnn.CudnnGRU cell:
+    :return: output of shape (time, batch, dim)
+    :rtype: tf.Tensor
+    """
+    print("CuDNN LSTM/GRU: Warning, this is experimental and incomplete!", file=log.v1)
+    from tensorflow.contrib.cudnn_rnn import RNNParamsSaveable
+    assert self._max_seq_len is None
+    assert self.input_data
+    assert not self.input_data.sparse
+    x, seq_len = self._get_input()
+    n_batch = tf.shape(seq_len)[0]
+    num_layers = 1
+    if self._direction == -1:
+      x = tf.reverse_sequence(x, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
+    # TODO: for the optimizer, use params, for checkpoint save/restore, use params_saveable.
+    params = tf.Variable(
+      tf.random_uniform([cell.params_size()], minval=-0.01, maxval=0.01),
+      validate_shape=False, name="cudnn_params")
+    params_saveable = RNNParamsSaveable(
+      params_to_canonical=cell.params_to_canonical,
+      canonical_to_params=cell.canonical_to_params,
+      param_variables=params)
+    tf.add_to_collection(tf.GraphKeys.SAVEABLE_OBJECTS, params_saveable)
+    # It's like a fused cell, i.e. operates on the full sequence.
+    input_h = tf.zeros((num_layers, n_batch, self.output.dim), dtype=tf.float32)
+    input_c = tf.zeros((num_layers, n_batch, self.output.dim), dtype=tf.float32)
+    y, _, _ = cell(x, input_h=input_h, input_c=input_c, params=params)
     if self._direction == -1:
       y = tf.reverse_sequence(y, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
     return y
