@@ -1064,13 +1064,12 @@ class RnnCellLayer(_ConcatInputLayer):
 
   layer_class = "rnn_cell"
 
-  def __init__(self, n_out, unit, initial_state=None, unit_opts=None, _var_names=None, **kwargs):
+  def __init__(self, n_out, unit, initial_state=None, unit_opts=None, **kwargs):
     """
     :param int n_out: so far, only output shape (batch,n_out) supported
     :param str|tf.contrib.rnn.RNNCell unit: e.g. "BasicLSTM" or "LSTMBlock"
     :param str|float|LayerBase initial_state: see self.get_rec_initial_state()
     :param dict[str]|None unit_opts: passed to the cell.__init__
-    :param dict[str,str] _var_names: hack for LSTMBlockCell to overwrite var names
     """
     super(RnnCellLayer, self).__init__(**kwargs)
     self._initial_state = initial_state
@@ -1081,13 +1080,6 @@ class RnnCellLayer(_ConcatInputLayer):
       assert isinstance(scope, tf.VariableScope)
       scope_name_prefix = scope.name + "/"  # e.g. "layer1/rec/"
       self.cell = self._get_cell(n_out=n_out, unit=unit, unit_opts=unit_opts)
-      if _var_names:
-        # https://github.com/tensorflow/tensorflow/issues/11168
-        import tensorflow.contrib.rnn as rnn_contrib
-        assert isinstance(self.cell, rnn_contrib.LSTMBlockCell)
-        for k, v in _var_names.items():
-          assert k in self.cell._names
-          self.cell._names[k] = v
       self.output.time_dim_axis = None
       self.output.batch_dim_axis = 0
       prev_state = self._rec_previous_layer.rec_vars_outputs["state"]
