@@ -96,6 +96,8 @@ class LayerBase(object):
     self._rec_previous_layer = rec_previous_layer
     self.sources = sources
     self.params = {}  # type: dict[str,tf.Variable]
+    self.saveable_param_replace = {}  # see get_saveable_params_dict()
+    " :type: dict[tf.Variable,tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject] "
     self.L2 = L2
     self._is_output_layer = is_output_layer
     self.use_batch_norm = batch_norm
@@ -334,6 +336,20 @@ class LayerBase(object):
     d = {}
     for param_name, param in self.params.items():
       d[param_name] = param.eval(session)
+    return d
+
+  def get_saveable_params_dict(self):
+    """
+    :return: params and saveable_param_replace resolved
+    :rtype: dict[str,tf.Variable|tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject]
+    """
+    if not self.saveable_param_replace:
+      return self.params.copy()
+    d = {}
+    for param_name, param in self.params.items():
+      if param in self.saveable_param_replace:
+        param = self.saveable_param_replace[param]
+      d[param_name] = param
     return d
 
   @staticmethod

@@ -442,6 +442,19 @@ class TFNetwork(object):
         l.append(param)
     return l
 
+  def get_saveable_params_list(self):
+    """
+    :return: list of model variables or SaveableObject, to save/restore
+    :rtype: list[tf.Variable|tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject]
+    """
+    l = []  # type: list[tf.Variable]
+    for layer_name, layer in sorted(self.layers.items()):
+      assert isinstance(layer, LayerBase)
+      for param_name, param in sorted(layer.get_saveable_params_dict().items()):
+        l.append(param)
+    l += self.get_auxiliary_params()
+    return l
+
   def get_params_nested_dict(self):
     """
     :return: dict: layer_name -> param_name -> variable
@@ -583,7 +596,7 @@ class TFNetwork(object):
     # Saver for storing checkpoints of the model.
     with tf.name_scope("saver"):
       self.saver = tf.train.Saver(
-        var_list=self.get_params_list() + self.get_auxiliary_params(), max_to_keep=2 ** 31 - 1)
+        var_list=self.get_saveable_params_list(), max_to_keep=2 ** 31 - 1)
 
   def save_params_to_file(self, filename, session):
     """
@@ -636,31 +649,34 @@ class TFNetwork(object):
       # This map_list can be extended by all the mappings in checkpoint_convert.py.
       map_list = {"lstm_cell/biases": "lstm_cell/bias", "lstm_cell/weights": "lstm_cell/kernel"}
       reader = tf.train.NewCheckpointReader(filename)
-      net_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES) + tf.get_collection(tf.GraphKeys.SAVEABLE_OBJECTS)
-      vars_ckpt = set(reader.get_variable_to_shape_map())
-      vars_net = set([v.name[:-2] for v in net_vars])
-      missing_vars = [v for v in sorted(vars_net) if v not in vars_ckpt]
-      obsolete_vars = [v for v in sorted(vars_ckpt) if v not in vars_net]
+      net_vars = self.get_saveable_params_list()
+      var_ckpt_names = set(reader.get_variable_to_shape_map())
+      var_net_names = set([v.name[:-2] for v in net_vars if isinstance(v, tf.Variable)])  # only tf.Variable supported yet
+      missing_vars = [v for v in sorted(var_net_names) if v not in var_ckpt_names]
+      obsolete_vars = [v for v in sorted(var_ckpt_names) if v not in var_net_names]
       print("Variables to restore which are not in checkpoint:", missing_vars, file=log.v1)
-      var_map = {}  # current name -> checkpoint name
+      var_name_map = {}  # current name -> checkpoint name
       for v in obsolete_vars:
         for k_old, k_new in map_list.items():
           if v.endswith("/%s" % k_old):
             v2 = v[:-len(k_old)] + k_new
             if v2 in missing_vars:
-              var_map[v2] = v
+              var_name_map[v2] = v
               break
-      could_not_find_map_list = [v for v in missing_vars if v not in var_map]
+      could_not_find_map_list = [v for v in missing_vars if v not in var_name_map]
       if not could_not_find_map_list:
         # We can restore all.
-        print("We found these corresponding variables in the checkpoint:", var_map, file=log.v1)
+        print("We found these corresponding variables in the checkpoint:", var_name_map, file=log.v1)
         print("Loading now...", file=log.v3)
         # Similar: from tensorflow.contrib.framework.python.ops import assign_from_checkpoint
-        for v in self.get_params_list() + self.get_auxiliary_params():
-          v_name = v.name[:-2]  # current name
-          if v_name not in vars_ckpt:
-            v_name = var_map[v_name]
-          assert v_name in vars_ckpt
+        for v in self.get_saveable_params_list():
+          if isinstance(v, tf.Variable):
+            v_name = v.name[:-2]  # current name
+          else:
+            v_name = v.name
+          if v_name not in var_ckpt_names:
+            v_name = var_name_map[v_name]
+          assert v_name in var_ckpt_names
           value = reader.get_tensor(v_name)
           assigner = self.get_var_assigner(v)
           assigner.assign(value=value, session=session)
@@ -676,14 +692,14 @@ class TFNetwork(object):
           print(v)
         print()
         print("Variables to restore which are not in checkpoint:")
-        for v in sorted(vars_net):
-          if v in vars_ckpt:
+        for v in sorted(var_net_names):
+          if v in var_ckpt_names:
             continue
           print(v)
         print()
         print("Variables in checkpoint which are not needed for restore:")
-        for v in sorted(vars_ckpt):
-          if v in vars_net:
+        for v in sorted(var_ckpt_names):
+          if v in var_net_names:
             continue
           print(v)
         print()

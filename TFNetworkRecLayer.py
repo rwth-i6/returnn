@@ -255,7 +255,7 @@ class RecLayer(_ConcatInputLayer):
       import tensorflow.contrib.cudnn_rnn as cudnn_rnn
       if issubclass(rnn_cell_class, (cudnn_rnn.CudnnLSTM, cudnn_rnn.CudnnGRU)):
         cell = rnn_cell_class(
-          num_layers=1, num_units=n_hidden, input_size=n_hidden,
+          num_layers=1, num_units=n_hidden, input_size=self.input_data.dim,
           input_mode='linear_input', direction='unidirectional', dropout=0.0)
         return cell
     cell = rnn_cell_class(n_hidden)
@@ -295,6 +295,28 @@ class RecLayer(_ConcatInputLayer):
       y = tf.reverse_sequence(y, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
     return y
 
+  @staticmethod
+  def _get_cudnn_param_size(num_units, input_size,
+                            num_layers=1, rnn_mode="lstm", input_mode="linear_input", direction='unidirectional'):
+    """
+    :param int num_layers:
+    :param int num_units:
+    :param int input_size:
+    :param str rnn_mode: 'lstm', 'gru', 'rnn_tanh' or 'rnn_relu'
+    :param str input_mode: "linear_input", "skip_input", "auto_select". note that we have a different default.
+    :param str direction: 'unidirectional' or 'bidirectional'
+    :return: size
+    :rtype: int
+    """
+    # Also see test_RecLayer_get_cudnn_params_size().
+    assert num_layers == 1, "not yet supported otherwise"
+    assert input_mode == "linear_input", "not yet supported otherwise"
+    assert direction == "unidirectional", "not yet supported otherwise"
+    num_gates = {"lstm": 3, "gru": 2}.get(rnn_mode, 0)
+    # (input + recurrent + 2 * bias) * output * (gates + cell in)
+    size = (input_size + num_units + 2) * num_units * (num_gates + 1)
+    return size
+
   def _get_output_cudnn(self, cell):
     """
     :param tensorflow.contrib.cudnn_rnn.CudnnLSTM|tensorflow.contrib.cudnn_rnn.CudnnGRU cell:
@@ -308,18 +330,24 @@ class RecLayer(_ConcatInputLayer):
     assert not self.input_data.sparse
     x, seq_len = self._get_input()
     n_batch = tf.shape(seq_len)[0]
-    num_layers = 1
     if self._direction == -1:
       x = tf.reverse_sequence(x, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
-    # TODO: for the optimizer, use params, for checkpoint save/restore, use params_saveable.
+    num_layers = 1
+    param_size = self._get_cudnn_param_size(
+      num_units=self.output.dim, input_size=self.input_data.dim, rnn_mode=cell._rnn_mode, num_layers=num_layers)
+    # Note: The raw params used during training for the cuDNN op is just a single variable
+    # with all params concatenated together.
+    # For the checkpoint save/restore, we will use RNNParamsSaveable, which also makes it easier in CPU mode
+    # to import the params for another unit like LSTMBlockCell.
     params = tf.Variable(
-      tf.random_uniform([cell.params_size()], minval=-0.01, maxval=0.01),
-      validate_shape=False, name="cudnn_params")
+      tf.random_uniform([param_size], minval=-0.01, maxval=0.01), name="cudnn_params_raw", trainable=True)
     params_saveable = RNNParamsSaveable(
       params_to_canonical=cell.params_to_canonical,
       canonical_to_params=cell.canonical_to_params,
-      param_variables=params)
+      param_variables=[params],
+      name="cudnn_params_canonical")
     tf.add_to_collection(tf.GraphKeys.SAVEABLE_OBJECTS, params_saveable)
+    self.saveable_param_replace[params] = params_saveable
     # It's like a fused cell, i.e. operates on the full sequence.
     input_h = tf.zeros((num_layers, n_batch, self.output.dim), dtype=tf.float32)
     input_c = tf.zeros((num_layers, n_batch, self.output.dim), dtype=tf.float32)
