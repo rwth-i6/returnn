@@ -197,7 +197,7 @@ class CNN(_NoOpLayer):
       border_mode = "half"
       result = input
     else:
-      assert False, "Invalid border_mode!!!"
+      assert False, "Invalid border_mode"
 
     if stride != 1:
       result = int(ceil(result/float(stride)))
