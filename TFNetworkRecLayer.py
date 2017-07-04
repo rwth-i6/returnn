@@ -138,6 +138,9 @@ class RecLayer(_ConcatInputLayer):
       out.beam_size = out.beam_size or dep.output.beam_size
     return out
 
+  def get_absolute_name_scope_prefix(self):
+    return super(RecLayer, self).get_absolute_name_scope_prefix() + "rec/"  # all under "rec" sub-name-scope
+
   _rnn_cells_dict = {}
 
   @classmethod

@@ -257,6 +257,10 @@ class LayerBase(object):
     return self.cls_get_tf_scope_name(name=self.name)
 
   def get_absolute_name_scope_prefix(self):
+    """
+    :return: e.g. "output/", always with "/" at end
+    :rtype: str
+    """
     return self.network.get_absolute_name_scope_prefix() + self.tf_scope_name + "/"
 
   def is_output_layer(self):

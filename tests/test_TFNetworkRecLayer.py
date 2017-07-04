@@ -81,6 +81,7 @@ def test_cudnn_save_restore():
     num_outputs = 3
 
     print("Storing network with cuDNN.")
+    tf.reset_default_graph()
     with tf.Session() as session:
       config1 = Config()
       config1.update({
