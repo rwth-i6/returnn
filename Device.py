@@ -680,18 +680,28 @@ class Device(object):
         elif extract == "win_post":
           layer = self.testnet.get_layer(output_layer_name)
           p_y_given_x = getattr(layer, "p_y_given_x", layer.output)
-          w = layer.sources[0].base[0].attrs['win']
-          t = layer.sources[0].base[0].timesteps
-          b = layer.sources[0].base[0].batches
-          fullind = layer.sources[0].fullind.T#.flatten()
-          p_y_given_x = p_y_given_x.reshape((p_y_given_x.shape[0]*p_y_given_x.shape[1],p_y_given_x.shape[2]))
+          from NetworkHiddenLayer import SegmentFinalStateLayer
+          if isinstance(layer.sources[0],SegmentFinalStateLayer):
+            w = layer.sources[0].base[0].attrs['win']
+            t = layer.sources[0].base[0].timesteps
+            b = layer.sources[0].base[0].batches
+            fullind = layer.sources[0].fullind.T
+            p_y_given_x = p_y_given_x.reshape((p_y_given_x.shape[0]*p_y_given_x.shape[1],p_y_given_x.shape[2]))
+          else:
+            w = layer.copy_output.attrs['win']
+            t = layer.copy_output.timesteps
+            b = layer.copy_output.batches
+            from TheanoUtil import window_batch_timewise
+            fullind = window_batch_timewise(t,b,w,layer.copy_output.fullind)
+            fullind = fullind.T
+            p_y_given_x = p_y_given_x.reshape((p_y_given_x.shape[0]*p_y_given_x.shape[1],p_y_given_x.shape[2]))[fullind.flatten()]
           zer = T.zeros((p_y_given_x.shape[1],1))
           fullind1 = fullind.repeat(p_y_given_x.shape[1]).reshape((fullind.flatten().shape[0],p_y_given_x.shape[1]))
           p_y_given_x1 = T.switch(fullind1>=0, p_y_given_x, 0)
           p_y_given_x1 = p_y_given_x1.reshape((t*b,w*p_y_given_x1.shape[1]))
           p_y_given_x1 = p_y_given_x1.reshape((b,t,p_y_given_x1.shape[1])).dimshuffle(1,0,2)
           assert p_y_given_x1.ndim == 3
-          source.append(p_y_given_x1)
+          source.append(T.log(p_y_given_x1))
         elif extract == "win_post_full":
           layer = self.testnet.get_layer(output_layer_name)
           p_y_given_x = layer.z
@@ -774,6 +784,12 @@ class Device(object):
             param = 'output'
           hidden = self.testnet.output[extract]
           signal = getattr(hidden, param)
+          if param == 'attention' and extract == 'aln':
+            n = signal.shape[0]
+            b = signal.shape[1]
+            t = signal.shape[2]
+            signal = signal.dimshuffle(1,0,2).reshape((signal.shape[0],signal.shape[1]*signal.shape[2])).argmax(axis=-1).reshape((n,b))
+            signal = signal.dimshuffle(0,1,'x')
           assert signal.ndim == 3, "extraction variable has to be of shape (time,batch,dimension)"
           source.append(signal)
         elif extract == 'input':
@@ -1219,7 +1235,7 @@ class Device(object):
     """
     if self.is_device_proc():
       return  # Nothing to do.
-    self.used_data_keys = self._generic_exec_on_dev("_host__get_used_targets")
+    self.used_data_keys = self._generic_exec_on_dev("_host__get_used_targets")  # type: list[str]
 
   def alloc_data(self, shapes, max_ctc_length=0):
     """

@@ -64,29 +64,37 @@ class OneDToTwoDFixedSizeLayer(TwoDBaseLayer):
   layer_class = "1Dto2D_fixed_size"
   recurrent = True
 
-  def __init__(self, pad_x=0, pad_y=0, **kwargs):
+  def __init__(self, pad_x=0, pad_y=0, d_row=-1, **kwargs):
     super(OneDToTwoDFixedSizeLayer, self).__init__(1, **kwargs)
     assert len(self.sources) == 1
     X = self.sources[0].output
     assert X.ndim == 3
     assert X.dtype == "float32"
 
-    if pad_x + pad_y > 0:
-      tmp = T.zeros((X.shape[0] + 2 * pad_x, X.shape[1]), 'int8')
-      self.index = T.set_subtensor(tmp[pad_x: pad_x + X.shape[0]], self.sources[0].index)
-      tmp = T.zeros((X.shape[0] + 2 * pad_x, X.shape[1], X.shape[2] + 2 * pad_y), 'float32')
-      X = T.set_subtensor(tmp[pad_x:pad_x + X.shape[0], :, pad_y:pad_y + X.shape[2]], X)
+    if d_row > 0:
+      X = X.reshape((X.shape[0],X.shape[1],d_row,X.shape[2] / d_row))
+      Y = T.unbroadcast(X.dimshuffle(2, 0, 1, 3), 3)
+      n_out = self.sources[0].attrs['n_out'] / d_row
+    else:
+     Y = X.dimshuffle(2, 0, 1, 'x')
+     n_out = 1
 
-    height = X.shape[2]
+    if pad_x + pad_y > 0:
+      tmp = T.zeros((Y.shape[1] + 2 * pad_x, Y.shape[2]), 'int8')
+      self.index = T.set_subtensor(tmp[pad_x: pad_x + Y.shape[1]], self.sources[0].index)
+      tmp = T.zeros((Y.shape[0] + 2 * pad_y, Y.shape[1] + 2 * pad_x, Y.shape[2], Y.shape[3]), 'float32')
+      Y = T.set_subtensor(tmp[pad_y:pad_y + Y.shape[0],pad_x:pad_x + Y.shape[1]], Y)
+
+    Y = T.unbroadcast(Y, 3)
+
+    height = Y.shape[0] # if n_out <= 0 else n_out
     width = T.maximum(T.sum(self.index, axis=0), T.ones_like(self.index[0]))
-    batch = X.shape[1]
+    batch = Y.shape[2]
     sizes = T.zeros((batch, 2), dtype="float32")
     sizes = T.set_subtensor(sizes[:, 0], height)
     sizes = T.set_subtensor(sizes[:, 1], width)
-    Y = T.unbroadcast(X.dimshuffle(2, 0, 1, 'x'), 3)
     self.output = Y
     self.output_sizes = sizes
-    n_out = 1
     self.set_attr('n_out', n_out)
 
 class TwoDToOneDLayer(TwoDBaseLayer):

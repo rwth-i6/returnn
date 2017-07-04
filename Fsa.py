@@ -36,7 +36,14 @@ class Fsa:
     """
     # needed by ASG, CTC and HMM
     self.num_states = 0
+
+    # 0: starting node
+    # 1: ending node
+    # 2: label
+    # 3: weight
+    # 4: label position
     self.edges = []
+    self.edges_single_state = []
 
     assert isinstance(fsa_type, str), "FSA type input not a string"
     self.fsa_type = fsa_type.lower()
@@ -47,6 +54,8 @@ class Fsa:
     self.lemma = None
 
     self.filename = 'fsa'
+
+    self.single_state = False
 
     # needed by ASG
     self.asg_repetition = 2
@@ -75,7 +84,8 @@ class Fsa:
                  depth=6,
                  allo_num_states=3,
                  lexicon_name='',
-                 state_tying_name=''):
+                 state_tying_name='',
+                 single_state=False):
     """
     sets the parameters for FSA generator
     checks if needed params for fsa type available otherwise erquests user input
@@ -91,10 +101,14 @@ class Fsa:
     :param int allo_num_states: umber of allophone states
     :param str lexicon: lexicon file name
     :param str state_tying: state tyting file name
+    :param bool single_state: produce additional fsa: single node
     :return:
     """
     print("Setting parameters for", self.fsa_type)
     self.filename = filename
+
+    self.single_state = single_state
+    print("Single state set to:", self.single_state)
 
     if not isinstance(label_conversion, bool):
       print("Set label conversion option:")
@@ -138,6 +152,28 @@ class Fsa:
     else:
       print("No finite state automaton matches to chosen type")
       sys.exit(-1)
+
+  def set_fsa_type(self, fsa_type=None):
+    if isinstance(fsa_type, str):
+      self.fsa_type = fsa_type
+
+  def set_lemma(self, lemma=None):
+    if isinstance(lemma, str):
+      self.lemma_orig = lemma
+      self.lemma = None
+
+  def set_filename(self, filename=None):
+    if isinstance(filename, str):
+      self.filename = filename
+
+  def set_lexicon(self, lexicon_name=None):
+    """
+    sets a new lexicon
+    :param str lexicon_name: lexicon path
+    """
+    if isinstance(lexicon_name, str):
+      self.lexicon_name = lexicon_name
+      self._load_lexicon()
 
   def run(self):
     if self.fsa_type == 'asg':
@@ -238,6 +274,13 @@ class Fsa:
 
     self.lemma = label_indices
 
+  def reduce_node_num(self):
+    """
+    takes the edges and nodes, then reduces all to one node
+    """
+    if (self.num_states > 1 and self.single_state == True):
+      self.edges_single_state = [(0, 0, edge[2], edge[3])for edge in self.edges]
+
   def _adds_loop_edges(self):
     """
     for every node loops with edge label pointing to node
@@ -259,8 +302,12 @@ class Fsa:
         label_pos = self.edges[edges_included[0]][4]
       except Exception:
         label_pos = None
-      edge_n = [state, state, self.edges[edges_included[0]][2], 0., label_pos]
-      assert len(edge_n) == 5, "length of edge wrong"
+      if self.fsa_type == 'hmm':
+        edge_n = [state, state, self.edges[edges_included[0]][2], 0., self.edges[edges_included[0]][4]]
+        assert len(edge_n) == 5,  "length of edge wrong"
+      else:
+        edge_n = [state, state, self.edges[edges_included[0]][2], 0.]
+        assert len(edge_n) == 4, "length of edge wrong"
       self.edges.append(edge_n)
 
   def _check_for_repetitions_for_asg(self):
@@ -309,36 +356,36 @@ class Fsa:
     """
     creates states from label sequence, skips repetitions
     """
-    print("Creating nodes and edges from label sequence...")
+    print("Create nodes and edges from label sequence...")
     # go through the whole label sequence and create the state for each label
     for label_index in range(0, len(self.lemma)):
       # if to remove skips if two equal labels follow each other
       if self.lemma[label_index] != self.lemma[label_index - 1]:
         n = 2 * label_index
-        self.edges.append((n, n + 2, self.lemma[label_index], 1.))
+        self.edges.append([n, n + 2, self.lemma[label_index], 1.])
 
   def _adds_blank_states_for_ctc(self):
     """
     adds blank edges and repetitions to ctc
     """
-    print("Adding blank states and edges...")
+    print("Add blank states and edges...")
     label_blank_idx = 0
     # adds blank labels to fsa
     for label_index in range(0, len(self.lemma)):
       label_blank_idx = 2 * label_index + 1
-      self.edges.append((label_blank_idx - 1, label_blank_idx, self._BLANK, 1.))
-      self.edges.append((label_blank_idx, label_blank_idx + 1, self.lemma[label_index], 1.))
+      self.edges.append([label_blank_idx - 1, label_blank_idx, self._BLANK, 1.])
+      self.edges.append([label_blank_idx, label_blank_idx + 1, self.lemma[label_index], 1.])
     self.final_states.append(label_blank_idx + 1)
 
   def _adds_last_state_for_ctc(self):
     """
     adds last states for ctc
     """
-    print("Adds final states and edges...")
+    print("Add final states and edges...")
     i = self.num_states
-    self.edges.append((i - 3, i, self._BLANK, 1.))
-    self.edges.append((i, i + 1, self.lemma[-1], 1.))
-    self.edges.append((i + 1, i + 2, self._BLANK, 1.))
+    self.edges.append([i - 3, i, self._BLANK, 1.])
+    self.edges.append([i, i + 1, self.lemma[-1], 1.])
+    self.edges.append([i + 1, i + 2, self._BLANK, 1.])
     self.num_states += 3
     self.final_states.append(self.num_states - 1)
 
@@ -350,7 +397,7 @@ class Fsa:
       - for all edge which ended in a former final node:
       - create new edge from stating node to new single final node with the same label
     """
-    print("Creates single final state...")
+    print("Create single final state...")
     if len(self.final_states) == 1 and self.final_states[0] == self.num_states - 1:  # nothing to change
       pass
     else:
@@ -358,7 +405,7 @@ class Fsa:
       for fstate in self.final_states:
         edges_fstate = [edge_index for edge_index, edge in enumerate(self.edges) if (edge[1] == fstate)]
         for fstate_edge in edges_fstate:
-          self.edges.append((self.edges[fstate_edge][0], self.num_states - 1, self.edges[fstate_edge][2], 1.))
+          self.edges.append([self.edges[fstate_edge][0], self.num_states - 1, self.edges[fstate_edge][2], 1.])
 
   def _lemma_acceptor_for_hmm_fsa(self):
     """
@@ -391,20 +438,26 @@ class Fsa:
         self.edges.append([start_node + 1, end_node + 1, i, 0.])
         self.num_states += 1
 
-  def _load_lexicon(self):
+  def _load_lexicon(self, reload = False):
     '''
-    loads a lexicon from a file, loads the xml and returns its conent
+    loads a lexicon from a file, loads the xml and returns its content
     where:
       lex.lemmas and lex.phonemes important
+    :param bool reload: should lexicon be reloaded
     '''
-    from os.path import isfile
-    from Log import log
     from LmDataset import Lexicon
+    if not isinstance(self.lexicon, Lexicon):
+      reload = True
 
-    assert isfile(self.lexicon_name), "Lexicon does not exists"
+    if reload:
+      from os.path import isfile
+      from Log import log
 
-    log.initialize(verbosity=[5])
-    self.lexicon = Lexicon(self.lexicon_name)
+      assert isfile(self.lexicon_name), "Lexicon does not exists"
+
+      log.initialize(verbosity=[5])
+
+      self.lexicon = Lexicon(self.lexicon_name)
 
   def _find_allo_seq_in_lex(self):
     '''
@@ -718,7 +771,7 @@ class Fsa:
 
     while (edges_t):
       edge_t = edges_t.pop(0)
-      assert len(edge_t) == 5, "edge length != 5"
+      assert len(edge_t) == 5, ("edge length != 5", edge_t)
       label = edge_t[2]
       pos = edge_t[4]
 
@@ -743,12 +796,14 @@ class Fsa:
       statetying.allo_map important
     '''
     from os.path import isfile
+    from Log import log
     from LmDataset import StateTying
 
     print("Loading state tying file:", self.state_tying_name)
 
     assert isfile(self.state_tying_name), "State tying file does not exists"
 
+    log.initialize(verbosity=[5])
     self.state_tying = StateTying(self.state_tying_name)
 
     print("Finished state tying mapping:", len(self.state_tying.allo_map), "allos to int")
@@ -862,6 +917,9 @@ def main():
   arg_parser.set_defaults(lexicon='recog.150k.final.lex.gz')
   arg_parser.add_argument("--state_tying", type=str)
   arg_parser.set_defaults(state_tying='state-tying.txt')
+  arg_parser.add_argument("--single_state_on", dest="single_state", action="store_true")
+  arg_parser.add_argument("--single_state_off", dest="single_state", action="store_false")
+  arg_parser.set_defaults(single_state=False)
   args = arg_parser.parse_args()
 
   fsa_gen = Fsa(args.label_seq, args.fsa)
@@ -873,12 +931,23 @@ def main():
                      depth=args.depth,
                      allo_num_states=args.allo_num_states,
                      lexicon_name=args.lexicon,
-                     state_tying_name=args.state_tying)
+                     state_tying_name=args.state_tying,
+                     single_state=args.single_state)
 
   fsa_gen.run()
 
   fsa_to_dot_format(file=fsa_gen.filename, num_states=fsa_gen.num_states, edges=fsa_gen.edges)
 
+  if (fsa_gen.single_state == True):
+    fsa_gen.reduce_node_num()
+    fsa_to_dot_format(file=fsa_gen.filename + "_single_state", num_states=1, edges=fsa_gen.edges_single_state)
+
 
 if __name__ == "__main__":
+  import time
+
+  start_time = time.time()
+
   main()
+
+  print(time.time() - start_time, "seconds")

@@ -445,9 +445,6 @@ class AttentionList(AttentionBase):
       self.__setattr__("att_%d" % i, self.add_state_var(T.zeros(shape,'float32'), "att_%d" % i))
     if self.attrs['smooth']:
       self.__setattr__("datt_%d" % i, self.add_state_var(T.zeros(shape, 'float32'), "datt_%d" % i))
-    if self.attrs['align']:
-      self.__setattr__("Q_%d" % i, self.add_state_var(T.zeros(shape,'float32') + numpy.float32(1e10), "Q_%d" % i))
-      self.__setattr__("K_%d" % i, self.add_state_var(T.zeros(shape,'float32'), "K_%d" % i))
     if self.attrs['momentum'] == "conv1d":
       self.__setattr__("F_%d" % i, self.custom_vars['F_%d' % i])
       self.__setattr__("U_%d" % i, self.custom_vars['U_%d' % i])
@@ -597,10 +594,6 @@ class AttentionList(AttentionBase):
         updates[self.state_vars['datt_%d' % i]] = w_i - self.state_vars['att_%d' % i]
       if self.attrs['store']:
         updates[self.state_vars['att_%d' % i]] = theano.gradient.disconnected_grad(w_i)
-      if self.attrs['align']:
-        Q,K = self.align(w_i,self.item("Q", i))
-        updates[self.state_vars['Q_%d' % i]] = Q
-        updates[self.state_vars['K_%d' % i]] = K
       if self.attrs['memory'] > 0:
         M = self.item('M',i)
         z_r = self.distance(M, H)
@@ -639,6 +632,202 @@ class AttentionList(AttentionBase):
         val += T.sum(self.get_state_vars_seq(self.state_vars['catt_%d' % i]))
     return val
 
+
+class AttentionAlign(AttentionBase):
+  """
+  alignment controlled attention
+  """
+  name = "attention_align"
+  def create_vars(self):
+    super(AttentionAlign, self).create_vars()
+    assert len(self.base) == 1
+    #assert self.base[0].layer_class.endswith('align')
+    max_skip = self.base[0].attrs['max_skip']
+    self.B = self.add_input(self.base[0].output, 'B')
+    l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + max_skip)
+    values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l,
+                           size=(self.base[0].attrs['n_out'], self.layer.unit.n_in)),
+                           dtype=theano.config.floatX)
+    self.W_att_in = self.add_param(self.layer.shared(value=values, borrow=True, name="W_att_in"), name="W_att_in")
+
+    self.T_W = self.add_var(self.layer.T_W, name="T_W")
+    self.T_b = self.add_var(self.layer.T_b, name="T_b")
+
+    #y_t = T.dot(self.base[0].attention, T.arange(self.base[0].output.shape[0], dtype='float32'))  # NB
+    #y_t = T.concatenate([T.zeros_like(y_t[:1]), y_t], axis=0)  # (N+1)B
+    #y_t = y_t[1:] - y_t[:-1] # NB
+    self.y_t = self.add_input(self.layer.y_t, "y_t")
+
+    lens = T.sum(self.base[0].index,axis=0,dtype='float32')
+    self.t = self.add_state_var(lens - numpy.float32(1), "t")
+    nlens = T.sum(self.layer.index,axis=0,dtype='float32')
+    self.ns = self.add_state_var(nlens - numpy.float32(1), "ns")
+    #self.cost_sum = self.add_state_var(T.zeros((1,), 'float32'), "cost_sum")
+
+
+  def attend(self, y_p):
+    inp, updates = 0, {}
+    z = T.dot(y_p,self.T_W) + self.T_b
+    #idx = self.I[self.n[0]]
+    #y_out = T.cast(self.y_t[self.n[0]],'int32')
+    #nll, _ = T.nnet.crossentropy_softmax_1hot(x=z[idx], y_idx=y_out[idx])
+    smooth = T.constant(self.attrs['smooth'], 'float32')
+    #n = T.cast(self.n[0],'int32')
+    n = T.cast(self.ns, 'int32')
+    t = T.dot(T.nnet.softmax(z), T.arange(self.base[0].attrs['max_skip'],dtype='float32')) #+ numpy.float32(1)
+    #t = T.cast(T.argmax(z,axis=1), 'float32' )
+    t = smooth * self.y_t[n,T.arange(self.y_t.shape[1]),T.cast(self.t,'int32')] + (numpy.float32(1) - smooth) * t
+    pos = T.cast(T.ceil(self.t), 'int32')
+    inp = T.dot(self.B[pos,T.arange(pos.shape[0])], self.W_att_in)
+    #updates[self.cost_sum] = T.sum(nll,dtype='float32').dimshuffle('x').repeat(1,axis=0)
+    updates[self.t] = T.maximum(self.t - t, numpy.float32(0))
+    updates[self.ns] = self.ns - numpy.float32(1)
+    return inp, updates
+
+
+class AttentionInverted(AttentionBase):
+  """
+  alignment controlled attention
+  """
+  name = "attention_inverted"
+  def create_vars(self):
+    super(AttentionInverted, self).create_vars()
+    assert len(self.base) == 1
+    assert self.base[0].layer_class.endswith('align')
+    align = self.base[0]
+    dir = -self.layer.attrs['direction']
+    self.max_skip = numpy.int32(self.layer.base[0].attrs['max_skip'])
+    p_in = T.concatenate([T.zeros_like(align.p_y_given_x[:self.max_skip]), align.p_y_given_x[::dir]], axis=0)
+    x_in = T.concatenate([T.zeros_like(align.x_in[:self.max_skip]), align.x_in[::dir]], axis=0)
+    a_in = T.concatenate([T.zeros_like(align.attention.dimshuffle(2,1,0)[:self.max_skip]),
+                          align.attention.dimshuffle(2,1,0)[::dir]], axis=0)
+    self.P = self.add_input(p_in, 'P')
+    self.X = self.add_input(x_in, 'X')
+    self.A = self.add_input(a_in, 'A')
+    l = sqrt(6.) / sqrt(self.layer.attrs['n_out'] + self.layer.unit.n_in)
+    values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l,
+                                                  size=(self.layer.attrs['n_out'], align.n_cls)),
+                                                  dtype=theano.config.floatX)
+    self.W_cls = self.add_param(self.layer.shared(value=values, borrow=True, name="W_cls"), name="W_cls")
+    values = numpy.zeros((align.n_cls,), 'float32')
+    self.b_cls = self.add_param(self.layer.shared(value=values, borrow=True, name='b_cls'), name='b_cls')
+    values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l,
+                           size=(align.attrs['n_out'], self.layer.unit.n_in)),
+                           dtype=theano.config.floatX)
+    self.W_in = self.add_param(self.layer.shared(value=values, borrow=True, name="W_in"), name="W_in")
+
+    lens = T.sum(self.base[0].index,axis=0,dtype='float32')
+    self.t = self.add_state_var(lens - numpy.float32(self.max_skip), "t")
+    self.max_skip = self.add_var(T.zeros((1,),'float32') + numpy.float32(self.max_skip),'max_skip')
+    nlens = T.sum(self.layer.index,axis=0,dtype='float32')
+    self.ns = self.add_state_var(nlens - numpy.float32(1), "ns")
+
+  def attend(self, y_p):
+    inp, updates = 0, {}
+    c = T.nnet.softmax(T.dot(y_p, self.W_cls) + self.b_cls) # BC
+    n = T.cast(self.ns - numpy.float32(1),'int32')[0]
+    tau = T.cast(self.t,'int32')[0]
+    max_skip = T.cast(self.max_skip, 'int32')[0]
+    #max_skip = numpy.int32(self.layer.base[0].attrs['max_skip'])
+    #max_skip = 12
+    p = self.P[tau:tau + max_skip] # MBC
+    x = self.X[tau:tau + max_skip]
+    a = self.A[tau:tau + max_skip,T.arange(x.shape[1]),n] # MB
+    a = self.A[:,T.arange(x.shape[1]),n]
+    e = T.exp(T.sum(c.dimshuffle('x',0,1).repeat(p.shape[0],axis=0) * p, axis=2)) # MB
+    e = e / e.sum(axis=0,keepdims=True)
+
+    w = a
+
+    #e = e.dimshuffle(0,1,'x').repeat(p.shape[2],axis=2)
+    q = T.exp(p.max(axis=2) * w)
+    q = q / q.sum(axis=0,keepdims=True)
+
+    q = w
+    from TheanoUtil import print_to_file
+    #q = print_to_file('q', q)
+    dt = q.argmax(axis=0) - T.cast(self.t,'int32') #+ max_skip
+
+    pos = T.argmax(self.A[:,T.arange(x.shape[1]),n],axis=0)
+    inp = T.dot(self.X[pos,T.arange(x.shape[1])], self.W_in)
+    #q = q.dimshuffle(0,1,'x').repeat(x.shape[2],axis=2)
+    #inp = T.dot(T.sum(x * q, axis=0), self.W_in)
+    #updates[self.t] = T.maximum(self.t - self.max_skip[0] + T.cast(dt, 'float32'), T.zeros_like(self.t))
+    n = T.cast(self.ns - numpy.float32(1), 'int32')[0]
+    updates[self.t] = T.cast(T.argmax(self.A[:,T.arange(x.shape[1]),n],axis=0),'float32')
+    updates[self.ns] = self.ns - numpy.float32(1)
+    return inp, updates
+
+class AttentionSegment(AttentionBase):
+  """
+  alignment controlled attention over segments
+  """
+  name = "attention_segment"
+
+  def create_bias(self, n, name, i=-1):
+    if i >= 0: name += '_%d' % i
+    values = numpy.zeros((n,), dtype=theano.config.floatX)
+    return self.add_param(self.layer.shared(value=values, borrow=True, name=name), name=name)
+
+  def create_weights(self, n, m, name, i=-1):
+    if i >= 0: name += '_%d' % i
+    l = sqrt(6.) / sqrt(n + m)
+    values = numpy.asarray(self.layer.rng.uniform(low=-l, high=l, size=(n, m)), dtype=theano.config.floatX)
+    return self.add_param(self.layer.shared(value=values, borrow=True, name=name), name=name)
+
+  def create_vars(self):
+    super(AttentionSegment, self).create_vars()
+    assert len(self.base) == 1
+    n_tmp = self.attrs['template']
+    B = self.B = self.add_input(self.base[0].output[::self.layer.attrs['direction']], 'B')
+    self.W_att_in = self.create_weights(self.base[0].attrs['n_out'], self.layer.unit.n_in, 'W_att_in')
+    self.b_att_in = self.create_bias(self.layer.unit.n_in, 'b_att_in')
+    self.rec_transform_enc = self.add_input(T.cast(self.layer.rec_transform_enc,'float32'),'rec_transform_enc')
+    self.rec_transform_index = self.add_input(T.cast(self.layer.rec_transform_index,'float32'), 'rec_transform_index')
+    self.inv_att = self.add_input(T.cast(self.base[0].inv_att,'float32'),'inv_att')
+    self.I = self.add_input(T.cast(self.layer.index,'float32'),'I')
+    self.W_att_re = self.create_weights(self.layer.attrs['n_out'], n_tmp, "W_att_re")
+    self.b_att_re = self.create_bias(n_tmp, "b_att_re")
+    self.W_att_bs = self.create_weights(self.base[0].attrs['n_out'], n_tmp, "W_att_bs")
+    self.b_att_bs = self.create_bias(n_tmp, "b_att_bs")
+    h_att = T.tanh(T.dot(B,self.W_att_bs) + self.b_att_bs)
+    self.I_dec = self.add_input(T.cast(self.base[0].output_index(),'float32'), 'I_dec')
+    self.i_f = self.add_input(T.cast(self.base[0].output_index(),'float32').dimshuffle(0,1,'x').repeat(h_att.shape[2],axis=2),'i_f')
+    h_att = h_att - (h_att * self.i_f).sum(axis=0,keepdims=True) / T.sum(self.i_f,axis=0,keepdims=True)
+    self.index_att = self.add_input(self.make_index(self.inv_att,self.I_dec),'index_att')#NTB
+    self.C = self.add_input(h_att,'C')
+    self.W_att_dec = self.create_weights(self.layer.attrs['n_out'], n_tmp, "W_att_dec")
+    self.b_att_dec = self.create_bias(n_tmp, "b_att_dec")
+
+  def make_index(self,inv_att,ind):
+    att = inv_att.argmax(axis=2) #NB
+    #att = theano.printing.Print('attention',attrs=['shape','__str__'])(att)
+    new_ind = T.zeros_like(ind).dimshuffle('x',0,1).repeat(att.shape[0],axis=0).dimshuffle(0,2,1) #NBT
+    mask = T.arange(ind.shape[0]).dimshuffle('x',0).repeat(att.shape[0]*att.shape[1],axis=0).reshape((att.shape[0],att.shape[1],ind.shape[0])) #NBT
+    flat_att = att.flatten().dimshuffle(0,'x').repeat(ind.shape[0],axis=1).reshape((att.shape[0],att.shape[1],ind.shape[0])) #NBT
+    result = T.switch(mask>flat_att,new_ind,numpy.float32(1))
+    result = T.switch(T.eq(flat_att,0),numpy.float32(0),result).dimshuffle(0,2,1)
+    return T.cast(result,'float32')
+
+  def attend(self, y_p):
+    inp, updates = 0, {}
+    n = T.cast(self.n[0],'int32')
+    prev_dec_step = T.dot(y_p,self.W_att_dec) + self.b_att_dec #BD
+    att_pts = self.inv_att.argmax(axis=2) + T.arange(self.inv_att.shape[1])*self.inv_att.shape[2] #NB
+    curr_enc_pts = att_pts[n] #B
+    curr_seg_final = T.dot(self.B.dimshuffle(1,0,2).reshape((self.B.shape[0]*self.B.shape[1],self.B.shape[2]))[curr_enc_pts],self.W_att_re) + self.b_att_re #BD
+    #e = self.distance(self.C,prev_dec_step)
+    e = self.distance(self.C*self.index_att[n].dimshuffle(0,1,'x').repeat(self.C.shape[2],axis=2),T.tanh(curr_seg_final + prev_dec_step))
+    #n = theano.printing.Print('dec step',attrs=['__str__'])(n)
+    curr_seg_index = T.switch(T.gt(self.index_att[n] - self.index_att[n-1],numpy.float32(0)),numpy.float32(1),numpy.float32(0)) #TB
+    ind_curr = theano.ifelse.ifelse(n > 0, curr_seg_index,self.index_att[n])
+    #n = theano.printing.Print('dec step',attrs=['__str__'])(n)
+    #ind_curr = theano.printing.Print('index curr',attrs=['shape','__str__'])(ind_curr)
+    att_w = self.softmax(e,ind_curr)
+    z = T.sum(self.B * att_w.dimshuffle(0, 1, 'x').repeat(self.B.shape[2], axis=2), axis=0)
+    res = T.dot(z, self.W_att_in) + self.b_att_in
+    inp = res
+    return inp, updates
 
 class AttentionTime(AttentionList):
   """

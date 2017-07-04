@@ -371,7 +371,7 @@ class LayerNetwork(object):
             traverse(content, prev, target, index)
             base.append(network.get_layer(prev))
         obj['base'] = base
-      for key in [ 'copy_input', 'copy_output' ]:
+      for key in [ 'copy_input', 'copy_output', 'aligner' ]:
         if key in obj:
           index = traverse(content, obj[key], target, index)
           obj[key] = network.get_layer(obj[key])

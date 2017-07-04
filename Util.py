@@ -204,7 +204,8 @@ def get_tensorflow_version_tuple():
   :rtype: tuple[int]
   """
   import tensorflow as tf
-  return tuple([int(s) for s in tf.__version__.split(".")])
+  import re
+  return tuple([int(re.sub('-rc[0-9]', '', s)) for s in tf.__version__.split(".")])
 
 def eval_shell_env(token):
   if token.startswith("$"):
@@ -617,6 +618,30 @@ def uniq(seq):
   return seq[idx]
 
 
+def slice_pad_zeros(x, begin, end, axis=0):
+  """
+  :param numpy.ndarray x: of shape (..., time, ...)
+  :param int begin:
+  :param int end:
+  :param int axis:
+  :return: basically x[begin:end] (with axis==0) but if begin < 0 or end > x.shape[0],
+   it will not discard these frames but pad zeros, such that the resulting shape[0] == end - begin.
+  :rtype: numpy.ndarray
+  """
+  assert axis == 0, "not yet fully implemented otherwise"
+  pad_left, pad_right = 0, 0
+  if begin < 0:
+    pad_left = -begin
+    begin = 0
+  elif begin >= x.shape[axis]:
+    return np.zeros((end - begin,) + x.shape[1:], dtype=x.dtype)
+  assert end >= begin
+  if end > x.shape[axis]:
+    pad_right = end - x.shape[axis]
+    end = x.shape[axis]
+  return np.pad(x[begin:end], [(pad_left, pad_right)] + [(0, 0)] * (x.ndim - 1), mode="constant")
+
+
 _have_inplace_increment = None
 _native_inplace_increment = None
 
@@ -782,6 +807,17 @@ def json_remove_comments(string, strip_space=True):
   return ''.join(new_str)
 
 
+def unicode_to_str_recursive(s):
+  if isinstance(s, dict):
+    return {unicode_to_str_recursive(key): unicode_to_str_recursive(value) for key, value in s.items()}
+  elif isinstance(s, list):
+    return [unicode_to_str_recursive(element) for element in s]
+  elif isinstance(s, unicode):
+    return s.encode('utf-8')
+  else:
+    return s
+
+
 def load_json(filename=None, content=None):
   if content:
     assert not filename
@@ -793,6 +829,8 @@ def load_json(filename=None, content=None):
     json_content = json.loads(content)
   except ValueError as e:
     raise Exception("config looks like JSON but invalid json content, %r" % e)
+  if not PY3:
+    json_content = unicode_to_str_recursive(json_content)
   return json_content
 
 
@@ -824,6 +862,11 @@ class NumbersDict:
 
   def copy(self):
     return NumbersDict(self)
+
+  def constant_like(self, number):
+    return NumbersDict(
+      broadcast_value=number if (self.value is not None) else None,
+      numbers_dict={k: number for k in self.dict.keys()})
 
   @property
   def keys_set(self):
@@ -860,6 +903,14 @@ class NumbersDict:
   def has_values(self):
     return bool(self.dict) or self.value is not None
 
+  def unary_op(self, op):
+    res = NumbersDict()
+    if self.value is not None:
+      res.value = op(self.value)
+    for k, v in self.dict.items():
+      res.dict[k] = op(v)
+    return res
+
   @classmethod
   def bin_op_scalar_optional(cls, self, other, zero, op):
     if self is None and other is None:
@@ -873,9 +924,12 @@ class NumbersDict:
   @classmethod
   def bin_op(cls, self, other, op, zero, result=None):
     if not isinstance(self, NumbersDict):
-      self = NumbersDict(self)
+      if isinstance(other, NumbersDict):
+        self = other.constant_like(self)
+      else:
+        self = NumbersDict(self)
     if not isinstance(other, NumbersDict):
-      other = NumbersDict(other)
+      other = self.constant_like(other)
     if result is None:
       result = NumbersDict()
     assert isinstance(result, NumbersDict)
@@ -912,23 +966,45 @@ class NumbersDict:
   def __div__(self, other):
     return self.bin_op(self, other, op=lambda a, b: a / b, zero=1)
 
-  def __rdiv__(self, other):
-    return self.bin_op(self, other, op=lambda a, b: b / a, zero=1)
+  __rdiv__ = __div__
+  __truediv__ = __div__
 
   def __idiv__(self, other):
     return self.bin_op(self, other, op=lambda a, b: a / b, zero=1, result=self)
 
-  def elem_eq(self, other, result_with_default=False):
+  __itruediv__ = __idiv__
+
+  def __floordiv__(self, other):
+    return self.bin_op(self, other, op=lambda a, b: a // b, zero=1)
+
+  def __ifloordiv__(self, other):
+    return self.bin_op(self, other, op=lambda a, b: a // b, zero=1, result=self)
+
+  def __neg__(self):
+    return self.unary_op(op=lambda a: -a)
+
+  def __bool__(self):
+    return any(self.values())
+
+  __nonzero__ = __bool__  # Python 2
+
+  def elem_eq(self, other, result_with_default=True):
     """
     Element-wise equality check with other.
     Note about broadcast default value: Consider some key which is neither in self nor in other.
       This means that self[key] == self.default, other[key] == other.default.
       Thus, in case that self.default != other.default, we get res.default == False.
       Then, all(res.values()) == False, even when all other values are True.
-      This is often not what we want.
+      This is sometimes not what we want.
       You can control the behavior via result_with_default.
     """
-    res = self.bin_op(self, other, op=lambda a, b: a == b, zero=None)
+    def op(a, b):
+      if a is None:
+        return None
+      if b is None:
+        return None
+      return a == b
+    res = self.bin_op(self, other, op=op, zero=None)
     if not result_with_default:
       res.value = None
     return res
@@ -944,31 +1020,50 @@ class NumbersDict:
     # and it would just confuse.
     raise Exception("%s.__cmp__ is undefined" % self.__class__.__name__)
 
+  @staticmethod
+  def _max(*args):
+    args = [a for a in args if a is not None]
+    if not args:
+      return None
+    if len(args) == 1:
+      return args[0]
+    return max(*args)
+
+  @staticmethod
+  def _min(*args):
+    args = [a for a in args if a is not None]
+    if not args:
+      return None
+    if len(args) == 1:
+      return args[0]
+    return min(*args)
+
   @classmethod
   def max(cls, items):
     """
     Element-wise maximum for item in items.
+    :param list[NumbersDict|int|float] items:
+    :rtype: NumbersDict
     """
-    if not items:
-      return None
+    assert items
     if len(items) == 1:
-      return items[0]
+      return NumbersDict(items[0])
     if len(items) == 2:
-      # max(x, None) == x, so this works.
-      return cls.bin_op(items[0], items[1], op=max, zero=None)
+      return cls.bin_op(items[0], items[1], op=cls._max, zero=None)
     return cls.max([items[0], cls.max(items[1:])])
 
   @classmethod
   def min(cls, items):
     """
     Element-wise minimum for item in items.
+    :param list[NumbersDict|int|float] items:
+    :rtype: NumbersDict
     """
-    if not items:
-      return None
+    assert items
     if len(items) == 1:
-      return items[0]
+      return NumbersDict(items[0])
     if len(items) == 2:
-      return cls.bin_op(items[0], items[1], op=min, zero=None)
+      return cls.bin_op(items[0], items[1], op=cls._min, zero=None)
     return cls.min([items[0], cls.min(items[1:])])
 
   @staticmethod
@@ -1315,7 +1410,7 @@ def get_temp_dir():
 class LockFile(object):
   def __init__(self, directory, name="lock_file", lock_timeout=1 * 60 * 60):
     """
-    :param str directory: 
+    :param str directory:
     :param int|float lock_timeout: in seconds
     """
     self.directory = directory
@@ -1388,7 +1483,7 @@ class LockFile(object):
 
 def str_is_number(s):
   """
-  :param str s: e.g. "1", ".3" or "x" 
+  :param str s: e.g. "1", ".3" or "x"
   :return: whether s can be casted to float or int
   :rtype: bool
   """
@@ -1410,9 +1505,9 @@ def dict_zip(keys, values):
 
 
 def parse_ld_conf_file(fn):
-  """  
+  """
   Via https://github.com/albertz/system-tools/blob/master/bin/find-lib-in-path.py.
-  :param str fn: e.g. "/etc/ld.so.conf" 
+  :param str fn: e.g. "/etc/ld.so.conf"
   :return: list of paths for libs
   :rtype: list[str]
   """
@@ -1439,11 +1534,11 @@ def get_ld_paths():
   Short version, not specific to an executable, in this order:
   - LD_LIBRARY_PATH
   - /etc/ld.so.cache (instead we will parse /etc/ld.so.conf)
-  - /lib, /usr/lib (or maybe /lib64, /usr/lib64)  
+  - /lib, /usr/lib (or maybe /lib64, /usr/lib64)
   Via https://github.com/albertz/system-tools/blob/master/bin/find-lib-in-path.py.
-  
+
   :rtype: list[str]
-  :return: list of paths to search for libs (*.so files) 
+  :return: list of paths to search for libs (*.so files)
   """
   paths = []
   if "LD_LIBRARY_PATH" in os.environ:
@@ -1482,3 +1577,27 @@ def try_and_ignore_exception(f):
   except Exception as exc:
     print("try_and_ignore_exception: %r failed: %s" % (f, exc))
     sys.excepthook(*sys.exc_info())
+
+
+def try_get_caller_name(depth=1, fallback=None):
+  """
+  :param int depth:
+  :param str|None fallback: this is returned if we fail for some reason
+  :rtype: str|None
+  :return: caller function name. this is just for debugging
+  """
+  try:
+    frame = sys._getframe(depth + 1)  # one more to count ourselves
+    return frame.f_code.co_name
+  except Exception:
+    return fallback
+
+
+def camel_case_to_snake_case(name):
+  """
+  :param str name: e.g. "CamelCase"
+  :return: e.g. "camel_case"
+  :rtype: str
+  """
+  s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
+  return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()

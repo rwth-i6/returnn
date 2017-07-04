@@ -2,15 +2,16 @@
 import numpy
 from theano import tensor as T
 import theano
-from NetworkHiddenLayer import HiddenLayer
+from NetworkHiddenLayer import HiddenLayer, CAlignmentLayer
 from NetworkBaseLayer import Container, Layer
 from ActivationFunctions import strtoact
 from math import sqrt
 from OpLSTM import LSTMOpInstance
+from OpLSTM import LSTMSOpInstance
 from OpBLSTM import BLSTMOpInstance
 import RecurrentTransform
 import json
-
+from TheanoUtil import print_to_file
 
 class Unit(Container):
   """
@@ -195,7 +196,7 @@ class LSTMS(Unit):
       z_t += z_r
       for v in self.recurrent_transform.get_sorted_state_vars():
         other_outputs += [r_updates[v]]
-    maxatt = T.max(att_p, axis=-1).repeat(z_t.shape[1]).reshape((z_t.shape[0],z_t.shape[1]))#.dimshuffle(1,0)
+    maxatt = att_p.repeat(z_t.shape[1]).reshape((z_t.shape[0],z_t.shape[1]))#.dimshuffle(1,0)
     #maxatt = theano.printing.Print('maxatt',attrs=['__str__','shape'])(maxatt)
     z_t = T.switch(maxatt>0,z_t,z_t + T.dot(y_p, self.W_re))
     #z_t += T.dot(y_p, self.W_re)
@@ -203,7 +204,7 @@ class LSTMS(Unit):
 
     partition = z_t.shape[1] // 4
     ingate = T.nnet.sigmoid(z_t[:,:partition])
-    forgetgate = ((T.nnet.sigmoid(z_t[:,partition:2*partition])).T * (1.-T.max(att_p,axis=-1))).T
+    forgetgate = ((T.nnet.sigmoid(z_t[:,partition:2*partition])).T * (1.-att_p)).T
     outgate = T.nnet.sigmoid(z_t[:,2*partition:3*partition])
     input = T.tanh(z_t[:,3*partition:4*partition])
     #c_t = ((forgetgate * c_p + ingate * input).T * (1.-T.max(att_p,axis=-1))).T
@@ -363,6 +364,17 @@ class LSTMP(Unit):
     result = LSTMOpInstance(z[::-(2 * go_backwards - 1)], W_re, outputs_info[1], i[::-(2 * go_backwards - 1)])
     return [ result[0], result[2].dimshuffle('x',0,1) ]
 
+class LSTMPS(Unit):
+  """
+  Very fast custom LSTM implementation for segment encoding
+  """
+  def __init__(self, n_units, **kwargs):
+    super(LSTMPS, self).__init__(n_units, n_units * 4, n_units, n_units * 4, 2)
+
+  def scan_seg(self, x, z, non_sequences, i, att, outputs_info, W_re, W_in, b, go_backwards = False, truncate_gradient = -1):
+    z = T.inc_subtensor(z[-1 if go_backwards else 0], T.dot(outputs_info[0],W_re))
+    result = LSTMSOpInstance(z[::-(2 * go_backwards - 1)], W_re, outputs_info[1], i[::-(2 * go_backwards - 1)], att)
+    return [ result[0], result[2].dimshuffle('x',0,1) ]
 
 class LSTMB(Unit):
   """
@@ -495,7 +507,6 @@ class RecurrentUnitLayer(Layer):
                attention_nbest = 0,
                attention_store = False,
                attention_smooth = False,
-               attention_align = False,
                attention_glimpse = 1,
                attention_filters = 1,
                attention_accumulator = 'sum',
@@ -505,6 +516,7 @@ class RecurrentUnitLayer(Layer):
                attention_ndec = 1,
                attention_memory = 0,
                base = None,
+               aligner = None,
                lm = False,
                force_lm = False,
                droplm = 1.0,
@@ -512,6 +524,8 @@ class RecurrentUnitLayer(Layer):
                bias_random_init_forget_shift=0.0,
                copy_weights_from_base=False,
                segment_input=False,
+               join_states=False,
+               sample_segment=None,
                **kwargs):
     """
     :param n_out: number of cells
@@ -557,7 +571,10 @@ class RecurrentUnitLayer(Layer):
     elif unit in ("lstmc", "lstmp") and not is_using_gpu():
       unit = "lstme"
     if segment_input:
-      unit = "lstms"
+      if is_using_gpu():
+        unit = "lstmps"
+      else:
+        unit = "lstms"
     if n_out is None:
       assert encoder
       n_out = sum([enc.attrs['n_out'] for enc in encoder])
@@ -597,7 +614,6 @@ class RecurrentUnitLayer(Layer):
     self.set_attr('attention_store', attention_store)
     self.set_attr('attention_smooth', attention_smooth)
     self.set_attr('attention_momentum', attention_momentum.encode('utf8'))
-    self.set_attr('attention_align', attention_align)
     self.set_attr('attention_glimpse', attention_glimpse)
     self.set_attr('attention_filters', attention_filters)
     self.set_attr('attention_lm', attention_lm)
@@ -609,14 +625,22 @@ class RecurrentUnitLayer(Layer):
     self.set_attr('n_dec', n_dec)
     self.set_attr('segment_input', segment_input)
     if segment_input:
-      #inv_att = self.sources[0].attention.dimshuffle(2, 1, 0)
-      if isinstance(self.sources[0],RecurrentUnitLayer):
-        self.inv_att = self.sources[0].inv_att
+      if not self.eval_flag:
+      #if self.eval_flag:
+        if isinstance(self.sources[0],RecurrentUnitLayer):
+          self.inv_att = self.sources[0].inv_att #NBT
+        else:
+          if not join_states:
+            self.inv_att = self.sources[0].attention #NBT
+          else:
+            assert hasattr(self.sources[0], "nstates"), "source does not have number of states!"
+            ns = self.sources[0].nstates
+            self.inv_att = self.sources[0].attention[(ns-1)::ns]
+        inv_att = T.roll(self.inv_att.dimshuffle(2, 1, 0),1,axis=0)#TBN
+        inv_att = T.set_subtensor(inv_att[0],T.zeros((inv_att.shape[1],inv_att.shape[2])))
+        inv_att = T.max(inv_att,axis=-1)
       else:
-        self.inv_att = self.sources[0].attention
-      #inv_att = self.inv_att.dimshuffle(2, 1, 0)
-      inv_att = T.roll(self.inv_att.dimshuffle(2, 1, 0),1,axis=0)
-      inv_att = T.set_subtensor(inv_att[0],T.zeros((inv_att.shape[1],inv_att.shape[2])))
+        inv_att = T.zeros((self.sources[0].output.shape[0],self.sources[0].output.shape[1]))
     if encoder and hasattr(encoder[0],'act'):
       self.set_attr('encoder', ",".join([e.name for e in encoder]))
     if base:
@@ -755,6 +779,24 @@ class RecurrentUnitLayer(Layer):
       zz = T.exp(T.tanh(T.dot(self.xc, self.W_att_xc))) # TB1
       self.zc = T.dot(T.sum(self.xc * (zz / T.sum(zz, axis=0, keepdims=True)).repeat(self.xc.shape[2],axis=2), axis=0, keepdims=True), self.W_att_in)
       recurrent_transform = 'none'
+    elif recurrent_transform == 'attention_align':
+      max_skip = base[0].attrs['max_skip']
+      values = numpy.zeros((max_skip,), dtype=theano.config.floatX)
+      self.T_b = self.add_param(self.shared(value=values, borrow=True, name="T_b"), name="T_b")
+      l = sqrt(6.) / sqrt(self.attrs['n_out'] + max_skip)
+      values = numpy.asarray(self.rng.uniform(
+        low=-l, high=l, size=(self.attrs['n_out'], max_skip)), dtype=theano.config.floatX)
+      self.T_W = self.add_param(self.shared(value=values, borrow=True, name="T_W"), name="T_W")
+      y_t = T.dot(self.base[0].attention, T.arange(self.base[0].output.shape[0], dtype='float32'))  # NB
+      y_t = T.concatenate([T.zeros_like(y_t[:1]), y_t], axis=0)  # (N+1)B
+      y_t = y_t[1:] - y_t[:-1]  # NB
+      self.y_t = y_t # T.clip(y_t,numpy.float32(0),numpy.float32(max_skip - 1))
+
+      self.y_t = T.cast(self.base[0].backtrace,'float32')
+    elif recurrent_transform == 'attention_segment':
+      assert base[0].inv_att, "Segment-wise attention requires attention points!"
+      self.create_seg_wise_encoder_output(base[0].inv_att.argmax(axis=2), aligner=aligner)
+
     recurrent_transform_inst = RecurrentTransform.transform_classes[recurrent_transform](layer=self)
     assert isinstance(recurrent_transform_inst, RecurrentTransform.RecurrentTransformBase)
     unit.recurrent_transform = recurrent_transform_inst
@@ -765,7 +807,12 @@ class RecurrentUnitLayer(Layer):
       sequences = z
       sources = self.sources
       if encoder:
-        if hasattr(encoder[0],'act'):
+        if recurrent_transform == "attention_segment":
+          if hasattr(encoder[0],'act'):
+            seg_pts_first = (self.base[0].inv_att.argmax(axis=2) + (T.arange(self.base[0].inv_att.shape[1]) * self.base[0].inv_att.shape[2]))[0] #B (first alignment points from all the batches)
+            outputs_info = [T.concatenate([e.act[i][-1] for e in encoder], axis=1) for i in range(unit.n_act)]
+            outputs_info[0] = encoder[0].act[0].dimshuffle(1,0,2).reshape((encoder[0].act[0].shape[0]*encoder[0].act[0].shape[1],encoder[0].act[0].shape[2]))[seg_pts_first]
+        elif hasattr(encoder[0],'act'):
           outputs_info = [ T.concatenate([e.act[i][-1] for e in encoder], axis=1) for i in range(unit.n_act) ]
         else:
           outputs_info = [ T.concatenate([e[i] for e in encoder], axis=1) for i in range(unit.n_act) ]
@@ -835,16 +882,66 @@ class RecurrentUnitLayer(Layer):
         last = vec.dimshuffle(1, 'x', 0).repeat(self.index.shape[1], axis=1)
         self.attention[i] = T.concatenate([self.attention[i][1:],last],axis=0)[::direction]
 
-    if self.attrs['attention_align']:
-      bp = [ self.aux[i] for i,v in enumerate(sorted(unit.recurrent_transform.state_vars.keys())) if v.startswith('K_') ]
-      def backtrace(k,i_p):
-        return i_p - k[i_p,T.arange(k.shape[1],dtype='int32')]
-      self.alignment = []
-      for K in bp: # K: NTB
-        aln, _ = theano.scan(backtrace, sequences=[T.cast(K,'int32').dimshuffle(1,0,2)],
-                             outputs_info=[T.cast(self.index.shape[0] - 1,'int32') + T.zeros((K.shape[2],),'int32')])
-        aln = theano.printing.Print("aln")(aln)
-        self.alignment.append(aln) # TB
+    self.cost_val = numpy.float32(0)
+    if recurrent_transform == 'attention_align':
+      back = T.ceil(self.aux[sorted(unit.recurrent_transform.state_vars.keys()).index('t')])
+      def make_output(base, yout, trace, length):
+        length = T.cast(length, 'int32')
+        idx = T.cast(trace[:length][::-1],'int32')
+        x_out = T.concatenate([base[idx],T.zeros((self.index.shape[0] + 1 - length, base.shape[1]), 'float32')],axis=0)
+        y_out = T.concatenate([yout[idx,T.arange(length)],T.zeros((self.index.shape[0] + 1 - length, ), 'float32')],axis=0)
+        return x_out, y_out
+
+      output, _ = theano.map(make_output,
+                             sequences = [base[0].output.dimshuffle(1,0,2),
+                                          self.y_t.dimshuffle(1,2,0),
+                                          back.dimshuffle(1,0),
+                                          T.sum(self.index,axis=0,dtype='float32')])
+      self.attrs['n_out'] = base[0].attrs['n_out']
+      self.params.update(unit.params)
+      self.output = output[0].dimshuffle(1,0,2)[:-1]
+
+      z = T.dot(self.act[0], self.T_W)[:-1] + self.T_b
+      z = z.reshape((z.shape[0] * z.shape[1], z.shape[2]))
+      idx = (self.index[1:].flatten() > 0).nonzero()
+      idy = (self.index[1:][::-1].flatten() > 0).nonzero()
+      y_out = T.cast(output[1],'int32').dimshuffle(1, 0)[:-1].flatten()
+      nll, _ = T.nnet.crossentropy_softmax_1hot(x=z[idx], y_idx=y_out[idy])
+      self.cost_val = T.sum(nll)
+      recog = T.argmax(z[idx], axis=1)
+      real = y_out[idy]
+      self.errors = lambda: T.sum(T.neq(recog, real))
+
+      return
+
+      back += T.arange(self.index.shape[1], dtype='float32') * T.cast(self.base[0].index.shape[0], 'float32')
+      idx = (self.index[:-1].flatten() > 0).nonzero()
+      idx = T.cast(back[::-1].flatten()[idx],'int32')
+      x_out = base[0].output
+      #x_out = x_out.dimshuffle(1,0,2).reshape((x_out.shape[0] * x_out.shape[1], x_out.shape[2]))[idx]
+      #x_out = x_out.reshape((self.index.shape[1], self.index.shape[0] - 1, x_out.shape[1])).dimshuffle(1,0,2)
+      x_out = x_out.reshape((x_out.shape[0] * x_out.shape[1], x_out.shape[2]))[idx]
+      x_out = x_out.reshape((self.index.shape[0] - 1, self.index.shape[1], x_out.shape[1]))
+      self.output = T.concatenate([x_out, base[0].output[1:]],axis=0)
+      self.attrs['n_out'] = base[0].attrs['n_out']
+      self.params.update(unit.params)
+      return
+
+
+      skips = T.dot(T.nnet.softmax(z), T.arange(z.shape[1], dtype='float32')).reshape(self.index[1:].shape)
+      shift = T.arange(self.index.shape[1], dtype='float32') * T.cast(self.base[0].index.shape[0], 'float32')
+      skips = T.concatenate([T.zeros_like(self.y_t[:1]),self.y_t[:-1]],axis=0)
+      idx = shift + T.cumsum(skips, axis=0)
+      idx = T.cast(idx[:-1].flatten(),'int32')
+      #idx = (idx.flatten() > 0).nonzero()
+      #idx = base[0].attention.flatten()
+      x_out = base[0].output[::-1]
+      x_out = x_out.reshape((x_out.shape[0] * x_out.shape[1], x_out.shape[2]))[idx]
+      x_out = x_out.reshape((self.index.shape[0], self.index.shape[1], x_out.shape[1]))
+      self.output = T.concatenate([base[0].output[-1:], x_out], axis=0)[::-1]
+      self.attrs['n_out'] = base[0].attrs['n_out']
+      self.params.update(unit.params)
+      return
 
     if recurrent_transform == 'batch_norm':
       self.params['sample_mean_batch_norm'].custom_update = T.dot(T.mean(self.act[0],axis=[0,1]),self.W_re)
@@ -858,9 +955,34 @@ class RecurrentUnitLayer(Layer):
     :rtype: (theano.Variable | None, dict[theano.Variable,theano.Variable] | None)
     :returns: cost, known_grads
     """
+    cost_val = self.cost_val
     if self.unit.recurrent_transform:
-      return self.unit.recurrent_transform.cost(), None
-    return None, None
+      transform_cost = self.unit.recurrent_transform.cost()
+      if transform_cost is not None:
+        cost_val += transform_cost
+    return cost_val, {}
+
+  def create_seg_wise_encoder_output(self, att, aligner=None):
+    assert aligner,"please provide an inverted aligner!"
+    t = self.base[0].output.shape[0]
+    b = self.base[0].output.shape[1]
+    att_with_first_index = T.concatenate([T.zeros((1,att.shape[1]))-numpy.float32(1),att],axis=0) #(N+1)B
+    max_diff = T.cast(T.extra_ops.diff(att_with_first_index,axis=0).flatten().sort()[-1],'int32')
+    reduced_index = aligner.reduced_index.repeat(max_diff).reshape((aligner.reduced_index.shape[0], aligner.reduced_index.shape[1],max_diff)) #NB(max_diff)
+    att_wo_last_ind = att_with_first_index[:-1] #NB
+    att_wo_last_ind +=numpy.int32(1)
+    att_rep = att_wo_last_ind.repeat(max_diff).reshape((att_wo_last_ind.shape[0],att_wo_last_ind.shape[1],max_diff))#NB(max_diff)
+    att_rep = T.switch(reduced_index>0, att_rep + T.arange(max_diff),T.zeros((1,),'float32')-numpy.float32(1))
+    att_rep = att_rep.dimshuffle(0,2,1) #N(max_diff)B
+    reduced_index = reduced_index.dimshuffle(0,2,1) #N(max_diff)B
+    att_rep = T.switch(reduced_index > 0,att_rep + (T.arange(b) * t),T.zeros((1,),'float32')-numpy.float32(1))
+    att_rep = att_rep.clip(0,(t*b-1))
+    diff_arr = att_with_first_index[1:]-att_with_first_index[:-1]
+    diff_arr = diff_arr.clip(0,max_diff) - numpy.float32(1)#NB
+    mask = diff_arr.dimshuffle(0,'x',1).repeat(max_diff,axis=1) - T.arange(max_diff).dimshuffle('x',0,'x')
+    ind = T.cast(T.where(T.lt(mask,numpy.float32(0)),T.zeros((1,),'float32'),numpy.float32(1)),'int8')
+    self.rec_transform_enc = att_rep
+    self.rec_transform_index = ind
 
 
 class RecurrentUpsampleLayer(RecurrentUnitLayer):

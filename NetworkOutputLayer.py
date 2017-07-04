@@ -10,11 +10,11 @@ from TwoStateHMMOp import TwoStateHMMOp
 from OpNumpyAlign import NumpyAlignOp
 from NativeOp import FastBaumWelchOp
 from NetworkBaseLayer import Layer
+from NetworkHiddenLayer import CAlignmentLayer
 from SprintErrorSignals import sprint_loss_and_error_signal, SprintAlignmentAutomataOp
-from TheanoUtil import time_batch_make_flat, grad_discard_out_of_bound
+from TheanoUtil import time_batch_make_flat, grad_discard_out_of_bound, DumpOp
 from Util import as_str
 from Log import log
-
 
 class OutputLayer(Layer):
   layer_class = "softmax"
@@ -115,21 +115,27 @@ class OutputLayer(Layer):
       self.y = y
       self.norm = numpy.float32(1)
     else:
-      self.norm = T.sum(self.index, dtype='float32') / T.sum(copy_output.index, dtype='float32')
       if hasattr(copy_output, 'index_out'):
+        self.norm = T.sum(self.index, dtype='float32') / T.sum(copy_output.index_out, dtype='float32')
         self.index = copy_output.index_out
       else:
+        self.norm = T.sum(self.index, dtype='float32') / T.sum(copy_output.index, dtype='float32')
         self.index = copy_output.index
       self.y = y = copy_output.y_out
+      self.copy_output = copy_output
     if y is None:
       self.y_data_flat = None
     elif isinstance(y, T.Variable):
       if reshape_target:
           if copy_output:
-            ind = copy_output.reduced_index.T.flatten()
-            self.y_data_flat = y.T.flatten()
-            self.y_data_flat = self.y_data_flat[(ind > 0).nonzero()]
-            self.index = T.ones((self.z.shape[0], self.z.shape[1]), 'int8')
+            if isinstance(copy_output,CAlignmentLayer):
+              ind = copy_output.reduced_index.T.flatten()
+              self.y_data_flat = y.T.flatten()
+              self.y_data_flat = self.y_data_flat[(ind > 0).nonzero()]
+              self.index = T.ones((self.z.shape[0], self.z.shape[1]), 'int8')
+            else:
+              self.y_data_flat = time_batch_make_flat(y)
+              #self.y_data_flat = theano.printing.Print('ydataflat',attrs=['shape'])(self.y_data_flat)
           else:
             src_index = self.sources[0].index
             self.index = src_index
@@ -151,7 +157,6 @@ class OutputLayer(Layer):
       out_arg, out_max = max_and_argmax_sparse(s0, s1, weight, mask, out_arg, out_max)
       assert out_arg.ndim == 2
       self.y_data_flat = out_arg.astype("int32")
-
     self.target_index = self.index
     if time_limit == 'inf':
       num = T.cast(T.sum(self.index), 'float32')
@@ -409,7 +414,10 @@ class FramewiseOutputLayer(OutputLayer):
         else:
           nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y_data_flat[self.i])
       else:
-        nll = -T.dot(T.log(T.clip(self.p_y_given_x_flat[self.i], 1.e-38, 1.e20)), self.y_data_flat[self.i].T)
+        target  = self.y_data_flat[self.i]
+        output = T.clip(self.p_y_given_x_flat[self.i], 1.e-38, 1.e20)
+        nll = -T.log(output) * target
+        self.norm *= self.p_y_given_x.shape[1] * T.inv(T.sum(self.index))
       if self.attrs.get("auto_fix_target_length"):
         return self.norm * theano.ifelse.ifelse(T.eq(self.index.sum(),0), 0.0, T.sum(nll)), known_grads
       else:

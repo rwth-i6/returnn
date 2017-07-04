@@ -1,7 +1,12 @@
 #!/usr/bin/env python2.7
 
 """
+Main entry point
+================
+
 This is the main entry point. You can execute this file.
+See :func:`rnn.initConfig` for some arguments, or just run ``./rnn.py --help``.
+See :ref:`tech_overview` for a technical overview.
 """
 
 from __future__ import print_function
@@ -14,22 +19,24 @@ __maintainer__ = "Patrick Doetsch"
 __email__ = "doetsch@i6.informatik.rwth-aachen.de"
 
 
-import re
 import os
 import sys
 import time
-import json
 import numpy
 from optparse import OptionParser
 from Log import log
-from Device import Device, get_num_devices, TheanoFlags, getDevicesInitArgs
+from Device import Device, TheanoFlags, getDevicesInitArgs
 from Config import Config
 from Engine import Engine
-from Dataset import Dataset, init_dataset, init_dataset_via_str, get_dataset_class
+from Dataset import Dataset, init_dataset, init_dataset_via_str
 from HDFDataset import HDFDataset
 from Debug import initIPythonKernel, initBetterExchook, initFaulthandler, initCudaNotInMainProcCheck
-from Util import initThreadJoinHack, custom_exec, describe_crnn_version, describe_theano_version, \
+from Util import initThreadJoinHack, describe_crnn_version, describe_theano_version, \
   describe_tensorflow_version, BackendEngine, get_tensorflow_version_tuple
+try:
+  import Server
+except ImportError:
+  Server = None
 
 
 config = None; """ :type: Config """
@@ -38,6 +45,7 @@ train_data = None; """ :type: Dataset """
 dev_data = None; """ :type: Dataset """
 eval_data = None; """ :type: Dataset """
 quit = False
+server = None; """:type: Server"""
 
 
 def initConfig(configFilename=None, commandLineOptions=()):
@@ -103,6 +111,11 @@ def initConfig(configFilename=None, commandLineOptions=()):
   if config.bool("EnableAutoNumpySharedMemPickling", False):
     import TaskSystem
     TaskSystem.SharedMemNumpyConfig["enabled"] = True
+  #Server default options
+  if config.value('task', 'train') == 'server':
+    config.set('num_inputs', 2)
+    config.set('num_outputs', 1)
+    #config.set('network', [{'out': {'loss': 'ce', 'class': 'softmax', 'target': 'classes'}}])
 
 
 def initLog():
@@ -188,7 +201,7 @@ def load_data(config, cache_byte_size, files_config_key, **kwargs):
   :param Config config:
   :param int cache_byte_size:
   :param str files_config_key: such as "train" or "dev"
-  :param dict[str] kwargs: passed on to init_dataset() or init_dataset_via_str()
+  :param kwargs: passed on to init_dataset() or init_dataset_via_str()
   :rtype: (Dataset,int)
   :returns the dataset, and the cache byte size left over if we cache the whole dataset.
   """
@@ -225,10 +238,10 @@ def initData():
   elif config.value('chunking', "0") == "1": # MLP mode
     chunking = "1"
   global train_data, dev_data, eval_data
-  dev_data, extra_cache_bytes_dev = load_data(config, cache_byte_sizes[1], 'dev', chunking=chunking,
-                                         seq_ordering="sorted", shuffle_frames_of_nseqs=0)
-  eval_data, extra_cache_bytes_eval = load_data(config, cache_byte_sizes[2], 'eval', chunking=chunking,
-                                           seq_ordering="sorted", shuffle_frames_of_nseqs=0)
+  dev_data, extra_cache_bytes_dev = load_data(
+    config, cache_byte_sizes[1], 'dev', chunking=chunking, seq_ordering="sorted", shuffle_frames_of_nseqs=0)
+  eval_data, extra_cache_bytes_eval = load_data(
+    config, cache_byte_sizes[2], 'eval', chunking=chunking, seq_ordering="sorted", shuffle_frames_of_nseqs=0)
   train_cache_bytes = cache_byte_sizes[0]
   if train_cache_bytes >= 0:
     # Maybe we have left over cache from dev/eval if dev/eval have cached everything.
@@ -257,9 +270,9 @@ def printTaskProperties(devices=None):
     print("Devices:", file=log.v3)
     for device in devices:
       print("  %s: %s" % (device.name, device.device_name), end=' ', file=log.v3)
-      print("(units:", device.get_device_shaders(), \
-                       "clock: %.02fGhz" % (device.get_device_clock() / 1024.0), \
-                       "memory: %.01f" % (device.get_device_memory() / float(1024 * 1024 * 1024)) + "GB)", end=' ', file=log.v3)
+      print("(units:", device.get_device_shaders(),
+            "clock: %.02fGhz" % (device.get_device_clock() / 1024.0),
+            "memory: %.01f" % (device.get_device_memory() / float(1024 * 1024 * 1024)) + "GB)", end=' ', file=log.v3)
       print("working on", device.num_batches, "batches" if device.num_batches > 1 else "batch", end=' ', file=log.v3)
       print("(update on device)" if device.update_specs['update_rule'] != 'none' else "(update on host)", file=log.v3)
 
@@ -333,7 +346,11 @@ def init(configFilename=None, commandLineOptions=(), config_updates=None, extra_
   if needData():
     initData()
   printTaskProperties(devices)
-  initEngine(devices)
+  if config.value('task', 'train') == 'server':
+    server = Server.Server(config)
+  else:
+    initEngine(devices)
+
 
 
 def finalize():
@@ -379,6 +396,15 @@ def executeMainTask():
     engine.forward_to_hdf(
       data=eval_data, output_file=output_file, combine_labels=combine_labels,
       batch_size=config.int('forward_batch_size', 0))
+  elif task == "search":
+    engine.use_search_flag = True
+    engine.init_network_from_config(config)
+    if config.value("search_data", "eval") in ["train", "dev", "eval"]:
+      data = {"train": train_data, "dev": dev_data, "eval": eval_data}[config.value("search_data", "eval")]
+      assert data, "set search_data"
+    else:
+      data = init_dataset(config.typed_value("search_data"))
+    engine.search(data, output_layer_name=config.value("search_output_layer", "output"))
   elif task == 'compute_priors':
     assert train_data is not None, 'train data for priors should be provided'
     engine.init_network_from_config(config)
@@ -416,6 +442,8 @@ def executeMainTask():
   elif task == "daemon":
     engine.init_network_from_config(config)
     engine.daemon(config)
+  elif task == "server":
+    print("Server Initiating")
   elif task == "nop":
     print("Task: No-operation", file=log.v1)
   else:

@@ -1,4 +1,5 @@
 
+import random
 from Util import NumbersDict
 
 
@@ -36,6 +37,10 @@ class BatchSeqCopyPart:
   def frame_length(self):
     return self.seq_end_frame - self.seq_start_frame
 
+  def __repr__(self):
+    keys = ("seq_idx", "seq_start_frame", "seq_end_frame", "batch_slice", "batch_frame_offset")
+    return "<BatchSeqCopyPart %s>" % " ".join(["%s=%r" % (k, getattr(self, k)) for k in keys])
+
 
 class Batch:
   """
@@ -48,7 +53,7 @@ class Batch:
     self.num_slices = 0
     # original data_shape = [0, 0], format (time,batch/slice)
     #          data_shape = [max_num_frames_per_slice, num_slices]
-    self.seqs = []; " :type: list[BatchSeqCopyPart] "
+    self.seqs = []  # type: list[BatchSeqCopyPart]
 
   def __repr__(self):
     return "<Batch start_seq:%r, #seqs:%i>" % (self.start_seq, len(self.seqs))
@@ -64,6 +69,9 @@ class Batch:
   def add_sequence_as_slice(self, seq_idx, seq_start_frame, length):
     """
     Adds one data-batch in an additional slice.
+
+    :param int seq_idx:
+    :param NumbersDict seq_start_frame:
     :param NumbersDict length: number of (time) frames
     """
     self.max_num_frames_per_slice, self.num_slices = self.try_sequence_as_slice(length)
@@ -77,6 +85,7 @@ class Batch:
     """
     Adds frames to all data-batches.
     Will add one data-batch if we don't have one yet.
+
     :param int seq_idx:
     :param NumbersDict|int seq_start_frame:
     :param NumbersDict length: number of (time) frames
@@ -93,6 +102,15 @@ class Batch:
                                    seq_end_frame=seq_start_frame + length,
                                    batch_slice=0,
                                    batch_frame_offset=batch_frame_offset)]
+
+  def init_with_one_full_sequence(self, seq_idx, dataset):
+    """
+    :param int seq_idx:
+    :param Dataset.Dataset dataset:
+    """
+    assert not self.seqs
+    start, end = dataset.get_start_end_frames_full_seq(seq_idx)
+    self.add_frames(seq_idx=seq_idx, seq_start_frame=start, length=end - start)
 
   def get_all_slices_num_frames(self):
     """
@@ -120,8 +138,6 @@ class Batch:
     if not self.seqs:
       return 0
     return self.end_seq - self.start_seq
-
-import random
 
 
 class BatchSetGenerator:

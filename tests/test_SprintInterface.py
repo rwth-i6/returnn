@@ -1,4 +1,6 @@
 
+from __future__ import print_function
+
 import sys
 sys.path += ["."]  # Python 3 hack
 
@@ -10,6 +12,7 @@ from tempfile import mkdtemp
 from Engine import Engine
 from Config import Config
 from Log import log
+from Network import LayerNetwork
 import shutil
 import numpy
 import better_exchook
@@ -85,6 +88,10 @@ def test_forward():
   SprintAPI.init(inputDim=inputDim, outputDim=outputDim,
                  config="action:forward,configfile:config,epoch:1",
                  targetMode="forward-only")
+  assert isinstance(SprintAPI.engine, Engine)
+  assert isinstance(SprintAPI.engine.network, LayerNetwork)
+  print("used data keys via net:", SprintAPI.engine.network.get_used_data_keys())
+  print("used data keys via dev:", SprintAPI.engine.devices[0].used_data_keys)
 
   features = numpy.array([[0.1, 0.2], [0.2, 0.3], [0.3, 0.4], [0.4, 0.5]])
   seq_len = features.shape[0]

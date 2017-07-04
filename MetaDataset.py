@@ -225,7 +225,7 @@ class ClusteringDataset(CachedDataset2):
     from EngineBatch import Batch
     batch = Batch()
     last_seq_idx = None
-    for seq_idx, t_start, t_end in self._iterate_seqs(chunk_size=chunk_size, chunk_step=chunk_step, used_data_keys=used_data_keys):
+    for seq_idx, t_start, t_end in self.iterate_seqs(chunk_size=chunk_size, chunk_step=chunk_step, used_data_keys=used_data_keys):
       if self.single_cluster:
         if last_seq_idx is not None and last_seq_idx != seq_idx:
           last_seq_name = self.get_tag(last_seq_idx)

@@ -68,6 +68,7 @@ Ndarray* Ndarray_Copy(const Ndarray* self) {
 // https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/matmul_op.cc
 
 // https://github.com/tensorflow/tensorflow/issues/6602
+// TODO: Fixed now, check if it works, maybe we can remove this workaround.
 #define TF_issue_6602_workaround 1
 
 #if TF_issue_6602_workaround

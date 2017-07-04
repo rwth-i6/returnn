@@ -86,23 +86,6 @@ def test_compare_layer():
     assert_equal(v[0], True)
 
 
-def test_rec_subnet_with_choice():
-  with tf.Session():
-    config = Config()
-    config.update({
-      "num_outputs": 3,
-      "num_inputs": 4,
-      "network": {
-        "output": {"class": "rec", "unit": {
-          "prob": {"class": "softmax", "from": ["prev:output"], "loss": "ce", "target": "classes"},
-          "output": {"class": "choice", "beam_size": 4, "from": ["prob"], "target": "classes", "initial_output": 0}
-        }},
-      }
-    })
-    network = TFNetwork(config=config, train_flag=True)
-    network.construct_from_dict(config.typed_dict["network"])
-
-
 def test_layer_base_get_out_data_from_opts():
   with tf.Session():
     config = Config()
@@ -127,3 +110,26 @@ def test_layer_base_get_out_data_from_opts():
     assert out.shape == target_data.shape_dense
     assert not out.sparse
     assert out.dtype == "float32"
+
+
+def test_SplitDimsLayer_resolve_dims():
+  assert_equal(SplitDimsLayer._resolve_dims(old_dim=3 * 5, new_dims=(3, -1)), (3, 5))
+  assert_equal(SplitDimsLayer._resolve_dims(old_dim=3 * 5, new_dims=(3, 5)), (3, 5))
+  assert_equal(SplitDimsLayer._resolve_dims(old_dim=3 * 5, new_dims=(5, -1)), (5, 3))
+  assert_equal(SplitDimsLayer._resolve_dims(old_dim=2 * 3 * 5, new_dims=(-1, 3, 5)), (2, 3, 5))
+  assert_equal(SplitDimsLayer._resolve_dims(old_dim=2 * 3 * 5, new_dims=(2, -1, 5)), (2, 3, 5))
+  assert_equal(SplitDimsLayer._resolve_dims(old_dim=2 * 3 * 5, new_dims=(2, 3, -1)), (2, 3, 5))
+  assert_equal(SplitDimsLayer._resolve_dims(old_dim=2 * 3 * 5, new_dims=(2, 3, -1, 1)), (2, 3, 5, 1))
+
+
+def test_ConvLayer_get_valid_out_dim():
+  assert_equal(ConvLayer.calc_out_dim(in_dim=10, stride=1, filter_size=2, padding="same"), 10)
+  assert_equal(ConvLayer.calc_out_dim(in_dim=10, stride=1, filter_size=3, padding="same"), 10)
+  assert_equal(ConvLayer.calc_out_dim(in_dim=10, stride=1, filter_size=2, padding="valid"), 9)
+  assert_equal(ConvLayer.calc_out_dim(in_dim=10, stride=1, filter_size=3, padding="valid"), 8)
+  assert_equal(ConvLayer.calc_out_dim(in_dim=10, stride=2, filter_size=2, padding="valid"), 5)
+  assert_equal(ConvLayer.calc_out_dim(in_dim=10, stride=3, filter_size=2, padding="valid"), 3)
+  assert_equal(ConvLayer.calc_out_dim(in_dim=10, stride=3, filter_size=1, padding="valid"), 4)
+  assert_equal(ConvLayer.calc_out_dim(in_dim=10, stride=3, filter_size=2, padding="same"), 4)
+  assert_equal(ConvLayer.calc_out_dim(in_dim=41, stride=1, filter_size=2, padding="valid"), 40)
+  assert_equal(ConvLayer.calc_out_dim(in_dim=40, stride=2, filter_size=2, padding="valid"), 20)

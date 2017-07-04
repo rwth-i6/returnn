@@ -133,6 +133,12 @@ def context_batched(source, window):
   final_concat_dim = final_sub.reshape((n_time, n_batch, window * n_dim))
   return final_concat_dim
 
+def window_batch_timewise(t,b,w,full_index):
+  for i in range(w):
+    full_index = T.set_subtensor(full_index[i], T.roll(full_index[i], i))
+    if i > 0:
+      full_index = T.inc_subtensor(full_index[i], T.where(full_index[i] > 0, i * t * b - i, 0))
+  return full_index
 
 def slice_for_axis(axis, s):
   return (slice(None),) * axis + (s,)
@@ -690,7 +696,7 @@ class DumpOp(theano.Op):
     dout = T.as_tensor_variable(dout)
     if self.with_grad:
       # Note: This assumes that there will be only one such gradient.
-      dout = DumpOp(filename=self.filename + ".grad", parent=self, container=self.container)(dout)
+      dout = DumpOp(filename=self.filename + ".grad", container=self.container, parent=self, step=self.step)(dout)
     return [dout]
 
   def dump(self, x):

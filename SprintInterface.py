@@ -40,14 +40,15 @@ startTime = None
 isInitialized = False
 isTrainThreadStarted = False
 isExited = False
-InputDim = None
-OutputDim = None
+InputDim = None  # type: int
+OutputDim = None  # type: int
+MaxSegmentLength = 1
 TargetMode = None
 Task = "train"
 
 config = None; """ :type: rnn.Config """
 sprintDataset = None; """ :type: SprintDatasetBase """
-engine = None; """ :type: Engine | TFEngine.Engine """
+engine = None; """ :type: TFEngine.Engine|Engine """
 
 
 # Start Sprint PythonSegmentOrder interface. {
@@ -138,9 +139,11 @@ def init(inputDim, outputDim, config, targetMode, **kwargs):
   print("config:", config)
   print("targetMode:", targetMode)
   print("other args:", kwargs)
-  global InputDim, OutputDim
+  global InputDim, OutputDim, MaxSegmentLength
   InputDim = inputDim
   OutputDim = outputDim
+
+  MaxSegmentLength = kwargs.get('maxSegmentLength', MaxSegmentLength)
 
   config = config.split(",")
   config = {key: value for (key, value) in [s.split(":", 1) for s in config if s]}
@@ -209,7 +212,7 @@ def feedInput(features, weights=None, segmentName=None):
     posteriors = forward(segmentName, features)
   else:
     assert False, "invalid task: %r" % Task
-  assert posteriors.shape == (OutputDim, features.shape[1])
+  assert posteriors.shape == (OutputDim * MaxSegmentLength, features.shape[1])
   return posteriors
 
 
@@ -496,13 +499,12 @@ def train(segmentName, features, targets=None):
     # posteriors is in format (time,batch,emission)
     assert posteriors.shape[0] == T
     assert posteriors.shape[1] == 1
-    assert OutputDim == posteriors.shape[2]
-    #assert OutputDim == engine.network.n_out
+    assert OutputDim * MaxSegmentLength == posteriors.shape[2]
     assert len(posteriors.shape) == 3
     # reformat to Sprint expected format (emission,time)
     posteriors = posteriors[:,0,:]
     posteriors = posteriors.transpose()
-    assert posteriors.shape[0] == OutputDim
+    assert posteriors.shape[0] == OutputDim * MaxSegmentLength
     assert posteriors.shape[1] == T
     assert len(posteriors.shape) == 2
 
@@ -550,13 +552,13 @@ def forward(segmentName, features):
 
   # If we have a sequence training criterion, posteriors might be in format (time,seq|batch,emission).
   if posteriors.ndim == 3:
-    assert posteriors.shape == (T, 1, OutputDim)
+    assert posteriors.shape == (T, 1, OutputDim * MaxSegmentLength)
     posteriors = posteriors[:, 0]
   # Posteriors are in format (time,emission).
-  assert posteriors.shape == (T, OutputDim)
+  assert posteriors.shape == (T, OutputDim * MaxSegmentLength)
   # Reformat to Sprint expected format (emission,time).
   posteriors = posteriors.transpose()
-  assert posteriors.shape == (OutputDim, T)
+  assert posteriors.shape == (OutputDim * MaxSegmentLength, T)
   stats = (numpy.min(posteriors), numpy.max(posteriors), numpy.mean(posteriors), numpy.std(posteriors))
   print("posteriors min/max/mean/std:", stats, "time:", time.time() - start_time)
   if numpy.isinf(posteriors).any() or numpy.isnan(posteriors).any():
@@ -595,7 +597,7 @@ class Criterion(theano.Op):
     assert seq_lengths.ndim == 1  # vector of seqs lengths
     return theano.Apply(op=self, inputs=[posteriors, seq_lengths], outputs=[T.fvector(), posteriors.type()])
 
-  def perform(self, node, inputs, outputs):
+  def perform(self, node, inputs, output_storage, params=None):
     posteriors, seq_lengths = inputs
     nTimeFrames = posteriors.shape[0]
     seq_lengths = numpy.array([nTimeFrames])  # TODO: fix or so?
@@ -614,8 +616,8 @@ class Criterion(theano.Op):
     loss, errsig = self.error, self.errorSignal
     assert errsig.shape[0] == nTimeFrames
 
-    outputs[0][0] = loss
-    outputs[1][0] = errsig
+    output_storage[0][0] = loss
+    output_storage[1][0] = errsig
 
     print('avg frame loss for segments:', loss.sum() / seq_lengths.sum(), end=" ", file=log.v5)
     print('time-frames:', seq_lengths.sum(), file=log.v5)
@@ -640,6 +642,7 @@ def demo():
   errorSignal = numpy.load("output-error-signal.npy")  # dumped via dump.py
   finishError(error=error, errorSignal=errorSignal, naturalPairingType="softmax")
   exit()
+
 
 if __name__ == "__main__":
   Debug.debug_shell(user_ns=locals(), user_global_ns=globals())

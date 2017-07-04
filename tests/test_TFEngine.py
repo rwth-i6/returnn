@@ -52,12 +52,13 @@ def test_DataProvider():
   batch.add_frames(seq_idx=seq_idx, seq_start_frame=0, length=dataset.get_seq_length(seq_idx))
   batch_generator = iter([batch])
   batches = BatchSetGenerator(dataset, generator=batch_generator)
-  data_provider = DataProvider(
+  from TFDataPipeline import FeedDictDataProvider
+  data_provider = FeedDictDataProvider(
     tf_session=session, extern_data=extern_data,
     data_keys=["data", "classes"],
     dataset=dataset, batches=batches)
 
-  feed_dict = data_provider.get_feed_dict(previous_feed_dict=None, single_threaded=True)
+  feed_dict = data_provider.get_feed_dict(single_threaded=True)
   print(feed_dict)
   assert_is_instance(feed_dict, dict)
   assert extern_data.data["data"].placeholder in feed_dict
@@ -201,7 +202,7 @@ def test_engine_search():
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {
-      "output": {"class": "rec", "from": [], "max_seq_len": 10, "unit": {
+      "output": {"class": "rec", "from": [], "max_seq_len": 10, "target": "classes", "unit": {
         "prob": {"class": "softmax", "from": ["prev:output"], "loss": "ce", "target": "classes"},
         "output": {"class": "choice", "beam_size": 4, "from": ["prob"], "target": "classes", "initial_output": 0},
         "end": {"class": "compare", "from": ["output"], "value": 0}
@@ -210,6 +211,7 @@ def test_engine_search():
     }
   })
   engine = Engine(config=config)
+  # Normally init_network can be used. We only do init_train here to randomly initialize the network.
   engine.init_train_from_config(config=config, train_data=dataset, dev_data=None, eval_data=None)
   print("network:")
   pprint(engine.network.layers)
@@ -225,16 +227,74 @@ def test_engine_search():
   engine.finalize()
 
 
+def test_engine_search_attention():
+  from GeneratingDataset import DummyDataset
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 3
+  dataset = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  dataset.init_seq_order(epoch=1)
+  print("Hello search!")
+
+  config = Config()
+  config.update({
+    "model": "/tmp/model",
+    "batch_size": 5000,
+    "max_seqs": 2,
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": {
+      "encoder": {"class": "linear", "activation": "tanh", "n_out": 5},
+      "output": {"class": "rec", "from": [], "unit": {
+        'output': {'class': 'choice', 'target': 'classes', 'beam_size': 4, 'from': ["output_prob"]},
+        "end": {"class": "compare", "from": ["output"], "value": 0},
+        'orth_embed': {'class': 'linear', 'activation': None, 'from': ['output'], "n_out": 7},
+        "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["prev:c", "prev:orth_embed"], "n_out": 7},
+        "c_in": {"class": "linear", "activation": "tanh", "from": ["s", "prev:orth_embed"], "n_out": 5},
+        "c": {"class": "dot_attention", "from": ["c_in"], "base": "base:encoder", "base_ctx": "base:encoder"},
+        "output_prob": {"class": "softmax", "from": ["prev:s", "c"], "target": "classes", "loss": "ce"}
+      }, "target": "classes", "max_seq_len": 10},
+      "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance"}
+    }})
+  engine = Engine(config=config)
+  print("Init network...")
+  engine.start_epoch = 1
+  engine.use_dynamic_train_flag = False
+  engine.use_search_flag = True
+  engine.init_network_from_config(config)
+  print("network:")
+  pprint(engine.network.layers)
+  assert "output" in engine.network.layers
+  assert "decision" in engine.network.layers
+
+  print("Search...")
+  engine.search(dataset=dataset)
+  print("error keys:")
+  pprint(engine.network.error_by_layer)
+  assert engine.network.total_objective is not None
+  assert "decision" in engine.network.error_by_layer
+
+  engine.finalize()
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()
-    assert len(sys.argv) >= 2
-    for arg in sys.argv[1:]:
-      print("Executing: %s" % arg)
-      if arg in globals():
-        globals()[arg]()  # assume function and execute
-      else:
-        eval(arg)  # assume Python code and execute
+    if len(sys.argv) <= 1:
+      for k, v in sorted(globals().items()):
+        if k.startswith("test_"):
+          print("-" * 40)
+          print("Executing: %s" % k)
+          v()
+          print("-" * 40)
+    else:
+      assert len(sys.argv) >= 2
+      for arg in sys.argv[1:]:
+        print("Executing: %s" % arg)
+        if arg in globals():
+          globals()[arg]()  # assume function and execute
+        else:
+          eval(arg)  # assume Python code and execute
   finally:
     session.close()
     del session

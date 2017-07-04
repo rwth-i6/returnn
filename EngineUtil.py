@@ -1,8 +1,9 @@
 
+from __future__ import print_function
+
 import numpy
 from EngineBatch import Batch
 from Log import log
-from Util import NumbersDict
 
 
 def assign_dev_data(device, dataset, batches, load_seqs=True):
@@ -13,7 +14,8 @@ def assign_dev_data(device, dataset, batches, load_seqs=True):
   :returns successful and how much batch idx to advance.
   :rtype: (bool,int)
   """
-  shapes = dataset.shapes_for_batches(batches, data_keys=device.used_data_keys)
+  from Dataset import shapes_for_batches
+  shapes = shapes_for_batches(batches, data_keys=device.used_data_keys, dataset=dataset)
   if shapes is None:
     return False, len(batches)
   device.alloc_data(shapes=shapes, max_ctc_length=dataset.get_max_ctc_length())
@@ -28,8 +30,13 @@ def assign_dev_data(device, dataset, batches, load_seqs=True):
         q = seq.batch_slice + offset_slice
         l = seq.frame_length
         # input-data, input-index will also be set in this loop. That is data-key "data".
+        # targets are usually data-key "classes".
         for k in device.used_data_keys:
-          if l[k] == 0: continue
+          # device.used_data_keys are set by the train-net, but we will also get here during forward-only,
+          # e.g. via SprintInterface, where we don't have e.g. the "classes" data.
+          # In that case, l[k] should be None. In some earlier code, l[k] could also be 0 in that case.
+          if l[k] in [0, None]:
+            continue
           data = dataset.get_data_slice(seq.seq_idx, k, seq.seq_start_frame[k], seq.seq_end_frame[k])
           ls = data.shape[0]
           if "[sparse:" in k:
@@ -88,7 +95,7 @@ def assign_dev_data_single_seq(device, dataset, seq, load_seqs=True):
   :rtype: bool
   """
   batch = Batch()
-  batch.add_frames(seq_idx=seq, seq_start_frame=0, length=dataset.get_seq_length(seq))
+  batch.init_with_one_full_sequence(seq_idx=seq, dataset=dataset)
   success, _ = assign_dev_data(device, dataset, [batch], load_seqs=load_seqs)
   return success
 
@@ -102,9 +109,9 @@ def maybe_subtract_priors(network, train, config):
   if config.bool('subtract_priors', False):
     prior_scale = config.float('prior_scale', 0.0)
     priors = train.calculate_priori()
-    priors[priors == 0] = 1e-10 #avoid priors of zero which would yield a bias of inf
+    priors[priors == 0] = 1e-10  # avoid priors of zero which would yield a bias of inf
     l = [p for p in network.train_params_vars if p.name == 'b_output']
     assert len(l) == 1, len(l)
     b_softmax = l[0]
     b_softmax.set_value(b_softmax.get_value() - prior_scale * numpy.log(priors))
-    print >> log.v3, "subtracting priors with prior_scale", prior_scale
+    print("subtracting priors with prior_scale", prior_scale, file=log.v3)

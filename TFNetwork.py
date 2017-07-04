@@ -25,6 +25,9 @@ class ExternData(object):
     if data:
       self.register_data_from_dict(data)
 
+  def __repr__(self):
+    return "<ExternData data=%r>" % self.data
+
   def init_from_config(self, config):
     """
     :param Config.Config config:
@@ -41,7 +44,7 @@ class ExternData(object):
 
   def init_from_dataset(self, dataset):
     """
-    :param Dataset.Dataset dataset: 
+    :param Dataset.Dataset dataset:
     """
     target_keys = list(dataset.get_target_list())
     if target_keys:
@@ -114,16 +117,18 @@ class ExternData(object):
     dtypes = [self.data[name].dtype for name in names]
     # And add seq_lens for each.
     for name in list(names):
-      names.append("%s_seq_lens" % name)
-      shapes.append((fixed_batch_dim,) if with_batch_dim else ())
-      dtypes.append(self.data[name].size_dtype)
+      for axis in self.data[name].get_axes_with_size():
+        names.append("%s/size%i" % (name, axis))
+        shapes.append((fixed_batch_dim,) if with_batch_dim else ())
+        dtypes.append(self.data[name].size_dtype)
     return {"names": names, "shapes": shapes, "dtypes": dtypes}
 
 
 class TFNetwork(object):
   def __init__(self, config=None, extern_data=None, rnd_seed=42,
                train_flag=False, search_flag=False,
-               parent_layer=None, parent_net=None):
+               parent_layer=None, parent_net=None,
+               name=None):
     """
     :param Config.Config config: only needed to init extern_data if not specified explicitly
     :param ExternData|None extern_data:
@@ -131,7 +136,12 @@ class TFNetwork(object):
     :param bool|tf.Tensor train_flag: True if we want to use this model in training, False if in eval, or dynamic
     :param TFNetworkLayer.LayerBase|None parent_layer:
     :param TFNetwork parent_net:
+    :param str name: only for debugging
     """
+    if not name:
+      from Util import try_get_caller_name
+      name = "<network via %s>" % try_get_caller_name(fallback="<unknown>")
+    self.name = name
     if extern_data is None:
       extern_data = ExternData()
       if not config:
@@ -139,6 +149,7 @@ class TFNetwork(object):
         config = get_global_config()
       extern_data.init_from_config(config)
     self.extern_data = extern_data
+    self._config = config
     self.used_data_keys = set()
     self.rnd_seed = rnd_seed
     self.random = numpy.random.RandomState(rnd_seed)
@@ -166,6 +177,20 @@ class TFNetwork(object):
     self.recurrent = False
     self._assigner_cache = {}  # type: dict[tf.Variable,VariableAssigner]
     self.concat_sources_dropout_cache = {}  # type: dict[(tuple[LayerBase],float),Data]
+
+  def __repr__(self):
+    s = "TFNetwork %r" % self.name
+    if self.parent_layer:
+      s += " parent_layer=%r" % self.parent_layer
+    elif self.parent_net:
+      s += " parent_net=%r" % self.parent_net
+    if self.train_flag is True:
+      s += " train"
+    elif self.train_flag is not None:
+      s += " train=%r" % self.train_flag
+    if self.search_flag is True:
+      s += " search"
+    return "<%s>" % s
 
   def construct_from(self, list_or_dict):
     """
@@ -249,10 +274,21 @@ class TFNetwork(object):
     assert "output" not in layer_desc
     layer_desc["name"] = name
     layer_desc["network"] = self
+    debug_print_layer_output_template = self._config and self._config.bool("debug_print_layer_output_template", False)
+    debug_print_layer_output_sizes = self._config and self._config.bool("debug_print_layer_output_sizes", False)
+    debug_print_layer_output_shape = self._config and self._config.bool("debug_print_layer_output_shape", False)
     with reuse_name_scope(layer_class.cls_get_tf_scope_name(name)):
       output = layer_class.get_out_data_from_opts(**layer_desc)
+      if debug_print_layer_output_template:
+        print("layer %r output: %r" % (name, output))
       layer = layer_class(output=output, **layer_desc)
       layer.post_init()
+      if debug_print_layer_output_sizes:
+        print("layer %r output sizes: %r" % (name, output.size_placeholder))
+      if debug_print_layer_output_shape:
+        layer.output.placeholder = tf.Print(
+          layer.output.placeholder, [layer_class.cls_get_tf_scope_name(name), "shape:", tf.shape(layer.output.placeholder)],
+          summarize=10, name="debug_print_layer_output_shape")
     assert layer.output
     assert layer.output.placeholder is not None
     assert layer.output.size_placeholder is not None
@@ -270,6 +306,10 @@ class TFNetwork(object):
     """
     if mark_data_key_as_used:
       self.used_data_keys.add(key)
+    if key == "seq_idx" and key not in self.extern_data.data:
+      self.extern_data.data[key] = Data(name="seq_idx", shape=(), dtype="int32", sparse=False, auto_create_placeholders=True)
+    if key == "seq_tag" and key not in self.extern_data.data:
+      self.extern_data.data[key] = Data(name="seq_tag", shape=(), dtype="string", auto_create_placeholders=True)
     return self.extern_data.get_data(key)
 
   def construct_objective(self):
@@ -309,12 +349,28 @@ class TFNetwork(object):
     return self.loss_by_layer
 
   def get_all_errors(self):
+    """
+    :rtype: dict[str|tf.Tensor]
+    :return: layer-name -> error dict. contains only the layers which have some error value
+    """
     self.maybe_construct_objective()
     return self.error_by_layer
 
   def get_objective(self):
     self.maybe_construct_objective()
     return self.total_objective
+
+  def get_total_loss(self):
+    """
+    :rtype: int|tf.Tensor
+    :return: 0 if no loss, or tf.Tensor
+    """
+    self.maybe_construct_objective()
+    return self.total_loss
+
+  def get_total_constraints(self):
+    self.maybe_construct_objective()
+    return self.total_constraints
 
   def get_used_targets(self):
     """
@@ -384,6 +440,19 @@ class TFNetwork(object):
       for param_name, param in sorted(layer.params.items()):
         assert isinstance(param, tf.Variable)
         l.append(param)
+    return l
+
+  def get_saveable_params_list(self):
+    """
+    :return: list of model variables or SaveableObject, to save/restore
+    :rtype: list[tf.Variable|tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject]
+    """
+    l = []  # type: list[tf.Variable]
+    for layer_name, layer in sorted(self.layers.items()):
+      assert isinstance(layer, LayerBase)
+      for param_name, param in sorted(layer.get_saveable_params_dict().items()):
+        l.append(param)
+    l += self.get_auxiliary_params()
     return l
 
   def get_params_nested_dict(self):
@@ -525,13 +594,9 @@ class TFNetwork(object):
 
   def _create_saver(self):
     # Saver for storing checkpoints of the model.
-    # If we want to check for existence of variables in the checkpoint:
-    # http://stackoverflow.com/questions/38218174/how-can-find-the-variable-names-that-saved-in-tensorflow-checkpoint
-    # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/framework/python/framework/checkpoint_utils.py
-    # http://stackoverflow.com/questions/38944238/tensorflow-list-variables-in-the-checkpoint
     with tf.name_scope("saver"):
       self.saver = tf.train.Saver(
-        var_list=self.get_params_list() + self.get_auxiliary_params(), max_to_keep=2 ** 31 - 1)
+        var_list=self.get_saveable_params_list(), max_to_keep=2 ** 31 - 1)
 
   def save_params_to_file(self, filename, session):
     """
@@ -567,7 +632,78 @@ class TFNetwork(object):
     """
     if not self.saver:
       self._create_saver()
-    self.saver.restore(sess=session, save_path=filename)
+    # Note:
+    # If we want to check for existence of variables in the checkpoint:
+    # http://stackoverflow.com/questions/38218174/how-can-find-the-variable-names-that-saved-in-tensorflow-checkpoint
+    # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/framework/python/framework/checkpoint_utils.py
+    # http://stackoverflow.com/questions/38944238/tensorflow-list-variables-in-the-checkpoint
+    try:
+      self.saver.restore(sess=session, save_path=filename)
+    except tf.errors.NotFoundError as exc:
+      # First, the short version, we will try to automatically resolve this, similar to this:
+      # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/rnn/python/tools/checkpoint_convert.py
+      # Also see:
+      # https://github.com/tensorflow/tensorflow/issues/11168
+      # https://github.com/tensorflow/tensorflow/commit/92da8abfd35b93488ed7a55308b8f589ee23b622
+      # https://github.com/tensorflow/tensorflow/commit/157370e5916b85c65958ed8383ae31d727228ed7
+      # This map_list can be extended by all the mappings in checkpoint_convert.py.
+      map_list = {"lstm_cell/biases": "lstm_cell/bias", "lstm_cell/weights": "lstm_cell/kernel"}
+      reader = tf.train.NewCheckpointReader(filename)
+      net_vars = self.get_saveable_params_list()
+      var_ckpt_names = set(reader.get_variable_to_shape_map())
+      var_net_names = set([v.name[:-2] for v in net_vars if isinstance(v, tf.Variable)])  # only tf.Variable supported yet
+      missing_vars = [v for v in sorted(var_net_names) if v not in var_ckpt_names]
+      obsolete_vars = [v for v in sorted(var_ckpt_names) if v not in var_net_names]
+      print("Variables to restore which are not in checkpoint:", missing_vars, file=log.v1)
+      var_name_map = {}  # current name -> checkpoint name
+      for v in obsolete_vars:
+        for k_old, k_new in map_list.items():
+          if v.endswith("/%s" % k_old):
+            v2 = v[:-len(k_old)] + k_new
+            if v2 in missing_vars:
+              var_name_map[v2] = v
+              break
+      could_not_find_map_list = [v for v in missing_vars if v not in var_name_map]
+      if not could_not_find_map_list:
+        # We can restore all.
+        print("We found these corresponding variables in the checkpoint:", var_name_map, file=log.v1)
+        print("Loading now...", file=log.v3)
+        # Similar: from tensorflow.contrib.framework.python.ops import assign_from_checkpoint
+        for v in self.get_saveable_params_list():
+          if isinstance(v, tf.Variable):
+            v_name = v.name[:-2]  # current name
+          else:
+            v_name = v.name
+          if v_name not in var_ckpt_names:
+            v_name = var_name_map[v_name]
+          assert v_name in var_ckpt_names
+          value = reader.get_tensor(v_name)
+          assigner = self.get_var_assigner(v)
+          assigner.assign(value=value, session=session)
+        print("Successfully loaded all variables. Any new save will use the updated variable names.", file=log.v3)
+
+      else:
+        print("Could not find mappings for these variables:", could_not_find_map_list)
+        print("Error, some entry is missing in the checkpoint %r: %s: %s" % (filename, type(exc), exc), file=log.v1)
+        print("All variables in checkpoint:")
+        print(reader.debug_string())
+        print("All variables to restore:")
+        for v in net_vars:
+          print(v)
+        print()
+        print("Variables to restore which are not in checkpoint:")
+        for v in sorted(var_net_names):
+          if v in var_ckpt_names:
+            continue
+          print(v)
+        print()
+        print("Variables in checkpoint which are not needed for restore:")
+        for v in sorted(var_ckpt_names):
+          if v in var_net_names:
+            continue
+          print(v)
+        print()
+        raise exc
 
   def print_network_info(self, name="Network"):
     print("%s layer topology:" % name, file=log.v2)
