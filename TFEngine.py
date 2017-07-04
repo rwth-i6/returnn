@@ -283,6 +283,8 @@ class Runner(object):
     writer = tf.summary.FileWriter(logdir)
     writer.add_graph(sess.graph)
     run_metadata = tf.RunMetadata()
+    debug_shell_in_runner = self.engine.config.bool("debug_shell_in_runner", False)
+    debug_shell_in_runner_step = self.engine.config.int("debug_shell_in_runner_step", 1)
 
     # Not sure if this is the best thing to do for an evaluation but it's ok for now.
     # We could also set it to 0 for non train epochs.
@@ -308,6 +310,13 @@ class Runner(object):
         if self._should_train and self.reset_updater_vars_mod_step and step % self.reset_updater_vars_mod_step == 0:
           print("Reset updater vars in step %i." % step, file=log.v5)
           self.engine.updater.init_optimizer_vars()
+
+        if debug_shell_in_runner and debug_shell_in_runner_step == step:
+          print("debug_shell_in_runner, step %i" % step, file=log.v1)
+          import Debug
+          Debug.debug_shell(user_ns=locals(), user_global_ns=globals(), exit_afterwards=False)
+
+        # Now do one calculation step. Optionally with metadata.
         if self.store_metadata_mod_step and step % self.store_metadata_mod_step == 0:
           # Slow run that stores extra information for debugging.
           print('Storing metadata', file=log.v5)
@@ -507,10 +516,12 @@ class Engine(object):
     print("Load model %s" % (filename,), file=log.v4)
     self.network.load_params_from_file(filename, session=self.tf_session)
 
-  def save_model(self, filename):
+  def save_model(self, filename=None):
     """
     :param str filename: full filename for model
     """
+    if not filename:
+      filename = self.get_epoch_model_filename()
     print("Save model under %s" % (filename,), file=log.v4)
     self.network.save_params_to_file(filename, session=self.tf_session)
 
