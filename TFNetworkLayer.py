@@ -256,6 +256,9 @@ class LayerBase(object):
   def tf_scope_name(self):
     return self.cls_get_tf_scope_name(name=self.name)
 
+  def get_absolute_name_scope_prefix(self):
+    return self.network.get_absolute_name_scope_prefix() + self.tf_scope_name + "/"
+
   def is_output_layer(self):
     """
     Some code differs between an output layer and other layers.
@@ -309,8 +312,13 @@ class LayerBase(object):
     :return: param
     :rtype tf.Variable
     """
+    assert isinstance(param, tf.Variable)
+    name_scope_prefix = self.get_absolute_name_scope_prefix()
     assert param.name
-    self.params[param.name] = param
+    assert param.name[:len(name_scope_prefix)] == name_scope_prefix
+    assert param.name[-2:] == ":0"
+    param_name = param.name[len(name_scope_prefix):-2]
+    self.params[param_name] = param
     return param
 
   def set_param_values_by_dict(self, values_dict, session):

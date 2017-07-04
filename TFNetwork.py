@@ -192,6 +192,13 @@ class TFNetwork(object):
       s += " search"
     return "<%s>" % s
 
+  def get_absolute_name_scope_prefix(self):
+    if self.parent_layer:
+      return self.parent_layer.get_absolute_name_scope_prefix()
+    if self.parent_net:
+      return self.parent_net.get_absolute_name_scope_prefix()
+    return ""
+
   def construct_from(self, list_or_dict):
     """
     :param list[dict[str]] | dict[str,dict[str]] list_or_dict:
@@ -649,46 +656,79 @@ class TFNetwork(object):
       # This map_list can be extended by all the mappings in checkpoint_convert.py.
       map_list = {"lstm_cell/biases": "lstm_cell/bias", "lstm_cell/weights": "lstm_cell/kernel"}
       reader = tf.train.NewCheckpointReader(filename)
-      net_vars = self.get_saveable_params_list()
+      net_vars = [v for v in self.get_saveable_params_list() if isinstance(v, tf.Variable)]
+      net_saveables = [v for v in self.get_saveable_params_list() if not isinstance(v, tf.Variable)]
       var_ckpt_names = set(reader.get_variable_to_shape_map())
-      var_net_names = set([v.name[:-2] for v in net_vars if isinstance(v, tf.Variable)])  # only tf.Variable supported yet
-      missing_vars = [v for v in sorted(var_net_names) if v not in var_ckpt_names]
-      obsolete_vars = [v for v in sorted(var_ckpt_names) if v not in var_net_names]
-      print("Variables to restore which are not in checkpoint:", missing_vars, file=log.v1)
-      var_name_map = {}  # current name -> checkpoint name
-      for v in obsolete_vars:
+      var_net_names = set([v.name[:-2] for v in net_vars] + [v.name for v in net_saveables])
+      missing_var_names = [v for v in sorted(var_net_names) if v not in var_ckpt_names]
+      obsolete_var_names = [v for v in sorted(var_ckpt_names) if v not in var_net_names]
+      print("Variables to restore which are not in checkpoint:", missing_var_names, file=log.v1)
+      var_name_map = {}  # type: dict[str,()->numpy.ndarray]  # current name -> value-loader
+
+      def make_load_renamed(old_name):
+        def load_old():
+          return reader.get_tensor(old_name)
+        return load_old
+
+      class make_load_cudnn_rnn:
+        cudnn_postfix = "/cudnn/CudnnRNNParamsToCanonical:0"
+
+        def __init__(self, prefix, target="lstm_block_wrapper/"):
+          self.target = target
+          self.keys = [target + "bias", target + "kernel"]
+          self.prefix = prefix
+          self.data = None
+
+        def _load(self):
+          from TFNetworkRecLayer import RecLayer
+          self.data = RecLayer.convert_cudnn_canonical_to_lstm_block(
+            reader=reader, prefix=self.prefix, target=self.target)
+
+        def make_getter(self, key):
+          def get():
+            if self.data is None:
+              self._load()
+            return self.data[key]
+          return get
+
+        def get_lazy_dict(self):
+          return {self.prefix + k: self.make_getter(self.prefix + k) for k in self.keys}
+
+      for v in obsolete_var_names:
         for k_old, k_new in map_list.items():
           if v.endswith("/%s" % k_old):
             v2 = v[:-len(k_old)] + k_new
-            if v2 in missing_vars:
-              var_name_map[v2] = v
+            if v2 in missing_var_names:
+              var_name_map[v2] = make_load_renamed(old_name=v)
               break
-      could_not_find_map_list = [v for v in missing_vars if v not in var_name_map]
+        if v.endswith(make_load_cudnn_rnn.cudnn_postfix):
+          var_name_map.update(
+            make_load_cudnn_rnn(prefix=v[:-len(make_load_cudnn_rnn.cudnn_postfix) + 1]).get_lazy_dict())
+
+      could_not_find_map_list = [v for v in missing_var_names if v not in var_name_map]
       if not could_not_find_map_list:
         # We can restore all.
         print("We found these corresponding variables in the checkpoint:", var_name_map, file=log.v1)
         print("Loading now...", file=log.v3)
         # Similar: from tensorflow.contrib.framework.python.ops import assign_from_checkpoint
         for v in self.get_saveable_params_list():
-          if isinstance(v, tf.Variable):
-            v_name = v.name[:-2]  # current name
+          assert isinstance(v, tf.Variable), "not yet implemented otherwise..."
+          v_name = v.name[:-2]  # current name
+          if v_name in var_ckpt_names:
+            value = reader.get_tensor(v_name)
           else:
-            v_name = v.name
-          if v_name not in var_ckpt_names:
-            v_name = var_name_map[v_name]
-          assert v_name in var_ckpt_names
-          value = reader.get_tensor(v_name)
+            value = var_name_map[v_name]()
           assigner = self.get_var_assigner(v)
           assigner.assign(value=value, session=session)
         print("Successfully loaded all variables. Any new save will use the updated variable names.", file=log.v3)
 
       else:
-        print("Could not find mappings for these variables:", could_not_find_map_list)
+        print("Could not find mappings for these variables:", could_not_find_map_list, "var_name_map:", var_name_map)
         print("Error, some entry is missing in the checkpoint %r: %s: %s" % (filename, type(exc), exc), file=log.v1)
         print("All variables in checkpoint:")
         print(reader.debug_string())
         print("All variables to restore:")
-        for v in net_vars:
+        for v in net_vars + net_saveables:
           print(v)
         print()
         print("Variables to restore which are not in checkpoint:")

@@ -317,13 +317,56 @@ class RecLayer(_ConcatInputLayer):
     size = (input_size + num_units + 2) * num_units * (num_gates + 1)
     return size
 
+  @staticmethod
+  def convert_cudnn_canonical_to_lstm_block(reader, prefix, target="lstm_block_wrapper/"):
+    """
+    This assumes CudnnLSTM currently, with num_layers=1, input_mode="linear_input", direction='unidirectional'!
+
+    :param tf.train.CheckpointReader reader:
+    :param str prefix: e.g. "layer2/rec/"
+    :param str target: e.g. "lstm_block_wrapper/" or "rnn/lstm_cell/"
+    :return: dict key -> value, {".../kernel": ..., ".../bias": ...} with prefix
+    :rtype: dict[str,numpy.ndarray]
+    """
+    # For reference:
+    # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/cudnn_rnn/python/ops/cudnn_rnn_ops.py
+    # For CudnnLSTM, there are 8 tensors per weight and per bias for each
+    # layer: tensor 0-3 are applied to the input from the previous layer and
+    # tensor 4-7 to the recurrent input. Tensor 0 and 4 are for the input gate;
+    # tensor 1 and 5 the forget gate; tensor 2 and 6 the new memory gate;
+    # tensor 3 and 7 the output gate.
+    import numpy
+    num_vars = 16
+    values = []
+    for i in range(num_vars):
+      values.append(reader.get_tensor("%scudnn/CudnnRNNParamsToCanonical:%i" % (prefix, i)))
+    assert len(values[-1].shape) == 1
+    output_dim = values[-1].shape[0]
+    # For some reason, the input weight matrices are sometimes flattened.
+    assert numpy.prod(values[0].shape) % output_dim == 0
+    input_dim = numpy.prod(values[0].shape) // output_dim
+    weights_and_biases = [
+      (numpy.concatenate(
+        [numpy.reshape(values[i], [output_dim, input_dim]),  # input weights
+         numpy.reshape(values[i + 4], [output_dim, output_dim])],  # recurrent weights
+        axis=1),
+       values[8 + i] +  # input bias
+       values[8 + i + 4]  # recurrent bias
+      )
+      for i in range(4)]
+    # cuDNN weights are in ifco order, convert to icfo order.
+    weights_and_biases[1:3] = reversed(weights_and_biases[1:3])
+    weights = numpy.transpose(numpy.concatenate([wb[0] for wb in weights_and_biases], axis=0))
+    biases = numpy.concatenate([wb[1] for wb in weights_and_biases], axis=0)
+    return {prefix + target + "kernel": weights, prefix + target + "bias": biases}
+
   def _get_output_cudnn(self, cell):
     """
     :param tensorflow.contrib.cudnn_rnn.CudnnLSTM|tensorflow.contrib.cudnn_rnn.CudnnGRU cell:
     :return: output of shape (time, batch, dim)
     :rtype: tf.Tensor
     """
-    print("CuDNN LSTM/GRU: Warning, this is experimental and incomplete!", file=log.v1)
+    from TFUtil import get_current_var_scope_name
     from tensorflow.contrib.cudnn_rnn import RNNParamsSaveable
     assert self._max_seq_len is None
     assert self.input_data
@@ -332,26 +375,29 @@ class RecLayer(_ConcatInputLayer):
     n_batch = tf.shape(seq_len)[0]
     if self._direction == -1:
       x = tf.reverse_sequence(x, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
-    num_layers = 1
-    param_size = self._get_cudnn_param_size(
-      num_units=self.output.dim, input_size=self.input_data.dim, rnn_mode=cell._rnn_mode, num_layers=num_layers)
-    # Note: The raw params used during training for the cuDNN op is just a single variable
-    # with all params concatenated together.
-    # For the checkpoint save/restore, we will use RNNParamsSaveable, which also makes it easier in CPU mode
-    # to import the params for another unit like LSTMBlockCell.
-    params = tf.Variable(
-      tf.random_uniform([param_size], minval=-0.01, maxval=0.01), name="cudnn_params_raw", trainable=True)
-    params_saveable = RNNParamsSaveable(
-      params_to_canonical=cell.params_to_canonical,
-      canonical_to_params=cell.canonical_to_params,
-      param_variables=[params],
-      name="cudnn_params_canonical")
-    tf.add_to_collection(tf.GraphKeys.SAVEABLE_OBJECTS, params_saveable)
-    self.saveable_param_replace[params] = params_saveable
-    # It's like a fused cell, i.e. operates on the full sequence.
-    input_h = tf.zeros((num_layers, n_batch, self.output.dim), dtype=tf.float32)
-    input_c = tf.zeros((num_layers, n_batch, self.output.dim), dtype=tf.float32)
-    y, _, _ = cell(x, input_h=input_h, input_c=input_c, params=params)
+    with tf.variable_scope("cudnn"):
+      num_layers = 1
+      param_size = self._get_cudnn_param_size(
+        num_units=self.output.dim, input_size=self.input_data.dim, rnn_mode=cell._rnn_mode, num_layers=num_layers)
+      # Note: The raw params used during training for the cuDNN op is just a single variable
+      # with all params concatenated together.
+      # For the checkpoint save/restore, we will use RNNParamsSaveable, which also makes it easier in CPU mode
+      # to import the params for another unit like LSTMBlockCell.
+      # Also see: https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/cudnn_rnn/python/kernel_tests/cudnn_rnn_ops_test.py
+      params = tf.Variable(
+        tf.random_uniform([param_size], minval=-0.01, maxval=0.01, seed=42), name="params_raw", trainable=True)
+      params_saveable = RNNParamsSaveable(
+        params_to_canonical=cell.params_to_canonical,
+        canonical_to_params=cell.canonical_to_params,
+        param_variables=[params],
+        name="%s/params_canonical" % get_current_var_scope_name())
+      params_saveable.op = params
+      tf.add_to_collection(tf.GraphKeys.SAVEABLE_OBJECTS, params_saveable)
+      self.saveable_param_replace[params] = params_saveable
+      # It's like a fused cell, i.e. operates on the full sequence.
+      input_h = tf.zeros((num_layers, n_batch, self.output.dim), dtype=tf.float32)
+      input_c = tf.zeros((num_layers, n_batch, self.output.dim), dtype=tf.float32)
+      y, _, _ = cell(x, input_h=input_h, input_c=input_c, params=params)
     if self._direction == -1:
       y = tf.reverse_sequence(y, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
     return y
