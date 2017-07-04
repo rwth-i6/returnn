@@ -191,11 +191,15 @@ def debug_shell(user_ns, user_global_ns, traceback=None, execWrapper=None):
             class DummyMod(object): pass
             module = DummyMod()
             module.__dict__ = user_global_ns
-            module.__name__ = "DummyMod"
+            module.__name__ = "_DummyMod"
+            if "__name__" not in user_ns:
+                user_ns = user_ns.copy()
+                user_ns["__name__"] = "_DummyUserNsMod"
             ipshell = IPython.terminal.embed.InteractiveShellEmbed(
                 user_ns=user_ns, user_module=module)
         except Exception:
-            pass
+            print("IPython not available.")
+            better_exchook(*sys.exc_info(), autodebugshell=False)
         else:
             if execWrapper:
                 old = ipshell.run_code
@@ -203,6 +207,7 @@ def debug_shell(user_ns, user_global_ns, traceback=None, execWrapper=None):
     if ipshell:
         ipshell()
     else:
+        print("Use simple debug shell:")
         if traceback:
             import pdb
             pdb.post_mortem(traceback)
@@ -295,7 +300,7 @@ def get_source_code(filename, lineno, module_globals):
 
 def str_visible_len(s):
     """
-    :param str s: 
+    :param str s:
     :return: len without escape chars
     :rtype: int
     """
@@ -704,7 +709,7 @@ def _StackSummary_extract(frame_gen, limit=None, lookup_lines=True, capture_loca
     We want always to capture locals, that is why we overwrite it.
     Additionally, we also capture the frame.
     This is a bit hacky and also not like this is originally intended (to not keep refs).
-     
+
     :param frame_gen: A generator that yields (frame, lineno) tuples to
         include in the stack.
     :param limit: None to include all frames or the number of frames to
