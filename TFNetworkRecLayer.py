@@ -169,6 +169,8 @@ class RecLayer(_ConcatInputLayer):
     if is_gpu_available():
       for key, v in vars(cudnn_rnn).items():
         maybe_add(key, v)
+    # Alias for the standard LSTM cell, because self._get_cell(unit="lstm") will use "NativeLSTM" by default.
+    maybe_add("StandardLSTM", rnn_contrib.LSTMCell)
 
   _warn_msg_once_for_cell_name = set()
 
