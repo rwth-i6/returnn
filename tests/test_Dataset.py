@@ -1,4 +1,6 @@
 
+# Also see test_SprintDataset.py.
+
 from __future__ import print_function
 
 import sys
@@ -263,3 +265,43 @@ def test_batches_context_window():
   assert_equal(b2.seqs[0].frame_length["data"], 1 + ctx_lr)
   assert_equal(b2.seqs[0].batch_slice, 0)
   assert_equal(b2.seqs[0].batch_frame_offset, 0)
+
+
+def test_task12ax_window():
+  from GeneratingDataset import Task12AXDataset
+  window = 3
+  dataset_kwargs = dict(num_seqs=10)
+  dataset1 = Task12AXDataset(**dataset_kwargs)
+  dataset2 = Task12AXDataset(window=window, **dataset_kwargs)
+  input_dim = dataset1.num_inputs
+  dataset1.initialize()
+  dataset2.initialize()
+  dataset1.init_seq_order(epoch=1)
+  dataset2.init_seq_order(epoch=1)
+  dataset1.load_seqs(0, 1)
+  dataset2.load_seqs(0, 1)
+  assert_equal(dataset1.get_data_dim("data"), input_dim)
+  assert_equal(dataset2.get_data_dim("data"), input_dim * window)
+  data1 = dataset1.get_data(0, "data")
+  data2 = dataset2.get_data(0, "data")
+  seq_len = data1.shape[0]
+  assert_equal(data1.shape, (seq_len, input_dim))
+  assert_equal(data2.shape, (seq_len, window * input_dim))
+  data2a = data2.reshape(seq_len, window, input_dim)
+  print("data1:")
+  print(data1)
+  print("data2:")
+  print(data2)
+  print("data1[0]:")
+  print(data1[0])
+  print("data2[0]:")
+  print(data2[0])
+  print("data2a[0,0]:")
+  print(data2a[0, 0])
+  assert_equal(list(data2a[0, 0]), [0] * input_dim)  # zero-padded left
+  assert_equal(list(data2a[0, 1]), list(data1[0]))
+  assert_equal(list(data2a[0, 2]), list(data1[1]))
+  assert_equal(list(data2a[1, 0]), list(data1[0]))
+  assert_equal(list(data2a[1, 1]), list(data1[1]))
+  assert_equal(list(data2a[1, 2]), list(data1[2]))
+  assert_equal(list(data2a[-1, 2]), [0] * input_dim)  # zero-padded right
