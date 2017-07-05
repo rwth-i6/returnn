@@ -60,6 +60,14 @@ def test_RecLayer_get_cudnn_params_size():
     check(rnn_mode="gru", num_units=7, input_size=5)
     check(rnn_mode="gru", num_units=7, input_size=7)
     check(rnn_mode="rnn_tanh", num_units=7, input_size=7)
+    check(rnn_mode="lstm", num_units=5, input_size=3, direction="bidirectional")
+    check(rnn_mode="lstm", num_units=5, input_size=3, direction="bidirectional", num_layers=2)
+    check(rnn_mode="lstm", num_units=5, input_size=3, direction="bidirectional", num_layers=7)
+    check(rnn_mode="lstm", num_units=5, input_size=3, direction="bidirectional", input_mode="auto_select")
+    check(rnn_mode="lstm", num_units=5, input_size=3, direction="bidirectional", num_layers=7, input_mode="auto_select")
+    check(rnn_mode="lstm", num_units=5, input_size=3, direction="unidirectional", num_layers=7, input_mode="auto_select")
+    check(rnn_mode="lstm", num_units=5, input_size=3, direction="bidirectional", input_mode="skip_input")
+    check(rnn_mode="lstm", num_units=5, input_size=3, direction="bidirectional", num_layers=7, input_mode="skip_input")
 
 
 @unittest.skipIf(not is_gpu_available(), "no gpu on this system")

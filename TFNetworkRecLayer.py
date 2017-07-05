@@ -312,12 +312,18 @@ class RecLayer(_ConcatInputLayer):
     :rtype: int
     """
     # Also see test_RecLayer_get_cudnn_params_size().
-    assert num_layers == 1, "not yet supported otherwise"
-    assert input_mode == "linear_input", "not yet supported otherwise"
-    assert direction == "unidirectional", "not yet supported otherwise"
+    dir_count = {"unidirectional": 1, "bidirectional": 2}[direction]
     num_gates = {"lstm": 3, "gru": 2}.get(rnn_mode, 0)
-    # (input + recurrent + 2 * bias) * output * (gates + cell in)
-    size = (input_size + num_units + 2) * num_units * (num_gates + 1)
+    if input_mode == "linear_input" or (input_mode == "auto_select" and num_units != input_size):
+      # (input + recurrent + 2 * bias) * output * (gates + cell in)
+      size = (input_size + num_units + 2) * num_units * (num_gates + 1) * dir_count
+    elif input_mode == "skip_input" or (input_mode == "auto_select" and num_units == input_size):
+      # (recurrent + 2 * bias) * output * (gates + cell in)
+      size = (num_units + 2) * num_units * (num_gates + 1) * dir_count
+    else:
+      raise Exception("invalid input_mode %r" % input_mode)
+    # Remaining layers:
+    size += (num_units * dir_count + num_units + 2) * num_units * (num_gates + 1) * dir_count * (num_layers - 1)
     return size
 
   @staticmethod
