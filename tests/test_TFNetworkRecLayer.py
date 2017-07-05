@@ -175,3 +175,31 @@ def test_cudnn_save_restore():
 
   finally:
     shutil.rmtree(model_tmp_dir)
+
+
+@unittest.skip("broken in TF. waiting to be fixed. https://github.com/tensorflow/tensorflow/issues/9370")
+@unittest.skipIf(not is_gpu_available(), "no gpu on this system")
+def test_cudnn_rnn_params_to_canonical():
+  # https://github.com/tensorflow/tensorflow/issues/9370
+  from tensorflow.contrib.cudnn_rnn import CudnnLSTM
+  with tf.Session() as session:
+    def check(**kwargs):
+      print("kwargs:", kwargs)
+      model = CudnnLSTM(**kwargs)
+      params = tf.Variable(tf.random_uniform([model.params_size()]), validate_shape=False)
+      session.run(params.initializer)
+      s1 = model.params_size().eval()
+      print("param size:", s1)
+      # s2 = sum([wts.eval().shape[0] for wtss in model.params_to_canonical(params) for wts in wtss])
+      weights, biases = model.params_to_canonical(params)
+      for p in weights:
+        print("weight:", p, "shape:", tf.shape(p).eval())
+      for p in biases:
+        print("bias:", p, "shape:", tf.shape(p).eval())
+      s2 = sum([tf.reduce_prod(tf.shape(p)).eval() for p in weights + biases])
+      print("summed up size:", s2)
+      assert_equal(s1, s2)
+
+    check(num_layers=1, num_units=5, input_size=3, direction='unidirectional')
+    check(num_layers=1, num_units=5, input_size=3, direction='bidirectional')  # fails in TF 1.2.0
+    check(num_layers=2, num_units=5, input_size=3, direction='bidirectional')
