@@ -274,14 +274,20 @@ class Runner(object):
     :param str report_prefix: prefix for logging
     """
     sess = self.engine.tf_session
-    logdir = os.path.dirname(self.engine.model_filename) or os.getcwd()
-    logdir += "/%s" % self.data_provider.get_dataset_name()
-    if not self._should_train:  # like eval
-      logdir += "-%i" % self.engine.epoch
-    if self.engine.use_search_flag:
-      logdir += "-search"
-    writer = tf.summary.FileWriter(logdir)
-    writer.add_graph(sess.graph)
+    if self.engine.config.has("tf_log_dir"):
+      logdir = self.engine.config.value("tf_log_dir", None)
+    else:
+      logdir = os.path.dirname(self.engine.model_filename) or os.getcwd()
+    if logdir:
+      logdir += "/%s" % self.data_provider.get_dataset_name()
+      if not self._should_train:  # like eval
+        logdir += "-%i" % self.engine.epoch
+      if self.engine.use_search_flag:
+        logdir += "-search"
+      writer = tf.summary.FileWriter(logdir)
+      writer.add_graph(sess.graph)
+    else:
+      writer = None
     run_metadata = tf.RunMetadata()
     debug_shell_in_runner = self.engine.config.bool("debug_shell_in_runner", False)
     debug_shell_in_runner_step = self.engine.config.int("debug_shell_in_runner_step", 1)
@@ -336,7 +342,8 @@ class Runner(object):
             f.write(tl.generate_chrome_trace_format(show_memory=True))
         else:
           fetches_results = sess.run(fetches_dict, feed_dict=feed_dict) # type: dict[str,numpy.ndarray|str]
-          writer.add_summary(fetches_results["summary"], step + step_offset)
+          if writer:
+            writer.add_summary(fetches_results["summary"], step + step_offset)
 
         eval_info = self._collect_eval_info(fetches_results=fetches_results)
         self._maybe_handle_extra_fetches(fetches_results)
@@ -367,8 +374,9 @@ class Runner(object):
     finally:
       from Util import try_and_ignore_exception
       from TFUtil import stop_event_writer_thread
-      try_and_ignore_exception(writer.close)
-      try_and_ignore_exception(lambda: stop_event_writer_thread(writer.event_writer))
+      if writer:
+        try_and_ignore_exception(writer.close)
+        try_and_ignore_exception(lambda: stop_event_writer_thread(writer.event_writer))
       try_and_ignore_exception(coord.request_stop)
       try_and_ignore_exception(lambda: coord.join(threads))
       try_and_ignore_exception(self.data_provider.stop_threads)
