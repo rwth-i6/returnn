@@ -1617,6 +1617,36 @@ def find_lib(lib_name):
   return None
 
 
+def read_sge_num_procs(job_id=None):
+  """
+  From the Sun Grid Engine (SGE), reads the num_proc setting for a particular job.
+  If job_id is not provided and the JOB_ID env is set, it will use that instead (i.e. it uses the current job).
+  This calls qstat to figure out this setting. There are multiple ways this can go wrong,
+  so better catch any exception.
+
+  :param int|None job_id:
+  :return: num_proc
+  :rtype: int|None
+  """
+  if not job_id:
+    if not os.environ.get("SGE_ROOT"):
+      return None
+    job_id = int(os.environ.get("JOB_ID") or 0)
+    if not job_id:
+      return None
+  from subprocess import Popen, PIPE, CalledProcessError
+  cmd = ["qstat", "-j", str(job_id)]
+  proc = Popen(cmd, stdout=PIPE)
+  stdout, _ = proc.communicate()
+  if proc.returncode:
+    raise CalledProcessError(proc.returncode, cmd, stdout)
+  stdout = stdout.decode("utf8")
+  ls = [l for l in stdout.splitlines() if l.startswith("hard resource_list:")]
+  assert len(ls) == 1
+  opts = dict([opt.split("=", 1) for opt in ls[0].split(",")])
+  return int(opts["num_proc"])
+
+
 def try_and_ignore_exception(f):
   try:
     f()

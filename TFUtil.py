@@ -921,6 +921,74 @@ def identity_with_ops(x, ops):
       return tf.identity(x, name="identity_with_ops")
 
 
+def _guess_requested_max_num_threads(log_file=None):
+  from Util import read_sge_num_procs
+  try:
+    sge_num_procs = read_sge_num_procs()
+  except Exception as exc:
+    if log_file:
+      print("Error while getting SGE num_proc: %r" % exc, file=log_file)
+  else:
+    if sge_num_procs:
+      if log_file:
+        print("Use num_threads=%i (but min 2) via SGE num_proc." % sge_num_procs, file=log_file)
+      return max(sge_num_procs, 2)
+  omp_num_threads = int(os.environ.get("OMP_NUM_THREADS") or 0)
+  if omp_num_threads:
+    # Minimum of 2 threads, should not hurt.
+    if log_file:
+      print("Use num_threads=%i (but min 2) via OMP_NUM_THREADS." % omp_num_threads, file=log_file)
+    return max(omp_num_threads, 2)
+  return None
+
+
+_setup_tf_thread_pools_called_once = False
+
+def setup_tf_thread_pools(num_threads=None, log_file=None):
+  """
+  See here for documentation of intra_op_parallelism_threads and inter_op_parallelism_threads:
+  https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/protobuf/config.proto
+
+  intra_op_parallelism_threads is used for the LocalDevice::EigenThreadPoolInfo, which is always global.
+  https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/common_runtime/local_device.cc
+
+  inter_op_parallelism_threads is used for the (global if not use_per_session_threads) session thread pool.
+  https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/common_runtime/direct_session.cc
+
+  TF will setup the thread pools on first usage. That can happen quite early, esp for intra_op_parallelism_threads.
+  E.g. list_local_devices() will trigger this, i.e. any call to is_gpu_available() or print_available_devices().
+  For debugging, you can set the env-var TF_CPP_MIN_VLOG_LEVEL=1 and then check for these message:
+
+      Local device intra op parallelism threads: 4
+      Direct session inter op parallelism threads: 4
+
+  Thus, call this function as early as possible with your preferred number of threads,
+  used for both thread pools.
+  It will create a dummy session and directly close it again, but if you use the global thread pools,
+  those settings will remain for further sessions.
+  This function will only execute on the first call.
+
+  :param int num_threads: used for both intra and inter parallelism thread pools
+  :param stream|None log_file:
+  """
+  global _setup_tf_thread_pools_called_once
+  if _setup_tf_thread_pools_called_once:
+    return
+  _setup_tf_thread_pools_called_once = True
+  if not num_threads:
+    num_threads = _guess_requested_max_num_threads()
+  if log_file:
+    print("Setup TF inter and intra global thread pools with num_threads=%r." % num_threads, file=log_file)
+  opts = {}
+  opts.setdefault("log_device_placement", False)
+  opts.setdefault("device_count", {}).setdefault("GPU", 0)
+  if num_threads:
+    opts.setdefault("intra_op_parallelism_threads", num_threads)
+    opts.setdefault("inter_op_parallelism_threads", num_threads)
+  with tf.Session(config=tf.ConfigProto(**opts)):
+    pass
+
+
 _list_local_devices = None
 
 def _get_tf_list_local_devices():

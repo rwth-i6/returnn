@@ -60,7 +60,7 @@ from Log import log
 from Config import Config
 from Util import hms_fraction, describe_crnn_version, describe_tensorflow_version
 from TFEngine import Engine
-from TFUtil import is_gpu_available, print_available_devices
+from TFUtil import setup_tf_thread_pools, is_gpu_available, print_available_devices
 from Dataset import init_dataset, Dataset
 
 
@@ -152,10 +152,14 @@ def benchmark(lstm_unit, use_gpu):
 
 
 def main():
+  global LstmCellTypes
   print("Benchmarking LSTMs.")
   better_exchook.install()
   arg_parser = ArgumentParser()
   arg_parser.add_argument("cfg", nargs="*", help="opt=value, opt in %r" % sorted(base_settings.keys()))
+  arg_parser.add_argument("--no-cpu", action="store_true")
+  arg_parser.add_argument("--no-gpu", action="store_true")
+  arg_parser.add_argument("--selected", help="comma-separated list from %r" % LstmCellTypes)
   args = arg_parser.parse_args()
   for opt in args.cfg:
     key, value = opt.split("=", 1)
@@ -168,17 +172,24 @@ def main():
   log.initialize(verbosity=[4])
   print("Returnn:", describe_crnn_version(), file=log.v3)
   print("TensorFlow:", describe_tensorflow_version(), file=log.v3)
-  print("GPU available: %r" % is_gpu_available())
+  setup_tf_thread_pools(log_file=log.v2)
+  if args.no_gpu:
+    print("GPU will not be used.")
+  else:
+    print("GPU available: %r" % is_gpu_available())
   print_available_devices()
 
+  if args.selected:
+    LstmCellTypes = args.selected.split(",")
   benchmarks = {}
-  if is_gpu_available():
+  if not args.no_gpu and is_gpu_available():
     for lstm_unit in LstmCellTypes:
       benchmarks["GPU:" + lstm_unit] = benchmark(lstm_unit=lstm_unit, use_gpu=True)
-  for lstm_unit in LstmCellTypes:
-    if lstm_unit in GpuOnlyCellTypes:
-      continue
-    benchmarks["CPU:" + lstm_unit] = benchmark(lstm_unit=lstm_unit, use_gpu=False)
+  if not args.no_cpu:
+    for lstm_unit in LstmCellTypes:
+      if lstm_unit in GpuOnlyCellTypes:
+        continue
+      benchmarks["CPU:" + lstm_unit] = benchmark(lstm_unit=lstm_unit, use_gpu=False)
 
   print("-" * 20)
   print("Settings:")
