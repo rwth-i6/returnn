@@ -23,6 +23,7 @@ from tornado.concurrent import run_on_executor
 from concurrent.futures import ThreadPoolExecutor
 from Dataset import Dataset, init_dataset, init_dataset_via_str
 from HDFDataset import HDFDataset
+import re
 
 
 _engines = {}
@@ -33,6 +34,14 @@ _max_amount_engines = 1
 _configs = {}
 _data = {}
 
+
+"""
+IMPORTANT NOTE TO PUT IN CONFIG FILE:
+
+#IMPORTANT FOR SERVER
+extract_output_layer_name = "out"
+
+"""
 
 class Server:
 
@@ -47,6 +56,9 @@ class Server:
           (r"/train", TrainingHandler)
         ], debug=True)
         
+        #create dirs
+        self.makedirs(os.path.dirname(os.path.abspath(Config.get_global_config().value('__file__',''))))
+        
         application.listen(int(global_config.value('port', '3033')))
 
         #self._max_amount_engines = global_config.value('max_engines', '5')
@@ -54,8 +66,17 @@ class Server:
         print("Starting server on port: " + global_config.value('port', '3033'), file=log.v3)
         
         IOLoop.instance().start()
+    
+    def makedirs(self, basepath):
+        #first make the config file directory
+        if not os.path.exists(basepath + "/configs"):
+          os.makedirs(basepath + "/configs")
 
+        # then make the data file directory
+        if not os.path.exists(basepath + "/data"):
+            os.makedirs(basepath + "/data")
 
+     
 class ClassifyHandler(tornado.web.RequestHandler):
     
     MAX_WORKERS = 4
@@ -76,6 +97,7 @@ class ClassifyHandler(tornado.web.RequestHandler):
         params = json.loads(self.request.body)
         output_dim = {}
         ret = {}
+        
         
         #first get meta data
         engine_hash = params['engine_hash']
@@ -165,6 +187,7 @@ class ConfigHandler(tornado.web.RequestHandler):
         # TODO: better fallback
         # download new config file
         urlmanager = urllib.URLopener()
+        #basefile = "" #"configs/"
         config_file = str(datetime.datetime.now()) + ".config"
         urlmanager.retrieve(data["new_config_url"], config_file)
         
@@ -177,9 +200,13 @@ class ConfigHandler(tornado.web.RequestHandler):
         #load devices
         _devices[hash_temp] = self.init_devices(config=config)
         
+        print("finished devices")
+        
         #load engine
         new_engine = Engine.Engine(_devices[hash_temp])
         new_engine.init_network_from_config(config=config)
+        
+        print("finished engines")
         
         _engines[hash_temp] = new_engine
         _engine_usage[hash_temp] = datetime.datetime.now()
@@ -252,27 +279,27 @@ class TrainingHandler(tornado.web.RequestHandler):
         
         #download training and dev data
         urlmanager = urllib.URLopener()
-        train_file = "train_" + str(datetime.datetime.now()) + ".h5" #currently assume h5 data
-        urlmanager.retrieve(data["training_url"], train_file)
-        dev_file = "dev_" + str(datetime.datetime.now()) + ".h5"  # currently assume h5 data
-        urlmanager.retrieve(data["dev_url"], dev_file)
+        datapath = "data/"
+        train_file = datapath + re.sub(r'\W+', '', "train" + str(datetime.datetime.now())) #currently assume h5 data
+        train_file_abs, train_file_headers = urlmanager.retrieve(data["training_url"], train_file)
+        dev_file = datapath + re.sub(r'\W+', '', "dev" + str(datetime.datetime.now()))  # currently assume h5 data
+        dev_file_abs, dev_file_headers = urlmanager.retrieve(data["dev_url"], dev_file)
         
         #configure engine
         engine_hash = data["engine_hash"]
         
         # update config to use this and save the future model
-        _configs[engine_hash].set(key='train', value="/" + train_file)
-        _configs[engine_hash].set(key='dev', value="/" + dev_file)
+        _configs[engine_hash].set(key='train', value=train_file_abs)
+        _configs[engine_hash].set(key='dev', value=dev_file_abs)
         _configs[engine_hash].set(key='model', value="/" + engine_hash)
         
         print("downloaded data")
-        
-        print("here")
         
         self.initData(config=_configs[engine_hash], engine_id=engine_hash)
 
         print("initialised data")
         
+  
         _engines[engine_hash].init_train_from_config(_configs[engine_hash], _data[engine_hash][0],
                                                      _data[engine_hash][1], _data[engine_hash][2])
         print("initialised engine")
