@@ -957,7 +957,7 @@ def setup_tf_thread_pools(num_threads=None, log_file=None):
 
   TF will setup the thread pools on first usage. That can happen quite early, esp for intra_op_parallelism_threads.
   E.g. list_local_devices() will trigger this, i.e. any call to is_gpu_available() or print_available_devices().
-  For debugging, you can set the env-var TF_CPP_MIN_VLOG_LEVEL=1 and then check for these message:
+  For debugging, you can set the env-var TF_CPP_MIN_VLOG_LEVEL=1 and then check for these message::
 
       Local device intra op parallelism threads: 4
       Direct session inter op parallelism threads: 4

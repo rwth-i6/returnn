@@ -53,7 +53,7 @@ import time
 from argparse import ArgumentParser
 from pprint import pprint
 
-sys.path += [os.path.dirname(os.path.dirname(__file__))]
+sys.path += [os.path.dirname(os.path.dirname(os.path.abspath(__file__)))]
 
 import better_exchook
 from Log import log
@@ -77,7 +77,7 @@ GpuOnlyCellTypes = ["CudnnLSTM"]
 _input_dim = 9
 _output_dim = 2
 
-# You can play around with these.
+# You can play around with these. E.g. use "chunking=0", "max_seqs=20" as command-line args.
 base_settings = {
   "num_layers": 5,  # number of LSTM layers
   "n_hidden": 500,  # per direction, per layer, the number of units
