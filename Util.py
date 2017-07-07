@@ -178,13 +178,8 @@ def describe_tensorflow_version():
     tdir = os.path.dirname(tf.__file__)
   except Exception as e:
     tdir = "<unknown(exception: %r)>" % e
-  try:
-    version = tf.__git_version__
-  except Exception:
-    try:
-      version = tf.__version__
-    except Exception as e:
-      version = "<unknown(exception: %r)>" % e
+  version = getattr(tf, "__version__", "<unknown version>")
+  version += " (%s)" % getattr(tf, "__git_version__", "<unknown git version>")
   try:
     if tdir.startswith("<"):
       git_info = "<unknown-dir>"

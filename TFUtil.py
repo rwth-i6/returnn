@@ -1145,6 +1145,52 @@ def get_activation_function(s):
   return act_func
 
 
+def random_uniform_abs_initializer(limit, **kwargs):
+  return tf.random_uniform_initializer(minval=-limit, maxval=limit, **kwargs)
+
+
+def get_initializer(s, seed=None, eval_local_ns=None):
+  """
+  :param str|dict[str] s: e.g. "glorot_uniform" or "truncated_normal" or "orthogonal", or config dict with "class",
+    or string to be `eval`ed if it contains "(".
+  :param int|tf.Tensor seed:
+  :param dict[str]|None eval_local_ns:
+  :return: (function (shape) -> tf.Tensor) | tf.Initializer
+  :rtype: ((tuple[int]) -> tf.Tensor) | tf.Initializer
+  """
+  import numpy
+  import math
+  from tensorflow.python.ops import init_ops
+  ns = dict(globals())
+  ns.update(vars(tf))
+  ns.update(vars(init_ops))
+  ns.update(vars(math))
+  ns["numpy"] = numpy
+  f = None
+  if isinstance(s, str):
+    if "(" in s:
+      f = eval(s, ns, eval_local_ns)
+    elif s.endswith("_initializer") and s in ns:
+      f = ns[s]()
+    elif s + "_initializer" in ns:
+      f = ns[s + "_initializer"]()
+  elif isinstance(s, dict):
+    s = s.copy()
+    class_name = s.pop("class")
+    class_ = ns[class_name]
+    assert issubclass(class_, init_ops.Initializer)
+    f = class_.from_config(s)
+  else:
+    raise ValueError("invalid get_initializer argument, expected string or dict, got: %r" % s)
+  if not f:
+    raise Exception("invalid initializer: %r" % s)
+  if seed is not None:
+    assert isinstance(f, init_ops.Initializer)
+    if hasattr(f, "seed"):
+      f.seed = seed
+  return f
+
+
 def swapaxes(x, axis1, axis2):
   """
   :param tf.Tensor x:

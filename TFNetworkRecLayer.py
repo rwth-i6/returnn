@@ -8,6 +8,16 @@ from Log import log
 
 
 class RecLayer(_ConcatInputLayer):
+  """
+  Recurrent layer, has support for several implementations of LSTMs (via ``unit`` argument),
+  see :ref:`tf_lstm_benchmark` (http://returnn.readthedocs.io/en/latest/tf_lstm_benchmark.html),
+  and also GRU, or simple RNN.
+
+  A subnetwork can also be given which will be evaluated step-by-step,
+  which can use attention over some separate input,
+  which can be used to implement a decoder in a sequence-to-sequence scenario.
+  """
+
   layer_class = "rec"
   recurrent = True
 
@@ -16,6 +26,7 @@ class RecLayer(_ConcatInputLayer):
                direction=None, input_projection=True,
                initial_state=None,
                max_seq_len=None,
+               forward_weights_init=None, recurrent_weights_init=None, bias_init=None,
                **kwargs):
     """
     :param str|dict[str,dict[str]] unit: the RNNCell/etc name, e.g. "nativelstm". see comment below.
@@ -25,6 +36,9 @@ class RecLayer(_ConcatInputLayer):
     :param bool input_projection: True -> input is multiplied with matrix. False only works if same input dim
     :param LayerBase|None initial_state:
     :param int max_seq_len: if unit is a subnetwork
+    :param str forward_weights_init: see :func:`TFUtil.get_initializer`
+    :param str recurrent_weights_init: see :func:`TFUtil.get_initializer`
+    :param str bias_init: see :func:`TFUtil.get_initializer`
     """
     super(RecLayer, self).__init__(**kwargs)
     from TFUtil import is_gpu_available
@@ -45,6 +59,41 @@ class RecLayer(_ConcatInputLayer):
     self._sub_loss = None
     self._sub_error = None
     self._sub_loss_normalization_factor = None
+    # On the random initialization:
+    # For many cells, e.g. NativeLSTM: there will be a single recurrent weight matrix, (output.dim, output.dim * 4),
+    # and a single input weight matrix (input_data.dim, output.dim * 4), and a single bias (output.dim * 4,).
+    # The bias is by default initialized with 0.
+    # In the Theano :class:`RecurrentUnitLayer`, create_recurrent_weights() and create_forward_weights() are used,
+    #   where forward_weights_init = "random_uniform(p_add=%i)" % (output.dim * 4)
+    #   and recurrent_weights_init = "random_uniform()",
+    #   thus with in=input_data.dim, out=output.dim,
+    #   for forward weights: uniform sqrt(6. / (in + out*8)), for rec. weights: uniform sqrt(6. / (out*5)).
+    # TensorFlow initializers:
+    #   https://www.tensorflow.org/api_guides/python/contrib.layers#Initializers
+    #   https://www.tensorflow.org/api_docs/python/tf/orthogonal_initializer
+    #   https://github.com/tensorflow/tensorflow/blob/master/tensorflow/python/ops/init_ops.py
+    #   xavier_initializer with uniform=True: uniform sqrt(6 / (fan_in + fan_out)),
+    #     i.e. uniform sqrt(6. / (in + out*4)) for forward, sqrt(6./(out*5)) for rec.
+    #     Ref: https://www.tensorflow.org/api_docs/python/tf/contrib/layers/xavier_initializer
+    # Keras uses these defaults:
+    #   Ref: https://github.com/fchollet/keras/blob/master/keras/layers/recurrent.py
+    #   Ref: https://keras.io/initializers/, https://github.com/fchollet/keras/blob/master/keras/engine/topology.py
+    #   (fwd weights) kernel_initializer='glorot_uniform', recurrent_initializer='orthogonal',
+    #   where glorot_uniform is sqrt(6 / (fan_in + fan_out)), i.e. fwd weights: uniform sqrt(6 / (in + out*4)),
+    #   and orthogonal creates a random orthogonal matrix (fan_in, fan_out), i.e. rec (out, out*4).
+    self._bias_initializer = tf.constant_initializer(0.0)
+    self._fwd_weights_initializer = None
+    self._rec_weights_initializer = None
+    from TFUtil import get_initializer
+    if forward_weights_init:
+      self._fwd_weights_initializer = get_initializer(
+        forward_weights_init, seed=self.network.random.randint(2**31), eval_local_ns={"layer": self})
+    if recurrent_weights_init:
+      self._rec_weights_initializer = get_initializer(
+        recurrent_weights_init, seed=self.network.random.randint(2**31), eval_local_ns={"layer": self})
+    if bias_init:
+      self._bias_initializer = get_initializer(
+        bias_init, seed=self.network.random.randint(2**31), eval_local_ns={"layer": self})
     with tf.variable_scope(
           "rec",
           initializer=tf.contrib.layers.xavier_initializer(
@@ -424,7 +473,9 @@ class RecLayer(_ConcatInputLayer):
     assert self.input_data
     x, seq_len = self._get_input()
     if self._input_projection:
-      W = tf.get_variable(name="W", shape=(self.input_data.dim, cell.n_input_dim), dtype=tf.float32)
+      W = tf.get_variable(
+        name="W", shape=(self.input_data.dim, cell.n_input_dim), dtype=tf.float32,
+        initializer=self._fwd_weights_initializer)
       if self.input_data.sparse:
         x = tf.nn.embedding_lookup(W, x)
       else:
@@ -432,12 +483,13 @@ class RecLayer(_ConcatInputLayer):
     else:
       assert not self.input_data.sparse
       assert self.input_data.dim == cell.n_input_dim
-    b = tf.get_variable(name="b", shape=(cell.n_input_dim,), dtype=tf.float32, initializer=tf.constant_initializer(0.0))
+    b = tf.get_variable(name="b", shape=(cell.n_input_dim,), dtype=tf.float32, initializer=self._bias_initializer)
     x += b
     index = sequence_mask_time_major(seq_len, maxlen=tf.shape(x)[0])
     y, final_state = cell(
       inputs=directed(x, self._direction), index=directed(index, self._direction),
-      initial_state=self._initial_state)
+      initial_state=self._initial_state,
+      recurrent_weights_initializer=self._rec_weights_initializer)
     self._last_hidden_state = final_state
     y = directed(y, self._direction)
     return y

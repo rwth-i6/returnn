@@ -433,11 +433,12 @@ class RecSeqCellOp(object):
     self.n_hidden = n_hidden
     self.n_input_dim = n_hidden
 
-  def __call__(self, inputs, index, initial_state=None):
+  def __call__(self, inputs, index, initial_state=None, recurrent_weights_initializer=None):
     """
     :param tf.Tensor inputs: shape (time,batch,n_input_dim)
     :param tf.Tensor index: shape (time,batch)
     :param tf.Tensor|None initial_state: optional initial state of shape (batch,n_hidden)
+    :param ()->tf.Tensor recurrent_weights_initializer:
     :returns: output fused tensor shape (time,batch,n_hidden), last hidden state (batch,n_hidden)
     :rtype: (tf.Tensor, tf.Tensor)
     """
@@ -473,15 +474,17 @@ class NativeLstmCell(RecSeqCellOp):
       c = tf.zeros((n_batch, n_out), dtype=tf.float32)
     return Z, V_h, c, i
 
-  def __call__(self, inputs, index, initial_state=None):
+  def __call__(self, inputs, index, initial_state=None, recurrent_weights_initializer=None):
     """
     :param tf.Tensor inputs: shape (time,batch,n_hidden*4)
     :param tf.Tensor index: shape (time,batch)
     :param tf.Tensor|None initial_state: shape (batch,n_hidden)
+    :param ()->tf.Tensor recurrent_weights_initializer:
     :returns: shape (time,batch,n_hidden), shape (batch,n_hidden)
     :rtype: (tf.Tensor, tf.Tensor)
     """
-    W_re = tf.get_variable(name="W_re", shape=(self.n_hidden, self.n_hidden * 4))
+    W_re = tf.get_variable(
+      name="W_re", shape=(self.n_hidden, self.n_hidden * 4), initializer=recurrent_weights_initializer)
     lstm_op = make_lstm_op()
     out, _, final_state = lstm_op(
       *self.map_layer_inputs_to_op(Z=inputs, V_h=W_re, i=index, initial_state=initial_state))
