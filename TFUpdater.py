@@ -157,7 +157,7 @@ class Updater(object):
       # Also see tf.contrib.layers.optimizers.optimize_loss() for reference.
       if self.config.bool("gradient_nan_inf_filter", False):
         from TFUtil import nan_to_num
-        grads_and_vars = [(nan_to_num(grad), var) for (grad, var) in grads_and_vars]
+        grads_and_vars = [(nan_to_num(grad, nan_num=0.0, inf_num=0.0), var) for (grad, var) in grads_and_vars]
       if grad_noise:
         assert grad_noise > 0
         from TFUtil import add_scaled_noise_to_gradients
