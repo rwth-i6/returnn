@@ -577,18 +577,16 @@ class NativeOpGenBase:
   custom_grad = None
   cpu_support = True
 
-  @classmethod
-  def make_op(cls):
-    name = cls.__name__
-    assert cls.in_info is not None
-    assert cls.out_info is not None
-    assert cls.c_fw_code is not None
-    return NativeOp(in_info=cls.in_info, out_info=cls.out_info,
-                    c_fw_code=cls.c_fw_code, c_bw_code=cls.c_bw_code,
-                    c_extra_support_code=cls.c_extra_support_code,
-                    grad_input_map=cls.grad_input_map,
-                    name=name,
-                    custom_grad=cls.custom_grad)
+  def make_op(self):
+    assert self.in_info is not None
+    assert self.out_info is not None
+    assert self.c_fw_code is not None
+    return NativeOp(in_info=self.in_info, out_info=self.out_info,
+                    c_fw_code=self.c_fw_code, c_bw_code=self.c_bw_code,
+                    c_extra_support_code=self.c_extra_support_code,
+                    grad_input_map=self.grad_input_map,
+                    name=self.__class__.__name__,
+                    custom_grad=self.custom_grad)
 
   @classmethod
   def map_layer_inputs_to_op(cls, *inputs):
@@ -1010,7 +1008,7 @@ def chunk(x, index, chunk_size, chunk_step):
   chunk_params = T.concatenate([T.as_tensor(chunk_size).reshape((1,)), T.as_tensor(chunk_step).reshape((1,))])
   out_buffer = T.zeros((chunk_size, n_batch * n_chunks, n_dim), dtype=x.dtype)
   oindex_buffer = T.zeros((chunk_size, n_batch * n_chunks), dtype=index.dtype)
-  chunk_op = Chunking.make_op()
+  chunk_op = Chunking().make_op()
   out, oindex = chunk_op(x, index, out_buffer, oindex_buffer, chunk_params)
   return out, oindex
 
@@ -1203,7 +1201,7 @@ def unchunk(x, index, chunk_size, chunk_step, n_time, n_batch):
   out_buffer = T.zeros((n_time, n_batch, n_dim), dtype=x.dtype)
   oindex_buffer = T.zeros((n_time, n_batch), dtype=index.dtype)
   ofactors_buffer = T.zeros((n_time, n_batch), dtype=x.dtype)
-  unchunk_op = UnChunking.make_op()
+  unchunk_op = UnChunking().make_op()
   out, oindex, ofactors = unchunk_op(x, index, out_buffer, oindex_buffer, ofactors_buffer, chunk_params)
   return out, oindex, ofactors
 
@@ -1354,7 +1352,7 @@ def subtensor_batched_index(x, idx):
     return y[:, 0]
   assert x.ndim == 3
   assert idx.ndim == 2
-  op = SubtensorBatchedIndex.make_op()
+  op = SubtensorBatchedIndex().make_op()
   return op(x, idx)
 
 
@@ -1446,7 +1444,7 @@ def sparse_to_dense(s0, s1, weight, mask, n_time, n_dim):
   assert mask.ndim == 2
   n_batch = s0.shape[1]
   initial_W = T.zeros((n_time, n_batch, n_dim), dtype="float32")
-  op = SparseToDense.make_op()
+  op = SparseToDense().make_op()
   W = op(initial_W, s0, s1, weight, mask)
   assert isinstance(W, T.Variable)
   return W
@@ -1575,7 +1573,7 @@ class MaxAndArgmaxSparse(NativeOpGenBase):
 
 
 def max_and_argmax_sparse(s0, s1, weight, mask, out_max, out_arg):
-  op = MaxAndArgmaxSparse.make_op()
+  op = MaxAndArgmaxSparse().make_op()
   out_max, out_arg = op(s0, s1, weight, mask, out_max, out_arg)
   return out_max, out_arg
 
@@ -1746,7 +1744,7 @@ class CrossEntropySoftmaxAndGradientZSparse(NativeOpGenBase):
 
 
 def crossentropy_softmax_and_gradient_z_sparse(z, z_mask, y_target_t, y_target_i, y_target_w, y_target_mask):
-  op = CrossEntropySoftmaxAndGradientZSparse.make_op()
+  op = CrossEntropySoftmaxAndGradientZSparse().make_op()
   out_ce, out_grad_z, _out_max_z = op(z, z_mask, y_target_t, y_target_i, y_target_w, y_target_mask)
   return out_ce, out_grad_z
 
