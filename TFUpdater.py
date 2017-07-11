@@ -103,6 +103,7 @@ class Updater(object):
       # Default TF values: learning_rate=0.001, beta1=0.9, beta2=0.999, epsilon=1e-8.
       # Default Keras values: lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-8.
       # Our Theano default values: beta1=0.9, beta2=0.999, epsilon=1e-16
+      # https://github.com/openai/improved-gan/blob/master/imagenet/train_imagenet.py: beta1=0.5
       optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=epsilon)
     elif self.config.bool("nadam", False):
       assert_min_tf_version((1, 2, 0), "NadamOptimizer introduced in TF 1.2.0")
@@ -152,6 +153,7 @@ class Updater(object):
       grad_noise = self.config.float("gradient_noise", 0.0)
       grad_clip = self.config.float("gradient_clip", 0.0)
       grad_clip_global_norm = self.config.float("gradient_clip_global_norm", 0.0)
+      # E.g. https://github.com/openai/baselines/blob/master/baselines/deepq/simple.py: grad_norm_clipping=10 -> tf.clip_by_norm
 
       # Extended self.optimizer.minimize() to optionally modify gradients.
       grads_and_vars = self.optimizer.compute_gradients(
