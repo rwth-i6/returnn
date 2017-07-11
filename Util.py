@@ -1636,7 +1636,7 @@ def read_sge_num_procs(job_id=None):
   if proc.returncode:
     raise CalledProcessError(proc.returncode, cmd, stdout)
   stdout = stdout.decode("utf8")
-  ls = [l for l in stdout.splitlines() if l.startswith("hard resource_list:")]
+  ls = [l[len("hard resource_list:"):].strip() for l in stdout.splitlines() if l.startswith("hard resource_list:")]
   assert len(ls) == 1
   opts = dict([opt.split("=", 1) for opt in ls[0].split(",")])
   return int(opts["num_proc"])

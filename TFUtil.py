@@ -976,9 +976,9 @@ def setup_tf_thread_pools(num_threads=None, log_file=None):
     return
   _setup_tf_thread_pools_called_once = True
   if not num_threads:
-    num_threads = _guess_requested_max_num_threads()
+    num_threads = _guess_requested_max_num_threads(log_file=log_file)
   if log_file:
-    print("Setup TF inter and intra global thread pools with num_threads=%r." % num_threads, file=log_file)
+    print("Setup TF inter and intra global thread pools, num_threads=%r." % num_threads, file=log_file)
   opts = {}
   opts.setdefault("log_device_placement", False)
   opts.setdefault("device_count", {}).setdefault("GPU", 0)
