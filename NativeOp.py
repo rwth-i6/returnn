@@ -33,7 +33,7 @@ class NativeOpBaseMixin(object):
   """
 
   def __init__(self, in_info, out_info,
-               c_fw_code, c_bw_code=None, c_extra_support_code=None, code_version=None,
+               c_fw_code, c_bw_code=None, c_extra_support_code=None, code_version=None, cpu_support=True,
                grad_input_map=None, name=None):
     """
     :param list[dict(str)] in_info: each dict describes one input var.
@@ -57,6 +57,7 @@ class NativeOpBaseMixin(object):
     :param str|dict[str] c_extra_support_code: C support code (for c_support_code)
     :param str|None c_bw_code: C code for backward pass (for gradient)
     :param tuple[int] code_version: will be returned by c_code_cache_version.
+    :param bool cpu_support:
     :param tuple[int]|callable grad_input_map: selection of grad inputs.
       by default, we get all inputs + all outputs + all grad outputs.
     :param str name: name
@@ -71,6 +72,7 @@ class NativeOpBaseMixin(object):
     self.c_bw_code = c_bw_code
     self.c_extra_support_code = self._reduce_c_extra_support_code(c_extra_support_code)
     self.code_version = code_version or ()
+    self.cpu_support = cpu_support
     self.name = name or "<anonNativeOp>"
     self.grad_input_map = self._convert_grad_input_map(grad_input_map, len(in_info) + len(out_info) * 2)
     self.destroy_map = self._construct_destroy_map(in_info)
@@ -218,7 +220,8 @@ class NativeOpBaseMixin(object):
       out_info=out_info,
       c_fw_code=self.c_bw_code,
       c_extra_support_code=self.c_extra_support_code,
-      code_version=self.code_version
+      code_version=self.code_version,
+      cpu_support=self.cpu_support
     )
 
   def make_results_of_gradient(self, grad_op_outputs, disconnected_type=None):
@@ -572,6 +575,7 @@ class NativeOpGenBase:
   code_version = None  # type: tuple[int]|int
   grad_input_map = None
   custom_grad = None
+  cpu_support = True
 
   @classmethod
   def make_op(cls):
@@ -2206,3 +2210,4 @@ class FastBaumWelchOp(NativeOpGenBase):
   c_bw_code = None
 
   code_version = 55
+  cpu_support = False  # TODO: fix CPU support...

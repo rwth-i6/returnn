@@ -25,6 +25,7 @@ class OpDescription(NativeOp.NativeOpBaseMixin):
       in_info=gen_base.in_info, out_info=gen_base.out_info,
       c_fw_code=gen_base.c_fw_code, c_bw_code=gen_base.c_bw_code,
       c_extra_support_code=gen_base.c_extra_support_code,
+      cpu_support=gen_base.cpu_support,
       grad_input_map=gen_base.grad_input_map,
       name=name)
 
@@ -266,9 +267,6 @@ class OpMaker(object):
       //#include "tensorflow/core/platform/stream_executor.h"
       //#include "tensorflow/core/common_runtime/gpu/gpu_util.h"
       """
-    code_header += """
-    using namespace tensorflow;
-    """
     # sgemm
     code_header += """
     typedef float real;
@@ -283,29 +281,34 @@ class OpMaker(object):
       real *c, integer *ldc);
     }
     """
-    code_register = """
-    REGISTER_OP("%(op_name)s")
-    %(code_register_op_io)s;
-    """ % format_args
-    code_op = """
+    code_header += """
+    using namespace tensorflow;
+
     #define TENSORFLOW 1
     #define CUDA 0
     #include "%(native_op_cpp_filename)s"
 
-    %(user_code_kernels)s
-
     static const int n_inputs = %(n_inputs)i, n_outputs = %(n_outputs)i;
 
-    class %(op_name)sOp : public OpKernel {
-    public:
-      explicit %(op_name)sOp(OpKernelConstruction* context) : OpKernel(context) {}
-      void Compute(OpKernelContext* context) override {
-        %(code_compute)s
-      }
-    };
-
-    REGISTER_KERNEL_BUILDER(Name("%(op_name)s").Device(DEVICE_CPU), %(op_name)sOp);
+    REGISTER_OP("%(op_name)s")
+    %(code_register_op_io)s;
     """ % format_args
+    if self.description.cpu_support:
+      code_cpu_op = """
+      %(user_code_kernels)s
+  
+      class %(op_name)sOp : public OpKernel {
+      public:
+        explicit %(op_name)sOp(OpKernelConstruction* context) : OpKernel(context) {}
+        void Compute(OpKernelContext* context) override {
+          %(code_compute)s
+        }
+      };
+  
+      REGISTER_KERNEL_BUILDER(Name("%(op_name)s").Device(DEVICE_CPU), %(op_name)sOp);
+      """ % format_args
+    else:
+      code_cpu_op = ""
     if self.with_cuda:
       code_gpu_op = """
       namespace _gpu {
@@ -338,7 +341,7 @@ class OpMaker(object):
       """ % format_args
     else:
       code_gpu_op = ""
-    return code_header + code_register + code_op + code_gpu_op
+    return code_header + code_cpu_op + code_gpu_op
 
   def _make_mod(self):
     if self.cache_key in self.mod_cache:
