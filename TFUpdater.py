@@ -35,6 +35,11 @@ def get_optimizer_class(class_name):
 
 
 class Updater(object):
+  """
+  This will create the :class:`tf.train.Optimizer` instance given the config
+  and the update-op for all trainable vars.
+  """
+
   def __init__(self, config, tf_session, network):
     """
     :param Config.Config config:
@@ -76,6 +81,10 @@ class Updater(object):
 
   def create_optimizer(self):
     lr = self.learning_rate_var
+    # Note: Vincent Vanhoucke says, in case you get nans, consider increasing the epsilon.
+    # https://github.com/tensorflow/tensorflow/issues/323#issuecomment-159116515
+    # In some places in our Theano code, 1e-16 is our default epsilon, in some other parts, 1e-8 is.
+    # 1e-8 might be more stable.
     epsilon = self.config.float("optimizer_epsilon", 1e-16)
     momentum = self.config.float("momentum", 0.0)
     optim_config = self.config.typed_value("optimizer")
