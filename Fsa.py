@@ -10,7 +10,7 @@ class Fsa:
   _EPS = '*'
   _BLANK = '%'
 
-  def __init__(self, lemma, fsa_type):
+  def __init__(self):
     """
     :param str or list lemma: word or sentence
     :param str fsa_type: determines finite state automaton type: asg, ctc, hmm
@@ -45,12 +45,9 @@ class Fsa:
     self.edges = []
     self.edges_single_state = []
 
-    assert isinstance(fsa_type, str), "FSA type input not a string"
-    self.fsa_type = fsa_type.lower()
-    assert isinstance(self.fsa_type, str), "FSA type not a string"
+    self.fsa_type = None
 
-    self.lemma_orig = lemma
-    assert isinstance(self.lemma_orig, str) or isinstance(self.lemma_orig, list), "Lemma type not correct"
+    self.lemma_orig = None
     self.lemma = None
 
     self.filename = 'fsa'
@@ -77,7 +74,6 @@ class Fsa:
     self.phon_dict = {}
 
   def set_params(self,
-                 filename='fsa',
                  asg_repetition=2,
                  num_labels=256,  # ascii number of labels
                  label_conversion=None,
@@ -104,9 +100,6 @@ class Fsa:
     :param bool single_state: produce additional fsa: single node
     :return:
     """
-    print("Setting parameters for", self.fsa_type)
-    self.filename = filename
-
     self.single_state = single_state
     print("Single state set to:", self.single_state)
 
@@ -153,18 +146,31 @@ class Fsa:
       print("No finite state automaton matches to chosen type")
       sys.exit(-1)
 
-  def set_fsa_type(self, fsa_type=None):
-    if isinstance(fsa_type, str):
-      self.fsa_type = fsa_type
+  def set_lemma(self, lemma):
+    """
+    :param str or list lemma: word or sentence
+    """
+    assert isinstance(lemma, str) or isinstance(lemma, list), "Lemma type not correct"
+    self.lemma_orig = lemma
+    assert isinstance(self.lemma_orig, str) or isinstance(self.lemma_orig, list),\
+      "Lemma type not correct"
+    self.lemma = None
 
-  def set_lemma(self, lemma=None):
-    if isinstance(lemma, str):
-      self.lemma_orig = lemma
-      self.lemma = None
+  def set_fsa_type(self, fsa_type):
+    """
+    :param str fsa_type: determines finite state automaton type: asg, ctc, hmm
+    """
+    assert isinstance(fsa_type, str), "FSA type input not a string"
+    self.fsa_type = fsa_type.lower()
+    assert isinstance(self.fsa_type, str), "FSA type not a string"
+    print("Setting parameters for", self.fsa_type)
 
-  def set_filename(self, filename=None):
-    if isinstance(filename, str):
-      self.filename = filename
+  def set_filename(self, filename):
+    """
+    :param str filename: name of file to store graph
+    """
+    assert isinstance(filename, str), "filename is not a string"
+    self.filename = filename
 
   def set_lexicon(self, lexicon_name=None):
     """
@@ -173,7 +179,36 @@ class Fsa:
     """
     if isinstance(lexicon_name, str):
       self.lexicon_name = lexicon_name
-      self._load_lexicon()
+      self.load_lexicon()
+
+  def set_state_tying(self, state_tying=None):
+    """
+    sets a new state tying file
+    :param str state_tying: state tying file/path
+    """
+    assert isinstance(state_tying, str), "state tying is not a string"
+    self.state_tying_name = state_tying
+
+  def load_lexicon(self, reload = False):
+    '''
+    loads a lexicon from a file, loads the xml and returns its content
+    where:
+      lex.lemmas and lex.phonemes important
+    :param bool reload: should lexicon be reloaded
+    '''
+    from LmDataset import Lexicon
+    if not isinstance(self.lexicon, Lexicon):
+      reload = True
+
+    if reload:
+      from os.path import isfile
+      from Log import log
+
+      assert isfile(self.lexicon_name), "Lexicon does not exists"
+
+      log.initialize(verbosity=[5])
+
+      self.lexicon = Lexicon(self.lexicon_name)
 
   def run(self):
     if self.fsa_type == 'asg':
@@ -236,7 +271,7 @@ class Fsa:
         self.num_states = 0
         self.edges = []
       if self.depth >= 2:
-        self._load_lexicon()
+        self.load_lexicon()
         print("Getting allophone sequence...")
         self._find_allo_seq_in_lex()
         print("Phoneme acceptor...")
@@ -437,27 +472,6 @@ class Fsa:
           self.num_states += 1
         self.edges.append([start_node + 1, end_node + 1, i, 0.])
         self.num_states += 1
-
-  def _load_lexicon(self, reload = False):
-    '''
-    loads a lexicon from a file, loads the xml and returns its content
-    where:
-      lex.lemmas and lex.phonemes important
-    :param bool reload: should lexicon be reloaded
-    '''
-    from LmDataset import Lexicon
-    if not isinstance(self.lexicon, Lexicon):
-      reload = True
-
-    if reload:
-      from os.path import isfile
-      from Log import log
-
-      assert isfile(self.lexicon_name), "Lexicon does not exists"
-
-      log.initialize(verbosity=[5])
-
-      self.lexicon = Lexicon(self.lexicon_name)
 
   def _find_allo_seq_in_lex(self):
     '''
@@ -922,10 +936,15 @@ def main():
   arg_parser.set_defaults(single_state=False)
   args = arg_parser.parse_args()
 
-  fsa_gen = Fsa(args.label_seq, args.fsa)
+  fsa_gen = Fsa()
 
-  fsa_gen.set_params(filename=args.file,
-                     asg_repetition=args.asg_repetition,
+  fsa_gen.set_lemma(args.label_seq)
+
+  fsa_gen.set_fsa_type(args.fsa)
+
+  fsa_gen.set_filename(args.file)
+
+  fsa_gen.set_params(asg_repetition=args.asg_repetition,
                      num_labels=args.num_labels,
                      label_conversion=args.label_conversion,
                      depth=args.depth,
@@ -933,6 +952,8 @@ def main():
                      lexicon_name=args.lexicon,
                      state_tying_name=args.state_tying,
                      single_state=args.single_state)
+
+  fsa_gen.load_lexicon(True)
 
   fsa_gen.run()
 
