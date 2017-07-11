@@ -420,6 +420,17 @@ def test_var_init():
   assert_equal(x.eval(), 2)
 
 
+def test_resource_var_init():
+  # https://github.com/tensorflow/tensorflow/issues/11240
+  # Will use :class:`ResourceVariable`.
+  v = tf.get_variable(
+    initializer=tf.constant_initializer(2), shape=(),
+    trainable=False, name="test_resource_var_init", use_resource=True)
+  with tf.control_dependencies([v.initializer]):
+    x = v.read_value()
+  assert_equal(x.eval(), 2)
+
+
 @unittest.skip("broken? see also test_var_init")  # TODO...
 def test_true_once():
   x = true_once()
