@@ -160,6 +160,7 @@ def main():
   arg_parser.add_argument("--no-cpu", action="store_true")
   arg_parser.add_argument("--no-gpu", action="store_true")
   arg_parser.add_argument("--selected", help="comma-separated list from %r" % LstmCellTypes)
+  arg_parser.add_argument("--no-setup-tf-thread-pools", action="store_true")
   args = arg_parser.parse_args()
   for opt in args.cfg:
     key, value = opt.split("=", 1)
@@ -172,7 +173,10 @@ def main():
   log.initialize(verbosity=[4])
   print("Returnn:", describe_crnn_version(), file=log.v3)
   print("TensorFlow:", describe_tensorflow_version(), file=log.v3)
-  setup_tf_thread_pools(log_file=log.v2)
+  if not args.no_setup_tf_thread_pools:
+    setup_tf_thread_pools(log_file=log.v2)
+  else:
+    print("Not setting up the TF thread pools. Will be done automatically by TF to number of CPU cores.")
   if args.no_gpu:
     print("GPU will not be used.")
   else:
