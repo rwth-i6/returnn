@@ -319,6 +319,9 @@ class TFNetwork(object):
       self.extern_data.data[key] = Data(name="seq_tag", shape=(), dtype="string", auto_create_placeholders=True)
     return self.extern_data.get_data(key)
 
+  def get_seq_tags(self, mark_data_key_as_used=True):
+    return self.get_extern_data(key="seq_tag", mark_data_key_as_used=mark_data_key_as_used)
+
   def construct_objective(self):
     with tf.name_scope("objective"):
       self.total_loss = 0

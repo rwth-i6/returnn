@@ -1967,6 +1967,47 @@ class CustomGradient(object):
     op_with_new_grad(*[tf.placeholder(dtype) for dtype in input_types])
     return op_with_new_grad
 
+  @classmethod
+  def _generic_loss_and_error_signal(cls, loss, x, grad_x):
+    """
+    :param tf.Tensor loss:
+    :param tf.Tensor x:
+    :param tf.Tensor grad_x:
+    :return: just loss
+    :rtype: tf.Tensor
+    """
+    return loss
+
+  @classmethod
+  def _generic_loss_and_error_signal_grad(cls, op, grad_loss):
+    """
+    :param tf.Operation op:
+    :param tf.Tensor grad_loss: grad for loss
+    :return: grad for op.outputs, only defined for op input x
+    :rtype: (None, tf.Tensor, None)
+    """
+    loss, x, grad_x = op.inputs
+    return None, grad_loss * grad_x, None
+
+  def register_loss_and_error_signal(self, loss, x, grad_x, name=None):
+    """
+    Wrapper around self.register().
+    Expects that loss = loss(x), and grad_x = \partial loss / \partial x.
+
+    :param tf.Tensor loss:
+    :param tf.Tensor x:
+    :param tf.Tensor grad_x:
+    :param str name: optional func_name
+    :return: loss but with the gradient for x
+    :rtype: tf.Tensor
+    """
+    generic_loss_and_error_signal = self.register(
+      input_types=[tf.float32, tf.float32, tf.float32],
+      op=self._generic_loss_and_error_signal,
+      grad_op=self._generic_loss_and_error_signal_grad,
+      name=name)
+    return generic_loss_and_error_signal(loss, x, grad_x)
+
 
 custom_gradient = CustomGradient()
 

@@ -243,7 +243,8 @@ class LayerBase(object):
       if not src_name == "none"]
     if d.get("loss"):
       loss_class = get_loss_class(d["loss"])
-      loss = loss_class(**d.pop("loss_opts", {}))
+      assert issubclass(loss_class, Loss)
+      loss = loss_class(base_network=network, **d.pop("loss_opts", {}))
       assert isinstance(loss, Loss)
       d["loss"] = loss
     if d.get("target"):
@@ -2447,9 +2448,12 @@ class Loss(object):
   class_name = None  # type: str  # used by get_loss_class()
   recurrent = False  # if this is a frame-wise criteria, this will be False
 
-  def __init__(self):
+  def __init__(self, base_network):
+    """
+    :param TFNetwork.TFNetwork base_network:
+    """
+    self.base_network = base_network
     # All are initialized in self.init().
-
     self.output = None  # type: Data
     self.time_major = None  # type: bool|None
     self.output_with_activation = None  # type: OutputWithActivation
@@ -2603,7 +2607,7 @@ class GenericCELoss(Loss):
       """
       :param tf.Operation op:
       :param tf.Tensor grad: grad for loss
-      :return: grad for op.inputs
+      :return: grad for op.outputs
       """
       z, y, grad_f, target = op.inputs
       num_classes = tf.shape(z)[-1]
@@ -2646,12 +2650,12 @@ class CtcLoss(Loss):
   class_name = "ctc"
   recurrent = True
 
-  def __init__(self, target_collapse_repeated=False, auto_clip_target_len=False):
+  def __init__(self, target_collapse_repeated=False, auto_clip_target_len=False, **kwargs):
     """
     :param bool target_collapse_repeated: like preprocess_collapse_repeated option for CTC. used for sparse_labels().
     :param bool auto_clip_target_len: see self._get_target_sparse_labels().
     """
-    super(CtcLoss, self).__init__()
+    super(CtcLoss, self).__init__(**kwargs)
     self.target_collapse_repeated = target_collapse_repeated
     self.auto_clip_target_len = auto_clip_target_len
     self._target_sparse_labels = None
@@ -2777,6 +2781,7 @@ class EditDistanceLoss(Loss):
   def get_value(self):
     return None
 
+
 class BinaryCrossEntropy(Loss):
   """
   """
@@ -2790,6 +2795,7 @@ class BinaryCrossEntropy(Loss):
       out = 0.5 * tf.nn.sigmoid_cross_entropy_with_logits(logits = self.output_flat, labels = self.target_flat)
       return tf.reduce_mean(out)
 
+
 class L1Loss(Loss):
   """
   L1-distance loss. sum(target - output).
@@ -2800,7 +2806,6 @@ class L1Loss(Loss):
     assert not self.target.sparse, "sparse target values are not yet supported"
     with tf.name_scope("loss_l1"):
       return self.reduce_func(tf.abs(self.target_flat - self.output_flat))
-
 
 
 class MeanSquaredError(Loss):
@@ -2816,6 +2821,73 @@ class MeanSquaredError(Loss):
     with tf.name_scope("loss_mse"):
       out = tf.reduce_mean(tf.squared_difference(self.output_flat, self.target_flat))
       return out
+
+
+class ExternSprintLoss(Loss):
+  """
+  The loss is calculated by an extern Sprint instance.
+  """
+  class_name = "sprint"
+  recurrent = True
+
+  def __init__(self, sprint_opts, **kwargs):
+    """
+    :param dict[str] sprint_opts:
+    """
+    super(ExternSprintLoss, self).__init__(**kwargs)
+    self.sprint_opts = sprint_opts
+
+  def get_value(self):
+    seq_tags = self.base_network.get_seq_tags()
+    output = self.output.get_placeholder_as_time_major()
+    from TFSprint import get_sprint_loss_and_error_signal
+    loss, error_signal = get_sprint_loss_and_error_signal(
+      sprint_opts=self.sprint_opts,
+      log_posteriors=tf.log(output),
+      seq_lengths=self.output_seq_lens,
+      seq_tags=seq_tags)
+    from TFUtil import custom_gradient
+    loss = custom_gradient.register_loss_and_error_signal(loss=loss, x=output, grad_x=error_signal)
+    return loss
+
+  def get_error(self):
+    return None  # we don't have it
+
+
+class FastBaumWelchLoss(Loss):
+  """
+  The loss is calculated via :func:`fast_baum_welch`.
+  The automata are created by an extern Sprint instance.
+  """
+  class_name = "fast_bw"
+  recurrent = True
+
+  def __init__(self, sprint_opts, **kwargs):
+    """
+    :param dict[str] sprint_opts:
+    """
+    super(FastBaumWelchLoss, self).__init__(**kwargs)
+    self.sprint_opts = sprint_opts
+
+  def get_value(self):
+    seq_tags = self.base_network.get_seq_tags()
+    output = self.output.get_placeholder_as_time_major()
+    from TFUtil import sequence_mask_time_major
+    seq_mask = sequence_mask_time_major(self.output_seq_lens)
+    from TFNativeOp import fast_baum_welch_by_sprint_automata
+    fwdbwd, obs_scores = fast_baum_welch_by_sprint_automata(
+      sprint_opts=self.sprint_opts,
+      am_scores=-tf.log(output),
+      float_idx=seq_mask,
+      tags=seq_tags)
+    loss = self.reduce_func(obs_scores[0])
+    bw = tf.exp(-fwdbwd)
+    from TFUtil import custom_gradient
+    loss = custom_gradient.register_loss_and_error_signal(loss=loss, x=output, grad_x=output - bw)
+    return loss
+
+  def get_error(self):
+    return None  # we don't have it
 
 
 _LossClassDict = {}  # type: dict[str,type(Loss)]
