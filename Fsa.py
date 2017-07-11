@@ -3,6 +3,9 @@
 from __future__ import print_function
 from __future__ import division
 
+import numpy as np
+import theano
+from theano import tensor as T
 
 class Edge:
   """
@@ -940,6 +943,51 @@ def _add_edges(graph, edges):
       graph.edge(*e)
   return graph
 
+class BuildSimpleFsaOp(theano.Op):
+  itypes = (T.imatrix,)
+  # the first and last output are actually uint32
+  otypes = (T.fmatrix, T.fvector, T.fmatrix)
+
+  def __init__(self, loop_emission_idxs=[]):
+    self.loop_emission_idxs = set(loop_emission_idxs)
+
+  def perform(self, node, inputs, output_storage):
+    labels = inputs[0]
+
+    from_states      = []
+    to_states        = []
+    emission_idxs    = []
+    seq_idxs         = []
+    weights          = []
+    start_end_states = []
+
+    cur_state = 0
+    edges            = []
+    weights          = []
+    start_end_states = []
+    for b in range(labels.shape[1]):
+      seq_start_state = cur_state
+      for l in range(labels.shape[0]):
+        label = labels[l, b]
+        lenmod = 1 if labels[l, b] in self.loop_emission_idxs else 0
+        if label < 0:
+          continue
+        edges.append((cur_state, cur_state + 1, label, lenmod, b))
+        weights.append(0.0)
+        if labels[l, b] in self.loop_emission_idxs:
+          edges.append((cur_state, cur_state, label, lenmod, b))
+          weights.append(0.0)
+        cur_state += 1
+
+      start_end_states.append([seq_start_state, cur_state])
+
+      cur_state += 1
+
+    edges = sorted(edges, key=lambda e: e[1] - e[0])
+
+    output_storage[0][0] = np.asarray(edges, dtype='uint32').T.copy().view(dtype='float32')
+    output_storage[1][0] = np.array(weights, dtype='float32')
+    output_storage[2][0] = np.asarray(start_end_states, dtype='uint32').T.copy().view(dtype='float32')
 
 def main():
   from argparse import ArgumentParser
