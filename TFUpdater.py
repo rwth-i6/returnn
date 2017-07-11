@@ -76,7 +76,7 @@ class Updater(object):
 
   def create_optimizer(self):
     lr = self.learning_rate_var
-    epsilon = 1e-16
+    epsilon = self.config.float("optimizer_epsilon", 1e-16)
     momentum = self.config.float("momentum", 0.0)
     optim_config = self.config.typed_value("optimizer")
     if optim_config:
@@ -100,11 +100,16 @@ class Updater(object):
     elif self.config.bool("adam", False):
       assert not momentum
       print("Create Adam optimizer.", file=log.v2)
+      # Default TF values: learning_rate=0.001, beta1=0.9, beta2=0.999, epsilon=1e-8.
+      # Default Keras values: lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-8.
+      # Our Theano default values: beta1=0.9, beta2=0.999, epsilon=1e-16
       optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=epsilon)
     elif self.config.bool("nadam", False):
       assert_min_tf_version((1, 2, 0), "NadamOptimizer introduced in TF 1.2.0")
       assert not momentum
       print("Create NAdam optimizer.", file=log.v2)
+      # TF default values: like Adam: beta1=0.9, beta2=0.999, epsilon=1e-8
+      # Our Theano default values: decay=0.004, beta1=0.9, beta2=0.999, epsilon=1e-8
       from tensorflow.contrib.opt.python.training.nadam_optimizer import NadamOptimizer
       optimizer = NadamOptimizer(learning_rate=lr, epsilon=epsilon)
     elif self.config.bool("adadelta", False):
