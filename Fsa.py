@@ -326,24 +326,24 @@ class Fsa:
     elif self.fsa_type == 'hmm':  # loops on first and last node excluded
       countloops = self.num_states - 1
     else:
-      print("No finite state automaton matches to chosen type")
-      sys.exit(-1)
+      assert 0 == 1, "No finite state automaton matches to chosen type"
 
     # adds loops to fsa
     for state in range(1, countloops):
       edges_included = [edge_index for edge_index, edge in enumerate(self.edges) if
                         (edge[1] == state and edge[2] != self._EPS)]
-      try:
-        label_pos = self.edges[edges_included[0]][4]
-      except Exception:
-        label_pos = None
-      if self.fsa_type == 'hmm':
-        edge_n = [state, state, self.edges[edges_included[0]][2], 0., self.edges[edges_included[0]][4]]
-        assert len(edge_n) == 5,  "length of edge wrong"
-      else:
-        edge_n = [state, state, self.edges[edges_included[0]][2], 0.]
-        assert len(edge_n) == 4, "length of edge wrong"
-      self.edges.append(edge_n)
+      for edge_inc in edges_included:
+        try:
+          label_pos = self.edges[edge_inc][4]
+        except Exception:
+          label_pos = None
+        if self.fsa_type == 'hmm':
+          edge_n = [state, state, self.edges[edge_inc][2], 0., self.edges[edge_inc][4]]
+          assert len(edge_n) == 5,  "length of edge wrong"
+        else:
+          edge_n = [state, state, self.edges[edge_inc][2], 0.]
+          assert len(edge_n) == 4, "length of edge wrong"
+        self.edges.append(edge_n)
 
   def _check_for_repetitions_for_asg(self):
     """
