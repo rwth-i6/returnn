@@ -155,6 +155,7 @@ def main():
   global LstmCellTypes
   print("Benchmarking LSTMs.")
   better_exchook.install()
+  print("Args:", " ".join(sys.argv))
   arg_parser = ArgumentParser()
   arg_parser.add_argument("cfg", nargs="*", help="opt=value, opt in %r" % sorted(base_settings.keys()))
   arg_parser.add_argument("--no-cpu", action="store_true")
@@ -173,6 +174,7 @@ def main():
   log.initialize(verbosity=[4])
   print("Returnn:", describe_crnn_version(), file=log.v3)
   print("TensorFlow:", describe_tensorflow_version(), file=log.v3)
+  print("Python:", sys.version.replace("\n", ""), sys.platform)
   if not args.no_setup_tf_thread_pools:
     setup_tf_thread_pools(log_file=log.v2)
   else:

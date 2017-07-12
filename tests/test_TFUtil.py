@@ -414,6 +414,7 @@ def test_sequential_control_dependencies():
 
 @unittest.skip("broken? https://github.com/tensorflow/tensorflow/issues/11240")
 def test_var_init():
+  # upstream comment: use resource variables instead
   v = tf.Variable(initial_value=2, trainable=False, name="test_var_init")
   with tf.control_dependencies([v.initializer]):
     x = v.read_value()
@@ -510,6 +511,7 @@ def test_GlobalTensorArray():
 
 @unittest.skip("remove this when it works. see https://github.com/tensorflow/tensorflow/issues/10950")
 def test_TFArrayContainer():
+  # Bug #10950 is fixed upstream, should be in TF 1.2.2.
   # TODO...
   # https://stackoverflow.com/questions/44455722/create-my-own-resource-types-tf-resource
   # https://github.com/tensorflow/tensorflow/issues/1419
@@ -526,6 +528,10 @@ def test_TFArrayContainer():
 @unittest.skip("does not work")
 def test_TensorArray():
   # see https://stackoverflow.com/questions/44418036/
+  # Reason is that the TensorArray uses a per-run ("per-step") resource manager,
+  # thus it will not remember anything across session.run() calls.
+  # This is by design.
+  # Our :class:`GlobalTensorArrayOpMaker` could fix this.
   ta = tf.TensorArray(tf.int32, size=3)
   index = tf.placeholder(tf.int32)
   value = tf.placeholder(tf.int32)

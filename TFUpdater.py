@@ -38,6 +38,29 @@ class Updater(object):
   """
   This will create the :class:`tf.train.Optimizer` instance given the config
   and the update-op for all trainable vars.
+  See the code of :func:`Updater.create_optimizer` for valid config options.
+
+  Note: Vincent Vanhoucke says, in case you get nans, consider increasing the epsilon (for Adam, Nadam and similar).
+  This is the config option ``optimizer_epsilon``.
+  https://github.com/tensorflow/tensorflow/issues/323#issuecomment-159116515
+  In some places in our Theano code, 1e-16 is our default epsilon, in some other parts, 1e-8 is.
+  1e-8 might be more stable. Or even 1e-6.
+  Note that when the gradient is zero, the update can be proportional to lr / eps.
+
+  More from Vincent Vanhoucke:
+
+  > One thing you can do is run with a tiny learning rate, or even zero learning rate.
+  > If you still have divergence then, you have a bug in your setup.
+  > If not, increase your rate slowly and see if there is a regime in which things train without diverging.
+  > It's completely possible to have weights that are in a good range,
+  > but activations or gradients going to infinity because of the shape of the loss, or too high a learning rate.
+  > It's obviously always a possibility that there is a bug in the optimizers, but in my experience,
+  > every single instance of this kind of problem could be traced back to a weirdly wired model,
+  > learning rate issues, bad randomization of the input examples,
+  > or - in the case of Adam or RMSProp - issues with the epsilon value.
+
+  In addition, you might also want to try `gradient_nan_inf_filter` or maybe set beta1=0.5.
+
   """
 
   def __init__(self, config, tf_session, network):
@@ -81,10 +104,6 @@ class Updater(object):
 
   def create_optimizer(self):
     lr = self.learning_rate_var
-    # Note: Vincent Vanhoucke says, in case you get nans, consider increasing the epsilon.
-    # https://github.com/tensorflow/tensorflow/issues/323#issuecomment-159116515
-    # In some places in our Theano code, 1e-16 is our default epsilon, in some other parts, 1e-8 is.
-    # 1e-8 might be more stable.
     epsilon = self.config.float("optimizer_epsilon", 1e-16)
     momentum = self.config.float("momentum", 0.0)
     optim_config = self.config.typed_value("optimizer")
@@ -101,7 +120,7 @@ class Updater(object):
         optim_config.setdefault("epsilon", epsilon)
       if "momentum" in optim_class_kwargs and momentum:
         optim_config.setdefault("momentum", momentum)
-      assert "learning_rate" not in optim_config, "learning_rate will be set implicitely"
+      assert "learning_rate" not in optim_config, "learning_rate will be set implicitly"
       optim_config["learning_rate"] = lr
       print("Create optimizer %s with options %r." % (optim_class, optim_config), file=log.v2)
       optimizer = optim_class(**optim_config)
