@@ -76,7 +76,7 @@ class Fsa:
   def set_params(self,
                  asg_repetition=2,
                  num_labels=256,  # ascii number of labels
-                 label_conversion=None,
+                 label_conversion=False,
                  depth=6,
                  allo_num_states=3,
                  lexicon_name='',
@@ -151,7 +151,7 @@ class Fsa:
     :param str or list lemma: word or sentence
     """
     assert isinstance(lemma, str) or isinstance(lemma, list), "Lemma type not correct"
-    self.lemma_orig = lemma
+    self.lemma_orig = lemma.lower()
     assert isinstance(self.lemma_orig, str) or isinstance(self.lemma_orig, list),\
       "Lemma type not correct"
     self.lemma = None
