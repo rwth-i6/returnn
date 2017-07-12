@@ -211,6 +211,9 @@ class Fsa:
       self.lexicon = Lexicon(self.lexicon_name)
 
   def run(self):
+    """
+    runs the FSA
+    """
     if self.fsa_type == 'asg':
       if self.label_conversion == True:
         self.convert_label_seq_to_indices()
