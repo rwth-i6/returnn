@@ -974,4 +974,4 @@ if __name__ == "__main__":
 
   main()
 
-  print(time.time() - start_time, "seconds")
+  print("Total time:", time.time() - start_time, "seconds")
