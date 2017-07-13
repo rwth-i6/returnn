@@ -172,6 +172,10 @@ class Fsa:
     assert isinstance(filename, str), "filename is not a string"
     self.filename = filename
 
+  def set_hmm_depth(self, depth):
+    assert isinstance(depth, int), "depth is not a int"
+    self.depth = depth
+
   def set_lexicon(self, lexicon_name=None):
     """
     sets a new lexicon
