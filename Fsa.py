@@ -183,7 +183,7 @@ class Fsa:
     """
     if isinstance(lexicon_name, str):
       self.lexicon_name = lexicon_name
-      self.load_lexicon()
+      self._load_lexicon()
 
   def set_state_tying(self, state_tying=None):
     """
@@ -193,7 +193,7 @@ class Fsa:
     assert isinstance(state_tying, str), "state tying is not a string"
     self.state_tying_name = state_tying
 
-  def load_lexicon(self, reload = False):
+  def _load_lexicon(self, reload = False):
     '''
     loads a lexicon from a file, loads the xml and returns its content
     where:
@@ -278,7 +278,7 @@ class Fsa:
         self.num_states = 0
         self.edges = []
       if self.depth >= 2:
-        self.load_lexicon()
+        self._load_lexicon()
         print("Getting allophone sequence...")
         self._find_allo_seq_in_lex()
         print("Phoneme acceptor...")
@@ -790,7 +790,7 @@ class Fsa:
     edges_orig = self.edges
     error_status = False
     self.edges = []
-    self._load_state_tying_file()
+    self._load_state_tying()
 
     while (edges_t):
       edge_t = edges_t.pop(0)
@@ -817,8 +817,7 @@ class Fsa:
       if error_status:
         self.edges = edges_orig
 
-
-  def _load_state_tying_file(self):
+  def _load_state_tying(self, reload = False):
     '''
     loads a state tying map from a file, loads the file and returns its content
     :param stFile: state tying map file (allo_syntax int)
@@ -970,7 +969,7 @@ def main():
                      state_tying_name=args.state_tying,
                      single_state=args.single_state)
 
-  fsa_gen.load_lexicon(True)
+  fsa_gen.set_lexicon(args.lexicon)
 
   fsa_gen.run()
 
