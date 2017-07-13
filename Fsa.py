@@ -192,6 +192,7 @@ class Fsa:
     """
     assert isinstance(state_tying, str), "state tying is not a string"
     self.state_tying_name = state_tying
+    self._load_state_tying()
 
   def _load_lexicon(self, reload = False):
     '''
