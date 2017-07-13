@@ -78,6 +78,55 @@ def test_Data_copy_batch_major():
   assert_equal(data2.batch_ndim, 3)
 
 
+def test_get_initializer_zero():
+  shape = (2, 3)
+  initializer = get_initializer(0.0)
+  v = initializer(shape)
+  assert_almost_equal(session.run(v), numpy.zeros(shape))
+
+
+def test_get_initializer_const_formula():
+  shape = (2, 3)
+  initializer = get_initializer("log(1.0 / 4.0)")
+  v = initializer(shape)
+  assert_almost_equal(session.run(v), numpy.zeros(shape) + numpy.log(1.0 / 4.0))
+
+
+def test_get_initializer_zeros():
+  shape = (2, 3)
+  initializer = get_initializer("zeros")
+  v = initializer(shape)
+  assert_almost_equal(session.run(v), numpy.zeros(shape))
+
+
+def test_get_initializer_constant():
+  shape = (2, 3)
+  initializer = get_initializer("constant")
+  v = initializer(shape)
+  assert_almost_equal(session.run(v), numpy.zeros(shape))
+
+
+def test_get_initializer_xavier():
+  shape = (2, 3)
+  initializer = get_initializer("xavier")
+  v = initializer(shape)
+  assert_equal(session.run(v).shape, shape)  # returns some random matrix
+
+
+def test_get_initializer_glorot_uniform():
+  shape = (2, 3)
+  initializer = get_initializer("glorot_uniform")
+  v = initializer(shape)
+  assert_equal(session.run(v).shape, shape)  # returns some random matrix
+
+
+def test_get_initializer_glorot_normal_with_scale():
+  shape = (2, 3)
+  initializer = get_initializer('VarianceScaling(scale=6.0, mode="fan_avg", distribution="normal")')
+  v = initializer(shape)
+  assert_equal(session.run(v).shape, shape)  # returns some random matrix
+
+
 def test_close_event_writer_thread():
   import threading
   import tempfile

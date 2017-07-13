@@ -1244,7 +1244,7 @@ def _get_act_func_with_op(s):
     else:
       return get_activation_function(v)
   a, b = None, None
-  for k in _bin_ops:
+  for k in "+-*/":
     if k in s:
       a, b = s.split(k, 2)
       a, b = _conv(a), _conv(b)
@@ -1271,15 +1271,31 @@ def random_uniform_abs_initializer(limit, **kwargs):
   return tf.random_uniform_initializer(minval=-limit, maxval=limit, **kwargs)
 
 
+def xavier_initializer(uniform=True, seed=None, dtype=tf.float32):
+  """
+  Alias for tf.glorot_uniform_initializer or tf.glorot_normal_initializer.
+
+  :param bool uniform: uniform or normal distribution
+  :param int seed:
+  :param tf.DType dtype:
+  :return: ((tuple[int]) -> tf.Tensor) | tf.Initializer
+  """
+  from tensorflow.python.ops import init_ops
+  return init_ops.variance_scaling_initializer(
+    scale=1.0, mode='fan_avg', distribution="uniform" if uniform else "normal", seed=seed, dtype=dtype)
+
+
 def get_initializer(s, seed=None, eval_local_ns=None):
   """
-  :param str|dict[str] s: e.g. "glorot_uniform" or "truncated_normal" or "orthogonal", or config dict with "class",
-    or string to be `eval`ed if it contains "(".
+  :param str|dict[str]|float s: e.g. "glorot_uniform" or "truncated_normal" or "orthogonal", or config dict with "class",
+    or string to be `eval`ed if it contains "(". constant if a float is given.
   :param int|tf.Tensor seed:
   :param dict[str]|None eval_local_ns:
   :return: (function (shape) -> tf.Tensor) | tf.Initializer
   :rtype: ((tuple[int]) -> tf.Tensor) | tf.Initializer
   """
+  if isinstance(s, (float, int)):
+    return tf.constant_initializer(s, dtype=tf.float32)
   import numpy
   import math
   from tensorflow.python.ops import init_ops
@@ -1288,14 +1304,19 @@ def get_initializer(s, seed=None, eval_local_ns=None):
   ns.update(vars(init_ops))
   ns.update(vars(math))
   ns["numpy"] = numpy
+  for k in sorted(list(ns.keys())):
+    if k.endswith("_initializer"):
+      k_short = k[:-len("_initializer")]
+      if k_short not in ns:
+        ns[k_short] = ns[k]
   f = None
   if isinstance(s, str):
     if "(" in s:
       f = eval(s, ns, eval_local_ns)
-    elif s.endswith("_initializer") and s in ns:
-      f = ns[s]()
     elif s + "_initializer" in ns:
       f = ns[s + "_initializer"]()
+    elif s in ns:
+      f = ns[s]()
   elif isinstance(s, dict):
     s = s.copy()
     class_name = s.pop("class")
@@ -1304,6 +1325,8 @@ def get_initializer(s, seed=None, eval_local_ns=None):
     f = class_.from_config(s)
   else:
     raise ValueError("invalid get_initializer argument, expected string or dict, got: %r" % s)
+  if isinstance(f, (float, int)):
+    return tf.constant_initializer(f, dtype=tf.float32)
   if not f:
     raise Exception("invalid initializer: %r" % s)
   if seed is not None:

@@ -927,13 +927,19 @@ class LinearLayer(_ConcatInputLayer):
   """
   layer_class = "linear"
 
-  def __init__(self, activation, with_bias=True, grad_filter=None, **kwargs):
+  def __init__(self, activation, with_bias=True, grad_filter=None,
+               forward_weights_init="glorot_uniform", bias_init=0.0,
+               **kwargs):
     """
     :param str|None activation: e.g. "relu", or None
     :param bool with_bias:
     :param float|None grad_filter: if grad norm is higher than this threshold (before activation), the grad is removed
+    :param str forward_weights_init: see :func:`TFUtil.get_initializer`
+    :param str recurrent_weights_init: see :func:`TFUtil.get_initializer`
+    :param str|float bias_init: see :func:`TFUtil.get_initializer`
     """
     super(LinearLayer, self).__init__(**kwargs)
+    from TFUtil import get_initializer
 
     self.activation = activation
     self.with_bias = with_bias
@@ -944,17 +950,22 @@ class LinearLayer(_ConcatInputLayer):
     assert n_in and n_out, "%r and %r" % (input_data, self.output)
 
     with var_creation_scope():
+      # Our Theano default: normal distribution, std_dev = sqrt(12. / (fan_in + fan_out))
+      # glorot_normal = variance_scaling_initializer(scale=1.0, mode="fan_avg", distribution="normal")
+      #  -> std_dev = sqrt(2. / (fan_in + fan_out)).
+      #  Or use VarianceScaling(scale=6.0, mode="fan_avg", distribution="normal") to get the same as in Theano.
+      fwd_weights_initializer = get_initializer(
+        forward_weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
       W = self.add_param(tf.Variable(
         name="W",
-        initial_value=tf.contrib.layers.xavier_initializer(seed=self.network.random.randint(2**31))(
-          shape=(n_in, n_out))))
+        initial_value=fwd_weights_initializer(shape=(n_in, n_out))))
 
       if self.with_bias:
-        b = self.add_param(tf.Variable(
-          name="b",
-          initial_value=tf.constant_initializer(value=0, dtype=tf.float32)(
-            shape=(n_out,))))
+        bias_initializer = get_initializer(
+          bias_init, seed=self.network.random.randint(2 ** 31) if bias_init else 0, eval_local_ns={"layer": self})
+        b = self.add_param(tf.Variable(name="b", initial_value=bias_initializer(shape=(n_out,))))
       else:
+        assert not bias_init
         b = None
 
     with tf.name_scope("linear"):
