@@ -788,7 +788,7 @@ class Fsa:
     edges_t = []
     edges_t.extend(self.edges)
     edges_orig = self.edges
-    error_status = false
+    error_status = False
     self.edges = []
     self._load_state_tying_file()
 
@@ -807,7 +807,7 @@ class Fsa:
           allo_id_num = self.state_tying.allo_map[allo_syntax]
         except:
           print("Error converting label:", label, pos, allo_syntax)
-          error_status = true
+          error_status = True
 
       if self.label_conversion:
         self.edges.append((edge_t[0], edge_t[1], allo_id_num, edge_t[3]))
