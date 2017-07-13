@@ -3,17 +3,13 @@
 from __future__ import print_function
 from __future__ import division
 
-try:
-  from Fsa import Fsa
-except ImportError:
-  import os
-  import sys
-  sys.path.append(os.path.relpath("./../"))
-  from Fsa import Fsa
 
+import os
+import sys
+sys.path.append(os.path.relpath("./../"))
+from Fsa import Fsa
+from Fsa import fsa_to_dot_format
 
-def test_01():
-  pass
 
 def main():
   import time
