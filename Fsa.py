@@ -151,7 +151,7 @@ class Fsa:
     :param str or list lemma: word or sentence
     """
     assert isinstance(lemma, str) or isinstance(lemma, list), "Lemma type not correct"
-    self.lemma_orig = lemma.lower()
+    self.lemma_orig = lemma.lower().rstrip()
     assert isinstance(self.lemma_orig, str) or isinstance(self.lemma_orig, list),\
       "Lemma type not correct"
     self.lemma = None
