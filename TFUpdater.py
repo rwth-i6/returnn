@@ -40,24 +40,33 @@ class Updater(object):
   and the update-op for all trainable vars.
   See the code of :func:`Updater.create_optimizer` for valid config options.
 
-  Note: Vincent Vanhoucke says, in case you get nans, consider increasing the epsilon (for Adam, Nadam and similar).
+  Note: `Vincent Vanhoucke says <https://github.com/tensorflow/tensorflow/issues/323#issuecomment-159116515>`_,
+  in case you get nans, consider increasing the epsilon (for Adam, Nadam and similar).
   This is the config option ``optimizer_epsilon``.
-  https://github.com/tensorflow/tensorflow/issues/323#issuecomment-159116515
   In some places in our Theano code, 1e-16 is our default epsilon, in some other parts, 1e-8 is.
   1e-8 might be more stable. Or even 1e-6.
-  Note that when the gradient is zero, the update can be proportional to lr / eps.
+  Note that when the gradient is suddenly zero in one step, the update can be proportional to lr / eps.
+
+  From the :class:`tf.train.AdamOptimizer` documentation:
+
+      The default value of 1e-8 for epsilon might not be a good default in
+      general. For example, when training an Inception network on ImageNet a
+      current good choice is 1.0 or 0.1. Note that since AdamOptimizer uses the
+      formulation just before Section 2.1 of the Kingma and Ba paper rather than
+      the formulation in Algorithm 1, the "epsilon" referred to here is "epsilon
+      hat" in the paper.
 
   More from Vincent Vanhoucke:
 
-  > One thing you can do is run with a tiny learning rate, or even zero learning rate.
-  > If you still have divergence then, you have a bug in your setup.
-  > If not, increase your rate slowly and see if there is a regime in which things train without diverging.
-  > It's completely possible to have weights that are in a good range,
-  > but activations or gradients going to infinity because of the shape of the loss, or too high a learning rate.
-  > It's obviously always a possibility that there is a bug in the optimizers, but in my experience,
-  > every single instance of this kind of problem could be traced back to a weirdly wired model,
-  > learning rate issues, bad randomization of the input examples,
-  > or - in the case of Adam or RMSProp - issues with the epsilon value.
+      One thing you can do is run with a tiny learning rate, or even zero learning rate.
+      If you still have divergence then, you have a bug in your setup.
+      If not, increase your rate slowly and see if there is a regime in which things train without diverging.
+      It's completely possible to have weights that are in a good range,
+      but activations or gradients going to infinity because of the shape of the loss, or too high a learning rate.
+      It's obviously always a possibility that there is a bug in the optimizers, but in my experience,
+      every single instance of this kind of problem could be traced back to a weirdly wired model,
+      learning rate issues, bad randomization of the input examples,
+      or - in the case of Adam or RMSProp - issues with the epsilon value.
 
   In addition, you might also want to try `gradient_nan_inf_filter` or maybe set beta1=0.5.
 
