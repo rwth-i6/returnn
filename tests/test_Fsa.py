@@ -34,7 +34,7 @@ def main():
 
   automaton.set_state_tying(st_ty)
 
-  automaton.set_hmm_depth(5)
+  automaton.set_hmm_depth(6)
 
   lexicon_end_time = time.time()
 
