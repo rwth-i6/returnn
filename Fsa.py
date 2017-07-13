@@ -976,6 +976,8 @@ def main():
 
   fsa_gen.set_lexicon(args.lexicon)
 
+  fsa_gen.set_state_tying(args.state_tying)
+
   fsa_gen.run()
 
   fsa_to_dot_format(file=fsa_gen.filename, num_states=fsa_gen.num_states, edges=fsa_gen.edges)
