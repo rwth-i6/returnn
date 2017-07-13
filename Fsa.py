@@ -830,14 +830,18 @@ class Fsa:
     from Log import log
     from LmDataset import StateTying
 
-    print("Loading state tying file:", self.state_tying_name)
+    if not isinstance(self.state_tying, StateTying):
+      reload = True
 
-    assert isfile(self.state_tying_name), "State tying file does not exists"
+    if reload:
+      print("Loading state tying file:", self.state_tying_name)
 
-    log.initialize(verbosity=[5])
-    self.state_tying = StateTying(self.state_tying_name)
+      assert isfile(self.state_tying_name), "State tying file does not exists"
 
-    print("Finished state tying mapping:", len(self.state_tying.allo_map), "allos to int")
+      log.initialize(verbosity=[5])
+      self.state_tying = StateTying(self.state_tying_name)
+
+      print("Finished state tying mapping:", len(self.state_tying.allo_map), "allos to int")
 
   def _build_allo_syntax_for_mapping(self, label, pos=''):
     """
