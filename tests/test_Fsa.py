@@ -4,9 +4,8 @@ from __future__ import print_function
 from __future__ import division
 
 
-import os
 import sys
-sys.path.append(os.path.relpath("./../"))
+sys.path += ["./.."]
 from Fsa import Fsa
 from Fsa import fsa_to_dot_format
 
@@ -16,13 +15,28 @@ def main():
 
   start_time = time.time()
 
-  lex = './../recog.150k.final.lex.gz'
-  st_ty = './../state-tying.txt'
-  lem = 'test_Fsa_lemma.txt'
+  lex_name = './tmp/recog.150k.final.lex.gz'
+
+  lex = []
+
+  lex_w = file(lex_name, "w")
+  lex_w.writelines(lex)
+
+  st_ty_name = './tmp/state-tying.txt'
+
+  st_ty = []
+
+  st_ty_w = file(st_ty, "w")
+  st_ty_w.writelines(st_ty)
+
   fsatype = ['asg', 'ctc', 'hmm']
 
-  # load file
-  lemmas = open(lem, "r")
+  lemmas = [
+    'Halloween is a fantastic event',
+    'This is a great day',
+    "hallucinations aren't great for driving",
+    'To be or not to be That is the question'
+  ]
 
   # init FSA class
   automaton = Fsa()
@@ -30,9 +44,9 @@ def main():
   # load lexicon (longest single op) and state tying file
   lexicon_start_time = time.time()
 
-  automaton.set_lexicon(lexicon_name=lex)
+  automaton.set_lexicon(lexicon_name=lex_name)
 
-  automaton.set_state_tying(st_ty)
+  automaton.set_state_tying(st_ty_name)
 
   automaton.set_hmm_depth(6)
 
@@ -52,8 +66,6 @@ def main():
       fsa_to_dot_format(file=filename, num_states=automaton.num_states, edges=automaton.edges)
 
   run_end_time = time.time()
-
-  lemmas.close()
 
   print("Run time:", run_end_time - run_start_time, "seconds")
 
