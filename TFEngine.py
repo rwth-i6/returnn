@@ -341,7 +341,7 @@ class Runner(object):
           with open(timeline_path, 'w') as f:
             f.write(tl.generate_chrome_trace_format(show_memory=True))
         else:
-          fetches_results = sess.run(fetches_dict, feed_dict=feed_dict) # type: dict[str,numpy.ndarray|str]
+          fetches_results = sess.run(fetches_dict, feed_dict=feed_dict)  # type: dict[str,numpy.ndarray|str]
           if writer:
             writer.add_summary(fetches_results["summary"], step + step_offset)
 

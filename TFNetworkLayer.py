@@ -3,7 +3,8 @@ from __future__ import print_function
 
 import tensorflow as tf
 import TFUtil
-from TFUtil import Data, OutputWithActivation, reuse_name_scope, var_creation_scope, dimshuffle, swapaxes
+from TFUtil import Data, OutputWithActivation, CustomUpdate, var_creation_scope, dimshuffle, swapaxes
+from Log import log
 
 
 class LayerBase(object):
@@ -311,13 +312,16 @@ class LayerBase(object):
       batch_dim *= beam_size
     return batch_dim
 
-  def add_param(self, param):
+  def add_param(self, param, custom_update=None):
     """
     :param tf.Variable param:
+    :param None|CustomUpdate custom_update: will be applied in training, instead of taking the gradient
     :return: param
     :rtype tf.Variable
     """
     assert isinstance(param, tf.Variable)
+    if custom_update:
+      custom_update.set_on_var(param)
     name_scope_prefix = self.get_absolute_name_scope_prefix()
     assert param.name
     assert param.name[:len(name_scope_prefix)] == name_scope_prefix
@@ -1714,27 +1718,33 @@ class ReduceLayer(_ConcatInputLayer):
   """
   layer_class = "reduce"
 
-  def __init__(self, mode, axis, keep_dims=False, enforce_batch_dim_axis=0, **kwargs):
+  def __init__(self, mode, axes=None, axis=None, keep_dims=False, enforce_batch_dim_axis=None, **kwargs):
     """
-    :param str mode: "sum" or "max"
-    :param int|list[int]|str axis: one axis or multiple axis to reduce.
+    :param str mode: "sum" or "max" or "mean"
+    :param int|list[int]|str axes: one axis or multiple axis to reduce.
       this is counted with batch-dim, which by default is axis 0 (see enforce_batch_dim_axis).
       it also accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature"
+    :param int|list[int]|str axis: for compatibility, can be used instead of ``axes``
     :param bool keep_dims: if dimensions should be kept (will be 1)
     :param int enforce_batch_dim_axis: will swap the batch-dim-axis of the input with the given axis.
       e.g. 0: will convert the input into batch-major format if not already like that.
     """
-    from TFUtil import swapaxes
+    if axis is not None:
+      print("reduce layer %r: option 'axis' is deprecated, use 'axes' instead" % kwargs["name"], file=log.v4)
+      assert axes is None, "don't provide both 'axes' and 'axis', layer %r" % kwargs["name"]
+      axes = axis
+    if enforce_batch_dim_axis is None and self.need_enforce_batch_dim_axis(axes):
+      enforce_batch_dim_axis = 0
     assert "n_out" not in kwargs
     assert "out_type" not in kwargs
     mode = mode.lower()
     assert mode in ["max", "sum", "avg", "mean"]
     super(ReduceLayer, self).__init__(**kwargs)
     assert not self.input_data.sparse
-    x = self.input_data.placeholder
-    if self.input_data.batch_dim_axis != enforce_batch_dim_axis:
-      x = swapaxes(x, self.input_data.batch_dim_axis, enforce_batch_dim_axis)
-    axis = self.get_axes(axis, input_data=self.input_data)
+    x = self.input_data
+    if enforce_batch_dim_axis is not None and x.batch_dim_axis != enforce_batch_dim_axis:
+      x = x.copy_with_batch_dim_axis(enforce_batch_dim_axis)
+    axes = self.get_axes(axes, input_data=x)
     if mode == "max":
       f = tf.reduce_max
     elif mode == "sum":
@@ -1743,20 +1753,40 @@ class ReduceLayer(_ConcatInputLayer):
       f = tf.reduce_mean
     else:
       assert False
-    y = f(x, axis=axis, keep_dims=keep_dims)
-    y_dyn_sizes = self.input_data.size_placeholder.copy()
+    if x.time_dim_axis in axes:
+      assert not keep_dims, "not yet implemented otherwise"
+      assert x.batch_dim_axis in axes, "not yet implemented otherwise"
+      axes = [a if (a < x.time_dim_axis) else (a - 1)
+              for a in axes if a != x.time_dim_axis]
+      x = x.copy_time_flattened()
+    y = f(x.placeholder, axis=axes, keep_dims=keep_dims)
+    y_dyn_sizes = x.size_placeholder.copy()
     if keep_dims:
-      for i in axis:
+      for i in axes:
         if i in y_dyn_sizes:
           y_dyn_sizes[i] = 1
     else:
-      for i in reversed(sorted(axis)):
+      for i in reversed(sorted(axes)):
         if i in y_dyn_sizes:
           del y_dyn_sizes[i]
         y_dyn_sizes = {(j if (j < i) else (j - 1)): s
                        for (j, s) in list(y_dyn_sizes.items())}
     self.output.placeholder = y
     self.output.size_placeholder = y_dyn_sizes
+
+  @classmethod
+  def need_enforce_batch_dim_axis(cls, axes):
+    """
+    :param int|list[int]|str axes:
+    :return: if any integer is in axes, thus we should have a fixed dimension layout
+    :rtype: bool
+    """
+    if isinstance(axes, int):
+      return True
+    if isinstance(axes, str):
+      return False
+    assert isinstance(axes, (list, tuple))
+    return any([cls.need_enforce_batch_dim_axis(a) for a in axes])
 
   @classmethod
   def get_axes(cls, axis, input_data):
@@ -1771,28 +1801,32 @@ class ReduceLayer(_ConcatInputLayer):
     return axis
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, axis, keep_dims=False, enforce_batch_dim_axis=0, **kwargs):
-    input_data = get_concat_sources_data_template(sources)
-    assert not input_data.sparse
-    axis = cls.get_axes(axis=axis, input_data=input_data)
-    y_shape = list(input_data.batch_shape)
-    if input_data.batch_dim_axis != enforce_batch_dim_axis:
-      y_shape[input_data.batch_dim_axis], y_shape[enforce_batch_dim_axis] = \
-        y_shape[enforce_batch_dim_axis], y_shape[input_data.batch_dim_axis]
+  def get_out_data_from_opts(cls, name, sources, axes=None, axis=None, keep_dims=False, enforce_batch_dim_axis=None,
+                             **kwargs):
+    if axis is not None:
+      axes = axis
+    if enforce_batch_dim_axis is None and cls.need_enforce_batch_dim_axis(axes):
+      enforce_batch_dim_axis = 0
+    x = get_concat_sources_data_template(sources)
+    assert not x.sparse
+    if enforce_batch_dim_axis is not None and x.batch_dim_axis != enforce_batch_dim_axis:
+      x = x.copy_with_batch_dim_axis(enforce_batch_dim_axis)
+    axes = cls.get_axes(axis=axes, input_data=x)
+    y_shape = list(x.batch_shape)
     if keep_dims:
-      for i in axis:
+      for i in axes:
         y_shape[i] = 1
+      y_shape.remove(x.batch_dim_axis)
     else:
-      for i in reversed(sorted(axis)):
-        assert i != enforce_batch_dim_axis
+      for i in reversed(sorted(set(axes + [x.batch_dim_axis]))):
         del y_shape[i]
     return Data(
       name="%s_output" % name,
-      shape=tuple(y_shape[:enforce_batch_dim_axis] + y_shape[enforce_batch_dim_axis + 1:]),
-      batch_dim_axis=enforce_batch_dim_axis,
-      dtype=input_data.dtype,
+      shape=y_shape,
+      batch_dim_axis=x.batch_dim_axis if (x.batch_dim_axis not in axes) else None,
+      dtype=x.dtype,
       sparse=False,
-      beam_size=input_data.beam_size)
+      beam_size=x.beam_size)
 
 
 class SqueezeLayer(_ConcatInputLayer):
@@ -2337,6 +2371,44 @@ class SubnetworkLayer(LayerBase):
     if h is not None:
       return h
     return super(SubnetworkLayer, self).get_last_hidden_state()
+
+
+class AccumulateMeanLayer(ReduceLayer):
+  """
+  Accumulates the mean of the input (in training).
+  It's similar to :class:`ReduceLayer`
+  """
+  layer_class = "accumulate_mean"
+
+  def __init__(self, exp_average, axes="bt", initial_value=None, is_prob_distribution=None, **kwargs):
+    """
+    :param float exp_average: momentum in exponential average calculation
+    :param int|list[str]|str axes: the axes to reduce. must contain batch and time.
+    :param float initial_value: how to initialize the variable which accumulates the mean
+    :param bool is_prob_distribution: if provided, better default for initial_value
+    """
+    super(AccumulateMeanLayer, self).__init__(mode="mean", keep_dims=False, axes=axes, **kwargs)
+    assert self.output.batch_dim_axis is None
+    assert all(self.output.batch_shape), "shape must be fixed"
+    shape = self.output.batch_shape
+
+    if is_prob_distribution:
+      assert len(shape) == 1
+      if initial_value is None:
+        initial_value = 1.0 / shape[0]
+    if initial_value is not None:
+      initial_value = tf.ones(shape) * initial_value
+    else:
+      initial_value = tf.zeros(shape)
+    from TFUtil import CustomUpdateExpAverage
+    v = self.add_param(
+      tf.Variable(initial_value, name="mean"),
+      custom_update=CustomUpdateExpAverage(average=self.output.placeholder, alpha=exp_average))
+    self.output.placeholder = v
+
+  @classmethod
+  def get_out_data_from_opts(cls, axes="bt", **kwargs):
+    return super(AccumulateMeanLayer, cls).get_out_data_from_opts(axes=axes, **kwargs)
 
 
 class FramewiseStatisticsLayer(LayerBase):

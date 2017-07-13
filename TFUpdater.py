@@ -5,7 +5,7 @@ import tensorflow as tf
 
 from Log import log
 from TFNetwork import TFNetwork
-from TFUtil import tf_version_tuple, assert_min_tf_version
+from TFUtil import tf_version_tuple, assert_min_tf_version, CustomUpdate
 
 _OptimizerClassesDict = {}  # type: dict[str,()->tf.train.Optimizer]
 
@@ -174,6 +174,9 @@ class Updater(object):
     self.reset_optim_op()
 
   def create_optim_op(self):
+    assert self.loss is not None
+    assert self.trainable_vars, "no variables to update/optimize"
+
     # Keep track of all current available vars.
     # The optimizer could add some, even some which are not so-called "slot-vars",
     # and we want to keep track about them.
@@ -182,40 +185,58 @@ class Updater(object):
     if not self.optimizer:
       self.create_optimizer()
 
-    assert self.loss is not None
-    with tf.variable_scope("optimize"):
-      # AccumulateN might not be deterministic but should be faster and should require less memory.
-      # We might want to make this configurable.
-      aggregation_method = tf.AggregationMethod.EXPERIMENTAL_ACCUMULATE_N
-      grad_noise = self.config.float("gradient_noise", 0.0)
-      grad_clip = self.config.float("gradient_clip", 0.0)
-      grad_clip_global_norm = self.config.float("gradient_clip_global_norm", 0.0)
-      # E.g. https://github.com/openai/baselines/blob/master/baselines/deepq/simple.py: grad_norm_clipping=10 -> tf.clip_by_norm
+    trainable_vars_for_gradients = list(self.trainable_vars)
+    trainable_vars_custom_update = []  # type: list[tf.Variable]
+    for v in self.trainable_vars:
+      if hasattr(v, "custom_update"):
+        trainable_vars_custom_update.append(v)
+        trainable_vars_for_gradients.remove(v)
 
-      # Extended self.optimizer.minimize() to optionally modify gradients.
-      grads_and_vars = self.optimizer.compute_gradients(
-        self.loss, var_list=self.trainable_vars,
-        aggregation_method=aggregation_method)
-      if not [v for g, v in grads_and_vars if g is not None]:
-        raise Exception("no single variable to train")
-      # Also see tf.contrib.layers.optimizers.optimize_loss() for reference.
-      if self.config.bool("gradient_nan_inf_filter", False):
-        from TFUtil import nan_to_num
-        grads_and_vars = [(nan_to_num(grad, nan_num=0.0, inf_num=0.0), var) for (grad, var) in grads_and_vars]
-      if grad_noise:
-        assert grad_noise > 0
-        from TFUtil import add_scaled_noise_to_gradients
-        grads_and_vars = add_scaled_noise_to_gradients(grads_and_vars, grad_noise)
-      if grad_clip:
-        assert grad_clip > 0
-        grads_and_vars = [(tf.clip_by_value(grad, -grad_clip, grad_clip), var) for grad, var in grads_and_vars]
-      if grad_clip_global_norm:
-        assert grad_clip_global_norm > 0
-        grads_clipped, _ = tf.clip_by_global_norm([grad for (grad, _) in grads_and_vars], grad_clip_global_norm)
-        grads_and_vars = zip(grads_clipped, [var for (_, var) in grads_and_vars])
-      apply_grads = self.optimizer.apply_gradients(grads_and_vars)
+    with tf.variable_scope("optimize"):
+      if trainable_vars_for_gradients:
+        # AccumulateN might not be deterministic but should be faster and should require less memory.
+        # We might want to make this configurable.
+        aggregation_method = tf.AggregationMethod.EXPERIMENTAL_ACCUMULATE_N
+        grad_noise = self.config.float("gradient_noise", 0.0)
+        grad_clip = self.config.float("gradient_clip", 0.0)
+        grad_clip_global_norm = self.config.float("gradient_clip_global_norm", 0.0)
+        # E.g. https://github.com/openai/baselines/blob/master/baselines/deepq/simple.py: grad_norm_clipping=10 -> tf.clip_by_norm
+
+        # Extended self.optimizer.minimize() to optionally modify gradients.
+        grads_and_vars = self.optimizer.compute_gradients(
+          self.loss, var_list=trainable_vars_for_gradients,
+          aggregation_method=aggregation_method)
+        if not [v for g, v in grads_and_vars if g is not None]:
+          raise Exception("no single variable to train")
+        # Also see tf.contrib.layers.optimizers.optimize_loss() for reference.
+        if self.config.bool("gradient_nan_inf_filter", False):
+          from TFUtil import nan_to_num
+          grads_and_vars = [(nan_to_num(grad, nan_num=0.0, inf_num=0.0), var) for (grad, var) in grads_and_vars]
+        if grad_noise:
+          assert grad_noise > 0
+          from TFUtil import add_scaled_noise_to_gradients
+          grads_and_vars = add_scaled_noise_to_gradients(grads_and_vars, grad_noise)
+        if grad_clip:
+          assert grad_clip > 0
+          grads_and_vars = [(tf.clip_by_value(grad, -grad_clip, grad_clip), var) for grad, var in grads_and_vars]
+        if grad_clip_global_norm:
+          assert grad_clip_global_norm > 0
+          grads_clipped, _ = tf.clip_by_global_norm([grad for (grad, _) in grads_and_vars], grad_clip_global_norm)
+          grads_and_vars = zip(grads_clipped, [var for (_, var) in grads_and_vars])
+        apply_grads = self.optimizer.apply_gradients(grads_and_vars)
+      else:
+        apply_grads = tf.no_op(name="no_grad_vars_no_op")
       incr_step_op = tf.assign_add(self.network.global_train_step, 1, name="global_train_step_increment")
       self.optim_op = tf.group(apply_grads, incr_step_op, name="optim_and_step_incr")
+
+    if trainable_vars_custom_update:
+      with tf.variable_scope("custom_update"):
+        updates = [self.optim_op]
+        for param in trainable_vars_custom_update:
+          custom_update = getattr(param, "custom_update")
+          assert isinstance(custom_update, CustomUpdate)
+          updates.append(custom_update.update_var(param))
+        self.optim_op = tf.group(*updates)
 
     print("Initialize optimizer with slots %s." % self.optimizer.get_slot_names(), file=log.v3)
     slot_vars = []

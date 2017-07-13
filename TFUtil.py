@@ -57,8 +57,10 @@ class Data(object):
     :param tf.Tensor|None placeholder: with added batch-dim
     :param bool sparse: whether to treat the value as an index. do not confuse with tf.SparseTensor
     :param None|int dim: feature dimension, shape[-1] if not sparse, otherwise like num_classes
-    :param int batch_dim_axis: where we add the batch-dim.
-      e.g. shape=(time,...), 0 -> (batch,time,...), 1 -> (time,batch,...)
+    :param int|None batch_dim_axis: where we add the batch-dim.
+      e.g. shape=(time,...), 0 -> (batch,time,...), 1 -> (time,batch,...).
+      This is normally always set, and a lot of code expects this. However, you can set it to None
+      if this Data does not have a batch-dim.
     :param int|None time_dim_axis: where we have the time dim axis, after we added the batch-dim.
       this is often 1. however, can be None if there is no time-dim.
     :param dict[int,tf.Tensor] tf.Tensor size_placeholder: for every None in shape, this will describe the size.
@@ -90,9 +92,11 @@ class Data(object):
       assert not sparse, "need dim"
       dim = shape[-1]
     self.dim = dim  # type: int
-    self.batch_dim_axis = batch_dim_axis  # type: int
+    self.batch_dim_axis = batch_dim_axis  # type: int|None  # usually not None
     if time_dim_axis is NotSpecified:
-      if (sparse and len(shape) >= 1) or ((not sparse) and len(shape) >= 2):
+      if batch_dim_axis is None:
+        time_dim_axis = None
+      elif (sparse and len(shape) >= 1) or ((not sparse) and len(shape) >= 2):
         if batch_dim_axis >= 1:
           time_dim_axis = 0
         else:
@@ -179,20 +183,14 @@ class Data(object):
     :return: copy of myself with batch_dim_axis == 0
     :rtype: Data
     """
-    data = self.copy()
-    if data.batch_dim_axis != 0:
-      if data.placeholder is not None:
-        data.placeholder = swapaxes(data.placeholder, 0, data.batch_dim_axis)
-      if data.time_dim_axis is not None and data.time_dim_axis <= data.batch_dim_axis:
-        data.time_dim_axis += 1
-      data.batch_dim_axis = 0
-    return data
+    return self.copy_with_batch_dim_axis(0)
 
   def copy_as_time_major(self):
     """
     :return: copy of myself with time_dim_axis == 0
     :rtype: Data
     """
+    assert self.batch_dim_axis is not None
     assert self.time_dim_axis is not None
     data = self.copy()
     if data.time_dim_axis != 0:
@@ -201,6 +199,43 @@ class Data(object):
       if data.batch_dim_axis <= data.time_dim_axis:
         data.batch_dim_axis += 1
       data.time_dim_axis = 0
+    return data
+
+  def copy_with_batch_dim_axis(self, batch_dim_axis):
+    """
+    :param int batch_dim_axis:
+    :return: copy of myself with specific batch_dim_axis
+    :rtype: Data
+    """
+    assert self.batch_dim_axis is not None
+    data = self.copy()
+    if data.batch_dim_axis != batch_dim_axis:
+      if data.placeholder is not None:
+        data.placeholder = swapaxes(data.placeholder, batch_dim_axis, data.batch_dim_axis)
+      other_special_axes = data.get_special_axes_dict(counted_with_batch_dim=False)
+      data.batch_dim_axis = batch_dim_axis
+      for k, a in other_special_axes.items():
+        setattr(data, k, data.get_batch_axis(a))
+    return data
+
+  def copy_time_flattened(self):
+    """
+    :return: copy of myself where the time-axis is flattened away into the batch-dim-axis.
+      See :func:`get_placeholder_time_flattened` and :func:`flatten_with_seq_len_mask for more details.
+    :rtype: Data
+    """
+    assert self.batch_dim_axis is not None
+    assert self.time_dim_axis is not None
+    data = self.copy()
+    if data.placeholder is not None:
+      data.placeholder = data.get_placeholder_time_flattened()
+    data.shape = tuple([
+      data.batch_shape[i] for i in range(data.batch_ndim)
+      if i not in (data.batch_dim_axis, data.time_dim_axis)])
+    if data.size_placeholder is not None:
+      if data.time_dim_axis_excluding_batch in data.size_placeholder:
+        del data.size_placeholder[data.time_dim_axis_excluding_batch]
+    data.time_dim_axis = None
     return data
 
   def copy_extend_with_beam(self, beam_size):
@@ -236,6 +271,7 @@ class Data(object):
     :return: copy of myself excluding the time-dimension without placeholder
     :rtype: Data
     """
+    assert self.batch_dim_axis is not None
     assert self.time_dim_axis is not None
     new_shape = list(self.shape)
     del new_shape[self.time_dim_axis_excluding_batch]
@@ -257,6 +293,7 @@ class Data(object):
     :return: copy of myself adding the time-dimension without placeholder
     :rtype: Data
     """
+    assert self.batch_dim_axis is not None
     assert self.time_dim_axis is None
     new_shape = list(self.shape)
     new_shape.insert(time_dim_axis, None)
@@ -300,7 +337,9 @@ class Data(object):
     :return: shape with added batch-dim. e.g. (batch,time,feat) = (None,None,128)
     :rtype: tuple[int|None]
     """
-    return self.shape[:self.batch_dim_axis] + (None,) + self.shape[self.batch_dim_axis:]
+    if self.batch_dim_axis is not None:
+      return self.shape[:self.batch_dim_axis] + (None,) + self.shape[self.batch_dim_axis:]
+    return self.shape
 
   @property
   def shape_dense(self):
@@ -332,7 +371,9 @@ class Data(object):
     :rtype: int
     :return: ndim counted with batch-dim
     """
-    return self.ndim + 1
+    if self.batch_dim_axis is not None:
+      return self.ndim + 1
+    return self.ndim
 
   @property
   def is_time_major(self):
@@ -428,6 +469,10 @@ class Data(object):
       return None
     return self.batch_ndim - 1
 
+  @feature_dim_axis.setter
+  def feature_dim_axis(self, value):
+    assert value == self.feature_dim_axis, "feature_dim_axis cannot be set at the moment"
+
   def get_axes(self, exclude_time=False, exclude_batch=False):
     """
     :param bool exclude_time: will filter out the time-axis
@@ -455,6 +500,7 @@ class Data(object):
       import re
       axes = axes.lower()
       if axes in ["b", "batch"]:
+        assert self.batch_dim_axis is not None
         axes = self.batch_dim_axis
       elif axes == "spatial":
         axes = self.get_spatial_batch_axes()
@@ -509,6 +555,13 @@ class Data(object):
     return axes[0]
 
   def get_batch_axis_excluding_batch(self, axis):
+    """
+    :param int axis: counted with batch-dim
+    :return: axis counted without batch-dim
+    :rtype: int
+    """
+    if self.batch_dim_axis is None:
+      return axis
     if axis == self.batch_dim_axis:
       return None
     if axis < self.batch_dim_axis:
@@ -516,9 +569,19 @@ class Data(object):
     return axis - 1
 
   def get_batch_axis(self, axis):
+    """
+    :param int axis: counted without batch-dim
+    :return: axis counted with batch-dim
+    :rtype: int
+    """
+    if self.batch_dim_axis is None:
+      return axis
     if axis >= self.batch_dim_axis:
       return axis + 1
     return axis
+
+  def have_batch_axis(self):
+    return self.batch_dim_axis is not None
 
   def have_time_axis(self):
     return self.time_dim_axis is not None
@@ -563,14 +626,64 @@ class Data(object):
     """
     return [self.get_batch_axis_excluding_batch(axis) for axis in self.get_feature_batch_axes()]
 
+  # excluding batch_dim_axis
+  SpecialAxesNames = ("time_dim_axis", "feature_dim_axis")
+
+  def get_special_axes_dict(self, counted_with_batch_dim=True):
+    """
+    :param bool counted_with_batch_dim:
+    :return: dict axis-name -> axis
+    :rtype: dict[str,int]
+    """
+    d = {k: getattr(self, k) for k in self.SpecialAxesNames}
+    if not counted_with_batch_dim:
+      d = {k: self.get_batch_axis_excluding_batch(d[k]) for k in self.SpecialAxesNames}
+    return d
+
   def get_bc_spatial_batch_shape(self):
     """
     :return: shape which will broadcast along all spatial dimensions and time/batch dim
     :rtype: tuple[int]
     """
-    dyn_axes = self.get_spatial_batch_axes() + [self.batch_dim_axis]
+    dyn_axes = self.get_spatial_batch_axes()
+    if self.batch_dim_axis is not None:
+      dyn_axes += [self.batch_dim_axis]
     return [1 if (axis in dyn_axes) else dim
             for axis, dim in enumerate(self.batch_shape)]
+
+
+class CustomUpdate(object):
+  def set_on_var(self, var):
+    """
+    :param tf.Variable var: variable to update. this will be recognized by :class:`TFUpdater.Updater`
+    """
+    # A bit ugly, but simple.
+    setattr(var, "custom_update", self)
+
+  def update_var(self, var):
+    """
+    :param tf.Variable var: variable to update
+    :return: operation which updates the variable, e.g. tf.assign_add(var, something)
+    :rtype: tf.Operation
+    """
+    raise NotImplementedError
+
+
+class CustomUpdateExpAverage(CustomUpdate):
+  """
+  exponential moving average
+  """
+
+  def __init__(self, average, alpha):
+    """
+    :param tf.Tensor average:
+    :param float alpha:
+    """
+    self.average = average
+    self.alpha = alpha
+
+  def update_var(self, var):
+    return tf.assign_add(var, self.alpha * (self.average - var))  # ((alpha - 1) * old + alpha * new)
 
 
 class OutputWithActivation(object):
