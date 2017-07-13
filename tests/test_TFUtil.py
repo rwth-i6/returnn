@@ -26,6 +26,58 @@ def test_tf_version_tuple():
   print("TF version tuple:", tf_version_tuple())
 
 
+def test_Data():
+  data = Data(name="my_data", shape=(None, 13))
+  assert_equal(data.name, "my_data")
+  assert_equal(data.dim, 13)
+  assert_equal(data.batch_dim_axis, 0)
+  assert_equal(data.time_dim_axis, 1)
+  assert_equal(data.feature_dim_axis, 2)
+  assert_equal(data.batch_ndim, 3)
+  assert_equal(data.batch_shape, (None, None, 13))
+  assert_equal(data.dtype, "float32")
+  assert_equal(data.sparse, False)
+
+
+def test_Data_dim():
+  data = Data(name="my_data", dim=13)
+  assert_equal(data.name, "my_data")
+  assert_equal(data.dim, 13)
+  assert_equal(data.batch_dim_axis, 0)
+  assert_equal(data.time_dim_axis, 1)
+  assert_equal(data.feature_dim_axis, 2)
+  assert_equal(data.batch_ndim, 3)
+  assert_equal(data.batch_shape, (None, None, 13))
+  assert_equal(data.dtype, "float32")
+  assert_equal(data.sparse, False)
+
+
+def test_Data_copy_time_major():
+  data = Data(name="my_data", dim=13)
+  assert_equal(data.batch_dim_axis, 0)
+  assert_equal(data.time_dim_axis, 1)
+  assert_equal(data.feature_dim_axis, 2)
+  assert_equal(data.batch_ndim, 3)
+  data2 = data.copy_as_time_major()
+  assert_equal(data2.time_dim_axis, 0)
+  assert_equal(data2.batch_dim_axis, 1)
+  assert_equal(data2.feature_dim_axis, 2)
+  assert_equal(data2.batch_ndim, 3)
+
+
+def test_Data_copy_batch_major():
+  data = Data(name="my_data", dim=13, time_dim_axis=0, batch_dim_axis=1)
+  assert_equal(data.time_dim_axis, 0)
+  assert_equal(data.batch_dim_axis, 1)
+  assert_equal(data.feature_dim_axis, 2)
+  assert_equal(data.batch_ndim, 3)
+  data2 = data.copy_as_batch_major()
+  assert_equal(data2.batch_dim_axis, 0)
+  assert_equal(data2.time_dim_axis, 1)
+  assert_equal(data2.feature_dim_axis, 2)
+  assert_equal(data2.batch_ndim, 3)
+
+
 def test_close_event_writer_thread():
   import threading
   import tempfile

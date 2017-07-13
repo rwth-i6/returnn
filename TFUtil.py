@@ -212,7 +212,7 @@ class Data(object):
     if data.batch_dim_axis != batch_dim_axis:
       if data.placeholder is not None:
         data.placeholder = swapaxes(data.placeholder, batch_dim_axis, data.batch_dim_axis)
-      other_special_axes = data.get_special_axes_dict(counted_with_batch_dim=False)
+      other_special_axes = data.get_special_axes_dict(counted_with_batch_dim=False, only_available=True)
       data.batch_dim_axis = batch_dim_axis
       for k, a in other_special_axes.items():
         setattr(data, k, data.get_batch_axis(a))
@@ -626,18 +626,27 @@ class Data(object):
     """
     return [self.get_batch_axis_excluding_batch(axis) for axis in self.get_feature_batch_axes()]
 
-  # excluding batch_dim_axis
-  SpecialAxesNames = ("time_dim_axis", "feature_dim_axis")
+  SpecialAxesNames = ("batch_dim_axis", "time_dim_axis", "feature_dim_axis")
 
-  def get_special_axes_dict(self, counted_with_batch_dim=True):
+  def get_special_axes_dict(self, counted_with_batch_dim=True, include_batch_dim_axis=False, only_available=False):
     """
     :param bool counted_with_batch_dim:
+    :param bool include_batch_dim_axis:
+    :param bool only_available:
     :return: dict axis-name -> axis
     :rtype: dict[str,int]
     """
-    d = {k: getattr(self, k) for k in self.SpecialAxesNames}
+    axes = list(self.SpecialAxesNames)
+    if include_batch_dim_axis:
+      assert counted_with_batch_dim
+    else:
+      axes.remove("batch_dim_axis")
+    d = {k: getattr(self, k) for k in axes}
     if not counted_with_batch_dim:
-      d = {k: self.get_batch_axis_excluding_batch(d[k]) for k in self.SpecialAxesNames}
+      d = {k: self.get_batch_axis_excluding_batch(v) if (v is not None) else None
+           for (k, v) in d.items()}
+    if only_available:
+      d = {k: v for (k, v) in d.items() if v is not None}
     return d
 
   def get_bc_spatial_batch_shape(self):
