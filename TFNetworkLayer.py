@@ -1904,7 +1904,7 @@ class WeightedSumLayer(_ConcatInputLayer):
         name="W",
         initial_value=tf.constant(1.0 / numpy.prod(size), shape=size)))
     filters = tf.reshape(filters, shape=list(size) + [1, 1])
-    y = tf.nn.convolution(x, filter=filters, padding=padding)  # result: (new_batch_dim, ..., 1)
+    y = tf.nn.convolution(x, filter=filters, padding=padding.upper())  # result: (new_batch_dim, ..., 1)
     if keep_dims:
       y_shape = tf.shape(y)
       # Now split new_batch_dim again into the other_axes.
