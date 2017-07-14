@@ -1476,6 +1476,7 @@ class ConvLayer(_ConcatInputLayer):
                input_expand_dims=0, input_add_feature_dim=False, input_split_feature_dim=None,
                with_bias=False,
                activation=None,
+               forward_weights_init="glorot_uniform", bias_init=0.0,
                **kwargs):
     """
     :param int n_out: number of outgoing features
@@ -1549,19 +1550,18 @@ class ConvLayer(_ConcatInputLayer):
         len(filter_size), len(dyn_axes), self.input_data.get_description()) +
       "consider using input_expand_dims or input_add_feature_dim.")
     filter_shape = list(filter_size) + [input_num_features, n_out]
+    from TFUtil import get_initializer
     with var_creation_scope():
-      filters = self.add_param(tf.Variable(
-        name="W",
-        initial_value=tf.contrib.layers.xavier_initializer(seed=self.network.random.randint(2**31))(
-          shape=filter_shape)))
+      fwd_weights_initializer = get_initializer(
+        forward_weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
+      filters = self.add_param(tf.Variable(name="W", initial_value=fwd_weights_initializer(shape=filter_shape)))
     y = tf.nn.convolution(x, filter=filters, padding=padding, strides=strides, dilation_rate=dilation_rate)
     # y shape is [batch] + dynamic_dims + [n_out].
     if with_bias:
       with var_creation_scope():
-        b = self.add_param(tf.Variable(
-          name="bias",
-          initial_value=tf.constant_initializer(value=0, dtype=tf.float32)(
-            shape=(n_out,))))
+        bias_initializer = get_initializer(
+          bias_init, seed=self.network.random.randint(2 ** 31) if bias_init else 0, eval_local_ns={"layer": self})
+        b = self.add_param(tf.Variable(name="bias", initial_value=bias_initializer(shape=(n_out,))))
       y += b
     if activation:
       from TFUtil import get_activation_function
