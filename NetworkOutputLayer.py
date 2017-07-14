@@ -316,7 +316,6 @@ class OutputLayer(Layer):
                                   custom_update_normalized=True)
       }
 
-
   def create_bias(self, n, prefix='b', name=""):
     if not name:
       name = "%s_%s" % (prefix, self.name)

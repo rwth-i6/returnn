@@ -26,6 +26,107 @@ def test_tf_version_tuple():
   print("TF version tuple:", tf_version_tuple())
 
 
+def test_Data():
+  data = Data(name="my_data", shape=(None, 13))
+  assert_equal(data.name, "my_data")
+  assert_equal(data.dim, 13)
+  assert_equal(data.batch_dim_axis, 0)
+  assert_equal(data.time_dim_axis, 1)
+  assert_equal(data.feature_dim_axis, 2)
+  assert_equal(data.batch_ndim, 3)
+  assert_equal(data.batch_shape, (None, None, 13))
+  assert_equal(data.dtype, "float32")
+  assert_equal(data.sparse, False)
+
+
+def test_Data_dim():
+  data = Data(name="my_data", dim=13)
+  assert_equal(data.name, "my_data")
+  assert_equal(data.dim, 13)
+  assert_equal(data.batch_dim_axis, 0)
+  assert_equal(data.time_dim_axis, 1)
+  assert_equal(data.feature_dim_axis, 2)
+  assert_equal(data.batch_ndim, 3)
+  assert_equal(data.batch_shape, (None, None, 13))
+  assert_equal(data.dtype, "float32")
+  assert_equal(data.sparse, False)
+
+
+def test_Data_copy_time_major():
+  data = Data(name="my_data", dim=13)
+  assert_equal(data.batch_dim_axis, 0)
+  assert_equal(data.time_dim_axis, 1)
+  assert_equal(data.feature_dim_axis, 2)
+  assert_equal(data.batch_ndim, 3)
+  data2 = data.copy_as_time_major()
+  assert_equal(data2.time_dim_axis, 0)
+  assert_equal(data2.batch_dim_axis, 1)
+  assert_equal(data2.feature_dim_axis, 2)
+  assert_equal(data2.batch_ndim, 3)
+
+
+def test_Data_copy_batch_major():
+  data = Data(name="my_data", dim=13, time_dim_axis=0, batch_dim_axis=1)
+  assert_equal(data.time_dim_axis, 0)
+  assert_equal(data.batch_dim_axis, 1)
+  assert_equal(data.feature_dim_axis, 2)
+  assert_equal(data.batch_ndim, 3)
+  data2 = data.copy_as_batch_major()
+  assert_equal(data2.batch_dim_axis, 0)
+  assert_equal(data2.time_dim_axis, 1)
+  assert_equal(data2.feature_dim_axis, 2)
+  assert_equal(data2.batch_ndim, 3)
+
+
+def test_get_initializer_zero():
+  shape = (2, 3)
+  initializer = get_initializer(0.0)
+  v = initializer(shape)
+  assert_almost_equal(session.run(v), numpy.zeros(shape))
+
+
+def test_get_initializer_const_formula():
+  shape = (2, 3)
+  initializer = get_initializer("log(1.0 / 4.0)")
+  v = initializer(shape)
+  assert_almost_equal(session.run(v), numpy.zeros(shape) + numpy.log(1.0 / 4.0))
+
+
+def test_get_initializer_zeros():
+  shape = (2, 3)
+  initializer = get_initializer("zeros")
+  v = initializer(shape)
+  assert_almost_equal(session.run(v), numpy.zeros(shape))
+
+
+def test_get_initializer_constant():
+  shape = (2, 3)
+  initializer = get_initializer("constant")
+  v = initializer(shape)
+  assert_almost_equal(session.run(v), numpy.zeros(shape))
+
+
+def test_get_initializer_xavier():
+  shape = (2, 3)
+  initializer = get_initializer("xavier")
+  v = initializer(shape)
+  assert_equal(session.run(v).shape, shape)  # returns some random matrix
+
+
+def test_get_initializer_glorot_uniform():
+  shape = (2, 3)
+  initializer = get_initializer("glorot_uniform")
+  v = initializer(shape)
+  assert_equal(session.run(v).shape, shape)  # returns some random matrix
+
+
+def test_get_initializer_glorot_normal_with_scale():
+  shape = (2, 3)
+  initializer = get_initializer('VarianceScaling(scale=6.0, mode="fan_avg", distribution="normal")')
+  v = initializer(shape)
+  assert_equal(session.run(v).shape, shape)  # returns some random matrix
+
+
 def test_close_event_writer_thread():
   import threading
   import tempfile
@@ -400,6 +501,7 @@ def test_encode_raw_seq_lens():
   assert_equal(list(back.eval()), [s.encode("utf8") for s in strs_stripped])
 
 
+@unittest.skip("broken? https://github.com/tensorflow/tensorflow/issues/11240")
 def test_sequential_control_dependencies():
   v = tf.Variable(initial_value=2, trainable=False, name="test_sequential_control_dependencies")
   with sequential_control_dependencies([
@@ -411,7 +513,27 @@ def test_sequential_control_dependencies():
   assert_equal(x.eval(), 3 + 5)
 
 
-@unittest.skip("broken?")  # TODO...
+@unittest.skip("broken? https://github.com/tensorflow/tensorflow/issues/11240")
+def test_var_init():
+  # upstream comment: use resource variables instead
+  v = tf.Variable(initial_value=2, trainable=False, name="test_var_init")
+  with tf.control_dependencies([v.initializer]):
+    x = v.read_value()
+  assert_equal(x.eval(), 2)
+
+
+def test_resource_var_init():
+  # https://github.com/tensorflow/tensorflow/issues/11240
+  # Will use :class:`ResourceVariable`.
+  v = tf.get_variable(
+    initializer=tf.constant_initializer(2), shape=(),
+    trainable=False, name="test_resource_var_init", use_resource=True)
+  with tf.control_dependencies([v.initializer]):
+    x = v.read_value()
+  assert_equal(x.eval(), 2)
+
+
+@unittest.skip("broken? see also test_var_init")  # TODO...
 def test_true_once():
   x = true_once()
   assert_equal(x.eval(), True)
@@ -490,6 +612,7 @@ def test_GlobalTensorArray():
 
 @unittest.skip("remove this when it works. see https://github.com/tensorflow/tensorflow/issues/10950")
 def test_TFArrayContainer():
+  # Bug #10950 is fixed upstream, should be in TF 1.2.2.
   # TODO...
   # https://stackoverflow.com/questions/44455722/create-my-own-resource-types-tf-resource
   # https://github.com/tensorflow/tensorflow/issues/1419
@@ -506,6 +629,10 @@ def test_TFArrayContainer():
 @unittest.skip("does not work")
 def test_TensorArray():
   # see https://stackoverflow.com/questions/44418036/
+  # Reason is that the TensorArray uses a per-run ("per-step") resource manager,
+  # thus it will not remember anything across session.run() calls.
+  # This is by design.
+  # Our :class:`GlobalTensorArrayOpMaker` could fix this.
   ta = tf.TensorArray(tf.int32, size=3)
   index = tf.placeholder(tf.int32)
   value = tf.placeholder(tf.int32)
@@ -576,6 +703,7 @@ def test_tf_tile():
   v2 = tf.tile(v, [beam_size])  # (beam*batch,)
   v2.set_shape((beam_size * batch_size,))
   print(v2.eval())
+  assert_equal(list(v2.eval()), [1, 2, 3] * 5)
   v3 = tf.reshape(v2, [beam_size, batch_size])  # (beam,batch)
   r = v3.eval()
   print(r)
@@ -592,6 +720,7 @@ def test_tile_transposed():
   v2 = tile_transposed(v, axis=0, multiples=beam_size)  # (batch*beam,)
   v2.set_shape((batch_size * beam_size,))
   print(v2.eval())
+  assert_equal(list(v2.eval()), [1] * 5 + [2] * 5 + [3] * 5)
   v3 = tf.reshape(v2, [batch_size, beam_size])  # (batch,beam)
   r = v3.eval()
   print(r)
@@ -612,3 +741,43 @@ def test_expand_dims_unbroadcast_instead_of_tf_tile():
   assert isinstance(r, numpy.ndarray)
   for beam in range(beam_size):
     assert_equal(list(r[:, beam]), [1, 2, 3])
+
+
+def test_where_nan():
+  # via: https://stackoverflow.com/a/42497444/133374
+  # @ops.RegisterGradient("Select")
+  # def _SelectGrad(op, grad):
+  #   c = op.inputs[0]
+  #   x = op.inputs[1]
+  #   zeros = array_ops.zeros_like(x)
+  #   return (None, array_ops.where(c, grad, zeros),
+  #           array_ops.where(c, zeros, grad))
+  # SelectOp, https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/cwise_op_select.cc
+  # We later check for nan. assert_equal does not work as-is because (nan == nan) is False.
+  # Thus, we resort to this check:
+  assert_equal(str(float("nan")), "nan")
+
+  where_0_nan = tf.where(True, 0., float("nan"))
+  print("where_0_nan:", where_0_nan.eval())
+  assert_equal(where_0_nan.eval(), 0.0)
+
+  x = tf.constant(0.)
+  x_equal_0 = tf.equal(x, 0.)
+  f = tf.where(x_equal_0, 0., 1. / x)
+  grad_x = tf.gradients(f, x)[0]
+  print("grad_x:", grad_x.eval())  # nan? or 0?
+  # This is expected when you look at the resulting computation graph for the gradient.
+  # You will have grad(1./x, x) * 0.0 in the graph in the back-propagation of the gradient, which is nan.
+  assert_equal(str(grad_x.eval()), "nan")
+
+  safe_x = tf.where(x_equal_0, 2., x)
+  grad_safe_x = tf.where(x_equal_0, 0., 1. / safe_x)
+  print("grad_safe_x:", grad_safe_x.eval())  # nan? ln(2)? 0?
+  # This works, because at no time, there is nan in the back-propagation.
+  assert_equal(grad_safe_x.eval(), 0.0)
+
+  f = tf.cond(x_equal_0, lambda: 0., lambda: 1. / x)
+  grad_cond_x = tf.gradients(f, x)[0]
+  print("grad_cond_x:", grad_cond_x.eval())  # nan? or 0?
+  # This is different than tf.where because really only one branch will go into the gradient.
+  assert_equal(grad_cond_x.eval(), 0.0)

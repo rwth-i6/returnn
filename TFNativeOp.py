@@ -11,7 +11,7 @@ from Util import camel_case_to_snake_case
 
 class OpDescription(NativeOp.NativeOpBaseMixin):
   @classmethod
-  def from_gen_base(x, gen_base):
+  def from_gen_base(cls, gen_base):
     """
     :param NativeOp.NativeOpGenBase gen_base:
     :rtype: OpDescription
@@ -25,6 +25,7 @@ class OpDescription(NativeOp.NativeOpBaseMixin):
       in_info=gen_base.in_info, out_info=gen_base.out_info,
       c_fw_code=gen_base.c_fw_code, c_bw_code=gen_base.c_bw_code,
       c_extra_support_code=gen_base.c_extra_support_code,
+      cpu_support=gen_base.cpu_support,
       grad_input_map=gen_base.grad_input_map,
       name=name)
 
@@ -266,9 +267,6 @@ class OpMaker(object):
       //#include "tensorflow/core/platform/stream_executor.h"
       //#include "tensorflow/core/common_runtime/gpu/gpu_util.h"
       """
-    code_header += """
-    using namespace tensorflow;
-    """
     # sgemm
     code_header += """
     typedef float real;
@@ -283,29 +281,34 @@ class OpMaker(object):
       real *c, integer *ldc);
     }
     """
-    code_register = """
-    REGISTER_OP("%(op_name)s")
-    %(code_register_op_io)s;
-    """ % format_args
-    code_op = """
+    code_header += """
+    using namespace tensorflow;
+
     #define TENSORFLOW 1
     #define CUDA 0
     #include "%(native_op_cpp_filename)s"
 
-    %(user_code_kernels)s
-
     static const int n_inputs = %(n_inputs)i, n_outputs = %(n_outputs)i;
 
-    class %(op_name)sOp : public OpKernel {
-    public:
-      explicit %(op_name)sOp(OpKernelConstruction* context) : OpKernel(context) {}
-      void Compute(OpKernelContext* context) override {
-        %(code_compute)s
-      }
-    };
-
-    REGISTER_KERNEL_BUILDER(Name("%(op_name)s").Device(DEVICE_CPU), %(op_name)sOp);
+    REGISTER_OP("%(op_name)s")
+    %(code_register_op_io)s;
     """ % format_args
+    if self.description.cpu_support:
+      code_cpu_op = """
+      %(user_code_kernels)s
+  
+      class %(op_name)sOp : public OpKernel {
+      public:
+        explicit %(op_name)sOp(OpKernelConstruction* context) : OpKernel(context) {}
+        void Compute(OpKernelContext* context) override {
+          %(code_compute)s
+        }
+      };
+  
+      REGISTER_KERNEL_BUILDER(Name("%(op_name)s").Device(DEVICE_CPU), %(op_name)sOp);
+      """ % format_args
+    else:
+      code_cpu_op = ""
     if self.with_cuda:
       code_gpu_op = """
       namespace _gpu {
@@ -338,7 +341,7 @@ class OpMaker(object):
       """ % format_args
     else:
       code_gpu_op = ""
-    return code_header + code_register + code_op + code_gpu_op
+    return code_header + code_cpu_op + code_gpu_op
 
   def _make_mod(self):
     if self.cache_key in self.mod_cache:
@@ -420,7 +423,8 @@ class OpMaker(object):
 
 def make_lstm_op(**kwargs):
   """
-  Demo.
+  See :class:`NativeLstmCell` for usage.
+
   :return: op
   :rtype: (tf.Tensor) -> tuple[tf.Tensor]
   """
@@ -433,11 +437,12 @@ class RecSeqCellOp(object):
     self.n_hidden = n_hidden
     self.n_input_dim = n_hidden
 
-  def __call__(self, inputs, index, initial_state=None):
+  def __call__(self, inputs, index, initial_state=None, recurrent_weights_initializer=None):
     """
     :param tf.Tensor inputs: shape (time,batch,n_input_dim)
     :param tf.Tensor index: shape (time,batch)
     :param tf.Tensor|None initial_state: optional initial state of shape (batch,n_hidden)
+    :param ()->tf.Tensor recurrent_weights_initializer:
     :returns: output fused tensor shape (time,batch,n_hidden), last hidden state (batch,n_hidden)
     :rtype: (tf.Tensor, tf.Tensor)
     """
@@ -473,19 +478,66 @@ class NativeLstmCell(RecSeqCellOp):
       c = tf.zeros((n_batch, n_out), dtype=tf.float32)
     return Z, V_h, c, i
 
-  def __call__(self, inputs, index, initial_state=None):
+  def __call__(self, inputs, index, initial_state=None, recurrent_weights_initializer=None):
     """
     :param tf.Tensor inputs: shape (time,batch,n_hidden*4)
     :param tf.Tensor index: shape (time,batch)
     :param tf.Tensor|None initial_state: shape (batch,n_hidden)
+    :param ()->tf.Tensor recurrent_weights_initializer:
     :returns: shape (time,batch,n_hidden), shape (batch,n_hidden)
     :rtype: (tf.Tensor, tf.Tensor)
     """
-    W_re = tf.get_variable(name="W_re", shape=(self.n_hidden, self.n_hidden * 4))
+    W_re = tf.get_variable(
+      name="W_re", shape=(self.n_hidden, self.n_hidden * 4), initializer=recurrent_weights_initializer)
     lstm_op = make_lstm_op()
     out, _, final_state = lstm_op(
       *self.map_layer_inputs_to_op(Z=inputs, V_h=W_re, i=index, initial_state=initial_state))
     return out, final_state
+
+
+def make_fast_baum_welch_op(**kwargs):
+  """
+  :return: op
+  :rtype: (tf.Tensor) -> tuple[tf.Tensor]
+  """
+  maker = OpMaker(OpDescription.from_gen_base(NativeOp.FastBaumWelchOp), **kwargs)
+  return maker.make_op()
+
+
+def fast_baum_welch(am_scores, edges, weights, start_end_states, float_idx, state_buffer=None):
+  """
+  :param tf.Tensor am_scores: (time, batch, dim), in -log space
+  :param tf.Tensor edges: (4,num_edges), edges of the graph (from,to,emission_idx,sequence_idx)
+  :param tf.Tensor weights: (num_edges,), weights of the edges
+  :param tf.Tensor start_end_states: (2, batch), (start,end) state idx in automaton. there is only one single automaton.
+  :param tf.Tensor float_idx: (time, batch) -> 0 or 1 (index mask, via seq lens)
+  :param tf.Tensor state_buffer: (2, num_states)
+  :return: (fwdbwd, obs_scores), fwdbwd is (time, batch, dim), obs_scores is (time, batch), in -log space
+  :rtype: (tf.Tensor, tf.Tensor)
+  """
+  # edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
+  op = make_fast_baum_welch_op()
+  if state_buffer is None:
+    last_state_idx = tf.reduce_max(start_end_states[1])  # see get_automata_for_batch
+    state_buffer = tf.zeros((2, last_state_idx + 1))
+  fwdbwd, obs_scores = op(am_scores, edges, weights, start_end_states, float_idx, state_buffer)
+  return fwdbwd, obs_scores
+
+
+def fast_baum_welch_by_sprint_automata(am_scores, float_idx, tags, sprint_opts):
+  """
+  :param tf.Tensor am_scores: (time, batch, dim), in -log space
+  :param tf.Tensor float_idx: (time, batch) -> 0 or 1 (index mask, via seq lens)
+  :param tf.Tensor tags: (batch,) -> seq name (str)
+  :param dict[str] sprint_opts:
+  :return: (fwdbwd, obs_scores), fwdbwd is (time, batch, dim), obs_scores is (time, batch), in -log space
+  :rtype: (tf.Tensor, tf.Tensor)
+  """
+  from TFSprint import get_sprint_automata_for_batch_op
+  edges, weights, start_end_states = get_sprint_automata_for_batch_op(sprint_opts=sprint_opts, tags=tags)
+  return fast_baum_welch(
+    am_scores=am_scores, float_idx=float_idx,
+    edges=edges, weights=weights, start_end_states=start_end_states)
 
 
 def demo():

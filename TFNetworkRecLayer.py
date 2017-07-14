@@ -8,6 +8,16 @@ from Log import log
 
 
 class RecLayer(_ConcatInputLayer):
+  """
+  Recurrent layer, has support for several implementations of LSTMs (via ``unit`` argument),
+  see :ref:`tf_lstm_benchmark` (http://returnn.readthedocs.io/en/latest/tf_lstm_benchmark.html),
+  and also GRU, or simple RNN.
+
+  A subnetwork can also be given which will be evaluated step-by-step,
+  which can use attention over some separate input,
+  which can be used to implement a decoder in a sequence-to-sequence scenario.
+  """
+
   layer_class = "rec"
   recurrent = True
 
@@ -16,6 +26,7 @@ class RecLayer(_ConcatInputLayer):
                direction=None, input_projection=True,
                initial_state=None,
                max_seq_len=None,
+               forward_weights_init=None, recurrent_weights_init=None, bias_init=None,
                **kwargs):
     """
     :param str|dict[str,dict[str]] unit: the RNNCell/etc name, e.g. "nativelstm". see comment below.
@@ -25,9 +36,17 @@ class RecLayer(_ConcatInputLayer):
     :param bool input_projection: True -> input is multiplied with matrix. False only works if same input dim
     :param LayerBase|None initial_state:
     :param int max_seq_len: if unit is a subnetwork
+    :param str forward_weights_init: see :func:`TFUtil.get_initializer`
+    :param str recurrent_weights_init: see :func:`TFUtil.get_initializer`
+    :param str bias_init: see :func:`TFUtil.get_initializer`
     """
     super(RecLayer, self).__init__(**kwargs)
-    import tensorflow.contrib.rnn as rnn_contrib
+    from TFUtil import is_gpu_available
+    from tensorflow.contrib import rnn as rnn_contrib
+    if is_gpu_available():
+      from tensorflow.contrib import cudnn_rnn
+    else:
+      cudnn_rnn = None
     import TFNativeOp
     if direction is not None:
       assert direction in [-1, 1]
@@ -40,6 +59,41 @@ class RecLayer(_ConcatInputLayer):
     self._sub_loss = None
     self._sub_error = None
     self._sub_loss_normalization_factor = None
+    # On the random initialization:
+    # For many cells, e.g. NativeLSTM: there will be a single recurrent weight matrix, (output.dim, output.dim * 4),
+    # and a single input weight matrix (input_data.dim, output.dim * 4), and a single bias (output.dim * 4,).
+    # The bias is by default initialized with 0.
+    # In the Theano :class:`RecurrentUnitLayer`, create_recurrent_weights() and create_forward_weights() are used,
+    #   where forward_weights_init = "random_uniform(p_add=%i)" % (output.dim * 4)
+    #   and recurrent_weights_init = "random_uniform()",
+    #   thus with in=input_data.dim, out=output.dim,
+    #   for forward weights: uniform sqrt(6. / (in + out*8)), for rec. weights: uniform sqrt(6. / (out*5)).
+    # TensorFlow initializers:
+    #   https://www.tensorflow.org/api_guides/python/contrib.layers#Initializers
+    #   https://www.tensorflow.org/api_docs/python/tf/orthogonal_initializer
+    #   https://github.com/tensorflow/tensorflow/blob/master/tensorflow/python/ops/init_ops.py
+    #   xavier_initializer with uniform=True: uniform sqrt(6 / (fan_in + fan_out)),
+    #     i.e. uniform sqrt(6. / (in + out*4)) for forward, sqrt(6./(out*5)) for rec.
+    #     Ref: https://www.tensorflow.org/api_docs/python/tf/contrib/layers/xavier_initializer
+    # Keras uses these defaults:
+    #   Ref: https://github.com/fchollet/keras/blob/master/keras/layers/recurrent.py
+    #   Ref: https://keras.io/initializers/, https://github.com/fchollet/keras/blob/master/keras/engine/topology.py
+    #   (fwd weights) kernel_initializer='glorot_uniform', recurrent_initializer='orthogonal',
+    #   where glorot_uniform is sqrt(6 / (fan_in + fan_out)), i.e. fwd weights: uniform sqrt(6 / (in + out*4)),
+    #   and orthogonal creates a random orthogonal matrix (fan_in, fan_out), i.e. rec (out, out*4).
+    self._bias_initializer = tf.constant_initializer(0.0)
+    self._fwd_weights_initializer = None
+    self._rec_weights_initializer = None
+    from TFUtil import get_initializer
+    if forward_weights_init:
+      self._fwd_weights_initializer = get_initializer(
+        forward_weights_init, seed=self.network.random.randint(2**31), eval_local_ns={"layer": self})
+    if recurrent_weights_init:
+      self._rec_weights_initializer = get_initializer(
+        recurrent_weights_init, seed=self.network.random.randint(2**31), eval_local_ns={"layer": self})
+    if bias_init:
+      self._bias_initializer = get_initializer(
+        bias_init, seed=self.network.random.randint(2**31), eval_local_ns={"layer": self})
     with tf.variable_scope(
           "rec",
           initializer=tf.contrib.layers.xavier_initializer(
@@ -50,6 +104,8 @@ class RecLayer(_ConcatInputLayer):
       self.cell = self._get_cell(unit)
       if isinstance(self.cell, (rnn_contrib.RNNCell, rnn_contrib.FusedRNNCell)):
         y = self._get_output_cell(self.cell)
+      elif cudnn_rnn and isinstance(self.cell, (cudnn_rnn.CudnnLSTM, cudnn_rnn.CudnnGRU)):
+        y = self._get_output_cudnn(self.cell)
       elif isinstance(self.cell, TFNativeOp.RecSeqCellOp):
         y = self._get_output_native_rec_op(self.cell)
       elif isinstance(self.cell, _SubnetworkRecCell):
@@ -131,14 +187,24 @@ class RecLayer(_ConcatInputLayer):
       out.beam_size = out.beam_size or dep.output.beam_size
     return out
 
+  def get_absolute_name_scope_prefix(self):
+    return super(RecLayer, self).get_absolute_name_scope_prefix() + "rec/"  # all under "rec" sub-name-scope
+
   _rnn_cells_dict = {}
 
   @classmethod
   def _create_rnn_cells_dict(cls):
-    import tensorflow.contrib.rnn as rnn_contrib
+    from TFUtil import is_gpu_available
+    from tensorflow.contrib import rnn as rnn_contrib
     import TFNativeOp
+    allowed_types = (rnn_contrib.RNNCell, rnn_contrib.FusedRNNCell, TFNativeOp.RecSeqCellOp)
+    if is_gpu_available():
+      from tensorflow.contrib import cudnn_rnn
+      allowed_types += (cudnn_rnn.CudnnLSTM, cudnn_rnn.CudnnGRU)
+    else:
+      cudnn_rnn = None
     def maybe_add(key, v):
-      if isinstance(v, type) and issubclass(v, (rnn_contrib.RNNCell, rnn_contrib.FusedRNNCell, TFNativeOp.RecSeqCellOp)):
+      if isinstance(v, type) and issubclass(v, allowed_types):
         name = key
         if name.endswith("Cell"):
           name = name[:-len("Cell")]
@@ -149,6 +215,13 @@ class RecLayer(_ConcatInputLayer):
       maybe_add(key, v)
     for key, v in vars(TFNativeOp).items():
       maybe_add(key, v)
+    if is_gpu_available():
+      for key, v in vars(cudnn_rnn).items():
+        maybe_add(key, v)
+    # Alias for the standard LSTM cell, because self._get_cell(unit="lstm") will use "NativeLSTM" by default.
+    maybe_add("StandardLSTM", rnn_contrib.LSTMCell)
+
+  _warn_msg_once_for_cell_name = set()
 
   @classmethod
   def get_rnn_cell_class(cls, name):
@@ -158,6 +231,15 @@ class RecLayer(_ConcatInputLayer):
     """
     if not cls._rnn_cells_dict:
       cls._create_rnn_cells_dict()
+    from TFUtil import is_gpu_available
+    if not is_gpu_available():
+      m = {"cudnnlstm": "LSTMBlockFused", "cudnngru": "GRUBlock"}
+      if name.lower() in m:
+        if name.lower() not in cls._warn_msg_once_for_cell_name:
+          print("You have selected unit %r in a rec layer which is for GPU only, so we are using %r instead." %
+                (name, m[name.lower()]), file=log.v2)
+          cls._warn_msg_once_for_cell_name.add(name.lower())
+        name = m[name.lower()]
     return cls._rnn_cells_dict[name.lower()]
 
   def _get_input(self):
@@ -170,8 +252,7 @@ class RecLayer(_ConcatInputLayer):
     if not self.input_data.is_time_major:
       assert self.input_data.batch_dim_axis == 0
       assert self.input_data.time_dim_axis == 1
-      from TFUtil import swapaxes
-      x = swapaxes(x, 0, 1)  # (time,batch,[dim])
+      x = self.input_data.get_placeholder_as_time_major()  # (time,batch,[dim])
     seq_len = self.input_data.size_placeholder[0]
     return x, seq_len
 
@@ -205,23 +286,31 @@ class RecLayer(_ConcatInputLayer):
     :param str|dict[str] unit:
     :rtype: RecLayer.SubnetworkCell|tensorflow.contrib.rnn.RNNCell|tensorflow.contrib.rnn.FusedRNNCell|TFNativeOp.RecSeqCellOp
     """
+    from TFUtil import is_gpu_available
     import tensorflow.contrib.rnn as rnn_contrib
     import TFNativeOp
     if isinstance(unit, dict):
       return _SubnetworkRecCell(parent_rec_layer=self, net_dict=unit)
-    else:
-      assert isinstance(unit, str)
-      if unit.lower() in ["lstmp", "lstm"]:
-        # Some possible LSTM implementations are (in all cases for both CPU and GPU):
-        # * BasicLSTM (the cell), via official TF, pure TF implementation
-        # * LSTMBlock (the cell), via tf.contrib.rnn.
-        # * LSTMBlockFused, via tf.contrib.rnn. should be much faster than BasicLSTM
-        # * NativeLSTM, our own native LSTM. should be faster than LSTMBlockFused
-        # We default to the fastest one, i.e. NativeLSTM.
-        # Note that they are currently not compatible to each other, i.e. the way the parameters are represented.
-        unit = "nativelstm"  # TFNativeOp.NativeLstmCell
+    assert isinstance(unit, str)
+    if unit.lower() in ["lstmp", "lstm"]:
+      # Some possible LSTM implementations are (in all cases for both CPU and GPU):
+      # * BasicLSTM (the cell), via official TF, pure TF implementation
+      # * LSTMBlock (the cell), via tf.contrib.rnn.
+      # * LSTMBlockFused, via tf.contrib.rnn. should be much faster than BasicLSTM
+      # * NativeLSTM, our own native LSTM. should be faster than LSTMBlockFused
+      # * CudnnLSTM, via tf.contrib.cudnn_rnn. This is experimental yet.
+      # We default to the current tested fastest one, i.e. NativeLSTM.
+      # Note that they are currently not compatible to each other, i.e. the way the parameters are represented.
+      unit = "nativelstm"  # TFNativeOp.NativeLstmCell
     rnn_cell_class = self.get_rnn_cell_class(unit)
     n_hidden = self.output.dim
+    if is_gpu_available():
+      import tensorflow.contrib.cudnn_rnn as cudnn_rnn
+      if issubclass(rnn_cell_class, (cudnn_rnn.CudnnLSTM, cudnn_rnn.CudnnGRU)):
+        cell = rnn_cell_class(
+          num_layers=1, num_units=n_hidden, input_size=self.input_data.dim,
+          input_mode='linear_input', direction='unidirectional', dropout=0.0)
+        return cell
     cell = rnn_cell_class(n_hidden)
     assert isinstance(
       cell, (rnn_contrib.RNNCell, rnn_contrib.FusedRNNCell, TFNativeOp.RecSeqCellOp))  # e.g. BasicLSTMCell
@@ -259,6 +348,119 @@ class RecLayer(_ConcatInputLayer):
       y = tf.reverse_sequence(y, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
     return y
 
+  @staticmethod
+  def _get_cudnn_param_size(num_units, input_size,
+                            num_layers=1, rnn_mode="lstm", input_mode="linear_input", direction='unidirectional'):
+    """
+    :param int num_layers:
+    :param int num_units:
+    :param int input_size:
+    :param str rnn_mode: 'lstm', 'gru', 'rnn_tanh' or 'rnn_relu'
+    :param str input_mode: "linear_input", "skip_input", "auto_select". note that we have a different default.
+    :param str direction: 'unidirectional' or 'bidirectional'
+    :return: size
+    :rtype: int
+    """
+    # Also see test_RecLayer_get_cudnn_params_size().
+    dir_count = {"unidirectional": 1, "bidirectional": 2}[direction]
+    num_gates = {"lstm": 3, "gru": 2}.get(rnn_mode, 0)
+    if input_mode == "linear_input" or (input_mode == "auto_select" and num_units != input_size):
+      # (input + recurrent + 2 * bias) * output * (gates + cell in)
+      size = (input_size + num_units + 2) * num_units * (num_gates + 1) * dir_count
+    elif input_mode == "skip_input" or (input_mode == "auto_select" and num_units == input_size):
+      # (recurrent + 2 * bias) * output * (gates + cell in)
+      size = (num_units + 2) * num_units * (num_gates + 1) * dir_count
+    else:
+      raise Exception("invalid input_mode %r" % input_mode)
+    # Remaining layers:
+    size += (num_units * dir_count + num_units + 2) * num_units * (num_gates + 1) * dir_count * (num_layers - 1)
+    return size
+
+  @staticmethod
+  def convert_cudnn_canonical_to_lstm_block(reader, prefix, target="lstm_block_wrapper/"):
+    """
+    This assumes CudnnLSTM currently, with num_layers=1, input_mode="linear_input", direction='unidirectional'!
+
+    :param tf.train.CheckpointReader reader:
+    :param str prefix: e.g. "layer2/rec/"
+    :param str target: e.g. "lstm_block_wrapper/" or "rnn/lstm_cell/"
+    :return: dict key -> value, {".../kernel": ..., ".../bias": ...} with prefix
+    :rtype: dict[str,numpy.ndarray]
+    """
+    # For reference:
+    # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/cudnn_rnn/python/ops/cudnn_rnn_ops.py
+    # For CudnnLSTM, there are 8 tensors per weight and per bias for each
+    # layer: tensor 0-3 are applied to the input from the previous layer and
+    # tensor 4-7 to the recurrent input. Tensor 0 and 4 are for the input gate;
+    # tensor 1 and 5 the forget gate; tensor 2 and 6 the new memory gate;
+    # tensor 3 and 7 the output gate.
+    import numpy
+    num_vars = 16
+    values = []
+    for i in range(num_vars):
+      values.append(reader.get_tensor("%scudnn/CudnnRNNParamsToCanonical:%i" % (prefix, i)))
+    assert len(values[-1].shape) == 1
+    output_dim = values[-1].shape[0]
+    # For some reason, the input weight matrices are sometimes flattened.
+    assert numpy.prod(values[0].shape) % output_dim == 0
+    input_dim = numpy.prod(values[0].shape) // output_dim
+    weights_and_biases = [
+      (numpy.concatenate(
+        [numpy.reshape(values[i], [output_dim, input_dim]),  # input weights
+         numpy.reshape(values[i + 4], [output_dim, output_dim])],  # recurrent weights
+        axis=1),
+       values[8 + i] +  # input bias
+       values[8 + i + 4]  # recurrent bias
+      )
+      for i in range(4)]
+    # cuDNN weights are in ifco order, convert to icfo order.
+    weights_and_biases[1:3] = reversed(weights_and_biases[1:3])
+    weights = numpy.transpose(numpy.concatenate([wb[0] for wb in weights_and_biases], axis=0))
+    biases = numpy.concatenate([wb[1] for wb in weights_and_biases], axis=0)
+    return {prefix + target + "kernel": weights, prefix + target + "bias": biases}
+
+  def _get_output_cudnn(self, cell):
+    """
+    :param tensorflow.contrib.cudnn_rnn.CudnnLSTM|tensorflow.contrib.cudnn_rnn.CudnnGRU cell:
+    :return: output of shape (time, batch, dim)
+    :rtype: tf.Tensor
+    """
+    from TFUtil import get_current_var_scope_name
+    from tensorflow.contrib.cudnn_rnn import RNNParamsSaveable
+    assert self._max_seq_len is None
+    assert self.input_data
+    assert not self.input_data.sparse
+    x, seq_len = self._get_input()
+    n_batch = tf.shape(seq_len)[0]
+    if self._direction == -1:
+      x = tf.reverse_sequence(x, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
+    with tf.variable_scope("cudnn"):
+      num_layers = 1
+      param_size = self._get_cudnn_param_size(
+        num_units=self.output.dim, input_size=self.input_data.dim, rnn_mode=cell._rnn_mode, num_layers=num_layers)
+      # Note: The raw params used during training for the cuDNN op is just a single variable
+      # with all params concatenated together.
+      # For the checkpoint save/restore, we will use RNNParamsSaveable, which also makes it easier in CPU mode
+      # to import the params for another unit like LSTMBlockCell.
+      # Also see: https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/cudnn_rnn/python/kernel_tests/cudnn_rnn_ops_test.py
+      params = tf.Variable(
+        tf.random_uniform([param_size], minval=-0.01, maxval=0.01, seed=42), name="params_raw", trainable=True)
+      params_saveable = RNNParamsSaveable(
+        params_to_canonical=cell.params_to_canonical,
+        canonical_to_params=cell.canonical_to_params,
+        param_variables=[params],
+        name="%s/params_canonical" % get_current_var_scope_name())
+      params_saveable.op = params
+      tf.add_to_collection(tf.GraphKeys.SAVEABLE_OBJECTS, params_saveable)
+      self.saveable_param_replace[params] = params_saveable
+      # It's like a fused cell, i.e. operates on the full sequence.
+      input_h = tf.zeros((num_layers, n_batch, self.output.dim), dtype=tf.float32)
+      input_c = tf.zeros((num_layers, n_batch, self.output.dim), dtype=tf.float32)
+      y, _, _ = cell(x, input_h=input_h, input_c=input_c, params=params)
+    if self._direction == -1:
+      y = tf.reverse_sequence(y, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
+    return y
+
   def _get_output_native_rec_op(self, cell):
     """
     :param TFNativeOp.RecSeqCellOp cell:
@@ -270,7 +472,9 @@ class RecLayer(_ConcatInputLayer):
     assert self.input_data
     x, seq_len = self._get_input()
     if self._input_projection:
-      W = tf.get_variable(name="W", shape=(self.input_data.dim, cell.n_input_dim), dtype=tf.float32)
+      W = tf.get_variable(
+        name="W", shape=(self.input_data.dim, cell.n_input_dim), dtype=tf.float32,
+        initializer=self._fwd_weights_initializer)
       if self.input_data.sparse:
         x = tf.nn.embedding_lookup(W, x)
       else:
@@ -278,12 +482,13 @@ class RecLayer(_ConcatInputLayer):
     else:
       assert not self.input_data.sparse
       assert self.input_data.dim == cell.n_input_dim
-    b = tf.get_variable(name="b", shape=(cell.n_input_dim,), dtype=tf.float32, initializer=tf.constant_initializer(0.0))
+    b = tf.get_variable(name="b", shape=(cell.n_input_dim,), dtype=tf.float32, initializer=self._bias_initializer)
     x += b
-    index = sequence_mask_time_major(seq_len, maxlen=tf.shape(x)[0])
+    index = sequence_mask_time_major(seq_len, maxlen=self.input_data.time_dimension())
     y, final_state = cell(
       inputs=directed(x, self._direction), index=directed(index, self._direction),
-      initial_state=self._initial_state)
+      initial_state=self._initial_state,
+      recurrent_weights_initializer=self._rec_weights_initializer)
     self._last_hidden_state = final_state
     y = directed(y, self._direction)
     return y
@@ -1064,13 +1269,12 @@ class RnnCellLayer(_ConcatInputLayer):
 
   layer_class = "rnn_cell"
 
-  def __init__(self, n_out, unit, initial_state=None, unit_opts=None, _var_names=None, **kwargs):
+  def __init__(self, n_out, unit, initial_state=None, unit_opts=None, **kwargs):
     """
     :param int n_out: so far, only output shape (batch,n_out) supported
     :param str|tf.contrib.rnn.RNNCell unit: e.g. "BasicLSTM" or "LSTMBlock"
     :param str|float|LayerBase initial_state: see self.get_rec_initial_state()
     :param dict[str]|None unit_opts: passed to the cell.__init__
-    :param dict[str,str] _var_names: hack for LSTMBlockCell to overwrite var names
     """
     super(RnnCellLayer, self).__init__(**kwargs)
     self._initial_state = initial_state
@@ -1081,13 +1285,6 @@ class RnnCellLayer(_ConcatInputLayer):
       assert isinstance(scope, tf.VariableScope)
       scope_name_prefix = scope.name + "/"  # e.g. "layer1/rec/"
       self.cell = self._get_cell(n_out=n_out, unit=unit, unit_opts=unit_opts)
-      if _var_names:
-        # https://github.com/tensorflow/tensorflow/issues/11168
-        import tensorflow.contrib.rnn as rnn_contrib
-        assert isinstance(self.cell, rnn_contrib.LSTMBlockCell)
-        for k, v in _var_names.items():
-          assert k in self.cell._names
-          self.cell._names[k] = v
       self.output.time_dim_axis = None
       self.output.batch_dim_axis = 0
       prev_state = self._rec_previous_layer.rec_vars_outputs["state"]

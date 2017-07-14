@@ -274,15 +274,23 @@ class Runner(object):
     :param str report_prefix: prefix for logging
     """
     sess = self.engine.tf_session
-    logdir = os.path.dirname(self.engine.model_filename) or os.getcwd()
-    logdir += "/%s" % self.data_provider.get_dataset_name()
-    if not self._should_train:  # like eval
-      logdir += "-%i" % self.engine.epoch
-    if self.engine.use_search_flag:
-      logdir += "-search"
-    writer = tf.summary.FileWriter(logdir)
-    writer.add_graph(sess.graph)
+    if self.engine.config.has("tf_log_dir"):
+      logdir = self.engine.config.value("tf_log_dir", None)
+    else:
+      logdir = os.path.dirname(self.engine.model_filename) or os.getcwd()
+    if logdir:
+      logdir += "/%s" % self.data_provider.get_dataset_name()
+      if not self._should_train:  # like eval
+        logdir += "-%i" % self.engine.epoch
+      if self.engine.use_search_flag:
+        logdir += "-search"
+      writer = tf.summary.FileWriter(logdir)
+      writer.add_graph(sess.graph)
+    else:
+      writer = None
     run_metadata = tf.RunMetadata()
+    debug_shell_in_runner = self.engine.config.bool("debug_shell_in_runner", False)
+    debug_shell_in_runner_step = self.engine.config.int("debug_shell_in_runner_step", 1)
 
     # Not sure if this is the best thing to do for an evaluation but it's ok for now.
     # We could also set it to 0 for non train epochs.
@@ -308,6 +316,13 @@ class Runner(object):
         if self._should_train and self.reset_updater_vars_mod_step and step % self.reset_updater_vars_mod_step == 0:
           print("Reset updater vars in step %i." % step, file=log.v5)
           self.engine.updater.init_optimizer_vars()
+
+        if debug_shell_in_runner and debug_shell_in_runner_step == step:
+          print("debug_shell_in_runner, step %i" % step, file=log.v1)
+          import Debug
+          Debug.debug_shell(user_ns=locals(), user_global_ns=globals(), exit_afterwards=False)
+
+        # Now do one calculation step. Optionally with metadata.
         if self.store_metadata_mod_step and step % self.store_metadata_mod_step == 0:
           # Slow run that stores extra information for debugging.
           print('Storing metadata', file=log.v5)
@@ -326,8 +341,9 @@ class Runner(object):
           with open(timeline_path, 'w') as f:
             f.write(tl.generate_chrome_trace_format(show_memory=True))
         else:
-          fetches_results = sess.run(fetches_dict, feed_dict=feed_dict) # type: dict[str,numpy.ndarray|str]
-          writer.add_summary(fetches_results["summary"], step + step_offset)
+          fetches_results = sess.run(fetches_dict, feed_dict=feed_dict)  # type: dict[str,numpy.ndarray|str]
+          if writer:
+            writer.add_summary(fetches_results["summary"], step + step_offset)
 
         eval_info = self._collect_eval_info(fetches_results=fetches_results)
         self._maybe_handle_extra_fetches(fetches_results)
@@ -358,8 +374,9 @@ class Runner(object):
     finally:
       from Util import try_and_ignore_exception
       from TFUtil import stop_event_writer_thread
-      try_and_ignore_exception(writer.close)
-      try_and_ignore_exception(lambda: stop_event_writer_thread(writer.event_writer))
+      if writer:
+        try_and_ignore_exception(writer.close)
+        try_and_ignore_exception(lambda: stop_event_writer_thread(writer.event_writer))
       try_and_ignore_exception(coord.request_stop)
       try_and_ignore_exception(lambda: coord.join(threads))
       try_and_ignore_exception(self.data_provider.stop_threads)
@@ -429,14 +446,6 @@ class Engine(object):
       if is_gpu_available():
         print("Note: There is a GPU available but you have set device=cpu.", file=log.v2)
 
-  @classmethod
-  def _guess_requested_max_num_threads(cls):
-    omp_num_threads = int(os.environ.get("OMP_NUM_THREADS") or 0)
-    if omp_num_threads:
-      # Minimum of 2 threads, should not hurt.
-      return max(omp_num_threads, 2)
-    return None
-
   def _close_tf_session(self):
     if self.tf_session:
       self.tf_session.close()
@@ -451,10 +460,8 @@ class Engine(object):
     # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/protobuf/config.proto
     opts.setdefault("log_device_placement", False)
     opts.setdefault("device_count", {}).setdefault("GPU", 1 if self.is_requesting_for_gpu() else 0)
-    num_threads = self._guess_requested_max_num_threads()
-    if num_threads:
-      opts.setdefault("intra_op_parallelism_threads", num_threads)
-      opts.setdefault("inter_op_parallelism_threads", num_threads)
+    # Note: We don't set intra_op_parallelism_threads and inter_op_parallelism_threads here anymore
+    # because it is saver to do it via setup_tf_thread_pools() which we call very early.
     print("Setup tf.Session with options %r ..." % opts, file=log.v2)
     config = tf.ConfigProto(**opts)
     # config.gpu_options.allow_growth=True
@@ -507,10 +514,12 @@ class Engine(object):
     print("Load model %s" % (filename,), file=log.v4)
     self.network.load_params_from_file(filename, session=self.tf_session)
 
-  def save_model(self, filename):
+  def save_model(self, filename=None):
     """
     :param str filename: full filename for model
     """
+    if not filename:
+      filename = self.get_epoch_model_filename()
     print("Save model under %s" % (filename,), file=log.v4)
     self.network.save_params_to_file(filename, session=self.tf_session)
 

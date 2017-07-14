@@ -30,6 +30,19 @@ def test_cmd_stderr():
   assert_equal(r, [], "cmd() output should only cover stdout")
 
 
+def test_hms():
+  assert_equal(hms(5), "0:00:05")
+  assert_equal(hms(65), "0:01:05")
+  assert_equal(hms(65 + 60 * 60), "1:01:05")
+
+
+def test_hms_fraction():
+  assert_equal(hms_fraction(0, decimals=3), "0:00:00.000")
+  assert_equal(hms_fraction(5, decimals=3), "0:00:05.000")
+  assert_equal(hms_fraction(5.345, decimals=3), "0:00:05.345")
+  assert_equal(hms_fraction(65.345, decimals=3), "0:01:05.345")
+
+
 def test_uniq():
   assert (uniq(np.array([0, 1, 1, 1, 2, 2])) == np.array([0, 1, 2])).all()
 

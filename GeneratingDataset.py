@@ -6,9 +6,14 @@ import numpy
 
 class GeneratingDataset(Dataset):
 
-  def __init__(self, input_dim, output_dim, window=1, num_seqs=float("inf"), fixed_random_seed=None, **kwargs):
-    assert window == 1
-    super(GeneratingDataset, self).__init__(window=window, **kwargs)
+  def __init__(self, input_dim, output_dim, num_seqs=float("inf"), fixed_random_seed=None, **kwargs):
+    """
+    :param int input_dim:
+    :param int|dict[str,int|(int,int)|dict] output_dim:
+    :param int|float num_seqs:
+    :param int fixed_random_seed:
+    """
+    super(GeneratingDataset, self).__init__(**kwargs)
     assert self.shuffle_frames_of_nseqs == 0
 
     self.num_inputs = input_dim
@@ -44,6 +49,15 @@ class GeneratingDataset(Dataset):
       i += 1
     del self.added_data[:i]
 
+  def _check_loaded_seq_idx(self, seq_idx):
+    if not self.added_data:
+      raise Exception("no data loaded yet")
+    start_loaded_seq_idx = self.added_data[0].seq_idx
+    end_loaded_seq_idx = self.added_data[-1].seq_idx
+    if seq_idx < start_loaded_seq_idx or seq_idx > end_loaded_seq_idx:
+      raise Exception("seq_idx %i not in loaded seqs range [%i,%i]" % (
+        seq_idx, start_loaded_seq_idx, end_loaded_seq_idx))
+
   def _get_seq(self, seq_idx):
     for data in self.added_data:
       if data.seq_idx == seq_idx:
@@ -75,6 +89,9 @@ class GeneratingDataset(Dataset):
     if end >= self.num_seqs:
       self.reached_final_seq = True
     seqs = [self.generate_seq(seq_idx=seq_idx) for seq_idx in range(start, end)]
+    if self.window > 1:
+      for seq in seqs:
+        seq.features = self.sliding_window(seq.features)
     self._num_timesteps += sum([seq.num_frames for seq in seqs])
     self.added_data += seqs
 
@@ -104,15 +121,19 @@ class GeneratingDataset(Dataset):
     return self._get_seq(sorted_seq_idx).num_frames
 
   def get_input_data(self, sorted_seq_idx):
+    self._check_loaded_seq_idx(sorted_seq_idx)
     return self._get_seq(sorted_seq_idx).features
 
   def get_targets(self, target, sorted_seq_idx):
+    self._check_loaded_seq_idx(sorted_seq_idx)
     return self._get_seq(sorted_seq_idx).targets[target]
 
   def get_ctc_targets(self, sorted_seq_idx):
+    self._check_loaded_seq_idx(sorted_seq_idx)
     assert self._get_seq(sorted_seq_idx).ctc_targets
 
   def get_tag(self, sorted_seq_idx):
+    self._check_loaded_seq_idx(sorted_seq_idx)
     return self._get_seq(sorted_seq_idx).seq_tag
 
 

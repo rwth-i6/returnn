@@ -86,23 +86,6 @@ def test_compare_layer():
     assert_equal(v[0], True)
 
 
-def test_rec_subnet_with_choice():
-  with tf.Session():
-    config = Config()
-    config.update({
-      "num_outputs": 3,
-      "num_inputs": 4,
-      "network": {
-        "output": {"class": "rec", "target": "classes", "unit": {
-          "prob": {"class": "softmax", "from": ["prev:output"], "loss": "ce", "target": "classes"},
-          "output": {"class": "choice", "beam_size": 4, "from": ["prob"], "target": "classes", "initial_output": 0}
-        }},
-      }
-    })
-    network = TFNetwork(config=config, train_flag=True)
-    network.construct_from_dict(config.typed_dict["network"])
-
-
 def test_layer_base_get_out_data_from_opts():
   with tf.Session():
     config = Config()
