@@ -148,12 +148,10 @@ class Fsa:
 
   def set_lemma(self, lemma):
     """
-    :param str or list lemma: word or sentence
+    :param str lemma: word or sentence
     """
     assert isinstance(lemma, str) or isinstance(lemma, list), "Lemma type not correct"
-    self.lemma_orig = lemma.lower().rstrip()
-    assert isinstance(self.lemma_orig, str) or isinstance(self.lemma_orig, list),\
-      "Lemma type not correct"
+    self.lemma_orig = lemma.lower().strip()
     self.lemma = None
 
   def set_fsa_type(self, fsa_type):
@@ -194,7 +192,7 @@ class Fsa:
     self.state_tying_name = state_tying
     self._load_state_tying()
 
-  def _load_lexicon(self, reload = False):
+  def _load_lexicon(self, reload=False):
     '''
     loads a lexicon from a file, loads the xml and returns its content
     where:
@@ -334,16 +332,16 @@ class Fsa:
     elif self.fsa_type == 'hmm':  # loops on first and last node excluded
       countloops = self.num_states - 1
     else:
-      assert 0 == 1, "No finite state automaton matches to chosen type"
+      assert False, ("No finite state automaton matches to chosen type", self.fsa_type)
 
     # adds loops to fsa
     for state in range(1, countloops):
       edges_included = [edge_index for edge_index, edge in enumerate(self.edges) if
                         (edge[1] == state and edge[2] != self._EPS)]
       for edge_inc in edges_included:
-        try:
+        if len(self.edges[edge_inc]) == 5:
           label_pos = self.edges[edge_inc][4]
-        except Exception:
+        else:
           label_pos = None
         if self.fsa_type == 'hmm':
           edge_n = [state, state, self.edges[edge_inc][2], 0., self.edges[edge_inc][4]]
@@ -804,9 +802,9 @@ class Fsa:
       if label == self._EPS:
         allo_id_num = '*'
       else:
-        try:
+        if allo_syntax in self.state_tying.allo_map:
           allo_id_num = self.state_tying.allo_map[allo_syntax]
-        except:
+        else:
           print("Error converting label:", label, pos, allo_syntax)
           error_status = True
 
@@ -818,7 +816,7 @@ class Fsa:
       if error_status:
         self.edges = edges_orig
 
-  def _load_state_tying(self, reload = False):
+  def _load_state_tying(self, reload=False):
     '''
     loads a state tying map from a file, loads the file and returns its content
     :param stFile: state tying map file (allo_syntax int)
@@ -960,11 +958,8 @@ def main():
   fsa_gen = Fsa()
 
   fsa_gen.set_lemma(args.label_seq)
-
   fsa_gen.set_fsa_type(args.fsa)
-
   fsa_gen.set_filename(args.file)
-
   fsa_gen.set_params(asg_repetition=args.asg_repetition,
                      num_labels=args.num_labels,
                      label_conversion=args.label_conversion,
@@ -973,9 +968,7 @@ def main():
                      lexicon_name=args.lexicon,
                      state_tying_name=args.state_tying,
                      single_state=args.single_state)
-
   fsa_gen.set_lexicon(args.lexicon)
-
   fsa_gen.set_state_tying(args.state_tying)
 
   fsa_gen.run()
