@@ -42,9 +42,9 @@ class RecLayer(_ConcatInputLayer):
     """
     super(RecLayer, self).__init__(**kwargs)
     from TFUtil import is_gpu_available
-    import tensorflow.contrib.rnn as rnn_contrib
+    from tensorflow.contrib import rnn as rnn_contrib
     if is_gpu_available():
-      import tensorflow.contrib.cudnn_rnn as cudnn_rnn
+      from tensorflow.contrib import cudnn_rnn
     else:
       cudnn_rnn = None
     import TFNativeOp
@@ -195,11 +195,11 @@ class RecLayer(_ConcatInputLayer):
   @classmethod
   def _create_rnn_cells_dict(cls):
     from TFUtil import is_gpu_available
-    import tensorflow.contrib.rnn as rnn_contrib
+    from tensorflow.contrib import rnn as rnn_contrib
     import TFNativeOp
     allowed_types = (rnn_contrib.RNNCell, rnn_contrib.FusedRNNCell, TFNativeOp.RecSeqCellOp)
     if is_gpu_available():
-      import tensorflow.contrib.cudnn_rnn as cudnn_rnn
+      from tensorflow.contrib import cudnn_rnn
       allowed_types += (cudnn_rnn.CudnnLSTM, cudnn_rnn.CudnnGRU)
     else:
       cudnn_rnn = None
@@ -252,8 +252,7 @@ class RecLayer(_ConcatInputLayer):
     if not self.input_data.is_time_major:
       assert self.input_data.batch_dim_axis == 0
       assert self.input_data.time_dim_axis == 1
-      from TFUtil import swapaxes
-      x = swapaxes(x, 0, 1)  # (time,batch,[dim])
+      x = self.input_data.get_placeholder_as_time_major()  # (time,batch,[dim])
     seq_len = self.input_data.size_placeholder[0]
     return x, seq_len
 
@@ -485,7 +484,7 @@ class RecLayer(_ConcatInputLayer):
       assert self.input_data.dim == cell.n_input_dim
     b = tf.get_variable(name="b", shape=(cell.n_input_dim,), dtype=tf.float32, initializer=self._bias_initializer)
     x += b
-    index = sequence_mask_time_major(seq_len, maxlen=tf.shape(x)[0])
+    index = sequence_mask_time_major(seq_len, maxlen=self.input_data.time_dimension())
     y, final_state = cell(
       inputs=directed(x, self._direction), index=directed(index, self._direction),
       initial_state=self._initial_state,

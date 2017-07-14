@@ -2,6 +2,7 @@
 from __future__ import print_function
 
 import tensorflow as tf
+import contextlib
 import TFUtil
 from TFUtil import Data, OutputWithActivation, CustomUpdate, var_creation_scope, dimshuffle, swapaxes
 from Log import log
@@ -678,6 +679,25 @@ class SourceLayer(LayerBase):
     return network.get_extern_data(data_key, mark_data_key_as_used=False)
 
 
+@contextlib.contextmanager
+def _name_scope_for_concat_src_layers(src_layers, postfix):
+  """
+  :param list[LayerBase] src_layers:
+  :param str postfix:
+  :return: yields scope via reuse_name_scope()
+  """
+  assert src_layers
+  if len(src_layers) == 1:
+    name_scope = src_layers[0].get_absolute_name_scope_prefix() + postfix
+  else:
+    base = src_layers[0].network.get_absolute_name_scope_prefix()
+    name = "_".join([l.tf_scope_name for l in src_layers])
+    name_scope = base + name + "/" + postfix
+  from TFUtil import reuse_name_scope
+  with reuse_name_scope(name_scope, absolute=True) as scope:
+    yield scope
+
+
 def concat_sources(src_layers):
   """
   :param list[LayerBase] src_layers:
@@ -701,9 +721,10 @@ def concat_sources(src_layers):
     assert shape, "source must not be a scalar of layer %r" % layer
     assert shape[:-1] == prefix_shape, "incompatible concat with layer %r" % layer
     assert shape[-1], "source last-dim must be specified of layer %r" % layer
-  data.placeholder = tf.concat(
-    axis=len(prefix_shape) + 1,  # one more because this is with batch-dim
-    values=[layer.output.get_placeholder_with_specific_batch_dim_axis(data.batch_dim_axis) for layer in src_layers])
+  with _name_scope_for_concat_src_layers(src_layers, "concat_sources"):
+    data.placeholder = tf.concat(
+      axis=len(prefix_shape) + 1,  # one more because this is with batch-dim
+      values=[layer.output.get_placeholder_with_specific_batch_dim_axis(data.batch_dim_axis) for layer in src_layers])
   data.size_placeholder = src_layers[0].output.size_placeholder.copy()
   network.concat_sources_dropout_cache[(tuple(src_layers), 0.0)] = data.copy()
   return data
@@ -755,15 +776,16 @@ def concat_sources_with_opt_dropout(src_layers, dropout=0):
     return network.concat_sources_dropout_cache[(tuple(src_layers), float(dropout))].copy()
   data = data.copy()
   assert 0.0 < dropout < 1.0
-  fn_train = lambda: tf.nn.dropout(
+  with _name_scope_for_concat_src_layers(src_layers, "dropout_in_train"):
+    fn_train = lambda: tf.nn.dropout(
       data.placeholder,
       keep_prob=1 - dropout,
       # noise_shape is like old behavior for now:
       # all dynamic dimensions (batch,time) will use the same dropout-mask broadcasted.
       noise_shape=data.get_bc_spatial_batch_shape(),
       seed=network.random.randint(2 ** 31))
-  fn_eval = lambda: data.placeholder
-  data.placeholder = network.cond_on_train(fn_train, fn_eval)
+    fn_eval = lambda: data.placeholder
+    data.placeholder = network.cond_on_train(fn_train, fn_eval)
   network.concat_sources_dropout_cache[(tuple(src_layers), float(dropout))] = data.copy()
   return data
 

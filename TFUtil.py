@@ -195,7 +195,8 @@ class Data(object):
     data = self.copy()
     if data.time_dim_axis != 0:
       if data.placeholder is not None:
-        data.placeholder = swapaxes(data.placeholder, 0, data.time_dim_axis)
+        with reuse_name_scope_of_tensor(data.placeholder):
+          data.placeholder = swapaxes(data.placeholder, 0, data.time_dim_axis)
       if data.batch_dim_axis <= data.time_dim_axis:
         data.batch_dim_axis += 1
       data.time_dim_axis = 0
@@ -397,13 +398,24 @@ class Data(object):
       return None
     return self.get_batch_axis_excluding_batch(self.time_dim_axis)
 
+  def time_dimension(self):
+    """
+    :return: shape(placeholder)[time_dim_axis], int scalar
+    :rtype: tf.Tensor
+    """
+    assert self.time_dim_axis is not None
+    with reuse_name_scope_of_tensor(self.placeholder):
+      with tf.name_scope("time_dim"):
+        return tf.shape(self.placeholder)[self.time_dim_axis]
+
   def get_placeholder_as_time_major(self):
     if self.is_time_major:
       assert self.batch_dim_axis == 1
       return self.placeholder
     assert self.batch_dim_axis == 0
     assert self.time_dim_axis == 1
-    return swapaxes(self.placeholder, 0, 1)  # (time,batch,dim)
+    with reuse_name_scope_of_tensor(self.placeholder):
+      return swapaxes(self.placeholder, 0, 1)  # (time,batch,dim)
 
   def get_placeholder_as_batch_major(self):
     if self.batch_dim_axis == 0:
@@ -807,6 +819,26 @@ def reuse_name_scope(name, absolute=None):
       yield scope
 
 
+def get_name_scope_of_tensor(x):
+  """
+  :param tf.Tensor x: has name e.g. "layer0/rec/W:0"
+  :return: the name scope of x, e.g. "layer0/rec"
+  :rtype: str
+  """
+  parts = str(x.name).split("/")
+  return "/".join(parts[:-1])
+
+
+@contextlib.contextmanager
+def reuse_name_scope_of_tensor(x):
+  """
+  :param tf.Tensor x: has name e.g. "layer0/rec/W:0"
+  :return: reuse the name scope of x, e.g. "layer0/rec", yields scope
+  """
+  with reuse_name_scope(get_name_scope_of_tensor(x), absolute=True) as scope:
+    yield scope
+
+
 @contextlib.contextmanager
 def var_creation_scope():
   """
@@ -868,7 +900,7 @@ def check_input_ndim(x, ndim):
     assert dyn_shape.ndims == ndim
     return x
   # Need to fall-back to runtime check.
-  with reuse_name_scope("checks"):
+  with tf.name_scope("check_input_ndim"):
     with tf.control_dependencies(
       [tf.assert_equal(tf.rank(x), ndim, data=["ndim not %i" % ndim, tf.shape(x)])]):
       return tf.identity(x, "identity_with_ndim_check")
@@ -888,7 +920,7 @@ def check_input_ndim_equal_offset(x, y, y_ndim_offset=0):
     assert x_dyn_shape.ndims == y_dyn_shape.ndims + y_ndim_offset
     return x
   # Need to fall-back to runtime check.
-  with reuse_name_scope("checks"):
+  with tf.name_scope("check_input_ndim_equal_offset"):
     with tf.control_dependencies(
       [tf.assert_equal(tf.rank(x), tf.rank(y) + y_ndim_offset,
                        data=["ndim not equal with offset %i" % y_ndim_offset,
@@ -910,7 +942,7 @@ def check_input_dim(x, axis, dim):
       assert dyn_shape.dims[axis].value == dim
       return x
   # Need to fall-back to runtime check.
-  with reuse_name_scope("checks"):
+  with tf.name_scope("check_input_dim"):
     with tf.control_dependencies(
       [tf.assert_equal(tf.shape(x)[axis], dim, data=["shape[%i] not dim" % (axis,), dim, tf.shape(x)])]):
       return tf.identity(x, "identity_with_dim_check")
@@ -932,12 +964,13 @@ def check_dim_equal(x, x_axis, y, y_axis):
       assert x_dyn_shape.dims[x_axis].value == y_dyn_shape.dims[y_axis].value
       return x
   # Need to fall-back to runtime check.
-  with reuse_name_scope("checks"):
+  with tf.name_scope("check_dim_equal"):
+    shape_x = tf.shape(x)
+    shape_y = tf.shape(y)
     with tf.control_dependencies(
       [tf.assert_equal(
-        tf.shape(x)[x_axis], tf.shape(y)[y_axis],
-        data=["x.shape[%i] not y.shape[%i]" % (x_axis, y_axis),
-              tf.shape(x), tf.shape(y)])]):
+         shape_x[x_axis], shape_y[y_axis],
+         data=["x.shape[%i] not y.shape[%i]" % (x_axis, y_axis), shape_x, shape_y])]):
       return tf.identity(x, "identity_with_dim_equal_check")
 
 
@@ -961,7 +994,7 @@ def check_shape_equal(x, y):
     if not have_unknown:
       return x  # all dims are checked, we can return
   # We need to fall-back to runtime check.
-  with reuse_name_scope("checks"):
+  with tf.name_scope("check_shape_equal"):
     with tf.control_dependencies(
       [tf.assert_equal(
         tf.shape(x), tf.shape(y),
@@ -1038,7 +1071,7 @@ def identity_with_ops(x, ops):
   :return: x with all ops executed
   :rtype: tf.Tensor
   """
-  with reuse_name_scope("checks"):
+  with tf.name_scope("identity_with_ops"):
     with tf.control_dependencies(ops()):
       return tf.identity(x, name="identity_with_ops")
 
@@ -1185,18 +1218,18 @@ def dot(a, b):
     a = check_dim_equal(a, -1, b, 0)
     if a_ndim == b_ndim == 1:
       return tf.reduce_sum(a * b)
-    a_shape = tf.shape(a)
-    b_shape = tf.shape(b)
     d = get_shape_dim(b, 0)
     assert a_ndim >= 2 and b_ndim >= 2
+    res_shape = None
+    if a_ndim > 2 or b_ndim > 2:
+      res_shape = [get_shape_dim(a, i) for i in range(0, a_ndim - 1)] + [get_shape_dim(b, i) for i in range(1, b_ndim)]
     if a_ndim > 2:
       a = tf.reshape(a, (-1, d))
     if b_ndim > 2:
       b = tf.reshape(b, (d, -1))
     res = tf.matmul(a, b)
     if a_ndim > 2 or b_ndim > 2:
-      res = tf.reshape(
-        res, [a_shape[i] for i in range(0, a_ndim - 1)] + [b_shape[i] for i in range(1, b_ndim)])
+      res = tf.reshape(res, res_shape)
     return res
 
 
@@ -1400,7 +1433,8 @@ def sequence_mask(lengths, **kwargs):
   """
   if hasattr(lengths, "_sequence_mask"):
     return lengths._sequence_mask
-  mask = tf.sequence_mask(lengths, **kwargs)
+  with reuse_name_scope_of_tensor(lengths):
+    mask = tf.sequence_mask(lengths, **kwargs)
   lengths._sequence_mask = mask
   return mask
 
@@ -1417,7 +1451,9 @@ def sequence_mask_time_major(lengths, **kwargs):
   if hasattr(lengths, "_sequence_mask_time_major"):
     return lengths._sequence_mask_time_major
   mask = sequence_mask(lengths=lengths, **kwargs)  # shape (time,batch)
-  mask = tf.transpose(mask, (1, 0))  # shape (batch,time)
+  with reuse_name_scope_of_tensor(lengths):
+    with tf.name_scope("sequence_mask_time_major"):
+      mask = tf.transpose(mask, (1, 0))  # shape (batch,time)
   lengths._sequence_mask_time_major = mask
   return mask
 
@@ -1448,7 +1484,9 @@ def reversed(x):
   """
   if hasattr(x, "_reversed_dim0"):
     return x._reversed_dim0
-  y = x[::-1]
+  with reuse_name_scope_of_tensor(x):
+    with tf.name_scope("reversed"):
+      y = x[::-1]
   x._reversed_dim0 = y
   y._reversed_dim0 = x
   return y
