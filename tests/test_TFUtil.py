@@ -741,3 +741,43 @@ def test_expand_dims_unbroadcast_instead_of_tf_tile():
   assert isinstance(r, numpy.ndarray)
   for beam in range(beam_size):
     assert_equal(list(r[:, beam]), [1, 2, 3])
+
+
+def test_where_nan():
+  # via: https://stackoverflow.com/a/42497444/133374
+  # @ops.RegisterGradient("Select")
+  # def _SelectGrad(op, grad):
+  #   c = op.inputs[0]
+  #   x = op.inputs[1]
+  #   zeros = array_ops.zeros_like(x)
+  #   return (None, array_ops.where(c, grad, zeros),
+  #           array_ops.where(c, zeros, grad))
+  # SelectOp, https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/cwise_op_select.cc
+  # We later check for nan. assert_equal does not work as-is because (nan == nan) is False.
+  # Thus, we resort to this check:
+  assert_equal(str(float("nan")), "nan")
+
+  where_0_nan = tf.where(True, 0., float("nan"))
+  print("where_0_nan:", where_0_nan.eval())
+  assert_equal(where_0_nan.eval(), 0.0)
+
+  x = tf.constant(0.)
+  x_equal_0 = tf.equal(x, 0.)
+  f = tf.where(x_equal_0, 0., 1. / x)
+  grad_x = tf.gradients(f, x)[0]
+  print("grad_x:", grad_x.eval())  # nan? or 0?
+  # This is expected when you look at the resulting computation graph for the gradient.
+  # You will have grad(1./x, x) * 0.0 in the graph in the back-propagation of the gradient, which is nan.
+  assert_equal(str(grad_x.eval()), "nan")
+
+  safe_x = tf.where(x_equal_0, 2., x)
+  grad_safe_x = tf.where(x_equal_0, 0., 1. / safe_x)
+  print("grad_safe_x:", grad_safe_x.eval())  # nan? ln(2)? 0?
+  # This works, because at no time, there is nan in the back-propagation.
+  assert_equal(grad_safe_x.eval(), 0.0)
+
+  f = tf.cond(x_equal_0, lambda: 0., lambda: 1. / x)
+  grad_cond_x = tf.gradients(f, x)[0]
+  print("grad_cond_x:", grad_cond_x.eval())  # nan? or 0?
+  # This is different than tf.where because really only one branch will go into the gradient.
+  assert_equal(grad_cond_x.eval(), 0.0)
