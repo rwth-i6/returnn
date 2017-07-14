@@ -648,6 +648,9 @@ class RecurrentUnitLayer(Layer):
     else:
       base = encoder
     self.base = base
+    self.encoder = encoder
+    if aligner:
+      self.aligner = aligner
     self.set_attr('n_units', n_out)
     unit = eval(unit.upper())(**self.attrs)
     assert isinstance(unit, Unit)
@@ -794,8 +797,7 @@ class RecurrentUnitLayer(Layer):
 
       self.y_t = T.cast(self.base[0].backtrace,'float32')
     elif recurrent_transform == 'attention_segment':
-      assert base[0].inv_att, "Segment-wise attention requires attention points!"
-      self.create_seg_wise_encoder_output(base[0].inv_att.argmax(axis=2), aligner=aligner)
+      assert aligner.attention, "Segment-wise attention requires attention points!"
 
     recurrent_transform_inst = RecurrentTransform.transform_classes[recurrent_transform](layer=self)
     assert isinstance(recurrent_transform_inst, RecurrentTransform.RecurrentTransformBase)
@@ -809,9 +811,10 @@ class RecurrentUnitLayer(Layer):
       if encoder:
         if recurrent_transform == "attention_segment":
           if hasattr(encoder[0],'act'):
-            seg_pts_first = (self.base[0].inv_att.argmax(axis=2) + (T.arange(self.base[0].inv_att.shape[1]) * self.base[0].inv_att.shape[2]))[0] #B (first alignment points from all the batches)
             outputs_info = [T.concatenate([e.act[i][-1] for e in encoder], axis=1) for i in range(unit.n_act)]
-            outputs_info[0] = encoder[0].act[0].dimshuffle(1,0,2).reshape((encoder[0].act[0].shape[0]*encoder[0].act[0].shape[1],encoder[0].act[0].shape[2]))[seg_pts_first]
+          else:
+           # outputs_info = [ T.concatenate([e[i] for e in encoder], axis=1) for i in range(unit.n_act) ]
+            outputs_info[0] = self.aligner.output[-1]
         elif hasattr(encoder[0],'act'):
           outputs_info = [ T.concatenate([e.act[i][-1] for e in encoder], axis=1) for i in range(unit.n_act) ]
         else:
