@@ -2871,6 +2871,9 @@ class GlobalTensorArrayOpMaker:
   Note: This whole implementation currently does not work because tensor_array.h is not available.
   See https://github.com/tensorflow/tensorflow/issues/10527
   and test_GlobalTensorArray().
+
+  An alternative to this might be the MapStagingArea (https://github.com/tensorflow/tensorflow/pull/9686),
+  which should get into TF 1.2.2.
   """
 
   code = """
@@ -3062,6 +3065,11 @@ class TFArrayContainer(object):
   Currently does not work.
   See https://github.com/tensorflow/tensorflow/issues/10950,
   and test_TFArrayContainer().
+  Bug #10950 is fixed upstream, should be in TF 1.2.2.
+
+  An alternative to this could be :class:`GlobalTensorArrayOpMaker`
+  and `MapStagingArea <https://github.com/tensorflow/tensorflow/pull/9686>`_,
+  which should get into TF 1.2.2.
   """
 
   code = """
@@ -3514,6 +3522,8 @@ class ExplicitRandomShuffleQueue(object):
       # see test_TensorArray() and https://stackoverflow.com/questions/44418036/
       # Solutions are GlobalTensorArrayOpMaker or TFArrayContainer which also both currently do not work.
       # Thus at the moment, I don't see any good way to make this work...
+      # TODO Another option might be MapStagingArea (https://github.com/tensorflow/tensorflow/pull/9686).
+      # This should get into TF 1.2.2.
       self._tas = [
         tf.TensorArray(
           dtype=dtype, size=capacity, clear_after_read=True,
