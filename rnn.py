@@ -293,7 +293,8 @@ def initEngine(devices):
 
 
 def crnnGreeting(configFilename=None, commandLineOptions=None):
-  print("CRNN starting up, version %s, pid %i" % (describe_crnn_version(), os.getpid()), file=log.v3)
+  print("CRNN starting up, version %s, pid %i, cwd %s" % (
+    describe_crnn_version(), os.getpid(), os.getcwd()), file=log.v3)
   if configFilename:
     print("CRNN config: %s" % configFilename, file=log.v4)
     if os.path.islink(configFilename):
