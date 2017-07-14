@@ -68,7 +68,10 @@ class Updater(object):
       learning rate issues, bad randomization of the input examples,
       or - in the case of Adam or RMSProp - issues with the epsilon value.
 
-  In addition, you might also want to try `gradient_nan_inf_filter` or maybe set beta1=0.5.
+  In addition, you might also want to try ``gradient_nan_inf_filter`` or maybe set beta1=0.5.
+
+  For further debugging, see :func:`tf.add_check_numerics_ops` or :func:`add_check_numerics_ops_and_debug_print`,
+  which is config option ``debug_add_check_numerics_ops``.
 
   """
 
@@ -266,6 +269,9 @@ class Updater(object):
     self.optimizer_init_vars_op = tf.variables_initializer(self.optimizer_vars, name="init_optim_slot_vars")
     self.init_optimizer_vars()
 
+    if self.config.bool("debug_add_check_numerics_ops", False):
+      add_check_numerics_ops_and_debug_print()
+
   def get_optim_op(self, callback_on_new=None):
     """
     :param None|()->None callback_on_new:
@@ -279,3 +285,24 @@ class Updater(object):
 
   def init_optimizer_vars(self):
     self.tf_session.run(self.optimizer_init_vars_op)
+
+
+def add_check_numerics_ops_and_debug_print():
+  """
+  This is similar to :func:`tf.add_check_numerics_ops` and based on similar code.
+  Instead of :func:`tf.check_numerics`, it does the check manually (via :func:`tf.is_finite`)
+  and in case there is inf/nan, it will also print the tensor (while `tf.check_numerics` does not print the tensor).
+  """
+  check_op = []
+  # This code relies on the ordering of ops in get_operations().
+  # The producer of a tensor always comes before that tensor's consumer in
+  # this list. This is true because get_operations() returns ops in the order
+  # added, and an op can only be added after its inputs are added.
+  for op in tf.get_default_graph().get_operations():
+    for output in op.outputs:
+      if output.dtype in [tf.float16, tf.float32, tf.float64]:
+        message = op.name + ":" + str(output.value_index)
+        with tf.control_dependencies(check_op):
+          is_finite = tf.reduce_all(tf.is_finite(output))
+          check_op = [tf.Assert(is_finite, [message, "Tensor had inf or nan values:", output])]
+  return tf.group(*check_op)
