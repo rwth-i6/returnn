@@ -270,7 +270,8 @@ class Updater(object):
     self.init_optimizer_vars()
 
     if self.config.bool("debug_add_check_numerics_ops", False):
-      add_check_numerics_ops_and_debug_print()
+      print("Adding checks for inf/nan.", file=log.v3)
+      self.optim_op = tf.group(self.optim_op, add_check_numerics_ops_and_debug_print())
 
   def get_optim_op(self, callback_on_new=None):
     """
