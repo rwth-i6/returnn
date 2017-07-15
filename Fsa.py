@@ -4,6 +4,19 @@ from __future__ import print_function
 from __future__ import division
 
 
+class Edge:
+  """
+  class to represent an edge
+  """
+
+  def __init__(self):
+    start_node = None
+    end_node = None
+    label = None
+    weight = None
+    position = None
+
+
 class Fsa:
   """class to create a finite state automaton"""
   _SIL = '_'
