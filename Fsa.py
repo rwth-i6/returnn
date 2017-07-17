@@ -948,8 +948,9 @@ class BuildSimpleFsaOp(theano.Op):
   # the first and last output are actually uint32
   otypes = (T.fmatrix, T.fvector, T.fmatrix)
 
-  def __init__(self, loop_emission_idxs=[]):
+  def __init__(self, loop_emission_idxs=[], loop_scores=(0.0, 0.0)):
     self.loop_emission_idxs = set(loop_emission_idxs)
+    self.loop_scores        = loop_scores
 
   def perform(self, node, inputs, output_storage):
     labels = inputs[0]
@@ -973,9 +974,11 @@ class BuildSimpleFsaOp(theano.Op):
         if label < 0:
           continue
         edges.append((cur_state, cur_state + 1, label, lenmod, b))
-        weights.append(0.0)
         if labels[l, b] in self.loop_emission_idxs:
           edges.append((cur_state, cur_state, label, lenmod, b))
+          weights.append(self.loop_scores[0])
+          weights.append(self.loop_scores[1])
+        else:
           weights.append(0.0)
         cur_state += 1
 
