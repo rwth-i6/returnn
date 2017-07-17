@@ -8,7 +8,7 @@ from TwoStateBestPathDecoder import TwoStateBestPathDecodeOp
 from CTC import CTCOp
 from TwoStateHMMOp import TwoStateHMMOp
 from OpNumpyAlign import NumpyAlignOp
-from NativeOp import FastBaumWelchOp
+from NativeOp import FastBaumWelchOp, SegmentFastBaumWelchOp
 from NetworkBaseLayer import Layer
 from NetworkHiddenLayer import CAlignmentLayer
 from SprintErrorSignals import sprint_loss_and_error_signal, SprintAlignmentAutomataOp
@@ -507,18 +507,21 @@ class SequenceOutputLayer(OutputLayer):
   def __init__(self,
                ce_smoothing=0.0, ce_target_layer_align=None,
                am_scale=1, gamma=1, bw_norm_class_avg=False,
-               fast_bw_opts=None,
+               fast_bw_opts=None, seg_fast_bw_opts=None,
                loss_like_ce=False, trained_softmax_prior=False,
                sprint_opts=None, warp_ctc_lib=None,
                **kwargs):
     if fast_bw_opts is None: fast_bw_opts = {}
+    if seg_fast_bw_opts is None: seg_fast_bw_opts = {}
     self._handle_old_kwargs(kwargs, fast_bw_opts=fast_bw_opts)
     super(SequenceOutputLayer, self).__init__(**kwargs)
+
     self.ce_smoothing = ce_smoothing
     if ce_smoothing:
       self.set_attr("ce_smoothing", ce_smoothing)
     if ce_target_layer_align:
       self.set_attr("ce_target_layer_align", ce_target_layer_align)
+
     if fast_bw_opts:
       if not isinstance(fast_bw_opts, dict):
         import json
@@ -526,15 +529,24 @@ class SequenceOutputLayer(OutputLayer):
       self.set_attr("fast_bw_opts", fast_bw_opts)
     from Util import CollectionReadCheckCovered
     self.fast_bw_opts = CollectionReadCheckCovered(fast_bw_opts or {})
+
+    if not isinstance(seg_fast_bw_opts, dict):
+      import json
+      seg_fast_bw_opts = json.loads(seg_fast_bw_opts)
+    self.set_attr("seg_fast_bw_opts", seg_fast_bw_opts)
+    self.seg_fast_bw_opts = seg_fast_bw_opts
+
     if am_scale != 1:
       self.set_attr("am_scale", am_scale)
     if gamma != 1:
       self.set_attr("gamma", gamma)
     if bw_norm_class_avg:
       self.set_attr("bw_norm_class_avg", bw_norm_class_avg)
+
     self.loss_like_ce = loss_like_ce
     if loss_like_ce:
       self.set_attr("loss_like_ce", loss_like_ce)
+
     if trained_softmax_prior:
       self.set_attr('trained_softmax_prior', trained_softmax_prior)
       assert not self.attrs.get('compute_priors', False)
@@ -546,16 +558,18 @@ class SequenceOutputLayer(OutputLayer):
       self.trained_softmax_prior_p = self.add_param(theano.shared(initialization, 'trained_softmax_prior_p'))
       self.priors = T.nnet.softmax(self.trained_softmax_prior_p).reshape((self.attrs['n_out'],))
       self.log_prior = T.log(self.priors)
+
     if sprint_opts is not None:
       if not isinstance(sprint_opts, dict):
         import json
         sprint_opts = json.loads(sprint_opts)
       self.set_attr("sprint_opts", sprint_opts)
     self.sprint_opts = sprint_opts
+
     if warp_ctc_lib:
       self.set_attr("warp_ctc_lib", warp_ctc_lib)
     assert self.loss in (
-      'ctc', 'ce_ctc', 'hmm', 'ctc2', 'sprint', 'viterbi', 'fast_bw', 'ctc_warp', 'ctc_rasr', 'inv'), 'invalid loss: ' + self.loss
+      'ctc', 'ce_ctc', 'hmm', 'ctc2', 'sprint', 'viterbi', 'fast_bw', 'seg_fast_bw', 'ctc_warp', 'ctc_rasr', 'inv'), 'invalid loss: ' + self.loss
 
   def _handle_old_kwargs(self, kwargs, fast_bw_opts):
     if "loss_with_softmax_prob" in kwargs:
@@ -637,7 +651,7 @@ class SequenceOutputLayer(OutputLayer):
       #from TheanoUtil import print_to_file
       #edges = theano.printing.Print("edges", attrs=['shape'])(edges)
       #weights = theano.printing.Print("weights", attrs=['shape'])(weights)
-      fwdbwd, _ = FastBaumWelchOp.make_op()(scores, edges, weights, start_end_states, T.cast(index,'float32'), state_buffer)
+      fwdbwd, _ = FastBaumWelchOp().make_op()(scores, edges, weights, start_end_states, T.cast(index,'float32'), state_buffer)
       def viterbi(op,x):
         print(x.argmin(axis=-1))
       #fwdbwd = theano.printing.Print(global_fn=viterbi)(fwdbwd)
@@ -652,7 +666,7 @@ class SequenceOutputLayer(OutputLayer):
       #  emissions = T.exp(T.log(emissions) - self.prior_scale * T.log(T.maximum(self.priors, 1e-10)))
       scores = -T.log(emissions.reshape(self.z.shape))
       edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
-      fwdbwd, _ = FastBaumWelchOp.make_op()(scores, edges, weights, start_end_states, float_idx, state_buffer)
+      fwdbwd, _ = FastBaumWelchOp().make_op()(scores, edges, weights, start_end_states, float_idx, state_buffer)
       err = T.exp(-fwdbwd) * scores
       return T.sum(err.reshape((err.shape[0]*err.shape[1],err.shape[2]))[idx]), None
     elif self.loss == 'fast_bw':
@@ -748,7 +762,7 @@ class SequenceOutputLayer(OutputLayer):
           state_buffer = T.zeros()  # TODO...
         else:
           raise Exception("invalid fsa_source %r" % self.fast_bw_opts.get("fsa_source"))
-        fwdbwd, obs_scores = FastBaumWelchOp.make_op()(am_scores, edges, weights, start_end_states, float_idx, state_buffer)
+        fwdbwd, obs_scores = FastBaumWelchOp().make_op()(am_scores, edges, weights, start_end_states, float_idx, state_buffer)
         gamma = self.attrs.get("gamma", 1)
         need_renorm = False
         if gamma != 1:
@@ -803,6 +817,33 @@ class SequenceOutputLayer(OutputLayer):
         # That is because the prior is in the denominator.
         known_grads[self.trained_softmax_prior_p] = numpy.float32(self.prior_scale) * (bw_sum0 - self.priors * idx_sum)
       self.fast_bw_opts.assert_all_read()
+      return err, known_grads
+    elif self.loss == 'seg_fast_bw':
+      from Fsa import BuildSimpleFsaOp
+
+      am_score_scales    = self.seg_fast_bw_opts.get('am_score_scales', [1.0])
+      loop_emission_idxs = self.seg_fast_bw_opts.get('loop_emission_idxs', [])
+      length_models      = self.seg_fast_bw_opts.get('length_models', [])
+      loop_scores        = self.seg_fast_bw_opts.get('loop_scores', (0.0, 0.0))
+
+      segment_layer = self.network.hidden[self.seg_fast_bw_opts['segment_layer']]
+      batch_idxs = segment_layer.batch_idxs
+      bw_args = { 'segmentwise_normalization' : self.seg_fast_bw_opts.get('segmentwise_normalization', False),
+                  'dump_targets_interval'     : self.seg_fast_bw_opts.get('dump_targets_interval', None) }
+
+      assert len(am_score_scales) > 0
+
+      edges, weights, start_end_states = BuildSimpleFsaOp(loop_emission_idxs, loop_scores)(self.y)
+      fwdbwd, _ = SegmentFastBaumWelchOp(**bw_args).make_op()(self.p_y_given_x, batch_idxs, edges, weights, start_end_states,
+                                                              length_models, T.cast(segment_layer.index, 'float32'),
+                                                              am_score_scales, self.network.epoch)
+      bw = T.exp(-fwdbwd)
+      nlog_scores = -T.log(T.clip(self.p_y_given_x, numpy.float32(1.e-20), numpy.float(1.e20)))
+
+      idx = segment_layer.index.reshape((bw.shape[0], bw.shape[1], 1))
+      err = (bw * nlog_scores * idx).sum()
+      known_grads = { self.z: (self.p_y_given_x - bw) * idx }
+
       return err, known_grads
     elif self.loss == 'ctc':
       from theano.tensor.extra_ops import cpu_contiguous
