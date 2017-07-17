@@ -271,7 +271,7 @@ class Updater(object):
 
     if self.config.bool("debug_add_check_numerics_ops", False):
       print("Adding checks for inf/nan.", file=log.v3)
-      self.optim_op = tf.group(self.optim_op, add_check_numerics_ops_and_debug_print())
+      self.optim_op = tf.group(self.optim_op, add_check_numerics_ops_and_debug_print([self.optim_op]))
 
   def get_optim_op(self, callback_on_new=None):
     """
@@ -288,22 +288,57 @@ class Updater(object):
     self.tf_session.run(self.optimizer_init_vars_op)
 
 
-def add_check_numerics_ops_and_debug_print():
+def add_check_numerics_ops_and_debug_print(
+  fetches=None, ignore_ops=None, use_check_numerics=True, debug_print_added_checks=True):
   """
   This is similar to :func:`tf.add_check_numerics_ops` and based on similar code.
-  Instead of :func:`tf.check_numerics`, it does the check manually (via :func:`tf.is_finite`)
-  and in case there is inf/nan, it will also print the tensor (while `tf.check_numerics` does not print the tensor).
+  It adds some more logic and options.
+
+  :param list[tf.Operation|tf.Tensor]|None fetches: in case this is given, will only look at these and dependent ops
+  :param list[str] ignore_ops: e.g. ""
+  :param bool use_check_numerics: if False, instead of :func:`tf.check_numerics`,
+    it does the check manually (via :func:`tf.is_finite`) and in case there is inf/nan,
+    it will also print the tensor (while `tf.check_numerics` does not print the tensor).
+    Note that this can be about 50 times slower.
+  :param bool debug_print_added_checks: prints info about each added check
+  :return: operation which performs all the checks
+  :rtype: tf.Operation
   """
+  if fetches is None:
+    ops = tf.get_default_graph().get_operations()
+  else:
+    fetch_ops = [v.op if isinstance(v, tf.Tensor) else v for v in fetches]
+    assert all([isinstance(op, tf.Operation) for op in fetch_ops])
+    from tensorflow.contrib import graph_editor
+    ops = graph_editor.get_backward_walk_ops(fetch_ops, inclusive=True, control_inputs=True)
+  if ignore_ops is None:
+    # The checks could increase the memory usage a lot.
+    # Ignore some common ops which should not be able to introduce inf/nan.
+    ignore_ops = {
+      "Add", "AddN", "Sum", "Mul", "MatMul", "Sub", "L2Loss", "Floor", "Neg", "UnsortedSegmentSum",
+      "Switch", "Merge", "PreventGradient",
+      "Const", "Identity", "Fill", "ZerosLike",
+      "Reshape", "Tile", "ExpandDims", "ConcatV2", "Transpose",
+      "Slice", "StridedSlice", "StridedSliceGrad", "Gather",
+      "TruncatedNormal", "RandomUniform"}
   check_op = []
   # This code relies on the ordering of ops in get_operations().
   # The producer of a tensor always comes before that tensor's consumer in
   # this list. This is true because get_operations() returns ops in the order
   # added, and an op can only be added after its inputs are added.
-  for op in tf.get_default_graph().get_operations():
+  for op in ops:
+    assert isinstance(op, tf.Operation)
+    if op.type in ignore_ops:
+      continue
     for output in op.outputs:
       if output.dtype in [tf.float16, tf.float32, tf.float64]:
         message = op.name + ":" + str(output.value_index)
         with tf.control_dependencies(check_op):
-          is_finite = tf.reduce_all(tf.is_finite(output))
-          check_op = [tf.Assert(is_finite, [message, "Tensor had inf or nan values:", output])]
+          if debug_print_added_checks:
+            print("add check for:", output, op.type)
+          if use_check_numerics:
+            check_op = [tf.check_numerics(output, message=message)]
+          else:
+            is_finite = tf.reduce_all(tf.is_finite(output))
+            check_op = [tf.Assert(is_finite, [message, "Tensor had inf or nan values:", output])]
   return tf.group(*check_op)
