@@ -777,7 +777,8 @@ def concat_sources_with_opt_dropout(src_layers, dropout=0):
   data = data.copy()
   assert 0.0 < dropout < 1.0
   with _name_scope_for_concat_src_layers(src_layers, "dropout_in_train"):
-    fn_train = lambda: tf.nn.dropout(
+    import TFUtil
+    fn_train = lambda: TFUtil.dropout(
       data.placeholder,
       keep_prob=1 - dropout,
       # noise_shape is like old behavior for now:

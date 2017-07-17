@@ -1369,6 +1369,40 @@ def get_initializer(s, seed=None, eval_local_ns=None):
   return f
 
 
+def dropout(x, keep_prob, noise_shape=None, seed=None, name=None):
+  """
+  Computes dropout.
+  Like :func:`tf.nn.dropout` but avoid :func:`tf.div` if possible.
+
+  :param tf.Tensor x:
+  :param float|tf.Tensor keep_prop:
+  :param tf.Tensor|tuple[int] noise_shape:
+  :param int seed:
+  :param str name:
+  """
+  with tf.name_scope(name, "dropout", [x]):
+    x = tf.convert_to_tensor(x, name="x")
+    assert isinstance(x, tf.Tensor)
+    if isinstance(keep_prob, (float, int)) and not 0 < keep_prob <= 1:
+      raise ValueError("keep_prob must be a scalar tensor or a float in the "
+                       "range (0, 1], got %g" % keep_prob)
+    # Do nothing if we know keep_prob == 1
+    if isinstance(keep_prob, (float, int)) and keep_prob == 1:
+      return x
+    inv_keep_prob = 1.0 / keep_prob
+
+    noise_shape = noise_shape if noise_shape is not None else tf.shape(x)
+    # uniform [keep_prob, 1.0 + keep_prob)
+    random_tensor = keep_prob
+    random_tensor += tf.random_uniform(noise_shape, seed=seed, dtype=x.dtype)
+    # 0. if [keep_prob, 1.0) and 1. if [1.0, 1.0 + keep_prob)
+    binary_tensor = tf.floor(random_tensor)
+    ret = x * inv_keep_prob * binary_tensor
+    assert isinstance(ret, tf.Tensor)
+    ret.set_shape(x.get_shape())
+    return ret
+
+
 def swapaxes(x, axis1, axis2):
   """
   :param tf.Tensor x:
