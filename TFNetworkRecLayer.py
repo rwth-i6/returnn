@@ -287,7 +287,7 @@ class RecLayer(_ConcatInputLayer):
     :rtype: RecLayer.SubnetworkCell|tensorflow.contrib.rnn.RNNCell|tensorflow.contrib.rnn.FusedRNNCell|TFNativeOp.RecSeqCellOp
     """
     from TFUtil import is_gpu_available
-    import tensorflow.contrib.rnn as rnn_contrib
+    from tensorflow.contrib import rnn as rnn_contrib
     import TFNativeOp
     if isinstance(unit, dict):
       return _SubnetworkRecCell(parent_rec_layer=self, net_dict=unit)
@@ -305,7 +305,7 @@ class RecLayer(_ConcatInputLayer):
     rnn_cell_class = self.get_rnn_cell_class(unit)
     n_hidden = self.output.dim
     if is_gpu_available():
-      import tensorflow.contrib.cudnn_rnn as cudnn_rnn
+      from tensorflow.contrib import cudnn_rnn
       if issubclass(rnn_cell_class, (cudnn_rnn.CudnnLSTM, cudnn_rnn.CudnnGRU)):
         cell = rnn_cell_class(
           num_layers=1, num_units=n_hidden, input_size=self.input_data.dim,
@@ -323,7 +323,7 @@ class RecLayer(_ConcatInputLayer):
     :rtype: tf.Tensor
     """
     from tensorflow.python.ops import rnn
-    import tensorflow.contrib.rnn as rnn_contrib
+    from tensorflow.contrib import rnn as rnn_contrib
     assert self._max_seq_len is None
     assert self.input_data
     assert not self.input_data.sparse

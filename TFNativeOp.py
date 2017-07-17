@@ -469,7 +469,12 @@ class NativeLstmCell(RecSeqCellOp):
     assert V_h.get_shape().ndims == 2
     assert i.get_shape().ndims == 2
     if i.dtype != tf.float32:
-      i = tf.cast(i, dtype=tf.float32)
+      if not hasattr(i, "cast_float32"):
+        from TFUtil import reuse_name_scope_of_tensor
+        with reuse_name_scope_of_tensor(i):
+          i_cast_float32 = tf.cast(i, dtype=tf.float32, name="index_cast_float32")
+        i.cast_float32 = i_cast_float32
+      i = i.cast_float32
     n_batch = tf.shape(Z)[1]
     n_out = tf.shape(V_h)[0]
     if initial_state is not None:
