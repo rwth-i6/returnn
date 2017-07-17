@@ -266,12 +266,13 @@ class Updater(object):
     if other_new_vars:
       print("These additional variable were created by the optimizer: %s." % other_new_vars, file=log.v3)
       self.optimizer_vars += other_new_vars
-    self.optimizer_init_vars_op = tf.variables_initializer(self.optimizer_vars, name="init_optim_slot_vars")
+    with tf.name_scope("optimizer_init_vars"):
+      self.optimizer_init_vars_op = tf.variables_initializer(self.optimizer_vars, name="init_optim_slot_vars")
     self.init_optimizer_vars()
 
     if self.config.bool("debug_add_check_numerics_ops", False):
       print("Adding checks for inf/nan.", file=log.v3)
-      self.optim_op = tf.group(self.optim_op, add_check_numerics_ops_and_debug_print([self.optim_op]))
+      self.optim_op = tf.group(self.optim_op, add_check_numerics_ops([self.optim_op]))
 
   def get_optim_op(self, callback_on_new=None):
     """
@@ -288,8 +289,9 @@ class Updater(object):
     self.tf_session.run(self.optimizer_init_vars_op)
 
 
-def add_check_numerics_ops_and_debug_print(
-  fetches=None, ignore_ops=None, use_check_numerics=True, debug_print_added_checks=True):
+def add_check_numerics_ops(
+  fetches=None, ignore_ops=None, use_check_numerics=True, debug_print_added_checks=True,
+  name="add_check_numerics_ops"):
   """
   This is similar to :func:`tf.add_check_numerics_ops` and based on similar code.
   It adds some more logic and options.
@@ -301,6 +303,7 @@ def add_check_numerics_ops_and_debug_print(
     it will also print the tensor (while `tf.check_numerics` does not print the tensor).
     Note that this can be about 50 times slower.
   :param bool debug_print_added_checks: prints info about each added check
+  :param str name: op-name for the final tf.group
   :return: operation which performs all the checks
   :rtype: tf.Operation
   """
@@ -321,24 +324,25 @@ def add_check_numerics_ops_and_debug_print(
       "Reshape", "Tile", "ExpandDims", "ConcatV2", "Transpose",
       "Slice", "StridedSlice", "StridedSliceGrad", "Gather",
       "TruncatedNormal", "RandomUniform"}
-  check_op = []
-  # This code relies on the ordering of ops in get_operations().
-  # The producer of a tensor always comes before that tensor's consumer in
-  # this list. This is true because get_operations() returns ops in the order
-  # added, and an op can only be added after its inputs are added.
-  for op in ops:
-    assert isinstance(op, tf.Operation)
-    if op.type in ignore_ops:
-      continue
-    for output in op.outputs:
-      if output.dtype in [tf.float16, tf.float32, tf.float64]:
-        message = op.name + ":" + str(output.value_index)
-        with tf.control_dependencies(check_op):
-          if debug_print_added_checks:
-            print("add check for:", output, op.type)
-          if use_check_numerics:
-            check_op = [tf.check_numerics(output, message=message)]
-          else:
-            is_finite = tf.reduce_all(tf.is_finite(output))
-            check_op = [tf.Assert(is_finite, [message, "Tensor had inf or nan values:", output])]
-  return tf.group(*check_op)
+  with tf.name_scope(name):
+    check_op = []
+    # This code relies on the ordering of ops in get_operations().
+    # The producer of a tensor always comes before that tensor's consumer in
+    # this list. This is true because get_operations() returns ops in the order
+    # added, and an op can only be added after its inputs are added.
+    for op in ops:
+      assert isinstance(op, tf.Operation)
+      if op.type in ignore_ops:
+        continue
+      for output in op.outputs:
+        if output.dtype in [tf.float16, tf.float32, tf.float64]:
+          message = op.name + ":" + str(output.value_index)
+          with tf.control_dependencies(check_op):
+            if debug_print_added_checks:
+              print("add check for:", output, op.type)
+            if use_check_numerics:
+              check_op = [tf.check_numerics(output, message=message)]
+            else:
+              is_finite = tf.reduce_all(tf.is_finite(output))
+              check_op = [tf.Assert(is_finite, [message, "Tensor had inf or nan values:", output])]
+    return tf.group(*check_op)

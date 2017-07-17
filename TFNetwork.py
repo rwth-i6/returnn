@@ -330,21 +330,34 @@ class TFNetwork(object):
       self.error_by_layer.clear()
       for name, layer in sorted(self.layers.items()):
         assert isinstance(layer, LayerBase)
-        with reuse_name_scope(layer.tf_scope_name):
-          loss = layer.get_loss_value()
-          error = layer.get_error_value()
-          constraints = layer.get_constraints_value()
+        with reuse_name_scope("loss"):
+          with reuse_name_scope(layer.tf_scope_name):
+            loss = layer.get_loss_value()
+            error = layer.get_error_value()
+            if loss is not None:
+              tf.summary.scalar("loss_%s" % layer.name, loss * layer.get_loss_normalization_factor())
+            if error is not None:
+              tf.summary.scalar("error_%s" % layer.name, error * layer.get_loss_normalization_factor())
+        with reuse_name_scope("constraints"):
+          with reuse_name_scope(layer.tf_scope_name):
+            constraints = layer.get_constraints_value()
+
+        with reuse_name_scope("loss"):
           if loss is not None:
-            tf.summary.scalar("loss_%s" % layer.name, loss * layer.get_loss_normalization_factor())
+            self.loss_by_layer[name] = loss
+            if self.total_loss is 0:
+              self.total_loss = loss
+            else:
+              self.total_loss += loss
           if error is not None:
-            tf.summary.scalar("error_%s" % layer.name, error * layer.get_loss_normalization_factor())
-        if loss is not None:
-          self.loss_by_layer[name] = loss
-          self.total_loss += loss
-        if error is not None:
-          self.error_by_layer[name] = error
-        if constraints is not None:
-          self.total_constraints += constraints
+            self.error_by_layer[name] = error
+        with reuse_name_scope("constraints"):
+          if constraints is not None:
+            if self.total_constraints is 0:
+              self.total_constraints = constraints
+            else:
+              self.total_constraints += constraints
+
       tf.summary.scalar("loss", self.total_loss)
       tf.summary.scalar("constraints", self.total_constraints)
       self.total_objective = self.total_loss + self.total_constraints

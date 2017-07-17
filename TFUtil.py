@@ -829,6 +829,15 @@ def get_name_scope_of_tensor(x):
   return "/".join(parts[:-1])
 
 
+def get_base_name(x):
+  """
+  :param tf.Tensor x: has name e.g. "layer0/rec/W:0"
+  :return: return the base name, e.g. "W", without the output index
+  """
+  parts = str(x.name).split("/")
+  return parts[-1].split(":")[0]
+
+
 @contextlib.contextmanager
 def reuse_name_scope_of_tensor(x):
   """
@@ -2141,8 +2150,10 @@ def add_scaled_noise_to_gradients(grads_and_vars, gradient_noise_scale):
       gradient_shape = gradient.dense_shape
     else:
       gradient_shape = gradient.get_shape()
-    noise = tf.truncated_normal(gradient_shape, stddev=gradient_noise_scale)
-    noisy_gradients.append(gradient + noise)
+    with reuse_name_scope_of_tensor(gradient):
+      name = get_base_name(gradient)
+      noise = tf.truncated_normal(gradient_shape, stddev=gradient_noise_scale, name="%s_grad_noise" % name)
+      noisy_gradients.append(tf.add(gradient, noise, name="%s_add_grad_noise" % name))
   return list(zip(noisy_gradients, variables))
 
 

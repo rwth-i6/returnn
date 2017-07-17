@@ -84,27 +84,27 @@ def test_Updater_CustomUpdate():
   assert_almost_equal(session.run(network.get_default_output_layer().output.placeholder), 17.0)
 
 
-def test_add_check_numerics_ops_and_debug_print():
+def test_add_check_numerics_ops():
   with tf.Graph().as_default():
     with tf.Session().as_default() as session:
       x = tf.constant(3.0, name="x")
       y = tf.log(x * 3, name="y")
       assert isinstance(y, tf.Tensor)
       assert_almost_equal(session.run(y), numpy.log(9.))
-      check = add_check_numerics_ops_and_debug_print([y])
+      check = add_check_numerics_ops([y])
       session.run(check)
       z1 = tf.log(x - 3, name="z1")
       assert_equal(str(session.run(z1)), "-inf")
       z2 = tf.log(x - 4, name="z2")
       assert_equal(str(session.run(z2)), "nan")
-      check1 = add_check_numerics_ops_and_debug_print([z1])
+      check1 = add_check_numerics_ops([z1])
       try:
         session.run(check1)
       except tf.errors.InvalidArgumentError as exc:
         print("Expected exception: %r" % exc)
       else:
         assert False, "should have raised an exception"
-      check2 = add_check_numerics_ops_and_debug_print([z2])
+      check2 = add_check_numerics_ops([z2])
       try:
         session.run(check2)
       except tf.errors.InvalidArgumentError as exc:
@@ -113,7 +113,7 @@ def test_add_check_numerics_ops_and_debug_print():
         assert False, "should have raised an exception"
 
 
-def test_grad_add_check_numerics_ops_and_debug_print():
+def test_grad_add_check_numerics_ops():
   # Also see test_where_nan().
   with tf.Graph().as_default():
     with tf.Session().as_default() as session:
@@ -128,7 +128,7 @@ def test_grad_add_check_numerics_ops_and_debug_print():
       session.run(x.assign(1.0))
       opt = tf.train.GradientDescentOptimizer(learning_rate=1.0)
       train_op = opt.minimize(y, var_list=[x])
-      check = add_check_numerics_ops_and_debug_print([train_op])
+      check = add_check_numerics_ops([train_op])
       session.run(check)
 
       session.run(x.assign(0.0))
@@ -140,7 +140,7 @@ def test_grad_add_check_numerics_ops_and_debug_print():
         assert False, "should have raised an exception"
 
 
-def test_Updater_add_check_numerics_ops_and_debug_print():
+def test_Updater_add_check_numerics_ops():
   class _Layer(DummyLayer):
     def get_loss_value(self):
       return tf.log(self.x)
