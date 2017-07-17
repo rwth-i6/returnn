@@ -285,7 +285,6 @@ class Runner(object):
       if self.engine.use_search_flag:
         logdir += "-search"
       writer = tf.summary.FileWriter(logdir)
-      writer.add_graph(sess.graph)
     else:
       writer = None
     run_metadata = tf.RunMetadata()
@@ -308,6 +307,9 @@ class Runner(object):
       fetches_dict = self._get_fetches_dict()
       # After get_fetches_dict, maybe some new uninitialized vars. Last check.
       self.engine.check_uninitialized_vars()
+      # Also, add graph to summary here because the updater/optimizer might not have been created before.
+      if writer:
+        writer.add_graph(sess.graph)
       while self.data_provider.have_more_data(session=sess):
         feed_dict = self.data_provider.get_feed_dict()
         if isinstance(self.engine.network.train_flag, tf.Tensor):
