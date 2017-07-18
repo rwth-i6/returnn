@@ -2078,7 +2078,7 @@ class FastBaumWelchOp(NativeOpGenBase):
     float*    d_state_buffer_prev = Ndarray_DEV_DATA(state_buffer) + 0 * Ndarray_STRIDE(state_buffer, 0);
     float*    d_state_buffer_next = Ndarray_DEV_DATA(state_buffer) + 1 * Ndarray_STRIDE(state_buffer, 0);
     float*    d_out               = Ndarray_DEV_DATA(out);
-    float*    d_sum_output        = CudaNdarray_DEV_DATA(sum_output);
+    float*    d_sum_output        = Ndarray_DEV_DATA(sum_output);
 
     unsigned n_frames    = Ndarray_DIMS(am_scores)[0];
     unsigned n_seqs      = Ndarray_DIMS(am_scores)[1];
@@ -2209,6 +2209,7 @@ class FastBaumWelchOp(NativeOpGenBase):
 
   code_version = 55
   cpu_support = False  # TODO: fix CPU support...
+
 
 class SegmentFastBaumWelchOp(NativeOpGenBase):
   in_info = (

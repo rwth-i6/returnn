@@ -2857,6 +2857,29 @@ def enforce_copy(x):
     return tf.add(x, zero)
 
 
+def view_as(x, dtype):
+  """
+  Does the numpy.view equivalent.
+  Note that the current implementation is inefficient (uses tf.py_func) and CPU-only.
+  :param tf.Tensor x:
+  :param tf.DType dtype:
+  :return: x.view(dtype) equivalent (see numpy.view)
+  """
+  import numpy
+
+  def py_wrap_numpy_view(x):
+    assert isinstance(x, numpy.ndarray)
+    return x.view(dtype.as_numpy_dtype)
+
+  y, = tf.py_func(
+    py_wrap_numpy_view,
+    [x], [dtype],
+    name="py_wrap_numpy_view")
+  assert isinstance(y, tf.Tensor)
+  y.set_shape(x.get_shape())
+  return y
+
+
 class Lock(object):
   """
   A pure TensorFlow implementation of a mutex / lock.

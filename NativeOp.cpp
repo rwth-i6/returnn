@@ -461,12 +461,48 @@ struct Context  {
     Context() {}
 #endif
 
+/*
+Note: There is also this hacky way to get the cudaStream_t:
+  const cudaStream_t cu_stream = CHECK_NOTNULL(
+      reinterpret_cast<const cudaStream_t>(context->op_device_context()
+                                                ->stream()
+                                                ->implementation()
+                                                ->CudaStreamMemberHack()));
+
+*/
+
 
 void _Ndarray_set_zero(Ndarray* a) {
 	long size = Ndarray_get_n_total_elements(a) * sizeof(float);
 	Ndarray_memset(Ndarray_DEV_DATA(a), 0, size);
 }
 #define Ndarray_set_zero Context(CONTEXT_ARGS)._Ndarray_set_zero
+
+
+void* _malloc(size_t num_bytes) {
+    //auto dev = context->eigen_device<EigenDev>();
+    auto* stream = context->op_device_context()->stream();
+
+    Allocator* allocator =
+        context->device()->GetAllocator(AllocatorAttributes());
+    return (void*)allocator->Allocate<uint8_t>(num_bytes);
+}
+void _free(void* ptr) {
+    Allocator* allocator =
+        context->device()->GetAllocator(AllocatorAttributes());
+    allocator->DeallocateRaw(ptr);
+}
+#define device_malloc Context(CONTEXT_ARGS)._malloc
+#define device_free Context(CONTEXT_ARGS)._free
+
+
+#ifdef CUDA
+cublasHandle_t _handle() {
+    assert("not available" && 0);
+    return NULL;
+}
+#define handle Context(CONTEXT_ARGS)._handle()
+#endif
 
 
 //C[x] += A[x]*B[x]
@@ -548,6 +584,8 @@ void _affine_global(
 #endif
 
 #if TENSORFLOW
+//void cudaMemcpy ... -> Ndarray_memcpy?
+
 void make_copy(OpKernelContext* context, tensorflow::Tensor* tgt_tensor, const tensorflow::Tensor* src_tensor) {
     // also check https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/debug_ops.h, CopyOp
     // also: https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/dense_update_ops.cc

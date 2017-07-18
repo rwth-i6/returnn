@@ -8,7 +8,9 @@ import tensorflow as tf
 import sys
 sys.path += ["."]  # Python 3 hack
 from TFNativeOp import *
+from TFUtil import is_gpu_available
 import Util
+import unittest
 from nose.tools import assert_equal, assert_is_instance
 import numpy
 import numpy.testing
@@ -75,3 +77,22 @@ def test_NativeLstmCell():
   inputs = tf.zeros([n_time, n_batch, n_hidden * 4])
   index = tf.ones([n_time, n_batch])
   outputs, final_state = cell(inputs, index)
+
+
+@unittest.skipIf(not is_gpu_available(), "no gpu on this system")
+def test_FastBaumWelch():
+  n_batch = 3
+  seq_len = 5
+  num_emission_labels = 10
+  from Fsa import FastBwFsaShared
+  fsa = FastBwFsaShared()
+  fsa.add_inf_loop(state_idx=0, num_emission_labels=num_emission_labels)
+  fast_bw_fsa = fsa.get_fast_bw_fsa(n_batch=n_batch)
+  edges = tf.constant(fast_bw_fsa.edges, dtype=tf.int32)
+  weights = tf.constant(fast_bw_fsa.weights, dtype=tf.float32)
+  start_end_states = tf.constant(fast_bw_fsa.start_end_states, dtype=tf.int32)
+  am_scores = tf.constant(numpy.random.normal(size=(seq_len, n_batch)), dtype=tf.float32)  # in -log space
+  float_idx = tf.ones((seq_len, n_batch), dtype=tf.float32)
+  fast_baum_welch(
+    am_scores=am_scores, float_idx=float_idx,
+    edges=edges, weights=weights, start_end_states=start_end_states)

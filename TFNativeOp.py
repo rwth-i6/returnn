@@ -262,6 +262,7 @@ class OpMaker(object):
       #include <cuda.h>
       #include <cuda_runtime.h>
       #include <cublas_v2.h>
+      #include <math_constants.h>
 
       // https://github.com/tensorflow/tensorflow/issues/6602 ?
       //#include "tensorflow/core/platform/stream_executor.h"
@@ -525,6 +526,11 @@ def fast_baum_welch(am_scores, edges, weights, start_end_states, float_idx, stat
   if state_buffer is None:
     last_state_idx = tf.reduce_max(start_end_states[1])  # see get_automata_for_batch
     state_buffer = tf.zeros((2, last_state_idx + 1))
+  # As long as we currently do not support the proper variable types,
+  # we have it hacked as reinterpret_cast<int32*>.
+  from TFUtil import view_as
+  edges = view_as(edges, dtype=tf.float32)
+  start_end_states = view_as(start_end_states, dtype=tf.float32)
   fwdbwd, obs_scores = op(am_scores, edges, weights, start_end_states, float_idx, state_buffer)
   return fwdbwd, obs_scores
 
