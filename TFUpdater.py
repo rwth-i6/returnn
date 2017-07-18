@@ -274,6 +274,14 @@ class Updater(object):
       print("Adding checks for inf/nan.", file=log.v3)
       self.optim_op = tf.group(self.optim_op, add_check_numerics_ops([self.optim_op]))
 
+    if self.config.bool("debug_save_updater_vars", False):
+      print("Save updater/optimizer vars:", file=log.v3)
+      print(self.optimizer_vars)
+      for v in self.optimizer_vars:
+        if v not in self.network.extra_vars_to_save:
+          self.network.extra_vars_to_save.append(v)
+      self.network.reset_saver()
+
   def get_optim_op(self, callback_on_new=None):
     """
     :param None|()->None callback_on_new:

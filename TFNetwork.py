@@ -174,6 +174,7 @@ class TFNetwork(object):
       self.global_train_step = tf.Variable(
         name="global_step", initial_value=0, dtype="int64", collections=[tf.GraphKeys.GLOBAL_STEP], trainable=False)
     self.saver = None  # type: tf.train.Saver
+    self.extra_vars_to_save = []  # type: list[tf.Variable]
     self.recurrent = False
     self._assigner_cache = {}  # type: dict[tf.Variable,VariableAssigner]
     self.concat_sources_dropout_cache = {}  # type: dict[(tuple[LayerBase],float),Data]
@@ -476,6 +477,7 @@ class TFNetwork(object):
       for param_name, param in sorted(layer.get_saveable_params_dict().items()):
         l.append(param)
     l += self.get_auxiliary_params()
+    l += self.extra_vars_to_save
     return l
 
   def get_params_nested_dict(self):
@@ -614,6 +616,14 @@ class TFNetwork(object):
     :rtype: int
     """
     return self.global_train_step.eval(session=session)
+
+  def reset_saver(self):
+    """
+    Resets the :class:`tf.train.Saver` object which will be used
+    for :func:`load_params_from_file` and :func:`save_params_to_file`.
+    Warning: Don't repeat that too often as it will always create new ops in the computation graph.
+    """
+    self.saver = None
 
   def _create_saver(self):
     # Saver for storing checkpoints of the model.
