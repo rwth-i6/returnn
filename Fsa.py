@@ -3,21 +3,27 @@
 from __future__ import print_function
 from __future__ import division
 
-import numpy as np
+import numpy
 import theano
 from theano import tensor as T
+
 
 class Edge:
   """
   class to represent an edge
   """
 
-  def __init__(self):
-    start_node = None
-    end_node = None
-    label = None
-    weight = None
-    position = None
+  def __init__(self, source_state_idx, target_state_idx, label, weight=0.0):
+    """
+    :param int source_state_idx:
+    :param int target_state_idx:
+    :param int|str|None label:
+    :param float weight: in -log space
+    """
+    self.source_state_idx = source_state_idx
+    self.target_state_idx = target_state_idx
+    self.label = label
+    self.weight = weight
 
 
 class Fsa:
@@ -160,6 +166,7 @@ class Fsa:
 
     else:
       print("No finite state automaton matches to chosen type")
+      import sys
       sys.exit(-1)
 
   def set_lemma(self, lemma):
@@ -209,12 +216,12 @@ class Fsa:
     self._load_state_tying()
 
   def _load_lexicon(self, reload=False):
-    '''
+    """
     loads a lexicon from a file, loads the xml and returns its content
     where:
       lex.lemmas and lex.phonemes important
     :param bool reload: should lexicon be reloaded
-    '''
+    """
     from LmDataset import Lexicon
     if not isinstance(self.lexicon, Lexicon):
       reload = True
@@ -315,6 +322,7 @@ class Fsa:
         print("No depth level higher than 6!")
     else:
       print("No finite state automaton matches to chosen type")
+      import sys
       sys.exit(-1)
 
   def convert_label_seq_to_indices(self):
@@ -527,9 +535,7 @@ class Fsa:
     """
     edges_phon_t = []
 
-    """
-    replaces chars with phonemes
-    """
+    # replaces chars with phonemes
     while self.edges:
       edge = self.edges.pop(0)
       if edge[2] != self._SIL and edge[2] != self._EPS:
@@ -544,9 +550,7 @@ class Fsa:
     assert len(self.edges) == 0, "Edges left"
     self.edges.extend(edges_phon_t)
 
-    """
-    splits word and marks the letters next to a silence
-    """
+    # splits word and marks the letters next to a silence
     word_pos = []
     assert isinstance(self.lemma, list), "Lemma not list"
     word_list = []
@@ -563,9 +567,7 @@ class Fsa:
         else:
           word_pos.append({letter: ['']})
 
-    """
-    splits phoneme sequence and marks the phoneme next to a silence
-    """
+    # splits phoneme sequence and marks the phoneme next to a silence
     edges_t = []
     edges_t.extend(self.edges)
     phon_pos = []
@@ -588,9 +590,7 @@ class Fsa:
             letter_pos.append([letter])
         phon_pos.append(letter_pos)
 
-    """
-    splits phoneme edge into several edges
-    """
+    # splits phoneme edge into several edges
     edges_tt = []
     edges_tt.extend(self.edges)
     edges_tt.sort(key=lambda x: x[0])
@@ -647,7 +647,7 @@ class Fsa:
     """
     idx = 0
 
-    while (idx < len(edges)):  # traverse all edges from 0 to num_states
+    while idx < len(edges):  # traverse all edges from 0 to num_states
       cur_edge = edges[idx]  # gets the current edge
       cur_edge_start = cur_edge[0]  # with current start
       cur_edge_end = cur_edge[1]  # and end node
@@ -833,13 +833,13 @@ class Fsa:
         self.edges = edges_orig
 
   def _load_state_tying(self, reload=False):
-    '''
+    """
     loads a state tying map from a file, loads the file and returns its content
     :param stFile: state tying map file (allo_syntax int)
     :return state_tying: variable with state tying mapping
     where:
       statetying.allo_map important
-    '''
+    """
     from os.path import isfile
     from Log import log
     from LmDataset import StateTying
@@ -902,13 +902,14 @@ class Fsa:
 
 
 def fsa_to_dot_format(file, num_states, edges):
-  '''
+  """
   :param num_states:
   :param edges:
   :return:
 
   converts num_states and edges to dot file to svg file via graphviz
-  '''
+  """
+  # noinspection PyPackageRequirements,PyUnresolvedReferences
   import graphviz
   G = graphviz.Digraph(format='svg')
 
@@ -943,16 +944,17 @@ def _add_edges(graph, edges):
       graph.edge(*e)
   return graph
 
+
 class BuildSimpleFsaOp(theano.Op):
   itypes = (T.imatrix,)
   # the first and last output are actually uint32
   otypes = (T.fmatrix, T.fvector, T.fmatrix)
 
-  def __init__(self, loop_emission_idxs=[], loop_scores=(0.0, 0.0)):
+  def __init__(self, loop_emission_idxs=(), loop_scores=(0.0, 0.0)):
     self.loop_emission_idxs = set(loop_emission_idxs)
     self.loop_scores        = loop_scores
 
-  def perform(self, node, inputs, output_storage):
+  def perform(self, node, inputs, output_storage, params=None):
     labels = inputs[0]
 
     from_states      = []
@@ -988,9 +990,119 @@ class BuildSimpleFsaOp(theano.Op):
 
     edges = sorted(edges, key=lambda e: e[1] - e[0])
 
-    output_storage[0][0] = np.asarray(edges, dtype='uint32').T.copy().view(dtype='float32')
-    output_storage[1][0] = np.array(weights, dtype='float32')
-    output_storage[2][0] = np.asarray(start_end_states, dtype='uint32').T.copy().view(dtype='float32')
+    output_storage[0][0] = numpy.asarray(edges, dtype='uint32').T.copy().view(dtype='float32')
+    output_storage[1][0] = numpy.array(weights, dtype='float32')
+    output_storage[2][0] = numpy.asarray(start_end_states, dtype='uint32').T.copy().view(dtype='float32')
+
+
+class FastBaumWelchBatchFsa:
+  """
+  FSA(s) in representation format for :class:`FastBaumWelchOp`.
+  """
+
+  def __init__(self, edges, weights, start_end_states):
+    """
+    :param numpy.ndarray edges: (4,num_edges), edges of the graph (from,to,emission_idx,sequence_idx)
+    :param numpy.ndarray weights: (num_edges,), weights of the edges
+    :param numpy.ndarray start_end_states: (2, batch), (start,end) state idx in automaton.
+    """
+    assert edges.ndim == 2
+    self.num_edges = edges.shape[1]
+    assert edges.shape == (4, self.num_edges)
+    assert weights.shape == (self.num_edges,)
+    assert start_end_states.ndim == 2
+    self.num_batch = start_end_states.shape[1]
+    assert start_end_states.shape == (2, self.num_batch)
+    self.edges = edges
+    self.weights = weights
+    self.start_end_states = start_end_states
+
+
+class FastBwFsaShared:
+  """
+  One FSA shared for all the seqs in one batch (i.e. across batch-dim).
+  This is a simplistic class which provides the necessary functions to
+  """
+
+  def __init__(self):
+    self.num_states = 1
+    self.edges = []  # type: list[Edge]
+
+  def add_edge(self, source_state_idx, target_state_idx, emission_idx, weight=0.0):
+    """
+    :param int source_state_idx:
+    :param int target_state_idx:
+    :param int emission_idx:
+    :param float weight:
+    """
+    edge = Edge(source_state_idx=source_state_idx, target_state_idx=target_state_idx, label=emission_idx, weight=weight)
+    self.num_states = max(self.num_states, edge.source_state_idx + 1, edge.target_state_idx + 1)
+    self.edges.append(edge)
+
+  def add_inf_loop(self, state_idx, num_emission_labels):
+    """
+    :param int state_idx:
+    :param int num_emission_labels:
+    """
+    for emission_idx in range(num_emission_labels):
+      self.add_edge(source_state_idx=state_idx, target_state_idx=state_idx, emission_idx=emission_idx)
+
+  def get_num_edges(self, n_batch):
+    """
+    :param int n_batch:
+    :rtype: int
+    """
+    return len(self.edges) * n_batch
+
+  def get_edges(self, n_batch):
+    """
+    :param int n_batch:
+    :return edges: (4,num_edges), edges of the graph (from,to,emission_idx,sequence_idx)
+    :rtype: numpy.ndarray
+    """
+    num_edges = len(self.edges)
+    res = numpy.zeros((4, num_edges * n_batch), dtype="int32")
+    for batch_idx in range(n_batch):
+      for edge_idx, edge in enumerate(self.edges):
+        res[:, batch_idx * num_edges + edge_idx] = (edge.source_state_idx, edge.target_state_idx, edge.label, batch_idx)
+    return res
+
+  def get_weights(self, n_batch):
+    """
+    :param int n_batch:
+    :return weights: (num_edges,), weights of the edges
+    :rtype: numpy.ndarray
+    """
+    num_edges = len(self.edges)
+    res = numpy.zeros((num_edges * n_batch,), dtype="float32")
+    for batch_idx in range(n_batch):
+      for edge_idx, edge in enumerate(self.edges):
+        res[batch_idx * num_edges + edge_idx] = edge.weight
+    return res
+
+  def get_start_end_states(self, n_batch):
+    """
+    :param int n_batch:
+    :return start_end_states: (2, batch), (start,end) state idx in automaton. there is only one single automaton.
+    :rtype: numpy.ndarray
+    """
+    start_state_idx = 0
+    end_state_idx = self.num_states - 1
+    res = numpy.zeros((2, n_batch), dtype="int32")
+    for batch_idx in range(n_batch):
+      res[:, batch_idx] = (start_state_idx, end_state_idx)
+    return res
+
+  def get_fast_bw_fsa(self, n_batch):
+    """
+    :param int n_batch:
+    :rtype: FastBaumWelchBatchFsa
+    """
+    return FastBaumWelchBatchFsa(
+      edges=self.get_edges(n_batch),
+      weights=self.get_weights(n_batch),
+      start_end_states=self.get_start_end_states(n_batch))
+
 
 def main():
   from argparse import ArgumentParser
