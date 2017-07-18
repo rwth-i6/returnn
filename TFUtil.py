@@ -2111,7 +2111,7 @@ class OpCodeCompiler(object):
     if proc.returncode != 0:
       print("OpCompiler: %s failed." % cmd_bin)
       print("Original stdout/stderr:")
-      print(stdout)
+      print(stdout.decode("utf8"))
       raise CalledProcessError(returncode=proc.returncode, cmd=cmd_args)
     assert os.path.exists(self._so_filename)
     self._save_info()
