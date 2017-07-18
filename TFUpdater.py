@@ -211,6 +211,11 @@ class Updater(object):
           aggregation_method=aggregation_method)
         if not [v for g, v in grads_and_vars if g is not None]:
           raise Exception("no single variable to train")
+        if self.config.bool("debug_grad_summaries", False):
+          from TFUtil import variable_summaries, get_base_name, reuse_name_scope_of_tensor
+          for grad, var in grads_and_vars:
+            with reuse_name_scope_of_tensor(grad):
+              variable_summaries(grad, name="grad_of_%s" % get_base_name(var))
         # Also see tf.contrib.layers.optimizers.optimize_loss() for reference.
         if self.config.bool("gradient_nan_inf_filter", False):
           from TFUtil import nan_to_num
