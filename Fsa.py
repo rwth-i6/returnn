@@ -13,28 +13,275 @@ class Edge:
   class to represent an edge
   """
 
+  # label placeholder
+  _SIL = '_'
+  _EPS = '*'
+  _BLANK = '%'
+
   def __init__(self, source_state_idx, target_state_idx, label, weight=0.0):
     """
-    :param int source_state_idx:
-    :param int target_state_idx:
-    :param int|str|None label:
-    :param float weight: in -log space
+    :param int source_state_idx: the starting node of the edge
+    :param int target_state_idx: the ending node od th edge
+    :param int|str|None label: the label of the edge (normally a letter or a phoneme ...)
+    :param float weight: probability of the word/phon in -log space
     """
     self.source_state_idx = source_state_idx
     self.target_state_idx = target_state_idx
     self.label = label
     self.weight = weight
 
+    """
+    int|None idx_word_in_sentence: index of word in the given sentence
+    int|None idx_phon_in_word: index of phon in a word
+    int|None idx: label index within the sentence/word/phon
+    bool phon_at_word_begin: flag indicates if phon at the beginning of a word
+    bool phon_at_word_end: flag indicates if phon at the end of a word
+    float|None score: score of the edge
+    bool is_loop: is the edge a loop within the graph
+    """
+    self.idx_word_in_sentence = None
+    self.idx_phon_in_word = None
+    self.idx = None
+    self.phon_at_word_begin = False
+    self.phon_at_word_end = False
+    self.score = None
+    self.is_loop = False
+
+
+class Graph:
+  """
+  class holds the Graph representing the Finite State Automaton
+  holds the input and the created output (ASG, CTC, HMM)
+  states between input and output may be held if necessary
+  """
+
+  def __init__(self, lemma):
+    """
+    :param str|None lemma: a sentence or word
+    list[str] lemma_list: input transformed into list if necessary
+    """
+    if isinstance(lemma, str):
+      self.lemma = lemma.strip()
+      self.lemma_list = self.lemma.split()
+    elif isinstance(lemma, list):
+      self.lemma = None
+      self.lemma_list = lemma
+    else:
+      assert False, "The input you provided is not acceptable!"
+
+    """
+    int|None num_states: number of state of FSA during creation for ASG, CTC, HMM
+    list[Edge] edges: current state of FSA during creation for ASG, CTC, HMM
+    int|None num_states_asg: number of states for ASG
+    list[Edge] edges_asg: created edges for ASG FSA
+    int|None num_states_ctc: number of states for ASG
+    list[Edge] edges_ctc: created edges for CTC FSA
+    int|None num_states_hmm: number of states for ASG
+    list[Edge] edges_hmm: created edges for HMM FSA
+    str|None filename: str + fsa type for file save
+    """
+    self.num_states = None
+    self.edges = []
+    self.num_states_asg = None
+    self.edges_asg = []
+    self.num_states_ctc = None
+    self.edges_ctc = []
+    self.num_states_hmm = None
+    self.edges_hmm = []
+    self.filename = None
+
+
+  def set_filename(self, name):
+    """
+    sets the filename, for use with saving
+    :param str name: the filename, different stuff gets appended
+    """
+    if isinstance(name, str):
+      self.filename = name
+    else:
+      assert False, "The filename is not a string!"
+
+  def make_single_state_graph(self):
+    pass
+
+  def save(self):
+    pass
+
+
+class Asg:
+  """
+  class to create ASG FSA
+  """
+
+  def __init__(self, graph, num_labels, asg_repetition=2, label_conversion=False):
+    """
+    :param Graph fsa: represents the Graph on which the class operates
+    :param int num_labels: number of labels without blank, silence, eps and repetitions
+    :param int asg_repetition: asg repeat symbol which stands for x repetitions
+    :param bool label_conversion: shall the labels be converted into numbers (only ASG and CTC)
+    """
+    if isinstance(graph, Graph) and isinstance(num_labels, int)\
+      and isinstance(asg_repetition, int) and isinstance(label_conversion, bool):
+      self.fsa = graph
+      self.num_labels = num_labels
+      self.asg_repetition = asg_repetition
+      self.label_conversion = label_conversion
+    else:
+      assert False, "The ASG input is not of class Graph!"
+
+
+  def set_asg_rep(self, reps):
+    """
+    sets the asg repeat symbol
+    :param int reps: the asg repeat
+    """
+    if isinstance(reps, int) and reps > 1:
+      self.asg_repetition = reps
+    else:
+      assert False, "The asg repeat input is not a positive integer!"
+
+  def set_num_labels(self, numlab):
+    """
+    sets number of labels
+    :param int numlab: the number of labels
+    """
+    if isinstance(numlab, int) and numlab > 0:
+      self.num_labels = numlab
+    else:
+      assert False, "The label number input is not a positive integer!"
+
+  def set_label_conversion(self, onoff):
+    """
+    sets label conversion on or off
+    :param bool onoff: flag to set label conversion on/off
+    """
+    if isinstance(onoff, bool):
+      self.label_conversion = onoff
+    else:
+      assert False, "The label conversion input is not a bool!"
+
+  def run(self):
+    pass
+
+
+class Ctc:
+  """
+  class to create CTC FSA
+  """
+
+  def __init__(self, graph, num_labels, label_conversion=False):
+    """
+    :param Graph fsa: represents the Graph on which the class operates
+    :param int num_labels: number of labels without blank, silence, eps and repetitions
+    :param bool label_conversion: shall the labels be converted into numbers (only ASG and CTC)
+    """
+    if isinstance(graph, Graph) and isinstance(num_labels, int) and isinstance(label_conversion, int):
+      self.fsa = graph
+      self.num_labels = num_labels
+      self.label_conversion = label_conversion
+    else:
+      assert False, "The CTC input is not of class Graph!"
+
+    # list[int] final_states: list of final states
+    self.final_states = []
+
+  def set_num_labels(self, numlab):
+    """
+    sets number of labels
+    :param int numlab: the number of labels
+    """
+    if isinstance(numlab, int):
+      self.num_labels = numlab
+    else:
+      assert False, "The label number input is not an integer!"
+
+  def set_label_conversion(self, onoff):
+    """
+    sets label conversion on or off
+    :param bool onoff: flag to set label conversion on/off
+    """
+    if isinstance(onoff, bool):
+      self.label_conversion = onoff
+    else:
+      assert False, "The label conversion input is not a bool!"
+
+  def _add_final_state(self, state):
+    """
+    adds a final state to list of final states
+    :param int state: the final state which gets added to list
+    """
+    if isinstance(state, int):
+      # only add if not in list
+      if state not in self.final_states:
+        self.final_states.append(state)
+    else:
+      assert False, "The final state input is not an integer!"
+
+  def run(self):
+    pass
+
+
+class Hmm:
+  """
+  class to create HMM FSA
+  """
+
+  def __init__(self, graph, depth=6, allo_num_states=3):
+    """
+    :param Graph fsa: represents the Graph on which the class operates
+    :param int depth: the depth of the HMM FSA process
+    :param int allo_num_states: number of allophone states
+    """
+    if isinstance(graph, Graph) and isinstance(depth, int) and isinstance(allo_num_states, int):
+      self.fsa = graph
+      self.depth = depth
+      self.allo_num_states = allo_num_states
+    else:
+      assert False, 'The HMM input is not of class Graph'
+
+    # Lexicon|None lexicon: lexicon for transforming a word into allophones
+    self.lexicon = None
+    # StateTying|None state_tying: holds the transformation from created label to number
+    self.state_tying = None
+    # dict phon_dict: dictionary of phonemes, loaded from lexicon file
+    self.phon_dict = {}
+
+  def set_depth(self, depth):
+    """
+    sets the depth for the HMM FSA process
+    :param int depth: the depth of the HMM FSA process
+    """
+    if isinstance(depth, int):
+      self.depth = depth
+    else:
+      assert False, "The depth input is not an integer!"
+
+  def load_lexicon(self, lexicon_name):
+    """
+    loads Lexicon
+    :param str lexicon_name: holds the path and name of the lexicon file
+    """
+    pass
+
+  def load_state_tying(self, state_tying_name):
+    """
+    loads StateTying
+    :param state_tying_name: holds the path and name of the state tying file
+    """
+    pass
+
 
 class Fsa:
-  """class to create a finite state automaton"""
+  """
+  class to create Finite State Automaton
+  """
   _SIL = '_'
   _EPS = '*'
   _BLANK = '%'
 
   def __init__(self):
     """
-    :param str or list lemma: word or sentence
+    :param str|list[str] lemma: word or sentence
     :param str fsa_type: determines finite state automaton type: asg, ctc, hmm
     :param int num_states: number of states
     :param list edges: list of edges
@@ -165,9 +412,7 @@ class Fsa:
       self.state_tying_name = state_tying_name
 
     else:
-      print("No finite state automaton matches to chosen type")
-      import sys
-      sys.exit(-1)
+      assert False, "No finite state automaton matches to chosen type"
 
   def set_lemma(self, lemma):
     """
@@ -321,9 +566,7 @@ class Fsa:
       if self.depth >= 7:
         print("No depth level higher than 6!")
     else:
-      print("No finite state automaton matches to chosen type")
-      import sys
-      sys.exit(-1)
+      assert False, "No finite state automaton matches to chosen type"
 
   def convert_label_seq_to_indices(self):
     """
@@ -504,13 +747,13 @@ class Fsa:
         self.num_states += 1
 
   def _find_allo_seq_in_lex(self):
-    '''
+    """
     searches a lexicon xml structure for a watching word and
     returns the matching allophone sequence as a list
     :return dict phon_dict:
           key: lemma from the list
           value: list of dictionaries with phon and score (keys)
-    '''
+    """
     if isinstance(self.lemma, str):
       self.lemma = self.lemma.split(" ")
 
