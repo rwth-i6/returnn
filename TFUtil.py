@@ -1798,6 +1798,8 @@ class CudaEnv(object):
 
   def __init__(self):
     self.cuda_path = self._find_cuda_path()
+    if self.verbose_find_cuda:
+      print("CUDA path:", self.cuda_path)
 
   @classmethod
   def _find_nvcc_in_path(cls):
@@ -1908,7 +1910,7 @@ class OpCodeCompiler(object):
 
   def __init__(self, base_name, code_version, code, c_macro_defines=None, ld_flags=None, include_deps=None,
                static_version_name=None, should_cleanup_old_all=True, should_cleanup_old_mydir=False,
-               use_cuda_if_available=True):
+               use_cuda_if_available=True, verbose=False):
     """
     :param str base_name: base name for the module, e.g. "zero_out"
     :param int|tuple[int] code_version: check for the cache whether to reuse
@@ -1922,8 +1924,10 @@ class OpCodeCompiler(object):
     :param bool should_cleanup_old_all: whether we should look in the cache dir
       and check all ops if we can delete some old ones which are older than some limit (self._cleanup_time_limit_days)
     :param bool should_cleanup_old_mydir: whether we should delete our op dir before we compile there.
+    :param bool verbose: be slightly more verbose
     """
     from Util import get_temp_dir
+    self.verbose = verbose
     self.cache_dir = "%s/returnn_tf_cache" % get_temp_dir()
     self._include_path = tf.sysconfig.get_include()  # e.g. "...python2.7/site-packages/tensorflow/include"
     self.base_name = base_name
@@ -1941,6 +1945,11 @@ class OpCodeCompiler(object):
     if should_cleanup_old_all:
       self._cleanup_old()
     self._should_cleanup_old_mydir = should_cleanup_old_mydir
+    if self.verbose:
+      print("OpCodeCompiler: %r" % self)
+
+  def __repr__(self):
+    return "<OpCodeCompiler %r in %r>" % (self.base_name, self._mod_path)
 
   @property
   def _mod_path(self):
@@ -2067,6 +2076,8 @@ class OpCodeCompiler(object):
 
   def _maybe_compile(self):
     if not self._need_recompile():
+      if self.verbose:
+        print("OpCodeCompiler: No need to recompile:", self._so_filename)
       # Touch it so that we can see that we used it recently.
       os.utime(self._info_filename, None)
       return
@@ -2114,6 +2125,11 @@ class OpCodeCompiler(object):
       print(stdout.decode("utf8"))
       raise CalledProcessError(returncode=proc.returncode, cmd=cmd_args)
     assert os.path.exists(self._so_filename)
+    with open("%s/compile.log" % self._mod_path, "wb") as f:
+      if self.verbose:
+        print("OpCodeCompiler: write compile log to:", f.name)
+      f.write(("+ %s" % " ".join(cmd_args)).encode("utf8"))
+      f.write(stdout)
     self._save_info()
     assert not self._need_recompile()
 

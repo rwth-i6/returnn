@@ -8,7 +8,7 @@ import tensorflow as tf
 import sys
 sys.path += ["."]  # Python 3 hack
 from TFNativeOp import *
-from TFUtil import is_gpu_available
+from TFUtil import is_gpu_available, CudaEnv
 import Util
 import unittest
 from nose.tools import assert_equal, assert_is_instance
@@ -19,6 +19,7 @@ import better_exchook
 better_exchook.replace_traceback_format_tb()
 
 
+CudaEnv.verbose_find_cuda = True
 session = tf.InteractiveSession()
 
 
@@ -81,6 +82,9 @@ def test_NativeLstmCell():
 
 @unittest.skipIf(not is_gpu_available(), "no gpu on this system")
 def test_FastBaumWelch():
+  print("Make op...")
+  op = make_fast_baum_welch_op(compiler_opts=dict(verbose=True))  # will be cached, used inside :func:`fast_baum_welch`
+  print("Op:", op)
   n_batch = 3
   seq_len = 5
   num_emission_labels = 10
@@ -93,6 +97,36 @@ def test_FastBaumWelch():
   start_end_states = tf.constant(fast_bw_fsa.start_end_states, dtype=tf.int32)
   am_scores = tf.constant(numpy.random.normal(size=(seq_len, n_batch)), dtype=tf.float32)  # in -log space
   float_idx = tf.ones((seq_len, n_batch), dtype=tf.float32)
+  print("Call...")
   fast_baum_welch(
     am_scores=am_scores, float_idx=float_idx,
     edges=edges, weights=weights, start_end_states=start_end_states)
+  print("Done.")
+
+
+if __name__ == "__main__":
+  try:
+    better_exchook.install()
+    if len(sys.argv) <= 1:
+      for k, v in sorted(globals().items()):
+        if k.startswith("test_"):
+          print("-" * 40)
+          print("Executing: %s" % k)
+          v()
+          print("-" * 40)
+    else:
+      assert len(sys.argv) >= 2
+      for arg in sys.argv[1:]:
+        print("Executing: %s" % arg)
+        if arg in globals():
+          globals()[arg]()  # assume function and execute
+        else:
+          eval(arg)  # assume Python code and execute
+  finally:
+    session.close()
+    del session
+    tf.reset_default_graph()
+    import threading
+    if len(list(threading.enumerate())) > 1:
+      print("Warning, more than one thread at exit:")
+      better_exchook.dump_all_thread_tracebacks()

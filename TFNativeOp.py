@@ -76,12 +76,18 @@ class OpMaker(object):
     See NativeOp.cpp.
     To make the symbols available in the namespace, load the library now.
     """
+    if TFUtil.CudaEnv.verbose_find_cuda:
+      print("Load tf.contrib lstm_ops...")
     from tensorflow.contrib.rnn.python.ops import lstm_ops
     lstm_ops_so = "%s/_lstm_ops.so" % os.path.dirname(lstm_ops.__file__)
     assert os.path.exists(lstm_ops_so)
+    if TFUtil.CudaEnv.verbose_find_cuda:
+      print("Load tf.contrib lstm_ops lib:", lstm_ops_so)
     # Maybe a bit hacky: Just load all symbols into the global namespace.
     from ctypes import RTLD_GLOBAL, CDLL
     CDLL(lstm_ops_so, mode=RTLD_GLOBAL)
+    if TFUtil.CudaEnv.verbose_find_cuda:
+      print("tf.contrib lstm_ops lib loaded.")
 
   @property
   def op_name(self):
