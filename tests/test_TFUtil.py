@@ -781,3 +781,12 @@ def test_where_nan():
   print("grad_cond_x:", grad_cond_x.eval())  # nan? or 0?
   # This is different than tf.where because really only one branch will go into the gradient.
   assert_equal(grad_cond_x.eval(), 0.0)
+
+
+def test_variable_summaries():
+  v = tf.Variable(initial_value=[[1.0, 2.0], [-4.0, -1.0]], name="test_variable_summaries")
+  variable_summaries(v)
+  variable_summaries(tf.square(v))
+  session.run(v.initializer)
+  session.run(tf.summary.merge_all())
+  assert_almost_equal(session.run(variable_scalar_summaries_dict(v)["test_variable_summaries_mean"]), -0.5)

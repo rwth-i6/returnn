@@ -735,24 +735,43 @@ class OutputWithActivation(object):
     return tf.log(self.y)
 
 
-def variable_summaries(var, name, with_histogram=False):
+def variable_scalar_summaries_dict(x, name=None):
+  """
+  Collects all interesting information about `x`, such as min/max/mean, etc. (all scalars).
+  This is used by :func:`variable_summaries`.
+
+  :param tf.Tensor|tf.Variable x:
+  :param str name:
+  :return: dicth with key -> scalar info, e.g. with "%s_mean" % name -> tf.reduce_mean(x)
+  :rtype: dict[str,tf.Tensor]
+  """
+  if not name:
+    name = get_base_name(x)
+  mean = tf.reduce_mean(x)
+  stddev = tf.sqrt(tf.reduce_mean(tf.square(x - mean)))
+  return {
+    '%s_mean' % name: mean,
+    '%s_stddev' % name: stddev,
+    '%s_rms' % name: tf.sqrt(tf.reduce_mean(tf.square(x))),
+    '%s_max' % name: tf.reduce_max(x),
+    '%s_min' % name: tf.reduce_min(x)}
+
+
+def variable_summaries(var, name=None, with_histogram=False):
   """
   Attach a lot of summaries to a Tensor (for TensorBoard visualization).
+  Also see :func:`variable_scalar_summaries_dict`.
 
   :param tf.Tensor|tf.Variable var:
   :param str name:
   :param bool with_histogram: adds histogram. note that this can add noticeable overhead
   :return: nothing, use :func:`tf.summary.merge_all()` to collect the summaries
   """
+  if not name:
+    name = get_base_name(var)
   with tf.name_scope('summaries_%s' % name):
-    mean = tf.reduce_mean(var)
-    tf.summary.scalar('%s_mean' % name, mean)
-    with tf.name_scope('stddev'):
-      stddev = tf.sqrt(tf.reduce_mean(tf.square(var - mean)))
-    tf.summary.scalar('%s_stddev' % name, stddev)
-    tf.summary.scalar('%s_rms' % name, tf.sqrt(tf.reduce_mean(tf.square(var))))
-    tf.summary.scalar('%s_max' % name, tf.reduce_max(var))
-    tf.summary.scalar('%s_min' % name, tf.reduce_min(var))
+    for k, v in variable_scalar_summaries_dict(var, name=name).items():
+      tf.summary.scalar(k, v)
     if with_histogram:
       tf.summary.histogram('%s_histogram' % name, var)
 
