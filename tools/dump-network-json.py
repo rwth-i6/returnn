@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 
+from __future__ import print_function
+
 import os
 import sys
 
@@ -22,7 +24,7 @@ def init(configFilename, commandLineOptions):
   config = rnn.config
   config.set("log", [])
   rnn.initLog()
-  print >> log.v3, "CRNN dump-dataset starting up."
+  print("CRNN dump-dataset starting up.", file=log.v3)
   rnn.initConfigJsonNetwork()
 
 
@@ -42,7 +44,7 @@ def main(argv):
 
   json_data = network.to_json_content()
   f = open(args.out, 'w')
-  print >> f, json.dumps(json_data, indent=2, sort_keys=True)
+  print(json.dumps(json_data, indent=2, sort_keys=True), file=f)
   f.close()
 
   rnn.finalize()
