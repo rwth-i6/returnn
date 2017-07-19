@@ -495,7 +495,7 @@ void _free(void* ptr) {
 #define device_malloc Context(CONTEXT_ARGS)._malloc
 #define device_free Context(CONTEXT_ARGS)._free
 
-#ifdef CUDA
+#if CUDA
 cublasHandle_t _handle() {
     assert("not available" && 0);
     return NULL;
