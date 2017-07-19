@@ -1,5 +1,20 @@
 #!/usr/bin/env python
 
+import os
+import sys
+
+my_dir = os.path.dirname(os.path.abspath(__file__))
+returnn_dir = os.path.dirname(my_dir)
+sys.path.append(returnn_dir)
+
+import numpy as np
+import argparse
+import itertools
+
+import better_exchook
+better_exchook.install()
+
+
 # Sprint
 layerCount = 0  # automatically determined
 archiverExec = "./sprint-executables/archiver"
@@ -8,15 +23,6 @@ archiverExec = "./sprint-executables/archiver"
 configFile = "config/crnn.config"
 inputDim = 0  # via config num_inputs
 outputDim = 0  # via config num_outputs
-
-
-import os
-import numpy as np
-import argparse
-import itertools
-
-import better_exchook
-better_exchook.install()
 
 
 def parseSprintLayer(lines, float_type):

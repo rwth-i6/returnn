@@ -1,6 +1,7 @@
 
 import sys
 sys.path += ["."]  # Python 3 hack
+sys.path += ["tools"]
 
 from hdf_dump import *
 import os
