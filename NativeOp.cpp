@@ -479,10 +479,10 @@ void _Ndarray_set_zero(Ndarray* a) {
 #define Ndarray_set_zero Context(CONTEXT_ARGS)._Ndarray_set_zero
 
 
+#if TENSORFLOW
 void* _malloc(size_t num_bytes) {
     //auto dev = context->eigen_device<EigenDev>();
-    auto* stream = context->op_device_context()->stream();
-
+    //auto* stream = context->op_device_context()->stream();
     Allocator* allocator =
         context->device()->GetAllocator(AllocatorAttributes());
     return (void*)allocator->Allocate<uint8_t>(num_bytes);
@@ -495,13 +495,13 @@ void _free(void* ptr) {
 #define device_malloc Context(CONTEXT_ARGS)._malloc
 #define device_free Context(CONTEXT_ARGS)._free
 
-
 #ifdef CUDA
 cublasHandle_t _handle() {
     assert("not available" && 0);
     return NULL;
 }
 #define handle Context(CONTEXT_ARGS)._handle()
+#endif
 #endif
 
 
