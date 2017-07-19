@@ -848,12 +848,14 @@ def get_base_name(x):
 
 
 @contextlib.contextmanager
-def reuse_name_scope_of_tensor(x):
+def reuse_name_scope_of_tensor(x, prefix="", postfix=""):
   """
   :param tf.Tensor x: has name e.g. "layer0/rec/W:0"
+  :param str prefix:
+  :param str postfix:
   :return: reuse the name scope of x, e.g. "layer0/rec", yields scope
   """
-  with reuse_name_scope(get_name_scope_of_tensor(x), absolute=True) as scope:
+  with reuse_name_scope(prefix + get_name_scope_of_tensor(x) + postfix, absolute=True) as scope:
     yield scope
 
 

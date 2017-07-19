@@ -214,8 +214,10 @@ class Updater(object):
         if self.config.bool("debug_grad_summaries", False):
           from TFUtil import variable_summaries, get_base_name, reuse_name_scope_of_tensor
           for grad, var in grads_and_vars:
-            with reuse_name_scope_of_tensor(grad):
+            with reuse_name_scope_of_tensor(grad, prefix="grads/"):
               variable_summaries(grad, name="grad_of_%s" % get_base_name(var))
+            with reuse_name_scope_of_tensor(var, prefix="vars/"):
+              variable_summaries(var, name=get_base_name(var))
         # Also see tf.contrib.layers.optimizers.optimize_loss() for reference.
         if self.config.bool("gradient_nan_inf_filter", False):
           from TFUtil import nan_to_num
