@@ -277,6 +277,15 @@ class Updater(object):
       self.optimizer_init_vars_op = tf.variables_initializer(self.optimizer_vars, name="init_optim_slot_vars")
     self.init_optimizer_vars()
 
+    if self.config.bool("debug_grad_summaries", False):
+      from TFUtil import variable_summaries, get_base_name, reuse_name_scope_of_tensor
+      for key in self.network.used_data_keys:
+        data = self.network.extern_data.data[key]
+        if data.sparse:
+          continue
+        with reuse_name_scope_of_tensor(data.placeholder):
+          variable_summaries(data.placeholder)
+
     if self.config.bool("debug_add_check_numerics_ops", False):
       print("Adding checks for inf/nan.", file=log.v3)
       self.optim_op = tf.group(self.optim_op, add_check_numerics_ops([self.optim_op]))
