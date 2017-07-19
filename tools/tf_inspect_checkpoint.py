@@ -45,6 +45,17 @@ from tensorflow.python.platform import flags
 FLAGS = None
 
 
+def print_tensor(v):
+  print(v)
+  # See :func:`variable_scalar_summaries_dict`.
+  mean = numpy.mean(v)
+  print("mean:", mean)
+  print("stddev:", numpy.sqrt(numpy.mean(numpy.square(v - mean))))
+  print("rms:", numpy.sqrt(numpy.mean(numpy.square(v))))
+  print("min:", numpy.min(v))
+  print("max:", numpy.max(v))
+
+
 def print_tensors_in_checkpoint_file(file_name, tensor_name, all_tensors):
   """Prints tensors in a checkpoint file.
 
@@ -70,14 +81,14 @@ def print_tensors_in_checkpoint_file(file_name, tensor_name, all_tensors):
     else:
       print("tensor_name: ", tensor_name)
       v = reader.get_tensor(tensor_name)
-      print(v)
-      # See :func:`variable_scalar_summaries_dict`.
-      mean = numpy.mean(v)
-      print("mean:", mean)
-      print("stddev:", numpy.sqrt(numpy.mean(numpy.square(v - mean))))
-      print("rms:", numpy.sqrt(numpy.mean(numpy.square(v))))
-      print("min:", numpy.min(v))
-      print("max:", numpy.max(v))
+      print_tensor(v)
+      if tensor_name.endswith("/Adam") and reader.has_tensor(tensor_name + "_1"):
+        # https://github.com/tensorflow/tensorflow/blob/03beb65cecbc1e49ea477bca7f54543134b31d53/tensorflow/core/kernels/training_ops_gpu.cu.cc
+        print("Guessing Adam m/v")
+        v2 = reader.get_tensor(tensor_name + "_1")
+        eps = 1e-8
+        print("Adam update (m / (eps + sqrt(v))) with eps=%r:" % eps)
+        print_tensor(v / (eps + numpy.sqrt(v2)))
   except Exception as e:  # pylint: disable=broad-except
     print(str(e))
     if "corrupted compressed block contents" in str(e):
