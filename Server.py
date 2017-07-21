@@ -2,7 +2,7 @@
 
 from __future__ import print_function
 
-import numpy
+import numpy as np
 import sys
 import os
 import tornado.web
@@ -30,7 +30,7 @@ _engines = {}
 _engine_usage = {}
 _devices = {}
 _classify_cache = {}
-_max_amount_engines = 1
+_max_amount_engines = 4
 _configs = {}
 _data = {}
 
@@ -39,7 +39,7 @@ _data = {}
 IMPORTANT NOTE TO PUT IN CONFIG FILE:
 
 #IMPORTANT FOR SERVER
-extract_output_layer_name = "out"
+extract_output_layer_name = "<OUTPUT LAYER ID>"
 
 """
 
@@ -93,19 +93,31 @@ class ClassifyHandler(tornado.web.RequestHandler):
     @tornado.gen.coroutine
     def post(self, *args, **kwargs):
         #TODO: Make this batch over a specific time period
-    
-        params = json.loads(self.request.body)
+        #TODO: Make data sending binary an option
+
+
+        #print('Received body: ' + str(self.request.body))
+
+        body_params = json.loads(self.request.body)
+        
         output_dim = {}
         ret = {}
-        
+        data = {}
         
         #first get meta data
-        engine_hash = params['engine_hash']
+        engine_hash = body_params['engine_hash']
+        data_format = body_params['data_format'] #possible options: 'json','binary'
+        data_type = body_params['data_type'] #possible options: https://docs.scipy.org/doc/numpy-1.10.1/user/basics.types.html
+        #data_shape = body_params['data_shape'] #either '' or a numpy shape
         
-        print('Received engine hash: ', engine_hash, file=log.v4)
+        #defaults
+        if data_format == '':
+            data_format = 'json'
+        if data_type == '':
+            data_type = 'float32'
         
-        #delete unneccessary stuff so that the rest works
-        del params['engine_hash']
+        print('Received engine hash: %s, data formatted: %s, data type %s', engine_hash, data_format, data_type,
+              file=log.v4)
         
         #load in engine and hash
         engine = _engines[engine_hash]
@@ -113,24 +125,38 @@ class ClassifyHandler(tornado.web.RequestHandler):
         devices = _devices[engine_hash]
         
         hash_engine = hashlib.new('ripemd160')
-        hash_engine.update(json.dumps(params) + engine_hash)
+        hash_engine.update(json.dumps(body_params) + engine_hash)
         hash_temp = hash_engine.hexdigest()
+
+        #delete unneccessary stuff so that the rest works
+        del body_params['engine_hash']
+        del body_params['data_format']
+        del body_params['data_type']
+
+        # process the data
+        if data_format == 'json':
+            data = json.loads(self.request.body)
+            for k in data:
+                try:
+                    data[k] = np.asarray(data[k], dtype=data_type)
+                    if k != 'data':
+                      output_dim[k] = network.n_out[k]  # = [network.n_in,2] if k == 'data' else network.n_out[k]
+                except Exception:
+                    if k != 'data' and not k in network.n_out:
+                        ret['error'] = 'unknown target: %s' % k
+                    else:
+                        ret['error'] = 'unable to convert %s to an array from value %s' % (k, str(data[k]))
+                    break
         
-        #process the data
-        for k in params:
-            try:
-                params[k] = numpy.asarray(params[k], dtype='float32')
-                if k != 'data':
-                  output_dim[k] = network.n_out[k]  # = [network.n_in,2] if k == 'data' else network.n_out[k]
-            except Exception:
-                if k != 'data' and not k in network.n_out:
-                    ret['error'] = 'unknown target: %s' % k
-                else:
-                    ret['error'] = 'unable to convert %s to an array from value %s' % (k, str(params[k]))
-                break
+        #if data_format == 'binary':
+        #TODO: we can pickle the object or make custom binary implementation
+        #Possible implementation: pass metadata via URL paramters, then use self.get_argument to retrieve the data
+        #and have the body just a binary dump of the array.
+        
+        #do dataset creation and processing
         if not 'error' in ret:
             try:
-                data = StaticDataset(data=[params], output_dim=output_dim)
+                data = StaticDataset(data=[data], output_dim=output_dim)
                 data.init_seq_order()
             except Exception:
                 ret['error'] = 'Dataset server error'
@@ -157,10 +183,7 @@ class ClassifyHandler(tornado.web.RequestHandler):
         self.write(ret)
         
 
-    
-    
-
-#EXAMPLE: curl -H "Content-Type: application/json" -X POST -d '{"new_config_url":"file:///home/nikita/Desktop/returnn-experiments-master/mnist-beginners/config/ff_3l_sgd.config"}' http://localhost:3033/loadconfig
+#EXAMPLE: curl -H "Content-Type: application/json" -X POST -d '{"new_config_url":"<CONFIG_FILE>"}' http://localhost:<PORT>/loadconfig
 class ConfigHandler(tornado.web.RequestHandler):
 
     def get(self):
@@ -174,7 +197,8 @@ class ConfigHandler(tornado.web.RequestHandler):
             self.remove_oldest_engine()
         
         data = json.loads(self.request.body)
-    
+        
+        
         print('Received new config for new engine', file=log.v3)
     
         #Overview: create engine, download full config, create hash, and add it to the main list
@@ -184,38 +208,47 @@ class ConfigHandler(tornado.web.RequestHandler):
         hash_engine.update(json.dumps(args) + str(datetime.datetime.now()))
         hash_temp = hash_engine.hexdigest()
 
-        # TODO: better fallback
         # download new config file
         urlmanager = urllib.URLopener()
-        #basefile = "" #"configs/"
-        config_file = str(datetime.datetime.now()) + ".config"
-        urlmanager.retrieve(data["new_config_url"], config_file)
+        basefile = "configs/"
+        config_file = basefile + str(datetime.datetime.now()) + ".config"
+        try:
+          urlmanager.retrieve(data["new_config_url"], config_file)
+        #very nooby approach; very open to better solutions
+        except:
+          self.write('Error: Loading in config file from URL')
+          return
         
-        # load and setup config
-        config = Config.Config()
-        config.load_file(config_file)
-        if config.value('task', 'daemon') != 'training':
-          config.set(key='task', value='daemon') #assume we're only using for classification or training
-   
-        #load devices
-        _devices[hash_temp] = self.init_devices(config=config)
+        #load and setup config
+        try:
+            config = Config.Config()
+            config.load_file(config_file)
+            if config.value('task', 'daemon') != 'training':
+              config.set(key='task', value='daemon') #assume we're only using for classification or training
+        except Exception:
+            self.write('Error: Processing config file')
+            return
+        try:
+            #load devices
+            _devices[hash_temp] = self.init_devices(config=config)
+        except Exception:
+            self.write('Error: Loading devices failed')
+            return
+        try:
+            #load engine
+            new_engine = Engine.Engine(_devices[hash_temp])
+            new_engine.init_network_from_config(config=config)
+            
+            _engines[hash_temp] = new_engine
+            _engine_usage[hash_temp] = datetime.datetime.now()
+            _configs[hash_temp] = config
+        except Exception:
+            self.write('Error: Loading engine failed')
+            return
         
-        print("finished devices")
-        
-        #load engine
-        new_engine = Engine.Engine(_devices[hash_temp])
-        new_engine.init_network_from_config(config=config)
-        
-        print("finished engines")
-        
-        _engines[hash_temp] = new_engine
-        _engine_usage[hash_temp] = datetime.datetime.now()
-        _configs[hash_temp] = config
-        
-        print("Finished loading in, server running. Currently number of active engines: ", len(_engines), file=log.v3)
-        
+        print('Finished loading in, server running. Currently number of active engines: ', len(_engines), file=log.v3)
         self.write(hash_temp)
-    
+         
     
     def init_devices(self, config):
         
@@ -262,7 +295,7 @@ class ConfigHandler(tornado.web.RequestHandler):
 
 #requires that the congig is loaded in
 #requires training and dev data URL to h5 files
-
+#TODO: finish implementation
 class TrainingHandler(tornado.web.RequestHandler):
   
       def get(self):
@@ -287,8 +320,24 @@ class TrainingHandler(tornado.web.RequestHandler):
         
         #configure engine
         engine_hash = data["engine_hash"]
+
+        # TODO: set new training epochs, so that it actually trains
         
-        # update config to use this and save the future model
+        #Current issue: we're changing the config and the corresponding epoch model, but the internal cache
+        #of the engine doesn't let us update the internal epoch model Engine:86 -> get_epoch_model.
+        
+        #if override, check line Engine:345
+        
+        #remove weight loading, as we're expecting a new topology
+        _configs[engine_hash].set(key='load', value='')
+        #_configs[engine_hash].set(key='start_epoch', value='auto')
+        #_configs[engine_hash].set(key='initialize_from_model', value='False')
+        #_configs[engine_hash].set(key='import_model_train_epoch1', value='False')
+        #_engines[engine_hash]._epoch_model = None
+        #print("EPOCHMODEL " + _engines[engine_hash]._epoch_model)
+        #_configs[engine_hash].set(key='num_epochs', value='12')
+        
+        # update config to use this new data and save the future model
         _configs[engine_hash].set(key='train', value=train_file_abs)
         _configs[engine_hash].set(key='dev', value=dev_file_abs)
         _configs[engine_hash].set(key='model', value="/" + engine_hash)
@@ -298,13 +347,14 @@ class TrainingHandler(tornado.web.RequestHandler):
         self.initData(config=_configs[engine_hash], engine_id=engine_hash)
 
         print("initialised data")
-        
   
         _engines[engine_hash].init_train_from_config(_configs[engine_hash], _data[engine_hash][0],
                                                      _data[engine_hash][1], _data[engine_hash][2])
         print("initialised engine")
         
         _engines[engine_hash].train()
+        
+        
         
         self.write({'success':'true'})
       
@@ -392,7 +442,6 @@ class TrainingHandler(tornado.web.RequestHandler):
         train_data, extra_train = self.load_data(config, train_cache_bytes, 'train')
         _data[engine_id] = (train_data, extra_train, eval_data)
 
-#TODO: implement training handler
 
 
 
