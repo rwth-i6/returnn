@@ -799,6 +799,20 @@ class LstmGenericBase(NativeOpGenBase):
     assert(Ndarray_DIMS(DZ)[2] %% 4 == 0); // 3 gates + cell
     int n_cells = Ndarray_DIMS(DZ)[2] / 4;
 
+    /*
+    // TF debugging:
+    printf("huhu\\n");
+    debug_print(context, V_h, "V_h");
+    debug_print(context, c, "c");
+    debug_print(context, i, "i");
+    debug_print(context, Y, "Y");
+    debug_print(context, Dd, "Dd");
+    debug_print(context, DZ, "DZ");
+    debug_print(context, DV_h, "DV_h");
+    debug_print(context, Dc, "Dc");
+    debug_print(context, tmpDc, "tmpDc");
+    */
+
     assert(T > 0);
     for(int x = T - 1; x >= 0; --x) {
       // add recurrent
@@ -826,6 +840,8 @@ class LstmGenericBase(NativeOpGenBase):
     Ndarray_memcpy(
       Ndarray_DEV_DATA(Dc), Ndarray_DEV_DATA(tmpDc),
       Dc_dim[0] * Dc_dim[1] * sizeof(float));
+
+    //debug_print(context, DZ, "DZ");
   """
 
   code_version = ()

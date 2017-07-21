@@ -506,7 +506,7 @@ def test_GradOfLstmGenericBase_simple_nan():
   print("GPU available:", is_gpu_available())
   print("Create LSTM op...")
   from TFNativeOp import make_lstm_op
-  op_func = make_lstm_op()
+  op_func = make_lstm_op(compiler_opts=dict(verbose=True))
   print("op_func:", op_func)
 
   def dummy_call():
@@ -520,17 +520,18 @@ def test_GradOfLstmGenericBase_simple_nan():
     return op_func(Z, V_h, c, i)
   dummy = dummy_call()
   with tf.Session() as session:
-    print("dummy out:", session.run(dummy[1]))
+    print("dummy out:", session.run(list(dummy)))
     grad_op = _lstm_grad_op(session)
     args = _demo_lstm_grad_args()
     placeholders = [tf.placeholder(v.dtype) for v in args]
-    lstm_grad_t = grad_op(*placeholders)
-    out_v_h_t = lstm_grad_t[1]
-    out_v_h = session.run(out_v_h_t, feed_dict=dict(zip(placeholders, args)))
-    assert isinstance(out_v_h, numpy.ndarray)
-    print("out:")
-    print(out_v_h)
-    assert numpy.all(numpy.isfinite(out_v_h))
+    lstm_grad_t = list(grad_op(*placeholders))
+    outs = session.run(lstm_grad_t, feed_dict=dict(zip(placeholders, args)))
+    for out, descr, i in zip(outs, ["z", "out_v_h", "out_c", "dummy_out"], range(4)):
+      assert isinstance(out, numpy.ndarray)
+      print("(%i) %s:" % (i, descr))
+      print(out)
+    for out in outs:
+      assert numpy.all(numpy.isfinite(out))
 
 
 if __name__ == "__main__":

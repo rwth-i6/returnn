@@ -232,6 +232,8 @@ class OpMaker(object):
         cshape = "TensorShape({%s})" % ", ".join(["inputs[%i]->dim_size(%i)" % (in_idx, in_dim)
                                                   for (in_idx, in_dim) in v["shape"]])
         code_set_io += "OP_REQUIRES_OK(context, context->allocate_output(%i, %s, &output_%i));\n" % (out_idx, cshape, out_idx)
+        code_set_io += "Ndarray_set_zero(*outputs[%i]);\n" % out_idx
+
     code_user = self.description.c_fw_code % {"fail": "assert(false);"}
     code_compute = "\n".join([
       code_forward_io,
@@ -261,6 +263,7 @@ class OpMaker(object):
     #include "tensorflow/core/framework/op.h"
     #include "tensorflow/core/framework/shape_inference.h"
     #include "tensorflow/core/framework/op_kernel.h"
+    #include "tensorflow/core/common_runtime/device.h"
     """
     if self.with_cuda:
       # http://docs.nvidia.com/cuda/cublas
@@ -273,6 +276,7 @@ class OpMaker(object):
       // https://github.com/tensorflow/tensorflow/issues/6602 ?
       //#include "tensorflow/core/platform/stream_executor.h"
       //#include "tensorflow/core/common_runtime/gpu/gpu_util.h"
+      //#include "tensorflow/core/common_runtime/gpu_device_context.h"
       """
     # sgemm
     code_header += """

@@ -601,4 +601,16 @@ void make_copy(OpKernelContext* context, tensorflow::Tensor* tgt_tensor, const t
     auto dev = context->eigen_device<EigenDev>();
     tgt_tensor->flat<float>().device(dev) = src_tensor->flat<float>();
 }
+
+void debug_print(OpKernelContext* context, tensorflow::Tensor* v, const char* name) {
+    // https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/debug_ops.h
+    tensorflow::Tensor cpy(v->dtype(), v->shape());
+    Notification done_copy;
+    context->op_device_context()->CopyDeviceTensorToCPU(
+      v, name, static_cast<Device*>(context->device()), &cpy,
+      [&done_copy](const Status& s) { done_copy.Notify(); });
+    done_copy.WaitForNotification();
+    printf("%s: %s\n", name, cpy.DebugString().c_str());
+}
+
 #endif
