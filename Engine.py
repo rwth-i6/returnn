@@ -76,6 +76,13 @@ class Engine:
     return file_list
 
   @classmethod
+  def model_filename_postfix(cls):
+    fn_postfix = ""
+    if BackendEngine.is_tensorflow_selected():
+      fn_postfix = ".meta"
+    return fn_postfix
+
+  @classmethod
   def get_epoch_model(cls, config):
     """
     :type config: Config.Config
@@ -95,14 +102,11 @@ class Engine:
 
     load_model_epoch_filename = config.value('load', '')
     if load_model_epoch_filename:
-      fn_postfix = ""
-      if BackendEngine.is_tensorflow_selected():
-        fn_postfix = ".meta"
-      assert os.path.exists(load_model_epoch_filename + fn_postfix)
+      assert os.path.exists(load_model_epoch_filename + cls.model_filename_postfix())
 
     import_model_train_epoch1 = config.value('import_model_train_epoch1', '')
     if import_model_train_epoch1:
-      assert os.path.exists(import_model_train_epoch1)
+      assert os.path.exists(import_model_train_epoch1 + cls.model_filename_postfix())
 
     existing_models = cls.get_existing_models(config)
 
