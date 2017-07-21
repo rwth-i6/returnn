@@ -44,7 +44,7 @@ class LayerBase(object):
   recurrent = False  # if the order in the time-dimension is relevant
 
   def __init__(self, name, network, output=None, n_out=None, out_type=None, sources=(),
-               target=None, loss=None, size_target=None,
+               target=None, loss=None, loss_scale=1.0, size_target=None,
                L2=None, is_output_layer=None,
                batch_norm=False,
                spatial_smoothing=0.0,
@@ -62,6 +62,7 @@ class LayerBase(object):
       alternatively, this also can be a layer name.
     :param str|None size_target: like target but this is only used to set our output size in case of training
     :param Loss|None loss: via self.transform_config_dict()
+    :param float loss_scale: scale factor for loss (1.0 by default)
     :param float|None L2: for constraints
     :param bool|None is_output_layer:
     :param bool|dict batch_norm: see self.batch_norm()
@@ -77,6 +78,7 @@ class LayerBase(object):
     self.loss = loss
     if self.loss and self.loss.recurrent:
       self.recurrent = True
+    self.loss_scale = loss_scale
     if output:
       self.output = output
       if n_out:
@@ -403,7 +405,7 @@ class LayerBase(object):
 
   def get_loss_value(self):
     """
-    :return: the loss, a scalar value, or None if not set
+    :return: the loss, a scalar value, or None if not set. not multiplied by loss_scale
     :rtype: tf.Tensor | None
     """
     if not self.loss:
