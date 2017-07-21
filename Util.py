@@ -1431,7 +1431,10 @@ def get_login_username():
   :return: the username of the current user.
   Use this as a replacement for os.getlogin().
   """
-  import pwd, os
+  import os
+  if sys.platform == 'win32':
+    return os.getlogin()
+  import pwd
   return pwd.getpwuid(os.getuid())[0]
 
 

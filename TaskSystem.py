@@ -151,92 +151,93 @@ class SharedMem:
   class ShmException(Exception): pass
   class CCallException(ShmException): pass
 
-  import ctypes
-  import ctypes.util
-
-  libc_so = ctypes.util.find_library('c')
-  libc = ctypes.CDLL(libc_so, use_errno=True)
-  shm_key_t = ctypes.c_int
-  IPC_PRIVATE = 0
-  IPC_RMID = 0
-
-  # int shmget(key_t key, size_t size, int shmflg);
-  shmget = libc.shmget
-  shmget.restype = ctypes.c_int
-  shmget.argtypes = (shm_key_t, ctypes.c_size_t, ctypes.c_int)
-  # void* shmat(int shmid, const void *shmaddr, int shmflg);
-  shmat = libc.shmat
-  shmat.restype = ctypes.c_void_p
-  shmat.argtypes = (ctypes.c_int, ctypes.c_void_p, ctypes.c_int)
-  # int shmdt(const void *shmaddr);
-  shmdt = libc.shmdt
-  shmdt.restype = ctypes.c_int
-  shmdt.argtypes = (ctypes.c_void_p,)
-  # int shmctl(int shmid, int cmd, struct shmid_ds *buf);
-  shmctl = libc.shmctl
-  shmctl.restype = ctypes.c_int
-  shmctl.argtypes = (ctypes.c_int, ctypes.c_int, ctypes.c_void_p)
-  # void* memcpy( void *dest, const void *src, size_t count );
-  memcpy = libc.memcpy
-  memcpy.restype = ctypes.c_void_p
-  memcpy.argtypes = (ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t)
-
-  @classmethod
-  def check_ccall_error(cls, check, f):
+  if sys.platform != "win32":
     import ctypes
-    if not check:
-      errno = ctypes.get_errno()
-      errstr = os.strerror(errno)
-      raise cls.CCallException("SharedMem: %s failed with error %i (%s)" % (f, errno, errstr))
+    import ctypes.util
 
-  @classmethod
-  def is_shmget_functioning(cls):
-    shmid = cls.shmget(cls.IPC_PRIVATE, 4 * 1024 * 1024, 0o600)
-    if shmid <= 0:
-      return False
-    cls.shmctl(shmid, cls.IPC_RMID, 0)
-    return True
+    libc_so = ctypes.util.find_library('c')
+    libc = ctypes.CDLL(libc_so, use_errno=True)
+    shm_key_t = ctypes.c_int
+    IPC_PRIVATE = 0
+    IPC_RMID = 0
 
-  def __init__(self, size, shmid=None):
-    self.size = size
-    self.shmid = None
-    self.ptr = None
-    if shmid is None:
-      self.is_creator = True
-      self.shmid = self.shmget(self.IPC_PRIVATE, self.size, 0o600)
-      self.check_ccall_error(self.shmid > 0, "shmget")
-      print("SharedMem[pid %i]: New shmid: %i (size %i)" % (os.getpid(), self.shmid, self.size))
-      import atexit
-      atexit.register(self.remove)
-    else:
-      self.is_creator = False
-      self.shmid = shmid
-      assert self.shmid > 0
-    self.ptr = self.shmat(self.shmid, 0, 0)
-    self.check_ccall_error(self.ptr != self.ctypes.c_void_p(-1).value, "shmat")
-    self.check_ccall_error(self.ptr > 0, "shmat")
+    # int shmget(key_t key, size_t size, int shmflg);
+    shmget = libc.shmget
+    shmget.restype = ctypes.c_int
+    shmget.argtypes = (shm_key_t, ctypes.c_size_t, ctypes.c_int)
+    # void* shmat(int shmid, const void *shmaddr, int shmflg);
+    shmat = libc.shmat
+    shmat.restype = ctypes.c_void_p
+    shmat.argtypes = (ctypes.c_int, ctypes.c_void_p, ctypes.c_int)
+    # int shmdt(const void *shmaddr);
+    shmdt = libc.shmdt
+    shmdt.restype = ctypes.c_int
+    shmdt.argtypes = (ctypes.c_void_p,)
+    # int shmctl(int shmid, int cmd, struct shmid_ds *buf);
+    shmctl = libc.shmctl
+    shmctl.restype = ctypes.c_int
+    shmctl.argtypes = (ctypes.c_int, ctypes.c_int, ctypes.c_void_p)
+    # void* memcpy( void *dest, const void *src, size_t count );
+    memcpy = libc.memcpy
+    memcpy.restype = ctypes.c_void_p
+    memcpy.argtypes = (ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t)
 
-  def remove(self):
-    if self.ptr:
-      self.shmdt(self.ptr)
-      self.ptr = None
-    if self.shmid and self.shmid > 0:
-      if self.is_creator:
-        print("SharedMem[pid %i]: Removing shmid %i (size %i)" % (os.getpid(), self.shmid, self.size))
-        self.shmctl(self.shmid, self.IPC_RMID, 0)
+    @classmethod
+    def check_ccall_error(cls, check, f):
+      import ctypes
+      if not check:
+        errno = ctypes.get_errno()
+        errstr = os.strerror(errno)
+        raise cls.CCallException("SharedMem: %s failed with error %i (%s)" % (f, errno, errstr))
+
+    @classmethod
+    def is_shmget_functioning(cls):
+      shmid = cls.shmget(cls.IPC_PRIVATE, 4 * 1024 * 1024, 0o600)
+      if shmid <= 0:
+        return False
+      cls.shmctl(shmid, cls.IPC_RMID, 0)
+      return True
+
+    def __init__(self, size, shmid=None):
+      self.size = size
       self.shmid = None
+      self.ptr = None
+      if shmid is None:
+        self.is_creator = True
+        self.shmid = self.shmget(self.IPC_PRIVATE, self.size, 0o600)
+        self.check_ccall_error(self.shmid > 0, "shmget")
+        print("SharedMem[pid %i]: New shmid: %i (size %i)" % (os.getpid(), self.shmid, self.size))
+        import atexit
+        atexit.register(self.remove)
+      else:
+        self.is_creator = False
+        self.shmid = shmid
+        assert self.shmid > 0
+      self.ptr = self.shmat(self.shmid, 0, 0)
+      self.check_ccall_error(self.ptr != self.ctypes.c_void_p(-1).value, "shmat")
+      self.check_ccall_error(self.ptr > 0, "shmat")
 
-  def __del__(self):
-    self.remove()
+    def remove(self):
+      if self.ptr:
+        self.shmdt(self.ptr)
+        self.ptr = None
+      if self.shmid and self.shmid > 0:
+        if self.is_creator:
+          print("SharedMem[pid %i]: Removing shmid %i (size %i)" % (os.getpid(), self.shmid, self.size))
+          self.shmctl(self.shmid, self.IPC_RMID, 0)
+        self.shmid = None
 
-  def __getstate__(self):
-    return {"size": self.size, "shmid": self.shmid}
+    def __del__(self):
+      self.remove()
 
-  def __setstate__(self, state):
-    self.__init__(**state)
+    def __getstate__(self):
+      return {"size": self.size, "shmid": self.shmid}
 
-  def __repr__(self):
-    return "<SharedMem shmid=%r size=%r is_creator=%r>" % (self.shmid, self.size, self.is_creator)
+    def __setstate__(self, state):
+      self.__init__(**state)
+
+    def __repr__(self):
+      return "<SharedMem shmid=%r size=%r is_creator=%r>" % (self.shmid, self.size, self.is_creator)
 
 
 def next_power_of_two(n):
@@ -1143,7 +1144,10 @@ def Pipe_ConnectionWrapper(*args, **kwargs):
 
 
 if sys.platform == "win32":
-  from multiprocessing.forking import Popen as mp_Popen
+  try:
+    from multiprocessing.forking import Popen as mp_Popen
+  except ImportError:
+    from multiprocessing.popen_spawn_win32 import Popen as mp_Popen
 
   class Win32_mp_Popen_wrapper:
     def __init__(self, env_update):
