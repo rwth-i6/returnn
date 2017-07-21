@@ -1179,13 +1179,22 @@ def setup_tf_thread_pools(num_threads=None, log_file=None):
   if num_threads:
     opts.setdefault("intra_op_parallelism_threads", num_threads)
     opts.setdefault("inter_op_parallelism_threads", num_threads)
-  with tf.Session(config=tf.ConfigProto(**opts)):
-    pass
+  with tf.Session(config=tf.ConfigProto(**opts)) as session:
+    session.close()
+
+
+def check_initial_tf_thread_pool_init():
+  if not _setup_tf_thread_pools_called_once:
+    from Util import try_get_caller_name
+    print("setup_tf_thread_pools() not yet called (via func %s), calling it now." %
+          try_get_caller_name(fallback="<unknown>"))
+    setup_tf_thread_pools(log_file=sys.stdout)
 
 
 _list_local_devices = None
 
 def _get_tf_list_local_devices():
+  check_initial_tf_thread_pool_init()
   global _list_local_devices
   if _list_local_devices:
     return _list_local_devices

@@ -211,3 +211,87 @@ def test_cudnn_rnn_params_to_canonical():
     check(num_layers=1, num_units=5, input_size=3, direction='unidirectional')
     check(num_layers=1, num_units=5, input_size=3, direction='bidirectional')  # fails in TF 1.2.0
     check(num_layers=2, num_units=5, input_size=3, direction='bidirectional')
+
+
+def test_RecLayer_NativeLstm_Nan():
+  print("test_RecLayer_NativeLstm_Nan()")
+  num_inputs = 4
+  num_outputs = 3
+
+  config = Config()
+  config.update({
+    "num_inputs": num_inputs,
+    "num_outputs": {"data": [num_inputs, 2], "classes": [num_outputs, 2]},  # dense output
+    "network": {
+      "output": {"class": "rec", "unit": "NativeLSTM", "loss": "mse"}
+    },
+    "adam": True,
+    "debug_grad_summaries": True,
+    "debug_save_updater_vars": True,
+    "debug_add_check_numerics_ops": True,
+  })
+
+  print("Reset default graph...")
+  tf.reset_default_graph()
+  print("Create network...")
+  network = TFNetwork(config=config, train_flag=True)
+  network.construct_from_dict(config.typed_dict["network"])
+
+  def make_feed_dict(seq_len=10):
+    limit = 5.0
+    return {
+      network.extern_data.data["data"].placeholder: numpy.random.uniform(-limit, limit, (1, seq_len, num_inputs)),
+      network.extern_data.data["data"].size_placeholder[0]: numpy.array([seq_len]),
+      network.extern_data.data["classes"].placeholder: numpy.random.uniform(-limit, limit, (1, seq_len, num_outputs)),
+      network.extern_data.data["classes"].size_placeholder[0]: numpy.array([seq_len]),
+    }
+
+  print("Creating session...")
+  with tf.Session() as session:
+    print("Init params...")
+    network.initialize_params(session=session)
+    print("Test run...")
+    output_data1 = session.run(network.get_default_output_layer().output.placeholder, feed_dict=make_feed_dict(5))
+    assert_equal(output_data1.shape, (5, 1, num_outputs))  # (time, batch, dim)
+
+    print("Create updater...")
+    from TFUpdater import Updater
+    updater = Updater(config=config, network=network, tf_session=session)
+    updater.set_trainable_vars(network.get_trainable_params())
+    updater.set_learning_rate(0.1)
+    optim_op = updater.get_optim_op()
+    loss_t = network.get_total_loss() * network.get_default_output_layer().get_loss_normalization_factor()
+
+    from TFUtil import variable_scalar_summaries_dict
+
+    print("Training...")
+    for i in range(10000):
+      loss, _ = session.run([loss_t, optim_op], feed_dict=make_feed_dict(5))
+      if not numpy.isfinite(loss) or i % 100 == 0:
+        print("step %i, loss: %r" % (i, loss))
+      assert numpy.isfinite(loss)
+
+
+if __name__ == "__main__":
+  try:
+    better_exchook.install()
+    if len(sys.argv) <= 1:
+      for k, v in sorted(globals().items()):
+        if k.startswith("test_"):
+          print("-" * 40)
+          print("Executing: %s" % k)
+          v()
+          print("-" * 40)
+    else:
+      assert len(sys.argv) >= 2
+      for arg in sys.argv[1:]:
+        print("Executing: %s" % arg)
+        if arg in globals():
+          globals()[arg]()  # assume function and execute
+        else:
+          eval(arg)  # assume Python code and execute
+  finally:
+    import threading
+    if len(list(threading.enumerate())) > 1:
+      print("Warning, more than one thread at exit:")
+      better_exchook.dump_all_thread_tracebacks()
