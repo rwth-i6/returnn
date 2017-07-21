@@ -215,6 +215,7 @@ def test_cudnn_rnn_params_to_canonical():
 
 def test_RecLayer_NativeLstm_Nan():
   print("test_RecLayer_NativeLstm_Nan()")
+  print("GPU available:", is_gpu_available())
   num_inputs = 4
   num_outputs = 3
 
@@ -237,12 +238,16 @@ def test_RecLayer_NativeLstm_Nan():
   network = TFNetwork(config=config, train_flag=True)
   network.construct_from_dict(config.typed_dict["network"])
 
+  # Depending on the seed, I get nan earlier, later, or not at all.
+  # limit=5.0: seed=3 -> nan in step 4094. seed=1 -> nan in step 2463.
+  random = numpy.random.RandomState(seed=1)
+  limit = 10.0  # The higher, the more likely you get nan.
+
   def make_feed_dict(seq_len=10):
-    limit = 5.0
     return {
-      network.extern_data.data["data"].placeholder: numpy.random.uniform(-limit, limit, (1, seq_len, num_inputs)),
+      network.extern_data.data["data"].placeholder: random.uniform(-limit, limit, (1, seq_len, num_inputs)),
       network.extern_data.data["data"].size_placeholder[0]: numpy.array([seq_len]),
-      network.extern_data.data["classes"].placeholder: numpy.random.uniform(-limit, limit, (1, seq_len, num_outputs)),
+      network.extern_data.data["classes"].placeholder: random.uniform(-limit, limit, (1, seq_len, num_outputs)),
       network.extern_data.data["classes"].size_placeholder[0]: numpy.array([seq_len]),
     }
 
@@ -260,13 +265,34 @@ def test_RecLayer_NativeLstm_Nan():
     updater.set_trainable_vars(network.get_trainable_params())
     updater.set_learning_rate(0.1)
     optim_op = updater.get_optim_op()
-    loss_t = network.get_total_loss() * network.get_default_output_layer().get_loss_normalization_factor()
-
-    from TFUtil import variable_scalar_summaries_dict
+    layer = network.layers["output"]
+    loss_t = network.get_total_loss() * layer.get_loss_normalization_factor()
+    weights_t = layer.params["W"]
+    summaries_t = tf.summary.merge_all()
 
     print("Training...")
+    recent_info = []  # type: list[dict[str]]
     for i in range(10000):
-      loss, _ = session.run([loss_t, optim_op], feed_dict=make_feed_dict(5))
+      try:
+        loss, _, summaries, weights = session.run(
+          [loss_t, optim_op, summaries_t, weights_t], feed_dict=make_feed_dict(5))
+      except tf.errors.InvalidArgumentError as exc:
+        print("TensorFlow exception in step %i." % i)
+        print(exc)
+        print("Most recent summaries:")
+        summary_proto = tf.Summary()
+        summary_proto.ParseFromString(recent_info[-1]["summaries"])
+        for val in summary_proto.value:
+          # Assuming all summaries are scalars.
+          print("  %s: %r" % (val.tag, val.simple_value))
+        print("Most recent weights:")
+        print(recent_info[-1]["weights"])
+        print("Current weights:")
+        print(session.run(weights_t))
+        raise Exception("TF exception in step %i." % i)
+      if len(recent_info) > 1000:
+        recent_info.pop(0)
+      recent_info.append({"step": i, "loss": loss, "summaries": summaries, "weights": weights})
       if not numpy.isfinite(loss) or i % 100 == 0:
         print("step %i, loss: %r" % (i, loss))
       assert numpy.isfinite(loss)
