@@ -1056,7 +1056,7 @@ class ConstantLayer(LayerBase):
   @classmethod
   def get_out_data_from_opts(cls, name, dtype="float32", **kwargs):
     return Data(
-      name="%s_const" % name, shape=(), batch_dim_axis=0, time_dim_axis=None, dtype=dtype)
+      name="%s_const" % name, shape=(1,), batch_dim_axis=0, time_dim_axis=None, dtype=dtype)
 
 
 class GatingLayer(_ConcatInputLayer):
@@ -2212,7 +2212,8 @@ class CombineLayer(LayerBase):
     assert not self.output.sparse
     for source in sources:
       assert not source.output.sparse
-      assert source.output.dim == self.output.dim
+      assert source.output.dim == self.output.dim \
+              or source.output.dim == 1 # Constant layer broadcasting
 
   # Requires the same input shape and yield the same output shape.
   def _op_kind_add(self, sources):
