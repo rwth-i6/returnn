@@ -2946,7 +2946,7 @@ class ExternSprintLoss(Loss):
     self.sprint_opts = sprint_opts
 
   def get_value(self):
-    seq_tags = self.base_network.get_seq_tags()
+    seq_tags = self.base_network.get_seq_tags().placeholder
     output = self.output.get_placeholder_as_time_major()
     from TFSprint import get_sprint_loss_and_error_signal
     loss, error_signal = get_sprint_loss_and_error_signal(
