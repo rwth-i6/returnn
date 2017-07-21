@@ -216,6 +216,7 @@ def test_cudnn_rnn_params_to_canonical():
 def test_RecLayer_NativeLstm_Nan():
   print("test_RecLayer_NativeLstm_Nan()")
   print("GPU available:", is_gpu_available())
+  numpy.set_printoptions(precision=15)
   num_inputs = 4
   num_outputs = 3
 
@@ -259,25 +260,60 @@ def test_RecLayer_NativeLstm_Nan():
     output_data1 = session.run(network.get_default_output_layer().output.placeholder, feed_dict=make_feed_dict(5))
     assert_equal(output_data1.shape, (5, 1, num_outputs))  # (time, batch, dim)
 
+    layer = network.layers["output"]
+    loss_t = network.get_total_loss() * layer.get_loss_normalization_factor()
+    weights_t = layer.params["W"]
+    weights_grad_t, = tf.gradients(network.get_objective(), weights_t)
+
+    def find_op_by_type(type_name):
+      for op in session.graph.get_operations():
+        assert isinstance(op, tf.Operation)
+        if op.type == type_name:
+          return op
+    lstm_grad_op = find_op_by_type("GradOfLstmGenericBase")
+    assert lstm_grad_op is not None
+    lstm_grad_ins_t = list(lstm_grad_op.inputs)
+    lstm_grad_outs_t = list(lstm_grad_op.outputs)
+    lstm_grad_func = _lstm_grad_op(session=session)
+    demo_grad_t = lstm_grad_func(*_demo_lstm_grad_args())
+    demo_grad2_input_placeholders = [tf.placeholder(v.dtype) for v in lstm_grad_ins_t]
+    demo_grad2_t = lstm_grad_func(*demo_grad2_input_placeholders)[1]
+
     print("Create updater...")
     from TFUpdater import Updater
     updater = Updater(config=config, network=network, tf_session=session)
     updater.set_trainable_vars(network.get_trainable_params())
     updater.set_learning_rate(0.1)
     optim_op = updater.get_optim_op()
-    layer = network.layers["output"]
-    loss_t = network.get_total_loss() * layer.get_loss_normalization_factor()
-    weights_t = layer.params["W"]
+    assert isinstance(updater.optimizer, tf.train.AdamOptimizer)
+    adam_weights_m_t = updater.optimizer.get_slot(var=weights_t, name="m")
+    adam_weights_v_t = updater.optimizer.get_slot(var=weights_t, name="v")
+    assert isinstance(adam_weights_m_t, tf.Variable)
+    assert isinstance(adam_weights_v_t, tf.Variable)
     summaries_t = tf.summary.merge_all()
+
+    # https://github.com/tensorflow/tensorflow/blob/03beb65cecbc1e49ea477bca7f54543134b31d53/tensorflow/core/kernels/training_ops_gpu.cu.cc
+    adam_update_t = adam_weights_m_t / (tf.sqrt(adam_weights_v_t) + 1e-8)
+
+    import tempfile
+    tmp_tf_logdir = tempfile.mkdtemp("tmp-tf-log")
+    print("Write TF logs to:", tmp_tf_logdir)
+    writer = tf.summary.FileWriter(tmp_tf_logdir)
+    writer.add_graph(session.graph)
 
     print("Training...")
     recent_info = []  # type: list[dict[str]]
     for i in range(10000):
+      feed_dict = make_feed_dict(5)
+      weights_grad, lstm_grad_ins, lstm_grad_outs = session.run(
+        [weights_grad_t, lstm_grad_ins_t, lstm_grad_outs_t], feed_dict=feed_dict)
       try:
-        loss, _, summaries, weights = session.run(
-          [loss_t, optim_op, summaries_t, weights_t], feed_dict=make_feed_dict(5))
-      except tf.errors.InvalidArgumentError as exc:
-        print("TensorFlow exception in step %i." % i)
+        if not numpy.all(numpy.isfinite(weights_grad)):
+          raise Exception("weights_grad has inf or nan.")
+        loss, _opt, summaries, weights, adam_update = session.run(
+          [loss_t, optim_op, summaries_t, weights_t, adam_update_t], feed_dict=feed_dict)
+      except Exception as exc:
+        print("Exception in step %i." % i)
         print(exc)
         print("Most recent summaries:")
         summary_proto = tf.Summary()
@@ -289,13 +325,212 @@ def test_RecLayer_NativeLstm_Nan():
         print(recent_info[-1]["weights"])
         print("Current weights:")
         print(session.run(weights_t))
-        raise Exception("TF exception in step %i." % i)
+        print("Most recent Adam update:")
+        print(recent_info[-1]["adam_update"])
+        print("Current Adam update:")
+        print(session.run(adam_update_t))
+        print("Used weights grad:")
+        print(weights_grad)
+        print("GradOfLstmGenericBase inputs:")
+        for t, v in zip(lstm_grad_ins_t, lstm_grad_ins):
+          print("%r:" % t)
+          print(repr(v))
+        print("GradOfLstmGenericBase outputs:")
+        for t, v in zip(lstm_grad_outs_t, lstm_grad_outs):
+          print("%r:" % t)
+          print(repr(v))
+        print("Demo grad:")
+        print(session.run(demo_grad_t))
+        print("Demo grad2:")
+        print(session.run(
+          demo_grad2_t, feed_dict={k: v for (k, v) in zip(demo_grad2_input_placeholders, lstm_grad_ins)}))
+        print("Demo grad2 via eval:")
+        print(session.run(
+          demo_grad2_t, feed_dict={
+            k: eval(repr(v), vars(numpy)) for (k, v) in zip(demo_grad2_input_placeholders, lstm_grad_ins)}))
+        print("Demo grad2 via args:")
+        print(session.run(
+          demo_grad2_t, feed_dict={
+            k: v for (k, v) in zip(demo_grad2_input_placeholders, _demo_lstm_grad_args())}))
+        raise Exception("Exception in step %i." % i)
+      writer.add_summary(summaries, global_step=i)
       if len(recent_info) > 1000:
         recent_info.pop(0)
-      recent_info.append({"step": i, "loss": loss, "summaries": summaries, "weights": weights})
+      recent_info.append({
+        "step": i, "loss": loss, "summaries": summaries, "weights": weights, "adam_update": adam_update})
       if not numpy.isfinite(loss) or i % 100 == 0:
         print("step %i, loss: %r" % (i, loss))
       assert numpy.isfinite(loss)
+
+  print("Done.")
+  import shutil
+  shutil.rmtree(tmp_tf_logdir)
+
+
+def find_op_by_type(session, type_name):
+  """
+  :param tf.Session session:
+  :param str type_name:
+  :rtype: tf.Operation|None
+  """
+  for op in session.graph.get_operations():
+    assert isinstance(op, tf.Operation)
+    if op.type == type_name:
+      return op
+
+
+def _lstm_grad_op(session, verbose=True):
+  """
+  :param tf.Session session:
+  :return: grad function
+  """
+  lstm_grad_op = find_op_by_type(session=session, type_name="LstmGenericBase")
+  assert lstm_grad_op is not None
+  if verbose: print("op:", lstm_grad_op)
+
+  from tensorflow.python.framework import ops
+  grad_func = ops.get_gradient_function(lstm_grad_op)
+  if verbose: print("grad_func:", grad_func)
+  grad_op = grad_func.grad_op
+  if verbose: print("grad_op:", grad_op, grad_op.__doc__)
+  return grad_op
+
+
+def _demo_lstm_grad_args():
+  from numpy import array, float32
+  n_time = 5
+  n_batch = 1
+  n_out = 3
+  # <tf.Tensor 'output/rec/W_re/read:0' shape=(3, 12) dtype=float32>:
+  W_re = \
+    array([[-2.193344831466675, 1.360482335090637, 0.294201552867889,
+            1.242056131362915, -0.18156972527504, -0.50642192363739,
+            1.264044165611267, 0.108740165829659, 1.768813014030457,
+            -3.442604303359985, -0.812745451927185, -0.213397994637489],
+           [5.140193462371826, -2.941965818405151, -0.055521309375763,
+            1.96869695186615, -1.29790472984314, 0.034493416547775,
+            -1.094233393669128, -0.767234861850739, -1.832728981971741,
+            2.556174278259277, 1.285072922706604, 2.783454418182373],
+           [-3.460673093795776, 0.700069725513458, -1.184944987297058,
+            -3.619244337081909, 3.242199659347534, -0.404601752758026,
+            -2.755020618438721, -0.827874422073364, 1.487833738327026,
+            -1.766772627830505, -0.019650995731354, -1.590330123901367]], dtype=float32)
+  assert W_re.shape == (n_out, n_out * 4)
+  # <tf.Tensor 'output/rec/zeros:0' shape=(?, ?) dtype=float32>:
+  cell_state = array([[ 0.,  0.,  0.]], dtype=numpy.float32)
+  assert cell_state.shape == (n_batch, n_out)
+  # <tf.Tensor 'extern_data/placeholders/data/sequence_mask_time_major/index_cast_float32:0' shape=(?, ?) dtype=float32>:
+  index_float = \
+    array([[ 1.],
+           [ 1.],
+           [ 1.],
+           [ 1.],
+           [ 1.]], dtype=numpy.float32)
+  # <tf.Tensor 'output/rec/LstmGenericBase:0' shape=(?, ?, 3) dtype=float32>:
+  assert index_float.shape == (n_time, n_batch)
+  in0 = \
+    array([[[-9.368341172266703e-12, -1.167426881865996e-18,
+             6.303897243924439e-04]],
+           [[1.045539761435066e-07, -7.615810632705688e-01,
+             2.735287125688046e-06]],
+           [[7.604487538337708e-01, -8.968127929165348e-08,
+             7.615941762924194e-01]],
+           [[5.488518013407884e-07, -8.968121534280726e-08,
+             7.616176009178162e-01]],
+           [[3.996720618921200e-19, -9.847509092886231e-12,
+             9.616374969482422e-01]]], dtype=float32)
+  assert in0.shape == (n_time, n_batch, n_out)
+  # <tf.Tensor 'output/rec/LstmGenericBase:1' shape=(?, ?, 12) dtype=float32>:
+  in1 = \
+    array([[[-9.481454683879509e-12, -9.999690055847168e-01,
+             9.999994039535522e-01, 9.481454683879509e-12,
+             9.999690055847168e-01, 1.000000000000000e+00,
+             7.535594544194613e-12, 1.300011009361175e-19,
+             1.000000000000000e+00, 9.880700707435608e-01,
+             1.532898954536958e-18, 8.277241722680628e-04]],
+           [[1.000000000000000e+00, -9.999688863754272e-01,
+             2.735287125688046e-06, 1.000000000000000e+00,
+             7.444035166059848e-09, 2.734021336436854e-06,
+             1.052110642194748e-01, 9.999998807907104e-01,
+             1.265849758347315e-09, 1.372830524815072e-07,
+             1.000000000000000e+00, 1.000000000000000e+00]],
+           [[9.972782731056213e-01, -8.968127929165348e-08,
+             1.000000000000000e+00, 9.972844123840332e-01,
+             2.056131756665299e-35, 1.000000000000000e+00,
+             1.915361472288072e-22, 8.968407172460502e-08,
+             8.604143175716672e-09, 1.000000000000000e+00,
+             1.000000000000000e+00, 1.000000000000000e+00]],
+           [[5.488518013407884e-07, -8.968121534280726e-08,
+             1.000055909156799e+00, 5.488518013407884e-07,
+             6.375615251193742e-25, 1.000000000000000e+00,
+             1.951400955893235e-17, 9.999992847442627e-01,
+             5.593653258983977e-05, 1.000000000000000e+00,
+             1.000000000000000e+00, 1.000000000000000e+00]],
+           [[9.999997615814209e-01, -3.767583223179827e-07,
+             2.000055789947510e+00, 9.999997615814209e-01,
+             2.870771140806028e-07, 1.000000000000000e+00,
+             8.848448883325144e-12, 1.000000000000000e+00,
+             1.000000000000000e+00, 5.247835948298600e-19,
+             2.613746983115561e-05, 9.975166320800781e-01]]], dtype=float32)
+  assert in1.shape == (n_time, n_batch, n_out * 4)
+  # <tf.Tensor 'gradients/objective/loss/output/loss_init/flatten_with_seq_len_mask/swapaxes/transpose_grad/transpose:0' shape=(?, ?, 3) dtype=float32>:
+  grad_in = \
+    array([[[0.576846659183502, -0.19706067442894, -0.684425234794617]],
+           [[1.117202281951904, 0.946405112743378, -0.533451914787292]],
+           [[0.822037994861603, 1.044727325439453, -1.008405923843384]],
+           [[-0.755452394485474, -0.606451511383057, 0.335312634706497]],
+           [[0.122484095394611, 1.015499114990234, 0.080147251486778]]], dtype=float32)
+  assert grad_in.shape == (n_time, n_batch, n_out)
+  zeros2 = array([[ 0.,  0.,  0.]], dtype=numpy.float32)
+  assert zeros2.shape == (n_batch, n_out)
+  # Args:
+  #  v_h: A `Tensor` of type `float32`.
+  #  c: A `Tensor` of type `float32`.
+  #  i: A `Tensor` of type `float32`.
+  #  y: A `Tensor` of type `float32`.
+  #  h: A `Tensor` of type `float32`.
+  #  d_y: A `Tensor` of type `float32`.
+  #  d_d: A `Tensor` of type `float32`.
+  #  name: A name for the operation (optional).
+  # Returns:
+  #  A tuple of `Tensor` objects (z, out_v_h, out_c, dummy_out_1).
+  #  z: A `Tensor` of type `float32`.
+  #  out_v_h: A `Tensor` of type `float32`.
+  #  out_c: A `Tensor` of type `float32`.
+  #  dummy_out_1: A `Tensor` of type `float32`.
+  return W_re, cell_state, index_float, in0, in1, grad_in, zeros2
+
+
+def test_GradOfLstmGenericBase_simple_nan():
+  print("test_GradOfLstmGenericBase_simple_nan()")
+  print("GPU available:", is_gpu_available())
+  print("Create LSTM op...")
+  from TFNativeOp import make_lstm_op
+  op_func = make_lstm_op()
+  print("op_func:", op_func)
+
+  def dummy_call():
+    n_time = 1
+    n_batch = 1
+    n_out = 1
+    Z = tf.zeros((n_time, n_batch, n_out * 4))
+    V_h = tf.zeros((n_out, n_out * 4))
+    c = tf.zeros((n_batch, n_out))
+    i = tf.ones((n_time, n_batch))
+    return op_func(Z, V_h, c, i)
+  dummy = dummy_call()
+  with tf.Session() as session:
+    print("dummy out:", session.run(dummy[1]))
+    grad_op = _lstm_grad_op(session)
+    args = _demo_lstm_grad_args()
+    placeholders = [tf.placeholder(v.dtype) for v in args]
+    lstm_grad_t = grad_op(*placeholders)
+    out_v_h_t = lstm_grad_t[1]
+    out_v_h = session.run(out_v_h_t, feed_dict=dict(zip(placeholders, args)))
+    assert isinstance(out_v_h, numpy.ndarray)
+    print("out:")
+    print(out_v_h)
+    assert numpy.all(numpy.isfinite(out_v_h))
 
 
 if __name__ == "__main__":
@@ -318,6 +553,6 @@ if __name__ == "__main__":
           eval(arg)  # assume Python code and execute
   finally:
     import threading
-    if len(list(threading.enumerate())) > 1:
-      print("Warning, more than one thread at exit:")
-      better_exchook.dump_all_thread_tracebacks()
+    #if len(list(threading.enumerate())) > 1:
+    #  print("Warning, more than one thread at exit:")
+    #  better_exchook.dump_all_thread_tracebacks()
