@@ -712,8 +712,8 @@ class LstmGenericBase(NativeOpGenBase):
           float eps = epsilon[idx];
 
           //avoid division by 0
-          float gc = Y[idx] / max(outGate, 1e-16); //g(c(t))
-          float gzc = (state - fgtGate * oldState) / max(inpGate, 1e-16); //g(z_c(t))
+          float gc = Y[idx] / fmaxf(outGate, float(1e-16)); //g(c(t))
+          float gzc = (state - fgtGate * oldState) / fmaxf(inpGate, float(1e-16)); //g(z_c(t))
 
           //delta_output
           delta[start + 3 * n_cells] = outGate * (1.f - outGate) * gc * eps * i_batch;
