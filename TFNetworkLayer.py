@@ -2234,12 +2234,24 @@ class CombineLayer(LayerBase):
     return x
 
   def _op_kind_add(self, sources):
+    """
+    :param list[LayerBase] sources:
+    :rtype: tf.Tensor
+    """
     return self._op_dense_fn(sources, tf.add)
 
   def _op_kind_sub(self, sources):
+    """
+    :param list[LayerBase] sources:
+    :rtype: tf.Tensor
+    """
     return self._op_dense_fn(sources, tf.subtract)
 
   def _op_kind_mul(self, sources):
+    """
+    :param list[LayerBase] sources:
+    :rtype: tf.Tensor
+    """
     return self._op_dense_fn(sources, tf.multiply)
 
   def _op_kind_average(self, sources):
