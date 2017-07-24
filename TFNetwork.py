@@ -321,7 +321,12 @@ class TFNetwork(object):
     return self.extern_data.get_data(key)
 
   def get_seq_tags(self, mark_data_key_as_used=True):
-    return self.get_extern_data(key="seq_tag", mark_data_key_as_used=mark_data_key_as_used)
+    """
+    :param bool mark_data_key_as_used: for extern_data
+    :return: tensor of shape (batch,) of dtype string, via extern_data
+    :rtype: tf.Tensor
+    """
+    return self.get_extern_data(key="seq_tag", mark_data_key_as_used=mark_data_key_as_used).placeholder
 
   def construct_objective(self):
     with tf.name_scope("objective"):
