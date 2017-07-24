@@ -2216,9 +2216,10 @@ class CombineLayer(LayerBase):
               or source.output.dim == 1 # Constant layer broadcasting
 
   # Requires the same input shape and yield the same output shape.
-  def _op_kind_add(self, sources):
+  def _op_dense_fn(self, sources, fn):
     """
     :param list[LayerBase] sources:
+    :param ((x1,x2) -> y) fn: function to perform on x1 and x2
     :rtype: tf.Tensor
     """
     self._check_same_dense_dim(sources)
@@ -2229,10 +2230,18 @@ class CombineLayer(LayerBase):
       x2 = source.output.placeholder
       if source.output.batch_dim_axis != batch_axis:
         x2 = swapaxes(x2, batch_axis, source.output.batch_dim_axis)
-      x += x2
+      x = fn(x, x2)
     return x
 
-  # Requires the same input shape and yield the same output shape.
+  def _op_kind_add(self, sources):
+    return self._op_dense_fn(sources, tf.add)
+
+  def _op_kind_sub(self, sources):
+    return self._op_dense_fn(sources, tf.subtract)
+
+  def _op_kind_mul(self, sources):
+    return self._op_dense_fn(sources, tf.multiply)
+
   def _op_kind_average(self, sources):
     """
     :param list[LayerBase] sources:
@@ -2251,6 +2260,8 @@ class CombineLayer(LayerBase):
     """
     assert sources
     super(CombineLayer, self).__init__(sources=sources, **kwargs)
+    assert kind in ["average", "add", "sub", "mul"], \
+        "Invalid `kind` for this layer."
     op = getattr(self, "_op_kind_%s" % kind)
     x = op(sources)
     if with_bias:
