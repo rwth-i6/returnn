@@ -87,21 +87,24 @@ def test_FastBaumWelch():
   print("Op:", op)
   n_batch = 3
   seq_len = 5
-  num_emission_labels = 10
+  n_classes = 10
   from Fsa import FastBwFsaShared
   fsa = FastBwFsaShared()
-  fsa.add_inf_loop(state_idx=0, num_emission_labels=num_emission_labels)
+  fsa.add_inf_loop(state_idx=0, num_emission_labels=n_classes)
   fast_bw_fsa = fsa.get_fast_bw_fsa(n_batch=n_batch)
   edges = tf.constant(fast_bw_fsa.edges, dtype=tf.int32)
   weights = tf.constant(fast_bw_fsa.weights, dtype=tf.float32)
   start_end_states = tf.constant(fast_bw_fsa.start_end_states, dtype=tf.int32)
-  am_scores = tf.constant(numpy.random.normal(size=(seq_len, n_batch)), dtype=tf.float32)  # in -log space
+  am_scores = tf.constant(numpy.random.normal(size=(seq_len, n_batch, n_classes)), dtype=tf.float32)  # in -log space
   float_idx = tf.ones((seq_len, n_batch), dtype=tf.float32)
-  print("Call...")
-  fast_baum_welch(
+  print("Construct call...")
+  fwdbwd, obs_scores = fast_baum_welch(
     am_scores=am_scores, float_idx=float_idx,
     edges=edges, weights=weights, start_end_states=start_end_states)
   print("Done.")
+  print("Eval:")
+  _, score = session.run([fwdbwd, obs_scores])
+  print("score:", score)
 
 
 if __name__ == "__main__":
