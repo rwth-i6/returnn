@@ -602,15 +602,53 @@ void make_copy(OpKernelContext* context, tensorflow::Tensor* tgt_tensor, const t
     tgt_tensor->flat<float>().device(dev) = src_tensor->flat<float>();
 }
 
-void debug_print(OpKernelContext* context, tensorflow::Tensor* v, const char* name) {
+template<typename T>
+void check_inf_or_nan_cpu(tensorflow::Tensor* v, const char* name) {
+    // copied from CheckNumericsOp CPU kernel
+    auto in = v->flat<T>();
+    static const int kInfBit = 0x01;
+    static const int kNaNBit = 0x02;
+    const T* data = in.data();
+    const int64 size = in.size();
+    // Check to see if any element of the tensor is NaN or Inf.
+    int fp_props =
+        std::accumulate(data, data + size, 0, [](const int& x, const T& y) {
+          int result = x;
+          if (Eigen::numext::isinf(y)) {
+            result |= kInfBit;
+          } else if (Eigen::numext::isnan(y)) {
+            result |= kNaNBit;
+          }
+          return result;
+        });
+    string status;
+    if ((fp_props & kInfBit) && (fp_props & kNaNBit)) {
+      status = "Inf and NaN";
+    } else {
+      if (fp_props & kInfBit) {
+        status = "Inf";
+      }
+      if (fp_props & kNaNBit) {
+        status = "NaN";
+      }
+    }
+    if (!status.empty())
+      printf("WARNING: %s: Tensor had %s values!\n", name, status.c_str());
+}
+
+void debug_print(OpKernelContext* context, tensorflow::Tensor* v, const char* name, int64 max_entries=100) {
     // https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/debug_ops.h
     tensorflow::Tensor cpy(v->dtype(), v->shape());
     Notification done_copy;
     context->op_device_context()->CopyDeviceTensorToCPU(
-      v, name, static_cast<Device*>(context->device()), &cpy,
-      [&done_copy](const Status& s) { done_copy.Notify(); });
+        v, name, static_cast<Device*>(context->device()), &cpy,
+        [&done_copy](const Status& s) { done_copy.Notify(); });
     done_copy.WaitForNotification();
     printf("%s: %s\n", name, cpy.DebugString().c_str());
+    if(max_entries > 0)
+        printf("%s\n", cpy.SummarizeValue(max_entries).c_str());
+    if(cpy.dtype() == DT_FLOAT)
+        check_inf_or_nan_cpu<float>(&cpy, name);
 }
 
 #endif

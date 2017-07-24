@@ -396,7 +396,7 @@ def _lstm_grad_op(session, verbose=True):
   return grad_op
 
 
-def _demo_lstm_grad_args():
+def _demo_lstm_grad_args(factor=1.0, ones_like=False):
   from numpy import array, float32
   n_time = 5
   n_batch = 1
@@ -415,6 +415,10 @@ def _demo_lstm_grad_args():
             -3.619244337081909, 3.242199659347534, -0.404601752758026,
             -2.755020618438721, -0.827874422073364, 1.487833738327026,
             -1.766772627830505, -0.019650995731354, -1.590330123901367]], dtype=float32)
+  if ones_like:
+    W_re = numpy.ones_like(W_re)
+  if factor != 1:
+    W_re *= factor
   assert W_re.shape == (n_out, n_out * 4)
   # <tf.Tensor 'output/rec/zeros:0' shape=(?, ?) dtype=float32>:
   cell_state = array([[ 0.,  0.,  0.]], dtype=numpy.float32)
@@ -439,6 +443,10 @@ def _demo_lstm_grad_args():
              7.616176009178162e-01]],
            [[3.996720618921200e-19, -9.847509092886231e-12,
              9.616374969482422e-01]]], dtype=float32)
+  if ones_like:
+    in0 = numpy.ones_like(in0)
+  if factor != 1:
+    in0 *= factor
   assert in0.shape == (n_time, n_batch, n_out)
   # <tf.Tensor 'output/rec/LstmGenericBase:1' shape=(?, ?, 12) dtype=float32>:
   in1 = \
@@ -472,6 +480,10 @@ def _demo_lstm_grad_args():
              8.848448883325144e-12, 1.000000000000000e+00,
              1.000000000000000e+00, 5.247835948298600e-19,
              2.613746983115561e-05, 9.975166320800781e-01]]], dtype=float32)
+  if ones_like:
+    in1 = numpy.ones_like(in1)
+  if factor != 1:
+    in1 *= factor
   assert in1.shape == (n_time, n_batch, n_out * 4)
   # <tf.Tensor 'gradients/objective/loss/output/loss_init/flatten_with_seq_len_mask/swapaxes/transpose_grad/transpose:0' shape=(?, ?, 3) dtype=float32>:
   grad_in = \
@@ -480,6 +492,10 @@ def _demo_lstm_grad_args():
            [[0.822037994861603, 1.044727325439453, -1.008405923843384]],
            [[-0.755452394485474, -0.606451511383057, 0.335312634706497]],
            [[0.122484095394611, 1.015499114990234, 0.080147251486778]]], dtype=float32)
+  if ones_like:
+    grad_in = numpy.ones_like(grad_in)
+  if factor != 1:
+    grad_in *= factor
   assert grad_in.shape == (n_time, n_batch, n_out)
   zeros2 = array([[ 0.,  0.,  0.]], dtype=numpy.float32)
   assert zeros2.shape == (n_batch, n_out)
@@ -525,13 +541,18 @@ def test_GradOfLstmGenericBase_simple_nan():
     args = _demo_lstm_grad_args()
     placeholders = [tf.placeholder(v.dtype) for v in args]
     lstm_grad_t = list(grad_op(*placeholders))
-    outs = session.run(lstm_grad_t, feed_dict=dict(zip(placeholders, args)))
-    for out, descr, i in zip(outs, ["z", "out_v_h", "out_c", "dummy_out"], range(4)):
-      assert isinstance(out, numpy.ndarray)
-      print("(%i) %s:" % (i, descr))
-      print(out)
-    for out in outs:
-      assert numpy.all(numpy.isfinite(out))
+    for kwargs in [{}]:  # [{"factor": 0}, {"ones_like": True}, {"ones_like": True, "factor": -1}, {}]:
+      print("Testing lstm grad args %r." % kwargs)
+      args = _demo_lstm_grad_args(**kwargs)
+      outs = session.run(lstm_grad_t, feed_dict=dict(zip(placeholders, args)))
+      for out, descr, i in zip(outs, ["z", "out_v_h", "out_c", "dummy_out"], range(4)):
+        assert isinstance(out, numpy.ndarray)
+        print("(%i) %s:" % (i, descr))
+        print(out)
+      for out in outs:
+        assert numpy.all(numpy.isfinite(out))
+      print("Seems ok.")
+    print("All ok!")
 
 
 if __name__ == "__main__":
@@ -542,8 +563,12 @@ if __name__ == "__main__":
         if k.startswith("test_"):
           print("-" * 40)
           print("Executing: %s" % k)
-          v()
+          try:
+            v()
+          except unittest.SkipTest as exc:
+            print("SkipTest:", exc)
           print("-" * 40)
+      print("Finished all tests.")
     else:
       assert len(sys.argv) >= 2
       for arg in sys.argv[1:]:

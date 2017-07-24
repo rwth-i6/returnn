@@ -711,13 +711,9 @@ class LstmGenericBase(NativeOpGenBase):
           float state = delta[start];
           float eps = epsilon[idx];
 
-          //avoid division by 0 (TODO: check if this is needed)
-          float gc = 0.f; //g(c(t))
-          float gzc = 0.f; //g(z_c(t))
-          if (outGate != 0)
-              gc = Y[idx] / outGate;
-          if (inpGate != 0)
-              gzc = (state - fgtGate * oldState) / inpGate;
+          //avoid division by 0
+          float gc = Y[idx] / max(outGate, 1e-16); //g(c(t))
+          float gzc = (state - fgtGate * oldState) / max(inpGate, 1e-16); //g(z_c(t))
 
           //delta_output
           delta[start + 3 * n_cells] = outGate * (1.f - outGate) * gc * eps * i_batch;
@@ -799,20 +795,6 @@ class LstmGenericBase(NativeOpGenBase):
     assert(Ndarray_DIMS(DZ)[2] %% 4 == 0); // 3 gates + cell
     int n_cells = Ndarray_DIMS(DZ)[2] / 4;
 
-    /*
-    // TF debugging:
-    printf("huhu\\n");
-    debug_print(context, V_h, "V_h");
-    debug_print(context, c, "c");
-    debug_print(context, i, "i");
-    debug_print(context, Y, "Y");
-    debug_print(context, Dd, "Dd");
-    debug_print(context, DZ, "DZ");
-    debug_print(context, DV_h, "DV_h");
-    debug_print(context, Dc, "Dc");
-    debug_print(context, tmpDc, "tmpDc");
-    */
-
     assert(T > 0);
     for(int x = T - 1; x >= 0; --x) {
       // add recurrent
@@ -841,7 +823,6 @@ class LstmGenericBase(NativeOpGenBase):
       Ndarray_DEV_DATA(Dc), Ndarray_DEV_DATA(tmpDc),
       Dc_dim[0] * Dc_dim[1] * sizeof(float));
 
-    //debug_print(context, DZ, "DZ");
   """
 
   code_version = ()
