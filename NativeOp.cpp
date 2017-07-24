@@ -34,11 +34,13 @@ The BLAS functions expect the inputs in column-major and return in column-major.
 // https://eigen.tuxfamily.org/dox-devel/unsupported/Tensor_8h_source.html
 #define Ndarray tensorflow::Tensor
 #define Ndarray_DEV_DATA(x) (x)->flat<float>().data()
+#define Ndarray_DEV_DATA_int32(x) (x)->flat<int32>().data()
 #define Ndarray_HOST_DIMS(x) (x)->shape().dim_sizes().data()
 #define Ndarray_DIMS Ndarray_HOST_DIMS
 #define Ndarray_NDIM(x) (x)->dims()
+#define Ndarray_dtype_size(x) tensorflow::DataTypeSize((x)->dtype())
 typedef long long Ndarray_DIM_Type;
-#define Ndarray_SIZE(x) (x)->flat<float>().size()
+#define Ndarray_SIZE(x) (x)->NumElements()
 
 // return in elements
 static inline size_t Ndarray_STRIDE(const Ndarray* x, int dim) {
@@ -216,11 +218,13 @@ static void tf_cuda_sgemm(
 // See also: https://github.com/Theano/Theano/blob/master/theano/sandbox/cuda/cuda_ndarray.cu
 #define Ndarray CudaNdarray
 #define Ndarray_DEV_DATA CudaNdarray_DEV_DATA
+#define Ndarray_DEV_DATA_int32(x) ((int32_t*) (Ndarray_DEV_DATA(x)))
 #define Ndarray_HOST_DIMS CudaNdarray_HOST_DIMS
 #define Ndarray_DIMS Ndarray_HOST_DIMS
 #define Ndarray_STRIDE(x, i) (CudaNdarray_HOST_STRIDES(x)[i])  // return in elements. CudaNdarray stores like that
 #define Ndarray_NDIM(x) (x->nd)
 #define Ndarray_DIM_Type int
+#define Ndarray_dtype_size(x) sizeof(float)
 #define Ndarray_SIZE CudaNdarray_SIZE
 // PyObject *CudaNdarray_NewDims(int nd, const inttype * dims), uninitialized
 #define Ndarray_NewDims CudaNdarray_NewDims
@@ -319,11 +323,13 @@ static void _cudaHandleError(cublasStatus_t status, const char *file, int line) 
 // And: http://deeplearning.net/software/theano/extending/extending_theano_c.html
 #define Ndarray PyArrayObject
 #define Ndarray_DEV_DATA(x) ((float*) PyArray_DATA(x))
+#define Ndarray_DEV_DATA_int32(x) ((int32_t*) (Ndarray_DEV_DATA(x)))
 #define Ndarray_HOST_DIMS PyArray_DIMS
 #define Ndarray_STRIDE(x, i) (PyArray_STRIDE(x, i) / sizeof(float))  // return in elements. Numpy stores in bytes
 #define Ndarray_DIMS Ndarray_HOST_DIMS
 #define Ndarray_NDIM PyArray_NDIM
 #define Ndarray_DIM_Type npy_intp
+#define Ndarray_dtype_size(x) sizeof(float)
 #define Ndarray_SIZE PyArray_SIZE
 #define Ndarray_NewDims(nd, dims) (PyArray_SimpleNew(nd, dims, NPY_FLOAT32))
 #define Ndarray_Copy(x) (PyArray_FromArray(x, NULL, NPY_ARRAY_OUT_ARRAY | NPY_ARRAY_ENSURECOPY))
@@ -473,7 +479,7 @@ Note: There is also this hacky way to get the cudaStream_t:
 
 
 void _Ndarray_set_zero(Ndarray* a) {
-	long size = Ndarray_get_n_total_elements(a) * sizeof(float);
+	long size = Ndarray_get_n_total_elements(a) * Ndarray_dtype_size(a);
 	Ndarray_memset(Ndarray_DEV_DATA(a), 0, size);
 }
 #define Ndarray_set_zero Context(CONTEXT_ARGS)._Ndarray_set_zero
@@ -599,6 +605,7 @@ void make_copy(OpKernelContext* context, tensorflow::Tensor* tgt_tensor, const t
                                 src_tensor->shape().DebugString(), tgt_tensor->shape().DebugString()));
     //Ndarray_memcpy(Ndarray_DEV_DATA(tgt_tensor), Ndarray_DEV_DATA(src_tensor), Ndarray_SIZE(src_tensor) * sizeof(float));
     auto dev = context->eigen_device<EigenDev>();
+    assert(tgt_tensor->dtype() == DT_FLOAT);  // not implemented otherwise yet...
     tgt_tensor->flat<float>().device(dev) = src_tensor->flat<float>();
 }
 

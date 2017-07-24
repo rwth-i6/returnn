@@ -1769,9 +1769,9 @@ class FastBaumWelchOp(NativeOpGenBase):
   """
   in_info = (
     {"name": "am_scores",        "ndim": 3, "shape": (None,   None,    None), "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "edges",            "ndim": 2, "shape": (None,   None),          "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "edges",            "ndim": 2, "shape": (None,   None),          "dtype": "int32", "need_contiguous": True, "gradient": "disconnected"},
     {"name": "weights",          "ndim": 1, "shape": (None,),                 "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "start_end_states", "ndim": 2, "shape": (2,      None),          "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "start_end_states", "ndim": 2, "shape": (2,      None),          "dtype": "int32", "need_contiguous": True, "gradient": "disconnected"},
     {"name": "index",            "ndim": 2, "shape": ((0, 0), (0, 1)),        "need_contiguous": True, "gradient": "disconnected"},
     {"name": "state_buffer",     "ndim": 2, "shape": (2,      None),          "need_contiguous": True, "gradient": "disconnected"}
   )
@@ -2063,14 +2063,14 @@ class FastBaumWelchOp(NativeOpGenBase):
     static unsigned batch_idx  = 0u;
     float           pruning    = 10.f;
 
-    unsigned* d_from              = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA(edges) + 0 * Ndarray_STRIDE(edges, 0));
-    unsigned* d_to                = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA(edges) + 1 * Ndarray_STRIDE(edges, 0));
-    unsigned* d_emission_idxs     = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA(edges) + 2 * Ndarray_STRIDE(edges, 0));
-    unsigned* d_sequence_idxs     = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA(edges) + 3 * Ndarray_STRIDE(edges, 0));
+    unsigned* d_from              = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(edges) + 0 * Ndarray_STRIDE(edges, 0));
+    unsigned* d_to                = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(edges) + 1 * Ndarray_STRIDE(edges, 0));
+    unsigned* d_emission_idxs     = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(edges) + 2 * Ndarray_STRIDE(edges, 0));
+    unsigned* d_sequence_idxs     = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(edges) + 3 * Ndarray_STRIDE(edges, 0));
     float*    d_weights           = Ndarray_DEV_DATA(weights);
     float*    d_am_scores         = Ndarray_DEV_DATA(am_scores);
-    unsigned* d_start_states      = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA(start_end_states) + 0 * Ndarray_STRIDE(start_end_states, 0));
-    unsigned* d_end_states        = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA(start_end_states) + 1 * Ndarray_STRIDE(start_end_states, 0));
+    unsigned* d_start_states      = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(start_end_states) + 0 * Ndarray_STRIDE(start_end_states, 0));
+    unsigned* d_end_states        = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(start_end_states) + 1 * Ndarray_STRIDE(start_end_states, 0));
     float*    d_index             = Ndarray_DEV_DATA(index);
     float*    d_state_buffer_prev = Ndarray_DEV_DATA(state_buffer) + 0 * Ndarray_STRIDE(state_buffer, 0);
     float*    d_state_buffer_next = Ndarray_DEV_DATA(state_buffer) + 1 * Ndarray_STRIDE(state_buffer, 0);
