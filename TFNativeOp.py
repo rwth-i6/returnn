@@ -156,7 +156,7 @@ class OpMaker(object):
         raise Exception("type: %s" % type(c))
     for i, v in enumerate(in_info):
       code_set_out_shape += """
-      if(c->Rank(c->input(%(idx)i)) != %(rank)i)
+      if(c->Rank(c->input(%(idx)i)) != tensorflow::shape_inference::InferenceContext::kUnknownRank && c->Rank(c->input(%(idx)i)) != %(rank)i)
         return errors::InvalidArgument(
           "wrong rank for input (%(idx)i) '%(name)s'. required %(rank)i but got ", c->Rank(c->input(%(idx)i)));
       """ % {"idx": i, "rank": v["ndim"], "name": v["name"]}
