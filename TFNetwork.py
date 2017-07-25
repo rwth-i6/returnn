@@ -690,6 +690,7 @@ class TFNetwork(object):
     try:
       self.saver.restore(sess=session, save_path=filename)
     except tf.errors.NotFoundError as exc:
+      print("load_params_from_file: some variables not found", file=log.v2)
       # First, the short version, we will try to automatically resolve this, similar to this:
       # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/rnn/python/tools/checkpoint_convert.py
       # Also see:
@@ -705,7 +706,11 @@ class TFNetwork(object):
       var_net_names = set([v.name[:-2] for v in net_vars] + [v.name for v in net_saveables])
       missing_var_names = [v for v in sorted(var_net_names) if v not in var_ckpt_names]
       obsolete_var_names = [v for v in sorted(var_ckpt_names) if v not in var_net_names]
-      print("Variables to restore which are not in checkpoint:", missing_var_names, file=log.v1)
+      print("Variables to restore which are not in checkpoint:", missing_var_names, file=log.v2)
+      if not missing_var_names:
+        print("Strange, nothing missing?", file=log.v2)
+        print("Original exception:", exc, file=log.v2)
+
       var_name_map = {}  # type: dict[str,()->numpy.ndarray]  # current name -> value-loader
 
       def make_load_renamed(old_name):
@@ -751,7 +756,7 @@ class TFNetwork(object):
       could_not_find_map_list = [v for v in missing_var_names if v not in var_name_map]
       if not could_not_find_map_list:
         # We can restore all.
-        print("We found these corresponding variables in the checkpoint:", var_name_map, file=log.v1)
+        print("We found these corresponding variables in the checkpoint:", var_name_map, file=log.v2)
         print("Loading now...", file=log.v3)
         # Similar: from tensorflow.contrib.framework.python.ops import assign_from_checkpoint
         for v in self.get_saveable_params_list():
