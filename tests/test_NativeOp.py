@@ -10,12 +10,13 @@ import numpy
 import theano
 import theano.tensor as T
 import theano.scan_module.scan_op
+import unittest
 from nose.tools import assert_equal, assert_is, assert_is_instance
 import theano.printing
 from pprint import pprint
 from GeneratingDataset import Task12AXDataset
 from Updater import Updater
-from Device import Device
+from Device import Device, have_gpu
 from Util import NumbersDict
 from Config import Config
 from NetworkHiddenLayer import DumpLayer
@@ -195,4 +196,68 @@ def compare_lstm(lstm_opts=None):
 def test_native_lstm():
   compare_lstm({"class": "native_lstm"})
 
+
+@unittest.skipIf(not have_gpu(), "no gpu on this system")
+def test_fast_bw():
+  print("Make op...")
+  from NativeOp import FastBaumWelchOp
+  op = FastBaumWelchOp().make_op()  # (am_scores, edges, weights, start_end_states, float_idx, state_buffer)
+  print("Op:", op)
+  n_batch = 3
+  seq_len = 5
+  n_classes = 5
+  from Fsa import FastBwFsaShared
+  fsa = FastBwFsaShared()
+  fsa.add_inf_loop(state_idx=0, num_emission_labels=n_classes)
+  fast_bw_fsa = fsa.get_fast_bw_fsa(n_batch=n_batch)
+  edges = fast_bw_fsa.edges.view("float32")
+  edges_placeholder = T.fmatrix(name="edges")
+  weights = fast_bw_fsa.weights
+  weights_placeholder = T.fvector(name="weights")
+  start_end_states = fast_bw_fsa.start_end_states.view("float32")
+  start_end_states_placeholder = T.fmatrix(name="start_end_states")
+  am_scores = numpy.random.normal(size=(seq_len, n_batch, n_classes)).astype("float32")  # in -log space
+  am_scores_placeholder = T.ftensor3(name="am_scores")
+  float_idx = numpy.ones((seq_len, n_batch), dtype="float32")
+  float_idx_placeholder = T.fmatrix(name="float_idx")
+  last_state_idx = numpy.max(fast_bw_fsa.start_end_states[1])  # see get_automata_for_batch
+  state_buffer = numpy.zeros((2, last_state_idx + 1), dtype="float32")
+  state_buffer_placeholder = T.fmatrix(name="state_buffer")
+  print("Construct call...")
+  fwdbwd, obs_scores = op(
+    am_scores_placeholder, edges_placeholder, weights_placeholder, start_end_states_placeholder, float_idx_placeholder, state_buffer_placeholder)
+  f = theano.function(inputs=[am_scores_placeholder, edges_placeholder, weights_placeholder, start_end_states_placeholder, float_idx_placeholder, state_buffer_placeholder], outputs=[fwdbwd, obs_scores])
+  print("Done.")
+  print("Eval:")
+  _, score = f(am_scores, edges, weights, start_end_states, float_idx, state_buffer)
+  print("score:", score)
+
+
+if __name__ == "__main__":
+  try:
+    better_exchook.install()
+    if len(sys.argv) <= 1:
+      for k, v in sorted(globals().items()):
+        if k.startswith("test_"):
+          print("-" * 40)
+          print("Executing: %s" % k)
+          try:
+            v()
+          except unittest.SkipTest as exc:
+            print("SkipTest:", exc)
+          print("-" * 40)
+      print("Finished all tests.")
+    else:
+      assert len(sys.argv) >= 2
+      for arg in sys.argv[1:]:
+        print("Executing: %s" % arg)
+        if arg in globals():
+          globals()[arg]()  # assume function and execute
+        else:
+          eval(arg)  # assume Python code and execute
+  finally:
+    import threading
+    #if len(list(threading.enumerate())) > 1:
+    #  print("Warning, more than one thread at exit:")
+    #  better_exchook.dump_all_thread_tracebacks()
 

@@ -302,7 +302,7 @@ class NativeOp(theano.Op, NativeOpBaseMixin):
 
   def _convert_input_var(self, v, info):
     v = self.as_tensor_var(v)
-    dtype = info.get("dtype", "float32")
+    dtype = "float32"  # Theano on GPU only supports float32 ... # info.get("dtype", "float32")
     if v.dtype != dtype:
       v = T.cast(v, dtype)
     if v.ndim != info["ndim"]:
