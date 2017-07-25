@@ -1809,11 +1809,12 @@ class VariableAssigner(object):
     :param tf.Variable var:
     """
     self.var = var
+    name = var.name.split("/")[-1][:-2]
     self.value_placeholder = tf.placeholder(
-      name="%s_placeholder_assign_value" % var.name.split("/")[-1][:-2],
+      name="%s_placeholder_assign_value" % name,
       shape=var.get_shape(),
       dtype=var.dtype)
-    self.assign_op = tf.assign(self.var, self.value_placeholder)
+    self.assign_op = tf.assign(self.var, self.value_placeholder, name="%s_assign" % name)
 
   def assign(self, value, session):
     """
