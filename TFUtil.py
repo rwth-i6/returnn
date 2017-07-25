@@ -220,6 +220,63 @@ class Data(object):
         setattr(data, k, data.get_batch_axis(a))
     return data
 
+  def copy_add_batch_dim(self, batch_dim_axis):
+    """
+    :param int batch_dim_axis:
+    :return: copy of myself with added batch-dim
+    :rtype: Data
+    """
+    assert self.batch_dim_axis is None
+    data = self.copy()
+    if data.placeholder is not None:
+      data.placeholder = tf.expand_dims(data.placeholder, batch_dim_axis, name="%s_add_batch_dim" % self.name)
+    data.batch_dim_axis = batch_dim_axis
+    other_special_axes = self.get_special_axes_dict(counted_with_batch_dim=True, only_available=True)
+    for k, a in other_special_axes.items():
+      setattr(data, k, a if (a < batch_dim_axis) else (a + 1))
+    return data
+
+  def copy_add_spatial_dim(self, spatial_dim_axis):
+    """
+    :param int spatial_dim_axis: counted with batch-dim. if there is no time-dim, this will be it
+    :return: copy of myself with added spatial-dim
+    :rtype: Data
+    """
+    data = self.copy()
+    if data.placeholder is not None:
+      data.placeholder = tf.expand_dims(data.placeholder, spatial_dim_axis, name="%s_add_spatial_dim" % self.name)
+    axis_wo_batch = spatial_dim_axis if (spatial_dim_axis <= self.batch_dim_axis) else (spatial_dim_axis - 1)
+    data.shape = data.shape[:axis_wo_batch] + (1,) + data.shape[axis_wo_batch:]
+    if data.time_dim_axis is None:
+      data.time_dim_axis = spatial_dim_axis
+    other_special_axes = self.get_special_axes_dict(
+      counted_with_batch_dim=True, only_available=True, include_batch_dim_axis=True)
+    for k, a in other_special_axes.items():
+      setattr(data, k, a if (a < spatial_dim_axis) else (a + 1))
+    return data
+
+  def copy_compatible_to(self, data):
+    """
+    :param Data data: other data which the returned tensor should be compatible to
+    :returns: Data, might add broadcast dimensions
+    :rtype: Data
+    """
+    assert self.sparse == data.sparse
+    assert self.dtype == data.dtype
+    v = self.copy()
+    if v.batch_dim_axis != data.batch_dim_axis:
+      if v.batch_dim_axis is not None:
+        v = v.copy_with_batch_dim_axis(data.batch_dim_axis)
+      else:
+        v = v.copy_add_batch_dim(data.batch_dim_axis)
+    assert v.batch_dim_axis == data.batch_dim_axis
+    for axis in data.get_spatial_batch_axes():
+      if len(data.get_spatial_batch_axes()) > len(v.get_spatial_batch_axes()):
+        v = v.copy_add_spatial_dim(axis)
+    assert data.get_spatial_batch_axes() == v.get_spatial_batch_axes()
+    assert data.feature_dim_axis == v.feature_dim_axis
+    return v
+
   def copy_time_flattened(self):
     """
     :return: copy of myself where the time-axis is flattened away into the batch-dim-axis.
@@ -3537,6 +3594,7 @@ class TFArrayContainer(object):
 
     # Fix for undefined symbol: _ZN6google8protobuf8internal26fixed_address_empty_stringE.
     # https://github.com/tensorflow/tensorflow/issues/1419
+    # noinspection PyUnresolvedReferences
     from google.protobuf.pyext import _message as msg
     lib = msg.__file__
     #lib = "/u/zeyer/.local/lib/python2.7/site-packages/tensorflow/python/_pywrap_tensorflow_internal.so"

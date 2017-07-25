@@ -3038,7 +3038,10 @@ class ExternSprintLoss(Loss):
     return loss
 
   def get_error(self):
-    return None  # we don't have it
+    if self.target is None:
+      return None  # we don't have it
+    # Use default frame-wise error to reference target.
+    return super(ExternSprintLoss, self).get_error()
 
 
 class FastBaumWelchLoss(Loss):
@@ -3078,7 +3081,10 @@ class FastBaumWelchLoss(Loss):
     return loss
 
   def get_error(self):
-    return None  # we don't have it
+    if self.target is None:
+      return None  # we don't have it
+    # Use default frame-wise error to reference target.
+    return super(FastBaumWelchLoss, self).get_error()
 
 
 class ViaLayerLoss(Loss):
@@ -3090,12 +3096,20 @@ class ViaLayerLoss(Loss):
   class_name = "via_layer"
   recurrent = True
 
-  def __init__(self, error_signal_layer, **kwargs):
+  def __init__(self, error_signal_layer=None, align_layer=None, **kwargs):
     """
     :param LayerBase error_signal_layer:
+    :param LayerBase align_layer:
     """
     super(ViaLayerLoss, self).__init__(**kwargs)
-    # TODO...
+    self.error_signal_layer = error_signal_layer
+    self.align_layer = align_layer
+    assert not (error_signal_layer and align_layer)
+    assert error_signal_layer or align_layer
+    layer = (error_signal_layer or align_layer)
+    assert isinstance(layer, LayerBase)
+    assert layer.output_loss is not None
+    self._loss_value = layer.output_loss
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
@@ -3104,10 +3118,30 @@ class ViaLayerLoss(Loss):
     :param TFNetwork.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     """
-    d["error_signal_layer"] = get_layer(d["error_signal_layer"])
+    for key in ["error_signal_layer", "align_layer"]:
+      if key in d:
+        d[key] = get_layer(d[key])
 
   def get_value(self):
-    raise NotImplementedError  # TODO...
+    if self.error_signal_layer:
+      assert not self.align_layer
+      error_signal = self.error_signal_layer.output.copy_compatible_to(self.output)
+    else:
+      assert self.align_layer
+      error_signal = self.align_layer.output.copy_compatible_to(self.output)
+      error_signal.placeholder = self.output.placeholder - error_signal.placeholder
+    assert self.output_with_activation.is_softmax_act_func()
+    output_before_softmax = self.output_with_activation.get_logits()
+    from TFUtil import custom_gradient
+    loss = custom_gradient.register_loss_and_error_signal(
+      loss=self._loss_value, x=output_before_softmax, grad_x=error_signal.placeholder)
+    return loss
+
+  def get_error(self):
+    if self.target is None:
+      return None  # we don't have it
+    # Use default frame-wise error to reference target.
+    return super(ViaLayerLoss, self).get_error()
 
 
 _LossClassDict = {}  # type: dict[str,type(Loss)]
