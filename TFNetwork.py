@@ -161,6 +161,7 @@ class TFNetwork(object):
       parent_net = parent_layer.network
     self.parent_net = parent_net
     self._selected_train_layers = None
+    self._constructing_layers = []  # type: list[str]
     self.layers_desc = {}  # type: dict[str,dict[str]]
     self.layers = {}  # type: dict[str,LayerBase]
     self.loss_by_layer = {}  # type: dict[str,tf.Tensor]
@@ -239,6 +240,7 @@ class TFNetwork(object):
       assert isinstance(layer_desc, dict)
       if name == "output" or "target" in layer_desc or "loss" in layer_desc or layer_desc.get("is_output_layer", False):
         self._construct_layer(net_dict, name)
+    assert not self._constructing_layers
 
   def _construct_layer(self, net_dict, name, get_layer=None, add_layer=None):
     """
@@ -250,6 +252,13 @@ class TFNetwork(object):
     """
     if name in self.layers:
       return self.layers[name]
+    if name in self._constructing_layers:
+      print("Error: There is a dependency loop on layer %r." % name, file=log.v1)
+      print("Construction stack (most recent first):", file=log.v1)
+      for l in reversed(self._constructing_layers):
+        print("  %s" % l)
+      raise Exception("Dependency loop on layer %r." % name)
+    self._constructing_layers.append(name)
     if name not in net_dict:
       if name == "data":
         layer_desc = {"class": "source", "from": []}
@@ -269,6 +278,7 @@ class TFNetwork(object):
     class_name = layer_desc.pop("class")
     layer_class = get_layer_class(class_name)
     layer_class.transform_config_dict(layer_desc, network=self, get_layer=get_layer)
+    self._constructing_layers.remove(name)
     return add_layer(name=name, layer_class=layer_class, **layer_desc)
 
   def add_layer(self, name, layer_class, **layer_desc):
