@@ -2728,7 +2728,7 @@ class CrossEntropyLoss(Loss):
           return -self.reduce_func(out)
       else:  # not sparse
         if self.output_before_softmax_flat is not None:
-          out = tf.nn.softmax_cross_entropy_with_logits(self.output_before_softmax_flat, self.target_flat)
+          out = tf.nn.softmax_cross_entropy_with_logits(logits=self.output_before_softmax_flat, labels=self.target_flat)
           return self.reduce_func(out)
         else:
           out = self.target_flat * tf.log(self.output_flat)
