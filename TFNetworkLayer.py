@@ -94,6 +94,7 @@ class LayerBase(object):
         network=network, name=name, target=target, size_target=size_target,
         sources=sources, loss=loss)
     self.output_before_activation = None  # type: None|OutputWithActivation
+    self.output_loss = None  # type: None|tf.Tensor
     self.rec_vars_outputs = {}  # type: dict[str,tf.Tensor]
     self.search_choices = None  # type: SearchChoices
     self._initial_output = initial_output
@@ -2471,6 +2472,42 @@ class AccumulateMeanLayer(ReduceLayer):
   @classmethod
   def get_out_data_from_opts(cls, axes="bt", **kwargs):
     return super(AccumulateMeanLayer, cls).get_out_data_from_opts(axes=axes, **kwargs)
+
+
+class FastBaumWelchLayer(_ConcatInputLayer):
+  """
+  Calls :func:`fast_baum_welch` or :func:`fast_baum_welch_by_sprint_automata`.
+  We expect that our input are +log scores.
+  """
+  layer_class = "fast_bw"
+  recurrent = True
+
+  def __init__(self, align_target, sprint_opts=None, **kwargs):
+    """
+    :param str align_target: e.g. "sprint"
+    :param dict[str] sprint_opts:
+    """
+    super(FastBaumWelchLayer, self).__init__(**kwargs)
+    assert align_target == "sprint", "not yet implemented otherwise, align_target %r" % align_target
+    data = self.input_data.copy_as_time_major()
+    from TFUtil import sequence_mask_time_major
+    seq_mask = sequence_mask_time_major(data.get_sequence_lengths())
+    from TFNativeOp import fast_baum_welch_by_sprint_automata
+    seq_tags = self.network.get_seq_tags()
+    fwdbwd, obs_scores = fast_baum_welch_by_sprint_automata(
+      sprint_opts=sprint_opts,
+      am_scores=-data.placeholder,  # it wants the scores in -log space
+      float_idx=seq_mask,
+      tags=seq_tags)
+    loss = tf.reduce_sum(obs_scores[0])
+    self.output_loss = loss
+    bw = tf.exp(-fwdbwd)
+    self.output.placeholder = bw
+    self.output.size_placeholder = data.size_placeholder.copy()
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, **kwargs):
+    return get_concat_sources_data_template(sources, name="%s_output" % name).copy_as_time_major()
 
 
 class FramewiseStatisticsLayer(LayerBase):
