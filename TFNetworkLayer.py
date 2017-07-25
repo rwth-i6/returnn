@@ -236,7 +236,7 @@ class LayerBase(object):
 
     Will modify `d` such that it becomes the kwargs for `self.__init__()`.
     Mostly leaves `d` as-is.
-    This is used by TFNetwork.construct_from_dict().
+    This is used by :func:`TFNetwork.construct_from_dict`.
     """
     src_names = d.pop("from", ["data"])
     if not isinstance(src_names, (list, tuple)):
@@ -248,7 +248,9 @@ class LayerBase(object):
     if d.get("loss"):
       loss_class = get_loss_class(d["loss"])
       assert issubclass(loss_class, Loss)
-      loss = loss_class(base_network=network, **d.pop("loss_opts", {}))
+      loss_opts = d.pop("loss_opts", {}).copy()
+      loss_class.transform_config_dict(loss_opts, network=network, get_layer=get_layer)
+      loss = loss_class(base_network=network, **loss_opts)
       assert isinstance(loss, Loss)
       d["loss"] = loss
     if d.get("target"):
@@ -2599,6 +2601,18 @@ class Loss(object):
     self.reduce_func = tf.reduce_sum  # or tf.reduce_mean
     self.loss_norm_factor = None  # type: tf.Tensor
 
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d: will modify inplace, the loss_opts
+    :param TFNetwork.TFNetwork network:
+    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
+
+    Will modify `d` such that it becomes the kwargs for `self.__init__()`.
+    Mostly leaves `d` as-is.
+    This is used by `LayerBase.transform_config_dict`.
+    """
+
   def init(self, output, output_with_activation=None, target=None):
     """
     :param Data output: generated output
@@ -2971,6 +2985,10 @@ class ExternSprintLoss(Loss):
 
   def get_value(self):
     seq_tags = self.base_network.get_seq_tags()
+    assert self.output_with_activation.is_softmax_act_func()
+    output_before_softmax = self.output_with_activation.get_logits()
+    if not self.output.is_time_major:
+      output_before_softmax = swapaxes(output_before_softmax, self.output.time_dim_axis, self.output.batch_dim_axis)
     output = self.output.get_placeholder_as_time_major()
     from TFSprint import get_sprint_loss_and_error_signal
     loss, error_signal = get_sprint_loss_and_error_signal(
@@ -2979,7 +2997,7 @@ class ExternSprintLoss(Loss):
       seq_lengths=self.output_seq_lens,
       seq_tags=seq_tags)
     from TFUtil import custom_gradient
-    loss = custom_gradient.register_loss_and_error_signal(loss=loss, x=output, grad_x=error_signal)
+    loss = custom_gradient.register_loss_and_error_signal(loss=loss, x=output_before_softmax, grad_x=error_signal)
     return loss
 
   def get_error(self):
@@ -3003,6 +3021,10 @@ class FastBaumWelchLoss(Loss):
 
   def get_value(self):
     seq_tags = self.base_network.get_seq_tags()
+    assert self.output_with_activation.is_softmax_act_func()
+    output_before_softmax = self.output_with_activation.get_logits()
+    if not self.output.is_time_major:
+      output_before_softmax = swapaxes(output_before_softmax, self.output.time_dim_axis, self.output.batch_dim_axis)
     output = self.output.get_placeholder_as_time_major()
     from TFUtil import sequence_mask_time_major
     seq_mask = sequence_mask_time_major(self.output_seq_lens)
@@ -3015,11 +3037,40 @@ class FastBaumWelchLoss(Loss):
     loss = self.reduce_func(obs_scores[0])
     bw = tf.exp(-fwdbwd)
     from TFUtil import custom_gradient
-    loss = custom_gradient.register_loss_and_error_signal(loss=loss, x=output, grad_x=output - bw)
+    loss = custom_gradient.register_loss_and_error_signal(loss=loss, x=output_before_softmax, grad_x=output - bw)
     return loss
 
   def get_error(self):
     return None  # we don't have it
+
+
+class ViaLayerLoss(Loss):
+  """
+  The loss error signal and loss value is defined as the output of another layer.
+  That way, you can define any custom loss.
+  This could e.g. be used together with the fast_bw layer.
+  """
+  class_name = "via_layer"
+  recurrent = True
+
+  def __init__(self, error_signal_layer, **kwargs):
+    """
+    :param LayerBase error_signal_layer:
+    """
+    super(ViaLayerLoss, self).__init__(**kwargs)
+    # TODO...
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d: will modify inplace, the loss_opts
+    :param TFNetwork.TFNetwork network:
+    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
+    """
+    d["error_signal_layer"] = get_layer(d["error_signal_layer"])
+
+  def get_value(self):
+    raise NotImplementedError  # TODO...
 
 
 _LossClassDict = {}  # type: dict[str,type(Loss)]
@@ -3036,7 +3087,7 @@ def _init_loss_class_dict():
 def get_loss_class(loss):
   """
   :param str loss: loss type such as "ce"
-  :rtype: () -> Loss | type[Loss] | Loss
+  :rtype: (() -> Loss) | type[Loss] | Loss
   """
   if not _LossClassDict:
     _init_loss_class_dict()
