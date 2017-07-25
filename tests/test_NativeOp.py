@@ -12,6 +12,7 @@ import theano.tensor as T
 import theano.scan_module.scan_op
 import unittest
 from nose.tools import assert_equal, assert_is, assert_is_instance
+from numpy.testing.utils import assert_almost_equal
 import theano.printing
 from pprint import pprint
 from GeneratingDataset import Task12AXDataset
@@ -231,6 +232,55 @@ def test_fast_bw():
   print("Eval:")
   _, score = f(am_scores, edges, weights, start_end_states, float_idx, state_buffer)
   print("score:", score)
+
+
+@unittest.skipIf(not have_gpu(), "no gpu on this system")
+def test_fast_bw_uniform():
+  print("Make op...")
+  from NativeOp import FastBaumWelchOp
+  op = FastBaumWelchOp().make_op()  # (am_scores, edges, weights, start_end_states, float_idx, state_buffer)
+  print("Op:", op)
+  n_batch = 3
+  seq_len = 5
+  n_classes = 5
+  from Fsa import FastBwFsaShared
+  fsa = FastBwFsaShared()
+  for i in range(n_classes):
+    fsa.add_edge(i, i + 1, emission_idx=i)  # fwd
+    fsa.add_edge(i + 1, i + 1, emission_idx=i)  # loop
+  assert n_classes <= seq_len
+  fast_bw_fsa = fsa.get_fast_bw_fsa(n_batch=n_batch)
+  edges = fast_bw_fsa.edges.view("float32")
+  edges_placeholder = T.fmatrix(name="edges")
+  weights = fast_bw_fsa.weights
+  weights_placeholder = T.fvector(name="weights")
+  start_end_states = fast_bw_fsa.start_end_states.view("float32")
+  start_end_states_placeholder = T.fmatrix(name="start_end_states")
+  am_scores = numpy.ones((seq_len, n_batch, n_classes), dtype="float32") * numpy.float32(1.0 / n_classes)
+  am_scores = -numpy.log(am_scores)  # in -log space
+  am_scores_placeholder = T.ftensor3(name="am_scores")
+  float_idx = numpy.ones((seq_len, n_batch), dtype="float32")
+  float_idx_placeholder = T.fmatrix(name="float_idx")
+  last_state_idx = numpy.max(fast_bw_fsa.start_end_states[1])  # see get_automata_for_batch
+  state_buffer = numpy.zeros((2, last_state_idx + 1), dtype="float32")
+  state_buffer_placeholder = T.fmatrix(name="state_buffer")
+  print("Construct call...")
+  fwdbwd, obs_scores = op(
+    am_scores_placeholder, edges_placeholder, weights_placeholder, start_end_states_placeholder, float_idx_placeholder, state_buffer_placeholder)
+  f = theano.function(inputs=[am_scores_placeholder, edges_placeholder, weights_placeholder, start_end_states_placeholder, float_idx_placeholder, state_buffer_placeholder], outputs=[fwdbwd, obs_scores])
+  print("Done.")
+  print("Eval:")
+  fwdbwd, score = f(am_scores, edges, weights, start_end_states, float_idx, state_buffer)
+  print("score:", score)
+  bw = numpy.exp(-fwdbwd)
+  print("Baum-Welch soft alignment:")
+  print(bw)
+  assert_equal(bw.shape, (seq_len, n_batch, n_classes))
+  if seq_len == n_classes:
+    print("Extra check...")
+    for i in range(n_batch):
+      assert_almost_equal(numpy.identity(n_classes), bw[:, i])
+  print("Done.")
 
 
 if __name__ == "__main__":
