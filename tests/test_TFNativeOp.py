@@ -14,6 +14,7 @@ import unittest
 from nose.tools import assert_equal, assert_is_instance
 import numpy
 import numpy.testing
+from numpy.testing.utils import assert_almost_equal
 import os
 import better_exchook
 better_exchook.replace_traceback_format_tb()
@@ -105,6 +106,46 @@ def test_FastBaumWelch():
   print("Eval:")
   _, score = session.run([fwdbwd, obs_scores])
   print("score:", score)
+
+
+@unittest.skipIf(not is_gpu_available(), "no gpu on this system")
+def test_fast_bw_uniform():
+  print("Make op...")
+  op = make_fast_baum_welch_op(compiler_opts=dict(verbose=True))  # will be cached, used inside :func:`fast_baum_welch`
+  # args: (am_scores, edges, weights, start_end_states, float_idx, state_buffer)
+  print("Op:", op)
+  n_batch = 3
+  seq_len = 10
+  n_classes = 5
+  from Fsa import FastBwFsaShared
+  fsa = FastBwFsaShared()
+  for i in range(n_classes):
+    fsa.add_edge(i, i + 1, emission_idx=i)  # fwd
+    fsa.add_edge(i + 1, i + 1, emission_idx=i)  # loop
+  assert n_classes <= seq_len
+  fast_bw_fsa = fsa.get_fast_bw_fsa(n_batch=n_batch)
+  edges = tf.constant(fast_bw_fsa.edges, dtype=tf.int32)
+  weights = tf.constant(fast_bw_fsa.weights, dtype=tf.float32)
+  start_end_states = tf.constant(fast_bw_fsa.start_end_states, dtype=tf.int32)
+  am_scores = tf.constant(numpy.random.normal(size=(seq_len, n_batch, n_classes)), dtype=tf.float32)  # in -log space
+  float_idx = tf.ones((seq_len, n_batch), dtype=tf.float32)
+  print("Construct call...")
+  fwdbwd, obs_scores = fast_baum_welch(
+    am_scores=am_scores, float_idx=float_idx,
+    edges=edges, weights=weights, start_end_states=start_end_states)
+  print("Done.")
+  print("Eval:")
+  fwdbwd, score = session.run([fwdbwd, obs_scores])
+  print("score:", score)  # seems wrong? Theano returns: [[ 3.65274048  3.65274048  3.65274048] ...]
+  bw = numpy.exp(-fwdbwd)
+  print("Baum-Welch soft alignment:")
+  print(bw)
+  assert_equal(bw.shape, (seq_len, n_batch, n_classes))
+  if seq_len == n_classes:
+    print("Extra check...")
+    for i in range(n_batch):
+      assert_almost_equal(numpy.identity(n_classes), bw[:, i])
+  print("Done.")
 
 
 if __name__ == "__main__":
