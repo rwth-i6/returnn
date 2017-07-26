@@ -12,7 +12,7 @@ import theano.tensor as T
 import theano.scan_module.scan_op
 import unittest
 from nose.tools import assert_equal, assert_is, assert_is_instance
-from numpy.testing.utils import assert_almost_equal
+from numpy.testing.utils import assert_almost_equal, assert_allclose
 import theano.printing
 from pprint import pprint
 from GeneratingDataset import Task12AXDataset
@@ -240,8 +240,8 @@ def test_fast_bw_uniform():
   from NativeOp import FastBaumWelchOp
   op = FastBaumWelchOp().make_op()  # (am_scores, edges, weights, start_end_states, float_idx, state_buffer)
   print("Op:", op)
-  n_batch = 3
-  seq_len = 5
+  n_batch = 2
+  seq_len = 7
   n_classes = 5
   from Fsa import FastBwFsaShared
   fsa = FastBwFsaShared()
@@ -271,15 +271,40 @@ def test_fast_bw_uniform():
   print("Done.")
   print("Eval:")
   fwdbwd, score = f(am_scores, edges, weights, start_end_states, float_idx, state_buffer)
-  print("score:", score)
+  print("score:")
+  print(repr(score))
+  assert_equal(score.shape, (seq_len, n_batch))
   bw = numpy.exp(-fwdbwd)
   print("Baum-Welch soft alignment:")
-  print(bw)
+  print(repr(bw))
   assert_equal(bw.shape, (seq_len, n_batch, n_classes))
+  from numpy import array, float32
   if seq_len == n_classes:
-    print("Extra check...")
+    print("Extra check identity...")
     for i in range(n_batch):
       assert_almost_equal(numpy.identity(n_classes), bw[:, i])
+  if seq_len == 7 and n_classes == 5:
+    print("Extra check ref_align (7,5)...")
+    # score == 8.55801582 with n_batch = 1?
+    # score == 4.39913225 with n_batch = 2?
+    # score == 1.9663415 with n_batch = 3?
+    # assert_allclose(score, 1.9663415)  # should be the same everywhere
+    ref_align = \
+      array([[[1., 0., 0., 0., 0.]],
+             [[0.33333316, 0.66666663, 0., 0., 0.]],
+             [[0.06666669, 0.53333354, 0.40000018, 0., 0.]],
+             [[0., 0.20000014, 0.60000014, 0.19999999, 0.]],
+             [[0., 0., 0.39999962, 0.53333312, 0.06666663]],
+             [[0., 0., 0., 0.66666633, 0.33333316]],
+             [[0., 0., 0., 0., 0.99999982]]], dtype=float32)
+    assert_equal(ref_align.shape, (seq_len, 1, n_classes))
+    ref_align = numpy.tile(ref_align, (1, n_batch, 1))
+    assert_equal(ref_align.shape, bw.shape)
+    # print("Reference alignment:")
+    # print(repr(ref_align))
+    print("mean square diff:", numpy.mean(numpy.square(ref_align - bw)))
+    print("max square diff:", numpy.max(numpy.square(ref_align - bw)))
+    assert_allclose(ref_align, bw, rtol=1e-5)
   print("Done.")
 
 
