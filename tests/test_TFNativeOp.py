@@ -128,7 +128,9 @@ def test_fast_bw_uniform():
   edges = tf.constant(fast_bw_fsa.edges, dtype=tf.int32)
   weights = tf.constant(fast_bw_fsa.weights, dtype=tf.float32)
   start_end_states = tf.constant(fast_bw_fsa.start_end_states, dtype=tf.int32)
-  am_scores = tf.constant(numpy.random.normal(size=(seq_len, n_batch, n_classes)), dtype=tf.float32)  # in -log space
+  am_scores = numpy.ones((seq_len, n_batch, n_classes), dtype="float32") * numpy.float32(1.0 / n_classes)
+  am_scores = -numpy.log(am_scores)  # in -log space
+  am_scores = tf.constant(am_scores, dtype=tf.float32)
   float_idx = tf.ones((seq_len, n_batch), dtype=tf.float32)
   print("Construct call...")
   fwdbwd, obs_scores = fast_baum_welch(
@@ -137,7 +139,6 @@ def test_fast_bw_uniform():
   print("Done.")
   print("Eval:")
   fwdbwd, score = session.run([fwdbwd, obs_scores])
-  # score seems wrong? Theano returns: [[ 3.65274048  3.65274048  3.65274048] ...]
   print("score:")
   print(repr(score))
   assert_equal(score.shape, (seq_len, n_batch))
@@ -152,10 +153,7 @@ def test_fast_bw_uniform():
       assert_almost_equal(numpy.identity(n_classes), bw[:, i])
   if seq_len == 7 and n_classes == 5:
     print("Extra check ref_align (7,5)...")
-    # score == 8.55801582 with n_batch = 1?
-    # score == 4.39913225 with n_batch = 2?
-    # score == 1.9663415 with n_batch = 3?
-    # assert_allclose(score, 1.9663415)  # should be the same everywhere
+    assert_allclose(score, 8.55801582, rtol=1e-5)  # should be the same everywhere
     ref_align = \
       array([[[1., 0., 0., 0., 0.]],
              [[0.33333316, 0.66666663, 0., 0., 0.]],
@@ -171,7 +169,7 @@ def test_fast_bw_uniform():
     # print(repr(ref_align))
     print("mean square diff:", numpy.mean(numpy.square(ref_align - bw)))
     print("max square diff:", numpy.max(numpy.square(ref_align - bw)))
-    # assert_allclose(ref_align, bw, rtol=1e-5)
+    assert_allclose(ref_align, bw, rtol=1e-5)
   print("Done.")
 
 
