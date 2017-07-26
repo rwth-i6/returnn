@@ -19,6 +19,9 @@ def py_get_sprint_automata_for_batch(sprint_opts, tags):
   sprint_instance_pool = SprintInstancePool.get_global_instance(sprint_opts=sprint_opts)
   with sprint_instance_pool.lock:  # We need multi-threading safety.
     edges, weights, start_end_states = sprint_instance_pool.get_automata_for_batch(tags)
+  # Note: UnimplementedError: Unsupported numpy type 6 (uint32) -> cast to int32.
+  edges = edges.astype("int32")
+  start_end_states = start_end_states.astype("int32")
   return edges, weights, start_end_states
 
 
