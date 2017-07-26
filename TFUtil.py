@@ -227,6 +227,8 @@ class Data(object):
     :rtype: Data
     """
     assert self.batch_dim_axis is None
+    if not self.sparse:
+      assert batch_dim_axis <= self.feature_dim_axis, "does not work yet otherwise, feature-dim-axis must be last"
     data = self.copy()
     if data.placeholder is not None:
       data.placeholder = tf.expand_dims(data.placeholder, batch_dim_axis, name="%s_add_batch_dim" % self.name)
@@ -245,7 +247,7 @@ class Data(object):
     data = self.copy()
     if data.placeholder is not None:
       data.placeholder = tf.expand_dims(data.placeholder, spatial_dim_axis, name="%s_add_spatial_dim" % self.name)
-    axis_wo_batch = spatial_dim_axis if (spatial_dim_axis <= self.batch_dim_axis) else (spatial_dim_axis - 1)
+    axis_wo_batch = spatial_dim_axis if (spatial_dim_axis <= (self.batch_dim_axis or 0)) else (spatial_dim_axis - 1)
     data.shape = data.shape[:axis_wo_batch] + (1,) + data.shape[axis_wo_batch:]
     if data.time_dim_axis is None:
       data.time_dim_axis = spatial_dim_axis
@@ -264,16 +266,19 @@ class Data(object):
     assert self.sparse == data.sparse
     assert self.dtype == data.dtype
     v = self.copy()
+    # First add spatial dims, in case we miss any.
+    for axis in data.get_spatial_batch_axes():
+      if len(data.get_spatial_batch_axes()) > len(v.get_spatial_batch_axes()):
+        axis_wo_batch = data.get_batch_axis_excluding_batch(axis)
+        v = v.copy_add_spatial_dim(v.get_batch_axis(axis_wo_batch))
+    assert data.get_spatial_axes() == v.get_spatial_axes()
     if v.batch_dim_axis != data.batch_dim_axis:
       if v.batch_dim_axis is not None:
         v = v.copy_with_batch_dim_axis(data.batch_dim_axis)
       else:
+        # Note that it might be important here that we added any missing spatial dims before.
         v = v.copy_add_batch_dim(data.batch_dim_axis)
     assert v.batch_dim_axis == data.batch_dim_axis
-    for axis in data.get_spatial_batch_axes():
-      if len(data.get_spatial_batch_axes()) > len(v.get_spatial_batch_axes()):
-        v = v.copy_add_spatial_dim(axis)
-    assert data.get_spatial_batch_axes() == v.get_spatial_batch_axes()
     assert data.feature_dim_axis == v.feature_dim_axis
     return v
 

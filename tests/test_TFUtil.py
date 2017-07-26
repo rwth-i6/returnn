@@ -78,6 +78,38 @@ def test_Data_copy_batch_major():
   assert_equal(data2.batch_ndim, 3)
 
 
+def test_Data_spatial_batch_axes():
+  d1 = Data(name='ff_out_prior_output', shape=(1, 9001), dtype='float32', batch_dim_axis=None)
+  d2 = Data(name='ff_out_output', shape=(None, 9001), dtype='float32')
+  spatial_axes1 = d1.get_spatial_batch_axes()
+  spatial_axes2 = d2.get_spatial_batch_axes()
+  assert_equal(len(spatial_axes1), len(spatial_axes2))
+  spatial_axes1 = d1.get_spatial_axes()
+  spatial_axes2 = d2.get_spatial_axes()
+  assert_equal(len(spatial_axes1), len(d1.get_spatial_batch_axes()))
+  assert_equal(spatial_axes1, spatial_axes2)
+
+
+def test_Data_copy_compatible_to_time_major():
+  d1 = Data(name='ff_out_output', shape=(None, 9001), dtype='float32', batch_dim_axis=1)
+  d2 = Data(name='ff_out_prior_output', shape=(9001,), dtype='float32', batch_dim_axis=None, time_dim_axis=None)
+  d2a = d2.copy_compatible_to(d1)
+  assert d2a.shape == (1, 9001)
+  assert d2a.batch_dim_axis == d1.batch_dim_axis
+  assert d2a.time_dim_axis == d1.time_dim_axis
+  assert d2a.feature_dim_axis == d1.feature_dim_axis
+
+
+def test_Data_copy_compatible_to_batch_major():
+  d1 = Data(name='ff_out_output', shape=(None, 9001), dtype='float32')
+  d2 = Data(name='ff_out_prior_output', shape=(9001,), dtype='float32', batch_dim_axis=None, time_dim_axis=None)
+  d2a = d2.copy_compatible_to(d1)
+  assert d2a.shape == (1, 9001)
+  assert d2a.batch_dim_axis == d1.batch_dim_axis
+  assert d2a.time_dim_axis == d1.time_dim_axis
+  assert d2a.feature_dim_axis == d1.feature_dim_axis
+
+
 def test_get_initializer_zero():
   shape = (2, 3)
   initializer = get_initializer(0.0)
