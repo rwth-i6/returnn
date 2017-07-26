@@ -540,6 +540,7 @@ def fast_baum_welch(am_scores, edges, weights, start_end_states, float_idx, stat
   """
   # edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
   op = make_fast_baum_welch_op()
+  float_idx = tf.cast(float_idx, tf.float32)
   if state_buffer is None:
     last_state_idx = tf.reduce_max(start_end_states[1])  # see get_automata_for_batch
     state_buffer = tf.zeros((2, last_state_idx + 1))

@@ -45,7 +45,7 @@ def get_sprint_automata_for_batch_op(sprint_opts, tags):
   assert isinstance(start_end_states, tf.Tensor)
   edges.set_shape((4, None))  # (4, num_edges)
   weights.set_shape((None,))  # (num_edges,)
-  start_end_states.set_shape((2, tags.get_shape().dims[1]))  # (2, batch)
+  start_end_states.set_shape((2, tags.get_shape().dims[0]))  # (2, batch)
   return edges, weights, start_end_states
 
 
