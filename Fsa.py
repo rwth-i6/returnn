@@ -1307,7 +1307,11 @@ class FastBwFsaShared:
     res = numpy.zeros((4, num_edges * n_batch), dtype="int32")
     for batch_idx in range(n_batch):
       for edge_idx, edge in enumerate(self.edges):
-        res[:, batch_idx * num_edges + edge_idx] = (edge.source_state_idx, edge.target_state_idx, edge.label, batch_idx)
+        res[:, batch_idx * num_edges + edge_idx] = (
+          edge.source_state_idx + batch_idx * self.num_states,
+          edge.target_state_idx + batch_idx * self.num_states,
+          edge.label,
+          batch_idx)
     return res
 
   def get_weights(self, n_batch):
@@ -1333,7 +1337,9 @@ class FastBwFsaShared:
     end_state_idx = self.num_states - 1
     res = numpy.zeros((2, n_batch), dtype="int32")
     for batch_idx in range(n_batch):
-      res[:, batch_idx] = (start_state_idx, end_state_idx)
+      res[:, batch_idx] = (
+        start_state_idx + batch_idx * self.num_states,
+        end_state_idx + batch_idx * self.num_states)
     return res
 
   def get_fast_bw_fsa(self, n_batch):

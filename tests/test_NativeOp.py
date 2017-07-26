@@ -240,7 +240,7 @@ def test_fast_bw_uniform():
   from NativeOp import FastBaumWelchOp
   op = FastBaumWelchOp().make_op()  # (am_scores, edges, weights, start_end_states, float_idx, state_buffer)
   print("Op:", op)
-  n_batch = 2
+  n_batch = 3
   seq_len = 7
   n_classes = 5
   from Fsa import FastBwFsaShared
@@ -250,10 +250,14 @@ def test_fast_bw_uniform():
     fsa.add_edge(i + 1, i + 1, emission_idx=i)  # loop
   assert n_classes <= seq_len
   fast_bw_fsa = fsa.get_fast_bw_fsa(n_batch=n_batch)
+  print("edges:")
+  print(fast_bw_fsa.edges)
   edges = fast_bw_fsa.edges.view("float32")
   edges_placeholder = T.fmatrix(name="edges")
   weights = fast_bw_fsa.weights
   weights_placeholder = T.fvector(name="weights")
+  print("start_end_states:")
+  print(fast_bw_fsa.start_end_states)
   start_end_states = fast_bw_fsa.start_end_states.view("float32")
   start_end_states_placeholder = T.fmatrix(name="start_end_states")
   am_scores = numpy.ones((seq_len, n_batch, n_classes), dtype="float32") * numpy.float32(1.0 / n_classes)
@@ -285,10 +289,7 @@ def test_fast_bw_uniform():
       assert_almost_equal(numpy.identity(n_classes), bw[:, i])
   if seq_len == 7 and n_classes == 5:
     print("Extra check ref_align (7,5)...")
-    # score == 8.55801582 with n_batch = 1?
-    # score == 4.39913225 with n_batch = 2?
-    # score == 1.9663415 with n_batch = 3?
-    # assert_allclose(score, 1.9663415)  # should be the same everywhere
+    assert_allclose(score, 8.55801582, rtol=1e-5)  # should be the same everywhere
     ref_align = \
       array([[[1., 0., 0., 0., 0.]],
              [[0.33333316, 0.66666663, 0., 0., 0.]],
