@@ -1129,8 +1129,18 @@ class NumbersDict:
            self.__class__.__name__, self.dict, self.value)
 
 
-def collect_class_init_kwargs(cls):
-  kwargs = set()
+def collect_class_init_kwargs(cls, with_default=False):
+  """
+  :param type cls: class, where it assumes that kwargs are passed on to base classes
+  :param bool with_default: if given will only return the kwargs with default values
+  :return: set if not with_default, otherwise the dict to the default values
+  :rtype: list[str] | dict[str]
+  """
+  from collections import OrderedDict
+  if with_default:
+    kwargs = OrderedDict()
+  else:
+    kwargs = []
   if PY3:
     getargspec = inspect.getfullargspec
   else:
@@ -1140,8 +1150,33 @@ def collect_class_init_kwargs(cls):
     if not inspect.ismethod(cls_.__init__) and not inspect.isfunction(cls_.__init__):
       continue
     arg_spec = getargspec(cls_.__init__)
-    kwargs.update(arg_spec.args[1:])  # first arg is self, ignore
+    args = arg_spec.args[1:]  # first arg is self, ignore
+    if with_default:
+      assert len(arg_spec.defaults) <= len(args)
+      args = args[len(args) - len(arg_spec.defaults):]
+      assert len(arg_spec.defaults) == len(args), arg_spec
+      for arg, default in zip(args, arg_spec.defaults):
+        kwargs[arg] = default
+    else:
+      for arg in args:
+        if arg not in kwargs:
+          kwargs.append(arg)
   return kwargs
+
+
+def collect_mandatory_class_init_kwargs(cls):
+  """
+  :param type cls:
+  :return: list of kwargs which have no default, i.e. which must be provided
+  :rtype: list[str]
+  """
+  all_kwargs = collect_class_init_kwargs(cls, with_default=False)
+  default_kwargs = collect_class_init_kwargs(cls, with_default=True)
+  mandatory_kwargs = []
+  for arg in all_kwargs:
+    if arg not in default_kwargs:
+      mandatory_kwargs.append(arg)
+  return mandatory_kwargs
 
 
 def custom_exec(source, source_filename, user_ns, user_global_ns):

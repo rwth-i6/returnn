@@ -10,7 +10,7 @@ from NetworkBaseLayer import Layer, SourceLayer
 from NetworkLayer import get_layer_class
 from NetworkLstmLayer import *
 from NetworkOutputLayer import OutputLayer, FramewiseOutputLayer, SequenceOutputLayer, DecoderOutputLayer, UnsupervisedOutputLayer
-from Util import collect_class_init_kwargs, dict_joined, as_str
+from Util import dict_joined, as_str
 from Log import log
 
 
