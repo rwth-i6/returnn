@@ -4,6 +4,7 @@ from __future__ import print_function
 import tensorflow as tf
 import contextlib
 import TFUtil
+from Util import unicode
 from TFUtil import Data, OutputWithActivation, CustomUpdate, var_creation_scope, dimshuffle, swapaxes
 from Log import log
 
@@ -46,6 +47,7 @@ class LayerBase(object):
   def __init__(self, name, network, output=None, n_out=None, out_type=None, sources=(),
                target=None, loss=None, loss_scale=1.0, size_target=None,
                L2=None, is_output_layer=None,
+               copy_output_loss_from_source_idx=None,
                batch_norm=False,
                spatial_smoothing=0.0,
                initial_output=None,
@@ -65,6 +67,7 @@ class LayerBase(object):
     :param float loss_scale: scale factor for loss (1.0 by default)
     :param float|None L2: for constraints
     :param bool|None is_output_layer:
+    :param int|None copy_output_loss_from_source_idx: if set, will copy output_loss from this source
     :param bool|dict batch_norm: see self.batch_norm()
     :param str|float initial_output: used for recurrent layer, see self.get_rec_initial_output()
     :param LayerBase|None rec_previous_layer: via the recurrent layer, layer (template) which represents the past of us
@@ -95,6 +98,8 @@ class LayerBase(object):
         sources=sources, loss=loss)
     self.output_before_activation = None  # type: None|OutputWithActivation
     self.output_loss = None  # type: None|tf.Tensor
+    if copy_output_loss_from_source_idx is not None:
+      self.output_loss = sources[copy_output_loss_from_source_idx].output_loss
     self.rec_vars_outputs = {}  # type: dict[str,tf.Tensor]
     self.search_choices = None  # type: SearchChoices
     self._initial_output = initial_output
@@ -816,6 +821,7 @@ class _ConcatInputLayer(LayerBase):
       assert not dropout
     elif mask == "dropout":
       assert dropout > 0
+    self.dropout = dropout
     self.input_data = None
     if self.sources:
       self.input_data = concat_sources_with_opt_dropout(self.sources, dropout=dropout)
@@ -832,6 +838,10 @@ class CopyLayer(_ConcatInputLayer):
   def __init__(self, **kwargs):
     super(CopyLayer, self).__init__(**kwargs)
     self.output = self.input_data
+    if len(self.sources) == 1:
+      self.output_loss = self.sources[0].output_loss
+      if not self.dropout:
+        self.output_before_activation = self.sources[0].output_before_activation
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources=(), out_type=None, n_out=None, **kwargs):
@@ -1105,6 +1115,8 @@ class WindowLayer(_ConcatInputLayer):
   The new axis for the window is created right after the time axis.
   Will always return as batch major mode.
   E.g. if the input is (batch, time, dim), the output is (batch, time, window_size, dim).
+  If you want to merge the (window_size, dim) together to (window_size * dim,),
+  you can use the MergeDimsLayer, e.g. {"class": "merge_dims", "axes": "except_time"}.
   """
   layer_class = "window"
   recurrent = True  # we must not allow any shuffling in the time-dim or so
@@ -1123,13 +1135,16 @@ class WindowLayer(_ConcatInputLayer):
     self.output.placeholder = windowed_nd(
       data.placeholder,
       window=window_size, padding=padding, time_axis=axis, new_window_axis=axis + 1)
+    self.output.placeholder.set_shape(tf.TensorShape(self.output.batch_shape))
+    # Note: size_placeholder not correct with padding="valid" in time axis...
+    self.output.size_placeholder = self.input_data.size_placeholder.copy()
 
   @classmethod
-  def get_out_data_from_opts(cls, axis="T", sources=(), **kwargs):
+  def get_out_data_from_opts(cls, window_size, axis="T", sources=(), **kwargs):
     data = get_concat_sources_data_template(sources)
     data = data.copy_as_batch_major()
     axis = data.get_axis_from_description(axis)
-    data.shape = data.shape[:axis] + (None,) + data.shape[axis:]  # add new axis right after
+    data.shape = data.shape[:axis] + (window_size,) + data.shape[axis:]  # add new axis right after
     return data
 
 
@@ -1296,8 +1311,8 @@ class MergeDimsLayer(_ConcatInputLayer):
         res_dim = n_out
       else:
         raise Exception(
-          "you need to provide n_out for layer %r, we are merging axes %r with dims %r" % (
-          name, axes, [data.batch_shape[i] for i in axes]))
+          "You need to provide n_out for layer %r, we are merging axes %r with dims %r. Input is %r." % (
+          name, axes, [data.batch_shape[i] for i in axes], data))
       data.dim = res_dim
     if data.batch_dim_axis not in axes:
       merge_target_axis = axes[0]
@@ -2208,6 +2223,53 @@ class CombineLayer(LayerBase):
   """
   layer_class = "combine"
 
+  def __init__(self, kind, sources, activation=None, with_bias=False,
+               eval=None, eval_locals=None, eval_for_output_loss=False,
+               **kwargs):
+    """
+    :param str kind: e.g. "average" or "add", or "eval"
+    :param list[LayerBase] sources:
+    :param str|None activation: if provided, activation function to apply, e.g. "tanh" or "relu"
+    :param bool with_bias: if given, will add a bias
+    :param str eval: for kind="eval", will eval this string. see :func:`_op_kind_eval`
+    :param dict[str]|None eval_locals: locals for eval
+    :param bool eval_for_output_loss: will do the same eval on layer.output_loss
+    """
+    assert sources
+    super(CombineLayer, self).__init__(sources=sources, **kwargs)
+    assert kind in ["average", "add", "sub", "mul", "eval"], \
+        "Invalid `kind` %r for this layer." % kind
+    op = self._get_op(kind=kind, eval_str=eval, eval_locals=eval_locals)
+    x = op(sources)
+    if eval_for_output_loss:
+      assert eval
+      assert all([layer.output_loss is not None for layer in sources])
+      self.output_loss = self._op_kind_eval(
+        sources=[layer.output_loss for layer in sources],
+        eval_str=eval, eval_locals=eval_locals)
+    if with_bias:
+      with var_creation_scope():
+        b = self.add_param(tf.Variable(
+          name="b",
+          initial_value=tf.constant_initializer(value=0, dtype=tf.float32)(
+            shape=(self.output.dim,))))
+      x += b
+    if activation:
+      from TFUtil import get_activation_function
+      act_func = get_activation_function(activation)
+      self.output_before_activation = OutputWithActivation(x, act_func=act_func)
+    else:
+      self.output_before_activation = OutputWithActivation(x)
+    x = self.output_before_activation.y
+    self.output.placeholder = x
+
+  @classmethod
+  def get_out_data_from_opts(cls, n_out=None, out_type=None, sources=(), **kwargs):
+    if not n_out and not out_type:
+      out_type = sources[0].output.get_kwargs()
+      out_type["name"] = "%s_output" % kwargs["name"]
+    return super(CombineLayer, cls).get_out_data_from_opts(n_out=n_out, out_type=out_type, sources=sources, **kwargs)
+
   def _check_same_dense_dim(self, sources):
     """
     :param list[LayerBase] sources:
@@ -2266,41 +2328,42 @@ class CombineLayer(LayerBase):
     x /= len(sources)
     return x
 
-  def __init__(self, kind, sources, activation=None, with_bias=False, **kwargs):
+  def _op_kind_eval(self, sources, eval_str, eval_locals=None):
     """
-    :param str kind: e.g. "average" or "add"
-    :param list[LayerBase] sources:
-    :param str|None activation: if provided, activation function to apply, e.g. "tanh" or "relu"
-    :param bool with_bias: if given , will add a bias
+    :param list[LayerBase]|list[tf.Tensor] sources:
+    :param str eval_str:
+    :param dict[str]|None eval_locals:
+    :rtype: tf.Tensor
     """
-    assert sources
-    super(CombineLayer, self).__init__(sources=sources, **kwargs)
-    assert kind in ["average", "add", "sub", "mul"], \
-        "Invalid `kind` for this layer."
-    op = getattr(self, "_op_kind_%s" % kind)
-    x = op(sources)
-    if with_bias:
-      with var_creation_scope():
-        b = self.add_param(tf.Variable(
-          name="b",
-          initial_value=tf.constant_initializer(value=0, dtype=tf.float32)(
-            shape=(self.output.dim,))))
-      x += b
-    if activation:
-      from TFUtil import get_activation_function
-      act_func = get_activation_function(activation)
-      self.output_before_activation = OutputWithActivation(x, act_func=act_func)
-    else:
-      self.output_before_activation = OutputWithActivation(x)
-    x = self.output_before_activation.y
-    self.output.placeholder = x
+    used_sources = set()  # type: set[int]
+    def source(i):
+      """
+      :param int i: layer index
+      :return: output placeholder from source i, compatible to source 0
+      :rtype: tf.Tensor
+      """
+      assert 0 <= i < len(sources)
+      used_sources.add(i)
+      if isinstance(sources[i], LayerBase):
+        if i == 0:
+          return sources[i].output.placeholder
+        return sources[i].output.copy_compatible_to(sources[0].output).placeholder
+      return sources[i]
+    vs = {"tf": tf, "source": source, "self": self}
+    vs.update(eval_locals or {})
+    x = eval(eval_str, vs)
+    assert sorted(used_sources) == list(range(len(sources))), (
+      "not used sources: %r" % set(range(len(sources))).difference(used_sources))
+    return x
 
-  @classmethod
-  def get_out_data_from_opts(cls, n_out=None, out_type=None, sources=(), **kwargs):
-    if not n_out and not out_type:
-      out_type = sources[0].output.get_kwargs()
-      out_type["name"] = "%s_output" % kwargs["name"]
-    return super(CombineLayer, cls).get_out_data_from_opts(n_out=n_out, out_type=out_type, sources=sources, **kwargs)
+  def _get_op(self, kind, eval_str=None, eval_locals=None):
+    op = getattr(self, "_op_kind_%s" % kind)
+    if eval_str:
+      assert kind == "eval"
+      def wrap_eval_op(sources):
+        return self._op_kind_eval(sources, eval_str=eval_str, eval_locals=eval_locals)
+      op = wrap_eval_op
+    return op
 
 
 class CompareLayer(LayerBase):
@@ -2452,7 +2515,7 @@ class AccumulateMeanLayer(ReduceLayer):
     """
     super(AccumulateMeanLayer, self).__init__(mode="mean", keep_dims=False, axes=axes, **kwargs)
     assert self.output.batch_dim_axis is None
-    assert all(self.output.batch_shape), "shape must be fixed"
+    assert all(self.output.batch_shape), "shape must be fixed. input: %r" % self.input_data
     shape = self.output.batch_shape
 
     if is_prob_distribution:
@@ -3096,14 +3159,21 @@ class ViaLayerLoss(Loss):
   class_name = "via_layer"
   recurrent = True
 
-  def __init__(self, error_signal_layer=None, align_layer=None, **kwargs):
+  def __init__(self, error_signal_layer=None, align_layer=None, loss_wrt_to_act_in=False, **kwargs):
     """
     :param LayerBase error_signal_layer:
     :param LayerBase align_layer:
+    :param bool|str loss_wrt_to_act_in: if True, we expect that the given output_with_activation is
+      set, and the given error signal is w.r.t. the input of the specific activation function.
+      A common example is the input to the softmax function, where the gradient is much more stable to define,
+      e.g. `y - z` instead of `y/z` for cross entropy.
+      If you specify a str, e.g. "softmax" or "log_softmax", there is an additional check
+      that the used activation function is really that one.
     """
     super(ViaLayerLoss, self).__init__(**kwargs)
     self.error_signal_layer = error_signal_layer
     self.align_layer = align_layer
+    self.loss_wrt_to_act_in = loss_wrt_to_act_in
     assert not (error_signal_layer and align_layer)
     assert error_signal_layer or align_layer
     layer = (error_signal_layer or align_layer)
@@ -3130,11 +3200,19 @@ class ViaLayerLoss(Loss):
       assert self.align_layer
       error_signal = self.align_layer.output.copy_compatible_to(self.output)
       error_signal.placeholder = self.output.placeholder - error_signal.placeholder
-    assert self.output_with_activation.is_softmax_act_func()
-    output_before_softmax = self.output_with_activation.get_logits()
+    if self.loss_wrt_to_act_in:
+      assert self.output_with_activation, "activation unknown, via %r" % self.output
+      if isinstance(self.loss_wrt_to_act_in, (str, unicode)):
+        from TFUtil import get_activation_function
+        assert self.output_with_activation.act_func is get_activation_function(self.loss_wrt_to_act_in)
+      else:
+        assert self.output_with_activation.act_func  # just check that there is some activation function
+      grad_wrt = self.output_with_activation.x  # softmax input
+    else:
+      grad_wrt = self.output.placeholder
     from TFUtil import custom_gradient
     loss = custom_gradient.register_loss_and_error_signal(
-      loss=self._loss_value, x=output_before_softmax, grad_x=error_signal.placeholder)
+      loss=self._loss_value, x=grad_wrt, grad_x=error_signal.placeholder)
     return loss
 
   def get_error(self):
@@ -3175,7 +3253,7 @@ def _init_layer_class_dict():
     if isinstance(v, type) and issubclass(v, LayerBase) and v.layer_class:
       assert v.layer_class not in _LayerClassDict
       _LayerClassDict[v.layer_class] = v
-  for alias, v in {"forward": LinearLayer}.items():
+  for alias, v in {"forward": LinearLayer, "hidden": LinearLayer}.items():
     assert alias not in _LayerClassDict
     _LayerClassDict[alias] = v
 

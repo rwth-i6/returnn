@@ -1369,6 +1369,7 @@ def _div(a, b):
 
 
 _bin_ops = {"+": _plus, "-": _minus, "*": _mul, "/": _div}
+_act_func_with_op_cache = {}  # type: dict[str,(tf.Tensor)->tf.Tensor]
 
 
 def _get_act_func_with_op(s):
@@ -1376,6 +1377,8 @@ def _get_act_func_with_op(s):
   :param str s: e.g. "2 * sigmoid" or even "3 + 2 * sigmoid"
   :rtype: (tf.Tensor) -> tf.Tensor
   """
+  if s in _act_func_with_op_cache:
+    return _act_func_with_op_cache[s]
   def _conv(v):
     v = v.strip()
     from Util import str_is_number
@@ -1394,6 +1397,7 @@ def _get_act_func_with_op(s):
       a, b = _conv(a), _conv(b)
       def combined_op(x):
         return _bin_ops[k](a(x), b(x))
+      _act_func_with_op_cache[s] = combined_op
       return combined_op
   assert False
 
