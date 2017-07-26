@@ -3082,6 +3082,8 @@ class ExternSprintLoss(Loss):
     """
     super(ExternSprintLoss, self).__init__(**kwargs)
     self.sprint_opts = sprint_opts
+    from TFUtil import custom_gradient
+    custom_gradient.register_generic_loss_and_error_signal()
 
   def get_value(self):
     seq_tags = self.base_network.get_seq_tags()
@@ -3097,7 +3099,7 @@ class ExternSprintLoss(Loss):
       seq_lengths=self.output_seq_lens,
       seq_tags=seq_tags)
     from TFUtil import custom_gradient
-    loss = custom_gradient.register_loss_and_error_signal(loss=loss, x=output_before_softmax, grad_x=error_signal)
+    loss = custom_gradient.generic_loss_and_error_signal(loss=loss, x=output_before_softmax, grad_x=error_signal)
     return loss
 
   def get_error(self):
@@ -3121,6 +3123,8 @@ class FastBaumWelchLoss(Loss):
     """
     super(FastBaumWelchLoss, self).__init__(**kwargs)
     self.sprint_opts = sprint_opts
+    from TFUtil import custom_gradient
+    custom_gradient.register_generic_loss_and_error_signal()
 
   def get_value(self):
     seq_tags = self.base_network.get_seq_tags()
@@ -3140,7 +3144,7 @@ class FastBaumWelchLoss(Loss):
     loss = self.reduce_func(obs_scores[0])
     bw = tf.exp(-fwdbwd)
     from TFUtil import custom_gradient
-    loss = custom_gradient.register_loss_and_error_signal(loss=loss, x=output_before_softmax, grad_x=output - bw)
+    loss = custom_gradient.generic_loss_and_error_signal(loss=loss, x=output_before_softmax, grad_x=output - bw)
     return loss
 
   def get_error(self):
@@ -3180,6 +3184,8 @@ class ViaLayerLoss(Loss):
     assert isinstance(layer, LayerBase)
     assert layer.output_loss is not None
     self._loss_value = layer.output_loss
+    from TFUtil import custom_gradient
+    custom_gradient.register_generic_loss_and_error_signal()
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
@@ -3211,7 +3217,7 @@ class ViaLayerLoss(Loss):
     else:
       grad_wrt = self.output.placeholder
     from TFUtil import custom_gradient
-    loss = custom_gradient.register_loss_and_error_signal(
+    loss = custom_gradient.generic_loss_and_error_signal(
       loss=self._loss_value, x=grad_wrt, grad_x=error_signal.placeholder)
     return loss
 

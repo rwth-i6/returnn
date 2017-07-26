@@ -2341,7 +2341,18 @@ class CustomGradient(object):
     loss, x, grad_x = op.inputs
     return None, grad_loss * grad_x, None
 
-  def register_loss_and_error_signal(self, loss, x, grad_x, name=None):
+  def register_generic_loss_and_error_signal(self):
+    """
+    If you want to use :func:`generic_loss_and_error_signal` at some point,
+    call this as early as possible, because of https://github.com/tensorflow/tensorflow/issues/6804.
+    """
+    return self.register(
+      input_types=[tf.float32, tf.float32, tf.float32],
+      op=self._generic_loss_and_error_signal,
+      grad_op=self._generic_loss_and_error_signal_grad,
+      name="generic_loss_and_error_signal")
+
+  def generic_loss_and_error_signal(self, loss, x, grad_x):
     """
     Wrapper around self.register().
     Expects that loss = loss(x), and grad_x = \partial loss / \partial x.
@@ -2353,11 +2364,7 @@ class CustomGradient(object):
     :return: loss but with the gradient for x
     :rtype: tf.Tensor
     """
-    generic_loss_and_error_signal = self.register(
-      input_types=[tf.float32, tf.float32, tf.float32],
-      op=self._generic_loss_and_error_signal,
-      grad_op=self._generic_loss_and_error_signal_grad,
-      name=name)
+    generic_loss_and_error_signal = self.register_generic_loss_and_error_signal()
     return generic_loss_and_error_signal(loss, x, grad_x)
 
 

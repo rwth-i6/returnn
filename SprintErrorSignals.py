@@ -17,6 +17,7 @@ import os
 import time
 import atexit
 import signal
+from threading import RLock
 import TaskSystem
 from TaskSystem import Pickler, Unpickler, numpy_set_unused
 from Util import eval_shell_str, make_hashable
@@ -274,18 +275,28 @@ class SprintInstancePool:
     (2) ...
   """
 
+  class_lock = RLock()
   global_instances = {}  # sprint_opts -> SprintInstancePool instance
 
   @classmethod
   def get_global_instance(cls, sprint_opts):
     sprint_opts = make_hashable(sprint_opts)
-    if sprint_opts in cls.global_instances:
-      return cls.global_instances[sprint_opts]
-    instance = SprintInstancePool(sprint_opts=sprint_opts)
-    cls.global_instances[sprint_opts] = instance
-    return instance
+    with cls.class_lock:
+      if sprint_opts in cls.global_instances:
+        return cls.global_instances[sprint_opts]
+      instance = SprintInstancePool(sprint_opts=sprint_opts)
+      cls.global_instances[sprint_opts] = instance
+      return instance
 
   def __init__(self, sprint_opts):
+    """
+    :param dict[str] sprint_opts:
+    """
+    # The lock will not be acquired automatically on the public functions here as there is the valid
+    # usage that only one thread will access it anyway.
+    # So, take care of acquiring this lock yourself whenever you call here potentially from multiple threads.
+    # All the code is not thread-safe, so this is important!
+    self.lock = RLock()
     assert isinstance(sprint_opts, dict)
     sprint_opts = sprint_opts.copy()
     self.max_num_instances = int(sprint_opts.pop("numInstances", 1))
@@ -373,7 +384,7 @@ class SprintInstancePool:
         b = bb + i
         if b >= len(tags): break
         instance = self._get_instance(i)
-        if isinstance(tags, (list, tuple)):
+        if isinstance(tags[0], str):
           segment_name = tags[b]
         else:
           segment_name = tags[b].view('S%d' % tags.shape[1])[0]

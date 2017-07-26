@@ -251,7 +251,7 @@ class Updater(object):
     print("Initialize optimizer with slots %s." % self.optimizer.get_slot_names(), file=log.v3)
     slot_vars = []
     for slot_name in self.optimizer.get_slot_names():
-      for v in self.trainable_vars:
+      for v in trainable_vars_for_gradients:
         slot_var = self.optimizer.get_slot(var=v, name=slot_name)
         assert slot_var is not None
         assert isinstance(slot_var, tf.Variable)

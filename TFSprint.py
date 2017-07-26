@@ -17,7 +17,8 @@ def py_get_sprint_automata_for_batch(sprint_opts, tags):
   """
   # Also see :class:`SprintAlignmentAutomataOp`.
   sprint_instance_pool = SprintInstancePool.get_global_instance(sprint_opts=sprint_opts)
-  edges, weights, start_end_states = sprint_instance_pool.get_automata_for_batch(tags)
+  with sprint_instance_pool.lock:  # We need multi-threading safety.
+    edges, weights, start_end_states = sprint_instance_pool.get_automata_for_batch(tags)
   return edges, weights, start_end_states
 
 
@@ -33,7 +34,13 @@ def get_sprint_automata_for_batch_op(sprint_opts, tags):
   """
 
   def py_wrap_get_sprint_automata_for_batch(py_tags):
-    return py_get_sprint_automata_for_batch(sprint_opts=sprint_opts, tags=py_tags)
+    try:
+      return py_get_sprint_automata_for_batch(sprint_opts=sprint_opts, tags=py_tags)
+    except Exception:
+      print("Exception in py_wrap_get_sprint_automata_for_batch:")
+      import sys
+      sys.excepthook(*sys.exc_info())
+      raise
 
   tags.set_shape((None,))  # (batch,)
   edges, weights, start_end_states = tf.py_func(
@@ -60,8 +67,9 @@ def py_get_sprint_loss_and_error_signal(sprint_opts, log_posteriors, seq_lengths
   """
   # Also see :class:`SprintErrorSigOp`.
   sprint_instance_pool = SprintInstancePool.get_global_instance(sprint_opts=sprint_opts)
-  loss, error_signal = sprint_instance_pool.get_batch_loss_and_error_signal(
-    log_posteriors=log_posteriors, seq_lengths=seq_lengths, tags=seq_tags)
+  with sprint_instance_pool.lock:  # We need multi-threading safety.
+    loss, error_signal = sprint_instance_pool.get_batch_loss_and_error_signal(
+      log_posteriors=log_posteriors, seq_lengths=seq_lengths, tags=seq_tags)
   return loss, error_signal
 
 
@@ -76,8 +84,14 @@ def get_sprint_loss_and_error_signal(sprint_opts, log_posteriors, seq_lengths, s
   """
 
   def py_wrap_get_sprint_loss_and_error_signal(py_log_posteriors, py_seq_lengths, py_seq_tags):
-    return py_get_sprint_loss_and_error_signal(
-      sprint_opts=sprint_opts, log_posteriors=py_log_posteriors, seq_lengths=py_seq_lengths, seq_tags=py_seq_tags)
+    try:
+      return py_get_sprint_loss_and_error_signal(
+        sprint_opts=sprint_opts, log_posteriors=py_log_posteriors, seq_lengths=py_seq_lengths, seq_tags=py_seq_tags)
+    except Exception:
+      print("Exception in py_wrap_get_sprint_loss_and_error_signal:")
+      import sys
+      sys.excepthook(*sys.exc_info())
+      raise
 
   log_posteriors.set_shape((None, None, None))  # (time,batch,label)
   seq_lengths.set_shape((None,))  # (batch,)
