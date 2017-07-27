@@ -50,7 +50,12 @@ class SprintDatasetBase(Dataset):
   SprintCachedSeqsMax = 200
   SprintCachedSeqsMin = 100
 
-  def __init__(self, target_maps=None, str_add_final_zero=False, **kwargs):
+  def __init__(self, target_maps=None, str_add_final_zero=False, input_stddev=1., **kwargs):
+    """
+    :param dict[str,str|dict] target_maps: e.g. {"speaker": "speaker_map.txt"}
+    :param bool str_add_final_zero: adds e.g. "orth0" with '\0'-ending
+    :param float input_stddev: if != 1, will divide the input "data" by that
+    """
     super(SprintDatasetBase, self).__init__(**kwargs)
     if target_maps:
       assert isinstance(target_maps, dict)
@@ -62,6 +67,7 @@ class SprintDatasetBase(Dataset):
         target_maps[key] = tmap
     self.target_maps = target_maps
     self.str_add_final_zero = str_add_final_zero
+    self.input_stddev = input_stddev
     self.cond = Condition(lock=self.lock)
     self.add_data_thread_id = thread.get_ident()  # This will be created in the Sprint thread.
     self.ready_for_data = False
@@ -249,6 +255,8 @@ class SprintDatasetBase(Dataset):
     # must be in format: (time,feature)
     features = features.transpose()
     assert features.shape == (T, self.num_inputs)
+    if self.input_stddev != 1:
+      features /= self.input_stddev
     if self.window > 1:
       features = self.sliding_window(features)
       assert features.shape == (T, self.num_inputs * self.window)
