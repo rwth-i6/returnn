@@ -2283,7 +2283,10 @@ def add_scaled_noise_to_gradients(grads_and_vars, gradient_noise_scale):
 
 class CustomGradient(object):
   def __init__(self):
+    from Util import NotSpecified
+    from weakref import ref
     self.num_calls = 0
+    self.registered_ops_graph = ref(NotSpecified)
     self.registered_ops = {}  # func -> decorated func
 
   def Defun(self, *input_types, **kwargs):
@@ -2309,14 +2312,25 @@ class CustomGradient(object):
     :return: op
     :rtype: (tf.Tensor) -> tf.Tensor
     """
+    graph = tf.get_default_graph()
+    assert isinstance(graph, tf.Graph)
+    if graph is not self.registered_ops_graph():
+      self.registered_ops.clear()
+      from weakref import ref
+      self.registered_ops_graph = ref(graph)
     if op in self.registered_ops:
       return self.registered_ops[op]
     from tensorflow.python.framework import function
     op_with_new_grad = function.Defun(*input_types, python_grad_func=grad_op, func_name=name)(op)
-    self.registered_ops[op] = op_with_new_grad
     # We need to add one instance of the new op to the graph now because of:
     # https://github.com/tensorflow/tensorflow/issues/6804
-    op_with_new_grad(*[tf.placeholder(dtype) for dtype in input_types])
+    # In case this is done too late, which is if there was already a previous session.run call,
+    # you might get an exception like this:
+    # NotFoundError: Op type not registered 'generic_loss_and_error_signal'
+    call = op_with_new_grad(*[tf.placeholder(dtype) for dtype in input_types])
+    assert isinstance(call, tf.Tensor)
+    assert call.graph is graph
+    self.registered_ops[op] = op_with_new_grad
     return op_with_new_grad
 
   @classmethod

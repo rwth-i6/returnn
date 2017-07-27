@@ -498,6 +498,22 @@ def test_windowed_nd_big():
   numpy.testing.assert_almost_equal(naive, real)
 
 
+def test_CustomGradient_register_new_graph_generic_loss_and_error_signal():
+  def check():
+    with tf.Graph().as_default() as graph:
+      with tf.Session(graph=graph) as session:
+        custom_gradient.register_generic_loss_and_error_signal()
+        x = tf.constant(2.)
+        session.run(x)  # do some early call, before `generic_loss_and_error_signal` below
+        y = custom_gradient.generic_loss_and_error_signal(loss=1., x=x, grad_x=3.)
+        assert y.graph is graph
+        grad_y, = tf.gradients(y, x)
+        assert_equal(session.run([y, x, grad_y]), [1., 2., 3.])
+  check()
+  check()
+  check()
+
+
 def test_global_tensor():
   class C:
     i = 0
