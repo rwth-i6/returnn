@@ -743,8 +743,8 @@ def init_dataset(kwargs):
   obj = clazz(**kwargs)
   assert isinstance(obj, Dataset)
   if files:
-    from HDFDataset import HDFDataset
-    assert isinstance(obj, HDFDataset)
+    from HDFDataset import HDFDataset, NextGenHDFDataset
+    assert isinstance(obj, (HDFDataset, NextGenHDFDataset))
     for f in files:
       obj.add_file(f)
   obj.initialize()

@@ -1,9 +1,12 @@
-
+import collections
 import gc
 import h5py
 import numpy
+import random
 import theano
 from CachedDataset import CachedDataset
+from CachedDataset2 import CachedDataset2
+from Dataset import Dataset, DatasetSeq
 from Log import log
 
 # Common attribute names for HDF dataset, which should be used in order to be proceed with HDFDataset class.
@@ -171,3 +174,137 @@ class HDFDataset(CachedDataset):
     return ", ".join(["HDF dataset",
                       "sequences: %i" % self.num_seqs,
                       "frames: %i" % self.get_num_timesteps()])
+
+# ------------------------------------------------------------------------------
+
+class StreamParser(object):
+  def __init__(self, seq_names, stream):
+    self.seq_names = seq_names
+    self.stream = stream
+
+    self.num_features = None
+    self.feature_type = None  # 1 for sparse, 2 for dense
+
+  def get_data(self, seq_name):
+    raise NotImplementedError()
+
+
+class FeatureSequenceStreamParser(StreamParser):
+  def __init__(self, *args, **kwargs):
+    super(FeatureSequenceStreamParser, self).__init__(*args, **kwargs)
+
+    for s in self.seq_names:
+      seq_data = self.stream['data'][s]
+      assert len(seq_data.shape) == 2
+
+      if self.num_features is None:
+        self.num_features = seq_data.shape[1]
+
+      assert seq_data.shape[1] == self.num_features
+
+    self.feature_type = 2
+
+  def get_data(self, seq_name):
+    return self.stream['data'][seq_name][...]
+
+
+class SparseStreamParser(StreamParser):
+  def __init__(self, *args, **kwargs):
+    super(SparseStreamParser, self).__init__(*args, **kwargs)
+
+    for s in self.seq_names:
+      seq_data = self.stream['data'][s]
+      assert len(seq_data.shape) == 1
+
+    self.num_features = self.stream['feature_names'].shape[0]
+    self.feature_type = 1
+
+  def get_data(self, seq_name):
+    return self.stream['data'][seq_name][:]
+
+
+class NextGenHDFDataset(CachedDataset2):
+  """
+  """
+
+  parsers = { 'feature_sequence' : FeatureSequenceStreamParser,
+              'sparse'           : SparseStreamParser }
+
+  def __init__(self, input_stream_name, *args, **kwargs):
+    super(NextGenHDFDataset, self).__init__(*args, **kwargs)
+
+    self.input_stream_name = input_stream_name
+
+    self.files         = []
+    self.h5_files      = []
+    self.all_seq_names = []
+    self.file_indices  = []
+    self.seq_order     = []
+    self.all_parsers   = collections.defaultdict(list)
+
+
+  def add_file(self, path):
+    self.files.append(path)
+    self.h5_files.append(h5py.File(path))
+
+    cur_file = self.h5_files[-1]
+
+    assert {'seq_names', 'streams'}.issubset(set(cur_file.keys())), "%s does not contain all required datasets/groups" % path
+
+    seqs = list(cur_file['seq_names'])
+    self.all_seq_names.extend(seqs)
+    self.file_indices.extend([len(self.files) - 1] * len(seqs))
+
+    all_streams = set(cur_file['streams'].keys())
+    assert self.input_stream_name in all_streams, "%s does not contain the input stream %s" % (path, self.input_stream)
+
+    parsers = { name : NextGenHDFDataset.parsers[stream.attrs['parser']](seqs, stream) for name, stream in cur_file['streams'].items()}
+    for k, v in parsers.items():
+      self.all_parsers[k].append(v)
+
+    if len(self.files) == 1:
+      self.num_outputs = { name : [parser.num_features, parser.feature_type] for name, parser in parsers.items() }
+      self.num_inputs = self.num_outputs[self.input_stream_name][0]
+    else:
+      assert all(self.num_outputs[name] == parser.num_features for name, parser in parsers.items())
+
+
+  def initialize(self):
+    super(NextGenHDFDataset, self).initialize()
+
+    self._num_seqs           = len(self.all_seq_names)
+    self._estimated_num_seqs = self._num_seqs
+
+
+  def init_seq_order(self, epoch=None, seq_list=None):
+    """
+    :type epoch: int|None
+    :param list[str] | None seq_list: In case we want to set a predefined order.
+    """
+    super(NextGenHDFDataset, self).init_seq_order(epoch, seq_list)
+
+    if seq_list is not None:
+      self.seq_order = [self.all_seq_names.index(s) for s in seq_list]
+    else:
+      self.seq_order = list(range(len(self.all_seq_names)))
+      rng = random.Random(epoch or 1337)
+      rng.shuffle(self.seq_order)
+
+
+  def _collect_single_seq(self, seq_idx):
+    """
+    :type seq_idx: int
+    :rtype: DatasetSeq
+    """
+    if seq_idx >= len(self.seq_order):
+      return None
+
+    real_seq_index = self.seq_order[seq_idx]
+    file_index     = self.file_indices[real_seq_index]
+    seq_name       = self.all_seq_names[real_seq_index]
+    targets        = { name : parsers[file_index].get_data(seq_name) for name, parsers in self.all_parsers.items() }
+    features       = targets[self.input_stream_name]
+    return DatasetSeq(seq_idx=seq_idx,
+                      seq_tag=seq_name,
+                      features=features,
+                      targets=targets)
