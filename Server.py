@@ -24,6 +24,7 @@ from concurrent.futures import ThreadPoolExecutor
 from Dataset import Dataset, init_dataset, init_dataset_via_str
 from HDFDataset import HDFDataset
 import re
+import io
 
 
 _engines = {}
@@ -36,7 +37,7 @@ _data = {}
 
 
 """
-IMPORTANT NOTE TO PUT IN CONFIG FILE:
+IMPORTANT TO PUT IN CONFIG FILES OF ALL CONFIGS THAT ARE GOING TO BE LOADED IN RUNTIME:
 
 #IMPORTANT FOR SERVER
 extract_output_layer_name = "<OUTPUT LAYER ID>"
@@ -94,21 +95,34 @@ class ClassifyHandler(tornado.web.RequestHandler):
     def post(self, *args, **kwargs):
         #TODO: Make this batch over a specific time period
         #TODO: Make data sending binary an option
-
+        #TODO: Write formal documentation
 
         #print('Received body: ' + str(self.request.body))
-
-        body_params = json.loads(self.request.body)
+        
+        url_params = self.request.arguments
+        body_params = self.request.body
         
         output_dim = {}
         ret = {}
         data = {}
+        data_format = ''
+        data_type = ''
+        engine_hash = ''
         
-        #first get meta data
-        engine_hash = body_params['engine_hash']
-        data_format = body_params['data_format'] #possible options: 'json','binary'
-        data_type = body_params['data_type'] #possible options: https://docs.scipy.org/doc/numpy-1.10.1/user/basics.types.html
-        #data_shape = body_params['data_shape'] #either '' or a numpy shape
+        print(str(url_params))
+        
+        #first get meta data from URL parameters
+        try:
+            engine_hash = str(url_params['engine_hash']).replace("['", '').replace("']", '')
+            if 'data_format' in url_params:
+              data_format = str(url_params['data_format']).replace("['", '').replace("']", '')
+            if 'data_type' in url_params:
+              # possible options: https://docs.scipy.org/doc/numpy-1.10.1/user/basics.types.html
+              data_type = str(url_params['data_type']).replace("['", '').replace("']", '')
+            if 'data_shape' in url_params:
+              data_shape = str(url_params['data_shape']).replace("['", '').replace("']", '')  # either '' or a numpy shape
+        except Exception as e:
+            print('Paramater formating exception: ' + str(e.message), file=log.v4)
         
         #defaults
         if data_format == '':
@@ -116,7 +130,7 @@ class ClassifyHandler(tornado.web.RequestHandler):
         if data_type == '':
             data_type = 'float32'
         
-        print('Received engine hash: %s, data formatted: %s, data type %s', engine_hash, data_format, data_type,
+        print('Received engine hash: ' + engine_hash + ', data formatted: ' + data_format + ', data type '+ data_type,
               file=log.v4)
         
         #load in engine and hash
@@ -125,13 +139,8 @@ class ClassifyHandler(tornado.web.RequestHandler):
         devices = _devices[engine_hash]
         
         hash_engine = hashlib.new('ripemd160')
-        hash_engine.update(json.dumps(body_params) + engine_hash)
+        hash_engine.update(str(body_params) + engine_hash)
         hash_temp = hash_engine.hexdigest()
-
-        #delete unneccessary stuff so that the rest works
-        del body_params['engine_hash']
-        del body_params['data_format']
-        del body_params['data_type']
 
         # process the data
         if data_format == 'json':
@@ -148,10 +157,29 @@ class ClassifyHandler(tornado.web.RequestHandler):
                         ret['error'] = 'unable to convert %s to an array from value %s' % (k, str(data[k]))
                     break
         
-        #if data_format == 'binary':
-        #TODO: we can pickle the object or make custom binary implementation
-        #Possible implementation: pass metadata via URL paramters, then use self.get_argument to retrieve the data
-        #and have the body just a binary dump of the array.
+        
+        #TODO: implement binary
+        if data_format == 'binary':
+            try:
+              #Numpy from file doesn't accept StringIO, so we need to physically save the binary data and then load
+              #it back in
+              #TODO: find bug
+              fname = 'data/' + str(datetime.datetime.now())
+              print(fname)
+              f = open(fname, 'w')
+              f.write(str(self.request.body))
+              dt = np.dtype(data_type)
+              #f = StringIO(str(self.request.body))
+              f = io.BytesIO(self.request.body)
+              data['data'] = np.fromfile(f, dtype=dt)
+              f.close()
+              os.remove(fname)
+              
+              #TODO: reshape
+              #data['data'].reshape()
+            except Exception as e:
+              print('Binary data error: ' + str(e.message), file=log.v4)
+              ret['error'] = 'Error during binary data conversion: ' + e.message
         
         #do dataset creation and processing
         if not 'error' in ret:
@@ -197,7 +225,6 @@ class ConfigHandler(tornado.web.RequestHandler):
             self.remove_oldest_engine()
         
         data = json.loads(self.request.body)
-        
         
         print('Received new config for new engine', file=log.v3)
     
@@ -248,7 +275,7 @@ class ConfigHandler(tornado.web.RequestHandler):
         
         print('Finished loading in, server running. Currently number of active engines: ', len(_engines), file=log.v3)
         self.write(hash_temp)
-         
+        
     
     def init_devices(self, config):
         
