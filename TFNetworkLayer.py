@@ -2349,7 +2349,8 @@ class CombineLayer(LayerBase):
           return sources[i].output.placeholder
         return sources[i].output.copy_compatible_to(sources[0].output).placeholder
       return sources[i]
-    vs = {"tf": tf, "source": source, "self": self}
+    vs = vars(TFUtil).copy()
+    vs.update({"tf": tf, "source": source, "self": self})
     vs.update(eval_locals or {})
     x = eval(eval_str, vs)
     assert sorted(used_sources) == list(range(len(sources))), (

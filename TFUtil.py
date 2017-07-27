@@ -3016,6 +3016,18 @@ def view_as(x, dtype):
   return y
 
 
+def safe_log(x, eps=1e-20):
+  """
+  Safe wrapper around :func:`tf.log` which avoids infs or nans in the gradient.
+
+  :param tf.Tensor x:
+  :param float|tf.Tensor eps:
+  :return: log(max(x, eps))
+  :rtype: tf.Tensor
+  """
+  return tf.log(tf.maximum(x, eps))
+
+
 class Lock(object):
   """
   A pure TensorFlow implementation of a mutex / lock.
