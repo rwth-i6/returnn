@@ -808,6 +808,8 @@ def variable_scalar_summaries_dict(x, name=None):
   :return: dicth with key -> scalar info, e.g. with "%s_mean" % name -> tf.reduce_mean(x)
   :rtype: dict[str,tf.Tensor]
   """
+  if x.dtype == tf.string:
+    return {}
   if not name:
     name = get_base_name(x)
   mean = tf.reduce_mean(x)
@@ -830,6 +832,8 @@ def variable_summaries(var, name=None, with_histogram=False):
   :param bool with_histogram: adds histogram. note that this can add noticeable overhead
   :return: nothing, use :func:`tf.summary.merge_all()` to collect the summaries
   """
+  if var.dtype == tf.string:
+    return
   if not name:
     name = get_base_name(var)
   with tf.name_scope('summaries_%s' % name):
