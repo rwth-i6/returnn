@@ -365,7 +365,7 @@ def add_check_numerics_ops(
             if debug_print_added_checks:
               print("add check for:", output, op.type)
             if use_check_numerics:
-              check_op = [tf.check_numerics(output, message=message)]
+              check_op = [tf.check_numerics(output, message=message, name=op.name + "_check_numerics")]
             else:
               is_finite = tf.reduce_all(tf.is_finite(output))
               check_op = [tf.Assert(is_finite, [message, "Tensor had inf or nan values:", output])]
