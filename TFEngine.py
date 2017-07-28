@@ -34,7 +34,7 @@ from Network import LayerNetwork
 from Pretrain import pretrainFromConfig
 from TFNetwork import TFNetwork, ExternData
 from TFUpdater import Updater
-from Util import hms, NumbersDict, hdf5_strings
+from Util import hms
 
 
 class Runner(object):
@@ -931,6 +931,9 @@ class Engine(object):
     :param str combine_labels: ignored at the moment
     :param int batch_size:
     """
+    import h5py
+    from Util import hdf5_strings
+
     output_layer_name = None
     if not output_layer_name:
       output_layer_name = self.config.value("forward_output_layer", self.network.get_default_output_layer_name())
@@ -939,7 +942,6 @@ class Engine(object):
     output_layer = self.network.layers[output_layer_name]
     target = self.network.get_default_target()
 
-    import h5py
     cache = h5py.File(output_file, "w")
     cache.attrs['numTimesteps'] = 0
     cache.attrs['inputPattSize'] = data.num_inputs
