@@ -153,7 +153,7 @@ def test_engine_forward_single():
   engine.forward_single(dataset=dataset, seq_idx=0)
 
 
-def test_engine_forward():
+def test_engine_forward_to_hdf():
   from GeneratingDataset import DummyDataset
   import tempfile
   output_file = tempfile.mktemp(suffix=".hdf", prefix="nose-tf-forward")
@@ -173,7 +173,6 @@ def test_engine_forward():
     "network": {"output": {"class": "softmax", "loss": "ce"}},
     "output_file": output_file,
   })
-
 
   engine = Engine(config=config)
   engine.init_train_from_config(config=config, train_data=dataset, dev_data=None, eval_data=None,)

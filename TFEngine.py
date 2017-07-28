@@ -923,104 +923,91 @@ class Engine(object):
 
   def forward_to_hdf(self, data, output_file, combine_labels='', batch_size=0):
     """
-    Is aiming at recreating the same interface and output as Engine.forward_to_hdf.
+    Is aiming at recreating the same interface and output as :func:`Engine.forward_to_hdf`.
+    See also :func:`EngineTask.HDFForwardTaskThread` and :func:`hdf_dump_from_dataset` in the hdf_dump.py tool.
 
-    :type data: Dataset.Dataset
-    :type output_file: str
-    :type combine_labels: str
+    :param Dataset data:
+    :param str output_file:
+    :param str combine_labels: ignored at the moment
+    :param int batch_size:
     """
-    import h5py
-
-    def insert_h5_inputs(name, raw_data):
-      """Inserts a record into the hdf5-file.
-      Resizes if necessary
-
-      :type name: str
-      :type raw_data: numpy.array
-      """
-      if len(raw_data.shape) == 3: # remove batch-dim
-        raw_data = raw_data.reshape(raw_data.shape[1:])
-      assert len(raw_data.shape) <= 2
-      if name not in datasets:
-        datasets[name] = cache.create_dataset(name, raw_data.shape, raw_data.dtype, maxshape=tuple(None for _ in raw_data.shape))
-      else:
-        old_shape = datasets[name].shape
-        datasets[name].resize((old_shape[0]+raw_data.shape[0],) +  old_shape[1:])
-      # append raw data to dataset
-      datasets[name][cache.attrs['numTimesteps']:,0:] = raw_data.copy()
-      cache.attrs['numTimesteps'] += raw_data.shape[0]
-
-    def extra_fetches_cb(inputs, seq_idx, seq_tag):
-      """
-      Insert each batch into the output_file (hdf).
-
-      :param numpy.ndarray inputs: shape=(n_batch,seq,data)
-      :param list[int] seq_idx: sequence ids of length n_batch
-      :param list[str] seq_tag: sequence tags of length n_batch
-      :return:
-      """
-      n_batch = len(seq_idx)
-      assert n_batch == len(seq_tag)
-      assert n_batch == inputs.shape[0]
-
-      insert_h5_inputs('inputs', inputs)
-      seqlen_offset = self.seq_lengths.shape[0]
-      self.seq_lengths.resize((seqlen_offset + n_batch,))
-      for i in range(len(seq_idx)):
-        tags.append(seq_tag[i])
-
-        # add sequence lengths, resize hdf if required
-        seq_len = inputs[i].shape[0]
-        self.seq_lengths[seqlen_offset + i] = seq_len
-
     output_layer_name = None
     if not output_layer_name:
       output_layer_name = self.config.value("forward_output_layer", self.network.get_default_output_layer_name())
       assert output_layer_name, "output layer not defined. set forward_output_layer in config"
     assert output_layer_name in self.network.layers, "output layer %r not found" % output_layer_name
+    output_layer = self.network.layers[output_layer_name]
     target = self.network.get_default_target()
 
+    import h5py
     cache = h5py.File(output_file, "w")
     cache.attrs['numTimesteps'] = 0
     cache.attrs['inputPattSize'] = data.num_inputs
     cache.attrs['numDims'] = 1
     cache.attrs['numLabels'] = data.num_outputs[target]
-    cache.attrs['numSeqs'] = data.num_seqs
-    tags = []
-
+    cache.attrs['numSeqs'] = 0
     if target in data.labels:
       hdf5_strings(cache, 'labels', data.labels[target])
 
-    datasets = dict()
+    datasets = {}  # type: dict[str,h5py.Dataset]
+    tags = []  # type: list[str]
+    seq_lengths = cache.create_dataset("seqLengths", (0,), dtype='i', maxshape=(None,))
 
+    def insert_h5_inputs(name, raw_data):
+      """
+      Inserts a record into the hdf5-file.
+      Resizes if necessary.
 
-    self.seq_lengths = cache.create_dataset("seqLengths", (0,), dtype='i', maxshape=(None,))
-    cache.attrs['numSeqs'] = data.num_seqs
+      :param str name:
+      :param numpy.ndarray raw_data: shape=(time,data)
+      """
+      assert len(raw_data.shape) == 2
+      if name not in datasets:
+        datasets[name] = cache.create_dataset(name, raw_data.shape, raw_data.dtype, maxshape=tuple(None for _ in raw_data.shape))
+      else:
+        old_shape = datasets[name].shape
+        datasets[name].resize((old_shape[0] + raw_data.shape[0],) + old_shape[1:])
+      # append raw data to dataset
+      datasets[name][cache.attrs['numTimesteps']:, 0:] = raw_data
+      cache.attrs['numTimesteps'] += raw_data.shape[0]
+      cache.attrs['numSeqs'] += 1
 
+    def extra_fetches_cb(inputs, seq_len, seq_tag):
+      """
+      Insert each batch into the output_file (hdf).
 
+      :param numpy.ndarray inputs: shape=(n_batch,time,data)
+      :param list[int] seq_len: sequence lengths
+      :param list[str] seq_tag: sequence tags of length n_batch
+      """
+      n_batch = len(seq_len)
+      assert n_batch == len(seq_tag)
+      assert n_batch == inputs.shape[0]
 
+      seqlen_offset = seq_lengths.shape[0]
+      seq_lengths.resize((seqlen_offset + n_batch,))
+      for i in range(n_batch):
+        tags.append(seq_tag[i])
+        seq_lengths[seqlen_offset + i] = seq_len[i]
+        insert_h5_inputs('inputs', inputs[i][:seq_len[i]])
 
-
-    self.batches = data.generate_batches(
+    batches = data.generate_batches(
       recurrent_net=self.network.recurrent,
       batch_size=batch_size,
       used_data_keys=self.network.used_data_keys)
-
-    forwarder = Runner(engine=self, dataset=data,
-                    batches=self.batches, train=False,
-                    eval=False, extra_fetches=
-                    {#'features': self.network.extern_data.get_default_input_data().get_placeholder_as_batch_major(),
-                     'inputs': self.network.get_default_output_layer().output.get_placeholder_as_batch_major(),
-                      "seq_idx": self.network.get_extern_data("seq_idx", mark_data_key_as_used=True),
-                      "seq_tag": self.network.get_extern_data("seq_tag", mark_data_key_as_used=True),
-    },
-                    # TODO: targets
-                    extra_fetches_callback=extra_fetches_cb)
+    forwarder = Runner(
+      engine=self, dataset=data, batches=batches,
+      train=False, eval=False,
+      extra_fetches={
+        'inputs': output_layer.output.get_placeholder_as_batch_major(),
+        "seq_len": output_layer.output.get_sequence_lengths(),
+        "seq_tag": self.network.get_seq_tags(),
+      },
+      extra_fetches_callback=extra_fetches_cb)
     forwarder.run(report_prefix=self.get_epoch_str() + " forward")
 
     hdf5_strings(cache, 'seqTags', tags)
     cache.close()
-
 
   def analyze(self, data, statistics):
     """
