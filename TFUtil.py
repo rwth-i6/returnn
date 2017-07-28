@@ -967,10 +967,12 @@ class FlipGradientBuilder(object):
   """
   Gradient Reversal Layer.
   Discussion:
-      https://github.com/fchollet/keras/issues/3119
-      https://github.com/tensorflow/tensorflow/issues/4342
+    https://github.com/fchollet/keras/issues/3119
+    https://github.com/tensorflow/tensorflow/issues/4342
   Code from here:
-      https://github.com/pumpikano/tf-dann/blob/master/flip_gradient.py
+    https://github.com/pumpikano/tf-dann/blob/master/flip_gradient.py
+
+  Also see :class:`CustomGradient` which is more generic.
   """
 
   def __init__(self):
@@ -982,7 +984,7 @@ class FlipGradientBuilder(object):
     from tensorflow.python.framework import ops
     @ops.RegisterGradient(grad_name)
     def _flip_gradients(op, grad):
-      return [tf.neg(grad) * l]
+      return [tf.negative(grad) * l]
 
     g = tf.get_default_graph()
     with g.gradient_override_map({"Identity": grad_name}):
@@ -2286,6 +2288,13 @@ def add_scaled_noise_to_gradients(grads_and_vars, gradient_noise_scale):
 
 
 class CustomGradient(object):
+  """
+  Utility functions to specify a custom gradient for a given function,
+  which will be wrapped around via TF :func:`Defun`.
+
+  Also see :class:`FlipGradientBuilder`.
+  """
+
   def __init__(self):
     from Util import NotSpecified
     from weakref import ref
@@ -2384,6 +2393,9 @@ class CustomGradient(object):
     """
     generic_loss_and_error_signal = self.register_generic_loss_and_error_signal()
     return generic_loss_and_error_signal(loss, x, grad_x)
+
+  def synthetic_gradient(self, x, synthetic_grad_x):
+    pass  # TODO...
 
 
 custom_gradient = CustomGradient()

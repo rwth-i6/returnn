@@ -514,6 +514,18 @@ def test_CustomGradient_register_new_graph_generic_loss_and_error_signal():
   check()
 
 
+def test_CustomGradient_generic_loss_and_error_signal_post_func():
+  with tf.Graph().as_default() as graph:
+    with tf.Session(graph=graph) as session:
+      custom_gradient.register_generic_loss_and_error_signal()
+      x = tf.constant(5.)
+      y = custom_gradient.generic_loss_and_error_signal(loss=2., x=x, grad_x=3.)
+      z = 2. * y
+      assert y.graph is graph
+      grad_z, = tf.gradients(z, x)
+      assert_equal(session.run([z, x, grad_z]), [4., 5., 6.])
+
+
 def test_global_tensor():
   class C:
     i = 0
