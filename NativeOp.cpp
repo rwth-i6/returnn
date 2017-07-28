@@ -610,7 +610,7 @@ void make_copy(OpKernelContext* context, tensorflow::Tensor* tgt_tensor, const t
 }
 
 template<typename T>
-void check_inf_or_nan_cpu(tensorflow::Tensor* v, const char* name) {
+void check_inf_or_nan_cpu(tensorflow::Tensor* v, const std::string& name) {
     // copied from CheckNumericsOp CPU kernel
     auto in = v->flat<T>();
     static const int kInfBit = 0x01;
@@ -640,22 +640,50 @@ void check_inf_or_nan_cpu(tensorflow::Tensor* v, const char* name) {
       }
     }
     if (!status.empty())
-      printf("WARNING: %s: Tensor had %s values!\n", name, status.c_str());
+      printf("WARNING: %s: Tensor had %s values!\n", name.c_str(), status.c_str());
 }
 
-void debug_print(OpKernelContext* context, tensorflow::Tensor* v, const char* name, int64 max_entries=100) {
+void _fwrite_uint64(FILE* f, uint64_t v) {
+    fwrite(&v, sizeof(uint64_t), 1, f);
+}
+
+void _fwrite_str_pascal(FILE* f, const std::string& s) {
+    _ns::_fwrite_uint64(f, s.size());
+    fwrite(s.data(), s.size(), 1, f);
+}
+
+void dump_to_file(tensorflow::Tensor* v, const std::string& name) {
+    FILE* f = fopen(name.c_str(), "w");
+    _ns::_fwrite_str_pascal(f, "NativeOp_dump");  // header
+    _ns::_fwrite_str_pascal(f, tensorflow::DataTypeString(v->dtype()));
+    _ns::_fwrite_uint64(f, tensorflow::DataTypeSize(v->dtype()));
+    _ns::_fwrite_uint64(f, (uint64_t) v->dims());
+    for(int i = 0; i < v->dims(); ++i)
+        _ns::_fwrite_uint64(f, (uint64_t) v->dim_size(i));
+    tensorflow::StringPiece data = v->tensor_data();
+    _ns::_fwrite_uint64(f, (uint64_t) data.size());
+    fwrite(data.data(), data.size(), 1, f);
+    fclose(f);
+}
+
+void debug_print(OpKernelContext* context, tensorflow::Tensor* v, const std::string& name, int64 max_entries=100) {
     // https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/debug_ops.h
+    std::string full_name = context->op_kernel().name() + ":" + name;
     tensorflow::Tensor cpy(v->dtype(), v->shape());
     Notification done_copy;
     context->op_device_context()->CopyDeviceTensorToCPU(
         v, name, static_cast<Device*>(context->device()), &cpy,
         [&done_copy](const Status& s) { done_copy.Notify(); });
     done_copy.WaitForNotification();
-    printf("%s: %s\n", name, cpy.DebugString().c_str());
+    printf("%s: %s\n", full_name.c_str(), cpy.DebugString().c_str());
     if(max_entries > 0)
-        printf("%s\n", cpy.SummarizeValue(max_entries).c_str());
+        printf("%s: %s\n", full_name.c_str(), cpy.SummarizeValue(max_entries).c_str());
     if(cpy.dtype() == DT_FLOAT)
-        check_inf_or_nan_cpu<float>(&cpy, name);
+        check_inf_or_nan_cpu<float>(&cpy, full_name);
+    std::string filename = full_name + ".dump";
+    filename = tensorflow::str_util::StringReplace(filename, ":", "_", true);
+    filename = tensorflow::str_util::StringReplace(filename, "/", "__", true);
+    dump_to_file(&cpy, filename);
 }
 
 #endif

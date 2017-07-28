@@ -301,6 +301,7 @@ class OpMaker(object):
     code_header += """
     using namespace tensorflow;
 
+    #define _ns  // so _ns::something will use the root namespace
     #define TENSORFLOW 1
     #define CUDA 0
     #include "%(native_op_cpp_filename)s"
@@ -329,6 +330,10 @@ class OpMaker(object):
     if self.with_cuda:
       code_gpu_op = """
       namespace _gpu {
+        #ifdef _ns
+          #undef _ns
+        #endif
+        namespace _ns = ::_gpu;
         #undef CUDA
         #define CUDA 1
         #undef Ndarray_memcpy
@@ -437,6 +442,44 @@ class OpMaker(object):
       ops.RegisterGradient(self.name)(grad_wrapper)
 
     return op
+
+
+def load_dump_file(filename):
+  """
+  See dump_to_file() in NativeOp.cpp.
+
+  :param str filename:
+  :rtype: numpy.ndarray
+  """
+  import numpy
+  from struct import unpack
+
+  with open(filename, "rb") as f:
+    def _read_uint64():
+      return int(unpack("Q", f.read(8))[0])
+
+    def _read_bytes():
+      size = _read_uint64()
+      return f.read(size)
+
+    def _read_str():
+      return _read_bytes().decode("utf8")
+
+    header = _read_str()
+    assert header == "NativeOp_dump"
+    dtype_name = _read_str()
+    if dtype_name == "float":
+      dtype_name = "float32"
+    dtype = numpy.dtype(dtype_name)
+    dtype_size = _read_uint64()
+    assert dtype.itemsize == dtype_size, "dtype %r %r: %r != %r" % (dtype_name, dtype, dtype.itemsize, dtype_size)
+    ndim = _read_uint64()
+    dims = [_read_uint64() for i in range(ndim)]
+    data = _read_bytes()
+    assert len(data) == numpy.prod(dims) * dtype.itemsize
+    v_flat = numpy.fromstring(data, dtype=dtype)
+    v = v_flat.reshape(dims)
+    return v
 
 
 def make_lstm_op(**kwargs):
@@ -562,6 +605,33 @@ def fast_baum_welch_by_sprint_automata(am_scores, float_idx, tags, sprint_opts):
   return fast_baum_welch(
     am_scores=am_scores, float_idx=float_idx,
     edges=edges, weights=weights, start_end_states=start_end_states)
+
+
+def _debug_dumped_fast_baum_welch(prefix, postfix=".dump"):
+  """
+  If you uncomment the debug_print statements in FastBaumWelchOp, as well as dump_to_file inside debug_print,
+  you will get some dump files in the current directory. These can be loaded here and evald again.
+
+  :param str prefix: filename prefix, e.g. "ff_out_bw__FastBaumWelchOp_"
+  :param str postfix: filename postfix
+  :return: output from fast_baum_welch(), evald
+  :rtype: (numpy.ndarray. numpy.ndarray)
+  """
+  with tf.Graph().as_default() as graph:
+    with tf.Session(graph=graph) as session:
+      arg_names = {
+        "am_scores": None, "edges": None, "weights": None, "start_end_states": None, "float_idx": "index",
+        "state_buffer": None}
+      args = {}
+      for name, file_postfix in list(arg_names.items()):
+        if file_postfix is None:
+          file_postfix = name
+        filename = prefix + file_postfix + postfix
+        print("load", filename)
+        args[name] = tf.constant(load_dump_file(filename))
+      print("run...")
+      out_list = fast_baum_welch(**args)
+      return session.run(out_list)
 
 
 def demo():

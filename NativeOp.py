@@ -2032,7 +2032,16 @@ class FastBaumWelchOp(NativeOpGenBase):
           }
         }
       }
-    """
+    """,
+    "25_remove_inf": """
+    __global__
+    void remove_inf(float* array, unsigned size) {
+      unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
+      if (idx < size) {
+        array[idx] = fminf(array[idx], 1e32);
+      }
+    }
+    """,
   }
 
   c_fw_code = """
@@ -2048,6 +2057,15 @@ class FastBaumWelchOp(NativeOpGenBase):
     Ndarray* state_buffer     = inputs[5];
     Ndarray* out              = *outputs[0];
     Ndarray* sum_output       = *outputs[1];
+
+    /*
+    debug_print(context, am_scores, "am_scores");
+    debug_print(context, edges, "edges");
+    debug_print(context, weights, "weights");
+    debug_print(context, start_end_states, "start_end_states");
+    debug_print(context, index, "index");
+    debug_print(context, state_buffer, "state_buffer");
+    */
 
     assert(Ndarray_DIMS(am_scores)[0] == Ndarray_DIMS(out)[0]);
     assert(Ndarray_DIMS(am_scores)[1] == Ndarray_DIMS(out)[1]);
@@ -2190,6 +2208,14 @@ class FastBaumWelchOp(NativeOpGenBase):
                                             frame_stride, sequence_stride, n_frames, n_seqs, n_edges);
     HANDLE_LAST_ERROR();
 
+    #if TENSORFLOW
+    // Certain TensorFlow code doesn't like inf, even if it is just the CheckNumerics,
+    // which is helpful for debugging.
+    // We replace it by a very high number, so that tf.exp(-out) will still result in 0.0.
+    n_fill_blocks = (n_frames * n_seqs * n_emissions + n_threads - 1u) / n_threads;
+    remove_inf<<<n_fill_blocks, n_threads>>>(d_out, n_frames * n_seqs * n_emissions);
+    //debug_print(context, out, "out");
+    #endif
     if (dump_output and batch_idx %% dump_every == 0) {
       write_output_to_file(d_out, d_index, index_stride, pruning, n_frames, n_seqs, n_emissions, batch_idx);
     }
