@@ -2394,11 +2394,107 @@ class CustomGradient(object):
     generic_loss_and_error_signal = self.register_generic_loss_and_error_signal()
     return generic_loss_and_error_signal(loss, x, grad_x)
 
-  def synthetic_gradient(self, x, synthetic_grad_x):
-    pass  # TODO...
-
-
 custom_gradient = CustomGradient()
+
+
+class SyntheticGradient(object):
+  class Scope(object):
+    def __init__(self):
+      self.losses = []  # type: list[tf.Tensor]
+
+    def register_loss(self, loss):
+      """
+      :param tf.Tenosr loss:
+      """
+      self.losses.append(loss)
+
+    def exit(self):
+      assert SyntheticGradient.scope is self
+      SyntheticGradient.scope = None
+
+    def as_fetch_dict(self):
+      from collections import OrderedDict
+      d = OrderedDict()
+      for loss in self.losses:
+        # Admittedly the way to get the layer name has some assumptions which might break in the future.
+        # However, this is anyway mostly used for debugging purpose, so fix it, or just remove it.
+        op_name_parts = loss.op.name.split("/")  # type: list[str]
+        assert op_name_parts[-2] == "grad_prediction_loss"
+        assert op_name_parts[-3].endswith("_grad")
+        layer_name = op_name_parts[-4]
+        d["cost:%s" % layer_name] = loss
+      return d
+
+  scope = None
+
+  @classmethod
+  def enter_gradient_scope(cls):
+    """
+    :rtype: SyntheticGradient.Scope
+    """
+    # Currently not multi-threading safe.
+    assert not cls.scope
+    cls.scope = cls.Scope()
+    return cls.scope
+
+  @classmethod
+  def exit_gradient_scope(cls):
+    cls.scope.exit()
+
+  @classmethod
+  @contextlib.contextmanager
+  def gradient_scope(cls):
+    """
+    When gradients will be calculated (e.g. via some optimizer.minimize()),
+    the synthetic gradient needs to collect the gradient prediction losses.
+    This is done via this global scope.
+    """
+    yield cls.enter_gradient_scope()
+    cls.exit_gradient_scope()
+
+  @classmethod
+  def _synthetic_gradient_fwd(cls, x, synthetic_grad_x):
+    """
+    :param tf.Tensor x:
+    :param tf.Tensor synthetic_grad_x:
+    :return: x
+    :rtype: tf.Tensor
+    """
+    return x
+
+  @classmethod
+  def _synthetic_gradient_bwd(cls, op, grad_out):
+    """
+    :param tf.Operation op:
+    :param tf.Tensor grad_out:
+    :return: grad for x
+    :rtype: (tf.Tensor,)
+    """
+    x, synthetic_grad_x = op.inputs
+    if cls.scope:
+      with tf.name_scope("grad_prediction_loss"):
+        grad_prediction_loss = tf.reduce_mean(tf.square(synthetic_grad_x - tf.stop_gradient(grad_out)))
+        tf.summary.scalar("loss", grad_prediction_loss)
+      cls.scope.register_loss(grad_prediction_loss)
+    return synthetic_grad_x, None
+
+  @classmethod
+  def synthetic_gradient(cls, x, synthetic_grad_x):
+    """
+    :param tf.Tensor x:
+    :param tf.Tensor synthetic_grad_x:
+    :return: x, where the gradient is overwritten by synthetic_grad_x, and when calculated,
+      the gradient prediction loss will be added to ``cls.scope``.
+    :rtype: tf.Tensor
+    """
+    op = custom_gradient.register(
+      [tf.float32, tf.float32],
+      op=cls._synthetic_gradient_fwd,
+      grad_op=cls._synthetic_gradient_bwd,
+      name="synthetic_gradient")
+    y = op(x, synthetic_grad_x)
+    y.set_shape(x.get_shape())
+    return y
 
 
 def filter_grad(x, threshold, axis):

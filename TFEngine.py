@@ -112,6 +112,8 @@ class Runner(object):
         # Force a new check.
         self.engine._checked_uninitialized_vars = False
       d["optim_op"] = self.engine.updater.get_optim_op(callback_on_new=callback_on_new)
+      if self.engine.updater.optim_meta_losses:
+        d.update(self.engine.updater.optim_meta_losses)
     if self.extra_fetches is not None:
       from TFNetworkLayer import LayerBase
       from TFUtil import Data

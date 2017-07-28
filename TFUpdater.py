@@ -89,6 +89,7 @@ class Updater(object):
     self.loss = network.get_objective()
     self.optimizer = None  # type: tf.train.Optimizer
     self.optim_op = None  # type: tf.Operation
+    self.optim_meta_losses = None  # type: dict[str,tf.Tensor]
     self.optimizer_vars = []  # type: list[tf.Variable]
     self.optimizer_init_vars_op = None  # type: tf.Operation
 
@@ -117,6 +118,7 @@ class Updater(object):
   def create_optimizer(self):
     lr = self.learning_rate_var
     epsilon = self.config.float("optimizer_epsilon", 1e-16)
+    use_locking = self.config.bool("optimizer_use_locking", False)
     momentum = self.config.float("momentum", 0.0)
     optim_config = self.config.typed_value("optimizer")
     if optim_config:
@@ -132,6 +134,8 @@ class Updater(object):
         optim_config.setdefault("epsilon", epsilon)
       if "momentum" in optim_class_kwargs and momentum:
         optim_config.setdefault("momentum", momentum)
+      if "use_locking" in optim_class_kwargs and use_locking:
+        optim_config.setdefault("use_locking", use_locking)
       assert "learning_rate" not in optim_config, "learning_rate will be set implicitly"
       optim_config["learning_rate"] = lr
       print("Create optimizer %s with options %r." % (optim_class, optim_config), file=log.v2)
@@ -144,7 +148,7 @@ class Updater(object):
       # Default Keras values: lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-8.
       # Our Theano default values: beta1=0.9, beta2=0.999, epsilon=1e-16
       # https://github.com/openai/improved-gan/blob/master/imagenet/train_imagenet.py: beta1=0.5
-      optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=epsilon)
+      optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=epsilon, use_locking=use_locking)
     elif self.config.bool("nadam", False):
       assert_min_tf_version((1, 2, 0), "NadamOptimizer introduced in TF 1.2.0")
       assert not momentum
@@ -152,33 +156,82 @@ class Updater(object):
       # TF default values: like Adam: beta1=0.9, beta2=0.999, epsilon=1e-8
       # Our Theano default values: decay=0.004, beta1=0.9, beta2=0.999, epsilon=1e-8
       from tensorflow.contrib.opt.python.training.nadam_optimizer import NadamOptimizer
-      optimizer = NadamOptimizer(learning_rate=lr, epsilon=epsilon)
+      optimizer = NadamOptimizer(learning_rate=lr, epsilon=epsilon, use_locking=use_locking)
     elif self.config.bool("adadelta", False):
       assert not momentum
       print("Create Adadelta optimizer.", file=log.v2)
-      optimizer = tf.train.AdadeltaOptimizer(learning_rate=lr, epsilon=epsilon)
+      optimizer = tf.train.AdadeltaOptimizer(learning_rate=lr, epsilon=epsilon, use_locking=use_locking)
     elif self.config.bool("adagrad", False):
       assert not momentum
       print("Create Adagrad optimizer.", file=log.v2)
-      optimizer = tf.train.AdagradOptimizer(learning_rate=lr)
+      optimizer = tf.train.AdagradOptimizer(learning_rate=lr, use_locking=use_locking)
     elif self.config.is_of_type("rmsprop", float):
       print("Create RMSProp optimizer. With Decay %f" % (self.config.float("rmsprop", 0.9)), file=log.v2)
-      optimizer = tf.train.RMSPropOptimizer(decay=self.config.float("rmsprop", 0.9), learning_rate=lr, momentum=momentum, epsilon=epsilon)
+      optimizer = tf.train.RMSPropOptimizer(decay=self.config.float("rmsprop", 0.9), learning_rate=lr, momentum=momentum, epsilon=epsilon, use_locking=use_locking)
     elif self.config.bool("rmsprop", False):
       print("Create RMSProp optimizer.", file=log.v2)
-      optimizer = tf.train.RMSPropOptimizer(learning_rate=lr, momentum=momentum, epsilon=epsilon)
+      optimizer = tf.train.RMSPropOptimizer(learning_rate=lr, momentum=momentum, epsilon=epsilon, use_locking=use_locking)
     elif momentum:
       print("Create Momentum optimizer.", file=log.v2)
-      optimizer = tf.train.MomentumOptimizer(learning_rate=lr, momentum=momentum)
+      optimizer = tf.train.MomentumOptimizer(learning_rate=lr, momentum=momentum, use_locking=use_locking)
     else:
       print("Create SGD optimizer.", file=log.v2)
-      optimizer = tf.train.GradientDescentOptimizer(learning_rate=lr)
+      optimizer = tf.train.GradientDescentOptimizer(learning_rate=lr, use_locking=use_locking)
     self.optimizer = optimizer
     self.reset_optim_op()
+
+  def _get_apply_grads_op(self, loss, trainable_vars_for_gradients):
+    """
+    :param tf.Tensor loss:
+    :param list[tf.Variable] trainable_vars_for_gradients:
+    :return: op with all variable updates combined, using the optimizer
+    :rtype: tf.Operation
+    """
+    if not trainable_vars_for_gradients:
+      return tf.no_op(name="no_grad_vars_no_op")
+    # AccumulateN might not be deterministic but should be faster and should require less memory.
+    # We might want to make this configurable.
+    aggregation_method = tf.AggregationMethod.EXPERIMENTAL_ACCUMULATE_N
+    grad_noise = self.config.float("gradient_noise", 0.0)
+    grad_clip = self.config.float("gradient_clip", 0.0)
+    grad_clip_global_norm = self.config.float("gradient_clip_global_norm", 0.0)
+    # E.g. https://github.com/openai/baselines/blob/master/baselines/deepq/simple.py: grad_norm_clipping=10 -> tf.clip_by_norm
+
+    # Extended self.optimizer.minimize() to optionally modify gradients.
+    grads_and_vars = self.optimizer.compute_gradients(
+      loss, var_list=trainable_vars_for_gradients,
+      aggregation_method=aggregation_method)
+    if not [v for g, v in grads_and_vars if g is not None]:
+      raise Exception("no single variable to train")
+    if self.config.bool("debug_grad_summaries", False):
+      from TFUtil import variable_summaries, get_base_name, reuse_name_scope_of_tensor
+      for grad, var in grads_and_vars:
+        with reuse_name_scope_of_tensor(grad, prefix="grads/"):
+          variable_summaries(grad, name="grad_of_%s" % get_base_name(var))
+        with reuse_name_scope_of_tensor(var, prefix="vars/"):
+          variable_summaries(var, name=get_base_name(var))
+    # Also see tf.contrib.layers.optimizers.optimize_loss() for reference.
+    if self.config.bool("gradient_nan_inf_filter", False):
+      from TFUtil import nan_to_num
+      grads_and_vars = [(nan_to_num(grad, nan_num=0.0, inf_num=0.0), var) for (grad, var) in grads_and_vars]
+    if grad_noise:
+      assert grad_noise > 0
+      from TFUtil import add_scaled_noise_to_gradients
+      grads_and_vars = add_scaled_noise_to_gradients(grads_and_vars, grad_noise)
+    if grad_clip:
+      assert grad_clip > 0
+      grads_and_vars = [(tf.clip_by_value(grad, -grad_clip, grad_clip), var) for grad, var in grads_and_vars]
+    if grad_clip_global_norm:
+      assert grad_clip_global_norm > 0
+      grads_clipped, _ = tf.clip_by_global_norm([grad for (grad, _) in grads_and_vars], grad_clip_global_norm)
+      grads_and_vars = zip(grads_clipped, [var for (_, var) in grads_and_vars])
+    apply_grads = self.optimizer.apply_gradients(grads_and_vars)
+    return apply_grads
 
   def create_optim_op(self):
     assert self.loss is not None
     assert self.trainable_vars, "no variables to update/optimize"
+    from TFUtil import SyntheticGradient
 
     # Keep track of all current available vars.
     # The optimizer could add some, even some which are not so-called "slot-vars",
@@ -196,46 +249,15 @@ class Updater(object):
         trainable_vars_for_gradients.remove(v)
 
     with tf.variable_scope("optimize"):
-      if trainable_vars_for_gradients:
-        # AccumulateN might not be deterministic but should be faster and should require less memory.
-        # We might want to make this configurable.
-        aggregation_method = tf.AggregationMethod.EXPERIMENTAL_ACCUMULATE_N
-        grad_noise = self.config.float("gradient_noise", 0.0)
-        grad_clip = self.config.float("gradient_clip", 0.0)
-        grad_clip_global_norm = self.config.float("gradient_clip_global_norm", 0.0)
-        # E.g. https://github.com/openai/baselines/blob/master/baselines/deepq/simple.py: grad_norm_clipping=10 -> tf.clip_by_norm
-
-        # Extended self.optimizer.minimize() to optionally modify gradients.
-        grads_and_vars = self.optimizer.compute_gradients(
-          self.loss, var_list=trainable_vars_for_gradients,
-          aggregation_method=aggregation_method)
-        if not [v for g, v in grads_and_vars if g is not None]:
-          raise Exception("no single variable to train")
-        if self.config.bool("debug_grad_summaries", False):
-          from TFUtil import variable_summaries, get_base_name, reuse_name_scope_of_tensor
-          for grad, var in grads_and_vars:
-            with reuse_name_scope_of_tensor(grad, prefix="grads/"):
-              variable_summaries(grad, name="grad_of_%s" % get_base_name(var))
-            with reuse_name_scope_of_tensor(var, prefix="vars/"):
-              variable_summaries(var, name=get_base_name(var))
-        # Also see tf.contrib.layers.optimizers.optimize_loss() for reference.
-        if self.config.bool("gradient_nan_inf_filter", False):
-          from TFUtil import nan_to_num
-          grads_and_vars = [(nan_to_num(grad, nan_num=0.0, inf_num=0.0), var) for (grad, var) in grads_and_vars]
-        if grad_noise:
-          assert grad_noise > 0
-          from TFUtil import add_scaled_noise_to_gradients
-          grads_and_vars = add_scaled_noise_to_gradients(grads_and_vars, grad_noise)
-        if grad_clip:
-          assert grad_clip > 0
-          grads_and_vars = [(tf.clip_by_value(grad, -grad_clip, grad_clip), var) for grad, var in grads_and_vars]
-        if grad_clip_global_norm:
-          assert grad_clip_global_norm > 0
-          grads_clipped, _ = tf.clip_by_global_norm([grad for (grad, _) in grads_and_vars], grad_clip_global_norm)
-          grads_and_vars = zip(grads_clipped, [var for (_, var) in grads_and_vars])
-        apply_grads = self.optimizer.apply_gradients(grads_and_vars)
-      else:
-        apply_grads = tf.no_op(name="no_grad_vars_no_op")
+      synthetic_gradient_scope = SyntheticGradient.enter_gradient_scope()
+      apply_grads = self._get_apply_grads_op(self.loss, trainable_vars_for_gradients)
+      synthetic_gradient_scope.exit()
+      self.optim_meta_losses = synthetic_gradient_scope.as_fetch_dict()
+      if synthetic_gradient_scope.losses:
+        with tf.name_scope("meta_loss"):
+          meta_loss = tf.add_n(synthetic_gradient_scope.losses)
+          meta_apply_grads = self._get_apply_grads_op(meta_loss, trainable_vars_for_gradients)
+        apply_grads = tf.group(apply_grads, meta_apply_grads)
       incr_step_op = tf.assign_add(self.network.global_train_step, 1, name="global_train_step_increment")
       self.optim_op = tf.group(apply_grads, incr_step_op, name="optim_and_step_incr")
 

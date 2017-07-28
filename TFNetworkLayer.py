@@ -2574,6 +2574,35 @@ class FastBaumWelchLayer(_ConcatInputLayer):
     return get_concat_sources_data_template(sources, name="%s_output" % name).copy_as_time_major()
 
 
+class SyntheticGradientLayer(_ConcatInputLayer):
+  """
+  This is a generalized way to be able to replace the true gradient with any kind of predicted gradient.
+  This enabled to implement the idea from here:
+    Decoupled Neural Interfaces using Synthetic Gradients, https://arxiv.org/abs/1608.05343
+  """
+  layer_class = "synthetic_gradient"
+
+  def __init__(self, gradient, **kwargs):
+    """
+    :param LayerBase gradient:
+    """
+    super(SyntheticGradientLayer, self).__init__(**kwargs)
+    from TFUtil import SyntheticGradient
+    self.output.placeholder = SyntheticGradient.synthetic_gradient(
+      x=self.input_data.placeholder,
+      synthetic_grad_x=gradient.output.copy_compatible_to(self.input_data).placeholder)
+    self.output.size_placeholder = self.input_data.size_placeholder.copy()
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    super(SyntheticGradientLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    d["gradient"] = get_layer(d["gradient"])
+
+  @classmethod
+  def get_out_data_from_opts(cls, sources, name, **kwargs):
+    return get_concat_sources_data_template(sources, name="%s_output" % name)
+
+
 class FramewiseStatisticsLayer(LayerBase):
   """
   Collects various statistics (such as FER, etc) on the sources.
