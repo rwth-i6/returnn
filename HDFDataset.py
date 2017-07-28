@@ -188,6 +188,9 @@ class StreamParser(object):
   def get_data(self, seq_name):
     raise NotImplementedError()
 
+  def get_seq_length(self, seq_name):
+    raise NotImplementedError()
+
 
 class FeatureSequenceStreamParser(StreamParser):
   def __init__(self, *args, **kwargs):
@@ -207,6 +210,9 @@ class FeatureSequenceStreamParser(StreamParser):
   def get_data(self, seq_name):
     return self.stream['data'][seq_name][...]
 
+  def get_seq_length(self, seq_name):
+    return self.stream['data'][seq_name].shape[0]
+
 
 class SparseStreamParser(StreamParser):
   def __init__(self, *args, **kwargs):
@@ -222,6 +228,9 @@ class SparseStreamParser(StreamParser):
   def get_data(self, seq_name):
     return self.stream['data'][seq_name][:]
 
+  def get_seq_length(self, seq_name):
+    return self.stream['data'][seq_name].shape[0]
+
 
 class NextGenHDFDataset(CachedDataset2):
   """
@@ -235,12 +244,13 @@ class NextGenHDFDataset(CachedDataset2):
 
     self.input_stream_name = input_stream_name
 
-    self.files         = []
-    self.h5_files      = []
-    self.all_seq_names = []
-    self.file_indices  = []
-    self.seq_order     = []
-    self.all_parsers   = collections.defaultdict(list)
+    self.files           = []
+    self.h5_files        = []
+    self.all_seq_names   = []
+    self.seq_name_to_idx = {}
+    self.file_indices    = []
+    self.seq_order       = []
+    self.all_parsers     = collections.defaultdict(list)
 
 
   def add_file(self, path):
@@ -252,6 +262,11 @@ class NextGenHDFDataset(CachedDataset2):
     assert {'seq_names', 'streams'}.issubset(set(cur_file.keys())), "%s does not contain all required datasets/groups" % path
 
     seqs = list(cur_file['seq_names'])
+
+    prev_no_seqs      = len(self.all_seq_names)
+    seqs_in_this_file = len(seqs)
+    self.seq_name_to_idx.update(zip(seqs, range(prev_no_seqs, prev_no_seqs + seqs_in_this_file + 1)))
+
     self.all_seq_names.extend(seqs)
     self.file_indices.extend([len(self.files) - 1] * len(seqs))
 
@@ -284,11 +299,17 @@ class NextGenHDFDataset(CachedDataset2):
     super(NextGenHDFDataset, self).init_seq_order(epoch, seq_list)
 
     if seq_list is not None:
-      self.seq_order = [self.all_seq_names.index(s) for s in seq_list]
+      self.seq_order = [self.seq_name_to_idx[s] for s in seq_list]
     else:
-      self.seq_order = list(range(len(self.all_seq_names)))
-      rng = random.Random(epoch or 1337)
-      rng.shuffle(self.seq_order)
+      self.seq_order = self.get_seq_order_for_epoch(epoch, len(self.all_seq_names), self._get_seq_length)
+
+  def _get_seq_length(self, orig_seq_idx):
+    """
+    :type orig_seq_idx: int
+    :rtype int
+    """
+    parser = self.all_parsers[self.input_stream_name][self.file_indices[orig_seq_idx]]
+    return parser.get_seq_length(self.all_seq_names[orig_seq_idx])
 
 
   def _collect_single_seq(self, seq_idx):
