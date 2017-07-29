@@ -14,9 +14,9 @@ class Edge:
   """
 
   # label placeholder
-  _SIL = '_'
-  _EPS = '*'
-  _BLANK = '%'
+  SIL = '_'
+  EPS = '*'
+  BLANK = '%'
 
   def __init__(self, source_state_idx, target_state_idx, label, weight=0.0):
     """
@@ -47,6 +47,187 @@ class Edge:
     self.score = None
     self.is_loop = False
 
+  def __repr__(self):
+    return "".join(("[",
+                    str(self.source_state_idx), ", ",
+                    str(self.target_state_idx), ", ",
+                    str(self.label), ", ",
+                    str(self. weight),
+                    "]"))
+
+  def __str__(self):
+    return "".join(("Edge:\n",
+                    "Source state: ",
+                    str(self.source_state_idx), "\n",
+                    "Target state: ",
+                    str(self.target_state_idx), "\n",
+                    "Label: ",
+                    str(self.label), "\n",
+                    "Weight: ",
+                    str(self. weight)))
+
+  def __eq__(self, other):
+    return ((self.source_state_idx, self.target_state_idx, self.label, self.weight)
+            == (other.source_state_idx, other.target_state_idx, other.label, other.weight))
+
+  def __ne__(self, other):
+    return ((self.source_state_idx, self.target_state_idx, self.label, self.weight)
+            != (other.source_state_idx, other.target_state_idx, other.label, other.weight))
+
+  def __le__(self, other):
+    return ((self.source_state_idx, self.target_state_idx, self.label, self.weight)
+            <= (other.source_state_idx, other.target_state_idx, other.label, other.weight))
+
+  def __lt__(self, other):
+    return ((self.source_state_idx, self.target_state_idx, self.label, self.weight)
+            < (other.source_state_idx, other.target_state_idx, other.label, other.weight))
+
+  def __ge__(self, other):
+    return ((self.source_state_idx, self.target_state_idx, self.label, self.weight)
+            >= (other.source_state_idx, other.target_state_idx, other.label, other.weight))
+
+  def __gt__(self, other):
+    return ((self.source_state_idx, self.target_state_idx, self.label, self.weight)
+            > (other.source_state_idx, other.target_state_idx, other.label, other.weight))
+
+  """
+    setters for the class variables
+  """
+  def set_source_state_idx(self, idx):
+    if isinstance(idx, int):
+      self.source_state_idx = idx
+    else:
+      assert False, ("Variable is not an int:", idx)
+
+  def set_target_state_idx(self, idx):
+    if isinstance(idx, int):
+      self.target_state_idx = idx
+    else:
+      assert False, ("Variable is not an int:", idx)
+
+  def set_label(self, lbl):
+    if isinstance(lbl, str) or isinstance(lbl, int):
+      self.label = lbl
+    else:
+      assert False, ("Variable is not a string or int:", lbl)
+
+  def set_weight(self, w):
+    if isinstance(w, float):
+      self.weight = w
+    else:
+      assert False, ("Variable is not a float:", w)
+
+  def set_idx_word_in_sentence(self, idx):
+    if isinstance(idx, int):
+      self.idx_word_in_sentence = idx
+    else:
+      assert False, ("Variable is not an int:", idx)
+
+  def set_idx_phon_in_word(self, idx):
+    if isinstance(idx, int):
+      self.idx_phon_in_word = idx
+    else:
+      assert False, ("Variable is not an int:", idx)
+
+  def set_idx(self, idx):
+    if isinstance(idx, int):
+      self.idx = idx
+    else:
+      assert False, ("Variable is not an int:", idx)
+
+  def set_phon_at_word_begin(self, flag):
+    if isinstance(flag, bool):
+      self.phon_at_word_begin = flag
+    else:
+      assert False, ("Variable is not a bool:", flag)
+
+  def set_phon_at_word_end(self, flag):
+    if isinstance(flag, bool):
+      self.phon_at_word_end = flag
+    else:
+      assert False, ("Variable is not a bool:", flag)
+
+  def set_score(self, number):
+    if isinstance(number, float):
+      self.score = number
+    else:
+      assert False, ("Variable is not a number:", number)
+
+  def set_is_loop(self, flag):
+    if isinstance(flag, bool):
+      self.is_loop = flag
+    else:
+      assert False, ("Variable is not a bool:", flag)
+
+  """
+    getters for the class variables
+  """
+  def get_source_state_idx(self):
+    if isinstance(self.source_state_idx, int):
+      return self.source_state_idx
+    else:
+      assert False, "Output wrong 1"
+
+  def get_target_state_idx(self):
+    if isinstance(self.target_state_idx, int):
+      return self.target_state_idx
+    else:
+      assert False, "Output wrong 2"
+
+  def get_label(self):
+    if isinstance(self.label, str) or isinstance(self.label, int):
+      return self.label
+    else:
+      assert False, "Output wrong 3"
+
+  def get_weight(self):
+    if isinstance(self.weight, float):
+      return self.weight
+    else:
+      assert False, "Output wrong 4"
+
+  def get_idx_word_in_sentence(self):
+    if isinstance(self.idx_word_in_sentence, int):
+      return self.idx_word_in_sentence
+    else:
+      assert False, "Output wrong 5"
+
+  def get_idx_phon_in_word(self):
+    if isinstance(self.idx_phon_in_word, int):
+      return self.idx_phon_in_word
+    else:
+      assert False, "Output wrong 6"
+
+  def get_idx(self):
+    if isinstance(self.idx, int):
+      return self.idx
+    else:
+      assert False, "Output wrong 7"
+
+  def get_phon_at_word_begin(self):
+    if isinstance(self.phon_at_word_begin, bool):
+      return self.phon_at_word_begin
+    else:
+      assert False, "Output wrong 8"
+
+  def get_phon_at_word_end(self):
+    if isinstance(self.phon_at_word_end, bool):
+      return self.phon_at_word_end
+    else:
+      assert False, "Output wrong 9"
+
+  def get_score(self):
+    if isinstance(self.score, float):
+      return self.score
+    else:
+      assert False, "Output wrong 10"
+
+  def get_is_loop(self):
+    if isinstance(self.is_loop, bool):
+      return self.is_loop
+    else:
+      assert False, "Output wrong 11"
+
 
 class Graph:
   """
@@ -58,38 +239,57 @@ class Graph:
   def __init__(self, lemma):
     """
     :param str|None lemma: a sentence or word
-    list[str] lemma_list: input transformed into list if necessary
+    list[str] lem_list: lemma transformed into list of strings
     """
     if isinstance(lemma, str):
       self.lemma = lemma.strip()
-      self.lemma_list = self.lemma.split()
+      self.lem_list = self.lemma.split()
     elif isinstance(lemma, list):
       self.lemma = None
-      self.lemma_list = lemma
+      self.lem_list = lemma
     else:
       assert False, "The input you provided is not acceptable!"
 
     """
-    int|None num_states: number of state of FSA during creation for ASG, CTC, HMM
+    int num_states: number of state of FSA during creation for ASG, CTC, HMM
     list[Edge] edges: current state of FSA during creation for ASG, CTC, HMM
-    int|None num_states_asg: number of states for ASG
+    int num_states_asg: number of states for ASG
     list[Edge] edges_asg: created edges for ASG FSA
-    int|None num_states_ctc: number of states for ASG
+    int num_states_ctc: number of states for ASG
     list[Edge] edges_ctc: created edges for CTC FSA
-    int|None num_states_hmm: number of states for ASG
+    int num_states_hmm: number of states for ASG
     list[Edge] edges_hmm: created edges for HMM FSA
     str|None filename: str + fsa type for file save
     """
-    self.num_states = None
+    self.num_states = -1
     self.edges = []
-    self.num_states_asg = None
+    self.num_states_asg = -1
     self.edges_asg = []
-    self.num_states_ctc = None
+    self.num_states_ctc = -1
     self.edges_ctc = []
-    self.num_states_hmm = None
+    self.num_states_hmm = -1
     self.edges_hmm = []
     self.filename = None
 
+  def __repr__(self):
+    return "Graph()"
+
+  def __str__(self):
+    prettygraph = "Graph:\n"\
+                  + str(self.lem_list)\
+                  + "\nASG:\nNum states: "\
+                  + str(self.num_states_asg)\
+                  + "\nEdges:\n"\
+                  + str(self.edges_asg)\
+                  + "\nCTC:\nNum states: "\
+                  + str(self.num_states_ctc)\
+                  + "\nEdges:\n"\
+                  + str(self.edges_ctc)\
+                  + "\nHMM:\nNum states: "\
+                  + str(self.num_states_hmm)\
+                  + "\nEdges:\n"\
+                  + str(self.edges_hmm)
+    return prettygraph
 
   def set_filename(self, name):
     """
