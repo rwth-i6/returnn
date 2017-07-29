@@ -7,6 +7,8 @@ import numpy
 import theano
 from theano import tensor as T
 
+from copy import deepcopy
+
 
 class Edge:
   """
@@ -313,19 +315,20 @@ class Asg:
   class to create ASG FSA
   """
 
-  def __init__(self, graph, num_labels, asg_repetition=2, label_conversion=False):
+  def __init__(self, fsa, num_labels=256, asg_repetition=2, label_conversion=False):
     """
     :param Graph fsa: represents the Graph on which the class operates
     :param int num_labels: number of labels without blank, silence, eps and repetitions
     :param int asg_repetition: asg repeat symbol which stands for x repetitions
     :param bool label_conversion: shall the labels be converted into numbers (only ASG and CTC)
     """
-    if isinstance(graph, Graph) and isinstance(num_labels, int)\
+    if isinstance(fsa, Graph) and isinstance(num_labels, int)\
       and isinstance(asg_repetition, int) and isinstance(label_conversion, bool):
-      self.fsa = graph
+      self.fsa = fsa
       self.num_labels = num_labels
       self.asg_repetition = asg_repetition
       self.label_conversion = label_conversion
+      self.label_repetitions = [] # marks the labels which will be replaced with a rep symbol
     else:
       assert False, "The ASG input is not of class Graph!"
 
@@ -361,7 +364,77 @@ class Asg:
       assert False, "The label conversion input is not a bool!"
 
   def run(self):
-    pass
+    """
+    creates the ASG FSA
+    """
+    print("Starting ASG FSA Creation")
+    label_prev = None
+    rep_count = 0
+
+    # goes through the list of strings
+    for lem in self.fsa.lem_list:
+      # goes through the string
+      reps_label = []
+      for label in lem:
+        label_cur = label
+        # check if current label matches previous label and generates label reps list
+        if label_cur == label_prev:
+          # adds reps symbol
+          if rep_count < self.asg_repetition:
+            rep_count += 1
+          else:
+            reps_label.append(self.num_labels + rep_count)
+            rep_count = 1
+        else:
+          # adds normal label
+          if rep_count != 0:
+            reps_label.append(self.num_labels + rep_count)
+            rep_count = 0
+          reps_label.append(label)
+        label_prev = label
+      # put reps list back into list -> list[list[str|int]]
+      self.label_repetitions.append(reps_label)
+
+    # create states
+    self.fsa.num_states_asg = 0
+    cur_idx = 0
+    for rep_index, rep_label in enumerate(self.label_repetitions):
+      for idx, lab in enumerate(rep_label):
+        src_idx = cur_idx
+        trgt_idx = src_idx + 1
+        if cur_idx == 0:  # for final state
+          self.fsa.num_states_asg += 1
+        self.fsa.num_states_asg += 1
+        edge = Edge(src_idx, trgt_idx, lab)
+        edge.set_idx_word_in_sentence(rep_index)
+        edge.set_idx_phon_in_word(idx)
+        edge.set_idx(cur_idx)
+        if idx == 0:
+          edge.set_phon_at_word_begin(True)
+        if idx == len(rep_label) - 1:
+          edge.set_phon_at_word_end(True)
+        self.fsa.edges_asg.append(edge)
+        cur_idx += 1
+      # adds separator between words in sentence
+      if rep_index < len(self.label_repetitions) - 1:
+        self.fsa.edges_asg.append(Edge(src_idx + 1, trgt_idx + 1, Edge.BLANK))
+        cur_idx += 1
+
+    # adds loops to graph
+    for loop_idx in range(1, self.fsa.num_states_asg):
+      edges_add_loop = [asg_edge_idx for asg_edge_idx, asg_edge in enumerate(self.fsa.edges_asg)
+                        if (asg_edge.target_state_idx == loop_idx and asg_edge.label != Edge.BLANK and asg_edge.label != Edge.EPS and asg_edge.label != Edge.SIL)]
+      for add_loop_edge in edges_add_loop:
+        edge = deepcopy(self.fsa.edges_asg[add_loop_edge])
+        edge.set_source_state_idx(edge.get_target_state_idx())
+        edge.set_is_loop(True)
+        self.fsa.edges_asg.append(edge)
+
+    self.fsa.edges_asg.sort()
+
+    # label conversion
+    if self.label_conversion == True:
+      pass
 
 
 class Ctc:
@@ -369,14 +442,14 @@ class Ctc:
   class to create CTC FSA
   """
 
-  def __init__(self, graph, num_labels, label_conversion=False):
+  def __init__(self, fsa, num_labels=256, label_conversion=False):
     """
     :param Graph fsa: represents the Graph on which the class operates
     :param int num_labels: number of labels without blank, silence, eps and repetitions
     :param bool label_conversion: shall the labels be converted into numbers (only ASG and CTC)
     """
-    if isinstance(graph, Graph) and isinstance(num_labels, int) and isinstance(label_conversion, int):
-      self.fsa = graph
+    if isinstance(fsa, Graph) and isinstance(num_labels, int) and isinstance(label_conversion, int):
+      self.fsa = fsa
       self.num_labels = num_labels
       self.label_conversion = label_conversion
     else:
@@ -426,14 +499,14 @@ class Hmm:
   class to create HMM FSA
   """
 
-  def __init__(self, graph, depth=6, allo_num_states=3):
+  def __init__(self, fsa, depth=6, allo_num_states=3):
     """
     :param Graph fsa: represents the Graph on which the class operates
     :param int depth: the depth of the HMM FSA process
     :param int allo_num_states: number of allophone states
     """
-    if isinstance(graph, Graph) and isinstance(depth, int) and isinstance(allo_num_states, int):
-      self.fsa = graph
+    if isinstance(fsa, Graph) and isinstance(depth, int) and isinstance(allo_num_states, int):
+      self.fsa = fsa
       self.depth = depth
       self.allo_num_states = allo_num_states
     else:
@@ -1580,6 +1653,15 @@ def main():
   arg_parser.set_defaults(single_state=False)
   args = arg_parser.parse_args()
 
+  fsa = Graph(lemma=args.label_seq)
+
+  asg = Asg(fsa)
+
+  asg.run()
+
+  print(fsa)
+
+  """
   fsa_gen = Fsa()
 
   fsa_gen.set_lemma(args.label_seq)
@@ -1603,7 +1685,7 @@ def main():
   if (fsa_gen.single_state == True):
     fsa_gen.reduce_node_num()
     fsa_to_dot_format(file=fsa_gen.filename + "_single_state", num_states=1, edges=fsa_gen.edges_single_state)
-
+  """
 
 if __name__ == "__main__":
   import time
