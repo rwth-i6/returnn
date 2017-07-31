@@ -2367,6 +2367,17 @@ class CombineLayer(LayerBase):
     return op
 
 
+class EvalLayer(CombineLayer):
+  """
+  Evaluates some string.
+  The CombineLayer provides this functionality, thus this is just a special case of it.
+  """
+  layer_class = "eval"
+
+  def __init__(self, **kwargs):
+    super(EvalLayer, self).__init__(kind="eval", **kwargs)
+
+
 class CompareLayer(LayerBase):
   """
   Compares (e.g. equality check) all the sources element-wise.
