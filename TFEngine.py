@@ -103,6 +103,11 @@ class Runner(object):
         d["cost:%s" % layer_name] = loss
       for layer_name, error in self.engine.network.error_by_layer.items():
         d["error:%s" % layer_name] = error
+      for layer in self.engine.network.layers.values():
+        if layer.target and layer.target.startswith("layer:"):
+          target_data = layer.loss.target
+          for dim, v in target_data.size_placeholder.items():
+            d["size:%s:%i" % (layer.target, dim)] = v
     for layer in self.engine.network.layers.values():
       for k, v in layer.stats.items():
         d["stats:%s:%s" % (layer.name, k)] = v
