@@ -96,7 +96,7 @@ class SprintDatasetBase(Dataset):
     """
     assert inputDim > 0
     self.num_inputs = inputDim
-    self.num_outputs = {"data": [inputDim, 2]}
+    self.num_outputs = {"data": [inputDim * self.window, 2]}
     if outputDim > 0:
       self.num_outputs["classes"] = [outputDim, 1]
     self._base_init()

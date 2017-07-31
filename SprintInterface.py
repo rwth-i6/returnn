@@ -218,7 +218,7 @@ def feedInput(features, weights=None, segmentName=None):
 
 def finishDiscard():
   print("finishDiscard()")
-  raise NotImplementedError # TODO ...
+  raise NotImplementedError  # TODO ...
 
 
 def finishError(error, errorSignal, naturalPairingType=None):
@@ -274,14 +274,17 @@ def feedInputForwarding(features, weights=None, segmentName=None):
 
 
 def dumpFlags():
-  print("available GPUs:", get_gpu_names())
-
-  import theano.sandbox.cuda as theano_cuda
-  print("CUDA via", theano_cuda.__file__)
-  print("CUDA available:", theano_cuda.cuda_available)
-
-  print("THEANO_FLAGS:", rnn.TheanoFlags)
+  print("CUDA_VISIBLE_DEVICES:", os.environ.get("CUDA_VISIBLE_DEVICES"))
   print("CUDA_LAUNCH_BLOCKING:", os.environ.get("CUDA_LAUNCH_BLOCKING"))
+
+  if BackendEngine.is_theano_selected():
+    print("available GPUs:", get_gpu_names())
+
+    from theano.sandbox import cuda as theano_cuda
+    print("CUDA via", theano_cuda.__file__)
+    print("CUDA available:", theano_cuda.cuda_available)
+
+    print("THEANO_FLAGS:", rnn.TheanoFlags)
 
 
 def setTargetMode(mode):
@@ -458,7 +461,9 @@ def initDataset():
   if sprintDataset:
     return
   assert config
-  sprintDataset = SprintDatasetBase.from_config(config)
+  extra_opts = config.typed_value("sprint_interface_dataset_opts", {})
+  assert isinstance(extra_opts, dict)
+  sprintDataset = SprintDatasetBase.from_config(config, **extra_opts)
 
 
 def getFinalEpoch():

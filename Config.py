@@ -192,7 +192,7 @@ class Config:
     :type key: str
     :type default: T
     :type index: int | None
-    :rtype: str | T
+    :rtype: T | object
     """
     value = self.typed_dict.get(key, default)
     if index is not None:
