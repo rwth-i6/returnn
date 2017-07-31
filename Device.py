@@ -1249,7 +1249,7 @@ class Device(object):
     self.targets = {k: numpy.full(shapes[k], -1, dtype=theano.config.floatX) for k in self.used_data_keys}
     self.ctc_targets = numpy.zeros((shapes.get('classes', [0,0])[1], max_ctc_length), dtype=theano.config.floatX)
     self.output_index = {k: numpy.zeros(shapes[k][0:2], dtype='int8') for k in self.used_data_keys}
-    self.tags = [None] * shapes["data"][1]  # seq-name for each batch slice
+    self.tags = [None] * shapes["data"][1]  # type: list[str]  # seq-name for each batch slice
 
   def update_data(self):
     # self.data is set in Engine.allocate_devices()
@@ -1552,10 +1552,15 @@ class Device(object):
 
 
 def is_device_host_proc():
-  if not deviceInstance: return False
+  if not deviceInstance:
+    return False
   return deviceInstance.is_device_proc()
 
 def get_current_seq_tags():
+  """
+  :return: current seq tags (seq names) of current batch. assumes is_device_host_proc()
+  :rtype: list[str]
+  """
   assert deviceInstance, "get_current_seq_tags: deviceInstance not set"
   return deviceInstance.tags
 

@@ -34,11 +34,13 @@ The BLAS functions expect the inputs in column-major and return in column-major.
 // https://eigen.tuxfamily.org/dox-devel/unsupported/Tensor_8h_source.html
 #define Ndarray tensorflow::Tensor
 #define Ndarray_DEV_DATA(x) (x)->flat<float>().data()
+#define Ndarray_DEV_DATA_int32(x) (x)->flat<int32>().data()
 #define Ndarray_HOST_DIMS(x) (x)->shape().dim_sizes().data()
 #define Ndarray_DIMS Ndarray_HOST_DIMS
 #define Ndarray_NDIM(x) (x)->dims()
+#define Ndarray_dtype_size(x) tensorflow::DataTypeSize((x)->dtype())
 typedef long long Ndarray_DIM_Type;
-#define Ndarray_SIZE(x) (x)->flat<float>().size()
+#define Ndarray_SIZE(x) (x)->NumElements()
 
 // return in elements
 static inline size_t Ndarray_STRIDE(const Ndarray* x, int dim) {
@@ -216,11 +218,13 @@ static void tf_cuda_sgemm(
 // See also: https://github.com/Theano/Theano/blob/master/theano/sandbox/cuda/cuda_ndarray.cu
 #define Ndarray CudaNdarray
 #define Ndarray_DEV_DATA CudaNdarray_DEV_DATA
+#define Ndarray_DEV_DATA_int32(x) ((int32_t*) (Ndarray_DEV_DATA(x)))
 #define Ndarray_HOST_DIMS CudaNdarray_HOST_DIMS
 #define Ndarray_DIMS Ndarray_HOST_DIMS
 #define Ndarray_STRIDE(x, i) (CudaNdarray_HOST_STRIDES(x)[i])  // return in elements. CudaNdarray stores like that
 #define Ndarray_NDIM(x) (x->nd)
 #define Ndarray_DIM_Type int
+#define Ndarray_dtype_size(x) sizeof(float)
 #define Ndarray_SIZE CudaNdarray_SIZE
 // PyObject *CudaNdarray_NewDims(int nd, const inttype * dims), uninitialized
 #define Ndarray_NewDims CudaNdarray_NewDims
@@ -319,11 +323,13 @@ static void _cudaHandleError(cublasStatus_t status, const char *file, int line) 
 // And: http://deeplearning.net/software/theano/extending/extending_theano_c.html
 #define Ndarray PyArrayObject
 #define Ndarray_DEV_DATA(x) ((float*) PyArray_DATA(x))
+#define Ndarray_DEV_DATA_int32(x) ((int32_t*) (Ndarray_DEV_DATA(x)))
 #define Ndarray_HOST_DIMS PyArray_DIMS
 #define Ndarray_STRIDE(x, i) (PyArray_STRIDE(x, i) / sizeof(float))  // return in elements. Numpy stores in bytes
 #define Ndarray_DIMS Ndarray_HOST_DIMS
 #define Ndarray_NDIM PyArray_NDIM
 #define Ndarray_DIM_Type npy_intp
+#define Ndarray_dtype_size(x) sizeof(float)
 #define Ndarray_SIZE PyArray_SIZE
 #define Ndarray_NewDims(nd, dims) (PyArray_SimpleNew(nd, dims, NPY_FLOAT32))
 #define Ndarray_Copy(x) (PyArray_FromArray(x, NULL, NPY_ARRAY_OUT_ARRAY | NPY_ARRAY_ENSURECOPY))
@@ -461,12 +467,48 @@ struct Context  {
     Context() {}
 #endif
 
+/*
+Note: There is also this hacky way to get the cudaStream_t:
+  const cudaStream_t cu_stream = CHECK_NOTNULL(
+      reinterpret_cast<const cudaStream_t>(context->op_device_context()
+                                                ->stream()
+                                                ->implementation()
+                                                ->CudaStreamMemberHack()));
+
+*/
+
 
 void _Ndarray_set_zero(Ndarray* a) {
-	long size = Ndarray_get_n_total_elements(a) * sizeof(float);
+	long size = Ndarray_get_n_total_elements(a) * Ndarray_dtype_size(a);
 	Ndarray_memset(Ndarray_DEV_DATA(a), 0, size);
 }
 #define Ndarray_set_zero Context(CONTEXT_ARGS)._Ndarray_set_zero
+
+
+#if TENSORFLOW
+void* _malloc(size_t num_bytes) {
+    //auto dev = context->eigen_device<EigenDev>();
+    //auto* stream = context->op_device_context()->stream();
+    Allocator* allocator =
+        context->device()->GetAllocator(AllocatorAttributes());
+    return (void*)allocator->Allocate<uint8_t>(num_bytes);
+}
+void _free(void* ptr) {
+    Allocator* allocator =
+        context->device()->GetAllocator(AllocatorAttributes());
+    allocator->DeallocateRaw(ptr);
+}
+#define device_malloc Context(CONTEXT_ARGS)._malloc
+#define device_free Context(CONTEXT_ARGS)._free
+
+#if CUDA
+cublasHandle_t _handle() {
+    assert("not available" && 0);
+    return NULL;
+}
+#define handle Context(CONTEXT_ARGS)._handle()
+#endif
+#endif
 
 
 //C[x] += A[x]*B[x]
@@ -548,6 +590,8 @@ void _affine_global(
 #endif
 
 #if TENSORFLOW
+//void cudaMemcpy ... -> Ndarray_memcpy?
+
 void make_copy(OpKernelContext* context, tensorflow::Tensor* tgt_tensor, const tensorflow::Tensor* src_tensor) {
     // also check https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/debug_ops.h, CopyOp
     // also: https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/dense_update_ops.cc
@@ -561,6 +605,85 @@ void make_copy(OpKernelContext* context, tensorflow::Tensor* tgt_tensor, const t
                                 src_tensor->shape().DebugString(), tgt_tensor->shape().DebugString()));
     //Ndarray_memcpy(Ndarray_DEV_DATA(tgt_tensor), Ndarray_DEV_DATA(src_tensor), Ndarray_SIZE(src_tensor) * sizeof(float));
     auto dev = context->eigen_device<EigenDev>();
+    assert(tgt_tensor->dtype() == DT_FLOAT);  // not implemented otherwise yet...
     tgt_tensor->flat<float>().device(dev) = src_tensor->flat<float>();
 }
+
+template<typename T>
+void check_inf_or_nan_cpu(tensorflow::Tensor* v, const std::string& name) {
+    // copied from CheckNumericsOp CPU kernel
+    auto in = v->flat<T>();
+    static const int kInfBit = 0x01;
+    static const int kNaNBit = 0x02;
+    const T* data = in.data();
+    const int64 size = in.size();
+    // Check to see if any element of the tensor is NaN or Inf.
+    int fp_props =
+        std::accumulate(data, data + size, 0, [](const int& x, const T& y) {
+          int result = x;
+          if (Eigen::numext::isinf(y)) {
+            result |= kInfBit;
+          } else if (Eigen::numext::isnan(y)) {
+            result |= kNaNBit;
+          }
+          return result;
+        });
+    string status;
+    if ((fp_props & kInfBit) && (fp_props & kNaNBit)) {
+      status = "Inf and NaN";
+    } else {
+      if (fp_props & kInfBit) {
+        status = "Inf";
+      }
+      if (fp_props & kNaNBit) {
+        status = "NaN";
+      }
+    }
+    if (!status.empty())
+      printf("WARNING: %s: Tensor had %s values!\n", name.c_str(), status.c_str());
+}
+
+void _fwrite_uint64(FILE* f, uint64_t v) {
+    fwrite(&v, sizeof(uint64_t), 1, f);
+}
+
+void _fwrite_str_pascal(FILE* f, const std::string& s) {
+    _ns::_fwrite_uint64(f, s.size());
+    fwrite(s.data(), s.size(), 1, f);
+}
+
+void dump_to_file(tensorflow::Tensor* v, const std::string& name) {
+    FILE* f = fopen(name.c_str(), "w");
+    _ns::_fwrite_str_pascal(f, "NativeOp_dump");  // header
+    _ns::_fwrite_str_pascal(f, tensorflow::DataTypeString(v->dtype()));
+    _ns::_fwrite_uint64(f, tensorflow::DataTypeSize(v->dtype()));
+    _ns::_fwrite_uint64(f, (uint64_t) v->dims());
+    for(int i = 0; i < v->dims(); ++i)
+        _ns::_fwrite_uint64(f, (uint64_t) v->dim_size(i));
+    tensorflow::StringPiece data = v->tensor_data();
+    _ns::_fwrite_uint64(f, (uint64_t) data.size());
+    fwrite(data.data(), data.size(), 1, f);
+    fclose(f);
+}
+
+void debug_print(OpKernelContext* context, tensorflow::Tensor* v, const std::string& name, int64 max_entries=100) {
+    // https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/debug_ops.h
+    std::string full_name = context->op_kernel().name() + ":" + name;
+    tensorflow::Tensor cpy(v->dtype(), v->shape());
+    Notification done_copy;
+    context->op_device_context()->CopyDeviceTensorToCPU(
+        v, name, static_cast<Device*>(context->device()), &cpy,
+        [&done_copy](const Status& s) { done_copy.Notify(); });
+    done_copy.WaitForNotification();
+    printf("%s: %s\n", full_name.c_str(), cpy.DebugString().c_str());
+    if(max_entries > 0)
+        printf("%s: %s\n", full_name.c_str(), cpy.SummarizeValue(max_entries).c_str());
+    if(cpy.dtype() == DT_FLOAT)
+        check_inf_or_nan_cpu<float>(&cpy, full_name);
+    std::string filename = full_name + ".dump";
+    filename = tensorflow::str_util::StringReplace(filename, ":", "_", true);
+    filename = tensorflow::str_util::StringReplace(filename, "/", "__", true);
+    dump_to_file(&cpy, filename);
+}
+
 #endif

@@ -1002,7 +1002,7 @@ class FeedDictDataProvider(DataProviderBase):
 
     :param bool single_threaded: whether to not use the queue
     :returns: we dequeue one batch from the queue and provide it for all placeholders of our external data
-    :rtype: dict[tf.Tensor,tf.Tensor]
+    :rtype: dict[tf.Tensor,numpy.ndarray]
     """
     if self.tf_queue:
       return {}  # not needed to feed anything, it gets it via the queues

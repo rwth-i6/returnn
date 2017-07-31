@@ -293,7 +293,8 @@ def initEngine(devices):
 
 
 def crnnGreeting(configFilename=None, commandLineOptions=None):
-  print("CRNN starting up, version %s, pid %i" % (describe_crnn_version(), os.getpid()), file=log.v3)
+  print("CRNN starting up, version %s, pid %i, cwd %s" % (
+    describe_crnn_version(), os.getpid(), os.getcwd()), file=log.v3)
   if configFilename:
     print("CRNN config: %s" % configFilename, file=log.v4)
     if os.path.islink(configFilename):
@@ -310,7 +311,8 @@ def initBackendEngine():
     print("TensorFlow:", describe_tensorflow_version(), file=log.v3)
     if get_tensorflow_version_tuple()[0] == 0:
       print("Warning: TF <1.0 is not supported and likely broken.", file=log.v2)
-    from TFUtil import debugRegisterBetterRepr
+    from TFUtil import debugRegisterBetterRepr, setup_tf_thread_pools
+    setup_tf_thread_pools(log_file=log.v2)
     debugRegisterBetterRepr()
   else:
     raise NotImplementedError

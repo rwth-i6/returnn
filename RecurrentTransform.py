@@ -780,28 +780,37 @@ class AttentionSegment(AttentionBase):
     assert len(self.base) == 1
     n_tmp = self.attrs['template']
     B = self.B = self.add_input(self.base[0].output[::self.layer.attrs['direction']], 'B')
+
     self.W_att_in = self.create_weights(self.base[0].attrs['n_out'], self.layer.unit.n_in, 'W_att_in')
     self.b_att_in = self.create_bias(self.layer.unit.n_in, 'b_att_in')
-    self.rec_transform_enc = self.add_input(T.cast(self.layer.rec_transform_enc,'float32'),'rec_transform_enc')
-    self.rec_transform_index = self.add_input(T.cast(self.layer.rec_transform_index,'float32'), 'rec_transform_index')
-    self.inv_att = self.add_input(T.cast(self.base[0].inv_att,'float32'),'inv_att')
-    self.I = self.add_input(T.cast(self.layer.index,'float32'),'I')
-    self.W_att_re = self.create_weights(self.layer.attrs['n_out'], n_tmp, "W_att_re")
-    self.b_att_re = self.create_bias(n_tmp, "b_att_re")
-    self.W_att_bs = self.create_weights(self.base[0].attrs['n_out'], n_tmp, "W_att_bs")
-    self.b_att_bs = self.create_bias(n_tmp, "b_att_bs")
-    h_att = T.tanh(T.dot(B,self.W_att_bs) + self.b_att_bs)
+
+    if not self.layer.attrs['n_out'] == n_tmp:
+      self.W_att_re = self.create_weights(self.layer.attrs['n_out'], n_tmp, "W_att_re")
+      self.b_att_re = self.create_bias(n_tmp, "b_att_re")
+      self.W_att_dec = self.create_weights(self.layer.attrs['n_out'], n_tmp, "W_att_dec")
+      self.b_att_dec = self.create_bias(n_tmp, "b_att_dec")
+
+    if not self.base[0].attrs['n_out'] == n_tmp:
+      self.W_att_bs = self.create_weights(self.base[0].attrs['n_out'], n_tmp, "W_att_bs")
+      self.b_att_bs = self.create_bias(n_tmp, "b_att_bs")
+      h_att = T.tanh(T.dot(B,self.W_att_bs) + self.b_att_bs)
+    else:
+      h_att = B
     self.I_dec = self.add_input(T.cast(self.base[0].output_index(),'float32'), 'I_dec')
     self.i_f = self.add_input(T.cast(self.base[0].output_index(),'float32').dimshuffle(0,1,'x').repeat(h_att.shape[2],axis=2),'i_f')
-    h_att = h_att - (h_att * self.i_f).sum(axis=0,keepdims=True) / T.sum(self.i_f,axis=0,keepdims=True)
-    self.index_att = self.add_input(self.make_index(self.inv_att,self.I_dec),'index_att')#NTB
-    self.C = self.add_input(h_att,'C')
-    self.W_att_dec = self.create_weights(self.layer.attrs['n_out'], n_tmp, "W_att_dec")
-    self.b_att_dec = self.create_bias(n_tmp, "b_att_dec")
+    if not self.layer.eval_flag:
+      self.inv_att = self.add_input(T.cast(self.layer.aligner.attention.dimshuffle(2,1,0)[::self.layer.attrs['direction']].dimshuffle(2,1,0),'float32'),'inv_att')
+      self.i_f = self.add_input(T.cast(self.base[0].output_index(),'float32').dimshuffle(0,1,'x').repeat(h_att.shape[2],axis=2),'i_f')
+      self.index_att = self.add_input(self.make_index(self.inv_att,self.I_dec),'index_att')#NTB
+    if not self.base[0].attrs['n_out'] == n_tmp:
+      h_att = h_att - (h_att * self.i_f).sum(axis=0,keepdims=True) / T.sum(self.i_f,axis=0,keepdims=True)
+      self.C = self.add_input(h_att,'C')
+    else:
+      self.C = self.add_input(self.base[0].output[::self.layer.attrs['direction']], 'C')
+    self.E = self.add_input(T.concatenate([e.output[::self.layer.attrs['direction']] for e in self.layer.encoder],axis=2),"E")
 
   def make_index(self,inv_att,ind):
     att = inv_att.argmax(axis=2) #NB
-    #att = theano.printing.Print('attention',attrs=['shape','__str__'])(att)
     new_ind = T.zeros_like(ind).dimshuffle('x',0,1).repeat(att.shape[0],axis=0).dimshuffle(0,2,1) #NBT
     mask = T.arange(ind.shape[0]).dimshuffle('x',0).repeat(att.shape[0]*att.shape[1],axis=0).reshape((att.shape[0],att.shape[1],ind.shape[0])) #NBT
     flat_att = att.flatten().dimshuffle(0,'x').repeat(ind.shape[0],axis=1).reshape((att.shape[0],att.shape[1],ind.shape[0])) #NBT
@@ -812,18 +821,31 @@ class AttentionSegment(AttentionBase):
   def attend(self, y_p):
     inp, updates = 0, {}
     n = T.cast(self.n[0],'int32')
-    prev_dec_step = T.dot(y_p,self.W_att_dec) + self.b_att_dec #BD
-    att_pts = self.inv_att.argmax(axis=2) + T.arange(self.inv_att.shape[1])*self.inv_att.shape[2] #NB
-    curr_enc_pts = att_pts[n] #B
-    curr_seg_final = T.dot(self.B.dimshuffle(1,0,2).reshape((self.B.shape[0]*self.B.shape[1],self.B.shape[2]))[curr_enc_pts],self.W_att_re) + self.b_att_re #BD
-    #e = self.distance(self.C,prev_dec_step)
-    e = self.distance(self.C*self.index_att[n].dimshuffle(0,1,'x').repeat(self.C.shape[2],axis=2),T.tanh(curr_seg_final + prev_dec_step))
-    #n = theano.printing.Print('dec step',attrs=['__str__'])(n)
-    curr_seg_index = T.switch(T.gt(self.index_att[n] - self.index_att[n-1],numpy.float32(0)),numpy.float32(1),numpy.float32(0)) #TB
-    ind_curr = theano.ifelse.ifelse(n > 0, curr_seg_index,self.index_att[n])
-    #n = theano.printing.Print('dec step',attrs=['__str__'])(n)
-    #ind_curr = theano.printing.Print('index curr',attrs=['shape','__str__'])(ind_curr)
-    att_w = self.softmax(e,ind_curr)
+
+    if not self.layer.eval_flag:
+      att_pts = self.inv_att.argmax(axis=2) + T.arange(self.inv_att.shape[1])*self.inv_att.shape[2] #NB
+      curr_enc_pts = T.cast(att_pts[n],'int32') #B
+
+      if self.layer.attrs['n_out'] == self.layer.attrs['attention_template']:
+        curr_seg_final = self.E.dimshuffle(1, 0, 2).reshape((self.E.shape[0] * self.E.shape[1], self.E.shape[2]))[curr_enc_pts]
+        dis_curr = curr_seg_final + y_p
+      else:
+        curr_seg_final = T.dot(
+          self.E.dimshuffle(1, 0, 2).reshape((self.E.shape[0] * self.E.shape[1], self.E.shape[2]))[curr_enc_pts],
+          self.W_att_re) + self.b_att_re  # BD
+        prev_dec_step = T.dot(y_p,self.W_att_dec) + self.b_att_dec #BD
+        dis_curr = curr_seg_final+prev_dec_step
+      curr_seg_index = T.switch(T.gt(self.index_att[n] - self.index_att[n-1],numpy.float32(0)),numpy.float32(1),numpy.float32(0)) #TB
+      ind_curr = theano.ifelse.ifelse(n > 0, curr_seg_index,self.index_att[n])
+
+    else:
+      if self.layer.attrs['n_out'] == self.layer.attrs['attention_template']:
+        dis_curr = y_p
+      else:
+        curr_seg_final = T.dot(y_p,self.W_att_re) + self.b_att_re
+      ind_curr = self.I_dec
+    e1 = self.distance(self.C,T.tanh(dis_curr))
+    att_w = self.softmax(e1,ind_curr)
     z = T.sum(self.B * att_w.dimshuffle(0, 1, 'x').repeat(self.B.shape[2], axis=2), axis=0)
     res = T.dot(z, self.W_att_in) + self.b_att_in
     inp = res

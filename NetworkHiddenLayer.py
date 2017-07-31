@@ -2656,7 +2656,7 @@ class NativeLayer(_NoOpLayer):
     import NativeOp
     native_class_cls = getattr(NativeOp, native_class)
     assert issubclass(native_class_cls, NativeOp.NativeOpGenBase)
-    op = native_class_cls.make_op()
+    op = native_class_cls().make_op()
 
     args = []
     args_info = []  # dict with ndim, shape, n_in

@@ -1,12 +1,19 @@
 #!/usr/bin/env python
 
+from __future__ import print_function
+
 import os
 import sys
+
+my_dir = os.path.dirname(os.path.abspath(__file__))
+returnn_dir = os.path.dirname(my_dir)
+sys.path.append(returnn_dir)
+
 import rnn
 from Log import log
 from Config import Config
 import argparse
-from Util import hms, human_size, parse_orthography, parse_orthography_into_symbols
+from Util import hms, human_size, parse_orthography, parse_orthography_into_symbols, unicode
 import gzip
 import xml.etree.ElementTree as etree
 from pprint import pprint
@@ -78,7 +85,7 @@ def iter_bliss(filename, options, callback):
       else:
         if not time_via_wav:
           time_via_wav = True
-          print >>log.v3, "Time will be read from WAV recordings. Can be slow. Maybe use `--collect_time False`."
+          print("Time will be read from WAV recordings. Can be slow. Maybe use `--collect_time False`.", file=log.v3)
         rec_elem = tree[-1]
         assert rec_elem.tag == "recording"
         wav_filename = rec_elem.attrib["audio"]
@@ -101,7 +108,7 @@ def iter_txt(filename, options, callback):
     f = gzip.GzipFile(fileobj=f)
 
   if options.collect_time:
-    print >> log.v3, "No time-info in txt."
+    print("No time-info in txt.", file=log.v3)
     options.collect_time = False
 
   for l in f:
@@ -127,11 +134,11 @@ def collect_stats(options, iter_corpus):
     orth_syms_set = set()
 
   if options.add_numbers:
-    Stats.orth_syms_set.update(map(chr, range(ord("0"), ord("9") + 1)))
+    Stats.orth_syms_set.update(map(chr, list(range(ord("0"), ord("9") + 1))))
   if options.add_lower_alphabet:
-    Stats.orth_syms_set.update(map(chr, range(ord("a"), ord("z") + 1)))
+    Stats.orth_syms_set.update(map(chr, list(range(ord("a"), ord("z") + 1))))
   if options.add_upper_alphabet:
-    Stats.orth_syms_set.update(map(chr, range(ord("A"), ord("Z") + 1)))
+    Stats.orth_syms_set.update(map(chr, list(range(ord("A"), ord("Z") + 1))))
 
   def cb(frame_len, orth):
     if frame_len >= options.max_seq_frame_len:
@@ -144,14 +151,14 @@ def collect_stats(options, iter_corpus):
     Stats.total_frame_len += frame_len
 
     if options.dump_orth_syms:
-      print >> log.v3, "Orth:", "".join(orth_syms)
+      print("Orth:", "".join(orth_syms), file=log.v3)
     if options.filter_orth_sym:
       if options.filter_orth_sym in orth_syms:
-        print >> log.v3, "Found orth:", "".join(orth_syms)
+        print("Found orth:", "".join(orth_syms), file=log.v3)
     if options.filter_orth_syms_seq:
       filter_seq = parse_orthography_into_symbols(options.filter_orth_syms_seq)
       if found_sub_seq(filter_seq, orth_syms):
-        print >> log.v3, "Found orth:", "".join(orth_syms)
+        print("Found orth:", "".join(orth_syms), file=log.v3)
     Stats.orth_syms_set.update(orth_syms)
     Stats.total_orth_len += len(orth_syms)
 
@@ -159,9 +166,9 @@ def collect_stats(options, iter_corpus):
     if time.time() - Stats.process_last_time > 2:
       Stats.process_last_time = time.time()
       if options.collect_time:
-        print >> log.v3, "Collect process, total frame len so far:", hms(Stats.total_frame_len * (options.frame_time / 1000.0))
+        print("Collect process, total frame len so far:", hms(Stats.total_frame_len * (options.frame_time / 1000.0)), file=log.v3)
       else:
-        print >> log.v3, "Collect process, total orth len so far:", human_size(Stats.total_orth_len)
+        print("Collect process, total orth len so far:", human_size(Stats.total_orth_len), file=log.v3)
 
   iter_corpus(cb)
 
@@ -170,25 +177,25 @@ def collect_stats(options, iter_corpus):
     Stats.orth_syms_set -= set(filter_syms)
 
   if options.collect_time:
-    print >> log.v3, "Total frame len:", Stats.total_frame_len, "time:", hms(Stats.total_frame_len * (options.frame_time / 1000.0))
+    print("Total frame len:", Stats.total_frame_len, "time:", hms(Stats.total_frame_len * (options.frame_time / 1000.0)), file=log.v3)
   else:
-    print >> log.v3, "No time stats (--collect_time False)."
-  print >> log.v3, "Total orth len:", Stats.total_orth_len, "(%s)" % human_size(Stats.total_orth_len),
+    print("No time stats (--collect_time False).", file=log.v3)
+  print("Total orth len:", Stats.total_orth_len, "(%s)" % human_size(Stats.total_orth_len), end=' ', file=log.v3)
   if options.collect_time:
-    print >> log.v3, "fraction:", float(Stats.total_orth_len) / Stats.total_frame_len
+    print("fraction:", float(Stats.total_orth_len) / Stats.total_frame_len, file=log.v3)
   else:
-    print >> log.v3, ""
-  print >> log.v3, "Average orth len:", float(Stats.total_orth_len) / Stats.count
-  print >> log.v3, "Num symbols:", len(Stats.orth_syms_set)
+    print("", file=log.v3)
+  print("Average orth len:", float(Stats.total_orth_len) / Stats.count, file=log.v3)
+  print("Num symbols:", len(Stats.orth_syms_set), file=log.v3)
 
   if orth_symbols_filename:
     orth_syms_file = open(orth_symbols_filename, "wb")
     for orth_sym in sorted(Stats.orth_syms_set):
       orth_syms_file.write("%s\n" % unicode(orth_sym).encode("utf8"))
     orth_syms_file.close()
-    print >> log.v3, "Wrote orthography symbols to", orth_symbols_filename
+    print("Wrote orthography symbols to", orth_symbols_filename, file=log.v3)
   else:
-    print >> log.v3, "Provide --output to save the symbols."
+    print("Provide --output to save the symbols.", file=log.v3)
 
 
 def init(configFilename=None):
@@ -199,7 +206,7 @@ def init(configFilename=None):
     rnn.initLog()
   else:
     log.initialize()
-  print >> log.v3, "CRNN collect-orth-symbols starting up."
+  print("CRNN collect-orth-symbols starting up.", file=log.v3)
   rnn.initFaulthandler()
   if configFilename:
     rnn.initConfigJsonNetwork()

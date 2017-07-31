@@ -178,13 +178,8 @@ def describe_tensorflow_version():
     tdir = os.path.dirname(tf.__file__)
   except Exception as e:
     tdir = "<unknown(exception: %r)>" % e
-  try:
-    version = tf.__git_version__
-  except Exception:
-    try:
-      version = tf.__version__
-    except Exception as e:
-      version = "<unknown(exception: %r)>" % e
+  version = getattr(tf, "__version__", "<unknown version>")
+  version += " (%s)" % getattr(tf, "__git_version__", "<unknown git version>")
   try:
     if tdir.startswith("<"):
       git_info = "<unknown-dir>"
@@ -315,9 +310,25 @@ def terminal_size(): # this will probably work on linux only
 
 
 def hms(s):
+  """
+  :param float|int s: seconds
+  :return: e.g. "1:23:45" (hs:ms:secs). see hms_fraction if you want to get fractional seconds
+  :rtype: str
+  """
   m, s = divmod(s, 60)
   h, m = divmod(m, 60)
   return "%d:%02d:%02d" % (h, m, s)
+
+
+def hms_fraction(s, decimals=4):
+  """
+  :param float s: seconds
+  :param int decimals: how much decimals to print
+  :return: e.g. "1:23:45.6789" (hs:ms:secs)
+  :rtype: str
+  """
+  return hms(int(s)) + (("%%.0%if" % decimals) % (s - int(s)))[1:]
+
 
 def human_size(n, factor=1000, frac=0.8, prec=1):
   postfixs = ["", "K", "M", "G", "T"]
@@ -640,6 +651,36 @@ def slice_pad_zeros(x, begin, end, axis=0):
     pad_right = end - x.shape[axis]
     end = x.shape[axis]
   return np.pad(x[begin:end], [(pad_left, pad_right)] + [(0, 0)] * (x.ndim - 1), mode="constant")
+
+
+def random_orthogonal(shape, gain=1., seed=None):
+  """
+  Returns a random orthogonal matrix of the given shape.
+  Code borrowed and adapted from Keras: https://github.com/fchollet/keras/blob/master/keras/initializers.py
+  Reference: Saxe et al., http://arxiv.org/abs/1312.6120
+  Related: Unitary Evolution Recurrent Neural Networks, https://arxiv.org/abs/1511.06464
+
+  :param tuple[int] shape:
+  :param float gain:
+  :param int seed: for Numpy random generator
+  :return: random orthogonal matrix
+  :rtype: numpy.ndarray
+  """
+  num_rows = 1
+  for dim in shape[:-1]:
+    num_rows *= dim
+  num_cols = shape[-1]
+  flat_shape = (num_rows, num_cols)
+  if seed is not None:
+    rnd = np.random.RandomState(seed=seed)
+  else:
+    rnd = np.random
+  a = rnd.normal(0.0, 1.0, flat_shape)
+  u, _, v = np.linalg.svd(a, full_matrices=False)
+  # Pick the one with the correct shape.
+  q = u if u.shape == flat_shape else v
+  q = q.reshape(shape)
+  return gain * q[:shape[0], :shape[1]]
 
 
 _have_inplace_increment = None
@@ -1088,8 +1129,18 @@ class NumbersDict:
            self.__class__.__name__, self.dict, self.value)
 
 
-def collect_class_init_kwargs(cls):
-  kwargs = set()
+def collect_class_init_kwargs(cls, with_default=False):
+  """
+  :param type cls: class, where it assumes that kwargs are passed on to base classes
+  :param bool with_default: if given will only return the kwargs with default values
+  :return: set if not with_default, otherwise the dict to the default values
+  :rtype: list[str] | dict[str]
+  """
+  from collections import OrderedDict
+  if with_default:
+    kwargs = OrderedDict()
+  else:
+    kwargs = []
   if PY3:
     getargspec = inspect.getfullargspec
   else:
@@ -1099,8 +1150,33 @@ def collect_class_init_kwargs(cls):
     if not inspect.ismethod(cls_.__init__) and not inspect.isfunction(cls_.__init__):
       continue
     arg_spec = getargspec(cls_.__init__)
-    kwargs.update(arg_spec.args[1:])  # first arg is self, ignore
+    args = arg_spec.args[1:]  # first arg is self, ignore
+    if with_default:
+      assert len(arg_spec.defaults) <= len(args)
+      args = args[len(args) - len(arg_spec.defaults):]
+      assert len(arg_spec.defaults) == len(args), arg_spec
+      for arg, default in zip(args, arg_spec.defaults):
+        kwargs[arg] = default
+    else:
+      for arg in args:
+        if arg not in kwargs:
+          kwargs.append(arg)
   return kwargs
+
+
+def collect_mandatory_class_init_kwargs(cls):
+  """
+  :param type cls:
+  :return: list of kwargs which have no default, i.e. which must be provided
+  :rtype: list[str]
+  """
+  all_kwargs = collect_class_init_kwargs(cls, with_default=False)
+  default_kwargs = collect_class_init_kwargs(cls, with_default=True)
+  mandatory_kwargs = []
+  for arg in all_kwargs:
+    if arg not in default_kwargs:
+      mandatory_kwargs.append(arg)
+  return mandatory_kwargs
 
 
 def custom_exec(source, source_filename, user_ns, user_global_ns):
@@ -1390,7 +1466,10 @@ def get_login_username():
   :return: the username of the current user.
   Use this as a replacement for os.getlogin().
   """
-  import pwd, os
+  import os
+  if sys.platform == 'win32':
+    return os.getlogin()
+  import pwd
   return pwd.getpwuid(os.getuid())[0]
 
 
@@ -1569,6 +1648,36 @@ def find_lib(lib_name):
     if os.path.exists(fn):
       return fn
   return None
+
+
+def read_sge_num_procs(job_id=None):
+  """
+  From the Sun Grid Engine (SGE), reads the num_proc setting for a particular job.
+  If job_id is not provided and the JOB_ID env is set, it will use that instead (i.e. it uses the current job).
+  This calls qstat to figure out this setting. There are multiple ways this can go wrong,
+  so better catch any exception.
+
+  :param int|None job_id:
+  :return: num_proc
+  :rtype: int|None
+  """
+  if not job_id:
+    if not os.environ.get("SGE_ROOT"):
+      return None
+    job_id = int(os.environ.get("JOB_ID") or 0)
+    if not job_id:
+      return None
+  from subprocess import Popen, PIPE, CalledProcessError
+  cmd = ["qstat", "-j", str(job_id)]
+  proc = Popen(cmd, stdout=PIPE)
+  stdout, _ = proc.communicate()
+  if proc.returncode:
+    raise CalledProcessError(proc.returncode, cmd, stdout)
+  stdout = stdout.decode("utf8")
+  ls = [l[len("hard resource_list:"):].strip() for l in stdout.splitlines() if l.startswith("hard resource_list:")]
+  assert len(ls) == 1
+  opts = dict([opt.split("=", 1) for opt in ls[0].split(",")])
+  return int(opts["num_proc"])
 
 
 def try_and_ignore_exception(f):

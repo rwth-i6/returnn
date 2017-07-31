@@ -50,7 +50,12 @@ class SprintDatasetBase(Dataset):
   SprintCachedSeqsMax = 200
   SprintCachedSeqsMin = 100
 
-  def __init__(self, target_maps=None, str_add_final_zero=False, **kwargs):
+  def __init__(self, target_maps=None, str_add_final_zero=False, input_stddev=1., **kwargs):
+    """
+    :param dict[str,str|dict] target_maps: e.g. {"speaker": "speaker_map.txt"}
+    :param bool str_add_final_zero: adds e.g. "orth0" with '\0'-ending
+    :param float input_stddev: if != 1, will divide the input "data" by that
+    """
     super(SprintDatasetBase, self).__init__(**kwargs)
     if target_maps:
       assert isinstance(target_maps, dict)
@@ -62,6 +67,7 @@ class SprintDatasetBase(Dataset):
         target_maps[key] = tmap
     self.target_maps = target_maps
     self.str_add_final_zero = str_add_final_zero
+    self.input_stddev = input_stddev
     self.cond = Condition(lock=self.lock)
     self.add_data_thread_id = thread.get_ident()  # This will be created in the Sprint thread.
     self.ready_for_data = False
@@ -90,7 +96,7 @@ class SprintDatasetBase(Dataset):
     """
     assert inputDim > 0
     self.num_inputs = inputDim
-    self.num_outputs = {"data": [inputDim, 2]}
+    self.num_outputs = {"data": [inputDim * self.window, 2]}
     if outputDim > 0:
       self.num_outputs["classes"] = [outputDim, 1]
     self._base_init()
@@ -249,6 +255,8 @@ class SprintDatasetBase(Dataset):
     # must be in format: (time,feature)
     features = features.transpose()
     assert features.shape == (T, self.num_inputs)
+    if self.input_stddev != 1:
+      features /= self.input_stddev
     if self.window > 1:
       features = self.sliding_window(features)
       assert features.shape == (T, self.num_inputs * self.window)
@@ -685,8 +693,14 @@ class SprintCacheDataset(CachedDataset2):
   For alignments, you need to provide all options for the AllophoneLabeling class, such as allophone file, etc.
   """
 
-  class Data(object):
+  class SprintCacheReader(object):
     def __init__(self, data_key, filename, type=None, allophone_labeling=None):
+      """
+      :param str data_key: e.g. "data" or "classes"
+      :param str filename: to Sprint cache archive
+      :param str|None type: "feat" or "align"
+      :param dict[str] allophone_labeling: kwargs for :class:`AllophoneLabeling`
+      """
       self.data_key = data_key
       from SprintCache import open_file_archive
       self.sprint_cache = open_file_archive(filename)
@@ -766,10 +780,10 @@ class SprintCacheDataset(CachedDataset2):
 
   def __init__(self, data, **kwargs):
     """
-    :param dict[str,dict[str]] data: data-key -> dict which keys such as filename, see Data constructor
+    :param dict[str,dict[str]] data: data-key -> dict which keys such as filename, see SprintCacheReader constructor
     """
     super(SprintCacheDataset, self).__init__(**kwargs)
-    self.data = {key: self.Data(data_key=key, **opts) for (key, opts) in data.items()}
+    self.data = {key: self.SprintCacheReader(data_key=key, **opts) for (key, opts) in data.items()}
     self.seq_list_original = self.data["data"].content_keys
     self.seq_list_ordered = self.seq_list_original
     self._num_seqs = len(self.seq_list_original)
@@ -780,12 +794,12 @@ class SprintCacheDataset(CachedDataset2):
 
   def _check_matching_content_list(self):
     data0 = self.data["data"]
-    assert isinstance(data0, self.Data)
+    assert isinstance(data0, self.SprintCacheReader)
     sorted_list0 = sorted(data0.content_keys)
     for key, data in self.data.items():
       if key == "data":
         continue
-      assert isinstance(data, self.Data)
+      assert isinstance(data, self.SprintCacheReader)
       assert len(data.content_keys) == len(data0.content_keys)
       sorted_list1 = sorted(data.content_keys)
       for i in range(len(data.content_keys)):
@@ -801,7 +815,7 @@ class SprintCacheDataset(CachedDataset2):
       return False
     self._num_seqs = len(self.seq_list_original)
     data0 = self.data["data"]
-    assert isinstance(data0, self.Data)
+    assert isinstance(data0, self.SprintCacheReader)
     get_seq_size = lambda s: data0.sprint_cache.ft[self.seq_list_original[s]].size
     seq_index = self.get_seq_order_for_epoch(epoch, self.num_seqs, get_seq_len=get_seq_size)
     self.seq_list_ordered = [self.seq_list_original[s] for s in seq_index]

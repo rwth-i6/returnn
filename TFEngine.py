@@ -34,7 +34,7 @@ from Network import LayerNetwork
 from Pretrain import pretrainFromConfig
 from TFNetwork import TFNetwork, ExternData
 from TFUpdater import Updater
-from Util import hms, NumbersDict
+from Util import hms
 
 
 class Runner(object):
@@ -103,6 +103,11 @@ class Runner(object):
         d["cost:%s" % layer_name] = loss
       for layer_name, error in self.engine.network.error_by_layer.items():
         d["error:%s" % layer_name] = error
+      for layer in self.engine.network.layers.values():
+        if layer.target and layer.target.startswith("layer:"):
+          target_data = layer.loss.target
+          for dim, v in target_data.size_placeholder.items():
+            d["size:%s:%i" % (layer.target, dim)] = v
     for layer in self.engine.network.layers.values():
       for k, v in layer.stats.items():
         d["stats:%s:%s" % (layer.name, k)] = v
@@ -112,6 +117,8 @@ class Runner(object):
         # Force a new check.
         self.engine._checked_uninitialized_vars = False
       d["optim_op"] = self.engine.updater.get_optim_op(callback_on_new=callback_on_new)
+      if self.engine.updater.optim_meta_losses:
+        d.update(self.engine.updater.optim_meta_losses)
     if self.extra_fetches is not None:
       from TFNetworkLayer import LayerBase
       from TFUtil import Data
@@ -125,7 +132,8 @@ class Runner(object):
         d["extra:%s" % k] = v.placeholder
         for i, s in v.size_placeholder.items():
           d["extra:%s:size_%i" % (k, i)] = s
-    d["summary"] = self.engine.get_all_merged_summaries()
+    if self.engine.get_all_merged_summaries() is not None:
+      d["summary"] = self.engine.get_all_merged_summaries()
     return d
 
   def _print_process(self, report_prefix, step, step_duration, eval_info):
@@ -274,14 +282,19 @@ class Runner(object):
     :param str report_prefix: prefix for logging
     """
     sess = self.engine.tf_session
-    logdir = os.path.dirname(self.engine.model_filename) or os.getcwd()
-    logdir += "/%s" % self.data_provider.get_dataset_name()
-    if not self._should_train:  # like eval
-      logdir += "-%i" % self.engine.epoch
-    if self.engine.use_search_flag:
-      logdir += "-search"
-    writer = tf.summary.FileWriter(logdir)
-    writer.add_graph(sess.graph)
+    if self.engine.config.has("tf_log_dir"):
+      logdir = self.engine.config.value("tf_log_dir", None)
+    else:
+      logdir = os.path.dirname(self.engine.model_filename) or os.getcwd()
+    if logdir:
+      logdir += "/%s" % self.data_provider.get_dataset_name()
+      if not self._should_train:  # like eval
+        logdir += "-%i" % self.engine.epoch
+      if self.engine.use_search_flag:
+        logdir += "-search"
+      writer = tf.summary.FileWriter(logdir)
+    else:
+      writer = None
     run_metadata = tf.RunMetadata()
     debug_shell_in_runner = self.engine.config.bool("debug_shell_in_runner", False)
     debug_shell_in_runner_step = self.engine.config.int("debug_shell_in_runner_step", 1)
@@ -302,6 +315,9 @@ class Runner(object):
       fetches_dict = self._get_fetches_dict()
       # After get_fetches_dict, maybe some new uninitialized vars. Last check.
       self.engine.check_uninitialized_vars()
+      # Also, add graph to summary here because the updater/optimizer might not have been created before.
+      if writer:
+        writer.add_graph(sess.graph)
       while self.data_provider.have_more_data(session=sess):
         feed_dict = self.data_provider.get_feed_dict()
         if isinstance(self.engine.network.train_flag, tf.Tensor):
@@ -335,8 +351,9 @@ class Runner(object):
           with open(timeline_path, 'w') as f:
             f.write(tl.generate_chrome_trace_format(show_memory=True))
         else:
-          fetches_results = sess.run(fetches_dict, feed_dict=feed_dict) # type: dict[str,numpy.ndarray|str]
-          writer.add_summary(fetches_results["summary"], step + step_offset)
+          fetches_results = sess.run(fetches_dict, feed_dict=feed_dict)  # type: dict[str,numpy.ndarray|str]
+          if writer:
+            writer.add_summary(fetches_results["summary"], step + step_offset)
 
         eval_info = self._collect_eval_info(fetches_results=fetches_results)
         self._maybe_handle_extra_fetches(fetches_results)
@@ -367,8 +384,9 @@ class Runner(object):
     finally:
       from Util import try_and_ignore_exception
       from TFUtil import stop_event_writer_thread
-      try_and_ignore_exception(writer.close)
-      try_and_ignore_exception(lambda: stop_event_writer_thread(writer.event_writer))
+      if writer:
+        try_and_ignore_exception(writer.close)
+        try_and_ignore_exception(lambda: stop_event_writer_thread(writer.event_writer))
       try_and_ignore_exception(coord.request_stop)
       try_and_ignore_exception(lambda: coord.join(threads))
       try_and_ignore_exception(self.data_provider.stop_threads)
@@ -438,14 +456,6 @@ class Engine(object):
       if is_gpu_available():
         print("Note: There is a GPU available but you have set device=cpu.", file=log.v2)
 
-  @classmethod
-  def _guess_requested_max_num_threads(cls):
-    omp_num_threads = int(os.environ.get("OMP_NUM_THREADS") or 0)
-    if omp_num_threads:
-      # Minimum of 2 threads, should not hurt.
-      return max(omp_num_threads, 2)
-    return None
-
   def _close_tf_session(self):
     if self.tf_session:
       self.tf_session.close()
@@ -460,10 +470,8 @@ class Engine(object):
     # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/protobuf/config.proto
     opts.setdefault("log_device_placement", False)
     opts.setdefault("device_count", {}).setdefault("GPU", 1 if self.is_requesting_for_gpu() else 0)
-    num_threads = self._guess_requested_max_num_threads()
-    if num_threads:
-      opts.setdefault("intra_op_parallelism_threads", num_threads)
-      opts.setdefault("inter_op_parallelism_threads", num_threads)
+    # Note: We don't set intra_op_parallelism_threads and inter_op_parallelism_threads here anymore
+    # because it is saver to do it via setup_tf_thread_pools() which we call very early.
     print("Setup tf.Session with options %r ..." % opts, file=log.v2)
     config = tf.ConfigProto(**opts)
     # config.gpu_options.allow_growth=True
@@ -920,29 +928,92 @@ class Engine(object):
 
   def forward_to_hdf(self, data, output_file, combine_labels='', batch_size=0):
     """
-    Is aiming at recreating the same interface and output as Engine.forward_to_hdf.
+    Is aiming at recreating the same interface and output as :func:`Engine.forward_to_hdf`.
+    See also :func:`EngineTask.HDFForwardTaskThread` and :func:`hdf_dump_from_dataset` in the hdf_dump.py tool.
 
-    :type data: Dataset.Dataset
-    :type output_file: str
-    :type combine_labels: str
+    :param Dataset data:
+    :param str output_file:
+    :param str combine_labels: ignored at the moment
+    :param int batch_size:
     """
-    # TODO: current implementation will blow up the memory, should write seq by seq into the dataset.
-    # TODO: should use Runner instead of self.forward_single().
     import h5py
-    forwarding_outputs = []
-    seq_tags = []
-    seq_idx = 0
-    while data.is_less_than_num_seqs(seq_idx):
-      forwarding_outputs.append(self.forward_single(data, seq_idx))
-      seq_tags.append(data.get_tag(seq_idx))
-      seq_idx += 1
-    #write to hdf file
+    from Util import hdf5_strings
+
+    output_layer_name = None
+    if not output_layer_name:
+      output_layer_name = self.config.value("forward_output_layer", self.network.get_default_output_layer_name())
+      assert output_layer_name, "output layer not defined. set forward_output_layer in config"
+    assert output_layer_name in self.network.layers, "output layer %r not found" % output_layer_name
+    output_layer = self.network.layers[output_layer_name]
+    target = self.network.get_default_target()
+
     cache = h5py.File(output_file, "w")
-    cache.create_dataset('inputs', data=numpy.concatenate(forwarding_outputs, axis=0))
-    cache.create_dataset('seqLengths', data=numpy.asarray([fo.shape[0] for fo in forwarding_outputs], dtype='int32'))
-    cache.create_dataset('seqTags', data=numpy.asarray(seq_tags, dtype='|S5'))
-    seqDims = numpy.asarray([0 for fo in forwarding_outputs], dtype='int32')
-    cache.create_dataset('seqDims', data=numpy.reshape(seqDims, (seqDims.shape[0], 1)))
+    cache.attrs['numTimesteps'] = 0
+    cache.attrs['inputPattSize'] = data.num_inputs
+    cache.attrs['numDims'] = 1
+    cache.attrs['numLabels'] = data.num_outputs[target]
+    cache.attrs['numSeqs'] = 0
+    if target in data.labels:
+      hdf5_strings(cache, 'labels', data.labels[target])
+
+    datasets = {}  # type: dict[str,h5py.Dataset]
+    tags = []  # type: list[str]
+    seq_lengths = cache.create_dataset("seqLengths", (0,), dtype='i', maxshape=(None,))
+
+    def insert_h5_inputs(name, raw_data):
+      """
+      Inserts a record into the hdf5-file.
+      Resizes if necessary.
+
+      :param str name:
+      :param numpy.ndarray raw_data: shape=(time,data)
+      """
+      assert len(raw_data.shape) == 2
+      if name not in datasets:
+        datasets[name] = cache.create_dataset(name, raw_data.shape, raw_data.dtype, maxshape=tuple(None for _ in raw_data.shape))
+      else:
+        old_shape = datasets[name].shape
+        datasets[name].resize((old_shape[0] + raw_data.shape[0],) + old_shape[1:])
+      # append raw data to dataset
+      datasets[name][cache.attrs['numTimesteps']:, 0:] = raw_data
+      cache.attrs['numTimesteps'] += raw_data.shape[0]
+      cache.attrs['numSeqs'] += 1
+
+    def extra_fetches_cb(inputs, seq_len, seq_tag):
+      """
+      Insert each batch into the output_file (hdf).
+
+      :param numpy.ndarray inputs: shape=(n_batch,time,data)
+      :param list[int] seq_len: sequence lengths
+      :param list[str] seq_tag: sequence tags of length n_batch
+      """
+      n_batch = len(seq_len)
+      assert n_batch == len(seq_tag)
+      assert n_batch == inputs.shape[0]
+
+      seqlen_offset = seq_lengths.shape[0]
+      seq_lengths.resize((seqlen_offset + n_batch,))
+      for i in range(n_batch):
+        tags.append(seq_tag[i])
+        seq_lengths[seqlen_offset + i] = seq_len[i]
+        insert_h5_inputs('inputs', inputs[i][:seq_len[i]])
+
+    batches = data.generate_batches(
+      recurrent_net=self.network.recurrent,
+      batch_size=batch_size,
+      used_data_keys=self.network.used_data_keys)
+    forwarder = Runner(
+      engine=self, dataset=data, batches=batches,
+      train=False, eval=False,
+      extra_fetches={
+        'inputs': output_layer.output.get_placeholder_as_batch_major(),
+        "seq_len": output_layer.output.get_sequence_lengths(),
+        "seq_tag": self.network.get_seq_tags(),
+      },
+      extra_fetches_callback=extra_fetches_cb)
+    forwarder.run(report_prefix=self.get_epoch_str() + " forward")
+
+    hdf5_strings(cache, 'seqTags', tags)
     cache.close()
 
   def analyze(self, data, statistics):
