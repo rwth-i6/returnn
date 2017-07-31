@@ -341,7 +341,7 @@ class Asg:
     if isinstance(reps, int) and reps > 1:
       self.asg_repetition = reps
     else:
-      assert False, "The asg repeat input is not a positive integer!"
+      assert False, "The asg repeat input is not a positive integer greater than one!"
 
   def set_num_labels(self, numlab):
     """
@@ -396,15 +396,15 @@ class Asg:
       self.label_repetitions.append(reps_label)
 
     # create states
-    self.fsa.num_states_asg = 0
+    self.fsa.num_states = 0
     cur_idx = 0
     for rep_index, rep_label in enumerate(self.label_repetitions):
       for idx, lab in enumerate(rep_label):
         src_idx = cur_idx
         trgt_idx = src_idx + 1
         if cur_idx == 0:  # for final state
-          self.fsa.num_states_asg += 1
-        self.fsa.num_states_asg += 1
+          self.fsa.num_states += 1
+        self.fsa.num_states += 1
         edge = Edge(src_idx, trgt_idx, lab)
         edge.set_idx_word_in_sentence(rep_index)
         edge.set_idx_phon_in_word(idx)
@@ -413,28 +413,45 @@ class Asg:
           edge.set_phon_at_word_begin(True)
         if idx == len(rep_label) - 1:
           edge.set_phon_at_word_end(True)
-        self.fsa.edges_asg.append(edge)
+        self.fsa.edges.append(edge)
         cur_idx += 1
       # adds separator between words in sentence
       if rep_index < len(self.label_repetitions) - 1:
-        self.fsa.edges_asg.append(Edge(src_idx + 1, trgt_idx + 1, Edge.BLANK))
+        self.fsa.edges.append(Edge(src_idx + 1, trgt_idx + 1, Edge.BLANK))
+        self.fsa.num_states += 1
         cur_idx += 1
 
     # adds loops to graph
-    for loop_idx in range(1, self.fsa.num_states_asg):
-      edges_add_loop = [asg_edge_idx for asg_edge_idx, asg_edge in enumerate(self.fsa.edges_asg)
-                        if (asg_edge.target_state_idx == loop_idx and asg_edge.label != Edge.BLANK and asg_edge.label != Edge.EPS and asg_edge.label != Edge.SIL)]
+    for loop_idx in range(1, self.fsa.num_states):
+      edges_add_loop = [edge_idx for edge_idx, edge_cur in enumerate(self.fsa.edges)
+                        if (edge_cur.target_state_idx == loop_idx and edge_cur.label != Edge.EPS and edge_cur.label != Edge.SIL)]
       for add_loop_edge in edges_add_loop:
-        edge = deepcopy(self.fsa.edges_asg[add_loop_edge])
+        edge = deepcopy(self.fsa.edges[add_loop_edge])
         edge.set_source_state_idx(edge.get_target_state_idx())
         edge.set_is_loop(True)
-        self.fsa.edges_asg.append(edge)
+        self.fsa.edges.append(edge)
 
-    self.fsa.edges_asg.sort()
+    self.fsa.edges.sort()
 
     # label conversion
     if self.label_conversion == True:
-      pass
+      for edge_lbl in self.fsa.edges:
+        lbl = edge_lbl.get_label()
+        if lbl == Edge.BLANK:
+          edge_lbl.set_label(ord(' '))
+        elif lbl == Edge.SIL or lbl == Edge.EPS:
+          pass
+        elif isinstance(lbl, str):
+          edge_lbl.set_label(ord(lbl))
+        elif isinstance(lbl, int):
+          pass
+        else:
+          assert False, "Label Conversion failed!"
+
+    self.fsa.num_states_asg = deepcopy(self.fsa.num_states)
+    self.fsa.num_states = -1
+    self.fsa.edges_asg = deepcopy(self.fsa.edges)
+    self.fsa.edges = []
 
 
 class Ctc:
@@ -1639,7 +1656,7 @@ def main():
   arg_parser.set_defaults(num_labels=265)  # ascii number of labels
   arg_parser.add_argument("--label_conversion_on", dest="label_conversion", action="store_true")
   arg_parser.add_argument("--label_conversion_off", dest="label_conversion", action="store_false")
-  arg_parser.set_defaults(label_conversion=None)
+  arg_parser.set_defaults(label_conversion=False)
   arg_parser.add_argument("--depth", type=int)
   arg_parser.set_defaults(depth=6)
   arg_parser.add_argument("--allo_num_states", type=int)
@@ -1656,6 +1673,10 @@ def main():
   fsa = Graph(lemma=args.label_seq)
 
   asg = Asg(fsa)
+
+  asg.set_label_conversion(args.label_conversion)
+
+  asg.set_asg_rep(args.asg_repetition)
 
   asg.run()
 
