@@ -114,26 +114,17 @@ class Graph:
     else:
       assert False, ("The input you provided is not acceptable!", lemma)
 
-    """
-    int num_states: number of state of FSA during creation for ASG, CTC, HMM
-    list[Edge] edges: current state of FSA during creation for ASG, CTC, HMM
-    int num_states_asg: number of states for ASG
-    list[Edge] edges_asg: created edges for ASG FSA
-    int num_states_ctc: number of states for ASG
-    list[Edge] edges_ctc: created edges for CTC FSA
-    int num_states_hmm: number of states for ASG
-    list[Edge] edges_hmm: created edges for HMM FSA
-    str|None filename: str + fsa type for file save
-    """
-    self.num_states = -1
-    self.edges = []
-    self.num_states_asg = -1
-    self.edges_asg = []
-    self.num_states_ctc = -1
-    self.edges_ctc = []
-    self.num_states_hmm = -1
-    self.edges_hmm = []
     self.filename = None
+    # int num_states: number of states of FSA during creation and final
+    self.num_states = -1
+    self.num_states_asg = -1
+    self.num_states_ctc = -1
+    self.num_states_hmm = -1
+    # list[Edge] edges: edges of FSA during creation and final state
+    self.edges = []
+    self.edges_asg = []
+    self.edges_ctc = []
+    self.edges_hmm = []
 
   def __repr__(self):
     return "Graph()"
@@ -179,7 +170,7 @@ class Asg:
       self.num_labels = num_labels
       self.asg_repetition = asg_repetition
       self.label_conversion = label_conversion
-      self.label_repetitions = []  # marks the labels which will be replaced with a rep symbol
+      self.separator = False  # words in the sentence will be separated by Edge.BLANK
     else:
       assert False, ("The ASG init went wrong!", fsa)
 
@@ -190,6 +181,7 @@ class Asg:
     print("Starting ASG FSA Creation")
     label_prev = None
     rep_count = 0
+    label_repetitions = []  # marks the labels which will be replaced with a rep symbol
 
     # goes through the list of strings
     for lem in self.fsa.lem_list:
@@ -213,14 +205,14 @@ class Asg:
           reps_label.append(label)
         label_prev = label
       # put reps list back into list -> list[list[str|int]]
-      self.label_repetitions.append(reps_label)
+      label_repetitions.append(reps_label)
 
     # create states
     self.fsa.num_states = 0
     cur_idx = 0
     src_idx = 0
     trgt_idx = 0
-    for rep_index, rep_label in enumerate(self.label_repetitions):
+    for rep_index, rep_label in enumerate(label_repetitions):
       for idx, lab in enumerate(rep_label):
         src_idx = cur_idx
         trgt_idx = src_idx + 1
@@ -228,17 +220,17 @@ class Asg:
           self.fsa.num_states += 1
         self.fsa.num_states += 1
         edge = Edge(src_idx, trgt_idx, lab)
-        edge.set_idx_word_in_sentence(rep_index)
-        edge.set_idx_phon_in_word(idx)
-        edge.set_idx(cur_idx)
+        edge.idx_word_in_sentence = rep_index
+        edge.idx_phon_in_word = idx
+        edge.idx = cur_idx
         if idx == 0:
-          edge.set_phon_at_word_begin(True)
+          edge.phon_at_word_begin = True
         if idx == len(rep_label) - 1:
-          edge.set_phon_at_word_end(True)
+          edge.phon_at_word_end = True
         self.fsa.edges.append(edge)
         cur_idx += 1
       # adds separator between words in sentence
-      if rep_index < len(self.label_repetitions) - 1:
+      if self.separator and rep_index < len(label_repetitions) - 1:
         self.fsa.edges.append(Edge(src_idx + 1, trgt_idx + 1, Edge.BLANK))
         self.fsa.num_states += 1
         cur_idx += 1
@@ -250,8 +242,8 @@ class Asg:
                             and edge_cur.label != Edge.SIL)]
       for add_loop_edge in edges_add_loop:
         edge = deepcopy(self.fsa.edges[add_loop_edge])
-        edge.set_source_state_idx(edge.get_target_state_idx())
-        edge.set_is_loop(True)
+        edge.source_state_idx = edge.target_state_idx
+        edge.is_loop = True
         self.fsa.edges.append(edge)
 
     self.fsa.edges.sort()
