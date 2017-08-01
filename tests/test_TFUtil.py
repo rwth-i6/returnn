@@ -302,6 +302,11 @@ def test_reuse_name_scope():
       assert_equal(c2.name, "lstm0/rec/c_1:0")
 
 
+def test_reuse_name_scope_root():
+  with reuse_name_scope("", absolute=True):
+    pass
+
+
 def test_reuse_var_scope():
   with tf.variable_scope("v1"):
     assert_equal(get_current_var_scope_name(), "v1")
@@ -337,6 +342,23 @@ def test_name_var_scope_mixing():
           with reuse_name_scope(scope):
             assert_equal(get_current_var_scope_name(), "mv1/v2")
             assert_equal(get_current_name_scope(), "mv1/v2")
+
+
+def test_reuse_name_scope_of_tensor():
+  with tf.name_scope("scope1") as scope1:
+    x = tf.constant(42)
+  with tf.name_scope("scope2") as scope2:
+    assert_equal(get_current_name_scope() + "/", scope2)
+    with reuse_name_scope_of_tensor(x):
+      assert_equal(get_current_name_scope() + "/", scope1)
+
+
+def test_reuse_name_scope_of_tensor_root():
+  x = tf.constant(42)
+  with tf.name_scope("scope2") as scope2:
+    assert_equal(get_current_name_scope() + "/", scope2)
+    with reuse_name_scope_of_tensor(x):
+      assert_equal(get_current_name_scope(), "")
 
 
 def test_loop_var_creation():
