@@ -92,144 +92,6 @@ class Edge:
     return ((self.source_state_idx, self.target_state_idx, self.label, self.weight)
             > (other.source_state_idx, other.target_state_idx, other.label, other.weight))
 
-  """
-    setters for the class variables
-  """
-  def set_source_state_idx(self, idx):
-    if isinstance(idx, int):
-      self.source_state_idx = idx
-    else:
-      assert False, ("Variable is not an int:", idx)
-
-  def set_target_state_idx(self, idx):
-    if isinstance(idx, int):
-      self.target_state_idx = idx
-    else:
-      assert False, ("Variable is not an int:", idx)
-
-  def set_label(self, lbl):
-    if isinstance(lbl, str) or isinstance(lbl, int):
-      self.label = lbl
-    else:
-      assert False, ("Variable is not a string or int:", lbl)
-
-  def set_weight(self, w):
-    if isinstance(w, float):
-      self.weight = w
-    else:
-      assert False, ("Variable is not a float:", w)
-
-  def set_idx_word_in_sentence(self, idx):
-    if isinstance(idx, int):
-      self.idx_word_in_sentence = idx
-    else:
-      assert False, ("Variable is not an int:", idx)
-
-  def set_idx_phon_in_word(self, idx):
-    if isinstance(idx, int):
-      self.idx_phon_in_word = idx
-    else:
-      assert False, ("Variable is not an int:", idx)
-
-  def set_idx(self, idx):
-    if isinstance(idx, int):
-      self.idx = idx
-    else:
-      assert False, ("Variable is not an int:", idx)
-
-  def set_phon_at_word_begin(self, flag):
-    if isinstance(flag, bool):
-      self.phon_at_word_begin = flag
-    else:
-      assert False, ("Variable is not a bool:", flag)
-
-  def set_phon_at_word_end(self, flag):
-    if isinstance(flag, bool):
-      self.phon_at_word_end = flag
-    else:
-      assert False, ("Variable is not a bool:", flag)
-
-  def set_score(self, number):
-    if isinstance(number, float):
-      self.score = number
-    else:
-      assert False, ("Variable is not a number:", number)
-
-  def set_is_loop(self, flag):
-    if isinstance(flag, bool):
-      self.is_loop = flag
-    else:
-      assert False, ("Variable is not a bool:", flag)
-
-  """
-    getters for the class variables
-  """
-  def get_source_state_idx(self):
-    if isinstance(self.source_state_idx, int):
-      return self.source_state_idx
-    else:
-      assert False, "Output wrong 1"
-
-  def get_target_state_idx(self):
-    if isinstance(self.target_state_idx, int):
-      return self.target_state_idx
-    else:
-      assert False, "Output wrong 2"
-
-  def get_label(self):
-    if isinstance(self.label, str) or isinstance(self.label, int):
-      return self.label
-    else:
-      assert False, "Output wrong 3"
-
-  def get_weight(self):
-    if isinstance(self.weight, float):
-      return self.weight
-    else:
-      assert False, "Output wrong 4"
-
-  def get_idx_word_in_sentence(self):
-    if isinstance(self.idx_word_in_sentence, int):
-      return self.idx_word_in_sentence
-    else:
-      assert False, "Output wrong 5"
-
-  def get_idx_phon_in_word(self):
-    if isinstance(self.idx_phon_in_word, int):
-      return self.idx_phon_in_word
-    else:
-      assert False, "Output wrong 6"
-
-  def get_idx(self):
-    if isinstance(self.idx, int):
-      return self.idx
-    else:
-      assert False, "Output wrong 7"
-
-  def get_phon_at_word_begin(self):
-    if isinstance(self.phon_at_word_begin, bool):
-      return self.phon_at_word_begin
-    else:
-      assert False, "Output wrong 8"
-
-  def get_phon_at_word_end(self):
-    if isinstance(self.phon_at_word_end, bool):
-      return self.phon_at_word_end
-    else:
-      assert False, "Output wrong 9"
-
-  def get_score(self):
-    if isinstance(self.score, float):
-      return self.score
-    else:
-      assert False, "Output wrong 10"
-
-  def get_is_loop(self):
-    if isinstance(self.is_loop, bool):
-      return self.is_loop
-    else:
-      assert False, "Output wrong 11"
-
 
 class Graph:
   """
@@ -293,20 +155,7 @@ class Graph:
                   + str(self.edges_hmm)
     return prettygraph
 
-  def set_filename(self, name):
-    """
-    sets the filename, for use with saving
-    :param str name: the filename, different stuff gets appended
-    """
-    if isinstance(name, str):
-      self.filename = name
-    else:
-      assert False, ("The filename is not a string!", name)
-
   def make_single_state_graph(self):
-    pass
-
-  def save(self):
     pass
 
 
@@ -319,7 +168,9 @@ class Asg:
     """
     :param Graph fsa: represents the Graph on which the class operates
     :param int num_labels: number of labels without blank, silence, eps and repetitions
+      where num_labels > 0
     :param int asg_repetition: asg repeat symbol which stands for x repetitions
+      where asg_repetition > 1
     :param bool label_conversion: shall the labels be converted into numbers (only ASG and CTC)
     """
     if isinstance(fsa, Graph) and isinstance(num_labels, int)\
@@ -331,36 +182,6 @@ class Asg:
       self.label_repetitions = []  # marks the labels which will be replaced with a rep symbol
     else:
       assert False, ("The ASG init went wrong!", fsa)
-
-  def set_asg_rep(self, reps):
-    """
-    sets the asg repeat symbol
-    :param int reps: the asg repeat
-    """
-    if isinstance(reps, int) and reps > 1:
-      self.asg_repetition = reps
-    else:
-      assert False, ("The asg repeat input is not a positive integer greater than one!", reps)
-
-  def set_num_labels(self, numlab):
-    """
-    sets number of labels
-    :param int numlab: the number of labels
-    """
-    if isinstance(numlab, int) and numlab > 0:
-      self.num_labels = numlab
-    else:
-      assert False, ("The label number input is not a positive integer!", numlab)
-
-  def set_label_conversion(self, onoff):
-    """
-    sets label conversion on or off
-    :param bool onoff: flag to set label conversion on/off
-    """
-    if isinstance(onoff, bool):
-      self.label_conversion = onoff
-    else:
-      assert False, ("The label conversion input is not a bool!", onoff)
 
   def run(self):
     """
@@ -477,26 +298,6 @@ class Ctc:
     # list[int] final_states: list of final states
     self.final_states = []
 
-  def set_num_labels(self, numlab):
-    """
-    sets number of labels
-    :param int numlab: the number of labels
-    """
-    if isinstance(numlab, int):
-      self.num_labels = numlab
-    else:
-      assert False, ("The label number input is not an integer!", numlab)
-
-  def set_label_conversion(self, onoff):
-    """
-    sets label conversion on or off
-    :param bool onoff: flag to set label conversion on/off
-    """
-    if isinstance(onoff, bool):
-      self.label_conversion = onoff
-    else:
-      assert False, ("The label conversion input is not a bool!", onoff)
-
   def _add_final_state(self, state):
     """
     adds a final state to list of final states
@@ -537,16 +338,6 @@ class Hmm:
     self.state_tying = None
     # dict phon_dict: dictionary of phonemes, loaded from lexicon file
     self.phon_dict = {}
-
-  def set_depth(self, depth):
-    """
-    sets the depth for the HMM FSA process
-    :param int depth: the depth of the HMM FSA process
-    """
-    if isinstance(depth, int):
-      self.depth = depth
-    else:
-      assert False, ("The depth input is not an integer!", depth)
 
   def load_lexicon(self, lexicon_name):
     """
@@ -593,29 +384,6 @@ class Store:
     self.graph_ctc = graphviz.Digraph(format=self.file_format)
     self.graph_hmm = graphviz.Digraph(format=self.file_format)
 
-  def set_filename(self, fn):
-    if isinstance(fn, str):
-      self.filename = fn
-    else:
-      assert False, ("Filename input is not a string", fn)
-
-  def set_path(self, p):
-    if isinstance(p, str):
-      self.path = p
-    else:
-      assert False, ("Path input is not a string", p)
-
-  def set_fsa_type(self, ft):
-    if isinstance(ft, str) or ft is None:
-      self.fsa_type = ft
-    else:
-      assert False, ("FSA Type input is not string or None", ft)
-
-  def set_file_format(self, ff):
-    if isinstance(ff, str):
-      self.file_format = ff
-    else:
-      assert False, ("File format input is not string", ff)
 
   def fsa_to_dot_format(self):
     """
