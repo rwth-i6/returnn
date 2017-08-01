@@ -3184,8 +3184,9 @@ class FastBaumWelchLoss(Loss):
       tags=seq_tags)
     loss = self.reduce_func(obs_scores[0])
     bw = tf.exp(-fwdbwd)
+    grad_x = (output - bw) * tf.expand_dims(seq_mask, 2)
     from TFUtil import custom_gradient
-    loss = custom_gradient.generic_loss_and_error_signal(loss=loss, x=output_before_softmax, grad_x=output - bw)
+    loss = custom_gradient.generic_loss_and_error_signal(loss=loss, x=output_before_softmax, grad_x=grad_x)
     return loss
 
   def get_error(self):
@@ -3242,11 +3243,11 @@ class ViaLayerLoss(Loss):
   def get_value(self):
     if self.error_signal_layer:
       assert not self.align_layer
-      error_signal = self.error_signal_layer.output.copy_compatible_to(self.output)
+      error_signal = self.error_signal_layer.output.copy_compatible_to(self.output).placeholder
     else:
       assert self.align_layer
-      error_signal = self.align_layer.output.copy_compatible_to(self.output)
-      error_signal.placeholder = self.output.placeholder - error_signal.placeholder
+      error_signal = self.output.placeholder - self.align_layer.output.copy_compatible_to(self.output).placeholder
+    error_signal *= tf.cast(self.output.get_sequence_mask_broadcast(), dtype=tf.float32)
     if self.loss_wrt_to_act_in:
       assert self.output_with_activation, "activation unknown, via %r" % self.output
       if isinstance(self.loss_wrt_to_act_in, (str, unicode)):
@@ -3254,12 +3255,12 @@ class ViaLayerLoss(Loss):
         assert self.output_with_activation.act_func is get_activation_function(self.loss_wrt_to_act_in)
       else:
         assert self.output_with_activation.act_func  # just check that there is some activation function
-      grad_wrt = self.output_with_activation.x  # softmax input
+      grad_wrt = self.output_with_activation.x  # activation (e.g. softmax) input
     else:
       grad_wrt = self.output.placeholder
     from TFUtil import custom_gradient
     loss = custom_gradient.generic_loss_and_error_signal(
-      loss=self._loss_value, x=grad_wrt, grad_x=error_signal.placeholder)
+      loss=self._loss_value, x=grad_wrt, grad_x=error_signal)
     return loss
 
   def get_error(self):

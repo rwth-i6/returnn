@@ -669,6 +669,33 @@ class Data(object):
     assert self.time_dim_axis is not None
     return self.size_placeholder[self.time_dim_axis_excluding_batch]
 
+  def get_sequence_mask(self):
+    """
+    :return: seq mask of shape (batch,time) if we are batch-major, else (time,batch) if we are time-major
+    :rtype: tf.Tensor
+    """
+    assert self.time_dim_axis is not None
+    assert self.batch_dim_axis is not None
+    if self.is_time_major:
+      assert self.batch_dim_axis == 1
+      return sequence_mask_time_major(self.get_sequence_lengths())
+    else:
+      assert self.batch_dim_axis == 0
+      assert self.time_dim_axis == 1
+      return sequence_mask(self.get_sequence_lengths())
+
+  def get_sequence_mask_broadcast(self):
+    """
+    :return: seq mask of shape ((batch,time) or (time,batch)) + (1,)s for remaining dims
+    :rtype: tf.Tensor
+    """
+    seq_mask = self.get_sequence_mask()
+    assert seq_mask.get_shape().ndims == 2  # batch and time
+    seq_mask = expand_multiple_dims(
+      seq_mask, [i for i in range(self.batch_ndim) if i not in (self.batch_dim_axis, self.time_dim_axis)])
+    assert seq_mask.get_shape().ndims == self.batch_ndim
+    return seq_mask
+
   def get_spatial_batch_axes(self):
     """
     :rtype: list[int]
