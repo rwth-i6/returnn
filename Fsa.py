@@ -235,7 +235,7 @@ class Asg:
         self.fsa.num_states += 1
         cur_idx += 1
 
-    # adds loops to graph
+    # adds loops to ASG FSA
     for loop_idx in range(1, self.fsa.num_states):
       edges_add_loop = [edge_idx for edge_idx, edge_cur in enumerate(self.fsa.edges)
                         if (edge_cur.target_state_idx == loop_idx and edge_cur.label != Edge.EPS
@@ -250,18 +250,7 @@ class Asg:
 
     # label conversion
     if self.label_conversion:
-      for edge_lbl in self.fsa.edges:
-        lbl = edge_lbl.get_label()
-        if lbl == Edge.BLANK:
-          edge_lbl.set_label(ord(' '))
-        elif lbl == Edge.SIL or lbl == Edge.EPS:
-          pass
-        elif isinstance(lbl, str):
-          edge_lbl.set_label(ord(lbl))
-        elif isinstance(lbl, int):
-          pass
-        else:
-          assert False, "Label Conversion failed!"
+      Store.label_conversion(self.fsa.edges)
 
     self.fsa.num_states_asg = deepcopy(self.fsa.num_states)
     self.fsa.num_states = -1
@@ -331,7 +320,7 @@ class Ctc:
         self.fsa.num_states += 2
         cur_idx += 1
 
-    # add node nuber of final state
+    # add node number of final state
     self.final_states.append(self.fsa.num_states - 1)
 
     # add all final possibilities
@@ -362,6 +351,19 @@ class Ctc:
           final_state_edge = deepcopy(self.fsa.edges[final_state_idx])
           final_state_edge.target_state_idx = self.fsa.num_states - 1
           self.fsa.edges.append(final_state_edge)
+
+    # add loops to CTC FSA
+    for loop_idx in range(1, self.fsa.num_states - 1):
+      edges_add_loop = [edge_idx for edge_idx, edge_cur in enumerate(self.fsa.edges)
+                        if (edge_cur.target_state_idx == loop_idx)]
+      edge = deepcopy(self.fsa.edges[edges_add_loop[0]])
+      edge.source_state_idx = edge.target_state_idx
+      edge.is_loop = True
+      self.fsa.edges.append(edge)
+
+    # label conversion
+    if self.label_conversion:
+      Store.label_conversion(self.fsa.edges)
 
     self.fsa.edges.sort()
     self.fsa.num_states_ctc = deepcopy(self.fsa.num_states)
@@ -409,6 +411,12 @@ class Hmm:
     """
     pass
 
+  def run(self):
+    """
+    creates the HMM FSA
+    """
+    pass
+
 
 class Store:
   """
@@ -437,20 +445,38 @@ class Store:
     """
     converts num_states and edges within the graph to dot format
     """
-    self._add_nodes(self.graph, self.num_states)
-    self._add_edges(self.graph, self.edges)
+    self.add_nodes(self.graph, self.num_states)
+    self.add_edges(self.graph, self.edges)
 
   def save_to_file(self):
     """
     saves dot graph to file
-    settings: filename, path, fsa_type and file_format
+    settings: filename, path
     caution: overwrites already present files
     """
     save_path = self.graph.render(filename=self.filename, directory=self.path)
     print("FSA saved in:", save_path)
 
   @staticmethod
-  def _add_nodes(graph, num_states):
+  def label_conversion(edges):
+    """
+    coverts the string labels to int labels
+    :param list[Edge] edges: list of edges describing the fsa graph
+    :return list[Edges] edges:
+    """
+    for edge in edges:
+      lbl = edge.label
+      if lbl == Edge.BLANK:
+        edge.label = ord(' ')
+      elif lbl == Edge.SIL or lbl == Edge.EPS or isinstance(lbl, int):
+        pass
+      elif isinstance(lbl, str):
+        edge.label = ord(lbl)
+      else:
+        assert False, "Label Conversion failed!"
+
+  @staticmethod
+  def add_nodes(graph, num_states):
     """
     add nodes to the dot graph
     :param Digraph graph: add nodes to this graph
@@ -464,7 +490,7 @@ class Store:
         graph.node(n)
 
   @staticmethod
-  def _add_edges(graph, edges):
+  def add_edges(graph, edges):
     """
     add edges to the dot graph
     :param Digraph graph: add edges to this graph
@@ -523,7 +549,7 @@ class Fsa:
     self.lemma_orig = None
     self.lemma = None
 
-    self.filename = 'edges'
+    self.filename = 'fsa'
 
     self.single_state = False
 
@@ -1560,7 +1586,7 @@ class FastBwFsaShared:
 def main():
   from argparse import ArgumentParser
   arg_parser = ArgumentParser()
-  arg_parser.add_argument("--fsa", type=str, required=True)
+  arg_parser.add_argument("--fsa", type=str)
   arg_parser.add_argument("--label_seq", type=str, required=True)
   arg_parser.add_argument("--file", type=str)
   arg_parser.set_defaults(file='fsa')
@@ -1582,23 +1608,41 @@ def main():
   arg_parser.add_argument("--single_state_on", dest="single_state", action="store_true")
   arg_parser.add_argument("--single_state_off", dest="single_state", action="store_false")
   arg_parser.set_defaults(single_state=False)
+  arg_parser.add_argument("--asg_separator", type=bool)
+  arg_parser.set_defaults(asg_separator=False)
   args = arg_parser.parse_args()
 
   fsa = Graph(lemma=args.label_seq)
 
   asg = Asg(fsa)
 
-  asg.set_label_conversion(args.label_conversion)
+  asg.label_conversion = args.label_conversion
 
-  asg.set_asg_rep(args.asg_repetition)
+  asg.asg_repetition = args.asg_repetition
 
   asg.run()
 
-  sav = Store(fsa)
+  sav_asg = Store(fsa.num_states_asg, fsa.edges_asg)
 
-  sav.fsa_to_dot_format()
+  sav_asg.filename = 'edges_asg'
 
-  sav.save_to_file()
+  sav_asg.fsa_to_dot_format()
+
+  sav_asg.save_to_file()
+
+  ctc = Ctc(fsa)
+
+  ctc.label_conversion = args.label_conversion
+
+  ctc.run()
+
+  sav_ctc = Store(fsa.num_states_ctc, fsa.edges_ctc)
+
+  sav_ctc.filename = 'edges_ctc'
+
+  sav_ctc.fsa_to_dot_format()
+
+  sav_ctc.save_to_file()
 
 if __name__ == "__main__":
   import time
