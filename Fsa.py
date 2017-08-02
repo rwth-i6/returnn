@@ -290,20 +290,84 @@ class Ctc:
     # list[int] final_states: list of final states
     self.final_states = []
 
-  def _add_final_state(self, state):
-    """
-    adds a final state to list of final states
-    :param int state: the final state which gets added to list
-    """
-    if isinstance(state, int):
-      # only add if not in list
-      if state not in self.final_states:
-        self.final_states.append(state)
-    else:
-      assert False, ("The final state input is not an integer!", state)
-
   def run(self):
-    pass
+    """
+    creates the CTC FSA
+    """
+    print("Starting CTC FSA Creation")
+    self.fsa.num_states = 0
+    cur_idx = 0
+
+    # goes through the list of strings
+    for idx, seq in enumerate(self.fsa.lem_list):
+      # goes through string
+      for i, label in enumerate(seq):
+        src_idx = 2 * cur_idx
+        if cur_idx == 0:
+          self.fsa.num_states += 1
+        trgt_idx = src_idx + 2
+        e_norm = Edge(src_idx, trgt_idx, seq[i])
+        e_norm.idx = cur_idx
+        e_norm.idx_word_in_sentence = idx
+        e_norm.idx_phon_in_word = i
+        # if two equal labels back to back in string -> skip repetition
+        if seq[i] != seq[i - 1] or len(seq) == 1:
+          self.fsa.edges.append(e_norm)
+        # adds blank labels and label repetitions
+        e_blank = Edge(src_idx, trgt_idx - 1, Edge.BLANK)
+        self.fsa.edges.append(e_blank)
+        e_rep = deepcopy(e_norm)
+        e_rep.source_state_idx = src_idx + 1
+        self.fsa.edges.append(e_rep)
+        cur_idx += 1
+        # add number of states
+        self.fsa.num_states += 2
+
+      # adds separator between words in sentence
+      if idx < len(self.fsa.lem_list) - 1:
+        self.fsa.edges.append(Edge(2 * cur_idx, 2 * cur_idx + 1, Edge.BLANK))
+        self.fsa.edges.append(Edge(2 * cur_idx + 1, 2 * cur_idx + 2, Edge.SIL))
+        self.fsa.edges.append(Edge(2 * cur_idx, 2 * cur_idx + 2, Edge.SIL))
+        self.fsa.num_states += 2
+        cur_idx += 1
+
+    # add node nuber of final state
+    self.final_states.append(self.fsa.num_states - 1)
+
+    # add all final possibilities
+    e_end_1 = Edge(self.fsa.num_states - 3, self.fsa.num_states, Edge.BLANK, 1.)
+    self.fsa.edges.append(e_end_1)
+    e_end_2 = Edge(self.fsa.num_states + 1, self.fsa.num_states + 2, Edge.BLANK, 1.)
+    self.fsa.edges.append(e_end_2)
+    e_end_3 = Edge(self.fsa.num_states, self.fsa.num_states + 1, self.fsa.lem_list[-1][-1], 1.)
+    self.fsa.edges.append(e_end_3)
+    self.fsa.num_states += 3
+    # add node nuber of final state
+    self.final_states.append(self.fsa.num_states - 1)
+
+    # make single final node
+    if not (len(self.final_states) == 1 and self.final_states[0] == self.fsa.num_states - 1):
+      # add new single final node
+      self.fsa.num_states += 1
+      for fstate in self.final_states:
+        # find edges which end in final nodes
+        final_state_idx_list = [edge_idx for edge_idx, edge in enumerate(self.fsa.edges)
+                                if edge.target_state_idx == fstate]
+        # add edge from final nodes to new single final node
+        final_state_node = Edge(fstate, self.fsa.num_states - 1,
+                                self.fsa.edges[final_state_idx_list[0]].label)
+        self.fsa.edges.append(final_state_node)
+        for final_state_idx in final_state_idx_list:
+          # add edges from nodes which go to final nodes
+          final_state_edge = deepcopy(self.fsa.edges[final_state_idx])
+          final_state_edge.target_state_idx = self.fsa.num_states - 1
+          self.fsa.edges.append(final_state_edge)
+
+    self.fsa.edges.sort()
+    self.fsa.num_states_ctc = deepcopy(self.fsa.num_states)
+    self.fsa.num_states = -1
+    self.fsa.edges_ctc = deepcopy(self.fsa.edges)
+    self.fsa.edges = []
 
 
 class Hmm:
