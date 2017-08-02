@@ -716,7 +716,7 @@ def concat_sources(src_layers):
   """
   assert src_layers, "need source layers"
   if len(src_layers) == 1:
-    return src_layers[0].output
+    return src_layers[0].output.copy()
   network = src_layers[0].network
   if (tuple(src_layers), 0.0) in network.concat_sources_dropout_cache:
     return network.concat_sources_dropout_cache[(tuple(src_layers), 0.0)].copy()
@@ -781,7 +781,7 @@ def concat_sources_with_opt_dropout(src_layers, dropout=0):
     # If we know that we are not training, we always disable dropout.
     dropout = 0
   if not dropout:
-    return data
+    return data.copy()
   if (tuple(src_layers), float(dropout)) in network.concat_sources_dropout_cache:
     return network.concat_sources_dropout_cache[(tuple(src_layers), float(dropout))].copy()
   data = data.copy()
