@@ -351,66 +351,39 @@ class Store:
   Conversion and save class for FSA
   """
 
-  def __init__(self, fsa, filename='fsa', path='./tmp/', fsa_type=None, file_format='svg'):
+  def __init__(self, num_states, edges, filename='edges', path='./tmp/', file_format='svg'):
     """
-    :param Graph fsa: the graph which shall be converted to a specific format or stored as a file
+    :param int num_states: number of states of FSA
+    :param list[Edge] edges: list of edges representing FSA
     :param str filename: name of the output file
     :param str path: location
-    :param str|None fsa_type: which type of fsa to process (None=all, asg, ctc, hmm)
     :param str file_format: format in which to save the file
     """
-    self.fsa = fsa
+    self.num_states = num_states
+    self.edges = edges
     self.filename = filename
     self.path = path
-    self.fsa_type = fsa_type
     self.file_format = file_format
 
-    """
-    :Digraph graph_asg: stores the asg fsa in dot format
-    :Digraph graph_ctc: stores the ctc fsa in dot format
-    :Digraph graph_hmm: stores the hmm fsa in dot format
-    """
     # noinspection PyPackageRequirements,PyUnresolvedReferences
     import graphviz
-    self.graph_asg = graphviz.Digraph(format=self.file_format)
-    self.graph_ctc = graphviz.Digraph(format=self.file_format)
-    self.graph_hmm = graphviz.Digraph(format=self.file_format)
-
+    self.graph = graphviz.Digraph(format=self.file_format)
 
   def fsa_to_dot_format(self):
     """
     converts num_states and edges within the graph to dot format
     """
-    if self.fsa.num_states_asg > 0 and (self.fsa_type == 'asg' or self.fsa_type is None):
-      self._add_nodes(self.graph_asg, self.fsa.num_states_asg)
-      self._add_edges(self.graph_asg, self.fsa.edges_asg)
-    elif self.fsa.num_states_ctc > 0 and (self.fsa_type == 'ctc' or self.fsa_type is None):
-      self._add_nodes(self.graph_ctc, self.fsa.num_states_ctc)
-      self._add_edges(self.graph_ctc, self.fsa.edges_ctc)
-    elif self.fsa.num_states_hmm > 0 and (self.fsa_type == 'hmm' or self.fsa_type is None):
-      self._add_nodes(self.graph_hmm, self.fsa.num_states_hmm)
-      self._add_edges(self.graph_hmm, self.fsa.edges_hmm)
-    else:
-      assert False, "Conversion to dot format went wrong"
+    self._add_nodes(self.graph, self.num_states)
+    self._add_edges(self.graph, self.edges)
 
   def save_to_file(self):
     """
-    saves dot graph to file using settings (filename, path, fsa_type and file_format)
+    saves dot graph to file
+    settings: filename, path, fsa_type and file_format
+    caution: overwrites already present files
     """
-    if self.fsa.num_states_asg > 0 and (self.fsa_type == 'asg' or self.fsa_type is None):
-      fn = self.filename + '_asg'
-      save_path = self.graph_asg.render(filename=fn, directory=self.path)
-      print("ASG FSA saved in:", save_path)
-    elif self.fsa.num_states_ctc > 0 and (self.fsa_type == 'ctc' or self.fsa_type is None):
-      fn = self.filename + '_ctc'
-      save_path = self.graph_ctc.render(filename=fn, directory=self.path)
-      print("CTC FSA saved in:", save_path)
-    elif self.fsa.num_states_hmm > 0 and (self.fsa_type == 'hmm' or self.fsa_type is None):
-      fn = self.filename + '_hmm'
-      save_path = self.graph_hmm.render(filename=fn, directory=self.path)
-      print("HMM FSA saved in:", save_path)
-    else:
-      assert False, "Save to file went wrong"
+    save_path = self.graph.render(filename=self.filename, directory=self.path)
+    print("FSA saved in:", save_path)
 
   @staticmethod
   def _add_nodes(graph, num_states):
@@ -486,7 +459,7 @@ class Fsa:
     self.lemma_orig = None
     self.lemma = None
 
-    self.filename = 'fsa'
+    self.filename = 'edges'
 
     self.single_state = False
 
