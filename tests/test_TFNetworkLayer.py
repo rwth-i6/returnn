@@ -16,6 +16,55 @@ from TFNetwork import *
 from TFNetworkLayer import *
 
 
+def test_activation_layer_net_construct():
+  with tf.Session() as session:
+    num_inputs = 2
+    config = Config()
+    config.update({
+      "num_outputs": 3,
+      "num_inputs": num_inputs,
+      "network": {
+        "output": {"class": "activation", "activation": "relu", "from": ["data"]}
+      }})
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_value("network"))
+    out = network.get_default_output_layer().output.placeholder
+    n_batch = 1
+    seq_len = 3
+    feed = {network.extern_data.get_default_input_data().placeholder:
+            numpy.array([[[0, 0], [-1, -1], [2, 2]]], dtype="float32")}
+    assert_equal(feed[network.extern_data.get_default_input_data().placeholder].shape, (n_batch, seq_len, num_inputs))
+    v = session.run(out, feed_dict=feed)
+    assert_equal(v.shape, (n_batch, seq_len, num_inputs))
+    assert_equal(v.tolist(), [[[0, 0], [0, 0], [2, 2]]])
+
+
+def test_activation_layer_net_construct_two_out():
+  with tf.Session() as session:
+    num_inputs = 2
+    config = Config()
+    config.update({
+      "num_outputs": 3,
+      "num_inputs": num_inputs,
+      "network": {
+        "0out": {"class": "linear", "n_out": 1, "activation": "relu", "from": ["data"], "is_output_layer": True},
+        "output": {"class": "activation", "activation": "relu", "from": ["data"]}
+      }})
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_value("network"))
+    session.run(tf.global_variables_initializer())
+    out = network.layers["output"].output.placeholder
+    out2 = network.layers["0out"].output.placeholder
+    n_batch = 1
+    seq_len = 3
+    feed = {network.extern_data.get_default_input_data().placeholder:
+            numpy.array([[[0, 0], [-1, -1], [2, 2]]], dtype="float32")}
+    assert_equal(feed[network.extern_data.get_default_input_data().placeholder].shape, (n_batch, seq_len, num_inputs))
+    v, v2 = session.run([out, out2], feed_dict=feed)
+    assert_equal(v.shape, (n_batch, seq_len, num_inputs))
+    assert_equal(v.tolist(), [[[0, 0], [0, 0], [2, 2]]])
+
+
 def test_combine_layer_net_construct():
   with tf.Session():
     net_dict = {

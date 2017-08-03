@@ -250,7 +250,7 @@ class Graph:
       self.lemma = None
       self.lem_list = lemma
     else:
-      assert False, "The input you provided is not acceptable!"
+      assert False, ("The input you provided is not acceptable!", lemma)
 
     """
     int num_states: number of state of FSA during creation for ASG, CTC, HMM
@@ -301,7 +301,7 @@ class Graph:
     if isinstance(name, str):
       self.filename = name
     else:
-      assert False, "The filename is not a string!"
+      assert False, ("The filename is not a string!", name)
 
   def make_single_state_graph(self):
     pass
@@ -323,15 +323,14 @@ class Asg:
     :param bool label_conversion: shall the labels be converted into numbers (only ASG and CTC)
     """
     if isinstance(fsa, Graph) and isinstance(num_labels, int)\
-      and isinstance(asg_repetition, int) and isinstance(label_conversion, bool):
+       and isinstance(asg_repetition, int) and isinstance(label_conversion, bool):
       self.fsa = fsa
       self.num_labels = num_labels
       self.asg_repetition = asg_repetition
       self.label_conversion = label_conversion
-      self.label_repetitions = [] # marks the labels which will be replaced with a rep symbol
+      self.label_repetitions = []  # marks the labels which will be replaced with a rep symbol
     else:
-      assert False, "The ASG input is not of class Graph!"
-
+      assert False, ("The ASG init went wrong!", fsa)
 
   def set_asg_rep(self, reps):
     """
@@ -341,7 +340,7 @@ class Asg:
     if isinstance(reps, int) and reps > 1:
       self.asg_repetition = reps
     else:
-      assert False, "The asg repeat input is not a positive integer!"
+      assert False, ("The asg repeat input is not a positive integer greater than one!", reps)
 
   def set_num_labels(self, numlab):
     """
@@ -351,7 +350,7 @@ class Asg:
     if isinstance(numlab, int) and numlab > 0:
       self.num_labels = numlab
     else:
-      assert False, "The label number input is not a positive integer!"
+      assert False, ("The label number input is not a positive integer!", numlab)
 
   def set_label_conversion(self, onoff):
     """
@@ -361,7 +360,7 @@ class Asg:
     if isinstance(onoff, bool):
       self.label_conversion = onoff
     else:
-      assert False, "The label conversion input is not a bool!"
+      assert False, ("The label conversion input is not a bool!", onoff)
 
   def run(self):
     """
@@ -396,15 +395,17 @@ class Asg:
       self.label_repetitions.append(reps_label)
 
     # create states
-    self.fsa.num_states_asg = 0
+    self.fsa.num_states = 0
     cur_idx = 0
+    src_idx = 0
+    trgt_idx = 0
     for rep_index, rep_label in enumerate(self.label_repetitions):
       for idx, lab in enumerate(rep_label):
         src_idx = cur_idx
         trgt_idx = src_idx + 1
         if cur_idx == 0:  # for final state
-          self.fsa.num_states_asg += 1
-        self.fsa.num_states_asg += 1
+          self.fsa.num_states += 1
+        self.fsa.num_states += 1
         edge = Edge(src_idx, trgt_idx, lab)
         edge.set_idx_word_in_sentence(rep_index)
         edge.set_idx_phon_in_word(idx)
@@ -413,28 +414,46 @@ class Asg:
           edge.set_phon_at_word_begin(True)
         if idx == len(rep_label) - 1:
           edge.set_phon_at_word_end(True)
-        self.fsa.edges_asg.append(edge)
+        self.fsa.edges.append(edge)
         cur_idx += 1
       # adds separator between words in sentence
       if rep_index < len(self.label_repetitions) - 1:
-        self.fsa.edges_asg.append(Edge(src_idx + 1, trgt_idx + 1, Edge.BLANK))
+        self.fsa.edges.append(Edge(src_idx + 1, trgt_idx + 1, Edge.BLANK))
+        self.fsa.num_states += 1
         cur_idx += 1
 
     # adds loops to graph
-    for loop_idx in range(1, self.fsa.num_states_asg):
-      edges_add_loop = [asg_edge_idx for asg_edge_idx, asg_edge in enumerate(self.fsa.edges_asg)
-                        if (asg_edge.target_state_idx == loop_idx and asg_edge.label != Edge.BLANK and asg_edge.label != Edge.EPS and asg_edge.label != Edge.SIL)]
+    for loop_idx in range(1, self.fsa.num_states):
+      edges_add_loop = [edge_idx for edge_idx, edge_cur in enumerate(self.fsa.edges)
+                        if (edge_cur.target_state_idx == loop_idx and edge_cur.label != Edge.EPS
+                            and edge_cur.label != Edge.SIL)]
       for add_loop_edge in edges_add_loop:
-        edge = deepcopy(self.fsa.edges_asg[add_loop_edge])
+        edge = deepcopy(self.fsa.edges[add_loop_edge])
         edge.set_source_state_idx(edge.get_target_state_idx())
         edge.set_is_loop(True)
-        self.fsa.edges_asg.append(edge)
+        self.fsa.edges.append(edge)
 
-    self.fsa.edges_asg.sort()
+    self.fsa.edges.sort()
 
     # label conversion
-    if self.label_conversion == True:
-      pass
+    if self.label_conversion:
+      for edge_lbl in self.fsa.edges:
+        lbl = edge_lbl.get_label()
+        if lbl == Edge.BLANK:
+          edge_lbl.set_label(ord(' '))
+        elif lbl == Edge.SIL or lbl == Edge.EPS:
+          pass
+        elif isinstance(lbl, str):
+          edge_lbl.set_label(ord(lbl))
+        elif isinstance(lbl, int):
+          pass
+        else:
+          assert False, "Label Conversion failed!"
+
+    self.fsa.num_states_asg = deepcopy(self.fsa.num_states)
+    self.fsa.num_states = -1
+    self.fsa.edges_asg = deepcopy(self.fsa.edges)
+    self.fsa.edges = []
 
 
 class Ctc:
@@ -453,7 +472,7 @@ class Ctc:
       self.num_labels = num_labels
       self.label_conversion = label_conversion
     else:
-      assert False, "The CTC input is not of class Graph!"
+      assert False, ("The CTC init went wrong!", fsa)
 
     # list[int] final_states: list of final states
     self.final_states = []
@@ -466,7 +485,7 @@ class Ctc:
     if isinstance(numlab, int):
       self.num_labels = numlab
     else:
-      assert False, "The label number input is not an integer!"
+      assert False, ("The label number input is not an integer!", numlab)
 
   def set_label_conversion(self, onoff):
     """
@@ -476,7 +495,7 @@ class Ctc:
     if isinstance(onoff, bool):
       self.label_conversion = onoff
     else:
-      assert False, "The label conversion input is not a bool!"
+      assert False, ("The label conversion input is not a bool!", onoff)
 
   def _add_final_state(self, state):
     """
@@ -488,7 +507,7 @@ class Ctc:
       if state not in self.final_states:
         self.final_states.append(state)
     else:
-      assert False, "The final state input is not an integer!"
+      assert False, ("The final state input is not an integer!", state)
 
   def run(self):
     pass
@@ -510,7 +529,7 @@ class Hmm:
       self.depth = depth
       self.allo_num_states = allo_num_states
     else:
-      assert False, 'The HMM input is not of class Graph'
+      assert False, ('The HMM init went wrong', fsa)
 
     # Lexicon|None lexicon: lexicon for transforming a word into allophones
     self.lexicon = None
@@ -527,7 +546,7 @@ class Hmm:
     if isinstance(depth, int):
       self.depth = depth
     else:
-      assert False, "The depth input is not an integer!"
+      assert False, ("The depth input is not an integer!", depth)
 
   def load_lexicon(self, lexicon_name):
     """
@@ -542,6 +561,121 @@ class Hmm:
     :param state_tying_name: holds the path and name of the state tying file
     """
     pass
+
+
+class Store:
+  """
+  Conversion and save class for FSA
+  """
+
+  def __init__(self, fsa, filename='fsa', path='./tmp/', fsa_type=None, file_format='svg'):
+    """
+    :param Graph fsa: the graph which shall be converted to a specific format or stored as a file
+    :param str filename: name of the output file
+    :param str path: location
+    :param str|None fsa_type: which type of fsa to process (None=all, asg, ctc, hmm)
+    :param str file_format: format in which to save the file
+    """
+    self.fsa = fsa
+    self.filename = filename
+    self.path = path
+    self.fsa_type = fsa_type
+    self.file_format = file_format
+
+    """
+    :Digraph graph_asg: stores the asg fsa in dot format
+    :Digraph graph_ctc: stores the ctc fsa in dot format
+    :Digraph graph_hmm: stores the hmm fsa in dot format
+    """
+    # noinspection PyPackageRequirements,PyUnresolvedReferences
+    import graphviz
+    self.graph_asg = graphviz.Digraph(format=self.file_format)
+    self.graph_ctc = graphviz.Digraph(format=self.file_format)
+    self.graph_hmm = graphviz.Digraph(format=self.file_format)
+
+  def set_filename(self, fn):
+    if isinstance(fn, str):
+      self.filename = fn
+    else:
+      assert False, ("Filename input is not a string", fn)
+
+  def set_path(self, p):
+    if isinstance(p, str):
+      self.path = p
+    else:
+      assert False, ("Path input is not a string", p)
+
+  def set_fsa_type(self, ft):
+    if isinstance(ft, str) or ft is None:
+      self.fsa_type = ft
+    else:
+      assert False, ("FSA Type input is not string or None", ft)
+
+  def set_file_format(self, ff):
+    if isinstance(ff, str):
+      self.file_format = ff
+    else:
+      assert False, ("File format input is not string", ff)
+
+  def fsa_to_dot_format(self):
+    """
+    converts num_states and edges within the graph to dot format
+    """
+    if self.fsa.num_states_asg > 0 and (self.fsa_type == 'asg' or self.fsa_type is None):
+      self._add_nodes(self.graph_asg, self.fsa.num_states_asg)
+      self._add_edges(self.graph_asg, self.fsa.edges_asg)
+    elif self.fsa.num_states_ctc > 0 and (self.fsa_type == 'ctc' or self.fsa_type is None):
+      self._add_nodes(self.graph_ctc, self.fsa.num_states_ctc)
+      self._add_edges(self.graph_ctc, self.fsa.edges_ctc)
+    elif self.fsa.num_states_hmm > 0 and (self.fsa_type == 'hmm' or self.fsa_type is None):
+      self._add_nodes(self.graph_hmm, self.fsa.num_states_hmm)
+      self._add_edges(self.graph_hmm, self.fsa.edges_hmm)
+    else:
+      assert False, "Conversion to dot format went wrong"
+
+  def save_to_file(self):
+    """
+    saves dot graph to file using settings (filename, path, fsa_type and file_format)
+    """
+    if self.fsa.num_states_asg > 0 and (self.fsa_type == 'asg' or self.fsa_type is None):
+      fn = self.filename + '_asg'
+      save_path = self.graph_asg.render(filename=fn, directory=self.path)
+      print("ASG FSA saved in:", save_path)
+    elif self.fsa.num_states_ctc > 0 and (self.fsa_type == 'ctc' or self.fsa_type is None):
+      fn = self.filename + '_ctc'
+      save_path = self.graph_ctc.render(filename=fn, directory=self.path)
+      print("CTC FSA saved in:", save_path)
+    elif self.fsa.num_states_hmm > 0 and (self.fsa_type == 'hmm' or self.fsa_type is None):
+      fn = self.filename + '_hmm'
+      save_path = self.graph_hmm.render(filename=fn, directory=self.path)
+      print("HMM FSA saved in:", save_path)
+    else:
+      assert False, "Save to file went wrong"
+
+  @staticmethod
+  def _add_nodes(graph, num_states):
+    """
+    add nodes to the dot graph
+    :param Digraph graph: add nodes to this graph
+    :param int num_states: number of states equal number of nodes
+    """
+    nodes = []
+    for i in range(0, num_states):
+      nodes.append(str(i))
+
+    for n in nodes:
+        graph.node(n)
+
+  @staticmethod
+  def _add_edges(graph, edges):
+    """
+    add edges to the dot graph
+    :param Digraph graph: add edges to this graph
+    :param list[Edge] edges: list of edges
+    """
+    for edge in edges:
+      e = ((str(edge.source_state_idx), str(edge.target_state_idx)), {'label': str(edge.label)})
+      graph.edge(*e[0], **e[1])
 
 
 class Fsa:
@@ -1433,8 +1567,8 @@ def fsa_to_dot_format(file, num_states, edges):
   for i in range(0, num_states):
     nodes.append(str(i))
 
-  _add_nodes(G, nodes)
-  _add_edges(G, edges)
+  add_nodes(G, nodes)
+  add_edges(G, edges)
 
   # print(G.source)
   filepath = "./tmp/" + file
@@ -1442,7 +1576,7 @@ def fsa_to_dot_format(file, num_states, edges):
   print("File saved in:", filename)
 
 
-def _add_nodes(graph, nodes):
+def add_nodes(graph, nodes):
   for n in nodes:
     if isinstance(n, tuple):
       graph.node(n[0], **n[1])
@@ -1451,7 +1585,7 @@ def _add_nodes(graph, nodes):
   return graph
 
 
-def _add_edges(graph, edges):
+def add_edges(graph, edges):
   for e in edges:
     e = ((str(e[0]), str(e[1])), {'label': str(e[2])})
     if isinstance(e[0], tuple):
@@ -1639,7 +1773,7 @@ def main():
   arg_parser.set_defaults(num_labels=265)  # ascii number of labels
   arg_parser.add_argument("--label_conversion_on", dest="label_conversion", action="store_true")
   arg_parser.add_argument("--label_conversion_off", dest="label_conversion", action="store_false")
-  arg_parser.set_defaults(label_conversion=None)
+  arg_parser.set_defaults(label_conversion=False)
   arg_parser.add_argument("--depth", type=int)
   arg_parser.set_defaults(depth=6)
   arg_parser.add_argument("--allo_num_states", type=int)
@@ -1657,35 +1791,17 @@ def main():
 
   asg = Asg(fsa)
 
+  asg.set_label_conversion(args.label_conversion)
+
+  asg.set_asg_rep(args.asg_repetition)
+
   asg.run()
 
-  print(fsa)
+  sav = Store(fsa)
 
-  """
-  fsa_gen = Fsa()
+  sav.fsa_to_dot_format()
 
-  fsa_gen.set_lemma(args.label_seq)
-  fsa_gen.set_fsa_type(args.fsa)
-  fsa_gen.set_filename(args.file)
-  fsa_gen.set_params(asg_repetition=args.asg_repetition,
-                     num_labels=args.num_labels,
-                     label_conversion=args.label_conversion,
-                     depth=args.depth,
-                     allo_num_states=args.allo_num_states,
-                     lexicon_name=args.lexicon,
-                     state_tying_name=args.state_tying,
-                     single_state=args.single_state)
-  fsa_gen.set_lexicon(args.lexicon)
-  fsa_gen.set_state_tying(args.state_tying)
-
-  fsa_gen.run()
-
-  fsa_to_dot_format(file=fsa_gen.filename, num_states=fsa_gen.num_states, edges=fsa_gen.edges)
-
-  if (fsa_gen.single_state == True):
-    fsa_gen.reduce_node_num()
-    fsa_to_dot_format(file=fsa_gen.filename + "_single_state", num_states=1, edges=fsa_gen.edges_single_state)
-  """
+  sav.save_to_file()
 
 if __name__ == "__main__":
   import time

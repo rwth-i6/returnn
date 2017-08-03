@@ -132,6 +132,8 @@ def test_fast_bw_uniform():
   am_scores = -numpy.log(am_scores)  # in -log space
   am_scores = tf.constant(am_scores, dtype=tf.float32)
   float_idx = tf.ones((seq_len, n_batch), dtype=tf.float32)
+  # from TFUtil import sequence_mask_time_major
+  # float_idx = tf.cast(sequence_mask_time_major(tf.convert_to_tensor(list(range(seq_len - n_batch + 1, seq_len + 1)))), dtype=tf.float32)
   print("Construct call...")
   fwdbwd, obs_scores = fast_baum_welch(
     am_scores=am_scores, float_idx=float_idx,

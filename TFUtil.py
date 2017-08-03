@@ -669,6 +669,33 @@ class Data(object):
     assert self.time_dim_axis is not None
     return self.size_placeholder[self.time_dim_axis_excluding_batch]
 
+  def get_sequence_mask(self):
+    """
+    :return: seq mask of shape (batch,time) if we are batch-major, else (time,batch) if we are time-major
+    :rtype: tf.Tensor
+    """
+    assert self.time_dim_axis is not None
+    assert self.batch_dim_axis is not None
+    if self.is_time_major:
+      assert self.batch_dim_axis == 1
+      return sequence_mask_time_major(self.get_sequence_lengths())
+    else:
+      assert self.batch_dim_axis == 0
+      assert self.time_dim_axis == 1
+      return sequence_mask(self.get_sequence_lengths())
+
+  def get_sequence_mask_broadcast(self):
+    """
+    :return: seq mask of shape ((batch,time) or (time,batch)) + (1,)s for remaining dims
+    :rtype: tf.Tensor
+    """
+    seq_mask = self.get_sequence_mask()
+    assert seq_mask.get_shape().ndims == 2  # batch and time
+    seq_mask = expand_multiple_dims(
+      seq_mask, [i for i in range(self.batch_ndim) if i not in (self.batch_dim_axis, self.time_dim_axis)])
+    assert seq_mask.get_shape().ndims == self.batch_ndim
+    return seq_mask
+
   def get_spatial_batch_axes(self):
     """
     :rtype: list[int]
@@ -868,7 +895,8 @@ def get_current_name_scope():
 @contextlib.contextmanager
 def reuse_name_scope(name, absolute=None):
   """
-  :param str|tf.VariableScope name: relative name scope (absolute if absolute=True or if tf.VariableScope)
+  :param str|tf.VariableScope name: relative or absolute name scope (absolute if absolute=True or if tf.VariableScope).
+    must not end with "/".
   :param bool absolute: if True it will be absolute
 
   We try to both set the variable scope and the name scope.
@@ -879,8 +907,8 @@ def reuse_name_scope(name, absolute=None):
       assert absolute is True
     absolute = True
   assert isinstance(name, str)
-  assert name
   if not absolute:
+    assert name
     # First figure out the absolute name scope which we want to reuse/set.
     # The current name scope is more reliable because tf.variable_scope
     # will always also set the name scope.
@@ -889,26 +917,27 @@ def reuse_name_scope(name, absolute=None):
       name = current_name_scope + "/" + name
   else:
     current_name_scope = None  # not needed
-  assert name[-1] != "/"
+  assert name[-1:] != "/"
+  abs_name = name + "/" if name else ""
   # tf.name_scope with a scope-name ending with "/" will interpret is as absolute name,
   # and use it as-is.
   # In all other cases, it would create a new name-scope with a new unique name,
   # which is not what we want.
-  with tf.name_scope(name + "/"):
+  with tf.name_scope(abs_name):
     # tf.name_scope will not set the variable scope.
     # tf.variable_scope will also set the name scope, but the logic is broken
     # for absolute name scopes, thus we had to do the tf.name_scope manually above.
     # We create the dummy_var_scope to force it to reuse that name.
     # Note that the reuse-argument might be miss-leading in this context:
     # It means that tf.get_variable() will search for existing variables and errors otherwise.
-    dummy_var_scope = tf.VariableScope(reuse=None, name=name + "/")
+    dummy_var_scope = tf.VariableScope(reuse=None, name=abs_name)
     with tf.variable_scope(dummy_var_scope) as scope:
       assert isinstance(scope, tf.VariableScope)
       # remove "/" from the end of the var-scope.
       # This is a work-around to fix up the variable scope behavior for nested variable scopes.
       # Warning: This might break at some future point.
       assert scope.name is scope._name
-      assert scope.name[-1] == "/"
+      assert scope.name[-1:] == "/" or scope.name == ""
       scope._name = scope._name[:-1]
       assert name == scope.name, "%r" % current_name_scope
       yield scope
