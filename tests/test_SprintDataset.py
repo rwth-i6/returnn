@@ -88,6 +88,8 @@ def test_window():
   try:
     dataset1.init_seq_order(epoch=1)
     dataset2.init_seq_order(epoch=1)
+    dataset1.load_seqs(0, 1)
+    dataset2.load_seqs(0, 1)
     assert_equal(dataset1.get_data_dim("data"), input_dim)
     assert_equal(dataset2.get_data_dim("data"), input_dim * window)
     data1 = dataset1.get_data(0, "data")

@@ -1,6 +1,8 @@
+.. _api:
 
+===
 API
----
+===
 
 The main entry point is in :mod:`rnn`.
 This will initialize an instance of :class:`Engine`

@@ -34,17 +34,22 @@ from Network import LayerNetwork
 from Pretrain import pretrainFromConfig
 from TFNetwork import TFNetwork, ExternData
 from TFUpdater import Updater
-from Util import hms, NumbersDict
+from Util import hms
 
 
 class Runner(object):
-  def __init__(self, engine, dataset, batches, train, eval=True):
+  def __init__(self, engine, dataset, batches, train, eval=True, extra_fetches=None, extra_fetches_callback=None):
     """
     :param Engine engine:
     :param Dataset.Dataset dataset:
     :param BatchSetGenerator batches:
     :param bool train: whether to do updates on the model
     :param bool eval: whether to evaluate (i.e. calculate loss/error)
+    :param dict[str,tf.Tensor|TFUtil.Data|TFNetworkLayer.LayerBase]|None extra_fetches: additional fetches per step.
+      `extra_fetches_callback` will be called with these. In case of Data/LayerBase, it will return a list,
+      where each item corresponds to the batch-seq.
+      It might also be useful to add `network.get_extern_data("seq_idx")` and `network.get_extern_data("seq_tag")`.
+    :param (**dict[str,numpy.ndarray|str|list[numpy.ndarray|str])->None extra_fetches_callback: called if extra_fetches
     """
     from TFDataPipeline import FeedDictDataProvider, DataProviderBase
     self.engine = engine
@@ -67,6 +72,10 @@ class Runner(object):
     self.score = {}  # type: dict[str,float]  # entries like "cost:output"
     self.error = {}  # type: dict[str,float]  # entries like "error:output"
     self.stats = {}  # type: dict[str,float]  # entries like "stats:..."
+    self.extra_fetches = extra_fetches
+    if extra_fetches is not None:
+      assert extra_fetches_callback
+    self.extra_fetches_callback = extra_fetches_callback
 
     from Util import terminal_size
     terminal_width, _ = terminal_size()
@@ -94,6 +103,11 @@ class Runner(object):
         d["cost:%s" % layer_name] = loss
       for layer_name, error in self.engine.network.error_by_layer.items():
         d["error:%s" % layer_name] = error
+      for layer in self.engine.network.layers.values():
+        if layer.target and layer.target.startswith("layer:"):
+          target_data = layer.loss.target
+          for dim, v in target_data.size_placeholder.items():
+            d["size:%s:%i" % (layer.target, dim)] = v
     for layer in self.engine.network.layers.values():
       for k, v in layer.stats.items():
         d["stats:%s:%s" % (layer.name, k)] = v
@@ -103,7 +117,23 @@ class Runner(object):
         # Force a new check.
         self.engine._checked_uninitialized_vars = False
       d["optim_op"] = self.engine.updater.get_optim_op(callback_on_new=callback_on_new)
-    d["summary"] = self.engine.get_all_merged_summaries()
+      if self.engine.updater.optim_meta_losses:
+        d.update(self.engine.updater.optim_meta_losses)
+    if self.extra_fetches is not None:
+      from TFNetworkLayer import LayerBase
+      from TFUtil import Data
+      for k, v in self.extra_fetches.items():
+        if isinstance(v, tf.Tensor):
+          d["extra:%s" % k] = v
+          continue
+        if isinstance(v, LayerBase):
+          v = v.output
+        assert isinstance(v, Data)
+        d["extra:%s" % k] = v.placeholder
+        for i, s in v.size_placeholder.items():
+          d["extra:%s:size_%i" % (k, i)] = s
+    if self.engine.get_all_merged_summaries() is not None:
+      d["summary"] = self.engine.get_all_merged_summaries()
     return d
 
   def _print_process(self, report_prefix, step, step_duration, eval_info):
@@ -218,20 +248,56 @@ class Runner(object):
 
     return eval_info
 
+  def _maybe_handle_extra_fetches(self, fetches_results):
+    """
+    :param dict[str,numpy.ndarray|str] fetches_results: results of calculations, see self._get_fetches_dict()
+    """
+    if self.extra_fetches is None:
+      return
+    d = {}
+    from TFNetworkLayer import LayerBase
+    from TFUtil import Data
+    for k, v in self.extra_fetches.items():
+      r = fetches_results["extra:%s" % k]
+      if isinstance(v, tf.Tensor):
+        d[k] = r
+        continue
+      if isinstance(v, LayerBase):
+        v = v.output
+      assert isinstance(v, Data)
+      if v.batch_dim_axis != 0:
+        r = numpy.moveaxis(r, v.batch_dim_axis, 0)
+      if v.have_time_axis():
+        assert v.time_dim_axis_excluding_batch == 0
+        assert list(v.size_placeholder.keys()) == [0]
+        seq_lens = fetches_results["extra:%s:size_0" % k]  # shape: (batch,)
+        assert seq_lens.shape == (r.shape[0],)
+        d[k] = [r[i, :seq_lens[i]] for i in range(seq_lens.shape[0])]
+      else:
+        d[k] = list(r)
+    self.extra_fetches_callback(**d)
+
   def run(self, report_prefix):
     """
     :param str report_prefix: prefix for logging
     """
     sess = self.engine.tf_session
-    logdir = os.path.dirname(self.engine.model_filename) or os.getcwd()
-    logdir += "/%s" % self.data_provider.get_dataset_name()
-    if not self._should_train:  # like eval
-      logdir += "-%i" % self.engine.epoch
-    if self.engine.use_search_flag:
-      logdir += "-search"
-    writer = tf.summary.FileWriter(logdir)
-    writer.add_graph(sess.graph)
+    if self.engine.config.has("tf_log_dir"):
+      logdir = self.engine.config.value("tf_log_dir", None)
+    else:
+      logdir = os.path.dirname(self.engine.model_filename) or os.getcwd()
+    if logdir:
+      logdir += "/%s" % self.data_provider.get_dataset_name()
+      if not self._should_train:  # like eval
+        logdir += "-%i" % self.engine.epoch
+      if self.engine.use_search_flag:
+        logdir += "-search"
+      writer = tf.summary.FileWriter(logdir)
+    else:
+      writer = None
     run_metadata = tf.RunMetadata()
+    debug_shell_in_runner = self.engine.config.bool("debug_shell_in_runner", False)
+    debug_shell_in_runner_step = self.engine.config.int("debug_shell_in_runner_step", 1)
 
     # Not sure if this is the best thing to do for an evaluation but it's ok for now.
     # We could also set it to 0 for non train epochs.
@@ -249,6 +315,9 @@ class Runner(object):
       fetches_dict = self._get_fetches_dict()
       # After get_fetches_dict, maybe some new uninitialized vars. Last check.
       self.engine.check_uninitialized_vars()
+      # Also, add graph to summary here because the updater/optimizer might not have been created before.
+      if writer:
+        writer.add_graph(sess.graph)
       while self.data_provider.have_more_data(session=sess):
         feed_dict = self.data_provider.get_feed_dict()
         if isinstance(self.engine.network.train_flag, tf.Tensor):
@@ -257,6 +326,13 @@ class Runner(object):
         if self._should_train and self.reset_updater_vars_mod_step and step % self.reset_updater_vars_mod_step == 0:
           print("Reset updater vars in step %i." % step, file=log.v5)
           self.engine.updater.init_optimizer_vars()
+
+        if debug_shell_in_runner and debug_shell_in_runner_step == step:
+          print("debug_shell_in_runner, step %i" % step, file=log.v1)
+          import Debug
+          Debug.debug_shell(user_ns=locals(), user_global_ns=globals(), exit_afterwards=False)
+
+        # Now do one calculation step. Optionally with metadata.
         if self.store_metadata_mod_step and step % self.store_metadata_mod_step == 0:
           # Slow run that stores extra information for debugging.
           print('Storing metadata', file=log.v5)
@@ -267,7 +343,7 @@ class Runner(object):
             fetches_dict,
             feed_dict=feed_dict,
             options=run_options,
-            run_metadata=run_metadata)
+            run_metadata=run_metadata)  # type: dict[str,numpy.ndarray|str]
           writer.add_summary(fetches_results["summary"], step + step_offset)
           writer.add_run_metadata(run_metadata, 'step_{:04d}'.format(step + step_offset))
           tl = timeline.Timeline(run_metadata.step_stats)
@@ -275,10 +351,12 @@ class Runner(object):
           with open(timeline_path, 'w') as f:
             f.write(tl.generate_chrome_trace_format(show_memory=True))
         else:
-          fetches_results = sess.run(fetches_dict, feed_dict=feed_dict)
-          writer.add_summary(fetches_results["summary"], step + step_offset)
+          fetches_results = sess.run(fetches_dict, feed_dict=feed_dict)  # type: dict[str,numpy.ndarray|str]
+          if writer:
+            writer.add_summary(fetches_results["summary"], step + step_offset)
 
         eval_info = self._collect_eval_info(fetches_results=fetches_results)
+        self._maybe_handle_extra_fetches(fetches_results)
         duration = time.time() - start_time
         self._print_process(report_prefix=report_prefix, step=step, step_duration=duration,
                             eval_info=eval_info)
@@ -306,8 +384,9 @@ class Runner(object):
     finally:
       from Util import try_and_ignore_exception
       from TFUtil import stop_event_writer_thread
-      try_and_ignore_exception(writer.close)
-      try_and_ignore_exception(lambda: stop_event_writer_thread(writer.event_writer))
+      if writer:
+        try_and_ignore_exception(writer.close)
+        try_and_ignore_exception(lambda: stop_event_writer_thread(writer.event_writer))
       try_and_ignore_exception(coord.request_stop)
       try_and_ignore_exception(lambda: coord.join(threads))
       try_and_ignore_exception(self.data_provider.stop_threads)
@@ -377,14 +456,6 @@ class Engine(object):
       if is_gpu_available():
         print("Note: There is a GPU available but you have set device=cpu.", file=log.v2)
 
-  @classmethod
-  def _guess_requested_max_num_threads(cls):
-    omp_num_threads = int(os.environ.get("OMP_NUM_THREADS") or 0)
-    if omp_num_threads:
-      # Minimum of 2 threads, should not hurt.
-      return max(omp_num_threads, 2)
-    return None
-
   def _close_tf_session(self):
     if self.tf_session:
       self.tf_session.close()
@@ -399,10 +470,8 @@ class Engine(object):
     # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/protobuf/config.proto
     opts.setdefault("log_device_placement", False)
     opts.setdefault("device_count", {}).setdefault("GPU", 1 if self.is_requesting_for_gpu() else 0)
-    num_threads = self._guess_requested_max_num_threads()
-    if num_threads:
-      opts.setdefault("intra_op_parallelism_threads", num_threads)
-      opts.setdefault("inter_op_parallelism_threads", num_threads)
+    # Note: We don't set intra_op_parallelism_threads and inter_op_parallelism_threads here anymore
+    # because it is saver to do it via setup_tf_thread_pools() which we call very early.
     print("Setup tf.Session with options %r ..." % opts, file=log.v2)
     config = tf.ConfigProto(**opts)
     # config.gpu_options.allow_growth=True
@@ -455,10 +524,12 @@ class Engine(object):
     print("Load model %s" % (filename,), file=log.v4)
     self.network.load_params_from_file(filename, session=self.tf_session)
 
-  def save_model(self, filename):
+  def save_model(self, filename=None):
     """
     :param str filename: full filename for model
     """
+    if not filename:
+      filename = self.get_epoch_model_filename()
     print("Save model under %s" % (filename,), file=log.v4)
     self.network.save_params_to_file(filename, session=self.tf_session)
 
@@ -521,7 +592,11 @@ class Engine(object):
 
     if model_epoch_filename:
       print("loading weights from", model_epoch_filename, file=log.v2)
-      self.network.load_params_from_file(model_epoch_filename, session=self.tf_session)
+      try:
+        self.network.load_params_from_file(model_epoch_filename, session=self.tf_session)
+      except tf.errors.NotFoundError:
+        print("Exiting now because model cannot be loaded.", file=log.v1)
+        sys.exit(1)
 
   def _init_network(self, net_desc, epoch=None):
     if epoch is None:
@@ -765,6 +840,10 @@ class Engine(object):
           self.eval_model()
 
   def get_all_merged_summaries(self):
+    """
+    :return: merged summaries, serialized string
+    :rtype: tf.Tensor
+    """
     # Note: This assumes that the summaries never change.
     # Both both training and evaluation on the CV dataset, this is the case.
     if self._merge_all_summaries is None:
@@ -805,7 +884,7 @@ class Engine(object):
     # First we need a custom DataProvider with a custom BatchSetGenerator
     # which will yield only one single batch for the provided sequence idx.
     batch = Batch()
-    batch.add_frames(seq_idx=seq_idx, seq_start_frame=0, length=dataset.get_seq_length(seq_idx))
+    batch.init_with_one_full_sequence(seq_idx=seq_idx, dataset=dataset)
     batch_generator = iter([batch])
     batches = BatchSetGenerator(dataset, generator=batch_generator)
     from TFDataPipeline import FeedDictDataProvider
@@ -849,29 +928,92 @@ class Engine(object):
 
   def forward_to_hdf(self, data, output_file, combine_labels='', batch_size=0):
     """
-    Is aiming at recreating the same interface and output as Engine.forward_to_hdf.
+    Is aiming at recreating the same interface and output as :func:`Engine.forward_to_hdf`.
+    See also :func:`EngineTask.HDFForwardTaskThread` and :func:`hdf_dump_from_dataset` in the hdf_dump.py tool.
 
-    :type data: Dataset.Dataset
-    :type output_file: str
-    :type combine_labels: str
+    :param Dataset data:
+    :param str output_file:
+    :param str combine_labels: ignored at the moment
+    :param int batch_size:
     """
-    # TODO: current implementation will blow up the memory, should write seq by seq into the dataset.
-    # TODO: should use Runner instead of self.forward_single().
     import h5py
-    forwarding_outputs = []
-    seq_tags = []
-    seq_idx = 0
-    while data.is_less_than_num_seqs(seq_idx):
-      forwarding_outputs.append(self.forward_single(data, seq_idx))
-      seq_tags.append(data.get_tag(seq_idx))
-      seq_idx += 1
-    #write to hdf file
+    from Util import hdf5_strings
+
+    output_layer_name = None
+    if not output_layer_name:
+      output_layer_name = self.config.value("forward_output_layer", self.network.get_default_output_layer_name())
+      assert output_layer_name, "output layer not defined. set forward_output_layer in config"
+    assert output_layer_name in self.network.layers, "output layer %r not found" % output_layer_name
+    output_layer = self.network.layers[output_layer_name]
+    target = self.network.get_default_target()
+
     cache = h5py.File(output_file, "w")
-    cache.create_dataset('inputs', data=numpy.concatenate(forwarding_outputs, axis=0))
-    cache.create_dataset('seqLengths', data=numpy.asarray([fo.shape[0] for fo in forwarding_outputs], dtype='int32'))
-    cache.create_dataset('seqTags', data=numpy.asarray(seq_tags, dtype='|S5'))
-    seqDims = numpy.asarray([0 for fo in forwarding_outputs], dtype='int32')
-    cache.create_dataset('seqDims', data=numpy.reshape(seqDims, (seqDims.shape[0], 1)))
+    cache.attrs['numTimesteps'] = 0
+    cache.attrs['inputPattSize'] = data.num_inputs
+    cache.attrs['numDims'] = 1
+    cache.attrs['numLabels'] = data.num_outputs[target]
+    cache.attrs['numSeqs'] = 0
+    if target in data.labels:
+      hdf5_strings(cache, 'labels', data.labels[target])
+
+    datasets = {}  # type: dict[str,h5py.Dataset]
+    tags = []  # type: list[str]
+    seq_lengths = cache.create_dataset("seqLengths", (0,), dtype='i', maxshape=(None,))
+
+    def insert_h5_inputs(name, raw_data):
+      """
+      Inserts a record into the hdf5-file.
+      Resizes if necessary.
+
+      :param str name:
+      :param numpy.ndarray raw_data: shape=(time,data)
+      """
+      assert len(raw_data.shape) == 2
+      if name not in datasets:
+        datasets[name] = cache.create_dataset(name, raw_data.shape, raw_data.dtype, maxshape=tuple(None for _ in raw_data.shape))
+      else:
+        old_shape = datasets[name].shape
+        datasets[name].resize((old_shape[0] + raw_data.shape[0],) + old_shape[1:])
+      # append raw data to dataset
+      datasets[name][cache.attrs['numTimesteps']:, 0:] = raw_data
+      cache.attrs['numTimesteps'] += raw_data.shape[0]
+      cache.attrs['numSeqs'] += 1
+
+    def extra_fetches_cb(inputs, seq_len, seq_tag):
+      """
+      Insert each batch into the output_file (hdf).
+
+      :param numpy.ndarray inputs: shape=(n_batch,time,data)
+      :param list[int] seq_len: sequence lengths
+      :param list[str] seq_tag: sequence tags of length n_batch
+      """
+      n_batch = len(seq_len)
+      assert n_batch == len(seq_tag)
+      assert n_batch == inputs.shape[0]
+
+      seqlen_offset = seq_lengths.shape[0]
+      seq_lengths.resize((seqlen_offset + n_batch,))
+      for i in range(n_batch):
+        tags.append(seq_tag[i])
+        seq_lengths[seqlen_offset + i] = seq_len[i]
+        insert_h5_inputs('inputs', inputs[i][:seq_len[i]])
+
+    batches = data.generate_batches(
+      recurrent_net=self.network.recurrent,
+      batch_size=batch_size,
+      used_data_keys=self.network.used_data_keys)
+    forwarder = Runner(
+      engine=self, dataset=data, batches=batches,
+      train=False, eval=False,
+      extra_fetches={
+        'inputs': output_layer.output.get_placeholder_as_batch_major(),
+        "seq_len": output_layer.output.get_sequence_lengths(),
+        "seq_tag": self.network.get_seq_tags(),
+      },
+      extra_fetches_callback=extra_fetches_cb)
+    forwarder.run(report_prefix=self.get_epoch_str() + " forward")
+
+    hdf5_strings(cache, 'seqTags', tags)
     cache.close()
 
   def analyze(self, data, statistics):
@@ -923,9 +1065,11 @@ class Engine(object):
       print("WARNING: Did not finished through the whole epoch.", file=log.v1)
       sys.exit(1)
 
-  def search(self, dataset, do_eval=True):
+  def search(self, dataset, do_eval=True, output_layer_name="output"):
     """
     :param Dataset.Dataset dataset:
+    :param bool do_eval: calculate errors. can only be done if we have the reference target
+    :param str output_layer_name:
     """
     print("Search with network on %r." % dataset, file=log.v1)
     if not self.use_search_flag or not self.network:
@@ -942,8 +1086,43 @@ class Engine(object):
       max_seqs=self.config.int('max_seqs', -1),
       max_seq_length=int(self.config.float('max_seq_length', 0)),
       used_data_keys=self.network.used_data_keys)
-    runner = Runner(engine=self, dataset=dataset, batches=batches, train=False, eval=do_eval)
+
+    output_layer = self.network.layers[output_layer_name]
+    out_beam_size = output_layer.output.beam_size
+    if out_beam_size is None:
+      print("Given output is after decision (no beam).", file=log.v1)
+    else:
+      print("Given output has beam size %i." % out_beam_size)
+
+    def extra_fetches_callback(seq_idx, seq_tag, output):
+      """
+      :param list[int] seq_idx: of length batch
+      :param list[str] seq_tag: of length batch
+      :param list[numpy.ndarray] output: of length batch
+      """
+      n_batch = len(seq_idx)
+      assert n_batch == len(seq_tag)
+      assert n_batch * (out_beam_size or 1) == len(output)
+      if output_layer.output.dim == 256 and output_layer.output.sparse:
+        # Interpret output as bytes/utf8-string.
+        output = [bytearray(o).decode("utf8") for o in output]
+      for i in range(len(seq_idx)):
+        if out_beam_size is None:
+          print("seq_idx: %i, seq_tag: %r, output: %r" % (seq_idx[i], seq_tag[i], output[i]), file=log.v1)
+        else:
+          print("seq_idx: %i, seq_tag: %r, outputs: %r" % (
+            seq_idx[i], seq_tag[i], output[i * out_beam_size:(i + 1)*out_beam_size]), file=log.v1)
+
+    runner = Runner(
+      engine=self, dataset=dataset, batches=batches, train=False, eval=do_eval,
+      extra_fetches={
+        "output": output_layer,
+        "seq_idx": self.network.get_extern_data("seq_idx", mark_data_key_as_used=True),
+        "seq_tag": self.network.get_extern_data("seq_tag", mark_data_key_as_used=True)},
+      extra_fetches_callback=extra_fetches_callback)
     runner.run(report_prefix=self.get_epoch_str() + " search")
-    assert runner.finalized
-    print("search: score %s error %s" % (
-      self.format_score(runner.score), self.format_score(runner.error)))
+    if not runner.finalized:
+      print("Error happened. Exit now.")
+      sys.exit(1)
+    print("Search done. Final: score %s error %s" % (
+      self.format_score(runner.score), self.format_score(runner.error)), file=log.v1)

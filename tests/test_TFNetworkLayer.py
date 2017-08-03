@@ -16,6 +16,55 @@ from TFNetwork import *
 from TFNetworkLayer import *
 
 
+def test_activation_layer_net_construct():
+  with tf.Session() as session:
+    num_inputs = 2
+    config = Config()
+    config.update({
+      "num_outputs": 3,
+      "num_inputs": num_inputs,
+      "network": {
+        "output": {"class": "activation", "activation": "relu", "from": ["data"]}
+      }})
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_value("network"))
+    out = network.get_default_output_layer().output.placeholder
+    n_batch = 1
+    seq_len = 3
+    feed = {network.extern_data.get_default_input_data().placeholder:
+            numpy.array([[[0, 0], [-1, -1], [2, 2]]], dtype="float32")}
+    assert_equal(feed[network.extern_data.get_default_input_data().placeholder].shape, (n_batch, seq_len, num_inputs))
+    v = session.run(out, feed_dict=feed)
+    assert_equal(v.shape, (n_batch, seq_len, num_inputs))
+    assert_equal(v.tolist(), [[[0, 0], [0, 0], [2, 2]]])
+
+
+def test_activation_layer_net_construct_two_out():
+  with tf.Session() as session:
+    num_inputs = 2
+    config = Config()
+    config.update({
+      "num_outputs": 3,
+      "num_inputs": num_inputs,
+      "network": {
+        "0out": {"class": "linear", "n_out": 1, "activation": "relu", "from": ["data"], "is_output_layer": True},
+        "output": {"class": "activation", "activation": "relu", "from": ["data"]}
+      }})
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_value("network"))
+    session.run(tf.global_variables_initializer())
+    out = network.layers["output"].output.placeholder
+    out2 = network.layers["0out"].output.placeholder
+    n_batch = 1
+    seq_len = 3
+    feed = {network.extern_data.get_default_input_data().placeholder:
+            numpy.array([[[0, 0], [-1, -1], [2, 2]]], dtype="float32")}
+    assert_equal(feed[network.extern_data.get_default_input_data().placeholder].shape, (n_batch, seq_len, num_inputs))
+    v, v2 = session.run([out, out2], feed_dict=feed)
+    assert_equal(v.shape, (n_batch, seq_len, num_inputs))
+    assert_equal(v.tolist(), [[[0, 0], [0, 0], [2, 2]]])
+
+
 def test_combine_layer_net_construct():
   with tf.Session():
     net_dict = {
@@ -86,23 +135,6 @@ def test_compare_layer():
     assert_equal(v[0], True)
 
 
-def test_rec_subnet_with_choice():
-  with tf.Session():
-    config = Config()
-    config.update({
-      "num_outputs": 3,
-      "num_inputs": 4,
-      "network": {
-        "output": {"class": "rec", "target": "classes", "unit": {
-          "prob": {"class": "softmax", "from": ["prev:output"], "loss": "ce", "target": "classes"},
-          "output": {"class": "choice", "beam_size": 4, "from": ["prob"], "target": "classes", "initial_output": 0}
-        }},
-      }
-    })
-    network = TFNetwork(config=config, train_flag=True)
-    network.construct_from_dict(config.typed_dict["network"])
-
-
 def test_layer_base_get_out_data_from_opts():
   with tf.Session():
     config = Config()
@@ -127,3 +159,26 @@ def test_layer_base_get_out_data_from_opts():
     assert out.shape == target_data.shape_dense
     assert not out.sparse
     assert out.dtype == "float32"
+
+
+def test_SplitDimsLayer_resolve_dims():
+  assert_equal(SplitDimsLayer._resolve_dims(old_dim=3 * 5, new_dims=(3, -1)), (3, 5))
+  assert_equal(SplitDimsLayer._resolve_dims(old_dim=3 * 5, new_dims=(3, 5)), (3, 5))
+  assert_equal(SplitDimsLayer._resolve_dims(old_dim=3 * 5, new_dims=(5, -1)), (5, 3))
+  assert_equal(SplitDimsLayer._resolve_dims(old_dim=2 * 3 * 5, new_dims=(-1, 3, 5)), (2, 3, 5))
+  assert_equal(SplitDimsLayer._resolve_dims(old_dim=2 * 3 * 5, new_dims=(2, -1, 5)), (2, 3, 5))
+  assert_equal(SplitDimsLayer._resolve_dims(old_dim=2 * 3 * 5, new_dims=(2, 3, -1)), (2, 3, 5))
+  assert_equal(SplitDimsLayer._resolve_dims(old_dim=2 * 3 * 5, new_dims=(2, 3, -1, 1)), (2, 3, 5, 1))
+
+
+def test_ConvLayer_get_valid_out_dim():
+  assert_equal(ConvLayer.calc_out_dim(in_dim=10, stride=1, filter_size=2, padding="same"), 10)
+  assert_equal(ConvLayer.calc_out_dim(in_dim=10, stride=1, filter_size=3, padding="same"), 10)
+  assert_equal(ConvLayer.calc_out_dim(in_dim=10, stride=1, filter_size=2, padding="valid"), 9)
+  assert_equal(ConvLayer.calc_out_dim(in_dim=10, stride=1, filter_size=3, padding="valid"), 8)
+  assert_equal(ConvLayer.calc_out_dim(in_dim=10, stride=2, filter_size=2, padding="valid"), 5)
+  assert_equal(ConvLayer.calc_out_dim(in_dim=10, stride=3, filter_size=2, padding="valid"), 3)
+  assert_equal(ConvLayer.calc_out_dim(in_dim=10, stride=3, filter_size=1, padding="valid"), 4)
+  assert_equal(ConvLayer.calc_out_dim(in_dim=10, stride=3, filter_size=2, padding="same"), 4)
+  assert_equal(ConvLayer.calc_out_dim(in_dim=41, stride=1, filter_size=2, padding="valid"), 40)
+  assert_equal(ConvLayer.calc_out_dim(in_dim=40, stride=2, filter_size=2, padding="valid"), 20)

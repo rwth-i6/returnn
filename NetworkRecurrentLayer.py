@@ -648,6 +648,9 @@ class RecurrentUnitLayer(Layer):
     else:
       base = encoder
     self.base = base
+    self.encoder = encoder
+    if aligner:
+      self.aligner = aligner
     self.set_attr('n_units', n_out)
     unit = eval(unit.upper())(**self.attrs)
     assert isinstance(unit, Unit)
@@ -794,8 +797,7 @@ class RecurrentUnitLayer(Layer):
 
       self.y_t = T.cast(self.base[0].backtrace,'float32')
     elif recurrent_transform == 'attention_segment':
-      assert base[0].inv_att, "Segment-wise attention requires attention points!"
-      self.create_seg_wise_encoder_output(base[0].inv_att.argmax(axis=2), aligner=aligner)
+      assert aligner.attention, "Segment-wise attention requires attention points!"
 
     recurrent_transform_inst = RecurrentTransform.transform_classes[recurrent_transform](layer=self)
     assert isinstance(recurrent_transform_inst, RecurrentTransform.RecurrentTransformBase)
@@ -807,7 +809,13 @@ class RecurrentUnitLayer(Layer):
       sequences = z
       sources = self.sources
       if encoder:
-        if hasattr(encoder[0],'act'):
+        if recurrent_transform == "attention_segment":
+          if hasattr(encoder[0],'act'):
+            outputs_info = [T.concatenate([e.act[i][-1] for e in encoder], axis=1) for i in range(unit.n_act)]
+          else:
+           # outputs_info = [ T.concatenate([e[i] for e in encoder], axis=1) for i in range(unit.n_act) ]
+            outputs_info[0] = self.aligner.output[-1]
+        elif hasattr(encoder[0],'act'):
           outputs_info = [ T.concatenate([e.act[i][-1] for e in encoder], axis=1) for i in range(unit.n_act) ]
         else:
           outputs_info = [ T.concatenate([e[i] for e in encoder], axis=1) for i in range(unit.n_act) ]
@@ -965,7 +973,7 @@ class RecurrentUnitLayer(Layer):
     max_diff = T.cast(T.extra_ops.diff(att_with_first_index,axis=0).flatten().sort()[-1],'int32')
     reduced_index = aligner.reduced_index.repeat(max_diff).reshape((aligner.reduced_index.shape[0], aligner.reduced_index.shape[1],max_diff)) #NB(max_diff)
     att_wo_last_ind = att_with_first_index[:-1] #NB
-    att_wo_last_ind = T.inc_subtensor(att_wo_last_ind[0],numpy.int32(1))
+    att_wo_last_ind +=numpy.int32(1)
     att_rep = att_wo_last_ind.repeat(max_diff).reshape((att_wo_last_ind.shape[0],att_wo_last_ind.shape[1],max_diff))#NB(max_diff)
     att_rep = T.switch(reduced_index>0, att_rep + T.arange(max_diff),T.zeros((1,),'float32')-numpy.float32(1))
     att_rep = att_rep.dimshuffle(0,2,1) #N(max_diff)B

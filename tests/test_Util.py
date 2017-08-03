@@ -2,9 +2,13 @@
 import sys
 sys.path += ["."]  # Python 3 hack
 
-from nose.tools import assert_equal, assert_raises, assert_true, assert_is
+from nose.tools import assert_equal, assert_not_equal, assert_raises, assert_true, assert_is
+from numpy.testing.utils import assert_almost_equal
 from Util import *
 import numpy as np
+
+import better_exchook
+better_exchook.replace_traceback_format_tb()
 
 
 def test_cmd_true():
@@ -24,6 +28,19 @@ def test_cmd_stdout():
 def test_cmd_stderr():
   r = cmd("echo x >/dev/stderr")
   assert_equal(r, [], "cmd() output should only cover stdout")
+
+
+def test_hms():
+  assert_equal(hms(5), "0:00:05")
+  assert_equal(hms(65), "0:01:05")
+  assert_equal(hms(65 + 60 * 60), "1:01:05")
+
+
+def test_hms_fraction():
+  assert_equal(hms_fraction(0, decimals=3), "0:00:00.000")
+  assert_equal(hms_fraction(5, decimals=3), "0:00:05.000")
+  assert_equal(hms_fraction(5.345, decimals=3), "0:00:05.345")
+  assert_equal(hms_fraction(65.345, decimals=3), "0:01:05.345")
 
 
 def test_uniq():
@@ -55,16 +72,55 @@ def test_NumbersDict_minus_1():
   print(a, b, r)
   assert_equal(r, NumbersDict(numbers_dict={'classes': 1, 'data': 1}, broadcast_value=-10))
 
+
 def test_NumbersDict_eq_1():
   a = NumbersDict({'classes': 11, 'data': 11})
   b = NumbersDict(11)
-  r1 = a.elem_eq(b)
-  r2 = a == b
-  print(a, b, r1, r2)
+  r1 = a.elem_eq(b, result_with_default=False)
+  r2 = a.elem_eq(b, result_with_default=True)
+  r2a = a == b
+  print(a, b, r1, r2, r2a)
+  assert_is(all(r2.values()), r2a)
   assert_is(r1.value, None)
   assert_equal(r1.dict, {'classes': True, 'data': True})
   assert_equal(r1, NumbersDict({'classes': True, 'data': True}))
-  assert_true(r2)
+  assert_is(r2.value, None)
+  assert_equal(r2.dict, {"classes": True, "data": True})
+  assert_true(r2a)
+
+
+def test_NumbersDict_eq_2():
+  a = NumbersDict(10)
+  assert_equal(a, 10)
+  assert_not_equal(a, 5)
+
+
+def test_NumbersDict_mul():
+  a = NumbersDict(numbers_dict={"data": 3, "classes": 2}, broadcast_value=1)
+  b = a * 2
+  assert isinstance(b, NumbersDict)
+  assert b.value == 2
+  assert_equal(b.dict, {"data": 6, "classes": 4})
+
+
+def test_NumbersDict_float_div():
+  a = NumbersDict(numbers_dict={"data": 3.0, "classes": 2.0}, broadcast_value=1.0)
+  b = a / 2.0
+  assert isinstance(b, NumbersDict)
+  assert_almost_equal(b.value, 0.5)
+  assert_equal(list(sorted(b.dict.keys())), ["classes", "data"])
+  assert_almost_equal(b.dict["data"], 1.5)
+  assert_almost_equal(b.dict["classes"], 1.0)
+
+
+def test_NumbersDict_int_floordiv():
+  a = NumbersDict(numbers_dict={"data": 3, "classes": 2}, broadcast_value=1)
+  b = a // 2
+  assert isinstance(b, NumbersDict)
+  assert_equal(b.value, 0)
+  assert_equal(list(sorted(b.dict.keys())), ["classes", "data"])
+  assert_equal(b.dict["data"], 1)
+  assert_equal(b.dict["classes"], 1)
 
 
 def test_collect_class_init_kwargs():

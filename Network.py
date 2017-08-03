@@ -10,7 +10,7 @@ from NetworkBaseLayer import Layer, SourceLayer
 from NetworkLayer import get_layer_class
 from NetworkLstmLayer import *
 from NetworkOutputLayer import OutputLayer, FramewiseOutputLayer, SequenceOutputLayer, DecoderOutputLayer, UnsupervisedOutputLayer
-from Util import collect_class_init_kwargs, dict_joined, as_str
+from Util import dict_joined, as_str
 from Log import log
 
 
@@ -579,7 +579,7 @@ class LayerNetwork(object):
     """
     if not "loss" in kwargs: kwargs["loss"] = "ce"
     self.loss = kwargs["loss"]
-    if self.loss in ('ctc', 'ce_ctc', 'hmm', 'ctc2', 'sprint', 'viterbi', 'fast_bw', 'ctc_warp', 'inv', "ctc_rasr"):
+    if self.loss in ('ctc', 'ce_ctc', 'hmm', 'ctc2', 'sprint', 'viterbi', 'fast_bw', 'seg_fast_bw', 'ctc_warp', 'inv', "ctc_rasr"):
       layer_class = SequenceOutputLayer
       # We must keep sequences as they are. Setting us as recurrent
       # will tell other code to leave seqs as they are (e.g. the dataset batch building).

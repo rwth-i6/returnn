@@ -17,6 +17,7 @@ import os
 import time
 import atexit
 import signal
+from threading import RLock
 import TaskSystem
 from TaskSystem import Pickler, Unpickler, numpy_set_unused
 from Util import eval_shell_str, make_hashable
@@ -274,18 +275,28 @@ class SprintInstancePool:
     (2) ...
   """
 
+  class_lock = RLock()
   global_instances = {}  # sprint_opts -> SprintInstancePool instance
 
   @classmethod
   def get_global_instance(cls, sprint_opts):
     sprint_opts = make_hashable(sprint_opts)
-    if sprint_opts in cls.global_instances:
-      return cls.global_instances[sprint_opts]
-    instance = SprintInstancePool(sprint_opts=sprint_opts)
-    cls.global_instances[sprint_opts] = instance
-    return instance
+    with cls.class_lock:
+      if sprint_opts in cls.global_instances:
+        return cls.global_instances[sprint_opts]
+      instance = SprintInstancePool(sprint_opts=sprint_opts)
+      cls.global_instances[sprint_opts] = instance
+      return instance
 
   def __init__(self, sprint_opts):
+    """
+    :param dict[str] sprint_opts:
+    """
+    # The lock will not be acquired automatically on the public functions here as there is the valid
+    # usage that only one thread will access it anyway.
+    # So, take care of acquiring this lock yourself whenever you call here potentially from multiple threads.
+    # All the code is not thread-safe, so this is important!
+    self.lock = RLock()
     assert isinstance(sprint_opts, dict)
     sprint_opts = sprint_opts.copy()
     self.max_num_instances = int(sprint_opts.pop("numInstances", 1))
@@ -305,10 +316,11 @@ class SprintInstancePool:
       self._maybe_create_new_instance()
     return self.instances[i]
 
-  def get_batch_loss_and_error_signal(self, log_posteriors, seq_lengths):
+  def get_batch_loss_and_error_signal(self, log_posteriors, seq_lengths, tags=None):
     """
     :param numpy.ndarray log_posteriors: 3d (time,batch,label)
     :param numpy.ndarray seq_lengths: 1d (batch)
+    :param list[str] tags: seq names, length = batch
     :rtype (numpy.ndarray, numpy.ndarray)
     :returns (loss, error_signal). error_signal has the same shape as posteriors.
     loss is a 1d-array (batch).
@@ -319,14 +331,15 @@ class SprintInstancePool:
       inside from SprintErrorSigOp.perform.
     This also expects that we don't have chunked seqs.
     """
-    import Device
-    assert Device.is_device_host_proc()
     assert seq_lengths.ndim == 1
     assert log_posteriors.ndim == 3
     n_batch = seq_lengths.shape[0]
     assert n_batch == log_posteriors.shape[1]
 
-    tags = Device.get_current_seq_tags()
+    if tags is None:
+      import Device
+      assert Device.is_device_host_proc()
+      tags = Device.get_current_seq_tags()
     assert len(tags) == n_batch
 
     batch_loss = numpy.zeros((n_batch,), dtype="float32")
@@ -354,16 +367,28 @@ class SprintInstancePool:
     return batch_loss, batch_error_signal
 
   def get_automata_for_batch(self, tags):
-    all_num_states = [None] * len(tags)
-    all_num_edges  = [None] * len(tags)
-    all_edges      = [None] * len(tags)
-    all_weights    = [None] * len(tags)
+    """
+    :param list[str]|numpy.ndarray tags: sequence names, used for Sprint (ndarray of shape (batch, max_str_len))
+    :return: (edges, weights, start_end_states). all together in one automaton.
+      edges are of shape (4, num_edges), each (from, to, emission-idx, seq-idx), of dtype uint32.
+      weights are of shape (num_edges,), of dtype float32.
+      start_end_states are of shape (2, batch), each (start,stop) state idx, batch = len(tags), of dtype uint32.
+    :rtype: (numpy.ndarray, numpy.ndarray, numpy.ndarray)
+    """
+    all_num_states = [None] * len(tags)  # type: list[int]
+    all_num_edges  = [None] * len(tags)  # type: list[int]
+    all_edges      = [None] * len(tags)  # type: list[numpy.ndarray]
+    all_weights    = [None] * len(tags)  # type: list[numpy.ndarray]
     for bb in range(0, len(tags), self.max_num_instances):
       for i in range(self.max_num_instances):
         b = bb + i
         if b >= len(tags): break
         instance = self._get_instance(i)
-        segment_name = tags[b].view('S%d' % tags.shape[1])[0]
+        if isinstance(tags[0], str):
+          segment_name = tags[b]
+        else:
+          segment_name = tags[b].view('S%d' % tags.shape[1])[0]
+        assert isinstance(segment_name, str)
         instance._send(("export_allophone_state_fsa_by_segment_name", segment_name))
       for i in range(self.max_num_instances):
         b = bb + i
@@ -375,14 +400,14 @@ class SprintInstancePool:
         num_states, num_edges, edges, weights = r[1:]
         all_num_states[b] = num_states
         all_num_edges [b] = num_edges
-        all_edges     [b] = edges.reshape((3, num_edges))
-        all_weights   [b] = weights
+        all_edges     [b] = edges.reshape((3, num_edges))  # (from, to, emission-idx) for each edge, uint32
+        all_weights   [b] = weights  # for each edge, float32
     state_offset = 0
     for idx in range(len(all_edges)):
       num_edges = all_num_edges[idx]
       all_edges[idx][0:2,:] += state_offset
       state_offset += all_num_states[idx]
-      # add sequence_idx
+      # add sequence_idx. becomes (from, to, emission-idx, seq-idx) for each edge
       all_edges[idx] = numpy.vstack((all_edges[idx], numpy.ones((1, num_edges), dtype='uint32') * idx))
 
     start_end_states = numpy.empty((2, len(all_num_states)), dtype='uint32')
@@ -660,7 +685,7 @@ class SprintErrorSigOp(theano.Op):
   def __init__(self, sprint_opts):
     super(SprintErrorSigOp, self).__init__()
     self.sprint_opts = make_hashable(sprint_opts)
-    self.sprint_instance_pool = None
+    self.sprint_instance_pool = None  # type: SprintInstancePool
     self.debug_perform_time = None
 
   def make_node(self, log_posteriors, seq_lengths):
@@ -669,7 +694,7 @@ class SprintErrorSigOp(theano.Op):
     assert seq_lengths.ndim == 1  # vector of seqs lengths
     return theano.Apply(self, [log_posteriors, seq_lengths], [T.fvector(), log_posteriors.type()])
 
-  def perform(self, node, inputs, output_storage):
+  def perform(self, node, inputs, output_storage, params=None):
     start_time = time.time()
     log_posteriors, seq_lengths = inputs
 
@@ -684,6 +709,7 @@ class SprintErrorSigOp(theano.Op):
       print("SprintErrorSigOp: Starting Sprint %r" % self.sprint_opts, file=log.v3)
       self.sprint_instance_pool = SprintInstancePool.get_global_instance(sprint_opts=self.sprint_opts)
 
+    assert isinstance(self.sprint_instance_pool, SprintInstancePool)  # PyCharm confused otherwise
     loss, errsig = self.sprint_instance_pool.get_batch_loss_and_error_signal(log_posteriors, seq_lengths)
     #print >> log.v4, 'loss:', loss, 'errsig:', errsig
     output_storage[0][0] = loss
@@ -713,20 +739,21 @@ class SprintAlignmentAutomataOp(theano.Op):
   def __init__(self, sprint_opts):
     super(SprintAlignmentAutomataOp, self).__init__()
     self.sprint_opts = make_hashable(sprint_opts)
-    self.sprint_instance_pool = None
+    self.sprint_instance_pool = None  # type: SprintInstancePool
 
   def make_node(self, tags):
     # the edges/start_end_state output has to be a float matrix because that is the only dtype supported
     # by CudaNdarray. We need unsigned ints. Thus we return a view on the unsigned int matrix
     return theano.Apply(self, [tags], [T.fmatrix(), T.fvector(), T.fmatrix(), T.fmatrix()])
 
-  def perform(self, node, inputs, output_storage):
+  def perform(self, node, inputs, output_storage, params=None):
     tags = inputs[0]
 
     if self.sprint_instance_pool is None:
-      print("SprintErrorSigOp: Starting Sprint %r" % self.sprint_opts, file=log.v3)
+      print("SprintAlignmentAutomataOp: Starting Sprint %r" % self.sprint_opts, file=log.v3)
       self.sprint_instance_pool = SprintInstancePool.get_global_instance(sprint_opts=self.sprint_opts)
 
+    assert isinstance(self.sprint_instance_pool, SprintInstancePool)  # PyCharm confused otherwise
     edges, weights, start_end_states = self.sprint_instance_pool.get_automata_for_batch(tags)
 
     output_storage[0][0] = edges.view(dtype='float32')

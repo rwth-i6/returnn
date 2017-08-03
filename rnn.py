@@ -19,26 +19,24 @@ __maintainer__ = "Patrick Doetsch"
 __email__ = "doetsch@i6.informatik.rwth-aachen.de"
 
 
-import re
 import os
 import sys
 import time
-import json
 import numpy
 from optparse import OptionParser
 from Log import log
-from Device import Device, get_num_devices, TheanoFlags, getDevicesInitArgs
+from Device import Device, TheanoFlags, getDevicesInitArgs
 from Config import Config
 from Engine import Engine
-from Dataset import Dataset, init_dataset, init_dataset_via_str, get_dataset_class
+from Dataset import Dataset, init_dataset, init_dataset_via_str
 from HDFDataset import HDFDataset
 from Debug import initIPythonKernel, initBetterExchook, initFaulthandler, initCudaNotInMainProcCheck
-from Util import initThreadJoinHack, custom_exec, describe_crnn_version, describe_theano_version, \
+from Util import initThreadJoinHack, describe_crnn_version, describe_theano_version, \
   describe_tensorflow_version, BackendEngine, get_tensorflow_version_tuple
 try:
   import Server
 except ImportError:
-  pass
+  Server = None
 
 
 config = None; """ :type: Config """
@@ -113,6 +111,11 @@ def initConfig(configFilename=None, commandLineOptions=()):
   if config.bool("EnableAutoNumpySharedMemPickling", False):
     import TaskSystem
     TaskSystem.SharedMemNumpyConfig["enabled"] = True
+  #Server default options
+  if config.value('task', 'train') == 'server':
+    config.set('num_inputs', 2)
+    config.set('num_outputs', 1)
+    #config.set('network', [{'out': {'loss': 'ce', 'class': 'softmax', 'target': 'classes'}}])
 
 
 def initLog():
@@ -290,7 +293,8 @@ def initEngine(devices):
 
 
 def crnnGreeting(configFilename=None, commandLineOptions=None):
-  print("CRNN starting up, version %s, pid %i" % (describe_crnn_version(), os.getpid()), file=log.v3)
+  print("CRNN starting up, version %s, pid %i, cwd %s" % (
+    describe_crnn_version(), os.getpid(), os.getcwd()), file=log.v3)
   if configFilename:
     print("CRNN config: %s" % configFilename, file=log.v4)
     if os.path.islink(configFilename):
@@ -307,7 +311,8 @@ def initBackendEngine():
     print("TensorFlow:", describe_tensorflow_version(), file=log.v3)
     if get_tensorflow_version_tuple()[0] == 0:
       print("Warning: TF <1.0 is not supported and likely broken.", file=log.v2)
-    from TFUtil import debugRegisterBetterRepr
+    from TFUtil import debugRegisterBetterRepr, setup_tf_thread_pools
+    setup_tf_thread_pools(log_file=log.v2)
     debugRegisterBetterRepr()
   else:
     raise NotImplementedError
@@ -344,7 +349,7 @@ def init(configFilename=None, commandLineOptions=(), config_updates=None, extra_
     initData()
   printTaskProperties(devices)
   if config.value('task', 'train') == 'server':
-    server = Server.Server()
+    server = Server.Server(config)
   else:
     initEngine(devices)
 
@@ -401,7 +406,7 @@ def executeMainTask():
       assert data, "set search_data"
     else:
       data = init_dataset(config.typed_value("search_data"))
-    engine.search(data)
+    engine.search(data, output_layer_name=config.value("search_output_layer", "output"))
   elif task == 'compute_priors':
     assert train_data is not None, 'train data for priors should be provided'
     engine.init_network_from_config(config)

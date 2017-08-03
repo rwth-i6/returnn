@@ -1,5 +1,22 @@
 #!/usr/bin/env python
 
+from __future__ import print_function
+
+import os
+import sys
+
+my_dir = os.path.dirname(os.path.abspath(__file__))
+returnn_dir = os.path.dirname(my_dir)
+sys.path.append(returnn_dir)
+
+import numpy as np
+import argparse
+import itertools
+
+import better_exchook
+better_exchook.install()
+
+
 # Sprint
 layerCount = 0  # automatically determined
 archiverExec = "./sprint-executables/archiver"
@@ -8,15 +25,6 @@ archiverExec = "./sprint-executables/archiver"
 configFile = "config/crnn.config"
 inputDim = 0  # via config num_inputs
 outputDim = 0  # via config num_outputs
-
-
-import os
-import numpy as np
-import argparse
-import itertools
-
-import better_exchook
-better_exchook.install()
 
 
 def parseSprintLayer(lines, float_type):
@@ -40,7 +48,7 @@ def parseSprintLayer(lines, float_type):
   matrix = matrix.transpose()  # Crnn format
   bias = matrix[0,:]
   weights = matrix[1:,:]
-  print "Sprint layer bias:", bias.shape, "weights:", weights.shape
+  print("Sprint layer bias:", bias.shape, "weights:", weights.shape)
   return bias, weights
 
 
@@ -62,7 +70,7 @@ def loadSprintNetwork(params_prefix_path, first_layer, float_type):
       if l == 0:
         raise Exception("Did not found any Sprint NN layer. First: %r" % fn)
       break
-    print("Loading Sprint NN layer %i" % (l + 1))
+    print(("Loading Sprint NN layer %i" % (l + 1)))
 
     p = Popen(
       [archiverExec, "--mode", "show", "--type", "bin-matrix", "--full-precision", "true", fn],
@@ -75,7 +83,7 @@ def loadSprintNetwork(params_prefix_path, first_layer, float_type):
 
   layerCount = len(layers)
   assert layerCount > 0
-  print("Sprint NN layer count: %i" % layerCount)
+  print(("Sprint NN layer count: %i" % layerCount))
   return layers
 
 
@@ -95,7 +103,7 @@ def saveCrnnLayer(layer, bias, weights):
   biasParams.set_value(bias)
   weightParams.set_value(weights)
 
-  print("Saved Crnn layer %s" % layer.name)
+  print(("Saved Crnn layer %s" % layer.name))
 
 
 def saveCrnnNetwork(epoch, layers):
@@ -124,13 +132,13 @@ def saveCrnnNetwork(epoch, layers):
   nHiddenLayers = len(network.hidden)
 
   # print network topology
-  print "Crnn Network layer topology:"
-  print "input dim:", network.n_in
-  print "hidden layer count:", nHiddenLayers
-  print "output dim:", network.n_out["classes"]
-  print "net weights #:", network.num_params()
-  print "net params:", network.train_params_vars
-  print "net output:", network.output["output"]
+  print("Crnn Network layer topology:")
+  print("input dim:", network.n_in)
+  print("hidden layer count:", nHiddenLayers)
+  print("output dim:", network.n_out["classes"])
+  print("net weights #:", network.num_params())
+  print("net params:", network.train_params_vars)
+  print("net output:", network.output["output"])
 
   assert network.n_in == inputDim
   #assert network.n_out == outputDim
@@ -146,7 +154,7 @@ def saveCrnnNetwork(epoch, layers):
   saveCrnnLayer(network.output["output"], *layers[len(layers) - 1])
 
   import h5py
-  print("Save Crnn model under %s" % filename)
+  print(("Save Crnn model under %s" % filename))
   model = h5py.File(filename, "w")
   network.save_hdf(model, epoch)
   model.close()

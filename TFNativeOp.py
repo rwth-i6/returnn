@@ -11,7 +11,7 @@ from Util import camel_case_to_snake_case
 
 class OpDescription(NativeOp.NativeOpBaseMixin):
   @classmethod
-  def from_gen_base(x, gen_base):
+  def from_gen_base(cls, gen_base):
     """
     :param NativeOp.NativeOpGenBase gen_base:
     :rtype: OpDescription
@@ -25,6 +25,7 @@ class OpDescription(NativeOp.NativeOpBaseMixin):
       in_info=gen_base.in_info, out_info=gen_base.out_info,
       c_fw_code=gen_base.c_fw_code, c_bw_code=gen_base.c_bw_code,
       c_extra_support_code=gen_base.c_extra_support_code,
+      cpu_support=gen_base.cpu_support,
       grad_input_map=gen_base.grad_input_map,
       name=name)
 
@@ -75,12 +76,18 @@ class OpMaker(object):
     See NativeOp.cpp.
     To make the symbols available in the namespace, load the library now.
     """
+    if TFUtil.CudaEnv.verbose_find_cuda:
+      print("Load tf.contrib lstm_ops...")
     from tensorflow.contrib.rnn.python.ops import lstm_ops
     lstm_ops_so = "%s/_lstm_ops.so" % os.path.dirname(lstm_ops.__file__)
     assert os.path.exists(lstm_ops_so)
+    if TFUtil.CudaEnv.verbose_find_cuda:
+      print("Load tf.contrib lstm_ops lib:", lstm_ops_so)
     # Maybe a bit hacky: Just load all symbols into the global namespace.
     from ctypes import RTLD_GLOBAL, CDLL
     CDLL(lstm_ops_so, mode=RTLD_GLOBAL)
+    if TFUtil.CudaEnv.verbose_find_cuda:
+      print("tf.contrib lstm_ops lib loaded.")
 
   @property
   def op_name(self):
@@ -147,6 +154,12 @@ class OpMaker(object):
         return str(c)
       else:
         raise Exception("type: %s" % type(c))
+    for i, v in enumerate(in_info):
+      code_set_out_shape += """
+      if(c->Rank(c->input(%(idx)i)) != tensorflow::shape_inference::InferenceContext::kUnknownRank && c->Rank(c->input(%(idx)i)) != %(rank)i)
+        return errors::InvalidArgument(
+          "wrong rank for input (%(idx)i) '%(name)s'. required %(rank)i but got ", c->Rank(c->input(%(idx)i)));
+      """ % {"idx": i, "rank": v["ndim"], "name": v["name"]}
     for i, v in enumerate(out_info):
       code_set_out_shape += "c->set_output(%i, c->MakeShape({%s}));\n" % (
         i, ", ".join([make_dim_str(c) for c in v["shape"]]))
@@ -225,6 +238,8 @@ class OpMaker(object):
         cshape = "TensorShape({%s})" % ", ".join(["inputs[%i]->dim_size(%i)" % (in_idx, in_dim)
                                                   for (in_idx, in_dim) in v["shape"]])
         code_set_io += "OP_REQUIRES_OK(context, context->allocate_output(%i, %s, &output_%i));\n" % (out_idx, cshape, out_idx)
+        code_set_io += "Ndarray_set_zero(*outputs[%i]);\n" % out_idx
+
     code_user = self.description.c_fw_code % {"fail": "assert(false);"}
     code_compute = "\n".join([
       code_forward_io,
@@ -254,6 +269,7 @@ class OpMaker(object):
     #include "tensorflow/core/framework/op.h"
     #include "tensorflow/core/framework/shape_inference.h"
     #include "tensorflow/core/framework/op_kernel.h"
+    #include "tensorflow/core/common_runtime/device.h"
     """
     if self.with_cuda:
       # http://docs.nvidia.com/cuda/cublas
@@ -261,14 +277,13 @@ class OpMaker(object):
       #include <cuda.h>
       #include <cuda_runtime.h>
       #include <cublas_v2.h>
+      #include <math_constants.h>
 
       // https://github.com/tensorflow/tensorflow/issues/6602 ?
       //#include "tensorflow/core/platform/stream_executor.h"
       //#include "tensorflow/core/common_runtime/gpu/gpu_util.h"
+      //#include "tensorflow/core/common_runtime/gpu_device_context.h"
       """
-    code_header += """
-    using namespace tensorflow;
-    """
     # sgemm
     code_header += """
     typedef float real;
@@ -283,32 +298,42 @@ class OpMaker(object):
       real *c, integer *ldc);
     }
     """
-    code_register = """
-    REGISTER_OP("%(op_name)s")
-    %(code_register_op_io)s;
-    """ % format_args
-    code_op = """
+    code_header += """
+    using namespace tensorflow;
+
+    #define _ns  // so _ns::something will use the root namespace
     #define TENSORFLOW 1
     #define CUDA 0
     #include "%(native_op_cpp_filename)s"
 
-    %(user_code_kernels)s
-
     static const int n_inputs = %(n_inputs)i, n_outputs = %(n_outputs)i;
 
-    class %(op_name)sOp : public OpKernel {
-    public:
-      explicit %(op_name)sOp(OpKernelConstruction* context) : OpKernel(context) {}
-      void Compute(OpKernelContext* context) override {
-        %(code_compute)s
-      }
-    };
-
-    REGISTER_KERNEL_BUILDER(Name("%(op_name)s").Device(DEVICE_CPU), %(op_name)sOp);
+    REGISTER_OP("%(op_name)s")
+    %(code_register_op_io)s;
     """ % format_args
+    if self.description.cpu_support:
+      code_cpu_op = """
+      %(user_code_kernels)s
+  
+      class %(op_name)sOp : public OpKernel {
+      public:
+        explicit %(op_name)sOp(OpKernelConstruction* context) : OpKernel(context) {}
+        void Compute(OpKernelContext* context) override {
+          %(code_compute)s
+        }
+      };
+  
+      REGISTER_KERNEL_BUILDER(Name("%(op_name)s").Device(DEVICE_CPU), %(op_name)sOp);
+      """ % format_args
+    else:
+      code_cpu_op = ""
     if self.with_cuda:
       code_gpu_op = """
       namespace _gpu {
+        #ifdef _ns
+          #undef _ns
+        #endif
+        namespace _ns = ::_gpu;
         #undef CUDA
         #define CUDA 1
         #undef Ndarray_memcpy
@@ -338,7 +363,7 @@ class OpMaker(object):
       """ % format_args
     else:
       code_gpu_op = ""
-    return code_header + code_register + code_op + code_gpu_op
+    return code_header + code_cpu_op + code_gpu_op
 
   def _make_mod(self):
     if self.cache_key in self.mod_cache:
@@ -413,14 +438,54 @@ class OpMaker(object):
         return grad_outputs
 
       grad_wrapper.__name__ = grad_description.name
+      grad_wrapper.grad_op = grad_op
       ops.RegisterGradient(self.name)(grad_wrapper)
 
     return op
 
 
+def load_dump_file(filename):
+  """
+  See dump_to_file() in NativeOp.cpp.
+
+  :param str filename:
+  :rtype: numpy.ndarray
+  """
+  import numpy
+  from struct import unpack
+
+  with open(filename, "rb") as f:
+    def _read_uint64():
+      return int(unpack("Q", f.read(8))[0])
+
+    def _read_bytes():
+      size = _read_uint64()
+      return f.read(size)
+
+    def _read_str():
+      return _read_bytes().decode("utf8")
+
+    header = _read_str()
+    assert header == "NativeOp_dump"
+    dtype_name = _read_str()
+    if dtype_name == "float":
+      dtype_name = "float32"
+    dtype = numpy.dtype(dtype_name)
+    dtype_size = _read_uint64()
+    assert dtype.itemsize == dtype_size, "dtype %r %r: %r != %r" % (dtype_name, dtype, dtype.itemsize, dtype_size)
+    ndim = _read_uint64()
+    dims = [_read_uint64() for i in range(ndim)]
+    data = _read_bytes()
+    assert len(data) == numpy.prod(dims) * dtype.itemsize
+    v_flat = numpy.fromstring(data, dtype=dtype)
+    v = v_flat.reshape(dims)
+    return v
+
+
 def make_lstm_op(**kwargs):
   """
-  Demo.
+  See :class:`NativeLstmCell` for usage.
+
   :return: op
   :rtype: (tf.Tensor) -> tuple[tf.Tensor]
   """
@@ -433,11 +498,12 @@ class RecSeqCellOp(object):
     self.n_hidden = n_hidden
     self.n_input_dim = n_hidden
 
-  def __call__(self, inputs, index, initial_state=None):
+  def __call__(self, inputs, index, initial_state=None, recurrent_weights_initializer=None):
     """
     :param tf.Tensor inputs: shape (time,batch,n_input_dim)
     :param tf.Tensor index: shape (time,batch)
     :param tf.Tensor|None initial_state: optional initial state of shape (batch,n_hidden)
+    :param ()->tf.Tensor recurrent_weights_initializer:
     :returns: output fused tensor shape (time,batch,n_hidden), last hidden state (batch,n_hidden)
     :rtype: (tf.Tensor, tf.Tensor)
     """
@@ -464,7 +530,12 @@ class NativeLstmCell(RecSeqCellOp):
     assert V_h.get_shape().ndims == 2
     assert i.get_shape().ndims == 2
     if i.dtype != tf.float32:
-      i = tf.cast(i, dtype=tf.float32)
+      if not hasattr(i, "cast_float32"):
+        from TFUtil import reuse_name_scope_of_tensor
+        with reuse_name_scope_of_tensor(i):
+          i_cast_float32 = tf.cast(i, dtype=tf.float32, name="index_cast_float32")
+        i.cast_float32 = i_cast_float32
+      i = i.cast_float32
     n_batch = tf.shape(Z)[1]
     n_out = tf.shape(V_h)[0]
     if initial_state is not None:
@@ -473,19 +544,94 @@ class NativeLstmCell(RecSeqCellOp):
       c = tf.zeros((n_batch, n_out), dtype=tf.float32)
     return Z, V_h, c, i
 
-  def __call__(self, inputs, index, initial_state=None):
+  def __call__(self, inputs, index, initial_state=None, recurrent_weights_initializer=None):
     """
     :param tf.Tensor inputs: shape (time,batch,n_hidden*4)
     :param tf.Tensor index: shape (time,batch)
     :param tf.Tensor|None initial_state: shape (batch,n_hidden)
+    :param ()->tf.Tensor recurrent_weights_initializer:
     :returns: shape (time,batch,n_hidden), shape (batch,n_hidden)
     :rtype: (tf.Tensor, tf.Tensor)
     """
-    W_re = tf.get_variable(name="W_re", shape=(self.n_hidden, self.n_hidden * 4))
+    W_re = tf.get_variable(
+      name="W_re", shape=(self.n_hidden, self.n_hidden * 4), initializer=recurrent_weights_initializer)
     lstm_op = make_lstm_op()
     out, _, final_state = lstm_op(
       *self.map_layer_inputs_to_op(Z=inputs, V_h=W_re, i=index, initial_state=initial_state))
     return out, final_state
+
+
+def make_fast_baum_welch_op(**kwargs):
+  """
+  :return: op
+  :rtype: (tf.Tensor) -> tuple[tf.Tensor]
+  """
+  maker = OpMaker(OpDescription.from_gen_base(NativeOp.FastBaumWelchOp), **kwargs)
+  return maker.make_op()
+
+
+def fast_baum_welch(am_scores, edges, weights, start_end_states, float_idx, state_buffer=None):
+  """
+  :param tf.Tensor am_scores: (time, batch, dim), in -log space
+  :param tf.Tensor edges: (4,num_edges), edges of the graph (from,to,emission_idx,sequence_idx)
+  :param tf.Tensor weights: (num_edges,), weights of the edges
+  :param tf.Tensor start_end_states: (2, batch), (start,end) state idx in automaton. there is only one single automaton.
+  :param tf.Tensor float_idx: (time, batch) -> 0 or 1 (index mask, via seq lens)
+  :param tf.Tensor state_buffer: (2, num_states)
+  :return: (fwdbwd, obs_scores), fwdbwd is (time, batch, dim), obs_scores is (time, batch), in -log space
+  :rtype: (tf.Tensor, tf.Tensor)
+  """
+  # edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
+  op = make_fast_baum_welch_op()
+  float_idx = tf.cast(float_idx, tf.float32)
+  if state_buffer is None:
+    last_state_idx = tf.reduce_max(start_end_states[1])  # see get_automata_for_batch
+    state_buffer = tf.zeros((2, last_state_idx + 1))
+  fwdbwd, obs_scores = op(am_scores, edges, weights, start_end_states, float_idx, state_buffer)
+  return fwdbwd, obs_scores
+
+
+def fast_baum_welch_by_sprint_automata(am_scores, float_idx, tags, sprint_opts):
+  """
+  :param tf.Tensor am_scores: (time, batch, dim), in -log space
+  :param tf.Tensor float_idx: (time, batch) -> 0 or 1 (index mask, via seq lens)
+  :param tf.Tensor tags: (batch,) -> seq name (str)
+  :param dict[str] sprint_opts:
+  :return: (fwdbwd, obs_scores), fwdbwd is (time, batch, dim), obs_scores is (time, batch), in -log space
+  :rtype: (tf.Tensor, tf.Tensor)
+  """
+  from TFSprint import get_sprint_automata_for_batch_op
+  edges, weights, start_end_states = get_sprint_automata_for_batch_op(sprint_opts=sprint_opts, tags=tags)
+  return fast_baum_welch(
+    am_scores=am_scores, float_idx=float_idx,
+    edges=edges, weights=weights, start_end_states=start_end_states)
+
+
+def _debug_dumped_fast_baum_welch(prefix, postfix=".dump"):
+  """
+  If you uncomment the debug_print statements in FastBaumWelchOp, as well as dump_to_file inside debug_print,
+  you will get some dump files in the current directory. These can be loaded here and evald again.
+
+  :param str prefix: filename prefix, e.g. "ff_out_bw__FastBaumWelchOp_"
+  :param str postfix: filename postfix
+  :return: output from fast_baum_welch(), evald
+  :rtype: (numpy.ndarray. numpy.ndarray)
+  """
+  with tf.Graph().as_default() as graph:
+    with tf.Session(graph=graph) as session:
+      arg_names = {
+        "am_scores": None, "edges": None, "weights": None, "start_end_states": None, "float_idx": "index",
+        "state_buffer": None}
+      args = {}
+      for name, file_postfix in list(arg_names.items()):
+        if file_postfix is None:
+          file_postfix = name
+        filename = prefix + file_postfix + postfix
+        print("load", filename)
+        args[name] = tf.constant(load_dump_file(filename))
+      print("run...")
+      out_list = fast_baum_welch(**args)
+      return session.run(out_list)
 
 
 def demo():

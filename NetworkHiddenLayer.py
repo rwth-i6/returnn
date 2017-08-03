@@ -2656,7 +2656,7 @@ class NativeLayer(_NoOpLayer):
     import NativeOp
     native_class_cls = getattr(NativeOp, native_class)
     assert issubclass(native_class_cls, NativeOp.NativeOpGenBase)
-    op = native_class_cls.make_op()
+    op = native_class_cls().make_op()
 
     args = []
     args_info = []  # dict with ndim, shape, n_in
@@ -3939,6 +3939,13 @@ class SignalValue(ForwardLayer):
 class SegmentInputLayer(_NoOpLayer):
   layer_class = 'segment_input'
 
+  class ReinterpretCastOp(theano.Op):
+    itypes = (T.imatrix,)
+    otypes = (T.fmatrix,)
+
+    def perform(self, node, inputs, output_storage):
+      output_storage[0][0] = inputs[0].view(dtype='float32')
+
   def __init__(self, window=15, **kwargs):
     super(SegmentInputLayer, self).__init__(**kwargs)
 
@@ -3961,23 +3968,28 @@ class SegmentInputLayer(_NoOpLayer):
                   .reshape((rs_idx.sum(), self.attrs['window']))\
                  + T.arange(self.attrs['window'])
 
-    # this filter has entries smaller than -1 for all elements that do not belong to the same sequence as the first frame
-    frame_filter_1 = (f - 1
+    # this filter has entries <= -1 for all elements that do not belong to the same sequence as the first frame
+    frame_filter_1 = (f
                       - (frames_idx[:,0] % f)\
                          .repeat(self.attrs['window'])\
                          .reshape((rs_idx.sum(), self.attrs['window']))\
-                      - T.arange(self.attrs['window'])) * 2
+                      - T.arange(self.attrs['window']))
 
     # this filter has entries 0 for all elements that are discarded by self.index, 1 otherwise
-    frame_filter_2 = T.concatenate([rs_idx, T.zeros((self.attrs['window'],), dtype='int8')])[frames_idx.flatten()].reshape((rs_idx.sum(), self.attrs['window']))
+    frame_filter_2 = T.concatenate([rs_idx, T.zeros((self.attrs['window'] * b,), dtype='int8')])[frames_idx.flatten()].reshape((rs_idx.sum(), self.attrs['window']))
 
-    frames_idx = T.switch(frame_filter_1 + frame_filter_2 >= 0, frames_idx, -1).dimshuffle(1, 0)
+    frames_idx = T.switch(frame_filter_1 * frame_filter_2 > 0, frames_idx, -1).dimshuffle(1, 0)
 
     # we add an additional vector with zeros s.t. the invalid entries from the filters above result in a feature vector of zeros
     self.z = T.concatenate([rs, T.zeros((1, src_out.shape[2]))], axis=0)[frames_idx]
-
     self.make_output(self.z)
-    self.index = T.cast((frame_filter_1 - frame_filter_2).clip(0, 1), 'int8').reshape((self.attrs['window'], rs_idx.sum()))
+
+    self.index = T.cast((frame_filter_1 * frame_filter_2).clip(0, 1), 'int8').T
+
+    inv_batch_idx   = frames_idx[0,:]
+    batch_idx       = -T.ones((f * b,), dtype='int32')
+    batch_idx       = T.set_subtensor(batch_idx[inv_batch_idx], T.arange(inv_batch_idx.size, dtype='int32')).reshape((b, f)).T
+    self.batch_idxs = self.ReinterpretCastOp()(batch_idx)
 
 class UnsegmentInputLayer(_NoOpLayer):
   layer_class = 'unsegment_input'

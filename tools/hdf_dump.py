@@ -2,12 +2,18 @@
 
 from __future__ import print_function
 
+import os
+import sys
+
+my_dir = os.path.dirname(os.path.abspath(__file__))
+returnn_dir = os.path.dirname(my_dir)
+sys.path.append(returnn_dir)
+
 import h5py as h5
 import numpy
 from Log import log
 import rnn
 import argparse
-import sys
 import HDFDataset
 from Dataset import Dataset, init_dataset_via_str
 from Config import Config

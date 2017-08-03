@@ -499,14 +499,11 @@ class Dataset(object):
     while self.is_less_than_num_seqs(s):
       length = self.get_seq_length(s)
       if chunk_size == 0:
-        yield (s, NumbersDict(0), length)
+        yield (s, length.constant_like(0), length)
       else:
         if used_data_keys is not None:
-          length = length.copy()
-          for key in list(length.keys()):
-            if key not in used_data_keys:
-              del length[key]
-        t = 0
+          length = NumbersDict({k: length[k] for k in used_data_keys})
+        t = length.constant_like(0)
         default_key = "data"
         # There are usually the 'data' (input) and 'classes' (targets) data-keys in `length` but there can be others.
         # We expect them all of the same length so that we can do chunking.
@@ -520,16 +517,50 @@ class Dataset(object):
             keys_with_full_seqs.append(key)
             continue
           raise Exception("Chunking with multiple data-keys of different length: %r" % length)
-        while t < length[default_key]:
-          l = min(t + chunk_size, length[default_key])
+        while t[default_key] < length[default_key]:
           chunk_start = NumbersDict(t)
-          chunk_end = NumbersDict(l)
+          chunk_end = NumbersDict.min([t + chunk_size, length])
           for key in keys_with_full_seqs:
             chunk_start[key] = 0
             chunk_end[key] = length[key]
+          if length.value is None:
+            chunk_start.value = None
+            chunk_end.value = None
           yield (s, chunk_start, chunk_end)
           t += chunk_step
       s += 1
+
+  def _get_context_window_left_right(self):
+    """
+    :return: (ctx_left, ctx_right)
+    :rtype: None|(NumbersDict,NumbersDict)
+    """
+    if self.context_window:
+      # One less because the original frame also counts, and context_window=1 means that we just have that single frame.
+      # ctx_total is how much frames we add additionally.
+      ctx_total = NumbersDict.max([self.context_window, 1]) - 1
+      # In case ctx_total is odd / context_window is even, we have to decide where to put one more frame.
+      # To keep it consistent with e.g. 1D convolution with a kernel of even size, we add one more to the right.
+      # See test_tfconv1d_evensize().
+      ctx_left = ctx_total // 2
+      ctx_right = ctx_total - ctx_left
+      return ctx_left, ctx_right
+    else:
+      return None
+
+  def get_start_end_frames_full_seq(self, seq_idx):
+    """
+    :param int seq_idx:
+    :return: (start,end) frame, taking context_window into account
+    :rtype: (NumbersDict,NumbersDict)
+    """
+    end = self.get_seq_length(seq_idx)
+    start = end.constant_like(0)
+    ctx_lr = self._get_context_window_left_right()
+    if ctx_lr:
+      start -= ctx_lr[0]
+      end += ctx_lr[1]
+    return start, end
 
   def _generate_batches(self, recurrent_net, batch_size, max_seqs=-1, seq_drop=0.0, max_seq_length=sys.maxsize, used_data_keys=None):
     """
@@ -551,10 +582,11 @@ class Dataset(object):
         print("Non-recurrent network, chunk size %i:%i ignored" % (chunk_size, chunk_step), file=log.v4)
         chunk_size = 0
     batch = Batch()
+    ctx_lr = self._get_context_window_left_right()
     for seq_idx, t_start, t_end in self.iterate_seqs(chunk_size=chunk_size, chunk_step=chunk_step, used_data_keys=used_data_keys):
-      if self.context_window:
-        t_start -= self.context_window
-        t_end += self.context_window
+      if ctx_lr:
+        t_start -= ctx_lr[0]
+        t_end += ctx_lr[1]
       if recurrent_net:
         length = t_end - t_start
         if max_seq_length < 0 and length['classes'] > -max_seq_length:
@@ -626,36 +658,6 @@ class Dataset(object):
         used_data_keys=used_data_keys),
       shuffle_batches=shuffle_batches,
       cache_whole_epoch=self.batch_set_generator_cache_whole_epoch())
-
-  def shapes_for_batches(self, batches, data_keys, batch_dim_first=False):
-    """
-    :type batches: list[EngineBatch.Batch]
-    :rtype: dict[str,list[int]] | None
-    """
-    all_data_keys = set(data_keys) | {"data"}
-
-    # The final device.data.shape is in format (time,batch,feature).
-    shape = [NumbersDict(0), 0]  # time,batch
-    for batch in batches:
-      shape = [NumbersDict.max([shape[0], batch.max_num_frames_per_slice]), shape[1] + batch.num_slices]
-    if shape[1] == 0:
-      return None
-    assert shape[0].max_value() > 0
-    # Theano has some buggy behaviour with tensors with some shape of zero.
-    # We will just use one dummy frame in that case.
-    # The index will stay zero in that case. (see EngineUtil.assign_dev_data())
-    # However, also see the OutputLayer.output_index() behavior for forwarding.
-    for k in all_data_keys:
-      shape[0][k] = max(shape[0][k], 1)
-
-    d = {k: [shape[0][k], shape[1]] for k in all_data_keys}
-    for k in d:
-      d[k] += self.get_data_shape(k)
-
-    if batch_dim_first:
-      # Just flip the first two dimensions.
-      d = {k: [shape[1], shape[0]] + shape[2:] for (k, shape) in d.items()}
-    return d
 
   @classmethod
   def index_shape_for_batches(cls, batches, data_key="data"):
@@ -741,8 +743,8 @@ def init_dataset(kwargs):
   obj = clazz(**kwargs)
   assert isinstance(obj, Dataset)
   if files:
-    from HDFDataset import HDFDataset
-    assert isinstance(obj, HDFDataset)
+    from HDFDataset import HDFDataset, NextGenHDFDataset
+    assert isinstance(obj, (HDFDataset, NextGenHDFDataset))
     for f in files:
       obj.add_file(f)
   obj.initialize()
@@ -815,3 +817,45 @@ def convert_data_dims(data_dims, leave_dict_as_is=False):
     assert isinstance(v[1], int)
     assert 1 <= v[1] <= 2
   return data_dims
+
+
+def shapes_for_batches(batches, data_keys, dataset=None, extern_data=None):
+  """
+  :param list[EngineBatch.Batch] batches:
+  :param list[str] data_keys:
+  :param Dataset dataset:
+  :param TFNetwork.ExternData extern_data: detailed data description. only used for TensorFlow
+  :rtype: dict[str,list[int]] | None
+  """
+  assert dataset or extern_data
+  all_data_keys = set(data_keys) | {"data"}
+
+  # The final device.data.shape is in format (time,batch,feature) in case of Theano.
+  shape = [NumbersDict(0), 0]  # time,batch
+  for batch in batches:
+    shape = [NumbersDict.max([shape[0], batch.max_num_frames_per_slice]), shape[1] + batch.num_slices]
+  if shape[1] == 0:
+    return None
+  assert shape[0].max_value() > 0
+  # Theano has some buggy behaviour with tensors with some shape of zero.
+  # We will just use one dummy frame in that case.
+  # The index will stay zero in that case. (see EngineUtil.assign_dev_data())
+  # However, also see the OutputLayer.output_index() behavior for forwarding.
+  if not extern_data:  # not needed if TensorFlow is used
+    for k in all_data_keys:
+      shape[0][k] = max(shape[0][k], 1)
+
+  if extern_data:
+    d = {}
+    for k in all_data_keys:
+      data_shape = list(extern_data.data[k].batch_shape)
+      data_shape[extern_data.data[k].batch_dim_axis] = shape[1]
+      if extern_data.data[k].have_time_axis():
+        data_shape[extern_data.data[k].time_dim_axis] = shape[0][k]
+      assert all([n is not None for n in data_shape])
+      d[k] = data_shape
+  else:  # shape via dataset
+    d = {k: [shape[0][k], shape[1]] for k in all_data_keys}
+    for k in all_data_keys:
+      d[k] += dataset.get_data_shape(k)
+  return d

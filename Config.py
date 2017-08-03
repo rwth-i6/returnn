@@ -132,7 +132,7 @@ class Config:
     :param str key:
     :param type|list[type]|T types: for isinstance() check
     :param T|None default:
-    :return: if is_of_type(key, types) is True, returns the value, otherwise default 
+    :return: if is_of_type(key, types) is True, returns the value, otherwise default
     :rtype: T
     """
     if self.is_of_type(key, types):
@@ -173,6 +173,8 @@ class Config:
       if index is None:
         if isinstance(l, (list, tuple)):
           return list_join_str.join([str(v) for v in l])
+        elif l is None:
+          return default
         else:
           return str(l)
       else:
@@ -190,7 +192,7 @@ class Config:
     :type key: str
     :type default: T
     :type index: int | None
-    :rtype: str | T
+    :rtype: T | object
     """
     value = self.typed_dict.get(key, default)
     if index is not None:

@@ -840,7 +840,7 @@ class FeedDictDataProvider(DataProviderBase):
   def __init__(self, tf_session, dataset, batches, capacity=10, tf_queue=None, **kwargs):
     """
     :param tf.Session|tf.InteractiveSession tf_session:
-    :param Dataset.Dataset dataset:
+    :param Dataset dataset:
     :param BatchSetGenerator batches:
     :param ExternData extern_data:
     :param set(str)|None data_keys:
@@ -881,15 +881,20 @@ class FeedDictDataProvider(DataProviderBase):
     """
     # See EngineUtil.assign_dev_data() for reference.
     batch, = self.batches.peek_next_n(1)
+    from Dataset import Batch, shapes_for_batches
+    assert isinstance(batch, Batch)
     # In Returnn with Theano, we usually have the shape (time,batch,feature).
     # In TensorFlow, the default is (batch,time,feature).
     # This is also what we use here, i.e. batch_dim_first=True.
     # This must match the Data specification in TFNetwork.ExternData.init_from_config().
-    shapes = self.dataset.shapes_for_batches([batch], data_keys=self.data_keys, batch_dim_first=True)
-    data = {k: numpy.zeros(shape=shapes[k], dtype=self.extern_data.get_data(k).dtype)
-            for k in self.data_keys}
-    seq_lens = {k: numpy.zeros(shape=(shapes[k][0],), dtype=self.extern_data.get_data(k).size_dtype)
-                for k in self.data_keys}
+    shapes = shapes_for_batches([batch], data_keys=self.data_keys, extern_data=self.extern_data)
+    data = {k: numpy.zeros(shape=shapes[k], dtype=self.extern_data.data[k].dtype)
+            for k in self.data_keys if self.extern_data.data[k].dtype != "string"}
+    # Numpy cannot handle "string" dtype. Just make it a list[str], which is what TF can handle.
+    data.update({k: [""] * batch.num_slices
+                 for k in self.data_keys if self.extern_data.data[k].dtype == "string"})
+    seq_lens = {k: numpy.zeros(shape=(shapes[k][0],), dtype=self.extern_data.data[k].size_dtype)
+                for k in self.data_keys if self.extern_data.data[k].have_time_axis()}
     self.dataset.load_seqs(batch.start_seq, batch.end_seq)
     self.num_frames += batch.get_total_num_frames()
     from Util import slice_pad_zeros
@@ -900,22 +905,36 @@ class FeedDictDataProvider(DataProviderBase):
         l = seq.frame_length
         # input-data, input-index will also be set in this loop. That is data-key "data".
         for k in self.data_keys:
-          if l[k] == 0: continue
+          # Some special cases first, such as "seq_idx" and "seq_tag".
+          # See also :func:`TFNetwork.get_extern_data`.
+          if k == "seq_idx":
+            data[k][q] = seq.seq_idx
+            continue
+          if k == "seq_tag":
+            data[k][q] = self.dataset.get_tag(seq.seq_idx)
+            continue
+          if self.extern_data.data[k].have_time_axis():
+            if l[k] in [0, None]:
+              continue
           v = self.dataset.get_data(seq.seq_idx, k)
-          v = slice_pad_zeros(v, begin=seq.seq_start_frame[k], end=seq.seq_end_frame[k])
-          ls = v.shape[0]
-          if ls != l[k]:
-            raise Exception("got shape[0]: %i, expected: %i, start/end: %r/%r, seq_idx: %i, seq len: %r" % (
-              ls, l[k], seq.seq_start_frame, seq.seq_end_frame, seq.seq_idx, self.dataset.get_seq_length(seq.seq_idx)))
-          data[k][q, o[k]:o[k] + ls] = v
-          seq_lens[k][q] = max(seq_lens[k][q], o[k] + ls)
+          if self.extern_data.data[k].have_time_axis():
+            v = slice_pad_zeros(v, begin=seq.seq_start_frame[k], end=seq.seq_end_frame[k])
+            ls = v.shape[0]
+            if ls != l[k]:
+              raise Exception("got shape[0]: %i, expected: %i, start/end: %r/%r, seq_idx: %i, seq len: %r" % (
+                ls, l[k], seq.seq_start_frame, seq.seq_end_frame, seq.seq_idx, self.dataset.get_seq_length(seq.seq_idx)))
+            data[k][q, o[k]:o[k] + ls] = v
+            seq_lens[k][q] = max(seq_lens[k][q], o[k] + ls)
+          else:  # no time-axis
+            data[k][q] = v
     return data, seq_lens
 
   def get_next_batch(self):
     data, seq_lens = self._get_next_batch()
     enqueue_args = data.copy()
     for k in data.keys():
-      enqueue_args["%s_seq_lens" % k] = seq_lens[k]
+      if k in seq_lens:
+        enqueue_args["%s_seq_lens" % k] = seq_lens[k]
     return enqueue_args
 
   def thread_main(self):
@@ -983,7 +1002,7 @@ class FeedDictDataProvider(DataProviderBase):
 
     :param bool single_threaded: whether to not use the queue
     :returns: we dequeue one batch from the queue and provide it for all placeholders of our external data
-    :rtype: dict[tf.Tensor,tf.Tensor]
+    :rtype: dict[tf.Tensor,numpy.ndarray]
     """
     if self.tf_queue:
       return {}  # not needed to feed anything, it gets it via the queues

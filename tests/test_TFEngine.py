@@ -153,6 +153,44 @@ def test_engine_forward_single():
   engine.forward_single(dataset=dataset, seq_idx=0)
 
 
+def test_engine_forward_to_hdf():
+  from GeneratingDataset import DummyDataset
+  import tempfile
+  output_file = tempfile.mktemp(suffix=".hdf", prefix="nose-tf-forward")
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 3
+  num_seqs = 20
+  dataset = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim,
+                         num_seqs=num_seqs, seq_len=seq_len)
+  dataset.init_seq_order(epoch=1)
+
+  config = Config()
+  config.update({
+    "model": "/tmp/model",
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": {"output": {"class": "softmax", "loss": "ce"}},
+    "output_file": output_file,
+  })
+
+  engine = Engine(config=config)
+  engine.init_train_from_config(config=config, train_data=dataset, dev_data=None, eval_data=None,)
+
+  engine.forward_to_hdf(data=dataset, output_file=output_file, batch_size=5)
+  assert os.path.exists(output_file)
+  import h5py
+  with h5py.File(output_file, 'r') as f:
+    assert f['inputs'].shape == (seq_len*num_seqs, n_classes_dim)
+    assert f['seqLengths'].shape == (num_seqs,)
+    assert f['seqTags'].shape == (num_seqs,)
+    assert f.attrs['inputPattSize'] == n_data_dim
+    assert f.attrs['numSeqs'] == num_seqs
+    assert f.attrs['numTimesteps'] == seq_len * num_seqs
+
+  os.remove(output_file)
+
+
 def test_engine_rec_subnet_count():
   from GeneratingDataset import DummyDataset
   seq_len = 5
@@ -280,13 +318,21 @@ def test_engine_search_attention():
 if __name__ == "__main__":
   try:
     better_exchook.install()
-    assert len(sys.argv) >= 2
-    for arg in sys.argv[1:]:
-      print("Executing: %s" % arg)
-      if arg in globals():
-        globals()[arg]()  # assume function and execute
-      else:
-        eval(arg)  # assume Python code and execute
+    if len(sys.argv) <= 1:
+      for k, v in sorted(globals().items()):
+        if k.startswith("test_"):
+          print("-" * 40)
+          print("Executing: %s" % k)
+          v()
+          print("-" * 40)
+    else:
+      assert len(sys.argv) >= 2
+      for arg in sys.argv[1:]:
+        print("Executing: %s" % arg)
+        if arg in globals():
+          globals()[arg]()  # assume function and execute
+        else:
+          eval(arg)  # assume Python code and execute
   finally:
     session.close()
     del session

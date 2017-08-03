@@ -1,4 +1,6 @@
+.. _index:
 
+==================
 Welcome to RETURNN
 ==================
 
@@ -20,15 +22,18 @@ Features include:
 
 See :ref:`basic_usage` and :ref:`tech_overview`.
 
-There are some example demos in ``/demos``
-which work on artifically generated data,
+There are `many example demos <https://github.com/rwth-i6/returnn/blob/master/demos/>`_
+which work on artificially generated data,
 i.e. they should work as-is.
 
-There are some real-world examples `here <https://github.com/rwth-i6/returnn-experiments>`_.
+There are `some real-world examples <https://github.com/rwth-i6/returnn-experiments>`_
+such as setups for speech recognition on the Switchboard corpus.
 
 Some benchmark setups against other frameworks
 can be found `here <https://github.com/rwth-i6/returnn-benchmarks>`_.
 The results are in the `RETURNN paper <https://arxiv.org/abs/1608.00895>`_.
+
+There is also `a wiki <https://github.com/rwth-i6/returnn/wiki>`_.
 
 
 User guide
@@ -40,6 +45,7 @@ User guide
     installation
     basic_usage
     tech_overview
+    tf_lstm_benchmark
 
 
 API Reference

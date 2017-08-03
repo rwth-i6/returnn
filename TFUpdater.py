@@ -2,11 +2,10 @@
 from __future__ import print_function
 
 import tensorflow as tf
-from tensorflow.python.framework import ops
 
 from Log import log
 from TFNetwork import TFNetwork
-
+from TFUtil import tf_version_tuple, assert_min_tf_version, CustomUpdate
 
 _OptimizerClassesDict = {}  # type: dict[str,()->tf.train.Optimizer]
 
@@ -17,7 +16,12 @@ def get_optimizer_class(class_name):
   :return:
   """
   if not _OptimizerClassesDict:
-    for name, v in list(vars(tf.train).items()) + list(globals().items()):
+    potential_list = list(vars(tf.train).items())
+    if tf_version_tuple() >= (1, 2, 0):
+      import tensorflow.contrib.opt.python.training.nadam_optimizer as nadam
+      potential_list += list(vars(nadam).items())
+    for name, v in potential_list:
+      assert isinstance(name, str)
       if name.endswith("Optimizer"):
         name = name[:-len("Optimizer")]
       else:
@@ -30,166 +34,47 @@ def get_optimizer_class(class_name):
   return _OptimizerClassesDict[class_name.lower()]
 
 
-class NadamOptimizer(tf.train.Optimizer):
-  def __init__(self, learning_rate=0.001, beta1=0.9, beta2=0.999, epsilon=1e-8, use_locking=False, name="Nadam"):
-    """
-    :param tf.Tensor|tf.Variable|float learning_rate:
-    :param float beta1:
-    :param float beta2:
-    :param float epsilon:
-    :param bool use_locking:
-    :param str name:
-
-    Nadam is Adam with Nesterov momentum, by Timothy Dozat (http://web.stanford.edu/~tdozat/).
-    http://cs229.stanford.edu/proj2015/054_report.pdf
-
-    Also see tf.train.AdamOptimizer for reference.
-    For Nadam code, see also Theano Updater.
-    Also see here, from the original author of Nadam:
-    https://github.com/tdozat/Optimization/blob/master/tensorflow/nadam.py
-    """
-    super(NadamOptimizer, self).__init__(use_locking=use_locking, name=name)
-
-    self._lr = learning_rate
-    self._beta1 = beta1
-    self._beta2 = beta2
-    self._epsilon = epsilon
-
-    # Tensor scalar versions of the constructor arguments, created in _prepare().
-    self._lr_t = None
-    self._beta1_t = None
-    self._beta2_t = None
-    self._epsilon_t = None
-
-    # Helper scalars, created in _prepare().
-    self._mu_t = None
-    self._mu_t_next = None
-
-    # Scalar variables to accumulate the powers of the beta parameters.
-    # Created in _create_slots when we know the variables to optimize.
-    self._beta1_power = None
-    self._beta2_power = None
-    self._mu_prod = None
-
-  def _create_slots(self, var_list):
-    # This get's called before self.prepare().
-    t = tf.cast(tf.train.get_global_step(), "float32") + 1
-    # Create the beta1 and beta2 accumulators on the same device as the first variable.
-    if self._beta1_power is None or self._beta1_power.graph is not var_list[0].graph:
-      with ops.colocate_with(var_list[0]):
-        self._beta1_power = tf.Variable(self._beta1 ** t, name="beta1_power", trainable=False)
-        self._beta2_power = tf.Variable(self._beta2 ** t, name="beta2_power", trainable=False)
-        self._mu_prod = tf.Variable(1.0, name="mu_prod", trainable=False)
-    # Create slots for the first and second moments.
-    for v in var_list:
-      self._zeros_slot(v, "m", self._name)
-      self._zeros_slot(v, "v", self._name)
-
-  def _prepare(self):
-    self._lr_t = ops.convert_to_tensor(self._lr, name="learning_rate")
-    self._beta1_t = ops.convert_to_tensor(self._beta1, name="beta1")
-    self._beta2_t = ops.convert_to_tensor(self._beta2, name="beta2")
-    self._epsilon_t = ops.convert_to_tensor(self._epsilon, name="epsilon")
-
-    self._t = tf.cast(tf.train.get_global_step(), "float32") + 1
-
-    # momentum schedule, http://www.cs.toronto.edu/~fritz/absps/momentum.pdf
-    nadam_decay = 0.004  # Magical 250.0 denominator in nesterov scaling of i_t
-    self._mu_t = (self._beta1_t * (1 - 0.5 * 0.96 ** (self._t * nadam_decay)))
-    self._mu_t_next = self._beta1_t * (1 - 0.5 * 0.96 ** ((self._t + 1) * nadam_decay))  # for simplified NAG
-
-    self._mu_prod_t_next = self._mu_prod * self._mu_t
-    self._mu_prod_t_next2 = self._mu_prod_t_next * self._mu_t_next
-
-  def _apply_dense(self, grad, var):
-    """
-    :param tf.Tensor grad:
-    :param tf.Variable var:
-    :return: group of update operations
-    :rtype: tf.Operation
-    """
-    m_prev = self.get_slot(var, "m")
-    v_prev = self.get_slot(var, "v")
-
-    # called m_t in paper
-    m = self._beta1_t * m_prev + (1 - self._beta1_t) * grad
-    m_ = m / (1 - self._mu_prod_t_next2)  # bias correction (with momentum schedule (include the next t+1))
-
-    # called n_t in paper
-    v = self._beta2_t * v_prev + (1 - self._beta2_t) * (grad * grad)
-    v_ = v / (1 - self._beta2_power)
-
-    grad_ = grad / (1 - self._mu_prod_t_next)
-    m__ = (1 - self._mu_t) * grad_ + self._mu_t_next * m_
-
-    step = self._lr_t * m__ / (tf.sqrt(v_) + self._epsilon_t)
-    var_update = tf.assign_sub(var, step, use_locking=self._use_locking)
-
-    return tf.group(
-      var_update,
-      tf.assign(m_prev, m, use_locking=self._use_locking),
-      tf.assign(v_prev, v, use_locking=self._use_locking))
-
-  def _apply_sparse(self, grad, var):
-    """
-    :param tf.IndexedSlices grad:
-    :param tf.Variable var:
-    :return: group of update operations
-    :rtype: tf.Operation
-    """
-    beta2_power = tf.cast(self._beta2_power, var.dtype.base_dtype)
-    lr_t = tf.cast(self._lr_t, var.dtype.base_dtype)
-    beta1_t = tf.cast(self._beta1_t, var.dtype.base_dtype)
-    beta2_t = tf.cast(self._beta2_t, var.dtype.base_dtype)
-    epsilon_t = tf.cast(self._epsilon_t, var.dtype.base_dtype)
-    mu_t = tf.cast(self._mu_t, var.dtype.base_dtype)
-    mu_t_next = tf.cast(self._mu_t_next, var.dtype.base_dtype)
-    mu_prod_t_next = tf.cast(self._mu_prod_t_next, var.dtype.base_dtype)
-    mu_prod_t_next2 = tf.cast(self._mu_prod_t_next2, var.dtype.base_dtype)
-
-    m_prev = self.get_slot(var, "m")
-    v_prev = self.get_slot(var, "v")
-
-    # called m_t in paper
-    m = beta1_t * m_prev
-    m = tf.assign(m_prev, m, use_locking=self._use_locking)
-    m = tf.scatter_add(m, grad.indices, (1 - beta1_t) * grad.values, use_locking=self._use_locking)
-    m_update = m
-    m_ = m / (1 - mu_prod_t_next2)  # bias correction (with momentum schedule (include the next t+1))
-
-    # called n_t in paper
-    v = beta2_t * v_prev
-    v = tf.assign(v_prev, v, use_locking=self._use_locking)
-    v = tf.scatter_add(v, grad.indices, (1 - beta2_t) * (grad.values * grad.values), use_locking=self._use_locking)
-    v_update = v
-    v_ = v / (1 - beta2_power)
-
-    m__ = tf.sparse_add(
-      mu_t_next * m_,
-      tf.IndexedSlices((1 - mu_t) * grad.values / (1 - mu_prod_t_next), grad.indices, grad.dense_shape))
-
-    step = lr_t * m__ / (tf.sqrt(v_) + epsilon_t)
-    var_update = tf.assign_sub(var, step, use_locking=self._use_locking)
-
-    return tf.group(var_update, m_update, v_update)
-
-  def _finish(self, update_ops, name_scope):
-    # Update the power accumulators.
-    with ops.control_dependencies(update_ops):
-      with ops.colocate_with(self._beta1_power):
-        update_beta1 = self._beta1_power.assign(
-            self._beta1_power * self._beta1_t,
-            use_locking=self._use_locking)
-        update_beta2 = self._beta2_power.assign(
-            self._beta2_power * self._beta2_t,
-            use_locking=self._use_locking)
-        update_mu_prod = self._mu_prod.assign(
-            self._mu_prod_t_next,
-            use_locking=self._use_locking)
-    return tf.group(*update_ops + [update_beta1, update_beta2, update_mu_prod], name=name_scope)
-
-
 class Updater(object):
+  """
+  This will create the :class:`tf.train.Optimizer` instance given the config
+  and the update-op for all trainable vars.
+  See the code of :func:`Updater.create_optimizer` for valid config options.
+
+  Note: `Vincent Vanhoucke says <https://github.com/tensorflow/tensorflow/issues/323#issuecomment-159116515>`_,
+  in case you get nans, consider increasing the epsilon (for Adam, Nadam and similar).
+  This is the config option ``optimizer_epsilon``.
+  In some places in our Theano code, 1e-16 is our default epsilon, in some other parts, 1e-8 is.
+  1e-8 might be more stable. Or even 1e-6.
+  Note that when the gradient is suddenly zero in one step, the update can be proportional to lr / eps.
+
+  From the :class:`tf.train.AdamOptimizer` documentation:
+
+      The default value of 1e-8 for epsilon might not be a good default in
+      general. For example, when training an Inception network on ImageNet a
+      current good choice is 1.0 or 0.1. Note that since AdamOptimizer uses the
+      formulation just before Section 2.1 of the Kingma and Ba paper rather than
+      the formulation in Algorithm 1, the "epsilon" referred to here is "epsilon
+      hat" in the paper.
+
+  More from Vincent Vanhoucke:
+
+      One thing you can do is run with a tiny learning rate, or even zero learning rate.
+      If you still have divergence then, you have a bug in your setup.
+      If not, increase your rate slowly and see if there is a regime in which things train without diverging.
+      It's completely possible to have weights that are in a good range,
+      but activations or gradients going to infinity because of the shape of the loss, or too high a learning rate.
+      It's obviously always a possibility that there is a bug in the optimizers, but in my experience,
+      every single instance of this kind of problem could be traced back to a weirdly wired model,
+      learning rate issues, bad randomization of the input examples,
+      or - in the case of Adam or RMSProp - issues with the epsilon value.
+
+  In addition, you might also want to try ``gradient_nan_inf_filter`` or maybe set beta1=0.5.
+
+  For further debugging, see :func:`tf.add_check_numerics_ops` or :func:`add_check_numerics_ops_and_debug_print`,
+  which is config option ``debug_add_check_numerics_ops``.
+
+  """
+
   def __init__(self, config, tf_session, network):
     """
     :param Config.Config config:
@@ -204,6 +89,7 @@ class Updater(object):
     self.loss = network.get_objective()
     self.optimizer = None  # type: tf.train.Optimizer
     self.optim_op = None  # type: tf.Operation
+    self.optim_meta_losses = None  # type: dict[str,tf.Tensor]
     self.optimizer_vars = []  # type: list[tf.Variable]
     self.optimizer_init_vars_op = None  # type: tf.Operation
 
@@ -231,7 +117,8 @@ class Updater(object):
 
   def create_optimizer(self):
     lr = self.learning_rate_var
-    epsilon = 1e-16
+    epsilon = self.config.float("optimizer_epsilon", 1e-16)
+    use_locking = self.config.bool("optimizer_use_locking", False)
     momentum = self.config.float("momentum", 0.0)
     optim_config = self.config.typed_value("optimizer")
     if optim_config:
@@ -247,7 +134,9 @@ class Updater(object):
         optim_config.setdefault("epsilon", epsilon)
       if "momentum" in optim_class_kwargs and momentum:
         optim_config.setdefault("momentum", momentum)
-      assert "learning_rate" not in optim_config, "learning_rate will be set implicitely"
+      if "use_locking" in optim_class_kwargs and use_locking:
+        optim_config.setdefault("use_locking", use_locking)
+      assert "learning_rate" not in optim_config, "learning_rate will be set implicitly"
       optim_config["learning_rate"] = lr
       print("Create optimizer %s with options %r." % (optim_class, optim_config), file=log.v2)
       optimizer = optim_class(**optim_config)
@@ -255,35 +144,95 @@ class Updater(object):
     elif self.config.bool("adam", False):
       assert not momentum
       print("Create Adam optimizer.", file=log.v2)
-      optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=epsilon)
+      # Default TF values: learning_rate=0.001, beta1=0.9, beta2=0.999, epsilon=1e-8.
+      # Default Keras values: lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-8.
+      # Our Theano default values: beta1=0.9, beta2=0.999, epsilon=1e-16
+      # https://github.com/openai/improved-gan/blob/master/imagenet/train_imagenet.py: beta1=0.5
+      optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=epsilon, use_locking=use_locking)
     elif self.config.bool("nadam", False):
+      assert_min_tf_version((1, 2, 0), "NadamOptimizer introduced in TF 1.2.0")
       assert not momentum
       print("Create NAdam optimizer.", file=log.v2)
-      optimizer = NadamOptimizer(learning_rate=lr, epsilon=epsilon)
+      # TF default values: like Adam: beta1=0.9, beta2=0.999, epsilon=1e-8
+      # Our Theano default values: decay=0.004, beta1=0.9, beta2=0.999, epsilon=1e-8
+      from tensorflow.contrib.opt.python.training.nadam_optimizer import NadamOptimizer
+      optimizer = NadamOptimizer(learning_rate=lr, epsilon=epsilon, use_locking=use_locking)
     elif self.config.bool("adadelta", False):
       assert not momentum
       print("Create Adadelta optimizer.", file=log.v2)
-      optimizer = tf.train.AdadeltaOptimizer(learning_rate=lr, epsilon=epsilon)
+      optimizer = tf.train.AdadeltaOptimizer(learning_rate=lr, epsilon=epsilon, use_locking=use_locking)
     elif self.config.bool("adagrad", False):
       assert not momentum
       print("Create Adagrad optimizer.", file=log.v2)
-      optimizer = tf.train.AdagradOptimizer(learning_rate=lr)
+      optimizer = tf.train.AdagradOptimizer(learning_rate=lr, use_locking=use_locking)
     elif self.config.is_of_type("rmsprop", float):
       print("Create RMSProp optimizer. With Decay %f" % (self.config.float("rmsprop", 0.9)), file=log.v2)
-      optimizer = tf.train.RMSPropOptimizer(decay=self.config.float("rmsprop", 0.9), learning_rate=lr, momentum=momentum, epsilon=epsilon)
+      optimizer = tf.train.RMSPropOptimizer(decay=self.config.float("rmsprop", 0.9), learning_rate=lr, momentum=momentum, epsilon=epsilon, use_locking=use_locking)
     elif self.config.bool("rmsprop", False):
       print("Create RMSProp optimizer.", file=log.v2)
-      optimizer = tf.train.RMSPropOptimizer(learning_rate=lr, momentum=momentum, epsilon=epsilon)
+      optimizer = tf.train.RMSPropOptimizer(learning_rate=lr, momentum=momentum, epsilon=epsilon, use_locking=use_locking)
     elif momentum:
       print("Create Momentum optimizer.", file=log.v2)
-      optimizer = tf.train.MomentumOptimizer(learning_rate=lr, momentum=momentum)
+      optimizer = tf.train.MomentumOptimizer(learning_rate=lr, momentum=momentum, use_locking=use_locking)
     else:
       print("Create SGD optimizer.", file=log.v2)
-      optimizer = tf.train.GradientDescentOptimizer(learning_rate=lr)
+      optimizer = tf.train.GradientDescentOptimizer(learning_rate=lr, use_locking=use_locking)
     self.optimizer = optimizer
     self.reset_optim_op()
 
+  def _get_apply_grads_op(self, loss, trainable_vars_for_gradients):
+    """
+    :param tf.Tensor loss:
+    :param list[tf.Variable] trainable_vars_for_gradients:
+    :return: op with all variable updates combined, using the optimizer
+    :rtype: tf.Operation
+    """
+    if not trainable_vars_for_gradients:
+      return tf.no_op(name="no_grad_vars_no_op")
+    # AccumulateN might not be deterministic but should be faster and should require less memory.
+    # We might want to make this configurable.
+    aggregation_method = tf.AggregationMethod.EXPERIMENTAL_ACCUMULATE_N
+    grad_noise = self.config.float("gradient_noise", 0.0)
+    grad_clip = self.config.float("gradient_clip", 0.0)
+    grad_clip_global_norm = self.config.float("gradient_clip_global_norm", 0.0)
+    # E.g. https://github.com/openai/baselines/blob/master/baselines/deepq/simple.py: grad_norm_clipping=10 -> tf.clip_by_norm
+
+    # Extended self.optimizer.minimize() to optionally modify gradients.
+    grads_and_vars = self.optimizer.compute_gradients(
+      loss, var_list=trainable_vars_for_gradients,
+      aggregation_method=aggregation_method)
+    if not [v for g, v in grads_and_vars if g is not None]:
+      raise Exception("no single variable to train")
+    if self.config.bool("debug_grad_summaries", False):
+      from TFUtil import variable_summaries, get_base_name, reuse_name_scope_of_tensor
+      for grad, var in grads_and_vars:
+        with reuse_name_scope_of_tensor(grad, prefix="grads/"):
+          variable_summaries(grad, name="grad_of_%s" % get_base_name(var))
+        with reuse_name_scope_of_tensor(var, prefix="vars/"):
+          variable_summaries(var, name=get_base_name(var))
+    # Also see tf.contrib.layers.optimizers.optimize_loss() for reference.
+    if self.config.bool("gradient_nan_inf_filter", False):
+      from TFUtil import nan_to_num
+      grads_and_vars = [(nan_to_num(grad, nan_num=0.0, inf_num=0.0), var) for (grad, var) in grads_and_vars]
+    if grad_noise:
+      assert grad_noise > 0
+      from TFUtil import add_scaled_noise_to_gradients
+      grads_and_vars = add_scaled_noise_to_gradients(grads_and_vars, grad_noise)
+    if grad_clip:
+      assert grad_clip > 0
+      grads_and_vars = [(tf.clip_by_value(grad, -grad_clip, grad_clip), var) for grad, var in grads_and_vars]
+    if grad_clip_global_norm:
+      assert grad_clip_global_norm > 0
+      grads_clipped, _ = tf.clip_by_global_norm([grad for (grad, _) in grads_and_vars], grad_clip_global_norm)
+      grads_and_vars = zip(grads_clipped, [var for (_, var) in grads_and_vars])
+    apply_grads = self.optimizer.apply_gradients(grads_and_vars)
+    return apply_grads
+
   def create_optim_op(self):
+    assert self.loss is not None
+    assert self.trainable_vars, "no variables to update/optimize"
+    from TFUtil import SyntheticGradient
+
     # Keep track of all current available vars.
     # The optimizer could add some, even some which are not so-called "slot-vars",
     # and we want to keep track about them.
@@ -292,44 +241,39 @@ class Updater(object):
     if not self.optimizer:
       self.create_optimizer()
 
-    assert self.loss is not None
-    with tf.variable_scope("optimize"):
-      # AccumulateN might not be deterministic but should be faster and should require less memory.
-      # We might want to make this configurable.
-      aggregation_method = tf.AggregationMethod.EXPERIMENTAL_ACCUMULATE_N
-      grad_noise = self.config.float("gradient_noise", 0.0)
-      grad_clip = self.config.float("gradient_clip", 0.0)
-      grad_clip_global_norm = self.config.float("gradient_clip_global_norm", 0.0)
+    trainable_vars_for_gradients = list(self.trainable_vars)
+    trainable_vars_custom_update = []  # type: list[tf.Variable]
+    for v in self.trainable_vars:
+      if hasattr(v, "custom_update"):
+        trainable_vars_custom_update.append(v)
+        trainable_vars_for_gradients.remove(v)
 
-      # Extended self.optimizer.minimize() to optionally modify gradients.
-      grads_and_vars = self.optimizer.compute_gradients(
-        self.loss, var_list=self.trainable_vars,
-        aggregation_method=aggregation_method)
-      if not [v for g, v in grads_and_vars if g is not None]:
-        raise Exception("no single variable to train")
-      # Also see tf.contrib.layers.optimizers.optimize_loss() for reference.
-      if self.config.bool("gradient_nan_inf_filter", False):
-        from TFUtil import nan_to_num
-        grads_and_vars = [(nan_to_num(grad), var) for (grad, var) in grads_and_vars]
-      if grad_noise:
-        assert grad_noise > 0
-        from TFUtil import add_scaled_noise_to_gradients
-        grads_and_vars = add_scaled_noise_to_gradients(grads_and_vars, grad_noise)
-      if grad_clip:
-        assert grad_clip > 0
-        grads_and_vars = [(tf.clip_by_value(grad, -grad_clip, grad_clip), var) for grad, var in grads_and_vars]
-      if grad_clip_global_norm:
-        assert grad_clip_global_norm > 0
-        grads_clipped, _ = tf.clip_by_global_norm([grad for (grad, _) in grads_and_vars], grad_clip_global_norm)
-        grads_and_vars = zip(grads_clipped, [var for (_, var) in grads_and_vars])
-      apply_grads = self.optimizer.apply_gradients(grads_and_vars)
+    with tf.variable_scope("optimize"):
+      synthetic_gradient_scope = SyntheticGradient.enter_gradient_scope()
+      apply_grads = self._get_apply_grads_op(self.loss, trainable_vars_for_gradients)
+      synthetic_gradient_scope.exit()
+      self.optim_meta_losses = synthetic_gradient_scope.as_fetch_dict()
+      if synthetic_gradient_scope.losses:
+        with tf.name_scope("meta_loss"):
+          meta_loss = tf.add_n(synthetic_gradient_scope.losses)
+          meta_apply_grads = self._get_apply_grads_op(meta_loss, trainable_vars_for_gradients)
+        apply_grads = tf.group(apply_grads, meta_apply_grads)
       incr_step_op = tf.assign_add(self.network.global_train_step, 1, name="global_train_step_increment")
       self.optim_op = tf.group(apply_grads, incr_step_op, name="optim_and_step_incr")
+
+    if trainable_vars_custom_update:
+      with tf.variable_scope("custom_update"):
+        updates = [self.optim_op]
+        for param in trainable_vars_custom_update:
+          custom_update = getattr(param, "custom_update")
+          assert isinstance(custom_update, CustomUpdate)
+          updates.append(custom_update.update_var(param))
+        self.optim_op = tf.group(*updates)
 
     print("Initialize optimizer with slots %s." % self.optimizer.get_slot_names(), file=log.v3)
     slot_vars = []
     for slot_name in self.optimizer.get_slot_names():
-      for v in self.trainable_vars:
+      for v in trainable_vars_for_gradients:
         slot_var = self.optimizer.get_slot(var=v, name=slot_name)
         assert slot_var is not None
         assert isinstance(slot_var, tf.Variable)
@@ -351,8 +295,30 @@ class Updater(object):
     if other_new_vars:
       print("These additional variable were created by the optimizer: %s." % other_new_vars, file=log.v3)
       self.optimizer_vars += other_new_vars
-    self.optimizer_init_vars_op = tf.variables_initializer(self.optimizer_vars, name="init_optim_slot_vars")
+    with tf.name_scope("optimizer_init_vars"):
+      self.optimizer_init_vars_op = tf.variables_initializer(self.optimizer_vars, name="init_optim_slot_vars")
     self.init_optimizer_vars()
+
+    if self.config.bool("debug_grad_summaries", False):
+      from TFUtil import variable_summaries, get_base_name, reuse_name_scope_of_tensor
+      for key in self.network.used_data_keys:
+        data = self.network.extern_data.data[key]
+        if data.sparse:
+          continue
+        with reuse_name_scope_of_tensor(data.placeholder):
+          variable_summaries(data.placeholder)
+
+    if self.config.bool("debug_add_check_numerics_ops", False):
+      print("Adding checks for inf/nan.", file=log.v3)
+      self.optim_op = tf.group(self.optim_op, add_check_numerics_ops([self.optim_op]))
+
+    if self.config.bool("debug_save_updater_vars", False):
+      print("Save updater/optimizer vars:", file=log.v3)
+      print(self.optimizer_vars)
+      for v in self.optimizer_vars:
+        if v not in self.network.extra_vars_to_save:
+          self.network.extra_vars_to_save.append(v)
+      self.network.reset_saver()
 
   def get_optim_op(self, callback_on_new=None):
     """
@@ -367,3 +333,62 @@ class Updater(object):
 
   def init_optimizer_vars(self):
     self.tf_session.run(self.optimizer_init_vars_op)
+
+
+def add_check_numerics_ops(
+  fetches=None, ignore_ops=None, use_check_numerics=True, debug_print_added_checks=True,
+  name="add_check_numerics_ops"):
+  """
+  This is similar to :func:`tf.add_check_numerics_ops` and based on similar code.
+  It adds some more logic and options.
+
+  :param list[tf.Operation|tf.Tensor]|None fetches: in case this is given, will only look at these and dependent ops
+  :param list[str] ignore_ops: e.g. ""
+  :param bool use_check_numerics: if False, instead of :func:`tf.check_numerics`,
+    it does the check manually (via :func:`tf.is_finite`) and in case there is inf/nan,
+    it will also print the tensor (while `tf.check_numerics` does not print the tensor).
+    Note that this can be about 50 times slower.
+  :param bool debug_print_added_checks: prints info about each added check
+  :param str name: op-name for the final tf.group
+  :return: operation which performs all the checks
+  :rtype: tf.Operation
+  """
+  if fetches is None:
+    ops = tf.get_default_graph().get_operations()
+  else:
+    fetch_ops = [v.op if isinstance(v, tf.Tensor) else v for v in fetches]
+    assert all([isinstance(op, tf.Operation) for op in fetch_ops])
+    from tensorflow.contrib import graph_editor
+    ops = graph_editor.get_backward_walk_ops(fetch_ops, inclusive=True, control_inputs=True)
+  if ignore_ops is None:
+    # The checks could increase the memory usage a lot.
+    # Ignore some common ops which should not be able to introduce inf/nan.
+    ignore_ops = {
+      "Add", "AddN", "Sum", "Mul", "MatMul", "Sub", "L2Loss", "Floor", "Neg", "UnsortedSegmentSum",
+      "Switch", "Merge", "PreventGradient",
+      "Const", "Identity", "Fill", "ZerosLike",
+      "Reshape", "Tile", "ExpandDims", "ConcatV2", "Transpose",
+      "Slice", "StridedSlice", "StridedSliceGrad", "Gather",
+      "TruncatedNormal", "RandomUniform"}
+  with tf.name_scope(name):
+    check_op = []
+    # This code relies on the ordering of ops in get_operations().
+    # The producer of a tensor always comes before that tensor's consumer in
+    # this list. This is true because get_operations() returns ops in the order
+    # added, and an op can only be added after its inputs are added.
+    for op in ops:
+      assert isinstance(op, tf.Operation)
+      if op.type in ignore_ops:
+        continue
+      for output in op.outputs:
+        if output.dtype in [tf.float16, tf.float32, tf.float64]:
+          message = op.name + ":" + str(output.value_index)
+          with tf.control_dependencies(check_op):
+            if debug_print_added_checks:
+              print("add check for:", output, op.type)
+            if use_check_numerics:
+              check_op = [tf.check_numerics(output, message=message, name=op.name + "_check_numerics")]
+            else:
+              is_finite = tf.reduce_all(tf.is_finite(output))
+              check_op = [tf.Assert(is_finite, [message, "Tensor had inf or nan values:", output])]
+    return tf.group(*check_op)

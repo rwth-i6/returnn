@@ -57,6 +57,8 @@ env:
   - TEST=TFEngine
   - TEST=TFNativeOp
   - TEST=TFNetworkLayer
+  - TEST=TFNetworkRecLayer
+  - TEST=TFUpdater
   - TEST=TFUtil
   - TEST=TheanoUtil
   - TEST=Util

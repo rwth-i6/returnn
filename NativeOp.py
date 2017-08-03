@@ -33,7 +33,7 @@ class NativeOpBaseMixin(object):
   """
 
   def __init__(self, in_info, out_info,
-               c_fw_code, c_bw_code=None, c_extra_support_code=None, code_version=None,
+               c_fw_code, c_bw_code=None, c_extra_support_code=None, code_version=None, cpu_support=True,
                grad_input_map=None, name=None):
     """
     :param list[dict(str)] in_info: each dict describes one input var.
@@ -57,6 +57,7 @@ class NativeOpBaseMixin(object):
     :param str|dict[str] c_extra_support_code: C support code (for c_support_code)
     :param str|None c_bw_code: C code for backward pass (for gradient)
     :param tuple[int] code_version: will be returned by c_code_cache_version.
+    :param bool cpu_support:
     :param tuple[int]|callable grad_input_map: selection of grad inputs.
       by default, we get all inputs + all outputs + all grad outputs.
     :param str name: name
@@ -71,6 +72,7 @@ class NativeOpBaseMixin(object):
     self.c_bw_code = c_bw_code
     self.c_extra_support_code = self._reduce_c_extra_support_code(c_extra_support_code)
     self.code_version = code_version or ()
+    self.cpu_support = cpu_support
     self.name = name or "<anonNativeOp>"
     self.grad_input_map = self._convert_grad_input_map(grad_input_map, len(in_info) + len(out_info) * 2)
     self.destroy_map = self._construct_destroy_map(in_info)
@@ -218,7 +220,8 @@ class NativeOpBaseMixin(object):
       out_info=out_info,
       c_fw_code=self.c_bw_code,
       c_extra_support_code=self.c_extra_support_code,
-      code_version=self.code_version
+      code_version=self.code_version,
+      cpu_support=self.cpu_support
     )
 
   def make_results_of_gradient(self, grad_op_outputs, disconnected_type=None):
@@ -299,7 +302,7 @@ class NativeOp(theano.Op, NativeOpBaseMixin):
 
   def _convert_input_var(self, v, info):
     v = self.as_tensor_var(v)
-    dtype = info.get("dtype", "float32")
+    dtype = "float32"  # Theano on GPU only supports float32 ... # info.get("dtype", "float32")
     if v.dtype != dtype:
       v = T.cast(v, dtype)
     if v.ndim != info["ndim"]:
@@ -572,19 +575,18 @@ class NativeOpGenBase:
   code_version = None  # type: tuple[int]|int
   grad_input_map = None
   custom_grad = None
+  cpu_support = True
 
-  @classmethod
-  def make_op(cls):
-    name = cls.__name__
-    assert cls.in_info is not None
-    assert cls.out_info is not None
-    assert cls.c_fw_code is not None
-    return NativeOp(in_info=cls.in_info, out_info=cls.out_info,
-                    c_fw_code=cls.c_fw_code, c_bw_code=cls.c_bw_code,
-                    c_extra_support_code=cls.c_extra_support_code,
-                    grad_input_map=cls.grad_input_map,
-                    name=name,
-                    custom_grad=cls.custom_grad)
+  def make_op(self):
+    assert self.in_info is not None
+    assert self.out_info is not None
+    assert self.c_fw_code is not None
+    return NativeOp(in_info=self.in_info, out_info=self.out_info,
+                    c_fw_code=self.c_fw_code, c_bw_code=self.c_bw_code,
+                    c_extra_support_code=self.c_extra_support_code,
+                    grad_input_map=self.grad_input_map,
+                    name=self.__class__.__name__,
+                    custom_grad=self.custom_grad)
 
   @classmethod
   def map_layer_inputs_to_op(cls, *inputs):
@@ -709,13 +711,9 @@ class LstmGenericBase(NativeOpGenBase):
           float state = delta[start];
           float eps = epsilon[idx];
 
-          //avoid division by 0 (TODO: check if this is needed)
-          float gc = 0.f; //g(c(t))
-          float gzc = 0.f; //g(z_c(t))
-          if (outGate != 0)
-              gc = Y[idx] / outGate;
-          if (inpGate != 0)
-              gzc = (state - fgtGate * oldState) / inpGate;
+          //avoid division by 0
+          float gc = Y[idx] / fmaxf(outGate, float(1e-16)); //g(c(t))
+          float gzc = (state - fgtGate * oldState) / fmaxf(inpGate, float(1e-16)); //g(z_c(t))
 
           //delta_output
           delta[start + 3 * n_cells] = outGate * (1.f - outGate) * gc * eps * i_batch;
@@ -824,6 +822,7 @@ class LstmGenericBase(NativeOpGenBase):
     Ndarray_memcpy(
       Ndarray_DEV_DATA(Dc), Ndarray_DEV_DATA(tmpDc),
       Dc_dim[0] * Dc_dim[1] * sizeof(float));
+
   """
 
   code_version = ()
@@ -1006,7 +1005,7 @@ def chunk(x, index, chunk_size, chunk_step):
   chunk_params = T.concatenate([T.as_tensor(chunk_size).reshape((1,)), T.as_tensor(chunk_step).reshape((1,))])
   out_buffer = T.zeros((chunk_size, n_batch * n_chunks, n_dim), dtype=x.dtype)
   oindex_buffer = T.zeros((chunk_size, n_batch * n_chunks), dtype=index.dtype)
-  chunk_op = Chunking.make_op()
+  chunk_op = Chunking().make_op()
   out, oindex = chunk_op(x, index, out_buffer, oindex_buffer, chunk_params)
   return out, oindex
 
@@ -1199,7 +1198,7 @@ def unchunk(x, index, chunk_size, chunk_step, n_time, n_batch):
   out_buffer = T.zeros((n_time, n_batch, n_dim), dtype=x.dtype)
   oindex_buffer = T.zeros((n_time, n_batch), dtype=index.dtype)
   ofactors_buffer = T.zeros((n_time, n_batch), dtype=x.dtype)
-  unchunk_op = UnChunking.make_op()
+  unchunk_op = UnChunking().make_op()
   out, oindex, ofactors = unchunk_op(x, index, out_buffer, oindex_buffer, ofactors_buffer, chunk_params)
   return out, oindex, ofactors
 
@@ -1350,7 +1349,7 @@ def subtensor_batched_index(x, idx):
     return y[:, 0]
   assert x.ndim == 3
   assert idx.ndim == 2
-  op = SubtensorBatchedIndex.make_op()
+  op = SubtensorBatchedIndex().make_op()
   return op(x, idx)
 
 
@@ -1442,7 +1441,7 @@ def sparse_to_dense(s0, s1, weight, mask, n_time, n_dim):
   assert mask.ndim == 2
   n_batch = s0.shape[1]
   initial_W = T.zeros((n_time, n_batch, n_dim), dtype="float32")
-  op = SparseToDense.make_op()
+  op = SparseToDense().make_op()
   W = op(initial_W, s0, s1, weight, mask)
   assert isinstance(W, T.Variable)
   return W
@@ -1571,7 +1570,7 @@ class MaxAndArgmaxSparse(NativeOpGenBase):
 
 
 def max_and_argmax_sparse(s0, s1, weight, mask, out_max, out_arg):
-  op = MaxAndArgmaxSparse.make_op()
+  op = MaxAndArgmaxSparse().make_op()
   out_max, out_arg = op(s0, s1, weight, mask, out_max, out_arg)
   return out_max, out_arg
 
@@ -1742,7 +1741,7 @@ class CrossEntropySoftmaxAndGradientZSparse(NativeOpGenBase):
 
 
 def crossentropy_softmax_and_gradient_z_sparse(z, z_mask, y_target_t, y_target_i, y_target_w, y_target_mask):
-  op = CrossEntropySoftmaxAndGradientZSparse.make_op()
+  op = CrossEntropySoftmaxAndGradientZSparse().make_op()
   out_ce, out_grad_z, _out_max_z = op(z, z_mask, y_target_t, y_target_i, y_target_w, y_target_mask)
   return out_ce, out_grad_z
 
@@ -1770,9 +1769,9 @@ class FastBaumWelchOp(NativeOpGenBase):
   """
   in_info = (
     {"name": "am_scores",        "ndim": 3, "shape": (None,   None,    None), "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "edges",            "ndim": 2, "shape": (None,   None),          "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "edges",            "ndim": 2, "shape": (None,   None),          "dtype": "int32", "need_contiguous": True, "gradient": "disconnected"},
     {"name": "weights",          "ndim": 1, "shape": (None,),                 "need_contiguous": True, "gradient": "disconnected"},
-    {"name": "start_end_states", "ndim": 2, "shape": (2,      None),          "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "start_end_states", "ndim": 2, "shape": (2,      None),          "dtype": "int32", "need_contiguous": True, "gradient": "disconnected"},
     {"name": "index",            "ndim": 2, "shape": ((0, 0), (0, 1)),        "need_contiguous": True, "gradient": "disconnected"},
     {"name": "state_buffer",     "ndim": 2, "shape": (2,      None),          "need_contiguous": True, "gradient": "disconnected"}
   )
@@ -2033,7 +2032,16 @@ class FastBaumWelchOp(NativeOpGenBase):
           }
         }
       }
-    """
+    """,
+    "25_remove_inf": """
+    __global__
+    void remove_inf(float* array, unsigned size) {
+      unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
+      if (idx < size) {
+        array[idx] = fminf(array[idx], 1e32);
+      }
+    }
+    """,
   }
 
   c_fw_code = """
@@ -2050,6 +2058,15 @@ class FastBaumWelchOp(NativeOpGenBase):
     Ndarray* out              = *outputs[0];
     Ndarray* sum_output       = *outputs[1];
 
+    /*
+    debug_print(context, am_scores, "am_scores");
+    debug_print(context, edges, "edges");
+    debug_print(context, weights, "weights");
+    debug_print(context, start_end_states, "start_end_states");
+    debug_print(context, index, "index");
+    debug_print(context, state_buffer, "state_buffer");
+    */
+
     assert(Ndarray_DIMS(am_scores)[0] == Ndarray_DIMS(out)[0]);
     assert(Ndarray_DIMS(am_scores)[1] == Ndarray_DIMS(out)[1]);
     assert(Ndarray_DIMS(am_scores)[2] == Ndarray_DIMS(out)[2]);
@@ -2064,19 +2081,19 @@ class FastBaumWelchOp(NativeOpGenBase):
     static unsigned batch_idx  = 0u;
     float           pruning    = 10.f;
 
-    unsigned* d_from              = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA(edges) + 0 * Ndarray_STRIDE(edges, 0));
-    unsigned* d_to                = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA(edges) + 1 * Ndarray_STRIDE(edges, 0));
-    unsigned* d_emission_idxs     = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA(edges) + 2 * Ndarray_STRIDE(edges, 0));
-    unsigned* d_sequence_idxs     = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA(edges) + 3 * Ndarray_STRIDE(edges, 0));
+    unsigned* d_from              = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(edges) + 0 * Ndarray_STRIDE(edges, 0));
+    unsigned* d_to                = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(edges) + 1 * Ndarray_STRIDE(edges, 0));
+    unsigned* d_emission_idxs     = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(edges) + 2 * Ndarray_STRIDE(edges, 0));
+    unsigned* d_sequence_idxs     = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(edges) + 3 * Ndarray_STRIDE(edges, 0));
     float*    d_weights           = Ndarray_DEV_DATA(weights);
     float*    d_am_scores         = Ndarray_DEV_DATA(am_scores);
-    unsigned* d_start_states      = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA(start_end_states) + 0 * Ndarray_STRIDE(start_end_states, 0));
-    unsigned* d_end_states        = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA(start_end_states) + 1 * Ndarray_STRIDE(start_end_states, 0));
+    unsigned* d_start_states      = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(start_end_states) + 0 * Ndarray_STRIDE(start_end_states, 0));
+    unsigned* d_end_states        = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(start_end_states) + 1 * Ndarray_STRIDE(start_end_states, 0));
     float*    d_index             = Ndarray_DEV_DATA(index);
     float*    d_state_buffer_prev = Ndarray_DEV_DATA(state_buffer) + 0 * Ndarray_STRIDE(state_buffer, 0);
     float*    d_state_buffer_next = Ndarray_DEV_DATA(state_buffer) + 1 * Ndarray_STRIDE(state_buffer, 0);
     float*    d_out               = Ndarray_DEV_DATA(out);
-    float*    d_sum_output        = CudaNdarray_DEV_DATA(sum_output);
+    float*    d_sum_output        = Ndarray_DEV_DATA(sum_output);
 
     unsigned n_frames    = Ndarray_DIMS(am_scores)[0];
     unsigned n_seqs      = Ndarray_DIMS(am_scores)[1];
@@ -2191,6 +2208,14 @@ class FastBaumWelchOp(NativeOpGenBase):
                                             frame_stride, sequence_stride, n_frames, n_seqs, n_edges);
     HANDLE_LAST_ERROR();
 
+    #if TENSORFLOW
+    // Certain TensorFlow code doesn't like inf, even if it is just the CheckNumerics,
+    // which is helpful for debugging.
+    // We replace it by a very high number, so that tf.exp(-out) will still result in 0.0.
+    n_fill_blocks = (n_frames * n_seqs * n_emissions + n_threads - 1u) / n_threads;
+    remove_inf<<<n_fill_blocks, n_threads>>>(d_out, n_frames * n_seqs * n_emissions);
+    //debug_print(context, out, "out");
+    #endif
     if (dump_output and batch_idx %% dump_every == 0) {
       write_output_to_file(d_out, d_index, index_stride, pruning, n_frames, n_seqs, n_emissions, batch_idx);
     }
@@ -2206,3 +2231,527 @@ class FastBaumWelchOp(NativeOpGenBase):
   c_bw_code = None
 
   code_version = 55
+  cpu_support = False  # TODO: fix CPU support...
+
+
+class SegmentFastBaumWelchOp(NativeOpGenBase):
+  in_info = (
+    {"name": "am_scores",        "ndim": 3, "shape": (None,   None,    None), "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "batch_idxs",       "ndim": 2, "shape": (None,   None),          "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "edges",            "ndim": 2, "shape": (None,   None),          "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "weights",          "ndim": 1, "shape": ((2, 1),),               "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "length_models",    "ndim": 2, "shape": (None,   (0, 0)),        "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "start_end_states", "ndim": 2, "shape": (2,      None),          "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "index",            "ndim": 2, "shape": ((0, 0), (0, 1)),        "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "am_score_scales",  "ndim": 1, "shape": (None,),                 "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "epoch",            "ndim": 0, "shape": tuple(),                 "need_contiguous": True, "gradient": "disconnected"},
+  )
+  out_info = (
+    {"name": "output",                "ndim": 3, "shape": ((0, 0), (0, 1), (0, 2)), "need_contiguous": True },
+    {"name": "normalization_factors", "ndim": 2, "shape": ((0, 0), (0, 1)),         "need_contiguous": True },
+  )
+
+  c_extra_support_code = {
+    "01_set_start_states" : """
+      __global__
+      void set_start_states(float* states, unsigned* start_states) {
+        unsigned state_idx = start_states[blockIdx.x * blockDim.x + threadIdx.x];
+        states[state_idx] = 0.0;
+      }
+    """,
+    "02_init_bwd_state_buffer": """
+      __global__
+      void init_bwd_state_buffer(unsigned t, unsigned num_batches, unsigned num_seqs,
+                                 int* batch_idxs, float* index, float* states, unsigned* end_states) {
+        unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
+        int batch_idx = batch_idxs[t * num_seqs + idx];
+        if (batch_idx < 0) {
+          return;
+        }
+        float* batch_first_frame = index + batch_idx;
+        //if (*batch_first_frame != 0.0 && (t == max_t || *(batch_first_frame + 1) == 0.0)) {
+        if (batch_first_frame[0] != 0.0 && batch_first_frame[num_batches] == 0.0) {
+          unsigned state_idx = end_states[idx];
+          states[state_idx] = 0.0;
+        }
+      }
+    """,
+    "10_fill_array" : """
+      __global__
+      void fill_array(float* array, float value, unsigned size) {
+        unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx < size) {
+          array[idx] = value;
+        }
+      }
+    """,
+    "11_prob_add": """
+      __device__
+      float prob_add(float a, float b) {
+        float diff = a - b;
+        if (isnan(diff)) {
+          return CUDART_INF_F;
+        }
+        else {
+          return -log1p(exp(-abs(diff))) + min(a, b);
+        }
+      }
+    """,
+    "12_atomic_prob_add": """
+      __device__
+      void atomic_prob_add(float* a, float b) {
+        int* addr = (int*)a;
+        int old   = __float_as_int(*a);
+        int assumed;
+        do {
+          assumed = old;
+          old     = atomicCAS(addr, assumed, __float_as_int(prob_add(__int_as_float(old), b)));
+        } while (old != assumed);
+      }
+    """,
+    "13_dump_to_file": """
+      template<typename T>
+      void dump_to_file_1d(T* d_mem, unsigned n_d1, std::string const& path) {
+        std::vector<T> buffer(n_d1);
+        cudaMemcpy(buffer.data(), d_mem, buffer.size() * sizeof(T), cudaMemcpyDeviceToHost);
+
+        std::ofstream output(path.c_str(), std::ios::trunc | std::ios::out);
+        for (size_t i1 = 0ul; i1 < n_d1; i1++) {
+          T val = buffer[i1];
+          if (!std::numeric_limits<T>::has_infinity or !std::isinf(val)) {
+            output << i1 << ' ' << val << '\\n';
+          }
+        }
+      }
+
+      template<typename T>
+      void dump_to_file_2d(T* d_mem, unsigned n_d1, unsigned n_d2, std::string const& path) {
+        std::vector<T> buffer(n_d1 * n_d2);
+        cudaMemcpy(buffer.data(), d_mem, buffer.size() * sizeof(T), cudaMemcpyDeviceToHost);
+
+        std::ofstream output(path.c_str(), std::ios::trunc | std::ios::out);
+        for (size_t i1 = 0ul; i1 < n_d1; i1++) {
+          for (size_t i2 = 0ul; i2 < n_d2; i2++) {
+            T val = buffer[i1 * n_d2 + i2];
+            if (!std::numeric_limits<T>::has_infinity or !std::isinf(val)) {
+              output << i1 << ' ' << i2 << ' ' << val << '\\n';
+            }
+          }
+        }
+      }
+
+      template<typename T>
+      void dump_to_file_3d(T* d_mem, unsigned n_d1, unsigned n_d2, unsigned n_d3, std::string const& path) {
+        std::vector<T> buffer(n_d1 * n_d2 * n_d3);
+        cudaMemcpy(buffer.data(), d_mem, buffer.size() * sizeof(T), cudaMemcpyDeviceToHost);
+
+        std::ofstream output(path.c_str(), std::ios::trunc | std::ios::out);
+        for (size_t i1 = 0ul; i1 < n_d1; i1++) {
+          for (size_t i2 = 0ul; i2 < n_d2; i2++) {
+            for (size_t i3 = 0ul; i3 < n_d3; i3++) {
+              T val = buffer[i1 * n_d2 * n_d3 + i2 * n_d3 + i3];
+              if (!std::numeric_limits<T>::has_infinity or !std::isinf(val)) {
+                output << i1 << ' ' << i2 << ' ' << i3 << ' ' << val << '\\n';
+              }
+            }
+          }
+        }
+      }
+    """,
+    "20_next_frame_fwd": """
+      __global__
+      void next_frame_fwd(unsigned time, unsigned num_states, unsigned num_edges, unsigned num_emissions, unsigned num_seg_frames,
+                          unsigned num_tot_frames, unsigned num_seqs, unsigned num_am_score_scales,
+                          unsigned const* sequence_idxs, unsigned const* from_buffer, unsigned const* to_buffer, float const* weight_buffer,
+                          unsigned const* emission_idxs, unsigned const* lenmod_idxs, int const* batch_idxs,
+                          float const* am_scores, float const* length_models, float const* am_score_scales, float const* epoch,
+                          float* state_buffer, float* edge_buffer) {
+        const unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx >= num_edges) {
+          return;
+        }
+
+        const unsigned num_ringbuffer_frames = num_seg_frames + 1;
+        const unsigned max_seg_frames        = min(num_seg_frames, num_tot_frames - time);
+
+        const unsigned prev_frame_idx   = time % num_ringbuffer_frames;
+        const unsigned prev_frame_start = prev_frame_idx * num_states;
+
+        const unsigned from     = from_buffer [idx];
+        const float    prev_val = state_buffer[prev_frame_start + from];
+        if (isinf(prev_val)) {
+          return;
+        }
+
+        const unsigned sequence_idx = sequence_idxs[idx];
+        const int      batch_idx    = batch_idxs[time * num_seqs + sequence_idx];
+        if (batch_idx == -1) {
+          return;
+        }
+
+        const unsigned amss_idx       = min(static_cast<unsigned>(*epoch), num_am_score_scales - 1);
+        const float    am_score_scale = am_score_scales[amss_idx];
+
+        const unsigned to             = to_buffer    [idx];
+        const unsigned emission_idx   = emission_idxs[idx];
+        const unsigned lenmod_idx     = lenmod_idxs  [idx];
+        const float    edge_weight    = weight_buffer[idx];
+        const float    prev_plus_edge = prev_val + edge_weight;
+
+        float const* am_buffer_in    = am_scores     + batch_idx  * num_seg_frames * num_emissions + emission_idx;
+        float const* length_scores   = length_models + lenmod_idx * num_seg_frames;
+        float*       edge_buffer_out = edge_buffer   + idx;
+
+        for (unsigned i = 0u; i < max_seg_frames; i++) {
+          const float val = prev_plus_edge + am_score_scale * am_buffer_in[i * num_emissions] + length_scores[i];
+          edge_buffer_out[i * num_edges] = val;
+          const unsigned next_frame = (prev_frame_idx + 1 + i) % num_ringbuffer_frames;
+          atomic_prob_add(state_buffer + (next_frame * num_states + to), val);
+        }
+      }
+    """,
+    "21_next_frame_bwd": """
+      __global__
+      void next_frame_bwd(unsigned time, unsigned num_states, unsigned num_edges, unsigned num_emissions, unsigned num_seg_frames,
+                          unsigned num_tot_frames, unsigned num_seqs, unsigned num_am_score_scales,
+                          unsigned const* sequence_idxs, unsigned const* from_buffer, unsigned const* to_buffer, float const* weight_buffer,
+                          unsigned const* emission_idxs, unsigned const* lenmod_idxs, int const* batch_idxs,
+                          float const* am_scores, float const* length_models, float const* am_score_scales, float const* epoch,
+                          float* state_buffer, float* edge_buffer) {
+        const unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx >= num_edges) {
+          return;
+        }
+
+        const unsigned num_ringbuffer_frames = num_seg_frames + 1;
+        const unsigned max_seg_frames        = min(num_seg_frames, num_tot_frames - time);
+
+        const unsigned sequence_idx = sequence_idxs[idx];
+        const int      batch_idx    = batch_idxs[time * num_seqs + sequence_idx];
+        if (batch_idx == -1) {
+          return;
+        }
+
+        const unsigned amss_idx       = min(static_cast<unsigned>(*epoch), num_am_score_scales - 1);
+        const float    am_score_scale = am_score_scales[amss_idx];
+
+        const unsigned from           = from_buffer  [idx];
+        const unsigned to             = to_buffer    [idx];
+        const unsigned emission_idx   = emission_idxs[idx];
+        const unsigned lenmod_idx     = lenmod_idxs  [idx];
+        const float    edge_weight    = weight_buffer[idx];
+        const unsigned next_frame_idx = time % num_ringbuffer_frames;
+
+        float const*   am_buffer_in    = am_scores     + batch_idx  * num_seg_frames * num_emissions + emission_idx;
+        float const*   length_scores   = length_models + lenmod_idx * num_seg_frames;
+        float*         edge_buffer_out = edge_buffer   + idx;
+
+        float acc_val = CUDART_INF_F;
+
+        for (unsigned i = 0u; i < max_seg_frames; i++) {
+          const unsigned prev_frame_idx = (next_frame_idx + i + 1) % num_ringbuffer_frames;
+          const float    prev_val       = state_buffer[prev_frame_idx * num_states + from];
+          if (isinf(prev_val)) {
+            edge_buffer_out[i * num_edges] = CUDART_INF_F;
+          }
+          else {
+            const float val = prev_val + edge_weight + am_score_scale * am_buffer_in[i * num_emissions] + length_scores[i];
+            edge_buffer_out[i * num_edges] += prev_val;
+            acc_val = prob_add(acc_val, val);
+          }
+        }
+
+        atomic_prob_add(state_buffer + next_frame_idx * num_states + to, acc_val);
+      }
+    """,
+    "30_compute_framewise_sum": """
+      __global__
+      void compute_framewise_sum(unsigned num_tot_frames, unsigned num_seqs, unsigned num_seg_frames, unsigned num_batches, unsigned num_edges,
+                                 unsigned const* sequence_idxs, int const* batch_idxs, float const* index, float const* edge_buffer,
+                                 float* output_buffer) {
+        extern __shared__ float sum[];
+
+        const unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx >= num_tot_frames * num_seg_frames) {
+          return;
+        }
+
+        float* sum_buffer = sum + threadIdx.x * num_seqs;
+        edge_buffer += idx * num_edges;
+
+        for (unsigned s = 0u; s < num_seqs; s++) {
+          sum_buffer[s] = CUDART_INF_F;
+        }
+
+        for (unsigned i = 0; i < num_edges; i++) {
+          const unsigned seq_idx = sequence_idxs[i];
+          sum_buffer[seq_idx] = prob_add(sum_buffer[seq_idx], edge_buffer[i]);
+        }
+
+        const unsigned time     = idx / num_seg_frames;
+        const unsigned seg_size = idx % num_seg_frames;
+        for (unsigned s = 0u; s < num_seqs; s++) {
+          const int batch_idx = batch_idxs[time * num_seqs + s];
+          if (batch_idx >= 0) {
+            const unsigned output_idx = seg_size * num_batches + batch_idx;
+            if (isinf(sum_buffer[s]) or index[output_idx] == 0.0) {
+              output_buffer[output_idx] = 0.0;
+            }
+            else {
+              output_buffer[output_idx] = sum_buffer[s];
+            }
+          }
+        }
+      }
+    """,
+    "31_merge_framewise_sums": """
+      __global__
+      void merge_framewise_sum(unsigned num_seg_frames, unsigned num_batches, float const* index, float* sum_buffer) {
+        const unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx >= num_batches) {
+          return;
+        }
+
+        sum_buffer += idx;
+        index += idx;
+
+        float sum = sum_buffer[0];
+        for (unsigned s = 1; s < num_seg_frames; s++) {
+          if (index[s * num_batches] != 0.0f) {
+            sum = prob_add(sum, sum_buffer[s * num_batches]);
+          }
+        }
+
+        for (unsigned s = 0; s < num_seg_frames; s++) {
+          if (index[s * num_batches] != 0.0f) {
+            sum_buffer[s * num_batches] = sum;
+          }
+        }
+      }
+    """,
+    "32_compute_targets": """
+      __global__
+      void compute_targets(unsigned num_tot_frames, unsigned num_seg_frames, unsigned num_edges, unsigned num_batches, unsigned num_seqs, unsigned num_emissions,
+                           unsigned const* sequence_idxs, unsigned const* emission_idxs, int const* batch_idxs, float const* index,
+                           float const* edge_buffer, float const* normalization_buffer, float* output_buffer) {
+        const unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx >= num_tot_frames * num_seg_frames * num_edges) {
+          return;
+        }
+
+        const unsigned edge_idx  = idx % num_edges;
+        const unsigned time      = idx / (num_edges * num_seg_frames);
+        const unsigned seq_idx   = sequence_idxs[edge_idx];
+        const int      batch_idx = batch_idxs[time * num_seqs + seq_idx];
+
+        if (batch_idx < 0) {
+          return;
+        }
+
+        const unsigned seg_length = (idx / num_edges) % num_seg_frames;
+
+        if (index[seg_length * num_batches + batch_idx] == 0.0) {
+          return;
+        }
+
+        const unsigned emission_idx  = emission_idxs[edge_idx];
+        const float    normalization = normalization_buffer[seg_length * num_batches + batch_idx];
+
+        atomic_prob_add(output_buffer + seg_length * num_batches * num_emissions + batch_idx * num_emissions + emission_idx, edge_buffer[idx] - normalization);
+      }
+    """
+ }
+
+  c_fw_code = """
+    // inputs:  am_scores, batch_idxs, edges, weights, length_models, start_end_states, index, am_score_scales, epoch
+    // outputs: output, normalization_factors
+    assert(n_inputs  == 9);
+    assert(n_outputs == 2);
+    Ndarray* ary_am_scores        = inputs[0];
+    Ndarray* ary_batch_idxs       = inputs[1];
+    Ndarray* ary_edges            = inputs[2];
+    Ndarray* ary_weights          = inputs[3];
+    Ndarray* ary_start_end_states = inputs[4];
+    Ndarray* ary_length_models    = inputs[5];
+    Ndarray* ary_index            = inputs[6];
+    Ndarray* ary_am_score_scales  = inputs[7];
+    Ndarray* ary_epoch            = inputs[8];
+    Ndarray* ary_out              = *outputs[0];
+    Ndarray* ary_norm_factors     = *outputs[1];
+
+    assert(Ndarray_DIMS(ary_edges)[1] == Ndarray_DIMS(ary_weights)[0]);
+
+    static unsigned iter = 0u; // used for debug output
+
+    float*    d_am_scores       = Ndarray_DEV_DATA(ary_am_scores);
+    int*      d_batch_idxs      = reinterpret_cast<int*>(Ndarray_DEV_DATA(ary_batch_idxs));
+    unsigned* d_from            = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA(ary_edges) + 0 * Ndarray_STRIDE(ary_edges, 0));
+    unsigned* d_to              = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA(ary_edges) + 1 * Ndarray_STRIDE(ary_edges, 0));
+    unsigned* d_emission_idxs   = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA(ary_edges) + 2 * Ndarray_STRIDE(ary_edges, 0));
+    unsigned* d_lenmod_idxs     = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA(ary_edges) + 3 * Ndarray_STRIDE(ary_edges, 0));
+    unsigned* d_sequence_idxs   = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA(ary_edges) + 4 * Ndarray_STRIDE(ary_edges, 0));
+    float*    d_weights         = Ndarray_DEV_DATA(ary_weights);
+    float*    d_length_models   = Ndarray_DEV_DATA(ary_length_models);
+    unsigned* d_start_states    = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA(ary_start_end_states) + 0 * Ndarray_STRIDE(ary_start_end_states, 0));
+    unsigned* d_end_states      = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA(ary_start_end_states) + 1 * Ndarray_STRIDE(ary_start_end_states, 0));
+    float*    d_index           = Ndarray_DEV_DATA(ary_index);
+    float*    d_am_score_scales = Ndarray_DEV_DATA(ary_am_score_scales);
+    float*    d_epoch           = Ndarray_DEV_DATA(ary_epoch);
+    float*    d_out             = Ndarray_DEV_DATA(ary_out);
+    float*    d_norm_factors    = Ndarray_DEV_DATA(ary_norm_factors);
+
+    const unsigned n_seg_frames      = Ndarray_DIMS(ary_am_scores)[0];
+    const unsigned n_batches         = Ndarray_DIMS(ary_am_scores)[1];
+    const unsigned n_emissions       = Ndarray_DIMS(ary_am_scores)[2];
+    const unsigned n_tot_frames      = Ndarray_DIMS(ary_batch_idxs)[0];
+    const unsigned n_seqs            = Ndarray_DIMS(ary_batch_idxs)[1];
+    const unsigned n_edges           = Ndarray_DIMS(ary_edges)[1];
+    const unsigned n_length_models   = Ndarray_DIMS(ary_length_models)[1];
+    const unsigned n_am_score_scales = Ndarray_DIMS(ary_am_score_scales)[0];
+    const unsigned n_threads         = 1024u;
+    unsigned       n_blocks          = (n_edges + n_threads - 1) / n_threads;
+
+    unsigned tmp;
+    HANDLE_ERROR(cudaMemcpy(&tmp, d_end_states + n_seqs - 1, sizeof(float), cudaMemcpyDeviceToHost));
+
+    const unsigned n_states = tmp + 1;
+
+    /*std::cerr << "seg frames: "    << n_seg_frames    << std::endl;
+    std::cerr << "batches: "       << n_batches       << std::endl;
+    std::cerr << "emissions: "     << n_emissions     << std::endl;
+    std::cerr << "tot frames: "    << n_tot_frames    << std::endl;
+    std::cerr << "seqs: "          << n_seqs          << std::endl;
+    std::cerr << "edges: "         << n_edges         << std::endl;
+    std::cerr << "length models: " << n_length_models << std::endl;
+    std::cerr << "threads: "       << n_threads       << std::endl;
+    std::cerr << "blocks: "        << n_blocks        << std::endl;
+    std::cerr << "num states: "    << n_states        << std::endl;*/
+
+    // initialize edge buffer
+    const unsigned edge_buffer_size = n_tot_frames * n_seg_frames * n_edges;
+    float* d_edge_buffer  = reinterpret_cast<float*>(device_malloc(edge_buffer_size * sizeof(float)));
+    HANDLE_LAST_ERROR();
+    unsigned n_fill_blocks = (edge_buffer_size + n_threads - 1u) / n_threads;
+    fill_array<<<n_fill_blocks, n_threads>>>(d_edge_buffer, std::numeric_limits<float>::infinity(), edge_buffer_size);
+    HANDLE_LAST_ERROR();
+
+    // initialize the state buffer
+    const unsigned n_ringbuffer_frames = n_seg_frames + 1;
+    float* d_state_buffer = reinterpret_cast<float*>(device_malloc(n_states * n_ringbuffer_frames * sizeof(float)));
+    HANDLE_LAST_ERROR();
+    n_fill_blocks = (n_states * n_ringbuffer_frames + n_threads - 1u) / n_threads;
+    fill_array<<<n_fill_blocks, n_threads>>>(d_state_buffer, std::numeric_limits<float>::infinity(), n_states * n_ringbuffer_frames);
+    HANDLE_LAST_ERROR();
+    n_fill_blocks = (n_states + n_threads - 1u) / n_threads;
+
+    // initialize sum buffer
+    HANDLE_LAST_ERROR();
+    n_fill_blocks = (n_batches * n_seg_frames + n_threads - 1u) / n_threads;
+    fill_array<<<n_fill_blocks, n_threads>>>(d_norm_factors, 0.0f, n_batches * n_seg_frames);
+    HANDLE_LAST_ERROR();
+
+    set_start_states<<<1, n_seqs>>>(d_state_buffer, d_start_states);
+    HANDLE_LAST_ERROR();
+
+    // fwd pass
+    for (unsigned t = 0u; t < n_tot_frames; t++) {
+      //std::cerr << "fwd t: " << t << " " << n_tot_frames << std::endl;
+      float* d_state_buffer_prev = d_state_buffer + ((t - 1) %% n_ringbuffer_frames) * n_states;
+      fill_array<<<n_fill_blocks, n_threads>>>(d_state_buffer_prev, std::numeric_limits<float>::infinity(), n_states);
+      HANDLE_LAST_ERROR();
+      next_frame_fwd<<<n_blocks, n_threads>>>(t, n_states, n_edges, n_emissions, n_seg_frames, n_tot_frames, n_seqs, n_am_score_scales,
+                                              d_sequence_idxs, d_from, d_to, d_weights, d_emission_idxs, d_lenmod_idxs, d_batch_idxs,
+                                              d_am_scores, d_length_models, d_am_score_scales, d_epoch,
+                                              d_state_buffer, d_edge_buffer + t * n_seg_frames * n_edges);
+      HANDLE_LAST_ERROR();
+
+      //std::stringstream ss;
+      //ss << "dump/fwd_state_buffer." << t << ".dump";
+      //dump_to_file_2d(d_state_buffer, n_ringbuffer_frames, n_states, ss.str());
+    }
+
+    //dump_to_file_3d(d_edge_buffer, n_tot_frames, n_seg_frames, n_edges, "dump/fwd_edges.dump");
+
+    // bwd pass
+    n_fill_blocks = (n_states * n_ringbuffer_frames + n_threads - 1u) / n_threads;
+    fill_array<<<n_fill_blocks, n_threads>>>(d_state_buffer, std::numeric_limits<float>::infinity(), n_states * n_ringbuffer_frames);
+    HANDLE_LAST_ERROR();
+    n_fill_blocks = (n_states + n_threads - 1u) / n_threads;
+    for (unsigned t = n_tot_frames; t > 0; t--) {
+      //std::cerr << "bwd t: " << t << " " << n_tot_frames << " buffer next: " << ((t-1) %% n_ringbuffer_frames) << std::endl;
+      float* d_state_buffer_next = d_state_buffer + ((t - 1) %% n_ringbuffer_frames) * n_states;
+      float* d_state_buffer_prev = d_state_buffer + ( t      %% n_ringbuffer_frames) * n_states;
+      fill_array<<<n_fill_blocks, n_threads>>>(d_state_buffer_next, std::numeric_limits<float>::infinity(), n_states);
+      HANDLE_LAST_ERROR();
+      init_bwd_state_buffer<<<1, n_seqs>>>(t - 1, n_batches, n_seqs, d_batch_idxs, d_index, d_state_buffer_prev, d_end_states);
+      HANDLE_LAST_ERROR();
+      next_frame_bwd<<<n_blocks, n_threads>>>(t - 1, n_states, n_edges, n_emissions, n_seg_frames, n_tot_frames, n_seqs, n_am_score_scales,
+                                              d_sequence_idxs, d_to, d_from, d_weights, d_emission_idxs, d_lenmod_idxs, d_batch_idxs,
+                                              d_am_scores, d_length_models, d_am_score_scales, d_epoch,
+                                              d_state_buffer, d_edge_buffer + (t - 1) * n_seg_frames * n_edges);
+      HANDLE_LAST_ERROR();
+
+      //std::stringstream ss;
+      //ss << "dump/bwd_state_buffer." << t << ".dump";
+      //dump_to_file_2d(d_state_buffer, n_ringbuffer_frames, n_states, ss.str());
+    }
+
+    n_blocks = (n_tot_frames * n_seg_frames + n_threads - 1) / n_threads;
+    compute_framewise_sum<<<n_blocks, n_threads, n_threads * n_seqs * sizeof(float)>>>(n_tot_frames, n_seqs, n_seg_frames, n_batches, n_edges,
+                                                                                       d_sequence_idxs, d_batch_idxs,
+                                                                                       d_index, d_edge_buffer, d_norm_factors);
+    HANDLE_LAST_ERROR();
+
+    //dump_to_file_2d(d_norm_factors, n_seg_frames, n_batches, "dump/norm_factors_1.dump");
+
+    if (segmentwise_normalization) {
+      n_blocks = (n_batches + n_threads - 1) / n_threads;
+      merge_framewise_sum<<<n_blocks, n_threads>>>(n_seg_frames, n_batches, d_index, d_norm_factors);
+      HANDLE_LAST_ERROR();
+    }
+
+    //dump_to_file_2d(d_norm_factors, n_seg_frames, n_batches, "dump/norm_factors_2.dump");
+
+    n_fill_blocks = (n_batches * n_seg_frames * n_emissions + n_threads - 1u) / n_threads;
+    fill_array<<<n_fill_blocks, n_threads>>>(d_out, std::numeric_limits<float>::infinity(), n_batches * n_seg_frames * n_emissions);
+    HANDLE_LAST_ERROR();
+
+    n_blocks = (n_tot_frames * n_seg_frames * n_edges + n_threads - 1) / n_threads;
+    compute_targets<<<n_blocks, n_threads>>>(n_tot_frames, n_seg_frames, n_edges, n_batches, n_seqs, n_emissions,
+                                             d_sequence_idxs, d_emission_idxs, d_batch_idxs, d_index, d_edge_buffer, d_norm_factors, d_out);
+    HANDLE_LAST_ERROR();
+
+    //dump_to_file_1d(d_weights,       n_edges, "dump/edge_weights.dump");
+    //dump_to_file_1d(d_sequence_idxs, n_edges, "dump/sequence_idxs.dump");
+    //dump_to_file_2d(d_state_buffer,  n_ringbuffer_frames, n_states,  "dump/fwd_state_buffer_init.dump");
+    //dump_to_file_2d(d_batch_idxs,    n_tot_frames,        n_seqs,    "dump/batch_idxs.dump");
+    //dump_to_file_2d(d_index,         n_seg_frames,        n_batches, "dump/index.dump");
+    //dump_to_file_3d(d_edge_buffer,   n_tot_frames,        n_seg_frames, n_edges,     "dump/edges.dump");
+    //dump_to_file_3d(d_am_scores,     n_seg_frames,        n_batches,    n_emissions, "dump/am_scores.dump");
+    //dump_to_file_3d(d_out,           n_seg_frames,        n_batches,    n_emissions, "dump/targets.dump");
+
+    if (dump_targets and iter %% dump_targets_interval == 0) {
+      std::stringstream ss;
+      ss << "dump/targets_" << iter << ".dump";
+      dump_to_file_3d(d_out, n_seg_frames, n_batches, n_emissions, ss.str());
+      ss.str("");
+      ss.clear();
+      ss << "dump/norm_factors" << iter << ".dump";
+      dump_to_file_2d(d_norm_factors, n_seg_frames, n_batches, ss.str());
+    }
+
+    iter += 1;
+
+    device_free(d_state_buffer);
+    device_free(d_edge_buffer);
+  """
+
+  cpu_support = False  # TODO: fix CPU support...
+
+  def __init__(self, segmentwise_normalization=False, dump_targets_interval=None):
+    to_cpp_bool = lambda v : 'true' if v else 'false';
+    extra_lines = []
+    extra_lines.append('const bool segmentwise_normalization = %s;' % to_cpp_bool(segmentwise_normalization))
+    extra_lines.append('const bool dump_targets = %s;' % to_cpp_bool(dump_targets_interval is not None))
+    extra_lines.append('const unsigned dump_targets_interval = %d;' % (0 if dump_targets_interval is None else dump_targets_interval))
+    self.c_fw_code = '\n'.join(extra_lines) + '\n' + self.c_fw_code
