@@ -107,7 +107,7 @@ class Graph:
     """
     if isinstance(lemma, str):
       self.lemma = lemma.strip()
-      self.lem_list = self.lemma.split()
+      self.lem_list = self.lemma.lower().split()
     elif isinstance(lemma, list):
       self.lemma = None
       self.lem_list = lemma
@@ -377,16 +377,18 @@ class Hmm:
   class to create HMM FSA
   """
 
-  def __init__(self, fsa, depth=6, allo_num_states=3):
+  def __init__(self, fsa, depth=6, allo_num_states=3, state_tying_conversion=False):
     """
     :param Graph fsa: represents the Graph on which the class operates
     :param int depth: the depth of the HMM FSA process
     :param int allo_num_states: number of allophone states
+    :param bool state_tying_conversion: flag for state tying conversion
     """
     if isinstance(fsa, Graph) and isinstance(depth, int) and isinstance(allo_num_states, int):
       self.fsa = fsa
       self.depth = depth
       self.allo_num_states = allo_num_states
+      self.state_tying_conversion = state_tying_conversion
     else:
       assert False, ('The HMM init went wrong', fsa)
 
@@ -397,25 +399,109 @@ class Hmm:
     # dict phon_dict: dictionary of phonemes, loaded from lexicon file
     self.phon_dict = {}
 
-  def load_lexicon(self, lexicon_name):
+  def load_lexicon(self, lexicon_name='recog.150k.final.lex.gz'):
     """
     loads Lexicon
+    takes a file, loads the xml and returns as Lexicon
+    where:
+      lex.lemmas and lex.phonemes important
     :param str lexicon_name: holds the path and name of the lexicon file
     """
-    pass
+    from LmDataset import Lexicon
+    from os.path import isfile
+    from Log import log
 
-  def load_state_tying(self, state_tying_name):
+    log.initialize(verbosity=[5])
+    assert isfile(lexicon_name), "Lexicon file does not exist"
+    self.lexicon = Lexicon(lexicon_name)
+
+  def load_state_tying(self, state_tying_name='state-tying.txt.gz'):
     """
-    loads StateTying
+    loads a state tying map from a file, loads the file and returns its content
+    where:
+      statetying.allo_map important
     :param state_tying_name: holds the path and name of the state tying file
     """
-    pass
+    from LmDataset import StateTying
+    from os.path import isfile
+    from Log import log
+
+    log.initialize(verbosity=[5])
+    assert isfile(state_tying_name), "State tying file does not exist"
+    self.state_tying = StateTying(state_tying_name)
 
   def run(self):
     """
     creates the HMM FSA
     """
-    pass
+    print("Starting HMM FSA Creation")
+    self.fsa.num_states_hmm = 0
+    split_begin = 0
+    split_end = 0
+    label_prev = ''
+    label_next = ''
+
+    for word_idx, word in enumerate(self.fsa.lem_list):
+      if word_idx == 0:
+        # add first silence and eps
+        self.fsa.edges.append(Edge(0, 1, Edge.SIL))
+        self.fsa.edges.append(Edge(0, 1, Edge.EPS))
+        self.fsa.num_states += 2
+      # get word with phons from lexicon
+      self.phon_dict[word] = self.lexicon.lemmas[word]['phons']
+      # go through all phoneme variations for a given word
+      for lemma_idx, lemma in enumerate(self.phon_dict[word]):
+        # go through the phoneme variations phoneme by phoneme
+        lem = lemma['phon'].split(' ')
+        for phon_idx, phon in enumerate(lem):
+          # sets the begin and end of splits if several lemma for a word are available
+          if lemma_idx == 0 and phon_idx == 0:
+            split_begin = self.fsa.num_states
+          if lemma_idx > 0 and phon_idx == 0:
+            source_node = split_begin
+          else:
+            source_node = self.fsa.num_states
+          if lemma_idx == 0 and phon_idx == len(lem) - 1:
+            split_end = self.fsa.num_states + 1
+          if lemma_idx > 0 and phon_idx == len(lem) - 1:
+            target_node = split_end
+          else:
+            target_node = self.fsa.num_states + 1
+          # triphone labels if current pos at first or last phon
+          if phon_idx == 0:
+            label_prev = ''
+          else:
+            label_prev = lem[phon_idx - 1]
+          if phon_idx == len(lem) - 1:
+            label_next = ''
+          else:
+            label_next = lem[phon_idx + 1]
+          label = [label_prev, phon, label_next]
+          phon_edge = Edge(source_node, target_node, label)
+          if phon_idx == 0:
+            phon_edge.score = lemma['score']
+          phon_edge.idx_word_in_sentence = word_idx
+          phon_edge.idx_phon_in_word = phon_idx
+          phon_edge.idx = self.fsa.num_states + phon_idx
+          if phon_idx == 0:
+            phon_edge.phon_at_word_begin = True
+          if phon_idx == len(lem) - 1:
+            phon_edge.phon_at_word_end = True
+          self.fsa.edges.append(phon_edge)
+          self.fsa.num_states += 1
+        if lemma_idx == 0 and len(self.phon_dict[word]) != 2:
+          self.fsa.num_states -= len(self.phon_dict[word]) - 2
+      # add silence and eps after word
+      self.fsa.edges.append(Edge(target_node, self.fsa.num_states, Edge.SIL))
+      self.fsa.edges.append(Edge(target_node, self.fsa.num_states, Edge.EPS))
+    # final node
+    self.fsa.num_states += 1
+
+    self.fsa.edges.sort()
+    self.fsa.num_states_hmm = deepcopy(self.fsa.num_states)
+    self.fsa.num_states = -1
+    self.fsa.edges_hmm = deepcopy(self.fsa.edges)
+    self.fsa.edges = []
 
 
 class Store:
@@ -1605,6 +1691,11 @@ def main():
   arg_parser.set_defaults(lexicon='recog.150k.final.lex.gz')
   arg_parser.add_argument("--state_tying", type=str)
   arg_parser.set_defaults(state_tying='state-tying.txt')
+  arg_parser.add_argument("--state_tying_conversion_on",
+                          dest="state_tying_conversion", action="store_true")
+  arg_parser.add_argument("--state_tying_conversion_off",
+                          dest="state_tying_conversion", action="store_false")
+  arg_parser.set_defaults(state_tying_conversion=False)
   arg_parser.add_argument("--single_state_on", dest="single_state", action="store_true")
   arg_parser.add_argument("--single_state_off", dest="single_state", action="store_false")
   arg_parser.set_defaults(single_state=False)
@@ -1643,6 +1734,22 @@ def main():
   sav_ctc.fsa_to_dot_format()
 
   sav_ctc.save_to_file()
+
+  hmm = Hmm(fsa)
+
+  hmm.load_lexicon(args.lexicon)
+
+  #hmm.load_state_tying(args.state_tying)
+
+  hmm.run()
+
+  sav_hmm = Store(fsa.num_states_hmm, fsa.edges_hmm)
+
+  sav_hmm.filename = 'edges_hmm'
+
+  sav_hmm.fsa_to_dot_format()
+
+  sav_hmm.save_to_file()
 
 if __name__ == "__main__":
   import time
