@@ -166,7 +166,7 @@ class Updater:
     self.device = str(theano.config.device)
     self.params = {}
     self.pid = -1
-    if self.adadelta or self.adamdelta:
+    if self.adadelta:
       self.momentum = 0.0
       self.nesterov_momentum = 0.0
       self.momentum2 = 0.0
@@ -896,8 +896,8 @@ class Updater:
         v_t = beta2 * v_prev + (numpy.float32(1) - beta2) * deltas ** 2
         g = m_t / (T.sqrt(v_t) + self.adam_offset)
 
-        #updates.append((m_prev, m_t))
-        #updates.append((v_prev, v_t))
+        updates.append((m_prev, m_t))
+        updates.append((v_prev, v_t))
 
         decay = self.adadelta_decay
         offset = self.adadelta_offset

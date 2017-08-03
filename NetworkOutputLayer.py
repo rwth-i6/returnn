@@ -33,6 +33,7 @@ class OutputLayer(Layer):
                substract_prior_from_output=False,
                input_output_similarity=None,
                input_output_similarity_scale=1,
+               scale_by_error=False,
                copy_weights=False,
                **kwargs):
     """
@@ -316,6 +317,20 @@ class OutputLayer(Layer):
                                   custom_update_normalized=True)
       }
 
+    self.cost_scale_val = T.constant(1)
+    if scale_by_error and self.train_flag:
+      rpcx = self.p_y_given_x_flat[T.arange(self.p_y_given_x_flat.shape[0]),self.y_data_flat]
+      #rpcx -= rpcx.min()
+      rpcx /= rpcx.max()
+      weight = T.constant(1) - rpcx
+      #weight = (T.constant(1) - self.p_y_given_x_flat[T.arange(self.p_y_given_x_flat.shape[0]),self.y_data_flat])
+      weight = weight.dimshuffle(0,'x').repeat(self.z.shape[2],axis=1).reshape(self.z.shape)
+      weight = T.cast(T.neq(T.argmax(self.p_y_given_x_flat, axis=1), self.y_data_flat), 'float32').dimshuffle(0,'x').repeat(self.z.shape[2],axis=1).reshape(self.z.shape)
+      self.p_y_given_x = T.exp(weight * T.log(self.p_y_given_x))
+      self.z = self.p_y_given_x
+      self.p_y_given_x_flat = self.p_y_given_x.reshape((self.z.shape[0]*self.z.shape[1],self.z.shape[2]))
+      self.y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim=2)
+
 
   def create_bias(self, n, prefix='b', name=""):
     if not name:
@@ -473,6 +488,9 @@ class FramewiseOutputLayer(OutputLayer):
       return err, known_grads
     else:
       assert False, "unknown loss: %s. maybe fix LayerNetwork.make_classifier" % self.loss
+
+  def cost_scale(self):
+    return self.cost_scale_val * T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
 
 
 class DecoderOutputLayer(FramewiseOutputLayer):  # must be connected to a layer with self.W_lm_in
