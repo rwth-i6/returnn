@@ -32,21 +32,25 @@ class Edge:
     self.label = label
     self.weight = weight
 
-    """
-    int|None idx_word_in_sentence: index of word in the given sentence
-    int|None idx_phon_in_word: index of phon in a word
-    int|None idx: label index within the sentence/word/phon
-    bool phon_at_word_begin: flag indicates if phon at the beginning of a word
-    bool phon_at_word_end: flag indicates if phon at the end of a word
-    float|None score: score of the edge
-    bool is_loop: is the edge a loop within the graph
-    """
+    # int|str|None label_prev: previous label
+    self.label_prev = None
+    # int|str|None label_next: next label
+    self.label_next = None
+    # int|None idx_word_in_sentence: index of word in the given sentence
     self.idx_word_in_sentence = None
+    # int|None idx_phon_in_word: index of phon in a word
     self.idx_phon_in_word = None
+    # int|None idx: label index within the sentence/word/phon
     self.idx = None
+    # int|None allo_idx: allophone position
+    self.allo_idx = None
+    # bool phon_at_word_begin: flag indicates if phon at the beginning of a word
     self.phon_at_word_begin = False
+    # bool phon_at_word_end: flag indicates if phon at the end of a word
     self.phon_at_word_end = False
+    # float|None score: score of the edge
     self.score = None
+    # bool is_loop: is the edge a loop within the graph
     self.is_loop = False
 
   def __repr__(self):
@@ -382,6 +386,7 @@ class Hmm:
     :param Graph fsa: represents the Graph on which the class operates
     :param int depth: the depth of the HMM FSA process
     :param int allo_num_states: number of allophone states
+      where allo_num_states > 0
     :param bool state_tying_conversion: flag for state tying conversion
     """
     if isinstance(fsa, Graph) and isinstance(depth, int) and isinstance(allo_num_states, int):
@@ -583,7 +588,13 @@ class Store:
     :param list[Edge] edges: list of edges
     """
     for edge in edges:
-      e = ((str(edge.source_state_idx), str(edge.target_state_idx)), {'label': str(edge.label)})
+      if edge.label_prev is not None and edge.label_next is not None:
+        label = [edge.label_prev, edge.label, edge.label_next]
+        if edge.allo_idx is not None:
+          label.append(edge.allo_idx)
+      else:
+        label = edge.label
+      e = ((str(edge.source_state_idx), str(edge.target_state_idx)), {'label': str(label)})
       graph.edge(*e[0], **e[1])
 
 
@@ -1740,6 +1751,8 @@ def main():
   hmm.load_lexicon(args.lexicon)
 
   #hmm.load_state_tying(args.state_tying)
+
+  hmm.allo_num_states = args.allo_num_states
 
   hmm.run()
 
