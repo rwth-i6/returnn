@@ -58,7 +58,7 @@ class Edge:
                     str(self.source_state_idx), ", ",
                     str(self.target_state_idx), ", ",
                     str(self.label), ", ",
-                    str(self. weight),
+                    str(self.weight),
                     "]"))
 
   def __str__(self):
@@ -70,7 +70,7 @@ class Edge:
                     "Label: ",
                     str(self.label), "\n",
                     "Weight: ",
-                    str(self. weight)))
+                    str(self.weight)))
 
   def __eq__(self, other):
     return ((self.source_state_idx, self.target_state_idx, self.label, self.weight)
@@ -435,6 +435,38 @@ class Hmm:
     assert isfile(state_tying_name), "State tying file does not exist"
     self.state_tying = StateTying(state_tying_name)
 
+  @staticmethod
+  def _find_node_in_edges(node, edges):
+    """
+    find a specific node in all edges
+    :param int node: node number
+    :param list edges: all edges
+    :return dict node_dict: dict of nodes where
+          key: edge index
+          value: 0 = specific node is as source state idx
+          value: 1 = specific node is target state idx
+          value: 2 = specific node is source and target state idx
+    """
+    node_dict = {}
+
+    pos_start = [edge_index for edge_index, edge in enumerate(edges)
+                 if (edge.source_state_idx == node)]
+    pos_end = [edge_index for edge_index, edge in enumerate(edges)
+               if (edge.target_state_idx == node)]
+    pos_start_end = [edge_index for edge_index, edge in enumerate(edges) if
+                     (edge.source_state_idx == node and edge.target_state_idx == node)]
+
+    for pos in pos_start:
+      node_dict[pos] = 0
+
+    for pos in pos_end:
+      node_dict[pos] = 1
+
+    for pos in pos_start_end:
+      node_dict[pos] = 2
+
+    return node_dict
+
   def run(self):
     """
     creates the HMM FSA
@@ -443,8 +475,6 @@ class Hmm:
     self.fsa.num_states_hmm = 0
     split_begin = 0
     split_end = 0
-    label_prev = ''
-    label_next = ''
 
     for word_idx, word in enumerate(self.fsa.lem_list):
       if word_idx == 0:
@@ -473,16 +503,15 @@ class Hmm:
           else:
             target_node = self.fsa.num_states + 1
           # triphone labels if current pos at first or last phon
+          phon_edge = Edge(source_node, target_node, phon)
           if phon_idx == 0:
-            label_prev = ''
+            phon_edge.label_prev = ''
           else:
-            label_prev = lem[phon_idx - 1]
+            phon_edge.label_prev = lem[phon_idx - 1]
           if phon_idx == len(lem) - 1:
-            label_next = ''
+            phon_edge.label_next = ''
           else:
-            label_next = lem[phon_idx + 1]
-          label = [label_prev, phon, label_next]
-          phon_edge = Edge(source_node, target_node, label)
+            phon_edge.label_next = lem[phon_idx + 1]
           if phon_idx == 0:
             phon_edge.score = lemma['score']
           phon_edge.idx_word_in_sentence = word_idx
@@ -501,6 +530,72 @@ class Hmm:
       self.fsa.edges.append(Edge(target_node, self.fsa.num_states, Edge.EPS))
     # final node
     self.fsa.num_states += 1
+
+    edges_allo_tmp = []
+    if self.allo_num_states > 1:
+      for edge in self.fsa.edges:  # do not add to list you are looping over XD
+        if edge.label != Edge.SIL and edge.label != Edge.EPS:
+          allo_target_idx = edge.target_state_idx
+          for state in range(self.allo_num_states):
+            if state == 0:
+              edge.target_state_idx = self.fsa.num_states
+              edge.allo_idx = state
+            elif state == self.allo_num_states - 1:
+              edge_1 = deepcopy(edge)
+              edge_1.allo_idx = state
+              edge_1.source_state_idx = self.fsa.num_states
+              edge_1.target_state_idx = allo_target_idx
+              self.fsa.num_states += 1
+              edges_allo_tmp.append(edge_1)
+            else:
+              self.fsa.num_states += 1
+              edge_2 = deepcopy(edge)
+              edge_2.allo_idx = state
+              edge_2.source_state_idx = self.fsa.num_states - 1
+              edge_2.target_state_idx = self.fsa.num_states
+              edges_allo_tmp.append(edge_2)
+      self.fsa.edges.extend(edges_allo_tmp)
+
+    sort_idx = 0
+    while sort_idx < len(self.fsa.edges):
+      cur_source_state = self.fsa.edges[sort_idx].source_state_idx
+      cur_target_state = self.fsa.edges[sort_idx].target_state_idx
+
+      if cur_source_state > cur_target_state:  # swap is needed
+        edges_with_cur_source_state = self._find_node_in_edges(
+          cur_source_state, self.fsa.edges)  # find start node in all edges
+        edges_with_cur_target_state = self._find_node_in_edges(
+          cur_target_state, self.fsa.edges)  # find end node in all edges
+
+        for edge_key in edges_with_cur_source_state.keys():  # loop over edges with specific node
+          if edges_with_cur_source_state[edge_key] == 0:  # swap source state
+            self.fsa.edges[edge_key].source_state_idx = cur_target_state
+          elif edges_with_cur_source_state[edge_key] == 1:
+            self.fsa.edges[edge_key].target_state_idx = cur_target_state
+          elif edges_with_cur_source_state[edge_key] == 2:
+            self.fsa.edges[edge_key].source_state_idx = cur_target_state
+            self.fsa.edges[edge_key].target_state_idx = cur_target_state
+          else:
+            assert False, ("Dict has a non matching value:",
+                           edge_key, edges_with_cur_source_state[edge_key])
+
+        for edge_key in edges_with_cur_target_state.keys():  # edge_key: idx from edge in edges
+          if edges_with_cur_target_state[edge_key] == 0:  # swap target state
+            self.fsa.edges[edge_key].source_state_idx = cur_source_state
+          elif edges_with_cur_target_state[edge_key] == 1:
+            self.fsa.edges[edge_key].target_state_idx = cur_source_state
+          elif edges_with_cur_target_state[edge_key] == 2:
+            self.fsa.edges[edge_key].source_state_idx = cur_source_state
+            self.fsa.edges[edge_key].target_state_idx = cur_source_state
+          else:
+            assert False, ("Dict has a non matching value:",
+                           edge_key, edges_with_cur_source_state[edge_key])
+
+        # reset idx: restarts traversing at the beginning of graph
+        # swapping may introduce new disorders
+        sort_idx = 0
+
+      sort_idx += 1
 
     self.fsa.edges.sort()
     self.fsa.num_states_hmm = deepcopy(self.fsa.num_states)
