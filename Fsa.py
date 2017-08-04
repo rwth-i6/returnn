@@ -150,8 +150,21 @@ class Graph:
                   + str(self.edges_hmm)
     return prettygraph
 
-  def make_single_state_graph(self):
-    pass
+  @staticmethod
+  def make_single_state_graph(num_states, edges):
+    """
+    takes a graph with several states and transforms into single state graph
+    :param int num_states: number of states
+    :param list[Edges] edges: list of Edges symbolizing the graph
+    :return list[Edges]: returns the transformed list of Edges with one state
+    """
+    edges_single_state = deepcopy(edges)
+    if num_states > 1:
+      for edge in edges_single_state:
+        edge.source_state_idx = 0
+        edge.target_state_idx = 0
+
+    return edges_single_state
 
 
 class Asg:
@@ -957,53 +970,34 @@ def main():
   fsa = Graph(lemma=args.label_seq)
 
   asg = Asg(fsa)
-
   asg.label_conversion = args.label_conversion
-
   asg.asg_repetition = args.asg_repetition
-
   asg.run()
 
   sav_asg = Store(fsa.num_states_asg, fsa.edges_asg)
-
   sav_asg.filename = 'edges_asg'
-
   sav_asg.fsa_to_dot_format()
-
   sav_asg.save_to_file()
 
   ctc = Ctc(fsa)
-
   ctc.label_conversion = args.label_conversion
-
   ctc.run()
 
   sav_ctc = Store(fsa.num_states_ctc, fsa.edges_ctc)
-
   sav_ctc.filename = 'edges_ctc'
-
   sav_ctc.fsa_to_dot_format()
-
   sav_ctc.save_to_file()
 
   hmm = Hmm(fsa)
-
   hmm.load_lexicon(args.lexicon)
-
   hmm.load_state_tying(args.state_tying)
-
   hmm.allo_num_states = args.allo_num_states
-
   hmm.state_tying_conversion = args.state_tying_conversion
-
   hmm.run()
 
   sav_hmm = Store(fsa.num_states_hmm, fsa.edges_hmm)
-
   sav_hmm.filename = 'edges_hmm'
-
   sav_hmm.fsa_to_dot_format()
-
   sav_hmm.save_to_file()
 
 if __name__ == "__main__":
