@@ -596,7 +596,7 @@ class RecLayer(_ConcatInputLayer):
       if self.network.train_flag is not False:
         layer_with_losses = [
           layer.name for layer in cell.layer_data_templates.values()
-          if "loss" in layer.kwargs]
+          if layer.kwargs.get("loss", None)]
         if layer_with_losses:
           if len(layer_with_losses) > 1:
             raise Exception("rec layer %r, multiple subnet losses not supported (yet): %r" % (
