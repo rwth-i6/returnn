@@ -133,6 +133,8 @@ class RecLayer(_ConcatInputLayer):
     :param TFNetwork.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     """
+    if isinstance(d.get("unit"), dict):
+      d["n_out"] = d.get("n_out", None)  # disable automatic guessing
     super(RecLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
     initial_state = d.pop("initial_state", None)
     if initial_state:
