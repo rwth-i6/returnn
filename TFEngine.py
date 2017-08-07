@@ -413,7 +413,8 @@ class Engine(object):
     self.train_data = None  # type: Dataset
     self.start_epoch = None
     self.use_dynamic_train_flag = False
-    self.use_search_flag = False
+    self.use_search_flag = config.value("task", None) == "search"
+    self.use_eval_flag = config.value("task", None) != "forward"
     self._const_cache = {}  # type: dict[str,tf.Tensor]
 
   def finalize(self):
@@ -620,6 +621,7 @@ class Engine(object):
       config=self.config,
       rnd_seed=epoch,
       train_flag=train_flag,
+      eval_flag=self.use_eval_flag,
       search_flag=self.use_search_flag)
     network.construct_from_dict(net_desc)
     network.initialize_params(session=self.tf_session)

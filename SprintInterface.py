@@ -329,7 +329,9 @@ def _at_exit_handler():
 
 def initBase(configfile=None, targetMode=None, epoch=None):
   """
-  :type configfile: str | None
+  :param str|None configfile: filename, via init(), this is set
+  :param str|None targetMode: "forward" or so. via init(), this is set
+  :param int epoch: via init(), this is set
   """
 
   global isInitialized

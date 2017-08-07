@@ -251,19 +251,37 @@ class LayerBase(object):
       get_layer(src_name)
       for src_name in src_names
       if not src_name == "none"]
-    if d.get("loss"):
-      loss_class = get_loss_class(d["loss"])
-      assert issubclass(loss_class, Loss)
-      loss_opts = d.pop("loss_opts", {}).copy()
-      loss_class.transform_config_dict(loss_opts, network=network, get_layer=get_layer)
-      loss = loss_class(base_network=network, **loss_opts)
-      assert isinstance(loss, Loss)
-      d["loss"] = loss
+    d["loss"] = cls._make_loss(
+      class_name=d.pop("loss", None), opts=d.pop("loss_opts", None), network=network, get_layer=get_layer)
     if d.get("target"):
-      # Not resolving this in the dict, but call get_layer to make it available.
-      assert isinstance(d["target"], str)
-      if d["target"].startswith("layer:"):
-        get_layer(d["target"][len("layer:"):])
+      if network.eval_flag:
+        # Not resolving this in the dict, but call get_layer to make it available.
+        assert isinstance(d["target"], str)
+        if d["target"].startswith("layer:"):
+          get_layer(d["target"][len("layer:"):])
+
+  @classmethod
+  def _make_loss(cls, class_name, opts, network, get_layer):
+    """
+    :param str|None class_name:
+    :param dict[str]|None opts:
+    :param TFNetwork.TFNetwork network:
+    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
+    :rtype: Loss|None
+    """
+    if not network.eval_flag:
+      return None
+    if not class_name:
+      return None
+    if not opts:
+      opts = {}
+    opts = opts.copy()
+    loss_class = get_loss_class(class_name)
+    assert issubclass(loss_class, Loss)
+    loss_class.transform_config_dict(opts, network=network, get_layer=get_layer)
+    loss = loss_class(base_network=network, **opts)
+    assert isinstance(loss, Loss)
+    return loss
 
   @property
   def tf_scope_name(self):

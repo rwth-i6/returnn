@@ -126,7 +126,7 @@ class ExternData(object):
 
 class TFNetwork(object):
   def __init__(self, config=None, extern_data=None, rnd_seed=42,
-               train_flag=False, search_flag=False,
+               train_flag=False, eval_flag=False, search_flag=False,
                parent_layer=None, parent_net=None,
                name=None):
     """
@@ -134,6 +134,8 @@ class TFNetwork(object):
     :param ExternData|None extern_data:
     :param int rnd_seed:
     :param bool|tf.Tensor train_flag: True if we want to use this model in training, False if in eval, or dynamic
+    :param bool eval_flag: whether to calculate losses. if train_flag is not False, this will be set to True
+    :param bool search_flag: whether we perform a beam-search. see usage
     :param TFNetworkLayer.LayerBase|None parent_layer:
     :param TFNetwork parent_net:
     :param str name: only for debugging
@@ -155,6 +157,10 @@ class TFNetwork(object):
     self.random = numpy.random.RandomState(rnd_seed)
     assert isinstance(train_flag, (bool, tf.Tensor))
     self.train_flag = train_flag
+    assert isinstance(eval_flag, bool)
+    if train_flag is not False:  # True or dynamic
+      eval_flag = True
+    self.eval_flag = eval_flag
     self.search_flag = search_flag
     self.parent_layer = parent_layer
     if not parent_net and parent_layer:
