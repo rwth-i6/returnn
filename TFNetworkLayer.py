@@ -75,8 +75,6 @@ class LayerBase(object):
     """
     self.name = name
     self.network = network
-    if loss and not target:
-      target = self.network.extern_data.default_target
     self.target = target
     self.loss = loss
     if self.loss and self.loss.recurrent:
@@ -167,8 +165,6 @@ class LayerBase(object):
       target = network.extern_data.default_target
     if n_out is None and target:
       n_out = cls._static_get_target_value(target=target, network=network, mark_data_key_as_used=False).dim
-      if loss:
-        n_out = loss.get_auto_output_layer_dim(n_out)
     if out_type is None:
       assert n_out
       out_type = {"dim": n_out}
@@ -251,19 +247,60 @@ class LayerBase(object):
       get_layer(src_name)
       for src_name in src_names
       if not src_name == "none"]
-    if d.get("loss"):
-      loss_class = get_loss_class(d["loss"])
-      assert issubclass(loss_class, Loss)
-      loss_opts = d.pop("loss_opts", {}).copy()
-      loss_class.transform_config_dict(loss_opts, network=network, get_layer=get_layer)
-      loss = loss_class(base_network=network, **loss_opts)
-      assert isinstance(loss, Loss)
-      d["loss"] = loss
+    if d.get("loss", None) and "target" not in d:
+      d["target"] = network.extern_data.default_target
+    if "n_out" not in d and d.get("target", None):
+      # Must be done here now because loss might be set to None later.
+      d["n_out"] = cls._guess_n_out_from_target_and_opt_loss(
+        network=network, target=d["target"], loss_class_name=d.get("loss", None))
+    d["loss"] = cls._make_loss(
+      class_name=d.pop("loss", None), opts=d.pop("loss_opts", None), network=network, get_layer=get_layer)
     if d.get("target"):
-      # Not resolving this in the dict, but call get_layer to make it available.
-      assert isinstance(d["target"], str)
-      if d["target"].startswith("layer:"):
-        get_layer(d["target"][len("layer:"):])
+      if network.eval_flag:
+        # Not resolving this in the dict, but call get_layer to make it available.
+        assert isinstance(d["target"], str)
+        if d["target"].startswith("layer:"):
+          get_layer(d["target"][len("layer:"):])
+
+  @classmethod
+  def _guess_n_out_from_target_and_opt_loss(cls, network, target, loss_class_name):
+    """
+    :param TFNetwork.TFNetwork network:
+    :param str target: e.g. "classes"
+    :param str|None loss_class_name: e.g. "ce" or None
+    :return: n_out value
+    :rtype: int
+    """
+    n_out = cls._static_get_target_value(target=target, network=network, mark_data_key_as_used=False).dim
+    if loss_class_name:
+      n_out = get_loss_class(loss_class_name).get_auto_output_layer_dim(n_out)
+    return n_out
+
+  @classmethod
+  def _make_loss(cls, class_name, opts, network, get_layer):
+    """
+    :param str|None class_name:
+    :param dict[str]|None opts:
+    :param TFNetwork.TFNetwork network:
+    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
+    :rtype: Loss|None
+    """
+    if not network.eval_flag:
+      # Don't resolve the loss opts on purpose.
+      # This might result in a smaller network because it might skip some get_layer calls.
+      # This is what we want, i.e. we don't want to resolve layers which are only needed for the loss.
+      return None
+    if not class_name:
+      return None
+    if not opts:
+      opts = {}
+    opts = opts.copy()
+    loss_class = get_loss_class(class_name)
+    assert issubclass(loss_class, Loss)
+    loss_class.transform_config_dict(opts, network=network, get_layer=get_layer)
+    loss = loss_class(base_network=network, **opts)
+    assert isinstance(loss, Loss)
+    return loss
 
   @property
   def tf_scope_name(self):
@@ -2838,7 +2875,8 @@ class Loss(object):
     """
     return self.loss_norm_factor
 
-  def get_auto_output_layer_dim(self, target_dim):
+  @classmethod
+  def get_auto_output_layer_dim(cls, target_dim):
     """
     :param int target_dim:
     :return: normally just the same as target_dim. e.g. for CTC, we would add 1 for the blank label
@@ -2999,7 +3037,8 @@ class CtcLoss(Loss):
       error = tf.edit_distance(hypothesis=tf.cast(decoded[0], labels.dtype), truth=labels, normalize=False)
       return self.reduce_func(error)
 
-  def get_auto_output_layer_dim(self, target_dim):
+  @classmethod
+  def get_auto_output_layer_dim(cls, target_dim):
     return target_dim + 1  # one added for blank
 
 
