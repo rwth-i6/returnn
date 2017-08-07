@@ -826,7 +826,9 @@ class AttentionSegment(AttentionBase):
     n = T.cast(self.n[0],'int32')
     attend_on_alnpts = self.layer.attrs['attention_alnpts']
     att_epoch = numpy.float32(self.layer.attrs['attention_epoch'])
-    temperature = T.minimum(T.cast(T.cast(self.epoch/att_epoch,'int32') * numpy.float32(0.01) + numpy.float32(0.95),'float32'),numpy.float32(1.0))
+    att_step = numpy.float32(self.layer.attrs['attention_segstep'])
+    att_offset = numpy.float32(self.layer.attrs['attention_offset'])
+    temperature = T.minimum(T.cast(T.cast(self.epoch/att_epoch,'int32') * att_step + att_offset,'float32'),numpy.float32(1.0))
     if not attend_on_alnpts:
       if not self.layer.eval_flag:
         att_pts = self.inv_att.argmax(axis=2) + T.arange(self.inv_att.shape[1])*self.inv_att.shape[2] #NB
