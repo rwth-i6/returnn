@@ -510,7 +510,7 @@ class Hmm:
       allo_map += ".0"
     elif edge.label == Edge.EPS:
       allo_map += ""
-    else:
+    elif edge.allo_idx is not None:
       allo_map += "." + str(edge.allo_idx)
 
     return allo_map
@@ -521,8 +521,8 @@ class Hmm:
     """
     print("Starting HMM FSA Creation")
     self.fsa.num_states_hmm = 0
-    split_begin = 0
-    split_end = 0
+    split_node = 0
+    merge_node = 0
 
     for word_idx, word in enumerate(self.fsa.lem_list):
       if word_idx == 0:
@@ -536,22 +536,37 @@ class Hmm:
       for lemma_idx, lemma in enumerate(self.phon_dict[word]):
         # go through the phoneme variations phoneme by phoneme
         lem = lemma['phon'].split(' ')
+        phon_dict_len = len(self.phon_dict[word])
         for phon_idx, phon in enumerate(lem):
-          # sets the begin and end of splits if several lemma for a word are available
-          if lemma_idx == 0 and phon_idx == 0:
-            split_begin = self.fsa.num_states
-          if lemma_idx > 0 and phon_idx == 0:
-            source_node = split_begin
-          else:
+          if phon_dict_len == 1:
+            # only one phoneme variation - no split!!!
             source_node = self.fsa.num_states
-          if lemma_idx == 0 and phon_idx == len(lem) - 1:
-            split_end = self.fsa.num_states + 1
-          if lemma_idx > 0 and phon_idx == len(lem) - 1:
-            target_node = split_end
-          else:
             target_node = self.fsa.num_states + 1
-          # triphone labels if current pos at first or last phon
+            self.fsa.num_states += 1
+          else:
+            # several phoneme variations - split and merge required
+            if lemma_idx == 0:
+              # save split node
+              if phon_idx == 0:
+                split_node = self.fsa.num_states
+              # save merge node
+              if phon_idx == len(lem) - 1:
+                merge_node = self.fsa.num_states + 1
+            # add appropriate number of states
+            if lemma_idx == 0:
+              # set source and target node for first phoneme variation
+              source_node = self.fsa.num_states
+              target_node = self.fsa.num_states + 1
+              self.fsa.num_states += 1
+            else:
+              if phon_idx != 0:
+                self.fsa.num_states += 1
+              # set source and target node for split / merge
+              source_node = split_node if phon_idx == 0 else self.fsa.num_states
+              target_node = merge_node if phon_idx == len(lem) - 1 else self.fsa.num_states + 1
+          # edge creation
           phon_edge = Edge(source_node, target_node, phon)
+          # triphone labels if current pos at first or last phon
           if phon_idx == 0:
             phon_edge.label_prev = ''
           else:
@@ -560,22 +575,24 @@ class Hmm:
             phon_edge.label_next = ''
           else:
             phon_edge.label_next = lem[phon_idx + 1]
+          # assign score
           if phon_idx == 0:
             phon_edge.score = lemma['score']
+          # position of phon in word and word in sentence
           phon_edge.idx_word_in_sentence = word_idx
           phon_edge.idx_phon_in_word = phon_idx
           phon_edge.idx = self.fsa.num_states + phon_idx
+          # phon at word begin / end
           if phon_idx == 0:
             phon_edge.phon_at_word_begin = True
           if phon_idx == len(lem) - 1:
             phon_edge.phon_at_word_end = True
+          # add to graph
           self.fsa.edges.append(phon_edge)
-          self.fsa.num_states += 1
-        if lemma_idx == 0 and len(self.phon_dict[word]) != 2:
-          self.fsa.num_states -= len(self.phon_dict[word]) - 2
       # add silence and eps after word
-      self.fsa.edges.append(Edge(target_node, self.fsa.num_states, Edge.SIL))
-      self.fsa.edges.append(Edge(target_node, self.fsa.num_states, Edge.EPS))
+      self.fsa.edges.append(Edge(target_node, self.fsa.num_states + 1, Edge.SIL))
+      self.fsa.edges.append(Edge(target_node, self.fsa.num_states + 1, Edge.EPS))
+      self.fsa.num_states += 1
     # final node
     self.fsa.num_states += 1
 
@@ -711,6 +728,7 @@ class Store:
     settings: filename, path
     caution: overwrites already present files
     """
+    # noinspection PyArgumentList
     save_path = self.graph.render(filename=self.filename, directory=self.path)
     print("FSA saved in:", save_path)
 
