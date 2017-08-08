@@ -3166,21 +3166,23 @@ class ExternSprintLoss(Loss):
     custom_gradient.register_generic_loss_and_error_signal()
 
   def get_value(self):
-    seq_tags = self.base_network.get_seq_tags()
-    assert self.output_with_activation.is_softmax_act_func()
-    output_before_softmax = self.output_with_activation.get_logits()
-    if not self.output.is_time_major:
-      output_before_softmax = swapaxes(output_before_softmax, self.output.time_dim_axis, self.output.batch_dim_axis)
-    output = self.output.get_placeholder_as_time_major()
-    from TFSprint import get_sprint_loss_and_error_signal
-    loss, error_signal = get_sprint_loss_and_error_signal(
-      sprint_opts=self.sprint_opts,
-      log_posteriors=tf.log(output),
-      seq_lengths=self.output_seq_lens,
-      seq_tags=seq_tags)
-    from TFUtil import custom_gradient
-    loss = custom_gradient.generic_loss_and_error_signal(loss=loss, x=output_before_softmax, grad_x=error_signal)
-    return loss
+    with tf.name_scope("ExternSprintLoss"):
+      seq_tags = self.base_network.get_seq_tags()
+      assert self.output_with_activation.is_softmax_act_func()
+      output_before_softmax = self.output_with_activation.get_logits()
+      if not self.output.is_time_major:
+        output_before_softmax = swapaxes(output_before_softmax, self.output.time_dim_axis, self.output.batch_dim_axis)
+      output = self.output.get_placeholder_as_time_major()
+      from TFSprint import get_sprint_loss_and_error_signal
+      loss, error_signal = get_sprint_loss_and_error_signal(
+        sprint_opts=self.sprint_opts,
+        log_posteriors=tf.log(output),
+        seq_lengths=self.output_seq_lens,
+        seq_tags=seq_tags)
+      loss = self.reduce_func(loss)
+      from TFUtil import custom_gradient
+      loss = custom_gradient.generic_loss_and_error_signal(loss=loss, x=output_before_softmax, grad_x=error_signal)
+      return loss
 
   def get_error(self):
     if self.target is None:
@@ -3207,26 +3209,27 @@ class FastBaumWelchLoss(Loss):
     custom_gradient.register_generic_loss_and_error_signal()
 
   def get_value(self):
-    seq_tags = self.base_network.get_seq_tags()
-    assert self.output_with_activation.is_softmax_act_func()
-    output_before_softmax = self.output_with_activation.get_logits()
-    if not self.output.is_time_major:
-      output_before_softmax = swapaxes(output_before_softmax, self.output.time_dim_axis, self.output.batch_dim_axis)
-    output = self.output.get_placeholder_as_time_major()
-    from TFUtil import sequence_mask_time_major
-    seq_mask = sequence_mask_time_major(self.output_seq_lens)
-    from TFNativeOp import fast_baum_welch_by_sprint_automata
-    fwdbwd, obs_scores = fast_baum_welch_by_sprint_automata(
-      sprint_opts=self.sprint_opts,
-      am_scores=-tf.log(output),
-      float_idx=seq_mask,
-      tags=seq_tags)
-    loss = self.reduce_func(obs_scores[0])
-    bw = tf.exp(-fwdbwd)
-    grad_x = (output - bw) * tf.expand_dims(seq_mask, 2)
-    from TFUtil import custom_gradient
-    loss = custom_gradient.generic_loss_and_error_signal(loss=loss, x=output_before_softmax, grad_x=grad_x)
-    return loss
+    with tf.name_scope("FastBaumWelchLoss"):
+      seq_tags = self.base_network.get_seq_tags()
+      assert self.output_with_activation.is_softmax_act_func()
+      output_before_softmax = self.output_with_activation.get_logits()
+      if not self.output.is_time_major:
+        output_before_softmax = swapaxes(output_before_softmax, self.output.time_dim_axis, self.output.batch_dim_axis)
+      output = self.output.get_placeholder_as_time_major()
+      from TFUtil import sequence_mask_time_major
+      seq_mask = sequence_mask_time_major(self.output_seq_lens)
+      from TFNativeOp import fast_baum_welch_by_sprint_automata
+      fwdbwd, obs_scores = fast_baum_welch_by_sprint_automata(
+        sprint_opts=self.sprint_opts,
+        am_scores=-tf.log(output),
+        float_idx=seq_mask,
+        tags=seq_tags)
+      loss = self.reduce_func(obs_scores[0])
+      bw = tf.exp(-fwdbwd)
+      grad_x = (output - bw) * tf.expand_dims(seq_mask, 2)
+      from TFUtil import custom_gradient
+      loss = custom_gradient.generic_loss_and_error_signal(loss=loss, x=output_before_softmax, grad_x=grad_x)
+      return loss
 
   def get_error(self):
     if self.target is None:
@@ -3280,27 +3283,28 @@ class ViaLayerLoss(Loss):
         d[key] = get_layer(d[key])
 
   def get_value(self):
-    if self.error_signal_layer:
-      assert not self.align_layer
-      error_signal = self.error_signal_layer.output.copy_compatible_to(self.output).placeholder
-    else:
-      assert self.align_layer
-      error_signal = self.output.placeholder - self.align_layer.output.copy_compatible_to(self.output).placeholder
-    error_signal *= tf.cast(self.output.get_sequence_mask_broadcast(), dtype=tf.float32)
-    if self.loss_wrt_to_act_in:
-      assert self.output_with_activation, "activation unknown, via %r" % self.output
-      if isinstance(self.loss_wrt_to_act_in, (str, unicode)):
-        from TFUtil import get_activation_function
-        assert self.output_with_activation.act_func is get_activation_function(self.loss_wrt_to_act_in)
+    with tf.name_scope("ViaLayerLoss"):
+      if self.error_signal_layer:
+        assert not self.align_layer
+        error_signal = self.error_signal_layer.output.copy_compatible_to(self.output).placeholder
       else:
-        assert self.output_with_activation.act_func  # just check that there is some activation function
-      grad_wrt = self.output_with_activation.x  # activation (e.g. softmax) input
-    else:
-      grad_wrt = self.output.placeholder
-    from TFUtil import custom_gradient
-    loss = custom_gradient.generic_loss_and_error_signal(
-      loss=self._loss_value, x=grad_wrt, grad_x=error_signal)
-    return loss
+        assert self.align_layer
+        error_signal = self.output.placeholder - self.align_layer.output.copy_compatible_to(self.output).placeholder
+      error_signal *= tf.cast(self.output.get_sequence_mask_broadcast(), dtype=tf.float32)
+      if self.loss_wrt_to_act_in:
+        assert self.output_with_activation, "activation unknown, via %r" % self.output
+        if isinstance(self.loss_wrt_to_act_in, (str, unicode)):
+          from TFUtil import get_activation_function
+          assert self.output_with_activation.act_func is get_activation_function(self.loss_wrt_to_act_in)
+        else:
+          assert self.output_with_activation.act_func  # just check that there is some activation function
+        grad_wrt = self.output_with_activation.x  # activation (e.g. softmax) input
+      else:
+        grad_wrt = self.output.placeholder
+      from TFUtil import custom_gradient
+      loss = custom_gradient.generic_loss_and_error_signal(
+        loss=self._loss_value, x=grad_wrt, grad_x=error_signal)
+      return loss
 
   def get_error(self):
     if self.target is None:
