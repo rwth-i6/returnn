@@ -819,14 +819,25 @@ class AttentionSegment(AttentionBase):
     result = T.switch(T.eq(flat_att,0),numpy.float32(0),result).dimshuffle(0,2,1)
     return T.cast(result,'float32')
 
+  def calc_temperature(self,method="epoch",min_dist=None):
+    att_epoch = numpy.float32(self.layer.attrs['attention_epoch'])
+    att_step = numpy.float32(self.layer.attrs['attention_segstep'])
+    att_offset = numpy.float32(self.layer.attrs['attention_offset'])
+    temperature = numpy.float32(0.0)
+
+    if method == "epoch":
+      temperature = T.minimum(T.cast(T.cast(self.epoch/att_epoch,'int32') * att_step + att_offset,'float32'),numpy.float32(1.0))
+    elif method == "min_dist":
+      assert min_dist is not None
+      temperature = T.maximum(T.exp(-min_dist),numpy.float32(0.9))
+
+    return temperature
+  
   def attend(self, y_p):
     inp, updates = 0, {}
     n = T.cast(self.n[0],'int32')
     attend_on_alnpts = self.layer.attrs['attention_alnpts']
-    att_epoch = numpy.float32(self.layer.attrs['attention_epoch'])
-    att_step = numpy.float32(self.layer.attrs['attention_segstep'])
-    att_offset = numpy.float32(self.layer.attrs['attention_offset'])
-    temperature = T.minimum(T.cast(T.cast(self.epoch/att_epoch,'int32') * att_step + att_offset,'float32'),numpy.float32(1.0))
+    att_method = self.layer.attrs['attention_method']
     if not attend_on_alnpts:
       #if not self.layer.eval_flag:
       if self.layer.train_flag:
@@ -841,11 +852,17 @@ class AttentionSegment(AttentionBase):
           dis_curr = prev_dec_step
         curr_seg_index = T.switch(T.gt(self.index_att[n] - self.index_att[n-1],numpy.float32(0)),numpy.float32(1),numpy.float32(0)) #TB
         ind_curr = theano.ifelse.ifelse(n > 0, curr_seg_index,self.index_att[n])
-        e1 = self.distance(self.C, T.tanh(dis_curr))
+        e1 = self.distance(self.C, T.tanh(dis_curr)) #TB
+
+        if att_method == 'min_dist':
+          min_dist = T.min(e1,axis=0) #B
+        else:
+          min_dist = None
+        temperature = self.calc_temperature(att_method,min_dist)
         att_w1 = self.softmax(e1, ind_curr)
         att_w2 = self.softmax(e1,self.I_dec)
         att_w = (numpy.float32(1) - temperature) * att_w1 + temperature * att_w2
-
+        
       else:
         if self.layer.attrs['n_out'] == self.layer.attrs['attention_template']:
           dis_curr = y_p
