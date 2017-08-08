@@ -537,3 +537,69 @@ class NeuralOptimizer1(_BaseCustomOptimizer):
     update = lr * grad * tf.where(tf.equal(tf.sign(m_gathered), tf.sign(grad)), ones, ones * self._decrease_factor)
     var_update = self._assign_sub(ref=var, updates=update, indices=indices)
     return tf.group(*[var_update, m_t])
+
+
+class GradVarianceScaledOptimizer(_BaseCustomOptimizer):
+  """
+  Let m be the running average of g.
+  Calculation of m: m_t <- beta1 * m_{t-1} + (1 - beta1) * g
+  Same beta1 default as in Adam and in the paper: beta1=0.9
+
+  Let v be the running average of the variance of g, i.e. of (g - m)^2.
+  """
+
+  def __init__(self, beta1=0.9, beta2=0.999, epsilon=1e-8, **kwargs):
+    """
+    :param float beta1: used for the running average of g (m)
+    :param float beta2: used for the running average of variance of g (v)
+    :param float epsilon:
+    """
+    super(GradVarianceScaledOptimizer, self).__init__(**kwargs)
+    self._beta1 = beta1
+    self._beta2 = beta2
+    self._epsilon = epsilon
+
+  def _prepare(self):
+    super(GradVarianceScaledOptimizer, self)._prepare()
+    self._beta1_t = tf.convert_to_tensor(self._beta1, name="beta1")
+    self._beta2_t = tf.convert_to_tensor(self._beta2, name="beta2")
+    self._epsilon_t = tf.convert_to_tensor(self._epsilon, name="epsilon")
+
+  def _create_slots(self, var_list):
+    for v in var_list:
+      self._zeros_slot(v, "m", self._name)
+      self._zeros_slot(v, "v", self._name)
+
+  def _apply(self, grad, var, indices=None):
+    lr = tf.cast(self._learning_rate_tensor, var.dtype.base_dtype)
+    m = self.get_slot(var, "m")
+    v = self.get_slot(var, "v")
+    beta1_t = tf.cast(self._beta1_t, var.dtype.base_dtype)
+    beta2_t = tf.cast(self._beta2_t, var.dtype.base_dtype)
+    epsilon_t = tf.cast(self._epsilon_t, var.dtype.base_dtype)
+
+    # m_t = beta1 * m + (1 - beta1) * g_t
+    m_scaled_g_values = grad * (1 - beta1_t)
+    m_t = tf.assign(m, m * beta1_t, use_locking=self._use_locking)
+    with tf.control_dependencies([m_t]):
+      m_t = self._assign_add(m, updates=m_scaled_g_values, indices=indices)
+    m_gathered = self._gather(m_t, indices=indices)
+
+    # Also see tf.nn.moments.
+    variance = tf.squared_difference(grad, m_gathered)
+
+    # v_t = beta2 * v + (1 - beta2) * variance
+    v_scaled_new_values = variance * (1 - beta2_t)
+    v_t = tf.assign(v, v * beta2_t, use_locking=self._use_locking)
+    with tf.control_dependencies([v_t]):
+      v_t = self._assign_add(v, updates=v_scaled_new_values, indices=indices)
+    v_gathered = self._gather(v_t, indices=indices)
+
+    # update = lr * grad * v / (variance + eps)
+    factor = v_gathered / (variance + epsilon_t)
+    # with tf.get_default_graph().colocate_with(None, True):
+    #   with tf.control_dependencies([tf.Print(factor, [tf.reduce_min(factor), tf.reduce_max(factor), tf.reduce_mean(factor)])]):
+    #     factor = tf.identity(factor)
+    update = lr * grad * tf.minimum(factor, 1.0)
+    var_update = self._assign_sub(ref=var, updates=update, indices=indices)
+    return tf.group(*[var_update, m_t])
