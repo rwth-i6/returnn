@@ -3848,7 +3848,7 @@ from SprintErrorSignals import sprint_loss_and_error_signal, SprintAlignmentAuto
 class SignalValue(ForwardLayer):
   layer_class = 'sigval'
 
-  def __init__(self, begin=0, sidx=0, reduce=False, copy_output=None, **kwargs):
+  def __init__(self, begin=0, sidx=0, risk=0.1, margin=0.0, copy_output=None, **kwargs):
     kwargs['n_out'] = 2
     super(SignalValue, self).__init__(**kwargs)
     self.params = {}
@@ -3862,9 +3862,10 @@ class SignalValue(ForwardLayer):
     z = self.get_linear_forward_output()
 
     q = T.nnet.sigmoid(z)
-    margin = q[:,:,1] # * numpy.float32(margin)
+    margin = 0.35
+    margin = numpy.float32(margin) #q[:,:,1] * numpy.float32(margin)
     p = q[:,:,0]
-    kwargs['n_out'] = 2
+    #kwargs['n_out'] = 2
 
     #n_in = sum([s.attrs['n_out'] for s in self.sources])
     #x_in = self.sources[0].output if len(self.sources) == 1 else T.concatenate([s.output for s in self.sources], axis=2)
@@ -3885,21 +3886,27 @@ class SignalValue(ForwardLayer):
     #margin = numpy.float32(margin)
     step = numpy.float32(0) * T.ones((self.index.shape[1],),'float32') #/ T.sum(self.index,axis=0,dtype='float32')#numpy.float32(1) / T.sum(self.index,axis=0,dtype='float32')
     stash = numpy.float32(1) # T.cast(p.shape[0], 'float32')
-    risk = numpy.float32(0.5)
+    from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
+    srng = RandomStreams(self.rng.randint(1234) + 1)
+    risk = numpy.float32(risk)
+    mom = numpy.float32(1.0)
 
-    def accumulate(p, m, rb, rs, bp, ep):
-      wb = T.maximum(p - m, numpy.float32(0)) / (numpy.float32(1.00001) - m)
-      ws = T.maximum(numpy.float32(1.0) - p - m, numpy.float32(0)) / (numpy.float32(1.00001) - m)
-      bp = bp + step
-      ep = ep + step / rs
+    def accumulate(p, rb, rs, bp, ep):
+      rnd = numpy.float32(1) #T.cast(srng.uniform(size=(1,), low=0, high=risk)[0],'float32')
+      wb = rnd * T.maximum(p - margin, numpy.float32(0)) / (numpy.float32(1.00001) - margin)
+      ws = rnd * T.maximum(numpy.float32(1.0) - p - margin, numpy.float32(0)) / (numpy.float32(1.00001) - margin)
+      bp = mom * bp + step
+      ep = mom * ep + step / rs
       bd, ed = wb * bp, ws * ep
       ba, ea = ed * rs, bd / rb
       return bp - bd + ba, ep - ed + ea
+      #return T.maximum(bp - bd + ba, T.zeros_like(bp)), T.maximum(ep - ed + ea, T.zeros_like(ep))
+      #return T.clip(bp - bd + ba,numpy.float32(0),numpy.float32(10)), T.clip(ep - ed + ea,numpy.float32(0),numpy.float32(10)/rs)
 
     binit = T.ones((p.shape[1],), dtype='float32') * stash
     einit = (T.ones((p.shape[1],), dtype='float32') * stash) / rs[0]
 
-    c, _ = theano.scan(accumulate,sequences=[p,margin,rb,rs],outputs_info=[binit,einit])
+    c, _ = theano.scan(accumulate,sequences=[p,rb,rs],outputs_info=[binit,einit])
 
     bcost = T.extra_ops.cumsum(step.dimshuffle('x',0).repeat(c[0].shape[0],axis=0), axis=0)
     ecost = rs * T.extra_ops.cumsum(step / rs, axis=0)
@@ -3911,11 +3918,12 @@ class SignalValue(ForwardLayer):
     self.error_val = T.sum((numpy.float32(1.) - total[-1]) * T.cast(total.shape[0],'float32') / norm) #T.sum(T.lt(total,numpy.float32(0)),dtype='float32',axis=0))
     self.cost_val = T.sum(T.sum(self.index,dtype='float32',axis=0) / norm) - cost
 
-    #self.cost_scale_val = numpy.float32(1)
-    self.cost_scale_val = T.mean(T.cast(T.argmax(total[::-1],axis=0),'float32') + numpy.float32(1)) / T.cast(total.shape[0],'float32') #numpy.float32(1)
-    out = T.concatenate([p.dimshuffle(0,1,'x'), margin.dimshuffle(0,1,'x')],axis=2)
-    self.p_y_given_y = out #p.dimshuffle(0,1,'x')
-    self.output = out #p.dimshuffle(0,1,'x')
+    self.cost_scale_val = numpy.float32(1)
+    #self.cost_val -= T.constant(0.01) * T.sum((c[0] * c[1] * rs)/(tcost*tcost)) #(T.sum(p * T.log(p + T.constant(1e-5))) + T.sum((T.constant(1)-p) * T.log((T.constant(1)-p) + T.constant(1e-5))))
+    #self.cost_scale_val = T.mean(T.cast(T.argmax(total[::-1],axis=0),'float32') + numpy.float32(1)) / T.cast(total.shape[0],'float32') #numpy.float32(1)
+    #out = T.concatenate([p.dimshuffle(0,1,'x'), margin.dimshuffle(0,1,'x')],axis=2)
+    self.p_y_given_y = p.dimshuffle(0,1,'x')
+    self.output = p.dimshuffle(0,1,'x')
     self.margin = margin
 
   def cost(self):

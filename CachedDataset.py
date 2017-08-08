@@ -60,7 +60,7 @@ class CachedDataset(Dataset):
     else:
       seq_index = self.get_seq_order_for_epoch(epoch, self.num_seqs, lambda s: self._seq_lengths[s][0])
 
-    if self._seq_index == seq_index:
+    if self._seq_index == seq_index and self.num_seqs_cached_at_start == len(seq_index):
       return False
 
     if epoch is not None:
