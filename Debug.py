@@ -189,14 +189,15 @@ def initFaulthandler(sigusr1_chain=False):
 
   :param bool sigusr1_chain: whether the default SIGUSR1 handler should also be called.
   """
-  # In case that sigusr1_chain, we expect that there is already some handler
-  # for SIGUSR1, and then this will not overwrite this handler.
-  if install_signal_handler_if_default(signal.SIGUSR1):
-    # There is already some handler or we installed our own handler now,
-    # so in any case, it's save that we chain then handler.
-    sigusr1_chain = True
-  # Why not also SIGUSR2... SGE can also send this signal.
-  install_signal_handler_if_default(signal.SIGUSR2)
+  if sys.platform != 'win32':
+    # In case that sigusr1_chain, we expect that there is already some handler
+    # for SIGUSR1, and then this will not overwrite this handler.
+    if install_signal_handler_if_default(signal.SIGUSR1):
+      # There is already some handler or we installed our own handler now,
+      # so in any case, it's save that we chain then handler.
+      sigusr1_chain = True
+    # Why not also SIGUSR2... SGE can also send this signal.
+    install_signal_handler_if_default(signal.SIGUSR2)
   try:
     import faulthandler
   except ImportError as e:
@@ -205,7 +206,7 @@ def initFaulthandler(sigusr1_chain=False):
     # Only enable if not yet enabled -- otherwise, leave it in its current state.
     if not faulthandler.is_enabled():
       faulthandler.enable()
-      if os.name != 'nt':
+      if sys.platform != 'win32':
         faulthandler.register(signal.SIGUSR1, all_threads=True, chain=sigusr1_chain)
   from Util import to_bool
   if os.environ.get("DEBUG_SIGNAL_HANDLER") and to_bool(os.environ.get("DEBUG_SIGNAL_HANDLER")):
