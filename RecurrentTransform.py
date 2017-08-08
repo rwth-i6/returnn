@@ -789,8 +789,6 @@ class AttentionSegment(AttentionBase):
       self.b_att_re = self.create_bias(n_tmp, "b_att_re")
       self.W_att_dec = self.create_weights(self.layer.attrs['n_out'], n_tmp, "W_att_dec")
       self.b_att_dec = self.create_bias(n_tmp, "b_att_dec")
-      #self.W_att_full = self.create_weights(self.layer.attrs['n_out'], n_tmp, "W_att_full")
-      #self.b_att_full = self.create_bias(n_tmp, "b_att_full")
 
     if not self.base[0].attrs['n_out'] == n_tmp:
       self.W_att_bs = self.create_weights(self.base[0].attrs['n_out'], n_tmp, "W_att_bs")
@@ -830,32 +828,34 @@ class AttentionSegment(AttentionBase):
     att_offset = numpy.float32(self.layer.attrs['attention_offset'])
     temperature = T.minimum(T.cast(T.cast(self.epoch/att_epoch,'int32') * att_step + att_offset,'float32'),numpy.float32(1.0))
     if not attend_on_alnpts:
-      if not self.layer.eval_flag:
+      #if not self.layer.eval_flag:
+      if self.layer.train_flag:
         att_pts = self.inv_att.argmax(axis=2) + T.arange(self.inv_att.shape[1])*self.inv_att.shape[2] #NB
         curr_enc_pts = T.cast(att_pts[n],'int32') #B
 
         if self.layer.attrs['n_out'] == self.layer.attrs['attention_template']:
           dis_curr = y_p
+
         else:
-          curr_seg_final = T.dot(
-            self.E.dimshuffle(1, 0, 2).reshape((self.E.shape[0] * self.E.shape[1], self.E.shape[2]))[curr_enc_pts],
-            self.W_att_re) + self.b_att_re  # BD
           prev_dec_step = T.dot(y_p,self.W_att_dec) + self.b_att_dec #BD
           dis_curr = prev_dec_step
         curr_seg_index = T.switch(T.gt(self.index_att[n] - self.index_att[n-1],numpy.float32(0)),numpy.float32(1),numpy.float32(0)) #TB
         ind_curr = theano.ifelse.ifelse(n > 0, curr_seg_index,self.index_att[n])
+        e1 = self.distance(self.C, T.tanh(dis_curr))
+        att_w1 = self.softmax(e1, ind_curr)
+        att_w2 = self.softmax(e1,self.I_dec)
+        att_w = (numpy.float32(1) - temperature) * att_w1 + temperature * att_w2
 
       else:
         if self.layer.attrs['n_out'] == self.layer.attrs['attention_template']:
           dis_curr = y_p
         else:
           dis_curr = T.dot(y_p,self.W_att_dec) + self.b_att_dec
-        ind_curr = self.I_dec
-      e1 = self.distance(self.C, T.tanh(dis_curr))
-      att_w1 = self.softmax(e1, ind_curr)
-      att_w2 = self.softmax(e1,self.I_dec)
-      att_w = (numpy.float32(1) - temperature) * att_w1 + temperature * att_w2
+        e1 = self.distance(self.C, T.tanh(dis_curr))
+        att_w = self.softmax(e1,self.I_dec)
+
       z = T.sum(self.B * att_w.dimshuffle(0, 1, 'x').repeat(self.B.shape[2], axis=2), axis=0)
+
     else:
       if not self.layer.eval_flag:
         att_pts = self.inv_att.argmax(axis=2) + T.arange(self.inv_att.shape[1]) * self.inv_att.shape[2]  # NB
