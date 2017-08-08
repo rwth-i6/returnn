@@ -823,12 +823,6 @@ class DataProviderBase(object):
     """
     raise NotImplementedError
 
-  def get_num_frames(self):
-    """
-    :rtype: NumbersDict
-    """
-    raise NotImplementedError
-
 
 class FeedDictDataProvider(DataProviderBase):
   """
@@ -857,7 +851,6 @@ class FeedDictDataProvider(DataProviderBase):
     if not self.tf_queue:
       self.queue = Queue(maxsize=capacity)
     self.thread = None  # type: Thread
-    self.num_frames = NumbersDict(0)
     self.thread_finished = False
     self.reached_end = False
 
@@ -896,7 +889,6 @@ class FeedDictDataProvider(DataProviderBase):
     seq_lens = {k: numpy.zeros(shape=(shapes[k][0],), dtype=self.extern_data.data[k].size_dtype)
                 for k in self.data_keys if self.extern_data.data[k].have_time_axis()}
     self.dataset.load_seqs(batch.start_seq, batch.end_seq)
-    self.num_frames += batch.get_total_num_frames()
     from Util import slice_pad_zeros
     with self.dataset.lock:
       for seq in batch.seqs:
@@ -1034,9 +1026,6 @@ class FeedDictDataProvider(DataProviderBase):
 
   def get_complete_frac(self):
     return self.batches.completed_frac()
-
-  def get_num_frames(self):
-    return self.num_frames
 
 
 class QueueDataProvider(DataProviderBase):
@@ -1186,9 +1175,6 @@ class QueueDataProvider(DataProviderBase):
     pass  # TODO
 
   def get_complete_frac(self):
-    pass  # TODO
-
-  def get_num_frames(self):
     pass  # TODO
 
   def init_dataset(self, session, dataset, is_train_dataset):

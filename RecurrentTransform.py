@@ -783,12 +783,14 @@ class AttentionSegment(AttentionBase):
 
     self.W_att_in = self.create_weights(self.base[0].attrs['n_out'], self.layer.unit.n_in, 'W_att_in')
     self.b_att_in = self.create_bias(self.layer.unit.n_in, 'b_att_in')
-
+    self.epoch = self.add_input(T.cast(self.layer.network.epoch,'float32'),'epoch')
     if not self.layer.attrs['n_out'] == n_tmp:
       self.W_att_re = self.create_weights(self.layer.attrs['n_out'], n_tmp, "W_att_re")
       self.b_att_re = self.create_bias(n_tmp, "b_att_re")
       self.W_att_dec = self.create_weights(self.layer.attrs['n_out'], n_tmp, "W_att_dec")
       self.b_att_dec = self.create_bias(n_tmp, "b_att_dec")
+      #self.W_att_full = self.create_weights(self.layer.attrs['n_out'], n_tmp, "W_att_full")
+      #self.b_att_full = self.create_bias(n_tmp, "b_att_full")
 
     if not self.base[0].attrs['n_out'] == n_tmp:
       self.W_att_bs = self.create_weights(self.base[0].attrs['n_out'], n_tmp, "W_att_bs")
@@ -800,6 +802,7 @@ class AttentionSegment(AttentionBase):
     self.i_f = self.add_input(T.cast(self.base[0].output_index(),'float32').dimshuffle(0,1,'x').repeat(h_att.shape[2],axis=2),'i_f')
     if not self.layer.eval_flag:
       self.inv_att = self.add_input(T.cast(self.layer.aligner.attention.dimshuffle(2,1,0)[::self.layer.attrs['direction']].dimshuffle(2,1,0),'float32'),'inv_att')
+      self.red_ind = self.add_input(T.cast(self.layer.aligner.reduced_index,'float32'),'red_ind')
       self.i_f = self.add_input(T.cast(self.base[0].output_index(),'float32').dimshuffle(0,1,'x').repeat(h_att.shape[2],axis=2),'i_f')
       self.index_att = self.add_input(self.make_index(self.inv_att,self.I_dec),'index_att')#NTB
     if not self.base[0].attrs['n_out'] == n_tmp:
@@ -821,32 +824,64 @@ class AttentionSegment(AttentionBase):
   def attend(self, y_p):
     inp, updates = 0, {}
     n = T.cast(self.n[0],'int32')
+    attend_on_alnpts = self.layer.attrs['attention_alnpts']
+    att_epoch = numpy.float32(self.layer.attrs['attention_epoch'])
+    att_step = numpy.float32(self.layer.attrs['attention_segstep'])
+    att_offset = numpy.float32(self.layer.attrs['attention_offset'])
+    temperature = T.minimum(T.cast(T.cast(self.epoch/att_epoch,'int32') * att_step + att_offset,'float32'),numpy.float32(1.0))
+    if not attend_on_alnpts:
+      if not self.layer.eval_flag:
+        att_pts = self.inv_att.argmax(axis=2) + T.arange(self.inv_att.shape[1])*self.inv_att.shape[2] #NB
+        curr_enc_pts = T.cast(att_pts[n],'int32') #B
 
-    if not self.layer.eval_flag:
-      att_pts = self.inv_att.argmax(axis=2) + T.arange(self.inv_att.shape[1])*self.inv_att.shape[2] #NB
-      curr_enc_pts = T.cast(att_pts[n],'int32') #B
+        if self.layer.attrs['n_out'] == self.layer.attrs['attention_template']:
+          dis_curr = y_p
+        else:
+          curr_seg_final = T.dot(
+            self.E.dimshuffle(1, 0, 2).reshape((self.E.shape[0] * self.E.shape[1], self.E.shape[2]))[curr_enc_pts],
+            self.W_att_re) + self.b_att_re  # BD
+          prev_dec_step = T.dot(y_p,self.W_att_dec) + self.b_att_dec #BD
+          dis_curr = prev_dec_step
+        curr_seg_index = T.switch(T.gt(self.index_att[n] - self.index_att[n-1],numpy.float32(0)),numpy.float32(1),numpy.float32(0)) #TB
+        ind_curr = theano.ifelse.ifelse(n > 0, curr_seg_index,self.index_att[n])
 
-      if self.layer.attrs['n_out'] == self.layer.attrs['attention_template']:
-        curr_seg_final = self.E.dimshuffle(1, 0, 2).reshape((self.E.shape[0] * self.E.shape[1], self.E.shape[2]))[curr_enc_pts]
-        dis_curr = curr_seg_final + y_p
       else:
-        curr_seg_final = T.dot(
-          self.E.dimshuffle(1, 0, 2).reshape((self.E.shape[0] * self.E.shape[1], self.E.shape[2]))[curr_enc_pts],
-          self.W_att_re) + self.b_att_re  # BD
-        prev_dec_step = T.dot(y_p,self.W_att_dec) + self.b_att_dec #BD
-        dis_curr = curr_seg_final+prev_dec_step
-      curr_seg_index = T.switch(T.gt(self.index_att[n] - self.index_att[n-1],numpy.float32(0)),numpy.float32(1),numpy.float32(0)) #TB
-      ind_curr = theano.ifelse.ifelse(n > 0, curr_seg_index,self.index_att[n])
-
+        if self.layer.attrs['n_out'] == self.layer.attrs['attention_template']:
+          dis_curr = y_p
+        else:
+          dis_curr = T.dot(y_p,self.W_att_dec) + self.b_att_dec
+        ind_curr = self.I_dec
+      e1 = self.distance(self.C, T.tanh(dis_curr))
+      att_w1 = self.softmax(e1, ind_curr)
+      att_w2 = self.softmax(e1,self.I_dec)
+      att_w = (numpy.float32(1) - temperature) * att_w1 + temperature * att_w2
+      z = T.sum(self.B * att_w.dimshuffle(0, 1, 'x').repeat(self.B.shape[2], axis=2), axis=0)
     else:
-      if self.layer.attrs['n_out'] == self.layer.attrs['attention_template']:
-        dis_curr = y_p
+      if not self.layer.eval_flag:
+        att_pts = self.inv_att.argmax(axis=2) + T.arange(self.inv_att.shape[1]) * self.inv_att.shape[2]  # NB
+        if self.layer.attrs['n_out'] == self.layer.attrs['attention_template']:
+          C = self.E.dimshuffle(1, 0, 2).reshape((self.E.shape[0] * self.E.shape[1], self.E.shape[2]))[att_pts] #NBD
+          dis_curr = y_p
+        else:
+          C = T.dot(
+            self.E.dimshuffle(1, 0, 2).reshape((self.E.shape[0] * self.E.shape[1], self.E.shape[2]))[att_pts],
+            self.W_att_re) + self.b_att_re  # NBD
+          prev_dec_step = T.dot(y_p,self.W_att_dec) + self.b_att_dec #BD
+          dis_curr = prev_dec_step
+        ind_curr = self.red_ind
+        e1 = self.distance(C,T.tanh(dis_curr))
+        att_w = self.softmax(e1,ind_curr)
+        z = T.sum(C * att_w.dimshuffle(0, 1, 'x').repeat(C.shape[2], axis=2), axis=0)
       else:
-        curr_seg_final = T.dot(y_p,self.W_att_re) + self.b_att_re
-      ind_curr = self.I_dec
-    e1 = self.distance(self.C,T.tanh(dis_curr))
-    att_w = self.softmax(e1,ind_curr)
-    z = T.sum(self.B * att_w.dimshuffle(0, 1, 'x').repeat(self.B.shape[2], axis=2), axis=0)
+        if self.layer.attrs['n_out'] == self.layer.attrs['attention_template']:
+          dis_curr = y_p
+        else:
+          prev_dec_step = T.dot(y_p, self.W_att_dec) + self.b_att_dec  # BD
+          dis_curr = prev_dec_step
+        ind_curr = self.I_dec
+        e1 = self.distance(self.C, T.tanh(dis_curr))
+        att_w = self.softmax(e1, ind_curr)
+        z = T.sum(self.C * att_w.dimshuffle(0, 1, 'x').repeat(self.C.shape[2], axis=2), axis=0)
     res = T.dot(z, self.W_att_in) + self.b_att_in
     inp = res
     return inp, updates

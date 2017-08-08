@@ -914,7 +914,9 @@ class NumbersDict:
     return set(self.dict.keys())
 
   def __getitem__(self, key):
-    return self.dict.get(key, self.value)
+    if self.value is not None:
+      return self.dict.get(key, self.value)
+    return self.dict[key]
 
   def __setitem__(self, key, value):
     self.dict[key] = value
@@ -923,7 +925,8 @@ class NumbersDict:
     del self.dict[key]
 
   def get(self, key, default=None):
-    return self.dict.get(key, default)
+    # Keep consistent with self.__get_item__. If self.value is set, this will always be the default value.
+    return self.dict.get(key, self.value if self.value is not None else default)
 
   def pop(self, key, *args):
     return self.dict.pop(key, *args)
@@ -975,7 +978,7 @@ class NumbersDict:
       result = NumbersDict()
     assert isinstance(result, NumbersDict)
     for k in self.keys_set | other.keys_set:
-      result[k] = cls.bin_op_scalar_optional(self[k], other[k], zero=zero, op=op)
+      result[k] = cls.bin_op_scalar_optional(self.get(k, None), other.get(k, None), zero=zero, op=op)
     result.value = cls.bin_op_scalar_optional(self.value, other.value, zero=zero, op=op)
     return result
 
