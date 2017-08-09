@@ -656,7 +656,7 @@ class _TFKerasDataset(CachedDataset2):
   """
   Wraps around any dataset from tf.contrib.keras.datasets.
   See: https://www.tensorflow.org/versions/master/api_docs/python/tf/contrib/keras/datasets
-  TODO: Should maybe be moved to a separate file. (Only here because of tf.contrib.keras.datasets.reuters).  
+  TODO: Should maybe be moved to a separate file. (Only here because of tf.contrib.keras.datasets.reuters).
   """
   # TODO...
 
@@ -667,6 +667,192 @@ class _NltkCorpusReaderDataset(CachedDataset2):
   TODO: Should maybe be moved to a separate file, e.g. CorpusReaderDataset.py or so?
   """
   # TODO ...
+
+
+class TranslationDataset(CachedDataset2):
+  """
+  Based on the conventions by our team for translation datasets.
+  It gets a directory and expects these files:
+
+      source.dev(.gz)?
+      source.train(.gz)?
+      source.vocab.pkl
+      target.dev(.gz)?
+      target.train(.gz)?
+      target.vocab.pkl
+  """
+
+  MapToDataKeys = {"source": "data", "target": "classes"}  # just by our convention
+
+  def __init__(self, path, postfix, random_shuffle_epoch1=False, **kwargs):
+    """
+    :param str path: the directory containing the files
+    :param str postfix: e.g. "train" or "dev". it will then search for "source." + postfix and "target." + postfix.
+    :param bool random_shuffle_epoch1: if True, will also randomly shuffle epoch 1. see self.init_seq_order().
+    """
+    super(TranslationDataset, self).__init__(**kwargs)
+    self.path = path
+    self.postfix = postfix
+    self.random_shuffle_epoch1 = random_shuffle_epoch1
+    import os
+    assert os.path.isdir(path)
+    self._data_files = {data_key: self._get_data_file(prefix) for (prefix, data_key) in self.MapToDataKeys.items()}
+    self._data = {data_key: [] for data_key in self._data_files.keys()}  # type: dict[str,list[str]]
+    self._data_final_lens = {k: None for k in self._data_files.keys()}  # type: dict[str,int|None]
+    self._vocabs = {data_key: self._get_vocab(prefix) for (prefix, data_key) in self.MapToDataKeys.items()}
+    self.num_outputs = {k: [max(self._vocabs[k].values()) + 1, 1] for k in self._vocabs.keys()}  # all sparse
+    assert all([v1 <= 2 ** 31 for (k, (v1, v2)) in self.num_outputs.items()])  # we use int32
+    self.num_inputs = self.num_outputs["data"][0]
+    self._reversed_vocabs = {k: self._reverse_vocab(k) for k in self._vocabs.keys()}
+    self.labels = {k: self._get_label_list(k) for k in self._vocabs.keys()}
+    self._seq_order = None  # type: None|list[int]  # seq_idx -> line_nr
+
+  def _get_data_file(self, prefix):
+    """
+    :param str prefix: e.g. "source" or "target"
+    :return: full filename
+    :rtype: io.FileIO
+    """
+    import os
+    filename = "%s/%s.%s" % (self.path, prefix, self.postfix)
+    if os.path.exists(filename):
+      return open(filename, "r")
+    if os.path.exists(filename + ".gz"):
+      import gzip
+      return gzip.GzipFile(filename + ".gz", "r")
+    raise Exception("Data file not found: %r (.gz)?" % filename)
+
+  def _get_vocab(self, prefix):
+    """
+    :param str prefix: e.g. "source" or "target"
+    :rtype: dict[str,int]
+    """
+    import os
+    filename = "%s/%s.vocab.pkl" % (self.path, prefix)
+    if not os.path.exists(filename):
+      raise Exception("Vocab file not found: %r" % filename)
+    import pickle
+    vocab = pickle.load(open(filename, "rb"))
+    assert isinstance(vocab, dict)
+    return vocab
+
+  def _reverse_vocab(self, data_key):
+    """
+    Note that there might be multiple items in the vocabulary (e.g. "<S>" and "</S>")
+    which map to the same label index.
+    We sort the list by lexical order and the last entry for a particular label index is used ("<S>" in that example).
+
+    :param str data_key: e.g. "data" or "classes"
+    :rtype: dict[int,str]
+    """
+    return {v: k for (k, v) in sorted(self._vocabs[data_key].items())}
+
+  def _get_label_list(self, data_key):
+    """
+    :param str data_key: e.g. "data" or "classes"
+    :return: list of len num labels
+    :rtype: list[str]
+    """
+    reversed_vocab = self._reversed_vocabs[data_key]
+    assert isinstance(reversed_vocab, dict)
+    num_labels = self.num_outputs[data_key][0]
+    return list(map(reversed_vocab.__getitem__, range(num_labels)))
+
+  def _read_data(self, key, limit_line_nr=float("inf")):
+    """
+    :param str key: e.g. "data" or "classes"
+    :param int|float limit_line_nr:
+    """
+    if self._data_final_lens[key] is not None:
+      return  # we already reached the end before
+    data = self._data[key]
+    assert isinstance(data, list)
+    f = self._data_files[key]
+    while limit_line_nr >= len(data):
+      l = f.readline()
+      if l == "":
+        for k, v in self._data_final_lens.items():
+          assert v == len(data), "mismatch of lens: %r, len of %r is %r != %r" % (
+            self._data_final_lens, k, v, len(data))
+        self._data_final_lens[key] = len(data)
+        break
+      data.append(l.decode("utf8").strip())
+
+  def _get_data_str(self, key, line_nr):
+    """
+    :param str key: e.g. "data" or "classes"
+    :param int line_nr: line-nr in the file
+    :return: line content or None if it is after the end
+    :rtype: str|None
+    """
+    self._read_data(key=key, limit_line_nr=line_nr)
+    data = self._data[key]
+    if line_nr < len(data):
+      return data[line_nr]
+    return None
+
+  def _get_data(self, key, line_nr):
+    s = self._get_data_str(key=key, line_nr=line_nr)
+    if s is None:
+      return None
+    words = s.split()
+    words_idxs = [self._vocabs[key][word] for word in words]  # type: list[int]
+    return numpy.array(words_idxs, dtype=numpy.int32)
+
+  def _get_line_nr(self, seq_idx):
+    """
+    :param int seq_idx:
+    :return: line-nr, i.e. index in any of the lists `self.data[key]`
+    :rtype: int
+    """
+    if self._seq_order is None:
+      return seq_idx
+    return self._seq_order[seq_idx]
+
+  def is_data_sparse(self, key):
+    return True  # all is sparse
+
+  def get_data_dtype(self, key):
+    return "int32"  # sparse -> label idx
+
+  def init_seq_order(self, epoch=None, seq_list=None):
+    """
+    If random_shuffle_epoch1, for epoch 1 with "random" ordering, we leave the given order as is.
+    Otherwise, this is mostly the default behavior.
+
+    :param int|None epoch:
+    :param list[str] | None seq_list: In case we want to set a predefined order.
+    """
+    super(TranslationDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+    if seq_list is not None:
+      self._seq_order = list(seq_list)
+    elif self.seq_ordering == "default" or (
+          self.random_shuffle_epoch1 and self.seq_ordering == "random" and epoch in (None, 0, 1)):
+      self._seq_order = None
+    else:
+      if self._data_final_lens["data"] is None:
+        self._read_data(key="data")
+      num_seqs = self._data_final_lens["data"]
+      assert isinstance(num_seqs, int)
+      self._seq_order = self.get_seq_order_for_epoch(
+        epoch=epoch, num_seqs=num_seqs, get_seq_len=lambda i: len(self._data["data"][i]))
+    if self._seq_order is not None:
+      self._num_seqs = len(self._seq_order)
+    elif self._data_final_lens["data"] is not None:
+      self._num_seqs = self._data_final_lens["data"]
+
+  def _collect_single_seq(self, seq_idx):
+    line_nr = self._get_line_nr(seq_idx)
+    features = self._get_data(key="data", line_nr=line_nr)
+    if features is None:
+      return None
+    targets = self._get_data(key="classes", line_nr=line_nr)
+    assert targets is not None
+    return DatasetSeq(
+      seq_idx=seq_idx,
+      seq_tag="line-%i" % line_nr,
+      features=features,
+      targets=targets)
 
 
 def _main(argv):

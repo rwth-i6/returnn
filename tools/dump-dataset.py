@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 from __future__ import print_function
 
@@ -22,7 +22,7 @@ def dump_dataset(dataset, options):
   :param options: argparse.Namespace
   """
   print("Epoch: %i" % options.epoch, file=log.v3)
-  rnn.train_data.init_seq_order(options.epoch)
+  rnn.train_data.init_seq_order(epoch=options.epoch)
 
   if options.type == "numpy":
     print("Dump files: %r*%r" % (options.dump_prefix, options.dump_postfix), file=log.v3)
@@ -53,13 +53,27 @@ def dump_dataset(dataset, options):
   print("Done. More seqs which we did not dumped: %s" % dataset.is_less_than_num_seqs(seq_idx), file=log.v1)
 
 
-def init(configFilename, commandLineOptions):
+def init(config_str):
+  """
+  :param str config_str: either filename to config-file, or dict for dataset
+  """
   rnn.initBetterExchook()
   rnn.initThreadJoinHack()
-  rnn.initConfig(configFilename, commandLineOptions)
+  if config_str.startswith("{"):
+    print("Using dataset %s." % config_str)
+    datasetDict = eval(config_str)
+    configFilename = None
+  else:
+    datasetDict = None
+    configFilename = config_str
+    print("Using config file %r." % configFilename)
+    assert os.path.exists(configFilename)
+  rnn.initConfig(configFilename=configFilename, commandLineOptions=[])
   global config
   config = rnn.config
   config.set("log", None)
+  if datasetDict:
+    config.set("train", datasetDict)
   rnn.initLog()
   print("CRNN dump-dataset starting up.", file=log.v1)
   rnn.initFaulthandler()
@@ -70,7 +84,7 @@ def init(configFilename, commandLineOptions):
 
 def main(argv):
   argparser = argparse.ArgumentParser(description='Dump something from dataset.')
-  argparser.add_argument('crnn_config_file')
+  argparser.add_argument('crnn_config', help="either filename to config-file, or dict for dataset")
   argparser.add_argument('--epoch', type=int, default=1)
   argparser.add_argument('--startseq', type=int, default=0, help='start seq idx (inclusive) (default: 0)')
   argparser.add_argument('--endseq', type=int, default=10, help='end seq idx (inclusive) or -1 (default: 10)')
@@ -78,7 +92,7 @@ def main(argv):
   argparser.add_argument('--dump_prefix', default='/tmp/crnn.dump-dataset.')
   argparser.add_argument('--dump_postfix', default='.txt.gz')
   args = argparser.parse_args(argv[1:])
-  init(configFilename=args.crnn_config_file, commandLineOptions=[])
+  init(config_str=args.crnn_config)
   dump_dataset(rnn.train_data, args)
   rnn.finalize()
 

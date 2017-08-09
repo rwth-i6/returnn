@@ -219,12 +219,14 @@ class Dataset(object):
 
   def get_seq_order_for_epoch(self, epoch, num_seqs, get_seq_len=None):
     """
-    :returns the order for the given epoch.
+    Returns the order of the given epoch.
     This is mostly a static method, except that is depends on the configured type of ordering,
-     such as 'default' (= as-is), 'sorted' or 'random'. 'sorted' also uses the sequence length.
+    such as 'default' (= as-is), 'sorted' or 'random'. 'sorted' also uses the sequence length.
+
     :param int epoch: for 'random', this determines the random seed
-    :type num_seqs: int
-    :param get_seq_len: function (originalSeqIdx: int) -> int
+    :param int num_seqs:
+    :param ((int) -> int)|None get_seq_len: function (originalSeqIdx: int) -> int
+    :return: the order for the given epoch. such that seq_idx -> underlying idx
     :rtype: list[int]
     """
     assert num_seqs > 0
@@ -419,8 +421,9 @@ class Dataset(object):
 
   def get_data_dim(self, key):
     """
-    :type key: str
+    :param str key: e.g. "data" or "classes"
     :return: number of classes, no matter if sparse or not
+    :rtype: int
     """
     if key == "data":
       return self.num_inputs * self.window
@@ -429,11 +432,21 @@ class Dataset(object):
     return 1  # unknown
 
   def get_data_dtype(self, key):
+    """
+    :param str key: e.g. "data" or "classes"
+    :return: dtype as str, e.g. "int32" or "float32"
+    :rtype: str
+    """
     if self.is_data_sparse(key):
       return "int32"
     return "float32"
 
   def is_data_sparse(self, key):
+    """
+    :param str key: e.g. "data" or "classes"
+    :return: whether the data is sparse
+    :rtype: bool
+    """
     if key in self.num_outputs:
       return self.num_outputs[key][1] == 1
     if key == "data":
@@ -443,12 +456,17 @@ class Dataset(object):
   def get_data_shape(self, key):
     """
     :returns get_data(*, key).shape[1:], i.e. num-frames excluded
+    :rtype: list[int]
     """
     if self.is_data_sparse(key):
       return []
     return [self.get_data_dim(key)]
 
   def have_seqs(self):
+    """
+    :return: whether num_seqs > 0
+    :rtype: bool
+    """
     return self.is_less_than_num_seqs(0)
 
   def len_info(self):
