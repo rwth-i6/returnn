@@ -150,7 +150,7 @@ class HDFDataset(CachedDataset):
         if 'targets' in fin:
           for k in fin['targets/data']:
             ldx = self.target_keys.index(k) + 1
-            self.targets[k][self.get_seq_start(idc)[ldx]:self.get_seq_start(idc)[ldx] + l[ldx]] = fin['targets/data/' + k][p[ldx] : p[ldx] + l[ldx]][...]
+            self.targets[k][self.get_seq_start(idc)[ldx]:self.get_seq_start(idc)[ldx] + l[ldx]] = fin['targets/data/' + k][p[ldx] : p[ldx] + l[ldx]] #[...]
         self._set_alloc_intervals_data(idc, data=fin['inputs'][p[0] : p[0] + l[0]][...])
       fin.close()
     gc.collect()

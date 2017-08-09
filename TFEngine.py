@@ -34,7 +34,7 @@ from Network import LayerNetwork
 from Pretrain import pretrainFromConfig
 from TFNetwork import TFNetwork, ExternData
 from TFUpdater import Updater
-from Util import hms
+from Util import hms, NumbersDict
 
 
 class Runner(object):
@@ -68,6 +68,7 @@ class Runner(object):
     self.start_time = None
     self.elapsed = None
     self._results_accumulated = {}  # type: dict[str,float]  # entries like "cost:output" or "loss"
+    self.num_frames_accumulated = NumbersDict()  # for each result key, the corresponding number of frames
     self.results = {}  # type: dict[str,float]  # entries like "cost:output" or "loss"
     self.score = {}  # type: dict[str,float]  # entries like "cost:output"
     self.error = {}  # type: dict[str,float]  # entries like "error:output"
@@ -183,9 +184,8 @@ class Runner(object):
     :return: factor to multiply with such accumulated values for the final epoch stats
     :rtype: float
     """
-    target = self._get_target_for_key(key)
     # Default: Normalize by number of frames.
-    return 1.0 / float(self.data_provider.get_num_frames()[target])
+    return 1.0 / self.num_frames_accumulated[key]
 
   def _finalize(self, num_steps):
     """
@@ -193,12 +193,11 @@ class Runner(object):
     :param int num_steps: number of steps we did for this epoch
     """
     assert not self.data_provider.have_more_data(session=self.engine.tf_session)
-    assert self.data_provider.get_num_frames()["data"] > 0
     results = {key: value * self._epoch_norm_factor_for_result(key)
                for (key, value) in self._results_accumulated.items()}
     self.results = results
-    self.score = dict([(key,value) for (key, value) in results.items() if key.startswith("cost:")])
-    self.error = dict([(key,value) for (key, value) in results.items() if key.startswith("error:")])
+    self.score = {key: value for (key, value) in results.items() if key.startswith("cost:")}
+    self.error = {key: value for (key, value) in results.items() if key.startswith("error:")}
     self.num_steps = num_steps
     self.finalized = True
 
@@ -220,8 +219,14 @@ class Runner(object):
     """
     # See see self._get_fetches_dict() for the keys.
     keys = [k for k in fetches_results.keys() if k.startswith("cost:") or k.startswith("error:") or k == "loss"]
+    step_seq_lens = {}  # key -> int
+    for key in keys:
+      target = self._get_target_for_key(key)
+      step_seq_lens[key] = self._step_seq_len(
+        fetches_results=fetches_results, data_key=target)
 
     # Accumulate for epoch stats.
+    self.num_frames_accumulated += NumbersDict(step_seq_lens)
     for key in keys:
       value = fetches_results[key]
       if key not in self._results_accumulated:
@@ -233,9 +238,8 @@ class Runner(object):
     eval_info = {}
     for key in keys:
       value = fetches_results[key]
-      target = self._get_target_for_key(key)
       if value:
-        value /= float(self._step_seq_len(fetches_results=fetches_results, data_key=target))
+        value /= float(step_seq_lens[key])
       eval_info[key] = value
 
     # Add raw stats.
@@ -358,8 +362,7 @@ class Runner(object):
         eval_info = self._collect_eval_info(fetches_results=fetches_results)
         self._maybe_handle_extra_fetches(fetches_results)
         duration = time.time() - start_time
-        self._print_process(report_prefix=report_prefix, step=step, step_duration=duration,
-                            eval_info=eval_info)
+        self._print_process(report_prefix=report_prefix, step=step, step_duration=duration, eval_info=eval_info)
         step += 1
 
       self._print_finish_process()
@@ -413,7 +416,8 @@ class Engine(object):
     self.train_data = None  # type: Dataset
     self.start_epoch = None
     self.use_dynamic_train_flag = False
-    self.use_search_flag = False
+    self.use_search_flag = config.value("task", None) == "search"
+    self.use_eval_flag = config.value("task", None) != "forward"
     self._const_cache = {}  # type: dict[str,tf.Tensor]
 
   def finalize(self):
@@ -620,6 +624,7 @@ class Engine(object):
       config=self.config,
       rnd_seed=epoch,
       train_flag=train_flag,
+      eval_flag=self.use_eval_flag,
       search_flag=self.use_search_flag)
     network.construct_from_dict(net_desc)
     network.initialize_params(session=self.tf_session)
@@ -1053,7 +1058,7 @@ class Engine(object):
     print("Finished analyzing of the dataset %r." % data, file=log.v1)
     print("elapsed:", hms(analyzer.elapsed), file=log.v1)
     print("num mini-batches:", analyzer.num_steps, file=log.v1)
-    print("total num_frames:", analyzer.data_provider.get_num_frames(), file=log.v1)
+    print("total num_frames:", analyzer.num_frames_accumulated, file=log.v1)
     print("score:", self.format_score(analyzer.score), file=log.v1)
     print("error:", self.format_score(analyzer.error), file=log.v1)
     for k, v in sorted(analyzer.stats.items()):

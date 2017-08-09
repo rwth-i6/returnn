@@ -75,8 +75,6 @@ class LayerBase(object):
     """
     self.name = name
     self.network = network
-    if loss and not target:
-      target = self.network.extern_data.default_target
     self.target = target
     self.loss = loss
     if self.loss and self.loss.recurrent:
@@ -167,8 +165,6 @@ class LayerBase(object):
       target = network.extern_data.default_target
     if n_out is None and target:
       n_out = cls._static_get_target_value(target=target, network=network, mark_data_key_as_used=False).dim
-      if loss:
-        n_out = loss.get_auto_output_layer_dim(n_out)
     if out_type is None:
       assert n_out
       out_type = {"dim": n_out}
@@ -251,19 +247,60 @@ class LayerBase(object):
       get_layer(src_name)
       for src_name in src_names
       if not src_name == "none"]
-    if d.get("loss"):
-      loss_class = get_loss_class(d["loss"])
-      assert issubclass(loss_class, Loss)
-      loss_opts = d.pop("loss_opts", {}).copy()
-      loss_class.transform_config_dict(loss_opts, network=network, get_layer=get_layer)
-      loss = loss_class(base_network=network, **loss_opts)
-      assert isinstance(loss, Loss)
-      d["loss"] = loss
+    if d.get("loss", None) and "target" not in d:
+      d["target"] = network.extern_data.default_target
+    if "n_out" not in d and d.get("target", None):
+      # Must be done here now because loss might be set to None later.
+      d["n_out"] = cls._guess_n_out_from_target_and_opt_loss(
+        network=network, target=d["target"], loss_class_name=d.get("loss", None))
+    d["loss"] = cls._make_loss(
+      class_name=d.pop("loss", None), opts=d.pop("loss_opts", None), network=network, get_layer=get_layer)
     if d.get("target"):
-      # Not resolving this in the dict, but call get_layer to make it available.
-      assert isinstance(d["target"], str)
-      if d["target"].startswith("layer:"):
-        get_layer(d["target"][len("layer:"):])
+      if network.eval_flag:
+        # Not resolving this in the dict, but call get_layer to make it available.
+        assert isinstance(d["target"], str)
+        if d["target"].startswith("layer:"):
+          get_layer(d["target"][len("layer:"):])
+
+  @classmethod
+  def _guess_n_out_from_target_and_opt_loss(cls, network, target, loss_class_name):
+    """
+    :param TFNetwork.TFNetwork network:
+    :param str target: e.g. "classes"
+    :param str|None loss_class_name: e.g. "ce" or None
+    :return: n_out value
+    :rtype: int
+    """
+    n_out = cls._static_get_target_value(target=target, network=network, mark_data_key_as_used=False).dim
+    if loss_class_name:
+      n_out = get_loss_class(loss_class_name).get_auto_output_layer_dim(n_out)
+    return n_out
+
+  @classmethod
+  def _make_loss(cls, class_name, opts, network, get_layer):
+    """
+    :param str|None class_name:
+    :param dict[str]|None opts:
+    :param TFNetwork.TFNetwork network:
+    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
+    :rtype: Loss|None
+    """
+    if not network.eval_flag:
+      # Don't resolve the loss opts on purpose.
+      # This might result in a smaller network because it might skip some get_layer calls.
+      # This is what we want, i.e. we don't want to resolve layers which are only needed for the loss.
+      return None
+    if not class_name:
+      return None
+    if not opts:
+      opts = {}
+    opts = opts.copy()
+    loss_class = get_loss_class(class_name)
+    assert issubclass(loss_class, Loss)
+    loss_class.transform_config_dict(opts, network=network, get_layer=get_layer)
+    loss = loss_class(base_network=network, **opts)
+    assert isinstance(loss, Loss)
+    return loss
 
   @property
   def tf_scope_name(self):
@@ -2838,7 +2875,8 @@ class Loss(object):
     """
     return self.loss_norm_factor
 
-  def get_auto_output_layer_dim(self, target_dim):
+  @classmethod
+  def get_auto_output_layer_dim(cls, target_dim):
     """
     :param int target_dim:
     :return: normally just the same as target_dim. e.g. for CTC, we would add 1 for the blank label
@@ -2999,7 +3037,8 @@ class CtcLoss(Loss):
       error = tf.edit_distance(hypothesis=tf.cast(decoded[0], labels.dtype), truth=labels, normalize=False)
       return self.reduce_func(error)
 
-  def get_auto_output_layer_dim(self, target_dim):
+  @classmethod
+  def get_auto_output_layer_dim(cls, target_dim):
     return target_dim + 1  # one added for blank
 
 
@@ -3127,21 +3166,23 @@ class ExternSprintLoss(Loss):
     custom_gradient.register_generic_loss_and_error_signal()
 
   def get_value(self):
-    seq_tags = self.base_network.get_seq_tags()
-    assert self.output_with_activation.is_softmax_act_func()
-    output_before_softmax = self.output_with_activation.get_logits()
-    if not self.output.is_time_major:
-      output_before_softmax = swapaxes(output_before_softmax, self.output.time_dim_axis, self.output.batch_dim_axis)
-    output = self.output.get_placeholder_as_time_major()
-    from TFSprint import get_sprint_loss_and_error_signal
-    loss, error_signal = get_sprint_loss_and_error_signal(
-      sprint_opts=self.sprint_opts,
-      log_posteriors=tf.log(output),
-      seq_lengths=self.output_seq_lens,
-      seq_tags=seq_tags)
-    from TFUtil import custom_gradient
-    loss = custom_gradient.generic_loss_and_error_signal(loss=loss, x=output_before_softmax, grad_x=error_signal)
-    return loss
+    with tf.name_scope("ExternSprintLoss"):
+      seq_tags = self.base_network.get_seq_tags()
+      assert self.output_with_activation.is_softmax_act_func()
+      output_before_softmax = self.output_with_activation.get_logits()
+      if not self.output.is_time_major:
+        output_before_softmax = swapaxes(output_before_softmax, self.output.time_dim_axis, self.output.batch_dim_axis)
+      output = self.output.get_placeholder_as_time_major()
+      from TFSprint import get_sprint_loss_and_error_signal
+      loss, error_signal = get_sprint_loss_and_error_signal(
+        sprint_opts=self.sprint_opts,
+        log_posteriors=tf.log(output),
+        seq_lengths=self.output_seq_lens,
+        seq_tags=seq_tags)
+      loss = self.reduce_func(loss)
+      from TFUtil import custom_gradient
+      loss = custom_gradient.generic_loss_and_error_signal(loss=loss, x=output_before_softmax, grad_x=error_signal)
+      return loss
 
   def get_error(self):
     if self.target is None:
@@ -3168,26 +3209,27 @@ class FastBaumWelchLoss(Loss):
     custom_gradient.register_generic_loss_and_error_signal()
 
   def get_value(self):
-    seq_tags = self.base_network.get_seq_tags()
-    assert self.output_with_activation.is_softmax_act_func()
-    output_before_softmax = self.output_with_activation.get_logits()
-    if not self.output.is_time_major:
-      output_before_softmax = swapaxes(output_before_softmax, self.output.time_dim_axis, self.output.batch_dim_axis)
-    output = self.output.get_placeholder_as_time_major()
-    from TFUtil import sequence_mask_time_major
-    seq_mask = sequence_mask_time_major(self.output_seq_lens)
-    from TFNativeOp import fast_baum_welch_by_sprint_automata
-    fwdbwd, obs_scores = fast_baum_welch_by_sprint_automata(
-      sprint_opts=self.sprint_opts,
-      am_scores=-tf.log(output),
-      float_idx=seq_mask,
-      tags=seq_tags)
-    loss = self.reduce_func(obs_scores[0])
-    bw = tf.exp(-fwdbwd)
-    grad_x = (output - bw) * tf.expand_dims(seq_mask, 2)
-    from TFUtil import custom_gradient
-    loss = custom_gradient.generic_loss_and_error_signal(loss=loss, x=output_before_softmax, grad_x=grad_x)
-    return loss
+    with tf.name_scope("FastBaumWelchLoss"):
+      seq_tags = self.base_network.get_seq_tags()
+      assert self.output_with_activation.is_softmax_act_func()
+      output_before_softmax = self.output_with_activation.get_logits()
+      if not self.output.is_time_major:
+        output_before_softmax = swapaxes(output_before_softmax, self.output.time_dim_axis, self.output.batch_dim_axis)
+      output = self.output.get_placeholder_as_time_major()
+      from TFUtil import sequence_mask_time_major
+      seq_mask = sequence_mask_time_major(self.output_seq_lens)
+      from TFNativeOp import fast_baum_welch_by_sprint_automata
+      fwdbwd, obs_scores = fast_baum_welch_by_sprint_automata(
+        sprint_opts=self.sprint_opts,
+        am_scores=-tf.log(output),
+        float_idx=seq_mask,
+        tags=seq_tags)
+      loss = self.reduce_func(obs_scores[0])
+      bw = tf.exp(-fwdbwd)
+      grad_x = (output - bw) * tf.expand_dims(seq_mask, 2)
+      from TFUtil import custom_gradient
+      loss = custom_gradient.generic_loss_and_error_signal(loss=loss, x=output_before_softmax, grad_x=grad_x)
+      return loss
 
   def get_error(self):
     if self.target is None:
@@ -3241,27 +3283,28 @@ class ViaLayerLoss(Loss):
         d[key] = get_layer(d[key])
 
   def get_value(self):
-    if self.error_signal_layer:
-      assert not self.align_layer
-      error_signal = self.error_signal_layer.output.copy_compatible_to(self.output).placeholder
-    else:
-      assert self.align_layer
-      error_signal = self.output.placeholder - self.align_layer.output.copy_compatible_to(self.output).placeholder
-    error_signal *= tf.cast(self.output.get_sequence_mask_broadcast(), dtype=tf.float32)
-    if self.loss_wrt_to_act_in:
-      assert self.output_with_activation, "activation unknown, via %r" % self.output
-      if isinstance(self.loss_wrt_to_act_in, (str, unicode)):
-        from TFUtil import get_activation_function
-        assert self.output_with_activation.act_func is get_activation_function(self.loss_wrt_to_act_in)
+    with tf.name_scope("ViaLayerLoss"):
+      if self.error_signal_layer:
+        assert not self.align_layer
+        error_signal = self.error_signal_layer.output.copy_compatible_to(self.output).placeholder
       else:
-        assert self.output_with_activation.act_func  # just check that there is some activation function
-      grad_wrt = self.output_with_activation.x  # activation (e.g. softmax) input
-    else:
-      grad_wrt = self.output.placeholder
-    from TFUtil import custom_gradient
-    loss = custom_gradient.generic_loss_and_error_signal(
-      loss=self._loss_value, x=grad_wrt, grad_x=error_signal)
-    return loss
+        assert self.align_layer
+        error_signal = self.output.placeholder - self.align_layer.output.copy_compatible_to(self.output).placeholder
+      error_signal *= tf.cast(self.output.get_sequence_mask_broadcast(), dtype=tf.float32)
+      if self.loss_wrt_to_act_in:
+        assert self.output_with_activation, "activation unknown, via %r" % self.output
+        if isinstance(self.loss_wrt_to_act_in, (str, unicode)):
+          from TFUtil import get_activation_function
+          assert self.output_with_activation.act_func is get_activation_function(self.loss_wrt_to_act_in)
+        else:
+          assert self.output_with_activation.act_func  # just check that there is some activation function
+        grad_wrt = self.output_with_activation.x  # activation (e.g. softmax) input
+      else:
+        grad_wrt = self.output.placeholder
+      from TFUtil import custom_gradient
+      loss = custom_gradient.generic_loss_and_error_signal(
+        loss=self._loss_value, x=grad_wrt, grad_x=error_signal)
+      return loss
 
   def get_error(self):
     if self.target is None:

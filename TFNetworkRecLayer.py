@@ -133,6 +133,8 @@ class RecLayer(_ConcatInputLayer):
     :param TFNetwork.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     """
+    if isinstance(d.get("unit"), dict):
+      d["n_out"] = d.get("n_out", None)  # disable automatic guessing
     super(RecLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
     initial_state = d.pop("initial_state", None)
     if initial_state:
@@ -596,7 +598,7 @@ class RecLayer(_ConcatInputLayer):
       if self.network.train_flag is not False:
         layer_with_losses = [
           layer.name for layer in cell.layer_data_templates.values()
-          if "loss" in layer.kwargs]
+          if layer.kwargs.get("loss", None)]
         if layer_with_losses:
           if len(layer_with_losses) > 1:
             raise Exception("rec layer %r, multiple subnet losses not supported (yet): %r" % (

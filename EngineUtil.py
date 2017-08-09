@@ -34,8 +34,8 @@ def assign_dev_data(device, dataset, batches, load_seqs=True):
         for k in device.used_data_keys:
           # device.used_data_keys are set by the train-net, but we will also get here during forward-only,
           # e.g. via SprintInterface, where we don't have e.g. the "classes" data.
-          # In that case, l[k] should be None. In some earlier code, l[k] could also be 0 in that case.
-          if l[k] in [0, None]:
+          # In that case, l.get(k) should be None. In some earlier code, l.get(k) could also be 0 in that case.
+          if l.get(k) in [0, None]:
             continue
           data = dataset.get_data_slice(seq.seq_idx, k, seq.seq_start_frame[k], seq.seq_end_frame[k])
           ls = data.shape[0]

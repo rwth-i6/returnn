@@ -2416,12 +2416,18 @@ class CustomGradient(object):
     :param tf.Tensor loss:
     :param tf.Tensor x:
     :param tf.Tensor grad_x:
-    :param str name: optional func_name
     :return: loss but with the gradient for x
     :rtype: tf.Tensor
     """
+    loss = tf.convert_to_tensor(loss)
+    x = tf.convert_to_tensor(x)
+    grad_x = tf.convert_to_tensor(grad_x)
+    x.set_shape(grad_x.get_shape())
+    grad_x.set_shape(x.get_shape())
     generic_loss_and_error_signal = self.register_generic_loss_and_error_signal()
-    return generic_loss_and_error_signal(loss, x, grad_x)
+    loss_out = generic_loss_and_error_signal(loss, x, grad_x)
+    loss_out.set_shape(loss.get_shape())
+    return loss_out
 
 custom_gradient = CustomGradient()
 

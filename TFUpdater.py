@@ -2,35 +2,40 @@
 from __future__ import print_function
 
 import tensorflow as tf
+from tensorflow.python.training.optimizer import Optimizer
+from tensorflow.python.ops import resource_variable_ops
 
 from Log import log
 from TFNetwork import TFNetwork
 from TFUtil import tf_version_tuple, assert_min_tf_version, CustomUpdate
 
-_OptimizerClassesDict = {}  # type: dict[str,()->tf.train.Optimizer]
+_OptimizerClassesDict = {}  # type: dict[str,()->Optimizer]
 
 
 def get_optimizer_class(class_name):
   """
   :param str class_name: e.g. "adam"
-  :return:
+  :return: the class
+  :rtype: type[Optimizer]|()->Optimizer
   """
   if not _OptimizerClassesDict:
     potential_list = list(vars(tf.train).items())
     if tf_version_tuple() >= (1, 2, 0):
-      import tensorflow.contrib.opt.python.training.nadam_optimizer as nadam
-      potential_list += list(vars(nadam).items())
+      from tensorflow.contrib import opt
+      potential_list += list(vars(opt).items())
+    potential_list += list(globals().items())
     for name, v in potential_list:
       assert isinstance(name, str)
+      if v is Optimizer:
+        continue
+      if not isinstance(v, type) or not issubclass(v, Optimizer):
+        continue
+      assert name.lower() not in _OptimizerClassesDict
+      _OptimizerClassesDict[name.lower()] = v
       if name.endswith("Optimizer"):
         name = name[:-len("Optimizer")]
-      else:
-        continue
-      if not issubclass(v, tf.train.Optimizer):
-        continue
-      name = name.lower()
-      assert name not in _OptimizerClassesDict
-      _OptimizerClassesDict[name] = v
+        assert name.lower() not in _OptimizerClassesDict
+        _OptimizerClassesDict[name.lower()] = v
   return _OptimizerClassesDict[class_name.lower()]
 
 
@@ -87,7 +92,7 @@ class Updater(object):
     self.trainable_vars = []  # type: list[tf.Variable]
     self.network = network
     self.loss = network.get_objective()
-    self.optimizer = None  # type: tf.train.Optimizer
+    self.optimizer = None  # type: Optimizer
     self.optim_op = None  # type: tf.Operation
     self.optim_meta_losses = None  # type: dict[str,tf.Tensor]
     self.optimizer_vars = []  # type: list[tf.Variable]
@@ -155,7 +160,7 @@ class Updater(object):
       print("Create NAdam optimizer.", file=log.v2)
       # TF default values: like Adam: beta1=0.9, beta2=0.999, epsilon=1e-8
       # Our Theano default values: decay=0.004, beta1=0.9, beta2=0.999, epsilon=1e-8
-      from tensorflow.contrib.opt.python.training.nadam_optimizer import NadamOptimizer
+      from tensorflow.contrib.opt import NadamOptimizer
       optimizer = NadamOptimizer(learning_rate=lr, epsilon=epsilon, use_locking=use_locking)
     elif self.config.bool("adadelta", False):
       assert not momentum
@@ -392,3 +397,209 @@ def add_check_numerics_ops(
               is_finite = tf.reduce_all(tf.is_finite(output))
               check_op = [tf.Assert(is_finite, [message, "Tensor had inf or nan values:", output])]
     return tf.group(*check_op)
+
+
+class _BaseCustomOptimizer(Optimizer):
+  """
+  Base class for our own optimizer implementations.
+  This simplifies the interface to be implemented a bit from :class:`Optimizer`.
+  """
+
+  def __init__(self, learning_rate, use_locking=False, name=None):
+    """Construct a new optimizer.
+
+    Args:
+      learning_rate: A Tensor or a floating point value.  The learning
+        rate to use.
+      use_locking: If True use locks for update operations.
+      name: Optional name prefix for the operations created when applying
+        gradients. Defaults to `self.__class__.__name__`.
+    """
+    if name is None:
+      name = self.__class__.__name__
+    super(_BaseCustomOptimizer, self).__init__(use_locking, name)
+    self._learning_rate = learning_rate
+
+  def _prepare(self):
+    self._learning_rate_tensor = tf.convert_to_tensor(self._learning_rate, name="learning_rate")
+
+  def _apply(self, grad, var, indices=None):
+    """
+    :param tf.Tensor grad:
+    :param tf.Variable|resource_variable_ops.ResourceVariable var:
+    :param tf.Tensor|None indices: if this is a sparse update, the indices of the grad values
+    :return: update
+    :rtype: tf.Tensor|tf.Operation
+    """
+    raise NotImplementedError
+
+  def _apply_dense(self, grad, var):
+    return self._apply(grad=grad, var=var)
+
+  def _resource_apply_dense(self, grad, handle):
+    return self._apply_dense(grad=grad, var=handle)
+
+  def _resource_apply_sparse_duplicate_indices(self, grad, handle, indices):
+    return self._apply(grad=grad, var=handle, indices=indices)
+
+  def _resource_apply_sparse(self, grad, handle, indices):
+    return self._resource_apply_sparse_duplicate_indices(grad=grad, handle=handle, indices=indices)
+
+  def _apply_sparse_duplicate_indices(self, grad, var):
+    return self._apply(grad=grad.values, var=var, indices=grad.indices)
+
+  def _apply_sparse(self, grad, var):
+    return self._apply_sparse_duplicate_indices(grad=grad, var=var)
+
+  def _assign_add(self, ref, updates, indices=None):
+    if indices is not None:
+      if isinstance(ref, tf.Variable):
+        return tf.scatter_add(ref, indices, updates, use_locking=self._use_locking)
+      elif isinstance(ref, resource_variable_ops.ResourceVariable):
+        with tf.control_dependencies([resource_variable_ops.resource_scatter_add(ref.handle, indices, updates)]):
+          return ref.value()
+      else:
+        raise TypeError("did not expect type %r" % type(ref))
+    else:
+      return tf.assign_add(ref, updates, use_locking=self._use_locking)
+
+  def _assign_sub(self, ref, updates, indices=None):
+    if indices is not None:
+      if isinstance(ref, tf.Variable):
+        return tf.scatter_sub(ref, indices, updates, use_locking=self._use_locking)
+      elif isinstance(ref, resource_variable_ops.ResourceVariable):
+        with tf.control_dependencies([resource_variable_ops.resource_scatter_add(ref.handle, indices, -updates)]):
+          return ref.value()
+      else:
+        raise TypeError("did not expect type %r" % type(ref))
+    else:
+      return tf.assign_sub(ref, updates, use_locking=self._use_locking)
+
+  def _gather(self, dense, indices=None):
+    if indices is not None:
+      return tf.gather(dense, indices=indices)
+    return dense
+
+
+class CustomGradientDescentOptimizer(_BaseCustomOptimizer):
+  """
+  Just an example implementation for simple gradient descent.
+  """
+
+  def _apply(self, grad, var, indices=None):
+    lr = tf.cast(self._learning_rate_tensor, grad.dtype.base_dtype)
+    return self._assign_sub(ref=var, updates=lr * grad, indices=indices).op
+
+
+class NeuralOptimizer1(_BaseCustomOptimizer):
+  """
+  Via Neural Optimizer Search with Reinforcement Learning (http://proceedings.mlr.press/v70/bello17a/bello17a.pdf).
+
+  Equivalent to the optimizer g * exp(sign(g) * sign(m)), we use:
+
+    g * where(sign(g) == sign(m), 1.0, decrease_factor)
+
+  where m is the running average of g.
+
+  Calculation of m: m_t <- beta1 * m_{t-1} + (1 - beta1) * g
+  Same beta1 default as in Adam and in the paper: beta1=0.9
+  """
+
+  def __init__(self, beta1=0.9, decrease_factor=0.1, **kwargs):
+    """
+    :param float beta1: used for the running average of m
+    :param float decrease_factor: in the original paper, it is e^-2 ~= 0.135
+    """
+    super(NeuralOptimizer1, self).__init__(**kwargs)
+    self._beta1 = beta1
+    self._decrease_factor = decrease_factor
+
+  def _prepare(self):
+    super(NeuralOptimizer1, self)._prepare()
+    self._beta1_t = tf.convert_to_tensor(self._beta1, name="beta1")
+
+  def _create_slots(self, var_list):
+    for v in var_list:
+      self._zeros_slot(v, "m", self._name)
+
+  def _apply(self, grad, var, indices=None):
+    lr = tf.cast(self._learning_rate_tensor, var.dtype.base_dtype)
+    m = self.get_slot(var, "m")
+    # m_t = beta1 * m + (1 - beta1) * g_t
+    beta1_t = tf.cast(self._beta1_t, var.dtype.base_dtype)
+    m_scaled_g_values = grad * (1 - beta1_t)
+    m_t = tf.assign(m, m * beta1_t, use_locking=self._use_locking)
+    with tf.control_dependencies([m_t]):
+      m_t = self._assign_add(m, updates=m_scaled_g_values, indices=indices)
+    # update = lr * grad * where(...)
+    m_gathered = self._gather(m_t, indices=indices)
+    ones = tf.ones_like(grad)
+    update = lr * grad * tf.where(tf.equal(tf.sign(m_gathered), tf.sign(grad)), ones, ones * self._decrease_factor)
+    var_update = self._assign_sub(ref=var, updates=update, indices=indices)
+    return tf.group(*[var_update, m_t])
+
+
+class GradVarianceScaledOptimizer(_BaseCustomOptimizer):
+  """
+  Let m be the running average of g.
+  Calculation of m: m_t <- beta1 * m_{t-1} + (1 - beta1) * g
+  Same beta1 default as in Adam and in the paper: beta1=0.9
+
+  Let v be the running average of the variance of g, i.e. of (g - m)^2.
+  """
+
+  def __init__(self, beta1=0.9, beta2=0.999, epsilon=1e-8, **kwargs):
+    """
+    :param float beta1: used for the running average of g (m)
+    :param float beta2: used for the running average of variance of g (v)
+    :param float epsilon:
+    """
+    super(GradVarianceScaledOptimizer, self).__init__(**kwargs)
+    self._beta1 = beta1
+    self._beta2 = beta2
+    self._epsilon = epsilon
+
+  def _prepare(self):
+    super(GradVarianceScaledOptimizer, self)._prepare()
+    self._beta1_t = tf.convert_to_tensor(self._beta1, name="beta1")
+    self._beta2_t = tf.convert_to_tensor(self._beta2, name="beta2")
+    self._epsilon_t = tf.convert_to_tensor(self._epsilon, name="epsilon")
+
+  def _create_slots(self, var_list):
+    for v in var_list:
+      self._zeros_slot(v, "m", self._name)
+      self._zeros_slot(v, "v", self._name)
+
+  def _apply(self, grad, var, indices=None):
+    lr = tf.cast(self._learning_rate_tensor, var.dtype.base_dtype)
+    m = self.get_slot(var, "m")
+    v = self.get_slot(var, "v")
+    beta1_t = tf.cast(self._beta1_t, var.dtype.base_dtype)
+    beta2_t = tf.cast(self._beta2_t, var.dtype.base_dtype)
+    epsilon_t = tf.cast(self._epsilon_t, var.dtype.base_dtype)
+
+    # m_t = beta1 * m + (1 - beta1) * g_t
+    m_scaled_g_values = grad * (1 - beta1_t)
+    m_t = tf.assign(m, m * beta1_t, use_locking=self._use_locking)
+    with tf.control_dependencies([m_t]):
+      m_t = self._assign_add(m, updates=m_scaled_g_values, indices=indices)
+    m_gathered = self._gather(m_t, indices=indices)
+
+    # Also see tf.nn.moments.
+    variance = tf.squared_difference(grad, m_gathered)
+
+    # v_t = beta2 * v + (1 - beta2) * variance
+    v_scaled_new_values = variance * (1 - beta2_t)
+    v_t = tf.assign(v, v * beta2_t, use_locking=self._use_locking)
+    with tf.control_dependencies([v_t]):
+      v_t = self._assign_add(v, updates=v_scaled_new_values, indices=indices)
+    v_gathered = self._gather(v_t, indices=indices)
+
+    # update = lr * grad * v / (variance + eps)
+    factor = v_gathered / (variance + epsilon_t)
+    # with tf.get_default_graph().colocate_with(None, True):
+    #   with tf.control_dependencies([tf.Print(factor, [tf.reduce_min(factor), tf.reduce_max(factor), tf.reduce_mean(factor)])]):
+    #     factor = tf.identity(factor)
+    update = lr * grad * tf.minimum(factor, 1.0)
+    var_update = self._assign_sub(ref=var, updates=update, indices=indices)
+    return tf.group(*[var_update, m_t])

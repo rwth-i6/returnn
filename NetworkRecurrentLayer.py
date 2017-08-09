@@ -515,6 +515,11 @@ class RecurrentUnitLayer(Layer):
                attention_lm = 'none',
                attention_ndec = 1,
                attention_memory = 0,
+               attention_alnpts = 0,
+               attention_epoch  = 1,
+               attention_segstep=0.01,
+               attention_offset=0.95,
+               attention_method="epoch",
                base = None,
                aligner = None,
                lm = False,
@@ -624,6 +629,11 @@ class RecurrentUnitLayer(Layer):
     self.set_attr('attention_loss', attention_loss)
     self.set_attr('n_dec', n_dec)
     self.set_attr('segment_input', segment_input)
+    self.set_attr('attention_alnpts', attention_alnpts)
+    self.set_attr('attention_epoch', attention_epoch)
+    self.set_attr('attention_segstep', attention_segstep)
+    self.set_attr('attention_offset', attention_offset)
+    self.set_attr('attention_method', attention_method)
     if segment_input:
       if not self.eval_flag:
       #if self.eval_flag:
