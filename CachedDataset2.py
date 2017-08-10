@@ -150,7 +150,7 @@ class CachedDataset2(Dataset):
 
   def get_target_list(self):
     self._load_something()
-    return self.added_data[0].targets.keys()
+    return sorted(self.added_data[0].targets.keys())
 
   def is_data_sparse(self, key):
     """

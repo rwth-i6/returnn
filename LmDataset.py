@@ -684,16 +684,19 @@ class TranslationDataset(CachedDataset2):
 
   MapToDataKeys = {"source": "data", "target": "classes"}  # just by our convention
 
-  def __init__(self, path, postfix, random_shuffle_epoch1=False, **kwargs):
+  def __init__(self, path, postfix, random_shuffle_epoch1=False, partition_epoch=None, **kwargs):
     """
     :param str path: the directory containing the files
     :param str postfix: e.g. "train" or "dev". it will then search for "source." + postfix and "target." + postfix.
     :param bool random_shuffle_epoch1: if True, will also randomly shuffle epoch 1. see self.init_seq_order().
+    :param int partition_epoch: if provided, will partition the dataset into multiple epochs
     """
     super(TranslationDataset, self).__init__(**kwargs)
     self.path = path
     self.postfix = postfix
     self.random_shuffle_epoch1 = random_shuffle_epoch1
+    self.partition_epoch = partition_epoch
+    self._partition_epoch_num_seqs = []
     import os
     assert os.path.isdir(path)
     self._data_files = {data_key: self._get_data_file(prefix) for (prefix, data_key) in self.MapToDataKeys.items()}
@@ -716,10 +719,10 @@ class TranslationDataset(CachedDataset2):
     import os
     filename = "%s/%s.%s" % (self.path, prefix, self.postfix)
     if os.path.exists(filename):
-      return open(filename, "r")
+      return open(filename, "rb")
     if os.path.exists(filename + ".gz"):
       import gzip
-      return gzip.GzipFile(filename + ".gz", "r")
+      return gzip.GzipFile(filename + ".gz", "rb")
     raise Exception("Data file not found: %r (.gz)?" % filename)
 
   def _get_vocab(self, prefix):
@@ -765,18 +768,23 @@ class TranslationDataset(CachedDataset2):
     """
     if self._data_final_lens[key] is not None:
       return  # we already reached the end before
+    if limit_line_nr == float("inf"):
+      print("%r: reading the whole dataset now, this can take a while" % self, file=log.v3)
     data = self._data[key]
     assert isinstance(data, list)
     f = self._data_files[key]
     while limit_line_nr >= len(data):
-      l = f.readline()
-      if l == "":
+      # Read in chunks. This can speed it up.
+      ls = f.readlines(10000)
+      data.extend([l.decode("utf8").strip() for l in ls])
+      if not ls:
         for k, v in self._data_final_lens.items():
+          if v is None:
+            continue
           assert v == len(data), "mismatch of lens: %r, len of %r is %r != %r" % (
             self._data_final_lens, k, v, len(data))
         self._data_final_lens[key] = len(data)
         break
-      data.append(l.decode("utf8").strip())
 
   def _get_data_str(self, key, line_nr):
     """
@@ -805,6 +813,11 @@ class TranslationDataset(CachedDataset2):
     :return: line-nr, i.e. index in any of the lists `self.data[key]`
     :rtype: int
     """
+    if self.partition_epoch:
+      epoch = self.epoch or 1
+      assert self._partition_epoch_num_seqs
+      for n in self._partition_epoch_num_seqs[:(epoch - 1) % self.partition_epoch]:
+        seq_idx += n
     if self._seq_order is None:
       return seq_idx
     return self._seq_order[seq_idx]
@@ -824,10 +837,15 @@ class TranslationDataset(CachedDataset2):
     :param list[str] | None seq_list: In case we want to set a predefined order.
     """
     super(TranslationDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+    if not epoch:
+      epoch = 1
+    if self.partition_epoch:
+      epoch = (epoch - 1) // self.partition_epoch + 1  # count starting from epoch 1
     if seq_list is not None:
       self._seq_order = list(seq_list)
-    elif self.seq_ordering == "default" or (
-          self.random_shuffle_epoch1 and self.seq_ordering == "random" and epoch in (None, 0, 1)):
+    elif (self.seq_ordering == "default" or (
+          self.random_shuffle_epoch1 and self.seq_ordering == "random" and epoch in (None, 0, 1))) \
+            and not self.partition_epoch:
       self._seq_order = None
     else:
       if self._data_final_lens["data"] is None:
@@ -840,6 +858,16 @@ class TranslationDataset(CachedDataset2):
       self._num_seqs = len(self._seq_order)
     elif self._data_final_lens["data"] is not None:
       self._num_seqs = self._data_final_lens["data"]
+    if self.partition_epoch:
+      assert self._num_seqs is not None
+      self._partition_epoch_num_seqs = [self._num_seqs // self.partition_epoch] * self.partition_epoch
+      i = 0
+      while sum(self._partition_epoch_num_seqs) < self._num_seqs:
+        self._partition_epoch_num_seqs[i] += 1
+        i += 1
+        assert i < self.partition_epoch
+      assert sum(self._partition_epoch_num_seqs) == self._num_seqs
+      self._num_seqs = self._partition_epoch_num_seqs[(self.epoch - 1) % self.partition_epoch]
 
   def _collect_single_seq(self, seq_idx):
     line_nr = self._get_line_nr(seq_idx)
