@@ -719,13 +719,21 @@ class TranslationDataset(CachedDataset2):
     try:
       import better_exchook
       better_exchook.install()
+      from Util import AsyncThreadRun
 
-      sources = self._read_data(self._data_files["data"])
+      sources_async = AsyncThreadRun(
+        name="%r: read source data", func=lambda: self._read_data(self._data_files["data"]))
+      targets_async = AsyncThreadRun(
+        name="%r: read target data", func=lambda: self._read_data(self._data_files["classes"]))
+      sources = sources_async.get()
       with self._lock:
         self._data_len = len(sources)
-      targets = self._read_data(self._data_files["classes"])
+      targets = targets_async.get()
       assert len(targets) == self._data_len, "len of source is %r != len of target %r" % (
         self._data_len, len(targets))
+      for k, f in list(self._data_files.items()):
+        f.close()
+        self._data_files[k] = None
       data_strs = {"data": sources, "classes": targets}
       ChunkSize = 1000
       i = 0
