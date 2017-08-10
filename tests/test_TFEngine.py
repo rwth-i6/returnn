@@ -182,7 +182,7 @@ def test_engine_forward_to_hdf():
   import h5py
   with h5py.File(output_file, 'r') as f:
     assert f['inputs'].shape == (seq_len*num_seqs, n_classes_dim)
-    assert f['seqLengths'].shape == (num_seqs,)
+    assert f['seqLengths'].shape == (num_seqs,2)
     assert f['seqTags'].shape == (num_seqs,)
     assert f.attrs['inputPattSize'] == n_data_dim
     assert f.attrs['numSeqs'] == num_seqs
