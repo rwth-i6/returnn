@@ -960,6 +960,8 @@ class Engine(object):
     cache.attrs['numSeqs'] = 0
     if target in data.labels:
       hdf5_strings(cache, 'labels', data.labels[target])
+    else:
+      cache.create_dataset('labels', (0,), dtype="S5")
 
     datasets = {}  # type: dict[str,h5py.Dataset]
     tags = []  # type: list[str]

@@ -188,6 +188,14 @@ def test_engine_forward_to_hdf():
     assert f.attrs['numSeqs'] == num_seqs
     assert f.attrs['numTimesteps'] == seq_len * num_seqs
 
+  from HDFDataset import HDFDataset
+  ds = HDFDataset()
+  ds.add_file(output_file)
+
+  assert_equal(ds.num_inputs, n_classes_dim) # forwarded input is network output
+  assert_equal(ds.get_num_timesteps(), seq_len*num_seqs)
+  assert_equal(ds.num_seqs, num_seqs)
+
   os.remove(output_file)
 
 
