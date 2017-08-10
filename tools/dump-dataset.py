@@ -120,8 +120,13 @@ def main(argv):
   argparser.add_argument('--dump_postfix', default='.txt.gz')
   args = argparser.parse_args(argv[1:])
   init(config_str=args.crnn_config)
-  dump_dataset(rnn.train_data, args)
-  rnn.finalize()
+  try:
+    dump_dataset(rnn.train_data, args)
+  except KeyboardInterrupt:
+    print("KeyboardInterrupt")
+    sys.exit(1)
+  finally:
+    rnn.finalize()
 
 
 if __name__ == '__main__':
