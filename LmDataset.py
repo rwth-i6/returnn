@@ -6,7 +6,7 @@ from Dataset import DatasetSeq
 from CachedDataset2 import CachedDataset2
 import gzip
 import xml.etree.ElementTree as etree
-from Util import parse_orthography, parse_orthography_into_symbols, load_json, NumbersDict, BackendEngine
+from Util import parse_orthography, parse_orthography_into_symbols, load_json, BackendEngine, unicode
 from Log import log
 import numpy
 import time
@@ -351,6 +351,10 @@ class AllophoneState:
   _attrs = ["id", "context_history", "context_future", "boundary", "state"]
 
   def __init__(self, id=None, state=None):
+    """
+    :param str id: phone
+    :param int|None state:
+    """
     self.id = id
     self.state = state
 
@@ -376,6 +380,153 @@ class AllophoneState:
   def mark_final(self):
     self.boundary = self.boundary | 2
 
+  def phoneme(self, ctx_offset, out_of_context_id=None):
+    """
+
+    Phoneme::Id ContextPhonology::PhonemeInContext::phoneme(s16 pos) const {
+      if (pos == 0)
+        return phoneme_;
+      else if (pos > 0) {
+        if (u16(pos - 1) < context_.future.length())
+          return context_.future[pos - 1];
+        else
+          return Phoneme::term;
+      } else { verify(pos < 0);
+        if (u16(-1 - pos) < context_.history.length())
+          return context_.history[-1 - pos];
+        else
+          return Phoneme::term;
+      }
+    }
+
+    :param int ctx_offset: 0 for center, >0 for future, <0 for history
+    :param str|None out_of_context_id: what to return out of our context
+    :return: phone-id from the offset
+    :rtype: str
+    """
+    if ctx_offset == 0:
+      return self.id
+    if ctx_offset > 0:
+      idx = ctx_offset - 1
+      if idx >= len(self.context_future):
+        return out_of_context_id
+      return self.context_future[idx]
+    if ctx_offset < 0:
+      idx = -ctx_offset - 1
+      if idx >= len(self.context_history):
+        return out_of_context_id
+      return self.context_history[idx]
+    assert False
+
+  def set_phoneme(self, ctx_offset, phone_id):
+    """
+    :param int ctx_offset: 0 for center, >0 for future, <0 for history
+    :param str phone_id:
+    """
+    if ctx_offset == 0:
+      self.id = phone_id
+    elif ctx_offset > 0:
+      idx = ctx_offset - 1
+      assert idx == len(self.context_future)
+      self.context_future = self.context_future + (phone_id,)
+    elif ctx_offset < 0:
+      idx = -ctx_offset - 1
+      assert idx == len(self.context_history)
+      self.context_history = self.context_history + (phone_id,)
+
+  def phone_idx(self, ctx_offset, phone_idxs):
+    """
+    :param int ctx_offset: see self.phoneme()
+    :param dict[str,int] phone_idxs:
+    :rtype: int
+    """
+    phone = self.phoneme(ctx_offset=ctx_offset)
+    if phone is None:
+      return 0  # by definition in the Sprint C++ code: static const Id term = 0;
+    else:
+      return phone_idxs[phone]
+
+  def index(self, phone_idxs, num_states=3, context_length=1):
+    """
+    Original Sprint C++ code:
+
+        AllophoneStateAlphabet::Index AllophoneStateAlphabet::index(const AllophoneState &phone) const {
+          require(nStates_ && contextLength_);
+          require(phone.boundary < 4);
+          require(0 <= phone.state && phone.state < (s16)nStates_);
+          u32 result = 0;
+          for (s32 i = - contextLength_; i <= s32(contextLength_); ++i) {
+            result *= pi_->nPhonemes() + 1;
+            result += phone.phoneme(i);
+          }
+          result *= 4;
+          result += phone.boundary;
+          result *= nStates_;
+          result += phone.state;
+          ensure(result < nClasses_);
+          return result + 1;
+        }
+
+    :param dict[str,int] phone_idxs:
+    :param int num_states: how much state per allophone
+    :param int context_length: how much left/right context
+    :rtype: int
+    """
+    assert max(len(self.context_history), len(self.context_future)) <= context_length
+    assert 0 <= self.boundary < 4
+    assert 0 <= self.state < num_states
+    num_phones = max(phone_idxs.values()) + 1
+    result = 0
+    for i in range(-context_length, context_length + 1):
+      result *= num_phones + 1
+      result += self.phone_idx(ctx_offset=i, phone_idxs=phone_idxs)
+    result *= 4
+    result += self.boundary
+    result *= num_states
+    result += self.state
+    return result + 1
+
+  @classmethod
+  def from_index(cls, index, phone_ids, num_states=3, context_length=1):
+    """
+    Original Sprint C++ code:
+
+        AllophoneState AllophoneStateAlphabet::allophoneState(AllophoneStateAlphabet::Index in) const {
+          require(nStates_ && contextLength_);
+          require(in != Fsa::Epsilon);
+          require(in < nClasses_);
+          AllophoneState result;
+          Index code = in - 1;
+          result.state    = code % nStates_; code /= nStates_;
+          result.boundary = code % 4;        code /= 4;
+          for (s32 i = contextLength_; i >= - s32(contextLength_); --i) {
+            result.setPhoneme(i, code % (pi_->nPhonemes() + 1));
+            code /= pi_->nPhonemes() + 1;
+          }
+          ensure_(index(result) == in);
+          return result;
+        }
+
+    :param int index:
+    :param dict[int,str] phone_ids: reverse-map from self.index(). idx -> id
+    :param int num_states: how much state per allophone
+    :param int context_length: how much left/right context
+    :rtype: int
+    :rtype: AllophoneState
+    """
+    num_phones = max(phone_ids.keys()) + 1
+    code = index - 1
+    result = AllophoneState()
+    result.state = code % num_states
+    code //= num_states
+    result.boundary = code % 4
+    code //= 4
+    for i in reversed(range(-context_length, context_length + 1)):
+      phone_idx = code % (num_phones + 1)
+      code //= num_phones + 1
+      result.set_phoneme(ctx_offset=i, phone_id=phone_ids[phone_idx])
+    return result
+
   def __hash__(self):
     return hash(tuple([getattr(self, a) for a in self._attrs]))
 
@@ -396,8 +547,9 @@ class Lexicon:
     lex_file = open(filename, 'rb')
     if filename.endswith(".gz"):
       lex_file = gzip.GzipFile(fileobj=lex_file)
-    self.phonemes = {}
-    self.lemmas = {}
+    self.phoneme_list = []  # type: list[str]
+    self.phonemes = {}  # type: dict[str,dict[str]]  # phone -> {index, symbol, variation}
+    self.lemmas = {}  # type: dict[str,dict[str]]  # orth -> {orth, phons}
 
     context = iter(etree.iterparse(lex_file, events=('start', 'end')))
     _, root = next(context)  # get root element
@@ -410,12 +562,14 @@ class Lexicon:
         tree = tree[:-1]
         if elem.tag == "phoneme":
           symbol = elem.find("symbol").text.strip()  # should be unicode
+          assert isinstance(symbol, (str, unicode))
           if elem.find("variation") is not None:
             variation = elem.find("variation").text.strip()
           else:
             variation = "context"  # default
           assert symbol not in self.phonemes
           assert variation in ["context", "none"]
+          self.phoneme_list.append(symbol)
           self.phonemes[symbol] = {"index": len(self.phonemes), "symbol": symbol, "variation": variation}
           root.clear()  # free memory
         elif elem.tag == "phoneme-inventory":
