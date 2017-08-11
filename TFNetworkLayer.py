@@ -2651,6 +2651,53 @@ class SyntheticGradientLayer(_ConcatInputLayer):
     return get_concat_sources_data_template(sources, name="%s_output" % name)
 
 
+class AllophoneStateIdxParserLayer(LayerBase):
+  """
+  This is very much Sprint/RASR specific.
+  We get allophone state indices and return (center, left_1, right_1, ..., state, boundary).
+  """
+  layer_class = "allophone_state_idx_parser"
+
+  def __init__(self, num_phones, num_states=3, context_len=1, **kwargs):
+    """
+    :param list[LayerBase] sources:
+    :param int num_phones: total number of phonemes
+    :param int num_states: number of HMM states
+    :param int context_len: left/right context len
+    """
+    super(AllophoneStateIdxParserLayer, self).__init__(**kwargs)
+    # See LmDataset.AllophoneState.from_index().
+    result = [None] * self.output.dim
+    code = self.sources[0].output.placeholder - 1
+    state = code % num_states
+    result[-2] = state
+    code //= num_states
+    boundary = code % 4
+    result[-1] = boundary
+    code //= 4
+    for i in reversed(range(-context_len, context_len + 1)):
+      phone_idx = code % (num_phones + 1)
+      code //= num_phones + 1
+      result_idx = abs(i) * 2
+      if i < 0:
+        result_idx -= 1
+      result[result_idx] = phone_idx
+    self.output.placeholder = tf.stack(result, axis=self.output.ndim - 1)
+    self.output.size_placeholder = self.sources[0].output.size_placeholder.copy()
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, context_len=1, n_out=None, **kwargs):
+    assert len(sources) == 1, "%s: We expect exactly one source layer." % name
+    dim = 3 + context_len * 2  # (center, left_1, right_1, ..., state, boundary)
+    if n_out is not None:
+      assert dim == n_out
+    return Data(
+      name="%s_output" % name,
+      shape=sources[0].output.shape,
+      dtype="int32", sparse=False, dim=n_out,
+      batch_dim_axis=sources[0].output.batch_dim_axis)
+
+
 class FramewiseStatisticsLayer(LayerBase):
   """
   Collects various statistics (such as FER, etc) on the sources.
