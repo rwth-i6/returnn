@@ -249,18 +249,18 @@ class LayerBase(object):
       if not src_name == "none"]
     if d.get("loss", None) and "target" not in d:
       d["target"] = network.extern_data.default_target
-    if "n_out" not in d and d.get("target", None):
-      # Must be done here now because loss might be set to None later.
-      d["n_out"] = cls._guess_n_out_from_target_and_opt_loss(
-        network=network, target=d["target"], loss_class_name=d.get("loss", None))
-    d["loss"] = cls._make_loss(
-      class_name=d.pop("loss", None), opts=d.pop("loss_opts", None), network=network, get_layer=get_layer)
     if d.get("target"):
       if network.eval_flag:
         # Not resolving this in the dict, but call get_layer to make it available.
         assert isinstance(d["target"], str)
         if d["target"].startswith("layer:"):
           get_layer(d["target"][len("layer:"):])
+    if "n_out" not in d and d.get("target", None):
+      # Must be done here now because loss might be set to None later.
+      d["n_out"] = cls._guess_n_out_from_target_and_opt_loss(
+        network=network, target=d["target"], loss_class_name=d.get("loss", None))
+    d["loss"] = cls._make_loss(
+      class_name=d.pop("loss", None), opts=d.pop("loss_opts", None), network=network, get_layer=get_layer)
 
   @classmethod
   def _guess_n_out_from_target_and_opt_loss(cls, network, target, loss_class_name):
