@@ -182,11 +182,19 @@ def test_engine_forward_to_hdf():
   import h5py
   with h5py.File(output_file, 'r') as f:
     assert f['inputs'].shape == (seq_len*num_seqs, n_classes_dim)
-    assert f['seqLengths'].shape == (num_seqs,)
+    assert f['seqLengths'].shape == (num_seqs,2)
     assert f['seqTags'].shape == (num_seqs,)
     assert f.attrs['inputPattSize'] == n_data_dim
     assert f.attrs['numSeqs'] == num_seqs
     assert f.attrs['numTimesteps'] == seq_len * num_seqs
+
+  from HDFDataset import HDFDataset
+  ds = HDFDataset()
+  ds.add_file(output_file)
+
+  assert_equal(ds.num_inputs, n_classes_dim) # forwarded input is network output
+  assert_equal(ds.get_num_timesteps(), seq_len*num_seqs)
+  assert_equal(ds.num_seqs, num_seqs)
 
   os.remove(output_file)
 

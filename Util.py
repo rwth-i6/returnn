@@ -603,6 +603,36 @@ def interrupt_main():
     sys.exit(1)  # And exit the thread.
 
 
+class AsyncThreadRun(threading.Thread):
+  def __init__(self, name, func):
+    """
+    :param str name:
+    :param ()->T func:
+    """
+    super(AsyncThreadRun, self).__init__(name=name, target=self.main)
+    self.func = func
+    self.result = None
+    self.daemon = True
+    self.start()
+
+  def main(self):
+    self.result = wrap_async_func(self.func)
+
+  def get(self):
+    self.join()
+    return self.result
+
+
+def wrap_async_func(f):
+  try:
+    import better_exchook
+    better_exchook.install()
+    return f()
+  except Exception:
+    sys.excepthook(*sys.exc_info())
+    interrupt_main()
+
+
 def try_run(func, args=(), catch_exc=Exception, default=None):
   try:
     return func(*args)

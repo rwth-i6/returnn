@@ -249,18 +249,18 @@ class LayerBase(object):
       if not src_name == "none"]
     if d.get("loss", None) and "target" not in d:
       d["target"] = network.extern_data.default_target
-    if "n_out" not in d and d.get("target", None):
-      # Must be done here now because loss might be set to None later.
-      d["n_out"] = cls._guess_n_out_from_target_and_opt_loss(
-        network=network, target=d["target"], loss_class_name=d.get("loss", None))
-    d["loss"] = cls._make_loss(
-      class_name=d.pop("loss", None), opts=d.pop("loss_opts", None), network=network, get_layer=get_layer)
     if d.get("target"):
       if network.eval_flag:
         # Not resolving this in the dict, but call get_layer to make it available.
         assert isinstance(d["target"], str)
         if d["target"].startswith("layer:"):
           get_layer(d["target"][len("layer:"):])
+    if "n_out" not in d and d.get("target", None):
+      # Must be done here now because loss might be set to None later.
+      d["n_out"] = cls._guess_n_out_from_target_and_opt_loss(
+        network=network, target=d["target"], loss_class_name=d.get("loss", None))
+    d["loss"] = cls._make_loss(
+      class_name=d.pop("loss", None), opts=d.pop("loss_opts", None), network=network, get_layer=get_layer)
 
   @classmethod
   def _guess_n_out_from_target_and_opt_loss(cls, network, target, loss_class_name):
@@ -2649,6 +2649,53 @@ class SyntheticGradientLayer(_ConcatInputLayer):
   @classmethod
   def get_out_data_from_opts(cls, sources, name, **kwargs):
     return get_concat_sources_data_template(sources, name="%s_output" % name)
+
+
+class AllophoneStateIdxParserLayer(LayerBase):
+  """
+  This is very much Sprint/RASR specific.
+  We get allophone state indices and return (center, left_1, right_1, ..., state, boundary).
+  """
+  layer_class = "allophone_state_idx_parser"
+
+  def __init__(self, num_phones, num_states=3, context_len=1, **kwargs):
+    """
+    :param list[LayerBase] sources:
+    :param int num_phones: total number of phonemes
+    :param int num_states: number of HMM states
+    :param int context_len: left/right context len
+    """
+    super(AllophoneStateIdxParserLayer, self).__init__(**kwargs)
+    # See LmDataset.AllophoneState.from_index().
+    result = [None] * self.output.dim
+    code = self.sources[0].output.placeholder - 1
+    state = code % num_states
+    result[-2] = state
+    code //= num_states
+    boundary = code % 4
+    result[-1] = boundary
+    code //= 4
+    for i in reversed(range(-context_len, context_len + 1)):
+      phone_idx = code % (num_phones + 1)
+      code //= num_phones + 1
+      result_idx = abs(i) * 2
+      if i < 0:
+        result_idx -= 1
+      result[result_idx] = phone_idx
+    self.output.placeholder = tf.stack(result, axis=self.output.ndim - 1)
+    self.output.size_placeholder = self.sources[0].output.size_placeholder.copy()
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, context_len=1, n_out=None, **kwargs):
+    assert len(sources) == 1, "%s: We expect exactly one source layer." % name
+    dim = 3 + context_len * 2  # (center, left_1, right_1, ..., state, boundary)
+    if n_out is not None:
+      assert dim == n_out
+    return Data(
+      name="%s_output" % name,
+      shape=sources[0].output.shape,
+      dtype="int32", sparse=False, dim=n_out,
+      batch_dim_axis=sources[0].output.batch_dim_axis)
 
 
 class FramewiseStatisticsLayer(LayerBase):

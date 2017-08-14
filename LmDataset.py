@@ -6,7 +6,7 @@ from Dataset import DatasetSeq
 from CachedDataset2 import CachedDataset2
 import gzip
 import xml.etree.ElementTree as etree
-from Util import parse_orthography, parse_orthography_into_symbols, load_json, NumbersDict, BackendEngine
+from Util import parse_orthography, parse_orthography_into_symbols, load_json, BackendEngine, unicode
 from Log import log
 import numpy
 import time
@@ -351,6 +351,10 @@ class AllophoneState:
   _attrs = ["id", "context_history", "context_future", "boundary", "state"]
 
   def __init__(self, id=None, state=None):
+    """
+    :param str id: phone
+    :param int|None state:
+    """
     self.id = id
     self.state = state
 
@@ -376,6 +380,153 @@ class AllophoneState:
   def mark_final(self):
     self.boundary = self.boundary | 2
 
+  def phoneme(self, ctx_offset, out_of_context_id=None):
+    """
+
+    Phoneme::Id ContextPhonology::PhonemeInContext::phoneme(s16 pos) const {
+      if (pos == 0)
+        return phoneme_;
+      else if (pos > 0) {
+        if (u16(pos - 1) < context_.future.length())
+          return context_.future[pos - 1];
+        else
+          return Phoneme::term;
+      } else { verify(pos < 0);
+        if (u16(-1 - pos) < context_.history.length())
+          return context_.history[-1 - pos];
+        else
+          return Phoneme::term;
+      }
+    }
+
+    :param int ctx_offset: 0 for center, >0 for future, <0 for history
+    :param str|None out_of_context_id: what to return out of our context
+    :return: phone-id from the offset
+    :rtype: str
+    """
+    if ctx_offset == 0:
+      return self.id
+    if ctx_offset > 0:
+      idx = ctx_offset - 1
+      if idx >= len(self.context_future):
+        return out_of_context_id
+      return self.context_future[idx]
+    if ctx_offset < 0:
+      idx = -ctx_offset - 1
+      if idx >= len(self.context_history):
+        return out_of_context_id
+      return self.context_history[idx]
+    assert False
+
+  def set_phoneme(self, ctx_offset, phone_id):
+    """
+    :param int ctx_offset: 0 for center, >0 for future, <0 for history
+    :param str phone_id:
+    """
+    if ctx_offset == 0:
+      self.id = phone_id
+    elif ctx_offset > 0:
+      idx = ctx_offset - 1
+      assert idx == len(self.context_future)
+      self.context_future = self.context_future + (phone_id,)
+    elif ctx_offset < 0:
+      idx = -ctx_offset - 1
+      assert idx == len(self.context_history)
+      self.context_history = self.context_history + (phone_id,)
+
+  def phone_idx(self, ctx_offset, phone_idxs):
+    """
+    :param int ctx_offset: see self.phoneme()
+    :param dict[str,int] phone_idxs:
+    :rtype: int
+    """
+    phone = self.phoneme(ctx_offset=ctx_offset)
+    if phone is None:
+      return 0  # by definition in the Sprint C++ code: static const Id term = 0;
+    else:
+      return phone_idxs[phone]
+
+  def index(self, phone_idxs, num_states=3, context_length=1):
+    """
+    Original Sprint C++ code:
+
+        AllophoneStateAlphabet::Index AllophoneStateAlphabet::index(const AllophoneState &phone) const {
+          require(nStates_ && contextLength_);
+          require(phone.boundary < 4);
+          require(0 <= phone.state && phone.state < (s16)nStates_);
+          u32 result = 0;
+          for (s32 i = - contextLength_; i <= s32(contextLength_); ++i) {
+            result *= pi_->nPhonemes() + 1;
+            result += phone.phoneme(i);
+          }
+          result *= 4;
+          result += phone.boundary;
+          result *= nStates_;
+          result += phone.state;
+          ensure(result < nClasses_);
+          return result + 1;
+        }
+
+    :param dict[str,int] phone_idxs:
+    :param int num_states: how much state per allophone
+    :param int context_length: how much left/right context
+    :rtype: int
+    """
+    assert max(len(self.context_history), len(self.context_future)) <= context_length
+    assert 0 <= self.boundary < 4
+    assert 0 <= self.state < num_states
+    num_phones = max(phone_idxs.values()) + 1
+    result = 0
+    for i in range(-context_length, context_length + 1):
+      result *= num_phones + 1
+      result += self.phone_idx(ctx_offset=i, phone_idxs=phone_idxs)
+    result *= 4
+    result += self.boundary
+    result *= num_states
+    result += self.state
+    return result + 1
+
+  @classmethod
+  def from_index(cls, index, phone_ids, num_states=3, context_length=1):
+    """
+    Original Sprint C++ code:
+
+        AllophoneState AllophoneStateAlphabet::allophoneState(AllophoneStateAlphabet::Index in) const {
+          require(nStates_ && contextLength_);
+          require(in != Fsa::Epsilon);
+          require(in < nClasses_);
+          AllophoneState result;
+          Index code = in - 1;
+          result.state    = code % nStates_; code /= nStates_;
+          result.boundary = code % 4;        code /= 4;
+          for (s32 i = contextLength_; i >= - s32(contextLength_); --i) {
+            result.setPhoneme(i, code % (pi_->nPhonemes() + 1));
+            code /= pi_->nPhonemes() + 1;
+          }
+          ensure_(index(result) == in);
+          return result;
+        }
+
+    :param int index:
+    :param dict[int,str] phone_ids: reverse-map from self.index(). idx -> id
+    :param int num_states: how much state per allophone
+    :param int context_length: how much left/right context
+    :rtype: int
+    :rtype: AllophoneState
+    """
+    num_phones = max(phone_ids.keys()) + 1
+    code = index - 1
+    result = AllophoneState()
+    result.state = code % num_states
+    code //= num_states
+    result.boundary = code % 4
+    code //= 4
+    for i in reversed(range(-context_length, context_length + 1)):
+      phone_idx = code % (num_phones + 1)
+      code //= num_phones + 1
+      result.set_phoneme(ctx_offset=i, phone_id=phone_ids[phone_idx])
+    return result
+
   def __hash__(self):
     return hash(tuple([getattr(self, a) for a in self._attrs]))
 
@@ -396,8 +547,9 @@ class Lexicon:
     lex_file = open(filename, 'rb')
     if filename.endswith(".gz"):
       lex_file = gzip.GzipFile(fileobj=lex_file)
-    self.phonemes = {}
-    self.lemmas = {}
+    self.phoneme_list = []  # type: list[str]
+    self.phonemes = {}  # type: dict[str,dict[str]]  # phone -> {index, symbol, variation}
+    self.lemmas = {}  # type: dict[str,dict[str]]  # orth -> {orth, phons}
 
     context = iter(etree.iterparse(lex_file, events=('start', 'end')))
     _, root = next(context)  # get root element
@@ -410,12 +562,14 @@ class Lexicon:
         tree = tree[:-1]
         if elem.tag == "phoneme":
           symbol = elem.find("symbol").text.strip()  # should be unicode
+          assert isinstance(symbol, (str, unicode))
           if elem.find("variation") is not None:
             variation = elem.find("variation").text.strip()
           else:
             variation = "context"  # default
           assert symbol not in self.phonemes
           assert variation in ["context", "none"]
+          self.phoneme_list.append(symbol)
           self.phonemes[symbol] = {"index": len(self.phonemes), "symbol": symbol, "variation": variation}
           root.clear()  # free memory
         elif elem.tag == "phoneme-inventory":
@@ -656,7 +810,7 @@ class _TFKerasDataset(CachedDataset2):
   """
   Wraps around any dataset from tf.contrib.keras.datasets.
   See: https://www.tensorflow.org/versions/master/api_docs/python/tf/contrib/keras/datasets
-  TODO: Should maybe be moved to a separate file. (Only here because of tf.contrib.keras.datasets.reuters).  
+  TODO: Should maybe be moved to a separate file. (Only here because of tf.contrib.keras.datasets.reuters).
   """
   # TODO...
 
@@ -667,6 +821,265 @@ class _NltkCorpusReaderDataset(CachedDataset2):
   TODO: Should maybe be moved to a separate file, e.g. CorpusReaderDataset.py or so?
   """
   # TODO ...
+
+
+class TranslationDataset(CachedDataset2):
+  """
+  Based on the conventions by our team for translation datasets.
+  It gets a directory and expects these files:
+
+      source.dev(.gz)?
+      source.train(.gz)?
+      source.vocab.pkl
+      target.dev(.gz)?
+      target.train(.gz)?
+      target.vocab.pkl
+  """
+
+  MapToDataKeys = {"source": "data", "target": "classes"}  # just by our convention
+
+  def __init__(self, path, postfix, partition_epoch=None, **kwargs):
+    """
+    :param str path: the directory containing the files
+    :param str postfix: e.g. "train" or "dev". it will then search for "source." + postfix and "target." + postfix.
+    :param bool random_shuffle_epoch1: if True, will also randomly shuffle epoch 1. see self.init_seq_order().
+    :param int partition_epoch: if provided, will partition the dataset into multiple epochs
+    """
+    super(TranslationDataset, self).__init__(**kwargs)
+    self.path = path
+    self.postfix = postfix
+    self.partition_epoch = partition_epoch
+    from threading import Lock, Thread
+    self._lock = Lock()
+    self._partition_epoch_num_seqs = []
+    import os
+    assert os.path.isdir(path)
+    self._data_files = {data_key: self._get_data_file(prefix) for (prefix, data_key) in self.MapToDataKeys.items()}
+    self._data = {data_key: [] for data_key in self._data_files.keys()}  # type: dict[str,list[numpy.ndarray]]
+    self._data_len = None  # type: int|None
+    self._vocabs = {data_key: self._get_vocab(prefix) for (prefix, data_key) in self.MapToDataKeys.items()}
+    self.num_outputs = {k: [max(self._vocabs[k].values()) + 1, 1] for k in self._vocabs.keys()}  # all sparse
+    assert all([v1 <= 2 ** 31 for (k, (v1, v2)) in self.num_outputs.items()])  # we use int32
+    self.num_inputs = self.num_outputs["data"][0]
+    self._reversed_vocabs = {k: self._reverse_vocab(k) for k in self._vocabs.keys()}
+    self.labels = {k: self._get_label_list(k) for k in self._vocabs.keys()}
+    self._seq_order = None  # type: None|list[int]  # seq_idx -> line_nr
+    self._thread = Thread(name="%r reader" % self, target=self._thread_main)
+    self._thread.daemon = True
+    self._thread.start()
+
+  def _thread_main(self):
+    from Util import interrupt_main
+    try:
+      import better_exchook
+      better_exchook.install()
+      from Util import AsyncThreadRun
+
+      sources_async = AsyncThreadRun(
+        name="%r: read source data", func=lambda: self._read_data(self._data_files["data"]))
+      targets_async = AsyncThreadRun(
+        name="%r: read target data", func=lambda: self._read_data(self._data_files["classes"]))
+      sources = sources_async.get()
+      with self._lock:
+        self._data_len = len(sources)
+      targets = targets_async.get()
+      assert len(targets) == self._data_len, "len of source is %r != len of target %r" % (
+        self._data_len, len(targets))
+      for k, f in list(self._data_files.items()):
+        f.close()
+        self._data_files[k] = None
+      data_strs = {"data": sources, "classes": targets}
+      ChunkSize = 1000
+      i = 0
+      while i < self._data_len:
+        for k in ("data", "classes"):
+          vocab = self._vocabs[k]
+          data = [self._data_str_to_numpy(vocab, s) for s in data_strs[k][i:i + ChunkSize]]
+          with self._lock:
+            self._data[k].extend(data)
+        i += ChunkSize
+
+    except Exception:
+      sys.excepthook(*sys.exc_info())
+      interrupt_main()
+
+  def _get_data_file(self, prefix):
+    """
+    :param str prefix: e.g. "source" or "target"
+    :return: full filename
+    :rtype: io.FileIO
+    """
+    import os
+    filename = "%s/%s.%s" % (self.path, prefix, self.postfix)
+    if os.path.exists(filename):
+      return open(filename, "rb")
+    if os.path.exists(filename + ".gz"):
+      import gzip
+      return gzip.GzipFile(filename + ".gz", "rb")
+    raise Exception("Data file not found: %r (.gz)?" % filename)
+
+  def _get_vocab(self, prefix):
+    """
+    :param str prefix: e.g. "source" or "target"
+    :rtype: dict[str,int]
+    """
+    import os
+    filename = "%s/%s.vocab.pkl" % (self.path, prefix)
+    if not os.path.exists(filename):
+      raise Exception("Vocab file not found: %r" % filename)
+    import pickle
+    vocab = pickle.load(open(filename, "rb"))
+    assert isinstance(vocab, dict)
+    return vocab
+
+  def _reverse_vocab(self, data_key):
+    """
+    Note that there might be multiple items in the vocabulary (e.g. "<S>" and "</S>")
+    which map to the same label index.
+    We sort the list by lexical order and the last entry for a particular label index is used ("<S>" in that example).
+
+    :param str data_key: e.g. "data" or "classes"
+    :rtype: dict[int,str]
+    """
+    return {v: k for (k, v) in sorted(self._vocabs[data_key].items())}
+
+  def _get_label_list(self, data_key):
+    """
+    :param str data_key: e.g. "data" or "classes"
+    :return: list of len num labels
+    :rtype: list[str]
+    """
+    reversed_vocab = self._reversed_vocabs[data_key]
+    assert isinstance(reversed_vocab, dict)
+    num_labels = self.num_outputs[data_key][0]
+    return list(map(reversed_vocab.__getitem__, range(num_labels)))
+
+  @staticmethod
+  def _read_data(f):
+    """
+    :param io.FileIO f: file
+    """
+    data = []
+    assert isinstance(data, list)
+    while True:
+      # Read in chunks. This can speed it up.
+      ls = f.readlines(10000)
+      data.extend([l.decode("utf8").strip() for l in ls])
+      if not ls:
+        break
+    return data
+
+  @staticmethod
+  def _data_str_to_numpy(vocab, s):
+    """
+    :param dict[str,int] vocab:
+    :param str s:
+    :rtype: numpy.ndarray
+    """
+    words = s.split()
+    return numpy.array(list(map(vocab.__getitem__, words)), dtype=numpy.int32)
+
+  def _get_data(self, key, line_nr):
+    """
+    :param str key: "data" or "classes"
+    :param int line_nr:
+    :return: 1D array
+    :rtype: numpy.ndarray
+    """
+    import time
+    last_len = None
+    while True:
+      with self._lock:
+        if self._data_len is not None:
+          assert line_nr <= self._data_len
+        cur_len = len(self._data[key])
+        if line_nr < cur_len:
+          return self._data[key][line_nr]
+      if cur_len != last_len:
+        print("%r: waiting for %r, line %i (%i loaded so far)..." % (self, key, line_nr, cur_len), file=log.v3)
+      last_len = cur_len
+      time.sleep(1)
+
+  def _get_data_len(self):
+    """
+    :rtype: num seqs of the whole underlying data
+    :rtype: int
+    """
+    import time
+    t = 0
+    while True:
+      with self._lock:
+        if self._data_len is not None:
+          return self._data_len
+      if t == 0:
+        print("%r: waiting for data length info..." % (self,), file=log.v3)
+      time.sleep(1)
+      t += 1
+
+  def _get_line_nr(self, seq_idx):
+    """
+    :param int seq_idx:
+    :return: line-nr, i.e. index in any of the lists `self.data[key]`
+    :rtype: int
+    """
+    if self.partition_epoch:
+      epoch = self.epoch or 1
+      assert self._partition_epoch_num_seqs
+      for n in self._partition_epoch_num_seqs[:(epoch - 1) % self.partition_epoch]:
+        seq_idx += n
+    if self._seq_order is None:
+      return seq_idx
+    return self._seq_order[seq_idx]
+
+  def is_data_sparse(self, key):
+    return True  # all is sparse
+
+  def get_data_dtype(self, key):
+    return "int32"  # sparse -> label idx
+
+  def init_seq_order(self, epoch=None, seq_list=None):
+    """
+    If random_shuffle_epoch1, for epoch 1 with "random" ordering, we leave the given order as is.
+    Otherwise, this is mostly the default behavior.
+
+    :param int|None epoch:
+    :param list[str] | None seq_list: In case we want to set a predefined order.
+    """
+    super(TranslationDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+    if not epoch:
+      epoch = 1
+    if self.partition_epoch:
+      epoch = (epoch - 1) // self.partition_epoch + 1  # count starting from epoch 1
+    if seq_list is not None:
+      self._seq_order = list(seq_list)
+      self._num_seqs = len(self._seq_order)
+    else:
+      num_seqs = self._get_data_len()
+      self._seq_order = self.get_seq_order_for_epoch(
+        epoch=epoch, num_seqs=num_seqs, get_seq_len=lambda i: len(self._get_data(key="data", line_nr=i)))
+      self._num_seqs = num_seqs
+    if self.partition_epoch:
+      self._partition_epoch_num_seqs = [self._num_seqs // self.partition_epoch] * self.partition_epoch
+      i = 0
+      while sum(self._partition_epoch_num_seqs) < self._num_seqs:
+        self._partition_epoch_num_seqs[i] += 1
+        i += 1
+        assert i < self.partition_epoch
+      assert sum(self._partition_epoch_num_seqs) == self._num_seqs
+      self._num_seqs = self._partition_epoch_num_seqs[(self.epoch - 1) % self.partition_epoch]
+
+  def _collect_single_seq(self, seq_idx):
+    if seq_idx >= self._num_seqs:
+      return None
+    line_nr = self._get_line_nr(seq_idx)
+    features = self._get_data(key="data", line_nr=line_nr)
+    targets = self._get_data(key="classes", line_nr=line_nr)
+    assert features is not None and targets is not None
+    return DatasetSeq(
+      seq_idx=seq_idx,
+      seq_tag="line-%i" % line_nr,
+      features=features,
+      targets=targets)
 
 
 def _main(argv):

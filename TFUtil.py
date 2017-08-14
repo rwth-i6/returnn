@@ -2419,6 +2419,9 @@ class CustomGradient(object):
     :return: loss but with the gradient for x
     :rtype: tf.Tensor
     """
+    loss = tf.convert_to_tensor(loss)
+    x = tf.convert_to_tensor(x)
+    grad_x = tf.convert_to_tensor(grad_x)
     x.set_shape(grad_x.get_shape())
     grad_x.set_shape(x.get_shape())
     generic_loss_and_error_signal = self.register_generic_loss_and_error_signal()

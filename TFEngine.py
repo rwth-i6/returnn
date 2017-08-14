@@ -960,10 +960,12 @@ class Engine(object):
     cache.attrs['numSeqs'] = 0
     if target in data.labels:
       hdf5_strings(cache, 'labels', data.labels[target])
+    else:
+      cache.create_dataset('labels', (0,), dtype="S5")
 
     datasets = {}  # type: dict[str,h5py.Dataset]
     tags = []  # type: list[str]
-    seq_lengths = cache.create_dataset("seqLengths", (0,), dtype='i', maxshape=(None,))
+    seq_lengths = cache.create_dataset("seqLengths", (0,2), dtype='i', maxshape=(None,2))
 
     def insert_h5_inputs(name, raw_data):
       """
@@ -997,7 +999,7 @@ class Engine(object):
       assert n_batch == inputs.shape[0]
 
       seqlen_offset = seq_lengths.shape[0]
-      seq_lengths.resize((seqlen_offset + n_batch,))
+      seq_lengths.resize(seqlen_offset + n_batch, axis=0)
       for i in range(n_batch):
         tags.append(seq_tag[i])
         seq_lengths[seqlen_offset + i] = seq_len[i]
@@ -1018,7 +1020,10 @@ class Engine(object):
       extra_fetches_callback=extra_fetches_cb)
     forwarder.run(report_prefix=self.get_epoch_str() + " forward")
 
-    hdf5_strings(cache, 'seqTags', tags)
+    max_tag_len = max([len(d) for d in tags])
+    cache.create_dataset('seqTags', shape=(len(tags),), dtype="S%i" % (max_tag_len + 1))
+    for i, tag in enumerate(tags):
+      cache['seqTags'][i] = numpy.array(tag, dtype="S%i" % (max_tag_len + 1))
     cache.close()
 
   def analyze(self, data, statistics):

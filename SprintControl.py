@@ -341,7 +341,7 @@ class PythonControl:
 
     See SprintErrorSignals.SprintSubprocessInstance.get_loss_and_error_signal().
     """
-    assert isinstance(seg_len, (int, long))
+    assert isinstance(seg_len, (int, long, numpy.int32))
     assert seg_len > 0
     assert posteriors.ndim == 2
     assert posteriors.shape[0] == seg_len
