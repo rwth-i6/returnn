@@ -324,6 +324,7 @@ class TFNetwork(object):
           summarize=10, name="debug_print_layer_output_shape")
     assert layer.output
     assert layer.output.placeholder is not None
+    layer.output.placeholder.set_shape(layer.output.batch_shape)
     assert layer.output.size_placeholder is not None
     self.layers[name] = layer
     if layer.recurrent:

@@ -2655,6 +2655,7 @@ class AllophoneStateIdxParserLayer(LayerBase):
   """
   This is very much Sprint/RASR specific.
   We get allophone state indices and return (center, left_1, right_1, ..., state, boundary).
+  The index is by the (new) state model encoding (StateModel.hh), not by the classic one (ClassicStateModel.hh).
   """
   layer_class = "allophone_state_idx_parser"
 
@@ -2669,11 +2670,12 @@ class AllophoneStateIdxParserLayer(LayerBase):
     # See LmDataset.AllophoneState.from_index().
     result = [None] * self.output.dim
     code = self.sources[0].output.placeholder - 1
+    mask = tf.cast(tf.greater_equal(code, 0), code.dtype)
     state = code % num_states
-    result[-2] = state
+    result[-2] = state * mask
     code //= num_states
     boundary = code % 4
-    result[-1] = boundary
+    result[-1] = boundary * mask
     code //= 4
     for i in reversed(range(-context_len, context_len + 1)):
       phone_idx = code % (num_phones + 1)
@@ -2681,8 +2683,8 @@ class AllophoneStateIdxParserLayer(LayerBase):
       result_idx = abs(i) * 2
       if i < 0:
         result_idx -= 1
-      result[result_idx] = phone_idx
-    self.output.placeholder = tf.stack(result, axis=self.output.ndim - 1)
+      result[result_idx] = phone_idx * mask
+    self.output.placeholder = tf.stack(result, axis=self.output.batch_ndim - 1)
     self.output.size_placeholder = self.sources[0].output.size_placeholder.copy()
 
   @classmethod
@@ -2693,8 +2695,8 @@ class AllophoneStateIdxParserLayer(LayerBase):
       assert dim == n_out
     return Data(
       name="%s_output" % name,
-      shape=sources[0].output.shape,
-      dtype="int32", sparse=False, dim=n_out,
+      shape=sources[0].output.shape + (dim,),
+      dtype="int32", sparse=False, dim=dim,
       batch_dim_axis=sources[0].output.batch_dim_axis)
 
 

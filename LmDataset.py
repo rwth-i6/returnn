@@ -374,6 +374,13 @@ class AllophoneState:
   def __repr__(self):
     return self.format()
 
+  def copy(self):
+    a = AllophoneState(id=self.id, state=self.state)
+    for attr in self._attrs:
+      if getattr(self, attr):
+        setattr(a, attr, getattr(self, attr))
+    return a
+
   def mark_initial(self):
     self.boundary = self.boundary | 1
 
@@ -489,7 +496,7 @@ class AllophoneState:
   @classmethod
   def from_index(cls, index, phone_ids, num_states=3, context_length=1):
     """
-    Original Sprint C++ code:
+    Original Sprint C++ code, via Am/StateModel.cc:
 
         AllophoneState AllophoneStateAlphabet::allophoneState(AllophoneStateAlphabet::Index in) const {
           require(nStates_ && contextLength_);
@@ -506,6 +513,10 @@ class AllophoneState:
           ensure_(index(result) == in);
           return result;
         }
+
+    Note that there is also AllophoneStateAlphabet::allophoneState, via Am/ClassicStateModel.cc,
+    which unfortunately uses a different encoding.
+    See :func:`from_classic_index`.
 
     :param int index:
     :param dict[int,str] phone_ids: reverse-map from self.index(). idx -> id
@@ -526,6 +537,35 @@ class AllophoneState:
       code //= num_phones + 1
       result.set_phoneme(ctx_offset=i, phone_id=phone_ids[phone_idx])
     return result
+
+  @classmethod
+  def from_classic_index(cls, index, allophones, max_states=6):
+    """
+    Via Sprint C++ Archiver.cc:getStateInfo():
+
+        const u32 max_states = 6; // TODO: should be increased for non-speech
+        for (state = 0; state < max_states; ++state) {
+            if (emission >= allophones_.size())
+            emission -= (1<<26);
+            else break;
+        }
+
+    :param int index:
+    :param int max_states:
+    :param dict[int,AllophoneState] allophones:
+    :rtype: AllophoneState
+    """
+    emission = index
+    state = 0
+    while state < max_states:
+      if emission >= (1 << 26):
+        emission -= (1 << 26)
+        state += 1
+      else:
+        break
+    a = allophones[emission].copy()
+    a.state = state
+    return a
 
   def __hash__(self):
     return hash(tuple([getattr(self, a) for a in self._attrs]))
