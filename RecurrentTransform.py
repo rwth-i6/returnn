@@ -785,8 +785,9 @@ class AttentionSegment(AttentionBase):
     self.b_att_in = self.create_bias(self.layer.unit.n_in, 'b_att_in')
     self.epoch = self.add_input(T.cast(self.layer.network.epoch,'float32'),'epoch')
     if not self.layer.attrs['n_out'] == n_tmp:
-      self.W_att_re = self.create_weights(self.layer.attrs['n_out'], n_tmp, "W_att_re")
-      self.b_att_re = self.create_bias(n_tmp, "b_att_re")
+      if self.layer.attrs['attention_alnpts']:
+        self.W_att_re = self.create_weights(self.layer.attrs['n_out'], n_tmp, "W_att_re")
+        self.b_att_re = self.create_bias(n_tmp, "b_att_re")
       self.W_att_dec = self.create_weights(self.layer.attrs['n_out'], n_tmp, "W_att_dec")
       self.b_att_dec = self.create_bias(n_tmp, "b_att_dec")
 
@@ -796,12 +797,12 @@ class AttentionSegment(AttentionBase):
       h_att = T.tanh(T.dot(B,self.W_att_bs) + self.b_att_bs)
     else:
       h_att = B
-    self.I_dec = self.add_input(T.cast(self.base[0].output_index(),'float32'), 'I_dec')
-    self.i_f = self.add_input(T.cast(self.base[0].output_index(),'float32').dimshuffle(0,1,'x').repeat(h_att.shape[2],axis=2),'i_f')
+    self.I_dec = self.add_input(T.cast(self.base[0].output_index()[::self.layer.attrs['direction']],'float32'), 'I_dec')
+    self.i_f = self.add_input(T.cast(self.base[0].output_index()[::self.layer.attrs['direction']],'float32').dimshuffle(0,1,'x').repeat(h_att.shape[2],axis=2),'i_f')
     if not self.layer.eval_flag:
       self.inv_att = self.add_input(T.cast(self.layer.aligner.attention.dimshuffle(2,1,0)[::self.layer.attrs['direction']].dimshuffle(2,1,0),'float32'),'inv_att')
       self.red_ind = self.add_input(T.cast(self.layer.aligner.reduced_index,'float32'),'red_ind')
-      self.i_f = self.add_input(T.cast(self.base[0].output_index(),'float32').dimshuffle(0,1,'x').repeat(h_att.shape[2],axis=2),'i_f')
+      self.i_f = self.add_input(T.cast(self.base[0].output_index()[::self.layer.attrs['direction']],'float32').dimshuffle(0,1,'x').repeat(h_att.shape[2],axis=2),'i_f')
       self.index_att = self.add_input(self.make_index(self.inv_att,self.I_dec),'index_att')#NTB
     if not self.base[0].attrs['n_out'] == n_tmp:
       h_att = h_att - (h_att * self.i_f).sum(axis=0,keepdims=True) / T.sum(self.i_f,axis=0,keepdims=True)
@@ -823,16 +824,17 @@ class AttentionSegment(AttentionBase):
     att_epoch = numpy.float32(self.layer.attrs['attention_epoch'])
     att_step = numpy.float32(self.layer.attrs['attention_segstep'])
     att_offset = numpy.float32(self.layer.attrs['attention_offset'])
-    temperature = numpy.float32(0.0)
+    temperature = T.cast(T.cast(self.epoch/att_epoch,'int32') * att_step + att_offset,'float32')
 
     if method == "epoch":
-      temperature = T.minimum(T.cast(T.cast(self.epoch/att_epoch,'int32') * att_step + att_offset,'float32'),numpy.float32(1.0))
+      temperature = T.minimum(temperature,numpy.float32(1.0))
     elif method == "min_dist":
       assert min_dist is not None
-      temperature = T.maximum(T.exp(-min_dist),numpy.float32(0.9))
+      temperature = T.maximum(T.exp(-min_dist),T.minimum(temperature,numpy.float32(1.0)))
+      #temperature = theano.ifelse.ifelse(self.epoch > numpy.float32(20), T.ones_like(min_dist), temperature)
 
     return temperature
-  
+
   def attend(self, y_p):
     inp, updates = 0, {}
     n = T.cast(self.n[0],'int32')
@@ -862,7 +864,7 @@ class AttentionSegment(AttentionBase):
         att_w1 = self.softmax(e1, ind_curr)
         att_w2 = self.softmax(e1,self.I_dec)
         att_w = (numpy.float32(1) - temperature) * att_w1 + temperature * att_w2
-        
+
       else:
         if self.layer.attrs['n_out'] == self.layer.attrs['attention_template']:
           dis_curr = y_p
