@@ -1106,7 +1106,7 @@ class ConstantLayer(LayerBase):
   @classmethod
   def get_out_data_from_opts(cls, name, dtype="float32", **kwargs):
     return Data(
-      name="%s_const" % name, shape=(1,), batch_dim_axis=0, time_dim_axis=None, dtype=dtype)
+      name="%s_const" % name, shape=(), batch_dim_axis=0, time_dim_axis=None, dtype=dtype)
 
 
 class GatingLayer(_ConcatInputLayer):
