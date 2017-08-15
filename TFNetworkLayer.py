@@ -3180,7 +3180,10 @@ class L1Loss(Loss):
   def get_value(self):
     assert not self.target.sparse, "sparse target values are not yet supported"
     with tf.name_scope("loss_l1"):
-      return self.reduce_func(tf.abs(self.target_flat - self.output_flat))
+      if self.output_before_softmax_flat is not None:
+        return tf.reduce_mean(tf.abs(self.target_flat - self.output_before_softmax_flat))
+      else:
+        return tf.reduce_mean(tf.abs(self.target_flat - self.output_flat))
 
 
 class MeanSquaredError(Loss):
@@ -3194,7 +3197,10 @@ class MeanSquaredError(Loss):
     """
     assert not self.target.sparse, "sparse is not supported yet"
     with tf.name_scope("loss_mse"):
-      out = tf.reduce_mean(tf.squared_difference(self.output_flat, self.target_flat))
+      if self.output_before_softmax_flat is not None:
+        out = tf.reduce_mean(tf.squared_difference(self.output_before_softmax_flat, self.target_flat))
+      else:
+        out = tf.reduce_mean(tf.squared_difference(self.output_flat, self.target_flat))
       return out
 
 
