@@ -29,7 +29,7 @@ class OutputLayer(Layer):
                compute_distortions=False,
                softmax_smoothing=1.0, grad_clip_z=None, grad_discard_out_of_bound_z=None, normalize_length=False,
                exclude_labels=[],
-               apply_softmax=True,
+               apply_softmax=True, batchwise_softmax=False,
                substract_prior_from_output=False,
                input_output_similarity=None,
                input_output_similarity_scale=1,
@@ -250,6 +250,14 @@ class OutputLayer(Layer):
       from ActivationFunctions import strtoact_single_joined
       act_f = strtoact_single_joined(activation)
       self.p_y_given_x = act_f(self.z)
+    elif batchwise_softmax:
+      n_frames   = self.z.shape[0]
+      n_batches  = self.z.shape[1]
+      n_features = self.z.shape[2]
+      y_m = T.switch(T.eq(self.index.reshape((n_frames, n_batches, 1)), 0), float('-inf'), self.z)
+      time_major = y_m.dimshuffle(1, 0, 2).reshape((n_batches, n_frames * n_features))
+      softmax = T.nnet.softmax(time_major)
+      self.p_y_given_x = softmax.reshape((n_batches, n_frames, n_features)).dimshuffle(1, 0, 2)
     else:  # standard case
       self.p_y_given_x = T.reshape(T.nnet.softmax(self.y_m), self.z.shape)
     if self.loss == "priori":
