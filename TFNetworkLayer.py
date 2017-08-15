@@ -2799,7 +2799,7 @@ class FramewiseStatisticsLayer(LayerBase):
   @classmethod
   def get_out_data_from_opts(cls, **kwargs):
     # n_out=1 is a workaround for now. Our output should not be used. We have none.
-    return super(FramewiseStatisticsLayer, cls).get_out_data_from_opts(n_out=1, **kwargs)
+    return Data(name="framewise_statistics_dummy_output", shape=(), dtype="int32", batch_dim_axis=None)
 
 
 class Loss(object):
