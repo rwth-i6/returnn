@@ -1294,6 +1294,9 @@ def load_txt_vector(filename):
   Expect line-based text encoding in file.
   We also support Sprint XML format, which has some additional xml header and footer,
   which we will just strip away.
+
+  :param str filename:
+  :rtype: list[float]
   """
   return [float(l) for l in open(filename).read().splitlines() if l and not l.startswith("<")]
 

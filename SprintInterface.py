@@ -51,6 +51,159 @@ sprintDataset = None; """ :type: SprintDatasetBase """
 engine = None; """ :type: TFEngine.Engine|Engine """
 
 
+# <editor-fold desc="generic init">
+# Generic interface, should be compatible to any PythonControl-based, and PythonTrainer. {
+
+def init(name=None, sprint_unit=None, **kwargs):
+  if name is None:
+    init_python_trainer(**kwargs)
+    return None
+  elif name == "Sprint.PythonControl":
+    # Any PythonControl interface.
+    if sprint_unit == "PythonFeatureScorer":
+      return PythonFeatureScorer(**kwargs)
+    else:
+      raise Exception(
+        "SprintInterface: Did not expect init() PythonControl with sprint_unit=%r, kwargs=%r",
+        (sprint_unit, kwargs))
+  else:
+    raise Exception(
+      "SprintInterface: Did not expect init() with name=%r, sprint_unit=%r, kwargs=%r",
+      (name, sprint_unit, kwargs))
+
+# }
+# </editor-fold>
+
+
+# <editor-fold desc="PythonFeatureScorer">
+# Start Sprint PythonFeatureScorer interface. {
+
+class PythonFeatureScorer(object):
+  def __init__(self, callback, version_number, config, **kwargs):
+    """
+    :param (str,)->object callback:
+    :param int version_number:
+    :param str config:
+    """
+    print("SprintInterface: PythonFeatureScorer: version %i, config %r, other %r" % (version_number, config, kwargs))
+    self.input_dim = None
+    self.output_dim = None
+    self.callback = callback
+    self.config = {key: value for (key, value) in [s.split(":", 1) for s in config.split(",") if s]}
+    self.priors = None  # type: None|numpy.ndarray
+    self.segment_count = 0
+    self.features = []  # type: list[numpy.ndarray]
+    self.scores = None  # type: None|numpy.ndarray
+    self._load_priors()
+    self._prepare()
+
+  def _prepare(self):
+    epoch = self.config.get("epoch", None)
+    if epoch is not None:
+      epoch = int(epoch)
+      assert epoch >= 1
+
+    # see init_python_trainer()
+    configfile = self.config.get("configfile", None)
+    assert self.config.get("action", None) in (None, "forward"), "invalid action: %r" % self.config["action"]
+
+    initBase(targetMode="forward", configfile=configfile, epoch=epoch)
+
+  def _load_priors(self):
+    scale = float(self.config["prior_scale"])
+    if not scale:
+      return
+    filename = self.config["prior_file"]
+    # We expect a filename to the priors, stored as txt, in +log space.
+    assert isinstance(filename, str)
+    assert os.path.exists(filename)
+    from Util import load_txt_vector
+    prior = load_txt_vector(filename)  # +log space
+    self.priors = -numpy.array(prior, dtype="float32") * numpy.float32(scale)  # -log space
+
+  def init(self, input_dim, output_dim):
+    """
+    :param int input_dim:
+    :param int output_dim: number of emission classes
+    """
+    self.input_dim = input_dim
+    self.output_dim = output_dim
+    if self.priors is not None:
+      assert self.priors.shape == (self.output_dim,), "dim missmatch: %i != %i" % (self.priors.shape, self.output_dim)
+
+    # see init_python_trainer()
+    global InputDim, OutputDim
+    InputDim = input_dim
+    OutputDim = output_dim
+    sprintDataset.setDimensions(self.input_dim, self.output_dim)
+    sprintDataset.initialize()
+
+    prepareForwarding()
+
+    global startTime
+    startTime = time.time()
+
+  def exit(self):
+    print("SprintInterface: PythonFeatureScorer: exit()")
+
+  def get_feature_buffer_size(self):
+    """
+    :return: -1 -> no limit
+    """
+    return -1
+
+  def add_feature(self, feature, time):
+    """
+    :param numpy.ndarray feature: shape (input_dim,)
+    :param int time:
+    """
+    assert time == len(self.features)
+    assert feature.shape == (self.input_dim,)
+    self.features.append(feature)
+
+  def reset(self, num_frames):
+    """
+    Called when we shall flush any buffers.
+
+    :param int num_frames:
+    """
+    if num_frames > 0:
+      self.segment_count += 1
+    assert num_frames == len(self.features)
+    del self.features[:]
+    self.scores = None
+
+  def compute(self, num_frames):  # all the features which we received so far should be evaluated
+    """
+    All the features which we received so far should be evaluated.
+
+    :param int num_frames:
+    """
+    assert 0 < num_frames == len(self.features)
+    posteriors = forward(
+      segmentName="unknown-seq-name-%i" % self.segment_count,
+      features=numpy.stack(self.features, axis=1))
+    assert posteriors.shape == (self.output_dim, num_frames)
+    scores = -numpy.log(posteriors)  # transfer to -log space
+    if self.priors is not None:
+      scores -= numpy.expand_dims(self.priors, axis=1)
+    # We must return in -log space.
+    self.scores = posteriors
+
+  def get_scores(self, time):
+    """
+    :param int time:
+    :return: shape (output_dim,)
+    :rtype: numpy.ndarray
+    """
+    # print("get scores, time", time, "max_frames", self.scores.shape[1])
+    return self.scores[:, time]
+
+# }
+# </editor-fold>
+
+
+# <editor-fold desc="PythonSegmentOrder">
 # Start Sprint PythonSegmentOrder interface. {
 
 def getSegmentList(corpusName, segmentList, **kwargs):
@@ -117,11 +270,13 @@ def getSegmentList(corpusName, segmentList, **kwargs):
   sprintDataset.finalizeSprint()
 
 # End Sprint PythonSegmentOrder interface. }
+# </editor-fold>
 
 
+# <editor-fold desc="PythonTrainer">
 # Start Sprint PythonTrainer interface. {
 
-def init(inputDim, outputDim, config, targetMode, **kwargs):
+def init_python_trainer(inputDim, outputDim, config, targetMode, **kwargs):
   """
   Called by Sprint when it initializes the PythonTrainer.
   Set trainer = python-trainer in Sprint to enable.
@@ -200,7 +355,7 @@ def exit():
   if startTime:
     print("SprintInterface[pid %i]: elapsed total time: %f" % (os.getpid(), time.time() - startTime), file=log.v3)
   else:
-    print("SprintInterface[pid %i]: finished (unknown start time)", file=log.v3)
+    print("SprintInterface[pid %i]: finished (unknown start time)" % os.getpid(), file=log.v3)
 
 
 def feedInput(features, weights=None, segmentName=None):
@@ -271,6 +426,7 @@ def feedInputForwarding(features, weights=None, segmentName=None):
   return feedInput(features, weights=weights, segmentName=segmentName)
 
 # End Sprint PythonTrainer interface. }
+# </editor-fold>
 
 
 def dumpFlags():
