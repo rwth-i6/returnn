@@ -1162,15 +1162,15 @@ class NumbersDict:
            self.__class__.__name__, self.dict, self.value)
 
 
-def collect_class_init_kwargs(cls, with_default=False):
+def collect_class_init_kwargs(cls, only_with_default=False):
   """
   :param type cls: class, where it assumes that kwargs are passed on to base classes
-  :param bool with_default: if given will only return the kwargs with default values
+  :param bool only_with_default: if given will only return the kwargs with default values
   :return: set if not with_default, otherwise the dict to the default values
   :rtype: list[str] | dict[str]
   """
   from collections import OrderedDict
-  if with_default:
+  if only_with_default:
     kwargs = OrderedDict()
   else:
     kwargs = []
@@ -1184,7 +1184,7 @@ def collect_class_init_kwargs(cls, with_default=False):
       continue
     arg_spec = getargspec(cls_.__init__)
     args = arg_spec.args[1:]  # first arg is self, ignore
-    if with_default:
+    if only_with_default:
       assert len(arg_spec.defaults) <= len(args)
       args = args[len(args) - len(arg_spec.defaults):]
       assert len(arg_spec.defaults) == len(args), arg_spec
@@ -1203,13 +1203,31 @@ def collect_mandatory_class_init_kwargs(cls):
   :return: list of kwargs which have no default, i.e. which must be provided
   :rtype: list[str]
   """
-  all_kwargs = collect_class_init_kwargs(cls, with_default=False)
-  default_kwargs = collect_class_init_kwargs(cls, with_default=True)
+  all_kwargs = collect_class_init_kwargs(cls, only_with_default=False)
+  default_kwargs = collect_class_init_kwargs(cls, only_with_default=True)
   mandatory_kwargs = []
   for arg in all_kwargs:
     if arg not in default_kwargs:
       mandatory_kwargs.append(arg)
   return mandatory_kwargs
+
+
+def help_on_type_error_wrong_args(cls, kwargs):
+  """
+  :param type cls:
+  :param list[str] kwargs:
+  """
+  mandatory_args = collect_mandatory_class_init_kwargs(cls)
+  for arg in kwargs:
+    if arg in mandatory_args:
+      mandatory_args.remove(arg)
+  all_kwargs = collect_class_init_kwargs(cls)
+  unknown_args = []
+  for arg in kwargs:
+    if arg not in all_kwargs:
+      unknown_args.append(arg)
+  if mandatory_args or unknown_args:
+    print("Args mismatch? Missing are %r, unknowns are %r." % (mandatory_args, unknown_args))
 
 
 def custom_exec(source, source_filename, user_ns, user_global_ns):

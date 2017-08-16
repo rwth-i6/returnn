@@ -292,7 +292,7 @@ class TFNetwork(object):
     :param str name:
     :param (()->LayerBase)|LayerBase layer_class:
     """
-    from Util import collect_mandatory_class_init_kwargs
+    from Util import help_on_type_error_wrong_args
     layer_desc = layer_desc.copy()
     assert "name" not in layer_desc
     assert "network" not in layer_desc
@@ -303,17 +303,13 @@ class TFNetwork(object):
     debug_print_layer_output_sizes = self._config and self._config.bool("debug_print_layer_output_sizes", False)
     debug_print_layer_output_shape = self._config and self._config.bool("debug_print_layer_output_shape", False)
     with reuse_name_scope(layer_class.cls_get_tf_scope_name(name)):
-      output = layer_class.get_out_data_from_opts(**layer_desc)
-      if debug_print_layer_output_template:
-        print("layer %r output: %r" % (name, output))
       try:
+        output = layer_class.get_out_data_from_opts(**layer_desc)
+        if debug_print_layer_output_template:
+          print("layer %r output: %r" % (name, output))
         layer = layer_class(output=output, **layer_desc)
       except TypeError:
-        mandatory_args = collect_mandatory_class_init_kwargs(layer_class)
-        for arg in layer_desc.keys():
-          if arg in mandatory_args:
-            mandatory_args.remove(arg)
-        print("Maybe missing some args? Probably you are missing these:", mandatory_args, file=log.v1)
+        help_on_type_error_wrong_args(cls=layer_class, kwargs=list(layer_desc.keys()))
         raise
       layer.post_init()
       if debug_print_layer_output_sizes:
