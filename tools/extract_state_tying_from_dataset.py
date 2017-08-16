@@ -79,12 +79,13 @@ class OrthHandler:
 
   allo_add_all = False  # only via lexicon
 
-  def __init__(self, lexicon, si_label=None, allo_num_states=3, allo_context_len=1):
+  def __init__(self, lexicon, si_label=None, allo_num_states=3, allo_context_len=1, allow_ci_in_words=True):
     """
     :param Lexicon lexicon:
     :param int si_label:
     :param int allo_num_states:
     :param int allo_context_len:
+    :param bool allow_ci_in_words:
     """
     self.lexicon = lexicon
     self.phonemes = sorted(self.lexicon.phonemes.keys(), key=lambda s: self.lexicon.phonemes[s]["index"])
@@ -106,6 +107,10 @@ class OrthHandler:
         self.phon_to_possible_ctx_via_lex[-1][phone].update(self.word_boundary_phones[1])
       if "" in self.phon_to_possible_ctx_via_lex[1][phone]:
         self.phon_to_possible_ctx_via_lex[1][phone].update(self.word_boundary_phones[-1])
+    if allow_ci_in_words:
+      for phone in self.lexicon.phoneme_list:
+        self.phon_to_possible_ctx_via_lex[-1][phone].add("")
+        self.phon_to_possible_ctx_via_lex[1][phone].add("")
     self.si_lemma = self.lexicon.lemmas["[SILENCE]"]
     self.si_phone = self.si_lemma["phons"][0]["phon"]  # type: str
     self.si_label = si_label

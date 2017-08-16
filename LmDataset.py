@@ -451,28 +451,12 @@ class AllophoneState:
     if phone is None:
       return 0  # by definition in the Sprint C++ code: static const Id term = 0;
     else:
-      return phone_idxs[phone]
+      return phone_idxs[phone] + 1
 
   def index(self, phone_idxs, num_states=3, context_length=1):
     """
-    Original Sprint C++ code:
-
-        AllophoneStateAlphabet::Index AllophoneStateAlphabet::index(const AllophoneState &phone) const {
-          require(nStates_ && contextLength_);
-          require(phone.boundary < 4);
-          require(0 <= phone.state && phone.state < (s16)nStates_);
-          u32 result = 0;
-          for (s32 i = - contextLength_; i <= s32(contextLength_); ++i) {
-            result *= pi_->nPhonemes() + 1;
-            result += phone.phoneme(i);
-          }
-          result *= 4;
-          result += phone.boundary;
-          result *= nStates_;
-          result += phone.state;
-          ensure(result < nClasses_);
-          return result + 1;
-        }
+    See self.from_index() for the inverse function.
+    And see Sprint NoStateTyingDense::classify().
 
     :param dict[str,int] phone_idxs:
     :param int num_states: how much state per allophone
@@ -483,35 +467,46 @@ class AllophoneState:
     assert 0 <= self.boundary < 4
     assert 0 <= self.state < num_states
     num_phones = max(phone_idxs.values()) + 1
+    num_phone_classes = num_phones + 1  # 0 is the special no-context symbol
     result = 0
-    for i in range(-context_length, context_length + 1):
-      result *= num_phones + 1
-      result += self.phone_idx(ctx_offset=i, phone_idxs=phone_idxs)
-    result *= 4
-    result += self.boundary
+    for i in range(2 * context_length + 1):
+      pos = i // 2
+      if i % 2 == 1:
+        pos = -pos - 1
+      result *= num_phone_classes
+      result += self.phone_idx(ctx_offset=pos, phone_idxs=phone_idxs)
     result *= num_states
     result += self.state
-    return result + 1
+    result *= 4
+    result += self.boundary
+    return result
 
   @classmethod
   def from_index(cls, index, phone_ids, num_states=3, context_length=1):
     """
-    Original Sprint C++ code, via Am/StateModel.cc:
+    Original Sprint C++ code:
 
-        AllophoneState AllophoneStateAlphabet::allophoneState(AllophoneStateAlphabet::Index in) const {
-          require(nStates_ && contextLength_);
-          require(in != Fsa::Epsilon);
-          require(in < nClasses_);
-          AllophoneState result;
-          Index code = in - 1;
-          result.state    = code % nStates_; code /= nStates_;
-          result.boundary = code % 4;        code /= 4;
-          for (s32 i = contextLength_; i >= - s32(contextLength_); --i) {
-            result.setPhoneme(i, code % (pi_->nPhonemes() + 1));
-            code /= pi_->nPhonemes() + 1;
-          }
-          ensure_(index(result) == in);
-          return result;
+        Mm::MixtureIndex NoStateTyingDense::classify(const AllophoneState& a) const {
+            require_lt(a.allophone()->boundary, numBoundaryClasses_);
+            require_le(0, a.state());
+            require_lt(u32(a.state()), numStates_);
+            u32 result = 0;
+            for(u32 i = 0; i < 2 * contextLength_ + 1; ++i) {  // context len is usually 1
+                // pos sequence: 0, -1, 1, [-2, 2, ...]
+                s16 pos = i / 2;
+                if(i % 2 == 1)
+                    pos = -pos - 1;
+                result *= numPhoneClasses_;
+                u32 phoneIdx = a.allophone()->phoneme(pos);
+                require_lt(phoneIdx, numPhoneClasses_);
+                result += phoneIdx;
+            }
+            result *= numStates_;
+            result += u32(a.state());
+            result *= numBoundaryClasses_;
+            result += a.allophone()->boundary;
+            require_lt(result, nClasses_);
+            return result;
         }
 
     Note that there is also AllophoneStateAlphabet::allophoneState, via Am/ClassicStateModel.cc,
@@ -526,16 +521,20 @@ class AllophoneState:
     :rtype: AllophoneState
     """
     num_phones = max(phone_ids.keys()) + 1
-    code = index - 1
+    num_phone_classes = num_phones + 1  # 0 is the special no-context symbol
+    code = index
     result = AllophoneState()
-    result.state = code % num_states
-    code //= num_states
     result.boundary = code % 4
     code //= 4
-    for i in reversed(range(-context_length, context_length + 1)):
-      phone_idx = code % (num_phones + 1)
-      code //= num_phones + 1
-      result.set_phoneme(ctx_offset=i, phone_id=phone_ids[phone_idx])
+    result.state = code % num_states
+    code //= num_states
+    for i in range(2 * context_length + 1):
+      pos = i // 2
+      if i % 2 == 1:
+        pos = -pos - 1
+      phone_idx = code % num_phone_classes
+      code //= num_phone_classes
+      result.set_phoneme(ctx_offset=pos, phone_id=phone_ids[phone_idx - 1] if phone_idx else "")
     return result
 
   @classmethod

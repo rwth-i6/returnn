@@ -2655,35 +2655,29 @@ class AllophoneStateIdxParserLayer(LayerBase):
   """
   This is very much Sprint/RASR specific.
   We get allophone state indices and return (center, left_1, right_1, ..., state, boundary).
-  The index is by the (new) state model encoding (StateModel.hh), not by the classic one (ClassicStateModel.hh).
+  The index is defined by NoTyingDense (ClassicStateTying.cc).
+  In the Sprint config, this is via option --*.state-tying.type=no-tying-dense.
   """
   layer_class = "allophone_state_idx_parser"
+  NumBoundaryClasses = 4  # 0: none, 1: start (@i), 2: end (@f), 3: start+end (@i@f)
 
-  def __init__(self, num_phones, num_states=3, context_len=1, **kwargs):
+  def __init__(self, num_phone_classes, num_states=3, context_len=1, **kwargs):
     """
     :param list[LayerBase] sources:
-    :param int num_phones: total number of phonemes
+    :param int num_phone_classes: number of phonemes + 1, with special 0 phone == no context
     :param int num_states: number of HMM states
     :param int context_len: left/right context len
     """
     super(AllophoneStateIdxParserLayer, self).__init__(**kwargs)
-    # See LmDataset.AllophoneState.from_index().
     result = [None] * self.output.dim
-    code = self.sources[0].output.placeholder - 1
-    mask = tf.cast(tf.greater_equal(code, 0), code.dtype)
-    state = code % num_states
-    result[-2] = state * mask
+    code = self.sources[0].output.placeholder
+    result[-1] = code % self.NumBoundaryClasses  # boundary
+    code //= self.NumBoundaryClasses
+    result[-2] = code % num_states  # state
     code //= num_states
-    boundary = code % 4
-    result[-1] = boundary * mask
-    code //= 4
-    for i in reversed(range(-context_len, context_len + 1)):
-      phone_idx = code % (num_phones + 1)
-      code //= num_phones + 1
-      result_idx = abs(i) * 2
-      if i < 0:
-        result_idx -= 1
-      result[result_idx] = phone_idx * mask
+    for i in range(2 * context_len + 1):
+      result[i] = code % num_phone_classes  # phone idx
+      code //= num_phone_classes
     self.output.placeholder = tf.stack(result, axis=self.output.batch_ndim - 1)
     self.output.size_placeholder = self.sources[0].output.size_placeholder.copy()
 
