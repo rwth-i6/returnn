@@ -188,7 +188,7 @@ class PythonFeatureScorer(object):
     if self.priors is not None:
       scores -= numpy.expand_dims(self.priors, axis=1)
     # We must return in -log space.
-    self.scores = posteriors
+    self.scores = scores
 
   def get_scores(self, time):
     """
