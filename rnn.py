@@ -370,6 +370,8 @@ def finalize():
 
 
 def needData():
+  if config.has("need_data") and not config.bool("need_data", True):
+    return False
   task = config.value('task', 'train')
   if task in ['theano_graph', "nop"]:
     return False
