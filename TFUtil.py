@@ -3185,7 +3185,7 @@ class Lock(object):
     with tf.name_scope(self._name):
       from tensorflow.python.ops.data_flow_ops import StagingArea
       self._queue = StagingArea(dtypes=[tf.bool])
-      self._queue_init = self._queue.put([True])
+      self._queue_init = self._queue.put([tf.constant(True)])
 
   def init(self):
     return self._queue_init
@@ -3202,7 +3202,7 @@ class Lock(object):
     Must be called after lock().
     """
     with tf.name_scope("%s/unlock" % self._name):
-      return self._queue.put([True])
+      return self._queue.put([tf.constant(True)])
 
 
 class Condition(object):
