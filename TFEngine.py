@@ -356,7 +356,7 @@ class Runner(object):
             f.write(tl.generate_chrome_trace_format(show_memory=True))
         else:
           fetches_results = sess.run(fetches_dict, feed_dict=feed_dict)  # type: dict[str,numpy.ndarray|str]
-          if writer:
+          if writer and "summary" in fetches_results:
             writer.add_summary(fetches_results["summary"], step + step_offset)
 
         eval_info = self._collect_eval_info(fetches_results=fetches_results)
@@ -912,6 +912,17 @@ class Engine(object):
     self.check_uninitialized_vars()  # Maybe some new uninitialized vars. Last check.
     return self.tf_session.run(output_dict, feed_dict=feed_dict)
 
+  def _get_output_layer(self, output_layer_name=None):
+    """
+    :param str|None output_layer_name: e.g. "output". if not set, will read from config "forward_output_layer"
+    :rtype: TFNetworkLayer.LayerBase
+    """
+    if not output_layer_name:
+      output_layer_name = self.config.value("forward_output_layer", self.network.get_default_output_layer_name())
+      assert output_layer_name, "output layer not defined. set forward_output_layer in config"
+    assert output_layer_name in self.network.layers, "output layer %r not found" % output_layer_name
+    return self.network.layers[output_layer_name]
+
   def forward_single(self, dataset, seq_idx, output_layer_name=None):
     """
     :param Dataset.Dataset dataset:
@@ -920,11 +931,7 @@ class Engine(object):
     :return: numpy array, output in time major format (time,dim)
     :rtype: numpy.ndarray
     """
-    if not output_layer_name:
-      output_layer_name = self.config.value("forward_output_layer", self.network.get_default_output_layer_name())
-      assert output_layer_name, "output layer not defined. set forward_output_layer in config"
-    assert output_layer_name in self.network.layers, "output layer %r not found" % output_layer_name
-    output_data = self.network.layers[output_layer_name].output
+    output_data = self._get_output_layer(output_layer_name).output
     out = output_data.get_placeholder_as_time_major()
     out_d = self.eval_single(dataset=dataset, seq_idx=seq_idx, output_dict={"out": out})
     output_value = out_d["out"]
@@ -944,12 +951,7 @@ class Engine(object):
     import h5py
     from Util import hdf5_strings
 
-    output_layer_name = None
-    if not output_layer_name:
-      output_layer_name = self.config.value("forward_output_layer", self.network.get_default_output_layer_name())
-      assert output_layer_name, "output layer not defined. set forward_output_layer in config"
-    assert output_layer_name in self.network.layers, "output layer %r not found" % output_layer_name
-    output_layer = self.network.layers[output_layer_name]
+    output_layer = self._get_output_layer()
     target = self.network.get_default_target()
 
     cache = h5py.File(output_file, "w")
@@ -1019,6 +1021,9 @@ class Engine(object):
       },
       extra_fetches_callback=extra_fetches_cb)
     forwarder.run(report_prefix=self.get_epoch_str() + " forward")
+    if not forwarder.finalized:
+      print("Error happened. Exit now.")
+      sys.exit(1)
 
     max_tag_len = max([len(d) for d in tags])
     cache.create_dataset('seqTags', shape=(len(tags),), dtype="S%i" % (max_tag_len + 1))
@@ -1136,3 +1141,73 @@ class Engine(object):
       sys.exit(1)
     print("Search done. Final: score %s error %s" % (
       self.format_score(runner.score), self.format_score(runner.error)), file=log.v1)
+
+  def compute_priors(self, dataset, config=None):
+    """
+    :param Dataset dataset:
+    :param Config.Config config:
+    """
+    assert isinstance(dataset, Dataset)
+    if config:
+      assert config is self.config
+
+    output_layer = self._get_output_layer()
+    assert config.has('output_file'), 'output_file for priors numbers should be provided'
+    output_file = config.value('output_file', '')
+    assert not os.path.exists(output_file), "Already existing output file %r." % output_file
+
+    class Accumulator(object):
+      """
+      Also see PriorEstimationTaskThread for reference.
+      """
+
+      def __init__(self):
+        self.sum_posteriors = numpy.zeros(int(output_layer.output.dim))
+        self.seq_len = 0
+
+      def __call__(self, outputs):
+        """
+        Called via extra_fetches_callback from the Runner.
+
+        :param numpy.ndarray outputs: shape=(time,data), flattened over batches
+        """
+        assert outputs.ndim == 2
+        seq_len = outputs.shape[0]
+        assert outputs.shape == (seq_len, output_layer.output.dim)
+        self.seq_len += seq_len
+        self.sum_posteriors += numpy.sum(outputs, axis=0)
+
+    accumulator = Accumulator()
+    batch_size = config.int('batch_size', 1)
+    max_seqs = config.int('max_seqs', -1)
+    epoch = config.int('epoch', 1)
+    max_seq_length = config.float('max_seq_length', 0)
+    if max_seq_length <= 0:
+      max_seq_length = sys.maxsize
+    dataset.init_seq_order(epoch=epoch)
+    batches = dataset.generate_batches(
+      recurrent_net=self.network.recurrent,
+      batch_size=batch_size,
+      max_seq_length=max_seq_length,
+      max_seqs=max_seqs,
+      used_data_keys=self.network.used_data_keys)
+    forwarder = Runner(
+      engine=self, dataset=dataset, batches=batches,
+      train=False, eval=False,
+      extra_fetches={
+        'outputs': output_layer.output.get_placeholder_flattened()
+      },
+      extra_fetches_callback=accumulator)
+    forwarder.run(report_prefix=self.get_epoch_str() + " forward")
+    if not forwarder.finalized:
+      print("Error happened. Exit now.")
+      sys.exit(1)
+
+    average_posterior = accumulator.sum_posteriors / accumulator.seq_len
+    avg_sum = numpy.sum(average_posterior)
+    assert numpy.isfinite(avg_sum)
+    print("Prior sum in std-space (should be close to 1.0):", avg_sum, file=log.v1)
+    log_average_posterior = numpy.log(average_posterior)
+    with open(output_file, 'w') as f:
+      numpy.savetxt(f, log_average_posterior, delimiter=' ')
+    print("Saved prior in %r in +log space." % output_file, file=log.v1)
