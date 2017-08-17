@@ -480,7 +480,7 @@ def _at_exit_handler():
     exit()
     print("All threads:")
     import Debug
-    Debug.dumpAllThreadTracebacks()
+    Debug.dumpAllThreadTracebacks(exclude_self=True)
 
 
 def initBase(configfile=None, targetMode=None, epoch=None):
