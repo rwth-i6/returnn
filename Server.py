@@ -1,28 +1,29 @@
 from __future__ import print_function
 
-import numpy as np
 import sys
 import os
-import tornado.web
-from tornado.ioloop import IOLoop
-from tornado import gen
-from tornado.concurrent import run_on_executor
-from concurrent.futures import ThreadPoolExecutor
-import Engine
-import hashlib
-import Config
 import json
-from Log import log
 import urllib
 import datetime
+from array import array
+import re
+import time
+
+import numpy as np
+import tornado.web
+from tornado.ioloop import IOLoop
+from tornado.concurrent import run_on_executor
+from concurrent.futures import ThreadPoolExecutor
+import hashlib
+
+from Log import log
 from GeneratingDataset import StaticDataset
 from Device import Device, get_num_devices, TheanoFlags, getDevicesInitArgs
-import time
 from EngineTask import ClassificationTaskThread
 from Dataset import Dataset, init_dataset, init_dataset_via_str
 from HDFDataset import HDFDataset
-from array import array
-import re
+import Engine
+import Config
 
 _engines = {}
 _engine_usage = {}
@@ -46,30 +47,25 @@ class Server:
     """
         :type devices: list[Device.Device]
     """
-    
     application = tornado.web.Application([
       (r"/classify", ClassifyHandler),
       (r"/loadconfig", ConfigHandler),
       (r"/train", TrainingHandler)
     ], debug=True)
     
-    # create dirs
+    # Create temporary directories.
     self._makedirs(os.path.dirname(os.path.abspath(Config.get_global_config().value('__file__', ''))))
-    
     application.listen(int(global_config.value('port', '3033')))
-    
-    # self._max_amount_engines = global_config.value('max_engines', '5')
-    
+    global _max_amount_engines
+    _max_amount_engines = global_config.value('max_engines', '5')
     print("Starting server on port: " + global_config.value('port', '3033'), file=log.v3)
-    
     IOLoop.instance().start()
   
   def _makedirs(self, basepath):
-    # first make the config file directory
+    # First make the config file directory.
     if not os.path.exists(basepath + "/configs"):
       os.makedirs(basepath + "/configs")
-    
-    # then make the data file directory
+    # Now make the data file directory.
     if not os.path.exists(basepath + "/data"):
       os.makedirs(basepath + "/data")
 
@@ -91,10 +87,7 @@ class ClassifyHandler(tornado.web.RequestHandler):
     # TODO: Make this batch over a specific time period
     # TODO: Write formal documentation
     
-    # print('Received body: ' + str(self.request.body))
-    
     url_params = self.request.arguments
-    
     output_dim = {}
     ret = {}
     data = {}
@@ -102,21 +95,19 @@ class ClassifyHandler(tornado.web.RequestHandler):
     data_type = ''
     engine_hash = ''
     data_shape = ''
-    
-    # first get meta data from URL parameters
+    # First get meta data from URL parameters
     try:
       engine_hash = str(url_params['engine_hash']).replace("['", '').replace("']", '')
       if 'data_format' in url_params:
         data_format = str(url_params['data_format']).replace("['", '').replace("']", '')
       if 'data_type' in url_params:
-        # possible options: https://docs.scipy.org/doc/numpy-1.10.1/user/basics.types.html
+        # Possible options: https://docs.scipy.org/doc/numpy-1.10.1/user/basics.types.html
         data_type = str(url_params['data_type']).replace("['", '').replace("']", '')
       if 'data_shape' in url_params:
         data_shape = str(url_params['data_shape']).replace("['", '').replace("']", '')  # either '' or 'dim1,dim2'
     except Exception as e:
-      print('Paramater formating exception: ' + str(e.message), file=log.v4)
-    
-    # defaults
+      print('Parameter formatting exception: ' + str(e.message), file=log.v4)
+    # Apply defaults, in case we didn't get them through the header.
     if data_format == '':
       data_format = 'json'
     if data_type == '':
@@ -124,17 +115,15 @@ class ClassifyHandler(tornado.web.RequestHandler):
     
     print('Received engine hash: ' + engine_hash + ', data formatted: ' + data_format + ', data type ' + data_type +
           ' data shape: ' + data_shape, file=log.v5)
-    
-    # load in engine and hash
+    # Load in engine and hash
     engine = _engines[engine_hash]
     network = engine.network
     devices = _devices[engine_hash]
-    
     hash_engine = hashlib.new('ripemd160')
     hash_engine.update(str(self.request.body) + engine_hash)
     hash_temp = hash_engine.hexdigest()
     
-    # process the data
+    # Pre-process the data
     if data_format == 'json':
       data = json.loads(self.request.body)
       for k in data:
@@ -161,7 +150,7 @@ class ClassifyHandler(tornado.web.RequestHandler):
         print('Binary data error: ' + str(e.message), file=log.v4)
         ret['error'] = 'Error during binary data conversion: ' + e.message
     
-    # do dataset creation and processing
+    # Do dataset creation and classification.
     if not 'error' in ret:
       try:
         data = StaticDataset(data=[data], output_dim=output_dim)
@@ -175,100 +164,81 @@ class ClassifyHandler(tornado.web.RequestHandler):
                                         batch_size=sys.maxsize, max_seqs=1)
         if not hash_temp in _classify_cache:
           print('Starting classification', file=log.v3)
-          # if we haven't yet processed this exact request and saved it in the cache
+          # If we haven't yet processed this exact request and saved it in the cache
           _classify_cache[hash_temp] = yield self.classification_task(network=network,
                                                                       devices=devices,
                                                                       data=data, batches=batches)
-        
         ret = {'result':
                  {k: _classify_cache[hash_temp].result[k].tolist() for k in _classify_cache[hash_temp].result}}
     
-    # update engine usage for performance optimization
+    # Update engine usage for performance optimization
     _engine_usage[engine_hash] = datetime.datetime.now()
-    
-    print("Finished processing classification with ID: ", hash_temp, file=log.v4)
-    
+    print("Finished processing classification with ID: ", hash_temp, file=log.v3)
     self.write(ret)
   
-  def _get_type_code(self, format):
+  def _get_type_code(self, format_to_convert):
     return {
       'float32': 'f',
       'float64': 'd',
       'int8': 'h',
       'int16': 'i',
       'int32': 'l',
-    }[format]
+    }[format_to_convert]
 
 
-# EXAMPLE: curl -H "Content-Type: application/json" -X POST -d '{"new_config_url":"<CONFIG_FILE>"}' http://localhost:<PORT>/loadconfig
 class ConfigHandler(tornado.web.RequestHandler):
   def get(self):
     pass
   
-  # not async and blocking, as it is a critical operation
+  # Not async and blocking, as it is a critical operation
   def post(self, *args, **kwargs):
-    
-    # cleanup of old unused engines
-    if len(_engines) + 1 > _max_amount_engines:
+    # Overview: Clean up, create engine, download full config, create hash, and add it to the main list
+    # TODO: Recheck clean up function
+    global _max_amount_engines
+    if (len(_engines) + 1) > _max_amount_engines:
       self.remove_oldest_engine()
-    
     data = json.loads(self.request.body)
-    
     print('Received new config for new engine', file=log.v3)
-    
-    # Overview: create engine, download full config, create hash, and add it to the main list
-    
-    # generate ID
     hash_engine = hashlib.new('ripemd160')
     hash_engine.update(json.dumps(args) + str(datetime.datetime.now()))
     hash_temp = hash_engine.hexdigest()
-    
-    # download new config file
+    # Download new config file and save to temp folder.
     urlmanager = urllib.URLopener()
     basefile = "configs/"
     config_file = basefile + str(datetime.datetime.now()) + ".config"
     try:
       urlmanager.retrieve(data["new_config_url"], config_file)
-    # very nooby approach; very open to better solutions
-    except:
+    except Exception:
       self.write('Error: Loading in config file from URL')
       return
-    
-    # load and setup config
+    # Load and setup config
     try:
       config = Config.Config()
       config.load_file(config_file)
-      if config.value('task', 'daemon') != 'training':
-        config.set(key='task', value='daemon')  # assume we're only using for classification or training
+      if config.value('task', 'daemon') != 'train':
+        config.set(key='task', value='daemon')  # Assume we're only using for classification or training
     except Exception:
       self.write('Error: Processing config file')
       return
     try:
-      # load devices
       _devices[hash_temp] = self.init_devices(config=config)
     except Exception:
       self.write('Error: Loading devices failed')
       return
     try:
-      # load engine
       new_engine = Engine.Engine(_devices[hash_temp])
       new_engine.init_network_from_config(config=config)
-      
       _engines[hash_temp] = new_engine
       _engine_usage[hash_temp] = datetime.datetime.now()
       _configs[hash_temp] = config
     except Exception:
       self.write('Error: Loading engine failed')
       return
-    
-    print('Finished loading in, server running. Currently number of active engines: ', len(_engines), file=log.v3)
+    print('Finished loading new config in, server running. Currently number of active engines: ', len(_engines),
+          file=log.v3)
     self.write(hash_temp)
   
   def init_devices(self, config):
-    
-    # very basic and hacky
-    # TODO: make this closer to rnn.py version, as in make it a function in rnn.py which isn't bound to the local vars of rnn.py (?)
-    
     oldDeviceConfig = ",".join(config.list('device', ['default']))
     if "device" in TheanoFlags:
       # This is important because Theano likely already has initialized that device.
@@ -288,16 +258,14 @@ class ConfigHandler(tornado.web.RequestHandler):
     return devices
   
   def remove_oldest_engine(self):
-    
     oldest_time = datetime.datetime.max
     oldest_engine = None
-    
     for engine in _engine_usage:
       if _engine_usage[engine] < oldest_time:
         oldest_engine = engine
         oldest_time = _engine_usage[engine]
-    
-    print("Cleaning up last used engine ", oldest_engine, file=log.v5)
+        
+    print('Cleaning up last used engine ', oldest_engine, file=log.v5)
     for device in _devices[oldest_engine]:
       device.terminate()
     del _engines[oldest_engine]
@@ -305,65 +273,51 @@ class ConfigHandler(tornado.web.RequestHandler):
     del _engine_usage[oldest_engine]
 
 
-# requires that the congig is loaded in
-# requires training and dev data URL to h5 files
+# Requires that the config is loaded in
+# Requires training and dev data URL to h5 files
 # TODO: finish implementation
 class TrainingHandler(tornado.web.RequestHandler):
   def get(self):
     pass
   
   def post(self, *args, **kwargs):
-    
     data = json.loads(self.request.body)
-    
     hash_engine = hashlib.new('ripemd160')
-    
     print("Training engine on new data: ", data["engine_hash"], file=log.v4)
-    
     # download training and dev data
-    urlmanager = urllib.URLopener()
-    datapath = "data/"
-    train_file = datapath + re.sub(r'\W+', '', "train" + str(datetime.datetime.now()))  # currently assume h5 data
-    train_file_abs, train_file_headers = urlmanager.retrieve(data["training_url"], train_file)
-    dev_file = datapath + re.sub(r'\W+', '', "dev" + str(datetime.datetime.now()))  # currently assume h5 data
-    dev_file_abs, dev_file_headers = urlmanager.retrieve(data["dev_url"], dev_file)
+    if data['download_data'] != 'False':
+      urlmanager = urllib.URLopener()
+      datapath = "data/"
+      train_file = datapath + re.sub(r'\W+', '', "train" + str(datetime.datetime.now()))  # currently assume h5 data
+      train_file_abs, train_file_headers = urlmanager.retrieve(data["training_url"], train_file)
+      dev_file = datapath + re.sub(r'\W+', '', "dev" + str(datetime.datetime.now()))  # currently assume h5 data
+      dev_file_abs, dev_file_headers = urlmanager.retrieve(data["dev_url"], dev_file)
+    else:
+      dev_file_abs = data["dev_url"]
+      train_file_abs = data["training_url"]
     
     # configure engine
     engine_hash = data["engine_hash"]
-    
     # TODO: set new training epochs, so that it actually trains
-    
     # Current issue: we're changing the config and the corresponding epoch model, but the internal cache
     # of the engine doesn't let us update the internal epoch model Engine:86 -> get_epoch_model.
-    
-    # if override, check line Engine:345
+    # if overriden, check line Engine:345
+    #why is Engine._epoch_model a class variable?
     
     # remove weight loading, as we're expecting a new topology
     _configs[engine_hash].set(key='load', value='')
-    # _configs[engine_hash].set(key='start_epoch', value='auto')
-    # _configs[engine_hash].set(key='initialize_from_model', value='False')
-    # _configs[engine_hash].set(key='import_model_train_epoch1', value='False')
-    # _engines[engine_hash]._epoch_model = None
-    # print("EPOCHMODEL " + _engines[engine_hash]._epoch_model)
-    # _configs[engine_hash].set(key='num_epochs', value='12')
-    
     # update config to use this new data and save the future model
     _configs[engine_hash].set(key='train', value=train_file_abs)
     _configs[engine_hash].set(key='dev', value=dev_file_abs)
     _configs[engine_hash].set(key='model', value="/" + engine_hash)
     
     print("downloaded data")
-    
     self.initData(config=_configs[engine_hash], engine_id=engine_hash)
-    
     print("initialised data")
-    
     _engines[engine_hash].init_train_from_config(_configs[engine_hash], _data[engine_hash][0],
                                                  _data[engine_hash][1], _data[engine_hash][2])
     print("initialised engine")
-    
     _engines[engine_hash].train()
-    
     self.write({'success': 'true'})
   
   def getCacheByteSizes(self, config):
@@ -448,25 +402,3 @@ class TrainingHandler(tornado.web.RequestHandler):
       train_cache_bytes += extra_cache_bytes_dev + extra_cache_bytes_eval
     train_data, extra_train = self.load_data(config, train_cache_bytes, 'train')
     _data[engine_id] = (train_data, extra_train, eval_data)
-
-
-"""
-CODE DUMP IN CASE OTHER APPROACH DOESN'T WORK
-
--USE IN 157, IN BINARY CLASSIFICATION:
-
-# Numpy from file doesn't accept StringIO, so we need to physically save the binary data and then load
-        # it back in
-        # TODO: find bug
-        fname = 'data/' + str(datetime.datetime.now())
-        print(fname)
-        f = open(fname, 'w')
-        f.write(str(self.request.body))
-        # f = StringIO(str(self.request.body))
-        # f = io.BytesIO(self.request.body)
-        f.close()
-        dt = np.dtype(data_type)
-        data['data'] = np.fromfile(fname, dtype=dt)
-        print('Debug data: ' + str(data['data']))
-        os.remove(fname)
-"""
