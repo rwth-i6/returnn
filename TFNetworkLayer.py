@@ -2724,7 +2724,7 @@ class FramewiseStatisticsLayer(LayerBase):
     flat_last_dim = output_before_softmax_flat.get_shape().ndims - 1
     assert flat_last_dim == 1
     output_flat = flatten_with_seq_len_mask(output.placeholder, output_seq_lens, time_major=output.is_time_major)
-    output_flat_argmax = tf.cast(tf.arg_max(output_before_softmax_flat, dimension=flat_last_dim), "int32")
+    output_flat_argmax = tf.cast(tf.argmax(output_before_softmax_flat, axis=flat_last_dim), "int32")
     frame_error = tf.not_equal(output_flat_argmax, target_flat)
     # target_flat is shape (time,) -> index.
     target_flat_exp = tf.stack([tf.range(tf.shape(target_flat)[0], dtype=tf.int32), target_flat], axis=1)
@@ -2899,8 +2899,8 @@ class Loss(object):
         target_label = check_input_ndim(self.target_flat, ndim=1)
       else:
         target_flat = check_shape_equal(self.target_flat, output_flat)
-        target_label = tf.cast(tf.arg_max(target_flat, dimension=last_dim), tf.int32)
-      output_label = tf.cast(tf.arg_max(output_flat, dimension=last_dim), target_label.dtype)
+        target_label = tf.cast(tf.argmax(target_flat, axis=last_dim), tf.int32)
+      output_label = tf.cast(tf.argmax(output_flat, axis=last_dim), target_label.dtype)
       not_equal = tf.not_equal(output_label, target_label)
       return self.reduce_func(tf.cast(not_equal, tf.float32))
 
