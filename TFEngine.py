@@ -900,7 +900,7 @@ class Engine(object):
     feed_dict = data_provider.get_feed_dict(single_threaded=True)
     return feed_dict
 
-  def eval_single(self, dataset, seq_idx, output_dict):
+  def run_single(self, dataset, seq_idx, output_dict):
     """
     :param Dataset.Dataset dataset:
     :param int seq_idx:
@@ -933,7 +933,7 @@ class Engine(object):
     """
     output_data = self._get_output_layer(output_layer_name).output
     out = output_data.get_placeholder_as_time_major()
-    out_d = self.eval_single(dataset=dataset, seq_idx=seq_idx, output_dict={"out": out})
+    out_d = self.run_single(dataset=dataset, seq_idx=seq_idx, output_dict={"out": out})
     output_value = out_d["out"]
     assert output_value.shape[1] == 1  # batch-dim
     return output_value[:, 0]  # remove batch-dim

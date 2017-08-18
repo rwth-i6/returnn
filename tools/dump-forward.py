@@ -35,7 +35,7 @@ def dump(dataset, options):
     options.endseq = float("inf")
   while dataset.is_less_than_num_seqs(seq_idx) and seq_idx <= options.endseq:
     print("Seq idx: %i" % (seq_idx,), file=log.v3)
-    out = rnn.engine.eval_single(dataset=dataset, seq_idx=seq_idx, output_dict=output_dict)
+    out = rnn.engine.run_single(dataset=dataset, seq_idx=seq_idx, output_dict=output_dict)
     for name, v in sorted(out.items()):
       print("  %s: %s" % (name, pretty_print(v)))
     seq_idx += 1
