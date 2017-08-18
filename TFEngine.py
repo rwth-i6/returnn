@@ -582,8 +582,16 @@ class Engine(object):
     self.max_seqs = config.int('max_seqs', -1)
 
     epoch, model_epoch_filename = self.get_epoch_model(config)
-    assert model_epoch_filename or self.start_epoch
+    if not model_epoch_filename and not self.start_epoch:
+      if self.config.bool("allow_random_model_init", False):
+        print("No model will be loaded. Randomly initializing model.", file=log.v2)
+        epoch = 1
+      else:
+        raise Exception(
+          "You are not using training, otherwise start_epoch would be set via self.init_train_from_config(). "
+          "There was also no model found which we could load. Set one via 'load'.")
     self.epoch = epoch or self.start_epoch
+    assert self.epoch
 
     if self.pretrain:
       # This would be obsolete if we don't want to load an existing model.
@@ -1155,6 +1163,7 @@ class Engine(object):
     assert config.has('output_file'), 'output_file for priors numbers should be provided'
     output_file = config.value('output_file', '')
     assert not os.path.exists(output_file), "Already existing output file %r." % output_file
+    print("Compute priors, using output layer %r, writing to %r." % (output_layer, output_file), file=log.v2)
 
     class Accumulator(object):
       """
@@ -1169,13 +1178,18 @@ class Engine(object):
         """
         Called via extra_fetches_callback from the Runner.
 
-        :param numpy.ndarray outputs: shape=(time,data), flattened over batches
+        :param numpy.ndarray outputs: shape=(time,data)|(time,), depending if dense or sparse, flattened over batches
         """
-        assert outputs.ndim == 2
         seq_len = outputs.shape[0]
-        assert outputs.shape == (seq_len, output_layer.output.dim)
-        self.seq_len += seq_len
+        if output_layer.output.sparse:
+          assert outputs.shape == (seq_len,)
+        else:
+          assert outputs.shape == (seq_len, output_layer.output.dim)
+        if output_layer.output.sparse:
+          from Util import class_idx_seq_to_1_of_k
+          outputs = class_idx_seq_to_1_of_k(outputs, num_classes=output_layer.output.dim)
         self.sum_posteriors += numpy.sum(outputs, axis=0)
+        self.seq_len += seq_len
 
     accumulator = Accumulator()
     batch_size = config.int('batch_size', 1)
