@@ -824,14 +824,26 @@ class AttentionSegment(AttentionBase):
     att_epoch = numpy.float32(self.layer.attrs['attention_epoch'])
     att_step = numpy.float32(self.layer.attrs['attention_segstep'])
     att_offset = numpy.float32(self.layer.attrs['attention_offset'])
+    att_scale = numpy.float32(self.layer.attrs['attention_scale'])
     temperature = T.cast(T.cast(self.epoch/att_epoch,'int32') * att_step + att_offset,'float32')
-
     if method == "epoch":
       temperature = T.minimum(temperature,numpy.float32(1.0))
     elif method == "min_dist":
       assert min_dist is not None
       temperature = T.maximum(T.exp(-min_dist),T.minimum(temperature,numpy.float32(1.0)))
-      #temperature = theano.ifelse.ifelse(self.epoch > numpy.float32(20), T.ones_like(min_dist), temperature)
+    elif method == "entropy":
+      assert min_dist is not None
+      exp_min_dist = T.exp(att_scale/T.cast(min_dist,'float32'))
+      temperature = numpy.float32(1) - T.minimum(exp_min_dist,numpy.float32(1.0))
+    elif method == "entropy_direct":
+      assert min_dist is not None
+      exp_min_dist = T.exp(T.cast(min_dist,'float32')*numpy.float32(0.5))
+      temperature = numpy.float32(1) - T.minimum(exp_min_dist,numpy.float32(1.0))
+    elif method == "entropy_batch_avg":
+      assert min_dist is not None
+      avg_entropy = T.sum(min_dist,dtype='float32')/T.cast(min_dist.shape[0],'float32')
+      exp_min_dist = T.exp(att_scale/T.cast(avg_entropy,'float32'))
+      temperature = numpy.float32(1) - T.minimum(exp_min_dist,numpy.float32(1.0))
 
     return temperature
 
@@ -855,14 +867,18 @@ class AttentionSegment(AttentionBase):
         curr_seg_index = T.switch(T.gt(self.index_att[n] - self.index_att[n-1],numpy.float32(0)),numpy.float32(1),numpy.float32(0)) #TB
         ind_curr = theano.ifelse.ifelse(n > 0, curr_seg_index,self.index_att[n])
         e1 = self.distance(self.C, T.tanh(dis_curr)) #TB
+        att_w1 = self.softmax(e1, ind_curr)
+        att_w2 = self.softmax(e1, self.I_dec)
 
         if att_method == 'min_dist':
           min_dist = T.min(e1,axis=0) #B
+        elif att_method.startswith("entropy"):
+          log_alpha = T.log(T.maximum(att_w2,numpy.float32(1e-7)))
+          min_dist = T.sum(att_w2 * log_alpha,axis=0) #B
         else:
           min_dist = None
         temperature = self.calc_temperature(att_method,min_dist)
-        att_w1 = self.softmax(e1, ind_curr)
-        att_w2 = self.softmax(e1,self.I_dec)
+        temperature = theano.ifelse.ifelse(self.epoch > numpy.float32(self.layer.attrs['attention_epoch']),T.ones_like(temperature),temperature)
         att_w = (numpy.float32(1) - temperature) * att_w1 + temperature * att_w2
 
       else:
