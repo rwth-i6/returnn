@@ -370,6 +370,8 @@ def finalize():
 
 
 def needData():
+  if config.has("need_data") and not config.bool("need_data", True):
+    return False
   task = config.value('task', 'train')
   if task in ['theano_graph', "nop"]:
     return False
@@ -445,7 +447,20 @@ def executeMainTask():
     engine.init_network_from_config(config)
     engine.daemon(config)
   elif task == "server":
-    print("Server Initiating")
+    print("Server Initiating", file=log.v1)
+  elif task.startswith("config:"):
+    action = config.typed_dict[task[len("config:"):]]
+    print("Task: %r" % action, file=log.v1)
+    assert callable(action)
+    action()
+  elif task.startswith("optional-config:"):
+    action = config.typed_dict.get(task[len("optional-config:"):], None)
+    if action is None:
+      print("No task found for %r, so just quitting." % task, file=log.v1)
+    else:
+      print("Task: %r" % action, file=log.v1)
+      assert callable(action)
+      action()
   elif task == "nop":
     print("Task: No-operation", file=log.v1)
   else:

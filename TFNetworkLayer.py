@@ -1106,7 +1106,7 @@ class ConstantLayer(LayerBase):
   @classmethod
   def get_out_data_from_opts(cls, name, dtype="float32", **kwargs):
     return Data(
-      name="%s_const" % name, shape=(1,), batch_dim_axis=0, time_dim_axis=None, dtype=dtype)
+      name="%s_const" % name, shape=(), batch_dim_axis=0, time_dim_axis=None, dtype=dtype)
 
 
 class GatingLayer(_ConcatInputLayer):
@@ -2655,34 +2655,30 @@ class AllophoneStateIdxParserLayer(LayerBase):
   """
   This is very much Sprint/RASR specific.
   We get allophone state indices and return (center, left_1, right_1, ..., state, boundary).
+  The index is defined by NoTyingDense (ClassicStateTying.cc).
+  In the Sprint config, this is via option --*.state-tying.type=no-tying-dense.
   """
   layer_class = "allophone_state_idx_parser"
+  NumBoundaryClasses = 4  # 0: none, 1: start (@i), 2: end (@f), 3: start+end (@i@f)
 
-  def __init__(self, num_phones, num_states=3, context_len=1, **kwargs):
+  def __init__(self, num_phone_classes, num_states=3, context_len=1, **kwargs):
     """
     :param list[LayerBase] sources:
-    :param int num_phones: total number of phonemes
+    :param int num_phone_classes: number of phonemes + 1, with special 0 phone == no context
     :param int num_states: number of HMM states
     :param int context_len: left/right context len
     """
     super(AllophoneStateIdxParserLayer, self).__init__(**kwargs)
-    # See LmDataset.AllophoneState.from_index().
     result = [None] * self.output.dim
-    code = self.sources[0].output.placeholder - 1
-    state = code % num_states
-    result[-2] = state
+    code = self.sources[0].output.placeholder
+    result[-1] = code % self.NumBoundaryClasses  # boundary
+    code //= self.NumBoundaryClasses
+    result[-2] = code % num_states  # state
     code //= num_states
-    boundary = code % 4
-    result[-1] = boundary
-    code //= 4
-    for i in reversed(range(-context_len, context_len + 1)):
-      phone_idx = code % (num_phones + 1)
-      code //= num_phones + 1
-      result_idx = abs(i) * 2
-      if i < 0:
-        result_idx -= 1
-      result[result_idx] = phone_idx
-    self.output.placeholder = tf.stack(result, axis=self.output.ndim - 1)
+    for i in range(2 * context_len + 1):
+      result[i] = code % num_phone_classes  # phone idx
+      code //= num_phone_classes
+    self.output.placeholder = tf.stack(result, axis=self.output.batch_ndim - 1)
     self.output.size_placeholder = self.sources[0].output.size_placeholder.copy()
 
   @classmethod
@@ -2693,8 +2689,8 @@ class AllophoneStateIdxParserLayer(LayerBase):
       assert dim == n_out
     return Data(
       name="%s_output" % name,
-      shape=sources[0].output.shape,
-      dtype="int32", sparse=False, dim=n_out,
+      shape=sources[0].output.shape + (dim,),
+      dtype="int32", sparse=False, dim=dim,
       batch_dim_axis=sources[0].output.batch_dim_axis)
 
 
@@ -2728,7 +2724,7 @@ class FramewiseStatisticsLayer(LayerBase):
     flat_last_dim = output_before_softmax_flat.get_shape().ndims - 1
     assert flat_last_dim == 1
     output_flat = flatten_with_seq_len_mask(output.placeholder, output_seq_lens, time_major=output.is_time_major)
-    output_flat_argmax = tf.cast(tf.arg_max(output_before_softmax_flat, dimension=flat_last_dim), "int32")
+    output_flat_argmax = tf.cast(tf.argmax(output_before_softmax_flat, axis=flat_last_dim), "int32")
     frame_error = tf.not_equal(output_flat_argmax, target_flat)
     # target_flat is shape (time,) -> index.
     target_flat_exp = tf.stack([tf.range(tf.shape(target_flat)[0], dtype=tf.int32), target_flat], axis=1)
@@ -2797,7 +2793,7 @@ class FramewiseStatisticsLayer(LayerBase):
   @classmethod
   def get_out_data_from_opts(cls, **kwargs):
     # n_out=1 is a workaround for now. Our output should not be used. We have none.
-    return super(FramewiseStatisticsLayer, cls).get_out_data_from_opts(n_out=1, **kwargs)
+    return Data(name="framewise_statistics_dummy_output", shape=(), dtype="int32", batch_dim_axis=None)
 
 
 class Loss(object):
@@ -2903,8 +2899,8 @@ class Loss(object):
         target_label = check_input_ndim(self.target_flat, ndim=1)
       else:
         target_flat = check_shape_equal(self.target_flat, output_flat)
-        target_label = tf.cast(tf.arg_max(target_flat, dimension=last_dim), tf.int32)
-      output_label = tf.cast(tf.arg_max(output_flat, dimension=last_dim), target_label.dtype)
+        target_label = tf.cast(tf.argmax(target_flat, axis=last_dim), tf.int32)
+      output_label = tf.cast(tf.argmax(output_flat, axis=last_dim), target_label.dtype)
       not_equal = tf.not_equal(output_label, target_label)
       return self.reduce_func(tf.cast(not_equal, tf.float32))
 

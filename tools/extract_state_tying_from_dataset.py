@@ -79,24 +79,38 @@ class OrthHandler:
 
   allo_add_all = False  # only via lexicon
 
-  def __init__(self, lexicon, si_label=None, allo_num_states=3, allo_context_len=1):
+  def __init__(self, lexicon, si_label=None, allo_num_states=3, allo_context_len=1, allow_ci_in_words=True):
     """
     :param Lexicon lexicon:
     :param int si_label:
     :param int allo_num_states:
     :param int allo_context_len:
+    :param bool allow_ci_in_words:
     """
     self.lexicon = lexicon
     self.phonemes = sorted(self.lexicon.phonemes.keys(), key=lambda s: self.lexicon.phonemes[s]["index"])
+    self.word_boundary_phones = {-1: set(), 1: set()}
     self.phon_to_possible_ctx_via_lex = {-1: {}, 1: {}}
     for lemma in self.lexicon.lemmas.values():
       for pron in lemma["phons"]:
         phons = pron["phon"].split()
+        assert phons
+        self.word_boundary_phones[-1].add(phons[0])
+        self.word_boundary_phones[1].add(phons[-1])
         for i in range(len(phons)):
           ps = [phons[i + j] if (0 <= (i + j) < len(phons)) else ""
                 for j in [-1, 0, 1]]
           self.phon_to_possible_ctx_via_lex[1].setdefault(ps[1], set()).add(ps[2])
           self.phon_to_possible_ctx_via_lex[-1].setdefault(ps[1], set()).add(ps[0])
+    for phone in self.lexicon.phoneme_list:
+      if "" in self.phon_to_possible_ctx_via_lex[-1][phone]:
+        self.phon_to_possible_ctx_via_lex[-1][phone].update(self.word_boundary_phones[1])
+      if "" in self.phon_to_possible_ctx_via_lex[1][phone]:
+        self.phon_to_possible_ctx_via_lex[1][phone].update(self.word_boundary_phones[-1])
+    if allow_ci_in_words:
+      for phone in self.lexicon.phoneme_list:
+        self.phon_to_possible_ctx_via_lex[-1][phone].add("")
+        self.phon_to_possible_ctx_via_lex[1][phone].add("")
     self.si_lemma = self.lexicon.lemmas["[SILENCE]"]
     self.si_phone = self.si_lemma["phons"][0]["phon"]  # type: str
     self.si_label = si_label
@@ -161,27 +175,34 @@ class OrthHandler:
       return 1
     return self.allo_num_states
 
-  def all_allophone_variations(self, phon, states=None):
+  def all_allophone_variations(self, phon, states=None, all_boundary_variations=False):
     """
     :param str phon:
     :param None|list[int] states: which states to yield for this phone
+    :param bool all_boundary_variations:
     :return: yields AllophoneState's
     :rtype: list[AllophoneState]
     """
     if states is None:
       states = range(self.num_states_for_phone(phon))
+    if all_boundary_variations:
+      boundary_variations = [0, 1, 2, 3]
+    else:
+      boundary_variations = [0]
     for left_ctx in self._iter_possible_ctx(phon, -1):
       for right_ctx in self._iter_possible_ctx(phon, 1):
         for state in states:
-          a = AllophoneState()
-          a.id = phon
-          a.context_history = left_ctx
-          a.context_future = right_ctx
-          a.state = state
-          a.boundary = 0
-          if not left_ctx: a.mark_initial()
-          if not right_ctx: a.mark_final()
-          yield a
+          for boundary in boundary_variations:
+            a = AllophoneState()
+            a.id = phon
+            a.context_history = left_ctx
+            a.context_future = right_ctx
+            a.state = state
+            a.boundary = boundary
+            if not all_boundary_variations:
+              if not left_ctx: a.mark_initial()
+              if not right_ctx: a.mark_final()
+            yield a
 
   def _phones_to_allos(self, phones):
     for p in phones:
@@ -286,9 +307,9 @@ def main():
     all_label_idx_are_used = True
   elif args.state_tying_type == "full":
     print("Full state tying.", file=log.v1)
-    phone_idxs = {k: i for (i, k) in enumerate(lexicon.phoneme_list)}
+    phone_idxs = {k: i + 1 for (i, k) in enumerate(lexicon.phoneme_list)}  # +1 to keep 0 reserved as the term-symbol
     for phon in lexicon.phoneme_list:
-      for allo in orth_handler.all_allophone_variations(phon):
+      for allo in orth_handler.all_allophone_variations(phon, all_boundary_variations=True):
         allo_idx = allo.index(
           phone_idxs=phone_idxs,
           num_states=orth_handler.allo_num_states,

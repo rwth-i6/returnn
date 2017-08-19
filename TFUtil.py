@@ -1085,12 +1085,13 @@ def check_input_dim(x, axis, dim):
       return tf.identity(x, "identity_with_dim_check")
 
 
-def check_dim_equal(x, x_axis, y, y_axis):
+def check_dim_equal(x, x_axis, y, y_axis, extra_msg=()):
   """
   :param tf.Tensor x:
   :param int x_axis: which axis to check
   :param tf.Tensor y:
   :param int y_axis: which axis to check
+  :param list[str]|tuple[str] extra_msg: will be printed additionally if it fails
   :return: x with check added that shape(x)[x_axis] == shape(y)[y_axis]
   :rtype: tf.Tensor
   """
@@ -1098,7 +1099,7 @@ def check_dim_equal(x, x_axis, y, y_axis):
   y_dyn_shape = y.get_shape()
   if x_dyn_shape.ndims is not None and y_dyn_shape.ndims is not None:
     if x_dyn_shape.dims[x_axis].value is not None and y_dyn_shape.dims[y_axis].value is not None:
-      assert x_dyn_shape.dims[x_axis].value == y_dyn_shape.dims[y_axis].value
+      assert x_dyn_shape.dims[x_axis].value == y_dyn_shape.dims[y_axis].value, extra_msg
       return x
   # Need to fall-back to runtime check.
   with tf.name_scope("check_dim_equal"):
@@ -1107,7 +1108,7 @@ def check_dim_equal(x, x_axis, y, y_axis):
     with tf.control_dependencies(
       [tf.assert_equal(
          shape_x[x_axis], shape_y[y_axis],
-         data=["x.shape[%i] not y.shape[%i]" % (x_axis, y_axis), shape_x, shape_y])]):
+         data=["x.shape[%i] != y.shape[%i]" % (x_axis, y_axis), shape_x, shape_y] + list(extra_msg))]):
       return tf.identity(x, "identity_with_dim_equal_check")
 
 
@@ -1688,7 +1689,7 @@ def flatten_with_seq_len_mask(x, seq_lens, time_major=False):
     seq_lens = check_input_ndim(seq_lens, 1)
     if time_major:
       x = swapaxes(x, 0, 1)  # get (batch,time,...s...)
-    x = check_dim_equal(x, 0, seq_lens, 0)  # batch dim
+    x = check_dim_equal(x, 0, seq_lens, 0, ["batch-dim does not match"])  # batch dim
     # int64? -> https://github.com/tensorflow/tensorflow/issues/6518
     mask = sequence_mask(seq_lens, maxlen=tf.shape(x)[1])  # shape (batch,time)
     mask = check_input_ndim(mask, 2)
@@ -3184,7 +3185,7 @@ class Lock(object):
     with tf.name_scope(self._name):
       from tensorflow.python.ops.data_flow_ops import StagingArea
       self._queue = StagingArea(dtypes=[tf.bool])
-      self._queue_init = self._queue.put([True])
+      self._queue_init = self._queue.put([tf.constant(True)])
 
   def init(self):
     return self._queue_init
@@ -3201,7 +3202,7 @@ class Lock(object):
     Must be called after lock().
     """
     with tf.name_scope("%s/unlock" % self._name):
-      return self._queue.put([True])
+      return self._queue.put([tf.constant(True)])
 
 
 class Condition(object):
