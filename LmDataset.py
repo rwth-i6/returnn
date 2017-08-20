@@ -1083,6 +1083,8 @@ class TranslationDataset(CachedDataset2):
 
     :param int|None epoch:
     :param list[str] | None seq_list: In case we want to set a predefined order.
+    :rtype: bool
+    :returns whether the order changed (True is always safe to return)
     """
     super(TranslationDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
     if not epoch:
@@ -1106,6 +1108,7 @@ class TranslationDataset(CachedDataset2):
         assert i < self.partition_epoch
       assert sum(self._partition_epoch_num_seqs) == self._num_seqs
       self._num_seqs = self._partition_epoch_num_seqs[(self.epoch - 1) % self.partition_epoch]
+    return True
 
   def _collect_single_seq(self, seq_idx):
     if seq_idx >= self._num_seqs:
