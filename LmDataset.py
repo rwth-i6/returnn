@@ -877,17 +877,20 @@ class TranslationDataset(CachedDataset2):
 
   MapToDataKeys = {"source": "data", "target": "classes"}  # just by our convention
 
-  def __init__(self, path, postfix, partition_epoch=None, **kwargs):
+  def __init__(self, path, file_postfix, partition_epoch=None, target_postfix="", **kwargs):
     """
     :param str path: the directory containing the files
-    :param str postfix: e.g. "train" or "dev". it will then search for "source." + postfix and "target." + postfix.
+    :param str file_postfix: e.g. "train" or "dev". it will then search for "source." + postfix and "target." + postfix.
     :param bool random_shuffle_epoch1: if True, will also randomly shuffle epoch 1. see self.init_seq_order().
     :param int partition_epoch: if provided, will partition the dataset into multiple epochs
+    :param None|str target_postfix: will concat this at the end of the target.
+      You might want to add some sentence-end symbol.
     """
     super(TranslationDataset, self).__init__(**kwargs)
     self.path = path
-    self.postfix = postfix
+    self.file_postfix = file_postfix
     self.partition_epoch = partition_epoch
+    self._add_postfix = {"data": "", "classes": target_postfix}
     from threading import Lock, Thread
     self._lock = Lock()
     self._partition_epoch_num_seqs = []
@@ -933,7 +936,9 @@ class TranslationDataset(CachedDataset2):
       while i < self._data_len:
         for k in ("data", "classes"):
           vocab = self._vocabs[k]
-          data = [self._data_str_to_numpy(vocab, s) for s in data_strs[k][i:i + ChunkSize]]
+          data = [
+            self._data_str_to_numpy(vocab, s + self._add_postfix[k])
+            for s in data_strs[k][i:i + ChunkSize]]
           with self._lock:
             self._data[k].extend(data)
         i += ChunkSize
@@ -949,7 +954,7 @@ class TranslationDataset(CachedDataset2):
     :rtype: io.FileIO
     """
     import os
-    filename = "%s/%s.%s" % (self.path, prefix, self.postfix)
+    filename = "%s/%s.%s" % (self.path, prefix, self.file_postfix)
     if os.path.exists(filename):
       return open(filename, "rb")
     if os.path.exists(filename + ".gz"):
