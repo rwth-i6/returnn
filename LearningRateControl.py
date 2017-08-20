@@ -2,7 +2,7 @@
 from __future__ import print_function
 
 import os
-from Util import betterRepr, simpleObjRepr, ObjAsDict
+from Util import betterRepr, simpleObjRepr, ObjAsDict, unicode
 from Log import log
 import numpy
 
