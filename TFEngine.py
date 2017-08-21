@@ -795,11 +795,13 @@ class Engine(object):
     if not trainer.finalized:
       if trainer.device_crash_batch is not None:  # Otherwise we got an unexpected exception - a bug in our code.
         self.save_model(self.get_epoch_model_filename() + ".crash_%i" % trainer.device_crash_batch)
-      print("Trainer not finalized, quitting.", file=log.v4)
+      print("Trainer not finalized, quitting.", file=log.v1)
       sys.exit(1)
 
-    assert not any(numpy.isinf(list(trainer.score.values()))) or any(numpy.isnan(list(trainer.score.values()))), \
-      "Model is broken, got inf or nan final score: %s" % trainer.score
+    if any(numpy.isinf(list(trainer.score.values()))) or any(numpy.isnan(list(trainer.score.values()))):
+      self.save_model(self.get_epoch_model_filename() + ".broken")
+      print("Model seems broken, got inf or nan final score: %s" % trainer.score, file=log.v1)
+      sys.exit(1)
 
     if self.model_filename and (self.epoch % self.save_model_epoch_interval == 0):
       self.save_model(self.get_epoch_model_filename())
