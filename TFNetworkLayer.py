@@ -5,7 +5,7 @@ import tensorflow as tf
 import contextlib
 import TFUtil
 from Util import unicode
-from TFUtil import Data, OutputWithActivation, CustomUpdate, var_creation_scope, dimshuffle, swapaxes
+from TFUtil import Data, OutputWithActivation, CustomUpdate, dimshuffle, swapaxes
 from Log import log
 
 
@@ -360,6 +360,15 @@ class LayerBase(object):
       batch_dim *= beam_size
     return batch_dim
 
+  @contextlib.contextmanager
+  def var_creation_scope(layer):
+    """
+    This takes care of setting up a scope where variables can be created.
+    """
+    from TFUtil import var_creation_scope
+    with var_creation_scope() as dep:
+      yield dep
+
   def add_param(self, param, custom_update=None):
     """
     :param tf.Variable param:
@@ -529,7 +538,7 @@ class LayerBase(object):
       x = data.get_placeholder_flattened(keep_dims=True)  # shape (time',...)
       mean, variance = tf.nn.moments(x, axes=[0], keep_dims=True)
       if sample_mean is None:
-        with var_creation_scope():
+        with self.var_creation_scope():
           sample_mean = self.add_param(tf.Variable(
             initial_value=tf.zeros(data.get_bc_spatial_batch_shape()),
             name="%s_%s_mean" % (self.name, data.name),
@@ -539,7 +548,7 @@ class LayerBase(object):
         sample_mean = tf.assign_add(sample_mean, (mean - sample_mean) * momentum)
       if sample_variance is None:
         # Note: Our Theano implementation does not use a moving average for this.
-        with var_creation_scope():
+        with self.var_creation_scope():
           sample_variance = self.add_param(tf.Variable(
             initial_value=tf.ones(data.get_bc_spatial_batch_shape()),
             name="%s_%s_variance" % (self.name, data.name),
@@ -552,7 +561,7 @@ class LayerBase(object):
       bn = (data.placeholder - mean) * tf.rsqrt(variance + epsilon)
       if use_std:
         if gamma is None:
-          with var_creation_scope():
+          with self.var_creation_scope():
             gamma = self.add_param(tf.Variable(
               initial_value=tf.ones(data.get_bc_spatial_batch_shape()),
               name="%s_%s_gamma" % (self.name, data.name),
@@ -560,7 +569,7 @@ class LayerBase(object):
         bn *= gamma
       if use_shift:
         if beta is None:
-          with var_creation_scope():
+          with self.var_creation_scope():
             beta = self.add_param(tf.Variable(
               initial_value=tf.zeros(data.get_bc_spatial_batch_shape()),
               name="%s_%s_beta" % (self.name, data.name),
@@ -1024,21 +1033,21 @@ class LinearLayer(_ConcatInputLayer):
     n_out = self.output.dim
     assert n_in and n_out, "%r and %r" % (input_data, self.output)
 
-    with var_creation_scope():
+    with self.var_creation_scope():
       # Our Theano default: normal distribution, std_dev = sqrt(12. / (fan_in + fan_out))
       # glorot_normal = variance_scaling_initializer(scale=1.0, mode="fan_avg", distribution="normal")
       #  -> std_dev = sqrt(2. / (fan_in + fan_out)).
       #  Or use VarianceScaling(scale=6.0, mode="fan_avg", distribution="normal") to get the same as in Theano.
       fwd_weights_initializer = get_initializer(
         forward_weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
-      W = self.add_param(tf.Variable(
-        name="W",
-        initial_value=fwd_weights_initializer(shape=(n_in, n_out))))
+      W = self.add_param(tf.get_variable(
+        name="W", shape=(n_in, n_out), dtype=tf.float32, initializer=fwd_weights_initializer))
 
       if self.with_bias:
         bias_initializer = get_initializer(
           bias_init, seed=self.network.random.randint(2 ** 31) if bias_init else 0, eval_local_ns={"layer": self})
-        b = self.add_param(tf.Variable(name="b", initial_value=bias_initializer(shape=(n_out,))))
+        b = self.add_param(tf.get_variable(
+          name="b", shape=(n_out,), dtype=tf.float32, initializer=bias_initializer))
       else:
         assert not bias_init
         b = None
@@ -1631,17 +1640,17 @@ class ConvLayer(_ConcatInputLayer):
       "consider using input_expand_dims or input_add_feature_dim.")
     filter_shape = list(filter_size) + [input_num_features, n_out]
     from TFUtil import get_initializer
-    with var_creation_scope():
+    with self.var_creation_scope():
       fwd_weights_initializer = get_initializer(
         forward_weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
-      filters = self.add_param(tf.Variable(name="W", initial_value=fwd_weights_initializer(shape=filter_shape)))
+      filters = self.add_param(tf.get_variable(name="W", shape=filter_shape, initializer=fwd_weights_initializer))
     y = tf.nn.convolution(x, filter=filters, padding=padding, strides=strides, dilation_rate=dilation_rate)
     # y shape is [batch] + dynamic_dims + [n_out].
     if with_bias:
-      with var_creation_scope():
+      with self.var_creation_scope():
         bias_initializer = get_initializer(
           bias_init, seed=self.network.random.randint(2 ** 31) if bias_init else 0, eval_local_ns={"layer": self})
-        b = self.add_param(tf.Variable(name="bias", initial_value=bias_initializer(shape=(n_out,))))
+        b = self.add_param(tf.get_variable(name="bias", shape=(n_out,), initializer=bias_initializer))
       y += b
     if activation:
       from TFUtil import get_activation_function
@@ -1979,10 +1988,9 @@ class WeightedSumLayer(_ConcatInputLayer):
     new_batch_dim = tf.reduce_prod(x_shape[:len(other_axes)])
     axes_shape = [x_shape[i] for i in range(len(other_axes), self.input_data.batch_ndim)]
     x = tf.reshape(x, shape=[new_batch_dim] + axes_shape + [1])
-    with var_creation_scope():
-      filters = self.add_param(tf.Variable(
-        name="W",
-        initial_value=tf.constant(1.0 / numpy.prod(size), shape=size)))
+    with self.var_creation_scope():
+      filters = self.add_param(tf.get_variable(
+        name="W", shape=size, initializer=tf.constant_initializer(1.0 / numpy.prod(size))))
     filters = tf.reshape(filters, shape=list(size) + [1, 1])
     y = tf.nn.convolution(x, filter=filters, padding=padding.upper())  # result: (new_batch_dim, ..., 1)
     if keep_dims:
@@ -2094,8 +2102,8 @@ class ElemwiseProdLayer(_ConcatInputLayer):
     else:
       assert isinstance(size, (list, tuple))
       assert tuple(size) == tuple(shape_size), "wrong size %r with input_data %r" % (size, self.input_data)
-    with var_creation_scope():
-      w = self.add_param(tf.Variable(name="W", initial_value=tf.constant(1.0, shape=size)))
+    with self.var_creation_scope():
+      w = self.add_param(tf.get_variable(name="W", shape=size, initializer=tf.constant_initializer(1.0)))
     w_full_shape = [self.input_data.batch_shape[a] if (a in axes) else 1
                     for a in range(self.input_data.batch_ndim)]
     w = tf.reshape(w, shape=w_full_shape)
@@ -2285,11 +2293,10 @@ class CombineLayer(LayerBase):
         sources=[layer.output_loss for layer in sources],
         eval_str=eval, eval_locals=eval_locals)
     if with_bias:
-      with var_creation_scope():
-        b = self.add_param(tf.Variable(
-          name="b",
-          initial_value=tf.constant_initializer(value=0, dtype=tf.float32)(
-            shape=(self.output.dim,))))
+      with self.var_creation_scope():
+        b = self.add_param(tf.get_variable(
+          name="b", shape=(self.output.dim,),
+          initializer=tf.constant_initializer(value=0, dtype=tf.float32)))
       x += b
     if activation:
       from TFUtil import get_activation_function
@@ -2742,7 +2749,7 @@ class FramewiseStatisticsLayer(LayerBase):
     seq_len_sil = tf.reduce_sum(tf.cast(mask_sil, tf.int32))
     seq_len_no_sil = tf.reduce_sum(tf.cast(mask_no_sil, tf.int32))
 
-    with var_creation_scope():
+    with self.var_creation_scope():
       accumulated_seq_len = tf.Variable(initial_value=0, dtype=tf.int64, trainable=False, name="accumulated_seq_len")
       accumulated_seq_len_sil = tf.Variable(initial_value=0, dtype=tf.int64, trainable=False, name="accumulated_seq_len_sil")
     accumulated_seq_len = tf.assign_add(accumulated_seq_len, tf.cast(seq_len, tf.int64))
@@ -2778,7 +2785,7 @@ class FramewiseStatisticsLayer(LayerBase):
           acc_dtype = "int64"
         acc_shape = v.get_shape().as_list()[1:]
         assert all(acc_shape)
-        with var_creation_scope():
+        with self.var_creation_scope():
           acc_v = tf.Variable(initial_value=numpy.zeros(acc_shape, dtype=acc_dtype), dtype=acc_dtype, trainable=False, name="accumulated_%s" % k)
         acc_v = tf.assign_add(acc_v, tf.reduce_sum(tf.cast(v, acc_dtype), axis=0))
         self.stats["accumulated_%s" % k] = tf.cast(acc_v, tf.float64) / tf.cast(acc_seq_len, tf.float64)

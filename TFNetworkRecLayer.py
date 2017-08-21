@@ -84,7 +84,7 @@ class RecLayer(_ConcatInputLayer):
     self._bias_initializer = tf.constant_initializer(0.0)
     self._fwd_weights_initializer = None
     self._rec_weights_initializer = None
-    from TFUtil import get_initializer
+    from TFUtil import get_initializer, xavier_initializer
     if forward_weights_init:
       self._fwd_weights_initializer = get_initializer(
         forward_weights_init, seed=self.network.random.randint(2**31), eval_local_ns={"layer": self})
@@ -96,27 +96,27 @@ class RecLayer(_ConcatInputLayer):
         bias_init, seed=self.network.random.randint(2**31), eval_local_ns={"layer": self})
     with tf.variable_scope(
           "rec",
-          initializer=tf.contrib.layers.xavier_initializer(
-            seed=self.network.random.randint(2**31))) as scope:
+          initializer=xavier_initializer(seed=self.network.random.randint(2**31))) as scope:
       assert isinstance(scope, tf.VariableScope)
       self._rec_scope = scope
       scope_name_prefix = scope.name + "/"  # e.g. "layer1/rec/"
-      self.cell = self._get_cell(unit)
-      if isinstance(self.cell, (rnn_contrib.RNNCell, rnn_contrib.FusedRNNCell)):
-        y = self._get_output_cell(self.cell)
-      elif cudnn_rnn and isinstance(self.cell, (cudnn_rnn.CudnnLSTM, cudnn_rnn.CudnnGRU)):
-        y = self._get_output_cudnn(self.cell)
-      elif isinstance(self.cell, TFNativeOp.RecSeqCellOp):
-        y = self._get_output_native_rec_op(self.cell)
-      elif isinstance(self.cell, _SubnetworkRecCell):
-        y = self._get_output_subnet_unit(self.cell)
-      else:
-        raise Exception("invalid type: %s" % type(self.cell))
-      self.output.time_dim_axis = 0
-      self.output.batch_dim_axis = 1
-      self.output.placeholder = y
-      params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope_name_prefix)
-      self.params.update({p.name[len(scope_name_prefix):-2]: p for p in params})
+      with self.var_creation_scope():
+        self.cell = self._get_cell(unit)
+        if isinstance(self.cell, (rnn_contrib.RNNCell, rnn_contrib.FusedRNNCell)):
+          y = self._get_output_cell(self.cell)
+        elif cudnn_rnn and isinstance(self.cell, (cudnn_rnn.CudnnLSTM, cudnn_rnn.CudnnGRU)):
+          y = self._get_output_cudnn(self.cell)
+        elif isinstance(self.cell, TFNativeOp.RecSeqCellOp):
+          y = self._get_output_native_rec_op(self.cell)
+        elif isinstance(self.cell, _SubnetworkRecCell):
+          y = self._get_output_subnet_unit(self.cell)
+        else:
+          raise Exception("invalid type: %s" % type(self.cell))
+        self.output.time_dim_axis = 0
+        self.output.batch_dim_axis = 1
+        self.output.placeholder = y
+        params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope_name_prefix)
+        self.params.update({p.name[len(scope_name_prefix):-2]: p for p in params})
 
   def get_dep_layers(self):
     l = super(RecLayer, self).get_dep_layers()
