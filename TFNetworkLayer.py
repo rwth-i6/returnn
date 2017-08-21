@@ -46,6 +46,7 @@ class LayerBase(object):
 
   def __init__(self, name, network, output=None, n_out=None, out_type=None, sources=(),
                target=None, loss=None, loss_scale=1.0, size_target=None,
+               reuse_params=None,
                L2=None, is_output_layer=None,
                copy_output_loss_from_source_idx=None,
                batch_norm=False,
@@ -65,6 +66,7 @@ class LayerBase(object):
     :param str|None size_target: like target but this is only used to set our output size in case of training
     :param Loss|None loss: via self.transform_config_dict()
     :param float loss_scale: scale factor for loss (1.0 by default)
+    :param LayerBase|None reuse_params: if given, will reuse the params from this layer. see self.var_creation_scope()
     :param float|None L2: for constraints
     :param bool|None is_output_layer:
     :param int|None copy_output_loss_from_source_idx: if set, will copy output_loss from this source
@@ -106,6 +108,7 @@ class LayerBase(object):
     self.params = {}  # type: dict[str,tf.Variable]
     self.saveable_param_replace = {}  # see get_saveable_params_dict()
     " :type: dict[tf.Variable,tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject] "
+    self.reuse_params = reuse_params
     self.L2 = L2
     self._is_output_layer = is_output_layer
     self.use_batch_norm = batch_norm
@@ -247,6 +250,8 @@ class LayerBase(object):
       get_layer(src_name)
       for src_name in src_names
       if not src_name == "none"]
+    if "reuse_params" in d:
+      d["reuse_params"] = get_layer(d["reuse_params"])
     if d.get("loss", None) and "target" not in d:
       d["target"] = network.extern_data.default_target
     if d.get("target"):
@@ -361,13 +366,28 @@ class LayerBase(object):
     return batch_dim
 
   @contextlib.contextmanager
-  def var_creation_scope(layer):
+  def var_creation_scope(self):
     """
     This takes care of setting up a scope where variables can be created.
+
+    :return: yields the variable_scope
     """
-    from TFUtil import var_creation_scope
+    from TFUtil import var_creation_scope, get_current_var_scope_name, reuse_name_scope
     with var_creation_scope() as dep:
-      yield dep
+      if self.reuse_params:
+        cur_scope = get_current_var_scope_name()
+        self_base_scope = self.get_absolute_name_scope_prefix()
+        assert self_base_scope.endswith("/")
+        assert (cur_scope + "/").startswith(self_base_scope)
+        ext_scope = cur_scope[len(self_base_scope) - 1:]  # e.g. "/rec" or ""
+        assert not ext_scope or ext_scope.startswith("/")
+        reuse_base_scope = self.reuse_params.get_absolute_name_scope_prefix()
+        assert reuse_base_scope.endswith("/")
+        reuse_scope = reuse_base_scope[:-1] + ext_scope
+        with reuse_name_scope(reuse_scope, absolute=True, reuse_vars=True) as scope:
+          yield scope
+      else:
+        yield tf.get_variable_scope()
 
   def add_param(self, param, custom_update=None):
     """
@@ -379,7 +399,10 @@ class LayerBase(object):
     assert isinstance(param, tf.Variable)
     if custom_update:
       custom_update.set_on_var(param)
-    name_scope_prefix = self.get_absolute_name_scope_prefix()
+    if self.reuse_params:
+      name_scope_prefix = self.reuse_params.get_absolute_name_scope_prefix()
+    else:
+      name_scope_prefix = self.get_absolute_name_scope_prefix()
     assert param.name
     assert param.name[:len(name_scope_prefix)] == name_scope_prefix
     assert param.name[-2:] == ":0"
