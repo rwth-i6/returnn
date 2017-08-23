@@ -2966,6 +2966,7 @@ class CrossEntropyLoss(Loss):
 
   def get_value(self):
     with tf.name_scope("loss_ce"):
+      log_clip_values = (1e-32, 1e32)  # only used for non-fused path
       assert self.target.ndim_dense == self.output.ndim_dense
       if self.target.sparse:
         if self.output_before_softmax_flat is not None:
@@ -2976,14 +2977,14 @@ class CrossEntropyLoss(Loss):
           target_flat_exp = tf.stack(
             [tf.range(tf.shape(self.target_flat)[0], dtype=tf.int32),
              tf.cast(self.target_flat, tf.int32)], axis=1)  # (time,2)
-          out = tf.log(tf.gather_nd(self.output_flat, target_flat_exp))
+          out = tf.log(tf.clip_by_value(tf.gather_nd(self.output_flat, target_flat_exp), *log_clip_values))
           return -self.reduce_func(out)
       else:  # not sparse
         if self.output_before_softmax_flat is not None:
           out = tf.nn.softmax_cross_entropy_with_logits(logits=self.output_before_softmax_flat, labels=self.target_flat)
           return self.reduce_func(out)
         else:
-          out = self.target_flat * tf.log(self.output_flat)
+          out = self.target_flat * tf.log(tf.clip_by_value(self.output_flat, *log_clip_values))
           return -self.reduce_func(out)
 
 
