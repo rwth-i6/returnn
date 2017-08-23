@@ -2895,8 +2895,13 @@ class Loss(object):
         else:
           self.output_flat = flatten_with_seq_len_mask(output.placeholder, self.output_seq_lens, time_major=output.is_time_major)
           self.output_flat.set_shape(tf.TensorShape(output.shape))
-      else:
+      else:  # no time axis
         self.loss_norm_factor = 1.0
+        assert self.output.batch_ndim == 2
+        if output_with_activation and output_with_activation.act_func is tf.nn.softmax:
+          self.output_before_softmax_flat = output_with_activation.x
+        else:
+          self.output_flat = output
       self.target_flat = flatten_with_seq_len_mask(target.placeholder, self.target_seq_lens, time_major=target.is_time_major)
       self._check_init()
 
