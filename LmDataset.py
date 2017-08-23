@@ -917,31 +917,38 @@ class TranslationDataset(CachedDataset2):
       better_exchook.install()
       from Util import AsyncThreadRun
 
-      sources_async = AsyncThreadRun(
-        name="%r: read source data", func=lambda: self._read_data(self._data_files["data"]))
-      targets_async = AsyncThreadRun(
-        name="%r: read target data", func=lambda: self._read_data(self._data_files["classes"]))
-      sources = sources_async.get()
+      # First iterate once over the data to get the data len as fast as possible.
+      data_len = 0
+      while True:
+        ls = self._data_files["data"].readlines(10 ** 4)
+        data_len += len(ls)
+        if not ls:
+          break
       with self._lock:
-        self._data_len = len(sources)
-      targets = targets_async.get()
-      assert len(targets) == self._data_len, "len of source is %r != len of target %r" % (
-        self._data_len, len(targets))
+        self._data_len = data_len
+      self._data_files["data"].rewind()  # we will read it again below
+
+      # Now, read and use the vocab for a compact representation in memory.
+      keys_to_read = ["data", "classes"]
+      while True:
+        for k in list(keys_to_read):
+          data_strs = self._data_files[k].readlines(10 ** 6)
+          if not data_strs:
+            assert len(self._data[k]) == self._data_len
+            keys_to_read.remove(k)
+            continue
+          assert len(self._data[k]) + len(data_strs) <= self._data_len
+          vocab = self._vocabs[k]
+          data = [
+            self._data_str_to_numpy(vocab, s.decode("utf8").strip() + self._add_postfix[k])
+            for s in data_strs]
+          with self._lock:
+            self._data[k].extend(data)
+        if not keys_to_read:
+          break
       for k, f in list(self._data_files.items()):
         f.close()
         self._data_files[k] = None
-      data_strs = {"data": sources, "classes": targets}
-      ChunkSize = 1000
-      i = 0
-      while i < self._data_len:
-        for k in ("data", "classes"):
-          vocab = self._vocabs[k]
-          data = [
-            self._data_str_to_numpy(vocab, s + self._add_postfix[k])
-            for s in data_strs[k][i:i + ChunkSize]]
-          with self._lock:
-            self._data[k].extend(data)
-        i += ChunkSize
 
     except Exception:
       sys.excepthook(*sys.exc_info())
@@ -999,21 +1006,6 @@ class TranslationDataset(CachedDataset2):
     return list(map(reversed_vocab.__getitem__, range(num_labels)))
 
   @staticmethod
-  def _read_data(f):
-    """
-    :param io.FileIO f: file
-    """
-    data = []
-    assert isinstance(data, list)
-    while True:
-      # Read in chunks. This can speed it up.
-      ls = f.readlines(10000)
-      data.extend([l.decode("utf8").strip() for l in ls])
-      if not ls:
-        break
-    return data
-
-  @staticmethod
   def _data_str_to_numpy(vocab, s):
     """
     :param dict[str,int] vocab:
@@ -1031,7 +1023,8 @@ class TranslationDataset(CachedDataset2):
     :rtype: numpy.ndarray
     """
     import time
-    last_len = None
+    last_print_time = 0
+    last_print_len = None
     while True:
       with self._lock:
         if self._data_len is not None:
@@ -1039,9 +1032,10 @@ class TranslationDataset(CachedDataset2):
         cur_len = len(self._data[key])
         if line_nr < cur_len:
           return self._data[key][line_nr]
-      if cur_len != last_len:
+      if cur_len != last_print_len and time.time() - last_print_time > 10:
         print("%r: waiting for %r, line %i (%i loaded so far)..." % (self, key, line_nr, cur_len), file=log.v3)
-      last_len = cur_len
+        last_print_len = cur_len
+        last_print_time = time.time()
       time.sleep(1)
 
   def _get_data_len(self):
