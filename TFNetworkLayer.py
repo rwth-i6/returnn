@@ -2706,7 +2706,7 @@ class AllophoneStateIdxParserLayer(LayerBase):
     result[-2] = code % num_states  # state
     code //= num_states
     for i in range(2 * context_len + 1):
-      result[i] = code % num_phone_classes  # phone idx
+      result[2 * context_len - i] = code % num_phone_classes  # phone idx
       code //= num_phone_classes
     self.output.placeholder = tf.stack(result, axis=self.output.batch_ndim - 1)
     self.output.size_placeholder = self.sources[0].output.size_placeholder.copy()
