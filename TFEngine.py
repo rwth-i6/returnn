@@ -910,15 +910,18 @@ class Engine(object):
     feed_dict = data_provider.get_feed_dict(single_threaded=True)
     return feed_dict
 
-  def run_single(self, dataset, seq_idx, output_dict):
+  def run_single(self, dataset, seq_idx, output_dict, ext_feed_dict=None):
     """
     :param Dataset.Dataset dataset:
     :param int seq_idx:
     :param dict[str,tf.Tensor] output_dict: key -> tf.Tensor
+    :param dict[tf.Tensor,numpy.ndarray] ext_feed_dict:
     :return: output_dict but values evaluated
     :rtype: dict[str,numpy.ndarray]
     """
     feed_dict = self.get_specific_feed_dict(dataset=dataset, seq_idx=seq_idx)
+    if ext_feed_dict:
+      feed_dict.update(ext_feed_dict)
     self.check_uninitialized_vars()  # Maybe some new uninitialized vars. Last check.
     return self.tf_session.run(output_dict, feed_dict=feed_dict)
 
