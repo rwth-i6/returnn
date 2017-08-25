@@ -27,7 +27,7 @@ from Log import log
 from Device import get_gpu_names
 import rnn
 _rnn_file = rnn.__file__
-_main_file = sys.modules["__main__"].__file__
+_main_file = getattr(sys.modules["__main__"], "__file__", "")
 if _rnn_file.endswith(".pyc"):
   _rnn_file = _rnn_file[:-1]
 if _main_file.endswith(".pyc"):
