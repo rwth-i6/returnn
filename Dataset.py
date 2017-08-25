@@ -490,6 +490,13 @@ class Dataset(object):
     # in advance can handle this somehow.
     return n < self.num_seqs
 
+  def serialize_data(self, key, data):
+    """
+    :param str key: e.g. "classes". self.labels[key] should be set
+    :param numpy.ndarray data: 1D
+    """
+    return " ".join(map(self.labels[key].__getitem__, data))
+
   def calculate_priori(self, target="classes"):
     priori = numpy.zeros((self.num_outputs[target][0],), dtype=theano.config.floatX)
     i = 0

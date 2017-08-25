@@ -1093,11 +1093,12 @@ class Engine(object):
       print("WARNING: Did not finished through the whole epoch.", file=log.v1)
       sys.exit(1)
 
-  def search(self, dataset, do_eval=True, output_layer_name="output"):
+  def search(self, dataset, do_eval=True, output_layer_name="output", out_file=None):
     """
     :param Dataset.Dataset dataset:
     :param bool do_eval: calculate errors. can only be done if we have the reference target
     :param str output_layer_name:
+    :param str out_file:
     """
     print("Search with network on %r." % dataset, file=log.v1)
     if not self.use_search_flag or not self.network:
@@ -1118,17 +1119,18 @@ class Engine(object):
     output_layer = self.network.layers[output_layer_name]
     out_beam_size = output_layer.output.beam_size
     if out_beam_size is None:
-      print("Given output is after decision (no beam).", file=log.v1)
+      print("Given output %r is after decision (no beam)." % output_layer, file=log.v1)
     else:
-      print("Given output has beam size %i." % out_beam_size)
+      print("Given output %r has beam size %i." % (output_layer, out_beam_size), file=log.v1)
 
-    def extra_fetches_callback(seq_idx, seq_tag, output):
+    def extra_fetches_callback(seq_idx, seq_tag, output, targets=None):
       """
-      :param list[int] seq_idx: of length batch
-      :param list[str] seq_tag: of length batch
-      :param list[numpy.ndarray] output: of length batch
+      :param list[int] seq_idx: of length batch (without beam)
+      :param list[str] seq_tag: of length batch (without beam)
+      :param list[numpy.ndarray] output: of length batch (with beam)
+      :param list[numpy.ndarray] targets: of length batch (without beam)
       """
-      n_batch = len(seq_idx)
+      n_batch = len(seq_idx)  # without beam
       assert n_batch == len(seq_tag)
       assert n_batch * (out_beam_size or 1) == len(output)
       if output_layer.output.dim == 256 and output_layer.output.sparse:
@@ -1137,6 +1139,8 @@ class Engine(object):
       for i in range(len(seq_idx)):
         if out_beam_size is None:
           print("seq_idx: %i, seq_tag: %r, output: %r" % (seq_idx[i], seq_tag[i], output[i]), file=log.v1)
+          print("  str:", dataset.serialize_data(key="classes", data=output[i]), file=log.v1)
+          print("  ref:", dataset.serialize_data(key="classes", data=targets[i]) , file=log.v1)
         else:
           print("seq_idx: %i, seq_tag: %r, outputs: %r" % (
             seq_idx[i], seq_tag[i], output[i * out_beam_size:(i + 1)*out_beam_size]), file=log.v1)
@@ -1146,7 +1150,8 @@ class Engine(object):
       extra_fetches={
         "output": output_layer,
         "seq_idx": self.network.get_extern_data("seq_idx", mark_data_key_as_used=True),
-        "seq_tag": self.network.get_extern_data("seq_tag", mark_data_key_as_used=True)},
+        "seq_tag": self.network.get_extern_data("seq_tag", mark_data_key_as_used=True),
+        "targets": self.network.get_extern_data("classes", mark_data_key_as_used=True)},
       extra_fetches_callback=extra_fetches_callback)
     runner.run(report_prefix=self.get_epoch_str() + " search")
     if not runner.finalized:
