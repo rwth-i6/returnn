@@ -746,10 +746,18 @@ def get_dataset_class(name):
 
 def init_dataset(kwargs):
   """
-  :type kwargs: dict[str] | str
+  :param dict[str]|str|(()->dict[str]) kwargs:
   :rtype: Dataset
   """
+  assert kwargs
+  if callable(kwargs):
+    return init_dataset(kwargs())
   if isinstance(kwargs, (str, unicode)):
+    if kwargs.startswith("config:"):
+      from Config import get_global_config
+      config = get_global_config()
+      assert config
+      return init_dataset(config.opt_typed_value(kwargs[len("config:"):]))
     return init_dataset_via_str(config_str=kwargs)
   kwargs = kwargs.copy()
   assert "class" in kwargs

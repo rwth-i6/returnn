@@ -203,6 +203,16 @@ class Config:
         assert index == 0
     return value
 
+  def opt_typed_value(self, key, default=None):
+    """
+    :param str key:
+    :param T|None default:
+    :rtype: T|object|str|None
+    """
+    if key in self.typed_dict:
+      return self.typed_dict[key]
+    return self.value(key, default)
+
   def int(self, key, default, index=0):
     """
     Parses the value of the given key as integer, returning default if not existent
