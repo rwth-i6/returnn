@@ -5,3 +5,4 @@ theano
 tensorflow
 numpydoc
 tornado
+futures
