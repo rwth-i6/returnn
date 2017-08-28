@@ -1093,12 +1093,12 @@ class Engine(object):
       print("WARNING: Did not finished through the whole epoch.", file=log.v1)
       sys.exit(1)
 
-  def search(self, dataset, do_eval=True, output_layer_name="output", out_file=None):
+  def search(self, dataset, do_eval=True, output_layer_name="output", output_file=None):
     """
     :param Dataset.Dataset dataset:
     :param bool do_eval: calculate errors. can only be done if we have the reference target
     :param str output_layer_name:
-    :param str out_file:
+    :param str output_file:
     """
     print("Search with network on %r." % dataset, file=log.v1)
     if not self.use_search_flag or not self.network:
@@ -1123,6 +1123,11 @@ class Engine(object):
     else:
       print("Given output %r has beam size %i." % (output_layer, out_beam_size), file=log.v1)
 
+    if output_file:
+      assert not os.path.exists(output_file)
+      print("Will write outputs to: %s" % output_file, file=log.v2)
+      output_file = open(output_file, "w")
+
     def extra_fetches_callback(seq_idx, seq_tag, output, targets=None):
       """
       :param list[int] seq_idx: of length batch (without beam)
@@ -1139,11 +1144,16 @@ class Engine(object):
       for i in range(len(seq_idx)):
         if out_beam_size is None:
           print("seq_idx: %i, seq_tag: %r, output: %r" % (seq_idx[i], seq_tag[i], output[i]), file=log.v1)
-          print("  str:", dataset.serialize_data(key="classes", data=output[i]), file=log.v1)
-          print("  ref:", dataset.serialize_data(key="classes", data=targets[i]) , file=log.v1)
+          out_idx = i
         else:
           print("seq_idx: %i, seq_tag: %r, outputs: %r" % (
             seq_idx[i], seq_tag[i], output[i * out_beam_size:(i + 1)*out_beam_size]), file=log.v1)
+          out_idx = i * out_beam_size
+        print("  hyp:", dataset.serialize_data(key="classes", data=output[out_idx]), file=log.v1)
+        print("  ref:", dataset.serialize_data(key="classes", data=targets[out_idx]), file=log.v1)
+        if output_file:
+          output_file.write("%s\n" % dataset.serialize_data(key="classes", data=output[out_idx]).encode("utf8"))
+          output_file.flush()
 
     runner = Runner(
       engine=self, dataset=dataset, batches=batches, train=False, eval=do_eval,
@@ -1159,6 +1169,8 @@ class Engine(object):
       sys.exit(1)
     print("Search done. Final: score %s error %s" % (
       self.format_score(runner.score), self.format_score(runner.error)), file=log.v1)
+    if output_file:
+      output_file.close()
 
   def compute_priors(self, dataset, config=None):
     """

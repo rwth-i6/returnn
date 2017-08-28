@@ -408,7 +408,10 @@ def executeMainTask():
       assert data, "set search_data"
     else:
       data = init_dataset(config.opt_typed_value("search_data"))
-    engine.search(data, output_layer_name=config.value("search_output_layer", "output"))
+    engine.search(
+      data,
+      output_layer_name=config.value("search_output_layer", "output"),
+      output_file=config.value("search_output_file", ""))
   elif task == 'compute_priors':
     assert train_data is not None, 'train data for priors should be provided'
     engine.init_network_from_config(config)
