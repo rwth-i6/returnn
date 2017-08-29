@@ -1,6 +1,7 @@
 
 from __future__ import print_function
 
+import os
 import sys
 from Dataset import DatasetSeq
 from CachedDataset2 import CachedDataset2
@@ -926,7 +927,7 @@ class TranslationDataset(CachedDataset2):
           break
       with self._lock:
         self._data_len = data_len
-      self._data_files["data"].rewind()  # we will read it again below
+      self._data_files["data"].seek(0, os.SEEK_SET)  # we will read it again below
 
       # Now, read and use the vocab for a compact representation in memory.
       keys_to_read = ["data", "classes"]
