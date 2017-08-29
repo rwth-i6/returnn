@@ -241,16 +241,16 @@ class Dataset(object):
       tmp = self.seq_ordering.split(':')
       bins = int(tmp[1]) if len(tmp) > 1 else 2
       nth = int(tmp[2]) if len(tmp) > 2 else 1
-      rnd_seed = ((epoch - 1) / nth + 1) if epoch else 1
+      rnd_seed = ((epoch - 1) // nth + 1) if epoch else 1
       rnd = Random(rnd_seed)
       rnd.shuffle(seq_index)
       out_index = []
       for i in range(bins):
         if i == bins - 1:
-          part = seq_index[i * len(seq_index) / bins:]
+          part = seq_index[i * len(seq_index) // bins:]
         else:
-          part = seq_index[i * len(seq_index) / bins:(i + 1) * len(seq_index) / bins]
-        part.sort(key=get_seq_len,reverse=(i%2==1))
+          part = seq_index[i * len(seq_index) // bins:(i + 1) * len(seq_index) // bins]
+        part.sort(key=get_seq_len, reverse=(i%2 == 1))
         out_index += part
       seq_index = out_index
     elif self.seq_ordering.startswith('random'):
