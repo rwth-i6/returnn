@@ -1122,8 +1122,10 @@ class Engine(object):
       print("Given output %r is after decision (no beam)." % output_layer, file=log.v1)
     else:
       print("Given output %r has beam size %i." % (output_layer, out_beam_size), file=log.v1)
+    target_key = "classes"
 
     if output_file:
+      assert dataset.can_serialize_data(target_key)
       assert not os.path.exists(output_file)
       print("Will write outputs to: %s" % output_file, file=log.v2)
       output_file = open(output_file, "w")
@@ -1149,10 +1151,11 @@ class Engine(object):
           print("seq_idx: %i, seq_tag: %r, outputs: %r" % (
             seq_idx[i], seq_tag[i], output[i * out_beam_size:(i + 1)*out_beam_size]), file=log.v1)
           out_idx = i * out_beam_size
-        print("  hyp:", dataset.serialize_data(key="classes", data=output[out_idx]), file=log.v1)
-        print("  ref:", dataset.serialize_data(key="classes", data=targets[out_idx]), file=log.v1)
+        if target_key and dataset.can_serialize_data(target_key):
+          print("  hyp:", dataset.serialize_data(key=target_key, data=output[out_idx]), file=log.v1)
+          print("  ref:", dataset.serialize_data(key=target_key, data=targets[out_idx]), file=log.v1)
         if output_file:
-          output_file.write("%s\n" % dataset.serialize_data(key="classes", data=output[out_idx]).encode("utf8"))
+          output_file.write("%s\n" % dataset.serialize_data(key=target_key, data=output[out_idx]).encode("utf8"))
           output_file.flush()
 
     runner = Runner(
@@ -1161,7 +1164,7 @@ class Engine(object):
         "output": output_layer,
         "seq_idx": self.network.get_extern_data("seq_idx", mark_data_key_as_used=True),
         "seq_tag": self.network.get_extern_data("seq_tag", mark_data_key_as_used=True),
-        "targets": self.network.get_extern_data("classes", mark_data_key_as_used=True)},
+        "targets": self.network.get_extern_data(target_key, mark_data_key_as_used=True)},
       extra_fetches_callback=extra_fetches_callback)
     runner.run(report_prefix=self.get_epoch_str() + " search")
     if not runner.finalized:

@@ -490,6 +490,13 @@ class Dataset(object):
     # in advance can handle this somehow.
     return n < self.num_seqs
 
+  def can_serialize_data(self, key):
+    """
+    :param str key: e.g. "classes"
+    :rtype: bool
+    """
+    return key in self.labels
+
   def serialize_data(self, key, data):
     """
     :param str key: e.g. "classes". self.labels[key] should be set
