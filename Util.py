@@ -1718,7 +1718,10 @@ def read_sge_num_procs(job_id=None):
   if not job_id:
     if not os.environ.get("SGE_ROOT"):
       return None
-    job_id = int(os.environ.get("JOB_ID") or 0)
+    try:
+      job_id = int(os.environ.get("JOB_ID") or 0)
+    except ValueError as exc:
+      raise Exception("read_sge_num_procs: %r, invalid JOB_ID: %r" % (exc, os.environ.get("JOB_ID")))
     if not job_id:
       return None
   from subprocess import Popen, PIPE, CalledProcessError
@@ -1731,7 +1734,11 @@ def read_sge_num_procs(job_id=None):
   ls = [l[len("hard resource_list:"):].strip() for l in stdout.splitlines() if l.startswith("hard resource_list:")]
   assert len(ls) == 1
   opts = dict([opt.split("=", 1) for opt in ls[0].split(",")])
-  return int(opts["num_proc"])
+  try:
+    return int(opts["num_proc"])
+  except ValueError as exc:
+    raise Exception("read_sge_num_procs: %r, invalid num_proc %r for job id %i.\nline: %r" % (
+      exc, opts["num_proc"], job_id, ls[0]))
 
 
 def try_and_ignore_exception(f):
