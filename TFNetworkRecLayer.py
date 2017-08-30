@@ -1686,6 +1686,7 @@ class DotAttentionLayer(GlobalAttentionContextBaseLayer):
     assert self.input_data.batch_ndim == 2
     assert self.input_data.time_dim_axis is None
     assert self.base.output.batch_ndim == 3
+    assert self.base.output.dim == self.output.dim
     assert self.base_ctx.output.batch_ndim == 3
     assert self.input_data.dim == self.base_ctx.output.dim
     # And we want to do a dot product so that we get (batch, base_time).
@@ -1695,10 +1696,55 @@ class DotAttentionLayer(GlobalAttentionContextBaseLayer):
       base_seq_lens = self.base.output.get_sequence_lengths()
       base_ctx = self.base_ctx.output.get_placeholder_as_batch_major()  # (batch, base_time, inner)
       # Get source of shape (batch, inner, 1).
-      source = tf.expand_dims(self.input_data.placeholder, axis=2)
-      energy = tf.matmul(base_ctx, source)
-      energy.set_shape(tf.TensorShape([None, None, 1]))  # (batch, base_time, 1)
+      source = tf.expand_dims(self.input_data.placeholder, axis=2)  # (batch, inner, 1)
+      energy = tf.matmul(base_ctx, source)  # (batch, base_time, 1)
+      energy.set_shape(tf.TensorShape([None, None, 1]))
       energy = tf.squeeze(energy, axis=2)  # (batch, base_time)
+      # We must mask all values behind base_seq_lens. Set them to -inf, because we use softmax afterwards.
+      energy_mask = tf.sequence_mask(base_seq_lens, maxlen=tf.shape(energy)[1])
+      energy = tf.where(energy_mask, energy, float("-inf") * tf.ones_like(energy))
+      self.base_weights = tf.nn.softmax(energy)  # (batch, base_time)
+      base_weights_bc = tf.expand_dims(self.base_weights, axis=1)  # (batch, 1, base_time)
+      out = tf.matmul(base_weights_bc, base)  # (batch, 1, n_out)
+      out.set_shape(tf.TensorShape([None, 1, self.output.dim]))
+      out = tf.squeeze(out, axis=1)  # (batch, n_out)
+      self.output.placeholder = out
+      self.output.size_placeholder = {}
+
+
+class ConcatAttentionLayer(GlobalAttentionContextBaseLayer):
+  """
+  Additive attention / tanh-concat attention as similarity measure between base_ctx and source.
+  This is used by Montreal, where as Stanford compared this to the dot-attention.
+  The concat-attention is maybe more standard for machine translation at the moment.
+  """
+
+  layer_class = "concat_attention"
+
+  def __init__(self, **kwargs):
+    super(ConcatAttentionLayer, self).__init__(**kwargs)
+    # We expect input_data of shape (batch, inner),
+    # base_ctx of shape (batch, base_time, inner) and base of shape (batch, base_time, n_out).
+    assert self.input_data.batch_ndim == 2
+    assert self.input_data.time_dim_axis is None
+    assert self.base.output.batch_ndim == 3
+    assert self.base.output.dim == self.output.dim
+    assert self.base_ctx.output.batch_ndim == 3
+    assert self.input_data.dim == self.base_ctx.output.dim
+    # And we want to get (batch, base_time).
+    from TFUtil import expand_multiple_dims
+    with tf.name_scope("att_energy"):
+      # Get base of shape (batch, base_time, inner).
+      base = self.base.output.get_placeholder_as_batch_major()  # (batch, base_time, n_out)
+      base_seq_lens = self.base.output.get_sequence_lengths()
+      base_ctx = self.base_ctx.output.get_placeholder_as_batch_major()  # (batch, base_time, inner)
+      # Get source of shape (batch, inner, 1).
+      source = tf.expand_dims(self.input_data.placeholder, axis=1)  # (batch, 1, inner)
+      energy_in = tf.tanh(base_ctx + source)  # (batch, base_time, inner)
+      energy_weights = self.add_param(tf.get_variable("v", shape=(self.input_data.dim,)))  # (inner,)
+      energy_weights_bc = expand_multiple_dims(energy_weights, axes=(0, 1))  # (1, 1, inner)
+      energy = tf.reduce_sum(energy_in * energy_weights_bc, axis=2)  # (batch, base_time)
+      energy.set_shape(tf.TensorShape([None, None]))
       # We must mask all values behind base_seq_lens. Set them to -inf, because we use softmax afterwards.
       energy_mask = tf.sequence_mask(base_seq_lens, maxlen=tf.shape(energy)[1])
       energy = tf.where(energy_mask, energy, float("-inf") * tf.ones_like(energy))
