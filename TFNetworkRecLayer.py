@@ -978,13 +978,13 @@ class _SubnetworkRecCell(object):
     if "end" in self.net_dict:  # used to specify ending of a sequence
       get_templated_layer("end")
 
-  def _construct(self, prev_outputs, prev_extra, data=None, classes=None, i=None):
+  def _construct(self, prev_outputs, prev_extra, i, data=None, classes=None):
     """
     :param dict[str,tf.Tensor] prev_outputs: outputs of the layers from the previous step
     :param dict[str,dict[str,tf.Tensor]] prev_extra: extra output / hidden states of the previous step for layers
+    :param tf.Tensor i: loop counter
     :param tf.Tensor|None data: optional source data, shape e.g. (batch,dim)
     :param tf.Tensor|None classes: optional target classes, shape e.g. (batch,) if it is sparse
-    :param tf.Tensor|None i: loop counter
     """
     assert not self.net.layers, "do not call this multiple times"
     if data is not None:
@@ -1028,8 +1028,7 @@ class _SubnetworkRecCell(object):
         return l
       return self.net._construct_layer(net_dict, name=name, get_layer=get_layer)
 
-    if i is not None:
-      self.net.layers[":i"] = _StepIndexLayer(i=i, name=":i", network=self.net)
+    self.net.layers[":i"] = _StepIndexLayer(i=i, name=":i", network=self.net)
     get_layer("output")
     assert "output" in self.net.layers
     # Might not be resolved otherwise:
@@ -1071,12 +1070,12 @@ class _SubnetworkRecCell(object):
     assert output_template.output.batch_shape == self.parent_rec_layer.output.batch_shape[1:], (
       "see RecLayer.get_out_data_from_opts()")
 
-  def get_next_loop_vars(self, loop_vars, data=None, classes=None, i=None):
+  def get_next_loop_vars(self, loop_vars, i, data=None, classes=None):
     """
     :param (list[tf.Tensor],list[tf.Tensor]) loop_vars: loop_vars from the previous step
+    :param tf.Tensor i: loop counter
     :param tf.Tensor|None data: optional source data, shape e.g. (batch,dim)
     :param tf.Tensor|None classes: optional target classes, shape e.g. (batch,) if it is sparse
-    :param tf.Tensor|None i: loop counter
     :return: next loop_vars
     :rtype: (list[tf.Tensor],list[tf.Tensor|tuple[tf.Tensor]])
     """
