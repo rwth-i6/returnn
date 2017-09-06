@@ -84,7 +84,7 @@ class RecLayer(_ConcatInputLayer):
     self._bias_initializer = tf.constant_initializer(0.0)
     self._fwd_weights_initializer = None
     self._rec_weights_initializer = None
-    from TFUtil import get_initializer
+    from TFUtil import get_initializer, xavier_initializer
     if forward_weights_init:
       self._fwd_weights_initializer = get_initializer(
         forward_weights_init, seed=self.network.random.randint(2**31), eval_local_ns={"layer": self})
@@ -96,27 +96,27 @@ class RecLayer(_ConcatInputLayer):
         bias_init, seed=self.network.random.randint(2**31), eval_local_ns={"layer": self})
     with tf.variable_scope(
           "rec",
-          initializer=tf.contrib.layers.xavier_initializer(
-            seed=self.network.random.randint(2**31))) as scope:
+          initializer=xavier_initializer(seed=self.network.random.randint(2**31))) as scope:
       assert isinstance(scope, tf.VariableScope)
       self._rec_scope = scope
       scope_name_prefix = scope.name + "/"  # e.g. "layer1/rec/"
-      self.cell = self._get_cell(unit)
-      if isinstance(self.cell, (rnn_contrib.RNNCell, rnn_contrib.FusedRNNCell)):
-        y = self._get_output_cell(self.cell)
-      elif cudnn_rnn and isinstance(self.cell, (cudnn_rnn.CudnnLSTM, cudnn_rnn.CudnnGRU)):
-        y = self._get_output_cudnn(self.cell)
-      elif isinstance(self.cell, TFNativeOp.RecSeqCellOp):
-        y = self._get_output_native_rec_op(self.cell)
-      elif isinstance(self.cell, _SubnetworkRecCell):
-        y = self._get_output_subnet_unit(self.cell)
-      else:
-        raise Exception("invalid type: %s" % type(self.cell))
-      self.output.time_dim_axis = 0
-      self.output.batch_dim_axis = 1
-      self.output.placeholder = y
-      params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope_name_prefix)
-      self.params.update({p.name[len(scope_name_prefix):-2]: p for p in params})
+      with self.var_creation_scope():
+        self.cell = self._get_cell(unit)
+        if isinstance(self.cell, (rnn_contrib.RNNCell, rnn_contrib.FusedRNNCell)):
+          y = self._get_output_cell(self.cell)
+        elif cudnn_rnn and isinstance(self.cell, (cudnn_rnn.CudnnLSTM, cudnn_rnn.CudnnGRU)):
+          y = self._get_output_cudnn(self.cell)
+        elif isinstance(self.cell, TFNativeOp.RecSeqCellOp):
+          y = self._get_output_native_rec_op(self.cell)
+        elif isinstance(self.cell, _SubnetworkRecCell):
+          y = self._get_output_subnet_unit(self.cell)
+        else:
+          raise Exception("invalid type: %s" % type(self.cell))
+        self.output.time_dim_axis = 0
+        self.output.batch_dim_axis = 1
+        self.output.placeholder = y
+        params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope_name_prefix)
+        self.params.update({p.name[len(scope_name_prefix):-2]: p for p in params})
 
   def get_dep_layers(self):
     l = super(RecLayer, self).get_dep_layers()
@@ -978,13 +978,13 @@ class _SubnetworkRecCell(object):
     if "end" in self.net_dict:  # used to specify ending of a sequence
       get_templated_layer("end")
 
-  def _construct(self, prev_outputs, prev_extra, data=None, classes=None, i=None):
+  def _construct(self, prev_outputs, prev_extra, i, data=None, classes=None):
     """
     :param dict[str,tf.Tensor] prev_outputs: outputs of the layers from the previous step
     :param dict[str,dict[str,tf.Tensor]] prev_extra: extra output / hidden states of the previous step for layers
+    :param tf.Tensor i: loop counter
     :param tf.Tensor|None data: optional source data, shape e.g. (batch,dim)
     :param tf.Tensor|None classes: optional target classes, shape e.g. (batch,) if it is sparse
-    :param tf.Tensor|None i: loop counter
     """
     assert not self.net.layers, "do not call this multiple times"
     if data is not None:
@@ -1028,8 +1028,7 @@ class _SubnetworkRecCell(object):
         return l
       return self.net._construct_layer(net_dict, name=name, get_layer=get_layer)
 
-    if i is not None:
-      self.net.layers[":i"] = _StepIndexLayer(i=i, name=":i", network=self.net)
+    self.net.layers[":i"] = _StepIndexLayer(i=i, name=":i", network=self.net)
     get_layer("output")
     assert "output" in self.net.layers
     # Might not be resolved otherwise:
@@ -1071,12 +1070,12 @@ class _SubnetworkRecCell(object):
     assert output_template.output.batch_shape == self.parent_rec_layer.output.batch_shape[1:], (
       "see RecLayer.get_out_data_from_opts()")
 
-  def get_next_loop_vars(self, loop_vars, data=None, classes=None, i=None):
+  def get_next_loop_vars(self, loop_vars, i, data=None, classes=None):
     """
     :param (list[tf.Tensor],list[tf.Tensor]) loop_vars: loop_vars from the previous step
+    :param tf.Tensor i: loop counter
     :param tf.Tensor|None data: optional source data, shape e.g. (batch,dim)
     :param tf.Tensor|None classes: optional target classes, shape e.g. (batch,) if it is sparse
-    :param tf.Tensor|None i: loop counter
     :return: next loop_vars
     :rtype: (list[tf.Tensor],list[tf.Tensor|tuple[tf.Tensor]])
     """
@@ -1686,6 +1685,7 @@ class DotAttentionLayer(GlobalAttentionContextBaseLayer):
     assert self.input_data.batch_ndim == 2
     assert self.input_data.time_dim_axis is None
     assert self.base.output.batch_ndim == 3
+    assert self.base.output.dim == self.output.dim
     assert self.base_ctx.output.batch_ndim == 3
     assert self.input_data.dim == self.base_ctx.output.dim
     # And we want to do a dot product so that we get (batch, base_time).
@@ -1695,10 +1695,55 @@ class DotAttentionLayer(GlobalAttentionContextBaseLayer):
       base_seq_lens = self.base.output.get_sequence_lengths()
       base_ctx = self.base_ctx.output.get_placeholder_as_batch_major()  # (batch, base_time, inner)
       # Get source of shape (batch, inner, 1).
-      source = tf.expand_dims(self.input_data.placeholder, axis=2)
-      energy = tf.matmul(base_ctx, source)
-      energy.set_shape(tf.TensorShape([None, None, 1]))  # (batch, base_time, 1)
+      source = tf.expand_dims(self.input_data.placeholder, axis=2)  # (batch, inner, 1)
+      energy = tf.matmul(base_ctx, source)  # (batch, base_time, 1)
+      energy.set_shape(tf.TensorShape([None, None, 1]))
       energy = tf.squeeze(energy, axis=2)  # (batch, base_time)
+      # We must mask all values behind base_seq_lens. Set them to -inf, because we use softmax afterwards.
+      energy_mask = tf.sequence_mask(base_seq_lens, maxlen=tf.shape(energy)[1])
+      energy = tf.where(energy_mask, energy, float("-inf") * tf.ones_like(energy))
+      self.base_weights = tf.nn.softmax(energy)  # (batch, base_time)
+      base_weights_bc = tf.expand_dims(self.base_weights, axis=1)  # (batch, 1, base_time)
+      out = tf.matmul(base_weights_bc, base)  # (batch, 1, n_out)
+      out.set_shape(tf.TensorShape([None, 1, self.output.dim]))
+      out = tf.squeeze(out, axis=1)  # (batch, n_out)
+      self.output.placeholder = out
+      self.output.size_placeholder = {}
+
+
+class ConcatAttentionLayer(GlobalAttentionContextBaseLayer):
+  """
+  Additive attention / tanh-concat attention as similarity measure between base_ctx and source.
+  This is used by Montreal, where as Stanford compared this to the dot-attention.
+  The concat-attention is maybe more standard for machine translation at the moment.
+  """
+
+  layer_class = "concat_attention"
+
+  def __init__(self, **kwargs):
+    super(ConcatAttentionLayer, self).__init__(**kwargs)
+    # We expect input_data of shape (batch, inner),
+    # base_ctx of shape (batch, base_time, inner) and base of shape (batch, base_time, n_out).
+    assert self.input_data.batch_ndim == 2
+    assert self.input_data.time_dim_axis is None
+    assert self.base.output.batch_ndim == 3
+    assert self.base.output.dim == self.output.dim
+    assert self.base_ctx.output.batch_ndim == 3
+    assert self.input_data.dim == self.base_ctx.output.dim
+    # And we want to get (batch, base_time).
+    from TFUtil import expand_multiple_dims
+    with tf.name_scope("att_energy"):
+      # Get base of shape (batch, base_time, inner).
+      base = self.base.output.get_placeholder_as_batch_major()  # (batch, base_time, n_out)
+      base_seq_lens = self.base.output.get_sequence_lengths()
+      base_ctx = self.base_ctx.output.get_placeholder_as_batch_major()  # (batch, base_time, inner)
+      # Get source of shape (batch, inner, 1).
+      source = tf.expand_dims(self.input_data.placeholder, axis=1)  # (batch, 1, inner)
+      energy_in = tf.tanh(base_ctx + source)  # (batch, base_time, inner)
+      energy_weights = self.add_param(tf.get_variable("v", shape=(self.input_data.dim,)))  # (inner,)
+      energy_weights_bc = expand_multiple_dims(energy_weights, axes=(0, 1))  # (1, 1, inner)
+      energy = tf.reduce_sum(energy_in * energy_weights_bc, axis=2)  # (batch, base_time)
+      energy.set_shape(tf.TensorShape([None, None]))
       # We must mask all values behind base_seq_lens. Set them to -inf, because we use softmax afterwards.
       energy_mask = tf.sequence_mask(base_seq_lens, maxlen=tf.shape(energy)[1])
       energy = tf.where(energy_mask, energy, float("-inf") * tf.ones_like(energy))

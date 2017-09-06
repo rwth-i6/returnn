@@ -795,11 +795,13 @@ class Engine(object):
     if not trainer.finalized:
       if trainer.device_crash_batch is not None:  # Otherwise we got an unexpected exception - a bug in our code.
         self.save_model(self.get_epoch_model_filename() + ".crash_%i" % trainer.device_crash_batch)
-      print("Trainer not finalized, quitting.", file=log.v4)
+      print("Trainer not finalized, quitting.", file=log.v1)
       sys.exit(1)
 
-    assert not any(numpy.isinf(list(trainer.score.values()))) or any(numpy.isnan(list(trainer.score.values()))), \
-      "Model is broken, got inf or nan final score: %s" % trainer.score
+    if any(numpy.isinf(list(trainer.score.values()))) or any(numpy.isnan(list(trainer.score.values()))):
+      self.save_model(self.get_epoch_model_filename() + ".broken")
+      print("Model seems broken, got inf or nan final score: %s" % trainer.score, file=log.v1)
+      sys.exit(1)
 
     if self.model_filename and (self.epoch % self.save_model_epoch_interval == 0):
       self.save_model(self.get_epoch_model_filename())
@@ -908,15 +910,18 @@ class Engine(object):
     feed_dict = data_provider.get_feed_dict(single_threaded=True)
     return feed_dict
 
-  def run_single(self, dataset, seq_idx, output_dict):
+  def run_single(self, dataset, seq_idx, output_dict, ext_feed_dict=None):
     """
     :param Dataset.Dataset dataset:
     :param int seq_idx:
     :param dict[str,tf.Tensor] output_dict: key -> tf.Tensor
+    :param dict[tf.Tensor,numpy.ndarray] ext_feed_dict:
     :return: output_dict but values evaluated
     :rtype: dict[str,numpy.ndarray]
     """
     feed_dict = self.get_specific_feed_dict(dataset=dataset, seq_idx=seq_idx)
+    if ext_feed_dict:
+      feed_dict.update(ext_feed_dict)
     self.check_uninitialized_vars()  # Maybe some new uninitialized vars. Last check.
     return self.tf_session.run(output_dict, feed_dict=feed_dict)
 
@@ -1088,11 +1093,12 @@ class Engine(object):
       print("WARNING: Did not finished through the whole epoch.", file=log.v1)
       sys.exit(1)
 
-  def search(self, dataset, do_eval=True, output_layer_name="output"):
+  def search(self, dataset, do_eval=True, output_layer_name="output", output_file=None):
     """
     :param Dataset.Dataset dataset:
     :param bool do_eval: calculate errors. can only be done if we have the reference target
     :param str output_layer_name:
+    :param str output_file:
     """
     print("Search with network on %r." % dataset, file=log.v1)
     if not self.use_search_flag or not self.network:
@@ -1113,17 +1119,25 @@ class Engine(object):
     output_layer = self.network.layers[output_layer_name]
     out_beam_size = output_layer.output.beam_size
     if out_beam_size is None:
-      print("Given output is after decision (no beam).", file=log.v1)
+      print("Given output %r is after decision (no beam)." % output_layer, file=log.v1)
     else:
-      print("Given output has beam size %i." % out_beam_size)
+      print("Given output %r has beam size %i." % (output_layer, out_beam_size), file=log.v1)
+    target_key = "classes"
 
-    def extra_fetches_callback(seq_idx, seq_tag, output):
+    if output_file:
+      assert dataset.can_serialize_data(target_key)
+      assert not os.path.exists(output_file)
+      print("Will write outputs to: %s" % output_file, file=log.v2)
+      output_file = open(output_file, "w")
+
+    def extra_fetches_callback(seq_idx, seq_tag, output, targets=None):
       """
-      :param list[int] seq_idx: of length batch
-      :param list[str] seq_tag: of length batch
-      :param list[numpy.ndarray] output: of length batch
+      :param list[int] seq_idx: of length batch (without beam)
+      :param list[str] seq_tag: of length batch (without beam)
+      :param list[numpy.ndarray] output: of length batch (with beam)
+      :param list[numpy.ndarray] targets: of length batch (without beam)
       """
-      n_batch = len(seq_idx)
+      n_batch = len(seq_idx)  # without beam
       assert n_batch == len(seq_tag)
       assert n_batch * (out_beam_size or 1) == len(output)
       if output_layer.output.dim == 256 and output_layer.output.sparse:
@@ -1132,16 +1146,25 @@ class Engine(object):
       for i in range(len(seq_idx)):
         if out_beam_size is None:
           print("seq_idx: %i, seq_tag: %r, output: %r" % (seq_idx[i], seq_tag[i], output[i]), file=log.v1)
+          out_idx = i
         else:
           print("seq_idx: %i, seq_tag: %r, outputs: %r" % (
             seq_idx[i], seq_tag[i], output[i * out_beam_size:(i + 1)*out_beam_size]), file=log.v1)
+          out_idx = i * out_beam_size
+        if target_key and dataset.can_serialize_data(target_key):
+          print("  hyp:", dataset.serialize_data(key=target_key, data=output[out_idx]), file=log.v1)
+          print("  ref:", dataset.serialize_data(key=target_key, data=targets[out_idx]), file=log.v1)
+        if output_file:
+          output_file.write("%s\n" % dataset.serialize_data(key=target_key, data=output[out_idx]).encode("utf8"))
+          output_file.flush()
 
     runner = Runner(
       engine=self, dataset=dataset, batches=batches, train=False, eval=do_eval,
       extra_fetches={
         "output": output_layer,
         "seq_idx": self.network.get_extern_data("seq_idx", mark_data_key_as_used=True),
-        "seq_tag": self.network.get_extern_data("seq_tag", mark_data_key_as_used=True)},
+        "seq_tag": self.network.get_extern_data("seq_tag", mark_data_key_as_used=True),
+        "targets": self.network.get_extern_data(target_key, mark_data_key_as_used=True)},
       extra_fetches_callback=extra_fetches_callback)
     runner.run(report_prefix=self.get_epoch_str() + " search")
     if not runner.finalized:
@@ -1149,6 +1172,8 @@ class Engine(object):
       sys.exit(1)
     print("Search done. Final: score %s error %s" % (
       self.format_score(runner.score), self.format_score(runner.error)), file=log.v1)
+    if output_file:
+      output_file.close()
 
   def compute_priors(self, dataset, config=None):
     """

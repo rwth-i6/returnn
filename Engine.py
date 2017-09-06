@@ -57,22 +57,26 @@ class Engine:
 
   @classmethod
   def get_existing_models(cls, config):
+    """
+    :param Config.Config config:
+    :return: dict epoch -> model filename
+    :rtype: dict[int,str]
+    """
     model_filename = config.value('model', '')
     if not model_filename:
       return []
     # Automatically search the filesystem for existing models.
-    file_list = []
+    file_list = {}
     for epoch in range(1, cls.config_get_final_epoch(config) + 1):
       for is_pretrain in [False, True]:
         fn = cls.epoch_model_filename(model_filename, epoch, is_pretrain)
         if os.path.exists(fn):
-          file_list += [(epoch, fn)]  # epoch, fn
+          file_list[epoch] = fn
           break
         if BackendEngine.is_tensorflow_selected():
           if os.path.exists(fn + ".index"):
-            file_list += [(epoch, fn)]  # epoch, fn
+            file_list[epoch] = fn
             break
-    file_list.sort()
     return file_list
 
   @classmethod
@@ -109,6 +113,12 @@ class Engine:
       assert os.path.exists(import_model_train_epoch1 + cls.model_filename_postfix())
 
     existing_models = cls.get_existing_models(config)
+    if not load_model_epoch_filename:
+      if config.has("load_epoch"):
+        load_epoch = config.int("load_epoch", 0)
+        assert load_epoch in existing_models
+        load_model_epoch_filename = existing_models[load_epoch]
+        assert model_epoch_from_filename(load_model_epoch_filename) == load_epoch
 
     # Only use this when we don't train.
     # For training, we first consider existing models before we take the 'load' into account when in auto epoch mode.
@@ -124,7 +134,7 @@ class Engine:
     # This is because we reran CRNN training, we usually don't want to train from scratch
     # but resume where we stopped last time.
     elif existing_models:
-      epoch_model = existing_models[-1]
+      epoch_model = sorted(existing_models.items())[-1]
       if load_model_epoch_filename:
         print("note: there is a 'load' which we ignore because of existing model", file=log.v4)
 
@@ -148,7 +158,7 @@ class Engine:
       if epoch_model[0]:
         if epoch_model[0] != start_epoch - 1:
           print("warning: start_epoch %i but there is %s" % (start_epoch, epoch_model), file=log.v4)
-        epoch_model = existing_models[start_epoch-1]
+        epoch_model = start_epoch - 1, existing_models[start_epoch - 1]
 
     cls._epoch_model = epoch_model
     return epoch_model

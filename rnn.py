@@ -23,7 +23,6 @@ import os
 import sys
 import time
 import numpy
-from optparse import OptionParser
 from Log import log
 from Device import Device, TheanoFlags, getDevicesInitArgs
 from Config import Config
@@ -48,70 +47,62 @@ quit = False
 server = None; """:type: Server"""
 
 
-def initConfig(configFilename=None, commandLineOptions=()):
+def initConfig(configFilename=None, commandLineOptions=(), extra_updates=None):
   """
-  :type configFilename: str
-  :type commandLineOptions: list[str]
+  :param str|None configFilename:
+  :param list[str]|tuple[str] commandLineOptions: e.g. ``sys.argv[1:]``
+  :param dict[str]|None extra_updates:
+
   Initializes the global config.
+  There are multiple sources which are used to init the config:
+
+    * ``configFilename``, and maybe first item of ``commandLineOptions`` interpret as config filename
+    * other options via ``commandLineOptions``
+    * ``extra_updates``
+
+  Note about the order/priority of these:
+
+    * ``extra_updates``
+    * options from ``commandLineOptions``
+    * ``configFilename``
+    * config filename from ``commandLineOptions[0]``
+    * ``extra_updates``
+    * options from ``commandLineOptions``
+
+  ``extra_updates`` and ``commandLineOptions`` are used twice so that they are available
+  when the config is loaded, which thus has access to them, and can e.g. use them via Python code.
+  However, the purpose is that they overwrite any option from the config;
+  that is why we apply them again in the end.
+
+  ``commandLineOptions`` is applied after ``extra_updates`` so that the user has still the possibility
+  to overwrite anything set by ``extra_updates``.
   """
   global config
   config = Config()
-  if configFilename:
-    assert os.path.isfile(configFilename), "config file not found"
-    config.load_file(configFilename)
+
+  config_filename_by_cmd_line = None
   if commandLineOptions and commandLineOptions[0][:1] not in ["-", "+"]:
     # Assume that this is a config filename.
-    config.load_file(commandLineOptions[0])
-    commandLineOptions = commandLineOptions[1:]
-  parser = OptionParser()
-  parser.add_option("-a", "--activation", dest = "activation", help = "[STRING/LIST] Activation functions: logistic, tanh, softsign, relu, identity, zero, one, maxout.")
-  parser.add_option("-b", "--batch_size", dest = "batch_size", help = "[INTEGER/TUPLE] Maximal number of frames per batch (optional: shift of batching window).")
-  parser.add_option("-c", "--chunking", dest = "chunking", help = "[INTEGER/TUPLE] Maximal number of frames per sequence (optional: shift of chunking window).")
-  parser.add_option("-d", "--description", dest = "description", help = "[STRING] Description of experiment.")
-  parser.add_option("-e", "--epoch", dest = "epoch", help = "[INTEGER] Starting epoch.")
-  parser.add_option("-E", "--eval", dest = "eval", help = "[STRING] eval file path")
-  parser.add_option("-f", "--gate_factors", dest = "gate_factors", help = "[none/local/global] Enables pooled (local) or separate (global) coefficients on gates.")
-  parser.add_option("-g", "--lreg", dest = "lreg", help = "[FLOAT] L1 or L2 regularization.")
-  parser.add_option("-i", "--save_interval", dest = "save_interval", help = "[INTEGER] Number of epochs until a new model will be saved.")
-  parser.add_option("-j", "--dropout", dest = "dropout", help = "[FLOAT] Dropout probability (0 to disable).")
-  #parser.add_option("-k", "--multiprocessing", dest = "multiprocessing", help = "[BOOLEAN] Enable multi threaded processing (required when using multiple devices).")
-  parser.add_option("-k", "--output_file", dest = "output_file", help = "[STRING] Path to target file for network output.")
-  parser.add_option("-l", "--log", dest = "log", help = "[STRING] Log file path.")
-  parser.add_option("-L", "--load", dest = "load", help = "[STRING] load model file path.")
-  parser.add_option("-m", "--momentum", dest = "momentum", help = "[FLOAT] Momentum term in gradient descent optimization.")
-  parser.add_option("-n", "--num_epochs", dest = "num_epochs", help = "[INTEGER] Number of epochs that should be trained.")
-  parser.add_option("-o", "--order", dest = "order", help = "[default/sorted/random] Ordering of sequences.")
-  parser.add_option("-p", "--loss", dest = "loss", help = "[loglik/sse/ctc] Objective function to be optimized.")
-  parser.add_option("-q", "--cache", dest = "cache", help = "[INTEGER] Cache size in bytes (supports notation for kilo (K), mega (M) and gigabtye (G)).")
-  parser.add_option("-r", "--learning_rate", dest = "learning_rate", help = "[FLOAT] Learning rate in gradient descent optimization.")
-  parser.add_option("-s", "--hidden_sizes", dest = "hidden_sizes", help = "[INTEGER/LIST] Number of units in hidden layers.")
-  parser.add_option("-t", "--truncate", dest = "truncate", help = "[INTEGER] Truncates sequence in BPTT routine after specified number of timesteps (-1 to disable).")
-  parser.add_option("-u", "--device", dest = "device", help = "[STRING/LIST] CPU and GPU devices that should be used (example: gpu0,cpu[1-6] or gpu,cpu*).")
-  parser.add_option("-v", "--verbose", dest = "log_verbosity", help = "[INTEGER] Verbosity level from 0 - 5.")
-  parser.add_option("-w", "--window", dest = "window", help = "[INTEGER] Width of sliding window over sequence.")
-  parser.add_option("-x", "--task", dest = "task", help = "[train/forward/analyze] Task of the current program call.")
-  parser.add_option("-y", "--hidden_type", dest = "hidden_type", help = "[VALUE/LIST] Hidden layer types: forward, recurrent, lstm.")
-  parser.add_option("-z", "--max_sequences", dest = "max_seqs", help = "[INTEGER] Maximal number of sequences per batch.")
-  parser.add_option("--config", dest="load_config", help="[STRING] load config")
-  (options, args) = parser.parse_args(list(commandLineOptions))
-  options = vars(options)
-  for opt in options.keys():
-    if options[opt] is not None:
-      if opt == "load_config":
-        config.load_file(options[opt])
-      else:
-        config.add_line(opt, options[opt])
-  assert len(args) % 2 == 0, "expect (++key, value) config tuples in remaining args: %r" % args
-  for i in range(0, len(args), 2):
-    key, value = args[i:i+2]
-    assert key[0:2] == "++", "expect key prefixed with '++' in (%r, %r)" % (key, value)
-    if value[:2] == "+-": value = value[1:]  # otherwise we never could specify things like "++threshold -0.1"
-    config.add_line(key=key[2:], value=value)
+    config_filename_by_cmd_line, commandLineOptions = commandLineOptions[0], commandLineOptions[1:]
+
+  if extra_updates:
+    config.update(extra_updates)
+  if commandLineOptions:
+    config.parse_cmd_args(commandLineOptions)
+  if configFilename:
+    config.load_file(configFilename)
+  if config_filename_by_cmd_line:
+    config.load_file(config_filename_by_cmd_line)
+  if extra_updates:
+    config.update(extra_updates)
+  if commandLineOptions:
+    config.parse_cmd_args(commandLineOptions)
+
   # I really don't know where to put this otherwise:
   if config.bool("EnableAutoNumpySharedMemPickling", False):
     import TaskSystem
     TaskSystem.SharedMemNumpyConfig["enabled"] = True
-  #Server default options
+  # Server default options
   if config.value('task', 'train') == 'server':
     config.set('num_inputs', 2)
     config.set('num_outputs', 1)
@@ -122,7 +113,7 @@ def initLog():
   logs = config.list('log', [])
   log_verbosity = config.int_list('log_verbosity', [])
   log_format = config.list('log_format', [])
-  log.initialize(logs = logs, verbosity = log_verbosity, formatter = log_format)
+  log.initialize(logs=logs, verbosity=log_verbosity, formatter=log_format)
 
 
 def initConfigJsonNetwork():
@@ -327,9 +318,7 @@ def init(configFilename=None, commandLineOptions=(), config_updates=None, extra_
   """
   initBetterExchook()
   initThreadJoinHack()
-  initConfig(configFilename=configFilename, commandLineOptions=commandLineOptions)
-  if config_updates:
-    config.update(config_updates)
+  initConfig(configFilename=configFilename, commandLineOptions=commandLineOptions, extra_updates=config_updates)
   initLog()
   if extra_greeting:
     print(extra_greeting, file=log.v1)
@@ -352,7 +341,6 @@ def init(configFilename=None, commandLineOptions=(), config_updates=None, extra_
     server = Server.Server(config)
   else:
     initEngine(devices)
-
 
 
 def finalize():
@@ -379,7 +367,7 @@ def needData():
 
 
 def executeMainTask():
-  st = time.time()
+  start_time = time.time()
   task = config.value('task', 'train')
   if task == 'train':
     assert train_data.have_seqs(), "no train files specified, check train option: %s" % config.value('train', None)
@@ -407,8 +395,11 @@ def executeMainTask():
       data = {"train": train_data, "dev": dev_data, "eval": eval_data}[config.value("search_data", "eval")]
       assert data, "set search_data"
     else:
-      data = init_dataset(config.typed_value("search_data"))
-    engine.search(data, output_layer_name=config.value("search_output_layer", "output"))
+      data = init_dataset(config.opt_typed_value("search_data"))
+    engine.search(
+      data,
+      output_layer_name=config.value("search_output_layer", "output"),
+      output_file=config.value("search_output_file", ""))
   elif task == 'compute_priors':
     assert train_data is not None, 'train data for priors should be provided'
     engine.init_network_from_config(config)
@@ -466,10 +457,13 @@ def executeMainTask():
   else:
     assert False, "unknown task: %s" % task
 
-  print(("elapsed: %f" % (time.time() - st)), file=log.v3)
+  print(("elapsed: %f" % (time.time() - start_time)), file=log.v3)
 
 
 def analyze_data(config):
+  """
+  :param Config config:
+  """
   dss = config.value('analyze_dataset', 'train')
   ds = {"train": train_data, "dev": dev_data, "eval": eval_data}[dss]
   epoch = config.int('epoch', 1)

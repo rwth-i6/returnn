@@ -893,13 +893,16 @@ def get_current_name_scope():
 
 
 @contextlib.contextmanager
-def reuse_name_scope(name, absolute=None):
+def reuse_name_scope(name, absolute=None, reuse_vars=None):
   """
+  Context manager to reuse an already created scope.
+  We try to both set the variable scope and the name scope.
+
   :param str|tf.VariableScope name: relative or absolute name scope (absolute if absolute=True or if tf.VariableScope).
     must not end with "/".
   :param bool absolute: if True it will be absolute
-
-  We try to both set the variable scope and the name scope.
+  :param bool reuse_vars: passed on as `reuse` arg for `tf.variable_scope`
+  :return: yields the variable_scope
   """
   if isinstance(name, tf.VariableScope):
     name = name.name
@@ -927,11 +930,13 @@ def reuse_name_scope(name, absolute=None):
     # tf.name_scope will not set the variable scope.
     # tf.variable_scope will also set the name scope, but the logic is broken
     # for absolute name scopes, thus we had to do the tf.name_scope manually above.
-    # We create the dummy_var_scope to force it to reuse that name.
+    # We create the dummy_var_scope to force it to reuse that name,
+    # and the trailing "/" will work-around the broken tf.variable_scope() usage of tf.name_scope().
+    # Afterwards we fix that name again.
     # Note that the reuse-argument might be miss-leading in this context:
     # It means that tf.get_variable() will search for existing variables and errors otherwise.
-    dummy_var_scope = tf.VariableScope(reuse=None, name=abs_name)
-    with tf.variable_scope(dummy_var_scope) as scope:
+    var_scope = tf.VariableScope(reuse=reuse_vars, name=abs_name)
+    with tf.variable_scope(var_scope) as scope:
       assert isinstance(scope, tf.VariableScope)
       # remove "/" from the end of the var-scope.
       # This is a work-around to fix up the variable scope behavior for nested variable scopes.

@@ -14,7 +14,6 @@ e.g. via ExternSprintDataset, when it spawns its Sprint subprocess.
 from __future__ import print_function
 
 import os
-
 import sys
 import time
 from threading import Event, Thread
@@ -27,6 +26,14 @@ from SprintDataset import SprintDatasetBase
 from Log import log
 from Device import get_gpu_names
 import rnn
+_rnn_file = rnn.__file__
+_main_file = getattr(sys.modules["__main__"], "__file__", "")
+if _rnn_file.endswith(".pyc"):
+  _rnn_file = _rnn_file[:-1]
+if _main_file.endswith(".pyc"):
+  _main_file = _main_file[:-1]
+if os.path.realpath(_rnn_file) == os.path.realpath(_main_file):
+  rnn = sys.modules["__main__"]
 from Engine import Engine
 from EngineUtil import assign_dev_data_single_seq
 import Debug
