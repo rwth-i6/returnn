@@ -847,10 +847,17 @@ class SequenceOutputLayer(OutputLayer):
     elif self.loss == 'seg_fast_bw':
       from Fsa import BuildSimpleFsaOp
 
-      am_score_scales    = self.seg_fast_bw_opts.get('am_score_scales', [1.0])
-      loop_emission_idxs = self.seg_fast_bw_opts.get('loop_emission_idxs', [])
-      length_models      = self.seg_fast_bw_opts.get('length_models', [])
-      loop_scores        = self.seg_fast_bw_opts.get('loop_scores', (0.0, 0.0))
+      am_score_scales      = self.seg_fast_bw_opts.get('am_score_scales', [1.0])
+      const_gradient_scale = self.seg_fast_bw_opts.get('const_gradient_scale', 1.0)
+      length_models        = self.seg_fast_bw_opts.get('length_models', [])
+      scale_gradient       = self.seg_fast_bw_opts.get('scale_gradient', False)
+      state_models         = self.seg_fast_bw_opts.get('state_models', None)
+
+      # support for legacy parameters
+      if 'loop_emission_idxs' in self.seg_fast_bw_opts:
+        loop_emission_idxs   = self.seg_fast_bw_opts.get('loop_emission_idxs', [])
+        loop_scores          = self.seg_fast_bw_opts.get('loop_scores', (0.0, 0.0))
+        state_model = { leidx : ('loop', 1, loop_scores[0], loop_scores[1]) for leidx in loop_emission_idxs }
 
       segment_layer = self.network.hidden[self.seg_fast_bw_opts['segment_layer']]
       batch_idxs = segment_layer.batch_idxs
@@ -859,16 +866,25 @@ class SequenceOutputLayer(OutputLayer):
 
       assert len(am_score_scales) > 0
 
-      edges, weights, start_end_states = BuildSimpleFsaOp(loop_emission_idxs, loop_scores)(self.y)
-      fwdbwd, _ = SegmentFastBaumWelchOp(**bw_args).make_op()(self.p_y_given_x, batch_idxs, edges, weights, start_end_states,
-                                                              length_models, T.cast(segment_layer.index, 'float32'),
-                                                              am_score_scales, self.network.epoch)
+      edges, weights, start_end_states = BuildSimpleFsaOp(state_models)(self.y)
+      fwdbwd, _, pw = SegmentFastBaumWelchOp(**bw_args).make_op()(self.p_y_given_x, batch_idxs, edges, weights, start_end_states,
+                                                                  length_models, T.cast(segment_layer.index, 'float32'),
+                                                                  am_score_scales, self.network.epoch)
       bw = T.exp(-fwdbwd)
+      self.y_data_flat = bw
       nlog_scores = -T.log(T.clip(self.p_y_given_x, numpy.float32(1.e-20), numpy.float(1.e20)))
 
       idx = segment_layer.index.reshape((bw.shape[0], bw.shape[1], 1))
-      err = (bw * nlog_scores * idx).sum()
-      known_grads = { self.z: (self.p_y_given_x - bw) * idx }
+      err = bw * nlog_scores * idx
+      grad = (self.p_y_given_x - bw) * idx
+
+      if scale_gradient:
+        pw  = T.clip(pw.reshape((pw.shape[0], pw.shape[1], 1)) * const_gradient_scale, 1.e-20, 1.0)
+        grad *= pw
+        err  *= pw
+
+      err = err.sum()
+      known_grads = { self.z: grad }
 
       return err, known_grads
     elif self.loss == 'ctc':
@@ -960,6 +976,8 @@ class SequenceOutputLayer(OutputLayer):
         pass
       else:
         return super(SequenceOutputLayer, self).errors()
+    elif self.loss == "seg_fast_bw":
+        return None
     else:
       return super(SequenceOutputLayer, self).errors()
 

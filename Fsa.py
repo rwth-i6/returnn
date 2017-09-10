@@ -791,9 +791,11 @@ class BuildSimpleFsaOp(theano.Op):
   # the first and last output are actually uint32
   otypes = (T.fmatrix, T.fvector, T.fmatrix)
 
-  def __init__(self, loop_emission_idxs=(), loop_scores=(0.0, 0.0)):
-    self.loop_emission_idxs = set(loop_emission_idxs)
-    self.loop_scores        = loop_scores
+  def __init__(self, state_models=None):
+    if state_models is None:
+        state_models = {}
+
+    self.state_models = state_models
 
   def perform(self, node, inputs, output_storage, params=None):
     labels = inputs[0]
@@ -813,17 +815,35 @@ class BuildSimpleFsaOp(theano.Op):
       seq_start_state = cur_state
       for l in range(labels.shape[0]):
         label = labels[l, b]
-        lenmod = 1 if labels[l, b] in self.loop_emission_idxs else 0
         if label < 0:
           continue
-        edges.append((cur_state, cur_state + 1, label, lenmod, b))
-        if labels[l, b] in self.loop_emission_idxs:
-          edges.append((cur_state, cur_state, label, lenmod, b))
-          weights.append(self.loop_scores[0])
-          weights.append(self.loop_scores[1])
-        else:
-          weights.append(0.0)
-        cur_state += 1
+        state_model = self.state_models.get(labels[l, b], ('default', 0, 0.0))
+        params = state_model[1:]
+        state_model = state_model[0]
+        if state_model == 'default':
+          # default state model where we transition to the next label
+          length_model, edge_weight = params
+          edges.append((cur_state, cur_state + 1, label, length_model, b))
+          weights.append(edge_weight)
+          cur_state += 1
+        elif state_model == 'loop':
+          # allow looping in the current state before proceeding to the next one
+          length_model, fwd_score, loop_score = params
+          edges.append((cur_state, cur_state,     label, length_model, b))
+          weights.append(loop_score)
+          edges.append((cur_state, cur_state + 1, label, length_model, b))
+          weights.append(fwd_score)
+          cur_state += 1
+        elif state_model == 'double':
+          # choose between emitting the label once or twice
+          lm_once, lm_twice_1, lm_twice_2, once_score, twice_score = params
+          edges.append((cur_state,     cur_state + 2, label, lm_once, b))
+          weights.append(once_score)
+          edges.append((cur_state    , cur_state + 1, label, lm_twice_1, b))
+          weights.append(0.5 * twice_score)
+          edges.append((cur_state + 1, cur_state + 2, label, lm_twice_2, b))
+          weights.append(0.5 * twice_score)
+          cur_state += 2
 
       start_end_states.append([seq_start_state, cur_state])
 
