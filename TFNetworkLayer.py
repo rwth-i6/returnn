@@ -965,7 +965,7 @@ class BatchNormLayer(CopyLayer):
     batch_norm_opts = {key: kwargs.pop(key)
                        for key in batch_norm_kwargs
                        if key in kwargs}
-    super(BatchNormLayer, self).__init__(use_batch_norm=batch_norm_opts or True, **kwargs)
+    super(BatchNormLayer, self).__init__(batch_norm=batch_norm_opts or True, **kwargs)
 
 
 class SliceLayer(_ConcatInputLayer):
