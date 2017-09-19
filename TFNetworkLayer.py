@@ -716,7 +716,7 @@ class SearchChoices(object):
 
   def filter_seqs(self, seq_filter):
     """
-    :param tf.Tensor seq_filter: (batch, beam) of type bool
+    :param tf.Tensor seq_filter: (batch, beam) of type bool, which we want to keep
     """
     with tf.name_scope("search_filter_seqs"):
       from TFUtil import expand_dims_unbroadcast, get_shape_dim
