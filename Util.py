@@ -1185,11 +1185,12 @@ def collect_class_init_kwargs(cls, only_with_default=False):
     arg_spec = getargspec(cls_.__init__)
     args = arg_spec.args[1:]  # first arg is self, ignore
     if only_with_default:
-      assert len(arg_spec.defaults) <= len(args)
-      args = args[len(args) - len(arg_spec.defaults):]
-      assert len(arg_spec.defaults) == len(args), arg_spec
-      for arg, default in zip(args, arg_spec.defaults):
-        kwargs[arg] = default
+      if arg_spec.defaults:
+        assert len(arg_spec.defaults) <= len(args)
+        args = args[len(args) - len(arg_spec.defaults):]
+        assert len(arg_spec.defaults) == len(args), arg_spec
+        for arg, default in zip(args, arg_spec.defaults):
+          kwargs[arg] = default
     else:
       for arg in args:
         if arg not in kwargs:
