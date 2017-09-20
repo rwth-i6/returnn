@@ -715,7 +715,7 @@ class LstmGenericBase(NativeOpGenBase):
           float eps = epsilon[idx];
 
           //avoid division by 0
-          float gc = Y[idx] / fmaxf(outGate, float(1e-16)); //g(c(t))
+          float gc = tanhf(state); //g(c(t))
           float gzc = (state - fgtGate * oldState) / fmaxf(inpGate, float(1e-16)); //g(z_c(t))
 
           //delta_output
