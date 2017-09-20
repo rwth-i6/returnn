@@ -537,8 +537,8 @@ class RecLayer(_ConcatInputLayer):
         assert self._max_seq_len, "must specify max_seq_len in rec layer"
         max_seq_len = self._max_seq_len
         have_known_seq_len = False
-      if not self.input_data and self.network.search_flag:
-        assert not have_known_seq_len  # at least for the moment
+      # if not self.input_data and self.network.search_flag:
+      #   assert not have_known_seq_len  # at least for the moment
 
       # TODO: Better check for train_flag.
       # Maybe more generic via sampling options later.
