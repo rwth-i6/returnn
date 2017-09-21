@@ -2898,7 +2898,7 @@ class AlignmentLayer(ForwardLayer):
 class CAlignmentLayer(ForwardLayer):
   layer_class = "calign"
 
-  def __init__(self, direction='inv', tdps=None, nstates=1, nstep=1, min_skip=1, max_skip=30, search='align', train_skips=False, train_emission=False, clip_emission=1.0,
+  def __init__(self, direction='inv', tdps=None, nstates=1, nstep=1, min_skip=1, max_skip=30, search='align', train_skips=False, train_emission=False, clip_emission=1.0, train_attention=False,
                base=None, coverage=0, output_z=False, reduce_output=True, blank=None, nil = None, focus='last', mode='viterbi', **kwargs):
     assert direction == 'inv'
     target = kwargs['target'] if 'target' in kwargs else 'classes'
@@ -2976,6 +2976,11 @@ class CAlignmentLayer(ForwardLayer):
       q_in = T.dot(x_in, W_skip) + b_skip
       q_in = T.nnet.softmax(q_in.reshape((q_in.shape[0] * q_in.shape[1], q_in.shape[2]))).reshape(q_in.shape)
 
+    if train_attention:
+      W_att = self.add_param(self.create_forward_weights(n_out, 1, name="W_att_%s" % self.name))
+      b_att = self.add_param(self.create_bias(1, name='b_att_%s' % self.name))
+      q_in = T.dot(x_in, W_att) + b_att
+      q_in = T.nnet.sigmoid(q_in)
 
     if reduce_output:
       self.output = z_out if output_z else x_out
@@ -3043,6 +3048,13 @@ class CAlignmentLayer(ForwardLayer):
       z_out = q_in.reshape((q_in.shape[0] * q_in.shape[1], q_in.shape[2])) # (TB)2
       self.cost_val = norm * -T.sum(y_out[idx] * T.log(z_out[idx]))
       self.error_val = norm * T.sum(T.ge(T.sqr(z_out[idx,1]-y_out[idx,1]),numpy.float32(1./self.n_cls)))
+      return
+    elif train_attention:
+      idx = (self.sources[0].index.flatten() > 0).nonzero()
+      y_out = T.round(T.sum(self.attention,axis=0).dimshuffle(1,0)).cast('int32') # TB
+      y_out = (y_out.flatten() > 0).nonzero()
+      self.cost_val = -T.log(q_in.flatten()[y_out[idx]]).sum()
+      self.error_val = T.sum(T.neq(T.round(q_in).flatten().cast('int32')[idx], y_out[idx]))
       return
     else:
       y_out = self.y_out
