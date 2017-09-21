@@ -844,7 +844,11 @@ class AttentionSegment(AttentionBase):
       avg_entropy = T.sum(min_dist,dtype='float32')/T.cast(min_dist.shape[0],'float32')
       exp_min_dist = T.exp(att_scale/T.cast(avg_entropy,'float32'))
       temperature = numpy.float32(1) - T.minimum(exp_min_dist,numpy.float32(1.0))
-
+    elif method == "entropy_batch_min":
+      assert min_dist is not None
+      min_entropy = T.max(min_dist)
+      exp_min_dist = T.exp(att_scale/T.cast(min_entropy,'float32'))
+      temperature = numpy.float32(1) - T.minimum(exp_min_dist,numpy.float32(1.0))
     return temperature
 
   def attend(self, y_p):

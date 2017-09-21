@@ -537,6 +537,8 @@ class RecLayer(_ConcatInputLayer):
         assert self._max_seq_len, "must specify max_seq_len in rec layer"
         max_seq_len = self._max_seq_len
         have_known_seq_len = False
+      # if not self.input_data and self.network.search_flag:
+      #   assert not have_known_seq_len  # at least for the moment
 
       # TODO: Better check for train_flag.
       # Maybe more generic via sampling options later.
@@ -658,7 +660,7 @@ class RecLayer(_ConcatInputLayer):
       :param tf.Tensor i: loop counter, scalar
       :param net_vars: the accumulator values
       :param list[tf.TensorArray] acc_tas: the output accumulator TensorArray
-      :param (tf.Tensor,tf.Tensor)|None seq_len_info:
+      :param (tf.Tensor,tf.Tensor)|None seq_len_info: tuple (end_flag, seq_len)
       :return: [i + 1, a_flat, tas]: the updated counter + new accumulator values + updated TensorArrays
       :rtype: (tf.Tensor, object, list[tf.TensorArray])
 
@@ -676,8 +678,10 @@ class RecLayer(_ConcatInputLayer):
         if seq_len_info is not None:
           end_flag, dyn_seq_len = seq_len_info
           with tf.name_scope("end_flag"):
+            # TODO: end_flag is (batch * beam_in,), probably a different beam than beam_out?
             end_flag = tf.logical_or(end_flag, cell.net.layers["end"].output.placeholder)  # (batch * beam,)
           with tf.name_scope("dyn_seq_len"):
+            # TODO: also wrong...
             dyn_seq_len += tf.where(
               end_flag,
               constant_with_shape(0, shape=tf.shape(end_flag)),
@@ -722,7 +726,7 @@ class RecLayer(_ConcatInputLayer):
       # See body().
       out_batch_dim = cell.layer_data_templates["end"].get_batch_dim()
       init_seq_len_info = (
-        constant_with_shape(False, shape=[out_batch_dim], name="initial_end"),
+        constant_with_shape(False, shape=[out_batch_dim], name="initial_end_flag"),
         constant_with_shape(0, shape=[out_batch_dim], name="initial_seq_len"))
       init_loop_vars += (init_seq_len_info,)
     final_loop_vars = tf.while_loop(
@@ -810,6 +814,7 @@ class RecLayer(_ConcatInputLayer):
         # choice_beams are from the previous step, shape (batch, beam_out) -> beam idx of output,
         # output is of shape (batch * beam, n_out).
         with reuse_name_scope(self._rec_scope.name + "/while_loop_search_body", absolute=True):
+          # We start at the output layer choice base, and search for its source, i.e. for the previous time frame.
           choice_base = output_choice_base
           is_output_choice = True
           while True:
@@ -978,13 +983,13 @@ class _SubnetworkRecCell(object):
     if "end" in self.net_dict:  # used to specify ending of a sequence
       get_templated_layer("end")
 
-  def _construct(self, prev_outputs, prev_extra, data=None, classes=None, i=None):
+  def _construct(self, prev_outputs, prev_extra, i, data=None, classes=None):
     """
     :param dict[str,tf.Tensor] prev_outputs: outputs of the layers from the previous step
     :param dict[str,dict[str,tf.Tensor]] prev_extra: extra output / hidden states of the previous step for layers
+    :param tf.Tensor i: loop counter
     :param tf.Tensor|None data: optional source data, shape e.g. (batch,dim)
     :param tf.Tensor|None classes: optional target classes, shape e.g. (batch,) if it is sparse
-    :param tf.Tensor|None i: loop counter
     """
     assert not self.net.layers, "do not call this multiple times"
     if data is not None:
@@ -1028,8 +1033,7 @@ class _SubnetworkRecCell(object):
         return l
       return self.net._construct_layer(net_dict, name=name, get_layer=get_layer)
 
-    if i is not None:
-      self.net.layers[":i"] = _StepIndexLayer(i=i, name=":i", network=self.net)
+    self.net.layers[":i"] = _StepIndexLayer(i=i, name=":i", network=self.net)
     get_layer("output")
     assert "output" in self.net.layers
     # Might not be resolved otherwise:
@@ -1071,12 +1075,12 @@ class _SubnetworkRecCell(object):
     assert output_template.output.batch_shape == self.parent_rec_layer.output.batch_shape[1:], (
       "see RecLayer.get_out_data_from_opts()")
 
-  def get_next_loop_vars(self, loop_vars, data=None, classes=None, i=None):
+  def get_next_loop_vars(self, loop_vars, i, data=None, classes=None):
     """
     :param (list[tf.Tensor],list[tf.Tensor]) loop_vars: loop_vars from the previous step
+    :param tf.Tensor i: loop counter
     :param tf.Tensor|None data: optional source data, shape e.g. (batch,dim)
     :param tf.Tensor|None classes: optional target classes, shape e.g. (batch,) if it is sparse
-    :param tf.Tensor|None i: loop counter
     :return: next loop_vars
     :rtype: (list[tf.Tensor],list[tf.Tensor|tuple[tf.Tensor]])
     """
@@ -1431,14 +1435,19 @@ class ChoiceLayer(LayerBase):
   This is supposed to be used inside the rec layer.
   This can be extended in various ways.
 
-  Assume that we get input (batch,dim) from a log-softmax.
+  We present the scores in +log space, and we will add them up along the path.
+  Assume that we get input (batch,dim) from a (log-)softmax.
   Assume that each batch is already a choice via search.
   In search with a beam size of N, we would output
   sparse (batch=N,) and scores for each.
   """
   layer_class = "choice"
 
-  def __init__(self, beam_size, **kwargs):
+  def __init__(self, beam_size, input_type="prob", **kwargs):
+    """
+    :param int beam_size: the outgoing beam size. i.e. our output will be (batch * beam_size, ...)
+    :param str input_type: "prob" or "log", whether the input is in probability space, log-space, etc
+    """
     super(ChoiceLayer, self).__init__(**kwargs)
     # We assume log-softmax here, inside the rec layer.
     assert len(self.sources) == 1
@@ -1447,6 +1456,10 @@ class ChoiceLayer(LayerBase):
     assert self.sources[0].output.shape == (self.output.dim,)
     assert self.target
     if self.network.search_flag:
+      # We are doing the search.
+      # We don't do any checking for sequence length here.
+      # The logic is implemented in `SearchChoices.filter_seqs()`.
+      # TODO this is wrong, we must do it here
       self.search_choices = SearchChoices(
         owner=self,
         beam_size=beam_size)
@@ -1457,13 +1470,21 @@ class ChoiceLayer(LayerBase):
       beam_in = tf.shape(scores_base)[1]
       scores_base = tf.expand_dims(scores_base, axis=-1)  # (batch, beam_in, dim)
       scores_in = self.sources[0].output.placeholder  # (batch * beam_in, dim)
+      # We present the scores in +log space, and we will add them up along the path.
+      if input_type == "prob":
+        scores_in = tf.log(scores_in)
+      elif input_type == "log":
+        pass
+      else:
+        raise Exception("%r: invalid input type %r" % (self, input_type))
       scores_in_dim = self.sources[0].output.dim
       scores_in = tf.reshape(scores_in, [net_batch_dim, beam_in, scores_in_dim])  # (batch, beam_in, dim)
       scores_in += scores_base  # (batch, beam_in, dim)
       scores_in_flat = tf.reshape(scores_in, [net_batch_dim, beam_in * scores_in_dim])  # (batch, beam_in * dim)
+      # `tf.nn.top_k` is the core function performing our search.
       # We get scores/labels of shape (batch, beam) with indices in [0..beam_in*dim-1].
       scores, labels = tf.nn.top_k(scores_in_flat, k=beam_size)
-      self.search_choices.src_beams = labels // scores_in_dim  # (batch, beam) -> scores_in batch idx
+      self.search_choices.src_beams = labels // scores_in_dim  # (batch, beam) -> beam_in idx
       labels = labels % scores_in_dim  # (batch, beam) -> dim idx
       labels = tf.reshape(labels, [net_batch_dim * beam_size])  # (batch * beam)
       labels = tf.cast(labels, self.output.dtype)
@@ -1686,6 +1707,7 @@ class DotAttentionLayer(GlobalAttentionContextBaseLayer):
     assert self.input_data.batch_ndim == 2
     assert self.input_data.time_dim_axis is None
     assert self.base.output.batch_ndim == 3
+    assert self.base.output.dim == self.output.dim
     assert self.base_ctx.output.batch_ndim == 3
     assert self.input_data.dim == self.base_ctx.output.dim
     # And we want to do a dot product so that we get (batch, base_time).
@@ -1695,10 +1717,55 @@ class DotAttentionLayer(GlobalAttentionContextBaseLayer):
       base_seq_lens = self.base.output.get_sequence_lengths()
       base_ctx = self.base_ctx.output.get_placeholder_as_batch_major()  # (batch, base_time, inner)
       # Get source of shape (batch, inner, 1).
-      source = tf.expand_dims(self.input_data.placeholder, axis=2)
-      energy = tf.matmul(base_ctx, source)
-      energy.set_shape(tf.TensorShape([None, None, 1]))  # (batch, base_time, 1)
+      source = tf.expand_dims(self.input_data.placeholder, axis=2)  # (batch, inner, 1)
+      energy = tf.matmul(base_ctx, source)  # (batch, base_time, 1)
+      energy.set_shape(tf.TensorShape([None, None, 1]))
       energy = tf.squeeze(energy, axis=2)  # (batch, base_time)
+      # We must mask all values behind base_seq_lens. Set them to -inf, because we use softmax afterwards.
+      energy_mask = tf.sequence_mask(base_seq_lens, maxlen=tf.shape(energy)[1])
+      energy = tf.where(energy_mask, energy, float("-inf") * tf.ones_like(energy))
+      self.base_weights = tf.nn.softmax(energy)  # (batch, base_time)
+      base_weights_bc = tf.expand_dims(self.base_weights, axis=1)  # (batch, 1, base_time)
+      out = tf.matmul(base_weights_bc, base)  # (batch, 1, n_out)
+      out.set_shape(tf.TensorShape([None, 1, self.output.dim]))
+      out = tf.squeeze(out, axis=1)  # (batch, n_out)
+      self.output.placeholder = out
+      self.output.size_placeholder = {}
+
+
+class ConcatAttentionLayer(GlobalAttentionContextBaseLayer):
+  """
+  Additive attention / tanh-concat attention as similarity measure between base_ctx and source.
+  This is used by Montreal, where as Stanford compared this to the dot-attention.
+  The concat-attention is maybe more standard for machine translation at the moment.
+  """
+
+  layer_class = "concat_attention"
+
+  def __init__(self, **kwargs):
+    super(ConcatAttentionLayer, self).__init__(**kwargs)
+    # We expect input_data of shape (batch, inner),
+    # base_ctx of shape (batch, base_time, inner) and base of shape (batch, base_time, n_out).
+    assert self.input_data.batch_ndim == 2
+    assert self.input_data.time_dim_axis is None
+    assert self.base.output.batch_ndim == 3
+    assert self.base.output.dim == self.output.dim
+    assert self.base_ctx.output.batch_ndim == 3
+    assert self.input_data.dim == self.base_ctx.output.dim
+    # And we want to get (batch, base_time).
+    from TFUtil import expand_multiple_dims
+    with tf.name_scope("att_energy"):
+      # Get base of shape (batch, base_time, inner).
+      base = self.base.output.get_placeholder_as_batch_major()  # (batch, base_time, n_out)
+      base_seq_lens = self.base.output.get_sequence_lengths()
+      base_ctx = self.base_ctx.output.get_placeholder_as_batch_major()  # (batch, base_time, inner)
+      # Get source of shape (batch, inner, 1).
+      source = tf.expand_dims(self.input_data.placeholder, axis=1)  # (batch, 1, inner)
+      energy_in = tf.tanh(base_ctx + source)  # (batch, base_time, inner)
+      energy_weights = self.add_param(tf.get_variable("v", shape=(self.input_data.dim,)))  # (inner,)
+      energy_weights_bc = expand_multiple_dims(energy_weights, axes=(0, 1))  # (1, 1, inner)
+      energy = tf.reduce_sum(energy_in * energy_weights_bc, axis=2)  # (batch, base_time)
+      energy.set_shape(tf.TensorShape([None, None]))
       # We must mask all values behind base_seq_lens. Set them to -inf, because we use softmax afterwards.
       energy_mask = tf.sequence_mask(base_seq_lens, maxlen=tf.shape(energy)[1])
       energy = tf.where(energy_mask, energy, float("-inf") * tf.ones_like(energy))
