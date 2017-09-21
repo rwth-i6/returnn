@@ -1088,7 +1088,7 @@ class LstmLowMem(NativeOpGenBase):
     device_free(x_h);
     device_free(intern);
 
-    Ndarray_memcpy(d, data_ptr(C, t - step), n_batch * n_cells * sizeof(float));
+    Ndarray_memcpy(Ndarray_DEV_DATA(d), data_ptr(C, t - step), n_batch * n_cells * sizeof(float));
   """
 
   c_bw_code = """
