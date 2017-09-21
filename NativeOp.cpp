@@ -9,6 +9,15 @@
 
 #define ARRAY_LEN(x) (sizeof(x) / sizeof(x[0]))
 
+
+#define assert_cmp(a, cmp, b) \
+    if(!((a) cmp (b))) { \
+        std::cerr << "Assertion failed: " << a << " " << #cmp << " " << b << std::endl; \
+        assert((a) cmp (b)); \
+    }
+
+
+
 #ifndef TENSORFLOW
 #define TENSORFLOW 0
 #endif
@@ -35,6 +44,7 @@ The BLAS functions expect the inputs in column-major and return in column-major.
 #define Ndarray tensorflow::Tensor
 #define Ndarray_DEV_DATA(x) (x)->flat<float>().data()
 #define Ndarray_DEV_DATA_int32(x) (x)->flat<int32>().data()
+#define Ndarray_DEV_DATA_int32_scalar(x) (x)->scalar<int32>()()
 #define Ndarray_HOST_DIMS(x) (x)->shape().dim_sizes().data()
 #define Ndarray_DIMS Ndarray_HOST_DIMS
 #define Ndarray_NDIM(x) (x)->dims()
@@ -219,6 +229,7 @@ static void tf_cuda_sgemm(
 #define Ndarray CudaNdarray
 #define Ndarray_DEV_DATA CudaNdarray_DEV_DATA
 #define Ndarray_DEV_DATA_int32(x) ((int32_t*) (Ndarray_DEV_DATA(x)))
+#define Ndarray_DEV_DATA_int32_scalar(x) Ndarray_DEV_DATA_int32(x)[0]
 #define Ndarray_HOST_DIMS CudaNdarray_HOST_DIMS
 #define Ndarray_DIMS Ndarray_HOST_DIMS
 #define Ndarray_STRIDE(x, i) (CudaNdarray_HOST_STRIDES(x)[i])  // return in elements. CudaNdarray stores like that
@@ -314,8 +325,6 @@ static void _cudaHandleError(cublasStatus_t status, const char *file, int line) 
 #define HANDLE_ERROR(status) (_cudaHandleError( status, __FILE__, __LINE__ ))
 #define HANDLE_LAST_ERROR()  (HANDLE_ERROR(cudaGetLastError()))
 
-#define assert_cmp(a, cmp, b) assert((a) cmp (b))
-
 #else   // not CUDA
 
 #if !TENSORFLOW
@@ -324,6 +333,7 @@ static void _cudaHandleError(cublasStatus_t status, const char *file, int line) 
 #define Ndarray PyArrayObject
 #define Ndarray_DEV_DATA(x) ((float*) PyArray_DATA(x))
 #define Ndarray_DEV_DATA_int32(x) ((int32_t*) (Ndarray_DEV_DATA(x)))
+#define Ndarray_DEV_DATA_int32_scalar(x) Ndarray_DEV_DATA_int32(x)[0]
 #define Ndarray_HOST_DIMS PyArray_DIMS
 #define Ndarray_STRIDE(x, i) (PyArray_STRIDE(x, i) / sizeof(float))  // return in elements. Numpy stores in bytes
 #define Ndarray_DIMS Ndarray_HOST_DIMS
@@ -403,12 +413,6 @@ struct _KernelLoop {
 		threadIdx.x++;
 	}
 };
-
-#define assert_cmp(a, cmp, b) \
-    if(!((a) cmp (b))) { \
-        std::cerr << "Assertion failed: " << a << " " << #cmp << " " << b << std::endl; \
-        assert((a) cmp (b)); \
-    }
 
 #endif
 
@@ -516,14 +520,17 @@ cublasHandle_t _handle() {
 
 void _affine_y_x(
         int x_A, Ndarray* A, int x_B, Ndarray* B,
-	    int x_C, /*out*/Ndarray* C, bool transpose_A = false, bool transpose_B = false) {
+	    int x_C, /*out*/Ndarray* C, bool transpose_A = false, bool transpose_B = false, float beta = 1.0) {
 	const float* data_A = data_ptr(A, x_A);
 	const float* data_B = data_ptr(B, x_B);
 	float* data_C = data_ptr(C, x_C);
-	int A_dim[2], B_dim[2];
+	// expect row-major (C-contiguous), and dims represent (columns, rows)
+	int A_dim[2], B_dim[2], C_dim[2];
 	lastTwoDims(A, A_dim);
 	lastTwoDims(B, B_dim);
+	lastTwoDims(C, C_dim);
 
+    int ldC = C_dim[1];
 	int ldB = B_dim[1];
 	int ldA = A_dim[1];
 	char transA = transpose_A ? 'T' : 'N';
@@ -532,14 +539,65 @@ void _affine_y_x(
 		std::swap(A_dim[0], A_dim[1]);
 	if (transpose_B)
 		std::swap(B_dim[0], B_dim[1]);
+	// Note that A/B will be swapped around in the sgemm call below.
+    assert_cmp(A_dim[0], ==, C_dim[0]);
+    assert_cmp(B_dim[1], ==, C_dim[1]);
+    assert_cmp(A_dim[1], ==, B_dim[0]);
+    int m = B_dim[1];
+    int n = A_dim[0];
+    int k = A_dim[1];
 
 	const float alpha = 1;
-	const float beta = 1;
 
-	Ndarray_sgemm(transB, transA, B_dim[1], A_dim[0], A_dim[1], &alpha, data_B, ldB,
-		data_A, ldA, &beta, data_C, B_dim[1]);
+    // https://www.ibm.com/support/knowledgecenter/en/SSFHY8_5.5.0/com.ibm.cluster.essl.v5r5.essl100.doc/am5gr_hsgemm.htm
+    // https://www.math.utah.edu/software/lapack/lapack-blas/sgemm.html
+	Ndarray_sgemm(
+	    transB, transA, m, n, k,
+	    &alpha, data_B, ldB, data_A, ldA, &beta, data_C, ldC);
 }
 #define affine_y_x Context(CONTEXT_ARGS)._affine_y_x
+
+//C += A*B
+//(if not 4-dimensional, then indexing [x] is ignored (e.g. for weight matrices))
+
+void _affine_raw(
+        float* A, int a0, int a1,
+        float* B, int b0, int b1,
+        /*out*/float* C, int c0, int c1,
+	    bool transpose_A = false, bool transpose_B = false, float beta = 1.0) {
+	const float* data_A = A;
+	const float* data_B = B;
+	float* data_C = C;
+	int A_dim[2], B_dim[2], C_dim[2];
+    A_dim[0] = a0; A_dim[1] = a1;
+    B_dim[0] = b0; B_dim[1] = b1;
+    C_dim[0] = c0; C_dim[1] = c1;
+
+    int ldC = C_dim[1];
+	int ldB = B_dim[1];
+	int ldA = A_dim[1];
+	char transA = transpose_A ? 'T' : 'N';
+	char transB = transpose_B ? 'T' : 'N';
+	if (transpose_A)
+		std::swap(A_dim[0], A_dim[1]);
+	if (transpose_B)
+		std::swap(B_dim[0], B_dim[1]);
+	// Note that A/B will be swapped around in the sgemm call below.
+    assert_cmp(A_dim[0], ==, C_dim[0]);
+    assert_cmp(B_dim[1], ==, C_dim[1]);
+    assert_cmp(A_dim[1], ==, B_dim[0]);
+    int m = B_dim[1];
+    int n = A_dim[0];
+    int k = A_dim[1];
+
+	const float alpha = 1;
+
+	Ndarray_sgemm(
+	    transB, transA, m, n, k,
+	    &alpha, data_B, ldB, data_A, ldA, &beta, data_C, ldC);
+}
+#define affine_raw Context(CONTEXT_ARGS)._affine_raw
+
 
 //offset is used for x time-shift between A and B
 //if offset == 1, then we will calculate A[0..end-1] * B[1..end]

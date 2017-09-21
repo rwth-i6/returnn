@@ -313,9 +313,15 @@ class RecLayer(_ConcatInputLayer):
           num_layers=1, num_units=n_hidden, input_size=self.input_data.dim,
           input_mode='linear_input', direction='unidirectional', dropout=0.0)
         return cell
+    if issubclass(rnn_cell_class, TFNativeOp.RecSeqCellOp):
+      cell = rnn_cell_class(
+        n_hidden=n_hidden, n_input_dim=self.input_data.dim,
+        input_is_sparse=self.input_data.sparse,
+        step=self._direction)
+      return cell
     cell = rnn_cell_class(n_hidden)
     assert isinstance(
-      cell, (rnn_contrib.RNNCell, rnn_contrib.FusedRNNCell, TFNativeOp.RecSeqCellOp))  # e.g. BasicLSTMCell
+      cell, (rnn_contrib.RNNCell, rnn_contrib.FusedRNNCell))  # e.g. BasicLSTMCell
     return cell
 
   def _get_output_cell(self, cell):
@@ -474,25 +480,34 @@ class RecLayer(_ConcatInputLayer):
     assert self.input_data
     x, seq_len = self._get_input()
     if self._input_projection:
-      W = tf.get_variable(
-        name="W", shape=(self.input_data.dim, cell.n_input_dim), dtype=tf.float32,
-        initializer=self._fwd_weights_initializer)
-      if self.input_data.sparse:
-        x = tf.nn.embedding_lookup(W, x)
+      if cell.does_input_projection:
+        # The cell get's x as-is. It will internally does the matrix mult and add the bias.
+        pass
       else:
-        x = dot(x, W)
+        W = tf.get_variable(
+          name="W", shape=(self.input_data.dim, cell.n_input_dim), dtype=tf.float32,
+          initializer=self._fwd_weights_initializer)
+        if self.input_data.sparse:
+          x = tf.nn.embedding_lookup(W, x)
+        else:
+          x = dot(x, W)
+        b = tf.get_variable(name="b", shape=(cell.n_input_dim,), dtype=tf.float32, initializer=self._bias_initializer)
+        x += b
     else:
+      assert not cell.does_input_projection
       assert not self.input_data.sparse
       assert self.input_data.dim == cell.n_input_dim
-    b = tf.get_variable(name="b", shape=(cell.n_input_dim,), dtype=tf.float32, initializer=self._bias_initializer)
-    x += b
     index = sequence_mask_time_major(seq_len, maxlen=self.input_data.time_dimension())
+    if not cell.does_direction_handling:
+      x = directed(x, self._direction)
+      index = directed(index, self._direction)
     y, final_state = cell(
-      inputs=directed(x, self._direction), index=directed(index, self._direction),
+      inputs=x, index=index,
       initial_state=self._initial_state,
       recurrent_weights_initializer=self._rec_weights_initializer)
     self._last_hidden_state = final_state
-    y = directed(y, self._direction)
+    if not cell.does_direction_handling:
+      y = directed(y, self._direction)
     return y
 
   def _get_output_subnet_unit(self, cell):

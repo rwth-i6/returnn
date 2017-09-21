@@ -76,8 +76,19 @@ def test_NativeLstmCell():
   n_time = 2
   n_batch = 1
   n_hidden = 3
-  cell = NativeLstmCell(n_hidden)
+  cell = NativeLstmCell(n_hidden=n_hidden)
   inputs = tf.zeros([n_time, n_batch, n_hidden * 4])
+  index = tf.ones([n_time, n_batch])
+  outputs, final_state = cell(inputs, index)
+
+
+def test_NativeLstmLowMemCell():
+  n_time = 2
+  n_batch = 1
+  n_in = 5
+  n_hidden = 3
+  cell = NativeLstmLowMemCell(n_hidden=n_hidden, n_input_dim=n_in)
+  inputs = tf.zeros([n_time, n_batch, n_in])
   index = tf.ones([n_time, n_batch])
   outputs, final_state = cell(inputs, index)
 
