@@ -864,8 +864,8 @@ class LstmLowMem(NativeOpGenBase):
     {"name": "d", "ndim": 2, "shape": ((0, 1), (4, 1)), "need_contiguous": True}
   )
   @classmethod
-  def grad_input_map(cls, X, W, b, h, c, i, start, step,   Y, C, d,   DY, DC, Dd):
-    return (X, W, b, h, c, i, start, step,   Y, C,   DY, Dd)
+  def grad_input_map(cls, X, W, b, y0, c0, i, start, step,   Y, C, d,   DY, DC, Dd):
+    return (X, W, b, y0, c0, i, start, step,   Y, C,   DY, Dd)
 
   c_extra_support_code = {
     "lstm_kernel": """
@@ -921,7 +921,7 @@ class LstmLowMem(NativeOpGenBase):
           int cell_idx = idx % n_cells;
           int intern_offset = batch_idx * 4 * n_cells + cell_idx;
           float mask_b = mask[batch_idx];
-          float d_y_b = d_y[idx] * mask_b;
+          float d_y_b = d_y[idx] * mask_b + d_h[idx];
           float d_c_b = d_c[idx] * mask_b;
           float prev_c_b = prev_c[idx];
 
@@ -938,21 +938,33 @@ class LstmLowMem(NativeOpGenBase):
           float d_cellIn_in = (1.f - cellIn * cellIn) * inpGate * d_c2;
           float d_inpGate_in = (1.f - inpGate) * inpGate * cellIn * d_c2;
           float d_fgtGate_in = (1.f - fgtGate) * fgtGate * prev_c_b * d_c2;
+          d_c[idx] = fgtGate * d_c2 + d_c[idx] * (1.f - mask_b);
 
           d_intern[intern_offset] = d_cellIn_in;
           d_intern[intern_offset + n_cells] = d_inpGate_in;
           d_intern[intern_offset + 2 * n_cells] = d_fgtGate_in;
           d_intern[intern_offset + 3 * n_cells] = d_outGate_in;
 
-          d_b[intern_offset] += d_cellIn_in;
-          d_b[intern_offset + n_cells] += d_inpGate_in;
-          d_b[intern_offset + 2 * n_cells] += d_fgtGate_in;
-          d_b[intern_offset + 3 * n_cells] += d_outGate_in;
+          elem_atomic_add(&d_b[cell_idx], d_cellIn_in);
+          elem_atomic_add(&d_b[cell_idx + n_cells], d_inpGate_in);
+          elem_atomic_add(&d_b[cell_idx + 2 * n_cells], d_fgtGate_in);
+          elem_atomic_add(&d_b[cell_idx + 3 * n_cells], d_outGate_in);
 
           idx += gridDim.x * blockDim.x;
         }
       }
       """,
+    "add_bias_kernel": """
+      DEF_KERNEL
+      void add_bias_kernel(int n_batch, int n_dim, float* x, float* b) {
+        int idx = threadIdx.x + blockDim.x * blockIdx.x;
+        while (idx < n_batch * n_dim) {
+          int dim_idx = idx % n_dim;
+          x[idx] += b[dim_idx];
+          idx += gridDim.x * blockDim.x;
+        }
+      }
+    """,
     "copy_x_h_kernel": """
       DEF_KERNEL
       void copy_x_h_kernel(
@@ -1057,6 +1069,7 @@ class LstmLowMem(NativeOpGenBase):
     assert_cmp(T, >, 0);
     assert_cmp(start, >=, 0);
     assert_cmp(start, <, T);
+    assert_cmp(step, !=, 0);
     int end = T - 1;
     if(step < 0) {
       end = start;
@@ -1073,6 +1086,9 @@ class LstmLowMem(NativeOpGenBase):
         Ndarray_DEV_DATA(W), n_in + n_cells, n_cells * 4,
         intern, n_batch, n_cells * 4,
         false, false, 0.0);
+      // intern += b
+      start_dev_kernel(add_bias_kernel, (
+        n_batch, n_cells * 4, intern, Ndarray_DEV_DATA(b)));
 
       start_dev_kernel(lstm_kernel, (
         n_batch,
@@ -1080,8 +1096,8 @@ class LstmLowMem(NativeOpGenBase):
         Ndarray_DEV_DATA(i) + t * n_batch,
         intern,
         (t != start) ? data_ptr(C, t-step) : Ndarray_DEV_DATA(c0),
-        data_ptr(Y, t),
-        data_ptr(C, t)
+        data_ptr(Y, t),  // out
+        data_ptr(C, t)  // out
       ));
     }
 
@@ -1091,6 +1107,7 @@ class LstmLowMem(NativeOpGenBase):
     Ndarray_memcpy(Ndarray_DEV_DATA(d), data_ptr(C, t - step), n_batch * n_cells * sizeof(float));
   """
 
+  # language=C++
   c_bw_code = """
     // X, W, b, y0, c0, i, start, step,   Y, C,   DY, Dd = input_names
     // DX, DW, Db, Dh, Dc = output_names
@@ -1171,16 +1188,19 @@ class LstmLowMem(NativeOpGenBase):
     float* Dx_h = (float*) device_malloc(n_batch * (n_in + n_cells) * sizeof(float));
     float* Dintern = (float*) device_malloc(n_batch * n_cells * 4 * sizeof(float));  // 3 gates + in
 
-    // We will work inplace on Db.
-    Ndarray_memset(Ndarray_DEV_DATA(Db), 0, n_batch * n_cells * sizeof(float));
+    // We will work inplace on DX/DW/Db.
+    Ndarray_memset(Ndarray_DEV_DATA(DX), 0, T * n_batch * n_in * sizeof(float));
+    Ndarray_memset(Ndarray_DEV_DATA(DW), 0, (n_in + n_cells) * n_cells * 4 * sizeof(float));
+    Ndarray_memset(Ndarray_DEV_DATA(Db), 0, n_cells * 4 * sizeof(float));
     // We will work inplace on Dh.
     Ndarray_memset(Ndarray_DEV_DATA(Dh), 0, n_batch * n_cells * sizeof(float));
     // We will work inplace on Dc, and init it with Dd.
-    Ndarray_memcpy(Ndarray_DEV_DATA(Dc), Dd, n_batch * n_cells * sizeof(float));
+    Ndarray_memcpy(Ndarray_DEV_DATA(Dc), Ndarray_DEV_DATA(Dd), n_batch * n_cells * sizeof(float));
 
     assert_cmp(T, >, 0);
     assert_cmp(start, >=, 0);
     assert_cmp(start, <, T);
+    assert_cmp(step, !=, 0);
     int end = T - 1;
     if(step < 0) {
       end = start;
@@ -1188,18 +1208,23 @@ class LstmLowMem(NativeOpGenBase):
     }
     int t = end;  // go backwards
     for(; (step > 0) ? (t >= start) : (t <= start); t -= step) {
-      bool right = (step > 0) ? (t - step < start) : (t - step > start);
+      bool right = (step > 0) ? (t - step >= start) : (t - step <= start);
 
+      // TODO: correct handling of mask in grad, fwd, initial cell,hidden, etc
       // x_h = X[t], Y[t-1]
       start_dev_kernel(copy_x_h_kernel,
         (n_batch, n_in, n_cells,
          x_h, data_ptr(X, t), right ? data_ptr(Y, t-step) : Ndarray_DEV_DATA(y0)));
+
       // intern = x_h * W
       affine_raw(
         x_h, n_batch, n_in + n_cells,
         Ndarray_DEV_DATA(W), n_in + n_cells, n_cells * 4,
         intern, n_batch, n_cells * 4,
         false, false, 0.0);
+      // intern += b
+      start_dev_kernel(add_bias_kernel, (
+        n_batch, n_cells * 4, intern, Ndarray_DEV_DATA(b)));
 
       start_dev_kernel(lstm_bwd_kernel, (
         n_batch,
@@ -1213,9 +1238,9 @@ class LstmLowMem(NativeOpGenBase):
         data_ptr(C, t),
         data_ptr(DY, t),
         Ndarray_DEV_DATA(Dh),  // error from prev frame, excluding DY. updated below
-        Ndarray_DEV_DATA(Dc),  // also error from prev frame, initially Dd; working inplace on it
-        Dintern,
-        Ndarray_DEV_DATA(Db)
+        Ndarray_DEV_DATA(Dc),  // in+out, working inplace. also error from prev frame, initially Dd
+        Dintern,  // out
+        Ndarray_DEV_DATA(Db)  // out
       ));
 
       // Dx_h = Dintern * W^T

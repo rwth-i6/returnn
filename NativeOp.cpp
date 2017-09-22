@@ -215,7 +215,11 @@ static void tf_cuda_sgemm(
 
 #endif  // TENSORFLOW
 
+
+
 #if CUDA
+
+#define elem_atomic_add(x, v) atomicAdd(x, v)
 
 #if TENSORFLOW
 // Ndarray and friends already declared above, they are same for CUDA and non-CUDA
@@ -326,6 +330,8 @@ static void _cudaHandleError(cublasStatus_t status, const char *file, int line) 
 #define HANDLE_LAST_ERROR()  (HANDLE_ERROR(cudaGetLastError()))
 
 #else   // not CUDA
+
+#define elem_atomic_add(x, v) (*x += v)  // ignore atomic for now...
 
 #if !TENSORFLOW
 // Numpy, see: http://docs.scipy.org/doc/numpy/reference/c-api.array.html

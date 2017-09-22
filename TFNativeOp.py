@@ -448,6 +448,8 @@ class OpMaker(object):
       grad_wrapper.__name__ = grad_description.name
       grad_wrapper.grad_op = grad_op
       ops.RegisterGradient(self.name)(grad_wrapper)
+      op.grad_wrapper = grad_wrapper
+      op.grad_op = grad_op
 
     return op
 

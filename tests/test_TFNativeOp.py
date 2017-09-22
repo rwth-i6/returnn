@@ -93,6 +93,110 @@ def test_NativeLstmLowMemCell():
   outputs, final_state = cell(inputs, index)
 
 
+def test_LstmLowMem_fwd_simple_1():
+  lstm = make_op(NativeOp.LstmLowMem)
+  n_time = 1
+  n_batch = 1
+  n_in = 1
+  n_cells = 1
+  vX = 0.2
+  vb = 0.3
+  vy0 = 0.1
+  vc0 = 0.1
+  X = tf.ones((n_time, n_batch, n_in)) * vX
+  W = tf.ones((n_in + n_cells, n_cells * 4))
+  b = tf.ones((n_cells * 4,)) * vb
+  y0 = tf.ones((n_batch, n_cells)) * vy0
+  c0 = tf.ones((n_batch, n_cells)) * vc0
+  i = tf.ones((n_time, n_batch))
+  start = tf.constant(0)
+  step = tf.constant(1)
+  Y, C, d = lstm(X, W, b, y0, c0, i, start, step)
+  vY, vC, vd = session.run((Y, C, d))
+  print("vY:", vY)
+  print("vC:", vC)
+  print("vd:", vd)
+  assert_equal(vY.shape, (n_time, n_batch, n_cells))
+  assert_equal(vC.shape, (n_time, n_batch, n_cells))
+  assert_equal(d.shape, (n_batch, n_cells))
+  vintern = vX + vy0 + vb
+  vcellIn = numpy.tanh(vintern)
+  vgates = 1. / (1. + numpy.exp(-vintern))  # sigmoid
+  vc = vgates * vc0 + vgates * vcellIn
+  vh = vgates * numpy.tanh(vc)
+  assert_allclose(vY[0, 0, 0], vh)
+  assert_allclose(vC[0, 0, 0], vc)
+  assert_allclose(vd[0, 0], vc)
+
+
+def test_LstmLowMem_bwd_simple_1():
+  lstm = make_op(NativeOp.LstmLowMem)
+  lstm_grad = lstm.grad_op
+  n_time = 1
+  n_batch = 1
+  n_in = 1
+  n_cells = 1
+  vX = 0.2
+  vb = 0.3
+  vy0 = 0.1
+  vc0 = 0.1
+  vx_h = numpy.array([vX, vy0])
+  print("vx_h:", vx_h)
+  vintern = numpy.sum(vx_h) + vb
+  print("vintern:", vintern)
+  vcellIn = numpy.tanh(vintern)
+  vgates = 1. / (1. + numpy.exp(-vintern))  # sigmoid
+  print("vgates:", vgates)
+  vc = vgates * vc0 + vgates * vcellIn
+  vh = vgates * numpy.tanh(vc)
+  X = tf.ones((n_time, n_batch, n_in)) * vX
+  W = tf.ones((n_in + n_cells, n_cells * 4))
+  b = tf.ones((n_cells * 4,)) * vb
+  y0 = tf.ones((n_batch, n_cells)) * vy0
+  c0 = tf.ones((n_batch, n_cells)) * vc0
+  i = tf.ones((n_time, n_batch))
+  start = tf.constant(0)
+  step = tf.constant(1)
+  Y = tf.ones((n_time, n_batch, n_cells)) * vh
+  C = tf.ones((n_time, n_batch, n_cells)) * vc
+  vDY = 1.5
+  vDd = 1.2
+  DY = tf.ones((n_time, n_batch, n_cells)) * vDY
+  Dd = tf.ones((n_batch, n_cells)) * vDd
+  DX, DW, Db, Dh, Dc = lstm_grad(X, W, b, y0, c0, i, start, step,   Y, C,   DY, Dd)
+  vDX, vDW, vDb, vDh, vDc = session.run((DX, DW, Db, Dh, Dc))
+  print("op vDX:", vDX)
+  print("op vDW:", vDW)
+  print("op vDb:", vDb)
+  print("op vDh:", vDh)
+  print("op vDc:", vDc)
+  assert_equal(vDX.shape, (n_time, n_batch, n_in))
+  assert_equal(vDW.shape, (n_in + n_cells, n_cells * 4))
+  assert_equal(vDb.shape, (n_cells * 4,))
+  assert_equal(vDh.shape, (n_batch, n_cells))
+  assert_equal(vDc.shape, (n_batch, n_cells))
+  vDh1 = vDY
+  vgc = numpy.tanh(vc)
+  vDoutGate_in = (1. - vgates) * vgates * vgc * vDh1
+  vDc2 = (1. - vgc * vgc) * vgates * vDh1 + vDd
+  vDcellIn_in = (1. - vcellIn * vcellIn) * vgates * vDc2
+  vDinpGate_in = (1. - vgates) * vgates * vcellIn * vDc2
+  vDfgtGate_in = (1. - vgates) * vgates * vc0 * vDc2
+  vDintern = numpy.array([vDcellIn_in, vDinpGate_in, vDfgtGate_in, vDoutGate_in])
+  vDb_ = vDintern
+  assert_equal(vDb_.shape, vDb.shape)
+  assert_allclose(vDb, vDb_)
+  vDW_ = numpy.array([vX * vDintern, vy0 * vDintern])
+  assert_equal(vDW_.shape, vDW.shape)
+  assert_allclose(vDW, vDW_)
+  vDx1 = numpy.sum(vDintern)
+  assert_allclose(vDX, vDx1)
+  vDh0 = numpy.sum(vDintern)
+  assert_allclose(vDh, vDh0)
+  vDc0 = vgates * vDc2
+  assert_allclose(vDc, vDc0)
+
+
 @unittest.skipIf(not is_gpu_available(), "no gpu on this system")
 def test_FastBaumWelch():
   print("Make op...")
