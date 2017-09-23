@@ -610,7 +610,7 @@ class NativeLstmLowMemCell(RecSeqCellOp):
     :param tf.Tensor b: shape (n_hidden*4,)
     :param tf.Tensor i: index: shape (time,batch)
     :param tf.Tensor|None initial_state: shape (batch,n_hidden)
-    :rtype: (tf.Tensor,tf.Tensor,tf.Tensor,tf.Tensor)
+    :rtype: tuple[tf.Tensor]
     """
     X.set_shape(tf.TensorShape([None, None, self.n_input_dim]))
     W.set_shape(tf.TensorShape([self.n_input_dim + self.n_hidden, self.n_hidden * 4]))
@@ -647,6 +647,61 @@ class NativeLstmLowMemCell(RecSeqCellOp):
     b = tf.get_variable(name="b", shape=(self.n_hidden * 4,), initializer=tf.zeros_initializer())
     out, _, final_state = self.op(
       *self.map_layer_inputs_to_op(X=inputs, W=W, b=b, i=index, initial_state=initial_state))
+    return out, final_state
+
+
+class NativeLstm2(RecSeqCellOp):
+  does_input_projection = False
+  does_direction_handling = True
+
+  def __init__(self, **kwargs):
+    super(NativeLstm2, self).__init__(**kwargs)
+    self.n_input_dim = self.n_hidden * 4
+    self.op = make_op(NativeOp.NativeLstm2)
+
+  def map_layer_inputs_to_op(self, X, W, i, initial_state=None):
+    """
+    Just like NativeOp.LstmGenericBase.map_layer_inputs_to_op().
+    :param tf.Tensor X: inputs: shape (time,batch,n_input_dim)
+    :param tf.Tensor W: shape (n_input_dim+n_hidden,n_hidden*4)
+    :param tf.Tensor i: index: shape (time,batch)
+    :param tf.Tensor|None initial_state: shape (batch,n_hidden)
+    :rtype: tuple[tf.Tensor]
+    """
+    X.set_shape(tf.TensorShape([None, None, self.n_hidden * 4]))
+    W.set_shape(tf.TensorShape([self.n_hidden, self.n_hidden * 4]))
+    i.set_shape(tf.TensorShape([None, None]))
+    if i.dtype != tf.float32:
+      if not hasattr(i, "cast_float32"):
+        from TFUtil import reuse_name_scope_of_tensor
+        with reuse_name_scope_of_tensor(i):
+          i_cast_float32 = tf.cast(i, dtype=tf.float32, name="index_cast_float32")
+        i.cast_float32 = i_cast_float32
+      i = i.cast_float32
+    n_batch = tf.shape(X)[1]
+    if initial_state is not None:
+      c0 = initial_state
+    else:
+      c0 = tf.zeros((n_batch, self.n_hidden), dtype=tf.float32, name="initial_c")
+    # We could make `h` a variable exactly if `c` is a trainable variable.
+    y0 = tf.zeros((n_batch, self.n_hidden), dtype=tf.float32, name="initial_h")
+    start = tf.constant(0, name="start")
+    step = tf.constant(self.step or 1, name="step")
+    return X, W, y0, c0, i, start, step
+
+  def __call__(self, inputs, index, initial_state=None, recurrent_weights_initializer=None):
+    """
+    :param tf.Tensor inputs: shape (time,batch,n_hidden)
+    :param tf.Tensor index: shape (time,batch)
+    :param tf.Tensor|None initial_state: shape (batch,n_hidden)
+    :param ()->tf.Tensor recurrent_weights_initializer:
+    :returns: shape (time,batch,n_hidden), shape (batch,n_hidden)
+    :rtype: (tf.Tensor, tf.Tensor)
+    """
+    W = tf.get_variable(
+      name="W_re", shape=(self.n_hidden, self.n_hidden * 4), initializer=recurrent_weights_initializer)
+    out, _, _, final_state = self.op(
+      *self.map_layer_inputs_to_op(X=inputs, W=W, i=index, initial_state=initial_state))
     return out, final_state
 
 

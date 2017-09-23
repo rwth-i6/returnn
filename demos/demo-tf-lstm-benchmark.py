@@ -67,7 +67,7 @@ from Dataset import init_dataset, Dataset
 LstmCellTypes = [
   "BasicLSTM", "StandardLSTM",
   "LSTMBlock", "LSTMBlockFused",
-  "NativeLSTM",
+  "NativeLSTM", "NativeLstm2", "NativeLstmLowMem",
   "CudnnLSTM"
 ]
 

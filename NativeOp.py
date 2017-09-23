@@ -833,6 +833,10 @@ class LstmGenericBase(NativeOpGenBase):
 
 class LstmLowMem(NativeOpGenBase):
   """
+  This is designed to require minimal memory during training.
+  It only stores the outputs and the cell states,
+  i.e. it requires time * cells * 2 floats for memory in total.
+
   inputs:
     :param X: (time,batch,in_dim)
     :param W: forward+recurrent matrix. 2d (in_dim+dim,dim*4)
@@ -1266,6 +1270,370 @@ class LstmLowMem(NativeOpGenBase):
     device_free(intern);
     device_free(Dx_h);
     device_free(Dintern);
+  """
+
+
+class NativeLstm2(NativeOpGenBase):
+  """
+  Yet another LSTM kernel.
+  This kernel is about 27% than NativeLstm,
+  and also has some more options (like the direction).
+  But it requires time * batch * cells more memory,
+  thus time * batch * cells * 6 in total.
+
+  inputs:
+    :param X: (time,batch,dim*4)
+    :param W: recurrent matrix. 2d (dim,dim*4)
+    :param y0: initial output|hidden state. 2d (batch,dim)
+    :param c0: initial cell state. 2d (batch,dim)
+    :param i: index. 2d (time,batch) -> 0 or 1
+    :param start: where to start. must be >=0, default is usually 0. dtype int, scalar.
+    :param step: +1 for fwd, -1 for bwd direction. can also be |step|>1 for wider steps. dtype int, scalar.
+      for bwd (<0), will start at T-start-1.
+  outputs:
+    :param Y: output. 3d (time,batch,dim)
+    :param C: cell states. 3d (time,batch,dim). gradient ignored!
+    :param H: cell-in + gates. 3d (time,batch,dim*4). gradient ignored!
+    :param d: final cell state. 2d (batch,dim)
+  """
+  in_info = (
+    {"name": "X", "ndim": 3, "shape": (None, None, None), "need_contiguous": True},
+    {"name": "W", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+    {"name": "y0", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+    {"name": "c0", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+    {"name": "i", "ndim": 2, "shape": (None, None), "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "start", "ndim": 0, "shape": (), "gradient": "disconnected", "dtype": "int32", "host_memory": True},
+    {"name": "step", "ndim": 0, "shape": (), "gradient": "disconnected", "dtype": "int32", "host_memory": True},
+  )
+  out_info = (
+    {"name": "Y", "ndim": 3, "shape": ((0, 0), (0, 1), (1, 0)), "need_contiguous": True},
+    {"name": "C", "ndim": 3, "shape": ((0, 0), (0, 1), (1, 0)), "need_contiguous": True},
+    {"name": "H", "ndim": 3, "shape": ((0, 0), (0, 1), (1, 1)), "need_contiguous": True},
+    {"name": "d", "ndim": 2, "shape": ((0, 1), (1, 0)), "need_contiguous": True}
+  )
+  @classmethod
+  def grad_input_map(cls, X, W, y0, c0, i, start, step,   Y, C, H, d,   DY, DC, DH, Dd):
+    return (X, W, y0, c0, i, start, step,   Y, C, H,   DY, Dd)
+
+  c_extra_support_code = {
+    "intern_slots_kernel": """
+      DEF_KERNEL
+      void intern_slots_kernel(
+        int n_batch, int n_cells, const float* mask,
+        float* h)
+      {
+        int idx = threadIdx.x + blockDim.x * blockIdx.x;
+        while (idx < n_batch * n_cells * 4) {
+          int batch_idx = idx / (n_cells * 4);
+          int dim_idx = idx % (n_cells * 4);
+          
+          if(dim_idx < n_cells)  // cell-in
+            h[idx] = tanhf(h[idx]);
+          else  // gate
+            h[idx] = 1.f / (1.f + expf(-h[idx]));
+        
+          idx += gridDim.x * blockDim.x;
+        }
+      }
+      """,
+    "lstm_kernel": """
+      DEF_KERNEL
+      void lstm_kernel(
+        int n_batch, int n_cells, const float* mask,
+        float* h,
+        float* prev_c,
+        float* y,
+        float* c)
+      {
+        int idx = threadIdx.x + blockDim.x * blockIdx.x;
+        while (idx < n_cells * n_batch) {
+          int batch_idx = idx / n_cells;
+          int cell_idx = idx % n_cells;
+          int intern_offset = batch_idx * 4 * n_cells + cell_idx;
+          float prev_c_b = prev_c[idx];
+          float mask_b = mask[batch_idx];
+
+          // cell-in + input, forget and output gates
+          float cellIn = h[intern_offset];
+          float inpGate = h[intern_offset + n_cells];
+          float fgtGate = h[intern_offset + 2 * n_cells];
+          float outGate = h[intern_offset + 3 * n_cells];
+
+          float c_b = (prev_c_b * fgtGate + cellIn * inpGate) * mask_b
+                      + prev_c_b * (1.f - mask_b);
+          c[idx] = c_b;
+          y[idx] = tanhf(c_b) * outGate * mask_b;
+
+          idx += gridDim.x * blockDim.x;
+        }
+      }
+      """,
+    "lstm_bwd_kernel": """
+      DEF_KERNEL
+      void lstm_bwd_kernel(
+        int n_batch, int n_cells, const float* mask,
+        float* h,
+        float* prev_c,
+        float* y,
+        float* c,
+        float* d_y,
+        float* d_h,
+        float* d_c,
+        float* d_x)
+      {
+        int idx = threadIdx.x + blockDim.x * blockIdx.x;
+        while (idx < n_cells * n_batch) {
+          int batch_idx = idx / n_cells;
+          int cell_idx = idx % n_cells;
+          int intern_offset = batch_idx * 4 * n_cells + cell_idx;
+          float mask_b = mask[batch_idx];
+          float d_y_b = d_y[idx] * mask_b + d_h[idx];
+          float d_c_b = d_c[idx] * mask_b;
+          float prev_c_b = prev_c[idx];
+
+          // cell-in + input, forget and output gates
+          float cellIn = h[intern_offset];
+          float inpGate = h[intern_offset + n_cells];
+          float fgtGate = h[intern_offset + 2 * n_cells];
+          float outGate = h[intern_offset + 3 * n_cells];
+
+          float c_b = prev_c_b * fgtGate + cellIn * inpGate;
+          float gc = tanhf(c_b);
+          float d_outGate_in = (1.f - outGate) * outGate * gc * d_y_b;
+          float d_c2 = d_c_b + outGate * d_y_b * (1.f - gc * gc);
+          float d_cellIn_in = (1.f - cellIn * cellIn) * inpGate * d_c2;
+          float d_inpGate_in = (1.f - inpGate) * inpGate * cellIn * d_c2;
+          float d_fgtGate_in = (1.f - fgtGate) * fgtGate * prev_c_b * d_c2;
+          d_c[idx] = fgtGate * d_c2 + d_c[idx] * (1.f - mask_b);
+
+          d_x[intern_offset] = d_cellIn_in;
+          d_x[intern_offset + n_cells] = d_inpGate_in;
+          d_x[intern_offset + 2 * n_cells] = d_fgtGate_in;
+          d_x[intern_offset + 3 * n_cells] = d_outGate_in;
+
+          idx += gridDim.x * blockDim.x;
+        }
+      }
+      """
+  }
+
+  c_fw_code = """
+    // X, W, y0, c0, i, start, step = input_names
+    // Y, C, H, d = output_names
+    assert(n_inputs == 7);
+    assert(n_outputs == 4);
+    Ndarray* X = inputs[0];
+    Ndarray* W = inputs[1];
+    Ndarray* y0 = inputs[2];
+    Ndarray* c0 = inputs[3];
+    Ndarray* i = inputs[4];
+    assert_cmp(Ndarray_NDIM(inputs[5]), ==, 0);
+    assert_cmp(Ndarray_NDIM(inputs[6]), ==, 0);
+    int start = Ndarray_DEV_DATA_int32_scalar(inputs[5]);
+    int step = Ndarray_DEV_DATA_int32_scalar(inputs[6]);
+    Ndarray* Y = *outputs[0];
+    Ndarray* C = *outputs[1];
+    Ndarray* H = *outputs[2];
+    Ndarray* d = *outputs[3];
+
+    assert_cmp(Ndarray_NDIM(X), ==, 3);
+    assert_cmp(Ndarray_NDIM(W), ==, 2);
+    assert_cmp(Ndarray_NDIM(y0), ==, 2);
+    assert_cmp(Ndarray_NDIM(c0), ==, 2);
+    assert_cmp(Ndarray_NDIM(i), ==, 2);
+    assert_cmp(Ndarray_NDIM(Y), ==, 3);
+    assert_cmp(Ndarray_NDIM(C), ==, 3);
+    assert_cmp(Ndarray_NDIM(H), ==, 3);
+    assert_cmp(Ndarray_NDIM(d), ==, 2);
+    long T = Ndarray_DIMS(i)[0];
+    int n_batch = Ndarray_DIMS(i)[1];
+    int n_cells = Ndarray_DIMS(y0)[1];
+    assert_cmp(Ndarray_DIMS(X)[0], ==, T);
+    assert_cmp(Ndarray_DIMS(X)[1], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(X)[2], ==, n_cells * 4);
+    assert_cmp(Ndarray_DIMS(W)[0], ==, n_cells);
+    assert_cmp(Ndarray_DIMS(W)[1], ==, n_cells * 4);
+    assert_cmp(Ndarray_DIMS(y0)[0], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(y0)[1], ==, n_cells);
+    assert_cmp(Ndarray_DIMS(c0)[0], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(c0)[1], ==, n_cells);
+    assert_cmp(Ndarray_DIMS(Y)[0], ==, T);
+    assert_cmp(Ndarray_DIMS(Y)[1], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(Y)[2], ==, n_cells);
+    assert_cmp(Ndarray_DIMS(C)[0], ==, T);
+    assert_cmp(Ndarray_DIMS(C)[1], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(C)[2], ==, n_cells);
+    assert_cmp(Ndarray_DIMS(H)[0], ==, T);
+    assert_cmp(Ndarray_DIMS(H)[1], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(H)[2], ==, n_cells * 4);
+    assert_cmp(Ndarray_DIMS(d)[0], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(d)[1], ==, n_cells);
+
+    // H = X
+    Ndarray_memcpy(Ndarray_DEV_DATA(H), Ndarray_DEV_DATA(X), T * n_batch * n_cells * 4 * sizeof(float));
+
+    assert_cmp(T, >, 0);
+    assert_cmp(start, >=, 0);
+    assert_cmp(start, <, T);
+    assert_cmp(step, !=, 0);
+    int end = T - 1;
+    if(step < 0) {
+      end = start;
+      start = T - start - 1;
+    }
+    int t = start;
+    for(; (step > 0) ? (t <= end) : (t >= end); t += step) {
+      // H[t] += Y[t-1] * W
+      affine_raw(
+        (t != start) ? data_ptr(Y, t-step) : Ndarray_DEV_DATA(y0), n_batch, n_cells,
+        Ndarray_DEV_DATA(W), n_cells, n_cells * 4,
+        data_ptr(H, t), n_batch, n_cells * 4,
+        false, false);
+      // H[t] = tanh|sigm(H[t])
+      start_dev_kernel(intern_slots_kernel, (
+        n_batch, n_cells, Ndarray_DEV_DATA(i) + t * n_batch,
+        data_ptr(H, t)  // out
+      ));
+
+      start_dev_kernel(lstm_kernel, (
+        n_batch,
+        n_cells,
+        Ndarray_DEV_DATA(i) + t * n_batch,
+        data_ptr(H, t),
+        (t != start) ? data_ptr(C, t-step) : Ndarray_DEV_DATA(c0),
+        data_ptr(Y, t),  // out
+        data_ptr(C, t)  // out
+      ));
+    }
+
+    Ndarray_memcpy(Ndarray_DEV_DATA(d), data_ptr(C, t - step), n_batch * n_cells * sizeof(float));
+  """
+
+  # language=C++
+  c_bw_code = """
+    // X, W, y0, c0, i, start, step,   Y, C, H,   DY, Dd = input_names
+    // DX, DW, Dy0, Dc0 = output_names
+    assert(n_inputs == 12);
+    assert(n_outputs == 4);
+    Ndarray* X = inputs[0];
+    Ndarray* W = inputs[1];
+    Ndarray* y0 = inputs[2];
+    Ndarray* c0 = inputs[3];
+    Ndarray* i = inputs[4];
+    assert_cmp(Ndarray_NDIM(inputs[5]), ==, 0);
+    assert_cmp(Ndarray_NDIM(inputs[6]), ==, 0);
+    int start = Ndarray_DEV_DATA_int32_scalar(inputs[5]);
+    int step = Ndarray_DEV_DATA_int32_scalar(inputs[6]);
+    Ndarray* Y = inputs[7];
+    Ndarray* C = inputs[8];
+    Ndarray* H = inputs[9];
+    Ndarray* DY = inputs[10];
+    Ndarray* Dd = inputs[11];
+    Ndarray* DX = *outputs[0];
+    Ndarray* DW = *outputs[1];
+    Ndarray* Dy0 = *outputs[2];
+    Ndarray* Dc0 = *outputs[3];
+
+    assert_cmp(Ndarray_NDIM(X), ==, 3);
+    assert_cmp(Ndarray_NDIM(W), ==, 2);
+    assert_cmp(Ndarray_NDIM(y0), ==, 2);
+    assert_cmp(Ndarray_NDIM(c0), ==, 2);
+    assert_cmp(Ndarray_NDIM(i), ==, 2);
+    assert_cmp(Ndarray_NDIM(Y), ==, 3);
+    assert_cmp(Ndarray_NDIM(C), ==, 3);
+    assert_cmp(Ndarray_NDIM(H), ==, 3);
+    assert_cmp(Ndarray_NDIM(DY), ==, 3);
+    assert_cmp(Ndarray_NDIM(Dd), ==, 2);
+    assert_cmp(Ndarray_NDIM(DX), ==, 3);
+    assert_cmp(Ndarray_NDIM(DW), ==, 2);
+    assert_cmp(Ndarray_NDIM(Dy0), ==, 2);
+    assert_cmp(Ndarray_NDIM(Dc0), ==, 2);
+    long T = Ndarray_DIMS(i)[0];
+    int n_batch = Ndarray_DIMS(i)[1];
+    int n_cells = Ndarray_DIMS(y0)[1];
+    assert_cmp(Ndarray_DIMS(X)[0], ==, T);
+    assert_cmp(Ndarray_DIMS(X)[1], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(X)[2], ==, n_cells * 4);
+    assert_cmp(Ndarray_DIMS(W)[0], ==, n_cells);
+    assert_cmp(Ndarray_DIMS(W)[1], ==, n_cells * 4);
+    assert_cmp(Ndarray_DIMS(y0)[0], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(y0)[1], ==, n_cells);
+    assert_cmp(Ndarray_DIMS(c0)[0], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(c0)[1], ==, n_cells);
+    assert_cmp(Ndarray_DIMS(Y)[0], ==, T);
+    assert_cmp(Ndarray_DIMS(Y)[1], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(Y)[2], ==, n_cells);
+    assert_cmp(Ndarray_DIMS(C)[0], ==, T);
+    assert_cmp(Ndarray_DIMS(C)[1], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(C)[2], ==, n_cells);
+    assert_cmp(Ndarray_DIMS(H)[0], ==, T);
+    assert_cmp(Ndarray_DIMS(H)[1], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(H)[2], ==, n_cells * 4);
+    assert_cmp(Ndarray_DIMS(DY)[0], ==, T);
+    assert_cmp(Ndarray_DIMS(DY)[1], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(DY)[2], ==, n_cells);
+    assert_cmp(Ndarray_DIMS(Dd)[0], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(Dd)[1], ==, n_cells);
+    assert_cmp(Ndarray_DIMS(DX)[0], ==, T);
+    assert_cmp(Ndarray_DIMS(DX)[1], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(DX)[2], ==, n_cells * 4);
+    assert_cmp(Ndarray_DIMS(DW)[0], ==, n_cells);
+    assert_cmp(Ndarray_DIMS(DW)[1], ==, n_cells * 4);
+    assert_cmp(Ndarray_DIMS(Dy0)[0], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(Dy0)[1], ==, n_cells);
+    assert_cmp(Ndarray_DIMS(Dc0)[0], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(Dc0)[1], ==, n_cells);
+
+    // We will work inplace on DW.
+    Ndarray_memset(Ndarray_DEV_DATA(DW), 0, n_cells * n_cells * 4 * sizeof(float));
+    // We will work inplace on (Dy0) DY[t], initially 0.
+    Ndarray_memset(Ndarray_DEV_DATA(Dy0), 0, n_batch * n_cells * sizeof(float));
+    // We will work inplace on (Dc0) DC[t], and init it with Dd.
+    Ndarray_memcpy(Ndarray_DEV_DATA(Dc0), Ndarray_DEV_DATA(Dd), n_batch * n_cells * sizeof(float));
+
+    assert_cmp(T, >, 0);
+    assert_cmp(start, >=, 0);
+    assert_cmp(start, <, T);
+    assert_cmp(step, !=, 0);
+    int end = T - 1;
+    if(step < 0) {
+      end = start;
+      start = T - start - 1;
+    }
+    int t = end;  // go backwards
+    for(; (step > 0) ? (t >= start) : (t <= start); t -= step) {
+      bool right = (step > 0) ? (t - step >= start) : (t - step <= start);
+
+      // TODO: correct handling of mask in grad, fwd, initial cell,hidden, etc
+
+      start_dev_kernel(lstm_bwd_kernel, (
+        n_batch,
+        n_cells,
+        Ndarray_DEV_DATA(i) + t * n_batch,
+        data_ptr(H, t),
+        right ? data_ptr(C, t-step) : Ndarray_DEV_DATA(c0),
+        data_ptr(Y, t),
+        data_ptr(C, t),
+        data_ptr(DY, t),
+        Ndarray_DEV_DATA(Dy0),  // error from prev frame, excluding DY. updated below
+        Ndarray_DEV_DATA(Dc0),  // in+out, working inplace. also error from prev frame, initially Dd
+        data_ptr(DX, t)  // out
+      ));
+
+      // (Dy0) DY[t-1] = DX[t] * W^T
+      affine_raw(
+        data_ptr(DX, t), n_batch, n_cells * 4,
+        Ndarray_DEV_DATA(W), n_cells, n_cells * 4,
+        Ndarray_DEV_DATA(Dy0), n_batch, n_cells,
+        false, true, 0.0);
+
+      // DW += Y[t-1]^T * DX[t]
+      affine_raw(
+        right ? data_ptr(Y, t-step) : Ndarray_DEV_DATA(y0), n_batch, n_cells,
+        data_ptr(DX, t), n_batch, n_cells * 4,
+        Ndarray_DEV_DATA(DW), n_cells, n_cells * 4,
+        true, false);
+    }
   """
 
 
