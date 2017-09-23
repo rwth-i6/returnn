@@ -1341,6 +1341,7 @@ class NativeLstm2(NativeOpGenBase):
       void lstm_kernel(
         int n_batch, int n_cells, const float* mask,
         float* h,
+        float* prev_y,
         float* prev_c,
         float* y,
         float* c)
@@ -1360,9 +1361,10 @@ class NativeLstm2(NativeOpGenBase):
           float outGate = h[intern_offset + 3 * n_cells];
 
           float c_b = (prev_c_b * fgtGate + cellIn * inpGate) * mask_b
-                      + prev_c_b * (1.f - mask_b);
+                    + prev_c_b * (1.f - mask_b);
           c[idx] = c_b;
-          y[idx] = tanhf(c_b) * outGate * mask_b;
+          y[idx] = tanhf(c_b) * outGate * mask_b
+                 + prev_y[idx] * (1.f - mask_b);
 
           idx += gridDim.x * blockDim.x;
         }
@@ -1410,6 +1412,9 @@ class NativeLstm2(NativeOpGenBase):
           d_x[intern_offset + n_cells] = d_inpGate_in;
           d_x[intern_offset + 2 * n_cells] = d_fgtGate_in;
           d_x[intern_offset + 3 * n_cells] = d_outGate_in;
+
+          // Reset if used frame, otherwise leave as-is.
+          d_h[idx] *= (1.f - mask_b);
 
           idx += gridDim.x * blockDim.x;
         }
@@ -1500,6 +1505,7 @@ class NativeLstm2(NativeOpGenBase):
         n_cells,
         Ndarray_DEV_DATA(i) + t * n_batch,
         data_ptr(H, t),
+        (t != start) ? data_ptr(Y, t-step) : Ndarray_DEV_DATA(y0),
         (t != start) ? data_ptr(C, t-step) : Ndarray_DEV_DATA(c0),
         data_ptr(Y, t),  // out
         data_ptr(C, t)  // out
@@ -1604,8 +1610,6 @@ class NativeLstm2(NativeOpGenBase):
     for(; (step > 0) ? (t >= start) : (t <= start); t -= step) {
       bool right = (step > 0) ? (t - step >= start) : (t - step <= start);
 
-      // TODO: correct handling of mask in grad, fwd, initial cell,hidden, etc
-
       start_dev_kernel(lstm_bwd_kernel, (
         n_batch,
         n_cells,
@@ -1615,17 +1619,17 @@ class NativeLstm2(NativeOpGenBase):
         data_ptr(Y, t),
         data_ptr(C, t),
         data_ptr(DY, t),
-        Ndarray_DEV_DATA(Dy0),  // error from prev frame, excluding DY. updated below
+        Ndarray_DEV_DATA(Dy0),  // in+out, error from prev frame, excluding DY. reset here, updated below
         Ndarray_DEV_DATA(Dc0),  // in+out, working inplace. also error from prev frame, initially Dd
         data_ptr(DX, t)  // out
       ));
 
-      // (Dy0) DY[t-1] = DX[t] * W^T
+      // (Dy0) DY[t-1] += DX[t] * W^T
       affine_raw(
         data_ptr(DX, t), n_batch, n_cells * 4,
         Ndarray_DEV_DATA(W), n_cells, n_cells * 4,
         Ndarray_DEV_DATA(Dy0), n_batch, n_cells,
-        false, true, 0.0);
+        false, true);
 
       // DW += Y[t-1]^T * DX[t]
       affine_raw(
