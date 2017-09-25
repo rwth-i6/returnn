@@ -1483,7 +1483,7 @@ class NativeLstm2(NativeOpGenBase):
     assert_cmp(step, !=, 0);
     int end = T - 1;
     if(step < 0) {
-      end = start;
+      end = 0;
       start = T - start - 1;
     }
     int t = start;
@@ -1601,11 +1601,24 @@ class NativeLstm2(NativeOpGenBase):
     assert_cmp(start, >=, 0);
     assert_cmp(start, <, T);
     assert_cmp(step, !=, 0);
-    int end = T - 1;
-    if(step < 0) {
-      end = start;
+    int abs_step = std::abs(step);
+    // e.g.:
+    // step=1, start=0, T=10 -> num_steps=10=T
+    // step=5, start=0, T=10 -> num_steps=2=T/step
+    // step=5, start=0, T=9  -> num_steps=2=(T+step-1)/step
+    // step=5, start=0, T=6  -> num_steps=2=(T+step-1)/step
+    // step=5, start=0, T=5  -> num_steps=1=(T+step-1)/step
+    // step=5, start=4, T=10 -> num_steps=2=(T-start+step-1)/step
+    // step=-5, start=0, T=10 -> num_steps=2=T/abs_step
+    // step=-5, start=0, T=9  -> num_steps=2=(T+abs_step-1)/abs_step
+    // step=-5, start=4, T=10 -> num_steps=2=(T-start+abs_step-1)/abs_step
+    int num_steps = (T - start + abs_step - 1) / abs_step;
+    assert_cmp(num_steps, >, 0);
+    if(step < 0)
       start = T - start - 1;
-    }
+    int end = start + (num_steps - 1) * step;  // inclusive
+    assert_cmp(end, >=, 0);
+    assert_cmp(end, <, T);
     int t = end;  // go backwards
     for(; (step > 0) ? (t >= start) : (t <= start); t -= step) {
       bool right = (step > 0) ? (t - step >= start) : (t - step <= start);
@@ -1630,14 +1643,23 @@ class NativeLstm2(NativeOpGenBase):
         Ndarray_DEV_DATA(W), n_cells, n_cells * 4,
         Ndarray_DEV_DATA(Dy0), n_batch, n_cells,
         false, true);
-
-      // DW += Y[t-1]^T * DX[t]
-      affine_raw(
-        right ? data_ptr(Y, t-step) : Ndarray_DEV_DATA(y0), n_batch, n_cells,
-        data_ptr(DX, t), n_batch, n_cells * 4,
-        Ndarray_DEV_DATA(DW), n_cells, n_cells * 4,
-        true, false);
     }
+
+    //DW = Y[0..T-2]^T * DX[1..T-1]  (if step==1)
+    affine_raw(
+      data_ptr(Y, std::min(start, end)), (num_steps - 1) * n_batch, n_cells,
+      data_ptr(DX, std::min(start, end) + abs_step), (num_steps - 1) * n_batch, n_cells * 4,
+      Ndarray_DEV_DATA(DW), n_cells, n_cells * 4,
+      true, false, 0.0f, 1.0f,
+      abs_step, abs_step);
+
+    // TODO: wrong if there is masking and step<0...
+    //DW += y0^T * DX[0]
+    affine_raw(
+      Ndarray_DEV_DATA(y0), n_batch, n_cells,
+      data_ptr(DX, start), n_batch, n_cells * 4,
+      Ndarray_DEV_DATA(DW), n_cells, n_cells * 4,
+      true, false);
   """
 
 

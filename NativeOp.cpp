@@ -570,7 +570,9 @@ void _affine_raw(
         float* A, int a0, int a1,
         float* B, int b0, int b1,
         /*out*/float* C, int c0, int c1,
-	    bool transpose_A = false, bool transpose_B = false, float beta = 1.0) {
+	    bool transpose_A = false, bool transpose_B = false,
+	    float beta = 1.0, float alpha = 1.0,
+	    int ldA_factor = 1, int ldB_factor = 1) {
 	const float* data_A = A;
 	const float* data_B = B;
 	float* data_C = C;
@@ -580,8 +582,8 @@ void _affine_raw(
     C_dim[0] = c0; C_dim[1] = c1;
 
     int ldC = C_dim[1];
-	int ldB = B_dim[1];
-	int ldA = A_dim[1];
+	int ldB = B_dim[1] * ldB_factor;
+	int ldA = A_dim[1] * ldA_factor;
 	char transA = transpose_A ? 'T' : 'N';
 	char transB = transpose_B ? 'T' : 'N';
 	if (transpose_A)
@@ -595,8 +597,6 @@ void _affine_raw(
     int m = B_dim[1];
     int n = A_dim[0];
     int k = A_dim[1];
-
-	const float alpha = 1;
 
 	Ndarray_sgemm(
 	    transB, transA, m, n, k,
