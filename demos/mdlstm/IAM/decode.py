@@ -6,7 +6,7 @@ import numpy
 with open("chars.txt") as f:
   chars = [l.strip() for l in f.readlines()] + ["_blank"]
 
-with h5py.File("mdlstm_long_valid.h5", "r") as f:
+with h5py.File("mdlstm_real_valid.h5", "r") as f:
   x = f["inputs"][...]
   x = numpy.argmax(x, axis=1)
   x = [chars[idx] for idx in x]
