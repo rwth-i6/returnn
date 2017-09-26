@@ -373,12 +373,19 @@ class LayerBase(object):
     :return: yields the variable_scope
     """
     from TFUtil import var_creation_scope, get_current_var_scope_name, reuse_name_scope
+    self_base_scope = self.get_absolute_name_scope_prefix()
+    assert self_base_scope.endswith("/")
+    cur_scope = get_current_var_scope_name()
+    if cur_scope + "/" != self_base_scope and self_base_scope.startswith(cur_scope + "/"):
+      # E.g. self_base_scope="lstm1/rec/" and cur_scope="lstm1".
+      # Just go into the subscope.
+      with reuse_name_scope(self_base_scope[:-1], absolute=True):
+        with self.var_creation_scope() as scope:
+          yield scope
+      return
+    assert (cur_scope + "/").startswith(self_base_scope)
     with var_creation_scope() as dep:
       if self.reuse_params:
-        cur_scope = get_current_var_scope_name()
-        self_base_scope = self.get_absolute_name_scope_prefix()
-        assert self_base_scope.endswith("/")
-        assert (cur_scope + "/").startswith(self_base_scope)
         ext_scope = cur_scope[len(self_base_scope) - 1:]  # e.g. "/rec" or ""
         assert not ext_scope or ext_scope.startswith("/")
         reuse_base_scope = self.reuse_params.get_absolute_name_scope_prefix()
@@ -3246,16 +3253,16 @@ class DeepClusteringLoss(Loss):
         seqLength = self.output_seq_lens[s]
         chunkOut = self.output_flat[start:(start + seqLength), :]
         chunkTarget = self.target_flat[start:(start + seqLength), :]
-        # convert network output into embedding vectors 
+        # convert network output into embedding vectors
         v = tf.reshape(tf.reshape(chunkOut, (tf.shape(chunkOut)[0], tf.shape(chunkOut)[1] / self._embedding_dimension, self._embedding_dimension)), (tf.shape(chunkOut)[0] * (tf.shape(chunkOut)[1] / self._embedding_dimension ), self._embedding_dimension))
-        # convert targets into class vectors 
+        # convert targets into class vectors
         y = tf.reshape(tf.reshape(chunkTarget, (tf.shape(chunkTarget)[0], tf.shape(chunkTarget)[1] / self._nr_of_sources, self._nr_of_sources)), (tf.shape(chunkTarget)[0] * (tf.shape(chunkTarget)[1] / self._nr_of_sources), self._nr_of_sources))
         chunkC = tf.pow(tf.norm(tf.matmul(tf.transpose(v), v)), 2) - 2 * tf.pow(tf.norm(tf.matmul(tf.transpose(v), y)), 2) + tf.pow(tf.norm(tf.matmul(tf.transpose(y), y)), 2)
         # append chunk cost to cost tensor
         c = tf.cond(tf.greater(s, 0), lambda: tf.concat([c, tf.reshape(chunkC, (1,))], axis=0), lambda: tf.reshape(chunkC, (1,)))
-        return tf.add(s, 1), tf.add(start, seqLength), c 
-      s = tf.constant(0, dtype=tf.int32) 
-      start = tf.constant(0, dtype=tf.int32) 
+        return tf.add(s, 1), tf.add(start, seqLength), c
+      s = tf.constant(0, dtype=tf.int32)
+      start = tf.constant(0, dtype=tf.int32)
       r = tf.while_loop(iterateSequences, computeCost, [s, start, c], shape_invariants=[s.get_shape(), start.get_shape(), tf.TensorShape([None,])])
       return tf.reduce_mean(r[-1])
 
