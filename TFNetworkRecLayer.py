@@ -190,7 +190,7 @@ class RecLayer(_ConcatInputLayer):
     return out
 
   def get_absolute_name_scope_prefix(self):
-    return super(RecLayer, self).get_absolute_name_scope_prefix() + "rec/"  # all under "rec" sub-name-scope
+    return self.get_base_absolute_name_scope_prefix() + "rec/"  # all under "rec" sub-name-scope
 
   _rnn_cells_dict = {}
 

@@ -311,12 +311,19 @@ class LayerBase(object):
   def tf_scope_name(self):
     return self.cls_get_tf_scope_name(name=self.name)
 
-  def get_absolute_name_scope_prefix(self):
+  def get_base_absolute_name_scope_prefix(self):
     """
     :return: e.g. "output/", always with "/" at end
     :rtype: str
     """
     return self.network.get_absolute_name_scope_prefix() + self.tf_scope_name + "/"
+
+  def get_absolute_name_scope_prefix(self):
+    """
+    :return: e.g. "output/", always with "/" at end
+    :rtype: str
+    """
+    return self.get_base_absolute_name_scope_prefix()
 
   def is_output_layer(self):
     """
@@ -373,22 +380,15 @@ class LayerBase(object):
     :return: yields the variable_scope
     """
     from TFUtil import var_creation_scope, get_current_var_scope_name, reuse_name_scope
-    self_base_scope = self.get_absolute_name_scope_prefix()
+    self_base_scope = self.get_base_absolute_name_scope_prefix()
     assert self_base_scope.endswith("/")
     cur_scope = get_current_var_scope_name()
-    if cur_scope + "/" != self_base_scope and self_base_scope.startswith(cur_scope + "/"):
-      # E.g. self_base_scope="lstm1/rec/" and cur_scope="lstm1".
-      # Just go into the subscope.
-      with reuse_name_scope(self_base_scope[:-1], absolute=True):
-        with self.var_creation_scope() as scope:
-          yield scope
-      return
     assert (cur_scope + "/").startswith(self_base_scope)
     with var_creation_scope() as dep:
       if self.reuse_params:
         ext_scope = cur_scope[len(self_base_scope) - 1:]  # e.g. "/rec" or ""
         assert not ext_scope or ext_scope.startswith("/")
-        reuse_base_scope = self.reuse_params.get_absolute_name_scope_prefix()
+        reuse_base_scope = self.reuse_params.get_base_absolute_name_scope_prefix()
         assert reuse_base_scope.endswith("/")
         reuse_scope = reuse_base_scope[:-1] + ext_scope
         with reuse_name_scope(reuse_scope, absolute=True, reuse_vars=True) as scope:
@@ -407,9 +407,9 @@ class LayerBase(object):
     if custom_update:
       custom_update.set_on_var(param)
     if self.reuse_params:
-      name_scope_prefix = self.reuse_params.get_absolute_name_scope_prefix()
+      name_scope_prefix = self.reuse_params.get_base_absolute_name_scope_prefix()
     else:
-      name_scope_prefix = self.get_absolute_name_scope_prefix()
+      name_scope_prefix = self.get_base_absolute_name_scope_prefix()
     assert param.name
     assert param.name[:len(name_scope_prefix)] == name_scope_prefix
     assert param.name[-2:] == ":0"
