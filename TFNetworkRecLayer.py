@@ -1461,7 +1461,8 @@ class ChoiceLayer(LayerBase):
   def __init__(self, beam_size, input_type="prob", **kwargs):
     """
     :param int beam_size: the outgoing beam size. i.e. our output will be (batch * beam_size, ...)
-    :param str input_type: "prob" or "log", whether the input is in probability space, log-space, etc
+    :param str input_type: "prob" or "log_prob", whether the input is in probability space, log-space, etc.
+      or "regression", if it is a prediction of the data as-is.
     """
     super(ChoiceLayer, self).__init__(**kwargs)
     # We assume log-softmax here, inside the rec layer.
@@ -1478,42 +1479,47 @@ class ChoiceLayer(LayerBase):
       self.search_choices = SearchChoices(
         owner=self,
         beam_size=beam_size)
-      net_batch_dim = self.network.get_batch_dim()
-      assert self.search_choices.src_layer  # not implemented yet... in rec-layer, this should always be the case
-      scores_base = self.search_choices.src_layer.search_choices.beam_scores  # (batch, beam_in)
-      assert scores_base.get_shape().ndims == 2, "%r invalid" % self.search_choices.src_layer.search_choices
-      beam_in = tf.shape(scores_base)[1]
-      scores_base = tf.expand_dims(scores_base, axis=-1)  # (batch, beam_in, dim)
-      scores_in = self.sources[0].output.placeholder  # (batch * beam_in, dim)
-      # We present the scores in +log space, and we will add them up along the path.
-      if input_type == "prob":
-        scores_in = tf.log(scores_in)
-      elif input_type == "log":
-        pass
+      if input_type == "regression":
+        # It's not a probability distribution, so there is no search here.
+        assert self.search_choices.beam_size == 1
+        self.output = self.sources[0].output.copy_compatible_to(self.output)
       else:
-        raise Exception("%r: invalid input type %r" % (self, input_type))
-      scores_in_dim = self.sources[0].output.dim
-      scores_in = tf.reshape(scores_in, [net_batch_dim, beam_in, scores_in_dim])  # (batch, beam_in, dim)
-      scores_in += scores_base  # (batch, beam_in, dim)
-      scores_in_flat = tf.reshape(scores_in, [net_batch_dim, beam_in * scores_in_dim])  # (batch, beam_in * dim)
-      # `tf.nn.top_k` is the core function performing our search.
-      # We get scores/labels of shape (batch, beam) with indices in [0..beam_in*dim-1].
-      scores, labels = tf.nn.top_k(scores_in_flat, k=beam_size)
-      self.search_choices.src_beams = labels // scores_in_dim  # (batch, beam) -> beam_in idx
-      labels = labels % scores_in_dim  # (batch, beam) -> dim idx
-      labels = tf.reshape(labels, [net_batch_dim * beam_size])  # (batch * beam)
-      labels = tf.cast(labels, self.output.dtype)
-      self.search_choices.set_beam_scores(scores)  # (batch, beam) -> log score
-      self.output = Data(
-        name="%s_choice_output" % self.name,
-        batch_dim_axis=0,
-        shape=self.output.shape,
-        sparse=True,
-        dim=self.output.dim,
-        dtype=self.output.dtype,
-        placeholder=labels,
-        available_for_inference=True,
-        beam_size=beam_size)
+        net_batch_dim = self.network.get_batch_dim()
+        assert self.search_choices.src_layer  # not implemented yet... in rec-layer, this should always be the case
+        scores_base = self.search_choices.src_layer.search_choices.beam_scores  # (batch, beam_in)
+        assert scores_base.get_shape().ndims == 2, "%r invalid" % self.search_choices.src_layer.search_choices
+        beam_in = tf.shape(scores_base)[1]
+        scores_base = tf.expand_dims(scores_base, axis=-1)  # (batch, beam_in, dim)
+        scores_in = self.sources[0].output.placeholder  # (batch * beam_in, dim)
+        # We present the scores in +log space, and we will add them up along the path.
+        if input_type == "prob":
+          scores_in = tf.log(scores_in)
+        elif input_type == "log_prob":
+          pass
+        else:
+          raise Exception("%r: invalid input type %r" % (self, input_type))
+        scores_in_dim = self.sources[0].output.dim
+        scores_in = tf.reshape(scores_in, [net_batch_dim, beam_in, scores_in_dim])  # (batch, beam_in, dim)
+        scores_in += scores_base  # (batch, beam_in, dim)
+        scores_in_flat = tf.reshape(scores_in, [net_batch_dim, beam_in * scores_in_dim])  # (batch, beam_in * dim)
+        # `tf.nn.top_k` is the core function performing our search.
+        # We get scores/labels of shape (batch, beam) with indices in [0..beam_in*dim-1].
+        scores, labels = tf.nn.top_k(scores_in_flat, k=beam_size)
+        self.search_choices.src_beams = labels // scores_in_dim  # (batch, beam) -> beam_in idx
+        labels = labels % scores_in_dim  # (batch, beam) -> dim idx
+        labels = tf.reshape(labels, [net_batch_dim * beam_size])  # (batch * beam)
+        labels = tf.cast(labels, self.output.dtype)
+        self.search_choices.set_beam_scores(scores)  # (batch, beam) -> log score
+        self.output = Data(
+          name="%s_choice_output" % self.name,
+          batch_dim_axis=0,
+          shape=self.output.shape,
+          sparse=True,
+          dim=self.output.dim,
+          dtype=self.output.dtype,
+          placeholder=labels,
+          available_for_inference=True,
+          beam_size=beam_size)
     else:
       # Note: If you want to do forwarding, without having the reference,
       # that wont work. You must do search in that case.
