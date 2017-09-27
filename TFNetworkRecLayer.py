@@ -2,7 +2,7 @@
 from __future__ import print_function
 
 import tensorflow as tf
-from TFNetworkLayer import LayerBase, _ConcatInputLayer, SearchChoices
+from TFNetworkLayer import LayerBase, _ConcatInputLayer, SearchChoices, get_concat_sources_data_template
 from TFUtil import Data, reuse_name_scope
 from Log import log
 
@@ -173,7 +173,8 @@ class RecLayer(_ConcatInputLayer):
     else:
       out = None
     if isinstance(unit, dict):  # subnetwork
-      subnet = _SubnetworkRecCell(parent_net=kwargs["network"], net_dict=unit)
+      source_data = get_concat_sources_data_template(sources) if sources else None
+      subnet = _SubnetworkRecCell(parent_net=kwargs["network"], net_dict=unit, source_data=source_data)
       sub_out = subnet.layer_data_templates["output"].output.copy_template_adding_time_dim(
         name="%s_output" % kwargs["name"], time_dim_axis=0)
       if out:
@@ -929,7 +930,7 @@ class _SubnetworkRecCell(object):
       parent_net=parent_net)
     if source_data:
       self.net.extern_data.data["source"] = \
-        parent_rec_layer.input_data.copy_template_excluding_time_dim()
+          source_data.copy_template_excluding_time_dim()
     for key in parent_net.extern_data.data.keys():
       self.net.extern_data.data[key] = \
         parent_net.extern_data.data[key].copy_template_excluding_time_dim()
