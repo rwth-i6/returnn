@@ -1355,10 +1355,15 @@ class NativeLstm2(NativeOpGenBase):
           float mask_b = mask[batch_idx];
 
           // cell-in + input, forget and output gates
-          float cellIn = h[intern_offset];
-          float inpGate = h[intern_offset + n_cells];
-          float fgtGate = h[intern_offset + 2 * n_cells];
-          float outGate = h[intern_offset + 3 * n_cells];
+          float cellIn = tanhf(h[intern_offset]);
+          float inpGate = 1.f / (1.f + expf(-h[intern_offset + n_cells]));
+          float fgtGate = 1.f / (1.f + expf(-h[intern_offset + 2 * n_cells]));
+          float outGate = 1.f / (1.f + expf(-h[intern_offset + 3 * n_cells]));
+
+          h[intern_offset] = cellIn;
+          h[intern_offset + n_cells] = inpGate;
+          h[intern_offset + 2 * n_cells] = fgtGate;
+          h[intern_offset + 3 * n_cells] = outGate;
 
           float c_b = (prev_c_b * fgtGate + cellIn * inpGate) * mask_b
                     + prev_c_b * (1.f - mask_b);
@@ -1494,17 +1499,12 @@ class NativeLstm2(NativeOpGenBase):
         Ndarray_DEV_DATA(W), n_cells, n_cells * 4,
         data_ptr(H, t), n_batch, n_cells * 4,
         false, false);
-      // H[t] = tanh|sigm(H[t])
-      start_dev_kernel(intern_slots_kernel, (
-        n_batch, n_cells, Ndarray_DEV_DATA(i) + t * n_batch,
-        data_ptr(H, t)  // out
-      ));
 
       start_dev_kernel(lstm_kernel, (
         n_batch,
         n_cells,
         Ndarray_DEV_DATA(i) + t * n_batch,
-        data_ptr(H, t),
+        data_ptr(H, t),  // inplace
         (t != start) ? data_ptr(Y, t-step) : Ndarray_DEV_DATA(y0),
         (t != start) ? data_ptr(C, t-step) : Ndarray_DEV_DATA(c0),
         data_ptr(Y, t),  // out
@@ -1647,8 +1647,8 @@ class NativeLstm2(NativeOpGenBase):
 
     //DW = Y[0..T-2]^T * DX[1..T-1]  (if step==1)
     affine_raw(
-      data_ptr(Y, std::min(start, end)), (num_steps - 1) * n_batch, n_cells,
-      data_ptr(DX, std::min(start, end) + abs_step), (num_steps - 1) * n_batch, n_cells * 4,
+      data_ptr(Y, std::min(start, end) + std::max(0, -step)), (num_steps - 1) * n_batch, n_cells,
+      data_ptr(DX, std::min(start, end) + std::max(0, step)), (num_steps - 1) * n_batch, n_cells * 4,
       Ndarray_DEV_DATA(DW), n_cells, n_cells * 4,
       true, false, 0.0f, 1.0f,
       abs_step, abs_step);

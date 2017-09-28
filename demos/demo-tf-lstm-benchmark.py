@@ -100,7 +100,7 @@ def make_config_dict(lstm_unit, use_gpu):
   for i in range(num_layers):
     for direction in [-1, 1]:
       dir_str = {-1: "bwd", 1: "fwd"}[direction]
-      layer = {"class": "rec", "unit": lstm_unit, "n_out": base_settings["n_hidden"]}
+      layer = {"class": "rec", "unit": lstm_unit, "n_out": base_settings["n_hidden"], "direction": direction}
       if i > 0:
         layer["from"] = ["lstm%i_fwd" % i, "lstm%i_bwd" % i]
       network["lstm%i_%s" % (i + 1, dir_str)] = layer

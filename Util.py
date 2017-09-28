@@ -813,7 +813,7 @@ def parse_orthography(orthography, prefix=(), postfix=("[END]",),
   :param str remove_chars: those chars will just be removed at the beginning
   :param bool collapse_spaces: whether multiple spaces and tabs are collapsed into a single space
   :param bool final_strip: whether we strip left and right
-  :param dict[str] kwargs: passed on to parse_orthography_into_symbols()
+  :param **kwargs: passed on to parse_orthography_into_symbols()
   :rtype: list[str]
   """
   for c in remove_chars:
