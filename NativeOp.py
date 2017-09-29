@@ -1316,26 +1316,6 @@ class NativeLstm2(NativeOpGenBase):
     return (X, W, y0, c0, i, start, step,   Y, C, H,   DY, Dd)
 
   c_extra_support_code = {
-    "intern_slots_kernel": """
-      DEF_KERNEL
-      void intern_slots_kernel(
-        int n_batch, int n_cells, const float* mask,
-        float* h)
-      {
-        int idx = threadIdx.x + blockDim.x * blockIdx.x;
-        while (idx < n_batch * n_cells * 4) {
-          int batch_idx = idx / (n_cells * 4);
-          int dim_idx = idx % (n_cells * 4);
-          
-          if(dim_idx < n_cells)  // cell-in
-            h[idx] = tanhf(h[idx]);
-          else  // gate
-            h[idx] = 1.f / (1.f + expf(-h[idx]));
-        
-          idx += gridDim.x * blockDim.x;
-        }
-      }
-      """,
     "lstm_kernel": """
       DEF_KERNEL
       void lstm_kernel(
@@ -1344,7 +1324,8 @@ class NativeLstm2(NativeOpGenBase):
         float* prev_y,
         float* prev_c,
         float* y,
-        float* c)
+        float* c,
+        float* y_prev_out)
       {
         int idx = threadIdx.x + blockDim.x * blockIdx.x;
         while (idx < n_cells * n_batch) {
@@ -1368,8 +1349,9 @@ class NativeLstm2(NativeOpGenBase):
           float c_b = (prev_c_b * fgtGate + cellIn * inpGate) * mask_b
                     + prev_c_b * (1.f - mask_b);
           c[idx] = c_b;
-          y[idx] = tanhf(c_b) * outGate * mask_b
-                 + prev_y[idx] * (1.f - mask_b);
+          float y_b = tanhf(c_b) * outGate * mask_b;
+          y[idx] = y_b;
+          y_prev_out[idx] = y_b + prev_y[idx] * (1.f - mask_b);
 
           idx += gridDim.x * blockDim.x;
         }
@@ -1386,7 +1368,8 @@ class NativeLstm2(NativeOpGenBase):
         float* d_y,
         float* d_h,
         float* d_c,
-        float* d_x)
+        float* d_x,
+        float* d_x0)
       {
         int idx = threadIdx.x + blockDim.x * blockIdx.x;
         while (idx < n_cells * n_batch) {
@@ -1394,7 +1377,7 @@ class NativeLstm2(NativeOpGenBase):
           int cell_idx = idx % n_cells;
           int intern_offset = batch_idx * 4 * n_cells + cell_idx;
           float mask_b = mask[batch_idx];
-          float d_y_b = d_y[idx] * mask_b + d_h[idx];
+          float d_y_b = (d_y[idx] + d_h[idx]) * mask_b;
           float d_c_b = d_c[idx] * mask_b;
           float prev_c_b = prev_c[idx];
 
@@ -1417,6 +1400,13 @@ class NativeLstm2(NativeOpGenBase):
           d_x[intern_offset + n_cells] = d_inpGate_in;
           d_x[intern_offset + 2 * n_cells] = d_fgtGate_in;
           d_x[intern_offset + 3 * n_cells] = d_outGate_in;
+
+          #define set_x0(off) { d_x0[off] = d_x[off] + d_x0[off] * (1.f - mask_b); }
+          set_x0(intern_offset);
+          set_x0(intern_offset + n_cells);
+          set_x0(intern_offset + 2 * n_cells);
+          set_x0(intern_offset + 3 * n_cells);
+          #undef set_x0
 
           // Reset if used frame, otherwise leave as-is.
           d_h[idx] *= (1.f - mask_b);
@@ -1479,6 +1469,12 @@ class NativeLstm2(NativeOpGenBase):
     assert_cmp(Ndarray_DIMS(d)[0], ==, n_batch);
     assert_cmp(Ndarray_DIMS(d)[1], ==, n_cells);
 
+    // It makes the backprop with step<0 easier to implement,
+    // esp. the DW = Y[0..T-2]^T * DX[1..T-1] calculation,
+    // if we can have Y[t] = 0 where mask[t] = 0.
+    // That is why we need to keep track of Y[t-1] explicitly.
+    float* y_prev = (float*) device_malloc(n_batch * n_cells * sizeof(float));
+
     // H = X
     Ndarray_memcpy(Ndarray_DEV_DATA(H), Ndarray_DEV_DATA(X), T * n_batch * n_cells * 4 * sizeof(float));
 
@@ -1495,7 +1491,7 @@ class NativeLstm2(NativeOpGenBase):
     for(; (step > 0) ? (t <= end) : (t >= end); t += step) {
       // H[t] += Y[t-1] * W
       affine_raw(
-        (t != start) ? data_ptr(Y, t-step) : Ndarray_DEV_DATA(y0), n_batch, n_cells,
+        (t != start) ? y_prev : Ndarray_DEV_DATA(y0), n_batch, n_cells,
         Ndarray_DEV_DATA(W), n_cells, n_cells * 4,
         data_ptr(H, t), n_batch, n_cells * 4,
         false, false);
@@ -1505,14 +1501,17 @@ class NativeLstm2(NativeOpGenBase):
         n_cells,
         Ndarray_DEV_DATA(i) + t * n_batch,
         data_ptr(H, t),  // inplace
-        (t != start) ? data_ptr(Y, t-step) : Ndarray_DEV_DATA(y0),
+        (t != start) ? y_prev : Ndarray_DEV_DATA(y0),
         (t != start) ? data_ptr(C, t-step) : Ndarray_DEV_DATA(c0),
         data_ptr(Y, t),  // out
-        data_ptr(C, t)  // out
+        data_ptr(C, t),  // out
+        y_prev  // out
       ));
     }
 
     Ndarray_memcpy(Ndarray_DEV_DATA(d), data_ptr(C, t - step), n_batch * n_cells * sizeof(float));
+
+    device_free(y_prev);
   """
 
   # language=C++
@@ -1597,6 +1596,11 @@ class NativeLstm2(NativeOpGenBase):
     // We will work inplace on (Dc0) DC[t], and init it with Dd.
     Ndarray_memcpy(Ndarray_DEV_DATA(Dc0), Ndarray_DEV_DATA(Dd), n_batch * n_cells * sizeof(float));
 
+    // Need to keep track of (logical) DX[0], which in practice (masking, step<0)
+    // can be different from data_ptr(DX, start).
+    float* dx0 = (float*) device_malloc(n_batch * n_cells * 4 * sizeof(float));
+    Ndarray_memset(dx0, 0, n_batch * n_cells * 4 * sizeof(float));
+    
     assert_cmp(T, >, 0);
     assert_cmp(start, >=, 0);
     assert_cmp(start, <, T);
@@ -1634,7 +1638,8 @@ class NativeLstm2(NativeOpGenBase):
         data_ptr(DY, t),
         Ndarray_DEV_DATA(Dy0),  // in+out, error from prev frame, excluding DY. reset here, updated below
         Ndarray_DEV_DATA(Dc0),  // in+out, working inplace. also error from prev frame, initially Dd
-        data_ptr(DX, t)  // out
+        data_ptr(DX, t),  // out
+        dx0  // out
       ));
 
       // (Dy0) DY[t-1] += DX[t] * W^T
@@ -1653,13 +1658,14 @@ class NativeLstm2(NativeOpGenBase):
       true, false, 0.0f, 1.0f,
       abs_step, abs_step);
 
-    // TODO: wrong if there is masking and step<0...
     //DW += y0^T * DX[0]
     affine_raw(
       Ndarray_DEV_DATA(y0), n_batch, n_cells,
-      data_ptr(DX, start), n_batch, n_cells * 4,
+      dx0, n_batch, n_cells * 4,
       Ndarray_DEV_DATA(DW), n_cells, n_cells * 4,
       true, false);
+    
+    device_free(dx0);
   """
 
 

@@ -688,14 +688,12 @@ def test_ref_lstm_grad_start_step():
   check_lstm_grad_start_step(op=lstm, name="ref_lstm", **kwargs)
 
 
-@unittest.skip("TODO fix...")
 def test_native_lstm2_grad_start_step():
   kwargs = lstm_grad_kwargs()
   check_lstm_grad_start_step(
     op=native_lstm2, name="native_lstm2", rtol=1e-5, **kwargs)
 
 
-@unittest.skip("TODO fix...")
 def test_native_lstm2_grad():
   kwargs = lstm_grad_kwargs()
   check_lstm_grad_ops(
