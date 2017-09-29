@@ -548,13 +548,15 @@ class Engine(object):
     print("Save model under %s" % (filename,), file=log.v4)
     self.network.save_params_to_file(filename, session=self.tf_session)
 
-  def init_train_from_config(self, config, train_data, dev_data=None, eval_data=None):
+  def init_train_from_config(self, config=None, train_data=None, dev_data=None, eval_data=None):
     """
-    :type config: Config.Config
-    :type train_data: Dataset.Dataset
-    :type dev_data: Dataset.Dataset | None
-    :type eval_data: Dataset.Dataset | None
+    :param Config.Config|None config:
+    :param Dataset.Dataset|None train_data:
+    :param Dataset.Dataset|None dev_data:
+    :param Dataset.Dataset|None eval_data:
     """
+    if not config:
+      config = self.config
     self.use_dynamic_train_flag = True
     self.train_data = train_data
     self.dev_data = dev_data
@@ -1261,3 +1263,21 @@ class Engine(object):
     with open(output_file, 'w') as f:
       numpy.savetxt(f, log_average_posterior, delimiter=' ')
     print("Saved prior in %r in +log space." % output_file, file=log.v1)
+
+
+def get_global_engine():
+  """
+  Similar as get_global_config().
+
+  :rtype: Engine
+  """
+
+  import sys
+  main_mod = sys.modules["__main__"]  # should be rnn.py
+  if isinstance(getattr(main_mod, "engine", None), Engine):
+    return main_mod.engine
+  # Maybe __main__ is not rnn.py, or config not yet loaded.
+  # Anyway, try directly. (E.g. for SprintInterface.)
+  import rnn
+  assert isinstance(rnn.engine, Engine)  # no other option anymore
+  return rnn.engine
