@@ -569,15 +569,23 @@ class TFNetwork(object):
   def initialize_params(self, session):
     """
     :param tf.Session session:
+
     Note: This will create a new node to the graph for each call!
     And it will overwrite also the already initialized variables.
     So you should call this only once after network construction and before you maybe load some of the params
     from external sources.
     If you know that you will load all params explicitly, you would not need to call this function.
     """
+    var_list = self.get_params_list() + self.get_auxiliary_params()
     with tf.name_scope("var_initializer"):
-      initializer_op = tf.variables_initializer(var_list=self.get_params_list() + self.get_auxiliary_params())
+      initializer_op = tf.variables_initializer(var_list=var_list)
     session.run(initializer_op)
+    for var in var_list:
+      # Some of our code could set this, e.g. the SubnetworkLayer.
+      custom_post_init = getattr(var, "custom_post_init", None)
+      if custom_post_init:
+        assert callable(custom_post_init)
+        custom_post_init(session=session)
 
   def get_var_assigner(self, var):
     """

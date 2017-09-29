@@ -2498,15 +2498,30 @@ class CompareLayer(LayerBase):
 class SubnetworkLayer(LayerBase):
   """
   You can define a whole subnetwork as a single layer by this class.
+
+  The subnetwork will be specified by a ``dict[str,dict[str]]``, just like
+  a normal network is specified in the config.
+
+  The ``"output"`` layer of the subnetwork will be the output of this
+  subnetwork-layer.
+
+  With ``concat_sources=True`` (default),
+    the input to this layer will be represented as the ``"data:data"`` or simply ``"data"``
+    in the subnetwork,
+  otherwise with ``concat_sources=False``,
+    the input to this layer will be represented as ``"data:input_layer_name"``
+    for each input, in the subnetwork.
   """
 
   layer_class = "subnetwork"
   recurrent = True  # we don't know. depends on the subnetwork.
 
-  def __init__(self, subnetwork, concat_sources=True, **kwargs):
+  def __init__(self, subnetwork, concat_sources=True, load_on_init=None, **kwargs):
     """
-    :param dict[str,dict] network: subnetwork as dict (JSON content). must have an "output" layer
+    :param dict[str,dict] subnetwork: subnetwork as dict (JSON content). must have an "output" layer-
     :param bool concat_sources: if we concatenate all sources into one, like it is standard for most other layers
+    :param str|None load_on_init: if provided, for parameter initialization,
+      we will load the given model file.
     """
     super(SubnetworkLayer, self).__init__(**kwargs)
     from TFNetwork import TFNetwork, ExternData
@@ -2531,6 +2546,28 @@ class SubnetworkLayer(LayerBase):
     for layer in net.layers.values():
       assert layer.trainable == self.trainable, "partly trainable subnetworks not yet supported"
       self.params.update({"%s/%s" % (layer.name, k): v for (k, v) in layer.params.items()})
+    if load_on_init:
+      reader = tf.train.NewCheckpointReader(load_on_init)
+      var_ckpt_names = set(reader.get_variable_to_shape_map())
+      self_prefix = self.get_absolute_name_scope_prefix()
+
+      def make_var_post_init(var):
+        assert var.name.startswith(self_prefix)
+        assert var.name[-2:] == ":0"
+        v_name = var.name[len(self_prefix):-2]
+        assert v_name in var_ckpt_names
+
+        def var_post_init(session):
+          value = reader.get_tensor(v_name)
+          assigner = self.network.get_var_assigner(var)
+          assigner.assign(value=value, session=session)
+
+        return var_post_init
+
+      for var in self.params.values():
+        # This custom attribute is a big ugly but simple.
+        # It's read in TFNetwork.initialize_params().
+        var.custom_post_init = make_var_post_init(var)
 
   @classmethod
   def get_out_data_from_opts(cls, subnetwork, n_out=None, out_type=None, **kwargs):
