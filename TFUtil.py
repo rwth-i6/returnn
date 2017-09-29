@@ -1916,19 +1916,16 @@ class VariableAssigner(object):
     :param tf.Variable var:
     """
     self.var = var
-    name = var.name.split("/")[-1][:-2]
-    self.value_placeholder = tf.placeholder(
-      name="%s_placeholder_assign_value" % name,
-      shape=var.get_shape(),
-      dtype=var.dtype)
-    self.assign_op = tf.assign(self.var, self.value_placeholder, name="%s_assign" % name)
+    assert isinstance(self.var.initializer, tf.Operation)
+    assert self.var.initializer.type in ["Assign", "AssignVariableOp"]
+    self.assign_op = self.var.initializer
 
   def assign(self, value, session):
     """
     :param numpy.ndarray|int|float value:
     :param tf.Session session:
     """
-    session.run(self.assign_op, feed_dict={self.value_placeholder: value})
+    session.run(self.assign_op, feed_dict={self.assign_op.inputs[1]: value})
 
 
 class CudaEnv(object):
