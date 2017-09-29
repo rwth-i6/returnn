@@ -115,6 +115,7 @@ def make_config_dict(lstm_unit, use_gpu):
     "num_epochs": 1,
     "model": None,  # don't save
     "tf_log_dir": None,  # no TF logs
+    "tf_log_memory_usage": True,
     "network": network,
     # batching
     "batch_size": base_settings["batch_size"],

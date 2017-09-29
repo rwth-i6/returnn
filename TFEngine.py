@@ -376,6 +376,17 @@ class Runner(object):
 
       self._finalize(num_steps=step)
 
+      if self.engine.config.bool("tf_log_memory_usage", False):
+        print("Memory usage:", file=log.v1)
+        from TFUtil import get_tf_list_local_devices, mem_usage_for_dev
+        from Util import human_bytes_size
+        for dev in get_tf_list_local_devices():
+          if dev.device_type != "GPU":
+            # mem_usage_for_dev currently only works for GPU
+            continue
+          size = sess.run(mem_usage_for_dev(dev.name))
+          print(" %s: %s" % (dev.name, human_bytes_size(size)), file=log.v1)
+
     except KeyboardInterrupt:
       print("KeyboardInterrupt in step %r." % step)
 

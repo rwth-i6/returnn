@@ -340,6 +340,10 @@ def human_size(n, factor=1000, frac=0.8, prec=1):
   return ("%." + str(prec) + "f") % (float(n) / (factor ** i)) + postfixs[i]
 
 
+def human_bytes_size(n, factor=1024, frac=0.8, prec=1):
+  return human_size(n, factor=factor, frac=frac, prec=prec) + "B"
+
+
 def progress_bar(complete = 1.0, prefix = "", suffix = ""):
   import sys
   terminal_width, _ = terminal_size()
