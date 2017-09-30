@@ -491,7 +491,7 @@ class AttentionList(AttentionBase):
         if self.attrs['bn']:
           h_att = self.layer.batch_norm(h_att, n_tmp, index = e.output_index())
         else:
-          i_f = T.cast(e.output_index(),'float32').dimshuffle(0,1,'x').repeat(h_att.shape[2],axis=2)
+          i_f = T.cast(e.output_index()[::self.layer.attrs['direction']],'float32').dimshuffle(0,1,'x').repeat(h_att.shape[2],axis=2)
           h_att = h_att - (h_att * i_f).sum(axis=0,keepdims=True) / T.sum(i_f,axis=0,keepdims=True)
         if self.attrs['memory'] > 0:
           self.add_state_var(T.zeros((self.attrs['memory'], n_tmp), 'float32'), 'M_%d' % i)
