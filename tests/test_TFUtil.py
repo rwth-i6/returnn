@@ -872,3 +872,23 @@ def test_variable_summaries():
   session.run(v.initializer)
   session.run(tf.summary.merge_all())
   assert_almost_equal(session.run(variable_scalar_summaries_dict(v)["test_variable_summaries_mean"]), -0.5)
+
+
+def test_VariableAssigner():
+  v = tf.Variable(initial_value=1.)
+  session.run(v.initializer)
+  assert_equal(session.run(v), 1.)
+  assigner = VariableAssigner(v)
+  assigner.assign(value=2., session=session)
+  assert_equal(session.run(v), 2.)
+
+
+def test_VariableAssigner_ResourceVariable():
+  v = tf.get_variable(
+    initializer=tf.constant_initializer(1.), shape=(),
+    name="test_VariableAssigner_ResourceVariable", use_resource=True)
+  session.run(v.initializer)
+  assert_equal(session.run(v), 1.)
+  assigner = VariableAssigner(v)
+  assigner.assign(value=2., session=session)
+  assert_equal(session.run(v), 2.)

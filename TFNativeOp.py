@@ -13,7 +13,7 @@ class OpDescription(NativeOp.NativeOpBaseMixin):
   @classmethod
   def from_gen_base(cls, gen_base):
     """
-    :param NativeOp.NativeOpGenBase gen_base:
+    :param NativeOp.NativeOpGenBase|Type[NativeOp.NativeOpGenBase] gen_base:
     :rtype: OpDescription
     """
     name = gen_base.__name__
@@ -245,6 +245,10 @@ class OpMaker(object):
       code_forward_io,
       code_set_io,
       code_user])
+    register_gpu_kernel_opts = ".Device(DEVICE_GPU)\n"
+    for v in in_info:
+      if v.get("host_memory", False):
+        register_gpu_kernel_opts += """.HostMemory("%s")\n""" % map_name(v)
     format_args = {
       "op_name": self.op_name,
       "code_register_op_io": code_register_op_io,
@@ -253,6 +257,7 @@ class OpMaker(object):
       "code_compute": code_compute,
       "user_code_kernels": self.description._reduce_c_extra_support_code(self.description.c_extra_support_code),
       "native_op_cpp_filename": self.support_native_op_cpp_filename,
+      "register_gpu_kernel_opts": register_gpu_kernel_opts,
       "n_inputs": len(in_info),
       "n_outputs": len(out_info)
     }
@@ -358,7 +363,10 @@ class OpMaker(object):
           }
         };
 
-        REGISTER_KERNEL_BUILDER(Name("%(op_name)s").Device(DEVICE_GPU), %(op_name)sGpuOp);
+        REGISTER_KERNEL_BUILDER(
+          Name("%(op_name)s")
+          %(register_gpu_kernel_opts)s,
+          %(op_name)sGpuOp);
       }
       """ % format_args
     else:
@@ -440,6 +448,8 @@ class OpMaker(object):
       grad_wrapper.__name__ = grad_description.name
       grad_wrapper.grad_op = grad_op
       ops.RegisterGradient(self.name)(grad_wrapper)
+      op.grad_wrapper = grad_wrapper
+      op.grad_op = grad_op
 
     return op
 
@@ -482,6 +492,17 @@ def load_dump_file(filename):
     return v
 
 
+def make_op(cls, **kwargs):
+  """
+  :param Type[NativeOp.NativeOpGenBase] cls:
+  :param kwargs: passed to OpMaker
+  :return: op
+  :rtype: (tf.Tensor) -> tuple[tf.Tensor]
+  """
+  maker = OpMaker(OpDescription.from_gen_base(cls), **kwargs)
+  return maker.make_op()
+
+
 def make_lstm_op(**kwargs):
   """
   See :class:`NativeLstmCell` for usage.
@@ -489,14 +510,26 @@ def make_lstm_op(**kwargs):
   :return: op
   :rtype: (tf.Tensor) -> tuple[tf.Tensor]
   """
-  maker = OpMaker(OpDescription.from_gen_base(NativeOp.LstmGenericBase), **kwargs)
-  return maker.make_op()
+  return make_op(NativeOp.LstmGenericBase, **kwargs)
 
 
 class RecSeqCellOp(object):
-  def __init__(self, n_hidden):
-    self.n_hidden = n_hidden
-    self.n_input_dim = n_hidden
+  does_input_projection = False
+  does_direction_handling = False
+
+  def __init__(self, n_hidden, n_input_dim=None, input_is_sparse=False, step=None):
+    """
+    :param int n_hidden:
+    :param int n_input_dim:
+    :param bool input_is_sparse:
+    :param int step: what direction and step to use
+    """
+    if n_input_dim is None:
+      n_input_dim = n_hidden
+    self.n_hidden = n_hidden  # hidden-dim and output-dim
+    self.n_input_dim = n_input_dim  # input dim for the inputs in __call__
+    self.input_is_sparse = input_is_sparse
+    self.step = step if self.does_direction_handling else None
 
   def __call__(self, inputs, index, initial_state=None, recurrent_weights_initializer=None):
     """
@@ -511,9 +544,9 @@ class RecSeqCellOp(object):
 
 
 class NativeLstmCell(RecSeqCellOp):
-  def __init__(self, n_hidden):
-    super(NativeLstmCell, self).__init__(n_hidden=n_hidden)
-    self.n_input_dim = n_hidden * 4
+  def __init__(self, **kwargs):
+    super(NativeLstmCell, self).__init__(**kwargs)
+    self.n_input_dim = self.n_hidden * 4
     self.op = make_lstm_op()
 
   @classmethod
@@ -555,9 +588,120 @@ class NativeLstmCell(RecSeqCellOp):
     """
     W_re = tf.get_variable(
       name="W_re", shape=(self.n_hidden, self.n_hidden * 4), initializer=recurrent_weights_initializer)
-    lstm_op = make_lstm_op()
-    out, _, final_state = lstm_op(
+    out, _, final_state = self.op(
       *self.map_layer_inputs_to_op(Z=inputs, V_h=W_re, i=index, initial_state=initial_state))
+    return out, final_state
+
+
+class NativeLstmLowMemCell(RecSeqCellOp):
+  does_input_projection = True
+  does_direction_handling = True
+
+  def __init__(self, **kwargs):
+    super(NativeLstmLowMemCell, self).__init__(**kwargs)
+    self.op = make_op(NativeOp.LstmLowMem)
+    assert not self.input_is_sparse, "not supported"
+
+  def map_layer_inputs_to_op(self, X, W, b, i, initial_state=None):
+    """
+    Just like NativeOp.LstmGenericBase.map_layer_inputs_to_op().
+    :param tf.Tensor X: inputs: shape (time,batch,n_input_dim)
+    :param tf.Tensor W: shape (n_input_dim+n_hidden,n_hidden*4)
+    :param tf.Tensor b: shape (n_hidden*4,)
+    :param tf.Tensor i: index: shape (time,batch)
+    :param tf.Tensor|None initial_state: shape (batch,n_hidden)
+    :rtype: tuple[tf.Tensor]
+    """
+    X.set_shape(tf.TensorShape([None, None, self.n_input_dim]))
+    W.set_shape(tf.TensorShape([self.n_input_dim + self.n_hidden, self.n_hidden * 4]))
+    i.set_shape(tf.TensorShape([None, None]))
+    if i.dtype != tf.float32:
+      if not hasattr(i, "cast_float32"):
+        from TFUtil import reuse_name_scope_of_tensor
+        with reuse_name_scope_of_tensor(i):
+          i_cast_float32 = tf.cast(i, dtype=tf.float32, name="index_cast_float32")
+        i.cast_float32 = i_cast_float32
+      i = i.cast_float32
+    n_batch = tf.shape(X)[1]
+    if initial_state is not None:
+      c0 = initial_state
+    else:
+      c0 = tf.zeros((n_batch, self.n_hidden), dtype=tf.float32, name="initial_c")
+    # We could make `h` a variable exactly if `c` is a trainable variable.
+    y0 = tf.zeros((n_batch, self.n_hidden), dtype=tf.float32, name="initial_h")
+    start = tf.constant(0, name="start")
+    step = tf.constant(self.step or 1, name="step")
+    return X, W, b, y0, c0, i, start, step
+
+  def __call__(self, inputs, index, initial_state=None, recurrent_weights_initializer=None):
+    """
+    :param tf.Tensor inputs: shape (time,batch,n_input_dim)
+    :param tf.Tensor index: shape (time,batch)
+    :param tf.Tensor|None initial_state: shape (batch,n_hidden)
+    :param ()->tf.Tensor recurrent_weights_initializer:
+    :returns: shape (time,batch,n_hidden), shape (batch,n_hidden)
+    :rtype: (tf.Tensor, tf.Tensor)
+    """
+    W = tf.get_variable(
+      name="W", shape=(self.n_input_dim + self.n_hidden, self.n_hidden * 4), initializer=recurrent_weights_initializer)
+    b = tf.get_variable(name="b", shape=(self.n_hidden * 4,), initializer=tf.zeros_initializer())
+    out, _, final_state = self.op(
+      *self.map_layer_inputs_to_op(X=inputs, W=W, b=b, i=index, initial_state=initial_state))
+    return out, final_state
+
+
+class NativeLstm2(RecSeqCellOp):
+  does_input_projection = False
+  does_direction_handling = True
+
+  def __init__(self, **kwargs):
+    super(NativeLstm2, self).__init__(**kwargs)
+    self.n_input_dim = self.n_hidden * 4
+    self.op = make_op(NativeOp.NativeLstm2)
+
+  def map_layer_inputs_to_op(self, X, W, i, initial_state=None):
+    """
+    Just like NativeOp.LstmGenericBase.map_layer_inputs_to_op().
+    :param tf.Tensor X: inputs: shape (time,batch,n_input_dim)
+    :param tf.Tensor W: shape (n_input_dim+n_hidden,n_hidden*4)
+    :param tf.Tensor i: index: shape (time,batch)
+    :param tf.Tensor|None initial_state: shape (batch,n_hidden)
+    :rtype: tuple[tf.Tensor]
+    """
+    X.set_shape(tf.TensorShape([None, None, self.n_hidden * 4]))
+    W.set_shape(tf.TensorShape([self.n_hidden, self.n_hidden * 4]))
+    i.set_shape(tf.TensorShape([None, None]))
+    if i.dtype != tf.float32:
+      if not hasattr(i, "cast_float32"):
+        from TFUtil import reuse_name_scope_of_tensor
+        with reuse_name_scope_of_tensor(i):
+          i_cast_float32 = tf.cast(i, dtype=tf.float32, name="index_cast_float32")
+        i.cast_float32 = i_cast_float32
+      i = i.cast_float32
+    n_batch = tf.shape(X)[1]
+    if initial_state is not None:
+      c0 = initial_state
+    else:
+      c0 = tf.zeros((n_batch, self.n_hidden), dtype=tf.float32, name="initial_c")
+    # We could make `h` a variable exactly if `c` is a trainable variable.
+    y0 = tf.zeros((n_batch, self.n_hidden), dtype=tf.float32, name="initial_h")
+    start = tf.constant(0, name="start")
+    step = tf.constant(self.step or 1, name="step")
+    return X, W, y0, c0, i, start, step
+
+  def __call__(self, inputs, index, initial_state=None, recurrent_weights_initializer=None):
+    """
+    :param tf.Tensor inputs: shape (time,batch,n_hidden)
+    :param tf.Tensor index: shape (time,batch)
+    :param tf.Tensor|None initial_state: shape (batch,n_hidden)
+    :param ()->tf.Tensor recurrent_weights_initializer:
+    :returns: shape (time,batch,n_hidden), shape (batch,n_hidden)
+    :rtype: (tf.Tensor, tf.Tensor)
+    """
+    W = tf.get_variable(
+      name="W_re", shape=(self.n_hidden, self.n_hidden * 4), initializer=recurrent_weights_initializer)
+    out, _, _, final_state = self.op(
+      *self.map_layer_inputs_to_op(X=inputs, W=W, i=index, initial_state=initial_state))
     return out, final_state
 
 
@@ -638,7 +782,7 @@ def demo():
   print("TFNativeOp demo")
   TFUtil.CudaEnv.verbose_find_cuda = True
   print("CUDA path: %s" % TFUtil.CudaEnv.get_instance().cuda_path)
-  op = make_lstm_op(compiler_opts={"static_version_name": "demo"})
+  op = make_op(NativeOp.LstmLowMem, compiler_opts={"static_version_name": "demo"})
   print(op)
 
 

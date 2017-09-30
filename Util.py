@@ -340,6 +340,10 @@ def human_size(n, factor=1000, frac=0.8, prec=1):
   return ("%." + str(prec) + "f") % (float(n) / (factor ** i)) + postfixs[i]
 
 
+def human_bytes_size(n, factor=1024, frac=0.8, prec=1):
+  return human_size(n, factor=factor, frac=frac, prec=prec) + "B"
+
+
 def progress_bar(complete = 1.0, prefix = "", suffix = ""):
   import sys
   terminal_width, _ = terminal_size()
@@ -813,7 +817,7 @@ def parse_orthography(orthography, prefix=(), postfix=("[END]",),
   :param str remove_chars: those chars will just be removed at the beginning
   :param bool collapse_spaces: whether multiple spaces and tabs are collapsed into a single space
   :param bool final_strip: whether we strip left and right
-  :param dict[str] kwargs: passed on to parse_orthography_into_symbols()
+  :param **kwargs: passed on to parse_orthography_into_symbols()
   :rtype: list[str]
   """
   for c in remove_chars:
@@ -1185,11 +1189,12 @@ def collect_class_init_kwargs(cls, only_with_default=False):
     arg_spec = getargspec(cls_.__init__)
     args = arg_spec.args[1:]  # first arg is self, ignore
     if only_with_default:
-      assert len(arg_spec.defaults) <= len(args)
-      args = args[len(args) - len(arg_spec.defaults):]
-      assert len(arg_spec.defaults) == len(args), arg_spec
-      for arg, default in zip(args, arg_spec.defaults):
-        kwargs[arg] = default
+      if arg_spec.defaults:
+        assert len(arg_spec.defaults) <= len(args)
+        args = args[len(args) - len(arg_spec.defaults):]
+        assert len(arg_spec.defaults) == len(args), arg_spec
+        for arg, default in zip(args, arg_spec.defaults):
+          kwargs[arg] = default
     else:
       for arg in args:
         if arg not in kwargs:

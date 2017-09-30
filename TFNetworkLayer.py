@@ -311,12 +311,19 @@ class LayerBase(object):
   def tf_scope_name(self):
     return self.cls_get_tf_scope_name(name=self.name)
 
-  def get_absolute_name_scope_prefix(self):
+  def get_base_absolute_name_scope_prefix(self):
     """
     :return: e.g. "output/", always with "/" at end
     :rtype: str
     """
     return self.network.get_absolute_name_scope_prefix() + self.tf_scope_name + "/"
+
+  def get_absolute_name_scope_prefix(self):
+    """
+    :return: e.g. "output/", always with "/" at end
+    :rtype: str
+    """
+    return self.get_base_absolute_name_scope_prefix()
 
   def is_output_layer(self):
     """
@@ -373,15 +380,15 @@ class LayerBase(object):
     :return: yields the variable_scope
     """
     from TFUtil import var_creation_scope, get_current_var_scope_name, reuse_name_scope
+    self_base_scope = self.get_base_absolute_name_scope_prefix()
+    assert self_base_scope.endswith("/")
+    cur_scope = get_current_var_scope_name()
+    assert (cur_scope + "/").startswith(self_base_scope)
     with var_creation_scope() as dep:
       if self.reuse_params:
-        cur_scope = get_current_var_scope_name()
-        self_base_scope = self.get_absolute_name_scope_prefix()
-        assert self_base_scope.endswith("/")
-        assert (cur_scope + "/").startswith(self_base_scope)
         ext_scope = cur_scope[len(self_base_scope) - 1:]  # e.g. "/rec" or ""
         assert not ext_scope or ext_scope.startswith("/")
-        reuse_base_scope = self.reuse_params.get_absolute_name_scope_prefix()
+        reuse_base_scope = self.reuse_params.get_base_absolute_name_scope_prefix()
         assert reuse_base_scope.endswith("/")
         reuse_scope = reuse_base_scope[:-1] + ext_scope
         with reuse_name_scope(reuse_scope, absolute=True, reuse_vars=True) as scope:
@@ -400,9 +407,9 @@ class LayerBase(object):
     if custom_update:
       custom_update.set_on_var(param)
     if self.reuse_params:
-      name_scope_prefix = self.reuse_params.get_absolute_name_scope_prefix()
+      name_scope_prefix = self.reuse_params.get_base_absolute_name_scope_prefix()
     else:
-      name_scope_prefix = self.get_absolute_name_scope_prefix()
+      name_scope_prefix = self.get_base_absolute_name_scope_prefix()
     assert param.name
     assert param.name[:len(name_scope_prefix)] == name_scope_prefix
     assert param.name[-2:] == ":0"
@@ -716,7 +723,7 @@ class SearchChoices(object):
 
   def filter_seqs(self, seq_filter):
     """
-    :param tf.Tensor seq_filter: (batch, beam) of type bool
+    :param tf.Tensor seq_filter: (batch, beam) of type bool, which we want to keep
     """
     with tf.name_scope("search_filter_seqs"):
       from TFUtil import expand_dims_unbroadcast, get_shape_dim
@@ -965,7 +972,7 @@ class BatchNormLayer(CopyLayer):
     batch_norm_opts = {key: kwargs.pop(key)
                        for key in batch_norm_kwargs
                        if key in kwargs}
-    super(BatchNormLayer, self).__init__(use_batch_norm=batch_norm_opts or True, **kwargs)
+    super(BatchNormLayer, self).__init__(batch_norm=batch_norm_opts or True, **kwargs)
 
 
 class SliceLayer(_ConcatInputLayer):
@@ -2491,15 +2498,30 @@ class CompareLayer(LayerBase):
 class SubnetworkLayer(LayerBase):
   """
   You can define a whole subnetwork as a single layer by this class.
+
+  The subnetwork will be specified by a ``dict[str,dict[str]]``, just like
+  a normal network is specified in the config.
+
+  The ``"output"`` layer of the subnetwork will be the output of this
+  subnetwork-layer.
+
+  With ``concat_sources=True`` (default),
+    the input to this layer will be represented as the ``"data:data"`` or simply ``"data"``
+    in the subnetwork,
+  otherwise with ``concat_sources=False``,
+    the input to this layer will be represented as ``"data:input_layer_name"``
+    for each input, in the subnetwork.
   """
 
   layer_class = "subnetwork"
   recurrent = True  # we don't know. depends on the subnetwork.
 
-  def __init__(self, subnetwork, concat_sources=True, **kwargs):
+  def __init__(self, subnetwork, concat_sources=True, load_on_init=None, **kwargs):
     """
-    :param dict[str,dict] network: subnetwork as dict (JSON content). must have an "output" layer
+    :param dict[str,dict] subnetwork: subnetwork as dict (JSON content). must have an "output" layer-
     :param bool concat_sources: if we concatenate all sources into one, like it is standard for most other layers
+    :param str|None load_on_init: if provided, for parameter initialization,
+      we will load the given model file.
     """
     super(SubnetworkLayer, self).__init__(**kwargs)
     from TFNetwork import TFNetwork, ExternData
@@ -2524,6 +2546,28 @@ class SubnetworkLayer(LayerBase):
     for layer in net.layers.values():
       assert layer.trainable == self.trainable, "partly trainable subnetworks not yet supported"
       self.params.update({"%s/%s" % (layer.name, k): v for (k, v) in layer.params.items()})
+    if load_on_init:
+      reader = tf.train.NewCheckpointReader(load_on_init)
+      var_ckpt_names = set(reader.get_variable_to_shape_map())
+      self_prefix = self.get_absolute_name_scope_prefix()
+
+      def make_var_post_init(var):
+        assert var.name.startswith(self_prefix)
+        assert var.name[-2:] == ":0"
+        v_name = var.name[len(self_prefix):-2]
+        assert v_name in var_ckpt_names
+
+        def var_post_init(session):
+          value = reader.get_tensor(v_name)
+          assigner = self.network.get_var_assigner(var)
+          assigner.assign(value=value, session=session)
+
+        return var_post_init
+
+      for var in self.params.values():
+        # This custom attribute is a big ugly but simple.
+        # It's read in TFNetwork.initialize_params().
+        var.custom_post_init = make_var_post_init(var)
 
   @classmethod
   def get_out_data_from_opts(cls, subnetwork, n_out=None, out_type=None, **kwargs):
@@ -3199,6 +3243,65 @@ class BinaryCrossEntropy(Loss):
     with tf.name_scope("loss_bin_ce"):
       out = 0.5 * tf.nn.sigmoid_cross_entropy_with_logits(logits = self.output_flat, labels = self.target_flat)
       return tf.reduce_mean(out)
+
+class DeepClusteringLoss(Loss):
+  """
+  cost function used for deep clustering as described in
+  [Hershey & Chen+, 2016]: "Deep clustering discriminative embeddings for segmentation and separation"
+  """
+  class_name = "deep_clustering"
+
+  def __init__(self, embedding_dimension, nr_of_sources, **kwargs):
+    """
+    """
+    super(DeepClusteringLoss, self).__init__(**kwargs)
+    self._embedding_dimension = embedding_dimension
+    self._nr_of_sources = nr_of_sources
+
+  def _check_init(self):
+    """
+    Does some checks on self.target and self.output, e.g. if the dense shapes matches.
+    You can overwrite this if those checks don't make sense for your derived loss class.
+    """
+    assert self.target.ndim_dense == self.output.ndim_dense, (
+      "Number of dimensions missmatch. Target: %s, output: %s" % (self.target, self.output))
+    expected_output_dim = self._embedding_dimension * ( self.target.shape[1] / self._nr_of_sources)
+    assert expected_output_dim == self.output.dim, (
+      "Expected output dim is %i but the output has dim %i. " % (expected_output_dim, self.output.dim) +
+      "Target: %s, output: %s" % (self.target, self.output))
+
+  def get_error(self):
+    """
+    :return: frame error rate as a scalar value
+    :rtype: tf.Tensor | None
+    """
+    return None
+
+  def get_value(self):
+    """
+    """
+    assert not self.target.sparse, "sparse is not supported yet"
+    with tf.name_scope("loss_deep_clustering"):
+      # iterate through all chunks and compute affinity cost function for every chunk separately
+      c = tf.Variable([0], dtype=tf.float32)
+      def iterateSequences(s, start, c):
+        return tf.less(s, tf.shape(self.output_seq_lens)[0])
+      def computeCost(s, start, c):
+        seqLength = self.output_seq_lens[s]
+        chunkOut = self.output_flat[start:(start + seqLength), :]
+        chunkTarget = self.target_flat[start:(start + seqLength), :]
+        # convert network output into embedding vectors
+        v = tf.reshape(tf.reshape(chunkOut, (tf.shape(chunkOut)[0], tf.shape(chunkOut)[1] / self._embedding_dimension, self._embedding_dimension)), (tf.shape(chunkOut)[0] * (tf.shape(chunkOut)[1] / self._embedding_dimension ), self._embedding_dimension))
+        # convert targets into class vectors
+        y = tf.reshape(tf.reshape(chunkTarget, (tf.shape(chunkTarget)[0], tf.shape(chunkTarget)[1] / self._nr_of_sources, self._nr_of_sources)), (tf.shape(chunkTarget)[0] * (tf.shape(chunkTarget)[1] / self._nr_of_sources), self._nr_of_sources))
+        chunkC = tf.pow(tf.norm(tf.matmul(tf.transpose(v), v)), 2) - 2 * tf.pow(tf.norm(tf.matmul(tf.transpose(v), y)), 2) + tf.pow(tf.norm(tf.matmul(tf.transpose(y), y)), 2)
+        # append chunk cost to cost tensor
+        c = tf.cond(tf.greater(s, 0), lambda: tf.concat([c, tf.reshape(chunkC, (1,))], axis=0), lambda: tf.reshape(chunkC, (1,)))
+        return tf.add(s, 1), tf.add(start, seqLength), c
+      s = tf.constant(0, dtype=tf.int32)
+      start = tf.constant(0, dtype=tf.int32)
+      r = tf.while_loop(iterateSequences, computeCost, [s, start, c], shape_invariants=[s.get_shape(), start.get_shape(), tf.TensorShape([None,])])
+      return tf.reduce_mean(r[-1])
 
 
 class L1Loss(Loss):

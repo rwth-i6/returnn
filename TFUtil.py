@@ -1297,7 +1297,14 @@ def check_initial_tf_thread_pool_init():
 
 _list_local_devices = None
 
-def _get_tf_list_local_devices():
+def get_tf_list_local_devices():
+  """
+  This uses tensorflow.device_lib.list_local_devices().
+  Note that a call to this will trigger the internal TF thread pool inits,
+  so you should call :func:`setup_tf_thread_pools` first.
+
+  :rtype: list[tensorflow.core.framework.device_attributes_pb2.DeviceAttributes]
+  """
   check_initial_tf_thread_pool_init()
   global _list_local_devices
   if _list_local_devices:
@@ -1323,13 +1330,19 @@ def _parse_physical_device_desc(s):
 
 
 def print_available_devices():
+  """
+  Prints the available TF devices on stdout.
+  This uses tensorflow.device_lib.list_local_devices().
+  Note that a call to this will trigger the internal TF thread pool inits,
+  so you should call :func:`setup_tf_thread_pools` first.
+  """
   cuda_visible_devs = None
   if "CUDA_VISIBLE_DEVICES" in os.environ:
     print("CUDA_VISIBLE_DEVICES is set to %r." % os.environ["CUDA_VISIBLE_DEVICES"])
     cuda_visible_devs = dict(enumerate([int(d) for d in os.environ["CUDA_VISIBLE_DEVICES"].split(",") if d]))
   else:
     print("CUDA_VISIBLE_DEVICES is not set.")
-  devs = _get_tf_list_local_devices()
+  devs = get_tf_list_local_devices()
   print("Local devices available to TensorFlow:")
   for i, dev in enumerate(devs):
     print("  %i/%i: %s" % (i + 1, len(devs), "\n       ".join(str(dev).splitlines())))
@@ -1347,8 +1360,13 @@ def print_available_devices():
 
 
 def is_gpu_available():
-  """Returns whether TensorFlow can access a GPU."""
-  return any(x.device_type == 'GPU' for x in _get_tf_list_local_devices())
+  """
+  Returns whether TensorFlow can access a GPU.
+  This uses tensorflow.device_lib.list_local_devices().
+  Note that a call to this will trigger the internal TF thread pool inits,
+  so you should call :func:`setup_tf_thread_pools` first.
+  """
+  return any(x.device_type == 'GPU' for x in get_tf_list_local_devices())
 
 
 def dot(a, b):
@@ -1916,19 +1934,16 @@ class VariableAssigner(object):
     :param tf.Variable var:
     """
     self.var = var
-    name = var.name.split("/")[-1][:-2]
-    self.value_placeholder = tf.placeholder(
-      name="%s_placeholder_assign_value" % name,
-      shape=var.get_shape(),
-      dtype=var.dtype)
-    self.assign_op = tf.assign(self.var, self.value_placeholder, name="%s_assign" % name)
+    assert isinstance(self.var.initializer, tf.Operation)
+    assert self.var.initializer.type in ["Assign", "AssignVariableOp"]
+    self.assign_op = self.var.initializer
 
   def assign(self, value, session):
     """
     :param numpy.ndarray|int|float value:
     :param tf.Session session:
     """
-    session.run(self.assign_op, feed_dict={self.value_placeholder: value})
+    session.run(self.assign_op, feed_dict={self.assign_op.inputs[1]: value})
 
 
 class CudaEnv(object):
@@ -2928,7 +2943,7 @@ def global_tensor(f, name):
   This is for the current graph, i.e. if there is a new graph, it will recreate the tensor.
 
   :param () -> tf.Tensor f: callable which creates the tensor
-  :param str name: global reference name for the tensor
+  :param str name: global reference name for the tensor. should be a valid scope name
   :return: the tensor
   :rtype: tf.Tensor
   """
@@ -4078,3 +4093,22 @@ class ExplicitRandomShuffleQueue(object):
                     return vs[0]
                   else:
                     return vs
+
+
+def mem_usage_for_dev(dev_name):
+  """
+  :param str dev_name: e.g. "/cpu:0" or "/gpu:0"
+  :return: int scalar, which is the peak memory usage in bytes of the given device
+  :rtype: tf.Tensor
+
+  This function will not create multiple nodes in the graph for multiple calls.
+  Currently only works for GPU devices.
+  """
+  def get():
+    from tensorflow.contrib.memory_stats import MaxBytesInUse
+    with tf.device(dev_name):
+      return MaxBytesInUse()
+
+  assert dev_name.startswith("/")  # e.g. "/cpu:0" or "/gpu:0"
+  scope_name = dev_name[1:].replace(":", "")  # e.g. "cpu0" or "gpu0"
+  return global_tensor(get, "mem_usage_%s" % scope_name)

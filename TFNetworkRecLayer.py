@@ -2,7 +2,7 @@
 from __future__ import print_function
 
 import tensorflow as tf
-from TFNetworkLayer import LayerBase, _ConcatInputLayer, SearchChoices
+from TFNetworkLayer import LayerBase, _ConcatInputLayer, SearchChoices, get_concat_sources_data_template
 from TFUtil import Data, reuse_name_scope
 from Log import log
 
@@ -173,7 +173,8 @@ class RecLayer(_ConcatInputLayer):
     else:
       out = None
     if isinstance(unit, dict):  # subnetwork
-      subnet = _SubnetworkRecCell(parent_net=kwargs["network"], net_dict=unit)
+      source_data = get_concat_sources_data_template(sources) if sources else None
+      subnet = _SubnetworkRecCell(parent_net=kwargs["network"], net_dict=unit, source_data=source_data)
       sub_out = subnet.layer_data_templates["output"].output.copy_template_adding_time_dim(
         name="%s_output" % kwargs["name"], time_dim_axis=0)
       if out:
@@ -190,7 +191,7 @@ class RecLayer(_ConcatInputLayer):
     return out
 
   def get_absolute_name_scope_prefix(self):
-    return super(RecLayer, self).get_absolute_name_scope_prefix() + "rec/"  # all under "rec" sub-name-scope
+    return self.get_base_absolute_name_scope_prefix() + "rec/"  # all under "rec" sub-name-scope
 
   _rnn_cells_dict = {}
 
@@ -313,9 +314,15 @@ class RecLayer(_ConcatInputLayer):
           num_layers=1, num_units=n_hidden, input_size=self.input_data.dim,
           input_mode='linear_input', direction='unidirectional', dropout=0.0)
         return cell
+    if issubclass(rnn_cell_class, TFNativeOp.RecSeqCellOp):
+      cell = rnn_cell_class(
+        n_hidden=n_hidden, n_input_dim=self.input_data.dim,
+        input_is_sparse=self.input_data.sparse,
+        step=self._direction)
+      return cell
     cell = rnn_cell_class(n_hidden)
     assert isinstance(
-      cell, (rnn_contrib.RNNCell, rnn_contrib.FusedRNNCell, TFNativeOp.RecSeqCellOp))  # e.g. BasicLSTMCell
+      cell, (rnn_contrib.RNNCell, rnn_contrib.FusedRNNCell))  # e.g. BasicLSTMCell
     return cell
 
   def _get_output_cell(self, cell):
@@ -474,25 +481,34 @@ class RecLayer(_ConcatInputLayer):
     assert self.input_data
     x, seq_len = self._get_input()
     if self._input_projection:
-      W = tf.get_variable(
-        name="W", shape=(self.input_data.dim, cell.n_input_dim), dtype=tf.float32,
-        initializer=self._fwd_weights_initializer)
-      if self.input_data.sparse:
-        x = tf.nn.embedding_lookup(W, x)
+      if cell.does_input_projection:
+        # The cell get's x as-is. It will internally does the matrix mult and add the bias.
+        pass
       else:
-        x = dot(x, W)
+        W = tf.get_variable(
+          name="W", shape=(self.input_data.dim, cell.n_input_dim), dtype=tf.float32,
+          initializer=self._fwd_weights_initializer)
+        if self.input_data.sparse:
+          x = tf.nn.embedding_lookup(W, x)
+        else:
+          x = dot(x, W)
+        b = tf.get_variable(name="b", shape=(cell.n_input_dim,), dtype=tf.float32, initializer=self._bias_initializer)
+        x += b
     else:
+      assert not cell.does_input_projection
       assert not self.input_data.sparse
       assert self.input_data.dim == cell.n_input_dim
-    b = tf.get_variable(name="b", shape=(cell.n_input_dim,), dtype=tf.float32, initializer=self._bias_initializer)
-    x += b
     index = sequence_mask_time_major(seq_len, maxlen=self.input_data.time_dimension())
+    if not cell.does_direction_handling:
+      x = directed(x, self._direction)
+      index = directed(index, self._direction)
     y, final_state = cell(
-      inputs=directed(x, self._direction), index=directed(index, self._direction),
+      inputs=x, index=index,
       initial_state=self._initial_state,
       recurrent_weights_initializer=self._rec_weights_initializer)
     self._last_hidden_state = final_state
-    y = directed(y, self._direction)
+    if not cell.does_direction_handling:
+      y = directed(y, self._direction)
     return y
 
   def _get_output_subnet_unit(self, cell):
@@ -537,6 +553,8 @@ class RecLayer(_ConcatInputLayer):
         assert self._max_seq_len, "must specify max_seq_len in rec layer"
         max_seq_len = self._max_seq_len
         have_known_seq_len = False
+      # if not self.input_data and self.network.search_flag:
+      #   assert not have_known_seq_len  # at least for the moment
 
       # TODO: Better check for train_flag.
       # Maybe more generic via sampling options later.
@@ -658,7 +676,7 @@ class RecLayer(_ConcatInputLayer):
       :param tf.Tensor i: loop counter, scalar
       :param net_vars: the accumulator values
       :param list[tf.TensorArray] acc_tas: the output accumulator TensorArray
-      :param (tf.Tensor,tf.Tensor)|None seq_len_info:
+      :param (tf.Tensor,tf.Tensor)|None seq_len_info: tuple (end_flag, seq_len)
       :return: [i + 1, a_flat, tas]: the updated counter + new accumulator values + updated TensorArrays
       :rtype: (tf.Tensor, object, list[tf.TensorArray])
 
@@ -676,8 +694,10 @@ class RecLayer(_ConcatInputLayer):
         if seq_len_info is not None:
           end_flag, dyn_seq_len = seq_len_info
           with tf.name_scope("end_flag"):
+            # TODO: end_flag is (batch * beam_in,), probably a different beam than beam_out?
             end_flag = tf.logical_or(end_flag, cell.net.layers["end"].output.placeholder)  # (batch * beam,)
           with tf.name_scope("dyn_seq_len"):
+            # TODO: also wrong...
             dyn_seq_len += tf.where(
               end_flag,
               constant_with_shape(0, shape=tf.shape(end_flag)),
@@ -722,7 +742,7 @@ class RecLayer(_ConcatInputLayer):
       # See body().
       out_batch_dim = cell.layer_data_templates["end"].get_batch_dim()
       init_seq_len_info = (
-        constant_with_shape(False, shape=[out_batch_dim], name="initial_end"),
+        constant_with_shape(False, shape=[out_batch_dim], name="initial_end_flag"),
         constant_with_shape(0, shape=[out_batch_dim], name="initial_seq_len"))
       init_loop_vars += (init_seq_len_info,)
     final_loop_vars = tf.while_loop(
@@ -810,6 +830,7 @@ class RecLayer(_ConcatInputLayer):
         # choice_beams are from the previous step, shape (batch, beam_out) -> beam idx of output,
         # output is of shape (batch * beam, n_out).
         with reuse_name_scope(self._rec_scope.name + "/while_loop_search_body", absolute=True):
+          # We start at the output layer choice base, and search for its source, i.e. for the previous time frame.
           choice_base = output_choice_base
           is_output_choice = True
           while True:
@@ -909,7 +930,7 @@ class _SubnetworkRecCell(object):
       parent_net=parent_net)
     if source_data:
       self.net.extern_data.data["source"] = \
-        parent_rec_layer.input_data.copy_template_excluding_time_dim()
+          source_data.copy_template_excluding_time_dim()
     for key in parent_net.extern_data.data.keys():
       self.net.extern_data.data[key] = \
         parent_net.extern_data.data[key].copy_template_excluding_time_dim()
@@ -1430,14 +1451,20 @@ class ChoiceLayer(LayerBase):
   This is supposed to be used inside the rec layer.
   This can be extended in various ways.
 
-  Assume that we get input (batch,dim) from a log-softmax.
+  We present the scores in +log space, and we will add them up along the path.
+  Assume that we get input (batch,dim) from a (log-)softmax.
   Assume that each batch is already a choice via search.
   In search with a beam size of N, we would output
   sparse (batch=N,) and scores for each.
   """
   layer_class = "choice"
 
-  def __init__(self, beam_size, **kwargs):
+  def __init__(self, beam_size, input_type="prob", **kwargs):
+    """
+    :param int beam_size: the outgoing beam size. i.e. our output will be (batch * beam_size, ...)
+    :param str input_type: "prob" or "log_prob", whether the input is in probability space, log-space, etc.
+      or "regression", if it is a prediction of the data as-is.
+    """
     super(ChoiceLayer, self).__init__(**kwargs)
     # We assume log-softmax here, inside the rec layer.
     assert len(self.sources) == 1
@@ -1446,37 +1473,54 @@ class ChoiceLayer(LayerBase):
     assert self.sources[0].output.shape == (self.output.dim,)
     assert self.target
     if self.network.search_flag:
+      # We are doing the search.
+      # We don't do any checking for sequence length here.
+      # The logic is implemented in `SearchChoices.filter_seqs()`.
+      # TODO this is wrong, we must do it here
       self.search_choices = SearchChoices(
         owner=self,
         beam_size=beam_size)
-      net_batch_dim = self.network.get_batch_dim()
-      assert self.search_choices.src_layer  # not implemented yet... in rec-layer, this should always be the case
-      scores_base = self.search_choices.src_layer.search_choices.beam_scores  # (batch, beam_in)
-      assert scores_base.get_shape().ndims == 2, "%r invalid" % self.search_choices.src_layer.search_choices
-      beam_in = tf.shape(scores_base)[1]
-      scores_base = tf.expand_dims(scores_base, axis=-1)  # (batch, beam_in, dim)
-      scores_in = self.sources[0].output.placeholder  # (batch * beam_in, dim)
-      scores_in_dim = self.sources[0].output.dim
-      scores_in = tf.reshape(scores_in, [net_batch_dim, beam_in, scores_in_dim])  # (batch, beam_in, dim)
-      scores_in += scores_base  # (batch, beam_in, dim)
-      scores_in_flat = tf.reshape(scores_in, [net_batch_dim, beam_in * scores_in_dim])  # (batch, beam_in * dim)
-      # We get scores/labels of shape (batch, beam) with indices in [0..beam_in*dim-1].
-      scores, labels = tf.nn.top_k(scores_in_flat, k=beam_size)
-      self.search_choices.src_beams = labels // scores_in_dim  # (batch, beam) -> scores_in batch idx
-      labels = labels % scores_in_dim  # (batch, beam) -> dim idx
-      labels = tf.reshape(labels, [net_batch_dim * beam_size])  # (batch * beam)
-      labels = tf.cast(labels, self.output.dtype)
-      self.search_choices.set_beam_scores(scores)  # (batch, beam) -> log score
-      self.output = Data(
-        name="%s_choice_output" % self.name,
-        batch_dim_axis=0,
-        shape=self.output.shape,
-        sparse=True,
-        dim=self.output.dim,
-        dtype=self.output.dtype,
-        placeholder=labels,
-        available_for_inference=True,
-        beam_size=beam_size)
+      if input_type == "regression":
+        # It's not a probability distribution, so there is no search here.
+        assert self.search_choices.beam_size == 1
+        self.output = self.sources[0].output.copy_compatible_to(self.output)
+      else:
+        net_batch_dim = self.network.get_batch_dim()
+        assert self.search_choices.src_layer  # not implemented yet... in rec-layer, this should always be the case
+        scores_base = self.search_choices.src_layer.search_choices.beam_scores  # (batch, beam_in)
+        assert scores_base.get_shape().ndims == 2, "%r invalid" % self.search_choices.src_layer.search_choices
+        beam_in = tf.shape(scores_base)[1]
+        scores_base = tf.expand_dims(scores_base, axis=-1)  # (batch, beam_in, dim)
+        scores_in = self.sources[0].output.placeholder  # (batch * beam_in, dim)
+        # We present the scores in +log space, and we will add them up along the path.
+        if input_type == "prob":
+          scores_in = tf.log(scores_in)
+        elif input_type == "log_prob":
+          pass
+        else:
+          raise Exception("%r: invalid input type %r" % (self, input_type))
+        scores_in_dim = self.sources[0].output.dim
+        scores_in = tf.reshape(scores_in, [net_batch_dim, beam_in, scores_in_dim])  # (batch, beam_in, dim)
+        scores_in += scores_base  # (batch, beam_in, dim)
+        scores_in_flat = tf.reshape(scores_in, [net_batch_dim, beam_in * scores_in_dim])  # (batch, beam_in * dim)
+        # `tf.nn.top_k` is the core function performing our search.
+        # We get scores/labels of shape (batch, beam) with indices in [0..beam_in*dim-1].
+        scores, labels = tf.nn.top_k(scores_in_flat, k=beam_size)
+        self.search_choices.src_beams = labels // scores_in_dim  # (batch, beam) -> beam_in idx
+        labels = labels % scores_in_dim  # (batch, beam) -> dim idx
+        labels = tf.reshape(labels, [net_batch_dim * beam_size])  # (batch * beam)
+        labels = tf.cast(labels, self.output.dtype)
+        self.search_choices.set_beam_scores(scores)  # (batch, beam) -> log score
+        self.output = Data(
+          name="%s_choice_output" % self.name,
+          batch_dim_axis=0,
+          shape=self.output.shape,
+          sparse=True,
+          dim=self.output.dim,
+          dtype=self.output.dtype,
+          placeholder=labels,
+          available_for_inference=True,
+          beam_size=beam_size)
     else:
       # Note: If you want to do forwarding, without having the reference,
       # that wont work. You must do search in that case.
