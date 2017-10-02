@@ -1722,7 +1722,15 @@ class DotAttentionLayer(GlobalAttentionContextBaseLayer):
 
   layer_class = "dot_attention"
 
-  def __init__(self, **kwargs):
+  def __init__(self, energy_factor=None, **kwargs):
+    """
+    :param LayerBase base: encoder output to attend on. defines output-dim
+    :param LayerBase base_ctx: encoder output used to calculate the attention weights, combined with input-data.
+      dim must be equal to input-data
+    :param float|None energy_factor: the energy will be scaled by this factor.
+      This is like a temperature for the softmax.
+      In Attention-is-all-you-need, this is set to 1/sqrt(base_ctx.dim).
+    """
     super(DotAttentionLayer, self).__init__(**kwargs)
     # We expect input_data of shape (batch, inner),
     # base_ctx of shape (batch, base_time, inner) and base of shape (batch, base_time, n_out).
@@ -1743,6 +1751,8 @@ class DotAttentionLayer(GlobalAttentionContextBaseLayer):
       energy = tf.matmul(base_ctx, source)  # (batch, base_time, 1)
       energy.set_shape(tf.TensorShape([None, None, 1]))
       energy = tf.squeeze(energy, axis=2)  # (batch, base_time)
+      if energy_factor:
+        energy *= energy_factor
       # We must mask all values behind base_seq_lens. Set them to -inf, because we use softmax afterwards.
       energy_mask = tf.sequence_mask(base_seq_lens, maxlen=tf.shape(energy)[1])
       energy = tf.where(energy_mask, energy, float("-inf") * tf.ones_like(energy))
