@@ -619,22 +619,11 @@ class LayerBase(object):
   def get_last_hidden_state(self):
     """
     If this is a recurrent layer, this would return the last hidden state.
-    If not, as a fallback, we recursively check our sources.
+    Otherwise, we return None.
     :rtype: tf.Tensor | None
     :return: optional tensor with shape (batch, dim)
     """
-    # This is the generic fallback code.
-    hidden_states = []
-    for s in self.sources:
-      h = s.get_last_hidden_state()
-      if h is not None:
-        assert h.get_shape().ndims == 2
-        hidden_states += [h]
-    if not hidden_states:
-      return None
-    if len(hidden_states) == 1:
-      return hidden_states[0]
-    return tf.concat(hidden_states, axis=1, name="concat_hidden_states")
+    return None
 
   @classmethod
   def get_rec_initial_output(cls, batch_dim, name, output, initial_output=None, **kwargs):

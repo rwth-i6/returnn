@@ -141,14 +141,11 @@ class RecLayer(_ConcatInputLayer):
       d["initial_state"] = get_layer(initial_state)
     if isinstance(d.get("unit"), dict):
       def sub_get_layer(name):
+        # Only used to resolve deps to base network.
         if name.startswith("base:"):
           return get_layer(name[len("base:"):])
       for sub in d["unit"].values():  # iterate over the layers of the subnet
         assert isinstance(sub, dict)
-        if "initial_state" in sub:
-          assert isinstance(sub["initial_state"], str)
-          if sub["initial_state"].startswith("base:"):
-            sub["initial_state"] = get_layer(sub["initial_state"][len("base:"):])
         if "class" in sub:
           from TFNetworkLayer import get_layer_class
           class_name = sub["class"]
@@ -1287,6 +1284,7 @@ class RnnCellLayer(_ConcatInputLayer):
   Wrapper around tf.contrib.rnn.RNNCell.
   This will operate a single step, i.e. there is no time dimension,
   i.e. we expect a (batch,n_in) input, and our output is (batch,n_out).
+  This is expected to be used inside a RecLayer.
   """
 
   layer_class = "rnn_cell"
@@ -1295,7 +1293,9 @@ class RnnCellLayer(_ConcatInputLayer):
     """
     :param int n_out: so far, only output shape (batch,n_out) supported
     :param str|tf.contrib.rnn.RNNCell unit: e.g. "BasicLSTM" or "LSTMBlock"
-    :param str|float|LayerBase initial_state: see self.get_rec_initial_state()
+    :param str|float|LayerBase|tuple[LayerBase]|dict[LayerBase] initial_state: see self._get_rec_initial_state().
+      This will be set via transform_config_dict().
+      To get the state from another recurrent layer, use the GetLastHiddenStateLayer (get_last_hidden_state).
     :param dict[str]|None unit_opts: passed to the cell.__init__
     """
     super(RnnCellLayer, self).__init__(**kwargs)
@@ -1360,6 +1360,10 @@ class RnnCellLayer(_ConcatInputLayer):
 
   @classmethod
   def get_hidden_state_size(cls, n_out, unit, unit_opts=None, **kwargs):
+    """
+    :return: size or tuple of sizes
+    :rtype: int|tuple[int]
+    """
     cell = cls._get_cell(unit=unit, unit_opts=unit_opts, n_out=n_out)
     import tensorflow.contrib.rnn as rnn_contrib
     assert isinstance(cell, rnn_contrib.RNNCell)
@@ -1376,32 +1380,90 @@ class RnnCellLayer(_ConcatInputLayer):
 
   @classmethod
   def _get_rec_initial_state(cls, batch_dim, name, initial_state=None, **kwargs):
-    v = initial_state
-    if isinstance(v, LayerBase):
-      return v.get_last_hidden_state()
+    init_value = initial_state
     dim = cls.get_hidden_state_size(**kwargs)
 
-    def make(d):
+    def make(d, v):
       assert isinstance(d, int)
+      assert isinstance(v, (LayerBase, int, float, str, type(None)))
       shape = [batch_dim, d]
-      if v == "zeros" or not v:
+      if isinstance(v, LayerBase):
+        h = v.get_last_hidden_state()
+        if h is not None:
+          h.set_shape(tf.TensorShape((None, d)))
+          return h
+        assert v.output.batch_dim_axis == 0
+        assert v.output.time_dim_axis is None
+        assert v.output.shape == (d,)
+        return v.output.placeholder
+      elif v == "zeros" or not v:
         return tf.zeros(shape)
       elif v == "ones" or v == 1:
         return tf.ones(shape)
       else:
         raise Exception("invalid initial state type %r for sub-layer %r" % (v, name))
 
-    if isinstance(dim, (tuple, list)):
-      s = [make(d) for d in dim]
-      # Make it the same type because nest.assert_same_structure() will complain otherwise.
-      if isinstance(dim, tuple) and type(dim) is not tuple:  # assume namedtuple
-        return type(dim)(*s)
+    def make_list():
+      if isinstance(init_value, (list, tuple)):
+        assert len(init_value) == len(dim)
+        return [make(d, v_) for (d, v_) in zip(dim, init_value)]
+      # Do not broadcast LayerBase automatically in this case.
+      assert isinstance(init_value, (str, int, float))
+      return [make(d, init_value) for d in dim]
+
+    # Make it the same type because nest.assert_same_structure() will complain otherwise.
+    if isinstance(dim, tuple) and type(dim) is not tuple:  # assume namedtuple
+      keys = dim._fields
+      assert len(dim) == len(keys)
+      assert isinstance(init_value, (int, float, str, tuple, list, dict, type(None)))
+      if not isinstance(init_value, dict) and init_value not in (0, 1, None):
+        print("RnnCellLayer %r: It is recommended to use a dict to specify 'initial_state' with keys %r for the state dimensions %r." % (name, keys, dim), file=log.v2)
+      if isinstance(init_value, dict):
+        assert set(init_value.keys()) == set(keys), "You must specify all keys for the state dimensions %r." % dim
+        assert len(init_value) == len(dim)
+        s = {k: make(d, init_value[k]) for (k, d) in zip(keys, dim)}
+      else:
+        s = make_list()
+        assert len(s) == len(keys)
+        s = {k: s_ for (k, s_) in zip(keys, s)}
+      return type(dim)(**s)
+    elif isinstance(dim, (tuple, list)):
+      s = make_list()
+      assert len(s) == len(dim)
       return type(dim)(s)
-    return make(dim)
+    elif isinstance(dim, int):
+      return make(dim, init_value)
+    else:
+      raise Exception("Did not expect hidden_state_size %r." % dim)
 
   @classmethod
   def get_rec_initial_extra_outputs(cls, **kwargs):
     return {"state": cls._get_rec_initial_state(**kwargs)}
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d: will modify inplace
+    :param TFNetwork.TFNetwork network:
+    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
+    """
+    super(RnnCellLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    if "initial_state" in d:
+      def resolve(v):
+        if isinstance(v, str):
+          if v in ["zeros", "ones"]:
+            return v
+          return get_layer(v)
+        if isinstance(v, (tuple, list)):
+          return [resolve(x) for x in v]
+        if isinstance(v, dict):
+          return {k: resolve(x) for (k, x) in v.items()}
+        if isinstance(v, (float, int)):
+          return v
+        if v is None:
+          return v
+        raise Exception("%r: invalid type: %r, %r" % (d, v, type(v)))
+      d["initial_state"] = resolve(d["initial_state"])
 
 
 class GetLastHiddenStateLayer(LayerBase):
