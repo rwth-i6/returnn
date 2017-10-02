@@ -1724,7 +1724,8 @@ def read_sge_num_procs(job_id=None):
     if not os.environ.get("SGE_ROOT"):
       return None
     try:
-      job_id = int(os.environ.get("JOB_ID") or 0)
+      # qint.py might overwrite JOB_ID but sets SGE_JOB_ID instead.
+      job_id = int(os.environ.get("SGE_JOB_ID") or os.environ.get("JOB_ID") or 0)
     except ValueError as exc:
       raise Exception("read_sge_num_procs: %r, invalid JOB_ID: %r" % (exc, os.environ.get("JOB_ID")))
     if not job_id:
