@@ -1408,7 +1408,7 @@ class RnnCellLayer(_ConcatInputLayer):
         assert len(init_value) == len(dim)
         return [make(d, v_) for (d, v_) in zip(dim, init_value)]
       # Do not broadcast LayerBase automatically in this case.
-      assert isinstance(init_value, (str, int, float))
+      assert isinstance(init_value, (int, float, str, type(None)))
       return [make(d, init_value) for d in dim]
 
     # Make it the same type because nest.assert_same_structure() will complain otherwise.
