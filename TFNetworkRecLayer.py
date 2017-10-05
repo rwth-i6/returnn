@@ -609,17 +609,68 @@ class RecLayer(_ConcatInputLayer):
           get=lambda: cell.net.layers[layer_name].output.placeholder))
       add_output_to_acc("output")
 
-      layer_with_loss = None
-      if self.network.train_flag is not False:
-        layer_with_losses = [
+      layer_names_with_losses = []
+      if self.network.eval_flag:  # only collect losses if we need them
+        # Note about the subnet loss calculation:
+        # 1. We can collect the output and calculate the loss on the whole sequence.
+        # 2. We can calculate the loss on a frame base and collect it per frame.
+        # We implemented option 1 (collect output, loss on sequence) earlier.
+        # Option 1 had the following disadvantages:
+        # - It can require a lot of extra memory if the output is large,
+        #   e.g. with a softmax output of 30k classes.
+        # - The loss calculation can be numerical unstable, e.g. for cross-entropy.
+        #   This could be solved by also storing the output before the activation (e.g. softmax),
+        #   which would require even more memory, and other cases is wasted (e.g. MSE loss).
+        #   There is no good way to determine in advance if we need it or not.
+        # Option 2 has the disadvantage that some part of the code might be more hacky.
+        # Overall, option 2 is more straight-forward, probably more what the user intends,
+        # can use numerical stable variants (e.g. for cross-entropy + softmax),
+        # and is what we do now.
+
+        # Not so nice but simple way to get all relevant layers:
+        layer_names_with_losses = [
           layer.name for layer in cell.layer_data_templates.values()
           if layer.kwargs.get("loss", None)]
-        if layer_with_losses:
-          if len(layer_with_losses) > 1:
-            raise Exception("rec layer %r, multiple subnet losses not supported (yet): %r" % (
-              self.name, layer_with_losses))
-          layer_with_loss = layer_with_losses[0]
-          add_output_to_acc(layer_with_loss)
+
+        def make_get_loss(layer_name, return_error=False, return_loss=False):
+          """
+          :param str layer_name:
+          :param bool return_error:
+          :param bool return_loss:
+          :rtype: ()->tf.Tensor
+          """
+
+          def get_loss():
+            layer = cell.net.layers[layer_name]
+            assert layer.loss
+            # This is a bit hacky but we want to not reduce the loss to a scalar
+            # in the loop but get it as shape (batch,).
+            # This should work with all current implementations
+            # but might need some redesign later.
+            layer.loss.reduce_func = lambda x: x
+            if return_loss:
+              value = layer.get_loss_value()
+            elif return_error:
+              value = layer.get_error_value()
+            else:
+              assert False, "return_error or return_loss"
+            assert isinstance(value, tf.Tensor)
+            value.set_shape(tf.TensorShape((None,)))  # (batch,)
+            return value
+
+          return get_loss
+
+        for layer_name in layer_names_with_losses:
+          outputs_to_accumulate.append(OutputToAccumulate(
+            name="loss_%s" % layer_name,
+            dtype=tf.float32,
+            element_shape=(None,),  # (batch,)
+            get=make_get_loss(layer_name, return_loss=True)))
+          outputs_to_accumulate.append(OutputToAccumulate(
+            name="error_%s" % layer_name,
+            dtype=tf.float32,
+            element_shape=(None,),  # (batch,)
+            get=make_get_loss(layer_name, return_error=True)))
 
       output_beam_size = None
       collected_choices = []  # type: list[str]  # layer names
@@ -760,37 +811,28 @@ class RecLayer(_ConcatInputLayer):
       out.name: final_acc_ta
       for (final_acc_ta, out) in zip(final_acc_tas, outputs_to_accumulate)}  # type: dict[str,tf.TensorArray]
 
-    if layer_with_loss:
+    if layer_names_with_losses:
       with tf.name_scope("sub_net_loss"):
-        layer_with_loss_inst = cell.net.layers[layer_with_loss]
-        out = final_acc_tas_dict["output_%s" % layer_with_loss].stack()  # e.g. (time, batch, dim)
-        if not have_known_seq_len:
-          with tf.name_scope("loss_output_sub_slice"):
-            out = out[:tf.reduce_max(seq_len)]
-        out_data = layer_with_loss_inst.output.copy_template_adding_time_dim(time_dim_axis=0)
-        out_data.placeholder = out
-        out_data.size_placeholder = {0: seq_len}
-        target_data = self._static_get_target_value(
-          target=layer_with_loss_inst.target,
-          network=self.network,
-          mark_data_key_as_used=True)
-        if not have_known_seq_len:
-          # Target will have the real target length.
-          # This is by definition a frame-wise loss, and we only use the generated frames.
-          with tf.name_scope("target_sub_slice"):
-            target_data = target_data.copy_as_time_major()
-            target_data.size_placeholder[0] = seq_len  # generated seq len
-            target_data.placeholder = target_data.placeholder[:tf.reduce_max(seq_len)]
-        loss = layer_with_loss_inst.loss
-        from TFNetworkLayer import Loss
-        assert isinstance(loss, Loss)
-        loss.init(
-          output=out_data,
-          output_with_activation=None,  # we could also collect that but not implemented yet...
-          target=target_data)
-        self._sub_loss = loss.get_value()
-        self._sub_error = loss.get_error()
-        self._sub_loss_normalization_factor = loss.get_normalization_factor()
+        self._sub_loss = 0.0  # accumulated
+        for layer_name in sorted(layer_names_with_losses):
+          layer_with_loss_inst = cell.net.layers[layer_name]
+          loss_value = final_acc_tas_dict["loss_%s" % layer_name].stack(name="loss_%s_stack" % layer_name)
+          error_value = final_acc_tas_dict["error_%s" % layer_name].stack(name="error_%s_stack" % layer_name)
+          loss_value.set_shape(tf.TensorShape((None, None)))  # (time, batch)
+          error_value.set_shape(tf.TensorShape((None, None)))  # (time, batch)
+          loss_norm_factor = 1.0 / tf.cast(tf.reduce_sum(seq_len), tf.float32)
+
+          from TFUtil import sequence_mask_time_major
+          mask = sequence_mask_time_major(seq_len)
+          loss_value = tf.where(mask, loss_value, tf.zeros_like(loss_value))
+          error_value = tf.where(mask, error_value, tf.zeros_like(error_value))
+          loss_value = tf.reduce_sum(loss_value)
+          error_value = tf.reduce_sum(error_value)
+
+          self._sub_loss += loss_value * layer_with_loss_inst.loss_scale
+          # Only one error, not summed up. Determined by sorted layers.
+          self._sub_error = error_value
+          self._sub_loss_normalization_factor = loss_norm_factor
 
     # Check if collected_choices has all the right layers.
     # At the moment, _TemplateLayer.has_search_choices() might be incomplete, that is why we check here.

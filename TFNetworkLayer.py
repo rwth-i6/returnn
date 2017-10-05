@@ -2913,14 +2913,16 @@ class Loss(object):
           assert not target.beam_size
       self.output = output
       self.output_with_activation = output_with_activation
-      self.output_seq_lens = output.size_placeholder[0]
       self.target = target
-      self.target_seq_lens = target.size_placeholder[0]
       # Flat variants are with batch,time collapsed into one, masked via seq_lens.
       self.output_flat = None
       self.output_before_softmax_flat = None
+      self.target_flat = None
+      self.output_seq_lens = None
+      self.target_seq_lens = None
+      self.loss_norm_factor = 1.0
       if self.output.have_time_axis():
-        self.loss_norm_factor = 1.0 / tf.cast(tf.reduce_sum(self.target_seq_lens), tf.float32)
+        self.output_seq_lens = output.get_sequence_lengths()
         time_and_batch_dims = (self.output.time_dim_axis, self.output.batch_dim_axis)
         assert time_and_batch_dims in [(0, 1), (1, 0)], "output time-batch-dim unexpected: %s" % self.output
         if output_with_activation and output_with_activation.act_func is tf.nn.softmax:
@@ -2928,14 +2930,22 @@ class Loss(object):
         else:
           self.output_flat = flatten_with_seq_len_mask(output.placeholder, self.output_seq_lens, time_major=output.is_time_major)
           self.output_flat.set_shape(tf.TensorShape(output.shape))
+        if target:
+          assert target.have_time_axis()
+          self.target_seq_lens = target.get_sequence_lengths()
+          self.target_flat = flatten_with_seq_len_mask(target.placeholder, self.target_seq_lens, time_major=target.is_time_major)
+          self.loss_norm_factor = 1.0 / tf.cast(tf.reduce_sum(self.target_seq_lens), tf.float32)
+        else:
+          self.loss_norm_factor = 1.0 / tf.cast(tf.reduce_sum(self.output_seq_lens), tf.float32)
       else:  # no time axis
-        self.loss_norm_factor = 1.0
         assert self.output.batch_ndim == 2
         if output_with_activation and output_with_activation.act_func is tf.nn.softmax:
           self.output_before_softmax_flat = output_with_activation.x
         else:
-          self.output_flat = output
-      self.target_flat = flatten_with_seq_len_mask(target.placeholder, self.target_seq_lens, time_major=target.is_time_major)
+          self.output_flat = output.placeholder
+        if target:
+          assert not self.target.have_time_axis()
+          self.target_flat = target.placeholder
       self._check_init()
 
   def _check_init(self):
@@ -3012,6 +3022,7 @@ class CrossEntropyLoss(Loss):
             logits=self.output_before_softmax_flat, labels=self.target_flat)
           return self.reduce_func(out)
         else:
+          print("Warning: using numerical unstable sparse Cross-Entropy loss calculation", file=log.v3)
           target_flat_exp = tf.stack(
             [tf.range(tf.shape(self.target_flat)[0], dtype=tf.int32),
              tf.cast(self.target_flat, tf.int32)], axis=1)  # (time,2)
@@ -3022,6 +3033,7 @@ class CrossEntropyLoss(Loss):
           out = tf.nn.softmax_cross_entropy_with_logits(logits=self.output_before_softmax_flat, labels=self.target_flat)
           return self.reduce_func(out)
         else:
+          print("Warning: using numerical unstable dense Cross-Entropy loss calculation", file=log.v3)
           out = self.target_flat * tf.log(tf.clip_by_value(self.output_flat, *log_clip_values))
           return -self.reduce_func(out)
 
