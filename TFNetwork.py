@@ -252,8 +252,9 @@ class TFNetwork(object):
     """
     :param dict[str,dict[str]] net_dict:
     :param str name: layer name
-    :param ((str) -> LayerBase)|None get_layer: optional, for source layers, for transform_config_dict
-    :param ((str, LayerBase, dict) -> LayerBase) | None add_layer: self.add_layer
+    :param ((str) -> LayerBase)|None get_layer: optional, for source layers, for transform_config_dict.
+      by default, this wraps self._construct_layer().
+    :param ((str, LayerBase, dict) -> LayerBase) | None add_layer: by default self.add_layer
     :rtype: LayerBase
     """
     if name in self.layers:
@@ -837,26 +838,30 @@ class TFNetwork(object):
     from TFUtil import cond
     return cond(self.train_flag, fn_train, fn_eval)
 
-  def get_search_choices(self, sources=None, src=None, _visited=None):
+  def get_search_choices(self, sources=None, src=None, base_search_choice=None, _visited=None):
     """
     Recursively searches through all sources,
-    and if there is a ChoiceLayer, returns it.
+    and if there is a ChoiceLayer / any layer with search_choices, returns it.
     Could also go to the parent network.
 
     :param LayerBase|None src:
+    :param LayerBase|None base_search_choice:
     :param list[LayerBase]|None sources:
     :param set[LayerBase]|None _visited: keep track about visited layers in case there are circular deps
     :return: (direct or indirect) source LayerBase which has search_choices, or None
     :rtype: LayerBase|None
     """
-    assert sources is None or src is None, "don't provide both"
     if src is not None:
       assert isinstance(src, LayerBase)
       if src.search_choices:
         if src.search_choices.is_decided:
           return None
         return src
-      sources = src.get_dep_layers()
+      assert base_search_choice is None
+      base_search_choice = src
+    if base_search_choice is not None:
+      assert sources is None
+      sources = base_search_choice.get_dep_layers()
     if _visited is None:
       _visited = set()
     assert sources is not None
@@ -871,6 +876,23 @@ class TFNetwork(object):
     if self.parent_layer:
       return self.parent_layer.network.get_search_choices(sources=self.parent_layer.get_dep_layers())
     return None
+
+  def debug_search_choices(self, base_search_choice):
+    """
+    :param LayerBase base_search_choice:
+    """
+    print("debug search choices:")
+    print("  base:", base_search_choice)
+    print("  network:")
+    for _, layer in sorted(self.layers.items()):
+      print("    layer:", layer)
+
+    class Visitor(set):
+      def update(self, others):
+        print("  visit: %r" % (others,))
+        super(Visitor, self).update(others)
+
+    self.get_search_choices(base_search_choice=base_search_choice, _visited=Visitor())
 
   def get_batch_dim(self):
     """

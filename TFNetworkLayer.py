@@ -684,10 +684,11 @@ class SearchChoices(object):
   @property
   def src_layer(self):
     """
+    :return: The layer where we had the last search choices.
     :rtype: LayerBase
     """
     if not self._done_src_layer:
-      self._src_layer = self.owner.network.get_search_choices(sources=self.owner.sources)
+      self._src_layer = self.owner.network.get_search_choices(base_search_choice=self.owner)
       self._done_src_layer = True
     return self._src_layer
 

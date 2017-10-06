@@ -985,11 +985,16 @@ class _SubnetworkRecCell(object):
     """
     def add_templated_layer(name, layer_class, **layer_desc):
       """
+      This is used instead of self.net.add_layer because we don't want to add
+      the layers at this point, we just want to construct the template layers
+      and store inside self.layer_data_templates.
+
       :param str name:
       :param type[LayerBase]|LayerBase layer_class:
       :param dict[str] layer_desc:
       :rtype: LayerBase
       """
+      # _TemplateLayer already created in get_templated_layer.
       layer = self.layer_data_templates[name]
       layer_desc = layer_desc.copy()
       layer_desc["name"] = name
@@ -999,6 +1004,7 @@ class _SubnetworkRecCell(object):
       return layer
 
     class construct_ctx:
+      # Stack of layers:
       layers = []  # type: list[_TemplateLayer]
 
     def get_templated_layer(name):
@@ -1211,6 +1217,89 @@ class _SubnetworkRecCell(object):
             l += [dep]
     return l
 
+  def move_outside_loop(self):
+    """
+    Based on the templated network, we can see the dependencies.
+    We want to move as much calculation, i.e. subnet layers, as possible out of the loop.
+
+    :return:
+    """
+    layers_in_loop = [l for (_, l) in sorted(self.layer_data_templates.items())]
+    input_layers_moved_out = []
+    output_layers_moved_out = []
+    needed_outputs = ["output"]  # TODO + losses + end + other?
+    layers_needed_from_prev_frame = sorted(self.prev_layers_needed)
+
+    def output_can_move_out(layer):
+      assert isinstance(layer, _TemplateLayer)
+      # layer.output from prev time frame is used by other layers?
+      if layer.name in layers_needed_from_prev_frame:
+        return False
+      # layer.output is used by other layers?
+      for other_layer in layers_in_loop:
+        if layer in other_layer.get_dep_layers():
+          return False
+      return True
+
+    def find_output_layer_to_move_out():
+      for layer in layers_in_loop:
+        if layer.name not in needed_outputs:
+          continue
+        if output_can_move_out(layer):
+          return layer
+      return None
+
+    def output_move_out(layer):
+      assert isinstance(layer, _TemplateLayer)
+      needed_outputs.remove(layer.name)
+      layers_in_loop.remove(layer)
+      output_layers_moved_out.append(layer)
+
+    def input_can_move_out(layer):
+      assert isinstance(layer, _TemplateLayer)
+      layer_deps = layer.get_dep_layers()
+      # We depend on other layers from this sub-network?
+      for other_layer in layers_in_loop:
+        if other_layer in layer_deps:
+          return False
+      return True
+
+    def find_input_layer_to_move_out():
+      for layer in layers_in_loop:
+        if input_can_move_out(layer):
+          return layer
+      return None
+
+    def input_move_out(layer):
+      assert isinstance(layer, _TemplateLayer)
+      if layer.name in needed_outputs:
+        needed_outputs.remove(layer.name)
+      layers_in_loop.remove(layer)
+      input_layers_moved_out.append(layer)
+
+    while True:
+      output_layer = find_output_layer_to_move_out()
+      if output_layer:
+        output_move_out(output_layer)
+      input_layer = find_input_layer_to_move_out()
+      if input_layer:
+        input_move_out(input_layer)
+      if not output_layer and not input_layer:
+        break
+
+    log_stream = log.v3
+    print("Rec layer sub net:", file=log_stream)
+    print("  Input layers moved out of loop: (#: %i)" % len(input_layers_moved_out), file=log_stream)
+    for layer in input_layers_moved_out:
+      print("    %s" % layer.name, file=log_stream)
+    if not input_layers_moved_out:
+      print("    None", file=log_stream)
+    print("  Output layers moved out of loop: (#: %i)" % len(output_layers_moved_out), file=log_stream)
+    for layer in output_layers_moved_out:
+      print("    %s" % layer.name, file=log_stream)
+    if not output_layers_moved_out:
+      print("    None", file=log_stream)
+
 
 class _TemplateLayer(LayerBase):
   """
@@ -1287,7 +1376,42 @@ class _TemplateLayer(LayerBase):
     return l
 
   def get_dep_layers(self):
-    return [self.network.layers.get("prev:%s" % l.name, l) for l in self.dependencies]
+    if self.is_data_template:
+      # This is from the template construction, a layer in _SubnetworkRecCell.layer_data_templates.
+      # Maybe we already have the layer constructed.
+      real_layer = self.network.layers.get(self.name)
+      if real_layer:
+        return real_layer.get_dep_layers()
+      # All refs to this subnet are other _TemplateLayer, no matter if prev-frame or not.
+      # Otherwise, refs to the base network are given as-is.
+      return sorted(self.dependencies, key=lambda l: l.name)
+    assert self.is_prev_time_frame
+    # In the current frame, the deps would be self.dependencies.
+    # (It's ok that this would not contain prev-frames.)
+    # We want to return the logical dependencies here, i.e. all such layers from previous frames.
+    # Not all of them might exist, but then, we want to get their dependencies.
+    cur_deps = sorted(self.dependencies, key=lambda l: l.name)
+    deps = []
+    for layer in cur_deps:
+      if layer.network is not self.network:
+        if layer not in deps:
+          deps.append(layer)
+        continue
+      assert isinstance(layer, _TemplateLayer)
+      assert layer.is_data_template
+      # Find the related prev-frame layer.
+      prev_layer = self.network.layers.get("prev:%s" % layer.name, None)
+      if prev_layer:
+        if prev_layer not in deps:
+          deps.append(prev_layer)
+        continue
+      # Not yet constructed or not needed to construct.
+      # In that case, add its dependencies instead.
+      layer_deps = sorted(layer.dependencies, key=lambda l: l.name)
+      for dep in layer_deps:
+        if dep not in cur_deps:
+          cur_deps.append(dep)  # the current iterable will also visit this
+    return deps
 
   def _has_search_choices(self):
     """
@@ -1395,9 +1519,21 @@ class RnnCellLayer(_ConcatInputLayer):
       beam_size=beam_size)
 
   def get_dep_layers(self):
-    l = super(RnnCellLayer, self).get_dep_layers()
-    if isinstance(self._initial_state, LayerBase):
-      l += [self._initial_state]
+    l = list(super(RnnCellLayer, self).get_dep_layers())
+
+    def visit(s):
+      if isinstance(s, (list, tuple)):
+        for x in s:
+          visit(x)
+      elif isinstance(s, dict):
+        for x in s.values():
+          visit(x)
+      elif isinstance(s, LayerBase):
+        l.append(s)
+      else:
+        assert isinstance(s, (str, int, float, type(None)))
+
+    visit(self._initial_state)
     return l
 
   @classmethod
@@ -1590,7 +1726,10 @@ class ChoiceLayer(LayerBase):
         self.output = self.sources[0].output.copy_compatible_to(self.output)
       else:
         net_batch_dim = self.network.get_batch_dim()
-        assert self.search_choices.src_layer  # not implemented yet... in rec-layer, this should always be the case
+        assert self.search_choices.src_layer, (
+          self.network.debug_search_choices(base_search_choice=self),
+          "Not implemented yet. In rec-layer, we would always have our prev-frame as one previous search choice. "
+          "Our deps: %r" % self.get_dep_layers())
         scores_base = self.search_choices.src_layer.search_choices.beam_scores  # (batch, beam_in)
         assert scores_base.get_shape().ndims == 2, "%r invalid" % self.search_choices.src_layer.search_choices
         beam_in = tf.shape(scores_base)[1]
