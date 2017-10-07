@@ -601,11 +601,13 @@ class _SubnetworkRecCell(object):
         self.prev_layers_needed.add(name)
       if name in self.layer_data_templates:
         layer = self.layer_data_templates[name]
-        construct_ctx.layers[-1].dependencies.add(layer)
+        if construct_ctx.layers:
+          construct_ctx.layers[-1].dependencies.add(layer)
         return layer
       if name.startswith("base:"):
         layer = self.parent_net.layers[name[len("base:"):]]
-        construct_ctx.layers[-1].dependencies.add(layer)
+        if construct_ctx.layers:
+          construct_ctx.layers[-1].dependencies.add(layer)
         return layer
       # Need to create layer instance here now to not run into recursive loops.
       # We will extend it later in add_templated_layer().
@@ -627,6 +629,10 @@ class _SubnetworkRecCell(object):
 
     if "end" in self.net_dict:  # used to specify ending of a sequence
       get_templated_layer("end")
+
+    for layer_name, layer in self.net_dict.items():
+      if layer.get("loss"):
+        get_templated_layer(layer_name)
 
   def _construct(self, prev_outputs, prev_extra, i, data=None, classes=None):
     """
@@ -686,6 +692,9 @@ class _SubnetworkRecCell(object):
       get_layer(name)
     if "end" in self.net_dict:  # used to specify ending of a sequence
       get_layer("end")
+    for layer_name, layer in self.net_dict.items():
+      if layer.get("loss"):
+        get_layer(layer_name)
 
   def _get_init_output(self, name):
     """
@@ -735,7 +744,7 @@ class _SubnetworkRecCell(object):
     assert len(prev_outputs_flat) == len(self.prev_layers_needed)
     prev_outputs = {k: v for (k, v) in zip(sorted(self.prev_layers_needed), prev_outputs_flat)}
     with tf.name_scope("prev_outputs"):
-      prev_outputs = {k: tf.identity(v, name=k) for (k, v) in prev_outputs.items()}
+      prev_outputs = identity_op_nested(prev_outputs)
     assert len(prev_extra_flat) == len(self._initial_extra_outputs)
     prev_extra = {
       k: dict_zip(sorted(self._initial_extra_outputs[k]), v)
@@ -747,8 +756,7 @@ class _SubnetworkRecCell(object):
     outputs_flat = [self.net.layers[k].output.placeholder for k in sorted(self.prev_layers_needed)]
     extra_flat = [
       sorted_values_from_dict(self.net.layers[k].rec_vars_outputs)
-      for k in sorted(self.layer_data_templates)
-      if self.net.layers[k].rec_vars_outputs]
+      for k in sorted(self._initial_extra_outputs)]
     return outputs_flat, extra_flat
 
   def get_init_loop_vars(self):
@@ -890,6 +898,7 @@ class _SubnetworkRecCell(object):
       from collections import namedtuple
       OutputToAccumulate = namedtuple("OutputToAccumulate", ["name", "dtype", "element_shape", "get"])
       outputs_to_accumulate = []  # type: list[OutputToAccumulate]
+      needed_outputs = set()
 
       def add_output_to_acc(layer_name):
         name = "output_%s" % layer_name
@@ -901,6 +910,7 @@ class _SubnetworkRecCell(object):
           element_shape=self.layer_data_templates[layer_name].output.batch_shape,
           get=lambda: self.net.layers[layer_name].output.placeholder))
       add_output_to_acc("output")
+      needed_outputs.add("output")
 
       layer_names_with_losses = []
       if rec_layer.network.eval_flag:  # only collect losses if we need them
@@ -924,6 +934,7 @@ class _SubnetworkRecCell(object):
         layer_names_with_losses = [
           layer.name for layer in self.layer_data_templates.values()
           if layer.kwargs.get("loss", None)]
+        needed_outputs.update(layer_names_with_losses)
 
         def make_get_loss(layer_name, return_error=False, return_loss=False):
           """
@@ -995,9 +1006,12 @@ class _SubnetworkRecCell(object):
         assert "end" in self.layer_data_templates, (
           "You need to have an 'end' layer in your rec subnet if the generated seq len is unknown.")
         end_template = self.layer_data_templates["end"]
+        needed_outputs.add("end")
         assert tf.as_dtype(end_template.output.dtype) is tf.bool
         assert end_template.output.batch_shape == (None,)  # (batch*beam,)
         assert end_template.output.sparse
+
+      self.move_outside_loop(needed_outputs=needed_outputs)
 
       # Create a tensor array to store the intermediate values for each step i, e.g. of shape (batch, dim).
       init_acc_tas = [
@@ -1231,17 +1245,31 @@ class _SubnetworkRecCell(object):
         output = output[:tf.reduce_max(seq_len)]  # usually one less
     return output, (sub_loss, sub_error, sub_loss_normalization_factor), search_choices
 
-  def move_outside_loop(self):
+  def move_outside_loop(self, needed_outputs):
     """
     Based on the templated network, we can see the dependencies.
     We want to move as much calculation, i.e. subnet layers, as possible out of the loop.
 
+    :param set[str] needed_outputs:
     :return:
     """
-    layers_in_loop = [l for (_, l) in sorted(self.layer_data_templates.items())]
+    layers_in_loop = []
+
+    def visit(deps):
+      """
+      :param list[LayerBase] deps:
+      """
+      for l in deps:
+        if not isinstance(l, _TemplateLayer):
+          continue
+        assert self.layer_data_templates[l.name] is l
+        if l not in layers_in_loop:
+          layers_in_loop.append(l)
+          visit(sorted(l.dependencies, key=lambda l: l.name))
+    visit([self.layer_data_templates[name] for name in needed_outputs])
+
     input_layers_moved_out = []
     output_layers_moved_out = []
-    needed_outputs = ["output"]  # TODO + losses + end + other?
     layers_needed_from_prev_frame = sorted(self.prev_layers_needed)
 
     def output_can_move_out(layer):
@@ -1265,7 +1293,6 @@ class _SubnetworkRecCell(object):
 
     def output_move_out(layer):
       assert isinstance(layer, _TemplateLayer)
-      needed_outputs.remove(layer.name)
       layers_in_loop.remove(layer)
       output_layers_moved_out.append(layer)
 
@@ -1286,8 +1313,6 @@ class _SubnetworkRecCell(object):
 
     def input_move_out(layer):
       assert isinstance(layer, _TemplateLayer)
-      if layer.name in needed_outputs:
-        needed_outputs.remove(layer.name)
       layers_in_loop.remove(layer)
       input_layers_moved_out.append(layer)
 
@@ -1303,16 +1328,26 @@ class _SubnetworkRecCell(object):
 
     log_stream = log.v3
     print("Rec layer sub net:", file=log_stream)
-    print("  Input layers moved out of loop: (#: %i)" % len(input_layers_moved_out), file=log_stream)
-    for layer in input_layers_moved_out:
-      print("    %s" % layer.name, file=log_stream)
-    if not input_layers_moved_out:
-      print("    None", file=log_stream)
-    print("  Output layers moved out of loop: (#: %i)" % len(output_layers_moved_out), file=log_stream)
-    for layer in output_layers_moved_out:
-      print("    %s" % layer.name, file=log_stream)
-    if not output_layers_moved_out:
-      print("    None", file=log_stream)
+    remaining_layers = set(self.net_dict.keys())
+
+    def dump_info(s, l):
+      print("  %s: (#: %i)" % (s, len(l)), file=log_stream)
+      for layer in l:
+        if isinstance(layer, LayerBase):
+          layer_name = layer.name
+        else:
+          layer_name = layer
+        print("    %s" % layer_name, file=log_stream)
+        remaining_layers.remove(layer_name)
+      if not l:
+        print("    None", file=log_stream)
+
+    dump_info("Input layers moved out of loop", input_layers_moved_out)
+    dump_info("Output layers moved out of loop", output_layers_moved_out)
+    dump_info("Layers in loop", layers_in_loop)
+    dump_info("Unused layers", sorted(remaining_layers))
+
+    # TODO...
 
 
 class _TemplateLayer(LayerBase):
@@ -1721,12 +1756,12 @@ class ChoiceLayer(LayerBase):
     """
     super(ChoiceLayer, self).__init__(**kwargs)
     # We assume log-softmax here, inside the rec layer.
-    assert len(self.sources) == 1
-    assert not self.sources[0].output.sparse
-    assert self.sources[0].output.dim == self.output.dim
-    assert self.sources[0].output.shape == (self.output.dim,)
     assert self.target
     if self.network.search_flag:
+      assert len(self.sources) == 1
+      assert not self.sources[0].output.sparse
+      assert self.sources[0].output.dim == self.output.dim
+      assert self.sources[0].output.shape == (self.output.dim,)
       # We are doing the search.
       # We don't do any checking for sequence length here.
       # The logic is implemented in `SearchChoices.filter_seqs()`.
@@ -1779,12 +1814,26 @@ class ChoiceLayer(LayerBase):
           available_for_inference=True,
           beam_size=beam_size)
     else:
+      assert len(self.sources) == 0  # will be filtered out in transform_config_dict
       # Note: If you want to do forwarding, without having the reference,
       # that wont work. You must do search in that case.
       self.output = self._static_get_target_value(
         target=self.target, network=self.network,
         mark_data_key_as_used=True).copy()
       self.output.available_for_inference = True  # in inference, we should do search
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d: will modify inplace
+    :param TFNetwork.TFNetwork network:
+    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
+    """
+    if not network.search_flag:
+      # In the dependency graph, we don't want it.
+      # This can enable some optimizations in the RecLayer.
+      d["from"] = []
+    super(ChoiceLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
 
   @classmethod
   def get_out_data_from_opts(cls, target, network, beam_size, **kwargs):

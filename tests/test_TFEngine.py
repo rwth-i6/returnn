@@ -323,6 +323,116 @@ def test_engine_search_attention():
   engine.finalize()
 
 
+def test_rec_subnet_train_t3b():
+  beam_size = 2
+  network = {
+    "data_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6},
+    "lstm0_fw" : { "class": "rec", "unit": "lstmp", "n_out" : 6, "dropout": 0.1, "L2": 0.01, "direction": 1, "from": ["data_embed"] },
+    "lstm0_bw" : { "class": "rec", "unit": "lstmp", "n_out" : 6, "dropout": 0.1, "L2": 0.01, "direction": -1, "from": ["data_embed"] },
+    "lstm1_fw" : { "class": "rec", "unit": "lstmp", "n_out" : 6, "dropout": 0.1, "L2": 0.01, "direction": 1, "from": ["data_embed"] },
+    "lstm1_bw" : { "class": "rec", "unit": "lstmp", "n_out" : 6, "dropout": 0.1, "L2": 0.01, "direction": -1, "from": ["data_embed"] },
+    "encoder": {"class": "copy", "from": ["lstm1_fw", "lstm1_bw"]},
+    "enc_ctx": {"class": "linear", "activation": None, "with_bias": False, "from": ["encoder"], "n_out": 5},
+    "enc_emb": {"class": "copy", "from": ["enc_ctx"]},
+
+    "output": {"class": "rec", "from": [], "unit": {
+      'output': {'class': 'choice', 'target': 'classes', 'beam_size': beam_size, 'from': ["output_prob"]},
+      "end": {"class": "compare", "from": ["output"], "value": 0},
+      'orth_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'], "n_out": 6},
+      "s_in": {"class": "linear", "activation": "tanh", "from": ["prev:c", "prev:orth_embed"], "n_out": 5},
+      "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["s_in"], "n_out": 5},  # h_t
+      "c_in": {"class": "copy", "from": ["s"]},
+      "c": {"class": "dot_attention", "from": ["c_in"], "base": "base:enc_emb", "base_ctx": "base:enc_ctx"},
+      "t1": {"class": "linear", "activation": "tanh", "from": ["c", "s"], "n_out": 6},
+      "t2": {"class": "linear", "activation": "tanh", "from": ["t1"], "n_out": 6},
+      "t3": {"class": "linear", "activation": "tanh", "from": ["t2"], "n_out": 6},
+      "output_prob": {"class": "softmax", "from": ["t3"], "target": "classes", "loss": "ce"}
+    }, "target": "classes", "max_seq_len": 75},
+
+    "decision": {
+      "class": "decide", "from": ["output"], "loss": "edit_distance", "target": "classes",
+      "loss_opts": {
+        "debug_print": True
+      }
+    }
+  }
+
+  from GeneratingDataset import DummyDataset
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 3
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
+  train_data.init_seq_order(epoch=1)
+  cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  cv_data.init_seq_order(epoch=1)
+
+  config = Config()
+  config.update({
+    "model": "/tmp/model",
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": network,
+    "start_epoch": 1,
+    "num_epochs": 2,
+    "batch_size": 10,
+    "nadam": True
+  })
+  engine = Engine(config=config)
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
+  engine.train()
+
+
+def test_rec_subnet_train_t3d():
+  beam_size = 2
+  network = {
+    "data_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6},
+    "lstm0_fw" : { "class": "rec", "unit": "nativelstm2", "n_out" : 5, "dropout": 0.1, "L2": 0.01, "direction": 1, "from": ["data_embed"] },
+    "lstm0_bw" : { "class": "rec", "unit": "nativelstm2", "n_out" : 5, "dropout": 0.1, "L2": 0.01, "direction": -1, "from": ["data_embed"] },
+    "encoder_state": {"class": "get_last_hidden_state", "from": ["lstm0_fw", "lstm0_bw"], "n_out": 2*5},
+    "enc_state_embed": {"class": "linear", "activation": None, "with_bias": False, "from": ["encoder_state"], "n_out": 5},
+    "encoder": {"class": "copy", "from": ["lstm0_fw", "lstm0_bw"]},
+    "enc_ctx": {"class": "linear", "activation": None, "with_bias": False, "from": ["encoder"], "n_out": 5},
+    "enc_emb": {"class": "copy", "from": ["enc_ctx"]},
+
+    "output": {"class": "rec", "from": [], "unit": {
+      'output': {'class': 'choice', 'target': 'classes', 'beam_size': beam_size, 'from': ["output_prob"]},
+      "end": {"class": "compare", "from": ["output"], "value": 0},
+      'orth_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'], "n_out": 6},
+      "s_in": {"class": "linear", "activation": "tanh", "from": ["prev:c", "prev:orth_embed"], "n_out": 5},
+      "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["s_in"], "initial_state": {"c": "base:enc_state_embed", "h": 0}, "n_out": 5},  # h_t
+      "c_in": {"class": "copy", "from": ["s"]},
+      "c": {"class": "dot_attention", "from": ["c_in"], "base": "base:enc_emb", "base_ctx": "base:enc_ctx",
+      "energy_factor": 1.0/numpy.sqrt(5)},
+      "att": {"class": "linear", "activation": "tanh", "from": ["c", "s"], "n_out": 6},  # \tilde h
+      "output_prob": {"class": "softmax", "from": ["att"], "target": "classes", "loss": "ce"}
+    }, "target": "classes", "max_seq_len": 75},
+  }
+
+  from GeneratingDataset import DummyDataset
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 3
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
+  train_data.init_seq_order(epoch=1)
+  cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  cv_data.init_seq_order(epoch=1)
+
+  config = Config()
+  config.update({
+    "model": "/tmp/model",
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": network,
+    "start_epoch": 1,
+    "num_epochs": 2,
+    "batch_size": 10,
+    "nadam": True
+  })
+  engine = Engine(config=config)
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
+  engine.train()
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()
