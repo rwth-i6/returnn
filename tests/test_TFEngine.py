@@ -375,7 +375,8 @@ def test_rec_subnet_train_t3b():
     "start_epoch": 1,
     "num_epochs": 2,
     "batch_size": 10,
-    "nadam": True
+    "nadam": True,
+    "learning_rate": 0.01,
   })
   engine = Engine(config=config)
   engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
@@ -426,7 +427,51 @@ def test_rec_subnet_train_t3d():
     "start_epoch": 1,
     "num_epochs": 2,
     "batch_size": 10,
-    "nadam": True
+    "nadam": True,
+    "learning_rate": 0.01,
+  })
+  engine = Engine(config=config)
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
+  engine.train()
+
+
+def test_rec_subnet_train_t3d_simple():
+  beam_size = 2
+  network = {
+    "encoder": {"class": "linear", "activation": "tanh", "n_out": 5},
+    "output": {"class": "rec", "from": [], "unit": {
+      'output': {'class': 'choice', 'target': 'classes', 'beam_size': beam_size, 'from': ["output_prob"]},
+      "end": {"class": "compare", "from": ["output"], "value": 0},
+      'orth_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'], "n_out": 6},
+      "s_in": {"class": "linear", "activation": "tanh", "from": ["prev:c", "prev:orth_embed"], "n_out": 5},
+      "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["s_in"], "n_out": 5},
+      "c_in": {"class": "copy", "from": ["s"]},
+      "c": {"class": "dot_attention", "from": ["c_in"], "base": "base:encoder", "base_ctx": "base:encoder"},
+      "att": {"class": "linear", "activation": "tanh", "from": ["c", "s"], "n_out": 6},
+      "output_prob": {"class": "softmax", "from": ["att"], "target": "classes", "loss": "ce"}
+    }, "target": "classes", "max_seq_len": 75},
+  }
+
+  from GeneratingDataset import DummyDataset
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 3
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
+  train_data.init_seq_order(epoch=1)
+  cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  cv_data.init_seq_order(epoch=1)
+
+  config = Config()
+  config.update({
+    "model": "/tmp/model",
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": network,
+    "start_epoch": 1,
+    "num_epochs": 2,
+    "batch_size": 10,
+    "nadam": True,
+    "learning_rate": 0.01,
   })
   engine = Engine(config=config)
   engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
