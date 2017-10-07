@@ -562,8 +562,8 @@ class _SubnetworkRecCell(object):
     self._construct_template()
     self._initial_outputs = None  # type: dict[str,tf.Tensor]
     self._initial_extra_outputs = None  # type: dict[str,dict[str,tf.Tensor|tuple[tf.Tensor]]]
-    self.input_layers_moved_out = None  # type: list[str]
-    self.output_layers_moved_out = None  # type: list[str]
+    self.input_layers_moved_out = []  # type: list[str]
+    self.output_layers_moved_out = []  # type: list[str]
     self.input_layers_net = None  # type: TFNetwork
     self.output_layers_net = None  # type: TFNetwork
 
@@ -639,13 +639,14 @@ class _SubnetworkRecCell(object):
         if layer.get("loss"):
           get_templated_layer(layer_name)
 
-  def _construct(self, prev_outputs, prev_extra, i, data=None, classes=None):
+  def _construct(self, prev_outputs, prev_extra, i, data=None, classes=None, inputs_moved_out=None):
     """
     :param dict[str,tf.Tensor] prev_outputs: outputs of the layers from the previous step
     :param dict[str,dict[str,tf.Tensor]] prev_extra: extra output / hidden states of the previous step for layers
     :param tf.Tensor i: loop counter
     :param tf.Tensor|None data: optional source data, shape e.g. (batch,dim)
     :param tf.Tensor|None classes: optional target classes, shape e.g. (batch,) if it is sparse
+    :param dict[str,tf.Tensor]|None inputs_moved_out:
     """
     if data is not None:
       self.net.extern_data.data["source"].placeholder = data
@@ -671,6 +672,12 @@ class _SubnetworkRecCell(object):
         net_dict[name]["rec_previous_layer"] = prev_layers[name]
 
     def get_layer(name):
+      """
+      :param str name: layer name
+      :rtype: LayerBase
+      """
+      from TFNetwork import TFNetwork
+      from TFNetworkLayer import InternalLayer
       if name.startswith("prev:"):
         return prev_layers[name[len("prev:"):]]
       if name.startswith("base:"):
@@ -681,10 +688,16 @@ class _SubnetworkRecCell(object):
           needed_beam_size = self.layer_data_templates["output"].output.beam_size
           if needed_beam_size:
             if l.output.beam_size != needed_beam_size:
-              from TFNetworkLayer import InternalLayer
               l = InternalLayer(name=name, network=self.net, output=l.output.copy_extend_with_beam(needed_beam_size))
               extended_layers[name] = l
           assert l.output.beam_size == needed_beam_size
+        return l
+      if name in self.input_layers_moved_out:
+        assert isinstance(self.input_layers_net, TFNetwork)
+        l = self.input_layers_net.layers[name]
+        assert isinstance(l, LayerBase)
+        l = InternalLayer(name=name, network=self.net, output=l.output.copy_template_excluding_time_dim())
+        l.output.placeholder = inputs_moved_out[name]
         return l
       return self.net._construct_layer(net_dict, name=name, get_layer=get_layer)
 
@@ -733,36 +746,6 @@ class _SubnetworkRecCell(object):
     assert output_template.output.time_dim_axis is None
     assert output_template.output.batch_shape == self.parent_rec_layer.output.batch_shape[1:], (
       "see RecLayer.get_out_data_from_opts()")
-
-  def get_next_loop_vars(self, loop_vars, i, data=None, classes=None):
-    """
-    :param (list[tf.Tensor],list[tf.Tensor]) loop_vars: loop_vars from the previous step
-    :param tf.Tensor i: loop counter
-    :param tf.Tensor|None data: optional source data, shape e.g. (batch,dim)
-    :param tf.Tensor|None classes: optional target classes, shape e.g. (batch,) if it is sparse
-    :return: next loop_vars
-    :rtype: (list[tf.Tensor],list[tf.Tensor|tuple[tf.Tensor]])
-    """
-    from TFUtil import identity_op_nested
-    from Util import sorted_values_from_dict, dict_zip
-    prev_outputs_flat, prev_extra_flat = loop_vars
-    assert len(prev_outputs_flat) == len(self.prev_layers_needed)
-    prev_outputs = {k: v for (k, v) in zip(sorted(self.prev_layers_needed), prev_outputs_flat)}
-    with tf.name_scope("prev_outputs"):
-      prev_outputs = identity_op_nested(prev_outputs)
-    assert len(prev_extra_flat) == len(self._initial_extra_outputs)
-    prev_extra = {
-      k: dict_zip(sorted(self._initial_extra_outputs[k]), v)
-      for (k, v) in zip(sorted(self._initial_extra_outputs), prev_extra_flat)}
-    with tf.name_scope("prev_extra"):
-      prev_extra = identity_op_nested(prev_extra)
-    with reuse_name_scope(self.parent_rec_layer._rec_scope):
-      self._construct(prev_outputs=prev_outputs, prev_extra=prev_extra, data=data, classes=classes, i=i)
-    outputs_flat = [self.net.layers[k].output.placeholder for k in sorted(self.prev_layers_needed)]
-    extra_flat = [
-      sorted_values_from_dict(self.net.layers[k].rec_vars_outputs)
-      for k in sorted(self._initial_extra_outputs)]
-    return outputs_flat, extra_flat
 
   def get_init_loop_vars(self):
     """
@@ -1020,10 +1003,10 @@ class _SubnetworkRecCell(object):
       # self._move_outside_loop(needed_outputs=needed_outputs)
 
       # Tensor arrays for any layers which were moved out.
+      input_layers_moved_out_tas = {}
       if self.input_layers_moved_out:
         with tf.name_scope("input_layers_moved_out"):
           self._construct_input_layers_moved_out()
-          input_layers_moved_out_tas = []
           for layer_name in self.input_layers_moved_out:
             assert seq_len is not None
             inp_ta = tf.TensorArray(
@@ -1033,7 +1016,7 @@ class _SubnetworkRecCell(object):
               size=tf.reduce_max(seq_len),
               infer_shape=True)
             inp_ta = inp_ta.unstack(self.input_layers_net.layers[layer_name].output.get_placeholder_as_time_major())
-            input_layers_moved_out_tas.append(inp_ta)
+            input_layers_moved_out_tas[layer_name] = inp_ta
 
       # Create a tensor array to store the intermediate values for each step i, e.g. of shape (batch, dim).
       init_acc_tas = [
@@ -1063,11 +1046,33 @@ class _SubnetworkRecCell(object):
       """
       # The inner scope name is a bit screwed up and this is nicer anyway.
       with reuse_name_scope(rec_layer._rec_scope.name + "/while_loop_body", absolute=True):
-        net_vars = self.get_next_loop_vars(
-          net_vars,
-          data=x_ta.read(i) if x_ta else None,
-          classes=y_ta.read(i) if y_ta else None,
-          i=i)
+        # get next loop vars (net_vars)
+        from TFUtil import identity_op_nested
+        from Util import sorted_values_from_dict, dict_zip
+        prev_outputs_flat, prev_extra_flat = net_vars
+        assert len(prev_outputs_flat) == len(self.prev_layers_needed)
+        prev_outputs = {k: v for (k, v) in zip(sorted(self.prev_layers_needed), prev_outputs_flat)}
+        with tf.name_scope("prev_outputs"):
+          prev_outputs = identity_op_nested(prev_outputs)
+        assert len(prev_extra_flat) == len(self._initial_extra_outputs)
+        prev_extra = {
+          k: dict_zip(sorted(self._initial_extra_outputs[k]), v)
+          for (k, v) in zip(sorted(self._initial_extra_outputs), prev_extra_flat)}
+        with tf.name_scope("prev_extra"):
+          prev_extra = identity_op_nested(prev_extra)
+        with reuse_name_scope(self.parent_rec_layer._rec_scope):
+          self._construct(
+            prev_outputs=prev_outputs, prev_extra=prev_extra,
+            i=i,
+            data=x_ta.read(i) if x_ta else None,
+            classes=y_ta.read(i) if y_ta else None,
+            inputs_moved_out={k: ta.read(i) for (k, ta) in input_layers_moved_out_tas.items()})
+        outputs_flat = [self.net.layers[k].output.placeholder for k in sorted(self.prev_layers_needed)]
+        extra_flat = [
+          sorted_values_from_dict(self.net.layers[k].rec_vars_outputs)
+          for k in sorted(self._initial_extra_outputs)]
+        net_vars = (outputs_flat, extra_flat)
+
         if seq_len_info is not None:
           end_flag, dyn_seq_len = seq_len_info
           with tf.name_scope("end_flag"):
@@ -1298,8 +1303,8 @@ class _SubnetworkRecCell(object):
           visit(sorted(l.dependencies, key=lambda l: l.name))
     visit([self.layer_data_templates[name] for name in needed_outputs])
 
-    input_layers_moved_out = []
-    output_layers_moved_out = []
+    self.input_layers_moved_out = []
+    self.output_layers_moved_out = []
     layers_needed_from_prev_frame = sorted(self.prev_layers_needed)
 
     def output_can_move_out(layer):
@@ -1324,7 +1329,7 @@ class _SubnetworkRecCell(object):
     def output_move_out(layer):
       assert isinstance(layer, _TemplateLayer)
       layers_in_loop.remove(layer)
-      output_layers_moved_out.append(layer.name)
+      self.output_layers_moved_out.append(layer.name)
 
     def input_can_move_out(layer):
       assert isinstance(layer, _TemplateLayer)
@@ -1344,7 +1349,7 @@ class _SubnetworkRecCell(object):
     def input_move_out(layer):
       assert isinstance(layer, _TemplateLayer)
       layers_in_loop.remove(layer)
-      input_layers_moved_out.append(layer.name)
+      self.input_layers_moved_out.append(layer.name)
 
     while True:
       output_layer = find_output_layer_to_move_out()
@@ -1368,13 +1373,10 @@ class _SubnetworkRecCell(object):
       if not l:
         print("    None", file=log_stream)
 
-    dump_info("Input layers moved out of loop", input_layers_moved_out)
-    dump_info("Output layers moved out of loop", output_layers_moved_out)
+    dump_info("Input layers moved out of loop", self.input_layers_moved_out)
+    dump_info("Output layers moved out of loop", self.output_layers_moved_out)
     dump_info("Layers in loop", [layer.name for layer in layers_in_loop])
     dump_info("Unused layers", sorted(remaining_layers))
-
-    self.input_layers_moved_out = input_layers_moved_out
-    self.output_layers_moved_out = output_layers_moved_out
 
   def _construct_input_layers_moved_out(self):
     """
