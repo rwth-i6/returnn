@@ -478,6 +478,79 @@ def test_rec_subnet_train_t3d_simple():
   engine.train()
 
 
+def test_deterministic_train():
+  """
+  Training should be deterministic, i.e. running it twice should result in exactly the same result.
+  """
+  network = {
+    "hidden": {"class": "linear", "activation": "tanh", "n_out": 5},
+    "output": {"class": "softmax", "from": ["hidden"], "target": "classes", "loss": "ce"},
+  }
+  n_data_dim = 2
+  n_classes_dim = 3
+  config = Config()
+  config.update({
+    "model": "/tmp/model",
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": network,
+    "start_epoch": 1,
+    "num_epochs": 2,
+    "batch_size": 10,
+    "nadam": True,
+    "learning_rate": 0.01,
+  })
+
+  from GeneratingDataset import DummyDataset
+  seq_len = 5
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
+  cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+
+  score_results = {}  # run_idx -> epoch (1, 2) -> error_key ('dev_score', ...) -> score
+  fwd_results = {}  # run_idx -> numpy array
+
+  for run_idx in range(3):
+    print("Run %i:" % run_idx)
+    # Will always reinit the TF session and all random generators,
+    # thus it should be deterministic.
+    engine = Engine(config=config)
+    engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
+    engine.train()
+
+    print("Run %i: Train results:" % run_idx)
+    pprint(engine.learning_rate_control.epochData)
+    score_results[run_idx] = {ep: d.error for (ep, d) in engine.learning_rate_control.epochData.items()}
+
+    print("Run %i: Forward cv seq 0:" % run_idx)
+    cv_data.init_seq_order(epoch=1)
+    out = engine.forward_single(cv_data, 0)
+    assert isinstance(out, numpy.ndarray)
+    assert out.shape == (seq_len, n_classes_dim)
+    print(out)
+    fwd_results[run_idx] = out
+
+    if run_idx > 0:
+      for ep, error_dict in sorted(score_results[run_idx].items()):
+        for error_key, error_value in sorted(error_dict.items()):
+          prev_error_value = score_results[run_idx - 1][ep][error_key]
+          print("Epoch %i, error key %r, current value %f vs prev value %f, equal?" % (
+            ep, error_key, error_value, prev_error_value))
+          numpy.testing.assert_almost_equal(error_value, prev_error_value)
+      print("Output equal to previous?")
+      prev_out = fwd_results[run_idx - 1]
+      numpy.testing.assert_almost_equal(out, prev_out)
+
+
+def test_rec_subnet_auto_optimize():
+  """
+  rec subnet can automatically move out layers from the loop.
+  It should result in an equivalent model.
+  Thus, training should be equivalent.
+  Also, training the one model, and then importing it in the original model, should work.
+  """
+  # TODO based on test_rec_subnet_train_t3d_simple + test_deterministic_train ...
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()
