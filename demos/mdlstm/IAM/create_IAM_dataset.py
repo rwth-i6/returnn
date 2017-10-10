@@ -25,7 +25,7 @@ def hdf5_strings(handle, name, data):
     dset = handle.create_dataset(name, (len(data),), dtype="S"+str(S))
     dset[...] = data
   except Exception:
-    dt = h5py.special_dtype(vlen=unicode)
+    dt = h5py.special_dtype(vlen=str)
     del handle[name]
     dset = handle.create_dataset(name, (len(data),), dtype=dt)
     dset[...] = data
@@ -64,7 +64,7 @@ def load_file_list_and_transcriptions_and_sizes_and_n_labels(file_list_path, cha
       size_list.append((height, width))
       s = name.split('-')
       name = base_path + name + '.png'
-      text = map(lambda c: charlist.index(c), text)
+      text = [charlist.index(c) for c in text]
       if pad_whitespace:
         text = [charlist.index("|")] + text + [charlist.index("|")]
       file_list.append(name)
@@ -93,7 +93,7 @@ def write_to_hdf(file_list, transcription_list, charlist, n_labels, out_file_nam
       inputs.append(img)
       seq_lengths.append([[img.size, len(transcription), 2]])
       if i % 100 == 0:
-        print i, "/", len(file_list)
+        print(i, "/", len(file_list))
 
     inputs = numpy.concatenate(inputs, axis=0)
     sizes = numpy.concatenate(numpy.array(sizes, dtype="int32"), axis=0)
@@ -121,7 +121,7 @@ def write_to_hdf(file_list, transcription_list, charlist, n_labels, out_file_nam
 
 
 def sort_by_size(file_list, transcription_list, size_list):
-  zipped = zip(file_list, transcription_list, size_list)
+  zipped = list(zip(file_list, transcription_list, size_list))
   #sort by (width, height)
   sorted_lists = sorted(zipped, key=lambda x: (x[2][1], x[2][0]))
   return [x[0] for x in sorted_lists], [x[1] for x in sorted_lists], [x[2] for x in sorted_lists]
@@ -134,7 +134,7 @@ def convert(file_list_path, char_list_path, selections, out_file_names, pad_whit
   file_list, transcription_list, size_list = sort_by_size(file_list, transcription_list, size_list)
 
   for selection, out_file_name in zip(selections, out_file_names):
-    print out_file_name
+    print(out_file_name)
     selection_set = set(selection)
     assert selection_set.issubset(set(x.split("/")[-1].split(".png")[0] for x in file_list))
     selected_file_list = []
@@ -162,16 +162,16 @@ def get_train_and_train_valid_lists(train_list_path, blacklist, train_fraction=0
   train_valid_imgs = imgs[n_train:]
 
   n_before = len(train_imgs)
-  train_imgs = filter(lambda s: s not in blacklist, train_imgs)
+  train_imgs = [s for s in train_imgs if s not in blacklist]
   n_after = len(train_imgs)
   if n_before != n_after:
-    print "removed", n_before - n_after, "blacklisted images from train"
+    print("removed", n_before - n_after, "blacklisted images from train")
   
   n_before = len(train_valid_imgs)
-  train_valid_imgs = filter(lambda s: s not in blacklist, train_valid_imgs)
+  train_valid_imgs = [s for s in train_valid_imgs if s not in blacklist]
   n_after = len(train_valid_imgs)
   if n_before != n_after:
-    print "removed", n_before - n_after, "blacklisted images from train_valid"
+    print("removed", n_before - n_after, "blacklisted images from train_valid")
 
   return train_imgs, train_valid_imgs
 
@@ -183,7 +183,7 @@ def convert_IAM_lines_demo(base_path_imgs, tag, blacklist=[]):
   selection_list_path = "split/demo.txt"
   out_file_name_demo = base_path_out + "demo.h5"
 
-  print "converting IAM_lines to", out_file_name_demo
+  print("converting IAM_lines to", out_file_name_demo)
   demo_list = ["a01-000u-00", "a01-007-04", "a01-007-06"]
   selections = [demo_list]
   out_file_names = [out_file_name_demo]
@@ -200,7 +200,7 @@ def convert_IAM_lines_train(base_path_imgs, tag, blacklist=[]):
   out_file_name_train2 = base_path_out + "train.2.h5"
   out_file_name_train_valid = base_path_out + "train_valid.h5"
 
-  print "converting IAM_lines to", out_file_name_train1, "and", out_file_name_train2
+  print("converting IAM_lines to", out_file_name_train1, "and", out_file_name_train2)
   train_list, train_valid_list = get_train_and_train_valid_lists(selection_list_path, blacklist, 0.9)
   len1 = len(train_list) / 2
   train_list1 = train_list[:len1]
@@ -237,7 +237,7 @@ def convert_IAM_lines_valid_test(base_path_imgs, tag):
     imgs = sorted(imgs)
     transcriptions = [[]] * len(imgs)
 
-    print "converting IAM_lines to", out_file_name
+    print("converting IAM_lines to", out_file_name)
     write_to_hdf(imgs, transcriptions, charlist, n_labels, out_file_name, dataset_prefix=prefix, compress=True)
 
 
