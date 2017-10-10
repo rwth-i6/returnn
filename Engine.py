@@ -278,10 +278,13 @@ class Engine:
         print("Copy hidden layer %s" % layer_name, file=log.v3)
         intelli_copy_layer(layer, network.hidden[layer_name])
       for layer_name, layer in sorted(old_network.output.items()):
-        print("Copy output layer %s" % layer_name, file=log.v3)
-        intelli_copy_layer(layer, network.output[layer_name])
-      print("Not copied hidden: %s" % sorted(set(network.hidden.keys()).difference(old_network.hidden.keys())), file=log.v3)
-      print("Not copied output: %s" % sorted(set(network.output.keys()).difference(old_network.output.keys())), file=log.v3)
+        if layer_name in network.output:
+          print("Copy output layer %s" % layer_name, file=log.v3)
+          intelli_copy_layer(layer, network.output[layer_name])
+        else:
+          print("Did not copy output layer %s" % layer_name, file=log.v3)
+      print("Not copied hidden: %s" % sorted(set(network.hidden.keys()).symmetric_difference(old_network.hidden.keys())), file=log.v3)
+      print("Not copied output: %s" % sorted(set(network.output.keys()).symmetric_difference(old_network.output.keys())), file=log.v3)
 
     # Maybe load existing model parameters.
     elif last_model_hdf:
