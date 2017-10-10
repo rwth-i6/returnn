@@ -665,6 +665,17 @@ class Engine(object):
           dict_diff_str(self.network.layers_desc, net_desc), file=log.v3)
     old_network_params = self.network.get_params_serialized(self.tf_session)
     self._init_network(net_desc)
+    # In pretraining it can happen, that the dimension of output parameters of the previous epoch is
+    # not equal to the dimension in the current epoch, due to difference in layer size. 
+    # In that case initialize output parameters randomly
+    if self.is_pretrain_epoch():
+      # iterate through all output layers and check dimension compatibility
+      for l in self.network.get_output_layers():
+        if l.name in old_network_params.values_dict:
+          for param in l.params:
+            if tuple(l.params[param].shape.as_list()) != old_network_params.values_dict[l.name][param].shape:
+              del old_network_params.values_dict[l.name]
+              break
     # Otherwise it's initialized randomly which is fine.
     # This copy will copy the old params over and leave the rest randomly initialized.
     # This also works if the old network has just the same topology,
