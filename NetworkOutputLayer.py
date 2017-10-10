@@ -8,10 +8,11 @@ from TwoStateBestPathDecoder import TwoStateBestPathDecodeOp
 from CTC import CTCOp
 from TwoStateHMMOp import TwoStateHMMOp
 from OpNumpyAlign import NumpyAlignOp
-from NativeOp import FastBaumWelchOp, SegmentFastBaumWelchOp
+from NativeOp import FastBaumWelchOp, SegmentFastBaumWelchOp, MultiEndFastBaumWelchOp
 from NetworkBaseLayer import Layer
 from NetworkHiddenLayer import CAlignmentLayer
 from SprintErrorSignals import sprint_loss_and_error_signal, SprintAlignmentAutomataOp
+from Fsa import LoadWfstOp
 from TheanoUtil import time_batch_make_flat, grad_discard_out_of_bound, DumpOp
 from Util import as_str
 from Log import log
@@ -324,7 +325,7 @@ class OutputLayer(Layer):
                                   custom_update=forward,
                                   custom_update_normalized=True)
       }
-      
+
     self.cost_scale_val = T.constant(1)
     if scale_by_error and self.train_flag:
       rpcx = self.p_y_given_x_flat[T.arange(self.p_y_given_x_flat.shape[0]),self.y_data_flat]
@@ -595,7 +596,7 @@ class SequenceOutputLayer(OutputLayer):
     if warp_ctc_lib:
       self.set_attr("warp_ctc_lib", warp_ctc_lib)
     assert self.loss in (
-      'ctc', 'ce_ctc', 'hmm', 'ctc2', 'sprint', 'viterbi', 'fast_bw', 'seg_fast_bw', 'ctc_warp', 'ctc_rasr', 'inv'), 'invalid loss: ' + self.loss
+      'ctc', 'ce_ctc', 'hmm', 'ctc2', 'sprint', 'viterbi', 'fast_bw', 'seg_fast_bw', 'lf_mmi', 'ctc_warp', 'ctc_rasr', 'inv'), 'invalid loss: ' + self.loss
 
   def _handle_old_kwargs(self, kwargs, fast_bw_opts):
     if "loss_with_softmax_prob" in kwargs:
@@ -887,6 +888,77 @@ class SequenceOutputLayer(OutputLayer):
       known_grads = { self.z: grad }
 
       return err, known_grads
+    elif self.loss == 'lf_mmi':
+      # Get AM scores for current utterances
+      am_scores = -T.log(self.p_y_given_x)
+      am_scale = self.attrs.get("am_scale", 1)
+      if am_scale != 1:
+        am_scale = numpy.float32(am_scale)
+        am_scores *= am_scale
+
+      # Get alignment FST for numerator
+      if self.fast_bw_opts.get("num_fsa_source", "sprint") == "sprint":
+        assert isinstance(self.sprint_opts, dict), "you need to specify sprint_opts in the output layer"
+        edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
+      else:
+        raise Exception("invalid fsa_source %r" % self.fast_bw_opts.get("fsa_source"))
+
+      # Calculate numerator part
+      fwdbwd, obs_scores = FastBaumWelchOp().make_op()(am_scores, edges, weights, start_end_states, float_idx, state_buffer)
+      self.baumwelch_alignment = T.exp(-fwdbwd)
+      self.num_scores = obs_scores
+
+      def loop_fkt(some_variable, seq_index, prev_fwdbwd, prev_scores):
+        # Get search FST for denominator
+        if self.fast_bw_opts.get("den_fsa_source", "file") == "file":
+          import os
+          assert isinstance(self.fast_bw_opts.get("den_fsa_file"), str) and os.path.exists(self.fast_bw_opts.get("den_fsa_file")),\
+            "you need to specify the path to the search FSA in den_fsa_file"
+          edges, weights, start_states, end_states, end_state_weigths, state_buffer = LoadWfstOp(self.fast_bw_opts.get("den_fsa_file"))(seq_index)
+        else:
+          raise Exception("invalid fsa_source %r" % self.fast_bw_opts.get("fsa_source"))
+
+        # Calculate denominator part
+        fwdbwd, obs_scores = MultiEndFastBaumWelchOp().make_op()(am_scores, edges, weights, start_states, end_states, end_state_weigths, float_idx, state_buffer)
+        return T.set_subtensor(prev_fwdbwd[:,seq_index,:], fwdbwd[:,seq_index,:]) , T.set_subtensor(prev_scores[:,seq_index], obs_scores[:,seq_index])
+
+      [foo,bar], scan_updates = theano.scan(fn=loop_fkt,
+                                            outputs_info=[T.zeros_like(fwdbwd),T.zeros_like(obs_scores)],
+                                            sequences=[am_scores[0],T.arange(1000)])
+
+      [fwdbwd, obs_scores] = [foo[-1],bar[-1]]
+
+      self.baumwelch_denominator =T.exp(-fwdbwd)
+      self.den_scores = obs_scores
+
+      # TODO: check weather loss is correct
+      err = ((self.num_scores - self.den_scores) *  T.cast(self.index,'float32') / T.sum( T.cast(self.index,'float32'), axis=0, dtype='float32', keepdims=True)).sum()
+
+      if self.fast_bw_opts.get('numerator_smoothing') :
+        num = (1 - self.fast_bw_opts.get('numerator_smoothing')) * self.baumwelch_alignment + self.fast_bw_opts.get('numerator_smoothing') * T.extra_ops.to_one_hot(self.y_data_flat, self.baumwelch_alignment.shape[-1]).reshape(self.baumwelch_alignment.shape)
+      else:
+        num = self.baumwelch_alignment
+
+      grad = (self.baumwelch_denominator - num) * float_idx_bc
+
+      if self.ce_smoothing:
+        err *= numpy.float32(1.0 - self.ce_smoothing)
+        grad *= numpy.float32(1.0 - self.ce_smoothing)
+        if not self.prior_scale:  # we kept the softmax bias as it was
+          nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y_data_flat[self.i])
+        else:  # assume that we have subtracted the bias by the log priors beforehand
+          assert self.log_prior is not None
+          # In this case, for the CE calculation, we need to add the log priors again.
+          y_m_prior = T.reshape(self.z + numpy.float32(self.prior_scale) * self.log_prior,
+                                (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim=2)
+          nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_m_prior[self.i], y_idx=self.y_data_flat[self.i])
+        ce = numpy.float32(self.ce_smoothing) * T.sum(nll)
+        err += ce
+        grad += T.grad(ce, self.z)
+
+
+      return err, {self.z: grad }
+
     elif self.loss == 'ctc':
       from theano.tensor.extra_ops import cpu_contiguous
       err, grad, priors = CTCOp()(self.p_y_given_x, cpu_contiguous(self.y.dimshuffle(1, 0)), self.index_for_ctc())

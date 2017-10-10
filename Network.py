@@ -579,7 +579,7 @@ class LayerNetwork(object):
     """
     if not "loss" in kwargs: kwargs["loss"] = "ce"
     self.loss = kwargs["loss"]
-    if self.loss in ('ctc', 'ce_ctc', 'hmm', 'ctc2', 'sprint', 'viterbi', 'fast_bw', 'seg_fast_bw', 'ctc_warp', 'inv', "ctc_rasr"):
+    if self.loss in ('ctc', 'ce_ctc', 'hmm', 'ctc2', 'sprint', 'viterbi', 'fast_bw', 'seg_fast_bw', 'lf_mmi', 'ctc_warp', 'inv', "ctc_rasr"):
       layer_class = SequenceOutputLayer
       # We must keep sequences as they are. Setting us as recurrent
       # will tell other code to leave seqs as they are (e.g. the dataset batch building).

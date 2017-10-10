@@ -970,6 +970,98 @@ class FastBwFsaShared:
       weights=self.get_weights(n_batch),
       start_end_states=self.get_start_end_states(n_batch))
 
+class LoadWfstOp(theano.Op):
+  """
+  Op: maps segment names (tags) to fsa automata (load from disk) that can be used to compute a BW-alignment
+  """
+
+  __props__ = ("filename",)
+
+  def __init__(self, filename):
+    super(LoadWfstOp, self).__init__()
+    from Util import make_hashable
+    self.filename = make_hashable(filename)
+    self.single_wfst = None  # type: dict
+
+  def make_node(self, tags):
+    # the edges/start_end_state output has to be a float matrix because that is the only dtype supported
+    # by CudaNdarray. We need unsigned ints. Thus we return a view on the unsigned int matrix
+    return theano.Apply(self, [tags], [T.fmatrix(), T.fvector(), T.fvector(), T.fmatrix(), T.fvector(), T.fmatrix()])
+
+  def perform(self, node, inputs, output_storage, params=None):
+    tags = inputs[0]
+    try:
+      _ = iter(tags)
+    except TypeError:
+      tags = [tags]
+
+    if self.single_wfst is None:
+      print("LoadWfstOp: Loading WFST from %r" % self.filename, file=log.v3)
+      import xml.etree.ElementTree as ET
+
+      tree = ET.parse(self.filename)
+      root = tree.getroot()
+      single_wfst = dict()
+      single_wfst['edges'] = []
+      single_wfst['weights'] = []
+      single_wfst['start_states'] = numpy.array([root.attrib['initial']],dtype=numpy.uint32)
+      single_wfst['end_states'] = []
+      single_wfst['end_state_weigths'] = []
+      self.single_wfst = dict()
+      self.single_wfst['num_states'] = len(root)
+
+      for state in root:
+        if state.tag != 'state':
+          continue # not interested in input-alphabet
+        state_id = numpy.uint32(state.attrib['id'])
+        if state[0].tag == 'final':
+            single_wfst['end_states'].append([numpy.uint32(0),state_id])
+            if state[1].tag == 'weight':
+              single_wfst['end_state_weigths'].append(numpy.float32(state[1].text))
+            else:
+              single_wfst['end_state_weigths'].append(numpy.float32(0.))
+        for arc in state:
+          if arc.tag != 'arc':
+            continue # alredy handeled 'final' and 'weight'
+          target = numpy.uint32(arc.attrib['target'])
+          emission_id = numpy.uint32(arc[0].text)
+          if len(arc) > 1 :
+            weight = numpy.float32(arc[1].text)
+          else:
+            weight = numpy.float32(0.)
+          single_wfst['edges'].append([state_id,target,emission_id,numpy.uint32(0)])
+          single_wfst['weights'].append(weight)
+      for key,val in single_wfst.items():
+        self.single_wfst[key] = numpy.array(val)
+
+    assert isinstance(self.single_wfst, dict)  # PyCharm confused otherwise
+
+    offset = 0
+    all_edges = []
+    all_weights = []
+    all_start_states = []
+    all_end_states = []
+    all_end_state_weigths = []
+    for tag in tags:
+      edges = numpy.transpose(numpy.copy(self.single_wfst['edges']))
+      edges[0:2,:] += offset
+      edges[3,:]    = tag
+      all_edges.append(edges)
+      all_weights.append(self.single_wfst['weights'])
+      all_start_states.append(self.single_wfst['start_states']+offset)
+      end_states = numpy.copy(self.single_wfst['end_states'])
+      end_states[:,1] += offset
+      end_states[:,0]    = tag
+      all_end_states.append(end_states)
+      all_end_state_weigths.append(self.single_wfst['end_state_weigths'])
+      offset += self.single_wfst['num_states']
+
+    output_storage[0][0] = numpy.hstack(all_edges).view(dtype='float32')
+    output_storage[1][0] = numpy.hstack(all_weights)
+    output_storage[2][0] = numpy.hstack(all_start_states).view(dtype='float32')
+    output_storage[3][0] = numpy.hstack(all_end_states).view(dtype='float32')
+    output_storage[4][0] = numpy.hstack(all_end_state_weigths)
+    output_storage[5][0] = numpy.empty((2, self.single_wfst['num_states']*len(tags)), dtype='float32')
 
 def main():
   from argparse import ArgumentParser

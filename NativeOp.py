@@ -3091,8 +3091,13 @@ class MultiEndFastBaumWelchOp(NativeOpGenBase):
   c_extra_support_code.update({
     "100_init_bwd_state_buffer": """
       __global__
-      void init_bwd_state_buffer(float* states, unsigned* end_states, float* end_state_weigths, unsigned t, unsigned max_t, float* index, unsigned index_stride) {
+      void init_bwd_state_buffer(unsigned t, unsigned max_t, unsigned num_endstates, unsigned index_stride,
+                                 float* states, unsigned const* end_states, float const* end_state_weights, float const* index) {
         unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx >= num_endstates) {
+          return;
+        }
+
         unsigned seq_idx = end_states[idx * 2u + 0u];
         if (index[t * index_stride + seq_idx] == 1.0 && (t == max_t || index[(t + 1) * index_stride + seq_idx] == 0.0)) {
           unsigned state_idx = end_states[idx * 2u + 1u];
@@ -3103,7 +3108,7 @@ class MultiEndFastBaumWelchOp(NativeOpGenBase):
     """})
 
   c_fw_code = """
-    // am_scores, edges, weights, start_states, end_states, end_state_weigths index, state_buffer* = input_names (*: inplace)
+    // am_scores, edges, weights, start_states, end_states, end_state_weights, index, state_buffer* = input_names (*: inplace)
     // output = output_names
     assert(n_inputs  == 8);
     assert(n_outputs == 2);
@@ -3121,7 +3126,7 @@ class MultiEndFastBaumWelchOp(NativeOpGenBase):
     assert(Ndarray_DIMS(am_scores)[0] == Ndarray_DIMS(out)[0]);
     assert(Ndarray_DIMS(am_scores)[1] == Ndarray_DIMS(out)[1]);
     assert(Ndarray_DIMS(am_scores)[2] == Ndarray_DIMS(out)[2]);
-    assert(Ndarray_DIMS(am_scores)[1] == Ndarray_DIMS(start_end_states)[1]);
+//    assert(Ndarray_DIMS(am_scores)[1] == Ndarray_DIMS(end_states)[0]);
 
     assert(Ndarray_DIMS(sum_output)[0] == Ndarray_DIMS(am_scores)[0]);
     assert(Ndarray_DIMS(sum_output)[1] == Ndarray_DIMS(am_scores)[1]);
@@ -3140,21 +3145,22 @@ class MultiEndFastBaumWelchOp(NativeOpGenBase):
     float*    d_am_scores         = Ndarray_DEV_DATA(am_scores);
     unsigned* d_start_states      = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(start_states));
     unsigned* d_end_states        = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(end_states));
-    float*    d_end_state_weigths = Ndarray_DEV_DATA(end_state_weights);
+    float*    d_end_state_weights = Ndarray_DEV_DATA(end_state_weights);
     float*    d_index             = Ndarray_DEV_DATA(index);
     float*    d_state_buffer_prev = Ndarray_DEV_DATA(state_buffer) + 0 * Ndarray_STRIDE(state_buffer, 0);
     float*    d_state_buffer_next = Ndarray_DEV_DATA(state_buffer) + 1 * Ndarray_STRIDE(state_buffer, 0);
     float*    d_out               = Ndarray_DEV_DATA(out);
     float*    d_sum_output        = Ndarray_DEV_DATA(sum_output);
 
-    unsigned n_frames     = Ndarray_DIMS(am_scores)[0];
-    unsigned n_seqs       = Ndarray_DIMS(am_scores)[1];
-    unsigned n_emissions  = Ndarray_DIMS(am_scores)[2];
-    unsigned n_states     = Ndarray_DIMS(state_buffer)[1];
-    unsigned n_edges      = Ndarray_DIMS(edges)[1];
-    unsigned n_end_states = Ndarray_DIMS(end_states)[0];
-    unsigned n_threads    = 1024u;
-    unsigned n_blocks     = (n_edges + n_threads - 1) / n_threads;
+    unsigned n_frames       = Ndarray_DIMS(am_scores)[0];
+    unsigned n_seqs         = Ndarray_DIMS(am_scores)[1];
+    unsigned n_emissions    = Ndarray_DIMS(am_scores)[2];
+    unsigned n_states       = Ndarray_DIMS(state_buffer)[1];
+    unsigned n_edges        = Ndarray_DIMS(edges)[1];
+    unsigned n_start_states = Ndarray_DIMS(start_states)[0];
+    unsigned n_end_states   = Ndarray_DIMS(end_states)[0];
+    unsigned n_threads      = 1024u;
+    unsigned n_blocks       = (n_edges + n_threads - 1) / n_threads;
 
     unsigned frame_stride    = Ndarray_STRIDE(am_scores, 0);
     unsigned sequence_stride = Ndarray_STRIDE(am_scores, 1);
@@ -3162,46 +3168,59 @@ class MultiEndFastBaumWelchOp(NativeOpGenBase):
 
     assert(n_frames > 0);
 
-    //std::cerr << "n_frames: "     << n_frames     << std::endl;
-    //std::cerr << "n_seqs: "       << n_seqs       << std::endl;
-    //std::cerr << "n_emissions: "  << n_emissions  << std::endl;
-    //std::cerr << "n_states: "     << n_states     << std::endl;
-    //std::cerr << "n_edges: "      << n_edges      << std::endl;
-    //std::cerr << "n_end_states: " << n_end_states << std::endl;
-    //std::cerr << "n_threads: "    << n_threads    << std::endl;
-    //std::cerr << "n_blocks: "     << n_blocks     << std::endl;
+//    std::cerr << "n_frames: "       << n_frames       << std::endl;
+//    std::cerr << "n_seqs: "         << n_seqs         << std::endl;
+//    std::cerr << "n_emissions: "    << n_emissions    << std::endl;
+//    std::cerr << "n_states: "       << n_states       << std::endl;
+//    std::cerr << "n_edges: "        << n_edges        << std::endl;
+//    std::cerr << "n_start_states: " << n_start_states << std::endl;
+//    std::cerr << "n_end_states: "   << n_end_states   << std::endl;
+//    std::cerr << "n_threads: "      << n_threads      << std::endl;
+//    std::cerr << "n_blocks: "       << n_blocks       << std::endl;
 
-    //std::cerr << "frame_stride: "     << frame_stride    << std::endl;
-    //std::cerr << "sequnence_stride: " << sequence_stride << std::endl;
-    //std::cerr << "index_stride: "     << index_stride    << std::endl;
+//    std::cerr << "frame_stride: "     << frame_stride    << std::endl;
+//    std::cerr << "sequence_stride: "  << sequence_stride << std::endl;
+//    std::cerr << "index_stride: "     << index_stride    << std::endl;
 
     // initialize edge buffer
     float* d_edge_buffer = reinterpret_cast<float*>(device_malloc(n_edges * n_frames * sizeof(float)));
+//    cudaDeviceSynchronize();
+//    HANDLE_LAST_ERROR();
     unsigned n_fill_blocks = (n_edges * n_frames + n_threads - 1u) / n_threads;
     fill_array<<<n_fill_blocks, n_threads>>>(d_edge_buffer, 0.0, n_edges * n_frames);
-    HANDLE_LAST_ERROR();
+//    cudaDeviceSynchronize();
+//    HANDLE_LAST_ERROR();
 
     // initialize the state buffer
     n_fill_blocks = (n_states + n_threads - 1u) / n_threads;
     fill_array<<<n_fill_blocks, n_threads>>>(d_state_buffer_prev, std::numeric_limits<float>::infinity(), n_states);
-    HANDLE_LAST_ERROR();
-    set_start_states<<<1, n_seqs>>>(d_state_buffer_prev, d_start_states);
+//    cudaDeviceSynchronize();
+//    HANDLE_LAST_ERROR();
+    set_start_states<<<1, n_start_states>>>(d_state_buffer_prev, d_start_states);
+//    cudaDeviceSynchronize();
+//    HANDLE_LAST_ERROR();
 
     // initialize full state buffer (only used to dump the alignment)
     float* d_state_buffer_all = NULL;
     if (dump_alignment and batch_idx %% dump_every == 0) {
       d_state_buffer_all = reinterpret_cast<float*>(device_malloc(n_states * (n_frames + 1u) * sizeof(float)));
+//      cudaDeviceSynchronize();
+//      HANDLE_LAST_ERROR();
       cudaMemcpy(d_state_buffer_all, d_state_buffer_prev, n_states * sizeof(float), cudaMemcpyDeviceToDevice);
+//      HANDLE_LAST_ERROR();
     }
 
     // fwd pass
     for (unsigned t = 0u; t < n_frames; t++) {
       fill_array<<<n_fill_blocks, n_threads>>>(d_state_buffer_next, std::numeric_limits<float>::infinity(), n_states);
-      HANDLE_LAST_ERROR();
+//      cudaDeviceSynchronize();
+//      HANDLE_LAST_ERROR();
+//      std::cerr << "frame " << t << std::endl;
       next_frame<<<n_blocks, n_threads>>>(true, n_edges, sequence_stride,
                                           d_sequence_idxs, d_from, d_to, d_weights, d_emission_idxs,
                                           d_state_buffer_prev, d_state_buffer_next, d_am_scores + t * frame_stride, d_edge_buffer + t * n_edges);
-      HANDLE_LAST_ERROR();
+//      cudaDeviceSynchronize();
+//      HANDLE_LAST_ERROR();
       if (dump_alignment and batch_idx %% dump_every == 0) {
         cudaMemcpy(d_state_buffer_all + (t + 1u) * n_states, d_state_buffer_next, n_states * sizeof(float), cudaMemcpyDeviceToDevice);
       }
@@ -3209,31 +3228,38 @@ class MultiEndFastBaumWelchOp(NativeOpGenBase):
     }
 
     // bwd pass
+    const unsigned n_end_state_blocks = (n_end_states + n_threads - 1u) / n_threads;
+    const unsigned n_end_state_threads = min(n_threads, n_end_states);
     fill_array<<<n_fill_blocks, n_threads>>>(d_state_buffer_prev, std::numeric_limits<float>::infinity(), n_states);
-    HANDLE_LAST_ERROR();
+//    cudaDeviceSynchronize();
+//    HANDLE_LAST_ERROR();
     for (unsigned t = n_frames; t > 0; t--) {
-      init_bwd_state_buffer<<<1, n_end_states>>>(d_state_buffer_prev, d_end_states, d_end_state_weigths, t - 1, n_frames - 1, d_index, index_stride);
-      HANDLE_LAST_ERROR();
+      init_bwd_state_buffer<<<n_end_state_blocks, n_end_state_threads>>>(t - 1, n_frames - 1, n_end_states, index_stride, d_state_buffer_prev, d_end_states, d_end_state_weights,  d_index);
+//      cudaDeviceSynchronize();
+//      HANDLE_LAST_ERROR();
       if (dump_alignment and batch_idx %% dump_every == 0) {
         float alpha = 1.0f;
-        HANDLE_ERROR(cublasSaxpy(handle, n_states, &alpha, d_state_buffer_prev, 1, d_state_buffer_all + t * n_states, 1));
+//        HANDLE_ERROR(cublasSaxpy(handle, n_states, &alpha, d_state_buffer_prev, 1, d_state_buffer_all + t * n_states, 1));
       }
       fill_array<<<n_fill_blocks, n_threads>>>(d_state_buffer_next, std::numeric_limits<float>::infinity(), n_states);
-      HANDLE_LAST_ERROR();
+//      cudaDeviceSynchronize();
+//      HANDLE_LAST_ERROR();
       next_frame<<<n_blocks, n_threads>>>(false, n_edges, sequence_stride,
                                           d_sequence_idxs, d_to, d_from, d_weights, d_emission_idxs,
                                           d_state_buffer_prev, d_state_buffer_next, d_am_scores + (t - 1) * frame_stride, d_edge_buffer + (t - 1) * n_edges);
-      HANDLE_LAST_ERROR();
+//      cudaDeviceSynchronize();
+//      HANDLE_LAST_ERROR();
       std::swap(d_state_buffer_prev, d_state_buffer_next);
     }
     if (dump_alignment and batch_idx %% dump_every == 0) {
       float alpha = 1.0f;
-      HANDLE_ERROR(cublasSaxpy(handle, n_states, &alpha, d_state_buffer_prev, 1, d_state_buffer_all, 1));
+//      HANDLE_ERROR(cublasSaxpy(handle, n_states, &alpha, d_state_buffer_prev, 1, d_state_buffer_all, 1));
     }
 
     // normalize at each time frame
     normalize<<<n_frames, 1, n_seqs * sizeof(float)>>>(d_edge_buffer, d_sequence_idxs, n_edges, n_seqs, d_sum_output);
-    HANDLE_LAST_ERROR();
+//    cudaDeviceSynchronize();
+//    HANDLE_LAST_ERROR();
 
     // dump alignment
     if (dump_alignment and batch_idx %% dump_every == 0) {
@@ -3243,14 +3269,16 @@ class MultiEndFastBaumWelchOp(NativeOpGenBase):
 
     n_fill_blocks = (n_frames * n_seqs * n_emissions + n_threads - 1u) / n_threads;
     fill_array<<<n_fill_blocks, n_threads>>>(d_out, std::numeric_limits<float>::infinity(), n_frames * n_seqs * n_emissions);
-    HANDLE_LAST_ERROR();
+//    cudaDeviceSynchronize();
+//    HANDLE_LAST_ERROR();
 
     frame_stride    = Ndarray_STRIDE(out, 0);
     sequence_stride = Ndarray_STRIDE(out, 1);
     n_blocks        = (n_frames * n_edges + n_threads - 1u) / n_threads;
     compute_result<<<n_blocks, n_threads>>>(d_edge_buffer, d_out, d_emission_idxs, d_sequence_idxs,
                                             frame_stride, sequence_stride, n_frames, n_seqs, n_edges);
-    HANDLE_LAST_ERROR();
+//    cudaDeviceSynchronize();
+//    HANDLE_LAST_ERROR();
 
     #if TENSORFLOW
     // Certain TensorFlow code doesn't like inf, even if it is just the CheckNumerics,
