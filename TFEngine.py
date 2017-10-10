@@ -669,13 +669,21 @@ class Engine(object):
     # not equal to the dimension in the current epoch, due to difference in layer size. 
     # In that case initialize output parameters randomly
     if self.is_pretrain_epoch():
-      # iterate through all output layers and check dimension compatibility
+      # iterate through all output layers and check dimension compatibility of parameters
+      # start output layer from random initialization if one parameters dimension do not match
       for l in self.network.get_output_layers():
-        if l.name in old_network_params.values_dict:
-          for param in l.params:
-            if tuple(l.params[param].shape.as_list()) != old_network_params.values_dict[l.name][param].shape:
-              del old_network_params.values_dict[l.name]
-              break
+        keepLayer = True
+        if self.pretrain.copy_output_layer == False:
+          keepLayer = False
+        else:
+          if l.name in old_network_params.values_dict:
+            for param in l.params:
+              if tuple(l.params[param].shape.as_list()) != old_network_params.values_dict[l.name][param].shape:
+                keepLayer = False
+                break
+        if not keepLayer:
+          print("suspend copying of output layer: " + l.name, file=log.v4)
+          del old_network_params.values_dict[l.name]
     # Otherwise it's initialized randomly which is fine.
     # This copy will copy the old params over and leave the rest randomly initialized.
     # This also works if the old network has just the same topology,
