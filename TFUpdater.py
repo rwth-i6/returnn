@@ -314,7 +314,7 @@ class Updater(object):
         with reuse_name_scope_of_tensor(data.placeholder):
           variable_summaries(data.placeholder)
 
-    if self.config.bool("debug_add_check_numerics_ops", False):
+    if self.config.bool("debug_add_check_numerics_ops", False):  # also see debug_add_check_numerics_on_output
       print("Adding checks for inf/nan.", file=log.v3)
       self.optim_op = tf.group(self.optim_op, add_check_numerics_ops([self.optim_op]))
 

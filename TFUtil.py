@@ -1030,6 +1030,50 @@ class FlipGradientBuilder(object):
 flip_gradient = FlipGradientBuilder()
 
 
+def lookup_grad_func_by_name(op_type):
+  """
+  :param str op_type:
+  :return: function grad_func(op, grad), or raises LookupError
+  """
+  from tensorflow.python.framework import ops
+  # Also see ops.RegisterGradient and ops.get_gradient_function.
+  return ops._gradient_registry.lookup(op_type)
+
+
+def identity_with_check_numerics(x, with_grad=True, name="identity_with_check_numerics"):
+  """
+  Returns identity(x), but with additional check_numerics control dependency,
+  and optionally the same for its gradient.
+  See also :func:`TFUpdater.add_check_numerics_ops`, which will add checks for the whole graph.
+
+  :param tf.Tensor x:
+  :param bool with_grad: whether the check will also be added for the gradient
+  :param str name:
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope(name):
+    with tf.control_dependencies([tf.check_numerics(x, message="%s %s" % (x.op.name, name))]):
+      if with_grad:
+        # An alternative to gradient_override_map would be :class:`CustomGradient` which is more generic.
+        grad_name = "identity_with_check_numerics_grad"
+        try:
+          lookup_grad_func_by_name(grad_name)
+        except LookupError:
+          from tensorflow.python.framework import ops
+          @ops.RegisterGradient(grad_name)
+          def _identity_with_check_numerics_grad(op, grad):
+            return identity_with_check_numerics(grad, with_grad=True, name="%s_grad" % name)
+
+        g = tf.get_default_graph()
+        with g.gradient_override_map({"Identity": grad_name}):
+          y = tf.identity(x)
+
+      else:
+        y = tf.identity(x)
+
+      return y
+
+
 def check_input_ndim(x, ndim):
   """
   :param tf.Tensor x:

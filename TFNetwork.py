@@ -303,6 +303,7 @@ class TFNetwork(object):
     debug_print_layer_output_template = self._config and self._config.bool("debug_print_layer_output_template", False)
     debug_print_layer_output_sizes = self._config and self._config.bool("debug_print_layer_output_sizes", False)
     debug_print_layer_output_shape = self._config and self._config.bool("debug_print_layer_output_shape", False)
+    debug_add_check_numerics_on_output = self._config and self._config.bool("debug_add_check_numerics_on_output", False)  # also see debug_add_check_numerics_ops
     with reuse_name_scope(layer_class.cls_get_tf_scope_name(name)):
       try:
         output = layer_class.get_out_data_from_opts(**layer_desc)
@@ -319,6 +320,10 @@ class TFNetwork(object):
         layer.output.placeholder = tf.Print(
           layer.output.placeholder, [layer_class.cls_get_tf_scope_name(name), "shape:", tf.shape(layer.output.placeholder)],
           summarize=10, name="debug_print_layer_output_shape")
+      if debug_add_check_numerics_on_output and layer.output.dtype.startswith("float"):
+        print("debug_add_check_numerics_on_output: add for %r" % layer.output.placeholder)
+        from TFUtil import identity_with_check_numerics
+        layer.output.placeholder = identity_with_check_numerics(layer.output.placeholder)
     assert layer.output
     assert layer.output.placeholder is not None
     layer.output.placeholder.set_shape(layer.output.batch_shape)
