@@ -913,7 +913,7 @@ class TFNetwork(object):
     :return: int scalar tensor which states the batch-dim
     :rtype: int|tf.Tensor
     """
-    from TFUtil import get_shape_dim
+    from TFUtil import get_shape_dim, reuse_name_scope_of_tensor
     # First check parent because there we might get the true batch dim.
     if self.parent_net:
       return self.parent_net.get_batch_dim()
@@ -921,7 +921,8 @@ class TFNetwork(object):
       assert isinstance(data, Data)
       if data.available_for_inference:
         self.used_data_keys.add(key)
-        return get_shape_dim(data.placeholder, data.batch_dim_axis, name="batch_dim")
+        with reuse_name_scope_of_tensor(data.placeholder):
+          return get_shape_dim(data.placeholder, data.batch_dim_axis, name="batch_dim")
     raise Exception("We cannot tell the batch dim.")
 
 

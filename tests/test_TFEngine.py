@@ -327,10 +327,10 @@ def test_rec_subnet_train_t3b():
   beam_size = 2
   network = {
     "data_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6},
-    "lstm0_fw" : { "class": "rec", "unit": "lstmp", "n_out" : 6, "dropout": 0.1, "L2": 0.01, "direction": 1, "from": ["data_embed"] },
-    "lstm0_bw" : { "class": "rec", "unit": "lstmp", "n_out" : 6, "dropout": 0.1, "L2": 0.01, "direction": -1, "from": ["data_embed"] },
-    "lstm1_fw" : { "class": "rec", "unit": "lstmp", "n_out" : 6, "dropout": 0.1, "L2": 0.01, "direction": 1, "from": ["data_embed"] },
-    "lstm1_bw" : { "class": "rec", "unit": "lstmp", "n_out" : 6, "dropout": 0.1, "L2": 0.01, "direction": -1, "from": ["data_embed"] },
+    "lstm0_fw" : { "class": "rec", "unit": "nativelstm2", "n_out" : 6, "dropout": 0.1, "L2": 0.01, "direction": 1, "from": ["data_embed"] },
+    "lstm0_bw" : { "class": "rec", "unit": "nativelstm2", "n_out" : 6, "dropout": 0.1, "L2": 0.01, "direction": -1, "from": ["data_embed"] },
+    "lstm1_fw" : { "class": "rec", "unit": "nativelstm2", "n_out" : 6, "dropout": 0.1, "L2": 0.01, "direction": 1, "from": ["data_embed"] },
+    "lstm1_bw" : { "class": "rec", "unit": "nativelstm2", "n_out" : 6, "dropout": 0.1, "L2": 0.01, "direction": -1, "from": ["data_embed"] },
     "encoder": {"class": "copy", "from": ["lstm1_fw", "lstm1_bw"]},
     "enc_ctx": {"class": "linear", "activation": None, "with_bias": False, "from": ["encoder"], "n_out": 5},
     "enc_emb": {"class": "copy", "from": ["enc_ctx"]},
@@ -377,6 +377,7 @@ def test_rec_subnet_train_t3b():
     "batch_size": 10,
     "nadam": True,
     "learning_rate": 0.01,
+    "debug_add_check_numerics_ops": True
   })
   engine = Engine(config=config)
   engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
@@ -429,6 +430,7 @@ def test_rec_subnet_train_t3d():
     "batch_size": 10,
     "nadam": True,
     "learning_rate": 0.01,
+    "debug_add_check_numerics_ops": True
   })
   engine = Engine(config=config)
   engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
@@ -472,18 +474,19 @@ def test_rec_subnet_train_t3d_simple():
     "batch_size": 10,
     "nadam": True,
     "learning_rate": 0.01,
+    "debug_add_check_numerics_ops": True
   })
   engine = Engine(config=config)
   engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
   engine.train()
 
 
-def test_deterministic_train():
+def deterministic_train_check(layer_opts):
   """
   Training should be deterministic, i.e. running it twice should result in exactly the same result.
   """
   network = {
-    "hidden": {"class": "linear", "activation": "tanh", "n_out": 5},
+    "hidden": layer_opts,
     "output": {"class": "softmax", "from": ["hidden"], "target": "classes", "loss": "ce"},
   }
   n_data_dim = 2
@@ -499,6 +502,7 @@ def test_deterministic_train():
     "batch_size": 10,
     "nadam": True,
     "learning_rate": 0.01,
+    "debug_add_check_numerics_ops": True
   })
 
   from GeneratingDataset import DummyDataset
@@ -524,9 +528,9 @@ def test_deterministic_train():
     print("Run %i: Forward cv seq 0:" % run_idx)
     cv_data.init_seq_order(epoch=1)
     out = engine.forward_single(cv_data, 0)
+    print(out)
     assert isinstance(out, numpy.ndarray)
     assert out.shape == (seq_len, n_classes_dim)
-    print(out)
     fwd_results[run_idx] = out
 
     if run_idx > 0:
@@ -541,6 +545,35 @@ def test_deterministic_train():
       numpy.testing.assert_almost_equal(out, prev_out)
 
 
+def test_deterministic_train_linear():
+  deterministic_train_check({"class": "linear", "activation": "tanh", "n_out": 5})
+
+
+def test_deterministic_train_rec_nativelstm2():
+  deterministic_train_check({"class": "rec", "unit": "nativelstm2", "n_out": 5})
+
+
+def _create_deterministic_layer_checks():
+  from TFNetworkLayer import get_layer_class_name_list, get_layer_class
+  from Util import collect_mandatory_class_init_kwargs
+  for cls_name in get_layer_class_name_list():
+    cls = get_layer_class(cls_name)
+    if cls.__name__.startswith("_"):
+      continue
+    mandatory_kwargs = collect_mandatory_class_init_kwargs(cls)
+    mandatory_kwargs.remove("name")
+    mandatory_kwargs.remove("network")
+    print("Class %s (%s), mandatory: %r" % (cls.__name__, cls_name, mandatory_kwargs))
+    # We could automatically add checks for layers, via deterministic_train_check(),
+    # and then add "test_xxx" to globals().
+    # For many kwargs, we can guess some arg (e.g. activation="tanh").
+    # Some layers need specific args.
+    # We also need a blacklist because some layers cannot work via deterministic_train_check(),
+    # because of shape.
+    # So far, we don't do this here.
+  pass
+
+
 def test_rec_subnet_auto_optimize():
   """
   rec subnet can automatically move out layers from the loop.
@@ -548,7 +581,111 @@ def test_rec_subnet_auto_optimize():
   Thus, training should be equivalent.
   Also, training the one model, and then importing it in the original model, should work.
   """
-  # TODO based on test_rec_subnet_train_t3d_simple + test_deterministic_train ...
+  from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
+  n_data_dim = 2
+  n_classes_dim = 3
+  from GeneratingDataset import DummyDataset
+  seq_len = 5
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=10, seq_len=seq_len)
+  cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+
+  def create_config(optimize_move_layers_out):
+    """
+    :param bool optimize_move_layers_out:
+    :rtype: Config
+    """
+    beam_size = 2
+    # Depending on optimize_move_layers_out, the order of the initialization of the variables might be different.
+    # To make sure it's the same, we init with zero.
+    # Actually, in the whole network, there should not be any randomness because of that for this check.
+    weights_init = 0.01
+    network = {
+      "encoder": {"class": "linear", "activation": "tanh", "n_out": 5, "forward_weights_init": weights_init},
+      "output": {
+        "class": "rec", "from": [],
+        "target": "classes", "max_seq_len": 75,
+        "optimize_move_layers_out": optimize_move_layers_out,
+        "unit": {
+          'output': {'class': 'choice', 'target': 'classes', 'beam_size': beam_size, 'from': ["output_prob"]},
+          "end": {"class": "compare", "from": ["output"], "value": 0},
+          'orth_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'], "n_out": 6, "forward_weights_init": weights_init},
+          "s_in": {"class": "linear", "activation": "tanh", "from": ["prev:c", "prev:orth_embed"], "n_out": 5, "forward_weights_init": weights_init},
+          "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["s_in"], "n_out": 5, "weights_init": weights_init},
+          "c_in": {"class": "copy", "from": ["s"]},
+          "c": {"class": "dot_attention", "from": ["c_in"], "base": "base:encoder", "base_ctx": "base:encoder"},
+          "att": {"class": "linear", "activation": "tanh", "from": ["c", "s"], "n_out": 6, "forward_weights_init": weights_init},
+          "output_prob": {"class": "softmax", "from": ["att"], "target": "classes", "loss": "ce", "forward_weights_init": weights_init}
+        },
+      },
+    }
+    config = Config()
+    config.update({
+      "model": "/tmp/model",
+      "num_outputs": n_classes_dim,
+      "num_inputs": n_data_dim,
+      "network": network,
+      "start_epoch": 1,
+      "num_epochs": 2,
+      "batch_size": 10,
+      "nadam": True,
+      "learning_rate": 0.01
+    })
+    return config
+
+  score_results = {}  # run_idx -> epoch (1, 2) -> error_key ('dev_score', ...) -> score
+  fwd_results = {}  # run_idx -> numpy array
+
+  def run(run_idx, optimize_move_layers_out):
+    """
+    :param int run_idx:
+    :param bool optimize_move_layers_out:
+    """
+    print("Run %i:" % run_idx)
+    # Will always reinit the TF session and all random generators,
+    # thus it should be deterministic.
+    config = create_config(optimize_move_layers_out=optimize_move_layers_out)
+    engine = Engine(config=config)
+    engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
+
+    rec_layer = engine.network.layers["output"]
+    assert isinstance(rec_layer, RecLayer)
+    assert isinstance(rec_layer.cell, _SubnetworkRecCell)
+    if optimize_move_layers_out:
+      assert_equal(set(rec_layer.cell.input_layers_moved_out), {"output", "orth_embed"})
+      assert_equal(set(rec_layer.cell.output_layers_moved_out), {"output_prob"})
+    else:
+      assert not rec_layer.cell.input_layers_moved_out
+      assert not rec_layer.cell.output_layers_moved_out
+
+    print("Run %i: Train now..." % run_idx)
+    engine.train()
+
+    print("Run %i: Train results:" % run_idx)
+    pprint(engine.learning_rate_control.epochData)
+    score_results[run_idx] = {ep: d.error for (ep, d) in engine.learning_rate_control.epochData.items()}
+
+    print("Run %i: Forward cv seq 0:" % run_idx)
+    cv_data.init_seq_order(epoch=1)
+    out = engine.forward_single(cv_data, 0)
+    print(out)
+    assert isinstance(out, numpy.ndarray)
+    assert out.shape == (seq_len,)  # label sequence
+    fwd_results[run_idx] = out
+
+    if len(score_results) > 1:
+      for ep, error_dict in sorted(score_results[run_idx].items()):
+        for error_key, error_value in sorted(error_dict.items()):
+          prev_error_value = score_results[run_idx - 1][ep][error_key]
+          print("Epoch %i, error key %r, current value %f vs prev value %f, equal?" % (
+            ep, error_key, error_value, prev_error_value))
+          numpy.testing.assert_almost_equal(error_value, prev_error_value, decimal=3)
+      print("Output equal to previous?")
+      prev_out = fwd_results[run_idx - 1]
+      numpy.testing.assert_almost_equal(out, prev_out, decimal=3)
+
+  run(run_idx=1, optimize_move_layers_out=False)
+  run(run_idx=2, optimize_move_layers_out=False)
+  run(run_idx=3, optimize_move_layers_out=True)
 
 
 if __name__ == "__main__":

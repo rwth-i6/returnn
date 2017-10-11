@@ -299,6 +299,7 @@ class Runner(object):
       writer = tf.summary.FileWriter(logdir)
     else:
       writer = None
+    print("TF: log_dir: %s" % logdir, file=log.v5)
     run_metadata = tf.RunMetadata()
     debug_shell_in_runner = self.engine.config.bool("debug_shell_in_runner", False)
     debug_shell_in_runner_step = self.engine.config.int("debug_shell_in_runner_step", 1)

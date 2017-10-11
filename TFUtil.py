@@ -1022,7 +1022,7 @@ class FlipGradientBuilder(object):
 
     g = tf.get_default_graph()
     with g.gradient_override_map({"Identity": grad_name}):
-      y = tf.identity(x)
+      y = tf.identity(x, "flip_gradient_identity")
 
     self.num_calls += 1
     return y
@@ -3115,7 +3115,7 @@ def auto_init_var(v):
   :rtype: tf.Tensor
   """
   with tf.control_dependencies(init_variable_if_needed(v)):
-    return tf.identity(v)
+    return tf.identity(v, name="auto_init_var")
 
 
 def true_once():
@@ -3124,15 +3124,16 @@ def true_once():
     Internally, this creates a non-trainable variable as a helper.
   :rtype: tf.Tensor
   """
-  v = tf.Variable(initial_value=True, trainable=False, name="true_once_var")
-  with tf.control_dependencies([init_variable_if_needed(v)]):
-    # Cannot use tf.identity because that would give us a reference to the var but we want to copy it now.
-    x = tf.where(v.read_value(), True, False)
-    with tf.control_dependencies([x]):
-      x = tf.identity(x)
-      reset = tf.assign(v, False)
-      with tf.control_dependencies([x, reset]):
+  with tf.variable_scope("true_once"):
+    v = tf.Variable(initial_value=True, trainable=False, name="true_once_var")
+    with tf.control_dependencies([init_variable_if_needed(v)]):
+      # Cannot use tf.identity because that would give us a reference to the var but we want to copy it now.
+      x = tf.where(v.read_value(), True, False)
+      with tf.control_dependencies([x]):
         x = tf.identity(x)
+        reset = tf.assign(v, False)
+        with tf.control_dependencies([x, reset]):
+          x = tf.identity(x)
   return x
 
 
@@ -4034,7 +4035,7 @@ class ExplicitRandomShuffleQueue(object):
                 return self._lock.unlock()
 
   def _is_full(self):
-    return tf.greater_equal(self.size(), self.capacity)
+    return tf.greater_equal(self.size(), self.capacity, name="is_full")
 
   def _loop_while_full(self):
     """
@@ -4050,13 +4051,14 @@ class ExplicitRandomShuffleQueue(object):
         with tf.control_dependencies([self._is_full_cond.wait()]):
           return tf.identity(last)
 
-    return tf.while_loop(cond=loop_cond, body=body, loop_vars=[0], parallel_iterations=1, back_prop=False)
+    return tf.while_loop(
+      name="loop_while_full", cond=loop_cond, body=body, loop_vars=[0], parallel_iterations=1, back_prop=False)
 
   def _have_min_after_dequeue(self):
-    return tf.greater_equal(self.size(), self._min_after_dequeue)
+    return tf.greater_equal(self.size(), self._min_after_dequeue, name="have_min_after_dequeue")
 
   def _maybe_signal_min_after_dequeue(self):
-    return tf.cond(self._have_min_after_dequeue(), lambda: self._min_after_dequeue_cond.signal(), lambda: tf.no_op())
+    return tf.cond(self._have_min_after_dequeue(), lambda: self._min_after_dequeue_cond.signal(), lambda: tf.no_op(), name="maybe_signal_min_after_dequeue")
 
   def _loop_while_not_min_after_dequeue(self):
     """
@@ -4072,7 +4074,9 @@ class ExplicitRandomShuffleQueue(object):
         with tf.control_dependencies([self._min_after_dequeue_cond.wait()]):
           return tf.identity(last)
 
-    return tf.while_loop(cond=loop_cond, body=body, loop_vars=[0], parallel_iterations=1, back_prop=False)
+    return tf.while_loop(
+      name="loop_while_not_min_after_dequeue",
+      cond=loop_cond, body=body, loop_vars=[0], parallel_iterations=1, back_prop=False)
 
   def dequeue(self):
     with reuse_name_scope("%s/dequeue" % self._name):

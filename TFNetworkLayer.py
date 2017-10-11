@@ -767,7 +767,7 @@ def _name_scope_for_concat_src_layers(src_layers, postfix):
     name_scope = src_layers[0].get_absolute_name_scope_prefix() + postfix
   else:
     base = src_layers[0].network.get_absolute_name_scope_prefix()
-    name = "_".join([l.tf_scope_name for l in src_layers])
+    name = "concat_" + "_".join([l.tf_scope_name for l in src_layers])
     name_scope = base + name + "/" + postfix
   from TFUtil import reuse_name_scope
   with reuse_name_scope(name_scope, absolute=True) as scope:
@@ -3544,3 +3544,8 @@ def get_layer_class(name):
     raise Exception("unknown layer class %r" % name)
   return _LayerClassDict[name]
 
+
+def get_layer_class_name_list():
+  if not _LayerClassDict:
+    _init_layer_class_dict()
+  return sorted(_LayerClassDict.keys())
