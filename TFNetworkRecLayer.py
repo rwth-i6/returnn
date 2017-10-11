@@ -27,7 +27,7 @@ class RecLayer(_ConcatInputLayer):
                initial_state=None,
                max_seq_len=None,
                forward_weights_init=None, recurrent_weights_init=None, bias_init=None,
-               optimize_move_layers_out=False,  # will be set to True once ready
+               optimize_move_layers_out=True,
                **kwargs):
     """
     :param str|dict[str,dict[str]] unit: the RNNCell/etc name, e.g. "nativelstm". see comment below.
@@ -567,6 +567,7 @@ class _SubnetworkRecCell(object):
     self._initial_extra_outputs = None  # type: dict[str,dict[str,tf.Tensor|tuple[tf.Tensor]]]
     self.input_layers_moved_out = []  # type: list[str]
     self.output_layers_moved_out = []  # type: list[str]
+    self.layers_in_loop = None   # type: list[str]
     self.input_layers_net = None  # type: TFNetwork
     self.output_layers_net = None  # type: TFNetwork
 
@@ -1001,6 +1002,8 @@ class _SubnetworkRecCell(object):
 
       if self.parent_rec_layer._optimize_move_layers_out:
         self._move_outside_loop(needed_outputs=needed_outputs)
+      else:
+        self.layers_in_loop = sorted(self.layer_data_templates.keys())
 
       if layer_names_with_losses:
         def make_get_loss_in_loop_frame(layer_name, return_error=False, return_loss=False):
@@ -1032,7 +1035,7 @@ class _SubnetworkRecCell(object):
           return get_loss
 
         for layer_name in layer_names_with_losses:
-          if layer_name in self.input_layers_moved_out + self.output_layers_moved_out:
+          if layer_name not in self.layers_in_loop:
             continue  # will get loss out of them below
           outputs_to_accumulate.append(OutputToAccumulate(
             name="loss_%s" % layer_name,
@@ -1045,14 +1048,14 @@ class _SubnetworkRecCell(object):
             element_shape=(None,),  # (batch,)
             get=make_get_loss_in_loop_frame(layer_name, return_error=True)))
 
-      if "output" not in self.input_layers_moved_out + self.output_layers_moved_out:
+      if "output" in self.layers_in_loop:
         add_output_to_acc("output")
 
       # Maybe some of the moved-out output-layers depend on data inside the loop,
       # so we should accumulate it to have access to it.
       for layer_name in self.output_layers_moved_out:
         for dep in self.layer_data_templates[layer_name].dependencies:
-          if dep.name in self.input_layers_moved_out + self.output_layers_moved_out:
+          if dep.name not in self.layers_in_loop:
             continue
           # Dependency is inside the loop, and we are using it, so we need to accumulate its output.
           add_output_to_acc(dep.name)
@@ -1156,10 +1159,10 @@ class _SubnetworkRecCell(object):
           # For the search choices, we do it here so that we can easily get out the final beam scores.
           with tf.name_scope("seq_filter_cond"):
             if seq_len is not None:
-              seq_filter_cond = tf.less(i, seq_len)  # (batch * beam,)
+              seq_filter_cond = tf.less(i, seq_len, name="i_lt_seq_len")  # (batch * beam,)
             else:
               assert end_flag is not None
-              seq_filter_cond = tf.logical_not(end_flag)
+              seq_filter_cond = tf.logical_not(end_flag, name="not_end_flag")
             seq_filter_cond = tf.reshape(seq_filter_cond, [batch_dim, output_beam_size])  # (batch, beam)
           for name in collected_choices:
             with reuse_name_scope(name):
@@ -1194,10 +1197,13 @@ class _SubnetworkRecCell(object):
         constant_with_shape(False, shape=[out_batch_dim], name="initial_end_flag"),
         constant_with_shape(0, shape=[out_batch_dim], name="initial_seq_len"))
       init_loop_vars += (init_seq_len_info,)
-    final_loop_vars = tf.while_loop(
-      cond=cond,
-      body=body,
-      loop_vars=init_loop_vars)
+    if self.layers_in_loop:
+      final_loop_vars = tf.while_loop(
+        cond=cond,
+        body=body,
+        loop_vars=init_loop_vars)
+    else:  # no layers inside loop, all optimized out
+      final_loop_vars = init_loop_vars
     if have_known_seq_len:
       _, final_net_vars, final_acc_tas = final_loop_vars
     else:
@@ -1392,7 +1398,7 @@ class _SubnetworkRecCell(object):
     And an (output) layer which is not used for other calculations inside the loop can be calculated out-of-the-loop.
 
     :param set[str] needed_outputs:
-    :return: nothing, will set self.input_layers_moved_out/output_layers_moved_out
+    :return: nothing, will set self.input_layers_moved_out/output_layers_moved_out/layers_in_loop
     """
     layers_in_loop = []  # type: list[_TemplateLayer]
 
@@ -1415,6 +1421,9 @@ class _SubnetworkRecCell(object):
 
     def output_can_move_out(layer):
       assert isinstance(layer, _TemplateLayer)
+      # Special case: end-layer, which is added if the seq-len is unknown, cannot be moved out.
+      if layer.name == "end":
+        return False
       # layer.output from prev time frame is used by other layers?
       if layer.name in layers_needed_from_prev_frame:
         return False
@@ -1467,6 +1476,8 @@ class _SubnetworkRecCell(object):
       if not output_layer and not input_layer:
         break
 
+    self.layers_in_loop = [layer.name for layer in layers_in_loop]
+
     log_stream = log.v3
     print("Rec layer sub net:", file=log_stream)
     remaining_layers = set(self.net_dict.keys())
@@ -1481,13 +1492,15 @@ class _SubnetworkRecCell(object):
 
     dump_info("Input layers moved out of loop", self.input_layers_moved_out)
     dump_info("Output layers moved out of loop", self.output_layers_moved_out)
-    dump_info("Layers in loop", [layer.name for layer in layers_in_loop])
+    dump_info("Layers in loop", self.layers_in_loop)
     dump_info("Unused layers", sorted(remaining_layers))
 
   def _construct_input_layers_moved_out(self):
     """
     See self._move_outside_loop().
     The input layers will be constructed in self.input_layers_net.
+
+    :return: nothing, will init self.input_layers_net
     """
     if not self.input_layers_moved_out:
       return
@@ -1522,11 +1535,12 @@ class _SubnetworkRecCell(object):
   def _construct_output_layers_moved_out(self, loop_accumulated, seq_len):
     """
     See self._move_outside_loop().
-    The input layers will be constructed in self.input_layers_net.
+    The output layers will be constructed in self.output_layers_net.
 
     :param dict[str,tf.TensorArray] loop_accumulated:
       keys, see self.get_output(). should be like "output_<layer_name>"
     :param tf.Tensor seq_len: shape (batch,)
+    :return: nothing, will init self.output_layers_net
     """
     if not self.output_layers_moved_out:
       return
@@ -1547,7 +1561,47 @@ class _SubnetworkRecCell(object):
       self.output_layers_net.extern_data.data[key] = \
         self.parent_net.extern_data.data[key]
 
-    loop_acc_layers = {}  # dict[str,InternalLayer]
+    prev_layers = {}  # type: dict[str,InternalLayer]
+    loop_acc_layers = {}  # type: dict[str,InternalLayer]
+
+    def get_loop_acc_layer(name):
+      """
+      :param str name:
+      :rtype: LayerBase
+      """
+      if name in loop_acc_layers:
+        return loop_acc_layers[name]
+      with tf.name_scope(name):
+        output = self.layer_data_templates[name].output.copy_template_adding_time_dim(time_dim_axis=0)
+        # We should have accumulated it.
+        output.placeholder = loop_accumulated["output_%s" % name].stack()  # e.g. (time,batch,dim)
+        output.size_placeholder = {0: seq_len}
+        l = InternalLayer(name=name, network=self.output_layers_net, output=output)
+        loop_acc_layers[name] = l
+        return l
+
+    def get_prev_layer(name):
+      """
+      :param str name: excluding "prev:" prefix
+      :rtype: LayerBase
+      """
+      if name in prev_layers:
+        return prev_layers[name]
+      cur_layer = get_layer(name)
+      with tf.name_scope("prev_%s" % name):
+        layer = InternalLayer(
+          name="prev:%s" % name, network=self.output_layers_net,
+          output=cur_layer.output.copy_as_time_major())
+        max_seq_len = tf.shape(layer.output.placeholder)[0]
+        initial = self._get_init_output(name)
+        initial_wt = tf.expand_dims(initial, axis=0)  # add time axis
+        layer.output.placeholder = \
+          tf.concat([initial_wt, layer.output.placeholder], axis=0, name="concat_in_time")
+        layer.output.placeholder = layer.output.placeholder[:-1]  # remove last frame
+        layer.output.size_placeholder[0] = \
+          tf.maximum(layer.output.size_placeholder[0] + 1, max_seq_len)
+        prev_layers[name] = layer
+        return layer
 
     # get_layer similar as in self._construct() but simplified.
     def get_layer(name):
@@ -1555,23 +1609,15 @@ class _SubnetworkRecCell(object):
       :param str name:
       :rtype: LayerBase
       """
-      assert not name.startswith("prev:")
+      if name.startswith("prev:"):
+        return get_prev_layer(name[len("prev:"):])
       if name.startswith("base:"):
         return self.parent_net.layers[name[len("base:"):]]
       if name in self.input_layers_moved_out:
         return self.input_layers_net.layers[name]
       if name not in self.output_layers_moved_out:
         # It means that the layer is inside the loop.
-        if name in loop_acc_layers:
-          return loop_acc_layers[name]
-        with tf.name_scope(name):
-          output = self.layer_data_templates[name].output.copy_template_adding_time_dim(time_dim_axis=0)
-          # We should have accumulated it.
-          output.placeholder = loop_accumulated["output_%s" % name].stack()  # e.g. (time,batch,dim)
-          output.size_placeholder = {0: seq_len}
-          l = InternalLayer(name=name, network=self.output_layers_net, output=output)
-          loop_acc_layers[name] = l
-          return l
+        return get_loop_acc_layer(name)
       return self.output_layers_net._construct_layer(self.net_dict, name=name, get_layer=get_layer)
 
     # Same scope as the main subnet, so that it stays compatible.

@@ -667,7 +667,7 @@ class Engine(object):
     old_network_params = self.network.get_params_serialized(self.tf_session)
     self._init_network(net_desc)
     # In pretraining it can happen, that the dimension of output parameters of the previous epoch is
-    # not equal to the dimension in the current epoch, due to difference in layer size. 
+    # not equal to the dimension in the current epoch, due to difference in layer size.
     # In that case initialize output parameters randomly
     if self.is_pretrain_epoch():
       # iterate through all output layers and check dimension compatibility of parameters
@@ -1134,8 +1134,12 @@ class Engine(object):
     :param str output_file:
     """
     print("Search with network on %r." % dataset, file=log.v1)
-    if not self.use_search_flag or not self.network:
+    if not self.use_search_flag or not self.network or self.use_dynamic_train_flag:
       self.use_search_flag = True
+      # At the moment this is probably not intended to use search with train flag.
+      # Also see LayerBase._post_init_output() about setting size_placeholder to the target seq len,
+      # so you would have have_known_seq_len=True in the RecLayer, with the given target seq len.
+      self.use_dynamic_train_flag = False
       if self.network:
         print("Reinit network with search flag.", file=log.v3)
       self.init_network_from_config(self.config)

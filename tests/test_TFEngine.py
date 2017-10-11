@@ -107,6 +107,8 @@ def test_engine_train():
   engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
   engine.train()
 
+  engine.finalize()
+
 
 def test_engine_analyze():
   from GeneratingDataset import DummyDataset
@@ -131,6 +133,8 @@ def test_engine_analyze():
 
   engine.analyze(data=dataset, statistics=None)
 
+  engine.finalize()
+
 
 def test_engine_forward_single():
   from GeneratingDataset import DummyDataset
@@ -151,6 +155,8 @@ def test_engine_forward_single():
   engine.init_train_from_config(config=config, train_data=dataset, dev_data=None, eval_data=None)
 
   engine.forward_single(dataset=dataset, seq_idx=0)
+
+  engine.finalize()
 
 
 def test_engine_forward_to_hdf():
@@ -178,6 +184,9 @@ def test_engine_forward_to_hdf():
   engine.init_train_from_config(config=config, train_data=dataset, dev_data=None, eval_data=None,)
 
   engine.forward_to_hdf(data=dataset, output_file=output_file, batch_size=5)
+
+  engine.finalize()
+
   assert os.path.exists(output_file)
   import h5py
   with h5py.File(output_file, 'r') as f:
@@ -232,9 +241,16 @@ def test_engine_rec_subnet_count():
   assert_equal(out.dtype, numpy.int32)
   assert_equal(list(out[:,0]), list(range(1, seq_len + 1)))
 
+  engine.finalize()
 
-def test_engine_search():
+
+def check_engine_search(extra_rec_kwargs=None):
+  """
+  :param dict[str] extra_rec_kwargs:
+  """
+  from Util import dict_joined
   from GeneratingDataset import DummyDataset
+  from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 3
@@ -248,11 +264,14 @@ def test_engine_search():
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {
-      "output": {"class": "rec", "from": [], "max_seq_len": 10, "target": "classes", "unit": {
-        "prob": {"class": "softmax", "from": ["prev:output"], "loss": "ce", "target": "classes"},
-        "output": {"class": "choice", "beam_size": 4, "from": ["prob"], "target": "classes", "initial_output": 0},
-        "end": {"class": "compare", "from": ["output"], "value": 0}
-      }},
+      "output": dict_joined({
+        "class": "rec", "from": [], "max_seq_len": 10, "target": "classes",
+        "unit": {
+          "prob": {"class": "softmax", "from": ["prev:output"], "loss": "ce", "target": "classes"},
+          "output": {"class": "choice", "beam_size": 4, "from": ["prob"], "target": "classes", "initial_output": 0},
+          "end": {"class": "compare", "from": ["output"], "value": 0}
+        }
+      }, extra_rec_kwargs or {}),
       "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance"}
     }
   })
@@ -264,6 +283,23 @@ def test_engine_search():
   assert "output" in engine.network.layers
   assert "decision" in engine.network.layers
 
+  rec_layer = engine.network.layers["output"]
+  assert isinstance(rec_layer, RecLayer)
+  assert isinstance(rec_layer.cell, _SubnetworkRecCell)
+  if rec_layer._optimize_move_layers_out:
+    assert_equal(set(rec_layer.cell.input_layers_moved_out), {"output"})
+    assert_equal(set(rec_layer.cell.output_layers_moved_out), {"prob"})
+    assert_equal(set(rec_layer.cell.layers_in_loop), set())
+  else:
+    assert_equal(set(rec_layer.cell.layers_in_loop), {"prob", "output", "end"})
+
+  # Now reinit for search.
+  assert not engine.use_search_flag
+  engine.use_search_flag = True
+  engine.use_dynamic_train_flag = False
+  print("Reinit network with search flag.")
+  engine.init_network_from_config(config=config)
+
   engine.search(dataset=dataset)
   print("error keys:")
   pprint(engine.network.error_by_layer)
@@ -273,8 +309,21 @@ def test_engine_search():
   engine.finalize()
 
 
-def test_engine_search_attention():
+def test_engine_search_no_optim():
+  check_engine_search({"optimize_move_layers_out": False})
+
+
+def test_engine_search():
+  check_engine_search()
+
+
+def check_engine_search_attention(extra_rec_kwargs=None):
+  """
+  :param dict[str] extra_rec_kwargs:
+  """
+  from Util import dict_joined
   from GeneratingDataset import DummyDataset
+  from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 3
@@ -291,15 +340,20 @@ def test_engine_search_attention():
     "num_inputs": n_data_dim,
     "network": {
       "encoder": {"class": "linear", "activation": "tanh", "n_out": 5},
-      "output": {"class": "rec", "from": [], "unit": {
-        'output': {'class': 'choice', 'target': 'classes', 'beam_size': 4, 'from': ["output_prob"]},
-        "end": {"class": "compare", "from": ["output"], "value": 0},
-        'orth_embed': {'class': 'linear', 'activation': None, 'from': ['output'], "n_out": 7},
-        "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["prev:c", "prev:orth_embed"], "n_out": 7},
-        "c_in": {"class": "linear", "activation": "tanh", "from": ["s", "prev:orth_embed"], "n_out": 5},
-        "c": {"class": "dot_attention", "from": ["c_in"], "base": "base:encoder", "base_ctx": "base:encoder"},
-        "output_prob": {"class": "softmax", "from": ["prev:s", "c"], "target": "classes", "loss": "ce"}
-      }, "target": "classes", "max_seq_len": 10},
+      "output": dict_joined({
+        "class": "rec",
+        "from": [],
+        "target": "classes", "max_seq_len": 10,
+        "unit": {
+          'output': {'class': 'choice', 'target': 'classes', 'beam_size': 4, 'from': ["output_prob"]},
+          "end": {"class": "compare", "from": ["output"], "value": 0},
+          'orth_embed': {'class': 'linear', 'activation': None, 'from': ['output'], "n_out": 7},
+          "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["prev:c", "prev:orth_embed"], "n_out": 7},
+          "c_in": {"class": "linear", "activation": "tanh", "from": ["s", "prev:orth_embed"], "n_out": 5},
+          "c": {"class": "dot_attention", "from": ["c_in"], "base": "base:encoder", "base_ctx": "base:encoder"},
+          "output_prob": {"class": "softmax", "from": ["prev:s", "c"], "target": "classes", "loss": "ce"}
+        },
+      }, extra_rec_kwargs or {}),
       "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance"}
     }})
   engine = Engine(config=config)
@@ -313,7 +367,96 @@ def test_engine_search_attention():
   assert "output" in engine.network.layers
   assert "decision" in engine.network.layers
 
+  rec_layer = engine.network.layers["output"]
+  assert isinstance(rec_layer, RecLayer)
+  assert isinstance(rec_layer.cell, _SubnetworkRecCell)
+  if rec_layer._optimize_move_layers_out:
+    assert_equal(set(rec_layer.cell.input_layers_moved_out), set())
+    assert_equal(set(rec_layer.cell.output_layers_moved_out), set())
+    assert_equal(set(rec_layer.cell.layers_in_loop), {"end", "output", "output_prob", "c", "c_in", "orth_embed", "s"})
+  else:
+    assert not rec_layer.cell.input_layers_moved_out
+    assert not rec_layer.cell.output_layers_moved_out
+    assert_equal(set(rec_layer.cell.layers_in_loop), {"end", "output", "output_prob", "c", "c_in", "orth_embed", "s"})
+
   print("Search...")
+  engine.search(dataset=dataset)
+  print("error keys:")
+  pprint(engine.network.error_by_layer)
+  assert engine.network.total_objective is not None
+  assert "decision" in engine.network.error_by_layer
+
+  engine.finalize()
+
+
+def test_engine_search_attention_no_optim():
+  check_engine_search_attention({"optimize_move_layers_out": False})
+
+
+def test_engine_search_attention():
+  check_engine_search_attention()
+
+
+def test_rec_optim_all_out():
+  from GeneratingDataset import DummyDataset
+  from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 3
+  dataset = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  dataset.init_seq_order(epoch=1)
+
+  config = Config()
+  config.update({
+    "model": "/tmp/model",
+    "batch_size": 5000,
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": {
+      "output": {
+        "class": "rec", "optimize_move_layers_out": True, "from": [], "max_seq_len": 10, "target": "classes",
+        "unit": {
+          "prob": {"class": "softmax", "from": ["prev:output"], "loss": "ce", "target": "classes"},
+          "output": {"class": "choice", "beam_size": 4, "from": ["prob"], "target": "classes", "initial_output": 0},
+          "end": {"class": "compare", "from": ["output"], "value": 0}
+        }
+      },
+      "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance"}
+    }
+  })
+  engine = Engine(config=config)
+  # Normally init_network can be used. We only do init_train here to randomly initialize the network.
+  engine.init_train_from_config(config=config, train_data=dataset, dev_data=None, eval_data=None)
+  print("network:")
+  pprint(engine.network.layers)
+  assert "output" in engine.network.layers
+  assert "decision" in engine.network.layers
+
+  rec_layer = engine.network.layers["output"]
+  assert isinstance(rec_layer, RecLayer)
+  assert isinstance(rec_layer.cell, _SubnetworkRecCell)
+  assert rec_layer._optimize_move_layers_out
+  # Now it was initialized and optimized for training.
+  assert_equal(set(rec_layer.cell.input_layers_moved_out), {"output"})
+  assert_equal(set(rec_layer.cell.output_layers_moved_out), {"prob"})
+  assert_equal(set(rec_layer.cell.layers_in_loop), set())
+
+  # Now reinit for search.
+  assert not engine.use_search_flag
+  engine.use_search_flag = True
+  engine.use_dynamic_train_flag = False
+  print("Reinit network with search flag.")
+  engine.init_network_from_config(config=config)
+
+  rec_layer = engine.network.layers["output"]
+  assert isinstance(rec_layer, RecLayer)
+  assert isinstance(rec_layer.cell, _SubnetworkRecCell)
+  assert rec_layer._optimize_move_layers_out
+  # Now it was initialized and optimized for search.
+  assert_equal(set(rec_layer.cell.input_layers_moved_out), set())
+  assert_equal(set(rec_layer.cell.output_layers_moved_out), set())
+  assert_equal(set(rec_layer.cell.layers_in_loop), {"prob", "output", "end"})
+
   engine.search(dataset=dataset)
   print("error keys:")
   pprint(engine.network.error_by_layer)
@@ -382,6 +525,8 @@ def test_rec_subnet_train_t3b():
   engine = Engine(config=config)
   engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
   engine.train()
+
+  engine.finalize()
 
 
 def test_rec_subnet_train_t3d():
@@ -544,6 +689,8 @@ def deterministic_train_check(layer_opts):
       prev_out = fwd_results[run_idx - 1]
       numpy.testing.assert_almost_equal(out, prev_out)
 
+    engine.finalize()
+
 
 def test_deterministic_train_linear():
   deterministic_train_check({"class": "linear", "activation": "tanh", "n_out": 5})
@@ -682,6 +829,8 @@ def test_rec_subnet_auto_optimize():
       print("Output equal to previous?")
       prev_out = fwd_results[run_idx - 1]
       numpy.testing.assert_almost_equal(out, prev_out, decimal=3)
+
+    engine.finalize()
 
   run(run_idx=1, optimize_move_layers_out=False)
   run(run_idx=2, optimize_move_layers_out=False)
