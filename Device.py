@@ -96,6 +96,8 @@ def get_gpu_names():
 
 def get_device_attributes():
   # (shaders / CUDA cores, clock in MHz, memory in bytes)
+  # https://en.wikipedia.org/wiki/GeForce_10_series
+  # https://en.wikipedia.org/wiki/List_of_Nvidia_graphics_processing_units
   attributes = {
                  "default" : (1000, 1020, 2 * 1024 * 1024 * 1024),
                  "GeForce GTX 580" : (512, 1714, 2 * 1024 * 1024 * 1024),
@@ -111,8 +113,9 @@ def get_device_attributes():
                  "GeForce GTX 970" : (1664, 1178, 4 * 1024 * 1024 * 1024),
                  "GeForce GTX 980" : (2048, 1126, 4 * 1024 * 1024 * 1024),
                  "GeForce GTX 980 Ti" : (2048, 1126, 4 * 1024 * 1024 * 1024),
+                 "GeForce GTX 1080 Ti" : (3584, 1480, 11 * 1024 * 1024 * 1024),
                  "GeForce GTX TITAN" : (2688, 837, 6 * 1024 * 1024 * 1024),
-                 "Geforce GTX TITAN X" : (3072, 1000, 12 * 1024 * 1024 * 1024),
+                 "Geforce GTX TITAN X" : (3584, 1417, 12 * 1024 * 1024 * 1024),
                  "GeForce GT 540M" : (2688, 837, 2 * 1024 * 1024 * 1024),
                  "Tesla K20c" : (2496, 706, 5 * 1024 * 1024 * 1024),
                  }
