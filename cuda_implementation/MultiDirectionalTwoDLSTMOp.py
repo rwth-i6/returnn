@@ -533,7 +533,7 @@ class MultiDirectionalTwoDLSTMOp(theano.sandbox.cuda.GpuOp):
   # noinspection PyMethodMayBeStatic
   def infer_shape(self, node, input_shapes):
     Xs, W1s = input_shapes[:2]
-    Y_shape = (Xs[0], Xs[1], Xs[2], W1s[1] / 5)
+    Y_shape = (Xs[0], Xs[1], Xs[2], W1s[1] // 5)
     H_shape = (Xs[0], Xs[1], Xs[2], W1s[1])
     return [Y_shape, Y_shape, Y_shape, Y_shape, H_shape, H_shape, H_shape, H_shape]
 
