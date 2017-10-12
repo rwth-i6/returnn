@@ -52,6 +52,8 @@ class Runner(object):
     :param (**dict[str,numpy.ndarray|str|list[numpy.ndarray|str])->None extra_fetches_callback: called if extra_fetches
     """
     from TFDataPipeline import FeedDictDataProvider, DataProviderBase
+    engine.network.extern_data.check_matched_dataset(
+      dataset=dataset, used_data_keys=engine.network.used_data_keys)
     self.engine = engine
     self.data_provider = FeedDictDataProvider(
       tf_session=engine.tf_session, extern_data=engine.network.extern_data,

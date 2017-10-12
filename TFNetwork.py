@@ -73,6 +73,28 @@ class ExternData(object):
         shape=shape, dim=dim, sparse=sparse, dtype=dtype,
         available_for_inference=available_for_inference)
 
+  def check_matched_dataset(self, dataset, used_data_keys=None):
+    """
+    :param Dataset.Dataset dataset:
+    :param set[str]|list[str] used_data_keys:
+    :return: nothing, will assert the check
+    """
+    if used_data_keys is None:
+      used_data_keys = dataset.get_data_keys()
+    base_err_msg = "%r num_outputs %r vs %r" % (dataset, dataset.num_outputs, self)
+    for key in sorted(used_data_keys):
+      if key in ["seq_idx", "seq_tag"]:
+        continue  # special cases, ignored for now
+      data = self.data[key]
+      data_sparse = dataset.is_data_sparse(key)
+      assert data.sparse == data_sparse, "key %r sparse mismatch. %s" % (key, base_err_msg)
+      data_dtype = dataset.get_data_dtype(key)
+      assert data.dtype == data_dtype, "key %r dtype mismatch. %s" % (key, base_err_msg)
+      data_dim = dataset.get_data_dim(key)
+      assert data.dim == data_dim, "key %r dim mismatch. %s" % (key, base_err_msg)
+      data_shape = tuple(dataset.get_data_shape(key))
+      assert data.shape[1:] == data_shape, "key %r shape mismatch. %s" % (key, base_err_msg)
+
   def register_data_from_dict(self, data):
     """
     :param dict[str,dict[str]] data: init kwargs for Data
