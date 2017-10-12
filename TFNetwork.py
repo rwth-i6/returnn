@@ -144,11 +144,15 @@ class TFNetwork(object):
       from Util import try_get_caller_name
       name = "<network via %s>" % try_get_caller_name(fallback="<unknown>")
     self.name = name
+    if not parent_net and parent_layer:
+      parent_net = parent_layer.network
+    if not config and parent_net:
+      config = parent_net._config
     if extern_data is None:
-      extern_data = ExternData()
       if not config:
         from Config import get_global_config
         config = get_global_config()
+      extern_data = ExternData()
       extern_data.init_from_config(config)
     self.extern_data = extern_data
     self._config = config
@@ -163,8 +167,6 @@ class TFNetwork(object):
     self.eval_flag = eval_flag
     self.search_flag = search_flag
     self.parent_layer = parent_layer
-    if not parent_net and parent_layer:
-      parent_net = parent_layer.network
     self.parent_net = parent_net
     self._selected_train_layers = None
     self._constructing_layers = []  # type: list[str]
@@ -290,40 +292,48 @@ class TFNetwork(object):
 
   def add_layer(self, name, layer_class, **layer_desc):
     """
+    This will construct the layer given the layer_desc arguments,
+    and add it to the network.
+
     :param str name:
     :param (()->LayerBase)|LayerBase layer_class:
+    :param layer_desc: contains the kwargs for the layer class.
+      the args should have been transformed via layer_class.transform_config_dict before (see _construct_layer).
+      must not contain "name" and "network", which will be automatically added here.
+      should not contain "output", which will be initialized to layer_class.get_out_data_from_opts.
+      the layer_class will usually then define the layer.output and its placeholder.
+      there is one notable exception: the InternalLayer, where you predefine the output.
     """
     from Util import help_on_type_error_wrong_args
     layer_desc = layer_desc.copy()
     assert "name" not in layer_desc
     assert "network" not in layer_desc
-    assert "output" not in layer_desc
     layer_desc["name"] = name
     layer_desc["network"] = self
     debug_print_layer_output_template = self._config and self._config.bool("debug_print_layer_output_template", False)
-    debug_print_layer_output_sizes = self._config and self._config.bool("debug_print_layer_output_sizes", False)
     debug_print_layer_output_shape = self._config and self._config.bool("debug_print_layer_output_shape", False)
     debug_add_check_numerics_on_output = self._config and self._config.bool("debug_add_check_numerics_on_output", False)  # also see debug_add_check_numerics_ops
     with reuse_name_scope(layer_class.cls_get_tf_scope_name(name)):
       try:
-        output = layer_class.get_out_data_from_opts(**layer_desc)
+        if "output" not in layer_desc:
+          layer_desc["output"] = layer_class.get_out_data_from_opts(**layer_desc)
         if debug_print_layer_output_template:
-          print("layer %r output: %r" % (name, output))
-        layer = layer_class(output=output, **layer_desc)
+          print("layer %r output: %r" % (name, layer_desc["output"]))
+        layer = layer_class(**layer_desc)
       except TypeError:
         help_on_type_error_wrong_args(cls=layer_class, kwargs=list(layer_desc.keys()))
         raise
       layer.post_init()
-      if debug_print_layer_output_sizes:
-        print("layer %r output sizes: %r" % (name, output.size_placeholder))
       if debug_print_layer_output_shape:
         layer.output.placeholder = tf.Print(
           layer.output.placeholder, [layer_class.cls_get_tf_scope_name(name), "shape:", tf.shape(layer.output.placeholder)],
           summarize=10, name="debug_print_layer_output_shape")
       if debug_add_check_numerics_on_output and layer.output.dtype.startswith("float"):
-        print("debug_add_check_numerics_on_output: add for %r" % layer.output.placeholder)
+        print("debug_add_check_numerics_on_output: add for layer %r: %r" % (name, layer.output.placeholder))
         from TFUtil import identity_with_check_numerics
-        layer.output.placeholder = identity_with_check_numerics(layer.output.placeholder)
+        layer.output.placeholder = identity_with_check_numerics(
+          layer.output.placeholder,
+          name="%s_identity_with_check_numerics" % layer_class.cls_get_tf_scope_name(name))
     assert layer.output
     assert layer.output.placeholder is not None
     layer.output.placeholder.set_shape(layer.output.batch_shape)
@@ -370,6 +380,12 @@ class TFNetwork(object):
             error = layer.get_error_value()
             if loss is not None:
               tf.summary.scalar("loss_%s" % layer.name, loss * layer.get_loss_normalization_factor())
+              if self._config and self._config.bool("debug_add_check_numerics_on_output", False):
+                print("debug_add_check_numerics_on_output: add for layer loss %r: %r" % (name, layer.output.placeholder))
+                from TFUtil import identity_with_check_numerics
+                loss = identity_with_check_numerics(
+                  loss,
+                  name="%s_loss_identity_with_check_numerics" % layer.tf_scope_name)
             if error is not None:
               tf.summary.scalar("error_%s" % layer.name, error * layer.get_loss_normalization_factor())
         with reuse_name_scope("constraints"):
