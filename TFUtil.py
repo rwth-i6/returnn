@@ -2824,11 +2824,13 @@ def nan_to_num(x, nan_num=0, inf_num=1e30):
   """
   Like numpy.nan_to_num().
 
-  :param tf.Tensor x:
+  :param tf.Tensor|tf.IndexedSlices x:
   :param float|tf.Tensor nan_num:
   :param float|tf.Tensor inf_num:
   :return: x with replaced nan and inf
   """
+  if isinstance(x, tf.IndexedSlices):
+    return tf.IndexedSlices(values=nan_to_num(x.values), indices=x.indices, dense_shape=x.dense_shape)
   with tf.name_scope("nan_to_num"):
     nan_num = tf.convert_to_tensor(nan_num, dtype=x.dtype)
     inf_num = tf.convert_to_tensor(inf_num, dtype=x.dtype)
