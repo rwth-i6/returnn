@@ -2358,11 +2358,12 @@ def add_scaled_noise_to_gradients(grads_and_vars, gradient_noise_scale):
   """
   Adds scaled noise from a 0-mean normal distribution to gradients.
   Adapted from tf.contrib.layers.optimizers.
+  For sparse gradients (tf.IndexedSlices), it will only add the noise to the indexed values.
 
-  :param list[(tf.Tensor, tf.Variable)] grads_and_vars:
+  :param list[(tf.Tensor|tf.IndexedSlices, tf.Variable)] grads_and_vars:
   :param float gradient_noise_scale: used as stddev for tf.truncated_normal().
   :return: adapted grads_and_vars
-  :rtype: list[(tf.Tensor, tf.Variable)]
+  :rtype: list[(tf.Tensor|tf.IndexedSlices, tf.Variable)]
   """
   gradients, variables = zip(*grads_and_vars)
   noisy_gradients = []
@@ -2370,14 +2371,24 @@ def add_scaled_noise_to_gradients(grads_and_vars, gradient_noise_scale):
     if gradient is None:
       noisy_gradients.append(None)
       continue
-    if isinstance(gradient, tf.IndexedSlices):
-      gradient_shape = gradient.dense_shape
-    else:
-      gradient_shape = gradient.get_shape()
+    name = get_base_name(gradient)
     with reuse_name_scope_of_tensor(gradient):
-      name = get_base_name(gradient)
+      if isinstance(gradient, tf.IndexedSlices):
+        gradient_values = gradient.values
+      else:
+        assert isinstance(gradient, tf.Tensor)
+        gradient_values = gradient
+      gradient_shape = gradient_values.get_shape()
+      assert isinstance(gradient_shape, tf.TensorShape)
+      if not gradient_shape.is_fully_defined():
+        gradient_shape = tf.shape(gradient_values)
       noise = tf.truncated_normal(gradient_shape, stddev=gradient_noise_scale, name="%s_grad_noise" % name)
-      noisy_gradients.append(tf.add(gradient, noise, name="%s_add_grad_noise" % name))
+      gradient_values = tf.add(gradient_values, noise, name="%s_add_grad_noise" % name)
+      if isinstance(gradient, tf.IndexedSlices):
+        gradient = tf.IndexedSlices(values=gradient_values, indices=gradient.indices, dense_shape=gradient.dense_shape)
+      else:
+        gradient = gradient_values
+      noisy_gradients.append(gradient)
   return list(zip(noisy_gradients, variables))
 
 

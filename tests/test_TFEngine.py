@@ -110,6 +110,56 @@ def test_engine_train():
   engine.finalize()
 
 
+def test_engine_train_grad_noise_sparse():
+  # Not sure how to test for it in a simple way...
+  # You might see "Converting sparse IndexedSlices to a dense Tensor of unknown shape."
+  # but that is normally related to sth else.
+
+  def wrapped_slice_to_tensor(value, dtype=None, name=None, as_ref=False):
+    print("wrapped_slice_to_tensor:", value)
+    assert "flatten_with_seq_len_mask" in value.name
+    from tensorflow.python.ops import gradients_impl
+    return gradients_impl._IndexedSlicesToTensor(value, dtype=dtype, name=name, as_ref=as_ref)
+
+  from tensorflow.python.framework import ops
+  ops.register_tensor_conversion_function(tf.IndexedSlices, wrapped_slice_to_tensor, priority=1)
+
+  # Anyway, for now, just try to trigger relevant code,
+  # ie. in add_scaled_noise_to_gradients(),
+  # and don't really check whether it works.
+
+  from GeneratingDataset import DummyDataset
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 3
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
+  train_data.init_seq_order(epoch=1)
+  cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  cv_data.init_seq_order(epoch=1)
+
+  config = Config()
+  config.update({
+    "model": "/tmp/model",
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": {
+      "output": {
+        "class": "linear", "activation": None, "loss": "mse",
+        "from": ["data:classes"],  # sparse input
+        "target": "data"  # dense output
+        }},
+    "start_epoch": 1,
+    "num_epochs": 2,
+    "learning_rate": 0.01,
+    "adam": True,
+    "gradient_noise": 0.3
+  })
+  engine = Engine(config=config)
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
+  engine.train()
+  engine.finalize()
+
+
 def test_engine_analyze():
   from GeneratingDataset import DummyDataset
   seq_len = 5
