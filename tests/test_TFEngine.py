@@ -117,7 +117,7 @@ def test_engine_train_grad_noise_sparse():
 
   def wrapped_slice_to_tensor(value, dtype=None, name=None, as_ref=False):
     print("wrapped_slice_to_tensor:", value)
-    assert "flatten_with_seq_len_mask" in value.name
+    #assert "flatten_with_seq_len_mask" in value.name
     from tensorflow.python.ops import gradients_impl
     return gradients_impl._IndexedSlicesToTensor(value, dtype=dtype, name=name, as_ref=as_ref)
 
@@ -128,14 +128,11 @@ def test_engine_train_grad_noise_sparse():
   # ie. in add_scaled_noise_to_gradients(),
   # and don't really check whether it works.
 
-  from GeneratingDataset import DummyDataset
-  seq_len = 5
-  n_data_dim = 2
-  n_classes_dim = 3
-  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
-  train_data.init_seq_order(epoch=1)
-  cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
-  cv_data.init_seq_order(epoch=1)
+  from GeneratingDataset import Task12AXDataset
+  train_data = Task12AXDataset(num_seqs=5)
+  cv_data = Task12AXDataset(num_seqs=2)
+  n_data_dim = train_data.num_outputs["data"][0]
+  n_classes_dim = train_data.num_outputs["classes"][0]
 
   config = Config()
   config.update({
@@ -143,16 +140,26 @@ def test_engine_train_grad_noise_sparse():
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {
-      "output": {
-        "class": "linear", "activation": None, "loss": "mse",
+      "hidden": {
+        "class": "linear", "activation": "tanh", "n_out": 10,
         "from": ["data:classes"],  # sparse input
-        "target": "data"  # dense output
+      },
+      "hidden2": {
+        "class": "linear", "activation": "tanh", "n_out": 10,
+        "from": ["data:classes"],  # sparse input
+      },
+      "hidden3": {"class": "linear", "activation": "tanh", "n_out": 10, "from": ["hidden", "hidden2"]},
+      "output": {
+        "class": "linear", "activation": None, "loss": "ce",
+        "from": ["hidden", "hidden2", "hidden3"],
+        "target": "classes"  # sparse output
         }},
     "start_epoch": 1,
     "num_epochs": 2,
     "learning_rate": 0.01,
-    "adam": True,
-    "gradient_noise": 0.3
+    "nadam": True,
+    "gradient_noise": 0.3,
+    "batch_size": 100
   })
   engine = Engine(config=config)
   engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
