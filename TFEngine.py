@@ -675,17 +675,17 @@ class Engine(object):
       # iterate through all output layers and check dimension compatibility of parameters
       # start output layer from random initialization if one parameters dimension do not match
       for l in self.network.get_output_layers():
-        keepLayer = True
-        if self.pretrain.copy_output_layer == False:
-          keepLayer = False
+        keep_layer = True
+        if self.pretrain.copy_output_layer is False:
+          keep_layer = False
         else:
           if l.name in old_network_params.values_dict:
             for param in l.params:
               if tuple(l.params[param].shape.as_list()) != old_network_params.values_dict[l.name][param].shape:
-                keepLayer = False
+                keep_layer = False
                 break
-        if not keepLayer:
-          print("suspend copying of output layer: " + l.name, file=log.v4)
+        if not keep_layer:
+          print("suspend copying of output layer: " + l.name, file=log.v2)
           del old_network_params.values_dict[l.name]
     # Otherwise it's initialized randomly which is fine.
     # This copy will copy the old params over and leave the rest randomly initialized.
