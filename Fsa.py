@@ -6,8 +6,8 @@ from __future__ import division
 import numpy
 import theano
 from theano import tensor as T
-
 from copy import deepcopy
+from Log import log
 
 
 class Edge:
@@ -72,29 +72,26 @@ class Edge:
                     "Weight: ",
                     str(self.weight)))
 
+  def as_tuple(self):
+    return self.source_state_idx, self.target_state_idx, self.label, self.weight
+
   def __eq__(self, other):
-    return ((self.source_state_idx, self.target_state_idx, self.label, self.weight)
-            == (other.source_state_idx, other.target_state_idx, other.label, other.weight))
+    return self.as_tuple() == other.as_tuple()
 
   def __ne__(self, other):
-    return ((self.source_state_idx, self.target_state_idx, self.label, self.weight)
-            != (other.source_state_idx, other.target_state_idx, other.label, other.weight))
+    return self.as_tuple() != other.as_tuple()
 
   def __le__(self, other):
-    return ((self.source_state_idx, self.target_state_idx, self.label, self.weight)
-            <= (other.source_state_idx, other.target_state_idx, other.label, other.weight))
+    return self.as_tuple() <= other.as_tuple()
 
   def __lt__(self, other):
-    return ((self.source_state_idx, self.target_state_idx, self.label, self.weight)
-            < (other.source_state_idx, other.target_state_idx, other.label, other.weight))
+    return self.as_tuple() < other.as_tuple()
 
   def __ge__(self, other):
-    return ((self.source_state_idx, self.target_state_idx, self.label, self.weight)
-            >= (other.source_state_idx, other.target_state_idx, other.label, other.weight))
+    return self.as_tuple() >= other.as_tuple()
 
   def __gt__(self, other):
-    return ((self.source_state_idx, self.target_state_idx, self.label, self.weight)
-            > (other.source_state_idx, other.target_state_idx, other.label, other.weight))
+    return self.as_tuple() > other.as_tuple()
 
 
 class Graph:
@@ -156,7 +153,8 @@ class Graph:
     takes a graph with several states and transforms into single state graph
     :param int num_states: number of states
     :param list[Edges] edges: list of Edges symbolizing the graph
-    :return list[Edges]: returns the transformed list of Edges with one state
+    :return: returns the transformed list of Edges with one state
+    :rtype: list[Edges]
     """
     edges_single_state = deepcopy(edges)
     if num_states > 1:
@@ -286,12 +284,12 @@ class Ctc:
     :param int num_labels: number of labels without blank, silence, eps and repetitions
     :param bool label_conversion: shall the labels be converted into numbers (only ASG and CTC)
     """
-    if isinstance(fsa, Graph) and isinstance(num_labels, int) and isinstance(label_conversion, int):
-      self.fsa = fsa
-      self.num_labels = num_labels
-      self.label_conversion = label_conversion
-    else:
-      assert False, ("The CTC init went wrong!", fsa)
+    assert isinstance(fsa, Graph)
+    assert isinstance(num_labels, int)
+    assert isinstance(label_conversion, int)
+    self.fsa = fsa
+    self.num_labels = num_labels
+    self.label_conversion = label_conversion
 
     # list[int] final_states: list of final states
     self.final_states = []
@@ -970,6 +968,7 @@ class FastBwFsaShared:
       weights=self.get_weights(n_batch),
       start_end_states=self.get_start_end_states(n_batch))
 
+
 class LoadWfstOp(theano.Op):
   """
   Op: maps segment names (tags) to fsa automata (load from disk) that can be used to compute a BW-alignment
@@ -1063,6 +1062,7 @@ class LoadWfstOp(theano.Op):
     output_storage[4][0] = numpy.hstack(all_end_state_weigths)
     output_storage[5][0] = numpy.empty((2, self.single_wfst['num_states']*len(tags)), dtype='float32')
 
+
 def main():
   from argparse import ArgumentParser
   arg_parser = ArgumentParser()
@@ -1129,6 +1129,7 @@ def main():
   sav_hmm.filename = 'edges_hmm'
   sav_hmm.fsa_to_dot_format()
   sav_hmm.save_to_file()
+
 
 if __name__ == "__main__":
   import time
