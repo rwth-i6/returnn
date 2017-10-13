@@ -675,7 +675,7 @@ class NltkTimitDataset(CachedDataset2):
     # Make 'sil' the 0 phoneme.
     self.labels.remove("sil")
     self.labels.insert(0, "sil")
-    self.num_outputs = {"data": (self.num_inputs, 1), "classes": (len(self.labels), 2)}
+    self.num_outputs = {"data": (self.num_inputs, 2), "classes": (len(self.labels), 1)}
 
     import os
     try:
@@ -721,7 +721,7 @@ class NltkTimitDataset(CachedDataset2):
 
     for seq_tag in utterance_ids:
       phone_seq = data_reader.phones(seq_tag)
-      phone_id_seq = numpy.array([self.labels.index(self.PhoneMapTo48[p]) for p in phone_seq])
+      phone_id_seq = numpy.array([self.labels.index(self.PhoneMapTo48[p]) for p in phone_seq], dtype="int32")
       # word_seq = data_reader.words(utter)
       spk = data_reader.spkrid(seq_tag)
       info = data_reader.spkrinfo(spk)
@@ -743,7 +743,7 @@ class NltkTimitDataset(CachedDataset2):
       if with_delta:
         deltas = librosa.feature.delta(mfccs)
         mfccs = numpy.vstack([mfccs, deltas])
-      mfccs = mfccs.transpose()
+      mfccs = mfccs.transpose().astype("float32")
       self._data.append((seq_tag, mfccs, phone_id_seq))
 
     self._num_seqs = len(self._data)
