@@ -1,10 +1,15 @@
 
 from Dataset import Dataset, DatasetSeq, convert_data_dims
+from CachedDataset2 import CachedDataset2
 from Util import class_idx_seq_to_1_of_k
+from Log import log
 import numpy
 
 
 class GeneratingDataset(Dataset):
+
+  _input_classes = None
+  _output_classes = None
 
   def __init__(self, input_dim, output_dim, num_seqs=float("inf"), fixed_random_seed=None, **kwargs):
     """
@@ -611,13 +616,95 @@ class CopyTaskDataset(GeneratingDataset):
     return DatasetSeq(seq_idx=seq_idx, features=seq_np, targets={"classes": seq_np})
 
 
+class _TFKerasDataset(CachedDataset2):
+  """
+  Wraps around any dataset from tf.contrib.keras.datasets.
+  See: https://www.tensorflow.org/versions/master/api_docs/python/tf/contrib/keras/datasets
+  TODO: Should maybe be moved to a separate file. (Only here because of tf.contrib.keras.datasets.reuters).
+  """
+  # TODO...
+
+
+class _NltkCorpusReaderDataset(CachedDataset2):
+  """
+  Wraps around any dataset from nltk.corpus.
+  TODO: Should maybe be moved to a separate file, e.g. CorpusReaderDataset.py or so?
+  """
+  # TODO ...
+
+
+class NltkTimitDataset(CachedDataset2):
+  """
+  DARPA TIMIT Acoustic-Phonetic Continuous Speech Corpus
+
+  This Dataset will get TIMIT via NLTK.
+  Demo:
+
+      tools/dump-dataset.py "{'class': 'NltkTimitDataset'}"
+
+  Note: The NLTK data only contains the train data.
+  Not sure how useful this is...
+  """
+
+  def __init__(self, nltk_download_dir=None, **kwargs):
+    super(NltkTimitDataset, self).__init__(**kwargs)
+    import os
+    try:
+      import nltk
+    except ImportError:
+      print("pip3 install --user nltk")
+      raise
+    try:
+      import python_speech_features
+    except ImportError:
+      print("pip3 install --user python_speech_features")
+      raise
+    try:
+      import scipy
+    except ImportError:
+      print("pip3 install --user scipy")
+      raise
+
+    from nltk.downloader import Downloader
+    downloader = Downloader(download_dir=nltk_download_dir)
+    print("NLTK corpus download dir:", downloader.download_dir, file=log.v3)
+    timit_dir = downloader.download_dir + "/corpora/timit"
+    if not os.path.exists(timit_dir):
+      assert downloader.download("timit")
+      assert os.path.exists(timit_dir)
+    assert os.path.exists(timit_dir + "/timitdic.txt"), "TIMIT download broken? remove the directory %r" % timit_dir
+
+    from nltk.data import FileSystemPathPointer
+    from nltk.corpus.reader.timit import TimitCorpusReader, SpeakerInfo
+    data_reader = TimitCorpusReader(FileSystemPathPointer(timit_dir))
+    utterance_ids = data_reader.utteranceids()
+    assert utterance_ids
+
+    import scipy.io.wavfile as wav
+    # Alternatives: talkbox.features.mfcc, librosa
+    from python_speech_features import mfcc
+
+    for utter in utterance_ids:
+        phonemes = data_reader.phones(utter)
+        words = data_reader.words(utter)
+        spk = data_reader.spkrid(utter)
+        info = data_reader.spkrinfo(spk)
+        assert isinstance(info, SpeakerInfo)
+        (rate, sig) = wav.read("%s/%s.wav" % (timit_dir, utter))
+        mfcc_feat = mfcc(sig, rate)
+
+    raise NotImplemented  # TODO ...
+
+
 def demo():
   import better_exchook
   better_exchook.install()
+  log.initialize(verbosity=[5])
   import sys
   dsclazzeval = sys.argv[1]
   dataset = eval(dsclazzeval)
-  assert isinstance(dataset, GeneratingDataset)
+  assert isinstance(dataset, Dataset)
+  assert isinstance(dataset, GeneratingDataset), "use tools/dump-dataset.py for a generic demo instead"
   assert dataset._input_classes and dataset._output_classes
   assert dataset.num_outputs["data"][1] == 2  # expect 1-hot
   assert dataset.num_outputs["classes"][1] == 1  # expect sparse
@@ -636,6 +723,7 @@ def demo():
     print(" %r" % output_seq_str)
     assert features.shape[1] == dataset.num_outputs["data"][0]
     assert features.shape[0] == output_seq.shape[0]
+
 
 if __name__ == "__main__":
   demo()

@@ -846,23 +846,6 @@ class PhoneSeqGenerator:
     return allos
 
 
-class _TFKerasDataset(CachedDataset2):
-  """
-  Wraps around any dataset from tf.contrib.keras.datasets.
-  See: https://www.tensorflow.org/versions/master/api_docs/python/tf/contrib/keras/datasets
-  TODO: Should maybe be moved to a separate file. (Only here because of tf.contrib.keras.datasets.reuters).
-  """
-  # TODO...
-
-
-class _NltkCorpusReaderDataset(CachedDataset2):
-  """
-  Wraps around any dataset from nltk.corpus.
-  TODO: Should maybe be moved to a separate file, e.g. CorpusReaderDataset.py or so?
-  """
-  # TODO ...
-
-
 class TranslationDataset(CachedDataset2):
   """
   Based on the conventions by our team for translation datasets.
