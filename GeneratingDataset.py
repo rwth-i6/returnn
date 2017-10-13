@@ -646,8 +646,37 @@ class NltkTimitDataset(CachedDataset2):
   Not sure how useful this is...
   """
 
-  def __init__(self, nltk_download_dir=None, **kwargs):
+  FeatureDim = 13
+  # via: https://github.com/kaldi-asr/kaldi/blob/master/egs/timit/s5/conf/phones.60-48-39.map
+  PhoneMapTo39 = {
+    'aa': 'aa', 'ae': 'ae', 'ah': 'ah', 'ao': 'aa', 'aw': 'aw', 'ax': 'ah', 'ax-h': 'ah', 'axr': 'er',
+    'ay': 'ay', 'b': 'b', 'bcl': 'sil', 'ch': 'ch', 'd': 'd', 'dcl': 'sil', 'dh': 'dh', 'dx': 'dx', 'eh': 'eh',
+    'el': 'l', 'em': 'm', 'en': 'n', 'eng': 'ng', 'epi': 'sil', 'er': 'er', 'ey': 'ey', 'f': 'f', 'g': 'g',
+    'gcl': 'sil', 'h#': 'sil', 'hh': 'hh', 'hv': 'hh', 'ih': 'ih', 'ix': 'ih', 'iy': 'iy', 'jh': 'jh',
+    'k': 'k', 'kcl': 'sil', 'l': 'l', 'm': 'm', 'n': 'n', 'ng': 'ng', 'nx': 'n', 'ow': 'ow', 'oy': 'oy',
+    'p': 'p', 'pau': 'sil', 'pcl': 'sil', 'q': 'q', 'r': 'r', 's': 's', 'sh': 'sh', 't': 't', 'tcl': 'sil',
+    'th': 'th', 'uh': 'uh', 'uw': 'uw', 'ux': 'uw', 'v': 'v', 'w': 'w', 'y': 'y', 'z': 'z', 'zh': 'sh'}
+  PhoneMapTo48 = {
+    'aa': 'aa', 'ae': 'ae', 'ah': 'ah', 'ao': 'ao', 'aw': 'aw', 'ax': 'ax', 'ax-h': 'ax', 'axr': 'er',
+    'ay': 'ay', 'b': 'b', 'bcl': 'vcl', 'ch': 'ch', 'd': 'd', 'dcl': 'vcl', 'dh': 'dh', 'dx': 'dx', 'eh': 'eh',
+    'el': 'el', 'em': 'm', 'en': 'en', 'eng': 'ng', 'epi': 'epi', 'er': 'er', 'ey': 'ey', 'f': 'f', 'g': 'g',
+    'gcl': 'vcl', 'h#': 'sil', 'hh': 'hh', 'hv': 'hh', 'ih': 'ih', 'ix': 'ix', 'iy': 'iy', 'jh': 'jh',
+    'k': 'k', 'kcl': 'cl', 'l': 'l', 'm': 'm', 'n': 'n', 'ng': 'ng', 'nx': 'n', 'ow': 'ow', 'oy': 'oy',
+    'p': 'p', 'pau': 'sil', 'pcl': 'cl', 'q': 'q', 'r': 'r', 's': 's', 'sh': 'sh', 't': 't', 'tcl': 'cl',
+    'th': 'th', 'uh': 'uh', 'uw': 'uw', 'ux': 'uw', 'v': 'v', 'w': 'w', 'y': 'y', 'z': 'z', 'zh': 'zh'}
+
+  def __init__(self, nltk_download_dir=None, with_delta=False, train=True, **kwargs):
     super(NltkTimitDataset, self).__init__(**kwargs)
+    if with_delta:
+      self.num_inputs = self.FeatureDim * 2
+    else:
+      self.num_inputs = self.FeatureDim
+    self.labels = sorted(set(self.PhoneMapTo48.values()))
+    # Make 'sil' the 0 phoneme.
+    self.labels.remove("sil")
+    self.labels.insert(0, "sil")
+    self.num_outputs = {"data": (self.num_inputs, 1), "classes": (len(self.labels), 2)}
+
     import os
     try:
       import nltk
@@ -659,10 +688,11 @@ class NltkTimitDataset(CachedDataset2):
     except ImportError:
       print("pip3 install --user python_speech_features")
       raise
+    # Alternatives: python_speech_features, talkbox.features.mfcc, librosa
     try:
-      import scipy
+      import librosa
     except ImportError:
-      print("pip3 install --user scipy")
+      print("pip3 install --user librosa")
       raise
 
     from nltk.downloader import Downloader
@@ -678,22 +708,65 @@ class NltkTimitDataset(CachedDataset2):
     from nltk.corpus.reader.timit import TimitCorpusReader, SpeakerInfo
     data_reader = TimitCorpusReader(FileSystemPathPointer(timit_dir))
     utterance_ids = data_reader.utteranceids()
+    assert isinstance(utterance_ids, list)
     assert utterance_ids
 
-    import scipy.io.wavfile as wav
-    # Alternatives: talkbox.features.mfcc, librosa
-    from python_speech_features import mfcc
+    split = int(len(utterance_ids) * 0.9)
+    if train:
+      utterance_ids = utterance_ids[:split]
+    else:
+      utterance_ids = utterance_ids[split:]
 
-    for utter in utterance_ids:
-        phonemes = data_reader.phones(utter)
-        words = data_reader.words(utter)
-        spk = data_reader.spkrid(utter)
-        info = data_reader.spkrinfo(spk)
-        assert isinstance(info, SpeakerInfo)
-        (rate, sig) = wav.read("%s/%s.wav" % (timit_dir, utter))
-        mfcc_feat = mfcc(sig, rate)
+    self._data = []  # list of (seq_tag, mfccs, phone_id_seq)
 
-    raise NotImplemented  # TODO ...
+    for seq_tag in utterance_ids:
+      phone_seq = data_reader.phones(seq_tag)
+      phone_id_seq = numpy.array([self.labels.index(self.PhoneMapTo48[p]) for p in phone_seq])
+      # word_seq = data_reader.words(utter)
+      spk = data_reader.spkrid(seq_tag)
+      info = data_reader.spkrinfo(spk)
+      assert isinstance(info, SpeakerInfo)
+      # see: https://github.com/rdadolf/fathom/blob/master/fathom/speech/preproc.py
+      # and: https://groups.google.com/forum/#!topic/librosa/V4Z1HpTKn8Q
+      audio, sample_rate = librosa.load("%s/%s.wav" % (timit_dir, seq_tag), sr=None)
+      window_len = 0.025
+      step_len = 0.010
+      mfccs = librosa.feature.mfcc(
+        audio, sr=sample_rate,
+        n_mfcc=self.FeatureDim,
+        hop_length=int(step_len * sample_rate), n_fft=int(window_len * sample_rate))
+      energy = librosa.feature.rmse(
+        audio,
+        hop_length=int(step_len * sample_rate), n_fft=int(window_len * sample_rate))
+      mfccs[0] = energy  # replace first MFCC with energy, per convention
+      assert mfccs.shape[0] == self.FeatureDim
+      if with_delta:
+        deltas = librosa.feature.delta(mfccs)
+        mfccs = numpy.vstack([mfccs, deltas])
+      mfccs = mfccs.transpose()
+      self._data.append((seq_tag, mfccs, phone_id_seq))
+
+    self._num_seqs = len(self._data)
+    self._seq_order = list(range(self._num_seqs))
+
+  def init_seq_order(self, epoch=None, seq_list=None):
+    assert seq_list is None
+    super(NltkTimitDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+    self._num_seqs = len(self._data)
+    self._seq_order = self.get_seq_order_for_epoch(
+      epoch=epoch, num_seqs=self._num_seqs, get_seq_len=lambda i: len(self._data[i][1]))
+    return True
+
+  def _collect_single_seq(self, seq_idx):
+    """
+    :type seq_idx: int
+    :rtype: DatasetSeq | None
+    :returns DatasetSeq or None if seq_idx >= num_seqs.
+    """
+    if seq_idx >= len(self._seq_order):
+      return None
+    seq_tag, mfccs, phone_id_seq = self._data[self._seq_order[seq_idx]]
+    return DatasetSeq(seq_idx=seq_idx, seq_tag=seq_tag, features=mfccs, targets=phone_id_seq)
 
 
 def demo():
