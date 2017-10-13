@@ -1,4 +1,6 @@
 
+from __future__ import print_function
+
 from Dataset import Dataset, DatasetSeq, convert_data_dims
 from CachedDataset2 import CachedDataset2
 from Util import class_idx_seq_to_1_of_k
