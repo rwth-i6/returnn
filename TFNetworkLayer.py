@@ -3325,11 +3325,11 @@ class MeanSquaredError(Loss):
   class_name = "mse"
 
   def get_value(self):
-    """
-    """
     assert not self.target.sparse, "sparse is not supported yet"
     with tf.name_scope("loss_mse"):
-      out = tf.reduce_mean(tf.squared_difference(self.output_flat, self.target_flat))
+      out = tf.squared_difference(self.output_flat, self.target_flat)
+      assert out.get_shape().ndims == 2
+      out = self.reduce_func(tf.reduce_mean(out, axis=1))
       return out
 
 
