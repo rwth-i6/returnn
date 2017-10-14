@@ -685,11 +685,6 @@ class NltkTimitDataset(CachedDataset2):
     except ImportError:
       print("pip3 install --user nltk")
       raise
-    try:
-      import python_speech_features
-    except ImportError:
-      print("pip3 install --user python_speech_features")
-      raise
     # Alternatives: python_speech_features, talkbox.features.mfcc, librosa
     try:
       import librosa
