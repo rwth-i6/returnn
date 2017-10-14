@@ -643,6 +643,7 @@ class NltkTimitDataset(CachedDataset2):
   Demo:
 
       tools/dump-dataset.py "{'class': 'NltkTimitDataset'}"
+      tools/dump-dataset.py "{'class': 'NltkTimitDataset', 'demo_play_audio': True, 'random_permute_audio': True}"
 
   Note: The NLTK data only contains the train data.
   Not sure how useful this is...
@@ -667,7 +668,8 @@ class NltkTimitDataset(CachedDataset2):
     'p': 'p', 'pau': 'sil', 'pcl': 'cl', 'q': 'q', 'r': 'r', 's': 's', 'sh': 'sh', 't': 't', 'tcl': 'cl',
     'th': 'th', 'uh': 'uh', 'uw': 'uw', 'ux': 'uw', 'v': 'v', 'w': 'w', 'y': 'y', 'z': 'z', 'zh': 'zh'}
 
-  def __init__(self, nltk_download_dir=None, with_delta=False, train=True, **kwargs):
+  def __init__(self, nltk_download_dir=None, with_delta=False,
+               train=True, demo_play_audio=False, fixed_random_seed=None, random_permute_audio=None, **kwargs):
     super(NltkTimitDataset, self).__init__(**kwargs)
     if with_delta:
       self.num_inputs = self.FeatureDim * 2
@@ -678,18 +680,23 @@ class NltkTimitDataset(CachedDataset2):
     self.labels.remove("sil")
     self.labels.insert(0, "sil")
     self.num_outputs = {"data": (self.num_inputs, 2), "classes": (len(self.labels), 1)}
+    self._with_delta = with_delta
+    self._demo_play_audio = demo_play_audio
+    self._random = numpy.random.RandomState(1)
+    self._fixed_random_seed = fixed_random_seed  # useful when used as eval dataset
+    if random_permute_audio is None:
+      random_permute_audio = train
+    self._random_permute_audio = random_permute_audio
 
+    # Alternatives for MFCC: python_speech_features, talkbox.features.mfcc, librosa
     import os
     try:
       import nltk
-    except ImportError:
-      print("pip3 install --user nltk")
-      raise
-    # Alternatives: python_speech_features, talkbox.features.mfcc, librosa
-    try:
       import librosa
+      import scipy
+      import scipy.ndimage
     except ImportError:
-      print("pip3 install --user librosa")
+      print("pip3 install --user nltk librosa scipy")
       raise
 
     from nltk.downloader import Downloader
@@ -700,11 +707,12 @@ class NltkTimitDataset(CachedDataset2):
       assert downloader.download("timit")
       assert os.path.exists(timit_dir)
     assert os.path.exists(timit_dir + "/timitdic.txt"), "TIMIT download broken? remove the directory %r" % timit_dir
+    self._timit_dir = timit_dir
 
     from nltk.data import FileSystemPathPointer
-    from nltk.corpus.reader.timit import TimitCorpusReader, SpeakerInfo
-    data_reader = TimitCorpusReader(FileSystemPathPointer(timit_dir))
-    utterance_ids = data_reader.utteranceids()
+    from nltk.corpus.reader.timit import TimitCorpusReader
+    self._data_reader = TimitCorpusReader(FileSystemPathPointer(timit_dir))
+    utterance_ids = self._data_reader.utteranceids()
     assert isinstance(utterance_ids, list)
     assert utterance_ids
 
@@ -713,45 +721,46 @@ class NltkTimitDataset(CachedDataset2):
       utterance_ids = utterance_ids[:split]
     else:
       utterance_ids = utterance_ids[split:]
+    self._seq_tags = utterance_ids  # list of seq_tag
 
-    self._data = []  # list of (seq_tag, mfccs, phone_id_seq)
-
-    for seq_tag in utterance_ids:
-      phone_seq = data_reader.phones(seq_tag)
-      phone_id_seq = numpy.array([self.labels.index(self.PhoneMapTo48[p]) for p in phone_seq], dtype="int32")
-      # word_seq = data_reader.words(utter)
-      spk = data_reader.spkrid(seq_tag)
-      info = data_reader.spkrinfo(spk)
-      assert isinstance(info, SpeakerInfo)
-      # see: https://github.com/rdadolf/fathom/blob/master/fathom/speech/preproc.py
-      # and: https://groups.google.com/forum/#!topic/librosa/V4Z1HpTKn8Q
-      audio, sample_rate = librosa.load("%s/%s.wav" % (timit_dir, seq_tag), sr=None)
-      window_len = 0.025
-      step_len = 0.010
-      mfccs = librosa.feature.mfcc(
-        audio, sr=sample_rate,
-        n_mfcc=self.FeatureDim,
-        hop_length=int(step_len * sample_rate), n_fft=int(window_len * sample_rate))
-      energy = librosa.feature.rmse(
-        audio,
-        hop_length=int(step_len * sample_rate), n_fft=int(window_len * sample_rate))
-      mfccs[0] = energy  # replace first MFCC with energy, per convention
-      assert mfccs.shape[0] == self.FeatureDim
-      if with_delta:
-        deltas = librosa.feature.delta(mfccs)
-        mfccs = numpy.vstack([mfccs, deltas])
-      mfccs = mfccs.transpose().astype("float32")
-      self._data.append((seq_tag, mfccs, phone_id_seq))
-
-    self._num_seqs = len(self._data)
+    self._num_seqs = len(self._seq_tags)
     self._seq_order = list(range(self._num_seqs))
+
+  def _demo_audio_play(self, audio, sample_rate):
+    """
+    :param numpy.ndarray audio: shape (sample_len,)
+    :param int sample_rate:
+    """
+    assert audio.dtype == numpy.float32
+    assert audio.ndim == 1
+    try:
+      import pyaudio
+    except ImportError:
+      print("pip3 install --user pyaudio")
+      raise
+    p = pyaudio.PyAudio()
+    chunk_size = 1024
+    stream = p.open(
+      format=pyaudio.paFloat32,
+      channels=1,
+      rate=sample_rate,
+      frames_per_buffer=chunk_size,
+      output=True)
+    while len(audio) > 0:
+      chunk = audio[:chunk_size]
+      audio = audio[chunk_size:]
+      stream.write(chunk, num_frames=len(chunk))
+    stream.stop_stream()
+    stream.close()
+    p.terminate()
 
   def init_seq_order(self, epoch=None, seq_list=None):
     assert seq_list is None
     super(NltkTimitDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
-    self._num_seqs = len(self._data)
+    self._num_seqs = len(self._seq_tags)
     self._seq_order = self.get_seq_order_for_epoch(
-      epoch=epoch, num_seqs=self._num_seqs, get_seq_len=lambda i: len(self._data[i][1]))
+      epoch=epoch, num_seqs=self._num_seqs, get_seq_len=lambda i: len(self._seq_tags[i][1]))
+    self._random.seed(self._fixed_random_seed or epoch or 1)
     return True
 
   def _collect_single_seq(self, seq_idx):
@@ -762,7 +771,54 @@ class NltkTimitDataset(CachedDataset2):
     """
     if seq_idx >= len(self._seq_order):
       return None
-    seq_tag, mfccs, phone_id_seq = self._data[self._seq_order[seq_idx]]
+
+    import nltk
+    from nltk.corpus.reader.timit import SpeakerInfo
+    import librosa
+    import scipy
+    import scipy.ndimage
+
+    seq_tag = self._seq_tags[self._seq_order[seq_idx]]
+    data_reader = self._data_reader
+    phone_seq = data_reader.phones(seq_tag)
+    phone_id_seq = numpy.array([self.labels.index(self.PhoneMapTo48[p]) for p in phone_seq], dtype="int32")
+    # word_seq = data_reader.words(utter)
+    spk = data_reader.spkrid(seq_tag)
+    info = data_reader.spkrinfo(spk)
+    assert isinstance(info, SpeakerInfo)
+    # see: https://github.com/rdadolf/fathom/blob/master/fathom/speech/preproc.py
+    # and: https://groups.google.com/forum/#!topic/librosa/V4Z1HpTKn8Q
+    timit_dir = self._timit_dir
+    audio_filename = "%s/%s.wav" % (timit_dir, seq_tag)
+    audio, sample_rate = librosa.load(audio_filename, sr=None)
+    peak = numpy.max(numpy.abs(audio))
+    audio /= peak
+    if self._random_permute_audio:
+      audio = audio * self._random.uniform(0.7, 1.0)
+      if self._random.uniform(0.0, 1.0) > 0.6:
+        audio = scipy.ndimage.zoom(audio, self._random.uniform(0.9, 1.1), order=3)  # or scipy.interpolate.interp2d
+      if self._random.uniform(0.0, 1.0) > 0.6:
+        audio = librosa.effects.time_stretch(audio, rate=self._random.uniform(0.9, 1.1))
+      if self._random.uniform(0.0, 1.0) > 0.6:
+        audio = librosa.effects.pitch_shift(audio, sr=sample_rate, n_steps=self._random.uniform(-3., 3.))
+    if self._demo_play_audio:
+      print("play %r" % audio_filename, "min/max:", numpy.min(audio), numpy.max(audio))
+      self._demo_audio_play(audio=audio, sample_rate=sample_rate)
+    window_len = 0.025
+    step_len = 0.010
+    mfccs = librosa.feature.mfcc(
+      audio, sr=sample_rate,
+      n_mfcc=self.FeatureDim,
+      hop_length=int(step_len * sample_rate), n_fft=int(window_len * sample_rate))
+    energy = librosa.feature.rmse(
+      audio,
+      hop_length=int(step_len * sample_rate), n_fft=int(window_len * sample_rate))
+    mfccs[0] = energy  # replace first MFCC with energy, per convention
+    assert mfccs.shape[0] == self.FeatureDim
+    if self._with_delta:
+      deltas = librosa.feature.delta(mfccs)
+      mfccs = numpy.vstack([mfccs, deltas])
+    mfccs = mfccs.transpose().astype("float32")
     return DatasetSeq(seq_idx=seq_idx, seq_tag=seq_tag, features=mfccs, targets=phone_id_seq)
 
 
