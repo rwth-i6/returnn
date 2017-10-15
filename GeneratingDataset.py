@@ -649,7 +649,7 @@ class NltkTimitDataset(CachedDataset2):
   Not sure how useful this is...
   """
 
-  FeatureDim = 13
+  FeatureDim = 40
   # via: https://github.com/kaldi-asr/kaldi/blob/master/egs/timit/s5/conf/phones.60-48-39.map
   PhoneMapTo39 = {
     'aa': 'aa', 'ae': 'ae', 'ah': 'ah', 'ao': 'aa', 'aw': 'aw', 'ax': 'ah', 'ax-h': 'ah', 'axr': 'er',
@@ -675,7 +675,7 @@ class NltkTimitDataset(CachedDataset2):
       self.num_inputs = self.FeatureDim * 2
     else:
       self.num_inputs = self.FeatureDim
-    self.labels = sorted(set(self.PhoneMapTo48.values()))
+    self.labels = sorted(set(self.PhoneMapTo39.values()))
     # Make 'sil' the 0 phoneme.
     self.labels.remove("sil")
     self.labels.insert(0, "sil")
@@ -781,7 +781,7 @@ class NltkTimitDataset(CachedDataset2):
     seq_tag = self._seq_tags[self._seq_order[seq_idx]]
     data_reader = self._data_reader
     phone_seq = data_reader.phones(seq_tag)
-    phone_id_seq = numpy.array([self.labels.index(self.PhoneMapTo48[p]) for p in phone_seq], dtype="int32")
+    phone_id_seq = numpy.array([self.labels.index(self.PhoneMapTo39[p]) for p in phone_seq], dtype="int32")
     # word_seq = data_reader.words(utter)
     spk = data_reader.spkrid(seq_tag)
     info = data_reader.spkrinfo(spk)
@@ -798,8 +798,8 @@ class NltkTimitDataset(CachedDataset2):
       if self._random.uniform(0.0, 1.0) > 0.6:
         audio = scipy.ndimage.zoom(audio, self._random.uniform(0.9, 1.1), order=3)  # or scipy.interpolate.interp2d
       if self._random.uniform(0.0, 1.0) > 0.6:
-        audio = librosa.effects.time_stretch(audio, rate=self._random.uniform(0.9, 1.1))
-      if self._random.uniform(0.0, 1.0) > 0.6:
+        audio = librosa.effects.time_stretch(audio, rate=self._random.uniform(0.9, 1.2))
+      if self._random.uniform(0.0, 1.0) > 0.7:
         audio = librosa.effects.pitch_shift(audio, sr=sample_rate, n_steps=self._random.uniform(-3., 3.))
     if self._demo_play_audio:
       print("play %r" % audio_filename, "min/max:", numpy.min(audio), numpy.max(audio))
