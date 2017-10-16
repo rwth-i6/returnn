@@ -103,8 +103,12 @@ class Runner(object):
         loss = self.engine.get_const_tensor(key="zero_loss", value=0.0)
       d["loss"] = loss
       for layer_name, loss in self.engine.network.loss_by_layer.items():
+        if self.engine.network.layers[layer_name].only_on_eval and self._should_train:
+          continue
         d["cost:%s" % layer_name] = loss
       for layer_name, error in self.engine.network.error_by_layer.items():
+        if self.engine.network.layers[layer_name].only_on_eval and self._should_train:
+          continue
         d["error:%s" % layer_name] = error
       for layer in self.engine.network.layers.values():
         if layer.target and layer.target.startswith("layer:"):

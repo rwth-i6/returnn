@@ -3060,6 +3060,95 @@ def encode_raw(x, axis=-1, seq_lens=None):
     return strings
 
 
+def map_labels(x, label_map, name="map_labels"):
+  """
+  :param tf.Tensor|tf.SparseTensor x: values of integer types
+  :param dict[int,int|None] label_map: should be dense on input
+  :param str name:
+  :return: mapped values
+  :rtype: tf.Tensor
+  """
+  if any([v is None for v in label_map.values()]):
+    assert isinstance(x, tf.SparseTensor), "not supported otherwise currently"
+    x = remove_labels(x, labels=[k for (k, v) in label_map.items() if v is None])
+    label_map = {k: v if v is not None else -1 for (k, v) in label_map.items()}
+  if isinstance(x, tf.SparseTensor):
+    return tf.SparseTensor(
+      indices=x.indices,
+      values=map_labels(x.values, label_map=label_map, name=name),
+      dense_shape=x.dense_shape)
+  with tf.name_scope(name):
+    assert label_map
+    assert 0 in label_map
+    assert len(label_map) - 1 in label_map
+    lookup = global_tensor(
+      lambda: tf.constant([label_map[i] for i in range(len(label_map))]),
+      name="label_map_lookup_id%i" % id(label_map))
+    y = tf.gather(lookup, indices=x, name="mapped")
+    return y
+
+
+def remove_labels(x, labels):
+  """
+  :param tf.SparseTensor x: sequences, i.e. the indices are interpret as (batch,time)
+  :param set[int]|list[int] labels:
+  :return: x where all provided labels are removed, and the indices are changed accordingly
+  """
+  if not labels:
+    return x
+  x.indices.set_shape((tf.TensorShape((None, 2))))
+  x.values.set_shape((tf.TensorShape((None,))))
+  x.dense_shape.set_shape(tf.TensorShape((2,)))
+  import numpy
+
+  # Much simpler for now to use tf.py_func.
+  def py_remove_labels(indices, values, dense_shape):
+    assert isinstance(indices, numpy.ndarray), "indices %r" % indices
+    assert isinstance(values, numpy.ndarray), "values %r" % indices
+    assert isinstance(dense_shape, numpy.ndarray), "dense_shape %r" % indices
+    indices_dtype = indices.dtype
+    values_dtype = values.dtype
+    dense_shape_dtype = dense_shape.dtype
+    assert dense_shape.shape == (2,), "dense_shape %r shape" % dense_shape  # (batch, time)
+    assert len(indices) == len(values), "len mismatch. shapes %r vs %r" % (indices.shape, values.shape)
+    indices = list(indices)
+    values = list(values)
+    i = 0
+    while i < len(indices):
+      if values[i] not in labels:
+        i += 1
+        continue
+      batch, time = indices[i]
+      # Remove it.
+      indices = indices[:i] + indices[i + 1:]
+      values = values[:i] + values[i + 1:]
+      for j in range(len(indices)):
+        if indices[j][0] != batch:
+          continue
+        if indices[j][1] < time:
+          continue
+        indices[j][1] -= 1
+    indices = numpy.array(indices, dtype=indices_dtype)
+    values = numpy.array(values, dtype=values_dtype)
+    dense_shape = numpy.array(
+      [dense_shape[0], max([idx[1] + 1 for idx in indices] or [0])], dtype=dense_shape_dtype)
+    return indices, values, dense_shape
+
+  with tf.name_scope("remove_labels"):
+    indices, values, dense_shape = tf.py_func(
+      py_remove_labels,
+      [x.indices, x.values, x.dense_shape],
+      [x.indices.dtype, x.values.dtype, x.dense_shape.dtype],
+      name="py_remove_labels")
+    assert isinstance(indices, tf.Tensor)
+    assert isinstance(values, tf.Tensor)
+    assert isinstance(dense_shape, tf.Tensor)
+    indices.set_shape((tf.TensorShape((None, 2))))
+    values.set_shape((tf.TensorShape((None,))))
+    dense_shape.set_shape(tf.TensorShape((2,)))
+    return tf.SparseTensor(indices=indices, values=values, dense_shape=dense_shape)
+
+
 def pad_zeros_in_axis(x, before=0, after=0, axis=0):
   """
   :param tf.Tensor x:
@@ -3228,6 +3317,8 @@ def view_as(x, dtype):
   """
   Does the numpy.view equivalent.
   Note that the current implementation is inefficient (uses tf.py_func) and CPU-only.
+  Also see `tf.tf.bitcast`.
+
   :param tf.Tensor x:
   :param tf.DType dtype:
   :return: x.view(dtype) equivalent (see numpy.view)

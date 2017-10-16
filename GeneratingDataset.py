@@ -642,10 +642,17 @@ class TimitDataset(CachedDataset2):
 
   Demo:
 
-      tools/dump-dataset.py "{'class': 'TimitDataset'}"
-      tools/dump-dataset.py "{'class': 'TimitDataset', 'demo_play_audio': True, 'random_permute_audio': True}"
+      tools/dump-dataset.py "{'class': 'TimitDataset', 'timit_dir': '...'}"
+      tools/dump-dataset.py "{'class': 'TimitDataset', 'timit_dir': '...', 'demo_play_audio': True, 'random_permute_audio': True}"
 
-  The full train data has 3696 utterances and the core test data has 192 utterances.
+  The full train data has 3696 utterances and the core test data has 192 utterances
+  (24-speaker core test set).
+
+  For some references:
+  https://github.com/ppwwyyxx/tensorpack/blob/master/examples/CTC-TIMIT/train-timit.py
+  https://www.cs.toronto.edu/~graves/preprint.pdf
+  https://arxiv.org/pdf/1303.5778.pdf
+  https://arxiv.org/pdf/0804.3269.pdf
   """
 
   FeatureDim = 40
@@ -669,6 +676,50 @@ class TimitDataset(CachedDataset2):
   Phones61 = PhoneMapTo39.keys()
   PhoneMapTo61 = {p: p for p in Phones61}
 
+  @classmethod
+  def _get_phone_map(cls, num_phones=61):
+    """
+    :param int num_phones:
+    :return: map 61-phone-set-phone -> num_phones-phone-set-phone
+    :rtype: dict[str,str|None]
+    """
+    return {61: cls.PhoneMapTo61, 48: cls.PhoneMapTo48, 39: cls.PhoneMapTo39}[num_phones]
+
+  @classmethod
+  def _get_labels(cls, phone_map):
+    """
+    :param dict[str,str|None] phone_map:
+    :rtype: list[str]
+    """
+    labels = sorted(set(filter(None, phone_map.values())))
+    # Make 'sil' the 0 phoneme.
+    if "pau" in labels:
+      labels.remove("pau")
+      labels.insert(0, "pau")
+    else:
+      labels.remove("sil")
+      labels.insert(0, "sil")
+    return labels
+
+  @classmethod
+  def get_label_map(cls, source_num_phones=61, target_num_phones=39):
+    """
+    :param int source_num_phones:
+    :param int target_num_phones:
+    :rtype: dict[int,int|None]
+    """
+    src_phone_map = cls._get_phone_map(source_num_phones)  # 61-phone -> src-phone
+    src_labels = cls._get_labels(src_phone_map)  # src-idx -> src-phone
+    tgt_phone_map = cls._get_phone_map(target_num_phones)  # 61-phone -> tgt-phone
+    tgt_labels = cls._get_labels(tgt_phone_map)  # tgt-idx -> tgt-phone
+    d = {i: src_labels[i] for i in range(source_num_phones)}  # src-idx -> src-phone|61-phone
+    if source_num_phones != 61:
+      src_phone_map_rev = {v: k for (k, v) in sorted(src_phone_map.items())}  # src-phone -> 61-phone
+      d = {i: src_phone_map_rev[v] for (i, v) in d.items()}  # src-idx -> 61-phone
+    d = {i: tgt_phone_map[v] for (i, v) in d.items()}  # src-idx -> tgt-phone
+    d = {i: tgt_labels.index(v) if v else None for (i, v) in d.items()}  # src-idx -> tgt-idx
+    return d
+
   def __init__(self, timit_dir, with_delta=False, num_phones=61,
                train=True, demo_play_audio=False, fixed_random_seed=None, random_permute_audio=None, **kwargs):
     super(TimitDataset, self).__init__(**kwargs)
@@ -678,14 +729,7 @@ class TimitDataset(CachedDataset2):
       self.num_inputs = self.FeatureDim
     assert num_phones in {61, 48, 39}
     self._phone_map = {61: self.PhoneMapTo61, 48: self.PhoneMapTo48, 39: self.PhoneMapTo39}[num_phones]
-    self.labels = sorted(set(filter(None, self._phone_map.values())))
-    # Make 'sil' the 0 phoneme.
-    if "pau" in self.labels:
-      self.labels.remove("pau")
-      self.labels.insert(0, "pau")
-    else:
-      self.labels.remove("sil")
-      self.labels.insert(0, "sil")
+    self.labels = self._get_labels(self._phone_map)
     self.num_outputs = {"data": (self.num_inputs, 2), "classes": (len(self.labels), 1)}
     self._timit_dir = timit_dir
     self._with_delta = with_delta

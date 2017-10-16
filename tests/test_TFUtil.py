@@ -892,3 +892,55 @@ def test_VariableAssigner_ResourceVariable():
   assigner = VariableAssigner(v)
   assigner.assign(value=2., session=session)
   assert_equal(session.run(v), 2.)
+
+
+def test_map_labels():
+  x = tf.constant([0, 1, 2, 3, 2, 1, 0])
+  label_map = {0: 1, 1: 2, 2: 3, 3: 0}
+  y = map_labels(x, label_map=label_map)
+  assert_equal(session.run(y).tolist(), [1, 2, 3, 0, 3, 2, 1])
+
+
+def test_map_labels_SparseTensor():
+  x = tf.SparseTensor(
+    indices=tf.constant([[0, 0], [0, 1], [1, 0], [1, 1]], dtype=tf.int64, name="x_indices"),
+    values=tf.constant([0, 1, 2, 3], name="x_values"),
+    dense_shape=tf.constant([3, 3], dtype=tf.int64, name="x_dense_shape"))
+  label_map = {0: 1, 1: 2, 2: 3, 3: 0}
+  y = map_labels(x, label_map=label_map)
+  assert isinstance(y, tf.SparseTensor)
+  y_eval = session.run(y)
+  assert isinstance(y_eval, tf.SparseTensorValue)
+  assert_equal(y_eval.values.tolist(), [1, 2, 3, 0])
+
+
+def test_sparse_labels():
+  x = tf.constant([[0, 1, 2, 3], [4, 5, 0, 0]], name="x")
+  seq_lens = tf.constant([4, 2], name="seq_lens")
+  y = sparse_labels(x, seq_lens=seq_lens)
+  y_eval = session.run(y)
+  assert isinstance(y_eval, tf.SparseTensorValue)
+  assert isinstance(y_eval.indices, numpy.ndarray)
+  assert isinstance(y_eval.values, numpy.ndarray)
+  assert isinstance(y_eval.dense_shape, numpy.ndarray)
+  assert_equal(y_eval.indices.tolist(), [[0, 0], [0, 1], [0, 2], [0, 3], [1, 0], [1, 1]])
+  assert_equal(y_eval.values.tolist(), [0, 1, 2, 3, 4, 5])
+  assert_equal(y_eval.dense_shape.tolist(), [2, 4])
+
+
+def test_remove_labels():
+  x = tf.SparseTensor(
+    indices=tf.constant([[0, 0], [0, 1], [0, 2], [1, 0]], dtype=tf.int64, name="x_indices"),
+    values=tf.constant([0, 1, 2, 3], name="x_values"),
+    dense_shape=tf.constant([3, 3], dtype=tf.int64, name="x_dense_shape"))
+  labels = {1}
+  y = remove_labels(x, labels=labels)
+  assert isinstance(y, tf.SparseTensor)
+  y_eval = session.run(y)
+  assert isinstance(y_eval, tf.SparseTensorValue)
+  assert isinstance(y_eval.indices, numpy.ndarray)
+  assert isinstance(y_eval.values, numpy.ndarray)
+  assert isinstance(y_eval.dense_shape, numpy.ndarray)
+  assert_equal(y_eval.indices.tolist(), [[0, 0], [0, 1], [1, 0]])
+  assert_equal(y_eval.values.tolist(), [0, 2, 3])
+  assert_equal(y_eval.dense_shape.tolist(), [3, 2])

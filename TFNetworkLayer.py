@@ -47,7 +47,7 @@ class LayerBase(object):
   def __init__(self, name, network, output=None, n_out=None, out_type=None, sources=(),
                target=None, loss=None, loss_scale=1.0, size_target=None,
                reuse_params=None,
-               L2=None, is_output_layer=None,
+               L2=None, is_output_layer=None, only_on_eval=False,
                copy_output_loss_from_source_idx=None,
                batch_norm=False,
                spatial_smoothing=0.0,
@@ -69,6 +69,7 @@ class LayerBase(object):
     :param LayerBase|None reuse_params: if given, will reuse the params from this layer. see self.var_creation_scope()
     :param float|None L2: for constraints
     :param bool|None is_output_layer:
+    :param bool only_on_eval: if True, this layer will only be calculated in eval
     :param int|None copy_output_loss_from_source_idx: if set, will copy output_loss from this source
     :param bool|dict batch_norm: see self.batch_norm()
     :param str|float initial_output: used for recurrent layer, see self.get_rec_initial_output()
@@ -111,6 +112,7 @@ class LayerBase(object):
     self.reuse_params = reuse_params
     self.L2 = L2
     self._is_output_layer = is_output_layer
+    self.only_on_eval = only_on_eval
     self.use_batch_norm = batch_norm
     self.spatial_smoothing = spatial_smoothing
     self.trainable = trainable
@@ -3177,11 +3179,19 @@ class EditDistanceLoss(Loss):
   class_name = "edit_distance"
   recurrent = True
 
-  def __init__(self, debug_print=False, **kwargs):
+  def __init__(self, debug_print=False, label_map=None, ctc_decode=False, **kwargs):
+    """
+    :param bool debug_print: will tf.Print the sequence
+    :param dict[int,int]|None label_map: before calculating the edit-distance, will apply this map
+    """
     super(EditDistanceLoss, self).__init__(**kwargs)
     self._output_sparse_labels = None
     self._target_sparse_labels = None
     self._debug_print = debug_print
+    self._label_map = label_map
+    self._ctc_decode = ctc_decode
+    if self._ctc_decode:
+      self.get_auto_output_layer_dim = lambda dim: dim + 1
 
   def init(self, output, output_with_activation=None, target=None):
     """
@@ -3191,26 +3201,70 @@ class EditDistanceLoss(Loss):
     """
     super(EditDistanceLoss, self).init(
       output=output, output_with_activation=output_with_activation, target=target)
-    assert output.sparse
     assert target.sparse
-    assert output.shape == target.shape
-    assert output.dim == target.dim
+    if output.sparse:
+      assert not self._ctc_decode
+      assert output.dim == target.dim
+      assert output.shape == target.shape
+    else:
+      assert self._ctc_decode
+      assert output.dim == target.dim + 1
+      assert output.shape == target.shape + (target.dim + 1,)
     self._output_sparse_labels = None
     self._target_sparse_labels = None
+
+  def _sparse_labels(self, output, seq_lens):
+    """
+    :param tf.Tensor output: batch-major, (batch, time) -> idx, of type int32
+    :param tf.Tensor seq_lens: (batch,) -> seq-len
+    :rtype: tf.SparseTensor
+    """
+    from TFUtil import sparse_labels
+    return sparse_labels(output, seq_lens=seq_lens)
+
+  def _map_labels(self, labels):
+    """
+    :param tf.SparseTensor labels:
+    :rtype: tf.SparseTensor
+    """
+    if not self._label_map:
+      return labels
+    from TFUtil import map_labels
+    return map_labels(labels, label_map=self._label_map)
+
+  def _ctc_decode_dense_output(self):
+    assert not self.output.sparse
+    logits = None
+    if self.output_with_activation:
+      logits = self.output_with_activation.get_logits()
+    if logits is None:
+      logits = tf.log(self.output.placeholder)
+    if not self.output.is_time_major:
+      logits = tf.transpose(logits, [1, 0, 2])  # (B,T,N) => (T,B,N)
+    seq_lens = self.output_seq_lens
+    decoded = self.base_network.cond_on_train(
+      lambda: tf.nn.ctc_greedy_decoder(inputs=logits, sequence_length=seq_lens)[0],
+      lambda: tf.nn.ctc_beam_search_decoder(inputs=logits, sequence_length=seq_lens)[0]
+    )
+    assert isinstance(decoded, tf.SparseTensor)
+    return decoded
 
   def _get_output_sparse_labels(self):
     if self._output_sparse_labels is not None:
       return self._output_sparse_labels
-    from TFUtil import sparse_labels
-    labels = sparse_labels(self.output.get_placeholder_as_batch_major(), seq_lens=self.output_seq_lens)
+    if self._ctc_decode:
+      labels = self._ctc_decode_dense_output()
+    else:
+      labels = self._sparse_labels(self.output.get_placeholder_as_batch_major(), seq_lens=self.output_seq_lens)
+    labels = self._map_labels(labels)
     self._output_sparse_labels = labels
     return labels
 
   def _get_target_sparse_labels(self):
     if self._target_sparse_labels is not None:
       return self._target_sparse_labels
-    from TFUtil import sparse_labels
-    labels = sparse_labels(self.target.get_placeholder_as_batch_major(), seq_lens=self.target_seq_lens)
+    labels = self._sparse_labels(self.target.get_placeholder_as_batch_major(), seq_lens=self.target_seq_lens)
+    labels = self._map_labels(labels)
     self._target_sparse_labels = labels
     return labels
 
