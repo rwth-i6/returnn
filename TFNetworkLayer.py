@@ -509,6 +509,9 @@ class LayerBase(object):
       return None
     self._init_loss()
     with tf.name_scope("error"):
+      if self.only_on_eval:
+        return self.network.cond_on_train(
+          lambda: tf.constant(0.0, name="only_on_eval_dummy_zero"), self.loss.get_error)
       return self.loss.get_error()
 
   def get_loss_normalization_factor(self):
@@ -3242,10 +3245,12 @@ class EditDistanceLoss(Loss):
     if not self.output.is_time_major:
       logits = tf.transpose(logits, [1, 0, 2])  # (B,T,N) => (T,B,N)
     seq_lens = self.output_seq_lens
-    decoded = self.base_network.cond_on_train(
-      lambda: tf.nn.ctc_greedy_decoder(inputs=logits, sequence_length=seq_lens)[0],
-      lambda: tf.nn.ctc_beam_search_decoder(inputs=logits, sequence_length=seq_lens)[0]
-    )
+    #decoded = self.base_network.cond_on_train(
+    #  lambda: tf.nn.ctc_greedy_decoder(inputs=logits, sequence_length=seq_lens)[0],
+    #  lambda: tf.nn.ctc_beam_search_decoder(inputs=logits, sequence_length=seq_lens)[0]
+    #)
+    # TODO...
+    decoded = tf.nn.ctc_beam_search_decoder(inputs=logits, sequence_length=seq_lens)[0][0]
     assert isinstance(decoded, tf.SparseTensor)
     return decoded
 
