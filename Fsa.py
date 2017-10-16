@@ -452,11 +452,12 @@ class Hmm:
     find a specific node in all edges
     :param int node: node number
     :param list edges: all edges
-    :return dict node_dict: dict of nodes where
+    :return node_dict: dict of nodes where
           key: edge index
           value: 0 = specific node is as source state idx
           value: 1 = specific node is target state idx
           value: 2 = specific node is source and target state idx
+    :rtype: dict
     """
     node_dict = {}
 
@@ -483,7 +484,8 @@ class Hmm:
     """
     builds a conforming allo syntax for mapping
     :param Edge edge: edge to build the allo syntax from
-    :return str allo_map: a allo syntax ready for mapping
+    :return allo_map: a allo syntax ready for mapping
+    :rtype: str
     """
     if edge.label == Edge.SIL:
       allo_map = "%s{#+#}" % '[SILENCE]'
@@ -735,7 +737,8 @@ class Store:
     """
     coverts the string labels to int labels
     :param list[Edge] edges: list of edges describing the fsa graph
-    :return list[Edges] edges:
+    :return edges:
+    :rtype: list[Edges]
     """
     for edge in edges:
       lbl = edge.label
