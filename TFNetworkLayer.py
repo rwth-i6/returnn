@@ -3586,7 +3586,8 @@ _LayerClassDict = {}  # type: dict[str,type(LayerBase)]
 
 def _init_layer_class_dict():
   import TFNetworkRecLayer
-  for v in list(globals().values()) + list(vars(TFNetworkRecLayer).values()):
+  import TFNetworkSigProcLayer
+  for v in list(globals().values()) + list(vars(TFNetworkRecLayer).values()) + list(vars(TFNetworkSigProcLayer).values()):
     if isinstance(v, type) and issubclass(v, LayerBase) and v.layer_class:
       assert v.layer_class not in _LayerClassDict
       _LayerClassDict[v.layer_class] = v
