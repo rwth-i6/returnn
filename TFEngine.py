@@ -297,6 +297,8 @@ class Runner(object):
     else:
       logdir = os.path.dirname(self.engine.model_filename) or os.getcwd()
     if logdir:
+      from Util import log_runtime_info_to_dir
+      log_runtime_info_to_dir(logdir, config=self.engine.config)
       logdir += "/%s" % self.data_provider.get_dataset_name()
       if not self._should_train:  # like eval
         logdir += "-%i" % self.engine.epoch

@@ -173,7 +173,10 @@ def describe_theano_version():
   return "%s (%s in %s)" % (version, git_info, tdir)
 
 def describe_tensorflow_version():
-  import tensorflow as tf
+  try:
+    import tensorflow as tf
+  except ImportError:
+    return "<TensorFlow ImportError>"
   try:
     tdir = os.path.dirname(tf.__file__)
   except Exception as e:
@@ -1777,3 +1780,53 @@ def camel_case_to_snake_case(name):
   """
   s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
   return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
+
+
+def log_runtime_info_to_dir(path, config):
+  """
+  This will write multiple logging information into the path.
+  It will create returnn.*.log with some meta information,
+  as well as copy the used config file.
+
+  :param str path: directory path
+  :param Config.Config config:
+  """
+  import os
+  import sys
+  import socket
+  import shutil
+  from Config import Config
+  content = [
+    "Time: %s" % time.strftime("%Y-%m-%d %H:%M:%S"),
+    "Call: %s" % (sys.argv,),
+    "Path: %s" % (os.getcwd(),),
+    "Returnn: %s" % (describe_crnn_version(),),
+    "TensorFlow: %s" % (describe_tensorflow_version(),),
+    "Config files: %s" % (config.files,),
+  ]
+  if not os.path.exists(path):
+    os.makedirs(path)
+  hostname = socket.gethostname()
+  with open("%s/returnn.%s.%i.%s.log" % (
+    path, hostname, os.getpid(), time.strftime("%Y-%m-%d-%H-%M-%S")), "w") as f:
+    f.write(
+      "Returnn log file:\n" +
+      "".join(["%s\n" % s for s in content]) +
+      "\n")
+  for fn in config.files:
+    base_fn = os.path.basename(fn)
+    target_fn = "%s/%s" % (path, base_fn)
+    if os.path.exists(target_fn):
+      continue
+    shutil.copy(fn, target_fn)
+    config_type = Config.get_config_file_type(fn)
+    comment_prefix = "#"
+    if config_type == "js":
+      comment_prefix = "//"
+    with open(target_fn, "a") as f:
+      f.write(
+        "\n\n\n" +
+        "".join(
+          ["%s Config-file copied for logging purpose by Returnn.\n" % comment_prefix] +
+          ["%s %s\n" % (comment_prefix, s) for s in content]) +
+        "\n")
