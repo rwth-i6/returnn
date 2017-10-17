@@ -25,7 +25,7 @@ class AlternatingRealToComplexLayer(_ConcatInputLayer):
 
 class AbsLayer(_ConcatInputLayer):
   """
-  This layer converts a input tensor into a output containing the aboslute value.
+  This layer converts a input tensor into a output containing the aboslute value as a float32.
   """
 
   layer_class = "abs"
@@ -34,7 +34,7 @@ class AbsLayer(_ConcatInputLayer):
     """
     """
     super(AbsLayer, self).__init__(**kwargs)
-    self.output.placeholder = tf.abs(self.input_data.placeholder)
+    self.output.placeholder = tf.cast(tf.abs(self.input_data.placeholder), dtype=tf.float32)
 
 class SplitConcatMultiChannel(_ConcatInputLayer):
   """
@@ -50,5 +50,8 @@ class SplitConcatMultiChannel(_ConcatInputLayer):
     """
     super(SplitConcatMultiChannel, self).__init__(**kwargs)
     self.output.placeholder = tf.reshape(self.input_data.placeholder, [tf.shape(self.input_data.placeholder)[0] * nr_of_channels, tf.shape(self.input_data.placeholder)[1], tf.shape(self.input_data.placeholder)[2] / nr_of_channels])
+    self.output.size_placeholder = self.input_data.size_placeholder.copy()
+    # work around to obtain result like numpy.repeat(size_placeholder, nr_of_channels)
+    self.output.size_placeholder[0] = tf.reshape(tf.tile(tf.reshape(self.output.size_placeholder[0], [-1, 1]), [1, nr_of_channels]), [-1]) 
 
 
