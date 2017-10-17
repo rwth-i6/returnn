@@ -47,7 +47,8 @@ class LayerBase(object):
   def __init__(self, name, network, output=None, n_out=None, out_type=None, sources=(),
                target=None, loss=None, loss_scale=1.0, size_target=None,
                reuse_params=None,
-               L2=None, is_output_layer=None, only_on_eval=False,
+               L2=None, darc1=None,
+               is_output_layer=None, only_on_eval=False,
                copy_output_loss_from_source_idx=None,
                batch_norm=False,
                spatial_smoothing=0.0,
@@ -68,6 +69,7 @@ class LayerBase(object):
     :param float loss_scale: scale factor for loss (1.0 by default)
     :param LayerBase|None reuse_params: if given, will reuse the params from this layer. see self.var_creation_scope()
     :param float|None L2: for constraints
+    :param float|None darc1: for constraints. see Generalization in Deep Learning, https://arxiv.org/abs/1710.05468
     :param bool|None is_output_layer:
     :param bool only_on_eval: if True, this layer will only be calculated in eval
     :param int|None copy_output_loss_from_source_idx: if set, will copy output_loss from this source
@@ -111,6 +113,7 @@ class LayerBase(object):
     " :type: dict[tf.Variable,tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject] "
     self.reuse_params = reuse_params
     self.L2 = L2
+    self.darc1 = darc1
     self._is_output_layer = is_output_layer
     self.only_on_eval = only_on_eval
     self.use_batch_norm = batch_norm
@@ -521,9 +524,17 @@ class LayerBase(object):
     return self.loss.get_normalization_factor()
 
   def get_params_l2_norm(self):
+    """
+    :return: scalar
+    :rtype: tf.Tensor
+    """
     return 2 * sum([tf.nn.l2_loss(param) for (name, param) in sorted(self.params.items())])
 
   def get_output_spatial_smoothing_energy(self):
+    """
+    :return: scalar. see :func:`TFUtil.spatial_smoothing_energy`
+    :rtype: tf.Tensor
+    """
     from TFUtil import spatial_smoothing_energy, flatten_with_seq_len_mask
     energy = spatial_smoothing_energy(self.output.placeholder, dim=self.output.dim)  # (batch,time)
     assert self.output.have_time_axis()
@@ -534,12 +545,43 @@ class LayerBase(object):
     energy = tf.reduce_sum(energy)
     return energy
 
+  def get_darc1(self):
+    """
+    DARC1, simplified Directly Approximately Regularizing Complexity (DARC), via
+    Generalization in Deep Learning, https://arxiv.org/abs/1710.05468
+
+    :return: scalar
+    :rtype: tf.Tensor
+    """
+    with tf.name_scope("darc1"):
+      if self.output_before_activation:
+        x = self.output_before_activation.x
+      else:
+        x = self.output.placeholder
+      mask = self.output.get_sequence_mask()  # (time,batch) or (batch,time), like output
+      size = tf.size(mask)  # time * batch
+      mask = tf.reshape(mask, (size,))  # (time*batch,)
+      x = tf.reshape(x, (size,) + self.output.shape[1:])  # (time*batch,dim)
+      x = tf.abs(x)
+      x = tf.where(mask, x, tf.zeros_like(x))
+      x = tf.reduce_sum(x, axis=0)  # (dim,)
+      assert isinstance(x, tf.Tensor)
+      assert x.get_shape().ndims == 1
+      x = tf.reduce_max(x)  # scalar
+      return x
+
   def get_constraints_value(self):
+    """
+    :return: None or scalar
+    :rtype: tf.Tensor|None
+    """
     c = 0
     if self.L2:
       c += self.L2 * self.get_params_l2_norm()
     if self.spatial_smoothing:
       c += self.spatial_smoothing * self.get_output_spatial_smoothing_energy()
+    if self.darc1:
+      c += self.darc1 * self.get_darc1()
     if c is 0:
       return None
     return c
