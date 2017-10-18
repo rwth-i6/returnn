@@ -1008,6 +1008,9 @@ class Engine(object):
     output_layer = self._get_output_layer()
     target = self.network.get_default_target()
 
+    assert output_file
+    assert not os.path.exists(output_file)
+    print("Forwarding to HDF file: %s" % output_file, file=log.v2)
     cache = h5py.File(output_file, "w")
     cache.attrs['numTimesteps'] = 0
     cache.attrs['inputPattSize'] = data.num_inputs

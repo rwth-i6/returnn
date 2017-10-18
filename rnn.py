@@ -382,10 +382,11 @@ def executeMainTask():
   elif task == 'forward':
     assert eval_data is not None, 'no eval data provided'
     combine_labels = config.value('combine_labels', '')
-    engine.use_search_flag = True
-    config.set('load_epoch', config.int('epoch', 0))
+    engine.use_search_flag = config.bool("forward_use_search", False)
+    if config.has("epoch"):
+      config.set('load_epoch', config.int('epoch', 0))
     engine.init_network_from_config(config)
-    output_file = config.value('output_file', 'net-model/dump-fwd-epoch-%i.hdf' % engine.epoch)
+    output_file = config.value('output_file', 'dump-fwd-epoch-%i.hdf' % engine.epoch)
     engine.forward_to_hdf(
       data=eval_data, output_file=output_file, combine_labels=combine_labels,
       batch_size=config.int('forward_batch_size', 0))
