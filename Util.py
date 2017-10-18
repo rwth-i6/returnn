@@ -140,12 +140,27 @@ def git_describeHeadVersion(gitdir="."):
   is_dirty = git_isDirty(gitdir=gitdir)
   return "%s--git-%s%s" % (cdate, rev, "-dirty" if is_dirty else "")
 
+_crnn_version_info = None
+
 def describe_crnn_version():
+  """
+  :rtype: str
+  :return: string like "20171017.163840--git-ab2a1da", via :func:`git_describeHeadVersion`
+  """
+  # Note that we cache it to avoid any issues e.g. when we changed the directory afterwards
+  # so that a relative __file__ would be invalid (which we hopefully don't do).
+  # Or to not trigger any pthread_atfork bugs,
+  # e.g. from OpenBlas (https://github.com/tensorflow/tensorflow/issues/13802),
+  # which also hopefully should not happen, but it might.
+  global _crnn_version_info
+  if _crnn_version_info:
+    return _crnn_version_info
   mydir = os.path.dirname(__file__)
   try:
-    return git_describeHeadVersion(gitdir=mydir)
+    _crnn_version_info = git_describeHeadVersion(gitdir=mydir)
   except Exception as e:
-    return "unknown(git exception: %r)" % e
+    _crnn_version_info = "unknown(git exception: %r)" % e
+  return _crnn_version_info
 
 def describe_theano_version():
   import theano
