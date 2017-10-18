@@ -2051,8 +2051,11 @@ class ChoiceLayer(LayerBase):
         beam_size=beam_size)
       if input_type == "regression":
         # It's not a probability distribution, so there is no search here.
+        net_batch_dim = self.network.get_batch_dim()
         assert self.search_choices.beam_size == 1
         self.output = self.sources[0].output.copy_compatible_to(self.output)
+        self.search_choices.src_beams = tf.zeros((net_batch_dim, 1), dtype=tf.int32)
+        self.search_choices.set_beam_scores(self.search_choices.src_layer.search_choices.beam_scores)
       else:
         net_batch_dim = self.network.get_batch_dim()
         assert self.search_choices.src_layer, (
