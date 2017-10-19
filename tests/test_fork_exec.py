@@ -16,9 +16,11 @@ from __future__ import print_function
 
 import os
 import sys
-import better_exchook
 from nose.tools import assert_equal, assert_is_instance
 from pprint import pprint
+
+sys.path += ["."]  # Python 3 hack
+import better_exchook
 
 my_dir = os.path.dirname(os.path.abspath(__file__))
 
