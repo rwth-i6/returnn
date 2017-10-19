@@ -177,10 +177,11 @@ def test_demo_start_subprocess():
     print("Not checking for atfork handler output.")
 
 
-def patched_test_demo_start_subprocess():
+def patched_check_demo_start_subprocess():
   """
   Just like test_demo_start_subprocess(), but here we assert that no atfork handlers are executed.
   """
+  assert_equal(os.environ.get("__RETURNN_ATFORK_PATCHED"), "1")
   ls = run_demo_check_output("demo_start_subprocess")
   pprint(ls)
   ls = filter_demo_output(ls)
@@ -188,7 +189,7 @@ def patched_test_demo_start_subprocess():
   assert 'Hello from subprocess.' in ls
   ls = [l for l in ls if l != "Ignoring pthread_atfork call!"]
   pprint(ls)
-  assert ls == ['Hello from subprocess.']
+  assert_equal(ls, ['Hello from subprocess.'])
 
 
 def test_demo_start_subprocess_patched():
@@ -196,7 +197,7 @@ def test_demo_start_subprocess_patched():
   from subprocess import check_call
   env = os.environ.copy()
   env["LD_PRELOAD"] = get_patch_atfork_lib()
-  check_call([sys.executable, __file__, "patched_test_demo_start_subprocess"], env=env)
+  check_call([sys.executable, __file__, "patched_check_demo_start_subprocess"], env=env)
 
 
 if __name__ == "__main__":

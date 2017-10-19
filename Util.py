@@ -2145,13 +2145,13 @@ def maybe_restart_returnn_with_atfork_patch():
   if os.environ.get("__RETURNN_ATFORK_PATCHED") == "1":
     print("Running with patched atfork.")
     return
-  if os.environ.get("__RETURN_TRY_ATFORK_PATCHED") == "1":
+  if os.environ.get("__RETURNN_TRY_ATFORK_PATCHED") == "1":
     print("Patching atfork did not work! Will continue anyway.")
     return
   lib = get_patch_atfork_lib()
   env = os.environ.copy()
   env["LD_PRELOAD"] = lib
-  env["__RETURN_TRY_ATFORK_PATCHED"] = "1"
+  env["__RETURNN_TRY_ATFORK_PATCHED"] = "1"
   print("Restarting Returnn with atfork patch...", sys.executable, sys.argv)
   sys.stdout.flush()
   os.execvpe(sys.executable, [sys.executable] + sys.argv, env)
