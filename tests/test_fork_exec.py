@@ -57,6 +57,8 @@ class CLib:
     self._lib = ctypes.cdll.LoadLibrary(self.so_file)
     self._lib.register_hello_from_child.restype = None  # void
     self._lib.register_hello_from_child.argtypes = ()
+    self._lib.register_hello_from_fork_prepare.restype = None  # void
+    self._lib.register_hello_from_fork_prepare.argtypes = ()
     self._lib.set_magic_number.restype = None  # void
     self._lib.set_magic_number.argtypes = (ctypes.c_long,)
 
@@ -66,6 +68,9 @@ class CLib:
   def register_hello_from_child(self):
     self._lib.register_hello_from_child()
 
+  def register_hello_from_fork_prepare(self):
+    self._lib.register_hello_from_fork_prepare()
+
 
 clib = CLib()
 
@@ -74,6 +79,7 @@ def demo_hello_from_fork():
   print("Hello.")
   clib.set_magic_number(3)
   clib.register_hello_from_child()
+  clib.register_hello_from_fork_prepare()
   sys.stdout.flush()
   pid = os.fork()
   if pid == 0:
@@ -88,6 +94,7 @@ def demo_start_subprocess():
   print("Hello.")
   clib.set_magic_number(5)
   clib.register_hello_from_child()
+  clib.register_hello_from_fork_prepare()
   sys.stdout.flush()
   from subprocess import check_call
   # Right now (2017-10-19), CPython will use subprocess_fork_exec which
@@ -129,6 +136,7 @@ def test_demo_hello_from_fork():
   assert_equal(set(ls), {
     'Hello from child after fork.',
     'Hello from child atfork, magic number 3.',
+    'Hello from atfork prepare, magic number 3.',
     'Hello from parent after fork.'})
 
 
@@ -152,6 +160,7 @@ def test_demo_start_subprocess():
   if old:
     print("atfork handler should have been called.")
     assert 'Hello from child atfork, magic number 5.' in ls
+    assert 'Hello from atfork prepare, magic number 5.' in ls
   else:
     print("Not checking for atfork handler output.")
 

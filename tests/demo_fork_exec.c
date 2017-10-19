@@ -14,6 +14,15 @@ void hello_from_child() {
     fflush(stdout);
 }
 
+void hello_from_fork_prepare() {
+    printf("Hello from atfork prepare, magic number %li.\n", magic_number);
+    fflush(stdout);
+}
+
 void register_hello_from_child() {
     pthread_atfork(0, 0, &hello_from_child);
+}
+
+void register_hello_from_fork_prepare() {
+    pthread_atfork(&hello_from_fork_prepare, 0, 0);
 }
