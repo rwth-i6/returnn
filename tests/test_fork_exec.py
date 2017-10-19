@@ -22,39 +22,47 @@ from pprint import pprint
 
 my_dir = os.path.dirname(os.path.abspath(__file__))
 
+c_code = """
+#include <stdio.h>
+#include <pthread.h>
+// int pthread_atfork(void (*prepare)(void), void (*parent)(void), void (*child)(void));
+
+static long magic_number = 0;
+
+void set_magic_number(long i) {
+    magic_number = i;
+}
+
+void hello_from_child() {
+    printf("Hello from child atfork, magic number %li.\\n", magic_number);
+    fflush(stdout);
+}
+
+void hello_from_fork_prepare() {
+    printf("Hello from atfork prepare, magic number %li.\\n", magic_number);
+    fflush(stdout);
+}
+
+void register_hello_from_child() {
+    pthread_atfork(0, 0, &hello_from_child);
+}
+
+void register_hello_from_fork_prepare() {
+    pthread_atfork(&hello_from_fork_prepare, 0, 0);
+}
+"""
+
 
 class CLib:
-  c_file = "%s/demo_fork_exec.c" % my_dir
-  so_file = "%s/demo_fork_exec.so" % my_dir
-
   def __init__(self):
-    if not os.path.exists(self.so_file) or os.stat(self.c_file).st_mtime >= os.stat(self.so_file).st_mtime:
-      self._compile()
     self._load_lib()
 
-  def _compile(self):
-    # see OpCodeCompiler for some reference
-    common_opts = ["-shared", "-O0"]
-    if sys.platform == "darwin":
-      common_opts += ["-undefined", "dynamic_lookup"]
-    common_opts += ["-fPIC"]
-    common_opts += ["-g"]
-    cmd_args = ["gcc"] + common_opts + [self.c_file, "-o", self.so_file]
-    from subprocess import Popen, PIPE, STDOUT, CalledProcessError
-    print("Compiler call: %s" % " ".join(cmd_args))
-    proc = Popen(cmd_args, stdout=PIPE, stderr=STDOUT)
-    stdout, stderr = proc.communicate()
-    assert stderr is None  # should only have stdout
-    if proc.returncode != 0:
-      print("Compiling failed.")
-      print("Original stdout/stderr:")
-      print(stdout.decode("utf8"))
-      raise CalledProcessError(returncode=proc.returncode, cmd=cmd_args)
-    assert os.path.exists(self.so_file)
-
   def _load_lib(self):
+    from Util import NativeCodeCompiler
+    native = NativeCodeCompiler(
+      base_name="test_fork_exec", code_version=1, code=c_code, is_cpp=False)
+    self._lib = native.load_lib_ctypes()
     import ctypes
-    self._lib = ctypes.cdll.LoadLibrary(self.so_file)
     self._lib.register_hello_from_child.restype = None  # void
     self._lib.register_hello_from_child.argtypes = ()
     self._lib.register_hello_from_fork_prepare.restype = None  # void
