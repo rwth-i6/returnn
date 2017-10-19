@@ -8,7 +8,7 @@ and those can crash/deadlock in some cases.
 https://github.com/tensorflow/tensorflow/issues/13802
 https://github.com/xianyi/OpenBLAS/issues/240
 https://trac.sagemath.org/ticket/22021
-https://bugs.python.org/msg304587
+https://bugs.python.org/issue31814
 
 """
 
@@ -24,7 +24,7 @@ import better_exchook
 
 my_dir = os.path.dirname(os.path.abspath(__file__))
 
-c_code = """
+c_code_at_fork_demo = """
 #include <stdio.h>
 #include <pthread.h>
 // int pthread_atfork(void (*prepare)(void), void (*parent)(void), void (*child)(void));
@@ -55,14 +55,27 @@ void register_hello_from_fork_prepare() {
 """
 
 
-class CLib:
+c_code_patch_atfork = """
+#include <stdio.h>
+
+// int pthread_atfork(void (*prepare)(void), void (*parent)(void), void (*child)(void));
+
+int pthread_atfork(void (*prepare)(void), void (*parent)(void), void (*child)(void)) {
+  printf("Ignoring pthread_atfork call!\\n");
+  fflush(stdout);
+  return 0;
+}
+"""
+
+
+class CLibAtForkDemo:
   def __init__(self):
     self._load_lib()
 
   def _load_lib(self):
     from Util import NativeCodeCompiler
     native = NativeCodeCompiler(
-      base_name="test_fork_exec", code_version=1, code=c_code, is_cpp=False)
+      base_name="test_fork_exec", code_version=1, code=c_code_at_fork_demo, is_cpp=False)
     self._lib = native.load_lib_ctypes()
     import ctypes
     self._lib.register_hello_from_child.restype = None  # void
@@ -82,15 +95,23 @@ class CLib:
     self._lib.register_hello_from_fork_prepare()
 
 
-clib = CLib()
+clib_at_fork_demo = CLibAtForkDemo()
+
+
+def get_patch_atfork_lib():
+  from Util import NativeCodeCompiler
+  native = NativeCodeCompiler(
+    base_name="patch_atfork", code_version=1, code=c_code_patch_atfork, is_cpp=False)
+  fn = native.get_lib_filename()
+  return fn
 
 
 def demo_hello_from_fork():
   print("Hello.")
-  clib.set_magic_number(3)
-  clib.register_hello_from_child()
-  clib.register_hello_from_fork_prepare()
   sys.stdout.flush()
+  clib_at_fork_demo.set_magic_number(3)
+  clib_at_fork_demo.register_hello_from_child()
+  clib_at_fork_demo.register_hello_from_fork_prepare()
   pid = os.fork()
   if pid == 0:
     print("Hello from child after fork.")
@@ -102,10 +123,10 @@ def demo_hello_from_fork():
 
 def demo_start_subprocess():
   print("Hello.")
-  clib.set_magic_number(5)
-  clib.register_hello_from_child()
-  clib.register_hello_from_fork_prepare()
   sys.stdout.flush()
+  clib_at_fork_demo.set_magic_number(5)
+  clib_at_fork_demo.register_hello_from_child()
+  clib_at_fork_demo.register_hello_from_fork_prepare()
   from subprocess import check_call
   # Right now (2017-10-19), CPython will use subprocess_fork_exec which
   # uses fork+exec, so this will call the atfork handler.
@@ -173,6 +194,27 @@ def test_demo_start_subprocess():
     assert 'Hello from atfork prepare, magic number 5.' in ls
   else:
     print("Not checking for atfork handler output.")
+
+
+def patched_test_demo_start_subprocess():
+  """
+  Just like test_demo_start_subprocess(), but here we assert that no atfork handlers are executed.
+  """
+  ls = run_demo_check_output("demo_start_subprocess")
+  pprint(ls)
+  ls = filter_demo_output(ls)
+  pprint(ls)
+  assert 'Hello from subprocess.' in ls
+  ls = [l for l in ls if l != "Ignoring pthread_atfork call!"]
+  pprint(ls)
+  assert ls == ['Hello from subprocess.']
+
+
+def test_demo_start_subprocess_patched():
+  from subprocess import check_call
+  env = os.environ.copy()
+  env["LD_PRELOAD"] = get_patch_atfork_lib()
+  check_call([sys.executable, __file__, "patched_test_demo_start_subprocess"], env=env)
 
 
 if __name__ == "__main__":

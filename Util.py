@@ -2097,3 +2097,8 @@ class NativeCodeCompiler(object):
     import ctypes
     self._ctypes_lib = ctypes.cdll.LoadLibrary(self._so_filename)
     return self._ctypes_lib
+
+  def get_lib_filename(self):
+    self._maybe_compile()
+    return self._so_filename
+
