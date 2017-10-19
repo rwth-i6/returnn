@@ -319,6 +319,9 @@ def init(configFilename=None, commandLineOptions=(), config_updates=None, extra_
   initBetterExchook()
   initThreadJoinHack()
   initConfig(configFilename=configFilename, commandLineOptions=commandLineOptions, extra_updates=config_updates)
+  if config.bool("patch_atfork", False):
+    from Util import maybe_restart_returnn_with_atfork_patch
+    maybe_restart_returnn_with_atfork_patch()
   initLog()
   if extra_greeting:
     print(extra_greeting, file=log.v1)

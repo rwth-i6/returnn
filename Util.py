@@ -2102,3 +2102,57 @@ class NativeCodeCompiler(object):
     self._maybe_compile()
     return self._so_filename
 
+
+_c_code_patch_atfork = """
+#include <stdio.h>
+#include <stdlib.h>
+
+int pthread_atfork(void (*prepare)(void), void (*parent)(void), void (*child)(void)) {
+  printf("Ignoring pthread_atfork call!\\n");
+  fflush(stdout);
+  return 0;
+}
+
+__attribute__((constructor))
+void init() {
+  setenv("__RETURNN_ATFORK_PATCHED", "1", 1);
+}
+"""
+
+
+def get_patch_atfork_lib():
+  native = NativeCodeCompiler(
+    base_name="patch_atfork", code_version=2, code=_c_code_patch_atfork, is_cpp=False)
+  fn = native.get_lib_filename()
+  return fn
+
+
+def maybe_restart_returnn_with_atfork_patch():
+  """
+  What we want: subprocess.Popen to always work.
+  Problem: It uses fork+exec internally in subprocess_fork_exec, via _posixsubprocess.fork_exec.
+  That is a problem because fork can trigger any atfork handlers registered via pthread_atfork,
+  and those can crash/deadlock in some cases.
+
+  https://github.com/tensorflow/tensorflow/issues/13802
+  https://github.com/xianyi/OpenBLAS/issues/240
+  https://trac.sagemath.org/ticket/22021
+  https://bugs.python.org/issue31814
+
+  The solution here: Just override pthread_atfork, via LD_PRELOAD.
+  See also tests/test_fork_exec.py for a demo.
+  """
+  if os.environ.get("__RETURNN_ATFORK_PATCHED") == "1":
+    print("Running with patched atfork.")
+    return
+  if os.environ.get("__RETURN_TRY_ATFORK_PATCHED") == "1":
+    print("Patching atfork did not work! Will continue anyway.")
+    return
+  lib = get_patch_atfork_lib()
+  env = os.environ.copy()
+  env["LD_PRELOAD"] = lib
+  env["__RETURN_TRY_ATFORK_PATCHED"] = "1"
+  print("Restarting Returnn with atfork patch...", sys.executable, sys.argv)
+  sys.stdout.flush()
+  os.execvpe(sys.executable, [sys.executable] + sys.argv, env)
+  print("execvpe did not work?")

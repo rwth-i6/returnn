@@ -55,17 +55,6 @@ void register_hello_from_fork_prepare() {
 """
 
 
-c_code_patch_atfork = """
-#include <stdio.h>
-
-// int pthread_atfork(void (*prepare)(void), void (*parent)(void), void (*child)(void));
-
-int pthread_atfork(void (*prepare)(void), void (*parent)(void), void (*child)(void)) {
-  printf("Ignoring pthread_atfork call!\\n");
-  fflush(stdout);
-  return 0;
-}
-"""
 
 
 class CLibAtForkDemo:
@@ -96,14 +85,6 @@ class CLibAtForkDemo:
 
 
 clib_at_fork_demo = CLibAtForkDemo()
-
-
-def get_patch_atfork_lib():
-  from Util import NativeCodeCompiler
-  native = NativeCodeCompiler(
-    base_name="patch_atfork", code_version=1, code=c_code_patch_atfork, is_cpp=False)
-  fn = native.get_lib_filename()
-  return fn
 
 
 def demo_hello_from_fork():
@@ -211,6 +192,7 @@ def patched_test_demo_start_subprocess():
 
 
 def test_demo_start_subprocess_patched():
+  from Util import get_patch_atfork_lib
   from subprocess import check_call
   env = os.environ.copy()
   env["LD_PRELOAD"] = get_patch_atfork_lib()
