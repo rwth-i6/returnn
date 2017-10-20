@@ -82,6 +82,52 @@ class BatchMedianPoolingLayer(_ConcatInputLayer):
     self.output.placeholder = r[-1]
     self.output.size_placeholder = {self.output.time_dim_axis_excluding_batch: tf.strided_slice(self.input_data.size_placeholder[self.input_data.time_dim_axis_excluding_batch], [0], tf.shape(self.input_data.size_placeholder[self.input_data.time_dim_axis_excluding_batch]), [pool_size])}
 
+class LogLayer(_ConcatInputLayer):
+  """
+  Applies logarithm to input 
+  """
+
+  layer_class = "logarithm"
+
+  def __init__(self, base=10, **kwargs):
+    """
+    :param base float32: base of the logarithm
+    """
+    super(LogLayer, self).__init__(**kwargs)
+    self.output.placeholder = tf.log(self.input_data.placeholder)/tf.log(tf.constant(base, dtype=tf.float32))
+
+class MelFilterbankLayer(_ConcatInputLayer):
+  """
+  This layer applies the log Mel filterbank to the input 
+  """
+
+  layer_class = "mel_filterbank"
+
+  def __init__(self, sampling_rate=16000, fft_size=1024, nr_of_filters=80, **kwargs):
+    """
+    :param sampling_rate int: sampling rate of the signal which the input originates from
+    :param fft_size int: fft_size with which the time signal was transformed into the intput
+    :param nr_of_filters int: number of output filter bins
+    """
+    if ('n_out' in kwargs and (kwargs['n_out'] != nr_of_filters)):
+        raise Exception('argument n_out of layer MelFilterbankLayer can not be different from nr_of_filters')
+    kwargs['n_out'] = nr_of_filters
+    super(MelFilterbankLayer, self).__init__(**kwargs)
+
+    from tfSi6Proc.basics.transformation.fourier import tfMelFilterBank
+    
+    # set order of axes
+    self.output.batch_dim_axis = 0
+    self.output.time_dim_axis = 1
+    self.output.feature_dim_axis = 2
+    #- ensure correct ordering of input placeholder
+    input_placeholder = self.input_data.placeholder
+    if ((self.input_data.batch_dim_axis != self.output.batch_dim_axis) or (self.input_data.time_dim_axis != self.output.time_dim_axis) or (self.input_data.feature_dim_axis != self.output.feature_dim_axis)):
+      input_placeholder = tf.transpose(input_placeholder, [self.input_data.batch_dim_axis, self.input_data.time_dim_axis, self.input_data.feature_dim_axis])
+
+    mel_fbank_mat = tfMelFilterBank(0, sampling_rate/2, sampling_rate, fft_size, nr_of_filters)
+    self.output.placeholder = tf.einsum('btf,bfc->btc', input_placeholder, tf.tile(tf.expand_dims(mel_fbank_mat, axis=0), [tf.shape(input_placeholder)[0], 1, 1]))
+
 class MaskBasedGevBeamformingLayer(LayerBase):
   """
   This layer applies GEV beamforming to a multichannel signal. The different channels are assumed to be concatenated to the
