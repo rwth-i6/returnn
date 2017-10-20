@@ -297,6 +297,8 @@ class Runner(object):
     else:
       logdir = os.path.dirname(self.engine.model_filename) or os.getcwd()
     if logdir:
+      from Util import log_runtime_info_to_dir
+      log_runtime_info_to_dir(logdir, config=self.engine.config)
       logdir += "/%s" % self.data_provider.get_dataset_name()
       if not self._should_train:  # like eval
         logdir += "-%i" % self.engine.epoch
@@ -1006,6 +1008,9 @@ class Engine(object):
     output_layer = self._get_output_layer()
     target = self.network.get_default_target()
 
+    assert output_file
+    assert not os.path.exists(output_file)
+    print("Forwarding to HDF file: %s" % output_file, file=log.v2)
     cache = h5py.File(output_file, "w")
     cache.attrs['numTimesteps'] = 0
     cache.attrs['inputPattSize'] = data.num_inputs

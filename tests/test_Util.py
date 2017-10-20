@@ -153,3 +153,23 @@ def test_try_get_caller_name():
 
 def test_camel_case_to_snake_case():
   assert_equal(camel_case_to_snake_case("CamelCaseOp"), "camel_case_op")
+
+
+def test_NativeCodeCompiler():
+  native = NativeCodeCompiler(
+    base_name="test_NativeCodeCompiler", code_version=1, code="""
+    static int magic = 13;
+
+    extern "C" void set_magic(int i) { magic = i; }
+    extern "C" int get_magic() { return magic; } 
+    """)
+  import ctypes
+  lib = native.load_lib_ctypes()
+  lib.set_magic.restype = None  # void
+  lib.set_magic.argtypes = (ctypes.c_int,)
+  lib.get_magic.restype = ctypes.c_int
+  lib.get_magic.argtypes = ()
+
+  assert_equal(lib.get_magic(), 13)
+  lib.set_magic(42)
+  assert_equal(lib.get_magic(), 42)

@@ -319,6 +319,9 @@ def init(configFilename=None, commandLineOptions=(), config_updates=None, extra_
   initBetterExchook()
   initThreadJoinHack()
   initConfig(configFilename=configFilename, commandLineOptions=commandLineOptions, extra_updates=config_updates)
+  if config.bool("patch_atfork", False):
+    from Util import maybe_restart_returnn_with_atfork_patch
+    maybe_restart_returnn_with_atfork_patch()
   initLog()
   if extra_greeting:
     print(extra_greeting, file=log.v1)
@@ -381,10 +384,12 @@ def executeMainTask():
     engine.eval_model()
   elif task == 'forward':
     assert eval_data is not None, 'no eval data provided'
-    assert config.has('output_file'), 'no output file provided'
     combine_labels = config.value('combine_labels', '')
-    output_file = config.value('output_file', '')
+    engine.use_search_flag = config.bool("forward_use_search", False)
+    if config.has("epoch"):
+      config.set('load_epoch', config.int('epoch', 0))
     engine.init_network_from_config(config)
+    output_file = config.value('output_file', 'dump-fwd-epoch-%i.hdf' % engine.epoch)
     engine.forward_to_hdf(
       data=eval_data, output_file=output_file, combine_labels=combine_labels,
       batch_size=config.int('forward_batch_size', 0))

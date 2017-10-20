@@ -6,7 +6,7 @@ from tensorflow.python.client import device_lib
 import contextlib
 import os
 import sys
-from Util import NotSpecified
+from Util import NotSpecified, NativeCodeCompiler
 
 
 def tf_version_tuple():
@@ -2100,244 +2100,51 @@ class CudaEnv(object):
     return cls._instance
 
 
-class OpCodeCompiler(object):
+class OpCodeCompiler(NativeCodeCompiler):
   """
   Helper class to compile TF ops on-the-fly, similar as Theano.
   https://www.tensorflow.org/versions/master/how_tos/adding_an_op/
   """
 
-  def __init__(self, base_name, code_version, code, c_macro_defines=None, ld_flags=None, include_deps=None,
-               static_version_name=None, should_cleanup_old_all=True, should_cleanup_old_mydir=False,
-               use_cuda_if_available=True, verbose=False):
-    """
-    :param str base_name: base name for the module, e.g. "zero_out"
-    :param int|tuple[int] code_version: check for the cache whether to reuse
-    :param str code: the source code itself
-    :param dict[str,str|int]|None c_macro_defines: e.g. {"TENSORFLOW": 1}
-    :param list[str]|None ld_flags: e.g. ["-lblas"]
-    :param list[str]|None include_deps: if provided and an existing lib file, we will check if any dependency is newer
-      and we need to recompile. we could also do it automatically via -MD but that seems overkill and too slow.
-    :param str|None static_version_name: normally, we use .../base_name/hash as the dir
-      but this would use .../base_name/static_version_name.
-    :param bool should_cleanup_old_all: whether we should look in the cache dir
-      and check all ops if we can delete some old ones which are older than some limit (self._cleanup_time_limit_days)
-    :param bool should_cleanup_old_mydir: whether we should delete our op dir before we compile there.
-    :param bool verbose: be slightly more verbose
-    """
-    from Util import get_temp_dir
-    self.verbose = verbose
-    self.cache_dir = "%s/returnn_tf_cache" % get_temp_dir()
-    self._include_path = tf.sysconfig.get_include()  # e.g. "...python2.7/site-packages/tensorflow/include"
-    self.base_name = base_name
-    self.code_version = code_version
-    self.code = code
-    self.c_macro_defines = c_macro_defines or {}
-    self.ld_flags = ld_flags or []
-    self.include_deps = include_deps
-    self.static_version_name = static_version_name
+  CacheDirName = "returnn_tf_cache/ops"
+
+  def __init__(self, use_cuda_if_available=True, include_paths=(), **kwargs):
     self._cuda_env = use_cuda_if_available and CudaEnv.get_instance()
-    self._code_hash = self._make_code_hash()
-    self._info_dict = self._make_info_dict()
-    self._hash = self._make_hash()
-    self._mod = None
-    if should_cleanup_old_all:
-      self._cleanup_old()
-    self._should_cleanup_old_mydir = should_cleanup_old_mydir
-    if self.verbose:
-      print("OpCodeCompiler: %r" % self)
+    include_paths = include_paths + (
+      tf.sysconfig.get_include(),)  # e.g. "...python2.7/site-packages/tensorflow/include"
+    super(OpCodeCompiler, self).__init__(include_paths=include_paths, **kwargs)
+    self._tf_mod = None
 
-  def __repr__(self):
-    return "<OpCodeCompiler %r in %r>" % (self.base_name, self._mod_path)
-
-  @property
-  def _mod_path(self):
-    return "%s/ops/%s/%s" % (self.cache_dir, self.base_name, self.static_version_name or self._hash[:10])
-
-  @property
-  def _info_filename(self):
-    return "%s/info.py" % (self._mod_path,)
-
-  @property
-  def _so_filename(self):
-    return "%s/%s.so" % (self._mod_path, self.base_name)
-
-  @property
-  def _cc_filename(self):
-    return "%s/%s.cc" % (self._mod_path, self.base_name)
-
-  _cleanup_time_limit_days = 60
-
-  def _cleanup_old(self):
-    mod_path = self._mod_path  # .../base_name/hash
-    base_mod_path = os.path.dirname(mod_path)  # .../base_name
-    my_mod_path_name = os.path.basename(mod_path)
-    if not os.path.exists(base_mod_path):
-      return
-    import time
-    from Util import hms, LockFile
-    cleanup_time_limit_secs = self._cleanup_time_limit_days * 24 * 60 * 60
-    for p in os.listdir(base_mod_path):
-      if p == my_mod_path_name:
-        continue
-      full_dir_path = "%s/%s" % (base_mod_path, p)
-      if not os.path.isdir(full_dir_path):
-        continue  # ignore for now
-      lock = LockFile(full_dir_path)
-      if lock.is_locked():
-        continue
-      lock.maybe_remove_old_lockfile()
-      info_path = "%s/info.py" % full_dir_path
-      if not os.path.exists(info_path):
-        self._cleanup_old_path(full_dir_path, reason="corrupt dir, missing info.py")
-        continue
-      so_path = "%s/%s.so" % (full_dir_path, self.base_name)
-      if not os.path.exists(so_path):
-        self._cleanup_old_path(full_dir_path, reason="corrupt dir, missing so")
-        continue
-      dt = time.time() - os.path.getmtime(so_path)
-      if dt > cleanup_time_limit_secs:
-        self._cleanup_old_path(full_dir_path, reason="%s old" % hms(dt))
-
-  def _cleanup_old_path(self, p, reason):
-    print("OpCompiler delete old, %s: %s" % (reason, p))
-    assert os.path.exists(p)
-    import shutil
-    try:
-      shutil.rmtree(p)
-    except OSError as exc:
-      print("OpCompiler delete exception (%s). Will ignore and try to continue anyway." % exc)
-
-  def _load_info(self):
-    filename = self._info_filename
-    if not os.path.exists(filename):
-      return None
-    s = open(filename).read()
-    return eval(s)
-
-  _relevant_info_keys = ("tf_version", "code_version", "with_cuda", "code_hash", "c_macro_defines", "ld_flags")
+  _relevant_info_keys = NativeCodeCompiler._relevant_info_keys + ("tf_version", "with_cuda")
 
   def _make_info_dict(self):
-    return {
-      "base_name": self.base_name,
+    d = super(OpCodeCompiler, self)._make_info_dict()
+    d.update({
       "tf_version": tf.__version__,
-      "tf_include_path": self._include_path,
-      "code_version": self.code_version,
-      "code_hash": self._code_hash,
-      "c_macro_defines": self.c_macro_defines,
-      "ld_flags": self.ld_flags,
       "with_cuda": bool(self._cuda_env and self._cuda_env.is_available())
-    }
+    })
+    return d
 
-  def _make_code_hash(self):
-    import hashlib
-    hash = hashlib.md5()
-    hash.update(self.code.encode("utf8"))
-    return hash.hexdigest()
-
-  def _make_hash(self):
-    import hashlib
-    hash = hashlib.md5()
-    hash.update("{".encode("utf8"))
-    for key in self._relevant_info_keys:
-      hash.update(("%s:{%s}" % (key, self._info_dict[key])).encode("utf8"))
-    hash.update("}".encode("utf8"))
-    return hash.hexdigest()
-
-  def _save_info(self):
-    filename = self._info_filename
-    from Util import betterRepr
-    with open(filename, "w") as f:
-      f.write("%s\n" % betterRepr(self._info_dict))
-
-  def _need_recompile(self):
-    if not os.path.exists(self._so_filename):
-      return True
-    if self.include_deps:
-      so_mtime = os.path.getmtime(self._so_filename)
-      for fn in self.include_deps:
-        if os.path.getmtime(fn) > so_mtime:
-          return True
-    old_info = self._load_info()
-    new_info = self._make_info_dict()
-    if not old_info:
-      return True
-    # The hash already matched but very unlikely, this could be a collision.
-    # Anyway, just do this very cheap check.
-    for key in self._relevant_info_keys:
-      if key not in old_info:
-        return True
-      if old_info[key] != new_info[key]:
-        return True
-    # If no code version is provided, we could also check the code itself now.
-    # But I think this is overkill.
-    return False
-
-  def _maybe_compile(self):
-    if not self._need_recompile():
-      if self.verbose:
-        print("OpCodeCompiler: No need to recompile:", self._so_filename)
-      # Touch it so that we can see that we used it recently.
-      os.utime(self._info_filename, None)
-      return
-    from Util import LockFile
-    lock = LockFile(self._mod_path)
-    if self._should_cleanup_old_mydir and not lock.is_locked():
-      if os.path.exists(self._mod_path):
-        self._cleanup_old_path(self._mod_path, reason="need recompile")
-    with lock:
-      self._maybe_compile_inner()
-
-  def _maybe_compile_inner(self):
-    # Directory should be created by the locking mechanism.
-    assert os.path.exists(self._mod_path)
-    with open(self._cc_filename, "w") as f:
-      f.write(self.code)
-    common_opts = ["-shared", "-O2", "-std=c++11"]
-    if sys.platform == "darwin":
-      common_opts += ["-undefined", "dynamic_lookup"]
-    common_opts += ["-I", self._include_path]
-    compiler_opts = ["-fPIC"]
+  def _get_compiler_bin(self):
     if self._cuda_env and self._cuda_env.is_available():
-      common_opts += self._cuda_env.get_compiler_opts()
-      common_opts += ["-DGOOGLE_CUDA=1"]
-      for opt in compiler_opts:
-        common_opts += ["-Xcompiler", opt]
-    else:
-      common_opts += compiler_opts
-    common_opts += ["-D_GLIBCXX_USE_CXX11_ABI=0"]  # might be obsolete in the future
-    common_opts += ["-D%s=%s" % item for item in sorted(self.c_macro_defines)]
-    common_opts += ["-g"]
-    opts = common_opts + [self._cc_filename, "-o", self._so_filename]
-    opts += self.ld_flags
-    cmd_bin = "g++"
-    if self._cuda_env and self._cuda_env.is_available():
-      cmd_bin = self._cuda_env.get_compiler_bin()
-    cmd_args = [cmd_bin] + opts
-    from subprocess import Popen, PIPE, STDOUT, CalledProcessError
-    print("OpCompiler call: %s" % " ".join(cmd_args))
-    proc = Popen(cmd_args, cwd=self._mod_path, stdout=PIPE, stderr=STDOUT)
-    stdout, stderr = proc.communicate()
-    assert stderr is None  # should only have stdout
-    if proc.returncode != 0:
-      print("OpCompiler: %s failed." % cmd_bin)
-      print("Original stdout/stderr:")
-      print(stdout.decode("utf8"))
-      raise CalledProcessError(returncode=proc.returncode, cmd=cmd_args)
-    assert os.path.exists(self._so_filename)
-    with open("%s/compile.log" % self._mod_path, "wb") as f:
-      if self.verbose:
-        print("OpCodeCompiler: write compile log to:", f.name)
-      f.write(("+ %s" % " ".join(cmd_args)).encode("utf8"))
-      f.write(stdout)
-    self._save_info()
-    assert not self._need_recompile()
+      return self._cuda_env.get_compiler_bin()
+    return super(OpCodeCompiler, self)._get_compiler_bin()
 
-  def load_module(self):
-    if self._mod:
-      return self._mod
+  def _transform_compiler_opts(self, opts):
+    if self._cuda_env and self._cuda_env.is_available():
+      nvcc_opts = self._cuda_env.get_compiler_opts()
+      nvcc_opts += ["-DGOOGLE_CUDA=1"]
+      for opt in opts:
+        nvcc_opts += ["-Xcompiler", opt]
+      return nvcc_opts
+    return super(OpCodeCompiler, self)._transform_compiler_opts(opts)
+
+  def load_tf_module(self):
+    if self._tf_mod:
+      return self._tf_mod
     self._maybe_compile()
-    self._mod = tf.load_op_library(self._so_filename)
-    return self._mod
+    self._tf_mod = tf.load_op_library(self._so_filename)
+    return self._tf_mod
 
 
 def make_var_tuple(v):
@@ -3632,7 +3439,7 @@ class GlobalTensorArrayOpMaker:
       include_deps=[],
       ld_flags=[])
 
-    mod = comp.load_module()
+    mod = comp.load_tf_module()
     self._mod = mod
     return mod
 
@@ -3976,7 +3783,7 @@ class TFArrayContainer(object):
         "-Xlinker", "-rpath", "-Xlinker", os.path.dirname(lib),
         "-L", os.path.dirname(lib), "-l", ":" + os.path.basename(lib)])
 
-    mod = comp.load_module()
+    mod = comp.load_tf_module()
     cls._mod = mod
     return mod
 

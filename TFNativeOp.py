@@ -411,7 +411,7 @@ class OpMaker(object):
       ld_flags=ld_flags,
       use_cuda_if_available=self.with_cuda,
       **dict(self.compiler_opts))
-    mod = comp.load_module()
+    mod = comp.load_tf_module()
     self.mod_cache[self.cache_key] = mod
     return mod
 

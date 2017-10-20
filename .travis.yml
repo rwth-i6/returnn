@@ -37,6 +37,7 @@ env:
   - TEST=Device
   - TEST=EngineTask
   - TEST=EngineUtil
+  - TEST=fork_exec
   - TEST=GeneratingDataset
   - TEST=hdf_dump
   - TEST=HDFDataset

@@ -27,15 +27,17 @@ class Config:
     self.dict = {}; """ :type: dict[str, list[str]] """
     self.typed_dict = {}; """ :type: dict[str] """  # could be loaded via JSON or so
     self.network_topology_json = None; """ :type: str | None """
+    self.files = []
 
   def load_file(self, f):
     """
     Reads the configuration parameters from a file and adds them to the inner set of parameters
-    :type f: string
+    :param string|io.TextIOBase f:
     """
     if isinstance(f, str):
       import os
       assert os.path.isfile(f), "config file not found: %r" % f
+      self.files.append(f)
       filename = f
       content = open(filename).read()
     else:
@@ -69,6 +71,21 @@ class Config:
       line = line.split(None, 1)
       assert len(line) == 2, "unable to parse config line: %r" % line
       self.add_line(key=line[0], value=line[1])
+
+  @classmethod
+  def get_config_file_type(cls, f):
+    """
+    :param str f: file path
+    :return: "py", "js" or "txt"
+    :rtype: str
+    """
+    with open(f, "r") as f:
+      start = f.read(3)
+    if start.startswith("#!"):
+      return "py"
+    if start.startswith("{"):
+      return "js"
+    return "txt"
 
   def parse_cmd_args(self, args):
     """
