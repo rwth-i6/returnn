@@ -5,9 +5,12 @@ from __future__ import division
 
 import numpy
 import theano
+import pickle
 from theano import tensor as T
 from copy import deepcopy
 from Log import log
+from LmDataset import Lexicon, StateTying
+from os.path import isfile
 
 
 class Edge:
@@ -415,37 +418,6 @@ class Hmm:
     # dict phon_dict: dictionary of phonemes, loaded from lexicon file
     self.phon_dict = {}
 
-  def load_lexicon(self, lexicon_name='recog.150k.final.lex.gz'):
-    """
-    loads Lexicon
-    takes a file, loads the xml and returns as Lexicon
-    where:
-      lex.lemmas and lex.phonemes important
-    :param str lexicon_name: holds the path and name of the lexicon file
-    """
-    from LmDataset import Lexicon
-    from os.path import isfile
-    from Log import log
-
-    log.initialize(verbosity=[5])
-    assert isfile(lexicon_name), "Lexicon file does not exist"
-    self.lexicon = Lexicon(lexicon_name)
-
-  def load_state_tying(self, state_tying_name='state-tying.txt.gz'):
-    """
-    loads a state tying map from a file, loads the file and returns its content
-    where:
-      statetying.allo_map important
-    :param state_tying_name: holds the path and name of the state tying file
-    """
-    from LmDataset import StateTying
-    from os.path import isfile
-    from Log import log
-
-    log.initialize(verbosity=[5])
-    assert isfile(state_tying_name), "State tying file does not exist"
-    self.state_tying = StateTying(state_tying_name)
-
   @staticmethod
   def _find_node_in_edges(node, edges):
     """
@@ -690,6 +662,58 @@ class Hmm:
     self.fsa.num_states = -1
     self.fsa.edges_hmm = deepcopy(self.fsa.edges)
     self.fsa.edges = []
+
+
+def load_lexicon(lexicon_name='recog.150k.final.lex.gz', pickleflag=False):
+  """
+  loads Lexicon
+  takes a file, loads the xml and returns as Lexicon
+  a pickled file can be loaded for a speed improvement
+  where:
+    lex.lemmas and lex.phonemes important
+  :param str lexicon_name: holds the path and name of the lexicon file
+  :param bool pickleflag: flag to indicate if the lexicon datastructure is to be pickled
+  :return lexicon: lexicon datastructure
+  :rtype: Lexicon
+  """
+  log.initialize(verbosity=[5])
+  lexicon_dumpname = lexicon_name.rstrip('\.gz') + '.pickle'
+
+  if pickleflag:
+    # loads from pickled lexicon file
+    if isfile(lexicon_dumpname):
+      print("Loading pickled lexicon")
+      with open(lexicon_dumpname, 'rb') as lexicon_load:
+        lexicon = pickle.load(lexicon_load)
+    else:  # pickled lexicon file does not exists -> now created
+      assert isfile(lexicon_name), "Lexicon file does not exist"
+      lexicon = Lexicon(lexicon_name)
+      print("Saving pickled lexicon")
+      with open(lexicon_dumpname, 'wb') as lexicon_dump:
+        pickle.dump(lexicon, lexicon_dump)
+  else:
+    # loads from non-pickled lexicon file
+    assert isfile(lexicon_name), "Lexicon file does not exist"
+    lexicon = Lexicon(lexicon_name)
+
+  return lexicon
+
+
+def load_state_tying(state_tying_name='state-tying.txt'):
+  """
+  loads a state tying map from a file, loads the file and returns its content
+  state tying slower with pickling
+  where:
+    statetying.allo_map important
+  :param state_tying_name: holds the path and name of the state tying file
+  :return state_tying: state tying datastructure
+  :rtype: StateTying
+  """
+  log.initialize(verbosity=[5])
+  assert isfile(state_tying_name), "State tying file does not exist"
+  state_tying = StateTying(state_tying_name)
+
+  return state_tying
 
 
 class Store:
@@ -1067,7 +1091,9 @@ class LoadWfstOp(theano.Op):
 
 
 def main():
+  import time
   from argparse import ArgumentParser
+
   arg_parser = ArgumentParser()
   arg_parser.add_argument("--fsa", type=str)
   arg_parser.add_argument("--label_seq", type=str, required=True)
@@ -1077,8 +1103,8 @@ def main():
   arg_parser.set_defaults(asg_repetition=3)
   arg_parser.add_argument("--num_labels", type=int)
   arg_parser.set_defaults(num_labels=265)  # ascii number of labels
-  arg_parser.add_argument("--label_conversion_on", dest="label_conversion", action="store_true")
-  arg_parser.add_argument("--label_conversion_off", dest="label_conversion", action="store_false")
+  arg_parser.add_argument("--label_conversion", dest="label_conversion", action="store_true")
+  arg_parser.add_argument("--no_label_conversion", dest="label_conversion", action="store_false")
   arg_parser.set_defaults(label_conversion=False)
   arg_parser.add_argument("--depth", type=int)
   arg_parser.set_defaults(depth=6)
@@ -1088,57 +1114,82 @@ def main():
   arg_parser.set_defaults(lexicon='recog.150k.final.lex.gz')
   arg_parser.add_argument("--state_tying", type=str)
   arg_parser.set_defaults(state_tying='state-tying.txt')
-  arg_parser.add_argument("--state_tying_conversion_on",
+  arg_parser.add_argument("--state_tying_conversion",
                           dest="state_tying_conversion", action="store_true")
-  arg_parser.add_argument("--state_tying_conversion_off",
+  arg_parser.add_argument("--no_state_tying_conversion",
                           dest="state_tying_conversion", action="store_false")
   arg_parser.set_defaults(state_tying_conversion=False)
-  arg_parser.add_argument("--single_state_on", dest="single_state", action="store_true")
-  arg_parser.add_argument("--single_state_off", dest="single_state", action="store_false")
+  arg_parser.add_argument("--single_state", dest="single_state", action="store_true")
+  arg_parser.add_argument("--no_single_state", dest="single_state", action="store_false")
   arg_parser.set_defaults(single_state=False)
   arg_parser.add_argument("--asg_separator", type=bool)
   arg_parser.set_defaults(asg_separator=False)
+  arg_parser.add_argument("--pickle", dest="pickle", action="store_true")
+  arg_parser.add_argument("--no_pickle", dest="pickle", action="store_false")
+  arg_parser.set_defaults(pickle=False)
   args = arg_parser.parse_args()
 
+  start_time = time.time()
+
   fsa = Graph(lemma=args.label_seq)
+
+  asg_start_time = time.time()
 
   asg = Asg(fsa)
   asg.label_conversion = args.label_conversion
   asg.asg_repetition = args.asg_repetition
+  asg_run_start_time = time.time()
   asg.run()
-
+  asg_run_end_time = time.time()
   sav_asg = Store(fsa.num_states_asg, fsa.edges_asg)
   sav_asg.filename = 'edges_asg'
   sav_asg.fsa_to_dot_format()
   sav_asg.save_to_file()
+  asg_end_time = ctc_start_time = time.time()
 
   ctc = Ctc(fsa)
   ctc.label_conversion = args.label_conversion
+  ctc_run_start_time = time.time()
   ctc.run()
-
+  ctc_run_end_time = time.time()
   sav_ctc = Store(fsa.num_states_ctc, fsa.edges_ctc)
   sav_ctc.filename = 'edges_ctc'
   sav_ctc.fsa_to_dot_format()
   sav_ctc.save_to_file()
+  ctc_end_time = hmm_start_time = time.time()
 
   hmm = Hmm(fsa)
-  hmm.load_lexicon(args.lexicon)
-  hmm.load_state_tying(args.state_tying)
+  hmm.lexicon = load_lexicon(args.lexicon, args.pickle)
+  hmm.state_tying = load_state_tying(args.state_tying)
   hmm.allo_num_states = args.allo_num_states
   hmm.state_tying_conversion = args.state_tying_conversion
+  hmm_run_start_time = time.time()
   hmm.run()
-
+  hmm_run_end_time = time.time()
   sav_hmm = Store(fsa.num_states_hmm, fsa.edges_hmm)
   sav_hmm.filename = 'edges_hmm'
   sav_hmm.fsa_to_dot_format()
   sav_hmm.save_to_file()
 
+  end_time = hmm_end_time = time.time()
+
+  print("\nTotal time    : ", end_time - start_time, "\n")
+
+  print("ASG total time: ", asg_end_time - asg_start_time)
+  print("ASG init time : ", asg_run_start_time - asg_start_time)
+  print("ASG run time  : ", asg_run_end_time - asg_run_start_time)
+  print("ASG save time : ", asg_end_time - asg_run_end_time, "\n")
+
+  print("CTC total time: ", ctc_end_time - ctc_start_time)
+  print("CTC init time : ", ctc_run_start_time - ctc_start_time)
+  print("CTC run time  : ", ctc_run_end_time - ctc_run_start_time)
+  print("CTC save time : ", ctc_end_time - ctc_run_end_time, "\n")
+
+  print("HMM total time: ", hmm_end_time - hmm_start_time)
+  print("HMM init time : ", hmm_run_start_time - hmm_start_time)
+  print("HMM run time  : ", hmm_run_end_time - hmm_run_start_time)
+  print("HMM save time : ", hmm_end_time - hmm_run_end_time, "\n")
+
 
 if __name__ == "__main__":
-  import time
-
-  start_time = time.time()
-
   main()
-
-  print("Total time:", time.time() - start_time, "seconds")
