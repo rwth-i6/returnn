@@ -6,6 +6,19 @@ from TFNetworkLayer import LayerBase, _ConcatInputLayer, SearchChoices, get_conc
 from TFUtil import Data, reuse_name_scope, var_creation_scope
 from Log import log
 
+class AbsLayer(_ConcatInputLayer):
+  """
+  This layer converts a input tensor into a output containing the aboslute value as a float32.
+  """
+
+  layer_class = "abs"
+
+  def __init__(self, **kwargs):
+    """
+    """
+    super(AbsLayer, self).__init__(**kwargs)
+    self.output.placeholder = tf.cast(tf.abs(self.input_data.placeholder), dtype=tf.float32)
+
 class AlternatingRealToComplexLayer(_ConcatInputLayer):
   """
   This layer converts a real valued input tensor into a complex valued output tensor.
@@ -31,50 +44,6 @@ class AlternatingRealToComplexLayer(_ConcatInputLayer):
     real_value = tf.strided_slice(input_placeholder, [0, 0, 0], tf.shape(input_placeholder), [1, 1, 2])
     imag_value = tf.strided_slice(input_placeholder, [0, 0, 1], tf.shape(input_placeholder), [1, 1, 2])
     self.output.placeholder = tf.complex(real_value, imag_value)
-
-class AbsLayer(_ConcatInputLayer):
-  """
-  This layer converts a input tensor into a output containing the aboslute value as a float32.
-  """
-
-  layer_class = "abs"
-
-  def __init__(self, **kwargs):
-    """
-    """
-    super(AbsLayer, self).__init__(**kwargs)
-    self.output.placeholder = tf.cast(tf.abs(self.input_data.placeholder), dtype=tf.float32)
-
-class SplitConcatMultiChannel(_ConcatInputLayer):
-  """
-  This layer assumes the feature vector to be a concatenation of features of multiple channels (of the same size)
-  It splits the feature dimension into equisized number of channel features and stacks them in the batch dimension. 
-  Thus the batch size is multiplied with the number of channels and the feature size is divided by the number of channels.
-  The channels of one singal will have consecutive batch indices, meaning the signal of the original batch index n is split
-  and can now be found in batch indices (n * nr_of_channels) to ((n+1) * nr_of_channels - 1)
-  """
-
-  layer_class = "split_concatenated_multichannel"
-
-  def __init__(self, nr_of_channels=1, **kwargs):
-    """
-    :param nr_of_channels int: the number of concatenated channels in the feature dimension
-    """
-    super(SplitConcatMultiChannel, self).__init__(**kwargs)
-
-    # set order of axes
-    self.output.batch_dim_axis = 0
-    self.output.time_dim_axis = 1
-    self.output.feature_dim_axis = 2
-    #- ensure correct ordering of input placeholder
-    input_placeholder = self.input_data.placeholder
-    if ((self.input_data.batch_dim_axis != self.output.batch_dim_axis) or (self.input_data.time_dim_axis != self.output.time_dim_axis) or (self.input_data.feature_dim_axis != self.output.feature_dim_axis)):
-      input_placeholder = tf.transpose(input_placeholder, [self.input_data.batch_dim_axis, self.input_data.time_dim_axis, self.input_data.feature_dim_axis])
-
-    output = tf.reshape(input_placeholder, [tf.shape(input_placeholder)[0], tf.shape(input_placeholder)[1], nr_of_channels, tf.shape(input_placeholder)[2] / nr_of_channels])
-    self.output.placeholder = tf.transpose(tf.reshape(tf.transpose(output, [1, 3, 0, 2]), (tf.shape(output)[1], tf.shape(output)[3], tf.shape(output)[0] *  tf.shape(output)[2])), [2, 0, 1])
-    # work around to obtain result like numpy.repeat(size_placeholder, nr_of_channels)
-    self.output.size_placeholder = {self.output.time_dim_axis_excluding_batch: tf.reshape(tf.tile(tf.reshape(self.input_data.size_placeholder[self.input_data.time_dim_axis_excluding_batch], [-1, 1]), [1, nr_of_channels]), [-1])}
 
 class BatchMedianPoolingLayer(_ConcatInputLayer):
   """
@@ -112,30 +81,6 @@ class BatchMedianPoolingLayer(_ConcatInputLayer):
     r = tf.while_loop(iteratePools, poolMedian, [pool_start_idx, output], shape_invariants=[pool_start_idx.get_shape(), tf.TensorShape([None, None, None])])
     self.output.placeholder = r[-1]
     self.output.size_placeholder = {self.output.time_dim_axis_excluding_batch: tf.strided_slice(self.input_data.size_placeholder[self.input_data.time_dim_axis_excluding_batch], [0], tf.shape(self.input_data.size_placeholder[self.input_data.time_dim_axis_excluding_batch]), [pool_size])}
-
-class TileFeaturesLayer(_ConcatInputLayer):
-  """
-  This function is tiling features with giving number of repetitions
-  """
-
-  layer_class = "tile_features"
-
-  def __init__(self, repetitions=1, **kwargs):
-    """
-    :param repetitions int: number of tiling repetitions in feature domain
-    """
-    super(TileFeaturesLayer, self).__init__(**kwargs)
-
-    # set order of axes
-    self.output.batch_dim_axis = 0
-    self.output.time_dim_axis = 1
-    self.output.feature_dim_axis = 2
-    #- ensure correct ordering of input placeholder
-    input_placeholder = self.input_data.placeholder
-    if ((self.input_data.batch_dim_axis != self.output.batch_dim_axis) or (self.input_data.time_dim_axis != self.output.time_dim_axis) or (self.input_data.feature_dim_axis != self.output.feature_dim_axis)):
-      input_placeholder = tf.transpose(input_placeholder, [self.input_data.batch_dim_axis, self.input_data.time_dim_axis, self.input_data.feature_dim_axis])
-
-    self.output.placeholder = tf.tile(input_placeholder, [1, 1, repetitions])
 
 class MaskBasedGevBeamformingLayer(LayerBase):
   """
@@ -182,4 +127,59 @@ class MaskBasedGevBeamformingLayer(LayerBase):
         return tf.add(batchIdx, 1), output 
       r = tf.while_loop(iterateBatch, beamform, [batchIdx, output], shape_invariants=[batchIdx.get_shape(), tf.TensorShape([None, None, None])])
       self.output.placeholder = r[-1]
+
+class SplitConcatMultiChannel(_ConcatInputLayer):
+  """
+  This layer assumes the feature vector to be a concatenation of features of multiple channels (of the same size)
+  It splits the feature dimension into equisized number of channel features and stacks them in the batch dimension. 
+  Thus the batch size is multiplied with the number of channels and the feature size is divided by the number of channels.
+  The channels of one singal will have consecutive batch indices, meaning the signal of the original batch index n is split
+  and can now be found in batch indices (n * nr_of_channels) to ((n+1) * nr_of_channels - 1)
+  """
+
+  layer_class = "split_concatenated_multichannel"
+
+  def __init__(self, nr_of_channels=1, **kwargs):
+    """
+    :param nr_of_channels int: the number of concatenated channels in the feature dimension
+    """
+    super(SplitConcatMultiChannel, self).__init__(**kwargs)
+
+    # set order of axes
+    self.output.batch_dim_axis = 0
+    self.output.time_dim_axis = 1
+    self.output.feature_dim_axis = 2
+    #- ensure correct ordering of input placeholder
+    input_placeholder = self.input_data.placeholder
+    if ((self.input_data.batch_dim_axis != self.output.batch_dim_axis) or (self.input_data.time_dim_axis != self.output.time_dim_axis) or (self.input_data.feature_dim_axis != self.output.feature_dim_axis)):
+      input_placeholder = tf.transpose(input_placeholder, [self.input_data.batch_dim_axis, self.input_data.time_dim_axis, self.input_data.feature_dim_axis])
+
+    output = tf.reshape(input_placeholder, [tf.shape(input_placeholder)[0], tf.shape(input_placeholder)[1], nr_of_channels, tf.shape(input_placeholder)[2] / nr_of_channels])
+    self.output.placeholder = tf.transpose(tf.reshape(tf.transpose(output, [1, 3, 0, 2]), (tf.shape(output)[1], tf.shape(output)[3], tf.shape(output)[0] *  tf.shape(output)[2])), [2, 0, 1])
+    # work around to obtain result like numpy.repeat(size_placeholder, nr_of_channels)
+    self.output.size_placeholder = {self.output.time_dim_axis_excluding_batch: tf.reshape(tf.tile(tf.reshape(self.input_data.size_placeholder[self.input_data.time_dim_axis_excluding_batch], [-1, 1]), [1, nr_of_channels]), [-1])}
+
+class TileFeaturesLayer(_ConcatInputLayer):
+  """
+  This function is tiling features with giving number of repetitions
+  """
+
+  layer_class = "tile_features"
+
+  def __init__(self, repetitions=1, **kwargs):
+    """
+    :param repetitions int: number of tiling repetitions in feature domain
+    """
+    super(TileFeaturesLayer, self).__init__(**kwargs)
+
+    # set order of axes
+    self.output.batch_dim_axis = 0
+    self.output.time_dim_axis = 1
+    self.output.feature_dim_axis = 2
+    #- ensure correct ordering of input placeholder
+    input_placeholder = self.input_data.placeholder
+    if ((self.input_data.batch_dim_axis != self.output.batch_dim_axis) or (self.input_data.time_dim_axis != self.output.time_dim_axis) or (self.input_data.feature_dim_axis != self.output.feature_dim_axis)):
+      input_placeholder = tf.transpose(input_placeholder, [self.input_data.batch_dim_axis, self.input_data.time_dim_axis, self.input_data.feature_dim_axis])
+
+    self.output.placeholder = tf.tile(input_placeholder, [1, 1, repetitions])
 
