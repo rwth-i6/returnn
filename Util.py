@@ -2104,8 +2104,13 @@ class NativeCodeCompiler(object):
 
 
 _c_code_patch_atfork = """
+#define _GNU_SOURCE
+#include <sched.h>
+#include <signal.h>
+#include <sys/syscall.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 int pthread_atfork(void (*prepare)(void), void (*parent)(void), void (*child)(void)) {
   printf("Ignoring pthread_atfork call!\\n");
@@ -2113,8 +2118,13 @@ int pthread_atfork(void (*prepare)(void), void (*parent)(void), void (*child)(vo
   return 0;
 }
 
+// Another way to ignore atfork handlers: Override fork.
+pid_t fork(void) {
+  return syscall(SYS_clone, SIGCHLD, 0);
+}
+
 __attribute__((constructor))
-void init() {
+void patch_atfork_init() {
   setenv("__RETURNN_ATFORK_PATCHED", "1", 1);
 }
 """
@@ -2138,8 +2148,12 @@ def maybe_restart_returnn_with_atfork_patch():
   https://github.com/xianyi/OpenBLAS/issues/240
   https://trac.sagemath.org/ticket/22021
   https://bugs.python.org/issue31814
+  https://stackoverflow.com/questions/46845496/ld-preload-and-linkage
+  https://stackoverflow.com/questions/46810597/forkexec-without-atfork-handlers
 
   The solution here: Just override pthread_atfork, via LD_PRELOAD.
+  Note that in some cases, this is not enough (see the SO discussion),
+  so we also overwrite fork itself.
   See also tests/test_fork_exec.py for a demo.
   """
   if os.environ.get("__RETURNN_ATFORK_PATCHED") == "1":
