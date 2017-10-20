@@ -23,6 +23,7 @@ sys.path += ["."]  # Python 3 hack
 sys.path += [os.path.dirname(os.path.abspath(__file__)) + "/.."]
 import better_exchook
 better_exchook.install()
+better_exchook.replace_traceback_format_tb()
 
 my_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -137,8 +138,16 @@ def filter_demo_output(ls):
   ls = [l for l in ls if not l.startswith("Compiler call: ")]
   ls = [l for l in ls if not l.startswith("loaded lib: ")]
   ls = [l for l in ls if not l.startswith("dlopen: ")]
-  assert ls[0] == "Hello."
-  ls = ls[1:]
+  found_hello = False
+  for i, l in enumerate(ls):
+    # Those can be very early, before the hello.
+    if l in ["Ignoring pthread_atfork call!", "Ignoring __register_atfork call!"]:
+      continue
+    assert l == "Hello."
+    ls.pop(i)
+    found_hello = True
+    break
+  assert found_hello, "no Hello: %r" % (ls,)
   assert ls[-1] == "Bye."
   ls = ls[:-1]
   return ls
@@ -191,7 +200,9 @@ def patched_check_demo_start_subprocess():
   ls = filter_demo_output(ls)
   pprint(ls)
   assert 'Hello from subprocess.' in ls
-  ls = [l for l in ls if l != "Ignoring pthread_atfork call!"]
+  ls = [l for l in ls if l not in [
+          "Ignoring pthread_atfork call!",
+          "Ignoring __register_atfork call!"]]
   pprint(ls)
   assert_equal(ls, ['Hello from subprocess.'])
 

@@ -2103,6 +2103,7 @@ class NativeCodeCompiler(object):
     return self._so_filename
 
 
+# See :func:`maybe_restart_returnn_with_atfork_patch` below for why you might want to use this.
 _c_code_patch_atfork = """
 #define _GNU_SOURCE
 #include <sched.h>
@@ -2112,8 +2113,17 @@ _c_code_patch_atfork = """
 #include <stdlib.h>
 #include <unistd.h>
 
+// https://stackoverflow.com/questions/46845496/ld-preload-and-linkage
+// https://stackoverflow.com/questions/46810597/forkexec-without-atfork-handlers
+
 int pthread_atfork(void (*prepare)(void), void (*parent)(void), void (*child)(void)) {
   printf("Ignoring pthread_atfork call!\\n");
+  fflush(stdout);
+  return 0;
+}
+
+int __register_atfork(void (*prepare)(void), void (*parent)(void), void (*child)(void)) {
+  printf("Ignoring __register_atfork call!\\n");
   fflush(stdout);
   return 0;
 }
