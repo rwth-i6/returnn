@@ -20,7 +20,9 @@ from nose.tools import assert_equal, assert_is_instance
 from pprint import pprint
 
 sys.path += ["."]  # Python 3 hack
+sys.path += [os.path.dirname(os.path.abspath(__file__)) + "/.."]
 import better_exchook
+better_exchook.install()
 
 my_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -55,8 +57,6 @@ void register_hello_from_fork_prepare() {
 """
 
 
-
-
 class CLibAtForkDemo:
   def __init__(self):
     self._load_lib()
@@ -64,8 +64,10 @@ class CLibAtForkDemo:
   def _load_lib(self):
     from Util import NativeCodeCompiler
     native = NativeCodeCompiler(
-      base_name="test_fork_exec", code_version=1, code=c_code_at_fork_demo, is_cpp=False)
+      base_name="test_fork_exec", code_version=1, code=c_code_at_fork_demo, is_cpp=False,
+      ld_flags=["-lpthread"])
     self._lib = native.load_lib_ctypes()
+    print("loaded lib:", native.get_lib_filename())
     import ctypes
     self._lib.register_hello_from_child.restype = None  # void
     self._lib.register_hello_from_child.argtypes = ()
@@ -133,6 +135,8 @@ def filter_demo_output(ls):
   """
   ls = [l for l in ls if not l.startswith("Executing: ")]
   ls = [l for l in ls if not l.startswith("Compiler call: ")]
+  ls = [l for l in ls if not l.startswith("loaded lib: ")]
+  ls = [l for l in ls if not l.startswith("dlopen: ")]
   assert ls[0] == "Hello."
   ls = ls[1:]
   assert ls[-1] == "Bye."
@@ -197,11 +201,11 @@ def test_demo_start_subprocess_patched():
   from subprocess import check_call
   env = os.environ.copy()
   env["LD_PRELOAD"] = get_patch_atfork_lib()
+  print("LD_PRELOAD:", get_patch_atfork_lib())
   check_call([sys.executable, __file__, "patched_check_demo_start_subprocess"], env=env)
 
 
 if __name__ == "__main__":
-  better_exchook.install()
   if len(sys.argv) <= 1:
     for k, v in sorted(globals().items()):
       if k.startswith("test_"):
