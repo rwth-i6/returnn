@@ -124,11 +124,13 @@ class Graph:
     self.num_states_asg = -1
     self.num_states_ctc = -1
     self.num_states_hmm = -1
+    self.num_states_word = -1
     # list[Edge] edges: edges of FSA during creation and final state
     self.edges = []
     self.edges_asg = []
     self.edges_ctc = []
     self.edges_hmm = []
+    self.edges_word = []
 
   def __repr__(self):
     return "Graph()"
@@ -664,6 +666,27 @@ class Hmm:
     self.fsa.edges = []
 
 
+class AllPossibleWordsFsa:
+  """
+  constructs a fsa from all words in a lexicon
+  """
+
+  def __init__(self, fsa):
+    """
+    takes a lexicon file, laods and conttructs a fsa over all possible words
+    :param Graph fsa: the graph which holds the constructed fsa
+    """
+    self.fsa = fsa
+    self.lexicon = None
+
+  def run(self):
+    print("Starting All Possible Words FSA Creation")
+    for key, value in self.lexicon.lemmas.iteritems():  # for python 3: .items()
+      edge = Edge(0, 0, key, 0)
+      self.fsa.edges_word.append(edge)
+    self.fsa.num_states_word = 1
+
+
 def load_lexicon(lexicon_name='recog.150k.final.lex.gz', pickleflag=False):
   """
   loads Lexicon
@@ -1133,7 +1156,24 @@ def main():
 
   fsa = Graph(lemma=args.label_seq)
 
-  asg_start_time = time.time()
+
+  lexicon_start_time = time.time()
+  lexicon = load_lexicon(args.lexicon, args.pickle)
+  lexicon_end_time = time.time()
+
+  word_start_time = time.time()
+
+  word = AllPossibleWordsFsa(fsa)
+  word.lexicon = lexicon
+  word_run_start_time = time.time()
+  word.run()
+  word_run_end_time = time.time()
+  sav_word = Store(fsa.num_states_word, fsa.edges_word)
+  sav_word.filename = 'edges_word'
+  sav_word.fsa_to_dot_format()
+  sav_word.save_to_file()
+
+  asg_start_time = word_end_time = time.time()
 
   asg = Asg(fsa)
   asg.label_conversion = args.label_conversion
@@ -1145,6 +1185,7 @@ def main():
   sav_asg.filename = 'edges_asg'
   sav_asg.fsa_to_dot_format()
   sav_asg.save_to_file()
+
   asg_end_time = ctc_start_time = time.time()
 
   ctc = Ctc(fsa)
@@ -1156,10 +1197,11 @@ def main():
   sav_ctc.filename = 'edges_ctc'
   sav_ctc.fsa_to_dot_format()
   sav_ctc.save_to_file()
+
   ctc_end_time = hmm_start_time = time.time()
 
   hmm = Hmm(fsa)
-  hmm.lexicon = load_lexicon(args.lexicon, args.pickle)
+  hmm.lexicon = lexicon
   hmm.state_tying = load_state_tying(args.state_tying)
   hmm.allo_num_states = args.allo_num_states
   hmm.state_tying_conversion = args.state_tying_conversion
@@ -1174,6 +1216,13 @@ def main():
   end_time = hmm_end_time = time.time()
 
   print("\nTotal time    : ", end_time - start_time, "\n")
+
+  print("Lexicon load time : ", lexicon_end_time - lexicon_start_time, "\n")
+
+  print("Word total time: ", word_end_time - word_start_time)
+  print("Word init time : ", word_run_start_time - word_start_time)
+  print("Word run time  : ", word_run_end_time - word_run_start_time)
+  print("Word save time : ", word_end_time - word_run_end_time, "\n")
 
   print("ASG total time: ", asg_end_time - asg_start_time)
   print("ASG init time : ", asg_run_start_time - asg_start_time)
