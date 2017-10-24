@@ -98,12 +98,12 @@ class LogLayer(_ConcatInputLayer):
 
   layer_class = "logarithm"
 
-  def __init__(self, base=10, **kwargs):
+  def __init__(self, base=10, epsilon=1e-7, **kwargs):
     """
     :param base float32: base of the logarithm
     """
     super(LogLayer, self).__init__(**kwargs)
-    self.output.placeholder = tf.log(self.input_data.placeholder) / tf.log(tf.constant(base, dtype=tf.float32))
+    self.output.placeholder = tf.log(self.input_data.placeholder + epsilon) / tf.log(tf.constant(base, dtype=tf.float32))
 
 
 class MelFilterbankLayer(_ConcatInputLayer):
