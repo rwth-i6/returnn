@@ -533,7 +533,7 @@ class RecLayer(_ConcatInputLayer):
 class _SubnetworkRecCell(object):
   def __init__(self, net_dict, parent_rec_layer=None, parent_net=None, source_data=None):
     """
-    :param dict[str] net_dict:
+    :param dict[str,dict[str]] net_dict: dict for the subnetwork, layer name -> layer dict
     :param RecLayer parent_rec_layer:
     :param TFNetwork.TFNetwork parent_net:
     :param Data|None source_data: usually concatenated input from the rec-layer
@@ -574,6 +574,8 @@ class _SubnetworkRecCell(object):
   def _construct_template(self):
     """
     Without creating any computation graph, create TemplateLayer instances.
+    Need it for shape/meta information as well as dependency graph in advance.
+    It will init self.layer_data_templates and self.prev_layers_needed.
     """
     def add_templated_layer(name, layer_class, **layer_desc):
       """

@@ -178,7 +178,7 @@ class TFNetwork(object):
       extern_data.init_from_config(config)
     self.extern_data = extern_data
     self._config = config
-    self.used_data_keys = set()
+    self.used_data_keys = set()  # type: set[str]  # keys from extern_data
     self.rnd_seed = rnd_seed
     self.random = numpy.random.RandomState(rnd_seed)
     assert isinstance(train_flag, (bool, tf.Tensor))
@@ -368,7 +368,7 @@ class TFNetwork(object):
   def get_extern_data(self, key, mark_data_key_as_used=True):
     """
     Returns Data and add the key to self.used_data_keys if mark_data_key_as_used.
-    :param str key:
+    :param str key: e.g. "data" or "classes"
     :param bool mark_data_key_as_used:
     :rtype: Data
     """

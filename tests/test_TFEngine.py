@@ -1,12 +1,15 @@
 
 # start test like this:  nosetests-2.7  tests/test_TFEngine.py
+# or directly:  python3 test_TFEngine.py test_engine_rec_subnet_count
 
 
 import logging
 logging.getLogger('tensorflow').disabled = True
 import tensorflow as tf
 import sys
+import os
 sys.path += ["."]  # Python 3 hack
+sys.path += [os.path.dirname(os.path.abspath(__file__)) + "/.."]
 from TFEngine import *
 import Util
 import TFUtil
@@ -15,7 +18,6 @@ from Config import Config
 from nose.tools import assert_equal, assert_is_instance
 import numpy
 import numpy.testing
-import os
 from pprint import pprint
 import better_exchook
 better_exchook.replace_traceback_format_tb()

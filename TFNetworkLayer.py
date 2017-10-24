@@ -861,6 +861,8 @@ def get_concat_sources_data_template(src_layers, name="concat_sources"):
   :rtype: Data
   """
   assert src_layers, "need source layers"
+  if len(src_layers) == 1:
+    return src_layers[0].output.copy()
   dim = 0
   beam_size = None
   for layer in src_layers:
