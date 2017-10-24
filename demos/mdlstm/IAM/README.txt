@@ -22,4 +22,4 @@ or follow the instructions below:
 -uncomment the lines "  #convert_IAM_lines_train(base_path_imgs, tag)" and "  #convert_IAM_lines_valid_test(base_path_imgs, tag)" in create_IAM_dataset.py
 -run ./go.sh
 
-For forwarding have a look at config_fwd
+For forwarding and simple decoding have a look at config_fwd and decode.py

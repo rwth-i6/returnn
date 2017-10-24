@@ -1,12 +1,15 @@
 
 # start test like this:  nosetests-2.7  tests/test_TFEngine.py
+# or directly:  python3 test_TFEngine.py test_engine_rec_subnet_count
 
 
 import logging
 logging.getLogger('tensorflow').disabled = True
 import tensorflow as tf
 import sys
+import os
 sys.path += ["."]  # Python 3 hack
+sys.path += [os.path.dirname(os.path.abspath(__file__)) + "/.."]
 from TFEngine import *
 import Util
 import TFUtil
@@ -15,7 +18,6 @@ from Config import Config
 from nose.tools import assert_equal, assert_is_instance
 import numpy
 import numpy.testing
-import os
 from pprint import pprint
 import better_exchook
 better_exchook.replace_traceback_format_tb()
@@ -107,6 +109,65 @@ def test_engine_train():
   engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
   engine.train()
 
+  engine.finalize()
+
+
+def test_engine_train_grad_noise_sparse():
+  # Not sure how to test for it in a simple way...
+  # You might see "Converting sparse IndexedSlices to a dense Tensor of unknown shape."
+  # but that is normally related to sth else.
+
+  def wrapped_slice_to_tensor(value, dtype=None, name=None, as_ref=False):
+    print("wrapped_slice_to_tensor:", value)
+    #assert "flatten_with_seq_len_mask" in value.name
+    from tensorflow.python.ops import gradients_impl
+    return gradients_impl._IndexedSlicesToTensor(value, dtype=dtype, name=name, as_ref=as_ref)
+
+  from tensorflow.python.framework import ops
+  ops.register_tensor_conversion_function(tf.IndexedSlices, wrapped_slice_to_tensor, priority=1)
+
+  # Anyway, for now, just try to trigger relevant code,
+  # ie. in add_scaled_noise_to_gradients(),
+  # and don't really check whether it works.
+
+  from GeneratingDataset import Task12AXDataset
+  train_data = Task12AXDataset(num_seqs=5)
+  cv_data = Task12AXDataset(num_seqs=2)
+  n_data_dim = train_data.num_outputs["data"][0]
+  n_classes_dim = train_data.num_outputs["classes"][0]
+
+  config = Config()
+  config.update({
+    "model": "/tmp/model",
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": {
+      "hidden": {
+        "class": "linear", "activation": "tanh", "n_out": 10,
+        "from": ["data:classes"],  # sparse input
+      },
+      "hidden2": {
+        "class": "linear", "activation": "tanh", "n_out": 10,
+        "from": ["data:classes"],  # sparse input
+      },
+      "hidden3": {"class": "linear", "activation": "tanh", "n_out": 10, "from": ["hidden", "hidden2"]},
+      "output": {
+        "class": "linear", "activation": None, "loss": "ce",
+        "from": ["hidden", "hidden2", "hidden3"],
+        "target": "classes"  # sparse output
+        }},
+    "start_epoch": 1,
+    "num_epochs": 2,
+    "learning_rate": 0.01,
+    "nadam": True,
+    "gradient_noise": 0.3,
+    "batch_size": 100
+  })
+  engine = Engine(config=config)
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
+  engine.train()
+  engine.finalize()
+
 
 def test_engine_analyze():
   from GeneratingDataset import DummyDataset
@@ -131,6 +192,8 @@ def test_engine_analyze():
 
   engine.analyze(data=dataset, statistics=None)
 
+  engine.finalize()
+
 
 def test_engine_forward_single():
   from GeneratingDataset import DummyDataset
@@ -151,6 +214,8 @@ def test_engine_forward_single():
   engine.init_train_from_config(config=config, train_data=dataset, dev_data=None, eval_data=None)
 
   engine.forward_single(dataset=dataset, seq_idx=0)
+
+  engine.finalize()
 
 
 def test_engine_forward_to_hdf():
@@ -178,15 +243,26 @@ def test_engine_forward_to_hdf():
   engine.init_train_from_config(config=config, train_data=dataset, dev_data=None, eval_data=None,)
 
   engine.forward_to_hdf(data=dataset, output_file=output_file, batch_size=5)
+
+  engine.finalize()
+
   assert os.path.exists(output_file)
   import h5py
   with h5py.File(output_file, 'r') as f:
     assert f['inputs'].shape == (seq_len*num_seqs, n_classes_dim)
-    assert f['seqLengths'].shape == (num_seqs,)
+    assert f['seqLengths'].shape == (num_seqs,2)
     assert f['seqTags'].shape == (num_seqs,)
     assert f.attrs['inputPattSize'] == n_data_dim
     assert f.attrs['numSeqs'] == num_seqs
     assert f.attrs['numTimesteps'] == seq_len * num_seqs
+
+  from HDFDataset import HDFDataset
+  ds = HDFDataset()
+  ds.add_file(output_file)
+
+  assert_equal(ds.num_inputs, n_classes_dim) # forwarded input is network output
+  assert_equal(ds.get_num_timesteps(), seq_len*num_seqs)
+  assert_equal(ds.num_seqs, num_seqs)
 
   os.remove(output_file)
 
@@ -224,9 +300,16 @@ def test_engine_rec_subnet_count():
   assert_equal(out.dtype, numpy.int32)
   assert_equal(list(out[:,0]), list(range(1, seq_len + 1)))
 
+  engine.finalize()
 
-def test_engine_search():
+
+def check_engine_search(extra_rec_kwargs=None):
+  """
+  :param dict[str] extra_rec_kwargs:
+  """
+  from Util import dict_joined
   from GeneratingDataset import DummyDataset
+  from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 3
@@ -240,11 +323,14 @@ def test_engine_search():
     "num_outputs": n_classes_dim,
     "num_inputs": n_data_dim,
     "network": {
-      "output": {"class": "rec", "from": [], "max_seq_len": 10, "target": "classes", "unit": {
-        "prob": {"class": "softmax", "from": ["prev:output"], "loss": "ce", "target": "classes"},
-        "output": {"class": "choice", "beam_size": 4, "from": ["prob"], "target": "classes", "initial_output": 0},
-        "end": {"class": "compare", "from": ["output"], "value": 0}
-      }},
+      "output": dict_joined({
+        "class": "rec", "from": [], "max_seq_len": 10, "target": "classes",
+        "unit": {
+          "prob": {"class": "softmax", "from": ["prev:output"], "loss": "ce", "target": "classes"},
+          "output": {"class": "choice", "beam_size": 4, "from": ["prob"], "target": "classes", "initial_output": 0},
+          "end": {"class": "compare", "from": ["output"], "value": 0}
+        }
+      }, extra_rec_kwargs or {}),
       "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance"}
     }
   })
@@ -256,6 +342,23 @@ def test_engine_search():
   assert "output" in engine.network.layers
   assert "decision" in engine.network.layers
 
+  rec_layer = engine.network.layers["output"]
+  assert isinstance(rec_layer, RecLayer)
+  assert isinstance(rec_layer.cell, _SubnetworkRecCell)
+  if rec_layer._optimize_move_layers_out:
+    assert_equal(set(rec_layer.cell.input_layers_moved_out), {"output"})
+    assert_equal(set(rec_layer.cell.output_layers_moved_out), {"prob"})
+    assert_equal(set(rec_layer.cell.layers_in_loop), set())
+  else:
+    assert_equal(set(rec_layer.cell.layers_in_loop), {"prob", "output", "end"})
+
+  # Now reinit for search.
+  assert not engine.use_search_flag
+  engine.use_search_flag = True
+  engine.use_dynamic_train_flag = False
+  print("Reinit network with search flag.")
+  engine.init_network_from_config(config=config)
+
   engine.search(dataset=dataset)
   print("error keys:")
   pprint(engine.network.error_by_layer)
@@ -265,8 +368,21 @@ def test_engine_search():
   engine.finalize()
 
 
-def test_engine_search_attention():
+def test_engine_search_no_optim():
+  check_engine_search({"optimize_move_layers_out": False})
+
+
+def test_engine_search():
+  check_engine_search()
+
+
+def check_engine_search_attention(extra_rec_kwargs=None):
+  """
+  :param dict[str] extra_rec_kwargs:
+  """
+  from Util import dict_joined
   from GeneratingDataset import DummyDataset
+  from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
   seq_len = 5
   n_data_dim = 2
   n_classes_dim = 3
@@ -283,15 +399,20 @@ def test_engine_search_attention():
     "num_inputs": n_data_dim,
     "network": {
       "encoder": {"class": "linear", "activation": "tanh", "n_out": 5},
-      "output": {"class": "rec", "from": [], "unit": {
-        'output': {'class': 'choice', 'target': 'classes', 'beam_size': 4, 'from': ["output_prob"]},
-        "end": {"class": "compare", "from": ["output"], "value": 0},
-        'orth_embed': {'class': 'linear', 'activation': None, 'from': ['output'], "n_out": 7},
-        "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["prev:c", "prev:orth_embed"], "n_out": 7},
-        "c_in": {"class": "linear", "activation": "tanh", "from": ["s", "prev:orth_embed"], "n_out": 5},
-        "c": {"class": "dot_attention", "from": ["c_in"], "base": "base:encoder", "base_ctx": "base:encoder"},
-        "output_prob": {"class": "softmax", "from": ["prev:s", "c"], "target": "classes", "loss": "ce"}
-      }, "target": "classes", "max_seq_len": 10},
+      "output": dict_joined({
+        "class": "rec",
+        "from": [],
+        "target": "classes", "max_seq_len": 10,
+        "unit": {
+          'output': {'class': 'choice', 'target': 'classes', 'beam_size': 4, 'from': ["output_prob"]},
+          "end": {"class": "compare", "from": ["output"], "value": 0},
+          'orth_embed': {'class': 'linear', 'activation': None, 'from': ['output'], "n_out": 7},
+          "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["prev:c", "prev:orth_embed"], "n_out": 7},
+          "c_in": {"class": "linear", "activation": "tanh", "from": ["s", "prev:orth_embed"], "n_out": 5},
+          "c": {"class": "dot_attention", "from": ["c_in"], "base": "base:encoder", "base_ctx": "base:encoder"},
+          "output_prob": {"class": "softmax", "from": ["prev:s", "c"], "target": "classes", "loss": "ce"}
+        },
+      }, extra_rec_kwargs or {}),
       "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance"}
     }})
   engine = Engine(config=config)
@@ -305,6 +426,18 @@ def test_engine_search_attention():
   assert "output" in engine.network.layers
   assert "decision" in engine.network.layers
 
+  rec_layer = engine.network.layers["output"]
+  assert isinstance(rec_layer, RecLayer)
+  assert isinstance(rec_layer.cell, _SubnetworkRecCell)
+  if rec_layer._optimize_move_layers_out:
+    assert_equal(set(rec_layer.cell.input_layers_moved_out), set())
+    assert_equal(set(rec_layer.cell.output_layers_moved_out), set())
+    assert_equal(set(rec_layer.cell.layers_in_loop), {"end", "output", "output_prob", "c", "c_in", "orth_embed", "s"})
+  else:
+    assert not rec_layer.cell.input_layers_moved_out
+    assert not rec_layer.cell.output_layers_moved_out
+    assert_equal(set(rec_layer.cell.layers_in_loop), {"end", "output", "output_prob", "c", "c_in", "orth_embed", "s"})
+
   print("Search...")
   engine.search(dataset=dataset)
   print("error keys:")
@@ -313,6 +446,454 @@ def test_engine_search_attention():
   assert "decision" in engine.network.error_by_layer
 
   engine.finalize()
+
+
+def test_engine_search_attention_no_optim():
+  check_engine_search_attention({"optimize_move_layers_out": False})
+
+
+def test_engine_search_attention():
+  check_engine_search_attention()
+
+
+def test_rec_optim_all_out():
+  from GeneratingDataset import DummyDataset
+  from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 3
+  dataset = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  dataset.init_seq_order(epoch=1)
+
+  config = Config()
+  config.update({
+    "model": "/tmp/model",
+    "batch_size": 5000,
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": {
+      "output": {
+        "class": "rec", "optimize_move_layers_out": True, "from": [], "max_seq_len": 10, "target": "classes",
+        "unit": {
+          "prob": {"class": "softmax", "from": ["prev:output"], "loss": "ce", "target": "classes"},
+          "output": {"class": "choice", "beam_size": 4, "from": ["prob"], "target": "classes", "initial_output": 0},
+          "end": {"class": "compare", "from": ["output"], "value": 0}
+        }
+      },
+      "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance"}
+    }
+  })
+  engine = Engine(config=config)
+  # Normally init_network can be used. We only do init_train here to randomly initialize the network.
+  engine.init_train_from_config(config=config, train_data=dataset, dev_data=None, eval_data=None)
+  print("network:")
+  pprint(engine.network.layers)
+  assert "output" in engine.network.layers
+  assert "decision" in engine.network.layers
+
+  rec_layer = engine.network.layers["output"]
+  assert isinstance(rec_layer, RecLayer)
+  assert isinstance(rec_layer.cell, _SubnetworkRecCell)
+  assert rec_layer._optimize_move_layers_out
+  # Now it was initialized and optimized for training.
+  assert_equal(set(rec_layer.cell.input_layers_moved_out), {"output"})
+  assert_equal(set(rec_layer.cell.output_layers_moved_out), {"prob"})
+  assert_equal(set(rec_layer.cell.layers_in_loop), set())
+
+  # Now reinit for search.
+  assert not engine.use_search_flag
+  engine.use_search_flag = True
+  engine.use_dynamic_train_flag = False
+  print("Reinit network with search flag.")
+  engine.init_network_from_config(config=config)
+
+  rec_layer = engine.network.layers["output"]
+  assert isinstance(rec_layer, RecLayer)
+  assert isinstance(rec_layer.cell, _SubnetworkRecCell)
+  assert rec_layer._optimize_move_layers_out
+  # Now it was initialized and optimized for search.
+  assert_equal(set(rec_layer.cell.input_layers_moved_out), set())
+  assert_equal(set(rec_layer.cell.output_layers_moved_out), set())
+  assert_equal(set(rec_layer.cell.layers_in_loop), {"prob", "output", "end"})
+
+  engine.search(dataset=dataset)
+  print("error keys:")
+  pprint(engine.network.error_by_layer)
+  assert engine.network.total_objective is not None
+  assert "decision" in engine.network.error_by_layer
+
+  engine.finalize()
+
+
+def test_rec_subnet_train_t3b():
+  beam_size = 2
+  network = {
+    "data_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6},
+    "lstm0_fw" : { "class": "rec", "unit": "nativelstm2", "n_out" : 6, "dropout": 0.1, "L2": 0.01, "direction": 1, "from": ["data_embed"] },
+    "lstm0_bw" : { "class": "rec", "unit": "nativelstm2", "n_out" : 6, "dropout": 0.1, "L2": 0.01, "direction": -1, "from": ["data_embed"] },
+    "lstm1_fw" : { "class": "rec", "unit": "nativelstm2", "n_out" : 6, "dropout": 0.1, "L2": 0.01, "direction": 1, "from": ["data_embed"] },
+    "lstm1_bw" : { "class": "rec", "unit": "nativelstm2", "n_out" : 6, "dropout": 0.1, "L2": 0.01, "direction": -1, "from": ["data_embed"] },
+    "encoder": {"class": "copy", "from": ["lstm1_fw", "lstm1_bw"]},
+    "enc_ctx": {"class": "linear", "activation": None, "with_bias": False, "from": ["encoder"], "n_out": 5},
+    "enc_emb": {"class": "copy", "from": ["enc_ctx"]},
+
+    "output": {"class": "rec", "from": [], "unit": {
+      'output': {'class': 'choice', 'target': 'classes', 'beam_size': beam_size, 'from': ["output_prob"]},
+      "end": {"class": "compare", "from": ["output"], "value": 0},
+      'orth_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'], "n_out": 6},
+      "s_in": {"class": "linear", "activation": "tanh", "from": ["prev:c", "prev:orth_embed"], "n_out": 5},
+      "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["s_in"], "n_out": 5},  # h_t
+      "c_in": {"class": "copy", "from": ["s"]},
+      "c": {"class": "dot_attention", "from": ["c_in"], "base": "base:enc_emb", "base_ctx": "base:enc_ctx"},
+      "t1": {"class": "linear", "activation": "tanh", "from": ["c", "s"], "n_out": 6},
+      "t2": {"class": "linear", "activation": "tanh", "from": ["t1"], "n_out": 6},
+      "t3": {"class": "linear", "activation": "tanh", "from": ["t2"], "n_out": 6},
+      "output_prob": {"class": "softmax", "from": ["t3"], "target": "classes", "loss": "ce"}
+    }, "target": "classes", "max_seq_len": 75},
+
+    "decision": {
+      "class": "decide", "from": ["output"], "loss": "edit_distance", "target": "classes",
+      "loss_opts": {
+        "debug_print": True
+      }
+    }
+  }
+
+  from GeneratingDataset import DummyDataset
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 3
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
+  train_data.init_seq_order(epoch=1)
+  cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  cv_data.init_seq_order(epoch=1)
+
+  config = Config()
+  config.update({
+    "model": "/tmp/model",
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": network,
+    "start_epoch": 1,
+    "num_epochs": 2,
+    "batch_size": 10,
+    "nadam": True,
+    "learning_rate": 0.01,
+    "debug_add_check_numerics_ops": True
+  })
+  engine = Engine(config=config)
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
+  engine.train()
+
+  engine.finalize()
+
+
+def test_rec_subnet_train_t3d():
+  beam_size = 2
+  network = {
+    "data_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6},
+    "lstm0_fw" : { "class": "rec", "unit": "nativelstm2", "n_out" : 5, "dropout": 0.1, "L2": 0.01, "direction": 1, "from": ["data_embed"] },
+    "lstm0_bw" : { "class": "rec", "unit": "nativelstm2", "n_out" : 5, "dropout": 0.1, "L2": 0.01, "direction": -1, "from": ["data_embed"] },
+    "encoder_state": {"class": "get_last_hidden_state", "from": ["lstm0_fw", "lstm0_bw"], "n_out": 2*5},
+    "enc_state_embed": {"class": "linear", "activation": None, "with_bias": False, "from": ["encoder_state"], "n_out": 5},
+    "encoder": {"class": "copy", "from": ["lstm0_fw", "lstm0_bw"]},
+    "enc_ctx": {"class": "linear", "activation": None, "with_bias": False, "from": ["encoder"], "n_out": 5},
+    "enc_emb": {"class": "copy", "from": ["enc_ctx"]},
+
+    "output": {"class": "rec", "from": [], "unit": {
+      'output': {'class': 'choice', 'target': 'classes', 'beam_size': beam_size, 'from': ["output_prob"]},
+      "end": {"class": "compare", "from": ["output"], "value": 0},
+      'orth_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'], "n_out": 6},
+      "s_in": {"class": "linear", "activation": "tanh", "from": ["prev:c", "prev:orth_embed"], "n_out": 5},
+      "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["s_in"], "initial_state": {"c": "base:enc_state_embed", "h": 0}, "n_out": 5},  # h_t
+      "c_in": {"class": "copy", "from": ["s"]},
+      "c": {"class": "dot_attention", "from": ["c_in"], "base": "base:enc_emb", "base_ctx": "base:enc_ctx",
+      "energy_factor": 1.0/numpy.sqrt(5)},
+      "att": {"class": "linear", "activation": "tanh", "from": ["c", "s"], "n_out": 6},  # \tilde h
+      "output_prob": {"class": "softmax", "from": ["att"], "target": "classes", "loss": "ce"}
+    }, "target": "classes", "max_seq_len": 75},
+  }
+
+  from GeneratingDataset import DummyDataset
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 3
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
+  train_data.init_seq_order(epoch=1)
+  cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  cv_data.init_seq_order(epoch=1)
+
+  config = Config()
+  config.update({
+    "model": "/tmp/model",
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": network,
+    "start_epoch": 1,
+    "num_epochs": 2,
+    "batch_size": 10,
+    "nadam": True,
+    "learning_rate": 0.01,
+    "debug_add_check_numerics_ops": True
+  })
+  engine = Engine(config=config)
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
+  engine.train()
+
+
+def test_rec_subnet_train_t3d_simple():
+  beam_size = 2
+  network = {
+    "encoder": {"class": "linear", "activation": "tanh", "n_out": 5},
+    "output": {"class": "rec", "from": [], "unit": {
+      'output': {'class': 'choice', 'target': 'classes', 'beam_size': beam_size, 'from': ["output_prob"]},
+      "end": {"class": "compare", "from": ["output"], "value": 0},
+      'orth_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'], "n_out": 6},
+      "s_in": {"class": "linear", "activation": "tanh", "from": ["prev:c", "prev:orth_embed"], "n_out": 5},
+      "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["s_in"], "n_out": 5},
+      "c_in": {"class": "copy", "from": ["s"]},
+      "c": {"class": "dot_attention", "from": ["c_in"], "base": "base:encoder", "base_ctx": "base:encoder"},
+      "att": {"class": "linear", "activation": "tanh", "from": ["c", "s"], "n_out": 6},
+      "output_prob": {"class": "softmax", "from": ["att"], "target": "classes", "loss": "ce"}
+    }, "target": "classes", "max_seq_len": 75},
+  }
+
+  from GeneratingDataset import DummyDataset
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 3
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
+  train_data.init_seq_order(epoch=1)
+  cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  cv_data.init_seq_order(epoch=1)
+
+  config = Config()
+  config.update({
+    "model": "/tmp/model",
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": network,
+    "start_epoch": 1,
+    "num_epochs": 2,
+    "batch_size": 10,
+    "nadam": True,
+    "learning_rate": 0.01,
+    "debug_add_check_numerics_ops": True
+  })
+  engine = Engine(config=config)
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
+  engine.train()
+
+
+def deterministic_train_check(layer_opts):
+  """
+  Training should be deterministic, i.e. running it twice should result in exactly the same result.
+  """
+  network = {
+    "hidden": layer_opts,
+    "output": {"class": "softmax", "from": ["hidden"], "target": "classes", "loss": "ce"},
+  }
+  n_data_dim = 2
+  n_classes_dim = 3
+  config = Config()
+  config.update({
+    "model": "/tmp/model",
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": network,
+    "start_epoch": 1,
+    "num_epochs": 2,
+    "batch_size": 10,
+    "nadam": True,
+    "learning_rate": 0.01,
+    "debug_add_check_numerics_ops": True
+  })
+
+  from GeneratingDataset import DummyDataset
+  seq_len = 5
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
+  cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+
+  score_results = {}  # run_idx -> epoch (1, 2) -> error_key ('dev_score', ...) -> score
+  fwd_results = {}  # run_idx -> numpy array
+
+  for run_idx in range(3):
+    print("Run %i:" % run_idx)
+    # Will always reinit the TF session and all random generators,
+    # thus it should be deterministic.
+    engine = Engine(config=config)
+    engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
+    engine.train()
+
+    print("Run %i: Train results:" % run_idx)
+    pprint(engine.learning_rate_control.epochData)
+    score_results[run_idx] = {ep: d.error for (ep, d) in engine.learning_rate_control.epochData.items()}
+
+    print("Run %i: Forward cv seq 0:" % run_idx)
+    cv_data.init_seq_order(epoch=1)
+    out = engine.forward_single(cv_data, 0)
+    print(out)
+    assert isinstance(out, numpy.ndarray)
+    assert out.shape == (seq_len, n_classes_dim)
+    fwd_results[run_idx] = out
+
+    if run_idx > 0:
+      for ep, error_dict in sorted(score_results[run_idx].items()):
+        for error_key, error_value in sorted(error_dict.items()):
+          prev_error_value = score_results[run_idx - 1][ep][error_key]
+          print("Epoch %i, error key %r, current value %f vs prev value %f, equal?" % (
+            ep, error_key, error_value, prev_error_value))
+          numpy.testing.assert_almost_equal(error_value, prev_error_value)
+      print("Output equal to previous?")
+      prev_out = fwd_results[run_idx - 1]
+      numpy.testing.assert_almost_equal(out, prev_out)
+
+    engine.finalize()
+
+
+def test_deterministic_train_linear():
+  deterministic_train_check({"class": "linear", "activation": "tanh", "n_out": 5})
+
+
+def test_deterministic_train_rec_nativelstm2():
+  deterministic_train_check({"class": "rec", "unit": "nativelstm2", "n_out": 5})
+
+
+def _create_deterministic_layer_checks():
+  from TFNetworkLayer import get_layer_class_name_list, get_layer_class
+  from Util import collect_mandatory_class_init_kwargs
+  for cls_name in get_layer_class_name_list():
+    cls = get_layer_class(cls_name)
+    if cls.__name__.startswith("_"):
+      continue
+    mandatory_kwargs = collect_mandatory_class_init_kwargs(cls)
+    mandatory_kwargs.remove("name")
+    mandatory_kwargs.remove("network")
+    print("Class %s (%s), mandatory: %r" % (cls.__name__, cls_name, mandatory_kwargs))
+    # We could automatically add checks for layers, via deterministic_train_check(),
+    # and then add "test_xxx" to globals().
+    # For many kwargs, we can guess some arg (e.g. activation="tanh").
+    # Some layers need specific args.
+    # We also need a blacklist because some layers cannot work via deterministic_train_check(),
+    # because of shape.
+    # So far, we don't do this here.
+  pass
+
+
+def test_rec_subnet_auto_optimize():
+  """
+  rec subnet can automatically move out layers from the loop.
+  It should result in an equivalent model.
+  Thus, training should be equivalent.
+  Also, training the one model, and then importing it in the original model, should work.
+  """
+  from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
+  n_data_dim = 2
+  n_classes_dim = 3
+  from GeneratingDataset import DummyDataset
+  seq_len = 5
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=10, seq_len=seq_len)
+  cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+
+  def create_config(optimize_move_layers_out):
+    """
+    :param bool optimize_move_layers_out:
+    :rtype: Config
+    """
+    beam_size = 2
+    # Depending on optimize_move_layers_out, the order of the initialization of the variables might be different.
+    # To make sure it's the same, we init with zero.
+    # Actually, in the whole network, there should not be any randomness because of that for this check.
+    weights_init = 0.01
+    network = {
+      "encoder": {"class": "linear", "activation": "tanh", "n_out": 5, "forward_weights_init": weights_init},
+      "output": {
+        "class": "rec", "from": [],
+        "target": "classes", "max_seq_len": 75,
+        "optimize_move_layers_out": optimize_move_layers_out,
+        "unit": {
+          'output': {'class': 'choice', 'target': 'classes', 'beam_size': beam_size, 'from': ["output_prob"]},
+          "end": {"class": "compare", "from": ["output"], "value": 0},
+          'orth_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'], "n_out": 6, "forward_weights_init": weights_init},
+          "s_in": {"class": "linear", "activation": "tanh", "from": ["prev:c", "prev:orth_embed"], "n_out": 5, "forward_weights_init": weights_init},
+          "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["s_in"], "n_out": 5, "weights_init": weights_init},
+          "c_in": {"class": "copy", "from": ["s"]},
+          "c": {"class": "dot_attention", "from": ["c_in"], "base": "base:encoder", "base_ctx": "base:encoder"},
+          "att": {"class": "linear", "activation": "tanh", "from": ["c", "s"], "n_out": 6, "forward_weights_init": weights_init},
+          "output_prob": {"class": "softmax", "from": ["att"], "target": "classes", "loss": "ce", "forward_weights_init": weights_init}
+        },
+      },
+    }
+    config = Config()
+    config.update({
+      "model": "/tmp/model",
+      "num_outputs": n_classes_dim,
+      "num_inputs": n_data_dim,
+      "network": network,
+      "start_epoch": 1,
+      "num_epochs": 2,
+      "batch_size": 10,
+      "nadam": True,
+      "learning_rate": 0.01
+    })
+    return config
+
+  score_results = {}  # run_idx -> epoch (1, 2) -> error_key ('dev_score', ...) -> score
+  fwd_results = {}  # run_idx -> numpy array
+
+  def run(run_idx, optimize_move_layers_out):
+    """
+    :param int run_idx:
+    :param bool optimize_move_layers_out:
+    """
+    print("Run %i:" % run_idx)
+    # Will always reinit the TF session and all random generators,
+    # thus it should be deterministic.
+    config = create_config(optimize_move_layers_out=optimize_move_layers_out)
+    engine = Engine(config=config)
+    engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
+
+    rec_layer = engine.network.layers["output"]
+    assert isinstance(rec_layer, RecLayer)
+    assert isinstance(rec_layer.cell, _SubnetworkRecCell)
+    if optimize_move_layers_out:
+      assert_equal(set(rec_layer.cell.input_layers_moved_out), {"output", "orth_embed"})
+      assert_equal(set(rec_layer.cell.output_layers_moved_out), {"output_prob"})
+    else:
+      assert not rec_layer.cell.input_layers_moved_out
+      assert not rec_layer.cell.output_layers_moved_out
+
+    print("Run %i: Train now..." % run_idx)
+    engine.train()
+
+    print("Run %i: Train results:" % run_idx)
+    pprint(engine.learning_rate_control.epochData)
+    score_results[run_idx] = {ep: d.error for (ep, d) in engine.learning_rate_control.epochData.items()}
+
+    print("Run %i: Forward cv seq 0:" % run_idx)
+    cv_data.init_seq_order(epoch=1)
+    out = engine.forward_single(cv_data, 0)
+    print(out)
+    assert isinstance(out, numpy.ndarray)
+    assert out.shape == (seq_len,)  # label sequence
+    fwd_results[run_idx] = out
+
+    if len(score_results) > 1:
+      for ep, error_dict in sorted(score_results[run_idx].items()):
+        for error_key, error_value in sorted(error_dict.items()):
+          prev_error_value = score_results[run_idx - 1][ep][error_key]
+          print("Epoch %i, error key %r, current value %f vs prev value %f, equal?" % (
+            ep, error_key, error_value, prev_error_value))
+          numpy.testing.assert_almost_equal(error_value, prev_error_value, decimal=3)
+      print("Output equal to previous?")
+      prev_out = fwd_results[run_idx - 1]
+      numpy.testing.assert_almost_equal(out, prev_out, decimal=3)
+
+    engine.finalize()
+
+  run(run_idx=1, optimize_move_layers_out=False)
+  run(run_idx=2, optimize_move_layers_out=False)
+  run(run_idx=3, optimize_move_layers_out=True)
 
 
 if __name__ == "__main__":

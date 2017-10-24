@@ -1,4 +1,4 @@
-#!/usr/bin/env python2.7
+#!/usr/bin/env python3
 
 from __future__ import print_function
 
@@ -79,30 +79,58 @@ class OrthHandler:
 
   allo_add_all = False  # only via lexicon
 
-  def __init__(self, lexicon, si_label=None, allo_num_states=3, allo_context_len=1):
+  def __init__(self, lexicon, si_label=None, allo_num_states=3, allo_context_len=1, allow_ci_in_words=True):
+    """
+    :param Lexicon lexicon:
+    :param int si_label:
+    :param int allo_num_states:
+    :param int allo_context_len:
+    :param bool allow_ci_in_words:
+    """
     self.lexicon = lexicon
     self.phonemes = sorted(self.lexicon.phonemes.keys(), key=lambda s: self.lexicon.phonemes[s]["index"])
+    self.word_boundary_phones = {-1: set(), 1: set()}
     self.phon_to_possible_ctx_via_lex = {-1: {}, 1: {}}
     for lemma in self.lexicon.lemmas.values():
       for pron in lemma["phons"]:
         phons = pron["phon"].split()
+        assert phons
+        self.word_boundary_phones[-1].add(phons[0])
+        self.word_boundary_phones[1].add(phons[-1])
         for i in range(len(phons)):
-          ps = [phons[i + j] if (0 <= (i + j) < len(phons)) else None
+          ps = [phons[i + j] if (0 <= (i + j) < len(phons)) else ""
                 for j in [-1, 0, 1]]
           self.phon_to_possible_ctx_via_lex[1].setdefault(ps[1], set()).add(ps[2])
           self.phon_to_possible_ctx_via_lex[-1].setdefault(ps[1], set()).add(ps[0])
+    for phone in self.lexicon.phoneme_list:
+      if "" in self.phon_to_possible_ctx_via_lex[-1][phone]:
+        self.phon_to_possible_ctx_via_lex[-1][phone].update(self.word_boundary_phones[1])
+      if "" in self.phon_to_possible_ctx_via_lex[1][phone]:
+        self.phon_to_possible_ctx_via_lex[1][phone].update(self.word_boundary_phones[-1])
+    if allow_ci_in_words:
+      for phone in self.lexicon.phoneme_list:
+        self.phon_to_possible_ctx_via_lex[-1][phone].add("")
+        self.phon_to_possible_ctx_via_lex[1][phone].add("")
     self.si_lemma = self.lexicon.lemmas["[SILENCE]"]
-    self.si_phone = self.si_lemma["phons"][0]["phon"]
+    self.si_phone = self.si_lemma["phons"][0]["phon"]  # type: str
     self.si_label = si_label
     self.allo_num_states = allo_num_states  # e.g. 3 -> 3-state HMM
     self.allo_context_len = allo_context_len  # e.g. 1 -> one left&right, i.e. triphone
 
   def expected_num_labels_for_monophone_state_tying(self):
-    # silence has 1 state, all others have allo_num_states
+    """
+    Silence has 1 state, all others have allo_num_states.
+
+    :rtype: int
+    """
     num_phones = len(self.lexicon.phonemes)
     return (num_phones - 1) * self.allo_num_states + 1
 
   def iter_orth(self, orth):
+    """
+    :param str orth:
+    :return: yields lemmas
+    """
     symbols = list(orth.split())
     i = 0
     while i < len(symbols):
@@ -121,6 +149,11 @@ class OrthHandler:
       yield lemma
 
   def _iter_possible_ctx(self, phon_id, direction):
+    """
+    :param str phon_id: e.g. "aa", "aw", "uh", "z", etc.
+    :param int direction: 1 or -1
+    :rtype: list[tuple[str]]
+    """
     if self.lexicon.phonemes[phon_id]["variation"] == "none":
       return [()]
     if self.allo_add_all:
@@ -132,26 +165,44 @@ class OrthHandler:
       ((p,) if p else ())
       for p in sorted(self.phon_to_possible_ctx_via_lex[direction][phon_id])]
 
-  def _num_states(self, phon_id):
+  def num_states_for_phone(self, phon_id):
+    """
+    :param str phon_id:
+    :return: number of allophone states for this phone
+    :rtype: int
+    """
     if phon_id == self.si_phone:
       return 1
     return self.allo_num_states
 
-  def all_allophone_variations(self, phon, states=None):
+  def all_allophone_variations(self, phon, states=None, all_boundary_variations=False):
+    """
+    :param str phon:
+    :param None|list[int] states: which states to yield for this phone
+    :param bool all_boundary_variations:
+    :return: yields AllophoneState's
+    :rtype: list[AllophoneState]
+    """
     if states is None:
-      states = range(self._num_states(phon))
+      states = range(self.num_states_for_phone(phon))
+    if all_boundary_variations:
+      boundary_variations = [0, 1, 2, 3]
+    else:
+      boundary_variations = [0]
     for left_ctx in self._iter_possible_ctx(phon, -1):
       for right_ctx in self._iter_possible_ctx(phon, 1):
         for state in states:
-          a = AllophoneState()
-          a.id = phon
-          a.context_history = left_ctx
-          a.context_future = right_ctx
-          a.state = state
-          a.boundary = 0
-          if not left_ctx: a.boundary |= 1  # initial
-          if not right_ctx: a.boundary |= 2  # final
-          yield a
+          for boundary in boundary_variations:
+            a = AllophoneState()
+            a.id = phon
+            a.context_history = left_ctx
+            a.context_future = right_ctx
+            a.state = state
+            a.boundary = boundary
+            if not all_boundary_variations:
+              if not left_ctx: a.mark_initial()
+              if not right_ctx: a.mark_final()
+            yield a
 
   def _phones_to_allos(self, phones):
     for p in phones:
@@ -219,11 +270,12 @@ def main():
   arg_parser.add_argument("--print_targets", action='store_true')
   arg_parser.add_argument("--dataset")
   arg_parser.add_argument("--corpus")
-  arg_parser.add_argument("--lexicon")
-  arg_parser.add_argument("--silence", type=int)
+  arg_parser.add_argument("--lexicon", help="filename")
+  arg_parser.add_argument("--silence", type=int, help="index")
   arg_parser.add_argument("--context", default=1, type=int)
   arg_parser.add_argument("--hmm_states", default=3, type=int)
-  arg_parser.add_argument("--state_tying_output")
+  arg_parser.add_argument("--state_tying_type", help="'monophone' or 'full'")
+  arg_parser.add_argument("--state_tying_output", help="filename")
   arg_parser.add_argument("--allo_add_all", action="store_true")
   args = arg_parser.parse_args()
 
@@ -248,81 +300,99 @@ def main():
   if args.allo_add_all:
     orth_handler.allo_add_all = True
 
-  # NOTE: Assume monophone state tying for now!
-  num_labels = orth_handler.expected_num_labels_for_monophone_state_tying()
+  print("Num HMM states: %i" % orth_handler.allo_num_states, file=log.v1)
+  if args.state_tying_type == "monophone":
+    print("Monophone state tying.", file=log.v1)
+    num_labels = orth_handler.expected_num_labels_for_monophone_state_tying()
+    all_label_idx_are_used = True
+  elif args.state_tying_type == "full":
+    print("Full state tying.", file=log.v1)
+    phone_idxs = {k: i + 1 for (i, k) in enumerate(lexicon.phoneme_list)}  # +1 to keep 0 reserved as the term-symbol
+    for phon in lexicon.phoneme_list:
+      for allo in orth_handler.all_allophone_variations(phon, all_boundary_variations=True):
+        allo_idx = allo.index(
+          phone_idxs=phone_idxs,
+          num_states=orth_handler.allo_num_states,
+          context_length=orth_handler.allo_context_len)
+        map_idx_to_allo[allo_idx].add(allo)
+    num_labels = max(map_idx_to_allo.keys()) + 1
+    all_label_idx_are_used = False
+  else:
+    raise Exception("invalid state tying type %r" % args.state_tying_type)
   print("Num labels: %i" % num_labels, file=log.v1)
 
-  count = 0
-  for segment_name, targets in iter_dataset_targets(dataset):
-    count += 1
-    if silence_label is None or count == 1:
-      likely_silence_label = collections.Counter(targets).most_common(1)[0][0]
-      if silence_label is None:
-        silence_label = likely_silence_label
-      if silence_label != likely_silence_label:
-        print("warning: silence %i but likely %i" % (silence_label, likely_silence_label), file=log.v2)
-      print("Silence label: %i" % silence_label, file=log.v1)
-      orth_handler.si_label = silence_label
-      # Monophone state tying:
-      for allo in orth_handler.all_allophone_variations(orth_handler.si_phone):
-        map_idx_to_allo[silence_label].add(allo)
-        map_allo_to_idx[allo] = silence_label
-    assert segment_name in corpus
-    orth = corpus[segment_name]
-    allo_states = orth_handler.orth_to_allophone_states(orth=orth)
-    if args.print_seq:
-      print("%r %r" % (segment_name, orth))
-    if args.print_allos:
-      print("  allophone state seq: %r" % allo_states)
-    tgt_seq = [t for t in uniq(targets) if t != silence_label]
-    if args.print_targets:
-      print("  target seq: %r" % (tgt_seq,))
-    assert len(allo_states) == len(tgt_seq), "check --hmm_states or so"
-    for allo, t in zip(allo_states, tgt_seq):
-      allo.boundary = 0  # do not differ between boundaries
-      allos = map_idx_to_allo[t]
-      if allo in map_allo_to_idx:
-        assert allo in allos, "bad mapping"
-      else:
-        assert allo not in allos
-        allos.add(allo)
-        map_allo_to_idx[allo] = t
-    if len(map_idx_to_allo) >= num_labels:
-      assert len(map_idx_to_allo) == num_labels
-      assert 0 in map_idx_to_allo
-      assert num_labels - 1 in map_idx_to_allo
-      print("Finished with uniq mapping after %i sequences." % count, file=log.v1)
-      break
-    if count % 100 == 0:
-      print("Have indices: %i (num labels: %i)" % (len(map_idx_to_allo), num_labels), file=log.v1)
+  if dataset:
+    count = 0
+    for segment_name, targets in iter_dataset_targets(dataset):
+      count += 1
+      if silence_label is None or count == 1:
+        likely_silence_label = collections.Counter(targets).most_common(1)[0][0]
+        if silence_label is None:
+          silence_label = likely_silence_label
+        if silence_label != likely_silence_label:
+          print("warning: silence %i but likely %i" % (silence_label, likely_silence_label), file=log.v2)
+        print("Silence label: %i" % silence_label, file=log.v1)
+        orth_handler.si_label = silence_label
+        # Monophone state tying:
+        for allo in orth_handler.all_allophone_variations(orth_handler.si_phone):
+          map_idx_to_allo[silence_label].add(allo)
+          map_allo_to_idx[allo] = silence_label
+      assert segment_name in corpus
+      orth = corpus[segment_name]
+      allo_states = orth_handler.orth_to_allophone_states(orth=orth)
+      if args.print_seq:
+        print("%r %r" % (segment_name, orth))
+      if args.print_allos:
+        print("  allophone state seq: %r" % allo_states)
+      tgt_seq = [t for t in uniq(targets) if t != silence_label]
+      if args.print_targets:
+        print("  target seq: %r" % (tgt_seq,))
+      assert len(allo_states) == len(tgt_seq), "check --hmm_states or so"
+      for allo, t in zip(allo_states, tgt_seq):
+        allo.boundary = 0  # do not differ between boundaries
+        allos = map_idx_to_allo[t]
+        if allo in map_allo_to_idx:
+          assert allo in allos, "bad mapping"
+        else:
+          assert allo not in allos
+          allos.add(allo)
+          map_allo_to_idx[allo] = t
+      if len(map_idx_to_allo) >= num_labels:
+        assert len(map_idx_to_allo) == num_labels
+        assert 0 in map_idx_to_allo
+        assert num_labels - 1 in map_idx_to_allo
+        print("Finished with uniq mapping after %i sequences." % count, file=log.v1)
+        break
+      if count % 100 == 0:
+        print("Have indices: %i (num labels: %i)" % (len(map_idx_to_allo), num_labels), file=log.v1)
 
-  print("Finished. Have indices: %i (num labels: %i)" % (len(map_idx_to_allo), num_labels), file=log.v1)
-  if len(map_idx_to_allo) < num_labels:
-    found = []
-    not_found = []
-    for p in sorted(lexicon.phonemes.keys()):
-      allo = AllophoneState(p, state=0)
-      if allo in map_allo_to_idx:
-        found.append(p)
-      else:
-        not_found.append(p)
-    print("Phonemes found: %r" % found)
-    print("Phonemes not found: %r" % not_found)
+    print("Finished. Have indices: %i (num labels: %i)" % (len(map_idx_to_allo), num_labels), file=log.v1)
+    if len(map_idx_to_allo) < num_labels:
+      found = []
+      not_found = []
+      for p in sorted(lexicon.phonemes.keys()):
+        allo = AllophoneState(p, state=0)
+        if allo in map_allo_to_idx:
+          found.append(p)
+        else:
+          not_found.append(p)
+      print("Phonemes found: %r" % found)
+      print("Phonemes not found: %r" % not_found)
 
   if args.state_tying_output:
     assert not os.path.exists(args.state_tying_output)
-    assert len(map_idx_to_allo) == num_labels
-    assert 0 in map_idx_to_allo
-    assert num_labels - 1 in map_idx_to_allo
+    if all_label_idx_are_used:
+      assert len(map_idx_to_allo) == num_labels
+      assert 0 in map_idx_to_allo
+      assert num_labels - 1 in map_idx_to_allo
     f = open(args.state_tying_output, "w")
-    for i in range(num_labels):
-      phons = sorted(set([(allo.id, allo.state) for allo in map_idx_to_allo[i]]))
-      assert len(phons) == 1
-      phon, state = phons[0]
-      for allo in orth_handler.all_allophone_variations(phon, states=[state]):
-        f.write("%s %i\n" % (allo, i))
+    for i, allos in sorted(map_idx_to_allo.items()):
+      for allo in allos:
+        f.write("%s %i\n" % (allo.format(), i))
     f.close()
     print("Wrote state tying to %r." % args.state_tying_output, file=log.v1)
+
+  print("The end.")
 
 
 if __name__ == "__main__":

@@ -48,7 +48,7 @@ class OneDToTwoDLayer(TwoDBaseLayer):
     n_out = n_in
     sizes = T.cast(self.sources[1].output, "float32")
     assert sizes.ndim == 2
-    sizes = sizes.reshape((2, sizes.size / 2)).dimshuffle(1, 0)
+    sizes = sizes.reshape((2, sizes.size // 2)).dimshuffle(1, 0)
     self.output_sizes = sizes
     X = self.sources[0].output
     assert X.ndim == 3

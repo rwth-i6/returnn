@@ -73,6 +73,28 @@ class ExternData(object):
         shape=shape, dim=dim, sparse=sparse, dtype=dtype,
         available_for_inference=available_for_inference)
 
+  def check_matched_dataset(self, dataset, used_data_keys=None):
+    """
+    :param Dataset.Dataset dataset:
+    :param set[str]|list[str] used_data_keys:
+    :return: nothing, will assert the check
+    """
+    if used_data_keys is None:
+      used_data_keys = dataset.get_data_keys()
+    base_err_msg = "%r num_outputs %r vs %r" % (dataset, dataset.num_outputs, self)
+    for key in sorted(used_data_keys):
+      if key in ["seq_idx", "seq_tag"]:
+        continue  # special cases, ignored for now
+      data = self.data[key]
+      data_sparse = dataset.is_data_sparse(key)
+      assert data.sparse == data_sparse, "key %r sparse mismatch. %s" % (key, base_err_msg)
+      data_dtype = dataset.get_data_dtype(key)
+      assert data.dtype == data_dtype, "key %r dtype mismatch. %s" % (key, base_err_msg)
+      data_dim = dataset.get_data_dim(key)
+      assert data.dim == data_dim, "key %r dim mismatch. %s" % (key, base_err_msg)
+      data_shape = tuple(dataset.get_data_shape(key))
+      assert data.shape[1:] == data_shape, "key %r shape mismatch. %s" % (key, base_err_msg)
+
   def register_data_from_dict(self, data):
     """
     :param dict[str,dict[str]] data: init kwargs for Data
@@ -144,15 +166,19 @@ class TFNetwork(object):
       from Util import try_get_caller_name
       name = "<network via %s>" % try_get_caller_name(fallback="<unknown>")
     self.name = name
+    if not parent_net and parent_layer:
+      parent_net = parent_layer.network
+    if not config and parent_net:
+      config = parent_net._config
     if extern_data is None:
-      extern_data = ExternData()
       if not config:
         from Config import get_global_config
         config = get_global_config()
+      extern_data = ExternData()
       extern_data.init_from_config(config)
     self.extern_data = extern_data
     self._config = config
-    self.used_data_keys = set()
+    self.used_data_keys = set()  # type: set[str]  # keys from extern_data
     self.rnd_seed = rnd_seed
     self.random = numpy.random.RandomState(rnd_seed)
     assert isinstance(train_flag, (bool, tf.Tensor))
@@ -163,8 +189,6 @@ class TFNetwork(object):
     self.eval_flag = eval_flag
     self.search_flag = search_flag
     self.parent_layer = parent_layer
-    if not parent_net and parent_layer:
-      parent_net = parent_layer.network
     self.parent_net = parent_net
     self._selected_train_layers = None
     self._constructing_layers = []  # type: list[str]
@@ -252,8 +276,9 @@ class TFNetwork(object):
     """
     :param dict[str,dict[str]] net_dict:
     :param str name: layer name
-    :param ((str) -> LayerBase)|None get_layer: optional, for source layers, for transform_config_dict
-    :param ((str, LayerBase, dict) -> LayerBase) | None add_layer: self.add_layer
+    :param ((str) -> LayerBase)|None get_layer: optional, for source layers, for transform_config_dict.
+      by default, this wraps self._construct_layer().
+    :param ((str, LayerBase, dict) -> LayerBase) | None add_layer: by default self.add_layer
     :rtype: LayerBase
     """
     if name in self.layers:
@@ -289,41 +314,51 @@ class TFNetwork(object):
 
   def add_layer(self, name, layer_class, **layer_desc):
     """
+    This will construct the layer given the layer_desc arguments,
+    and add it to the network.
+
     :param str name:
     :param (()->LayerBase)|LayerBase layer_class:
+    :param layer_desc: contains the kwargs for the layer class.
+      the args should have been transformed via layer_class.transform_config_dict before (see _construct_layer).
+      must not contain "name" and "network", which will be automatically added here.
+      should not contain "output", which will be initialized to layer_class.get_out_data_from_opts.
+      the layer_class will usually then define the layer.output and its placeholder.
+      there is one notable exception: the InternalLayer, where you predefine the output.
     """
-    from Util import collect_mandatory_class_init_kwargs
+    from Util import help_on_type_error_wrong_args
     layer_desc = layer_desc.copy()
     assert "name" not in layer_desc
     assert "network" not in layer_desc
-    assert "output" not in layer_desc
     layer_desc["name"] = name
     layer_desc["network"] = self
     debug_print_layer_output_template = self._config and self._config.bool("debug_print_layer_output_template", False)
-    debug_print_layer_output_sizes = self._config and self._config.bool("debug_print_layer_output_sizes", False)
     debug_print_layer_output_shape = self._config and self._config.bool("debug_print_layer_output_shape", False)
+    debug_add_check_numerics_on_output = self._config and self._config.bool("debug_add_check_numerics_on_output", False)  # also see debug_add_check_numerics_ops
     with reuse_name_scope(layer_class.cls_get_tf_scope_name(name)):
-      output = layer_class.get_out_data_from_opts(**layer_desc)
-      if debug_print_layer_output_template:
-        print("layer %r output: %r" % (name, output))
       try:
-        layer = layer_class(output=output, **layer_desc)
+        if "output" not in layer_desc:
+          layer_desc["output"] = layer_class.get_out_data_from_opts(**layer_desc)
+        if debug_print_layer_output_template:
+          print("layer %r output: %r" % (name, layer_desc["output"]))
+        layer = layer_class(**layer_desc)
       except TypeError:
-        mandatory_args = collect_mandatory_class_init_kwargs(layer_class)
-        for arg in layer_desc.keys():
-          if arg in mandatory_args:
-            mandatory_args.remove(arg)
-        print("Maybe missing some args? Probably you are missing these:", mandatory_args, file=log.v1)
+        help_on_type_error_wrong_args(cls=layer_class, kwargs=list(layer_desc.keys()))
         raise
       layer.post_init()
-      if debug_print_layer_output_sizes:
-        print("layer %r output sizes: %r" % (name, output.size_placeholder))
       if debug_print_layer_output_shape:
         layer.output.placeholder = tf.Print(
           layer.output.placeholder, [layer_class.cls_get_tf_scope_name(name), "shape:", tf.shape(layer.output.placeholder)],
           summarize=10, name="debug_print_layer_output_shape")
+      if debug_add_check_numerics_on_output and layer.output.dtype.startswith("float"):
+        print("debug_add_check_numerics_on_output: add for layer %r: %r" % (name, layer.output.placeholder))
+        from TFUtil import identity_with_check_numerics
+        layer.output.placeholder = identity_with_check_numerics(
+          layer.output.placeholder,
+          name="%s_identity_with_check_numerics" % layer_class.cls_get_tf_scope_name(name))
     assert layer.output
     assert layer.output.placeholder is not None
+    layer.output.placeholder.set_shape(layer.output.batch_shape)
     assert layer.output.size_placeholder is not None
     self.layers[name] = layer
     if layer.recurrent:
@@ -333,7 +368,7 @@ class TFNetwork(object):
   def get_extern_data(self, key, mark_data_key_as_used=True):
     """
     Returns Data and add the key to self.used_data_keys if mark_data_key_as_used.
-    :param str key:
+    :param str key: e.g. "data" or "classes"
     :param bool mark_data_key_as_used:
     :rtype: Data
     """
@@ -367,6 +402,12 @@ class TFNetwork(object):
             error = layer.get_error_value()
             if loss is not None:
               tf.summary.scalar("loss_%s" % layer.name, loss * layer.get_loss_normalization_factor())
+              if self._config and self._config.bool("debug_add_check_numerics_on_output", False):
+                print("debug_add_check_numerics_on_output: add for layer loss %r: %r" % (name, layer.output.placeholder))
+                from TFUtil import identity_with_check_numerics
+                loss = identity_with_check_numerics(
+                  loss,
+                  name="%s_loss_identity_with_check_numerics" % layer.tf_scope_name)
             if error is not None:
               tf.summary.scalar("error_%s" % layer.name, error * layer.get_loss_normalization_factor())
         with reuse_name_scope("constraints"):
@@ -572,15 +613,23 @@ class TFNetwork(object):
   def initialize_params(self, session):
     """
     :param tf.Session session:
+
     Note: This will create a new node to the graph for each call!
     And it will overwrite also the already initialized variables.
     So you should call this only once after network construction and before you maybe load some of the params
     from external sources.
     If you know that you will load all params explicitly, you would not need to call this function.
     """
+    var_list = self.get_params_list() + self.get_auxiliary_params()
     with tf.name_scope("var_initializer"):
-      initializer_op = tf.variables_initializer(var_list=self.get_params_list() + self.get_auxiliary_params())
+      initializer_op = tf.variables_initializer(var_list=var_list)
     session.run(initializer_op)
+    for var in var_list:
+      # Some of our code could set this, e.g. the SubnetworkLayer.
+      custom_post_init = getattr(var, "custom_post_init", None)
+      if custom_post_init:
+        assert callable(custom_post_init)
+        custom_post_init(session=session)
 
   def get_var_assigner(self, var):
     """
@@ -832,26 +881,30 @@ class TFNetwork(object):
     from TFUtil import cond
     return cond(self.train_flag, fn_train, fn_eval)
 
-  def get_search_choices(self, sources=None, src=None, _visited=None):
+  def get_search_choices(self, sources=None, src=None, base_search_choice=None, _visited=None):
     """
     Recursively searches through all sources,
-    and if there is a ChoiceLayer, returns it.
+    and if there is a ChoiceLayer / any layer with search_choices, returns it.
     Could also go to the parent network.
 
     :param LayerBase|None src:
+    :param LayerBase|None base_search_choice:
     :param list[LayerBase]|None sources:
     :param set[LayerBase]|None _visited: keep track about visited layers in case there are circular deps
     :return: (direct or indirect) source LayerBase which has search_choices, or None
     :rtype: LayerBase|None
     """
-    assert sources is None or src is None, "don't provide both"
     if src is not None:
       assert isinstance(src, LayerBase)
       if src.search_choices:
         if src.search_choices.is_decided:
           return None
         return src
-      sources = src.get_dep_layers()
+      assert base_search_choice is None
+      base_search_choice = src
+    if base_search_choice is not None:
+      assert sources is None
+      sources = base_search_choice.get_dep_layers()
     if _visited is None:
       _visited = set()
     assert sources is not None
@@ -866,6 +919,23 @@ class TFNetwork(object):
     if self.parent_layer:
       return self.parent_layer.network.get_search_choices(sources=self.parent_layer.get_dep_layers())
     return None
+
+  def debug_search_choices(self, base_search_choice):
+    """
+    :param LayerBase base_search_choice:
+    """
+    print("debug search choices:")
+    print("  base:", base_search_choice)
+    print("  network:")
+    for _, layer in sorted(self.layers.items()):
+      print("    layer:", layer)
+
+    class Visitor(set):
+      def update(self, others):
+        print("  visit: %r" % (others,))
+        super(Visitor, self).update(others)
+
+    self.get_search_choices(base_search_choice=base_search_choice, _visited=Visitor())
 
   def get_batch_dim(self):
     """
@@ -886,7 +956,7 @@ class TFNetwork(object):
     :return: int scalar tensor which states the batch-dim
     :rtype: int|tf.Tensor
     """
-    from TFUtil import get_shape_dim
+    from TFUtil import get_shape_dim, reuse_name_scope_of_tensor
     # First check parent because there we might get the true batch dim.
     if self.parent_net:
       return self.parent_net.get_batch_dim()
@@ -894,7 +964,8 @@ class TFNetwork(object):
       assert isinstance(data, Data)
       if data.available_for_inference:
         self.used_data_keys.add(key)
-        return get_shape_dim(data.placeholder, data.batch_dim_axis, name="batch_dim")
+        with reuse_name_scope_of_tensor(data.placeholder):
+          return get_shape_dim(data.placeholder, data.batch_dim_axis, name="batch_dim")
     raise Exception("We cannot tell the batch dim.")
 
 

@@ -140,12 +140,27 @@ def git_describeHeadVersion(gitdir="."):
   is_dirty = git_isDirty(gitdir=gitdir)
   return "%s--git-%s%s" % (cdate, rev, "-dirty" if is_dirty else "")
 
+_crnn_version_info = None
+
 def describe_crnn_version():
+  """
+  :rtype: str
+  :return: string like "20171017.163840--git-ab2a1da", via :func:`git_describeHeadVersion`
+  """
+  # Note that we cache it to avoid any issues e.g. when we changed the directory afterwards
+  # so that a relative __file__ would be invalid (which we hopefully don't do).
+  # Or to not trigger any pthread_atfork bugs,
+  # e.g. from OpenBlas (https://github.com/tensorflow/tensorflow/issues/13802),
+  # which also hopefully should not happen, but it might.
+  global _crnn_version_info
+  if _crnn_version_info:
+    return _crnn_version_info
   mydir = os.path.dirname(__file__)
   try:
-    return git_describeHeadVersion(gitdir=mydir)
+    _crnn_version_info = git_describeHeadVersion(gitdir=mydir)
   except Exception as e:
-    return "unknown(git exception: %r)" % e
+    _crnn_version_info = "unknown(git exception: %r)" % e
+  return _crnn_version_info
 
 def describe_theano_version():
   import theano
@@ -173,7 +188,10 @@ def describe_theano_version():
   return "%s (%s in %s)" % (version, git_info, tdir)
 
 def describe_tensorflow_version():
-  import tensorflow as tf
+  try:
+    import tensorflow as tf
+  except ImportError:
+    return "<TensorFlow ImportError>"
   try:
     tdir = os.path.dirname(tf.__file__)
   except Exception as e:
@@ -338,6 +356,10 @@ def human_size(n, factor=1000, frac=0.8, prec=1):
   if i == 0:
     return str(n)
   return ("%." + str(prec) + "f") % (float(n) / (factor ** i)) + postfixs[i]
+
+
+def human_bytes_size(n, factor=1024, frac=0.8, prec=1):
+  return human_size(n, factor=factor, frac=frac, prec=prec) + "B"
 
 
 def progress_bar(complete = 1.0, prefix = "", suffix = ""):
@@ -603,6 +625,36 @@ def interrupt_main():
     sys.exit(1)  # And exit the thread.
 
 
+class AsyncThreadRun(threading.Thread):
+  def __init__(self, name, func):
+    """
+    :param str name:
+    :param ()->T func:
+    """
+    super(AsyncThreadRun, self).__init__(name=name, target=self.main)
+    self.func = func
+    self.result = None
+    self.daemon = True
+    self.start()
+
+  def main(self):
+    self.result = wrap_async_func(self.func)
+
+  def get(self):
+    self.join()
+    return self.result
+
+
+def wrap_async_func(f):
+  try:
+    import better_exchook
+    better_exchook.install()
+    return f()
+  except Exception:
+    sys.excepthook(*sys.exc_info())
+    interrupt_main()
+
+
 def try_run(func, args=(), catch_exc=Exception, default=None):
   try:
     return func(*args)
@@ -783,7 +835,7 @@ def parse_orthography(orthography, prefix=(), postfix=("[END]",),
   :param str remove_chars: those chars will just be removed at the beginning
   :param bool collapse_spaces: whether multiple spaces and tabs are collapsed into a single space
   :param bool final_strip: whether we strip left and right
-  :param dict[str] kwargs: passed on to parse_orthography_into_symbols()
+  :param **kwargs: passed on to parse_orthography_into_symbols()
   :rtype: list[str]
   """
   for c in remove_chars:
@@ -1132,15 +1184,15 @@ class NumbersDict:
            self.__class__.__name__, self.dict, self.value)
 
 
-def collect_class_init_kwargs(cls, with_default=False):
+def collect_class_init_kwargs(cls, only_with_default=False):
   """
   :param type cls: class, where it assumes that kwargs are passed on to base classes
-  :param bool with_default: if given will only return the kwargs with default values
+  :param bool only_with_default: if given will only return the kwargs with default values
   :return: set if not with_default, otherwise the dict to the default values
   :rtype: list[str] | dict[str]
   """
   from collections import OrderedDict
-  if with_default:
+  if only_with_default:
     kwargs = OrderedDict()
   else:
     kwargs = []
@@ -1154,12 +1206,13 @@ def collect_class_init_kwargs(cls, with_default=False):
       continue
     arg_spec = getargspec(cls_.__init__)
     args = arg_spec.args[1:]  # first arg is self, ignore
-    if with_default:
-      assert len(arg_spec.defaults) <= len(args)
-      args = args[len(args) - len(arg_spec.defaults):]
-      assert len(arg_spec.defaults) == len(args), arg_spec
-      for arg, default in zip(args, arg_spec.defaults):
-        kwargs[arg] = default
+    if only_with_default:
+      if arg_spec.defaults:
+        assert len(arg_spec.defaults) <= len(args)
+        args = args[len(args) - len(arg_spec.defaults):]
+        assert len(arg_spec.defaults) == len(args), arg_spec
+        for arg, default in zip(args, arg_spec.defaults):
+          kwargs[arg] = default
     else:
       for arg in args:
         if arg not in kwargs:
@@ -1173,13 +1226,31 @@ def collect_mandatory_class_init_kwargs(cls):
   :return: list of kwargs which have no default, i.e. which must be provided
   :rtype: list[str]
   """
-  all_kwargs = collect_class_init_kwargs(cls, with_default=False)
-  default_kwargs = collect_class_init_kwargs(cls, with_default=True)
+  all_kwargs = collect_class_init_kwargs(cls, only_with_default=False)
+  default_kwargs = collect_class_init_kwargs(cls, only_with_default=True)
   mandatory_kwargs = []
   for arg in all_kwargs:
     if arg not in default_kwargs:
       mandatory_kwargs.append(arg)
   return mandatory_kwargs
+
+
+def help_on_type_error_wrong_args(cls, kwargs):
+  """
+  :param type cls:
+  :param list[str] kwargs:
+  """
+  mandatory_args = collect_mandatory_class_init_kwargs(cls)
+  for arg in kwargs:
+    if arg in mandatory_args:
+      mandatory_args.remove(arg)
+  all_kwargs = collect_class_init_kwargs(cls)
+  unknown_args = []
+  for arg in kwargs:
+    if arg not in all_kwargs:
+      unknown_args.append(arg)
+  if mandatory_args or unknown_args:
+    print("Args mismatch? Missing are %r, unknowns are %r." % (mandatory_args, unknown_args))
 
 
 def custom_exec(source, source_filename, user_ns, user_global_ns):
@@ -1264,6 +1335,9 @@ def load_txt_vector(filename):
   Expect line-based text encoding in file.
   We also support Sprint XML format, which has some additional xml header and footer,
   which we will just strip away.
+
+  :param str filename:
+  :rtype: list[float]
   """
   return [float(l) for l in open(filename).read().splitlines() if l and not l.startswith("<")]
 
@@ -1667,7 +1741,11 @@ def read_sge_num_procs(job_id=None):
   if not job_id:
     if not os.environ.get("SGE_ROOT"):
       return None
-    job_id = int(os.environ.get("JOB_ID") or 0)
+    try:
+      # qint.py might overwrite JOB_ID but sets SGE_JOB_ID instead.
+      job_id = int(os.environ.get("SGE_JOB_ID") or os.environ.get("JOB_ID") or 0)
+    except ValueError as exc:
+      raise Exception("read_sge_num_procs: %r, invalid JOB_ID: %r" % (exc, os.environ.get("JOB_ID")))
     if not job_id:
       return None
   from subprocess import Popen, PIPE, CalledProcessError
@@ -1680,7 +1758,11 @@ def read_sge_num_procs(job_id=None):
   ls = [l[len("hard resource_list:"):].strip() for l in stdout.splitlines() if l.startswith("hard resource_list:")]
   assert len(ls) == 1
   opts = dict([opt.split("=", 1) for opt in ls[0].split(",")])
-  return int(opts["num_proc"])
+  try:
+    return int(opts["num_proc"])
+  except ValueError as exc:
+    raise Exception("read_sge_num_procs: %r, invalid num_proc %r for job id %i.\nline: %r" % (
+      exc, opts["num_proc"], job_id, ls[0]))
 
 
 def try_and_ignore_exception(f):
@@ -1713,3 +1795,388 @@ def camel_case_to_snake_case(name):
   """
   s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
   return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
+
+
+def log_runtime_info_to_dir(path, config):
+  """
+  This will write multiple logging information into the path.
+  It will create returnn.*.log with some meta information,
+  as well as copy the used config file.
+
+  :param str path: directory path
+  :param Config.Config config:
+  """
+  import os
+  import sys
+  import socket
+  import shutil
+  from Config import Config
+  content = [
+    "Time: %s" % time.strftime("%Y-%m-%d %H:%M:%S"),
+    "Call: %s" % (sys.argv,),
+    "Path: %s" % (os.getcwd(),),
+    "Returnn: %s" % (describe_crnn_version(),),
+    "TensorFlow: %s" % (describe_tensorflow_version(),),
+    "Config files: %s" % (config.files,),
+  ]
+  if not os.path.exists(path):
+    os.makedirs(path)
+  hostname = socket.gethostname()
+  with open("%s/returnn.%s.%i.%s.log" % (
+    path, hostname, os.getpid(), time.strftime("%Y-%m-%d-%H-%M-%S")), "w") as f:
+    f.write(
+      "Returnn log file:\n" +
+      "".join(["%s\n" % s for s in content]) +
+      "\n")
+  for fn in config.files:
+    base_fn = os.path.basename(fn)
+    target_fn = "%s/%s" % (path, base_fn)
+    if os.path.exists(target_fn):
+      continue
+    shutil.copy(fn, target_fn)
+    config_type = Config.get_config_file_type(fn)
+    comment_prefix = "#"
+    if config_type == "js":
+      comment_prefix = "//"
+    with open(target_fn, "a") as f:
+      f.write(
+        "\n\n\n" +
+        "".join(
+          ["%s Config-file copied for logging purpose by Returnn.\n" % comment_prefix] +
+          ["%s %s\n" % (comment_prefix, s) for s in content]) +
+        "\n")
+
+
+class NativeCodeCompiler(object):
+  """
+  Helper class to compile native C/C++ code on-the-fly.
+  """
+
+  CacheDirName = "returnn_native"
+
+  def __init__(self, base_name, code_version, code,
+               is_cpp=True, c_macro_defines=None, ld_flags=None,
+               include_paths=(), include_deps=None,
+               static_version_name=None, should_cleanup_old_all=True, should_cleanup_old_mydir=False,
+               verbose=False):
+    """
+    :param str base_name: base name for the module, e.g. "zero_out"
+    :param int|tuple[int] code_version: check for the cache whether to reuse
+    :param str code: the source code itself
+    :param bool is_cpp: if False, C is assumed
+    :param dict[str,str|int]|None c_macro_defines: e.g. {"TENSORFLOW": 1}
+    :param list[str]|None ld_flags: e.g. ["-lblas"]
+    :param list[str]|tuple[str] include_paths:
+    :param list[str]|None include_deps: if provided and an existing lib file, we will check if any dependency is newer
+      and we need to recompile. we could also do it automatically via -MD but that seems overkill and too slow.
+    :param str|None static_version_name: normally, we use .../base_name/hash as the dir
+      but this would use .../base_name/static_version_name.
+    :param bool should_cleanup_old_all: whether we should look in the cache dir
+      and check all ops if we can delete some old ones which are older than some limit (self._cleanup_time_limit_days)
+    :param bool should_cleanup_old_mydir: whether we should delete our op dir before we compile there.
+    :param bool verbose: be slightly more verbose
+    """
+    self.verbose = verbose
+    self.cache_dir = "%s/%s" % (get_temp_dir(), self.CacheDirName)
+    self._include_paths = list(include_paths)
+    self.base_name = base_name
+    self.code_version = code_version
+    self.code = code
+    self.is_cpp = is_cpp
+    self.c_macro_defines = c_macro_defines or {}
+    self.ld_flags = ld_flags or []
+    self.include_deps = include_deps
+    self.static_version_name = static_version_name
+    self._code_hash = self._make_code_hash()
+    self._info_dict = self._make_info_dict()
+    self._hash = self._make_hash()
+    self._ctypes_lib = None
+    if should_cleanup_old_all:
+      self._cleanup_old()
+    self._should_cleanup_old_mydir = should_cleanup_old_mydir
+    if self.verbose:
+      print("%s: %r" % (self.__class__.__name__, self))
+
+  def __repr__(self):
+    return "<%s %r in %r>" % (self.__class__.__name__, self.base_name, self._mod_path)
+
+  @property
+  def _mod_path(self):
+    return "%s/%s/%s" % (self.cache_dir, self.base_name, self.static_version_name or self._hash[:10])
+
+  @property
+  def _info_filename(self):
+    return "%s/info.py" % (self._mod_path,)
+
+  @property
+  def _so_filename(self):
+    return "%s/%s.so" % (self._mod_path, self.base_name)
+
+  @property
+  def _c_filename(self):
+    if self.is_cpp:
+      return "%s/%s.cc" % (self._mod_path, self.base_name)
+    return "%s/%s.c" % (self._mod_path, self.base_name)
+
+  _cleanup_time_limit_days = 60
+
+  def _cleanup_old(self):
+    mod_path = self._mod_path  # .../base_name/hash
+    base_mod_path = os.path.dirname(mod_path)  # .../base_name
+    my_mod_path_name = os.path.basename(mod_path)
+    if not os.path.exists(base_mod_path):
+      return
+    import time
+    cleanup_time_limit_secs = self._cleanup_time_limit_days * 24 * 60 * 60
+    for p in os.listdir(base_mod_path):
+      if p == my_mod_path_name:
+        continue
+      full_dir_path = "%s/%s" % (base_mod_path, p)
+      if not os.path.isdir(full_dir_path):
+        continue  # ignore for now
+      lock = LockFile(full_dir_path)
+      if lock.is_locked():
+        continue
+      lock.maybe_remove_old_lockfile()
+      info_path = "%s/info.py" % full_dir_path
+      if not os.path.exists(info_path):
+        self._cleanup_old_path(full_dir_path, reason="corrupt dir, missing info.py")
+        continue
+      so_path = "%s/%s.so" % (full_dir_path, self.base_name)
+      if not os.path.exists(so_path):
+        self._cleanup_old_path(full_dir_path, reason="corrupt dir, missing so")
+        continue
+      dt = time.time() - os.path.getmtime(so_path)
+      if dt > cleanup_time_limit_secs:
+        self._cleanup_old_path(full_dir_path, reason="%s old" % hms(dt))
+
+  def _cleanup_old_path(self, p, reason):
+    print("%s delete old, %s: %s" % (self.__class__.__name__, reason, p))
+    assert os.path.exists(p)
+    import shutil
+    try:
+      shutil.rmtree(p)
+    except OSError as exc:
+      print("%s delete exception (%s). Will ignore and try to continue anyway." % (self.__class__.__name__, exc))
+
+  def _load_info(self):
+    filename = self._info_filename
+    if not os.path.exists(filename):
+      return None
+    s = open(filename).read()
+    return eval(s)
+
+  _relevant_info_keys = ("code_version", "code_hash", "c_macro_defines", "ld_flags")
+
+  def _make_info_dict(self):
+    return {
+      "base_name": self.base_name,
+      "include_paths": self._include_paths,
+      "code_version": self.code_version,
+      "code_hash": self._code_hash,
+      "c_macro_defines": self.c_macro_defines,
+      "ld_flags": self.ld_flags,
+    }
+
+  def _make_code_hash(self):
+    import hashlib
+    hash = hashlib.md5()
+    hash.update(self.code.encode("utf8"))
+    return hash.hexdigest()
+
+  def _make_hash(self):
+    import hashlib
+    hash = hashlib.md5()
+    hash.update("{".encode("utf8"))
+    for key in self._relevant_info_keys:
+      hash.update(("%s:{%s}" % (key, self._info_dict[key])).encode("utf8"))
+    hash.update("}".encode("utf8"))
+    return hash.hexdigest()
+
+  def _save_info(self):
+    filename = self._info_filename
+    with open(filename, "w") as f:
+      f.write("%s\n" % betterRepr(self._info_dict))
+
+  def _need_recompile(self):
+    if not os.path.exists(self._so_filename):
+      return True
+    if self.include_deps:
+      so_mtime = os.path.getmtime(self._so_filename)
+      for fn in self.include_deps:
+        if os.path.getmtime(fn) > so_mtime:
+          return True
+    old_info = self._load_info()
+    new_info = self._make_info_dict()
+    if not old_info:
+      return True
+    # The hash already matched but very unlikely, this could be a collision.
+    # Anyway, just do this very cheap check.
+    for key in self._relevant_info_keys:
+      if key not in old_info:
+        return True
+      if old_info[key] != new_info[key]:
+        return True
+    # If no code version is provided, we could also check the code itself now.
+    # But I think this is overkill.
+    return False
+
+  def _maybe_compile(self):
+    """
+    On successful return, self._so_filename should exist and be up-to-date.
+    """
+    if not self._need_recompile():
+      if self.verbose:
+        print("%s: No need to recompile: %s" % (self.__class__.__name__, self._so_filename))
+      # Touch it so that we can see that we used it recently.
+      os.utime(self._info_filename, None)
+      return
+    lock = LockFile(self._mod_path)
+    if self._should_cleanup_old_mydir and not lock.is_locked():
+      if os.path.exists(self._mod_path):
+        self._cleanup_old_path(self._mod_path, reason="need recompile")
+    with lock:
+      self._maybe_compile_inner()
+
+  def _get_compiler_bin(self):
+    if self.is_cpp:
+      return "g++"
+    return "gcc"
+
+  def _transform_compiler_opts(self, opts):
+    """
+    :param list[str] opts:
+    :rtype: list[str]
+    """
+    return opts
+
+  def _maybe_compile_inner(self):
+    # Directory should be created by the locking mechanism.
+    assert os.path.exists(self._mod_path)
+    with open(self._c_filename, "w") as f:
+      f.write(self.code)
+    common_opts = ["-shared", "-O2"]
+    if self.is_cpp:
+      common_opts += ["-std=c++11"]
+    if sys.platform == "darwin":
+      common_opts += ["-undefined", "dynamic_lookup"]
+    for include_path in self._include_paths:
+      common_opts += ["-I", include_path]
+    compiler_opts = ["-fPIC"]
+    common_opts += self._transform_compiler_opts(compiler_opts)
+    common_opts += ["-D_GLIBCXX_USE_CXX11_ABI=0"]  # might be obsolete in the future
+    common_opts += ["-D%s=%s" % item for item in sorted(self.c_macro_defines)]
+    common_opts += ["-g"]
+    opts = common_opts + [self._c_filename, "-o", self._so_filename]
+    opts += self.ld_flags
+    cmd_bin = self._get_compiler_bin()
+    cmd_args = [cmd_bin] + opts
+    from subprocess import Popen, PIPE, STDOUT, CalledProcessError
+    print("%s call: %s" % (self.__class__.__name__, " ".join(cmd_args)))
+    proc = Popen(cmd_args, cwd=self._mod_path, stdout=PIPE, stderr=STDOUT)
+    stdout, stderr = proc.communicate()
+    assert stderr is None  # should only have stdout
+    if proc.returncode != 0:
+      print("%s: %s failed." % (self.__class__.__name__, cmd_bin))
+      print("Original stdout/stderr:")
+      print(stdout.decode("utf8"))
+      raise CalledProcessError(returncode=proc.returncode, cmd=cmd_args)
+    assert os.path.exists(self._so_filename)
+    with open("%s/compile.log" % self._mod_path, "wb") as f:
+      if self.verbose:
+        print("%s: write compile log to: %s" % (self.__class__.__name__, f.name))
+      f.write(("+ %s" % " ".join(cmd_args)).encode("utf8"))
+      f.write(stdout)
+    self._save_info()
+    assert not self._need_recompile()
+
+  def load_lib_ctypes(self):
+    if self._ctypes_lib:
+      return self._ctypes_lib
+    self._maybe_compile()
+    import ctypes
+    self._ctypes_lib = ctypes.cdll.LoadLibrary(self._so_filename)
+    return self._ctypes_lib
+
+  def get_lib_filename(self):
+    self._maybe_compile()
+    return self._so_filename
+
+
+# See :func:`maybe_restart_returnn_with_atfork_patch` below for why you might want to use this.
+_c_code_patch_atfork = """
+#define _GNU_SOURCE
+#include <sched.h>
+#include <signal.h>
+#include <sys/syscall.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+// https://stackoverflow.com/questions/46845496/ld-preload-and-linkage
+// https://stackoverflow.com/questions/46810597/forkexec-without-atfork-handlers
+
+int pthread_atfork(void (*prepare)(void), void (*parent)(void), void (*child)(void)) {
+  printf("Ignoring pthread_atfork call!\\n");
+  fflush(stdout);
+  return 0;
+}
+
+int __register_atfork(void (*prepare)(void), void (*parent)(void), void (*child)(void)) {
+  printf("Ignoring __register_atfork call!\\n");
+  fflush(stdout);
+  return 0;
+}
+
+// Another way to ignore atfork handlers: Override fork.
+pid_t fork(void) {
+  return syscall(SYS_clone, SIGCHLD, 0);
+}
+
+__attribute__((constructor))
+void patch_atfork_init() {
+  setenv("__RETURNN_ATFORK_PATCHED", "1", 1);
+}
+"""
+
+
+def get_patch_atfork_lib():
+  native = NativeCodeCompiler(
+    base_name="patch_atfork", code_version=2, code=_c_code_patch_atfork, is_cpp=False)
+  fn = native.get_lib_filename()
+  return fn
+
+
+def maybe_restart_returnn_with_atfork_patch():
+  """
+  What we want: subprocess.Popen to always work.
+  Problem: It uses fork+exec internally in subprocess_fork_exec, via _posixsubprocess.fork_exec.
+  That is a problem because fork can trigger any atfork handlers registered via pthread_atfork,
+  and those can crash/deadlock in some cases.
+
+  https://github.com/tensorflow/tensorflow/issues/13802
+  https://github.com/xianyi/OpenBLAS/issues/240
+  https://trac.sagemath.org/ticket/22021
+  https://bugs.python.org/issue31814
+  https://stackoverflow.com/questions/46845496/ld-preload-and-linkage
+  https://stackoverflow.com/questions/46810597/forkexec-without-atfork-handlers
+
+  The solution here: Just override pthread_atfork, via LD_PRELOAD.
+  Note that in some cases, this is not enough (see the SO discussion),
+  so we also overwrite fork itself.
+  See also tests/test_fork_exec.py for a demo.
+  """
+  if os.environ.get("__RETURNN_ATFORK_PATCHED") == "1":
+    print("Running with patched atfork.")
+    return
+  if os.environ.get("__RETURNN_TRY_ATFORK_PATCHED") == "1":
+    print("Patching atfork did not work! Will continue anyway.")
+    return
+  lib = get_patch_atfork_lib()
+  env = os.environ.copy()
+  env["LD_PRELOAD"] = lib
+  env["__RETURNN_TRY_ATFORK_PATCHED"] = "1"
+  print("Restarting Returnn with atfork patch...", sys.executable, sys.argv)
+  sys.stdout.flush()
+  os.execvpe(sys.executable, [sys.executable] + sys.argv, env)
+  print("execvpe did not work?")

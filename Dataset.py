@@ -219,12 +219,14 @@ class Dataset(object):
 
   def get_seq_order_for_epoch(self, epoch, num_seqs, get_seq_len=None):
     """
-    :returns the order for the given epoch.
+    Returns the order of the given epoch.
     This is mostly a static method, except that is depends on the configured type of ordering,
-     such as 'default' (= as-is), 'sorted' or 'random'. 'sorted' also uses the sequence length.
+    such as 'default' (= as-is), 'sorted' or 'random'. 'sorted' also uses the sequence length.
+
     :param int epoch: for 'random', this determines the random seed
-    :type num_seqs: int
-    :param get_seq_len: function (originalSeqIdx: int) -> int
+    :param int num_seqs:
+    :param ((int) -> int)|None get_seq_len: function (originalSeqIdx: int) -> int
+    :return: the order for the given epoch. such that seq_idx -> underlying idx
     :rtype: list[int]
     """
     assert num_seqs > 0
@@ -239,16 +241,16 @@ class Dataset(object):
       tmp = self.seq_ordering.split(':')
       bins = int(tmp[1]) if len(tmp) > 1 else 2
       nth = int(tmp[2]) if len(tmp) > 2 else 1
-      rnd_seed = ((epoch - 1) / nth + 1) if epoch else 1
+      rnd_seed = ((epoch - 1) // nth + 1) if epoch else 1
       rnd = Random(rnd_seed)
       rnd.shuffle(seq_index)
       out_index = []
       for i in range(bins):
         if i == bins - 1:
-          part = seq_index[i * len(seq_index) / bins:]
+          part = seq_index[i * len(seq_index) // bins:]
         else:
-          part = seq_index[i * len(seq_index) / bins:(i + 1) * len(seq_index) / bins]
-        part.sort(key=get_seq_len,reverse=(i%2==1))
+          part = seq_index[i * len(seq_index) // bins:(i + 1) * len(seq_index) // bins]
+        part.sort(key=get_seq_len, reverse=(i%2 == 1))
         out_index += part
       seq_index = out_index
     elif self.seq_ordering.startswith('random'):
@@ -267,7 +269,7 @@ class Dataset(object):
     :type epoch: int|None
     :param list[str] | None seq_list: In case we want to set a predefined order.
     :rtype: bool
-    :returns whether the order changed
+    :returns whether the order changed (True is always safe to return)
 
     This is called when we start a new epoch, or at initialization.
     Call this when you reset the seq list.
@@ -419,8 +421,9 @@ class Dataset(object):
 
   def get_data_dim(self, key):
     """
-    :type key: str
+    :param str key: e.g. "data" or "classes"
     :return: number of classes, no matter if sparse or not
+    :rtype: int
     """
     if key == "data":
       return self.num_inputs * self.window
@@ -429,11 +432,21 @@ class Dataset(object):
     return 1  # unknown
 
   def get_data_dtype(self, key):
+    """
+    :param str key: e.g. "data" or "classes"
+    :return: dtype as str, e.g. "int32" or "float32"
+    :rtype: str
+    """
     if self.is_data_sparse(key):
       return "int32"
     return "float32"
 
   def is_data_sparse(self, key):
+    """
+    :param str key: e.g. "data" or "classes"
+    :return: whether the data is sparse
+    :rtype: bool
+    """
     if key in self.num_outputs:
       return self.num_outputs[key][1] == 1
     if key == "data":
@@ -443,12 +456,17 @@ class Dataset(object):
   def get_data_shape(self, key):
     """
     :returns get_data(*, key).shape[1:], i.e. num-frames excluded
+    :rtype: list[int]
     """
     if self.is_data_sparse(key):
       return []
     return [self.get_data_dim(key)]
 
   def have_seqs(self):
+    """
+    :return: whether num_seqs > 0
+    :rtype: bool
+    """
     return self.is_less_than_num_seqs(0)
 
   def len_info(self):
@@ -471,6 +489,20 @@ class Dataset(object):
     # We keep this dynamic so that other implementations which don't know the num of seqs
     # in advance can handle this somehow.
     return n < self.num_seqs
+
+  def can_serialize_data(self, key):
+    """
+    :param str key: e.g. "classes"
+    :rtype: bool
+    """
+    return key in self.labels
+
+  def serialize_data(self, key, data):
+    """
+    :param str key: e.g. "classes". self.labels[key] should be set
+    :param numpy.ndarray data: 1D
+    """
+    return " ".join(map(self.labels[key].__getitem__, data))
 
   def calculate_priori(self, target="classes"):
     priori = numpy.zeros((self.num_outputs[target][0],), dtype=theano.config.floatX)
@@ -728,10 +760,18 @@ def get_dataset_class(name):
 
 def init_dataset(kwargs):
   """
-  :type kwargs: dict[str] | str
+  :param dict[str]|str|(()->dict[str]) kwargs:
   :rtype: Dataset
   """
+  assert kwargs
+  if callable(kwargs):
+    return init_dataset(kwargs())
   if isinstance(kwargs, (str, unicode)):
+    if kwargs.startswith("config:"):
+      from Config import get_global_config
+      config = get_global_config()
+      assert config
+      return init_dataset(config.opt_typed_value(kwargs[len("config:"):]))
     return init_dataset_via_str(config_str=kwargs)
   kwargs = kwargs.copy()
   assert "class" in kwargs

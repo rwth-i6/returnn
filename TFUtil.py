@@ -6,7 +6,7 @@ from tensorflow.python.client import device_lib
 import contextlib
 import os
 import sys
-from Util import NotSpecified
+from Util import NotSpecified, NativeCodeCompiler
 
 
 def tf_version_tuple():
@@ -893,13 +893,16 @@ def get_current_name_scope():
 
 
 @contextlib.contextmanager
-def reuse_name_scope(name, absolute=None):
+def reuse_name_scope(name, absolute=None, reuse_vars=None):
   """
+  Context manager to reuse an already created scope.
+  We try to both set the variable scope and the name scope.
+
   :param str|tf.VariableScope name: relative or absolute name scope (absolute if absolute=True or if tf.VariableScope).
     must not end with "/".
   :param bool absolute: if True it will be absolute
-
-  We try to both set the variable scope and the name scope.
+  :param bool reuse_vars: passed on as `reuse` arg for `tf.variable_scope`
+  :return: yields the variable_scope
   """
   if isinstance(name, tf.VariableScope):
     name = name.name
@@ -927,11 +930,13 @@ def reuse_name_scope(name, absolute=None):
     # tf.name_scope will not set the variable scope.
     # tf.variable_scope will also set the name scope, but the logic is broken
     # for absolute name scopes, thus we had to do the tf.name_scope manually above.
-    # We create the dummy_var_scope to force it to reuse that name.
+    # We create the dummy_var_scope to force it to reuse that name,
+    # and the trailing "/" will work-around the broken tf.variable_scope() usage of tf.name_scope().
+    # Afterwards we fix that name again.
     # Note that the reuse-argument might be miss-leading in this context:
     # It means that tf.get_variable() will search for existing variables and errors otherwise.
-    dummy_var_scope = tf.VariableScope(reuse=None, name=abs_name)
-    with tf.variable_scope(dummy_var_scope) as scope:
+    var_scope = tf.VariableScope(reuse=reuse_vars, name=abs_name)
+    with tf.variable_scope(var_scope) as scope:
       assert isinstance(scope, tf.VariableScope)
       # remove "/" from the end of the var-scope.
       # This is a work-around to fix up the variable scope behavior for nested variable scopes.
@@ -1017,12 +1022,56 @@ class FlipGradientBuilder(object):
 
     g = tf.get_default_graph()
     with g.gradient_override_map({"Identity": grad_name}):
-      y = tf.identity(x)
+      y = tf.identity(x, "flip_gradient_identity")
 
     self.num_calls += 1
     return y
 
 flip_gradient = FlipGradientBuilder()
+
+
+def lookup_grad_func_by_name(op_type):
+  """
+  :param str op_type:
+  :return: function grad_func(op, grad), or raises LookupError
+  """
+  from tensorflow.python.framework import ops
+  # Also see ops.RegisterGradient and ops.get_gradient_function.
+  return ops._gradient_registry.lookup(op_type)
+
+
+def identity_with_check_numerics(x, with_grad=True, name="identity_with_check_numerics"):
+  """
+  Returns identity(x), but with additional check_numerics control dependency,
+  and optionally the same for its gradient.
+  See also :func:`TFUpdater.add_check_numerics_ops`, which will add checks for the whole graph.
+
+  :param tf.Tensor x:
+  :param bool with_grad: whether the check will also be added for the gradient
+  :param str name:
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope(name):
+    with tf.control_dependencies([tf.check_numerics(x, message="%s %s" % (x.name, name))]):
+      if with_grad:
+        # An alternative to gradient_override_map would be :class:`CustomGradient` which is more generic.
+        grad_name = "identity_with_check_numerics_grad"
+        try:
+          lookup_grad_func_by_name(grad_name)
+        except LookupError:
+          from tensorflow.python.framework import ops
+          @ops.RegisterGradient(grad_name)
+          def _identity_with_check_numerics_grad(op, grad):
+            return identity_with_check_numerics(grad, with_grad=True, name="%s_grad" % name)
+
+        g = tf.get_default_graph()
+        with g.gradient_override_map({"Identity": grad_name}):
+          y = tf.identity(x)
+
+      else:
+        y = tf.identity(x)
+
+      return y
 
 
 def check_input_ndim(x, ndim):
@@ -1085,12 +1134,13 @@ def check_input_dim(x, axis, dim):
       return tf.identity(x, "identity_with_dim_check")
 
 
-def check_dim_equal(x, x_axis, y, y_axis):
+def check_dim_equal(x, x_axis, y, y_axis, extra_msg=()):
   """
   :param tf.Tensor x:
   :param int x_axis: which axis to check
   :param tf.Tensor y:
   :param int y_axis: which axis to check
+  :param list[str]|tuple[str] extra_msg: will be printed additionally if it fails
   :return: x with check added that shape(x)[x_axis] == shape(y)[y_axis]
   :rtype: tf.Tensor
   """
@@ -1098,7 +1148,7 @@ def check_dim_equal(x, x_axis, y, y_axis):
   y_dyn_shape = y.get_shape()
   if x_dyn_shape.ndims is not None and y_dyn_shape.ndims is not None:
     if x_dyn_shape.dims[x_axis].value is not None and y_dyn_shape.dims[y_axis].value is not None:
-      assert x_dyn_shape.dims[x_axis].value == y_dyn_shape.dims[y_axis].value
+      assert x_dyn_shape.dims[x_axis].value == y_dyn_shape.dims[y_axis].value, extra_msg
       return x
   # Need to fall-back to runtime check.
   with tf.name_scope("check_dim_equal"):
@@ -1107,7 +1157,7 @@ def check_dim_equal(x, x_axis, y, y_axis):
     with tf.control_dependencies(
       [tf.assert_equal(
          shape_x[x_axis], shape_y[y_axis],
-         data=["x.shape[%i] not y.shape[%i]" % (x_axis, y_axis), shape_x, shape_y])]):
+         data=["x.shape[%i] != y.shape[%i]" % (x_axis, y_axis), shape_x, shape_y] + list(extra_msg))]):
       return tf.identity(x, "identity_with_dim_equal_check")
 
 
@@ -1291,7 +1341,14 @@ def check_initial_tf_thread_pool_init():
 
 _list_local_devices = None
 
-def _get_tf_list_local_devices():
+def get_tf_list_local_devices():
+  """
+  This uses tensorflow.device_lib.list_local_devices().
+  Note that a call to this will trigger the internal TF thread pool inits,
+  so you should call :func:`setup_tf_thread_pools` first.
+
+  :rtype: list[tensorflow.core.framework.device_attributes_pb2.DeviceAttributes]
+  """
   check_initial_tf_thread_pool_init()
   global _list_local_devices
   if _list_local_devices:
@@ -1317,13 +1374,19 @@ def _parse_physical_device_desc(s):
 
 
 def print_available_devices():
+  """
+  Prints the available TF devices on stdout.
+  This uses tensorflow.device_lib.list_local_devices().
+  Note that a call to this will trigger the internal TF thread pool inits,
+  so you should call :func:`setup_tf_thread_pools` first.
+  """
   cuda_visible_devs = None
   if "CUDA_VISIBLE_DEVICES" in os.environ:
     print("CUDA_VISIBLE_DEVICES is set to %r." % os.environ["CUDA_VISIBLE_DEVICES"])
     cuda_visible_devs = dict(enumerate([int(d) for d in os.environ["CUDA_VISIBLE_DEVICES"].split(",") if d]))
   else:
     print("CUDA_VISIBLE_DEVICES is not set.")
-  devs = _get_tf_list_local_devices()
+  devs = get_tf_list_local_devices()
   print("Local devices available to TensorFlow:")
   for i, dev in enumerate(devs):
     print("  %i/%i: %s" % (i + 1, len(devs), "\n       ".join(str(dev).splitlines())))
@@ -1341,8 +1404,13 @@ def print_available_devices():
 
 
 def is_gpu_available():
-  """Returns whether TensorFlow can access a GPU."""
-  return any(x.device_type == 'GPU' for x in _get_tf_list_local_devices())
+  """
+  Returns whether TensorFlow can access a GPU.
+  This uses tensorflow.device_lib.list_local_devices().
+  Note that a call to this will trigger the internal TF thread pool inits,
+  so you should call :func:`setup_tf_thread_pools` first.
+  """
+  return any(x.device_type == 'GPU' for x in get_tf_list_local_devices())
 
 
 def dot(a, b):
@@ -1688,7 +1756,7 @@ def flatten_with_seq_len_mask(x, seq_lens, time_major=False):
     seq_lens = check_input_ndim(seq_lens, 1)
     if time_major:
       x = swapaxes(x, 0, 1)  # get (batch,time,...s...)
-    x = check_dim_equal(x, 0, seq_lens, 0)  # batch dim
+    x = check_dim_equal(x, 0, seq_lens, 0, ["batch-dim does not match"])  # batch dim
     # int64? -> https://github.com/tensorflow/tensorflow/issues/6518
     mask = sequence_mask(seq_lens, maxlen=tf.shape(x)[1])  # shape (batch,time)
     mask = check_input_ndim(mask, 2)
@@ -1910,19 +1978,16 @@ class VariableAssigner(object):
     :param tf.Variable var:
     """
     self.var = var
-    name = var.name.split("/")[-1][:-2]
-    self.value_placeholder = tf.placeholder(
-      name="%s_placeholder_assign_value" % name,
-      shape=var.get_shape(),
-      dtype=var.dtype)
-    self.assign_op = tf.assign(self.var, self.value_placeholder, name="%s_assign" % name)
+    assert isinstance(self.var.initializer, tf.Operation)
+    assert self.var.initializer.type in ["Assign", "AssignVariableOp"]
+    self.assign_op = self.var.initializer
 
   def assign(self, value, session):
     """
     :param numpy.ndarray|int|float value:
     :param tf.Session session:
     """
-    session.run(self.assign_op, feed_dict={self.value_placeholder: value})
+    session.run(self.assign_op, feed_dict={self.assign_op.inputs[1]: value})
 
 
 class CudaEnv(object):
@@ -2035,244 +2100,51 @@ class CudaEnv(object):
     return cls._instance
 
 
-class OpCodeCompiler(object):
+class OpCodeCompiler(NativeCodeCompiler):
   """
   Helper class to compile TF ops on-the-fly, similar as Theano.
   https://www.tensorflow.org/versions/master/how_tos/adding_an_op/
   """
 
-  def __init__(self, base_name, code_version, code, c_macro_defines=None, ld_flags=None, include_deps=None,
-               static_version_name=None, should_cleanup_old_all=True, should_cleanup_old_mydir=False,
-               use_cuda_if_available=True, verbose=False):
-    """
-    :param str base_name: base name for the module, e.g. "zero_out"
-    :param int|tuple[int] code_version: check for the cache whether to reuse
-    :param str code: the source code itself
-    :param dict[str,str|int]|None c_macro_defines: e.g. {"TENSORFLOW": 1}
-    :param list[str]|None ld_flags: e.g. ["-lblas"]
-    :param list[str]|None include_deps: if provided and an existing lib file, we will check if any dependency is newer
-      and we need to recompile. we could also do it automatically via -MD but that seems overkill and too slow.
-    :param str|None static_version_name: normally, we use .../base_name/hash as the dir
-      but this would use .../base_name/static_version_name.
-    :param bool should_cleanup_old_all: whether we should look in the cache dir
-      and check all ops if we can delete some old ones which are older than some limit (self._cleanup_time_limit_days)
-    :param bool should_cleanup_old_mydir: whether we should delete our op dir before we compile there.
-    :param bool verbose: be slightly more verbose
-    """
-    from Util import get_temp_dir
-    self.verbose = verbose
-    self.cache_dir = "%s/returnn_tf_cache" % get_temp_dir()
-    self._include_path = tf.sysconfig.get_include()  # e.g. "...python2.7/site-packages/tensorflow/include"
-    self.base_name = base_name
-    self.code_version = code_version
-    self.code = code
-    self.c_macro_defines = c_macro_defines or {}
-    self.ld_flags = ld_flags or []
-    self.include_deps = include_deps
-    self.static_version_name = static_version_name
+  CacheDirName = "returnn_tf_cache/ops"
+
+  def __init__(self, use_cuda_if_available=True, include_paths=(), **kwargs):
     self._cuda_env = use_cuda_if_available and CudaEnv.get_instance()
-    self._code_hash = self._make_code_hash()
-    self._info_dict = self._make_info_dict()
-    self._hash = self._make_hash()
-    self._mod = None
-    if should_cleanup_old_all:
-      self._cleanup_old()
-    self._should_cleanup_old_mydir = should_cleanup_old_mydir
-    if self.verbose:
-      print("OpCodeCompiler: %r" % self)
+    include_paths = include_paths + (
+      tf.sysconfig.get_include(),)  # e.g. "...python2.7/site-packages/tensorflow/include"
+    super(OpCodeCompiler, self).__init__(include_paths=include_paths, **kwargs)
+    self._tf_mod = None
 
-  def __repr__(self):
-    return "<OpCodeCompiler %r in %r>" % (self.base_name, self._mod_path)
-
-  @property
-  def _mod_path(self):
-    return "%s/ops/%s/%s" % (self.cache_dir, self.base_name, self.static_version_name or self._hash[:10])
-
-  @property
-  def _info_filename(self):
-    return "%s/info.py" % (self._mod_path,)
-
-  @property
-  def _so_filename(self):
-    return "%s/%s.so" % (self._mod_path, self.base_name)
-
-  @property
-  def _cc_filename(self):
-    return "%s/%s.cc" % (self._mod_path, self.base_name)
-
-  _cleanup_time_limit_days = 60
-
-  def _cleanup_old(self):
-    mod_path = self._mod_path  # .../base_name/hash
-    base_mod_path = os.path.dirname(mod_path)  # .../base_name
-    my_mod_path_name = os.path.basename(mod_path)
-    if not os.path.exists(base_mod_path):
-      return
-    import time
-    from Util import hms, LockFile
-    cleanup_time_limit_secs = self._cleanup_time_limit_days * 24 * 60 * 60
-    for p in os.listdir(base_mod_path):
-      if p == my_mod_path_name:
-        continue
-      full_dir_path = "%s/%s" % (base_mod_path, p)
-      if not os.path.isdir(full_dir_path):
-        continue  # ignore for now
-      lock = LockFile(full_dir_path)
-      if lock.is_locked():
-        continue
-      lock.maybe_remove_old_lockfile()
-      info_path = "%s/info.py" % full_dir_path
-      if not os.path.exists(info_path):
-        self._cleanup_old_path(full_dir_path, reason="corrupt dir, missing info.py")
-        continue
-      so_path = "%s/%s.so" % (full_dir_path, self.base_name)
-      if not os.path.exists(so_path):
-        self._cleanup_old_path(full_dir_path, reason="corrupt dir, missing so")
-        continue
-      dt = time.time() - os.path.getmtime(so_path)
-      if dt > cleanup_time_limit_secs:
-        self._cleanup_old_path(full_dir_path, reason="%s old" % hms(dt))
-
-  def _cleanup_old_path(self, p, reason):
-    print("OpCompiler delete old, %s: %s" % (reason, p))
-    assert os.path.exists(p)
-    import shutil
-    try:
-      shutil.rmtree(p)
-    except OSError as exc:
-      print("OpCompiler delete exception (%s). Will ignore and try to continue anyway." % exc)
-
-  def _load_info(self):
-    filename = self._info_filename
-    if not os.path.exists(filename):
-      return None
-    s = open(filename).read()
-    return eval(s)
-
-  _relevant_info_keys = ("tf_version", "code_version", "with_cuda", "code_hash", "c_macro_defines", "ld_flags")
+  _relevant_info_keys = NativeCodeCompiler._relevant_info_keys + ("tf_version", "with_cuda")
 
   def _make_info_dict(self):
-    return {
-      "base_name": self.base_name,
+    d = super(OpCodeCompiler, self)._make_info_dict()
+    d.update({
       "tf_version": tf.__version__,
-      "tf_include_path": self._include_path,
-      "code_version": self.code_version,
-      "code_hash": self._code_hash,
-      "c_macro_defines": self.c_macro_defines,
-      "ld_flags": self.ld_flags,
       "with_cuda": bool(self._cuda_env and self._cuda_env.is_available())
-    }
+    })
+    return d
 
-  def _make_code_hash(self):
-    import hashlib
-    hash = hashlib.md5()
-    hash.update(self.code.encode("utf8"))
-    return hash.hexdigest()
-
-  def _make_hash(self):
-    import hashlib
-    hash = hashlib.md5()
-    hash.update("{".encode("utf8"))
-    for key in self._relevant_info_keys:
-      hash.update(("%s:{%s}" % (key, self._info_dict[key])).encode("utf8"))
-    hash.update("}".encode("utf8"))
-    return hash.hexdigest()
-
-  def _save_info(self):
-    filename = self._info_filename
-    from Util import betterRepr
-    with open(filename, "w") as f:
-      f.write("%s\n" % betterRepr(self._info_dict))
-
-  def _need_recompile(self):
-    if not os.path.exists(self._so_filename):
-      return True
-    if self.include_deps:
-      so_mtime = os.path.getmtime(self._so_filename)
-      for fn in self.include_deps:
-        if os.path.getmtime(fn) > so_mtime:
-          return True
-    old_info = self._load_info()
-    new_info = self._make_info_dict()
-    if not old_info:
-      return True
-    # The hash already matched but very unlikely, this could be a collision.
-    # Anyway, just do this very cheap check.
-    for key in self._relevant_info_keys:
-      if key not in old_info:
-        return True
-      if old_info[key] != new_info[key]:
-        return True
-    # If no code version is provided, we could also check the code itself now.
-    # But I think this is overkill.
-    return False
-
-  def _maybe_compile(self):
-    if not self._need_recompile():
-      if self.verbose:
-        print("OpCodeCompiler: No need to recompile:", self._so_filename)
-      # Touch it so that we can see that we used it recently.
-      os.utime(self._info_filename, None)
-      return
-    from Util import LockFile
-    lock = LockFile(self._mod_path)
-    if self._should_cleanup_old_mydir and not lock.is_locked():
-      if os.path.exists(self._mod_path):
-        self._cleanup_old_path(self._mod_path, reason="need recompile")
-    with lock:
-      self._maybe_compile_inner()
-
-  def _maybe_compile_inner(self):
-    # Directory should be created by the locking mechanism.
-    assert os.path.exists(self._mod_path)
-    with open(self._cc_filename, "w") as f:
-      f.write(self.code)
-    common_opts = ["-shared", "-O2", "-std=c++11"]
-    if sys.platform == "darwin":
-      common_opts += ["-undefined", "dynamic_lookup"]
-    common_opts += ["-I", self._include_path]
-    compiler_opts = ["-fPIC"]
+  def _get_compiler_bin(self):
     if self._cuda_env and self._cuda_env.is_available():
-      common_opts += self._cuda_env.get_compiler_opts()
-      common_opts += ["-DGOOGLE_CUDA=1"]
-      for opt in compiler_opts:
-        common_opts += ["-Xcompiler", opt]
-    else:
-      common_opts += compiler_opts
-    common_opts += ["-D_GLIBCXX_USE_CXX11_ABI=0"]  # might be obsolete in the future
-    common_opts += ["-D%s=%s" % item for item in sorted(self.c_macro_defines)]
-    common_opts += ["-g"]
-    opts = common_opts + [self._cc_filename, "-o", self._so_filename]
-    opts += self.ld_flags
-    cmd_bin = "g++"
-    if self._cuda_env and self._cuda_env.is_available():
-      cmd_bin = self._cuda_env.get_compiler_bin()
-    cmd_args = [cmd_bin] + opts
-    from subprocess import Popen, PIPE, STDOUT, CalledProcessError
-    print("OpCompiler call: %s" % " ".join(cmd_args))
-    proc = Popen(cmd_args, cwd=self._mod_path, stdout=PIPE, stderr=STDOUT)
-    stdout, stderr = proc.communicate()
-    assert stderr is None  # should only have stdout
-    if proc.returncode != 0:
-      print("OpCompiler: %s failed." % cmd_bin)
-      print("Original stdout/stderr:")
-      print(stdout.decode("utf8"))
-      raise CalledProcessError(returncode=proc.returncode, cmd=cmd_args)
-    assert os.path.exists(self._so_filename)
-    with open("%s/compile.log" % self._mod_path, "wb") as f:
-      if self.verbose:
-        print("OpCodeCompiler: write compile log to:", f.name)
-      f.write(("+ %s" % " ".join(cmd_args)).encode("utf8"))
-      f.write(stdout)
-    self._save_info()
-    assert not self._need_recompile()
+      return self._cuda_env.get_compiler_bin()
+    return super(OpCodeCompiler, self)._get_compiler_bin()
 
-  def load_module(self):
-    if self._mod:
-      return self._mod
+  def _transform_compiler_opts(self, opts):
+    if self._cuda_env and self._cuda_env.is_available():
+      nvcc_opts = self._cuda_env.get_compiler_opts()
+      nvcc_opts += ["-DGOOGLE_CUDA=1"]
+      for opt in opts:
+        nvcc_opts += ["-Xcompiler", opt]
+      return nvcc_opts
+    return super(OpCodeCompiler, self)._transform_compiler_opts(opts)
+
+  def load_tf_module(self):
+    if self._tf_mod:
+      return self._tf_mod
     self._maybe_compile()
-    self._mod = tf.load_op_library(self._so_filename)
-    return self._mod
+    self._tf_mod = tf.load_op_library(self._so_filename)
+    return self._tf_mod
 
 
 def make_var_tuple(v):
@@ -2289,15 +2161,17 @@ def make_var_tuple(v):
   return v
 
 
-def add_scaled_noise_to_gradients(grads_and_vars, gradient_noise_scale):
+def add_scaled_noise_to_gradients(grads_and_vars, gradient_noise_scale, sparse_grads=False):
   """
   Adds scaled noise from a 0-mean normal distribution to gradients.
   Adapted from tf.contrib.layers.optimizers.
 
-  :param list[(tf.Tensor, tf.Variable)] grads_and_vars:
+  :param list[(tf.Tensor|tf.IndexedSlices, tf.Variable)] grads_and_vars:
   :param float gradient_noise_scale: used as stddev for tf.truncated_normal().
+  :param bool sparse_grads: for sparse gradients (tf.IndexedSlices), it will only add the noise to the indexed values.
+    Seems broken in some cases? Needs debugging.
   :return: adapted grads_and_vars
-  :rtype: list[(tf.Tensor, tf.Variable)]
+  :rtype: list[(tf.Tensor|tf.IndexedSlices, tf.Variable)]
   """
   gradients, variables = zip(*grads_and_vars)
   noisy_gradients = []
@@ -2305,14 +2179,28 @@ def add_scaled_noise_to_gradients(grads_and_vars, gradient_noise_scale):
     if gradient is None:
       noisy_gradients.append(None)
       continue
-    if isinstance(gradient, tf.IndexedSlices):
-      gradient_shape = gradient.dense_shape
-    else:
-      gradient_shape = gradient.get_shape()
+    name = get_base_name(gradient)
     with reuse_name_scope_of_tensor(gradient):
-      name = get_base_name(gradient)
+      if isinstance(gradient, tf.IndexedSlices):
+        if sparse_grads:
+          gradient_values = gradient.values
+          gradient_shape = gradient.values.get_shape()
+        else:
+          gradient_values = gradient
+          gradient_shape = gradient.dense_shape
+      else:
+        assert isinstance(gradient, tf.Tensor)
+        gradient_values = gradient
+        gradient_shape = gradient_values.get_shape()
+      if isinstance(gradient_shape, tf.TensorShape) and not gradient_shape.is_fully_defined():
+        gradient_shape = tf.shape(gradient_values)
       noise = tf.truncated_normal(gradient_shape, stddev=gradient_noise_scale, name="%s_grad_noise" % name)
-      noisy_gradients.append(tf.add(gradient, noise, name="%s_add_grad_noise" % name))
+      gradient_values = tf.add(gradient_values, noise, name="%s_add_grad_noise" % name)
+      if sparse_grads and isinstance(gradient, tf.IndexedSlices):
+        gradient = tf.IndexedSlices(values=gradient_values, indices=gradient.indices, dense_shape=gradient.dense_shape)
+      else:
+        gradient = gradient_values
+      noisy_gradients.append(gradient)
   return list(zip(noisy_gradients, variables))
 
 
@@ -2759,11 +2647,13 @@ def nan_to_num(x, nan_num=0, inf_num=1e30):
   """
   Like numpy.nan_to_num().
 
-  :param tf.Tensor x:
+  :param tf.Tensor|tf.IndexedSlices x:
   :param float|tf.Tensor nan_num:
   :param float|tf.Tensor inf_num:
   :return: x with replaced nan and inf
   """
+  if isinstance(x, tf.IndexedSlices):
+    return tf.IndexedSlices(values=nan_to_num(x.values), indices=x.indices, dense_shape=x.dense_shape)
   with tf.name_scope("nan_to_num"):
     nan_num = tf.convert_to_tensor(nan_num, dtype=x.dtype)
     inf_num = tf.convert_to_tensor(inf_num, dtype=x.dtype)
@@ -2922,7 +2812,7 @@ def global_tensor(f, name):
   This is for the current graph, i.e. if there is a new graph, it will recreate the tensor.
 
   :param () -> tf.Tensor f: callable which creates the tensor
-  :param str name: global reference name for the tensor
+  :param str name: global reference name for the tensor. should be a valid scope name
   :return: the tensor
   :rtype: tf.Tensor
   """
@@ -2975,6 +2865,95 @@ def encode_raw(x, axis=-1, seq_lens=None):
     if seq_lens is not None:
       strings = tf.substr(strings, pos=tf.zeros_like(seq_lens), len=seq_lens)
     return strings
+
+
+def map_labels(x, label_map, name="map_labels"):
+  """
+  :param tf.Tensor|tf.SparseTensor x: values of integer types
+  :param dict[int,int|None] label_map: should be dense on input
+  :param str name:
+  :return: mapped values
+  :rtype: tf.Tensor
+  """
+  if any([v is None for v in label_map.values()]):
+    assert isinstance(x, tf.SparseTensor), "not supported otherwise currently"
+    x = remove_labels(x, labels=[k for (k, v) in label_map.items() if v is None])
+    label_map = {k: v if v is not None else -1 for (k, v) in label_map.items()}
+  if isinstance(x, tf.SparseTensor):
+    return tf.SparseTensor(
+      indices=x.indices,
+      values=map_labels(x.values, label_map=label_map, name=name),
+      dense_shape=x.dense_shape)
+  with tf.name_scope(name):
+    assert label_map
+    assert 0 in label_map
+    assert len(label_map) - 1 in label_map
+    lookup = global_tensor(
+      lambda: tf.constant([label_map[i] for i in range(len(label_map))]),
+      name="label_map_lookup_id%i" % id(label_map))
+    y = tf.gather(lookup, indices=x, name="mapped")
+    return y
+
+
+def remove_labels(x, labels):
+  """
+  :param tf.SparseTensor x: sequences, i.e. the indices are interpret as (batch,time)
+  :param set[int]|list[int] labels:
+  :return: x where all provided labels are removed, and the indices are changed accordingly
+  """
+  if not labels:
+    return x
+  x.indices.set_shape((tf.TensorShape((None, 2))))
+  x.values.set_shape((tf.TensorShape((None,))))
+  x.dense_shape.set_shape(tf.TensorShape((2,)))
+  import numpy
+
+  # Much simpler for now to use tf.py_func.
+  def py_remove_labels(indices, values, dense_shape):
+    assert isinstance(indices, numpy.ndarray), "indices %r" % indices
+    assert isinstance(values, numpy.ndarray), "values %r" % indices
+    assert isinstance(dense_shape, numpy.ndarray), "dense_shape %r" % indices
+    indices_dtype = indices.dtype
+    values_dtype = values.dtype
+    dense_shape_dtype = dense_shape.dtype
+    assert dense_shape.shape == (2,), "dense_shape %r shape" % dense_shape  # (batch, time)
+    assert len(indices) == len(values), "len mismatch. shapes %r vs %r" % (indices.shape, values.shape)
+    indices = list(indices)
+    values = list(values)
+    i = 0
+    while i < len(indices):
+      if values[i] not in labels:
+        i += 1
+        continue
+      batch, time = indices[i]
+      # Remove it.
+      indices = indices[:i] + indices[i + 1:]
+      values = values[:i] + values[i + 1:]
+      for j in range(len(indices)):
+        if indices[j][0] != batch:
+          continue
+        if indices[j][1] < time:
+          continue
+        indices[j][1] -= 1
+    indices = numpy.array(indices, dtype=indices_dtype)
+    values = numpy.array(values, dtype=values_dtype)
+    dense_shape = numpy.array(
+      [dense_shape[0], max([idx[1] + 1 for idx in indices] or [0])], dtype=dense_shape_dtype)
+    return indices, values, dense_shape
+
+  with tf.name_scope("remove_labels"):
+    indices, values, dense_shape = tf.py_func(
+      py_remove_labels,
+      [x.indices, x.values, x.dense_shape],
+      [x.indices.dtype, x.values.dtype, x.dense_shape.dtype],
+      name="py_remove_labels")
+    assert isinstance(indices, tf.Tensor)
+    assert isinstance(values, tf.Tensor)
+    assert isinstance(dense_shape, tf.Tensor)
+    indices.set_shape((tf.TensorShape((None, 2))))
+    values.set_shape((tf.TensorShape((None,))))
+    dense_shape.set_shape(tf.TensorShape((2,)))
+    return tf.SparseTensor(indices=indices, values=values, dense_shape=dense_shape)
 
 
 def pad_zeros_in_axis(x, before=0, after=0, axis=0):
@@ -3094,7 +3073,7 @@ def auto_init_var(v):
   :rtype: tf.Tensor
   """
   with tf.control_dependencies(init_variable_if_needed(v)):
-    return tf.identity(v)
+    return tf.identity(v, name="auto_init_var")
 
 
 def true_once():
@@ -3103,15 +3082,16 @@ def true_once():
     Internally, this creates a non-trainable variable as a helper.
   :rtype: tf.Tensor
   """
-  v = tf.Variable(initial_value=True, trainable=False, name="true_once_var")
-  with tf.control_dependencies([init_variable_if_needed(v)]):
-    # Cannot use tf.identity because that would give us a reference to the var but we want to copy it now.
-    x = tf.where(v.read_value(), True, False)
-    with tf.control_dependencies([x]):
-      x = tf.identity(x)
-      reset = tf.assign(v, False)
-      with tf.control_dependencies([x, reset]):
+  with tf.variable_scope("true_once"):
+    v = tf.Variable(initial_value=True, trainable=False, name="true_once_var")
+    with tf.control_dependencies([init_variable_if_needed(v)]):
+      # Cannot use tf.identity because that would give us a reference to the var but we want to copy it now.
+      x = tf.where(v.read_value(), True, False)
+      with tf.control_dependencies([x]):
         x = tf.identity(x)
+        reset = tf.assign(v, False)
+        with tf.control_dependencies([x, reset]):
+          x = tf.identity(x)
   return x
 
 
@@ -3144,6 +3124,8 @@ def view_as(x, dtype):
   """
   Does the numpy.view equivalent.
   Note that the current implementation is inefficient (uses tf.py_func) and CPU-only.
+  Also see `tf.tf.bitcast`.
+
   :param tf.Tensor x:
   :param tf.DType dtype:
   :return: x.view(dtype) equivalent (see numpy.view)
@@ -3184,7 +3166,7 @@ class Lock(object):
     with tf.name_scope(self._name):
       from tensorflow.python.ops.data_flow_ops import StagingArea
       self._queue = StagingArea(dtypes=[tf.bool])
-      self._queue_init = self._queue.put([True])
+      self._queue_init = self._queue.put([tf.constant(True)])
 
   def init(self):
     return self._queue_init
@@ -3201,7 +3183,7 @@ class Lock(object):
     Must be called after lock().
     """
     with tf.name_scope("%s/unlock" % self._name):
-      return self._queue.put([True])
+      return self._queue.put([tf.constant(True)])
 
 
 class Condition(object):
@@ -3457,7 +3439,7 @@ class GlobalTensorArrayOpMaker:
       include_deps=[],
       ld_flags=[])
 
-    mod = comp.load_module()
+    mod = comp.load_tf_module()
     self._mod = mod
     return mod
 
@@ -3801,7 +3783,7 @@ class TFArrayContainer(object):
         "-Xlinker", "-rpath", "-Xlinker", os.path.dirname(lib),
         "-L", os.path.dirname(lib), "-l", ":" + os.path.basename(lib)])
 
-    mod = comp.load_module()
+    mod = comp.load_tf_module()
     cls._mod = mod
     return mod
 
@@ -4013,7 +3995,7 @@ class ExplicitRandomShuffleQueue(object):
                 return self._lock.unlock()
 
   def _is_full(self):
-    return tf.greater_equal(self.size(), self.capacity)
+    return tf.greater_equal(self.size(), self.capacity, name="is_full")
 
   def _loop_while_full(self):
     """
@@ -4029,13 +4011,14 @@ class ExplicitRandomShuffleQueue(object):
         with tf.control_dependencies([self._is_full_cond.wait()]):
           return tf.identity(last)
 
-    return tf.while_loop(cond=loop_cond, body=body, loop_vars=[0], parallel_iterations=1, back_prop=False)
+    return tf.while_loop(
+      name="loop_while_full", cond=loop_cond, body=body, loop_vars=[0], parallel_iterations=1, back_prop=False)
 
   def _have_min_after_dequeue(self):
-    return tf.greater_equal(self.size(), self._min_after_dequeue)
+    return tf.greater_equal(self.size(), self._min_after_dequeue, name="have_min_after_dequeue")
 
   def _maybe_signal_min_after_dequeue(self):
-    return tf.cond(self._have_min_after_dequeue(), lambda: self._min_after_dequeue_cond.signal(), lambda: tf.no_op())
+    return tf.cond(self._have_min_after_dequeue(), lambda: self._min_after_dequeue_cond.signal(), lambda: tf.no_op(), name="maybe_signal_min_after_dequeue")
 
   def _loop_while_not_min_after_dequeue(self):
     """
@@ -4051,7 +4034,9 @@ class ExplicitRandomShuffleQueue(object):
         with tf.control_dependencies([self._min_after_dequeue_cond.wait()]):
           return tf.identity(last)
 
-    return tf.while_loop(cond=loop_cond, body=body, loop_vars=[0], parallel_iterations=1, back_prop=False)
+    return tf.while_loop(
+      name="loop_while_not_min_after_dequeue",
+      cond=loop_cond, body=body, loop_vars=[0], parallel_iterations=1, back_prop=False)
 
   def dequeue(self):
     with reuse_name_scope("%s/dequeue" % self._name):
@@ -4072,3 +4057,22 @@ class ExplicitRandomShuffleQueue(object):
                     return vs[0]
                   else:
                     return vs
+
+
+def mem_usage_for_dev(dev_name):
+  """
+  :param str dev_name: e.g. "/cpu:0" or "/gpu:0"
+  :return: int scalar, which is the peak memory usage in bytes of the given device
+  :rtype: tf.Tensor
+
+  This function will not create multiple nodes in the graph for multiple calls.
+  Currently only works for GPU devices.
+  """
+  def get():
+    from tensorflow.contrib.memory_stats import MaxBytesInUse
+    with tf.device(dev_name):
+      return MaxBytesInUse()
+
+  assert dev_name.startswith("/")  # e.g. "/cpu:0" or "/gpu:0"
+  scope_name = dev_name[1:].replace(":", "")  # e.g. "cpu0" or "gpu0"
+  return global_tensor(get, "mem_usage_%s" % scope_name)

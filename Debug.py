@@ -27,15 +27,17 @@ def auto_exclude_all_new_threads(func):
   return wrapped
 
 
-def dumpAllThreadTracebacks(exclude_thread_ids=set()):
+def dumpAllThreadTracebacks(exclude_thread_ids=set(), exclude_self=False):
   import better_exchook
   import threading
+
+  if exclude_self:
+    exclude_thread_ids = set(list(exclude_thread_ids) + [threading.current_thread().ident])
 
   if hasattr(sys, "_current_frames"):
     print("")
     threads = {t.ident: t for t in threading.enumerate()}
-    for tid, stack in sys._current_frames().items():
-      if tid in exclude_thread_ids: continue
+    for tid, stack in sorted(sys._current_frames().items()):
       # This is a bug in earlier Python versions.
       # http://bugs.python.org/issue17094
       # Note that this leaves out all threads not created via the threading module.
@@ -54,6 +56,8 @@ def dumpAllThreadTracebacks(exclude_thread_ids=set()):
       print("Thread %s:" % ", ".join(tags))
       if tid in global_exclude_thread_ids:
         print("(Auto-ignored traceback.)")
+      elif tid in exclude_thread_ids:
+        print("(Excluded thread.)")
       else:
         better_exchook.print_tb(stack, file=sys.stdout)
       print("")

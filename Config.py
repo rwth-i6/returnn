@@ -27,13 +27,17 @@ class Config:
     self.dict = {}; """ :type: dict[str, list[str]] """
     self.typed_dict = {}; """ :type: dict[str] """  # could be loaded via JSON or so
     self.network_topology_json = None; """ :type: str | None """
+    self.files = []
 
   def load_file(self, f):
     """
     Reads the configuration parameters from a file and adds them to the inner set of parameters
-    :type f: string
+    :param string|io.TextIOBase f:
     """
     if isinstance(f, str):
+      import os
+      assert os.path.isfile(f), "config file not found: %r" % f
+      self.files.append(f)
       filename = f
       content = open(filename).read()
     else:
@@ -67,6 +71,86 @@ class Config:
       line = line.split(None, 1)
       assert len(line) == 2, "unable to parse config line: %r" % line
       self.add_line(key=line[0], value=line[1])
+
+  @classmethod
+  def get_config_file_type(cls, f):
+    """
+    :param str f: file path
+    :return: "py", "js" or "txt"
+    :rtype: str
+    """
+    with open(f, "r") as f:
+      start = f.read(3)
+    if start.startswith("#!"):
+      return "py"
+    if start.startswith("{"):
+      return "js"
+    return "txt"
+
+  def parse_cmd_args(self, args):
+    """
+    :param list[str]|tuple[str] args:
+    """
+    from optparse import OptionParser
+    parser = OptionParser()
+    parser.add_option("-a", "--activation", dest="activation",
+                      help="[STRING/LIST] Activation functions: logistic, tanh, softsign, relu, identity, zero, one, maxout.")
+    parser.add_option("-b", "--batch_size", dest="batch_size",
+                      help="[INTEGER/TUPLE] Maximal number of frames per batch (optional: shift of batching window).")
+    parser.add_option("-c", "--chunking", dest="chunking",
+                      help="[INTEGER/TUPLE] Maximal number of frames per sequence (optional: shift of chunking window).")
+    parser.add_option("-d", "--description", dest="description", help="[STRING] Description of experiment.")
+    parser.add_option("-e", "--epoch", dest="epoch", help="[INTEGER] Starting epoch.")
+    parser.add_option("-E", "--eval", dest="eval", help="[STRING] eval file path")
+    parser.add_option("-f", "--gate_factors", dest="gate_factors",
+                      help="[none/local/global] Enables pooled (local) or separate (global) coefficients on gates.")
+    parser.add_option("-g", "--lreg", dest="lreg", help="[FLOAT] L1 or L2 regularization.")
+    parser.add_option("-i", "--save_interval", dest="save_interval",
+                      help="[INTEGER] Number of epochs until a new model will be saved.")
+    parser.add_option("-j", "--dropout", dest="dropout", help="[FLOAT] Dropout probability (0 to disable).")
+    # parser.add_option("-k", "--multiprocessing", dest = "multiprocessing", help = "[BOOLEAN] Enable multi threaded processing (required when using multiple devices).")
+    parser.add_option("-k", "--output_file", dest="output_file",
+                      help="[STRING] Path to target file for network output.")
+    parser.add_option("-l", "--log", dest="log", help="[STRING] Log file path.")
+    parser.add_option("-L", "--load", dest="load", help="[STRING] load model file path.")
+    parser.add_option("-m", "--momentum", dest="momentum",
+                      help="[FLOAT] Momentum term in gradient descent optimization.")
+    parser.add_option("-n", "--num_epochs", dest="num_epochs",
+                      help="[INTEGER] Number of epochs that should be trained.")
+    parser.add_option("-o", "--order", dest="order", help="[default/sorted/random] Ordering of sequences.")
+    parser.add_option("-p", "--loss", dest="loss", help="[loglik/sse/ctc] Objective function to be optimized.")
+    parser.add_option("-q", "--cache", dest="cache",
+                      help="[INTEGER] Cache size in bytes (supports notation for kilo (K), mega (M) and gigabtye (G)).")
+    parser.add_option("-r", "--learning_rate", dest="learning_rate",
+                      help="[FLOAT] Learning rate in gradient descent optimization.")
+    parser.add_option("-s", "--hidden_sizes", dest="hidden_sizes",
+                      help="[INTEGER/LIST] Number of units in hidden layers.")
+    parser.add_option("-t", "--truncate", dest="truncate",
+                      help="[INTEGER] Truncates sequence in BPTT routine after specified number of timesteps (-1 to disable).")
+    parser.add_option("-u", "--device", dest="device",
+                      help="[STRING/LIST] CPU and GPU devices that should be used (example: gpu0,cpu[1-6] or gpu,cpu*).")
+    parser.add_option("-v", "--verbose", dest="log_verbosity", help="[INTEGER] Verbosity level from 0 - 5.")
+    parser.add_option("-w", "--window", dest="window", help="[INTEGER] Width of sliding window over sequence.")
+    parser.add_option("-x", "--task", dest="task", help="[train/forward/analyze] Task of the current program call.")
+    parser.add_option("-y", "--hidden_type", dest="hidden_type",
+                      help="[VALUE/LIST] Hidden layer types: forward, recurrent, lstm.")
+    parser.add_option("-z", "--max_sequences", dest="max_seqs", help="[INTEGER] Maximal number of sequences per batch.")
+    parser.add_option("--config", dest="load_config", help="[STRING] load config")
+    (options, args) = parser.parse_args(list(args))
+    options = vars(options)
+    for opt in options.keys():
+      if options[opt] is not None:
+        if opt == "load_config":
+          self.load_file(options[opt])
+        else:
+          self.add_line(opt, options[opt])
+    assert len(args) % 2 == 0, "expect (++key, value) config tuples in remaining args: %r" % args
+    for i in range(0, len(args), 2):
+      key, value = args[i:i + 2]
+      assert key[0:2] == "++", "expect key prefixed with '++' in (%r, %r)" % (key, value)
+      if value[:2] == "+-":
+        value = value[1:]  # otherwise we never could specify things like "++threshold -0.1"
+      self.add_line(key=key[2:], value=value)
 
   def add_line(self, key, value):
     """
@@ -202,6 +286,16 @@ class Config:
       else:
         assert index == 0
     return value
+
+  def opt_typed_value(self, key, default=None):
+    """
+    :param str key:
+    :param T|None default:
+    :rtype: T|object|str|None
+    """
+    if key in self.typed_dict:
+      return self.typed_dict[key]
+    return self.value(key, default)
 
   def int(self, key, default, index=0):
     """

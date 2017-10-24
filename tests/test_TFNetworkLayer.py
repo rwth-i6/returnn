@@ -7,6 +7,7 @@ import tensorflow as tf
 import sys
 sys.path += ["."]  # Python 3 hack
 from nose.tools import assert_equal, assert_is_instance
+import contextlib
 import numpy.testing
 import better_exchook
 better_exchook.replace_traceback_format_tb()
@@ -16,8 +17,15 @@ from TFNetwork import *
 from TFNetworkLayer import *
 
 
+@contextlib.contextmanager
+def make_scope():
+  with tf.Graph().as_default() as graph:
+    with tf.Session(graph=graph) as session:
+      yield session
+
+
 def test_activation_layer_net_construct():
-  with tf.Session() as session:
+  with make_scope() as session:
     num_inputs = 2
     config = Config()
     config.update({
@@ -40,7 +48,7 @@ def test_activation_layer_net_construct():
 
 
 def test_activation_layer_net_construct_two_out():
-  with tf.Session() as session:
+  with make_scope() as session:
     num_inputs = 2
     config = Config()
     config.update({
@@ -66,7 +74,7 @@ def test_activation_layer_net_construct_two_out():
 
 
 def test_combine_layer_net_construct():
-  with tf.Session():
+  with make_scope() as session:
     net_dict = {
       "lstm0_fw": {"class": "rec", "unit": "lstmp", "n_out": 5, "dropout": 0.0, "L2": 0.01, "direction": 1},
       "lstm0_bw": {"class": "rec", "unit": "lstmp", "n_out": 5, "dropout": 0.0, "L2": 0.01, "direction": -1},
@@ -80,7 +88,7 @@ def test_combine_layer_net_construct():
 
 
 def test_subnetwork_layer_net_construct():
-  with tf.Session():
+  with make_scope() as session:
     net_dict = {
       "ff0": {"class": "forward", "activation": "tanh", "n_out": 3},
       "sub": {"class": "subnetwork", "from": ["ff0"], "subnetwork": {
@@ -97,38 +105,38 @@ def test_subnetwork_layer_net_construct():
 
 
 def test_constant_layer():
-  config = Config()
-  config.update({
-    "num_outputs": 3,
-    "num_inputs": 2,
-    "network": {
-      "output": {"class": "constant", "value": 42, "from": []}
-    }
-  })
-  network = TFNetwork(config=config, train_flag=True)
-  network.construct_from_dict(config.typed_dict["network"])
-  out = network.get_default_output_layer(must_exist=True)
-  with tf.Session() as session:
+  with make_scope() as session:
+    config = Config()
+    config.update({
+      "num_outputs": 3,
+      "num_inputs": 2,
+      "network": {
+        "output": {"class": "constant", "value": 42, "from": []}
+      }
+    })
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    out = network.get_default_output_layer(must_exist=True)
     v = session.run(out.output.placeholder)
     assert_equal(v.shape, (1,))  # (batch,), where batch==1 for broadcasting
     assert_equal(v[0], 42)
 
 
 def test_compare_layer():
-  config = Config()
-  config.update({
-    "model": "/tmp/model",
-    "num_outputs": 3,
-    "num_inputs": 2,
-    "network": {
-      "const": {"class": "constant", "value": 3, "from": []},
-      "output": {"class": "compare", "from": ["const"], "value": 3}
-    }
-  })
-  network = TFNetwork(config=config, train_flag=True)
-  network.construct_from_dict(config.typed_dict["network"])
-  out = network.get_default_output_layer(must_exist=True)
-  with tf.Session() as session:
+  with make_scope() as session:
+    config = Config()
+    config.update({
+      "model": "/tmp/model",
+      "num_outputs": 3,
+      "num_inputs": 2,
+      "network": {
+        "const": {"class": "constant", "value": 3, "from": []},
+        "output": {"class": "compare", "from": ["const"], "value": 3}
+      }
+    })
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    out = network.get_default_output_layer(must_exist=True)
     v = session.run(out.output.placeholder)
     assert_equal(v.shape, (1,))  # (batch,), where batch==1 for broadcasting
     assert_equal(v.dtype, numpy.dtype("bool"))
@@ -136,7 +144,7 @@ def test_compare_layer():
 
 
 def test_layer_base_get_out_data_from_opts():
-  with tf.Session():
+  with make_scope() as session:
     config = Config()
     config.update({
       "num_inputs": 4,
@@ -182,3 +190,26 @@ def test_ConvLayer_get_valid_out_dim():
   assert_equal(ConvLayer.calc_out_dim(in_dim=10, stride=3, filter_size=2, padding="same"), 4)
   assert_equal(ConvLayer.calc_out_dim(in_dim=41, stride=1, filter_size=2, padding="valid"), 40)
   assert_equal(ConvLayer.calc_out_dim(in_dim=40, stride=2, filter_size=2, padding="valid"), 20)
+
+
+def test_reuse_params():
+  with make_scope() as session:
+    config = Config()
+    n_in, n_out = 2, 3
+    config.update({
+      "num_outputs": n_out,
+      "num_inputs": n_in,
+      "network": {
+        "l1": {"class": "linear", "activation": None, "n_out": n_out},
+        "output": {"class": "linear", "activation": None, "n_out": n_out, "reuse_params": "l1"}
+      }
+    })
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    l1 = network.layers["l1"]
+    l2 = network.layers["output"]
+    assert_equal(set(l1.params.keys()), {"W", "b"})
+    assert_equal(set(l2.params.keys()), {"W", "b"})
+    assert l1.params["W"] is l2.params["W"]
+    assert l1.params["b"] is l2.params["b"]
+    assert_equal(set(network.get_trainable_params()), {l1.params["W"], l1.params["b"]})

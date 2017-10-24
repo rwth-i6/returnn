@@ -4,3 +4,5 @@ h5py
 theano
 tensorflow
 numpydoc
+tornado
+futures

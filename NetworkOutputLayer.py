@@ -8,10 +8,11 @@ from TwoStateBestPathDecoder import TwoStateBestPathDecodeOp
 from CTC import CTCOp
 from TwoStateHMMOp import TwoStateHMMOp
 from OpNumpyAlign import NumpyAlignOp
-from NativeOp import FastBaumWelchOp, SegmentFastBaumWelchOp
+from NativeOp import FastBaumWelchOp, SegmentFastBaumWelchOp, MultiEndFastBaumWelchOp
 from NetworkBaseLayer import Layer
 from NetworkHiddenLayer import CAlignmentLayer
 from SprintErrorSignals import sprint_loss_and_error_signal, SprintAlignmentAutomataOp
+from Fsa import LoadWfstOp
 from TheanoUtil import time_batch_make_flat, grad_discard_out_of_bound, DumpOp
 from Util import as_str
 from Log import log
@@ -29,7 +30,7 @@ class OutputLayer(Layer):
                compute_distortions=False,
                softmax_smoothing=1.0, grad_clip_z=None, grad_discard_out_of_bound_z=None, normalize_length=False,
                exclude_labels=[],
-               apply_softmax=True,
+               apply_softmax=True, batchwise_softmax=False,
                substract_prior_from_output=False,
                input_output_similarity=None,
                input_output_similarity_scale=1,
@@ -250,6 +251,14 @@ class OutputLayer(Layer):
       from ActivationFunctions import strtoact_single_joined
       act_f = strtoact_single_joined(activation)
       self.p_y_given_x = act_f(self.z)
+    elif batchwise_softmax:
+      n_frames   = self.z.shape[0]
+      n_batches  = self.z.shape[1]
+      n_features = self.z.shape[2]
+      y_m = T.switch(T.eq(self.index.reshape((n_frames, n_batches, 1)), 0), float('-inf'), self.z)
+      time_major = y_m.dimshuffle(1, 0, 2).reshape((n_batches, n_frames * n_features))
+      softmax = T.nnet.softmax(time_major)
+      self.p_y_given_x = softmax.reshape((n_batches, n_frames, n_features)).dimshuffle(1, 0, 2)
     else:  # standard case
       self.p_y_given_x = T.reshape(T.nnet.softmax(self.y_m), self.z.shape)
     if self.loss == "priori":
@@ -316,7 +325,7 @@ class OutputLayer(Layer):
                                   custom_update=forward,
                                   custom_update_normalized=True)
       }
-      
+
     self.cost_scale_val = T.constant(1)
     if scale_by_error and self.train_flag:
       rpcx = self.p_y_given_x_flat[T.arange(self.p_y_given_x_flat.shape[0]),self.y_data_flat]
@@ -587,7 +596,7 @@ class SequenceOutputLayer(OutputLayer):
     if warp_ctc_lib:
       self.set_attr("warp_ctc_lib", warp_ctc_lib)
     assert self.loss in (
-      'ctc', 'ce_ctc', 'hmm', 'ctc2', 'sprint', 'viterbi', 'fast_bw', 'seg_fast_bw', 'ctc_warp', 'ctc_rasr', 'inv'), 'invalid loss: ' + self.loss
+      'ctc', 'ce_ctc', 'hmm', 'ctc2', 'sprint', 'viterbi', 'fast_bw', 'seg_fast_bw', 'lf_mmi', 'ctc_warp', 'ctc_rasr', 'inv'), 'invalid loss: ' + self.loss
 
   def _handle_old_kwargs(self, kwargs, fast_bw_opts):
     if "loss_with_softmax_prob" in kwargs:
@@ -839,10 +848,17 @@ class SequenceOutputLayer(OutputLayer):
     elif self.loss == 'seg_fast_bw':
       from Fsa import BuildSimpleFsaOp
 
-      am_score_scales    = self.seg_fast_bw_opts.get('am_score_scales', [1.0])
-      loop_emission_idxs = self.seg_fast_bw_opts.get('loop_emission_idxs', [])
-      length_models      = self.seg_fast_bw_opts.get('length_models', [])
-      loop_scores        = self.seg_fast_bw_opts.get('loop_scores', (0.0, 0.0))
+      am_score_scales      = self.seg_fast_bw_opts.get('am_score_scales', [1.0])
+      const_gradient_scale = self.seg_fast_bw_opts.get('const_gradient_scale', 1.0)
+      length_models        = self.seg_fast_bw_opts.get('length_models', [])
+      scale_gradient       = self.seg_fast_bw_opts.get('scale_gradient', False)
+      state_models         = self.seg_fast_bw_opts.get('state_models', None)
+
+      # support for legacy parameters
+      if 'loop_emission_idxs' in self.seg_fast_bw_opts:
+        loop_emission_idxs   = self.seg_fast_bw_opts.get('loop_emission_idxs', [])
+        loop_scores          = self.seg_fast_bw_opts.get('loop_scores', (0.0, 0.0))
+        state_model = { leidx : ('loop', 1, loop_scores[0], loop_scores[1]) for leidx in loop_emission_idxs }
 
       segment_layer = self.network.hidden[self.seg_fast_bw_opts['segment_layer']]
       batch_idxs = segment_layer.batch_idxs
@@ -851,18 +867,98 @@ class SequenceOutputLayer(OutputLayer):
 
       assert len(am_score_scales) > 0
 
-      edges, weights, start_end_states = BuildSimpleFsaOp(loop_emission_idxs, loop_scores)(self.y)
-      fwdbwd, _ = SegmentFastBaumWelchOp(**bw_args).make_op()(self.p_y_given_x, batch_idxs, edges, weights, start_end_states,
-                                                              length_models, T.cast(segment_layer.index, 'float32'),
-                                                              am_score_scales, self.network.epoch)
+      edges, weights, start_end_states = BuildSimpleFsaOp(state_models)(self.y)
+      fwdbwd, _, pw = SegmentFastBaumWelchOp(**bw_args).make_op()(self.p_y_given_x, batch_idxs, edges, weights, start_end_states,
+                                                                  length_models, T.cast(segment_layer.index, 'float32'),
+                                                                  am_score_scales, self.network.epoch)
       bw = T.exp(-fwdbwd)
+      self.y_data_flat = bw
       nlog_scores = -T.log(T.clip(self.p_y_given_x, numpy.float32(1.e-20), numpy.float(1.e20)))
 
       idx = segment_layer.index.reshape((bw.shape[0], bw.shape[1], 1))
-      err = (bw * nlog_scores * idx).sum()
-      known_grads = { self.z: (self.p_y_given_x - bw) * idx }
+      err = bw * nlog_scores * idx
+      grad = (self.p_y_given_x - bw) * idx
+
+      if scale_gradient:
+        pw  = T.clip(pw.reshape((pw.shape[0], pw.shape[1], 1)) * const_gradient_scale, 1.e-20, 1.0)
+        grad *= pw
+        err  *= pw
+
+      err = err.sum()
+      known_grads = { self.z: grad }
 
       return err, known_grads
+    elif self.loss == 'lf_mmi':
+      # Get AM scores for current utterances
+      am_scores = -T.log(self.p_y_given_x)
+      am_scale = self.attrs.get("am_scale", 1)
+      if am_scale != 1:
+        am_scale = numpy.float32(am_scale)
+        am_scores *= am_scale
+
+      # Get alignment FST for numerator
+      if self.fast_bw_opts.get("num_fsa_source", "sprint") == "sprint":
+        assert isinstance(self.sprint_opts, dict), "you need to specify sprint_opts in the output layer"
+        edges, weights, start_end_states, state_buffer = SprintAlignmentAutomataOp(self.sprint_opts)(self.network.tags)
+      else:
+        raise Exception("invalid fsa_source %r" % self.fast_bw_opts.get("fsa_source"))
+
+      # Calculate numerator part
+      fwdbwd, obs_scores = FastBaumWelchOp().make_op()(am_scores, edges, weights, start_end_states, float_idx, state_buffer)
+      self.baumwelch_alignment = T.exp(-fwdbwd)
+      self.num_scores = obs_scores
+
+      def loop_fkt(some_variable, seq_index, prev_fwdbwd, prev_scores):
+        # Get search FST for denominator
+        if self.fast_bw_opts.get("den_fsa_source", "file") == "file":
+          import os
+          assert isinstance(self.fast_bw_opts.get("den_fsa_file"), str) and os.path.exists(self.fast_bw_opts.get("den_fsa_file")),\
+            "you need to specify the path to the search FSA in den_fsa_file"
+          edges, weights, start_states, end_states, end_state_weigths, state_buffer = LoadWfstOp(self.fast_bw_opts.get("den_fsa_file"))(seq_index)
+        else:
+          raise Exception("invalid fsa_source %r" % self.fast_bw_opts.get("fsa_source"))
+
+        # Calculate denominator part
+        fwdbwd, obs_scores = MultiEndFastBaumWelchOp().make_op()(am_scores, edges, weights, start_states, end_states, end_state_weigths, float_idx, state_buffer)
+        return T.set_subtensor(prev_fwdbwd[:,seq_index,:], fwdbwd[:,seq_index,:]) , T.set_subtensor(prev_scores[:,seq_index], obs_scores[:,seq_index])
+
+      [foo,bar], scan_updates = theano.scan(fn=loop_fkt,
+                                            outputs_info=[T.zeros_like(fwdbwd),T.zeros_like(obs_scores)],
+                                            sequences=[am_scores[0],T.arange(1000)])
+
+      [fwdbwd, obs_scores] = [foo[-1],bar[-1]]
+
+      self.baumwelch_denominator =T.exp(-fwdbwd)
+      self.den_scores = obs_scores
+
+      # TODO: check weather loss is correct
+      err = ((self.num_scores - self.den_scores) *  T.cast(self.index,'float32') / T.sum( T.cast(self.index,'float32'), axis=0, dtype='float32', keepdims=True)).sum()
+
+      if self.fast_bw_opts.get('numerator_smoothing') :
+        num = (1 - self.fast_bw_opts.get('numerator_smoothing')) * self.baumwelch_alignment + self.fast_bw_opts.get('numerator_smoothing') * T.extra_ops.to_one_hot(self.y_data_flat, self.baumwelch_alignment.shape[-1]).reshape(self.baumwelch_alignment.shape)
+      else:
+        num = self.baumwelch_alignment
+
+      grad = (self.baumwelch_denominator - num) * float_idx_bc
+
+      if self.ce_smoothing:
+        err *= numpy.float32(1.0 - self.ce_smoothing)
+        grad *= numpy.float32(1.0 - self.ce_smoothing)
+        if not self.prior_scale:  # we kept the softmax bias as it was
+          nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y_data_flat[self.i])
+        else:  # assume that we have subtracted the bias by the log priors beforehand
+          assert self.log_prior is not None
+          # In this case, for the CE calculation, we need to add the log priors again.
+          y_m_prior = T.reshape(self.z + numpy.float32(self.prior_scale) * self.log_prior,
+                                (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim=2)
+          nll, pcx = T.nnet.crossentropy_softmax_1hot(x=y_m_prior[self.i], y_idx=self.y_data_flat[self.i])
+        ce = numpy.float32(self.ce_smoothing) * T.sum(nll)
+        err += ce
+        grad += T.grad(ce, self.z)
+
+
+      return err, {self.z: grad }
+
     elif self.loss == 'ctc':
       from theano.tensor.extra_ops import cpu_contiguous
       err, grad, priors = CTCOp()(self.p_y_given_x, cpu_contiguous(self.y.dimshuffle(1, 0)), self.index_for_ctc())
@@ -952,6 +1048,8 @@ class SequenceOutputLayer(OutputLayer):
         pass
       else:
         return super(SequenceOutputLayer, self).errors()
+    elif self.loss == "seg_fast_bw":
+        return None
     else:
       return super(SequenceOutputLayer, self).errors()
 

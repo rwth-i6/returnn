@@ -271,7 +271,7 @@ class NextGenHDFDataset(CachedDataset2):
     self.file_indices.extend([len(self.files) - 1] * len(seqs))
 
     all_streams = set(cur_file['streams'].keys())
-    assert self.input_stream_name in all_streams, "%s does not contain the input stream %s" % (path, self.input_stream)
+    assert self.input_stream_name in all_streams, "%s does not contain the input stream %s" % (path, self.input_stream_name)
 
     parsers = { name : NextGenHDFDataset.parsers[stream.attrs['parser']](seqs, stream) for name, stream in cur_file['streams'].items()}
     for k, v in parsers.items():

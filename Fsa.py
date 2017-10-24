@@ -5,9 +5,12 @@ from __future__ import division
 
 import numpy
 import theano
+import pickle
 from theano import tensor as T
-
 from copy import deepcopy
+from Log import log
+from LmDataset import Lexicon, StateTying
+from os.path import isfile
 
 
 class Edge:
@@ -72,29 +75,26 @@ class Edge:
                     "Weight: ",
                     str(self.weight)))
 
+  def as_tuple(self):
+    return self.source_state_idx, self.target_state_idx, self.label, self.weight
+
   def __eq__(self, other):
-    return ((self.source_state_idx, self.target_state_idx, self.label, self.weight)
-            == (other.source_state_idx, other.target_state_idx, other.label, other.weight))
+    return self.as_tuple() == other.as_tuple()
 
   def __ne__(self, other):
-    return ((self.source_state_idx, self.target_state_idx, self.label, self.weight)
-            != (other.source_state_idx, other.target_state_idx, other.label, other.weight))
+    return self.as_tuple() != other.as_tuple()
 
   def __le__(self, other):
-    return ((self.source_state_idx, self.target_state_idx, self.label, self.weight)
-            <= (other.source_state_idx, other.target_state_idx, other.label, other.weight))
+    return self.as_tuple() <= other.as_tuple()
 
   def __lt__(self, other):
-    return ((self.source_state_idx, self.target_state_idx, self.label, self.weight)
-            < (other.source_state_idx, other.target_state_idx, other.label, other.weight))
+    return self.as_tuple() < other.as_tuple()
 
   def __ge__(self, other):
-    return ((self.source_state_idx, self.target_state_idx, self.label, self.weight)
-            >= (other.source_state_idx, other.target_state_idx, other.label, other.weight))
+    return self.as_tuple() >= other.as_tuple()
 
   def __gt__(self, other):
-    return ((self.source_state_idx, self.target_state_idx, self.label, self.weight)
-            > (other.source_state_idx, other.target_state_idx, other.label, other.weight))
+    return self.as_tuple() > other.as_tuple()
 
 
 class Graph:
@@ -124,11 +124,13 @@ class Graph:
     self.num_states_asg = -1
     self.num_states_ctc = -1
     self.num_states_hmm = -1
+    self.num_states_word = -1
     # list[Edge] edges: edges of FSA during creation and final state
     self.edges = []
     self.edges_asg = []
     self.edges_ctc = []
     self.edges_hmm = []
+    self.edges_word = []
 
   def __repr__(self):
     return "Graph()"
@@ -156,7 +158,8 @@ class Graph:
     takes a graph with several states and transforms into single state graph
     :param int num_states: number of states
     :param list[Edges] edges: list of Edges symbolizing the graph
-    :return list[Edges]: returns the transformed list of Edges with one state
+    :return: returns the transformed list of Edges with one state
+    :rtype: list[Edges]
     """
     edges_single_state = deepcopy(edges)
     if num_states > 1:
@@ -286,12 +289,12 @@ class Ctc:
     :param int num_labels: number of labels without blank, silence, eps and repetitions
     :param bool label_conversion: shall the labels be converted into numbers (only ASG and CTC)
     """
-    if isinstance(fsa, Graph) and isinstance(num_labels, int) and isinstance(label_conversion, int):
-      self.fsa = fsa
-      self.num_labels = num_labels
-      self.label_conversion = label_conversion
-    else:
-      assert False, ("The CTC init went wrong!", fsa)
+    assert isinstance(fsa, Graph)
+    assert isinstance(num_labels, int)
+    assert isinstance(label_conversion, int)
+    self.fsa = fsa
+    self.num_labels = num_labels
+    self.label_conversion = label_conversion
 
     # list[int] final_states: list of final states
     self.final_states = []
@@ -417,48 +420,18 @@ class Hmm:
     # dict phon_dict: dictionary of phonemes, loaded from lexicon file
     self.phon_dict = {}
 
-  def load_lexicon(self, lexicon_name='recog.150k.final.lex.gz'):
-    """
-    loads Lexicon
-    takes a file, loads the xml and returns as Lexicon
-    where:
-      lex.lemmas and lex.phonemes important
-    :param str lexicon_name: holds the path and name of the lexicon file
-    """
-    from LmDataset import Lexicon
-    from os.path import isfile
-    from Log import log
-
-    log.initialize(verbosity=[5])
-    assert isfile(lexicon_name), "Lexicon file does not exist"
-    self.lexicon = Lexicon(lexicon_name)
-
-  def load_state_tying(self, state_tying_name='state-tying.txt.gz'):
-    """
-    loads a state tying map from a file, loads the file and returns its content
-    where:
-      statetying.allo_map important
-    :param state_tying_name: holds the path and name of the state tying file
-    """
-    from LmDataset import StateTying
-    from os.path import isfile
-    from Log import log
-
-    log.initialize(verbosity=[5])
-    assert isfile(state_tying_name), "State tying file does not exist"
-    self.state_tying = StateTying(state_tying_name)
-
   @staticmethod
   def _find_node_in_edges(node, edges):
     """
     find a specific node in all edges
     :param int node: node number
     :param list edges: all edges
-    :return dict node_dict: dict of nodes where
+    :return node_dict: dict of nodes where
           key: edge index
           value: 0 = specific node is as source state idx
           value: 1 = specific node is target state idx
           value: 2 = specific node is source and target state idx
+    :rtype: dict
     """
     node_dict = {}
 
@@ -485,7 +458,8 @@ class Hmm:
     """
     builds a conforming allo syntax for mapping
     :param Edge edge: edge to build the allo syntax from
-    :return str allo_map: a allo syntax ready for mapping
+    :return allo_map: a allo syntax ready for mapping
+    :rtype: str
     """
     if edge.label == Edge.SIL:
       allo_map = "%s{#+#}" % '[SILENCE]'
@@ -692,6 +666,79 @@ class Hmm:
     self.fsa.edges = []
 
 
+class AllPossibleWordsFsa:
+  """
+  constructs a fsa from all words in a lexicon
+  """
+
+  def __init__(self, fsa):
+    """
+    takes a lexicon file, laods and conttructs a fsa over all possible words
+    :param Graph fsa: the graph which holds the constructed fsa
+    """
+    self.fsa = fsa
+    self.lexicon = None
+
+  def run(self):
+    print("Starting All Possible Words FSA Creation")
+    for key, value in self.lexicon.lemmas.iteritems():  # for python 3: .items()
+      edge = Edge(0, 0, key, 0)
+      self.fsa.edges_word.append(edge)
+    self.fsa.num_states_word = 1
+
+
+def load_lexicon(lexicon_name='recog.150k.final.lex.gz', pickleflag=False):
+  """
+  loads Lexicon
+  takes a file, loads the xml and returns as Lexicon
+  a pickled file can be loaded for a speed improvement
+  where:
+    lex.lemmas and lex.phonemes important
+  :param str lexicon_name: holds the path and name of the lexicon file
+  :param bool pickleflag: flag to indicate if the lexicon datastructure is to be pickled
+  :return lexicon: lexicon datastructure
+  :rtype: Lexicon
+  """
+  log.initialize(verbosity=[5])
+  lexicon_dumpname = lexicon_name.rstrip('\.gz') + '.pickle'
+
+  if pickleflag:
+    # loads from pickled lexicon file
+    if isfile(lexicon_dumpname):
+      print("Loading pickled lexicon")
+      with open(lexicon_dumpname, 'rb') as lexicon_load:
+        lexicon = pickle.load(lexicon_load)
+    else:  # pickled lexicon file does not exists -> now created
+      assert isfile(lexicon_name), "Lexicon file does not exist"
+      lexicon = Lexicon(lexicon_name)
+      print("Saving pickled lexicon")
+      with open(lexicon_dumpname, 'wb') as lexicon_dump:
+        pickle.dump(lexicon, lexicon_dump)
+  else:
+    # loads from non-pickled lexicon file
+    assert isfile(lexicon_name), "Lexicon file does not exist"
+    lexicon = Lexicon(lexicon_name)
+
+  return lexicon
+
+
+def load_state_tying(state_tying_name='state-tying.txt'):
+  """
+  loads a state tying map from a file, loads the file and returns its content
+  state tying slower with pickling
+  where:
+    statetying.allo_map important
+  :param state_tying_name: holds the path and name of the state tying file
+  :return state_tying: state tying datastructure
+  :rtype: StateTying
+  """
+  log.initialize(verbosity=[5])
+  assert isfile(state_tying_name), "State tying file does not exist"
+  state_tying = StateTying(state_tying_name)
+
+  return state_tying
+
+
 class Store:
   """
   Conversion and save class for FSA
@@ -737,7 +784,8 @@ class Store:
     """
     coverts the string labels to int labels
     :param list[Edge] edges: list of edges describing the fsa graph
-    :return list[Edges] edges:
+    :return edges:
+    :rtype: list[Edges]
     """
     for edge in edges:
       lbl = edge.label
@@ -791,9 +839,11 @@ class BuildSimpleFsaOp(theano.Op):
   # the first and last output are actually uint32
   otypes = (T.fmatrix, T.fvector, T.fmatrix)
 
-  def __init__(self, loop_emission_idxs=(), loop_scores=(0.0, 0.0)):
-    self.loop_emission_idxs = set(loop_emission_idxs)
-    self.loop_scores        = loop_scores
+  def __init__(self, state_models=None):
+    if state_models is None:
+        state_models = {}
+
+    self.state_models = state_models
 
   def perform(self, node, inputs, output_storage, params=None):
     labels = inputs[0]
@@ -813,17 +863,35 @@ class BuildSimpleFsaOp(theano.Op):
       seq_start_state = cur_state
       for l in range(labels.shape[0]):
         label = labels[l, b]
-        lenmod = 1 if labels[l, b] in self.loop_emission_idxs else 0
         if label < 0:
           continue
-        edges.append((cur_state, cur_state + 1, label, lenmod, b))
-        if labels[l, b] in self.loop_emission_idxs:
-          edges.append((cur_state, cur_state, label, lenmod, b))
-          weights.append(self.loop_scores[0])
-          weights.append(self.loop_scores[1])
-        else:
-          weights.append(0.0)
-        cur_state += 1
+        state_model = self.state_models.get(labels[l, b], ('default', 0, 0.0))
+        params = state_model[1:]
+        state_model = state_model[0]
+        if state_model == 'default':
+          # default state model where we transition to the next label
+          length_model, edge_weight = params
+          edges.append((cur_state, cur_state + 1, label, length_model, b))
+          weights.append(edge_weight)
+          cur_state += 1
+        elif state_model == 'loop':
+          # allow looping in the current state before proceeding to the next one
+          length_model, fwd_score, loop_score = params
+          edges.append((cur_state, cur_state,     label, length_model, b))
+          weights.append(loop_score)
+          edges.append((cur_state, cur_state + 1, label, length_model, b))
+          weights.append(fwd_score)
+          cur_state += 1
+        elif state_model == 'double':
+          # choose between emitting the label once or twice
+          lm_once, lm_twice_1, lm_twice_2, once_score, twice_score = params
+          edges.append((cur_state,     cur_state + 2, label, lm_once, b))
+          weights.append(once_score)
+          edges.append((cur_state    , cur_state + 1, label, lm_twice_1, b))
+          weights.append(0.5 * twice_score)
+          edges.append((cur_state + 1, cur_state + 2, label, lm_twice_2, b))
+          weights.append(0.5 * twice_score)
+          cur_state += 2
 
       start_end_states.append([seq_start_state, cur_state])
 
@@ -951,8 +1019,104 @@ class FastBwFsaShared:
       start_end_states=self.get_start_end_states(n_batch))
 
 
+class LoadWfstOp(theano.Op):
+  """
+  Op: maps segment names (tags) to fsa automata (load from disk) that can be used to compute a BW-alignment
+  """
+
+  __props__ = ("filename",)
+
+  def __init__(self, filename):
+    super(LoadWfstOp, self).__init__()
+    from Util import make_hashable
+    self.filename = make_hashable(filename)
+    self.single_wfst = None  # type: dict
+
+  def make_node(self, tags):
+    # the edges/start_end_state output has to be a float matrix because that is the only dtype supported
+    # by CudaNdarray. We need unsigned ints. Thus we return a view on the unsigned int matrix
+    return theano.Apply(self, [tags], [T.fmatrix(), T.fvector(), T.fvector(), T.fmatrix(), T.fvector(), T.fmatrix()])
+
+  def perform(self, node, inputs, output_storage, params=None):
+    tags = inputs[0]
+    try:
+      _ = iter(tags)
+    except TypeError:
+      tags = [tags]
+
+    if self.single_wfst is None:
+      print("LoadWfstOp: Loading WFST from %r" % self.filename, file=log.v3)
+      import xml.etree.ElementTree as ET
+
+      tree = ET.parse(self.filename)
+      root = tree.getroot()
+      single_wfst = dict()
+      single_wfst['edges'] = []
+      single_wfst['weights'] = []
+      single_wfst['start_states'] = numpy.array([root.attrib['initial']],dtype=numpy.uint32)
+      single_wfst['end_states'] = []
+      single_wfst['end_state_weigths'] = []
+      self.single_wfst = dict()
+      self.single_wfst['num_states'] = len(root)
+
+      for state in root:
+        if state.tag != 'state':
+          continue # not interested in input-alphabet
+        state_id = numpy.uint32(state.attrib['id'])
+        if state[0].tag == 'final':
+            single_wfst['end_states'].append([numpy.uint32(0),state_id])
+            if state[1].tag == 'weight':
+              single_wfst['end_state_weigths'].append(numpy.float32(state[1].text))
+            else:
+              single_wfst['end_state_weigths'].append(numpy.float32(0.))
+        for arc in state:
+          if arc.tag != 'arc':
+            continue # alredy handeled 'final' and 'weight'
+          target = numpy.uint32(arc.attrib['target'])
+          emission_id = numpy.uint32(arc[0].text)
+          if len(arc) > 1 :
+            weight = numpy.float32(arc[1].text)
+          else:
+            weight = numpy.float32(0.)
+          single_wfst['edges'].append([state_id,target,emission_id,numpy.uint32(0)])
+          single_wfst['weights'].append(weight)
+      for key,val in single_wfst.items():
+        self.single_wfst[key] = numpy.array(val)
+
+    assert isinstance(self.single_wfst, dict)  # PyCharm confused otherwise
+
+    offset = 0
+    all_edges = []
+    all_weights = []
+    all_start_states = []
+    all_end_states = []
+    all_end_state_weigths = []
+    for tag in tags:
+      edges = numpy.transpose(numpy.copy(self.single_wfst['edges']))
+      edges[0:2,:] += offset
+      edges[3,:]    = tag
+      all_edges.append(edges)
+      all_weights.append(self.single_wfst['weights'])
+      all_start_states.append(self.single_wfst['start_states']+offset)
+      end_states = numpy.copy(self.single_wfst['end_states'])
+      end_states[:,1] += offset
+      end_states[:,0]    = tag
+      all_end_states.append(end_states)
+      all_end_state_weigths.append(self.single_wfst['end_state_weigths'])
+      offset += self.single_wfst['num_states']
+
+    output_storage[0][0] = numpy.hstack(all_edges).view(dtype='float32')
+    output_storage[1][0] = numpy.hstack(all_weights)
+    output_storage[2][0] = numpy.hstack(all_start_states).view(dtype='float32')
+    output_storage[3][0] = numpy.hstack(all_end_states).view(dtype='float32')
+    output_storage[4][0] = numpy.hstack(all_end_state_weigths)
+    output_storage[5][0] = numpy.empty((2, self.single_wfst['num_states']*len(tags)), dtype='float32')
+
+
 def main():
+  import time
   from argparse import ArgumentParser
+
   arg_parser = ArgumentParser()
   arg_parser.add_argument("--fsa", type=str)
   arg_parser.add_argument("--label_seq", type=str, required=True)
@@ -962,8 +1126,8 @@ def main():
   arg_parser.set_defaults(asg_repetition=3)
   arg_parser.add_argument("--num_labels", type=int)
   arg_parser.set_defaults(num_labels=265)  # ascii number of labels
-  arg_parser.add_argument("--label_conversion_on", dest="label_conversion", action="store_true")
-  arg_parser.add_argument("--label_conversion_off", dest="label_conversion", action="store_false")
+  arg_parser.add_argument("--label_conversion", dest="label_conversion", action="store_true")
+  arg_parser.add_argument("--no_label_conversion", dest="label_conversion", action="store_false")
   arg_parser.set_defaults(label_conversion=False)
   arg_parser.add_argument("--depth", type=int)
   arg_parser.set_defaults(depth=6)
@@ -973,56 +1137,108 @@ def main():
   arg_parser.set_defaults(lexicon='recog.150k.final.lex.gz')
   arg_parser.add_argument("--state_tying", type=str)
   arg_parser.set_defaults(state_tying='state-tying.txt')
-  arg_parser.add_argument("--state_tying_conversion_on",
+  arg_parser.add_argument("--state_tying_conversion",
                           dest="state_tying_conversion", action="store_true")
-  arg_parser.add_argument("--state_tying_conversion_off",
+  arg_parser.add_argument("--no_state_tying_conversion",
                           dest="state_tying_conversion", action="store_false")
   arg_parser.set_defaults(state_tying_conversion=False)
-  arg_parser.add_argument("--single_state_on", dest="single_state", action="store_true")
-  arg_parser.add_argument("--single_state_off", dest="single_state", action="store_false")
+  arg_parser.add_argument("--single_state", dest="single_state", action="store_true")
+  arg_parser.add_argument("--no_single_state", dest="single_state", action="store_false")
   arg_parser.set_defaults(single_state=False)
   arg_parser.add_argument("--asg_separator", type=bool)
   arg_parser.set_defaults(asg_separator=False)
+  arg_parser.add_argument("--pickle", dest="pickle", action="store_true")
+  arg_parser.add_argument("--no_pickle", dest="pickle", action="store_false")
+  arg_parser.set_defaults(pickle=False)
   args = arg_parser.parse_args()
 
+  start_time = time.time()
+
   fsa = Graph(lemma=args.label_seq)
+
+
+  lexicon_start_time = time.time()
+  lexicon = load_lexicon(args.lexicon, args.pickle)
+  lexicon_end_time = time.time()
+
+  word_start_time = time.time()
+
+  word = AllPossibleWordsFsa(fsa)
+  word.lexicon = lexicon
+  word_run_start_time = time.time()
+  word.run()
+  word_run_end_time = time.time()
+  sav_word = Store(fsa.num_states_word, fsa.edges_word)
+  sav_word.filename = 'edges_word'
+  sav_word.fsa_to_dot_format()
+  sav_word.save_to_file()
+
+  asg_start_time = word_end_time = time.time()
 
   asg = Asg(fsa)
   asg.label_conversion = args.label_conversion
   asg.asg_repetition = args.asg_repetition
+  asg_run_start_time = time.time()
   asg.run()
-
+  asg_run_end_time = time.time()
   sav_asg = Store(fsa.num_states_asg, fsa.edges_asg)
   sav_asg.filename = 'edges_asg'
   sav_asg.fsa_to_dot_format()
   sav_asg.save_to_file()
 
+  asg_end_time = ctc_start_time = time.time()
+
   ctc = Ctc(fsa)
   ctc.label_conversion = args.label_conversion
+  ctc_run_start_time = time.time()
   ctc.run()
-
+  ctc_run_end_time = time.time()
   sav_ctc = Store(fsa.num_states_ctc, fsa.edges_ctc)
   sav_ctc.filename = 'edges_ctc'
   sav_ctc.fsa_to_dot_format()
   sav_ctc.save_to_file()
 
+  ctc_end_time = hmm_start_time = time.time()
+
   hmm = Hmm(fsa)
-  hmm.load_lexicon(args.lexicon)
-  hmm.load_state_tying(args.state_tying)
+  hmm.lexicon = lexicon
+  hmm.state_tying = load_state_tying(args.state_tying)
   hmm.allo_num_states = args.allo_num_states
   hmm.state_tying_conversion = args.state_tying_conversion
+  hmm_run_start_time = time.time()
   hmm.run()
-
+  hmm_run_end_time = time.time()
   sav_hmm = Store(fsa.num_states_hmm, fsa.edges_hmm)
   sav_hmm.filename = 'edges_hmm'
   sav_hmm.fsa_to_dot_format()
   sav_hmm.save_to_file()
 
+  end_time = hmm_end_time = time.time()
+
+  print("\nTotal time    : ", end_time - start_time, "\n")
+
+  print("Lexicon load time : ", lexicon_end_time - lexicon_start_time, "\n")
+
+  print("Word total time: ", word_end_time - word_start_time)
+  print("Word init time : ", word_run_start_time - word_start_time)
+  print("Word run time  : ", word_run_end_time - word_run_start_time)
+  print("Word save time : ", word_end_time - word_run_end_time, "\n")
+
+  print("ASG total time: ", asg_end_time - asg_start_time)
+  print("ASG init time : ", asg_run_start_time - asg_start_time)
+  print("ASG run time  : ", asg_run_end_time - asg_run_start_time)
+  print("ASG save time : ", asg_end_time - asg_run_end_time, "\n")
+
+  print("CTC total time: ", ctc_end_time - ctc_start_time)
+  print("CTC init time : ", ctc_run_start_time - ctc_start_time)
+  print("CTC run time  : ", ctc_run_end_time - ctc_run_start_time)
+  print("CTC save time : ", ctc_end_time - ctc_run_end_time, "\n")
+
+  print("HMM total time: ", hmm_end_time - hmm_start_time)
+  print("HMM init time : ", hmm_run_start_time - hmm_start_time)
+  print("HMM run time  : ", hmm_run_end_time - hmm_run_start_time)
+  print("HMM save time : ", hmm_end_time - hmm_run_end_time, "\n")
+
+
 if __name__ == "__main__":
-  import time
-
-  start_time = time.time()
-
   main()
-
-  print("Total time:", time.time() - start_time, "seconds")

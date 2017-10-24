@@ -8,7 +8,7 @@ class CachedDataset2(Dataset):
   """
   Somewhat like CachedDataset, but different.
   Simpler in some sense. And more generic. Caching might be worse.
-  
+
   If you derive from this class:
   - you must override `_collect_single_seq`
   - you must set `num_inputs` (dense-dim of "data" key) and `num_outputs` (dict key -> dim, ndim-1)
@@ -25,8 +25,10 @@ class CachedDataset2(Dataset):
 
   def init_seq_order(self, epoch=None, seq_list=None):
     """
-    :type epoch: int|None
+    :param int|None epoch:
     :param list[str] | None seq_list: In case we want to set a predefined order.
+    :rtype: bool
+    :returns whether the order changed (True is always safe to return)
 
     This is called when we start a new epoch, or at initialization.
     Call this when you reset the seq list.
@@ -84,7 +86,7 @@ class CachedDataset2(Dataset):
     if self.added_data:
       start = max(self.added_data[-1].seq_idx + 1, start)
     seqs = [self._collect_single_seq(seq_idx=seq_idx) for seq_idx in range(start, end)]
-    seqs = filter(None, seqs)  # We might not know the num seqs in advance.
+    seqs = list(filter(None, seqs))  # We might not know the num seqs in advance.
     self._num_timesteps_accumulated += sum([seq.num_frames for seq in seqs])
     self.added_data += seqs
 
@@ -99,6 +101,7 @@ class CachedDataset2(Dataset):
       if self._get_seq(n) is not None:
         return True
       # We reached the end.
+      assert self.added_data, "Not a single seq was loaded?"
       self._num_seqs = self.added_data[-1].seq_idx + 1
       assert n >= self._num_seqs
       self.reached_final_seq = True
@@ -149,21 +152,22 @@ class CachedDataset2(Dataset):
 
   def get_target_list(self):
     self._load_something()
-    return self.added_data[0].targets.keys()
+    return sorted(self.added_data[0].targets.keys())
 
   def is_data_sparse(self, key):
     """
-    :type key: str
+    :param str key: e.g. "data" or "classes"
     :rtype: bool
     """
     if key in self.num_outputs:
       return self.num_outputs[key][1] == 1
+    assert key == "data"
     self._load_something()
     return len(self.added_data[0].features.shape) == 1
 
   def get_data_dim(self, key):
     """
-    :type key: str
+    :param str key: e.g. "data" or "classes"
     :rtype: int
     :return: number of classes, no matter if sparse or not
     """

@@ -14,8 +14,6 @@ e.g. via ExternSprintDataset, when it spawns its Sprint subprocess.
 from __future__ import print_function
 
 import os
-print("CRNN Python SprintInterface module load, pid %i" % os.getpid())
-
 import sys
 import time
 from threading import Event, Thread
@@ -28,6 +26,14 @@ from SprintDataset import SprintDatasetBase
 from Log import log
 from Device import get_gpu_names
 import rnn
+_rnn_file = rnn.__file__
+_main_file = getattr(sys.modules["__main__"], "__file__", "")
+if _rnn_file.endswith(".pyc"):
+  _rnn_file = _rnn_file[:-1]
+if _main_file.endswith(".pyc"):
+  _main_file = _main_file[:-1]
+if os.path.realpath(_rnn_file) == os.path.realpath(_main_file):
+  rnn = sys.modules["__main__"]
 from Engine import Engine
 from EngineUtil import assign_dev_data_single_seq
 import Debug
@@ -51,6 +57,247 @@ sprintDataset = None; """ :type: SprintDatasetBase """
 engine = None; """ :type: TFEngine.Engine|Engine """
 
 
+# <editor-fold desc="generic init">
+# Generic interface, should be compatible to any PythonControl-based, and PythonTrainer. {
+
+def init(name=None, sprint_unit=None, **kwargs):
+  """
+  This will get called by various Sprint interfaces.
+  Depending on `name` and `sprint_unit`, we can figure out which interface it is.
+  For all PythonControl-based interfaces, we must return an object which will be used for further callbacks.
+
+  :param str|None name:
+  :param str|None sprint_unit:
+  :return: some object or None
+  :rtype: None|object
+  """
+  print("CRNN Python SprintInterface init: name %r, sprint_unit %r, pid %i, kwargs %r" % (
+    name, sprint_unit, os.getpid(), kwargs))
+  if name is None:
+    return init_python_trainer(**kwargs)
+  elif name == "Sprint.PythonControl":
+    # Any PythonControl interface.
+    if sprint_unit == "PythonFeatureScorer":
+      return init_python_feature_scorer(**kwargs)
+    else:
+      raise Exception(
+        "SprintInterface: Did not expect init() PythonControl with sprint_unit=%r, kwargs=%r",
+        (sprint_unit, kwargs))
+  else:
+    raise Exception(
+      "SprintInterface: Did not expect init() with name=%r, sprint_unit=%r, kwargs=%r",
+      (name, sprint_unit, kwargs))
+
+# }
+# </editor-fold>
+
+
+# <editor-fold desc="PythonFeatureScorer">
+# Start Sprint PythonFeatureScorer interface. {
+
+def init_python_feature_scorer(config, **kwargs):
+  """
+  :param str config:
+  :rtype: PythonFeatureScorer
+  """
+  sprint_opts = {key: value for (key, value) in [s.split(":", 1) for s in config.split(",") if s]}
+
+  epoch = sprint_opts.get("epoch", None)
+  if epoch is not None:
+    epoch = int(epoch)
+    assert epoch >= 1
+
+  # see init_python_trainer()
+  configfile = sprint_opts.get("configfile", None)
+  assert sprint_opts.get("action", None) in (None, "forward"), "invalid action: %r" % sprint_opts["action"]
+
+  initBase(targetMode="forward", configfile=configfile, epoch=epoch)
+
+  cls = PythonFeatureScorer
+  if rnn.config.has("SprintInterfacePythonFeatureScorer"):
+    cls = rnn.config.typed_value("SprintInterfacePythonFeatureScorer")
+  return cls(sprint_opts=sprint_opts, **kwargs)
+
+
+class PythonFeatureScorer(object):
+  def __init__(self, callback, version_number, sprint_opts, **kwargs):
+    """
+    :param (str,)->object callback:
+    :param int version_number:
+    :param dict[str,str] sprint_opts:
+    """
+    print("SprintInterface: PythonFeatureScorer(%s): version %i, sprint_opts %r, other %r" % (
+      self.__class__.__name__, version_number, sprint_opts, kwargs))
+    self.input_dim = None
+    self.output_dim = None
+    self.callback = callback
+    self.sprint_opts = sprint_opts
+    self.priors = None  # type: None|numpy.ndarray
+    self.segment_count = 0
+    self.features = []  # type: list[numpy.ndarray]
+    self.scores = None  # type: None|numpy.ndarray
+
+  def init(self, input_dim, output_dim):
+    """
+    Called by Sprint.
+
+    :param int input_dim:
+    :param int output_dim: number of emission classes
+    """
+    self.input_dim = input_dim
+    self.output_dim = output_dim
+
+    # see init_python_trainer()
+    global InputDim, OutputDim
+    InputDim = input_dim
+    OutputDim = output_dim
+    sprintDataset.setDimensions(self.input_dim, self.output_dim)
+    sprintDataset.initialize()
+
+    prepareForwarding()
+    self._load_priors()
+
+    global startTime
+    startTime = time.time()
+
+  def _load_priors(self):
+    """
+    This will optionally initialize self.priors of shape (self.output_dim,), in -log space,
+    already multiplied by any prior scale.
+
+    :return: nothing
+    """
+    scale = float(self.sprint_opts["prior_scale"])
+    if not scale:
+      return
+    filename = self.sprint_opts["prior_file"]
+    # We expect a filename to the priors, stored as txt, in +log space.
+    assert isinstance(filename, str)
+    assert os.path.exists(filename)
+    from Util import load_txt_vector
+    prior = load_txt_vector(filename)  # +log space
+    self.priors = -numpy.array(prior, dtype="float32") * numpy.float32(scale)  # -log space
+    assert self.priors.shape == (self.output_dim,), "dim mismatch: %r != %i" % (self.priors.shape, self.output_dim)
+
+  def exit(self):
+    print("SprintInterface: PythonFeatureScorer: exit()")
+
+  def get_feature_buffer_size(self):
+    """
+    Called by Sprint.
+
+    :return: -1 -> no limit
+    """
+    return -1
+
+  def add_feature(self, feature, time):
+    """
+    Called by Sprint.
+
+    :param numpy.ndarray feature: shape (input_dim,)
+    :param int time:
+    """
+    assert time == len(self.features)
+    assert feature.shape == (self.input_dim,)
+    self.features.append(feature)
+
+  def reset(self, num_frames):
+    """
+    Called by Sprint.
+    Called when we shall flush any buffers.
+
+    :param int num_frames:
+    """
+    if num_frames > 0:
+      self.segment_count += 1
+    assert num_frames == len(self.features)
+    del self.features[:]
+    self.scores = None
+
+  def get_segment_name(self):
+    return "unknown-seq-name-%i" % self.segment_count
+
+  def get_features(self, num_frames=None):
+    """
+    :param int|None num_frames:
+    :return: shape (input_dim, num_frames)
+    :rtype: numpy.ndarray
+    """
+    if num_frames is not None:
+      assert 0 < num_frames == len(self.features)
+    return numpy.stack(self.features, axis=1)
+
+  def get_posteriors(self, num_frames=None):
+    """
+    :param int|None num_frames:
+    :return: shape (output_dim, num_frames)
+    :rtype: numpy.ndarray
+    """
+    if num_frames is None:
+      num_frames = len(self.features)
+    assert 0 < num_frames == len(self.features)
+    posteriors = forward(
+      segmentName=self.get_segment_name(),
+      features=self.get_features(num_frames=num_frames))
+    assert posteriors.shape == (self.output_dim, num_frames)
+    return posteriors
+
+  def features_to_dataset(self, num_frames=None):
+    """
+    :param int|None num_frames:
+    :return: (dataset, seq_idx)
+    :rtype: (Dataset.Dataset, int)
+    """
+    segment_name = self.get_segment_name()
+    features = self.get_features(num_frames=num_frames)
+    return features_to_dataset(features=features, segment_name=segment_name)
+
+  @property
+  def engine(self):
+    """
+    :rtype: TFEngine.Engine|Engine.Engine
+    """
+    return rnn.engine
+
+  @property
+  def config(self):
+    """
+    :rtype: Config.Config
+    """
+    return rnn.config
+
+  def compute(self, num_frames):
+    """
+    Called by Sprint.
+    All the features which we received so far should be evaluated.
+
+    :param int num_frames:
+    """
+    assert 0 < num_frames == len(self.features)
+    posteriors = self.get_posteriors(num_frames=num_frames)
+    assert posteriors.shape == (self.output_dim, num_frames)
+    scores = -numpy.log(posteriors)  # transfer to -log space
+    if self.priors is not None:
+      scores -= numpy.expand_dims(self.priors, axis=1)
+    # We must return in -log space.
+    self.scores = scores
+
+  def get_scores(self, time):
+    """
+    Called by Sprint.
+
+    :param int time:
+    :return: shape (output_dim,)
+    :rtype: numpy.ndarray
+    """
+    # print("get scores, time", time, "max_frames", self.scores.shape[1])
+    return self.scores[:, time]
+
+# }
+# </editor-fold>
+
+
+# <editor-fold desc="PythonSegmentOrder">
 # Start Sprint PythonSegmentOrder interface. {
 
 def getSegmentList(corpusName, segmentList, **kwargs):
@@ -117,11 +364,13 @@ def getSegmentList(corpusName, segmentList, **kwargs):
   sprintDataset.finalizeSprint()
 
 # End Sprint PythonSegmentOrder interface. }
+# </editor-fold>
 
 
+# <editor-fold desc="PythonTrainer">
 # Start Sprint PythonTrainer interface. {
 
-def init(inputDim, outputDim, config, targetMode, **kwargs):
+def init_python_trainer(inputDim, outputDim, config, targetMode, **kwargs):
   """
   Called by Sprint when it initializes the PythonTrainer.
   Set trainer = python-trainer in Sprint to enable.
@@ -132,6 +381,8 @@ def init(inputDim, outputDim, config, targetMode, **kwargs):
   :type outputDim: int
   :param str config: config string, passed by Sprint. assumed to be ","-separated
   :param str targetMode: "target-alignment" or "criterion-by-sprint" or so
+  :return: not expected to return anything
+  :rtype: None
   """
   print("SprintInterface[pid %i] init()" % (os.getpid(),))
   print("inputDim:", inputDim)
@@ -200,7 +451,7 @@ def exit():
   if startTime:
     print("SprintInterface[pid %i]: elapsed total time: %f" % (os.getpid(), time.time() - startTime), file=log.v3)
   else:
-    print("SprintInterface[pid %i]: finished (unknown start time)", file=log.v3)
+    print("SprintInterface[pid %i]: finished (unknown start time)" % os.getpid(), file=log.v3)
 
 
 def feedInput(features, weights=None, segmentName=None):
@@ -271,6 +522,7 @@ def feedInputForwarding(features, weights=None, segmentName=None):
   return feedInput(features, weights=weights, segmentName=segmentName)
 
 # End Sprint PythonTrainer interface. }
+# </editor-fold>
 
 
 def dumpFlags():
@@ -324,7 +576,7 @@ def _at_exit_handler():
     exit()
     print("All threads:")
     import Debug
-    Debug.dumpAllThreadTracebacks()
+    Debug.dumpAllThreadTracebacks(exclude_self=True)
 
 
 def initBase(configfile=None, targetMode=None, epoch=None):
@@ -518,6 +770,27 @@ def train(segmentName, features, targets=None):
     return posteriors
 
 
+def features_to_dataset(features, segment_name):
+  """
+  :param numpy.ndarray features: format (input-feature,time) (via Sprint)
+  :param str segment_name:
+  :return: (dataset, seq-idx)
+  :rtype: (Dataset.Dataset, int)
+  """
+  assert sprintDataset
+
+  # Features are in Sprint format (feature,time).
+  T = features.shape[1]
+  assert features.shape == (InputDim, T)
+
+  # Fill the data for the current segment.
+  sprintDataset.shuffle_frames_of_nseqs = 0  # We must not shuffle.
+  sprintDataset.initSprintEpoch(None)  # Reset cache. We don't need old seqs anymore.
+  sprintDataset.init_seq_order()
+  seq = sprintDataset.addNewData(features, segmentName=segment_name)
+  return sprintDataset, seq
+
+
 def forward(segmentName, features):
   """
   :param numpy.ndarray features: format (input-feature,time) (via Sprint)
@@ -531,18 +804,13 @@ def forward(segmentName, features):
   # Features are in Sprint format (feature,time).
   T = features.shape[1]
   assert features.shape == (InputDim, T)
-
-  # Fill the data for the current segment.
-  sprintDataset.shuffle_frames_of_nseqs = 0  # We must not shuffle.
-  sprintDataset.initSprintEpoch(None)  # Reset cache. We don't need old seqs anymore.
-  sprintDataset.init_seq_order()
-  seq = sprintDataset.addNewData(features, segmentName=segmentName)
+  dataset, seq_idx = features_to_dataset(features=features, segment_name=segmentName)
 
   if BackendEngine.is_theano_selected():
     # Prepare data for device.
     device = engine.devices[0]
-    success = assign_dev_data_single_seq(device, sprintDataset, seq)
-    assert success, "failed to allocate & assign data for seq %i, %s" % (seq, segmentName)
+    success = assign_dev_data_single_seq(device, dataset=dataset, seq=seq_idx)
+    assert success, "failed to allocate & assign data for seq %i, %s" % (seq_idx, segmentName)
 
     # Do the actual forwarding and collect result.
     device.run("extract")
@@ -552,7 +820,7 @@ def forward(segmentName, features):
     posteriors = result[0]
 
   elif BackendEngine.is_tensorflow_selected():
-    posteriors = engine.forward_single(dataset=sprintDataset, seq_idx=seq)
+    posteriors = engine.forward_single(dataset=dataset, seq_idx=seq_idx)
 
   else:
     raise NotImplementedError("unknown backend engine")
