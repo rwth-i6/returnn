@@ -1343,9 +1343,36 @@ def load_txt_vector(filename):
 
 
 class CollectionReadCheckCovered:
-  def __init__(self, collection):
+  """
+  Wraps around a dict. It keeps track about all the keys which were read from the dict.
+  Via :func:`assert_all_read`, you can check that there are no keys in the dict which were not read.
+  The usage is for config dict options, where the user has specified a range of options,
+  and where in the code there is usually a default for every non-specified option,
+  to check whether all the user-specified options are also used (maybe the user made a typo).
+  """
+
+  def __init__(self, collection, truth_value=None):
+    """
+    :param dict[str] collection:
+    :param None|bool truth_value:
+    """
     self.collection = collection
+    if truth_value is None:
+      truth_value = bool(self.collection)
+    self.truth_value = truth_value
     self.got_items = set()
+
+  @classmethod
+  def from_bool_or_dict(cls, value):
+    """
+    :param bool|dict[str] value:
+    :rtype: CollectionReadCheckCovered
+    """
+    if isinstance(value, bool):
+      return cls(collection={}, truth_value=value)
+    if isinstance(value, dict):
+      return cls(collection=value)
+    raise TypeError("invalid type: %s" % type(value))
 
   def __getitem__(self, item):
     res = self.collection[item]

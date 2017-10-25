@@ -655,7 +655,6 @@ class TimitDataset(CachedDataset2):
   https://arxiv.org/pdf/0804.3269.pdf
   """
 
-  FeatureDim = 40
   # via: https://github.com/kaldi-asr/kaldi/blob/master/egs/timit/s5/conf/phones.60-48-39.map
   PhoneMapTo39 = {
     'aa': 'aa', 'ae': 'ae', 'ah': 'ah', 'ao': 'aa', 'aw': 'aw', 'ax': 'ah', 'ax-h': 'ah', 'axr': 'er',
@@ -720,15 +719,29 @@ class TimitDataset(CachedDataset2):
     d = {i: tgt_labels.index(v) if v else None for (i, v) in d.items()}  # src-idx -> tgt-idx
     return d
 
-  def __init__(self, timit_dir, with_delta=False, num_phones=61,
-               train=True, demo_play_audio=False, fixed_random_seed=None, random_permute_audio=None, **kwargs):
+  def __init__(self, timit_dir, train=True,
+               num_feature_filters=40, feature_window_len=0.025, feature_step_len=0.010, with_delta=False,
+               random_permute_audio=None, num_phones=61,
+               demo_play_audio=False, fixed_random_seed=None, **kwargs):
+    """
+    :param str timit_dir: directory of TIMIT. should contain filelist.phn and filelist.core.phn
+    :param bool train: whether to use the train or core test data
+    :param int num_feature_filters: e.g. number of MFCCs
+    :param bool with_delta: whether to add delta features (doubles the features dim)
+    :param None|bool|dict[str] random_permute_audio: enables permutation on the audio. see _get_random_permuted_audio
+    :param int num_phones: 39, 48 or 61. num labels of our classes
+    :param bool demo_play_audio: plays the audio. only make sense with tools/dump-dataset.py
+    :param None|int fixed_random_seed: if given, use this fixed random seed in every epoch
+    """
     super(TimitDataset, self).__init__(**kwargs)
     from threading import Lock, Thread
     self._lock = Lock()
+    self._num_feature_filters = num_feature_filters
+    self._feature_window_len = feature_window_len
+    self._feature_step_len = feature_step_len
+    self.num_inputs = self._num_feature_filters
     if with_delta:
-      self.num_inputs = self.FeatureDim * 2
-    else:
-      self.num_inputs = self.FeatureDim
+      self.num_inputs *= 2
     assert num_phones in {61, 48, 39}
     self._phone_map = {61: self.PhoneMapTo61, 48: self.PhoneMapTo48, 39: self.PhoneMapTo39}[num_phones]
     self.labels = self._get_labels(self._phone_map)
@@ -741,7 +754,8 @@ class TimitDataset(CachedDataset2):
     self._fixed_random_seed = fixed_random_seed  # useful when used as eval dataset
     if random_permute_audio is None:
       random_permute_audio = train
-    self._random_permute_audio = random_permute_audio
+    from Util import CollectionReadCheckCovered
+    self._random_permute_audio = CollectionReadCheckCovered.from_bool_or_dict(random_permute_audio)
 
     self._init_timit()
 
@@ -900,6 +914,33 @@ class TimitDataset(CachedDataset2):
     self._random.seed(self._fixed_random_seed or epoch or 1)
     return True
 
+  def _get_random_permuted_audio(self, audio, sample_rate):
+    """
+    :param numpy.ndarray audio: raw time signal
+    :param int sample_rate:
+    :return: audio randomly permuted
+    :rtype: numpy.ndarray
+    """
+    opts = self._random_permute_audio
+    import librosa
+    import scipy.ndimage
+    import warnings
+    audio = audio * self._random.uniform(opts.get("rnd_scale_lower", 0.8), opts.get("rnd_scale_upper", 1.0))
+    if self._random.uniform(0.0, 1.0) < opts.get("rnd_zoom_switch", 0.2):
+      with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        # Alternative: scipy.interpolate.interp2d
+        factor = self._random.uniform(opts.get("rnd_zoom_lower", 0.9), opts.get("rnd_zoom_upper", 1.1))
+        audio = scipy.ndimage.zoom(audio, factor, order=3)
+    if self._random.uniform(0.0, 1.0) < opts.get("rnd_stretch_switch", 0.2):
+      rate = self._random.uniform(opts.get("rnd_stretch_lower", 0.9), opts.get("rnd_stretch_upper", 1.2))
+      audio = librosa.effects.time_stretch(audio, rate=rate)
+    if self._random.uniform(0.0, 1.0) < opts.get("rnd_pitch_switch", 0.2):
+      n_steps = self._random.uniform(opts.get("rnd_pitch_lower", -1.), opts.get("rnd_pitch_upper", 1.))
+      audio = librosa.effects.pitch_shift(audio, sr=sample_rate, n_steps=n_steps)
+    opts.assert_all_read()
+    return audio
+
   def _collect_single_seq(self, seq_idx):
     """
     :type seq_idx: int
@@ -911,8 +952,6 @@ class TimitDataset(CachedDataset2):
 
     # Alternatives for MFCC: python_speech_features, talkbox.features.mfcc, librosa
     import librosa
-    import scipy.ndimage
-    import warnings
 
     seq_tag = self._seq_tags[self._seq_order[seq_idx]]
     phone_seq = self._get_phone_seq(seq_tag)
@@ -924,30 +963,22 @@ class TimitDataset(CachedDataset2):
     audio, sample_rate = self._get_audio(seq_tag)
     peak = numpy.max(numpy.abs(audio))
     audio /= peak
-    if self._random_permute_audio:
-      audio = audio * self._random.uniform(0.8, 1.0)
-      if self._random.uniform(0.0, 1.0) > 0.8:
-        with warnings.catch_warnings():
-          warnings.simplefilter("ignore")
-          audio = scipy.ndimage.zoom(audio, self._random.uniform(0.9, 1.1), order=3)  # or scipy.interpolate.interp2d
-      if self._random.uniform(0.0, 1.0) > 0.8:
-        audio = librosa.effects.time_stretch(audio, rate=self._random.uniform(0.9, 1.2))
-      if self._random.uniform(0.0, 1.0) > 0.8:
-        audio = librosa.effects.pitch_shift(audio, sr=sample_rate, n_steps=self._random.uniform(-1., 1.))
+    if self._random_permute_audio.truth_value:
+      audio = self._get_random_permuted_audio(audio=audio, sample_rate=sample_rate)
     if self._demo_play_audio:
       print("play %r" % seq_tag, "min/max:", numpy.min(audio), numpy.max(audio))
       self._demo_audio_play(audio=audio, sample_rate=sample_rate)
-    window_len = 0.025
-    step_len = 0.010
+    window_len = self._feature_window_len
+    step_len = self._feature_step_len
     mfccs = librosa.feature.mfcc(
       audio, sr=sample_rate,
-      n_mfcc=self.FeatureDim,
+      n_mfcc=self._num_feature_filters,
       hop_length=int(step_len * sample_rate), n_fft=int(window_len * sample_rate))
     energy = librosa.feature.rmse(
       audio,
       hop_length=int(step_len * sample_rate), n_fft=int(window_len * sample_rate))
     mfccs[0] = energy  # replace first MFCC with energy, per convention
-    assert mfccs.shape[0] == self.FeatureDim  # (dim, time)
+    assert mfccs.shape[0] == self._num_feature_filters  # (dim, time)
     if self._with_delta:
       deltas = librosa.feature.delta(mfccs)
       mfccs = numpy.vstack([mfccs, deltas])

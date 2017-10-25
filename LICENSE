@@ -89,6 +89,7 @@ Contains code from Theano:
 Contains code from albertz-system-tools:
  - Website: https://github.com/albertz/system-tools
  - No project license
+ - Copyright Albert Zeyer
  - Various functions in Util.py.
 
 Contains code from Lasagne:
@@ -106,6 +107,13 @@ Contains code from TensorFlow:
 Contains code from pumpikano-tf-dann:
  - Website: https://github.com/pumpikano/tf-dann
  - No project license
+ - Copyright Clayton Mellina
  - Function FlipGradientBuilder in TFUtil.py.
+
+Contains code from tensorpack:
+ - Website: https://github.com/ppwwyyxx/tensorpack
+ - Apache License 2.0
+ - Copyright Yuxin Wu
+ - Some code in GeneratingDataset.py.
 
 Various code snippets from StackOverflow, which are under Creative Commons / Public Domain.
