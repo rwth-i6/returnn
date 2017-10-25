@@ -3154,14 +3154,16 @@ class CtcLoss(Loss):
   class_name = "ctc"
   recurrent = True
 
-  def __init__(self, target_collapse_repeated=False, auto_clip_target_len=False, **kwargs):
+  def __init__(self, target_collapse_repeated=False, auto_clip_target_len=False, output_in_log_space=False, **kwargs):
     """
     :param bool target_collapse_repeated: like preprocess_collapse_repeated option for CTC. used for sparse_labels().
     :param bool auto_clip_target_len: see self._get_target_sparse_labels().
+    :param bool output_in_log_space: False -> output expected in prob space. see self.get_output_logits
     """
     super(CtcLoss, self).__init__(**kwargs)
     self.target_collapse_repeated = target_collapse_repeated
     self.auto_clip_target_len = auto_clip_target_len
+    self.output_in_log_space = output_in_log_space
     self._target_sparse_labels = None
 
   def init(self, **kwargs):
@@ -3183,17 +3185,29 @@ class CtcLoss(Loss):
     self._target_sparse_labels = labels
     return labels
 
-  def get_value(self):
-    if not self.target.sparse:
-      raise Exception("CTC target expected to be sparse (symbols)")
-    with tf.name_scope("loss_ctc"):
+  def get_output_logits(self):
+    """
+    :return: outputs in log-space / logits
+    :rtype: tf.Tensor
+    """
+    if self.output_in_log_space:
+      logits = self.output.placeholder
+    else:
+      # If not self.output_in_log_space, we expect the values in probability space.
       logits = self.output_with_activation
       if self.output_with_activation:
         logits = self.output_with_activation.get_logits()
       if logits is None:
         logits = tf.log(self.output.placeholder)
-      assert logits.get_shape().ndims == 3  # (B,T,N) or (T,B,N)
-      assert logits.get_shape().dims[2].value == self.target.dim + 1  # one more for blank
+    assert logits.get_shape().ndims == 3  # (B,T,N) or (T,B,N)
+    assert logits.get_shape().dims[2].value == self.target.dim + 1  # one more for blank
+    return logits
+
+  def get_value(self):
+    if not self.target.sparse:
+      raise Exception("CTC target expected to be sparse (symbols)")
+    with tf.name_scope("loss_ctc"):
+      logits = self.get_output_logits()
       seq_lens = self.output_seq_lens
       labels = self._get_target_sparse_labels()
       loss = tf.nn.ctc_loss(inputs=logits, labels=labels, sequence_length=seq_lens, time_major=self.output.is_time_major)
@@ -3203,11 +3217,7 @@ class CtcLoss(Loss):
     if not self.target.sparse:
       raise Exception("CTC target expected to be sparse (symbols)")
     with tf.name_scope("loss_ctc_error"):
-      logits = None
-      if self.output_with_activation:
-        logits = self.output_with_activation.get_logits()
-      if logits is None:
-        logits = tf.log(self.output.placeholder)
+      logits = self.get_output_logits()
       if not self.output.is_time_major:
         logits = tf.transpose(logits, [1, 0, 2])  # (B,T,N) => (T,B,N)
       seq_lens = self.output_seq_lens
