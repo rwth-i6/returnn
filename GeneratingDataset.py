@@ -719,13 +719,14 @@ class TimitDataset(CachedDataset2):
     d = {i: tgt_labels.index(v) if v else None for (i, v) in d.items()}  # src-idx -> tgt-idx
     return d
 
-  def __init__(self, timit_dir, train=True,
+  def __init__(self, timit_dir, train=True, preload=False,
                num_feature_filters=40, feature_window_len=0.025, feature_step_len=0.010, with_delta=False,
                random_permute_audio=None, num_phones=61,
                demo_play_audio=False, fixed_random_seed=None, **kwargs):
     """
     :param str timit_dir: directory of TIMIT. should contain filelist.phn and filelist.core.phn
     :param bool train: whether to use the train or core test data
+    :param bool preload: if True, here at __init__, we will wait until we loaded all the data
     :param int num_feature_filters: e.g. number of MFCCs
     :param bool with_delta: whether to add delta features (doubles the features dim)
     :param None|bool|dict[str] random_permute_audio: enables permutation on the audio. see _get_random_permuted_audio
@@ -764,6 +765,8 @@ class TimitDataset(CachedDataset2):
     self._reader_thread = Thread(name="%r reader" % self, target=self._reader_thread_main)
     self._reader_thread.daemon = True
     self._reader_thread.start()
+    if preload:
+      self._preload()
 
   def _init_timit(self):
     """
@@ -786,6 +789,22 @@ class TimitDataset(CachedDataset2):
     self._seq_tags = seq_tags
     self._num_seqs = len(self._seq_tags)
     self._seq_order = list(range(self._num_seqs))
+
+  def _preload(self):
+    import time
+    last_print_time = 0
+    last_print_len = None
+    while True:
+      with self._lock:
+        cur_len = len(self._audio_data)
+      if cur_len == len(self._seq_tags):
+        return
+      if cur_len != last_print_len and time.time() - last_print_time > 10:
+        print("%r: loading (%i/%i loaded so far)..." % (
+          self, cur_len, len(self._seq_tags)), file=log.v3)
+        last_print_len = cur_len
+        last_print_time = time.time()
+      time.sleep(1)
 
   def _reader_thread_main(self):
     import sys
