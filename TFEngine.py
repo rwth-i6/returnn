@@ -1067,6 +1067,7 @@ class Engine(object):
     batches = data.generate_batches(
       recurrent_net=self.network.recurrent,
       batch_size=batch_size,
+      max_seqs=self.max_seqs,
       used_data_keys=self.network.used_data_keys)
     forwarder = Runner(
       engine=self, dataset=data, batches=batches,
