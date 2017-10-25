@@ -2,7 +2,8 @@
 from __future__ import print_function
 
 import tensorflow as tf
-from TFNetworkLayer import LayerBase, _ConcatInputLayer
+from TFNetworkLayer import LayerBase, _ConcatInputLayer, get_concat_sources_data_template
+from TFUtil import Data
 
 
 class AlternatingRealToComplexLayer(_ConcatInputLayer):
@@ -20,18 +21,16 @@ class AlternatingRealToComplexLayer(_ConcatInputLayer):
     """
     super(AlternatingRealToComplexLayer, self).__init__(**kwargs)
 
-    # set order of axes
-    self.output.batch_dim_axis = 0
-    self.output.time_dim_axis = 1
-    self.output.feature_dim_axis = 2
-    # - ensure correct ordering of input placeholder
-    input_placeholder = self.input_data.placeholder
-    if ((self.input_data.batch_dim_axis != self.output.batch_dim_axis) or (self.input_data.time_dim_axis != self.output.time_dim_axis) or (self.input_data.feature_dim_axis != self.output.feature_dim_axis)):
-      input_placeholder = tf.transpose(input_placeholder, [self.input_data.batch_dim_axis, self.input_data.time_dim_axis, self.input_data.feature_dim_axis])
+    input_placeholder = self.input_data.get_placeholder_as_batch_major()
 
     real_value = tf.strided_slice(input_placeholder, [0, 0, 0], tf.shape(input_placeholder), [1, 1, 2])
     imag_value = tf.strided_slice(input_placeholder, [0, 0, 1], tf.shape(input_placeholder), [1, 1, 2])
     self.output.placeholder = tf.complex(real_value, imag_value)
+    self.output.size_placeholder = {0: self.input_data.size_placeholder[self.input_data.time_dim_axis_excluding_batch]}
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, n_out=None, **kwargs):
+    return super(AlternatingRealToComplexLayer, cls).get_out_data_from_opts(name=name, sources=sources, out_type={"dim": n_out, "dtype": "complex64", "batch_dim_axis": 0, "time_dim_axis": 1}, **kwargs)
 
 
 class BatchMedianPoolingLayer(_ConcatInputLayer):
@@ -49,14 +48,7 @@ class BatchMedianPoolingLayer(_ConcatInputLayer):
     """
     super(BatchMedianPoolingLayer, self).__init__(**kwargs)
 
-    # set order of axes
-    self.output.batch_dim_axis = 0
-    self.output.time_dim_axis = 1
-    self.output.feature_dim_axis = 2
-    # - ensure correct ordering of input placeholder
-    input_placeholder = self.input_data.placeholder
-    if ((self.input_data.batch_dim_axis != self.output.batch_dim_axis) or (self.input_data.time_dim_axis != self.output.time_dim_axis) or (self.input_data.feature_dim_axis != self.output.feature_dim_axis)):
-      input_placeholder = tf.transpose(input_placeholder, [self.input_data.batch_dim_axis, self.input_data.time_dim_axis, self.input_data.feature_dim_axis])
+    input_placeholder = self.input_data.get_placeholder_as_batch_major()
 
     # loop over batch pools and extract median
     pool_start_idx = tf.constant(0)
@@ -74,6 +66,19 @@ class BatchMedianPoolingLayer(_ConcatInputLayer):
     r = tf.while_loop(iteratePools, poolMedian, [pool_start_idx, output], shape_invariants=[pool_start_idx.get_shape(), tf.TensorShape([None, None, None])])
     self.output.placeholder = r[-1]
     self.output.size_placeholder = {self.output.time_dim_axis_excluding_batch: tf.strided_slice(self.input_data.size_placeholder[self.input_data.time_dim_axis_excluding_batch], [0], tf.shape(self.input_data.size_placeholder[self.input_data.time_dim_axis_excluding_batch]), [pool_size])}
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, pool_size, n_out=None, **kwargs):
+    input_data = get_concat_sources_data_template(sources)
+    assert not input_data.sparse
+    return Data(
+      name="%s_output" % name,
+      shape=[input_data.get_placeholder_as_batch_major().shape[1].value, input_data.get_placeholder_as_batch_major().shape[2].value],
+      dtype=input_data.dtype,
+      size_placeholder={0: tf.strided_slice(input_data.size_placeholder[input_data.time_dim_axis_excluding_batch], [0], tf.shape(input_data.size_placeholder[input_data.time_dim_axis_excluding_batch]), [pool_size])},
+      sparse=False,
+      batch_dim_axis=0,
+      time_dim_axis=1)
 
 
 class MelFilterbankLayer(_ConcatInputLayer):
@@ -96,17 +101,15 @@ class MelFilterbankLayer(_ConcatInputLayer):
 
     from tfSi6Proc.basics.transformation.fourier import tfMelFilterBank
 
-    # set order of axes
-    self.output.batch_dim_axis = 0
-    self.output.time_dim_axis = 1
-    self.output.feature_dim_axis = 2
-    # - ensure correct ordering of input placeholder
-    input_placeholder = self.input_data.placeholder
-    if ((self.input_data.batch_dim_axis != self.output.batch_dim_axis) or (self.input_data.time_dim_axis != self.output.time_dim_axis) or (self.input_data.feature_dim_axis != self.output.feature_dim_axis)):
-      input_placeholder = tf.transpose(input_placeholder, [self.input_data.batch_dim_axis, self.input_data.time_dim_axis, self.input_data.feature_dim_axis])
+    input_placeholder = self.input_data.get_placeholder_as_batch_major()
 
     mel_fbank_mat = tfMelFilterBank(0, sampling_rate / 2, sampling_rate, fft_size, nr_of_filters)
     self.output.placeholder = tf.einsum('btf,bfc->btc', input_placeholder, tf.tile(tf.expand_dims(mel_fbank_mat, axis=0), [tf.shape(input_placeholder)[0], 1, 1]))
+    self.output.size_placeholder = {0: self.input_data.size_placeholder[self.input_data.time_dim_axis_excluding_batch]}
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, n_out=None, **kwargs):
+    return super(MelFilterbankLayer, cls).get_out_data_from_opts(name=name, sources=sources, out_type={"dim": n_out, "batch_dim_axis": 0, "time_dim_axis": 1}, **kwargs)
 
 
 class MaskBasedGevBeamformingLayer(LayerBase):
@@ -129,14 +132,9 @@ class MaskBasedGevBeamformingLayer(LayerBase):
     super(MaskBasedGevBeamformingLayer, self).__init__(**kwargs)
     assert len(self.sources) == 2
 
-    # set order of axes
-    self.output.batch_dim_axis = 0
-    self.output.time_dim_axis = 1
-    self.output.feature_dim_axis = 2
-
     from tfSi6Proc.audioProcessing.enhancement.beamforming import TfMaskBasedGevBeamformer
 
-    complexSpectrogram = tf.transpose(self.sources[0].output.placeholder, [self.sources[0].output.batch_dim_axis, self.sources[0].output.time_dim_axis, self.sources[0].output.feature_dim_axis])
+    complexSpectrogram = self.sources[0].output.get_placeholder_as_batch_major()
     complexSpectrogram = tf.transpose(tf.reshape(complexSpectrogram, (tf.shape(complexSpectrogram)[0], tf.shape(complexSpectrogram)[1], nr_of_channels, tf.shape(complexSpectrogram)[2] / nr_of_channels)), [0, 1, 3, 2])
     masks = tf.transpose(self.sources[1].output.placeholder, [self.sources[1].output.batch_dim_axis, self.sources[1].output.time_dim_axis, self.sources[1].output.feature_dim_axis])
     masks = tf.transpose(tf.reshape(masks, (tf.shape(masks)[0], tf.shape(masks)[1], nr_of_channels, tf.shape(masks)[2] / nr_of_channels)), [0, 1, 3, 2])
@@ -160,6 +158,13 @@ class MaskBasedGevBeamformingLayer(LayerBase):
       r = tf.while_loop(iterateBatch, beamform, [batchIdx, output], shape_invariants=[batchIdx.get_shape(), tf.TensorShape([None, None, None])])
       self.output.placeholder = r[-1]
 
+  @classmethod
+  def get_out_data_from_opts(cls, out_type={}, n_out=None, **kwargs):
+    out_type.setdefault("dim", n_out)
+    out_type["batch_dim_axis"] = 0
+    out_type["time_dim_axis"] = 1
+    return super(MaskBasedGevBeamformingLayer, cls).get_out_data_from_opts(out_type=out_type, **kwargs)
+
 
 class SplitConcatMultiChannel(_ConcatInputLayer):
   """
@@ -182,19 +187,25 @@ class SplitConcatMultiChannel(_ConcatInputLayer):
     """
     super(SplitConcatMultiChannel, self).__init__(**kwargs)
 
-    # set order of axes
-    self.output.batch_dim_axis = 0
-    self.output.time_dim_axis = 1
-    self.output.feature_dim_axis = 2
-    # - ensure correct ordering of input placeholder
-    input_placeholder = self.input_data.placeholder
-    if ((self.input_data.batch_dim_axis != self.output.batch_dim_axis) or (self.input_data.time_dim_axis != self.output.time_dim_axis) or (self.input_data.feature_dim_axis != self.output.feature_dim_axis)):
-      input_placeholder = tf.transpose(input_placeholder, [self.input_data.batch_dim_axis, self.input_data.time_dim_axis, self.input_data.feature_dim_axis])
+    input_placeholder = self.input_data.get_placeholder_as_batch_major()
 
     output = tf.reshape(input_placeholder, [tf.shape(input_placeholder)[0], tf.shape(input_placeholder)[1], nr_of_channels, tf.shape(input_placeholder)[2] / nr_of_channels])
     self.output.placeholder = tf.transpose(tf.reshape(tf.transpose(output, [1, 3, 0, 2]), (tf.shape(output)[1], tf.shape(output)[3], tf.shape(output)[0] * tf.shape(output)[2])), [2, 0, 1])
     # work around to obtain result like numpy.repeat(size_placeholder, nr_of_channels)
     self.output.size_placeholder = {self.output.time_dim_axis_excluding_batch: tf.reshape(tf.tile(tf.reshape(self.input_data.size_placeholder[self.input_data.time_dim_axis_excluding_batch], [-1, 1]), [1, nr_of_channels]), [-1])}
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, nr_of_channels, n_out=None, **kwargs):
+    input_data = get_concat_sources_data_template(sources)
+    assert not input_data.sparse
+    return Data(
+      name="%s_output" % name,
+      shape=[input_data.get_placeholder_as_batch_major().shape[1].value, input_data.get_placeholder_as_batch_major().shape[2].value // nr_of_channels],
+      dtype=input_data.dtype,
+      size_placeholder={0: tf.reshape(tf.tile(tf.reshape(input_data.size_placeholder[input_data.time_dim_axis_excluding_batch], [-1, 1]), [1, nr_of_channels]), [-1])},
+      sparse=False,
+      batch_dim_axis=0,
+      time_dim_axis=1)
 
 
 class TileFeaturesLayer(_ConcatInputLayer):
@@ -210,13 +221,19 @@ class TileFeaturesLayer(_ConcatInputLayer):
     """
     super(TileFeaturesLayer, self).__init__(**kwargs)
 
-    # set order of axes
-    self.output.batch_dim_axis = 0
-    self.output.time_dim_axis = 1
-    self.output.feature_dim_axis = 2
-    # - ensure correct ordering of input placeholder
-    input_placeholder = self.input_data.placeholder
-    if ((self.input_data.batch_dim_axis != self.output.batch_dim_axis) or (self.input_data.time_dim_axis != self.output.time_dim_axis) or (self.input_data.feature_dim_axis != self.output.feature_dim_axis)):
-      input_placeholder = tf.transpose(input_placeholder, [self.input_data.batch_dim_axis, self.input_data.time_dim_axis, self.input_data.feature_dim_axis])
+    input_placeholder = self.input_data.get_placeholder_as_batch_major()
 
     self.output.placeholder = tf.tile(input_placeholder, [1, 1, repetitions])
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, repetitions, n_out=None, **kwargs):
+    input_data = get_concat_sources_data_template(sources)
+    assert not input_data.sparse
+    return Data(
+      name="%s_output" % name,
+      shape=[input_data.get_placeholder_as_batch_major().shape[1].value, input_data.get_placeholder_as_batch_major().shape[2].value * repetitions],
+      dtype=input_data.dtype,
+      sparse=False,
+      size_placeholder={0: input_data.size_placeholder[input_data.time_dim_axis_excluding_batch]},
+      batch_dim_axis=0,
+      time_dim_axis=1)
