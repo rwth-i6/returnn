@@ -51,6 +51,12 @@ Contains code from TaskSystem:
  - Copyright (c) 2011--2016, Albert Zeyer. All rights reserved.
  - Files: TaskSystem*.py
 
+Contains code from extpickle:
+ - Website: https://github.com/albertz/extpickle
+ - BSD 2-clause "Simplified" License
+ - Copyright (c) 2016, Albert Zeyer. All rights reserved.
+ - File: TaskSystem.py
+
 Contains code from MusicPlayer:
  - Website: https://github.com/albertz/music-player
  - BSD 2-clause "Simplified" License
