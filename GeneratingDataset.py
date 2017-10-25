@@ -723,6 +723,8 @@ class TimitDataset(CachedDataset2):
   def __init__(self, timit_dir, with_delta=False, num_phones=61,
                train=True, demo_play_audio=False, fixed_random_seed=None, random_permute_audio=None, **kwargs):
     super(TimitDataset, self).__init__(**kwargs)
+    from threading import Lock, Thread
+    self._lock = Lock()
     if with_delta:
       self.num_inputs = self.FeatureDim * 2
     else:
@@ -743,6 +745,12 @@ class TimitDataset(CachedDataset2):
 
     self._init_timit()
 
+    self._audio_data = {}  # seq_tag -> (audio, sample_rate). loaded by self._reader_thread_main
+    self._phone_seqs = {}  # seq_tag -> phone_seq (list of str)
+    self._reader_thread = Thread(name="%r reader" % self, target=self._reader_thread_main)
+    self._reader_thread.daemon = True
+    self._reader_thread.start()
+
   def _init_timit(self):
     """
     Sets self._seq_tags, _num_seqs, _seq_order, and _timit_dir.
@@ -761,10 +769,31 @@ class TimitDataset(CachedDataset2):
       file_list_fn = self._timit_dir + "/filelist.core.phn"
     assert os.path.exists(file_list_fn)
     seq_tags = [os.path.splitext(p)[0] for p in open(file_list_fn).read().splitlines()]
-    self._phone_seqs = {seq_tag: self._read_phn_file(seq_tag) for seq_tag in seq_tags}
     self._seq_tags = seq_tags
     self._num_seqs = len(self._seq_tags)
     self._seq_order = list(range(self._num_seqs))
+
+  def _reader_thread_main(self):
+    import sys
+    from Util import interrupt_main
+    try:
+      import better_exchook
+      better_exchook.install()
+
+      import librosa
+
+      for seq_tag in self._seq_tags:
+        audio_filename = "%s/%s.wav" % (self._timit_dir, seq_tag)
+        audio, sample_rate = librosa.load(audio_filename, sr=None)
+        with self._lock:
+          self._audio_data[seq_tag] = (audio, sample_rate)
+        phone_seq = self._read_phone_seq(seq_tag)
+        with self._lock:
+          self._phone_seqs[seq_tag] = phone_seq
+
+    except Exception:
+      sys.excepthook(*sys.exc_info())
+      interrupt_main()
 
   def _read_phn_file(self, seq_tag):
     """
@@ -780,12 +809,59 @@ class TimitDataset(CachedDataset2):
       phone_seq.append(p)
     return phone_seq
 
+  def _read_phone_seq(self, seq_tag):
+    """
+    :param str seq_tag: e.g. "dr1-fvmh0/s1" or "dr1/fcjf0/sa1"
+    :rtype: list[str]
+    """
+    return self._read_phn_file(seq_tag)
+
   def _get_phone_seq(self, seq_tag):
     """
     :param str seq_tag: e.g. "dr1-fvmh0/s1" or "dr1/fcjf0/sa1"
     :rtype: list[str]
     """
-    return self._phone_seqs[seq_tag]
+    import time
+    last_print_time = 0
+    last_print_len = None
+    idx = None
+    while True:
+      with self._lock:
+        if seq_tag in self._phone_seqs:
+          return self._phone_seqs[seq_tag]
+        cur_len = len(self._phone_seqs)
+      if idx is None:
+        idx = self._seq_tags.index(seq_tag)
+      if cur_len != last_print_len and time.time() - last_print_time > 10:
+        print("%r: waiting for %r, idx %i (%i/%i loaded so far)..." % (
+          self, seq_tag, idx, cur_len, len(self._seq_tags)), file=log.v3)
+        last_print_len = cur_len
+        last_print_time = time.time()
+      time.sleep(1)
+
+  def _get_audio(self, seq_tag):
+    """
+    :param str seq_tag: e.g. "dr1-fvmh0/s1" or "dr1/fcjf0/sa1"
+    :return: audio, sample_rate
+    :rtype: (numpy.ndarray, int)
+    """
+    import time
+    last_print_time = 0
+    last_print_len = None
+    idx = None
+    while True:
+      with self._lock:
+        if seq_tag in self._audio_data:
+          return self._audio_data[seq_tag]
+        cur_len = len(self._audio_data)
+      if idx is None:
+        idx = self._seq_tags.index(seq_tag)
+      if cur_len != last_print_len and time.time() - last_print_time > 10:
+        print("%r: waiting for %r, idx %i (%i/%i loaded so far)..." % (
+          self, seq_tag, idx, cur_len, len(self._seq_tags)), file=log.v3)
+        last_print_len = cur_len
+        last_print_time = time.time()
+      time.sleep(1)
 
   def _demo_audio_play(self, audio, sample_rate):
     """
@@ -845,8 +921,7 @@ class TimitDataset(CachedDataset2):
     phone_id_seq = numpy.array([self.labels.index(p) for p in phone_seq], dtype="int32")
     # see: https://github.com/rdadolf/fathom/blob/master/fathom/speech/preproc.py
     # and: https://groups.google.com/forum/#!topic/librosa/V4Z1HpTKn8Q
-    audio_filename = "%s/%s.wav" % (self._timit_dir, seq_tag)
-    audio, sample_rate = librosa.load(audio_filename, sr=None)
+    audio, sample_rate = self._get_audio(seq_tag)
     peak = numpy.max(numpy.abs(audio))
     audio /= peak
     if self._random_permute_audio:
@@ -860,7 +935,7 @@ class TimitDataset(CachedDataset2):
       if self._random.uniform(0.0, 1.0) > 0.8:
         audio = librosa.effects.pitch_shift(audio, sr=sample_rate, n_steps=self._random.uniform(-1., 1.))
     if self._demo_play_audio:
-      print("play %r" % audio_filename, "min/max:", numpy.min(audio), numpy.max(audio))
+      print("play %r" % seq_tag, "min/max:", numpy.min(audio), numpy.max(audio))
       self._demo_audio_play(audio=audio, sample_rate=sample_rate)
     window_len = 0.025
     step_len = 0.010
@@ -934,11 +1009,7 @@ class NltkTimitDataset(TimitDataset):
     self._num_seqs = len(self._seq_tags)
     self._seq_order = list(range(self._num_seqs))
 
-  def _get_phone_seq(self, seq_tag):
-    """
-    :param str seq_tag: e.g. "dr1-fvmh0/s1" or "dr1/fcjf0/sa1"
-    :rtype: list[str]
-    """
+  def _read_phone_seq(self, seq_tag):
     return self._data_reader.phones(seq_tag)
 
 
