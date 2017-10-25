@@ -109,6 +109,7 @@ class Graph:
     :param str|None lemma: a sentence or word
     list[str] lem_list: lemma transformed into list of strings
     """
+    # TODO use dict to distinguish between str and list?
     if isinstance(lemma, str):
       self.lemma = lemma.strip()
       self.lem_list = self.lemma.lower().split()
@@ -828,6 +829,7 @@ class Store:
         label = [edge.label_prev, edge.label, edge.label_next]
         if edge.allo_idx is not None:
           label.append(edge.allo_idx)
+      # TODO add label creation for fst
       else:
         label = edge.label
       e = ((str(edge.source_state_idx), str(edge.target_state_idx)), {'label': str(label)})
@@ -1155,7 +1157,6 @@ def main():
   start_time = time.time()
 
   fsa = Graph(lemma=args.label_seq)
-
 
   lexicon_start_time = time.time()
   lexicon = load_lexicon(args.lexicon, args.pickle)
