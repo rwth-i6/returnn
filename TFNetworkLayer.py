@@ -975,6 +975,8 @@ class InternalLayer(LayerBase):
 class ActivationLayer(CopyLayer):
   """
   This layer just applies an activation function.
+  See :func:`TFUtil.get_activation_function` about supported functions.
+  Also see :class:`EvalLayer` and :class:`CombineLayer` for similar layers.
   """
 
   layer_class = "activation"
@@ -2334,6 +2336,7 @@ class FsaLayer(LayerBase):
 class CombineLayer(LayerBase):
   """
   Applies some binary operation on all sources, such as addition.
+  Also see :class:`ActivationLayer`.
   """
   layer_class = "combine"
 
@@ -2484,6 +2487,7 @@ class EvalLayer(CombineLayer):
   """
   Evaluates some string.
   The CombineLayer provides this functionality, thus this is just a special case of it.
+  Also see :class:`ActivationLayer`.
   """
   layer_class = "eval"
 
@@ -3004,7 +3008,7 @@ class Loss(object):
     You can overwrite this if those checks don't make sense for your derived loss class.
     """
     assert self.target.ndim_dense == self.output.ndim_dense, (
-      "Number of dimensions missmatch. Target: %s, output: %s" % (self.target, self.output))
+      "Number of dimensions mismatch. Target: %s, output: %s" % (self.target, self.output))
     expected_output_dim = self.get_auto_output_layer_dim(self.target.dim)
     assert expected_output_dim == self.output.dim, (
       "Expected output dim is %i but the output has dim %i. " % (expected_output_dim, self.output.dim) +
@@ -3034,7 +3038,8 @@ class Loss(object):
 
   def get_value(self):
     """
-    :return: loss as a scalar value
+    :return: loss as a scalar float32 value. it should *not* be normalized over frames,
+      as this will be calculated in :func:`TFEngine.Runner._collect_eval_info`.
     :rtype: tf.Tensor|None
     """
     raise NotImplementedError
@@ -3341,26 +3346,31 @@ class EditDistanceLoss(Loss):
 
 class BinaryCrossEntropy(Loss):
   """
+  Binary cross entropy.
+  We expect the output as logits, not in probability space!
+  Per frame: mean(target * log(sigmoid(output)) + (1 - target) * log(1 - sigmoid(output)))
   """
   class_name = "bin_ce"
 
   def get_value(self):
-    """
-    """
     assert not self.target.sparse, "sparse is not supported yet"
+    assert self.target.dim == self.output.dim
     with tf.name_scope("loss_bin_ce"):
-      out = 0.5 * tf.nn.sigmoid_cross_entropy_with_logits(logits = self.output_flat, labels = self.target_flat)
-      return tf.reduce_mean(out)
+      out = tf.nn.sigmoid_cross_entropy_with_logits(logits=self.output_flat, labels=self.target_flat)
+      return self.reduce_func(out * (1.0 / self.target.dim))
+
 
 class DeepClusteringLoss(Loss):
   """
-  cost function used for deep clustering as described in
+  Cost function used for deep clustering as described in
   [Hershey & Chen+, 2016]: "Deep clustering discriminative embeddings for segmentation and separation"
   """
   class_name = "deep_clustering"
 
   def __init__(self, embedding_dimension, nr_of_sources, **kwargs):
     """
+    :param int embedding_dimension:
+    :param int nr_of_sources:
     """
     super(DeepClusteringLoss, self).__init__(**kwargs)
     self._embedding_dimension = embedding_dimension
@@ -3372,7 +3382,7 @@ class DeepClusteringLoss(Loss):
     You can overwrite this if those checks don't make sense for your derived loss class.
     """
     assert self.target.ndim_dense == self.output.ndim_dense, (
-      "Number of dimensions missmatch. Target: %s, output: %s" % (self.target, self.output))
+      "Number of dimensions mismatch. Target: %s, output: %s" % (self.target, self.output))
     expected_output_dim = self._embedding_dimension * ( self.target.shape[1] / self._nr_of_sources)
     assert expected_output_dim == self.output.dim, (
       "Expected output dim is %i but the output has dim %i. " % (expected_output_dim, self.output.dim) +
@@ -3386,30 +3396,68 @@ class DeepClusteringLoss(Loss):
     return None
 
   def get_value(self):
-    """
-    """
     assert not self.target.sparse, "sparse is not supported yet"
+    assert self.target.dim == self.output.dim
     with tf.name_scope("loss_deep_clustering"):
       # iterate through all chunks and compute affinity cost function for every chunk separately
-      c = tf.Variable([0], dtype=tf.float32)
-      def iterateSequences(s, start, c):
+
+      def iterate_sequences(s, start, c):
         return tf.less(s, tf.shape(self.output_seq_lens)[0])
-      def computeCost(s, start, c):
-        seqLength = self.output_seq_lens[s]
-        chunkOut = self.output_flat[start:(start + seqLength), :]
-        chunkTarget = self.target_flat[start:(start + seqLength), :]
+
+      def compute_cost(s, start, c):
+        """
+        :param tf.Tensor s: scalar, int32, seq idx
+        :param tf.Tensor start: scalar, int32, time offset
+        :param tf.Tensor c: scalar, float32, accumulated loss
+        :return: new (s, start, c)
+        :rtype: (tf.Tensor, tf.Tensor, tf.Tensor)
+        """
+        seq_length = self.output_seq_lens[s]  # scalar, int32
+        # Note: This slice indexed access will be inefficient to do in every frame of the loop.
+        #   It's better to use a tf.TensorArray.
+        #   It would also be better/faster/easier to use self.output/self.target instead of the flat variants.
+        #   It would also maybe be easier to use tf.foldl, tf.scan or some of the other variants instead
+        #   of tf.while_loop.
+        chunk_out = self.output_flat[start:(start + seq_length), :]  # (time, dim)
+        chunk_target = self.target_flat[start:(start + seq_length), :]  # (time, dim)
         # convert network output into embedding vectors
-        v = tf.reshape(tf.reshape(chunkOut, (tf.shape(chunkOut)[0], tf.shape(chunkOut)[1] / self._embedding_dimension, self._embedding_dimension)), (tf.shape(chunkOut)[0] * (tf.shape(chunkOut)[1] / self._embedding_dimension ), self._embedding_dimension))
+        # Note: The first reshape is redundant if you reshape it right after again.
+        v = tf.reshape(
+          tf.reshape(
+            chunk_out,
+            (tf.shape(chunk_out)[0], tf.shape(chunk_out)[1] // self._embedding_dimension, self._embedding_dimension)),
+          (tf.shape(chunk_out)[0] * (tf.shape(chunk_out)[1] // self._embedding_dimension), self._embedding_dimension))
         # convert targets into class vectors
-        y = tf.reshape(tf.reshape(chunkTarget, (tf.shape(chunkTarget)[0], tf.shape(chunkTarget)[1] / self._nr_of_sources, self._nr_of_sources)), (tf.shape(chunkTarget)[0] * (tf.shape(chunkTarget)[1] / self._nr_of_sources), self._nr_of_sources))
-        chunkC = tf.pow(tf.norm(tf.matmul(tf.transpose(v), v)), 2) - 2 * tf.pow(tf.norm(tf.matmul(tf.transpose(v), y)), 2) + tf.pow(tf.norm(tf.matmul(tf.transpose(y), y)), 2)
+        # Note: The first reshape is redundant if you reshape it right after again.
+        y = tf.reshape(
+          tf.reshape(
+            chunk_target,
+            (tf.shape(chunk_target)[0], tf.shape(chunk_target)[1] // self._nr_of_sources, self._nr_of_sources)),
+          (tf.shape(chunk_target)[0] * (tf.shape(chunk_target)[1] // self._nr_of_sources), self._nr_of_sources))
+        chunk_c = (
+          tf.pow(tf.norm(tf.matmul(tf.transpose(v), v)), 2)
+          - 2.0 * tf.pow(tf.norm(tf.matmul(tf.transpose(v), y)), 2)
+          + tf.pow(tf.norm(tf.matmul(tf.transpose(y), y)), 2))
         # append chunk cost to cost tensor
-        c = tf.cond(tf.greater(s, 0), lambda: tf.concat([c, tf.reshape(chunkC, (1,))], axis=0), lambda: tf.reshape(chunkC, (1,)))
-        return tf.add(s, 1), tf.add(start, seqLength), c
+        # Note: It's very inefficient to have a different shape in each frame of the loop.
+        #   A tf.TensorArray should be used instead.
+        #   As I see from the code, you are anyway reducing it at the end,
+        #   so it would be even easier to just accumulate it here (just sum it).
+        # Note: tf.cond can be slow. It should only be used if the arguments are very expensive to compute.
+        #   Maybe tf.where might be better. But if you just sum it up, you don't have that problem here anyway.
+        c = tf.cond(
+          tf.greater(s, 0),
+          lambda: tf.concat([c, tf.reshape(chunk_c, (1,))], axis=0),
+          lambda: tf.reshape(chunk_c, (1,)))
+        return tf.add(s, 1), tf.add(start, seq_length), c
+
+      c = tf.constant(0.0)
       s = tf.constant(0, dtype=tf.int32)
       start = tf.constant(0, dtype=tf.int32)
-      r = tf.while_loop(iterateSequences, computeCost, [s, start, c], shape_invariants=[s.get_shape(), start.get_shape(), tf.TensorShape([None,])])
-      return tf.reduce_mean(r[-1])
+      r = tf.while_loop(
+        iterate_sequences, compute_cost, [s, start, c],
+        shape_invariants=[s.get_shape(), start.get_shape(), tf.TensorShape([None])])
+      return self.reduce_func(r[-1])
 
 
 class L1Loss(Loss):

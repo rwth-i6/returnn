@@ -122,9 +122,10 @@ class MaskBasedGevBeamformingLayer(LayerBase):
 
   def __init__(self, nr_of_channels=1, postfilter_id=0, **kwargs):
     """
-    :param nr_of_channels int: number of input channels to beamforming (needed to split the feature vector)
-    :param postfilter_id int: Id which is specifying which post filter to apply in gev beamforming.
-                              For more information see tfSi6Proc.audioProcessing.enhancement.beamforming.TfMaskBasedGevBeamformer
+    :param int nr_of_channels: number of input channels to beamforming (needed to split the feature vector)
+    :param int postfilter_id: Id which is specifying which post filter to apply in gev beamforming.
+                              For more information see
+                              tfSi6Proc.audioProcessing.enhancement.beamforming.TfMaskBasedGevBeamformer
     """
     super(MaskBasedGevBeamformingLayer, self).__init__(**kwargs)
     assert len(self.sources) == 2
@@ -178,7 +179,7 @@ class SplitConcatMultiChannel(_ConcatInputLayer):
 
   def __init__(self, nr_of_channels=1, **kwargs):
     """
-    :param nr_of_channels int: the number of concatenated channels in the feature dimension
+    :param int nr_of_channels: the number of concatenated channels in the feature dimension
     """
     super(SplitConcatMultiChannel, self).__init__(**kwargs)
 
