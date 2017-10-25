@@ -1514,7 +1514,14 @@ def get_activation_function(s):
     return identity
   if any(k in s for k in _bin_ops):
     return _get_act_func_with_op(s)
-  act_func = getattr(tf.nn, s)  # e.g. relu, elu, sigmoid, softmax, ...
+
+  if hasattr(tf.nn, s):
+    act_func = getattr(tf.nn, s)  # e.g. relu, elu, sigmoid, softmax, ...
+  elif hasattr(tf, s):
+    act_func = getattr(tf, s)  # e.g. log, abs
+  elif s in globals():
+    act_func = globals()[s]  # e.g. safe_log 
+
   return act_func
 
 

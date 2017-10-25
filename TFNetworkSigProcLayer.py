@@ -5,21 +5,6 @@ import tensorflow as tf
 from TFNetworkLayer import LayerBase, _ConcatInputLayer
 
 
-class AbsLayer(_ConcatInputLayer):
-  """
-  This layer converts a input tensor into a output containing the aboslute
-  value as a float32.
-  """
-
-  layer_class = "abs"
-
-  def __init__(self, **kwargs):
-    """
-    """
-    super(AbsLayer, self).__init__(**kwargs)
-    self.output.placeholder = tf.cast(tf.abs(self.input_data.placeholder), dtype=tf.float32)
-
-
 class AlternatingRealToComplexLayer(_ConcatInputLayer):
   """
   This layer converts a real valued input tensor into a complex valued output
@@ -89,21 +74,6 @@ class BatchMedianPoolingLayer(_ConcatInputLayer):
     r = tf.while_loop(iteratePools, poolMedian, [pool_start_idx, output], shape_invariants=[pool_start_idx.get_shape(), tf.TensorShape([None, None, None])])
     self.output.placeholder = r[-1]
     self.output.size_placeholder = {self.output.time_dim_axis_excluding_batch: tf.strided_slice(self.input_data.size_placeholder[self.input_data.time_dim_axis_excluding_batch], [0], tf.shape(self.input_data.size_placeholder[self.input_data.time_dim_axis_excluding_batch]), [pool_size])}
-
-
-class LogLayer(_ConcatInputLayer):
-  """
-  Applies logarithm to input
-  """
-
-  layer_class = "logarithm"
-
-  def __init__(self, base=10, epsilon=1e-7, **kwargs):
-    """
-    :param base float32: base of the logarithm
-    """
-    super(LogLayer, self).__init__(**kwargs)
-    self.output.placeholder = tf.log(self.input_data.placeholder + epsilon) / tf.log(tf.constant(base, dtype=tf.float32))
 
 
 class MelFilterbankLayer(_ConcatInputLayer):
