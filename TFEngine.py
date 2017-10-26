@@ -1158,6 +1158,9 @@ class Engine(object):
     if do_eval:
       # It's constructed lazily and it will set used_data_keys, so make sure that we have it now.
       self.network.get_all_errors()
+    if output_file:
+      dataset.seq_ordering = "default"  # enforce order as-is, so that the order in the written file corresponds
+    dataset.init_seq_order(epoch=self.epoch)
     batches = dataset.generate_batches(
       recurrent_net=self.network.recurrent,
       batch_size=self.config.int('batch_size', 1),
@@ -1204,7 +1207,7 @@ class Engine(object):
           print("  hyp:", dataset.serialize_data(key=target_key, data=output[out_idx]), file=log.v1)
           print("  ref:", dataset.serialize_data(key=target_key, data=targets[out_idx]), file=log.v1)
         if output_file:
-          output_file.write("%s\n" % dataset.serialize_data(key=target_key, data=output[out_idx]).encode("utf8"))
+          output_file.write("%s\n" % dataset.serialize_data(key=target_key, data=output[out_idx]))
           output_file.flush()
 
     runner = Runner(
