@@ -3067,6 +3067,27 @@ class CrossEntropyLoss(Loss):
   """
   class_name = "ce"
 
+  def __init__(self, focal_loss_factor=0.0, **kwargs):
+    """
+    :param float focal_loss_factor: see https://arxiv.org/abs/1708.02002. 0 means disabled
+    """
+    super(CrossEntropyLoss, self).__init__(**kwargs)
+    self.focal_loss_factor = focal_loss_factor
+
+  def get_output_target_scores(self):
+    """
+    :return: shape (time_flat,), type float32
+    :rtype: tf.Tensor
+    """
+    output_flat = self.output_flat
+    if output_flat is None:
+      output_flat = self.output.get_placeholder_time_flattened()
+    target_flat_exp = tf.stack(
+      [tf.range(tf.shape(self.target_flat)[0], dtype=tf.int32),
+       tf.cast(self.target_flat, tf.int32)], axis=1)  # (time,2)
+    out = tf.gather_nd(output_flat, target_flat_exp)
+    return out
+
   def get_value(self):
     with tf.name_scope("loss_ce"):
       log_clip_values = (1e-32, 1e32)  # only used for non-fused path
@@ -3075,15 +3096,14 @@ class CrossEntropyLoss(Loss):
         if self.output_before_softmax_flat is not None:
           out = tf.nn.sparse_softmax_cross_entropy_with_logits(
             logits=self.output_before_softmax_flat, labels=self.target_flat)
-          return self.reduce_func(out)
         else:
           print("Warning: using numerical unstable sparse Cross-Entropy loss calculation", file=log.v3)
-          target_flat_exp = tf.stack(
-            [tf.range(tf.shape(self.target_flat)[0], dtype=tf.int32),
-             tf.cast(self.target_flat, tf.int32)], axis=1)  # (time,2)
-          out = tf.log(tf.clip_by_value(tf.gather_nd(self.output_flat, target_flat_exp), *log_clip_values))
-          return -self.reduce_func(out)
+          out = -tf.log(tf.clip_by_value(self.get_output_target_scores(), *log_clip_values))
+        if self.focal_loss_factor:
+          out *= (1.0 - self.get_output_target_scores()) ** self.focal_loss_factor
+        return self.reduce_func(out)
       else:  # not sparse
+        assert not self.focal_loss_factor, "not implemented"
         if self.output_before_softmax_flat is not None:
           out = tf.nn.softmax_cross_entropy_with_logits(logits=self.output_before_softmax_flat, labels=self.target_flat)
           return self.reduce_func(out)
