@@ -3241,10 +3241,12 @@ class EditDistanceLoss(Loss):
   class_name = "edit_distance"
   recurrent = True
 
-  def __init__(self, debug_print=False, label_map=None, ctc_decode=False, **kwargs):
+  def __init__(self, debug_print=False, label_map=None, ctc_decode=False, output_in_log_space=False, **kwargs):
     """
     :param bool debug_print: will tf.Print the sequence
     :param dict[int,int]|None label_map: before calculating the edit-distance, will apply this map
+    :param bool ctc_decode: True -> expects dense output and does CTC decode, False -> expects sparse labels in output
+    :param bool output_in_log_space: False -> dense output expected in prob space. see self.get_output_logits
     """
     super(EditDistanceLoss, self).__init__(**kwargs)
     self._output_sparse_labels = None
@@ -3252,6 +3254,7 @@ class EditDistanceLoss(Loss):
     self._debug_print = debug_print
     self._label_map = label_map
     self._ctc_decode = ctc_decode
+    self._output_in_log_space = output_in_log_space
     if self._ctc_decode:
       self.get_auto_output_layer_dim = lambda dim: dim + 1
 
@@ -3294,13 +3297,28 @@ class EditDistanceLoss(Loss):
     from TFUtil import map_labels
     return map_labels(labels, label_map=self._label_map)
 
+  def get_output_logits(self):
+    """
+    :return: outputs in log-space / logits
+    :rtype: tf.Tensor
+    """
+    assert not self.output.sparse
+    if self._output_in_log_space:
+      logits = self.output.placeholder
+    else:
+      # If not self.output_in_log_space, we expect the values in probability space.
+      logits = self.output_with_activation
+      if self.output_with_activation:
+        logits = self.output_with_activation.get_logits()
+      if logits is None:
+        logits = tf.log(self.output.placeholder)
+    assert logits.get_shape().ndims == 3  # (B,T,N) or (T,B,N)
+    assert logits.get_shape().dims[2].value == self.target.dim + 1  # one more for blank
+    return logits
+
   def _ctc_decode_dense_output(self):
     assert not self.output.sparse
-    logits = None
-    if self.output_with_activation:
-      logits = self.output_with_activation.get_logits()
-    if logits is None:
-      logits = tf.log(self.output.placeholder)
+    logits = self.get_output_logits()
     if not self.output.is_time_major:
       logits = tf.transpose(logits, [1, 0, 2])  # (B,T,N) => (T,B,N)
     seq_lens = self.output_seq_lens

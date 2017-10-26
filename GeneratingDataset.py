@@ -724,7 +724,7 @@ class TimitDataset(CachedDataset2):
                random_permute_audio=None, num_phones=61,
                demo_play_audio=False, fixed_random_seed=None, **kwargs):
     """
-    :param str timit_dir: directory of TIMIT. should contain filelist.phn and filelist.core.phn
+    :param str timit_dir: directory of TIMIT. should contain train/filelist.phn and test/filelist.core.phn
     :param bool train: whether to use the train or core test data
     :param bool preload: if True, here at __init__, we will wait until we loaded all the data
     :param int num_feature_filters: e.g. number of MFCCs
