@@ -3174,17 +3174,21 @@ class CtcLoss(Loss):
   class_name = "ctc"
   recurrent = True
 
-  def __init__(self, target_collapse_repeated=False, auto_clip_target_len=False, output_in_log_space=False, **kwargs):
+  def __init__(self, target_collapse_repeated=False, auto_clip_target_len=False, output_in_log_space=False,
+               focal_loss_factor=0.0, **kwargs):
     """
     :param bool target_collapse_repeated: like preprocess_collapse_repeated option for CTC. used for sparse_labels().
     :param bool auto_clip_target_len: see self._get_target_sparse_labels().
     :param bool output_in_log_space: False -> output expected in prob space. see self.get_output_logits
+    :param float focal_loss_factor: see https://arxiv.org/abs/1708.02002. 0 means disabled. generalized for CTC
     """
     super(CtcLoss, self).__init__(**kwargs)
     self.target_collapse_repeated = target_collapse_repeated
     self.auto_clip_target_len = auto_clip_target_len
     self.output_in_log_space = output_in_log_space
     self._target_sparse_labels = None
+    self._ctc_loss = None  # set in get_value
+    self.focal_loss_factor = focal_loss_factor
 
   def init(self, **kwargs):
     self._target_sparse_labels = None
@@ -3223,6 +3227,34 @@ class CtcLoss(Loss):
     assert logits.get_shape().dims[2].value == self.target.dim + 1  # one more for blank
     return logits
 
+  def get_soft_alignment(self):
+    """
+    Also called the Baum-Welch-alignment.
+    This is basically p_t(s|x_1^T,w_1^N), where s are the output labels (including blank),
+    and w are the real target labels.
+    :return: shape (time, batch, dim)
+    :rtype: tf.Tensor
+    """
+    assert self._ctc_loss is not None
+    assert isinstance(self._ctc_loss, tf.Tensor)
+    assert self._ctc_loss.op.type == "CTCLoss"
+    # See grad definition of CTCLoss.
+    # The op will calculate the gradient w.r.t. the logits.
+    # I.e. with y = softmax(z), this is \partial loss / \partial z = y - soft_align.
+    ctc_grad_z = self._ctc_loss.op.outputs[1]  # time major, i.e. (time, batch, dim)
+    y = self.output.get_placeholder_as_time_major()  # (time, batch, dim)
+    soft_align = y - ctc_grad_z
+    soft_align.set_shape(tf.TensorShape((None, None, self.output.dim)))
+    return soft_align
+
+  def get_focal_loss_factor(self):
+    """
+    :return: shape (time, batch, dim)
+    :rtype: tf.Tensor
+    """
+    y = self.output.get_placeholder_as_time_major()
+    return (1.0 - y) ** self.focal_loss_factor
+
   def get_value(self):
     if not self.target.sparse:
       raise Exception("CTC target expected to be sparse (symbols)")
@@ -3230,7 +3262,19 @@ class CtcLoss(Loss):
       logits = self.get_output_logits()
       seq_lens = self.output_seq_lens
       labels = self._get_target_sparse_labels()
-      loss = tf.nn.ctc_loss(inputs=logits, labels=labels, sequence_length=seq_lens, time_major=self.output.is_time_major)
+      self._ctc_loss = tf.nn.ctc_loss(
+        inputs=logits, labels=labels, sequence_length=seq_lens, time_major=self.output.is_time_major)
+      loss = self._ctc_loss  # shape (batch,)
+      if self.focal_loss_factor:
+        # We are going up to (time,batch,dim), and we later use reduce_sum,
+        # and we want the same normalization, thus we multiply that in now.
+        loss /= tf.cast(self.output_seq_lens, tf.float32)
+        loss /= tf.cast(self.output.dim, tf.float32)
+        loss = tf.expand_dims(loss, axis=0)  # (time,batch)
+        loss = tf.expand_dims(loss, axis=2)  # (time,batch,dim)
+        loss *= self.get_focal_loss_factor()
+        from TFUtil import flatten_with_seq_len_mask
+        loss = flatten_with_seq_len_mask(loss, seq_lens=self.output_seq_lens, time_major=True)  # (time_flat,dim)
       return self.reduce_func(loss)
 
   def get_error(self):
