@@ -222,6 +222,9 @@ class TwoDLSTMLayer(TwoDBaseLayer):
     X = source.output
     assert X.ndim == 4
     sizes = source.output_sizes
+    if source.layer_class == "1Dto2D":
+      #sizes has the wrong layout if coming directly from a 1Dto2D layer
+      sizes = sizes.reshape((2, sizes.size // 2)).dimshuffle(1, 0)
     self.output_sizes = sizes
     assert directions in [1,2,4], "only 1, 2 or 4 directions are supported"
     assert projection in ['average', 'concat'], "invalid projection"
