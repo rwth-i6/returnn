@@ -674,7 +674,7 @@ class AllPossibleWordsFsa:
 
   def __init__(self, fsa):
     """
-    takes a lexicon file, laods and conttructs a fsa over all possible words
+    takes a lexicon file and constructs a fsa over all words
     :param Graph fsa: the graph which holds the constructed fsa
     """
     self.fsa = fsa
@@ -686,6 +686,29 @@ class AllPossibleWordsFsa:
       edge = Edge(0, 0, key, 0)
       self.fsa.edges_word.append(edge)
     self.fsa.num_states_word = 1
+
+
+class Ngram:
+  """
+  constructs a fsa with a n-gram lm
+  """
+
+  def __init__(self, n):
+    """
+    constructs a fsa over a lexicon with n-grams
+    :param int n: size of the gram (1, 2, 3)
+    """
+    self.n = n
+    self.lexicon = None
+    self.ngramscores = None
+    self.num_states = 0
+    self.edges = []
+    # TODO take list of words or even a lexicon and generate a fsa for ngram lm
+    # TODO from list or lexicon generate all possible word combinations
+    # TODO loop over all possible word combinations and add edges to fsa
+
+  def run(self):
+    print("Starting {}-gram FSA Creation".format(self.n))
 
 
 def load_lexicon(lexicon_name='recog.150k.final.lex.gz', pickleflag=False):
@@ -1214,7 +1237,18 @@ def main():
   sav_hmm.fsa_to_dot_format()
   sav_hmm.save_to_file()
 
-  end_time = hmm_end_time = time.time()
+  ngram_start_time = hmm_end_time = time.time()
+  ngram = Ngram(2)
+  ngram.lexicon = lexicon
+  ngram_run_start_time = time.time()
+  ngram.run()
+  ngram_run_end_time = time.time()
+  sav_ngram = Store(ngram.num_states, ngram.edges)
+  sav_ngram.filename = 'edges_ngram'
+  sav_ngram.fsa_to_dot_format()
+  sav_ngram.save_to_file()
+
+  end_time = ngram_end_time = time.time()
 
   print("\nTotal time    : ", end_time - start_time, "\n")
 
@@ -1239,6 +1273,11 @@ def main():
   print("HMM init time : ", hmm_run_start_time - hmm_start_time)
   print("HMM run time  : ", hmm_run_end_time - hmm_run_start_time)
   print("HMM save time : ", hmm_end_time - hmm_run_end_time, "\n")
+
+  print("n-gram total time: ", ngram_end_time - ngram_start_time)
+  print("n-gram init time : ", ngram_run_start_time - ngram_start_time)
+  print("n-gram run time  : ", ngram_run_end_time - ngram_run_start_time)
+  print("n-gram save time : ", ngram_end_time - ngram_run_end_time, "\n")
 
 
 if __name__ == "__main__":
