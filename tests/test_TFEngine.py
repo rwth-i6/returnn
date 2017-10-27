@@ -456,6 +456,57 @@ def test_engine_search_attention():
   check_engine_search_attention()
 
 
+def test_engine_train_simple_attention():
+  net_dict = {
+    "lstm0_fw": {"class": "rec", "unit": "lstmp", "n_out": 20, "dropout": 0.0, "L2": 0.01, "direction": 1},
+    "lstm0_bw": {"class": "rec", "unit": "lstmp", "n_out": 20, "dropout": 0.0, "L2": 0.01, "direction": -1},
+
+    "lstm1_fw": {"class": "rec", "unit": "lstmp", "n_out": 20, "dropout": 0.0, "L2": 0.01, "direction": 1,
+                 "from": ["lstm0_fw", "lstm0_bw"]},
+    "lstm1_bw": {"class": "rec", "unit": "lstmp", "n_out": 20, "dropout": 0.0, "L2": 0.01, "direction": -1,
+                 "from": ["lstm0_fw", "lstm0_bw"]},
+
+    "encoder": {"class": "linear", "activation": "tanh", "from": ["lstm1_fw", "lstm1_bw"], "n_out": 20},
+    "enc_ctx": {"class": "linear", "activation": "tanh", "from": ["encoder"], "n_out": 20},
+
+    "output": {"class": "rec", "from": [], "unit": {
+      'orth_embed': {'class': 'linear', 'activation': None, 'from': ['data:classes'], "n_out": 10},
+      "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["prev:c", "prev:orth_embed"], "n_out": 20},
+      "c_in": {"class": "linear", "activation": "tanh", "from": ["s", "prev:orth_embed"], "n_out": 20},
+      "c": {"class": "dot_attention", "from": ["c_in"], "base": "base:encoder", "base_ctx": "base:enc_ctx",
+            "n_out": 20},
+      "output": {"class": "softmax", "from": ["prev:s", "c"], "target": "classes"}
+    }, "target": "classes", "loss": "ce"}
+
+  }
+
+  from GeneratingDataset import DummyDataset
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 3
+  dataset = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  dataset.init_seq_order(epoch=1)
+
+  config = Config()
+  config.update({
+    "model": "/tmp/model",
+    "batch_size": 100,
+    "max_seqs": 2,
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": net_dict,
+    "start_epoch": 1,
+    "num_epochs": 2,
+    "learning_rate": 0.01,
+    "nadam": True,
+    "gradient_noise": 0.3,
+  })
+  engine = Engine(config=config)
+  engine.init_train_from_config(config=config, train_data=dataset, dev_data=dataset, eval_data=None)
+  engine.train()
+  engine.finalize()
+
+
 def test_rec_optim_all_out():
   from GeneratingDataset import DummyDataset
   from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell

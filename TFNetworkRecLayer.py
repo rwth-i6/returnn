@@ -1411,6 +1411,8 @@ class _SubnetworkRecCell(object):
       for l in deps:
         if not isinstance(l, _TemplateLayer):  # real layer from base net or so
           continue
+        if l.name == "data" or l.name.startswith("data:"):
+          continue
         assert self.layer_data_templates[l.name] is l
         if l not in layers_in_loop:
           layers_in_loop.append(l)
@@ -1426,6 +1428,9 @@ class _SubnetworkRecCell(object):
       # Special case: end-layer, which is added if the seq-len is unknown, cannot be moved out.
       if layer.name == "end":
         return False
+      if self.parent_net.search_flag:
+        if issubclass(layer.layer_class_type, ChoiceLayer):
+          return False  # need to perform the search inside the loop currently
       # layer.output from prev time frame is used by other layers?
       if layer.name in layers_needed_from_prev_frame:
         return False
@@ -1450,6 +1455,9 @@ class _SubnetworkRecCell(object):
 
     def input_can_move_out(layer):
       assert isinstance(layer, _TemplateLayer)
+      if self.parent_net.search_flag:
+        if issubclass(layer.layer_class_type, ChoiceLayer):
+          return False  # need to perform the search inside the loop currently
       layer_deps = layer.get_dep_layers()
       # We depend on other layers from this sub-network?
       for other_layer in layers_in_loop:
@@ -1573,7 +1581,7 @@ class _SubnetworkRecCell(object):
       """
       if name in loop_acc_layers:
         return loop_acc_layers[name]
-      with tf.name_scope(name):
+      with tf.name_scope(self.layer_data_templates[name].layer_class_type.cls_get_tf_scope_name(name)):
         output = self.layer_data_templates[name].output.copy_template_adding_time_dim(time_dim_axis=0)
         # We should have accumulated it.
         output.placeholder = loop_accumulated["output_%s" % name].stack()  # e.g. (time,batch,dim)
@@ -2030,13 +2038,14 @@ class ChoiceLayer(LayerBase):
   """
   layer_class = "choice"
 
-  def __init__(self, beam_size, input_type="prob", **kwargs):
+  def __init__(self, beam_size, input_type="prob", explicit_search_source=None, **kwargs):
     """
     :param int beam_size: the outgoing beam size. i.e. our output will be (batch * beam_size, ...)
     :param str input_type: "prob" or "log_prob", whether the input is in probability space, log-space, etc.
       or "regression", if it is a prediction of the data as-is.
     """
     super(ChoiceLayer, self).__init__(**kwargs)
+    self.explicit_search_source = explicit_search_source
     # We assume log-softmax here, inside the rec layer.
     assert self.target
     if self.network.search_flag:
@@ -2118,6 +2127,8 @@ class ChoiceLayer(LayerBase):
       # In the dependency graph, we don't want it.
       # This can enable some optimizations in the RecLayer.
       d["from"] = []
+    if d.get("explicit_search_source"):
+      d["explicit_search_source"] = get_layer(d["explicit_search_source"]) if network.search_flag else None
     super(ChoiceLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
 
   @classmethod
@@ -2142,6 +2153,12 @@ class ChoiceLayer(LayerBase):
       return {}
     batch_dim = network.get_batch_dim()
     return {"choice_scores": tf.zeros([batch_dim, beam_size])}
+
+  def get_dep_layers(self):
+    l = super(ChoiceLayer, self).get_dep_layers()
+    if self.explicit_search_source:
+      l.append(self.explicit_search_source)
+    return l
 
 
 class DecideLayer(LayerBase):

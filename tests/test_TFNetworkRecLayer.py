@@ -7,7 +7,9 @@ import logging
 logging.getLogger('tensorflow').disabled = True
 import tensorflow as tf
 import sys
+import os
 sys.path += ["."]  # Python 3 hack
+sys.path += [os.path.dirname(os.path.abspath(__file__)) + "/.."]
 from nose.tools import assert_equal, assert_is_instance
 import unittest
 import numpy.testing
@@ -553,6 +555,33 @@ def test_GradOfLstmGenericBase_simple_nan():
         assert numpy.all(numpy.isfinite(out))
       print("Seems ok.")
     print("All ok!")
+
+
+def test_search_no_rec_explicit():
+  beam_size = 3
+  logits = numpy.array([
+    [1., 2., 3., 0.],
+    [0., 4., 3., 6.],
+    [5., 8., 7.5, 0.]], dtype="float32")
+  n_time = 3
+  n_classes = 4
+  assert_equal(logits.shape, (n_time, n_classes))
+  n_batch = 1
+  logits = numpy.expand_dims(logits, axis=1)
+  assert_equal(logits.shape, (n_time, n_batch, n_classes))
+
+  net_dict = {
+    "output": {"class": "rec", "from": ["data"], "unit": {
+      "output": {
+        "class": "choice", "from": ["data:source"], "input_type": "log_prob",
+        "explicit_search_source": "prev:output", 'initial_output': 0,
+        "beam_size": beam_size, "target": "classes"}
+    }}
+  }
+  extern_data = ExternData({"data": {"dim": n_classes}, "classes": {"dim": n_classes, "sparse": True}})
+  net = TFNetwork(extern_data=extern_data, search_flag=True)
+  net.construct_from_dict(net_dict)
+  # TODO wip...
 
 
 if __name__ == "__main__":
