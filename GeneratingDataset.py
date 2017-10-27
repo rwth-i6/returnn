@@ -721,6 +721,7 @@ class TimitDataset(CachedDataset2):
 
   def __init__(self, timit_dir, train=True, preload=False,
                num_feature_filters=40, feature_window_len=0.025, feature_step_len=0.010, with_delta=False,
+               norm_mean=None, norm_std_dev=None,
                random_permute_audio=None, num_phones=61,
                demo_play_audio=False, fixed_random_seed=None, **kwargs):
     """
@@ -728,7 +729,9 @@ class TimitDataset(CachedDataset2):
     :param bool train: whether to use the train or core test data
     :param bool preload: if True, here at __init__, we will wait until we loaded all the data
     :param int num_feature_filters: e.g. number of MFCCs
-    :param bool with_delta: whether to add delta features (doubles the features dim)
+    :param bool|int with_delta: whether to add delta features (doubles the features dim). if int, up to this degree
+    :param str norm_mean: file with mean values which are used for mean-normalization of the final features
+    :param str norm_std_dev: file with std dev valeus for variance-normalization of the final features
     :param None|bool|dict[str] random_permute_audio: enables permutation on the audio. see _get_random_permuted_audio
     :param int num_phones: 39, 48 or 61. num labels of our classes
     :param bool demo_play_audio: plays the audio. only make sense with tools/dump-dataset.py
@@ -741,14 +744,18 @@ class TimitDataset(CachedDataset2):
     self._feature_window_len = feature_window_len
     self._feature_step_len = feature_step_len
     self.num_inputs = self._num_feature_filters
-    if with_delta:
-      self.num_inputs *= 2
+    if isinstance(with_delta, bool):
+      with_delta = 1 if with_delta else 0
+    assert isinstance(with_delta, int)
+    self._with_delta = with_delta
+    self.num_inputs *= (1 + with_delta)
+    self._norm_mean = self._load_feature_vec(norm_mean)
+    self._norm_std_dev = self._load_feature_vec(norm_std_dev)
     assert num_phones in {61, 48, 39}
     self._phone_map = {61: self.PhoneMapTo61, 48: self.PhoneMapTo48, 39: self.PhoneMapTo39}[num_phones]
     self.labels = self._get_labels(self._phone_map)
     self.num_outputs = {"data": (self.num_inputs, 2), "classes": (len(self.labels), 1)}
     self._timit_dir = timit_dir
-    self._with_delta = with_delta
     self._is_train = train
     self._demo_play_audio = demo_play_audio
     self._random = numpy.random.RandomState(1)
@@ -767,6 +774,20 @@ class TimitDataset(CachedDataset2):
     self._reader_thread.start()
     if preload:
       self._preload()
+
+  def _load_feature_vec(self, value):
+    """
+    :param str|None value:
+    :return: shape (self.num_inputs,), float32
+    :rtype: numpy.ndarray|None
+    """
+    if value is None:
+      return None
+    if isinstance(value, str):
+      value = numpy.loadtxt(value)
+    assert isinstance(value, numpy.ndarray)
+    assert value.shape == (self.num_inputs,)
+    return value.astype("float32")
 
   def _init_timit(self):
     """
@@ -999,9 +1020,13 @@ class TimitDataset(CachedDataset2):
     mfccs[0] = energy  # replace first MFCC with energy, per convention
     assert mfccs.shape[0] == self._num_feature_filters  # (dim, time)
     if self._with_delta:
-      deltas = librosa.feature.delta(mfccs)
-      mfccs = numpy.vstack([mfccs, deltas])
+      deltas = [librosa.feature.delta(mfccs, order=i) for i in range(1, self._with_delta + 1)]
+      mfccs = numpy.vstack([mfccs] + deltas)
     mfccs = mfccs.transpose().astype("float32")  # (time, dim)
+    if self._norm_mean is not None:
+      mfccs -= self._norm_mean[None, :]
+    if self._norm_std_dev is not None:
+      mfccs /= self._norm_std_dev[None, :]
     return DatasetSeq(seq_idx=seq_idx, seq_tag=seq_tag, features=mfccs, targets=phone_id_seq)
 
 

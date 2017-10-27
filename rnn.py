@@ -488,6 +488,7 @@ def analyze_data(config):
   total_targets_len = 0
   total_data_len = 0
 
+  # Note: This is not stable!
   seq_idx = 0
   while ds.is_less_than_num_seqs(seq_idx):
     progress_bar_with_time(ds.get_complete_frac(seq_idx))
@@ -504,17 +505,17 @@ def analyze_data(config):
     seq_idx += 1
   log_priors = numpy.log(priors)
   log_priors -= numpy.log(NumbersDict(ds.get_num_timesteps())[target])
-  var = numpy.sqrt(mean_sq - mean * mean)
+  std_dev = numpy.sqrt(mean_sq - mean * mean)
   print("Finished. %i total target frames, %i total data frames" % (total_targets_len, total_data_len), file=log.v1)
   priors_fn = stat_prefix + ".log_priors.txt"
   mean_fn = stat_prefix + ".mean.txt"
-  var_fn = stat_prefix + ".var.txt"
+  std_dev_fn = stat_prefix + ".std_dev.txt"
   print("Dump priors to", priors_fn, file=log.v1)
   numpy.savetxt(priors_fn, log_priors)
   print("Dump mean to", mean_fn, file=log.v1)
   numpy.savetxt(mean_fn, mean)
-  print("Dump var to", var_fn, file=log.v1)
-  numpy.savetxt(var_fn, var)
+  print("Dump std dev to", std_dev_fn, file=log.v1)
+  numpy.savetxt(std_dev_fn, std_dev)
   print("Done.", file=log.v1)
 
 

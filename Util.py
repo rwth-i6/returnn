@@ -2207,3 +2207,75 @@ def maybe_restart_returnn_with_atfork_patch():
   sys.stdout.flush()
   os.execvpe(sys.executable, [sys.executable] + sys.argv, env)
   print("execvpe did not work?")
+
+
+class Stats:
+  """
+  Collects mean and variance.
+
+  https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance
+  """
+
+  def __init__(self):
+    self.mean = 0.0
+    self.mean_sq = 0.0
+    self.var = 0.0
+    self.total_data_len = 0
+    self.num_seqs = 0
+
+  def collect(self, data):
+    """
+    :param numpy.ndarray data: shape (time, dim)
+    """
+    import numpy
+    self.num_seqs += 1
+    new_total_data_len = self.total_data_len + data.shape[0]
+    mean_diff = numpy.mean(data, axis=0) - self.mean
+    m_a = self.var * self.total_data_len
+    m_b = numpy.var(data, axis=0) * data.shape[0]
+    m2 = m_a + m_b + mean_diff ** 2 * self.total_data_len * data.shape[0] / new_total_data_len
+    self.var = m2 / new_total_data_len
+    data_sum = numpy.sum(data, axis=0)
+    delta = data_sum - self.mean * data.shape[0]
+    self.mean += delta / new_total_data_len
+    delta_sq = numpy.sum(data * data, axis=0) - self.mean_sq * data.shape[0]
+    self.mean_sq += delta_sq / new_total_data_len
+    self.total_data_len = new_total_data_len
+
+  def get_mean(self):
+    """
+    :return: mean, shape (dim,)
+    :rtype: numpy.ndarray
+    """
+    assert self.num_seqs > 0
+    return self.mean
+
+  def get_std_dev(self):
+    """
+    :return: std dev, shape (dim,)
+    :rtype: numpy.ndarray
+    """
+    import numpy
+    assert self.num_seqs > 0
+    return numpy.sqrt(self.var)
+    # return numpy.sqrt(self.mean_sq - self.mean * self.mean)
+
+  def dump(self, output_file_prefix=None, stream=None):
+    """
+    :param str|None output_file_prefix: if given, will numpy.savetxt mean|std_dev to disk
+    :param io.TextIOBase stream: sys.stdout by default
+    """
+    if stream is None:
+      stream = sys.stdout
+    import numpy
+    print("Stats:", file=stream)
+    print("%i seqs, %i total frames, %f average frames" % (
+      self.num_seqs, self.total_data_len, self.total_data_len / float(self.num_seqs)), file=stream)
+    print("Mean: %s" % self.get_mean(), file=stream)
+    print("Std dev: %s" % self.get_std_dev(), file=stream)
+    # print("Std dev (naive): %s" % numpy.sqrt(self.mean_sq - self.mean * self.mean), file=stream)
+    if output_file_prefix:
+      print("Write mean/std-dev to %s.(mean|std_dev).txt." % output_file_prefix, file=stream)
+      numpy.savetxt("%s.mean.txt" % output_file_prefix, self.get_mean())
+      numpy.savetxt("%s.std_dev.txt" % output_file_prefix, self.get_std_dev())
+
