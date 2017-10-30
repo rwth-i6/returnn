@@ -974,7 +974,7 @@ class Engine(object):
     if not output_layer_name:
       output_layer_name = self.config.value("forward_output_layer", self.network.get_default_output_layer_name())
       assert output_layer_name, "output layer not defined. set forward_output_layer in config"
-    assert output_layer_name in self.network.layers, "output layer %r not found" % output_layer_name
+    assert output_layer_name in self.network.layers, "output layer %r not found, available layers: %s" % (output_layer_name, ','.join(self.network.layers.keys()))
     return self.network.layers[output_layer_name]
 
   def forward_single(self, dataset, seq_idx, output_layer_name=None):
@@ -1013,9 +1013,9 @@ class Engine(object):
     print("Forwarding to HDF file: %s" % output_file, file=log.v2)
     cache = h5py.File(output_file, "w")
     cache.attrs['numTimesteps'] = 0
-    cache.attrs['inputPattSize'] = data.num_inputs
+    cache.attrs['inputPattSize'] = output_layer.output.dim
     cache.attrs['numDims'] = 1
-    cache.attrs['numLabels'] = data.num_outputs[target]
+    cache.attrs['numLabels'] = output_layer.output.dim
     cache.attrs['numSeqs'] = 0
     if target in data.labels:
       hdf5_strings(cache, 'labels', data.labels[target])
@@ -1285,6 +1285,8 @@ class Engine(object):
     forwarder = Runner(
       engine=self, dataset=dataset, batches=batches,
       train=False, eval=False,
+      max_seq_length=max_seq_length,
+      max_seqs=max_seqs,
       extra_fetches={
         'outputs': output_layer.output.get_placeholder_flattened()
       },
