@@ -40,10 +40,11 @@ class CachedDataset(Dataset):
     self.definite_cache_leftover = temp_cache_size_bytes if self.num_seqs_cached_at_start == self.num_seqs else 0
     self.cache_num_frames_free = temp_cache_size_bytes / self.nbytes
 
-    print >> log.v4, "cached %i seqs" % self.num_seqs_cached_at_start, \
-                     "%s GB" % (self.cached_bytes_at_start / float(1024 * 1024 * 1024)), \
-                     ("(fully loaded, %s GB left over)" if self.definite_cache_leftover else "(%s GB free)") % \
-                     max(temp_cache_size_bytes / float(1024 * 1024 * 1024), 0)
+    print("cached %i seqs" % self.num_seqs_cached_at_start, \
+          "%s GB" % (self.cached_bytes_at_start / float(1024 * 1024 * 1024)), \
+          ("(fully loaded, %s GB left over)" if self.definite_cache_leftover else "(%s GB free)") % \
+          max(temp_cache_size_bytes / float(1024 * 1024 * 1024), 0),
+          file=log.v4)
 
   def init_seq_order(self, epoch=None, seq_list=None):
     """
@@ -229,7 +230,7 @@ class CachedDataset(Dataset):
     e = len(self.alloc_intervals)
     # Binary search.
     while s < e:
-      i = (s + e) / 2
+      i = (s + e) // 2
       alloc_start, alloc_end, _ = self.alloc_intervals[i]
       if alloc_start <= ids < alloc_end:
         return i
@@ -395,7 +396,7 @@ class CachedDataset(Dataset):
     e = len(self.alloc_intervals)
     # Binary search.
     while s < e:
-      i = (s + e) / 2
+      i = (s + e) // 2
       alloc_start, alloc_end, _ = self.alloc_intervals[i]
       if alloc_start <= start < alloc_end:
         return alloc_start < end <= alloc_end
