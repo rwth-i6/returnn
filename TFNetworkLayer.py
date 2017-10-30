@@ -2912,6 +2912,154 @@ class FramewiseStatisticsLayer(LayerBase):
     # n_out=1 is a workaround for now. Our output should not be used. We have none.
     return Data(name="framewise_statistics_dummy_output", shape=(), dtype="int32", batch_dim_axis=None)
 
+class SegmentInputLayer(_ConcatInputLayer):
+  """
+  This layer takes the input data, applies a window and outputs each window as a new batch, this is more
+  efficient than a window as a new dimension if sequences have varying lengths
+  """
+  layer_class = "segment_input"
+
+  def __init__(self, window=15, **kwargs):
+    super(SegmentInputLayer, self).__init__(**kwargs)
+    sizes = self.input_data.size_placeholder[0]
+    def fold_times(acc, x):
+      r1 = tf.tile([window], [tf.maximum(x - window + 1, 0)])
+      r2 = tf.range(tf.minimum(x, window - 1), 0, -1)
+      return tf.concat([acc, r1, r2], 0)
+    new_sizes = tf.foldl(fold_times, sizes, tf.placeholder_with_default(tf.zeros([0], dtype='int32'), [None]))
+
+    def fold_data(acc, x):
+      batch_idx = x[0]
+      num_frames = x[1]
+      res  = tf.expand_dims(tf.range(num_frames), -1)                # start times
+      res  = tf.tile(res, [1, window])                               # fill add time dimension
+      res += tf.range(window)                                        # add offsets
+      res  = tf.where(res >= num_frames, tf.zeros_like(res), res)    # filter frames that go past the end
+      res  = tf.stack([tf.ones_like(res) * batch_idx, res], axis=2)  # add batch_index
+      return tf.concat([acc, res], 0)
+
+    initial = tf.placeholder_with_default((tf.zeros([0, window, 2], dtype=tf.int32)), [None, window, 2])
+    indices = tf.foldl(fold_data, tf.stack([tf.range(tf.shape(sizes)[0]), sizes], axis=1), initial)
+
+    self.output.placeholder = tf.gather_nd(self.input_data.placeholder, indices)
+    self.output.size_placeholder[0] = new_sizes
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, window, **kwargs):
+    out = get_concat_sources_data_template(sources, name="%s_output" % name).copy_as_batch_major()
+    out.size_placeholder = {}
+    out.size_placeholder[0] = None
+    return out
+
+class ClassesToSegmentsLayer(_ConcatInputLayer):
+  """
+  This layer takes a sequence of classes (=> sparse input) and applies a window (same as SegmentInput) to it.
+  For each position t in the window it computes the relative frequencies of the classes up to and including
+  that position t.
+  """
+  layer_class = "classes_to_segments"
+
+  def __init__(self, num_classes, window=15, **kwargs):
+    super(ClassesToSegmentsLayer, self).__init__(**kwargs)
+    assert(self.input_data.sparse)
+
+    sizes = self.input_data.size_placeholder[0]
+
+    def fold_fun(acc, x):
+      r1 = tf.tile([window], [tf.maximum(x - window + 1, 0)])
+      r2 = tf.range(tf.minimum(x, window - 1), 0, -1)
+      return tf.concat([acc, r1, r2], 0)
+    new_sizes = tf.foldl(fold_fun, sizes, tf.placeholder_with_default(tf.zeros([0], dtype='int32'), [None]))
+
+    # here we compute the start and end times for each of the new batches
+    def fold_batches(acc, x):
+      b = x[0]
+      l = x[1]
+      batch = tf.tile([b], [l])
+      start = tf.range(l)
+      end   = tf.minimum(tf.range(window, l + window), l)
+      return tf.concat([acc, tf.transpose(tf.stack([batch, start, end]))], axis=0)
+    batches = tf.foldl(fold_batches, tf.stack([tf.range(tf.shape(sizes)[0]), sizes], axis=1),
+                       tf.placeholder_with_default(tf.zeros([0, 3], dtype='int32'), [None, 3]))
+
+    onehot = tf.one_hot(self.input_data.placeholder, num_classes)
+    def compute(x):
+      batch = x[0]
+      start = x[1]
+      end   = x[2]
+
+      padded_onehot = tf.concat([onehot[batch][start:end],
+                                 tf.zeros([tf.maximum(window - (end - start), 0), num_classes])],
+                                axis=0)
+      classes = tf.cumsum(padded_onehot)
+      normalization = tf.cast(tf.expand_dims(tf.range(1, window + 1), -1), classes.dtype)
+      return classes / normalization
+
+    self.output.placeholder = tf.map_fn(compute, batches, dtype='float32')
+    self.output.size_placeholder[0] = new_sizes
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, num_classes, window, **kwargs):
+    out = get_concat_sources_data_template(sources, name="%s_output" % name).copy_as_batch_major()
+    out.size_placeholder = {}
+    out.size_placeholder[0] = None
+    out.sparse = False
+    out.shape += (num_classes,)
+    out.dtype = 'float32'
+    out.dim = num_classes
+    return out
+
+class UnsegmentInput(_ConcatInputLayer):
+  """
+  Takes the output of SegmentInput (sequences windowed over time and folded into batch-dim)
+  and restores the original batch dimension. The feature dimension contains window * original_features
+  many entries. The entries at time t all correspond to windows ending at time t. The window
+  that started in the same frame comes first, then the window that started in the frame before and so on.
+  This is also the format used for the segmental decoder in RASR.
+  """
+  layer_class = "unsegment_input"
+
+  def __init__(self, **kwargs):
+    super(UnsegmentInput, self).__init__(**kwargs)
+    sizes = self.input_data.size_placeholder[0]
+    new_sizes = tf.where(tf.equal(sizes, 1)) + 1  # a batch of size one indicates that a sequence ended there
+    max_size = tf.reduce_max(new_sizes)
+
+    # first we shift the data in the time dimension (to get all windows that end at the same time into one batch)
+    data = self.input_data.placeholder
+    def map_data(x):
+      time = x[0]
+      batches = x[1]
+      size = tf.shape(batches)[0]
+      out = tf.concat([batches[time:], batches[:time]], axis=0)
+      return out
+    data = tf.map_fn(map_data, [tf.range(tf.shape(data)[0]), data], dtype=self.input_data.dtype)
+
+    # now we take the start and end times that we extracted above and feed them into extract_batch, which will get
+    # the data for one of the original batches
+    def extract_batch(x):
+      start_batch = x[0]
+      end_batch = x[1]
+      # the next three lines are a convoluted way of writing data[:,start:end,:], but this notation did not work
+      start = tf.concat([[tf.constant(0, dtype='int64')], start_batch, [tf.constant(0, dtype='int64')]], axis=0)
+      end   = tf.concat([[tf.shape(data, out_type=tf.int64)[0]], end_batch - start_batch, [tf.shape(data, out_type=tf.int64)[2]]], axis=0)
+      d = tf.slice(data, start, end)
+      d = tf.transpose(d, perm=[1, 0, 2])
+      d = tf.reshape(d, [tf.shape(d)[0], -1])
+      return d
+    data = tf.map_fn(extract_batch, [tf.cumsum(new_sizes, exclusive=True), tf.cumsum(new_sizes)], dtype=data.dtype)
+
+    self.output.size_placeholder = {}
+    self.output.size_placeholder[0] = new_sizes
+    self.output.batch_dim_axis = 0
+    self.output.time_dim_axis = 1
+    self.output.placeholder = data
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, **kwargs):
+    out = get_concat_sources_data_template(sources, name="%s_output" % name).copy_as_time_major()
+    out.size_placeholder[0] = None
+    return out
 
 class Loss(object):
   """
