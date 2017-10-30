@@ -252,7 +252,7 @@ def test_engine_forward_to_hdf():
     assert f['inputs'].shape == (seq_len*num_seqs, n_classes_dim)
     assert f['seqLengths'].shape == (num_seqs,2)
     assert f['seqTags'].shape == (num_seqs,)
-    assert f.attrs['inputPattSize'] == n_data_dim
+    assert f.attrs['inputPattSize'] == n_classes_dim
     assert f.attrs['numSeqs'] == num_seqs
     assert f.attrs['numTimesteps'] == seq_len * num_seqs
 
