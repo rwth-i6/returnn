@@ -1,4 +1,4 @@
-
+from __future__ import print_function
 import gc
 import numpy
 import theano
@@ -66,7 +66,7 @@ class CachedDataset(Dataset):
 
     if epoch is not None:
       # Give some hint to the user in case he is wondering why the cache is reloading.
-      print >> log.v4, "Reinitialize dataset seq order for epoch %i." % epoch
+      print("Reinitialize dataset seq order for epoch %i." % epoch, file=log.v4)
 
     if self.num_seqs_cached_at_start != len(seq_index):
       self._seq_index = seq_index
