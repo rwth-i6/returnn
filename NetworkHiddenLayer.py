@@ -3946,7 +3946,7 @@ class SegmentInputLayer(_NoOpLayer):
     def perform(self, node, inputs, output_storage):
       output_storage[0][0] = inputs[0].view(dtype='float32')
 
-  def __init__(self, window=15, **kwargs):
+  def __init__(self, window=15, input_is_sparse=False, num_classes=None, **kwargs):
     super(SegmentInputLayer, self).__init__(**kwargs)
 
     assert len(self.sources) == 1
@@ -3960,7 +3960,10 @@ class SegmentInputLayer(_NoOpLayer):
     b = src_out.shape[1]  # number of batches
     d = src_out.shape[2]  # feature dimension
 
-    rs = src_out.dimshuffle(1, 0, 2).reshape((f * b, d))
+    if input_is_sparse:
+      rs = src_out.dimshuffle(1, 0).reshape((f * b,))
+    else:
+      rs = src_out.dimshuffle(1, 0, 2).reshape((f * b, d))
     rs_idx = src_index.dimshuffle(1, 0).flatten()
 
     frames_idx = T.arange(f * b)[(rs_idx>0).nonzero()]\
@@ -3981,7 +3984,10 @@ class SegmentInputLayer(_NoOpLayer):
     frames_idx = T.switch(frame_filter_1 * frame_filter_2 > 0, frames_idx, -1).dimshuffle(1, 0)
 
     # we add an additional vector with zeros s.t. the invalid entries from the filters above result in a feature vector of zeros
-    self.z = T.concatenate([rs, T.zeros((1, src_out.shape[2]))], axis=0)[frames_idx]
+    zero = T.zeros((1,), dtype='int8') if input_is_sparse else T.zeros((1, src_out.shape[2]))
+    self.z = T.concatenate([rs, zero], axis=0)[frames_idx]
+    if input_is_sparse:
+      self.z = T.extra_ops.to_one_hot(self.z.flatten(), num_classes).reshape((self.z.shape[0], self.z.shape[1], num_classes))
     self.make_output(self.z)
 
     self.index = T.cast((frame_filter_1 * frame_filter_2).clip(0, 1), 'int8').T
