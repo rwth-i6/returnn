@@ -13,6 +13,7 @@ sys.path += [os.path.dirname(os.path.abspath(__file__)) + "/.."]
 from nose.tools import assert_equal, assert_is_instance
 import unittest
 import numpy.testing
+from pprint import pprint
 import better_exchook
 better_exchook.replace_traceback_format_tb()
 
@@ -558,6 +559,7 @@ def test_GradOfLstmGenericBase_simple_nan():
 
 
 def test_search_no_rec_explicit():
+  from TFNetworkRecLayer import _SubnetworkRecCell
   beam_size = 3
   logits = numpy.array([
     [1., 2., 3., 0.],
@@ -567,8 +569,10 @@ def test_search_no_rec_explicit():
   n_classes = 4
   assert_equal(logits.shape, (n_time, n_classes))
   n_batch = 1
-  logits = numpy.expand_dims(logits, axis=1)
-  assert_equal(logits.shape, (n_time, n_batch, n_classes))
+  logits = numpy.expand_dims(logits, axis=0)
+  assert_equal(logits.shape, (n_batch, n_time, n_classes))
+  print("logits:")
+  print(logits)
 
   net_dict = {
     "output": {"class": "rec", "from": ["data"], "unit": {
@@ -578,10 +582,40 @@ def test_search_no_rec_explicit():
         "beam_size": beam_size, "target": "classes"}
     }}
   }
-  extern_data = ExternData({"data": {"dim": n_classes}, "classes": {"dim": n_classes, "sparse": True}})
-  net = TFNetwork(extern_data=extern_data, search_flag=True)
+  extern_data = ExternData({
+    "data": {"dim": n_classes},
+    "classes": {"dim": n_classes, "sparse": True, "available_for_inference": False}})
+  net = TFNetwork(
+    extern_data=extern_data, search_flag=True, train_flag=False, eval_flag=False)
   net.construct_from_dict(net_dict)
-  # TODO wip...
+  assert_equal(net.used_data_keys, {"data"})  # not classes
+  rec_layer = net.layers["output"]
+  assert isinstance(rec_layer, RecLayer)
+  subnet = rec_layer.cell
+  assert isinstance(subnet, _SubnetworkRecCell)
+  assert_equal(subnet.layers_in_loop, ["output"])
+  sub_layer = subnet.net.layers["output"]
+  assert isinstance(sub_layer, ChoiceLayer)
+  assert_equal(sub_layer.output.beam_size, beam_size)
+  assert_equal(rec_layer.output.beam_size, beam_size)
+  input_search_choices = rec_layer.network.get_search_choices(sources=rec_layer.sources)
+  assert not input_search_choices
+  feed_dict = {
+    net.extern_data.data["data"].placeholder: logits,
+    net.extern_data.data["data"].size_placeholder[0]: [n_time]}
+  with tf.Session() as session:
+    assert_equal(session.run(net.get_batch_dim(), feed_dict=feed_dict), n_batch)
+    out, out_sizes = session.run(
+      (rec_layer.output.placeholder, rec_layer.output.get_sequence_lengths()),
+      feed_dict=feed_dict)
+    print("output seq lens:", out_sizes)
+    print("output:")
+    print(out)
+    assert isinstance(out_sizes, numpy.ndarray)
+    assert isinstance(out, numpy.ndarray)
+    assert_equal(out_sizes.shape, (n_batch * beam_size,))
+    assert_equal(out.shape, (n_time, n_batch * beam_size))
+    assert_equal(out_sizes.tolist(), [n_time] * beam_size)
 
 
 if __name__ == "__main__":

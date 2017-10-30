@@ -313,9 +313,11 @@ class Data(object):
       if data.beam_size and data.beam_size == beam_size:
         return data
       assert data.beam_size is None, "incompatible beam sizes (%r vs %r)" % (data.beam_size, beam_size)
-      data.placeholder = tile_transposed(data.placeholder, axis=data.batch_dim_axis, multiples=beam_size)
-      data.size_placeholder = {
-        i: tile_transposed(v, axis=0, multiples=beam_size) for (i, v) in data.size_placeholder.items()}
+      if data.placeholder is not None:
+        data.placeholder = tile_transposed(data.placeholder, axis=data.batch_dim_axis, multiples=beam_size)
+      if data.size_placeholder is not None:
+        data.size_placeholder = {
+          i: tile_transposed(v, axis=0, multiples=beam_size) for (i, v) in data.size_placeholder.items()}
       data.beam_size = beam_size * (data.beam_size or 1)
       return data
 
@@ -1130,7 +1132,7 @@ def check_input_dim(x, axis, dim):
   # Need to fall-back to runtime check.
   with tf.name_scope("check_input_dim"):
     with tf.control_dependencies(
-      [tf.assert_equal(tf.shape(x)[axis], dim, data=["shape[%i] not dim" % (axis,), dim, tf.shape(x)])]):
+      [tf.assert_equal(tf.shape(x)[axis], dim, data=["shape[%i]:" % (axis,), tf.shape(x), "!=", "dim:", dim])]):
       return tf.identity(x, "identity_with_dim_check")
 
 

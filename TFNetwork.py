@@ -145,6 +145,17 @@ class ExternData(object):
         dtypes.append(self.data[name].size_dtype)
     return {"names": names, "shapes": shapes, "dtypes": dtypes}
 
+  def get_sorted_data_items(self):
+    """
+    :rtype: list[(str,Data)]
+    """
+    keys = sorted(self.data.keys())
+    if self.default_input in self.data:
+      # Move to front.
+      keys.remove(self.default_input)
+      keys.insert(0, self.default_input)
+    return [(key, self.data[key]) for key in keys]
+
 
 class TFNetwork(object):
   def __init__(self, config=None, extern_data=None, rnd_seed=42,
@@ -209,6 +220,7 @@ class TFNetwork(object):
     self.recurrent = False
     self._assigner_cache = {}  # type: dict[tf.Variable,VariableAssigner]
     self.concat_sources_dropout_cache = {}  # type: dict[(tuple[LayerBase],float),Data]
+    self._batch_dim = None  # see get_batch_dim
 
   def __repr__(self):
     s = "TFNetwork %r" % self.name
@@ -960,12 +972,16 @@ class TFNetwork(object):
     # First check parent because there we might get the true batch dim.
     if self.parent_net:
       return self.parent_net.get_batch_dim()
-    for key, data in sorted(self.extern_data.data.items()):
+    if self._batch_dim is not None:
+      return self._batch_dim
+    for key, data in self.extern_data.get_sorted_data_items():
       assert isinstance(data, Data)
       if data.available_for_inference:
         self.used_data_keys.add(key)
         with reuse_name_scope_of_tensor(data.placeholder):
-          return get_shape_dim(data.placeholder, data.batch_dim_axis, name="batch_dim")
+          batch_dim = get_shape_dim(data.placeholder, data.batch_dim_axis, name="batch_dim")
+          self._batch_dim = batch_dim
+          return batch_dim
     raise Exception("We cannot tell the batch dim.")
 
 

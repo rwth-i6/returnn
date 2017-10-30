@@ -560,6 +560,10 @@ class _SubnetworkRecCell(object):
     for key in parent_net.extern_data.data.keys():
       self.net.extern_data.data[key] = \
         parent_net.extern_data.data[key].copy_template_excluding_time_dim()
+    if parent_net.search_flag and parent_rec_layer and parent_rec_layer.output.beam_size:
+      for key, data in list(self.net.extern_data.data.items()):
+        self.net.extern_data.data[key] = data.copy_extend_with_beam(
+          beam_size=parent_rec_layer.output.beam_size)
     self.layer_data_templates = {}  # type: dict[str,_TemplateLayer]
     self.prev_layers_needed = set()  # type: set[str]
     self._construct_template()
@@ -657,9 +661,21 @@ class _SubnetworkRecCell(object):
     """
     from TFNetwork import TFNetwork
     from TFNetworkLayer import InternalLayer
+    from TFUtil import tile_transposed
+    needed_beam_size = self.layer_data_templates["output"].output.beam_size
     if data is not None:
+      if needed_beam_size:
+        data = tile_transposed(
+          data,
+          axis=self.net.extern_data.data["source"].batch_dim_axis,
+          multiples=needed_beam_size)
       self.net.extern_data.data["source"].placeholder = data
     if classes is not None:
+      if needed_beam_size:
+        classes = tile_transposed(
+          classes,
+          axis=self.net.extern_data.data[self.parent_rec_layer.target].batch_dim_axis,
+          multiples=needed_beam_size)
       self.net.extern_data.data[self.parent_rec_layer.target].placeholder = classes
     for data_key, data in self.net.extern_data.data.items():
       if data_key not in self.net.used_data_keys:
@@ -729,7 +745,6 @@ class _SubnetworkRecCell(object):
           return extended_layers[name]
         l = self.parent_net.layers[name[len("base:"):]]
         if self.parent_net.search_flag:
-          needed_beam_size = self.layer_data_templates["output"].output.beam_size
           if needed_beam_size:
             if l.output.beam_size != needed_beam_size:
               l = self.net.add_layer(name="%s_beam_%i" % (name, needed_beam_size), output=l.output.copy_extend_with_beam(needed_beam_size), layer_class=InternalLayer)
@@ -869,6 +884,7 @@ class _SubnetworkRecCell(object):
         input_search_choices = rec_layer.network.get_search_choices(sources=rec_layer.sources)
         if input_search_choices:
           input_beam_size = input_search_choices.search_choices.beam_size
+          assert self.parent_rec_layer.input_data.beam_size == input_beam_size
       else:
         x_ta = None
         if rec_layer.output.size_placeholder:
@@ -967,6 +983,9 @@ class _SubnetworkRecCell(object):
           if layer.kwargs.get("loss", None)]
         needed_outputs.update(layer_names_with_losses)
 
+      # For search:
+      # We will collect the search choices of the beam search,
+      # to be able to reconstruct the final hypotheses.
       output_beam_size = None
       collected_choices = []  # type: list[str]  # layer names
       if rec_layer.network.search_flag:
@@ -990,6 +1009,7 @@ class _SubnetworkRecCell(object):
           output_beam_size = self.layer_data_templates["output"].get_search_beam_size()
           assert output_beam_size is not None
           if seq_len is not None:
+            assert input_beam_size in (1, None)
             from TFUtil import tile_transposed
             seq_len = tile_transposed(seq_len, axis=0, multiples=output_beam_size)  # (batch * beam,)
 
