@@ -2151,6 +2151,10 @@ class OpCodeCompiler(NativeCodeCompiler):
     if self._tf_mod:
       return self._tf_mod
     self._maybe_compile()
+    # https://github.com/tensorflow/tensorflow/issues/6568
+    if hasattr(sys, "getdlopenflags") and hasattr(sys, "setdlopenflags"):
+      import ctypes
+      sys.setdlopenflags(sys.getdlopenflags() | ctypes.RTLD_GLOBAL)
     self._tf_mod = tf.load_op_library(self._so_filename)
     return self._tf_mod
 
