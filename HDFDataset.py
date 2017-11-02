@@ -186,12 +186,16 @@ class StreamParser(object):
 
     self.num_features = None
     self.feature_type = None  # 1 for sparse, 2 for dense
+    self.dtype        = None
 
   def get_data(self, seq_name):
     raise NotImplementedError()
 
   def get_seq_length(self, seq_name):
     raise NotImplementedError()
+
+  def get_dtype(self):
+    return self.dtype
 
 
 class FeatureSequenceStreamParser(StreamParser):
@@ -204,8 +208,11 @@ class FeatureSequenceStreamParser(StreamParser):
 
       if self.num_features is None:
         self.num_features = seq_data.shape[1]
+      if self.dtype is None:
+        self.dtype = seq_data.dtype
 
       assert seq_data.shape[1] == self.num_features
+      assert seq_data.dtype    == self.dtype
 
     self.feature_type = 2
 
@@ -223,6 +230,10 @@ class SparseStreamParser(StreamParser):
     for s in self.seq_names:
       seq_data = self.stream['data'][s]
       assert len(seq_data.shape) == 1
+
+      if self.dtype is None:
+        self.dtype = seq_data.dtype
+      assert seq_data.dtype    == self.dtype
 
     self.num_features = self.stream['feature_names'].shape[0]
     self.feature_type = 1
@@ -332,3 +343,8 @@ class NextGenHDFDataset(CachedDataset2):
                       seq_tag=seq_name,
                       features=features,
                       targets=targets)
+
+  def get_data_dtype(self, key):
+    if key == 'data':
+      return self.get_data_dtype(self.input_stream_name)
+    return self.all_parsers[key][0].get_dtype()
