@@ -2117,8 +2117,9 @@ class OpCodeCompiler(NativeCodeCompiler):
 
   def __init__(self, use_cuda_if_available=True, include_paths=(), **kwargs):
     self._cuda_env = use_cuda_if_available and CudaEnv.get_instance()
-    include_paths = include_paths + (
-      tf.sysconfig.get_include(),)  # e.g. "...python2.7/site-packages/tensorflow/include"
+    tf_include = tf.sysconfig.get_include()  # e.g. "...python2.7/site-packages/tensorflow/include"
+    tf_include_nsync = tf_include + "/external/nsync/public"  # https://github.com/tensorflow/tensorflow/issues/2412
+    include_paths = list(include_paths) + [tf_include, tf_include_nsync]
     super(OpCodeCompiler, self).__init__(include_paths=include_paths, **kwargs)
     self._tf_mod = None
 
