@@ -663,19 +663,22 @@ class _SubnetworkRecCell(object):
     from TFNetworkLayer import InternalLayer
     from TFUtil import tile_transposed
     needed_beam_size = self.layer_data_templates["output"].output.beam_size
+    # See ChoiceLayer.get_rec_initial_extra_outputs.
+    dyn_input_beam_size = tf.where(tf.equal(i, 0), 1, needed_beam_size) if needed_beam_size else 1
     if data is not None:
       if needed_beam_size:
+        assert not self.parent_rec_layer.input_data.beam_size
         data = tile_transposed(
           data,
           axis=self.net.extern_data.data["source"].batch_dim_axis,
-          multiples=needed_beam_size)
+          multiples=dyn_input_beam_size)
       self.net.extern_data.data["source"].placeholder = data
     if classes is not None:
       if needed_beam_size:
         classes = tile_transposed(
           classes,
           axis=self.net.extern_data.data[self.parent_rec_layer.target].batch_dim_axis,
-          multiples=needed_beam_size)
+          multiples=dyn_input_beam_size)
       self.net.extern_data.data[self.parent_rec_layer.target].placeholder = classes
     for data_key, data in self.net.extern_data.data.items():
       if data_key not in self.net.used_data_keys:
@@ -746,8 +749,9 @@ class _SubnetworkRecCell(object):
         l = self.parent_net.layers[name[len("base:"):]]
         if self.parent_net.search_flag:
           if needed_beam_size:
+            assert not l.output.beam_size
             if l.output.beam_size != needed_beam_size:
-              l = self.net.add_layer(name="%s_beam_%i" % (name, needed_beam_size), output=l.output.copy_extend_with_beam(needed_beam_size), layer_class=InternalLayer)
+              l = self.net.add_layer(name="%s_beam_%i" % (name, needed_beam_size), output=l.output.copy_extend_with_beam(needed_beam_size, dyn_beam_size=dyn_input_beam_size), layer_class=InternalLayer)
               extended_layers[name] = l
           assert l.output.beam_size == needed_beam_size
         return l
@@ -760,7 +764,7 @@ class _SubnetworkRecCell(object):
         return None
       return self.net._construct_layer(net_dict, name=name, get_layer=get_layer)
 
-    self.net.layers[":i"] = _StepIndexLayer(i=i, name=":i", network=self.net)
+    self.net.set_step_index(i)
     # Go through needed_outputs, e.g. "output".
     # And prev_layers_needed because they might not be resolved otherwise.
     for layer_name in sorted(needed_outputs) + sorted(self.prev_layers_needed):
@@ -806,7 +810,7 @@ class _SubnetworkRecCell(object):
   def get_init_loop_vars(self):
     """
     :return: initial loop_vars. see self.get_next_loop_vars(). used in the body inside self.get_output()
-    :rtype: (list[tf.Tensor],list[tf.Tensor|tuple[tf.Tensor]])
+    :rtype: (list[tf.Tensor],list[list[tf.Tensor]])
     """
     self._initial_outputs = {
       k: self._get_init_output(k)
@@ -820,6 +824,32 @@ class _SubnetworkRecCell(object):
     from Util import sorted_values_from_dict
     init_outputs_flat = sorted_values_from_dict(self._initial_outputs)
     init_extra_flat = [sorted_values_from_dict(v) for (k, v) in sorted(self._initial_extra_outputs.items())]
+    return init_outputs_flat, init_extra_flat
+
+  def get_init_loop_vars_shape_invariants(self):
+    """
+    :return: shape invariants, nested structure like get_init_loop_vars
+    :rtype: (list[tf.TensorShape],list[tf.TensorShape|tuple[tf.TensorShape]])
+    """
+    assert self._initial_outputs is not None
+    assert self._initial_extra_outputs is not None
+    init_out_shapes = {
+      k: tf.TensorShape(self.layer_data_templates[k].output.batch_shape)
+      for k in self._initial_outputs}
+    from TFUtil import nested_get_shapes
+    init_rec_extra_shapes = nested_get_shapes(self._initial_extra_outputs)
+    for name, shapes in init_rec_extra_shapes.items():
+      # See also _get_init_extra_outputs.
+      template_layer = self.layer_data_templates[name]
+      cl = template_layer.layer_class_type
+      d = cl.get_rec_initial_extra_outputs_shape_invariants(**self.layer_data_templates[name].kwargs)
+      for k, shape in d.items():
+        assert k in shapes
+        # Not merge but replace because we intentionally want to allow relaxation.
+        shapes[k] = shape
+    from Util import sorted_values_from_dict
+    init_outputs_flat = sorted_values_from_dict(init_out_shapes)
+    init_extra_flat = [sorted_values_from_dict(v) for (k, v) in sorted(init_rec_extra_shapes.items())]
     return init_outputs_flat, init_extra_flat
 
   def get_layer_rec_var_from_loop_vars(self, loop_vars, layer_name):
@@ -1186,9 +1216,10 @@ class _SubnetworkRecCell(object):
               assert end_flag is not None
               seq_filter_cond = tf.logical_not(end_flag, name="not_end_flag")
             seq_filter_cond = tf.reshape(seq_filter_cond, [batch_dim, output_beam_size])  # (batch, beam)
-          for name in collected_choices:
-            with reuse_name_scope(name):
-              self.net.layers[name].search_choices.filter_seqs(seq_filter_cond)
+          # TODO wrong, beam idxs would not match. has to be done in ChoiceLayer
+          #for name in collected_choices:
+          #  with reuse_name_scope(name):
+          #    self.net.layers[name].search_choices.filter_seqs(seq_filter_cond)
         assert len(acc_tas) == len(outputs_to_accumulate)
         acc_tas = [
           acc_ta.write(i, out.get(), name="%s_acc_ta_write" % out.name)
@@ -1212,6 +1243,10 @@ class _SubnetworkRecCell(object):
       tf.constant(0, name="initial_i"),
       self.get_init_loop_vars(),
       init_acc_tas)
+    shape_invariants = (
+      tf.TensorShape(()),
+      self.get_init_loop_vars_shape_invariants(),
+      [tf.TensorShape(None) for ta in init_acc_tas])
     if not have_known_seq_len:
       # See body().
       out_batch_dim = self.layer_data_templates["end"].get_batch_dim()
@@ -1219,11 +1254,13 @@ class _SubnetworkRecCell(object):
         constant_with_shape(False, shape=[out_batch_dim], name="initial_end_flag"),
         constant_with_shape(0, shape=[out_batch_dim], name="initial_seq_len"))
       init_loop_vars += (init_seq_len_info,)
+      shape_invariants += ((tf.TensorShape([out_batch_dim]), tf.TensorShape([out_batch_dim])),)
     if self.layers_in_loop:
       final_loop_vars = tf.while_loop(
         cond=cond,
         body=body,
-        loop_vars=init_loop_vars)
+        loop_vars=init_loop_vars,
+        shape_invariants=shape_invariants)
     else:  # no layers inside loop, all optimized out
       final_loop_vars = init_loop_vars
     if have_known_seq_len:
@@ -1796,9 +1833,13 @@ class _StepIndexLayer(LayerBase):
   layer_class = ":i"
 
   def __init__(self, i, **kwargs):
+    """
+    :param tf.Tensor i: scalar, int32
+    """
     super(_StepIndexLayer, self).__init__(
       output=Data(name="i", shape=(), dtype="int32", sparse=False, placeholder=tf.expand_dims(i, axis=0)),
       **kwargs)
+    self.step = i
 
 
 class RnnCellLayer(_ConcatInputLayer):
@@ -2058,6 +2099,8 @@ class ChoiceLayer(LayerBase):
   """
   layer_class = "choice"
 
+  _debug_out = None  # type: None|list
+
   def __init__(self, beam_size, input_type="prob", explicit_search_source=None, **kwargs):
     """
     :param int beam_size: the outgoing beam size. i.e. our output will be (batch * beam_size, ...)
@@ -2093,8 +2136,10 @@ class ChoiceLayer(LayerBase):
           self.network.debug_search_choices(base_search_choice=self),
           "Not implemented yet. In rec-layer, we would always have our prev-frame as one previous search choice. "
           "Our deps: %r" % self.get_dep_layers())
+        # TODO: for the initial frame, we must not tile over beam!
         scores_base = self.search_choices.src_layer.search_choices.beam_scores  # (batch, beam_in)
         assert scores_base.get_shape().ndims == 2, "%r invalid" % self.search_choices.src_layer.search_choices
+        # beam_in = self.sources[0].output.beam_size  # might not be the same
         beam_in = tf.shape(scores_base)[1]
         scores_base = tf.expand_dims(scores_base, axis=-1)  # (batch, beam_in, dim)
         scores_in = self.sources[0].output.placeholder  # (batch * beam_in, dim)
@@ -2117,6 +2162,17 @@ class ChoiceLayer(LayerBase):
         labels = tf.reshape(labels, [net_batch_dim * beam_size])  # (batch * beam)
         labels = tf.cast(labels, self.output.dtype)
         self.search_choices.set_beam_scores(scores)  # (batch, beam) -> log score
+        if self._debug_out is not None:
+          from TFUtil import identity_with_debug_log
+          labels = identity_with_debug_log(
+            out=self._debug_out, x=labels, args={
+              "step": self.network.get_step_index() if self.network.have_step_index() else tf.constant(-1),
+              "scores_in": self.sources[0].output.placeholder,
+              "scores_base": self.search_choices.src_layer.search_choices.beam_scores,
+              "scores_combined": scores_in,
+              "src_beam_idxs": self.search_choices.src_beams,
+              "labels": tf.reshape(labels, [net_batch_dim, beam_size]),
+              "scores": scores})
         self.output = Data(
           name="%s_choice_output" % self.name,
           batch_dim_axis=0,
@@ -2172,7 +2228,14 @@ class ChoiceLayer(LayerBase):
     if not network.search_flag:
       return {}
     batch_dim = network.get_batch_dim()
-    return {"choice_scores": tf.zeros([batch_dim, beam_size])}
+    # Note: Use beam_size 1 for the initial as there are no competing hypotheses yet.
+    initial_scores = tf.zeros([batch_dim, 1])  # (batch, beam)
+    return {"choice_scores": initial_scores}
+
+  @classmethod
+  def get_rec_initial_extra_outputs_shape_invariants(cls, **kwargs):
+    # Initial beam size is 1 and then later the given one, so it changes.
+    return {"choice_scores": tf.TensorShape((None, None))}  # (batch, beam)
 
   def get_dep_layers(self):
     l = super(ChoiceLayer, self).get_dep_layers()

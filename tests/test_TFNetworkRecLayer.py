@@ -563,8 +563,23 @@ def test_search_no_rec_explicit():
   beam_size = 3
   logits = numpy.array([
     [1., 2., 3., 0.],
-    [0., 4., 3., 6.],
+    [0., 4.5, 3., 6.],
     [5., 8., 7.5, 0.]], dtype="float32")
+  # Labels/scores of each beam in search should be:
+  # frame 0: labels [2, 1, 0], scores [3., 2., 1.], source beam idxs [0, 0, 0]
+  # frame 1: labels [3, 3, 1], scores [9., 8., 7.5], source beam idxs [0, 1, 2]
+  # frame 2: labels [1, 2, 1], scores [17., 16.5, 16.], source beam idxs [0, 0, 1]
+  # Thus, the final three label seqs of the beam search should be:
+  # - [2, 3, 1] with score 17.
+  # - [2, 3, 2] with score 16.5
+  # - [1, 3, 1] with score 16.
+  expected_final_seqs = [[2, 3, 1], [2, 3, 2], [1, 3, 1]]
+  expected_debug_out = [
+    {"src_beam_idxs": [0, 0, 0], "scores": [3., 2., 1.], "labels": [2, 1, 0], "step": 0},
+    {"src_beam_idxs": [0, 1, 0], "scores": [9., 8., 7.5], "labels": [3, 3, 1], "step": 1},
+    {"src_beam_idxs": [0, 0, 1], "scores": [17., 16.5, 16.], "labels": [1, 2, 1], "step": 2},
+  ]
+  assert len(expected_final_seqs) == len(expected_debug_out) == beam_size
   n_time = 3
   n_classes = 4
   assert_equal(logits.shape, (n_time, n_classes))
@@ -573,6 +588,8 @@ def test_search_no_rec_explicit():
   assert_equal(logits.shape, (n_batch, n_time, n_classes))
   print("logits:")
   print(logits)
+
+  ChoiceLayer._debug_out = []
 
   net_dict = {
     "output": {"class": "rec", "from": ["data"], "unit": {
@@ -598,8 +615,10 @@ def test_search_no_rec_explicit():
   assert isinstance(sub_layer, ChoiceLayer)
   assert_equal(sub_layer.output.beam_size, beam_size)
   assert_equal(rec_layer.output.beam_size, beam_size)
-  input_search_choices = rec_layer.network.get_search_choices(sources=rec_layer.sources)
+  input_search_choices = net.get_search_choices(sources=rec_layer.sources)
   assert not input_search_choices
+  assert rec_layer.output.is_time_major
+  assert_equal(rec_layer.get_search_beam_size(), beam_size)
   feed_dict = {
     net.extern_data.data["data"].placeholder: logits,
     net.extern_data.data["data"].size_placeholder[0]: [n_time]}
@@ -616,6 +635,38 @@ def test_search_no_rec_explicit():
     assert_equal(out_sizes.shape, (n_batch * beam_size,))
     assert_equal(out.shape, (n_time, n_batch * beam_size))
     assert_equal(out_sizes.tolist(), [n_time] * beam_size)
+    out = numpy.reshape(out, (n_time, n_batch, beam_size))
+
+  print("Debug out:")
+  debug_out = ChoiceLayer._debug_out
+  ChoiceLayer._debug_out = []
+  pprint(debug_out)
+
+  # Assume that beams are sorted by score. See above.
+  for beam in range(beam_size):
+    out_seq = out[:, 0, beam].tolist()
+    expected_seq = expected_final_seqs[beam]
+    print("beam %i, out seq %r, expected seq %r" % (beam, out_seq, expected_seq))
+    assert_equal(out_seq, expected_final_seqs[beam])
+
+  assert len(debug_out) == n_time
+  # Could be that it is not in order (because of parallel execution of the loop).
+  debug_out = sorted(debug_out, key=lambda k: k["step"])
+  for t in range(n_time):
+    debug_t = debug_out[t]
+    expected_debug_t = expected_debug_out[t]
+    assert isinstance(debug_t, dict) and isinstance(expected_debug_t, dict)
+    for k, v in sorted(expected_debug_t.items()):
+      assert k in debug_t
+      out_v = debug_t[k]
+      if isinstance(v, int):
+        assert_equal(v, out_v)
+      else:
+        assert isinstance(out_v, numpy.ndarray)
+        assert out_v.shape[0] == n_batch, "t %i, k %r, v %r" % (t, k, v)
+        out_v = out_v[0]
+        assert_equal(v, out_v.tolist(), "t %i, k %r" % (t, k))
+  print("Seems fine.")
 
 
 if __name__ == "__main__":

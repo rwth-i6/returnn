@@ -313,22 +313,25 @@ class Data(object):
     data.time_dim_axis = None
     return data
 
-  def copy_extend_with_beam(self, beam_size):
+  def copy_extend_with_beam(self, beam_size, dyn_beam_size=None):
     """
     :param int beam_size:
+    :param tf.Tensor|None dyn_beam_size: if the beam size is dynamic
     :return: copy of myself where the batch-dim is extended/multiplied by beam_size, using tile_transposed
     :rtype: Data
     """
+    if dyn_beam_size is None:
+      dyn_beam_size = beam_size
     with tf.name_scope("data_extend_with_beam"):
       data = self.copy()
       if data.beam_size and data.beam_size == beam_size:
         return data
       assert data.beam_size is None, "incompatible beam sizes (%r vs %r)" % (data.beam_size, beam_size)
       if data.placeholder is not None:
-        data.placeholder = tile_transposed(data.placeholder, axis=data.batch_dim_axis, multiples=beam_size)
+        data.placeholder = tile_transposed(data.placeholder, axis=data.batch_dim_axis, multiples=dyn_beam_size)
       if data.size_placeholder is not None:
         data.size_placeholder = {
-          i: tile_transposed(v, axis=0, multiples=beam_size) for (i, v) in data.size_placeholder.items()}
+          i: tile_transposed(v, axis=0, multiples=dyn_beam_size) for (i, v) in data.size_placeholder.items()}
       data.beam_size = beam_size * (data.beam_size or 1)
       return data
 
@@ -4099,3 +4102,43 @@ def mem_usage_for_dev(dev_name):
   assert dev_name.startswith("/")  # e.g. "/cpu:0" or "/gpu:0"
   scope_name = dev_name[1:].replace(":", "")  # e.g. "cpu0" or "gpu0"
   return global_tensor(get, "mem_usage_%s" % scope_name)
+
+
+def identity_with_debug_log(x, args, out, name="DebugLogOp"):
+  """
+  :param tf.Tensor x:
+  :param dict[str,tf.Tensor] args:
+  :param list[dict[str,numpy.ndarray]] out:
+  :param str name:
+  :return: x
+  :rtype: tf.Tensor
+  """
+  arg_keys = sorted(args.keys())
+
+  def py_func(x, *arg_values):
+    out.append(dict(zip(arg_keys, arg_values)))
+    return x
+
+  with tf.name_scope(name):
+    y, = tf.py_func(
+      py_func, [x] + [args[k] for k in arg_keys], [x.dtype], stateful=True)
+    with tf.control_dependencies([y]):
+      return tf.identity(x)
+
+
+def nested_get_shapes(x):
+  """
+  :param tf.Tensor|dict[str,tf.Tensor]|list[tf.Tensor]|object x: anything that nest supports
+  :return: same structure as x, but tf.TensorShape for each tensor
+  """
+  if isinstance(x, tf.Tensor):
+    return x.get_shape()
+  if isinstance(x, list):
+    return [nested_get_shapes(v) for v in x]
+  if isinstance(x, tuple):
+    if type(x) is not tuple:  # assume namedtuple
+      return type(x)(*[nested_get_shapes(v) for v in x])
+    return tuple([nested_get_shapes(v) for v in x])
+  if isinstance(x, dict):
+    return {k: nested_get_shapes(v) for (k, v) in x.items()}
+  raise TypeError("invalid type %r of %r" % (type(x), x))

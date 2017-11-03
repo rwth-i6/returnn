@@ -984,6 +984,27 @@ class TFNetwork(object):
           return batch_dim
     raise Exception("We cannot tell the batch dim.")
 
+  def set_step_index(self, i):
+    """
+    Used by _SubnetworkRecCell.
+    :param tf.Tensor i: scalar, int32
+    """
+    from TFNetworkRecLayer import _StepIndexLayer
+    self.layers[":i"] = _StepIndexLayer(i=i, name=":i", network=self)
+
+  def have_step_index(self):
+    return ":i" in self.layers
+
+  def get_step_index(self):
+    """
+    :rtype: tf.Tensor
+    :return: scalar, int32
+    """
+    from TFNetworkRecLayer import _StepIndexLayer
+    layer = self.layers[":i"]
+    assert isinstance(layer, _StepIndexLayer)
+    return layer.step
+
 
 class TFNetworkParamsSerialized(object):
   """

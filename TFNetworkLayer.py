@@ -700,6 +700,18 @@ class LayerBase(object):
 
   @classmethod
   def get_rec_initial_extra_outputs(cls, batch_dim, **kwargs):
+    """
+    :param tf.Tensor|int batch_dim: for this layer, might be with beam
+    :rtype: dict[str,tf.Tensor]
+    """
+    return {}
+
+  @classmethod
+  def get_rec_initial_extra_outputs_shape_invariants(cls, **kwargs):
+    """
+    :return: optional shapes for the tensors by get_rec_initial_extra_outputs
+    :rtype: dict[str,tf.TensorShape]
+    """
     return {}
 
 
