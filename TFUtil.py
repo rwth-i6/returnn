@@ -1633,7 +1633,7 @@ def dropout(x, keep_prob, noise_shape=None, seed=None, name=None):
     random_tensor += tf.random_uniform(noise_shape, seed=seed, dtype=x.dtype)
     # 0. if [keep_prob, 1.0) and 1. if [1.0, 1.0 + keep_prob)
     binary_tensor = tf.floor(random_tensor)
-    ret = x * inv_keep_prob * binary_tensor
+    ret = x * (binary_tensor * inv_keep_prob)
     assert isinstance(ret, tf.Tensor)
     ret.set_shape(x.get_shape())
     return ret
