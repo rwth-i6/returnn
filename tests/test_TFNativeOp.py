@@ -25,9 +25,9 @@ CudaEnv.verbose_find_cuda = True
 session = tf.InteractiveSession()
 
 
-def sys_exec(*args, shell=False):
+def sys_exec(*args, **kwargs):
   print("$ %s" % " ".join(args))
-  out = Util.sysexecOut(*args, shell=shell)
+  out = Util.sysexecOut(*args, **kwargs)
   print(out)
 
 
@@ -746,7 +746,8 @@ def dummy_lstm_op(x, h_0, c_0, mask, W_f, W_r, b, n_time, n_batch, n_in_dim, n_c
   return y, y, h_0 + c_0
 
 
-@unittest.skip("TF 1.3.0 bug: https://github.com/tensorflow/tensorflow/issues/13355")
+@unittest.skipIf(
+  not TFUtil.have_min_tf_version((1, 5)), "TF 1.3.0 bug: https://github.com/tensorflow/tensorflow/issues/13355")
 def test_tensorarray_grad():
   def gen(shape, offset):
     return (numpy.arange(numpy.prod(shape)) + offset).reshape(shape).astype("float32")
@@ -831,7 +832,8 @@ def test_tensorarray_grad():
   assert_allclose(vdx1[start::step], vdx2[start::step])
 
 
-@unittest.skip("TF 1.3.0 bug: https://github.com/tensorflow/tensorflow/issues/13355")
+@unittest.skipIf(
+  not TFUtil.have_min_tf_version((1, 5)), "TF 1.3.0 bug: https://github.com/tensorflow/tensorflow/issues/13355")
 def test_tensorarray_grad_simple():
   n_time = 1
   n_dim = 1

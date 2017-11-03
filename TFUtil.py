@@ -28,6 +28,17 @@ def assert_min_tf_version(version, reason):
   assert tf_version >= version, "Your TF version %r is too old (older than %r). %s" % (tf_version, version, reason)
 
 
+def have_min_tf_version(version):
+  """
+  :param tuple[int] version: e.g. (1,2,0) or (1,2)
+  :return: True if we have at least that version, or newer
+  :rtype: bool
+  """
+  tf_version = tf_version_tuple()
+  assert len(version) <= len(tf_version)
+  return tf_version >= version
+
+
 class Data(object):
   """
   This class is to describe a tensor,
@@ -3187,7 +3198,8 @@ class Lock(object):
     On first call, just returns. Any further call will block, unless there is an unlock() call.
     """
     with tf.name_scope("%s/lock" % self._name):
-      return self._queue.get()
+      v, = self._queue.get()
+      return v
 
   def unlock(self):
     """
