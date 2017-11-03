@@ -25,27 +25,60 @@ CudaEnv.verbose_find_cuda = True
 session = tf.InteractiveSession()
 
 
-def dump_info():
-  numpy_path = os.path.dirname(numpy.__file__)
-  print("Numpy path: %r" % numpy_path)
-  so_files = Util.sysexecOut("find %s | grep \"\.so\"" % numpy_path, shell=True)
-  print("Numpy so files:\n---\n%s\n---\n" % so_files)
-  so_files = [f for f in so_files.splitlines() if f]
+def sys_exec(*args, shell=False):
+  print("$ %s" % " ".join(args))
+  out = Util.sysexecOut(*args, shell=shell)
+  print(out)
+
+
+def debug_lib_so(f, syms=()):
   ldd = "ldd"
   if sys.platform == "darwin":
     ldd = "otool -L"
   objdump = "objdump -T"
   if sys.platform == "darwin":
     objdump = "otool -IHGv"
+  cmd = "%s %s" % (ldd, f)
+  sys_exec(cmd, shell=True)
+  for sym in syms:
+    cmd = "%s %s | { grep %s || true; }" % (objdump, f, sym)
+    sys_exec(cmd, shell=True)
+
+
+def dump_info():
+  # Some generic stuff.
+  sys_exec("g++", "--version")
+  print("TF include:", tf.sysconfig.get_include())
+  print("TF lib:", tf.sysconfig.get_lib())
+  tf_lib_so = tf.sysconfig.get_lib() + "/libtensorflow_framework.so"
+  tf_pywrap_so = tf.sysconfig.get_lib() + "/python/_pywrap_tensorflow_internal.so"
+  sys_exec("ls", "-la", tf.sysconfig.get_lib())
+  if os.path.exists(tf_lib_so):
+    print("TF lib so exists:", tf_lib_so)
+    debug_lib_so(tf_lib_so, ["_ZTIN10tensorflow8OpKernelE"])
+  else:
+    print("TF lib so does not(!) exist:", tf_lib_so)
+  if os.path.exists(tf_pywrap_so):
+    print("TF pywrap so exists:", tf_pywrap_so)
+    debug_lib_so(tf_pywrap_so, ["_ZTIN10tensorflow8OpKernelE"])
+  else:
+    print("TF pywrap so does not(!) exist:", tf_pywrap_so)
+  # See OpCodeCompiler. Is already not used anymore but still maybe relevant.
+  if hasattr(sys, "getdlopenflags") and hasattr(sys, "setdlopenflags"):
+    print("have (set|get)dlopenflags")
+    import ctypes
+    print("Cur flags: %r, RTLD_GLOBAL is set: %r" % (sys.getdlopenflags(), sys.getdlopenflags() & ctypes.RTLD_GLOBAL))
+  if os.path.exists("/proc"):
+    print("Have /proc")
+    sys_exec("cat", "/proc/%i/maps" % os.getpid())
+  # Numpy stuff, debugging if sgemm was not found:
+  numpy_path = os.path.dirname(numpy.__file__)
+  print("Numpy path: %r" % numpy_path)
+  so_files = Util.sysexecOut("find %s | grep \"\.so\"" % numpy_path, shell=True)
+  print("Numpy so files:\n---\n%s\n---\n" % so_files)
+  so_files = [f for f in so_files.splitlines() if f]
   for f in so_files:
-    cmd = "%s %s" % (ldd, f)
-    print("$ %s" % cmd)
-    out = Util.sysexecOut(cmd, shell=True)
-    print(out)
-    cmd = "%s %s | { grep sgemm || true; }" % (objdump, f)
-    print("$ %s" % cmd)
-    out = Util.sysexecOut(cmd, shell=True)
-    print(out)
+    debug_lib_so(f, ["sgemm"])
 
 
 def test_dummy():
@@ -55,7 +88,7 @@ def test_dummy():
 
 def test_make_lstm_op_auto_cuda():
   try:
-    make_lstm_op()
+    make_lstm_op(compiler_opts={"verbose": True})
   except tf.errors.NotFoundError:
     dump_info()
     raise
@@ -64,7 +97,7 @@ def test_make_lstm_op_auto_cuda():
 def test_make_lstm_op_no_cuda():
   try:
     OpMaker.with_cuda = False
-    make_lstm_op()
+    make_lstm_op(compiler_opts={"verbose": True})
   except tf.errors.NotFoundError:
     dump_info()
     raise
@@ -930,8 +963,12 @@ if __name__ == "__main__":
         if k.startswith("test_"):
           print("-" * 40)
           print("Executing: %s" % k)
-          v()
+          try:
+            v()
+          except unittest.SkipTest as exc:
+            print("SkipTest: %s" % exc)
           print("-" * 40)
+      print("All passed.")
     else:
       assert len(sys.argv) >= 2
       for arg in sys.argv[1:]:

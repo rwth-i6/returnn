@@ -2111,16 +2111,19 @@ class OpCodeCompiler(NativeCodeCompiler):
   """
   Helper class to compile TF ops on-the-fly, similar as Theano.
   https://www.tensorflow.org/versions/master/how_tos/adding_an_op/
+  https://github.com/tensorflow/tensorflow/blob/master/tensorflow/docs_src/extend/adding_an_op.md
   """
 
   CacheDirName = "returnn_tf_cache/ops"
 
-  def __init__(self, use_cuda_if_available=True, include_paths=(), **kwargs):
+  def __init__(self, use_cuda_if_available=True, include_paths=(), ld_flags=(), **kwargs):
     self._cuda_env = use_cuda_if_available and CudaEnv.get_instance()
     tf_include = tf.sysconfig.get_include()  # e.g. "...python2.7/site-packages/tensorflow/include"
     tf_include_nsync = tf_include + "/external/nsync/public"  # https://github.com/tensorflow/tensorflow/issues/2412
     include_paths = list(include_paths) + [tf_include, tf_include_nsync]
-    super(OpCodeCompiler, self).__init__(include_paths=include_paths, **kwargs)
+    # https://github.com/tensorflow/tensorflow/issues/13607
+    ld_flags = list(ld_flags) + ["-L%s" % tf.sysconfig.get_lib(), "-ltensorflow_framework"]
+    super(OpCodeCompiler, self).__init__(include_paths=include_paths, ld_flags=ld_flags, **kwargs)
     self._tf_mod = None
 
   _relevant_info_keys = NativeCodeCompiler._relevant_info_keys + ("tf_version", "with_cuda")
@@ -2151,10 +2154,6 @@ class OpCodeCompiler(NativeCodeCompiler):
     if self._tf_mod:
       return self._tf_mod
     self._maybe_compile()
-    # https://github.com/tensorflow/tensorflow/issues/6568
-    if hasattr(sys, "getdlopenflags") and hasattr(sys, "setdlopenflags"):
-      import ctypes
-      sys.setdlopenflags(sys.getdlopenflags() | ctypes.RTLD_GLOBAL)
     self._tf_mod = tf.load_op_library(self._so_filename)
     return self._tf_mod
 
