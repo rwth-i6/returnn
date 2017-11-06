@@ -663,22 +663,20 @@ class _SubnetworkRecCell(object):
     from TFNetworkLayer import InternalLayer
     from TFUtil import tile_transposed
     needed_beam_size = self.layer_data_templates["output"].output.beam_size
-    # See ChoiceLayer.get_rec_initial_extra_outputs.
-    dyn_input_beam_size = tf.where(tf.equal(i, 0), 1, needed_beam_size) if needed_beam_size else 1
     if data is not None:
       if needed_beam_size:
         assert not self.parent_rec_layer.input_data.beam_size
         data = tile_transposed(
           data,
           axis=self.net.extern_data.data["source"].batch_dim_axis,
-          multiples=dyn_input_beam_size)
+          multiples=needed_beam_size)
       self.net.extern_data.data["source"].placeholder = data
     if classes is not None:
       if needed_beam_size:
         classes = tile_transposed(
           classes,
           axis=self.net.extern_data.data[self.parent_rec_layer.target].batch_dim_axis,
-          multiples=dyn_input_beam_size)
+          multiples=needed_beam_size)
       self.net.extern_data.data[self.parent_rec_layer.target].placeholder = classes
     for data_key, data in self.net.extern_data.data.items():
       if data_key not in self.net.used_data_keys:
@@ -751,7 +749,7 @@ class _SubnetworkRecCell(object):
           if needed_beam_size:
             assert not l.output.beam_size
             if l.output.beam_size != needed_beam_size:
-              l = self.net.add_layer(name="%s_beam_%i" % (name, needed_beam_size), output=l.output.copy_extend_with_beam(needed_beam_size, dyn_beam_size=dyn_input_beam_size), layer_class=InternalLayer)
+              l = self.net.add_layer(name="%s_beam_%i" % (name, needed_beam_size), output=l.output.copy_extend_with_beam(needed_beam_size), layer_class=InternalLayer)
               extended_layers[name] = l
           assert l.output.beam_size == needed_beam_size
         return l
@@ -898,7 +896,7 @@ class _SubnetworkRecCell(object):
     from TFUtil import check_input_dim
 
     with tf.name_scope("subnet_base"):
-      batch_dim = rec_layer.network.get_batch_dim()
+      batch_dim = rec_layer.network.get_data_batch_dim()
       input_beam_size = None  # type: int | None
       if rec_layer.input_data:
         with tf.name_scope("x_tensor_array"):
@@ -1254,7 +1252,7 @@ class _SubnetworkRecCell(object):
         constant_with_shape(False, shape=[out_batch_dim], name="initial_end_flag"),
         constant_with_shape(0, shape=[out_batch_dim], name="initial_seq_len"))
       init_loop_vars += (init_seq_len_info,)
-      shape_invariants += ((tf.TensorShape([out_batch_dim]), tf.TensorShape([out_batch_dim])),)
+      shape_invariants += ((tf.TensorShape([None]), tf.TensorShape([None])),)
     if self.layers_in_loop:
       final_loop_vars = tf.while_loop(
         cond=cond,
@@ -1957,6 +1955,22 @@ class RnnCellLayer(_ConcatInputLayer):
 
   @classmethod
   def _get_rec_initial_state(cls, batch_dim, name, initial_state=None, **kwargs):
+    """
+    Very similar to :func:`get_rec_initial_output`.
+    Initial hidden state when used inside a recurrent layer for the frame t=-1, if it is needed.
+    As arguments, we get the usual layer arguments.
+    batch_dim is added because it might be special because of beam search.
+    Also see :func:`transform_config_dict` for `initial_state`.
+
+    Note: This could maybe share code with :func:`get_rec_initial_output`,
+    although it is a bit more generic here because the state can also be a namedtuple
+    or any kind of nested structure.
+
+    :param tf.Tensor batch_dim: including beam size in beam search
+    :param str name:
+    :param LayerBase|str|int|float|None|list|tuple|namedtuple initial_state: see code
+    :rtype: tf.Tensor|tuple[tf.Tensor]|namedtuple
+    """
     with tf.name_scope("rec_initial_state"):
       init_value = initial_state
       dim = cls.get_hidden_state_size(**kwargs)
@@ -2125,22 +2139,32 @@ class ChoiceLayer(LayerBase):
         beam_size=beam_size)
       if input_type == "regression":
         # It's not a probability distribution, so there is no search here.
-        net_batch_dim = self.network.get_batch_dim()
+        net_batch_dim = self.network.get_data_batch_dim()
         assert self.search_choices.beam_size == 1
         self.output = self.sources[0].output.copy_compatible_to(self.output)
         self.search_choices.src_beams = tf.zeros((net_batch_dim, 1), dtype=tf.int32)
         self.search_choices.set_beam_scores(self.search_choices.src_layer.search_choices.beam_scores)
       else:
-        net_batch_dim = self.network.get_batch_dim()
+        net_batch_dim = self.network.get_data_batch_dim()
         assert self.search_choices.src_layer, (
           self.network.debug_search_choices(base_search_choice=self),
           "Not implemented yet. In rec-layer, we would always have our prev-frame as one previous search choice. "
           "Our deps: %r" % self.get_dep_layers())
-        # TODO: for the initial frame, we must not tile over beam!
         scores_base = self.search_choices.src_layer.search_choices.beam_scores  # (batch, beam_in)
         assert scores_base.get_shape().ndims == 2, "%r invalid" % self.search_choices.src_layer.search_choices
-        # beam_in = self.sources[0].output.beam_size  # might not be the same
-        beam_in = tf.shape(scores_base)[1]
+        base_beam_in = tf.shape(scores_base)[1]
+        scores_beam_in = tf.shape(self.sources[0].output.placeholder)[0] // net_batch_dim
+        scores_beam_in_default = self.sources[0].output.beam_size
+        # About incoming beam size:
+        #   base_beam_in  - 1 in first frame, then beam_in
+        #   scores_beam_in  - scores_beam_in_default or 1
+        #   scores_beam_in_default  - beam_in
+        # Note about scores_beam_in, i.e. the batch-beam-size of other layers:
+        # We could make it like base_beam_in, i.e. have beam-size 1 in the 0th layer
+        # and also in the 1st layer before any ChoiceLayer.
+        # However, currently it makes the code a bit simpler to just have always
+        # the final beam-size everywhere.
+        # Keep in mind that this might change at some future point.
         scores_base = tf.expand_dims(scores_base, axis=-1)  # (batch, beam_in, dim)
         scores_in = self.sources[0].output.placeholder  # (batch * beam_in, dim)
         # We present the scores in +log space, and we will add them up along the path.
@@ -2151,9 +2175,23 @@ class ChoiceLayer(LayerBase):
         else:
           raise Exception("%r: invalid input type %r" % (self, input_type))
         scores_in_dim = self.sources[0].output.dim
-        scores_in = tf.reshape(scores_in, [net_batch_dim, beam_in, scores_in_dim])  # (batch, beam_in, dim)
+        scores_in = tf.reshape(scores_in, [net_batch_dim, scores_beam_in, scores_in_dim])  # (batch, beam_in, dim)
+        with tf.control_dependencies([
+              # See comment above. This checks that all is as expected.
+              tf.Assert(tf.logical_or(
+                tf.equal(base_beam_in, 1),
+                tf.logical_and(
+                  tf.equal(base_beam_in, scores_beam_in),
+                  tf.equal(base_beam_in, scores_beam_in_default))),
+                [
+                  "base_beam_in", base_beam_in,
+                  "scores_beam_in", scores_beam_in,
+                  "scores_beam_in_default", scores_beam_in_default])]):
+          # See the comment above. It could be that scores_in has a wider beam
+          # than what should be used here now.
+          scores_in = scores_in[:, :base_beam_in]  # (batch, beam_in, dim)
         scores_in += scores_base  # (batch, beam_in, dim)
-        scores_in_flat = tf.reshape(scores_in, [net_batch_dim, beam_in * scores_in_dim])  # (batch, beam_in * dim)
+        scores_in_flat = tf.reshape(scores_in, [net_batch_dim, base_beam_in * scores_in_dim])  # (batch, beam_in * dim)
         # `tf.nn.top_k` is the core function performing our search.
         # We get scores/labels of shape (batch, beam) with indices in [0..beam_in*dim-1].
         scores, labels = tf.nn.top_k(scores_in_flat, k=beam_size)
@@ -2227,7 +2265,7 @@ class ChoiceLayer(LayerBase):
     """
     if not network.search_flag:
       return {}
-    batch_dim = network.get_batch_dim()
+    batch_dim = network.get_data_batch_dim()
     # Note: Use beam_size 1 for the initial as there are no competing hypotheses yet.
     initial_scores = tf.zeros([batch_dim, 1])  # (batch, beam)
     return {"choice_scores": initial_scores}
@@ -2278,7 +2316,7 @@ class DecideLayer(LayerBase):
     if not output:
       output = src.output.copy_template(name="%s_output" % (name or src.name)).copy_as_batch_major()
     assert output.batch_dim_axis == 0
-    batch_dim = src.network.get_batch_dim()
+    batch_dim = src.network.get_data_batch_dim()
     src_data = src.output.copy_as_batch_major()
     src_output = tf.reshape(
       src_data.placeholder,

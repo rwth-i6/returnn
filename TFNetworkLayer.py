@@ -371,10 +371,11 @@ class LayerBase(object):
     :return: batch dim * beam size
     :rtype: tf.Tensor
     """
-    batch_dim = self.network.get_batch_dim()
+    batch_dim = self.network.get_data_batch_dim()
     beam_size = self.get_search_beam_size()
     if beam_size is not None:
-      batch_dim *= beam_size
+      with tf.name_scope("batch_beam_dim"):
+        batch_dim *= beam_size
     return batch_dim
 
   @contextlib.contextmanager
@@ -674,6 +675,21 @@ class LayerBase(object):
 
   @classmethod
   def get_rec_initial_output(cls, batch_dim, name, output, initial_output=None, **kwargs):
+    """
+    If this layer is used inside a recurrent layer, this function specifies the
+    output of frame t=-1, if it is needed.
+    As arguments, we get the usual layer arguments.
+    batch_dim is added because it might be special because of beam search.
+
+    Note: This could maybe share code with :func:`RnnCellLayer._get_rec_initial_state`.
+    We could also add support to make the initial output be the output of another layer.
+
+    :param tf.Tensor batch_dim: including beam size in beam search
+    :param str name:
+    :param Data output:
+    :param str|float|int|tf.Tensor|None initial_output:
+    :rtype: tf.Tensor
+    """
     v = initial_output
     data = output
     if isinstance(v, tf.Tensor):
@@ -701,7 +717,7 @@ class LayerBase(object):
   @classmethod
   def get_rec_initial_extra_outputs(cls, batch_dim, **kwargs):
     """
-    :param tf.Tensor|int batch_dim: for this layer, might be with beam
+    :param tf.Tensor batch_dim: for this layer, might be with beam
     :rtype: dict[str,tf.Tensor]
     """
     return {}
@@ -798,7 +814,7 @@ class SourceLayer(LayerBase):
     if data_key is None:
       data_key = network.extern_data.default_input
     assert not sources, "source layer does not expect sources"
-    data = network.get_extern_data(data_key, mark_data_key_as_used=True)
+    data = network.get_extern_data(data_key, mark_data_key_as_used=True).copy()
     super(SourceLayer, self).__init__(network=network, **kwargs)
     self.output = data
 
@@ -811,7 +827,7 @@ class SourceLayer(LayerBase):
     """
     if data_key is None:
       data_key = network.extern_data.default_input
-    return network.get_extern_data(data_key, mark_data_key_as_used=False)
+    return network.get_extern_data(data_key, mark_data_key_as_used=False).copy()
 
 
 @contextlib.contextmanager

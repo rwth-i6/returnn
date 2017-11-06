@@ -949,7 +949,7 @@ class TFNetwork(object):
 
     self.get_search_choices(base_search_choice=base_search_choice, _visited=Visitor())
 
-  def get_batch_dim(self):
+  def get_data_batch_dim(self):
     """
     Get the batch-dim size, i.e. amount of sequences in the current batch.
     Consider that the data tensor is usually of shape [batch, time, dim],
@@ -971,7 +971,7 @@ class TFNetwork(object):
     from TFUtil import get_shape_dim, reuse_name_scope_of_tensor
     # First check parent because there we might get the true batch dim.
     if self.parent_net:
-      return self.parent_net.get_batch_dim()
+      return self.parent_net.get_data_batch_dim()
     if self._batch_dim is not None:
       return self._batch_dim
     for key, data in self.extern_data.get_sorted_data_items():

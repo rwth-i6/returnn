@@ -16,6 +16,7 @@ import TFUtil
 TFUtil.debugRegisterBetterRepr()
 from Config import Config
 from nose.tools import assert_equal, assert_is_instance
+import unittest
 import numpy
 import numpy.testing
 from pprint import pprint
@@ -312,7 +313,7 @@ def check_engine_search(extra_rec_kwargs=None):
   from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
   seq_len = 5
   n_data_dim = 2
-  n_classes_dim = 3
+  n_classes_dim = 7
   dataset = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
   dataset.init_seq_order(epoch=1)
 
@@ -385,7 +386,7 @@ def check_engine_search_attention(extra_rec_kwargs=None):
   from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
   seq_len = 5
   n_data_dim = 2
-  n_classes_dim = 3
+  n_classes_dim = 7
   dataset = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
   dataset.init_seq_order(epoch=1)
   print("Hello search!")
@@ -414,7 +415,10 @@ def check_engine_search_attention(extra_rec_kwargs=None):
         },
       }, extra_rec_kwargs or {}),
       "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance"}
-    }})
+    },
+    "debug_print_layer_output_template": True,
+    "debug_print_layer_output_shape": True
+  })
   engine = Engine(config=config)
   print("Init network...")
   engine.start_epoch = 1
@@ -456,14 +460,14 @@ def test_engine_search_attention():
   check_engine_search_attention()
 
 
-def test_engine_train_simple_attention():
+def check_engine_train_simple_attention(lstm_unit):
   net_dict = {
-    "lstm0_fw": {"class": "rec", "unit": "lstmp", "n_out": 20, "dropout": 0.0, "L2": 0.01, "direction": 1},
-    "lstm0_bw": {"class": "rec", "unit": "lstmp", "n_out": 20, "dropout": 0.0, "L2": 0.01, "direction": -1},
+    "lstm0_fw": {"class": "rec", "unit": lstm_unit, "n_out": 20, "dropout": 0.0, "L2": 0.01, "direction": 1},
+    "lstm0_bw": {"class": "rec", "unit": lstm_unit, "n_out": 20, "dropout": 0.0, "L2": 0.01, "direction": -1},
 
-    "lstm1_fw": {"class": "rec", "unit": "lstmp", "n_out": 20, "dropout": 0.0, "L2": 0.01, "direction": 1,
+    "lstm1_fw": {"class": "rec", "unit": lstm_unit, "n_out": 20, "dropout": 0.0, "L2": 0.01, "direction": 1,
                  "from": ["lstm0_fw", "lstm0_bw"]},
-    "lstm1_bw": {"class": "rec", "unit": "lstmp", "n_out": 20, "dropout": 0.0, "L2": 0.01, "direction": -1,
+    "lstm1_bw": {"class": "rec", "unit": lstm_unit, "n_out": 20, "dropout": 0.0, "L2": 0.01, "direction": -1,
                  "from": ["lstm0_fw", "lstm0_bw"]},
 
     "encoder": {"class": "linear", "activation": "tanh", "from": ["lstm1_fw", "lstm1_bw"], "n_out": 20},
@@ -500,11 +504,32 @@ def test_engine_train_simple_attention():
     "learning_rate": 0.01,
     "nadam": True,
     "gradient_noise": 0.3,
+    "debug_add_check_numerics_ops": True,
+    "debug_print_layer_output_template": True,
+    "debug_print_layer_output_shape": True,
+    "debug_add_check_numerics_on_output": True,
   })
   engine = Engine(config=config)
   engine.init_train_from_config(config=config, train_data=dataset, dev_data=dataset, eval_data=None)
+  print("Extern data:")
+  pprint(engine.network.extern_data.data)
+  print("Used data keys:")
+  pprint(engine.network.used_data_keys)
   engine.train()
   engine.finalize()
+
+
+@unittest.skip("crash on OSX? https://github.com/tensorflow/tensorflow/issues/14285")
+def test_engine_train_simple_attention_lstmp():
+  check_engine_train_simple_attention(lstm_unit="lstmp")
+
+
+def test_engine_train_simple_attention_nativelstm2():
+  check_engine_train_simple_attention(lstm_unit="nativelstm2")
+
+
+def test_engine_train_simple_attention_basiclstm():
+  check_engine_train_simple_attention(lstm_unit="basiclstm")
 
 
 def test_rec_optim_all_out():

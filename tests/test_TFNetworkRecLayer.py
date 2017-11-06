@@ -623,7 +623,7 @@ def test_search_no_rec_explicit():
     net.extern_data.data["data"].placeholder: logits,
     net.extern_data.data["data"].size_placeholder[0]: [n_time]}
   with tf.Session() as session:
-    assert_equal(session.run(net.get_batch_dim(), feed_dict=feed_dict), n_batch)
+    assert_equal(session.run(net.get_data_batch_dim(), feed_dict=feed_dict), n_batch)
     out, out_sizes = session.run(
       (rec_layer.output.placeholder, rec_layer.output.get_sequence_lengths()),
       feed_dict=feed_dict)
