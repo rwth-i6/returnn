@@ -537,7 +537,7 @@ def test_rec_optim_all_out():
   from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
   seq_len = 5
   n_data_dim = 2
-  n_classes_dim = 3
+  n_classes_dim = 7
   dataset = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
   dataset.init_seq_order(epoch=1)
 
@@ -980,7 +980,10 @@ if __name__ == "__main__":
         if k.startswith("test_"):
           print("-" * 40)
           print("Executing: %s" % k)
-          v()
+          try:
+            v()
+          except unittest.SkipTest as exc:
+            print("SkipTest:", exc)
           print("-" * 40)
     else:
       assert len(sys.argv) >= 2
