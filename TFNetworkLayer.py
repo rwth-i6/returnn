@@ -2963,18 +2963,24 @@ class SegmentInputLayer(_ConcatInputLayer):
       res  = tf.tile(res, [1, window])                               # fill add time dimension
       res += tf.range(window)                                        # add offsets
       res  = tf.where(res >= num_frames, tf.zeros_like(res), res)    # filter frames that go past the end
-      res  = tf.stack([tf.ones_like(res) * batch_idx, res], axis=2)  # add batch_index
+      if self.input_data.is_batch_major:
+        res  = tf.stack([tf.ones_like(res) * batch_idx, res], axis=2)  # add batch_index in first dim
+      else:
+        res  = tf.stack([res, tf.ones_like(res) * batch_idx], axis=2)  # add batch_index in second dim
       return tf.concat([acc, res], 0)
 
     initial = tf.placeholder_with_default((tf.zeros([0, window, 2], dtype=tf.int32)), [None, window, 2])
     indices = tf.foldl(fold_data, tf.stack([tf.range(tf.shape(sizes)[0]), sizes], axis=1), initial, name='fold_data')
+
+    if self.input_data.is_time_major:
+      indices = tf.transpose(indices, [1, 0, 2])
 
     self.output.placeholder = tf.gather_nd(self.input_data.placeholder, indices)
     self.output.size_placeholder[0] = new_sizes
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources, window, **kwargs):
-    out = get_concat_sources_data_template(sources, name="%s_output" % name).copy_as_batch_major()
+    out = get_concat_sources_data_template(sources, name="%s_output" % name)
     out.size_placeholder = {}
     out.size_placeholder[0] = None
     return out
@@ -3010,7 +3016,7 @@ class ClassesToSegmentsLayer(_ConcatInputLayer):
     batches = tf.foldl(fold_batches, tf.stack([tf.range(tf.shape(sizes)[0]), sizes], axis=1),
                        tf.placeholder_with_default(tf.zeros([0, 3], dtype='int32'), [None, 3]))
 
-    onehot = tf.one_hot(self.input_data.placeholder, num_classes)
+    onehot = tf.one_hot(self.input_data.get_placeholder_as_batch_major(), num_classes)
     def compute(x):
       batch = x[0]
       start = x[1]
