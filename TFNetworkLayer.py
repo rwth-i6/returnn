@@ -2926,7 +2926,7 @@ class SegmentInputLayer(_ConcatInputLayer):
       r1 = tf.tile([window], [tf.maximum(x - window + 1, 0)])
       r2 = tf.range(tf.minimum(x, window - 1), 0, -1)
       return tf.concat([acc, r1, r2], 0)
-    new_sizes = tf.foldl(fold_times, sizes, tf.placeholder_with_default(tf.zeros([0], dtype='int32'), [None]))
+    new_sizes = tf.foldl(fold_times, sizes, tf.placeholder_with_default(tf.zeros([0], dtype='int32'), [None], name='fold_sizes'))
 
     def fold_data(acc, x):
       batch_idx = x[0]
@@ -2939,7 +2939,7 @@ class SegmentInputLayer(_ConcatInputLayer):
       return tf.concat([acc, res], 0)
 
     initial = tf.placeholder_with_default((tf.zeros([0, window, 2], dtype=tf.int32)), [None, window, 2])
-    indices = tf.foldl(fold_data, tf.stack([tf.range(tf.shape(sizes)[0]), sizes], axis=1), initial)
+    indices = tf.foldl(fold_data, tf.stack([tf.range(tf.shape(sizes)[0]), sizes], axis=1), initial, name='fold_data')
 
     self.output.placeholder = tf.gather_nd(self.input_data.placeholder, indices)
     self.output.size_placeholder[0] = new_sizes
