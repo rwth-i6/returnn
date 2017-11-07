@@ -106,16 +106,23 @@ class Graph:
 
   def __init__(self, lemma):
     """
-    :param str|None lemma: a sentence or word
+    :param str|list[str]|list[Edge]|None lemma: a sentence or word
     list[str] lem_list: lemma transformed into list of strings
+    list[Edge] lem_edges: the lemma is provided as a list of edges, so basically is already a fsa
     """
     # TODO use dict to distinguish between str and list?
     if isinstance(lemma, str):
       self.lemma = lemma.strip()
       self.lem_list = self.lemma.lower().split()
-    elif isinstance(lemma, list):
+      self.lem_edges = None
+    elif isinstance(lemma, list) and isinstance(lemma[0], str):
       self.lemma = None
       self.lem_list = lemma
+      self.lem_edges = None
+    elif isinstance(lemma, list) and isinstance(lemma[0], Edge):
+      self.lemma = None
+      self.lem_list = None
+      self.lem_edges = lemma
     else:
       assert False, ("The input you provided is not acceptable!", lemma)
 
@@ -152,6 +159,9 @@ class Graph:
                   + "\nEdges:\n"\
                   + str(self.edges_hmm)
     return prettygraph
+
+  def is_empty(self):
+    return True if self.num_states <= 0 and len(self.edges) <= 0 else False
 
   @staticmethod
   def make_single_state_graph(num_states, edges):
@@ -308,20 +318,70 @@ class Ctc:
     self.fsa.num_states = 0
     cur_idx = 0
 
-    # goes through the list of strings
-    for idx, seq in enumerate(self.fsa.lem_list):
-      # goes through string
-      for i, label in enumerate(seq):
+    # if the graph fsa is empty use the provided list of strings
+    if self.fsa.lem_list is not None:
+      # goes through the list of strings
+      for idx, seq in enumerate(self.fsa.lem_list):
+        # goes through string
+        for i, label in enumerate(seq):
+          src_idx = 2 * cur_idx
+          if cur_idx == 0:
+            self.fsa.num_states += 1
+          trgt_idx = src_idx + 2
+          e_norm = Edge(src_idx, trgt_idx, seq[i])
+          e_norm.idx = cur_idx
+          e_norm.idx_word_in_sentence = idx
+          e_norm.idx_phon_in_word = i
+          # if two equal labels back to back in string -> skip repetition
+          if seq[i] != seq[i - 1] or len(seq) == 1:
+            self.fsa.edges.append(e_norm)
+          # adds blank labels and label repetitions
+          e_blank = Edge(src_idx, trgt_idx - 1, Edge.BLANK)
+          self.fsa.edges.append(e_blank)
+          e_rep = deepcopy(e_norm)
+          e_rep.source_state_idx = src_idx + 1
+          self.fsa.edges.append(e_rep)
+          cur_idx += 1
+          # add number of states
+          self.fsa.num_states += 2
+
+        # adds separator between words in sentence
+        if idx < len(self.fsa.lem_list) - 1:
+          self.fsa.edges.append(Edge(2 * cur_idx, 2 * cur_idx + 1, Edge.BLANK))
+          self.fsa.edges.append(Edge(2 * cur_idx + 1, 2 * cur_idx + 2, Edge.SIL))
+          self.fsa.edges.append(Edge(2 * cur_idx, 2 * cur_idx + 2, Edge.SIL))
+          self.fsa.num_states += 2
+          cur_idx += 1
+
+      # add node number of final state
+      self.final_states.append(self.fsa.num_states - 1)
+
+      # add all final possibilities
+      e_end_1 = Edge(self.fsa.num_states - 3, self.fsa.num_states, Edge.BLANK, 1.)
+      self.fsa.edges.append(e_end_1)
+      e_end_2 = Edge(self.fsa.num_states + 1, self.fsa.num_states + 2, Edge.BLANK, 1.)
+      self.fsa.edges.append(e_end_2)
+      e_end_3 = Edge(self.fsa.num_states, self.fsa.num_states + 1, self.fsa.lem_list[-1][-1], 1.)
+      self.fsa.edges.append(e_end_3)
+      self.fsa.num_states += 3
+      # add node nuber of final state
+      self.final_states.append(self.fsa.num_states - 1)
+
+    elif self.fsa.lem_edges is not None:
+      self.fsa.lem_edges.sort()
+      for idx, edge in enumerate(self.fsa.lem_edges):
+        # goes through fsa (list)
         src_idx = 2 * cur_idx
         if cur_idx == 0:
           self.fsa.num_states += 1
         trgt_idx = src_idx + 2
-        e_norm = Edge(src_idx, trgt_idx, seq[i])
+        e_norm = deepcopy(edge)
+        e_norm.source_state_idx = src_idx
+        e_norm.target_state_idx = trgt_idx
         e_norm.idx = cur_idx
         e_norm.idx_word_in_sentence = idx
-        e_norm.idx_phon_in_word = i
         # if two equal labels back to back in string -> skip repetition
-        if seq[i] != seq[i - 1] or len(seq) == 1:
+        if self.fsa.lem_edges[idx].label != self.fsa.lem_edges[idx - 1].label or len(self.fsa.lem_edges) == 1:
           self.fsa.edges.append(e_norm)
         # adds blank labels and label repetitions
         e_blank = Edge(src_idx, trgt_idx - 1, Edge.BLANK)
@@ -333,27 +393,23 @@ class Ctc:
         # add number of states
         self.fsa.num_states += 2
 
-      # adds separator between words in sentence
-      if idx < len(self.fsa.lem_list) - 1:
-        self.fsa.edges.append(Edge(2 * cur_idx, 2 * cur_idx + 1, Edge.BLANK))
-        self.fsa.edges.append(Edge(2 * cur_idx + 1, 2 * cur_idx + 2, Edge.SIL))
-        self.fsa.edges.append(Edge(2 * cur_idx, 2 * cur_idx + 2, Edge.SIL))
-        self.fsa.num_states += 2
-        cur_idx += 1
+      # add node number of final state
+      self.final_states.append(self.fsa.num_states - 1)
 
-    # add node number of final state
-    self.final_states.append(self.fsa.num_states - 1)
-
-    # add all final possibilities
-    e_end_1 = Edge(self.fsa.num_states - 3, self.fsa.num_states, Edge.BLANK, 1.)
-    self.fsa.edges.append(e_end_1)
-    e_end_2 = Edge(self.fsa.num_states + 1, self.fsa.num_states + 2, Edge.BLANK, 1.)
-    self.fsa.edges.append(e_end_2)
-    e_end_3 = Edge(self.fsa.num_states, self.fsa.num_states + 1, self.fsa.lem_list[-1][-1], 1.)
-    self.fsa.edges.append(e_end_3)
-    self.fsa.num_states += 3
-    # add node nuber of final state
-    self.final_states.append(self.fsa.num_states - 1)
+      # add all final possibilities
+      e_end_1 = Edge(self.fsa.num_states - 3, self.fsa.num_states, Edge.BLANK, 1.)
+      self.fsa.edges.append(e_end_1)
+      e_end_2 = Edge(self.fsa.num_states + 1, self.fsa.num_states + 2, Edge.BLANK, 1.)
+      self.fsa.edges.append(e_end_2)
+      e_end_3 = deepcopy(self.fsa.lem_edges[-1])
+      e_end_3.source_state_idx = self.fsa.num_states
+      e_end_3.target_state_idx = self.fsa.num_states + 1
+      self.fsa.edges.append(e_end_3)
+      self.fsa.num_states += 3
+      # add node nuber of final state
+      self.final_states.append(self.fsa.num_states - 1)
+    else:
+      assert False, "Something went wrong! Graph does not have a lemma list or fsa for CTC"
 
     # make single final node
     if not (len(self.final_states) == 1 and self.final_states[0] == self.fsa.num_states - 1):
@@ -1180,6 +1236,15 @@ def main():
   start_time = time.time()
 
   fsa = Graph(lemma=args.label_seq)
+  fsafsa = Graph([Edge(0, 1, 'H'),
+                  Edge(1, 2, 'a'),
+                  Edge(2, 3, 'l'),
+                  Edge(3, 4, 'l'),
+                  Edge(4, 5, 'o'),
+                  Edge(5, 6, 'w'),
+                  Edge(6, 7, 'e'),
+                  Edge(7, 8, 'e'),
+                  Edge(8, 9, 'n')])
 
   lexicon_start_time = time.time()
   lexicon = load_lexicon(args.lexicon, args.pickle)
@@ -1222,7 +1287,19 @@ def main():
   sav_ctc.fsa_to_dot_format()
   sav_ctc.save_to_file()
 
-  ctc_end_time = hmm_start_time = time.time()
+  ctc_end_time = ctcfsa_start_time = time.time()
+
+  ctcfsa = Ctc(fsafsa)
+  ctcfsa.label_conversion = args.label_conversion
+  ctcfsa_run_start_time = time.time()
+  ctcfsa.run()
+  ctcfsa_run_end_time = time.time()
+  sav_ctcfsa = Store(fsafsa.num_states_ctc, fsafsa.edges_ctc)
+  sav_ctcfsa.filename = 'edges_ctcfsa'
+  sav_ctcfsa.fsa_to_dot_format()
+  sav_ctcfsa.save_to_file()
+
+  ctcfsa_end_time = hmm_start_time = time.time()
 
   hmm = Hmm(fsa)
   hmm.lexicon = lexicon
@@ -1268,6 +1345,11 @@ def main():
   print("CTC init time : ", ctc_run_start_time - ctc_start_time)
   print("CTC run time  : ", ctc_run_end_time - ctc_run_start_time)
   print("CTC save time : ", ctc_end_time - ctc_run_end_time, "\n")
+
+  print("CTC from FSA total time: ", ctcfsa_end_time - ctcfsa_start_time)
+  print("CTC from FSA init time : ", ctcfsa_run_start_time - ctcfsa_start_time)
+  print("CTC from FSA run time  : ", ctcfsa_run_end_time - ctcfsa_run_start_time)
+  print("CTC from FSA save time : ", ctcfsa_end_time - ctcfsa_run_end_time, "\n")
 
   print("HMM total time: ", hmm_end_time - hmm_start_time)
   print("HMM init time : ", hmm_run_start_time - hmm_start_time)
