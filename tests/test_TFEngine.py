@@ -519,7 +519,7 @@ def check_engine_train_simple_attention(lstm_unit):
   engine.finalize()
 
 
-@unittest.skip("crash on OSX? https://github.com/tensorflow/tensorflow/issues/14285")
+# @unittest.skip("crash on OSX? https://github.com/tensorflow/tensorflow/issues/14285")
 def test_engine_train_simple_attention_lstmp():
   check_engine_train_simple_attention(lstm_unit="lstmp")
 
