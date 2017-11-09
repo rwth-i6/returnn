@@ -2118,11 +2118,13 @@ class ChoiceLayer(LayerBase):
 
   _debug_out = None  # type: None|list
 
-  def __init__(self, beam_size, input_type="prob", explicit_search_source=None, **kwargs):
+  def __init__(self, beam_size, input_type="prob", explicit_search_source=None, length_normalization=True, **kwargs):
     """
     :param int beam_size: the outgoing beam size. i.e. our output will be (batch * beam_size, ...)
     :param str input_type: "prob" or "log_prob", whether the input is in probability space, log-space, etc.
       or "regression", if it is a prediction of the data as-is.
+    :param LayerBase|None explicit_search_source: will mark it as an additional dependency
+    :param bool length_normalization: evaluates score_t/len in search
     """
     super(ChoiceLayer, self).__init__(**kwargs)
     self.explicit_search_source = explicit_search_source
@@ -2152,19 +2154,32 @@ class ChoiceLayer(LayerBase):
           "Our deps: %r" % self.get_dep_layers())
         scores_base = self.search_choices.src_layer.search_choices.beam_scores  # (batch, beam_in)
         assert scores_base.get_shape().ndims == 2, "%r invalid" % self.search_choices.src_layer.search_choices
-        base_beam_in = tf.shape(scores_base)[1]
+        base_beam_in = tf.shape(scores_base)[1]  # 1 in first frame, then beam_in (beam_size)
         scores_beam_in = tf.shape(self.sources[0].output.placeholder)[0] // net_batch_dim
-        scores_beam_in_default = self.sources[0].output.beam_size
+        beam_size = self.sources[0].output.beam_size
         # About incoming beam size:
         #   base_beam_in  - 1 in first frame, then beam_in
-        #   scores_beam_in  - scores_beam_in_default or 1
-        #   scores_beam_in_default  - beam_in
+        #   scores_beam_in  - beam_size or 1
+        #   beam_size  - beam_in
         # Note about scores_beam_in, i.e. the batch-beam-size of other layers:
         # We could make it like base_beam_in, i.e. have beam-size 1 in the 0th layer
         # and also in the 1st layer before any ChoiceLayer.
         # However, currently it makes the code a bit simpler to just have always
         # the final beam-size everywhere.
         # Keep in mind that this might change at some future point.
+        if length_normalization:
+          assert self.network.have_rec_step_info()
+          t = self.network.get_rec_step_index()  # scalar
+          end_flags_flat = self.network.get_rec_step_info().get_end_flag()  # (batch * beam_in,)
+          with tf.name_scope("length_normalization"):
+            end_flags = tf.reshape(end_flags_flat, [net_batch_dim, beam_size])  # (batch, beam_in)
+            end_flags = end_flags[:, :base_beam_in]  # see scores_in below
+            # Normalized scores, so we evaluate score_t/len.
+            # If seq ended, score_t/t == score_{t-1}/(t-1), thus score_t = score_{t-1}*(t/(t-1))
+            scores_base *= tf.where(
+              end_flags,
+              tf.ones(tf.shape(end_flags)) * (tf.to_float(t) / tf.to_float(tf.maximum(t - 1, 1))),
+              tf.ones(tf.shape(end_flags)))
         scores_base = tf.expand_dims(scores_base, axis=-1)  # (batch, beam_in, dim)
         scores_in = self.sources[0].output.placeholder  # (batch * beam_in, dim)
         # We present the scores in +log space, and we will add them up along the path.
@@ -2176,9 +2191,10 @@ class ChoiceLayer(LayerBase):
           raise Exception("%r: invalid input type %r" % (self, input_type))
         from TFUtil import filter_ended_scores
         scores_in_dim = self.sources[0].output.dim
-        scores_in = filter_ended_scores(
-          scores_in, end_flags=self.network.get_rec_step_info().get_end_flag(),
-          dim=scores_in_dim, batch_dim=net_batch_dim * scores_beam_in)
+        if self.network.have_rec_step_info():
+          scores_in = filter_ended_scores(
+            scores_in, end_flags=self.network.get_rec_step_info().get_end_flag(),
+            dim=scores_in_dim, batch_dim=net_batch_dim * scores_beam_in)  # (batch * beam_in, dim)
         scores_in = tf.reshape(scores_in, [net_batch_dim, scores_beam_in, scores_in_dim])  # (batch, beam_in, dim)
         with tf.control_dependencies([
               # See comment above. This checks that all is as expected.
@@ -2186,11 +2202,11 @@ class ChoiceLayer(LayerBase):
                 tf.equal(base_beam_in, 1),
                 tf.logical_and(
                   tf.equal(base_beam_in, scores_beam_in),
-                  tf.equal(base_beam_in, scores_beam_in_default))),
+                  tf.equal(base_beam_in, beam_size))),
                 [
                   "base_beam_in", base_beam_in,
                   "scores_beam_in", scores_beam_in,
-                  "scores_beam_in_default", scores_beam_in_default])]):
+                  "beam_size", beam_size])]):
           # See the comment above. It could be that scores_in has a wider beam
           # than what should be used here now.
           scores_in = scores_in[:, :base_beam_in]  # (batch, beam_in, dim)
