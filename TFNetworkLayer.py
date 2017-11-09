@@ -352,15 +352,25 @@ class LayerBase(object):
     """
     return list(self.sources)
 
+  def get_search_choices(self):
+    """
+    :rtype: SearchChoices|None
+    """
+    layer = self.network.get_search_choices(src=self)
+    if layer:
+      assert layer.search_choices
+      return layer.search_choices
+    return None
+
   def get_search_beam_size(self):
     """
     :return: beam size if there was a choice layer and we do search
     :rtype: int|None
     """
     if self.network.search_flag:
-      choices = self.network.get_search_choices(src=self)
+      choices = self.get_search_choices()
       if choices:
-        return choices.search_choices.beam_size
+        return choices.beam_size
     return None
 
   def get_batch_dim(self):
@@ -785,21 +795,6 @@ class SearchChoices(object):
      """
     self.beam_scores = scores
     self.owner.rec_vars_outputs["choice_scores"] = scores
-
-  def filter_seqs(self, seq_filter):
-    """
-    :param tf.Tensor seq_filter: (batch, beam) of type bool, which we want to keep
-    """
-    with tf.name_scope("search_filter_seqs"):
-      from TFUtil import expand_dims_unbroadcast, get_shape_dim
-      beam_size = get_shape_dim(self.beam_scores, axis=-1)
-      src_layer = self.src_layer
-      src_search = src_layer.search_choices
-      self.beam_scores = tf.where(seq_filter, self.beam_scores, src_search.beam_scores)
-      initial_src_beams = tf.range(0, beam_size, dtype=self.src_beams.dtype)  # (beam,)
-      initial_src_beams = expand_dims_unbroadcast(
-        initial_src_beams, axis=0, dim=get_shape_dim(self.beam_scores, axis=0))  # (batch, beam)
-      self.src_beams = tf.where(seq_filter, self.src_beams, initial_src_beams)
 
 
 class SourceLayer(LayerBase):

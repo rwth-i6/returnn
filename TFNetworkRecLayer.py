@@ -649,11 +649,13 @@ class _SubnetworkRecCell(object):
         if layer.get("loss"):
           get_templated_layer(layer_name)
 
-  def _construct(self, prev_outputs, prev_extra, i, data=None, classes=None, inputs_moved_out_tas=None, needed_outputs=("output",)):
+  def _construct(self, prev_outputs, prev_extra, i,
+                 data=None, classes=None,
+                 inputs_moved_out_tas=None, needed_outputs=("output",)):
     """
     :param dict[str,tf.Tensor] prev_outputs: outputs of the layers from the previous step
     :param dict[str,dict[str,tf.Tensor]] prev_extra: extra output / hidden states of the previous step for layers
-    :param tf.Tensor i: loop counter
+    :param tf.Tensor i: loop counter. scalar, int32, current step (time)
     :param tf.Tensor|None data: optional source data, shape e.g. (batch,dim)
     :param tf.Tensor|None classes: optional target classes, shape e.g. (batch,) if it is sparse
     :param dict[str,tf.TensorArray]|None inputs_moved_out_tas:
@@ -762,7 +764,6 @@ class _SubnetworkRecCell(object):
         return None
       return self.net._construct_layer(net_dict, name=name, get_layer=get_layer)
 
-    self.net.set_step_index(i)
     # Go through needed_outputs, e.g. "output".
     # And prev_layers_needed because they might not be resolved otherwise.
     for layer_name in sorted(needed_outputs) + sorted(self.prev_layers_needed):
@@ -1160,8 +1161,10 @@ class _SubnetworkRecCell(object):
       """
       # The inner scope name is a bit screwed up and this is nicer anyway.
       with reuse_name_scope(rec_layer._rec_scope.name + "/while_loop_body", absolute=True):
+        self.net.set_rec_step_info(
+          i, end_flag=seq_len_info[0] if seq_len_info else None, seq_lens=seq_len)
         # get next loop vars (net_vars)
-        from TFUtil import identity_op_nested
+        from TFUtil import identity_op_nested, select_src_beams
         from Util import sorted_values_from_dict, dict_zip
         prev_outputs_flat, prev_extra_flat = net_vars
         assert len(prev_outputs_flat) == len(self._initial_outputs)  # subset of self.prev_layers_needed
@@ -1190,34 +1193,18 @@ class _SubnetworkRecCell(object):
 
         if seq_len_info is not None:
           end_flag, dyn_seq_len = seq_len_info
+          choices = self.net.layers["end"].get_search_choices()
+          assert choices, "no search choices in layer %r" % self.net.layers["end"]
           with tf.name_scope("end_flag"):
-            # TODO: end_flag is (batch * beam_in,), probably a different beam than beam_out?
+            end_flag = select_src_beams(end_flag, src_beams=choices.src_beams)
             end_flag = tf.logical_or(end_flag, self.net.layers["end"].output.placeholder)  # (batch * beam,)
           with tf.name_scope("dyn_seq_len"):
-            # TODO: also wrong...
+            dyn_seq_len = select_src_beams(dyn_seq_len, src_beams=choices.src_beams)
             dyn_seq_len += tf.where(
               end_flag,
               constant_with_shape(0, shape=tf.shape(end_flag)),
               constant_with_shape(1, shape=tf.shape(end_flag)))  # (batch * beam,)
             seq_len_info = (end_flag, dyn_seq_len)
-        else:
-          end_flag = None
-        # We could use tf.cond() to return the previous or so, and min_seq_len
-        # to avoid the check if not needed. However, just filtering the result
-        # outside the loop is likely faster.
-        if collected_choices:
-          # For the search choices, we do it here so that we can easily get out the final beam scores.
-          with tf.name_scope("seq_filter_cond"):
-            if seq_len is not None:
-              seq_filter_cond = tf.less(i, seq_len, name="i_lt_seq_len")  # (batch * beam,)
-            else:
-              assert end_flag is not None
-              seq_filter_cond = tf.logical_not(end_flag, name="not_end_flag")
-            seq_filter_cond = tf.reshape(seq_filter_cond, [batch_dim, output_beam_size])  # (batch, beam)
-          # TODO wrong, beam idxs would not match. has to be done in ChoiceLayer
-          #for name in collected_choices:
-          #  with reuse_name_scope(name):
-          #    self.net.layers[name].search_choices.filter_seqs(seq_filter_cond)
         assert len(acc_tas) == len(outputs_to_accumulate)
         acc_tas = [
           acc_ta.write(i, out.get(), name="%s_acc_ta_write" % out.name)
@@ -1822,7 +1809,7 @@ class _TemplateLayer(LayerBase):
     return self.kwargs["beam_size"]
 
 
-class _StepIndexLayer(LayerBase):
+class RecStepInfoLayer(LayerBase):
   """
   Used by _SubnetworkRecCell.
   Represents the current step number.
@@ -1830,14 +1817,30 @@ class _StepIndexLayer(LayerBase):
 
   layer_class = ":i"
 
-  def __init__(self, i, **kwargs):
+  def __init__(self, i, end_flag=None, seq_lens=None, **kwargs):
     """
-    :param tf.Tensor i: scalar, int32
+    :param tf.Tensor i: scalar, int32, current step (time)
+    :param tf.Tensor|None end_flag: (batch,), bool, says that the current sequence has ended
+    :param tf.Tensor|None seq_lens: (batch,) int32, seq lens
     """
-    super(_StepIndexLayer, self).__init__(
+    super(RecStepInfoLayer, self).__init__(
       output=Data(name="i", shape=(), dtype="int32", sparse=False, placeholder=tf.expand_dims(i, axis=0)),
       **kwargs)
     self.step = i
+    self.end_flag = end_flag
+    self.seq_lens = seq_lens
+
+  def get_end_flag(self):
+    """
+    :return: (batch,) of type bool. batch might include beam size
+    :rtype: tf.Tensor
+    """
+    if self.end_flag is None:
+      assert self.seq_lens is not None
+      from TFUtil import reuse_name_scope_of_tensor
+      with reuse_name_scope_of_tensor(self.step, postfix="/end_flag"):
+        self.end_flag = tf.greater_equal(self.step, self.seq_lens)
+    return self.end_flag
 
 
 class RnnCellLayer(_ConcatInputLayer):
@@ -2131,9 +2134,6 @@ class ChoiceLayer(LayerBase):
       assert self.sources[0].output.dim == self.output.dim
       assert self.sources[0].output.shape == (self.output.dim,)
       # We are doing the search.
-      # We don't do any checking for sequence length here.
-      # The logic is implemented in `SearchChoices.filter_seqs()`.
-      # TODO this is wrong, we must do it here
       self.search_choices = SearchChoices(
         owner=self,
         beam_size=beam_size)
@@ -2174,7 +2174,11 @@ class ChoiceLayer(LayerBase):
           pass
         else:
           raise Exception("%r: invalid input type %r" % (self, input_type))
+        from TFUtil import filter_ended_scores
         scores_in_dim = self.sources[0].output.dim
+        scores_in = filter_ended_scores(
+          scores_in, end_flags=self.network.get_rec_step_info().get_end_flag(),
+          dim=scores_in_dim, batch_dim=net_batch_dim * scores_beam_in)
         scores_in = tf.reshape(scores_in, [net_batch_dim, scores_beam_in, scores_in_dim])  # (batch, beam_in, dim)
         with tf.control_dependencies([
               # See comment above. This checks that all is as expected.
@@ -2204,7 +2208,7 @@ class ChoiceLayer(LayerBase):
           from TFUtil import identity_with_debug_log
           labels = identity_with_debug_log(
             out=self._debug_out, x=labels, args={
-              "step": self.network.get_step_index() if self.network.have_step_index() else tf.constant(-1),
+              "step": self.network.get_rec_step_index() if self.network.have_rec_step_info() else tf.constant(-1),
               "scores_in": self.sources[0].output.placeholder,
               "scores_base": self.search_choices.src_layer.search_choices.beam_scores,
               "scores_combined": scores_in,

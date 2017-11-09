@@ -1790,7 +1790,7 @@ def flatten_with_seq_len_mask(x, seq_lens, time_major=False):
 
 def expand_dims_unbroadcast(x, axis, dim, name="expand_dims_unbroadcast"):
   """
-  :param tf.Tensor x:
+  :param tf.Tensor|float|int x:
   :param int|tf.Tensor axis: new axis
   :param int|tf.Tensor dim: dimension for axis
   :param str name: scope name
@@ -1798,6 +1798,7 @@ def expand_dims_unbroadcast(x, axis, dim, name="expand_dims_unbroadcast"):
   :rtype: tf.Tensor
   """
   with tf.name_scope(name):
+    x = tf.convert_to_tensor(x)
     x = tf.expand_dims(x, axis)
     if dim is not 1:
       new_ndim = x.get_shape().ndims
@@ -4142,3 +4143,95 @@ def nested_get_shapes(x):
   if isinstance(x, dict):
     return {k: nested_get_shapes(v) for (k, v) in x.items()}
   raise TypeError("invalid type %r of %r" % (type(x), x))
+
+
+@contextlib.contextmanager
+def same_context(x):
+  """
+  Will use the same context as `x`.
+  E.g. if `x` is a constant, it can be outside the loop,
+  so we will yield a context which is not inside the loop.
+
+  :param tf.Tensor|int|float|None|list[tf.Tensor|int|float] x:
+  :return: yields context (via tf.control_dependencies)
+  """
+  def get_tensors(v):
+    if isinstance(v, (list, tuple)):
+      for elem in v:
+        for t in get_tensors(elem):
+          yield t
+      return
+    if isinstance(v, (int, float, type(None))):
+      return
+    assert isinstance(v, tf.Tensor), "unexpected type %r" % type(v)
+    yield v
+  tensors = list(get_tensors(x))
+  if not tensors:
+    # No TF tensor given, so we can consider the input as constant
+    # and can use a clean context (e.g. not within the current loop or so).
+    with tf.control_dependencies(None) as dep:  # this will reset the context
+      yield dep
+    return
+  # There is currently no good way to get into the same context.
+  # Just keep using the current context.
+  yield None
+
+
+def select_src_beams(x, src_beams):
+  """
+  :param tf.Tensor x: (batch * src-beam, ...)
+  :param tf.Tensor src_beams: (batch, beam) -> src-beam-idx
+  :return: (batch * beam, ...)
+  :rtype: tf.Tensor
+  """
+  assert isinstance(x, tf.Tensor)
+  assert isinstance(src_beams, tf.Tensor)
+  with tf.name_scope("select_src_beams"):
+    src_beams.set_shape(tf.TensorShape([None, None]))
+    src_beams_shape = tf.shape(src_beams)
+    batch_dim, beam_dim = src_beams_shape[0], src_beams_shape[1]
+    x_ndim = x.get_shape().ndims
+    assert x_ndim is not None
+    x_shape = tf.shape(x)
+    x_shape_rem = [x_shape[i] for i in range(1, x_ndim)]
+    src_beam_dim = x_shape[0] // batch_dim
+    x = tf.reshape(x, [batch_dim, src_beam_dim] + x_shape_rem)  # (batch, src-beam, ...)
+    indices = nd_indices(src_beams)  # (batch, beam, 2)
+    x = tf.gather_nd(x, indices=indices)  # K=2, (batch, beam, ...)
+    x = tf.reshape(x, [batch_dim * beam_dim] + x_shape_rem)
+    return x
+
+
+def filter_ended_scores(x, end_flags, batch_dim=None, dim=None, score_zero=0.0, score_rem=-1.e30):
+  """
+  This can e.g. used before tf.nn.top_k to let only one beam through for an ended hypothesis.
+  Then, batch would also include the beam size, which does not matter here.
+
+  :param tf.Tensor x: (batch, dim)
+  :param tf.Tensor end_flags: (batch,)
+  :param tf.Tensor|int|None batch_dim:
+  :param tf.Tensor|int|None dim:
+  :param float score_zero: x[..., 0] will have this score where end_flag is True
+  :param float score_rem: x[..., 1:] will have this score where end_flag is False
+  :return: filtered x, (batch, dim)
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope("filter_ended_scores"):
+    end_flags = check_input_ndim(end_flags, 1)
+    x = check_dim_equal(x, 0, end_flags, 0)
+    x.set_shape(tf.TensorShape([
+      batch_dim if isinstance(batch_dim, int) else None,
+      dim if isinstance(dim, int) else None]))
+    if batch_dim is None:
+      batch_dim = tf.shape(end_flags)[0]
+    if dim is None:
+      dim = tf.shape(x)[-1]
+    with same_context(dim):  # force calculation outside loop if possible
+      filter_score = tf.where(
+        tf.equal(tf.range(dim), 0),
+        expand_dims_unbroadcast(score_zero, axis=0, dim=dim),
+        expand_dims_unbroadcast(score_rem, axis=0, dim=dim))  # (dim,)
+    with same_context([dim, batch_dim]):  # force calculation outside loop if possible
+      filter_score = expand_dims_unbroadcast(filter_score, axis=0, dim=batch_dim)  # (batch,dim)
+    x = tf.where(end_flags, filter_score, x)
+    return x

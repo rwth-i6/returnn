@@ -984,26 +984,38 @@ class TFNetwork(object):
           return batch_dim
     raise Exception("We cannot tell the batch dim.")
 
-  def set_step_index(self, i):
+  def set_rec_step_info(self, i, end_flag=None, seq_lens=None):
     """
     Used by _SubnetworkRecCell.
-    :param tf.Tensor i: scalar, int32
+    :param tf.Tensor i: scalar, int32, current step (time)
+    :param tf.Tensor|None end_flag: (batch,), bool, says that the current sequence has ended
+    :param tf.Tensor|None seq_lens: (batch,) int32, seq lens
     """
-    from TFNetworkRecLayer import _StepIndexLayer
-    self.layers[":i"] = _StepIndexLayer(i=i, name=":i", network=self)
+    from TFNetworkRecLayer import RecStepInfoLayer
+    self.layers[":i"] = RecStepInfoLayer(
+      name=":i", network=self, i=i, end_flag=end_flag, seq_lens=seq_lens)
 
-  def have_step_index(self):
+  def have_rec_step_info(self):
     return ":i" in self.layers
 
-  def get_step_index(self):
+  def get_rec_step_info(self):
     """
+    Assumes that have_rec_step_info is True.
+    :rtype: TFNetworkRecLayer.RecStepInfoLayer
+    """
+    from TFNetworkRecLayer import RecStepInfoLayer
+    layer = self.layers[":i"]
+    assert isinstance(layer, RecStepInfoLayer)
+    return layer
+
+  def get_rec_step_index(self):
+    """
+    Assumes that have_rec_step_info is True.
+
     :rtype: tf.Tensor
     :return: scalar, int32
     """
-    from TFNetworkRecLayer import _StepIndexLayer
-    layer = self.layers[":i"]
-    assert isinstance(layer, _StepIndexLayer)
-    return layer.step
+    return self.get_rec_step_info().step
 
 
 class TFNetworkParamsSerialized(object):
