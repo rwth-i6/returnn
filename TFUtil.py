@@ -2136,8 +2136,10 @@ class OpCodeCompiler(NativeCodeCompiler):
     tf_include = tf.sysconfig.get_include()  # e.g. "...python2.7/site-packages/tensorflow/include"
     tf_include_nsync = tf_include + "/external/nsync/public"  # https://github.com/tensorflow/tensorflow/issues/2412
     include_paths = list(include_paths) + [tf_include, tf_include_nsync]
-    # https://github.com/tensorflow/tensorflow/issues/13607
-    ld_flags = list(ld_flags) + ["-L%s" % tf.sysconfig.get_lib(), "-ltensorflow_framework"]
+    ld_flags = list(ld_flags)
+    if have_min_tf_version((1, 4)):
+      # https://github.com/tensorflow/tensorflow/issues/13607
+      ld_flags += ["-L%s" % tf.sysconfig.get_lib(), "-ltensorflow_framework"]
     super(OpCodeCompiler, self).__init__(include_paths=include_paths, ld_flags=ld_flags, **kwargs)
     self._tf_mod = None
 
