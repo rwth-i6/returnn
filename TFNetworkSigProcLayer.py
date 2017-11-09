@@ -50,21 +50,13 @@ class BatchMedianPoolingLayer(_ConcatInputLayer):
 
     input_placeholder = self.input_data.get_placeholder_as_batch_major()
 
-    # loop over batch pools and extract median
-    pool_start_idx = tf.constant(0)
-    output = tf.Variable(tf.zeros([1, 1, 1], dtype=tf.float32), dtype=tf.float32, trainable=False)
-
-    def iteratePools(pool_start_idx, output):
-        return tf.less(pool_start_idx, tf.shape(input_placeholder)[self.output.batch_dim_axis])
-
-    def poolMedian(pool_start_idx, output):
-      pool = input_placeholder[pool_start_idx:(pool_start_idx + pool_size), :, :]
-      median = tf.transpose(tf.reshape(tf.nn.top_k(tf.transpose(pool, [self.output.time_dim_axis, self.output.feature_dim_axis, self.output.batch_dim_axis]), tf.cast(tf.ceil(tf.cast(tf.shape(pool)[self.output.batch_dim_axis], dtype=tf.float32) / 2), dtype=tf.int32)).values[:, :, -1], (tf.shape(pool)[1], tf.shape(pool)[2], 1)), [2, 0, 1])
-      output = tf.cond(tf.greater(pool_start_idx, 0), lambda: tf.concat([output, median], axis=self.output.batch_dim_axis), lambda: median)
-      return tf.add(pool_start_idx, pool_size), output
-
-    r = tf.while_loop(iteratePools, poolMedian, [pool_start_idx, output], shape_invariants=[pool_start_idx.get_shape(), tf.TensorShape([None, None, None])])
-    self.output.placeholder = r[-1]
+    # get median over pooled batches
+    # - reshape input for usage with tf.nn.top_k
+    reshaped_input = tf.reshape(tf.transpose(input_placeholder, [1, 2, 0]), shape=(tf.shape(input_placeholder)[1], tf.shape(input_placeholder)[2], tf.shape(input_placeholder)[0] / pool_size, pool_size))
+    # - get median of each pool
+    median = tf.nn.top_k(reshaped_input, k=tf.cast(tf.ceil(tf.constant(pool_size, dtype=tf.float32) / 2), dtype=tf.int32)).values[:, :, :, -1]
+    median_batch_major = tf.transpose(median, [2, 0, 1])
+    self.output.placeholder = median_batch_major
     self.output.size_placeholder = {self.output.time_dim_axis_excluding_batch: tf.strided_slice(self.input_data.size_placeholder[self.input_data.time_dim_axis_excluding_batch], [0], tf.shape(self.input_data.size_placeholder[self.input_data.time_dim_axis_excluding_batch]), [pool_size])}
 
   @classmethod
@@ -103,7 +95,7 @@ class MelFilterbankLayer(_ConcatInputLayer):
 
     input_placeholder = self.input_data.get_placeholder_as_batch_major()
 
-    mel_fbank_mat = tfMelFilterBank(0, sampling_rate / 2, sampling_rate, fft_size, nr_of_filters)
+    mel_fbank_mat = tfMelFilterBank(0, sampling_rate / 2.0, sampling_rate, fft_size, nr_of_filters)
     self.output.placeholder = tf.einsum('btf,bfc->btc', input_placeholder, tf.tile(tf.expand_dims(mel_fbank_mat, axis=0), [tf.shape(input_placeholder)[0], 1, 1]))
     self.output.size_placeholder = {0: self.input_data.size_placeholder[self.input_data.time_dim_axis_excluding_batch]}
 
@@ -136,28 +128,15 @@ class MaskBasedGevBeamformingLayer(LayerBase):
     from tfSi6Proc.audioProcessing.enhancement.beamforming import TfMaskBasedGevBeamformer
 
     complexSpectrogram = self.sources[0].output.get_placeholder_as_batch_major()
-    complexSpectrogram = tf.transpose(tf.reshape(complexSpectrogram, (tf.shape(complexSpectrogram)[0], tf.shape(complexSpectrogram)[1], nr_of_channels, tf.shape(complexSpectrogram)[2] / nr_of_channels)), [0, 1, 3, 2])
+    complexSpectrogram = tf.transpose(tf.reshape(complexSpectrogram, (tf.shape(complexSpectrogram)[0], tf.shape(complexSpectrogram)[1], nr_of_channels, tf.shape(complexSpectrogram)[2] // nr_of_channels)), [0, 1, 3, 2])
     masks = tf.transpose(self.sources[1].output.placeholder, [self.sources[1].output.batch_dim_axis, self.sources[1].output.time_dim_axis, self.sources[1].output.feature_dim_axis])
     masks = tf.transpose(tf.reshape(masks, (tf.shape(masks)[0], tf.shape(masks)[1], nr_of_channels, tf.shape(masks)[2] / nr_of_channels)), [0, 1, 3, 2])
-    noiseMasks = masks[:, :, :(tf.shape(masks)[2] / 2), :]
-    speechMasks = masks[:, :, (tf.shape(masks)[2] / 2):, :]
+    noiseMasks = masks[:, :, :(tf.shape(masks)[2] // 2), :]
+    speechMasks = masks[:, :, (tf.shape(masks)[2] // 2):, :]
 
-    with tf.name_scope("beamformingBatchLoop"):
-      batchIdx = tf.constant(0)
-      output = tf.Variable(tf.zeros([1, 1, 1], dtype=tf.complex64), dtype=tf.complex64, trainable=False)
-
-      def iterateBatch(batchIdx, output):
-          return tf.less(batchIdx, tf.shape(complexSpectrogram)[0])
-
-      def beamform(batchIdx, output):
-        gevBf = TfMaskBasedGevBeamformer(tfFreqDomInput=complexSpectrogram[batchIdx, :, :, :], tfNoiseMask=noiseMasks[batchIdx, :, :, :], tfSpeechMask=speechMasks[batchIdx, :, :, :], postFilterId=postfilter_id)
-        bfOut = gevBf.getFrequencyDomainOutputSignal()
-        bfOut = tf.reshape(bfOut, (1, tf.shape(bfOut)[0], tf.shape(bfOut)[1]))
-        output = tf.cond(tf.greater(batchIdx, 0), lambda: tf.concat([output, bfOut], axis=self.output.batch_dim_axis), lambda: bfOut)
-        return tf.add(batchIdx, 1), output
-
-      r = tf.while_loop(iterateBatch, beamform, [batchIdx, output], shape_invariants=[batchIdx.get_shape(), tf.TensorShape([None, None, None])])
-      self.output.placeholder = r[-1]
+    gevBf = TfMaskBasedGevBeamformer(flag_inputHasBatch=1, tfFreqDomInput=complexSpectrogram, tfNoiseMask=noiseMasks, tfSpeechMask=speechMasks, postFilterId=postfilter_id)
+    bfOut = gevBf.getFrequencyDomainOutputSignal()
+    self.output.placeholder = bfOut
 
   @classmethod
   def get_out_data_from_opts(cls, out_type={}, n_out=None, **kwargs):
