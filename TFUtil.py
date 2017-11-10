@@ -4229,10 +4229,8 @@ def filter_ended_scores(x, end_flags, batch_dim=None, dim=None, score_zero=0.0, 
     if dim is None:
       dim = tf.shape(x)[-1]
     with same_context(dim):  # force calculation outside loop if possible
-      filter_score = tf.where(
-        tf.equal(tf.range(dim), 0),
-        expand_dims_unbroadcast(score_zero, axis=0, dim=dim),
-        expand_dims_unbroadcast(score_rem, axis=0, dim=dim))  # (dim,)
+      filter_score = tf.one_hot(
+        0, dim, dtype=tf.float32, on_value=score_zero, off_value=score_rem)  # (dim,)
     with same_context([dim, batch_dim]):  # force calculation outside loop if possible
       filter_score = expand_dims_unbroadcast(filter_score, axis=0, dim=batch_dim)  # (batch,dim)
     x = tf.where(end_flags, filter_score, x)
