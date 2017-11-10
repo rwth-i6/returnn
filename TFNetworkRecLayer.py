@@ -901,7 +901,7 @@ class _SubnetworkRecCell(object):
       input_beam_size = None  # type: int | None
       if rec_layer.input_data:
         with tf.name_scope("x_tensor_array"):
-          x, seq_len = rec_layer._get_input()  # x will be (time,batch,..,dim)
+          x, input_seq_len = rec_layer._get_input()  # x will be (time,batch,..,dim)
           x_shape = tf.shape(x, name="x_shape")
           x_ta = tf.TensorArray(
             name="x_ta",
@@ -916,17 +916,27 @@ class _SubnetworkRecCell(object):
           assert self.parent_rec_layer.input_data.beam_size == input_beam_size
       else:
         x_ta = None
-        if rec_layer.output.size_placeholder:
-          # see LayerBase._post_init_output(). could be set via target or size_target...
-          seq_len = rec_layer.output.size_placeholder[0]
-        else:
-          seq_len = None
-      if seq_len is not None:
+        input_seq_len = None
+      if rec_layer.output.size_placeholder and not self.parent_net.search_flag:
+        # See LayerBase._post_init_output(). could be set via target or size_target...
+        # This should only be the case in training.
+        fixed_seq_len = rec_layer.output.size_placeholder[0]
+      else:
+        fixed_seq_len = None
+      if fixed_seq_len is None and "end" not in self.layer_data_templates:
+        # If 'end' layer is not existing, the length must be defined.
+        # In some cases (training with given target) we know the target sequence length.
+        # Otherwise, by convention, it is defined by the input length
+        # (assuming that there is an input which we iterate over).
+        assert input_seq_len is not None, "length is not defined. provide an 'end' layer"
+        fixed_seq_len = input_seq_len
+      if fixed_seq_len is not None:
         with tf.name_scope("check_seq_len_batch_size"):
-          seq_len = check_input_dim(seq_len, axis=0, dim=batch_dim * (input_beam_size or 1))
-        max_seq_len = tf.reduce_max(seq_len, name="max_seq_len")
+          fixed_seq_len = check_input_dim(fixed_seq_len, axis=0, dim=batch_dim * (input_beam_size or 1))
+        max_seq_len = tf.reduce_max(fixed_seq_len, name="max_seq_len")
         have_known_seq_len = True
       else:
+        assert "end" in self.layer_data_templates, "length not defined, provide 'end' layer"
         assert rec_layer._max_seq_len, "must specify max_seq_len in rec layer"
         max_seq_len = tf.constant(rec_layer._max_seq_len, name="max_seq_len_const")
         have_known_seq_len = False
@@ -942,10 +952,10 @@ class _SubnetworkRecCell(object):
         y = y_data.get_placeholder_as_time_major()
         with tf.name_scope("y_max_len"):
           y_max_len = tf.shape(y)[0]
-          if seq_len is not None:
-            with tf.control_dependencies([tf.assert_equal(max_seq_len, y_max_len,
+          if input_seq_len is not None:
+            with tf.control_dependencies([tf.assert_equal(tf.reduce_max(input_seq_len), y_max_len,
                 ["RecLayer %r with sources %r." % (rec_layer.name, rec_layer.sources),
-                 " The length of the sources (", max_seq_len,
+                 " The length of the sources (", tf.reduce_max(input_seq_len),
                  ") differ from the length of the target (", y_max_len, ")."])]):
               y_max_len = tf.identity(y_max_len)
         y_ta = tf.TensorArray(
@@ -1037,19 +1047,20 @@ class _SubnetworkRecCell(object):
         if collected_choices:
           output_beam_size = self.layer_data_templates["output"].get_search_beam_size()
           assert output_beam_size is not None
-          if seq_len is not None:
+          if fixed_seq_len is not None:
             assert input_beam_size in (1, None)
             from TFUtil import tile_transposed
-            seq_len = tile_transposed(seq_len, axis=0, multiples=output_beam_size)  # (batch * beam,)
+            fixed_seq_len = tile_transposed(fixed_seq_len, axis=0, multiples=output_beam_size)  # (batch * beam,)
 
       if not have_known_seq_len:
-        assert "end" in self.layer_data_templates, (
-          "You need to have an 'end' layer in your rec subnet if the generated seq len is unknown.")
+        assert "end" in self.layer_data_templates, "You need to have an 'end' layer in your rec subnet."
         end_template = self.layer_data_templates["end"]
         needed_outputs.add("end")
         assert tf.as_dtype(end_template.output.dtype) is tf.bool
         assert end_template.output.batch_shape == (None,)  # (batch*beam,)
-        assert end_template.output.sparse
+      else:
+        assert have_known_seq_len, (
+          "You need to have an 'end' layer in your rec subnet if the generated seq len is unknown.")
 
       if self.parent_rec_layer._optimize_move_layers_out:
         self._move_outside_loop(needed_outputs=needed_outputs)
@@ -1121,12 +1132,12 @@ class _SubnetworkRecCell(object):
             # Create only Tensor arrays for those which we use inside the loop.
             if not self._input_layer_used_inside_loop(layer_name):
               continue
-            assert seq_len is not None
+            assert fixed_seq_len is not None
             inp_ta = tf.TensorArray(
               name="%s_ta" % layer_name,
               dtype=self.layer_data_templates[layer_name].output.dtype,
               element_shape=self.layer_data_templates[layer_name].output.batch_shape,
-              size=tf.reduce_max(seq_len),
+              size=tf.reduce_max(fixed_seq_len),
               infer_shape=True)
             inp_ta = inp_ta.unstack(
               self.input_layers_net.layers[layer_name].output.get_placeholder_as_time_major(),
@@ -1162,7 +1173,7 @@ class _SubnetworkRecCell(object):
       # The inner scope name is a bit screwed up and this is nicer anyway.
       with reuse_name_scope(rec_layer._rec_scope.name + "/while_loop_body", absolute=True):
         self.net.set_rec_step_info(
-          i, end_flag=seq_len_info[0] if seq_len_info else None, seq_lens=seq_len)
+          i, end_flag=seq_len_info[0] if seq_len_info else None, seq_lens=fixed_seq_len)
         # get next loop vars (net_vars)
         from TFUtil import identity_op_nested, select_src_beams
         from Util import sorted_values_from_dict, dict_zip
@@ -1231,7 +1242,7 @@ class _SubnetworkRecCell(object):
     shape_invariants = (
       tf.TensorShape(()),
       self.get_init_loop_vars_shape_invariants(),
-      [tf.TensorShape(None) for ta in init_acc_tas])
+      [tf.TensorShape(None) for _ in init_acc_tas])
     if not have_known_seq_len:
       # See body().
       out_batch_dim = self.layer_data_templates["end"].get_batch_dim()
@@ -1249,6 +1260,8 @@ class _SubnetworkRecCell(object):
     else:  # no layers inside loop, all optimized out
       final_loop_vars = init_loop_vars
     if have_known_seq_len:
+      assert fixed_seq_len is not None
+      seq_len = fixed_seq_len
       _, final_net_vars, final_acc_tas = final_loop_vars
     else:
       _, final_net_vars, final_acc_tas, (_, seq_len) = final_loop_vars
