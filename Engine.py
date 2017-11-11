@@ -243,6 +243,7 @@ class Engine:
 
     epoch, model_epoch_filename = self.get_epoch_model(config)
     assert model_epoch_filename or self.start_epoch
+    self.epoch = epoch or self.start_epoch
 
     if model_epoch_filename:
       print("loading weights from", model_epoch_filename, file=log.v2)
