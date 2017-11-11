@@ -4098,9 +4098,13 @@ def mem_usage_for_dev(dev_name):
   Currently only works for GPU devices.
   """
   def get():
-    from tensorflow.contrib.memory_stats import MaxBytesInUse
+    from tensorflow.contrib import memory_stats
+    try:
+      bytes_in_use = memory_stats.BytesInUse  # since TF 1.4.0
+    except AttributeError:
+      bytes_in_use = memory_stats.MaxBytesInUse
     with tf.device(dev_name):
-      return MaxBytesInUse()
+      return bytes_in_use()
 
   assert dev_name.startswith("/")  # e.g. "/cpu:0" or "/gpu:0"
   scope_name = dev_name[1:].replace(":", "")  # e.g. "cpu0" or "gpu0"
