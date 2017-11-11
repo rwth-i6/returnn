@@ -2189,9 +2189,10 @@ class ChoiceLayer(LayerBase):
             end_flags = end_flags[:, :base_beam_in]  # see scores_in below
             # Normalized scores, so we evaluate score_t/len.
             # If seq ended, score_t/t == score_{t-1}/(t-1), thus score_t = score_{t-1}*(t/(t-1))
+            # Because we count with EOS symbol, shifted by one.
             scores_base *= tf.where(
               end_flags,
-              tf.ones(tf.shape(end_flags)) * (tf.to_float(t) / tf.to_float(tf.maximum(t - 1, 1))),
+              tf.ones(tf.shape(end_flags)) * (tf.to_float(t + 1) / tf.to_float(t)),
               tf.ones(tf.shape(end_flags)))
         scores_base = tf.expand_dims(scores_base, axis=-1)  # (batch, beam_in, dim)
         scores_in = self.sources[0].output.placeholder  # (batch * beam_in, dim)

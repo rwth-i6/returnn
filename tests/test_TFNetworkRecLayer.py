@@ -11,6 +11,7 @@ import os
 sys.path += ["."]  # Python 3 hack
 sys.path += [os.path.dirname(os.path.abspath(__file__)) + "/.."]
 from nose.tools import assert_equal, assert_is_instance
+from numpy.testing.utils import assert_almost_equal, assert_allclose
 import unittest
 import numpy.testing
 from pprint import pprint
@@ -666,6 +667,122 @@ def test_search_no_rec_explicit():
         assert out_v.shape[0] == n_batch, "t %i, k %r, v %r" % (t, k, v)
         out_v = out_v[0]
         assert_equal(v, out_v.tolist(), "t %i, k %r" % (t, k))
+  print("Seems fine.")
+
+
+def test_search_no_rec_explicit_dyn_len():
+  from TFNetworkRecLayer import _SubnetworkRecCell
+  beam_size = 3
+  logits = numpy.array([
+    [-1., -2., -3., -9.],
+    [-0.6, -6., -0.5, -2.],
+    [-0.4, -0.6, -0.7, -1.]], dtype="float32")
+  # Let the 0 label be the EOS symbol. We use length normalization.
+  # Labels/scores of each beam in search should be:
+  # frame 0: labels [0, 1, 2], scores [-1., -2., -3.], source beam idxs [0, 0, 0]
+  # frame 1: labels [0, 2, 0], scores [-2., -2.5, -2.6], source beam idxs [0, 1, 1]
+  # frame 2: labels [0, 0, 1], scores [-2.9, -3., -3.1], source beam idxs [1, 0, 1]
+  # Thus, the final three label seqs of the beam search should be:
+  # - [1, 2, 0] with score -2.9
+  # - [0, 0, 0] with score -3.
+  # - [1, 2, 1] with score -3.1
+  expected_final_seqs = [[1, 2, 0], [0, 0, 0], [1, 2, 1]]
+  expected_final_seq_lens = [2, 0, 3]
+  expected_debug_out = [
+    {"src_beam_idxs": [0, 0, 0], "scores": [-1., -2., -3.], "labels": [0, 1, 2], "step": 0},
+    {"src_beam_idxs": [0, 1, 1], "scores": [-2., -2.5, -2.6], "labels": [0, 2, 0], "step": 1},
+    {"src_beam_idxs": [1, 0, 1], "scores": [-2.9, -3., -3.1], "labels": [0, 0, 1], "step": 2},
+  ]
+  assert len(expected_final_seqs) == len(expected_debug_out) == beam_size
+  n_time = 3
+  n_classes = 4
+  assert_equal(logits.shape, (n_time, n_classes))
+  n_batch = 1
+  logits = numpy.expand_dims(logits, axis=0)
+  assert_equal(logits.shape, (n_batch, n_time, n_classes))
+  print("logits:")
+  print(logits)
+
+  ChoiceLayer._debug_out = []
+
+  net_dict = {
+    "output": {"class": "rec", "from": ["data"], "max_seq_len": n_time, "unit": {
+      "output": {
+        "class": "choice", "from": ["data:source"], "input_type": "log_prob",
+        "explicit_search_source": "prev:output", 'initial_output': 0,
+        "beam_size": beam_size, "length_normalization": True,
+        "target": "classes"},
+      "end": {"class": "compare", "from": ["output"], "value": 0}
+    }}
+  }
+  extern_data = ExternData({
+    "data": {"dim": n_classes},
+    "classes": {"dim": n_classes, "sparse": True, "available_for_inference": False}})
+  net = TFNetwork(
+    extern_data=extern_data, search_flag=True, train_flag=False, eval_flag=False)
+  net.construct_from_dict(net_dict)
+  assert_equal(net.used_data_keys, {"data"})  # not classes
+  rec_layer = net.layers["output"]
+  assert isinstance(rec_layer, RecLayer)
+  subnet = rec_layer.cell
+  assert isinstance(subnet, _SubnetworkRecCell)
+  assert_equal(set(subnet.layers_in_loop), {"output", "end"})
+  sub_layer = subnet.net.layers["output"]
+  assert isinstance(sub_layer, ChoiceLayer)
+  assert_equal(sub_layer.output.beam_size, beam_size)
+  assert_equal(rec_layer.output.beam_size, beam_size)
+  input_search_choices = net.get_search_choices(sources=rec_layer.sources)
+  assert not input_search_choices
+  assert rec_layer.output.is_time_major
+  assert_equal(rec_layer.get_search_beam_size(), beam_size)
+  feed_dict = {
+    net.extern_data.data["data"].placeholder: logits,
+    net.extern_data.data["data"].size_placeholder[0]: [n_time]}
+  with tf.Session() as session:
+    assert_equal(session.run(net.get_data_batch_dim(), feed_dict=feed_dict), n_batch)
+    out, out_sizes = session.run(
+      (rec_layer.output.placeholder, rec_layer.output.get_sequence_lengths()),
+      feed_dict=feed_dict)
+    print("output seq lens:", out_sizes)
+    assert isinstance(out_sizes, numpy.ndarray)
+    assert isinstance(out, numpy.ndarray)
+    assert_equal(out_sizes.shape, (n_batch * beam_size,))
+    assert_equal(out.shape, (n_time, n_batch * beam_size))
+  out = numpy.reshape(out, (n_time, n_batch, beam_size))
+  print("output:")
+  print(out)
+
+  print("Debug out:")
+  debug_out = ChoiceLayer._debug_out
+  ChoiceLayer._debug_out = []
+  pprint(debug_out)
+
+  assert_equal(out_sizes.tolist(), expected_final_seq_lens)
+
+  # Assume that beams are sorted by score. See above.
+  for beam in range(beam_size):
+    out_seq = out[:, 0, beam].tolist()
+    expected_seq = expected_final_seqs[beam]
+    print("beam %i, out seq %r, expected seq %r" % (beam, out_seq, expected_seq))
+    assert_equal(out_seq, expected_final_seqs[beam])
+
+  assert len(debug_out) == n_time
+  # Could be that it is not in order (because of parallel execution of the loop).
+  debug_out = sorted(debug_out, key=lambda k: k["step"])
+  for t in range(n_time):
+    debug_t = debug_out[t]
+    expected_debug_t = expected_debug_out[t]
+    assert isinstance(debug_t, dict) and isinstance(expected_debug_t, dict)
+    for k, v in sorted(expected_debug_t.items()):
+      assert k in debug_t
+      out_v = debug_t[k]
+      if isinstance(v, int):
+        assert_equal(v, out_v)
+      else:
+        assert isinstance(out_v, numpy.ndarray)
+        assert out_v.shape[0] == n_batch, "t %i, k %r, v %r" % (t, k, v)
+        out_v = out_v[0]
+        assert_allclose(v, out_v.tolist(), err_msg="t %i, k %r" % (t, k))
   print("Seems fine.")
 
 
