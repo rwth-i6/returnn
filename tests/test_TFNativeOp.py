@@ -695,7 +695,7 @@ def check_lstm_grad_ops_single(op1, op2, name1, name2, dy, dd, rtol=1e-7, exclud
       v1 = (v1 * vmask)[start_::step]
       v2 = (v2 * vmask)[start_::step]
     print("check", k)
-    assert_allclose(v1, v2, rtol=rtol)
+    assert_allclose(v1, v2, rtol=rtol, err_msg="no match for %s" % k)
 
 
 def check_lstm_grad_ops(name1, name2, **kwargs):
