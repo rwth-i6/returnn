@@ -476,7 +476,7 @@ class RecLayer(_ConcatInputLayer):
     :return: output of shape (time, batch, dim)
     :rtype: tf.Tensor
     """
-    from TFUtil import dot, sequence_mask_time_major, directed
+    from TFUtil import dot, sequence_mask_time_major, directed, to_int32_64
     assert self._max_seq_len is None
     assert self.input_data
     x, seq_len = self._get_input()
@@ -489,7 +489,7 @@ class RecLayer(_ConcatInputLayer):
           name="W", shape=(self.input_data.dim, cell.n_input_dim), dtype=tf.float32,
           initializer=self._fwd_weights_initializer)
         if self.input_data.sparse:
-          x = tf.nn.embedding_lookup(W, x)
+          x = tf.nn.embedding_lookup(W, to_int32_64(x))
         else:
           x = dot(x, W)
         b = tf.get_variable(name="b", shape=(cell.n_input_dim,), dtype=tf.float32, initializer=self._bias_initializer)

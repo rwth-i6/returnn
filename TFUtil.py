@@ -4239,3 +4239,15 @@ def filter_ended_scores(x, end_flags, batch_dim=None, dim=None, score_zero=0.0, 
       filter_score = expand_dims_unbroadcast(filter_score, axis=0, dim=batch_dim)  # (batch,dim)
     x = tf.where(end_flags, filter_score, x)
     return x
+
+
+def to_int32_64(x):
+  """
+  :param tf.Tensor x: dtype int8, int16, int32, int64
+  :rtype: tf.Tensor
+  :return: dtype int32 or int64
+  """
+  if x.dtype in [tf.int32, tf.int64]:
+    return x
+  assert x.dtype in [tf.int8, tf.int16]
+  return tf.cast(x, tf.int32)

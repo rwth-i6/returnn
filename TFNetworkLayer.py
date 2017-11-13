@@ -3266,13 +3266,14 @@ class CrossEntropyLoss(Loss):
     return out
 
   def get_value(self):
+    from TFUtil import to_int32_64
     with tf.name_scope("loss_ce"):
       log_clip_values = (1e-32, 1e32)  # only used for non-fused path
       assert self.target.ndim_dense == self.output.ndim_dense
       if self.target.sparse:
         if self.output_before_softmax_flat is not None:
           out = tf.nn.sparse_softmax_cross_entropy_with_logits(
-            logits=self.output_before_softmax_flat, labels=self.target_flat)
+            logits=self.output_before_softmax_flat, labels=to_int32_64(self.target_flat))
         else:
           print("Warning: using numerical unstable sparse Cross-Entropy loss calculation", file=log.v3)
           out = -tf.log(tf.clip_by_value(self.get_output_target_scores(), *log_clip_values))

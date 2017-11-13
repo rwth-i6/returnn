@@ -257,7 +257,7 @@ class LmDataset(CachedDataset2):
         else:
           orth_debug_str = repr("".join(orth_syms))
         try:
-          data = numpy.array(map(self.orth_symbols_map.__getitem__, orth_syms), dtype=self.dtype)
+          data = numpy.array(list(map(self.orth_symbols_map.__getitem__, orth_syms)), dtype=self.dtype)
         except KeyError as e:
           if self.log_skipped_seqs:
             print("LmDataset: skipping sequence %s because of missing orth symbol: %s" % (orth_debug_str, e), file=log.v4)
@@ -284,6 +284,10 @@ class LmDataset(CachedDataset2):
 
 
 def _is_bliss(filename):
+  """
+  :param str filename:
+  :rtype: bool
+  """
   try:
     corpus_file = open(filename, 'rb')
     if filename.endswith(".gz"):
