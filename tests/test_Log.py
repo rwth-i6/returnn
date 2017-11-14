@@ -53,7 +53,7 @@ def test_returnn_startup():
   out = run([py, "rnn.py", "-x", "nop"])
   ls = out.splitlines()
   assert 3 <= len(ls) <= 10  # not fixed because might change
-  assert_equal(count_start_with(ls, "CRNN starting up, version "), 1)
+  assert_equal(count_start_with(ls, "RETURNN starting up, version "), 1)
   assert_equal(count_start_with(ls, "Theano: "), 1)
   assert_in("Task: No-operation", ls)
 
@@ -62,8 +62,8 @@ def test_returnn_startup_verbose():
   out = run([py, "rnn.py", "-x", "nop", "++log_verbosity", "5"])
   ls = out.splitlines()
   assert 3 <= len(ls) <= 10  # not fixed because might change
-  assert_equal(count_start_with(ls, "CRNN starting up, version "), 1)
-  assert_equal(count_start_with(ls, "CRNN command line options: "), 1)
+  assert_equal(count_start_with(ls, "RETURNN starting up, version "), 1)
+  assert_equal(count_start_with(ls, "RETURNN command line options: "), 1)
   assert_equal(count_start_with(ls, "Theano: "), 1)
   assert_in("Task: No-operation", ls)
   assert_in("Quitting", ls)
@@ -74,7 +74,7 @@ def test_returnn_tf_startup():
   ls = out.splitlines()
   ls = [l for l in ls if "tensorflow/core/" not in l]  # filter out TF warnings
   assert 3 <= len(ls) <= 40, "\n".join(ls)  # not fixed because might change
-  assert_equal(count_start_with(ls, "CRNN starting up, version "), 1)
+  assert_equal(count_start_with(ls, "RETURNN starting up, version "), 1)
   assert_equal(count_start_with(ls, "TensorFlow: "), 1)
   assert_in("Task: No-operation", ls)
   assert_in("Quitting", ls)
