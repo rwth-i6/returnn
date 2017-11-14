@@ -595,10 +595,12 @@ class Engine(object):
     # And also initialize the network. That depends on some vars here such as pretrain.
     self.init_network_from_config(config)
 
-  def init_network_from_config(self, config):
+  def init_network_from_config(self, config=None):
     """
-    :param Config.Config config:
+    :param Config.Config|None config:
     """
+    if not config:
+      config = self.config
     self.model_filename = config.value('model', None)
     self.pretrain = pretrainFromConfig(config)
     self.max_seqs = config.int('max_seqs', -1)

@@ -80,10 +80,16 @@ def initConfig(configFilename=None, commandLineOptions=(), extra_updates=None):
   global config
   config = Config()
 
-  config_filename_by_cmd_line = None
-  if commandLineOptions and commandLineOptions[0][:1] not in ["-", "+"]:
-    # Assume that this is a config filename.
-    config_filename_by_cmd_line, commandLineOptions = commandLineOptions[0], commandLineOptions[1:]
+  config_filenames_by_cmd_line = []
+  if commandLineOptions:
+    # Assume that the first argument prefixed with "+" or "-" and all following is not a config file.
+    i = 0
+    for arg in commandLineOptions:
+      if arg[:1] in "-+":
+        break
+      config_filenames_by_cmd_line.append(arg)
+      i += 1
+    commandLineOptions = commandLineOptions[i:]
 
   if extra_updates:
     config.update(extra_updates)
@@ -91,8 +97,8 @@ def initConfig(configFilename=None, commandLineOptions=(), extra_updates=None):
     config.parse_cmd_args(commandLineOptions)
   if configFilename:
     config.load_file(configFilename)
-  if config_filename_by_cmd_line:
-    config.load_file(config_filename_by_cmd_line)
+  for fn in config_filenames_by_cmd_line:
+    config.load_file(fn)
   if extra_updates:
     config.update(extra_updates)
   if commandLineOptions:
@@ -283,15 +289,15 @@ def initEngine(devices):
     raise NotImplementedError
 
 
-def crnnGreeting(configFilename=None, commandLineOptions=None):
-  print("CRNN starting up, version %s, pid %i, cwd %s" % (
+def returnnGreeting(configFilename=None, commandLineOptions=None):
+  print("RETURNN starting up, version %s, pid %i, cwd %s" % (
     describe_crnn_version(), os.getpid(), os.getcwd()), file=log.v3)
   if configFilename:
-    print("CRNN config: %s" % configFilename, file=log.v4)
+    print("RETURNN config: %s" % configFilename, file=log.v4)
     if os.path.islink(configFilename):
-      print("CRNN config is symlink to: %s" % os.readlink(configFilename), file=log.v4)
+      print("RETURNN config is symlink to: %s" % os.readlink(configFilename), file=log.v4)
   if commandLineOptions is not None:
-    print("CRNN command line options: %s" % (commandLineOptions,), file=log.v4)
+    print("RETURNN command line options: %s" % (commandLineOptions,), file=log.v4)
 
 
 def initBackendEngine():
@@ -312,8 +318,8 @@ def initBackendEngine():
 def init(configFilename=None, commandLineOptions=(), config_updates=None, extra_greeting=None):
   """
   :param str|None configFilename:
-  :param tuple[str]|list[str]|None commandLineOptions:
-  :param dict[str]|None config_updates:
+  :param tuple[str]|list[str]|None commandLineOptions: e.g. sys.argv[1:]
+  :param dict[str]|None config_updates: see :func:`initConfig`
   :param str|None extra_greeting:
   """
   initBetterExchook()
@@ -325,7 +331,7 @@ def init(configFilename=None, commandLineOptions=(), config_updates=None, extra_
   initLog()
   if extra_greeting:
     print(extra_greeting, file=log.v1)
-  crnnGreeting(configFilename=configFilename, commandLineOptions=commandLineOptions)
+  returnnGreeting(configFilename=configFilename, commandLineOptions=commandLineOptions)
   initBackendEngine()
   initFaulthandler()
   if BackendEngine.is_theano_selected():
