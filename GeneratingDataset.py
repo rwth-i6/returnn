@@ -24,7 +24,7 @@ class GeneratingDataset(Dataset):
     assert self.shuffle_frames_of_nseqs == 0
 
     self.num_inputs = input_dim
-    output_dim = convert_data_dims(output_dim)
+    output_dim = convert_data_dims(output_dim, leave_dict_as_is=True)
     if "data" not in output_dim:
       output_dim["data"] = [input_dim, 2]  # not sparse
     self.num_outputs = output_dim
@@ -551,13 +551,18 @@ class StaticDataset(GeneratingDataset):
 
     if output_dim is None:
       output_dim = {}
-    output_dim = convert_data_dims(output_dim)
+    output_dim = convert_data_dims(output_dim, leave_dict_as_is=True)
 
     first_data_input = first_data["data"]
     assert len(first_data_input.shape) <= 2  # (time[,dim])
     if input_dim is None:
       if "data" in output_dim:
-        input_dim = output_dim["data"][0]
+        if isinstance(output_dim["data"], (list, tuple)):
+          input_dim = output_dim["data"][0]
+        elif isinstance(output_dim["data"], dict):
+          input_dim = output_dim["data"]["dim"]
+        else:
+          raise TypeError(type(output_dim["data"]))
       else:
         input_dim = first_data_input.shape[1]
 

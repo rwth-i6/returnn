@@ -936,7 +936,7 @@ class Engine(object):
     :param Dataset.Dataset dataset:
     :param int seq_idx:
     :return: feed_dict for self.tf_session.run()
-    :rtype: dict[str,numpy.ndarray]
+    :rtype: dict[tf.Tensor,numpy.ndarray]
     """
     # No Runner instance here but a very simplified version of Runner.run().
     # First we need a custom DataProvider with a custom BatchSetGenerator
@@ -955,7 +955,7 @@ class Engine(object):
 
   def run_single(self, dataset, seq_idx, output_dict, ext_feed_dict=None):
     """
-    :param Dataset.Dataset dataset:
+    :param Dataset dataset:
     :param int seq_idx:
     :param dict[str,tf.Tensor] output_dict: key -> tf.Tensor
     :param dict[tf.Tensor,numpy.ndarray] ext_feed_dict:
@@ -1287,8 +1287,6 @@ class Engine(object):
     forwarder = Runner(
       engine=self, dataset=dataset, batches=batches,
       train=False, eval=False,
-      max_seq_length=max_seq_length,
-      max_seqs=max_seqs,
       extra_fetches={
         'outputs': output_layer.output.get_placeholder_flattened()
       },

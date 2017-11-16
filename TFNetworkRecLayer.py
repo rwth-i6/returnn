@@ -22,7 +22,7 @@ class RecLayer(_ConcatInputLayer):
   recurrent = True
 
   def __init__(self,
-               unit="lstm",
+               unit="lstm", unit_opts=None,
                direction=None, input_projection=True,
                initial_state=None,
                max_seq_len=None,
@@ -33,6 +33,7 @@ class RecLayer(_ConcatInputLayer):
     :param str|dict[str,dict[str]] unit: the RNNCell/etc name, e.g. "nativelstm". see comment below.
       alternatively a whole subnetwork, which will be executed step by step,
       and which can include "prev" in addition to "from" to refer to previous steps.
+    :param None|dict[str] unit_opts: passed to RNNCell creation
     :param int|None direction: None|1 -> forward, -1 -> backward
     :param bool input_projection: True -> input is multiplied with matrix. False only works if same input dim
     :param LayerBase|None initial_state:
@@ -104,7 +105,7 @@ class RecLayer(_ConcatInputLayer):
       self._rec_scope = scope
       scope_name_prefix = scope.name + "/"  # e.g. "layer1/rec/"
       with self.var_creation_scope():
-        self.cell = self._get_cell(unit)
+        self.cell = self._get_cell(unit, unit_opts=unit_opts)
         if isinstance(self.cell, (rnn_contrib.RNNCell, rnn_contrib.FusedRNNCell)):
           y = self._get_output_cell(self.cell)
         elif cudnn_rnn and isinstance(self.cell, (cudnn_rnn.CudnnLSTM, cudnn_rnn.CudnnGRU)):
@@ -284,15 +285,17 @@ class RecLayer(_ConcatInputLayer):
         v = optional_add(v, layer.get_constraints_value())
     return v
 
-  def _get_cell(self, unit):
+  def _get_cell(self, unit, unit_opts=None):
     """
     :param str|dict[str] unit:
-    :rtype: RecLayer.SubnetworkCell|tensorflow.contrib.rnn.RNNCell|tensorflow.contrib.rnn.FusedRNNCell|TFNativeOp.RecSeqCellOp
+    :param None|dict[str] unit_opts:
+    :rtype: _SubnetworkRecCell|tensorflow.contrib.rnn.RNNCell|tensorflow.contrib.rnn.FusedRNNCell|TFNativeOp.RecSeqCellOp
     """
     from TFUtil import is_gpu_available
     from tensorflow.contrib import rnn as rnn_contrib
     import TFNativeOp
     if isinstance(unit, dict):
+      assert unit_opts is None
       return _SubnetworkRecCell(parent_rec_layer=self, net_dict=unit)
     assert isinstance(unit, str)
     if unit.lower() in ["lstmp", "lstm"]:
@@ -307,20 +310,22 @@ class RecLayer(_ConcatInputLayer):
       unit = "nativelstm"  # TFNativeOp.NativeLstmCell
     rnn_cell_class = self.get_rnn_cell_class(unit)
     n_hidden = self.output.dim
+    if unit_opts is None:
+      unit_opts = {}
     if is_gpu_available():
       from tensorflow.contrib import cudnn_rnn
       if issubclass(rnn_cell_class, (cudnn_rnn.CudnnLSTM, cudnn_rnn.CudnnGRU)):
         cell = rnn_cell_class(
           num_layers=1, num_units=n_hidden, input_size=self.input_data.dim,
-          input_mode='linear_input', direction='unidirectional', dropout=0.0)
+          input_mode='linear_input', direction='unidirectional', dropout=0.0, **unit_opts)
         return cell
     if issubclass(rnn_cell_class, TFNativeOp.RecSeqCellOp):
       cell = rnn_cell_class(
         n_hidden=n_hidden, n_input_dim=self.input_data.dim,
         input_is_sparse=self.input_data.sparse,
-        step=self._direction)
+        step=self._direction, **unit_opts)
       return cell
-    cell = rnn_cell_class(n_hidden)
+    cell = rnn_cell_class(n_hidden, **unit_opts)
     assert isinstance(
       cell, (rnn_contrib.RNNCell, rnn_contrib.FusedRNNCell))  # e.g. BasicLSTMCell
     return cell
@@ -1970,7 +1975,7 @@ class RnnCellLayer(_ConcatInputLayer):
     return self._hidden_state
 
   @classmethod
-  def _get_rec_initial_state(cls, batch_dim, name, initial_state=None, **kwargs):
+  def get_rec_initial_state(cls, batch_dim, name, initial_state=None, **kwargs):
     """
     Very similar to :func:`get_rec_initial_output`.
     Initial hidden state when used inside a recurrent layer for the frame t=-1, if it is needed.
@@ -2046,7 +2051,7 @@ class RnnCellLayer(_ConcatInputLayer):
 
   @classmethod
   def get_rec_initial_extra_outputs(cls, **kwargs):
-    return {"state": cls._get_rec_initial_state(**kwargs)}
+    return {"state": cls.get_rec_initial_state(**kwargs)}
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
@@ -2057,21 +2062,30 @@ class RnnCellLayer(_ConcatInputLayer):
     """
     super(RnnCellLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
     if "initial_state" in d:
-      def resolve(v):
-        if isinstance(v, str):
-          if v in ["zeros", "ones"]:
-            return v
-          return get_layer(v)
-        if isinstance(v, (tuple, list)):
-          return [resolve(x) for x in v]
-        if isinstance(v, dict):
-          return {k: resolve(x) for (k, x) in v.items()}
-        if isinstance(v, (float, int)):
+      d["initial_state"] = cls.transform_initial_state(d["initial_state"], network=network, get_layer=get_layer)
+
+  @staticmethod
+  def transform_initial_state(initial_state, network, get_layer):
+    """
+    :param str|float|int|list[str|float|int]|dict[str]|None initial_state:
+    :param TFNetwork.TFNetwork network:
+    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
+    """
+    def resolve(v):
+      if isinstance(v, str):
+        if v in ["zeros", "ones"]:
           return v
-        if v is None:
-          return v
-        raise Exception("%r: invalid type: %r, %r" % (d, v, type(v)))
-      d["initial_state"] = resolve(d["initial_state"])
+        return get_layer(v)
+      if isinstance(v, (tuple, list)):
+        return [resolve(x) for x in v]
+      if isinstance(v, dict):
+        return {k: resolve(x) for (k, x) in v.items()}
+      if isinstance(v, (float, int)):
+        return v
+      if v is None:
+        return v
+      raise Exception("initial_state %r: invalid type: %r, %r" % (initial_state, v, type(v)))
+    return resolve(initial_state)
 
 
 class GetLastHiddenStateLayer(LayerBase):

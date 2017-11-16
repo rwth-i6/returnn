@@ -22,7 +22,7 @@ def dump(dataset, options):
   :param options: argparse.Namespace
   """
   print("Epoch: %i" % options.epoch, file=log.v3)
-  rnn.train_data.init_seq_order(options.epoch)
+  dataset.init_seq_order(options.epoch)
 
   output_dict = {}
   for name, layer in rnn.engine.network.layers.items():

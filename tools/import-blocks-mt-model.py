@@ -59,7 +59,7 @@ def get_in_hierarchy(name, hierarchy):
   :rtype: dict[str,dict[str]]
   """
   if "/" in name:
-    name, rest = name.split("/", 2)
+    name, rest = name.split("/", 1)
   else:
     rest = None
   if rest is None:
@@ -110,7 +110,7 @@ def main():
   print("Blocks total num params: %i" % blocks_total_num_params)
 
   # Init our network structure.
-  rnn.engine.use_dynamic_train_flag = True  # construct the net as in training
+  rnn.engine.use_search_flag = True  # construct the net as in search
   rnn.engine.init_network_from_config()
   print("Our network model params:")
   our_params = {}  # type: dict[str,tf.Variable]
@@ -159,8 +159,36 @@ def main():
   dec_name = "decoder/sequencegenerator"
   dec_hierarchy_base = get_in_hierarchy(dec_name, blocks_params_hierarchy)
   assert_equal(set(dec_hierarchy_base.keys()), {"att_trans", "readout"})
+  dec_embed_name = "readout/lookupfeedbackwmt15/lookuptable.W"
+  get_in_hierarchy(dec_embed_name, dec_hierarchy_base)  # check
 
-  # TODO enc lstm layers... mostly straight forward
+  for i in range(num_encoder_layers):
+    # Assume standard LSTMCell.
+    # i = input_gate, j = new_input, f = forget_gate, o = output_gate
+    # lstm_matrix = self._linear1([inputs, m_prev])
+    # i, j, f, o = array_ops.split(value=lstm_matrix, num_or_size_splits=4, axis=1)
+    # bias (4*in), kernel (in+out,4*out), w_(f|i|o)_diag (out)
+    # prefix: rec/rnn/lstm_cell
+    "bidirectionalencoder/EncoderBidirectionalLSTM%/%s_fork/fork_inputs.W" % (i + 1, "fwd")  # (in,out*4)
+
+  blocks_debug_dump_output = config.value("blocks_debug_dump_output", None)
+  if blocks_debug_dump_output:
+    initial_outputs = numpy.load("%s/initial_states_data.0.npz" % blocks_debug_dump_output)
+    input_seq = initial_outputs["input"][0]
+    assert isinstance(input_seq, numpy.ndarray)
+    print("Debug input seq: %s" % input_seq.tolist())
+    from GeneratingDataset import StaticDataset
+    dataset = StaticDataset(
+      data=[{"data": input_seq}],
+      output_dim={"data": get_network().extern_data.get_default_input_data().get_kwargs()})
+    dataset.init_seq_order(epoch=0)
+    our_output = rnn.engine.run_single(
+      dataset=dataset, seq_idx=0, output_dict={
+        "encoder": get_network().layers["encoder"].output.get_placeholder_as_batch_major(),
+        "output": get_network().layers["output"].output.get_placeholder_as_batch_major()
+      })
+    print("our output:")
+    pprint(our_output)
 
   print("Finished importing.")
 
