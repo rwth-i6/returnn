@@ -2946,11 +2946,7 @@ class SegmentInputLayer(_ConcatInputLayer):
   def __init__(self, window=15, **kwargs):
     super(SegmentInputLayer, self).__init__(**kwargs)
     sizes = self.input_data.size_placeholder[0]
-    def fold_times(acc, x):
-      r1 = tf.tile([window], [tf.maximum(x - window + 1, 0)])
-      r2 = tf.range(tf.minimum(x, window - 1), 0, -1)
-      return tf.concat([acc, r1, r2], 0)
-    new_sizes = tf.foldl(fold_times, sizes, tf.placeholder_with_default(tf.zeros([0], dtype='int32'), [None], name='fold_sizes'))
+    new_sizes = TFUtil.batch_sizes_after_windowing(sizes, window)
 
     def fold_data(acc, x):
       batch_idx = x[0]
@@ -2995,23 +2991,8 @@ class ClassesToSegmentsLayer(_ConcatInputLayer):
     assert(self.input_data.sparse)
 
     sizes = self.input_data.size_placeholder[0]
-
-    def fold_fun(acc, x):
-      r1 = tf.tile([window], [tf.maximum(x - window + 1, 0)])
-      r2 = tf.range(tf.minimum(x, window - 1), 0, -1)
-      return tf.concat([acc, r1, r2], 0)
-    new_sizes = tf.foldl(fold_fun, sizes, tf.placeholder_with_default(tf.zeros([0], dtype='int32'), [None]))
-
-    # here we compute the start and end times for each of the new batches
-    def fold_batches(acc, x):
-      b = x[0]
-      l = x[1]
-      batch = tf.tile([b], [l])
-      start = tf.range(l)
-      end   = tf.minimum(tf.range(window, l + window), l)
-      return tf.concat([acc, tf.transpose(tf.stack([batch, start, end]))], axis=0)
-    batches = tf.foldl(fold_batches, tf.stack([tf.range(tf.shape(sizes)[0]), sizes], axis=1),
-                       tf.placeholder_with_default(tf.zeros([0, 3], dtype='int32'), [None, 3]))
+    new_sizes = TFUtil.batch_sizes_after_windowing(sizes, window)
+    batches = TFUtil.batch_indices_after_windowing(sizes, window)
 
     onehot = tf.one_hot(self.input_data.get_placeholder_as_batch_major(), num_classes)
     def compute(x):
