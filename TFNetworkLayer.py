@@ -2935,6 +2935,7 @@ class FramewiseStatisticsLayer(LayerBase):
     # n_out=1 is a workaround for now. Our output should not be used. We have none.
     return Data(name="framewise_statistics_dummy_output", shape=(), dtype="int32", batch_dim_axis=None)
 
+
 class SegmentInputLayer(_ConcatInputLayer):
   """
   This layer takes the input data, applies a window and outputs each window as a new batch, this is more
@@ -2979,6 +2980,7 @@ class SegmentInputLayer(_ConcatInputLayer):
     out.size_placeholder = {}
     out.size_placeholder[0] = None
     return out
+
 
 class ClassesToSegmentsLayer(_ConcatInputLayer):
   """
@@ -3050,17 +3052,19 @@ class UnsegmentInput(_ConcatInputLayer):
 
   def __init__(self, **kwargs):
     super(UnsegmentInput, self).__init__(**kwargs)
-    sizes = self.input_data.size_placeholder[0]
-    new_sizes = tf.where(tf.equal(sizes, 1)) + 1  # a batch of size one indicates that a sequence ended there
-    max_size = tf.reduce_max(new_sizes)
+    sizes       = self.input_data.size_placeholder[0]
+    end_times   = tf.squeeze(tf.where(tf.equal(sizes, 1)) + 1, axis=1)  # a batch of size one indicates that a sequence ended there
+    start_times = tf.concat([[0], end_times[:-1]], axis=0)
+    new_sizes   = end_times - start_times
+    max_size    = tf.reduce_max(new_sizes)
 
     # first we shift the data in the time dimension (to get all windows that end at the same time into one batch)
-    data = self.input_data.placeholder
+    data = self.input_data.get_placeholder_as_time_major()
     def map_data(x):
       time = x[0]
       batches = x[1]
       size = tf.shape(batches)[0]
-      out = tf.concat([batches[time:], batches[:time]], axis=0)
+      out = tf.concat([batches[size-time:], batches[time:]], axis=0)
       return out
     data = tf.map_fn(map_data, [tf.range(tf.shape(data)[0]), data], dtype=self.input_data.dtype)
 
@@ -3070,13 +3074,15 @@ class UnsegmentInput(_ConcatInputLayer):
       start_batch = x[0]
       end_batch = x[1]
       # the next three lines are a convoluted way of writing data[:,start:end,:], but this notation did not work
-      start = tf.concat([[tf.constant(0, dtype='int64')], start_batch, [tf.constant(0, dtype='int64')]], axis=0)
-      end   = tf.concat([[tf.shape(data, out_type=tf.int64)[0]], end_batch - start_batch, [tf.shape(data, out_type=tf.int64)[2]]], axis=0)
+      start = [tf.constant( 0, dtype='int64'), start_batch,             tf.constant( 0, dtype='int64')]
+      end   = [tf.constant(-1, dtype='int64'), end_batch - start_batch, tf.constant(-1, dtype='int64')]
       d = tf.slice(data, start, end)
       d = tf.transpose(d, perm=[1, 0, 2])
       d = tf.reshape(d, [tf.shape(d)[0], -1])
+      s = tf.convert_to_tensor([tf.cast(max_size - (end_batch - start_batch), dtype='int32'), tf.shape(d)[1]])
+      d = tf.concat([d, tf.zeros(s, dtype='float32')], axis=0)
       return d
-    data = tf.map_fn(extract_batch, [tf.cumsum(new_sizes, exclusive=True), tf.cumsum(new_sizes)], dtype=data.dtype)
+    data = tf.map_fn(extract_batch, [start_times, end_times], dtype=data.dtype)
 
     self.output.size_placeholder = {}
     self.output.size_placeholder[0] = new_sizes
@@ -3086,7 +3092,7 @@ class UnsegmentInput(_ConcatInputLayer):
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources, **kwargs):
-    out = get_concat_sources_data_template(sources, name="%s_output" % name).copy_as_time_major()
+    out = get_concat_sources_data_template(sources, name="%s_output" % name).copy_as_batch_major()
     out.size_placeholder[0] = None
     return out
 
