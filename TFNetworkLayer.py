@@ -3021,6 +3021,51 @@ class ClassesToSegmentsLayer(_ConcatInputLayer):
     out.dim = num_classes
     return out
 
+
+class ClassesToLengthDistributionLayer(_ConcatInputLayer):
+  layer_class = "classes_to_length_distribution"
+
+  def __init__(self, window=15, **kwargs):
+    super(ClassesToLengthDistributionLayer, self).__init__(**kwargs)
+    assert(self.input_data.sparse)
+
+    sizes = self.input_data.size_placeholder[0]
+    new_sizes = TFUtil.batch_sizes_after_windowing(sizes, window)
+    batches = TFUtil.batch_indices_after_windowing(sizes, window)
+    classes = self.input_data.get_placeholder_as_batch_major()
+
+    def compute(bse):
+      batch = bse[0]
+      start = bse[1]
+      end   = bse[2]
+
+      batch_cls   = classes[batch][start:end]
+      cls_not_eq  = tf.not_equal(batch_cls[:-1], batch_cls[1:])
+      cls_changed = tf.concat([cls_not_eq, [True]], axis=0)
+      idx         = tf.where(cls_changed)
+      count       = tf.squeeze(tf.concat([[idx[0] + 1], idx[1:] - idx[:-1]], axis=0), axis=1)
+
+      res = tf.scatter_nd(idx, tf.cast(count, dtype='float32') / tf.cast(end - start, dtype='float32'), (window,))
+
+      return res
+
+    self.output.placeholder = tf.expand_dims(tf.map_fn(compute, batches, back_prop=False, dtype='float32'), axis=-2)
+    print(self.output.placeholder.get_shape())
+    #self.output.placeholder = tf.map_fn(compute, batches, back_prop=False, dtype='float32')
+    self.output.size_placeholder[0] = new_sizes
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, window, **kwargs):
+    out = get_concat_sources_data_template(sources, name="%s_output" % name).copy_as_batch_major()
+    out.size_placeholder = {}
+    out.size_placeholder[0] = None
+    out.shape = (1, window)
+    out.dim = window
+    out.sparse = False
+    out.dtype = 'float32'
+    return out
+
+
 class UnsegmentInput(_ConcatInputLayer):
   """
   Takes the output of SegmentInput (sequences windowed over time and folded into batch-dim)
@@ -3076,6 +3121,72 @@ class UnsegmentInput(_ConcatInputLayer):
     out = get_concat_sources_data_template(sources, name="%s_output" % name).copy_as_batch_major()
     out.size_placeholder[0] = None
     return out
+
+
+class FillUnusedMemoryLayer(CopyLayer):
+  """
+  Fills all unused entries in the time/batch/feature tensor with a constant
+  """
+
+  layer_class = "fill_unused"
+
+  def __init__(self, fill_value=0.0, **kwargs):
+    super(CopyLayer, self).__init__(**kwargs)
+
+    mask = self.output.get_sequence_mask()
+    mask = tf.expand_dims(mask, dim=-1)
+    mask = tf.tile(mask, [1, 1, tf.shape(self.output.placeholder)[2]])
+
+    x = self.output.placeholder
+    x = tf.where(mask, x, tf.fill(tf.shape(x), fill_value))
+    self.output.placeholder = x
+
+
+class SwapTimeFeatureLayer(CopyLayer):
+  layer_class = "swap_time_feature"
+
+  def __init__(self, **kwargs):
+    super(SwapTimeFeatureLayer, self).__init__(**kwargs)
+    self.output = self.get_out_data_from_opts(**kwargs)
+    perm = [self.input_data.batch_dim_axis, self.input_data.feature_dim_axis, self.input_data.time_dim_axis]
+    self.output.placeholder = tf.transpose(self.output.placeholder, perm=perm)
+    shape = tf.shape(self.output.placeholder)
+    self.output.size_placeholder[0] = tf.fill((shape[0],), value=shape[1])
+    self.output.dim = self.output.placeholder.get_shape()[-1].value
+    self.output.shape = (self.output.placeholder.get_shape()[1].value, self.output.dim)
+
+  @classmethod
+  def get_out_data_from_opts(cls, **kwargs):
+    out = super(SwapTimeFeatureLayer, cls).get_out_data_from_opts(**kwargs)
+    out.batch_dim_axis = 0
+    out.time_dim_axis = 1
+    out.dim = None
+    out.size_placeholder = {}
+    return out
+
+
+class ApplyLengthDistributionLayer(LayerBase):
+  layer_class = "apply_length_distribution"
+
+  def __init__(self, **kwargs):
+    super(ApplyLengthDistributionLayer, self).__init__(**kwargs)
+    self.output = self.sources[0].output.copy()
+    len_dist_layer = self.sources[1]
+    perm = []
+    if self.output.is_batch_major:
+      perm.append(len_dist_layer.output.batch_dim_axis)
+      perm.append(len_dist_layer.output.feature_dim_axis)
+    else:
+      perm.append(len_dist_layer.output.feature_dim_axis)
+      perm.append(len_dist_layer.output.batch_dim_axis)
+    perm.append(len_dist_layer.output.time_dim_axis)
+    len_mod = tf.transpose(len_dist_layer.output.placeholder, perm=perm)
+    self.output.placeholder *= len_mod
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, **kwargs):
+    return sources[0].output.copy()
+
 
 class Loss(object):
   """
