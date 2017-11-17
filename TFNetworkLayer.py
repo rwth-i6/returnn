@@ -3090,7 +3090,7 @@ class UnsegmentInput(_ConcatInputLayer):
       time = x[0]
       batches = x[1]
       size = tf.shape(batches)[0]
-      out = tf.concat([batches[size-time:], batches[time:]], axis=0)
+      out = tf.concat([batches[size-time:,:], batches[:size-time,:]], axis=0)
       return out
     data = tf.map_fn(map_data, [tf.range(tf.shape(data)[0]), data], dtype=self.input_data.dtype)
 
