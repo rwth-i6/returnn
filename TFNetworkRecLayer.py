@@ -36,7 +36,7 @@ class RecLayer(_ConcatInputLayer):
     :param None|dict[str] unit_opts: passed to RNNCell creation
     :param int|None direction: None|1 -> forward, -1 -> backward
     :param bool input_projection: True -> input is multiplied with matrix. False only works if same input dim
-    :param LayerBase|None initial_state:
+    :param LayerBase|str|float|int|tuple|None initial_state:
     :param int max_seq_len: if unit is a subnetwork
     :param str forward_weights_init: see :func:`TFUtil.get_initializer`
     :param str recurrent_weights_init: see :func:`TFUtil.get_initializer`
@@ -46,6 +46,7 @@ class RecLayer(_ConcatInputLayer):
     super(RecLayer, self).__init__(**kwargs)
     from TFUtil import is_gpu_available
     from tensorflow.contrib import rnn as rnn_contrib
+    from tensorflow.python.util import nest
     if is_gpu_available():
       from tensorflow.contrib import cudnn_rnn
     else:
@@ -55,8 +56,7 @@ class RecLayer(_ConcatInputLayer):
       assert direction in [-1, 1]
     self._last_hidden_state = None
     self._direction = direction
-    self._initial_state_src = initial_state
-    self._initial_state = initial_state.get_last_hidden_state() if initial_state else None
+    self._initial_state_deps = [l for l in nest.flatten(initial_state) if isinstance(l, LayerBase)]
     self._input_projection = input_projection
     self._max_seq_len = max_seq_len
     self._optimize_move_layers_out = optimize_move_layers_out
@@ -105,6 +105,9 @@ class RecLayer(_ConcatInputLayer):
       self._rec_scope = scope
       scope_name_prefix = scope.name + "/"  # e.g. "layer1/rec/"
       with self.var_creation_scope():
+        self._initial_state = RnnCellLayer.get_rec_initial_state(
+          initial_state=initial_state, n_out=self.output.dim, unit=unit, unit_opts=unit_opts,
+          batch_dim=self.network.get_data_batch_dim(), name=self.name) if initial_state is not None else None
         self.cell = self._get_cell(unit, unit_opts=unit_opts)
         if isinstance(self.cell, (rnn_contrib.RNNCell, rnn_contrib.FusedRNNCell)):
           y = self._get_output_cell(self.cell)
@@ -119,13 +122,15 @@ class RecLayer(_ConcatInputLayer):
         self.output.time_dim_axis = 0
         self.output.batch_dim_axis = 1
         self.output.placeholder = y
+        # Very generic way to collect all created params.
+        # Note that for the TF RNN cells, there is no other way to do this.
+        # Also, see the usage of :func:`LayerBase.cls_layer_scope`, e.g. for initial vars.
         params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope_name_prefix)
         self.params.update({p.name[len(scope_name_prefix):-2]: p for p in params})
 
   def get_dep_layers(self):
     l = super(RecLayer, self).get_dep_layers()
-    if self._initial_state_src:
-      l += [self._initial_state_src]
+    l += self._initial_state_deps
     if isinstance(self.cell, _SubnetworkRecCell):
       l += self.cell.get_parent_deps()
     return l
@@ -140,9 +145,9 @@ class RecLayer(_ConcatInputLayer):
     if isinstance(d.get("unit"), dict):
       d["n_out"] = d.get("n_out", None)  # disable automatic guessing
     super(RecLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
-    initial_state = d.pop("initial_state", None)
-    if initial_state:
-      d["initial_state"] = get_layer(initial_state)
+    if "initial_state" in d:
+      d["initial_state"] = RnnCellLayer.transform_initial_state(
+        d["initial_state"], network=network, get_layer=get_layer)
     if isinstance(d.get("unit"), dict):
       def sub_get_layer(name):
         # Only used to resolve deps to base network.
@@ -160,12 +165,12 @@ class RecLayer(_ConcatInputLayer):
 
   @classmethod
   def get_out_data_from_opts(cls, unit, sources=(), initial_state=None, **kwargs):
+    from tensorflow.python.util import nest
     n_out = kwargs.get("n_out", None)
     out_type = kwargs.get("out_type", None)
     loss = kwargs.get("loss", None)
     deps = list(sources)  # type: list[LayerBase]
-    if initial_state:
-      deps += [initial_state]
+    deps += [l for l in nest.flatten(initial_state) if isinstance(l, LayerBase)]
     if out_type or n_out or loss:
       if out_type:
         assert out_type.get("time_dim_axis", 0) == 0
@@ -798,7 +803,7 @@ class _SubnetworkRecCell(object):
     """
     template_layer = self.layer_data_templates[name]
     cl = template_layer.layer_class_type
-    with reuse_name_scope(cl.cls_get_tf_scope_name(name)):
+    with cl.cls_layer_scope(name):
       batch_dim = template_layer.get_batch_dim()
       d = cl.get_rec_initial_extra_outputs(batch_dim=batch_dim, **self.layer_data_templates[name].kwargs)
     return d
@@ -1975,7 +1980,7 @@ class RnnCellLayer(_ConcatInputLayer):
     return self._hidden_state
 
   @classmethod
-  def get_rec_initial_state(cls, batch_dim, name, initial_state=None, **kwargs):
+  def get_rec_initial_state(cls, batch_dim, name, n_out, unit, initial_state=None, unit_opts=None, **kwargs):
     """
     Very similar to :func:`get_rec_initial_output`.
     Initial hidden state when used inside a recurrent layer for the frame t=-1, if it is needed.
@@ -1988,17 +1993,21 @@ class RnnCellLayer(_ConcatInputLayer):
     or any kind of nested structure.
 
     :param tf.Tensor batch_dim: including beam size in beam search
-    :param str name:
+    :param str name: layer name
+    :param int n_out: out dim
+    :param str unit: cell name
+    :param dict[str]|None unit_opts:
     :param LayerBase|str|int|float|None|list|tuple|namedtuple initial_state: see code
     :rtype: tf.Tensor|tuple[tf.Tensor]|namedtuple
     """
     with tf.name_scope("rec_initial_state"):
       init_value = initial_state
-      dim = cls.get_hidden_state_size(**kwargs)
+      dim = cls.get_hidden_state_size(n_out=n_out, unit=unit, unit_opts=unit_opts, **kwargs)
 
-      def make(d, v):
+      def make(d, v, name):
         assert isinstance(d, int)
         assert isinstance(v, (LayerBase, int, float, str, type(None)))
+        assert isinstance(name, str)
         shape = [batch_dim, d]
         if isinstance(v, LayerBase):
           h = v.get_last_hidden_state()
@@ -2013,39 +2022,46 @@ class RnnCellLayer(_ConcatInputLayer):
           return tf.zeros(shape)
         elif v == "ones" or v == 1:
           return tf.ones(shape)
+        elif v == "var":
+          v = tf.get_variable("initial_%s" % name, shape=(d,), initializer=tf.zeros_initializer())
+          from TFUtil import expand_dims_unbroadcast
+          v = expand_dims_unbroadcast(v, axis=0, dim=batch_dim)  # (batch,dim)
+          return v
         else:
           raise Exception("invalid initial state type %r for sub-layer %r" % (v, name))
 
-      def make_list():
+      def make_list(keys):
+        assert isinstance(keys, (tuple, list))
+        assert len(keys) == len(dim)
         if isinstance(init_value, (list, tuple)):
           assert len(init_value) == len(dim)
-          return [make(d, v_) for (d, v_) in zip(dim, init_value)]
+          return [make(d, v_, k) for (d, v_, k) in zip(dim, init_value, keys)]
         # Do not broadcast LayerBase automatically in this case.
         assert isinstance(init_value, (int, float, str, type(None)))
-        return [make(d, init_value) for d in dim]
+        return [make(d, init_value, k) for d, k in zip(dim, keys)]
 
       # Make it the same type because nest.assert_same_structure() will complain otherwise.
       if isinstance(dim, tuple) and type(dim) is not tuple:  # assume namedtuple
         keys = dim._fields
         assert len(dim) == len(keys)
         assert isinstance(init_value, (int, float, str, tuple, list, dict, type(None)))
-        if not isinstance(init_value, dict) and init_value not in (0, 1, None):
-          print("RnnCellLayer %r: It is recommended to use a dict to specify 'initial_state' with keys %r for the state dimensions %r." % (name, keys, dim), file=log.v2)
+        if not isinstance(init_value, dict) and init_value not in (0, 1, None) and not isinstance(init_value, str):
+          print("Layer %r: It is recommended to use a dict to specify 'initial_state' with keys %r for the state dimensions %r." % (name, keys, dim), file=log.v2)
         if isinstance(init_value, dict):
           assert set(init_value.keys()) == set(keys), "You must specify all keys for the state dimensions %r." % dim
           assert len(init_value) == len(dim)
-          s = {k: make(d, init_value[k]) for (k, d) in zip(keys, dim)}
+          s = {k: make(d, init_value[k], k) for (k, d) in zip(keys, dim)}
         else:
-          s = make_list()
+          s = make_list(keys)
           assert len(s) == len(keys)
           s = {k: s_ for (k, s_) in zip(keys, s)}
         return type(dim)(**s)
       elif isinstance(dim, (tuple, list)):
-        s = make_list()
+        s = make_list([str(i) for i in range(len(dim))])
         assert len(s) == len(dim)
         return type(dim)(s)
       elif isinstance(dim, int):
-        return make(dim, init_value)
+        return make(dim, init_value, "var")
       else:
         raise Exception("Did not expect hidden_state_size %r." % dim)
 
@@ -2073,7 +2089,7 @@ class RnnCellLayer(_ConcatInputLayer):
     """
     def resolve(v):
       if isinstance(v, str):
-        if v in ["zeros", "ones"]:
+        if v in ["zeros", "ones", "var"]:
           return v
         return get_layer(v)
       if isinstance(v, (tuple, list)):

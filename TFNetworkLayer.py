@@ -238,6 +238,24 @@ class LayerBase(object):
     return name.replace(":", "__")
 
   @classmethod
+  def cls_layer_scope(cls, name):
+    """
+    Setup scope for layer. This can also be used when the layer does not yet exists.
+    This is supposed to cover variable creations as well.
+    Currently vars might be created when used within the rec-layer, but they are caught
+    in a more generic way there, so we have not implemented yet any special logic here.
+
+    :param str name: layer name
+    :return: context manager object
+    """
+    @contextlib.contextmanager
+    def layer_scope_ctx():
+      from TFUtil import reuse_name_scope
+      with reuse_name_scope(cls.cls_get_tf_scope_name(name)) as scope:
+        yield scope
+    return layer_scope_ctx()
+
+  @classmethod
   def transform_config_dict(cls, d, network, get_layer):
     """
     :param dict[str] d: will modify inplace
