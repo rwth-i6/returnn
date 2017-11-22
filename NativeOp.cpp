@@ -248,7 +248,7 @@ static void tf_cuda_sgemm(
 #define Ndarray_STRIDE(x, i) (CudaNdarray_HOST_STRIDES(x)[i])  // return in elements. CudaNdarray stores like that
 #define Ndarray_NDIM(x) (x->nd)
 #define Ndarray_DIM_Type int
-typedef Ndarray_DIM_Type* Ndarray_DIMS_Type;
+typedef Ndarray_DIM_Type const* Ndarray_DIMS_Type;
 #define Ndarray_dtype_size(x) sizeof(float)
 #define Ndarray_SIZE CudaNdarray_SIZE
 // PyObject *CudaNdarray_NewDims(int nd, const inttype * dims), uninitialized
@@ -355,7 +355,7 @@ static void _cudaHandleError(cublasStatus_t status, const char *file, int line) 
 #define Ndarray_DIMS Ndarray_HOST_DIMS
 #define Ndarray_NDIM PyArray_NDIM
 #define Ndarray_DIM_Type npy_intp
-typedef Ndarray_DIM_Type* Ndarray_DIMS_Type;
+typedef Ndarray_DIM_Type const* Ndarray_DIMS_Type;
 #define Ndarray_dtype_size(x) sizeof(float)
 #define Ndarray_SIZE PyArray_SIZE
 #define Ndarray_NewDims(nd, dims) (PyArray_SimpleNew(nd, dims, NPY_FLOAT32))
