@@ -111,6 +111,8 @@ def main():
   print("Blocks total num params: %i" % blocks_total_num_params)
 
   # Init our network structure.
+  from TFNetworkRecLayer import _SubnetworkRecCell
+  _SubnetworkRecCell._debug_out = []  # enable for debugging intermediate values below
   rnn.engine.use_search_flag = True  # construct the net as in search
   rnn.engine.init_network_from_config()
   print("Our network model params:")
@@ -204,6 +206,10 @@ def main():
       import_var(our_layer.params["initial_h"], "%s/bidirectionalseparateparameters/%s.initial_state" % (blocks_prefix, {"fwd": "forward", "bwd": "backward"}[direction]))
       for s1, s2 in [("W_cell_to_in", "w_i_diag"), ("W_cell_to_forget", "w_f_diag"), ("W_cell_to_out", "w_o_diag")]:
         import_var(our_layer.params["rnn/lstm_cell/%s" % s2], "%s/bidirectionalseparateparameters/%s.%s" % (blocks_prefix, {"fwd": "forward", "bwd": "backward"}[direction], s1))
+  import_var(get_network().layers["enc_ctx"].params["W"], "decoder/sequencegenerator/att_trans/attention/encoder_state_transformer.W")
+  import_var(get_network().layers["enc_ctx"].params["b"], "decoder/sequencegenerator/att_trans/attention/encoder_state_transformer.b")
+  import_var(our_params["output/rec/s/initial_c"], "decoder/sequencegenerator/att_trans/lstm_decoder.initial_cells")
+  import_var(our_params["output/rec/s/initial_h"], "decoder/sequencegenerator/att_trans/lstm_decoder.initial_state")
 
   print("Not initialized own params:")
   for key, v in sorted(our_params.items()):
@@ -231,8 +237,9 @@ def main():
       output_dim={"data": get_network().extern_data.get_default_input_data().get_kwargs()})
     dataset.init_seq_order(epoch=0)
     extract_output_dict = {
-      "enc_emb": get_network().layers["data_embed"].output.get_placeholder_as_batch_major(),
+      "enc_data_emb": get_network().layers["data_embed"].output.get_placeholder_as_batch_major(),
       "encoder": get_network().layers["encoder"].output.get_placeholder_as_batch_major(),
+      "enc_ctx": get_network().layers["enc_ctx"].output.get_placeholder_as_batch_major(),
       "output": get_network().layers["output"].output.get_placeholder_as_batch_major()
     }
     from TFNetworkLayer import concat_sources
@@ -244,7 +251,7 @@ def main():
     our_output = rnn.engine.run_single(
       dataset=dataset, seq_idx=0, output_dict=extract_output_dict)
     blocks_out = blocks_initial_outputs["bidirectionalencoder_EncoderLookUp0__EncoderLookUp0_apply_output"]
-    our_out = our_output["enc_emb"]
+    our_out = our_output["enc_data_emb"]
     print("our enc emb shape:", our_out.shape)
     print("Blocks enc emb shape:", blocks_out.shape)
     assert our_out.shape[:2] == (1, seq_len)
@@ -277,6 +284,27 @@ def main():
     assert blocks_encoder_out.shape[:2] == (seq_len, beam_size)
     assert our_output["encoder"].shape[2] == blocks_encoder_out.shape[2]
     assert_almost_equal(our_output["encoder"][0], blocks_encoder_out[:, 0], decimal=6)
+    blocks_first_frame_outputs = numpy.load("%s/next_states.0.npz" % blocks_debug_dump_output)
+    blocks_enc_ctx_out = blocks_first_frame_outputs["decoder_sequencegenerator_att_trans_attention__attention_preprocess_preprocessed_attended"]
+    our_enc_ctx_out = our_output["enc_ctx"]
+    print("Blocks enc ctx shape:", blocks_enc_ctx_out.shape)
+    assert blocks_enc_ctx_out.shape[:2] == (seq_len, beam_size)
+    assert our_enc_ctx_out.shape[:2] == (1, seq_len)
+    assert blocks_enc_ctx_out.shape[2:] == our_enc_ctx_out.shape[2:]
+    assert_almost_equal(blocks_enc_ctx_out[:, 0], our_enc_ctx_out[0], decimal=5)
+    our_dec_outputs = {v["step"]: v for v in _SubnetworkRecCell._debug_out}
+    assert our_dec_outputs
+    for dec_step in range(3):
+      blocks_frame_outputs = numpy.load("%s/next_states.%i.npz" % (blocks_debug_dump_output, dec_step))
+      our_dec_frame_outputs = our_dec_outputs[dec_step]
+      # pprint(our_dec_frame_outputs)
+      blocks_last_lstm_state = blocks_frame_outputs["decoder_sequencegenerator__sequencegenerator_generate_states"]
+      blocks_last_lstm_cells = blocks_frame_outputs["decoder_sequencegenerator__sequencegenerator_generate_cells"]
+      if dec_step == 0:
+        blocks_initial_lstm_state = blocks_params["decoder/sequencegenerator/att_trans/lstm_decoder.initial_state"]
+        blocks_initial_lstm_cells = blocks_params["decoder/sequencegenerator/att_trans/lstm_decoder.initial_cells"]
+        assert_almost_equal(blocks_last_lstm_state[0], blocks_initial_lstm_state)
+        assert_almost_equal(blocks_last_lstm_cells[0], blocks_initial_lstm_cells)
 
   print("Finished importing.")
 
