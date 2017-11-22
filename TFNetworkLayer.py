@@ -3186,7 +3186,7 @@ class SwapTimeFeatureLayer(CopyLayer):
 class ApplyLengthDistributionLayer(LayerBase):
   layer_class = "apply_length_distribution"
 
-  def __init__(self, **kwargs):
+  def __init__(self, length_model_scale=1.0, **kwargs):
     super(ApplyLengthDistributionLayer, self).__init__(**kwargs)
     self.output = self.sources[0].output.copy()
     len_dist_layer = self.sources[1]
@@ -3199,6 +3199,8 @@ class ApplyLengthDistributionLayer(LayerBase):
       perm.append(len_dist_layer.output.batch_dim_axis)
     perm.append(len_dist_layer.output.time_dim_axis)
     len_mod = tf.transpose(len_dist_layer.output.placeholder, perm=perm)
+    if length_model_scale != 1.0:
+      len_mod = tf.pow(len_mod, length_model_scale)
     self.output.placeholder *= len_mod
 
   @classmethod
