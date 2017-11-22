@@ -4114,16 +4114,18 @@ def mem_usage_for_dev(dev_name):
 def identity_with_debug_log(x, args, out, name="DebugLogOp"):
   """
   :param tf.Tensor x:
-  :param dict[str,tf.Tensor] args:
+  :param dict[str,tf.Tensor|None] args:
   :param list[dict[str,numpy.ndarray]] out:
   :param str name:
   :return: x
   :rtype: tf.Tensor
   """
-  arg_keys = sorted(args.keys())
+  from Util import dict_joined
+  none_args = {k: None for (k, v) in args.items() if v is None}
+  arg_keys = sorted([k for k in args.keys() if k not in none_args])
 
   def py_func(x, *arg_values):
-    out.append(dict(zip(arg_keys, arg_values)))
+    out.append(dict_joined(dict(zip(arg_keys, arg_values)), none_args))
     return x
 
   with tf.name_scope(name):

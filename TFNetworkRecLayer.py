@@ -541,6 +541,13 @@ class RecLayer(_ConcatInputLayer):
 
 
 class _SubnetworkRecCell(object):
+  """
+  This class is used by :class:`RecLayer` to implement
+  the generic subnetwork logic inside the recurrency.
+  """
+
+  _debug_out = None  # set to list to enable
+
   def __init__(self, net_dict, parent_rec_layer=None, parent_net=None, source_data=None):
     """
     :param dict[str,dict[str]] net_dict: dict for the subnetwork, layer name -> layer dict
@@ -1234,6 +1241,13 @@ class _SubnetworkRecCell(object):
         res = (next_i, net_vars, acc_tas)
         if seq_len_info is not None:
           res += (seq_len_info,)
+        if self._debug_out is not None:
+          from TFUtil import identity_with_debug_log
+          args = {"step": i}
+          args.update({"%s.output" % k: v.output.placeholder for (k, v) in self.net.layers.items()})
+          for k in self._initial_extra_outputs:
+            args.update({"%s.extra.%s" % (k, k2): v for (k2, v) in self.net.layers[k].rec_vars_outputs.items()})
+          res = (identity_with_debug_log(out=self._debug_out, x=res[0], args=args),) + res[1:]
         return res
 
     def cond(i, net_vars, acc_ta, seq_len_info=None):
