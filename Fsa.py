@@ -11,6 +11,7 @@ from copy import deepcopy
 from Log import log
 from LmDataset import Lexicon, StateTying
 from os.path import isfile
+import itertools
 
 
 class Edge:
@@ -755,16 +756,72 @@ class Ngram:
     :param int n: size of the gram (1, 2, 3)
     """
     self.n = n
-    self.lexicon = None
-    self.ngramscores = None
+    self.lexicon = None  # type: Lexicon
+    # lexicon consists of 3 entries: phoneme_list, phonemes and lemmas
+    # phoneme_list: list of string phonemes in the lexicon
+    # phonemes: dict of dict of str {phone: {index: , symbol: , variation:}}
+    # lemmas: dict of dict of (str, list of dict) {orth: {orth: , phons: [{score: , phon:}]}}
+    self.lemma_list = []
+    self.ngram_scores = None
+    self.ngram_list = []
     self.num_states = 0
     self.edges = []
-    # TODO take list of words or even a lexicon and generate a fsa for ngram lm
-    # TODO from list or lexicon generate all possible word combinations
-    # TODO loop over all possible word combinations and add edges to fsa
+    # TODO take lexicon and generate a fsa for ngram lm
+
+  def _create_lemma_list(self):
+    """
+    create list of lemmas from lexicon
+    transform lexicon.lemmas into a list of str
+    """
+    for lemma, lemma_dict in self.lexicon.lemmas.items():
+      self.lemma_list.append(lemma)
+
+  def _create_ngram_list(self):
+    """
+    creates a ngram list from list of lemmas
+    permute over the created list
+    """
+    for perm in itertools.permutations(self.lemma_list, self.n):
+      self.ngram_list.append(perm)
+
+  def _create_fsa_from_ngram_list(self):
+    """
+    takes a ngram list and converts it into a fsa
+    """
+    for idx, ngram in enumerate(self.ngram_list):
+      ngram_edge = Edge(idx, idx + 1, ngram, 0.)
+      self.edges.append(ngram_edge)
+      self.num_states += 1
+
+    if self.ngram_list:
+      self.num_states += 1
 
   def run(self):
     print("Starting {}-gram FSA Creation".format(self.n))
+
+    if not self.lemma_list:
+      self._create_lemma_list()
+
+    node_expand = []
+    node_expand.append(0)
+    ngram_counter = 1
+
+    while node_expand:
+      cur_start = node_expand.pop()
+      for idx, lemma in enumerate(self.lemma_list):
+        cur_end = self.num_states + 1 # cur_start + idx + 1
+        edge = Edge(cur_start, cur_end, lemma, 0.)
+        self.edges.append(edge)
+        self.num_states += 1
+        if ngram_counter < self.n:
+          node_expand.append(cur_end)
+        print(self.num_states, cur_start, cur_end, idx, lemma)
+      ngram_counter += 1
+
+    if self.lemma_list:
+      self.num_states += 1
+
+    print(self.num_states)
 
 
 def load_lexicon(lexicon_name='recog.150k.final.lex.gz', pickleflag=False):
@@ -1231,6 +1288,10 @@ def main():
   arg_parser.add_argument("--pickle", dest="pickle", action="store_true")
   arg_parser.add_argument("--no_pickle", dest="pickle", action="store_false")
   arg_parser.set_defaults(pickle=False)
+  arg_parser.add_argument("--timings", type=bool)
+  arg_parser.set_defaults(timings=False)
+  arg_parser.add_argument("--ngram", type=int)
+  arg_parser.set_defaults(ngram=2)
   args = arg_parser.parse_args()
 
   start_time = time.time()
@@ -1315,7 +1376,7 @@ def main():
   sav_hmm.save_to_file()
 
   ngram_start_time = hmm_end_time = time.time()
-  ngram = Ngram(2)
+  ngram = Ngram(args.ngram)
   ngram.lexicon = lexicon
   ngram_run_start_time = time.time()
   ngram.run()
@@ -1327,39 +1388,40 @@ def main():
 
   end_time = ngram_end_time = time.time()
 
-  print("\nTotal time    : ", end_time - start_time, "\n")
+  if args.timings:
+    print("\nTotal time    : ", end_time - start_time, "\n")
 
-  print("Lexicon load time : ", lexicon_end_time - lexicon_start_time, "\n")
+    print("Lexicon load time : ", lexicon_end_time - lexicon_start_time, "\n")
 
-  print("Word total time: ", word_end_time - word_start_time)
-  print("Word init time : ", word_run_start_time - word_start_time)
-  print("Word run time  : ", word_run_end_time - word_run_start_time)
-  print("Word save time : ", word_end_time - word_run_end_time, "\n")
+    print("Word total time: ", word_end_time - word_start_time)
+    print("Word init time : ", word_run_start_time - word_start_time)
+    print("Word run time  : ", word_run_end_time - word_run_start_time)
+    print("Word save time : ", word_end_time - word_run_end_time, "\n")
 
-  print("ASG total time: ", asg_end_time - asg_start_time)
-  print("ASG init time : ", asg_run_start_time - asg_start_time)
-  print("ASG run time  : ", asg_run_end_time - asg_run_start_time)
-  print("ASG save time : ", asg_end_time - asg_run_end_time, "\n")
+    print("ASG total time: ", asg_end_time - asg_start_time)
+    print("ASG init time : ", asg_run_start_time - asg_start_time)
+    print("ASG run time  : ", asg_run_end_time - asg_run_start_time)
+    print("ASG save time : ", asg_end_time - asg_run_end_time, "\n")
 
-  print("CTC total time: ", ctc_end_time - ctc_start_time)
-  print("CTC init time : ", ctc_run_start_time - ctc_start_time)
-  print("CTC run time  : ", ctc_run_end_time - ctc_run_start_time)
-  print("CTC save time : ", ctc_end_time - ctc_run_end_time, "\n")
+    print("CTC total time: ", ctc_end_time - ctc_start_time)
+    print("CTC init time : ", ctc_run_start_time - ctc_start_time)
+    print("CTC run time  : ", ctc_run_end_time - ctc_run_start_time)
+    print("CTC save time : ", ctc_end_time - ctc_run_end_time, "\n")
 
-  print("CTC from FSA total time: ", ctcfsa_end_time - ctcfsa_start_time)
-  print("CTC from FSA init time : ", ctcfsa_run_start_time - ctcfsa_start_time)
-  print("CTC from FSA run time  : ", ctcfsa_run_end_time - ctcfsa_run_start_time)
-  print("CTC from FSA save time : ", ctcfsa_end_time - ctcfsa_run_end_time, "\n")
+    print("CTC from FSA total time: ", ctcfsa_end_time - ctcfsa_start_time)
+    print("CTC from FSA init time : ", ctcfsa_run_start_time - ctcfsa_start_time)
+    print("CTC from FSA run time  : ", ctcfsa_run_end_time - ctcfsa_run_start_time)
+    print("CTC from FSA save time : ", ctcfsa_end_time - ctcfsa_run_end_time, "\n")
 
-  print("HMM total time: ", hmm_end_time - hmm_start_time)
-  print("HMM init time : ", hmm_run_start_time - hmm_start_time)
-  print("HMM run time  : ", hmm_run_end_time - hmm_run_start_time)
-  print("HMM save time : ", hmm_end_time - hmm_run_end_time, "\n")
+    print("HMM total time: ", hmm_end_time - hmm_start_time)
+    print("HMM init time : ", hmm_run_start_time - hmm_start_time)
+    print("HMM run time  : ", hmm_run_end_time - hmm_run_start_time)
+    print("HMM save time : ", hmm_end_time - hmm_run_end_time, "\n")
 
-  print("n-gram total time: ", ngram_end_time - ngram_start_time)
-  print("n-gram init time : ", ngram_run_start_time - ngram_start_time)
-  print("n-gram run time  : ", ngram_run_end_time - ngram_run_start_time)
-  print("n-gram save time : ", ngram_end_time - ngram_run_end_time, "\n")
+    print("n-gram total time: ", ngram_end_time - ngram_start_time)
+    print("n-gram init time : ", ngram_run_start_time - ngram_start_time)
+    print("n-gram run time  : ", ngram_run_end_time - ngram_run_start_time)
+    print("n-gram save time : ", ngram_end_time - ngram_run_end_time, "\n")
 
 
 if __name__ == "__main__":
