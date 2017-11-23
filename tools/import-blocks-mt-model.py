@@ -210,6 +210,7 @@ def main():
   import_var(get_network().layers["enc_ctx"].params["b"], "decoder/sequencegenerator/att_trans/attention/encoder_state_transformer.b")
   import_var(our_params["output/rec/s/initial_c"], "decoder/sequencegenerator/att_trans/lstm_decoder.initial_cells")
   import_var(our_params["output/rec/s/initial_h"], "decoder/sequencegenerator/att_trans/lstm_decoder.initial_state")
+  import_var(our_params["output/rec/weight_feedback/W"], "decoder/sequencegenerator/att_trans/attention/sum_alignment_transformer.W")
 
   print("Not initialized own params:")
   for key, v in sorted(our_params.items()):
@@ -294,17 +295,31 @@ def main():
     assert_almost_equal(blocks_enc_ctx_out[:, 0], our_enc_ctx_out[0], decimal=5)
     our_dec_outputs = {v["step"]: v for v in _SubnetworkRecCell._debug_out}
     assert our_dec_outputs
+    print("our dec frame keys:", sorted(our_dec_outputs[0].keys()))
+    last_lstm_state = blocks_params["decoder/sequencegenerator/att_trans/lstm_decoder.initial_state"]
+    last_lstm_cells = blocks_params["decoder/sequencegenerator/att_trans/lstm_decoder.initial_cells"]
+    accumulated_weights = numpy.zeros((seq_len,), dtype="float32")
     for dec_step in range(3):
       blocks_frame_outputs = numpy.load("%s/next_states.%i.npz" % (blocks_debug_dump_output, dec_step))
       our_dec_frame_outputs = our_dec_outputs[dec_step]
+      blocks_accumulated_weights = blocks_frame_outputs["decoder_sequencegenerator__sequencegenerator_generate_accumulated_weights"]
+      assert blocks_accumulated_weights.shape == (beam_size, seq_len)
+      assert_almost_equal(blocks_accumulated_weights[0], accumulated_weights)
+      energy_sum = blocks_enc_ctx_out[:, 0]  # (T,enc-ctx-dim)
+      # weight_feedback = numpy.dot(accumulated_weights, blocks_params["decoder/sequencegenerator/att_trans/attention/sum_alignment_transformer.W"])  # TODO...
+      # energy_sum += weight_feedback  # TODO
+      transformed_states = 0  # TODO, based on states -> state_transformers (Linear?)
+      energy_sum += transformed_states
+      blocks_energy_sum_tanh = blocks_frame_outputs["decoder_sequencegenerator_att_trans_attention_energy_comp_tanh__tanh_apply_output"]
+      assert blocks_energy_sum_tanh.shape == (seq_len, beam_size, energy_sum.shape[-1])
+      # assert_almost_equal(blocks_energy_sum_tanh[1], numpy.tanh(energy_sum), decimal=6)  # TODO
       # pprint(our_dec_frame_outputs)
       blocks_last_lstm_state = blocks_frame_outputs["decoder_sequencegenerator__sequencegenerator_generate_states"]
       blocks_last_lstm_cells = blocks_frame_outputs["decoder_sequencegenerator__sequencegenerator_generate_cells"]
-      if dec_step == 0:
-        blocks_initial_lstm_state = blocks_params["decoder/sequencegenerator/att_trans/lstm_decoder.initial_state"]
-        blocks_initial_lstm_cells = blocks_params["decoder/sequencegenerator/att_trans/lstm_decoder.initial_cells"]
-        assert_almost_equal(blocks_last_lstm_state[0], blocks_initial_lstm_state)
-        assert_almost_equal(blocks_last_lstm_cells[0], blocks_initial_lstm_cells)
+      assert blocks_last_lstm_state.shape == (beam_size, last_lstm_state.shape[0])
+      assert_almost_equal(blocks_last_lstm_state[0], last_lstm_state)
+      assert_almost_equal(blocks_last_lstm_cells[0], last_lstm_cells)
+      if dec_step == 0: break  # TODO ...
 
   print("Finished importing.")
 
