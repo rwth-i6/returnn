@@ -436,7 +436,7 @@ struct _KernelLoop {
 
 Ndarray* Ndarray_uninitialized_like(Ndarray* a) {
 	Ndarray_DIMS_Type dim = Ndarray_HOST_DIMS(a);
-	Ndarray* res = (Ndarray*) Ndarray_NewDims(Ndarray_NDIM(a), dim);
+	Ndarray* res = (Ndarray*) Ndarray_NewDims(Ndarray_NDIM(a), const_cast<Ndarray_DIM_Type*>(dim));
 	return res;
 }
 
