@@ -714,7 +714,7 @@ class LayerBase(object):
 
     :param tf.Tensor batch_dim: including beam size in beam search
     :param str name:
-    :param Data output:
+    :param Data output: template
     :param str|float|int|tf.Tensor|None initial_output:
     :rtype: tf.Tensor
     """
@@ -728,8 +728,8 @@ class LayerBase(object):
         (" E.g. '%s': {'initial_output': 'zeros'}." % name))
     if v is None:
       v = "zeros"
-    assert all([d is not None for d in data.shape])
-    shape = [batch_dim] + list(data.shape)
+    shape = [(d if (d is not None) else 1) for d in data.batch_shape]
+    shape[data.batch_dim_axis] = batch_dim
     if isinstance(v, (float, int)):
       with tf.name_scope("init_%s_const" % name):
         from TFUtil import constant_with_shape
@@ -1210,6 +1210,47 @@ class SoftmaxLayer(LinearLayer):
 
   def __init__(self, activation="softmax", **kwargs):
     super(SoftmaxLayer, self).__init__(activation=activation, **kwargs)
+
+
+class SoftmaxOverSpatialLayer(_ConcatInputLayer):
+  """
+  This applies a softmax over spatial axis/axes (currently only time axis supported).
+  E.g. when the input is of shape (B,T,dim), the output will be (B,dim).
+  It automatically masks the frames outside the seq defined by the seq-len.
+  In contrast to :class:`SoftmaxLayer`, this will not do a linear transformation.
+  """
+  layer_class = "softmax_over_spatial"
+
+  def __init__(self, energy_factor=None, **kwargs):
+    """
+    :param float|None energy_factor: the energy will be scaled by this factor.
+      This is like a temperature for the softmax.
+      In Attention-is-all-you-need, this is set to 1/sqrt(base_ctx.dim).
+    """
+    from TFUtil import move_axis, sequence_mask, sequence_mask_time_major
+    import numpy
+    super(SoftmaxOverSpatialLayer, self).__init__(**kwargs)
+    energy_data = self.input_data  # e.g. (B,T,dim)
+    assert energy_data.dtype.startswith("float")
+    energy = energy_data.placeholder
+    energy_shape = tf.shape(energy, name="energy_shape")
+    energy_shape = [energy_shape[i] for i in range(energy_data.batch_ndim)]
+    # We must mask all values behind seq_lens. Set them to -inf, because we use softmax afterwards.
+    energy_mask = energy_data.get_sequence_mask()
+    energy_mask_flat = tf.reshape(energy_mask, [numpy.prod(energy_shape[:2])], name="energy_mask_flat")
+    energy_flat = tf.reshape(energy, [numpy.prod(energy_shape[:2])] + energy_shape[2:], name="energy_flat")
+    energy_flat = tf.where(energy_mask_flat, energy_flat, float("-inf") * tf.ones_like(energy_flat), "energy_masked")
+    energy = tf.reshape(energy_flat, energy_shape, name="energy_unflat")
+    if energy_factor:
+      energy = tf.multiply(energy, energy_factor, name="energy_scaled")
+    energy = move_axis(energy, old_axis=energy_data.time_dim_axis, new_axis=-1, name="tr_time_last")  # (...,T)
+    weights = tf.nn.softmax(energy)  # (...,T)
+    weights = move_axis(weights, old_axis=-1, new_axis=energy_data.time_dim_axis, name="tr_time_recover")  # e.g. (B,T,dim)
+    self.output.placeholder = weights
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, **kwargs):
+    return get_concat_sources_data_template(sources, name="%s_output" % name)
 
 
 class ConstantLayer(LayerBase):
@@ -2445,13 +2486,9 @@ class CombineLayer(LayerBase):
     :rtype: tf.Tensor
     """
     self._check_same_dense_dim(sources)
-    from TFUtil import swapaxes
     x = sources[0].output.placeholder
-    batch_axis = sources[0].output.batch_dim_axis
     for source in sources[1:]:
-      x2 = source.output.placeholder
-      if source.output.batch_dim_axis != batch_axis:
-        x2 = swapaxes(x2, batch_axis, source.output.batch_dim_axis)
+      x2 = source.output.copy_compatible_to(sources[0].output).placeholder
       x = fn(x, x2)
     return x
 
@@ -2527,13 +2564,16 @@ class CombineLayer(LayerBase):
 class EvalLayer(CombineLayer):
   """
   Evaluates some string.
-  The CombineLayer provides this functionality, thus this is just a special case of it.
+  The :class:`CombineLayer` provides this functionality, thus this is just a special case of it.
   Also see :class:`ActivationLayer`.
   """
   layer_class = "eval"
 
-  def __init__(self, **kwargs):
-    super(EvalLayer, self).__init__(kind="eval", **kwargs)
+  def __init__(self, eval, **kwargs):
+    """
+    :param str eval: will eval this string. see :func:`_op_kind_eval`
+    """
+    super(EvalLayer, self).__init__(kind="eval", eval=eval, **kwargs)
 
 
 class CompareLayer(LayerBase):

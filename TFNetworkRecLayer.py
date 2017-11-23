@@ -2498,6 +2498,7 @@ class AttentionBaseLayer(_ConcatInputLayer):
     """
     out = base.output.copy_template_excluding_time_dim()
     assert out.time_dim_axis is None
+    assert out.batch_dim_axis == 0
     if n_out:
       assert out.dim == n_out, (
         "The default attention selects some frame-weighted input of shape [batch, frame, dim=%i]," % out.dim +
@@ -2508,6 +2509,7 @@ class AttentionBaseLayer(_ConcatInputLayer):
 class GlobalAttentionContextBaseLayer(AttentionBaseLayer):
   def __init__(self, base_ctx, **kwargs):
     """
+    :param LayerBase base: encoder output to attend on
     :param LayerBase base_ctx: encoder output used to calculate the attention weights
     """
     super(GlobalAttentionContextBaseLayer, self).__init__(**kwargs)
@@ -2520,6 +2522,51 @@ class GlobalAttentionContextBaseLayer(AttentionBaseLayer):
   def transform_config_dict(cls, d, network, get_layer):
     super(GlobalAttentionContextBaseLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
     d["base_ctx"] = get_layer(d["base_ctx"])
+
+
+class GenericAttentionLayer(AttentionBaseLayer):
+  """
+  The weighting for the base is specified explicitly here.
+  This can e.g. be used together with :class:`SoftmaxOverSpatialLayer`.
+  """
+  layer_class = "generic_attention"
+
+  def __init__(self, weights, **kwargs):
+    """
+    :param LayerBase base: encoder output to attend on. (B, enc-time)|(enc-time, B) + (n_out,)
+    :param LayerBase weights: attention weights. ((B, enc-time)|(enc-time, B)) + (1,)|()
+    """
+    super(GenericAttentionLayer, self).__init__(**kwargs)
+    assert not self.sources, "only base and weights are needed"
+    self.weights = weights
+    weights_data = self.weights.output.copy_as_batch_major()
+    assert (weights_data.batch_dim_axis, weights_data.time_dim_axis) == (0, 1)
+    assert weights_data.batch_ndim in {2, 3}
+    # We will always have batch-major mode and just write T, i.e. (B,T,...).
+    weights_t = weights_data.placeholder  # (B,T,1)|(B,T)
+    if weights_data.batch_ndim < self.base.output.batch_ndim:  # weights_t of shape (B,T)
+      weights_t_bc = tf.expand_dims(weights_t, axis=1)  # (B,1,T)
+    else:
+      assert weights_data.batch_ndim == self.base.output.batch_ndim
+      assert weights_data.dim == 1
+      weights_t_bc = tf.transpose(weights_t, perm=(0, 2, 1))  # (B,1,T)
+      weights_t = tf.squeeze(weights_t, axis=2)  # (B,T)
+    self.base_weights = weights_t  # (B,T)
+    base = self.base.output.get_placeholder_as_batch_major()  # (B,T,n_out)
+    out = tf.matmul(weights_t_bc, base)  # (B,1,n_out)
+    out.set_shape(tf.TensorShape([None, 1, self.output.dim]))
+    out = tf.squeeze(out, axis=1)  # (batch, n_out)
+    self.output.placeholder = out
+    self.output.size_placeholder = {}
+
+  def get_dep_layers(self):
+    return super(GenericAttentionLayer, self).get_dep_layers() + [self.weights]
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    d.setdefault("from", [])
+    super(GenericAttentionLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    d["weights"] = get_layer(d["weights"])
 
 
 class DotAttentionLayer(GlobalAttentionContextBaseLayer):

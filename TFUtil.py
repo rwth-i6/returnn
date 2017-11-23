@@ -208,7 +208,8 @@ class Data(object):
     if data.time_dim_axis != 0:
       if data.placeholder is not None:
         with reuse_name_scope_of_tensor(data.placeholder):
-          data.placeholder = swapaxes(data.placeholder, 0, data.time_dim_axis)
+          with tf.name_scope("%s_as_time_major" % (data.name,)):
+            data.placeholder = swapaxes(data.placeholder, 0, data.time_dim_axis)
       if data.batch_dim_axis <= data.time_dim_axis:
         data.batch_dim_axis += 1
       data.time_dim_axis = 0
@@ -224,7 +225,8 @@ class Data(object):
     data = self.copy()
     if data.batch_dim_axis != batch_dim_axis:
       if data.placeholder is not None:
-        data.placeholder = swapaxes(data.placeholder, batch_dim_axis, data.batch_dim_axis)
+        with tf.name_scope("%s_with_batch_axis_%i" % (data.name, batch_dim_axis)):
+          data.placeholder = swapaxes(data.placeholder, batch_dim_axis, data.batch_dim_axis)
       other_special_axes = data.get_special_axes_dict(counted_with_batch_dim=False, only_available=True)
       data.batch_dim_axis = batch_dim_axis
       for k, a in other_special_axes.items():
@@ -488,18 +490,10 @@ class Data(object):
         return tf.shape(self.placeholder)[self.time_dim_axis]
 
   def get_placeholder_as_time_major(self):
-    if self.is_time_major:
-      assert self.batch_dim_axis == 1
-      return self.placeholder
-    assert self.batch_dim_axis == 0
-    assert self.time_dim_axis == 1
-    with reuse_name_scope_of_tensor(self.placeholder):
-      return swapaxes(self.placeholder, 0, 1)  # (time,batch,dim)
+    return self.copy_as_time_major().placeholder
 
   def get_placeholder_as_batch_major(self):
-    if self.batch_dim_axis == 0:
-      return self.placeholder
-    return swapaxes(self.placeholder, 0, self.batch_dim_axis)  # (time,batch,dim)
+    return self.copy_as_batch_major().placeholder
 
   def get_placeholder_with_specific_batch_dim_axis(self, batch_dim_axis):
     if self.batch_dim_axis == batch_dim_axis:
@@ -1679,15 +1673,24 @@ def swapaxes(x, axis1, axis2):
     return tf.transpose(x, perm=perm)
 
 
-def move_axis(x, old_axis, new_axis):
+def move_axis(x, old_axis, new_axis, name="move_axis"):
   """
   :param tf.Tensor x:
-  :param int old_axis:
-  :param int new_axis:
+  :param int old_axis: can also be negative
+  :param int new_axis: can also be negative
+  :param str name: name of the scope
   """
-  with tf.name_scope("move_axis"):
+  with tf.name_scope(name):
     ndim = x.get_shape().ndims
     assert ndim is not None, "not supported currently: %r" % x
+    if old_axis < 0:
+      old_axis += ndim
+      assert old_axis >= 0
+    if new_axis < 0:
+      new_axis += ndim
+      assert new_axis >= 0
+    if old_axis == new_axis:
+      return x
     perm = list(range(ndim))
     old = perm.pop(old_axis)
     perm.insert(new_axis, old)
@@ -1700,7 +1703,7 @@ def sequence_mask(lengths, **kwargs):
   It will cache the value inside the passed object so that we don't recompute it multiple times.
 
   :param tf.Tensor lengths: shape (batch,)
-  :param dict[str] kwargs: passed on to tf.sequence_mask
+  :param kwargs: passed on to tf.sequence_mask
   :return: tensor mask of shape (batch,maxlen/time). default dtype is bool unless you specify something else
   :rtype: tf.Tensor
   """
@@ -1718,8 +1721,9 @@ def sequence_mask_time_major(lengths, **kwargs):
   It will cache the value inside the passed object so that we don't recompute it multiple times.
 
   :param tf.Tensor lengths: shape (batch,)
-  :param dict[str] kwargs: passed on to tf.sequence_mask
+  :param kwargs: passed on to tf.sequence_mask
   :return: mask of shape (maxlen/time,batch)
+  :rtype: tf.Tensor
   """
   if hasattr(lengths, "_sequence_mask_time_major"):
     return lengths._sequence_mask_time_major
