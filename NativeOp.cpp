@@ -436,7 +436,11 @@ struct _KernelLoop {
 
 Ndarray* Ndarray_uninitialized_like(Ndarray* a) {
 	Ndarray_DIMS_Type dim = Ndarray_HOST_DIMS(a);
-	Ndarray* res = (Ndarray*) Ndarray_NewDims(Ndarray_NDIM(a), const_cast<Ndarray_DIM_Type*>(dim));
+#ifdef TENSORFLOW
+	Ndarray* res = (Ndarray*) Ndarray_NewDims(Ndarray_NDIM(a), dim);
+#else
+	Ndarray* res = (Ndarray*) Ndarray_NewDims(Ndarray_NDIM(a), const_cast<decltype(Ndarray_DIM_Type)>(dim));
+#endif
 	return res;
 }
 
