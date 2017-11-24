@@ -3083,7 +3083,7 @@ class ClassesToSegmentsLayer(_ConcatInputLayer):
 class ClassesToLengthDistributionLayer(_ConcatInputLayer):
   layer_class = "classes_to_length_distribution"
 
-  def __init__(self, window=15, **kwargs):
+  def __init__(self, window=15, scale=1.0, **kwargs):
     super(ClassesToLengthDistributionLayer, self).__init__(**kwargs)
     assert(self.input_data.sparse)
 
@@ -3102,14 +3102,61 @@ class ClassesToLengthDistributionLayer(_ConcatInputLayer):
       cls_changed = tf.concat([cls_not_eq, [True]], axis=0)
       idx         = tf.where(cls_changed)
       count       = tf.squeeze(tf.concat([[idx[0] + 1], idx[1:] - idx[:-1]], axis=0), axis=1)
+      freq        = tf.cast(count, dtype='float32')
 
       res = tf.scatter_nd(idx, tf.cast(count, dtype='float32') / tf.cast(end - start, dtype='float32'), (window,))
 
       return res
 
     self.output.placeholder = tf.expand_dims(tf.map_fn(compute, batches, back_prop=False, dtype='float32'), axis=-2)
-    print(self.output.placeholder.get_shape())
-    #self.output.placeholder = tf.map_fn(compute, batches, back_prop=False, dtype='float32')
+    self.output.size_placeholder[0] = new_sizes
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, window, **kwargs):
+    out = get_concat_sources_data_template(sources, name="%s_output" % name).copy_as_batch_major()
+    out.size_placeholder = {}
+    out.size_placeholder[0] = None
+    out.shape = (1, window)
+    out.dim = window
+    out.sparse = False
+    out.dtype = 'float32'
+    return out
+
+
+class ClassesToLengthDistributionGlobalLayer(_ConcatInputLayer):
+  layer_class = "classes_to_length_distribution_global"
+
+  def __init__(self, window=15, weight_falloff=1.0, **kwargs):
+    super(ClassesToLengthDistributionGlobalLayer, self).__init__(**kwargs)
+    assert(self.input_data.sparse)
+
+    sizes = self.input_data.size_placeholder[0]
+    new_sizes = TFUtil.batch_sizes_after_windowing(sizes, window)
+    batches = TFUtil.batch_indices_after_windowing(sizes, window)
+    classes = self.input_data.get_placeholder_as_batch_major()
+    cls_not_eq = tf.not_equal(classes[:,:-1], classes[:,1:])
+    cls_changed = tf.concat([cls_not_eq, tf.fill((1, tf.shape(classes)[0],), True)], axis=1)
+
+    lengths = tf.range(0.0, float(window), 1.0)
+    end_distribution = tf.pow((1.0 - weight_falloff), lengths) * weight_falloff
+
+    # add small weight at the last frame in case there is no ending label, then we want the last frame to be a label end
+    no_label_backup = tf.concat([tf.zeros((window - 1,), dtype='float32'), [1e-4]], axis=0)
+
+    def compute(bse):
+      batch = bse[0]
+      start = bse[1]
+      end   = bse[2]
+
+      cls_chg = cls_changed[batch][start:end]
+      idx     = tf.where(cls_chg)
+      res     = tf.scatter_nd(idx, end_distribution[:tf.shape(idx)[0]], (window,))
+      res    += no_label_backup
+      res     = res / tf.reduce_sum(res)
+
+      return res
+
+    self.output.placeholder = tf.expand_dims(tf.map_fn(compute, batches, back_prop=False, dtype='float32'), axis=-2)
     self.output.size_placeholder[0] = new_sizes
 
   @classmethod
