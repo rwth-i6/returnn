@@ -211,6 +211,7 @@ def main():
   import_var(our_params["output/rec/s/initial_c"], "decoder/sequencegenerator/att_trans/lstm_decoder.initial_cells")
   import_var(our_params["output/rec/s/initial_h"], "decoder/sequencegenerator/att_trans/lstm_decoder.initial_state")
   import_var(our_params["output/rec/weight_feedback/W"], "decoder/sequencegenerator/att_trans/attention/sum_alignment_transformer.W")
+  import_var(our_params["output/rec/target_embed/W"], "decoder/sequencegenerator/readout/lookupfeedbackwmt15/lookuptable.W")
 
   print("Not initialized own params:")
   for key, v in sorted(our_params.items()):
@@ -238,7 +239,7 @@ def main():
       output_dim={"data": get_network().extern_data.get_default_input_data().get_kwargs()})
     dataset.init_seq_order(epoch=0)
     extract_output_dict = {
-      "enc_data_emb": get_network().layers["data_embed"].output.get_placeholder_as_batch_major(),
+      "enc_src_emb": get_network().layers["source_embed"].output.get_placeholder_as_batch_major(),
       "encoder": get_network().layers["encoder"].output.get_placeholder_as_batch_major(),
       "enc_ctx": get_network().layers["enc_ctx"].output.get_placeholder_as_batch_major(),
       "output": get_network().layers["output"].output.get_placeholder_as_batch_major()
@@ -252,7 +253,7 @@ def main():
     our_output = rnn.engine.run_single(
       dataset=dataset, seq_idx=0, output_dict=extract_output_dict)
     blocks_out = blocks_initial_outputs["bidirectionalencoder_EncoderLookUp0__EncoderLookUp0_apply_output"]
-    our_out = our_output["enc_data_emb"]
+    our_out = our_output["enc_src_emb"]
     print("our enc emb shape:", our_out.shape)
     print("Blocks enc emb shape:", blocks_out.shape)
     assert our_out.shape[:2] == (1, seq_len)
@@ -293,33 +294,122 @@ def main():
     assert our_enc_ctx_out.shape[:2] == (1, seq_len)
     assert blocks_enc_ctx_out.shape[2:] == our_enc_ctx_out.shape[2:]
     assert_almost_equal(blocks_enc_ctx_out[:, 0], our_enc_ctx_out[0], decimal=5)
+    fertility = numpy.dot(blocks_encoder_out[:, 0], blocks_params["decoder/sequencegenerator/att_trans/attention/fertility_transformer.W"])
+    fertility = 1.0 / (1.0 + numpy.exp(-fertility))  # sigmoid
+    assert fertility.shape == (seq_len, 1)
+    fertility = fertility[:, 0]
+    assert fertility.shape == (seq_len,)
     our_dec_outputs = {v["step"]: v for v in _SubnetworkRecCell._debug_out}
     assert our_dec_outputs
     print("our dec frame keys:", sorted(our_dec_outputs[0].keys()))
+    dec_lookup = blocks_params["decoder/sequencegenerator/readout/lookupfeedbackwmt15/lookuptable.W"]
     last_lstm_state = blocks_params["decoder/sequencegenerator/att_trans/lstm_decoder.initial_state"]
     last_lstm_cells = blocks_params["decoder/sequencegenerator/att_trans/lstm_decoder.initial_cells"]
-    accumulated_weights = numpy.zeros((seq_len,), dtype="float32")
-    for dec_step in range(3):
-      blocks_frame_outputs = numpy.load("%s/next_states.%i.npz" % (blocks_debug_dump_output, dec_step))
+    last_accumulated_weights = numpy.zeros((seq_len,), dtype="float32")
+    last_output = 0
+    for dec_step in range(100):
+      blocks_frame_outputs_fn = "%s/next_states.%i.npz" % (blocks_debug_dump_output, dec_step)
+      if dec_step > 3:
+        if not os.path.exists(blocks_frame_outputs_fn):
+          break
+      blocks_frame_outputs = numpy.load(blocks_frame_outputs_fn)
       our_dec_frame_outputs = our_dec_outputs[dec_step]
-      blocks_accumulated_weights = blocks_frame_outputs["decoder_sequencegenerator__sequencegenerator_generate_accumulated_weights"]
-      assert blocks_accumulated_weights.shape == (beam_size, seq_len)
-      assert_almost_equal(blocks_accumulated_weights[0], accumulated_weights)
-      energy_sum = blocks_enc_ctx_out[:, 0]  # (T,enc-ctx-dim)
-      # weight_feedback = numpy.dot(accumulated_weights, blocks_params["decoder/sequencegenerator/att_trans/attention/sum_alignment_transformer.W"])  # TODO...
-      # energy_sum += weight_feedback  # TODO
-      transformed_states = 0  # TODO, based on states -> state_transformers (Linear?)
-      energy_sum += transformed_states
-      blocks_energy_sum_tanh = blocks_frame_outputs["decoder_sequencegenerator_att_trans_attention_energy_comp_tanh__tanh_apply_output"]
-      assert blocks_energy_sum_tanh.shape == (seq_len, beam_size, energy_sum.shape[-1])
-      # assert_almost_equal(blocks_energy_sum_tanh[1], numpy.tanh(energy_sum), decimal=6)  # TODO
-      # pprint(our_dec_frame_outputs)
       blocks_last_lstm_state = blocks_frame_outputs["decoder_sequencegenerator__sequencegenerator_generate_states"]
       blocks_last_lstm_cells = blocks_frame_outputs["decoder_sequencegenerator__sequencegenerator_generate_cells"]
       assert blocks_last_lstm_state.shape == (beam_size, last_lstm_state.shape[0])
-      assert_almost_equal(blocks_last_lstm_state[0], last_lstm_state)
-      assert_almost_equal(blocks_last_lstm_cells[0], last_lstm_cells)
-      if dec_step == 0: break  # TODO ...
+      assert_almost_equal(blocks_last_lstm_state[0], last_lstm_state, decimal=5)
+      assert_almost_equal(blocks_last_lstm_cells[0], last_lstm_cells, decimal=5)
+      blocks_last_accum_weights = blocks_frame_outputs["decoder_sequencegenerator__sequencegenerator_generate_accumulated_weights"]
+      assert blocks_last_accum_weights.shape == (beam_size, seq_len)
+      assert_almost_equal(blocks_last_accum_weights[0], last_accumulated_weights, decimal=5)
+      energy_sum = numpy.copy(blocks_enc_ctx_out[:, 0])  # (T,enc-ctx-dim)
+      weight_feedback = numpy.dot(last_accumulated_weights[:, None], blocks_params["decoder/sequencegenerator/att_trans/attention/sum_alignment_transformer.W"])
+      energy_sum += weight_feedback
+      transformed_states = numpy.dot(last_lstm_state[None, :], blocks_params["decoder/sequencegenerator/att_trans/attention/state_trans/transform_states.W"])
+      transformed_cells = numpy.dot(last_lstm_cells[None, :], blocks_params["decoder/sequencegenerator/att_trans/attention/state_trans/transform_cells.W"])
+      energy_sum += transformed_states + transformed_cells
+      assert energy_sum.shape == (seq_len, blocks_enc_ctx_out.shape[-1])
+      blocks_energy_sum_tanh = blocks_frame_outputs["decoder_sequencegenerator_att_trans_attention_energy_comp_tanh__tanh_apply_output"]
+      assert blocks_energy_sum_tanh.shape == (seq_len, beam_size, energy_sum.shape[-1])
+      assert_almost_equal(blocks_energy_sum_tanh[:, 0], numpy.tanh(energy_sum), decimal=5)
+      blocks_energy = blocks_frame_outputs["decoder_sequencegenerator_att_trans_attention_energy_comp__energy_comp_apply_output"]
+      assert blocks_energy.shape == (seq_len, beam_size, 1)
+      energy = numpy.dot(numpy.tanh(energy_sum), blocks_params["decoder/sequencegenerator/att_trans/attention/energy_comp/linear.W"])
+      assert energy.shape == (seq_len, 1)
+      assert_almost_equal(blocks_energy[:, 0], energy, decimal=5)
+      weights = softmax(energy[:, 0])
+      assert weights.shape == (seq_len,)
+      accumulated_weights = last_accumulated_weights + weights / (2.0 * fertility)
+      assert accumulated_weights.shape == (seq_len,)
+      blocks_accumulated_weights = blocks_frame_outputs["decoder_sequencegenerator_att_trans_attention__attention_take_glimpses_accumulated_weights"]
+      assert blocks_accumulated_weights.shape == (beam_size, seq_len)
+      assert_almost_equal(blocks_accumulated_weights[0], accumulated_weights, decimal=5)
+      blocks_weights = blocks_frame_outputs["decoder_sequencegenerator_att_trans_attention__attention_compute_weights_output_0"]
+      assert blocks_weights.shape == (seq_len, beam_size)
+      assert_almost_equal(weights, blocks_weights[:, 0], decimal=5)
+      weighted_avg = (weights[:, None] * blocks_encoder_out[:, 0]).sum(axis=0)  # att in our
+      assert weighted_avg.shape == (blocks_encoder_out.shape[-1],)
+      blocks_weighted_avg = blocks_frame_outputs["decoder_sequencegenerator_att_trans_attention__attention_compute_weighted_averages_output_0"]
+      assert blocks_weighted_avg.shape == (beam_size, blocks_encoder_out.shape[-1])
+      assert_almost_equal(blocks_weighted_avg[0], weighted_avg, decimal=5)
+
+      blocks_last_output = blocks_frame_outputs["decoder_sequencegenerator__sequencegenerator_generate_outputs"]
+      assert blocks_last_output.shape == (beam_size,)
+      assert max(blocks_last_output[0], 0) == last_output
+      last_target_embed = dec_lookup[last_output]
+
+      readout_in = \
+        numpy.dot(last_lstm_state, blocks_params["decoder/sequencegenerator/readout/merge/transform_states.W"]) + \
+        numpy.dot(last_target_embed, blocks_params["decoder/sequencegenerator/readout/merge/transform_feedback.W"]) + \
+        numpy.dot(weighted_avg, blocks_params["decoder/sequencegenerator/readout/merge/transform_weighted_averages.W"])
+      readout_in += blocks_params["decoder/sequencegenerator/readout/initializablefeedforwardsequence/maxout_bias.b"]
+      assert readout_in.shape == (blocks_params["decoder/sequencegenerator/readout/initializablefeedforwardsequence/maxout_bias.b"].shape[0],)
+      readout = readout_in.reshape((readout_in.shape[0] // 2, 2)).max(axis=1)
+      prob_logits = numpy.dot(readout, blocks_params["decoder/sequencegenerator/readout/initializablefeedforwardsequence/softmax1.W"]) + \
+        blocks_params["decoder/sequencegenerator/readout/initializablefeedforwardsequence/softmax1.b"]
+      output_prob = softmax(prob_logits)
+      ref_output = numpy.argmax(output_prob)
+      blocks_dec_output = blocks_frame_outputs["decoder_sequencegenerator_readout__readout_emit_output_0"]
+      assert blocks_dec_output.shape == (beam_size,)
+      assert ref_output in blocks_dec_output
+      print("Frame %i: Ref output symbol: %i, Blocks: %r" % (dec_step, int(ref_output), blocks_dec_output.tolist()))
+      if dec_step == 0:
+        assert blocks_dec_output[0] == ref_output
+      ref_output = blocks_dec_output[0]
+
+      blocks_target_emb = blocks_frame_outputs["decoder_sequencegenerator_fork__fork_apply_feedback_decoder_input"]
+      assert blocks_target_emb.shape == (beam_size, dec_lookup.shape[1])
+      target_embed = dec_lookup[ref_output]
+      assert target_embed.shape == (dec_lookup.shape[1],)
+      assert_almost_equal(blocks_target_emb[0], target_embed)
+
+      feedback_to_decoder = numpy.dot(target_embed, blocks_params["decoder/sequencegenerator/att_trans/feedback_to_decoder/fork_inputs.W"])
+      context_to_decoder = numpy.dot(weighted_avg, blocks_params["decoder/sequencegenerator/att_trans/context_to_decoder/fork_inputs.W"])
+      lstm_z = feedback_to_decoder + context_to_decoder
+      assert lstm_z.shape == feedback_to_decoder.shape == context_to_decoder.shape == (last_lstm_state.shape[-1] * 4,)
+      blocks_feedback_to_decoder = blocks_frame_outputs["decoder_sequencegenerator_att_trans_feedback_to_decoder__feedback_to_decoder_apply_inputs"]
+      blocks_context_to_decoder = blocks_frame_outputs["decoder_sequencegenerator_att_trans_context_to_decoder__context_to_decoder_apply_inputs"]
+      assert blocks_feedback_to_decoder.shape == blocks_context_to_decoder.shape == (beam_size, last_lstm_state.shape[-1] * 4)
+      assert_almost_equal(blocks_feedback_to_decoder[0], feedback_to_decoder, decimal=5)
+      assert_almost_equal(blocks_context_to_decoder[0], context_to_decoder, decimal=5)
+      lstm_state, lstm_cells = calc_raw_lstm(
+        lstm_z, blocks_params=blocks_params,
+        prefix="decoder/sequencegenerator/att_trans/lstm_decoder.",
+        last_state=last_lstm_state, last_cell=last_lstm_cells)
+      assert lstm_state.shape == last_lstm_state.shape == lstm_cells.shape == last_lstm_cells.shape
+      blocks_lstm_state = blocks_frame_outputs["decoder_sequencegenerator_att_trans_lstm_decoder__lstm_decoder_apply_states"]
+      blocks_lstm_cells = blocks_frame_outputs["decoder_sequencegenerator_att_trans_lstm_decoder__lstm_decoder_apply_cells"]
+      assert blocks_lstm_state.shape == blocks_lstm_cells.shape == (beam_size, last_lstm_state.shape[-1])
+      assert_almost_equal(blocks_lstm_state[0], lstm_state, decimal=5)
+      assert_almost_equal(blocks_lstm_cells[0], lstm_cells, decimal=5)
+
+      last_accumulated_weights = accumulated_weights
+      last_lstm_state = lstm_state
+      last_lstm_cells = lstm_cells
+      last_output = ref_output
+      if last_output == 0:
+        print("Sequence finished, seq len %i." % dec_step)
+        break
 
   print("Finished importing.")
 
@@ -336,10 +426,11 @@ def lstm_vec_blocks_to_tf(x):
   return numpy.concatenate([i, j, f, o], axis=axis)
 
 
-def calc_lstm(x, blocks_params):
+def calc_lstm(x, blocks_params, t=0):
   """
-  :param numpy.ndarray x:
+  :param numpy.ndarray x: (seq_len, in_dim)
   :param dict[str,numpy.ndarray] blocks_params:
+  :param int t:
   :rtype: numpy.ndarray
   """
   prefix = "bidirectionalencoder/EncoderBidirectionalLSTM1"
@@ -351,33 +442,54 @@ def calc_lstm(x, blocks_params):
   out_dim = b.shape[0] // 4
   seq_len, in_dim = x.shape
   assert W_in.shape == (in_dim, out_dim * 4)
-  W_re = blocks_params[prefix1 + "W_state"]
+  z = numpy.dot(x[t], W_in) + b
+  assert z.shape == (out_dim * 4,)
+  cur_state, cur_cell = calc_raw_lstm(z, blocks_params=blocks_params, prefix=prefix1)
+  return cur_state
+
+
+def calc_raw_lstm(z, blocks_params, prefix, last_state=None, last_cell=None):
+  """
+  :param numpy.ndarray z: shape (out_dim * 4,)
+  :param dict[str,numpy.ndarray] blocks_params:
+  :param str prefix: e.g. "bidirectionalencoder/EncoderBidirectionalLSTM1/bidirectionalseparateparameters/forward."
+  :param numpy.ndarray|None last_state: (out_dim,)
+  :param numpy.ndarray|None last_cell: (out_dim,)
+  :rtype: numpy.ndarray
+  """
+  assert z.ndim == 1
+  assert z.shape[-1] % 4 == 0
+  out_dim = z.shape[-1] // 4
+  W_re = blocks_params[prefix + "W_state"]
   assert W_re.shape == (out_dim, out_dim * 4)
-  W_cell_to_in = blocks_params[prefix1 + "W_cell_to_in"]
-  W_cell_to_forget = blocks_params[prefix1 + "W_cell_to_forget"]
-  W_cell_to_out = blocks_params[prefix1 + "W_cell_to_out"]
+  W_cell_to_in = blocks_params[prefix + "W_cell_to_in"]
+  W_cell_to_forget = blocks_params[prefix + "W_cell_to_forget"]
+  W_cell_to_out = blocks_params[prefix + "W_cell_to_out"]
   assert W_cell_to_in.shape == W_cell_to_forget.shape == W_cell_to_out.shape == (out_dim,)
-  initial_state, initial_cell = blocks_params[prefix1 + "initial_state"], blocks_params[prefix1 + "initial_cells"]
-  assert initial_state.shape == initial_cell.shape == (out_dim,)
-  t = 0
-  last_state = initial_state
-  last_cell = initial_cell
-  z = numpy.dot(x[t], W_in) + numpy.dot(last_state, W_re) + b
+  if last_cell is None and last_state is None:
+    initial_state, initial_cell = blocks_params[prefix + "initial_state"], blocks_params[prefix + "initial_cells"]
+    assert initial_state.shape == initial_cell.shape == (out_dim,)
+    last_state = initial_state
+    last_cell = initial_cell
+  z = z + numpy.dot(last_state, W_re)
   assert z.shape == (out_dim * 4,)
   # Blocks order: gate-in, gate-forget, next-in, gate-out
   gate_in, gate_forget, next_in, gate_out = numpy.split(z, 4)
-  gate_in += W_cell_to_in * last_cell
-  gate_forget += W_cell_to_forget * last_cell
+  gate_in = gate_in + W_cell_to_in * last_cell
+  gate_forget = gate_forget + W_cell_to_forget * last_cell
   gate_in = 1.0 / (1.0 + numpy.exp(-gate_in))
   gate_forget = 1.0 / (1.0 + numpy.exp(-gate_forget))
   next_in = numpy.tanh(next_in)
   cur_cell = last_cell * gate_forget + next_in * gate_in
-  gate_out += W_cell_to_out * cur_cell
+  gate_out = gate_out + W_cell_to_out * cur_cell
   gate_out = 1.0 / (1.0 + numpy.exp(-gate_out))
   cur_state = numpy.tanh(cur_cell) * gate_out
-  last_cell = cur_cell
-  last_state = cur_state
-  return cur_state
+  return cur_state, cur_cell
+
+
+def softmax(x, axis=-1):
+  e_x = numpy.exp(x - numpy.max(x, axis=axis))
+  return e_x / e_x.sum(axis=axis)
 
 
 if __name__ == "__main__":
