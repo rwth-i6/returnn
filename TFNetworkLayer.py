@@ -894,16 +894,16 @@ def concat_sources(src_layers):
   return data
 
 
-def get_concat_sources_data_template(src_layers, name="concat_sources"):
+def get_concat_sources_data_template(src_layers, name=None):
   """
   :param list[LayerBase] src_layers:
-  :param str name: name of the Data
+  :param str|None name: name of the Data
   :return: data with no placeholders set
   :rtype: Data
   """
   assert src_layers, "need source layers"
   if len(src_layers) == 1:
-    return src_layers[0].output.copy()
+    return src_layers[0].output.copy(name=name)
   dim = 0
   beam_size = None
   for layer in src_layers:
@@ -912,7 +912,7 @@ def get_concat_sources_data_template(src_layers, name="concat_sources"):
     dim += shape[-1]
     beam_size = beam_size or layer.output.beam_size
   data = Data(
-    name=name,
+    name=name or ("concat_" + "_".join([l.name for l in src_layers])),
     shape=src_layers[0].output.shape[:-1] + (dim,),
     dim=dim,
     sparse=False,
@@ -993,7 +993,7 @@ class CopyLayer(_ConcatInputLayer):
 
   def __init__(self, **kwargs):
     super(CopyLayer, self).__init__(**kwargs)
-    self.output = self.input_data
+    self.output = self.input_data.copy(name="%s_output" % self.name)
     if len(self.sources) == 1:
       self.output_loss = self.sources[0].output_loss
       if not self.dropout:
@@ -2005,7 +2005,7 @@ class ReduceLayer(_ConcatInputLayer):
     elif mode in ["avg", "mean"]:
       f = tf.reduce_mean
     else:
-      assert False
+      raise Exception("invalid mode %r" % mode)
     if x.time_dim_axis in axes:
       assert not keep_dims, "not yet implemented otherwise"
       assert x.batch_dim_axis in axes, "not yet implemented otherwise"
@@ -2080,6 +2080,47 @@ class ReduceLayer(_ConcatInputLayer):
       dtype=x.dtype,
       sparse=False,
       beam_size=x.beam_size)
+
+
+class ReduceOutLayer(_ConcatInputLayer):
+  """
+  Combination of :class:`SplitDimsLayer` applied to the feature dim
+  and :class:`ReduceLayer` applied to the resulting feature dim.
+  This can e.g. be used to do maxout.
+  """
+  layer_class = "reduce_out"
+
+  def __init__(self, mode, num_pieces, **kwargs):
+    """
+    :param str mode: "sum" or "max" or "mean"
+    :param int num_pieces: how many elements to reduce. The output dimension will be input.dim // num_pieces.
+    """
+    super(ReduceOutLayer, self).__init__(**kwargs)
+    if mode == "max":
+      f = tf.reduce_max
+    elif mode == "sum":
+      f = tf.reduce_sum
+    elif mode in ["avg", "mean"]:
+      f = tf.reduce_mean
+    else:
+      raise Exception("invalid mode %r" % mode)
+    shape = tf.shape(self.input_data.placeholder)
+    shape = [shape[i] for i in range(self.input_data.batch_ndim)]
+    x = tf.reshape(self.input_data.placeholder, shape[:-1] + [self.output.dim, num_pieces])
+    x.set_shape(tf.TensorShape(self.input_data.batch_shape[:-1] + (self.output.dim, num_pieces)))
+    x = f(x, axis=self.input_data.batch_ndim, name="%s_out" % mode)
+    x.set_shape(tf.TensorShape(self.output.batch_shape))
+    self.output.placeholder = x
+    self.output.size_placeholder = self.input_data.size_placeholder.copy()
+
+  @classmethod
+  def get_out_data_from_opts(cls, num_pieces, sources, name, **kwargs):
+    out = get_concat_sources_data_template(sources, name="%s_output" % name)
+    assert not out.sparse
+    assert out.dim % num_pieces == 0
+    out.dim //= num_pieces
+    out.shape = out.shape[:-1] + (out.dim,)
+    return out
 
 
 class SqueezeLayer(_ConcatInputLayer):

@@ -179,8 +179,9 @@ class Data(object):
   def __repr__(self):
     return self.get_description()
 
-  def copy(self):
+  def copy(self, name=None):
     """
+    :param str name: if given, will overwrite this name
     :return: copy of myself, using self.get_kwargs(), and with placeholder and size_placeholder
     :rtype: Data
     """
@@ -188,6 +189,8 @@ class Data(object):
     data.placeholder = self.placeholder
     if self.size_placeholder is not None:
       data.size_placeholder = self.size_placeholder.copy()
+    if name:
+      data.name = name
     return data
 
   def copy_as_batch_major(self):

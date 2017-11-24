@@ -237,6 +237,10 @@ class TFNetwork(object):
     return "<%s>" % s
 
   def get_absolute_name_scope_prefix(self):
+    """
+    :return: scope, always with "/" at the end, or ""
+    :rtype: str
+    """
     if self.parent_layer:
       return self.parent_layer.get_absolute_name_scope_prefix()
     if self.parent_net:
@@ -352,7 +356,7 @@ class TFNetwork(object):
         if "output" not in layer_desc:
           layer_desc["output"] = layer_class.get_out_data_from_opts(**layer_desc)
         if debug_print_layer_output_template:
-          print("layer %r output: %r" % (name, layer_desc["output"]))
+          print("layer %s%r output: %r" % (self.get_absolute_name_scope_prefix(), name, layer_desc["output"]))
         layer = layer_class(**layer_desc)
       except TypeError:
         help_on_type_error_wrong_args(cls=layer_class, kwargs=list(layer_desc.keys()))

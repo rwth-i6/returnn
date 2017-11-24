@@ -1280,7 +1280,8 @@ class _SubnetworkRecCell(object):
         cond=cond,
         body=body,
         loop_vars=init_loop_vars,
-        shape_invariants=shape_invariants)
+        shape_invariants=shape_invariants,
+        back_prop=self.net.train_flag is not False)
     else:  # no layers inside loop, all optimized out
       final_loop_vars = init_loop_vars
     if have_known_seq_len:
@@ -1424,7 +1425,8 @@ class _SubnetworkRecCell(object):
         loop_vars=(
           tf.identity(final_acc_tas[0].size() - 1, name="search_resolve_initial_i"),  # we go backwards
           initial_beam_choices,
-          new_acc_output_ta))
+          new_acc_output_ta),
+        back_prop=self.net.train_flag is not False)
       final_acc_tas_dict["output_output"] = new_acc_output_ta
 
       # Collect the search choices for the rec layer itself.
