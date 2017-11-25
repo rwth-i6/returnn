@@ -801,7 +801,8 @@ class _SubnetworkRecCell(object):
       # Special case for the 'end' layer.
       from TFUtil import constant_with_shape
       return constant_with_shape(False, shape=[batch_dim], name="initial_end")
-    return cl.get_rec_initial_output(batch_dim=batch_dim, **self.layer_data_templates[name].kwargs)
+    with cl.cls_layer_scope(name):
+      return cl.get_rec_initial_output(batch_dim=batch_dim, **self.layer_data_templates[name].kwargs)
 
   def _get_init_extra_outputs(self, name):
     """
@@ -1903,17 +1904,21 @@ class RnnCellLayer(_ConcatInputLayer):
 
   layer_class = "rnn_cell"
 
-  def __init__(self, n_out, unit, initial_state=None, unit_opts=None, weights_init="xavier",**kwargs):
+  def __init__(self, n_out, unit, unit_opts=None,
+               initial_state=None, initial_output=None,
+               weights_init="xavier", **kwargs):
     """
     :param int n_out: so far, only output shape (batch,n_out) supported
     :param str|tf.contrib.rnn.RNNCell unit: e.g. "BasicLSTM" or "LSTMBlock"
+    :param dict[str]|None unit_opts: passed to the cell.__init__
     :param str|float|LayerBase|tuple[LayerBase]|dict[LayerBase] initial_state: see self._get_rec_initial_state().
       This will be set via transform_config_dict().
       To get the state from another recurrent layer, use the GetLastHiddenStateLayer (get_last_hidden_state).
-    :param dict[str]|None unit_opts: passed to the cell.__init__
+    :param None initial_output: the initial output is defined implicitly via initial state, thus don't set this
     """
     super(RnnCellLayer, self).__init__(**kwargs)
     self._initial_state = initial_state
+    assert initial_output is None, "set initial_state instead"
     from TFUtil import get_initializer
     with tf.variable_scope(
           "rec",
@@ -1945,6 +1950,7 @@ class RnnCellLayer(_ConcatInputLayer):
     if isinstance(unit, rnn_contrib.RNNCell):
       return unit
     rnn_cell_class = RecLayer.get_rnn_cell_class(unit)
+    # E.g. rnn_cell_class is :class:`rnn_contrib.LSTMCell`.
     assert issubclass(rnn_cell_class, rnn_contrib.RNNCell)
     if unit_opts is None:
       unit_opts = {}
@@ -1989,6 +1995,9 @@ class RnnCellLayer(_ConcatInputLayer):
   @classmethod
   def get_hidden_state_size(cls, n_out, unit, unit_opts=None, **kwargs):
     """
+    :param int n_out:
+    :param str unit:
+    :param dict[str]|None unit_opts:
     :return: size or tuple of sizes
     :rtype: int|tuple[int]
     """
@@ -1997,7 +2006,25 @@ class RnnCellLayer(_ConcatInputLayer):
     assert isinstance(cell, rnn_contrib.RNNCell)
     return cell.state_size
 
+  @classmethod
+  def get_output_from_state(cls, state, unit):
+    """
+    :param tuple[tf.Tensor]|tf.Tensor state:
+    :param str unit:
+    :rtype: tf.Tensor
+    """
+    import tensorflow.contrib.rnn as rnn_contrib
+    if isinstance(state, rnn_contrib.LSTMStateTuple):
+      return state.h
+    # Assume the state is the output. This might be wrong...
+    assert isinstance(state, tf.Tensor)
+    return state
+
   def get_hidden_state(self):
+    """
+    :return: state as defined by the cell
+    :rtype: tuple[tf.Tensor]|tf.Tensor
+    """
     return self._hidden_state
 
   @classmethod
@@ -2134,6 +2161,15 @@ class RnnCellLayer(_ConcatInputLayer):
         return v
       raise Exception("initial_state %r: invalid type: %r, %r" % (initial_state, v, type(v)))
     return resolve(initial_state)
+
+  @classmethod
+  def get_rec_initial_output(cls, unit, initial_output=None, initial_state=None, **kwargs):
+    assert initial_output is None, "layer %r: use initial_state instead" % kwargs["name"]
+    if initial_state in [None, 0, "zero"]:
+      # We can just return 0.
+      return super(RnnCellLayer, cls).get_rec_initial_output(initial_output=0, **kwargs)
+    state = cls.get_rec_initial_state(unit=unit, initial_state=initial_state, **kwargs)
+    return cls.get_output_from_state(state=state, unit=unit)
 
 
 class GetLastHiddenStateLayer(LayerBase):
