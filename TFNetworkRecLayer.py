@@ -1247,6 +1247,7 @@ class _SubnetworkRecCell(object):
           args.update({"%s.output" % k: v.output.placeholder for (k, v) in self.net.layers.items()})
           for k in self._initial_extra_outputs:
             args.update({"%s.extra.%s" % (k, k2): v for (k2, v) in self.net.layers[k].rec_vars_outputs.items()})
+            args.update({"prev:%s.extra.%s" % (k, k2): v for (k2, v) in prev_extra[k].items()})
           res = (identity_with_debug_log(out=self._debug_out, x=res[0], args=args),) + res[1:]
         return res
 
@@ -1847,6 +1848,16 @@ class _TemplateLayer(LayerBase):
     """
     return self.kwargs["beam_size"]
 
+  def get_hidden_state(self):
+    if issubclass(self.layer_class_type, RnnCellLayer):
+      return self.rec_vars_outputs["state"]
+    return super(_TemplateLayer, self).get_hidden_state()
+
+  def get_last_hidden_state(self):
+    if issubclass(self.layer_class_type, RnnCellLayer):
+      return RnnCellLayer.flatten_hidden_state(self.rec_vars_outputs["state"])
+    return super(_TemplateLayer, self).get_last_hidden_state()
+
 
 class RecStepInfoLayer(LayerBase):
   """
@@ -1989,11 +2000,16 @@ class RnnCellLayer(_ConcatInputLayer):
   def get_hidden_state(self):
     return self._hidden_state
 
-  def get_last_hidden_state(self):
+  @classmethod
+  def flatten_hidden_state(cls, state):
     from tensorflow.python.util import nest
-    if nest.is_sequence(self._hidden_state):
-      return tf.concat(self._hidden_state, axis=1)
-    return self._hidden_state
+    if nest.is_sequence(state):
+      state = tf.concat(state, axis=1)  # in dim-axis
+    state.set_shape(tf.TensorShape([None, None]))  # (batch,dim)
+    return state
+
+  def get_last_hidden_state(self):
+    return self.flatten_hidden_state(self._hidden_state)
 
   @classmethod
   def get_rec_initial_state(cls, batch_dim, name, n_out, unit, initial_state=None, unit_opts=None, **kwargs):
@@ -2134,15 +2150,15 @@ class GetLastHiddenStateLayer(LayerBase):
     """
     super(GetLastHiddenStateLayer, self).__init__(**kwargs)
     assert len(self.sources) > 0
-    sources = [s.get_last_hidden_state() for s in self.sources]
-    assert all([s is not None for s in sources])
-    if len(sources) == 1:
-      h = sources[0]
+    last_states = [s.get_last_hidden_state() for s in self.sources]
+    assert all([s is not None for s in last_states])
+    if len(last_states) == 1:
+      h = last_states[0]
     else:
       if combine == "concat":
-        h = tf.concat(sources, axis=1, name="concat_hidden_states")
+        h = tf.concat(last_states, axis=1, name="concat_hidden_states")
       elif combine == "add":
-        h = tf.add_n(sources, name="add_hidden_states")
+        h = tf.add_n(last_states, name="add_hidden_states")
       else:
         raise Exception("invalid hidden states combine mode %r" % combine)
     from TFUtil import check_input_ndim, check_input_dim
