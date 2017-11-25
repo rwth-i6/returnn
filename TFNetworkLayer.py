@@ -739,6 +739,24 @@ class LayerBase(object):
       return tf.zeros(shape, dtype=data.dtype, name="init_%s_zeros" % name)
     elif v == "ones":
       return tf.ones(shape, dtype=data.dtype, name="init_%s_ones" % name)
+    elif v == "apply(0)":
+      # We will apply the layer for the input 0 and use this as the initial state.
+      # This code might be a bit unstable.
+      kwargs = kwargs.copy()
+      sources = kwargs.pop("sources")
+      zeroed_sources = []
+      for src in sources:
+        assert isinstance(src, LayerBase)
+        zeroed_src = InternalLayer(name=src.name, output=src.output.copy(), network=src.network)
+        zeroed_src_shape = [(d if (d is not None) else 1) for d in zeroed_src.output.batch_shape]
+        zeroed_src_shape[zeroed_src.output.batch_dim_axis] = batch_dim
+        zeroed_src.output.placeholder = tf.zeros(
+          zeroed_src_shape, dtype=zeroed_src.output.dtype, name="init_%s_zeros" % src.name)
+        zeroed_sources.append(zeroed_src)
+      layer = cls(name=name, output=output.copy(), sources=tuple(zeroed_sources), **kwargs)
+      out = layer.output.placeholder
+      out.set_shape(data.batch_shape)
+      return out
     else:
       raise Exception("invalid initial output type %r for sub-layer %r" % (v, name))
 
