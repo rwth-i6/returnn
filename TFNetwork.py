@@ -735,6 +735,8 @@ class TFNetwork(object):
     :param str filename:
     :param tf.Session session:
     """
+    import os
+    filename = os.path.abspath(filename)  # TF needs absolute path
     if not self.saver:
       self._create_saver()
     # We add some extra logic to try again for DiskQuota and other errors.
