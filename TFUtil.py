@@ -2803,7 +2803,7 @@ def windowed_nd(source, window, padding="same", time_axis=1, new_window_axis=2):
       w_right = window // 2
       w_left = window - w_right - 1
       pad_left = tf.zeros(tf.concat([[w_left], source_shape[1:]], axis=0), dtype=source.dtype)
-      pad_right = tf.zeros(tf.concat([[w_left], source_shape[1:]], axis=0), dtype=source.dtype)
+      pad_right = tf.zeros(tf.concat([[w_right], source_shape[1:]], axis=0), dtype=source.dtype)
       source = tf.concat([pad_left, source, pad_right], axis=0)  # shape[0] == n_time + window - 1
     elif padding == "valid":
       n_out_time = n_time - window + 1
