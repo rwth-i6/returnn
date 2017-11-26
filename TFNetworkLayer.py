@@ -747,7 +747,7 @@ class LayerBase(object):
       zeroed_sources = []
       for src in sources:
         assert isinstance(src, LayerBase)
-        zeroed_src = InternalLayer(name=src.name, output=src.output.copy(), network=src.network)
+        zeroed_src = InternalLayer(name="%s_zeroed" % src.name, output=src.output.copy(), network=src.network)
         zeroed_src_shape = [(d if (d is not None) else 1) for d in zeroed_src.output.batch_shape]
         zeroed_src_shape[zeroed_src.output.batch_dim_axis] = batch_dim
         zeroed_src.output.placeholder = tf.zeros(

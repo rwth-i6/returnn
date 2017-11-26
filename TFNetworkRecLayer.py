@@ -735,9 +735,9 @@ class _SubnetworkRecCell(object):
         assert "prev:%s" % layer_name not in inputs_moved_out, "currently cannot use both cur + prev frame"
       assert layer_name in self.input_layers_moved_out
       assert isinstance(self.input_layers_net, TFNetwork)
-      l = self.input_layers_net.layers[layer_name]
-      assert isinstance(l, LayerBase)
-      output = l.output.copy_template_excluding_time_dim()
+      layer = self.input_layers_net.layers[layer_name]
+      assert isinstance(layer, LayerBase)
+      output = layer.output.copy_template_excluding_time_dim()
       with tf.name_scope("%s_moved_input" % name.replace(":", "_")):
         if prev:
           output.placeholder = tf.cond(
@@ -746,9 +746,9 @@ class _SubnetworkRecCell(object):
             lambda: inputs_moved_out_tas[layer_name].read(i - 1))
         else:
           output.placeholder = inputs_moved_out_tas[layer_name].read(i)
-      l = self.input_layers_net.add_layer(name=name, output=output, layer_class=InternalLayer)
-      inputs_moved_out[name] = l
-      return l
+      layer = self.net.add_layer(name=name, output=output, layer_class=InternalLayer)
+      inputs_moved_out[name] = layer
+      return layer
 
     def get_layer(name):
       """
@@ -763,15 +763,18 @@ class _SubnetworkRecCell(object):
       if name.startswith("base:"):
         if name in extended_layers:
           return extended_layers[name]
-        l = self.parent_net.layers[name[len("base:"):]]
+        layer = self.parent_net.layers[name[len("base:"):]]
         if self.parent_net.search_flag:
           if needed_beam_size:
-            assert not l.output.beam_size
-            if l.output.beam_size != needed_beam_size:
-              l = self.net.add_layer(name="%s_beam_%i" % (name, needed_beam_size), output=l.output.copy_extend_with_beam(needed_beam_size), layer_class=InternalLayer)
-              extended_layers[name] = l
-          assert l.output.beam_size == needed_beam_size
-        return l
+            assert not layer.output.beam_size
+            if layer.output.beam_size != needed_beam_size:
+              layer = self.net.add_layer(
+                name="%s_beam_%i" % (name, needed_beam_size),
+                output=layer.output.copy_extend_with_beam(needed_beam_size),
+                layer_class=InternalLayer)
+              extended_layers[name] = layer
+          assert layer.output.beam_size == needed_beam_size
+        return layer
       if name in self.input_layers_moved_out:
         return get_input_moved_out(name)
       if name in self.output_layers_moved_out:
@@ -796,13 +799,15 @@ class _SubnetworkRecCell(object):
     """
     template_layer = self.layer_data_templates[name]
     cl = template_layer.layer_class_type
+    assert issubclass(cl, LayerBase)
     batch_dim = template_layer.get_batch_dim()
     if name == "end" and template_layer.kwargs.get("initial_output", None) is None:
       # Special case for the 'end' layer.
       from TFUtil import constant_with_shape
       return constant_with_shape(False, shape=[batch_dim], name="initial_end")
-    with cl.cls_layer_scope(name):
-      return cl.get_rec_initial_output(batch_dim=batch_dim, **self.layer_data_templates[name].kwargs)
+    with reuse_name_scope(self.parent_rec_layer._rec_scope):
+      with cl.cls_layer_scope(name):
+        return cl.get_rec_initial_output(batch_dim=batch_dim, **self.layer_data_templates[name].kwargs)
 
   def _get_init_extra_outputs(self, name):
     """
@@ -811,9 +816,11 @@ class _SubnetworkRecCell(object):
     """
     template_layer = self.layer_data_templates[name]
     cl = template_layer.layer_class_type
-    with cl.cls_layer_scope(name):
-      batch_dim = template_layer.get_batch_dim()
-      d = cl.get_rec_initial_extra_outputs(batch_dim=batch_dim, **self.layer_data_templates[name].kwargs)
+    assert issubclass(cl, LayerBase)
+    with reuse_name_scope(self.parent_rec_layer._rec_scope):
+      with cl.cls_layer_scope(name):
+        batch_dim = template_layer.get_batch_dim()
+        d = cl.get_rec_initial_extra_outputs(batch_dim=batch_dim, **self.layer_data_templates[name].kwargs)
     return d
 
   def _check_output_template_shape(self):
@@ -1525,8 +1532,6 @@ class _SubnetworkRecCell(object):
 
     def find_output_layer_to_move_out():
       for layer in layers_in_loop:
-        if layer.name not in needed_outputs:
-          continue
         if output_can_move_out(layer):
           return layer
       return None

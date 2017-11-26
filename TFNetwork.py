@@ -342,6 +342,7 @@ class TFNetwork(object):
       the layer_class will usually then define the layer.output and its placeholder.
       there is one notable exception: the InternalLayer, where you predefine the output.
     """
+    assert name not in self.layers
     from Util import help_on_type_error_wrong_args
     layer_desc = layer_desc.copy()
     assert "name" not in layer_desc
