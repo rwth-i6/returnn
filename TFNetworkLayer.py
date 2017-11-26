@@ -1040,17 +1040,16 @@ class ActivationLayer(CopyLayer):
 
   layer_class = "activation"
 
-  def __init__(self, activation, func_arg_dict={}, **kwargs):
+  def __init__(self, activation, **kwargs):
     """
     :param str activation: e.g. "relu", "tanh", etc
-    :param dict func_arg_dict: additional arguments for the activation function
     """
     super(ActivationLayer, self).__init__(**kwargs)
     x = self.input_data.placeholder
     if activation:
       from TFUtil import get_activation_function
       act_func = get_activation_function(activation)
-      self.output_before_activation = OutputWithActivation(x, act_func=act_func, func_arg_dict=func_arg_dict)
+      self.output_before_activation = OutputWithActivation(x, act_func=act_func)
     else:
       self.output_before_activation = OutputWithActivation(x)
     self.output.placeholder = self.output_before_activation.y

@@ -811,17 +811,16 @@ class CustomUpdateExpAverage(CustomUpdate):
 
 
 class OutputWithActivation(object):
-  def __init__(self, x, act_func=None, func_arg_dict={}):
+  def __init__(self, x, act_func=None):
     """
     :param tf.Tensor x:
     :param None|(tf.Tensor)->tf.Tensor act_func:
-    :param dict func_arg_dict: additional arguments for the activation function
     """
     self.x = x
     self.act_func = act_func
     if act_func:
       with tf.name_scope("activation"):
-        self.y = act_func(x, **func_arg_dict)
+        self.y = act_func(x)
     else:
       self.y = x
 
