@@ -1,5 +1,56 @@
 #!/usr/bin/env python3
 
+"""
+This script can import a Blocks MT model into Returnn.
+It currently assumes a specific Returnn network topology with specific layer names.
+Example Returnn network topology:
+
+.. code-block:: python
+
+    network = {
+    "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 620},
+
+    "lstm0_fw" : { "class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0}, "initial_state": "var", "n_out" : 1000, "direction": 1, "from": ["source_embed"] },
+    "lstm0_bw" : { "class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0}, "initial_state": "var", "n_out" : 1000, "direction": -1, "from": ["source_embed"] },
+
+    "lstm1_fw" : { "class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0}, "initial_state": "var", "n_out" : 1000, "direction": 1, "from": ["lstm0_fw", "lstm0_bw"] },
+    "lstm1_bw" : { "class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0}, "initial_state": "var", "n_out" : 1000, "direction": -1, "from": ["lstm0_fw", "lstm0_bw"] },
+
+    "encoder": {"class": "copy", "from": ["lstm1_fw", "lstm1_bw"]},
+    "enc_ctx": {"class": "linear", "activation": None, "with_bias": True, "from": ["encoder"], "n_out": 1000},  # preprocessed_attended in Blocks
+    "fertility": {"class": "linear", "activation": "sigmoid", "with_bias": False, "from": ["encoder"], "n_out": 1},
+
+    "output": {"class": "rec", "from": [], "unit": {
+        'output': {'class': 'choice', 'target': 'classes', 'beam_size': beam_size, 'from': ["output_prob"], "initial_output": 0},
+        "end": {"class": "compare", "from": ["output"], "value": 0},
+        'target_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'], "n_out": 621, "initial_output": "apply(0)"},  # feedback_input
+        "weight_feedback": {"class": "linear", "activation": None, "with_bias": False, "from": ["prev:accum_att_weights"], "n_out": 1000},
+        "prev_s_state": {"class": "get_last_hidden_state", "from": ["prev:s"], "n_out": 2000},
+        "prev_s_transformed": {"class": "linear", "activation": None, "with_bias": False, "from": ["prev_s_state"], "n_out": 1000},
+        "energy_in": {"class": "combine", "kind": "add", "from": ["base:enc_ctx", "weight_feedback", "prev_s_transformed"], "n_out": 1000},
+        "energy_tanh": {"class": "activation", "activation": "tanh", "from": ["energy_in"]},
+        "energy": {"class": "linear", "activation": None, "with_bias": False, "from": ["energy_tanh"], "n_out": 1},  # (B, enc-T, 1)
+        "att_weights": {"class": "softmax_over_spatial", "from": ["energy"]},  # (B, enc-T, 1)
+        "accum_att_weights": {"class": "eval", "from": ["prev:accum_att_weights", "att_weights", "base:fertility"],
+            "eval": "source(0) + source(1) / (2.0 * source(2))", "out_type": {"dim": 1, "shape": (None, 1)}},
+        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder"},
+        "s": {"class": "rnn_cell", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+            "initial_state": "var", "from": ["target_embed", "att"], "n_out": 1000},  # transform
+        "readout_in": {"class": "linear", "from": ["prev:s", "prev:target_embed", "att"], "activation": None, "n_out": 1000},  # merge + post_merge bias
+        "readout": {"class": "reduce_out", "mode": "max", "num_pieces": 2, "from": ["readout_in"]},
+        "output_prob": {"class": "softmax", "from": ["readout"], "target": "classes", "loss": "ce"}
+    }, "target": "classes", "max_seq_len": 75},
+
+    "decision": {
+        "class": "decide", "from": ["output"], "loss": "edit_distance", "target": "classes",
+        "loss_opts": {
+            #"debug_print": True
+            }
+        }
+    }
+
+"""
+
 from __future__ import print_function
 
 import os
@@ -90,6 +141,12 @@ def main():
   if os.path.isdir(blocks_mt_model_fn):
     blocks_mt_model_fn += "/params.npz"
     assert os.path.exists(blocks_mt_model_fn)
+
+  our_model_fn = config.value('model', "returnn-model") + ".imported"
+  print("Will save Returnn model as %s." % our_model_fn)
+  assert os.path.exists(os.path.dirname(our_model_fn) or "."), "model-dir does not exist"
+  assert not os.path.exists(our_model_fn), "model-file already exists"
+
   blocks_mt_model = numpy.load(blocks_mt_model_fn)
   assert isinstance(blocks_mt_model, numpy.lib.npyio.NpzFile), "did not expect type %r in file %r" % (
     type(blocks_mt_model), blocks_mt_model_fn)
@@ -212,17 +269,48 @@ def main():
   import_var(our_params["output/rec/s/initial_h"], "decoder/sequencegenerator/att_trans/lstm_decoder.initial_state")
   import_var(our_params["output/rec/weight_feedback/W"], "decoder/sequencegenerator/att_trans/attention/sum_alignment_transformer.W")
   import_var(our_params["output/rec/target_embed/W"], "decoder/sequencegenerator/readout/lookupfeedbackwmt15/lookuptable.W")
+  import_var(our_params["fertility/W"], "decoder/sequencegenerator/att_trans/attention/fertility_transformer.W")
+  import_var(our_params["output/rec/energy/W"], "decoder/sequencegenerator/att_trans/attention/energy_comp/linear.W")
+  prev_s_trans_W_states = load_blocks_var("decoder/sequencegenerator/att_trans/attention/state_trans/transform_states.W")
+  prev_s_trans_W_cells = load_blocks_var("decoder/sequencegenerator/att_trans/attention/state_trans/transform_cells.W")
+  prev_s_trans_W = numpy.concatenate([prev_s_trans_W_cells, prev_s_trans_W_states], axis=0)
+  import_var(our_params["output/rec/prev_s_transformed/W"], prev_s_trans_W)
+  import_var(our_params["output/rec/s/rec/lstm_cell/bias"], numpy.zeros(our_params["output/rec/s/rec/lstm_cell/bias"].shape))
+  dec_lstm_kernel_in_feedback = load_blocks_var("decoder/sequencegenerator/att_trans/feedback_to_decoder/fork_inputs.W")
+  dec_lstm_kernel_in_ctx = load_blocks_var("decoder/sequencegenerator/att_trans/context_to_decoder/fork_inputs.W")
+  dec_lstm_kernel_re = load_blocks_var("decoder/sequencegenerator/att_trans/lstm_decoder.W_state")
+  dec_lstm_kernel = numpy.concatenate([dec_lstm_kernel_in_feedback, dec_lstm_kernel_in_ctx, dec_lstm_kernel_re], axis=0)
+  dec_lstm_kernel = lstm_vec_blocks_to_tf(dec_lstm_kernel)
+  import_var(our_params["output/rec/s/rec/lstm_cell/kernel"], dec_lstm_kernel)
+  for s1, s2 in [("W_cell_to_in", "w_i_diag"), ("W_cell_to_forget", "w_f_diag"), ("W_cell_to_out", "w_o_diag")]:
+    import_var(our_params["output/rec/s/rec/lstm_cell/%s" % s2], "decoder/sequencegenerator/att_trans/lstm_decoder.%s" % s1)
+  readout_in_W_states = load_blocks_var("decoder/sequencegenerator/readout/merge/transform_states.W")
+  readout_in_W_feedback = load_blocks_var("decoder/sequencegenerator/readout/merge/transform_feedback.W")
+  readout_in_W_att = load_blocks_var("decoder/sequencegenerator/readout/merge/transform_weighted_averages.W")
+  readout_in_W = numpy.concatenate([readout_in_W_states, readout_in_W_feedback, readout_in_W_att], axis=0)
+  import_var(our_params["output/rec/readout_in/W"], readout_in_W)
+  import_var(our_params["output/rec/readout_in/b"], "decoder/sequencegenerator/readout/initializablefeedforwardsequence/maxout_bias.b")
+  import_var(our_params["output/rec/output_prob/W"], "decoder/sequencegenerator/readout/initializablefeedforwardsequence/softmax1.W")
+  import_var(our_params["output/rec/output_prob/b"], "decoder/sequencegenerator/readout/initializablefeedforwardsequence/softmax1.b")
 
   print("Not initialized own params:")
+  count = 0
   for key, v in sorted(our_params.items()):
     if key in our_loaded_params:
       continue
     print("  %s: %s, %s" % (key, v.shape, v.dtype.base_dtype.name))
+    count += 1
+  if not count:
+    print("  None.")
   print("Not used Blocks params:")
+  count = 0
   for key, value in sorted(blocks_params.items()):
     if key in blocks_used_params:
       continue
     print("  %s: %s, %s" % (key, value.shape, value.dtype))
+    count += 1
+  if not count:
+    print("  None.")
   print("Done.")
 
   blocks_debug_dump_output = config.value("blocks_debug_dump_output", None)
@@ -307,21 +395,40 @@ def main():
     last_lstm_cells = blocks_params["decoder/sequencegenerator/att_trans/lstm_decoder.initial_cells"]
     last_accumulated_weights = numpy.zeros((seq_len,), dtype="float32")
     last_output = 0
+    dec_seq_len = 0
     for dec_step in range(100):
       blocks_frame_outputs_fn = "%s/next_states.%i.npz" % (blocks_debug_dump_output, dec_step)
       if dec_step > 3:
         if not os.path.exists(blocks_frame_outputs_fn):
+          print("Seq not ended yet but frame not found for step %i." % dec_step)
           break
       blocks_frame_outputs = numpy.load(blocks_frame_outputs_fn)
       our_dec_frame_outputs = our_dec_outputs[dec_step]
+      assert our_dec_frame_outputs["step"] == dec_step
+      assert our_dec_frame_outputs[":i.output"].tolist() == [dec_step]
+
       blocks_last_lstm_state = blocks_frame_outputs["decoder_sequencegenerator__sequencegenerator_generate_states"]
       blocks_last_lstm_cells = blocks_frame_outputs["decoder_sequencegenerator__sequencegenerator_generate_cells"]
       assert blocks_last_lstm_state.shape == (beam_size, last_lstm_state.shape[0])
       assert_almost_equal(blocks_last_lstm_state[0], last_lstm_state, decimal=5)
       assert_almost_equal(blocks_last_lstm_cells[0], last_lstm_cells, decimal=5)
+      our_last_lstm_cells = our_dec_frame_outputs["prev:s.extra.state"][0]
+      our_last_lstm_state = our_dec_frame_outputs["prev:s.extra.state"][1]
+      assert our_last_lstm_state.shape == our_last_lstm_cells.shape == (beam_size, last_lstm_state.shape[0])
+      assert_almost_equal(our_last_lstm_state[0], last_lstm_state, decimal=5)
+      assert_almost_equal(our_last_lstm_cells[0], last_lstm_cells, decimal=5)
+      our_last_s = our_dec_frame_outputs["prev:s.output"]
+      assert our_last_s.shape == (beam_size, last_lstm_state.shape[0])
+      assert_almost_equal(our_last_s[0], last_lstm_state, decimal=5)
+
       blocks_last_accum_weights = blocks_frame_outputs["decoder_sequencegenerator__sequencegenerator_generate_accumulated_weights"]
       assert blocks_last_accum_weights.shape == (beam_size, seq_len)
       assert_almost_equal(blocks_last_accum_weights[0], last_accumulated_weights, decimal=5)
+      our_last_accum_weights = our_dec_frame_outputs["prev:accum_att_weights.output"]
+      assert our_last_accum_weights.shape == (beam_size, seq_len if dec_step > 0 else 1, 1)
+      if dec_step > 0:
+        assert_almost_equal(our_last_accum_weights[0, :, 0], last_accumulated_weights, decimal=5)
+
       energy_sum = numpy.copy(blocks_enc_ctx_out[:, 0])  # (T,enc-ctx-dim)
       weight_feedback = numpy.dot(last_accumulated_weights[:, None], blocks_params["decoder/sequencegenerator/att_trans/attention/sum_alignment_transformer.W"])
       energy_sum += weight_feedback
@@ -332,13 +439,24 @@ def main():
       blocks_energy_sum_tanh = blocks_frame_outputs["decoder_sequencegenerator_att_trans_attention_energy_comp_tanh__tanh_apply_output"]
       assert blocks_energy_sum_tanh.shape == (seq_len, beam_size, energy_sum.shape[-1])
       assert_almost_equal(blocks_energy_sum_tanh[:, 0], numpy.tanh(energy_sum), decimal=5)
+      assert_equal(our_dec_frame_outputs["weight_feedback.output"].shape, (beam_size, seq_len if dec_step > 0 else 1, blocks_enc_ctx_out.shape[-1]))
+      assert_equal(our_dec_frame_outputs["prev_s_transformed.output"].shape, (beam_size, blocks_enc_ctx_out.shape[-1]))
+      our_energy_sum = our_dec_frame_outputs["energy_in.output"]
+      assert our_energy_sum.shape == (seq_len, beam_size, blocks_enc_ctx_out.shape[-1])
+      assert_almost_equal(our_energy_sum[:, 0], energy_sum, decimal=4)
       blocks_energy = blocks_frame_outputs["decoder_sequencegenerator_att_trans_attention_energy_comp__energy_comp_apply_output"]
       assert blocks_energy.shape == (seq_len, beam_size, 1)
       energy = numpy.dot(numpy.tanh(energy_sum), blocks_params["decoder/sequencegenerator/att_trans/attention/energy_comp/linear.W"])
       assert energy.shape == (seq_len, 1)
       assert_almost_equal(blocks_energy[:, 0], energy, decimal=5)
+      our_energy = our_dec_frame_outputs["energy.output"]
+      assert our_energy.shape == (seq_len, beam_size, 1)
+      assert_almost_equal(our_energy[:, 0], energy, decimal=5)
       weights = softmax(energy[:, 0])
       assert weights.shape == (seq_len,)
+      our_weights = our_dec_frame_outputs["att_weights.output"]
+      assert our_weights.shape == (seq_len, beam_size, 1)
+      assert_almost_equal(our_weights[:, 0, 0], weights, decimal=5)
       accumulated_weights = last_accumulated_weights + weights / (2.0 * fertility)
       assert accumulated_weights.shape == (seq_len,)
       blocks_accumulated_weights = blocks_frame_outputs["decoder_sequencegenerator_att_trans_attention__attention_take_glimpses_accumulated_weights"]
@@ -347,16 +465,24 @@ def main():
       blocks_weights = blocks_frame_outputs["decoder_sequencegenerator_att_trans_attention__attention_compute_weights_output_0"]
       assert blocks_weights.shape == (seq_len, beam_size)
       assert_almost_equal(weights, blocks_weights[:, 0], decimal=5)
+      our_accum_weights = our_dec_frame_outputs["accum_att_weights.output"]
+      assert our_accum_weights.shape == (beam_size, seq_len, 1)
       weighted_avg = (weights[:, None] * blocks_encoder_out[:, 0]).sum(axis=0)  # att in our
       assert weighted_avg.shape == (blocks_encoder_out.shape[-1],)
       blocks_weighted_avg = blocks_frame_outputs["decoder_sequencegenerator_att_trans_attention__attention_compute_weighted_averages_output_0"]
       assert blocks_weighted_avg.shape == (beam_size, blocks_encoder_out.shape[-1])
       assert_almost_equal(blocks_weighted_avg[0], weighted_avg, decimal=5)
+      our_att = our_dec_frame_outputs["att.output"]
+      assert our_att.shape == (beam_size, blocks_encoder_out.shape[-1])
+      assert_almost_equal(our_att[0], weighted_avg, decimal=5)
 
       blocks_last_output = blocks_frame_outputs["decoder_sequencegenerator__sequencegenerator_generate_outputs"]
       assert blocks_last_output.shape == (beam_size,)
       assert max(blocks_last_output[0], 0) == last_output
       last_target_embed = dec_lookup[last_output]
+      our_last_target_embed = our_dec_frame_outputs["prev:target_embed.output"]
+      assert our_last_target_embed.shape == (beam_size, dec_lookup.shape[-1])
+      assert_almost_equal(our_last_target_embed[0], last_target_embed, decimal=5)
 
       readout_in = \
         numpy.dot(last_lstm_state, blocks_params["decoder/sequencegenerator/readout/merge/transform_states.W"]) + \
@@ -364,18 +490,33 @@ def main():
         numpy.dot(weighted_avg, blocks_params["decoder/sequencegenerator/readout/merge/transform_weighted_averages.W"])
       readout_in += blocks_params["decoder/sequencegenerator/readout/initializablefeedforwardsequence/maxout_bias.b"]
       assert readout_in.shape == (blocks_params["decoder/sequencegenerator/readout/initializablefeedforwardsequence/maxout_bias.b"].shape[0],)
+      our_readout_in = our_dec_frame_outputs["readout_in.output"]
+      assert our_readout_in.shape == (beam_size, readout_in.shape[0])
+      assert_almost_equal(our_readout_in[0], readout_in, decimal=5)
       readout = readout_in.reshape((readout_in.shape[0] // 2, 2)).max(axis=1)
+      our_readout = our_dec_frame_outputs["readout.output"]
+      assert our_readout.shape == (beam_size, readout.shape[0])
+      assert_almost_equal(our_readout[0], readout, decimal=5)
       prob_logits = numpy.dot(readout, blocks_params["decoder/sequencegenerator/readout/initializablefeedforwardsequence/softmax1.W"]) + \
         blocks_params["decoder/sequencegenerator/readout/initializablefeedforwardsequence/softmax1.b"]
       output_prob = softmax(prob_logits)
+      our_output_prob = our_dec_frame_outputs["output_prob.output"]
+      assert our_output_prob.shape == (beam_size, output_prob.shape[0])
+      assert_almost_equal(our_output_prob[0], output_prob, decimal=4)
       ref_output = numpy.argmax(output_prob)
       blocks_dec_output = blocks_frame_outputs["decoder_sequencegenerator_readout__readout_emit_output_0"]
       assert blocks_dec_output.shape == (beam_size,)
+      our_dec_output = our_dec_frame_outputs["output.output"]
+      assert our_dec_output.shape == (beam_size,)
       assert ref_output in blocks_dec_output
-      print("Frame %i: Ref output symbol: %i, Blocks: %r" % (dec_step, int(ref_output), blocks_dec_output.tolist()))
+      assert ref_output in our_dec_output
+      print("Frame %i: Ref output symbol: %i, Blocks: %r, Our: %r" % (
+        dec_step, int(ref_output), blocks_dec_output.tolist(), our_dec_output.tolist()))
       if dec_step == 0:
         assert blocks_dec_output[0] == ref_output
+        assert our_dec_output[0] == ref_output
       ref_output = blocks_dec_output[0]
+      assert our_dec_output[0] == blocks_dec_output[0]
 
       blocks_target_emb = blocks_frame_outputs["decoder_sequencegenerator_fork__fork_apply_feedback_decoder_input"]
       assert blocks_target_emb.shape == (beam_size, dec_lookup.shape[1])
@@ -402,6 +543,14 @@ def main():
       assert blocks_lstm_state.shape == blocks_lstm_cells.shape == (beam_size, last_lstm_state.shape[-1])
       assert_almost_equal(blocks_lstm_state[0], lstm_state, decimal=5)
       assert_almost_equal(blocks_lstm_cells[0], lstm_cells, decimal=5)
+      our_lstm_cells = our_dec_frame_outputs["s.extra.state"][0]
+      our_lstm_state = our_dec_frame_outputs["s.extra.state"][1]
+      assert our_lstm_state.shape == our_lstm_cells.shape == (beam_size, lstm_state.shape[0])
+      assert_almost_equal(our_lstm_state[0], lstm_state, decimal=5)
+      assert_almost_equal(our_lstm_cells[0], lstm_cells, decimal=5)
+      our_s = our_dec_frame_outputs["s.output"]
+      assert our_s.shape == (beam_size, lstm_state.shape[0])
+      assert_almost_equal(our_s[0], lstm_state, decimal=5)
 
       last_accumulated_weights = accumulated_weights
       last_lstm_state = lstm_state
@@ -409,8 +558,12 @@ def main():
       last_output = ref_output
       if last_output == 0:
         print("Sequence finished, seq len %i." % dec_step)
+        dec_seq_len = dec_step
         break
+    assert dec_seq_len > 0
+    print("All outputs seem to match.")
 
+  rnn.engine.save_model(our_model_fn)
   print("Finished importing.")
 
 
@@ -477,12 +630,12 @@ def calc_raw_lstm(z, blocks_params, prefix, last_state=None, last_cell=None):
   gate_in, gate_forget, next_in, gate_out = numpy.split(z, 4)
   gate_in = gate_in + W_cell_to_in * last_cell
   gate_forget = gate_forget + W_cell_to_forget * last_cell
-  gate_in = 1.0 / (1.0 + numpy.exp(-gate_in))
-  gate_forget = 1.0 / (1.0 + numpy.exp(-gate_forget))
+  gate_in = sigmoid(gate_in)
+  gate_forget = sigmoid(gate_forget)
   next_in = numpy.tanh(next_in)
   cur_cell = last_cell * gate_forget + next_in * gate_in
   gate_out = gate_out + W_cell_to_out * cur_cell
-  gate_out = 1.0 / (1.0 + numpy.exp(-gate_out))
+  gate_out = sigmoid(gate_out)
   cur_state = numpy.tanh(cur_cell) * gate_out
   return cur_state, cur_cell
 
@@ -490,6 +643,10 @@ def calc_raw_lstm(z, blocks_params, prefix, last_state=None, last_cell=None):
 def softmax(x, axis=-1):
   e_x = numpy.exp(x - numpy.max(x, axis=axis))
   return e_x / e_x.sum(axis=axis)
+
+
+def sigmoid(x):
+  return 1.0 / (1.0 + numpy.exp(-x))
 
 
 if __name__ == "__main__":
