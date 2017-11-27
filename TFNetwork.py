@@ -349,9 +349,9 @@ class TFNetwork(object):
     assert "network" not in layer_desc
     layer_desc["name"] = name
     layer_desc["network"] = self
-    debug_print_layer_output_template = self._config and self._config.bool("debug_print_layer_output_template", False)
-    debug_print_layer_output_shape = self._config and self._config.bool("debug_print_layer_output_shape", False)
-    debug_add_check_numerics_on_output = self._config and self._config.bool("debug_add_check_numerics_on_output", False)  # also see debug_add_check_numerics_ops
+    debug_print_layer_output_template = self.get_config().bool("debug_print_layer_output_template", False)
+    debug_print_layer_output_shape = self.get_config().bool("debug_print_layer_output_shape", False)
+    debug_add_check_numerics_on_output = self.get_config().bool("debug_add_check_numerics_on_output", False)  # also see debug_add_check_numerics_ops
     with reuse_name_scope(layer_class.cls_get_tf_scope_name(name)):
       try:
         if "output" not in layer_desc:
@@ -419,7 +419,7 @@ class TFNetwork(object):
             error = layer.get_error_value()
             if loss is not None:
               tf.summary.scalar("loss_%s" % layer.name, loss * layer.get_loss_normalization_factor())
-              if self._config and self._config.bool("debug_add_check_numerics_on_output", False):
+              if self.get_config().bool("debug_add_check_numerics_on_output", False):
                 print("debug_add_check_numerics_on_output: add for layer loss %r: %r" % (name, layer.output.placeholder))
                 from TFUtil import identity_with_check_numerics
                 loss = identity_with_check_numerics(
@@ -1023,6 +1023,26 @@ class TFNetwork(object):
     :return: scalar, int32
     """
     return self.get_rec_step_info().step
+
+  def get_config(self, consider_global_config=True, fallback_dummy_config=True):
+    """
+    :param bool consider_global_config: if no config is set, check for global config
+    :param bool fallback_dummy_config: if no config, return a new empty Config, otherwise return None
+    :rtype: Config.Config|None
+    """
+    from Config import Config, get_global_config
+    if self._config:
+      return self._config
+    if self.parent_net:
+      return self.parent_net.get_config(
+        consider_global_config=consider_global_config, fallback_dummy_config=fallback_dummy_config)
+    if consider_global_config:
+      config = get_global_config(raise_exception=False)
+      if config:
+        return config
+    if fallback_dummy_config:
+      return Config()
+    return None
 
 
 class TFNetworkParamsSerialized(object):

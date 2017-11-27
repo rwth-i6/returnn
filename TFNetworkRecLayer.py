@@ -27,7 +27,7 @@ class RecLayer(_ConcatInputLayer):
                initial_state=None,
                max_seq_len=None,
                forward_weights_init=None, recurrent_weights_init=None, bias_init=None,
-               optimize_move_layers_out=True,
+               optimize_move_layers_out=None,
                **kwargs):
     """
     :param str|dict[str,dict[str]] unit: the RNNCell/etc name, e.g. "nativelstm". see comment below.
@@ -41,7 +41,7 @@ class RecLayer(_ConcatInputLayer):
     :param str forward_weights_init: see :func:`TFUtil.get_initializer`
     :param str recurrent_weights_init: see :func:`TFUtil.get_initializer`
     :param str bias_init: see :func:`TFUtil.get_initializer`
-    :param bool optimize_move_layers_out: will automatically move layers out of the loop when possible
+    :param bool|None optimize_move_layers_out: will automatically move layers out of the loop when possible
     """
     super(RecLayer, self).__init__(**kwargs)
     from TFUtil import is_gpu_available
@@ -59,6 +59,8 @@ class RecLayer(_ConcatInputLayer):
     self._initial_state_deps = [l for l in nest.flatten(initial_state) if isinstance(l, LayerBase)]
     self._input_projection = input_projection
     self._max_seq_len = max_seq_len
+    if optimize_move_layers_out is None:
+      optimize_move_layers_out = self.network.get_config().bool("optimize_move_layers_out", True)
     self._optimize_move_layers_out = optimize_move_layers_out
     self._sub_loss = None
     self._sub_error = None
