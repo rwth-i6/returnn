@@ -934,7 +934,7 @@ def test_rec_subnet_auto_optimize():
     assert isinstance(rec_layer.cell, _SubnetworkRecCell)
     if optimize_move_layers_out:
       assert_equal(set(rec_layer.cell.input_layers_moved_out), {"output", "orth_embed"})
-      assert_equal(set(rec_layer.cell.output_layers_moved_out), {"output_prob"})
+      assert_equal(set(rec_layer.cell.output_layers_moved_out), {"output_prob", "att"})
     else:
       assert not rec_layer.cell.input_layers_moved_out
       assert not rec_layer.cell.output_layers_moved_out
