@@ -787,11 +787,9 @@ def test_search_no_rec_explicit_dyn_len():
 
 def test_rec_layer_move_out_of_loop():
   from TFNetworkRecLayer import _SubnetworkRecCell
+  from TFUtil import get_global_train_flag_placeholder
   n_src_dim = 5
   n_tgt_dim = 7
-  extern_data = ExternData({
-    "data": {"dim": n_src_dim, "sparse": True},
-    "classes": {"dim": n_tgt_dim, "sparse": True, "available_for_inference": False}})
   beam_size = 12
   config = Config()
   config.update({"debug_print_layer_output_template": True})
@@ -846,6 +844,10 @@ def test_rec_layer_move_out_of_loop():
     }
 
   print("Constructing search network.")
+  tf.reset_default_graph()
+  extern_data = ExternData({
+    "data": {"dim": n_src_dim, "sparse": True},
+    "classes": {"dim": n_tgt_dim, "sparse": True, "available_for_inference": False}})
   search_net = TFNetwork(extern_data=extern_data, search_flag=True, train_flag=False, eval_flag=True, config=config)
   search_net.construct_from_dict(get_net_dict())
   search_out_layer = search_net.layers["output"]
@@ -855,8 +857,69 @@ def test_rec_layer_move_out_of_loop():
   assert not search_out_layer.cell.output_layers_moved_out
   print("=" * 40)
 
+  def train(net):
+    """
+    :param TFNetwork net:
+    """
+    from GeneratingDataset import StaticDataset
+    from TFDataPipeline import FeedDictDataProvider
+    from EngineBatch import Batch, BatchSetGenerator
+    from Util import dict_joined
+    dataset = StaticDataset(
+      data=[
+        {"data": numpy.array([2, 4, 1, 0]), "classes": numpy.array([3, 6, 0])},
+        {"data": numpy.array([2, 4, 1, 3, 0]), "classes": numpy.array([3, 6, 2, 1, 4, 5, 0])}],
+      output_dim={"data": [n_src_dim, 1], "classes": [n_tgt_dim, 1]})
+    dataset.init_seq_order(epoch=1)
+    batch = Batch()
+    batch.add_sequence_as_slice(seq_idx=0, seq_start_frame=0, length=dataset.get_seq_length(0))
+    batch.add_sequence_as_slice(seq_idx=1, seq_start_frame=0, length=dataset.get_seq_length(1))
+    print("batch:", batch, "num frames:", batch.get_total_num_frames())
+    print("batch dims:", batch.max_num_frames_per_slice * batch.num_slices)
+    batch_generator = iter([batch])
+    batches = BatchSetGenerator(dataset, generator=batch_generator)
+    out_layer = net.layers["output"]
+    assert isinstance(out_layer, RecLayer)
+    assert isinstance(out_layer.cell, _SubnetworkRecCell)
+
+    with tf.Session() as session:
+      net.initialize_params(session)
+      data_provider = FeedDictDataProvider(
+        tf_session=session, extern_data=extern_data,
+        data_keys=["data", "classes"],
+        dataset=dataset, batches=batches)
+      feed_dict = data_provider.get_feed_dict(single_threaded=True)
+      if isinstance(net.train_flag, tf.Tensor):
+        feed_dict[net.train_flag] = True
+      try:
+        out = session.run(
+          dict_joined(
+            {"data:%s:seq_len" % k: v.get_sequence_lengths() for (k, v) in net.extern_data.data.items()},
+            {"layer:%s:out_seq_len" % k: l.output.get_sequence_lengths() for (k, l) in net.layers.items()},
+            {"rec_layer_in:%s:out_seq_len" % k: l.output.get_sequence_lengths()
+             for (k, l) in out_layer.cell.input_layers_net.layers.items()} if out_layer.cell.input_layers_net else {},
+            {"rec_layer_out:%s:out_seq_len" % k: l.output.get_sequence_lengths()
+             for (k, l) in out_layer.cell.output_layers_net.layers.items()} if out_layer.cell.output_layers_net else {},
+          ),
+          feed_dict=feed_dict)
+        pprint(out)
+        out = session.run(
+          {"objective": net.get_objective()},
+          feed_dict=feed_dict)
+        pprint(out)
+      except Exception as exc:
+        print("Exception happened:", str(exc).splitlines()[0])
+        print("Writing TF log file.")
+        writer = tf.summary.FileWriter(".", filename_suffix="test_rec_layer_move_out_of_loop")
+        writer.add_graph(session.graph)
+        writer.close()
+        raise
+
   print("Constructing train network.")
-  from TFUtil import get_global_train_flag_placeholder
+  tf.reset_default_graph()
+  extern_data = ExternData({
+    "data": {"dim": n_src_dim, "sparse": True},
+    "classes": {"dim": n_tgt_dim, "sparse": True, "available_for_inference": False}})
   train_net = TFNetwork(
     extern_data=extern_data, search_flag=False, train_flag=get_global_train_flag_placeholder(), config=config)
   assert train_net.eval_flag is True
@@ -866,6 +929,25 @@ def test_rec_layer_move_out_of_loop():
   assert isinstance(train_out_layer.cell, _SubnetworkRecCell)
   assert_equal(set(train_out_layer.cell.input_layers_moved_out), {"output", "target_embed"})
   assert_equal(set(train_out_layer.cell.output_layers_moved_out), {"output_prob", "readout_in", "readout"})
+  train(train_net)
+  print("=" * 40)
+
+  print("Constructing train network with optimize_move_layers_out=False.")
+  config.set("optimize_move_layers_out", False)
+  tf.reset_default_graph()
+  extern_data = ExternData({
+    "data": {"dim": n_src_dim, "sparse": True},
+    "classes": {"dim": n_tgt_dim, "sparse": True, "available_for_inference": False}})
+  train_not_optim_net = TFNetwork(
+    extern_data=extern_data, search_flag=False, train_flag=get_global_train_flag_placeholder(), config=config)
+  assert train_not_optim_net.eval_flag is True
+  train_not_optim_net.construct_from_dict(get_net_dict())
+  train_not_optim_out_layer = train_not_optim_net.layers["output"]
+  assert isinstance(train_not_optim_out_layer, RecLayer)
+  assert isinstance(train_not_optim_out_layer.cell, _SubnetworkRecCell)
+  assert not train_not_optim_out_layer.cell.input_layers_moved_out
+  assert not train_not_optim_out_layer.cell.output_layers_moved_out
+  train(train_not_optim_net)
 
 
 if __name__ == "__main__":

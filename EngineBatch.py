@@ -116,6 +116,8 @@ class Batch:
     """
     Note that this is only an upper limit in case of data_shape[1] > 1
     because data_shape[0] is the max frame len of all seqs.
+    :return: related to the data-key with max length
+    :rtype: int
     """
     return self.max_num_frames_per_slice.max_value() * self.num_slices
 

@@ -1691,14 +1691,15 @@ class _SubnetworkRecCell(object):
       cur_layer = get_layer(name)
       with tf.name_scope("prev_%s" % name):
         output = cur_layer.output.copy_as_time_major()
-        max_seq_len = tf.shape(output.placeholder)[0]
         initial = self._get_init_output(name)
         initial_wt = tf.expand_dims(initial, axis=0)  # add time axis
-        output.placeholder = \
-          tf.concat([initial_wt, output.placeholder], axis=0, name="concat_in_time")
+        x = output.placeholder
+        output.placeholder = tf.concat([initial_wt, x], axis=0, name="concat_in_time")
         output.placeholder = output.placeholder[:-1]  # remove last frame
-        output.size_placeholder[0] = \
-          tf.maximum(output.size_placeholder[0] + 1, max_seq_len)
+        # Note: This seq_len might make sense to use here:
+        # output.size_placeholder[0] = tf.minimum(output.size_placeholder[0] + 1, tf.shape(x)[0])
+        # However, often we assume that we keep the same seq lens as the output layer.
+        output.size_placeholder[0] = seq_len
         assert isinstance(self.output_layers_net, TFNetwork)
         layer = self.output_layers_net.add_layer(name="prev:%s" % name, output=output, layer_class=InternalLayer)
         prev_layers[name] = layer
