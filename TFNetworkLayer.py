@@ -3147,8 +3147,8 @@ class ClassesToLengthDistributionLayer(_ConcatInputLayer):
     assert(self.input_data.sparse)
 
     sizes = self.input_data.size_placeholder[0]
-    new_sizes = TFUtil.batch_sizes_after_windowing(sizes, window)
     batches = TFUtil.batch_indices_after_windowing(sizes, window)
+    new_sizes = tf.fill((tf.shape(batches)[0],), 1)
     classes = self.input_data.get_placeholder_as_batch_major()
 
     def compute(bse):
@@ -3185,37 +3185,70 @@ class ClassesToLengthDistributionLayer(_ConcatInputLayer):
 class ClassesToLengthDistributionGlobalLayer(_ConcatInputLayer):
   layer_class = "classes_to_length_distribution_global"
 
-  def __init__(self, window=15, weight_falloff=1.0, **kwargs):
+  def __init__(self, window=15, weight_falloff=1.0, target_smoothing=None, **kwargs):
     super(ClassesToLengthDistributionGlobalLayer, self).__init__(**kwargs)
     assert(self.input_data.sparse)
 
     sizes = self.input_data.size_placeholder[0]
-    new_sizes = TFUtil.batch_sizes_after_windowing(sizes, window)
     batches = TFUtil.batch_indices_after_windowing(sizes, window)
+    new_sizes = tf.fill((tf.shape(batches)[0],), 1)
     classes = self.input_data.get_placeholder_as_batch_major()
     cls_not_eq = tf.not_equal(classes[:,:-1], classes[:,1:])
-    cls_changed = tf.concat([cls_not_eq, tf.fill((1, tf.shape(classes)[0],), True)], axis=1)
+    cls_changed = tf.concat([cls_not_eq, tf.fill((tf.shape(classes)[0], 1), True)], axis=1)
 
     lengths = tf.range(0.0, float(window), 1.0)
     end_distribution = tf.pow((1.0 - weight_falloff), lengths) * weight_falloff
 
     # add small weight at the last frame in case there is no ending label, then we want the last frame to be a label end
-    no_label_backup = tf.concat([tf.zeros((window - 1,), dtype='float32'), [1e-4]], axis=0)
+    # because the windows have different lengths the last frame might not be at index (window -1), but earlier, thus we
+    # also add some zeros at the end
+    no_label_backup = tf.convert_to_tensor([0.0] * (window - 1) + [1e-4] + [0.0] * (window - 1))
+
+    # As the label ends are not well-defined in most cases, we allow the model a little bit of wiggle-room in the
+    # decision where to put the label ends. This is achieved by smoothing the targets for one segment with a kernel
+    # that is specified by target_smoothing.
+    smoothing = None
+    if target_smoothing is not None:
+      import numpy as np
+      assert len(target_smoothing) % 2 == 1
+
+      smoothing = tf.TensorArray(dtype='float32',
+                                 size=window,
+                                 clear_after_read=False,
+                                 infer_shape=False, name='smoothing_matrices')
+
+      s = sum(target_smoothing)
+      target_smoothing = [v / s for v in target_smoothing]
+      center = len(target_smoothing) // 2
+
+      mat = np.zeros((window, window), dtype='float32')
+      for i, v in enumerate(target_smoothing):
+        mat += np.diag([v] * (window - abs(i - center)), i - center)
+
+      for i in range(window):
+        submat = np.diag([1.0]*window).astype('float32')
+        submat[:i+1,:i+1] = mat[:i+1,:i+1]
+        submat /= submat.sum(axis=1).reshape((-1, 1))
+        smoothing = smoothing.write(i, submat)
 
     def compute(bse):
       batch = bse[0]
       start = bse[1]
       end   = bse[2]
+      size  = end - start
 
       cls_chg = cls_changed[batch][start:end]
       idx     = tf.where(cls_chg)
       res     = tf.scatter_nd(idx, end_distribution[:tf.shape(idx)[0]], (window,))
-      res    += no_label_backup
+      res    += no_label_backup[window-size:2*window-size]
       res     = res / tf.reduce_sum(res)
+      if smoothing is not None:
+        res = tf.tensordot(res, smoothing.read(size - 1), [[0], [0]])
 
       return res
 
-    self.output.placeholder = tf.expand_dims(tf.map_fn(compute, batches, back_prop=False, dtype='float32'), axis=-2)
+    targets = tf.map_fn(compute, batches, back_prop=False, dtype='float32')
+    self.output.placeholder = tf.expand_dims(targets, axis=-2)
     self.output.size_placeholder[0] = new_sizes
 
   @classmethod
@@ -3230,7 +3263,7 @@ class ClassesToLengthDistributionGlobalLayer(_ConcatInputLayer):
     return out
 
 
-class UnsegmentInput(_ConcatInputLayer):
+class UnsegmentInputLayer(_ConcatInputLayer):
   """
   Takes the output of SegmentInput (sequences windowed over time and folded into batch-dim)
   and restores the original batch dimension. The feature dimension contains window * original_features
@@ -3241,7 +3274,7 @@ class UnsegmentInput(_ConcatInputLayer):
   layer_class = "unsegment_input"
 
   def __init__(self, **kwargs):
-    super(UnsegmentInput, self).__init__(**kwargs)
+    super(UnsegmentInputLayer, self).__init__(**kwargs)
     sizes       = self.input_data.size_placeholder[0]
     end_times   = tf.squeeze(tf.where(tf.equal(sizes, 1)) + 1, axis=1)  # a batch of size one indicates that a sequence ended there
     start_times = tf.concat([[0], end_times[:-1]], axis=0)
@@ -3302,7 +3335,7 @@ class FillUnusedMemoryLayer(CopyLayer):
     mask = tf.tile(mask, [1, 1, tf.shape(self.output.placeholder)[2]])
 
     x = self.output.placeholder
-    x = tf.where(mask, x, tf.fill(tf.shape(x), fill_value))
+    x = tf.where(mask, x, tf.fill(tf.shape(x), float(fill_value)))
     self.output.placeholder = x
 
 
