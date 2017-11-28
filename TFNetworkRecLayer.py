@@ -2434,21 +2434,25 @@ class DecideLayer(LayerBase):
   """
   layer_class = "decide"
 
-  def __init__(self, **kwargs):
+  def __init__(self, length_normalization=False, **kwargs):
+    """
+    :param bool length_normalization: performed on the beam scores
+    """
     super(DecideLayer, self).__init__(**kwargs)
     # If not in search, this will already be set via self.get_out_data_from_opts().
     if self.network.search_flag:
       assert len(self.sources) == 1
       src = self.sources[0]
-      self.decide(src=src, output=self.output)
+      self.decide(src=src, output=self.output, length_normalization=length_normalization)
       self.search_choices = SearchChoices(owner=self, is_decided=True)
 
   @classmethod
-  def decide(cls, src, output=None, name=None):
+  def decide(cls, src, output=None, name=None, length_normalization=False):
     """
     :param LayerBase src: with search_choices set. e.g. input of shape (batch * beam, time, dim)
     :param Data|None output:
     :param str|None name:
+    :param bool length_normalization: performed on the beam scores
     :return: best beam selected from input, e.g. shape (batch, time, dim)
     :rtype: Data
     """
@@ -2458,12 +2462,16 @@ class DecideLayer(LayerBase):
     assert output.batch_dim_axis == 0
     batch_dim = src.network.get_data_batch_dim()
     src_data = src.output.copy_as_batch_major()
+    beam_size = src.search_choices.beam_size
     src_output = tf.reshape(
       src_data.placeholder,
-      [batch_dim, src.search_choices.beam_size] +
+      [batch_dim, beam_size] +
       [tf.shape(src_data.placeholder)[i] for i in range(1, src_data.batch_ndim)])  # (batch, beam, [time], [dim])
-    # beam_scores is of shape (batch, beam) -> log score.
-    beam_idxs = tf.argmax(src.search_choices.beam_scores, axis=1)  # (batch,)
+    # beam_scores is of shape (batch, beam) -> +log score.
+    beam_scores = src.search_choices.beam_scores
+    if length_normalization:
+      beam_scores /= tf.to_float(tf.reshape(src.output.get_sequence_lengths(), [batch_dim, beam_size]))
+    beam_idxs = tf.argmax(beam_scores, axis=1)  # (batch,)
     from TFUtil import assert_min_tf_version, nd_indices
     assert_min_tf_version((1, 1), "gather_nd")
     beam_idxs_ext = nd_indices(beam_idxs)
@@ -2473,7 +2481,7 @@ class DecideLayer(LayerBase):
       lambda: src_output[:, 0], name="cond_not_empty")  # (batch, [time], [dim])
     output.size_placeholder = {}
     for i, size in src_data.size_placeholder.items():
-      size = tf.reshape(size, [batch_dim, src.search_choices.beam_size])  # (batch, beam)
+      size = tf.reshape(size, [batch_dim, beam_size])  # (batch, beam)
       output.size_placeholder[i] = tf.gather_nd(size, indices=beam_idxs_ext)  # (batch,)
     return output
 
