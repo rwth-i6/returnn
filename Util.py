@@ -85,6 +85,18 @@ class BackendEngine:
     return cls.get_selected_engine() == cls.TensorFlow
 
 
+def get_model_filename_postfix():
+  """
+  :return: one possible postfix of a file which will be present when the model is saved
+  :rtype: str
+  """
+  assert BackendEngine.selectedEngine is not None
+  if BackendEngine.is_tensorflow_selected():
+    # There will be multiple files but a *.meta file will always be present.
+    return ".meta"
+  return ""
+
+
 def cmd(s):
   """
   :type s: str

@@ -23,7 +23,7 @@ Example Returnn network topology:
     "output": {"class": "rec", "from": [], "unit": {
         'output': {'class': 'choice', 'target': 'classes', 'beam_size': beam_size, 'from': ["output_prob"], "initial_output": 0},
         "end": {"class": "compare", "from": ["output"], "value": 0},
-        'target_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'], "n_out": 621, "initial_output": "apply(0)"},  # feedback_input
+        'target_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'], "n_out": 621, "initial_output": 0},  # feedback_input
         "weight_feedback": {"class": "linear", "activation": None, "with_bias": False, "from": ["prev:accum_att_weights"], "n_out": 1000},
         "prev_s_state": {"class": "get_last_hidden_state", "from": ["prev:s"], "n_out": 2000},
         "prev_s_transformed": {"class": "linear", "activation": None, "with_bias": False, "from": ["prev_s_state"], "n_out": 1000},
@@ -61,6 +61,7 @@ from pprint import pprint
 from nose.tools import assert_equal, assert_is_instance
 from numpy.testing import assert_almost_equal, assert_allclose
 import tensorflow as tf
+import pickle
 
 my_dir = os.path.dirname(os.path.abspath(__file__))
 returnn_dir = os.path.dirname(my_dir)
@@ -71,6 +72,7 @@ import rnn
 import Util
 from TFNetwork import TFNetwork
 from TFNetworkLayer import SourceLayer, LayerBase, LinearLayer
+from TFNetworkRecLayer import ChoiceLayer
 
 
 def get_network():
@@ -142,10 +144,15 @@ def main():
     blocks_mt_model_fn += "/params.npz"
     assert os.path.exists(blocks_mt_model_fn)
 
-  our_model_fn = config.value('model', "returnn-model") + ".imported"
-  print("Will save Returnn model as %s." % our_model_fn)
-  assert os.path.exists(os.path.dirname(our_model_fn) or "."), "model-dir does not exist"
-  assert not os.path.exists(our_model_fn), "model-file already exists"
+  dry_run = config.bool("dry_run", False)
+  if dry_run:
+    our_model_fn = None
+    print("Dry-run, will not save model.")
+  else:
+    our_model_fn = config.value('model', "returnn-model") + ".imported"
+    print("Will save Returnn model as %s." % our_model_fn)
+    assert os.path.exists(os.path.dirname(our_model_fn) or "."), "model-dir does not exist"
+    assert not os.path.exists(our_model_fn + Util.get_model_filename_postfix()), "model-file already exists"
 
   blocks_mt_model = numpy.load(blocks_mt_model_fn)
   assert isinstance(blocks_mt_model, numpy.lib.npyio.NpzFile), "did not expect type %r in file %r" % (
@@ -170,6 +177,7 @@ def main():
   # Init our network structure.
   from TFNetworkRecLayer import _SubnetworkRecCell
   _SubnetworkRecCell._debug_out = []  # enable for debugging intermediate values below
+  ChoiceLayer._debug_out = []  # also for debug outputs of search
   rnn.engine.use_search_flag = True  # construct the net as in search
   rnn.engine.init_network_from_config()
   print("Our network model params:")
@@ -315,7 +323,10 @@ def main():
 
   blocks_debug_dump_output = config.value("blocks_debug_dump_output", None)
   if blocks_debug_dump_output:
+    print("Will read Blocks debug dump output from %r and compare with Returnn outputs." % blocks_debug_dump_output)
     blocks_initial_outputs = numpy.load("%s/initial_states_data.0.npz" % blocks_debug_dump_output)
+    blocks_search_log = pickle.load(open("%s/search.log.pkl" % blocks_debug_dump_output, "rb"), encoding="bytes")
+    blocks_search_log = {d[b"step"]: d for d in blocks_search_log}
     input_seq = blocks_initial_outputs["input"]
     beam_size, seq_len = input_seq.shape
     input_seq = input_seq[0]  # all the same, select beam 0
@@ -347,15 +358,15 @@ def main():
     assert our_out.shape[:2] == (1, seq_len)
     assert blocks_out.shape[:2] == (seq_len, beam_size)
     assert our_out.shape[2] == blocks_out.shape[2]
-    assert_almost_equal(our_out[0], blocks_out[:, 0])
+    assert_almost_equal(our_out[0], blocks_out[:, 0], decimal=5)
     blocks_lstm0_out_ref = calc_lstm(blocks_out[:, 0], blocks_params)
     blocks_lstm0_out = blocks_initial_outputs["bidirectionalencoder_EncoderBidirectionalLSTM1_bidirectionalseparateparameters_forward__forward_apply_states"]
     our_lstm0_out = our_output["enc_layer_0_fwd"]
     assert blocks_lstm0_out.shape == (seq_len, beam_size) + blocks_lstm0_out_ref.shape
     assert our_lstm0_out.shape == (1, seq_len) + blocks_lstm0_out_ref.shape
-    assert_almost_equal(blocks_lstm0_out[0, 0], blocks_lstm0_out_ref)
+    assert_almost_equal(blocks_lstm0_out[0, 0], blocks_lstm0_out_ref, decimal=6)
     print("Blocks LSTM0 frame 0 matched to ref calc.")
-    assert_almost_equal(our_lstm0_out[0, 0], blocks_lstm0_out_ref)
+    assert_almost_equal(our_lstm0_out[0, 0], blocks_lstm0_out_ref, decimal=6)
     print("Our LSTM0 frame 0 matched to ref calc.")
     for i in range(num_encoder_layers):
       blocks_out = blocks_initial_outputs[
@@ -383,13 +394,16 @@ def main():
     assert blocks_enc_ctx_out.shape[2:] == our_enc_ctx_out.shape[2:]
     assert_almost_equal(blocks_enc_ctx_out[:, 0], our_enc_ctx_out[0], decimal=5)
     fertility = numpy.dot(blocks_encoder_out[:, 0], blocks_params["decoder/sequencegenerator/att_trans/attention/fertility_transformer.W"])
-    fertility = 1.0 / (1.0 + numpy.exp(-fertility))  # sigmoid
+    fertility = sigmoid(fertility)
     assert fertility.shape == (seq_len, 1)
     fertility = fertility[:, 0]
     assert fertility.shape == (seq_len,)
     our_dec_outputs = {v["step"]: v for v in _SubnetworkRecCell._debug_out}
     assert our_dec_outputs
     print("our dec frame keys:", sorted(our_dec_outputs[0].keys()))
+    our_dec_search_outputs = {v["step"]: v for v in ChoiceLayer._debug_out}
+    assert our_dec_search_outputs
+    print("our dec search frame keys:", sorted(our_dec_search_outputs[0].keys()))
     dec_lookup = blocks_params["decoder/sequencegenerator/readout/lookupfeedbackwmt15/lookuptable.W"]
     last_lstm_state = blocks_params["decoder/sequencegenerator/att_trans/lstm_decoder.initial_state"]
     last_lstm_cells = blocks_params["decoder/sequencegenerator/att_trans/lstm_decoder.initial_cells"]
@@ -397,18 +411,22 @@ def main():
     last_output = 0
     dec_seq_len = 0
     for dec_step in range(100):
-      blocks_frame_outputs_fn = "%s/next_states.%i.npz" % (blocks_debug_dump_output, dec_step)
+      blocks_frame_state_outputs_fn = "%s/next_states.%i.npz" % (blocks_debug_dump_output, dec_step)
+      blocks_frame_probs_outputs_fn = "%s/logprobs.%i.npz" % (blocks_debug_dump_output, dec_step)
       if dec_step > 3:
-        if not os.path.exists(blocks_frame_outputs_fn):
+        if not os.path.exists(blocks_frame_state_outputs_fn) or not os.path.exists(blocks_frame_probs_outputs_fn):
           print("Seq not ended yet but frame not found for step %i." % dec_step)
           break
-      blocks_frame_outputs = numpy.load(blocks_frame_outputs_fn)
+      blocks_frame_state_outputs = numpy.load(blocks_frame_state_outputs_fn)
+      blocks_frame_probs_outputs = numpy.load(blocks_frame_probs_outputs_fn)
+      blocks_search_frame = blocks_search_log[dec_step]
       our_dec_frame_outputs = our_dec_outputs[dec_step]
       assert our_dec_frame_outputs["step"] == dec_step
       assert our_dec_frame_outputs[":i.output"].tolist() == [dec_step]
+      our_dec_search_frame_outputs = our_dec_search_outputs[dec_step]
 
-      blocks_last_lstm_state = blocks_frame_outputs["decoder_sequencegenerator__sequencegenerator_generate_states"]
-      blocks_last_lstm_cells = blocks_frame_outputs["decoder_sequencegenerator__sequencegenerator_generate_cells"]
+      blocks_last_lstm_state = blocks_frame_state_outputs["decoder_sequencegenerator__sequencegenerator_generate_states"]
+      blocks_last_lstm_cells = blocks_frame_state_outputs["decoder_sequencegenerator__sequencegenerator_generate_cells"]
       assert blocks_last_lstm_state.shape == (beam_size, last_lstm_state.shape[0])
       assert_almost_equal(blocks_last_lstm_state[0], last_lstm_state, decimal=5)
       assert_almost_equal(blocks_last_lstm_cells[0], last_lstm_cells, decimal=5)
@@ -421,13 +439,15 @@ def main():
       assert our_last_s.shape == (beam_size, last_lstm_state.shape[0])
       assert_almost_equal(our_last_s[0], last_lstm_state, decimal=5)
 
-      blocks_last_accum_weights = blocks_frame_outputs["decoder_sequencegenerator__sequencegenerator_generate_accumulated_weights"]
+      blocks_last_accum_weights = blocks_frame_state_outputs["decoder_sequencegenerator__sequencegenerator_generate_accumulated_weights"]
       assert blocks_last_accum_weights.shape == (beam_size, seq_len)
       assert_almost_equal(blocks_last_accum_weights[0], last_accumulated_weights, decimal=5)
       our_last_accum_weights = our_dec_frame_outputs["prev:accum_att_weights.output"]
       assert our_last_accum_weights.shape == (beam_size, seq_len if dec_step > 0 else 1, 1)
       if dec_step > 0:
-        assert_almost_equal(our_last_accum_weights[0, :, 0], last_accumulated_weights, decimal=5)
+        assert_almost_equal(our_last_accum_weights[0, :, 0], last_accumulated_weights, decimal=4)
+      else:
+        assert_almost_equal(our_last_accum_weights[0, 0, 0], last_accumulated_weights.sum(), decimal=4)
 
       energy_sum = numpy.copy(blocks_enc_ctx_out[:, 0])  # (T,enc-ctx-dim)
       weight_feedback = numpy.dot(last_accumulated_weights[:, None], blocks_params["decoder/sequencegenerator/att_trans/attention/sum_alignment_transformer.W"])
@@ -436,7 +456,7 @@ def main():
       transformed_cells = numpy.dot(last_lstm_cells[None, :], blocks_params["decoder/sequencegenerator/att_trans/attention/state_trans/transform_cells.W"])
       energy_sum += transformed_states + transformed_cells
       assert energy_sum.shape == (seq_len, blocks_enc_ctx_out.shape[-1])
-      blocks_energy_sum_tanh = blocks_frame_outputs["decoder_sequencegenerator_att_trans_attention_energy_comp_tanh__tanh_apply_output"]
+      blocks_energy_sum_tanh = blocks_frame_state_outputs["decoder_sequencegenerator_att_trans_attention_energy_comp_tanh__tanh_apply_output"]
       assert blocks_energy_sum_tanh.shape == (seq_len, beam_size, energy_sum.shape[-1])
       assert_almost_equal(blocks_energy_sum_tanh[:, 0], numpy.tanh(energy_sum), decimal=5)
       assert_equal(our_dec_frame_outputs["weight_feedback.output"].shape, (beam_size, seq_len if dec_step > 0 else 1, blocks_enc_ctx_out.shape[-1]))
@@ -444,7 +464,7 @@ def main():
       our_energy_sum = our_dec_frame_outputs["energy_in.output"]
       assert our_energy_sum.shape == (seq_len, beam_size, blocks_enc_ctx_out.shape[-1])
       assert_almost_equal(our_energy_sum[:, 0], energy_sum, decimal=4)
-      blocks_energy = blocks_frame_outputs["decoder_sequencegenerator_att_trans_attention_energy_comp__energy_comp_apply_output"]
+      blocks_energy = blocks_frame_state_outputs["decoder_sequencegenerator_att_trans_attention_energy_comp__energy_comp_apply_output"]
       assert blocks_energy.shape == (seq_len, beam_size, 1)
       energy = numpy.dot(numpy.tanh(energy_sum), blocks_params["decoder/sequencegenerator/att_trans/attention/energy_comp/linear.W"])
       assert energy.shape == (seq_len, 1)
@@ -459,35 +479,49 @@ def main():
       assert_almost_equal(our_weights[:, 0, 0], weights, decimal=5)
       accumulated_weights = last_accumulated_weights + weights / (2.0 * fertility)
       assert accumulated_weights.shape == (seq_len,)
-      blocks_accumulated_weights = blocks_frame_outputs["decoder_sequencegenerator_att_trans_attention__attention_take_glimpses_accumulated_weights"]
+      blocks_accumulated_weights = blocks_frame_state_outputs["decoder_sequencegenerator_att_trans_attention__attention_take_glimpses_accumulated_weights"]
       assert blocks_accumulated_weights.shape == (beam_size, seq_len)
       assert_almost_equal(blocks_accumulated_weights[0], accumulated_weights, decimal=5)
-      blocks_weights = blocks_frame_outputs["decoder_sequencegenerator_att_trans_attention__attention_compute_weights_output_0"]
+      blocks_weights = blocks_frame_state_outputs["decoder_sequencegenerator_att_trans_attention__attention_compute_weights_output_0"]
       assert blocks_weights.shape == (seq_len, beam_size)
       assert_almost_equal(weights, blocks_weights[:, 0], decimal=5)
       our_accum_weights = our_dec_frame_outputs["accum_att_weights.output"]
       assert our_accum_weights.shape == (beam_size, seq_len, 1)
       weighted_avg = (weights[:, None] * blocks_encoder_out[:, 0]).sum(axis=0)  # att in our
       assert weighted_avg.shape == (blocks_encoder_out.shape[-1],)
-      blocks_weighted_avg = blocks_frame_outputs["decoder_sequencegenerator_att_trans_attention__attention_compute_weighted_averages_output_0"]
+      blocks_weighted_avg = blocks_frame_state_outputs["decoder_sequencegenerator_att_trans_attention__attention_compute_weighted_averages_output_0"]
       assert blocks_weighted_avg.shape == (beam_size, blocks_encoder_out.shape[-1])
       assert_almost_equal(blocks_weighted_avg[0], weighted_avg, decimal=5)
       our_att = our_dec_frame_outputs["att.output"]
       assert our_att.shape == (beam_size, blocks_encoder_out.shape[-1])
       assert_almost_equal(our_att[0], weighted_avg, decimal=5)
 
-      blocks_last_output = blocks_frame_outputs["decoder_sequencegenerator__sequencegenerator_generate_outputs"]
+      blocks_last_output = blocks_frame_state_outputs["decoder_sequencegenerator__sequencegenerator_generate_outputs"]
       assert blocks_last_output.shape == (beam_size,)
       assert max(blocks_last_output[0], 0) == last_output
       last_target_embed = dec_lookup[last_output]
+      if dec_step == 0:
+        last_target_embed = numpy.zeros_like(last_target_embed)
       our_last_target_embed = our_dec_frame_outputs["prev:target_embed.output"]
       assert our_last_target_embed.shape == (beam_size, dec_lookup.shape[-1])
       assert_almost_equal(our_last_target_embed[0], last_target_embed, decimal=5)
 
-      readout_in = \
-        numpy.dot(last_lstm_state, blocks_params["decoder/sequencegenerator/readout/merge/transform_states.W"]) + \
-        numpy.dot(last_target_embed, blocks_params["decoder/sequencegenerator/readout/merge/transform_feedback.W"]) + \
-        numpy.dot(weighted_avg, blocks_params["decoder/sequencegenerator/readout/merge/transform_weighted_averages.W"])
+      readout_in_state = numpy.dot(last_lstm_state, blocks_params["decoder/sequencegenerator/readout/merge/transform_states.W"])
+      blocks_trans_state = blocks_frame_probs_outputs["decoder_sequencegenerator_readout_merge__merge_apply_states"]
+      assert blocks_trans_state.shape == (beam_size, last_lstm_state.shape[0])
+      assert_almost_equal(blocks_trans_state[0], readout_in_state, decimal=5)
+      readout_in_feedback = numpy.dot(last_target_embed, blocks_params["decoder/sequencegenerator/readout/merge/transform_feedback.W"])
+      blocks_trans_feedback = blocks_frame_probs_outputs["decoder_sequencegenerator_readout_merge__merge_apply_feedback"]
+      assert blocks_trans_feedback.shape == (beam_size, readout_in_feedback.shape[0])
+      assert_almost_equal(blocks_trans_feedback[0], readout_in_feedback, decimal=5)
+      readout_in_weighted_avg = numpy.dot(weighted_avg, blocks_params["decoder/sequencegenerator/readout/merge/transform_weighted_averages.W"])
+      blocks_trans_weighted_avg = blocks_frame_probs_outputs["decoder_sequencegenerator_readout_merge__merge_apply_weighted_averages"]
+      assert blocks_trans_weighted_avg.shape == (beam_size, readout_in_weighted_avg.shape[0])
+      assert_almost_equal(blocks_trans_weighted_avg[0], readout_in_weighted_avg, decimal=5)
+      readout_in = readout_in_state + readout_in_feedback + readout_in_weighted_avg
+      blocks_readout_in = blocks_frame_probs_outputs["decoder_sequencegenerator_readout_merge__merge_apply_output"]
+      assert blocks_readout_in.shape == (beam_size, readout_in.shape[0])
+      assert_almost_equal(blocks_readout_in[0], readout_in, decimal=5)
       readout_in += blocks_params["decoder/sequencegenerator/readout/initializablefeedforwardsequence/maxout_bias.b"]
       assert readout_in.shape == (blocks_params["decoder/sequencegenerator/readout/initializablefeedforwardsequence/maxout_bias.b"].shape[0],)
       our_readout_in = our_dec_frame_outputs["readout_in.output"]
@@ -499,26 +533,44 @@ def main():
       assert_almost_equal(our_readout[0], readout, decimal=5)
       prob_logits = numpy.dot(readout, blocks_params["decoder/sequencegenerator/readout/initializablefeedforwardsequence/softmax1.W"]) + \
         blocks_params["decoder/sequencegenerator/readout/initializablefeedforwardsequence/softmax1.b"]
+      assert prob_logits.ndim == 1
+      blocks_prob_logits = blocks_frame_probs_outputs["decoder_sequencegenerator_readout__readout_readout_output_0"]
+      assert blocks_prob_logits.shape == (beam_size, prob_logits.shape[0])
+      assert_almost_equal(blocks_prob_logits[0], prob_logits, decimal=4)
       output_prob = softmax(prob_logits)
+      log_output_prob = log_softmax(prob_logits)
+      assert_almost_equal(numpy.log(output_prob), log_output_prob, decimal=4)
       our_output_prob = our_dec_frame_outputs["output_prob.output"]
       assert our_output_prob.shape == (beam_size, output_prob.shape[0])
       assert_almost_equal(our_output_prob[0], output_prob, decimal=4)
+      blocks_nlog_prob = blocks_frame_probs_outputs["logprobs"]
+      assert blocks_nlog_prob.shape == (beam_size, output_prob.shape[0])
+      assert_almost_equal(blocks_nlog_prob[0], -log_output_prob, decimal=4)  # quite inexact?
       ref_output = numpy.argmax(output_prob)
-      blocks_dec_output = blocks_frame_outputs["decoder_sequencegenerator_readout__readout_emit_output_0"]
+      # Warning: The emit looks like it is randomly sampled. It this reliable? Why is it there at all?
+      blocks_dec_output = blocks_frame_state_outputs["decoder_sequencegenerator_readout__readout_emit_output_0"]
       assert blocks_dec_output.shape == (beam_size,)
       our_dec_output = our_dec_frame_outputs["output.output"]
       assert our_dec_output.shape == (beam_size,)
-      assert ref_output in blocks_dec_output
-      assert ref_output in our_dec_output
       print("Frame %i: Ref output symbol: %i, Blocks: %r, Our: %r" % (
         dec_step, int(ref_output), blocks_dec_output.tolist(), our_dec_output.tolist()))
+      # Well, the following two could be not true if all the other beams have much better scores,
+      # but this is unlikely.
+      assert ref_output in blocks_dec_output
+      assert ref_output in our_dec_output
       if dec_step == 0:
-        assert blocks_dec_output[0] == ref_output
-        assert our_dec_output[0] == ref_output
-      ref_output = blocks_dec_output[0]
+        # This assumes that the results are ordered by score which might not be true (see tf.nn.top_k).
+        assert blocks_dec_output[0] == our_dec_output[0] == ref_output
+      # We assume that the best is the same. Note that this also might not be true if there are two equally best scores.
+      # It also assumes that it's ordered by the score which also might not be true (see tf.nn.top_k).
+      # For the same reason, the remaining list and entries might also not perfectly match.
       assert our_dec_output[0] == blocks_dec_output[0]
+      # Just follow the first beam.
+      ref_output = blocks_dec_output[0]
+      print("Blocks indexes:", blocks_search_frame[b'indexes'])
+      print("Our indexes:", our_dec_search_frame_outputs["src_beam_idxs"])
 
-      blocks_target_emb = blocks_frame_outputs["decoder_sequencegenerator_fork__fork_apply_feedback_decoder_input"]
+      blocks_target_emb = blocks_frame_state_outputs["decoder_sequencegenerator_fork__fork_apply_feedback_decoder_input"]
       assert blocks_target_emb.shape == (beam_size, dec_lookup.shape[1])
       target_embed = dec_lookup[ref_output]
       assert target_embed.shape == (dec_lookup.shape[1],)
@@ -528,8 +580,8 @@ def main():
       context_to_decoder = numpy.dot(weighted_avg, blocks_params["decoder/sequencegenerator/att_trans/context_to_decoder/fork_inputs.W"])
       lstm_z = feedback_to_decoder + context_to_decoder
       assert lstm_z.shape == feedback_to_decoder.shape == context_to_decoder.shape == (last_lstm_state.shape[-1] * 4,)
-      blocks_feedback_to_decoder = blocks_frame_outputs["decoder_sequencegenerator_att_trans_feedback_to_decoder__feedback_to_decoder_apply_inputs"]
-      blocks_context_to_decoder = blocks_frame_outputs["decoder_sequencegenerator_att_trans_context_to_decoder__context_to_decoder_apply_inputs"]
+      blocks_feedback_to_decoder = blocks_frame_state_outputs["decoder_sequencegenerator_att_trans_feedback_to_decoder__feedback_to_decoder_apply_inputs"]
+      blocks_context_to_decoder = blocks_frame_state_outputs["decoder_sequencegenerator_att_trans_context_to_decoder__context_to_decoder_apply_inputs"]
       assert blocks_feedback_to_decoder.shape == blocks_context_to_decoder.shape == (beam_size, last_lstm_state.shape[-1] * 4)
       assert_almost_equal(blocks_feedback_to_decoder[0], feedback_to_decoder, decimal=5)
       assert_almost_equal(blocks_context_to_decoder[0], context_to_decoder, decimal=5)
@@ -538,8 +590,8 @@ def main():
         prefix="decoder/sequencegenerator/att_trans/lstm_decoder.",
         last_state=last_lstm_state, last_cell=last_lstm_cells)
       assert lstm_state.shape == last_lstm_state.shape == lstm_cells.shape == last_lstm_cells.shape
-      blocks_lstm_state = blocks_frame_outputs["decoder_sequencegenerator_att_trans_lstm_decoder__lstm_decoder_apply_states"]
-      blocks_lstm_cells = blocks_frame_outputs["decoder_sequencegenerator_att_trans_lstm_decoder__lstm_decoder_apply_cells"]
+      blocks_lstm_state = blocks_frame_state_outputs["decoder_sequencegenerator_att_trans_lstm_decoder__lstm_decoder_apply_states"]
+      blocks_lstm_cells = blocks_frame_state_outputs["decoder_sequencegenerator_att_trans_lstm_decoder__lstm_decoder_apply_cells"]
       assert blocks_lstm_state.shape == blocks_lstm_cells.shape == (beam_size, last_lstm_state.shape[-1])
       assert_almost_equal(blocks_lstm_state[0], lstm_state, decimal=5)
       assert_almost_equal(blocks_lstm_cells[0], lstm_cells, decimal=5)
@@ -562,8 +614,13 @@ def main():
         break
     assert dec_seq_len > 0
     print("All outputs seem to match.")
+  else:
+    print("blocks_debug_dump_output not specified. It will not compare the model outputs." % blocks_debug_dump_output)
 
-  rnn.engine.save_model(our_model_fn)
+  if dry_run:
+    print("Dry-run, not saving model.")
+  else:
+    rnn.engine.save_model(our_model_fn)
   print("Finished importing.")
 
 
@@ -641,8 +698,17 @@ def calc_raw_lstm(z, blocks_params, prefix, last_state=None, last_cell=None):
 
 
 def softmax(x, axis=-1):
-  e_x = numpy.exp(x - numpy.max(x, axis=axis))
-  return e_x / e_x.sum(axis=axis)
+  assert isinstance(x, numpy.ndarray)
+  e_x = numpy.exp(x - numpy.max(x, axis=axis, keepdims=True))
+  assert isinstance(e_x, numpy.ndarray)
+  return e_x / e_x.sum(axis=axis, keepdims=True)
+
+
+def log_softmax(x, axis=-1):
+  assert isinstance(x, numpy.ndarray)
+  xdev = x - x.max(axis=axis, keepdims=True)
+  lsm = xdev - numpy.log(numpy.sum(numpy.exp(xdev), axis=axis, keepdims=True))
+  return lsm
 
 
 def sigmoid(x):
