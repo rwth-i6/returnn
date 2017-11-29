@@ -767,12 +767,8 @@ def init_dataset(kwargs):
   if callable(kwargs):
     return init_dataset(kwargs())
   if isinstance(kwargs, (str, unicode)):
-    if kwargs.startswith("config:"):
-      from Config import get_global_config
-      config = get_global_config()
-      assert config
-      return init_dataset(config.opt_typed_value(kwargs[len("config:"):]))
     return init_dataset_via_str(config_str=kwargs)
+  assert isinstance(kwargs, dict)
   kwargs = kwargs.copy()
   assert "class" in kwargs
   clazz_name = kwargs.pop("class")
@@ -810,6 +806,12 @@ def init_dataset_via_str(config_str, config=None, cache_byte_size=None, **kwargs
     kwargs["sprintTrainerExecPath"] = sprintTrainerExecPath
     from SprintDataset import ExternSprintDataset
     cls = ExternSprintDataset
+  elif config_str.startswith("config:"):
+    from Config import get_global_config
+    if not config:
+      config = get_global_config()
+    data = eval(config_str[len("config:"):], config.typed_dict, config.typed_dict)
+    return init_dataset(data)
   elif ":" in config_str:
     kwargs.update(eval("dict(%s)" % config_str[config_str.find(":") + 1:]))
     class_name = config_str[:config_str.find(":")]
