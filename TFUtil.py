@@ -4202,6 +4202,7 @@ def select_src_beams(x, src_beams):
   assert isinstance(x, tf.Tensor)
   assert isinstance(src_beams, tf.Tensor)
   with tf.name_scope("select_src_beams"):
+    x_tshape = x.get_shape()
     src_beams.set_shape(tf.TensorShape([None, None]))
     src_beams_shape = tf.shape(src_beams)
     batch_dim, beam_dim = src_beams_shape[0], src_beams_shape[1]
@@ -4214,6 +4215,7 @@ def select_src_beams(x, src_beams):
     indices = nd_indices(src_beams)  # (batch, beam, 2)
     x = tf.gather_nd(x, indices=indices)  # K=2, (batch, beam, ...)
     x = tf.reshape(x, [batch_dim * beam_dim] + x_shape_rem)
+    x.set_shape(tf.TensorShape([None] + x_tshape.as_list()[1:]))
     return x
 
 
@@ -4232,6 +4234,7 @@ def filter_ended_scores(x, end_flags, batch_dim=None, dim=None, score_zero=0.0, 
   :rtype: tf.Tensor
   """
   with tf.name_scope("filter_ended_scores"):
+    end_flags.set_shape(tf.TensorShape([batch_dim if isinstance(batch_dim, int) else None]))
     end_flags = check_input_ndim(end_flags, 1)
     x = check_dim_equal(x, 0, end_flags, 0)
     x.set_shape(tf.TensorShape([
@@ -4244,9 +4247,16 @@ def filter_ended_scores(x, end_flags, batch_dim=None, dim=None, score_zero=0.0, 
     with same_context(dim):  # force calculation outside loop if possible
       filter_score = tf.one_hot(
         0, dim, dtype=tf.float32, on_value=score_zero, off_value=score_rem)  # (dim,)
+      filter_score.set_shape(tf.TensorShape([dim if isinstance(dim, int) else None]))
     with same_context([dim, batch_dim]):  # force calculation outside loop if possible
       filter_score = expand_dims_unbroadcast(filter_score, axis=0, dim=batch_dim)  # (batch,dim)
+      filter_score.set_shape(tf.TensorShape([
+        batch_dim if isinstance(batch_dim, int) else None,
+        dim if isinstance(dim, int) else None]))
     x = tf.where(end_flags, filter_score, x)
+    x.set_shape(tf.TensorShape([
+      batch_dim if isinstance(batch_dim, int) else None,
+      dim if isinstance(dim, int) else None]))
     return x
 
 

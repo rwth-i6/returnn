@@ -344,6 +344,9 @@ class TFNetwork(object):
     """
     assert name not in self.layers
     from Util import help_on_type_error_wrong_args
+    if self.search_flag:
+      from TFNetworkLayer import SearchChoices
+      layer_desc = SearchChoices.translate_to_common_search_beam(layer_desc)
     layer_desc = layer_desc.copy()
     assert "name" not in layer_desc
     assert "network" not in layer_desc

@@ -21,7 +21,7 @@ Example Returnn network topology:
     "fertility": {"class": "linear", "activation": "sigmoid", "with_bias": False, "from": ["encoder"], "n_out": 1},
 
     "output": {"class": "rec", "from": [], "unit": {
-        'output': {'class': 'choice', 'target': 'classes', 'beam_size': beam_size, 'from': ["output_prob"], "initial_output": 0},
+        'output': {'class': 'choice', 'target': 'classes', 'beam_size': beam_size, 'from': ["output_prob"], "initial_output": 0, "length_normalization": False},
         "end": {"class": "compare", "from": ["output"], "value": 0},
         'target_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'], "n_out": 621, "initial_output": 0},  # feedback_input
         "weight_feedback": {"class": "linear", "activation": None, "with_bias": False, "from": ["prev:accum_att_weights"], "n_out": 1000},
@@ -42,7 +42,8 @@ Example Returnn network topology:
     }, "target": "classes", "max_seq_len": 75},
 
     "decision": {
-        "class": "decide", "from": ["output"], "loss": "edit_distance", "target": "classes",
+        "class": "decide", "from": ["output"], "length_normalization": True,
+        "loss": "edit_distance", "target": "classes",
         "loss_opts": {
             #"debug_print": True
             }
@@ -404,6 +405,7 @@ def main():
     our_dec_search_outputs = {v["step"]: v for v in ChoiceLayer._debug_out}
     assert our_dec_search_outputs
     print("our dec search frame keys:", sorted(our_dec_search_outputs[0].keys()))
+    print("Blocks search frame keys:", sorted(blocks_search_log[0].keys()))
     dec_lookup = blocks_params["decoder/sequencegenerator/readout/lookupfeedbackwmt15/lookuptable.W"]
     last_lstm_state = blocks_params["decoder/sequencegenerator/att_trans/lstm_decoder.initial_state"]
     last_lstm_cells = blocks_params["decoder/sequencegenerator/att_trans/lstm_decoder.initial_cells"]
@@ -462,21 +464,21 @@ def main():
       assert_equal(our_dec_frame_outputs["weight_feedback.output"].shape, (beam_size, seq_len if dec_step > 0 else 1, blocks_enc_ctx_out.shape[-1]))
       assert_equal(our_dec_frame_outputs["prev_s_transformed.output"].shape, (beam_size, blocks_enc_ctx_out.shape[-1]))
       our_energy_sum = our_dec_frame_outputs["energy_in.output"]
-      assert our_energy_sum.shape == (seq_len, beam_size, blocks_enc_ctx_out.shape[-1])
-      assert_almost_equal(our_energy_sum[:, 0], energy_sum, decimal=4)
+      assert our_energy_sum.shape == (beam_size, seq_len, blocks_enc_ctx_out.shape[-1])
+      assert_almost_equal(our_energy_sum[0], energy_sum, decimal=4)
       blocks_energy = blocks_frame_state_outputs["decoder_sequencegenerator_att_trans_attention_energy_comp__energy_comp_apply_output"]
       assert blocks_energy.shape == (seq_len, beam_size, 1)
       energy = numpy.dot(numpy.tanh(energy_sum), blocks_params["decoder/sequencegenerator/att_trans/attention/energy_comp/linear.W"])
       assert energy.shape == (seq_len, 1)
       assert_almost_equal(blocks_energy[:, 0], energy, decimal=5)
       our_energy = our_dec_frame_outputs["energy.output"]
-      assert our_energy.shape == (seq_len, beam_size, 1)
-      assert_almost_equal(our_energy[:, 0], energy, decimal=5)
+      assert our_energy.shape == (beam_size, seq_len, 1)
+      assert_almost_equal(our_energy[0], energy, decimal=5)
       weights = softmax(energy[:, 0])
       assert weights.shape == (seq_len,)
       our_weights = our_dec_frame_outputs["att_weights.output"]
-      assert our_weights.shape == (seq_len, beam_size, 1)
-      assert_almost_equal(our_weights[:, 0, 0], weights, decimal=5)
+      assert our_weights.shape == (beam_size, seq_len, 1)
+      assert_almost_equal(our_weights[0, :, 0], weights, decimal=5)
       accumulated_weights = last_accumulated_weights + weights / (2.0 * fertility)
       assert accumulated_weights.shape == (seq_len,)
       blocks_accumulated_weights = blocks_frame_state_outputs["decoder_sequencegenerator_att_trans_attention__attention_take_glimpses_accumulated_weights"]
@@ -545,15 +547,20 @@ def main():
       assert_almost_equal(our_output_prob[0], output_prob, decimal=4)
       blocks_nlog_prob = blocks_frame_probs_outputs["logprobs"]
       assert blocks_nlog_prob.shape == (beam_size, output_prob.shape[0])
-      assert_almost_equal(blocks_nlog_prob[0], -log_output_prob, decimal=4)  # quite inexact?
+      assert_almost_equal(blocks_nlog_prob[0], -log_output_prob, decimal=4)
+      assert_almost_equal(our_dec_search_frame_outputs["scores_in_orig"][0], output_prob, decimal=4)
+      assert_almost_equal(blocks_search_frame[b'logprobs'][0], -log_output_prob, decimal=4)
+      #for b in range(beam_size):
+      #  assert_almost_equal(-numpy.log(our_output_prob[b]), blocks_frame_probs_outputs["logprobs"][b], decimal=4)
       ref_output = numpy.argmax(output_prob)
-      # Warning: The emit looks like it is randomly sampled. It this reliable? Why is it there at all?
-      blocks_dec_output = blocks_frame_state_outputs["decoder_sequencegenerator_readout__readout_emit_output_0"]
+      # Note: Don't take the readout.emit outputs. They are randomly sampled.
+      blocks_dec_output = blocks_search_frame[b'outputs']
       assert blocks_dec_output.shape == (beam_size,)
       our_dec_output = our_dec_frame_outputs["output.output"]
       assert our_dec_output.shape == (beam_size,)
-      print("Frame %i: Ref output symbol: %i, Blocks: %r, Our: %r" % (
-        dec_step, int(ref_output), blocks_dec_output.tolist(), our_dec_output.tolist()))
+      print("Frame %i: Ref best greedy output symbol: %i" % (dec_step, int(ref_output)))
+      print("Blocks labels:", blocks_dec_output.tolist())
+      print("Our labels:", our_dec_output.tolist())
       # Well, the following two could be not true if all the other beams have much better scores,
       # but this is unlikely.
       assert ref_output in blocks_dec_output
@@ -567,8 +574,25 @@ def main():
       assert our_dec_output[0] == blocks_dec_output[0]
       # Just follow the first beam.
       ref_output = blocks_dec_output[0]
-      print("Blocks indexes:", blocks_search_frame[b'indexes'])
-      print("Our indexes:", our_dec_search_frame_outputs["src_beam_idxs"])
+      assert our_dec_search_frame_outputs["src_beam_idxs"].shape == (1, beam_size)
+      assert our_dec_search_frame_outputs["scores"].shape == (1, beam_size)
+      print("Blocks src_beam_idxs:", blocks_search_frame[b'indexes'].tolist())
+      print("Our src_beam_idxs:", our_dec_search_frame_outputs["src_beam_idxs"][0].tolist())
+      print("Blocks scores:", blocks_search_frame[b'chosen_costs'].tolist())
+      print("Our scores:", our_dec_search_frame_outputs["scores"][0].tolist())
+      if list(our_dec_search_frame_outputs["src_beam_idxs"][0]) != list(blocks_search_frame[b'indexes']):
+        print("Warning, beams do not match.")
+        print("Blocks scores base:", blocks_search_frame[b'scores_base'].flatten().tolist())
+        print("Our scores base:", our_dec_search_frame_outputs["scores_base"].flatten().tolist())
+        #print("Blocks score in orig top k:", sorted(blocks_search_frame[b'logprobs'].flatten())[:beam_size])
+        #print("Our score in orig top k:", sorted(-numpy.log(our_dec_search_frame_outputs["scores_in_orig"].flatten()))[:beam_size])
+        print("Blocks score in top k:", sorted((blocks_search_frame[b'logprobs'] * blocks_search_log[dec_step - 1][b'mask'][:, None]).flatten())[:beam_size])
+        print("Our score in top k:", sorted(-our_dec_search_frame_outputs["scores_in"].flatten())[:beam_size])
+        blocks_scores_combined = blocks_search_frame[b'next_costs']
+        our_scores_combined = our_dec_search_frame_outputs["scores_combined"]
+        print("Blocks scores combined top k:", sorted(blocks_scores_combined.flatten())[:beam_size])
+        print("Our neg scores combined top k:", sorted(-our_scores_combined.flatten())[:beam_size])
+        #raise Exception("beams mismatch")
 
       blocks_target_emb = blocks_frame_state_outputs["decoder_sequencegenerator_fork__fork_apply_feedback_decoder_input"]
       assert blocks_target_emb.shape == (beam_size, dec_lookup.shape[1])

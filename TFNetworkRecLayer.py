@@ -2330,11 +2330,12 @@ class ChoiceLayer(LayerBase):
           # See the comment above. It could be that scores_in has a wider beam
           # than what should be used here now.
           scores_in = scores_in[:, :base_beam_in]  # (batch, beam_in, dim)
-        scores_in += scores_base  # (batch, beam_in, dim)
-        scores_in_flat = tf.reshape(scores_in, [net_batch_dim, base_beam_in * scores_in_dim])  # (batch, beam_in * dim)
+        scores_comb = scores_in + scores_base  # (batch, beam_in, dim)
+        scores_comb_flat = tf.reshape(
+          scores_comb, [net_batch_dim, base_beam_in * scores_in_dim])  # (batch, beam_in * dim)
         # `tf.nn.top_k` is the core function performing our search.
         # We get scores/labels of shape (batch, beam) with indices in [0..beam_in*dim-1].
-        scores, labels = tf.nn.top_k(scores_in_flat, k=beam_size)
+        scores, labels = tf.nn.top_k(scores_comb_flat, k=beam_size)
         self.search_choices.src_beams = labels // scores_in_dim  # (batch, beam) -> beam_in idx
         labels = labels % scores_in_dim  # (batch, beam) -> dim idx
         labels = tf.reshape(labels, [net_batch_dim * beam_size])  # (batch * beam)
@@ -2345,9 +2346,12 @@ class ChoiceLayer(LayerBase):
           labels = identity_with_debug_log(
             out=self._debug_out, x=labels, args={
               "step": self.network.get_rec_step_index() if self.network.have_rec_step_info() else tf.constant(-1),
-              "scores_in": self.sources[0].output.placeholder,
-              "scores_base": self.search_choices.src_layer.search_choices.beam_scores,
-              "scores_combined": scores_in,
+              "base_beam_in": base_beam_in,
+              "scores_in_orig": self.sources[0].output.placeholder,
+              "scores_in": scores_in,
+              "scores_base_orig": self.search_choices.src_layer.search_choices.beam_scores,
+              "scores_base": scores_base,
+              "scores_combined": scores_comb,
               "src_beam_idxs": self.search_choices.src_beams,
               "labels": tf.reshape(labels, [net_batch_dim, beam_size]),
               "scores": scores})

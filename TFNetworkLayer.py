@@ -832,6 +832,96 @@ class SearchChoices(object):
     self.beam_scores = scores
     self.owner.rec_vars_outputs["choice_scores"] = scores
 
+  def get_all_src_choices(self):
+    """
+    :return: all SearchChoices we depend on up to the root, including self
+    :rtype: list[SearchChoices]
+    """
+    sources = [self]
+    choice = self
+    while True:
+      src_layer = choice.src_layer
+      if not src_layer:
+        break
+      assert isinstance(src_layer.search_choices, SearchChoices)
+      choice = src_layer.search_choices
+      if choice in sources:  # loop, can happen e.g. in RecLayer in the loop
+        break
+      sources.append(choice)
+    return sources
+
+  def __eq__(self, other):
+    return self is other
+
+  def __ne__(self, other):
+    return self is not other
+
+  def __cmp__(self, other):
+    """
+    :param SearchChoices|None self:
+    :param SearchChoices|None other:
+    :return: 0 if equal, -1 if we are smaller, else 1
+    :rtype: int
+    """
+    if self is other:
+      return 0
+    if self is None:
+      return -1
+    if other is None:
+      return 1
+    self_src_choices = self.get_all_src_choices()
+    other_src_choices = other.get_all_src_choices()
+    assert len(self_src_choices) != len(other_src_choices)
+    if len(self_src_choices) < len(other_src_choices):
+      res = -1
+    else:
+      res = 1
+      self_src_choices, other_src_choices = other_src_choices, self_src_choices
+    assert len(self_src_choices) < len(other_src_choices)
+    for i in range(len(self_src_choices)):
+      assert self_src_choices[-1 - i] == other_src_choices[-1 - i], (
+        "cannot compare, they don't share the same search-tree")
+    return res
+
+  def __lt__(self, other):
+    return self.__cmp__(other) < 0
+
+  def __gt__(self, other):
+    return self.__cmp__(other) > 0
+
+  @classmethod
+  def translate_to_common_search_beam(cls, sources):
+    """
+    :param list[LayerBase]|dict[str,LayerBase|object] sources:
+    :return: sources but all layers transformed when needed
+    :rtype: list[LayerBase]|dict[str,LayerBase|object]
+    """
+    from tensorflow.python.util import nest
+    layers_flat = [v for v in nest.flatten(sources) if isinstance(v, LayerBase)]
+    if len(layers_flat) <= 1:
+      return sources
+    from functools import cmp_to_key
+    common_choices = max([layer.get_search_choices() for layer in layers_flat], key=cmp_to_key(cls.__cmp__))
+    if not common_choices:
+      return sources
+    common_layers = [layer for layer in layers_flat if layer.get_search_choices() == common_choices]
+    if len(common_layers) == len(layers_flat):
+      return sources
+    common_layer = common_layers[0]
+
+    def transform(d):
+      if isinstance(d, dict):
+        return {k: transform(v) for (k, v) in d.items()}
+      if isinstance(d, (tuple, list)):
+        return type(d)([transform(v) for v in d])
+      if isinstance(d, LayerBase):
+        if d.get_search_choices() == common_choices:
+          return d
+        return SelectSearchSourcesLayer(sources=(d,), search_choices=common_layer, name=d.name, network=d.network)
+      return d
+
+    return transform(sources)
+
 
 class SourceLayer(LayerBase):
   layer_class = "source"
@@ -1029,6 +1119,76 @@ class InternalLayer(LayerBase):
   This is not supposed to be used by the user.
   It is used by some code to construct a wrapper layer or so.
   """
+
+
+class SelectSearchSourcesLayer(InternalLayer):
+  """
+  Selects the corresponding search beams from the source, given current search choices
+  (determined by a layer).
+  Like :class:`InternalLayer`, only for internal purpose at the moment.
+  """
+
+  def __init__(self, search_choices, **kwargs):
+    """
+    :param LayerBase search_choices:
+    """
+    if "output" not in kwargs:
+      kwargs = kwargs.copy()
+      kwargs["output"] = kwargs["sources"][0].output  # will be reset later
+    from TFUtil import select_src_beams
+    super(SelectSearchSourcesLayer, self).__init__(**kwargs)
+    assert len(self.sources) == 1
+    src = self.sources[0]
+    self.search_choices_layer = search_choices
+    search_choices = search_choices.get_search_choices()
+    src_search_choices = src.get_search_choices()
+    if not search_choices or search_choices == src_search_choices or not src_search_choices:
+      self.output = src.output.copy_as_batch_major()
+      if search_choices:
+        self.output = self.output.copy_extend_with_beam(search_choices.beam_size)
+    else:
+      assert search_choices and search_choices != src_search_choices
+      search_choices_seq = search_choices.get_all_src_choices()
+      assert src_search_choices in search_choices_seq
+      search_choices_seq = search_choices_seq[:search_choices_seq.index(src_search_choices)]
+      assert src_search_choices not in search_choices_seq
+
+      def transform(v):
+        if isinstance(v, (tuple, list)):
+          return type(v)([transform(v_) for v_ in v])
+        for base_src_choices in reversed(search_choices_seq):
+          assert isinstance(base_src_choices, SearchChoices)
+          v = select_src_beams(v, src_beams=base_src_choices.src_beams)
+        return v
+
+      self.output.placeholder = transform(src.output.get_placeholder_as_batch_major())
+      self.rec_vars_outputs = {k: transform(v) for (k, v) in src.rec_vars_outputs.items()}  # assumes batch-major
+
+  def get_dep_layers(self):
+    return super(SelectSearchSourcesLayer, self).get_dep_layers() + [self.search_choices_layer]
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    super(SelectSearchSourcesLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    d["search_choices"] = get_layer(d["search_choices"])
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, search_choices, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :param LayerBase search_choices:
+    :rtype: Data
+    """
+    assert len(sources) == 1
+    search_choices = search_choices.get_search_choices()
+    data = sources[0].output.copy_as_batch_major()
+    if data.beam_size:
+      assert search_choices
+      data = data.copy_extend_with_beam(search_choices.beam_size)
+    elif search_choices:
+      data = data.copy_extend_with_beam(search_choices.beam_size)
+    return data
 
 
 class ActivationLayer(CopyLayer):
