@@ -794,13 +794,21 @@ class SearchChoices(object):
     self.is_decided = is_decided
 
   def __repr__(self):
+    def short(v):
+      if isinstance(v, LayerBase):
+        return repr(v.name)
+      if isinstance(v, tf.Tensor):
+        if v.get_shape().ndims is not None:
+          return "shaped:(%s)" % ",".join(map(str, v.get_shape().as_list()))
+        return "unknown-ndim"
+      return repr(v)
     s = " beam_size=%r" % self.beam_size
     if self._done_src_layer:
-      s += " src_layer=%r" % self._src_layer
-    s += " beam_scores=%r" % self.beam_scores
+      s += " src_layer=%s" % short(self._src_layer)
+    s += " beam_scores=%s" % short(self.beam_scores)
     if self.is_decided:
       s += " is_decided"
-    return "<SearchChoices owner=%r%s>" % (self.owner, s)
+    return "<SearchChoices owner=%s%s>" % (short(self.owner), s)
 
   @property
   def src_layer(self):
@@ -893,6 +901,23 @@ class SearchChoices(object):
   def __gt__(self, other):
     return self.__cmp__(other) > 0
 
+  def translate_to_this_search_beam(self, sources):
+    """
+    :param LayerBase|list[LayerBase]|dict[str,LayerBase|object]|tuple[LayerBase|object]|T sources:
+    :return: sources but all layers transformed when needed
+    :rtype: T
+    """
+    d = sources
+    if isinstance(d, dict):
+      return {k: self.translate_to_this_search_beam(v) for (k, v) in d.items()}
+    if isinstance(d, (tuple, list)):
+      return type(d)([self.translate_to_this_search_beam(v) for v in d])
+    if isinstance(d, LayerBase):
+      if d.get_search_choices() == self:
+        return d
+      return SelectSearchSourcesLayer(sources=(d,), search_choices=self.owner, name=d.name, network=d.network)
+    return d
+
   @classmethod
   def translate_to_common_search_beam(cls, sources):
     """
@@ -908,23 +933,7 @@ class SearchChoices(object):
     common_choices = max([layer.get_search_choices() for layer in layers_flat], key=cmp_to_key(cls.compare))
     if not common_choices:
       return sources
-    common_layers = [layer for layer in layers_flat if layer.get_search_choices() == common_choices]
-    if len(common_layers) == len(layers_flat):
-      return sources
-    common_layer = common_layers[0]
-
-    def transform(d):
-      if isinstance(d, dict):
-        return {k: transform(v) for (k, v) in d.items()}
-      if isinstance(d, (tuple, list)):
-        return type(d)([transform(v) for v in d])
-      if isinstance(d, LayerBase):
-        if d.get_search_choices() == common_choices:
-          return d
-        return SelectSearchSourcesLayer(sources=(d,), search_choices=common_layer, name=d.name, network=d.network)
-      return d
-
-    return transform(sources)
+    return common_choices.translate_to_this_search_beam(sources)
 
 
 class SourceLayer(LayerBase):
@@ -1145,21 +1154,23 @@ class SelectSearchSourcesLayer(InternalLayer):
     src = self.sources[0]
     self.search_choices_layer = search_choices
     search_choices = search_choices.get_search_choices()
+    self.output = src.output.copy_as_batch_major()
+    if search_choices:
+      self.output = self.output.copy_extend_with_beam(search_choices.beam_size)
     src_search_choices = src.get_search_choices()
     if not search_choices or search_choices == src_search_choices or not src_search_choices:
-      self.output = src.output.copy_as_batch_major()
-      if search_choices:
-        self.output = self.output.copy_extend_with_beam(search_choices.beam_size)
+      pass
     else:
       assert search_choices and search_choices != src_search_choices
       search_choices_seq = search_choices.get_all_src_choices()
-      assert src_search_choices in search_choices_seq
+      assert src_search_choices in search_choices_seq, "no common search base"
       search_choices_seq = search_choices_seq[:search_choices_seq.index(src_search_choices)]
       assert src_search_choices not in search_choices_seq
 
       def transform(v):
         if isinstance(v, (tuple, list)):
           return type(v)([transform(v_) for v_ in v])
+        assert isinstance(v, tf.Tensor)
         for base_src_choices in reversed(search_choices_seq):
           assert isinstance(base_src_choices, SearchChoices)
           v = select_src_beams(v, src_beams=base_src_choices.src_beams)

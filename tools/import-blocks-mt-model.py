@@ -427,8 +427,8 @@ def main():
       assert our_dec_frame_outputs[":i.output"].tolist() == [dec_step]
       our_dec_search_frame_outputs = our_dec_search_outputs[dec_step]
 
-      blocks_last_lstm_state = blocks_frame_state_outputs["decoder_sequencegenerator__sequencegenerator_generate_states"]
-      blocks_last_lstm_cells = blocks_frame_state_outputs["decoder_sequencegenerator__sequencegenerator_generate_cells"]
+      blocks_last_lstm_state = blocks_frame_probs_outputs["decoder_sequencegenerator__sequencegenerator_generate_states"]
+      blocks_last_lstm_cells = blocks_frame_probs_outputs["decoder_sequencegenerator__sequencegenerator_generate_cells"]
       assert blocks_last_lstm_state.shape == (beam_size, last_lstm_state.shape[0])
       assert_almost_equal(blocks_last_lstm_state[0], last_lstm_state, decimal=5)
       assert_almost_equal(blocks_last_lstm_cells[0], last_lstm_cells, decimal=5)
@@ -441,7 +441,7 @@ def main():
       assert our_last_s.shape == (beam_size, last_lstm_state.shape[0])
       assert_almost_equal(our_last_s[0], last_lstm_state, decimal=5)
 
-      blocks_last_accum_weights = blocks_frame_state_outputs["decoder_sequencegenerator__sequencegenerator_generate_accumulated_weights"]
+      blocks_last_accum_weights = blocks_frame_probs_outputs["decoder_sequencegenerator__sequencegenerator_generate_accumulated_weights"]
       assert blocks_last_accum_weights.shape == (beam_size, seq_len)
       assert_almost_equal(blocks_last_accum_weights[0], last_accumulated_weights, decimal=5)
       our_last_accum_weights = our_dec_frame_outputs["prev:accum_att_weights.output"]
@@ -458,7 +458,7 @@ def main():
       transformed_cells = numpy.dot(last_lstm_cells[None, :], blocks_params["decoder/sequencegenerator/att_trans/attention/state_trans/transform_cells.W"])
       energy_sum += transformed_states + transformed_cells
       assert energy_sum.shape == (seq_len, blocks_enc_ctx_out.shape[-1])
-      blocks_energy_sum_tanh = blocks_frame_state_outputs["decoder_sequencegenerator_att_trans_attention_energy_comp_tanh__tanh_apply_output"]
+      blocks_energy_sum_tanh = blocks_frame_probs_outputs["decoder_sequencegenerator_att_trans_attention_energy_comp_tanh__tanh_apply_output"]
       assert blocks_energy_sum_tanh.shape == (seq_len, beam_size, energy_sum.shape[-1])
       assert_almost_equal(blocks_energy_sum_tanh[:, 0], numpy.tanh(energy_sum), decimal=5)
       assert_equal(our_dec_frame_outputs["weight_feedback.output"].shape, (beam_size, seq_len if dec_step > 0 else 1, blocks_enc_ctx_out.shape[-1]))
@@ -466,39 +466,39 @@ def main():
       our_energy_sum = our_dec_frame_outputs["energy_in.output"]
       assert our_energy_sum.shape == (beam_size, seq_len, blocks_enc_ctx_out.shape[-1])
       assert_almost_equal(our_energy_sum[0], energy_sum, decimal=4)
-      blocks_energy = blocks_frame_state_outputs["decoder_sequencegenerator_att_trans_attention_energy_comp__energy_comp_apply_output"]
+      blocks_energy = blocks_frame_probs_outputs["decoder_sequencegenerator_att_trans_attention_energy_comp__energy_comp_apply_output"]
       assert blocks_energy.shape == (seq_len, beam_size, 1)
       energy = numpy.dot(numpy.tanh(energy_sum), blocks_params["decoder/sequencegenerator/att_trans/attention/energy_comp/linear.W"])
       assert energy.shape == (seq_len, 1)
-      assert_almost_equal(blocks_energy[:, 0], energy, decimal=5)
+      assert_almost_equal(blocks_energy[:, 0], energy, decimal=4)
       our_energy = our_dec_frame_outputs["energy.output"]
       assert our_energy.shape == (beam_size, seq_len, 1)
-      assert_almost_equal(our_energy[0], energy, decimal=5)
+      assert_almost_equal(our_energy[0], energy, decimal=4)
       weights = softmax(energy[:, 0])
       assert weights.shape == (seq_len,)
       our_weights = our_dec_frame_outputs["att_weights.output"]
       assert our_weights.shape == (beam_size, seq_len, 1)
-      assert_almost_equal(our_weights[0, :, 0], weights, decimal=5)
+      assert_almost_equal(our_weights[0, :, 0], weights, decimal=4)
       accumulated_weights = last_accumulated_weights + weights / (2.0 * fertility)
       assert accumulated_weights.shape == (seq_len,)
-      blocks_accumulated_weights = blocks_frame_state_outputs["decoder_sequencegenerator_att_trans_attention__attention_take_glimpses_accumulated_weights"]
-      assert blocks_accumulated_weights.shape == (beam_size, seq_len)
-      assert_almost_equal(blocks_accumulated_weights[0], accumulated_weights, decimal=5)
-      blocks_weights = blocks_frame_state_outputs["decoder_sequencegenerator_att_trans_attention__attention_compute_weights_output_0"]
+      #blocks_accumulated_weights = blocks_frame_probs_outputs["decoder_sequencegenerator_att_trans_attention__attention_take_glimpses_accumulated_weights"]
+      #assert blocks_accumulated_weights.shape == (beam_size, seq_len)
+      #assert_almost_equal(blocks_accumulated_weights[0], accumulated_weights, decimal=5)
+      blocks_weights = blocks_frame_probs_outputs["decoder_sequencegenerator_att_trans_attention__attention_compute_weights_output_0"]
       assert blocks_weights.shape == (seq_len, beam_size)
-      assert_almost_equal(weights, blocks_weights[:, 0], decimal=5)
+      assert_almost_equal(weights, blocks_weights[:, 0], decimal=4)
       our_accum_weights = our_dec_frame_outputs["accum_att_weights.output"]
       assert our_accum_weights.shape == (beam_size, seq_len, 1)
       weighted_avg = (weights[:, None] * blocks_encoder_out[:, 0]).sum(axis=0)  # att in our
       assert weighted_avg.shape == (blocks_encoder_out.shape[-1],)
-      blocks_weighted_avg = blocks_frame_state_outputs["decoder_sequencegenerator_att_trans_attention__attention_compute_weighted_averages_output_0"]
+      blocks_weighted_avg = blocks_frame_probs_outputs["decoder_sequencegenerator_att_trans_attention__attention_compute_weighted_averages_output_0"]
       assert blocks_weighted_avg.shape == (beam_size, blocks_encoder_out.shape[-1])
-      assert_almost_equal(blocks_weighted_avg[0], weighted_avg, decimal=5)
+      assert_almost_equal(blocks_weighted_avg[0], weighted_avg, decimal=4)
       our_att = our_dec_frame_outputs["att.output"]
       assert our_att.shape == (beam_size, blocks_encoder_out.shape[-1])
-      assert_almost_equal(our_att[0], weighted_avg, decimal=5)
+      assert_almost_equal(our_att[0], weighted_avg, decimal=4)
 
-      blocks_last_output = blocks_frame_state_outputs["decoder_sequencegenerator__sequencegenerator_generate_outputs"]
+      blocks_last_output = blocks_frame_probs_outputs["decoder_sequencegenerator__sequencegenerator_generate_outputs"]
       assert blocks_last_output.shape == (beam_size,)
       assert max(blocks_last_output[0], 0) == last_output
       last_target_embed = dec_lookup[last_output]
@@ -506,33 +506,33 @@ def main():
         last_target_embed = numpy.zeros_like(last_target_embed)
       our_last_target_embed = our_dec_frame_outputs["prev:target_embed.output"]
       assert our_last_target_embed.shape == (beam_size, dec_lookup.shape[-1])
-      assert_almost_equal(our_last_target_embed[0], last_target_embed, decimal=5)
+      assert_almost_equal(our_last_target_embed[0], last_target_embed, decimal=4)
 
       readout_in_state = numpy.dot(last_lstm_state, blocks_params["decoder/sequencegenerator/readout/merge/transform_states.W"])
       blocks_trans_state = blocks_frame_probs_outputs["decoder_sequencegenerator_readout_merge__merge_apply_states"]
       assert blocks_trans_state.shape == (beam_size, last_lstm_state.shape[0])
-      assert_almost_equal(blocks_trans_state[0], readout_in_state, decimal=5)
+      assert_almost_equal(blocks_trans_state[0], readout_in_state, decimal=4)
       readout_in_feedback = numpy.dot(last_target_embed, blocks_params["decoder/sequencegenerator/readout/merge/transform_feedback.W"])
       blocks_trans_feedback = blocks_frame_probs_outputs["decoder_sequencegenerator_readout_merge__merge_apply_feedback"]
       assert blocks_trans_feedback.shape == (beam_size, readout_in_feedback.shape[0])
-      assert_almost_equal(blocks_trans_feedback[0], readout_in_feedback, decimal=5)
+      assert_almost_equal(blocks_trans_feedback[0], readout_in_feedback, decimal=4)
       readout_in_weighted_avg = numpy.dot(weighted_avg, blocks_params["decoder/sequencegenerator/readout/merge/transform_weighted_averages.W"])
       blocks_trans_weighted_avg = blocks_frame_probs_outputs["decoder_sequencegenerator_readout_merge__merge_apply_weighted_averages"]
       assert blocks_trans_weighted_avg.shape == (beam_size, readout_in_weighted_avg.shape[0])
-      assert_almost_equal(blocks_trans_weighted_avg[0], readout_in_weighted_avg, decimal=5)
+      assert_almost_equal(blocks_trans_weighted_avg[0], readout_in_weighted_avg, decimal=4)
       readout_in = readout_in_state + readout_in_feedback + readout_in_weighted_avg
       blocks_readout_in = blocks_frame_probs_outputs["decoder_sequencegenerator_readout_merge__merge_apply_output"]
       assert blocks_readout_in.shape == (beam_size, readout_in.shape[0])
-      assert_almost_equal(blocks_readout_in[0], readout_in, decimal=5)
+      assert_almost_equal(blocks_readout_in[0], readout_in, decimal=4)
       readout_in += blocks_params["decoder/sequencegenerator/readout/initializablefeedforwardsequence/maxout_bias.b"]
       assert readout_in.shape == (blocks_params["decoder/sequencegenerator/readout/initializablefeedforwardsequence/maxout_bias.b"].shape[0],)
       our_readout_in = our_dec_frame_outputs["readout_in.output"]
       assert our_readout_in.shape == (beam_size, readout_in.shape[0])
-      assert_almost_equal(our_readout_in[0], readout_in, decimal=5)
+      assert_almost_equal(our_readout_in[0], readout_in, decimal=4)
       readout = readout_in.reshape((readout_in.shape[0] // 2, 2)).max(axis=1)
       our_readout = our_dec_frame_outputs["readout.output"]
       assert our_readout.shape == (beam_size, readout.shape[0])
-      assert_almost_equal(our_readout[0], readout, decimal=5)
+      assert_almost_equal(our_readout[0], readout, decimal=4)
       prob_logits = numpy.dot(readout, blocks_params["decoder/sequencegenerator/readout/initializablefeedforwardsequence/softmax1.W"]) + \
         blocks_params["decoder/sequencegenerator/readout/initializablefeedforwardsequence/softmax1.b"]
       assert prob_logits.ndim == 1
@@ -593,7 +593,18 @@ def main():
         print("Blocks scores combined top k:", sorted(blocks_scores_combined.flatten())[:beam_size])
         print("Our neg scores combined top k:", sorted(-our_scores_combined.flatten())[:beam_size])
         #raise Exception("beams mismatch")
+      assert our_dec_search_frame_outputs["src_beam_idxs"][0][0] == blocks_search_frame[b'indexes'][0]
+      beam_idx = our_dec_search_frame_outputs["src_beam_idxs"][0][0]
+      if beam_idx != 0:
+        print("Selecting different beam: %i." % beam_idx)
+        # Just overwrite the needed states by Blocks outputs.
+        accumulated_weights = blocks_frame_state_outputs["decoder_sequencegenerator_att_trans_attention__attention_take_glimpses_accumulated_weights"][0]
+        weighted_avg = blocks_frame_state_outputs["decoder_sequencegenerator__sequencegenerator_generate_weighted_averages"][0]
+        last_lstm_state = blocks_frame_state_outputs["decoder_sequencegenerator__sequencegenerator_generate_states"][0]
+        last_lstm_cells = blocks_frame_state_outputs["decoder_sequencegenerator__sequencegenerator_generate_cells"][0]
 
+      # From now on, use blocks_frame_state_outputs instead of blocks_frame_probs_outputs because
+      # it will have the beam reordered.
       blocks_target_emb = blocks_frame_state_outputs["decoder_sequencegenerator_fork__fork_apply_feedback_decoder_input"]
       assert blocks_target_emb.shape == (beam_size, dec_lookup.shape[1])
       target_embed = dec_lookup[ref_output]
@@ -607,8 +618,8 @@ def main():
       blocks_feedback_to_decoder = blocks_frame_state_outputs["decoder_sequencegenerator_att_trans_feedback_to_decoder__feedback_to_decoder_apply_inputs"]
       blocks_context_to_decoder = blocks_frame_state_outputs["decoder_sequencegenerator_att_trans_context_to_decoder__context_to_decoder_apply_inputs"]
       assert blocks_feedback_to_decoder.shape == blocks_context_to_decoder.shape == (beam_size, last_lstm_state.shape[-1] * 4)
-      assert_almost_equal(blocks_feedback_to_decoder[0], feedback_to_decoder, decimal=5)
-      assert_almost_equal(blocks_context_to_decoder[0], context_to_decoder, decimal=5)
+      assert_almost_equal(blocks_feedback_to_decoder[0], feedback_to_decoder, decimal=4)
+      assert_almost_equal(blocks_context_to_decoder[0], context_to_decoder, decimal=4)
       lstm_state, lstm_cells = calc_raw_lstm(
         lstm_z, blocks_params=blocks_params,
         prefix="decoder/sequencegenerator/att_trans/lstm_decoder.",
@@ -617,16 +628,16 @@ def main():
       blocks_lstm_state = blocks_frame_state_outputs["decoder_sequencegenerator_att_trans_lstm_decoder__lstm_decoder_apply_states"]
       blocks_lstm_cells = blocks_frame_state_outputs["decoder_sequencegenerator_att_trans_lstm_decoder__lstm_decoder_apply_cells"]
       assert blocks_lstm_state.shape == blocks_lstm_cells.shape == (beam_size, last_lstm_state.shape[-1])
-      assert_almost_equal(blocks_lstm_state[0], lstm_state, decimal=5)
-      assert_almost_equal(blocks_lstm_cells[0], lstm_cells, decimal=5)
+      assert_almost_equal(blocks_lstm_state[0], lstm_state, decimal=4)
+      assert_almost_equal(blocks_lstm_cells[0], lstm_cells, decimal=4)
       our_lstm_cells = our_dec_frame_outputs["s.extra.state"][0]
       our_lstm_state = our_dec_frame_outputs["s.extra.state"][1]
       assert our_lstm_state.shape == our_lstm_cells.shape == (beam_size, lstm_state.shape[0])
-      assert_almost_equal(our_lstm_state[0], lstm_state, decimal=5)
-      assert_almost_equal(our_lstm_cells[0], lstm_cells, decimal=5)
+      assert_almost_equal(our_lstm_state[0], lstm_state, decimal=4)
+      assert_almost_equal(our_lstm_cells[0], lstm_cells, decimal=4)
       our_s = our_dec_frame_outputs["s.output"]
       assert our_s.shape == (beam_size, lstm_state.shape[0])
-      assert_almost_equal(our_s[0], lstm_state, decimal=5)
+      assert_almost_equal(our_s[0], lstm_state, decimal=4)
 
       last_accumulated_weights = accumulated_weights
       last_lstm_state = lstm_state

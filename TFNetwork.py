@@ -908,6 +908,8 @@ class TFNetwork(object):
     Recursively searches through all sources,
     and if there is a ChoiceLayer / any layer with search_choices, returns it.
     Could also go to the parent network.
+    If there are multiple, it assumes they are on the same search-sequence in the search-tree
+    and it will return the last one.
 
     :param LayerBase|None src:
     :param LayerBase|None base_search_choice:
@@ -934,13 +936,14 @@ class TFNetwork(object):
     _visited.update(sources)
     layers = [self.get_search_choices(src=src, _visited=_visited) for src in sources]
     layers = [layer for layer in layers if layer is not None]  # type: list[LayerBase]
-    layers = set(layers)
-    assert len(layers) <= 1, "multiple choice layers not supported yet"
-    if len(layers) == 1:
-      return list(layers)[0]
-    if self.parent_layer:
-      return self.parent_layer.network.get_search_choices(sources=self.parent_layer.get_dep_layers())
-    return None
+    if not layers:
+      if self.parent_layer:
+        return self.parent_layer.network.get_search_choices(sources=self.parent_layer.get_dep_layers())
+      return None
+    from TFNetworkLayer import SearchChoices
+    from functools import cmp_to_key
+    layers = sorted(layers, key=cmp_to_key(lambda l1, l2: SearchChoices.compare(l1.search_choices, l2.search_choices)))
+    return layers[-1]
 
   def debug_search_choices(self, base_search_choice):
     """

@@ -541,6 +541,16 @@ class RecLayer(_ConcatInputLayer):
       "last-hidden-state not implemented/supported for this layer-type. try another unit. see the code.")
     return self._last_hidden_state
 
+  @classmethod
+  def is_prev_step_layer(cls, layer):
+    """
+    :param LayerBase layer:
+    :rtype: bool
+    """
+    if isinstance(layer, _TemplateLayer):
+      return layer.is_prev_time_frame
+    return False
+
 
 class _SubnetworkRecCell(object):
   """
@@ -1223,9 +1233,36 @@ class _SubnetworkRecCell(object):
             classes=y_ta.read(i, name="y_ta_read") if y_ta else None,
             inputs_moved_out_tas=input_layers_moved_out_tas,
             needed_outputs=needed_outputs)
-        outputs_flat = [self.net.layers[k].output.placeholder for k in sorted(self._initial_outputs)]
+
+        transformed_cache = {}  # layer -> layer
+
+        def maybe_transform(layer):
+          """
+          This will be available in the next loop frame as the "prev:..." layer.
+          If the current search choices are already from the prev frame, select beams such that we end up
+          in the current frame.
+          :param LayerBase layer:
+          :rtype: LayerBase
+          """
+          if not self.parent_net.search_flag:
+            return layer
+          if layer in transformed_cache:
+            return transformed_cache[layer]
+          assert not RecLayer.is_prev_step_layer(layer)  # this layer is from current frame
+          search_choices_layer = layer.get_search_choices().owner
+          if not RecLayer.is_prev_step_layer(search_choices_layer):
+            return layer
+          assert search_choices_layer.name.startswith("prev:")
+          cur_frame_search_choices_layer = self.net.layers[search_choices_layer.name[len("prev:"):]]
+          assert not RecLayer.is_prev_step_layer(cur_frame_search_choices_layer)
+          transformed_layer = cur_frame_search_choices_layer.search_choices.translate_to_this_search_beam(layer)
+          assert transformed_layer != layer
+          transformed_cache[layer] = transformed_layer
+          return transformed_layer
+        outputs_flat = [
+          maybe_transform(self.net.layers[k]).output.placeholder for k in sorted(self._initial_outputs)]
         extra_flat = [
-          sorted_values_from_dict(self.net.layers[k].rec_vars_outputs)
+          sorted_values_from_dict(maybe_transform(self.net.layers[k]).rec_vars_outputs)
           for k in sorted(self._initial_extra_outputs)]
         net_vars = (outputs_flat, extra_flat)
 
