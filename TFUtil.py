@@ -4149,12 +4149,9 @@ def nested_get_shapes(x):
   """
   if isinstance(x, tf.Tensor):
     return x.get_shape()
-  if isinstance(x, list):
-    return [nested_get_shapes(v) for v in x]
-  if isinstance(x, tuple):
-    if type(x) is not tuple:  # assume namedtuple
-      return type(x)(*[nested_get_shapes(v) for v in x])
-    return tuple([nested_get_shapes(v) for v in x])
+  if isinstance(x, (tuple, list)):
+    from Util import make_seq_of_type
+    return make_seq_of_type(type(x), [nested_get_shapes(v) for v in x])
   if isinstance(x, dict):
     return {k: nested_get_shapes(v) for (k, v) in x.items()}
   raise TypeError("invalid type %r of %r" % (type(x), x))

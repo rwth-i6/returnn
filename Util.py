@@ -2297,3 +2297,24 @@ class Stats:
       numpy.savetxt("%s.mean.txt" % output_file_prefix, self.get_mean())
       numpy.savetxt("%s.std_dev.txt" % output_file_prefix, self.get_std_dev())
 
+
+def is_namedtuple(cls):
+  """
+  :param T cls: tuple, list or namedtuple type
+  :return: whether cls is a namedtuple type
+  :rtype: bool
+  """
+  return issubclass(cls, tuple) and cls is not tuple
+
+
+def make_seq_of_type(cls, seq):
+  """
+  :param T cls: e.g. tuple, list or namedtuple
+  :param list|tuple|T seq:
+  :return: cls(seq) or cls(*seq)
+  :rtype: T|list|tuple
+  """
+  assert issubclass(cls, (list, tuple))
+  if is_namedtuple(cls):
+    return cls(*seq)
+  return cls(seq)

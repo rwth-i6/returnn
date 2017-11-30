@@ -911,7 +911,8 @@ class SearchChoices(object):
     if isinstance(d, dict):
       return {k: self.translate_to_this_search_beam(v) for (k, v) in d.items()}
     if isinstance(d, (tuple, list)):
-      return type(d)([self.translate_to_this_search_beam(v) for v in d])
+      from Util import make_seq_of_type
+      return make_seq_of_type(type(d), [self.translate_to_this_search_beam(v) for v in d])
     if isinstance(d, LayerBase):
       if d.get_search_choices() == self:
         return d
@@ -1169,7 +1170,8 @@ class SelectSearchSourcesLayer(InternalLayer):
 
       def transform(v):
         if isinstance(v, (tuple, list)):
-          return type(v)([transform(v_) for v_ in v])
+          from Util import make_seq_of_type
+          return make_seq_of_type(type(v), [transform(v_) for v_ in v])
         assert isinstance(v, tf.Tensor)
         for base_src_choices in reversed(search_choices_seq):
           assert isinstance(base_src_choices, SearchChoices)

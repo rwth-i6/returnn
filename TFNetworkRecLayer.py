@@ -2145,7 +2145,8 @@ class RnnCellLayer(_ConcatInputLayer):
         return [make(d, init_value, k) for d, k in zip(dim, keys)]
 
       # Make it the same type because nest.assert_same_structure() will complain otherwise.
-      if isinstance(dim, tuple) and type(dim) is not tuple:  # assume namedtuple
+      from Util import is_namedtuple
+      if is_namedtuple(type(dim)):
         keys = dim._fields
         assert len(dim) == len(keys)
         assert isinstance(init_value, (int, float, str, tuple, list, dict, type(None)))
