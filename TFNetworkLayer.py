@@ -3716,12 +3716,14 @@ class CrossEntropyLoss(Loss):
   """
   class_name = "ce"
 
-  def __init__(self, focal_loss_factor=0.0, **kwargs):
+  def __init__(self, focal_loss_factor=0.0, debug_dump=False, **kwargs):
     """
     :param float focal_loss_factor: see https://arxiv.org/abs/1708.02002. 0 means disabled
+    :param bool debug_dump:
     """
     super(CrossEntropyLoss, self).__init__(**kwargs)
     self.focal_loss_factor = focal_loss_factor
+    self.debug_dump = debug_dump
 
   def get_output_target_scores(self):
     """
@@ -3744,8 +3746,14 @@ class CrossEntropyLoss(Loss):
       assert self.target.ndim_dense == self.output.ndim_dense
       if self.target.sparse:
         if self.output_before_softmax_flat is not None:
+          target_flat = self.target_flat
+          if self.debug_dump:
+            target_flat = tf.Print(target_flat, [target_flat], summarize=10000, message='target word IDs ')
+            target_flat = tf.Print(target_flat, [tf.shape(target_flat)], message='sequence length ')
           out = tf.nn.sparse_softmax_cross_entropy_with_logits(
-            logits=self.output_before_softmax_flat, labels=to_int32_64(self.target_flat))
+            logits=self.output_before_softmax_flat, labels=to_int32_64(target_flat))
+          if self.debug_dump:
+            out = tf.Print(out, [tf.exp(tf.negative(out))], summarize=10000, message='target prob ')
         else:
           print("Warning: using numerical unstable sparse Cross-Entropy loss calculation", file=log.v3)
           out = -tf.log(tf.clip_by_value(self.get_output_target_scores(), *log_clip_values))
