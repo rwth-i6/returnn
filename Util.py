@@ -1850,40 +1850,46 @@ def log_runtime_info_to_dir(path, config):
   import socket
   import shutil
   from Config import Config
-  content = [
-    "Time: %s" % time.strftime("%Y-%m-%d %H:%M:%S"),
-    "Call: %s" % (sys.argv,),
-    "Path: %s" % (os.getcwd(),),
-    "Returnn: %s" % (describe_crnn_version(),),
-    "TensorFlow: %s" % (describe_tensorflow_version(),),
-    "Config files: %s" % (config.files,),
-  ]
-  if not os.path.exists(path):
-    os.makedirs(path)
-  hostname = socket.gethostname()
-  with open("%s/returnn.%s.%i.%s.log" % (
-    path, hostname, os.getpid(), time.strftime("%Y-%m-%d-%H-%M-%S")), "w") as f:
-    f.write(
-      "Returnn log file:\n" +
-      "".join(["%s\n" % s for s in content]) +
-      "\n")
-  for fn in config.files:
-    base_fn = os.path.basename(fn)
-    target_fn = "%s/%s" % (path, base_fn)
-    if os.path.exists(target_fn):
-      continue
-    shutil.copy(fn, target_fn)
-    config_type = Config.get_config_file_type(fn)
-    comment_prefix = "#"
-    if config_type == "js":
-      comment_prefix = "//"
-    with open(target_fn, "a") as f:
+  try:
+    content = [
+      "Time: %s" % time.strftime("%Y-%m-%d %H:%M:%S"),
+      "Call: %s" % (sys.argv,),
+      "Path: %s" % (os.getcwd(),),
+      "Returnn: %s" % (describe_crnn_version(),),
+      "TensorFlow: %s" % (describe_tensorflow_version(),),
+      "Config files: %s" % (config.files,),
+    ]
+    if not os.path.exists(path):
+      os.makedirs(path)
+    hostname = socket.gethostname()
+    with open("%s/returnn.%s.%i.%s.log" % (
+      path, hostname, os.getpid(), time.strftime("%Y-%m-%d-%H-%M-%S")), "w") as f:
       f.write(
-        "\n\n\n" +
-        "".join(
-          ["%s Config-file copied for logging purpose by Returnn.\n" % comment_prefix] +
-          ["%s %s\n" % (comment_prefix, s) for s in content]) +
+        "Returnn log file:\n" +
+        "".join(["%s\n" % s for s in content]) +
         "\n")
+    for fn in config.files:
+      base_fn = os.path.basename(fn)
+      target_fn = "%s/%s" % (path, base_fn)
+      if os.path.exists(target_fn):
+        continue
+      shutil.copy(fn, target_fn)
+      config_type = Config.get_config_file_type(fn)
+      comment_prefix = "#"
+      if config_type == "js":
+        comment_prefix = "//"
+      with open(target_fn, "a") as f:
+        f.write(
+          "\n\n\n" +
+          "".join(
+            ["%s Config-file copied for logging purpose by Returnn.\n" % comment_prefix] +
+            ["%s %s\n" % (comment_prefix, s) for s in content]) +
+          "\n")
+  except OSError as exc:
+    if "Disk quota" in str(exc):
+      print("log_runtime_info_to_dir: Error, cannot write: %s" % exc)
+    else:
+      raise
 
 
 class NativeCodeCompiler(object):
