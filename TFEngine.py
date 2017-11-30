@@ -203,6 +203,8 @@ class Runner(object):
                for (key, value) in self._results_accumulated.items()}
     self.results = results
     self.score = {key: value for (key, value) in results.items() if key.startswith("cost:")}
+    if self.engine.config.bool("calculate_exp_loss", False):
+      self.score.update({key + ":exp": numpy.exp(value) for (key, value) in results.items() if key.startswith("cost:")})
     self.error = {key: value for (key, value) in results.items() if key.startswith("error:")}
     self.num_steps = num_steps
     self.finalized = True
@@ -247,6 +249,8 @@ class Runner(object):
       if value:
         value /= float(step_seq_lens[key])
       eval_info[key] = value
+      if self.engine.config.bool("calculate_exp_loss", False) and key.startswith("cost:"):
+        eval_info[key + ":exp"] = numpy.exp(value)
 
     # Add raw stats.
     for k, v in fetches_results.items():
@@ -859,7 +863,7 @@ class Engine(object):
       return "None"
     if len(score) == 1:
       return str(list(score.values())[0])
-    return " ".join(["%s %s" % (key.split(':')[-1], str(score[key]))
+    return " ".join(["%s %s" % (key.split(':', 2)[-1], str(score[key]))
                      for key in sorted(score.keys())])
 
   def eval_model(self):

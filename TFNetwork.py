@@ -422,6 +422,8 @@ class TFNetwork(object):
             error = layer.get_error_value()
             if loss is not None:
               tf.summary.scalar("loss_%s" % layer.name, loss * layer.get_loss_normalization_factor())
+              if self.get_config().bool("calculate_exp_loss", False):
+                tf.summary.scalar("exp_loss_%s" % layer.name, tf.exp(loss * layer.get_loss_normalization_factor()))
               if self.get_config().bool("debug_add_check_numerics_on_output", False):
                 print("debug_add_check_numerics_on_output: add for layer loss %r: %r" % (name, layer.output.placeholder))
                 from TFUtil import identity_with_check_numerics
