@@ -856,7 +856,8 @@ class SearchChoices(object):
   def __ne__(self, other):
     return self is not other
 
-  def __cmp__(self, other):
+  @staticmethod
+  def compare(self, other):
     """
     :param SearchChoices|None self:
     :param SearchChoices|None other:
@@ -883,6 +884,9 @@ class SearchChoices(object):
         "cannot compare, they don't share the same search-tree")
     return res
 
+  def __cmp__(self, other):
+    return self.compare(self, other)
+
   def __lt__(self, other):
     return self.__cmp__(other) < 0
 
@@ -901,7 +905,7 @@ class SearchChoices(object):
     if len(layers_flat) <= 1:
       return sources
     from functools import cmp_to_key
-    common_choices = max([layer.get_search_choices() for layer in layers_flat], key=cmp_to_key(cls.__cmp__))
+    common_choices = max([layer.get_search_choices() for layer in layers_flat], key=cmp_to_key(cls.compare))
     if not common_choices:
       return sources
     common_layers = [layer for layer in layers_flat if layer.get_search_choices() == common_choices]
