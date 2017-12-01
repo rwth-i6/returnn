@@ -944,3 +944,10 @@ def test_remove_labels():
   assert_equal(y_eval.indices.tolist(), [[0, 0], [0, 1], [1, 0]])
   assert_equal(y_eval.values.tolist(), [0, 2, 3])
   assert_equal(y_eval.dense_shape.tolist(), [3, 2])
+
+
+def test_supported_devices_for_op():
+  op_name = "MatMul"
+  devs = supported_devices_for_op(op_name)
+  print("Supported devs for op %r: %r" % (op_name, devs))
+  assert "CPU" in devs

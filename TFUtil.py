@@ -2182,6 +2182,31 @@ class OpCodeCompiler(NativeCodeCompiler):
     return self._tf_mod
 
 
+class TFNativeUtilCompiler(NativeCodeCompiler):
+  """
+  Helper class to compile TF utility functions on-the-fly.
+  """
+
+  CacheDirName = "returnn_tf_cache/tf_utils"
+
+  def __init__(self, include_paths=(), ld_flags=(), **kwargs):
+    tf_include = tf.sysconfig.get_include()  # e.g. "...python2.7/site-packages/tensorflow/include"
+    tf_include_nsync = tf_include + "/external/nsync/public"  # https://github.com/tensorflow/tensorflow/issues/2412
+    include_paths = list(include_paths) + [tf_include, tf_include_nsync]
+    ld_flags = list(ld_flags)
+    if have_min_tf_version((1, 4)):
+      # https://github.com/tensorflow/tensorflow/issues/13607
+      ld_flags += ["-L%s" % tf.sysconfig.get_lib(), "-ltensorflow_framework"]
+    super(TFNativeUtilCompiler, self).__init__(include_paths=include_paths, ld_flags=ld_flags, **kwargs)
+
+  _relevant_info_keys = NativeCodeCompiler._relevant_info_keys + ("tf_version",)
+
+  def _make_info_dict(self):
+    d = super(TFNativeUtilCompiler, self)._make_info_dict()
+    d.update({"tf_version": tf.__version__})
+    return d
+
+
 def make_var_tuple(v):
   """
   :param tf.Tensor|list[tf.Tensor]|tuple[tf.Tensor] v:
@@ -4269,6 +4294,87 @@ def to_int32_64(x):
   return tf.cast(x, tf.int32)
 
 
+def kernels_registered_for_op(op_name):
+  """
+  This just wraps the TF C++ function tensorflow::KernelsRegisteredForOp().
+
+  :param str op_name: e.g. "Gather"
+  :return: e.g. ["device='CPU'; ...", "device='GPU'; ...", ...]
+  :rtype: list[str]
+  """
+  code = """
+  #include <tensorflow/core/framework/op_kernel.h>
+  using namespace tensorflow;
+
+  extern "C" {
+    typedef void (*set_string_callback) (const char* str, unsigned long size);
+
+    void kernels_registered_for_op(const char* op_name, set_string_callback cb) {
+      string s = KernelsRegisteredForOp(op_name);
+      cb(s.c_str(), s.size());
+    }
+  };
+  """
+  native = TFNativeUtilCompiler(
+    base_name="kernels_registered_for_op", code_version=1, code=code, is_cpp=True)
+  lib = native.load_lib_ctypes()
+  from ctypes import CFUNCTYPE, c_char_p, c_ulong
+  set_string_callback_type = CFUNCTYPE(None, c_char_p, c_ulong)
+  lib.kernels_registered_for_op.restype = None  # void
+  lib.kernels_registered_for_op.argtypes = (c_char_p, set_string_callback_type)
+
+  class Res:
+    res = None
+
+    @classmethod
+    def callback(cls, string, size):
+      cls.res = string
+
+  cb = set_string_callback_type(Res.callback)
+  lib.kernels_registered_for_op(str(op_name).encode("utf8"), cb)
+  assert Res.res is not None
+  s = Res.res.decode("utf8")
+  ls = [l.strip() for l in s.splitlines()]
+  if "<no registered kernels>" in ls:
+    raise Exception("Op %r is unknown." % op_name)
+  ls = [l for l in ls if l]
+  return ls
+
+
+def supported_devices_for_op(op_name):
+  """
+  :param str op_name:
+  :return: list of devices, e.g. ["CPU", "GPU"]
+  :rtype: list[str]
+  """
+  import re
+  kernels_info = kernels_registered_for_op(op_name)
+  devs_matches = [re.match("device='(.+)'.*", s) for s in kernels_info]
+  if None in devs_matches:
+    raise Exception("Got invalid output: %r" % kernels_info)
+  devs = [m.group(1) for m in devs_matches]
+  return list(sorted(set(devs)))
+
+
+def find_unsupported_devices_in_graph(graph, dev_name, ignore=None):
+  """
+  :param tf.Graph graph:
+  :param str dev_name: e.g. "GPU"
+  :param list[str]|None ignore: list of op-names to ignore, e.g. ["ScalarSummary"] etc. If None, will use defaults.
+  :rtype: list[tf.Operation]
+  """
+  if ignore is None:
+    ignore = {"Assert", "ScalarSummary", "MergeSummary", "SaveV2", "RestoreV2"}
+  ops = []
+  for op in graph.get_operations():
+    assert isinstance(op, tf.Operation)
+    if op.type in ignore:
+      continue
+    if dev_name not in supported_devices_for_op(op.type):
+      ops.append(op)
+  return ops
+
+
 # -------------------- BEGIN Segment model related helpers --------------------
 
 def batch_sizes_after_windowing(sizes, window):
@@ -4283,6 +4389,7 @@ def batch_sizes_after_windowing(sizes, window):
     r2 = tf.range(tf.minimum(x, window - 1), 0, -1)
     return tf.concat([acc, r1, r2], 0)
   return tf.foldl(fold_times, sizes, tf.placeholder_with_default(tf.zeros([0], dtype='int32'), [None]), name='fold_sizes')
+
 
 def batch_indices_after_windowing(sizes, window):
   """
@@ -4302,7 +4409,6 @@ def batch_indices_after_windowing(sizes, window):
 
   return tf.foldl(fold_batches, tf.stack([tf.range(tf.shape(sizes)[0]), sizes], axis=1),
                   tf.placeholder_with_default(tf.zeros([0, 3], dtype='int32'), [None, 3]), name="fold_batches")
-
 
 
 # --------------------- END Segment model related helpers ---------------------

@@ -344,6 +344,17 @@ class Runner(object):
           print("Reset updater vars in step %i." % step, file=log.v5)
           self.engine.updater.init_optimizer_vars()
 
+        if step == 0:
+          if self.engine.config.bool("check_unsupported_device", False) and self.engine.is_requesting_for_gpu():
+            from pprint import pprint
+            from TFUtil import find_unsupported_devices_in_graph
+            ops = find_unsupported_devices_in_graph(graph=sess.graph, dev_name="GPU")
+            if not ops:
+              print("All ops in graph can be run on GPU.")
+            else:
+              print("The following ops do not have a GPU kernel:")
+              pprint(ops)
+
         if debug_shell_in_runner and debug_shell_in_runner_step == step:
           print("debug_shell_in_runner, step %i" % step, file=log.v1)
           import Debug
