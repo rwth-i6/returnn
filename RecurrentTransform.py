@@ -335,6 +335,8 @@ class AttentionBase(RecurrentTransformBase):
     assert H.ndim == 3
     if dist == 'l2':
       dst = T.sqrt(T.sum((C - H) ** 2, axis=2))
+    elif dist == 'logl2':
+      dst = T.sqrt(T.sum((T.log((C + numpy.float32(1))/numpy.float32(2)) - T.log((H + numpy.float32(1))/numpy.float32(2))) ** 2, axis=2))
     elif dist == 'sqr':
       dst = T.mean((C - H) ** 2, axis=2)
     elif dist == 'dot':
@@ -342,8 +344,8 @@ class AttentionBase(RecurrentTransformBase):
     elif dist == 'l1':
       dst = T.sum(T.abs_(C - H), axis=2)
     elif dist == 'cos': # use with template size > 32
-      J = H / T.sqrt(T.sum(H**2,axis=2,keepdims=True))
-      K = C / T.sqrt(T.sum(C**2,axis=2,keepdims=True))
+      J = H / (T.sqrt(T.sum(H**2,axis=2,keepdims=True)) + T.constant(1e-5, 'float32'))
+      K = C / (T.sqrt(T.sum(C**2,axis=2,keepdims=True)) + T.constant(1e-5, 'float32'))
       dst = T.sum(K * J, axis=2)
     elif dist == 'rnn':
       inp, _ = theano.scan(lambda x,p,W:elu(x+T.dot(p,W)), sequences = C, outputs_info = [H[0]], non_sequences=[self.A_re])
@@ -388,8 +390,12 @@ class AttentionBase(RecurrentTransformBase):
   def softmax(self, D, I):
     D = D * T.constant(self.attrs['sharpening'], 'float32')
     if self.attrs['norm'] == 'exp':
-      E = T.exp(-D) * I
+      D = D - D.mean(axis=0,keepdims=True) * I
+      E = T.exp(-D)
       E = E / T.maximum(T.sum(E,axis=0,keepdims=True),T.constant(1e-20,'float32'))
+    elif self.attrs['norm'] == 'linear':
+      E = D * I
+      E = numpy.float32(1) - E / T.maximum(T.sum(E,axis=0,keepdims=True),T.constant(1e-20,'float32'))
     elif self.attrs['norm'] == 'sigmoid':
       E = (numpy.float32(1) - T.tanh(D)**2) * I
     elif self.attrs['norm'] == 'lstm':
@@ -492,7 +498,9 @@ class AttentionList(AttentionBase):
           h_att = self.layer.batch_norm(h_att, n_tmp, index = e.output_index())
         else:
           i_f = T.cast(e.output_index(),'float32').dimshuffle(0,1,'x').repeat(h_att.shape[2],axis=2)
-          h_att = h_att - (h_att * i_f).sum(axis=0,keepdims=True) / T.sum(i_f,axis=0,keepdims=True)
+          h_att = h_att - h_att.mean(axis=(0,1),keepdims=True)
+          #h_att = h_att / h_att.std(axis=(0,1),keepdims=True)
+          #h_att = h_att - (h_att * i_f).sum(axis=0,keepdims=True) / T.sum(i_f,axis=0,keepdims=True)
         if self.attrs['memory'] > 0:
           self.add_state_var(T.zeros((self.attrs['memory'], n_tmp), 'float32'), 'M_%d' % i)
           self.create_weights(n_tmp, self.layer.unit.n_in, "W_mem_in", i)
@@ -803,13 +811,13 @@ class AttentionSegment(AttentionBase):
       self.inv_att = self.add_input(T.cast(self.layer.aligner.attention.dimshuffle(2,1,0)[::self.layer.attrs['direction']].dimshuffle(2,1,0),'float32'),'inv_att')
       self.red_ind = self.add_input(T.cast(self.layer.aligner.reduced_index,'float32'),'red_ind')
       self.i_f = self.add_input(T.cast(self.base[0].output_index()[::self.layer.attrs['direction']],'float32').dimshuffle(0,1,'x').repeat(h_att.shape[2],axis=2),'i_f')
-      self.index_att = self.add_input(self.make_index(self.inv_att,self.I_dec),'index_att')#NTB
+      self.index_att = self.add_input(self.make_index(self.inv_att,self.I_dec),'index_att') #NTB
     if not self.base[0].attrs['n_out'] == n_tmp:
       h_att = h_att - (h_att * self.i_f).sum(axis=0,keepdims=True) / T.sum(self.i_f,axis=0,keepdims=True)
-      self.C = self.add_input(h_att,'C')
+      self.C = self.add_input(h_att, 'C')
     else:
       self.C = self.add_input(self.base[0].output[::self.layer.attrs['direction']], 'C')
-    self.E = self.add_input(T.concatenate([e.output[::self.layer.attrs['direction']] for e in self.layer.encoder],axis=2),"E")
+    self.E = self.add_input(T.concatenate([e.output[::self.layer.attrs['direction']] for e in self.layer.encoder],axis=2), 'E')
 
   def make_index(self,inv_att,ind):
     att = inv_att.argmax(axis=2) #NB
