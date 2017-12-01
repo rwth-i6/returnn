@@ -669,7 +669,9 @@ class Device(object):
           #but makes the index handling with mdlstm work for now
           source.append(T.log(pcx))
         elif extract == "posteriors":
-          layer = self.testnet.get_layer(output_layer_name)
+          if not param:
+            param = output_layer_name
+          layer = self.testnet.get_layer(param)
           p_y_given_x = getattr(layer, "p_y_given_x", layer.output)
           index = layer.output_index()
           if p_y_given_x.ndim == 2:
