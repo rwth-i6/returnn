@@ -52,6 +52,8 @@ class Runner(object):
     :param (**dict[str,numpy.ndarray|str|list[numpy.ndarray|str])->None extra_fetches_callback: called if extra_fetches
     """
     from TFDataPipeline import FeedDictDataProvider, DataProviderBase
+    engine.network.extern_data.check_matched_dataset(
+      dataset=dataset, used_data_keys=engine.network.used_data_keys)
     self.engine = engine
     self.data_provider = FeedDictDataProvider(
       tf_session=engine.tf_session, extern_data=engine.network.extern_data,
@@ -101,8 +103,12 @@ class Runner(object):
         loss = self.engine.get_const_tensor(key="zero_loss", value=0.0)
       d["loss"] = loss
       for layer_name, loss in self.engine.network.loss_by_layer.items():
+        if self.engine.network.layers[layer_name].only_on_eval and self._should_train:
+          continue
         d["cost:%s" % layer_name] = loss
       for layer_name, error in self.engine.network.error_by_layer.items():
+        if self.engine.network.layers[layer_name].only_on_eval and self._should_train:
+          continue
         d["error:%s" % layer_name] = error
       for layer in self.engine.network.layers.values():
         if layer.target and layer.target.startswith("layer:"):
@@ -197,6 +203,8 @@ class Runner(object):
                for (key, value) in self._results_accumulated.items()}
     self.results = results
     self.score = {key: value for (key, value) in results.items() if key.startswith("cost:")}
+    if self.engine.config.bool("calculate_exp_loss", False):
+      self.score.update({key + ":exp": numpy.exp(value) for (key, value) in results.items() if key.startswith("cost:")})
     self.error = {key: value for (key, value) in results.items() if key.startswith("error:")}
     self.num_steps = num_steps
     self.finalized = True
@@ -241,6 +249,8 @@ class Runner(object):
       if value:
         value /= float(step_seq_lens[key])
       eval_info[key] = value
+      if self.engine.config.bool("calculate_exp_loss", False) and key.startswith("cost:"):
+        eval_info[key + ":exp"] = numpy.exp(value)
 
     # Add raw stats.
     for k, v in fetches_results.items():
@@ -291,6 +301,8 @@ class Runner(object):
     else:
       logdir = os.path.dirname(self.engine.model_filename) or os.getcwd()
     if logdir:
+      from Util import log_runtime_info_to_dir
+      log_runtime_info_to_dir(logdir, config=self.engine.config)
       logdir += "/%s" % self.data_provider.get_dataset_name()
       if not self._should_train:  # like eval
         logdir += "-%i" % self.engine.epoch
@@ -299,6 +311,7 @@ class Runner(object):
       writer = tf.summary.FileWriter(logdir)
     else:
       writer = None
+    print("TF: log_dir: %s" % logdir, file=log.v5)
     run_metadata = tf.RunMetadata()
     debug_shell_in_runner = self.engine.config.bool("debug_shell_in_runner", False)
     debug_shell_in_runner_step = self.engine.config.int("debug_shell_in_runner_step", 1)
@@ -330,6 +343,17 @@ class Runner(object):
         if self._should_train and self.reset_updater_vars_mod_step and step % self.reset_updater_vars_mod_step == 0:
           print("Reset updater vars in step %i." % step, file=log.v5)
           self.engine.updater.init_optimizer_vars()
+
+        if step == 0:
+          if self.engine.config.bool("check_unsupported_device", False) and self.engine.is_requesting_for_gpu():
+            from pprint import pprint
+            from TFUtil import find_unsupported_devices_in_graph
+            ops = find_unsupported_devices_in_graph(graph=sess.graph, dev_name="GPU")
+            if not ops:
+              print("All ops in graph can be run on GPU.")
+            else:
+              print("The following ops do not have a GPU kernel:")
+              pprint(ops)
 
         if debug_shell_in_runner and debug_shell_in_runner_step == step:
           print("debug_shell_in_runner, step %i" % step, file=log.v1)
@@ -375,6 +399,17 @@ class Runner(object):
         assert step + step_offset == final_global_train_step
 
       self._finalize(num_steps=step)
+
+      if self.engine.config.bool("tf_log_memory_usage", False):
+        print("Memory usage:", file=log.v1)
+        from TFUtil import get_tf_list_local_devices, mem_usage_for_dev
+        from Util import human_bytes_size
+        for dev in get_tf_list_local_devices():
+          if dev.device_type != "GPU":
+            # mem_usage_for_dev currently only works for GPU
+            continue
+          size = sess.run(mem_usage_for_dev(dev.name))
+          print(" %s: %s" % (dev.name, human_bytes_size(size)), file=log.v1)
 
     except KeyboardInterrupt:
       print("KeyboardInterrupt in step %r." % step)
@@ -537,13 +572,15 @@ class Engine(object):
     print("Save model under %s" % (filename,), file=log.v4)
     self.network.save_params_to_file(filename, session=self.tf_session)
 
-  def init_train_from_config(self, config, train_data, dev_data=None, eval_data=None):
+  def init_train_from_config(self, config=None, train_data=None, dev_data=None, eval_data=None):
     """
-    :type config: Config.Config
-    :type train_data: Dataset.Dataset
-    :type dev_data: Dataset.Dataset | None
-    :type eval_data: Dataset.Dataset | None
+    :param Config.Config|None config:
+    :param Dataset.Dataset|None train_data:
+    :param Dataset.Dataset|None dev_data:
+    :param Dataset.Dataset|None eval_data:
     """
+    if not config:
+      config = self.config
     self.use_dynamic_train_flag = True
     self.train_data = train_data
     self.dev_data = dev_data
@@ -573,10 +610,12 @@ class Engine(object):
     # And also initialize the network. That depends on some vars here such as pretrain.
     self.init_network_from_config(config)
 
-  def init_network_from_config(self, config):
+  def init_network_from_config(self, config=None):
     """
-    :param Config.Config config:
+    :param Config.Config|None config:
     """
+    if not config:
+      config = self.config
     self.model_filename = config.value('model', None)
     self.pretrain = pretrainFromConfig(config)
     self.max_seqs = config.int('max_seqs', -1)
@@ -652,6 +691,25 @@ class Engine(object):
           dict_diff_str(self.network.layers_desc, net_desc), file=log.v3)
     old_network_params = self.network.get_params_serialized(self.tf_session)
     self._init_network(net_desc)
+    # In pretraining it can happen, that the dimension of output parameters of the previous epoch is
+    # not equal to the dimension in the current epoch, due to difference in layer size.
+    # In that case initialize output parameters randomly
+    if self.is_pretrain_epoch():
+      # iterate through all output layers and check dimension compatibility of parameters
+      # start output layer from random initialization if one parameters dimension do not match
+      for l in self.network.get_output_layers():
+        keep_layer = True
+        if self.pretrain.copy_output_layer is False:
+          keep_layer = False
+        else:
+          if l.name in old_network_params.values_dict:
+            for param in l.params:
+              if tuple(l.params[param].shape.as_list()) != old_network_params.values_dict[l.name][param].shape:
+                keep_layer = False
+                break
+        if not keep_layer:
+          print("suspend copying of output layer: " + l.name, file=log.v2)
+          del old_network_params.values_dict[l.name]
     # Otherwise it's initialized randomly which is fine.
     # This copy will copy the old params over and leave the rest randomly initialized.
     # This also works if the old network has just the same topology,
@@ -816,7 +874,7 @@ class Engine(object):
       return "None"
     if len(score) == 1:
       return str(list(score.values())[0])
-    return " ".join(["%s %s" % (key.split(':')[-1], str(score[key]))
+    return " ".join(["%s %s" % (key.split(':', 2)[-1], str(score[key]))
                      for key in sorted(score.keys())])
 
   def eval_model(self):
@@ -893,7 +951,7 @@ class Engine(object):
     :param Dataset.Dataset dataset:
     :param int seq_idx:
     :return: feed_dict for self.tf_session.run()
-    :rtype: dict[str,numpy.ndarray]
+    :rtype: dict[tf.Tensor,numpy.ndarray]
     """
     # No Runner instance here but a very simplified version of Runner.run().
     # First we need a custom DataProvider with a custom BatchSetGenerator
@@ -912,7 +970,7 @@ class Engine(object):
 
   def run_single(self, dataset, seq_idx, output_dict, ext_feed_dict=None):
     """
-    :param Dataset.Dataset dataset:
+    :param Dataset dataset:
     :param int seq_idx:
     :param dict[str,tf.Tensor] output_dict: key -> tf.Tensor
     :param dict[tf.Tensor,numpy.ndarray] ext_feed_dict:
@@ -933,7 +991,7 @@ class Engine(object):
     if not output_layer_name:
       output_layer_name = self.config.value("forward_output_layer", self.network.get_default_output_layer_name())
       assert output_layer_name, "output layer not defined. set forward_output_layer in config"
-    assert output_layer_name in self.network.layers, "output layer %r not found" % output_layer_name
+    assert output_layer_name in self.network.layers, "output layer %r not found, available layers: %s" % (output_layer_name, ','.join(self.network.layers.keys()))
     return self.network.layers[output_layer_name]
 
   def forward_single(self, dataset, seq_idx, output_layer_name=None):
@@ -967,11 +1025,14 @@ class Engine(object):
     output_layer = self._get_output_layer()
     target = self.network.get_default_target()
 
+    assert output_file
+    assert not os.path.exists(output_file)
+    print("Forwarding to HDF file: %s" % output_file, file=log.v2)
     cache = h5py.File(output_file, "w")
     cache.attrs['numTimesteps'] = 0
-    cache.attrs['inputPattSize'] = data.num_inputs
+    cache.attrs['inputPattSize'] = output_layer.output.dim
     cache.attrs['numDims'] = 1
-    cache.attrs['numLabels'] = data.num_outputs[target]
+    cache.attrs['numLabels'] = output_layer.output.dim
     cache.attrs['numSeqs'] = 0
     if target in data.labels:
       hdf5_strings(cache, 'labels', data.labels[target])
@@ -1023,6 +1084,7 @@ class Engine(object):
     batches = data.generate_batches(
       recurrent_net=self.network.recurrent,
       batch_size=batch_size,
+      max_seqs=self.max_seqs,
       used_data_keys=self.network.used_data_keys)
     forwarder = Runner(
       engine=self, dataset=data, batches=batches,
@@ -1101,14 +1163,21 @@ class Engine(object):
     :param str output_file:
     """
     print("Search with network on %r." % dataset, file=log.v1)
-    if not self.use_search_flag or not self.network:
+    if not self.use_search_flag or not self.network or self.use_dynamic_train_flag:
       self.use_search_flag = True
+      # At the moment this is probably not intended to use search with train flag.
+      # Also see LayerBase._post_init_output() about setting size_placeholder to the target seq len,
+      # so you would have have_known_seq_len=True in the RecLayer, with the given target seq len.
+      self.use_dynamic_train_flag = False
       if self.network:
         print("Reinit network with search flag.", file=log.v3)
       self.init_network_from_config(self.config)
     if do_eval:
       # It's constructed lazily and it will set used_data_keys, so make sure that we have it now.
       self.network.get_all_errors()
+    if output_file:
+      dataset.seq_ordering = "default"  # enforce order as-is, so that the order in the written file corresponds
+    dataset.init_seq_order(epoch=self.epoch)
     batches = dataset.generate_batches(
       recurrent_net=self.network.recurrent,
       batch_size=self.config.int('batch_size', 1),
@@ -1155,7 +1224,7 @@ class Engine(object):
           print("  hyp:", dataset.serialize_data(key=target_key, data=output[out_idx]), file=log.v1)
           print("  ref:", dataset.serialize_data(key=target_key, data=targets[out_idx]), file=log.v1)
         if output_file:
-          output_file.write("%s\n" % dataset.serialize_data(key=target_key, data=output[out_idx]).encode("utf8"))
+          output_file.write("%s\n" % dataset.serialize_data(key=target_key, data=output[out_idx]))
           output_file.flush()
 
     runner = Runner(
@@ -1250,3 +1319,21 @@ class Engine(object):
     with open(output_file, 'w') as f:
       numpy.savetxt(f, log_average_posterior, delimiter=' ')
     print("Saved prior in %r in +log space." % output_file, file=log.v1)
+
+
+def get_global_engine():
+  """
+  Similar as get_global_config().
+
+  :rtype: Engine
+  """
+
+  import sys
+  main_mod = sys.modules["__main__"]  # should be rnn.py
+  if isinstance(getattr(main_mod, "engine", None), Engine):
+    return main_mod.engine
+  # Maybe __main__ is not rnn.py, or config not yet loaded.
+  # Anyway, try directly. (E.g. for SprintInterface.)
+  import rnn
+  assert isinstance(rnn.engine, Engine)  # no other option anymore
+  return rnn.engine

@@ -1,3 +1,4 @@
+from __future__ import print_function
 import collections
 import gc
 import h5py
@@ -38,13 +39,14 @@ class HDFDataset(CachedDataset):
     :type filename: str
     """
     fin = h5py.File(filename, "r")
+    decode = lambda s: s if isinstance(s, str) else s.decode('utf-8')
     if 'targets' in fin:
-      self.labels = { k : [ item.decode("utf8").split('\0')[0] for item in fin["targets/labels"][k][...].tolist() ] for k in fin['targets/labels'] }
+      self.labels = { k : [ decode(item).split('\0')[0] for item in fin["targets/labels"][k][...].tolist() ] for k in fin['targets/labels'] }
     if not self.labels:
       labels = [ item.split('\0')[0] for item in fin["labels"][...].tolist() ]; """ :type: list[str] """
       self.labels = { 'classes' : labels }
       assert len(self.labels['classes']) == len(labels), "expected " + str(len(self.labels['classes'])) + " got " + str(len(labels))
-    tags = [ item.decode("utf8").split('\0')[0] for item in fin["seqTags"][...].tolist() ]; """ :type: list[str] """
+    tags = [ decode(item).split('\0')[0] for item in fin["seqTags"][...].tolist() ]; """ :type: list[str] """
     self.files.append(filename)
     if 'times' in fin:
       self.timestamps.extend(fin[attr_times][...].tolist())
@@ -141,7 +143,7 @@ class HDFDataset(CachedDataset):
     for i in range(len(self.files)):
       if len(file_info[i]) == 0:
         continue
-      print >> log.v4, "loading file", self.files[i]
+      print("loading file", self.files[i], file=log.v4)
       fin = h5py.File(self.files[i], 'r')
       for idc, ids in file_info[i]:
         s = ids - self.file_start[i]
@@ -184,12 +186,16 @@ class StreamParser(object):
 
     self.num_features = None
     self.feature_type = None  # 1 for sparse, 2 for dense
+    self.dtype        = None
 
   def get_data(self, seq_name):
     raise NotImplementedError()
 
   def get_seq_length(self, seq_name):
     raise NotImplementedError()
+
+  def get_dtype(self):
+    return self.dtype
 
 
 class FeatureSequenceStreamParser(StreamParser):
@@ -202,8 +208,11 @@ class FeatureSequenceStreamParser(StreamParser):
 
       if self.num_features is None:
         self.num_features = seq_data.shape[1]
+      if self.dtype is None:
+        self.dtype = seq_data.dtype
 
       assert seq_data.shape[1] == self.num_features
+      assert seq_data.dtype    == self.dtype
 
     self.feature_type = 2
 
@@ -221,6 +230,10 @@ class SparseStreamParser(StreamParser):
     for s in self.seq_names:
       seq_data = self.stream['data'][s]
       assert len(seq_data.shape) == 1
+
+      if self.dtype is None:
+        self.dtype = seq_data.dtype
+      assert seq_data.dtype    == self.dtype
 
     self.num_features = self.stream['feature_names'].shape[0]
     self.feature_type = 1
@@ -271,7 +284,7 @@ class NextGenHDFDataset(CachedDataset2):
     self.file_indices.extend([len(self.files) - 1] * len(seqs))
 
     all_streams = set(cur_file['streams'].keys())
-    assert self.input_stream_name in all_streams, "%s does not contain the input stream %s" % (path, self.input_stream)
+    assert self.input_stream_name in all_streams, "%s does not contain the input stream %s" % (path, self.input_stream_name)
 
     parsers = { name : NextGenHDFDataset.parsers[stream.attrs['parser']](seqs, stream) for name, stream in cur_file['streams'].items()}
     for k, v in parsers.items():
@@ -281,7 +294,8 @@ class NextGenHDFDataset(CachedDataset2):
       self.num_outputs = { name : [parser.num_features, parser.feature_type] for name, parser in parsers.items() }
       self.num_inputs = self.num_outputs[self.input_stream_name][0]
     else:
-      assert all(self.num_outputs[name] == parser.num_features for name, parser in parsers.items())
+      num_features = [(name, self.num_outputs[name][0], parser.num_features) for name, parser in parsers.items()]
+      assert all(nf[1] == nf[2] for nf in num_features), '\n'.join("Number of features does not match for parser %s: %d (config) vs. %d (hdf-file)" % nf for nf in num_features if nf[1] != nf[2])
 
 
   def initialize(self):
@@ -329,3 +343,8 @@ class NextGenHDFDataset(CachedDataset2):
                       seq_tag=seq_name,
                       features=features,
                       targets=targets)
+
+  def get_data_dtype(self, key):
+    if key == 'data':
+      return self.get_data_dtype(self.input_stream_name)
+    return self.all_parsers[key][0].get_dtype()

@@ -3,14 +3,7 @@ The RWTH Extensible Training framework for Universal Recurrent Neural Networks (
 Copyright (c) 2010--2016, RWTH.
 All rights reserved.
 
-Contains code from better_exchook, Copyright (c) 2011--2016, Albert Zeyer.
-All rights reserved.
-
-Contains code from TaskSystem and MusicPlayer, Copyright (c) 2011--2016, Albert Zeyer.
-All rights reserved.
-
-Contains code from pydbattach, Copyright (c) 2011--2016, Albert Zeyer.
-All rights reserved.
+Contains third party code from other projects. See below.
 
 This license is derived from the Q Public License v1.0 and the Qt Non-Commercial License v1.0 which are both Copyright by Trolltech AS, Norway.
 The aim of this license is to lay down the conditions enabling you to use, modify and circulate the SOFTWARE, use of third-party application programs based on the Software and publication of results obtained through the use of modified and unmodified versions of the SOFTWARE.
@@ -42,3 +35,91 @@ The Software and this license document are provided "AS IS" with NO EXPLICIT OR 
  9. You assume all risks concerning the quality or the effects of the SOFTWARE and its use. If the SOFTWARE is defective, you will bear the costs of all required services, corrections or repairs.
  10. This license has the binding value of a contract.
  11. The present license and its effects are subject to German law and the competent German Courts.
+
+
+=====================
+
+Contains code from better_exchook:
+ - Website: https://github.com/albertz/py_better_exchook
+ - BSD 2-clause "Simplified" License
+ - Copyright (c) 2011--2016, Albert Zeyer. All rights reserved.
+ - File: better_exchook.py
+
+Contains code from TaskSystem:
+ - Website: https://github.com/albertz/TaskSystem
+ - BSD 2-clause "Simplified" License
+ - Copyright (c) 2011--2016, Albert Zeyer. All rights reserved.
+ - Files: TaskSystem*.py
+
+Contains code from extpickle:
+ - Website: https://github.com/albertz/extpickle
+ - BSD 2-clause "Simplified" License
+ - Copyright (c) 2016, Albert Zeyer. All rights reserved.
+ - File: TaskSystem.py
+
+Contains code from MusicPlayer:
+ - Website: https://github.com/albertz/music-player
+ - BSD 2-clause "Simplified" License
+ - Copyright (c) 2011--2016, Albert Zeyer. All rights reserved.
+ - Various functions e.g. in Util.py, Debug.py.
+
+Contains code from pydbattach:
+ - Website: https://github.com/albertz/pydbattach
+ - No project license; also on StackOverflow with Creative Commons license.
+ - Copyright (c) 2011--2016, Albert Zeyer. All rights reserved.
+ - Function: initIPythonKernel
+
+Contains code from Keras:
+ - Website: https://github.com/fchollet/keras
+ - MIT License
+ - Copyright (c) 2015, François Chollet. All rights reserved.
+ - Copyright (c) 2015, Google, Inc. All rights reserved.
+ - Copyright (c) 2017, Microsoft, Inc. All rights reserved.
+ - Copyright (c) 2015 - 2017, the respective contributors.
+   Each contributor holds copyright over their respective contributions.
+   The project versioning (Git) records all such contribution source information.
+   All rights reserved.
+ - Various functions in Util.py, TFUtil.py, TheanoUtil.py.
+
+Contains code from Theano:
+ - Website: https://github.com/Theano/Theano
+ - 3-Clause BSD License, New BSD License
+ - Copyright (c) 2008--2017, Theano Development Team. All rights reserved.
+ - Contains code from NumPy, Copyright (c) 2005-2016, NumPy Developers. All rights reserved.
+ - Contains CnMeM under the same license, Copyright (c) 2015, NVIDIA CORPORATION. All rights reserved.
+ - Contains frozendict code from slezica’s python-frozendict:
+   - Website: https://github.com/slezica/python-frozendict/blob/master/frozendict/__init__.py
+   - Copyright (c) 2012 Santiago Lezica. All rights reserved.
+ - Various functions in Util.py, TheanoUtil.py.
+
+Contains code from albertz-system-tools:
+ - Website: https://github.com/albertz/system-tools
+ - No project license
+ - Copyright Albert Zeyer
+ - Various functions in Util.py.
+
+Contains code from Lasagne:
+ - Website: https://github.com/Lasagne/Lasagne
+ - MIT License (MIT)
+ - Copyright (c) 2014-2015 Lasagne contributors
+ - Various functions in TheanoUtil.py.
+
+Contains code from TensorFlow:
+ - Website: https://github.com/tensorflow/tensorflow
+ - Apache License 2.0
+ - Copyright 2017 The TensorFlow Authors. All rights reserved.
+ - Various functions in TFUtil.py, TFUpdater.py.
+
+Contains code from pumpikano-tf-dann:
+ - Website: https://github.com/pumpikano/tf-dann
+ - No project license
+ - Copyright Clayton Mellina
+ - Function FlipGradientBuilder in TFUtil.py.
+
+Contains code from tensorpack:
+ - Website: https://github.com/ppwwyyxx/tensorpack
+ - Apache License 2.0
+ - Copyright Yuxin Wu
+ - Some code in GeneratingDataset.py.
+
+Various code snippets from StackOverflow, which are under Creative Commons / Public Domain.

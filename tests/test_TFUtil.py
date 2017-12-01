@@ -872,3 +872,82 @@ def test_variable_summaries():
   session.run(v.initializer)
   session.run(tf.summary.merge_all())
   assert_almost_equal(session.run(variable_scalar_summaries_dict(v)["test_variable_summaries_mean"]), -0.5)
+
+
+def test_VariableAssigner():
+  v = tf.Variable(initial_value=1.)
+  session.run(v.initializer)
+  assert_equal(session.run(v), 1.)
+  assigner = VariableAssigner(v)
+  assigner.assign(value=2., session=session)
+  assert_equal(session.run(v), 2.)
+
+
+def test_VariableAssigner_ResourceVariable():
+  v = tf.get_variable(
+    initializer=tf.constant_initializer(1.), shape=(),
+    name="test_VariableAssigner_ResourceVariable", use_resource=True)
+  session.run(v.initializer)
+  assert_equal(session.run(v), 1.)
+  assigner = VariableAssigner(v)
+  assigner.assign(value=2., session=session)
+  assert_equal(session.run(v), 2.)
+
+
+def test_map_labels():
+  x = tf.constant([0, 1, 2, 3, 2, 1, 0])
+  label_map = {0: 1, 1: 2, 2: 3, 3: 0}
+  y = map_labels(x, label_map=label_map)
+  assert_equal(session.run(y).tolist(), [1, 2, 3, 0, 3, 2, 1])
+
+
+def test_map_labels_SparseTensor():
+  x = tf.SparseTensor(
+    indices=tf.constant([[0, 0], [0, 1], [1, 0], [1, 1]], dtype=tf.int64, name="x_indices"),
+    values=tf.constant([0, 1, 2, 3], name="x_values"),
+    dense_shape=tf.constant([3, 3], dtype=tf.int64, name="x_dense_shape"))
+  label_map = {0: 1, 1: 2, 2: 3, 3: 0}
+  y = map_labels(x, label_map=label_map)
+  assert isinstance(y, tf.SparseTensor)
+  y_eval = session.run(y)
+  assert isinstance(y_eval, tf.SparseTensorValue)
+  assert_equal(y_eval.values.tolist(), [1, 2, 3, 0])
+
+
+def test_sparse_labels():
+  x = tf.constant([[0, 1, 2, 3], [4, 5, 0, 0]], name="x")
+  seq_lens = tf.constant([4, 2], name="seq_lens")
+  y = sparse_labels(x, seq_lens=seq_lens)
+  y_eval = session.run(y)
+  assert isinstance(y_eval, tf.SparseTensorValue)
+  assert isinstance(y_eval.indices, numpy.ndarray)
+  assert isinstance(y_eval.values, numpy.ndarray)
+  assert isinstance(y_eval.dense_shape, numpy.ndarray)
+  assert_equal(y_eval.indices.tolist(), [[0, 0], [0, 1], [0, 2], [0, 3], [1, 0], [1, 1]])
+  assert_equal(y_eval.values.tolist(), [0, 1, 2, 3, 4, 5])
+  assert_equal(y_eval.dense_shape.tolist(), [2, 4])
+
+
+def test_remove_labels():
+  x = tf.SparseTensor(
+    indices=tf.constant([[0, 0], [0, 1], [0, 2], [1, 0]], dtype=tf.int64, name="x_indices"),
+    values=tf.constant([0, 1, 2, 3], name="x_values"),
+    dense_shape=tf.constant([3, 3], dtype=tf.int64, name="x_dense_shape"))
+  labels = {1}
+  y = remove_labels(x, labels=labels)
+  assert isinstance(y, tf.SparseTensor)
+  y_eval = session.run(y)
+  assert isinstance(y_eval, tf.SparseTensorValue)
+  assert isinstance(y_eval.indices, numpy.ndarray)
+  assert isinstance(y_eval.values, numpy.ndarray)
+  assert isinstance(y_eval.dense_shape, numpy.ndarray)
+  assert_equal(y_eval.indices.tolist(), [[0, 0], [0, 1], [1, 0]])
+  assert_equal(y_eval.values.tolist(), [0, 2, 3])
+  assert_equal(y_eval.dense_shape.tolist(), [3, 2])
+
+
+def test_supported_devices_for_op():
+  op_name = "MatMul"
+  devs = supported_devices_for_op(op_name)
+  print("Supported devs for op %r: %r" % (op_name, devs))
+  assert "CPU" in devs

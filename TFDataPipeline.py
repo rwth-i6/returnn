@@ -684,6 +684,7 @@ class TFBatchingQueue(object):
           return stop, tf.identity(last_op)
 
     return tf.while_loop(
+      name="enqueue_loop",
       cond=loop_cond,
       body=body,
       loop_vars=[False, 0],  # stop, op

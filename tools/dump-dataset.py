@@ -14,6 +14,17 @@ from Log import log
 import argparse
 import numpy
 from better_exchook import pretty_print
+from Util import Stats
+
+
+def plot(m):
+  """
+  :param numpy.ndarray m:
+  """
+  print("Plotting matrix of shape %s." % (m.shape,))
+  from matplotlib.pyplot import matshow, show
+  matshow(m.transpose())
+  show()
 
 
 def dump_dataset(dataset, options):
@@ -54,9 +65,14 @@ def dump_dataset(dataset, options):
     print("Dump files: %r*%r" % (options.dump_prefix, options.dump_postfix), file=log.v3)
   elif options.type == "stdout":
     print("Dump to stdout", file=log.v3)
+  elif options.type == "plot":
+    print("Plot.", file=log.v3)
+  elif options.type == "null":
+    print("No dump.")
   else:
     raise Exception("unknown dump option type %r" % options.type)
 
+  stats = Stats() if (options.stats or options.dump_stats) else None
   seq_idx = options.startseq
   if options.endseq < 0:
     options.endseq = float("inf")
@@ -67,16 +83,22 @@ def dump_dataset(dataset, options):
       numpy.savetxt("%s%i.data%s" % (options.dump_prefix, seq_idx, options.dump_postfix), data)
     elif options.type == "stdout":
       print("seq %i data:" % seq_idx, pretty_print(data))
+    elif options.type == "plot":
+      plot(data)
     for target in dataset.get_target_list():
       targets = dataset.get_targets(target, seq_idx)
       if options.type == "numpy":
         numpy.savetxt("%s%i.targets.%s%s" % (options.dump_prefix, seq_idx, target, options.dump_postfix), targets, fmt='%i')
       elif options.type == "stdout":
         print("seq %i target %r:" % (seq_idx, target), pretty_print(targets))
+    if stats:
+      stats.collect(data)
 
     seq_idx += 1
 
   print("Done. More seqs which we did not dumped: %s" % dataset.is_less_than_num_seqs(seq_idx), file=log.v1)
+  if stats:
+    stats.dump(output_file_prefix=options.dump_stats, stream=log.v2)
 
 
 def init(config_str):
@@ -115,9 +137,11 @@ def main(argv):
   argparser.add_argument('--startseq', type=int, default=0, help='start seq idx (inclusive) (default: 0)')
   argparser.add_argument('--endseq', type=int, default=10, help='end seq idx (inclusive) or -1 (default: 10)')
   argparser.add_argument('--get_num_seqs', action="store_true")
-  argparser.add_argument('--type', default='stdout', help="'numpy' or 'stdout'")
+  argparser.add_argument('--type', default='stdout', help="'numpy', 'stdout', 'plot', 'null'")
   argparser.add_argument('--dump_prefix', default='/tmp/crnn.dump-dataset.')
   argparser.add_argument('--dump_postfix', default='.txt.gz')
+  argparser.add_argument('--stats', action="store_true", help="calculate mean/stddev stats")
+  argparser.add_argument('--dump_stats', help="file-prefix to dump stats to")
   args = argparser.parse_args(argv[1:])
   init(config_str=args.crnn_config)
   try:

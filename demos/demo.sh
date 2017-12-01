@@ -9,6 +9,7 @@ shift
 # Delete any old data.
 rm /tmp/crnn.demo-${demo}.* 2>/dev/null || true
 rm -rf /tmp/crnn 2>/dev/null || true
+rm -rf /tmp/$(whoami)/crnn 2>/dev/null || true
 
 cd $(dirname $0)
 test -e demo-${demo}.config || { echo "error: demo-${demo}.config not found"; exit 1; }

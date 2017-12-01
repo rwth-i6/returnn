@@ -16,7 +16,7 @@ import Device
 from LearningRateControl import loadLearningRateControlFromConfig
 from Pretrain import pretrainFromConfig
 import EngineUtil
-from Util import hms, hdf5_dimension, BackendEngine, model_epoch_from_filename
+from Util import hms, hdf5_dimension, BackendEngine, model_epoch_from_filename, get_model_filename_postfix
 import errno
 import time
 try:
@@ -31,6 +31,7 @@ import json
 import cgi
 from GeneratingDataset import StaticDataset
 import hashlib
+
 
 class Engine:
 
@@ -80,13 +81,6 @@ class Engine:
     return file_list
 
   @classmethod
-  def model_filename_postfix(cls):
-    fn_postfix = ""
-    if BackendEngine.is_tensorflow_selected():
-      fn_postfix = ".meta"
-    return fn_postfix
-
-  @classmethod
   def get_epoch_model(cls, config):
     """
     :type config: Config.Config
@@ -106,11 +100,11 @@ class Engine:
 
     load_model_epoch_filename = config.value('load', '')
     if load_model_epoch_filename:
-      assert os.path.exists(load_model_epoch_filename + cls.model_filename_postfix())
+      assert os.path.exists(load_model_epoch_filename + get_model_filename_postfix())
 
     import_model_train_epoch1 = config.value('import_model_train_epoch1', '')
     if import_model_train_epoch1:
-      assert os.path.exists(import_model_train_epoch1 + cls.model_filename_postfix())
+      assert os.path.exists(import_model_train_epoch1 + get_model_filename_postfix())
 
     existing_models = cls.get_existing_models(config)
     if not load_model_epoch_filename:
@@ -243,6 +237,7 @@ class Engine:
 
     epoch, model_epoch_filename = self.get_epoch_model(config)
     assert model_epoch_filename or self.start_epoch
+    self.epoch = epoch or self.start_epoch
 
     if model_epoch_filename:
       print("loading weights from", model_epoch_filename, file=log.v2)
@@ -278,10 +273,13 @@ class Engine:
         print("Copy hidden layer %s" % layer_name, file=log.v3)
         intelli_copy_layer(layer, network.hidden[layer_name])
       for layer_name, layer in sorted(old_network.output.items()):
-        print("Copy output layer %s" % layer_name, file=log.v3)
-        intelli_copy_layer(layer, network.output[layer_name])
-      print("Not copied hidden: %s" % sorted(set(network.hidden.keys()).difference(old_network.hidden.keys())), file=log.v3)
-      print("Not copied output: %s" % sorted(set(network.output.keys()).difference(old_network.output.keys())), file=log.v3)
+        if layer_name in network.output:
+          print("Copy output layer %s" % layer_name, file=log.v3)
+          intelli_copy_layer(layer, network.output[layer_name])
+        else:
+          print("Did not copy output layer %s" % layer_name, file=log.v3)
+      print("Not copied hidden: %s" % sorted(set(network.hidden.keys()).symmetric_difference(old_network.hidden.keys())), file=log.v3)
+      print("Not copied output: %s" % sorted(set(network.output.keys()).symmetric_difference(old_network.output.keys())), file=log.v3)
 
     # Maybe load existing model parameters.
     elif last_model_hdf:

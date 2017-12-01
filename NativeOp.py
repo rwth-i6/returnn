@@ -821,7 +821,7 @@ class LstmGenericBase(NativeOpGenBase):
     //DV_h = Y[0..end-1]^T * DZ[1..end]
     affine_global(Y, DZ, DV_h, true, false, 1, 0.0f);
 
-    const Ndarray_DIM_Type* Dc_dim = Ndarray_HOST_DIMS(Dc);
+    Ndarray_DIMS_Type Dc_dim = Ndarray_HOST_DIMS(Dc);
     Ndarray_memcpy(
       Ndarray_DEV_DATA(Dc), Ndarray_DEV_DATA(tmpDc),
       Dc_dim[0] * Dc_dim[1] * sizeof(float));
@@ -829,6 +829,844 @@ class LstmGenericBase(NativeOpGenBase):
   """
 
   code_version = ()
+
+
+class LstmLowMem(NativeOpGenBase):
+  """
+  This is designed to require minimal memory during training.
+  It only stores the outputs and the cell states,
+  i.e. it requires time * cells * 2 floats for memory in total.
+
+  inputs:
+    :param X: (time,batch,in_dim)
+    :param W: forward+recurrent matrix. 2d (in_dim+dim,dim*4)
+    :param b: bias. 1d (dim*4,)
+    :param y0: initial output|hidden state. 2d (batch,dim)
+    :param c0: initial cell state. 2d (batch,dim)
+    :param i: index. 2d (time,batch) -> 0 or 1
+    :param start: where to start. must be >=0, default is usually 0. dtype int, scalar.
+    :param step: +1 for fwd, -1 for bwd direction. can also be |step|>1 for wider steps. dtype int, scalar.
+      for bwd (<0), will start at T-start-1.
+  outputs:
+    :param Y: output. 3d (time,batch,dim)
+    :param C: cell states. 3d (time,batch,dim). gradient ignored!
+    :param d: final cell state. 2d (batch,dim)
+  """
+  in_info = (
+    {"name": "X", "ndim": 3, "shape": (None, None, None), "need_contiguous": True},
+    {"name": "W", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+    {"name": "b", "ndim": 1, "shape": (None,), "need_contiguous": True},
+    {"name": "y0", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+    {"name": "c0", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+    {"name": "i", "ndim": 2, "shape": (None, None), "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "start", "ndim": 0, "shape": (), "gradient": "disconnected", "dtype": "int32", "host_memory": True},
+    {"name": "step", "ndim": 0, "shape": (), "gradient": "disconnected", "dtype": "int32", "host_memory": True},
+  )
+  out_info = (
+    {"name": "Y", "ndim": 3, "shape": ((0, 0), (0, 1), (4, 1)), "need_contiguous": True},
+    {"name": "C", "ndim": 3, "shape": ((0, 0), (0, 1), (4, 1)), "need_contiguous": True},
+    {"name": "d", "ndim": 2, "shape": ((0, 1), (4, 1)), "need_contiguous": True}
+  )
+  @classmethod
+  def grad_input_map(cls, X, W, b, y0, c0, i, start, step,   Y, C, d,   DY, DC, Dd):
+    return (X, W, b, y0, c0, i, start, step,   Y, C,   DY, Dd)
+
+  c_extra_support_code = {
+    "lstm_kernel": """
+      DEF_KERNEL
+      void lstm_kernel(
+        int n_batch, int n_cells, const float* mask,
+        float* intern,
+        float* prev_c,
+        float* y,
+        float* c)
+      {
+        int idx = threadIdx.x + blockDim.x * blockIdx.x;
+        while (idx < n_cells * n_batch) {
+          int batch_idx = idx / n_cells;
+          int cell_idx = idx % n_cells;
+          int intern_offset = batch_idx * 4 * n_cells + cell_idx;
+          float prev_c_b = prev_c[idx];
+          float mask_b = mask[batch_idx];
+
+          // cell-in + input, forget and output gates
+          float cellIn = tanhf(intern[intern_offset]);
+          float inpGate = 1.f / (1.f + expf(-intern[intern_offset + n_cells]));
+          float fgtGate = 1.f / (1.f + expf(-intern[intern_offset + 2 * n_cells]));
+          float outGate = 1.f / (1.f + expf(-intern[intern_offset + 3 * n_cells]));
+
+          float c_b = (prev_c_b * fgtGate + cellIn * inpGate) * mask_b
+                      + prev_c_b * (1.f - mask_b);
+          c[idx] = c_b;
+          y[idx] = tanhf(c_b) * outGate * mask_b;
+
+          idx += gridDim.x * blockDim.x;
+        }
+      }
+      """,
+    "lstm_bwd_kernel": """
+      DEF_KERNEL
+      void lstm_bwd_kernel(
+        int n_batch, int n_in, int n_cells, const float* mask,
+        float* x_h,
+        float* intern,
+        float* prev_c,
+        float* y,
+        float* c,
+        float* d_y,
+        float* d_h,
+        float* d_c,
+        float* d_intern,
+        float* d_b)
+      {
+        int idx = threadIdx.x + blockDim.x * blockIdx.x;
+        while (idx < n_cells * n_batch) {
+          int batch_idx = idx / n_cells;
+          int cell_idx = idx % n_cells;
+          int intern_offset = batch_idx * 4 * n_cells + cell_idx;
+          float mask_b = mask[batch_idx];
+          float d_y_b = d_y[idx] * mask_b + d_h[idx];
+          float d_c_b = d_c[idx] * mask_b;
+          float prev_c_b = prev_c[idx];
+
+          // cell-in + input, forget and output gates
+          float cellIn = tanhf(intern[intern_offset]);
+          float inpGate = 1.f / (1.f + expf(-intern[intern_offset + n_cells]));
+          float fgtGate = 1.f / (1.f + expf(-intern[intern_offset + 2 * n_cells]));
+          float outGate = 1.f / (1.f + expf(-intern[intern_offset + 3 * n_cells]));
+
+          float c_b = prev_c_b * fgtGate + cellIn * inpGate;
+          float gc = tanhf(c_b);
+          float d_outGate_in = (1.f - outGate) * outGate * gc * d_y_b;
+          float d_c2 = d_c_b + outGate * d_y_b * (1.f - gc * gc);
+          float d_cellIn_in = (1.f - cellIn * cellIn) * inpGate * d_c2;
+          float d_inpGate_in = (1.f - inpGate) * inpGate * cellIn * d_c2;
+          float d_fgtGate_in = (1.f - fgtGate) * fgtGate * prev_c_b * d_c2;
+          d_c[idx] = fgtGate * d_c2 + d_c[idx] * (1.f - mask_b);
+
+          d_intern[intern_offset] = d_cellIn_in;
+          d_intern[intern_offset + n_cells] = d_inpGate_in;
+          d_intern[intern_offset + 2 * n_cells] = d_fgtGate_in;
+          d_intern[intern_offset + 3 * n_cells] = d_outGate_in;
+
+          elem_atomic_add(&d_b[cell_idx], d_cellIn_in);
+          elem_atomic_add(&d_b[cell_idx + n_cells], d_inpGate_in);
+          elem_atomic_add(&d_b[cell_idx + 2 * n_cells], d_fgtGate_in);
+          elem_atomic_add(&d_b[cell_idx + 3 * n_cells], d_outGate_in);
+
+          idx += gridDim.x * blockDim.x;
+        }
+      }
+      """,
+    "add_bias_kernel": """
+      DEF_KERNEL
+      void add_bias_kernel(int n_batch, int n_dim, float* x, float* b) {
+        int idx = threadIdx.x + blockDim.x * blockIdx.x;
+        while (idx < n_batch * n_dim) {
+          int dim_idx = idx % n_dim;
+          x[idx] += b[dim_idx];
+          idx += gridDim.x * blockDim.x;
+        }
+      }
+    """,
+    "copy_x_h_kernel": """
+      DEF_KERNEL
+      void copy_x_h_kernel(
+        int n_batch, int n_in, int n_cells,
+        float* x_h,
+        float* x,
+        float* h)
+      {
+        int n_total_in = n_in + n_cells;
+        int idx = threadIdx.x + blockDim.x * blockIdx.x;
+        while (idx < n_batch * n_total_in) {
+          int batch_idx = idx / n_total_in;
+          int in_dim_idx = idx % n_total_in;
+
+          if(in_dim_idx < n_in)
+            x_h[idx] = x[batch_idx * n_in + in_dim_idx];
+          else
+            x_h[idx] = h[batch_idx * n_cells + in_dim_idx - n_in];
+
+          idx += gridDim.x * blockDim.x;
+        }
+      }
+      """,
+    "inv_copy_x_h_kernel": """
+    DEF_KERNEL
+    void inv_copy_x_h_kernel(
+      int n_batch, int n_in, int n_cells,
+      float* x_h,
+      float* x,
+      float* h)
+    {
+      int n_total_in = n_in + n_cells;
+      int idx = threadIdx.x + blockDim.x * blockIdx.x;
+      while (idx < n_batch * n_total_in) {
+        int batch_idx = idx / n_total_in;
+        int in_dim_idx = idx % n_total_in;
+
+        if(in_dim_idx < n_in)
+          x[batch_idx * n_in + in_dim_idx] = x_h[idx];
+        else
+          h[batch_idx * n_cells + in_dim_idx - n_in] = x_h[idx];
+
+        idx += gridDim.x * blockDim.x;
+      }
+    }
+    """
+  }
+
+  c_fw_code = """
+    // X, W, b, y0, c0, i, start, step = input_names
+    // Y, C, d = output_names
+    assert(n_inputs == 8);
+    assert(n_outputs == 3);
+    Ndarray* X = inputs[0];
+    Ndarray* W = inputs[1];
+    Ndarray* b = inputs[2];
+    Ndarray* y0 = inputs[3];
+    Ndarray* c0 = inputs[4];
+    Ndarray* i = inputs[5];
+    assert_cmp(Ndarray_NDIM(inputs[6]), ==, 0);
+    assert_cmp(Ndarray_NDIM(inputs[7]), ==, 0);
+    int start = Ndarray_DEV_DATA_int32_scalar(inputs[6]);
+    int step = Ndarray_DEV_DATA_int32_scalar(inputs[7]);
+    Ndarray* Y = *outputs[0];
+    Ndarray* C = *outputs[1];
+    Ndarray* d = *outputs[2];
+
+    assert_cmp(Ndarray_NDIM(X), ==, 3);
+    assert_cmp(Ndarray_NDIM(W), ==, 2);
+    assert_cmp(Ndarray_NDIM(b), ==, 1);
+    assert_cmp(Ndarray_NDIM(y0), ==, 2);
+    assert_cmp(Ndarray_NDIM(c0), ==, 2);
+    assert_cmp(Ndarray_NDIM(i), ==, 2);
+    assert_cmp(Ndarray_NDIM(Y), ==, 3);
+    assert_cmp(Ndarray_NDIM(C), ==, 3);
+    assert_cmp(Ndarray_NDIM(d), ==, 2);
+    long T = Ndarray_DIMS(i)[0];
+    int n_batch = Ndarray_DIMS(i)[1];
+    int n_cells = Ndarray_DIMS(y0)[1];
+    int n_in = Ndarray_DIMS(X)[2];
+    assert_cmp(Ndarray_DIMS(X)[0], ==, T);
+    assert_cmp(Ndarray_DIMS(X)[1], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(W)[0], ==, n_in + n_cells);
+    assert_cmp(Ndarray_DIMS(W)[1], ==, n_cells * 4);
+    assert_cmp(Ndarray_DIMS(b)[0], ==, n_cells * 4);
+    assert_cmp(Ndarray_DIMS(y0)[0], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(y0)[1], ==, n_cells);
+    assert_cmp(Ndarray_DIMS(c0)[0], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(c0)[1], ==, n_cells);
+    assert_cmp(Ndarray_DIMS(Y)[0], ==, T);
+    assert_cmp(Ndarray_DIMS(Y)[1], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(Y)[2], ==, n_cells);
+    assert_cmp(Ndarray_DIMS(C)[0], ==, T);
+    assert_cmp(Ndarray_DIMS(C)[1], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(C)[2], ==, n_cells);
+    assert_cmp(Ndarray_DIMS(d)[0], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(d)[1], ==, n_cells);
+
+    float* x_h = (float*) device_malloc(n_batch * (n_in + n_cells) * sizeof(float));
+    float* intern = (float*) device_malloc(n_batch * n_cells * 4 * sizeof(float));  // 3 gates + in
+
+    assert_cmp(T, >, 0);
+    assert_cmp(start, >=, 0);
+    assert_cmp(start, <, T);
+    assert_cmp(step, !=, 0);
+    int end = T - 1;
+    if(step < 0) {
+      end = start;
+      start = T - start - 1;
+    }
+    int t = start;
+    for(; (step > 0) ? (t <= end) : (t >= end); t += step) {
+      // x_h = X[t], Y[t-1]
+      start_dev_kernel(copy_x_h_kernel,
+        (n_batch, n_in, n_cells, x_h, data_ptr(X, t), (t != start) ? data_ptr(Y, t-step) : Ndarray_DEV_DATA(y0)));
+      // intern = x_h * W
+      affine_raw(
+        x_h, n_batch, n_in + n_cells,
+        Ndarray_DEV_DATA(W), n_in + n_cells, n_cells * 4,
+        intern, n_batch, n_cells * 4,
+        false, false, 0.0);
+      // intern += b
+      start_dev_kernel(add_bias_kernel, (
+        n_batch, n_cells * 4, intern, Ndarray_DEV_DATA(b)));
+
+      start_dev_kernel(lstm_kernel, (
+        n_batch,
+        n_cells,
+        Ndarray_DEV_DATA(i) + t * n_batch,
+        intern,
+        (t != start) ? data_ptr(C, t-step) : Ndarray_DEV_DATA(c0),
+        data_ptr(Y, t),  // out
+        data_ptr(C, t)  // out
+      ));
+    }
+
+    device_free(x_h);
+    device_free(intern);
+
+    Ndarray_memcpy(Ndarray_DEV_DATA(d), data_ptr(C, t - step), n_batch * n_cells * sizeof(float));
+  """
+
+  # language=C++
+  c_bw_code = """
+    // X, W, b, y0, c0, i, start, step,   Y, C,   DY, Dd = input_names
+    // DX, DW, Db, Dh, Dc = output_names
+    assert(n_inputs == 12);
+    assert(n_outputs == 5);
+    Ndarray* X = inputs[0];
+    Ndarray* W = inputs[1];
+    Ndarray* b = inputs[2];
+    Ndarray* y0 = inputs[3];
+    Ndarray* c0 = inputs[4];
+    Ndarray* i = inputs[5];
+    assert_cmp(Ndarray_NDIM(inputs[6]), ==, 0);
+    assert_cmp(Ndarray_NDIM(inputs[7]), ==, 0);
+    int start = Ndarray_DEV_DATA_int32_scalar(inputs[6]);
+    int step = Ndarray_DEV_DATA_int32_scalar(inputs[7]);
+    Ndarray* Y = inputs[8];
+    Ndarray* C = inputs[9];
+    Ndarray* DY = inputs[10];
+    Ndarray* Dd = inputs[11];
+    Ndarray* DX = *outputs[0];
+    Ndarray* DW = *outputs[1];
+    Ndarray* Db = *outputs[2];
+    Ndarray* Dh = *outputs[3];
+    Ndarray* Dc = *outputs[4];
+
+    assert_cmp(Ndarray_NDIM(X), ==, 3);
+    assert_cmp(Ndarray_NDIM(W), ==, 2);
+    assert_cmp(Ndarray_NDIM(b), ==, 1);
+    assert_cmp(Ndarray_NDIM(y0), ==, 2);
+    assert_cmp(Ndarray_NDIM(c0), ==, 2);
+    assert_cmp(Ndarray_NDIM(i), ==, 2);
+    assert_cmp(Ndarray_NDIM(Y), ==, 3);
+    assert_cmp(Ndarray_NDIM(C), ==, 3);
+    assert_cmp(Ndarray_NDIM(DY), ==, 3);
+    assert_cmp(Ndarray_NDIM(Dd), ==, 2);
+    assert_cmp(Ndarray_NDIM(DX), ==, 3);
+    assert_cmp(Ndarray_NDIM(DW), ==, 2);
+    assert_cmp(Ndarray_NDIM(Db), ==, 1);
+    assert_cmp(Ndarray_NDIM(Dh), ==, 2);
+    assert_cmp(Ndarray_NDIM(Dc), ==, 2);
+    long T = Ndarray_DIMS(i)[0];
+    int n_batch = Ndarray_DIMS(i)[1];
+    int n_cells = Ndarray_DIMS(y0)[1];
+    int n_in = Ndarray_DIMS(X)[2];
+    assert_cmp(Ndarray_DIMS(X)[0], ==, T);
+    assert_cmp(Ndarray_DIMS(X)[1], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(W)[0], ==, n_in + n_cells);
+    assert_cmp(Ndarray_DIMS(W)[1], ==, n_cells * 4);
+    assert_cmp(Ndarray_DIMS(b)[0], ==, n_cells * 4);
+    assert_cmp(Ndarray_DIMS(y0)[0], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(y0)[1], ==, n_cells);
+    assert_cmp(Ndarray_DIMS(c0)[0], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(c0)[1], ==, n_cells);
+    assert_cmp(Ndarray_DIMS(Y)[0], ==, T);
+    assert_cmp(Ndarray_DIMS(Y)[1], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(Y)[2], ==, n_cells);
+    assert_cmp(Ndarray_DIMS(C)[0], ==, T);
+    assert_cmp(Ndarray_DIMS(C)[1], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(C)[2], ==, n_cells);
+    assert_cmp(Ndarray_DIMS(DY)[0], ==, T);
+    assert_cmp(Ndarray_DIMS(DY)[1], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(DY)[2], ==, n_cells);
+    assert_cmp(Ndarray_DIMS(Dd)[0], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(Dd)[1], ==, n_cells);
+    assert_cmp(Ndarray_DIMS(DX)[0], ==, T);
+    assert_cmp(Ndarray_DIMS(DX)[1], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(DX)[2], ==, n_in);
+    assert_cmp(Ndarray_DIMS(DW)[0], ==, n_in + n_cells);
+    assert_cmp(Ndarray_DIMS(DW)[1], ==, n_cells * 4);
+    assert_cmp(Ndarray_DIMS(Db)[0], ==, n_cells * 4);
+    assert_cmp(Ndarray_DIMS(Dh)[0], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(Dh)[1], ==, n_cells);
+    assert_cmp(Ndarray_DIMS(Dc)[0], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(Dc)[1], ==, n_cells);
+
+    float* x_h = (float*) device_malloc(n_batch * (n_in + n_cells) * sizeof(float));
+    float* intern = (float*) device_malloc(n_batch * n_cells * 4 * sizeof(float));  // 3 gates + in
+    float* Dx_h = (float*) device_malloc(n_batch * (n_in + n_cells) * sizeof(float));
+    float* Dintern = (float*) device_malloc(n_batch * n_cells * 4 * sizeof(float));  // 3 gates + in
+
+    // We will work inplace on DX/DW/Db.
+    Ndarray_memset(Ndarray_DEV_DATA(DX), 0, T * n_batch * n_in * sizeof(float));
+    Ndarray_memset(Ndarray_DEV_DATA(DW), 0, (n_in + n_cells) * n_cells * 4 * sizeof(float));
+    Ndarray_memset(Ndarray_DEV_DATA(Db), 0, n_cells * 4 * sizeof(float));
+    // We will work inplace on Dh.
+    Ndarray_memset(Ndarray_DEV_DATA(Dh), 0, n_batch * n_cells * sizeof(float));
+    // We will work inplace on Dc, and init it with Dd.
+    Ndarray_memcpy(Ndarray_DEV_DATA(Dc), Ndarray_DEV_DATA(Dd), n_batch * n_cells * sizeof(float));
+
+    assert_cmp(T, >, 0);
+    assert_cmp(start, >=, 0);
+    assert_cmp(start, <, T);
+    assert_cmp(step, !=, 0);
+    int end = T - 1;
+    if(step < 0) {
+      end = start;
+      start = T - start - 1;
+    }
+    int t = end;  // go backwards
+    for(; (step > 0) ? (t >= start) : (t <= start); t -= step) {
+      bool right = (step > 0) ? (t - step >= start) : (t - step <= start);
+
+      // TODO: correct handling of mask in grad, fwd, initial cell,hidden, etc
+      // x_h = X[t], Y[t-1]
+      start_dev_kernel(copy_x_h_kernel,
+        (n_batch, n_in, n_cells,
+         x_h, data_ptr(X, t), right ? data_ptr(Y, t-step) : Ndarray_DEV_DATA(y0)));
+
+      // intern = x_h * W
+      affine_raw(
+        x_h, n_batch, n_in + n_cells,
+        Ndarray_DEV_DATA(W), n_in + n_cells, n_cells * 4,
+        intern, n_batch, n_cells * 4,
+        false, false, 0.0);
+      // intern += b
+      start_dev_kernel(add_bias_kernel, (
+        n_batch, n_cells * 4, intern, Ndarray_DEV_DATA(b)));
+
+      start_dev_kernel(lstm_bwd_kernel, (
+        n_batch,
+        n_in,
+        n_cells,
+        Ndarray_DEV_DATA(i) + t * n_batch,
+        x_h,
+        intern,
+        right ? data_ptr(C, t-step) : Ndarray_DEV_DATA(c0),
+        data_ptr(Y, t),
+        data_ptr(C, t),
+        data_ptr(DY, t),
+        Ndarray_DEV_DATA(Dh),  // error from prev frame, excluding DY. updated below
+        Ndarray_DEV_DATA(Dc),  // in+out, working inplace. also error from prev frame, initially Dd
+        Dintern,  // out
+        Ndarray_DEV_DATA(Db)  // out
+      ));
+
+      // Dx_h = Dintern * W^T
+      affine_raw(
+        Dintern, n_batch, n_cells * 4,
+        Ndarray_DEV_DATA(W), n_in + n_cells, n_cells * 4,
+        Dx_h, n_batch, n_in + n_cells,
+        false, true, 0.0);
+
+      // DW += x_h^T * Dintern
+      affine_raw(
+        x_h, n_batch, n_in + n_cells,
+        Dintern, n_batch, n_cells * 4,
+        Ndarray_DEV_DATA(DW), n_in + n_cells, n_cells * 4,
+        true, false);
+
+      // DX[t], Dh = Dx_h
+      start_dev_kernel(inv_copy_x_h_kernel,
+        (n_batch, n_in, n_cells, Dx_h, data_ptr(DX, t), Ndarray_DEV_DATA(Dh)));
+    }
+
+    device_free(x_h);
+    device_free(intern);
+    device_free(Dx_h);
+    device_free(Dintern);
+  """
+
+
+class NativeLstm2(NativeOpGenBase):
+  """
+  Yet another LSTM kernel.
+  This kernel is about 27% than NativeLstm,
+  and also has some more options (like the direction).
+  But it requires time * batch * cells more memory,
+  thus time * batch * cells * 6 in total.
+
+  inputs:
+    :param X: (time,batch,dim*4)
+    :param W: recurrent matrix. 2d (dim,dim*4)
+    :param y0: initial output|hidden state. 2d (batch,dim)
+    :param c0: initial cell state. 2d (batch,dim)
+    :param i: index. 2d (time,batch) -> 0 or 1
+    :param start: where to start. must be >=0, default is usually 0. dtype int, scalar.
+    :param step: +1 for fwd, -1 for bwd direction. can also be |step|>1 for wider steps. dtype int, scalar.
+      for bwd (<0), will start at T-start-1.
+  outputs:
+    :param Y: output. 3d (time,batch,dim)
+    :param C: cell states. 3d (time,batch,dim). gradient ignored!
+    :param H: cell-in + gates. 3d (time,batch,dim*4). gradient ignored!
+    :param d: final cell state. 2d (batch,dim)
+  """
+  in_info = (
+    {"name": "X", "ndim": 3, "shape": (None, None, None), "need_contiguous": True},
+    {"name": "W", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+    {"name": "y0", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+    {"name": "c0", "ndim": 2, "shape": (None, None), "need_contiguous": True},
+    {"name": "i", "ndim": 2, "shape": (None, None), "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "start", "ndim": 0, "shape": (), "gradient": "disconnected", "dtype": "int32", "host_memory": True},
+    {"name": "step", "ndim": 0, "shape": (), "gradient": "disconnected", "dtype": "int32", "host_memory": True},
+  )
+  out_info = (
+    {"name": "Y", "ndim": 3, "shape": ((0, 0), (0, 1), (1, 0)), "need_contiguous": True},
+    {"name": "C", "ndim": 3, "shape": ((0, 0), (0, 1), (1, 0)), "need_contiguous": True},
+    {"name": "H", "ndim": 3, "shape": ((0, 0), (0, 1), (1, 1)), "need_contiguous": True},
+    {"name": "d", "ndim": 2, "shape": ((0, 1), (1, 0)), "need_contiguous": True}
+  )
+  @classmethod
+  def grad_input_map(cls, X, W, y0, c0, i, start, step,   Y, C, H, d,   DY, DC, DH, Dd):
+    return (X, W, y0, c0, i, start, step,   Y, C, H,   DY, Dd)
+
+  c_extra_support_code = {
+    "lstm_kernel": """
+      DEF_KERNEL
+      void lstm_kernel(
+        int n_batch, int n_cells, const float* mask,
+        float* h,
+        float* prev_y,
+        float* prev_c,
+        float* y,
+        float* c,
+        float* y_prev_out)
+      {
+        int idx = threadIdx.x + blockDim.x * blockIdx.x;
+        while (idx < n_cells * n_batch) {
+          int batch_idx = idx / n_cells;
+          int cell_idx = idx % n_cells;
+          int intern_offset = batch_idx * 4 * n_cells + cell_idx;
+          float prev_c_b = prev_c[idx];
+          float mask_b = mask[batch_idx];
+
+          // cell-in + input, forget and output gates
+          float cellIn = tanhf(h[intern_offset]);
+          float inpGate = 1.f / (1.f + expf(-h[intern_offset + n_cells]));
+          float fgtGate = 1.f / (1.f + expf(-h[intern_offset + 2 * n_cells]));
+          float outGate = 1.f / (1.f + expf(-h[intern_offset + 3 * n_cells]));
+
+          h[intern_offset] = cellIn;
+          h[intern_offset + n_cells] = inpGate;
+          h[intern_offset + 2 * n_cells] = fgtGate;
+          h[intern_offset + 3 * n_cells] = outGate;
+
+          float c_b = (prev_c_b * fgtGate + cellIn * inpGate) * mask_b
+                    + prev_c_b * (1.f - mask_b);
+          c[idx] = c_b;
+          float y_b = tanhf(c_b) * outGate * mask_b;
+          y[idx] = y_b;
+          y_prev_out[idx] = y_b + prev_y[idx] * (1.f - mask_b);
+
+          idx += gridDim.x * blockDim.x;
+        }
+      }
+      """,
+    "lstm_bwd_kernel": """
+      DEF_KERNEL
+      void lstm_bwd_kernel(
+        int n_batch, int n_cells, const float* mask,
+        float* h,
+        float* prev_c,
+        float* y,
+        float* c,
+        float* d_y,
+        float* d_h,
+        float* d_c,
+        float* d_x,
+        float* d_x0)
+      {
+        int idx = threadIdx.x + blockDim.x * blockIdx.x;
+        while (idx < n_cells * n_batch) {
+          int batch_idx = idx / n_cells;
+          int cell_idx = idx % n_cells;
+          int intern_offset = batch_idx * 4 * n_cells + cell_idx;
+          float mask_b = mask[batch_idx];
+          float d_y_b = (d_y[idx] + d_h[idx]) * mask_b;
+          float d_c_b = d_c[idx] * mask_b;
+          float prev_c_b = prev_c[idx];
+
+          // cell-in + input, forget and output gates
+          float cellIn = h[intern_offset];
+          float inpGate = h[intern_offset + n_cells];
+          float fgtGate = h[intern_offset + 2 * n_cells];
+          float outGate = h[intern_offset + 3 * n_cells];
+
+          float c_b = prev_c_b * fgtGate + cellIn * inpGate;
+          float gc = tanhf(c_b);
+          float d_outGate_in = (1.f - outGate) * outGate * gc * d_y_b;
+          float d_c2 = d_c_b + outGate * d_y_b * (1.f - gc * gc);
+          float d_cellIn_in = (1.f - cellIn * cellIn) * inpGate * d_c2;
+          float d_inpGate_in = (1.f - inpGate) * inpGate * cellIn * d_c2;
+          float d_fgtGate_in = (1.f - fgtGate) * fgtGate * prev_c_b * d_c2;
+          d_c[idx] = fgtGate * d_c2 + d_c[idx] * (1.f - mask_b);
+
+          d_x[intern_offset] = d_cellIn_in;
+          d_x[intern_offset + n_cells] = d_inpGate_in;
+          d_x[intern_offset + 2 * n_cells] = d_fgtGate_in;
+          d_x[intern_offset + 3 * n_cells] = d_outGate_in;
+
+          #define set_x0(off) { d_x0[off] = d_x[off] + d_x0[off] * (1.f - mask_b); }
+          set_x0(intern_offset);
+          set_x0(intern_offset + n_cells);
+          set_x0(intern_offset + 2 * n_cells);
+          set_x0(intern_offset + 3 * n_cells);
+          #undef set_x0
+
+          // Reset if used frame, otherwise leave as-is.
+          d_h[idx] *= (1.f - mask_b);
+
+          idx += gridDim.x * blockDim.x;
+        }
+      }
+      """
+  }
+
+  c_fw_code = """
+    // X, W, y0, c0, i, start, step = input_names
+    // Y, C, H, d = output_names
+    assert(n_inputs == 7);
+    assert(n_outputs == 4);
+    Ndarray* X = inputs[0];
+    Ndarray* W = inputs[1];
+    Ndarray* y0 = inputs[2];
+    Ndarray* c0 = inputs[3];
+    Ndarray* i = inputs[4];
+    assert_cmp(Ndarray_NDIM(inputs[5]), ==, 0);
+    assert_cmp(Ndarray_NDIM(inputs[6]), ==, 0);
+    int start = Ndarray_DEV_DATA_int32_scalar(inputs[5]);
+    int step = Ndarray_DEV_DATA_int32_scalar(inputs[6]);
+    Ndarray* Y = *outputs[0];
+    Ndarray* C = *outputs[1];
+    Ndarray* H = *outputs[2];
+    Ndarray* d = *outputs[3];
+
+    assert_cmp(Ndarray_NDIM(X), ==, 3);
+    assert_cmp(Ndarray_NDIM(W), ==, 2);
+    assert_cmp(Ndarray_NDIM(y0), ==, 2);
+    assert_cmp(Ndarray_NDIM(c0), ==, 2);
+    assert_cmp(Ndarray_NDIM(i), ==, 2);
+    assert_cmp(Ndarray_NDIM(Y), ==, 3);
+    assert_cmp(Ndarray_NDIM(C), ==, 3);
+    assert_cmp(Ndarray_NDIM(H), ==, 3);
+    assert_cmp(Ndarray_NDIM(d), ==, 2);
+    long T = Ndarray_DIMS(i)[0];
+    int n_batch = Ndarray_DIMS(i)[1];
+    int n_cells = Ndarray_DIMS(y0)[1];
+    assert_cmp(Ndarray_DIMS(X)[0], ==, T);
+    assert_cmp(Ndarray_DIMS(X)[1], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(X)[2], ==, n_cells * 4);
+    assert_cmp(Ndarray_DIMS(W)[0], ==, n_cells);
+    assert_cmp(Ndarray_DIMS(W)[1], ==, n_cells * 4);
+    assert_cmp(Ndarray_DIMS(y0)[0], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(y0)[1], ==, n_cells);
+    assert_cmp(Ndarray_DIMS(c0)[0], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(c0)[1], ==, n_cells);
+    assert_cmp(Ndarray_DIMS(Y)[0], ==, T);
+    assert_cmp(Ndarray_DIMS(Y)[1], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(Y)[2], ==, n_cells);
+    assert_cmp(Ndarray_DIMS(C)[0], ==, T);
+    assert_cmp(Ndarray_DIMS(C)[1], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(C)[2], ==, n_cells);
+    assert_cmp(Ndarray_DIMS(H)[0], ==, T);
+    assert_cmp(Ndarray_DIMS(H)[1], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(H)[2], ==, n_cells * 4);
+    assert_cmp(Ndarray_DIMS(d)[0], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(d)[1], ==, n_cells);
+
+    // It makes the backprop with step<0 easier to implement,
+    // esp. the DW = Y[0..T-2]^T * DX[1..T-1] calculation,
+    // if we can have Y[t] = 0 where mask[t] = 0.
+    // That is why we need to keep track of Y[t-1] explicitly.
+    float* y_prev = (float*) device_malloc(n_batch * n_cells * sizeof(float));
+
+    // H = X
+    Ndarray_memcpy(Ndarray_DEV_DATA(H), Ndarray_DEV_DATA(X), T * n_batch * n_cells * 4 * sizeof(float));
+
+    assert_cmp(T, >, 0);
+    assert_cmp(start, >=, 0);
+    assert_cmp(start, <, T);
+    assert_cmp(step, !=, 0);
+    int end = T - 1;
+    if(step < 0) {
+      end = 0;
+      start = T - start - 1;
+    }
+    int t = start;
+    for(; (step > 0) ? (t <= end) : (t >= end); t += step) {
+      // H[t] += Y[t-1] * W
+      affine_raw(
+        (t != start) ? y_prev : Ndarray_DEV_DATA(y0), n_batch, n_cells,
+        Ndarray_DEV_DATA(W), n_cells, n_cells * 4,
+        data_ptr(H, t), n_batch, n_cells * 4,
+        false, false);
+
+      start_dev_kernel(lstm_kernel, (
+        n_batch,
+        n_cells,
+        Ndarray_DEV_DATA(i) + t * n_batch,
+        data_ptr(H, t),  // inplace
+        (t != start) ? y_prev : Ndarray_DEV_DATA(y0),
+        (t != start) ? data_ptr(C, t-step) : Ndarray_DEV_DATA(c0),
+        data_ptr(Y, t),  // out
+        data_ptr(C, t),  // out
+        y_prev  // out
+      ));
+    }
+
+    Ndarray_memcpy(Ndarray_DEV_DATA(d), data_ptr(C, t - step), n_batch * n_cells * sizeof(float));
+
+    device_free(y_prev);
+  """
+
+  # language=C++
+  c_bw_code = """
+    // X, W, y0, c0, i, start, step,   Y, C, H,   DY, Dd = input_names
+    // DX, DW, Dy0, Dc0 = output_names
+    assert(n_inputs == 12);
+    assert(n_outputs == 4);
+    Ndarray* X = inputs[0];
+    Ndarray* W = inputs[1];
+    Ndarray* y0 = inputs[2];
+    Ndarray* c0 = inputs[3];
+    Ndarray* i = inputs[4];
+    assert_cmp(Ndarray_NDIM(inputs[5]), ==, 0);
+    assert_cmp(Ndarray_NDIM(inputs[6]), ==, 0);
+    int start = Ndarray_DEV_DATA_int32_scalar(inputs[5]);
+    int step = Ndarray_DEV_DATA_int32_scalar(inputs[6]);
+    Ndarray* Y = inputs[7];
+    Ndarray* C = inputs[8];
+    Ndarray* H = inputs[9];
+    Ndarray* DY = inputs[10];
+    Ndarray* Dd = inputs[11];
+    Ndarray* DX = *outputs[0];
+    Ndarray* DW = *outputs[1];
+    Ndarray* Dy0 = *outputs[2];
+    Ndarray* Dc0 = *outputs[3];
+
+    assert_cmp(Ndarray_NDIM(X), ==, 3);
+    assert_cmp(Ndarray_NDIM(W), ==, 2);
+    assert_cmp(Ndarray_NDIM(y0), ==, 2);
+    assert_cmp(Ndarray_NDIM(c0), ==, 2);
+    assert_cmp(Ndarray_NDIM(i), ==, 2);
+    assert_cmp(Ndarray_NDIM(Y), ==, 3);
+    assert_cmp(Ndarray_NDIM(C), ==, 3);
+    assert_cmp(Ndarray_NDIM(H), ==, 3);
+    assert_cmp(Ndarray_NDIM(DY), ==, 3);
+    assert_cmp(Ndarray_NDIM(Dd), ==, 2);
+    assert_cmp(Ndarray_NDIM(DX), ==, 3);
+    assert_cmp(Ndarray_NDIM(DW), ==, 2);
+    assert_cmp(Ndarray_NDIM(Dy0), ==, 2);
+    assert_cmp(Ndarray_NDIM(Dc0), ==, 2);
+    long T = Ndarray_DIMS(i)[0];
+    int n_batch = Ndarray_DIMS(i)[1];
+    int n_cells = Ndarray_DIMS(y0)[1];
+    assert_cmp(Ndarray_DIMS(X)[0], ==, T);
+    assert_cmp(Ndarray_DIMS(X)[1], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(X)[2], ==, n_cells * 4);
+    assert_cmp(Ndarray_DIMS(W)[0], ==, n_cells);
+    assert_cmp(Ndarray_DIMS(W)[1], ==, n_cells * 4);
+    assert_cmp(Ndarray_DIMS(y0)[0], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(y0)[1], ==, n_cells);
+    assert_cmp(Ndarray_DIMS(c0)[0], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(c0)[1], ==, n_cells);
+    assert_cmp(Ndarray_DIMS(Y)[0], ==, T);
+    assert_cmp(Ndarray_DIMS(Y)[1], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(Y)[2], ==, n_cells);
+    assert_cmp(Ndarray_DIMS(C)[0], ==, T);
+    assert_cmp(Ndarray_DIMS(C)[1], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(C)[2], ==, n_cells);
+    assert_cmp(Ndarray_DIMS(H)[0], ==, T);
+    assert_cmp(Ndarray_DIMS(H)[1], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(H)[2], ==, n_cells * 4);
+    assert_cmp(Ndarray_DIMS(DY)[0], ==, T);
+    assert_cmp(Ndarray_DIMS(DY)[1], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(DY)[2], ==, n_cells);
+    assert_cmp(Ndarray_DIMS(Dd)[0], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(Dd)[1], ==, n_cells);
+    assert_cmp(Ndarray_DIMS(DX)[0], ==, T);
+    assert_cmp(Ndarray_DIMS(DX)[1], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(DX)[2], ==, n_cells * 4);
+    assert_cmp(Ndarray_DIMS(DW)[0], ==, n_cells);
+    assert_cmp(Ndarray_DIMS(DW)[1], ==, n_cells * 4);
+    assert_cmp(Ndarray_DIMS(Dy0)[0], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(Dy0)[1], ==, n_cells);
+    assert_cmp(Ndarray_DIMS(Dc0)[0], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(Dc0)[1], ==, n_cells);
+
+    // We will work inplace on DW.
+    Ndarray_memset(Ndarray_DEV_DATA(DW), 0, n_cells * n_cells * 4 * sizeof(float));
+    // We will work inplace on (Dy0) DY[t], initially 0.
+    Ndarray_memset(Ndarray_DEV_DATA(Dy0), 0, n_batch * n_cells * sizeof(float));
+    // We will work inplace on (Dc0) DC[t], and init it with Dd.
+    Ndarray_memcpy(Ndarray_DEV_DATA(Dc0), Ndarray_DEV_DATA(Dd), n_batch * n_cells * sizeof(float));
+
+    // Need to keep track of (logical) DX[0], which in practice (masking, step<0)
+    // can be different from data_ptr(DX, start).
+    float* dx0 = (float*) device_malloc(n_batch * n_cells * 4 * sizeof(float));
+    Ndarray_memset(dx0, 0, n_batch * n_cells * 4 * sizeof(float));
+    
+    assert_cmp(T, >, 0);
+    assert_cmp(start, >=, 0);
+    assert_cmp(start, <, T);
+    assert_cmp(step, !=, 0);
+    int abs_step = std::abs(step);
+    // e.g.:
+    // step=1, start=0, T=10 -> num_steps=10=T
+    // step=5, start=0, T=10 -> num_steps=2=T/step
+    // step=5, start=0, T=9  -> num_steps=2=(T+step-1)/step
+    // step=5, start=0, T=6  -> num_steps=2=(T+step-1)/step
+    // step=5, start=0, T=5  -> num_steps=1=(T+step-1)/step
+    // step=5, start=4, T=10 -> num_steps=2=(T-start+step-1)/step
+    // step=-5, start=0, T=10 -> num_steps=2=T/abs_step
+    // step=-5, start=0, T=9  -> num_steps=2=(T+abs_step-1)/abs_step
+    // step=-5, start=4, T=10 -> num_steps=2=(T-start+abs_step-1)/abs_step
+    int num_steps = (T - start + abs_step - 1) / abs_step;
+    assert_cmp(num_steps, >, 0);
+    if(step < 0)
+      start = T - start - 1;
+    int end = start + (num_steps - 1) * step;  // inclusive
+    assert_cmp(end, >=, 0);
+    assert_cmp(end, <, T);
+    int t = end;  // go backwards
+    for(; (step > 0) ? (t >= start) : (t <= start); t -= step) {
+      bool right = (step > 0) ? (t - step >= start) : (t - step <= start);
+
+      start_dev_kernel(lstm_bwd_kernel, (
+        n_batch,
+        n_cells,
+        Ndarray_DEV_DATA(i) + t * n_batch,
+        data_ptr(H, t),
+        right ? data_ptr(C, t-step) : Ndarray_DEV_DATA(c0),
+        data_ptr(Y, t),
+        data_ptr(C, t),
+        data_ptr(DY, t),
+        Ndarray_DEV_DATA(Dy0),  // in+out, error from prev frame, excluding DY. reset here, updated below
+        Ndarray_DEV_DATA(Dc0),  // in+out, working inplace. also error from prev frame, initially Dd
+        data_ptr(DX, t),  // out
+        dx0  // out
+      ));
+
+      // (Dy0) DY[t-1] += DX[t] * W^T
+      affine_raw(
+        data_ptr(DX, t), n_batch, n_cells * 4,
+        Ndarray_DEV_DATA(W), n_cells, n_cells * 4,
+        Ndarray_DEV_DATA(Dy0), n_batch, n_cells,
+        false, true);
+    }
+
+    //DW = Y[0..T-2]^T * DX[1..T-1]  (if step==1)
+    affine_raw(
+      data_ptr(Y, std::min(start, end) + std::max(0, -step)), (num_steps - 1) * n_batch, n_cells,
+      data_ptr(DX, std::min(start, end) + std::max(0, step)), (num_steps - 1) * n_batch, n_cells * 4,
+      Ndarray_DEV_DATA(DW), n_cells, n_cells * 4,
+      true, false, 0.0f, 1.0f,
+      abs_step, abs_step);
+
+    //DW += y0^T * DX[0]
+    affine_raw(
+      Ndarray_DEV_DATA(y0), n_batch, n_cells,
+      dx0, n_batch, n_cells * 4,
+      Ndarray_DEV_DATA(DW), n_cells, n_cells * 4,
+      true, false);
+    
+    device_free(dx0);
+  """
 
 
 class Chunking(NativeOpGenBase):
@@ -2253,8 +3091,13 @@ class MultiEndFastBaumWelchOp(NativeOpGenBase):
   c_extra_support_code.update({
     "100_init_bwd_state_buffer": """
       __global__
-      void init_bwd_state_buffer(float* states, unsigned* end_states, float* end_state_weigths, unsigned t, unsigned max_t, float* index, unsigned index_stride) {
+      void init_bwd_state_buffer(unsigned t, unsigned max_t, unsigned num_endstates, unsigned index_stride,
+                                 float* states, unsigned const* end_states, float const* end_state_weights, float const* index) {
         unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx >= num_endstates) {
+          return;
+        }
+
         unsigned seq_idx = end_states[idx * 2u + 0u];
         if (index[t * index_stride + seq_idx] == 1.0 && (t == max_t || index[(t + 1) * index_stride + seq_idx] == 0.0)) {
           unsigned state_idx = end_states[idx * 2u + 1u];
@@ -2265,7 +3108,7 @@ class MultiEndFastBaumWelchOp(NativeOpGenBase):
     """})
 
   c_fw_code = """
-    // am_scores, edges, weights, start_states, end_states, end_state_weigths index, state_buffer* = input_names (*: inplace)
+    // am_scores, edges, weights, start_states, end_states, end_state_weights, index, state_buffer* = input_names (*: inplace)
     // output = output_names
     assert(n_inputs  == 8);
     assert(n_outputs == 2);
@@ -2283,7 +3126,7 @@ class MultiEndFastBaumWelchOp(NativeOpGenBase):
     assert(Ndarray_DIMS(am_scores)[0] == Ndarray_DIMS(out)[0]);
     assert(Ndarray_DIMS(am_scores)[1] == Ndarray_DIMS(out)[1]);
     assert(Ndarray_DIMS(am_scores)[2] == Ndarray_DIMS(out)[2]);
-    assert(Ndarray_DIMS(am_scores)[1] == Ndarray_DIMS(start_end_states)[1]);
+//    assert(Ndarray_DIMS(am_scores)[1] == Ndarray_DIMS(end_states)[0]);
 
     assert(Ndarray_DIMS(sum_output)[0] == Ndarray_DIMS(am_scores)[0]);
     assert(Ndarray_DIMS(sum_output)[1] == Ndarray_DIMS(am_scores)[1]);
@@ -2302,21 +3145,22 @@ class MultiEndFastBaumWelchOp(NativeOpGenBase):
     float*    d_am_scores         = Ndarray_DEV_DATA(am_scores);
     unsigned* d_start_states      = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(start_states));
     unsigned* d_end_states        = reinterpret_cast<unsigned*>(Ndarray_DEV_DATA_int32(end_states));
-    float*    d_end_state_weigths = Ndarray_DEV_DATA(end_state_weights);
+    float*    d_end_state_weights = Ndarray_DEV_DATA(end_state_weights);
     float*    d_index             = Ndarray_DEV_DATA(index);
     float*    d_state_buffer_prev = Ndarray_DEV_DATA(state_buffer) + 0 * Ndarray_STRIDE(state_buffer, 0);
     float*    d_state_buffer_next = Ndarray_DEV_DATA(state_buffer) + 1 * Ndarray_STRIDE(state_buffer, 0);
     float*    d_out               = Ndarray_DEV_DATA(out);
     float*    d_sum_output        = Ndarray_DEV_DATA(sum_output);
 
-    unsigned n_frames     = Ndarray_DIMS(am_scores)[0];
-    unsigned n_seqs       = Ndarray_DIMS(am_scores)[1];
-    unsigned n_emissions  = Ndarray_DIMS(am_scores)[2];
-    unsigned n_states     = Ndarray_DIMS(state_buffer)[1];
-    unsigned n_edges      = Ndarray_DIMS(edges)[1];
-    unsigned n_end_states = Ndarray_DIMS(end_states)[0];
-    unsigned n_threads    = 1024u;
-    unsigned n_blocks     = (n_edges + n_threads - 1) / n_threads;
+    unsigned n_frames       = Ndarray_DIMS(am_scores)[0];
+    unsigned n_seqs         = Ndarray_DIMS(am_scores)[1];
+    unsigned n_emissions    = Ndarray_DIMS(am_scores)[2];
+    unsigned n_states       = Ndarray_DIMS(state_buffer)[1];
+    unsigned n_edges        = Ndarray_DIMS(edges)[1];
+    unsigned n_start_states = Ndarray_DIMS(start_states)[0];
+    unsigned n_end_states   = Ndarray_DIMS(end_states)[0];
+    unsigned n_threads      = 1024u;
+    unsigned n_blocks       = (n_edges + n_threads - 1) / n_threads;
 
     unsigned frame_stride    = Ndarray_STRIDE(am_scores, 0);
     unsigned sequence_stride = Ndarray_STRIDE(am_scores, 1);
@@ -2324,46 +3168,59 @@ class MultiEndFastBaumWelchOp(NativeOpGenBase):
 
     assert(n_frames > 0);
 
-    //std::cerr << "n_frames: "     << n_frames     << std::endl;
-    //std::cerr << "n_seqs: "       << n_seqs       << std::endl;
-    //std::cerr << "n_emissions: "  << n_emissions  << std::endl;
-    //std::cerr << "n_states: "     << n_states     << std::endl;
-    //std::cerr << "n_edges: "      << n_edges      << std::endl;
-    //std::cerr << "n_end_states: " << n_end_states << std::endl;
-    //std::cerr << "n_threads: "    << n_threads    << std::endl;
-    //std::cerr << "n_blocks: "     << n_blocks     << std::endl;
+//    std::cerr << "n_frames: "       << n_frames       << std::endl;
+//    std::cerr << "n_seqs: "         << n_seqs         << std::endl;
+//    std::cerr << "n_emissions: "    << n_emissions    << std::endl;
+//    std::cerr << "n_states: "       << n_states       << std::endl;
+//    std::cerr << "n_edges: "        << n_edges        << std::endl;
+//    std::cerr << "n_start_states: " << n_start_states << std::endl;
+//    std::cerr << "n_end_states: "   << n_end_states   << std::endl;
+//    std::cerr << "n_threads: "      << n_threads      << std::endl;
+//    std::cerr << "n_blocks: "       << n_blocks       << std::endl;
 
-    //std::cerr << "frame_stride: "     << frame_stride    << std::endl;
-    //std::cerr << "sequnence_stride: " << sequence_stride << std::endl;
-    //std::cerr << "index_stride: "     << index_stride    << std::endl;
+//    std::cerr << "frame_stride: "     << frame_stride    << std::endl;
+//    std::cerr << "sequence_stride: "  << sequence_stride << std::endl;
+//    std::cerr << "index_stride: "     << index_stride    << std::endl;
 
     // initialize edge buffer
     float* d_edge_buffer = reinterpret_cast<float*>(device_malloc(n_edges * n_frames * sizeof(float)));
+//    cudaDeviceSynchronize();
+//    HANDLE_LAST_ERROR();
     unsigned n_fill_blocks = (n_edges * n_frames + n_threads - 1u) / n_threads;
     fill_array<<<n_fill_blocks, n_threads>>>(d_edge_buffer, 0.0, n_edges * n_frames);
-    HANDLE_LAST_ERROR();
+//    cudaDeviceSynchronize();
+//    HANDLE_LAST_ERROR();
 
     // initialize the state buffer
     n_fill_blocks = (n_states + n_threads - 1u) / n_threads;
     fill_array<<<n_fill_blocks, n_threads>>>(d_state_buffer_prev, std::numeric_limits<float>::infinity(), n_states);
-    HANDLE_LAST_ERROR();
-    set_start_states<<<1, n_seqs>>>(d_state_buffer_prev, d_start_states);
+//    cudaDeviceSynchronize();
+//    HANDLE_LAST_ERROR();
+    set_start_states<<<1, n_start_states>>>(d_state_buffer_prev, d_start_states);
+//    cudaDeviceSynchronize();
+//    HANDLE_LAST_ERROR();
 
     // initialize full state buffer (only used to dump the alignment)
     float* d_state_buffer_all = NULL;
     if (dump_alignment and batch_idx %% dump_every == 0) {
       d_state_buffer_all = reinterpret_cast<float*>(device_malloc(n_states * (n_frames + 1u) * sizeof(float)));
+//      cudaDeviceSynchronize();
+//      HANDLE_LAST_ERROR();
       cudaMemcpy(d_state_buffer_all, d_state_buffer_prev, n_states * sizeof(float), cudaMemcpyDeviceToDevice);
+//      HANDLE_LAST_ERROR();
     }
 
     // fwd pass
     for (unsigned t = 0u; t < n_frames; t++) {
       fill_array<<<n_fill_blocks, n_threads>>>(d_state_buffer_next, std::numeric_limits<float>::infinity(), n_states);
-      HANDLE_LAST_ERROR();
+//      cudaDeviceSynchronize();
+//      HANDLE_LAST_ERROR();
+//      std::cerr << "frame " << t << std::endl;
       next_frame<<<n_blocks, n_threads>>>(true, n_edges, sequence_stride,
                                           d_sequence_idxs, d_from, d_to, d_weights, d_emission_idxs,
                                           d_state_buffer_prev, d_state_buffer_next, d_am_scores + t * frame_stride, d_edge_buffer + t * n_edges);
-      HANDLE_LAST_ERROR();
+//      cudaDeviceSynchronize();
+//      HANDLE_LAST_ERROR();
       if (dump_alignment and batch_idx %% dump_every == 0) {
         cudaMemcpy(d_state_buffer_all + (t + 1u) * n_states, d_state_buffer_next, n_states * sizeof(float), cudaMemcpyDeviceToDevice);
       }
@@ -2371,31 +3228,38 @@ class MultiEndFastBaumWelchOp(NativeOpGenBase):
     }
 
     // bwd pass
+    const unsigned n_end_state_blocks = (n_end_states + n_threads - 1u) / n_threads;
+    const unsigned n_end_state_threads = min(n_threads, n_end_states);
     fill_array<<<n_fill_blocks, n_threads>>>(d_state_buffer_prev, std::numeric_limits<float>::infinity(), n_states);
-    HANDLE_LAST_ERROR();
+//    cudaDeviceSynchronize();
+//    HANDLE_LAST_ERROR();
     for (unsigned t = n_frames; t > 0; t--) {
-      init_bwd_state_buffer<<<1, n_end_states>>>(d_state_buffer_prev, d_end_states, d_end_state_weigths, t - 1, n_frames - 1, d_index, index_stride);
-      HANDLE_LAST_ERROR();
+      init_bwd_state_buffer<<<n_end_state_blocks, n_end_state_threads>>>(t - 1, n_frames - 1, n_end_states, index_stride, d_state_buffer_prev, d_end_states, d_end_state_weights,  d_index);
+//      cudaDeviceSynchronize();
+//      HANDLE_LAST_ERROR();
       if (dump_alignment and batch_idx %% dump_every == 0) {
         float alpha = 1.0f;
-        HANDLE_ERROR(cublasSaxpy(handle, n_states, &alpha, d_state_buffer_prev, 1, d_state_buffer_all + t * n_states, 1));
+//        HANDLE_ERROR(cublasSaxpy(handle, n_states, &alpha, d_state_buffer_prev, 1, d_state_buffer_all + t * n_states, 1));
       }
       fill_array<<<n_fill_blocks, n_threads>>>(d_state_buffer_next, std::numeric_limits<float>::infinity(), n_states);
-      HANDLE_LAST_ERROR();
+//      cudaDeviceSynchronize();
+//      HANDLE_LAST_ERROR();
       next_frame<<<n_blocks, n_threads>>>(false, n_edges, sequence_stride,
                                           d_sequence_idxs, d_to, d_from, d_weights, d_emission_idxs,
                                           d_state_buffer_prev, d_state_buffer_next, d_am_scores + (t - 1) * frame_stride, d_edge_buffer + (t - 1) * n_edges);
-      HANDLE_LAST_ERROR();
+//      cudaDeviceSynchronize();
+//      HANDLE_LAST_ERROR();
       std::swap(d_state_buffer_prev, d_state_buffer_next);
     }
     if (dump_alignment and batch_idx %% dump_every == 0) {
       float alpha = 1.0f;
-      HANDLE_ERROR(cublasSaxpy(handle, n_states, &alpha, d_state_buffer_prev, 1, d_state_buffer_all, 1));
+//      HANDLE_ERROR(cublasSaxpy(handle, n_states, &alpha, d_state_buffer_prev, 1, d_state_buffer_all, 1));
     }
 
     // normalize at each time frame
     normalize<<<n_frames, 1, n_seqs * sizeof(float)>>>(d_edge_buffer, d_sequence_idxs, n_edges, n_seqs, d_sum_output);
-    HANDLE_LAST_ERROR();
+//    cudaDeviceSynchronize();
+//    HANDLE_LAST_ERROR();
 
     // dump alignment
     if (dump_alignment and batch_idx %% dump_every == 0) {
@@ -2405,14 +3269,16 @@ class MultiEndFastBaumWelchOp(NativeOpGenBase):
 
     n_fill_blocks = (n_frames * n_seqs * n_emissions + n_threads - 1u) / n_threads;
     fill_array<<<n_fill_blocks, n_threads>>>(d_out, std::numeric_limits<float>::infinity(), n_frames * n_seqs * n_emissions);
-    HANDLE_LAST_ERROR();
+//    cudaDeviceSynchronize();
+//    HANDLE_LAST_ERROR();
 
     frame_stride    = Ndarray_STRIDE(out, 0);
     sequence_stride = Ndarray_STRIDE(out, 1);
     n_blocks        = (n_frames * n_edges + n_threads - 1u) / n_threads;
     compute_result<<<n_blocks, n_threads>>>(d_edge_buffer, d_out, d_emission_idxs, d_sequence_idxs,
                                             frame_stride, sequence_stride, n_frames, n_seqs, n_edges);
-    HANDLE_LAST_ERROR();
+//    cudaDeviceSynchronize();
+//    HANDLE_LAST_ERROR();
 
     #if TENSORFLOW
     // Certain TensorFlow code doesn't like inf, even if it is just the CheckNumerics,

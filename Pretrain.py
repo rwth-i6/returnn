@@ -136,11 +136,12 @@ class Pretrain:
         self._step_net_jsons.append(deepcopy(net_json))
 
   def _resolve_wrapped_values(self):
-    def _check_dict(d, epoch):
+    def _check_dict(d, epoch, depth=0):
       for k, v in sorted(d.items()):
-        assert isinstance(k, (str, unicode))
+        if depth <= 1:  # 0 - layers, 1 - layer opts
+          assert isinstance(k, (str, unicode))
         if isinstance(v, dict):
-          _check_dict(v, epoch=epoch)
+          _check_dict(v, epoch=epoch, depth=depth + 1)
         if isinstance(v, WrapEpochValue):
           d[k] = v.get_value(epoch=epoch)
     for i, net_json in enumerate(self._step_net_jsons):

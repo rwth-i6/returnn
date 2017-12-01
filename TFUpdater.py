@@ -280,7 +280,8 @@ class Updater(object):
     for slot_name in self.optimizer.get_slot_names():
       for v in trainable_vars_for_gradients:
         slot_var = self.optimizer.get_slot(var=v, name=slot_name)
-        assert slot_var is not None
+        assert slot_var is not None, (
+          "No slot_var found for variable %r, slot_name %r. Maybe no gradient for this var?" % (v, slot_name))
         assert isinstance(slot_var, tf.Variable)
         slot_vars.append(slot_var)
     self.optimizer_vars = slot_vars
@@ -313,7 +314,7 @@ class Updater(object):
         with reuse_name_scope_of_tensor(data.placeholder):
           variable_summaries(data.placeholder)
 
-    if self.config.bool("debug_add_check_numerics_ops", False):
+    if self.config.bool("debug_add_check_numerics_ops", False):  # also see debug_add_check_numerics_on_output
       print("Adding checks for inf/nan.", file=log.v3)
       self.optim_op = tf.group(self.optim_op, add_check_numerics_ops([self.optim_op]))
 
@@ -385,17 +386,22 @@ def add_check_numerics_ops(
       assert isinstance(op, tf.Operation)
       if op.type in ignore_ops:
         continue
+      # Frames from within a while-loop are partly broken.
+      # https://github.com/tensorflow/tensorflow/issues/2211
+      if op._get_control_flow_context() != tf.get_default_graph()._get_control_flow_context():
+        continue
       for output in op.outputs:
-        if output.dtype in [tf.float16, tf.float32, tf.float64]:
-          message = op.name + ":" + str(output.value_index)
-          with tf.control_dependencies(check_op):
-            if debug_print_added_checks:
-              print("add check for:", output, op.type)
-            if use_check_numerics:
-              check_op = [tf.check_numerics(output, message=message, name=op.name + "_check_numerics")]
-            else:
-              is_finite = tf.reduce_all(tf.is_finite(output))
-              check_op = [tf.Assert(is_finite, [message, "Tensor had inf or nan values:", output])]
+        if output.dtype not in [tf.float16, tf.float32, tf.float64]:
+          continue
+        message = op.name + ":" + str(output.value_index)
+        with tf.control_dependencies(check_op):
+          if debug_print_added_checks:
+            print("add check for:", output, op.type)
+          if use_check_numerics:
+            check_op = [tf.check_numerics(output, message=message, name=op.name + "_check_numerics")]
+          else:
+            is_finite = tf.reduce_all(tf.is_finite(output))
+            check_op = [tf.Assert(is_finite, [message, "Tensor had inf or nan values:", output])]
     return tf.group(*check_op)
 
 

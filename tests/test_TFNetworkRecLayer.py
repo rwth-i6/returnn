@@ -7,10 +7,13 @@ import logging
 logging.getLogger('tensorflow').disabled = True
 import tensorflow as tf
 import sys
-sys.path += ["."]  # Python 3 hack
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + "/..")
 from nose.tools import assert_equal, assert_is_instance
+from numpy.testing.utils import assert_almost_equal, assert_allclose
 import unittest
 import numpy.testing
+from pprint import pprint
 import better_exchook
 better_exchook.replace_traceback_format_tb()
 
@@ -553,6 +556,507 @@ def test_GradOfLstmGenericBase_simple_nan():
         assert numpy.all(numpy.isfinite(out))
       print("Seems ok.")
     print("All ok!")
+
+
+def test_search_no_rec_explicit():
+  from TFNetworkRecLayer import _SubnetworkRecCell
+  beam_size = 3
+  logits = numpy.array([
+    [1., 2., 3., 0.],
+    [0., 4.5, 3., 6.],
+    [5., 8., 7.5, 0.]], dtype="float32")
+  # Labels/scores of each beam in search should be:
+  # frame 0: labels [2, 1, 0], scores [3., 2., 1.], source beam idxs [0, 0, 0]
+  # frame 1: labels [3, 3, 1], scores [9., 8., 7.5], source beam idxs [0, 1, 2]
+  # frame 2: labels [1, 2, 1], scores [17., 16.5, 16.], source beam idxs [0, 0, 1]
+  # Thus, the final three label seqs of the beam search should be:
+  # - [2, 3, 1] with score 17.
+  # - [2, 3, 2] with score 16.5
+  # - [1, 3, 1] with score 16.
+  expected_final_seqs = [[2, 3, 1], [2, 3, 2], [1, 3, 1]]
+  expected_debug_out = [
+    {"src_beam_idxs": [0, 0, 0], "scores": [3., 2., 1.], "labels": [2, 1, 0], "step": 0},
+    {"src_beam_idxs": [0, 1, 0], "scores": [9., 8., 7.5], "labels": [3, 3, 1], "step": 1},
+    {"src_beam_idxs": [0, 0, 1], "scores": [17., 16.5, 16.], "labels": [1, 2, 1], "step": 2},
+  ]
+  assert len(expected_final_seqs) == len(expected_debug_out) == beam_size
+  n_time = 3
+  n_classes = 4
+  assert_equal(logits.shape, (n_time, n_classes))
+  n_batch = 1
+  logits = numpy.expand_dims(logits, axis=0)
+  assert_equal(logits.shape, (n_batch, n_time, n_classes))
+  print("logits:")
+  print(logits)
+
+  ChoiceLayer._debug_out = []
+
+  net_dict = {
+    "output": {"class": "rec", "from": ["data"], "unit": {
+      "output": {
+        "class": "choice", "from": ["data:source"], "input_type": "log_prob",
+        "explicit_search_source": "prev:output", 'initial_output': 0,
+        "beam_size": beam_size, "target": "classes"}
+    }}
+  }
+  extern_data = ExternData({
+    "data": {"dim": n_classes},
+    "classes": {"dim": n_classes, "sparse": True, "available_for_inference": False}})
+  net = TFNetwork(
+    extern_data=extern_data, search_flag=True, train_flag=False, eval_flag=False)
+  net.construct_from_dict(net_dict)
+  assert_equal(net.used_data_keys, {"data"})  # not classes
+  rec_layer = net.layers["output"]
+  assert isinstance(rec_layer, RecLayer)
+  subnet = rec_layer.cell
+  assert isinstance(subnet, _SubnetworkRecCell)
+  assert_equal(subnet.layers_in_loop, ["output"])
+  sub_layer = subnet.net.layers["output"]
+  assert isinstance(sub_layer, ChoiceLayer)
+  assert_equal(sub_layer.output.beam_size, beam_size)
+  assert_equal(rec_layer.output.beam_size, beam_size)
+  input_search_choices = net.get_search_choices(sources=rec_layer.sources)
+  assert not input_search_choices
+  assert rec_layer.output.is_time_major
+  assert_equal(rec_layer.get_search_beam_size(), beam_size)
+  feed_dict = {
+    net.extern_data.data["data"].placeholder: logits,
+    net.extern_data.data["data"].size_placeholder[0]: [n_time]}
+  with tf.Session() as session:
+    assert_equal(session.run(net.get_data_batch_dim(), feed_dict=feed_dict), n_batch)
+    out, out_sizes = session.run(
+      (rec_layer.output.placeholder, rec_layer.output.get_sequence_lengths()),
+      feed_dict=feed_dict)
+    print("output seq lens:", out_sizes)
+    print("output:")
+    print(out)
+    assert isinstance(out_sizes, numpy.ndarray)
+    assert isinstance(out, numpy.ndarray)
+    assert_equal(out_sizes.shape, (n_batch * beam_size,))
+    assert_equal(out.shape, (n_time, n_batch * beam_size))
+    assert_equal(out_sizes.tolist(), [n_time] * beam_size)
+    out = numpy.reshape(out, (n_time, n_batch, beam_size))
+
+  print("Debug out:")
+  debug_out = ChoiceLayer._debug_out
+  ChoiceLayer._debug_out = []
+  pprint(debug_out)
+
+  # Assume that beams are sorted by score. See above.
+  for beam in range(beam_size):
+    out_seq = out[:, 0, beam].tolist()
+    expected_seq = expected_final_seqs[beam]
+    print("beam %i, out seq %r, expected seq %r" % (beam, out_seq, expected_seq))
+    assert_equal(out_seq, expected_final_seqs[beam])
+
+  assert len(debug_out) == n_time
+  # Could be that it is not in order (because of parallel execution of the loop).
+  debug_out = sorted(debug_out, key=lambda k: k["step"])
+  for t in range(n_time):
+    debug_t = debug_out[t]
+    expected_debug_t = expected_debug_out[t]
+    assert isinstance(debug_t, dict) and isinstance(expected_debug_t, dict)
+    for k, v in sorted(expected_debug_t.items()):
+      assert k in debug_t
+      out_v = debug_t[k]
+      if isinstance(v, int):
+        assert_equal(v, out_v)
+      else:
+        assert isinstance(out_v, numpy.ndarray)
+        assert out_v.shape[0] == n_batch, "t %i, k %r, v %r" % (t, k, v)
+        out_v = out_v[0]
+        assert_equal(v, out_v.tolist(), "t %i, k %r" % (t, k))
+  print("Seems fine.")
+
+
+def test_search_no_rec_explicit_dyn_len():
+  from TFNetworkRecLayer import _SubnetworkRecCell
+  beam_size = 3
+  logits = numpy.array([
+    [-1., -2., -3., -9.],
+    [-0.6, -6., -0.5, -2.],
+    [-0.4, -0.6, -0.7, -1.]], dtype="float32")
+  # Let the 0 label be the EOS symbol. We use length normalization.
+  # Labels/scores of each beam in search should be:
+  # frame 0: labels [0, 1, 2], scores [-1., -2., -3.], source beam idxs [0, 0, 0]
+  # frame 1: labels [0, 2, 0], scores [-2., -2.5, -2.6], source beam idxs [0, 1, 1]
+  # frame 2: labels [0, 0, 1], scores [-2.9, -3., -3.1], source beam idxs [1, 0, 1]
+  # Thus, the final three label seqs of the beam search should be:
+  # - [1, 2, 0] with score -2.9
+  # - [0, 0, 0] with score -3.
+  # - [1, 2, 1] with score -3.1
+  expected_final_seqs = [[1, 2, 0], [0, 0, 0], [1, 2, 1]]
+  expected_final_seq_lens = [2, 0, 3]
+  expected_debug_out = [
+    {"src_beam_idxs": [0, 0, 0], "scores": [-1., -2., -3.], "labels": [0, 1, 2], "step": 0},
+    {"src_beam_idxs": [0, 1, 1], "scores": [-2., -2.5, -2.6], "labels": [0, 2, 0], "step": 1},
+    {"src_beam_idxs": [1, 0, 1], "scores": [-2.9, -3., -3.1], "labels": [0, 0, 1], "step": 2},
+  ]
+  assert len(expected_final_seqs) == len(expected_debug_out) == beam_size
+  n_time = 3
+  n_classes = 4
+  assert_equal(logits.shape, (n_time, n_classes))
+  n_batch = 1
+  logits = numpy.expand_dims(logits, axis=0)
+  assert_equal(logits.shape, (n_batch, n_time, n_classes))
+  print("logits:")
+  print(logits)
+
+  ChoiceLayer._debug_out = []
+
+  net_dict = {
+    "output": {"class": "rec", "from": ["data"], "max_seq_len": n_time, "unit": {
+      "output": {
+        "class": "choice", "from": ["data:source"], "input_type": "log_prob",
+        "explicit_search_source": "prev:output", 'initial_output': 0,
+        "beam_size": beam_size, "length_normalization": True,
+        "target": "classes"},
+      "end": {"class": "compare", "from": ["output"], "value": 0}
+    }}
+  }
+  extern_data = ExternData({
+    "data": {"dim": n_classes},
+    "classes": {"dim": n_classes, "sparse": True, "available_for_inference": False}})
+  net = TFNetwork(
+    extern_data=extern_data, search_flag=True, train_flag=False, eval_flag=False)
+  net.construct_from_dict(net_dict)
+  assert_equal(net.used_data_keys, {"data"})  # not classes
+  rec_layer = net.layers["output"]
+  assert isinstance(rec_layer, RecLayer)
+  subnet = rec_layer.cell
+  assert isinstance(subnet, _SubnetworkRecCell)
+  assert_equal(set(subnet.layers_in_loop), {"output", "end"})
+  sub_layer = subnet.net.layers["output"]
+  assert isinstance(sub_layer, ChoiceLayer)
+  assert_equal(sub_layer.output.beam_size, beam_size)
+  assert_equal(rec_layer.output.beam_size, beam_size)
+  input_search_choices = net.get_search_choices(sources=rec_layer.sources)
+  assert not input_search_choices
+  assert rec_layer.output.is_time_major
+  assert_equal(rec_layer.get_search_beam_size(), beam_size)
+  feed_dict = {
+    net.extern_data.data["data"].placeholder: logits,
+    net.extern_data.data["data"].size_placeholder[0]: [n_time]}
+  with tf.Session() as session:
+    assert_equal(session.run(net.get_data_batch_dim(), feed_dict=feed_dict), n_batch)
+    out, out_sizes = session.run(
+      (rec_layer.output.placeholder, rec_layer.output.get_sequence_lengths()),
+      feed_dict=feed_dict)
+    print("output seq lens:", out_sizes)
+    assert isinstance(out_sizes, numpy.ndarray)
+    assert isinstance(out, numpy.ndarray)
+    assert_equal(out_sizes.shape, (n_batch * beam_size,))
+    assert_equal(out.shape, (n_time, n_batch * beam_size))
+  out = numpy.reshape(out, (n_time, n_batch, beam_size))
+  print("output:")
+  print(out)
+
+  print("Debug out:")
+  debug_out = ChoiceLayer._debug_out
+  ChoiceLayer._debug_out = []
+  pprint(debug_out)
+
+  assert_equal(out_sizes.tolist(), expected_final_seq_lens)
+
+  # Assume that beams are sorted by score. See above.
+  for beam in range(beam_size):
+    out_seq = out[:, 0, beam].tolist()
+    expected_seq = expected_final_seqs[beam]
+    print("beam %i, out seq %r, expected seq %r" % (beam, out_seq, expected_seq))
+    assert_equal(out_seq, expected_final_seqs[beam])
+
+  assert len(debug_out) == n_time
+  # Could be that it is not in order (because of parallel execution of the loop).
+  debug_out = sorted(debug_out, key=lambda k: k["step"])
+  for t in range(n_time):
+    debug_t = debug_out[t]
+    expected_debug_t = expected_debug_out[t]
+    assert isinstance(debug_t, dict) and isinstance(expected_debug_t, dict)
+    for k, v in sorted(expected_debug_t.items()):
+      assert k in debug_t
+      out_v = debug_t[k]
+      if isinstance(v, int):
+        assert_equal(v, out_v)
+      else:
+        assert isinstance(out_v, numpy.ndarray)
+        assert out_v.shape[0] == n_batch, "t %i, k %r, v %r" % (t, k, v)
+        out_v = out_v[0]
+        assert_allclose(v, out_v.tolist(), err_msg="t %i, k %r" % (t, k))
+  print("Seems fine.")
+
+
+def test_rec_layer_move_out_of_loop():
+  from TFNetworkRecLayer import _SubnetworkRecCell
+  from TFUtil import get_global_train_flag_placeholder
+  n_src_dim = 5
+  n_tgt_dim = 7
+  beam_size = 12
+  config = Config()
+  config.update({"debug_print_layer_output_template": True})
+
+  def get_net_dict():
+    return {
+      "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6},
+
+      "lstm0_fw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": 1, "from": ["source_embed"]},
+      "lstm0_bw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": -1, "from": ["source_embed"]},
+
+      "lstm1_fw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": 1, "from": ["lstm0_fw", "lstm0_bw"]},
+      "lstm1_bw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": -1, "from": ["lstm0_fw", "lstm0_bw"]},
+
+      "encoder": {"class": "copy", "from": ["lstm1_fw", "lstm1_bw"]},
+      "enc_ctx": {"class": "linear", "activation": None, "with_bias": True, "from": ["encoder"], "n_out": 10},
+      "fertility": {"class": "linear", "activation": "sigmoid", "with_bias": False, "from": ["encoder"], "n_out": 1},
+
+      "output": {"class": "rec", "from": [], "unit": {
+        'output': {'class': 'choice', 'target': 'classes', 'beam_size': beam_size, 'from': ["output_prob"],
+                   "initial_output": 0},
+        "end": {"class": "compare", "from": ["output"], "value": 0},
+        'target_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'], "n_out": 6,
+                         "initial_output": "apply(0)"},
+        "weight_feedback": {"class": "linear", "activation": None, "with_bias": False, "from": ["prev:accum_att_weights"],
+                            "n_out": 10},
+        "prev_s_state": {"class": "get_last_hidden_state", "from": ["prev:s"], "n_out": 20},
+        "prev_s_transformed": {"class": "linear", "activation": None, "with_bias": False, "from": ["prev_s_state"],
+                               "n_out": 10},
+        "energy_in": {"class": "combine", "kind": "add",
+                      "from": ["base:enc_ctx", "weight_feedback", "prev_s_transformed"], "n_out": 10},
+        "energy_tanh": {"class": "activation", "activation": "tanh", "from": ["energy_in"]},
+        "energy": {"class": "linear", "activation": None, "with_bias": False, "from": ["energy_tanh"], "n_out": 1},
+        "att_weights": {"class": "softmax_over_spatial", "from": ["energy"]},  # (B, enc-T, 1)
+        "accum_att_weights": {"class": "eval", "from": ["prev:accum_att_weights", "att_weights", "base:fertility"],
+                              "eval": "source(0) + source(1) / (2.0 * source(2))",
+                              "out_type": {"dim": 1, "shape": (None, 1)}},
+        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder"},
+        "s": {"class": "rnn_cell", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+              "initial_state": "var", "from": ["target_embed", "att"], "n_out": 10},
+        "readout_in": {"class": "linear", "from": ["prev:s", "prev:target_embed", "att"], "activation": None,
+                       "n_out": 10},
+        "readout": {"class": "reduce_out", "mode": "max", "num_pieces": 2, "from": ["readout_in"]},
+        "output_prob": {"class": "softmax", "from": ["readout"], "target": "classes", "loss": "ce"}
+      }, "target": "classes", "max_seq_len": 20},
+
+      "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance", "target": "classes"}
+    }
+
+  print("Constructing search network.")
+  tf.reset_default_graph()
+  extern_data = ExternData({
+    "data": {"dim": n_src_dim, "sparse": True},
+    "classes": {"dim": n_tgt_dim, "sparse": True, "available_for_inference": False}})
+  search_net = TFNetwork(extern_data=extern_data, search_flag=True, train_flag=False, eval_flag=True, config=config)
+  search_net.construct_from_dict(get_net_dict())
+  search_out_layer = search_net.layers["output"]
+  assert isinstance(search_out_layer, RecLayer)
+  assert isinstance(search_out_layer.cell, _SubnetworkRecCell)
+  assert not search_out_layer.cell.input_layers_moved_out
+  assert not search_out_layer.cell.output_layers_moved_out
+  print("=" * 40)
+
+  def train(net):
+    """
+    :param TFNetwork net:
+    """
+    from GeneratingDataset import StaticDataset
+    from TFDataPipeline import FeedDictDataProvider
+    from EngineBatch import Batch, BatchSetGenerator
+    from Util import dict_joined
+    dataset = StaticDataset(
+      data=[
+        {"data": numpy.array([2, 4, 1, 0]), "classes": numpy.array([3, 6, 0])},
+        {"data": numpy.array([2, 4, 1, 3, 0]), "classes": numpy.array([3, 6, 2, 1, 4, 5, 0])}],
+      output_dim={"data": [n_src_dim, 1], "classes": [n_tgt_dim, 1]})
+    dataset.init_seq_order(epoch=1)
+    batch = Batch()
+    batch.add_sequence_as_slice(seq_idx=0, seq_start_frame=0, length=dataset.get_seq_length(0))
+    batch.add_sequence_as_slice(seq_idx=1, seq_start_frame=0, length=dataset.get_seq_length(1))
+    print("batch:", batch, "num frames:", batch.get_total_num_frames())
+    print("batch dims:", batch.max_num_frames_per_slice * batch.num_slices)
+    batch_generator = iter([batch])
+    batches = BatchSetGenerator(dataset, generator=batch_generator)
+    out_layer = net.layers["output"]
+    assert isinstance(out_layer, RecLayer)
+    assert isinstance(out_layer.cell, _SubnetworkRecCell)
+
+    with tf.Session() as session:
+      net.initialize_params(session)
+      data_provider = FeedDictDataProvider(
+        tf_session=session, extern_data=extern_data,
+        data_keys=["data", "classes"],
+        dataset=dataset, batches=batches)
+      feed_dict = data_provider.get_feed_dict(single_threaded=True)
+      if isinstance(net.train_flag, tf.Tensor):
+        feed_dict[net.train_flag] = True
+      try:
+        out = session.run(
+          dict_joined(
+            {"data:%s:seq_len" % k: v.get_sequence_lengths() for (k, v) in net.extern_data.data.items()},
+            {"layer:%s:out_seq_len" % k: l.output.get_sequence_lengths() for (k, l) in net.layers.items()},
+            {"rec_layer_in:%s:out_seq_len" % k: l.output.get_sequence_lengths()
+             for (k, l) in out_layer.cell.input_layers_net.layers.items()} if out_layer.cell.input_layers_net else {},
+            {"rec_layer_out:%s:out_seq_len" % k: l.output.get_sequence_lengths()
+             for (k, l) in out_layer.cell.output_layers_net.layers.items()} if out_layer.cell.output_layers_net else {},
+          ),
+          feed_dict=feed_dict)
+        pprint(out)
+        out = session.run(
+          {"objective": net.get_objective()},
+          feed_dict=feed_dict)
+        pprint(out)
+      except Exception as exc:
+        print("Exception happened:", str(exc).splitlines()[0])
+        print("Writing TF log file.")
+        writer = tf.summary.FileWriter(".", filename_suffix="test_rec_layer_move_out_of_loop")
+        writer.add_graph(session.graph)
+        writer.close()
+        raise
+
+  print("Constructing train network.")
+  tf.reset_default_graph()
+  extern_data = ExternData({
+    "data": {"dim": n_src_dim, "sparse": True},
+    "classes": {"dim": n_tgt_dim, "sparse": True, "available_for_inference": False}})
+  train_net = TFNetwork(
+    extern_data=extern_data, search_flag=False, train_flag=get_global_train_flag_placeholder(), config=config)
+  assert train_net.eval_flag is True
+  train_net.construct_from_dict(get_net_dict())
+  train_out_layer = train_net.layers["output"]
+  assert isinstance(train_out_layer, RecLayer)
+  assert isinstance(train_out_layer.cell, _SubnetworkRecCell)
+  assert_equal(set(train_out_layer.cell.input_layers_moved_out), {"output", "target_embed"})
+  assert_equal(set(train_out_layer.cell.output_layers_moved_out), {"output_prob", "readout_in", "readout"})
+  train(train_net)
+  print("=" * 40)
+
+  print("Constructing train network with optimize_move_layers_out=False.")
+  config.set("optimize_move_layers_out", False)
+  tf.reset_default_graph()
+  extern_data = ExternData({
+    "data": {"dim": n_src_dim, "sparse": True},
+    "classes": {"dim": n_tgt_dim, "sparse": True, "available_for_inference": False}})
+  train_not_optim_net = TFNetwork(
+    extern_data=extern_data, search_flag=False, train_flag=get_global_train_flag_placeholder(), config=config)
+  assert train_not_optim_net.eval_flag is True
+  train_not_optim_net.construct_from_dict(get_net_dict())
+  train_not_optim_out_layer = train_not_optim_net.layers["output"]
+  assert isinstance(train_not_optim_out_layer, RecLayer)
+  assert isinstance(train_not_optim_out_layer.cell, _SubnetworkRecCell)
+  assert not train_not_optim_out_layer.cell.input_layers_moved_out
+  assert not train_not_optim_out_layer.cell.output_layers_moved_out
+  train(train_not_optim_net)
+
+
+def test_rec_layer_search_select_src():
+  from TFNetworkRecLayer import _SubnetworkRecCell
+  n_src_dim = 5
+  n_tgt_dim = 7
+  beam_size = 12
+  config = Config()
+  config.update({"debug_print_layer_output_template": True, "optimize_move_layers_out": False})
+
+  def get_net_dict():
+    return {
+      "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6},
+
+      "lstm0_fw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": 1, "from": ["source_embed"]},
+      "lstm0_bw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": -1, "from": ["source_embed"]},
+
+      "lstm1_fw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": 1, "from": ["lstm0_fw", "lstm0_bw"]},
+      "lstm1_bw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": -1, "from": ["lstm0_fw", "lstm0_bw"]},
+
+      "encoder": {"class": "copy", "from": ["lstm1_fw", "lstm1_bw"]},
+      "enc_ctx": {"class": "linear", "activation": None, "with_bias": True, "from": ["encoder"], "n_out": 10},
+      "fertility": {"class": "linear", "activation": "sigmoid", "with_bias": False, "from": ["encoder"], "n_out": 1},
+
+      "output": {"class": "rec", "from": [], "unit": {
+        'output': {'class': 'choice', 'target': 'classes', 'beam_size': beam_size, 'from': ["output_prob"],
+                   "initial_output": 0},
+        "end": {"class": "compare", "from": ["output"], "value": 0},
+        'target_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'], "n_out": 6,
+                         "initial_output": "apply(0)"},
+        "weight_feedback": {"class": "linear", "activation": None, "with_bias": False, "from": ["prev:accum_att_weights"],
+                            "n_out": 10},
+        "prev_s_state": {"class": "get_last_hidden_state", "from": ["prev:s"], "n_out": 20},
+        "prev_s_transformed": {"class": "linear", "activation": None, "with_bias": False, "from": ["prev_s_state"],
+                               "n_out": 10},
+        "energy_in": {"class": "combine", "kind": "add",
+                      "from": ["base:enc_ctx", "weight_feedback", "prev_s_transformed"], "n_out": 10},
+        "energy_tanh": {"class": "activation", "activation": "tanh", "from": ["energy_in"]},
+        "energy": {"class": "linear", "activation": None, "with_bias": False, "from": ["energy_tanh"], "n_out": 1},
+        "att_weights": {"class": "softmax_over_spatial", "from": ["energy"]},  # (B, enc-T, 1)
+        "accum_att_weights": {"class": "eval", "from": ["prev:accum_att_weights", "att_weights", "base:fertility"],
+                              "eval": "source(0) + source(1) / (2.0 * source(2))",
+                              "out_type": {"dim": 1, "shape": (None, 1)}},
+        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder"},
+        "s": {"class": "rnn_cell", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+              "initial_state": "var", "from": ["target_embed", "att"], "n_out": 10},
+        "readout_in": {"class": "linear", "from": ["prev:s", "prev:target_embed", "att"], "activation": None,
+                       "n_out": 10},
+        "readout": {"class": "reduce_out", "mode": "max", "num_pieces": 2, "from": ["readout_in"]},
+        "output_prob": {"class": "softmax", "from": ["readout"], "target": "classes", "loss": "ce"}
+      }, "target": "classes", "max_seq_len": 20},
+
+      "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance", "target": "classes"}
+    }
+
+  print("Constructing search network.")
+  tf.reset_default_graph()
+  extern_data = ExternData({
+    "data": {"dim": n_src_dim, "sparse": True},
+    "classes": {"dim": n_tgt_dim, "sparse": True, "available_for_inference": False}})
+  search_net = TFNetwork(extern_data=extern_data, search_flag=True, train_flag=False, eval_flag=True, config=config)
+  search_net.construct_from_dict(get_net_dict())
+  search_out_layer = search_net.layers["output"]
+  assert isinstance(search_out_layer, RecLayer)
+  assert isinstance(search_out_layer.cell, _SubnetworkRecCell)
+  assert not search_out_layer.cell.input_layers_moved_out
+  assert not search_out_layer.cell.output_layers_moved_out
+  print("Layers in the loop:")
+  loop_net = search_out_layer.cell.net
+  for name, layer in sorted(loop_net.layers.items()):
+    print("  %r: %s" % (name, layer))
+    print("    search choices:", layer.get_search_choices())
+    print("    sources:")
+    for src in layer.sources:
+      print("      %s" % src)
+    print("    other deps:")
+    for dep in layer.get_dep_layers():
+      if dep in layer.sources:
+        continue
+      print("      %s" % dep)
+  loop_out_layer = loop_net.layers["output"]
+  assert isinstance(loop_out_layer, ChoiceLayer)
+  assert isinstance(loop_out_layer.search_choices, SearchChoices)
+  all_src_choices = loop_out_layer.search_choices.get_all_src_choices()
+  assert len(all_src_choices) == 2
+  cur_out_choice, prev_out_choice = all_src_choices
+  assert isinstance(cur_out_choice, SearchChoices)
+  assert isinstance(prev_out_choice, SearchChoices)
+  assert cur_out_choice == loop_out_layer.search_choices
+  prev_loop_out_layer = loop_net.layers["prev:output"]
+  assert prev_out_choice == prev_loop_out_layer.search_choices
+  assert RecLayer.is_prev_step_layer(prev_out_choice.owner)
+  assert_equal(loop_net.layers["end"].get_search_choices(), cur_out_choice)
+  assert_equal(loop_net.layers["target_embed"].get_search_choices(), cur_out_choice)
+  assert_equal(loop_net.layers["prev:target_embed"].get_search_choices(), prev_out_choice)
+  assert_equal(loop_net.layers["accum_att_weights"].get_search_choices(), prev_out_choice)
+  assert_equal(loop_net.layers["prev:accum_att_weights"].get_search_choices(), prev_out_choice)  # will be transformed
+  assert_equal(loop_net.layers["weight_feedback"].get_search_choices(), prev_out_choice)
+  assert_equal(loop_net.layers["s"].get_search_choices(), cur_out_choice)
+  assert_equal(loop_net.layers["prev:s"].get_search_choices(), prev_out_choice)
+  assert_equal(loop_net.layers["prev_s_state"].get_search_choices(), prev_out_choice)
+  assert_equal(loop_net.layers["energy_in"].get_search_choices(), prev_out_choice)
+  assert_equal(loop_net.layers["att_weights"].get_search_choices(), prev_out_choice)
+  assert_equal(loop_net.layers["att"].get_search_choices(), prev_out_choice)
+  assert_equal(loop_net.layers["output_prob"].get_search_choices(), prev_out_choice)
 
 
 if __name__ == "__main__":

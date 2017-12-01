@@ -85,6 +85,18 @@ class BackendEngine:
     return cls.get_selected_engine() == cls.TensorFlow
 
 
+def get_model_filename_postfix():
+  """
+  :return: one possible postfix of a file which will be present when the model is saved
+  :rtype: str
+  """
+  assert BackendEngine.selectedEngine is not None
+  if BackendEngine.is_tensorflow_selected():
+    # There will be multiple files but a *.meta file will always be present.
+    return ".meta"
+  return ""
+
+
 def cmd(s):
   """
   :type s: str
@@ -140,12 +152,27 @@ def git_describeHeadVersion(gitdir="."):
   is_dirty = git_isDirty(gitdir=gitdir)
   return "%s--git-%s%s" % (cdate, rev, "-dirty" if is_dirty else "")
 
+_crnn_version_info = None
+
 def describe_crnn_version():
+  """
+  :rtype: str
+  :return: string like "20171017.163840--git-ab2a1da", via :func:`git_describeHeadVersion`
+  """
+  # Note that we cache it to avoid any issues e.g. when we changed the directory afterwards
+  # so that a relative __file__ would be invalid (which we hopefully don't do).
+  # Or to not trigger any pthread_atfork bugs,
+  # e.g. from OpenBlas (https://github.com/tensorflow/tensorflow/issues/13802),
+  # which also hopefully should not happen, but it might.
+  global _crnn_version_info
+  if _crnn_version_info:
+    return _crnn_version_info
   mydir = os.path.dirname(__file__)
   try:
-    return git_describeHeadVersion(gitdir=mydir)
+    _crnn_version_info = git_describeHeadVersion(gitdir=mydir)
   except Exception as e:
-    return "unknown(git exception: %r)" % e
+    _crnn_version_info = "unknown(git exception: %r)" % e
+  return _crnn_version_info
 
 def describe_theano_version():
   import theano
@@ -173,7 +200,10 @@ def describe_theano_version():
   return "%s (%s in %s)" % (version, git_info, tdir)
 
 def describe_tensorflow_version():
-  import tensorflow as tf
+  try:
+    import tensorflow as tf
+  except ImportError:
+    return "<TensorFlow ImportError>"
   try:
     tdir = os.path.dirname(tf.__file__)
   except Exception as e:
@@ -338,6 +368,10 @@ def human_size(n, factor=1000, frac=0.8, prec=1):
   if i == 0:
     return str(n)
   return ("%." + str(prec) + "f") % (float(n) / (factor ** i)) + postfixs[i]
+
+
+def human_bytes_size(n, factor=1024, frac=0.8, prec=1):
+  return human_size(n, factor=factor, frac=frac, prec=prec) + "B"
 
 
 def progress_bar(complete = 1.0, prefix = "", suffix = ""):
@@ -813,7 +847,7 @@ def parse_orthography(orthography, prefix=(), postfix=("[END]",),
   :param str remove_chars: those chars will just be removed at the beginning
   :param bool collapse_spaces: whether multiple spaces and tabs are collapsed into a single space
   :param bool final_strip: whether we strip left and right
-  :param dict[str] kwargs: passed on to parse_orthography_into_symbols()
+  :param **kwargs: passed on to parse_orthography_into_symbols()
   :rtype: list[str]
   """
   for c in remove_chars:
@@ -1321,9 +1355,36 @@ def load_txt_vector(filename):
 
 
 class CollectionReadCheckCovered:
-  def __init__(self, collection):
+  """
+  Wraps around a dict. It keeps track about all the keys which were read from the dict.
+  Via :func:`assert_all_read`, you can check that there are no keys in the dict which were not read.
+  The usage is for config dict options, where the user has specified a range of options,
+  and where in the code there is usually a default for every non-specified option,
+  to check whether all the user-specified options are also used (maybe the user made a typo).
+  """
+
+  def __init__(self, collection, truth_value=None):
+    """
+    :param dict[str] collection:
+    :param None|bool truth_value:
+    """
     self.collection = collection
+    if truth_value is None:
+      truth_value = bool(self.collection)
+    self.truth_value = truth_value
     self.got_items = set()
+
+  @classmethod
+  def from_bool_or_dict(cls, value):
+    """
+    :param bool|dict[str] value:
+    :rtype: CollectionReadCheckCovered
+    """
+    if isinstance(value, bool):
+      return cls(collection={}, truth_value=value)
+    if isinstance(value, dict):
+      return cls(collection=value)
+    raise TypeError("invalid type: %s" % type(value))
 
   def __getitem__(self, item):
     res = self.collection[item]
@@ -1720,7 +1781,8 @@ def read_sge_num_procs(job_id=None):
     if not os.environ.get("SGE_ROOT"):
       return None
     try:
-      job_id = int(os.environ.get("JOB_ID") or 0)
+      # qint.py might overwrite JOB_ID but sets SGE_JOB_ID instead.
+      job_id = int(os.environ.get("SGE_JOB_ID") or os.environ.get("JOB_ID") or 0)
     except ValueError as exc:
       raise Exception("read_sge_num_procs: %r, invalid JOB_ID: %r" % (exc, os.environ.get("JOB_ID")))
     if not job_id:
@@ -1772,3 +1834,487 @@ def camel_case_to_snake_case(name):
   """
   s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
   return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
+
+
+def log_runtime_info_to_dir(path, config):
+  """
+  This will write multiple logging information into the path.
+  It will create returnn.*.log with some meta information,
+  as well as copy the used config file.
+
+  :param str path: directory path
+  :param Config.Config config:
+  """
+  import os
+  import sys
+  import socket
+  import shutil
+  from Config import Config
+  try:
+    content = [
+      "Time: %s" % time.strftime("%Y-%m-%d %H:%M:%S"),
+      "Call: %s" % (sys.argv,),
+      "Path: %s" % (os.getcwd(),),
+      "Returnn: %s" % (describe_crnn_version(),),
+      "TensorFlow: %s" % (describe_tensorflow_version(),),
+      "Config files: %s" % (config.files,),
+    ]
+    if not os.path.exists(path):
+      os.makedirs(path)
+    hostname = socket.gethostname()
+    with open("%s/returnn.%s.%i.%s.log" % (
+      path, hostname, os.getpid(), time.strftime("%Y-%m-%d-%H-%M-%S")), "w") as f:
+      f.write(
+        "Returnn log file:\n" +
+        "".join(["%s\n" % s for s in content]) +
+        "\n")
+    for fn in config.files:
+      base_fn = os.path.basename(fn)
+      target_fn = "%s/%s" % (path, base_fn)
+      if os.path.exists(target_fn):
+        continue
+      shutil.copy(fn, target_fn)
+      config_type = Config.get_config_file_type(fn)
+      comment_prefix = "#"
+      if config_type == "js":
+        comment_prefix = "//"
+      with open(target_fn, "a") as f:
+        f.write(
+          "\n\n\n" +
+          "".join(
+            ["%s Config-file copied for logging purpose by Returnn.\n" % comment_prefix] +
+            ["%s %s\n" % (comment_prefix, s) for s in content]) +
+          "\n")
+  except OSError as exc:
+    if "Disk quota" in str(exc):
+      print("log_runtime_info_to_dir: Error, cannot write: %s" % exc)
+    else:
+      raise
+
+
+class NativeCodeCompiler(object):
+  """
+  Helper class to compile native C/C++ code on-the-fly.
+  """
+
+  CacheDirName = "returnn_native"
+
+  def __init__(self, base_name, code_version, code,
+               is_cpp=True, c_macro_defines=None, ld_flags=None,
+               include_paths=(), include_deps=None,
+               static_version_name=None, should_cleanup_old_all=True, should_cleanup_old_mydir=False,
+               verbose=False):
+    """
+    :param str base_name: base name for the module, e.g. "zero_out"
+    :param int|tuple[int] code_version: check for the cache whether to reuse
+    :param str code: the source code itself
+    :param bool is_cpp: if False, C is assumed
+    :param dict[str,str|int]|None c_macro_defines: e.g. {"TENSORFLOW": 1}
+    :param list[str]|None ld_flags: e.g. ["-lblas"]
+    :param list[str]|tuple[str] include_paths:
+    :param list[str]|None include_deps: if provided and an existing lib file, we will check if any dependency is newer
+      and we need to recompile. we could also do it automatically via -MD but that seems overkill and too slow.
+    :param str|None static_version_name: normally, we use .../base_name/hash as the dir
+      but this would use .../base_name/static_version_name.
+    :param bool should_cleanup_old_all: whether we should look in the cache dir
+      and check all ops if we can delete some old ones which are older than some limit (self._cleanup_time_limit_days)
+    :param bool should_cleanup_old_mydir: whether we should delete our op dir before we compile there.
+    :param bool verbose: be slightly more verbose
+    """
+    self.verbose = verbose
+    self.cache_dir = "%s/%s" % (get_temp_dir(), self.CacheDirName)
+    self._include_paths = list(include_paths)
+    self.base_name = base_name
+    self.code_version = code_version
+    self.code = code
+    self.is_cpp = is_cpp
+    self.c_macro_defines = c_macro_defines or {}
+    self.ld_flags = ld_flags or []
+    self.include_deps = include_deps
+    self.static_version_name = static_version_name
+    self._code_hash = self._make_code_hash()
+    self._info_dict = self._make_info_dict()
+    self._hash = self._make_hash()
+    self._ctypes_lib = None
+    if should_cleanup_old_all:
+      self._cleanup_old()
+    self._should_cleanup_old_mydir = should_cleanup_old_mydir
+    if self.verbose:
+      print("%s: %r" % (self.__class__.__name__, self))
+
+  def __repr__(self):
+    return "<%s %r in %r>" % (self.__class__.__name__, self.base_name, self._mod_path)
+
+  @property
+  def _mod_path(self):
+    return "%s/%s/%s" % (self.cache_dir, self.base_name, self.static_version_name or self._hash[:10])
+
+  @property
+  def _info_filename(self):
+    return "%s/info.py" % (self._mod_path,)
+
+  @property
+  def _so_filename(self):
+    return "%s/%s.so" % (self._mod_path, self.base_name)
+
+  @property
+  def _c_filename(self):
+    if self.is_cpp:
+      return "%s/%s.cc" % (self._mod_path, self.base_name)
+    return "%s/%s.c" % (self._mod_path, self.base_name)
+
+  _cleanup_time_limit_days = 60
+
+  def _cleanup_old(self):
+    mod_path = self._mod_path  # .../base_name/hash
+    base_mod_path = os.path.dirname(mod_path)  # .../base_name
+    my_mod_path_name = os.path.basename(mod_path)
+    if not os.path.exists(base_mod_path):
+      return
+    import time
+    cleanup_time_limit_secs = self._cleanup_time_limit_days * 24 * 60 * 60
+    for p in os.listdir(base_mod_path):
+      if p == my_mod_path_name:
+        continue
+      full_dir_path = "%s/%s" % (base_mod_path, p)
+      if not os.path.isdir(full_dir_path):
+        continue  # ignore for now
+      lock = LockFile(full_dir_path)
+      if lock.is_locked():
+        continue
+      lock.maybe_remove_old_lockfile()
+      info_path = "%s/info.py" % full_dir_path
+      if not os.path.exists(info_path):
+        self._cleanup_old_path(full_dir_path, reason="corrupt dir, missing info.py")
+        continue
+      so_path = "%s/%s.so" % (full_dir_path, self.base_name)
+      if not os.path.exists(so_path):
+        self._cleanup_old_path(full_dir_path, reason="corrupt dir, missing so")
+        continue
+      dt = time.time() - os.path.getmtime(so_path)
+      if dt > cleanup_time_limit_secs:
+        self._cleanup_old_path(full_dir_path, reason="%s old" % hms(dt))
+
+  def _cleanup_old_path(self, p, reason):
+    print("%s delete old, %s: %s" % (self.__class__.__name__, reason, p))
+    assert os.path.exists(p)
+    import shutil
+    try:
+      shutil.rmtree(p)
+    except OSError as exc:
+      print("%s delete exception (%s). Will ignore and try to continue anyway." % (self.__class__.__name__, exc))
+
+  def _load_info(self):
+    filename = self._info_filename
+    if not os.path.exists(filename):
+      return None
+    s = open(filename).read()
+    return eval(s)
+
+  _relevant_info_keys = ("code_version", "code_hash", "c_macro_defines", "ld_flags")
+
+  def _make_info_dict(self):
+    return {
+      "base_name": self.base_name,
+      "include_paths": self._include_paths,
+      "code_version": self.code_version,
+      "code_hash": self._code_hash,
+      "c_macro_defines": self.c_macro_defines,
+      "ld_flags": self.ld_flags,
+    }
+
+  def _make_code_hash(self):
+    import hashlib
+    hash = hashlib.md5()
+    hash.update(self.code.encode("utf8"))
+    return hash.hexdigest()
+
+  def _make_hash(self):
+    import hashlib
+    hash = hashlib.md5()
+    hash.update("{".encode("utf8"))
+    for key in self._relevant_info_keys:
+      hash.update(("%s:{%s}" % (key, self._info_dict[key])).encode("utf8"))
+    hash.update("}".encode("utf8"))
+    return hash.hexdigest()
+
+  def _save_info(self):
+    filename = self._info_filename
+    with open(filename, "w") as f:
+      f.write("%s\n" % betterRepr(self._info_dict))
+
+  def _need_recompile(self):
+    if not os.path.exists(self._so_filename):
+      return True
+    if self.include_deps:
+      so_mtime = os.path.getmtime(self._so_filename)
+      for fn in self.include_deps:
+        if os.path.getmtime(fn) > so_mtime:
+          return True
+    old_info = self._load_info()
+    new_info = self._make_info_dict()
+    if not old_info:
+      return True
+    # The hash already matched but very unlikely, this could be a collision.
+    # Anyway, just do this very cheap check.
+    for key in self._relevant_info_keys:
+      if key not in old_info:
+        return True
+      if old_info[key] != new_info[key]:
+        return True
+    # If no code version is provided, we could also check the code itself now.
+    # But I think this is overkill.
+    return False
+
+  def _maybe_compile(self):
+    """
+    On successful return, self._so_filename should exist and be up-to-date.
+    """
+    if not self._need_recompile():
+      if self.verbose:
+        print("%s: No need to recompile: %s" % (self.__class__.__name__, self._so_filename))
+      # Touch it so that we can see that we used it recently.
+      os.utime(self._info_filename, None)
+      return
+    lock = LockFile(self._mod_path)
+    if self._should_cleanup_old_mydir and not lock.is_locked():
+      if os.path.exists(self._mod_path):
+        self._cleanup_old_path(self._mod_path, reason="need recompile")
+    with lock:
+      self._maybe_compile_inner()
+
+  def _get_compiler_bin(self):
+    if self.is_cpp:
+      return "g++"
+    return "gcc"
+
+  def _transform_compiler_opts(self, opts):
+    """
+    :param list[str] opts:
+    :rtype: list[str]
+    """
+    return opts
+
+  def _maybe_compile_inner(self):
+    # Directory should be created by the locking mechanism.
+    assert os.path.exists(self._mod_path)
+    with open(self._c_filename, "w") as f:
+      f.write(self.code)
+    common_opts = ["-shared", "-O2"]
+    if self.is_cpp:
+      common_opts += ["-std=c++11"]
+    if sys.platform == "darwin":
+      common_opts += ["-undefined", "dynamic_lookup"]
+    for include_path in self._include_paths:
+      common_opts += ["-I", include_path]
+    compiler_opts = ["-fPIC"]
+    common_opts += self._transform_compiler_opts(compiler_opts)
+    common_opts += ["-D_GLIBCXX_USE_CXX11_ABI=0"]  # might be obsolete in the future
+    common_opts += ["-D%s=%s" % item for item in sorted(self.c_macro_defines)]
+    common_opts += ["-g"]
+    opts = common_opts + [self._c_filename, "-o", self._so_filename]
+    opts += self.ld_flags
+    cmd_bin = self._get_compiler_bin()
+    cmd_args = [cmd_bin] + opts
+    from subprocess import Popen, PIPE, STDOUT, CalledProcessError
+    print("%s call: %s" % (self.__class__.__name__, " ".join(cmd_args)))
+    proc = Popen(cmd_args, cwd=self._mod_path, stdout=PIPE, stderr=STDOUT)
+    stdout, stderr = proc.communicate()
+    assert stderr is None  # should only have stdout
+    if proc.returncode != 0:
+      print("%s: %s failed." % (self.__class__.__name__, cmd_bin))
+      print("Original stdout/stderr:")
+      print(stdout.decode("utf8"))
+      raise CalledProcessError(returncode=proc.returncode, cmd=cmd_args)
+    assert os.path.exists(self._so_filename)
+    with open("%s/compile.log" % self._mod_path, "wb") as f:
+      if self.verbose:
+        print("%s: write compile log to: %s" % (self.__class__.__name__, f.name))
+      f.write(("+ %s" % " ".join(cmd_args)).encode("utf8"))
+      f.write(stdout)
+    self._save_info()
+    assert not self._need_recompile()
+
+  def load_lib_ctypes(self):
+    if self._ctypes_lib:
+      return self._ctypes_lib
+    self._maybe_compile()
+    import ctypes
+    self._ctypes_lib = ctypes.cdll.LoadLibrary(self._so_filename)
+    return self._ctypes_lib
+
+  def get_lib_filename(self):
+    self._maybe_compile()
+    return self._so_filename
+
+
+# See :func:`maybe_restart_returnn_with_atfork_patch` below for why you might want to use this.
+_c_code_patch_atfork = """
+#define _GNU_SOURCE
+#include <sched.h>
+#include <signal.h>
+#include <sys/syscall.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+// https://stackoverflow.com/questions/46845496/ld-preload-and-linkage
+// https://stackoverflow.com/questions/46810597/forkexec-without-atfork-handlers
+
+int pthread_atfork(void (*prepare)(void), void (*parent)(void), void (*child)(void)) {
+  printf("Ignoring pthread_atfork call!\\n");
+  fflush(stdout);
+  return 0;
+}
+
+int __register_atfork(void (*prepare)(void), void (*parent)(void), void (*child)(void)) {
+  printf("Ignoring __register_atfork call!\\n");
+  fflush(stdout);
+  return 0;
+}
+
+// Another way to ignore atfork handlers: Override fork.
+pid_t fork(void) {
+  return syscall(SYS_clone, SIGCHLD, 0);
+}
+
+__attribute__((constructor))
+void patch_atfork_init() {
+  setenv("__RETURNN_ATFORK_PATCHED", "1", 1);
+}
+"""
+
+
+def get_patch_atfork_lib():
+  native = NativeCodeCompiler(
+    base_name="patch_atfork", code_version=2, code=_c_code_patch_atfork, is_cpp=False)
+  fn = native.get_lib_filename()
+  return fn
+
+
+def maybe_restart_returnn_with_atfork_patch():
+  """
+  What we want: subprocess.Popen to always work.
+  Problem: It uses fork+exec internally in subprocess_fork_exec, via _posixsubprocess.fork_exec.
+  That is a problem because fork can trigger any atfork handlers registered via pthread_atfork,
+  and those can crash/deadlock in some cases.
+
+  https://github.com/tensorflow/tensorflow/issues/13802
+  https://github.com/xianyi/OpenBLAS/issues/240
+  https://trac.sagemath.org/ticket/22021
+  https://bugs.python.org/issue31814
+  https://stackoverflow.com/questions/46845496/ld-preload-and-linkage
+  https://stackoverflow.com/questions/46810597/forkexec-without-atfork-handlers
+
+  The solution here: Just override pthread_atfork, via LD_PRELOAD.
+  Note that in some cases, this is not enough (see the SO discussion),
+  so we also overwrite fork itself.
+  See also tests/test_fork_exec.py for a demo.
+  """
+  if os.environ.get("__RETURNN_ATFORK_PATCHED") == "1":
+    print("Running with patched atfork.")
+    return
+  if os.environ.get("__RETURNN_TRY_ATFORK_PATCHED") == "1":
+    print("Patching atfork did not work! Will continue anyway.")
+    return
+  lib = get_patch_atfork_lib()
+  env = os.environ.copy()
+  env["LD_PRELOAD"] = lib
+  env["__RETURNN_TRY_ATFORK_PATCHED"] = "1"
+  print("Restarting Returnn with atfork patch...", sys.executable, sys.argv)
+  sys.stdout.flush()
+  os.execvpe(sys.executable, [sys.executable] + sys.argv, env)
+  print("execvpe did not work?")
+
+
+class Stats:
+  """
+  Collects mean and variance.
+
+  https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance
+  """
+
+  def __init__(self):
+    self.mean = 0.0
+    self.mean_sq = 0.0
+    self.var = 0.0
+    self.total_data_len = 0
+    self.num_seqs = 0
+
+  def collect(self, data):
+    """
+    :param numpy.ndarray data: shape (time, dim)
+    """
+    import numpy
+    self.num_seqs += 1
+    new_total_data_len = self.total_data_len + data.shape[0]
+    mean_diff = numpy.mean(data, axis=0) - self.mean
+    m_a = self.var * self.total_data_len
+    m_b = numpy.var(data, axis=0) * data.shape[0]
+    m2 = m_a + m_b + mean_diff ** 2 * self.total_data_len * data.shape[0] / new_total_data_len
+    self.var = m2 / new_total_data_len
+    data_sum = numpy.sum(data, axis=0)
+    delta = data_sum - self.mean * data.shape[0]
+    self.mean += delta / new_total_data_len
+    delta_sq = numpy.sum(data * data, axis=0) - self.mean_sq * data.shape[0]
+    self.mean_sq += delta_sq / new_total_data_len
+    self.total_data_len = new_total_data_len
+
+  def get_mean(self):
+    """
+    :return: mean, shape (dim,)
+    :rtype: numpy.ndarray
+    """
+    assert self.num_seqs > 0
+    return self.mean
+
+  def get_std_dev(self):
+    """
+    :return: std dev, shape (dim,)
+    :rtype: numpy.ndarray
+    """
+    import numpy
+    assert self.num_seqs > 0
+    return numpy.sqrt(self.var)
+    # return numpy.sqrt(self.mean_sq - self.mean * self.mean)
+
+  def dump(self, output_file_prefix=None, stream=None):
+    """
+    :param str|None output_file_prefix: if given, will numpy.savetxt mean|std_dev to disk
+    :param io.TextIOBase stream: sys.stdout by default
+    """
+    if stream is None:
+      stream = sys.stdout
+    import numpy
+    print("Stats:", file=stream)
+    print("%i seqs, %i total frames, %f average frames" % (
+      self.num_seqs, self.total_data_len, self.total_data_len / float(self.num_seqs)), file=stream)
+    print("Mean: %s" % self.get_mean(), file=stream)
+    print("Std dev: %s" % self.get_std_dev(), file=stream)
+    # print("Std dev (naive): %s" % numpy.sqrt(self.mean_sq - self.mean * self.mean), file=stream)
+    if output_file_prefix:
+      print("Write mean/std-dev to %s.(mean|std_dev).txt." % output_file_prefix, file=stream)
+      numpy.savetxt("%s.mean.txt" % output_file_prefix, self.get_mean())
+      numpy.savetxt("%s.std_dev.txt" % output_file_prefix, self.get_std_dev())
+
+
+def is_namedtuple(cls):
+  """
+  :param T cls: tuple, list or namedtuple type
+  :return: whether cls is a namedtuple type
+  :rtype: bool
+  """
+  return issubclass(cls, tuple) and cls is not tuple
+
+
+def make_seq_of_type(cls, seq):
+  """
+  :param T cls: e.g. tuple, list or namedtuple
+  :param list|tuple|T seq:
+  :return: cls(seq) or cls(*seq)
+  :rtype: T|list|tuple
+  """
+  assert issubclass(cls, (list, tuple))
+  if is_namedtuple(cls):
+    return cls(*seq)
+  return cls(seq)

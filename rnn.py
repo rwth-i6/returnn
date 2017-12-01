@@ -1,4 +1,4 @@
-#!/usr/bin/env python2.7
+#!/usr/bin/env python3
 
 """
 Main entry point
@@ -80,10 +80,16 @@ def initConfig(configFilename=None, commandLineOptions=(), extra_updates=None):
   global config
   config = Config()
 
-  config_filename_by_cmd_line = None
-  if commandLineOptions and commandLineOptions[0][:1] not in ["-", "+"]:
-    # Assume that this is a config filename.
-    config_filename_by_cmd_line, commandLineOptions = commandLineOptions[0], commandLineOptions[1:]
+  config_filenames_by_cmd_line = []
+  if commandLineOptions:
+    # Assume that the first argument prefixed with "+" or "-" and all following is not a config file.
+    i = 0
+    for arg in commandLineOptions:
+      if arg[:1] in "-+":
+        break
+      config_filenames_by_cmd_line.append(arg)
+      i += 1
+    commandLineOptions = commandLineOptions[i:]
 
   if extra_updates:
     config.update(extra_updates)
@@ -91,8 +97,8 @@ def initConfig(configFilename=None, commandLineOptions=(), extra_updates=None):
     config.parse_cmd_args(commandLineOptions)
   if configFilename:
     config.load_file(configFilename)
-  if config_filename_by_cmd_line:
-    config.load_file(config_filename_by_cmd_line)
+  for fn in config_filenames_by_cmd_line:
+    config.load_file(fn)
   if extra_updates:
     config.update(extra_updates)
   if commandLineOptions:
@@ -283,15 +289,15 @@ def initEngine(devices):
     raise NotImplementedError
 
 
-def crnnGreeting(configFilename=None, commandLineOptions=None):
-  print("CRNN starting up, version %s, pid %i, cwd %s" % (
+def returnnGreeting(configFilename=None, commandLineOptions=None):
+  print("RETURNN starting up, version %s, pid %i, cwd %s" % (
     describe_crnn_version(), os.getpid(), os.getcwd()), file=log.v3)
   if configFilename:
-    print("CRNN config: %s" % configFilename, file=log.v4)
+    print("RETURNN config: %s" % configFilename, file=log.v4)
     if os.path.islink(configFilename):
-      print("CRNN config is symlink to: %s" % os.readlink(configFilename), file=log.v4)
+      print("RETURNN config is symlink to: %s" % os.readlink(configFilename), file=log.v4)
   if commandLineOptions is not None:
-    print("CRNN command line options: %s" % (commandLineOptions,), file=log.v4)
+    print("RETURNN command line options: %s" % (commandLineOptions,), file=log.v4)
 
 
 def initBackendEngine():
@@ -312,17 +318,20 @@ def initBackendEngine():
 def init(configFilename=None, commandLineOptions=(), config_updates=None, extra_greeting=None):
   """
   :param str|None configFilename:
-  :param tuple[str]|list[str]|None commandLineOptions:
-  :param dict[str]|None config_updates:
+  :param tuple[str]|list[str]|None commandLineOptions: e.g. sys.argv[1:]
+  :param dict[str]|None config_updates: see :func:`initConfig`
   :param str|None extra_greeting:
   """
   initBetterExchook()
   initThreadJoinHack()
   initConfig(configFilename=configFilename, commandLineOptions=commandLineOptions, extra_updates=config_updates)
+  if config.bool("patch_atfork", False):
+    from Util import maybe_restart_returnn_with_atfork_patch
+    maybe_restart_returnn_with_atfork_patch()
   initLog()
   if extra_greeting:
     print(extra_greeting, file=log.v1)
-  crnnGreeting(configFilename=configFilename, commandLineOptions=commandLineOptions)
+  returnnGreeting(configFilename=configFilename, commandLineOptions=commandLineOptions)
   initBackendEngine()
   initFaulthandler()
   if BackendEngine.is_theano_selected():
@@ -381,10 +390,12 @@ def executeMainTask():
     engine.eval_model()
   elif task == 'forward':
     assert eval_data is not None, 'no eval data provided'
-    assert config.has('output_file'), 'no output file provided'
     combine_labels = config.value('combine_labels', '')
-    output_file = config.value('output_file', '')
+    engine.use_search_flag = config.bool("forward_use_search", False)
+    if config.has("epoch"):
+      config.set('load_epoch', config.int('epoch', 0))
     engine.init_network_from_config(config)
+    output_file = config.value('output_file', 'dump-fwd-epoch-%i.hdf' % engine.epoch)
     engine.forward_to_hdf(
       data=eval_data, output_file=output_file, combine_labels=combine_labels,
       batch_size=config.int('forward_batch_size', 0))
@@ -483,6 +494,7 @@ def analyze_data(config):
   total_targets_len = 0
   total_data_len = 0
 
+  # Note: This is not stable!
   seq_idx = 0
   while ds.is_less_than_num_seqs(seq_idx):
     progress_bar_with_time(ds.get_complete_frac(seq_idx))
@@ -499,17 +511,17 @@ def analyze_data(config):
     seq_idx += 1
   log_priors = numpy.log(priors)
   log_priors -= numpy.log(NumbersDict(ds.get_num_timesteps())[target])
-  var = numpy.sqrt(mean_sq - mean * mean)
+  std_dev = numpy.sqrt(mean_sq - mean * mean)
   print("Finished. %i total target frames, %i total data frames" % (total_targets_len, total_data_len), file=log.v1)
   priors_fn = stat_prefix + ".log_priors.txt"
   mean_fn = stat_prefix + ".mean.txt"
-  var_fn = stat_prefix + ".var.txt"
+  std_dev_fn = stat_prefix + ".std_dev.txt"
   print("Dump priors to", priors_fn, file=log.v1)
   numpy.savetxt(priors_fn, log_priors)
   print("Dump mean to", mean_fn, file=log.v1)
   numpy.savetxt(mean_fn, mean)
-  print("Dump var to", var_fn, file=log.v1)
-  numpy.savetxt(var_fn, var)
+  print("Dump std dev to", std_dev_fn, file=log.v1)
+  numpy.savetxt(std_dev_fn, std_dev)
   print("Done.", file=log.v1)
 
 
