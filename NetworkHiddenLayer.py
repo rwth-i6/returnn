@@ -2899,6 +2899,7 @@ class CAlignmentLayer(ForwardLayer):
   layer_class = "calign"
 
   def __init__(self, direction='inv', tdps=None, nstates=1, nstep=1, min_skip=1, max_skip=30, search='align', train_skips=False, train_emission=False, clip_emission=1.0, train_attention=False,
+               compute_priors=False,
                base=None, coverage=0, output_z=False, reduce_output=True, blank=None, nil = None, focus='last', mode='viterbi', **kwargs):
     assert direction == 'inv'
     target = kwargs['target'] if 'target' in kwargs else 'classes'
@@ -3026,12 +3027,14 @@ class CAlignmentLayer(ForwardLayer):
     if train_skips:
       y_out = T.dot(self.attention, T.arange(x_in.shape[0],dtype='float32')) # NB
       y_out = T.concatenate([T.zeros_like(y_out[:1]), y_out],axis=0) # (N+1)B
-      y_out = T.cast(T.round(y_out[1:] - y_out[:-1]) * T.cast(self.index,'float32'),'int32') # NB
+      y_out = T.cast(T.round(y_out[1:] - y_out[:-1]) * T.cast(rindex,'float32'),'int32') # NB
+      #y_out = print_to_file('out',y_out)
 
       W_skip = self.add_param(self.create_forward_weights(n_out, max_skip, name="W_skip_%s" % self.name))
       b_skip = self.add_param(self.create_bias(max_skip, name='b_skip_%s' % self.name))
       z_out = T.dot(x_out, W_skip) + b_skip
       self.q_in = T.nnet.softmax(self.z.reshape((self.z.shape[0] * self.z.shape[1], self.z.shape[2]))).reshape(self.z.shape)
+
     elif train_emission:
       idx = (self.sources[0].index.flatten() > 0).nonzero()
       norm = T.sum(self.network.j[target],dtype='float32') / T.sum(self.sources[0].index,dtype='float32')
@@ -3048,6 +3051,8 @@ class CAlignmentLayer(ForwardLayer):
       z_out = q_in.reshape((q_in.shape[0] * q_in.shape[1], q_in.shape[2])) # (TB)2
       self.cost_val = norm * -T.sum(y_out[idx] * T.log(z_out[idx]))
       self.error_val = norm * T.sum(T.ge(T.sqr(z_out[idx,1]-y_out[idx,1]),numpy.float32(1./self.n_cls)))
+      self.p_y_given_x = q_in[:,:,1:]
+      self.attrs['n_cls'] = 1
       return
     elif train_attention:
       idx = (self.sources[0].index.flatten() > 0).nonzero()
@@ -3064,6 +3069,15 @@ class CAlignmentLayer(ForwardLayer):
     nll, _ = T.nnet.crossentropy_softmax_1hot(x=z_out[idx], y_idx=y_out[idx])
     self.cost_val = norm * T.sum(nll)
     self.error_val = norm * T.sum(T.neq(T.argmax(z_out[idx], axis=1), y_out[idx]))
+
+    if compute_priors:
+      self.set_attr('compute_priors', compute_priors)
+      custom = T.mean(theano.tensor.extra_ops.to_one_hot(y_out[idx], self.n_cls, 'float32'), axis=0)
+      custom_init = numpy.ones((self.n_cls,), 'float32') / numpy.float32(self.n_cls)
+      self.priors = self.add_param(theano.shared(custom_init, 'priors'), 'priors',
+                                   custom_update=custom,
+                                   custom_update_normalized=True,
+                                   custom_update_exp_average=False)
 
   def cost(self):
     return self.cost_val * self.cost_scale_val, None
