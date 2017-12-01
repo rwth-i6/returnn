@@ -2177,17 +2177,18 @@ class ReduceLayer(_ConcatInputLayer):
     :param int enforce_batch_dim_axis: will swap the batch-dim-axis of the input with the given axis.
       e.g. 0: will convert the input into batch-major format if not already like that.
     """
+    super(ReduceLayer, self).__init__(**kwargs)
     if axis is not None:
       print("reduce layer %r: option 'axis' is deprecated, use 'axes' instead" % kwargs["name"], file=log.v4)
       assert axes is None, "don't provide both 'axes' and 'axis', layer %r" % kwargs["name"]
       axes = axis
     if enforce_batch_dim_axis is None and self.need_enforce_batch_dim_axis(axes):
       enforce_batch_dim_axis = 0
-    assert "n_out" not in kwargs
+    if "n_out" in kwargs:
+      assert kwargs["n_out"] == self.output.dim
     assert "out_type" not in kwargs
     mode = mode.lower()
     assert mode in ["max", "sum", "avg", "mean"]
-    super(ReduceLayer, self).__init__(**kwargs)
     assert not self.input_data.sparse
     x = self.input_data
     if enforce_batch_dim_axis is not None and x.batch_dim_axis != enforce_batch_dim_axis:
