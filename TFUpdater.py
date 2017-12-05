@@ -80,18 +80,27 @@ class Updater(object):
 
   """
 
-  def __init__(self, config, tf_session, network):
+  def __init__(self, config, tf_session, network, initial_learning_rate=1.):
     """
     :param Config.Config config:
     :param tf.Session tf_session:
     :param TFNetwork network:
+    :param float initial_learning_rate:
     """
     self.config = config
     self.tf_session = tf_session
     self.learning_rate_var = tf.Variable(name="learning_rate", initial_value=0.0, trainable=False, dtype="float32")
     self.trainable_vars = []  # type: list[tf.Variable]
     self.network = network
-    self.loss = network.get_objective()
+    self.use_locking = self.config.bool("optimizer_use_locking", False)
+    self.initial_learning_rate = initial_learning_rate
+    if self.config.bool("decouple_constraints", False):
+      # https://arxiv.org/abs/1711.05101, Fixing Weight Decay Regularization in Adam
+      self.loss = network.get_total_loss()
+      self.constraints = network.get_total_constraints()
+    else:
+      self.loss = network.get_objective()
+      self.constraints = None
     self.optimizer = None  # type: Optimizer
     self.optim_op = None  # type: tf.Operation
     self.optim_meta_losses = None  # type: dict[str,tf.Tensor]
@@ -120,10 +129,30 @@ class Updater(object):
     """
     self.network.get_var_assigner(self.learning_rate_var).assign(value, session=self.tf_session)
 
-  def create_optimizer(self):
+  def get_current_step_learning_rate(self):
+    """
+    :rtype: tf.Tensor
+    """
     lr = self.learning_rate_var
+    if self.config.typed_dict.get("dynamic_learning_rate"):
+      # To implement any kind of cyclic learning rate during the epoch. E.g.: https://arxiv.org/abs/1608.03983
+      with tf.name_scope("dynamic_learning_rate"):
+        from Util import CollectionReadCheckCovered
+        opts = CollectionReadCheckCovered(self.config.typed_dict["dynamic_learning_rate"])
+        # Currently all intervals of same step size.
+        interval_steps = tf.constant(opts["interval"], name="interval", dtype=self.network.global_train_step.dtype)
+        step_in_interval = tf.mod(self.network.global_train_step, interval_steps, name="step_in_interval")
+        factor = tf.pow(
+          tf.constant(opts["decay"], name="decay", dtype=tf.float32),
+          tf.to_float(step_in_interval, name="step_in_interval_float"), name="factor")
+        lr *= factor
+        opts.assert_all_read()
+    return lr
+
+  def create_optimizer(self):
+    lr = self.get_current_step_learning_rate()
     epsilon = self.config.float("optimizer_epsilon", 1e-16)
-    use_locking = self.config.bool("optimizer_use_locking", False)
+    use_locking = self.use_locking
     momentum = self.config.float("momentum", 0.0)
     optim_config = self.config.typed_value("optimizer")
     if optim_config:
@@ -199,6 +228,8 @@ class Updater(object):
     aggregation_method = tf.AggregationMethod.EXPERIMENTAL_ACCUMULATE_N
     grad_noise = self.config.float("gradient_noise", 0.0)
     grad_clip = self.config.float("gradient_clip", 0.0)
+    grad_clip_norm = self.config.float("gradient_clip_norm", 0.0)
+    grad_clip_avg_norm = self.config.float("gradient_clip_avg_norm", 0.0)
     grad_clip_global_norm = self.config.float("gradient_clip_global_norm", 0.0)
     # E.g. https://github.com/openai/baselines/blob/master/baselines/deepq/simple.py: grad_norm_clipping=10 -> tf.clip_by_norm
 
@@ -226,6 +257,12 @@ class Updater(object):
     if grad_clip:
       assert grad_clip > 0
       grads_and_vars = [(tf.clip_by_value(grad, -grad_clip, grad_clip), var) for grad, var in grads_and_vars]
+    if grad_clip_norm:
+      assert grad_clip_norm > 0
+      grads_and_vars = [(tf.clip_by_norm(grad, grad_clip_norm), var) for grad, var in grads_and_vars]
+    if grad_clip_avg_norm:
+      assert grad_clip_avg_norm > 0
+      grads_and_vars = [(tf.clip_by_average_norm(grad, grad_clip_avg_norm), var) for grad, var in grads_and_vars]
     if grad_clip_global_norm:
       assert grad_clip_global_norm > 0
       grads_clipped, _ = tf.clip_by_global_norm([grad for (grad, _) in grads_and_vars], grad_clip_global_norm)
@@ -241,7 +278,7 @@ class Updater(object):
     # Keep track of all current available vars.
     # The optimizer could add some, even some which are not so-called "slot-vars",
     # and we want to keep track about them.
-    all_vars = tf.global_variables()  # type: list[tf.Variable]
+    all_prev_existing_vars = tf.global_variables()  # type: list[tf.Variable]
 
     if not self.optimizer:
       self.create_optimizer()
@@ -275,6 +312,16 @@ class Updater(object):
           updates.append(custom_update.update_var(param))
         self.optim_op = tf.group(*updates)
 
+    if self.constraints is not None:
+      with tf.variable_scope("optimize_constraints"):
+        with tf.variable_scope("factor"):
+          factor = (self.get_current_step_learning_rate() / float(self.initial_learning_rate))
+          factor *= self.config.float("decouple_constraints_factor", 0.025)
+        sgd_optimizer = tf.train.GradientDescentOptimizer(
+          learning_rate=factor, use_locking=self.use_locking)
+        with tf.control_dependencies([self.optim_op]):
+          self.optim_op = sgd_optimizer.minimize(self.constraints, var_list=self.trainable_vars)
+
     print("Initialize optimizer with slots %s." % self.optimizer.get_slot_names(), file=log.v3)
     slot_vars = []
     for slot_name in self.optimizer.get_slot_names():
@@ -293,7 +340,7 @@ class Updater(object):
     # which do not correspond to trainable vars, thus we did not get them as slot vars above.
     other_new_vars = []
     for v in tf.global_variables():
-      if v in all_vars:
+      if v in all_prev_existing_vars:
         continue
       if v in self.optimizer_vars:
         continue

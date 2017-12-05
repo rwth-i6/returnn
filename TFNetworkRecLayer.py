@@ -100,9 +100,13 @@ class RecLayer(_ConcatInputLayer):
     if bias_init is not None:
       self._bias_initializer = get_initializer(
         bias_init, seed=self.network.random.randint(2**31), eval_local_ns={"layer": self})
-    with tf.variable_scope(
-          "rec",
-          initializer=xavier_initializer(seed=self.network.random.randint(2**31))) as scope:
+    if self._rec_weights_initializer:
+      default_var_initializer = self._rec_weights_initializer
+    elif self._fwd_weights_initializer:
+      default_var_initializer = self._fwd_weights_initializer
+    else:
+      default_var_initializer = xavier_initializer(seed=self.network.random.randint(2**31))
+    with tf.variable_scope("rec", initializer=default_var_initializer) as scope:
       assert isinstance(scope, tf.VariableScope)
       self._rec_scope = scope
       scope_name_prefix = scope.name + "/"  # e.g. "layer1/rec/"

@@ -159,6 +159,20 @@ def test_get_initializer_glorot_normal_with_scale():
   assert_equal(session.run(v).shape, shape)  # returns some random matrix
 
 
+def test_get_initializer_uniform():
+  shape = (2, 3)
+  initializer = get_initializer("RandomUniform(-0.01, 0.01)")
+  v = initializer(shape)
+  assert_equal(session.run(v).shape, shape)  # returns some random matrix
+
+
+def test_get_initializer_gauss():
+  shape = (2, 3)
+  initializer = get_initializer("RandomNormal(0.0, 0.01)")
+  v = initializer(shape)
+  assert_equal(session.run(v).shape, shape)  # returns some random matrix
+
+
 def test_close_event_writer_thread():
   import threading
   import tempfile

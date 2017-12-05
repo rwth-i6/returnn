@@ -24,10 +24,12 @@ if PY3:
   import builtins
   unicode = str
   long = int
+  input = builtins.input
 else:
   import __builtin__ as builtins
   unicode = builtins.unicode
   long = builtins.long
+  input = builtins.raw_input
 
 
 class NotSpecified(object):
@@ -337,6 +339,25 @@ def terminal_size(): # this will probably work on linux only
   if not cr:
     cr = (env.get('LINES', 25), env.get('COLUMNS', 80))
   return int(cr[1]), int(cr[0])
+
+
+def confirm(txt, exit_on_false=False):
+  """
+  :param str txt: e.g. "Delete everything?"
+  :param bool exit_on_false: if True, will call sys.exit(1) if not confirmed
+  :rtype: bool
+  """
+  while True:
+    r = input("%s Confirm? [yes/no]" % txt)
+    if not r:
+      continue
+    if r in ["y", "yes"]:
+      return True
+    if r in ["n", "no"]:
+      if exit_on_false:
+        sys.exit(1)
+      return False
+    print("Invalid response %r." % r)
 
 
 def hms(s):

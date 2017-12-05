@@ -1568,6 +1568,15 @@ def get_initializer(s, seed=None, eval_local_ns=None):
   import numpy
   import math
   from tensorflow.python.ops import init_ops
+
+  def error():
+    print("Error for initializer %r." % s)
+    print("Possible initializers:")
+    from inspect import isclass
+    for key, value in sorted(vars(init_ops).items()):
+      if isclass(value) and issubclass(value, init_ops.Initializer):
+        print("  %s" % key)
+
   ns = dict(globals())
   ns.update(vars(tf))
   ns.update(vars(init_ops))
@@ -1579,29 +1588,33 @@ def get_initializer(s, seed=None, eval_local_ns=None):
       if k_short not in ns:
         ns[k_short] = ns[k]
   f = None
-  if isinstance(s, str):
-    if "(" in s:
-      f = eval(s, ns, eval_local_ns)
-    elif s + "_initializer" in ns:
-      f = ns[s + "_initializer"]()
-    elif s in ns:
-      f = ns[s]()
-  elif isinstance(s, dict):
-    s = s.copy()
-    class_name = s.pop("class")
-    class_ = ns[class_name]
-    assert issubclass(class_, init_ops.Initializer)
-    f = class_.from_config(s)
-  else:
-    raise ValueError("invalid get_initializer argument, expected string or dict, got: %r" % s)
-  if isinstance(f, (float, int)):
-    return tf.constant_initializer(f, dtype=tf.float32)
-  if not f:
-    raise Exception("invalid initializer: %r" % s)
-  if seed is not None:
-    assert isinstance(f, init_ops.Initializer)
-    if hasattr(f, "seed"):
-      f.seed = seed
+  try:
+    if isinstance(s, str):
+      if "(" in s:
+        f = eval(s, ns, eval_local_ns)
+      elif s + "_initializer" in ns:
+        f = ns[s + "_initializer"]()
+      elif s in ns:
+        f = ns[s]()
+    elif isinstance(s, dict):
+      s = s.copy()
+      class_name = s.pop("class")
+      class_ = ns[class_name]
+      assert issubclass(class_, init_ops.Initializer)
+      f = class_.from_config(s)
+    else:
+      raise ValueError("invalid get_initializer argument, expected string or dict, got: %r" % s)
+    if isinstance(f, (float, int)):
+      return tf.constant_initializer(f, dtype=tf.float32)
+    if not f:
+      raise Exception("invalid initializer: %r" % s)
+    if seed is not None:
+      assert isinstance(f, init_ops.Initializer)
+      if hasattr(f, "seed"):
+        f.seed = seed
+  except Exception:
+    error()
+    raise
   return f
 
 
