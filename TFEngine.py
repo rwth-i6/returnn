@@ -951,7 +951,9 @@ class Engine(object):
     else:
       lr_control = loadLearningRateControlFromConfig(self.config)
     epochs = sorted(existing_models.keys())
-    assert epochs
+    if not epochs:
+      print("Cannot cleanup models, no models found.", file=log.v2)
+      return
     keep_last_n = opts.get("keep_last_n", 2)
     keep_best_n = opts.get("keep_best_n", 4)
     assert keep_last_n >= 1 and keep_best_n >= 0

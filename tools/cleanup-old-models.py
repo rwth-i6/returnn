@@ -30,7 +30,8 @@ def main():
       configFilename=args.config or None,
       config_updates={
         "use_tensorflow": True,
-        "need_data": False})
+        "need_data": False,
+        "device": "cpu"})
     from rnn import engine, config
     if args.model:
       config.set("model", args.model)
