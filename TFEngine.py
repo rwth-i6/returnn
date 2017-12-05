@@ -572,6 +572,27 @@ class Engine(object):
     print("Save model under %s" % (filename,), file=log.v4)
     self.network.save_params_to_file(filename, session=self.tf_session)
 
+  @staticmethod
+  def delete_model(filename):
+    """
+    :param str filename:
+    :return: accumulated file-size in bytes of deleted files
+    :rtype: int
+    """
+    # This assumes TensorFlow models here.
+    # They consists of multiple files with the extensions ".index", ".meta" and ".data*".
+    from glob import glob
+    count_bytes = 0
+    assert os.path.exists(filename + ".index")
+    for fn in glob(filename + "*"):
+      fn_ext = os.path.splitext(fn)[1]
+      if fn_ext not in [".index", ".meta"] and not fn_ext.startswith(".data"):
+        continue
+      count_bytes += os.stat(fn).st_size
+      os.remove(fn)
+    assert count_bytes > 0
+    return count_bytes
+
   def init_train_from_config(self, config=None, train_data=None, dev_data=None, eval_data=None):
     """
     :param Config.Config|None config:
@@ -871,6 +892,9 @@ class Engine(object):
     print(self.get_epoch_str(), "score:", self.format_score(trainer.score), "elapsed:", hms(trainer.elapsed), end=" ", file=log.v1)
     self.eval_model()
 
+    if self.config.bool_or_other("cleanup_old_models", None):
+      self.cleanup_old_models()
+
   def format_score(self, score):
     if not score:
       return "None"
@@ -913,6 +937,89 @@ class Engine(object):
           # This can happen when we have a previous model but did not test it yet.
           print("Last epoch model not yet evaluated on dev. Doing that now.", file=log.v4)
           self.eval_model()
+
+  def cleanup_old_models(self):
+    from Util import CollectionReadCheckCovered, human_bytes_size
+    from itertools import count
+    opts = CollectionReadCheckCovered(self.config.get_of_type("cleanup_old_models", dict, {}))
+    existing_models = TheanoEngine.get_existing_models(config=self.config)
+    if hasattr(self, "learning_rate_control"):
+      lr_control = self.learning_rate_control
+    else:
+      lr_control = loadLearningRateControlFromConfig(self.config)
+    epochs = sorted(existing_models.keys())
+    assert epochs
+    keep_last_n = opts.get("keep_last_n", 2)
+    keep_best_n = opts.get("keep_best_n", 4)
+    assert keep_last_n >= 1 and keep_best_n >= 0
+    if max(keep_last_n, keep_best_n) >= len(epochs):
+      print(
+        ("Only %i epochs stored so far and keeping last %i epochs and best %i epochs,"
+         " thus not cleaning up any epochs yet.") % (
+          len(epochs), keep_last_n, keep_best_n), file=log.v2)
+      return
+    keep_epochs = set()  # type: set[int]
+    default_keep_pattern = set()
+    if epochs[-1] <= 10:
+      keep_every = 4
+      keep_doubles_of = 5
+    elif epochs[-1] <= 50:
+      keep_every = 20
+      keep_doubles_of = 5
+    elif epochs[-1] <= 100:
+      keep_every = 40
+      keep_doubles_of = 10
+    else:
+      keep_every = 80
+      keep_doubles_of = 20
+    for i in count(1):
+      n = keep_every * i
+      if n > epochs[-1]:
+        break
+      default_keep_pattern.add(n)
+    for i in count():
+      n = keep_doubles_of * (2 ** i)
+      if n > epochs[-1]:
+        break
+      default_keep_pattern.add(n)
+    keep_epochs.update(opts.get("keep", default_keep_pattern))
+    keep_epochs.update(epochs[-keep_last_n:])
+    score_keys = sorted(lr_control.epochData[epochs[0]].error.keys())
+    assert score_keys
+    score_values = {key: [] for key in score_keys}
+    for epoch in epochs:
+      epoch_scores = lr_control.epochData[epoch].error
+      score_values = {key: score_values[key] + [epoch_scores[key]] for key in score_keys}
+    for key in list(score_keys):
+      scores = score_values[key]
+      if min(scores) == max(scores):
+        print("Ignoring score key %r because all epochs have the same value %r." % (key, scores[0]), file=log.v3)
+        score_keys.remove(key)
+        score_values.pop(key)
+    for key in score_keys:
+      scores = sorted([(lr_control.epochData[epoch].error[key], epoch) for epoch in epochs])
+      scores = scores[:keep_best_n]
+      keep_epochs.update([v[1] for v in scores])
+    keep_epochs.intersection_update(epochs)
+    if len(keep_epochs) == len(epochs):
+      print("%i epochs stored so far and keeping all." % len(epochs), file=log.v2)
+      return
+    remove_epochs = sorted(set(epochs).difference(keep_epochs))
+    assert remove_epochs
+    if len(epochs) > 6:
+      epoch_summary = "[%s, ..., %s]" % (", ".join(map(str, epochs[:3])), ", ".join(map(str, epochs[-3:])))
+    else:
+      epoch_summary = str(epochs)
+    print("We have stored models for epochs %s and keep epochs %s." % (epoch_summary, sorted(keep_epochs)), file=log.v3)
+    print("We will delete the models of epochs %s." % (remove_epochs,), file=log.v3)
+    opts.assert_all_read()
+    if self.config.bool("dry_run", False):
+      print("Dry-run, will not delete models.", file=log.v2)
+      return
+    count_bytes = 0
+    for epoch in remove_epochs:
+      count_bytes += self.delete_model(existing_models[epoch])
+    print("Deleted %s." % human_bytes_size(count_bytes), file=log.v2)
 
   def get_all_merged_summaries(self):
     """

@@ -370,12 +370,13 @@ def needData():
   if config.has("need_data") and not config.bool("need_data", True):
     return False
   task = config.value('task', 'train')
-  if task in ['theano_graph', "nop"]:
+  if task in ['theano_graph', "nop", "cleanup_old_models"]:
     return False
   return True
 
 
 def executeMainTask():
+  from Util import hms_fraction
   start_time = time.time()
   task = config.value('task', 'train')
   if task == 'train':
@@ -445,6 +446,8 @@ def executeMainTask():
     label_file = config.value('label_file', '')
     engine.init_network_from_config(config)
     engine.classify(engine.devices[0], eval_data, label_file)
+  elif task == "cleanup_old_models":
+    engine.cleanup_old_models()
   elif task == "daemon":
     engine.init_network_from_config(config)
     engine.daemon(config)
@@ -468,7 +471,7 @@ def executeMainTask():
   else:
     assert False, "unknown task: %s" % task
 
-  print(("elapsed: %f" % (time.time() - start_time)), file=log.v3)
+  print(("elapsed: %s" % hms_fraction(time.time() - start_time)), file=log.v3)
 
 
 def analyze_data(config):

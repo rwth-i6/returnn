@@ -146,6 +146,7 @@ class Updater(object):
           tf.constant(opts["decay"], name="decay", dtype=tf.float32),
           tf.to_float(step_in_interval, name="step_in_interval_float"), name="factor")
         lr *= factor
+        opts.assert_all_read()
     return lr
 
   def create_optimizer(self):
