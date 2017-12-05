@@ -548,6 +548,7 @@ class TrainTaskThread(TaskThread):
 
   def save_ctc_priors(self, filename, epoch_str):
     assert self.ctc_priors is not None
+    return # this should be done using compute_priors
     with open(filename, 'a') as f:
       print(epoch_str, file=f)
       numpy.savetxt(f, self.ctc_priors, newline=" ")

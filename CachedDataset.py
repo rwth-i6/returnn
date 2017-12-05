@@ -468,7 +468,7 @@ class CachedDataset(Dataset):
     return self.targets[target][seq_start:seq_start + seq_len]
 
   def get_target_list(self):
-    return self.targets.keys()
+    return list(self.targets.keys())
 
   def get_ctc_targets(self, sorted_seq_idx):
     ids = self._seq_index[self._index_map[sorted_seq_idx]]
