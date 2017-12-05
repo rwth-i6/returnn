@@ -228,6 +228,8 @@ class Updater(object):
     aggregation_method = tf.AggregationMethod.EXPERIMENTAL_ACCUMULATE_N
     grad_noise = self.config.float("gradient_noise", 0.0)
     grad_clip = self.config.float("gradient_clip", 0.0)
+    grad_clip_norm = self.config.float("gradient_clip_norm", 0.0)
+    grad_clip_avg_norm = self.config.float("gradient_clip_avg_norm", 0.0)
     grad_clip_global_norm = self.config.float("gradient_clip_global_norm", 0.0)
     # E.g. https://github.com/openai/baselines/blob/master/baselines/deepq/simple.py: grad_norm_clipping=10 -> tf.clip_by_norm
 
@@ -255,6 +257,12 @@ class Updater(object):
     if grad_clip:
       assert grad_clip > 0
       grads_and_vars = [(tf.clip_by_value(grad, -grad_clip, grad_clip), var) for grad, var in grads_and_vars]
+    if grad_clip_norm:
+      assert grad_clip_norm > 0
+      grads_and_vars = [(tf.clip_by_norm(grad, grad_clip_norm), var) for grad, var in grads_and_vars]
+    if grad_clip_avg_norm:
+      assert grad_clip_avg_norm > 0
+      grads_and_vars = [(tf.clip_by_average_norm(grad, grad_clip_avg_norm), var) for grad, var in grads_and_vars]
     if grad_clip_global_norm:
       assert grad_clip_global_norm > 0
       grads_clipped, _ = tf.clip_by_global_norm([grad for (grad, _) in grads_and_vars], grad_clip_global_norm)
