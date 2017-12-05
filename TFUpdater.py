@@ -80,18 +80,27 @@ class Updater(object):
 
   """
 
-  def __init__(self, config, tf_session, network):
+  def __init__(self, config, tf_session, network, initial_learning_rate=1.):
     """
     :param Config.Config config:
     :param tf.Session tf_session:
     :param TFNetwork network:
+    :param float initial_learning_rate:
     """
     self.config = config
     self.tf_session = tf_session
     self.learning_rate_var = tf.Variable(name="learning_rate", initial_value=0.0, trainable=False, dtype="float32")
     self.trainable_vars = []  # type: list[tf.Variable]
     self.network = network
-    self.loss = network.get_objective()
+    self.use_locking = self.config.bool("optimizer_use_locking", False)
+    self.initial_learning_rate = initial_learning_rate
+    if self.config.bool("decouple_constraints", False):
+      # https://arxiv.org/abs/1711.05101, Fixing Weight Decay Regularization in Adam
+      self.loss = network.get_total_loss()
+      self.constraints = network.get_total_constraints()
+    else:
+      self.loss = network.get_objective()
+      self.constraints = None
     self.optimizer = None  # type: Optimizer
     self.optim_op = None  # type: tf.Operation
     self.optim_meta_losses = None  # type: dict[str,tf.Tensor]
@@ -123,7 +132,7 @@ class Updater(object):
   def create_optimizer(self):
     lr = self.learning_rate_var
     epsilon = self.config.float("optimizer_epsilon", 1e-16)
-    use_locking = self.config.bool("optimizer_use_locking", False)
+    use_locking = self.use_locking
     momentum = self.config.float("momentum", 0.0)
     optim_config = self.config.typed_value("optimizer")
     if optim_config:
@@ -274,6 +283,16 @@ class Updater(object):
           assert isinstance(custom_update, CustomUpdate)
           updates.append(custom_update.update_var(param))
         self.optim_op = tf.group(*updates)
+
+    if self.constraints is not None:
+      with tf.variable_scope("optimize_constraints"):
+        with tf.variable_scope("factor"):
+          factor = (self.learning_rate_var / float(self.initial_learning_rate))
+          factor *= self.config.float("decouple_constraints_factor", 0.025)
+        sgd_optimizer = tf.train.GradientDescentOptimizer(
+          learning_rate=factor, use_locking=self.use_locking)
+        with tf.control_dependencies([self.optim_op]):
+          self.optim_op = sgd_optimizer.minimize(self.constraints, var_list=self.trainable_vars)
 
     print("Initialize optimizer with slots %s." % self.optimizer.get_slot_names(), file=log.v3)
     slot_vars = []

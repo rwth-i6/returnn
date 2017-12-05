@@ -679,7 +679,9 @@ class Engine(object):
     self.network = network
     if self.train_data:
       # Need to create new Updater because it has the learning_rate var which must be in the current graph.
-      self.updater = Updater(config=self.config, tf_session=self.tf_session, network=network)
+      self.updater = Updater(
+        config=self.config, tf_session=self.tf_session, network=network,
+        initial_learning_rate=self.initial_learning_rate)
       self.updater.set_trainable_vars(network.get_trainable_params())
     network.print_network_info()
 
