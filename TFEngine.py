@@ -938,8 +938,11 @@ class Engine(object):
           print("Last epoch model not yet evaluated on dev. Doing that now.", file=log.v4)
           self.eval_model()
 
-  def cleanup_old_models(self):
-    from Util import CollectionReadCheckCovered, human_bytes_size
+  def cleanup_old_models(self, ask_for_confirmation=False):
+    """
+    :param bool ask_for_confirmation: if True, will ask the user interactively to confirm
+    """
+    from Util import CollectionReadCheckCovered, human_bytes_size, confirm
     from itertools import count
     opts = CollectionReadCheckCovered(self.config.get_of_type("cleanup_old_models", dict, {}))
     existing_models = TheanoEngine.get_existing_models(config=self.config)
@@ -1016,6 +1019,8 @@ class Engine(object):
     if self.config.bool("dry_run", False):
       print("Dry-run, will not delete models.", file=log.v2)
       return
+    if ask_for_confirmation:
+      confirm("Delete those models?", exit_on_false=True)
     count_bytes = 0
     for epoch in remove_epochs:
       count_bytes += self.delete_model(existing_models[epoch])

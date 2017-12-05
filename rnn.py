@@ -447,7 +447,7 @@ def executeMainTask():
     engine.init_network_from_config(config)
     engine.classify(engine.devices[0], eval_data, label_file)
   elif task == "cleanup_old_models":
-    engine.cleanup_old_models()
+    engine.cleanup_old_models(ask_for_confirmation=True)
   elif task == "daemon":
     engine.init_network_from_config(config)
     engine.daemon(config)
