@@ -129,8 +129,27 @@ class Updater(object):
     """
     self.network.get_var_assigner(self.learning_rate_var).assign(value, session=self.tf_session)
 
-  def create_optimizer(self):
+  def get_current_step_learning_rate(self):
+    """
+    :rtype: tf.Tensor
+    """
     lr = self.learning_rate_var
+    if self.config.typed_dict.get("dynamic_learning_rate"):
+      # To implement any kind of cyclic learning rate during the epoch. E.g.: https://arxiv.org/abs/1608.03983
+      with tf.name_scope("dynamic_learning_rate"):
+        from Util import CollectionReadCheckCovered
+        opts = CollectionReadCheckCovered(self.config.typed_dict["dynamic_learning_rate"])
+        # Currently all intervals of same step size.
+        interval_steps = tf.constant(opts["interval"], name="interval", dtype=self.network.global_train_step.dtype)
+        step_in_interval = tf.mod(self.network.global_train_step, interval_steps, name="step_in_interval")
+        factor = tf.pow(
+          tf.constant(opts["decay"], name="decay", dtype=tf.float32),
+          tf.to_float(step_in_interval, name="step_in_interval_float"), name="factor")
+        lr *= factor
+    return lr
+
+  def create_optimizer(self):
+    lr = self.get_current_step_learning_rate()
     epsilon = self.config.float("optimizer_epsilon", 1e-16)
     use_locking = self.use_locking
     momentum = self.config.float("momentum", 0.0)
@@ -250,7 +269,7 @@ class Updater(object):
     # Keep track of all current available vars.
     # The optimizer could add some, even some which are not so-called "slot-vars",
     # and we want to keep track about them.
-    all_vars = tf.global_variables()  # type: list[tf.Variable]
+    all_prev_existing_vars = tf.global_variables()  # type: list[tf.Variable]
 
     if not self.optimizer:
       self.create_optimizer()
@@ -287,7 +306,7 @@ class Updater(object):
     if self.constraints is not None:
       with tf.variable_scope("optimize_constraints"):
         with tf.variable_scope("factor"):
-          factor = (self.learning_rate_var / float(self.initial_learning_rate))
+          factor = (self.get_current_step_learning_rate() / float(self.initial_learning_rate))
           factor *= self.config.float("decouple_constraints_factor", 0.025)
         sgd_optimizer = tf.train.GradientDescentOptimizer(
           learning_rate=factor, use_locking=self.use_locking)
@@ -312,7 +331,7 @@ class Updater(object):
     # which do not correspond to trainable vars, thus we did not get them as slot vars above.
     other_new_vars = []
     for v in tf.global_variables():
-      if v in all_vars:
+      if v in all_prev_existing_vars:
         continue
       if v in self.optimizer_vars:
         continue
