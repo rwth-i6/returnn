@@ -128,7 +128,7 @@ def initConfigJsonNetwork():
     json_file = config.value('initialize_from_json', '')
     assert os.path.isfile(json_file), "json file not found: " + json_file
     print("loading network topology from json:", json_file, file=log.v5)
-    config.network_topology_json = open(json_file).read().encode('utf8')
+    config.network_topology_json = open(json_file).read()
 
 
 def initDevices():

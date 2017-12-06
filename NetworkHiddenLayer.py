@@ -262,14 +262,14 @@ class DownsampleLayer(_NoOpLayer):
   def __init__(self, factor, axis, method="average", padding=False, sample_target=False, base=None, **kwargs):
     super(DownsampleLayer, self).__init__(**kwargs)
     self.set_attr("method", method)
-    if isinstance(axis, (str, unicode)):
+    if isinstance(axis, (str)):
       axis = json.loads(axis)
     if isinstance(axis, set): axis = tuple(axis)
     assert isinstance(axis, int) or isinstance(axis, (tuple, list)), "int or list[int] expected for axis"
     if isinstance(axis, int): axis = [axis]
     axis = list(sorted(axis))
     self.set_attr("axis", axis)
-    if isinstance(factor, (str, unicode)):
+    if isinstance(factor, (str)):
       factor = json.loads(factor)
     assert isinstance(factor, (int, float)) or isinstance(axis, (tuple, list)), "int|float or list[int|float] expected for factor"
     if isinstance(factor, (int, float)): factor = [factor] * len(axis)
