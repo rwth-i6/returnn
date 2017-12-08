@@ -141,21 +141,26 @@ class StreamDummy:
 
 
 @contextlib.contextmanager
-def wrap_log_streams(alternative_stream):
+def wrap_log_streams(alternative_stream, also_sys_stdout=False):
   """
   :param StreamThreadLocal|StreamDummy alternative_stream:
+  :param bool also_sys_stdout: wrap sys.stdout as well
   :return: context manager which yields (original info stream v1, alternative_stream)
   """
   v_attrib_keys = ["v%i" % i for i in range(6)] + ["error"]
   # Store original values.
   orig_v_list = log.v
   orig_v_attribs = {key: getattr(log, key) for key in v_attrib_keys}
+  orig_stdout = sys.stdout
   log.v = [alternative_stream] * len(orig_v_list)
   for key in v_attrib_keys:
     setattr(log, key, alternative_stream)
+  if also_sys_stdout:
+    sys.stdout = alternative_stream
   yield (orig_v_attribs["v1"], alternative_stream)
   # Restore original values.
   log.v = orig_v_list
   for key, value in orig_v_attribs.items():
     setattr(log, key, value)
-
+  if also_sys_stdout:
+    sys.stdout = orig_stdout

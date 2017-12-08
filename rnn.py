@@ -446,6 +446,10 @@ def executeMainTask():
     label_file = config.value('label_file', '')
     engine.init_network_from_config(config)
     engine.classify(engine.devices[0], eval_data, label_file)
+  elif task == "hyper_param_tuning":
+    import HyperParamTuning
+    tuner = HyperParamTuning.Optimization(config=config, train_data=train_data)
+    tuner.work()
   elif task == "cleanup_old_models":
     engine.cleanup_old_models(ask_for_confirmation=True)
   elif task == "daemon":
