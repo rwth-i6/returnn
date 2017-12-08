@@ -1363,6 +1363,34 @@ def as_str(s):
   assert False, "unknown type %s" % type(s)
 
 
+def deepcopy(x):
+  """
+  Mostly like copy.deepcopy(), except that it handles some edge cases as well, like copying module references.
+
+  :param T x: an arbitrary object
+  :rtype: T
+  """
+  # We could use the Pickler from TaskSystem.
+  # Or right now just this, via: https://mail.python.org/pipermail/python-ideas/2013-July/021959.html
+  from copy import deepcopy
+  if PY3:
+    import copyreg
+  else:
+    import copy_reg as copyreg
+  import sys, pickle
+
+  def reduce_mod(m):
+    assert sys.modules[m.__name__] is m
+    return rebuild_mod, (m.__name__,)
+
+  def rebuild_mod(name):
+    __import__(name)
+    return sys.modules[name]
+
+  copyreg.pickle(type(sys), reduce_mod)
+  return deepcopy(x)
+
+
 def load_txt_vector(filename):
   """
   Expect line-based text encoding in file.
@@ -1823,6 +1851,28 @@ def read_sge_num_procs(job_id=None):
   except ValueError as exc:
     raise Exception("read_sge_num_procs: %r, invalid num_proc %r for job id %i.\nline: %r" % (
       exc, opts["num_proc"], job_id, ls[0]))
+
+
+def guess_requested_max_num_threads(log_file=None, fallback_num_cpus=True):
+  try:
+    sge_num_procs = read_sge_num_procs()
+  except Exception as exc:
+    if log_file:
+      print("Error while getting SGE num_proc: %r" % exc, file=log_file)
+  else:
+    if sge_num_procs:
+      if log_file:
+        print("Use num_threads=%i (but min 2) via SGE num_proc." % sge_num_procs, file=log_file)
+      return max(sge_num_procs, 2)
+  omp_num_threads = int(os.environ.get("OMP_NUM_THREADS") or 0)
+  if omp_num_threads:
+    # Minimum of 2 threads, should not hurt.
+    if log_file:
+      print("Use num_threads=%i (but min 2) via OMP_NUM_THREADS." % omp_num_threads, file=log_file)
+    return max(omp_num_threads, 2)
+  if fallback_num_cpus:
+    return os.cpu_count()
+  return None
 
 
 def try_and_ignore_exception(f):
