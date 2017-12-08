@@ -17,6 +17,7 @@ arg_parser.add_argument("--config")
 arg_parser.add_argument("--cwd", help="will change to this dir")
 arg_parser.add_argument("--model", help="model filenames")
 arg_parser.add_argument("--scores", help="learning_rate_control file, e.g. newbob.data")
+arg_parser.add_argument("--dry_run", action="store_true")
 
 
 def main():
@@ -37,6 +38,8 @@ def main():
       config.set("model", args.model)
     if args.scores:
       config.set("learning_rate_file", args.scores)
+    if args.dry_run:
+      config.set("dry_run", True)
     engine.cleanup_old_models(ask_for_confirmation=True)
 
   except KeyboardInterrupt:
