@@ -2526,6 +2526,39 @@ class PrefixInTimeLayer(CopyLayer):
     self.output.placeholder = tf.concat([x * c, self.output.placeholder], axis=self.output.time_dim_axis)
     self.output.size_placeholder[self.output.time_dim_axis_excluding_batch] += repeat
 
+class ShiftAxisLayer(CopyLayer):
+  """
+  Shifts a axis around.
+  This layer may change the axis-dimension.
+  """
+  layer_class = "shift_axis"
+
+  def __init__(self, axis="T",  amount=0, **kwargs):
+    """
+    :param str|int axis: single axis to shift
+    :param int amount: number of elements to shift
+                   (<0 for left-shift, >0 for right-shift)
+    """
+    from TFUtil import single_strided_slice
+    import numpy
+    super(ShiftAxisLayer, self).__init__(**kwargs)
+    assert isinstance(amount, int)
+    axis = self.output.get_axis_from_description(axis)
+    paddings = numpy.zeros(shape=(self.output.batch_ndim, 2))
+    shifted = None
+    if amount < 0:  # left-shift
+      shifted = single_strided_slice(self.output.placeholder, axis=axis, begin=amount)
+      paddings[axis] = [0,amount]
+    elif amount > 0:  # right-shift
+      # discard `amount` values in the end of the axis
+      shifted = single_strided_slice(self.output.placeholder, axis=axis, end=-amount)
+      paddings[axis] = [amount, 0]
+    else:
+      assert False, "amount ==0 equals no operation"
+
+    # insert missing values, so that the shape is preserved
+    self.output.placeholder = tf.pad(shifted, paddings)
+
 
 class ResizeLayer(_ConcatInputLayer):
   """
@@ -4234,9 +4267,17 @@ class MeanSquaredError(Loss):
   def get_value(self):
     assert not self.target.sparse, "sparse is not supported yet"
     with tf.name_scope("loss_mse"):
-      out = tf.squared_difference(self.output_flat, self.target_flat)
-      assert out.get_shape().ndims == 2
-      out = self.reduce_func(tf.reduce_mean(out, axis=1))
+      if self.target_flat is not None:
+        assert self.output_flat is not None
+        out = tf.squared_difference(self.output_flat, self.target_flat)
+        assert out.get_shape().ndims == 2
+        out = self.reduce_func(tf.reduce_mean(out, axis=1))
+      else:
+        assert self.output is not None and self.target is not None
+        out = tf.squared_difference(self.output, self.target)
+        assert out.get_shape().ndims == 1
+        out = self.reduce_func(out)
+
       return out
 
 
