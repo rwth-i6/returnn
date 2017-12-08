@@ -530,6 +530,31 @@ class DummyDataset(GeneratingDataset):
 
 class StaticDataset(GeneratingDataset):
 
+  @classmethod
+  def copy_from_dataset(cls, dataset, start_seq_idx=0, max_seqs=None):
+    """
+    :param Dataset dataset:
+    :param int start_seq_idx:
+    :param int|None max_seqs:
+    :rtype: StaticDataset
+    """
+    if isinstance(dataset, StaticDataset):
+      return cls(
+        data=dataset.data, target_list=dataset.target_list,
+        output_dim=dataset.num_outputs, input_dim=dataset.num_inputs)
+    seq_idx = start_seq_idx
+    data = []
+    while dataset.is_less_than_num_seqs(seq_idx):
+      dataset.load_seqs(seq_idx, seq_idx + 1)
+      if max_seqs is not None and len(data) >= max_seqs:
+        break
+      seq_data = {key: dataset.get_data(seq_idx, key) for key in dataset.get_data_keys()}
+      data.append(seq_data)
+      seq_idx += 1
+    return cls(
+      data=data, target_list=dataset.get_target_list(),
+      output_dim=dataset.num_outputs, input_dim=dataset.num_inputs)
+
   def __init__(self, data, target_list=None, output_dim=None, input_dim=None, **kwargs):
     """
     :type data: list[dict[str,numpy.ndarray]]

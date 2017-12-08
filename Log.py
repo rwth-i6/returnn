@@ -8,7 +8,9 @@ try:
   import StringIO
 except ImportError:
   import io as StringIO
+import threading
 from threading import RLock
+import contextlib
 
 
 class Stream():
@@ -107,3 +109,53 @@ log = Log()
 # By adding a dummy handler to the root logger, we will avoid that
 # it adds any other default handlers.
 logging.getLogger().addHandler(logging.NullHandler())
+
+
+class StreamThreadLocal(threading.local):
+  """
+  This will just buffer everything, thread-locally, and not forward it to any stream.
+  The idea is that multiple tasks will run in multiple threads and you want to catch all the logging/stdout
+  of each to not clutter the output, and also you want to keep it separate for each.
+  """
+
+  def __init__(self):
+    self.buf = StringIO.StringIO()
+
+  def write(self, msg):
+    self.buf.write(msg)
+
+  def flush(self):
+    pass
+
+
+class StreamDummy:
+  """
+  This will just discard any data.
+  """
+
+  def write(self, msg):
+    pass
+
+  def flush(self):
+    pass
+
+
+@contextlib.contextmanager
+def wrap_log_streams(alternative_stream):
+  """
+  :param StreamThreadLocal|StreamDummy alternative_stream:
+  :return: context manager which yields (original info stream v1, alternative_stream)
+  """
+  v_attrib_keys = ["v%i" % i for i in range(6)] + ["error"]
+  # Store original values.
+  orig_v_list = log.v
+  orig_v_attribs = {key: getattr(log, key) for key in v_attrib_keys}
+  log.v = [alternative_stream] * len(orig_v_list)
+  for key in v_attrib_keys:
+    setattr(log, key, alternative_stream)
+  yield (orig_v_attribs["v1"], alternative_stream)
+  # Restore original values.
+  log.v = orig_v_list
+  for key, value in orig_v_attribs.items():
+    setattr(log, key, value)
+
