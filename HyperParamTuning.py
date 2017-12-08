@@ -13,12 +13,13 @@ Eps = 1e-16
 
 
 class HyperParam:
-  def __init__(self, dtype=None, bounds=None, classes=None, log=False):
+  def __init__(self, dtype=None, bounds=None, classes=None, log=False, default=None):
     """
     :param str|type|None|list dtype: e.g. "float", "int" or "bool", or if Collection, will be classes
     :param None|list[int|float] bounds: inclusive
     :param list|None classes:
     :param bool log: if in log-scale
+    :param float|int|object|None default:
     """
     if isinstance(dtype, (list, tuple)):
       assert classes is None
@@ -46,6 +47,7 @@ class HyperParam:
     self.bounds = bounds
     self.classes = classes
     self.log_space = log
+    self.default = default
     self.usages = []  # type: list[_AttrChain]
 
   def __repr__(self):
@@ -55,6 +57,8 @@ class HyperParam:
     ext = ""
     if self.log_space:
       ext += ", log=True"
+    if self.default is not None:
+      ext += ", default=%r" % self.default
     if self.bounds is not None:
       return "HyperParam(%s, %s%s)" % (dtype_name, self.bounds, ext)
     assert self.bounds is None
@@ -86,6 +90,42 @@ class HyperParam:
       assert x1 < x2
       return min(x2 - x1 + 1, upper_limit)
     raise Exception("invalid dtype %r" % self.dtype)
+
+  def merge_values(self, value1, value2):
+    """
+    Merge two values, which are valid values for this `HyperParam`.
+
+    :param T value1:
+    :param T value2:
+    :rtype: T
+    """
+    if self.dtype is bool:
+      return value1 or value2
+    if self.log_space:
+      x0, x1 = value1, value2
+      if x0 > x1:
+        x0, x1 = x1, x0
+      if x0 < 0 or x1 < 0:
+        assert x0 <= x1 <= 0
+        sign = -1
+        x0, x1 = -x1, -x0
+      else:
+        sign = 1
+      assert x1 >= x0 >= 0
+      x0o = x0
+      if x0 < Eps * 0.5:
+        x0 = Eps * 0.5
+      if x1 < Eps:
+        x1 = Eps
+      x0 = numpy.log(float(x0))
+      x1 = numpy.log(float(x1))
+      y = numpy.exp(x0 + (x1 - x0) * 0.5)
+      if y <= Eps:
+        y = x0o
+      return self.dtype(y) * sign
+    if self.dtype is int:
+      return (value1 + value2) // 2
+    return self.dtype((value1 + value2) * 0.5)
 
   def get_value(self, selected, eps=Eps):
     """
@@ -126,6 +166,11 @@ class HyperParam:
   def get_initial_value(self):
     return self.get_value(selected=0.5)
 
+  def get_default_value(self):
+    if self.default is not None:
+      return self.dtype(self.default)
+    return self.get_initial_value()
+
   def get_random_value(self, seed, eps=Eps):
     """
     :param int seed:
@@ -134,6 +179,10 @@ class HyperParam:
     """
     rnd = numpy.random.RandomState(seed=seed)
     x = rnd.uniform(0.0, 1.0)
+    if x < eps:
+      x = 0.0
+    if x > 1.0 - eps:
+      x = 1.0
     return self.get_value(x, eps=eps)
 
   def get_random_value_by_idx(self, iteration_idx, individual_idx):
@@ -160,6 +209,32 @@ class Individual:
     self.cost = None
     self.name = name
 
+  def cross_over(self, hyper_params, population, random_seed):
+    """
+    :param list[HyperParam] hyper_params:
+    :param list[Individual] population:
+    :param int random_seed:
+    :return: copy of self, cross-overd with others
+    :rtype: Individual
+    """
+    name = self.name
+    if len(name) > 10:
+      name = name[:8] + ".."
+    name += "x%x" % random_seed
+    res = Individual(hyper_param_mapping=self.hyper_param_mapping.copy(), name=name)
+    rnd = numpy.random.RandomState(random_seed)
+    while True:
+      other = population[rnd.random_integers(0, len(population) - 1)]
+      for p in hyper_params:
+        x = rnd.uniform(0.0, 1.0)
+        if x > 0.75:
+          res.hyper_param_mapping[p] = other.hyper_param_mapping[p]
+        elif x > 0.5:
+          res.hyper_param_mapping[p] = p.merge_values(res.hyper_param_mapping[p], other.hyper_param_mapping[p])
+      if rnd.uniform(0.0, 1.0) > 0.5:
+        break
+    return res
+
 
 class Optimization:
   def __init__(self, config, train_data):
@@ -183,7 +258,7 @@ class Optimization:
     self.num_iterations = self.opts["num_tune_iterations"]
     self.num_individuals = self.opts["num_individuals"]
     self.num_kill_individuals = self.opts.get(
-      "num_kill_individuals", self.num_iterations // 2)
+      "num_kill_individuals", self.num_individuals // 2)
     self.num_best = self.opts.get("num_best", 10)
     self.num_threads = self.opts.get("num_threads", guess_requested_max_num_threads())
     self.opts.assert_all_read()
@@ -243,6 +318,17 @@ class Optimization:
        for p in self.hyper_params},
       name="%i-%i" % (iteration_idx, individual_idx))
 
+  def cross_over(self, population, iteration_idx):
+    """
+    :param list[Individual] population: modified in-place
+    :param int iteration_idx:
+    """
+    for i in range(len(population) - 1):
+      population[i] = population[i].cross_over(
+        hyper_params=self.hyper_params,
+        population=population[i + 1:],
+        random_seed=iteration_idx * 1013 + i * 17)
+
   def create_config_instance(self, hyper_param_mapping):
     """
     :param dict[HyperParam] hyper_param_mapping: maps each hyper param to some value
@@ -261,7 +347,6 @@ class Optimization:
   def work(self):
     print("Starting hyper param search. Using %i threads." % self.num_threads, file=log.v1)
     from Log import wrap_log_streams, StreamDummy
-    from heapq import nsmallest
     from multiprocessing.pool import ThreadPool
     thread_pool = ThreadPool(self.num_threads)
     best_individuals = []
@@ -269,12 +354,14 @@ class Optimization:
     for cur_iteration_idx in range(1, self.num_iterations + 1):
       print("Starting iteration %i." % cur_iteration_idx, file=log.v2)
       if cur_iteration_idx == 1:
-        initial_canonical_individual = Individual(
-          {p: p.get_initial_value() for p in self.hyper_params}, name="canonical")
-        population.append(initial_canonical_individual)
+        population.append(Individual(
+          {p: p.get_initial_value() for p in self.hyper_params}, name="canonical"))
+        population.append(Individual(
+          {p: p.get_default_value() for p in self.hyper_params}, name="default"))
       population.extend(self.get_population(
-        iteration_idx=cur_iteration_idx, num_individuals=(self.num_individuals - len(population)) // 2))
-      # TODO: random cross-over here for remaining individuals...
+        iteration_idx=cur_iteration_idx, num_individuals=self.num_individuals - len(population)))
+      if cur_iteration_idx > 1:
+        self.cross_over(population=population, iteration_idx=cur_iteration_idx)
       if cur_iteration_idx == 1:
         print("Population of %i individuals (hyper param setting instances)." % len(population), file=log.v2)
         # Train first directly for testing and to see log output.
@@ -288,6 +375,7 @@ class Optimization:
       best_individuals.extend(population)
       best_individuals.sort(key=lambda p: p.cost)
       del best_individuals[self.num_best:]
+      population.extend(best_individuals[:5])
     print("Best %i settings:" % len(best_individuals))
     for individual in best_individuals:
       print("Individual %s" % individual.name, "cost:", individual.cost)
