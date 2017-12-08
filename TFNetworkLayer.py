@@ -2526,38 +2526,72 @@ class PrefixInTimeLayer(CopyLayer):
     self.output.placeholder = tf.concat([x * c, self.output.placeholder], axis=self.output.time_dim_axis)
     self.output.size_placeholder[self.output.time_dim_axis_excluding_batch] += repeat
 
-class ShiftAxisLayer(CopyLayer):
+
+class ShiftAxisLayer(_ConcatInputLayer):
   """
   Shifts a axis around.
   This layer may change the axis-dimension.
   """
   layer_class = "shift_axis"
 
-  def __init__(self, axis="T",  amount=0, **kwargs):
+  def __init__(self, axis, amount, pad=True, adjust_size_info=True, **kwargs):
     """
     :param str|int axis: single axis to shift
     :param int amount: number of elements to shift
                    (<0 for left-shift, >0 for right-shift)
+    :param bool pad: preserve shape by padding
+    :param bool adjust_size_info: whether to adjust the size_placeholder
     """
     from TFUtil import single_strided_slice
     import numpy
     super(ShiftAxisLayer, self).__init__(**kwargs)
     assert isinstance(amount, int)
-    axis = self.output.get_axis_from_description(axis)
-    paddings = numpy.zeros(shape=(self.output.batch_ndim, 2))
-    shifted = None
+    axis = self.input_data.get_axis_from_description(axis)
+    paddings = numpy.zeros(shape=(self.input_data.batch_ndim, 2))
     if amount < 0:  # left-shift
-      shifted = single_strided_slice(self.output.placeholder, axis=axis, begin=amount)
-      paddings[axis] = [0,amount]
+      shifted = single_strided_slice(self.input_data.placeholder, axis=axis, begin=-amount)
+      paddings[axis] = [0, -amount]
     elif amount > 0:  # right-shift
       # discard `amount` values in the end of the axis
-      shifted = single_strided_slice(self.output.placeholder, axis=axis, end=-amount)
+      shifted = single_strided_slice(self.input_data.placeholder, axis=axis, end=-amount)
       paddings[axis] = [amount, 0]
     else:
-      assert False, "amount ==0 equals no operation"
+      assert False, "amount == 0 equals no operation"
+    if pad:
+      # insert missing values, so that the shape is preserved
+      shifted = tf.pad(shifted, paddings)
+    self.output.placeholder = shifted
+    self.output.size_placeholder = self.input_data.size_placeholder.copy()
+    axis_wob = self.input_data.get_batch_axis_excluding_batch(axis)
+    if adjust_size_info and axis_wob in self.output.size_placeholder:
+      # Note: Different logic than in get_out_data_from_opts() because this is about e.g. the seq lengths.
+      if amount < 0:
+        size_delta = amount
+      else:  # amount > 0
+        if pad:
+          size_delta = amount
+        else:
+          size_delta = 0
+      self.output.size_placeholder[axis_wob] = tf.clip_by_value(
+        self.output.size_placeholder[axis_wob] + size_delta, 0, tf.shape(shifted)[axis])
 
-    # insert missing values, so that the shape is preserved
-    self.output.placeholder = tf.pad(shifted, paddings)
+  @classmethod
+  def get_out_data_from_opts(cls, name, amount, axis, pad, sources=(), **kwargs):
+    out = get_concat_sources_data_template(sources, name="%s_output" % name)
+    assert isinstance(amount, int)
+    axis = out.get_axis_from_description(axis)
+    axis_wob = out.get_batch_axis_excluding_batch(axis)
+    if axis_wob is None:  # batch-axis
+      return out  # not storing this information
+    if pad:
+      return out  # nothing in the shape will change
+    if out.shape[axis_wob] is not None:
+      shape = list(out.shape)
+      shape[axis_wob] -= abs(amount)
+      out.shape = tuple(shape)
+    if axis == out.feature_dim_axis:
+      out.dim = out.shape[axis_wob]
+    return out
 
 
 class ResizeLayer(_ConcatInputLayer):
