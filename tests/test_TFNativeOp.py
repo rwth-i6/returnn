@@ -115,6 +115,23 @@ def test_NativeLstmCell():
   outputs, final_state = cell(inputs, index)
 
 
+def test_NativeLstmCell_run():
+  from pprint import pprint
+  from Util import describe_tensorflow_version
+  print("TensorFlow:", describe_tensorflow_version())
+  n_time = 2
+  n_batch = 1
+  n_hidden = 3
+  with tf.Session() as session:
+    cell = NativeLstmCell(n_hidden=n_hidden)
+    inputs = tf.zeros([n_time, n_batch, n_hidden * 4])
+    index = tf.ones([n_time, n_batch])
+    outputs, final_state = cell(inputs, index)
+    session.run(tf.global_variables_initializer())
+    res = session.run(outputs)
+    pprint(res)
+
+
 def test_NativeLstmLowMemCell():
   n_time = 2
   n_batch = 1
