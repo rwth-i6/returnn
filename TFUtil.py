@@ -2433,8 +2433,10 @@ class SyntheticGradient(object):
     the synthetic gradient needs to collect the gradient prediction losses.
     This is done via this global scope.
     """
-    yield cls.enter_gradient_scope()
-    cls.exit_gradient_scope()
+    try:
+      yield cls.enter_gradient_scope()
+    finally:
+      cls.exit_gradient_scope()
 
   @classmethod
   def _synthetic_gradient_fwd(cls, x, synthetic_grad_x):

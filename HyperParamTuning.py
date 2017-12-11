@@ -1,4 +1,27 @@
 
+"""
+Here we provide some logic to perform hyper-parameter search.
+See ``demos/demo-hyper-param-tuning.config`` for an example config.
+For each entry in the config where search should be performed on,
+you declare it as an instance of :class:`HyperParam`.
+Then, this module will find all such instances in the config and replace it with values during search.
+
+The search itself is some evolutionary genetic search.
+There are many variants to it, e.g. such as what kind of manipulations you,
+e.g. cross-over and mutation, and also, how you sample new random values.
+The current logic probably can be improved.
+
+Currently, each search is a training started from the scratch, and the accumulated train score
+is used as an evaluation measure.
+This probably also can be improved.
+Also, instead of always starting from scratch, we could keep intermediate results and resume from them,
+or use real training intermediate results and resume from them.
+We could even do some simple search in the beginning of each epoch when we keep it cheap enough.
+
+Also, we could store the population of hyper params on disk to allow resuming of a search.
+"""
+
+import sys
 import time
 import numpy
 from Config import Config
@@ -48,7 +71,15 @@ class HyperParam:
     self.classes = classes
     self.log_space = log
     self.default = default
+    self.unique_idx = HyperParam._get_next_unique_idx()
     self.usages = []  # type: list[_AttrChain]
+
+  _unique_idx = 0
+
+  @classmethod
+  def _get_next_unique_idx(cls):
+    cls._unique_idx += 1
+    return cls._unique_idx
 
   def __repr__(self):
     if self.classes is not None:
@@ -63,6 +94,9 @@ class HyperParam:
       return "HyperParam(%s, %s%s)" % (dtype_name, self.bounds, ext)
     assert self.bounds is None
     return "HyperParam(%s%s)" % (dtype_name, ext)
+
+  def get_canonical_usage(self):
+    return self.get_sorted_usages()[0]
 
   def get_sorted_usages(self):
     return sorted(self.usages, key=lambda chain: min(2, len(chain.chain)))
@@ -100,7 +134,7 @@ class HyperParam:
     :rtype: T
     """
     if self.dtype is bool:
-      return value1 or value2
+      return value1
     if self.log_space:
       x0, x1 = value1, value2
       if x0 > x1:
@@ -137,6 +171,8 @@ class HyperParam:
     assert 0 <= selected <= 1
     if self.classes:
       return self.classes[int(len(self.classes) * selected)]
+    if self.dtype is bool:
+      return selected > 0.5
     if self.bounds:
       if self.dtype is int and not self.log_space:
         return self.bounds[0] + int((self.bounds[1] - self.bounds[0]) * selected)
@@ -161,7 +197,17 @@ class HyperParam:
           y = x0
         return self.dtype(y) * sign
       return self.dtype(self.bounds[0] + (self.bounds[1] - self.bounds[0]) * selected)
-    return self.dtype(0)
+    # No bounds. So anything -inf to inf.
+    # But exclude -inf/inf.
+    # Assume selected is uniform in [0,1], so use the inverse accumulated Gauss density function
+    # to get normal distributed in [-inf,inf].
+    x = selected
+    if x < eps:
+      x = eps
+    if x > 1. - eps:
+      x = 1. - eps
+    import scipy.special
+    return self.dtype(scipy.special.ndtri(x))
 
   def get_initial_value(self):
     return self.get_value(selected=0.5)
@@ -191,7 +237,10 @@ class HyperParam:
     :param int individual_idx:
     :rtype: float|int|bool|object
     """
-    seed = hash_obj((self.get_sorted_usages()[0], iteration_idx, individual_idx))
+    # Use a deterministic seed for the random number generator
+    # which will not change on unrelated changes in the config file,
+    # so that runs will stay deterministic in this sense.
+    seed = hash_obj((self.get_canonical_usage(), iteration_idx, individual_idx))
     return self.get_random_value(seed=seed)
 
 
@@ -252,6 +301,7 @@ class Optimization:
     self._find_hyper_params()
     if not self.hyper_params:
       raise Exception("No hyper params found.")
+    self.hyper_params.sort(key=lambda p: p.unique_idx)
     print("We have found these hyper params:")
     for p in self.hyper_params:
       print(" %s" % p.description())
@@ -326,7 +376,7 @@ class Optimization:
     for i in range(len(population) - 1):
       population[i] = population[i].cross_over(
         hyper_params=self.hyper_params,
-        population=population[i + 1:],
+        population=population[:i] + population[i + 1:],
         random_seed=iteration_idx * 1013 + i * 17)
 
   def create_config_instance(self, hyper_param_mapping):
@@ -351,31 +401,36 @@ class Optimization:
     thread_pool = ThreadPool(self.num_threads)
     best_individuals = []
     population = []
-    for cur_iteration_idx in range(1, self.num_iterations + 1):
-      print("Starting iteration %i." % cur_iteration_idx, file=log.v2)
-      if cur_iteration_idx == 1:
-        population.append(Individual(
-          {p: p.get_initial_value() for p in self.hyper_params}, name="canonical"))
-        population.append(Individual(
-          {p: p.get_default_value() for p in self.hyper_params}, name="default"))
-      population.extend(self.get_population(
-        iteration_idx=cur_iteration_idx, num_individuals=self.num_individuals - len(population)))
-      if cur_iteration_idx > 1:
-        self.cross_over(population=population, iteration_idx=cur_iteration_idx)
-      if cur_iteration_idx == 1:
-        print("Population of %i individuals (hyper param setting instances)." % len(population), file=log.v2)
-        # Train first directly for testing and to see log output.
-        # Later we will strip away all log output.
-        print("Very first try with log output:", file=log.v2)
-        self._train_individual(population[0])
-      with wrap_log_streams(StreamDummy(), also_sys_stdout=True):
-        thread_pool.map(self._train_individual, population)
-      population.sort(key=lambda p: p.cost)
-      del population[-self.num_kill_individuals:]
-      best_individuals.extend(population)
-      best_individuals.sort(key=lambda p: p.cost)
-      del best_individuals[self.num_best:]
-      population.extend(best_individuals[:5])
+    canceled = False
+    try:
+      for cur_iteration_idx in range(1, self.num_iterations + 1):
+        print("Starting iteration %i." % cur_iteration_idx, file=log.v2)
+        if cur_iteration_idx == 1:
+          population.append(Individual(
+            {p: p.get_initial_value() for p in self.hyper_params}, name="canonical"))
+          population.append(Individual(
+            {p: p.get_default_value() for p in self.hyper_params}, name="default"))
+        population.extend(self.get_population(
+          iteration_idx=cur_iteration_idx, num_individuals=self.num_individuals - len(population)))
+        if cur_iteration_idx > 1:
+          self.cross_over(population=population, iteration_idx=cur_iteration_idx)
+        if cur_iteration_idx == 1:
+          print("Population of %i individuals (hyper param setting instances)." % len(population), file=log.v2)
+          # Train first directly for testing and to see log output.
+          # Later we will strip away all log output.
+          print("Very first try with log output:", file=log.v2)
+          self._train_individual(population[0])
+        with wrap_log_streams(StreamDummy(), also_sys_stdout=True):
+          thread_pool.map(self._train_individual, population)
+        population.sort(key=lambda p: p.cost)
+        del population[-self.num_kill_individuals:]
+        best_individuals.extend(population)
+        best_individuals.sort(key=lambda p: p.cost)
+        del best_individuals[self.num_best:]
+        population = best_individuals[:self.num_kill_individuals // 4] + population
+    except KeyboardInterrupt:
+      print("KeyboardInterrupt, canceled search.")
+      canceled = True
     print("Best %i settings:" % len(best_individuals))
     for individual in best_individuals:
       print("Individual %s" % individual.name, "cost:", individual.cost)
@@ -414,6 +469,7 @@ class Optimization:
     trainer = Runner(engine=engine, dataset=train_data, batches=batches, train=True)
     trainer.run(report_prefix="hyper param tune train")
     if not trainer.finalized:
+      print("Trainer exception:", trainer.run_exception, file=log.v1)
       raise trainer.run_exception
     cost = trainer.score["cost:output"]
     print(

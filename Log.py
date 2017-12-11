@@ -157,10 +157,12 @@ def wrap_log_streams(alternative_stream, also_sys_stdout=False):
     setattr(log, key, alternative_stream)
   if also_sys_stdout:
     sys.stdout = alternative_stream
-  yield (orig_v_attribs["v1"], alternative_stream)
-  # Restore original values.
-  log.v = orig_v_list
-  for key, value in orig_v_attribs.items():
-    setattr(log, key, value)
-  if also_sys_stdout:
-    sys.stdout = orig_stdout
+  try:
+    yield (orig_v_attribs["v1"], alternative_stream)
+  finally:
+    # Restore original values.
+    log.v = orig_v_list
+    for key, value in orig_v_attribs.items():
+      setattr(log, key, value)
+    if also_sys_stdout:
+      sys.stdout = orig_stdout
