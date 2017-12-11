@@ -599,8 +599,7 @@ class StaticDataset(GeneratingDataset):
         if len(first_data_output.shape) >= 2:
           assert output_dim[target][0] == first_data_output.shape[1]
       else:
-        assert len(first_data_output.shape) == 2, "We expect not sparse. Or specify it explicitly in output_dim."
-        output_dim[target] = [first_data_output.shape[1], 2]
+        print("%r: Warning: Data-key %r not specified in output_dim (%r)." % (self, target, output_dim), file=log.v2)
 
     super(StaticDataset, self).__init__(input_dim=input_dim, output_dim=output_dim, num_seqs=num_seqs, **kwargs)
 

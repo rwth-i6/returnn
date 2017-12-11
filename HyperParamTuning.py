@@ -21,6 +21,8 @@ We could even do some simple search in the beginning of each epoch when we keep 
 Also, we could store the population of hyper params on disk to allow resuming of a search.
 """
 
+from __future__ import print_function
+
 import sys
 import time
 import numpy
@@ -102,8 +104,13 @@ class HyperParam:
     return sorted(self.usages, key=lambda chain: min(2, len(chain.chain)))
 
   def description(self):
-    usages = self.get_sorted_usages()
-    return "|".join(map(str, usages)) + ": %s" % self
+    if len(self.usages) == 0:
+      usage_str = "<no usage>"
+    elif len(self.usages) == 1:
+      usage_str = str(self.usages[0])
+    else:
+      usage_str = str(self.get_canonical_usage()) + "|..."
+    return usage_str + ": %s" % self
 
   def get_num_instances(self, upper_limit=100):
     """
@@ -397,8 +404,36 @@ class Optimization:
   def work(self):
     print("Starting hyper param search. Using %i threads." % self.num_threads, file=log.v1)
     from Log import wrap_log_streams, StreamDummy
-    from multiprocessing.pool import ThreadPool
-    thread_pool = ThreadPool(self.num_threads)
+    from threading import Thread, Condition
+
+    class Outstanding:
+      cond = Condition()
+      threads = []
+      population = []
+      exit = False
+      exception = None
+
+    class WorkerThread(Thread):
+      def __init__(self):
+        super(WorkerThread, self).__init__(name="Hyper param tune train thread")
+        self.start()
+
+      def run(thread):
+        try:
+          while True:
+            with Outstanding.cond:
+              if Outstanding.exit or Outstanding.exception:
+                return
+              if not Outstanding.population:
+                return
+              individual = Outstanding.population.pop(0)
+            self._train_individual(individual)
+        except Exception as exc:
+          with Outstanding.cond:
+            if not Outstanding.exception:
+              Outstanding.exception = exc
+            Outstanding.cond.notify_all()
+
     best_individuals = []
     population = []
     canceled = False
@@ -420,8 +455,14 @@ class Optimization:
           # Later we will strip away all log output.
           print("Very first try with log output:", file=log.v2)
           self._train_individual(population[0])
-        with wrap_log_streams(StreamDummy(), also_sys_stdout=True):
-          thread_pool.map(self._train_individual, population)
+        with wrap_log_streams(StreamDummy(), also_sys_stdout=True, tf_log_verbosity="WARN"):
+          Outstanding.population = list(population)
+          Outstanding.threads = [WorkerThread() for i in range(self.num_threads)]
+          for thread in Outstanding.threads:
+            thread.join()
+          Outstanding.threads = []
+        if Outstanding.exception:
+          raise Outstanding.exception
         population.sort(key=lambda p: p.cost)
         del population[-self.num_kill_individuals:]
         best_individuals.extend(population)
@@ -431,6 +472,13 @@ class Optimization:
     except KeyboardInterrupt:
       print("KeyboardInterrupt, canceled search.")
       canceled = True
+    finally:
+      Outstanding.exit = True
+      with Outstanding.cond:
+        Outstanding.cond.notify_all()
+      for thread in Outstanding.threads:
+        thread.join()
+
     print("Best %i settings:" % len(best_individuals))
     for individual in best_individuals:
       print("Individual %s" % individual.name, "cost:", individual.cost)
@@ -554,7 +602,7 @@ class _AttrChain:
     :rtype: _AttrChain
     """
     sub_chain = _AttrChain(base=self.base)
-    sub_chain.chain = self.chain.copy()
+    sub_chain.chain = list(self.chain)
     sub_chain.chain.append(attr)
     sub_chain.value = attr.get(self.value)
     return sub_chain

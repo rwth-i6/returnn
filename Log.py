@@ -141,10 +141,11 @@ class StreamDummy:
 
 
 @contextlib.contextmanager
-def wrap_log_streams(alternative_stream, also_sys_stdout=False):
+def wrap_log_streams(alternative_stream, also_sys_stdout=False, tf_log_verbosity=None):
   """
   :param StreamThreadLocal|StreamDummy alternative_stream:
   :param bool also_sys_stdout: wrap sys.stdout as well
+  :param int|str|None tf_log_verbosity: e.g. "WARNING"
   :return: context manager which yields (original info stream v1, alternative_stream)
   """
   v_attrib_keys = ["v%i" % i for i in range(6)] + ["error"]
@@ -157,6 +158,11 @@ def wrap_log_streams(alternative_stream, also_sys_stdout=False):
     setattr(log, key, alternative_stream)
   if also_sys_stdout:
     sys.stdout = alternative_stream
+  orig_tf_log_verbosity = None
+  if tf_log_verbosity is not None:
+    import tensorflow as tf
+    orig_tf_log_verbosity = tf.logging.get_verbosity()
+    tf.logging.set_verbosity(tf_log_verbosity)
   try:
     yield (orig_v_attribs["v1"], alternative_stream)
   finally:
@@ -166,3 +172,6 @@ def wrap_log_streams(alternative_stream, also_sys_stdout=False):
       setattr(log, key, value)
     if also_sys_stdout:
       sys.stdout = orig_stdout
+    if tf_log_verbosity is not None:
+      import tensorflow as tf
+      tf.logging.set_verbosity(orig_tf_log_verbosity)
