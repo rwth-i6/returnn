@@ -214,6 +214,32 @@ def test_Stats():
   assert_almost_equal(stddev1, 1.)
 
 
+def test_deepcopy():
+  deepcopy({"a": 1, "b": 2, "c": [3, {}, (), [42, True]]})
+
+
+def test_deepcopy_mod():
+  o = deepcopy({"a": 1, "b": 2, "c": sys})
+  assert isinstance(o, dict)
+  assert o["c"] is sys
+
+
+def test_deepcopy_config():
+  from Config import Config
+  config = Config()
+  deepcopy(config)
+
+
+def test_deepcopy_builtins():
+  user_ns = {}
+  custom_exec("", "<source.py>", user_ns, user_ns)
+  print(user_ns)
+  assert "__builtins__" in user_ns
+  assert isinstance(user_ns["__builtins__"], dict)
+  o = deepcopy(user_ns)
+  assert o["__builtins__"] is user_ns["__builtins__"]  # no copy, directly reference this module dict
+
+
 if __name__ == "__main__":
   better_exchook.install()
   if len(sys.argv) <= 1:

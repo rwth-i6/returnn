@@ -1365,30 +1365,34 @@ def as_str(s):
 
 def deepcopy(x):
   """
-  Mostly like copy.deepcopy(), except that it handles some edge cases as well, like copying module references.
+  Simpler variant of copy.deepcopy().
+  Should handle some edge cases as well, like copying module references.
 
   :param T x: an arbitrary object
   :rtype: T
   """
-  # We could use the Pickler from TaskSystem.
-  # Or right now just this, via: https://mail.python.org/pipermail/python-ideas/2013-July/021959.html
-  from copy import deepcopy
+  # See also class Pickler from TaskSystem.
+  # Or: https://mail.python.org/pipermail/python-ideas/2013-July/021959.html
+  from TaskSystem import Pickler, Unpickler
   if PY3:
-    import copyreg
+    from io import BytesIO as StringIO
   else:
-    import copy_reg as copyreg
-  import sys, pickle
+    # noinspection PyUnresolvedReferences
+    from StringIO import StringIO
 
-  def reduce_mod(m):
-    assert sys.modules[m.__name__] is m
-    return rebuild_mod, (m.__name__,)
+  def pickle_dumps(obj):
+    sio = StringIO()
+    p = Pickler(sio)
+    p.dump(obj)
+    return sio.getvalue()
 
-  def rebuild_mod(name):
-    __import__(name)
-    return sys.modules[name]
+  def pickle_loads(s):
+    p = Unpickler(StringIO(s))
+    return p.load()
 
-  copyreg.pickle(type(sys), reduce_mod)
-  return deepcopy(x)
+  s = pickle_dumps(x)
+  c = pickle_loads(s)
+  return c
 
 
 def load_txt_vector(filename):
