@@ -30,7 +30,7 @@ from Config import Config
 from Log import log
 from Dataset import Dataset
 from GeneratingDataset import StaticDataset
-from TFEngine import Engine, Runner
+from TFEngine import Engine, Runner, CancelTrainingException
 from Util import CollectionReadCheckCovered, hms_fraction, guess_requested_max_num_threads
 
 
@@ -312,6 +312,7 @@ class Optimization:
     print("We have found these hyper params:")
     for p in self.hyper_params:
       print(" %s" % p.description())
+    self.dry_run_first_individual = self.opts.get("dry_run_first_individual", True)
     self.num_iterations = self.opts["num_tune_iterations"]
     self.num_individuals = self.opts["num_individuals"]
     self.num_kill_individuals = self.opts.get(
@@ -405,10 +406,11 @@ class Optimization:
     print("Starting hyper param search. Using %i threads." % self.num_threads, file=log.v1)
     from Log import wrap_log_streams, StreamDummy
     from threading import Thread, Condition
+    from Util import progress_bar, hms, is_tty
 
     class Outstanding:
       cond = Condition()
-      threads = []
+      threads = []  # type: list[WorkerThread]
       population = []
       exit = False
       exception = None
@@ -416,68 +418,126 @@ class Optimization:
     class WorkerThread(Thread):
       def __init__(self):
         super(WorkerThread, self).__init__(name="Hyper param tune train thread")
+        self.trainer = None  # type: _IndividualTrainer
+        self.finished = False
         self.start()
 
-      def run(thread):
+      def cancel(self, join=False):
+        with Outstanding.cond:
+          if self.trainer:
+            self.trainer.cancel_flag = True
+            if self.trainer.runner:
+              self.trainer.runner.cancel_flag = True
+        if join:
+          self.join()
+
+      def get_complete_frac(self):
+        with Outstanding.cond:
+          if self.trainer and self.trainer.runner:
+            return self.trainer.runner.data_provider.get_complete_frac()
+        return 0.0
+
+      def run(self_thread):
         try:
           while True:
             with Outstanding.cond:
               if Outstanding.exit or Outstanding.exception:
                 return
               if not Outstanding.population:
+                self_thread.finished = True
+                Outstanding.cond.notify_all()
                 return
               individual = Outstanding.population.pop(0)
-            self._train_individual(individual)
+              self_thread.trainer = _IndividualTrainer(optim=self, individual=individual)
+            self_thread.name = "Hyper param tune train thread on %r" % individual.name
+            self_thread.trainer.run()
         except Exception as exc:
           with Outstanding.cond:
             if not Outstanding.exception:
-              Outstanding.exception = exc
+              Outstanding.exception = exc or True
             Outstanding.cond.notify_all()
+          for thread in Outstanding.threads:
+            if thread is not self_thread:
+              thread.cancel()
+          if not isinstance(exc, CancelTrainingException):
+            with Outstanding.cond:  # So that we don't mix up multiple on sys.stderr.
+              # This would normally dump it on sys.stderr so it's fine.
+              sys.excepthook(*sys.exc_info())
 
     best_individuals = []
     population = []
     canceled = False
+    interactive = is_tty()
     try:
+      print("Population of %i individuals (hyper param setting instances), running for %i evaluation iterations." % (
+        self.num_individuals, self.num_iterations), file=log.v2)
       for cur_iteration_idx in range(1, self.num_iterations + 1):
         print("Starting iteration %i." % cur_iteration_idx, file=log.v2)
         if cur_iteration_idx == 1:
           population.append(Individual(
-            {p: p.get_initial_value() for p in self.hyper_params}, name="canonical"))
-          population.append(Individual(
             {p: p.get_default_value() for p in self.hyper_params}, name="default"))
+          population.append(Individual(
+            {p: p.get_initial_value() for p in self.hyper_params}, name="canonical"))
         population.extend(self.get_population(
           iteration_idx=cur_iteration_idx, num_individuals=self.num_individuals - len(population)))
         if cur_iteration_idx > 1:
           self.cross_over(population=population, iteration_idx=cur_iteration_idx)
-        if cur_iteration_idx == 1:
-          print("Population of %i individuals (hyper param setting instances)." % len(population), file=log.v2)
+        if cur_iteration_idx == 1 and self.dry_run_first_individual:
           # Train first directly for testing and to see log output.
           # Later we will strip away all log output.
           print("Very first try with log output:", file=log.v2)
-          self._train_individual(population[0])
+          _IndividualTrainer(optim=self, individual=population[0]).run()
+        print("Starting training with thread pool of %i threads." % self.num_threads)
+        iteration_start_time = time.time()
         with wrap_log_streams(StreamDummy(), also_sys_stdout=True, tf_log_verbosity="WARN"):
+          Outstanding.exit = False
           Outstanding.population = list(population)
           Outstanding.threads = [WorkerThread() for i in range(self.num_threads)]
-          for thread in Outstanding.threads:
-            thread.join()
+          try:
+            while True:
+              with Outstanding.cond:
+                if all([thread.finished for thread in Outstanding.threads]) or Outstanding.exception:
+                  break
+                complete_frac = max(len(population) - len(Outstanding.population) - len(Outstanding.threads), 0)
+                complete_frac += sum([thread.get_complete_frac() for thread in Outstanding.threads])
+                complete_frac /= float(len(population))
+                remaining_str = ""
+                if complete_frac > 0:
+                  start_elapsed = time.time() - iteration_start_time
+                  total_time_estimated = start_elapsed / complete_frac
+                  remaining_estimated = total_time_estimated - start_elapsed
+                  remaining_str = hms(remaining_estimated)
+                if interactive:
+                  progress_bar(complete_frac, prefix=remaining_str, file=sys.__stdout__)
+                else:
+                  print(
+                    "Progress: %.02f%%" % (complete_frac * 100),
+                    "remaining:", remaining_str or "unknown", file=sys.__stdout__)
+                  sys.__stdout__.flush()
+                Outstanding.cond.wait(1 if interactive else 10)
+            for thread in Outstanding.threads:
+              thread.join()
+          finally:
+            Outstanding.exit = True
+            for thread in Outstanding.threads:
+              thread.cancel(join=True)
           Outstanding.threads = []
         if Outstanding.exception:
           raise Outstanding.exception
+        assert not Outstanding.population
+        print("Training iteration finished.")
         population.sort(key=lambda p: p.cost)
         del population[-self.num_kill_individuals:]
         best_individuals.extend(population)
         best_individuals.sort(key=lambda p: p.cost)
         del best_individuals[self.num_best:]
         population = best_individuals[:self.num_kill_individuals // 4] + population
+        print("Current best setting, individual %s" % best_individuals[0].name, "cost:", best_individuals[0].cost)
+        for p in self.hyper_params:
+          print(" %s -> %s" % (p.description(), best_individuals[0].hyper_param_mapping[p]))
     except KeyboardInterrupt:
       print("KeyboardInterrupt, canceled search.")
       canceled = True
-    finally:
-      Outstanding.exit = True
-      with Outstanding.cond:
-        Outstanding.cond.notify_all()
-      for thread in Outstanding.threads:
-        thread.join()
 
     print("Best %i settings:" % len(best_individuals))
     for individual in best_individuals:
@@ -485,22 +545,29 @@ class Optimization:
       for p in self.hyper_params:
         print(" %s -> %s" % (p.description(), individual.hyper_param_mapping[p]))
 
-  def _train_individual(self, individual):
+
+class _IndividualTrainer:
+  def __init__(self, optim, individual):
     """
+    :param Optimization optim:
     :param Individual individual:
-    :return: score
-    :rtype: float
     """
-    if individual.cost is not None:
-      return individual.cost
+    self.optim = optim
+    self.individual = individual
+    self.runner = None  # type: Runner
+    self.cancel_flag = False
+
+  def run(self):
+    if self.individual.cost is not None:
+      return self.individual.cost
     start_time = time.time()
-    hyper_param_mapping = individual.hyper_param_mapping
-    print("Training using hyper params:", file=log.v2)
-    for p in self.hyper_params:
+    hyper_param_mapping = self.individual.hyper_param_mapping
+    print("Training %r using hyper params:" % self.individual.name, file=log.v2)
+    for p in self.optim.hyper_params:
       print(" %s -> %s" % (p.description(), hyper_param_mapping[p]), file=log.v2)
-    config = self.create_config_instance(hyper_param_mapping)
+    config = self.optim.create_config_instance(hyper_param_mapping)
     engine = Engine(config=config)
-    train_data = StaticDataset.copy_from_dataset(self.train_data)
+    train_data = StaticDataset.copy_from_dataset(self.optim.train_data)
     engine.init_train_from_config(config=config, train_data=train_data)
     # Not directly calling train() as we want to have full control.
     engine.epoch = 1
@@ -515,18 +582,20 @@ class Optimization:
       used_data_keys=engine.network.used_data_keys)
     engine.updater.set_learning_rate(engine.learning_rate)
     trainer = Runner(engine=engine, dataset=train_data, batches=batches, train=True)
-    trainer.run(report_prefix="hyper param tune train")
+    self.runner = trainer
+    if self.cancel_flag:
+      raise CancelTrainingException("Trainer cancel flag is set")
+    trainer.run(report_prefix="hyper param tune train %r" % self.individual.name)
     if not trainer.finalized:
       print("Trainer exception:", trainer.run_exception, file=log.v1)
       raise trainer.run_exception
     cost = trainer.score["cost:output"]
     print(
-      "Individual %s:" % individual.name,
+      "Individual %s:" % self.individual.name,
       "Train cost:", cost,
       "elapsed time:", hms_fraction(time.time() - start_time),
-      file=self.log)
-    individual.cost = cost
-    return cost
+      file=self.optim.log)
+    self.individual.cost = cost
 
 
 class _AttribOrKey:

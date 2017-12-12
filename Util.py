@@ -311,12 +311,12 @@ def model_epoch_from_filename(filename):
     return int(m.groups()[0])
 
 
-def terminal_size(): # this will probably work on linux only
+def terminal_size(file=sys.stdout):  # this will probably work on linux only
   import os, sys, io
-  if not hasattr(sys.stdout, "fileno"):
+  if not hasattr(file, "fileno"):
     return -1, -1
   try:
-    if not os.isatty(sys.stdout.fileno()):
+    if not os.isatty(file.fileno()):
       return -1, -1
   except io.UnsupportedOperation:
     return -1, -1
@@ -324,7 +324,7 @@ def terminal_size(): # this will probably work on linux only
   def ioctl_GWINSZ(fd):
     try:
       import fcntl, termios, struct, os
-      cr = struct.unpack('hh', fcntl.ioctl(fd, termios.TIOCGWINSZ,'1234'))
+      cr = struct.unpack('hh', fcntl.ioctl(fd, termios.TIOCGWINSZ, '1234'))
     except Exception:
         return
     return cr
@@ -339,6 +339,11 @@ def terminal_size(): # this will probably work on linux only
   if not cr:
     cr = (env.get('LINES', 25), env.get('COLUMNS', 80))
   return int(cr[1]), int(cr[0])
+
+
+def is_tty(file=sys.stdout):
+  terminal_width, _ = terminal_size()
+  return terminal_width > 0
 
 
 def confirm(txt, exit_on_false=False):
@@ -395,15 +400,15 @@ def human_bytes_size(n, factor=1024, frac=0.8, prec=1):
   return human_size(n, factor=factor, frac=frac, prec=prec) + "B"
 
 
-def progress_bar(complete = 1.0, prefix = "", suffix = ""):
+def progress_bar(complete=1.0, prefix="", suffix="", file=sys.stdout):
   import sys
-  terminal_width, _ = terminal_size()
+  terminal_width, _ = terminal_size(file=file)
   if terminal_width == -1: return
   if complete == 1.0:
-    sys.stdout.write("\r%s"%(terminal_width * ' '))
-    sys.stdout.flush()
-    sys.stdout.write("\r")
-    sys.stdout.flush()
+    file.write("\r%s"%(terminal_width * ' '))
+    file.flush()
+    file.write("\r")
+    file.flush()
     return
   progress = "%.02f%%" % (complete * 100)
   if prefix != "": prefix = prefix + " "
@@ -412,8 +417,8 @@ def progress_bar(complete = 1.0, prefix = "", suffix = ""):
   bars = '|' * int(complete * ntotal)
   spaces = ' ' * (ntotal - int(complete * ntotal))
   bar = bars + spaces
-  sys.stdout.write("\r%s" % prefix + "[" + bar[:len(bar)//2] + " " + progress + " " + bar[len(bar)//2:] + "]" + suffix)
-  sys.stdout.flush()
+  file.write("\r%s" % prefix + "[" + bar[:len(bar)//2] + " " + progress + " " + bar[len(bar)//2:] + "]" + suffix)
+  file.flush()
 
 
 class _progress_bar_with_time_stats:

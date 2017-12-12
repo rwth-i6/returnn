@@ -37,6 +37,10 @@ from TFUpdater import Updater
 from Util import hms, NumbersDict
 
 
+class CancelTrainingException(Exception):
+  pass
+
+
 class Runner(object):
   def __init__(self, engine, dataset, batches, train, eval=True, extra_fetches=None, extra_fetches_callback=None):
     """
@@ -65,6 +69,7 @@ class Runner(object):
     self.store_metadata_mod_step = engine.config.int("store_metadata_mod_step", 0)
     self.reset_updater_vars_mod_step = engine.config.int("reset_updater_vars_mod_step", 0)
     self.finalized = False
+    self.cancel_flag = False
     self.run_exception = None
     self.num_steps = None
     self.device_crash_batch = None  # type: int|None
@@ -389,6 +394,8 @@ class Runner(object):
         duration = time.time() - start_time
         self._print_process(report_prefix=report_prefix, step=step, step_duration=duration, eval_info=eval_info)
         step += 1
+        if self.cancel_flag:
+          raise CancelTrainingException("cancel_flag is set")
 
       self._print_finish_process()
 
@@ -418,7 +425,8 @@ class Runner(object):
 
     except BaseException as exc:
       print("Exception %r in step %r." % (exc, step), file=log.v1)
-      sys.excepthook(*sys.exc_info())
+      if not isinstance(exc, CancelTrainingException):
+        sys.excepthook(*sys.exc_info())
       self.device_crash_batch = step
       self.run_exception = exc
 
