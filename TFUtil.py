@@ -1407,8 +1407,22 @@ def is_gpu_available():
   This uses tensorflow.device_lib.list_local_devices().
   Note that a call to this will trigger the internal TF thread pool inits,
   so you should call :func:`setup_tf_thread_pools` first.
+
+  :rtype: bool
   """
-  return any(x.device_type == 'GPU' for x in get_tf_list_local_devices())
+  return len(get_available_gpu_devices()) > 0
+
+
+def get_available_gpu_devices():
+  """
+  Returns a list of available GPU devices.
+  This uses tensorflow.device_lib.list_local_devices().
+  Note that a call to this will trigger the internal TF thread pool inits,
+  so you should call :func:`setup_tf_thread_pools` first.
+
+  :rtype: list[tensorflow.core.framework.device_attributes_pb2.DeviceAttributes]
+  """
+  return [x for x in get_tf_list_local_devices() if x.device_type == 'GPU']
 
 
 def dot(a, b):

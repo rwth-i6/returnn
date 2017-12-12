@@ -26,6 +26,7 @@ from __future__ import print_function
 import sys
 import time
 import numpy
+import tensorflow as tf
 from Config import Config
 from Log import log
 from Dataset import Dataset
@@ -387,9 +388,10 @@ class Optimization:
         population=population[:i] + population[i + 1:],
         random_seed=iteration_idx * 1013 + i * 17)
 
-  def create_config_instance(self, hyper_param_mapping):
+  def create_config_instance(self, hyper_param_mapping, gpu_ids):
     """
     :param dict[HyperParam] hyper_param_mapping: maps each hyper param to some value
+    :param set[int] gpu_ids:
     :rtype: Config
     """
     assert set(self.hyper_params) == set(hyper_param_mapping.keys())
@@ -400,10 +402,17 @@ class Optimization:
       assert isinstance(p, HyperParam)
       for attr_chain in p.usages:
         attr_chain.write_attrib(base=config, new_value=value)
+    tf_session_opts = config.typed_dict.setdefault("tf_session_opts", {})
+    # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/protobuf/config.proto
+    gpu_opts = tf_session_opts.setdefault("gpu_options", tf.GPUOptions())
+    if isinstance(gpu_opts, dict):
+      gpu_opts = tf.GPUOptions(**gpu_opts)
+    gpu_opts.visible_device_list = ",".join(map(str, sorted(gpu_ids)))
     return config
 
   def work(self):
     print("Starting hyper param search. Using %i threads." % self.num_threads, file=log.v1)
+    from TFUtil import get_available_gpu_devices
     from Log import wrap_log_streams, StreamDummy
     from threading import Thread, Condition
     from Util import progress_bar, hms, is_tty
@@ -416,8 +425,12 @@ class Optimization:
       exception = None
 
     class WorkerThread(Thread):
-      def __init__(self):
+      def __init__(self, gpu_ids):
+        """
+        :param set[int] gpu_ids:
+        """
         super(WorkerThread, self).__init__(name="Hyper param tune train thread")
+        self.gpu_ids = gpu_ids
         self.trainer = None  # type: _IndividualTrainer
         self.finished = False
         self.start()
@@ -448,7 +461,7 @@ class Optimization:
                 Outstanding.cond.notify_all()
                 return
               individual = Outstanding.population.pop(0)
-              self_thread.trainer = _IndividualTrainer(optim=self, individual=individual)
+              self_thread.trainer = _IndividualTrainer(optim=self, individual=individual, gpu_ids=self_thread.gpu_ids)
             self_thread.name = "Hyper param tune train thread on %r" % individual.name
             self_thread.trainer.run()
         except Exception as exc:
@@ -467,6 +480,9 @@ class Optimization:
     best_individuals = []
     population = []
     canceled = False
+    num_gpus = len(get_available_gpu_devices())
+    print("Num available GPUs:", num_gpus)
+    num_gpus = num_gpus or 1  # Would be ignored anyway.
     interactive = is_tty()
     try:
       print("Population of %i individuals (hyper param setting instances), running for %i evaluation iterations." % (
@@ -486,13 +502,13 @@ class Optimization:
           # Train first directly for testing and to see log output.
           # Later we will strip away all log output.
           print("Very first try with log output:", file=log.v2)
-          _IndividualTrainer(optim=self, individual=population[0]).run()
+          _IndividualTrainer(optim=self, individual=population[0], gpu_ids={0}).run()
         print("Starting training with thread pool of %i threads." % self.num_threads)
         iteration_start_time = time.time()
         with wrap_log_streams(StreamDummy(), also_sys_stdout=True, tf_log_verbosity="WARN"):
           Outstanding.exit = False
           Outstanding.population = list(population)
-          Outstanding.threads = [WorkerThread() for i in range(self.num_threads)]
+          Outstanding.threads = [WorkerThread(gpu_ids={i % num_gpus}) for i in range(self.num_threads)]
           try:
             while True:
               with Outstanding.cond:
@@ -521,7 +537,8 @@ class Optimization:
             Outstanding.exit = True
             for thread in Outstanding.threads:
               thread.cancel(join=True)
-          Outstanding.threads = []
+        Outstanding.threads = []
+        print("Training iteration elapsed time:", hms(time.time() - iteration_start_time))
         if Outstanding.exception:
           raise Outstanding.exception
         assert not Outstanding.population
@@ -547,14 +564,16 @@ class Optimization:
 
 
 class _IndividualTrainer:
-  def __init__(self, optim, individual):
+  def __init__(self, optim, individual, gpu_ids):
     """
     :param Optimization optim:
     :param Individual individual:
+    :param set[int] gpu_ids:
     """
     self.optim = optim
     self.individual = individual
     self.runner = None  # type: Runner
+    self.gpu_ids = gpu_ids
     self.cancel_flag = False
 
   def run(self):
@@ -565,7 +584,7 @@ class _IndividualTrainer:
     print("Training %r using hyper params:" % self.individual.name, file=log.v2)
     for p in self.optim.hyper_params:
       print(" %s -> %s" % (p.description(), hyper_param_mapping[p]), file=log.v2)
-    config = self.optim.create_config_instance(hyper_param_mapping)
+    config = self.optim.create_config_instance(hyper_param_mapping, gpu_ids=self.gpu_ids)
     engine = Engine(config=config)
     train_data = StaticDataset.copy_from_dataset(self.optim.train_data)
     engine.init_train_from_config(config=config, train_data=train_data)
