@@ -24,10 +24,12 @@ if PY3:
   import builtins
   unicode = str
   long = int
+  input = builtins.input
 else:
   import __builtin__ as builtins
   unicode = builtins.unicode
   long = builtins.long
+  input = builtins.raw_input
 
 
 class NotSpecified(object):
@@ -83,6 +85,18 @@ class BackendEngine:
   @classmethod
   def is_tensorflow_selected(cls):
     return cls.get_selected_engine() == cls.TensorFlow
+
+
+def get_model_filename_postfix():
+  """
+  :return: one possible postfix of a file which will be present when the model is saved
+  :rtype: str
+  """
+  assert BackendEngine.selectedEngine is not None
+  if BackendEngine.is_tensorflow_selected():
+    # There will be multiple files but a *.meta file will always be present.
+    return ".meta"
+  return ""
 
 
 def cmd(s):
@@ -297,12 +311,12 @@ def model_epoch_from_filename(filename):
     return int(m.groups()[0])
 
 
-def terminal_size(): # this will probably work on linux only
+def terminal_size(file=sys.stdout):  # this will probably work on linux only
   import os, sys, io
-  if not hasattr(sys.stdout, "fileno"):
+  if not hasattr(file, "fileno"):
     return -1, -1
   try:
-    if not os.isatty(sys.stdout.fileno()):
+    if not os.isatty(file.fileno()):
       return -1, -1
   except io.UnsupportedOperation:
     return -1, -1
@@ -310,7 +324,7 @@ def terminal_size(): # this will probably work on linux only
   def ioctl_GWINSZ(fd):
     try:
       import fcntl, termios, struct, os
-      cr = struct.unpack('hh', fcntl.ioctl(fd, termios.TIOCGWINSZ,'1234'))
+      cr = struct.unpack('hh', fcntl.ioctl(fd, termios.TIOCGWINSZ, '1234'))
     except Exception:
         return
     return cr
@@ -325,6 +339,30 @@ def terminal_size(): # this will probably work on linux only
   if not cr:
     cr = (env.get('LINES', 25), env.get('COLUMNS', 80))
   return int(cr[1]), int(cr[0])
+
+
+def is_tty(file=sys.stdout):
+  terminal_width, _ = terminal_size()
+  return terminal_width > 0
+
+
+def confirm(txt, exit_on_false=False):
+  """
+  :param str txt: e.g. "Delete everything?"
+  :param bool exit_on_false: if True, will call sys.exit(1) if not confirmed
+  :rtype: bool
+  """
+  while True:
+    r = input("%s Confirm? [yes/no]" % txt)
+    if not r:
+      continue
+    if r in ["y", "yes"]:
+      return True
+    if r in ["n", "no"]:
+      if exit_on_false:
+        sys.exit(1)
+      return False
+    print("Invalid response %r." % r)
 
 
 def hms(s):
@@ -362,15 +400,15 @@ def human_bytes_size(n, factor=1024, frac=0.8, prec=1):
   return human_size(n, factor=factor, frac=frac, prec=prec) + "B"
 
 
-def progress_bar(complete = 1.0, prefix = "", suffix = ""):
+def progress_bar(complete=1.0, prefix="", suffix="", file=sys.stdout):
   import sys
-  terminal_width, _ = terminal_size()
+  terminal_width, _ = terminal_size(file=file)
   if terminal_width == -1: return
   if complete == 1.0:
-    sys.stdout.write("\r%s"%(terminal_width * ' '))
-    sys.stdout.flush()
-    sys.stdout.write("\r")
-    sys.stdout.flush()
+    file.write("\r%s"%(terminal_width * ' '))
+    file.flush()
+    file.write("\r")
+    file.flush()
     return
   progress = "%.02f%%" % (complete * 100)
   if prefix != "": prefix = prefix + " "
@@ -379,8 +417,8 @@ def progress_bar(complete = 1.0, prefix = "", suffix = ""):
   bars = '|' * int(complete * ntotal)
   spaces = ' ' * (ntotal - int(complete * ntotal))
   bar = bars + spaces
-  sys.stdout.write("\r%s" % prefix + "[" + bar[:len(bar)//2] + " " + progress + " " + bar[len(bar)//2:] + "]" + suffix)
-  sys.stdout.flush()
+  file.write("\r%s" % prefix + "[" + bar[:len(bar)//2] + " " + progress + " " + bar[len(bar)//2:] + "]" + suffix)
+  file.flush()
 
 
 class _progress_bar_with_time_stats:
@@ -1330,6 +1368,38 @@ def as_str(s):
   assert False, "unknown type %s" % type(s)
 
 
+def deepcopy(x):
+  """
+  Simpler variant of copy.deepcopy().
+  Should handle some edge cases as well, like copying module references.
+
+  :param T x: an arbitrary object
+  :rtype: T
+  """
+  # See also class Pickler from TaskSystem.
+  # Or: https://mail.python.org/pipermail/python-ideas/2013-July/021959.html
+  from TaskSystem import Pickler, Unpickler
+  if PY3:
+    from io import BytesIO as StringIO
+  else:
+    # noinspection PyUnresolvedReferences
+    from StringIO import StringIO
+
+  def pickle_dumps(obj):
+    sio = StringIO()
+    p = Pickler(sio)
+    p.dump(obj)
+    return sio.getvalue()
+
+  def pickle_loads(s):
+    p = Unpickler(StringIO(s))
+    return p.load()
+
+  s = pickle_dumps(x)
+  c = pickle_loads(s)
+  return c
+
+
 def load_txt_vector(filename):
   """
   Expect line-based text encoding in file.
@@ -1343,9 +1413,36 @@ def load_txt_vector(filename):
 
 
 class CollectionReadCheckCovered:
-  def __init__(self, collection):
+  """
+  Wraps around a dict. It keeps track about all the keys which were read from the dict.
+  Via :func:`assert_all_read`, you can check that there are no keys in the dict which were not read.
+  The usage is for config dict options, where the user has specified a range of options,
+  and where in the code there is usually a default for every non-specified option,
+  to check whether all the user-specified options are also used (maybe the user made a typo).
+  """
+
+  def __init__(self, collection, truth_value=None):
+    """
+    :param dict[str] collection:
+    :param None|bool truth_value:
+    """
     self.collection = collection
+    if truth_value is None:
+      truth_value = bool(self.collection)
+    self.truth_value = truth_value
     self.got_items = set()
+
+  @classmethod
+  def from_bool_or_dict(cls, value):
+    """
+    :param bool|dict[str] value:
+    :rtype: CollectionReadCheckCovered
+    """
+    if isinstance(value, bool):
+      return cls(collection={}, truth_value=value)
+    if isinstance(value, dict):
+      return cls(collection=value)
+    raise TypeError("invalid type: %s" % type(value))
 
   def __getitem__(self, item):
     res = self.collection[item]
@@ -1765,6 +1862,28 @@ def read_sge_num_procs(job_id=None):
       exc, opts["num_proc"], job_id, ls[0]))
 
 
+def guess_requested_max_num_threads(log_file=None, fallback_num_cpus=True):
+  try:
+    sge_num_procs = read_sge_num_procs()
+  except Exception as exc:
+    if log_file:
+      print("Error while getting SGE num_proc: %r" % exc, file=log_file)
+  else:
+    if sge_num_procs:
+      if log_file:
+        print("Use num_threads=%i (but min 2) via SGE num_proc." % sge_num_procs, file=log_file)
+      return max(sge_num_procs, 2)
+  omp_num_threads = int(os.environ.get("OMP_NUM_THREADS") or 0)
+  if omp_num_threads:
+    # Minimum of 2 threads, should not hurt.
+    if log_file:
+      print("Use num_threads=%i (but min 2) via OMP_NUM_THREADS." % omp_num_threads, file=log_file)
+    return max(omp_num_threads, 2)
+  if fallback_num_cpus:
+    return os.cpu_count()
+  return None
+
+
 def try_and_ignore_exception(f):
   try:
     f()
@@ -1811,40 +1930,46 @@ def log_runtime_info_to_dir(path, config):
   import socket
   import shutil
   from Config import Config
-  content = [
-    "Time: %s" % time.strftime("%Y-%m-%d %H:%M:%S"),
-    "Call: %s" % (sys.argv,),
-    "Path: %s" % (os.getcwd(),),
-    "Returnn: %s" % (describe_crnn_version(),),
-    "TensorFlow: %s" % (describe_tensorflow_version(),),
-    "Config files: %s" % (config.files,),
-  ]
-  if not os.path.exists(path):
-    os.makedirs(path)
-  hostname = socket.gethostname()
-  with open("%s/returnn.%s.%i.%s.log" % (
-    path, hostname, os.getpid(), time.strftime("%Y-%m-%d-%H-%M-%S")), "w") as f:
-    f.write(
-      "Returnn log file:\n" +
-      "".join(["%s\n" % s for s in content]) +
-      "\n")
-  for fn in config.files:
-    base_fn = os.path.basename(fn)
-    target_fn = "%s/%s" % (path, base_fn)
-    if os.path.exists(target_fn):
-      continue
-    shutil.copy(fn, target_fn)
-    config_type = Config.get_config_file_type(fn)
-    comment_prefix = "#"
-    if config_type == "js":
-      comment_prefix = "//"
-    with open(target_fn, "a") as f:
+  try:
+    content = [
+      "Time: %s" % time.strftime("%Y-%m-%d %H:%M:%S"),
+      "Call: %s" % (sys.argv,),
+      "Path: %s" % (os.getcwd(),),
+      "Returnn: %s" % (describe_crnn_version(),),
+      "TensorFlow: %s" % (describe_tensorflow_version(),),
+      "Config files: %s" % (config.files,),
+    ]
+    if not os.path.exists(path):
+      os.makedirs(path)
+    hostname = socket.gethostname()
+    with open("%s/returnn.%s.%i.%s.log" % (
+      path, hostname, os.getpid(), time.strftime("%Y-%m-%d-%H-%M-%S")), "w") as f:
       f.write(
-        "\n\n\n" +
-        "".join(
-          ["%s Config-file copied for logging purpose by Returnn.\n" % comment_prefix] +
-          ["%s %s\n" % (comment_prefix, s) for s in content]) +
+        "Returnn log file:\n" +
+        "".join(["%s\n" % s for s in content]) +
         "\n")
+    for fn in config.files:
+      base_fn = os.path.basename(fn)
+      target_fn = "%s/%s" % (path, base_fn)
+      if os.path.exists(target_fn):
+        continue
+      shutil.copy(fn, target_fn)
+      config_type = Config.get_config_file_type(fn)
+      comment_prefix = "#"
+      if config_type == "js":
+        comment_prefix = "//"
+      with open(target_fn, "a") as f:
+        f.write(
+          "\n\n\n" +
+          "".join(
+            ["%s Config-file copied for logging purpose by Returnn.\n" % comment_prefix] +
+            ["%s %s\n" % (comment_prefix, s) for s in content]) +
+          "\n")
+  except OSError as exc:
+    if "Disk quota" in str(exc):
+      print("log_runtime_info_to_dir: Error, cannot write: %s" % exc)
+    else:
+      raise
 
 
 class NativeCodeCompiler(object):
@@ -2180,3 +2305,96 @@ def maybe_restart_returnn_with_atfork_patch():
   sys.stdout.flush()
   os.execvpe(sys.executable, [sys.executable] + sys.argv, env)
   print("execvpe did not work?")
+
+
+class Stats:
+  """
+  Collects mean and variance.
+
+  https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance
+  """
+
+  def __init__(self):
+    self.mean = 0.0
+    self.mean_sq = 0.0
+    self.var = 0.0
+    self.total_data_len = 0
+    self.num_seqs = 0
+
+  def collect(self, data):
+    """
+    :param numpy.ndarray data: shape (time, dim)
+    """
+    import numpy
+    self.num_seqs += 1
+    new_total_data_len = self.total_data_len + data.shape[0]
+    mean_diff = numpy.mean(data, axis=0) - self.mean
+    m_a = self.var * self.total_data_len
+    m_b = numpy.var(data, axis=0) * data.shape[0]
+    m2 = m_a + m_b + mean_diff ** 2 * self.total_data_len * data.shape[0] / new_total_data_len
+    self.var = m2 / new_total_data_len
+    data_sum = numpy.sum(data, axis=0)
+    delta = data_sum - self.mean * data.shape[0]
+    self.mean += delta / new_total_data_len
+    delta_sq = numpy.sum(data * data, axis=0) - self.mean_sq * data.shape[0]
+    self.mean_sq += delta_sq / new_total_data_len
+    self.total_data_len = new_total_data_len
+
+  def get_mean(self):
+    """
+    :return: mean, shape (dim,)
+    :rtype: numpy.ndarray
+    """
+    assert self.num_seqs > 0
+    return self.mean
+
+  def get_std_dev(self):
+    """
+    :return: std dev, shape (dim,)
+    :rtype: numpy.ndarray
+    """
+    import numpy
+    assert self.num_seqs > 0
+    return numpy.sqrt(self.var)
+    # return numpy.sqrt(self.mean_sq - self.mean * self.mean)
+
+  def dump(self, output_file_prefix=None, stream=None):
+    """
+    :param str|None output_file_prefix: if given, will numpy.savetxt mean|std_dev to disk
+    :param io.TextIOBase stream: sys.stdout by default
+    """
+    if stream is None:
+      stream = sys.stdout
+    import numpy
+    print("Stats:", file=stream)
+    print("%i seqs, %i total frames, %f average frames" % (
+      self.num_seqs, self.total_data_len, self.total_data_len / float(self.num_seqs)), file=stream)
+    print("Mean: %s" % self.get_mean(), file=stream)
+    print("Std dev: %s" % self.get_std_dev(), file=stream)
+    # print("Std dev (naive): %s" % numpy.sqrt(self.mean_sq - self.mean * self.mean), file=stream)
+    if output_file_prefix:
+      print("Write mean/std-dev to %s.(mean|std_dev).txt." % output_file_prefix, file=stream)
+      numpy.savetxt("%s.mean.txt" % output_file_prefix, self.get_mean())
+      numpy.savetxt("%s.std_dev.txt" % output_file_prefix, self.get_std_dev())
+
+
+def is_namedtuple(cls):
+  """
+  :param T cls: tuple, list or namedtuple type
+  :return: whether cls is a namedtuple type
+  :rtype: bool
+  """
+  return issubclass(cls, tuple) and cls is not tuple
+
+
+def make_seq_of_type(cls, seq):
+  """
+  :param T cls: e.g. tuple, list or namedtuple
+  :param list|tuple|T seq:
+  :return: cls(seq) or cls(*seq)
+  :rtype: T|list|tuple
+  """
+  assert issubclass(cls, (list, tuple))
+  if is_namedtuple(cls):
+    return cls(*seq)
+  return cls(seq)

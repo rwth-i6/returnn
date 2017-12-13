@@ -192,7 +192,16 @@ class LayerNetworkDescription:
       from Util import BackendEngine
       num_outputs = convert_data_dims(num_outputs, leave_dict_as_is=BackendEngine.is_tensorflow_selected())
       if "data" in num_outputs:
-        num_inputs = num_outputs["data"][0]
+        num_inputs = num_outputs["data"]
+        if isinstance(num_inputs, (list, tuple)):
+          num_inputs = num_inputs[0]
+        elif isinstance(num_inputs, dict):
+          if "dim" in num_inputs:
+            num_inputs = num_inputs["dim"]
+          else:
+            num_inputs = num_inputs["shape"][-1]
+        else:
+          raise TypeError("data key %r" % num_inputs)
     elif config.has('num_outputs'):
       num_outputs = {target: [config.int('num_outputs', 0), 1]}
     else:

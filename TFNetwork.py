@@ -145,6 +145,17 @@ class ExternData(object):
         dtypes.append(self.data[name].size_dtype)
     return {"names": names, "shapes": shapes, "dtypes": dtypes}
 
+  def get_sorted_data_items(self):
+    """
+    :rtype: list[(str,Data)]
+    """
+    keys = sorted(self.data.keys())
+    if self.default_input in self.data:
+      # Move to front.
+      keys.remove(self.default_input)
+      keys.insert(0, self.default_input)
+    return [(key, self.data[key]) for key in keys]
+
 
 class TFNetwork(object):
   def __init__(self, config=None, extern_data=None, rnd_seed=42,
@@ -209,6 +220,7 @@ class TFNetwork(object):
     self.recurrent = False
     self._assigner_cache = {}  # type: dict[tf.Variable,VariableAssigner]
     self.concat_sources_dropout_cache = {}  # type: dict[(tuple[LayerBase],float),Data]
+    self._batch_dim = None  # see get_batch_dim
 
   def __repr__(self):
     s = "TFNetwork %r" % self.name
@@ -225,6 +237,10 @@ class TFNetwork(object):
     return "<%s>" % s
 
   def get_absolute_name_scope_prefix(self):
+    """
+    :return: scope, always with "/" at the end, or ""
+    :rtype: str
+    """
     if self.parent_layer:
       return self.parent_layer.get_absolute_name_scope_prefix()
     if self.parent_net:
@@ -326,21 +342,25 @@ class TFNetwork(object):
       the layer_class will usually then define the layer.output and its placeholder.
       there is one notable exception: the InternalLayer, where you predefine the output.
     """
+    assert name not in self.layers
     from Util import help_on_type_error_wrong_args
+    if self.search_flag:
+      from TFNetworkLayer import SearchChoices
+      layer_desc = SearchChoices.translate_to_common_search_beam(layer_desc)
     layer_desc = layer_desc.copy()
     assert "name" not in layer_desc
     assert "network" not in layer_desc
     layer_desc["name"] = name
     layer_desc["network"] = self
-    debug_print_layer_output_template = self._config and self._config.bool("debug_print_layer_output_template", False)
-    debug_print_layer_output_shape = self._config and self._config.bool("debug_print_layer_output_shape", False)
-    debug_add_check_numerics_on_output = self._config and self._config.bool("debug_add_check_numerics_on_output", False)  # also see debug_add_check_numerics_ops
+    debug_print_layer_output_template = self.get_config().bool("debug_print_layer_output_template", False)
+    debug_print_layer_output_shape = self.get_config().bool("debug_print_layer_output_shape", False)
+    debug_add_check_numerics_on_output = self.get_config().bool("debug_add_check_numerics_on_output", False)  # also see debug_add_check_numerics_ops
     with reuse_name_scope(layer_class.cls_get_tf_scope_name(name)):
       try:
         if "output" not in layer_desc:
           layer_desc["output"] = layer_class.get_out_data_from_opts(**layer_desc)
         if debug_print_layer_output_template:
-          print("layer %r output: %r" % (name, layer_desc["output"]))
+          print("layer %s%r output: %r" % (self.get_absolute_name_scope_prefix(), name, layer_desc["output"]))
         layer = layer_class(**layer_desc)
       except TypeError:
         help_on_type_error_wrong_args(cls=layer_class, kwargs=list(layer_desc.keys()))
@@ -402,7 +422,9 @@ class TFNetwork(object):
             error = layer.get_error_value()
             if loss is not None:
               tf.summary.scalar("loss_%s" % layer.name, loss * layer.get_loss_normalization_factor())
-              if self._config and self._config.bool("debug_add_check_numerics_on_output", False):
+              if self.get_config().bool("calculate_exp_loss", False):
+                tf.summary.scalar("exp_loss_%s" % layer.name, tf.exp(loss * layer.get_loss_normalization_factor()))
+              if self.get_config().bool("debug_add_check_numerics_on_output", False):
                 print("debug_add_check_numerics_on_output: add for layer loss %r: %r" % (name, layer.output.placeholder))
                 from TFUtil import identity_with_check_numerics
                 loss = identity_with_check_numerics(
@@ -719,6 +741,8 @@ class TFNetwork(object):
     :param str filename:
     :param tf.Session session:
     """
+    import os
+    filename = os.path.abspath(filename)  # TF needs absolute path
     if not self.saver:
       self._create_saver()
     # We add some extra logic to try again for DiskQuota and other errors.
@@ -860,7 +884,7 @@ class TFNetwork(object):
   def print_network_info(self, name="Network"):
     print("%s layer topology:" % name, file=log.v2)
     print("  extern data:", self.extern_data.get_data_description(), file=log.v2)
-    print("  used data keys: %s" % list(sorted(self.used_data_keys)))
+    print("  used data keys: %s" % list(sorted(self.used_data_keys)), file=log.v2)
     for layer_name, layer in sorted(self.layers.items()):
       print("  layer %s %r #: %i" % (layer.layer_class, layer_name, layer.output.dim), file=log.v2)
     if not self.layers:
@@ -886,6 +910,8 @@ class TFNetwork(object):
     Recursively searches through all sources,
     and if there is a ChoiceLayer / any layer with search_choices, returns it.
     Could also go to the parent network.
+    If there are multiple, it assumes they are on the same search-sequence in the search-tree
+    and it will return the last one.
 
     :param LayerBase|None src:
     :param LayerBase|None base_search_choice:
@@ -912,13 +938,14 @@ class TFNetwork(object):
     _visited.update(sources)
     layers = [self.get_search_choices(src=src, _visited=_visited) for src in sources]
     layers = [layer for layer in layers if layer is not None]  # type: list[LayerBase]
-    layers = set(layers)
-    assert len(layers) <= 1, "multiple choice layers not supported yet"
-    if len(layers) == 1:
-      return list(layers)[0]
-    if self.parent_layer:
-      return self.parent_layer.network.get_search_choices(sources=self.parent_layer.get_dep_layers())
-    return None
+    if not layers:
+      if self.parent_layer:
+        return self.parent_layer.network.get_search_choices(sources=self.parent_layer.get_dep_layers())
+      return None
+    from TFNetworkLayer import SearchChoices
+    from functools import cmp_to_key
+    layers = sorted(layers, key=cmp_to_key(lambda l1, l2: SearchChoices.compare(l1.search_choices, l2.search_choices)))
+    return layers[-1]
 
   def debug_search_choices(self, base_search_choice):
     """
@@ -937,7 +964,7 @@ class TFNetwork(object):
 
     self.get_search_choices(base_search_choice=base_search_choice, _visited=Visitor())
 
-  def get_batch_dim(self):
+  def get_data_batch_dim(self):
     """
     Get the batch-dim size, i.e. amount of sequences in the current batch.
     Consider that the data tensor is usually of shape [batch, time, dim],
@@ -959,14 +986,71 @@ class TFNetwork(object):
     from TFUtil import get_shape_dim, reuse_name_scope_of_tensor
     # First check parent because there we might get the true batch dim.
     if self.parent_net:
-      return self.parent_net.get_batch_dim()
-    for key, data in sorted(self.extern_data.data.items()):
+      return self.parent_net.get_data_batch_dim()
+    if self._batch_dim is not None:
+      return self._batch_dim
+    for key, data in self.extern_data.get_sorted_data_items():
       assert isinstance(data, Data)
       if data.available_for_inference:
         self.used_data_keys.add(key)
         with reuse_name_scope_of_tensor(data.placeholder):
-          return get_shape_dim(data.placeholder, data.batch_dim_axis, name="batch_dim")
+          batch_dim = get_shape_dim(data.placeholder, data.batch_dim_axis, name="batch_dim")
+          self._batch_dim = batch_dim
+          return batch_dim
     raise Exception("We cannot tell the batch dim.")
+
+  def set_rec_step_info(self, i, end_flag=None, seq_lens=None):
+    """
+    Used by _SubnetworkRecCell.
+    :param tf.Tensor i: scalar, int32, current step (time)
+    :param tf.Tensor|None end_flag: (batch,), bool, says that the current sequence has ended
+    :param tf.Tensor|None seq_lens: (batch,) int32, seq lens
+    """
+    from TFNetworkRecLayer import RecStepInfoLayer
+    self.layers[":i"] = RecStepInfoLayer(
+      name=":i", network=self, i=i, end_flag=end_flag, seq_lens=seq_lens)
+
+  def have_rec_step_info(self):
+    return ":i" in self.layers
+
+  def get_rec_step_info(self):
+    """
+    Assumes that have_rec_step_info is True.
+    :rtype: TFNetworkRecLayer.RecStepInfoLayer
+    """
+    from TFNetworkRecLayer import RecStepInfoLayer
+    layer = self.layers[":i"]
+    assert isinstance(layer, RecStepInfoLayer)
+    return layer
+
+  def get_rec_step_index(self):
+    """
+    Assumes that have_rec_step_info is True.
+
+    :rtype: tf.Tensor
+    :return: scalar, int32
+    """
+    return self.get_rec_step_info().step
+
+  def get_config(self, consider_global_config=True, fallback_dummy_config=True):
+    """
+    :param bool consider_global_config: if no config is set, check for global config
+    :param bool fallback_dummy_config: if no config, return a new empty Config, otherwise return None
+    :rtype: Config.Config|None
+    """
+    from Config import Config, get_global_config
+    if self._config:
+      return self._config
+    if self.parent_net:
+      return self.parent_net.get_config(
+        consider_global_config=consider_global_config, fallback_dummy_config=fallback_dummy_config)
+    if consider_global_config:
+      config = get_global_config(raise_exception=False)
+      if config:
+        return config
+    if fallback_dummy_config:
+      return Config()
+    return None
 
 
 class TFNetworkParamsSerialized(object):

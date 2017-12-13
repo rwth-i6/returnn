@@ -59,13 +59,13 @@ def _consider_check_for_gpu():
   return False
 
 
-def get_num_devices():
+def _get_num_devices():
   if os.name == 'nt':
-    return 1, 1 #TODO
+    return 1, 1  # TODO
   elif sys.platform == 'darwin':
-      #TODO parse via xml output
-      return int(cmd("sysctl -a | grep machdep.cpu.core_count | awk '{print $2}'")[0]),\
-               len(cmd("system_profiler SPDisplaysDataType | grep 'Chipset Model: NVIDIA' | cat"))
+    return (
+      int(cmd("sysctl -a | grep machdep.cpu.core_count | awk '{print $2}'")[0]),
+      len(cmd("system_profiler SPDisplaysDataType | grep 'Chipset Model: NVIDIA' | cat")))
   else:
     num_cpus = len(cmd('cat /proc/cpuinfo | grep processor')) or 1
     num_gpus = 0
@@ -75,6 +75,21 @@ def get_num_devices():
       except CalledProcessError:
         pass
     return num_cpus, num_gpus
+
+
+_num_devices = None
+
+
+def get_num_devices():
+  """
+  :return: (cpu count, gpu count)
+  :rtype: (int, int)
+  """
+  global _num_devices
+  if _num_devices is not None:
+    return _num_devices
+  _num_devices = _get_num_devices()
+  return _num_devices
 
 
 def get_gpu_names():
@@ -672,7 +687,9 @@ class Device(object):
           #but makes the index handling with mdlstm work for now
           source.append(T.log(pcx))
         elif extract == "posteriors":
-          layer = self.testnet.get_layer(output_layer_name)
+          if not param:
+            param = output_layer_name
+          layer = self.testnet.get_layer(param)
           p_y_given_x = getattr(layer, "p_y_given_x", layer.output)
           index = layer.output_index()
           if p_y_given_x.ndim == 2:

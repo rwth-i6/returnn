@@ -608,7 +608,7 @@ def initBase(configfile=None, targetMode=None, epoch=None):
     config = rnn.config
 
     rnn.initLog()
-    rnn.crnnGreeting(configFilename=configfile)
+    rnn.returnnGreeting(configFilename=configfile)
     rnn.initBackendEngine()
     rnn.initFaulthandler(sigusr1_chain=True)
     rnn.initConfigJsonNetwork()

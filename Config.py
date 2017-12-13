@@ -445,9 +445,10 @@ class Config:
       return int(value), int(value)
 
 
-def get_global_config():
+def get_global_config(raise_exception=True):
   """
-  :rtype: Config
+  :param bool raise_exception: if no global config is found, raise an exception, otherwise return None
+  :rtype: Config|None
   """
   import TaskSystem
   import Device
@@ -463,5 +464,8 @@ def get_global_config():
   # Maybe __main__ is not rnn.py, or config not yet loaded.
   # Anyway, try directly. (E.g. for SprintInterface.)
   import rnn
-  assert isinstance(rnn.config, Config)  # no other option anymore
-  return rnn.config
+  if isinstance(rnn.config, Config):
+    return rnn.config
+  if raise_exception:
+    raise Exception("No global config found.")
+  return None

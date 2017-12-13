@@ -1,4 +1,4 @@
-
+from __future__ import print_function
 import gc
 import numpy
 import theano
@@ -40,10 +40,11 @@ class CachedDataset(Dataset):
     self.definite_cache_leftover = temp_cache_size_bytes if self.num_seqs_cached_at_start == self.num_seqs else 0
     self.cache_num_frames_free = temp_cache_size_bytes / self.nbytes
 
-    print >> log.v4, "cached %i seqs" % self.num_seqs_cached_at_start, \
-                     "%s GB" % (self.cached_bytes_at_start / float(1024 * 1024 * 1024)), \
-                     ("(fully loaded, %s GB left over)" if self.definite_cache_leftover else "(%s GB free)") % \
-                     max(temp_cache_size_bytes / float(1024 * 1024 * 1024), 0)
+    print("cached %i seqs" % self.num_seqs_cached_at_start, \
+          "%s GB" % (self.cached_bytes_at_start / float(1024 * 1024 * 1024)), \
+          ("(fully loaded, %s GB left over)" if self.definite_cache_leftover else "(%s GB free)") % \
+          max(temp_cache_size_bytes / float(1024 * 1024 * 1024), 0),
+          file=log.v4)
 
   def init_seq_order(self, epoch=None, seq_list=None):
     """
@@ -65,7 +66,7 @@ class CachedDataset(Dataset):
 
     if epoch is not None:
       # Give some hint to the user in case he is wondering why the cache is reloading.
-      print >> log.v4, "Reinitialize dataset seq order for epoch %i." % epoch
+      print("Reinitialize dataset seq order for epoch %i." % epoch, file=log.v4)
 
     if self.num_seqs_cached_at_start != len(seq_index):
       self._seq_index = seq_index
@@ -229,7 +230,7 @@ class CachedDataset(Dataset):
     e = len(self.alloc_intervals)
     # Binary search.
     while s < e:
-      i = (s + e) / 2
+      i = (s + e) // 2
       alloc_start, alloc_end, _ = self.alloc_intervals[i]
       if alloc_start <= ids < alloc_end:
         return i
@@ -395,7 +396,7 @@ class CachedDataset(Dataset):
     e = len(self.alloc_intervals)
     # Binary search.
     while s < e:
-      i = (s + e) / 2
+      i = (s + e) // 2
       alloc_start, alloc_end, _ = self.alloc_intervals[i]
       if alloc_start <= start < alloc_end:
         return alloc_start < end <= alloc_end
@@ -467,7 +468,7 @@ class CachedDataset(Dataset):
     return self.targets[target][seq_start:seq_start + seq_len]
 
   def get_target_list(self):
-    return self.targets.keys()
+    return list(self.targets.keys())
 
   def get_ctc_targets(self, sorted_seq_idx):
     ids = self._seq_index[self._index_map[sorted_seq_idx]]

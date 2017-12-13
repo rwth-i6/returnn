@@ -45,12 +45,21 @@ The BLAS functions expect the inputs in column-major and return in column-major.
 #define Ndarray_DEV_DATA(x) (x)->flat<float>().data()
 #define Ndarray_DEV_DATA_int32(x) (x)->flat<int32>().data()
 #define Ndarray_DEV_DATA_int32_scalar(x) (x)->scalar<int32>()()
-#define Ndarray_HOST_DIMS(x) (x)->shape().dim_sizes().data()
+#define Ndarray_HOST_DIMS(x) DimsAccessor(x)
 #define Ndarray_DIMS Ndarray_HOST_DIMS
 #define Ndarray_NDIM(x) (x)->dims()
 #define Ndarray_dtype_size(x) tensorflow::DataTypeSize((x)->dtype())
 typedef long long Ndarray_DIM_Type;
 #define Ndarray_SIZE(x) (x)->NumElements()
+
+struct DimsAccessor {
+    const Ndarray* tensor_;
+    DimsAccessor(const Ndarray* tensor) : tensor_(tensor) {}
+    Ndarray_DIM_Type operator[](const int i) {
+        return tensor_->dim_size(i);
+    }
+};
+typedef DimsAccessor Ndarray_DIMS_Type;
 
 // return in elements
 static inline size_t Ndarray_STRIDE(const Ndarray* x, int dim) {
@@ -61,7 +70,7 @@ static inline size_t Ndarray_STRIDE(const Ndarray* x, int dim) {
 }
 
 // uninitialized
-static Ndarray* Ndarray_NewDims(int nd, const Ndarray_DIM_Type* dims) {
+static Ndarray* Ndarray_NewDims(int nd, Ndarray_DIMS_Type dims) {
     // TODO...
     assert("not implemented" && 0);
     return NULL;
@@ -239,6 +248,7 @@ static void tf_cuda_sgemm(
 #define Ndarray_STRIDE(x, i) (CudaNdarray_HOST_STRIDES(x)[i])  // return in elements. CudaNdarray stores like that
 #define Ndarray_NDIM(x) (x->nd)
 #define Ndarray_DIM_Type int
+typedef Ndarray_DIM_Type const* Ndarray_DIMS_Type;
 #define Ndarray_dtype_size(x) sizeof(float)
 #define Ndarray_SIZE CudaNdarray_SIZE
 // PyObject *CudaNdarray_NewDims(int nd, const inttype * dims), uninitialized
@@ -345,6 +355,7 @@ static void _cudaHandleError(cublasStatus_t status, const char *file, int line) 
 #define Ndarray_DIMS Ndarray_HOST_DIMS
 #define Ndarray_NDIM PyArray_NDIM
 #define Ndarray_DIM_Type npy_intp
+typedef Ndarray_DIM_Type const* Ndarray_DIMS_Type;
 #define Ndarray_dtype_size(x) sizeof(float)
 #define Ndarray_SIZE PyArray_SIZE
 #define Ndarray_NewDims(nd, dims) (PyArray_SimpleNew(nd, dims, NPY_FLOAT32))
@@ -424,8 +435,12 @@ struct _KernelLoop {
 
 
 Ndarray* Ndarray_uninitialized_like(Ndarray* a) {
-	const Ndarray_DIM_Type* dim = Ndarray_HOST_DIMS(a);
-	Ndarray* res = (Ndarray*) Ndarray_NewDims(Ndarray_NDIM(a), (Ndarray_DIM_Type*) dim);
+	Ndarray_DIMS_Type dim = Ndarray_HOST_DIMS(a);
+#if TENSORFLOW
+	Ndarray* res = (Ndarray*) Ndarray_NewDims(Ndarray_NDIM(a), dim);
+#else
+	Ndarray* res = (Ndarray*) Ndarray_NewDims(Ndarray_NDIM(a), const_cast<Ndarray_DIM_Type*>(dim));
+#endif
 	return res;
 }
 
@@ -443,7 +458,7 @@ float* data_ptr(Ndarray* a, int x) {
 	if(Ndarray_NDIM(a) == 2)
 		return Ndarray_DEV_DATA(a);
 	else {
-		const Ndarray_DIM_Type* dims = Ndarray_HOST_DIMS(a);
+		Ndarray_DIMS_Type dims = Ndarray_HOST_DIMS(a);
 		return Ndarray_DEV_DATA(a) + x * dims[1] * dims[2];
 	}
 }
@@ -453,7 +468,7 @@ const float* data_ptr(const Ndarray* a, int x) {
 }
 
 void lastTwoDims(const Ndarray* a, int out[2]) {
-	const Ndarray_DIM_Type* dims = Ndarray_HOST_DIMS((Ndarray*) a);
+	Ndarray_DIMS_Type dims = Ndarray_HOST_DIMS((Ndarray*) a);
 	assert(Ndarray_NDIM(a) >= 2);
 	out[0] = dims[Ndarray_NDIM(a) - 2];
 	out[1] = dims[Ndarray_NDIM(a) - 1];
@@ -734,11 +749,16 @@ void debug_print(OpKernelContext* context, tensorflow::Tensor* v, const std::str
     // https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/debug_ops.h
     std::string full_name = context->op_kernel().name() + ":" + name;
     tensorflow::Tensor cpy(v->dtype(), v->shape());
-    Notification done_copy;
-    context->op_device_context()->CopyDeviceTensorToCPU(
-        v, name, static_cast<Device*>(context->device()), &cpy,
-        [&done_copy](const Status& s) { done_copy.Notify(); });
-    done_copy.WaitForNotification();
+    if(context->op_device_context()) {  // GPU
+        Notification done_copy;
+        context->op_device_context()->CopyDeviceTensorToCPU(
+            v, name, static_cast<Device*>(context->device()), &cpy,
+            [&done_copy](const Status& s) { done_copy.Notify(); });
+        done_copy.WaitForNotification();
+    }
+    else {
+        cpy.UnsafeCopyFromInternal(*v, v->dtype(), v->shape());
+    }
     printf("%s: %s\n", full_name.c_str(), cpy.DebugString().c_str());
     if(max_entries > 0)
         printf("%s: %s\n", full_name.c_str(), cpy.SummarizeValue(max_entries).c_str());
@@ -748,6 +768,25 @@ void debug_print(OpKernelContext* context, tensorflow::Tensor* v, const std::str
     filename = tensorflow::str_util::StringReplace(filename, ":", "_", true);
     filename = tensorflow::str_util::StringReplace(filename, "/", "__", true);
     dump_to_file(&cpy, filename);
+}
+
+void debug_print_shape(OpKernelContext* context, tensorflow::Tensor* tensor, const std::string& name) {
+    printf("%s info:\n", name.c_str());
+    printf("  initialized: %i\n", tensor->IsInitialized());
+    printf("  dtype: %s (size %i)\n", DataTypeString(tensor->dtype()).c_str(), DataTypeSize(tensor->dtype()));
+    printf("  shape: %s\n", tensor->shape().DebugString().c_str());
+    #define _dump_type_dims(NDIM) \
+      if(DataTypeString(tensor->dtype()) == "float" && tensor->dims() == NDIM) { \
+        const auto& eigen_tensor = tensor->tensor<float, NDIM>(); \
+        printf("  eigen rank: %li\n", eigen_tensor.rank()); \
+        for(int d = 0; d < eigen_tensor.rank(); ++d) \
+          printf("  eigen dim %i: %li\n", d, eigen_tensor.dimension(d)); \
+        printf("  eigen data: %p\n", eigen_tensor.data()); \
+      }
+    _dump_type_dims(1);
+    _dump_type_dims(2);
+    _dump_type_dims(3);
+    printf("  data: %p\n", Ndarray_DEV_DATA(tensor));
 }
 
 #endif

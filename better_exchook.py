@@ -171,20 +171,27 @@ def simple_debug_shell(globals, locals):
 
 def debug_shell(user_ns, user_global_ns, traceback=None, execWrapper=None):
     ipshell = None
-    if traceback:
+    try:
+        import IPython
+        have_ipython = True
+    except ImportError:
+        have_ipython = False
+    if not ipshell and traceback and have_ipython:
         try:
             from IPython.core.debugger import Pdb
+            from IPython.terminal.debugger import TerminalPdb
             from IPython.terminal.ipapp import TerminalIPythonApp
             ipapp = TerminalIPythonApp.instance()
             ipapp.interact = False  # Avoid output (banner, prints)
             ipapp.initialize(argv=[])
             def_colors = ipapp.shell.colors
-            pdb_obj = Pdb(def_colors)
+            pdb_obj = TerminalPdb(def_colors)
             pdb_obj.botframe = None  # not sure. exception otherwise at quit
             ipshell = lambda: pdb_obj.interaction(None, traceback=traceback)
         except Exception:
-            pass
-    if not ipshell:
+            print("IPython Pdb exception:")
+            better_exchook(*sys.exc_info(), autodebugshell=False)
+    if not ipshell and have_ipython:
         try:
             import IPython
             import IPython.terminal.embed
@@ -195,10 +202,10 @@ def debug_shell(user_ns, user_global_ns, traceback=None, execWrapper=None):
             if "__name__" not in user_ns:
                 user_ns = user_ns.copy()
                 user_ns["__name__"] = "_DummyUserNsMod"
-            ipshell = IPython.terminal.embed.InteractiveShellEmbed(
+            ipshell = IPython.terminal.embed.InteractiveShellEmbed.instance(
                 user_ns=user_ns, user_module=module)
         except Exception:
-            print("IPython not available.")
+            print("IPython not available:")
             better_exchook(*sys.exc_info(), autodebugshell=False)
         else:
             if execWrapper:
@@ -761,14 +768,30 @@ def test_remove_indent_lines():
     assert remove_indent_lines("  a\n b") == "a\nb"
     assert remove_indent_lines("\ta\n\t b") == "a\n b"
 
+
 if __name__ == "__main__":
-    if " ".join(sys.argv[1:]) == "test":
+    if sys.argv[1:] == ["test"]:
         for k, v in sorted(globals().items()):
             if not k.startswith("test_"): continue
             print("running: %s()" % k)
             v()
         print("ok.")
         sys.exit()
+
+    elif sys.argv[1:] == ["debug_shell"]:
+        debug_shell(locals(), globals())
+        sys.exit()
+
+    elif sys.argv[1:] == ["debug_shell_exception"]:
+        try:
+            raise Exception("demo exception")
+        except Exception:
+            better_exchook(*sys.exc_info(), debugshell=True)
+        sys.exit()
+
+    elif sys.argv[1:]:
+        print("Usage: %s (test|...)" % sys.argv[0])
+        sys.exit(1)
 
     # some examples
     # this code produces this output: https://gist.github.com/922622

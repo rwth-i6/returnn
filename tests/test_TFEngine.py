@@ -16,6 +16,7 @@ import TFUtil
 TFUtil.debugRegisterBetterRepr()
 from Config import Config
 from nose.tools import assert_equal, assert_is_instance
+import unittest
 import numpy
 import numpy.testing
 from pprint import pprint
@@ -252,7 +253,7 @@ def test_engine_forward_to_hdf():
     assert f['inputs'].shape == (seq_len*num_seqs, n_classes_dim)
     assert f['seqLengths'].shape == (num_seqs,2)
     assert f['seqTags'].shape == (num_seqs,)
-    assert f.attrs['inputPattSize'] == n_data_dim
+    assert f.attrs['inputPattSize'] == n_classes_dim
     assert f.attrs['numSeqs'] == num_seqs
     assert f.attrs['numTimesteps'] == seq_len * num_seqs
 
@@ -312,7 +313,7 @@ def check_engine_search(extra_rec_kwargs=None):
   from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
   seq_len = 5
   n_data_dim = 2
-  n_classes_dim = 3
+  n_classes_dim = 7
   dataset = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
   dataset.init_seq_order(epoch=1)
 
@@ -385,7 +386,7 @@ def check_engine_search_attention(extra_rec_kwargs=None):
   from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
   seq_len = 5
   n_data_dim = 2
-  n_classes_dim = 3
+  n_classes_dim = 7
   dataset = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
   dataset.init_seq_order(epoch=1)
   print("Hello search!")
@@ -414,7 +415,10 @@ def check_engine_search_attention(extra_rec_kwargs=None):
         },
       }, extra_rec_kwargs or {}),
       "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance"}
-    }})
+    },
+    "debug_print_layer_output_template": True,
+    "debug_print_layer_output_shape": True
+  })
   engine = Engine(config=config)
   print("Init network...")
   engine.start_epoch = 1
@@ -456,12 +460,84 @@ def test_engine_search_attention():
   check_engine_search_attention()
 
 
+def check_engine_train_simple_attention(lstm_unit):
+  net_dict = {
+    "lstm0_fw": {"class": "rec", "unit": lstm_unit, "n_out": 20, "dropout": 0.0, "L2": 0.01, "direction": 1},
+    "lstm0_bw": {"class": "rec", "unit": lstm_unit, "n_out": 20, "dropout": 0.0, "L2": 0.01, "direction": -1},
+
+    "lstm1_fw": {"class": "rec", "unit": lstm_unit, "n_out": 20, "dropout": 0.0, "L2": 0.01, "direction": 1,
+                 "from": ["lstm0_fw", "lstm0_bw"]},
+    "lstm1_bw": {"class": "rec", "unit": lstm_unit, "n_out": 20, "dropout": 0.0, "L2": 0.01, "direction": -1,
+                 "from": ["lstm0_fw", "lstm0_bw"]},
+
+    "encoder": {"class": "linear", "activation": "tanh", "from": ["lstm1_fw", "lstm1_bw"], "n_out": 20},
+    "enc_ctx": {"class": "linear", "activation": "tanh", "from": ["encoder"], "n_out": 20},
+
+    "output": {"class": "rec", "from": [], "unit": {
+      'orth_embed': {'class': 'linear', 'activation': None, 'from': ['data:classes'], "n_out": 10},
+      "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["prev:c", "prev:orth_embed"], "n_out": 20},
+      "c_in": {"class": "linear", "activation": "tanh", "from": ["s", "prev:orth_embed"], "n_out": 20},
+      "c": {"class": "dot_attention", "from": ["c_in"], "base": "base:encoder", "base_ctx": "base:enc_ctx",
+            "n_out": 20},
+      "output": {"class": "softmax", "from": ["prev:s", "c"], "target": "classes"}
+    }, "target": "classes", "loss": "ce"}
+
+  }
+
+  from GeneratingDataset import DummyDataset
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 3
+  dataset = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  dataset.init_seq_order(epoch=1)
+
+  config = Config()
+  config.update({
+    "model": "/tmp/model",
+    "batch_size": 100,
+    "max_seqs": 2,
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": net_dict,
+    "start_epoch": 1,
+    "num_epochs": 2,
+    "learning_rate": 0.01,
+    "nadam": True,
+    "gradient_noise": 0.3,
+    "debug_add_check_numerics_ops": True,
+    "debug_print_layer_output_template": True,
+    "debug_print_layer_output_shape": True,
+    "debug_add_check_numerics_on_output": True,
+  })
+  engine = Engine(config=config)
+  engine.init_train_from_config(config=config, train_data=dataset, dev_data=dataset, eval_data=None)
+  print("Extern data:")
+  pprint(engine.network.extern_data.data)
+  print("Used data keys:")
+  pprint(engine.network.used_data_keys)
+  engine.train()
+  engine.finalize()
+
+
+# @unittest.skip("crash on OSX? https://github.com/tensorflow/tensorflow/issues/14285")
+def test_engine_train_simple_attention_lstmp():
+  check_engine_train_simple_attention(lstm_unit="lstmp")
+
+
+def test_engine_train_simple_attention_nativelstm2():
+  check_engine_train_simple_attention(lstm_unit="nativelstm2")
+
+
+def test_engine_train_simple_attention_basiclstm():
+  check_engine_train_simple_attention(lstm_unit="basiclstm")
+
+
 def test_rec_optim_all_out():
   from GeneratingDataset import DummyDataset
   from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
   seq_len = 5
   n_data_dim = 2
-  n_classes_dim = 3
+  n_classes_dim = 7
   dataset = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
   dataset.init_seq_order(epoch=1)
 
@@ -858,7 +934,7 @@ def test_rec_subnet_auto_optimize():
     assert isinstance(rec_layer.cell, _SubnetworkRecCell)
     if optimize_move_layers_out:
       assert_equal(set(rec_layer.cell.input_layers_moved_out), {"output", "orth_embed"})
-      assert_equal(set(rec_layer.cell.output_layers_moved_out), {"output_prob"})
+      assert_equal(set(rec_layer.cell.output_layers_moved_out), {"output_prob", "att"})
     else:
       assert not rec_layer.cell.input_layers_moved_out
       assert not rec_layer.cell.output_layers_moved_out
@@ -904,7 +980,10 @@ if __name__ == "__main__":
         if k.startswith("test_"):
           print("-" * 40)
           print("Executing: %s" % k)
-          v()
+          try:
+            v()
+          except unittest.SkipTest as exc:
+            print("SkipTest:", exc)
           print("-" * 40)
     else:
       assert len(sys.argv) >= 2

@@ -6,6 +6,8 @@ from nose.tools import assert_equal, assert_not_equal, assert_raises, assert_tru
 from numpy.testing.utils import assert_almost_equal
 from Util import *
 import numpy as np
+import numpy
+import unittest
 
 import better_exchook
 better_exchook.replace_traceback_format_tb()
@@ -173,3 +175,89 @@ def test_NativeCodeCompiler():
   assert_equal(lib.get_magic(), 13)
   lib.set_magic(42)
   assert_equal(lib.get_magic(), 42)
+
+
+def test_Stats():
+  rnd = numpy.random.RandomState(42)
+  m = rnd.uniform(-2., 10., (1000, 3))
+  mean_ref = numpy.mean(m, axis=0)
+  var_ref = numpy.var(m, axis=0)
+  std_dev_ref = numpy.std(m, axis=0)
+  print("ref mean/var/stddev:", mean_ref, var_ref, std_dev_ref)
+  assert_almost_equal(numpy.sqrt(var_ref), std_dev_ref)
+  stats = Stats()
+  t = 0
+  while t < len(m):
+    s = int(rnd.uniform(10, 100))
+    m_sub = m[t:t + s]
+    print("sub seq from t=%i, len=%i" % (t, len(m_sub)))
+    stats.collect(m_sub)
+    t += s
+  mean = stats.get_mean()
+  std_dev = stats.get_std_dev()
+  print("mean/stddev:", mean, std_dev)
+  assert_almost_equal(mean, mean_ref)
+  assert_almost_equal(std_dev, std_dev_ref)
+  m -= mean[None, :]
+  m /= std_dev[None, :]
+  stats2 = Stats()
+  t = 0
+  while t < len(m):
+    s = int(rnd.uniform(10, 100))
+    m_sub = m[t:t + s]
+    stats2.collect(m_sub)
+    t += s
+  mean0 = stats2.get_mean()
+  stddev1 = stats2.get_std_dev()
+  print("normalized mean/stddev:", mean0, stddev1)
+  assert_almost_equal(mean0, 0.)
+  assert_almost_equal(stddev1, 1.)
+
+
+def test_deepcopy():
+  deepcopy({"a": 1, "b": 2, "c": [3, {}, (), [42, True]]})
+
+
+def test_deepcopy_mod():
+  o = deepcopy({"a": 1, "b": 2, "c": sys})
+  assert isinstance(o, dict)
+  assert o["c"] is sys
+
+
+def test_deepcopy_config():
+  from Config import Config
+  config = Config()
+  deepcopy(config)
+
+
+def test_deepcopy_builtins():
+  user_ns = {}
+  custom_exec("", "<source.py>", user_ns, user_ns)
+  print(user_ns)
+  assert "__builtins__" in user_ns
+  assert isinstance(user_ns["__builtins__"], dict)
+  o = deepcopy(user_ns)
+  assert o["__builtins__"] is user_ns["__builtins__"]  # no copy, directly reference this module dict
+
+
+if __name__ == "__main__":
+  better_exchook.install()
+  if len(sys.argv) <= 1:
+    for k, v in sorted(globals().items()):
+      if k.startswith("test_"):
+        print("-" * 40)
+        print("Executing: %s" % k)
+        try:
+          v()
+        except unittest.SkipTest as exc:
+          print("SkipTest:", exc)
+        print("-" * 40)
+    print("Finished all tests.")
+  else:
+    assert len(sys.argv) >= 2
+    for arg in sys.argv[1:]:
+      print("Executing: %s" % arg)
+      if arg in globals():
+        globals()[arg]()  # assume function and execute
+      else:
+        eval(arg)  # assume Python code and execute

@@ -159,6 +159,20 @@ def test_get_initializer_glorot_normal_with_scale():
   assert_equal(session.run(v).shape, shape)  # returns some random matrix
 
 
+def test_get_initializer_uniform():
+  shape = (2, 3)
+  initializer = get_initializer("RandomUniform(-0.01, 0.01)")
+  v = initializer(shape)
+  assert_equal(session.run(v).shape, shape)  # returns some random matrix
+
+
+def test_get_initializer_gauss():
+  shape = (2, 3)
+  initializer = get_initializer("RandomNormal(0.0, 0.01)")
+  v = initializer(shape)
+  assert_equal(session.run(v).shape, shape)  # returns some random matrix
+
+
 def test_close_event_writer_thread():
   import threading
   import tempfile
@@ -944,3 +958,10 @@ def test_remove_labels():
   assert_equal(y_eval.indices.tolist(), [[0, 0], [0, 1], [1, 0]])
   assert_equal(y_eval.values.tolist(), [0, 2, 3])
   assert_equal(y_eval.dense_shape.tolist(), [3, 2])
+
+
+def test_supported_devices_for_op():
+  op_name = "MatMul"
+  devs = supported_devices_for_op(op_name)
+  print("Supported devs for op %r: %r" % (op_name, devs))
+  assert "CPU" in devs

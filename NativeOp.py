@@ -821,7 +821,7 @@ class LstmGenericBase(NativeOpGenBase):
     //DV_h = Y[0..end-1]^T * DZ[1..end]
     affine_global(Y, DZ, DV_h, true, false, 1, 0.0f);
 
-    const Ndarray_DIM_Type* Dc_dim = Ndarray_HOST_DIMS(Dc);
+    Ndarray_DIMS_Type Dc_dim = Ndarray_HOST_DIMS(Dc);
     Ndarray_memcpy(
       Ndarray_DEV_DATA(Dc), Ndarray_DEV_DATA(tmpDc),
       Dc_dim[0] * Dc_dim[1] * sizeof(float));

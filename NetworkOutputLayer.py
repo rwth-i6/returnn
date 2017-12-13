@@ -331,10 +331,11 @@ class OutputLayer(Layer):
       rpcx = self.p_y_given_x_flat[T.arange(self.p_y_given_x_flat.shape[0]),self.y_data_flat]
       #rpcx -= rpcx.min()
       rpcx /= rpcx.max()
-      weight = T.constant(1) - rpcx
+      #weight = T.constant(1) - rpcx
       #weight = (T.constant(1) - self.p_y_given_x_flat[T.arange(self.p_y_given_x_flat.shape[0]),self.y_data_flat])
-      weight = weight.dimshuffle(0,'x').repeat(self.z.shape[2],axis=1).reshape(self.z.shape)
-      weight = T.cast(T.neq(T.argmax(self.p_y_given_x_flat, axis=1), self.y_data_flat), 'float32').dimshuffle(0,'x').repeat(self.z.shape[2],axis=1).reshape(self.z.shape)
+      #weight = weight.dimshuffle(0,'x').repeat(self.z.shape[2],axis=1).reshape(self.z.shape)
+      #weight = T.cast(T.neq(T.argmax(self.p_y_given_x_flat, axis=1), self.y_data_flat), 'float32').dimshuffle(0,'x').repeat(self.z.shape[2],axis=1).reshape(self.z.shape)
+      weight = T.cast(T.eq(T.argmax(self.p_y_given_x_flat, axis=1), self.y_data_flat), 'float32').dimshuffle(0,'x').repeat(self.z.shape[2], axis=1).reshape(self.z.shape)
       self.p_y_given_x = T.exp(weight * T.log(self.p_y_given_x))
       self.z = self.p_y_given_x
       self.p_y_given_x_flat = self.p_y_given_x.reshape((self.z.shape[0]*self.z.shape[1],self.z.shape[2]))

@@ -257,7 +257,7 @@ class LmDataset(CachedDataset2):
         else:
           orth_debug_str = repr("".join(orth_syms))
         try:
-          data = numpy.array(map(self.orth_symbols_map.__getitem__, orth_syms), dtype=self.dtype)
+          data = numpy.array(list(map(self.orth_symbols_map.__getitem__, orth_syms)), dtype=self.dtype)
         except KeyError as e:
           if self.log_skipped_seqs:
             print("LmDataset: skipping sequence %s because of missing orth symbol: %s" % (orth_debug_str, e), file=log.v4)
@@ -284,6 +284,10 @@ class LmDataset(CachedDataset2):
 
 
 def _is_bliss(filename):
+  """
+  :param str filename:
+  :rtype: bool
+  """
   try:
     corpus_file = open(filename, 'rb')
     if filename.endswith(".gz"):
@@ -861,12 +865,13 @@ class TranslationDataset(CachedDataset2):
 
   MapToDataKeys = {"source": "data", "target": "classes"}  # just by our convention
 
-  def __init__(self, path, file_postfix, partition_epoch=None, target_postfix="", **kwargs):
+  def __init__(self, path, file_postfix, partition_epoch=None, source_postfix="", target_postfix="", **kwargs):
     """
     :param str path: the directory containing the files
     :param str file_postfix: e.g. "train" or "dev". it will then search for "source." + postfix and "target." + postfix.
     :param bool random_shuffle_epoch1: if True, will also randomly shuffle epoch 1. see self.init_seq_order().
     :param int partition_epoch: if provided, will partition the dataset into multiple epochs
+    :param None|str source_postfix: will concat this at the end of the source. e.g.
     :param None|str target_postfix: will concat this at the end of the target.
       You might want to add some sentence-end symbol.
     """
@@ -874,7 +879,7 @@ class TranslationDataset(CachedDataset2):
     self.path = path
     self.file_postfix = file_postfix
     self.partition_epoch = partition_epoch
-    self._add_postfix = {"data": "", "classes": target_postfix}
+    self._add_postfix = {"data": source_postfix, "classes": target_postfix}
     from threading import Lock, Thread
     self._lock = Lock()
     self._partition_epoch_num_seqs = []
@@ -1024,7 +1029,7 @@ class TranslationDataset(CachedDataset2):
 
   def _get_data_len(self):
     """
-    :rtype: num seqs of the whole underlying data
+    :return: num seqs of the whole underlying data
     :rtype: int
     """
     import time

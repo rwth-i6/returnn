@@ -271,9 +271,9 @@ class LSTMOp(theano.sandbox.cuda.GpuOp):
 
   def infer_shape(self, node, input_shapes):
     Zs, V_hs, cs, idxs = input_shapes
-    Y_shape = (Zs[0], Zs[1], Zs[2] / 4)
+    Y_shape = (Zs[0], Zs[1], Zs[2] // 4)
     H_shape = (Zs[0], Zs[1], Zs[2])
-    d_shape = (Zs[1], Zs[2] / 4)
+    d_shape = (Zs[1], Zs[2] // 4)
     return [Y_shape, H_shape, d_shape]
 
   #!!! change this when changing the code!

@@ -68,9 +68,10 @@ class Updater:
                adam_fit_learning_rate=True,
                adamax=False,
                nadam=False,
+               ena=False,
                nadam_decay=0.004,  # Magical 250.0 denominator in nesterov scaling of i_t
                eve=False,
-               gradient_l2_norm=False,
+               gradient_l2_norm=0,
                mean_normalized_sgd=False,
                mean_normalized_sgd_average_interpolation=0.5,
                rmsprop=0.0,
@@ -139,6 +140,7 @@ class Updater:
     self.adadelta_decay = numpy.float32(adadelta_decay)
     self.adadelta_offset = numpy.float32(adadelta_offset)
     self.adasecant = adasecant
+    self.ena = ena
     self.nadam = nadam
     self.nadam_decay = nadam_decay
     self.adam = adam
@@ -224,7 +226,7 @@ class Updater:
     self.i = self.var(numpy.float32(0 if self.reset_update_params else network.update_step), name="updater_i")
     self.e = self.var(numpy.float32(0 if self.reset_update_params else network.update_step), name="updater_epoch")
 
-    if self.momentum > 0:
+    if self.momentum > 0 and not self.ena:
       self.deltas = {p: self.var(p, zero=True, name="momentum_deltas_%s" % p.name)
                      for p in network.train_params_vars}
 
@@ -432,6 +434,9 @@ class Updater:
         deltas = self.norm_constraint(deltas, self.max_norm)
       if self.gradient_l2_norm:
         deltas = deltas / (deltas.norm(2) + numpy.float32(1e-10))
+        #deltas = T.switch(T.le(T.constant(self.gradient_l2_norm),self.network.epoch),
+        #                  deltas / (deltas.norm(2) + numpy.float32(1e-10)),
+        #                  deltas)
 
       if self.gradient_noise > 0.0: # http://arxiv.org/pdf/1511.06807v1.pdf
         nu = self.gradient_noise # try 0.01 0.3 1.0
@@ -812,6 +817,32 @@ class Updater:
         updates.append((m_prev, m))
         updates.append((v_prev, v))
 
+      elif self.ena: # epoch-wise adam with integrated nesterov momentum
+        m_cache = self.var(1, name="momemtum_cache")
+        m_prev = self.var(param, zero=True, name="nadam_m_%s" % param.name)
+        v_prev = self.var(param, zero=True, name="nadam_v_%s" % param.name)
+        beta = numpy.float32(self.momentum or 0.5)
+        i_t = (T.cast(self.network.epoch,'float32') + T.constant(1))
+
+        mt = (beta * ( 1 - 0.5 * 0.96**( i_t * numpy.float32(0.004) ) )) # momentum schedule, http://www.cs.toronto.edu/~fritz/absps/momentum.pdf
+        mtnext = beta * ( 1 - 0.5 * 0.96**( (i_t + 1) * numpy.float32(0.004) ) ) # for simplified NAG
+        m_cache_new = m_cache * mt
+        bias_corr = m_cache_new * mtnext
+
+        _deltas = deltas / T.cast(1 - m_cache_new, dtype="float32")
+
+        m = beta * m_prev + (numpy.float32(1) - beta) * deltas
+        _m = m / T.cast(1 - bias_corr, dtype="float32") # bias correction (with momentum schedule (include the next t+1))
+        v = beta * v_prev + (numpy.float32(1) - beta) * (deltas**2)
+        _v = v / T.cast(1 - beta ** i_t, dtype="float32")
+        __m = T.cast(1 - mt, dtype="float32") * _deltas + T.cast(mtnext, dtype="float32") * _m
+        step = -self.learning_rate_var * gradient_scale * __m / ( T.sqrt(_v) + numpy.float32(1e-8) )
+
+        upd[param] += step
+        updates.append((m_cache, m_cache_new))
+        updates.append((m_prev, m))
+        updates.append((v_prev, v))
+
       elif self.eve:  # https://arxiv.org/pdf/1611.01505v1.pdf https://github.com/jayanthkoushik/sgd-feedback/blob/master/src/eve.py
         loss = self.network.get_objective()  # current objective value
         loss_prev = self.var(0, name="loss at t-1")
@@ -954,7 +985,7 @@ class Updater:
       else:  # SGD
         upd[param] += - self.learning_rate_var * deltas
 
-      if self.momentum > 0:
+      if self.momentum > 0 and not self.ena:
         updates.append((self.deltas[param], upd[param]))
         upd[param] += self.deltas[param] * self.momentum
       if self.nesterov_momentum > 0:

@@ -80,10 +80,16 @@ def initConfig(configFilename=None, commandLineOptions=(), extra_updates=None):
   global config
   config = Config()
 
-  config_filename_by_cmd_line = None
-  if commandLineOptions and commandLineOptions[0][:1] not in ["-", "+"]:
-    # Assume that this is a config filename.
-    config_filename_by_cmd_line, commandLineOptions = commandLineOptions[0], commandLineOptions[1:]
+  config_filenames_by_cmd_line = []
+  if commandLineOptions:
+    # Assume that the first argument prefixed with "+" or "-" and all following is not a config file.
+    i = 0
+    for arg in commandLineOptions:
+      if arg[:1] in "-+":
+        break
+      config_filenames_by_cmd_line.append(arg)
+      i += 1
+    commandLineOptions = commandLineOptions[i:]
 
   if extra_updates:
     config.update(extra_updates)
@@ -91,8 +97,8 @@ def initConfig(configFilename=None, commandLineOptions=(), extra_updates=None):
     config.parse_cmd_args(commandLineOptions)
   if configFilename:
     config.load_file(configFilename)
-  if config_filename_by_cmd_line:
-    config.load_file(config_filename_by_cmd_line)
+  for fn in config_filenames_by_cmd_line:
+    config.load_file(fn)
   if extra_updates:
     config.update(extra_updates)
   if commandLineOptions:
@@ -122,7 +128,7 @@ def initConfigJsonNetwork():
     json_file = config.value('initialize_from_json', '')
     assert os.path.isfile(json_file), "json file not found: " + json_file
     print("loading network topology from json:", json_file, file=log.v5)
-    config.network_topology_json = open(json_file).read().encode('utf8')
+    config.network_topology_json = open(json_file).read()
 
 
 def initDevices():
@@ -283,15 +289,15 @@ def initEngine(devices):
     raise NotImplementedError
 
 
-def crnnGreeting(configFilename=None, commandLineOptions=None):
-  print("CRNN starting up, version %s, pid %i, cwd %s" % (
+def returnnGreeting(configFilename=None, commandLineOptions=None):
+  print("RETURNN starting up, version %s, pid %i, cwd %s" % (
     describe_crnn_version(), os.getpid(), os.getcwd()), file=log.v3)
   if configFilename:
-    print("CRNN config: %s" % configFilename, file=log.v4)
+    print("RETURNN config: %s" % configFilename, file=log.v4)
     if os.path.islink(configFilename):
-      print("CRNN config is symlink to: %s" % os.readlink(configFilename), file=log.v4)
+      print("RETURNN config is symlink to: %s" % os.readlink(configFilename), file=log.v4)
   if commandLineOptions is not None:
-    print("CRNN command line options: %s" % (commandLineOptions,), file=log.v4)
+    print("RETURNN command line options: %s" % (commandLineOptions,), file=log.v4)
 
 
 def initBackendEngine():
@@ -312,8 +318,8 @@ def initBackendEngine():
 def init(configFilename=None, commandLineOptions=(), config_updates=None, extra_greeting=None):
   """
   :param str|None configFilename:
-  :param tuple[str]|list[str]|None commandLineOptions:
-  :param dict[str]|None config_updates:
+  :param tuple[str]|list[str]|None commandLineOptions: e.g. sys.argv[1:]
+  :param dict[str]|None config_updates: see :func:`initConfig`
   :param str|None extra_greeting:
   """
   initBetterExchook()
@@ -325,7 +331,7 @@ def init(configFilename=None, commandLineOptions=(), config_updates=None, extra_
   initLog()
   if extra_greeting:
     print(extra_greeting, file=log.v1)
-  crnnGreeting(configFilename=configFilename, commandLineOptions=commandLineOptions)
+  returnnGreeting(configFilename=configFilename, commandLineOptions=commandLineOptions)
   initBackendEngine()
   initFaulthandler()
   if BackendEngine.is_theano_selected():
@@ -364,12 +370,13 @@ def needData():
   if config.has("need_data") and not config.bool("need_data", True):
     return False
   task = config.value('task', 'train')
-  if task in ['theano_graph', "nop"]:
+  if task in ['theano_graph', "nop", "cleanup_old_models"]:
     return False
   return True
 
 
 def executeMainTask():
+  from Util import hms_fraction
   start_time = time.time()
   task = config.value('task', 'train')
   if task == 'train':
@@ -439,6 +446,12 @@ def executeMainTask():
     label_file = config.value('label_file', '')
     engine.init_network_from_config(config)
     engine.classify(engine.devices[0], eval_data, label_file)
+  elif task == "hyper_param_tuning":
+    import HyperParamTuning
+    tuner = HyperParamTuning.Optimization(config=config, train_data=train_data)
+    tuner.work()
+  elif task == "cleanup_old_models":
+    engine.cleanup_old_models(ask_for_confirmation=True)
   elif task == "daemon":
     engine.init_network_from_config(config)
     engine.daemon(config)
@@ -462,7 +475,7 @@ def executeMainTask():
   else:
     assert False, "unknown task: %s" % task
 
-  print(("elapsed: %f" % (time.time() - start_time)), file=log.v3)
+  print(("elapsed: %s" % hms_fraction(time.time() - start_time)), file=log.v3)
 
 
 def analyze_data(config):
@@ -488,6 +501,7 @@ def analyze_data(config):
   total_targets_len = 0
   total_data_len = 0
 
+  # Note: This is not stable!
   seq_idx = 0
   while ds.is_less_than_num_seqs(seq_idx):
     progress_bar_with_time(ds.get_complete_frac(seq_idx))
@@ -504,17 +518,17 @@ def analyze_data(config):
     seq_idx += 1
   log_priors = numpy.log(priors)
   log_priors -= numpy.log(NumbersDict(ds.get_num_timesteps())[target])
-  var = numpy.sqrt(mean_sq - mean * mean)
+  std_dev = numpy.sqrt(mean_sq - mean * mean)
   print("Finished. %i total target frames, %i total data frames" % (total_targets_len, total_data_len), file=log.v1)
   priors_fn = stat_prefix + ".log_priors.txt"
   mean_fn = stat_prefix + ".mean.txt"
-  var_fn = stat_prefix + ".var.txt"
+  std_dev_fn = stat_prefix + ".std_dev.txt"
   print("Dump priors to", priors_fn, file=log.v1)
   numpy.savetxt(priors_fn, log_priors)
   print("Dump mean to", mean_fn, file=log.v1)
   numpy.savetxt(mean_fn, mean)
-  print("Dump var to", var_fn, file=log.v1)
-  numpy.savetxt(var_fn, var)
+  print("Dump std dev to", std_dev_fn, file=log.v1)
+  numpy.savetxt(std_dev_fn, std_dev)
   print("Done.", file=log.v1)
 
 

@@ -100,7 +100,7 @@ class Dataset(object):
     self.epoch = None
 
   def __repr__(self):
-    return "<%s %r>" % (self.__class__.__name__, self.name)
+    return "<%s %r>" % (self.__class__.__name__, getattr(self, "name", "<unknown>"))
 
   def sliding_window(self, xr):
     """
@@ -247,9 +247,9 @@ class Dataset(object):
       out_index = []
       for i in range(bins):
         if i == bins - 1:
-          part = seq_index[i * len(seq_index) // bins:]
+          part = seq_index[i * len(seq_index) // bins:][:]
         else:
-          part = seq_index[i * len(seq_index) // bins:(i + 1) * len(seq_index) // bins]
+          part = seq_index[i * len(seq_index) // bins:(i + 1) * len(seq_index) // bins][:]
         part.sort(key=get_seq_len, reverse=(i%2 == 1))
         out_index += part
       seq_index = out_index
@@ -767,12 +767,8 @@ def init_dataset(kwargs):
   if callable(kwargs):
     return init_dataset(kwargs())
   if isinstance(kwargs, (str, unicode)):
-    if kwargs.startswith("config:"):
-      from Config import get_global_config
-      config = get_global_config()
-      assert config
-      return init_dataset(config.opt_typed_value(kwargs[len("config:"):]))
     return init_dataset_via_str(config_str=kwargs)
+  assert isinstance(kwargs, dict)
   kwargs = kwargs.copy()
   assert "class" in kwargs
   clazz_name = kwargs.pop("class")
@@ -810,6 +806,12 @@ def init_dataset_via_str(config_str, config=None, cache_byte_size=None, **kwargs
     kwargs["sprintTrainerExecPath"] = sprintTrainerExecPath
     from SprintDataset import ExternSprintDataset
     cls = ExternSprintDataset
+  elif config_str.startswith("config:"):
+    from Config import get_global_config
+    if not config:
+      config = get_global_config()
+    data = eval(config_str[len("config:"):], config.typed_dict, config.typed_dict)
+    return init_dataset(data)
   elif ":" in config_str:
     kwargs.update(eval("dict(%s)" % config_str[config_str.find(":") + 1:]))
     class_name = config_str[:config_str.find(":")]

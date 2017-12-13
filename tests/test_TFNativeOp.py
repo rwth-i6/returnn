@@ -25,27 +25,60 @@ CudaEnv.verbose_find_cuda = True
 session = tf.InteractiveSession()
 
 
-def dump_info():
-  numpy_path = os.path.dirname(numpy.__file__)
-  print("Numpy path: %r" % numpy_path)
-  so_files = Util.sysexecOut("find %s | grep \"\.so\"" % numpy_path, shell=True)
-  print("Numpy so files:\n---\n%s\n---\n" % so_files)
-  so_files = [f for f in so_files.splitlines() if f]
+def sys_exec(*args, **kwargs):
+  print("$ %s" % " ".join(args))
+  out = Util.sysexecOut(*args, **kwargs)
+  print(out)
+
+
+def debug_lib_so(f, syms=()):
   ldd = "ldd"
   if sys.platform == "darwin":
     ldd = "otool -L"
   objdump = "objdump -T"
   if sys.platform == "darwin":
     objdump = "otool -IHGv"
+  cmd = "%s %s" % (ldd, f)
+  sys_exec(cmd, shell=True)
+  for sym in syms:
+    cmd = "%s %s | { grep %s || true; }" % (objdump, f, sym)
+    sys_exec(cmd, shell=True)
+
+
+def dump_info():
+  # Some generic stuff.
+  sys_exec("g++", "--version")
+  print("TF include:", tf.sysconfig.get_include())
+  print("TF lib:", tf.sysconfig.get_lib())
+  tf_lib_so = tf.sysconfig.get_lib() + "/libtensorflow_framework.so"
+  tf_pywrap_so = tf.sysconfig.get_lib() + "/python/_pywrap_tensorflow_internal.so"
+  sys_exec("ls", "-la", tf.sysconfig.get_lib())
+  if os.path.exists(tf_lib_so):
+    print("TF lib so exists:", tf_lib_so)
+    debug_lib_so(tf_lib_so, ["_ZTIN10tensorflow8OpKernelE"])
+  else:
+    print("TF lib so does not(!) exist:", tf_lib_so)
+  if os.path.exists(tf_pywrap_so):
+    print("TF pywrap so exists:", tf_pywrap_so)
+    debug_lib_so(tf_pywrap_so, ["_ZTIN10tensorflow8OpKernelE"])
+  else:
+    print("TF pywrap so does not(!) exist:", tf_pywrap_so)
+  # See OpCodeCompiler. Is already not used anymore but still maybe relevant.
+  if hasattr(sys, "getdlopenflags") and hasattr(sys, "setdlopenflags"):
+    print("have (set|get)dlopenflags")
+    import ctypes
+    print("Cur flags: %r, RTLD_GLOBAL is set: %r" % (sys.getdlopenflags(), sys.getdlopenflags() & ctypes.RTLD_GLOBAL))
+  if os.path.exists("/proc"):
+    print("Have /proc")
+    sys_exec("cat", "/proc/%i/maps" % os.getpid())
+  # Numpy stuff, debugging if sgemm was not found:
+  numpy_path = os.path.dirname(numpy.__file__)
+  print("Numpy path: %r" % numpy_path)
+  so_files = Util.sysexecOut("find %s | grep \"\.so\"" % numpy_path, shell=True)
+  print("Numpy so files:\n---\n%s\n---\n" % so_files)
+  so_files = [f for f in so_files.splitlines() if f]
   for f in so_files:
-    cmd = "%s %s" % (ldd, f)
-    print("$ %s" % cmd)
-    out = Util.sysexecOut(cmd, shell=True)
-    print(out)
-    cmd = "%s %s | { grep sgemm || true; }" % (objdump, f)
-    print("$ %s" % cmd)
-    out = Util.sysexecOut(cmd, shell=True)
-    print(out)
+    debug_lib_so(f, ["sgemm"])
 
 
 def test_dummy():
@@ -55,7 +88,7 @@ def test_dummy():
 
 def test_make_lstm_op_auto_cuda():
   try:
-    make_lstm_op()
+    make_lstm_op(compiler_opts={"verbose": True})
   except tf.errors.NotFoundError:
     dump_info()
     raise
@@ -64,7 +97,7 @@ def test_make_lstm_op_auto_cuda():
 def test_make_lstm_op_no_cuda():
   try:
     OpMaker.with_cuda = False
-    make_lstm_op()
+    make_lstm_op(compiler_opts={"verbose": True})
   except tf.errors.NotFoundError:
     dump_info()
     raise
@@ -80,6 +113,24 @@ def test_NativeLstmCell():
   inputs = tf.zeros([n_time, n_batch, n_hidden * 4])
   index = tf.ones([n_time, n_batch])
   outputs, final_state = cell(inputs, index)
+
+
+def test_NativeLstmCell_run():
+  from pprint import pprint
+  from Util import describe_tensorflow_version
+  print("TensorFlow:", describe_tensorflow_version())
+  n_time = 2
+  n_batch = 1
+  n_hidden = 3
+  with tf.Session() as session:
+    with tf.variable_scope("test_NativeLstmCell_run"):
+      cell = NativeLstmCell(n_hidden=n_hidden)
+      inputs = tf.zeros([n_time, n_batch, n_hidden * 4])
+      index = tf.ones([n_time, n_batch])
+      outputs, final_state = cell(inputs, index)
+      session.run(tf.global_variables_initializer())
+      res = session.run(outputs)
+      pprint(res)
 
 
 def test_NativeLstmLowMemCell():
@@ -662,7 +713,7 @@ def check_lstm_grad_ops_single(op1, op2, name1, name2, dy, dd, rtol=1e-7, exclud
       v1 = (v1 * vmask)[start_::step]
       v2 = (v2 * vmask)[start_::step]
     print("check", k)
-    assert_allclose(v1, v2, rtol=rtol)
+    assert_allclose(v1, v2, rtol=rtol, err_msg="no match for %s" % k)
 
 
 def check_lstm_grad_ops(name1, name2, **kwargs):
@@ -713,7 +764,8 @@ def dummy_lstm_op(x, h_0, c_0, mask, W_f, W_r, b, n_time, n_batch, n_in_dim, n_c
   return y, y, h_0 + c_0
 
 
-@unittest.skip("TF 1.3.0 bug: https://github.com/tensorflow/tensorflow/issues/13355")
+@unittest.skipIf(
+  not TFUtil.have_min_tf_version((1, 5)), "TF 1.3.0 bug: https://github.com/tensorflow/tensorflow/issues/13355")
 def test_tensorarray_grad():
   def gen(shape, offset):
     return (numpy.arange(numpy.prod(shape)) + offset).reshape(shape).astype("float32")
@@ -798,7 +850,8 @@ def test_tensorarray_grad():
   assert_allclose(vdx1[start::step], vdx2[start::step])
 
 
-@unittest.skip("TF 1.3.0 bug: https://github.com/tensorflow/tensorflow/issues/13355")
+@unittest.skipIf(
+  not TFUtil.have_min_tf_version((1, 5)), "TF 1.3.0 bug: https://github.com/tensorflow/tensorflow/issues/13355")
 def test_tensorarray_grad_simple():
   n_time = 1
   n_dim = 1
@@ -930,8 +983,12 @@ if __name__ == "__main__":
         if k.startswith("test_"):
           print("-" * 40)
           print("Executing: %s" % k)
-          v()
+          try:
+            v()
+          except unittest.SkipTest as exc:
+            print("SkipTest: %s" % exc)
           print("-" * 40)
+      print("All passed.")
     else:
       assert len(sys.argv) >= 2
       for arg in sys.argv[1:]:
