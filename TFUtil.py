@@ -6,6 +6,7 @@ from tensorflow.python.client import device_lib
 import contextlib
 import os
 import sys
+import threading
 from Util import NotSpecified, NativeCodeCompiler
 
 
@@ -1276,27 +1277,6 @@ def identity_with_ops(x, ops):
       return tf.identity(x, name="identity_with_ops")
 
 
-def _guess_requested_max_num_threads(log_file=None):
-  from Util import read_sge_num_procs
-  try:
-    sge_num_procs = read_sge_num_procs()
-  except Exception as exc:
-    if log_file:
-      print("Error while getting SGE num_proc: %r" % exc, file=log_file)
-  else:
-    if sge_num_procs:
-      if log_file:
-        print("Use num_threads=%i (but min 2) via SGE num_proc." % sge_num_procs, file=log_file)
-      return max(sge_num_procs, 2)
-  omp_num_threads = int(os.environ.get("OMP_NUM_THREADS") or 0)
-  if omp_num_threads:
-    # Minimum of 2 threads, should not hurt.
-    if log_file:
-      print("Use num_threads=%i (but min 2) via OMP_NUM_THREADS." % omp_num_threads, file=log_file)
-    return max(omp_num_threads, 2)
-  return None
-
-
 _setup_tf_thread_pools_called_once = False
 
 def setup_tf_thread_pools(num_threads=None, log_file=None):
@@ -1331,7 +1311,8 @@ def setup_tf_thread_pools(num_threads=None, log_file=None):
     return
   _setup_tf_thread_pools_called_once = True
   if not num_threads:
-    num_threads = _guess_requested_max_num_threads(log_file=log_file)
+    from Util import guess_requested_max_num_threads
+    num_threads = guess_requested_max_num_threads(log_file=log_file, fallback_num_cpus=False)
   if log_file:
     print("Setup TF inter and intra global thread pools, num_threads=%r." % num_threads, file=log_file)
   opts = {}
@@ -1386,23 +1367,27 @@ def _parse_physical_device_desc(s):
   return d
 
 
-def print_available_devices():
+def print_available_devices(file=None):
   """
-  Prints the available TF devices on stdout.
+  Prints the available TF devices on `file` (stdout by default).
   This uses tensorflow.device_lib.list_local_devices().
   Note that a call to this will trigger the internal TF thread pool inits,
   so you should call :func:`setup_tf_thread_pools` first.
+
+  :param io.FileIO file:
   """
+  if file is None:
+    file = sys.stdout
   cuda_visible_devs = None
   if "CUDA_VISIBLE_DEVICES" in os.environ:
-    print("CUDA_VISIBLE_DEVICES is set to %r." % os.environ["CUDA_VISIBLE_DEVICES"])
+    print("CUDA_VISIBLE_DEVICES is set to %r." % os.environ["CUDA_VISIBLE_DEVICES"], file=file)
     cuda_visible_devs = dict(enumerate([int(d) for d in os.environ["CUDA_VISIBLE_DEVICES"].split(",") if d]))
   else:
-    print("CUDA_VISIBLE_DEVICES is not set.")
+    print("CUDA_VISIBLE_DEVICES is not set.", file=file)
   devs = get_tf_list_local_devices()
-  print("Local devices available to TensorFlow:")
+  print("Local devices available to TensorFlow:", file=file)
   for i, dev in enumerate(devs):
-    print("  %i/%i: %s" % (i + 1, len(devs), "\n       ".join(str(dev).splitlines())))
+    print("  %i/%i: %s" % (i + 1, len(devs), "\n       ".join(str(dev).splitlines())), file=file)
 
   # Theano prints sth like: Using gpu device 2: GeForce GTX 980 (...)
   # Print in a similar format so that some scripts which grep our stdout work just as before.
@@ -1413,7 +1398,7 @@ def print_available_devices():
       if cuda_visible_devs:
         dev_id = cuda_visible_devs[dev_id]
       dev_name = d["name"]
-      print("Using gpu device %i: %s" % (dev_id, dev_name))
+      print("Using gpu device %i: %s" % (dev_id, dev_name), file=file)
 
 
 def is_gpu_available():
@@ -1422,8 +1407,22 @@ def is_gpu_available():
   This uses tensorflow.device_lib.list_local_devices().
   Note that a call to this will trigger the internal TF thread pool inits,
   so you should call :func:`setup_tf_thread_pools` first.
+
+  :rtype: bool
   """
-  return any(x.device_type == 'GPU' for x in get_tf_list_local_devices())
+  return len(get_available_gpu_devices()) > 0
+
+
+def get_available_gpu_devices():
+  """
+  Returns a list of available GPU devices.
+  This uses tensorflow.device_lib.list_local_devices().
+  Note that a call to this will trigger the internal TF thread pool inits,
+  so you should call :func:`setup_tf_thread_pools` first.
+
+  :rtype: list[tensorflow.core.framework.device_attributes_pb2.DeviceAttributes]
+  """
+  return [x for x in get_tf_list_local_devices() if x.device_type == 'GPU']
 
 
 def dot(a, b):
@@ -1875,6 +1874,11 @@ def constant_with_shape(x, shape, dtype=None, name="constant_with_shape"):
   :rtype: tf.Tensor
   """
   with tf.name_scope(name):
+    if type(x) in [int, float, bool]:
+      if x in (0, 0.0, False):
+        return tf.zeros(shape, dtype=dtype)
+      if x in (1, 1.0, True):
+        return tf.ones(shape, dtype=dtype)
     x = tf.convert_to_tensor(x, dtype=dtype)
     ones = tf.ones(shape, dtype=x.dtype)
     if x.dtype == tf.bool:
@@ -2405,8 +2409,8 @@ class SyntheticGradient(object):
       self.losses.append(loss)
 
     def exit(self):
-      assert SyntheticGradient.scope is self
-      SyntheticGradient.scope = None
+      assert SyntheticGradient.scope_ctx.scope is self
+      SyntheticGradient.scope_ctx.scope = None
 
     def as_fetch_dict(self):
       from collections import OrderedDict
@@ -2421,7 +2425,10 @@ class SyntheticGradient(object):
         d["cost:%s" % layer_name] = loss
       return d
 
-  scope = None
+  class ScopeCtxThreadLocal(threading.local):
+    scope = None  # type: None|SyntheticGradient.Scope
+
+  scope_ctx = ScopeCtxThreadLocal()
 
   @classmethod
   def enter_gradient_scope(cls):
@@ -2429,13 +2436,13 @@ class SyntheticGradient(object):
     :rtype: SyntheticGradient.Scope
     """
     # Currently not multi-threading safe.
-    assert not cls.scope
-    cls.scope = cls.Scope()
-    return cls.scope
+    assert not cls.scope_ctx.scope
+    cls.scope_ctx.scope = cls.Scope()
+    return cls.scope_ctx.scope
 
   @classmethod
   def exit_gradient_scope(cls):
-    cls.scope.exit()
+    cls.scope_ctx.scope.exit()
 
   @classmethod
   @contextlib.contextmanager
@@ -2445,8 +2452,10 @@ class SyntheticGradient(object):
     the synthetic gradient needs to collect the gradient prediction losses.
     This is done via this global scope.
     """
-    yield cls.enter_gradient_scope()
-    cls.exit_gradient_scope()
+    try:
+      yield cls.enter_gradient_scope()
+    finally:
+      cls.exit_gradient_scope()
 
   @classmethod
   def _synthetic_gradient_fwd(cls, x, synthetic_grad_x):
@@ -2467,11 +2476,11 @@ class SyntheticGradient(object):
     :rtype: (tf.Tensor,)
     """
     x, synthetic_grad_x = op.inputs
-    if cls.scope:
+    if cls.scope_ctx.scope:
       with tf.name_scope("grad_prediction_loss"):
         grad_prediction_loss = tf.reduce_mean(tf.square(synthetic_grad_x - tf.stop_gradient(grad_out)))
         tf.summary.scalar("loss", grad_prediction_loss)
-      cls.scope.register_loss(grad_prediction_loss)
+      cls.scope_ctx.scope.register_loss(grad_prediction_loss)
     return synthetic_grad_x, None
 
   @classmethod

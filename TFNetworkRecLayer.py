@@ -1960,7 +1960,7 @@ class RnnCellLayer(_ConcatInputLayer):
     :param int n_out: so far, only output shape (batch,n_out) supported
     :param str|tf.contrib.rnn.RNNCell unit: e.g. "BasicLSTM" or "LSTMBlock"
     :param dict[str]|None unit_opts: passed to the cell.__init__
-    :param str|float|LayerBase|tuple[LayerBase]|dict[LayerBase] initial_state: see self._get_rec_initial_state().
+    :param str|float|LayerBase|tuple[LayerBase]|dict[LayerBase] initial_state: see self.get_rec_initial_state().
       This will be set via transform_config_dict().
       To get the state from another recurrent layer, use the GetLastHiddenStateLayer (get_last_hidden_state).
     :param None initial_output: the initial output is defined implicitly via initial state, thus don't set this

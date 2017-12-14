@@ -311,12 +311,12 @@ def model_epoch_from_filename(filename):
     return int(m.groups()[0])
 
 
-def terminal_size(): # this will probably work on linux only
+def terminal_size(file=sys.stdout):  # this will probably work on linux only
   import os, sys, io
-  if not hasattr(sys.stdout, "fileno"):
+  if not hasattr(file, "fileno"):
     return -1, -1
   try:
-    if not os.isatty(sys.stdout.fileno()):
+    if not os.isatty(file.fileno()):
       return -1, -1
   except io.UnsupportedOperation:
     return -1, -1
@@ -324,7 +324,7 @@ def terminal_size(): # this will probably work on linux only
   def ioctl_GWINSZ(fd):
     try:
       import fcntl, termios, struct, os
-      cr = struct.unpack('hh', fcntl.ioctl(fd, termios.TIOCGWINSZ,'1234'))
+      cr = struct.unpack('hh', fcntl.ioctl(fd, termios.TIOCGWINSZ, '1234'))
     except Exception:
         return
     return cr
@@ -339,6 +339,11 @@ def terminal_size(): # this will probably work on linux only
   if not cr:
     cr = (env.get('LINES', 25), env.get('COLUMNS', 80))
   return int(cr[1]), int(cr[0])
+
+
+def is_tty(file=sys.stdout):
+  terminal_width, _ = terminal_size()
+  return terminal_width > 0
 
 
 def confirm(txt, exit_on_false=False):
@@ -395,15 +400,15 @@ def human_bytes_size(n, factor=1024, frac=0.8, prec=1):
   return human_size(n, factor=factor, frac=frac, prec=prec) + "B"
 
 
-def progress_bar(complete = 1.0, prefix = "", suffix = ""):
+def progress_bar(complete=1.0, prefix="", suffix="", file=sys.stdout):
   import sys
-  terminal_width, _ = terminal_size()
+  terminal_width, _ = terminal_size(file=file)
   if terminal_width == -1: return
   if complete == 1.0:
-    sys.stdout.write("\r%s"%(terminal_width * ' '))
-    sys.stdout.flush()
-    sys.stdout.write("\r")
-    sys.stdout.flush()
+    file.write("\r%s"%(terminal_width * ' '))
+    file.flush()
+    file.write("\r")
+    file.flush()
     return
   progress = "%.02f%%" % (complete * 100)
   if prefix != "": prefix = prefix + " "
@@ -412,8 +417,8 @@ def progress_bar(complete = 1.0, prefix = "", suffix = ""):
   bars = '|' * int(complete * ntotal)
   spaces = ' ' * (ntotal - int(complete * ntotal))
   bar = bars + spaces
-  sys.stdout.write("\r%s" % prefix + "[" + bar[:len(bar)//2] + " " + progress + " " + bar[len(bar)//2:] + "]" + suffix)
-  sys.stdout.flush()
+  file.write("\r%s" % prefix + "[" + bar[:len(bar)//2] + " " + progress + " " + bar[len(bar)//2:] + "]" + suffix)
+  file.flush()
 
 
 class _progress_bar_with_time_stats:
@@ -1363,6 +1368,38 @@ def as_str(s):
   assert False, "unknown type %s" % type(s)
 
 
+def deepcopy(x):
+  """
+  Simpler variant of copy.deepcopy().
+  Should handle some edge cases as well, like copying module references.
+
+  :param T x: an arbitrary object
+  :rtype: T
+  """
+  # See also class Pickler from TaskSystem.
+  # Or: https://mail.python.org/pipermail/python-ideas/2013-July/021959.html
+  from TaskSystem import Pickler, Unpickler
+  if PY3:
+    from io import BytesIO as StringIO
+  else:
+    # noinspection PyUnresolvedReferences
+    from StringIO import StringIO
+
+  def pickle_dumps(obj):
+    sio = StringIO()
+    p = Pickler(sio)
+    p.dump(obj)
+    return sio.getvalue()
+
+  def pickle_loads(s):
+    p = Unpickler(StringIO(s))
+    return p.load()
+
+  s = pickle_dumps(x)
+  c = pickle_loads(s)
+  return c
+
+
 def load_txt_vector(filename):
   """
   Expect line-based text encoding in file.
@@ -1823,6 +1860,28 @@ def read_sge_num_procs(job_id=None):
   except ValueError as exc:
     raise Exception("read_sge_num_procs: %r, invalid num_proc %r for job id %i.\nline: %r" % (
       exc, opts["num_proc"], job_id, ls[0]))
+
+
+def guess_requested_max_num_threads(log_file=None, fallback_num_cpus=True):
+  try:
+    sge_num_procs = read_sge_num_procs()
+  except Exception as exc:
+    if log_file:
+      print("Error while getting SGE num_proc: %r" % exc, file=log_file)
+  else:
+    if sge_num_procs:
+      if log_file:
+        print("Use num_threads=%i (but min 2) via SGE num_proc." % sge_num_procs, file=log_file)
+      return max(sge_num_procs, 2)
+  omp_num_threads = int(os.environ.get("OMP_NUM_THREADS") or 0)
+  if omp_num_threads:
+    # Minimum of 2 threads, should not hurt.
+    if log_file:
+      print("Use num_threads=%i (but min 2) via OMP_NUM_THREADS." % omp_num_threads, file=log_file)
+    return max(omp_num_threads, 2)
+  if fallback_num_cpus:
+    return os.cpu_count()
+  return None
 
 
 def try_and_ignore_exception(f):

@@ -884,7 +884,7 @@ class TFNetwork(object):
   def print_network_info(self, name="Network"):
     print("%s layer topology:" % name, file=log.v2)
     print("  extern data:", self.extern_data.get_data_description(), file=log.v2)
-    print("  used data keys: %s" % list(sorted(self.used_data_keys)))
+    print("  used data keys: %s" % list(sorted(self.used_data_keys)), file=log.v2)
     for layer_name, layer in sorted(self.layers.items()):
       print("  layer %s %r #: %i" % (layer.layer_class, layer_name, layer.output.dim), file=log.v2)
     if not self.layers:

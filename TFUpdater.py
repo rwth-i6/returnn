@@ -77,7 +77,7 @@ class Updater(object):
 
   For further debugging, see :func:`tf.add_check_numerics_ops` or :func:`add_check_numerics_ops_and_debug_print`,
   which is config option ``debug_add_check_numerics_ops``.
-
+  Also relevant are config options ``debug_add_check_numerics_on_output`` and ``debug_grad_summaries``.
   """
 
   def __init__(self, config, tf_session, network, initial_learning_rate=1.):
@@ -253,20 +253,25 @@ class Updater(object):
     if grad_noise:
       assert grad_noise > 0
       from TFUtil import add_scaled_noise_to_gradients
-      grads_and_vars = add_scaled_noise_to_gradients(grads_and_vars, grad_noise)
+      with tf.name_scope("grad_noise"):
+        grads_and_vars = add_scaled_noise_to_gradients(grads_and_vars, grad_noise)
     if grad_clip:
       assert grad_clip > 0
-      grads_and_vars = [(tf.clip_by_value(grad, -grad_clip, grad_clip), var) for grad, var in grads_and_vars]
+      with tf.name_scope("grad_clip"):
+        grads_and_vars = [(tf.clip_by_value(grad, -grad_clip, grad_clip), var) for grad, var in grads_and_vars]
     if grad_clip_norm:
       assert grad_clip_norm > 0
-      grads_and_vars = [(tf.clip_by_norm(grad, grad_clip_norm), var) for grad, var in grads_and_vars]
+      with tf.name_scope("grad_clip_norm"):
+        grads_and_vars = [(tf.clip_by_norm(grad, grad_clip_norm), var) for grad, var in grads_and_vars]
     if grad_clip_avg_norm:
       assert grad_clip_avg_norm > 0
-      grads_and_vars = [(tf.clip_by_average_norm(grad, grad_clip_avg_norm), var) for grad, var in grads_and_vars]
+      with tf.name_scope("grad_clip_avg_norm"):
+        grads_and_vars = [(tf.clip_by_average_norm(grad, grad_clip_avg_norm), var) for grad, var in grads_and_vars]
     if grad_clip_global_norm:
       assert grad_clip_global_norm > 0
-      grads_clipped, _ = tf.clip_by_global_norm([grad for (grad, _) in grads_and_vars], grad_clip_global_norm)
-      grads_and_vars = zip(grads_clipped, [var for (_, var) in grads_and_vars])
+      with tf.name_scope("grad_clip_global_norm"):
+        grads_clipped, _ = tf.clip_by_global_norm([grad for (grad, _) in grads_and_vars], grad_clip_global_norm)
+        grads_and_vars = zip(grads_clipped, [var for (_, var) in grads_and_vars])
     apply_grads = self.optimizer.apply_gradients(grads_and_vars)
     return apply_grads
 

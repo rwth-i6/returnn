@@ -100,7 +100,7 @@ class Dataset(object):
     self.epoch = None
 
   def __repr__(self):
-    return "<%s %r>" % (self.__class__.__name__, self.name)
+    return "<%s %r>" % (self.__class__.__name__, getattr(self, "name", "<unknown>"))
 
   def sliding_window(self, xr):
     """

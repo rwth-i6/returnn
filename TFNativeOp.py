@@ -3,6 +3,7 @@ from __future__ import print_function
 
 import os
 import tensorflow as tf
+from threading import RLock
 
 import NativeOp
 import TFUtil
@@ -48,6 +49,7 @@ class OpMaker(object):
   https://www.tensorflow.org/versions/master/how_tos/adding_an_op/
   """
   with_cuda = None  # type: None|bool
+  global_lock = RLock()
   mod_cache = {}  # cache_key -> mod
   op_cache = {}  # cache_key -> op
 
@@ -416,40 +418,41 @@ class OpMaker(object):
     return mod
 
   def make_op(self):
-    if self.cache_key in self.op_cache:
-      return self.op_cache[self.cache_key]
-    mod = self._make_mod()
-    op = getattr(mod, camel_case_to_snake_case(self.op_name))
-    self.op_cache[self.cache_key] = op
+    with self.global_lock:
+      if self.cache_key in self.op_cache:
+        return self.op_cache[self.cache_key]
+      mod = self._make_mod()
+      op = getattr(mod, camel_case_to_snake_case(self.op_name))
+      self.op_cache[self.cache_key] = op
 
-    if self.description.is_grad_defined:
-      grad_description = self.description.grad()
-      grad_op_maker = OpMaker(description=grad_description, compiler_opts=self.compiler_opts)
-      grad_op = grad_op_maker.make_op()
+      if self.description.is_grad_defined:
+        grad_description = self.description.grad()
+        grad_op_maker = OpMaker(description=grad_description, compiler_opts=self.compiler_opts)
+        grad_op = grad_op_maker.make_op()
 
-      from tensorflow.python.framework import ops
-      def grad_wrapper(fwd_op, *bwd_grads):
-        """
-        :param tf.Operation fwd_op: for fwd_op.inputs and fwd_op.outputs
-        :param list[tf.Tensor] bwd_grads:
-        :return: list of tensors of gradients for each input
-        :rtype: list[tf.Tensor]
-        """
-        assert len(bwd_grads) == len(fwd_op.outputs)
+        from tensorflow.python.framework import ops
+        def grad_wrapper(fwd_op, *bwd_grads):
+          """
+          :param tf.Operation fwd_op: for fwd_op.inputs and fwd_op.outputs
+          :param list[tf.Tensor] bwd_grads:
+          :return: list of tensors of gradients for each input
+          :rtype: list[tf.Tensor]
+          """
+          assert len(bwd_grads) == len(fwd_op.outputs)
 
-        grad_inputs = list(fwd_op.inputs) + list(fwd_op.outputs) + list(bwd_grads)
-        grad_inputs = self.description._filter_grad_inputs(grad_inputs)
-        grad_outputs = TFUtil.make_var_tuple(grad_op(*grad_inputs))
-        if grad_description.num_dummy_outs > 0:
-          grad_outputs = grad_outputs[:-grad_description.num_dummy_outs]
-        grad_outputs = self.description.make_results_of_gradient(grad_outputs)
-        return grad_outputs
+          grad_inputs = list(fwd_op.inputs) + list(fwd_op.outputs) + list(bwd_grads)
+          grad_inputs = self.description._filter_grad_inputs(grad_inputs)
+          grad_outputs = TFUtil.make_var_tuple(grad_op(*grad_inputs))
+          if grad_description.num_dummy_outs > 0:
+            grad_outputs = grad_outputs[:-grad_description.num_dummy_outs]
+          grad_outputs = self.description.make_results_of_gradient(grad_outputs)
+          return grad_outputs
 
-      grad_wrapper.__name__ = grad_description.name
-      grad_wrapper.grad_op = grad_op
-      ops.RegisterGradient(self.name)(grad_wrapper)
-      op.grad_wrapper = grad_wrapper
-      op.grad_op = grad_op
+        grad_wrapper.__name__ = grad_description.name
+        grad_wrapper.grad_op = grad_op
+        ops.RegisterGradient(self.name)(grad_wrapper)
+        op.grad_wrapper = grad_wrapper
+        op.grad_op = grad_op
 
     return op
 

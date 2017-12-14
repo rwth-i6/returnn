@@ -709,15 +709,16 @@ class LayerBase(object):
     As arguments, we get the usual layer arguments.
     batch_dim is added because it might be special because of beam search.
 
-    Note: This could maybe share code with :func:`RnnCellLayer._get_rec_initial_state`.
+    Note: This could maybe share code with :func:`RnnCellLayer.get_rec_initial_state`.
     We could also add support to make the initial output be the output of another layer.
 
     :param tf.Tensor batch_dim: including beam size in beam search
-    :param str name:
+    :param str name: layer name
     :param Data output: template
     :param str|float|int|tf.Tensor|None initial_output:
     :rtype: tf.Tensor
     """
+    import numpy
     v = initial_output
     data = output
     if isinstance(v, tf.Tensor):
@@ -728,7 +729,10 @@ class LayerBase(object):
         (" E.g. '%s': {'initial_output': 'zeros'}." % name))
     if v is None:
       v = "zeros"
-    shape = [(d if (d is not None) else 1) for d in data.batch_shape]
+    bc_shape = [(d if (d is not None) else 1) for d in data.batch_shape]
+    # Some other code might not support automatic broadcasting in the batch-axis. (Example: concat_in_time)
+    # Thus we will automatically
+    shape = list(bc_shape)
     shape[data.batch_dim_axis] = batch_dim
     if isinstance(v, (float, int)):
       with tf.name_scope("init_%s_const" % name):
@@ -739,6 +743,15 @@ class LayerBase(object):
       return tf.zeros(shape, dtype=data.dtype, name="init_%s_zeros" % name)
     elif v == "ones":
       return tf.ones(shape, dtype=data.dtype, name="init_%s_ones" % name)
+    elif v == "var":
+      assert not data.sparse
+      assert numpy.prod(bc_shape) == data.dim
+      x = tf.get_variable(
+        "init_%s_var" % name, shape=(data.dim,), dtype=data.dtype, initializer=tf.zeros_initializer(dtype=data.dtype))
+      x = tf.reshape(x, bc_shape, name="init_%s_var_bc" % name)
+      x = tf.tile(x, [batch_dim if (i == data.batch_dim_axis) else 1 for i in range(data.batch_ndim)],
+                  name="init_%s_var_batch_bc" % name)
+      return x
     elif v == "apply(0)":
       # We will apply the layer for the input 0 and use this as the initial state.
       # This code might be a bit unstable.
@@ -2527,6 +2540,73 @@ class PrefixInTimeLayer(CopyLayer):
     self.output.size_placeholder[self.output.time_dim_axis_excluding_batch] += repeat
 
 
+class ShiftAxisLayer(_ConcatInputLayer):
+  """
+  Shifts a axis around.
+  This layer may change the axis-dimension.
+  """
+  layer_class = "shift_axis"
+
+  def __init__(self, axis, amount, pad=True, adjust_size_info=True, **kwargs):
+    """
+    :param str|int axis: single axis to shift
+    :param int amount: number of elements to shift
+                   (<0 for left-shift, >0 for right-shift)
+    :param bool pad: preserve shape by padding
+    :param bool adjust_size_info: whether to adjust the size_placeholder
+    """
+    from TFUtil import single_strided_slice
+    import numpy
+    super(ShiftAxisLayer, self).__init__(**kwargs)
+    assert isinstance(amount, int)
+    axis = self.input_data.get_axis_from_description(axis)
+    paddings = numpy.zeros(shape=(self.input_data.batch_ndim, 2))
+    if amount < 0:  # left-shift
+      shifted = single_strided_slice(self.input_data.placeholder, axis=axis, begin=-amount)
+      paddings[axis] = [0, -amount]
+    elif amount > 0:  # right-shift
+      # discard `amount` values in the end of the axis
+      shifted = single_strided_slice(self.input_data.placeholder, axis=axis, end=-amount)
+      paddings[axis] = [amount, 0]
+    else:
+      assert False, "amount == 0 equals no operation"
+    if pad:
+      # insert missing values, so that the shape is preserved
+      shifted = tf.pad(shifted, paddings)
+    self.output.placeholder = shifted
+    self.output.size_placeholder = self.input_data.size_placeholder.copy()
+    axis_wob = self.input_data.get_batch_axis_excluding_batch(axis)
+    if adjust_size_info and axis_wob in self.output.size_placeholder:
+      # Note: Different logic than in get_out_data_from_opts() because this is about e.g. the seq lengths.
+      if amount < 0:
+        size_delta = amount
+      else:  # amount > 0
+        if pad:
+          size_delta = amount
+        else:
+          size_delta = 0
+      self.output.size_placeholder[axis_wob] = tf.clip_by_value(
+        self.output.size_placeholder[axis_wob] + size_delta, 0, tf.shape(shifted)[axis])
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, amount, axis, pad, sources=(), **kwargs):
+    out = get_concat_sources_data_template(sources, name="%s_output" % name)
+    assert isinstance(amount, int)
+    axis = out.get_axis_from_description(axis)
+    axis_wob = out.get_batch_axis_excluding_batch(axis)
+    if axis_wob is None:  # batch-axis
+      return out  # not storing this information
+    if pad:
+      return out  # nothing in the shape will change
+    if out.shape[axis_wob] is not None:
+      shape = list(out.shape)
+      shape[axis_wob] -= abs(amount)
+      out.shape = tuple(shape)
+    if axis == out.feature_dim_axis:
+      out.dim = out.shape[axis_wob]
+    return out
+
+
 class ResizeLayer(_ConcatInputLayer):
   """
   Resizes the input, i.e. upsampling or downsampling.
@@ -4234,9 +4314,17 @@ class MeanSquaredError(Loss):
   def get_value(self):
     assert not self.target.sparse, "sparse is not supported yet"
     with tf.name_scope("loss_mse"):
-      out = tf.squared_difference(self.output_flat, self.target_flat)
-      assert out.get_shape().ndims == 2
-      out = self.reduce_func(tf.reduce_mean(out, axis=1))
+      if self.target_flat is not None:
+        assert self.output_flat is not None
+        out = tf.squared_difference(self.output_flat, self.target_flat)
+        assert out.get_shape().ndims == 2
+        out = self.reduce_func(tf.reduce_mean(out, axis=1))
+      else:
+        assert self.output is not None and self.target is not None
+        out = tf.squared_difference(self.output, self.target)
+        assert out.get_shape().ndims == 1
+        out = self.reduce_func(out)
+
       return out
 
 

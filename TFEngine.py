@@ -37,6 +37,10 @@ from TFUpdater import Updater
 from Util import hms, NumbersDict
 
 
+class CancelTrainingException(Exception):
+  pass
+
+
 class Runner(object):
   def __init__(self, engine, dataset, batches, train, eval=True, extra_fetches=None, extra_fetches_callback=None):
     """
@@ -65,6 +69,8 @@ class Runner(object):
     self.store_metadata_mod_step = engine.config.int("store_metadata_mod_step", 0)
     self.reset_updater_vars_mod_step = engine.config.int("reset_updater_vars_mod_step", 0)
     self.finalized = False
+    self.cancel_flag = False
+    self.run_exception = None
     self.num_steps = None
     self.device_crash_batch = None  # type: int|None
     self.start_time = None
@@ -388,6 +394,8 @@ class Runner(object):
         duration = time.time() - start_time
         self._print_process(report_prefix=report_prefix, step=step, step_duration=duration, eval_info=eval_info)
         step += 1
+        if self.cancel_flag:
+          raise CancelTrainingException("cancel_flag is set")
 
       self._print_finish_process()
 
@@ -411,13 +419,16 @@ class Runner(object):
           size = sess.run(mem_usage_for_dev(dev.name))
           print(" %s: %s" % (dev.name, human_bytes_size(size)), file=log.v1)
 
-    except KeyboardInterrupt:
+    except KeyboardInterrupt as exc:
       print("KeyboardInterrupt in step %r." % step)
+      self.run_exception = exc
 
     except BaseException as exc:
       print("Exception %r in step %r." % (exc, step), file=log.v1)
-      sys.excepthook(*sys.exc_info())
+      if not isinstance(exc, CancelTrainingException):
+        sys.excepthook(*sys.exc_info())
       self.device_crash_batch = step
+      self.run_exception = exc
 
     finally:
       from Util import try_and_ignore_exception
@@ -487,7 +498,7 @@ class Engine(object):
 
   def _check_devices(self):
     from TFUtil import print_available_devices, is_gpu_available
-    print_available_devices()
+    print_available_devices(file=log.v2)
     assert len(self.devices_config) == 1, "multiple devices not supported yet for TF"
     if self.is_requesting_for_gpu():
       assert is_gpu_available(), "no GPU available"
@@ -518,6 +529,10 @@ class Engine(object):
     self.tf_session = tf.Session(config=config)
 
   def _reset_graph(self):
+    """
+    Resets the default graph (of the current thread),
+    and clears up any cached tensors created in it.
+    """
     tf.reset_default_graph()
     self._checked_uninitialized_vars = False
     self._merge_all_summaries = None
