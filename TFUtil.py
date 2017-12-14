@@ -1874,10 +1874,11 @@ def constant_with_shape(x, shape, dtype=None, name="constant_with_shape"):
   :rtype: tf.Tensor
   """
   with tf.name_scope(name):
-    if x is (0, 0.0, False):
-      return tf.zeros(shape, dtype=dtype)
-    if x is (1, 1.0, True):
-      return tf.ones(shape, dtype=dtype)
+    if type(x) in [int, float, bool]:
+      if x in (0, 0.0, False):
+        return tf.zeros(shape, dtype=dtype)
+      if x in (1, 1.0, True):
+        return tf.ones(shape, dtype=dtype)
     x = tf.convert_to_tensor(x, dtype=dtype)
     ones = tf.ones(shape, dtype=x.dtype)
     if x.dtype == tf.bool:
