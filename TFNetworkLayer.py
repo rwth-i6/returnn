@@ -709,15 +709,16 @@ class LayerBase(object):
     As arguments, we get the usual layer arguments.
     batch_dim is added because it might be special because of beam search.
 
-    Note: This could maybe share code with :func:`RnnCellLayer._get_rec_initial_state`.
+    Note: This could maybe share code with :func:`RnnCellLayer.get_rec_initial_state`.
     We could also add support to make the initial output be the output of another layer.
 
     :param tf.Tensor batch_dim: including beam size in beam search
-    :param str name:
+    :param str name: layer name
     :param Data output: template
     :param str|float|int|tf.Tensor|None initial_output:
     :rtype: tf.Tensor
     """
+    import numpy
     v = initial_output
     data = output
     if isinstance(v, tf.Tensor):
@@ -728,7 +729,10 @@ class LayerBase(object):
         (" E.g. '%s': {'initial_output': 'zeros'}." % name))
     if v is None:
       v = "zeros"
-    shape = [(d if (d is not None) else 1) for d in data.batch_shape]
+    bc_shape = [(d if (d is not None) else 1) for d in data.batch_shape]
+    # Some other code might not support automatic broadcasting in the batch-axis. (Example: concat_in_time)
+    # Thus we will automatically
+    shape = list(bc_shape)
     shape[data.batch_dim_axis] = batch_dim
     if isinstance(v, (float, int)):
       with tf.name_scope("init_%s_const" % name):
@@ -739,6 +743,15 @@ class LayerBase(object):
       return tf.zeros(shape, dtype=data.dtype, name="init_%s_zeros" % name)
     elif v == "ones":
       return tf.ones(shape, dtype=data.dtype, name="init_%s_ones" % name)
+    elif v == "var":
+      assert not data.sparse
+      assert numpy.prod(bc_shape) == data.dim
+      x = tf.get_variable(
+        "init_%s_var" % name, shape=(data.dim,), dtype=data.dtype, initializer=tf.zeros_initializer(dtype=data.dtype))
+      x = tf.reshape(x, bc_shape, name="init_%s_var_bc" % name)
+      x = tf.tile(x, [batch_dim if (i == data.batch_dim_axis) else 1 for i in range(data.batch_ndim)],
+                  name="init_%s_var_batch_bc" % name)
+      return x
     elif v == "apply(0)":
       # We will apply the layer for the input 0 and use this as the initial state.
       # This code might be a bit unstable.
