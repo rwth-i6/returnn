@@ -255,7 +255,7 @@ class Device(object):
     try:
       import pynvml
     except ImportError:
-      print("pynvml not available, memory information missing")
+      print("pynvml not available, memory information missing", file=log.v4)
     else:
       try:
         pynvml.nvmlInit()

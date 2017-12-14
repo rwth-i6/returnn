@@ -1356,7 +1356,7 @@ def to_bool(v):
 
 
 def as_str(s):
-  if isinstance(s, str):
+  if isinstance(s, str) or 'unicode' in str(type(s)):
     return s
   if isinstance(s, bytes):
     return s.decode("utf8")
