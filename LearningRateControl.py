@@ -409,17 +409,20 @@ class NewbobMultiEpoch(LearningRateControl):
       "numEpochs": config.int("newbob_multi_num_epochs", 5),
       "updateInterval": config.int("newbob_multi_update_interval", config.int("newbob_multi_num_epochs", 5)),
       "relativeErrorThreshold": config.float('newbob_relative_error_threshold', -0.01),
-      "learningRateDecayFactor": config.float('newbob_learning_rate_decay', 0.5)})
+      "learningRateDecayFactor": config.float('newbob_learning_rate_decay', 0.5),
+      "learningRateGrowthFactor": config.float('newbob_learning_rate_growth', 1.0),
+      })
     return kwargs
 
-  def __init__(self, numEpochs,  updateInterval, relativeErrorThreshold, learningRateDecayFactor, **kwargs):
+  def __init__(self, numEpochs,  updateInterval,
+               relativeErrorThreshold, learningRateDecayFactor, learningRateGrowthFactor=1.0, **kwargs):
     """
     :param float defaultLearningRate: learning rate for epoch 1+2
-    :type numEpochs: int
-    :type updateInterval: int
-    :type relativeErrorThreshold: float
-    :type learningRateDecayFactor: float
-    :type filename: str
+    :param int numEpochs:
+    :param int updateInterval:
+    :param float relativeErrorThreshold:
+    :param float learningRateDecayFactor:
+    :param int filename:
     """
     super(NewbobMultiEpoch, self).__init__(**kwargs)
     self.numEpochs = numEpochs
@@ -428,6 +431,7 @@ class NewbobMultiEpoch(LearningRateControl):
     assert self.updateInterval >= 1
     self.relativeErrorThreshold = relativeErrorThreshold
     self.learningRateDecayFactor = learningRateDecayFactor
+    self.learningRateGrowthFactor = learningRateGrowthFactor
 
   def _calcMeanRelativeError(self, epochs):
     """
@@ -472,6 +476,8 @@ class NewbobMultiEpoch(LearningRateControl):
       return learningRate
     if meanRelativeError > self.relativeErrorThreshold:
       learningRate *= self.learningRateDecayFactor
+    else:
+      learningRate *= self.learningRateGrowthFactor
     return learningRate
 
 
