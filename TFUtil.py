@@ -1874,7 +1874,7 @@ def constant_with_shape(x, shape, dtype=None, name="constant_with_shape"):
   :rtype: tf.Tensor
   """
   with tf.name_scope(name):
-    if type(x) in [int, float, bool] and all([isinstance(d, int) for d in shape]):
+    if type(x) in [int, float, bool] and type(shape) in [list, tuple] and all([type(d) == int for d in shape]):
       if dtype is None:
         dtype = {int: tf.int32, float: tf.float32, bool: tf.bool}[type(x)]
       if x in (0, 0.0, False):
