@@ -3537,9 +3537,10 @@ class ClassesToLengthDistributionLayer(_ConcatInputLayer):
 class ClassesToLengthDistributionGlobalLayer(_ConcatInputLayer):
   layer_class = "classes_to_length_distribution_global"
 
-  def __init__(self, window=15, weight_falloff=1.0, target_smoothing=None, **kwargs):
+  def __init__(self, window=15, weight_falloff=1.0, target_smoothing=None, broadcast_axis='time', **kwargs):
     super(ClassesToLengthDistributionGlobalLayer, self).__init__(**kwargs)
-    assert(self.input_data.sparse)
+    assert self.input_data.sparse
+    assert broadcast_axis in ['time', 'feature']
 
     sizes = self.input_data.size_placeholder[0]
     batches = TFUtil.batch_indices_after_windowing(sizes, window)
@@ -3600,16 +3601,19 @@ class ClassesToLengthDistributionGlobalLayer(_ConcatInputLayer):
       return res
 
     targets = tf.map_fn(compute, batches, back_prop=False, dtype='float32')
-    self.output.placeholder = tf.expand_dims(targets, axis=-2)
+    if broadcast_axis == 'time':
+      self.output.placeholder = tf.expand_dims(targets, axis=-2)
+    elif broadcast_axis == 'feature':
+      self.output.placeholder = tf.expand_dims(targets, axis=-1)
     self.output.size_placeholder[0] = new_sizes
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, window, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, window, broadcast_axis, **kwargs):
     out = get_concat_sources_data_template(sources, name="%s_output" % name).copy_as_batch_major()
     out.size_placeholder = {}
     out.size_placeholder[0] = None
-    out.shape = (1, window)
-    out.dim = window
+    out.shape = (1, window) if broadcast_axis == 'time' else (window, 1)
+    out.dim = window if broadcast_axis == 'time' else 1
     out.sparse = False
     out.dtype = 'float32'
     return out
