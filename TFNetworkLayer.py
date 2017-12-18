@@ -3718,6 +3718,24 @@ class SwapTimeFeatureLayer(CopyLayer):
     return out
 
 
+class FlattenTimeLayer(_ConcatInputLayer):
+  layer_class = "flatten_time"
+
+  def __init__(self, **kwargs):
+    super(FlattenTimeLayer, self).__init__(**kwargs)
+    out = self.input_data.get_placeholder_as_batch_major()
+    out = tf.reshape(out, [tf.shape(out)[0], 1, -1])  # (B, 1, T*D)
+    self.output.placeholder = out
+    self.output.size_placeholder[0] = tf.ones_like(self.input_data.get_sequence_lengths())
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, **kwargs):
+    out = get_concat_sources_data_template(sources, name="%s_output" % name).copy_as_batch_major()
+    out.dim = None
+    out.size_placeholder = {}
+    return out
+
+
 class ApplyLengthDistributionLayer(LayerBase):
   layer_class = "apply_length_distribution"
 
