@@ -886,7 +886,8 @@ class TFNetwork(object):
     print("  extern data:", self.extern_data.get_data_description(), file=log.v2)
     print("  used data keys: %s" % list(sorted(self.used_data_keys)), file=log.v2)
     for layer_name, layer in sorted(self.layers.items()):
-      print("  layer %s %r #: %i" % (layer.layer_class, layer_name, layer.output.dim), file=log.v2)
+      layer_dim = 'unknown' if layer.output.dim is None else '%i' % layer.output.dim
+      print("  layer %s %r #: %s" % (layer.layer_class, layer_name, layer_dim), file=log.v2)
     if not self.layers:
       print("  (no layers)", file=log.v2)
     print("net params #:", self.get_num_params(), file=log.v2)
