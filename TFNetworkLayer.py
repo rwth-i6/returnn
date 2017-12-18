@@ -1461,6 +1461,33 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
     return get_concat_sources_data_template(sources, name="%s_output" % name)
 
 
+class BatchSoftmaxLayer(_ConcatInputLayer):
+  """
+  Softmax over spacial and feature axis
+  """
+  layer_class = "batch_softmax"
+
+  def __init__(self, **kwargs):
+    from TFUtil import sequence_mask
+    super(BatchSoftmaxLayer, self).__init__(**kwargs)
+
+    data = self.input_data.get_placeholder_as_batch_major()
+    data_shape = tf.shape(data)
+    data_flat = tf.reshape(data, [data_shape[0] * data_shape[1], -1])  # (B * T, D)
+    # first mask all values that are not used with -inf, the mask is flat, otherwise we would have to tile it
+    # (increasing the size by the number of features)
+    mask = tf.reshape(sequence_mask(self.input_data.get_sequence_lengths()), [-1])  # (B * T,)
+    data_flat = tf.where(mask, data_flat, tf.fill(tf.shape(data_flat), float("-inf")))
+    data = tf.reshape(data_flat, [data_shape[0], -1])  # (B, T*D)
+    data = tf.nn.softmax(data)
+    data = tf.reshape(data, data_shape)  # (B, T, D)
+    self.output.placeholder = data
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, **kwargs):
+    return get_concat_sources_data_template(sources, name="%s_output" % name).copy_as_batch_major()
+
+
 class ConstantLayer(LayerBase):
   """
   Output is a constant value.
