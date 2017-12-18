@@ -1629,7 +1629,8 @@ class MergeDimsLayer(_ConcatInputLayer):
   Merges a list of axes into a single one.
   E.g. input is (batch, width, height, dim) and axes=(1,2), then we get (batch, width*height, dim).
   Or input is (batch, time, height, dim) and axes="except_time", then we get (batch, time, height*dim).
-  See also CombineDimsLayer.
+  See also :class:`CombineDimsLayer`.
+  When batch and time got merged, :class:`SplitBatchTimeLayer` can undo this.
   """
   layer_class = "merge_dims"
 
@@ -1911,6 +1912,72 @@ class ExpandDimsLayer(_ConcatInputLayer):
       data.dim = dim
     data.shape = data.shape[:axis] + (dim,) + data.shape[axis:]
     return data
+
+
+class ReinterpretAxesLayer(_ConcatInputLayer):
+  """
+  Acts like the :class:`CopyLayer` but reinterprets the role of some axes.
+  """
+  layer_class = "reinterpret_axes"
+
+  def __init__(self, switch_axes=None, size_base=None, set_axes=None,
+               enforce_batch_major=False, enforce_time_major=False, **kwargs):
+    """
+    :param str|list[str] switch_axes: e.g. "bt" to switch batch and time axes
+    :param LayerBase|None size_base:
+    :param dict[str,int] set_axes:
+    :param bool enforce_batch_major:
+    :param bool enforce_time_major:
+    """
+    super(ReinterpretAxesLayer, self).__init__(**kwargs)
+    # All is done already in get_out_data_from_opts().
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    super(ReinterpretAxesLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    if d.get("size_base"):
+      d["size_base"] = get_layer(d["size_base"])
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources,
+                             switch_axes=None, size_base=None, set_axes=None,
+                             enforce_batch_major=False, enforce_time_major=False, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :param str|list[str] switch_axes: e.g. "bt" to switch batch and time axes
+    :param LayerBase|None size_base:
+    :param dict[str,int] set_axes:
+    :param bool enforce_batch_major:
+    :param bool enforce_time_major:
+    """
+    out = get_concat_sources_data_template(sources, name="%s_output" % name)
+    assert not (enforce_batch_major and enforce_time_major)
+    if enforce_batch_major:
+      out = out.copy_as_batch_major()
+    if enforce_time_major:
+      out = out.copy_as_time_major()
+
+    def map_axis_name(s):
+      if s.upper() == "B":
+        return "batch_dim_axis"
+      if s.upper() == "T":
+        return "time_dim_axis"
+      assert s in ["batch_dim_axis", "time_dim_axis"]
+      return s
+    if switch_axes:
+      assert len(switch_axes) == 2
+      axes_s = list(map(map_axis_name, switch_axes))
+      axes = [getattr(out, s) for s in axes_s]
+      for i in range(len(axes)):
+        setattr(out, axes_s[i], axes[(i + 1) % len(axes)])
+    if set_axes:
+      assert enforce_batch_major or enforce_time_major
+      for s, i in sorted(set_axes.items()):
+        setattr(out, map_axis_name(s), i)
+    if size_base:
+      out.size_placeholder = size_base.output.size_placeholder.copy()
+    return out
 
 
 class ConvLayer(_ConcatInputLayer):
@@ -2667,7 +2734,7 @@ class ResizeLayer(_ConcatInputLayer):
 class CombineDimsLayer(_ConcatInputLayer):
   """
   Combines multiple dimensions.
-  See also MergeDimsLayer.
+  See also :class:`MergeDimsLayer`. This is deprecated in favor of :class:`MergeDimsLayer`.
   """
   layer_class = "combine_dims"
 

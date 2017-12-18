@@ -181,7 +181,7 @@ class RecLayer(_ConcatInputLayer):
       if out_type:
         assert out_type.get("time_dim_axis", 0) == 0
         assert out_type.get("batch_dim_axis", 1) == 1
-      out = super(RecLayer, cls).get_out_data_from_opts(**kwargs)
+      out = super(RecLayer, cls).get_out_data_from_opts(sources=sources, **kwargs)
     else:
       out = None
     if isinstance(unit, dict):  # subnetwork
@@ -268,7 +268,7 @@ class RecLayer(_ConcatInputLayer):
       assert self.input_data.batch_dim_axis == 0
       assert self.input_data.time_dim_axis == 1
       x = self.input_data.get_placeholder_as_time_major()  # (time,batch,[dim])
-    seq_len = self.input_data.size_placeholder[0]
+    seq_len = self.input_data.get_sequence_lengths()
     return x, seq_len
 
   def get_loss_value(self):

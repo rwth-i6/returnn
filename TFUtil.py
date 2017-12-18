@@ -128,7 +128,7 @@ class Data(object):
       with tf.name_scope("extern_data/placeholders/%s/" % name):
         for axis in self.get_axes_with_size():
           size_placeholder[axis] = tf.placeholder(**self.get_size_placeholder_kwargs(axis))
-    if not size_placeholder and self.ndim_dense <= 1:
+    if not size_placeholder and (self.ndim_dense <= 1 or all([d is not None for d in shape])):
       size_placeholder = {}
     self.size_placeholder = size_placeholder  # type: dict[int,tf.Tensor]  # axis w.o. batch -> size of shape (batch,)
     self.available_for_inference = available_for_inference
@@ -681,7 +681,12 @@ class Data(object):
     :rtype: tf.Tensor
     """
     assert self.time_dim_axis is not None
-    return self.size_placeholder[self.time_dim_axis_excluding_batch]
+    if self.time_dim_axis_excluding_batch in self.size_placeholder:
+      return self.size_placeholder[self.time_dim_axis_excluding_batch]
+    with tf.name_scope("fixed_seq_len"):
+      assert self.shape[self.time_dim_axis_excluding_batch] is not None
+      return expand_dims_unbroadcast(
+        self.shape[self.time_dim_axis_excluding_batch], axis=0, dim=tf.shape(self.placeholder)[self.batch_dim_axis])
 
   def get_sequence_mask(self):
     """
