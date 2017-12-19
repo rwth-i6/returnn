@@ -283,7 +283,7 @@ class LayerBase(object):
         assert isinstance(d["target"], str)
         if d["target"].startswith("layer:"):
           get_layer(d["target"][len("layer:"):])
-    if "n_out" not in d and d.get("target", None):
+    if "n_out" not in d and d.get("target", None) and network.eval_flag:
       # Must be done here now because loss might be set to None later.
       d["n_out"] = cls._guess_n_out_from_target_and_opt_loss(
         network=network, target=d["target"], loss_class_name=d.get("loss", None))
