@@ -3676,7 +3676,7 @@ class UnsegmentInputLayer(_ConcatInputLayer):
     return out
 
 
-class FillUnusedMemoryLayer(CopyLayer):
+class FillUnusedMemoryLayer(_ConcatInputLayer):
   """
   Fills all unused entries in the time/batch/feature tensor with a constant
   """
@@ -3684,23 +3684,25 @@ class FillUnusedMemoryLayer(CopyLayer):
   layer_class = "fill_unused"
 
   def __init__(self, fill_value=0.0, **kwargs):
-    super(CopyLayer, self).__init__(**kwargs)
+    super(FillUnusedMemoryLayer, self).__init__(**kwargs)
 
-    mask = self.output.get_sequence_mask()
+    mask = self.input_data.get_sequence_mask()
     mask = tf.expand_dims(mask, dim=-1)
-    mask = tf.tile(mask, [1, 1, tf.shape(self.output.placeholder)[2]])
+    mask = tf.tile(mask, [1, 1, tf.shape(self.input_data.placeholder)[2]])
 
-    x = self.output.placeholder
+    x = self.input_data.placeholder
     x = tf.where(mask, x, tf.fill(tf.shape(x), float(fill_value)))
     self.output.placeholder = x
+    self.output.size_placeholder = self.input_data.size_placeholder.copy()
 
 
-class SwapTimeFeatureLayer(CopyLayer):
+class SwapTimeFeatureLayer(_ConcatInputLayer):
   layer_class = "swap_time_feature"
 
   def __init__(self, **kwargs):
     super(SwapTimeFeatureLayer, self).__init__(**kwargs)
-    self.output = self.get_out_data_from_opts(**kwargs)
+    assert self.input_data.batch_ndim == 3
+    assert not self.input_data.sparse
     perm = [self.input_data.batch_dim_axis, self.input_data.feature_dim_axis, self.input_data.time_dim_axis]
     self.output.placeholder = tf.transpose(self.output.placeholder, perm=perm)
     shape = tf.shape(self.output.placeholder)
