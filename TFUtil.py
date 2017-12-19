@@ -3243,7 +3243,48 @@ def safe_log(x, eps=1e-20):
   :return: log(max(x, eps))
   :rtype: tf.Tensor
   """
-  return tf.log(tf.maximum(x, eps))
+  with tf.name_scope("safe_log"):
+    return tf.log(tf.maximum(x, eps))
+
+
+def l1_normalized(x, axis=-1, eps=1e-20):
+  """
+  :param tf.Tensor x: assumes != 0
+  :param int|tf.Tensor axis: in range [-rank(x),rank(x)]
+  :param float|tf.Tensor|None eps: for safety, to ensure that tf.reduce_sum(tf.abs(x)) >= eps
+  :return: y such that tf.reduce_sum(tf.abs(y)) == 1. i.e. y = x / tf.reduce_sum(tf.abs(x)).
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope("l1_normalized"):
+    weighted_input_sum = tf.reduce_sum(tf.abs(x), axis=axis, keep_dims=True)
+    if eps is not None:
+      weighted_input_sum = tf.maximum(weighted_input_sum, eps)
+    divisor = tf.reciprocal(weighted_input_sum)
+    return tf.multiply(x, divisor)
+
+
+def lin_exp(x):
+  """
+  :param tf.Tensor x:
+  :return: x + 1 if x >= 0 else exp(x). this is smooth and differentiable everywhere
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope("lin_exp"):
+    return tf.maximum(x + 1, tf.exp(x))
+
+
+def lin_exp_normed(x, axis=-1, eps=1e-20):
+  """
+  This can be used as an alternative to softmax. It uses :func:`lin_exp` instead of exp.
+
+  :param tf.Tensor x:
+  :param int|tf.Tensor axis: in range [-rank(x),rank(x)]
+  :param float|tf.Tensor|None eps: for safety, to ensure that tf.reduce_sum(tf.abs(x)) >= eps
+  :return: y = l1_normalized(lin_exp(x)), i.e. tf.reduce_sum(y) == 1, and y >= 0.
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope("lin_exp_normed"):
+    return l1_normalized(lin_exp(x), axis=axis, eps=eps)
 
 
 class Lock(object):
