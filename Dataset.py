@@ -235,7 +235,10 @@ class Dataset(object):
       pass  # Keep order as-is.
     elif self.seq_ordering == 'sorted':
       assert get_seq_len
-      seq_index.sort(key=get_seq_len)  # sort by length
+      seq_index.sort(key=get_seq_len)  # sort by length, starting with shortest
+    elif self.seq_ordering == "sorted_reverse":
+      assert get_seq_len
+      seq_index.sort(key=get_seq_len, reverse=True)  # sort by length, in reverse, starting with longest
     elif self.seq_ordering.startswith('laplace'):
       assert get_seq_len
       tmp = self.seq_ordering.split(':')
@@ -359,7 +362,29 @@ class Dataset(object):
       return data[s0_start:s0_end]
 
   def get_tag(self, sorted_seq_idx):
+    """
+    :param int sorted_seq_idx:
+    :rtype: str
+    """
     return "seq-%i" % sorted_seq_idx
+
+  def have_corpus_seq_idx(self):
+    """
+    :rtype: bool
+    :return: whether you can call self.get_corpus_seq_idx()
+    """
+    return False
+
+  def get_corpus_seq_idx(self, seq_idx):
+    """
+    :param int seq_idx: sorted sequence index from the current epoch, depending on seq_ordering
+    :return: the sequence index as-is in the original corpus. only defined if self.have_corpus_seq_idx()
+    :rtype: int
+    """
+    if self.seq_ordering == "default":
+      return seq_idx
+    assert self.have_corpus_seq_idx()
+    raise NotImplemented
 
   def has_ctc_targets(self):
     return False

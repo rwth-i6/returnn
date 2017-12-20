@@ -1313,7 +1313,11 @@ class Engine(object):
       # It's constructed lazily and it will set used_data_keys, so make sure that we have it now.
       self.network.get_all_errors()
     if output_file:
-      dataset.seq_ordering = "default"  # enforce order as-is, so that the order in the written file corresponds
+      if dataset.have_corpus_seq_idx():
+        # We can sort it. Sort it in reverse to make sure that we have enough memory right at the beginning.
+        dataset.seq_ordering = "sorted_reverse"
+      else:
+        dataset.seq_ordering = "default"  # enforce order as-is, so that the order in the written file corresponds
     dataset.init_seq_order(epoch=self.epoch)
     batches = dataset.generate_batches(
       recurrent_net=self.network.recurrent,
@@ -1330,11 +1334,13 @@ class Engine(object):
       print("Given output %r has beam size %i." % (output_layer, out_beam_size), file=log.v1)
     target_key = "classes"
 
+    out_cache = None
     if output_file:
       assert dataset.can_serialize_data(target_key)
       assert not os.path.exists(output_file)
       print("Will write outputs to: %s" % output_file, file=log.v2)
       output_file = open(output_file, "w")
+      out_cache = {}  # corpus-seq-idx -> str
 
     def extra_fetches_callback(seq_idx, seq_tag, output, targets=None):
       """
@@ -1360,9 +1366,10 @@ class Engine(object):
         if target_key and dataset.can_serialize_data(target_key):
           print("  hyp:", dataset.serialize_data(key=target_key, data=output[out_idx]), file=log.v1)
           print("  ref:", dataset.serialize_data(key=target_key, data=targets[out_idx]), file=log.v1)
-        if output_file:
-          output_file.write("%s\n" % dataset.serialize_data(key=target_key, data=output[out_idx]))
-          output_file.flush()
+        if out_cache is not None:
+          corpus_seq_idx = dataset.get_corpus_seq_idx(seq_idx[i])
+          assert corpus_seq_idx not in out_cache
+          out_cache[corpus_seq_idx] = dataset.serialize_data(key=target_key, data=output[out_idx])
 
     runner = Runner(
       engine=self, dataset=dataset, batches=batches, train=False, eval=do_eval,
@@ -1379,6 +1386,11 @@ class Engine(object):
     print("Search done. Final: score %s error %s" % (
       self.format_score(runner.score), self.format_score(runner.error)), file=log.v1)
     if output_file:
+      assert out_cache
+      assert 0 in out_cache
+      assert len(out_cache) - 1 in out_cache
+      for i in range(len(out_cache)):
+        output_file.write("%s\n" % out_cache[i])
       output_file.close()
 
   def compute_priors(self, dataset, config=None):
