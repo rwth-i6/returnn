@@ -1285,7 +1285,7 @@ class SliceLayer(_ConcatInputLayer):
     slices = [slice(None, None)] * axis + [dim_slice]
     axis_wo_batch = self.input_data.get_batch_axis_excluding_batch(axis)
     self.output.size_placeholder = self.input_data.size_placeholder.copy()
-    if axis == self.input_data.time_dim_axis:
+    if axis == self.input_data.time_dim_axis and self.input_data.time_dim_axis_excluding_batch in self.output.size_placeholder:
       if slice_start:
         assert slice_start > 0
         self.output.size_placeholder[self.input_data.time_dim_axis_excluding_batch] = \
