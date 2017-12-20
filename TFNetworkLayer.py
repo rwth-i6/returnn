@@ -3695,6 +3695,10 @@ class FillUnusedMemoryLayer(_ConcatInputLayer):
     self.output.placeholder = x
     self.output.size_placeholder = self.input_data.size_placeholder.copy()
 
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources=(), **kwargs):
+    return get_concat_sources_data_template(sources, name="%s_output" % name)
+
 
 class SwapTimeFeatureLayer(_ConcatInputLayer):
   layer_class = "swap_time_feature"
@@ -3711,8 +3715,8 @@ class SwapTimeFeatureLayer(_ConcatInputLayer):
     self.output.shape = (self.output.placeholder.get_shape()[1].value, self.output.dim)
 
   @classmethod
-  def get_out_data_from_opts(cls, **kwargs):
-    out = super(SwapTimeFeatureLayer, cls).get_out_data_from_opts(**kwargs)
+  def get_out_data_from_opts(cls, name, sources=(), **kwargs):
+    out = get_concat_sources_data_template(sources, name="%s_output" % name)
     out.batch_dim_axis = 0
     out.time_dim_axis = 1
     out.dim = None
