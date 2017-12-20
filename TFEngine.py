@@ -80,7 +80,7 @@ class Runner(object):
     self.results = {}  # type: dict[str,float]  # entries like "cost:output" or "loss"
     self.score = {}  # type: dict[str,float]  # entries like "cost:output"
     self.error = {}  # type: dict[str,float]  # entries like "error:output"
-    self.stats = {}  # type: dict[str,float]  # entries like "stats:..."
+    self.stats = {}  # type: dict[str,float|numpy.ndarray|Util.Stats]  # entries like "stats:..."
     self.extra_fetches = extra_fetches
     if extra_fetches is not None:
       assert extra_fetches_callback
@@ -147,6 +147,13 @@ class Runner(object):
           d["extra:%s:size_%i" % (k, i)] = s
     if self.engine.get_all_merged_summaries() is not None:
       d["summary"] = self.engine.get_all_merged_summaries()
+    if self.engine.config.bool("tf_log_memory_usage", False):
+      from TFUtil import get_tf_list_local_devices, mem_usage_for_dev
+      for dev in get_tf_list_local_devices():
+        if dev.device_type != "GPU":
+          # mem_usage_for_dev currently only works for GPU
+          continue
+        d["mem_usage:%s" % dev.name.replace("/device:", "")] = mem_usage_for_dev(dev.name)
     return d
 
   def _print_process(self, report_prefix, step, step_duration, eval_info):
@@ -265,6 +272,11 @@ class Runner(object):
           v = list(v)  # looks nicer in logs
         eval_info[k] = v
         self.stats[k] = v  # Always just store latest value.
+      if k.startswith("mem_usage:"):
+        from Util import human_bytes_size, Stats
+        self.stats.setdefault(k, Stats(format_str=human_bytes_size))
+        self.stats[k].collect([v])
+        eval_info[k] = human_bytes_size(v)
 
     return eval_info
 
@@ -408,16 +420,10 @@ class Runner(object):
 
       self._finalize(num_steps=step)
 
-      if self.engine.config.bool("tf_log_memory_usage", False):
-        print("Memory usage:", file=log.v1)
-        from TFUtil import get_tf_list_local_devices, mem_usage_for_dev
-        from Util import human_bytes_size
-        for dev in get_tf_list_local_devices():
-          if dev.device_type != "GPU":
-            # mem_usage_for_dev currently only works for GPU
-            continue
-          size = sess.run(mem_usage_for_dev(dev.name))
-          print(" %s: %s" % (dev.name, human_bytes_size(size)), file=log.v1)
+      if self.stats:
+        print("Stats:", file=log.v1)
+        for k, v in sorted(self.stats.items()):
+          print("  %s:" % k, v, file=log.v1)
 
     except KeyboardInterrupt as exc:
       print("KeyboardInterrupt in step %r." % step)

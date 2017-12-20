@@ -2309,24 +2309,51 @@ def maybe_restart_returnn_with_atfork_patch():
 
 class Stats:
   """
-  Collects mean and variance.
+  Collects mean and variance, running average.
 
   https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance
   """
 
-  def __init__(self):
+  def __init__(self, format_str=None):
+    """
+    :param None|((float|numpy.ndarray)->str) format_str:
+    """
+    self.format_str = format_str or str
     self.mean = 0.0
     self.mean_sq = 0.0
     self.var = 0.0
+    self.min = None
+    self.max = None
     self.total_data_len = 0
     self.num_seqs = 0
 
+  def __str__(self):
+    if self.num_seqs > 0:
+      return "Stats(mean=%s, std_dev=%s, min=%s, max=%s, num_seqs=%i, total_data_len=%i)" % (
+        self.format_str(self.get_mean()), self.format_str(self.get_std_dev()),
+        self.format_str(self.min), self.format_str(self.max), self.num_seqs, self.total_data_len)
+    return "Stats(num_seqs=0)"
+
   def collect(self, data):
     """
-    :param numpy.ndarray data: shape (time, dim)
+    :param numpy.ndarray data: shape (time, dim) or (time,)
     """
     import numpy
+    if isinstance(data, (list, tuple)):
+      data = numpy.array(data)
+    assert isinstance(data, numpy.ndarray)
+    assert data.ndim >= 1
+    if data.shape[0] == 0:
+      return
     self.num_seqs += 1
+    data_min = numpy.min(data, axis=0)
+    data_max = numpy.max(data, axis=0)
+    if self.min is None:
+      self.min = data_min
+      self.max = data_max
+    else:
+      self.min = numpy.minimum(self.min, data_min)
+      self.max = numpy.maximum(self.max, data_max)
     new_total_data_len = self.total_data_len + data.shape[0]
     mean_diff = numpy.mean(data, axis=0) - self.mean
     m_a = self.var * self.total_data_len

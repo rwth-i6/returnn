@@ -4192,7 +4192,7 @@ class ExplicitRandomShuffleQueue(object):
 
 def mem_usage_for_dev(dev_name):
   """
-  :param str dev_name: e.g. "/cpu:0" or "/gpu:0"
+  :param str dev_name: e.g. "/device:GPU:0"
   :return: int scalar, which is the peak memory usage in bytes of the given device
   :rtype: tf.Tensor
 
@@ -4201,10 +4201,13 @@ def mem_usage_for_dev(dev_name):
   """
   def get():
     from tensorflow.contrib import memory_stats
-    try:
-      bytes_in_use = memory_stats.BytesInUse  # since TF 1.4.0
-    except AttributeError:
-      bytes_in_use = memory_stats.MaxBytesInUse
+    # It's not so clear what BytesInUse returns. https://stackoverflow.com/questions/47903039/
+    # Thus we always use MaxBytesInUse for now, although this is also not so nice.
+    bytes_in_use = memory_stats.MaxBytesInUse
+    # try:
+    #   bytes_in_use = memory_stats.BytesInUse  # since TF 1.4.0
+    # except AttributeError:
+    #   bytes_in_use = memory_stats.MaxBytesInUse
     with tf.device(dev_name):
       return bytes_in_use()
 
