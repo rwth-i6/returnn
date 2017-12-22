@@ -1948,7 +1948,7 @@ class ReinterpretAxesLayer(_ConcatInputLayer):
   layer_class = "reinterpret_axes"
 
   def __init__(self, switch_axes=None, size_base=None, set_axes=None,
-               enforce_batch_major=False, enforce_time_major=False, **kwargs):
+               enforce_batch_major=False, enforce_time_major=False, increase_sparse_dim=None, **kwargs):
     """
     :param str|list[str] switch_axes: e.g. "bt" to switch batch and time axes
     :param LayerBase|None size_base:
@@ -1968,7 +1968,8 @@ class ReinterpretAxesLayer(_ConcatInputLayer):
   @classmethod
   def get_out_data_from_opts(cls, name, sources,
                              switch_axes=None, size_base=None, set_axes=None,
-                             enforce_batch_major=False, enforce_time_major=False, **kwargs):
+                             enforce_batch_major=False, enforce_time_major=False,
+                             increase_sparse_dim=None, **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
@@ -1977,6 +1978,7 @@ class ReinterpretAxesLayer(_ConcatInputLayer):
     :param dict[str,int] set_axes:
     :param bool enforce_batch_major:
     :param bool enforce_time_major:
+    :param int|None increase_sparse_dim: if sparse, add this to the dim
     """
     out = get_concat_sources_data_template(sources, name="%s_output" % name)
     assert not (enforce_batch_major and enforce_time_major)
@@ -2004,6 +2006,9 @@ class ReinterpretAxesLayer(_ConcatInputLayer):
         setattr(out, map_axis_name(s), i)
     if size_base:
       out.size_placeholder = size_base.output.size_placeholder.copy()
+    if increase_sparse_dim:
+      assert out.sparse
+      out.dim += increase_sparse_dim
     return out
 
 
