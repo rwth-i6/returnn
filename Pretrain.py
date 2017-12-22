@@ -42,7 +42,9 @@ class Pretrain:
   """
   # Note: If we want to add other pretraining schemes, make this a base class.
 
-  def __init__(self, original_network_json, network_init_args, copy_output_layer=None, greedy=None, repetitions=None, construction_algo=None):
+  def __init__(self, original_network_json, network_init_args,
+               copy_output_layer=None, greedy=None, repetitions=None,
+               construction_algo="from_output", output_layers=("output",), input_layers=("data",)):
     """
     :type original_network_json: dict[str]
     :param dict[str] network_init_args: additional args we use for LayerNetwork.from_json().
@@ -52,6 +54,8 @@ class Pretrain:
     :param None | int | list[int] | dict repetitions: how often to repeat certain pretrain steps. default is one epoch.
       It can also be a dict, with keys like 'default' and 'final'. See code below.
     :param str construction_algo: e.g. "from_output"
+    :param list[str]|tuple[str] output_layers: used for construction
+    :param list[str]|tuple[str] input_layers: used for construction
     """
     if copy_output_layer is None:
       copy_output_layer = "ifpossible"
@@ -65,10 +69,17 @@ class Pretrain:
     assert "n_in" in network_init_args
     assert "n_out" in network_init_args
     self._original_network_json = original_network_json
-    if not construction_algo:
-      construction_algo = "from_output"
     self._construction_algo = construction_algo
-    getattr(self, "_construct_epochs_%s" % construction_algo)()
+    self._input_layers = input_layers
+    self._output_layers = output_layers
+    if construction_algo == "from_input":
+      self._construct_epochs_from_input()
+    elif construction_algo == "from_output":
+      self._construct_epochs_from_output()
+    elif construction_algo == "no_network_modifications":
+      self._construct_epochs_no_network_modifications()
+    else:
+      raise Exception("invalid construction_algo %r" % construction_algo)
     self._remove_non_trainable_added_only()
     if not repetitions:
       repetitions = 1
@@ -161,7 +172,7 @@ class Pretrain:
     return l
 
   def _is_layer_output(self, json, layer_name):
-    if layer_name == "output":
+    if layer_name in self._output_layers:
       return True
     if json[layer_name]["class"] == "softmax":
       return True
@@ -281,28 +292,31 @@ class Pretrain:
     from copy import deepcopy
     new_json = deepcopy(self._step_net_jsons[0])
     while True:
-      assert "output" in new_json
+      for out_layer_name in self._output_layers:
+        assert out_layer_name in new_json
       # From the sources of the output layer, collect all their sources.
       # Then remove the direct output sources and replace them with the indirect sources.
       new_sources = set()
       deleted_sources = set()
-      for source in new_json["output"]["from"]:
-        # Except for data sources. Just keep them.
-        if source == "data":
-          new_sources.add("data")
-        else:
-          assert source in new_json, "error %r, n: %i, last: %s" % (source, len(self._step_net_jsons), self._step_net_jsons[0])
-          new_sources.update(new_json[source].get("from", ["data"]))
-          del new_json[source]
-          deleted_sources.add(source)
+      for out_layer_name in self._output_layers:
+        for source in new_json[out_layer_name]["from"]:
+          # Except for data sources. Just keep them.
+          if source in self._input_layers:
+            new_sources.add(source)
+          else:
+            assert source in new_json, "error %r, n: %i, last: %s" % (source, len(self._step_net_jsons), self._step_net_jsons[0])
+            new_sources.update(new_json[source].get("from", ["data"]))
+            del new_json[source]
+            deleted_sources.add(source)
       # Check if anything changed.
       # This is e.g. not the case if the only source was data.
-      if list(sorted(new_sources)) == list(sorted(new_json["output"]["from"])):
+      if list(sorted(new_sources)) == list(sorted(set(sum([new_json[name]["from"] for name in self._output_layers], [])))):
         return False
-      new_json["output"]["from"] = list(sorted(new_sources))
+      for out_layer_name in self._output_layers:
+        new_json[out_layer_name]["from"] = list(sorted(new_sources))
       # If we have data input, it likely means that the input dimension
       # for the output layer would change. Just avoid that for now.
-      if "data" in new_sources:
+      if new_sources.intersection(set(self._input_layers)):
         # Try again.
         continue
       # If all deleted sources were non-trainable, skip this.
@@ -401,23 +415,24 @@ def pretrainFromConfig(config):
   :type config: Config.Config
   :rtype: Pretrain | None
   """
-  pretrainType = config.value("pretrain", "")
-  if pretrainType == "default":
+  pretrainType = config.bool_or_other("pretrain", None)
+  if pretrainType == "default" or (isinstance(pretrainType, dict) and pretrainType) or pretrainType is True:
     network_init_args = LayerNetwork.init_args_from_config(config)
     original_network_json = LayerNetwork.json_from_config(config)
-    copy_output_layer = config.bool_or_other("pretrain_copy_output_layer", "ifpossible")
-    greedy = config.bool("pretrain_greedy", None)
-    if config.is_typed("pretrain_repetitions"):
-      repetitions = config.typed_value("pretrain_repetitions")
-    else:
-      repetitions = config.int_list("pretrain_repetitions", None)
-    construction_algo = config.value("pretrain_construction_algo", None)
-    return Pretrain(original_network_json=original_network_json,
-                    network_init_args=network_init_args,
-                    copy_output_layer=copy_output_layer,
-                    greedy=greedy, repetitions=repetitions,
-                    construction_algo=construction_algo)
-  elif pretrainType == "":
+    opts = config.get_of_type("pretrain", dict, {})
+    if config.has("pretrain_copy_output_layer"):
+      opts.setdefault("copy_output_layer", config.bool_or_other("pretrain_copy_output_layer", "ifpossible"))
+    if config.has("pretrain_greedy"):
+      opts.setdefault("greedy", config.bool("pretrain_greedy", None))
+    if config.has("pretrain_repetitions"):
+      if config.is_typed("pretrain_repetitions"):
+        opts.setdefault("repetitions", config.typed_value("pretrain_repetitions"))
+      else:
+        opts.setdefault("repetitions", config.int_list("pretrain_repetitions", None))
+    if config.has("construction_algo"):
+      opts.setdefault("construction_algo", config.value("pretrain_construction_algo", None))
+    return Pretrain(original_network_json=original_network_json, network_init_args=network_init_args, **opts)
+  elif not pretrainType:
     return None
   else:
     raise Exception("unknown pretrain type: %s" % pretrainType)
