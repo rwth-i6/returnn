@@ -1941,11 +1941,11 @@ class ExpandDimsLayer(_ConcatInputLayer):
     return data
 
 
-class ReinterpretAxesLayer(_ConcatInputLayer):
+class ReinterpretDataLayer(_ConcatInputLayer):
   """
-  Acts like the :class:`CopyLayer` but reinterprets the role of some axes.
+  Acts like the :class:`CopyLayer` but reinterprets the role of some axes or data.
   """
-  layer_class = "reinterpret_axes"
+  layer_class = "reinterpret_data"
 
   def __init__(self, switch_axes=None, size_base=None, set_axes=None,
                enforce_batch_major=False, enforce_time_major=False, increase_sparse_dim=None, **kwargs):
@@ -1956,12 +1956,12 @@ class ReinterpretAxesLayer(_ConcatInputLayer):
     :param bool enforce_batch_major:
     :param bool enforce_time_major:
     """
-    super(ReinterpretAxesLayer, self).__init__(**kwargs)
+    super(ReinterpretDataLayer, self).__init__(**kwargs)
     # All is done already in get_out_data_from_opts().
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
-    super(ReinterpretAxesLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    super(ReinterpretDataLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
     if d.get("size_base"):
       d["size_base"] = get_layer(d["size_base"])
 
