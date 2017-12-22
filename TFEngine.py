@@ -153,7 +153,7 @@ class Runner(object):
         if dev.device_type != "GPU":
           # mem_usage_for_dev currently only works for GPU
           continue
-        d["mem_usage:%s" % dev.name.replace("/device:", "")] = mem_usage_for_dev(dev.name)
+        d["mem_usage:%s" % os.path.basename(dev.name.replace("/device:", "/"))] = mem_usage_for_dev(dev.name)
     return d
 
   def _print_process(self, report_prefix, step, step_duration, eval_info):

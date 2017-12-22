@@ -4195,7 +4195,7 @@ class ExplicitRandomShuffleQueue(object):
 
 def mem_usage_for_dev(dev_name):
   """
-  :param str dev_name: e.g. "/device:GPU:0"
+  :param str dev_name: e.g. "/device:GPU:0" or "/job:localhost/replica:0/task:0/device:GPU:0"
   :return: int scalar, which is the peak memory usage in bytes of the given device
   :rtype: tf.Tensor
 
@@ -4215,7 +4215,7 @@ def mem_usage_for_dev(dev_name):
       return bytes_in_use()
 
   assert dev_name.startswith("/")  # e.g. "/cpu:0" or "/gpu:0"
-  scope_name = dev_name[1:].replace(":", "")  # e.g. "cpu0" or "gpu0"
+  scope_name = dev_name[1:].replace(":", "").replace("/", "_")  # e.g. "cpu0" or "gpu0"
   return global_tensor(get, "mem_usage_%s" % scope_name)
 
 
