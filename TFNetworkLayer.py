@@ -2713,11 +2713,12 @@ class ResizeLayer(_ConcatInputLayer):
   """
   layer_class = "resize"
 
-  def __init__(self, factor, axis, kind="nn", **kwargs):
+  def __init__(self, factor, axis, kind="nn", fill_value=None, **kwargs):
     """
     :param int factor:
     :param str|int axis: the axis to resize, counted with batch-dim. can also be "T" for time
-    :param str kind: "linear", "nn"/"nearest_neighbor", "cubic"
+    :param str kind: "linear", "nn"/"nearest_neighbor", "cubic", "fill"
+    :param None|int|float fill_value: if kind=="fill"
     """
     super(ResizeLayer, self).__init__(**kwargs)
     # self.output.shape and self.output.batch_dim_axis are already set here via self.get_out_data_from_opts().
@@ -2733,7 +2734,8 @@ class ResizeLayer(_ConcatInputLayer):
     x = dimshuffle(self.output.placeholder, [0, axis, 'x'] + remaining_axes)  # [batch,height,width] + remaining_axes
     shape = tf.shape(self.output.placeholder)
     shape = [shape[i] for i in range(self.output.batch_ndim)]
-    x = tf.reshape(x, [shape[0], shape[axis], 1] + [tf.reduce_prod([shape[i] for i in remaining_axes])])  # [batch,height,width,channels]
+    remaining_dim = tf.reduce_prod([shape[i] for i in remaining_axes]) if remaining_axes else 1
+    x = tf.reshape(x, [shape[0], shape[axis], 1, remaining_dim])  # [batch,height,width,channels]
     new_size = shape[axis] * factor
     if kind == "linear":
       x = tf.image.resize_bilinear(x, size=(new_size, 1))
@@ -2741,10 +2743,22 @@ class ResizeLayer(_ConcatInputLayer):
       x = tf.image.resize_bicubic(x, size=(new_size, 1))
     elif kind in ["nn", "nearest_neighbor"]:
       x = tf.image.resize_nearest_neighbor(x, size=(new_size, 1))
+    elif kind == "fill":
+      if self.input_data.sparse:
+        assert isinstance(fill_value, int)
+        if fill_value < 0:
+          fill_value += self.input_data.dim
+          assert fill_value > 0
+      else:
+        assert isinstance(fill_value, (int, float))
+      assert isinstance(factor, int) and factor > 1
+      from TFUtil import constant_with_shape
+      fill_tensor = constant_with_shape(
+        fill_value, shape=[shape[0], shape[axis], factor - 1, remaining_dim], dtype=x.dtype)
+      x = tf.concat([x, fill_tensor], axis=2)  # [batch,height,factor,channels]
     else:
       raise Exception("invalid kind %r for resizing" % kind)
-    x = tf.reshape(x, [shape[0], new_size, 1] + [shape[i] for i in remaining_axes])  # [batch,new_size,1] + remaining_axes
-    x = tf.squeeze(x, axis=2)  # [batch,new_size] + remaining_axes
+    x = tf.reshape(x, [shape[0], new_size] + [shape[i] for i in remaining_axes])  # [batch,new_size] + remaining_axes
     if axis != 1:
       perm = [0] + remaining_axes
       perm.insert(axis, 1)
