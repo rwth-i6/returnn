@@ -159,6 +159,8 @@ class RecLayer(_ConcatInputLayer):
         # Only used to resolve deps to base network.
         if name.startswith("base:"):
           return get_layer(name[len("base:"):])
+      from TFNetwork import TFNetwork, ExternData
+      subnet = TFNetwork(parent_net=network, extern_data=network.extern_data)  # dummy subnet
       for sub in d["unit"].values():  # iterate over the layers of the subnet
         assert isinstance(sub, dict)
         if "class" in sub:
@@ -167,7 +169,7 @@ class RecLayer(_ConcatInputLayer):
           cl = get_layer_class(class_name)
           # Operate on a copy because we will transform the dict later.
           # We only need this to resolve any other layer dependencies in the main network.
-          cl.transform_config_dict(sub.copy(), network=network, get_layer=sub_get_layer)
+          cl.transform_config_dict(sub.copy(), network=subnet, get_layer=sub_get_layer)
 
   @classmethod
   def get_out_data_from_opts(cls, unit, sources=(), initial_state=None, **kwargs):

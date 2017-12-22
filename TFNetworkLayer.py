@@ -54,7 +54,8 @@ class LayerBase(object):
                spatial_smoothing=0.0,
                initial_output=None,
                rec_previous_layer=None,
-               trainable=True):
+               trainable=True,
+               register_as_extern_data=None):
     """
     :param str name:
     :param TFNetwork.TFNetwork network:
@@ -77,6 +78,7 @@ class LayerBase(object):
     :param str|float initial_output: used for recurrent layer, see self.get_rec_initial_output()
     :param LayerBase|None rec_previous_layer: via the recurrent layer, layer (template) which represents the past of us
     :param bool trainable: whether the parameters of this layer will be trained
+    :param str|None register_as_extern_data:
     """
     self.name = name
     self.network = network
@@ -119,6 +121,7 @@ class LayerBase(object):
     self.use_batch_norm = batch_norm
     self.spatial_smoothing = spatial_smoothing
     self.trainable = trainable
+    self.register_as_extern_data = register_as_extern_data
     # Stats will be collected by the engine.
     self.stats = {}  # type: dict[str,tf.Tensor]
 
@@ -131,6 +134,9 @@ class LayerBase(object):
       if isinstance(self.use_batch_norm, dict):
         opts = self.use_batch_norm
       self.output.placeholder = self.batch_norm(self.output, **opts)
+    if self.register_as_extern_data:
+      self.network.extern_data.extra_added_keys.add(self.register_as_extern_data)
+      self.network.extern_data.data[self.register_as_extern_data] = self.output
 
   def __repr__(self):
     return "<%s %r out_type=%s>" % (
@@ -233,9 +239,13 @@ class LayerBase(object):
   def cls_get_tf_scope_name(cls, name):
     """
     :param str name: layer name
-    :return: scope name, might be just name
+    :return: valid scope name, might be just name. see tf._VALID_SCOPE_NAME_REGEX and tf._VALID_OP_NAME_REGEX
     """
-    return name.replace(":", "__")
+    # For the root name scope, it's even more restrictive, and we must also cover this case.
+    name = name.replace(":", "__")
+    if name[:1] in "_-\\/":
+      name = (".%i." % ord(name[0])) + name[1:]
+    return name
 
   @classmethod
   def cls_layer_scope(cls, name):
@@ -286,16 +296,17 @@ class LayerBase(object):
     if "n_out" not in d and d.get("target", None) and network.eval_flag:
       # Must be done here now because loss might be set to None later.
       d["n_out"] = cls._guess_n_out_from_target_and_opt_loss(
-        network=network, target=d["target"], loss_class_name=d.get("loss", None))
+        network=network, target=d["target"], loss_class_name=d.get("loss", None), get_layer=get_layer)
     d["loss"] = cls._make_loss(
       class_name=d.pop("loss", None), opts=d.pop("loss_opts", None), network=network, get_layer=get_layer)
 
   @classmethod
-  def _guess_n_out_from_target_and_opt_loss(cls, network, target, loss_class_name):
+  def _guess_n_out_from_target_and_opt_loss(cls, network, target, loss_class_name, get_layer):
     """
     :param TFNetwork.TFNetwork network:
     :param str target: e.g. "classes"
     :param str|None loss_class_name: e.g. "ce" or None
+    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     :return: n_out value
     :rtype: int
     """
@@ -491,17 +502,20 @@ class LayerBase(object):
     return d
 
   @staticmethod
-  def _static_get_target_value(target, network, mark_data_key_as_used=True):
+  def _static_get_target_value(target, network, mark_data_key_as_used=True, get_layer=None):
     """
     :param str target:
     :param TFNetwork.TFNetwork network:
     :param bool mark_data_key_as_used: forwarded self.network.get_extern_data()
+    :param None|((str) -> LayerBase) get_layer: function to get or construct another layer
     :rtype: Data | None
     """
     if not target or target == "none":
       return None
     if target.startswith("layer:"):
-      return network.layers[target[len("layer:"):]].output
+      if not get_layer:
+        get_layer = network.get_layer
+      return get_layer(target[len("layer:"):]).output
     assert network.extern_data.has_data(target), "target %r unknown" % target
     return network.get_extern_data(target, mark_data_key_as_used=mark_data_key_as_used)
 
@@ -2756,6 +2770,7 @@ class ResizeLayer(_ConcatInputLayer):
       fill_tensor = constant_with_shape(
         fill_value, shape=[shape[0], shape[axis], factor - 1, remaining_dim], dtype=x.dtype)
       x = tf.concat([x, fill_tensor], axis=2)  # [batch,height,factor,channels]
+      x.set_shape(tf.TensorShape((None, None, factor, None)))
     else:
       raise Exception("invalid kind %r for resizing" % kind)
     x = tf.reshape(x, [shape[0], new_size] + [shape[i] for i in remaining_axes])  # [batch,new_size] + remaining_axes
@@ -2766,8 +2781,9 @@ class ResizeLayer(_ConcatInputLayer):
     self.output.placeholder = x
 
   @classmethod
-  def get_out_data_from_opts(cls, factor, axis, sources, **kwargs):
+  def get_out_data_from_opts(cls, factor, axis, sources, name, **kwargs):
     out = get_concat_sources_data_template(sources).copy_as_batch_major()
+    out.name = "%s_output" % name
     axis = out.get_axis_from_description(axis)
     assert axis > 0, "batch-dim resize not supported"
     if out.shape[axis - 1] is not None:
@@ -2832,6 +2848,61 @@ class CombineDimsLayer(_ConcatInputLayer):
       del shape[i]
     out.shape = tuple(shape[:out.batch_dim_axis] + shape[out.batch_dim_axis + 1:])
     out.dim = shape[-1]
+    return out
+
+
+class RemoveLayer(LayerBase):
+  """
+  Currently, assumes sparse data, and removes a specific symbol from the data.
+  """
+  layer_class = "remove"
+
+  def __init__(self, symbol, **kwargs):
+    """
+    :param int symbol:
+    """
+    super(RemoveLayer, self).__init__(**kwargs)
+    if symbol < 0:
+      symbol += self.output.dim
+      assert symbol > 0
+
+    # I currently do not have a good idea how to make this efficient.
+    in_data = self.sources[0].output.copy_as_batch_major()
+    assert in_data.sparse
+    assert in_data.batch_ndim == 2
+    in_seqs = in_data.placeholder  # (batch,time)
+    in_mask = tf.logical_and(tf.not_equal(in_seqs, symbol), in_data.get_sequence_mask_broadcast())  # (batch,time)
+    out_seq_lens = tf.count_nonzero(in_mask, axis=1, dtype=tf.int32)  # (batch,)
+    max_out_seq_len = tf.reduce_max(out_seq_lens)  # scalar
+    from TFUtil import constant_with_shape
+    zero_seq = constant_with_shape(0, shape=[max_out_seq_len], dtype=in_seqs.dtype)
+
+    def body(args):
+      """
+      :param (tf.Tensor,tf.Tensor) args: seq, mask; both (time,)
+      :return: out seq
+      :rtype: tf.Tensor
+      """
+      seq, mask = args
+      out_seq = tf.boolean_mask(seq, mask)
+      out_seq = tf.concat([out_seq, zero_seq], axis=0)
+      return out_seq[:max_out_seq_len]
+
+    out_seqs = tf.map_fn(body, [in_seqs, in_mask], dtype=in_seqs.dtype)
+    self.output.placeholder = out_seqs
+    self.output.size_placeholder[0] = out_seq_lens
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources=(), **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :rtype: Data
+    """
+    assert len(sources) == 1, "%s layer %r: must have exactly one source" % (cls, name)
+    assert sources[0].output.sparse, "%s layer %r: assumes sparse data" % (cls, name)
+    out = sources[0].output.copy(name="%s_output" % name).copy_as_batch_major()
+    out.shape = (None,) + out.shape[1:]  # must be dynamic
     return out
 
 

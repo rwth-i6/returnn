@@ -24,6 +24,7 @@ class ExternData(object):
     self.default_target = default_target
     if data:
       self.register_data_from_dict(data)
+    self.extra_added_keys = set()  # set[str]
 
   def __repr__(self):
     return "<ExternData data=%r>" % self.data
@@ -85,6 +86,8 @@ class ExternData(object):
     for key in sorted(used_data_keys):
       if key in ["seq_idx", "seq_tag"]:
         continue  # special cases, ignored for now
+      if key in self.extra_added_keys:
+        continue
       data = self.data[key]
       data_sparse = dataset.is_data_sparse(key)
       assert data.sparse == data_sparse, "key %r sparse mismatch. %s" % (key, base_err_msg)
@@ -281,6 +284,11 @@ class TFNetwork(object):
     """
     :param dict[str,dict[str]] net_dict:
     """
+    for name, layer_desc in sorted(net_dict.items()):
+      assert isinstance(name, str)
+      assert isinstance(layer_desc, dict)
+      if layer_desc.get("register_as_extern_data"):
+        self._construct_layer(net_dict, name)
     for name, layer_desc in sorted(net_dict.items()):
       assert isinstance(name, str)
       assert isinstance(layer_desc, dict)
@@ -547,6 +555,18 @@ class TFNetwork(object):
       assert not must_exist, "default output layer does not exist"
       return None
     return self.layers[name]
+
+  def get_layer(self, layer_name):
+    """
+    Normally just self.layers[layer_name] but with some extra logic added,
+    such as resolving "base:" prefix to the parent network.
+
+    :param str layer_name:
+    :rtype: LayerBase
+    """
+    if layer_name.startswith("base:"):
+      return self.parent_net.get_layer(layer_name[len("base:"):])
+    return self.layers[layer_name]
 
   def get_params_list(self):
     """
