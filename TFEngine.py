@@ -148,8 +148,8 @@ class Runner(object):
     if self.engine.get_all_merged_summaries() is not None:
       d["summary"] = self.engine.get_all_merged_summaries()
     if self.engine.config.bool("tf_log_memory_usage", False):
-      from TFUtil import get_tf_list_local_devices, mem_usage_for_dev
-      for dev in get_tf_list_local_devices():
+      from TFUtil import mem_usage_for_dev
+      for dev in self.engine.tf_session.list_devices():
         if dev.device_type != "GPU":
           # mem_usage_for_dev currently only works for GPU
           continue

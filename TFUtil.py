@@ -1345,6 +1345,9 @@ def get_tf_list_local_devices():
   This uses tensorflow.device_lib.list_local_devices().
   Note that a call to this will trigger the internal TF thread pool inits,
   so you should call :func:`setup_tf_thread_pools` first.
+  Note that this will list all available devices.
+  Any TF session might only use a subset of these.
+  You can get the list available in a given TF session by :func:`tf.Session.list_devices`.
 
   :rtype: list[tensorflow.core.framework.device_attributes_pb2.DeviceAttributes]
   """
