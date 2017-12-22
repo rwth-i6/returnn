@@ -385,6 +385,8 @@ class LayerBase(object):
     """
     :rtype: SearchChoices|None
     """
+    if self.search_choices:
+      return self.search_choices
     layer = self.network.get_search_choices(src=self)
     if layer:
       assert layer.search_choices

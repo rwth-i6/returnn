@@ -2504,19 +2504,20 @@ class DecideLayer(LayerBase):
     :return: best beam selected from input, e.g. shape (batch, time, dim)
     :rtype: Data
     """
-    assert src.search_choices
+    search_choices = src.get_search_choices()
+    assert search_choices
     if not output:
       output = src.output.copy_template(name="%s_output" % (name or src.name)).copy_as_batch_major()
     assert output.batch_dim_axis == 0
     batch_dim = src.network.get_data_batch_dim()
     src_data = src.output.copy_as_batch_major()
-    beam_size = src.search_choices.beam_size
+    beam_size = search_choices.beam_size
     src_output = tf.reshape(
       src_data.placeholder,
       [batch_dim, beam_size] +
       [tf.shape(src_data.placeholder)[i] for i in range(1, src_data.batch_ndim)])  # (batch, beam, [time], [dim])
     # beam_scores is of shape (batch, beam) -> +log score.
-    beam_scores = src.search_choices.beam_scores
+    beam_scores = search_choices.beam_scores
     if length_normalization:
       beam_scores /= tf.to_float(tf.reshape(src.output.get_sequence_lengths(), [batch_dim, beam_size]))
     beam_idxs = tf.argmax(beam_scores, axis=1)  # (batch,)
