@@ -1381,7 +1381,7 @@ class Engine(object):
       extra_fetches_callback=extra_fetches_callback)
     runner.run(report_prefix=self.get_epoch_str() + " search")
     if not runner.finalized:
-      print("Error happened. Exit now.")
+      print("Error happened (%s). Exit now." % runner.run_exception)
       sys.exit(1)
     print("Search done. Final: score %s error %s" % (
       self.format_score(runner.score), self.format_score(runner.error)), file=log.v1)
