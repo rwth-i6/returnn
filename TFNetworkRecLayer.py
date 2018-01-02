@@ -856,11 +856,11 @@ class _SubnetworkRecCell(object):
     """
     self._initial_outputs = {
       k: self._get_init_output(k)
-      for k in self.prev_layers_needed
+      for k in sorted(self.prev_layers_needed)
       if k not in self.input_layers_moved_out + self.output_layers_moved_out}
     self._initial_extra_outputs = {
       k: self._get_init_extra_outputs(k)
-      for k in self.layer_data_templates.keys()
+      for k in sorted(self.layer_data_templates.keys())
       if k not in self.input_layers_moved_out + self.output_layers_moved_out}
     self._initial_extra_outputs = {k: v for (k, v) in self._initial_extra_outputs.items() if v}
     from Util import sorted_values_from_dict
@@ -1556,7 +1556,6 @@ class _SubnetworkRecCell(object):
 
     self.input_layers_moved_out = []
     self.output_layers_moved_out = []
-    layers_needed_from_prev_frame = sorted(self.prev_layers_needed)
 
     def output_can_move_out(layer):
       assert isinstance(layer, _TemplateLayer)
@@ -1566,9 +1565,6 @@ class _SubnetworkRecCell(object):
       if self.parent_net.search_flag:
         if issubclass(layer.layer_class_type, ChoiceLayer):
           return False  # need to perform the search inside the loop currently
-      # layer.output from prev time frame is used by other layers?
-      if layer.name in layers_needed_from_prev_frame:
-        return False
       # layer.output is used by other layers?
       for other_layer in layers_in_loop:
         if layer in other_layer.get_dep_layers():

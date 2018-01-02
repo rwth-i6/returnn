@@ -1089,7 +1089,7 @@ def test_rec_subnet_construct_2():
     assert isinstance(rec_layer, RecLayer)
     assert isinstance(rec_layer.cell, _SubnetworkRecCell)
     assert_equal(set(rec_layer.cell.input_layers_moved_out), {"output", "target_embed"})
-    # assert_equal(set(rec_layer.cell.output_layers_moved_out), {"output_prob", "readout", "readout_in", "s2"})  # TODO...
+    assert_equal(set(rec_layer.cell.output_layers_moved_out), {"output_prob", "readout", "readout_in", "s2"})
     print("Construct search net")
     search_net = TFNetwork(extern_data=extern_data, train_flag=False, eval_flag=True, search_flag=True)
     search_net.construct_from_dict(net_dict)
