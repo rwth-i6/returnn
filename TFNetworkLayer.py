@@ -1207,7 +1207,10 @@ class SelectSearchSourcesLayer(InternalLayer):
           v = select_src_beams(v, src_beams=base_src_choices.src_beams)
         return v
 
-      self.output.placeholder = transform(src.output.get_placeholder_as_batch_major())
+      # It's possible that src.output.placeholder is not set, e.g. in a prev-layer where the
+      # prev output is not needed, only the prev state. See _TemplateLayer.copy_as_prev_time_frame.
+      if src.output.placeholder is not None:
+        self.output.placeholder = transform(src.output.get_placeholder_as_batch_major())
       self.rec_vars_outputs = {k: transform(v) for (k, v) in src.rec_vars_outputs.items()}  # assumes batch-major
 
   def get_dep_layers(self):

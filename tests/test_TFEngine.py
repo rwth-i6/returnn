@@ -972,6 +972,65 @@ def test_rec_subnet_auto_optimize():
   run(run_idx=3, optimize_move_layers_out=True)
 
 
+def test_rec_subnet_construct_1():
+  """
+  Test for a bug in SearchChoices.translate_to_common_search_beam with the prev-layer template.
+  """
+  n_data_dim = 2
+  n_classes_dim = 3
+  from GeneratingDataset import DummyDataset
+  seq_len = 5
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=10, seq_len=seq_len)
+
+  beam_size = 2
+  net_dict = {
+    "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6},
+
+    "lstm0_fw": {"class": "rec", "unit": "nativelstm2", "n_out": 10, "direction": 1, "from": ["source_embed"]},
+    "lstm0_bw": {"class": "rec", "unit": "nativelstm2", "n_out": 10, "direction": -1, "from": ["source_embed"]},
+
+    "lstm1_fw": {"class": "rec", "unit": "nativelstm2", "n_out": 10, "direction": 1, "from": ["lstm0_fw", "lstm0_bw"]},
+    "lstm1_bw": {"class": "rec", "unit": "nativelstm2", "n_out": 10, "direction": -1, "from": ["lstm0_fw", "lstm0_bw"]},
+
+    "encoder": {"class": "copy", "from": ["lstm1_fw", "lstm1_bw"]},
+    "enc_ctx": {"class": "linear", "activation": None, "with_bias": True, "from": ["encoder"], "n_out": 10},
+    "inv_fertility": {"class": "linear", "activation": "sigmoid", "with_bias": False, "from": ["encoder"], "n_out": 1},
+
+    "output": {"class": "rec", "from": [], "unit": {
+      'output': {'class': 'choice', 'target': 'classes', 'beam_size': beam_size, 'from': ["output_prob"], "initial_output": 0},
+      "end": {"class": "compare", "from": ["output"], "value": 0},
+      'target_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'], "n_out": 6, "initial_output": 0},
+      "weight_feedback": {"class": "linear", "activation": None, "with_bias": False, "from": ["prev:accum_att_weights"], "n_out": 10},
+      "prev_s_state": {"class": "get_last_hidden_state", "from": ["prev:s2"], "n_out": 20},
+      "prev_s_transformed": {"class": "linear", "activation": None, "with_bias": False, "from": ["prev_s_state"], "n_out": 10},
+      "energy_in": {"class": "combine", "kind": "add", "from": ["base:enc_ctx", "weight_feedback", "prev_s_transformed"], "n_out": 10},
+      "energy_tanh": {"class": "activation", "activation": "tanh", "from": ["energy_in"]},
+      "energy": {"class": "linear", "activation": None, "with_bias": False, "from": ["energy_tanh"], "n_out": 1},
+      "att_weights": {"class": "softmax_over_spatial", "from": ["energy"]},
+      "accum_att_weights": {"class": "eval", "from": ["prev:accum_att_weights", "att_weights", "base:inv_fertility"],
+                            "eval": "source(0) + source(1) * source(2) * 0.5",
+                            "out_type": {"dim": 1, "shape": (None, 1)}},
+      "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder"},
+      "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["target_embed", "att"], "n_out": 10},
+      "s2": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["s"], "n_out": 10},
+      "readout_in": {"class": "linear", "from": ["prev:s2", "prev:target_embed", "att"], "activation": None, "n_out": 10},
+      "readout": {"class": "reduce_out", "mode": "max", "num_pieces": 2, "from": ["readout_in"]},
+      "output_prob": {"class": "softmax", "from": ["readout"], "target": "classes", "loss": "ce", "dropout": 0.3}
+    }, "target": "classes", "max_seq_len": 7},
+
+    "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance", "target": "classes"}
+  }
+
+  extern_data = ExternData()
+  extern_data.init_from_dataset(train_data)
+  print("Construct train net")
+  train_net = TFNetwork(extern_data=extern_data, train_flag=True)
+  train_net.construct_from_dict(net_dict)
+  print("Construct search net")
+  search_net = TFNetwork(extern_data=extern_data, train_flag=False, eval_flag=True, search_flag=True)
+  search_net.construct_from_dict(net_dict)
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()

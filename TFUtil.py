@@ -494,17 +494,21 @@ class Data(object):
         return tf.shape(self.placeholder)[self.time_dim_axis]
 
   def get_placeholder_as_time_major(self):
+    assert self.placeholder is not None
     return self.copy_as_time_major().placeholder
 
   def get_placeholder_as_batch_major(self):
+    assert self.placeholder is not None
     return self.copy_as_batch_major().placeholder
 
   def get_placeholder_with_specific_batch_dim_axis(self, batch_dim_axis):
+    assert self.placeholder is not None
     if self.batch_dim_axis == batch_dim_axis:
       return self.placeholder
     return swapaxes(self.placeholder, batch_dim_axis, self.batch_dim_axis)
 
   def get_placeholder_time_flattened(self):
+    assert self.placeholder is not None
     assert self.have_time_axis()
     # flatten_with_seq_len_mask only works for these two cases at the moment:
     assert (self.time_dim_axis, self.batch_dim_axis) == (0, 1) or (self.time_dim_axis, self.batch_dim_axis) == (1, 0)
@@ -520,6 +524,7 @@ class Data(object):
       or (batch, time, height, dim) will also become (batch'|time', dim).
       with keep_dims, (batch, time, height, dim) will become (batch'|time', 1, 1, dim).
     """
+    assert self.placeholder is not None
     x = self.placeholder
     dyn_axes = self.get_spatial_batch_axes() + [self.batch_dim_axis]
     if dyn_axes == [self.batch_dim_axis]:
