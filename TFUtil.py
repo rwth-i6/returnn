@@ -91,10 +91,12 @@ class Data(object):
     self.sparse = sparse
     if shape is None:
       assert dim, "no shape specified, need dim"
-      if sparse:
-        shape = (None,)  # assume common (time,)
+      if time_dim_axis is not None:
+        shape = (None,)
       else:
-        shape = (None, dim)  # assume common (time,feat)
+        shape = ()
+      if not sparse:
+        shape = shape + (dim,)
     self.shape = tuple(shape)  # type: tuple[int|None]  # excluding batch-dim. see self.batch_shape
     if dtype is None:
       if sparse:
@@ -719,6 +721,14 @@ class Data(object):
       seq_mask, [i for i in range(self.batch_ndim) if i not in (self.batch_dim_axis, self.time_dim_axis)])
     assert seq_mask.get_shape().ndims == self.batch_ndim
     return seq_mask
+
+  def get_batch_dim(self):
+    """
+    :rtype: tf.Tensor
+    """
+    assert self.placeholder is not None
+    assert self.batch_dim_axis is not None
+    return tf.shape(self.placeholder)[self.batch_dim_axis]
 
   def get_spatial_batch_axes(self):
     """
