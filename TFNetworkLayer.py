@@ -2732,12 +2732,13 @@ class ResizeLayer(_ConcatInputLayer):
   """
   layer_class = "resize"
 
-  def __init__(self, factor, axis, kind="nn", fill_value=None, **kwargs):
+  def __init__(self, factor, axis, kind="nn", fill_value=None, fill_dropout=None, **kwargs):
     """
     :param int factor:
     :param str|int axis: the axis to resize, counted with batch-dim. can also be "T" for time
     :param str kind: "linear", "nn"/"nearest_neighbor", "cubic", "fill"
     :param None|int|float fill_value: if kind=="fill"
+    :param float fill_dropout: if set, will dropout in the same axis
     """
     super(ResizeLayer, self).__init__(**kwargs)
     # self.output.shape and self.output.batch_dim_axis are already set here via self.get_out_data_from_opts().
@@ -2753,7 +2754,8 @@ class ResizeLayer(_ConcatInputLayer):
     x = dimshuffle(self.output.placeholder, [0, axis, 'x'] + remaining_axes)  # [batch,height,width] + remaining_axes
     shape = tf.shape(self.output.placeholder)
     shape = [shape[i] for i in range(self.output.batch_ndim)]
-    remaining_dim = tf.reduce_prod([shape[i] for i in remaining_axes]) if remaining_axes else 1
+    remaining_shape = [shape[i] for i in remaining_axes]
+    remaining_dim = tf.reduce_prod(remaining_shape) if remaining_axes else 1
     x = tf.reshape(x, [shape[0], shape[axis], 1, remaining_dim])  # [batch,height,width,channels]
     new_size = shape[axis] * factor
     if kind == "linear":
@@ -2778,7 +2780,25 @@ class ResizeLayer(_ConcatInputLayer):
       x.set_shape(tf.TensorShape((None, None, factor, None)))
     else:
       raise Exception("invalid kind %r for resizing" % kind)
-    x = tf.reshape(x, [shape[0], new_size] + [shape[i] for i in remaining_axes])  # [batch,new_size] + remaining_axes
+    x = tf.reshape(x, [shape[0], new_size] + remaining_shape)  # [batch,new_size] + remaining_shape
+    if fill_dropout:
+      from TFUtil import expand_dims_unbroadcast
+      # We are going to build a mask over the axis. This mask will be shared over all seqs in the batch.
+      # Similar as in tf.nn.dropout. Build random_tensor as uniform [keep_prob, 1.0 + keep_prob).
+      random_tensor = 1.0 - fill_dropout  # keep_prop
+      random_tensor += tf.random_uniform([shape[axis], factor - 1])  # (old_size, factor - 1)
+      # 0. if [keep_prob, 1.0) and 1. if [1.0, 1.0 + keep_prob)
+      mask = tf.cast(tf.floor(random_tensor), dtype=tf.bool)
+      mask = tf.concat([tf.ones((shape[axis], 1), dtype=tf.bool), mask], axis=1)  # (old_size, factor)
+      mask = tf.reshape(mask, (new_size,))  # (new_size,)
+      new_size_dropped = tf.reduce_sum(tf.to_int32(mask))
+      mask = expand_dims_unbroadcast(mask, axis=0, dim=shape[0])  # (batch,new_size)
+      x = tf.boolean_mask(x, mask)  # [batch*new_size_dropped] + remaining_shape
+      x = tf.reshape(x, [shape[0], new_size_dropped] + remaining_shape)  # [batch, new_size_dropped] + remaining_shape
+      if (axis - 1) in self.output.size_placeholder:
+        orig_mask = tf.sequence_mask(
+          self.output.size_placeholder[axis - 1], maxlen=new_size, dtype=tf.bool)  # (batch,new_size)
+        self.output.size_placeholder[axis - 1] = tf.reduce_sum(tf.to_int32(tf.logical_and(mask, orig_mask)), axis=1)
     if axis != 1:
       perm = [0] + remaining_axes
       perm.insert(axis, 1)
