@@ -107,9 +107,9 @@ def init(config_str):
   """
   rnn.initBetterExchook()
   rnn.initThreadJoinHack()
-  if config_str.startswith("{"):
+  if config_str.strip().startswith("{"):
     print("Using dataset %s." % config_str)
-    datasetDict = eval(config_str)
+    datasetDict = eval(config_str.strip())
     configFilename = None
   else:
     datasetDict = None
@@ -123,7 +123,8 @@ def init(config_str):
   if datasetDict:
     config.set("train", datasetDict)
   rnn.initLog()
-  print("CRNN dump-dataset starting up.", file=log.v1)
+  print("Returnn dump-dataset starting up.", file=log.v1)
+  rnn.returnnGreeting()
   rnn.initFaulthandler()
   rnn.initConfigJsonNetwork()
   rnn.initData()

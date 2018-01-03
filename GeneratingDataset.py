@@ -1117,6 +1117,89 @@ class NltkTimitDataset(TimitDataset):
     return self._data_reader.phones(seq_tag)
 
 
+class BlissDataset(CachedDataset2):
+  """
+  Reads in a Bliss XML corpus (similar as :class:`LmDataset`),
+  and provides the features (similar as :class:`TimitDataset`)
+  and the orthography as words, subwords or chars (similar as :class:`TranslationDataset`).
+
+  Example:
+    ./tools/dump-dataset.py "
+      {'class':'BlissDataset',
+       'path': '/u/tuske/work/ASR/switchboard/corpus/xml/train.corpus.gz',
+       'bpe_file': '/u/zeyer/setups/switchboard/subwords/swb-bpe-codes'}"
+  """
+
+  class SegmentInfo:
+    __slots__ = ("idx", "tag", "orth", "audio_path", "audio_start", "audio_end")
+
+  def __init__(self, path, vocab=None, bpe_file=None, **kwargs):
+    """
+    :param str path: path to XML. can also be gzipped.
+    :param str vocab: path to vocabulary file
+    :param str bpe_file: Byte-pair encoding file
+    """
+    super(BlissDataset, self).__init__(**kwargs)
+    self._segments = []
+    self._parse_bliss_xml(filename=path)
+    # TODO: loading audio and applying BPE in parallel
+    # TODO: loading audio like in TimitDataset
+    # TODO: applying BPE like in /u/rossenbach/src/subword-nmt/apply_bpe.py
+    # TODO: automatic vocab via bpe_file. maybe like in /u/rossenbach/src/subword-nmt/get_vocab.py
+
+  def _parse_bliss_xml(self, filename):
+    """
+    This takes e.g. around 5 seconds for the Switchboard 300h train corpus.
+    Should be as fast as possible to get a list of the segments.
+    All further parsing and loading can then be done in parallel and lazily.
+    :param str filename:
+    :return: nothing, fills self._segments
+    """
+    # Also see LmDataset._iter_bliss.
+    from Util import hms_fraction
+    import time
+    import gzip
+    import xml.etree.ElementTree as etree
+    start_time = time.time()
+    corpus_file = open(filename, 'rb')
+    if filename.endswith(".gz"):
+      corpus_file = gzip.GzipFile(fileobj=corpus_file)
+    SegmentInfo = self.SegmentInfo
+    context = iter(etree.iterparse(corpus_file, events=('start', 'end')))
+    elem_tree = []
+    name_tree = []
+    cur_recording = None
+    idx = 0
+    for event, elem in context:
+      if event == "start":
+        elem_tree += [elem]
+        name_tree += [elem.attrib.get("name", None)]
+        if elem.tag == "recording":
+          cur_recording = elem.attrib["audio"]
+      elif event == "end":
+        assert elem_tree[-1] is elem
+        elem_tree = elem_tree[:-1]
+        name_tree = name_tree[:-1]
+      if event == 'end' and elem.tag == "segment":
+        segment_name = "/".join(name_tree + [elem.attrib["name"]])
+        info = SegmentInfo()
+        info.idx = idx
+        info.tag = segment_name
+        info.orth = elem.find("orth").text
+        info.audio_path = cur_recording
+        info.audio_start = float(elem.attrib["start"])
+        info.audio_end = float(elem.attrib["end"])
+        self._segments.append(info)
+        idx += 1
+        if elem_tree:
+          elem_tree[0].clear()  # free memory
+    print("%s: Loaded %r, num seqs: %i, elapsed: %s" % (
+      self.__class__.__name__, filename, len(self._segments), hms_fraction(time.time() - start_time)), file=log.v3)
+
+  def _collect_single_seq(self, seq_idx):
+    pass  # TODO...
+
+
 def demo():
   import better_exchook
   better_exchook.install()
