@@ -1159,40 +1159,57 @@ class BlissDataset(CachedDataset2):
     from Util import hms_fraction
     import time
     import gzip
-    import xml.etree.ElementTree as etree
+    import xml.sax
     start_time = time.time()
     corpus_file = open(filename, 'rb')
     if filename.endswith(".gz"):
       corpus_file = gzip.GzipFile(fileobj=corpus_file)
     SegmentInfo = self.SegmentInfo
-    context = iter(etree.iterparse(corpus_file, events=('start', 'end')))
-    elem_tree = []
-    name_tree = []
-    cur_recording = None
-    idx = 0
-    for event, elem in context:
-      if event == "start":
-        elem_tree += [elem]
-        name_tree += [elem.attrib.get("name", None)]
-        if elem.tag == "recording":
-          cur_recording = elem.attrib["audio"]
-      elif event == "end":
-        assert elem_tree[-1] is elem
-        elem_tree = elem_tree[:-1]
-        name_tree = name_tree[:-1]
-      if event == 'end' and elem.tag == "segment":
-        segment_name = "/".join(name_tree + [elem.attrib["name"]])
-        info = SegmentInfo()
-        info.idx = idx
-        info.tag = segment_name
-        info.orth = elem.find("orth").text
-        info.audio_path = cur_recording
-        info.audio_start = float(elem.attrib["start"])
-        info.audio_end = float(elem.attrib["end"])
-        self._segments.append(info)
-        idx += 1
-        if elem_tree:
-          elem_tree[0].clear()  # free memory
+    dataset = self
+
+    class CorpusParser(xml.sax.handler.ContentHandler):
+      def __init__(self):
+        super(CorpusParser, self).__init__()
+        self.name_tree = []
+        self.cur_tag = None
+        self.cur_recording = None
+        self.cur_orth = None
+        self.cur_segment_attrs = None
+        self.idx = 0
+
+      def startElement(self, name, attrs):
+        self.name_tree.append(attrs.get("name", None))
+        self.cur_tag = name
+        if name == "recording":
+          self.cur_recording = attrs["audio"]
+        if name == "orth":
+          self.cur_orth = ""
+        if name == "segment":
+          self.cur_segment_attrs = attrs
+
+      def endElement(self, name):
+        if name == "segment":
+          assert self.cur_orth is not None
+          assert self.cur_recording is not None
+          info = SegmentInfo()
+          info.idx = self.idx
+          info.tag = "/".join(self.name_tree)
+          info.orth = self.cur_orth
+          info.audio_path = self.cur_recording
+          info.audio_start = float(self.cur_segment_attrs["start"])
+          info.audio_end = float(self.cur_segment_attrs["end"])
+          dataset._segments.append(info)
+          self.idx += 1
+          self.cur_orth = None
+          self.cur_segment_attrs = None
+        self.name_tree.pop(-1)
+        self.cur_tag = None
+
+      def characters(self, characters):
+        if self.cur_tag == "orth":
+          self.cur_orth += characters
+
+    xml.sax.parse(corpus_file, CorpusParser())
     print("%s: Loaded %r, num seqs: %i, elapsed: %s" % (
       self.__class__.__name__, filename, len(self._segments), hms_fraction(time.time() - start_time)), file=log.v3)
 
