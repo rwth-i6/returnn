@@ -122,4 +122,10 @@ Contains code from tensorpack:
  - Copyright Yuxin Wu
  - Some code in GeneratingDataset.py.
 
+Contains code from subword-nmt:
+ - Website: https://github.com/rsennrich/subword-nmt
+ - MIT License (MIT)
+ - Copyright (c) 2015 University of Edinburgh
+ - Some code in GeneratingDataset.py.
+
 Various code snippets from StackOverflow, which are under Creative Commons / Public Domain.

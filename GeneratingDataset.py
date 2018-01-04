@@ -1130,8 +1130,8 @@ class BlissDataset(CachedDataset2):
        'bpe_file': '/u/zeyer/setups/switchboard/subwords/swb-bpe-codes'}"
   """
 
-  class SegmentInfo:
-    __slots__ = ("idx", "tag", "orth", "audio_path", "audio_start", "audio_end")
+  class SeqInfo:
+    __slots__ = ("idx", "tag", "orth_raw", "orth_seq", "audio_path", "audio_start", "audio_end")
 
   def __init__(self, path, vocab=None, bpe_file=None, **kwargs):
     """
@@ -1140,12 +1140,15 @@ class BlissDataset(CachedDataset2):
     :param str bpe_file: Byte-pair encoding file
     """
     super(BlissDataset, self).__init__(**kwargs)
-    self._segments = []
+    self.bpe_file = open(bpe_file, "r")
+    self._seqs = []  # type: list[BlissDataset.SeqInfo]
     self._parse_bliss_xml(filename=path)
     # TODO: loading audio and applying BPE in parallel
     # TODO: loading audio like in TimitDataset
     # TODO: applying BPE like in /u/rossenbach/src/subword-nmt/apply_bpe.py
     # TODO: automatic vocab via bpe_file. maybe like in /u/rossenbach/src/subword-nmt/get_vocab.py
+
+    self._apply_bpe()
 
   def _parse_bliss_xml(self, filename):
     """
@@ -1164,7 +1167,7 @@ class BlissDataset(CachedDataset2):
     corpus_file = open(filename, 'rb')
     if filename.endswith(".gz"):
       corpus_file = gzip.GzipFile(fileobj=corpus_file)
-    SegmentInfo = self.SegmentInfo
+    SeqInfo = self.SeqInfo
     context = iter(etree.iterparse(corpus_file, events=('start', 'end')))
     elem_tree = []
     name_tree = []
@@ -1176,25 +1179,143 @@ class BlissDataset(CachedDataset2):
         name_tree += [elem.attrib.get("name", None)]
         if elem.tag == "recording":
           cur_recording = elem.attrib["audio"]
-      elif event == "end":
-        assert elem_tree[-1] is elem
-        elem_tree = elem_tree[:-1]
-        name_tree = name_tree[:-1]
       if event == 'end' and elem.tag == "segment":
-        segment_name = "/".join(name_tree + [elem.attrib["name"]])
-        info = SegmentInfo()
+        info = SeqInfo()
         info.idx = idx
-        info.tag = segment_name
-        info.orth = elem.find("orth").text
+        info.tag = "/".join(name_tree)
+        info.orth_raw = elem.find("orth").text
         info.audio_path = cur_recording
         info.audio_start = float(elem.attrib["start"])
         info.audio_end = float(elem.attrib["end"])
-        self._segments.append(info)
+        self._seqs.append(info)
         idx += 1
         if elem_tree:
           elem_tree[0].clear()  # free memory
+      if event == "end":
+        assert elem_tree[-1] is elem
+        elem_tree = elem_tree[:-1]
+        name_tree = name_tree[:-1]
     print("%s: Loaded %r, num seqs: %i, elapsed: %s" % (
-      self.__class__.__name__, filename, len(self._segments), hms_fraction(time.time() - start_time)), file=log.v3)
+      self.__class__.__name__, filename, len(self._seqs), hms_fraction(time.time() - start_time)), file=log.v3)
+
+  def _apply_bpe(self):
+    """
+    Code is partly taken from subword-nmt/apply_bpe.py.
+    Author: Rico Sennrich, code under MIT license.
+
+    Use operations learned with learn_bpe.py to encode a new text.
+    The text will not be smaller, but use only a fixed vocabulary, with rare words
+    encoded as variable-length sequences of subword units.
+
+    Reference:
+    Rico Sennrich, Barry Haddow and Alexandra Birch (2016). Neural Machine Translation of Rare Words with Subword Units.
+    Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (ACL 2016). Berlin, Germany.
+    """
+
+    bpe_codes = [tuple(item.split()) for item in self.bpe_file]
+    # some hacking to deal with duplicates (only consider first instance)
+    bpe_codes = dict([(code, i) for (i, code) in reversed(list(enumerate(bpe_codes)))])
+    encode_cache = {}
+    separator = '@@'
+
+    def get_pairs(word):
+      """
+      :param tuple[str] word: represented as tuple of symbols (symbols being variable-length strings)
+      :return: set of symbol pairs in a word
+      :rtype: set[(str,str)]
+      """
+      pairs = set()
+      prev_char = word[0]
+      for char in word[1:]:
+        pairs.add((prev_char, char))
+        prev_char = char
+      return pairs
+
+    def encode(orig):
+      """
+      Encode word based on list of BPE merge operations, which are applied consecutively.
+      :param str orig:
+      :rtype: tuple[str]
+      """
+
+      if orig in encode_cache:
+        return encode_cache[orig]
+
+      word = tuple(orig) + ('</w>',)
+      pairs = get_pairs(word)
+
+      while True:
+        bigram = min(pairs, key=lambda pair: bpe_codes.get(pair, float('inf')))
+        if bigram not in bpe_codes:
+          break
+        first, second = bigram
+        new_word = []
+        i = 0
+        while i < len(word):
+          try:
+            j = word.index(first, i)
+            new_word.extend(word[i:j])
+            i = j
+          except ValueError:
+            new_word.extend(word[i:])
+            break
+
+          if word[i] == first and i < len(word) - 1 and word[i + 1] == second:
+            new_word.append(first + second)
+            i += 2
+          else:
+            new_word.append(word[i])
+            i += 1
+        new_word = tuple(new_word)
+        word = new_word
+        if len(word) == 1:
+          break
+        else:
+          pairs = get_pairs(word)
+
+      # don't print end-of-word symbols
+      if word[-1] == '</w>':
+        word = word[:-1]
+      elif word[-1].endswith('</w>'):
+        word = word[:-1] + (word[-1].replace('</w>', ''),)
+
+      encode_cache[orig] = word
+      return word
+
+    def segment(sentence):
+      """
+      Segment single sentence (whitespace-tokenized string) with BPE encoding.
+      :param str sentence:
+      :rtype: str
+      """
+
+      output = []
+
+      found_category = False
+      skip_category = False
+
+      for word in sentence.split():
+        if word[0] == '$' and len(word) > 1:
+          found_category = True
+          output.append(word)
+        elif found_category is True and word[0] == '{':
+          skip_category = True
+          output.append(word)
+        elif skip_category is True and word[0] != '}':
+          output.append(word)
+        else:
+          found_category = False
+          skip_category = False
+          new_word = encode(word)
+
+          for item in new_word[:-1]:
+            output.append(item + separator)
+          output.append(new_word[-1])
+
+      return ' '.join(output).strip()
+
+    for seq in self._seqs:
+      print(segment(seq.orth_raw))
 
   def _collect_single_seq(self, seq_idx):
     pass  # TODO...
