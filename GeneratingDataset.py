@@ -1127,28 +1127,47 @@ class BlissDataset(CachedDataset2):
     ./tools/dump-dataset.py "
       {'class':'BlissDataset',
        'path': '/u/tuske/work/ASR/switchboard/corpus/xml/train.corpus.gz',
-       'bpe_file': '/u/zeyer/setups/switchboard/subwords/swb-bpe-codes'}"
+       'bpe_file': '/u/zeyer/setups/switchboard/subwords/swb-bpe-codes',
+       'vocab_file': '/u/zeyer/setups/switchboard/subwords/swb-vocab'}"
   """
 
   class SeqInfo:
     __slots__ = ("idx", "tag", "orth_raw", "orth_seq", "audio_path", "audio_start", "audio_end")
 
-  def __init__(self, path, vocab=None, bpe_file=None, **kwargs):
+  def __init__(self, path, vocab_file, bpe_file=None,
+               num_feature_filters=40, feature_window_len=0.025, feature_step_len=0.010, with_delta=False,
+               norm_mean=None, norm_std_dev=None,
+               **kwargs):
     """
     :param str path: path to XML. can also be gzipped.
-    :param str vocab: path to vocabulary file
+    :param str vocab_file: path to vocabulary file. Python-str which evals to dict[str,int]
     :param str bpe_file: Byte-pair encoding file
+    :param int num_feature_filters: e.g. number of MFCCs
+    :param bool|int with_delta: whether to add delta features (doubles the features dim). if int, up to this degree
     """
     super(BlissDataset, self).__init__(**kwargs)
-    self.bpe_file = open(bpe_file, "r")
+    from Util import hms_fraction
+    import time
+    start_time = time.time()
+    self._num_feature_filters = num_feature_filters
+    self.num_inputs = num_feature_filters
+    self._feature_window_len = feature_window_len
+    self._feature_step_len = feature_step_len
+    if isinstance(with_delta, bool):
+      with_delta = 1 if with_delta else 0
+    assert isinstance(with_delta, int)
+    self._with_delta = with_delta
+    self.num_inputs *= (1 + with_delta)
+    self.num_outputs = {'data': (self.num_inputs, 2)}  # 'classes' set later in self._parse_vocab
+    self._bpe_file = open(bpe_file, "r")
     self._seqs = []  # type: list[BlissDataset.SeqInfo]
+    self._vocab = {}  # type: dict[str,int]  # set in self._parse_vocab
     self._parse_bliss_xml(filename=path)
-    # TODO: loading audio and applying BPE in parallel
-    # TODO: loading audio like in TimitDataset
-    # TODO: applying BPE like in /u/rossenbach/src/subword-nmt/apply_bpe.py
-    # TODO: automatic vocab via bpe_file. maybe like in /u/rossenbach/src/subword-nmt/get_vocab.py
-
-    self._apply_bpe()
+    # TODO: loading audio like in TimitDataset, and in parallel
+    self._parse_vocab(filename=vocab_file)
+    self._apply_bpe()  # TODO in parallel
+    print("%s: Loaded %r, num seqs: %i, elapsed: %s" % (
+      self.__class__.__name__, path, len(self._seqs), hms_fraction(time.time() - start_time)), file=log.v3)
 
   def _parse_bliss_xml(self, filename):
     """
@@ -1159,11 +1178,8 @@ class BlissDataset(CachedDataset2):
     :return: nothing, fills self._segments
     """
     # Also see LmDataset._iter_bliss.
-    from Util import hms_fraction
-    import time
     import gzip
     import xml.etree.ElementTree as etree
-    start_time = time.time()
     corpus_file = open(filename, 'rb')
     if filename.endswith(".gz"):
       corpus_file = gzip.GzipFile(fileobj=corpus_file)
@@ -1195,8 +1211,20 @@ class BlissDataset(CachedDataset2):
         assert elem_tree[-1] is elem
         elem_tree = elem_tree[:-1]
         name_tree = name_tree[:-1]
-    print("%s: Loaded %r, num seqs: %i, elapsed: %s" % (
-      self.__class__.__name__, filename, len(self._seqs), hms_fraction(time.time() - start_time)), file=log.v3)
+    self._num_seqs = len(self._seqs)
+
+  def _parse_vocab(self, filename):
+    """
+    :param str filename:
+    """
+    d = eval(open(filename, "r").read())
+    assert isinstance(d, dict)
+    labels = {idx: label for (label, idx) in sorted(d.items())}
+    assert 0 in labels
+    assert len(labels) - 1 in labels
+    self.num_outputs["classes"] = (len(labels), 1)
+    self._vocab = d
+    self.labels = [label for (idx, label) in sorted(labels.items())]
 
   def _apply_bpe(self):
     """
@@ -1212,7 +1240,7 @@ class BlissDataset(CachedDataset2):
     Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (ACL 2016). Berlin, Germany.
     """
 
-    bpe_codes = [tuple(item.split()) for item in self.bpe_file]
+    bpe_codes = [tuple(item.split()) for item in self._bpe_file]
     # some hacking to deal with duplicates (only consider first instance)
     bpe_codes = dict([(code, i) for (i, code) in reversed(list(enumerate(bpe_codes)))])
     encode_cache = {}
@@ -1286,7 +1314,7 @@ class BlissDataset(CachedDataset2):
       """
       Segment single sentence (whitespace-tokenized string) with BPE encoding.
       :param str sentence:
-      :rtype: str
+      :rtype: list[str]
       """
 
       output = []
@@ -1312,13 +1340,25 @@ class BlissDataset(CachedDataset2):
             output.append(item + separator)
           output.append(new_word[-1])
 
-      return ' '.join(output).strip()
+      return output
 
     for seq in self._seqs:
-      print(segment(seq.orth_raw))
+      seq_segs = segment(seq.orth_raw)
+      seq.orth_seq = [self._vocab[k] for k in seq_segs]
+
+  def init_seq_order(self, epoch=None, seq_list=None):
+    """
+    :param int|None epoch:
+    :param list[str] | None seq_list: In case we want to set a predefined order.
+    :rtype: bool
+    :returns whether the order changed (True is always safe to return)
+    """
+    super(BlissDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+    self._num_seqs = len(self._seqs)
+    return True
 
   def _collect_single_seq(self, seq_idx):
-    pass  # TODO...
+    raise NotImplementedError  # TODO...
 
 
 def demo():
