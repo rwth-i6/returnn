@@ -1131,10 +1131,11 @@ class BytePairEncoding:
   Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (ACL 2016). Berlin, Germany.
   """
 
-  def __init__(self, vocab_file, bpe_file):
+  def __init__(self, vocab_file, bpe_file, seq_postfix=None):
     """
     :param str vocab_file:
     :param str bpe_file:
+    :param list[int]|None seq_postfix: labels will be added to the seq in self.get_seq
     """
     self._parse_vocab(vocab_file)
     self._bpe_codes = [tuple(item.split()) for item in open(bpe_file, "r").read().splitlines()]
@@ -1142,6 +1143,7 @@ class BytePairEncoding:
     self._bpe_codes = dict([(code, i) for (i, code) in reversed(list(enumerate(self._bpe_codes)))])
     self._bpe_encode_cache = {}
     self._bpe_separator = '@@'
+    self.seq_postfix = seq_postfix or []
 
   def _parse_vocab(self, filename):
     """
@@ -1184,8 +1186,8 @@ class BytePairEncoding:
     pairs = self._get_pairs(word)
 
     while True:
-      bigram = min(pairs, key=lambda pair: bpe_codes.get(pair, float('inf')))
-      if bigram not in bpe_codes:
+      bigram = min(pairs, key=lambda pair: self._bpe_codes.get(pair, float('inf')))
+      if bigram not in self._bpe_codes:
         break
       first, second = bigram
       new_word = []
@@ -1210,7 +1212,7 @@ class BytePairEncoding:
       if len(word) == 1:
         break
       else:
-        pairs = get_pairs(word)
+        pairs = self._get_pairs(word)
 
     # don't print end-of-word symbols
     if word[-1] == '</w>':
@@ -1259,7 +1261,8 @@ class BytePairEncoding:
     :rtype: list[int]
     """
     segments = self._segment_sentence(sentence)
-    return [self.vocab[k] for k in segments]
+    seq = [self.vocab[k] for k in segments]
+    return seq + self.seq_postfix
 
 
 class BlissDataset(CachedDataset2):
