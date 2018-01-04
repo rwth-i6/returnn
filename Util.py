@@ -1154,6 +1154,24 @@ class NumbersDict:
     # and it would just confuse.
     raise Exception("%s.__cmp__ is undefined" % self.__class__.__name__)
 
+  def any_compare(self, other, cmp):
+    """
+    :param NumbersDict other:
+    :param ((object,object)->True) cmp:
+    :rtype: True
+    """
+    for key in self.keys():
+      if key in other.keys():
+        if cmp(self[key], other[key]):
+          return True
+      elif other.value is not None:
+        if cmp(self[key], other.value):
+          return True
+    if self.value is not None and other.value is not None:
+      if cmp(self.value, other.value):
+        return True
+    return False
+
   @staticmethod
   def _max(*args):
     args = [a for a in args if a is not None]

@@ -645,10 +645,13 @@ class Engine(object):
     self.share_batches = config.bool('share_batches', False)
     self.seq_drop = config.float('seq_drop', 0.0)
     self.seq_drop_freq = config.float('seq_drop_freq', 10)
-    self.max_seq_length = config.float('max_seq_length', 0)
+    self.max_seq_length = config.typed_value('max_seq_length', None) or config.float('max_seq_length', 0)
     self.inc_seq_length = config.float('inc_seq_length', 0)
-    if self.max_seq_length == 0:
-      self.max_seq_length = sys.maxsize
+    if not self.max_seq_length:
+      self.max_seq_length = sys.maxsize  # type: int|float|dict[str,int]|NumbersDict
+    if isinstance(self.max_seq_length, dict):
+      self.max_seq_length = NumbersDict(self.max_seq_length)
+    assert isinstance(self.max_seq_length, (int, float, NumbersDict))
     # And also initialize the network. That depends on some vars here such as pretrain.
     self.init_network_from_config(config)
 
@@ -773,16 +776,17 @@ class Engine(object):
             (self.start_epoch, self.final_epoch), file=log.v1)
 
     self.check_last_epoch()
-    self.max_seq_length += (self.start_epoch - 1) * self.inc_seq_length
+    if isinstance(self.max_seq_length, (int, float)):
+      self.max_seq_length += (self.start_epoch - 1) * self.inc_seq_length
 
     epoch = self.start_epoch  # Epochs start at 1.
     rebatch = True
     while epoch <= final_epoch:
-      if self.max_seq_length != sys.maxsize:
+      if isinstance(self.max_seq_length, int) and self.max_seq_length != sys.maxsize:
         if int(self.max_seq_length + self.inc_seq_length) != int(self.max_seq_length):
           print("increasing sequence lengths to", int(self.max_seq_length + self.inc_seq_length), file=log.v3)
           rebatch = True
-        self.max_seq_length += self.inc_seq_length
+          self.max_seq_length += self.inc_seq_length
       # In case of random seq ordering, we want to reorder each epoch.
       if self.train_data.init_seq_order(epoch=epoch):
         rebatch = True
@@ -882,7 +886,7 @@ class Engine(object):
       self.dataset_batches['train'] = self.train_data.generate_batches(recurrent_net=self.network.recurrent,
                                                                        batch_size=self.batch_size,
                                                                        max_seqs=self.max_seqs,
-                                                                       max_seq_length=int(self.max_seq_length),
+                                                                       max_seq_length=self.max_seq_length,
                                                                        seq_drop=self.seq_drop,
                                                                        shuffle_batches=self.shuffle_batches,
                                                                        used_data_keys=self.network.used_data_keys)

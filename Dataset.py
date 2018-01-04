@@ -619,17 +619,26 @@ class Dataset(object):
       end += ctx_lr[1]
     return start, end
 
-  def _generate_batches(self, recurrent_net, batch_size, max_seqs=-1, seq_drop=0.0, max_seq_length=sys.maxsize, used_data_keys=None):
+  def _generate_batches(self, recurrent_net,
+                        batch_size, max_seqs=-1, max_seq_length=sys.maxsize,
+                        seq_drop=0.0,
+                        used_data_keys=None):
     """
     :param bool recurrent_net: If True, the batch might have a batch seq dimension > 1.
       Otherwise, the batch seq dimension is always 1 and multiple seqs will be concatenated.
     :param int batch_size: Max number of frames in one batch.
     :param int max_seqs: Max number of seqs per batch.
+    :param int|dict[str,int]|NumbersDict max_seq_length:
     :param set(str)|None used_data_keys:
     """
-    if batch_size == 0: batch_size = sys.maxsize
+    if batch_size == 0:
+      batch_size = sys.maxsize
     assert batch_size > 0
-    if max_seqs == -1: max_seqs = float('inf')
+    if max_seqs == -1:
+      max_seqs = float('inf')
+    if isinstance(max_seq_length, int) and max_seq_length < 0:
+      max_seq_length = {"classes": -max_seq_length}
+    max_seq_length = NumbersDict(max_seq_length)
     assert max_seqs > 0
     assert seq_drop <= 1.0
     chunk_size = self.chunk_size
@@ -640,15 +649,14 @@ class Dataset(object):
         chunk_size = 0
     batch = Batch()
     ctx_lr = self._get_context_window_left_right()
-    for seq_idx, t_start, t_end in self.iterate_seqs(chunk_size=chunk_size, chunk_step=chunk_step, used_data_keys=used_data_keys):
+    for seq_idx, t_start, t_end in self.iterate_seqs(
+          chunk_size=chunk_size, chunk_step=chunk_step, used_data_keys=used_data_keys):
       if ctx_lr:
         t_start -= ctx_lr[0]
         t_end += ctx_lr[1]
       if recurrent_net:
         length = t_end - t_start
-        if max_seq_length < 0 and length['classes'] > -max_seq_length:
-          continue
-        elif max_seq_length > 0 and length.max_value() > max_seq_length:
+        if length.any_compare(max_seq_length, (lambda a, b: a > b)):
           continue
         if length.max_value() > batch_size:
           print("warning: sequence length (%i) larger than limit (%i)" % (length.max_value(), batch_size), file=log.v4)
@@ -688,31 +696,14 @@ class Dataset(object):
     """
     return False
 
-  def generate_batches(self,
-                       recurrent_net,
-                       batch_size,
-                       max_seqs=-1,
-                       seq_drop=0.0,
-                       max_seq_length=sys.maxsize,
-                       shuffle_batches=False,
-                       used_data_keys=None):
+  def generate_batches(self, shuffle_batches=False, **kwargs):
     """
-    :type recurrent_net: bool
-    :type batch_size: int
-    :type max_seqs: int
-    :type shuffle_batches: bool
-    :param set(str)|None used_data_keys:
+    :param bool shuffle_batches:
     :rtype: BatchSetGenerator
     """
     return BatchSetGenerator(
       dataset=self,
-      generator=self._generate_batches(
-        recurrent_net=recurrent_net,
-        batch_size=batch_size,
-        max_seqs=max_seqs,
-        seq_drop=seq_drop,
-        max_seq_length=max_seq_length,
-        used_data_keys=used_data_keys),
+      generator=self._generate_batches(**kwargs),
       shuffle_batches=shuffle_batches,
       cache_whole_epoch=self.batch_set_generator_cache_whole_epoch())
 
