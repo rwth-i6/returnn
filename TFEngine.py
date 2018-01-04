@@ -938,7 +938,7 @@ class Engine(object):
           recurrent_net=self.network.recurrent,
           batch_size=self.batch_size,
           max_seqs=self.max_seqs,
-          max_seq_length=(int(self.max_seq_length) if dataset_name == 'dev' else sys.maxsize),
+          max_seq_length=(self.max_seq_length if dataset_name == 'dev' else sys.maxsize),
           used_data_keys=self.network.used_data_keys)
       else:
         self.dataset_batches[dataset_name].reset()
@@ -1327,7 +1327,7 @@ class Engine(object):
       recurrent_net=self.network.recurrent,
       batch_size=self.config.int('batch_size', 1),
       max_seqs=self.config.int('max_seqs', -1),
-      max_seq_length=int(self.config.float('max_seq_length', 0)),
+      max_seq_length=self.config.typed_value('max_seq_length', None) or self.config.float('max_seq_length', 0),
       used_data_keys=self.network.used_data_keys)
 
     output_layer = self.network.layers[output_layer_name]
