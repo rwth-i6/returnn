@@ -3194,7 +3194,8 @@ class SubnetworkLayer(LayerBase):
     self.subnetwork = net
     self.output = net.get_default_output_layer().output
     for layer in net.layers.values():
-      assert layer.trainable == self.trainable, "partly trainable subnetworks not yet supported"
+      if layer.params.items():
+        assert layer.trainable == self.trainable, "partly trainable subnetworks not yet supported"
       self.params.update({"%s/%s" % (layer.name, k): v for (k, v) in layer.params.items()})
     if load_on_init:
       reader = tf.train.NewCheckpointReader(load_on_init)
