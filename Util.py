@@ -2347,9 +2347,14 @@ class Stats:
 
   def __str__(self):
     if self.num_seqs > 0:
-      return "Stats(mean=%s, std_dev=%s, min=%s, max=%s, num_seqs=%i, total_data_len=%i)" % (
+      if self.num_seqs == self.total_data_len:
+        extra_str = "avg_data_len=1"
+      else:
+        extra_str = "total_data_len=%i, avg_data_len=%f" % (
+          self.total_data_len, float(self.total_data_len) / self.num_seqs)
+      return "Stats(mean=%s, std_dev=%s, min=%s, max=%s, num_seqs=%i, %s)" % (
         self.format_str(self.get_mean()), self.format_str(self.get_std_dev()),
-        self.format_str(self.min), self.format_str(self.max), self.num_seqs, self.total_data_len)
+        self.format_str(self.min), self.format_str(self.max), self.num_seqs, extra_str)
     return "Stats(num_seqs=0)"
 
   def collect(self, data):
@@ -2403,22 +2408,27 @@ class Stats:
     return numpy.sqrt(self.var)
     # return numpy.sqrt(self.mean_sq - self.mean * self.mean)
 
-  def dump(self, output_file_prefix=None, stream=None):
+  def dump(self, output_file_prefix=None, stream=None, stream_prefix=""):
     """
     :param str|None output_file_prefix: if given, will numpy.savetxt mean|std_dev to disk
+    :param str stream_prefix:
     :param io.TextIOBase stream: sys.stdout by default
     """
     if stream is None:
       stream = sys.stdout
     import numpy
-    print("Stats:", file=stream)
-    print("%i seqs, %i total frames, %f average frames" % (
-      self.num_seqs, self.total_data_len, self.total_data_len / float(self.num_seqs)), file=stream)
-    print("Mean: %s" % self.get_mean(), file=stream)
-    print("Std dev: %s" % self.get_std_dev(), file=stream)
+    print("%sStats:" % stream_prefix, file=stream)
+    if self.num_seqs != self.total_data_len:
+      print("  %i seqs, %i total frames, %f average frames" % (
+        self.num_seqs, self.total_data_len, self.total_data_len / float(self.num_seqs)), file=stream)
+    else:
+      print("  %i seqs" % (self.num_seqs,), file=stream)
+    print("  Mean: %s" % (self.format_str(self.get_mean()),), file=stream)
+    print("  Std dev: %s" % (self.format_str(self.get_std_dev()),), file=stream)
+    print("  Min/max: %s / %s" % (self.format_str(self.min), self.format_str(self.max)), file=stream)
     # print("Std dev (naive): %s" % numpy.sqrt(self.mean_sq - self.mean * self.mean), file=stream)
     if output_file_prefix:
-      print("Write mean/std-dev to %s.(mean|std_dev).txt." % output_file_prefix, file=stream)
+      print("  Write mean/std-dev to %s.(mean|std_dev).txt." % (output_file_prefix,), file=stream)
       numpy.savetxt("%s.mean.txt" % output_file_prefix, self.get_mean())
       numpy.savetxt("%s.std_dev.txt" % output_file_prefix, self.get_std_dev())
 
