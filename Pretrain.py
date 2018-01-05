@@ -15,6 +15,9 @@ class WrapEpochValue:
   This is going to be part in your network description dict.
   """
   def __init__(self, func):
+    """
+    :param ((epoch: int) -> object) func: function which should accept one kwd-arg 'epoch'
+    """
     self.func = func
 
   def get_value(self, epoch):
@@ -22,16 +25,32 @@ class WrapEpochValue:
 
 
 def find_pretrain_wrap_values(net_json):
+  """
+  See also :func:`Pretrain._resolve_wrapped_values`.
+  Recursively goes through dicts, tuples and lists.
+  This is a simple check to see if this is needed,
+  i.e. if there are any :class:`WrapEpochValue` used.
+
+  :param dict[str] net_json: network dict
+  :return: whether there is some :class:`WrapEpochValue` in it
+  :rtype: bool
+  """
   assert isinstance(net_json, dict)
-  def _check_dict(d):
-    for k, v in sorted(d.items()):
-      if isinstance(v, dict):
-        if _check_dict(v):
+
+  def _check(d):
+    if isinstance(d, WrapEpochValue):
+      return True
+    if isinstance(d, dict):
+      for k, v in sorted(d.items()):
+        if _check(v):
           return True
-      if isinstance(v, WrapEpochValue):
-        return True
+    if isinstance(d, (tuple, list)):
+      for v in d:
+        if _check(v):
+          return True
     return False
-  return _check_dict(net_json)
+
+  return _check(net_json)
 
 
 class Pretrain:
@@ -53,7 +72,7 @@ class Pretrain:
     :param bool greedy: if True, only train output+last layer, otherwise train all
     :param None | int | list[int] | dict repetitions: how often to repeat certain pretrain steps. default is one epoch.
       It can also be a dict, with keys like 'default' and 'final'. See code below.
-    :param str construction_algo: e.g. "from_output"
+    :param str|callable construction_algo: e.g. "from_output"
     :param list[str]|tuple[str] output_layers: used for construction
     :param list[str]|tuple[str] input_layers: used for construction
     """
@@ -76,11 +95,14 @@ class Pretrain:
       self._construct_epochs_from_input()
     elif construction_algo == "from_output":
       self._construct_epochs_from_output()
+    elif callable(construction_algo):
+      self._construct_epochs_custom(construction_algo)
     elif construction_algo == "no_network_modifications":
       self._construct_epochs_no_network_modifications()
     else:
       raise Exception("invalid construction_algo %r" % construction_algo)
-    self._remove_non_trainable_added_only()
+    if not callable(construction_algo):  # if callable, trust the user
+      self._remove_non_trainable_added_only()
     if not repetitions:
       repetitions = 1
     if isinstance(repetitions, dict):
@@ -147,14 +169,29 @@ class Pretrain:
         self._step_net_jsons.append(deepcopy(net_json))
 
   def _resolve_wrapped_values(self):
+    """
+    Resolves any :class:`WrapEpochValue` in the net dicts.
+    Recursively goes through dicts, tuples and lists.
+    See also :func:`find_pretrain_wrap_values`.
+    """
     def _check_dict(d, epoch, depth=0):
       for k, v in sorted(d.items()):
         if depth <= 1:  # 0 - layers, 1 - layer opts
           assert isinstance(k, (str, unicode))
-        if isinstance(v, dict):
-          _check_dict(v, epoch=epoch, depth=depth + 1)
-        if isinstance(v, WrapEpochValue):
-          d[k] = v.get_value(epoch=epoch)
+        d[k] = _check(v, epoch=epoch, depth=depth + 1)
+
+    def _check(v, epoch, depth):
+      if isinstance(v, WrapEpochValue):
+        return v.get_value(epoch=epoch)
+      if isinstance(v, (tuple, list)):
+        if not any([isinstance(x, WrapEpochValue) for x in v]):
+          return v
+        return type(v)([_check(x, epoch=epoch, depth=depth + 1) for x in v])
+      if isinstance(v, dict):
+        _check_dict(v, epoch=epoch, depth=depth)
+        return v
+      return v
+
     for i, net_json in enumerate(self._step_net_jsons):
       epoch = i + 1
       _check_dict(net_json, epoch=epoch)
@@ -330,6 +367,24 @@ class Pretrain:
     self._step_net_jsons = [self._original_network_json]
     while self._construct_new_epoch_from_output():
       pass
+
+  def _construct_epochs_custom(self, func):
+    """
+    :param ((idx: int, net_dict: dict[str,dict[str]]) -> dict[str,dict[str]]|None) func:
+      ``func`` can work inplace on net_dict and should then return it.
+      If ``None`` is returned, it will stop with the construction.
+      The original network will always be added at the end.
+    """
+    from copy import deepcopy
+    self._step_net_jsons = []
+    idx = 0
+    while True:
+      d = func(idx=idx, net_dict=deepcopy(self._original_network_json))
+      if not d:
+        break
+      self._step_net_jsons.append(d)
+      idx += 1
+    self._step_net_jsons.append(self._original_network_json)
 
   def _construct_epochs_no_network_modifications(self):
     self._step_net_jsons = [self._original_network_json]
