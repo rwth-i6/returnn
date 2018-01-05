@@ -157,6 +157,13 @@ class Runner(object):
     return d
 
   def _print_process(self, report_prefix, step, step_duration, eval_info):
+    """
+    :param str report_prefix:
+    :param int step:
+    :param float step_duration: in secs
+    :param dict[str] eval_info: via :func:`_collect_eval_info`
+    :return: nothing, will be printed to log
+    """
     if not self._show_interactive_process_bar and not log.v[5]:
       return
     start_elapsed = time.time() - self.start_time
@@ -264,6 +271,16 @@ class Runner(object):
       eval_info[key] = value
       if self.engine.config.bool("calculate_exp_loss", False) and key.startswith("cost:"):
         eval_info[key + ":exp"] = numpy.exp(value)
+
+    # Add batch size info.
+    if self.engine.config.bool("log_batch_size", False):
+      for k, v in sorted(fetches_results.items()):
+        if not k.startswith("size:"):
+          continue
+        if not k.endswith(":0"):
+          continue
+        eval_info["batch_size"] = len(v)
+        eval_info["max_size:%s" % k[len("size:"):-len(":0")]] = max(v)
 
     # Add raw stats.
     for k, v in fetches_results.items():
