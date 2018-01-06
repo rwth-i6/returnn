@@ -636,6 +636,8 @@ class Dataset(object):
     assert batch_size > 0
     if max_seqs == -1:
       max_seqs = float('inf')
+    if not max_seq_length:
+      max_seq_length = sys.maxsize
     if isinstance(max_seq_length, int) and max_seq_length < 0:
       max_seq_length = {"classes": -max_seq_length}
     max_seq_length = NumbersDict(max_seq_length)
@@ -699,6 +701,7 @@ class Dataset(object):
   def generate_batches(self, shuffle_batches=False, **kwargs):
     """
     :param bool shuffle_batches:
+    :param kwargs: will be passed to :func:`_generate_batches`
     :rtype: BatchSetGenerator
     """
     return BatchSetGenerator(

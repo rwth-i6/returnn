@@ -1404,8 +1404,8 @@ class Engine(object):
     if not runner.finalized:
       print("Error happened (%s). Exit now." % runner.run_exception)
       sys.exit(1)
-    print("Search done. Final: score %s error %s" % (
-      self.format_score(runner.score), self.format_score(runner.error)), file=log.v1)
+    print("Search done. Num steps %i, Final: score %s error %s" % (
+      runner.num_steps, self.format_score(runner.score), self.format_score(runner.error)), file=log.v1)
     if output_file:
       assert out_cache
       assert 0 in out_cache
