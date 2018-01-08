@@ -1353,7 +1353,7 @@ class Engine(object):
       print("Given output %r is after decision (no beam)." % output_layer, file=log.v1)
     else:
       print("Given output %r has beam size %i." % (output_layer, out_beam_size), file=log.v1)
-    target_key = "classes"
+    target_key = self.network.extern_data.default_target
 
     out_cache = None
     if output_file:

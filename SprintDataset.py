@@ -106,6 +106,7 @@ class SprintDatasetBase(Dataset):
       self.num_outputs["classes"] = (outputDim, 1)
     if self.bpe:
       self.num_outputs["bpe"] = (self.bpe.num_labels, 1)
+      self.labels["bpe"] = self.bpe.labels
     self._base_init()
     # At this point, we are ready for data. In case we don't use the Sprint PythonSegmentOrdering
     # (SprintInterface.getSegmentList()), we must call this at least once.
