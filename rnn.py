@@ -411,7 +411,8 @@ def executeMainTask():
     engine.search(
       data,
       output_layer_name=config.value("search_output_layer", "output"),
-      output_file=config.value("search_output_file", ""))
+      output_file=config.value("search_output_file", ""),
+      output_file_format=config.value("search_output_file_format", "txt"))
   elif task == 'compute_priors':
     assert train_data is not None, 'train data for priors should be provided'
     engine.init_network_from_config(config)

@@ -1313,12 +1313,13 @@ class Engine(object):
       print("WARNING: Did not finished through the whole epoch.", file=log.v1)
       sys.exit(1)
 
-  def search(self, dataset, do_eval=True, output_layer_name="output", output_file=None):
+  def search(self, dataset, do_eval=True, output_layer_name="output", output_file=None, output_file_format="txt"):
     """
     :param Dataset.Dataset dataset:
     :param bool do_eval: calculate errors. can only be done if we have the reference target
     :param str output_layer_name:
     :param str output_file:
+    :param str output_file_format: "txt" or "py"
     """
     print("Search with network on %r." % dataset, file=log.v1)
     if not self.use_search_flag or not self.network or self.use_dynamic_train_flag:
@@ -1353,10 +1354,12 @@ class Engine(object):
       print("Given output %r is after decision (no beam)." % output_layer, file=log.v1)
     else:
       print("Given output %r has beam size %i." % (output_layer, out_beam_size), file=log.v1)
-    target_key = self.network.extern_data.default_target
+    target_key = output_layer.target or self.network.extern_data.default_target
 
     out_cache = None
+    seq_idx_to_tag = {}
     if output_file:
+      assert output_file_format in {"txt", "py"}
       assert dataset.can_serialize_data(target_key)
       assert not os.path.exists(output_file)
       print("Will write outputs to: %s" % output_file, file=log.v2)
@@ -1391,6 +1394,7 @@ class Engine(object):
           corpus_seq_idx = dataset.get_corpus_seq_idx(seq_idx[i])
           assert corpus_seq_idx not in out_cache
           out_cache[corpus_seq_idx] = dataset.serialize_data(key=target_key, data=output[out_idx])
+          seq_idx_to_tag[corpus_seq_idx] = seq_tag[i]
 
     runner = Runner(
       engine=self, dataset=dataset, batches=batches, train=False, eval=do_eval,
@@ -1410,8 +1414,16 @@ class Engine(object):
       assert out_cache
       assert 0 in out_cache
       assert len(out_cache) - 1 in out_cache
-      for i in range(len(out_cache)):
-        output_file.write("%s\n" % out_cache[i])
+      if output_file_format == "txt":
+        for i in range(len(out_cache)):
+          output_file.write("%s\n" % out_cache[i])
+      elif output_file_format == "py":
+        output_file.write("{\n")
+        for i in range(len(out_cache)):
+          output_file.write("%r: %r,\n" % (seq_idx_to_tag[i], out_cache[i]))
+        output_file.write("}\n")
+      else:
+        raise Exception("invalid output_file_format %r" % output_file_format)
       output_file.close()
 
   def compute_priors(self, dataset, config=None):
