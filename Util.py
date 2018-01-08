@@ -1381,7 +1381,7 @@ def to_bool(v):
 def as_str(s):
   if isinstance(s, str):
     return s
-  if isinstance(s, bytes):
+  if isinstance(s, bytes) or isinstance(s, unicode):
     return s.decode("utf8")
   assert False, "unknown type %s" % type(s)
 
