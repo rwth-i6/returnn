@@ -80,7 +80,7 @@ class Runner(object):
     self.results = {}  # type: dict[str,float]  # entries like "cost:output" or "loss"
     self.score = {}  # type: dict[str,float]  # entries like "cost:output"
     self.error = {}  # type: dict[str,float]  # entries like "error:output"
-    self.stats = {}  # type: dict[str,float]  # entries like "stats:..."
+    self.stats = {}  # type: dict[str,float|numpy.ndarray|Util.Stats]  # entries like "stats:..."
     self.extra_fetches = extra_fetches
     if extra_fetches is not None:
       assert extra_fetches_callback
@@ -147,9 +147,23 @@ class Runner(object):
           d["extra:%s:size_%i" % (k, i)] = s
     if self.engine.get_all_merged_summaries() is not None:
       d["summary"] = self.engine.get_all_merged_summaries()
+    if self.engine.config.bool("tf_log_memory_usage", False):
+      from TFUtil import mem_usage_for_dev
+      for dev in self.engine.tf_session.list_devices():
+        if dev.device_type != "GPU":
+          # mem_usage_for_dev currently only works for GPU
+          continue
+        d["mem_usage:%s" % os.path.basename(dev.name.replace("/device:", "/"))] = mem_usage_for_dev(dev.name)
     return d
 
   def _print_process(self, report_prefix, step, step_duration, eval_info):
+    """
+    :param str report_prefix:
+    :param int step:
+    :param float step_duration: in secs
+    :param dict[str] eval_info: via :func:`_collect_eval_info`
+    :return: nothing, will be printed to log
+    """
     if not self._show_interactive_process_bar and not log.v[5]:
       return
     start_elapsed = time.time() - self.start_time
@@ -258,6 +272,16 @@ class Runner(object):
       if self.engine.config.bool("calculate_exp_loss", False) and key.startswith("cost:"):
         eval_info[key + ":exp"] = numpy.exp(value)
 
+    # Add batch size info.
+    if self.engine.config.bool("log_batch_size", False):
+      for k, v in sorted(fetches_results.items()):
+        if not k.startswith("size:"):
+          continue
+        if not k.endswith(":0"):
+          continue
+        eval_info["batch_size"] = len(v)
+        eval_info["max_size:%s" % k[len("size:"):-len(":0")]] = max(v)
+
     # Add raw stats.
     for k, v in fetches_results.items():
       if k.startswith("stats:"):
@@ -265,6 +289,11 @@ class Runner(object):
           v = list(v)  # looks nicer in logs
         eval_info[k] = v
         self.stats[k] = v  # Always just store latest value.
+      if k.startswith("mem_usage:"):
+        from Util import human_bytes_size, Stats
+        self.stats.setdefault(k, Stats(format_str=human_bytes_size))
+        self.stats[k].collect([v])
+        eval_info[k] = human_bytes_size(v)
 
     return eval_info
 
@@ -408,16 +437,10 @@ class Runner(object):
 
       self._finalize(num_steps=step)
 
-      if self.engine.config.bool("tf_log_memory_usage", False):
-        print("Memory usage:", file=log.v1)
-        from TFUtil import get_tf_list_local_devices, mem_usage_for_dev
-        from Util import human_bytes_size
-        for dev in get_tf_list_local_devices():
-          if dev.device_type != "GPU":
-            # mem_usage_for_dev currently only works for GPU
-            continue
-          size = sess.run(mem_usage_for_dev(dev.name))
-          print(" %s: %s" % (dev.name, human_bytes_size(size)), file=log.v1)
+      if self.stats:
+        print("Stats:", file=log.v1)
+        for k, v in sorted(self.stats.items()):
+          print("  %s:" % k, v, file=log.v1)
 
     except KeyboardInterrupt as exc:
       print("KeyboardInterrupt in step %r." % step)
@@ -639,10 +662,13 @@ class Engine(object):
     self.share_batches = config.bool('share_batches', False)
     self.seq_drop = config.float('seq_drop', 0.0)
     self.seq_drop_freq = config.float('seq_drop_freq', 10)
-    self.max_seq_length = config.float('max_seq_length', 0)
+    self.max_seq_length = config.typed_value('max_seq_length', None) or config.float('max_seq_length', 0)
     self.inc_seq_length = config.float('inc_seq_length', 0)
-    if self.max_seq_length == 0:
-      self.max_seq_length = sys.maxsize
+    if not self.max_seq_length:
+      self.max_seq_length = sys.maxsize  # type: int|float|dict[str,int]|NumbersDict
+    if isinstance(self.max_seq_length, dict):
+      self.max_seq_length = NumbersDict(self.max_seq_length)
+    assert isinstance(self.max_seq_length, (int, float, NumbersDict))
     # And also initialize the network. That depends on some vars here such as pretrain.
     self.init_network_from_config(config)
 
@@ -767,16 +793,17 @@ class Engine(object):
             (self.start_epoch, self.final_epoch), file=log.v1)
 
     self.check_last_epoch()
-    self.max_seq_length += (self.start_epoch - 1) * self.inc_seq_length
+    if isinstance(self.max_seq_length, (int, float)):
+      self.max_seq_length += (self.start_epoch - 1) * self.inc_seq_length
 
     epoch = self.start_epoch  # Epochs start at 1.
     rebatch = True
     while epoch <= final_epoch:
-      if self.max_seq_length != sys.maxsize:
+      if isinstance(self.max_seq_length, int) and self.max_seq_length != sys.maxsize:
         if int(self.max_seq_length + self.inc_seq_length) != int(self.max_seq_length):
           print("increasing sequence lengths to", int(self.max_seq_length + self.inc_seq_length), file=log.v3)
           rebatch = True
-        self.max_seq_length += self.inc_seq_length
+          self.max_seq_length += self.inc_seq_length
       # In case of random seq ordering, we want to reorder each epoch.
       if self.train_data.init_seq_order(epoch=epoch):
         rebatch = True
@@ -876,7 +903,7 @@ class Engine(object):
       self.dataset_batches['train'] = self.train_data.generate_batches(recurrent_net=self.network.recurrent,
                                                                        batch_size=self.batch_size,
                                                                        max_seqs=self.max_seqs,
-                                                                       max_seq_length=int(self.max_seq_length),
+                                                                       max_seq_length=self.max_seq_length,
                                                                        seq_drop=self.seq_drop,
                                                                        shuffle_batches=self.shuffle_batches,
                                                                        used_data_keys=self.network.used_data_keys)
@@ -928,7 +955,7 @@ class Engine(object):
           recurrent_net=self.network.recurrent,
           batch_size=self.batch_size,
           max_seqs=self.max_seqs,
-          max_seq_length=(int(self.max_seq_length) if dataset_name == 'dev' else sys.maxsize),
+          max_seq_length=(self.max_seq_length if dataset_name == 'dev' else sys.maxsize),
           used_data_keys=self.network.used_data_keys)
       else:
         self.dataset_batches[dataset_name].reset()
@@ -1307,13 +1334,17 @@ class Engine(object):
       # It's constructed lazily and it will set used_data_keys, so make sure that we have it now.
       self.network.get_all_errors()
     if output_file:
-      dataset.seq_ordering = "default"  # enforce order as-is, so that the order in the written file corresponds
+      if dataset.have_corpus_seq_idx():
+        # We can sort it. Sort it in reverse to make sure that we have enough memory right at the beginning.
+        dataset.seq_ordering = "sorted_reverse"
+      else:
+        dataset.seq_ordering = "default"  # enforce order as-is, so that the order in the written file corresponds
     dataset.init_seq_order(epoch=self.epoch)
     batches = dataset.generate_batches(
       recurrent_net=self.network.recurrent,
       batch_size=self.config.int('batch_size', 1),
       max_seqs=self.config.int('max_seqs', -1),
-      max_seq_length=int(self.config.float('max_seq_length', 0)),
+      max_seq_length=self.config.typed_value('max_seq_length', None) or self.config.float('max_seq_length', 0),
       used_data_keys=self.network.used_data_keys)
 
     output_layer = self.network.layers[output_layer_name]
@@ -1324,11 +1355,13 @@ class Engine(object):
       print("Given output %r has beam size %i." % (output_layer, out_beam_size), file=log.v1)
     target_key = "classes"
 
+    out_cache = None
     if output_file:
       assert dataset.can_serialize_data(target_key)
       assert not os.path.exists(output_file)
       print("Will write outputs to: %s" % output_file, file=log.v2)
       output_file = open(output_file, "w")
+      out_cache = {}  # corpus-seq-idx -> str
 
     def extra_fetches_callback(seq_idx, seq_tag, output, targets=None):
       """
@@ -1354,9 +1387,10 @@ class Engine(object):
         if target_key and dataset.can_serialize_data(target_key):
           print("  hyp:", dataset.serialize_data(key=target_key, data=output[out_idx]), file=log.v1)
           print("  ref:", dataset.serialize_data(key=target_key, data=targets[out_idx]), file=log.v1)
-        if output_file:
-          output_file.write("%s\n" % dataset.serialize_data(key=target_key, data=output[out_idx]))
-          output_file.flush()
+        if out_cache is not None:
+          corpus_seq_idx = dataset.get_corpus_seq_idx(seq_idx[i])
+          assert corpus_seq_idx not in out_cache
+          out_cache[corpus_seq_idx] = dataset.serialize_data(key=target_key, data=output[out_idx])
 
     runner = Runner(
       engine=self, dataset=dataset, batches=batches, train=False, eval=do_eval,
@@ -1368,11 +1402,16 @@ class Engine(object):
       extra_fetches_callback=extra_fetches_callback)
     runner.run(report_prefix=self.get_epoch_str() + " search")
     if not runner.finalized:
-      print("Error happened. Exit now.")
+      print("Error happened (%s). Exit now." % runner.run_exception)
       sys.exit(1)
-    print("Search done. Final: score %s error %s" % (
-      self.format_score(runner.score), self.format_score(runner.error)), file=log.v1)
+    print("Search done. Num steps %i, Final: score %s error %s" % (
+      runner.num_steps, self.format_score(runner.score), self.format_score(runner.error)), file=log.v1)
     if output_file:
+      assert out_cache
+      assert 0 in out_cache
+      assert len(out_cache) - 1 in out_cache
+      for i in range(len(out_cache)):
+        output_file.write("%s\n" % out_cache[i])
       output_file.close()
 
   def compute_priors(self, dataset, config=None):

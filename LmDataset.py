@@ -1058,6 +1058,12 @@ class TranslationDataset(CachedDataset2):
       return seq_idx
     return self._seq_order[seq_idx]
 
+  def have_corpus_seq_idx(self):
+    return True
+
+  def get_corpus_seq_idx(self, seq_idx):
+    return self._get_line_nr(seq_idx)
+
   def is_data_sparse(self, key):
     return True  # all is sparse
 

@@ -159,6 +159,8 @@ class RecLayer(_ConcatInputLayer):
         # Only used to resolve deps to base network.
         if name.startswith("base:"):
           return get_layer(name[len("base:"):])
+      from TFNetwork import TFNetwork, ExternData
+      subnet = TFNetwork(parent_net=network, extern_data=network.extern_data)  # dummy subnet
       for sub in d["unit"].values():  # iterate over the layers of the subnet
         assert isinstance(sub, dict)
         if "class" in sub:
@@ -167,7 +169,7 @@ class RecLayer(_ConcatInputLayer):
           cl = get_layer_class(class_name)
           # Operate on a copy because we will transform the dict later.
           # We only need this to resolve any other layer dependencies in the main network.
-          cl.transform_config_dict(sub.copy(), network=network, get_layer=sub_get_layer)
+          cl.transform_config_dict(sub.copy(), network=subnet, get_layer=sub_get_layer)
 
   @classmethod
   def get_out_data_from_opts(cls, unit, sources=(), initial_state=None, **kwargs):
@@ -181,7 +183,7 @@ class RecLayer(_ConcatInputLayer):
       if out_type:
         assert out_type.get("time_dim_axis", 0) == 0
         assert out_type.get("batch_dim_axis", 1) == 1
-      out = super(RecLayer, cls).get_out_data_from_opts(**kwargs)
+      out = super(RecLayer, cls).get_out_data_from_opts(sources=sources, **kwargs)
     else:
       out = None
     if isinstance(unit, dict):  # subnetwork
@@ -268,7 +270,7 @@ class RecLayer(_ConcatInputLayer):
       assert self.input_data.batch_dim_axis == 0
       assert self.input_data.time_dim_axis == 1
       x = self.input_data.get_placeholder_as_time_major()  # (time,batch,[dim])
-    seq_len = self.input_data.size_placeholder[0]
+    seq_len = self.input_data.get_sequence_lengths()
     return x, seq_len
 
   def get_loss_value(self):
@@ -854,11 +856,11 @@ class _SubnetworkRecCell(object):
     """
     self._initial_outputs = {
       k: self._get_init_output(k)
-      for k in self.prev_layers_needed
+      for k in sorted(self.prev_layers_needed)
       if k not in self.input_layers_moved_out + self.output_layers_moved_out}
     self._initial_extra_outputs = {
       k: self._get_init_extra_outputs(k)
-      for k in self.layer_data_templates.keys()
+      for k in sorted(self.layer_data_templates.keys())
       if k not in self.input_layers_moved_out + self.output_layers_moved_out}
     self._initial_extra_outputs = {k: v for (k, v) in self._initial_extra_outputs.items() if v}
     from Util import sorted_values_from_dict
@@ -1554,7 +1556,6 @@ class _SubnetworkRecCell(object):
 
     self.input_layers_moved_out = []
     self.output_layers_moved_out = []
-    layers_needed_from_prev_frame = sorted(self.prev_layers_needed)
 
     def output_can_move_out(layer):
       assert isinstance(layer, _TemplateLayer)
@@ -1564,9 +1565,6 @@ class _SubnetworkRecCell(object):
       if self.parent_net.search_flag:
         if issubclass(layer.layer_class_type, ChoiceLayer):
           return False  # need to perform the search inside the loop currently
-      # layer.output from prev time frame is used by other layers?
-      if layer.name in layers_needed_from_prev_frame:
-        return False
       # layer.output is used by other layers?
       for other_layer in layers_in_loop:
         if layer in other_layer.get_dep_layers():
@@ -1965,22 +1963,39 @@ class RnnCellLayer(_ConcatInputLayer):
       To get the state from another recurrent layer, use the GetLastHiddenStateLayer (get_last_hidden_state).
     :param None initial_output: the initial output is defined implicitly via initial state, thus don't set this
     """
-    super(RnnCellLayer, self).__init__(**kwargs)
+    super(RnnCellLayer, self).__init__(n_out=n_out, **kwargs)
+    assert self._rec_previous_layer or self.input_data.time_dim_axis is not None, (
+      "%s: This layer is expected to be used inside a RecLayer, or to have input with time." % self)
     self._initial_state = initial_state
     assert initial_output is None, "set initial_state instead"
     from TFUtil import get_initializer
     with tf.variable_scope(
-          "rec",
-          initializer=get_initializer(
-            weights_init, seed=self.network.random.randint(2**31), eval_local_ns={"layer": self})
+      "rec",
+      initializer=get_initializer(
+        weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
     ) as scope:
       assert isinstance(scope, tf.VariableScope)
       scope_name_prefix = scope.name + "/"  # e.g. "layer1/rec/"
       self.cell = self._get_cell(n_out=n_out, unit=unit, unit_opts=unit_opts)
-      self.output.time_dim_axis = None
-      self.output.batch_dim_axis = 0
-      prev_state = self._rec_previous_layer.rec_vars_outputs["state"]
-      self.output.placeholder, state = self.cell(self.input_data.placeholder, prev_state)
+      if self._rec_previous_layer:
+        assert not self.input_data or self.input_data.time_dim_axis is None
+        self.output.time_dim_axis = None
+        self.output.batch_dim_axis = 0
+        prev_state = self._rec_previous_layer.rec_vars_outputs["state"]
+        self.output.placeholder, state = self.cell(self.input_data.placeholder, prev_state)
+      else:
+        assert self.input_data and self.input_data.time_dim_axis is not None
+        self.output.time_dim_axis = 0
+        self.output.batch_dim_axis = 1
+        state0 = self.get_rec_initial_state(
+          n_out=n_out, unit=unit, unit_opts=unit_opts,
+          batch_dim=self.input_data.get_batch_dim(), name=self.name,
+          initial_state=initial_state)
+        self.output.placeholder, state = tf.nn.dynamic_rnn(
+          self.cell,
+          inputs=self.input_data.get_placeholder_as_time_major(),
+          sequence_length=self.input_data.get_sequence_lengths(),
+          initial_state=state0, time_major=True, scope=scope)
       self._hidden_state = state
       self.rec_vars_outputs["state"] = state
       params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope_name_prefix)
@@ -2012,15 +2027,28 @@ class RnnCellLayer(_ConcatInputLayer):
 
   @classmethod
   def get_out_data_from_opts(cls, n_out, name, sources=(), **kwargs):
+    """
+    :param int n_out:
+    :param str name: layer name
+    :param list[LayerBase] sources:
+    :rtype: Data
+    """
     beam_size = None
     for dep in sources:
       beam_size = beam_size or dep.output.beam_size
+    shape = (n_out,)
+    batch_dim_axis = 0
+    time_dim_axis = None
+    if sources and sources[0].output.time_dim_axis is not None:
+      shape = (None,) + shape
+      batch_dim_axis = 1
+      time_dim_axis = 0
     return Data(
       name="%s_output" % name,
-      shape=(n_out,), dim=n_out,
-      batch_dim_axis=0,
-      time_dim_axis=None,
-      size_placeholder={},
+      shape=shape, dim=n_out,
+      batch_dim_axis=batch_dim_axis,
+      time_dim_axis=time_dim_axis,
+      size_placeholder={} if not sources else sources[0].output.size_placeholder.copy(),
       beam_size=beam_size)
 
   def get_dep_layers(self):
@@ -2502,19 +2530,20 @@ class DecideLayer(LayerBase):
     :return: best beam selected from input, e.g. shape (batch, time, dim)
     :rtype: Data
     """
-    assert src.search_choices
+    search_choices = src.get_search_choices()
+    assert search_choices
     if not output:
       output = src.output.copy_template(name="%s_output" % (name or src.name)).copy_as_batch_major()
     assert output.batch_dim_axis == 0
     batch_dim = src.network.get_data_batch_dim()
     src_data = src.output.copy_as_batch_major()
-    beam_size = src.search_choices.beam_size
+    beam_size = search_choices.beam_size
     src_output = tf.reshape(
       src_data.placeholder,
       [batch_dim, beam_size] +
       [tf.shape(src_data.placeholder)[i] for i in range(1, src_data.batch_ndim)])  # (batch, beam, [time], [dim])
     # beam_scores is of shape (batch, beam) -> +log score.
-    beam_scores = src.search_choices.beam_scores
+    beam_scores = search_choices.beam_scores
     if length_normalization:
       beam_scores /= tf.to_float(tf.reshape(src.output.get_sequence_lengths(), [batch_dim, beam_size]))
     beam_idxs = tf.argmax(beam_scores, axis=1)  # (batch,)

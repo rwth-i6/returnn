@@ -73,12 +73,13 @@ def dump_dataset(dataset, options):
     raise Exception("unknown dump option type %r" % options.type)
 
   stats = Stats() if (options.stats or options.dump_stats) else None
+  seq_len_stats = {key: Stats() for key in dataset.get_data_keys()}
   seq_idx = options.startseq
   if options.endseq < 0:
     options.endseq = float("inf")
   while dataset.is_less_than_num_seqs(seq_idx) and seq_idx <= options.endseq:
     dataset.load_seqs(seq_idx, seq_idx + 1)
-    data = dataset.get_data(seq_idx, "data")
+    data = dataset.get_data(seq_idx, options.key)
     if options.type == "numpy":
       numpy.savetxt("%s%i.data%s" % (options.dump_prefix, seq_idx, options.dump_postfix), data)
     elif options.type == "stdout":
@@ -91,14 +92,19 @@ def dump_dataset(dataset, options):
         numpy.savetxt("%s%i.targets.%s%s" % (options.dump_prefix, seq_idx, target, options.dump_postfix), targets, fmt='%i')
       elif options.type == "stdout":
         print("seq %i target %r:" % (seq_idx, target), pretty_print(targets))
+    seq_len = dataset.get_seq_length(seq_idx)
+    for key in dataset.get_data_keys():
+      seq_len_stats[key].collect([seq_len[key]])
     if stats:
       stats.collect(data)
 
     seq_idx += 1
 
   print("Done. More seqs which we did not dumped: %s" % dataset.is_less_than_num_seqs(seq_idx), file=log.v1)
+  for key in dataset.get_data_keys():
+    seq_len_stats[key].dump(stream_prefix="Seq-length %r " % key, stream=log.v2)
   if stats:
-    stats.dump(output_file_prefix=options.dump_stats, stream=log.v2)
+    stats.dump(output_file_prefix=options.dump_stats, stream_prefix="Data %r " % options.key, stream=log.v2)
 
 
 def init(config_str):
@@ -107,9 +113,9 @@ def init(config_str):
   """
   rnn.initBetterExchook()
   rnn.initThreadJoinHack()
-  if config_str.startswith("{"):
+  if config_str.strip().startswith("{"):
     print("Using dataset %s." % config_str)
-    datasetDict = eval(config_str)
+    datasetDict = eval(config_str.strip())
     configFilename = None
   else:
     datasetDict = None
@@ -123,7 +129,8 @@ def init(config_str):
   if datasetDict:
     config.set("train", datasetDict)
   rnn.initLog()
-  print("CRNN dump-dataset starting up.", file=log.v1)
+  print("Returnn dump-dataset starting up.", file=log.v1)
+  rnn.returnnGreeting()
   rnn.initFaulthandler()
   rnn.initConfigJsonNetwork()
   rnn.initData()
@@ -140,6 +147,7 @@ def main(argv):
   argparser.add_argument('--type', default='stdout', help="'numpy', 'stdout', 'plot', 'null'")
   argparser.add_argument('--dump_prefix', default='/tmp/crnn.dump-dataset.')
   argparser.add_argument('--dump_postfix', default='.txt.gz')
+  argparser.add_argument("--key", default="data", help="data-key, e.g. 'data' or 'classes'. (default: 'data')")
   argparser.add_argument('--stats', action="store_true", help="calculate mean/stddev stats")
   argparser.add_argument('--dump_stats', help="file-prefix to dump stats to")
   args = argparser.parse_args(argv[1:])

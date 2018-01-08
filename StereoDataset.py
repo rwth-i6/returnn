@@ -197,14 +197,24 @@ class StereoHdfDataset(StereoDataset):
 
     :type num_outputs: int
     :param num_outputs: dimensionality of output features. used only if
-                        the dataset does not have output features.
+                        the dataset does not have output features. Or if output
+                        features are sparse
     """
     someSequence = self._collect_single_seq(0)
     self.num_inputs = someSequence.get_data('data').shape[1]
     if 'outputs' in self._fileHandlers[0]:
-      self.num_outputs = {
-        'classes': (someSequence.get_data('classes').shape[1], 2)
-      }
+      if len(someSequence.get_data('classes').shape) == 1:
+        outputFeatDim = 1
+      else:
+        outputFeatDim = someSequence.get_data('classes').shape[1]
+      if outputFeatDim == 1 and num_outputs != None:
+        self.num_outputs = {
+          'classes': (num_outputs, outputFeatDim)
+        }
+      else:
+        self.num_outputs = {
+          'classes': (outputFeatDim, 2)
+        }
     else:
       # in this case no output data is in the hdf file and
       # therfore the output dimension needs to be given
@@ -297,8 +307,10 @@ class StereoHdfDataset(StereoDataset):
 
     # enforce float32 to enable Theano optimizations
     inputFeatures = inputFeatures.astype(np.float32)
-    if targets is not None:
+    if (targets is not None) and targets.shape[1] > 1:
       targets = targets.astype(np.float32)
+    elif targets.shape[1] == 1:
+      targets = np.reshape(targets.astype(np.int32), (targets.shape[0],))
 
     return DatasetSeq(seq_idx, inputFeatures, targets)
 

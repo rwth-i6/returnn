@@ -1154,6 +1154,24 @@ class NumbersDict:
     # and it would just confuse.
     raise Exception("%s.__cmp__ is undefined" % self.__class__.__name__)
 
+  def any_compare(self, other, cmp):
+    """
+    :param NumbersDict other:
+    :param ((object,object)->True) cmp:
+    :rtype: True
+    """
+    for key in self.keys():
+      if key in other.keys():
+        if cmp(self[key], other[key]):
+          return True
+      elif other.value is not None:
+        if cmp(self[key], other.value):
+          return True
+    if self.value is not None and other.value is not None:
+      if cmp(self.value, other.value):
+        return True
+    return False
+
   @staticmethod
   def _max(*args):
     args = [a for a in args if a is not None]
@@ -2309,24 +2327,56 @@ def maybe_restart_returnn_with_atfork_patch():
 
 class Stats:
   """
-  Collects mean and variance.
+  Collects mean and variance, running average.
 
   https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance
   """
 
-  def __init__(self):
+  def __init__(self, format_str=None):
+    """
+    :param None|((float|numpy.ndarray)->str) format_str:
+    """
+    self.format_str = format_str or str
     self.mean = 0.0
     self.mean_sq = 0.0
     self.var = 0.0
+    self.min = None
+    self.max = None
     self.total_data_len = 0
     self.num_seqs = 0
 
+  def __str__(self):
+    if self.num_seqs > 0:
+      if self.num_seqs == self.total_data_len:
+        extra_str = "avg_data_len=1"
+      else:
+        extra_str = "total_data_len=%i, avg_data_len=%f" % (
+          self.total_data_len, float(self.total_data_len) / self.num_seqs)
+      return "Stats(mean=%s, std_dev=%s, min=%s, max=%s, num_seqs=%i, %s)" % (
+        self.format_str(self.get_mean()), self.format_str(self.get_std_dev()),
+        self.format_str(self.min), self.format_str(self.max), self.num_seqs, extra_str)
+    return "Stats(num_seqs=0)"
+
   def collect(self, data):
     """
-    :param numpy.ndarray data: shape (time, dim)
+    :param numpy.ndarray data: shape (time, dim) or (time,)
     """
     import numpy
+    if isinstance(data, (list, tuple)):
+      data = numpy.array(data)
+    assert isinstance(data, numpy.ndarray)
+    assert data.ndim >= 1
+    if data.shape[0] == 0:
+      return
     self.num_seqs += 1
+    data_min = numpy.min(data, axis=0)
+    data_max = numpy.max(data, axis=0)
+    if self.min is None:
+      self.min = data_min
+      self.max = data_max
+    else:
+      self.min = numpy.minimum(self.min, data_min)
+      self.max = numpy.maximum(self.max, data_max)
     new_total_data_len = self.total_data_len + data.shape[0]
     mean_diff = numpy.mean(data, axis=0) - self.mean
     m_a = self.var * self.total_data_len
@@ -2358,22 +2408,27 @@ class Stats:
     return numpy.sqrt(self.var)
     # return numpy.sqrt(self.mean_sq - self.mean * self.mean)
 
-  def dump(self, output_file_prefix=None, stream=None):
+  def dump(self, output_file_prefix=None, stream=None, stream_prefix=""):
     """
     :param str|None output_file_prefix: if given, will numpy.savetxt mean|std_dev to disk
+    :param str stream_prefix:
     :param io.TextIOBase stream: sys.stdout by default
     """
     if stream is None:
       stream = sys.stdout
     import numpy
-    print("Stats:", file=stream)
-    print("%i seqs, %i total frames, %f average frames" % (
-      self.num_seqs, self.total_data_len, self.total_data_len / float(self.num_seqs)), file=stream)
-    print("Mean: %s" % self.get_mean(), file=stream)
-    print("Std dev: %s" % self.get_std_dev(), file=stream)
+    print("%sStats:" % stream_prefix, file=stream)
+    if self.num_seqs != self.total_data_len:
+      print("  %i seqs, %i total frames, %f average frames" % (
+        self.num_seqs, self.total_data_len, self.total_data_len / float(self.num_seqs)), file=stream)
+    else:
+      print("  %i seqs" % (self.num_seqs,), file=stream)
+    print("  Mean: %s" % (self.format_str(self.get_mean()),), file=stream)
+    print("  Std dev: %s" % (self.format_str(self.get_std_dev()),), file=stream)
+    print("  Min/max: %s / %s" % (self.format_str(self.min), self.format_str(self.max)), file=stream)
     # print("Std dev (naive): %s" % numpy.sqrt(self.mean_sq - self.mean * self.mean), file=stream)
     if output_file_prefix:
-      print("Write mean/std-dev to %s.(mean|std_dev).txt." % output_file_prefix, file=stream)
+      print("  Write mean/std-dev to %s.(mean|std_dev).txt." % (output_file_prefix,), file=stream)
       numpy.savetxt("%s.mean.txt" % output_file_prefix, self.get_mean())
       numpy.savetxt("%s.std_dev.txt" % output_file_prefix, self.get_std_dev())
 

@@ -1059,6 +1059,59 @@ def test_rec_layer_search_select_src():
   assert_equal(loop_net.layers["output_prob"].get_search_choices(), prev_out_choice)
 
 
+def test_RnnCellLayer_with_time():
+  from GeneratingDataset import DummyDataset
+  from TFNetworkLayer import InternalLayer, SourceLayer, ReduceLayer
+  train_data = DummyDataset(input_dim=2, output_dim=3, num_seqs=10, seq_len=5)
+  with tf.variable_scope("test_RnnCellLayer_with_time"):
+    extern_data = ExternData()
+    extern_data.init_from_dataset(train_data)
+    net = TFNetwork(extern_data=extern_data)
+    with tf.variable_scope("input_no_time_l"):
+      input_no_time_l = InternalLayer(
+        name="input_no_time_l", network=net, out_type={"dim": train_data.num_inputs, "time_dim_axis": None})
+      print("Input layer (without time-dim):", input_no_time_l)
+      assert input_no_time_l.output.shape == (train_data.num_inputs,)
+      assert input_no_time_l.output.time_dim_axis is None
+      assert not input_no_time_l.output.sparse
+      assert input_no_time_l.output.dim == input_no_time_l.output.shape[-1]
+      input_no_time_l.output.placeholder = LayerBase.get_rec_initial_output(
+        batch_dim=1, name="input_no_time_l", n_out=10, output=input_no_time_l.output)  # dummy
+    with tf.variable_scope("prev_l1"):
+      prev_l = InternalLayer(name="prev:l1", network=net, out_type={"dim": 10, "time_dim_axis": None})
+      prev_l.rec_vars_outputs["state"] = RnnCellLayer.get_rec_initial_state(
+        batch_dim=1, name="prev_l", n_out=10, unit="LSTMBlock")
+      print("Previous time layer:", prev_l)
+    with tf.variable_scope("l1"):
+      l1 = RnnCellLayer(
+        n_out=10, unit="LSTMBlock", network=net, name="l1", rec_previous_layer=prev_l, sources=[input_no_time_l])
+      print("RnnCell layer (no time):", l1)
+      print("RnnCell layer (no time) params:", l1.params)
+      assert l1.output.time_dim_axis is None
+      assert l1.output.batch_dim_axis == 0
+      assert l1.output.dim == 10
+      assert l1.output.shape == (10,)
+    with tf.variable_scope("data"):
+      input_l = SourceLayer(network=net, name="data")
+      print("Input layer (with time-dim):", input_l)
+      assert input_l.output.dim == input_no_time_l.output.dim
+      assert input_l.output.shape == (None, input_l.output.dim)
+      assert input_l.output.time_dim_axis == 1
+      assert not input_l.output.sparse
+    with tf.variable_scope("l2"):
+      l2 = RnnCellLayer(
+        n_out=10, unit="LSTMBlock", network=net, name="l2", sources=[input_l])
+      print("RnnCell layer (with time):", l2)
+      print("RnnCell layer (with time) params:", l2.params)
+      assert l2.output.time_dim_axis == 0
+      assert l2.output.batch_dim_axis == 1
+      assert l2.output.dim == 10
+      assert l2.output.shape == (None, 10)
+      assert_equal(set(l1.params.keys()), set(l2.params.keys()))
+      for key in l1.params.keys():
+        assert l1.params[key].shape == l2.params[key].shape
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()

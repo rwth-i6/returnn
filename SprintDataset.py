@@ -50,11 +50,12 @@ class SprintDatasetBase(Dataset):
   SprintCachedSeqsMax = 200
   SprintCachedSeqsMin = 100
 
-  def __init__(self, target_maps=None, str_add_final_zero=False, input_stddev=1., **kwargs):
+  def __init__(self, target_maps=None, str_add_final_zero=False, input_stddev=1., bpe=None, **kwargs):
     """
     :param dict[str,str|dict] target_maps: e.g. {"speaker": "speaker_map.txt"}
     :param bool str_add_final_zero: adds e.g. "orth0" with '\0'-ending
     :param float input_stddev: if != 1, will divide the input "data" by that
+    :param None|dict[str] bpe: if given, will be opts for :class:`BytePairEncoding`
     """
     super(SprintDatasetBase, self).__init__(**kwargs)
     if target_maps:
@@ -68,6 +69,10 @@ class SprintDatasetBase(Dataset):
     self.target_maps = target_maps
     self.str_add_final_zero = str_add_final_zero
     self.input_stddev = input_stddev
+    self.bpe = None
+    if bpe:
+      from GeneratingDataset import BytePairEncoding
+      self.bpe = BytePairEncoding(**bpe)
     self.cond = Condition(lock=self.lock)
     self.add_data_thread_id = thread.get_ident()  # This will be created in the Sprint thread.
     self.ready_for_data = False
@@ -96,9 +101,11 @@ class SprintDatasetBase(Dataset):
     """
     assert inputDim > 0
     self.num_inputs = inputDim
-    self.num_outputs = {"data": [inputDim * self.window, 2]}
+    self.num_outputs = {"data": (inputDim * self.window, 2)}
     if outputDim > 0:
-      self.num_outputs["classes"] = [outputDim, 1]
+      self.num_outputs["classes"] = (outputDim, 1)
+    if self.bpe:
+      self.num_outputs["bpe"] = (self.bpe.num_labels, 1)
     self._base_init()
     # At this point, we are ready for data. In case we don't use the Sprint PythonSegmentOrdering
     # (SprintInterface.getSegmentList()), we must call this at least once.
@@ -267,7 +274,14 @@ class SprintDatasetBase(Dataset):
       targets = {"classes": targets}
     if "classes" in targets:
       # 'classes' is always the alignment
-      assert targets["classes"].shape == (T,), "Number of targets %s does not equal to number of features %s" % (targets["classes"].shape, (T,))  # is in format (time,)
+      assert targets["classes"].shape == (T,), (  # is in format (time,)
+        "Number of targets %s does not equal to number of features %s" % (targets["classes"].shape, (T,)))
+    if self.bpe:
+      assert "orth" in targets
+      orth = targets["orth"]
+      assert isinstance(orth, (str, unicode))
+      assert "bpe" not in targets
+      targets["bpe"] = numpy.array(self.bpe.get_seq(orth.strip()), dtype="int32")
 
     # Maybe convert some targets.
     if self.target_maps:

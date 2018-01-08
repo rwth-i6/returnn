@@ -906,6 +906,8 @@ class FeedDictDataProvider(DataProviderBase):
           if k == "seq_tag":
             data[k][q] = self.dataset.get_tag(seq.seq_idx)
             continue
+          if k in self.extern_data.extra_added_keys:
+            continue
           if self.extern_data.data[k].have_time_axis():
             if l[k] in [0, None]:
               continue
@@ -1006,9 +1008,14 @@ class FeedDictDataProvider(DataProviderBase):
       output = self.queue.get()
     assert isinstance(output, dict)
     # The data itself.
-    d = {self.extern_data.get_data(k).placeholder: output[k] for k in self.data_keys}
+    d = {
+      self.extern_data.get_data(k).placeholder: output[k]
+      for k in self.data_keys
+      if k not in self.extern_data.extra_added_keys}
     # And seq lengths info.
     for k in self.data_keys:
+      if k in self.extern_data.extra_added_keys:
+        continue
       data = self.extern_data.get_data(k)
       for dim, len_placeholder in data.size_placeholder.items():
         if dim == 0:  # time-dim

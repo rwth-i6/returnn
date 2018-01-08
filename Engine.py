@@ -740,7 +740,7 @@ class Engine:
       confusion_matrix = numpy.zeros((num_mle_labels, num_mle_labels), dtype = 'int32')
     else:
       confusion_matrix = numpy.zeros((num_labels, num_labels), dtype = 'int32')
-    batches = data.generate_batches(self.network.recurrent, data.num_timesteps, 1)
+    batches = data.generate_batches(recurrent_net=self.network.recurrent, batch_size=data.num_timesteps, max_seqs=1)
     num_data_batches = len(batches)
     num_batches = 0
     # TODO: This code is broken.

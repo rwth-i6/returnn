@@ -8,6 +8,7 @@ import sys
 sys.path += ["."]  # Python 3 hack
 from nose.tools import assert_equal, assert_is_instance
 import contextlib
+import unittest
 import numpy.testing
 import better_exchook
 better_exchook.replace_traceback_format_tb()
@@ -142,6 +143,7 @@ def test_compare_layer():
     assert_equal(v.dtype, numpy.dtype("bool"))
     assert_equal(v[0], True)
 
+
 def test_shift_layer():
   with make_scope() as session:
     import numpy as np
@@ -169,6 +171,7 @@ def test_shift_layer():
     assert_equal(np.equal(v[0, shift_amount:, 0], np.arange(time_size-shift_amount)).all(), True)
     assert_equal((v[:,:shift_amount,:] == 0).all(), True)  # padding
     assert_equal((v[1:,shift_amount:,:] == 1).all(), True)
+
 
 def test_layer_base_get_out_data_from_opts():
   with make_scope() as session:
@@ -240,3 +243,80 @@ def test_reuse_params():
     assert l1.params["W"] is l2.params["W"]
     assert l1.params["b"] is l2.params["b"]
     assert_equal(set(network.get_trainable_params()), {l1.params["W"], l1.params["b"]})
+
+
+def test_ResizeLayer_fill_value():
+  with make_scope() as session:
+    net = TFNetwork(extern_data=ExternData())
+    src = InternalLayer(name="src", network=net, out_type={"dim": 20, "sparse": True})
+    src.output.placeholder = tf.constant([[1, 2, 3, 4, 5], [6, 7, 8, 9, 10]], dtype=tf.int32)
+    src.output.size_placeholder = {0: tf.constant([5, 3], dtype=tf.int32)}
+    layer = ResizeLayer(
+      name="resize", network=net, factor=3, axis="T", kind="fill", fill_value=19, sources=[src],
+      output=ResizeLayer.get_out_data_from_opts(
+        name="resize", network=net, factor=3, axis="T", kind="fill", sources=[src]))
+    out, seq_lens = session.run([layer.output.placeholder, layer.output.size_placeholder[0]])
+    print(out)
+    print(seq_lens)
+    assert isinstance(out, numpy.ndarray)
+    assert isinstance(seq_lens, numpy.ndarray)
+    assert_equal(
+      out.tolist(),
+      [[1, 19, 19,  2, 19, 19,  3, 19, 19,  4, 19, 19,  5, 19, 19,],
+       [6, 19, 19,  7, 19, 19,  8, 19, 19,  9, 19, 19, 10, 19, 19]])
+    assert_equal(seq_lens.tolist(), [15, 9])
+
+
+def test_ResizeLayer_fill_dropout():
+  with make_scope() as session:
+    net = TFNetwork(extern_data=ExternData())
+    src = InternalLayer(name="src", network=net, out_type={"dim": 20, "sparse": True})
+    src_seqs = [[1, 2, 3, 4, 5], [6, 7, 8, 9, 10]]
+    src_seq_lens = [5, 3]
+    factor = 3
+    fill_value = 19
+    src.output.placeholder = tf.constant(src_seqs, dtype=tf.int32)
+    src.output.size_placeholder = {0: tf.constant(src_seq_lens, dtype=tf.int32)}
+    layer = ResizeLayer(
+      name="resize", network=net,
+      factor=factor, axis="T", kind="fill", fill_value=fill_value, fill_dropout=0.5, sources=[src],
+      output=ResizeLayer.get_out_data_from_opts(
+        name="resize", network=net, factor=factor, axis="T", kind="fill", sources=[src]))
+    out, seq_lens = session.run([layer.output.placeholder, layer.output.size_placeholder[0]])
+    print(out)
+    print(seq_lens)
+    assert isinstance(out, numpy.ndarray)
+    assert isinstance(seq_lens, numpy.ndarray)
+    # Non-deterministic output. But we can check some constraints.
+    for i in range(len(src_seq_lens)):
+      assert src_seq_lens[i] <= seq_lens[i] <= src_seq_lens[i] * factor
+      assert_equal([s for s in out[i] if s != fill_value], src_seqs[i])
+
+
+if __name__ == "__main__":
+  try:
+    better_exchook.install()
+    if len(sys.argv) <= 1:
+      for k, v in sorted(globals().items()):
+        if k.startswith("test_"):
+          print("-" * 40)
+          print("Executing: %s" % k)
+          try:
+            v()
+          except unittest.SkipTest as exc:
+            print("SkipTest:", exc)
+          print("-" * 40)
+      print("Finished all tests.")
+    else:
+      assert len(sys.argv) >= 2
+      for arg in sys.argv[1:]:
+        print("Executing: %s" % arg)
+        if arg in globals():
+          globals()[arg]()  # assume function and execute
+        else:
+          eval(arg)  # assume Python code and execute
+  finally:
+    import threading
+    #if len(list(threading.enumerate())) > 1:
+    #  print("Warning, more than one thread at exit:")
+    #  better_exchook.dump_all_thread_tracebacks()

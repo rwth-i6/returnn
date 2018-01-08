@@ -501,7 +501,7 @@ def analyze_data(config):
   total_targets_len = 0
   total_data_len = 0
 
-  # Note: This is not stable!
+  # Note: This is not stable! See :class:`Util.Stats` for a better alternative.
   seq_idx = 0
   while ds.is_less_than_num_seqs(seq_idx):
     progress_bar_with_time(ds.get_complete_frac(seq_idx))

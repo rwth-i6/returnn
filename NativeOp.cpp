@@ -42,8 +42,8 @@ The BLAS functions expect the inputs in column-major and return in column-major.
 // https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/op_kernel.h
 // https://eigen.tuxfamily.org/dox-devel/unsupported/Tensor_8h_source.html
 #define Ndarray tensorflow::Tensor
-#define Ndarray_DEV_DATA(x) (x)->flat<float>().data()
-#define Ndarray_DEV_DATA_int32(x) (x)->flat<int32>().data()
+#define Ndarray_DEV_DATA(x) ((float*) (x)->tensor_data().data())
+#define Ndarray_DEV_DATA_int32(x) ((int32_t*) (x)->tensor_data().data())
 #define Ndarray_DEV_DATA_int32_scalar(x) (x)->scalar<int32>()()
 #define Ndarray_HOST_DIMS(x) DimsAccessor(x)
 #define Ndarray_DIMS Ndarray_HOST_DIMS
