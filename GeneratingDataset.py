@@ -1261,7 +1261,8 @@ class BytePairEncoding:
     :rtype: list[int]
     """
     segments = self._segment_sentence(sentence)
-    seq = [self.vocab[k] for k in segments]
+    unk_id = self.vocab["UNK"]
+    seq = [self.vocab.get(k, unk_id) for k in segments]
     return seq + self.seq_postfix
 
 
