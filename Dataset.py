@@ -41,6 +41,7 @@ class Dataset(object):
     set_or_remove("chunking", config.value("chunking", None))
     set_or_remove("seq_ordering", config.value("batching", None))
     set_or_remove("shuffle_frames_of_nseqs", config.int('shuffle_frames_of_nseqs', 0) or None)
+    set_or_remove("min_chunk_size", config.int('min_chunk_size', 0) or None)
 
   @classmethod
   def from_config(cls, config, **kwargs):
@@ -54,7 +55,7 @@ class Dataset(object):
 
   def __init__(self, name="dataset",
                window=1, context_window=None, chunking="0",
-               seq_ordering='default', shuffle_frames_of_nseqs=0,
+               seq_ordering='default', shuffle_frames_of_nseqs=0, min_chunk_size=0,
                estimated_num_seqs=None,):
     """
     :param str name: e.g. "train" or "eval"
@@ -82,6 +83,7 @@ class Dataset(object):
     self._num_seqs = 0
     self._estimated_num_seqs = estimated_num_seqs
     self.chunk_size = int(chunking.split(':')[0])
+    self.min_chunk_size = min_chunk_size
     if ':' in chunking:
       self.chunk_step = int(chunking.split(':')[1])
       assert self.chunk_step > 0, "chunking step must be positive"
@@ -549,7 +551,7 @@ class Dataset(object):
             keys_with_full_seqs.append(key)
             continue
           raise Exception("Chunking with multiple data-keys of different length: %r" % length)
-        while t[default_key] < length[default_key]:
+        while length[default_key] > t[default_key]:
           chunk_start = NumbersDict(t)
           chunk_end = NumbersDict.min([t + chunk_size, length])
           for key in keys_with_full_seqs:
@@ -560,6 +562,8 @@ class Dataset(object):
             chunk_end.value = None
           yield (s, chunk_start, chunk_end)
           t += chunk_step
+          if length[default_key] - t[default_key] <= self.min_chunk_size:
+            break
       s += 1
 
   def _get_context_window_left_right(self):
