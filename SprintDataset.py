@@ -77,6 +77,7 @@ class SprintDatasetBase(Dataset):
     self.add_data_thread_id = thread.get_ident()  # This will be created in the Sprint thread.
     self.ready_for_data = False
     self.reached_final_seq = False
+    self.reached_final_seq_seen_all = False
     self.multiple_epochs = False
     self._complete_frac = None
     self.sprintEpoch = None  # in SprintInterface.getSegmentList()
@@ -118,6 +119,7 @@ class SprintDatasetBase(Dataset):
     self.requested_load_seq_end = 0
     self.next_seq_to_be_added = 0
     self.reached_final_seq = False
+    self.reached_final_seq_seen_all = False
     self._num_timesteps = 0
     self.added_data = []; " :type: list[DatasetSeq] "
     self.ready_for_data = True
@@ -347,7 +349,7 @@ class SprintDatasetBase(Dataset):
       self.cond.notify_all()
       return seq_idx
 
-  def finishSprintEpoch(self):
+  def finishSprintEpoch(self, seen_all=True):
     """
     Called by SprintInterface.getSegmentList().
     This is in a state where Sprint asks for the next segment after we just finished an epoch.
@@ -356,6 +358,7 @@ class SprintDatasetBase(Dataset):
     """
     with self.lock:
       self.reached_final_seq = True
+      self.reached_final_seq_seen_all = seen_all
       self.ready_for_data = False
       self.cond.notify_all()
 
@@ -471,7 +474,7 @@ class ExternSprintDataset(SprintDatasetBase):
       interrupt = False
       expected_exit_status = 0 if not self.python_exit else None
       if self._join_child(wait=False, expected_exit_status=expected_exit_status) is False:  # Not yet terminated.
-        interrupt = not self.reached_final_seq
+        interrupt = not self.reached_final_seq_seen_all
         if interrupt:
           print("ExternSprintDataset: interrupt child proc %i" % self.child_pid, file=log.v5)
           os.kill(self.child_pid, signal.SIGKILL)
@@ -652,10 +655,10 @@ class ExternSprintDataset(SprintDatasetBase):
 
       if not self.python_exit and self.child_pid:
         with self.lock:
-          self.finishSprintEpoch()
+          self.finishSprintEpoch(seen_all=haveSeenTheWhole)
           if haveSeenTheWhole:
             self._num_seqs = self.next_seq_to_be_added
-      print("ExternSprintDataset finished reading epoch %i" % epoch, file=log.v5)
+      print("ExternSprintDataset finished reading epoch %i, seen all %r" % (epoch, haveSeenTheWhole), file=log.v5)
 
     except Exception:
       if not self.python_exit:
@@ -687,7 +690,7 @@ class ExternSprintDataset(SprintDatasetBase):
           self._estimated_num_seqs = self._num_seqs  # last epoch num_seqs is a good estimate
           self._num_seqs = None  # but we are not certain whether we have the same num_seqs for this epoch
       super(ExternSprintDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
-    self._exit_child()
+    self._exit_child(wait_thread=True)
     self._start_child(epoch)
 
   def init_seq_order(self, epoch=None, seq_list=None):
