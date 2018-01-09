@@ -478,8 +478,9 @@ class FramewiseOutputLayer(OutputLayer):
       return 1.0 / 2.0 * T.nnet.binary_crossentropy(T.clip(self.p_y_given_x_flat[self.i], 1.e-38, 1.0 - 1.e-5), self.y_data_flat[self.i]).mean(), known_grads
     elif self.loss == 'sigmoid_binary_crossentropy':
       from theano.tensor.extra_ops import to_one_hot
-      self.y_s = T.nnet.sigmoid(self.y_m).reshape(self.z.shape)
-      return T.nnet.binary_crossentropy(T.nnet.sigmoid(self.y_m)[self.i], to_one_hot(self.y_data_flat[self.i],self.attrs['n_out'])).sum(), known_grads
+      z_s = T.nnet.sigmoid(self.y_m)
+      self.y_s = z_s.reshape(self.z.shape)
+      return T.nnet.binary_crossentropy(T.clip(z_s, 1.e-5, 1 - 1.e-5)[self.i], to_one_hot(self.y_data_flat[self.i],self.attrs['n_out'])).sum(), known_grads
     elif self.loss == "generic_ce":
       # Should be generic for any activation function.
       # (Except when the labels are not independent, such as for softmax.)
