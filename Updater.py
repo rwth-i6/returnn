@@ -811,7 +811,7 @@ class Updater:
 
         step = -self.learning_rate_var * gradient_scale * __m / ( T.sqrt(_v) + self.adam_offset )
 
-        upd[param] += step
+        upd[param] += T.switch(T.eq(m_cache,numpy.float32(1)), T.zeros_like(step), step)
 
         updates.append((m_cache, m_cache_new))
         updates.append((m_prev, m))
