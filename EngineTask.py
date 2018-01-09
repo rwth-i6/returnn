@@ -614,6 +614,8 @@ class TrainTaskThread(TaskThread):
         consnet = hypnets[0]
       else:
         # consensus via average
+        mean_updates = numpy.mean([dev.num_updates for dev in self.devices])
+        self.network.update_step += mean_updates
         for i in range(nparams):
           num_updates = { dev.name : dev.num_updates for net,dev in zip(hypnets,self.devices) if numpy.sum(abs(net[i] - basenet[i].get_value())) > numpy.float32(0) }
           tot_updates = sum(num_updates.values())

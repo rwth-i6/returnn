@@ -792,7 +792,6 @@ class Updater:
         m_prev = self.var(param, zero=True, name="nadam_m_%s" % param.name)
         v_prev = self.var(param, zero=True, name="nadam_v_%s" % param.name)
         self.adam_offset = numpy.float32(1e-8)
-        i_t = T.minimum(T.ones_like(i_t) * numpy.float32(self.adam_fit_learning_rate), i_t)
 
         mt =  beta1 * ( 1 - 0.5 * 0.96**( i_t * float(self.nadam_decay) ) ) # momentum schedule, http://www.cs.toronto.edu/~fritz/absps/momentum.pdf
         mtnext = beta1 * ( 1 - 0.5 * 0.96**( (i_t + 1) * float(self.nadam_decay) ) ) # for simplified NAG
@@ -814,31 +813,6 @@ class Updater:
 
         upd[param] += step
 
-        updates.append((m_cache, m_cache_new))
-        updates.append((m_prev, m))
-        updates.append((v_prev, v))
-
-      elif self.ena: # epoch-wise adam with integrated nesterov momentum
-        m_cache = self.var(1, name="momemtum_cache")
-        m_prev = self.var(param, zero=True, name="nadam_m_%s" % param.name)
-        v_prev = self.var(param, zero=True, name="nadam_v_%s" % param.name)
-        beta = numpy.float32(self.momentum or 0.5)
-        e_t = T.cast(self.network.epoch,'float32') * numpy.float32(1.)/self.learning_rate_var #nadam_decay)
-        mt = (beta1 * ( 1 - 0.5 * 0.96**( e_t * numpy.float32(0.004) ) )) # momentum schedule, http://www.cs.toronto.edu/~fritz/absps/momentum.pdf
-        mtnext = beta1 * ( 1 - 0.5 * 0.96**( (e_t + 1) * numpy.float32(0.004) ) ) # for simplified NAG
-        m_cache_new = m_cache * mt
-        bias_corr = m_cache_new * mtnext
-
-        _deltas = deltas / T.cast(1 - m_cache_new, dtype="float32")
-
-        m = beta1 * m_prev + (numpy.float32(1) - beta1) * deltas
-        _m = m / T.cast(1 - bias_corr, dtype="float32") # bias correction (with momentum schedule (include the next t+1))
-        v = beta2 * v_prev + (numpy.float32(1) - beta2) * (deltas**2)
-        _v = v / T.cast(1 - beta2 ** e_t, dtype="float32")
-        __m = T.cast(1 - mt, dtype="float32") * _deltas + T.cast(mtnext, dtype="float32") * _m
-        step = -self.learning_rate_var * gradient_scale * __m / ( T.sqrt(_v) + numpy.float32(1e-8) )
-
-        upd[param] += step
         updates.append((m_cache, m_cache_new))
         updates.append((m_prev, m))
         updates.append((v_prev, v))
