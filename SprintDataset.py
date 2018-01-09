@@ -77,6 +77,7 @@ class SprintDatasetBase(Dataset):
     self.add_data_thread_id = thread.get_ident()  # This will be created in the Sprint thread.
     self.ready_for_data = False
     self.reached_final_seq = False
+    self.reached_final_seq_seen_all = False
     self.multiple_epochs = False
     self._complete_frac = None
     self.sprintEpoch = None  # in SprintInterface.getSegmentList()
@@ -118,6 +119,7 @@ class SprintDatasetBase(Dataset):
     self.requested_load_seq_end = 0
     self.next_seq_to_be_added = 0
     self.reached_final_seq = False
+    self.reached_final_seq_seen_all = False
     self._num_timesteps = 0
     self.added_data = []; " :type: list[DatasetSeq] "
     self.ready_for_data = True
@@ -347,7 +349,7 @@ class SprintDatasetBase(Dataset):
       self.cond.notify_all()
       return seq_idx
 
-  def finishSprintEpoch(self, reached_final_seq=True):
+  def finishSprintEpoch(self, seen_all=True):
     """
     Called by SprintInterface.getSegmentList().
     This is in a state where Sprint asks for the next segment after we just finished an epoch.
@@ -355,7 +357,8 @@ class SprintDatasetBase(Dataset):
     Thus, we finish the current epoch in Sprint.
     """
     with self.lock:
-      self.reached_final_seq = reached_final_seq
+      self.reached_final_seq = True
+      self.reached_final_seq_seen_all = seen_all
       self.ready_for_data = False
       self.cond.notify_all()
 
@@ -471,7 +474,7 @@ class ExternSprintDataset(SprintDatasetBase):
       interrupt = False
       expected_exit_status = 0 if not self.python_exit else None
       if self._join_child(wait=False, expected_exit_status=expected_exit_status) is False:  # Not yet terminated.
-        interrupt = not self.reached_final_seq
+        interrupt = not self.reached_final_seq_seen_all
         if interrupt:
           print("ExternSprintDataset: interrupt child proc %i" % self.child_pid, file=log.v5)
           os.kill(self.child_pid, signal.SIGKILL)
@@ -652,7 +655,7 @@ class ExternSprintDataset(SprintDatasetBase):
 
       if not self.python_exit and self.child_pid:
         with self.lock:
-          self.finishSprintEpoch(reached_final_seq=haveSeenTheWhole)
+          self.finishSprintEpoch(seen_all=haveSeenTheWhole)
           if haveSeenTheWhole:
             self._num_seqs = self.next_seq_to_be_added
       print("ExternSprintDataset finished reading epoch %i, seen all %r" % (epoch, haveSeenTheWhole), file=log.v5)
