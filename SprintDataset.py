@@ -347,7 +347,7 @@ class SprintDatasetBase(Dataset):
       self.cond.notify_all()
       return seq_idx
 
-  def finishSprintEpoch(self):
+  def finishSprintEpoch(self, reached_final_seq=True):
     """
     Called by SprintInterface.getSegmentList().
     This is in a state where Sprint asks for the next segment after we just finished an epoch.
@@ -355,7 +355,7 @@ class SprintDatasetBase(Dataset):
     Thus, we finish the current epoch in Sprint.
     """
     with self.lock:
-      self.reached_final_seq = True
+      self.reached_final_seq = reached_final_seq
       self.ready_for_data = False
       self.cond.notify_all()
 
@@ -652,10 +652,10 @@ class ExternSprintDataset(SprintDatasetBase):
 
       if not self.python_exit and self.child_pid:
         with self.lock:
-          self.finishSprintEpoch()
+          self.finishSprintEpoch(reached_final_seq=haveSeenTheWhole)
           if haveSeenTheWhole:
             self._num_seqs = self.next_seq_to_be_added
-      print("ExternSprintDataset finished reading epoch %i" % epoch, file=log.v5)
+      print("ExternSprintDataset finished reading epoch %i, seen all %r" % (epoch, haveSeenTheWhole), file=log.v5)
 
     except Exception:
       if not self.python_exit:
@@ -687,7 +687,7 @@ class ExternSprintDataset(SprintDatasetBase):
           self._estimated_num_seqs = self._num_seqs  # last epoch num_seqs is a good estimate
           self._num_seqs = None  # but we are not certain whether we have the same num_seqs for this epoch
       super(ExternSprintDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
-    self._exit_child()
+    self._exit_child(wait_thread=True)
     self._start_child(epoch)
 
   def init_seq_order(self, epoch=None, seq_list=None):
