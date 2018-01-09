@@ -630,7 +630,6 @@ class Engine:
     def _backprob(params):
       ret = {}
 
-
     def _result(hash):
       if not workers[hash].isAlive():
         return { 'result' : { k : workers[hash].result[k].tolist() for k in workers[hash].result } }

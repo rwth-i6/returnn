@@ -87,6 +87,10 @@ class InvOp(theano.Op):
                   {
                     cls.viterbi(CSArrayF(xWr, 1, i), CSArrayI(yWr, 1, i), len_xWr(i), len_yWr(i), %(nstates)s, 
                                 %(min_skip)s, %(max_skip)s, %(focus)s, %(nil)s, %(coverage)s, attentionSWr);
+                  } else
+                  {
+                    cls.full(CSArrayF(xWr, 1, i), CSArrayI(yWr, 1, i), len_xWr(i), len_yWr(i), %(nstates)s,
+                                %(min_skip)s, %(max_skip)s, %(focus)s, attentionSWr);
                   }
               }
             }

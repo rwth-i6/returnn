@@ -484,7 +484,7 @@ def pretrainFromConfig(config):
         opts.setdefault("repetitions", config.typed_value("pretrain_repetitions"))
       else:
         opts.setdefault("repetitions", config.int_list("pretrain_repetitions", None))
-    if config.has("construction_algo"):
+    if config.has("pretrain_construction_algo"):
       opts.setdefault("construction_algo", config.value("pretrain_construction_algo", None))
     return Pretrain(original_network_json=original_network_json, network_init_args=network_init_args, **opts)
   elif not pretrainType:

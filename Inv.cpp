@@ -448,83 +448,52 @@ public:
             //bwd_(N * S - 1, T - 1 - m + M + 1) = score_(N*S-1, T - 1 - m + M + 1);
         }
 
-    	for(int s=1; s < N * S; ++s)
+      	for(int s=1; s < N * S; ++s)
         {
             int start = T - (N * S - s) * M;
             if(start < 0)
                 start = 0;
-            start = 0;
-            for(int t=start; t < T; ++t)
+            //start = 0;
+            for(int t=start; t < T - (N * S - s - 1); ++t)
             {
-                //float score = exp(-score_(s, t + M - 1));
                 float sum = 0.0;
                 for(int m=t; m < t + M; ++m)
-                    sum += exp(-fwd_(s - 1, m));
-                //cout << "sum:" << sum << endl;
-                if(sum > 0 && score_(s, t + M - 1) != INF)
-                    fwd_(s, t + M - 1) = -log(sum) + score_(s, t + M - 1);
+                    sum += exp(-(score_(s, t + M - 1) + fwd_(s - 1, m)));
+                fwd_(s, t + M - 1) = -log(sum)
             }
         }
 
         //bwd_(N * S - 1, T - 1) = 0.0; //score_(N * S - 1, T - 1);
-        bwd_(N * S - 1, T - 1) = score_(N * S - 1, T - 1);
+        int offset = M - 1;
+        bwd_(N * S - 1, T - 1) = score_(N * S - 1,offset + T - 1);
 
-        for(int s=N*S-2;s>=0; --s)
+        for(int s=N*S-2; s>=0; --s)
         {
-            int start = T - (N * S - s) * M;
-            if(start < 0)
-                start = 0;
             start = 0;
             //start = M - 1;
             for(int t=start; t < T; ++t)
             {
                 float sum = 0.0;
                 for(int m=t; m < t + M; ++m)
-                    if(bwd_(s + 1, m) != INF && score_(s, t) != INF)
-                        sum += exp(-bwd_(s + 1, m) - score_(s, m));
-                /*
-                for(int m=t; m > t - M; ++m)
-                    if(m >= 0 && bwd_(s + 1, m) != INF && score_(s, t) != INF)
-                        sum += exp(-bwd_(s + 1, m) - score_(s+1, m));
-                */
-                if(sum > 0.0)
-                    bwd_(s, t) = -log(sum);
+                  sum += exp(-(score_(s, t + offset)))
+                bwd_(s, t + offset) = -log(sum)
             }
         }
 
-        for(int s=0;s < N * S;++s)
+        for(int s=0; s < N * S; ++s)
         {
-            float sum = 0.0;
-            for(int t=0; t < T; ++t)
-            {
-                //bwd_(s, t) = 0;
-                if(fwd_(s, t + M - 1) == INF || bwd_(s,t) == INF)
-                    attention(s, t) = 0;
-                else
-                    attention(s, t) = exp(-(fwd_(s, t + M - 1) + bwd_(s, t)));
-                //attention(s, t) = exp(-(fwd_(s, t + M - 1) + bwd_(s, t)));
-                //cout << s << " " << t << " fw " << fwd_(s, t) << " bw " << bwd_(s, t) << endl;
-                //attention(s, t) = exp(-(fwd_(s, t + M - 1) + bwd_(s, t)));
-                //attention(s, t) = exp(-(fwd_(s, t + M - 1) + bwd_(s, t)));
-                /*
-                if(s < N*S-1)
-                {
-                    for(int m=t;m<t+M;++m)
-                    {
-                        attention(s, t) += bwd_(s+1,m);
-                    }
-                }*/
-                //sum += exp(-(fwd_(s, t + M - 1) + bwd_(s, t)));
-                sum += attention(s, t);
-            }
-            for(int t=0; t < T; ++t)
-                attention(s, t) /= sum;
+          for(int t=0; t < T; ++t)
+            fwd_(s, t) += bwd_(s, t + offset)
         }
 
-        /*for(int s=0;s < N * S;++s)
-            for(int t=0;t<T;++t)
-                cout << labellings(s/S) << " " << t << " " << attention(s, t) << endl;
-        */
+        for(int t=0; t < T; ++t)
+        {
+          float sum = 0.0;
+          for(int s=0; s < N * S; ++s)
+            sum += exp(-fwd_(s,t));
+          for(int s=0; s < N * S; ++s)
+            attention(s,t) = exp(-fwd(s,t)) + sum;
+        }
     }
 
 public:
