@@ -459,7 +459,7 @@ public:
                 float sum = 0.0;
                 for(int m=t; m < t + M; ++m)
                     sum += exp(-(score_(s, t + M - 1) + fwd_(s - 1, m)));
-                fwd_(s, t + M - 1) = -log(sum)
+                fwd_(s, t + M - 1) = -log(sum);
             }
         }
 
@@ -469,21 +469,21 @@ public:
 
         for(int s=N*S-2; s>=0; --s)
         {
-            start = 0;
+            int start = 0;
             //start = M - 1;
             for(int t=start; t < T; ++t)
             {
                 float sum = 0.0;
                 for(int m=t; m < t + M; ++m)
-                  sum += exp(-(score_(s, t + offset)))
-                bwd_(s, t + offset) = -log(sum)
+                  sum += exp(-(score_(s, t + offset)));
+                bwd_(s, t + offset) = -log(sum);
             }
         }
 
         for(int s=0; s < N * S; ++s)
         {
           for(int t=0; t < T; ++t)
-            fwd_(s, t) += bwd_(s, t + offset)
+            fwd_(s, t) += bwd_(s, t + offset);
         }
 
         for(int t=0; t < T; ++t)
@@ -492,7 +492,7 @@ public:
           for(int s=0; s < N * S; ++s)
             sum += exp(-fwd_(s,t));
           for(int s=0; s < N * S; ++s)
-            attention(s,t) = exp(-fwd(s,t)) + sum;
+            attention(s,t) = exp(-fwd_(s,t)) + sum;
         }
     }
 
