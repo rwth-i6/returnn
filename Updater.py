@@ -792,12 +792,10 @@ class Updater:
         m_prev = self.var(param, zero=True, name="nadam_m_%s" % param.name)
         v_prev = self.var(param, zero=True, name="nadam_v_%s" % param.name)
         self.adam_offset = numpy.float32(1e-8)
+        i_t = T.minimum(T.ones_like(i_t) * numpy.float32(self.adam_fit_learning_rate), i_t)
 
-        apply_scaling = T.le(self.network.epoch, T.constant(self.adam_fit_learning_rate))
-
-
-        mt = T.switch(apply_scaling, beta1 * ( 1 - 0.5 * 0.96**( i_t * float(self.nadam_decay) ) ), beta1) # momentum schedule, http://www.cs.toronto.edu/~fritz/absps/momentum.pdf
-        mtnext = T.switch(apply_scaling, beta1 * ( 1 - 0.5 * 0.96**( (i_t + 1) * float(self.nadam_decay) ) ), beta1) # for simplified NAG
+        mt =  beta1 * ( 1 - 0.5 * 0.96**( i_t * float(self.nadam_decay) ) ) # momentum schedule, http://www.cs.toronto.edu/~fritz/absps/momentum.pdf
+        mtnext = beta1 * ( 1 - 0.5 * 0.96**( (i_t + 1) * float(self.nadam_decay) ) ) # for simplified NAG
 
         m_cache_new = m_cache * mt
         bias_corr = m_cache_new * mtnext
@@ -808,7 +806,7 @@ class Updater:
         _m = m / T.cast(1 - bias_corr, dtype="float32") # bias correction (with momentum schedule (include the next t+1))
 
         v = beta2 * v_prev + (numpy.float32(1) - beta2) * (deltas**2)
-        _v = T.switch(apply_scaling, v / T.cast(1 - beta2 ** i_t, dtype="float32"), v)
+        _v = v / T.cast(1 - beta2 ** i_t, dtype="float32")
 
         __m = T.cast(1 - mt, dtype="float32") * _deltas + T.cast(mtnext, dtype="float32") * _m
 
