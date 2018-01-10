@@ -53,8 +53,14 @@ class Engine:
 
   @classmethod
   def config_get_final_epoch(cls, config):
-    """ :type config: Config.Config """
-    return config.int('num_epochs', 5)
+    """
+    :param Config.Config config:
+    :rtype: int
+    """
+    num_epochs = config.int('num_epochs', 5)
+    if config.has("load_epoch"):
+      num_epochs = max(num_epochs, config.int("load_epoch", 0))
+    return num_epochs
 
   @classmethod
   def get_existing_models(cls, config):
