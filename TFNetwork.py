@@ -704,7 +704,8 @@ class TFNetwork(object):
     Note that this excludes auxiliary params.
     """
     for layer_name, layer_values_dict in values_dict.items():
-      self.layers[layer_name].set_param_values_by_dict(values_dict=layer_values_dict, session=session)
+      if layer_values_dict:
+        self.layers[layer_name].set_param_values_by_dict(values_dict=layer_values_dict, session=session)
 
   def get_auxiliary_params(self):
     return [self.global_train_step]
