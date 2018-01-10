@@ -3676,13 +3676,20 @@ class CrossEntropyLoss(Loss):
   """
   class_name = "ce"
 
-  def __init__(self, focal_loss_factor=0.0, debug_dump=False, **kwargs):
+  def __init__(self,
+               focal_loss_factor=0.0,
+               label_smoothing=0.0, label_smoothing_gaussian=False,
+               debug_dump=False, **kwargs):
     """
     :param float focal_loss_factor: see https://arxiv.org/abs/1708.02002. 0 means disabled
+    :param float label_smoothing: 0.1 is a common default. see :func:`TFUtil.smoothing_cross_entropy`
+    :param bool label_smoothing_gaussian: see :func:`TFUtil.smoothing_cross_entropy`
     :param bool debug_dump:
     """
     super(CrossEntropyLoss, self).__init__(**kwargs)
     self.focal_loss_factor = focal_loss_factor
+    self.label_smoothing = label_smoothing
+    self.label_smoothing_gaussian = label_smoothing_gaussian
     self.debug_dump = debug_dump
 
   def get_output_target_scores(self):
@@ -3700,7 +3707,7 @@ class CrossEntropyLoss(Loss):
     return out
 
   def get_value(self):
-    from TFUtil import to_int32_64
+    from TFUtil import to_int32_64, smoothing_cross_entropy
     with tf.name_scope("loss_ce"):
       log_clip_values = (1e-32, 1e32)  # only used for non-fused path
       assert self.target.ndim_dense == self.output.ndim_dense
@@ -3710,11 +3717,18 @@ class CrossEntropyLoss(Loss):
           if self.debug_dump:
             target_flat = tf.Print(target_flat, [target_flat], summarize=10000, message='target word IDs ')
             target_flat = tf.Print(target_flat, [tf.shape(target_flat)], message='sequence length ')
-          out = tf.nn.sparse_softmax_cross_entropy_with_logits(
-            logits=self.output_before_softmax_flat, labels=to_int32_64(target_flat))
+          if self.label_smoothing:
+            out = smoothing_cross_entropy(
+              logits=self.output_before_softmax_flat, labels=to_int32_64(target_flat), vocab_size=self.target.dim,
+              label_smoothing=self.label_smoothing, gaussian=self.label_smoothing_gaussian)  # shape(labels)
+          else:
+            # This is really the standard case which we hope to get:
+            out = tf.nn.sparse_softmax_cross_entropy_with_logits(
+              logits=self.output_before_softmax_flat, labels=to_int32_64(target_flat))  # shape(labels)
           if self.debug_dump:
             out = tf.Print(out, [tf.exp(tf.negative(out))], summarize=10000, message='target prob ')
         else:
+          assert not self.label_smoothing, "not implemented"
           print("Warning: using numerical unstable sparse Cross-Entropy loss calculation", file=log.v3)
           out = -tf.log(tf.clip_by_value(self.get_output_target_scores(), *log_clip_values))
         if self.focal_loss_factor:
@@ -3722,6 +3736,8 @@ class CrossEntropyLoss(Loss):
         return self.reduce_func(out)
       else:  # not sparse
         assert not self.focal_loss_factor, "not implemented"
+        assert not self.label_smoothing, "not implemented"
+        assert not self.debug_dump, "not implemented"
         if self.output_before_softmax_flat is not None:
           out = tf.nn.softmax_cross_entropy_with_logits(logits=self.output_before_softmax_flat, labels=self.target_flat)
           return self.reduce_func(out)

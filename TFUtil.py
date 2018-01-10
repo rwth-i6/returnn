@@ -3305,6 +3305,61 @@ def lin_exp_normed(x, axis=-1, eps=1e-20):
     return l1_normalized(lin_exp(x), axis=axis, eps=eps)
 
 
+def smoothing_cross_entropy(logits,
+                            labels,
+                            vocab_size,
+                            label_smoothing,
+                            gaussian=False):
+  """
+  Cross entropy with label smoothing to limit over-confidence.
+  Code adapted from here:
+  https://github.com/tensorflow/tensor2tensor/blob/master/tensor2tensor/layers/common_layers.py
+
+  :param tf.Tensor logits: Tensor of size shape(labels) + [vocab_size]
+  :param tf.Tensor labels: Tensor of size [...]
+  :param int vocab_size: Tensor representing the size of the vocabulary.
+  :param float label_smoothing: confidence = 1.0 - label_smoothing.
+    Used to determine on and off values for label smoothing.
+    If `gaussian` is true, `confidence` is the variance to the gaussian distribution.
+    A common default value is 0.1. See:
+      https://github.com/tensorflow/tensor2tensor/blob/master/tensor2tensor/layers/common_hparams.py
+  :param bool gaussian: Uses a gaussian distribution for label smoothing
+  :return: Tensor of the same shape as `labels` and of the same dtype as `logits`.
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope("smoothing_cross_entropy", [logits, labels]):
+    confidence = 1.0 - label_smoothing
+    # Low confidence is given to all non-true labels, uniformly.
+    low_confidence = (1.0 - confidence) / tf.to_float(vocab_size - 1)
+    # Normalizing constant is the best cross-entropy value with soft targets.
+    # We subtract it just for readability, makes no difference on learning.
+    normalizing = -(
+      confidence * tf.log(confidence) + tf.to_float(vocab_size - 1) *
+      low_confidence * tf.log(low_confidence + 1e-20))  # scalar
+
+    if gaussian:
+      labels = tf.cast(labels, tf.float32)
+      normal_dist = tf.distributions.Normal(loc=labels, scale=confidence)
+      # Locations to evaluate the probability distributions.
+      soft_targets = normal_dist.prob(
+        expand_multiple_dims(
+          tf.cast(tf.range(vocab_size), tf.float32),
+          axes=[i + 1 for i in range(len(labels.get_shape().ndims))]))  # [vocab_size] + shape(labels)
+      soft_targets = move_axis(
+        soft_targets, old_axis=0, new_axis=labels.get_shape().ndims)  # shape(labels) + [vocab_size]
+    else:
+      # TODO: We could implement an own native op which does not need to create this one-hot vector
+      # which consumes lots of memory.
+      soft_targets = tf.one_hot(
+        tf.cast(labels, tf.int32),
+        depth=vocab_size,
+        on_value=confidence,
+        off_value=low_confidence)  # shape(labels) + [vocab_size
+    xentropy = tf.nn.softmax_cross_entropy_with_logits(
+      logits=logits, labels=soft_targets)  # shape(labels)
+    return xentropy - normalizing  # shape(labels)
+
+
 class Lock(object):
   """
   A pure TensorFlow implementation of a mutex / lock.
