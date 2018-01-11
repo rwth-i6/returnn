@@ -22,7 +22,6 @@ import Debug
 import re
 
 
-
 def have_gpu():
   cpus, gpus = get_num_devices()
   return gpus > 0

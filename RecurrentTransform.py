@@ -262,7 +262,7 @@ class AttentionBase(RecurrentTransformBase):
 
   @property
   def attrs(self):
-    return { "_".join(k.split("_")[1:]) : self.layer.attrs[k] for k in self.layer.attrs.keys() if k.startswith("attention_") }
+    return { "_".join(k.split("_")[1:]) : self.layer.attrs[k].decode('utf-8') if isinstance(self.layer.attrs[k],bytes) else self.layer.attrs[k] for k in self.layer.attrs.keys() if k.startswith("attention_") }
 
   def create_vars(self):
     if self.base is None:
