@@ -2676,31 +2676,43 @@ class GenericAttentionLayer(AttentionBaseLayer):
   """
   layer_class = "generic_attention"
 
-  def __init__(self, weights, **kwargs):
+  def __init__(self, weights, auto_squeeze=True, **kwargs):
     """
-    :param LayerBase base: encoder output to attend on. (B, enc-time)|(enc-time, B) + (n_out,)
+    :param LayerBase base: encoder output to attend on. (B, enc-time)|(enc-time, B) + (...) + (n_out,)
     :param LayerBase weights: attention weights. ((B, enc-time)|(enc-time, B)) + (1,)|()
+    :param bool auto_squeeze: auto-squeeze any weight-axes with dim=1 away
     """
     super(GenericAttentionLayer, self).__init__(**kwargs)
     assert not self.sources, "only base and weights are needed"
     self.weights = weights
     weights_data = self.weights.output.copy_as_batch_major()
-    assert (weights_data.batch_dim_axis, weights_data.time_dim_axis) == (0, 1)
-    assert weights_data.batch_ndim in {2, 3}
-    # We will always have batch-major mode and just write T, i.e. (B,T,...).
-    weights_t = weights_data.placeholder  # (B,T,1)|(B,T)
+    self.base_weights = weights_data.copy_with_time_dim_axis(1)  # (B,T,...)
+    # We will always have batch-major mode and just write T for enc-time, i.e. (B,T,...).
+    weights_t = weights_data.placeholder  # (B,...,T,...)
+    new_axes = list(range(weights_data.batch_ndim))
+    new_axes.remove(weights_data.time_dim_axis)
+    new_axes.append(weights_data.time_dim_axis)
+    weights_t = tf.transpose(weights_t, perm=new_axes)  # (B,...,T)
+    shape = tf.shape(weights_t)
+    shape = [weights_data.batch_shape[new_axes[i]] or shape[i] for i in range(len(new_axes))]
+    batch_dim, time_dim = shape[0], shape[-1]
     if weights_data.batch_ndim < self.base.output.batch_ndim:  # weights_t of shape (B,T)
-      weights_t_bc = tf.expand_dims(weights_t, axis=1)  # (B,1,T)
+      from TFUtil import expand_multiple_dims
+      weights_t = expand_multiple_dims(
+        weights_t, [-2] * (self.base.output.batch_ndim - weights_data.batch_ndim))  # (B,...,1,T)
+      rem_dims_start_axis = weights_data.batch_ndim - 2
+      rem_dims = []
     else:
-      assert weights_data.batch_ndim == self.base.output.batch_ndim
-      assert weights_data.dim == 1
-      weights_t_bc = tf.transpose(weights_t, perm=(0, 2, 1))  # (B,1,T)
-      weights_t = tf.squeeze(weights_t, axis=2)  # (B,T)
-    self.base_weights = weights_t  # (B,T)
-    base = self.base.output.get_placeholder_as_batch_major()  # (B,T,n_out)
-    out = tf.matmul(weights_t_bc, base)  # (B,1,n_out)
-    out.set_shape(tf.TensorShape([None, 1, self.output.dim]))
-    out = tf.squeeze(out, axis=1)  # (batch, n_out)
+      rem_dims_start_axis = self.base.output.batch_ndim - 2
+      rem_dims = shape[rem_dims_start_axis:-1]
+      weights_t = tf.reshape(
+        weights_t, shape[:rem_dims_start_axis] + [tf.reduce_prod(rem_dims) if rem_dims else 1, time_dim])  # (B,?,T)
+    if auto_squeeze:
+      rem_dims = [d for d in rem_dims if d != 1]
+    base = self.base.output.copy_as_batch_major().copy_with_time_dim_axis(-2)  # (B,...,T,n_out)
+    base_t = base.placeholder
+    out = tf.matmul(weights_t, base_t)  # (B,?,n_out)
+    out = tf.reshape(out, shape[:rem_dims_start_axis] + rem_dims + [self.output.dim])  # (batch, ..., n_out)
     self.output.placeholder = out
     self.output.size_placeholder = {}
 
@@ -2712,6 +2724,28 @@ class GenericAttentionLayer(AttentionBaseLayer):
     d.setdefault("from", [])
     super(GenericAttentionLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
     d["weights"] = get_layer(d["weights"])
+
+  @classmethod
+  def get_out_data_from_opts(cls, base, weights, auto_squeeze=True, **kwargs):
+    """
+    :param LayerBase base:
+    :param LayerBase weights:
+    :param bool auto_squeeze:
+    :rtype: Data
+    """
+    out = super(GenericAttentionLayer, cls).get_out_data_from_opts(base=base, **kwargs)
+    base_rem_axes = base.output.get_axes(exclude_batch=True, exclude_time=True)
+    base_rem_axes.remove(base.output.feature_dim_axis)
+    weights_rem_axes = weights.output.get_axes(exclude_batch=True, exclude_time=True)
+    # All the first axes in weights should match with base_rem_axes, just like the batch-dim.
+    weights_rem_axes = weights_rem_axes[len(base_rem_axes):]
+    if auto_squeeze:
+      weights_rem_axes = [a for a in weights_rem_axes if weights.output.batch_shape[a] != 1]
+    out.shape = (
+      out.shape[:min(len(base_rem_axes), len(out.shape) - 1)] +
+      tuple([weights.output.batch_shape[a] for a in weights_rem_axes]) + out.shape[-1:])
+
+    return out
 
 
 class DotAttentionLayer(GlobalAttentionContextBaseLayer):

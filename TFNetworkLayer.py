@@ -1457,7 +1457,7 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
     from TFUtil import move_axis, sequence_mask, sequence_mask_time_major
     import numpy
     super(SoftmaxOverSpatialLayer, self).__init__(**kwargs)
-    energy_data = self.input_data  # e.g. (B,T,dim)
+    energy_data = self.input_data.copy_as_bt_or_tb_major()  # e.g. (B,T,dim)
     assert energy_data.dtype.startswith("float")
     energy = energy_data.placeholder
     energy_shape = tf.shape(energy, name="energy_shape")
@@ -1477,7 +1477,7 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources, **kwargs):
-    return get_concat_sources_data_template(sources, name="%s_output" % name)
+    return get_concat_sources_data_template(sources, name="%s_output" % name).copy_as_bt_or_tb_major()
 
 
 class BatchSoftmaxLayer(_ConcatInputLayer):

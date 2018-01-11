@@ -228,6 +228,9 @@ class Data(object):
     :rtype: Data
     """
     assert self.batch_dim_axis is not None
+    if batch_dim_axis < 0:
+      batch_dim_axis += self.batch_ndim
+      assert batch_dim_axis >= 0
     data = self.copy()
     if data.batch_dim_axis != batch_dim_axis:
       if data.placeholder is not None:
@@ -238,6 +241,50 @@ class Data(object):
       for k, a in other_special_axes.items():
         setattr(data, k, data.get_batch_axis(a))
     return data
+
+  def copy_with_time_dim_axis(self, time_dim_axis):
+    """
+    :param int time_dim_axis:
+    :return: copy of myself with specific time_dim_axis
+    :rtype: Data
+    """
+    assert self.batch_dim_axis is not None
+    if time_dim_axis < 0:
+      time_dim_axis += self.batch_ndim
+      assert time_dim_axis >= 0
+    data = self.copy()
+    if data.time_dim_axis != time_dim_axis:
+      data.time_dim_axis = time_dim_axis
+      assert time_dim_axis <= data.batch_ndim_dense - 2
+      new_axes = list(range(data.batch_ndim))
+      new_axes[self.time_dim_axis], new_axes[data.time_dim_axis] = \
+        new_axes[data.time_dim_axis], new_axes[self.time_dim_axis]  # swap
+      if data.placeholder is not None:
+        with tf.name_scope("%s_with_time_axis_%i" % (data.name, time_dim_axis)):
+          data.placeholder = tf.transpose(data.placeholder, new_axes)
+      batch_shape = [data.batch_shape[i] for i in new_axes]
+      data.batch_dim_axis = new_axes[self.batch_dim_axis]
+      data.shape = tuple([d for (i, d) in enumerate(batch_shape) if i != data.batch_dim_axis])
+      if data.size_placeholder is not None:
+        data.size_placeholder = {}
+        for axis_wo_b, size in sorted(self.size_placeholder.items()):
+          axis_wb = self.get_batch_axis(axis_wo_b)
+          axis_wb = new_axes[axis_wb]
+          axis_wo_b = data.get_batch_axis_excluding_batch(axis_wb)
+          assert axis_wo_b is not None
+          data.size_placeholder[axis_wo_b] = size
+    return data
+
+  def copy_as_bt_or_tb_major(self):
+    """
+    :rtype: Data
+    :return: copy of myself in batch-time-major or time-batch-major
+    """
+    if self.batch_dim_axis == 0:
+      return self.copy_with_time_dim_axis(1)
+    if self.time_dim_axis == 0:
+      return self.copy_with_batch_dim_axis(1)
+    raise ValueError("cannot convert %r to BT|TB major" % self)
 
   def copy_add_batch_dim(self, batch_dim_axis):
     """
@@ -464,6 +511,16 @@ class Data(object):
     return self.ndim
 
   @property
+  def batch_ndim_dense(self):
+    """
+    :rtype: int
+    :return: ndim counted with batch-dim, added by 1 if we are sparse
+    """
+    if self.sparse:
+      return self.batch_ndim + 1
+    return self.batch_ndim
+
+  @property
   def is_time_major(self):
     """
     :return: whether this is in time-major format, i.e. (time,batch,...)
@@ -614,11 +671,14 @@ class Data(object):
       elif axes in ["t", "time"]:
         assert self.time_dim_axis is not None
         axes = self.time_dim_axis
-      elif axes == "except_time":
+      elif axes == "except_time":  # also except batch
         axes = list(range(self.batch_ndim))
         axes.remove(self.batch_dim_axis)
         assert self.time_dim_axis is not None
         axes.remove(self.time_dim_axis)
+      elif axes == "except_batch":
+        axes = list(range(self.batch_ndim))
+        axes.remove(self.batch_dim_axis)
       elif axes in ["f", "feature", "non_spatial"]:
         axes = self.get_feature_batch_axes()
       elif all([a in "btf" for a in axes]):
