@@ -2658,6 +2658,170 @@ class PrefixInTimeLayer(CopyLayer):
     self.output.size_placeholder[self.output.time_dim_axis_excluding_batch] += repeat
 
 
+class DotLayer(LayerBase):
+  """
+  This performs a dot-product of two sources.
+  The underlying matmul expects shapes (shared..., I, J) * (shared..., J, K) -> (shared..., I, K).
+  We say that J is the axis to be reduced,
+  I is the var-dim of source 1, and K is the var-dim of source 2.
+  I, J, K can also be multiple axes from the sources.
+  The var-dims don't need to exist.
+  All other axes (shared...) are expected to match.
+  """
+  layer_class = "dot"
+
+  def __init__(self, red1=-1, red2=-2, var1=-2, var2=-1, debug=False, **kwargs):
+    """
+    :param str|int|tuple[str|int] red1: reduce axes of first source
+    :param str|int|tuple[str|int] red2: reduce axes of second source
+    :param str|int|tuple[str|int]|None var1: var axes of first source
+    :param str|int|tuple[str|int]|None var2: var axes of second source
+    :param bool debug: will print debug shapes, etc.
+    """
+    from TFUtil import prod
+    super(DotLayer, self).__init__(**kwargs)
+    a_out = self.sources[0].output.copy_as_batch_major()
+    b_out = self.sources[1].output.copy_as_batch_major()
+    a_reduce_axes = a_out.get_axes_from_description(red1)
+    b_reduce_axes = b_out.get_axes_from_description(red2)
+    assert a_reduce_axes and b_reduce_axes
+    a_var_axes = a_out.get_axes_from_description(var1)
+    b_var_axes = b_out.get_axes_from_description(var2)
+    assert not set(a_reduce_axes).intersection(a_var_axes)
+    assert not set(b_reduce_axes).intersection(b_var_axes)
+    a_rem_axes = [i for i in range(a_out.batch_ndim) if i not in a_var_axes + a_reduce_axes]
+    b_rem_axes = [i for i in range(b_out.batch_ndim) if i not in b_var_axes + b_reduce_axes]
+    transpose_a = a_var_axes and a_reduce_axes[0] < a_var_axes[0]
+    transpose_b = b_var_axes and b_reduce_axes[0] > b_var_axes[0]
+    # For A, if not transpose_a, we must reorder the axes as: a_rem_axes + a_var_axes + a_reduce_axes.
+    # For A, if transpose_a, we must reorder the axes as: a_rem_axes + a_reduce_axes + a_var_axes.
+    # For B, if not transpose_b, we must reorder the axes as: b_rem_axes + b_reduce_axes + b_var_axes.
+    # For B, if transpose_b, we must reorder the axes as: b_rem_axes + b_var_axes + b_reduce_axes.
+    # For matmul, all the first dims must match (batch dim etc), and for the remaining 2 dims,
+    # we get (I, J) * (J, K) -> (I, K).
+    # So we reshape such that we collapse all reduce-axes and var-axes into each a single axis.
+    a = a_out.placeholder
+    b = b_out.placeholder
+    a_shape = tf.shape(a)
+    b_shape = tf.shape(b)
+    a_shape = [a_out.batch_shape[i] or a_shape[i] for i in range(a_out.batch_ndim)]
+    b_shape = [b_out.batch_shape[i] or b_shape[i] for i in range(b_out.batch_ndim)]
+    a_rem_dims = [a_shape[i] for i in a_rem_axes]
+    b_rem_dims = [b_shape[i] for i in b_rem_axes]
+    assert len(a_rem_axes) == len(b_rem_axes)
+    assert all([
+      isinstance(d1, tf.Tensor) or isinstance(d2, tf.Tensor) or d1 == d2
+      for (d1, d2) in zip(a_rem_dims, b_rem_dims)])
+    a_var_dims = [a_shape[i] for i in a_var_axes]
+    b_var_dims = [b_shape[i] for i in b_var_axes]
+    a_reduce_dims = [a_shape[i] for i in a_reduce_axes]
+    b_reduce_dims = [b_shape[i] for i in b_reduce_axes]
+    assert len(a_reduce_axes) == len(b_reduce_axes)
+    assert all([
+      isinstance(d1, tf.Tensor) or isinstance(d2, tf.Tensor) or d1 == d2
+      for (d1, d2) in zip(a_reduce_dims, b_reduce_dims)])
+    a_var_dim = prod(a_var_dims)
+    b_var_dim = prod(b_var_dims)
+    a_reduce_dim = prod(a_reduce_dims)
+    b_reduce_dim = prod(b_reduce_dims)
+    if debug:
+      print(self, "a:", a_out, a, "b:", b_out, b, file=log.v3)
+      print(
+        " ", "a_rem_axes:", a_rem_axes, "dims:", a_rem_dims, "a_var_axes:", a_var_axes, "dims:", a_var_dims, a_var_dim,
+        "a_reduce_axes:", a_reduce_axes, "dims:", a_reduce_dims, a_reduce_dim, "transpose_a:", transpose_a, file=log.v3)
+      print(
+        " ", "b_rem_axes:", b_rem_axes, "dims:", b_rem_dims, "b_var_axes:", b_var_axes, "dims:", b_var_dims, b_var_dim,
+        "b_reduce_axes:", b_reduce_axes, "dims:", b_reduce_dims, b_reduce_dim, "transpose_b:", transpose_b, file=log.v3)
+    if not transpose_a:
+      a = tf.transpose(a, a_rem_axes + a_var_axes + a_reduce_axes)
+      a = tf.reshape(a, a_rem_dims + [a_var_dim, a_reduce_dim])
+    else:
+      a = tf.transpose(a, a_rem_axes + a_reduce_axes + a_var_axes)
+      a = tf.reshape(a, a_rem_dims + [a_reduce_dim, a_var_dim])
+    if not transpose_b:
+      b = tf.transpose(b, b_rem_axes + b_reduce_axes + b_var_axes)
+      b = tf.reshape(b, b_rem_dims + [b_reduce_dim, b_var_dim])
+    else:
+      b = tf.transpose(b, b_rem_axes + b_var_axes + b_reduce_axes)
+      b = tf.reshape(b, b_rem_dims + [b_var_dim, b_reduce_dim])
+    # `res` will be of shape: a_rem_dims + [a_var_dim, b_var_dim]
+    res = tf.matmul(a, b, transpose_a=transpose_a, transpose_b=transpose_b)
+    res = tf.reshape(res, a_rem_dims + a_var_dims + (b_var_dims or [1]))
+    self.output.placeholder = res
+    # Collect dynamic size info.
+    self.output.size_placeholder = {}
+    for axis1_wo_b in sorted(a_out.size_placeholder.keys()):
+      axis_out_wb = self._axis1_to_output(axis1_wo_b + 1, a_rem_axes=a_rem_axes, a_var_axes=a_var_axes)
+      if axis_out_wb is None:
+        continue
+      self.output.size_placeholder[axis_out_wb - 1] = a_out.size_placeholder[axis1_wo_b]
+    for axis2_wo_b in sorted(b_out.size_placeholder.keys()):
+      axis_out_wb = self._axis2_to_output(
+        axis2_wo_b + 1, b_rem_axes=b_rem_axes, a_var_axes=a_var_axes, b_var_axes=b_var_axes)
+      if axis_out_wb is None or axis_out_wb in self.output.size_placeholder:
+        continue
+      self.output.size_placeholder[axis_out_wb - 1] = b_out.size_placeholder[axis2_wo_b]
+
+  @staticmethod
+  def _axis1_to_output(axis, a_rem_axes, a_var_axes):
+    # Output will be of shape a_rem_dims + [a_var_dim, b_var_dim].
+    out_axes = a_rem_axes + a_var_axes  # remaining axes do not matter
+    if axis not in out_axes:
+      return None
+    return out_axes.index(axis)
+
+  @staticmethod
+  def _axis2_to_output(axis, b_rem_axes, a_var_axes, b_var_axes):
+    # Output will be of shape a_rem_dims + [a_var_dim, b_var_dim].
+    out_axes = b_rem_axes + [None for i in a_var_axes] + (b_var_axes or [None])
+    if axis not in out_axes:
+      return None
+    return out_axes.index(axis)
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, red1=-1, red2=-2, var1=-2, var2=-1, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :param str|int|tuple[str|int] red1: reduce axes of first source
+    :param str|int|tuple[str|int] red2: reduce axes of second source
+    :param str|int|tuple[str|int]|None var1: var axes of first source
+    :param str|int|tuple[str|int]|None var2: var axes of second source
+    :rtype: Data
+    """
+    import numpy
+    assert len(sources) == 2, "dot-layer %r: needs exactly two sources" % (name,)
+    # See __init__.
+    a_out = sources[0].output.copy_as_batch_major()
+    b_out = sources[1].output.copy_as_batch_major()
+    a_reduce_axes = a_out.get_axes_from_description(red1)
+    b_reduce_axes = b_out.get_axes_from_description(red2)
+    assert a_reduce_axes and b_reduce_axes
+    a_var_axes = a_out.get_axes_from_description(var1)
+    b_var_axes = b_out.get_axes_from_description(var2)
+    assert not set(a_reduce_axes).intersection(a_var_axes)
+    assert not set(b_reduce_axes).intersection(b_var_axes)
+    a_rem_axes = [i for i in range(a_out.batch_ndim) if i not in a_var_axes + a_reduce_axes]
+    b_rem_axes = [i for i in range(b_out.batch_ndim) if i not in b_var_axes + b_reduce_axes]
+    a_shape = a_out.batch_shape
+    b_shape = b_out.batch_shape
+    a_rem_dims = [a_shape[i] for i in a_rem_axes]
+    a_var_dims = [a_shape[i] for i in a_var_axes]
+    b_var_dims = [b_shape[i] for i in b_var_axes]
+    time_dim_axis = None
+    if a_out.time_dim_axis is not None:
+      time_dim_axis = cls._axis1_to_output(a_out.time_dim_axis, a_rem_axes=a_rem_axes, a_var_axes=a_var_axes)
+    if time_dim_axis is None and b_out.time_dim_axis is not None:
+      time_dim_axis = cls._axis2_to_output(
+        b_out.time_dim_axis, b_rem_axes=b_rem_axes, a_var_axes=a_var_axes, b_var_axes=b_var_axes)
+    return Data(
+      name="%s_output" % name,
+      shape=tuple(a_rem_dims[1:] + a_var_dims + (b_var_dims or [1])),
+      batch_dim_axis=0,
+      time_dim_axis=time_dim_axis,
+      dtype=a_out.dtype)
+
+
 class ShiftAxisLayer(_ConcatInputLayer):
   """
   Shifts a axis around.

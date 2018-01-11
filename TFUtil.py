@@ -585,13 +585,15 @@ class Data(object):
 
   def get_axes_from_description(self, axes):
     """
-    :param int|list[int]|str|list[str] axes: one axis or multiple axis.
+    :param int|list[int]|str|list[str]|None axes: one axis or multiple axis, or none.
       This is counted with batch-dim, which by default is axis 0 (see enforce_batch_dim_axis).
       It also accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature",
       and more (see the code).
     :return: list of axes, counted with batch-dim
     :rtype: list[int]
     """
+    if axes is None or axes == "":
+      return []
     if isinstance(axes, str):
       import re
       axes = axes.lower()
@@ -3358,6 +3360,20 @@ def smoothing_cross_entropy(logits,
     xentropy = tf.nn.softmax_cross_entropy_with_logits(
       logits=logits, labels=soft_targets)  # shape(labels)
     return xentropy - normalizing  # shape(labels)
+
+
+def prod(ls):
+  """
+  :param list[T]|tuple[T]|numpy.ndarray|tf.Tensor ls:
+  :rtype: T|int|float|tf.Tensor
+  """
+  if isinstance(ls, tf.Tensor):
+    return tf.reduce_prod(ls, axis=0)
+  from Util import prod as pure_prod
+  if all([not isinstance(x, tf.Tensor) for x in ls]):
+    return pure_prod(ls)  # not a tf.Tensor
+  with tf.name_scope("prod"):
+    return pure_prod(ls)  # tf.Tensor
 
 
 class Lock(object):
