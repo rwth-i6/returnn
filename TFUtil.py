@@ -332,7 +332,11 @@ class Data(object):
     assert self.sparse == data.sparse
     assert self.dtype == data.dtype
     v = self.copy()
-    # First add spatial dims, in case we miss any.
+    # Add feature dim, if needed.
+    if data.feature_dim_axis is not None and v.feature_dim_axis is None:
+      v.dim = 1
+      v.shape = v.shape + (1,)
+    # Add spatial dims, in case we miss any.
     for axis in data.get_spatial_batch_axes():
       if len(data.get_spatial_batch_axes()) > len(v.get_spatial_batch_axes()):
         axis_wo_batch = data.get_batch_axis_excluding_batch(axis)
@@ -619,6 +623,8 @@ class Data(object):
   @property
   def feature_dim_axis(self):
     if self.sparse:
+      return None
+    if not self.shape:
       return None
     return self.batch_ndim - 1
 
