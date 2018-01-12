@@ -2691,8 +2691,8 @@ class DotLayer(LayerBase):
     assert not set(b_reduce_axes).intersection(b_var_axes)
     a_rem_axes = [i for i in range(a_out.batch_ndim) if i not in a_var_axes + a_reduce_axes]
     b_rem_axes = [i for i in range(b_out.batch_ndim) if i not in b_var_axes + b_reduce_axes]
-    transpose_a = a_var_axes and a_reduce_axes[0] < a_var_axes[0]
-    transpose_b = b_var_axes and b_reduce_axes[0] > b_var_axes[0]
+    transpose_a = bool(a_var_axes and a_reduce_axes[0] < a_var_axes[0])
+    transpose_b = bool(b_var_axes and b_reduce_axes[0] > b_var_axes[0])
     # For A, if not transpose_a, we must reorder the axes as: a_rem_axes + a_var_axes + a_reduce_axes.
     # For A, if transpose_a, we must reorder the axes as: a_rem_axes + a_reduce_axes + a_var_axes.
     # For B, if not transpose_b, we must reorder the axes as: b_rem_axes + b_reduce_axes + b_var_axes.
@@ -2725,13 +2725,21 @@ class DotLayer(LayerBase):
     a_reduce_dim = prod(a_reduce_dims)
     b_reduce_dim = prod(b_reduce_dims)
     if debug:
-      print(self, "a:", a_out, a, "b:", b_out, b, file=log.v3)
+      print("%s, red1=%r, red2=%r, var1=%r, var2=%r:" % (self, red1, red2, var1, var2), file=log.v3)
+      print(" ", "a:", a_out, a, file=log.v3)
       print(
         " ", "a_rem_axes:", a_rem_axes, "dims:", a_rem_dims, "a_var_axes:", a_var_axes, "dims:", a_var_dims, a_var_dim,
         "a_reduce_axes:", a_reduce_axes, "dims:", a_reduce_dims, a_reduce_dim, "transpose_a:", transpose_a, file=log.v3)
+      print(" ", "b:", b_out, b, file=log.v3)
       print(
         " ", "b_rem_axes:", b_rem_axes, "dims:", b_rem_dims, "b_var_axes:", b_var_axes, "dims:", b_var_dims, b_var_dim,
         "b_reduce_axes:", b_reduce_axes, "dims:", b_reduce_dims, b_reduce_dim, "transpose_b:", transpose_b, file=log.v3)
+      with tf.control_dependencies([
+            tf.assert_equal(
+              a_rem_dims, b_rem_dims, data=[a_shape, b_shape, a_rem_dims, b_rem_dims], summarize=100),
+            tf.assert_equal(
+              a_reduce_dim, b_reduce_dim, data=[a_shape, b_shape, a_reduce_dims, b_reduce_dims], summarize=100)]):
+        a = tf.identity(a)
     if not transpose_a:
       a = tf.transpose(a, a_rem_axes + a_var_axes + a_reduce_axes)
       a = tf.reshape(a, a_rem_dims + [a_var_dim, a_reduce_dim])
