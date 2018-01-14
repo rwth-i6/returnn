@@ -225,7 +225,10 @@ class Updater(object):
       return tf.no_op(name="no_grad_vars_no_op")
     # AccumulateN might not be deterministic but should be faster and should require less memory.
     # We might want to make this configurable.
-    aggregation_method = tf.AggregationMethod.EXPERIMENTAL_ACCUMULATE_N
+    if self.config.is_true("deterministic_train"):
+      aggregation_method = tf.AggregationMethod.ADD_N
+    else:
+      aggregation_method = tf.AggregationMethod.EXPERIMENTAL_ACCUMULATE_N
     grad_noise = self.config.float("gradient_noise", 0.0)
     grad_clip = self.config.float("gradient_clip", 0.0)
     grad_clip_norm = self.config.float("gradient_clip_norm", 0.0)
