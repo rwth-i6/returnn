@@ -776,15 +776,17 @@ class LayerBase(object):
       zeroed_sources = []
       for src in sources:
         assert isinstance(src, LayerBase)
-        zeroed_src = InternalLayer(name="%s_zeroed" % src.name, output=src.output.copy(), network=src.network)
-        if src.output.placeholder is not None:
-          zeroed_src_shape = tf.shape(src.output.placeholder)
+        src_output = src.output.copy()
+        if src_output.placeholder is not None:
+          zeroed_src_shape = tf.shape(src_output.placeholder)
+          zeroed_src_shape = [zeroed_src_shape[i] for i in range(src_output.batch_ndim)]
         else:
-          zeroed_src_shape = [(d if (d is not None) else 1) for d in zeroed_src.output.batch_shape]
-          if zeroed_src.output.batch_dim_axis is not None:
-            zeroed_src_shape[zeroed_src.output.batch_dim_axis] = batch_dim
-        zeroed_src.output.placeholder = tf.zeros(
-          zeroed_src_shape, dtype=zeroed_src.output.dtype, name="init_%s_zeros" % src.name)
+          zeroed_src_shape = [(d if (d is not None) else 1) for d in src_output.batch_shape]
+        if src_output.batch_dim_axis is not None:
+          zeroed_src_shape[src_output.batch_dim_axis] = batch_dim
+        src_output.placeholder = tf.zeros(
+          zeroed_src_shape, dtype=src_output.dtype, name="init_%s_zeros" % src.name)
+        zeroed_src = InternalLayer(name="%s_zeroed" % src.name, output=src_output, network=src.network)
         zeroed_sources.append(zeroed_src)
       layer = cls(name=name, output=output.copy(), sources=tuple(zeroed_sources), **kwargs)
       out = layer.output.placeholder
