@@ -246,7 +246,7 @@ class Updater(object):
     if accum_grad_multiple_num_steps >= 1:
       grads_and_vars = [
         (accum_grad_multiple_step(
-          grad, train_step=self.network.global_train_step, num_accum_steps=accum_grad_multiple_num_steps),
+          grad, var, train_step=self.network.global_train_step, num_accum_steps=accum_grad_multiple_num_steps),
          var) for (grad, var) in grads_and_vars]
     if self.config.bool("debug_grad_summaries", False):
       from TFUtil import variable_summaries, get_base_name, reuse_name_scope_of_tensor
@@ -475,18 +475,20 @@ def add_check_numerics_ops(
     return tf.group(*check_op)
 
 
-def accum_grad_multiple_step(grad, train_step, num_accum_steps):
+def accum_grad_multiple_step(grad, var, train_step, num_accum_steps):
   """
-  :param tf.Tensor grad:
+  :param tf.Tensor|tf.IndexedSlices grad:
+  :param tf.Variable var:
   :param tf.Tensor train_step: int, scalar
   :param int num_accum_steps:
   :return: modified grad
   :rtype: tf.Tensor
   """
-  from TFUtil import reuse_name_scope_of_tensor
-  with reuse_name_scope_of_tensor(grad, postfix="/accum_grad_multiple_step"):
+  from TFUtil import reuse_name_scope_of_tensor, get_base_name
+  with reuse_name_scope_of_tensor(grad, postfix="/%s_accum_grad" % get_base_name(grad)):
+    shape = var.get_shape().as_list()
     v = tf.get_variable(
-      name="grad_accum", shape=grad.get_shape().as_list(), dtype=grad.dtype,
+      name="var_accum_grad", shape=shape, dtype=grad.dtype,
       initializer=tf.zeros_initializer(), trainable=False)
     return tf.cond(
       tf.less_equal(tf.mod(train_step, num_accum_steps), 0),
