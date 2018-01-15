@@ -1293,6 +1293,7 @@ class BatchNormLayer(CopyLayer):
 class SliceLayer(_ConcatInputLayer):
   """
   Slicing on the input, i.e. x[start:end:step] in some axis.
+  See also :class:`SliceNdLayer`.
   """
   layer_class = "slice"
 
@@ -1346,6 +1347,25 @@ class SliceLayer(_ConcatInputLayer):
         assert out_type["shape"][axis_wo_batch]
         out_type["dim"] = out_type["shape"][axis_wo_batch]
     return Data(**out_type)
+
+
+class SliceNdLayer(_ConcatInputLayer):
+  """
+  This takes out a slice-range from some axis,
+  e.g. ``x[start:start + size]``.
+  This layers allows a different start slice point for each batch,
+  in contrast to :class:`SliceLayer`, and the start is variable.
+  """
+  layer_class = "slice_nd"
+
+  def __init__(self, start, size, **kwargs):
+    """
+    :param LayerBase start:
+    :param int size:
+    """
+    super(SliceNdLayer, self).__init__(**kwargs)
+    from TFUtil import slice_nd
+    # TODO...
 
 
 class LinearLayer(_ConcatInputLayer):
@@ -1576,6 +1596,9 @@ class WindowLayer(_ConcatInputLayer):
   E.g. if the input is (batch, time, dim), the output is (batch, time, window_size, dim).
   If you want to merge the (window_size, dim) together to (window_size * dim,),
   you can use the MergeDimsLayer, e.g. {"class": "merge_dims", "axes": "except_time"}.
+
+  This is not to take out a window from the time-dimension.
+  See :class:`SliceLayer` or :class:`SliceNdLayer`.
   """
   layer_class = "window"
   recurrent = True  # we must not allow any shuffling in the time-dim or so

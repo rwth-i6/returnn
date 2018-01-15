@@ -2925,6 +2925,9 @@ def optional_add(*args):
 
 def windowed_nd(source, window, padding="same", time_axis=1, new_window_axis=2):
   """
+  Constructs a new "window" axis which is a moving input over the time-axis.
+  If you want to take out a window, i.e. a slice, see :func:`slice_nd`.
+
   :param tf.Tensor source: N-D tensor of shape (..., n_time, ...)
   :param int|tf.Tensor window: window size
   :param str padding: "same" or "valid"
@@ -2977,6 +2980,21 @@ def windowed_nd(source, window, padding="same", time_axis=1, new_window_axis=2):
       else:
         final = move_axis(final, 1, time_axis)
     return final
+
+
+def slice_nd(x, start, size, seq_lens=None):
+  """
+  :param tf.Tensor x: shape (B, T, ...)
+  :param tf.Tensor start: shape (B,), int32
+  :param int size:
+  :param tf.Tensor|None seq_lens: shape (B,), int32, <= T. if None, [T]*B is assumed.
+  :return: [x[start_1:size], x[start_2:size], ..., x[start_B:size]], shape (B, size, ...)
+    Like :func:`slice_pad_zeros`, the size in the first axis will always be ``size``,
+    and we will pad with zeros.
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope("slice_nd"):
+    pass  # TODO...
 
 
 def global_tensor(f, name):
