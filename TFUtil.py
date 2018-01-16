@@ -3351,16 +3351,20 @@ def safe_log(x, eps=1e-20):
     return tf.log(tf.maximum(x, eps))
 
 
-def l1_normalized(x, axis=-1, eps=1e-20):
+def l1_normalized(x, axis=-1, eps=1e-20, use_logsumexp=False):
   """
   :param tf.Tensor x: assumes != 0
   :param int|tf.Tensor axis: in range [-rank(x),rank(x)]
   :param float|tf.Tensor|None eps: for safety, to ensure that tf.reduce_sum(tf.abs(x)) >= eps
+  :param bool use_logsumexp: eps must not be None
   :return: y such that tf.reduce_sum(tf.abs(y)) == 1. i.e. y = x / tf.reduce_sum(tf.abs(x)).
   :rtype: tf.Tensor
   """
   with tf.name_scope("l1_normalized"):
-    weighted_input_sum = tf.reduce_sum(tf.abs(x), axis=axis, keep_dims=True)
+    if use_logsumexp:
+      weighted_input_sum = tf.exp(tf.reduce_logsumexp(tf.log(tf.maximum(tf.abs(x), eps)), axis=axis, keep_dims=True))
+    else:
+      weighted_input_sum = tf.reduce_sum(tf.abs(x), axis=axis, keep_dims=True)
     if eps is not None:
       weighted_input_sum = tf.maximum(weighted_input_sum, eps)
     divisor = tf.reciprocal(weighted_input_sum)
@@ -3374,7 +3378,7 @@ def lin_exp(x):
   :rtype: tf.Tensor
   """
   with tf.name_scope("lin_exp"):
-    return tf.maximum(x + 1, tf.exp(x))
+    return tf.where(tf.greater_equal(x, 0), x + 1, tf.exp(x))
 
 
 def lin_exp_normed(x, axis=-1, eps=1e-20):
