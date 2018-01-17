@@ -804,6 +804,18 @@ def inplace_increment(x, idx, y):
   raise NotImplementedError("need Numpy 1.8 or later")
 
 
+def prod(ls):
+  """
+  :param list[T]|tuple[T]|numpy.ndarray ls:
+  :rtype: T|int|float
+  """
+  if len(ls) == 0:
+    return 1
+  x = ls[0]
+  for y in ls[1:]:
+    x *= y
+  return x
+
 
 def parse_orthography_into_symbols(orthography, upper_case_special=True, word_based=False):
   """

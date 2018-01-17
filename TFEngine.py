@@ -847,6 +847,9 @@ class Engine(object):
       new_network_desc = self.pretrain.get_network_json_for_epoch(self.epoch)
       self.maybe_init_new_network(new_network_desc)
       self.network.declare_train_params(**self.pretrain.get_train_param_args_for_epoch(self.epoch))
+    if self.config.is_true("use_learning_rate_control_always"):
+      self.learning_rate = self.learning_rate_control.getLearningRateForEpoch(self.epoch)
+    elif self.is_pretrain_epoch():
       # Use constant learning rate.
       self.learning_rate = self.pretrain_learning_rate
       self.learning_rate_control.setDefaultLearningRateForEpoch(self.epoch, self.learning_rate)

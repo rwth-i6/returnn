@@ -225,7 +225,11 @@ class Updater(object):
       return tf.no_op(name="no_grad_vars_no_op")
     # AccumulateN might not be deterministic but should be faster and should require less memory.
     # We might want to make this configurable.
-    aggregation_method = tf.AggregationMethod.EXPERIMENTAL_ACCUMULATE_N
+    if self.config.is_true("deterministic_train"):
+      aggregation_method = tf.AggregationMethod.ADD_N
+    else:
+      aggregation_method = tf.AggregationMethod.EXPERIMENTAL_ACCUMULATE_N
+    accum_grad_multiple_num_steps = self.config.int("accum_grad_multiple_step", 0)
     grad_noise = self.config.float("gradient_noise", 0.0)
     grad_clip = self.config.float("gradient_clip", 0.0)
     grad_clip_norm = self.config.float("gradient_clip_norm", 0.0)
@@ -239,6 +243,11 @@ class Updater(object):
       aggregation_method=aggregation_method)
     if not [v for g, v in grads_and_vars if g is not None]:
       raise Exception("no single variable to train")
+    if accum_grad_multiple_num_steps >= 1:
+      grads_and_vars = [
+        (accum_grad_multiple_step(
+          grad, var, train_step=self.network.global_train_step, num_accum_steps=accum_grad_multiple_num_steps),
+         var) for (grad, var) in grads_and_vars]
     if self.config.bool("debug_grad_summaries", False):
       from TFUtil import variable_summaries, get_base_name, reuse_name_scope_of_tensor
       for grad, var in grads_and_vars:
@@ -272,7 +281,16 @@ class Updater(object):
       with tf.name_scope("grad_clip_global_norm"):
         grads_clipped, _ = tf.clip_by_global_norm([grad for (grad, _) in grads_and_vars], grad_clip_global_norm)
         grads_and_vars = zip(grads_clipped, [var for (_, var) in grads_and_vars])
-    apply_grads = self.optimizer.apply_gradients(grads_and_vars)
+    if accum_grad_multiple_num_steps >= 1:
+      apply_grads = tf.cond(
+        tf.equal(
+          tf.mod(self.network.global_train_step, accum_grad_multiple_num_steps),
+          accum_grad_multiple_num_steps - 1),
+        true_fn=lambda: self.optimizer.apply_gradients(grads_and_vars),
+        false_fn=lambda: tf.no_op(),
+        name="apply_grads/accum_grad_multiple_step")
+    else:
+      apply_grads = self.optimizer.apply_gradients(grads_and_vars)
     return apply_grads
 
   def create_optim_op(self):
@@ -455,6 +473,27 @@ def add_check_numerics_ops(
             is_finite = tf.reduce_all(tf.is_finite(output))
             check_op = [tf.Assert(is_finite, [message, "Tensor had inf or nan values:", output])]
     return tf.group(*check_op)
+
+
+def accum_grad_multiple_step(grad, var, train_step, num_accum_steps):
+  """
+  :param tf.Tensor|tf.IndexedSlices grad:
+  :param tf.Variable var:
+  :param tf.Tensor train_step: int, scalar
+  :param int num_accum_steps:
+  :return: modified grad
+  :rtype: tf.Tensor
+  """
+  from TFUtil import reuse_name_scope_of_tensor, get_base_name
+  with reuse_name_scope_of_tensor(grad, postfix="/%s_accum_grad" % get_base_name(grad)):
+    shape = var.get_shape().as_list()
+    v = tf.get_variable(
+      name="var_accum_grad", shape=shape, dtype=grad.dtype,
+      initializer=tf.zeros_initializer(), trainable=False)
+    return tf.cond(
+      tf.less_equal(tf.mod(train_step, num_accum_steps), 0),
+      lambda: tf.assign(v, grad),
+      lambda: tf.assign_add(v, grad))
 
 
 class _BaseCustomOptimizer(Optimizer):

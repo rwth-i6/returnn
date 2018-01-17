@@ -37,7 +37,7 @@ class RecLayer(_ConcatInputLayer):
     :param int|None direction: None|1 -> forward, -1 -> backward
     :param bool input_projection: True -> input is multiplied with matrix. False only works if same input dim
     :param LayerBase|str|float|int|tuple|None initial_state:
-    :param int max_seq_len: if unit is a subnetwork
+    :param int|str|None max_seq_len: if unit is a subnetwork. str will be evaluated. see code
     :param str forward_weights_init: see :func:`TFUtil.get_initializer`
     :param str recurrent_weights_init: see :func:`TFUtil.get_initializer`
     :param str bias_init: see :func:`TFUtil.get_initializer`
@@ -980,8 +980,7 @@ class _SubnetworkRecCell(object):
         have_known_seq_len = True
       else:
         assert "end" in self.layer_data_templates, "length not defined, provide 'end' layer"
-        assert rec_layer._max_seq_len, "must specify max_seq_len in rec layer"
-        max_seq_len = tf.constant(rec_layer._max_seq_len, name="max_seq_len_const")
+        max_seq_len = None
         have_known_seq_len = False
       # if not self.input_data and self.network.search_flag:
       #   assert not have_known_seq_len  # at least for the moment
@@ -1304,12 +1303,45 @@ class _SubnetworkRecCell(object):
           res = (identity_with_debug_log(out=self._debug_out, x=res[0], args=args),) + res[1:]
         return res
 
-    def cond(i, net_vars, acc_ta, seq_len_info=None):
+    def cond(i, net_vars, acc_tas, seq_len_info=None):
+      """
+      :param tf.Tensor i: loop counter, scalar
+      :param net_vars: the accumulator values. see also self.get_init_loop_vars()
+      :param list[tf.TensorArray] acc_tas: the output accumulator TensorArray
+      :param (tf.Tensor,tf.Tensor)|None seq_len_info: tuple (end_flag, seq_len)
+      :return: True -> we should run the current loop-iteration, False -> stop loop
+      :rtype: tf.Tensor
+      """
       with tf.name_scope("loop_cond"):
-        res = tf.less(i, max_seq_len, name="i_less_max_seq_len")
+        from TFUtil import opt_logical_and
+        res = True
+        if max_seq_len is not None:
+          res = opt_logical_and(res, tf.less(i, max_seq_len, name="i_less_max_seq_len"))
+        # Only consider the user 'max_seq_len' option if we don't know the real max_seq_len.
+        # This is the old behavior. Maybe this might change at some point.
+        elif isinstance(rec_layer._max_seq_len, int):
+          res = opt_logical_and(res, tf.less(i, rec_layer._max_seq_len, name="i_less_const_max_seq_len"))
+        elif isinstance(rec_layer._max_seq_len, str):
+          def max_len_from(src):
+            """
+            :param str src: layer name. use "base:" prefix to access the parent network
+            :return: max seq-len of the layer output
+            :rtype: tf.Tensor
+            """
+            layer = self.net.get_layer(src)
+            return tf.reduce_max(layer.output.get_sequence_lengths(), name="max_seq_len_%s" % layer.tf_scope_name)
+          with tf.name_scope("user_max_seq_len"):
+            user_max_seq_len = eval(rec_layer._max_seq_len, {"max_len_from": max_len_from, "tf": tf})
+          res = opt_logical_and(res, tf.less(i, user_max_seq_len, name="i_less_user_max_seq_len"))
+        else:
+          assert rec_layer._max_seq_len is None, "%r: unsupported max_seq_len %r" % (rec_layer, rec_layer._max_seq_len)
+        # Check not considering seq_len_info because the dynamics of the network can also lead
+        # to an infinite loop, so enforce that some maximum is specified.
+        assert res is not True, "%r: specify max_seq_len" % rec_layer
         if seq_len_info is not None:
           end_flag, _ = seq_len_info
-          res = tf.logical_and(res, tf.reduce_any(tf.logical_not(end_flag)), name="loop_cond_res")
+          any_not_ended = tf.reduce_any(tf.logical_not(end_flag), name="any_not_ended")
+          res = opt_logical_and(res, any_not_ended)
         return res
 
     from TFUtil import constant_with_shape
@@ -2676,31 +2708,43 @@ class GenericAttentionLayer(AttentionBaseLayer):
   """
   layer_class = "generic_attention"
 
-  def __init__(self, weights, **kwargs):
+  def __init__(self, weights, auto_squeeze=True, **kwargs):
     """
-    :param LayerBase base: encoder output to attend on. (B, enc-time)|(enc-time, B) + (n_out,)
+    :param LayerBase base: encoder output to attend on. (B, enc-time)|(enc-time, B) + (...) + (n_out,)
     :param LayerBase weights: attention weights. ((B, enc-time)|(enc-time, B)) + (1,)|()
+    :param bool auto_squeeze: auto-squeeze any weight-axes with dim=1 away
     """
     super(GenericAttentionLayer, self).__init__(**kwargs)
     assert not self.sources, "only base and weights are needed"
     self.weights = weights
     weights_data = self.weights.output.copy_as_batch_major()
-    assert (weights_data.batch_dim_axis, weights_data.time_dim_axis) == (0, 1)
-    assert weights_data.batch_ndim in {2, 3}
-    # We will always have batch-major mode and just write T, i.e. (B,T,...).
-    weights_t = weights_data.placeholder  # (B,T,1)|(B,T)
+    self.base_weights = weights_data.copy_with_time_dim_axis(1)  # (B,T,...)
+    # We will always have batch-major mode and just write T for enc-time, i.e. (B,T,...).
+    weights_t = weights_data.placeholder  # (B,...,T,...)
+    new_axes = list(range(weights_data.batch_ndim))
+    new_axes.remove(weights_data.time_dim_axis)
+    new_axes.append(weights_data.time_dim_axis)
+    weights_t = tf.transpose(weights_t, perm=new_axes)  # (B,...,T)
+    shape = tf.shape(weights_t)
+    shape = [weights_data.batch_shape[new_axes[i]] or shape[i] for i in range(len(new_axes))]
+    batch_dim, time_dim = shape[0], shape[-1]
     if weights_data.batch_ndim < self.base.output.batch_ndim:  # weights_t of shape (B,T)
-      weights_t_bc = tf.expand_dims(weights_t, axis=1)  # (B,1,T)
+      from TFUtil import expand_multiple_dims
+      weights_t = expand_multiple_dims(
+        weights_t, [-2] * (self.base.output.batch_ndim - weights_data.batch_ndim))  # (B,...,1,T)
+      rem_dims_start_axis = weights_data.batch_ndim - 2
+      rem_dims = []
     else:
-      assert weights_data.batch_ndim == self.base.output.batch_ndim
-      assert weights_data.dim == 1
-      weights_t_bc = tf.transpose(weights_t, perm=(0, 2, 1))  # (B,1,T)
-      weights_t = tf.squeeze(weights_t, axis=2)  # (B,T)
-    self.base_weights = weights_t  # (B,T)
-    base = self.base.output.get_placeholder_as_batch_major()  # (B,T,n_out)
-    out = tf.matmul(weights_t_bc, base)  # (B,1,n_out)
-    out.set_shape(tf.TensorShape([None, 1, self.output.dim]))
-    out = tf.squeeze(out, axis=1)  # (batch, n_out)
+      rem_dims_start_axis = self.base.output.batch_ndim - 2
+      rem_dims = shape[rem_dims_start_axis:-1]
+      weights_t = tf.reshape(
+        weights_t, shape[:rem_dims_start_axis] + [tf.reduce_prod(rem_dims) if rem_dims else 1, time_dim])  # (B,?,T)
+    if auto_squeeze:
+      rem_dims = [d for d in rem_dims if d != 1]
+    base = self.base.output.copy_as_batch_major().copy_with_time_dim_axis(-2)  # (B,...,T,n_out)
+    base_t = base.placeholder
+    out = tf.matmul(weights_t, base_t)  # (B,?,n_out)
+    out = tf.reshape(out, shape[:rem_dims_start_axis] + rem_dims + [self.output.dim])  # (batch, ..., n_out)
     self.output.placeholder = out
     self.output.size_placeholder = {}
 
@@ -2712,6 +2756,28 @@ class GenericAttentionLayer(AttentionBaseLayer):
     d.setdefault("from", [])
     super(GenericAttentionLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
     d["weights"] = get_layer(d["weights"])
+
+  @classmethod
+  def get_out_data_from_opts(cls, base, weights, auto_squeeze=True, **kwargs):
+    """
+    :param LayerBase base:
+    :param LayerBase weights:
+    :param bool auto_squeeze:
+    :rtype: Data
+    """
+    out = super(GenericAttentionLayer, cls).get_out_data_from_opts(base=base, **kwargs)
+    base_rem_axes = base.output.get_axes(exclude_batch=True, exclude_time=True)
+    base_rem_axes.remove(base.output.feature_dim_axis)
+    weights_rem_axes = weights.output.get_axes(exclude_batch=True, exclude_time=True)
+    # All the first axes in weights should match with base_rem_axes, just like the batch-dim.
+    weights_rem_axes = weights_rem_axes[len(base_rem_axes):]
+    if auto_squeeze:
+      weights_rem_axes = [a for a in weights_rem_axes if weights.output.batch_shape[a] != 1]
+    out.shape = (
+      out.shape[:min(len(base_rem_axes), len(out.shape) - 1)] +
+      tuple([weights.output.batch_shape[a] for a in weights_rem_axes]) + out.shape[-1:])
+
+    return out
 
 
 class DotAttentionLayer(GlobalAttentionContextBaseLayer):

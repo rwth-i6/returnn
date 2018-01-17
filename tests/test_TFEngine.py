@@ -113,6 +113,58 @@ def test_engine_train():
   engine.finalize()
 
 
+def test_engine_train_accum_grad_multiple_step():
+  from GeneratingDataset import DummyDataset
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 3
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=7, seq_len=seq_len)
+  train_data.init_seq_order(epoch=1)
+  cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  cv_data.init_seq_order(epoch=1)
+
+  config = Config()
+  config.update({
+    "model": "/tmp/model",
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": {"output": {"class": "softmax", "loss": "ce"}},
+    "start_epoch": 1,
+    "num_epochs": 2,
+    "accum_grad_multiple_step": 3,
+  })
+  engine = Engine(config=config)
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
+  engine.train()
+  engine.finalize()
+
+
+def test_engine_train_accum_grad_multiple_step_sparse():
+  from GeneratingDataset import DummyDataset
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 3
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=7, seq_len=seq_len)
+  train_data.init_seq_order(epoch=1)
+  cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  cv_data.init_seq_order(epoch=1)
+
+  config = Config()
+  config.update({
+    "model": "/tmp/model",
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": {"output": {"class": "softmax", "loss": "ce", "from": ["data:classes"]}},
+    "start_epoch": 1,
+    "num_epochs": 2,
+    "accum_grad_multiple_step": 3,
+  })
+  engine = Engine(config=config)
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
+  engine.train()
+  engine.finalize()
+
+
 def test_engine_train_grad_noise_sparse():
   # Not sure how to test for it in a simple way...
   # You might see "Converting sparse IndexedSlices to a dense Tensor of unknown shape."
@@ -1156,6 +1208,99 @@ def test_rec_subnet_construct_3():
     print("Construct search net")
     search_net = TFNetwork(extern_data=extern_data, train_flag=False, eval_flag=True, search_flag=True)
     search_net.construct_from_dict(net_dict)
+
+
+def test_rec_subnet_eval_init_out_apply0():
+  # network
+  # (also defined by num_inputs & num_outputs)
+  beam_size = 3
+  AttNumHeads = 2
+  EncKeyTotalDim = AttNumHeads * 2
+  EncKeyPerHeadDim = EncKeyTotalDim // AttNumHeads
+  EncValueTotalDim = AttNumHeads * 2
+  EncValuePerHeadDim = EncValueTotalDim // AttNumHeads
+  network = {
+    "lstm0_fw": {"class": "rec", "unit": "nativelstm2", "n_out": 2, "direction": 1},
+    "lstm0_bw": {"class": "rec", "unit": "nativelstm2", "n_out": 2, "direction": -1},
+    "lstm0_pool": {"class": "pool", "mode": "max", "padding": "same", "pool_size": (2,),
+                   "from": ["lstm0_fw", "lstm0_bw"], "trainable": False},
+    "encoder": {"class": "copy", "from": ["lstm0_pool"]},
+    "enc_ctx0": {"class": "linear", "activation": None, "with_bias": False, "from": ["encoder"],
+                 "n_out": EncKeyTotalDim},  # (B, enc-T, D)
+    "enc_ctx": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncKeyPerHeadDim), "from": ["enc_ctx0"]},
+    "enc_value0": {"class": "linear", "activation": None, "with_bias": False, "from": ["encoder"],
+                   "n_out": EncValueTotalDim},
+    "enc_value": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncValuePerHeadDim),
+                  "from": ["enc_value0"]},  # (B, enc-T, H, D'/H)
+    "inv_fertility": {"class": "linear", "activation": "sigmoid", "with_bias": False, "from": ["encoder"], "n_out": 1},
+
+    "output": {"class": "rec", "from": [], "unit": {
+      'output': {'class': 'choice', 'target': 'classes', 'beam_size': beam_size, 'from': ["output_prob"],
+                 "initial_output": 0},
+      "end": {"class": "compare", "from": ["output"], "value": 0},
+      'target_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'], "n_out": 6,
+                       "initial_output": 0},  # feedback_input
+      "weight_feedback": {"class": "linear", "activation": None, "with_bias": False, "from": ["prev:accum_att_weights"],
+                          "n_out": 2},  # (B, enc-T, 1000)
+      "prev_s_state": {"class": "get_last_hidden_state", "from": ["prev:s"], "n_out": 4},
+      "prev_s_feedback": {"class": "linear", "activation": None, "with_bias": False, "from": ["prev_s_state"],
+                          "n_out": 2},  # (B, D)  -- Q (query). D should be same as enc_ctx
+      "att_query0": {"class": "combine", "kind": "add", "from": ["weight_feedback", "prev_s_feedback"], "n_out": 2},
+      "att_query1": {"class": "activation", "activation": "tanh", "from": ["att_query0"]},
+      "att_query2": {"class": "linear", "activation": None, "with_bias": False, "from": ["att_query1"],
+                     "n_out": EncKeyTotalDim},  # (B, enc-T, D)
+      "att_query": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncKeyPerHeadDim),
+                    "from": ["att_query2"]},  # (B, enc-T, H, D/H)
+      "energy": {"class": "dot", "red1": -1, "red2": -1, "var1": None, "var2": None,
+                 "from": ["base:enc_ctx", "att_query"], "debug": True},  # (B, enc-T, H, 1)
+
+      "att_weights": {"class": "softmax_over_spatial", "from": ["energy"], "energy_factor": EncKeyPerHeadDim ** -0.5},
+      "att_weights_avg": {"class": "reduce", "axes": -2, "mode": "avg", "from": ["att_weights"]},  # (B, enc-T, 1)
+      "accum_att_weights": {"class": "eval",
+                            "from": ["prev:accum_att_weights", "att_weights_avg", "base:inv_fertility"],
+                            "eval": "source(0) + source(1) * source(2) * 0.5",
+                            "out_type": {"dim": 1, "shape": (None, 1)}, "initial_output": "apply(0)"},  # (B, enc-T, 1)
+      "att0": {"class": "generic_attention", "weights": "att_weights", "base": "base:enc_value"},  # (B, H, V)
+      "att": {"class": "merge_dims", "axes": "except_batch", "from": ["att0"]},  # (B, H*V)
+
+      "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["target_embed", "att"], "n_out": 2},  # transform
+      "readout_in": {"class": "linear", "from": ["prev:s", "prev:target_embed", "att"], "activation": None,
+                     "n_out": 2},  # merge + post_merge bias
+      "readout": {"class": "reduce_out", "mode": "max", "num_pieces": 2, "from": ["readout_in"]},
+      "output_prob": {"class": "softmax", "from": ["readout"], "target": "classes", "loss": "ce"}
+    }, "target": "classes", "max_seq_len": 7},
+  }
+
+  from GeneratingDataset import DummyDataset
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 3
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
+  train_data.init_seq_order(epoch=1)
+  cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  cv_data.init_seq_order(epoch=1)
+
+  config = Config()
+  config.update({
+    "model": "/tmp/model",
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": network,
+    "start_epoch": 1,
+    "num_epochs": 2,
+    "batch_size": 10,
+    "nadam": True,
+    "learning_rate": 0.01
+  })
+
+  print("Create engine.")
+  engine = Engine(config=config)
+  print("Init for train.")
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
+  print("Train.")
+  engine.train()
+  print("Search.")
+  engine.search(cv_data)
 
 
 if __name__ == "__main__":

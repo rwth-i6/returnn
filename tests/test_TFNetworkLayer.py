@@ -16,6 +16,9 @@ better_exchook.replace_traceback_format_tb()
 from Config import Config
 from TFNetwork import *
 from TFNetworkLayer import *
+from Log import log
+
+log.initialize(verbosity=[5])
 
 
 @contextlib.contextmanager
@@ -291,6 +294,45 @@ def test_ResizeLayer_fill_dropout():
     for i in range(len(src_seq_lens)):
       assert src_seq_lens[i] <= seq_lens[i] <= src_seq_lens[i] * factor
       assert_equal([s for s in out[i] if s != fill_value], src_seqs[i])
+
+
+def test_DotLayer():
+  with make_scope() as session:
+    B = 2
+    H = 3
+    D = H * 5
+    net = TFNetwork(extern_data=ExternData())
+    a = InternalLayer(name="A", network=net, out_type={"shape": (None, H, D // H)})
+    assert a.output.batch_dim_axis == 0
+    assert a.output.time_dim_axis == 1
+    assert a.output.shape == (None, H, D // H)
+    assert a.output.dim == D // H
+    a_seq_lens = [7, 3]
+    assert len(a_seq_lens) == B
+    a.output.placeholder = tf.reshape(
+      tf.range(B * max(a_seq_lens) * D, dtype=tf.float32), (B, max(a_seq_lens), H, D // H))
+    a.output.size_placeholder = {0: tf.constant(a_seq_lens, dtype=tf.int32)}
+    b = InternalLayer(name="B", network=net, out_type={"shape": (H, D // H)})
+    assert b.output.batch_dim_axis == 0
+    assert b.output.shape == (H, D // H)
+    assert b.output.dim == D // H
+    b.output.placeholder = tf.reshape(tf.add(tf.range(B * D, dtype=tf.float32), 0.5), (B, H, D // H))
+    kwargs = dict(
+      name="dot", network=net, sources=[a, b], debug=True,
+      red1=-1, red2=-1, var1="T", var2=None)
+    layer = DotLayer(output=DotLayer.get_out_data_from_opts(**kwargs), **kwargs)
+    print(layer, layer.output)
+    assert layer.output.batch_dim_axis == 0
+    assert layer.output.time_dim_axis == 2
+    assert layer.output.shape == (H, None, 1)
+    assert layer.output.dim == 1
+    out, seq_lens = session.run([layer.output.placeholder, layer.output.size_placeholder[1]])
+    print(out)
+    print(seq_lens)
+    assert isinstance(out, numpy.ndarray)
+    assert isinstance(seq_lens, numpy.ndarray)
+    assert_equal(seq_lens.tolist(), a_seq_lens)
+    assert_equal(out.shape, (B, H, max(a_seq_lens), 1))
 
 
 if __name__ == "__main__":

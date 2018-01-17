@@ -228,6 +228,9 @@ class Data(object):
     :rtype: Data
     """
     assert self.batch_dim_axis is not None
+    if batch_dim_axis < 0:
+      batch_dim_axis += self.batch_ndim
+      assert batch_dim_axis >= 0
     data = self.copy()
     if data.batch_dim_axis != batch_dim_axis:
       if data.placeholder is not None:
@@ -238,6 +241,50 @@ class Data(object):
       for k, a in other_special_axes.items():
         setattr(data, k, data.get_batch_axis(a))
     return data
+
+  def copy_with_time_dim_axis(self, time_dim_axis):
+    """
+    :param int time_dim_axis:
+    :return: copy of myself with specific time_dim_axis
+    :rtype: Data
+    """
+    assert self.batch_dim_axis is not None
+    if time_dim_axis < 0:
+      time_dim_axis += self.batch_ndim
+      assert time_dim_axis >= 0
+    data = self.copy()
+    if data.time_dim_axis != time_dim_axis:
+      data.time_dim_axis = time_dim_axis
+      assert time_dim_axis <= data.batch_ndim_dense - 2
+      new_axes = list(range(data.batch_ndim))
+      new_axes[self.time_dim_axis], new_axes[data.time_dim_axis] = \
+        new_axes[data.time_dim_axis], new_axes[self.time_dim_axis]  # swap
+      if data.placeholder is not None:
+        with tf.name_scope("%s_with_time_axis_%i" % (data.name, time_dim_axis)):
+          data.placeholder = tf.transpose(data.placeholder, new_axes)
+      batch_shape = [data.batch_shape[i] for i in new_axes]
+      data.batch_dim_axis = new_axes[self.batch_dim_axis]
+      data.shape = tuple([d for (i, d) in enumerate(batch_shape) if i != data.batch_dim_axis])
+      if data.size_placeholder is not None:
+        data.size_placeholder = {}
+        for axis_wo_b, size in sorted(self.size_placeholder.items()):
+          axis_wb = self.get_batch_axis(axis_wo_b)
+          axis_wb = new_axes[axis_wb]
+          axis_wo_b = data.get_batch_axis_excluding_batch(axis_wb)
+          assert axis_wo_b is not None
+          data.size_placeholder[axis_wo_b] = size
+    return data
+
+  def copy_as_bt_or_tb_major(self):
+    """
+    :rtype: Data
+    :return: copy of myself in batch-time-major or time-batch-major
+    """
+    if self.batch_dim_axis == 0:
+      return self.copy_with_time_dim_axis(1)
+    if self.time_dim_axis == 0:
+      return self.copy_with_batch_dim_axis(1)
+    raise ValueError("cannot convert %r to BT|TB major" % self)
 
   def copy_add_batch_dim(self, batch_dim_axis):
     """
@@ -285,7 +332,11 @@ class Data(object):
     assert self.sparse == data.sparse
     assert self.dtype == data.dtype
     v = self.copy()
-    # First add spatial dims, in case we miss any.
+    # Add feature dim, if needed.
+    if data.feature_dim_axis is not None and v.feature_dim_axis is None:
+      v.dim = 1
+      v.shape = v.shape + (1,)
+    # Add spatial dims, in case we miss any.
     for axis in data.get_spatial_batch_axes():
       if len(data.get_spatial_batch_axes()) > len(v.get_spatial_batch_axes()):
         axis_wo_batch = data.get_batch_axis_excluding_batch(axis)
@@ -464,6 +515,16 @@ class Data(object):
     return self.ndim
 
   @property
+  def batch_ndim_dense(self):
+    """
+    :rtype: int
+    :return: ndim counted with batch-dim, added by 1 if we are sparse
+    """
+    if self.sparse:
+      return self.batch_ndim + 1
+    return self.batch_ndim
+
+  @property
   def is_time_major(self):
     """
     :return: whether this is in time-major format, i.e. (time,batch,...)
@@ -563,6 +624,8 @@ class Data(object):
   def feature_dim_axis(self):
     if self.sparse:
       return None
+    if not self.shape:
+      return None
     return self.batch_ndim - 1
 
   @feature_dim_axis.setter
@@ -585,13 +648,15 @@ class Data(object):
 
   def get_axes_from_description(self, axes):
     """
-    :param int|list[int]|str|list[str] axes: one axis or multiple axis.
+    :param int|list[int]|str|list[str]|None axes: one axis or multiple axis, or none.
       This is counted with batch-dim, which by default is axis 0 (see enforce_batch_dim_axis).
       It also accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature",
       and more (see the code).
     :return: list of axes, counted with batch-dim
     :rtype: list[int]
     """
+    if axes is None or axes == "":
+      return []
     if isinstance(axes, str):
       import re
       axes = axes.lower()
@@ -612,11 +677,14 @@ class Data(object):
       elif axes in ["t", "time"]:
         assert self.time_dim_axis is not None
         axes = self.time_dim_axis
-      elif axes == "except_time":
+      elif axes == "except_time":  # also except batch
         axes = list(range(self.batch_ndim))
         axes.remove(self.batch_dim_axis)
         assert self.time_dim_axis is not None
         axes.remove(self.time_dim_axis)
+      elif axes == "except_batch":
+        axes = list(range(self.batch_ndim))
+        axes.remove(self.batch_dim_axis)
       elif axes in ["f", "feature", "non_spatial"]:
         axes = self.get_feature_batch_axes()
       elif all([a in "btf" for a in axes]):
@@ -2855,8 +2923,30 @@ def optional_add(*args):
   return y
 
 
+def opt_logical_and(*args):
+  """
+  :param list[tf.Tensor|bool] args:
+  :return: basically logical_and(*args), but leaves out all constants
+  :rtype: tf.Tensor|bool
+  """
+  res = True
+  for v in args:
+    if v is True:
+      continue
+    if v is False:
+      return False
+    if res is True:
+      res = v
+    else:
+      res = tf.logical_and(res, v)
+  return res
+
+
 def windowed_nd(source, window, padding="same", time_axis=1, new_window_axis=2):
   """
+  Constructs a new "window" axis which is a moving input over the time-axis.
+  If you want to take out a window, i.e. a slice, see :func:`slice_nd`.
+
   :param tf.Tensor source: N-D tensor of shape (..., n_time, ...)
   :param int|tf.Tensor window: window size
   :param str padding: "same" or "valid"
@@ -2909,6 +2999,21 @@ def windowed_nd(source, window, padding="same", time_axis=1, new_window_axis=2):
       else:
         final = move_axis(final, 1, time_axis)
     return final
+
+
+def slice_nd(x, start, size, seq_lens=None):
+  """
+  :param tf.Tensor x: shape (B, T, ...)
+  :param tf.Tensor start: shape (B,), int32
+  :param int size:
+  :param tf.Tensor|None seq_lens: shape (B,), int32, <= T. if None, [T]*B is assumed.
+  :return: [x[start_1:size], x[start_2:size], ..., x[start_B:size]], shape (B, size, ...)
+    Like :func:`slice_pad_zeros`, the size in the first axis will always be ``size``,
+    and we will pad with zeros.
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope("slice_nd"):
+    pass  # TODO...
 
 
 def global_tensor(f, name):
@@ -3265,16 +3370,20 @@ def safe_log(x, eps=1e-20):
     return tf.log(tf.maximum(x, eps))
 
 
-def l1_normalized(x, axis=-1, eps=1e-20):
+def l1_normalized(x, axis=-1, eps=1e-20, use_logsumexp=False):
   """
   :param tf.Tensor x: assumes != 0
   :param int|tf.Tensor axis: in range [-rank(x),rank(x)]
   :param float|tf.Tensor|None eps: for safety, to ensure that tf.reduce_sum(tf.abs(x)) >= eps
+  :param bool use_logsumexp: eps must not be None
   :return: y such that tf.reduce_sum(tf.abs(y)) == 1. i.e. y = x / tf.reduce_sum(tf.abs(x)).
   :rtype: tf.Tensor
   """
   with tf.name_scope("l1_normalized"):
-    weighted_input_sum = tf.reduce_sum(tf.abs(x), axis=axis, keep_dims=True)
+    if use_logsumexp:
+      weighted_input_sum = tf.exp(tf.reduce_logsumexp(tf.log(tf.maximum(tf.abs(x), eps)), axis=axis, keep_dims=True))
+    else:
+      weighted_input_sum = tf.reduce_sum(tf.abs(x), axis=axis, keep_dims=True)
     if eps is not None:
       weighted_input_sum = tf.maximum(weighted_input_sum, eps)
     divisor = tf.reciprocal(weighted_input_sum)
@@ -3288,7 +3397,7 @@ def lin_exp(x):
   :rtype: tf.Tensor
   """
   with tf.name_scope("lin_exp"):
-    return tf.maximum(x + 1, tf.exp(x))
+    return tf.where(tf.greater_equal(x, 0), x + 1, tf.exp(x))
 
 
 def lin_exp_normed(x, axis=-1, eps=1e-20):
@@ -3358,6 +3467,20 @@ def smoothing_cross_entropy(logits,
     xentropy = tf.nn.softmax_cross_entropy_with_logits(
       logits=logits, labels=soft_targets)  # shape(labels)
     return xentropy - normalizing  # shape(labels)
+
+
+def prod(ls):
+  """
+  :param list[T]|tuple[T]|numpy.ndarray|tf.Tensor ls:
+  :rtype: T|int|float|tf.Tensor
+  """
+  if isinstance(ls, tf.Tensor):
+    return tf.reduce_prod(ls, axis=0)
+  from Util import prod as pure_prod
+  if all([not isinstance(x, tf.Tensor) for x in ls]):
+    return pure_prod(ls)  # not a tf.Tensor
+  with tf.name_scope("prod"):
+    return pure_prod(ls)  # tf.Tensor
 
 
 class Lock(object):
