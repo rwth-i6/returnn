@@ -240,6 +240,7 @@ class LayerBase(object):
     """
     :param str name: layer name
     :return: valid scope name, might be just name. see tf._VALID_SCOPE_NAME_REGEX and tf._VALID_OP_NAME_REGEX
+    :rtype: str
     """
     # For the root name scope, it's even more restrictive, and we must also cover this case.
     name = name.replace(":", "__")

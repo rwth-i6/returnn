@@ -2923,6 +2923,25 @@ def optional_add(*args):
   return y
 
 
+def opt_logical_and(*args):
+  """
+  :param list[tf.Tensor|bool] args:
+  :return: basically logical_and(*args), but leaves out all constants
+  :rtype: tf.Tensor|bool
+  """
+  res = True
+  for v in args:
+    if v is True:
+      continue
+    if v is False:
+      return False
+    if res is True:
+      res = v
+    else:
+      res = tf.logical_and(res, v)
+  return res
+
+
 def windowed_nd(source, window, padding="same", time_axis=1, new_window_axis=2):
   """
   Constructs a new "window" axis which is a moving input over the time-axis.

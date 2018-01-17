@@ -37,7 +37,7 @@ class RecLayer(_ConcatInputLayer):
     :param int|None direction: None|1 -> forward, -1 -> backward
     :param bool input_projection: True -> input is multiplied with matrix. False only works if same input dim
     :param LayerBase|str|float|int|tuple|None initial_state:
-    :param int max_seq_len: if unit is a subnetwork
+    :param int|str|None max_seq_len: if unit is a subnetwork. str will be evaluated. see code
     :param str forward_weights_init: see :func:`TFUtil.get_initializer`
     :param str recurrent_weights_init: see :func:`TFUtil.get_initializer`
     :param str bias_init: see :func:`TFUtil.get_initializer`
@@ -980,8 +980,7 @@ class _SubnetworkRecCell(object):
         have_known_seq_len = True
       else:
         assert "end" in self.layer_data_templates, "length not defined, provide 'end' layer"
-        assert rec_layer._max_seq_len, "must specify max_seq_len in rec layer"
-        max_seq_len = tf.constant(rec_layer._max_seq_len, name="max_seq_len_const")
+        max_seq_len = None
         have_known_seq_len = False
       # if not self.input_data and self.network.search_flag:
       #   assert not have_known_seq_len  # at least for the moment
@@ -1304,12 +1303,45 @@ class _SubnetworkRecCell(object):
           res = (identity_with_debug_log(out=self._debug_out, x=res[0], args=args),) + res[1:]
         return res
 
-    def cond(i, net_vars, acc_ta, seq_len_info=None):
+    def cond(i, net_vars, acc_tas, seq_len_info=None):
+      """
+      :param tf.Tensor i: loop counter, scalar
+      :param net_vars: the accumulator values. see also self.get_init_loop_vars()
+      :param list[tf.TensorArray] acc_tas: the output accumulator TensorArray
+      :param (tf.Tensor,tf.Tensor)|None seq_len_info: tuple (end_flag, seq_len)
+      :return: True -> we should run the current loop-iteration, False -> stop loop
+      :rtype: tf.Tensor
+      """
       with tf.name_scope("loop_cond"):
-        res = tf.less(i, max_seq_len, name="i_less_max_seq_len")
+        from TFUtil import opt_logical_and
+        res = True
+        if max_seq_len is not None:
+          res = opt_logical_and(res, tf.less(i, max_seq_len, name="i_less_max_seq_len"))
+        # Only consider the user 'max_seq_len' option if we don't know the real max_seq_len.
+        # This is the old behavior. Maybe this might change at some point.
+        elif isinstance(rec_layer._max_seq_len, int):
+          res = opt_logical_and(res, tf.less(i, rec_layer._max_seq_len, name="i_less_const_max_seq_len"))
+        elif isinstance(rec_layer._max_seq_len, str):
+          def max_len_from(src):
+            """
+            :param str src: layer name. use "base:" prefix to access the parent network
+            :return: max seq-len of the layer output
+            :rtype: tf.Tensor
+            """
+            layer = self.net.get_layer(src)
+            return tf.reduce_max(layer.output.get_sequence_lengths(), name="max_seq_len_%s" % layer.tf_scope_name)
+          with tf.name_scope("user_max_seq_len"):
+            user_max_seq_len = eval(rec_layer._max_seq_len, {"max_len_from": max_len_from, "tf": tf})
+          res = opt_logical_and(res, tf.less(i, user_max_seq_len, name="i_less_user_max_seq_len"))
+        else:
+          assert rec_layer._max_seq_len is None, "%r: unsupported max_seq_len %r" % (rec_layer, rec_layer._max_seq_len)
+        # Check not considering seq_len_info because the dynamics of the network can also lead
+        # to an infinite loop, so enforce that some maximum is specified.
+        assert res is not True, "%r: specify max_seq_len" % rec_layer
         if seq_len_info is not None:
           end_flag, _ = seq_len_info
-          res = tf.logical_and(res, tf.reduce_any(tf.logical_not(end_flag)), name="loop_cond_res")
+          any_not_ended = tf.reduce_any(tf.logical_not(end_flag), name="any_not_ended")
+          res = opt_logical_and(res, any_not_ended)
         return res
 
     from TFUtil import constant_with_shape
