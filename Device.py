@@ -815,11 +815,17 @@ class Device(object):
           source.append(self.testnet.x.reshape((self.testnet.i.shape[0], self.testnet.i.shape[1], self.testnet.x.shape[2])) * T.cast(self.testnet.i.dimshuffle(0,1,'x').repeat(self.testnet.x.shape[2],axis=2),'float32'))
         else:
           assert False, "invalid extraction: " + extract
-      self.extractor = theano.function(inputs = [],
-                                       outputs = source if len(source) == 1 else [T.concatenate(source, axis=-1)],
-                                       givens = givens,
-                                       on_unused_input=config.value('theano_on_unused_input', 'ignore'),
-                                       name = "extractor")
+      if config.has('load_graph') and os.path.exists(config.value('load_graph','')):
+        import dill
+        graphfile = config.value('load_graph','')
+        self.extractor = dill.load(open(graphfile,'rb'))
+      else:
+        self.extractor = theano.function(inputs = [],
+                                         outputs = source if len(source) == 1 else [T.concatenate(source, axis=-1)],
+                                         givens = givens,
+                                         on_unused_input=config.value('theano_on_unused_input', 'ignore'),
+                                         name = "extractor")
+      self.save_graph = config.has('save_graph')
 
     elif self.network_task == 'classify':
       self.classifier = theano.function(inputs = [],
@@ -859,6 +865,11 @@ class Device(object):
             output[j] += block_output[j]
     elif task == "extract" or task == "forward":
       output = self.extractor()
+      if self.save_graph:
+        import dill
+        sys.setrecursionlimit(50000)
+        dill.dump(self.extractor, open(self.config.value('save_graph',''), 'wb'))
+        self.save_graph = False
     elif task == 'classify':
       output = self.classifier()
     elif task == "analyze":
