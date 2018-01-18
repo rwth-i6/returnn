@@ -68,7 +68,7 @@ class LayerBase(object):
     :param str|None size_target: like target but this is only used to set our output size in case of training
     :param Loss|None loss: via self.transform_config_dict()
     :param float loss_scale: scale factor for loss (1.0 by default)
-    :param LayerBase|None reuse_params: if given, will reuse the params from this layer. see self.var_creation_scope()
+    :param ReuseParams|None reuse_params: if given, will opt reuse the params. see :func:`self.var_creation_scope`
     :param float|None L2: for constraints
     :param float|None darc1: for constraints. see Generalization in Deep Learning, https://arxiv.org/abs/1710.05468
     :param bool|None is_output_layer:
@@ -285,7 +285,7 @@ class LayerBase(object):
       for src_name in src_names
       if not src_name == "none"]
     if "reuse_params" in d:
-      d["reuse_params"] = get_layer(d["reuse_params"])
+      d["reuse_params"] = ReuseParams.from_config_dict(d["reuse_params"], network=network, get_layer=get_layer)
     if d.get("loss", None) and "target" not in d:
       d["target"] = network.extern_data.default_target
     if d.get("target"):
@@ -427,42 +427,45 @@ class LayerBase(object):
 
     :return: yields the variable_scope
     """
-    from TFUtil import var_creation_scope, get_current_var_scope_name, reuse_name_scope
+    from TFUtil import var_creation_scope, get_current_var_scope_name
     self_base_scope = self.get_base_absolute_name_scope_prefix()
     assert self_base_scope.endswith("/")
     cur_scope = get_current_var_scope_name()
     assert (cur_scope + "/").startswith(self_base_scope)
     with var_creation_scope() as dep:
       if self.reuse_params:
-        ext_scope = cur_scope[len(self_base_scope) - 1:]  # e.g. "/rec" or ""
-        assert not ext_scope or ext_scope.startswith("/")
-        reuse_base_scope = self.reuse_params.get_base_absolute_name_scope_prefix()
-        assert reuse_base_scope.endswith("/")
-        reuse_scope = reuse_base_scope[:-1] + ext_scope
-        with reuse_name_scope(reuse_scope, absolute=True, reuse_vars=True) as scope:
+        with tf.variable_scope(self.reuse_params.get_variable_scope(base_layer=self)) as scope:
           yield scope
       else:
         yield tf.get_variable_scope()
 
   def add_param(self, param, custom_update=None):
     """
-    :param tf.Variable param:
+    :param tf.Variable|tf.Tensor param:
     :param None|CustomUpdate custom_update: will be applied in training, instead of taking the gradient
     :return: param
     :rtype tf.Variable
     """
+    if isinstance(param, tf.Tensor):
+      # This can happen with a custom_getter in tf.get_variable(), e.g. via self.reuse_params.
+      # In that case, don't treat it like a param, i.e. don't save a reference in self.params,
+      # where we only want to store tf.Variable objects.
+      return param
     assert isinstance(param, tf.Variable)
     if custom_update:
       custom_update.set_on_var(param)
     if self.reuse_params:
-      name_scope_prefix = self.reuse_params.get_base_absolute_name_scope_prefix()
+      name_scope_prefix = self.reuse_params.get_base_absolute_name_scope_prefix(base_layer=self, param=param)
     else:
       name_scope_prefix = self.get_base_absolute_name_scope_prefix()
     assert param.name
     assert param.name[:len(name_scope_prefix)] == name_scope_prefix
     assert param.name[-2:] == ":0"
     param_name = param.name[len(name_scope_prefix):-2]
-    self.params[param_name] = param
+    if param_name not in self.params:
+      self.params[param_name] = param
+    else:
+      assert self.params[param_name] is param
     return param
 
   def set_param_values_by_dict(self, values_dict, session):
@@ -811,6 +814,141 @@ class LayerBase(object):
     :rtype: dict[str,tf.TensorShape]
     """
     return {}
+
+
+class ReuseParams:
+  @classmethod
+  def from_config_dict(cls, opts, network, get_layer):
+    """
+    :param str|dict|None opts:
+    :param TFNetwork.TFNetwork network:
+    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
+    :rtype: ReuseParams|None
+    """
+    if not opts:
+      return None
+    if isinstance(opts, str):
+      return ReuseParams(reuse_layer=get_layer(opts))
+    assert isinstance(opts, dict)
+    opts = opts.copy()
+    if "reuse_layer" in opts:
+      opts["reuse_layer"] = get_layer(opts["reuse_layer"])
+    if "map" in opts:
+      assert isinstance(opts["map"], dict)
+      opts["map"] = opts["map"].copy()
+      for key, value in sorted(opts["map"].items()):
+        if isinstance(value, str):
+          value = {"reuse_layer": get_layer(value)}
+        elif value is None:
+          value = {"auto_create_missing": True}
+        else:
+          assert isinstance(value, dict)
+          value = value.copy()
+          if "reuse_layer" in value:
+            value["reuse_layer"] = get_layer(value["reuse_layer"])
+        opts["map"][key] = ReuseParams(**value)
+    return ReuseParams(**opts)
+
+  def __init__(self, reuse_layer=None, map=None, custom=None, auto_create_missing=False):
+    """
+    :param LayerBase|None reuse_layer:
+    :param dict[str,ReuseParams]|None map:
+    :param (**kwargs)->(tf.Tensor|tf.Variable) custom: see :func:`self.variable_custom_getter`
+    :param bool auto_create_missing:
+    """
+    self.reuse_layer = reuse_layer
+    self.param_map = map
+    self.custom_func = custom
+    self.auto_create_missing = auto_create_missing
+
+  def get_base_absolute_name_scope_prefix(self, base_layer, param):
+    """
+    :param LayerBase base_layer:
+    :param tf.Variable param: e.g. "base_layer/rec/W"
+    :return: e.g. "base_layer/" (not "base_layer/rec/"), always with "/" at end
+    :rtype: str
+    """
+    base_scope_name = base_layer.get_base_absolute_name_scope_prefix()  # e.g. "current_layer/"
+    assert base_scope_name.endswith("/")
+    from TFUtil import var_creation_scope, get_current_var_scope_name, reuse_name_scope
+    cur_scope = get_current_var_scope_name() + "/"  # e.g. "current_layer/rec/" or "current_layer/"
+    assert cur_scope.startswith(base_scope_name)
+    ext_scope = cur_scope[len(base_scope_name):]  # e.g. "rec/" or ""
+    assert not ext_scope or ext_scope.endswith("/")
+    assert param.name[-2:] == ":0"
+    abs_param_name = param.name[:-2]
+    param_name = abs_param_name.split("/")[-1]
+    assert param_name
+    rel_name = ext_scope + param_name  # e.g. "rec/W" or "W"
+    if self.custom_func:  # Could be any base absolute name scope prefix, so just return what we have.
+      if abs_param_name.endswith("/" + rel_name):
+        return abs_param_name[:-len(rel_name)]
+      else:
+        return abs_param_name[:-len(param_name)]
+    if self.param_map is not None and rel_name in self.param_map:
+      return self.param_map[rel_name].get_base_absolute_name_scope_prefix(base_layer=base_layer, param=param)
+    assert abs_param_name.endswith("/" + rel_name)
+    if self.reuse_layer and rel_name in self.reuse_layer.params:
+      reuse_layer_prefix = self.reuse_layer.get_base_absolute_name_scope_prefix()
+      assert reuse_layer_prefix + rel_name == abs_param_name
+      return reuse_layer_prefix
+    assert self.auto_create_missing
+    base_layer_prefix = base_layer.get_base_absolute_name_scope_prefix()
+    assert base_layer_prefix + rel_name == abs_param_name
+    return base_layer_prefix
+
+  def get_variable_scope(self, base_layer):
+    """
+    :param LayerBase base_layer:
+    :rtype: tf.VariableScope
+    """
+    def _variable_custom_getter(**kwargs):
+      return self.variable_custom_getter(base_layer=base_layer, **kwargs)
+    with tf.variable_scope(tf.get_variable_scope(), custom_getter=_variable_custom_getter) as scope:
+      return scope
+
+  def variable_custom_getter(self, getter, name, base_layer, **kwargs):
+    """
+    By TF docs, from :func:`_VariableStore.get_variable`:
+    Callable that takes as a first argument the true getter,
+    and allows overwriting the internal get_variable method.
+    The signature of `custom_getter` should match that of this method,
+    but the most future-proof version will allow for changes:
+    `def custom_getter(getter, *args, **kwargs)`.  Direct access to
+    all `get_variable` parameters is also allowed:
+    `def custom_getter(getter, name, *args, **kwargs)`.  A simple identity
+    custom getter that simply creates variables with modified names is:
+    ```python
+    def custom_getter(getter, name, *args, **kwargs):
+      return getter(name + '_suffix', *args, **kwargs)
+    ```
+    In addition, we get the argument `base_scope_name`, via :func:`self.get_variable_scope`.
+
+    :param (...)->tf.Variable getter:
+    :param str name: absolute name
+    :param LayerBase base_layer: we expect that this is the prefix of ``name``
+    :rtype: tf.Variable|tf.Tensor
+    """
+    base_scope_name = base_layer.get_base_absolute_name_scope_prefix()
+    assert not base_scope_name or base_scope_name.endswith("/")
+    assert name.startswith(base_scope_name)
+    rel_name = name[len(base_scope_name):]  # e.g. "rec/W" or "W"
+    if self.custom_func:
+      return self.custom_func(
+        base_layer=base_layer, reuse_layer=self.reuse_layer, name=rel_name, getter=getter, full_name=name, **kwargs)
+    if self.param_map is not None:
+      if not self.auto_create_missing:
+        assert rel_name in self.param_map
+      if rel_name in self.param_map:
+        return self.param_map[rel_name].variable_custom_getter(
+          getter=getter, name=name, base_layer=base_layer, **kwargs)
+    if self.reuse_layer:
+      if not self.auto_create_missing:
+        assert rel_name in self.reuse_layer.params
+      if rel_name in self.reuse_layer.params:
+        return self.reuse_layer.params[rel_name]
+    assert self.auto_create_missing
+    return getter(name=name, **kwargs)
 
 
 class SearchChoices(object):
@@ -2268,6 +2406,10 @@ class PoolLayer(_ConcatInputLayer):
       strides = [strides] * len(pool_size)
     assert len(strides) == len(pool_size)
     super(PoolLayer, self).__init__(**kwargs)
+    if all([s == 1 for s in pool_size]) and all([s == 1 for s in strides]):
+      # Identity function. Just copy and don't do anything.
+      self.output = self.input_data.copy("%s_output" % self.name)
+      return
     # We want to prepare the input data such that the batch-dim is the very first,
     # the feature-dim is the very last, and all in between are where we convolve over.
     # In the common terminology, this is the "NHWC" format, which is the default for TF convolution/pooling.
@@ -2290,7 +2432,7 @@ class PoolLayer(_ConcatInputLayer):
   @classmethod
   def get_out_data_from_opts(cls, name, pool_size, strides=None, dilation_rate=1, sources=(), padding="VALID", **kwargs):
     # y shape is [batch] + spatial_dims + [n_out].
-    data = get_concat_sources_data_template(sources)
+    data = get_concat_sources_data_template(sources, name="%s_output" % name)
     shape = [None] * len(pool_size) + [data.dim]
     if strides is None:
       strides = pool_size
@@ -2304,6 +2446,9 @@ class PoolLayer(_ConcatInputLayer):
     else:
       dilation_rate = list(dilation_rate)
     assert len(dilation_rate) == len(pool_size)
+    if all([s == 1 for s in pool_size]) and all([s == 1 for s in strides]):
+      # Identity function. Just copy and don't do anything.
+      return data
     padding = padding.upper()
     for i in range(len(pool_size)):
       if data.shape[i] is not None:

@@ -44,6 +44,7 @@ class RecLayer(_ConcatInputLayer):
     :param bool|None optimize_move_layers_out: will automatically move layers out of the loop when possible
     """
     super(RecLayer, self).__init__(**kwargs)
+    import re
     from TFUtil import is_gpu_available
     from tensorflow.contrib import rnn as rnn_contrib
     from tensorflow.python.util import nest
@@ -131,7 +132,7 @@ class RecLayer(_ConcatInputLayer):
         # Very generic way to collect all created params.
         # Note that for the TF RNN cells, there is no other way to do this.
         # Also, see the usage of :func:`LayerBase.cls_layer_scope`, e.g. for initial vars.
-        params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope_name_prefix)
+        params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=re.escape(scope_name_prefix))
         self.params.update({p.name[len(scope_name_prefix):-2]: p for p in params})
 
   def get_dep_layers(self):
@@ -2000,6 +2001,7 @@ class RnnCellLayer(_ConcatInputLayer):
       "%s: This layer is expected to be used inside a RecLayer, or to have input with time." % self)
     self._initial_state = initial_state
     assert initial_output is None, "set initial_state instead"
+    import re
     from TFUtil import get_initializer
     with tf.variable_scope(
       "rec",
@@ -2030,7 +2032,7 @@ class RnnCellLayer(_ConcatInputLayer):
           initial_state=state0, time_major=True, scope=scope)
       self._hidden_state = state
       self.rec_vars_outputs["state"] = state
-      params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope_name_prefix)
+      params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=re.escape(scope_name_prefix))
       assert params
       self.params.update({p.name[len(scope_name_prefix):-2]: p for p in params})
 

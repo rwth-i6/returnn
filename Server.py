@@ -12,22 +12,23 @@ network = {"out" : { "class" : "softmax", "loss" : "ce", "target":"classes" }}
 
 from __future__ import print_function
 
-import sys
-import os
-import json
-import urllib
-import urllib2
-import datetime
 from array import array
+import concurrent.futures
+import datetime
+import hashlib
+import json
+import os
 import re
+import struct
+import sys
 import time
+import urllib
+import urllib.request
 
 import numpy as np
 import tornado.web
 from tornado.ioloop import IOLoop
 from tornado.concurrent import run_on_executor
-import concurrent.futures
-import hashlib
 
 from Log import log
 from GeneratingDataset import StaticDataset
@@ -53,38 +54,38 @@ class Server:
     Initializes the server with an empty config.
     :param global_config: Basic config of server. Requires a network paramater.
     """
-    application = tornado.web.Application([
+
+    # Create temporary directories.
+    self.base_dir   = os.path.abspath(Config.get_global_config().value('__file__', ''))
+    self.config_dir = os.path.join(self.base_dir, "configs")
+    self.data_dir   = os.path.join(self.base_dir, "data")
+
+    for d in [self.config_dir, self.data_dir]:
+      try:
+        os.makedirs(d)
+      except FileExistsError as e:
+        pass
+
+    self.application = tornado.web.Application([
       (r"/classify", ClassifyHandler),
-      (r"/loadconfig", ConfigHandler),
+      (r"/loadconfig", ConfigHandler, {'config_dir': self.config_dir}),
       (r"/train", TrainingHandler)
     ], debug=True)
     
-    # Create temporary directories.
-    self._make_dirs(os.path.dirname(os.path.abspath(Config.get_global_config().value('__file__', ''))))
-    application.listen(int(global_config.value('port', '3033')))
+    self.port = int(global_config.value('port', '3033'))
     global _max_amount_engines
-    _max_amount_engines = global_config.value('max_engines', '5')
-    print("Starting server on port: %s" % global_config.value('port', '3033'), file=log.v3)
+    _max_amount_engines = int(global_config.value('max_engines', '5'))
+
+  def run(self):
+    print("Starting server on port: %d" % self.port, file=log.v3)
+    self.application.listen(self.port)
     IOLoop.instance().start()
   
-  def _make_dirs(self, basepath):
-    """
-      Creates empty directories 'data' and 'configs' in the basepath.
-      :param self:
-      :param basepath: Location to create directories
-      :return:
-      """
-    if not os.path.exists(basepath + "/configs"):
-      os.makedirs(basepath + "/configs")
-    # Now make the data file directory.
-    if not os.path.exists(basepath + "/data"):
-      os.makedirs(basepath + "/data")
-
 
 class ClassifyHandler(tornado.web.RequestHandler):
   max_workers = 4
   executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
-  
+
   @run_on_executor
   def _classification_task(self, network, devices, data, batches):
     """
@@ -118,34 +119,27 @@ class ClassifyHandler(tornado.web.RequestHandler):
     output_dim = {}
     ret = {}
     data = {}
-    data_format = ''
-    data_type = ''
+    data_format = 'json'
+    data_type = 'float32'
     engine_hash = ''
     data_shape = ''
     # First get meta data from URL parameters
-    engine_hash = str(url_params['engine_hash']).replace("['", '').replace("']", '')
+    if 'engine_hash' in url_params:
+      engine_hash = url_params['engine_hash'][0].decode('utf8')
     if 'data_format' in url_params:
-      data_format = str(url_params['data_format']).replace("['", '').replace("']", '')
+      data_format = url_params['data_format'][0].decode('utf8')
     if 'data_type' in url_params:
       # Possible options: https://docs.scipy.org/doc/numpy-1.10.1/user/basics.types.html
-      data_type = str(url_params['data_type']).replace("['", '').replace("']", '')
+      data_type = url_params['data_type'][0].decode('utf8')
     if 'data_shape' in url_params:
-      data_shape = str(url_params['data_shape']).replace("['", '').replace("']", '')  # either '' or 'dim1,dim2'
-    # Apply defaults, in case we didn't get them through the header.
-    if data_format == '':
-      data_format = 'json'
-    if data_type == '':
-      data_type = 'float32'
+      data_shape = url_params['data_shape'][0].decode('utf8')  # either '' or 'dim1,dim2'
     
-    print('Received engine hash: %s data formatted: %s, data type %s data shape: %s' %
+    print('Received request, engine hash: %s, data format: %s, data type %s data shape: %s' %
           (engine_hash, data_format, data_type, data_shape), file=log.v5)
     # Load in engine and hash
     engine = _engines[engine_hash]
     network = engine.network
     devices = _devices[engine_hash]
-    hash_engine = hashlib.new('ripemd160')
-    hash_engine.update(str(self.request.body) + engine_hash)
-    hash_temp = hash_engine.hexdigest()
     
     # Pre-process the data
     if data_format == 'json':
@@ -161,18 +155,15 @@ class ClassifyHandler(tornado.web.RequestHandler):
           else:
             ret['error'] = 'unable to convert %s to an array from value %s' % (k, str(data[k]))
           break
-    
-    if data_format == 'binary':
+    elif data_format == 'binary':
       float_array = array(self._get_type_code(data_type))
       try:
-        float_array.fromstring(self.request.body)
+        float_array.frombytes(self.request.body)
       except Exception as e:
         print('Binary data error: %s' % str(e.message), file=log.v4)
         ret['error'] = 'Error during binary data conversion: ' + e.message
-      data['data'] = np.asarray(float_array.tolist(), dtype=data_type)
-      data_shape_arr = data_shape.split(",")
-      shape = (int(data_shape_arr[0]), int(data_shape_arr[1]))
-      data['data'] = np.reshape(data['data'], shape)
+      shape = tuple(map(int, data_shape.split(',')))
+      data['data'] = np.asarray(float_array.tolist(), dtype=data_type).reshape(shape)
     
     # Do dataset creation and classification.
     if 'error' not in ret:
@@ -180,19 +171,24 @@ class ClassifyHandler(tornado.web.RequestHandler):
       data.init_seq_order()
       batches = data.generate_batches(recurrent_net=network.recurrent,
                                       batch_size=sys.maxsize, max_seqs=1)
-      if hash_temp not in _classify_cache:
-        print('Starting classification', file=log.v3)
-        # If we haven't yet processed this exact request and saved it in the cache
-        _classify_cache[hash_temp] = yield self._classification_task(network=network,
-                                                                     devices=devices,
-                                                                     data=data, batches=batches)
-      ret = {'result':
-               {k: _classify_cache[hash_temp].result[k].tolist() for k in _classify_cache[hash_temp].result}}
+      ct = yield self._classification_task(network=network,
+                                           devices=devices,
+                                           data=data, batches=batches)
+      assert len(ct.result.keys()) == 1  # we only added one sequence
+      result_array = ct.result[next(iter(ct.result.keys()))]
+      assert result_array.shape[0] == 1  # there is only one DeviceRun
+      result_array = np.squeeze(np.reshape(result_array, result_array.shape[1:]))
+      if data_format == 'json':
+        ret = {'result': result_array.tolist()}
+      elif data_format == 'binary':
+        size_info = struct.pack('<LL', *result_array.shape)
+        self.write(size_info)
+        ret = result_array.tobytes()
     
     # Update engine usage for performance optimization
     _engine_usage[engine_hash] = datetime.datetime.now()
-    print("Finished processing classification with ID: ", hash_temp, file=log.v3)
     self.write(ret)
+    self.finish()
   
   def _get_type_code(self, format_to_convert):
     """
@@ -210,7 +206,9 @@ class ClassifyHandler(tornado.web.RequestHandler):
 
 
 class ConfigHandler(tornado.web.RequestHandler):
-  
+  def initialize(self, config_dir, **kwargs):
+    self.config_dir = config_dir
+
   def post(self, *args, **kwargs):
     """
     Handles the creation of a new engine based on a slightly modified config, supplied
@@ -229,19 +227,27 @@ class ConfigHandler(tornado.web.RequestHandler):
     if (len(_engines) + 1) > _max_amount_engines:
         self._remove_oldest_engine()
     data = json.loads(self.request.body)
+    config_url = data["new_config_url"]
     print('Received new config for new engine', file=log.v3)
+
     hash_engine = hashlib.new('ripemd160')
-    hash_engine.update(json.dumps(args) + str(datetime.datetime.now()))
+    hash_engine.update(config_url.encode('utf8'))
     hash_temp = hash_engine.hexdigest()
-    # Download new config file and save to temp folder.
-    urlmanager = urllib.URLopener()
-    basefile = "configs/"
-    config_file = basefile + str(datetime.datetime.now()) + ".config"
-    try:
-      urlmanager.retrieve(data["new_config_url"], config_file)
-    except (urllib2.URLError, urllib2.HTTPError):
-      self.write('Error: Loading in config file from URL')
+
+    if hash_temp in _configs:
+      self.write(hash_temp)
       return
+
+    # Download new config file and save to temp folder.
+    print('loading config %s' % config_url, file=log.v5)
+    config_file = os.path.join(self.config_dir, hash_temp + ".config")
+    try:
+      urllib.request.urlretrieve(config_url, config_file)
+    except (urllib.request.URLError, urllib.request.HTTPError) as e:
+      self.write('Error: Loading in config file from URL %s' % e)
+      return
+
+    print('reading config %s' % config_file, file=log.v5)
     # Load and setup config
     try:
       config = Config.Config()
@@ -249,14 +255,15 @@ class ConfigHandler(tornado.web.RequestHandler):
     except Exception:
       self.write('Error: Processing config file')
       return
-    if config.value('task', 'daemon') != 'train':
-      config.set(key='task', value='daemon')  # Assume we're only using for classification or training
+    #if config.value('task', 'daemon') != 'train':
+    #  config.set(key='task', value='daemon')  # Assume we're only using for classification or training
     try:
       _devices[hash_temp] = self._init_devices(config=config)
     except Exception:
       self.write('Error: Loading devices failed')
       return
     
+    print('Starting engine %s' % hash_temp, file=log.v5)
     new_engine = Engine.Engine(_devices[hash_temp])
     try:
       new_engine.init_network_from_config(config=config)
@@ -266,8 +273,7 @@ class ConfigHandler(tornado.web.RequestHandler):
     _engines[hash_temp] = new_engine
     _engine_usage[hash_temp] = datetime.datetime.now()
     _configs[hash_temp] = config
-    print('Finished loading new config in, server running. Currently number of active engines: %i' % len(_engines),
-          file=log.v3)
+    print('Loaded new config from %s with hash %s, %d engines are running' % (config_url, hash_temp, len(_engines)), file=log.v3)
     self.write(hash_temp)
   
   def _init_devices(self, config):
@@ -332,7 +338,7 @@ class TrainingHandler(tornado.web.RequestHandler):
     print("Training engine on new data: ", data["engine_hash"], file=log.v4)
     # download training and dev data
     if data['download_data'] != 'False':
-      urlmanager = urllib.URLopener()
+      urlmanager = urllib.request.URLopener()
       datapath = "data/"
       train_file = datapath + re.sub(r'\W+', '', "train" + str(datetime.datetime.now()))  # currently assume h5 data
       train_file_abs, train_file_headers = urlmanager.retrieve(data["training_url"], train_file)
