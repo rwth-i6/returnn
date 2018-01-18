@@ -564,6 +564,7 @@ class Device(object):
       elif self.update_specs['update_rule'] != 'none':
         self.updater = Updater.initRule(self.update_specs['update_rule'], **self.update_specs['update_params'])
 
+      self.use_inputs = False
       self.train_outputs_format = ["cost:" + out for out in sorted(self.trainnet.costs.keys())]
       # The function output lists must be consistent with TrainTaskThread.evaluate()
       outputs = output_streams['train'] + [self.trainnet.costs[out] for out in sorted(self.trainnet.costs.keys())]
@@ -625,6 +626,24 @@ class Device(object):
                                     on_unused_input=config.value('theano_on_unused_input', 'ignore'),
                                     no_default_updates=True,
                                     name="tester")
+    elif self.network_task == 'hpx':
+      layer = self.testnet.get_layer(config.value('output_layer_name','output'))
+      pcx = getattr(layer, "p_y_given_x", layer.output)
+      self.used_data_keys = self.testnet.get_used_data_keys()
+      inp = [self.testnet.y[k] for k in self.used_data_keys]
+      inp += [self.testnet.j[k] for k in self.used_data_keys]
+      self.use_inputs = True
+      if config.has('load_graph') and os.path.exists(config.value('load_graph','')):
+        import dill
+        graphfile = config.value('load_graph','')
+        self.extractor = dill.load(open(graphfile,'rb'))
+      else:
+        self.extractor = theano.function(inputs = inp,
+                                         outputs = [pcx],
+                                         givens = [],
+                                         on_unused_input=config.value('theano_on_unused_input', 'ignore'),
+                                         name = "extractor")
+      self.save_graph = config.has('save_graph')
 
     elif self.network_task in ['forward', 'daemon', 'compute_priors']:
       output_layer_name = config.value("extract_output_layer_name", "output")
@@ -864,7 +883,12 @@ class Device(object):
           for j in range(len(block_output)):
             output[j] += block_output[j]
     elif task == "extract" or task == "forward":
-      output = self.extractor()
+      if self.use_inputs:
+        inp = [self.y[k].get_value() for k in self.used_data_keys]
+        inp += [self.j[k].get_value() for k in self.used_data_keys]
+        output = self.extractor(*inp)
+      else:
+        output = self.extractor()
       if self.save_graph:
         import dill
         sys.setrecursionlimit(50000)

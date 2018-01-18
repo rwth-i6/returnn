@@ -389,7 +389,7 @@ def executeMainTask():
     assert engine.epoch
     print("Evaluate epoch", engine.epoch, file=log.v4)
     engine.eval_model()
-  elif task == 'forward':
+  elif task in ['forward','hpx']:
     assert eval_data is not None, 'no eval data provided'
     combine_labels = config.value('combine_labels', '')
     engine.use_search_flag = config.bool("forward_use_search", False)
