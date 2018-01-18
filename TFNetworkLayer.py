@@ -2268,6 +2268,10 @@ class PoolLayer(_ConcatInputLayer):
       strides = [strides] * len(pool_size)
     assert len(strides) == len(pool_size)
     super(PoolLayer, self).__init__(**kwargs)
+    if all([s == 1 for s in pool_size]) and all([s == 1 for s in strides]):
+      # Identity function. Just copy and don't do anything.
+      self.output = self.input_data.copy("%s_output" % self.name)
+      return
     # We want to prepare the input data such that the batch-dim is the very first,
     # the feature-dim is the very last, and all in between are where we convolve over.
     # In the common terminology, this is the "NHWC" format, which is the default for TF convolution/pooling.
@@ -2290,7 +2294,7 @@ class PoolLayer(_ConcatInputLayer):
   @classmethod
   def get_out_data_from_opts(cls, name, pool_size, strides=None, dilation_rate=1, sources=(), padding="VALID", **kwargs):
     # y shape is [batch] + spatial_dims + [n_out].
-    data = get_concat_sources_data_template(sources)
+    data = get_concat_sources_data_template(sources, name="%s_output" % name)
     shape = [None] * len(pool_size) + [data.dim]
     if strides is None:
       strides = pool_size
@@ -2304,6 +2308,9 @@ class PoolLayer(_ConcatInputLayer):
     else:
       dilation_rate = list(dilation_rate)
     assert len(dilation_rate) == len(pool_size)
+    if all([s == 1 for s in pool_size]) and all([s == 1 for s in strides]):
+      # Identity function. Just copy and don't do anything.
+      return data
     padding = padding.upper()
     for i in range(len(pool_size)):
       if data.shape[i] is not None:
