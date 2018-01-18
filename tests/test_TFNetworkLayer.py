@@ -248,6 +248,36 @@ def test_reuse_params():
     assert_equal(set(network.get_trainable_params()), {l1.params["W"], l1.params["b"]})
 
 
+def test_reuse_params_map_custom():
+  with make_scope() as session:
+    config = Config()
+    n_in, n_out = 2, 3
+    config.update({
+      "num_outputs": n_out,
+      "num_inputs": n_in,
+      "network": {
+        "l1": {"class": "linear", "activation": "tanh", "with_bias": False, "n_out": 5},
+        "output": {
+          "class": "linear", "activation": None, "n_out": n_in, "from": ["l1"], "target": "data",
+          "reuse_params": {
+            "map": {
+              "W": {
+                "reuse_layer": "l1",
+                "custom": (lambda reuse_layer, **kwargs: tf.transpose(reuse_layer.params["W"]))},
+              "b": None}
+          },
+        }
+      }
+    })
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    l1 = network.layers["l1"]
+    l2 = network.layers["output"]
+    assert_equal(set(l1.params.keys()), {"W"})
+    assert_equal(set(l2.params.keys()), {"b"})
+    assert_equal(set(network.get_trainable_params()), {l1.params["W"], l2.params["b"]})
+
+
 def test_ResizeLayer_fill_value():
   with make_scope() as session:
     net = TFNetwork(extern_data=ExternData())
