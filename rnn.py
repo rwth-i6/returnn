@@ -32,10 +32,6 @@ from HDFDataset import HDFDataset
 from Debug import initIPythonKernel, initBetterExchook, initFaulthandler, initCudaNotInMainProcCheck
 from Util import initThreadJoinHack, describe_crnn_version, describe_theano_version, \
   describe_tensorflow_version, BackendEngine, get_tensorflow_version_tuple
-try:
-  import Server
-except ImportError:
-  Server = None
 
 
 config = None; """ :type: Config """
@@ -347,6 +343,8 @@ def init(configFilename=None, commandLineOptions=(), config_updates=None, extra_
     initData()
   printTaskProperties(devices)
   if config.value('task', 'train') == 'server':
+    import Server
+    global server
     server = Server.Server(config)
   else:
     initEngine(devices)
@@ -458,6 +456,7 @@ def executeMainTask():
     engine.daemon(config)
   elif task == "server":
     print("Server Initiating", file=log.v1)
+    server.run()
   elif task.startswith("config:"):
     action = config.typed_dict[task[len("config:"):]]
     print("Task: %r" % action, file=log.v1)
