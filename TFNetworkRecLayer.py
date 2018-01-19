@@ -2341,16 +2341,21 @@ class ChoiceLayer(LayerBase):
 
   _debug_out = None  # type: None|list
 
-  def __init__(self, beam_size, input_type="prob", explicit_search_source=None, length_normalization=True, **kwargs):
+  def __init__(self, beam_size, input_type="prob", explicit_search_source=None, length_normalization=True,
+               scheduled_sampling=False,
+               **kwargs):
     """
     :param int beam_size: the outgoing beam size. i.e. our output will be (batch * beam_size, ...)
     :param str input_type: "prob" or "log_prob", whether the input is in probability space, log-space, etc.
       or "regression", if it is a prediction of the data as-is.
     :param LayerBase|None explicit_search_source: will mark it as an additional dependency
+    :param dict|None scheduled_sampling:
     :param bool length_normalization: evaluates score_t/len in search
     """
     super(ChoiceLayer, self).__init__(**kwargs)
+    from Util import CollectionReadCheckCovered
     self.explicit_search_source = explicit_search_source
+    self.scheduled_sampling = CollectionReadCheckCovered.from_bool_or_dict(scheduled_sampling)
     # We assume log-softmax here, inside the rec layer.
     assert self.target
     if self.network.search_flag:
@@ -2469,7 +2474,38 @@ class ChoiceLayer(LayerBase):
           placeholder=labels,
           available_for_inference=True,
           beam_size=beam_size)
-    else:
+    elif self.scheduled_sampling.truth_value:
+      # Original paper: https://arxiv.org/abs/1506.03099
+      # Currently, here: no scheduling, just always sample...
+      # We could also do that with a beam (num_samples=beam_size). But currently we do not.
+      # Note that in other implementations (e.g. tensor2tensor), as well as in the original paper,
+      # they do the sampling from the logits where the decoder got always the true labels,
+      # and then a second pass is done for the decoder, and the losses are used only from the second pass.
+      # This means that they don't back-propagate the gradient of the losses through the sampling decision,
+      # as they write in the paper.
+      # This is different from what we do here. There is no second pass.
+      # Currently there is also no gradient through tf.multinomial but we could add that later.
+      assert len(self.sources) == 1
+      scores_in = self.sources[0].output.get_placeholder_as_batch_major()  # (batch, dim)
+      # We present the scores in +log space, and we will add them up along the path.
+      if input_type == "prob":
+        scores_in = tf.log(scores_in)
+      elif input_type == "log_prob":
+        pass
+      else:
+        raise Exception("%r: invalid input type %r" % (self, input_type))
+      samples = tf.multinomial(scores_in, num_samples=1)  # (batch, num_samples), int64
+      samples = tf.to_int32(tf.reshape(samples, [-1]))  # (batch,), int32
+      self.output = Data(
+        name="%s_sampled_output" % self.name,
+        batch_dim_axis=0,
+        shape=self.output.shape,
+        sparse=True,
+        dim=self.output.dim,
+        dtype=self.output.dtype,
+        placeholder=samples,
+        available_for_inference=True)
+    else:  # no search, and no scheduled-sampling
       assert len(self.sources) == 0  # will be filtered out in transform_config_dict
       # Note: If you want to do forwarding, without having the reference,
       # that wont work. You must do search in that case.
@@ -2485,9 +2521,10 @@ class ChoiceLayer(LayerBase):
     :param TFNetwork.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     """
-    if not network.search_flag:
+    if not network.search_flag and not d.get("scheduled_sampling"):
       # In the dependency graph, we don't want it.
       # This can enable some optimizations in the RecLayer.
+      # We do it here because we should know about the deps early in the template creation in RecLayer.
       d["from"] = []
     if d.get("explicit_search_source"):
       d["explicit_search_source"] = get_layer(d["explicit_search_source"]) if network.search_flag else None
@@ -2524,6 +2561,7 @@ class ChoiceLayer(LayerBase):
     return {"choice_scores": tf.TensorShape((None, None))}  # (batch, beam)
 
   def get_dep_layers(self):
+    # See also self.transform_config_dict where we might strip away the sources.
     l = super(ChoiceLayer, self).get_dep_layers()
     if self.explicit_search_source:
       l.append(self.explicit_search_source)
