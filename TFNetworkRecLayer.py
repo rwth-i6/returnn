@@ -2496,6 +2496,13 @@ class ChoiceLayer(LayerBase):
         raise Exception("%r: invalid input type %r" % (self, input_type))
       samples = tf.multinomial(scores_in, num_samples=1)  # (batch, num_samples), int64
       samples = tf.to_int32(tf.reshape(samples, [-1]))  # (batch,), int32
+      if self.scheduled_sampling.get("gold_mixin_prob"):
+        gold_targets = self._static_get_target_value(
+          target=self.target, network=self.network,
+          mark_data_key_as_used=True).get_placeholder_as_batch_major()  # (batch,), int32
+        samples = tf.where(
+          tf.less(tf.random_uniform(tf.shape(samples)), self.scheduled_sampling.get("gold_mixin_prob")),
+          gold_targets, samples)
       self.output = Data(
         name="%s_sampled_output" % self.name,
         batch_dim_axis=0,
