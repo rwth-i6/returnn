@@ -545,6 +545,7 @@ class Device(object):
             output_streams[key].append(ctx.attrs['member'])
 
     self.forwarder = None
+    self.use_inputs = False
     if self.network_task in ['train', 'theano_graph']:
       if self.trainnet.loss in ('ctc', 'hmm'):
         train_givens = self.make_givens(self.trainnet)
@@ -564,7 +565,6 @@ class Device(object):
       elif self.update_specs['update_rule'] != 'none':
         self.updater = Updater.initRule(self.update_specs['update_rule'], **self.update_specs['update_params'])
 
-      self.use_inputs = False
       self.train_outputs_format = ["cost:" + out for out in sorted(self.trainnet.costs.keys())]
       # The function output lists must be consistent with TrainTaskThread.evaluate()
       outputs = output_streams['train'] + [self.trainnet.costs[out] for out in sorted(self.trainnet.costs.keys())]
