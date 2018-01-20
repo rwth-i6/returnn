@@ -1454,7 +1454,7 @@ class CollectionReadCheckCovered:
   def __init__(self, collection, truth_value=None):
     """
     :param dict[str] collection:
-    :param None|bool truth_value:
+    :param None|bool truth_value: note: check explicitly for self.truth_value, bool(self) is not the same!
     """
     self.collection = collection
     if truth_value is None:

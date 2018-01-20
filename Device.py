@@ -289,6 +289,7 @@ class Device(object):
     self.num_frames = NumbersDict(0)
     self.num_updates = 0
     self.epoch = None
+    self.use_inputs = False
     if not update_specs: update_specs = {}
     update_specs.setdefault('update_rule', 'global')
     update_specs.setdefault('update_params', {})
