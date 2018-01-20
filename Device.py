@@ -627,24 +627,6 @@ class Device(object):
                                     on_unused_input=config.value('theano_on_unused_input', 'ignore'),
                                     no_default_updates=True,
                                     name="tester")
-    elif self.network_task == 'hpx':
-      layer = self.testnet.get_layer(config.value('output_layer_name','output'))
-      pcx = getattr(layer, "p_y_given_x", layer.output)
-      self.used_data_keys = self.testnet.get_used_data_keys()
-      inp = [self.testnet.y[k] for k in self.used_data_keys]
-      inp += [self.testnet.j[k] for k in self.used_data_keys]
-      self.use_inputs = True
-      if config.has('load_graph') and os.path.exists(config.value('load_graph','')):
-        import dill
-        graphfile = config.value('load_graph','')
-        self.extractor = dill.load(open(graphfile,'rb'))
-      else:
-        self.extractor = theano.function(inputs = inp,
-                                         outputs = [pcx],
-                                         givens = [],
-                                         on_unused_input=config.value('theano_on_unused_input', 'ignore'),
-                                         name = "extractor")
-      self.save_graph = config.has('save_graph')
 
     elif self.network_task in ['forward', 'daemon', 'compute_priors']:
       output_layer_name = config.value("extract_output_layer_name", "output")
@@ -835,10 +817,20 @@ class Device(object):
           source.append(self.testnet.x.reshape((self.testnet.i.shape[0], self.testnet.i.shape[1], self.testnet.x.shape[2])) * T.cast(self.testnet.i.dimshuffle(0,1,'x').repeat(self.testnet.x.shape[2],axis=2),'float32'))
         else:
           assert False, "invalid extraction: " + extract
-      if config.has('load_graph') and os.path.exists(config.value('load_graph','')):
-        import dill
-        graphfile = config.value('load_graph','')
-        self.extractor = dill.load(open(graphfile,'rb'))
+      if config.has('load_graph') or config.has('save_graph'):
+        self.use_inputs = True
+        if config.has('load_graph') and os.path.exists(config.value('load_graph', '')):
+          import dill
+          graphfile = config.value('load_graph', '')
+          self.extractor = dill.load(open(graphfile, 'rb'))
+        else:
+          inp = [self.testnet.y[k] for k in self.used_data_keys]
+          inp += [self.testnet.j[k] for k in self.used_data_keys]
+          self.extractor = theano.function(inputs=inp,
+                                           outputs=source if len(source) == 1 else [T.concatenate(source, axis=-1)],
+                                           givens=[],
+                                           on_unused_input=config.value('theano_on_unused_input', 'ignore'),
+                                           name="extractor")
       else:
         self.extractor = theano.function(inputs = [],
                                          outputs = source if len(source) == 1 else [T.concatenate(source, axis=-1)],
