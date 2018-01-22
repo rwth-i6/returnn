@@ -107,7 +107,7 @@ class RecLayer(_ConcatInputLayer):
       default_var_initializer = self._fwd_weights_initializer
     else:
       default_var_initializer = xavier_initializer(seed=self.network.random.randint(2**31))
-    with tf.variable_scope("rec", initializer=default_var_initializer) as scope:
+    with reuse_name_scope("rec", initializer=default_var_initializer) as scope:
       assert isinstance(scope, tf.VariableScope)
       self._rec_scope = scope
       scope_name_prefix = scope.name + "/"  # e.g. "layer1/rec/"

@@ -278,6 +278,100 @@ def test_reuse_params_map_custom():
     assert_equal(set(network.get_trainable_params()), {l1.params["W"], l2.params["b"]})
 
 
+def test_reuse_params_map_custom_rev():
+  with make_scope() as session:
+    config = Config()
+    n_in, n_out = 2, 3
+    config.update({
+      "num_outputs": n_out,
+      "num_inputs": n_in,
+      "network": {
+        "output": {"class": "linear", "activation": "tanh", "with_bias": False, "from": ["l1"], "n_out": n_in},
+        "l1": {
+          "class": "linear", "activation": None, "n_out": 5, "from": ["data"], "target": "data",
+          "reuse_params": {
+            "map": {
+              "W": {
+                "reuse_layer": "output",
+                "custom": (lambda reuse_layer, **kwargs: tf.transpose(reuse_layer.params["W"]))},
+              "b": None}
+          },
+        }
+      }
+    })
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    l1 = network.layers["l1"]
+    l2 = network.layers["output"]
+    assert_equal(set(l1.params.keys()), {"b"})
+    assert_equal(set(l2.params.keys()), {"W"})
+    assert_equal(set(network.get_trainable_params()), {l2.params["W"], l1.params["b"]})
+
+
+def test_reuse_params_map_custom_dep_loop():
+  config = Config()
+  n_in, n_out = 2, 3
+  config.update({
+    "num_outputs": n_out,
+    "num_inputs": n_in,
+    "network": {
+      "encoder": {"class": "copy", "from": ["data"]},
+      "enc_ctx": {"class": "linear", "activation": None, "with_bias": True, "from": ["encoder"], "n_out": 10},
+      "inv_fertility": {"class": "linear", "activation": "sigmoid", "with_bias": False, "from": ["encoder"],
+                        "n_out": 1},
+      "output": {"class": "rec", "from": [], "unit": {
+        'output': {'class': 'choice', 'target': 'classes', 'beam_size': 1, 'from': ["output_prob"],
+                   "initial_output": 0},
+        "end": {"class": "compare", "from": ["output"], "value": 0},
+        'target_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'], "n_out": 6,
+                         "initial_output": 0},
+        "weight_feedback": {"class": "linear", "activation": None, "with_bias": False,
+                            "from": ["prev:accum_att_weights"], "n_out": 10},
+        "prev_s_state": {"class": "get_last_hidden_state", "from": ["prev:s"], "n_out": 20},
+        "prev_s_transformed": {"class": "linear", "activation": None, "with_bias": False, "from": ["prev_s_state"],
+                               "n_out": 10},
+        "energy_in": {"class": "combine", "kind": "add",
+                      "from": ["base:enc_ctx", "weight_feedback", "prev_s_transformed"], "n_out": 10},
+        "energy_tanh": {"class": "activation", "activation": "tanh", "from": ["energy_in"]},
+        "energy": {"class": "linear", "activation": None, "with_bias": False, "from": ["energy_tanh"], "n_out": 1},
+        "att_weights": {"class": "softmax_over_spatial", "from": ["energy"]},
+        "accum_att_weights": {"class": "eval",
+                              "from": ["prev:accum_att_weights", "att_weights", "base:inv_fertility"],
+                              "eval": "source(0) + source(1) * source(2) * 0.5",
+                              "out_type": {"dim": 1, "shape": (None, 1)}},
+        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder"},
+        "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["target_embed", "att"], "n_out": 10},
+        "readout_in": {"class": "linear", "from": ["prev:s", "prev:target_embed", "att"], "activation": None,
+                       "n_out": 2 * 6},
+        "readout": {"class": "reduce_out", "mode": "max", "num_pieces": 2, "from": ["readout_in"]},
+        "output_prob": {
+          "class": "softmax", "from": ["readout"], "dropout": 0.3,
+          "reuse_params": {
+            "map": {
+              "W": {
+                "reuse_layer": "target_embed",
+                "custom": (lambda reuse_layer, **kwargs: tf.transpose(reuse_layer.params["W"]))},
+              "b": None}},
+          "target": "classes", "loss": "ce", "loss_opts": {"label_smoothing": 0.1}}
+      }, "target": "classes", "max_seq_len": "max_len_from('base:encoder')"},
+    }
+  })
+  with make_scope() as session:
+    from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
+    train_net = TFNetwork(config=config, train_flag=True)
+    train_net.construct_from_dict(config.typed_dict["network"])
+    train_rec_layer = train_net.layers["output"]
+    assert isinstance(train_rec_layer, RecLayer)
+    assert isinstance(train_rec_layer.cell, _SubnetworkRecCell)
+    assert_equal(set(train_rec_layer.cell.input_layers_moved_out), {"output", "target_embed"})
+    assert_equal(set(train_rec_layer.cell.output_layers_moved_out), {"output_prob", "readout", "readout_in"})
+    assert isinstance(train_rec_layer.cell.output_layers_net, TFNetwork)
+    assert_equal(set(train_rec_layer.cell.output_layers_net.layers["output_prob"].params.keys()), {"b"})
+  with make_scope() as session:
+    search_net = TFNetwork(config=config, train_flag=False, eval_flag=True, search_flag=True)
+    search_net.construct_from_dict(config.typed_dict["network"])
+
+
 def test_ResizeLayer_fill_value():
   with make_scope() as session:
     net = TFNetwork(extern_data=ExternData())

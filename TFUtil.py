@@ -995,7 +995,7 @@ def get_current_name_scope():
 
 
 @contextlib.contextmanager
-def reuse_name_scope(name, absolute=None, reuse_vars=None):
+def reuse_name_scope(name, absolute=None, **kwargs):
   """
   Context manager to reuse an already created scope.
   We try to both set the variable scope and the name scope.
@@ -1003,7 +1003,7 @@ def reuse_name_scope(name, absolute=None, reuse_vars=None):
   :param str|tf.VariableScope name: relative or absolute name scope (absolute if absolute=True or if tf.VariableScope).
     must not end with "/".
   :param bool absolute: if True it will be absolute
-  :param bool reuse_vars: passed on as `reuse` arg for `tf.variable_scope`
+  :param kwargs: passed on to `tf.variable_scope`
   :return: yields the variable_scope
   """
   if isinstance(name, tf.VariableScope):
@@ -1037,8 +1037,8 @@ def reuse_name_scope(name, absolute=None, reuse_vars=None):
     # Afterwards we fix that name again.
     # Note that the reuse-argument might be miss-leading in this context:
     # It means that tf.get_variable() will search for existing variables and errors otherwise.
-    var_scope = tf.VariableScope(reuse=reuse_vars, name=abs_name)
-    with tf.variable_scope(var_scope) as scope:
+    var_scope = tf.VariableScope(name=abs_name, reuse=kwargs.get("reuse", False))
+    with tf.variable_scope(var_scope, **kwargs) as scope:
       assert isinstance(scope, tf.VariableScope)
       # remove "/" from the end of the var-scope.
       # This is a work-around to fix up the variable scope behavior for nested variable scopes.

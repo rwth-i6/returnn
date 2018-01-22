@@ -432,12 +432,16 @@ class LayerBase(object):
     assert self_base_scope.endswith("/")
     cur_scope = get_current_var_scope_name()
     assert (cur_scope + "/").startswith(self_base_scope)
+    # There are cases were a dummy layer was created already to create the variables,
+    # e.g. see ReuseParams.LazyLayerResolver.
+    opts = {"reuse": tf.AUTO_REUSE}
     with var_creation_scope() as dep:
       if self.reuse_params:
-        with tf.variable_scope(self.reuse_params.get_variable_scope(base_layer=self)) as scope:
+        with tf.variable_scope(self.reuse_params.get_variable_scope(base_layer=self, **opts)) as scope:
           yield scope
       else:
-        yield tf.get_variable_scope()
+        with tf.variable_scope(tf.get_variable_scope(), **opts) as scope:
+          yield scope
 
   def add_param(self, param, custom_update=None):
     """
@@ -827,39 +831,130 @@ class ReuseParams:
     """
     if not opts:
       return None
+
+    def optional_get_layer(layer_name):
+      from TFNetwork import NetworkConstructionDependencyLoopException
+      try:
+        return get_layer(layer_name)
+      except NetworkConstructionDependencyLoopException:
+        # This dependency loop is not seen as critical. We allow it to be done later.
+        # So any template construction of this layer should work.
+        return ReuseParams.LazyLayerResolver(layer_name=layer_name, network=network, get_layer=get_layer)
     if isinstance(opts, str):
-      return ReuseParams(reuse_layer=get_layer(opts))
+      return ReuseParams(reuse_layer=optional_get_layer(opts))
     assert isinstance(opts, dict)
     opts = opts.copy()
     if "reuse_layer" in opts:
-      opts["reuse_layer"] = get_layer(opts["reuse_layer"])
+      opts["reuse_layer"] = optional_get_layer(opts["reuse_layer"])
     if "map" in opts:
       assert isinstance(opts["map"], dict)
       opts["map"] = opts["map"].copy()
       for key, value in sorted(opts["map"].items()):
         if isinstance(value, str):
-          value = {"reuse_layer": get_layer(value)}
+          value = {"reuse_layer": optional_get_layer(value)}
         elif value is None:
           value = {"auto_create_missing": True}
         else:
           assert isinstance(value, dict)
           value = value.copy()
           if "reuse_layer" in value:
-            value["reuse_layer"] = get_layer(value["reuse_layer"])
+            value["reuse_layer"] = optional_get_layer(value["reuse_layer"])
         opts["map"][key] = ReuseParams(**value)
     return ReuseParams(**opts)
 
+  class LazyLayerResolver:
+    """
+    Unfortunately this is a bit tricky and difficult to do right.
+    We want to support it because it can happen that e.g. in training, this is layer resolving is not needed,
+    and then in search, it is needed, due to different dependencies.
+    See :func:`test_reuse_params_map_custom_dep_loop` for an example.
+    The params depend on a layer which is not constructed yet and cannot be constructed yet
+    because of a dependency loop.
+    Thus, here we again try to create it, and if we still get the dependency loop,
+    we create the reused-params-layer based on dummy inputs, such that the variables/parameters get created
+    and can be used now. Then, later, we are going to recreate the reused-params-layer.
+    """
+    def __init__(self, layer_name, network, get_layer):
+      """
+      :param str layer_name:
+      :param TFNetwork.TFNetwork network:
+      :param ((str) -> LayerBase) get_layer:
+      """
+      self.layer_name = layer_name
+      self.network = network
+      self.get_layer_func = get_layer
+      self.var_scope = tf.get_variable_scope()
+
+    def get_layer(self):
+      from TFNetwork import NetworkConstructionDependencyLoopException
+      from TFUtil import reuse_name_scope
+      with reuse_name_scope(self.var_scope):
+        try:
+          return self.get_layer_func(self.layer_name)
+        except NetworkConstructionDependencyLoopException as exc:
+          return self.create_dummy_layer(dep_loop_exception=exc)
+
+    def create_dummy_layer(self, dep_loop_exception):
+      """
+      :param TFNetwork.NetworkConstructionDependencyLoopException dep_loop_exception:
+      :rtype: LayerBase
+      """
+      print(
+        ("ReuseParams: layer %r does not exist yet and there is a dependency loop, " +
+         "thus creating it on dummy inputs now") % self.layer_name,
+        file=log.v4)
+
+      def opt_get_layer(layer_name):
+        if layer_name in self.network.layers:
+          return self.network.layers[layer_name]
+        print("ReuseParams: non-existing layer %r, ignoring..." % layer_name, file=log.v4)
+        return None
+
+      def get_dummy_input_layer(layer_name):
+        if layer_name in self.network.layers:
+          return self.network.layers[layer_name]
+        print("ReuseParams: creating dummy input %r" % layer_name, file=log.v4)
+        layer_desc = dep_loop_exception.net_dict[layer_name].copy()
+        class_name = layer_desc.pop("class")
+        layer_class = get_layer_class(class_name)
+        layer_desc = self.network._create_layer_layer_desc(name=layer_name, layer_desc=layer_desc)
+        layer_class.transform_config_dict(
+          layer_desc, network=self.network, get_layer=opt_get_layer)
+        output = layer_class.get_out_data_from_opts(**layer_desc).copy()
+        output.placeholder = tf.zeros(
+          [d or 1 for d in output.batch_shape], dtype=output.dtype, name="%s_dummy" % output.name)
+        return InternalLayer(name=layer_name, network=self.network, output=output)
+
+      layer_desc = dep_loop_exception.net_dict[self.layer_name].copy()
+      class_name = layer_desc.pop("class")
+      layer_class = get_layer_class(class_name)
+      layer_class.transform_config_dict(layer_desc, network=self.network, get_layer=get_dummy_input_layer)
+      return self.network._create_layer(name=self.layer_name, layer_class=layer_class, **layer_desc)
+
   def __init__(self, reuse_layer=None, map=None, custom=None, auto_create_missing=False):
     """
-    :param LayerBase|None reuse_layer:
+    :param LayerBase|()->LayerBase|None reuse_layer:
     :param dict[str,ReuseParams]|None map:
     :param (**kwargs)->(tf.Tensor|tf.Variable) custom: see :func:`self.variable_custom_getter`
     :param bool auto_create_missing:
     """
-    self.reuse_layer = reuse_layer
+    assert isinstance(reuse_layer, (LayerBase, ReuseParams.LazyLayerResolver)) or not reuse_layer
+    self._reuse_layer = reuse_layer
     self.param_map = map
     self.custom_func = custom
     self.auto_create_missing = auto_create_missing
+
+  @property
+  def reuse_layer(self):
+    """
+    :rtype: LayerBase|None
+    """
+    if self._reuse_layer:
+      if isinstance(self._reuse_layer, ReuseParams.LazyLayerResolver):
+        self._reuse_layer = self._reuse_layer.get_layer()
+      assert isinstance(self._reuse_layer, LayerBase)
+      return self._reuse_layer
+    return None
 
   def get_base_absolute_name_scope_prefix(self, base_layer, param):
     """
@@ -897,14 +992,15 @@ class ReuseParams:
     assert base_layer_prefix + rel_name == abs_param_name
     return base_layer_prefix
 
-  def get_variable_scope(self, base_layer):
+  def get_variable_scope(self, base_layer, **kwargs):
     """
     :param LayerBase base_layer:
+    :param kwargs: passed to tf.variable_scope
     :rtype: tf.VariableScope
     """
     def _variable_custom_getter(**kwargs):
       return self.variable_custom_getter(base_layer=base_layer, **kwargs)
-    with tf.variable_scope(tf.get_variable_scope(), custom_getter=_variable_custom_getter) as scope:
+    with tf.variable_scope(tf.get_variable_scope(), custom_getter=_variable_custom_getter, **kwargs) as scope:
       return scope
 
   def variable_custom_getter(self, getter, name, base_layer, **kwargs):
