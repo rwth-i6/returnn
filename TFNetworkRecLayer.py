@@ -826,7 +826,8 @@ class _SubnetworkRecCell(object):
       return constant_with_shape(False, shape=[batch_dim], name="initial_end")
     with reuse_name_scope(self.parent_rec_layer._rec_scope):
       with cl.cls_layer_scope(name):
-        return cl.get_rec_initial_output(batch_dim=batch_dim, **self.layer_data_templates[name].kwargs)
+        return cl.get_rec_initial_output(
+          batch_dim=batch_dim, rec_layer=self.parent_rec_layer, **self.layer_data_templates[name].kwargs)
 
   def _get_init_extra_outputs(self, name):
     """
@@ -839,7 +840,8 @@ class _SubnetworkRecCell(object):
     with reuse_name_scope(self.parent_rec_layer._rec_scope):
       with cl.cls_layer_scope(name):
         batch_dim = template_layer.get_batch_dim()
-        d = cl.get_rec_initial_extra_outputs(batch_dim=batch_dim, **self.layer_data_templates[name].kwargs)
+        d = cl.get_rec_initial_extra_outputs(
+          batch_dim=batch_dim, rec_layer=self.parent_rec_layer, **self.layer_data_templates[name].kwargs)
     return d
 
   def _check_output_template_shape(self):
@@ -2003,9 +2005,8 @@ class RnnCellLayer(_ConcatInputLayer):
     assert initial_output is None, "set initial_state instead"
     import re
     from TFUtil import get_initializer
-    with tf.variable_scope(
-      "rec",
-      initializer=get_initializer(
+    with self.var_creation_scope(
+      "rec", initializer=get_initializer(
         weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
     ) as scope:
       assert isinstance(scope, tf.VariableScope)
@@ -2150,7 +2151,8 @@ class RnnCellLayer(_ConcatInputLayer):
     return self.flatten_hidden_state(self._hidden_state)
 
   @classmethod
-  def get_rec_initial_state(cls, batch_dim, name, n_out, unit, initial_state=None, unit_opts=None, **kwargs):
+  def get_rec_initial_state(cls, batch_dim, name, n_out, unit, initial_state=None, unit_opts=None,
+                            rec_layer=None, **kwargs):
     """
     Very similar to :func:`get_rec_initial_output`.
     Initial hidden state when used inside a recurrent layer for the frame t=-1, if it is needed.
@@ -2168,8 +2170,10 @@ class RnnCellLayer(_ConcatInputLayer):
     :param str unit: cell name
     :param dict[str]|None unit_opts:
     :param LayerBase|str|int|float|None|list|tuple|namedtuple initial_state: see code
+    :param RecLayer|None rec_layer: for the scope
     :rtype: tf.Tensor|tuple[tf.Tensor]|namedtuple
     """
+    from Util import dummy_noop_ctx
     with tf.name_scope("rec_initial_state"):
       init_value = initial_state
       dim = cls.get_hidden_state_size(n_out=n_out, unit=unit, unit_opts=unit_opts, **kwargs)
@@ -2193,7 +2197,8 @@ class RnnCellLayer(_ConcatInputLayer):
         elif v == "ones" or v == 1:
           return tf.ones(shape)
         elif v == "var":
-          v = tf.get_variable("initial_%s" % name, shape=(d,), initializer=tf.zeros_initializer())
+          with rec_layer.var_creation_scope() if rec_layer else dummy_noop_ctx():
+            v = tf.get_variable("initial_%s" % name, shape=(d,), initializer=tf.zeros_initializer())
           from TFUtil import expand_dims_unbroadcast
           v = expand_dims_unbroadcast(v, axis=0, dim=batch_dim)  # (batch,dim)
           return v

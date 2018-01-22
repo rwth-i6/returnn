@@ -1006,7 +1006,9 @@ def reuse_name_scope(name, absolute=None, **kwargs):
   :param kwargs: passed on to `tf.variable_scope`
   :return: yields the variable_scope
   """
+  kwargs = kwargs.copy()
   if isinstance(name, tf.VariableScope):
+    kwargs.setdefault("reuse", name.reuse)
     name = name.name
     if absolute is not None:
       assert absolute is True
@@ -1020,6 +1022,7 @@ def reuse_name_scope(name, absolute=None, **kwargs):
     current_name_scope = get_current_name_scope()
     if current_name_scope:
       name = current_name_scope + "/" + name
+    kwargs.setdefault("reuse", tf.get_variable_scope().reuse)
   else:
     current_name_scope = None  # not needed
   assert name[-1:] != "/"
@@ -1037,7 +1040,7 @@ def reuse_name_scope(name, absolute=None, **kwargs):
     # Afterwards we fix that name again.
     # Note that the reuse-argument might be miss-leading in this context:
     # It means that tf.get_variable() will search for existing variables and errors otherwise.
-    var_scope = tf.VariableScope(name=abs_name, reuse=kwargs.get("reuse", False))
+    var_scope = tf.VariableScope(name=abs_name, reuse=kwargs.get("reuse", None))
     with tf.variable_scope(var_scope, **kwargs) as scope:
       assert isinstance(scope, tf.VariableScope)
       # remove "/" from the end of the var-scope.
@@ -1048,6 +1051,19 @@ def reuse_name_scope(name, absolute=None, **kwargs):
       scope._name = scope._name[:-1]
       assert name == scope.name, "%r" % current_name_scope
       yield scope
+
+
+@contextlib.contextmanager
+def opt_reuse_name_scope(name):
+  """
+  :param str|tf.VariableScope name:
+  :return: yields the variable_scope
+  """
+  if name:
+    with reuse_name_scope(name) as scope:
+      yield scope
+  else:
+    yield tf.get_variable_scope()
 
 
 def get_name_scope_of_tensor(x):

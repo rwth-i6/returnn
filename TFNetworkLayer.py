@@ -421,27 +421,31 @@ class LayerBase(object):
     return batch_dim
 
   @contextlib.contextmanager
-  def var_creation_scope(self):
+  def var_creation_scope(self, sub_scope_name=None, **kwargs):
     """
     This takes care of setting up a scope where variables can be created.
 
+    :param str|None sub_scope_name:
+    :param kwargs: passed to variable_scope
     :return: yields the variable_scope
     """
-    from TFUtil import var_creation_scope, get_current_var_scope_name
+    from TFUtil import var_creation_scope, get_current_var_scope_name, opt_reuse_name_scope
     self_base_scope = self.get_base_absolute_name_scope_prefix()
     assert self_base_scope.endswith("/")
     cur_scope = get_current_var_scope_name()
     assert (cur_scope + "/").startswith(self_base_scope)
     # There are cases were a dummy layer was created already to create the variables,
     # e.g. see ReuseParams.LazyLayerResolver.
-    opts = {"reuse": tf.AUTO_REUSE}
+    kwargs = kwargs.copy()
+    kwargs.setdefault("reuse", tf.AUTO_REUSE)
     with var_creation_scope() as dep:
-      if self.reuse_params:
-        with tf.variable_scope(self.reuse_params.get_variable_scope(base_layer=self, **opts)) as scope:
-          yield scope
-      else:
-        with tf.variable_scope(tf.get_variable_scope(), **opts) as scope:
-          yield scope
+      with opt_reuse_name_scope(sub_scope_name):
+        if self.reuse_params:
+          with tf.variable_scope(self.reuse_params.get_variable_scope(base_layer=self, **kwargs)) as scope:
+            yield scope
+        else:
+          with tf.variable_scope(tf.get_variable_scope(), **kwargs) as scope:
+            yield scope
 
   def add_param(self, param, custom_update=None):
     """
@@ -726,7 +730,7 @@ class LayerBase(object):
     return None
 
   @classmethod
-  def get_rec_initial_output(cls, batch_dim, name, output, initial_output=None, **kwargs):
+  def get_rec_initial_output(cls, batch_dim, name, output, rec_layer, initial_output=None, **kwargs):
     """
     If this layer is used inside a recurrent layer, this function specifies the
     output of frame t=-1, if it is needed.
@@ -739,6 +743,7 @@ class LayerBase(object):
     :param tf.Tensor batch_dim: including beam size in beam search
     :param str name: layer name
     :param Data output: template
+    :param TFNetworkRecLayer.RecLayer rec_layer:
     :param str|float|int|tf.Tensor|None initial_output:
     :rtype: tf.Tensor
     """
@@ -770,8 +775,9 @@ class LayerBase(object):
     elif v == "var":
       assert not data.sparse
       assert numpy.prod(bc_shape) == data.dim
-      x = tf.get_variable(
-        "init_%s_var" % name, shape=(data.dim,), dtype=data.dtype, initializer=tf.zeros_initializer(dtype=data.dtype))
+      with rec_layer.var_creation_scope():
+        x = tf.get_variable(
+          "init_%s_var" % name, shape=(data.dim,), dtype=data.dtype, initializer=tf.zeros_initializer(dtype=data.dtype))
       x = tf.reshape(x, bc_shape, name="init_%s_var_bc" % name)
       x = tf.tile(x, [batch_dim if (i == data.batch_dim_axis) else 1 for i in range(data.batch_ndim)],
                   name="init_%s_var_batch_bc" % name)
@@ -804,9 +810,10 @@ class LayerBase(object):
       raise Exception("invalid initial output type %r for sub-layer %r" % (v, name))
 
   @classmethod
-  def get_rec_initial_extra_outputs(cls, batch_dim, **kwargs):
+  def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, **kwargs):
     """
     :param tf.Tensor batch_dim: for this layer, might be with beam
+    :param TFNetworkRecLayer.RecLayer rec_layer:
     :rtype: dict[str,tf.Tensor]
     """
     return {}

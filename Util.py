@@ -12,6 +12,7 @@ import shlex
 import numpy as np
 import re
 import time
+import contextlib
 try:
   import thread
 except ImportError:
@@ -2465,3 +2466,8 @@ def make_seq_of_type(cls, seq):
   if is_namedtuple(cls):
     return cls(*seq)
   return cls(seq)
+
+
+@contextlib.contextmanager
+def dummy_noop_ctx():
+  yield None
