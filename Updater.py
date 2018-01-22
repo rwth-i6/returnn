@@ -788,10 +788,13 @@ class Updater:
           updates.append((old_grad, corrected_grad))
 
       elif self.nadam: # http://cs229.stanford.edu/proj2015/054_report.pdf
-        m_cache = self.var(1, name="momemtum_cache")
+        from functools import reduce
+
+        m_cache = self.var(reduce(lambda x, y: x * y,[beta1 * ( 1 - 0.5 * 0.96**( (i + 1) * float(self.nadam_decay) ) ) for i in range(int(self.network.update_step - 1))] + [1]), name="momemtum_cache")
         m_prev = self.var(param, zero=True, name="nadam_m_%s" % param.name)
         v_prev = self.var(param, zero=True, name="nadam_v_%s" % param.name)
         self.adam_offset = numpy.float32(1e-8)
+        init_flag = T.le(i_t,numpy.float32(self.network.update_step + 1))
 
         mt =  beta1 * ( 1 - 0.5 * 0.96**( i_t * float(self.nadam_decay) ) ) # momentum schedule, http://www.cs.toronto.edu/~fritz/absps/momentum.pdf
         mtnext = beta1 * ( 1 - 0.5 * 0.96**( (i_t + 1) * float(self.nadam_decay) ) ) # for simplified NAG
@@ -801,17 +804,17 @@ class Updater:
 
         _deltas = deltas / T.cast(1 - m_cache_new, dtype="float32")
 
-        m = beta1 * m_prev + (numpy.float32(1) - beta1) * deltas
+        m = beta1 * T.switch(init_flag, deltas, m_prev) + (numpy.float32(1) - beta1) * deltas
         _m = m / T.cast(1 - bias_corr, dtype="float32") # bias correction (with momentum schedule (include the next t+1))
 
-        v = beta2 * v_prev + (numpy.float32(1) - beta2) * (deltas**2)
+        v = beta2 * T.switch(init_flag, deltas**2, v_prev) + (numpy.float32(1) - beta2) * (deltas**2)
         _v = v / T.cast(1 - beta2 ** i_t, dtype="float32")
 
         __m = T.cast(1 - mt, dtype="float32") * _deltas + T.cast(mtnext, dtype="float32") * _m
 
         step = -self.learning_rate_var * gradient_scale * __m / ( T.sqrt(_v) + self.adam_offset )
 
-        upd[param] += T.switch(T.eq(m_cache,numpy.float32(1)), T.zeros_like(step), step)
+        upd[param] += T.switch(init_flag, T.zeros_like(step), step)
 
         updates.append((m_cache, m_cache_new))
         updates.append((m_prev, m))

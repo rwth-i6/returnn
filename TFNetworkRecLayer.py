@@ -37,13 +37,14 @@ class RecLayer(_ConcatInputLayer):
     :param int|None direction: None|1 -> forward, -1 -> backward
     :param bool input_projection: True -> input is multiplied with matrix. False only works if same input dim
     :param LayerBase|str|float|int|tuple|None initial_state:
-    :param int max_seq_len: if unit is a subnetwork
+    :param int|str|None max_seq_len: if unit is a subnetwork. str will be evaluated. see code
     :param str forward_weights_init: see :func:`TFUtil.get_initializer`
     :param str recurrent_weights_init: see :func:`TFUtil.get_initializer`
     :param str bias_init: see :func:`TFUtil.get_initializer`
     :param bool|None optimize_move_layers_out: will automatically move layers out of the loop when possible
     """
     super(RecLayer, self).__init__(**kwargs)
+    import re
     from TFUtil import is_gpu_available
     from tensorflow.contrib import rnn as rnn_contrib
     from tensorflow.python.util import nest
@@ -106,7 +107,7 @@ class RecLayer(_ConcatInputLayer):
       default_var_initializer = self._fwd_weights_initializer
     else:
       default_var_initializer = xavier_initializer(seed=self.network.random.randint(2**31))
-    with tf.variable_scope("rec", initializer=default_var_initializer) as scope:
+    with reuse_name_scope("rec", initializer=default_var_initializer) as scope:
       assert isinstance(scope, tf.VariableScope)
       self._rec_scope = scope
       scope_name_prefix = scope.name + "/"  # e.g. "layer1/rec/"
@@ -131,7 +132,7 @@ class RecLayer(_ConcatInputLayer):
         # Very generic way to collect all created params.
         # Note that for the TF RNN cells, there is no other way to do this.
         # Also, see the usage of :func:`LayerBase.cls_layer_scope`, e.g. for initial vars.
-        params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope_name_prefix)
+        params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=re.escape(scope_name_prefix))
         self.params.update({p.name[len(scope_name_prefix):-2]: p for p in params})
 
   def get_dep_layers(self):
@@ -825,7 +826,8 @@ class _SubnetworkRecCell(object):
       return constant_with_shape(False, shape=[batch_dim], name="initial_end")
     with reuse_name_scope(self.parent_rec_layer._rec_scope):
       with cl.cls_layer_scope(name):
-        return cl.get_rec_initial_output(batch_dim=batch_dim, **self.layer_data_templates[name].kwargs)
+        return cl.get_rec_initial_output(
+          batch_dim=batch_dim, rec_layer=self.parent_rec_layer, **self.layer_data_templates[name].kwargs)
 
   def _get_init_extra_outputs(self, name):
     """
@@ -838,7 +840,8 @@ class _SubnetworkRecCell(object):
     with reuse_name_scope(self.parent_rec_layer._rec_scope):
       with cl.cls_layer_scope(name):
         batch_dim = template_layer.get_batch_dim()
-        d = cl.get_rec_initial_extra_outputs(batch_dim=batch_dim, **self.layer_data_templates[name].kwargs)
+        d = cl.get_rec_initial_extra_outputs(
+          batch_dim=batch_dim, rec_layer=self.parent_rec_layer, **self.layer_data_templates[name].kwargs)
     return d
 
   def _check_output_template_shape(self):
@@ -980,8 +983,7 @@ class _SubnetworkRecCell(object):
         have_known_seq_len = True
       else:
         assert "end" in self.layer_data_templates, "length not defined, provide 'end' layer"
-        assert rec_layer._max_seq_len, "must specify max_seq_len in rec layer"
-        max_seq_len = tf.constant(rec_layer._max_seq_len, name="max_seq_len_const")
+        max_seq_len = None
         have_known_seq_len = False
       # if not self.input_data and self.network.search_flag:
       #   assert not have_known_seq_len  # at least for the moment
@@ -1304,12 +1306,45 @@ class _SubnetworkRecCell(object):
           res = (identity_with_debug_log(out=self._debug_out, x=res[0], args=args),) + res[1:]
         return res
 
-    def cond(i, net_vars, acc_ta, seq_len_info=None):
+    def cond(i, net_vars, acc_tas, seq_len_info=None):
+      """
+      :param tf.Tensor i: loop counter, scalar
+      :param net_vars: the accumulator values. see also self.get_init_loop_vars()
+      :param list[tf.TensorArray] acc_tas: the output accumulator TensorArray
+      :param (tf.Tensor,tf.Tensor)|None seq_len_info: tuple (end_flag, seq_len)
+      :return: True -> we should run the current loop-iteration, False -> stop loop
+      :rtype: tf.Tensor
+      """
       with tf.name_scope("loop_cond"):
-        res = tf.less(i, max_seq_len, name="i_less_max_seq_len")
+        from TFUtil import opt_logical_and
+        res = True
+        if max_seq_len is not None:
+          res = opt_logical_and(res, tf.less(i, max_seq_len, name="i_less_max_seq_len"))
+        # Only consider the user 'max_seq_len' option if we don't know the real max_seq_len.
+        # This is the old behavior. Maybe this might change at some point.
+        elif isinstance(rec_layer._max_seq_len, int):
+          res = opt_logical_and(res, tf.less(i, rec_layer._max_seq_len, name="i_less_const_max_seq_len"))
+        elif isinstance(rec_layer._max_seq_len, str):
+          def max_len_from(src):
+            """
+            :param str src: layer name. use "base:" prefix to access the parent network
+            :return: max seq-len of the layer output
+            :rtype: tf.Tensor
+            """
+            layer = self.net.get_layer(src)
+            return tf.reduce_max(layer.output.get_sequence_lengths(), name="max_seq_len_%s" % layer.tf_scope_name)
+          with tf.name_scope("user_max_seq_len"):
+            user_max_seq_len = eval(rec_layer._max_seq_len, {"max_len_from": max_len_from, "tf": tf})
+          res = opt_logical_and(res, tf.less(i, user_max_seq_len, name="i_less_user_max_seq_len"))
+        else:
+          assert rec_layer._max_seq_len is None, "%r: unsupported max_seq_len %r" % (rec_layer, rec_layer._max_seq_len)
+        # Check not considering seq_len_info because the dynamics of the network can also lead
+        # to an infinite loop, so enforce that some maximum is specified.
+        assert res is not True, "%r: specify max_seq_len" % rec_layer
         if seq_len_info is not None:
           end_flag, _ = seq_len_info
-          res = tf.logical_and(res, tf.reduce_any(tf.logical_not(end_flag)), name="loop_cond_res")
+          any_not_ended = tf.reduce_any(tf.logical_not(end_flag), name="any_not_ended")
+          res = opt_logical_and(res, any_not_ended)
         return res
 
     from TFUtil import constant_with_shape
@@ -1968,11 +2003,14 @@ class RnnCellLayer(_ConcatInputLayer):
       "%s: This layer is expected to be used inside a RecLayer, or to have input with time." % self)
     self._initial_state = initial_state
     assert initial_output is None, "set initial_state instead"
+    import re
     from TFUtil import get_initializer
-    with tf.variable_scope(
+    # Cannot use self.var_creation_scope() when this is inside a RecLayer.
+    with reuse_name_scope(
       "rec",
       initializer=get_initializer(
-        weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
+        weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self}),
+      reuse=tf.AUTO_REUSE
     ) as scope:
       assert isinstance(scope, tf.VariableScope)
       scope_name_prefix = scope.name + "/"  # e.g. "layer1/rec/"
@@ -1998,7 +2036,7 @@ class RnnCellLayer(_ConcatInputLayer):
           initial_state=state0, time_major=True, scope=scope)
       self._hidden_state = state
       self.rec_vars_outputs["state"] = state
-      params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope_name_prefix)
+      params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=re.escape(scope_name_prefix))
       assert params
       self.params.update({p.name[len(scope_name_prefix):-2]: p for p in params})
 
@@ -2116,7 +2154,8 @@ class RnnCellLayer(_ConcatInputLayer):
     return self.flatten_hidden_state(self._hidden_state)
 
   @classmethod
-  def get_rec_initial_state(cls, batch_dim, name, n_out, unit, initial_state=None, unit_opts=None, **kwargs):
+  def get_rec_initial_state(cls, batch_dim, name, n_out, unit, initial_state=None, unit_opts=None,
+                            rec_layer=None, **kwargs):
     """
     Very similar to :func:`get_rec_initial_output`.
     Initial hidden state when used inside a recurrent layer for the frame t=-1, if it is needed.
@@ -2134,8 +2173,10 @@ class RnnCellLayer(_ConcatInputLayer):
     :param str unit: cell name
     :param dict[str]|None unit_opts:
     :param LayerBase|str|int|float|None|list|tuple|namedtuple initial_state: see code
+    :param RecLayer|None rec_layer: for the scope
     :rtype: tf.Tensor|tuple[tf.Tensor]|namedtuple
     """
+    from Util import dummy_noop_ctx
     with tf.name_scope("rec_initial_state"):
       init_value = initial_state
       dim = cls.get_hidden_state_size(n_out=n_out, unit=unit, unit_opts=unit_opts, **kwargs)
@@ -2159,7 +2200,8 @@ class RnnCellLayer(_ConcatInputLayer):
         elif v == "ones" or v == 1:
           return tf.ones(shape)
         elif v == "var":
-          v = tf.get_variable("initial_%s" % name, shape=(d,), initializer=tf.zeros_initializer())
+          with rec_layer.var_creation_scope() if rec_layer else dummy_noop_ctx():
+            v = tf.get_variable("initial_%s" % name, shape=(d,), initializer=tf.zeros_initializer())
           from TFUtil import expand_dims_unbroadcast
           v = expand_dims_unbroadcast(v, axis=0, dim=batch_dim)  # (batch,dim)
           return v
@@ -2307,16 +2349,21 @@ class ChoiceLayer(LayerBase):
 
   _debug_out = None  # type: None|list
 
-  def __init__(self, beam_size, input_type="prob", explicit_search_source=None, length_normalization=True, **kwargs):
+  def __init__(self, beam_size, input_type="prob", explicit_search_source=None, length_normalization=True,
+               scheduled_sampling=False,
+               **kwargs):
     """
     :param int beam_size: the outgoing beam size. i.e. our output will be (batch * beam_size, ...)
     :param str input_type: "prob" or "log_prob", whether the input is in probability space, log-space, etc.
       or "regression", if it is a prediction of the data as-is.
     :param LayerBase|None explicit_search_source: will mark it as an additional dependency
+    :param dict|None scheduled_sampling:
     :param bool length_normalization: evaluates score_t/len in search
     """
     super(ChoiceLayer, self).__init__(**kwargs)
+    from Util import CollectionReadCheckCovered
     self.explicit_search_source = explicit_search_source
+    self.scheduled_sampling = CollectionReadCheckCovered.from_bool_or_dict(scheduled_sampling)
     # We assume log-softmax here, inside the rec layer.
     assert self.target
     if self.network.search_flag:
@@ -2435,7 +2482,45 @@ class ChoiceLayer(LayerBase):
           placeholder=labels,
           available_for_inference=True,
           beam_size=beam_size)
-    else:
+    elif self.scheduled_sampling.truth_value:
+      # Original paper: https://arxiv.org/abs/1506.03099
+      # Currently, here: no scheduling, just always sample...
+      # We could also do that with a beam (num_samples=beam_size). But currently we do not.
+      # Note that in other implementations (e.g. tensor2tensor), as well as in the original paper,
+      # they do the sampling from the logits where the decoder got always the true labels,
+      # and then a second pass is done for the decoder, and the losses are used only from the second pass.
+      # This means that they don't back-propagate the gradient of the losses through the sampling decision,
+      # as they write in the paper.
+      # This is different from what we do here. There is no second pass.
+      # Currently there is also no gradient through tf.multinomial but we could add that later.
+      assert len(self.sources) == 1
+      scores_in = self.sources[0].output.get_placeholder_as_batch_major()  # (batch, dim)
+      # We present the scores in +log space, and we will add them up along the path.
+      if input_type == "prob":
+        scores_in = tf.log(scores_in)
+      elif input_type == "log_prob":
+        pass
+      else:
+        raise Exception("%r: invalid input type %r" % (self, input_type))
+      samples = tf.multinomial(scores_in, num_samples=1)  # (batch, num_samples), int64
+      samples = tf.to_int32(tf.reshape(samples, [-1]))  # (batch,), int32
+      if self.scheduled_sampling.get("gold_mixin_prob"):
+        gold_targets = self._static_get_target_value(
+          target=self.target, network=self.network,
+          mark_data_key_as_used=True).get_placeholder_as_batch_major()  # (batch,), int32
+        samples = tf.where(
+          tf.less(tf.random_uniform(tf.shape(samples)), self.scheduled_sampling.get("gold_mixin_prob")),
+          gold_targets, samples)
+      self.output = Data(
+        name="%s_sampled_output" % self.name,
+        batch_dim_axis=0,
+        shape=self.output.shape,
+        sparse=True,
+        dim=self.output.dim,
+        dtype=self.output.dtype,
+        placeholder=samples,
+        available_for_inference=True)
+    else:  # no search, and no scheduled-sampling
       assert len(self.sources) == 0  # will be filtered out in transform_config_dict
       # Note: If you want to do forwarding, without having the reference,
       # that wont work. You must do search in that case.
@@ -2451,9 +2536,10 @@ class ChoiceLayer(LayerBase):
     :param TFNetwork.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     """
-    if not network.search_flag:
+    if not network.search_flag and not d.get("scheduled_sampling"):
       # In the dependency graph, we don't want it.
       # This can enable some optimizations in the RecLayer.
+      # We do it here because we should know about the deps early in the template creation in RecLayer.
       d["from"] = []
     if d.get("explicit_search_source"):
       d["explicit_search_source"] = get_layer(d["explicit_search_source"]) if network.search_flag else None
@@ -2490,6 +2576,7 @@ class ChoiceLayer(LayerBase):
     return {"choice_scores": tf.TensorShape((None, None))}  # (batch, beam)
 
   def get_dep_layers(self):
+    # See also self.transform_config_dict where we might strip away the sources.
     l = super(ChoiceLayer, self).get_dep_layers()
     if self.explicit_search_source:
       l.append(self.explicit_search_source)
@@ -2676,31 +2763,43 @@ class GenericAttentionLayer(AttentionBaseLayer):
   """
   layer_class = "generic_attention"
 
-  def __init__(self, weights, **kwargs):
+  def __init__(self, weights, auto_squeeze=True, **kwargs):
     """
-    :param LayerBase base: encoder output to attend on. (B, enc-time)|(enc-time, B) + (n_out,)
+    :param LayerBase base: encoder output to attend on. (B, enc-time)|(enc-time, B) + (...) + (n_out,)
     :param LayerBase weights: attention weights. ((B, enc-time)|(enc-time, B)) + (1,)|()
+    :param bool auto_squeeze: auto-squeeze any weight-axes with dim=1 away
     """
     super(GenericAttentionLayer, self).__init__(**kwargs)
     assert not self.sources, "only base and weights are needed"
     self.weights = weights
     weights_data = self.weights.output.copy_as_batch_major()
-    assert (weights_data.batch_dim_axis, weights_data.time_dim_axis) == (0, 1)
-    assert weights_data.batch_ndim in {2, 3}
-    # We will always have batch-major mode and just write T, i.e. (B,T,...).
-    weights_t = weights_data.placeholder  # (B,T,1)|(B,T)
+    self.base_weights = weights_data.copy_with_time_dim_axis(1)  # (B,T,...)
+    # We will always have batch-major mode and just write T for enc-time, i.e. (B,T,...).
+    weights_t = weights_data.placeholder  # (B,...,T,...)
+    new_axes = list(range(weights_data.batch_ndim))
+    new_axes.remove(weights_data.time_dim_axis)
+    new_axes.append(weights_data.time_dim_axis)
+    weights_t = tf.transpose(weights_t, perm=new_axes)  # (B,...,T)
+    shape = tf.shape(weights_t)
+    shape = [weights_data.batch_shape[new_axes[i]] or shape[i] for i in range(len(new_axes))]
+    batch_dim, time_dim = shape[0], shape[-1]
     if weights_data.batch_ndim < self.base.output.batch_ndim:  # weights_t of shape (B,T)
-      weights_t_bc = tf.expand_dims(weights_t, axis=1)  # (B,1,T)
+      from TFUtil import expand_multiple_dims
+      weights_t = expand_multiple_dims(
+        weights_t, [-2] * (self.base.output.batch_ndim - weights_data.batch_ndim))  # (B,...,1,T)
+      rem_dims_start_axis = weights_data.batch_ndim - 2
+      rem_dims = []
     else:
-      assert weights_data.batch_ndim == self.base.output.batch_ndim
-      assert weights_data.dim == 1
-      weights_t_bc = tf.transpose(weights_t, perm=(0, 2, 1))  # (B,1,T)
-      weights_t = tf.squeeze(weights_t, axis=2)  # (B,T)
-    self.base_weights = weights_t  # (B,T)
-    base = self.base.output.get_placeholder_as_batch_major()  # (B,T,n_out)
-    out = tf.matmul(weights_t_bc, base)  # (B,1,n_out)
-    out.set_shape(tf.TensorShape([None, 1, self.output.dim]))
-    out = tf.squeeze(out, axis=1)  # (batch, n_out)
+      rem_dims_start_axis = self.base.output.batch_ndim - 2
+      rem_dims = shape[rem_dims_start_axis:-1]
+      weights_t = tf.reshape(
+        weights_t, shape[:rem_dims_start_axis] + [tf.reduce_prod(rem_dims) if rem_dims else 1, time_dim])  # (B,?,T)
+    if auto_squeeze:
+      rem_dims = [d for d in rem_dims if d != 1]
+    base = self.base.output.copy_as_batch_major().copy_with_time_dim_axis(-2)  # (B,...,T,n_out)
+    base_t = base.placeholder
+    out = tf.matmul(weights_t, base_t)  # (B,?,n_out)
+    out = tf.reshape(out, shape[:rem_dims_start_axis] + rem_dims + [self.output.dim])  # (batch, ..., n_out)
     self.output.placeholder = out
     self.output.size_placeholder = {}
 
@@ -2712,6 +2811,28 @@ class GenericAttentionLayer(AttentionBaseLayer):
     d.setdefault("from", [])
     super(GenericAttentionLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
     d["weights"] = get_layer(d["weights"])
+
+  @classmethod
+  def get_out_data_from_opts(cls, base, weights, auto_squeeze=True, **kwargs):
+    """
+    :param LayerBase base:
+    :param LayerBase weights:
+    :param bool auto_squeeze:
+    :rtype: Data
+    """
+    out = super(GenericAttentionLayer, cls).get_out_data_from_opts(base=base, **kwargs)
+    base_rem_axes = base.output.get_axes(exclude_batch=True, exclude_time=True)
+    base_rem_axes.remove(base.output.feature_dim_axis)
+    weights_rem_axes = weights.output.get_axes(exclude_batch=True, exclude_time=True)
+    # All the first axes in weights should match with base_rem_axes, just like the batch-dim.
+    weights_rem_axes = weights_rem_axes[len(base_rem_axes):]
+    if auto_squeeze:
+      weights_rem_axes = [a for a in weights_rem_axes if weights.output.batch_shape[a] != 1]
+    out.shape = (
+      out.shape[:min(len(base_rem_axes), len(out.shape) - 1)] +
+      tuple([weights.output.batch_shape[a] for a in weights_rem_axes]) + out.shape[-1:])
+
+    return out
 
 
 class DotAttentionLayer(GlobalAttentionContextBaseLayer):

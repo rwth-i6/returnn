@@ -909,7 +909,7 @@ class FeedDictDataProvider(DataProviderBase):
           if k in self.extern_data.extra_added_keys:
             continue
           if self.extern_data.data[k].have_time_axis():
-            if l[k] in [0, None]:
+            if l.get(k) in [0, None]:
               continue
           v = self.dataset.get_data(seq.seq_idx, k)
           if self.extern_data.data[k].have_time_axis():

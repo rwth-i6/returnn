@@ -615,7 +615,6 @@ class TrainTaskThread(TaskThread):
       else:
         # consensus via average
         mean_updates = numpy.mean([dev.num_updates for dev in self.devices])
-        self.network.update_step += mean_updates
         for i in range(nparams):
           num_updates = { dev.name : dev.num_updates for net,dev in zip(hypnets,self.devices) if numpy.sum(abs(net[i] - basenet[i].get_value())) > numpy.float32(0) }
           tot_updates = sum(num_updates.values())
@@ -628,7 +627,7 @@ class TrainTaskThread(TaskThread):
             print("warning: no update available for parameter", basenet[i], file=log.v3)
             consnet[i] = basenet[i].get_value()
           #consnet[i] = basenet[i].get_value() + ndevs * numpy.sum([ (net[i] - basenet[i].get_value()) * (float(device.num_frames) / nframes) for net,dev in zip(hypnets,self.devices) ], axis = 0)
-      self.network.update_step = sum([ dev.get_num_updates() for dev in self.devices ]) / len(self.devices)
+      self.network.update_step = max([ dev.get_num_updates() for dev in self.devices ])
       for p, q in zip(self.network.get_all_params_vars(), consnet):
         p_shape = p.get_value(borrow=True, return_internal_type=True).shape
         assert p_shape == q.shape

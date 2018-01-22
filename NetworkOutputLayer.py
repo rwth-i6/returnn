@@ -29,7 +29,7 @@ class OutputLayer(Layer):
                compute_priors=False, compute_priors_exp_average=0, compute_priors_accumulate_batches=None,
                compute_distortions=False,
                softmax_smoothing=1.0, grad_clip_z=None, grad_discard_out_of_bound_z=None, normalize_length=False,
-               exclude_labels=[],
+               exclude_labels=[], include_labels=[],
                apply_softmax=True, batchwise_softmax=False,
                substract_prior_from_output=False,
                input_output_similarity=None,
@@ -185,6 +185,10 @@ class OutputLayer(Layer):
 
     self.set_attr('from', ",".join([s.name for s in self.sources]))
     index_flat = self.index.flatten()
+    assert not (exclude_labels and include_labels)
+    if include_labels:
+      exclude_labels = [ i for i in range(self.attrs['n_out']) if not i in include_labels ]
+    assert len(exclude_labels) < self.attrs['n_out']
     for label in exclude_labels:
       index_flat = T.set_subtensor(index_flat[(T.eq(self.y_data_flat, label) > 0).nonzero()], numpy.int8(0))
     self.i = (index_flat > 0).nonzero()
@@ -337,9 +341,9 @@ class OutputLayer(Layer):
       #weight = T.cast(T.neq(T.argmax(self.p_y_given_x_flat, axis=1), self.y_data_flat), 'float32').dimshuffle(0,'x').repeat(self.z.shape[2],axis=1).reshape(self.z.shape)
       weight = T.cast(T.eq(T.argmax(self.p_y_given_x_flat, axis=1), self.y_data_flat), 'float32').dimshuffle(0,'x').repeat(self.z.shape[2], axis=1).reshape(self.z.shape)
       self.p_y_given_x = T.exp(weight * T.log(self.p_y_given_x))
-      self.z = self.p_y_given_x
-      self.p_y_given_x_flat = self.p_y_given_x.reshape((self.z.shape[0]*self.z.shape[1],self.z.shape[2]))
-      self.y_m = T.reshape(self.z, (self.z.shape[0] * self.z.shape[1], self.z.shape[2]), ndim=2)
+      #self.z = self.p_y_given_x
+      self.p_y_given_x_flat = self.p_y_given_x.reshape((self.p_y_given_x.shape[0]*self.p_y_given_x.shape[1],self.p_y_given_x.shape[2]))
+      self.y_m = T.reshape(self.p_y_given_x, (self.p_y_given_x.shape[0] * self.p_y_given_x.shape[1], self.p_y_given_x.shape[2]), ndim=2)
 
   def create_bias(self, n, prefix='b', name=""):
     if not name:

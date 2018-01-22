@@ -12,6 +12,7 @@ import shlex
 import numpy as np
 import re
 import time
+import contextlib
 try:
   import thread
 except ImportError:
@@ -804,6 +805,18 @@ def inplace_increment(x, idx, y):
   raise NotImplementedError("need Numpy 1.8 or later")
 
 
+def prod(ls):
+  """
+  :param list[T]|tuple[T]|numpy.ndarray ls:
+  :rtype: T|int|float
+  """
+  if len(ls) == 0:
+    return 1
+  x = ls[0]
+  for y in ls[1:]:
+    x *= y
+  return x
+
 
 def parse_orthography_into_symbols(orthography, upper_case_special=True, word_based=False):
   """
@@ -1442,7 +1455,7 @@ class CollectionReadCheckCovered:
   def __init__(self, collection, truth_value=None):
     """
     :param dict[str] collection:
-    :param None|bool truth_value:
+    :param None|bool truth_value: note: check explicitly for self.truth_value, bool(self) is not the same!
     """
     self.collection = collection
     if truth_value is None:
@@ -2453,3 +2466,8 @@ def make_seq_of_type(cls, seq):
   if is_namedtuple(cls):
     return cls(*seq)
   return cls(seq)
+
+
+@contextlib.contextmanager
+def dummy_noop_ctx():
+  yield None

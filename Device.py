@@ -22,7 +22,6 @@ import Debug
 import re
 
 
-
 def have_gpu():
   cpus, gpus = get_num_devices()
   return gpus > 0
@@ -290,6 +289,7 @@ class Device(object):
     self.num_frames = NumbersDict(0)
     self.num_updates = 0
     self.epoch = None
+    self.use_inputs = False
     if not update_specs: update_specs = {}
     update_specs.setdefault('update_rule', 'global')
     update_specs.setdefault('update_params', {})
@@ -546,6 +546,7 @@ class Device(object):
             output_streams[key].append(ctx.attrs['member'])
 
     self.forwarder = None
+    self.use_inputs = False
     if self.network_task in ['train', 'theano_graph']:
       if self.trainnet.loss in ('ctc', 'hmm'):
         train_givens = self.make_givens(self.trainnet)
@@ -816,11 +817,27 @@ class Device(object):
           source.append(self.testnet.x.reshape((self.testnet.i.shape[0], self.testnet.i.shape[1], self.testnet.x.shape[2])) * T.cast(self.testnet.i.dimshuffle(0,1,'x').repeat(self.testnet.x.shape[2],axis=2),'float32'))
         else:
           assert False, "invalid extraction: " + extract
-      self.extractor = theano.function(inputs = [],
-                                       outputs = source if len(source) == 1 else [T.concatenate(source, axis=-1)],
-                                       givens = givens,
-                                       on_unused_input=config.value('theano_on_unused_input', 'ignore'),
-                                       name = "extractor")
+      if config.has('load_graph') or config.has('save_graph'):
+        self.use_inputs = True
+        if config.has('load_graph') and os.path.exists(config.value('load_graph', '')):
+          import dill
+          graphfile = config.value('load_graph', '')
+          self.extractor = dill.load(open(graphfile, 'rb'))
+        else:
+          inp = [self.testnet.y[k] for k in self.used_data_keys]
+          inp += [self.testnet.j[k] for k in self.used_data_keys]
+          self.extractor = theano.function(inputs=inp,
+                                           outputs=source if len(source) == 1 else [T.concatenate(source, axis=-1)],
+                                           givens=[],
+                                           on_unused_input=config.value('theano_on_unused_input', 'ignore'),
+                                           name="extractor")
+      else:
+        self.extractor = theano.function(inputs = [],
+                                         outputs = source if len(source) == 1 else [T.concatenate(source, axis=-1)],
+                                         givens = givens,
+                                         on_unused_input=config.value('theano_on_unused_input', 'ignore'),
+                                         name = "extractor")
+      self.save_graph = config.has('save_graph')
 
     elif self.network_task == 'classify':
       self.classifier = theano.function(inputs = [],
@@ -859,7 +876,17 @@ class Device(object):
           for j in range(len(block_output)):
             output[j] += block_output[j]
     elif task == "extract" or task == "forward":
-      output = self.extractor()
+      if self.use_inputs:
+        inp = [self.y[k].get_value() for k in self.used_data_keys]
+        inp += [self.j[k].get_value() for k in self.used_data_keys]
+        output = self.extractor(*inp)
+      else:
+        output = self.extractor()
+      if self.save_graph:
+        import dill
+        sys.setrecursionlimit(50000)
+        dill.dump(self.extractor, open(self.config.value('save_graph',''), 'wb'))
+        self.save_graph = False
     elif task == 'classify':
       output = self.classifier()
     elif task == "analyze":

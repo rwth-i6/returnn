@@ -1076,7 +1076,7 @@ def test_RnnCellLayer_with_time():
       assert not input_no_time_l.output.sparse
       assert input_no_time_l.output.dim == input_no_time_l.output.shape[-1]
       input_no_time_l.output.placeholder = LayerBase.get_rec_initial_output(
-        batch_dim=1, name="input_no_time_l", n_out=10, output=input_no_time_l.output)  # dummy
+        batch_dim=1, name="input_no_time_l", n_out=10, output=input_no_time_l.output, rec_layer=None)  # dummy
     with tf.variable_scope("prev_l1"):
       prev_l = InternalLayer(name="prev:l1", network=net, out_type={"dim": 10, "time_dim_axis": None})
       prev_l.rec_vars_outputs["state"] = RnnCellLayer.get_rec_initial_state(

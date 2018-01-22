@@ -308,12 +308,8 @@ class TFNetwork(object):
     if name in self.layers:
       return self.layers[name]
     if name in self._constructing_layers:
-      print("Error: There is a dependency loop on layer %r." % name, file=log.v1)
-      print("Construction stack (most recent first):", file=log.v1)
-      for l in reversed(self._constructing_layers):
-        print("  %s" % l)
-      raise Exception("Dependency loop on layer %r." % name)
-    self._constructing_layers.append(name)
+      raise NetworkConstructionDependencyLoopException(
+        layer_name=name, constructing_layers=self._constructing_layers, net_dict=net_dict, network=self)
     if name not in net_dict:
       if name == "data":
         layer_desc = {"class": "source", "from": []}
@@ -332,14 +328,32 @@ class TFNetwork(object):
     layer_desc = layer_desc.copy()
     class_name = layer_desc.pop("class")
     layer_class = get_layer_class(class_name)
-    layer_class.transform_config_dict(layer_desc, network=self, get_layer=get_layer)
-    self._constructing_layers.remove(name)
+    self._constructing_layers.append(name)
+    try:
+      layer_class.transform_config_dict(layer_desc, network=self, get_layer=get_layer)
+    finally:
+      self._constructing_layers.remove(name)
     return add_layer(name=name, layer_class=layer_class, **layer_desc)
 
-  def add_layer(self, name, layer_class, **layer_desc):
+  def _create_layer_layer_desc(self, name, layer_desc):
     """
-    This will construct the layer given the layer_desc arguments,
-    and add it to the network.
+    :param str name: layer name
+    :param dict[str] layer_desc: opts
+    :rtype: dict[str]
+    """
+    if self.search_flag:
+      from TFNetworkLayer import SearchChoices
+      layer_desc = SearchChoices.translate_to_common_search_beam(layer_desc)
+    layer_desc = layer_desc.copy()
+    assert "name" not in layer_desc
+    assert "network" not in layer_desc
+    layer_desc["name"] = name
+    layer_desc["network"] = self
+    return layer_desc
+
+  def _create_layer(self, name, layer_class, **layer_desc):
+    """
+    This will create the layer given the layer_desc arguments.
 
     :param str name:
     :param (()->LayerBase)|LayerBase layer_class:
@@ -349,17 +363,10 @@ class TFNetwork(object):
       should not contain "output", which will be initialized to layer_class.get_out_data_from_opts.
       the layer_class will usually then define the layer.output and its placeholder.
       there is one notable exception: the InternalLayer, where you predefine the output.
+    :rtype: LayerBase
     """
-    assert name not in self.layers
     from Util import help_on_type_error_wrong_args
-    if self.search_flag:
-      from TFNetworkLayer import SearchChoices
-      layer_desc = SearchChoices.translate_to_common_search_beam(layer_desc)
-    layer_desc = layer_desc.copy()
-    assert "name" not in layer_desc
-    assert "network" not in layer_desc
-    layer_desc["name"] = name
-    layer_desc["network"] = self
+    layer_desc = self._create_layer_layer_desc(name=name, layer_desc=layer_desc)
     debug_print_layer_output_template = self.get_config().bool("debug_print_layer_output_template", False)
     debug_print_layer_output_shape = self.get_config().bool("debug_print_layer_output_shape", False)
     debug_add_check_numerics_on_output = self.get_config().bool("debug_add_check_numerics_on_output", False)  # also see debug_add_check_numerics_ops
@@ -388,6 +395,24 @@ class TFNetwork(object):
     assert layer.output.placeholder is not None
     layer.output.placeholder.set_shape(layer.output.batch_shape)
     assert layer.output.size_placeholder is not None
+    return layer
+
+  def add_layer(self, name, layer_class, **layer_desc):
+    """
+    This will construct the layer given the layer_desc arguments,
+    and add it to the network.
+
+    :param str name:
+    :param (()->LayerBase)|LayerBase layer_class:
+    :param layer_desc: contains the kwargs for the layer class.
+      the args should have been transformed via layer_class.transform_config_dict before (see _construct_layer).
+      must not contain "name" and "network", which will be automatically added here.
+      should not contain "output", which will be initialized to layer_class.get_out_data_from_opts.
+      the layer_class will usually then define the layer.output and its placeholder.
+      there is one notable exception: the InternalLayer, where you predefine the output.
+    """
+    assert name not in self.layers
+    layer = self._create_layer(name=name, layer_class=layer_class, **layer_desc)
     self.layers[name] = layer
     if layer.recurrent:
       self.recurrent = True
@@ -704,7 +729,8 @@ class TFNetwork(object):
     Note that this excludes auxiliary params.
     """
     for layer_name, layer_values_dict in values_dict.items():
-      self.layers[layer_name].set_param_values_by_dict(values_dict=layer_values_dict, session=session)
+      if layer_values_dict:
+        self.layers[layer_name].set_param_values_by_dict(values_dict=layer_values_dict, session=session)
 
   def get_auxiliary_params(self):
     return [self.global_train_step]
@@ -1085,3 +1111,24 @@ class TFNetworkParamsSerialized(object):
     """
     self.values_dict = values_dict
     self.global_train_step = global_train_step
+
+
+class NetworkConstructionDependencyLoopException(Exception):
+  """
+  This is raised when there is a dependency loop in the network construction.
+  """
+  def __init__(self, network, layer_name, constructing_layers, net_dict):
+    """
+    :param TFNetwork network:
+    :param str layer_name:
+    :param list[str] constructing_layers:
+    :param dict[str,dict[str]] net_dict:
+    """
+    msg = "Error: There is a dependency loop on layer %r." % layer_name
+    msg += "\nConstruction stack (most recent first):"
+    for l in reversed(constructing_layers):
+      msg += "\n  %s" % l
+    super(NetworkConstructionDependencyLoopException, self).__init__(msg)
+    self.network = network
+    self.layer_name = layer_name
+    self.net_dict = net_dict
