@@ -74,7 +74,7 @@ class Dataset(object):
     self.num_outputs = None; " :type: dict[str,(int,int)] "  # tuple is num-classes, len(shape).
     self.window = window
     self.seq_ordering = seq_ordering  # "default", "sorted" or "random". See self.get_seq_order_for_epoch().
-    self.timestamps = []
+    self.timestamps = None
     self.labels = {}; """ :type: dict[str,list[str]] """
     self.nbytes = 0
     self.num_running_chars = 0  # CTC running chars.
