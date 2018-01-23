@@ -151,7 +151,7 @@ class NormalizationData(object):
     """
     sum = None
     sumOfSqr = None
-    totalFrames = 0 if six.PY3 else 0L  # python 2/3 compatibility
+    totalFrames = np.int64(0)
     if groupName not in f:
       return sum, sumOfSqr, totalFrames
     group = f[groupName]
