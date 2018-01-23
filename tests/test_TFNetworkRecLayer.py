@@ -22,6 +22,8 @@ from Config import Config
 from TFNetwork import *
 from TFNetworkRecLayer import *
 from TFUtil import is_gpu_available
+import TFUtil
+TFUtil.debugRegisterBetterRepr()
 
 log.initialize(verbosity=[5])
 
@@ -75,6 +77,7 @@ def test_RecLayer_get_cudnn_params_size():
 
 @unittest.skipIf(not is_gpu_available(), "no gpu on this system")
 def test_cudnn_save_restore():
+  from pprint import pprint
   import tempfile, shutil, os
   from tensorflow.python.training.saver import BaseSaverBuilder
   model_tmp_dir = tempfile.mkdtemp("tmp-checkpoint")
@@ -126,13 +129,15 @@ def test_cudnn_save_restore():
               assert isinstance(spec, BaseSaverBuilder.SaveSpec)
               print("        name: %r" % spec.name)
               print("        tensor: %r" % spec.tensor)
+              print("        tensor shape: %r" % (session.run(spec.tensor).shape,))
       output_data1 = session.run(
         network1.get_default_output_layer().output.placeholder,
         feed_dict={
           network1.extern_data.data["data"].placeholder: input_data,
           network1.extern_data.data["data"].size_placeholder[0]: seq_lens})
       assert_equal(output_data1.shape, (seq_lens[0], 1, num_outputs))  # (time, batch, dim)
-      print("Saveable params:", network1.get_saveable_params_list())
+      print("Saveable params:")
+      pprint(network1.get_saveable_params_list())
       network1.save_params_to_file(filename=model_filename, session=session)
     print()
 
@@ -142,6 +147,8 @@ def test_cudnn_save_restore():
     with tf.Session() as session:
       network1a = TFNetwork(config=config1, train_flag=True)
       network1a.construct_from_dict(config1.typed_dict["network"])
+      print("Saveable params:")
+      pprint(network1a.get_saveable_params_list())
       network1a.load_params_from_file(filename=model_filename, session=session)
       for layer_name, layer1 in sorted(network1a.layers.items()):
         print("layer: %r" % layer_name)
@@ -149,7 +156,13 @@ def test_cudnn_save_restore():
           print("  param %r: %r" % (param_name, param1))
           param1old = params[layer_name][param_name]
           param1new = param1.eval(session)
-          numpy.testing.assert_almost_equal(param1old, param1new)
+          assert_equal(param1old.shape, param1new.shape)
+          # Unfortunately, this doesn't seem to be the case.
+          # Also, doesn't need to be, because they have two biases, so it's not unique.
+          #assert param1old.ndim == 1
+          #for i in range(param1old.shape[0]):
+          #  assert_almost_equal(param1old[i], param1new[i])
+          #numpy.testing.assert_almost_equal(param1old, param1new)
       output_data1a = session.run(
         network1a.get_default_output_layer().output.placeholder,
         feed_dict={
@@ -175,6 +188,8 @@ def test_cudnn_save_restore():
       })
       network2 = TFNetwork(config=config2, train_flag=True)
       network2.construct_from_dict(config2.typed_dict["network"])
+      print("Saveable params:")
+      pprint(network2.get_saveable_params_list())
       network2.load_params_from_file(filename=model_filename, session=session)
       output_data2 = session.run(
         network2.get_default_output_layer().output.placeholder,

@@ -2645,6 +2645,7 @@ def debugRegisterBetterRepr():
   """
 
   from tensorflow.python.framework import tensor_util
+  from tensorflow.python.training import saver
 
   def indexed_slices_repr(x):
     """
@@ -2677,11 +2678,27 @@ def debugRegisterBetterRepr():
     assert isinstance(op, tf.Operation)
     return "<tf.TensorArray %r>" % op.name
 
+  def saveable_repr(x):
+    """
+    :param tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject x:
+    :rtype: str
+    """
+    return "<tf..%s op=%r, specs=%r, name=%r>" % (x.__class__.__name__, x.op, x.specs, x.name)
+
+  def savespec_repr(x):
+    """
+    :param tensorflow.python.training.saver.BaseSaverBuilder.SaveSpec x:
+    :rtype: str
+    """
+    return "<tf..%s tensor=%r, slice_spec=%r, name=%r>" % (x.__class__.__name__, x.tensor, x.slice_spec, x.name)
+
   for cl, f in [
         (tf.IndexedSlices, indexed_slices_repr),
         (tf.Operation, op_repr),
         (tf.Variable, var_repr),
-        (tf.TensorArray, tensorarray_repr)]:
+        (tf.TensorArray, tensorarray_repr),
+        (saver.BaseSaverBuilder.SaveableObject, saveable_repr),
+        (saver.BaseSaverBuilder.SaveSpec, savespec_repr)]:
     if getattr(cl, "__repr__") is object.__repr__:
       setattr(cl, "__repr__", f)
 

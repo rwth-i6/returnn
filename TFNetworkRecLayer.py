@@ -454,7 +454,7 @@ class RecLayer(_ConcatInputLayer):
     :rtype: tf.Tensor
     """
     from TFUtil import get_current_var_scope_name
-    from tensorflow.contrib.cudnn_rnn import RNNParamsSaveable
+    from tensorflow.contrib.cudnn_rnn.python.ops import cudnn_rnn_ops
     assert self._max_seq_len is None
     assert self.input_data
     assert not self.input_data.sparse
@@ -468,17 +468,30 @@ class RecLayer(_ConcatInputLayer):
         num_units=self.output.dim, input_size=self.input_data.dim, rnn_mode=cell._rnn_mode, num_layers=num_layers)
       # Note: The raw params used during training for the cuDNN op is just a single variable
       # with all params concatenated together.
-      # For the checkpoint save/restore, we will use RNNParamsSaveable, which also makes it easier in CPU mode
+      # For the checkpoint save/restore, we will use Cudnn*Saveable, which also makes it easier in CPU mode
       # to import the params for another unit like LSTMBlockCell.
       # Also see: https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/cudnn_rnn/python/kernel_tests/cudnn_rnn_ops_test.py
       params = tf.Variable(
         tf.random_uniform([param_size], minval=-0.01, maxval=0.01, seed=42), name="params_raw", trainable=True)
-      params_saveable = RNNParamsSaveable(
-        params_to_canonical=cell.params_to_canonical,
-        canonical_to_params=cell.canonical_to_params,
-        param_variables=[params],
+      if cell._rnn_mode == cudnn_rnn_ops.CUDNN_LSTM:
+        fn = cudnn_rnn_ops.CudnnLSTMSaveable
+      elif cell._rnn_mode == cudnn_rnn_ops.CUDNN_GRU:
+        fn = cudnn_rnn_ops.CudnnGRUSaveable
+      elif cell._rnn_mode == cudnn_rnn_ops.CUDNN_RNN_TANH:
+        fn = cudnn_rnn_ops.CudnnRNNTanhSaveable
+      elif cell._rnn_mode == cudnn_rnn_ops.CUDNN_RNN_RELU:
+        fn = cudnn_rnn_ops.CudnnRNNReluSaveable
+      else:
+        raise ValueError("rnn mode %r" % cell._rnn_mode)
+      params_saveable = fn(
+        params,
+        num_layers=cell.num_layers,
+        num_units=cell.num_units,
+        input_size=cell.input_size,
+        input_mode=cell.input_mode,
+        direction=cell.direction,
+        scope="%s/params_canonical" % get_current_var_scope_name(),
         name="%s/params_canonical" % get_current_var_scope_name())
-      params_saveable.op = params
       tf.add_to_collection(tf.GraphKeys.SAVEABLE_OBJECTS, params_saveable)
       self.saveable_param_replace[params] = params_saveable
       # It's like a fused cell, i.e. operates on the full sequence.

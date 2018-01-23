@@ -832,7 +832,11 @@ class TFNetwork(object):
       # https://github.com/tensorflow/tensorflow/commit/92da8abfd35b93488ed7a55308b8f589ee23b622
       # https://github.com/tensorflow/tensorflow/commit/157370e5916b85c65958ed8383ae31d727228ed7
       # This map_list can be extended by all the mappings in checkpoint_convert.py.
-      map_list = {"lstm_cell/biases": "lstm_cell/bias", "lstm_cell/weights": "lstm_cell/kernel"}
+      map_list = {
+        "lstm_cell/biases": "lstm_cell/bias",
+        "lstm_cell/weights": "lstm_cell/kernel",
+        "cudnn/params_canonical/rnn/multi_rnn_cell/cell_0/cudnn_compatible_lstm_cell/bias": "lstm_block_wrapper/bias",
+        "cudnn/params_canonical/rnn/multi_rnn_cell/cell_0/cudnn_compatible_lstm_cell/kernel": "lstm_block_wrapper/kernel"}
       reader = tf.train.NewCheckpointReader(filename)
       net_vars = [v for v in self.get_saveable_params_list() if isinstance(v, tf.Variable)]
       net_saveables = [v for v in self.get_saveable_params_list() if not isinstance(v, tf.Variable)]
