@@ -547,7 +547,8 @@ class LayerBase(object):
     self.loss.init(
       output=self.output,
       output_with_activation=self.output_before_activation,
-      target=self._get_target_value())
+      target=self._get_target_value(),
+      layer=self)
 
   def get_loss_value(self):
     """
@@ -3970,6 +3971,7 @@ class FramewiseStatisticsLayer(LayerBase):
     # n_out=1 is a workaround for now. Our output should not be used. We have none.
     return Data(name="framewise_statistics_dummy_output", shape=(), dtype="int32", batch_dim_axis=None)
 
+
 # ------------------------------------------------------------------------------
 
 class Loss(object):
@@ -3984,6 +3986,7 @@ class Loss(object):
     :param TFNetwork.TFNetwork base_network:
     """
     self.base_network = base_network
+    self.layer = None  # type: LayerBase|None
     # All are initialized in self.init().
     self.output = None  # type: Data
     self.time_major = None  # type: bool|None
@@ -4010,14 +4013,16 @@ class Loss(object):
     This is used by `LayerBase.transform_config_dict`.
     """
 
-  def init(self, output, output_with_activation=None, target=None):
+  def init(self, output, output_with_activation=None, target=None, layer=None):
     """
     :param Data output: generated output
     :param OutputWithActivation|None output_with_activation:
     :param Data target: reference target from dataset
+    :param LayerBase|None layer:
     """
     from TFUtil import flatten_with_seq_len_mask
     with tf.name_scope("loss_init"):
+      self.layer = layer
       if target:
         if output.beam_size:
           if target.beam_size != output.beam_size:
@@ -4406,14 +4411,14 @@ class EditDistanceLoss(Loss):
     if self._ctc_decode:
       self.get_auto_output_layer_dim = lambda dim: dim + 1
 
-  def init(self, output, output_with_activation=None, target=None):
+  def init(self, output, output_with_activation=None, target=None, **kwargs):
     """
     :param Data output: generated output
     :param OutputWithActivation|None output_with_activation:
     :param Data target: reference target from dataset
     """
     super(EditDistanceLoss, self).init(
-      output=output, output_with_activation=output_with_activation, target=target)
+      output=output, output_with_activation=output_with_activation, target=target, **kwargs)
     assert target.sparse
     if output.sparse:
       assert not self._ctc_decode
@@ -4517,6 +4522,80 @@ class EditDistanceLoss(Loss):
     return self.reduce_func(error)
 
   def get_value(self):
+    return None
+
+
+class ExpectedLoss(Loss):
+  """
+  This loss uses another loss error or value and given the search beam scores, calculates the expected loss.
+  Sometimes also called minimum Bayes risk.
+  """
+  class_name = "expected_loss"
+  recurrent = True  # we don't know
+
+  def __init__(self, loss, loss_kind, norm_scores=True, norm_scores_stop_gradient=True, **kwargs):
+    """
+    :param Loss loss:
+    :param str loss_kind: "error" or "value". whether to use loss.get_error() or loss.get_value()
+    :param bool norm_scores:
+    """
+    super(ExpectedLoss, self).__init__(**kwargs)
+    from TFUtil import identity
+    self.losses = loss
+    self.losses.reduce_func = identity  # see self.get_value()
+    self.loss_kind = loss_kind
+    self.norm_scores = norm_scores
+    self.norm_scores_stop_gradient = norm_scores_stop_gradient
+    self.search_choices = None  # type: SearchChoices
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    assert "loss" in d, "specify 'loss' in 'loss_opts' for the expected loss"
+    assert isinstance(d["loss"], dict)
+    opts = d["loss"].copy()
+    assert isinstance(opts, dict)
+    class_name = opts.pop("class")
+    loss_class = get_loss_class(class_name)
+    assert issubclass(loss_class, Loss)
+    loss_class.transform_config_dict(opts, network=network, get_layer=get_layer)
+    loss = loss_class(base_network=network, **opts)
+    assert isinstance(loss, Loss)
+    d["loss"] = loss
+
+  def init(self, **kwargs):
+    super(ExpectedLoss, self).init(**kwargs)
+    self.losses.init(**kwargs)
+    assert isinstance(self.layer, LayerBase)
+    self.search_choices = self.layer.get_search_choices()
+    assert isinstance(self.search_choices, SearchChoices), "no search choices from layer %r" % self.layer
+
+  def get_value(self):
+    with tf.name_scope("expected_loss"):
+      if self.loss_kind == "value":
+        v = self.losses.get_value()
+      elif self.loss_kind == "error":
+        v = tf.to_float(self.losses.get_error())
+      else:
+        raise ValueError("invalid loss_kind %r" % self.loss_kind)
+      assert v is not None, "no value for loss_kind %r with loss %r" % (self.loss_kind, self.losses)
+      beam_scores = self.search_choices.beam_scores  # (batch,beam), +log scores
+      # We currently expect that v is of shape (batch*beam,), as we set reduce_func = identity,
+      # and that self.losses is a sequence criterion.
+      # This does not work for frame-wise criteria yet where we get (batch*beam*time') flattened.
+      v = tf.reshape(v, tf.shape(beam_scores))  # (batch,beam)
+      if self.norm_scores:
+        scores_norm_shift = tf.reduce_logsumexp(
+          beam_scores, name="scores_norm_shift", axis=1, keep_dims=True)  # (batch,1)
+        if self.norm_scores_stop_gradient:
+          scores_norm_shift = tf.stop_gradient(scores_norm_shift)
+        # Thus sum(value_weights) == 1.
+        value_weights = tf.exp(beam_scores - scores_norm_shift)
+      else:
+        value_weights = tf.exp(beam_scores)
+      weighted_values = tf.reduce_sum(v * value_weights, axis=1)  # (batch,)
+      return self.reduce_func(weighted_values)
+
+  def get_error(self):
     return None
 
 

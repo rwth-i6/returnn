@@ -1133,15 +1133,17 @@ class _SubnetworkRecCell(object):
           :param bool return_loss:
           :rtype: ()->tf.Tensor
           """
+          from TFNetworkLayer import Loss
+          from TFUtil import identity
 
           def get_loss():
             layer = self.net.layers[layer_name]
-            assert layer.loss
+            assert isinstance(layer.loss, Loss)
             # This is a bit hacky but we want to not reduce the loss to a scalar
             # in the loop but get it as shape (batch,).
             # This should work with all current implementations
             # but might need some redesign later.
-            layer.loss.reduce_func = lambda x: x
+            layer.loss.reduce_func = identity
             if return_loss:
               value = layer.get_loss_value()
             elif return_error:
