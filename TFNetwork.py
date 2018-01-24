@@ -235,7 +235,7 @@ class TFNetwork(object):
       s += " train"
     elif self.train_flag is not None:
       s += " train=%r" % self.train_flag
-    if self.search_flag is True:
+    if self.search_flag:
       s += " search"
     return "<%s>" % s
 
