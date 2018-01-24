@@ -4535,11 +4535,17 @@ class ExpectedLoss(Loss):
   class_name = "expected_loss"
   recurrent = True  # we don't know
 
-  def __init__(self, loss, loss_kind, norm_scores=True, norm_scores_stop_gradient=True, **kwargs):
+  def __init__(self, loss, loss_kind,
+               norm_scores=True, norm_scores_stop_gradient=True,
+               divide_beam_size=True, subtract_average_loss=True,
+               **kwargs):
     """
     :param Loss loss:
     :param str loss_kind: "error" or "value". whether to use loss.get_error() or loss.get_value()
     :param bool norm_scores:
+    :param bool norm_scores_stop_gradient:
+    :param bool divide_beam_size:
+    :param bool subtract_average_loss:
     """
     super(ExpectedLoss, self).__init__(**kwargs)
     from TFUtil import identity
@@ -4548,6 +4554,8 @@ class ExpectedLoss(Loss):
     self.loss_kind = loss_kind
     self.norm_scores = norm_scores
     self.norm_scores_stop_gradient = norm_scores_stop_gradient
+    self.divide_beam_size = divide_beam_size
+    self.subtract_average_loss = subtract_average_loss
     self.search_choices = None  # type: SearchChoices
 
   @classmethod
@@ -4584,7 +4592,7 @@ class ExpectedLoss(Loss):
       # We currently expect that v is of shape (batch*beam,), as we set reduce_func = identity,
       # and that self.losses is a sequence criterion.
       # This does not work for frame-wise criteria yet where we get (batch*beam*time') flattened.
-      v = tf.reshape(v, tf.shape(beam_scores))  # (batch,beam)
+      v = tf.reshape(v, tf.shape(beam_scores), name="losses")  # (batch,beam)
       if self.norm_scores:
         scores_norm_shift = tf.reduce_logsumexp(
           beam_scores, name="scores_norm_shift", axis=1, keep_dims=True)  # (batch,1)
@@ -4594,7 +4602,13 @@ class ExpectedLoss(Loss):
         value_weights = tf.exp(beam_scores - scores_norm_shift)
       else:
         value_weights = tf.exp(beam_scores)
-      weighted_values = tf.reduce_sum(v * value_weights, axis=1)  # (batch,)
+      if self.subtract_average_loss:
+        # Gradient variance reduction for the gradient of the value-weights.
+        # In case that the values also are differentiable, we don't want it to propagate through this.
+        v -= tf.stop_gradient(tf.reduce_mean(v, axis=1, keep_dims=True, name="avg_loss"))
+      weighted_values = tf.reduce_sum(v * value_weights, axis=1, name="weighted_loss")  # (batch,)
+      if self.divide_beam_size:
+        weighted_values /= tf.to_float(tf.shape(beam_scores)[-1])
       return self.reduce_func(weighted_values)
 
   def get_error(self):
