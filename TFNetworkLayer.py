@@ -48,7 +48,7 @@ class LayerBase(object):
                target=None, loss=None, loss_scale=1.0, size_target=None,
                reuse_params=None,
                L2=None, darc1=None,
-               is_output_layer=None, only_on_eval=False,
+               is_output_layer=None, only_on_eval=False, only_on_search=False,
                copy_output_loss_from_source_idx=None,
                batch_norm=False,
                spatial_smoothing=0.0,
@@ -73,6 +73,7 @@ class LayerBase(object):
     :param float|None darc1: for constraints. see Generalization in Deep Learning, https://arxiv.org/abs/1710.05468
     :param bool|None is_output_layer:
     :param bool only_on_eval: if True, this layer will only be calculated in eval
+    :param bool only_on_search: if True, this layer will only be calculated when search is done
     :param int|None copy_output_loss_from_source_idx: if set, will copy output_loss from this source
     :param bool|dict batch_norm: see self.batch_norm()
     :param str|float initial_output: used for recurrent layer, see self.get_rec_initial_output()
@@ -118,6 +119,7 @@ class LayerBase(object):
     self.darc1 = darc1
     self._is_output_layer = is_output_layer
     self.only_on_eval = only_on_eval
+    self.only_on_search = only_on_search
     self.use_batch_norm = batch_norm
     self.spatial_smoothing = spatial_smoothing
     self.trainable = trainable
@@ -244,7 +246,7 @@ class LayerBase(object):
     """
     # For the root name scope, it's even more restrictive, and we must also cover this case.
     name = name.replace(":", "__")
-    if name[:1] in "_-\\/":
+    if name[:1] in "_-\\/":  # invalid first chars
       name = (".%i." % ord(name[0])) + name[1:]
     return name
 
@@ -298,6 +300,8 @@ class LayerBase(object):
       # Must be done here now because loss might be set to None later.
       d["n_out"] = cls._guess_n_out_from_target_and_opt_loss(
         network=network, target=d["target"], loss_class_name=d.get("loss", None), get_layer=get_layer)
+    if d.pop("loss_only_on_non_search", None) and "loss" in d and network.search_flag:
+      del d["loss"]
     d["loss"] = cls._make_loss(
       class_name=d.pop("loss", None), opts=d.pop("loss_opts", None), network=network, get_layer=get_layer)
 
@@ -421,15 +425,14 @@ class LayerBase(object):
     return batch_dim
 
   @contextlib.contextmanager
-  def var_creation_scope(self, sub_scope_name=None, **kwargs):
+  def var_creation_scope(self, **kwargs):
     """
     This takes care of setting up a scope where variables can be created.
 
-    :param str|None sub_scope_name:
     :param kwargs: passed to variable_scope
     :return: yields the variable_scope
     """
-    from TFUtil import var_creation_scope, get_current_var_scope_name, opt_reuse_name_scope
+    from TFUtil import var_creation_scope, get_current_var_scope_name, reuse_name_scope
     self_base_scope = self.get_base_absolute_name_scope_prefix()
     assert self_base_scope.endswith("/")
     cur_scope = get_current_var_scope_name()
@@ -439,13 +442,12 @@ class LayerBase(object):
     kwargs = kwargs.copy()
     kwargs.setdefault("reuse", tf.AUTO_REUSE)
     with var_creation_scope() as dep:
-      with opt_reuse_name_scope(sub_scope_name):
-        if self.reuse_params:
-          with tf.variable_scope(self.reuse_params.get_variable_scope(base_layer=self, **kwargs)) as scope:
-            yield scope
-        else:
-          with tf.variable_scope(tf.get_variable_scope(), **kwargs) as scope:
-            yield scope
+      if self.reuse_params:
+        with reuse_name_scope(self.reuse_params.get_variable_scope(base_layer=self, **kwargs)) as scope:
+          yield scope
+      else:
+        with reuse_name_scope(tf.get_variable_scope(), **kwargs) as scope:
+          yield scope
 
   def add_param(self, param, custom_update=None):
     """

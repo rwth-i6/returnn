@@ -109,11 +109,11 @@ class Runner(object):
         loss = self.engine.get_const_tensor(key="zero_loss", value=0.0)
       d["loss"] = loss
       for layer_name, loss in self.engine.network.loss_by_layer.items():
-        if self.engine.network.layers[layer_name].only_on_eval and self._should_train:
+        if self.engine.network.get_layer(layer_name).only_on_eval and self._should_train:
           continue
         d["cost:%s" % layer_name] = loss
       for layer_name, error in self.engine.network.error_by_layer.items():
-        if self.engine.network.layers[layer_name].only_on_eval and self._should_train:
+        if self.engine.network.get_layer(layer_name).only_on_eval and self._should_train:
           continue
         d["error:%s" % layer_name] = error
       for layer in self.engine.network.layers.values():
@@ -199,7 +199,7 @@ class Runner(object):
     :rtype: str
     """
     if ":" in key:
-      layer = self.engine.network.layers[key.split(':')[-1]]
+      layer = self.engine.network.get_layer(key[key.find(":") + 1:])
       if layer.target:
         return layer.target
     return self.engine.network.extern_data.default_target
@@ -712,6 +712,10 @@ class Engine(object):
         sys.exit(1)
 
   def _init_network(self, net_desc, epoch=None):
+    """
+    :param dict[str,dict[str]] net_desc: layer name -> layer description dict
+    :param int|None epoch: if not given, uses self.epoch. used for the random seed
+    """
     if epoch is None:
       epoch = self.epoch
     self._close_tf_session()
@@ -736,6 +740,18 @@ class Engine(object):
       eval_flag=self.use_eval_flag,
       search_flag=self.use_search_flag)
     network.construct_from_dict(net_desc)
+    if self.config.list("search_train_network_layers"):
+      network.construct_extra_net(
+        net_desc, layer_list=self.config.list("search_train_network_layers"), search_flag=True)
+      print("search train network layers:")
+      for layer_name, layer in sorted(network.extra_net.layers.items()):
+        print("  layer %s %r #: %s" % (layer.layer_class, layer_name, layer.output.dim), file=log.v2)
+      if not network.extra_net.layers:
+        print("  (no layers)", file=log.v2)
+      # We don't expect any new params (for now). Check that.
+      net_params = network.get_params_list()
+      for extra_param in network.extra_net.get_params_list():
+        assert extra_param in net_params
     network.initialize_params(session=self.tf_session)
     network.layers_desc = net_desc
     self.network = network
@@ -748,6 +764,9 @@ class Engine(object):
     network.print_network_info()
 
   def maybe_init_new_network(self, net_desc):
+    """
+    :param dict[str,dict[str]] net_desc: layer name -> layer description dict
+    """
     if self.network.layers_desc == net_desc:
       return
     from Util import dict_diff_str

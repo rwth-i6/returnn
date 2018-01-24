@@ -163,7 +163,7 @@ class ExternData(object):
 class TFNetwork(object):
   def __init__(self, config=None, extern_data=None, rnd_seed=42,
                train_flag=False, eval_flag=False, search_flag=False,
-               parent_layer=None, parent_net=None,
+               parent_layer=None, parent_net=None, extra_parent_net=None,
                name=None):
     """
     :param Config.Config config: only needed to init extern_data if not specified explicitly
@@ -173,7 +173,8 @@ class TFNetwork(object):
     :param bool eval_flag: whether to calculate losses. if train_flag is not False, this will be set to True
     :param bool search_flag: whether we perform a beam-search. see usage
     :param TFNetworkLayer.LayerBase|None parent_layer:
-    :param TFNetwork parent_net:
+    :param TFNetwork|None parent_net:
+    :param TFNetwork|None extra_parent_net:
     :param str name: only for debugging
     """
     if not name:
@@ -204,6 +205,8 @@ class TFNetwork(object):
     self.search_flag = search_flag
     self.parent_layer = parent_layer
     self.parent_net = parent_net
+    self.extra_parent_net = extra_parent_net
+    self.extra_net = None  # type: TFNetwork
     self._selected_train_layers = None
     self._constructing_layers = []  # type: list[str]
     self.layers_desc = {}  # type: dict[str,dict[str]]
@@ -231,6 +234,8 @@ class TFNetwork(object):
       s += " parent_layer=%r" % self.parent_layer
     elif self.parent_net:
       s += " parent_net=%r" % self.parent_net
+    if self.extra_net:
+      s += " extra_net=%r" % self.extra_net
     if self.train_flag is True:
       s += " train"
     elif self.train_flag is not None:
@@ -248,6 +253,8 @@ class TFNetwork(object):
       return self.parent_layer.get_absolute_name_scope_prefix()
     if self.parent_net:
       return self.parent_net.get_absolute_name_scope_prefix()
+    if self.extra_parent_net:
+      return self.extra_parent_net.get_absolute_name_scope_prefix()
     return ""
 
   def construct_from(self, list_or_dict):
@@ -288,20 +295,51 @@ class TFNetwork(object):
       assert isinstance(name, str)
       assert isinstance(layer_desc, dict)
       if layer_desc.get("register_as_extern_data"):
-        self._construct_layer(net_dict, name)
+        self.construct_layer(net_dict, name)
     for name, layer_desc in sorted(net_dict.items()):
       assert isinstance(name, str)
       assert isinstance(layer_desc, dict)
+      if layer_desc.get("only_on_search") and not self.search_flag:
+        continue
+      if layer_desc.get("only_on_eval") and not self.eval_flag:
+        continue
       if name == "output" or "target" in layer_desc or "loss" in layer_desc or layer_desc.get("is_output_layer", False):
-        self._construct_layer(net_dict, name)
+        self.construct_layer(net_dict, name)
     assert not self._constructing_layers
 
-  def _construct_layer(self, net_dict, name, get_layer=None, add_layer=None):
+  def construct_extra_net(self, net_dict, layer_list, search_flag=None):
+    """
+    The purpose is to create another net like `self` but with different flags,
+    e.g. with `search_flag = True`.
+    That `extra_net` can have different losses, which will be added.
+
+    :param dict[str,dict[str]] net_dict:
+    :param list[str] layer_list:
+    :param bool|None search_flag:
+    """
+    if not self.extra_net:
+      self.extra_net = TFNetwork(
+        config=self._config, extern_data=self.extern_data, rnd_seed=self.random.randint(2 ** 31),
+        train_flag=self.train_flag, eval_flag=self.eval_flag,
+        search_flag=search_flag if search_flag is not None else self.search_flag,
+        extra_parent_net=self)
+
+    def extra_get_layer(layer_name):
+      if layer_name in self.extra_net.layers:
+        return self.extra_net.layers[layer_name]
+      if layer_name in self.layers:
+        return self.layers[layer_name]
+      return self.extra_net.construct_layer(net_dict=net_dict, name=layer_name)
+
+    for layer_name in layer_list:
+      self.extra_net.construct_layer(net_dict=net_dict, name=layer_name, get_layer=extra_get_layer)
+
+  def construct_layer(self, net_dict, name, get_layer=None, add_layer=None):
     """
     :param dict[str,dict[str]] net_dict:
     :param str name: layer name
     :param ((str) -> LayerBase)|None get_layer: optional, for source layers, for transform_config_dict.
-      by default, this wraps self._construct_layer().
+      by default, this wraps self.construct_layer().
     :param ((str, LayerBase, dict) -> LayerBase) | None add_layer: by default self.add_layer
     :rtype: LayerBase
     """
@@ -321,7 +359,7 @@ class TFNetwork(object):
       layer_desc = net_dict[name]
     if not get_layer:
       def get_layer(src_name):
-        return self._construct_layer(net_dict=net_dict, name=src_name)
+        return self.construct_layer(net_dict=net_dict, name=src_name)
     if not add_layer:
       add_layer = self.add_layer
     self.layers_desc[name] = layer_desc
@@ -358,7 +396,7 @@ class TFNetwork(object):
     :param str name:
     :param (()->LayerBase)|LayerBase layer_class:
     :param layer_desc: contains the kwargs for the layer class.
-      the args should have been transformed via layer_class.transform_config_dict before (see _construct_layer).
+      the args should have been transformed via layer_class.transform_config_dict before (see construct_layer).
       must not contain "name" and "network", which will be automatically added here.
       should not contain "output", which will be initialized to layer_class.get_out_data_from_opts.
       the layer_class will usually then define the layer.output and its placeholder.
@@ -405,7 +443,7 @@ class TFNetwork(object):
     :param str name:
     :param (()->LayerBase)|LayerBase layer_class:
     :param layer_desc: contains the kwargs for the layer class.
-      the args should have been transformed via layer_class.transform_config_dict before (see _construct_layer).
+      the args should have been transformed via layer_class.transform_config_dict before (see construct_layer).
       must not contain "name" and "network", which will be automatically added here.
       should not contain "output", which will be initialized to layer_class.get_out_data_from_opts.
       the layer_class will usually then define the layer.output and its placeholder.
@@ -447,26 +485,37 @@ class TFNetwork(object):
       self.total_constraints = 0
       self.loss_by_layer.clear()
       self.error_by_layer.clear()
-      for name, layer in sorted(self.layers.items()):
+      layer_items = sorted(self.layers.items())
+      if self.extra_net:
+        extra_name_prefix = "extra"
+        if self.extra_net.search_flag and not self.search_flag:
+          extra_name_prefix += "_search"
+        layer_items += [
+          ("%s:%s" % (extra_name_prefix, name), layer)
+          for (name, layer) in sorted(self.extra_net.layers.items())]
+      for name, layer in layer_items:
+        assert isinstance(name, str)
+        assert isinstance(layer, LayerBase)
+        tf_scope_name = layer.cls_get_tf_scope_name(name=name.replace(":", "/", 1))
+        tf_flat_scope_name = layer.cls_get_tf_scope_name(name=name.replace(":", "_"))
         assert isinstance(layer, LayerBase)
         with reuse_name_scope("loss"):
-          with reuse_name_scope(layer.tf_scope_name):
+          with reuse_name_scope(tf_scope_name):
             loss = layer.get_loss_value()
             error = layer.get_error_value()
             if loss is not None:
-              tf.summary.scalar("loss_%s" % layer.name, loss * layer.get_loss_normalization_factor())
+              tf.summary.scalar("loss_%s" % tf_flat_scope_name, loss * layer.get_loss_normalization_factor())
               if self.get_config().bool("calculate_exp_loss", False):
-                tf.summary.scalar("exp_loss_%s" % layer.name, tf.exp(loss * layer.get_loss_normalization_factor()))
+                tf.summary.scalar("exp_loss_%s" % tf_flat_scope_name, tf.exp(loss * layer.get_loss_normalization_factor()))
               if self.get_config().bool("debug_add_check_numerics_on_output", False):
                 print("debug_add_check_numerics_on_output: add for layer loss %r: %r" % (name, layer.output.placeholder))
                 from TFUtil import identity_with_check_numerics
                 loss = identity_with_check_numerics(
-                  loss,
-                  name="%s_loss_identity_with_check_numerics" % layer.tf_scope_name)
+                  loss, name="%s_loss_identity_with_check_numerics" % tf_flat_scope_name)
             if error is not None:
-              tf.summary.scalar("error_%s" % layer.name, error * layer.get_loss_normalization_factor())
+              tf.summary.scalar("error_%s" % tf_flat_scope_name, error * layer.get_loss_normalization_factor())
         with reuse_name_scope("constraints"):
-          with reuse_name_scope(layer.tf_scope_name):
+          with reuse_name_scope(tf_scope_name):
             constraints = layer.get_constraints_value()
 
         with reuse_name_scope("loss"):
@@ -589,7 +638,15 @@ class TFNetwork(object):
     :param str layer_name:
     :rtype: LayerBase
     """
+    if layer_name in self.layers:
+      return self.layers[layer_name]
+    if layer_name.startswith("extra:") or layer_name.startswith("extra_search:"):
+      assert self.extra_net, "cannot get layer %r, no extra net for %r" % (layer_name, self)
+      return self.extra_net.get_layer(layer_name[layer_name.find(":") + 1:])
+    if self.extra_parent_net:
+      return self.extra_parent_net.get_layer(layer_name)
     if layer_name.startswith("base:"):
+      assert self.parent_net, "cannot get layer %r, no parent net for %r" % (layer_name, self)
       return self.parent_net.get_layer(layer_name[len("base:"):])
     return self.layers[layer_name]
 
@@ -1038,6 +1095,8 @@ class TFNetwork(object):
     # First check parent because there we might get the true batch dim.
     if self.parent_net:
       return self.parent_net.get_data_batch_dim()
+    if self.extra_parent_net:
+      return self.extra_parent_net.get_data_batch_dim()
     if self._batch_dim is not None:
       return self._batch_dim
     for key, data in self.extern_data.get_sorted_data_items():
@@ -1094,6 +1153,9 @@ class TFNetwork(object):
       return self._config
     if self.parent_net:
       return self.parent_net.get_config(
+        consider_global_config=consider_global_config, fallback_dummy_config=fallback_dummy_config)
+    if self.extra_parent_net:
+      return self.extra_parent_net.get_config(
         consider_global_config=consider_global_config, fallback_dummy_config=fallback_dummy_config)
     if consider_global_config:
       config = get_global_config(raise_exception=False)

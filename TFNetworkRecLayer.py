@@ -549,7 +549,7 @@ class RecLayer(_ConcatInputLayer):
     :return: output of shape (time, batch, dim)
     :rtype: tf.Tensor
     """
-    output, (sub_loss, sub_error, sub_loss_norm_factor), search_choices = cell.get_output(self)
+    output, (sub_loss, sub_error, sub_loss_norm_factor), search_choices = cell.get_output(rec_layer=self)
     self._sub_loss = sub_loss
     self._sub_error = sub_error
     self._sub_loss_normalization_factor = sub_loss_norm_factor
@@ -668,7 +668,7 @@ class _SubnetworkRecCell(object):
           construct_ctx.layers[-1].dependencies.add(layer)
         return layer
       if name.startswith("base:"):
-        layer = self.parent_net.layers[name[len("base:"):]]
+        layer = self.parent_net.get_layer(name[len("base:"):])
         if construct_ctx.layers:
           construct_ctx.layers[-1].dependencies.add(layer)
         return layer
@@ -679,7 +679,7 @@ class _SubnetworkRecCell(object):
         construct_ctx.layers[-1].dependencies.add(layer)
       construct_ctx.layers.append(layer)
       self.layer_data_templates[name] = layer
-      self.net._construct_layer(
+      self.net.construct_layer(
         self.net_dict, name, get_layer=get_templated_layer, add_layer=add_templated_layer)
       assert construct_ctx.layers[-1] is layer
       construct_ctx.layers.pop(-1)
@@ -795,7 +795,7 @@ class _SubnetworkRecCell(object):
       if name.startswith("base:"):
         if name in extended_layers:
           return extended_layers[name]
-        layer = self.parent_net.layers[name[len("base:"):]]
+        layer = self.parent_net.get_layer(name[len("base:"):])
         if self.parent_net.search_flag:
           if needed_beam_size:
             assert not layer.output.beam_size
@@ -814,7 +814,7 @@ class _SubnetworkRecCell(object):
         # This should not be used recursively, because we checked that nothing depends on it,
         # thus it should not be a problem to return None.
         return None
-      return self.net._construct_layer(net_dict, name=name, get_layer=get_layer)
+      return self.net.construct_layer(net_dict, name=name, get_layer=get_layer)
 
     # Go through needed_outputs, e.g. "output".
     # And prev_layers_needed because they might not be resolved otherwise.
@@ -1004,7 +1004,7 @@ class _SubnetworkRecCell(object):
       # TODO: Better check for train_flag.
       # Maybe more generic via sampling options later.
       y_ta = None
-      if rec_layer.target and rec_layer.network.train_flag is not False:
+      if rec_layer.target and rec_layer.network.train_flag is not False and not self.parent_net.search_flag:
         # TODO check subnet, which extern data keys are used...
         y_data = rec_layer.network.get_extern_data(rec_layer.target, mark_data_key_as_used=True)
         y = y_data.get_placeholder_as_time_major()
@@ -1077,7 +1077,7 @@ class _SubnetworkRecCell(object):
         # Not so nice but simple way to get all relevant layers:
         layer_names_with_losses = [
           layer.name for layer in self.layer_data_templates.values()
-          if layer.kwargs.get("loss", None)]
+          if layer.kwargs.get("loss") and not layer.kwargs.get("loss_only_on_non_search")]
         needed_outputs.update(layer_names_with_losses)
 
       # For search:
@@ -1714,7 +1714,7 @@ class _SubnetworkRecCell(object):
       assert not name.startswith("prev:")
       if name.startswith("base:"):
         return self.parent_net.layers[name[len("base:"):]]
-      return self.input_layers_net._construct_layer(self.net_dict, name=name, get_layer=get_layer)
+      return self.input_layers_net.construct_layer(self.net_dict, name=name, get_layer=get_layer)
 
     # Same scope as the main subnet, so that it stays compatible.
     with reuse_name_scope(self.parent_rec_layer._rec_scope):
@@ -1809,7 +1809,7 @@ class _SubnetworkRecCell(object):
       if name not in self.output_layers_moved_out:
         # It means that the layer is inside the loop.
         return get_loop_acc_layer(name)
-      return self.output_layers_net._construct_layer(self.net_dict, name=name, get_layer=get_layer)
+      return self.output_layers_net.construct_layer(self.net_dict, name=name, get_layer=get_layer)
 
     # Same scope as the main subnet, so that it stays compatible.
     with reuse_name_scope(self.parent_rec_layer._rec_scope):
