@@ -208,6 +208,7 @@ class Engine:
     self.batch_size = config.int('batch_size', 1)
     self.shuffle_batches = config.bool('shuffle_batches', True)
     self.update_batch_size = config.int('update_batch_size', 0)
+    self.batch_size_eval = config.int('batch_size_eval', self.update_batch_size)
     self.model_filename = config.value('model', None)
     self.save_model_epoch_interval = config.int('save_interval', 1)
     self.save_epoch1_initial_model = config.bool('save_epoch1_initial_model', False)
@@ -217,6 +218,7 @@ class Engine:
     self.pretrain_learning_rate = config.float('pretrain_learning_rate', self.learning_rate)
     self.final_epoch = self.config_get_final_epoch(config)  # Inclusive.
     self.max_seqs = config.int('max_seqs', -1)
+    self.max_seqs_eval = config.int('max_seqs_eval', self.max_seqs)
     self.updater = Updater.initFromConfig(config)
     self.ctc_prior_file = config.value('ctc_prior_file', None)
     self.exclude = config.int_list('exclude', [])
@@ -532,8 +534,8 @@ class Engine:
     for dataset_name, dataset in self.get_eval_datasets().items():
       if dataset_name not in self.dataset_batches or not dataset.batch_set_generator_cache_whole_epoch():
         self.dataset_batches[dataset_name] = dataset.generate_batches(recurrent_net=self.network.recurrent,
-                                                                      batch_size=self.batch_size,
-                                                                      max_seqs=self.max_seqs,
+                                                                      batch_size=self.batch_size_eval,
+                                                                      max_seqs=self.max_seqs_eval,
                                                                       max_seq_length=(int(self.max_seq_length) if dataset_name == 'dev' else sys.maxsize))
       else:
         self.dataset_batches[dataset_name].reset()
