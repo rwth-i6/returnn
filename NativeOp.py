@@ -3323,12 +3323,27 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
 
   c_extra_support_code = copy.copy(common_fast_bw_kernels)
   c_extra_support_code.update({
-    "100_init_bwd_state_buffer": """
+    "100_get_batch_idx": """
+      __device__
+      int get_batch_idx(int const* batch_idxs, unsigned num_seqs, unsigned t, unsigned seq_idx) {
+        if (NEW_BATCH_IDX_FORMAT) {
+          int res = batch_idxs[seq_idx] + t;
+          if (res >= batch_idxs[seq_idx + 1]) {
+            return -1;
+          }
+          return res;
+        }
+        else {
+          return batch_idxs[t * num_seqs + seq_idx];
+        }
+      }
+    """,
+    "101_init_bwd_state_buffer": """
       __global__
       void init_bwd_state_buffer(unsigned t, unsigned num_batches, unsigned num_seqs,
                                  int* batch_idxs, float* index, float* states, unsigned* end_states) {
         unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
-        int batch_idx = batch_idxs[t * num_seqs + idx];
+        int batch_idx = get_batch_idx(batch_idxs, num_seqs, t, idx);
         if (batch_idx < 0) {
           return;
         }
@@ -3340,7 +3355,7 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
         }
       }
     """,
-    "101_next_frame_fwd": """
+    "102_next_frame_fwd": """
       __global__
       void next_frame_fwd(unsigned time, unsigned num_states, unsigned num_edges, unsigned num_emissions, unsigned num_seg_frames,
                           unsigned num_tot_frames, unsigned num_seqs, unsigned num_am_score_scales,
@@ -3366,7 +3381,7 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
         }
 
         const unsigned sequence_idx = sequence_idxs[idx];
-        const int      batch_idx    = batch_idxs[time * num_seqs + sequence_idx];
+        const int      batch_idx    = get_batch_idx(batch_idxs, num_seqs, time, sequence_idx);
         if (batch_idx == -1) {
           return;
         }
@@ -3392,7 +3407,7 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
         }
       }
     """,
-    "102_next_frame_bwd": """
+    "103_next_frame_bwd": """
       __global__
       void next_frame_bwd(unsigned time, unsigned num_states, unsigned num_edges, unsigned num_emissions, unsigned num_seg_frames,
                           unsigned num_tot_frames, unsigned num_seqs, unsigned num_am_score_scales,
@@ -3409,7 +3424,7 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
         const unsigned max_seg_frames        = min(num_seg_frames, num_tot_frames - time);
 
         const unsigned sequence_idx = sequence_idxs[idx];
-        const int      batch_idx    = batch_idxs[time * num_seqs + sequence_idx];
+        const int      batch_idx    = get_batch_idx(batch_idxs, num_seqs, time, sequence_idx);
         if (batch_idx == -1) {
           return;
         }
@@ -3446,7 +3461,7 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
         atomic_prob_add(state_buffer + next_frame_idx * num_states + to, acc_val);
       }
     """,
-    "103_compute_framewise_sum": """
+    "104_compute_framewise_sum": """
       __global__
       void compute_framewise_sum(unsigned num_tot_frames, unsigned num_seqs, unsigned num_seg_frames, unsigned num_batches, unsigned num_edges,
                                  unsigned const* sequence_idxs, int const* batch_idxs, float const* index, float const* edge_buffer,
@@ -3473,7 +3488,7 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
         const unsigned time     = idx / num_seg_frames;
         const unsigned seg_size = idx % num_seg_frames;
         for (unsigned s = 0u; s < num_seqs; s++) {
-          const int batch_idx = batch_idxs[time * num_seqs + s];
+          const int batch_idx = get_batch_idx(batch_idxs, num_seqs, time, s);
           if (batch_idx >= 0) {
             const unsigned output_idx = seg_size * num_batches + batch_idx;
             if (isinf(sum_buffer[s]) or index[output_idx] == 0.0) {
@@ -3486,7 +3501,7 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
         }
       }
     """,
-    "104_merge_framewise_sums": """
+    "105_merge_framewise_sums": """
       __global__
       void merge_framewise_sum(unsigned num_seg_frames, unsigned num_batches, float const* index, float* sum_buffer) {
         const unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -3511,7 +3526,7 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
         }
       }
     """,
-    "105_compute_targets": """
+    "106_compute_targets": """
       __global__
       void compute_targets(unsigned num_tot_frames, unsigned num_seg_frames, unsigned num_edges, unsigned num_batches, unsigned num_seqs, unsigned num_emissions,
                            unsigned const* sequence_idxs, unsigned const* emission_idxs, int const* batch_idxs, float const* index,
@@ -3524,7 +3539,7 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
         const unsigned edge_idx  = idx % num_edges;
         const unsigned time      = idx / (num_edges * num_seg_frames);
         const unsigned seq_idx   = sequence_idxs[edge_idx];
-        const int      batch_idx = batch_idxs[time * num_seqs + seq_idx];
+        const int      batch_idx = get_batch_idx(batch_idxs, num_seqs, time, seq_idx);
 
         if (batch_idx < 0) {
           return;
@@ -3542,7 +3557,7 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
         atomic_prob_add(output_buffer + seg_length * num_batches * num_emissions + batch_idx * num_emissions + emission_idx, edge_buffer[idx] - normalization);
       }
     """,
-    "106_compute_posterior_weights": """
+    "107_compute_posterior_weights": """
     __global__
     void compute_posterior_weights(unsigned num_tot_frames, unsigned num_seg_frames, unsigned num_seqs, unsigned num_batches,
                                    float const* state_buffer, unsigned const* start_states, int const* batch_idxs,
@@ -3555,7 +3570,7 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
         const unsigned time    = idx / num_seqs;
         const unsigned seq_idx = idx % num_seqs;
 
-        const int batch_idx = batch_idxs[time * num_seqs + seq_idx];
+        const int batch_idx = get_batch_idx(batch_idxs, num_seqs, time, seq_idx);
         if (batch_idx < 0) {
           return;
         }
@@ -3612,11 +3627,17 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
     float*    d_norm_factors      = Ndarray_DEV_DATA(ary_norm_factors);
     float*    d_posterior_weights = Ndarray_DEV_DATA(ary_posterior_weights);
 
+    std::vector<int> seq_lengths;
+    if (NEW_BATCH_IDX_FORMAT) {
+      seq_lengths.resize(Ndarray_DIMS(ary_batch_idxs)[0]);
+      HANDLE_ERROR(cudaMemcpy(seq_lengths.data(), d_batch_idxs, seq_lengths.size() * sizeof(int), cudaMemcpyDeviceToHost));
+    }
+
     const unsigned n_seg_frames      = Ndarray_DIMS(ary_am_scores)[0];
     const unsigned n_batches         = Ndarray_DIMS(ary_am_scores)[1];
     const unsigned n_emissions       = Ndarray_DIMS(ary_am_scores)[2];
-    const unsigned n_tot_frames      = Ndarray_DIMS(ary_batch_idxs)[0];
-    const unsigned n_seqs            = Ndarray_DIMS(ary_batch_idxs)[1];
+    const unsigned n_seqs            = NEW_BATCH_IDX_FORMAT ? (Ndarray_DIMS(ary_batch_idxs)[0] - 1) : Ndarray_DIMS(ary_batch_idxs)[1];
+    const unsigned n_tot_frames      = NEW_BATCH_IDX_FORMAT ? seq_lengths.back()                     : Ndarray_DIMS(ary_batch_idxs)[0];
     const unsigned n_edges           = Ndarray_DIMS(ary_edges)[1];
     const unsigned n_length_models   = Ndarray_DIMS(ary_length_models)[1];
     const unsigned n_am_score_scales = Ndarray_DIMS(ary_am_score_scales)[0];
@@ -3769,11 +3790,24 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
 
   cpu_support = False  # TODO: fix CPU support...
 
-  def __init__(self, segmentwise_normalization=False, dump_targets_interval=None):
-    to_cpp_bool = lambda v : 'true' if v else 'false';
+  def __init__(self, segmentwise_normalization=False, dump_targets_interval=None, new_batch_idxs_format=False):
+    # the new_buffer_idx_format flag can be used to change the format of buffer_idxs parameter, if set to false
+    # the code expects a two-dimensional array that stores the batch index (within the given am_scores) for any
+    # timeframe and sequence index. if the flag is true we expect a list of offsets (as given by a cumulative sum
+    # of the sequence lengths).
+
+    to_cpp_bool = lambda v : 'true' if v else 'false'
     extra_lines = []
     extra_lines.append('const bool segmentwise_normalization = %s;' % to_cpp_bool(segmentwise_normalization))
     extra_lines.append('const bool dump_targets = %s;' % to_cpp_bool(dump_targets_interval is not None))
     extra_lines.append('const unsigned dump_targets_interval = %d;' % (0 if dump_targets_interval is None else dump_targets_interval))
+
+    self.c_extra_support_code = dict(**self.c_extra_support_code)
+    self.c_extra_support_code['000_batch_format'] = '#define NEW_BATCH_IDX_FORMAT %s\n' % to_cpp_bool(new_batch_idxs_format)
+    if new_batch_idxs_format:
+      in_info = list(self.in_info)  # copy class member to instance
+      in_info[1] = {"name": "batch_idxs", "ndim": 1, "shape": (None,), "need_contiguous": True, "gradient": "disconnected"}
+      self.in_info = tuple(in_info)
+
     self.c_fw_code = '\n'.join(extra_lines) + '\n' + self.c_fw_code
 
