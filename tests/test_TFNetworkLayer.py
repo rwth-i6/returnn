@@ -17,6 +17,8 @@ from Config import Config
 from TFNetwork import *
 from TFNetworkLayer import *
 from Log import log
+import TFUtil
+TFUtil.debugRegisterBetterRepr()
 
 log.initialize(verbosity=[5])
 

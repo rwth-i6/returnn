@@ -1007,12 +1007,21 @@ def reuse_name_scope(name, absolute=None, **kwargs):
   :return: yields the variable_scope
   """
   kwargs = kwargs.copy()
+  parent_var_scope = None  # type: tf.VariableScope
+  if not absolute:
+    parent_var_scope = tf.get_variable_scope()
   if isinstance(name, tf.VariableScope):
-    kwargs.setdefault("reuse", name.reuse)
+    parent_var_scope = name
     name = name.name
     if absolute is not None:
       assert absolute is True
     absolute = True
+  if parent_var_scope:
+    for attr in [
+      "reuse", "initializer", "regularizer", "caching_device", "partitioner",
+      "dtype", "custom_getter", "use_resource", "constraint"
+    ]:
+      kwargs.setdefault(attr, getattr(parent_var_scope, attr))
   assert isinstance(name, str)
   if not absolute:
     assert name
@@ -1022,7 +1031,6 @@ def reuse_name_scope(name, absolute=None, **kwargs):
     current_name_scope = get_current_name_scope()
     if current_name_scope:
       name = current_name_scope + "/" + name
-    kwargs.setdefault("reuse", tf.get_variable_scope().reuse)
   else:
     current_name_scope = None  # not needed
   assert name[-1:] != "/"
@@ -2678,6 +2686,13 @@ def debugRegisterBetterRepr():
     assert isinstance(op, tf.Operation)
     return "<tf.TensorArray %r>" % op.name
 
+  def variablescope_repr(x):
+    """
+    :param tf.VariableScope x:
+    :rtype: str
+    """
+    return "<tf.VariableScope %r>" % x.name
+
   def saveable_repr(x):
     """
     :param tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject x:
@@ -2697,6 +2712,7 @@ def debugRegisterBetterRepr():
         (tf.Operation, op_repr),
         (tf.Variable, var_repr),
         (tf.TensorArray, tensorarray_repr),
+        (tf.VariableScope, variablescope_repr),
         (saver.BaseSaverBuilder.SaveableObject, saveable_repr),
         (saver.BaseSaverBuilder.SaveSpec, savespec_repr)]:
     if getattr(cl, "__repr__") is object.__repr__:
