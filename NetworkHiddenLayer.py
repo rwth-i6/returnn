@@ -259,7 +259,7 @@ class DownsampleLayer(_NoOpLayer):
   """
   layer_class = "downsample"
 
-  def __init__(self, factor, axis, method="average", padding=False, sample_target=False, base=None, **kwargs):
+  def __init__(self, factor, axis, method="average", padding=False, sample_target=False, fit_target=False, base=None, **kwargs):
     super(DownsampleLayer, self).__init__(**kwargs)
     self.set_attr("method", method)
     if isinstance(axis, (str)):
@@ -288,11 +288,20 @@ class DownsampleLayer(_NoOpLayer):
         if padding:
           z = T.concatenate([z,T.zeros((f-T.mod(z.shape[a], f), z.shape[1], z.shape[2]), 'float32')],axis=0)
         z = TheanoUtil.downsample(z, axis=a, factor=f, method=method)
-        if sample_target:
+        if sample_target or fit_target:
           if self.y_out.dtype == 'float32':
-            self.y_out = TheanoUtil.downsample(self.y_out, axis=a, factor=f, method=method)
+            if padding:
+              self.y_out = T.concatenate(
+                [self.y_out, T.zeros((f - T.mod(self.y_out.shape[0], f), self.y_out.shape[1], self.y_out.shape[2]),
+                                     'float32')], axis=0)
+            if sample_target:
+              self.y_out = TheanoUtil.downsample(self.y_out, axis=0, factor=f, method=method)
           else:
-            self.y_out = TheanoUtil.downsample(self.y_out, axis=a, factor=f, method='max')
+            if padding:
+              self.y_out = T.concatenate(
+                [self.y_out, T.zeros((f - T.mod(self.y_out.shape[0], f), self.y_out.shape[1]), 'int32')], axis=0)
+            if sample_target:
+              self.y_out = TheanoUtil.downsample(self.y_out, axis=0, factor=f, method='max')
       else:
         z = TheanoUtil.downsample(z, axis=a, factor=f, method=method)
         if a < self.y_out.ndim:
@@ -300,11 +309,13 @@ class DownsampleLayer(_NoOpLayer):
       if a == 0:
         self.index = self.sources[0].index
         if padding:
-          self.index = T.concatenate([self.index, T.zeros((f-T.mod(self.index.shape[a], f), self.index.shape[1]), 'int8')], axis=0)
-        self.index = TheanoUtil.downsample(self.index, axis=0, factor=f, method="max")
+          self.index = T.concatenate([self.index, T.zeros((f-T.mod(self.index.shape[0], f), self.index.shape[1]), 'int8')], axis=0)
+          if fit_target:
+            self.index_out = self.index
+        self.index = TheanoUtil.downsample(self.index, axis=0, factor=f, method="min")
         if sample_target:
-          self.index_out = TheanoUtil.downsample(self.index_out, axis=0, factor=f, method="max")
-        else:
+          self.index_out = TheanoUtil.downsample(self.index_out, axis=0, factor=f, method="min")
+        elif not fit_target:
           self.index_out = self.index if base is None else base[0].index_out
       elif a == 2:
         n_out = int(n_out / f)
@@ -357,6 +368,11 @@ class DownsampleLayer(_NoOpLayer):
     self.set_attr('n_out', n_out)
     self.make_output(output)
 
+    if fit_target:
+      self.output = print_to_file('o.out', self.output, shape=True)
+      self.index_out = print_to_file('o.idx', self.index_out, shape=True)
+      self.y_out = print_to_file('o.y', self.y_out, shape=True)
+
 class UpsampleLayer(_NoOpLayer):
   layer_class = "upsample"
 
@@ -398,6 +414,20 @@ class UpsampleLayer(_NoOpLayer):
       z = TheanoUtil.upsample(z, axis=a, factor=f, method=method, target_axis_len=target_axis_len)
     self.set_attr('n_out', n_out)
     self.make_output(z)
+
+
+class RepetitionLayer(_NoOpLayer):
+  layer_class = "rep"
+
+  def __init__(self, factor, **kwargs):
+    super(RepetitionLayer, self).__init__(**kwargs)
+    factor = numpy.int32(factor)
+    self.set_attr("factor", factor)
+    inp, n_out = _concat_sources(self.sources, masks=self.masks, mass=self.mass)
+    self.set_attr('n_out', n_out)
+    time, batch, dim = inp.shape[0], inp.shape[1], inp.shape[2]
+    self.index = self.index.flatten().dimshuffle('x',0).repeat(factor,axis=0).reshape((time*factor,batch))
+    self.output = inp.reshape((time*batch,dim)).dimshuffle('x',0,1).repeat(factor,axis=0).reshape((time*factor,batch,dim))
 
 
 class FrameConcatZeroLayer(_NoOpLayer): # TODO: This is not correct for max_seqs > 1
