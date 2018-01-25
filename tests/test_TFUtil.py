@@ -965,3 +965,14 @@ def test_supported_devices_for_op():
   devs = supported_devices_for_op(op_name)
   print("Supported devs for op %r: %r" % (op_name, devs))
   assert "CPU" in devs
+
+
+def test_bleu_score():
+  res = session.run(bleu_score(
+    hypothesis=[[1, 2, 3]], hyp_seq_lens=[3],
+    truth=[[2, 3]], truth_seq_lens=[2]
+  ))
+  print("res:", res)
+  assert isinstance(res, numpy.ndarray)
+  assert res.shape == (1,)
+  assert_almost_equal(res, [0.6389431])

@@ -3518,6 +3518,50 @@ def smoothing_cross_entropy(logits,
     return xentropy - normalizing  # shape(labels)
 
 
+def _py_bleu_score(hypothesis, truth, hyp_seq_lens, truth_seq_lens):
+  """
+  :param numpy.ndarray hypothesis:
+  :param numpy.ndarray truth:
+  :param numpy.ndarray hyp_seq_lens:
+  :param numpy.ndarray truth_seq_lens:
+  :rtype: numpy.ndarray
+  """
+  import numpy
+  from Util import compute_bleu
+  assert hypothesis.ndim == truth.ndim == 2 and hyp_seq_lens.ndim == truth_seq_lens.ndim == 1
+  assert hypothesis.shape[0] == truth.shape[0] == hyp_seq_lens.shape[0] == truth_seq_lens.shape[0]
+  return numpy.array([
+    compute_bleu([truth[n, :truth_seq_lens[n]]], [hypothesis[n, :hyp_seq_lens[n]]])
+    for n in range(hypothesis.shape[0])])
+
+
+def bleu_score(hypothesis, truth, hyp_seq_lens, truth_seq_lens):
+  """
+  Calculates the BLEU score. See :func:`Util.compute_bleu`.
+  This currently wraps a Python function and thus is not efficient.
+
+  :param tf.Tensor hypothesis: (batch, max(hyp_seq_lens))
+  :param tf.Tensor truth: (batch, max(truth_seq_lens))
+  :param tf.Tensor hyp_seq_lens: (batch,)
+  :param tf.Tensor truth_seq_lens: (batch,)
+  :rtype: tf.Tensor
+  :return: (batch,), float32
+  """
+  hypothesis = tf.convert_to_tensor(hypothesis)
+  truth = tf.convert_to_tensor(truth)
+  hyp_seq_lens = tf.convert_to_tensor(hyp_seq_lens)
+  truth_seq_lens = tf.convert_to_tensor(truth_seq_lens)
+  hypothesis.set_shape(tf.TensorShape((None, None)))
+  truth.set_shape(tf.TensorShape((None, None)))
+  hyp_seq_lens.set_shape(tf.TensorShape((None,)))
+  truth_seq_lens.set_shape(tf.TensorShape((None,)))
+  res = tf.py_func(
+    _py_bleu_score, name="py_bleu_score", stateful=False,
+    inp=[hypothesis, truth, hyp_seq_lens, truth_seq_lens], Tout=tf.float32)
+  res.set_shape(tf.TensorShape((None,)))
+  return res
+
+
 def prod(ls):
   """
   :param list[T]|tuple[T]|numpy.ndarray|tf.Tensor ls:

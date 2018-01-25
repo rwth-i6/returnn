@@ -4532,6 +4532,43 @@ class EditDistanceLoss(Loss):
     return None
 
 
+class BleuLoss(Loss):
+  """
+  Note that this loss is not differentiable, thus it's only for keeping statistics.
+  Also, BLEU is a score, i.e. the higher, the better.
+  Thus, to interpret it as a loss or error, we take the negative value.
+  """
+  class_name = "bleu"
+  recurrent = True
+
+  def __init__(self, **kwargs):
+    super(BleuLoss, self).__init__(**kwargs)
+
+  def init(self, output, output_with_activation=None, target=None, **kwargs):
+    """
+    :param Data output: generated output
+    :param OutputWithActivation|None output_with_activation:
+    :param Data target: reference target from dataset
+    """
+    super(BleuLoss, self).init(
+      output=output, output_with_activation=output_with_activation, target=target, **kwargs)
+    assert target.sparse
+    assert output.sparse
+    assert output.dim == target.dim
+    assert output.shape == target.shape
+
+  def get_error(self):
+    from TFUtil import bleu_score
+    score = bleu_score(
+      hypothesis=self.output.get_placeholder_as_batch_major(), hyp_seq_lens=self.output.get_sequence_lengths(),
+      truth=self.target.get_placeholder_as_batch_major(), truth_seq_lens=self.target.get_sequence_lengths())
+    # Take negative, to make it a loss/error, which we want to minimize.
+    return -self.reduce_func(score)
+
+  def get_value(self):
+    return None
+
+
 class ExpectedLoss(Loss):
   """
   This loss uses another loss error or value and given the search beam scores, calculates the expected loss.

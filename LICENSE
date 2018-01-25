@@ -132,6 +132,6 @@ Contains code from tensor2tensor:
  - Website: https://github.com/tensorflow/tensor2tensor
  - Apache License, Version 2.0
  - Copyright 2017 The Tensor2Tensor Authors
- - Some code in TFUtil.py.
+ - Some code in TFUtil.py, Util.py.
 
 Various code snippets from StackOverflow, which are under Creative Commons / Public Domain.
