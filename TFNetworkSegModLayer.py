@@ -222,6 +222,60 @@ class ClassesToLengthDistributionGlobalLayer(_ConcatInputLayer):
     return out
 
 
+class SegmentAlignmentLayer(_ConcatInputLayer):
+  layer_class = "segment_alignment"
+
+  def __init__(self, num_classes, window=15, **kwargs):
+    super(SegmentAlignmentLayer, self).__init__(**kwargs)
+    assert self.input_data.sparse
+
+    sizes = tf.div(self.input_data.size_placeholder[0], 2)
+    batches = TFUtil.batch_indices_after_windowing(sizes, window)
+    new_sizes = tf.fill((tf.shape(batches)[0],), window)
+
+    input = self.input_data.get_placeholder_as_batch_major()
+    input = tf.reshape(input, (tf.shape(input)[0], -1, 2)) # reinterpret last dimension as (dim, 2)
+    end_distribution = tf.convert_to_tensor([1.0] + [0.0] * (window - 1))
+    onehot = tf.one_hot(input[:,:,0], num_classes)
+    onehot = tf.pad(onehot, tf.constant([[0, 0], [0, window - 1], [0, 0]]), 'CONSTANT')
+
+    # add small weight at the last frame in case there is no ending label, then we want the last frame to be a label end
+    # because the windows have different lengths the last frame might not be at index (window -1), but earlier, thus we
+    # also add some zeros at the end
+    no_label_backup = tf.constant([0.0] * (window - 1) + [1e-4] + [0.0] * (window - 1))
+
+    def compute(bse):
+      batch = bse[0]
+      start = bse[1]
+      end   = bse[2]
+      size  = end - start
+
+      seg_ended    = input[batch,start:end,1]
+      idx          = tf.where(tf.not_equal(seg_ended, 0))
+      length_dist  = tf.scatter_nd(idx, end_distribution[:tf.shape(idx)[0]], (window,))
+      length_dist += no_label_backup[window-size:2*window-size]
+      length_dist  = length_dist / tf.reduce_sum(length_dist)
+      length_dist  = tf.expand_dims(length_dist, -1)
+
+      result = onehot[batch,start:start+window,:] * length_dist
+      return result
+
+    targets = tf.map_fn(compute, batches, back_prop=False, dtype='float32')
+    self.output.placeholder = targets
+    self.output.size_placeholder[0] = new_sizes
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, num_classes, window, **kwargs):
+    out = get_concat_sources_data_template(sources, name="%s_output" % name).copy_as_batch_major()
+    out.size_placeholder = {}
+    out.size_placeholder[0] = None
+    out.shape = (window, num_classes)
+    out.dim = num_classes
+    out.sparse = False
+    out.dtype = 'float32'
+    return out
+
+
 class UnsegmentInputLayer(_ConcatInputLayer):
   """
   Takes the output of SegmentInput (sequences windowed over time and folded into batch-dim)
@@ -341,6 +395,7 @@ class FlattenTimeLayer(_ConcatInputLayer):
   def get_out_data_from_opts(cls, name, sources, **kwargs):
     out = get_concat_sources_data_template(sources, name="%s_output" % name).copy_as_batch_major()
     out.dim = None
+    out.shape = (1, None)
     out.size_placeholder = {}
     return out
 
