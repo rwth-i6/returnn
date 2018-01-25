@@ -474,6 +474,7 @@ class Engine(object):
       from Config import get_global_config
       config = get_global_config()
     self.config = config
+    self.orig_config = {}  # see _maybe_update_config
     self.devices_config = self._get_devices_config()
     self._check_devices()
     self.tf_session = None  # type: tf.Session
@@ -711,6 +712,49 @@ class Engine(object):
         print("Exiting now because model cannot be loaded.", file=log.v1)
         sys.exit(1)
 
+  def _maybe_update_config(self, net_desc, epoch):
+    """
+    This is a slightly hacky way to overwrite entries in the config, via the network description.
+    This can e.g. be used in pretraining to overwrite certain settings such as batch_size.
+
+    :param dict[str,dict[str]] net_desc:
+    :param int epoch:
+    """
+    def set_value(key, value):
+      """
+      :param str key:
+      :param value:
+      """
+      assert key in self.config.typed_dict
+      self.config.typed_dict[key] = value
+      # Some entries need specific handling, e.g. to update our attribs.
+      if key == "max_seq_length":
+        # See init_train_from_config.
+        if not value:
+          value = sys.maxsize
+        if isinstance(value, dict):
+          value = NumbersDict(value)
+        assert isinstance(value, (int, float, NumbersDict))
+      if key in ["batch_size", "max_seq_length", "max_seqs", "inc_seq_length", "seq_drop", "seq_drop_freq"]:
+        # To be sure, never keep the batch order.
+        self.dataset_batches.clear()
+        setattr(self, key, value)
+
+    if self.orig_config:
+      # We have updated the config before. Now, first, recover all entries.
+      for key, value in self.orig_config.items():
+        set_value(key, value)
+      self.orig_config.clear()
+    if "#config" not in net_desc:
+      return
+    config_overwrites = net_desc["#config"]
+    for key, value in config_overwrites.items():
+      assert key in self.config.typed_dict, "config update key %r -> %r expected to be in orig. config" % (key, value)
+      orig_value = self.config.typed_dict[key]
+      print("Update config key %r for epoch %i: %r -> %r" % (key, epoch, orig_value, value), file=log.v3)
+      self.orig_config[key] = orig_value
+      set_value(key, value)
+
   def _init_network(self, net_desc, epoch=None):
     """
     :param dict[str,dict[str]] net_desc: layer name -> layer description dict
@@ -720,6 +764,7 @@ class Engine(object):
       epoch = self.epoch
     self._close_tf_session()
     self._reset_graph()
+    self._maybe_update_config(net_desc=net_desc, epoch=epoch)
     # The new session will by default use the newly created default graph.
     self._make_tf_session()
     tf.set_random_seed(42)

@@ -293,11 +293,15 @@ class TFNetwork(object):
     """
     for name, layer_desc in sorted(net_dict.items()):
       assert isinstance(name, str)
+      if name == "#config":
+        continue
       assert isinstance(layer_desc, dict)
       if layer_desc.get("register_as_extern_data"):
         self.construct_layer(net_dict, name)
     for name, layer_desc in sorted(net_dict.items()):
       assert isinstance(name, str)
+      if name == "#config":
+        continue
       assert isinstance(layer_desc, dict)
       if layer_desc.get("only_on_search") and not self.search_flag:
         continue
