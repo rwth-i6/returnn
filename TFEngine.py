@@ -804,6 +804,7 @@ class Engine(object):
     print("using batch size: %i, max seqs: %i" % (self.batch_size, self.max_seqs), file=log.v4)
     print("learning rate control:", self.learning_rate_control, file=log.v4)
     print("pretrain:", self.pretrain, file=log.v4)
+    self.dataset_batches.clear()
 
     assert self.start_epoch >= 1, "Epochs start at 1."
     final_epoch = self.final_epoch if self.final_epoch != 0 else sys.maxsize
@@ -816,38 +817,25 @@ class Engine(object):
       self.max_seq_length += (self.start_epoch - 1) * self.inc_seq_length
 
     epoch = self.start_epoch  # Epochs start at 1.
-    rebatch = True
     while epoch <= final_epoch:
+      self.epoch = epoch  # type: int
       if isinstance(self.max_seq_length, int) and self.max_seq_length != sys.maxsize:
         if int(self.max_seq_length + self.inc_seq_length) != int(self.max_seq_length):
           print("increasing sequence lengths to", int(self.max_seq_length + self.inc_seq_length), file=log.v3)
-          rebatch = True
+          self.dataset_batches.pop("train", None)
           self.max_seq_length += self.inc_seq_length
-      # In case of random seq ordering, we want to reorder each epoch.
-      if self.train_data.init_seq_order(epoch=epoch):
-        rebatch = True
-      if epoch % self.seq_drop_freq == 0:
+      if self.epoch % self.seq_drop_freq == 0:
         if self.seq_drop > 0.0:
-          rebatch = True
-      self.epoch = epoch  # type: int
-
-      if 'train' in self.dataset_batches:
-        if rebatch:
-          del self.dataset_batches['train']
-        else:
-          print("keeping previous dataset batch order for 'train' dataset", file=log.v4)
+          self.dataset_batches.pop("train", None)
+      # In case of random seq ordering, we want to reorder each epoch.
+      if self.train_data.init_seq_order(epoch=self.epoch):
+        self.dataset_batches.pop("train", None)
       for dataset_name, dataset in self.get_eval_datasets().items():
         if dataset.init_seq_order(epoch=self.epoch):
-          if dataset_name in self.dataset_batches:
-            del self.dataset_batches[dataset_name]
-        else:
-          if dataset_name in self.dataset_batches:
-            print("keeping previous dataset batch order for %r dataset" % dataset_name, file=log.v4)
+          self.dataset_batches.pop(dataset_name, None)
 
       self.init_train_epoch()
       self.train_epoch()
-
-      rebatch = False
       epoch += 1
 
     if self.start_epoch <= self.final_epoch:  # We did train at least one epoch.
@@ -863,6 +851,8 @@ class Engine(object):
 
   def init_train_epoch(self):
     if self.is_pretrain_epoch():
+      # Note: For pretrain epochs, we ensure that the last pretrain epoch will have exactly the same
+      # network as we use after pretraining.
       new_network_desc = self.pretrain.get_network_json_for_epoch(self.epoch)
       self.maybe_init_new_network(new_network_desc)
       self.network.declare_train_params(**self.pretrain.get_train_param_args_for_epoch(self.epoch))
@@ -930,6 +920,7 @@ class Engine(object):
                                                                        shuffle_batches=self.shuffle_batches,
                                                                        used_data_keys=self.network.used_data_keys)
     else:
+      print("reusing previous dataset batch order for 'train' dataset", file=log.v4)
       self.dataset_batches['train'].reset()
     train_batches = self.dataset_batches['train']
 
@@ -980,6 +971,7 @@ class Engine(object):
           max_seq_length=(self.max_seq_length if dataset_name == 'dev' else sys.maxsize),
           used_data_keys=self.network.used_data_keys)
       else:
+        print("reusing previous dataset batch order for %r dataset" % dataset_name, file=log.v4)
         self.dataset_batches[dataset_name].reset()
       tester = Runner(engine=self, dataset=dataset, batches=self.dataset_batches[dataset_name], train=False)
       tester.run(report_prefix=self.get_epoch_str() + " eval")
