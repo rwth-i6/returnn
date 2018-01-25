@@ -819,30 +819,20 @@ class Engine(object):
           dict_diff_str(self.network.layers_desc, net_desc), file=log.v3)
     old_network_params = self.network.get_params_serialized(self.tf_session)
     self._init_network(net_desc)
-    # In pretraining it can happen, that the dimension of output parameters of the previous epoch is
-    # not equal to the dimension in the current epoch, due to difference in layer size.
-    # In that case initialize output parameters randomly
-    if self.is_pretrain_epoch():
-      # iterate through all output layers and check dimension compatibility of parameters
-      # start output layer from random initialization if one parameters dimension do not match
+    if self.is_pretrain_epoch() and not self.pretrain.copy_output_layer:
+      # "ifpossible" logic handled below. copy_output_layer=True is currently not enforced.
       for l in self.network.get_output_layers():
-        keep_layer = True
-        if self.pretrain.copy_output_layer is False:
-          keep_layer = False
-        else:
-          if l.name in old_network_params.values_dict:
-            for param in l.params:
-              if tuple(l.params[param].shape.as_list()) != old_network_params.values_dict[l.name][param].shape:
-                keep_layer = False
-                break
-        if not keep_layer:
+        if l.name in old_network_params.values_dict:
           print("suspend copying of output layer: " + l.name, file=log.v2)
-          del old_network_params.values_dict[l.name]
-    # Otherwise it's initialized randomly which is fine.
+          old_network_params.values_dict.pop(l.name)
     # This copy will copy the old params over and leave the rest randomly initialized.
     # This also works if the old network has just the same topology,
     # e.g. if it is the initial model from self.init_network_from_config().
-    self.network.set_params_by_serialized(old_network_params, session=self.tf_session, ignore_wrong_shape=True)
+    # In pretraining it can happen, that the dimension of output parameters of the previous epoch is
+    # not equal to the dimension in the current epoch, due to difference in layer size.
+    # In that case initialize output parameters randomly.
+    self.network.set_params_by_serialized(
+      old_network_params, session=self.tf_session, ignore_wrong_shape=self.is_pretrain_epoch())
 
   def train(self):
     print("start training at epoch %i and step %i" % (self.start_epoch, self.start_batch), file=log.v3)
