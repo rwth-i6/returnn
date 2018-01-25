@@ -37,7 +37,7 @@ class RecLayer(_ConcatInputLayer):
     :param int|None direction: None|1 -> forward, -1 -> backward
     :param bool input_projection: True -> input is multiplied with matrix. False only works if same input dim
     :param LayerBase|str|float|int|tuple|None initial_state:
-    :param int|str|None max_seq_len: if unit is a subnetwork. str will be evaluated. see code
+    :param int|tf.Tensor|None max_seq_len: if unit is a subnetwork. str will be evaluated. see code
     :param str forward_weights_init: see :func:`TFUtil.get_initializer`
     :param str recurrent_weights_init: see :func:`TFUtil.get_initializer`
     :param str bias_init: see :func:`TFUtil.get_initializer`
@@ -171,6 +171,31 @@ class RecLayer(_ConcatInputLayer):
           # Operate on a copy because we will transform the dict later.
           # We only need this to resolve any other layer dependencies in the main network.
           cl.transform_config_dict(sub.copy(), network=subnet, get_layer=sub_get_layer)
+    if isinstance(d.get("max_seq_len"), str):
+      from TFNetwork import LayerNotFound
+
+      def max_len_from(src):
+        """
+        :param str src: layer name
+        :return: max seq-len of the layer output
+        :rtype: tf.Tensor
+        """
+        layer = None
+        if src.startswith("base:"):
+          # For legacy reasons, this was interpret to be in the subnet, so this should access the current net.
+          # However, now we want that this behaves more standard, such that "base:" accesses the parent net,
+          # but we also want to not break old configs.
+          # We first check whether there is such a layer in the parent net.
+          try:
+            layer = get_layer(src)
+          except LayerNotFound:
+            src = src[len("base:"):]  # This will fall-back to the old behavior.
+        if not layer:
+          layer = get_layer(src)
+        return tf.reduce_max(layer.output.get_sequence_lengths(), name="max_seq_len_%s" % layer.tf_scope_name)
+
+      with tf.name_scope("user_max_seq_len"):
+        d["max_seq_len"] = eval(d["max_seq_len"], {"max_len_from": max_len_from, "tf": tf})
 
   @classmethod
   def get_out_data_from_opts(cls, unit, sources=(), initial_state=None, **kwargs):
@@ -1337,20 +1362,8 @@ class _SubnetworkRecCell(object):
           res = opt_logical_and(res, tf.less(i, max_seq_len, name="i_less_max_seq_len"))
         # Only consider the user 'max_seq_len' option if we don't know the real max_seq_len.
         # This is the old behavior. Maybe this might change at some point.
-        elif isinstance(rec_layer._max_seq_len, int):
-          res = opt_logical_and(res, tf.less(i, rec_layer._max_seq_len, name="i_less_const_max_seq_len"))
-        elif isinstance(rec_layer._max_seq_len, str):
-          def max_len_from(src):
-            """
-            :param str src: layer name. use "base:" prefix to access the parent network
-            :return: max seq-len of the layer output
-            :rtype: tf.Tensor
-            """
-            layer = self.net.get_layer(src)
-            return tf.reduce_max(layer.output.get_sequence_lengths(), name="max_seq_len_%s" % layer.tf_scope_name)
-          with tf.name_scope("user_max_seq_len"):
-            user_max_seq_len = eval(rec_layer._max_seq_len, {"max_len_from": max_len_from, "tf": tf})
-          res = opt_logical_and(res, tf.less(i, user_max_seq_len, name="i_less_user_max_seq_len"))
+        elif isinstance(rec_layer._max_seq_len, (int, tf.Tensor)):
+          res = opt_logical_and(res, tf.less(i, rec_layer._max_seq_len, name="i_less_max_seq_len"))
         else:
           assert rec_layer._max_seq_len is None, "%r: unsupported max_seq_len %r" % (rec_layer, rec_layer._max_seq_len)
         # Check not considering seq_len_info because the dynamics of the network can also lead

@@ -354,7 +354,7 @@ class TFNetwork(object):
       elif name.startswith("data:"):
         layer_desc = {"class": "source", "data_key": name[len("data:"):], "from": []}
       else:
-        raise Exception("layer not found: %r" % name)
+        raise LayerNotFound("layer %r not found in %r" % (name, self))
     else:
       layer_desc = net_dict[name]
     if not get_layer:
@@ -634,6 +634,7 @@ class TFNetwork(object):
     """
     Normally just self.layers[layer_name] but with some extra logic added,
     such as resolving "base:" prefix to the parent network.
+    Raises :class:`LayerNotFound` if the layer is not found.
 
     :param str layer_name:
     :rtype: LayerBase
@@ -641,13 +642,17 @@ class TFNetwork(object):
     if layer_name in self.layers:
       return self.layers[layer_name]
     if layer_name.startswith("extra:") or layer_name.startswith("extra_search:"):
-      assert self.extra_net, "cannot get layer %r, no extra net for %r" % (layer_name, self)
+      if not self.extra_net:
+        raise LayerNotFound("cannot get layer %r, no extra net for %r" % (layer_name, self))
       return self.extra_net.get_layer(layer_name[layer_name.find(":") + 1:])
     if self.extra_parent_net:
       return self.extra_parent_net.get_layer(layer_name)
     if layer_name.startswith("base:"):
-      assert self.parent_net, "cannot get layer %r, no parent net for %r" % (layer_name, self)
+      if not self.parent_net:
+        raise LayerNotFound("cannot get layer %r, no parent net for %r" % (layer_name, self))
       return self.parent_net.get_layer(layer_name[len("base:"):])
+    if layer_name not in self.layers:
+      raise LayerNotFound("layer %r not found in %r" % (layer_name, self))
     return self.layers[layer_name]
 
   def get_params_list(self):
@@ -1198,3 +1203,9 @@ class NetworkConstructionDependencyLoopException(Exception):
     self.network = network
     self.layer_name = layer_name
     self.net_dict = net_dict
+
+
+class LayerNotFound(Exception):
+  """
+  Via :func:`TFNetwork.get_layer`.
+  """
