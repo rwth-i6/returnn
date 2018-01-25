@@ -242,7 +242,7 @@ class SparseStreamParser(StreamParser):
 
       if self.dtype is None:
         self.dtype = seq_data.dtype
-      assert seq_data.dtype    == self.dtype
+      assert seq_data.dtype == self.dtype
 
     self.num_features = self.stream['feature_names'].shape[0]
     self.feature_type = 1
@@ -254,12 +254,50 @@ class SparseStreamParser(StreamParser):
     return self.stream['data'][seq_name].shape[0]
 
 
+class SegmentAlignmentStreamParser(StreamParser):
+  def __init__(self, *args, **kwargs):
+    super(SegmentAlignmentStreamParser, self).__init__(*args, **kwargs)
+
+    for s in self.seq_names:
+      seq_data = self.stream['data'][s]
+
+      if self.dtype is None:
+        self.dtype = seq_data.dtype
+      assert seq_data.dtype == self.dtype
+
+      assert len(seq_data.shape) == 2
+      assert seq_data.shape[1] == 2
+
+    self.num_features = self.stream['feature_names'].shape[0]
+    self.feature_type = 1
+
+  def get_data(self, seq_name):
+    # we return flatted two-dimensional data where the 2nd dimension is 2 [classs, segment end]
+    length = self.get_seq_length(seq_name) // 2
+    segments = self.stream['data'][seq_name][:]
+
+    alignment = numpy.zeros((length,2,), dtype=self.dtype)
+    num_segments = segments.shape[0]
+    seg_end = 0
+    for i in range(num_segments):
+      next_seg_end = seg_end + segments[i,1]
+      alignment[seg_end:next_seg_end,0] = segments[i,0]  # set class
+      alignment[      next_seg_end-1,1] = 1              # mark segment end
+      seg_end = next_seg_end
+
+    alignment = alignment.reshape((-1,))
+    return alignment
+
+  def get_seq_length(self, seq_name):
+    return 2 * sum(self.stream['data'][seq_name][:,1])
+
 class NextGenHDFDataset(CachedDataset2):
   """
   """
 
-  parsers = { 'feature_sequence' : FeatureSequenceStreamParser,
-              'sparse'           : SparseStreamParser }
+  parsers = { 'feature_sequence'  : FeatureSequenceStreamParser,
+              'sparse'            : SparseStreamParser,
+              'segment_alignment' : SegmentAlignmentStreamParser }
 
   def __init__(self, input_stream_name, *args, **kwargs):
     super(NextGenHDFDataset, self).__init__(*args, **kwargs)
