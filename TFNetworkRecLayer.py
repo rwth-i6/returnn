@@ -1487,6 +1487,7 @@ class _SubnetworkRecCell(object):
         size=final_acc_tas[0].size(),
         infer_shape=True)
 
+      # TODO: Maybe we could use tf.contrib.seq2seq.GatherTree op here instead...
       def search_resolve_body(i, choice_beams, new_acc_output_ta):
         # This loops goes backwards through time.
         # This starts at i == seq_len - 1.
