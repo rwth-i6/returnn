@@ -478,9 +478,10 @@ class LayerBase(object):
       assert self.params[param_name] is param
     return param
 
-  def set_param_values_by_dict(self, values_dict, session):
+  def set_param_values_by_dict(self, values_dict, session, ignore_wrong_shape=False):
     """
     :param dict[str,numpy.ndarray] values_dict:
+    :param bool ignore_wrong_shape:
     :param tf.Session session:
     """
     for param_name, values in values_dict.items():
@@ -489,7 +490,11 @@ class LayerBase(object):
       shape = param.get_shape()
       assert isinstance(shape, tf.TensorShape)
       assert shape.is_fully_defined()
-      assert tuple(shape.as_list()) == values.shape
+      if not ignore_wrong_shape:
+        assert tuple(shape.as_list()) == values.shape, "var %r: shape %s != %s" % (param, shape.as_list(), values.shape)
+      elif tuple(shape.as_list()) != values.shape:
+        print("Will not set param %r because its shape %s != %s." % (param, shape.as_list(), values.shape), file=log.v3)
+        continue
       self.network.get_var_assigner(param).assign(values, session=session)
 
   def get_param_values_dict(self, session):

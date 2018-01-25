@@ -842,7 +842,7 @@ class Engine(object):
     # This copy will copy the old params over and leave the rest randomly initialized.
     # This also works if the old network has just the same topology,
     # e.g. if it is the initial model from self.init_network_from_config().
-    self.network.set_params_by_serialized(old_network_params, session=self.tf_session)
+    self.network.set_params_by_serialized(old_network_params, session=self.tf_session, ignore_wrong_shape=True)
 
   def train(self):
     print("start training at epoch %i and step %i" % (self.start_epoch, self.start_batch), file=log.v3)

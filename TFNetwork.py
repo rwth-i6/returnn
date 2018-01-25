@@ -788,15 +788,16 @@ class TFNetwork(object):
       l[layer_name] = layer.get_param_values_dict(session)
     return l
 
-  def set_param_values_by_dict(self, values_dict, session):
+  def set_param_values_by_dict(self, values_dict, **kwargs):
     """
     :param dict[str,dict[str,numpy.ndarray]] values_dict:
-    :param tf.Session session:
+    :param kwargs: passed to :func:`LayerBase.set_param_values_by_dict`
+
     Note that this excludes auxiliary params.
     """
     for layer_name, layer_values_dict in values_dict.items():
       if layer_values_dict:
-        self.layers[layer_name].set_param_values_by_dict(values_dict=layer_values_dict, session=session)
+        self.layers[layer_name].set_param_values_by_dict(values_dict=layer_values_dict, **kwargs)
 
   def get_auxiliary_params(self):
     return [self.global_train_step]
@@ -810,12 +811,13 @@ class TFNetwork(object):
       values_dict=self.get_param_values_dict(session=session),
       global_train_step=self.get_global_train_step(session=session))
 
-  def set_params_by_serialized(self, serialized, session):
+  def set_params_by_serialized(self, serialized, session, **kwargs):
     """
     :param TFNetworkParamsSerialized serialized:
     :param tf.Session session:
+    :param kwargs: passed to :func:`set_param_values_by_dict`
     """
-    self.set_param_values_by_dict(serialized.values_dict, session=session)
+    self.set_param_values_by_dict(serialized.values_dict, session=session, **kwargs)
     self.set_global_train_step(serialized.global_train_step, session=session)
 
   def set_global_train_step(self, step, session):
