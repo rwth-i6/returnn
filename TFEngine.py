@@ -229,6 +229,22 @@ class Runner(object):
     self.num_steps = num_steps
     self.finalized = True
 
+  def _get_batch_dim_from_fetches(self, fetches_results):
+    """
+    :param dict[str,numpy.ndarray|None] fetches_results: results of calculations, see self._get_fetches_dict()
+    :rtype: int
+    """
+    default_target = self.engine.network.extern_data.default_target
+    if "size:%s:0" % default_target in fetches_results:
+      return len(fetches_results["size:%s:0" % default_target])
+    for k, v in sorted(fetches_results.items()):
+      if not k.startswith("size:"):
+        continue
+      if not k.endswith(":0"):
+        continue
+      return len(v)
+    assert False, "batch-dim not found in %r" % fetches_results
+
   def _step_seq_len(self, fetches_results, data_key):
     """
     :param dict[str,numpy.ndarray|None] fetches_results: results of calculations, see self._get_fetches_dict()
@@ -236,8 +252,12 @@ class Runner(object):
     :return: the seq length of this batch
     :rtype: int
     """
-    num_frames = numpy.sum(fetches_results["size:%s:0" % data_key])
-    return num_frames
+    seq_len_key = "size:%s:0" % data_key
+    if seq_len_key in fetches_results:
+      return numpy.sum(fetches_results[seq_len_key])
+    else:
+      # We assume that this data-key has no time axis. Use the batch-dim instead.
+      return self._get_batch_dim_from_fetches(fetches_results)
 
   def _collect_eval_info(self, fetches_results):
     """
