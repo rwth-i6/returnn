@@ -279,7 +279,7 @@ class Runner(object):
           continue
         if not k.endswith(":0"):
           continue
-        eval_info["batch_size"] = len(v)
+        eval_info["num_seqs"] = len(v)
         eval_info["max_size:%s" % k[len("size:"):-len(":0")]] = max(v)
 
     # Add raw stats.
