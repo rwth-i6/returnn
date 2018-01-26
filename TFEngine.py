@@ -396,27 +396,37 @@ class Runner(object):
           Debug.debug_shell(user_ns=locals(), user_global_ns=globals(), exit_afterwards=False)
 
         # Now do one calculation step. Optionally with metadata.
-        if self.store_metadata_mod_step and step % self.store_metadata_mod_step == 0:
-          # Slow run that stores extra information for debugging.
-          print('Storing metadata', file=log.v5)
-          run_options = tf.RunOptions(
-            trace_level=tf.RunOptions.FULL_TRACE)
-          # We could use tfdbg.add_debug_tensor_watch here.
-          fetches_results = sess.run(
-            fetches_dict,
-            feed_dict=feed_dict,
-            options=run_options,
-            run_metadata=run_metadata)  # type: dict[str,numpy.ndarray|str]
-          writer.add_summary(fetches_results["summary"], step + step_offset)
-          writer.add_run_metadata(run_metadata, 'step_{:04d}'.format(step + step_offset))
-          tl = timeline.Timeline(run_metadata.step_stats)
-          timeline_path = os.path.join(logdir, 'timeline.trace')
-          with open(timeline_path, 'w') as f:
-            f.write(tl.generate_chrome_trace_format(show_memory=True))
-        else:
-          fetches_results = sess.run(fetches_dict, feed_dict=feed_dict)  # type: dict[str,numpy.ndarray|str]
-          if writer and "summary" in fetches_results:
+        try:
+          if self.store_metadata_mod_step and step % self.store_metadata_mod_step == 0:
+            # Slow run that stores extra information for debugging.
+            print('Storing metadata', file=log.v5)
+            run_options = tf.RunOptions(
+              trace_level=tf.RunOptions.FULL_TRACE)
+            # We could use tfdbg.add_debug_tensor_watch here.
+            fetches_results = sess.run(
+              fetches_dict,
+              feed_dict=feed_dict,
+              options=run_options,
+              run_metadata=run_metadata)  # type: dict[str,numpy.ndarray|str]
             writer.add_summary(fetches_results["summary"], step + step_offset)
+            writer.add_run_metadata(run_metadata, 'step_{:04d}'.format(step + step_offset))
+            tl = timeline.Timeline(run_metadata.step_stats)
+            timeline_path = os.path.join(logdir, 'timeline.trace')
+            with open(timeline_path, 'w') as f:
+              f.write(tl.generate_chrome_trace_format(show_memory=True))
+          else:
+            fetches_results = sess.run(fetches_dict, feed_dict=feed_dict)  # type: dict[str,numpy.ndarray|str]
+            if writer and "summary" in fetches_results:
+              writer.add_summary(fetches_results["summary"], step + step_offset)
+        except tf.errors.ResourceExhaustedError:
+          print("ResourceExhaustedError. Shapes of feed_dict:", file=log.v1)
+          for key, value in sorted(feed_dict.items(), key=lambda item: item[0].name):
+            print(
+              "  %r: %s" % (
+                key,
+                ("shape %s" % value.shape) if isinstance(value, numpy.ndarray) else ("type %r" % type(value))),
+              file=log.v1)
+          raise
 
         eval_info = self._collect_eval_info(fetches_results=fetches_results)
         self._maybe_handle_extra_fetches(fetches_results)
