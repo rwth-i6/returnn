@@ -1709,6 +1709,7 @@ class _SubnetworkRecCell(object):
       return
 
     from TFNetwork import TFNetwork, ExternData
+    from TFNetworkLayer import InternalLayer
     self.input_layers_net = TFNetwork(
       name="%s/%s:rec-subnet-input" % (self.parent_net.name, self.parent_rec_layer.name if self.parent_rec_layer else "?"),
       extern_data=ExternData(),
@@ -1723,9 +1724,38 @@ class _SubnetworkRecCell(object):
       self.input_layers_net.extern_data.data[key] = \
         self.parent_net.extern_data.data[key]
 
+    def get_prev_layer(name):
+      """
+      :param str name: layer name without "prev:" prefix
+      :rtype: LayerBase
+      """
+      cur_layer = get_layer(name)
+      with tf.name_scope("prev_%s" % name):
+        # See also _construct_output_layers_moved_out.
+        output = cur_layer.output.copy_as_time_major()
+        initial = self._get_init_output(name)
+        initial_wt = tf.expand_dims(initial, axis=0)  # add time axis
+        x = output.placeholder
+        output.placeholder = tf.concat([initial_wt, x], axis=0, name="concat_in_time")
+        output.placeholder = output.placeholder[:-1]  # remove last frame
+        # Note: This seq_len might make sense to use here:
+        # output.size_placeholder[0] = tf.minimum(output.size_placeholder[0] + 1, tf.shape(x)[0])
+        # However, often we assume that we keep the same seq lens as the output layer.
+        assert isinstance(self.input_layers_net, TFNetwork)
+        layer = self.input_layers_net.add_layer(name="prev:%s" % name, output=output, layer_class=InternalLayer)
+        return layer
+
     # get_layer similar as in self._construct() but simplified.
     def get_layer(name):
-      assert not name.startswith("prev:")
+      """
+      :param str name: layer name
+      :rtype: LayerBase
+      """
+      assert isinstance(self.input_layers_net, TFNetwork)
+      if name in self.input_layers_net.layers:
+        return self.input_layers_net.layers[name]
+      if name.startswith("prev:"):
+        return get_prev_layer(name[len("prev:"):])
       if name.startswith("base:"):
         return self.parent_net.layers[name[len("base:"):]]
       return self.input_layers_net.construct_layer(self.net_dict, name=name, get_layer=get_layer)
