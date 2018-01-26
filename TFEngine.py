@@ -1110,20 +1110,29 @@ class Engine(object):
       default_keep_pattern.add(n)
     keep_epochs.update(opts.get("keep", default_keep_pattern))
     keep_epochs.update(epochs[-keep_last_n:])
-    score_keys = sorted(lr_control.epochData[epochs[0]].error.keys())
+    score_keys = set()  # e.g. "dev_error", "dev_score", etc.
+    # Collect all possible score keys. Note that we could have different ones for different epochs.
+    for data in lr_control.epochData.values():
+      score_keys.update(data.error.keys())
     assert score_keys
+    score_keys = sorted(score_keys)
     score_values = {key: [] for key in score_keys}
     for epoch in epochs:
       epoch_scores = lr_control.epochData[epoch].error
-      score_values = {key: score_values[key] + [epoch_scores[key]] for key in score_keys}
+      for key in epoch_scores.keys():
+        score_values[key].append(epoch_scores[key])
     for key in list(score_keys):
       scores = score_values[key]
       if min(scores) == max(scores):
         print("Ignoring score key %r because all epochs have the same value %r." % (key, scores[0]), file=log.v3)
         score_keys.remove(key)
         score_values.pop(key)
+    # Actually, terminology is a bit confusing. We call it "score" here (and elsewhere), but it's a loss,
+    # so the maximum value is the worst possible value.
+    worst_score_values = {key: max(scores) for (key, scores) in score_values.items()}
     for key in score_keys:
-      scores = sorted([(lr_control.epochData[epoch].error[key], epoch) for epoch in epochs])
+      scores = sorted([
+        (lr_control.epochData[epoch].error.get(key, worst_score_values[key]), epoch) for epoch in epochs])
       scores = scores[:keep_best_n]
       keep_epochs.update([v[1] for v in scores])
     keep_epochs.intersection_update(epochs)
