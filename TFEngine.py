@@ -1014,7 +1014,7 @@ class Engine(object):
 
     if self.model_filename and (self.epoch % self.save_model_epoch_interval == 0):
       self.save_model(self.get_epoch_model_filename())
-    self.learning_rate_control.setEpochError(self.epoch, {"train_score": trainer.score})
+    self.learning_rate_control.setEpochError(self.epoch, {"train_score": trainer.score, "train_error": trainer.error})
     self.learning_rate_control.save()
 
     print(self.get_epoch_str(), "score:", self.format_score(trainer.score), "elapsed:", hms(trainer.elapsed), end=" ", file=log.v1)
