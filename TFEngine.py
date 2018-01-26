@@ -777,8 +777,16 @@ class Engine(object):
       self.orig_config.clear()
     if "#config" not in net_desc:
       return
+
     config_overwrites = net_desc["#config"]
     for key, value in config_overwrites.items():
+      if key == "learning_rate":
+        old_lr = self.learning_rate_control.getLearningRateForEpoch(epoch)
+        print("Overwrite learning rate for epoch %i: %r -> %r" % (epoch, old_lr, value), file=log.v3)
+        assert self.config.is_true("use_learning_rate_control_always")
+        self.learning_rate_control.epochData[epoch].learningRate = value
+        continue
+
       assert key in self.config.typed_dict, "config update key %r -> %r expected to be in orig. config" % (key, value)
       orig_value = self.config.typed_dict[key]
       print("Update config key %r for epoch %i: %r -> %r" % (key, epoch, orig_value, value), file=log.v3)

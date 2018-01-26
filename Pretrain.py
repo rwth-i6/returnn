@@ -106,7 +106,7 @@ class Pretrain:
     if not repetitions:
       repetitions = 1
     if isinstance(repetitions, dict):
-      rep_dict = repetitions
+      rep_dict = repetitions.copy()
       default_rep = rep_dict.pop('default', 1)
       repetitions = [default_rep] * len(self._step_net_jsons)
       for k, v in sorted(rep_dict.items()):
@@ -121,6 +121,10 @@ class Pretrain:
       assert 0 < len(repetitions) <= len(self._step_net_jsons)
       if len(repetitions) < len(self._step_net_jsons):
         repetitions = repetitions + [repetitions[-1]] * (len(self._step_net_jsons) - len(repetitions))
+    assert len(repetitions) == len(self._step_net_jsons)
+    for i, net_dict in enumerate(self._step_net_jsons):
+      if "#repetition" in net_dict:
+        repetitions[i] = net_dict.pop("#repetition")
     self.repetitions = repetitions
     self._make_repetitions()
     self._resolve_wrapped_values()

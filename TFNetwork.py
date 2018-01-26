@@ -287,20 +287,22 @@ class TFNetwork(object):
       net_dict[name] = layer_desc
     self.construct_from_dict(net_dict)
 
+  _LayerNamesToIgnore = ["#config", "#repetition"]
+
   def construct_from_dict(self, net_dict):
     """
     :param dict[str,dict[str]] net_dict:
     """
     for name, layer_desc in sorted(net_dict.items()):
       assert isinstance(name, str)
-      if name == "#config":
+      if name in self._LayerNamesToIgnore:
         continue
       assert isinstance(layer_desc, dict)
       if layer_desc.get("register_as_extern_data"):
         self.construct_layer(net_dict, name)
     for name, layer_desc in sorted(net_dict.items()):
       assert isinstance(name, str)
-      if name == "#config":
+      if name in self._LayerNamesToIgnore:
         continue
       assert isinstance(layer_desc, dict)
       if layer_desc.get("only_on_search") and not self.search_flag:
