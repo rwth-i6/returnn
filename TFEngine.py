@@ -424,7 +424,7 @@ class Runner(object):
             print(
               "  %r: %s" % (
                 key,
-                ("shape %s" % value.shape) if isinstance(value, numpy.ndarray) else ("type %r" % type(value))),
+                ("shape %s" % (value.shape,)) if isinstance(value, numpy.ndarray) else ("type %r" % type(value))),
               file=log.v1)
           raise
 
