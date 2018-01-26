@@ -968,11 +968,46 @@ def test_supported_devices_for_op():
 
 
 def test_bleu_score():
-  res = session.run(bleu_score(
-    hypothesis=[[1, 2, 3]], hyp_seq_lens=[3],
-    truth=[[2, 3]], truth_seq_lens=[2]
-  ))
+  hyp = [1, 2, 3]
+  truth = [2, 3]
+  from Util import compute_bleu
+  res = compute_bleu([truth], [hyp])
   print("res:", res)
-  assert isinstance(res, numpy.ndarray)
-  assert res.shape == (1,)
-  assert_almost_equal(res, [0.6389431])
+  tf_res = session.run(bleu_score(
+    hypothesis=[hyp], hyp_seq_lens=[len(hyp)],
+    truth=[truth], truth_seq_lens=[len(truth)]
+  ))
+  print("TF res:", tf_res)
+  assert isinstance(tf_res, numpy.ndarray)
+  assert tf_res.shape == (1,)
+  assert_almost_equal(tf_res, [res])
+  assert_almost_equal(tf_res, [0.6389431])
+
+
+if __name__ == "__main__":
+  try:
+    better_exchook.install()
+    if len(sys.argv) <= 1:
+      for k, v in sorted(globals().items()):
+        if k.startswith("test_"):
+          print("-" * 40)
+          print("Executing: %s" % k)
+          try:
+            v()
+          except unittest.SkipTest as exc:
+            print("SkipTest:", exc)
+          print("-" * 40)
+      print("Finished all tests.")
+    else:
+      assert len(sys.argv) >= 2
+      for arg in sys.argv[1:]:
+        print("Executing: %s" % arg)
+        if arg in globals():
+          globals()[arg]()  # assume function and execute
+        else:
+          eval(arg)  # assume Python code and execute
+  finally:
+    import threading
+    #if len(list(threading.enumerate())) > 1:
+    #  print("Warning, more than one thread at exit:")
+    #  better_exchook.dump_all_thread_tracebacks()
