@@ -10,6 +10,7 @@ from nose.tools import assert_equal, assert_is_instance
 import contextlib
 import unittest
 import numpy.testing
+from pprint import pprint
 import better_exchook
 better_exchook.replace_traceback_format_tb()
 
@@ -28,6 +29,36 @@ def make_scope():
   with tf.Graph().as_default() as graph:
     with tf.Session(graph=graph) as session:
       yield session
+
+
+def test_batch_norm_vars():
+  with make_scope() as session:
+    n_in, n_out = 2, 3
+    config = Config()
+    layer_name = "layer1"
+    config.update({
+      "num_outputs": n_out,
+      "num_inputs": n_in,
+      "network": {
+        layer_name: {
+          "class": "linear", "activation": "relu", "batch_norm": True, "n_out": n_out, "is_output_layer": True}
+      }})
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_value("network"))
+    layer = network.layers[layer_name]
+    print("layer:", layer)
+    print("layer vars:")
+    pprint(layer.params)
+    assert layer.use_batch_norm
+    bn_prefix = "batch_norm/%s_%s_output_" % (layer_name, layer_name)
+    assert_equal(set(layer.params.keys()), {
+      "W", "b", bn_prefix + "beta", bn_prefix + "mean", bn_prefix + "gamma", bn_prefix + "variance"})
+    assert_equal(layer.params["W"].get_shape().as_list(), [n_in, n_out])
+    assert_equal(layer.params["b"].get_shape().as_list(), [n_out])
+    assert_equal(layer.params[bn_prefix + "beta"].get_shape().as_list(), [1, 1, n_out])
+    assert_equal(layer.params[bn_prefix + "gamma"].get_shape().as_list(), [1, 1, n_out])
+    assert_equal(layer.params[bn_prefix + "mean"].get_shape().as_list(), [1, 1, n_out])
+    assert_equal(layer.params[bn_prefix + "variance"].get_shape().as_list(), [1, 1, n_out])
 
 
 def test_activation_layer_net_construct():
