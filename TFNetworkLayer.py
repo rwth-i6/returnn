@@ -676,7 +676,7 @@ class LayerBase(object):
       tf.nn.batch_normalization()
       https://github.com/deepmind/sonnet/blob/master/sonnet/python/modules/batch_norm.py
     """
-    with tf.name_scope("batch_norm"):
+    with tf.variable_scope("batch_norm"):
       x = data.get_placeholder_flattened(keep_dims=True)  # shape (time',...)
       mean, variance = tf.nn.moments(x, axes=[0], keep_dims=True)
       if sample_mean is None:
