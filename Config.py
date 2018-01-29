@@ -32,7 +32,7 @@ class Config:
   def load_file(self, f):
     """
     Reads the configuration parameters from a file and adds them to the inner set of parameters
-    :param string|io.TextIOBase f:
+    :param string|io.TextIOBase|io.StringIO f:
     """
     if isinstance(f, str):
       import os
@@ -163,7 +163,19 @@ class Config:
     else:
       value = [value]
     if key in self.typed_dict:
-      del self.typed_dict[key]
+      # This is a special case. We overwrite a config value which was typed before.
+      # E.g. this could have been loaded via a Python config file.
+      # We want to keep the entry in self.typed_dict because there might be functions/lambdas inside
+      # the config which require the global variable to be available.
+      # See :func:`test_rnn_initConfig_py_global_var`.
+      value_type = type(self.typed_dict[key])
+      if not isinstance(value, str) and not isinstance(value, value_type):
+        assert isinstance(value, list)
+        assert len(value) == 1
+        assert isinstance(value[0], str)
+        value = value[0]
+      self.typed_dict[key] = value_type(value)
+      return
     if key == 'include':
       for f in value:
         self.load_file(f)
