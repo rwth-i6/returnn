@@ -158,10 +158,6 @@ class Config:
     :type key: str
     :type value: str
     """
-    if value.find(',') > 0:
-      value = value.split(',')
-    else:
-      value = [value]
     if key in self.typed_dict:
       # This is a special case. We overwrite a config value which was typed before.
       # E.g. this could have been loaded via a Python config file.
@@ -169,13 +165,12 @@ class Config:
       # the config which require the global variable to be available.
       # See :func:`test_rnn_initConfig_py_global_var`.
       value_type = type(self.typed_dict[key])
-      if not isinstance(value, str) and not isinstance(value, value_type):
-        assert isinstance(value, list)
-        assert len(value) == 1
-        assert isinstance(value[0], str)
-        value = value[0]
       self.typed_dict[key] = value_type(value)
       return
+    if value.find(',') > 0:
+      value = value.split(',')
+    else:
+      value = [value]
     if key == 'include':
       for f in value:
         self.load_file(f)
