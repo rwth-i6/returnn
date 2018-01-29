@@ -823,7 +823,7 @@ class Engine(object):
       eval_flag=self.use_eval_flag,
       search_flag=self.use_search_flag)
     network.construct_from_dict(net_desc)
-    if self.config.list("search_train_network_layers"):
+    if train_flag is not False and self.config.list("search_train_network_layers"):
       network.construct_extra_net(
         net_desc, layer_list=self.config.list("search_train_network_layers"), search_flag=True)
       print("search train network layers:")
