@@ -28,7 +28,7 @@ from tensorflow.python.client import timeline
 
 from Dataset import Dataset, Batch, BatchSetGenerator
 from Engine import Engine as TheanoEngine
-from LearningRateControl import loadLearningRateControlFromConfig
+from LearningRateControl import loadLearningRateControlFromConfig, LearningRateControl
 from Log import log
 from Network import LayerNetwork
 from Pretrain import pretrainFromConfig
@@ -510,6 +510,7 @@ class Engine(object):
     self.tf_session = None  # type: tf.Session
     self.network = None  # type: TFNetwork
     self.updater = None  # type: Updater
+    self.learning_rate_control = None  # type: LearningRateControl
     self._checked_uninitialized_vars = False
     self._merge_all_summaries = None
     self.dataset_batches = {}  # type: dict[str,BatchSetGenerator]
@@ -781,6 +782,9 @@ class Engine(object):
     config_overwrites = net_desc["#config"]
     for key, value in config_overwrites.items():
       if key == "learning_rate":
+        if not self.learning_rate_control:
+          print("No lr control, ignore learning rate %r for epoch %i" % (value, epoch), file=log.v3)
+          continue
         old_lr = self.learning_rate_control.getLearningRateForEpoch(epoch)
         print("Overwrite learning rate for epoch %i: %r -> %r" % (epoch, old_lr, value), file=log.v3)
         assert self.config.is_true("use_learning_rate_control_always")
