@@ -1540,6 +1540,33 @@ class BatchNormLayer(CopyLayer):
     super(BatchNormLayer, self).__init__(batch_norm=batch_norm_opts or True, **kwargs)
 
 
+class LayerNormLayer(_ConcatInputLayer):
+  """
+  Applies layer-normalization.
+  """
+  layer_class = "layer_norm"
+
+  def __init__(self, epsilon=1e-6, **kwargs):
+    super(LayerNormLayer, self).__init__(**kwargs)
+    assert not self.input_data.sparse
+    x = self.input_data.placeholder
+    dim = self.input_data.dim
+    axis = self.input_data.feature_dim_axis
+    with self.var_creation_scope():
+      scale = tf.get_variable("scale", [dim], initializer=tf.ones_initializer())
+      bias = tf.get_variable("bias", [dim], initializer=tf.zeros_initializer())
+    mean = tf.reduce_mean(x, axis=[axis], keep_dims=True, name="mean")
+    variance = tf.reduce_mean(tf.square(x - mean), axis=[axis], keep_dims=True, name="variance")
+    with tf.name_scope("normalized"):
+      norm_x = (x - mean) * tf.rsqrt(variance + epsilon)
+    self.output.placeholder = norm_x * scale + bias
+    self.output.size_placeholder = self.input_data.size_placeholder.copy()
+
+  @classmethod
+  def get_out_data_from_opts(cls, sources, name, **kwargs):
+    return get_concat_sources_data_template(sources, name="%s_output" % name)
+
+
 class SliceLayer(_ConcatInputLayer):
   """
   Slicing on the input, i.e. x[start:end:step] in some axis.
