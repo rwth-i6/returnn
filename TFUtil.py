@@ -487,6 +487,12 @@ class Data(object):
     return self.shape
 
   @property
+  def batch_shape_dense(self):
+    if self.sparse:
+      return self.batch_shape + (self.dim,)
+    return self.batch_shape
+
+  @property
   def ndim(self):
     """
     :rtype: int

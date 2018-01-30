@@ -3093,3 +3093,100 @@ class GaussWindowAttentionLayer(AttentionBaseLayer):
       assert isinstance(inner_size, int)
       out.shape = out.shape[:-1] + (inner_size,) + out.shape[-1:]
     return out
+
+
+class SelfAttentionLayer(_ConcatInputLayer):
+  """
+  Applies self-attention on the input. I.e., with input `x`,
+  it will basically calculate
+
+      att(Q x, K x, V x),
+
+  where `att` is multi-head dot-attention for now, `Q`, `K`, `V` are matrices.
+  """
+  layer_class = "self_attention"
+  recurrent = True
+
+  def __init__(self, num_heads, total_key_dim, forward_weights_init="glorot_uniform", **kwargs):
+    """
+    :param int num_heads:
+    :param int total_key_dim:
+    :param str forward_weights_init: see :func:`TFUtil.get_initializer`
+    """
+    super(SelfAttentionLayer, self).__init__(**kwargs)
+    total_value_dim = self.output.dim
+    assert total_key_dim % num_heads == 0, "must be divisible"
+    assert total_value_dim % num_heads == 0, "must be divisible. total_value_dim = n_out"
+    from TFUtil import get_initializer, dot, get_shape, move_axis
+    with self.var_creation_scope():
+      fwd_weights_initializer = get_initializer(
+        forward_weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
+      n_in = self.input_data.dim
+      mat_n_out = total_key_dim * 2 + total_value_dim  # Q, K, V
+      mat = self.add_param(tf.get_variable(
+        name="QKV", shape=(n_in, mat_n_out), dtype=tf.float32, initializer=fwd_weights_initializer))
+    x = self.input_data.placeholder
+    if self.input_data.sparse:
+      if x.dtype in [tf.uint8, tf.int8, tf.uint16, tf.int16]:
+        x = tf.cast(x, tf.int32)
+      x = tf.nn.embedding_lookup(mat, x)
+    else:
+      x = dot(x, mat)
+    x.set_shape(tf.TensorShape(self.input_data.batch_shape_dense[:-1] + (mat_n_out,)))
+    x_shape = [-1, -1, num_heads, mat_n_out // num_heads]
+    assert self.input_data.batch_dim_axis in (0, 1)
+    x_shape[self.input_data.batch_dim_axis] = tf.shape(x)[self.input_data.batch_dim_axis]
+    x = tf.reshape(x, x_shape)  # (batch,time)|(time,batch) + (heads,qkv-dim//heads)
+    x.set_shape(tf.TensorShape([None, None, num_heads, mat_n_out // num_heads]))
+    assert self.input_data.batch_dim_axis in (0, 1)
+    # (batch,heads,time,qkv-dim//heads)
+    x = tf.transpose(x, [self.input_data.batch_dim_axis, 2, 1 - self.input_data.batch_dim_axis, 3])
+    x.set_shape(tf.TensorShape([None, num_heads, None, mat_n_out // num_heads]))
+    q, k, v = tf.split(
+      x, [total_key_dim // num_heads, total_key_dim // num_heads, total_value_dim // num_heads], axis=-1, name="qkv")
+    q *= (total_key_dim // num_heads) ** -0.5
+    energy = tf.matmul(q, k, transpose_b=True)  # (batch,heads,time,time)
+    energy_mask = tf.sequence_mask(
+      self.input_data.get_sequence_lengths(), maxlen=tf.shape(energy)[-1])  # (batch,time)
+    energy_mask = tf.reshape(energy_mask, [tf.shape(energy)[0], 1, 1, tf.shape(energy)[-1]])  # (batch,1,1,time)
+    # Currently tf.where does not support broadcasting...
+    energy_mask = tf.logical_and(energy_mask, tf.ones_like(energy, dtype=tf.bool))
+    energy = tf.where(energy_mask, energy, float("-inf") * tf.ones_like(energy), name="energy_masked")
+    weights = tf.nn.softmax(energy)  # (batch,heads,time,time)
+    v = tf.matmul(weights, v)  # (batch,heads,time,v-dim//heads)
+    v.set_shape(tf.TensorShape([None, num_heads, None, total_value_dim // num_heads]))
+    v = tf.transpose(v, [0, 2, 1, 3])  # (batch,time,heads,v-dim//heads)
+    if len(self.output.shape) == 2:
+      v = tf.reshape(v, get_shape(v)[:2] + [total_value_dim])
+      v.set_shape(tf.TensorShape([None, None, total_value_dim]))
+    else:
+      assert len(self.output.shape) == 1
+      v = tf.reshape(v, get_shape(v)[:1] + [total_value_dim])  # (batch,v-dim)
+      v.set_shape(tf.TensorShape([None, total_value_dim]))
+    self.output.placeholder = v
+    self.output.size_placeholder = self.input_data.size_placeholder.copy()
+
+  @classmethod
+  def get_out_data_from_opts(cls, n_out, name, sources, **kwargs):
+    """
+    :param int n_out:
+    :param str name:
+    :param list[LayerBase] sources:
+    :rtype: Data
+    """
+    assert sources
+    import numpy
+    out = sources[0].output.copy_as_batch_major().copy(name="%s_output" % name)
+    if out.sparse:
+      out.dtype = "float32"
+      out.sparse = False
+      out.shape = out.shape + (out.dim,)
+    out.dim = n_out
+    if len(out.shape) >= 2:
+      if all(out.shape[:-1]):
+        out.shape = (numpy.prod(out.shape[:-1]), n_out)
+      else:
+        out.shape = (None, n_out)
+    else:
+      out.shape = (n_out,)
+    return out
