@@ -36,7 +36,8 @@ class LearningRateControl(object):
       "defaultLearningRate": config.float('learning_rate', 1.0),
       "minLearningRate": config.float('min_learning_rate', 0.0),
       "defaultLearningRates": config.typed_value('learning_rates') or config.float_list('learning_rates'),
-      "errorMeasureKey": config.value('learning_rate_control_error_measure', None),
+      "errorMeasureKey": config.typed_value('learning_rate_control_error_measure')
+                         or config.value('learning_rate_control_error_measure', None),
       "relativeErrorAlsoRelativeToLearningRate": config.bool('learning_rate_control_relative_error_relative_lr', False),
       "minNumEpochsPerNewLearningRate": config.int("learning_rate_control_min_num_epochs_per_new_lr", 0),
       "filename": config.value('learning_rate_file', None),
@@ -217,8 +218,14 @@ class LearningRateControl(object):
       keys += [self.errorMeasureKey, self.errorMeasureKey + "_output"]
     else:
       assert self.errorMeasureKey is None
-    keys += ["dev_score", "train_score"]  # To keep old setups producing the same behavior, keep this order.
+    keys += ["dev_score", "dev_score_output"]
     for key in keys:
+      if key in epoch_data.error:
+        return key
+    for key in sorted(epoch_data.error.keys()):
+      if key.startswith("dev_"):
+        return key
+    for key in ["train_score", "train_score_output"]:
       if key in epoch_data.error:
         return key
     return min(epoch_data.error.keys())
