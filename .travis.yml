@@ -17,11 +17,12 @@ dist: trusty
 
 # command to install dependencies
 # quiet (-qq) to keep log smaller
+# >/dev/stdout to avoid interactive banner (which blows up the log)
 install:
   - pip install -qq --upgrade pip setuptools wheel
-  - pip install numpy scipy
-  - pip install -r requirements.txt
-  - pip install tensorflow
+  - pip install --upgrade numpy scipy  >/dev/stdout
+  - pip install -r requirements.txt  >/dev/stdout
+  - pip install tensorflow  >/dev/stdout
   - pip install -qq nose
   - echo "[global]" >> ~/.theanorc
   - echo "device = cpu" >> ~/.theanorc
