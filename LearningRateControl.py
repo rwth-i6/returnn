@@ -59,7 +59,7 @@ class LearningRateControl(object):
     """
     :param float defaultLearningRate: default learning rate. usually for epoch 1
     :param list[float] | dict[int,float] defaultLearningRates: learning rates
-    :param str errorMeasureKey: for getEpochErrorValue() the selector for EpochData.error which is a dict
+    :param str|list[str]|None errorMeasureKey: for getEpochErrorValue() the selector for EpochData.error which is a dict
     :param int minNumEpochsPerNewLearningRate: if the lr was recently updated, use it for at least N epochs
     :param str filename: load from and save to file
     """
@@ -159,9 +159,11 @@ class LearningRateControl(object):
     return self.defaultLearningRate
 
   def calcRelativeError(self, oldEpoch, newEpoch):
-    oldError = self.getEpochErrorValue(oldEpoch)
-    newError = self.getEpochErrorValue(newEpoch)
+    oldKey, oldError = self.getEpochErrorKeyValue(oldEpoch)
+    newKey, newError = self.getEpochErrorKeyValue(newEpoch)
     if oldError is None or newError is None:
+      return None
+    if oldKey != newKey:
       return None
     relativeError = (newError - oldError) / abs(newError)
     if self.relativeErrorAlsoRelativeToLearningRate:
@@ -198,18 +200,25 @@ class LearningRateControl(object):
 
   def getErrorKey(self, epoch):
     if epoch not in self.epochData:
+      if isinstance(self.errorMeasureKey, list):
+        return self.errorMeasureKey[0]
+      assert isinstance(self.errorMeasureKey, (str, type(None)))
       return self.errorMeasureKey
     epoch_data = self.epochData[epoch]
     if not epoch_data.error:
       return None
     if len(epoch_data.error) == 1 and "old_format_score" in epoch_data.error:
       return "old_format_score"
-    if self.errorMeasureKey:
-      if self.errorMeasureKey not in epoch_data.error:
-        if self.errorMeasureKey + "_output" in epoch_data.error:  # for multiple outputs, try default output
-          return self.errorMeasureKey + "_output"
-      return self.errorMeasureKey
-    for key in ["dev_score", "train_score"]:  # To keep old setups producing the same behavior, keep this order.
+    keys = []
+    if isinstance(self.errorMeasureKey, list):
+      for key in self.errorMeasureKey:
+        keys += [key, key + "_output"]  # for multiple outputs, try default output
+    elif isinstance(self.errorMeasureKey, str):
+      keys += [self.errorMeasureKey, self.errorMeasureKey + "_output"]
+    else:
+      assert self.errorMeasureKey is None
+    keys += ["dev_score", "train_score"]  # To keep old setups producing the same behavior, keep this order.
+    for key in keys:
       if key in epoch_data.error:
         return key
     return min(epoch_data.error.keys())
@@ -229,25 +238,36 @@ class LearningRateControl(object):
                          (key, error, 'learning_rate_control_error_measure', 'dev_error')
     return error[key]
 
+  def getEpochErrorKeyValue(self, epoch):
+    error = self.getEpochErrorDict(epoch)
+    if not error:
+      return None, None
+    key = self.getErrorKey(epoch)
+    assert key
+    assert key in error, "%r not in %r. fix %r in config. set it to %r or so." % \
+                         (key, error, 'learning_rate_control_error_measure', 'dev_error')
+    return key, error[key]
+
   def getLastBestEpoch(self, last_epoch, first_epoch=1, filter_score=float("inf"), only_last_n=-1, min_score_dist=0.0):
     """
     :param int first_epoch: will check all epochs >= first_epoch
-    :param int last_epoch: will check all epochs <= last_epoch
+    :param int last_epoch: inclusive. will check all epochs <= last_epoch
     :param float filter_score: all epochs which values over this score are not considered
-    :param int only_last_n: if set, from the resulting list, we consider only the last only_last_n
+    :param int only_last_n: if set (>=1), from the resulting list, we consider only the last only_last_n
     :param float min_score_dist: filter out epochs where the diff to the most recent is not big enough
     :return: the last best epoch. to get the details then, you might want to use getEpochErrorDict.
     :rtype: int|None
     """
     if first_epoch > last_epoch:
       return None
-    values = [(self.getEpochErrorValue(ep), ep) for ep in range(first_epoch, last_epoch + 1)]
+    values = [(self.getEpochErrorKeyValue(ep), ep) for ep in range(first_epoch, last_epoch + 1)]
     # Note that the order of the checks here is a bit arbitrary but I had some thoughts on it.
     # Changing the order will also slightly change the behavior, so be sure it make sense.
-    values = [(v, ep) for (v, ep) in values if v is not None]
+    values = [((key, v), ep) for ((key, v), ep) in values if v is not None]
     if not values:
       return None
-    latest_score = values[-1][0]
+    last_key, latest_score = values[-1][0]
+    values = [(v, ep) for ((key, v), ep) in values if key == last_key]  # only same key
     values = [(v, ep) for (v, ep) in values if v <= filter_score]
     if not values:
       return None
@@ -386,9 +406,11 @@ class NewbobAbs(LearningRateControl):
     last2Epoch = self.getLastEpoch(lastEpoch)
     if last2Epoch is None:
       return learningRate
-    oldError = self.getEpochErrorValue(last2Epoch)
-    newError = self.getEpochErrorValue(lastEpoch)
+    oldKey, oldError = self.getEpochErrorKeyValue(last2Epoch)
+    newKey, newError = self.getEpochErrorKeyValue(lastEpoch)
     if oldError is None or newError is None:
+      return learningRate
+    if oldKey != newKey:
       return learningRate
     errorDiff = newError - oldError
     if errorDiff > self.errorThreshold:

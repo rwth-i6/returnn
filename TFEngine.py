@@ -972,7 +972,7 @@ class Engine(object):
       **opts)
     if last_best_epoch and last_best_epoch != self.epoch - 1:
       print("Last epoch %i (score: %f) is not the optimal model" %
-            (self.epoch -1, self.learning_rate_control.getEpochErrorValue(self.epoch -1))
+            (self.epoch - 1, self.learning_rate_control.getEpochErrorValue(self.epoch -1))
             + " but epoch %i has better score %f (%r), will use that model." %
             (last_best_epoch, self.learning_rate_control.getEpochErrorValue(last_best_epoch),
              self.learning_rate_control.getEpochErrorDict(last_best_epoch)),
