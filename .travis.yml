@@ -19,14 +19,15 @@ dist: trusty
 # quiet (-qq) to keep log smaller
 install:
   - pip install -qq --upgrade pip setuptools wheel
-  - pip install -qq --only-binary=numpy,scipy numpy
-  - pip install -qq -r requirements.txt
-  - pip install -qq tensorflow
+  - pip install numpy scipy
+  - pip install -r requirements.txt
+  - pip install tensorflow
   - pip install -qq nose
   - echo "[global]" >> ~/.theanorc
   - echo "device = cpu" >> ~/.theanorc
   - echo "floatX = float32" >> ~/.theanorc
   - python --version
+  - python -c "import numpy; print(numpy.version.full_version)"
   - python -c "import tensorflow as tf; print(tf.GIT_VERSION, tf.VERSION)"
   - python -c "import theano; print(theano.__version__)"
 
