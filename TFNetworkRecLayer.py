@@ -2837,21 +2837,27 @@ class GenericAttentionLayer(AttentionBaseLayer):
     self.base_weights = weights_data.copy_with_time_dim_axis(1)  # (B,T,...)
     # We will always have batch-major mode and just write T for enc-time, i.e. (B,T,...).
     weights_t = weights_data.placeholder  # (B,...,T,...)
+    # Move time-dim to end in weights.
     new_axes = list(range(weights_data.batch_ndim))
     new_axes.remove(weights_data.time_dim_axis)
     new_axes.append(weights_data.time_dim_axis)
     weights_t = tf.transpose(weights_t, perm=new_axes)  # (B,...,T)
     shape = tf.shape(weights_t)
     shape = [weights_data.batch_shape[new_axes[i]] or shape[i] for i in range(len(new_axes))]
-    batch_dim, time_dim = shape[0], shape[-1]
+    time_dim = shape[-1]
+    # rem_dims_start_axis will specify which prefix axes we will share,
+    # and thus also in the output we will have shape[:rem_dims_start_axis].
+    # Example: weights (B,1,T), base (B,T,V) -> rem_dims_start_axis=1, rem_dims=[]
+    # Example: weights (B,H,1,T), base (B,T,H,V) -> rem_dims_start_axis=2, rem_dims=[] (auto_squeeze)
+    # Example: weights (B,H,T), base (B,T,H,V) -> rem_dims_start_axis=2, rem_dims=[]
     if weights_data.batch_ndim < self.base.output.batch_ndim:  # weights_t of shape (B,T)
       from TFUtil import expand_multiple_dims
       weights_t = expand_multiple_dims(
         weights_t, [-2] * (self.base.output.batch_ndim - weights_data.batch_ndim))  # (B,...,1,T)
-      rem_dims_start_axis = weights_data.batch_ndim - 2
+      rem_dims_start_axis = self.base.output.batch_ndim - 2  # count without T,V
       rem_dims = []
     else:
-      rem_dims_start_axis = self.base.output.batch_ndim - 2
+      rem_dims_start_axis = self.base.output.batch_ndim - 2  # count without T,V
       rem_dims = shape[rem_dims_start_axis:-1]
       weights_t = tf.reshape(
         weights_t, shape[:rem_dims_start_axis] + [tf.reduce_prod(rem_dims) if rem_dims else 1, time_dim])  # (B,?,T)
