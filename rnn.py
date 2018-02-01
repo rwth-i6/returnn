@@ -328,8 +328,8 @@ def init(configFilename=None, commandLineOptions=(), config_updates=None, extra_
   if extra_greeting:
     print(extra_greeting, file=log.v1)
   returnnGreeting(configFilename=configFilename, commandLineOptions=commandLineOptions)
-  initBackendEngine()
   initFaulthandler()
+  initBackendEngine()
   if BackendEngine.is_theano_selected():
     if config.value('task', 'train') == "theano_graph":
       config.set("multiprocessing", False)
