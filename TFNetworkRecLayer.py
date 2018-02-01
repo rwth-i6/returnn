@@ -2782,12 +2782,14 @@ class AttentionBaseLayer(_ConcatInputLayer):
     d["base"] = get_layer(d["base"])
 
   @classmethod
-  def get_out_data_from_opts(cls, base, n_out=None, **kwargs):
+  def get_out_data_from_opts(cls, name, base, n_out=None, **kwargs):
     """
+    :param str name:
+    :param int|None n_out:
     :param LayerBase base:
     :rtype: Data
     """
-    out = base.output.copy_template_excluding_time_dim()
+    out = base.output.copy_template_excluding_time_dim().copy(name="%s_output" % name)
     assert out.time_dim_axis is None
     assert out.batch_dim_axis == 0
     if n_out:
@@ -2890,7 +2892,6 @@ class GenericAttentionLayer(AttentionBaseLayer):
     out.shape = (
       out.shape[:min(len(base_rem_axes), len(out.shape) - 1)] +
       tuple([weights.output.batch_shape[a] for a in weights_rem_axes]) + out.shape[-1:])
-
     return out
 
 
