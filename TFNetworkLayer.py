@@ -4197,9 +4197,8 @@ class CrossEntropyLoss(Loss):
     return out
 
   def get_value(self):
-    from TFUtil import to_int32_64, smoothing_cross_entropy
+    from TFUtil import to_int32_64, smoothing_cross_entropy, safe_log
     with tf.name_scope("loss_ce"):
-      log_clip_values = (1e-32, 1e32)  # only used for non-fused path
       assert self.target.ndim_dense == self.output.ndim_dense
       if self.target.sparse:
         if self.output_before_softmax_flat is not None:
@@ -4220,7 +4219,7 @@ class CrossEntropyLoss(Loss):
         else:
           assert not self.label_smoothing, "not implemented"
           print("Warning: using numerical unstable sparse Cross-Entropy loss calculation", file=log.v3)
-          out = -tf.log(tf.clip_by_value(self.get_output_target_scores(), *log_clip_values))
+          out = -safe_log(self.get_output_target_scores())
         if self.focal_loss_factor:
           out *= (1.0 - self.get_output_target_scores()) ** self.focal_loss_factor
         return self.reduce_func(out)
@@ -4233,7 +4232,7 @@ class CrossEntropyLoss(Loss):
           return self.reduce_func(out)
         else:
           print("Warning: using numerical unstable dense Cross-Entropy loss calculation", file=log.v3)
-          out = self.target_flat * tf.log(tf.clip_by_value(self.output_flat, *log_clip_values))
+          out = self.target_flat * safe_log(self.output_flat)
           return -self.reduce_func(out)
 
 

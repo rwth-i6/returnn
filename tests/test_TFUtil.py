@@ -984,12 +984,84 @@ def test_bleu_score():
   assert_almost_equal(tf_res, [0.6389431])
 
 
+def test_clip_by_value_with_identity_grad():
+  err_y = 42.0
+  limit = 1.0
+  limits = -limit, limit
+  with tf.name_scope("test_safe_log_and_grad"):
+    x_t = tf.placeholder(tf.float32, shape=(), name="x")
+    y_t = clip_by_value_with_identity_grad(x_t, *limits)
+    err_x_t, = tf.gradients(ys=y_t, xs=x_t, grad_ys=tf.constant(err_y))
+    err2_x_t, = tf.gradients(ys=tf.clip_by_value(x_t, *limits), xs=x_t, grad_ys=tf.constant(err_y))
+
+  for x in [0.0, -0.5, 0.5, -1.0, 1.0, -2.0, 2.0]:
+    x = numpy.array(x, dtype="float32")
+    y, err_x, err2_x = session.run([y_t, err_x_t, err2_x_t], feed_dict={x_t: x})
+    print("x:", x, "y:", y, "err_x:", err_x, "err2_x:", err2_x)
+    assert_equal(err_x, err_y)
+    assert -limit <= y <= limit
+    if abs(x) > limit:
+      assert_equal(err2_x, 0.0)
+    if abs(x) < limit:
+      assert_equal(err2_x, err_y)
+
+
+def test_safe_log_and_grad():
+  with tf.name_scope("test_safe_log_and_grad"):
+    x_t = tf.placeholder(tf.float32, shape=(), name="x")
+    y_t = safe_log(x_t)
+    err_x_t, = tf.gradients(ys=y_t, xs=x_t)
+    check_numerics_op = add_check_numerics_ops([y_t, err_x_t])
+    # For comparison:
+    y2_t = tf.log(x_t)
+    err2_x_t, = tf.gradients(ys=y2_t, xs=x_t)
+
+  for x in [0.0, 100, 1e30, 1e-30]:
+    x = numpy.array(x, dtype="float32")
+    print("x:", x)
+    assert numpy.isfinite(x).all()
+    y, err_x = session.run([y_t, err_x_t], feed_dict={x_t: x})
+    print("y:", y, "err_x:", err_x)
+    y2, err2_x = session.run([y2_t, err2_x_t], feed_dict={x_t: x})
+    print("y2:", y2, "err2_x:", err2_x)
+    if not numpy.isfinite(y).all() or not numpy.isfinite(err_x).all():
+      print("Warning, some nan or inf!")
+      session.run(check_numerics_op, feed_dict={x_t: x})
+    assert numpy.isfinite(y).all() and numpy.isfinite(err_x).all()
+    assert err_x != 0.0  # there should be some gradient
+
+
+def test_safe_exp_and_grad():
+  with tf.name_scope("test_safe_log_and_grad"):
+    x_t = tf.placeholder(tf.float32, shape=(), name="x")
+    y_t = safe_exp(x_t)
+    err_x_t, = tf.gradients(ys=y_t, xs=x_t)
+    check_numerics_op = add_check_numerics_ops([y_t, err_x_t])
+    # For comparison:
+    y2_t = tf.exp(x_t)
+    err2_x_t, = tf.gradients(ys=y2_t, xs=x_t)
+
+  for x in [0.0, 100, 1e30, 1e-30, -1e30, -1e-30]:
+    x = numpy.array(x, dtype="float32")
+    print("x:", x)
+    assert numpy.isfinite(x).all()
+    y, err_x = session.run([y_t, err_x_t], feed_dict={x_t: x})
+    print("y:", y, "err_x:", err_x)
+    y2, err2_x = session.run([y2_t, err2_x_t], feed_dict={x_t: x})
+    print("y2:", y2, "err2_x:", err2_x)
+    if not numpy.isfinite(y).all() or not numpy.isfinite(err_x).all():
+      print("Warning, some nan or inf!")
+      session.run(check_numerics_op, feed_dict={x_t: x})
+    assert numpy.isfinite(y).all() and numpy.isfinite(err_x).all()
+    assert err_x != 0.0  # there should be some gradient
+
+
 def test_lin_exp_normed_limits_not_nan():
   with tf.name_scope("test_lin_exp_normed_limits_not_nan"):
     x_t = tf.placeholder(tf.float32, shape=(None,), name="x")
     y_t = lin_exp_normed(x_t)
-    log_clip_values = (1e-32, 1e32)  # see :class:`CrossEntropyLoss`. here score instead of loss
-    score_t = tf.log(tf.clip_by_value(y_t[..., -1], *log_clip_values))
+    # Also see :class:`CrossEntropyLoss`. here score instead of loss.
+    score_t = safe_log(y_t[..., -1])
     err_x_t, = tf.gradients(ys=score_t, xs=x_t)
     check_numerics_op = add_check_numerics_ops([score_t, y_t, err_x_t])
 
@@ -1003,6 +1075,8 @@ def test_lin_exp_normed_limits_not_nan():
       print("Warning, some nan or inf!")
       session.run(check_numerics_op, feed_dict={x_t: x})
     assert numpy.isfinite(y).all() and numpy.isfinite(err_x).all()
+    # We constructed the examples in such a way that there should always be a gradient.
+    assert any(err_x != 0.0)
 
 
 if __name__ == "__main__":

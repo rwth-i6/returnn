@@ -1172,6 +1172,24 @@ def lookup_grad_func_by_name(op_type):
   return ops._gradient_registry.lookup(op_type)
 
 
+def opt_register_grad_func(op_type, grad_func, assert_is_same=True):
+  """
+  :param str op_type:
+  :param grad_func: function grad_func(op, grad)
+  :param bool assert_is_same:
+  """
+  try:
+    f = lookup_grad_func_by_name(op_type)
+  except LookupError:
+    f = None
+  if f is not None:
+    if assert_is_same:
+      assert f is grad_func, "already registered grad for %r, and not the same func: %r != %r" % (op_type, f, grad_func)
+  else:
+    from tensorflow.python.framework import ops
+    ops.RegisterGradient(op_type)(grad_func)
+
+
 def identity_with_check_numerics(x, with_grad=True, name="identity_with_check_numerics"):
   """
   Returns identity(x), but with additional check_numerics control dependency,
@@ -1187,14 +1205,14 @@ def identity_with_check_numerics(x, with_grad=True, name="identity_with_check_nu
     with tf.control_dependencies([tf.check_numerics(x, message="%s %s" % (x.name, name))]):
       if with_grad:
         # An alternative to gradient_override_map would be :class:`CustomGradient` which is more generic.
-        grad_name = "identity_with_check_numerics_grad"
-        try:
-          lookup_grad_func_by_name(grad_name)
-        except LookupError:
-          from tensorflow.python.framework import ops
-          @ops.RegisterGradient(grad_name)
-          def _identity_with_check_numerics_grad(op, grad):
-            return identity_with_check_numerics(grad, with_grad=True, name="%s_grad" % name)
+        def _identity_with_check_numerics_grad(op, grad):
+          return identity_with_check_numerics(grad, with_grad=True, name="%s_grad" % name)
+
+        grad_name = "identity_with_check_numerics_with_grad"
+        opt_register_grad_func(
+          op_type=grad_name,
+          grad_func=_identity_with_check_numerics_grad,
+          assert_is_same=False)
 
         g = tf.get_default_graph()
         with g.gradient_override_map({"Identity": grad_name}):
@@ -3412,6 +3430,84 @@ def view_as(x, dtype):
   return y
 
 
+def _alternative_minmax_grad(op, grad):
+  """
+  :param tf.Operation op: e.g. tf.minimum(x, y) or tf.maximum(x, y)
+  :param tf.Tensor grad:
+  :rtype: tf.Tensor, tf.Tensor
+  """
+  from tensorflow.python.ops import gen_array_ops
+  x = op.inputs[0]
+  y = op.inputs[1]
+  sx = tf.shape(x)
+  sy = tf.shape(y)
+  rx, ry = gen_array_ops._broadcast_gradient_args(sx, sy)
+  gx = tf.reshape(tf.reduce_sum(grad, rx), sx)
+  gy = tf.reshape(tf.reduce_sum(grad, ry), sy)
+  return gx, gy
+
+
+def _register_alternative_minmax_grad():
+  """
+  :return: the name to use with gradient_override_map
+  :rtype: str
+  """
+  grad_name = "alternative_minmax_grad"
+  opt_register_grad_func(
+    op_type=grad_name,
+    grad_func=_alternative_minmax_grad,
+    assert_is_same=True)
+  return grad_name
+
+
+def maximum_with_identity_grad(x, y):
+  """
+  :param tf.Tensor x:
+  :param tf.Tensor y:
+  :return: tf.maximum(x, y) where each will receive the gradient
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope("maximum_with_identity_grad"):
+    # An alternative to gradient_override_map would be :class:`CustomGradient` which is more generic.
+    grad_name = _register_alternative_minmax_grad()
+    g = tf.get_default_graph()
+    with g.gradient_override_map({"Maximum": grad_name}):
+      return tf.maximum(x, y)
+
+
+def minimum_with_identity_grad(x, y):
+  """
+  :param tf.Tensor x:
+  :param tf.Tensor y:
+  :return: tf.maximum(x, y) where each will receive the gradient
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope("minimum_with_identity_grad"):
+    # An alternative to gradient_override_map would be :class:`CustomGradient` which is more generic.
+    grad_name = _register_alternative_minmax_grad()
+    g = tf.get_default_graph()
+    with g.gradient_override_map({"Minimum": grad_name}):
+      return tf.minimum(x, y)
+
+
+def clip_by_value_with_identity_grad(x, clip_value_min, clip_value_max):
+  """
+  :param tf.Tensor x:
+  :param tf.Tensor|float clip_value_min:
+  :param tf.Tensor|float clip_value_max:
+  :return: tf.clip_by_value(x, clip_value_min, clip_value_max) where each will receive the gradient
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope("clip_by_value_with_identity_grad"):
+    # An alternative to gradient_override_map would be :class:`CustomGradient` which is more generic.
+    grad_name = _register_alternative_minmax_grad()
+    g = tf.get_default_graph()
+    with g.gradient_override_map({"Minimum": grad_name, "Maximum": grad_name}):
+      x = tf.maximum(x, clip_value_min)
+      x = tf.minimum(x, clip_value_max)
+      return x
+
+
 def safe_log(x, eps=1e-20):
   """
   Safe wrapper around :func:`tf.log` which avoids infs or nans in the gradient.
@@ -3422,40 +3518,65 @@ def safe_log(x, eps=1e-20):
   :rtype: tf.Tensor
   """
   with tf.name_scope("safe_log"):
-    return tf.log(tf.maximum(x, eps))
+    return tf.log(maximum_with_identity_grad(x, eps))
 
 
-def l1_normalized(x, axis=-1, eps=1e-20, use_logsumexp=False):
+def safe_exp(x, eps=1e-20):
+  """
+  :param tf.Tensor x:
+  :param float eps:
+  :return: exp(x), but does clipping before, such that it never returns inf nor exactly 0.0.
+    Also, we make sure that we use the gradient in all cases.
+  :rtype: tf.Tensor
+  """
+  import numpy
+  with tf.name_scope("safe_exp"):
+    clip_value_min = numpy.log(eps)
+    clip_value_max = numpy.log(1.0 / eps)
+    x = clip_by_value_with_identity_grad(x, clip_value_min, clip_value_max)
+    return tf.exp(x)
+
+
+def l1_normalized(x, axis=-1, eps=1e-20, use_logsumexp=False, is_not_negative=False):
   """
   :param tf.Tensor x: assumes != 0
   :param int|tf.Tensor axis: in range [-rank(x),rank(x)]
   :param float|tf.Tensor|None eps: for safety, to ensure that tf.reduce_sum(tf.abs(x)) >= eps
   :param bool use_logsumexp: eps must not be None
+  :param bool is_not_negative:
   :return: y such that tf.reduce_sum(tf.abs(y)) == 1. i.e. y = x / tf.reduce_sum(tf.abs(x)).
   :rtype: tf.Tensor
   """
   with tf.name_scope("l1_normalized"):
-    if use_logsumexp:
-      weighted_input_sum = tf.exp(tf.reduce_logsumexp(tf.log(tf.maximum(tf.abs(x), eps)), axis=axis, keep_dims=True))
-    else:
-      weighted_input_sum = tf.reduce_sum(tf.abs(x), axis=axis, keep_dims=True)
+    if not is_not_negative:
+      x = tf.abs(x)
     if eps is not None:
-      weighted_input_sum = tf.maximum(weighted_input_sum, eps)
+      # Do that here, not after reduce_sum, so that we get a proper gradient to each entry.
+      x = maximum_with_identity_grad(x, eps)
+    if use_logsumexp:
+      weighted_input_sum = tf.exp(tf.reduce_logsumexp(tf.log(x), axis=axis, keep_dims=True))
+    else:
+      weighted_input_sum = tf.reduce_sum(x, axis=axis, keep_dims=True)
     divisor = tf.reciprocal(weighted_input_sum)
     return tf.multiply(x, divisor)
 
 
-def lin_exp(x):
+def lin_exp(x, use_safe_exp=True):
   """
   :param tf.Tensor x:
+  :param bool use_safe_exp:
   :return: x + 1 if x >= 0 else exp(x). this is smooth and differentiable everywhere
   :rtype: tf.Tensor
   """
   with tf.name_scope("lin_exp"):
-    return tf.where(tf.greater_equal(x, 0), x + 1, tf.exp(tf.minimum(x, 0)))
+    if use_safe_exp:
+      neg_part = safe_exp(tf.minimum(x, 0))
+    else:
+      neg_part = tf.exp(tf.minimum(x, 0))
+    return tf.where(tf.greater_equal(x, 0), x + 1, neg_part)
 
 
-def lin_exp_normed(x, axis=-1, eps=1e-20):
+def lin_exp_normed(x, axis=-1, eps=1e-10):
   """
   This can be used as an alternative to softmax. It uses :func:`lin_exp` instead of exp.
 
@@ -3466,7 +3587,7 @@ def lin_exp_normed(x, axis=-1, eps=1e-20):
   :rtype: tf.Tensor
   """
   with tf.name_scope("lin_exp_normed"):
-    return l1_normalized(lin_exp(x), axis=axis, eps=eps)
+    return l1_normalized(lin_exp(x), axis=axis, eps=eps, is_not_negative=True)
 
 
 def smoothing_cross_entropy(logits,
