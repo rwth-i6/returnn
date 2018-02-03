@@ -434,7 +434,7 @@ class TFNetwork(object):
         from TFUtil import identity_with_check_numerics
         layer.output.placeholder = identity_with_check_numerics(
           layer.output.placeholder,
-          name="%s_identity_with_check_numerics" % layer_class.cls_get_tf_scope_name(name))
+          name="%s_identity_with_check_numerics_output" % layer_class.cls_get_tf_scope_name(name))
     assert layer.output
     assert layer.output.placeholder is not None
     layer.output.placeholder.set_shape(layer.output.batch_shape)
@@ -517,7 +517,7 @@ class TFNetwork(object):
                 print("debug_add_check_numerics_on_output: add for layer loss %r: %r" % (name, layer.output.placeholder))
                 from TFUtil import identity_with_check_numerics
                 loss = identity_with_check_numerics(
-                  loss, name="%s_loss_identity_with_check_numerics" % tf_flat_scope_name)
+                  loss, name="%s_identity_with_check_numerics_loss" % tf_flat_scope_name)
             if error is not None:
               tf.summary.scalar("error_%s" % tf_flat_scope_name, error * layer.get_loss_normalization_factor())
         with reuse_name_scope("constraints"):

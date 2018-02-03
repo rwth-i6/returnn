@@ -1202,13 +1202,13 @@ def identity_with_check_numerics(x, with_grad=True, name="identity_with_check_nu
   :rtype: tf.Tensor
   """
   with tf.name_scope(name):
-    with tf.control_dependencies([tf.check_numerics(x, message="%s %s" % (x.name, name))]):
+    with tf.control_dependencies([tf.check_numerics(x, message="%s check_numerics for tensor %s" % (name, x.name))]):
       if with_grad:
         # An alternative to gradient_override_map would be :class:`CustomGradient` which is more generic.
         def _identity_with_check_numerics_grad(op, grad):
           return identity_with_check_numerics(grad, with_grad=True, name="%s_grad" % name)
 
-        grad_name = "identity_with_check_numerics_with_grad"
+        grad_name = "%s_with_grad" % name
         opt_register_grad_func(
           op_type=grad_name,
           grad_func=_identity_with_check_numerics_grad,
