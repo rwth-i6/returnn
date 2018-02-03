@@ -3452,7 +3452,7 @@ def lin_exp(x):
   :rtype: tf.Tensor
   """
   with tf.name_scope("lin_exp"):
-    return tf.where(tf.greater_equal(x, 0), x + 1, tf.exp(x))
+    return tf.where(tf.greater_equal(x, 0), x + 1, tf.exp(tf.minimum(x, 0)))
 
 
 def lin_exp_normed(x, axis=-1, eps=1e-20):
@@ -4566,6 +4566,7 @@ def add_check_numerics_ops(
     ignore_ops = {
       "Add", "AddN", "Sum", "Mul", "MatMul", "Sub", "L2Loss", "Floor", "Neg", "UnsortedSegmentSum",
       "Switch", "Merge", "PreventGradient",
+      "Select", "Maximum", "Minimum", "Abs", "Sign",
       "Const", "Identity", "Fill", "ZerosLike",
       "Reshape", "Tile", "ExpandDims", "ConcatV2", "Transpose",
       "Slice", "StridedSlice", "StridedSliceGrad", "Gather",

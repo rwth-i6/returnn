@@ -984,6 +984,27 @@ def test_bleu_score():
   assert_almost_equal(tf_res, [0.6389431])
 
 
+def test_lin_exp_normed_limits_not_nan():
+  with tf.name_scope("test_lin_exp_normed_limits_not_nan"):
+    x_t = tf.placeholder(tf.float32, shape=(None,), name="x")
+    y_t = lin_exp_normed(x_t)
+    log_clip_values = (1e-32, 1e32)  # see :class:`CrossEntropyLoss`. here score instead of loss
+    score_t = tf.log(tf.clip_by_value(y_t[..., -1], *log_clip_values))
+    err_x_t, = tf.gradients(ys=score_t, xs=x_t)
+    check_numerics_op = add_check_numerics_ops([score_t, y_t, err_x_t])
+
+  for x in [(0, 0), (1, -1), (100, 100), (100, -100), (1e20, 1e-20), (1e30, -1e30), (1e30, 1e30), (-1e30, -1e30)]:
+    x = numpy.array(x, dtype="float32")
+    print("x:", x)
+    assert numpy.isfinite(x).all()
+    score, y, err_x = session.run([score_t, y_t, err_x_t], feed_dict={x_t: x})
+    print("score:", score, "y:", y, "err_x:", err_x)
+    if not numpy.isfinite(y).all() or not numpy.isfinite(err_x).all():
+      print("Warning, some nan or inf!")
+      session.run(check_numerics_op, feed_dict={x_t: x})
+    assert numpy.isfinite(y).all() and numpy.isfinite(err_x).all()
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()
