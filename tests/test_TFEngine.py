@@ -205,7 +205,7 @@ def test_engine_train_grad_noise_sparse():
       },
       "hidden3": {"class": "linear", "activation": "tanh", "n_out": 10, "from": ["hidden", "hidden2"]},
       "output": {
-        "class": "linear", "activation": None, "loss": "ce",
+        "class": "linear", "activation": "softmax", "loss": "ce",
         "from": ["hidden", "hidden2", "hidden3"],
         "target": "classes"  # sparse output
         }},
