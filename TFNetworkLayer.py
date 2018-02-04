@@ -4337,6 +4337,7 @@ class CtcLoss(Loss):
     :return: outputs in log-space / logits
     :rtype: tf.Tensor
     """
+    from TFUtil import safe_log
     if self.output_in_log_space:
       logits = self.output.placeholder
     else:
@@ -4345,7 +4346,7 @@ class CtcLoss(Loss):
       if self.output_with_activation:
         logits = self.output_with_activation.get_logits()
       if logits is None:
-        logits = tf.log(self.output.placeholder)
+        logits = safe_log(self.output.placeholder)
     assert logits.get_shape().ndims == 3  # (B,T,N) or (T,B,N)
     assert logits.get_shape().dims[2].value == self.target.dim + 1  # one more for blank
     return logits
@@ -4489,6 +4490,7 @@ class EditDistanceLoss(Loss):
     :return: outputs in log-space / logits
     :rtype: tf.Tensor
     """
+    from TFUtil import safe_log
     assert not self.output.sparse
     if self._output_in_log_space:
       logits = self.output.placeholder
@@ -4498,7 +4500,7 @@ class EditDistanceLoss(Loss):
       if self.output_with_activation:
         logits = self.output_with_activation.get_logits()
       if logits is None:
-        logits = tf.log(self.output.placeholder)
+        logits = safe_log(self.output.placeholder)
     assert logits.get_shape().ndims == 3  # (B,T,N) or (T,B,N)
     assert logits.get_shape().dims[2].value == self.target.dim + 1  # one more for blank
     return logits

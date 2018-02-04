@@ -930,7 +930,22 @@ class OutputWithActivation(object):
     """
     if self.is_softmax_act_func():
       return self.x
-    return tf.log(self.y)
+    if self.act_func is tf.exp:
+      return self.x
+    return safe_log(self.y)
+
+  def get_log_output(self):
+    """
+    :rtype: tf.Tensor
+    :return: tf.log(output)
+    """
+    if self.is_softmax_act_func():
+      return tf.nn.log_softmax(self.x)
+    if self.act_func is tf.exp:
+      return self.x
+    if self.act_func is tf.sigmoid:
+      return tf.log_sigmoid(self.x)
+    return safe_log(self.y)
 
 
 def variable_scalar_summaries_dict(x, name=None):

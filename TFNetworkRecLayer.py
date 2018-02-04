@@ -2480,7 +2480,11 @@ class ChoiceLayer(LayerBase):
         scores_in = self.sources[0].output.placeholder  # (batch * beam_in, dim)
         # We present the scores in +log space, and we will add them up along the path.
         if input_type == "prob":
-          scores_in = tf.log(scores_in)
+          if self.sources[0].output_before_activation:
+            scores_in = self.sources[0].output_before_activation.get_log_output()
+          else:
+            from TFUtil import safe_log
+            scores_in = safe_log(scores_in)
         elif input_type == "log_prob":
           pass
         else:
