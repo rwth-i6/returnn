@@ -984,6 +984,23 @@ def test_bleu_score():
   assert_almost_equal(tf_res, [0.6389431])
 
 
+def test_bleu_score_empty():
+  hyp = []
+  truth = [2, 3]
+  from Util import compute_bleu
+  res = compute_bleu([truth], [hyp])
+  print("res:", res)
+  tf_res = session.run(bleu_score(
+    hypothesis=[hyp], hyp_seq_lens=[len(hyp)],
+    truth=[truth], truth_seq_lens=[len(truth)]
+  ))
+  print("TF res:", tf_res)
+  assert isinstance(tf_res, numpy.ndarray)
+  assert tf_res.shape == (1,)
+  assert_almost_equal(tf_res, [res])
+  assert_almost_equal(tf_res, [0.0])
+
+
 def test_clip_by_value_with_identity_grad():
   err_y = 42.0
   limit = 1.0
