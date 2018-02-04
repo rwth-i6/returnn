@@ -2069,7 +2069,7 @@ class RnnCellLayer(_ConcatInputLayer):
       "rec",
       initializer=get_initializer(
         weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self}),
-      reuse=tf.AUTO_REUSE
+      reuse=getattr(tf, "AUTO_REUSE", None)
     ) as scope:
       assert isinstance(scope, tf.VariableScope)
       scope_name_prefix = scope.name + "/"  # e.g. "layer1/rec/"

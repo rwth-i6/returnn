@@ -440,7 +440,7 @@ class LayerBase(object):
     # There are cases were a dummy layer was created already to create the variables,
     # e.g. see ReuseParams.LazyLayerResolver.
     kwargs = kwargs.copy()
-    kwargs.setdefault("reuse", tf.AUTO_REUSE)
+    kwargs.setdefault("reuse", getattr(tf, "AUTO_REUSE", None))
     with var_creation_scope() as dep:
       if self.reuse_params:
         with reuse_name_scope(self.reuse_params.get_variable_scope(base_layer=self, **kwargs)) as scope:
