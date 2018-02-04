@@ -1042,6 +1042,8 @@ def reuse_name_scope(name, absolute=None, **kwargs):
       "reuse", "initializer", "regularizer", "caching_device", "partitioner",
       "dtype", "custom_getter", "use_resource", "constraint"
     ]:
+      if not hasattr(parent_var_scope, attr):
+        continue  # e.g. "constraint" not available in older TF
       kwargs.setdefault(attr, getattr(parent_var_scope, attr))
   assert isinstance(name, str)
   if not absolute:
