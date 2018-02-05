@@ -1553,8 +1553,8 @@ class LayerNormLayer(_ConcatInputLayer):
     dim = self.input_data.dim
     axis = self.input_data.feature_dim_axis
     with self.var_creation_scope():
-      scale = tf.get_variable("scale", [dim], initializer=tf.ones_initializer())
-      bias = tf.get_variable("bias", [dim], initializer=tf.zeros_initializer())
+      scale = self.add_param(tf.get_variable("scale", [dim], initializer=tf.ones_initializer()))
+      bias = self.add_param(tf.get_variable("bias", [dim], initializer=tf.zeros_initializer()))
     mean = tf.reduce_mean(x, axis=[axis], keep_dims=True, name="mean")
     variance = tf.reduce_mean(tf.square(x - mean), axis=[axis], keep_dims=True, name="variance")
     with tf.name_scope("normalized"):
