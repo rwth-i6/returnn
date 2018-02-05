@@ -3118,11 +3118,12 @@ class SelfAttentionLayer(_ConcatInputLayer):
   layer_class = "self_attention"
   recurrent = True
 
-  def __init__(self, num_heads, total_key_dim, forward_weights_init="glorot_uniform", **kwargs):
+  def __init__(self, num_heads, total_key_dim, forward_weights_init="glorot_uniform", attention_dropout=0.0, **kwargs):
     """
     :param int num_heads:
     :param int total_key_dim:
     :param str forward_weights_init: see :func:`TFUtil.get_initializer`
+    :param float attention_dropout:
     """
     super(SelfAttentionLayer, self).__init__(**kwargs)
     total_value_dim = self.output.dim
@@ -3164,6 +3165,14 @@ class SelfAttentionLayer(_ConcatInputLayer):
     energy_mask = tf.logical_and(energy_mask, tf.ones_like(energy, dtype=tf.bool))
     energy = tf.where(energy_mask, energy, float("-inf") * tf.ones_like(energy), name="energy_masked")
     weights = tf.nn.softmax(energy)  # (batch,heads,time,time)
+    if attention_dropout:
+      import TFUtil
+      fn_train = lambda: TFUtil.dropout(
+        weights,
+        keep_prob=1 - attention_dropout,
+        seed=self.network.random.randint(2 ** 31))
+      fn_eval = lambda: weights
+      weights = self.network.cond_on_train(fn_train, fn_eval)
     v = tf.matmul(weights, v)  # (batch,heads,time,v-dim//heads)
     v.set_shape(tf.TensorShape([None, num_heads, None, total_value_dim // num_heads]))
     v = tf.transpose(v, [0, 2, 1, 3])  # (batch,time,heads,v-dim//heads)
