@@ -3723,6 +3723,7 @@ def prod(ls):
 class Lock(object):
   """
   A pure TensorFlow implementation of a mutex / lock.
+  Probably obsolete now, as with TF 1.6.0, there is ``tf.contrib.framework.CriticalSection``.
   """
   def __init__(self, name="Lock"):
     self._name = name
