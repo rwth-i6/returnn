@@ -146,6 +146,45 @@ class MaskBasedGevBeamformingLayer(LayerBase):
     return super(MaskBasedGevBeamformingLayer, cls).get_out_data_from_opts(out_type=out_type, **kwargs)
 
 
+class MaskBasedMvdrBeamformingWithDiagLoadingLayer(LayerBase):
+  """
+  This layer applies GEV beamforming to a multichannel signal. The different
+  channels are assumed to be concatenated to the
+  input feature vector. The first source to the layer must contain the complex
+  spectrograms of the single channels and the
+  second source must contain the noise and speech masks
+  """
+
+  layer_class = "mask_based_mvdrbeamforming"
+
+  def __init__(self, nr_of_channels=1, diag_loading_coeff=0, **kwargs):
+    """
+    :param int nr_of_channels: number of input channels to beamforming (needed to split the feature vector)
+    :param int diag_loading_coeff: weighting coefficient for diagonal loading.
+    """
+    super(MaskBasedMvdrBeamformingWithDiagLoadingLayer, self).__init__(**kwargs)
+    assert len(self.sources) == 2
+
+    from tfSi6Proc.audioProcessing.enhancement.beamforming import TfMaskBasedMvdrBeamformer
+
+    complexSpectrogramWithConcatChannels = self.sources[0].output.get_placeholder_as_batch_major()
+    complexSpectrogram = tf.transpose(tf.reshape(complexSpectrogramWithConcatChannels, (tf.shape(complexSpectrogramWithConcatChannels)[0], tf.shape(complexSpectrogramWithConcatChannels)[1], nr_of_channels, tf.shape(complexSpectrogramWithConcatChannels)[2] // nr_of_channels)), [0, 1, 3, 2])
+#    noiseMasks = tf.transpose(self.sources[1].output.placeholder, [self.sources[1].output.batch_dim_axis, self.sources[1].output.time_dim_axis, self.sources[1].output.feature_dim_axis])
+    noiseMasks = self.sources[1].output.get_placeholder_as_batch_major()
+    noiseMasks = tf.transpose(tf.reshape(noiseMasks, (tf.shape(noiseMasks)[0], tf.shape(noiseMasks)[1], nr_of_channels, tf.shape(noiseMasks)[2] / nr_of_channels)), [0, 1, 3, 2])
+
+    mvdrBf = TfMaskBasedMvdrBeamformer(flag_inputHasBatch=1, tfFreqDomInput=complexSpectrogram, tfNoiseMask=noiseMasks, tfDiagLoadingCoeff=tf.constant(diag_loading_coeff, dtype=tf.float32))
+    bfOut = mvdrBf.getFrequencyDomainOutputSignal()
+    self.output.placeholder = bfOut
+
+  @classmethod
+  def get_out_data_from_opts(cls, out_type={}, n_out=None, **kwargs):
+    out_type.setdefault("dim", n_out)
+    out_type["batch_dim_axis"] = 0
+    out_type["time_dim_axis"] = 1
+    return super(MaskBasedMvdrBeamformingWithDiagLoadingLayer, cls).get_out_data_from_opts(out_type=out_type, **kwargs)
+
+
 class SplitConcatMultiChannel(_ConcatInputLayer):
   """
   This layer assumes the feature vector to be a concatenation of features of
