@@ -6,8 +6,12 @@ from __future__ import print_function
 import logging
 logging.getLogger('tensorflow').disabled = True
 import tensorflow as tf
+import os
 import sys
-sys.path += ["."]  # Python 3 hack
+print("__file__:", __file__)
+base_path = os.path.realpath(os.path.dirname(os.path.abspath(__file__)) + "/..")
+print("base path:", base_path)
+sys.path.insert(0, base_path)
 from TFNativeOp import *
 from TFUtil import is_gpu_available, CudaEnv
 import Util
@@ -20,6 +24,8 @@ import os
 import better_exchook
 better_exchook.replace_traceback_format_tb()
 
+
+print("TF version:", tf.__version__)
 
 CudaEnv.verbose_find_cuda = True
 session = tf.InteractiveSession()

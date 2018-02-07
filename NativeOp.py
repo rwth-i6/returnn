@@ -2598,6 +2598,7 @@ def crossentropy_softmax_and_gradient_z_sparse__slow(z, z_mask, y_target_t, y_ta
   grad_z = y - y_target
   return ce, grad_z
 
+
 common_fast_bw_kernels = {
   "001_set_start_states" : """
     __global__
@@ -2698,6 +2699,7 @@ common_fast_bw_kernels = {
     }
   """,
 }
+
 
 class FastBaumWelchOp(NativeOpGenBase):
   """
@@ -2909,13 +2911,13 @@ class FastBaumWelchOp(NativeOpGenBase):
     debug_print(context, state_buffer, "state_buffer");
     */
 
-    assert(Ndarray_DIMS(am_scores)[0] == Ndarray_DIMS(out)[0]);
-    assert(Ndarray_DIMS(am_scores)[1] == Ndarray_DIMS(out)[1]);
-    assert(Ndarray_DIMS(am_scores)[2] == Ndarray_DIMS(out)[2]);
-    assert(Ndarray_DIMS(am_scores)[1] == Ndarray_DIMS(start_end_states)[1]);
+    assert_cmp(Ndarray_DIMS(am_scores)[0], ==, Ndarray_DIMS(out)[0]);
+    assert_cmp(Ndarray_DIMS(am_scores)[1], ==, Ndarray_DIMS(out)[1]);
+    assert_cmp(Ndarray_DIMS(am_scores)[2], ==, Ndarray_DIMS(out)[2]);
+    assert_cmp(Ndarray_DIMS(am_scores)[1], ==, Ndarray_DIMS(start_end_states)[1]);
 
-    assert(Ndarray_DIMS(sum_output)[0] == Ndarray_DIMS(am_scores)[0]);
-    assert(Ndarray_DIMS(sum_output)[1] == Ndarray_DIMS(am_scores)[1]);
+    assert_cmp(Ndarray_DIMS(sum_output)[0], ==, Ndarray_DIMS(am_scores)[0]);
+    assert_cmp(Ndarray_DIMS(sum_output)[1], ==, Ndarray_DIMS(am_scores)[1]);
 
     bool            dump_alignment = false;
     bool            dump_output    = false;
@@ -2965,6 +2967,7 @@ class FastBaumWelchOp(NativeOpGenBase):
 
     // initialize edge buffer
     float* d_edge_buffer = reinterpret_cast<float*>(device_malloc(n_edges * n_frames * sizeof(float)));
+    if(!d_edge_buffer) return;  // error should have been set in device_malloc
     unsigned n_fill_blocks = (n_edges * n_frames + n_threads - 1u) / n_threads;
     fill_array<<<n_fill_blocks, n_threads>>>(d_edge_buffer, 0.0, n_edges * n_frames);
     HANDLE_LAST_ERROR();
@@ -2974,12 +2977,15 @@ class FastBaumWelchOp(NativeOpGenBase):
     fill_array<<<n_fill_blocks, n_threads>>>(d_state_buffer_prev, std::numeric_limits<float>::infinity(), n_states);
     HANDLE_LAST_ERROR();
     set_start_states<<<1, n_seqs>>>(d_state_buffer_prev, d_start_states);
+    HANDLE_LAST_ERROR();
 
     // initialize full state buffer (only used to dump the alignment)
     float* d_state_buffer_all = NULL;
-    if (dump_alignment and batch_idx %% dump_every == 0) {
+    if (dump_alignment && batch_idx %% dump_every == 0) {
       d_state_buffer_all = reinterpret_cast<float*>(device_malloc(n_states * (n_frames + 1u) * sizeof(float)));
+      if(!d_state_buffer_all) return;  // error should have been set in device_malloc
       cudaMemcpy(d_state_buffer_all, d_state_buffer_prev, n_states * sizeof(float), cudaMemcpyDeviceToDevice);
+      HANDLE_LAST_ERROR();
     }
 
     // fwd pass
@@ -2992,6 +2998,7 @@ class FastBaumWelchOp(NativeOpGenBase):
       HANDLE_LAST_ERROR();
       if (dump_alignment and batch_idx %% dump_every == 0) {
         cudaMemcpy(d_state_buffer_all + (t + 1u) * n_states, d_state_buffer_next, n_states * sizeof(float), cudaMemcpyDeviceToDevice);
+        HANDLE_LAST_ERROR();
       }
       std::swap(d_state_buffer_prev, d_state_buffer_next);
     }
@@ -3014,7 +3021,7 @@ class FastBaumWelchOp(NativeOpGenBase):
       HANDLE_LAST_ERROR();
       std::swap(d_state_buffer_prev, d_state_buffer_next);
     }
-    if (dump_alignment and batch_idx %% dump_every == 0) {
+    if (dump_alignment && batch_idx %% dump_every == 0) {
       float alpha = 1.0f;
       HANDLE_ERROR(cublasSaxpy(handle, n_states, &alpha, d_state_buffer_prev, 1, d_state_buffer_all, 1));
     }
@@ -3024,7 +3031,7 @@ class FastBaumWelchOp(NativeOpGenBase):
     HANDLE_LAST_ERROR();
 
     // dump alignment
-    if (dump_alignment and batch_idx %% dump_every == 0) {
+    if (dump_alignment && batch_idx %% dump_every == 0) {
       write_alignment_to_file(d_state_buffer_all, d_index, index_stride, d_start_states, d_end_states,
                               pruning, n_frames, n_seqs, n_states, batch_idx);
     }
