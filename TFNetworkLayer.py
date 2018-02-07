@@ -566,6 +566,9 @@ class LayerBase(object):
       return None
     self._init_loss()
     with tf.name_scope("loss"):
+      if self.only_on_eval:
+        return self.network.cond_on_train(
+          lambda: tf.constant(0.0, name="only_on_eval_dummy_zero"), self.loss.get_value)
       return self.loss.get_value()
 
   def get_error_value(self):
