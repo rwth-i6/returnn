@@ -3554,17 +3554,22 @@ def clip_by_value_with_identity_grad(x, clip_value_min, clip_value_max):
       return x
 
 
-def safe_log(x, eps=1e-20):
+def safe_log(x, eps=1e-20, use_fake_grad=True):
   """
   Safe wrapper around :func:`tf.log` which avoids infs or nans in the gradient.
 
   :param tf.Tensor x:
   :param float|tf.Tensor eps:
+  :param bool use_fake_grad: True -> use maximum_with_identity_grad, False -> use tf.maximum
   :return: log(max(x, eps))
   :rtype: tf.Tensor
   """
   with tf.name_scope("safe_log"):
-    return tf.log(maximum_with_identity_grad(x, eps))
+    if use_fake_grad:
+      x = maximum_with_identity_grad(x, eps)
+    else:
+      x = tf.maximum(x, eps)
+    return tf.log(x)
 
 
 def safe_exp(x, eps=1e-20):

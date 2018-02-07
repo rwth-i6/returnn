@@ -4169,7 +4169,9 @@ class CrossEntropyLoss(Loss):
   def __init__(self,
                focal_loss_factor=0.0,
                label_smoothing=0.0, label_smoothing_gaussian=False,
-               debug_dump=False, **kwargs):
+               debug_dump=False,
+               safe_log_opts=None,
+               **kwargs):
     """
     :param float focal_loss_factor: see https://arxiv.org/abs/1708.02002. 0 means disabled
     :param float label_smoothing: 0.1 is a common default. see :func:`TFUtil.smoothing_cross_entropy`
@@ -4181,6 +4183,7 @@ class CrossEntropyLoss(Loss):
     self.label_smoothing = label_smoothing
     self.label_smoothing_gaussian = label_smoothing_gaussian
     self.debug_dump = debug_dump
+    self.safe_log_opts = safe_log_opts or {}
 
   def get_output_target_scores(self):
     """
@@ -4219,7 +4222,7 @@ class CrossEntropyLoss(Loss):
         else:
           assert not self.label_smoothing, "not implemented"
           print("Warning: using numerical unstable sparse Cross-Entropy loss calculation", file=log.v3)
-          out = -safe_log(self.get_output_target_scores())
+          out = -safe_log(self.get_output_target_scores(), **self.safe_log_opts)
         if self.focal_loss_factor:
           out *= (1.0 - self.get_output_target_scores()) ** self.focal_loss_factor
         return self.reduce_func(out)
@@ -4232,7 +4235,7 @@ class CrossEntropyLoss(Loss):
           return self.reduce_func(out)
         else:
           print("Warning: using numerical unstable dense Cross-Entropy loss calculation", file=log.v3)
-          out = self.target_flat * safe_log(self.output_flat)
+          out = self.target_flat * safe_log(self.output_flat, **self.safe_log_opts)
           return -self.reduce_func(out)
 
 
