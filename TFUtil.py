@@ -1581,6 +1581,24 @@ def get_available_gpu_devices():
   return [x for x in get_tf_list_local_devices() if x.device_type == 'GPU']
 
 
+def get_available_gpu_min_compute_capability():
+  """
+  Uses :func:`get_available_gpu_devices`.
+
+  :return: e.g. 3.0, or 5.0, etc, or None
+  :rtype: float|None
+  """
+  cap = None
+  for dev in get_available_gpu_devices():
+    desc = _parse_physical_device_desc(dev.physical_device_desc)
+    dev_cap = float(desc['compute capability'])
+    if cap is None:
+      cap = dev_cap
+    else:
+      cap = min(cap, dev_cap)
+  return cap
+
+
 def dot(a, b):
   """
   :param tf.Tensor a: shape [...da...,d]
@@ -2315,6 +2333,12 @@ class OpCodeCompiler(NativeCodeCompiler):
 
   def __init__(self, use_cuda_if_available=True, include_paths=(), ld_flags=(), **kwargs):
     self._cuda_env = use_cuda_if_available and CudaEnv.get_instance()
+    self._nvcc_opts = []
+    if self._with_cuda():
+      # Get CUDA compute capability of the current GPU device.
+      min_compute_capability = get_available_gpu_min_compute_capability()
+      if min_compute_capability:
+        self._nvcc_opts += ["-arch", "compute_%i" % int(min_compute_capability * 10)]
     tf_include = tf.sysconfig.get_include()  # e.g. "...python2.7/site-packages/tensorflow/include"
     tf_include_nsync = tf_include + "/external/nsync/public"  # https://github.com/tensorflow/tensorflow/issues/2412
     include_paths = list(include_paths) + [tf_include, tf_include_nsync]
@@ -2325,27 +2349,32 @@ class OpCodeCompiler(NativeCodeCompiler):
     super(OpCodeCompiler, self).__init__(include_paths=include_paths, ld_flags=ld_flags, **kwargs)
     self._tf_mod = None
 
-  _relevant_info_keys = NativeCodeCompiler._relevant_info_keys + ("tf_version", "with_cuda")
+  _relevant_info_keys = NativeCodeCompiler._relevant_info_keys + ("tf_version", "with_cuda", "nvcc_opts")
 
   def _make_info_dict(self):
     d = super(OpCodeCompiler, self)._make_info_dict()
     d.update({
       "tf_version": tf.__version__,
-      "with_cuda": bool(self._cuda_env and self._cuda_env.is_available())
+      "with_cuda": self._with_cuda(),
+      "nvcc_opts": tuple(self._nvcc_opts),
     })
     return d
 
+  def _with_cuda(self):
+    return bool(self._cuda_env and self._cuda_env.is_available())
+
   def _get_compiler_bin(self):
-    if self._cuda_env and self._cuda_env.is_available():
+    if self._with_cuda():
       return self._cuda_env.get_compiler_bin()
     return super(OpCodeCompiler, self)._get_compiler_bin()
 
   def _transform_compiler_opts(self, opts):
-    if self._cuda_env and self._cuda_env.is_available():
+    if self._with_cuda():
       nvcc_opts = self._cuda_env.get_compiler_opts()
       nvcc_opts += ["-DGOOGLE_CUDA=1"]
       for opt in opts:
         nvcc_opts += ["-Xcompiler", opt]
+      nvcc_opts += self._nvcc_opts
       return nvcc_opts
     return super(OpCodeCompiler, self)._transform_compiler_opts(opts)
 
