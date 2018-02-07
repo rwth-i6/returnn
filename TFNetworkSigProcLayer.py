@@ -171,7 +171,7 @@ class MaskBasedMvdrBeamformingWithDiagLoadingLayer(LayerBase):
     complexSpectrogram = tf.transpose(tf.reshape(complexSpectrogramWithConcatChannels, (tf.shape(complexSpectrogramWithConcatChannels)[0], tf.shape(complexSpectrogramWithConcatChannels)[1], nr_of_channels, tf.shape(complexSpectrogramWithConcatChannels)[2] // nr_of_channels)), [0, 1, 3, 2])
 #    noiseMasks = tf.transpose(self.sources[1].output.placeholder, [self.sources[1].output.batch_dim_axis, self.sources[1].output.time_dim_axis, self.sources[1].output.feature_dim_axis])
     noiseMasks = self.sources[1].output.get_placeholder_as_batch_major()
-    noiseMasks = tf.transpose(tf.reshape(noiseMasks, (tf.shape(noiseMasks)[0], tf.shape(noiseMasks)[1], nr_of_channels, tf.shape(noiseMasks)[2] / nr_of_channels)), [0, 1, 3, 2])
+    noiseMasks = tf.transpose(tf.reshape(noiseMasks, (tf.shape(noiseMasks)[0], tf.shape(noiseMasks)[1], nr_of_channels, tf.shape(noiseMasks)[2] // nr_of_channels)), [0, 1, 3, 2])
 
     mvdrBf = TfMaskBasedMvdrBeamformer(flag_inputHasBatch=1, tfFreqDomInput=complexSpectrogram, tfNoiseMask=noiseMasks, tfDiagLoadingCoeff=tf.constant(diag_loading_coeff, dtype=tf.float32))
     bfOut = mvdrBf.getFrequencyDomainOutputSignal()
