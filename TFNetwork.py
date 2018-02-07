@@ -527,8 +527,12 @@ class TFNetwork(object):
         with reuse_name_scope("loss"):
           if loss is not None:
             self.loss_by_layer[name] = loss
-            if layer.loss_scale != 1:
+          if loss is not None and layer.loss_scale != 1:
+            if not layer.loss_scale:
+              loss = None
+            else:
               loss *= layer.loss_scale
+          if loss is not None:
             if self.total_loss is 0:
               self.total_loss = loss
             else:
