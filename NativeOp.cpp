@@ -519,7 +519,7 @@ void* _malloc(size_t num_bytes) {
     void* ptr = (void*)allocator->Allocate<uint8_t>(num_bytes);
     if(!ptr)
         context->CtxFailure(
-            errors::InvalidArgument("cannot allocate", num_bytes, "bytes on", allocator->Name()));
+            errors::InvalidArgument("NativeOp: cannot allocate ", num_bytes, " bytes on ", allocator->Name()));
     return ptr;
 }
 void _free(void* ptr) {

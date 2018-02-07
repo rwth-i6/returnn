@@ -2838,7 +2838,7 @@ class FastBaumWelchOp(NativeOpGenBase):
           filename << "alignment.dump." << batch_idx << '.' << seq;
           std::ofstream out(filename.str().c_str(), std::ios::out | std::ios::trunc);
           for (unsigned t = 0u; t <= n_frames; t++) {
-            if (t > 0u and index[seq * index_stride + t] <= 0.0) {
+            if (t > 0u && index[seq * index_stride + t] <= 0.0) {
               break;
             }
             float sum = std::numeric_limits<float>::infinity();
@@ -2873,7 +2873,7 @@ class FastBaumWelchOp(NativeOpGenBase):
           filename << "target.dump." << batch_idx << '.' << seq;
           std::ofstream out(filename.str().c_str(), std::ios::out | std::ios::trunc);
           for (unsigned t = 0u; t <= n_frames; t++) {
-            if (t > 0u and index[seq * index_stride + t] <= 0.0) {
+            if (t > 0u && index[seq * index_stride + t] <= 0.0) {
               break;
             }
             for (unsigned e = 0u; e < n_emissions; e++) {
@@ -2996,7 +2996,7 @@ class FastBaumWelchOp(NativeOpGenBase):
                                           d_sequence_idxs, d_from, d_to, d_weights, d_emission_idxs,
                                           d_state_buffer_prev, d_state_buffer_next, d_am_scores + t * frame_stride, d_edge_buffer + t * n_edges);
       HANDLE_LAST_ERROR();
-      if (dump_alignment and batch_idx %% dump_every == 0) {
+      if (dump_alignment && batch_idx %% dump_every == 0) {
         cudaMemcpy(d_state_buffer_all + (t + 1u) * n_states, d_state_buffer_next, n_states * sizeof(float), cudaMemcpyDeviceToDevice);
         HANDLE_LAST_ERROR();
       }
@@ -3009,7 +3009,7 @@ class FastBaumWelchOp(NativeOpGenBase):
     for (unsigned t = n_frames; t > 0; t--) {
       init_bwd_state_buffer<<<1, n_seqs>>>(d_state_buffer_prev, d_end_states, t - 1, n_frames - 1, d_index, index_stride);
       HANDLE_LAST_ERROR();
-      if (dump_alignment and batch_idx %% dump_every == 0) {
+      if (dump_alignment && batch_idx %% dump_every == 0) {
         float alpha = 1.0f;
         HANDLE_ERROR(cublasSaxpy(handle, n_states, &alpha, d_state_buffer_prev, 1, d_state_buffer_all + t * n_states, 1));
       }
@@ -3055,7 +3055,7 @@ class FastBaumWelchOp(NativeOpGenBase):
     remove_inf<<<n_blocks, n_threads>>>(d_out, n_frames * n_seqs * n_emissions);
     //debug_print(context, out, "out");
     #endif
-    if (dump_output and batch_idx %% dump_every == 0) {
+    if (dump_output && batch_idx %% dump_every == 0) {
       write_output_to_file(d_out, d_index, index_stride, pruning, n_frames, n_seqs, n_emissions, batch_idx);
     }
 
@@ -3069,6 +3069,7 @@ class FastBaumWelchOp(NativeOpGenBase):
   c_bw_code = None
 
   cpu_support = False  # TODO: fix CPU support...
+
 
 class MultiEndFastBaumWelchOp(NativeOpGenBase):
   """
@@ -3309,6 +3310,7 @@ class MultiEndFastBaumWelchOp(NativeOpGenBase):
   c_bw_code = None
 
   cpu_support = False  # TODO: fix CPU support...
+
 
 class SegmentFastBaumWelchOp(NativeOpGenBase):
   in_info = (
