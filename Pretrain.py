@@ -237,18 +237,21 @@ class Pretrain:
           sources.remove(v)
     return outs
 
-  def _find_existing_inputs(self, json, layer_name):
-    l = []
+  def _find_existing_inputs(self, json, layer_name, _collected=None, _visited=None):
+    if _collected is None:
+      _collected = []
+    if _visited is None:
+      _visited = {layer_name: None}
     sources = self._original_network_json[layer_name].get("from", ["data"])
     for src in sources:
       if src in json or src == "data":
-        if src not in l:
-          l.append(src)
+        if src not in _collected:
+          _collected.append(src)
       else:
-        for csrc in self._find_existing_inputs(json, src):
-          if csrc not in l:
-            l.append(csrc)
-    return l
+        if src not in _visited:
+          _visited[src] = layer_name
+          self._find_existing_inputs(json=json, layer_name=src, _collected=_collected, _visited=_visited)
+    return _collected
 
   def _construct_next_epoch_from_input(self, num_steps):
     """
