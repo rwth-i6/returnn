@@ -1096,6 +1096,34 @@ def test_lin_exp_normed_limits_not_nan():
     assert any(err_x != 0.0)
 
 
+def test_check_base_op_type_and_replace_softmax():
+  with tf.name_scope("test_check_base_op_type_and_replace_softmax"):
+    z = tf.constant([1.0, 2.0])
+    x = tf.nn.softmax(z)
+    y = tf.log(x)
+    print("x:", x, list(x.op.inputs), "y:", y)
+    y2 = check_base_op_type_and_replace(x, "Softmax", "LogSoftmax")
+    print("y2:", y2)
+    assert y2 is not None
+    vy1, vy2 = session.run([y, y2])
+    print("eval:", vy1, vy2)
+    assert_almost_equal(vy1, vy2)
+
+
+def test_check_base_op_type_and_replace_sigmoid():
+  with tf.name_scope("test_check_base_op_type_and_replace_sigmoid"):
+    z = tf.constant([1.0, 2.0])
+    x = tf.sigmoid(z)
+    y = tf.log(x)
+    print("x:", x, list(x.op.inputs), "y:", y)
+    y2 = check_base_op_type_and_replace(x, "Sigmoid", "LogSigmoid")
+    print("y2:", y2)
+    assert y2 is not None
+    vy1, vy2 = session.run([y, y2])
+    print("eval:", vy1, vy2)
+    assert_almost_equal(vy1, vy2)
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()

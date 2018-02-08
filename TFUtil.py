@@ -3565,6 +3565,12 @@ def safe_log(x, eps=1e-20, use_fake_grad=True):
   :rtype: tf.Tensor
   """
   with tf.name_scope("safe_log"):
+    y = check_base_op_type_and_replace(x, "Softmax", "LogSoftmax")
+    if y is not None:
+      return y
+    y = check_base_op_type_and_replace(x, "Sigmoid", "LogSigmoid")
+    if y is not None:
+      return y
     if use_fake_grad:
       x = maximum_with_identity_grad(x, eps)
     else:
@@ -3639,6 +3645,61 @@ def lin_exp_normed(x, axis=-1, eps=1e-10):
   """
   with tf.name_scope("lin_exp_normed"):
     return l1_normalized(lin_exp(x), axis=axis, eps=eps, is_not_negative=True)
+
+
+def check_base_op_type_and_replace(x, op_type, new_op_type):
+  """
+  Suppose you have ``x = tf.nn.softmax(z)`` and you want to get ``y = tf.nn.log_softmax(z)``.
+  This function will test to see if ``x`` is of that kind and then return ``y``.
+
+  :param tf.Tensor x:
+  :param str op_type: e.g. "Softmax"
+  :param str new_op_type: e.g. "LogSoftmax"
+  :return: x with new_op_type instead of op_type, or None if not matched
+  :rtype: tf.Tensor|None
+  """
+  assert isinstance(x, tf.Tensor)
+  assert x.op.outputs[0] is x
+  if op_type != "Reshape" and x.op.type == "Reshape":
+    if x.op.inputs[0].op.type != op_type:
+      return None
+    inner = check_base_op_type_and_replace(x.op.inputs[0], op_type=op_type, new_op_type=new_op_type)
+    assert inner is not None
+    op = copy_op(x.op, inputs=[inner] + x.op.inputs[1:])
+    return op.outputs[0]
+  if x.op.type != op_type:
+    return None
+  op = copy_op(x.op, op_type=new_op_type)
+  return op.outputs[0]
+
+
+def copy_op(op, op_type=None, inputs=None):
+  """
+  :param tf.Operation op:
+  :param str|None op_type:
+  :param list[tf.Tensor]|None inputs:
+  :return: copy of op but optionally change op.type == op_type or op.inputs == inputs
+  :rtype: tf.Operation
+  """
+  assert isinstance(op, tf.Operation)
+  g = op.graph
+  if op_type is None:
+    op_type = op.type
+  if inputs is None:
+    inputs = list(op.inputs)
+  # Use some aliases, for simplicity.
+  # Maybe in the future we would also wrap some deprecated/outdated ops.
+  if op_type == "LogSigmoid":
+    assert len(inputs) == 1
+    return tf.log_sigmoid(inputs[0]).op
+  # Fallback to the generic case.
+  new_op = g.create_op(
+    op_type=op_type,
+    inputs=inputs,
+    input_types=[x.dtype for x in inputs],
+    dtypes=[x.dtype for x in op.outputs],  # output types
+    attrs=dict(op.node_def.attr.items()))
+  return new_op
 
 
 def smoothing_cross_entropy(logits,
@@ -4979,6 +5040,22 @@ def find_unsupported_devices_in_graph(graph, dev_name, ignore=None):
     if dev_name not in supported_devices_for_op(op.type):
       ops.append(op)
   return ops
+
+
+def print_graph_output(fetches):
+  """
+  :param tf.Operation|tf.Tensor|list[tf.Tensor|tf.Operation] fetches:
+  """
+  if not isinstance(fetches, (list, tuple)):
+    fetches = [fetches]
+  fetch_ops = [v.op if isinstance(v, tf.Tensor) else v for v in fetches]
+  assert all([isinstance(op, tf.Operation) for op in fetch_ops])
+  # TODO: We could print it a bit like Theano does.
+  # So far this is not really implemented...
+  from tensorflow.contrib import graph_editor
+  ops = graph_editor.get_backward_walk_ops(fetch_ops, inclusive=True, control_inputs=True)
+  from pprint import pprint
+  pprint(ops)
 
 
 # -------------------- BEGIN Segment model related helpers --------------------

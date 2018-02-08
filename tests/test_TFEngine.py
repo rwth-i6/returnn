@@ -1303,6 +1303,50 @@ def test_rec_subnet_eval_init_out_apply0():
   engine.search(cv_data)
 
 
+def test_net_safe_log_to_log_softmax():
+  n_out = 5
+  net_dict = {
+    "ff_in_window": {"class": "window", "window_size": 3, "trainable": False},
+    "ff_in": {"class": "merge_dims", "axes": "except_time", "from": ["ff_in_window"], "trainable": False},
+    "ff0": {"class": "hidden", "activation": "relu", "n_out": 8, "L2": 0.01, "from": ["ff_in"]},
+    "ff_out": {"class": "softmax", "n_out": n_out, "from": ["ff0"]},
+    "ff_out_prior": {
+      "class": "accumulate_mean", "exp_average": 0.001,
+      "is_prob_distribution": True, "from": ["ff_out"]},
+    "output": {
+      "class": "combine", "kind": "eval", "from": ["ff_out", "ff_out_prior"],
+      "eval": "safe_log(source(0)) - safe_log(source(1))",
+      "eval_locals": {"am_scale": 0.1, "prior_scale": 0.5 * 0.1}
+    },
+  }
+  net = TFNetwork(extern_data=ExternData(data={"data": {"dim": 3}, "classes": {"dim": n_out, "sparse": True}}))
+  net.construct_from_dict(net_dict)
+  output_layer = net.get_default_output_layer(must_exist=True)
+  out = output_layer.output.placeholder
+  print(out)
+  from TFUtil import print_graph_output
+  print_graph_output(out)
+  assert out.op.type == "Sub"
+  assert len(out.op.inputs) == 2
+  sub_in0, sub_in1 = out.op.inputs
+  print(sub_in0, sub_in1)
+  assert isinstance(sub_in0, tf.Tensor)
+  assert isinstance(sub_in1, tf.Tensor)
+  assert "/safe_log" in sub_in0.name
+  assert "/safe_log" in sub_in1.name
+  assert sub_in1.op.type == "Log"
+  # This is what we want to test now:
+  # :func:`safe_log` should figure out that a softmax was used before and then use log_softmax for a stable calculation.
+  # See also :func:`test_check_base_op_type_and_replace_softmax`.
+  if sub_in0.op.type != "LogSoftmax" and sub_in0.op.inputs[0].op.type != "LogSoftmax":
+    # It failed. Print some helpful information.
+    print("not LogSoftmax:", sub_in0)
+    print("inputs:", list(sub_in0.op.inputs))
+    print("inputs':", list(sub_in0.op.inputs[0].op.inputs))
+    print("inputs'':", list(sub_in0.op.inputs[0].op.inputs[0].op.inputs))
+  assert sub_in0.op.type == "LogSoftmax" or sub_in0.op.inputs[0].op.type == "LogSoftmax"
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()
