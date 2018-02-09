@@ -822,6 +822,7 @@ class Device(object):
         if config.has('load_graph') and os.path.exists(config.value('load_graph', '')):
           import dill
           graphfile = config.value('load_graph', '')
+          print("Loading pre-compiled graph from '%s'" % graphfile, file=log.v4)
           self.extractor = dill.load(open(graphfile, 'rb'))
         else:
           inp = [self.testnet.y[k] for k in self.used_data_keys]
@@ -885,7 +886,9 @@ class Device(object):
       if self.save_graph:
         import dill
         sys.setrecursionlimit(50000)
-        dill.dump(self.extractor, open(self.config.value('save_graph',''), 'wb'))
+        graphfile = self.config.value('save_graph','')
+        print("Loading pre-compiled graph from '%s'" % graphfile, file=log.v4)
+        dill.dump(self.extractor, open(graphfile, 'wb'))
         self.save_graph = False
     elif task == 'classify':
       output = self.classifier()
