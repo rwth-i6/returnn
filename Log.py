@@ -45,7 +45,7 @@ class Log:
   def initialize(self, logs = [], verbosity = [], formatter = []):
     fmt = { 'default' : logging.Formatter('%(message)s'),
             'timed' : logging.Formatter('%(asctime)s %(message)s', datefmt = '%Y-%m-%d,%H:%M:%S.%MS'),
-            'raw''' : logging.Formatter('%(message)s'),
+            'raw' : logging.Formatter('%(message)s'),
             'verbose': logging.Formatter('%(levelname)s - %(asctime)s %(message)s', datefmt = '%Y-%m-%d,%H:%M:%S.%MS')
           }
     self.v = [ logging.getLogger('v' + str(v)) for v in range(6) ]
@@ -54,6 +54,9 @@ class Log:
       l.handlers = []
     if not 'stdout' in logs:
       logs.append('stdout')
+    if len(formatter) == 1:
+        # if only one format provided, use it for all logs
+        formatter = [formatter[0]] * len(logs)
     for i in range(len(logs)):
       t = logs[i]
       v = 3
