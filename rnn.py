@@ -198,7 +198,7 @@ def load_data(config, cache_byte_size, files_config_key, **kwargs):
   :rtype: (Dataset,int)
   :returns the dataset, and the cache byte size left over if we cache the whole dataset.
   """
-  if not config.has(files_config_key):
+  if not config.bool_or_other(files_config_key, None):
     return None, 0
   kwargs = kwargs.copy()
   kwargs.setdefault("name", files_config_key)
