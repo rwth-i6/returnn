@@ -644,6 +644,7 @@ class AMSGradOptimizer(tf.train.Optimizer):
   https://openreview.net/pdf?id=ryQu7f-RZ
   https://keras.io/optimizers/
   http://ruder.io/deep-learning-optimization-2017/index.html#fixingtheexponentialmovingaverage
+  https://github.com/taki0112/AMSGrad-Tensorflow
   """
   def __init__(self, learning_rate=0.001, decay=False, beta1=0.9, beta2=0.99,
                epsilon=0.0, var_list=[]):
