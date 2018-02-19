@@ -147,7 +147,7 @@ class HDFDataset(CachedDataset):
     for i in range(len(self.files)):
       if len(file_info[i]) == 0:
         continue
-      print("loading file", self.files[i], file=log.v4)
+      print("loading file %d/%d" % (i+1, len(self.files)), self.files[i], file=log.v4)
       fin = h5py.File(self.files[i], 'r')
       for idc, ids in file_info[i]:
         s = ids - self.file_start[i]
