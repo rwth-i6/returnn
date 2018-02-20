@@ -781,6 +781,22 @@ def _debug_dumped_fast_baum_welch(prefix, postfix=".dump"):
       return session.run(out_list)
 
 
+def init_blocksparse():
+  import TFUtil
+  assert TFUtil.is_gpu_available(), "we currently need a GPU"
+  min_compute_capability = TFUtil.get_available_gpu_min_compute_capability()
+  assert min_compute_capability and min_compute_capability >= 3.5, "we need at least compute capability 3.5"
+  path = os.path.dirname(__file__) + "/extern/blocksparse"
+  assert os.path.exists(path), "maybe submodule not checked out?"
+  import sys
+  if path not in sys.path:
+    # At the beginning, to make sure we find it firs.t
+    sys.path.insert(0, path)
+  # test it
+  from blocksparse import op_module
+  op_module.get_module()
+
+
 def demo():
   print("TFNativeOp demo")
   TFUtil.CudaEnv.verbose_find_cuda = True

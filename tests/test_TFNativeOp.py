@@ -13,7 +13,7 @@ base_path = os.path.realpath(os.path.dirname(os.path.abspath(__file__)) + "/..")
 print("base path:", base_path)
 sys.path.insert(0, base_path)
 from TFNativeOp import *
-from TFUtil import is_gpu_available, CudaEnv
+from TFUtil import is_gpu_available, get_available_gpu_min_compute_capability, CudaEnv
 import Util
 import unittest
 from nose.tools import assert_equal, assert_is_instance
@@ -979,6 +979,12 @@ def test_fast_bw_uniform():
     print("max square diff:", numpy.max(numpy.square(ref_align - bw)))
     assert_allclose(ref_align, bw, rtol=1e-5)
   print("Done.")
+
+
+@unittest.skipIf(not is_gpu_available(), "no gpu on this system")
+@unittest.skipIf(is_gpu_available() and get_available_gpu_min_compute_capability() < 3.5, "too low compute capability")
+def test_init_blocksparse():
+  init_blocksparse()
 
 
 if __name__ == "__main__":
