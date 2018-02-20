@@ -1,4 +1,4 @@
 [submodule "extern/blocksparse"]
 	path = extern/blocksparse
-	url = git@github.com:albertz/blocksparse.git
+	url = https://github.com/albertz/blocksparse.git
 	branch = master
