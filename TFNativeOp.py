@@ -781,6 +781,16 @@ def _debug_dumped_fast_baum_welch(prefix, postfix=".dump"):
       return session.run(out_list)
 
 
+def have_blocksparse_requirements():
+  import TFUtil
+  if not TFUtil.is_gpu_available():
+    return False
+  min_compute_capability = TFUtil.get_available_gpu_min_compute_capability()
+  if min_compute_capability < 3.5:
+    return False
+  return True
+
+
 def init_blocksparse():
   import TFUtil
   assert TFUtil.is_gpu_available(), "we currently need a GPU"
