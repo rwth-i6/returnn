@@ -2564,3 +2564,25 @@ def compute_bleu(reference_corpus,
       bp = 1.0
   bleu = geo_mean * bp
   return np.float32(bleu)
+
+
+def monkeyfix_glib():
+  """
+  Fixes some stupid bugs such that SIGINT is not working.
+  This is used by audioread, and indirectly by librosa for loading audio.
+
+  https://stackoverflow.com/questions/16410852/
+  """
+  try:
+    import gi
+  except ImportError:
+    return
+  try:
+    from gi.repository import GLib
+  except ImportError:
+    from gi.overrides import GLib
+  # Do nothing.
+  # The original behavior would install a SIGINT handler which calls GLib.MainLoop.quit(),
+  # and then reraise a KeyboardInterrupt in that thread.
+  # However, we want and expect to get the KeyboardInterrupt in the main thread.
+  GLib.MainLoop.__init__ = lambda *args, **kwargs: None

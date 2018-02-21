@@ -668,7 +668,7 @@ class ExtractAudioFeatures:
   def __init__(self,
                window_len=0.025, step_len=0.010,
                num_feature_filters=40, with_delta=False, norm_mean=None, norm_std_dev=None,
-               random_permute_opts=None, random_state=None):
+               random_permute=None, random_state=None):
     """
     :param numpy.ndarray audio: raw audio samples, shape (audio_len,)
     :param int sample_rate: e.g. 22050
@@ -678,7 +678,7 @@ class ExtractAudioFeatures:
     :param bool|int with_delta:
     :param numpy.ndarray|str|None norm_mean:
     :param numpy.ndarray|str|None norm_std_dev:
-    :param CollectionReadCheckCovered|dict[str]|bool|None random_permute_opts:
+    :param CollectionReadCheckCovered|dict[str]|bool|None random_permute:
     :param numpy.random.RandomState|None random_state:
     :return: (audio_len // int(step_len * sample_rate), max(1, with_delta) * num_feature_filters), float32
     :rtype: numpy.ndarray
@@ -696,9 +696,9 @@ class ExtractAudioFeatures:
       norm_std_dev = self._load_feature_vec(norm_std_dev)
     self.norm_mean = norm_mean
     self.norm_std_dev = norm_std_dev
-    if random_permute_opts and not isinstance(random_permute_opts, CollectionReadCheckCovered):
-      random_permute_opts = CollectionReadCheckCovered.from_bool_or_dict(random_permute_opts)
-    self.random_permute_opts = random_permute_opts
+    if random_permute and not isinstance(random_permute, CollectionReadCheckCovered):
+      random_permute = CollectionReadCheckCovered.from_bool_or_dict(random_permute)
+    self.random_permute_opts = random_permute
     self.random_state = random_state
 
   def _load_feature_vec(self, value):
@@ -1498,6 +1498,8 @@ class LibriSpeechCorpus(CachedDataset2):
     self.prefix = prefix
     assert prefix in ["train", "dev", "eval"]
     assert os.path.exists(path + "/train-clean-100")
+    from Util import monkeyfix_glib
+    monkeyfix_glib()
     self.bpe = BytePairEncoding(**bpe)
     self.labels = self.bpe.labels
     self._fixed_random_seed = fixed_random_seed
