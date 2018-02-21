@@ -5057,3 +5057,12 @@ def print_graph_output(fetches):
   from pprint import pprint
   pprint(ops)
 
+
+def add_control_input(op, control_input):
+  """
+  :param tf.Operation op:
+  :param tf.Operation control_input:
+  """
+  op._control_inputs.append(control_input)
+  op._recompute_node_def()
+
