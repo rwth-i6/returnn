@@ -15,6 +15,7 @@ import argparse
 import numpy
 from better_exchook import pretty_print
 from Util import Stats
+import Util
 
 
 def plot(m):
@@ -97,6 +98,8 @@ def dump_dataset(dataset, options):
       seq_len_stats[key].collect([seq_len[key]])
     if stats:
       stats.collect(data)
+    if options.type == "null":
+      Util.progress_bar_with_time(dataset.get_complete_frac(seq_idx))
 
     seq_idx += 1
 
