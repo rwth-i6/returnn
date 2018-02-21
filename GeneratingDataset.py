@@ -3,7 +3,7 @@ from __future__ import print_function
 
 from Dataset import Dataset, DatasetSeq, convert_data_dims
 from CachedDataset2 import CachedDataset2
-from Util import class_idx_seq_to_1_of_k
+from Util import class_idx_seq_to_1_of_k, CollectionReadCheckCovered
 from Log import log
 import numpy
 
@@ -664,6 +664,149 @@ class _NltkCorpusReaderDataset(CachedDataset2):
   # TODO ...
 
 
+class ExtractAudioFeatures:
+  def __init__(self,
+               window_len=0.025, step_len=0.010,
+               num_feature_filters=40, with_delta=False, norm_mean=None, norm_std_dev=None,
+               random_permute_opts=None, random_state=None):
+    """
+    :param numpy.ndarray audio: raw audio samples, shape (audio_len,)
+    :param int sample_rate: e.g. 22050
+    :param float window_len: in seconds
+    :param float step_len: in seconds
+    :param int num_feature_filters:
+    :param bool|int with_delta:
+    :param numpy.ndarray|str|None norm_mean:
+    :param numpy.ndarray|str|None norm_std_dev:
+    :param CollectionReadCheckCovered|dict[str]|bool|None random_permute_opts:
+    :param numpy.random.RandomState|None random_state:
+    :return: (audio_len // int(step_len * sample_rate), max(1, with_delta) * num_feature_filters), float32
+    :rtype: numpy.ndarray
+    """
+    self.window_len = window_len
+    self.step_len = step_len
+    self.num_feature_filters = num_feature_filters
+    if isinstance(with_delta, bool):
+      with_delta = 1 if with_delta else 0
+    assert isinstance(with_delta, int)
+    self.with_delta = with_delta
+    if norm_mean is not None:
+      norm_mean = self._load_feature_vec(norm_mean)
+    if norm_std_dev is not None:
+      norm_std_dev = self._load_feature_vec(norm_std_dev)
+    self.norm_mean = norm_mean
+    self.norm_std_dev = norm_std_dev
+    if random_permute_opts and not isinstance(random_permute_opts, CollectionReadCheckCovered):
+      random_permute_opts = CollectionReadCheckCovered.from_bool_or_dict(random_permute_opts)
+    self.random_permute_opts = random_permute_opts
+    self.random_state = random_state
+
+  def _load_feature_vec(self, value):
+    """
+    :param str|None value:
+    :return: shape (self.num_inputs,), float32
+    :rtype: numpy.ndarray|None
+    """
+    if value is None:
+      return None
+    if isinstance(value, str):
+      value = numpy.loadtxt(value)
+    assert isinstance(value, numpy.ndarray)
+    assert value.shape == (self.get_feature_dimension(),)
+    return value.astype("float32")
+
+  def get_audio_features(self, audio, sample_rate):
+    """
+    :param numpy.ndarray audio: raw audio samples, shape (audio_len,)
+    :param int sample_rate: e.g. 22050
+    :rtype: numpy.ndarray
+    """
+    return _get_audio_features(
+      audio=audio, sample_rate=sample_rate,
+      window_len=self.window_len, step_len=self.step_len, num_feature_filters=self.num_feature_filters,
+      with_delta=self.with_delta, norm_mean=self.norm_mean, norm_std_dev=self.norm_std_dev,
+      random_permute_opts=self.random_permute_opts, random_state=self.random_state)
+
+  def get_feature_dimension(self):
+    return max(self.with_delta, 1) * self.num_feature_filters
+
+
+def _get_audio_features(audio, sample_rate, window_len=0.025, step_len=0.010,
+                        num_feature_filters=40, with_delta=False, norm_mean=None, norm_std_dev=None,
+                        random_permute_opts=None, random_state=None):
+  """
+  :param numpy.ndarray audio: raw audio samples, shape (audio_len,)
+  :param int sample_rate: e.g. 22050
+  :param float window_len: in seconds
+  :param float step_len: in seconds
+  :param int num_feature_filters:
+  :param bool|int with_delta:
+  :param numpy.ndarray|None norm_mean:
+  :param numpy.ndarray|None norm_std_dev:
+  :param CollectionReadCheckCovered|dict[str]|bool|None random_permute_opts:
+  :param numpy.random.RandomState|None random_state:
+  :return: (audio_len // int(step_len * sample_rate), max(1, with_delta) * num_feature_filters), float32
+  :rtype: numpy.ndarray
+  """
+  peak = numpy.max(numpy.abs(audio))
+  audio /= peak
+
+  if random_permute_opts and not isinstance(random_permute_opts, CollectionReadCheckCovered):
+    random_permute_opts = CollectionReadCheckCovered.from_bool_or_dict(random_permute_opts)
+  if random_permute_opts and random_permute_opts.truth_value:
+    audio = _get_random_permuted_audio(
+      audio=audio, sample_rate=sample_rate, opts=random_permute_opts, random_state=random_state)
+
+  import librosa
+  mfccs = librosa.feature.mfcc(
+    audio, sr=sample_rate,
+    n_mfcc=num_feature_filters,
+    hop_length=int(step_len * sample_rate), n_fft=int(window_len * sample_rate))
+  energy = librosa.feature.rmse(
+    audio,
+    hop_length=int(step_len * sample_rate), frame_length=int(window_len * sample_rate))
+  mfccs[0] = energy  # replace first MFCC with energy, per convention
+  assert mfccs.shape[0] == num_feature_filters  # (dim, time)
+  if with_delta:
+    deltas = [librosa.feature.delta(mfccs, order=i) for i in range(1, with_delta + 1)]
+    mfccs = numpy.vstack([mfccs] + deltas)
+  mfccs = mfccs.transpose().astype("float32")  # (time, dim)
+  if norm_mean is not None:
+    mfccs -= norm_mean[None, :]
+  if norm_std_dev is not None:
+    mfccs /= norm_std_dev[None, :]
+  return mfccs
+
+
+def _get_random_permuted_audio(audio, sample_rate, opts, random_state):
+  """
+  :param numpy.ndarray audio: raw time signal
+  :param int sample_rate:
+  :param CollectionReadCheckCovered opts:
+  :param numpy.random.RandomState random_state:
+  :return: audio randomly permuted
+  :rtype: numpy.ndarray
+  """
+  import librosa
+  import scipy.ndimage
+  import warnings
+  audio = audio * random_state.uniform(opts.get("rnd_scale_lower", 0.8), opts.get("rnd_scale_upper", 1.0))
+  if random_state.uniform(0.0, 1.0) < opts.get("rnd_zoom_switch", 0.2):
+    with warnings.catch_warnings():
+      warnings.simplefilter("ignore")
+      # Alternative: scipy.interpolate.interp2d
+      factor = random_state.uniform(opts.get("rnd_zoom_lower", 0.9), opts.get("rnd_zoom_upper", 1.1))
+      audio = scipy.ndimage.zoom(audio, factor, order=3)
+  if random_state.uniform(0.0, 1.0) < opts.get("rnd_stretch_switch", 0.2):
+    rate = random_state.uniform(opts.get("rnd_stretch_lower", 0.9), opts.get("rnd_stretch_upper", 1.2))
+    audio = librosa.effects.time_stretch(audio, rate=rate)
+  if random_state.uniform(0.0, 1.0) < opts.get("rnd_pitch_switch", 0.2):
+    n_steps = random_state.uniform(opts.get("rnd_pitch_lower", -1.), opts.get("rnd_pitch_upper", 1.))
+    audio = librosa.effects.pitch_shift(audio, sr=sample_rate, n_steps=n_steps)
+  opts.assert_all_read()
+  return audio
+
+
 class TimitDataset(CachedDataset2):
   """
   DARPA TIMIT Acoustic-Phonetic Continuous Speech Corpus.
@@ -990,25 +1133,8 @@ class TimitDataset(CachedDataset2):
     :return: audio randomly permuted
     :rtype: numpy.ndarray
     """
-    opts = self._random_permute_audio
-    import librosa
-    import scipy.ndimage
-    import warnings
-    audio = audio * self._random.uniform(opts.get("rnd_scale_lower", 0.8), opts.get("rnd_scale_upper", 1.0))
-    if self._random.uniform(0.0, 1.0) < opts.get("rnd_zoom_switch", 0.2):
-      with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        # Alternative: scipy.interpolate.interp2d
-        factor = self._random.uniform(opts.get("rnd_zoom_lower", 0.9), opts.get("rnd_zoom_upper", 1.1))
-        audio = scipy.ndimage.zoom(audio, factor, order=3)
-    if self._random.uniform(0.0, 1.0) < opts.get("rnd_stretch_switch", 0.2):
-      rate = self._random.uniform(opts.get("rnd_stretch_lower", 0.9), opts.get("rnd_stretch_upper", 1.2))
-      audio = librosa.effects.time_stretch(audio, rate=rate)
-    if self._random.uniform(0.0, 1.0) < opts.get("rnd_pitch_switch", 0.2):
-      n_steps = self._random.uniform(opts.get("rnd_pitch_lower", -1.), opts.get("rnd_pitch_upper", 1.))
-      audio = librosa.effects.pitch_shift(audio, sr=sample_rate, n_steps=n_steps)
-    opts.assert_all_read()
-    return audio
+    return _get_random_permuted_audio(
+      audio=audio, sample_rate=sample_rate, opts=self._random_permute_audio, random_state=self._random)
 
   def _collect_single_seq(self, seq_idx):
     """
@@ -1030,32 +1156,11 @@ class TimitDataset(CachedDataset2):
     # see: https://github.com/rdadolf/fathom/blob/master/fathom/speech/preproc.py
     # and: https://groups.google.com/forum/#!topic/librosa/V4Z1HpTKn8Q
     audio, sample_rate = self._get_audio(seq_tag)
-    peak = numpy.max(numpy.abs(audio))
-    audio /= peak
-    if self._random_permute_audio.truth_value:
-      audio = self._get_random_permuted_audio(audio=audio, sample_rate=sample_rate)
-    if self._demo_play_audio:
-      print("play %r" % seq_tag, "min/max:", numpy.min(audio), numpy.max(audio))
-      self._demo_audio_play(audio=audio, sample_rate=sample_rate)
-    window_len = self._feature_window_len
-    step_len = self._feature_step_len
-    mfccs = librosa.feature.mfcc(
-      audio, sr=sample_rate,
-      n_mfcc=self._num_feature_filters,
-      hop_length=int(step_len * sample_rate), n_fft=int(window_len * sample_rate))
-    energy = librosa.feature.rmse(
-      audio,
-      hop_length=int(step_len * sample_rate), n_fft=int(window_len * sample_rate))
-    mfccs[0] = energy  # replace first MFCC with energy, per convention
-    assert mfccs.shape[0] == self._num_feature_filters  # (dim, time)
-    if self._with_delta:
-      deltas = [librosa.feature.delta(mfccs, order=i) for i in range(1, self._with_delta + 1)]
-      mfccs = numpy.vstack([mfccs] + deltas)
-    mfccs = mfccs.transpose().astype("float32")  # (time, dim)
-    if self._norm_mean is not None:
-      mfccs -= self._norm_mean[None, :]
-    if self._norm_std_dev is not None:
-      mfccs /= self._norm_std_dev[None, :]
+    mfccs = _get_audio_features(
+      audio=audio, sample_rate=sample_rate, window_len=self._feature_window_len, step_len=self._feature_step_len,
+      num_feature_filters=self._num_feature_filters, with_delta=self._with_delta,
+      norm_mean=self._norm_mean, norm_std_dev=self._norm_std_dev,
+      random_permute_opts=self._random_permute_audio, random_state=self._random)
     return DatasetSeq(seq_idx=seq_idx, seq_tag=seq_tag, features=mfccs, targets=phone_id_seq)
 
 
@@ -1375,6 +1480,126 @@ class BlissDataset(CachedDataset2):
 
   def _collect_single_seq(self, seq_idx):
     raise NotImplementedError  # TODO...
+
+
+class LibriSpeechCorpus(CachedDataset2):
+  def __init__(self, path, prefix, bpe, audio, partition_epoch=None, fixed_random_seed=None, **kwargs):
+    """
+    :param str path: dir, should contain "train-*/*/*/{*.flac,*.trans.txt}"
+    :param str prefix: e.g. "train"
+    :param dict[str] bpe: options for :class:`BytePairEncoding`
+    :param dict[str] audio: options for :class:`ExtractAudioFeatures`
+    :param int|None partition_epoch:
+    :param int|None fixed_random_seed:
+    """
+    super(LibriSpeechCorpus, self).__init__(**kwargs)
+    import os
+    self.path = path
+    self.prefix = prefix
+    assert prefix in ["train", "dev", "eval"]
+    assert os.path.exists(path + "/train-clean-100")
+    self.bpe = BytePairEncoding(**bpe)
+    self.labels = self.bpe.labels
+    self._fixed_random_seed = fixed_random_seed
+    self._audio_random = numpy.random.RandomState(1)
+    self.feature_extractor = ExtractAudioFeatures(random_state=self._audio_random, **audio)
+    self.num_inputs = self.feature_extractor.get_feature_dimension()
+    self.num_outputs = {"data": [self.num_inputs, 2], "classes": [self.bpe.num_labels, 1]}
+    self.partition_epoch = partition_epoch
+    self.transs = self._collect_trans()
+    self._reference_seq_order = sorted(self.transs.keys())
+
+  def _collect_trans(self):
+    transs = {}
+    from glob import glob
+    import os
+    for subdir in glob("%s/%s-*" % (self.path, self.prefix)):
+      if not os.path.isdir(subdir):
+        continue
+      subdir = os.path.basename(subdir)
+      for fn in glob("%s/%s/*/*/*.trans.txt" % (self.path, subdir)):
+        for l in open(fn).read().splitlines():
+          seq_name, txt = l.split(" ", 1)
+          speaker_id, chapter_id, seq_id = map(int, seq_name.split("-"))
+          transs[(subdir, speaker_id, chapter_id, seq_id)] = txt
+    assert transs, "did not found anything %s/%s-*" % (self.path, self.prefix)
+    return transs
+
+  def init_seq_order(self, epoch=None, seq_list=None):
+    """
+    If random_shuffle_epoch1, for epoch 1 with "random" ordering, we leave the given order as is.
+    Otherwise, this is mostly the default behavior.
+
+    :param int|None epoch:
+    :param list[str]|None seq_list: In case we want to set a predefined order.
+    :rtype: bool
+    :returns whether the order changed (True is always safe to return)
+    """
+    super(LibriSpeechCorpus, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+    if not epoch:
+      epoch = 1
+    self._audio_random.seed(self._fixed_random_seed or epoch or 1)
+    if self.partition_epoch:
+      epoch = (epoch - 1) // self.partition_epoch + 1  # count starting from epoch 1
+    if seq_list is not None:
+      self._seq_order = list(seq_list)
+      self._num_seqs = len(self._seq_order)
+    else:
+      num_seqs = len(self.transs)
+      self._seq_order = self.get_seq_order_for_epoch(
+        epoch=epoch, num_seqs=num_seqs, get_seq_len=lambda i: len(self.transs[self._reference_seq_order[i]]))
+      self._num_seqs = num_seqs
+    if self.partition_epoch:
+      self._partition_epoch_num_seqs = [self._num_seqs // self.partition_epoch] * self.partition_epoch
+      i = 0
+      while sum(self._partition_epoch_num_seqs) < self._num_seqs:
+        self._partition_epoch_num_seqs[i] += 1
+        i += 1
+        assert i < self.partition_epoch
+      assert sum(self._partition_epoch_num_seqs) == self._num_seqs
+      self._num_seqs = self._partition_epoch_num_seqs[(self.epoch - 1) % self.partition_epoch]
+    return True
+
+  def _get_ref_seq_idx(self, seq_idx):
+    """
+    :param int seq_idx:
+    :return: idx in self._reference_seq_order
+    :rtype: int
+    """
+    if self.partition_epoch:
+      epoch = self.epoch or 1
+      assert self._partition_epoch_num_seqs
+      for n in self._partition_epoch_num_seqs[:(epoch - 1) % self.partition_epoch]:
+        seq_idx += n
+    if self._seq_order is None:
+      return seq_idx
+    return self._seq_order[seq_idx]
+
+  def get_tag(self, seq_idx):
+    """
+    :param int seq_idx:
+    :rtype: str
+    """
+    subdir, speaker_id, chapter_id, seq_id = self._reference_seq_order[self._get_ref_seq_idx(seq_idx)]
+    return "%(sd)s-%(sp)i-%(ch)i-%(i)04i" % {
+      "sd": subdir, "sp": speaker_id, "ch": chapter_id, "i": seq_id}
+
+  def _collect_single_seq(self, seq_idx):
+    """
+    :param int seq_idx:
+    :rtype: DatasetSeq
+    """
+    import os
+    import librosa
+    subdir, speaker_id, chapter_id, seq_id = self._reference_seq_order[self._get_ref_seq_idx(seq_idx)]
+    audio_fn = "%(p)s/%(sd)s/%(sp)i/%(ch)i/%(sp)i-%(ch)i-%(i)04i.flac" % {
+      "p": self.path, "sd": subdir, "sp": speaker_id, "ch": chapter_id, "i": seq_id}
+    assert os.path.exists(audio_fn)
+    audio, sample_rate = librosa.load(audio_fn, sr=None)
+    features = self.feature_extractor.get_audio_features(audio=audio, sample_rate=sample_rate)
+    targets_txt = self.transs[(subdir, speaker_id, chapter_id, seq_id)]
+    targets = numpy.array(self.bpe.get_seq(targets_txt), dtype="int32")
+    return DatasetSeq(features=features, targets=targets, seq_idx=seq_idx, seq_tag=self.get_tag(seq_idx))
 
 
 def demo():
