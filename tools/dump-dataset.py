@@ -93,7 +93,8 @@ def dump_dataset(dataset, options):
         num_seqs_s = "~%i" % dataset.estimated_num_seqs
       except TypeError:  # a number is required, not NoneType
         num_seqs_s = "?"
-    progress = "%i/%s (%.02f%%)" % (seq_idx, num_seqs_s, complete_frac * 100)
+    progress_prefix = "%i/%s" % (seq_idx, num_seqs_s)
+    progress = "%s (%.02f%%)" % (progress_prefix, complete_frac * 100)
     if complete_frac > 0:
       total_time_estimated = start_elapsed / complete_frac
       remaining_estimated = total_time_estimated - start_elapsed
@@ -121,7 +122,7 @@ def dump_dataset(dataset, options):
     if stats:
       stats.collect(data)
     if options.type == "null":
-      Util.progress_bar_with_time(complete_frac)
+      Util.progress_bar_with_time(complete_frac, prefix=progress_prefix)
 
     seq_idx += 1
 

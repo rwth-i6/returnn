@@ -1498,8 +1498,9 @@ class LibriSpeechCorpus(CachedDataset2):
     self.prefix = prefix
     assert prefix in ["train", "dev", "eval"]
     assert os.path.exists(path + "/train-clean-100")
-    from Util import monkeyfix_glib
-    monkeyfix_glib()
+    import Util
+    Util.monkeyfix_glib()
+    Util.monkeypatch_audioread()
     self.bpe = BytePairEncoding(**bpe)
     self.labels = self.bpe.labels
     self._fixed_random_seed = fixed_random_seed

@@ -2586,3 +2586,17 @@ def monkeyfix_glib():
   # and then reraise a KeyboardInterrupt in that thread.
   # However, we want and expect to get the KeyboardInterrupt in the main thread.
   GLib.MainLoop.__init__ = lambda *args, **kwargs: None
+
+
+def monkeypatch_audioread():
+  """
+  audioread does not behave optimal in some cases.
+  E.g. each call to _ca_available() takes quite long because of the ctypes.util.find_library usage.
+  We will patch this.
+  """
+  try:
+    import audioread
+  except ImportError:
+    return
+  res = audioread._ca_available()
+  audioread._ca_available = lambda: res
