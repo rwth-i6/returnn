@@ -1510,6 +1510,7 @@ class LibriSpeechCorpus(CachedDataset2):
     self.partition_epoch = partition_epoch
     self.transs = self._collect_trans()
     self._reference_seq_order = sorted(self.transs.keys())
+    self.init_seq_order()
 
   def _collect_trans(self):
     transs = {}
