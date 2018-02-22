@@ -2570,8 +2570,8 @@ def monkeyfix_glib():
   """
   Fixes some stupid bugs such that SIGINT is not working.
   This is used by audioread, and indirectly by librosa for loading audio.
-
   https://stackoverflow.com/questions/16410852/
+  See also :func:`monkeypatch_audioread`.
   """
   try:
     import gi
@@ -2593,6 +2593,16 @@ def monkeypatch_audioread():
   audioread does not behave optimal in some cases.
   E.g. each call to _ca_available() takes quite long because of the ctypes.util.find_library usage.
   We will patch this.
+
+  However, the recommendation would be to not use audioread (librosa.load).
+  audioread uses Gstreamer as a backend by default currently (on Linux).
+  Gstreamer has multiple issues. See also :func:`monkeyfix_glib`, and here for discussion:
+  https://github.com/beetbox/audioread/issues/62
+  https://github.com/beetbox/audioread/issues/63
+
+  Instead, use PySoundFile, which is also faster. See here for discussions:
+  https://github.com/beetbox/audioread/issues/64
+  https://github.com/librosa/librosa/issues/681
   """
   try:
     import audioread

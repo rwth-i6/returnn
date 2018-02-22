@@ -665,6 +665,12 @@ class _NltkCorpusReaderDataset(CachedDataset2):
 
 
 class ExtractAudioFeatures:
+  """
+  Currently uses librosa to extract MFCC features.
+  We could also use python_speech_features.
+  We could also add support e.g. to directly extract log-filterbanks or so.
+  """
+
   def __init__(self,
                window_len=0.025, step_len=0.010,
                num_feature_filters=40, with_delta=False, norm_mean=None, norm_std_dev=None,
@@ -1498,9 +1504,6 @@ class LibriSpeechCorpus(CachedDataset2):
     self.prefix = prefix
     assert prefix in ["train", "dev", "eval"]
     assert os.path.exists(path + "/train-clean-100")
-    import Util
-    Util.monkeyfix_glib()
-    Util.monkeypatch_audioread()
     self.bpe = BytePairEncoding(**bpe)
     self.labels = self.bpe.labels
     self._fixed_random_seed = fixed_random_seed
@@ -1593,13 +1596,20 @@ class LibriSpeechCorpus(CachedDataset2):
     :param int seq_idx:
     :rtype: DatasetSeq
     """
+    # Don't use librosa.load which internally uses audioread which would use Gstreamer as a backend,
+    # which has multiple issues:
+    # https://github.com/beetbox/audioread/issues/62
+    # https://github.com/beetbox/audioread/issues/63
+    # Instead, use PySoundFile, which is also faster. See here for discussions:
+    # https://github.com/beetbox/audioread/issues/64
+    # https://github.com/librosa/librosa/issues/681
     import os
-    import librosa
+    import soundfile  # pip install pysoundfile
     subdir, speaker_id, chapter_id, seq_id = self._reference_seq_order[self._get_ref_seq_idx(seq_idx)]
     audio_fn = "%(p)s/%(sd)s/%(sp)i/%(ch)i/%(sp)i-%(ch)i-%(i)04i.flac" % {
       "p": self.path, "sd": subdir, "sp": speaker_id, "ch": chapter_id, "i": seq_id}
     assert os.path.exists(audio_fn)
-    audio, sample_rate = librosa.load(audio_fn, sr=None)
+    audio, sample_rate = soundfile.read(audio_fn)
     features = self.feature_extractor.get_audio_features(audio=audio, sample_rate=sample_rate)
     targets_txt = self.transs[(subdir, speaker_id, chapter_id, seq_id)]
     targets = numpy.array(self.bpe.get_seq(targets_txt), dtype="int32")
