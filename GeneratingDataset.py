@@ -1489,14 +1489,19 @@ class BlissDataset(CachedDataset2):
 
 
 class LibriSpeechCorpus(CachedDataset2):
-  def __init__(self, path, prefix, bpe, audio, partition_epoch=None, fixed_random_seed=None, **kwargs):
+  def __init__(self, path, prefix, bpe, audio,
+               partition_epoch=None, fixed_random_seed=None, fixed_random_subset=None, **kwargs):
     """
     :param str path: dir, should contain "train-*/*/*/{*.flac,*.trans.txt}"
     :param str prefix: e.g. "train"
     :param dict[str] bpe: options for :class:`BytePairEncoding`
     :param dict[str] audio: options for :class:`ExtractAudioFeatures`
     :param int|None partition_epoch:
-    :param int|None fixed_random_seed:
+    :param int|None fixed_random_seed: for the shuffling, e.g. for seq_ordering='random'. otherwise epoch will be used
+    :param float|int|None fixed_random_subset:
+      Value in [0,1] to specify the fraction, or integer >=1 which specifies number of seqs.
+      If given, will use this random subset. This will be applied initially at loading time,
+      i.e. not dependent on the epoch. It will use an internally hardcoded fixed random seed, i.e. its deterministic.
     """
     super(LibriSpeechCorpus, self).__init__(**kwargs)
     import os
@@ -1514,6 +1519,16 @@ class LibriSpeechCorpus(CachedDataset2):
     self.partition_epoch = partition_epoch
     self.transs = self._collect_trans()
     self._reference_seq_order = sorted(self.transs.keys())
+    if fixed_random_subset:
+      if 0 < fixed_random_subset < 1:
+        fixed_random_subset = int(len(self._reference_seq_order) * fixed_random_subset)
+      assert isinstance(fixed_random_subset, int) and fixed_random_subset > 0
+      rnd = numpy.random.RandomState(42)
+      seqs = self._reference_seq_order
+      rnd.shuffle(seqs)
+      seqs = seqs[:fixed_random_subset]
+      self._reference_seq_order = seqs
+      self.transs = {s: self.transs[s] for s in seqs}
     self.init_seq_order()
 
   def _collect_trans(self):
