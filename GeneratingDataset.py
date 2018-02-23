@@ -1242,12 +1242,14 @@ class BytePairEncoding:
   Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (ACL 2016). Berlin, Germany.
   """
 
-  def __init__(self, vocab_file, bpe_file, seq_postfix=None):
+  def __init__(self, vocab_file, bpe_file, seq_postfix=None, unknown_label="UNK"):
     """
     :param str vocab_file:
     :param str bpe_file:
     :param list[int]|None seq_postfix: labels will be added to the seq in self.get_seq
+    :param str unknown_label:
     """
+    self._unknown_label = unknown_label
     self._parse_vocab(vocab_file)
     self._bpe_codes = [tuple(item.split()) for item in open(bpe_file, "r").read().splitlines()]
     # some hacking to deal with duplicates (only consider first instance)
@@ -1262,9 +1264,14 @@ class BytePairEncoding:
     """
     d = eval(open(filename, "r").read())
     assert isinstance(d, dict)
+    assert self._unknown_label in d
     labels = {idx: label for (label, idx) in sorted(d.items())}
-    assert 0 in labels
-    assert len(labels) - 1 in labels
+    min_label, max_label, num_labels = min(labels), max(labels), len(labels)
+    assert 0 == min_label
+    if num_labels - 1 < max_label:
+      print("Vocab error: not all indices used? max label: %i" % max_label, file=log.v1)
+      print("unused labels: %r" % ([i for i in range(max_label + 1) if i not in labels],), file=log.v2)
+    assert num_labels - 1 == max_label
     self.num_labels = len(labels)
     self.vocab = d
     self.labels = [label for (idx, label) in sorted(labels.items())]
@@ -1372,7 +1379,7 @@ class BytePairEncoding:
     :rtype: list[int]
     """
     segments = self._segment_sentence(sentence)
-    unk_id = self.vocab["UNK"]
+    unk_id = self.vocab[self._unknown_label]
     seq = [self.vocab.get(k, unk_id) for k in segments]
     return seq + self.seq_postfix
 
