@@ -903,7 +903,7 @@ def test_rec_layer_move_out_of_loop():
         tf_session=session, extern_data=extern_data,
         data_keys=["data", "classes"],
         dataset=dataset, batches=batches)
-      feed_dict = data_provider.get_feed_dict(single_threaded=True)
+      feed_dict, meta_step_info = data_provider.get_feed_dict(single_threaded=True)
       if isinstance(net.train_flag, tf.Tensor):
         feed_dict[net.train_flag] = True
       try:

@@ -61,8 +61,8 @@ def test_DataProvider():
     data_keys=["data", "classes"],
     dataset=dataset, batches=batches)
 
-  feed_dict = data_provider.get_feed_dict(single_threaded=True)
-  print(feed_dict)
+  feed_dict, meta = data_provider.get_feed_dict(single_threaded=True)
+  print(feed_dict, meta)
   assert_is_instance(feed_dict, dict)
   assert extern_data.data["data"].placeholder in feed_dict
   assert extern_data.data["data"].size_placeholder[0] in feed_dict

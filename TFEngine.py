@@ -32,9 +32,10 @@ from LearningRateControl import loadLearningRateControlFromConfig, LearningRateC
 from Log import log
 from Network import LayerNetwork
 from Pretrain import pretrainFromConfig
-from TFNetwork import TFNetwork, ExternData
+from TFNetwork import TFNetwork, ExternData, help_on_tf_exception
 from TFUpdater import Updater
 from Util import hms, NumbersDict
+from pprint import pprint
 
 
 class CancelTrainingException(Exception):
@@ -391,7 +392,7 @@ class Runner(object):
       if writer:
         writer.add_graph(sess.graph)
       while self.data_provider.have_more_data(session=sess):
-        feed_dict = self.data_provider.get_feed_dict()
+        feed_dict, meta_step_info = self.data_provider.get_feed_dict()
         if isinstance(self.engine.network.train_flag, tf.Tensor):
           feed_dict[self.engine.network.train_flag] = self._should_train
         start_time = time.time()
@@ -401,7 +402,6 @@ class Runner(object):
 
         if step == 0:
           if self.engine.config.bool("check_unsupported_device", False) and self.engine.is_requesting_for_gpu():
-            from pprint import pprint
             from TFUtil import find_unsupported_devices_in_graph
             ops = find_unsupported_devices_in_graph(graph=sess.graph, dev_name="GPU")
             if not ops:
@@ -438,14 +438,11 @@ class Runner(object):
             fetches_results = sess.run(fetches_dict, feed_dict=feed_dict)  # type: dict[str,numpy.ndarray|str]
             if writer and "summary" in fetches_results:
               writer.add_summary(fetches_results["summary"], step + step_offset)
-        except tf.errors.ResourceExhaustedError:
-          print("ResourceExhaustedError. Shapes of feed_dict:", file=log.v1)
-          for key, value in sorted(feed_dict.items(), key=lambda item: item[0].name):
-            print(
-              "  %r: %s" % (
-                key,
-                ("shape %s" % (value.shape,)) if isinstance(value, numpy.ndarray) else ("type %r" % type(value))),
-              file=log.v1)
+        except tf.errors.OpError as exc:
+          print("TensorFlow exception:", exc, file=log.v1)
+          help_on_tf_exception(
+            exception=exc, feed_dict=feed_dict, meta_step_info=meta_step_info,
+            extern_data=self.data_provider.extern_data, file=log.v2)
           raise
 
         eval_info = self._collect_eval_info(fetches_results=fetches_results)
@@ -1223,7 +1220,7 @@ class Engine(object):
       tf_session=self.tf_session, extern_data=self.network.extern_data,
       data_keys=self.network.used_data_keys,
       dataset=dataset, batches=batches)
-    feed_dict = data_provider.get_feed_dict(single_threaded=True)
+    feed_dict, _ = data_provider.get_feed_dict(single_threaded=True)
     return feed_dict
 
   def run_single(self, dataset, seq_idx, output_dict, ext_feed_dict=None):

@@ -1221,3 +1221,40 @@ class LayerNotFound(Exception):
   """
   Via :func:`TFNetwork.get_layer`.
   """
+
+
+def help_on_tf_exception(exception, feed_dict, meta_step_info, extern_data, file=sys.stdout):
+  """
+  :param tf.errors.OpError exception:
+  :param dict[tf.Tensor,numpy.ndarray] feed_dict:
+  :param dict[str] meta_step_info:
+  :param ExternData extern_data:
+  :param typing.IO[str] file:
+  """
+  from pprint import pprint
+  import numpy
+  from TFUtil import get_base_name
+  print("Step meta information:", file=file)
+  pprint(meta_step_info, stream=file)
+  print("Feed dict:", file=file)
+  for key, value in sorted(feed_dict.items(), key=lambda item: item[0].name):
+    assert isinstance(key, tf.Tensor)
+    if isinstance(value, numpy.ndarray):
+      v_minmax = numpy.min(value), numpy.max(value)
+      info = "shape %s, dtype %s" % (value.shape, value.dtype)
+      info += ", min/max %s/%s" % v_minmax
+      if value.dtype.kind == "f":
+        info += ", mean/stddev %s/%s" % (numpy.mean(value), numpy.std(value))
+    else:
+      v_minmax = -1, -1
+      info = "type %r" % type(value)
+    data = None
+    if key.name.startswith("extern_data/"):
+      data_key = get_base_name(key)
+      if data_key in extern_data.data:
+        data = extern_data.data[data_key]
+        info += ", %s" % data
+    print("  %r: %s" % (key, info), file=file)
+    if data and data.sparse:
+      if v_minmax[0] < 0 or v_minmax[1] >= data.dim:
+        print("  WARNING, invalid label for data", data, file=file)

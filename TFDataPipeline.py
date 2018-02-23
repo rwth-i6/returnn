@@ -798,8 +798,9 @@ class DataProviderBase(object):
     The queue gets filled by the other thread, via self.thread_main().
 
     :param bool single_threaded: whether to not use the queue
-    :returns: we dequeue one batch from the queue and provide it for all placeholders of our external data
-    :rtype: dict[tf.Tensor,tf.Tensor]
+    :returns: We dequeue one batch from the queue and provide the data for all placeholders of our external data.
+      Additionally, there can be some meta information.
+    :rtype: dict[tf.Tensor,tf.Tensor],dict[str]
     """
     raise NotImplementedError
 
@@ -887,6 +888,7 @@ class FeedDictDataProvider(DataProviderBase):
     # Numpy cannot handle "string" dtype. Just make it a list[str], which is what TF can handle.
     data.update({k: [""] * batch.num_slices
                  for k in self.data_keys if self.extern_data.data[k].dtype == "string"})
+    data.update({"seq_idx": [-1] * batch.num_slices, "seq_tag": [""] * batch.num_slices})
     seq_lens = {k: numpy.zeros(shape=(shapes[k][0],), dtype=self.extern_data.data[k].size_dtype)
                 for k in self.data_keys if self.extern_data.data[k].have_time_axis()}
     self.dataset.load_seqs(batch.start_seq, batch.end_seq)
@@ -900,12 +902,8 @@ class FeedDictDataProvider(DataProviderBase):
         for k in self.data_keys:
           # Some special cases first, such as "seq_idx" and "seq_tag".
           # See also :func:`TFNetwork.get_extern_data`.
-          if k == "seq_idx":
-            data[k][q] = seq.seq_idx
-            continue
-          if k == "seq_tag":
-            data[k][q] = self.dataset.get_tag(seq.seq_idx)
-            continue
+          if k in ["seq_idx", "seq_tag"]:
+            continue  # handled below. will always be added
           if k in self.extern_data.extra_added_keys:
             continue
           if self.extern_data.data[k].have_time_axis():
@@ -922,6 +920,8 @@ class FeedDictDataProvider(DataProviderBase):
             seq_lens[k][q] = max(seq_lens[k][q], o[k] + ls)
           else:  # no time-axis
             data[k][q] = v
+        data["seq_idx"][q] = seq.seq_idx
+        data["seq_tag"][q] = self.dataset.get_tag(seq.seq_idx)
     return data, seq_lens
 
   def get_next_batch(self):
@@ -996,8 +996,9 @@ class FeedDictDataProvider(DataProviderBase):
     The queue gets filled by the other thread, via self.thread_main().
 
     :param bool single_threaded: whether to not use the queue
-    :returns: we dequeue one batch from the queue and provide it for all placeholders of our external data
-    :rtype: dict[tf.Tensor,numpy.ndarray]
+    :returns: we dequeue one batch from the queue and provide it for all placeholders of our external data,
+      and additionally return some meta information.
+    :rtype: (dict[tf.Tensor,numpy.ndarray],dict[str])
     """
     if self.tf_queue:
       return {}  # not needed to feed anything, it gets it via the queues
@@ -1024,7 +1025,7 @@ class FeedDictDataProvider(DataProviderBase):
           raise Exception(
             "dataset currently does not support variable shape in other dimensions than the first. "
             "dim=%i, placeholder=%r" % (dim, len_placeholder))
-    return d
+    return d, {"seq_idx": output["seq_idx"], "seq_tag": output["seq_tag"]}
 
   def get_dataset_name(self):
     return self.dataset.name
@@ -1129,7 +1130,7 @@ class QueueDataProvider(DataProviderBase):
     self._last_seq_idx = None
 
   def get_feed_dict(self, single_threaded=False):
-    return {}
+    return {}, {}
 
   def _update_last_seq_idx(self, session):
     """
