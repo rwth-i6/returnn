@@ -6,7 +6,7 @@ from CachedDataset2 import CachedDataset2
 from Util import class_idx_seq_to_1_of_k, CollectionReadCheckCovered
 from Log import log
 import numpy
-
+import re
 
 class GeneratingDataset(Dataset):
 
@@ -1249,6 +1249,12 @@ class BytePairEncoding:
     :param list[int]|None seq_postfix: labels will be added to the seq in self.get_seq
     :param str unknown_label:
     """
+    # check version information
+    firstline = open(bpe_file, "r").readline()
+    if firstline.startswith('#version:'):
+        self.version = tuple([int(x) for x in re.sub(r'(\.0+)*$','', firstline.split()[-1]).split(".")])
+    else:
+        self.version = (0, 1)
     self._unknown_label = unknown_label
     self._parse_vocab(vocab_file)
     self._bpe_codes = [tuple(item.split()) for item in open(bpe_file, "r").read().splitlines()]
@@ -1300,8 +1306,17 @@ class BytePairEncoding:
     if orig in self._bpe_encode_cache:
       return self._bpe_encode_cache[orig]
 
-    word = tuple(orig) + ('</w>',)
+    if self.version == (0, 1):
+        word = tuple(orig) + ('</w>',)
+    elif self.version == (0, 2): # more consistent handling of word-final segments
+        word = tuple(orig[:-1]) + ( orig[-1] + '</w>',)
+    else:
+        raise NotImplementedError
+
     pairs = self._get_pairs(word)
+
+    if not pairs:
+        return orig
 
     while True:
       bigram = min(pairs, key=lambda pair: self._bpe_codes.get(pair, float('inf')))
