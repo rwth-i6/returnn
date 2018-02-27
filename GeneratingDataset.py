@@ -1511,13 +1511,14 @@ class BlissDataset(CachedDataset2):
 
 
 class LibriSpeechCorpus(CachedDataset2):
-  def __init__(self, path, prefix, bpe, audio,
+  def __init__(self, path, prefix, bpe, audio, use_zip=False,
                partition_epoch=None, fixed_random_seed=None, fixed_random_subset=None, **kwargs):
     """
-    :param str path: dir, should contain "train-*/*/*/{*.flac,*.trans.txt}"
-    :param str prefix: e.g. "train"
+    :param str path: dir, should contain "train-*/*/*/{*.flac,*.trans.txt}", or "train-*.zip"
+    :param str prefix: "train", "dev" or "test"
     :param dict[str] bpe: options for :class:`BytePairEncoding`
     :param dict[str] audio: options for :class:`ExtractAudioFeatures`
+    :param bool use_zip: whether to use the ZIP files instead (better for NFS)
     :param int|None partition_epoch:
     :param int|None fixed_random_seed: for the shuffling, e.g. for seq_ordering='random'. otherwise epoch will be used
     :param float|int|None fixed_random_subset:
@@ -1527,10 +1528,21 @@ class LibriSpeechCorpus(CachedDataset2):
     """
     super(LibriSpeechCorpus, self).__init__(**kwargs)
     import os
+    from glob import glob
+    import zipfile
     self.path = path
     self.prefix = prefix
-    assert prefix in ["train", "dev", "eval"]
-    assert os.path.exists(path + "/train-clean-100")
+    self.use_zip = use_zip
+    self._zip_files = None
+    if use_zip:
+      zip_fn_pattern = "%s/%s-*.zip" % (self.path, self.prefix)
+      zip_fns = sorted(glob(zip_fn_pattern))
+      assert zip_fns, "no files found: %r" % zip_fn_pattern
+      self._zip_files = {
+        os.path.splitext(os.path.basename(fn))[0]: zipfile.ZipFile(fn)
+        for fn in zip_fns}  # e.g. "train-clean-100" -> ZipFile
+    assert prefix in ["train", "dev", "test"]
+    assert os.path.exists(path + "/train-clean-100" + (".zip" if use_zip else ""))
     self.bpe = BytePairEncoding(**bpe)
     self.labels = self.bpe.labels
     self._fixed_random_seed = fixed_random_seed
@@ -1554,19 +1566,39 @@ class LibriSpeechCorpus(CachedDataset2):
     self.init_seq_order()
 
   def _collect_trans(self):
-    transs = {}
     from glob import glob
     import os
-    for subdir in glob("%s/%s-*" % (self.path, self.prefix)):
-      if not os.path.isdir(subdir):
-        continue
-      subdir = os.path.basename(subdir)
-      for fn in glob("%s/%s/*/*/*.trans.txt" % (self.path, subdir)):
-        for l in open(fn).read().splitlines():
-          seq_name, txt = l.split(" ", 1)
-          speaker_id, chapter_id, seq_id = map(int, seq_name.split("-"))
-          transs[(subdir, speaker_id, chapter_id, seq_id)] = txt
-    assert transs, "did not found anything %s/%s-*" % (self.path, self.prefix)
+    import zipfile
+    transs = {}  # type: dict[(str,int,int,int),str]  # (subdir, speaker-id, chapter-id, seq-id) -> transcription
+    if self.use_zip:
+      for name, zip_file in self._zip_files.items():
+        assert isinstance(zip_file, zipfile.ZipFile)
+        assert zip_file.filelist
+        assert zip_file.filelist[0].filename.startswith("LibriSpeech/")
+        for info in zip_file.filelist:
+          assert isinstance(info, zipfile.ZipInfo)
+          path = info.filename.split("/")
+          assert path[0] == "LibriSpeech", "does not expect %r (%r)" % (info, info.filename)
+          if path[1].startswith(self.prefix + "-"):
+            subdir = path[1]  # e.g. "train-clean-100"
+            assert subdir == name
+            if path[-1].endswith(".trans.txt"):
+              for l in zip_file.read(info).decode("utf8").splitlines():
+                seq_name, txt = l.split(" ", 1)
+                speaker_id, chapter_id, seq_id = map(int, seq_name.split("-"))
+                transs[(subdir, speaker_id, chapter_id, seq_id)] = txt
+    else:  # not zipped, directly read extracted files
+      for subdir in glob("%s/%s-*" % (self.path, self.prefix)):
+        if not os.path.isdir(subdir):
+          continue
+        subdir = os.path.basename(subdir)  # e.g. "train-clean-100"
+        for fn in glob("%s/%s/*/*/*.trans.txt" % (self.path, subdir)):
+          for l in open(fn).read().splitlines():
+            seq_name, txt = l.split(" ", 1)
+            speaker_id, chapter_id, seq_id = map(int, seq_name.split("-"))
+            transs[(subdir, speaker_id, chapter_id, seq_id)] = txt
+      assert transs, "did not found anything %s/%s-*" % (self.path, self.prefix)
+    assert transs
     return transs
 
   def init_seq_order(self, epoch=None, seq_list=None):
@@ -1628,6 +1660,37 @@ class LibriSpeechCorpus(CachedDataset2):
     return "%(sd)s-%(sp)i-%(ch)i-%(i)04i" % {
       "sd": subdir, "sp": speaker_id, "ch": chapter_id, "i": seq_id}
 
+  def _get_transcription(self, seq_idx):
+    """
+    :param int seq_idx:
+    :rtype: list[int]
+    """
+    seq_key = self._reference_seq_order[self._get_ref_seq_idx(seq_idx)]
+    targets_txt = self.transs[seq_key]
+    return self.bpe.get_seq(targets_txt)
+
+  def _open_audio_file(self, seq_idx):
+    """
+    :param int seq_idx:
+    :return: io.FileIO
+    """
+    import io
+    import os
+    import zipfile
+    subdir, speaker_id, chapter_id, seq_id = self._reference_seq_order[self._get_ref_seq_idx(seq_idx)]
+    audio_fn = "%(sd)s/%(sp)i/%(ch)i/%(sp)i-%(ch)i-%(i)04i.flac" % {
+      "sd": subdir, "sp": speaker_id, "ch": chapter_id, "i": seq_id}
+    if self.use_zip:
+      audio_fn = "LibriSpeech/%s" % (audio_fn,)
+      zip_file = self._zip_files[subdir]
+      assert isinstance(zip_file, zipfile.ZipFile)
+      raw_bytes = zip_file.read(audio_fn)
+      return io.BytesIO(raw_bytes)
+    else:
+      audio_fn = "%s/%s" % (self.path, audio_fn)
+      assert os.path.exists(audio_fn)
+      return open(audio_fn, "rb")
+
   def _collect_single_seq(self, seq_idx):
     """
     :param int seq_idx:
@@ -1640,16 +1703,11 @@ class LibriSpeechCorpus(CachedDataset2):
     # Instead, use PySoundFile, which is also faster. See here for discussions:
     # https://github.com/beetbox/audioread/issues/64
     # https://github.com/librosa/librosa/issues/681
-    import os
     import soundfile  # pip install pysoundfile
-    subdir, speaker_id, chapter_id, seq_id = self._reference_seq_order[self._get_ref_seq_idx(seq_idx)]
-    audio_fn = "%(p)s/%(sd)s/%(sp)i/%(ch)i/%(sp)i-%(ch)i-%(i)04i.flac" % {
-      "p": self.path, "sd": subdir, "sp": speaker_id, "ch": chapter_id, "i": seq_id}
-    assert os.path.exists(audio_fn)
-    audio, sample_rate = soundfile.read(audio_fn)
+    with self._open_audio_file(seq_idx) as audio_file:
+      audio, sample_rate = soundfile.read(audio_file)
     features = self.feature_extractor.get_audio_features(audio=audio, sample_rate=sample_rate)
-    targets_txt = self.transs[(subdir, speaker_id, chapter_id, seq_id)]
-    targets = numpy.array(self.bpe.get_seq(targets_txt), dtype="int32")
+    targets = numpy.array(self._get_transcription(seq_idx), dtype="int32")
     return DatasetSeq(features=features, targets=targets, seq_idx=seq_idx, seq_tag=self.get_tag(seq_idx))
 
 
