@@ -153,6 +153,7 @@ def init(config_str):
   global config
   config = rnn.config
   config.set("log", None)
+  config.set("log_verbosity", 4)
   if datasetDict:
     config.set("train", datasetDict)
   rnn.initLog()
