@@ -2656,3 +2656,23 @@ def cf(filename):
   _cf_cache[filename] = cached_fn
   return cached_fn
 
+
+def binary_search_any(cmp, low, high):
+  """
+  Binary search for a custom compare function.
+
+  :param (int)->int cmp: e.g. cmp(idx) == compare(array[idx], key)
+  :param int low: inclusive
+  :param int high: exclusive
+  :rtype: int|None
+  """
+  while low < high:
+    mid = (low + high) // 2
+    r = cmp(mid)
+    if r < 0:
+      low = mid + 1
+    elif r > 0:
+      high = mid
+    else:
+      return mid
+  return None

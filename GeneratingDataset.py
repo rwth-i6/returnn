@@ -1511,8 +1511,25 @@ class BlissDataset(CachedDataset2):
 
 
 class LibriSpeechCorpus(CachedDataset2):
+  """
+  LibriSpeech. http://www.openslr.org/12/
+
+  "train-*" Seq-length 'data' Stats (default MFCC, every 10ms):
+    281241 seqs
+    Mean: 1230.94154835176
+    Std dev: 383.5126785278322
+    Min/max: 84 / 2974
+  "train-*" Seq-length 'classes' Stats (BPE with 10k symbols):
+    281241 seqs
+    Mean: 58.46585312952222
+    Std dev: 20.54464373013634
+    Min/max: 1 / 161
+  "train-*" mean transcription len: 177.009085 (chars), i.e. ~3 chars per BPE label
+  """
   def __init__(self, path, prefix, bpe, audio, use_zip=False, use_cache_manager=False,
-               partition_epoch=None, fixed_random_seed=None, fixed_random_subset=None, **kwargs):
+               partition_epoch=None, fixed_random_seed=None, fixed_random_subset=None,
+               epoch_wise_filter=None,
+               **kwargs):
     """
     :param str path: dir, should contain "train-*/*/*/{*.flac,*.trans.txt}", or "train-*.zip"
     :param str prefix: "train", "dev" or "test"
@@ -1526,6 +1543,7 @@ class LibriSpeechCorpus(CachedDataset2):
       Value in [0,1] to specify the fraction, or integer >=1 which specifies number of seqs.
       If given, will use this random subset. This will be applied initially at loading time,
       i.e. not dependent on the epoch. It will use an internally hardcoded fixed random seed, i.e. its deterministic.
+    :param dict|None epoch_wise_filter: see init_seq_order
     """
     super(LibriSpeechCorpus, self).__init__(**kwargs)
     import os
@@ -1567,6 +1585,7 @@ class LibriSpeechCorpus(CachedDataset2):
       seqs = seqs[:fixed_random_subset]
       self._reference_seq_order = seqs
       self.transs = {s: self.transs[s] for s in seqs}
+    self.epoch_wise_filter = epoch_wise_filter
     self.init_seq_order()
 
   def _collect_trans(self):
@@ -1615,29 +1634,66 @@ class LibriSpeechCorpus(CachedDataset2):
     :rtype: bool
     :returns whether the order changed (True is always safe to return)
     """
+    import Util
     super(LibriSpeechCorpus, self).init_seq_order(epoch=epoch, seq_list=seq_list)
     if not epoch:
       epoch = 1
     self._audio_random.seed(self._fixed_random_seed or epoch or 1)
     if self.partition_epoch:
-      epoch = (epoch - 1) // self.partition_epoch + 1  # count starting from epoch 1
+      real_epoch = (epoch - 1) // self.partition_epoch + 1  # count starting from epoch 1
+    else:
+      real_epoch = epoch
     if seq_list is not None:
       self._seq_order = list(seq_list)
       self._num_seqs = len(self._seq_order)
     else:
-      num_seqs = len(self.transs)
+      num_seqs = len(self._reference_seq_order)
       self._seq_order = self.get_seq_order_for_epoch(
-        epoch=epoch, num_seqs=num_seqs, get_seq_len=lambda i: len(self.transs[self._reference_seq_order[i]]))
+        epoch=real_epoch, num_seqs=num_seqs, get_seq_len=lambda i: len(self.transs[self._reference_seq_order[i]]))
       self._num_seqs = num_seqs
     if self.partition_epoch:
-      self._partition_epoch_num_seqs = [self._num_seqs // self.partition_epoch] * self.partition_epoch
+      partition_epoch_num_seqs = [self._num_seqs // self.partition_epoch] * self.partition_epoch
       i = 0
-      while sum(self._partition_epoch_num_seqs) < self._num_seqs:
-        self._partition_epoch_num_seqs[i] += 1
+      while sum(partition_epoch_num_seqs) < self._num_seqs:
+        partition_epoch_num_seqs[i] += 1
         i += 1
         assert i < self.partition_epoch
-      assert sum(self._partition_epoch_num_seqs) == self._num_seqs
-      self._num_seqs = self._partition_epoch_num_seqs[(self.epoch - 1) % self.partition_epoch]
+      assert sum(partition_epoch_num_seqs) == self._num_seqs
+      self._num_seqs = partition_epoch_num_seqs[(self.epoch - 1) % self.partition_epoch]
+      i = 0
+      for n in partition_epoch_num_seqs[:(epoch - 1) % self.partition_epoch]:
+        i += n
+      self._seq_order = self._seq_order[i:i + self._num_seqs]
+    if self.epoch_wise_filter:
+      old_num_seqs = self._num_seqs
+      any_filter = False
+      for (ep_start, ep_end), value in sorted(self.epoch_wise_filter.items()):
+        assert isinstance(ep_start, int) and isinstance(ep_end, int) and 1 <= ep_start <= ep_end
+        assert isinstance(value, dict)
+        if ep_start <= epoch <= ep_end:
+          any_filter = True
+          opts = CollectionReadCheckCovered(value)
+          if opts.get("subdirs") is not None:
+            subdirs = opts.get("subdirs", None)
+            assert isinstance(subdirs, list)
+            self._seq_order = [idx for idx in self._seq_order if self._reference_seq_order[idx][0] in subdirs]
+            assert self._seq_order, "subdir filter %r invalid?" % (subdirs,)
+          if opts.get("max_mean_len"):
+            max_mean_len = opts.get("max_mean_len")
+            seqs = numpy.array(
+              sorted([(len(self.transs[self._reference_seq_order[idx]]), idx) for idx in self._seq_order]))
+            num = Util.binary_search_any(
+              cmp=lambda num: numpy.mean(seqs[:num, 0]) > max_mean_len, low=1, high=len(seqs) + 1)
+            assert num is not None
+            self._seq_order = list(seqs[:num, 1])
+            print("%s, epoch %i. Old mean seq len (transcription) is %f, new is %f." % (
+              self, epoch, float(numpy.mean(seqs[:, 0])), float(numpy.mean(seqs[:num, 0]))), file=log.v4)
+          self._num_seqs = len(self._seq_order)
+      if any_filter:
+        print("%s, epoch %i. Old num seqs %i, new num seqs %i." % (
+          self, epoch, old_num_seqs, self._num_seqs), file=log.v4)
+      else:
+        print("%s, epoch %i. No filter for this epoch." % (self, epoch), file=log.v4)
     return True
 
   def _get_ref_seq_idx(self, seq_idx):
@@ -1646,13 +1702,6 @@ class LibriSpeechCorpus(CachedDataset2):
     :return: idx in self._reference_seq_order
     :rtype: int
     """
-    if self.partition_epoch:
-      epoch = self.epoch or 1
-      assert self._partition_epoch_num_seqs
-      for n in self._partition_epoch_num_seqs[:(epoch - 1) % self.partition_epoch]:
-        seq_idx += n
-    if self._seq_order is None:
-      return seq_idx
     return self._seq_order[seq_idx]
 
   def get_tag(self, seq_idx):
