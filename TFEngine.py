@@ -1009,9 +1009,10 @@ class Engine(object):
       sys.exit(1)
 
     if any(numpy.isinf(list(trainer.score.values()))) or any(numpy.isnan(list(trainer.score.values()))):
-      self.save_model(self.get_epoch_model_filename() + ".broken")
       print("Model seems broken, got inf or nan final score: %s" % trainer.score, file=log.v1)
-      sys.exit(1)
+      if self.config.bool("stop_on_nonfinite_train_score", True):
+        self.save_model(self.get_epoch_model_filename() + ".broken")
+        sys.exit(1)
 
     if self.model_filename and (self.epoch % self.save_model_epoch_interval == 0):
       self.save_model(self.get_epoch_model_filename())
