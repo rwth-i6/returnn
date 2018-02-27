@@ -286,8 +286,8 @@ def initEngine(devices):
 
 
 def returnnGreeting(configFilename=None, commandLineOptions=None):
-  print("RETURNN starting up, version %s, pid %i, cwd %s" % (
-    describe_crnn_version(), os.getpid(), os.getcwd()), file=log.v3)
+  print("RETURNN starting up, version %s, pid %i, cwd %s, Python %s" % (
+    describe_crnn_version(), os.getpid(), os.getcwd(), sys.executable), file=log.v3)
   if configFilename:
     print("RETURNN config: %s" % configFilename, file=log.v4)
     if os.path.islink(configFilename):
