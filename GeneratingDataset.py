@@ -1511,7 +1511,7 @@ class BlissDataset(CachedDataset2):
 
 
 class LibriSpeechCorpus(CachedDataset2):
-  def __init__(self, path, prefix, bpe, audio, use_zip=False,
+  def __init__(self, path, prefix, bpe, audio, use_zip=False, use_cache_manager=False,
                partition_epoch=None, fixed_random_seed=None, fixed_random_subset=None, **kwargs):
     """
     :param str path: dir, should contain "train-*/*/*/{*.flac,*.trans.txt}", or "train-*.zip"
@@ -1519,6 +1519,7 @@ class LibriSpeechCorpus(CachedDataset2):
     :param dict[str] bpe: options for :class:`BytePairEncoding`
     :param dict[str] audio: options for :class:`ExtractAudioFeatures`
     :param bool use_zip: whether to use the ZIP files instead (better for NFS)
+    :param bool use_cache_manager: uses :func:`Util.cf`
     :param int|None partition_epoch:
     :param int|None fixed_random_seed: for the shuffling, e.g. for seq_ordering='random'. otherwise epoch will be used
     :param float|int|None fixed_random_subset:
@@ -1530,6 +1531,7 @@ class LibriSpeechCorpus(CachedDataset2):
     import os
     from glob import glob
     import zipfile
+    import Util
     self.path = path
     self.prefix = prefix
     self.use_zip = use_zip
@@ -1538,6 +1540,8 @@ class LibriSpeechCorpus(CachedDataset2):
       zip_fn_pattern = "%s/%s-*.zip" % (self.path, self.prefix)
       zip_fns = sorted(glob(zip_fn_pattern))
       assert zip_fns, "no files found: %r" % zip_fn_pattern
+      if use_cache_manager:
+        zip_fns = [Util.cf(fn) for fn in zip_fns]
       self._zip_files = {
         os.path.splitext(os.path.basename(fn))[0]: zipfile.ZipFile(fn)
         for fn in zip_fns}  # e.g. "train-clean-100" -> ZipFile

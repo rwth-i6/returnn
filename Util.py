@@ -1948,6 +1948,24 @@ def camel_case_to_snake_case(name):
   return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
 
 
+def get_hostname():
+  """
+  :return: e.g. "cluster-cn-211"
+  :rtype: str
+  """
+  # check_output(["hostname"]).strip().decode("utf8")
+  import socket
+  return socket.gethostname()
+
+
+def is_running_on_cluster():
+  """
+  :return: i6 specific. Whether we run on some of the cluster nodes.
+  :rtype: bool
+  """
+  return get_hostname().startswith("cluster-cn-")
+
+
 def log_runtime_info_to_dir(path, config):
   """
   This will write multiple logging information into the path.
@@ -1973,7 +1991,7 @@ def log_runtime_info_to_dir(path, config):
     ]
     if not os.path.exists(path):
       os.makedirs(path)
-    hostname = socket.gethostname()
+    hostname = get_hostname()
     with open("%s/returnn.%s.%i.%s.log" % (
       path, hostname, os.getpid(), time.strftime("%Y-%m-%d-%H-%M-%S")), "w") as f:
       f.write(
@@ -2610,3 +2628,31 @@ def monkeypatch_audioread():
     return
   res = audioread._ca_available()
   audioread._ca_available = lambda: res
+
+
+_cf_cache = {}
+
+def cf(filename):
+  """
+  Cache manager. i6 specific.
+
+  :return: filename
+  :rtype: str
+  """
+  import os
+  from subprocess import check_output
+  if filename in _cf_cache:
+    return _cf_cache[filename]
+  debug_mode = int(os.environ.get("DEBUG", 0))
+  if debug_mode or get_hostname() == "cluster-cn-211" or not is_running_on_cluster():
+    print("use local file: %s" % filename)
+    return filename  # for debugging
+  try:
+    cached_fn = check_output(["cf", filename]).strip().decode("utf8")
+  except CalledProcessError:
+    print("Cache manager: Error occured, using local file")
+    return filename
+  assert os.path.exists(cached_fn)
+  _cf_cache[filename] = cached_fn
+  return cached_fn
+
