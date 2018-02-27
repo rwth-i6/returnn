@@ -4318,11 +4318,13 @@ class CtcLoss(Loss):
   recurrent = True
 
   def __init__(self, target_collapse_repeated=False, auto_clip_target_len=False, output_in_log_space=False,
+               ctc_opts=None,
                focal_loss_factor=0.0, **kwargs):
     """
     :param bool target_collapse_repeated: like preprocess_collapse_repeated option for CTC. used for sparse_labels().
     :param bool auto_clip_target_len: see self._get_target_sparse_labels().
     :param bool output_in_log_space: False -> output expected in prob space. see self.get_output_logits
+    :param dict[str]|None ctc_opts: other kwargs used for tf.nn.ctc_loss
     :param float focal_loss_factor: see https://arxiv.org/abs/1708.02002. 0 means disabled. generalized for CTC
     """
     super(CtcLoss, self).__init__(**kwargs)
@@ -4331,6 +4333,7 @@ class CtcLoss(Loss):
     self.output_in_log_space = output_in_log_space
     self._target_sparse_labels = None
     self._ctc_loss = None  # set in get_value
+    self.ctc_opts = ctc_opts
     self.focal_loss_factor = focal_loss_factor
 
   def init(self, **kwargs):
@@ -4407,7 +4410,8 @@ class CtcLoss(Loss):
       seq_lens = self.output_seq_lens
       labels = self._get_target_sparse_labels()
       self._ctc_loss = tf.nn.ctc_loss(
-        inputs=logits, labels=labels, sequence_length=seq_lens, time_major=self.output.is_time_major)
+        inputs=logits, labels=labels, sequence_length=seq_lens, time_major=self.output.is_time_major,
+        **(self.ctc_opts or {}))
       loss = self._ctc_loss  # shape (batch,)
       if self.focal_loss_factor:
         # We are going up to (time,batch,dim), and we later use reduce_sum,
