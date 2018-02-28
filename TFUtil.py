@@ -5066,3 +5066,60 @@ def add_control_input(op, control_input):
   op._control_inputs.append(control_input)
   op._recompute_node_def()
 
+
+def bpe_idx_to_bpe_string(labels, vocab):
+  """
+  Just does a lookup on vocab.
+
+  :param tf.Tensor labels: (batch,max_len), int32, indices in vocab
+  :param tf.Tensor vocab: (bpe_units,), string
+  :return: (batch,max_len), string
+  :rtype: tf.Tensor
+  """
+  return tf.gather(params=vocab, indices=labels, axis=0)
+
+
+def string_merge(strings, seq_lens, separator=" "):
+  """
+  Also see TFEngine.Engine.search().
+
+  :param tf.Tensor strings: (batch,max_len)
+  :param tf.Tensor seq_lens: (batch,)
+  :param str|tf.Tensor separator: string
+  :return: (batch,), string
+  :rtype: tf.Tensor
+  """
+  input_shape = tf.shape(strings)
+  n_batch, max_len = input_shape[0], input_shape[1]
+  strings = tf.reshape(strings, [n_batch, max_len, 1])
+  seps = tf.zeros_like(strings, dtype=tf.string) + separator
+  strings = tf.concat([strings, seps], axis=2)  # (batch,max_len,2)
+  strings = tf.reshape(strings, [n_batch, max_len * 2])
+  mask = tf.sequence_mask(seq_lens * 2 - 1, maxlen=max_len * 2)  # (batch,)
+  strings = tf.where(mask, strings, tf.zeros_like(strings, dtype=tf.string))  # (batch,max_len*2)
+  strings = tf.reduce_join(strings, axis=1)
+  return strings
+
+
+def string_replace(strings, old, new, count=-1):
+  """
+  Like str.replace.
+
+  :param tf.Tensor strings: (batch,), string
+  :param tf.Tensor|str old:
+  :param tf.Tensor|str new:
+  :param tf.Tensor|int count:
+  :return: (batch,), string
+  :rtype: tf.Tensor
+  """
+  raise NotImplementedError  # TODO ...
+
+
+def bpe_merge(strings):
+  """
+  :param tf.Tensor strings: (batch,), string
+  :param tf.Tensor|str replace_str:
+  :return: (batch,), string. strings after BPE merging
+  :rtype: tf.Tensor
+  """
+  return string_replace(strings, old="@ ", new="")

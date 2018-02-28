@@ -1124,6 +1124,29 @@ def test_check_base_op_type_and_replace_sigmoid():
     assert_almost_equal(vy1, vy2)
 
 
+def test_string_merge():
+  strings = [
+    ["sub@", "word", "test", "</s>"],
+    ["hel@", "lo", "wo@", "r@", "ld", "</s>"],
+    ["</s>"]]
+  seq_lens = [len(seq) for seq in strings]
+  max_len = max(seq_lens)
+  strings = [seq + [""] * (max_len - len(seq)) for seq in strings]
+
+  tf_strings = tf.placeholder(tf.string, [None, None])
+  tf_seq_lens = tf.placeholder(tf.int32, [None])
+  tf_res = string_merge(tf_strings, tf_seq_lens)
+  res = session.run(tf_res, feed_dict={tf_strings: strings, tf_seq_lens: seq_lens})
+  print(res)
+  assert isinstance(res, numpy.ndarray)
+  assert res.shape == (len(seq_lens),)
+  res = res.tolist()
+  print(res)
+  res = [s.decode("utf8") for s in res]
+  print(res)
+  assert_equal(res, ["sub@ word test </s>", "hel@ lo wo@ r@ ld </s>", "</s>"])
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()
