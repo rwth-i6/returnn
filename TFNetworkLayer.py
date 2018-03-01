@@ -4436,8 +4436,8 @@ class CtcLoss(Loss):
         logits = tf.transpose(logits, [1, 0, 2])  # (B,T,N) => (T,B,N)
       seq_lens = self.output_seq_lens
       decoded = self.base_network.cond_on_train(
-        lambda: tf.nn.ctc_greedy_decoder(inputs=logits, sequence_length=seq_lens)[0],
-        lambda: tf.nn.ctc_beam_search_decoder(inputs=logits, sequence_length=seq_lens, beam_width=self.beam_width)[0]
+        lambda: tf.nn.ctc_greedy_decoder(inputs=logits, sequence_length=seq_lens)[0][0],
+        lambda: tf.nn.ctc_beam_search_decoder(inputs=logits, sequence_length=seq_lens, beam_width=self.beam_width)[0][0]
       )
       labels = self._get_target_sparse_labels()
       error = tf.edit_distance(hypothesis=tf.cast(decoded, labels.dtype), truth=labels, normalize=False)
