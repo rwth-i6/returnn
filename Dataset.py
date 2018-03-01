@@ -752,7 +752,7 @@ class DatasetSeq:
     :rtype: NumbersDict
     """
     d = {"data": self.features.shape[0]}
-    d.update({k: self.targets[k].shape[0] for k in self.targets.keys()})
+    d.update({k: self.targets[k].shape[0] for k in self.targets.keys() if self.targets[k].ndim >= 1})
     return NumbersDict(d)
 
   def get_data(self, key):

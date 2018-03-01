@@ -1571,7 +1571,8 @@ class LibriSpeechCorpus(CachedDataset2):
     self._audio_random = numpy.random.RandomState(1)
     self.feature_extractor = ExtractAudioFeatures(random_state=self._audio_random, **audio)
     self.num_inputs = self.feature_extractor.get_feature_dimension()
-    self.num_outputs = {"data": [self.num_inputs, 2], "classes": [self.bpe.num_labels, 1]}
+    self.num_outputs = {
+      "data": [self.num_inputs, 2], "classes": [self.bpe.num_labels, 1], "raw": {"dtype": "string", "shape": ()}}
     self.partition_epoch = partition_epoch
     self.transs = self._collect_trans()
     self._reference_seq_order = sorted(self.transs.keys())
@@ -1716,11 +1717,12 @@ class LibriSpeechCorpus(CachedDataset2):
   def _get_transcription(self, seq_idx):
     """
     :param int seq_idx:
-    :rtype: list[int]
+    :return: (bpe, txt)
+    :rtype: (list[int], str)
     """
     seq_key = self._reference_seq_order[self._get_ref_seq_idx(seq_idx)]
     targets_txt = self.transs[seq_key]
-    return self.bpe.get_seq(targets_txt)
+    return self.bpe.get_seq(targets_txt), targets_txt
 
   def _open_audio_file(self, seq_idx):
     """
@@ -1760,8 +1762,14 @@ class LibriSpeechCorpus(CachedDataset2):
     with self._open_audio_file(seq_idx) as audio_file:
       audio, sample_rate = soundfile.read(audio_file)
     features = self.feature_extractor.get_audio_features(audio=audio, sample_rate=sample_rate)
-    targets = numpy.array(self._get_transcription(seq_idx), dtype="int32")
-    return DatasetSeq(features=features, targets=targets, seq_idx=seq_idx, seq_tag=self.get_tag(seq_idx))
+    bpe, txt = self._get_transcription(seq_idx)
+    targets = numpy.array(bpe, dtype="int32")
+    raw = numpy.array(txt, dtype="object")
+    return DatasetSeq(
+      features=features,
+      targets={"classes": targets, "raw": raw},
+      seq_idx=seq_idx,
+      seq_tag=self.get_tag(seq_idx))
 
 
 def demo():
