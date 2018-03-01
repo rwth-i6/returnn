@@ -6,6 +6,7 @@ import os
 import sys
 import time
 import tensorflow as tf
+import numpy
 
 my_dir = os.path.dirname(os.path.abspath(__file__))
 returnn_dir = os.path.dirname(my_dir)
@@ -55,6 +56,7 @@ def calc_wer_on_dataset(dataset, options, hyps):
   if options.endseq < 0:
     options.endseq = float("inf")
   wer = 1.0
+  remaining_hyp_seq_tags = set(hyps.keys())
   while dataset.is_less_than_num_seqs(seq_idx) and seq_idx <= options.endseq:
     dataset.load_seqs(seq_idx, seq_idx + 1)
     complete_frac = dataset.get_complete_frac(seq_idx)
@@ -66,8 +68,8 @@ def calc_wer_on_dataset(dataset, options, hyps):
         num_seqs_s = "~%i" % dataset.estimated_num_seqs
       except TypeError:  # a number is required, not NoneType
         num_seqs_s = "?"
-    progress_prefix = "%i/%s" % (seq_idx, num_seqs_s)
-    progress = "%s (%.02f%%) (WER %.02f%%)" % (progress_prefix, complete_frac * 100, wer * 100)
+    progress_prefix = "%i/%s (WER %.02f%%)" % (seq_idx, num_seqs_s, wer * 100)
+    progress = "%s (%.02f%%)" % (progress_prefix, complete_frac * 100)
     if complete_frac > 0:
       total_time_estimated = start_elapsed / complete_frac
       remaining_estimated = total_time_estimated - start_elapsed
@@ -75,15 +77,24 @@ def calc_wer_on_dataset(dataset, options, hyps):
     seq_tag = dataset.get_tag(seq_idx)
     hyp = hyps[seq_tag]
     ref = dataset.get_data(seq_idx, options.key)
+    if isinstance(ref, numpy.ndarray):
+      assert ref.shape == ()
+      ref = ref.flatten()[0]  # get the entry itself (str or bytes)
+    if isinstance(ref, bytes):
+      ref = ref.decode("utf8")
     assert isinstance(ref, str)
     wer = wer_compute.step(session, hyps=[hyp], refs=[ref])
     seq_len_stats["hyps"].collect([len(hyp)])
     seq_len_stats["refs"].collect([len(ref)])
+    remaining_hyp_seq_tags.remove(seq_tag)
+    Util.progress_bar_with_time(complete_frac, prefix=progress_prefix)
     seq_idx += 1
 
-  print("Done. Num seqs %i. Total time %s. More seqs which we did not dumped: %s" % (
-    seq_idx, hms(time.time() - start_time), dataset.is_less_than_num_seqs(seq_idx)), file=log.v1)
-  print("Final WER: %f" % wer, file=log.v1)
+  print("Done. Num seqs %i. Total time %s." % (
+    seq_idx, hms(time.time() - start_time)), file=log.v1)
+  print("Remaining num hyp seqs %i. More seqs which we did not dumped: %s." % (
+    len(remaining_hyp_seq_tags), dataset.is_less_than_num_seqs(seq_idx),), file=log.v1)
+  print("Final WER: %.02f%%" % (wer * 100), file=log.v1)
 
   for key in ["hyps", "refs"]:
     seq_len_stats[key].dump(stream_prefix="Seq-length %r %r" % (key, options.key), stream=log.v2)
@@ -107,6 +118,7 @@ def init(config_str):
   rnn.initConfig(configFilename=configFilename, commandLineOptions=[])
   global config
   config = rnn.config
+  config.set("task", "calculate_wer")
   config.set("log", None)
   config.set("log_verbosity", 4)
   if datasetDict:
@@ -127,11 +139,14 @@ def main(argv):
   argparser.add_argument("--hyps", help="hypotheses, dumped via search in py format")
   argparser.add_argument('--startseq', type=int, default=0, help='start seq idx (inclusive) (default: 0)')
   argparser.add_argument('--endseq', type=int, default=-1, help='end seq idx (inclusive) or -1 (default: -1)')
-  argparser.add_argument("--key", default="classes", help="data-key, e.g. 'data' or 'classes'. (default: 'classes')")
+  argparser.add_argument("--key", default="raw", help="data-key, e.g. 'data' or 'classes'. (default: 'raw')")
+  argparser.add_argument("--data")
   args = argparser.parse_args(argv[1:])
 
   init(config_str=args.crnn_config)
-  if config.value("wer_data", "eval") in ["train", "dev", "eval"]:
+  if args.data:
+    dataset = init_dataset(args.data)
+  elif config.value("wer_data", "eval") in ["train", "dev", "eval"]:
     dataset = init_dataset(config.opt_typed_value(config.value("search_data", "eval")))
   else:
     dataset = init_dataset(config.opt_typed_value("wer_data"))
@@ -146,9 +161,10 @@ def main(argv):
 
   global wer_compute
   wer_compute = WerComputeGraph()
-  with tf.Session() as _session:
+  with tf.Session(config=tf.ConfigProto(device_count={"GPU": 0})) as _session:
     global session
     session = _session
+    session.run(tf.global_variables_initializer())
     try:
       calc_wer_on_dataset(dataset=dataset, options=args, hyps=hyps)
     except KeyboardInterrupt:
