@@ -5112,7 +5112,31 @@ def string_replace(strings, old, new, count=-1):
   :return: (batch,), string
   :rtype: tf.Tensor
   """
-  raise NotImplementedError  # TODO ...
+  import numpy
+
+  def str_replace(strings, old, new, count):
+    assert isinstance(strings, (numpy.ndarray, bytes)), "strings is %r" % (strings,)
+    assert isinstance(old, bytes), "old is %r" % (new,)
+    assert isinstance(new, bytes), "new is %r" % (new,)
+    assert isinstance(count, numpy.int32), "count is %r" % (count,)
+    if isinstance(strings, numpy.ndarray):
+      return numpy.array(
+        [s.replace(old, new, count) for s in strings.flatten()], dtype=strings.dtype).reshape(strings.shape)
+    else:
+      return strings.replace(old, new, count)
+
+  res, = tf.py_func(
+    str_replace,
+    [tf.cast(strings, tf.string),
+     tf.cast(old, tf.string),
+     tf.cast(new, tf.string),
+     tf.cast(count, tf.int32)],
+    [tf.string],
+    stateful=False,
+    name="string_replace")
+  assert isinstance(res, tf.Tensor)
+  res.set_shape(strings.get_shape())
+  return res
 
 
 def bpe_merge(strings):
@@ -5123,3 +5147,45 @@ def bpe_merge(strings):
   :rtype: tf.Tensor
   """
   return string_replace(strings, old="@ ", new="")
+
+
+def words_split(strings):
+  """
+  Basically just tf.string_split with delimiter=" ".
+
+  :param tf.Tensor strings: (batch,), string
+  :return: sparse tensor of shape (batch,max_len), string
+  :rtype: tf.SparseTensor
+  """
+  return tf.string_split(strings)
+
+
+def get_sparse_tensor_length(x):
+  """
+  :param tf.SparseTensor x: of shape prefix + (max_len,), where prefix can be anything, e.g. prefix=(batch,)
+  :return: shape prefix, int64
+  :rtype: tf.Tensor
+  """
+  # x.indices is of shape (N,R), where R==rank(x), and each x.indices[i] is the index entry.
+  # So, x.indices[i, -1] is the position.
+  # We just do it in a simple way here.
+  mask = tf.sparse_to_dense(
+    x.indices, output_shape=x.dense_shape, sparse_values=tf.ones_like(x.values, dtype=tf.int64))  # prefix+(max_len,)
+  return tf.reduce_sum(mask, axis=-1)  # prefix
+
+
+def string_words_calc_wer(hyps, refs):
+  """
+  :param tf.Tensor hyps: (batch,)
+  :param tf.Tensor refs: (batch,)
+  :return: (WER (batch,), num ref words (batch,))
+  :rtype: (tf.Tensor, tf.Tensor)
+  """
+  refs.set_shape(hyps.get_shape())
+  hyps.set_shape(refs.get_shape())
+  hyps_sparse = words_split(hyps)
+  refs_sparse = words_split(refs)
+  wer = tf.edit_distance(hypothesis=hyps_sparse, truth=refs_sparse, normalize=False)
+  wer.set_shape(hyps.get_shape())
+  wer = tf.cast(wer, tf.int64)  # no normalization, should be an integer
+  return wer, get_sparse_tensor_length(refs_sparse)

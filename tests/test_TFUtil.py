@@ -1126,9 +1126,9 @@ def test_check_base_op_type_and_replace_sigmoid():
 
 def test_string_merge():
   strings = [
-    ["sub@", "word", "test", "</s>"],
-    ["hel@", "lo", "wo@", "r@", "ld", "</s>"],
-    ["</s>"]]
+    ["sub@", "word", "test"],
+    ["hel@", "lo", "wo@", "r@", "ld"],
+    ["foo"]]
   seq_lens = [len(seq) for seq in strings]
   max_len = max(seq_lens)
   strings = [seq + [""] * (max_len - len(seq)) for seq in strings]
@@ -1144,7 +1144,62 @@ def test_string_merge():
   print(res)
   res = [s.decode("utf8") for s in res]
   print(res)
-  assert_equal(res, ["sub@ word test </s>", "hel@ lo wo@ r@ ld </s>", "</s>"])
+  assert_equal(res, ["sub@ word test", "hel@ lo wo@ r@ ld", "foo"])
+
+
+def test_string_replace():
+  strings = ["sub@ word test", "hel@ lo wo@ r@ ld", "foo"]
+  tf_strings = tf.placeholder(tf.string, [None])
+  tf_res = string_replace(tf_strings, old="@ ", new="")
+  res = session.run(tf_res, feed_dict={tf_strings: strings})
+  print(res)
+  assert isinstance(res, numpy.ndarray)
+  assert res.shape == (len(strings),)
+  res = res.tolist()
+  print(res)
+  res = [s.decode("utf8") for s in res]
+  print(res)
+  assert_equal(res, ["subword test", "hello world", "foo"])
+
+
+def test_words_split_get_sparse_tensor_length():
+  strings = ["subword test", "a b c d", "hello world", "foo"]
+  word_lens = [len(s.split(" ")) for s in strings]
+  tf_strings = tf.placeholder(tf.string, [None])
+  tf_words = words_split(tf_strings)
+  tf_dense_words = tf.sparse_to_dense(
+    tf_words.indices, tf_words.dense_shape, tf_words.values, default_value="")
+  tf_num_words = get_sparse_tensor_length(tf_words)
+  words, dense_words, num_words = session.run(
+    [tf_words, tf_dense_words, tf_num_words], feed_dict={tf_strings: strings})
+  print(words)
+  print(dense_words)
+  print(num_words)
+  assert isinstance(words, tf.SparseTensorValue)
+  assert isinstance(dense_words, numpy.ndarray)
+  assert isinstance(num_words, numpy.ndarray)
+  assert dense_words.shape == (len(word_lens), max(word_lens))
+  assert num_words.shape == (len(strings),)
+  dense_words = dense_words.tolist()
+  print(dense_words)
+  assert_equal(dense_words, [
+    [b"subword", b"test", b"", b""], [b"a", b"b", b"c", b"d"],
+    [b"hello", b"world", b"", b""], [b"foo", b"", b"", b""]])
+  assert_equal(num_words.tolist(), word_lens)
+
+
+def test_string_words_calc_wer():
+  hyps = ["hello world", "a b c", "how are you", "good"]
+  refs = ["hello nice world", "a x c d", "how are we", "good"]
+  tf_hyps = tf.placeholder(tf.string, [None])
+  tf_refs = tf.placeholder(tf.string, [None])
+  tf_wer, tf_ref_num_words = string_words_calc_wer(hyps=tf_hyps, refs=tf_refs)
+  wer, ref_num_words = session.run([tf_wer, tf_ref_num_words], {tf_hyps: hyps, tf_refs: refs})
+  print(wer, ref_num_words)
+  assert isinstance(wer, numpy.ndarray)
+  assert isinstance(ref_num_words, numpy.ndarray)
+  assert_equal(wer.tolist(), [1, 2, 1, 0])
+  assert_equal(ref_num_words.tolist(), [3, 4, 3, 1])
 
 
 if __name__ == "__main__":
