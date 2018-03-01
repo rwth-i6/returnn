@@ -115,7 +115,7 @@ class MaskBasedGevBeamformingLayer(LayerBase):
 
   layer_class = "mask_based_gevbeamforming"
 
-  def __init__(self, nr_of_channels=1, postfilter_id=0, **kwargs):
+  def __init__(self, nr_of_channels=1, postfilter_id=0, qralgorithm_steps=None, **kwargs):
     """
     :param int nr_of_channels: number of input channels to beamforming (needed to split the feature vector)
     :param int postfilter_id: Id which is specifying which post filter to apply in gev beamforming.
@@ -134,7 +134,7 @@ class MaskBasedGevBeamformingLayer(LayerBase):
     noiseMasks = masks[:, :, :(tf.shape(masks)[2] // 2), :]
     speechMasks = masks[:, :, (tf.shape(masks)[2] // 2):, :]
 
-    gevBf = TfMaskBasedGevBeamformer(flag_inputHasBatch=1, tfFreqDomInput=complexSpectrogram, tfNoiseMask=noiseMasks, tfSpeechMask=speechMasks, postFilterId=postfilter_id)
+    gevBf = TfMaskBasedGevBeamformer(flag_inputHasBatch=1, tfFreqDomInput=complexSpectrogram, tfNoiseMask=noiseMasks, tfSpeechMask=speechMasks, postFilterId=postfilter_id, qrAlgorithmSteps=qralgorithm_steps)
     bfOut = gevBf.getFrequencyDomainOutputSignal()
     self.output.placeholder = bfOut
 
@@ -157,7 +157,7 @@ class MaskBasedMvdrBeamformingWithDiagLoadingLayer(LayerBase):
 
   layer_class = "mask_based_mvdrbeamforming"
 
-  def __init__(self, nr_of_channels=1, diag_loading_coeff=0, **kwargs):
+  def __init__(self, nr_of_channels=1, diag_loading_coeff=0, qralgorithm_steps=None, **kwargs):
     """
     :param int nr_of_channels: number of input channels to beamforming (needed to split the feature vector)
     :param int diag_loading_coeff: weighting coefficient for diagonal loading.
@@ -173,7 +173,7 @@ class MaskBasedMvdrBeamformingWithDiagLoadingLayer(LayerBase):
     noiseMasks = self.sources[1].output.get_placeholder_as_batch_major()
     noiseMasks = tf.transpose(tf.reshape(noiseMasks, (tf.shape(noiseMasks)[0], tf.shape(noiseMasks)[1], nr_of_channels, tf.shape(noiseMasks)[2] // nr_of_channels)), [0, 1, 3, 2])
 
-    mvdrBf = TfMaskBasedMvdrBeamformer(flag_inputHasBatch=1, tfFreqDomInput=complexSpectrogram, tfNoiseMask=noiseMasks, tfDiagLoadingCoeff=tf.constant(diag_loading_coeff, dtype=tf.float32))
+    mvdrBf = TfMaskBasedMvdrBeamformer(flag_inputHasBatch=1, tfFreqDomInput=complexSpectrogram, tfNoiseMask=noiseMasks, tfDiagLoadingCoeff=tf.constant(diag_loading_coeff, dtype=tf.float32), qrAlgorithmSteps=qralgorithm_steps)
     bfOut = mvdrBf.getFrequencyDomainOutputSignal()
     self.output.placeholder = bfOut
 
