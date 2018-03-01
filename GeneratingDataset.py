@@ -1532,7 +1532,7 @@ class LibriSpeechCorpus(CachedDataset2):
                **kwargs):
     """
     :param str path: dir, should contain "train-*/*/*/{*.flac,*.trans.txt}", or "train-*.zip"
-    :param str prefix: "train", "dev" or "test"
+    :param str prefix: "train", "dev", "test", "dev-clean", "dev-other", ...
     :param dict[str] bpe: options for :class:`BytePairEncoding`
     :param dict[str] audio: options for :class:`ExtractAudioFeatures`
     :param bool use_zip: whether to use the ZIP files instead (better for NFS)
@@ -1555,7 +1555,7 @@ class LibriSpeechCorpus(CachedDataset2):
     self.use_zip = use_zip
     self._zip_files = None
     if use_zip:
-      zip_fn_pattern = "%s/%s-*.zip" % (self.path, self.prefix)
+      zip_fn_pattern = "%s/%s*.zip" % (self.path, self.prefix)
       zip_fns = sorted(glob(zip_fn_pattern))
       assert zip_fns, "no files found: %r" % zip_fn_pattern
       if use_cache_manager:
@@ -1563,10 +1563,10 @@ class LibriSpeechCorpus(CachedDataset2):
       self._zip_files = {
         os.path.splitext(os.path.basename(fn))[0]: zipfile.ZipFile(fn)
         for fn in zip_fns}  # e.g. "train-clean-100" -> ZipFile
-    assert prefix in ["train", "dev", "test"]
+    assert prefix.split("-")[0] in ["train", "dev", "test"]
     assert os.path.exists(path + "/train-clean-100" + (".zip" if use_zip else ""))
     self.bpe = BytePairEncoding(**bpe)
-    self.labels = self.bpe.labels
+    self.labels = {"classes": self.bpe.labels}
     self._fixed_random_seed = fixed_random_seed
     self._audio_random = numpy.random.RandomState(1)
     self.feature_extractor = ExtractAudioFeatures(random_state=self._audio_random, **audio)
@@ -1602,7 +1602,7 @@ class LibriSpeechCorpus(CachedDataset2):
           assert isinstance(info, zipfile.ZipInfo)
           path = info.filename.split("/")
           assert path[0] == "LibriSpeech", "does not expect %r (%r)" % (info, info.filename)
-          if path[1].startswith(self.prefix + "-"):
+          if path[1].startswith(self.prefix):
             subdir = path[1]  # e.g. "train-clean-100"
             assert subdir == name
             if path[-1].endswith(".trans.txt"):
@@ -1611,7 +1611,7 @@ class LibriSpeechCorpus(CachedDataset2):
                 speaker_id, chapter_id, seq_id = map(int, seq_name.split("-"))
                 transs[(subdir, speaker_id, chapter_id, seq_id)] = txt
     else:  # not zipped, directly read extracted files
-      for subdir in glob("%s/%s-*" % (self.path, self.prefix)):
+      for subdir in glob("%s/%s*" % (self.path, self.prefix)):
         if not os.path.isdir(subdir):
           continue
         subdir = os.path.basename(subdir)  # e.g. "train-clean-100"
@@ -1620,7 +1620,7 @@ class LibriSpeechCorpus(CachedDataset2):
             seq_name, txt = l.split(" ", 1)
             speaker_id, chapter_id, seq_id = map(int, seq_name.split("-"))
             transs[(subdir, speaker_id, chapter_id, seq_id)] = txt
-      assert transs, "did not found anything %s/%s-*" % (self.path, self.prefix)
+      assert transs, "did not found anything %s/%s*" % (self.path, self.prefix)
     assert transs
     return transs
 
