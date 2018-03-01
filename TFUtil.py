@@ -5146,7 +5146,7 @@ def bpe_merge(strings):
   :return: (batch,), string. strings after BPE merging
   :rtype: tf.Tensor
   """
-  return string_replace(strings, old="@ ", new="")
+  return string_replace(strings, old="@@ ", new="")
 
 
 def words_split(strings):

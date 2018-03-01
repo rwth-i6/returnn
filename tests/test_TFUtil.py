@@ -1126,8 +1126,8 @@ def test_check_base_op_type_and_replace_sigmoid():
 
 def test_string_merge():
   strings = [
-    ["sub@", "word", "test"],
-    ["hel@", "lo", "wo@", "r@", "ld"],
+    ["sub@@", "word", "test"],
+    ["hel@@", "lo", "wo@@", "r@@", "ld"],
     ["foo"]]
   seq_lens = [len(seq) for seq in strings]
   max_len = max(seq_lens)
@@ -1144,13 +1144,13 @@ def test_string_merge():
   print(res)
   res = [s.decode("utf8") for s in res]
   print(res)
-  assert_equal(res, ["sub@ word test", "hel@ lo wo@ r@ ld", "foo"])
+  assert_equal(res, ["sub@@ word test", "hel@@ lo wo@@ r@@ ld", "foo"])
 
 
 def test_string_replace():
-  strings = ["sub@ word test", "hel@ lo wo@ r@ ld", "foo"]
+  strings = ["sub@@ word test", "hel@@ lo wo@@ r@@ ld", "foo"]
   tf_strings = tf.placeholder(tf.string, [None])
-  tf_res = string_replace(tf_strings, old="@ ", new="")
+  tf_res = string_replace(tf_strings, old="@@ ", new="")
   res = session.run(tf_res, feed_dict={tf_strings: strings})
   print(res)
   assert isinstance(res, numpy.ndarray)
