@@ -44,12 +44,14 @@ class WerComputeGraph:
     return session.run(self.updated_normalized_wer, feed_dict={self.hyps: hyps, self.refs: refs})
 
 
-def calc_wer_on_dataset(dataset, options, hyps):
+def calc_wer_on_dataset(dataset, refs, options, hyps):
   """
-  :param Dataset dataset:
+  :param Dataset|None dataset:
+  :param dict[str,str]|None refs: seq tag -> ref string (words delimited by space)
   :param options: argparse.Namespace
   :param dict[str,str] hyps: seq tag -> hyp string (words delimited by space)
   """
+  assert dataset or refs
   start_time = time.time()
   seq_len_stats = {"refs": Stats(), "hyps": Stats()}
   seq_idx = options.startseq
@@ -60,33 +62,53 @@ def calc_wer_on_dataset(dataset, options, hyps):
   interactive = Util.is_tty() and not log.verbose[5]
   collected = {"hyps": [], "refs": []}
   max_num_collected = 1
-  while dataset.is_less_than_num_seqs(seq_idx) and seq_idx <= options.endseq:
-    dataset.load_seqs(seq_idx, seq_idx + 1)
-    complete_frac = dataset.get_complete_frac(seq_idx)
-    start_elapsed = time.time() - start_time
-    try:
-      num_seqs_s = str(dataset.num_seqs)
-    except NotImplementedError:
+  if dataset:
+    dataset.init_seq_order(epoch=1)
+  else:
+    refs = sorted(refs.items(), key=lambda item: len(item[1]))
+  while True:
+    if seq_idx > options.endseq:
+      break
+    if dataset:
+      if not dataset.is_less_than_num_seqs(seq_idx):
+        break
+      dataset.load_seqs(seq_idx, seq_idx + 1)
+      complete_frac = dataset.get_complete_frac(seq_idx)
+      seq_tag = dataset.get_tag(seq_idx)
+      assert isinstance(seq_tag, str)
+      ref = dataset.get_data(seq_idx, options.key)
+      if isinstance(ref, numpy.ndarray):
+        assert ref.shape == ()
+        ref = ref.flatten()[0]  # get the entry itself (str or bytes)
+      if isinstance(ref, bytes):
+        ref = ref.decode("utf8")
+      assert isinstance(ref, str)
       try:
-        num_seqs_s = "~%i" % dataset.estimated_num_seqs
-      except TypeError:  # a number is required, not NoneType
-        num_seqs_s = "?"
+        num_seqs_s = str(dataset.num_seqs)
+      except NotImplementedError:
+        try:
+          num_seqs_s = "~%i" % dataset.estimated_num_seqs
+        except TypeError:  # a number is required, not NoneType
+          num_seqs_s = "?"
+    else:
+      if seq_idx >= len(refs):
+        break
+      complete_frac = (seq_idx + 1) / float(len(refs))
+      seq_tag, ref = refs[seq_idx]
+      assert isinstance(seq_tag, str)
+      assert isinstance(ref, str)
+      num_seqs_s = str(len(refs))
+
+    start_elapsed = time.time() - start_time
     progress_prefix = "%i/%s (WER %.02f%%)" % (seq_idx, num_seqs_s, wer * 100)
     progress = "%s (%.02f%%)" % (progress_prefix, complete_frac * 100)
     if complete_frac > 0:
       total_time_estimated = start_elapsed / complete_frac
       remaining_estimated = total_time_estimated - start_elapsed
       progress += " (%s)" % hms(remaining_estimated)
-    seq_tag = dataset.get_tag(seq_idx)
+
     remaining_hyp_seq_tags.remove(seq_tag)
     hyp = hyps[seq_tag]
-    ref = dataset.get_data(seq_idx, options.key)
-    if isinstance(ref, numpy.ndarray):
-      assert ref.shape == ()
-      ref = ref.flatten()[0]  # get the entry itself (str or bytes)
-    if isinstance(ref, bytes):
-      ref = ref.decode("utf8")
-    assert isinstance(ref, str)
     seq_len_stats["hyps"].collect([len(hyp)])
     seq_len_stats["refs"].collect([len(ref)])
     collected["hyps"].append(hyp)
@@ -99,45 +121,39 @@ def calc_wer_on_dataset(dataset, options, hyps):
 
     if interactive:
       Util.progress_bar_with_time(complete_frac, prefix=progress_prefix)
-    else:
+    elif log.verbose[5]:
       print(progress_prefix, "seq tag %r, ref/hyp len %i/%i chars" % (seq_tag, len(ref), len(hyp)))
     seq_idx += 1
   if len(collected["hyps"]) > 0:
     wer = wer_compute.step(session, **collected)
   print("Done. Num seqs %i. Total time %s." % (
     seq_idx, hms(time.time() - start_time)), file=log.v1)
-  print("Remaining num hyp seqs %i. More seqs which we did not dumped: %s." % (
-    len(remaining_hyp_seq_tags), dataset.is_less_than_num_seqs(seq_idx),), file=log.v1)
+  print("Remaining num hyp seqs %i." % (len(remaining_hyp_seq_tags),), file=log.v1)
+  if dataset:
+    print("More seqs which we did not dumped: %s." % dataset.is_less_than_num_seqs(seq_idx), file=log.v1)
   print("Final WER: %.02f%%" % (wer * 100), file=log.v1)
 
   for key in ["hyps", "refs"]:
-    seq_len_stats[key].dump(stream_prefix="Seq-length %r %r" % (key, options.key), stream=log.v2)
+    seq_len_stats[key].dump(stream_prefix="Seq-length %r %r " % (key, options.key), stream=log.v2)
 
 
-def init(config_str, log_verbosity):
+def init(config_filename, log_verbosity):
   """
-  :param str config_str: either filename to config-file, or dict for dataset
+  :param str config_filename: filename to config-file
   :param int log_verbosity:
   """
   rnn.initBetterExchook()
   rnn.initThreadJoinHack()
-  if config_str.strip().startswith("{"):
-    print("Using dataset %s." % config_str)
-    datasetDict = eval(config_str.strip())
-    configFilename = None
-  else:
-    datasetDict = None
-    configFilename = config_str
-    print("Using config file %r." % configFilename)
-    assert os.path.exists(configFilename)
-  rnn.initConfig(configFilename=configFilename, commandLineOptions=[])
+  if config_filename:
+    print("Using config file %r." % config_filename)
+    assert os.path.exists(config_filename)
+  rnn.initConfig(configFilename=config_filename, commandLineOptions=[])
   global config
   config = rnn.config
   config.set("task", "calculate_wer")
   config.set("log", None)
   config.set("log_verbosity", log_verbosity)
-  if datasetDict:
-    config.set("eval", datasetDict)
+  config.set("use_tensorflow", True)
   rnn.initLog()
   print("Returnn calculate-word-error-rate starting up.", file=log.v1)
   rnn.returnnGreeting()
@@ -148,32 +164,48 @@ def init(config_str, log_verbosity):
   rnn.printTaskProperties()
 
 
+def load_hyps_refs(filename):
+  """
+  :param str filename:
+  :return: dict of seq_tag -> ref
+  :rtype: dict[str,str]
+  """
+  content = eval(open(filename).read())
+  # See dump-dataset-raw-strings.py.
+  # We expect that it is stored as a dict.
+  assert isinstance(content, dict)
+  assert len(content) > 0
+  example_hyp = next(iter(content.items()))
+  assert isinstance(example_hyp[0], str)  # seq tag
+  assert isinstance(example_hyp[1], str)  # hyp
+  return content
+
+
 def main(argv):
   argparser = argparse.ArgumentParser(description='Dump something from dataset.')
-  argparser.add_argument('crnn_config', help="either filename to config-file, or dict for dataset")
+  argparser.add_argument('--config', help="filename to config-file. will use dataset 'eval' from it")
+  argparser.add_argument("--dataset", help="dataset, overwriting config")
+  argparser.add_argument("--refs", help="same format as hyps. alternative to providing dataset/config")
   argparser.add_argument("--hyps", help="hypotheses, dumped via search in py format")
   argparser.add_argument('--startseq', type=int, default=0, help='start seq idx (inclusive) (default: 0)')
   argparser.add_argument('--endseq', type=int, default=-1, help='end seq idx (inclusive) or -1 (default: -1)')
   argparser.add_argument("--key", default="raw", help="data-key, e.g. 'data' or 'classes'. (default: 'raw')")
   argparser.add_argument("--verbosity", default=4, type=int, help="5 for all seqs (default: 4)")
-  argparser.add_argument("--data")
   args = argparser.parse_args(argv[1:])
+  assert args.config or args.dataset or args.refs
 
-  init(config_str=args.crnn_config, log_verbosity=args.verbosity)
-  if args.data:
-    dataset = init_dataset(args.data)
+  init(config_filename=args.config, log_verbosity=args.verbosity)
+  dataset = None
+  refs = None
+  if args.refs:
+    refs = load_hyps_refs(args.refs)
+  elif args.dataset:
+    dataset = init_dataset(args.dataset)
   elif config.value("wer_data", "eval") in ["train", "dev", "eval"]:
     dataset = init_dataset(config.opt_typed_value(config.value("search_data", "eval")))
   else:
     dataset = init_dataset(config.opt_typed_value("wer_data"))
-  dataset.init_seq_order(epoch=1)
-
-  hyps = eval(open(args.hyps).read())
-  assert isinstance(hyps, dict)
-  assert len(hyps) > 0
-  example_hyp = next(iter(hyps.items()))
-  assert isinstance(example_hyp[0], str)  # seq tag
-  assert isinstance(example_hyp[1], str)  # hyp
+  hyps = load_hyps_refs(args.hyps)
 
   global wer_compute
   wer_compute = WerComputeGraph()
@@ -182,7 +214,7 @@ def main(argv):
     session = _session
     session.run(tf.global_variables_initializer())
     try:
-      calc_wer_on_dataset(dataset=dataset, options=args, hyps=hyps)
+      calc_wer_on_dataset(dataset=dataset, refs=refs, options=args, hyps=hyps)
     except KeyboardInterrupt:
       print("KeyboardInterrupt")
       sys.exit(1)
