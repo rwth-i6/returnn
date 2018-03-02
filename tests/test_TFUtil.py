@@ -533,6 +533,59 @@ def test_windowed_nd_big():
   real = windowed_nd(source, window_size=window, time_axis=0, new_window_axis=1).eval()
   numpy.testing.assert_almost_equal(naive, real)
 
+def naive_slice_nd(x, start, size):
+  slices_shape = [x.shape[0], size] + list(x.shape)[2:]
+  ys = numpy.zeros(shape=slices_shape)
+  for i in range(len(start)):
+      time_len = len(x[i])
+      end = start[i] + size
+      if time_len < end:
+          end = time_len
+      y = x[i][start[i]:end]
+
+      # padding
+      if time_len < start[i] + size:
+         y = numpy.pad(y, [[0,start[i]+size-time_len], [0,0]], mode='constant')
+      ys[i] = y
+  return ys
+
+
+def test_slice_nd_small():
+  n_batch = 3
+  n_time = 4
+  n_dim = 2
+  size = 2
+  start = numpy.array([0,2,3])
+  source = numpy.arange(1, n_batch*n_time*n_dim + 1, dtype=numpy.float32).reshape(n_batch, n_time, n_dim)
+  naive = naive_slice_nd(source, start, size)
+  real = slice_nd(source, start=start, size=size).eval()
+  print("source:")
+  print(source)
+  print("naive:")
+  print(naive)
+  print("real:")
+  print(real)
+  numpy.testing.assert_almost_equal(naive, real)
+
+def test_slice_nd_big():
+  n_batch = 8
+  n_time = 12
+  n_dim = 4
+  size = 4
+  numpy.random.seed(123)
+  start = numpy.random.randint(low=0, high=12, size=(n_batch,))
+  source = numpy.random.random((n_batch, n_time, n_dim))
+  naive = naive_slice_nd(source, start, size)
+  real = slice_nd(source, start=start, size=size).eval()
+  print("source:")
+  print(source)
+  print("naive:")
+  print(naive)
+  print("real:")
+  print(real)
+  numpy.testing.assert_almost_equal(naive, real)
+
+
 
 def test_CustomGradient_register_new_graph_generic_loss_and_error_signal():
   def check():

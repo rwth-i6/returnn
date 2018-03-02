@@ -3197,7 +3197,35 @@ def slice_nd(x, start, size, seq_lens=None):
   :rtype: tf.Tensor
   """
   with tf.name_scope("slice_nd"):
-    pass  # TODO...
+    shape = tf.shape(x)
+    n_batch = shape[0]
+
+    batch_idxs = expand_dims_unbroadcast(tf.range(n_batch), 1, size)  # (n_batch, size)
+    batch_idxs = tf.reshape(batch_idxs, (-1,))  # (n_batch*size,)
+
+
+    window_pos = start[:,None] + tf.range(size)  # (n_batch, size)
+    window_pos = tf.reshape(window_pos, (-1,))  # (n_batch*size,)
+
+    # build mask for zero-padding
+    mask = window_pos > shape[1]-1  # (n_batch*size,) tf.bool
+
+    # clip indices so that gather_nd doesn't fail, will zero-pad later
+    clip_time_idx = tf.clip_by_value(window_pos, 0, shape[1]-1)
+    indices = tf.stack([batch_idxs, clip_time_idx])  # (n_batch*size, 2)
+    indices = tf.transpose(indices)  # (2, n_batch*size)
+
+
+    slices = tf.gather_nd(x, indices)  # (n_batch*size, ...)
+
+    # (B, size, ...), we assume time-axis is/was 1
+    new_shape = tf.concat([[shape[0], size], shape[2:]], axis=0)
+
+    # zero-pad
+    slices = tf.where(mask, tf.zeros_like(slices), slices)
+
+    slices = tf.reshape(slices, new_shape)  # (B, size, ...)
+    return slices
 
 
 def global_tensor(f, name):
