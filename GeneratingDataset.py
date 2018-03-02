@@ -1529,6 +1529,7 @@ class LibriSpeechCorpus(CachedDataset2):
   def __init__(self, path, prefix, bpe, audio, use_zip=False, use_cache_manager=False,
                partition_epoch=None, fixed_random_seed=None, fixed_random_subset=None,
                epoch_wise_filter=None,
+               name=None,
                **kwargs):
     """
     :param str path: dir, should contain "train-*/*/*/{*.flac,*.trans.txt}", or "train-*.zip"
@@ -1545,7 +1546,9 @@ class LibriSpeechCorpus(CachedDataset2):
       i.e. not dependent on the epoch. It will use an internally hardcoded fixed random seed, i.e. its deterministic.
     :param dict|None epoch_wise_filter: see init_seq_order
     """
-    super(LibriSpeechCorpus, self).__init__(**kwargs)
+    if not name:
+      name = "prefix:" + prefix
+    super(LibriSpeechCorpus, self).__init__(name=name, **kwargs)
     import os
     from glob import glob
     import zipfile

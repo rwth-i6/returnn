@@ -790,7 +790,10 @@ def init_dataset(kwargs):
   if callable(kwargs):
     return init_dataset(kwargs())
   if isinstance(kwargs, (str, unicode)):
-    return init_dataset_via_str(config_str=kwargs)
+    if kwargs.startswith("{"):
+      kwargs = eval(kwargs)
+    else:
+      return init_dataset_via_str(config_str=kwargs)
   assert isinstance(kwargs, dict)
   kwargs = kwargs.copy()
   assert "class" in kwargs
