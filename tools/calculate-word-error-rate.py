@@ -58,6 +58,8 @@ def calc_wer_on_dataset(dataset, options, hyps):
   wer = 1.0
   remaining_hyp_seq_tags = set(hyps.keys())
   interactive = Util.is_tty() and not log.verbose[5]
+  collected = {"hyps": [], "refs": []}
+  max_num_collected = 1
   while dataset.is_less_than_num_seqs(seq_idx) and seq_idx <= options.endseq:
     dataset.load_seqs(seq_idx, seq_idx + 1)
     complete_frac = dataset.get_complete_frac(seq_idx)
@@ -76,6 +78,7 @@ def calc_wer_on_dataset(dataset, options, hyps):
       remaining_estimated = total_time_estimated - start_elapsed
       progress += " (%s)" % hms(remaining_estimated)
     seq_tag = dataset.get_tag(seq_idx)
+    remaining_hyp_seq_tags.remove(seq_tag)
     hyp = hyps[seq_tag]
     ref = dataset.get_data(seq_idx, options.key)
     if isinstance(ref, numpy.ndarray):
@@ -84,15 +87,23 @@ def calc_wer_on_dataset(dataset, options, hyps):
     if isinstance(ref, bytes):
       ref = ref.decode("utf8")
     assert isinstance(ref, str)
-    wer = wer_compute.step(session, hyps=[hyp], refs=[ref])
     seq_len_stats["hyps"].collect([len(hyp)])
     seq_len_stats["refs"].collect([len(ref)])
-    remaining_hyp_seq_tags.remove(seq_tag)
+    collected["hyps"].append(hyp)
+    collected["refs"].append(ref)
+
+    if len(collected["hyps"]) >= max_num_collected:
+      wer = wer_compute.step(session, **collected)
+      del collected["hyps"][:]
+      del collected["refs"][:]
+
     if interactive:
       Util.progress_bar_with_time(complete_frac, prefix=progress_prefix)
     else:
       print(progress_prefix, "seq tag %r, ref/hyp len %i/%i chars" % (seq_tag, len(ref), len(hyp)))
     seq_idx += 1
+  if len(collected["hyps"]) > 0:
+    wer = wer_compute.step(session, **collected)
   print("Done. Num seqs %i. Total time %s." % (
     seq_idx, hms(time.time() - start_time)), file=log.v1)
   print("Remaining num hyp seqs %i. More seqs which we did not dumped: %s." % (
