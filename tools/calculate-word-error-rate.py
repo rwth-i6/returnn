@@ -57,6 +57,7 @@ def calc_wer_on_dataset(dataset, options, hyps):
     options.endseq = float("inf")
   wer = 1.0
   remaining_hyp_seq_tags = set(hyps.keys())
+  interactive = Util.is_tty() and not log.verbose[5]
   while dataset.is_less_than_num_seqs(seq_idx) and seq_idx <= options.endseq:
     dataset.load_seqs(seq_idx, seq_idx + 1)
     complete_frac = dataset.get_complete_frac(seq_idx)
@@ -87,9 +88,11 @@ def calc_wer_on_dataset(dataset, options, hyps):
     seq_len_stats["hyps"].collect([len(hyp)])
     seq_len_stats["refs"].collect([len(ref)])
     remaining_hyp_seq_tags.remove(seq_tag)
-    Util.progress_bar_with_time(complete_frac, prefix=progress_prefix)
+    if interactive:
+      Util.progress_bar_with_time(complete_frac, prefix=progress_prefix)
+    else:
+      print(progress_prefix, "seq tag %r, ref/hyp len %i/%i chars" % (seq_tag, len(ref), len(hyp)))
     seq_idx += 1
-
   print("Done. Num seqs %i. Total time %s." % (
     seq_idx, hms(time.time() - start_time)), file=log.v1)
   print("Remaining num hyp seqs %i. More seqs which we did not dumped: %s." % (
@@ -100,9 +103,10 @@ def calc_wer_on_dataset(dataset, options, hyps):
     seq_len_stats[key].dump(stream_prefix="Seq-length %r %r" % (key, options.key), stream=log.v2)
 
 
-def init(config_str):
+def init(config_str, log_verbosity):
   """
   :param str config_str: either filename to config-file, or dict for dataset
+  :param int log_verbosity:
   """
   rnn.initBetterExchook()
   rnn.initThreadJoinHack()
@@ -120,7 +124,7 @@ def init(config_str):
   config = rnn.config
   config.set("task", "calculate_wer")
   config.set("log", None)
-  config.set("log_verbosity", 4)
+  config.set("log_verbosity", log_verbosity)
   if datasetDict:
     config.set("eval", datasetDict)
   rnn.initLog()
@@ -140,10 +144,11 @@ def main(argv):
   argparser.add_argument('--startseq', type=int, default=0, help='start seq idx (inclusive) (default: 0)')
   argparser.add_argument('--endseq', type=int, default=-1, help='end seq idx (inclusive) or -1 (default: -1)')
   argparser.add_argument("--key", default="raw", help="data-key, e.g. 'data' or 'classes'. (default: 'raw')")
+  argparser.add_argument("--verbosity", default=4, type=int, help="5 for all seqs (default: 4)")
   argparser.add_argument("--data")
   args = argparser.parse_args(argv[1:])
 
-  init(config_str=args.crnn_config)
+  init(config_str=args.crnn_config, log_verbosity=args.verbosity)
   if args.data:
     dataset = init_dataset(args.data)
   elif config.value("wer_data", "eval") in ["train", "dev", "eval"]:
