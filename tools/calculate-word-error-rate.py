@@ -50,6 +50,8 @@ def calc_wer_on_dataset(dataset, refs, options, hyps):
   :param dict[str,str]|None refs: seq tag -> ref string (words delimited by space)
   :param options: argparse.Namespace
   :param dict[str,str] hyps: seq tag -> hyp string (words delimited by space)
+  :return: WER
+  :rtype: float
   """
   assert dataset or refs
   start_time = time.time()
@@ -131,10 +133,11 @@ def calc_wer_on_dataset(dataset, refs, options, hyps):
   print("Remaining num hyp seqs %i." % (len(remaining_hyp_seq_tags),), file=log.v1)
   if dataset:
     print("More seqs which we did not dumped: %s." % dataset.is_less_than_num_seqs(seq_idx), file=log.v1)
-  print("Final WER: %.02f%%" % (wer * 100), file=log.v1)
-
   for key in ["hyps", "refs"]:
     seq_len_stats[key].dump(stream_prefix="Seq-length %r %r " % (key, options.key), stream=log.v2)
+  if options.expect_full:
+    assert not remaining_hyp_seq_tags, "There are still remaining hypotheses."
+  return wer
 
 
 def init(config_filename, log_verbosity):
@@ -191,6 +194,8 @@ def main(argv):
   argparser.add_argument('--endseq', type=int, default=-1, help='end seq idx (inclusive) or -1 (default: -1)')
   argparser.add_argument("--key", default="raw", help="data-key, e.g. 'data' or 'classes'. (default: 'raw')")
   argparser.add_argument("--verbosity", default=4, type=int, help="5 for all seqs (default: 4)")
+  argparser.add_argument("--out", help="if provided, will write WER% (as string) to this file")
+  argparser.add_argument("--expect_full", action="store_true", help="full dataset should be scored")
   args = argparser.parse_args(argv[1:])
   assert args.config or args.dataset or args.refs
 
@@ -214,7 +219,12 @@ def main(argv):
     session = _session
     session.run(tf.global_variables_initializer())
     try:
-      calc_wer_on_dataset(dataset=dataset, refs=refs, options=args, hyps=hyps)
+      wer = calc_wer_on_dataset(dataset=dataset, refs=refs, options=args, hyps=hyps)
+      print("Final WER: %.02f%%" % (wer * 100), file=log.v1)
+      if args.out:
+        with open(args.out, "w") as output_file:
+          output_file.write("%.02f\n" % (wer * 100))
+        print("Wrote WER%% to %r." % args.out)
     except KeyboardInterrupt:
       print("KeyboardInterrupt")
       sys.exit(1)
