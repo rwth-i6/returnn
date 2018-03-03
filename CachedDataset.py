@@ -458,6 +458,8 @@ class CachedDataset(Dataset):
   def get_data_dim(self, key):
     if key == "data":
       return self.num_inputs * self.window
+    if key in self.num_outputs:
+      return self.num_outputs[key][0]
     return 1 if len(self.targets[key].shape) == 1 else self.targets[key].shape[1]
 
   def get_targets(self, target, sorted_seq_idx):
