@@ -408,6 +408,7 @@ def executeMainTask():
       data = init_dataset(config.opt_typed_value("search_data"))
     engine.search(
       data,
+      do_eval=config.bool("search_do_eval", True),
       output_layer_name=config.value("search_output_layer", "output"),
       output_file=config.value("search_output_file", ""),
       output_file_format=config.value("search_output_file_format", "txt"))
