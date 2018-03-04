@@ -3042,6 +3042,16 @@ class ConcatAttentionLayer(GlobalAttentionContextBaseLayer):
       self.output.size_placeholder = {}
 
 
+class GenericWindowAttentionLayer(AttentionBaseLayer):
+  """
+  """
+  layer_class = "generic_window_attention"
+
+  def __init__(self, weights, window_size, **kwargs):
+    super(GenericWindowAttentionLayer, self).__init__(**kwargs)
+    with tf.name_scope("base"):
+      base = self.base.output.get_placeholder_as_time_major()
+
 class GaussWindowAttentionLayer(AttentionBaseLayer):
   """
   Interprets the incoming source as the location (float32, shape (batch,))

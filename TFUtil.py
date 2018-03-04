@@ -3197,14 +3197,14 @@ def slice_nd(x, start, size, seq_lens=None):
   :rtype: tf.Tensor
   """
   with tf.name_scope("slice_nd"):
-    shape = tf.shape(x)
+    shape = get_shape(x)
     n_batch = shape[0]
 
     batch_idxs = expand_dims_unbroadcast(tf.range(n_batch), 1, size)  # (n_batch, size)
     batch_idxs = tf.reshape(batch_idxs, (-1,))  # (n_batch*size,)
 
 
-    window_pos = start[:,None] + tf.range(size)  # (n_batch, size)
+    window_pos = tf.expand_dims(start,1) + tf.range(size)  # (n_batch, size)
     window_pos = tf.reshape(window_pos, (-1,))  # (n_batch*size,)
 
     # build mask for zero-padding

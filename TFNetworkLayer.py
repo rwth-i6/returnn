@@ -1675,8 +1675,37 @@ class SliceNdLayer(_ConcatInputLayer):
     :param int size:
     """
     super(SliceNdLayer, self).__init__(**kwargs)
-    from TFUtil import slice_nd
-    # TODO...
+    from TFUtil import slice_nd, dimshuffle
+    x = self.input_data.copy_as_batch_major()
+    start = start.output.get_placeholder_as_batch_major()
+    start = dimshuffle(start, [0, 'x'])  # (B, T, ...)
+    axis = x.time_dim_axis
+    assert axis == 1, "currently only time-axis==1 supported"
+    slices = slice_nd(x.placeholder, tf.cast(start, tf.int32), size)  # (B,size, ...)
+
+    self.output.size_placeholder = x.size_placeholder.copy()
+    self.output.size_placeholder.pop(0, None)  # static time axis
+    self.output.placeholder = slices
+
+  @classmethod
+  def get_out_data_from_opts(
+        cls, name, sources=(),
+        start=None, size=None, **kwargs):
+    input_data = get_concat_sources_data_template(sources).copy_as_batch_major()
+    in_shape = list(input_data.shape)
+    shape = [size] + in_shape[1:]  # (B, size, ...) (w/o batch)
+    out_type = input_data.get_kwargs()
+    out_type["name"] = "%s_output" % name
+    out_type["shape"] = shape
+    out_type["batch_dim_axis"] = 0
+    return Data(**out_type)
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    super(SliceNdLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    d["start"] = get_layer(d["start"])
+
+
 
 
 class LinearLayer(_ConcatInputLayer):

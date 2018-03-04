@@ -555,10 +555,11 @@ def test_slice_nd_small():
   n_time = 4
   n_dim = 2
   size = 2
-  start = numpy.array([0,2,3])
-  source = numpy.arange(1, n_batch*n_time*n_dim + 1, dtype=numpy.float32).reshape(n_batch, n_time, n_dim)
+  start = numpy.array([0,2,3]).astype("int32")
+  source = numpy.arange(1, n_batch*n_time*n_dim + 1, dtype=numpy.float32).reshape(n_batch, n_time, n_dim).astype("float32")
+  source_tf = tf.constant(source)
   naive = naive_slice_nd(source, start, size)
-  real = slice_nd(source, start=start, size=size).eval()
+  real = slice_nd(source_tf, start=start, size=size).eval()
   print("source:")
   print(source)
   print("naive:")
@@ -573,10 +574,11 @@ def test_slice_nd_big():
   n_dim = 4
   size = 4
   numpy.random.seed(123)
-  start = numpy.random.randint(low=0, high=12, size=(n_batch,))
-  source = numpy.random.random((n_batch, n_time, n_dim))
+  start = numpy.random.randint(low=0, high=12, size=(n_batch,), dtype="int32")
+  source = numpy.random.random((n_batch, n_time, n_dim)).astype("float32")
+  source_tf = tf.constant(source)
   naive = naive_slice_nd(source, start, size)
-  real = slice_nd(source, start=start, size=size).eval()
+  real = slice_nd(source_tf, start=start, size=size).eval()
   print("source:")
   print(source)
   print("naive:")
