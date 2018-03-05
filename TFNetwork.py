@@ -794,15 +794,19 @@ class TFNetwork(object):
       l[layer_name] = layer.get_param_values_dict(session)
     return l
 
-  def set_param_values_by_dict(self, values_dict, **kwargs):
+  def set_param_values_by_dict(self, values_dict, ignore_non_existing=False, **kwargs):
     """
     :param dict[str,dict[str,numpy.ndarray]] values_dict:
+    :param bool ignore_non_existing:
     :param kwargs: passed to :func:`LayerBase.set_param_values_by_dict`
 
     Note that this excludes auxiliary params.
     """
     for layer_name, layer_values_dict in values_dict.items():
       if layer_values_dict:
+        if ignore_non_existing and layer_name not in self.layers:
+          print("Will not set layer %r because it does not exist." % (layer_name,), file=log.v3)
+          continue
         self.layers[layer_name].set_param_values_by_dict(values_dict=layer_values_dict, **kwargs)
 
   def get_auxiliary_params(self):
