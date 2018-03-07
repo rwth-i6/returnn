@@ -1193,7 +1193,7 @@ class TFNetworkParamsSerialized(object):
   """
   def __init__(self, values_dict, global_train_step):
     """
-    :param dict[str,dict[str,numpy.ndarray]] values_dict:
+    :param dict[str,dict[str,numpy.ndarray]] values_dict: dict: layer_name -> param_name -> variable numpy array
     :param int global_train_step:
     """
     self.values_dict = values_dict

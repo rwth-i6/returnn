@@ -3705,6 +3705,11 @@ class SubnetworkLayer(LayerBase):
       self_prefix = self.get_absolute_name_scope_prefix()
 
       def make_var_post_init(var):
+        """
+        :param tf.Variable var:
+        :return: function
+        :rtype: (tf.Session)->None
+        """
         assert var.name.startswith(self_prefix)
         assert var.name[-2:] == ":0"
         v_name = var.name[len(self_prefix):-2]
