@@ -3719,32 +3719,11 @@ class SubnetworkLayer(LayerBase):
       self.params.update({"%s/%s" % (layer.name, k): v for (k, v) in layer.params.items()})
       self.rec_vars_outputs.update({"%s/%s" % (layer.name, k): v for (k, v) in layer.rec_vars_outputs.items()})
     if load_on_init:
-      reader = tf.train.NewCheckpointReader(load_on_init)
-      var_ckpt_names = set(reader.get_variable_to_shape_map())
-      self_prefix = self.get_absolute_name_scope_prefix()
-
-      def make_var_post_init(var):
-        """
-        :param tf.Variable var:
-        :return: function
-        :rtype: (tf.Session)->None
-        """
-        assert var.name.startswith(self_prefix)
-        assert var.name[-2:] == ":0"
-        v_name = var.name[len(self_prefix):-2]
-        assert v_name in var_ckpt_names
-
-        def var_post_init(session):
-          value = reader.get_tensor(v_name)
-          assigner = self.network.get_var_assigner(var)
-          assigner.assign(value=value, session=session)
-
-        return var_post_init
-
-      for var in self.params.values():
-        # This custom attribute is a big ugly but simple.
-        # It's read in TFNetwork.initialize_params().
-        var.custom_post_init = make_var_post_init(var)
+      self_prefix = self.get_absolute_name_scope_prefix()  # with "/" at end
+      from TFNetwork import CustomCheckpointLoader
+      loader = CustomCheckpointLoader(
+        filename=load_on_init, saveable_params=list(self.params.values()), params_prefix=self_prefix)
+      loader.set_as_custom_init()
 
   @classmethod
   def get_out_data_from_opts(cls, subnetwork, n_out=None, out_type=None, **kwargs):
