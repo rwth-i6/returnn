@@ -514,7 +514,7 @@ def test_windowed_nd_small():
   print("source:")
   print(source)
   naive = naive_windowed_batch(source, window=window)
-  real = windowed_nd(source, window=window, time_axis=0, new_window_axis=1).eval()
+  real = windowed_nd(source, window_size=window, time_axis=0, new_window_axis=1).eval()
   print("naive:")
   print(naive)
   print("real:")
@@ -530,7 +530,7 @@ def test_windowed_nd_big():
   numpy.random.seed(123)
   source = numpy.random.random((n_time, n_batch, n_dim)).astype("float32")
   naive = naive_windowed_batch(source, window=window)
-  real = windowed_nd(source, window=window, time_axis=0, new_window_axis=1).eval()
+  real = windowed_nd(source, window_size=window, time_axis=0, new_window_axis=1).eval()
   numpy.testing.assert_almost_equal(naive, real)
 
 

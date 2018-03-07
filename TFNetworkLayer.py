@@ -1901,20 +1901,33 @@ class WindowLayer(_ConcatInputLayer):
   layer_class = "window"
   recurrent = True  # we must not allow any shuffling in the time-dim or so
 
-  def __init__(self, window_size, axis="T", padding="same", **kwargs):
+  def __init__(self, window_size, window_left=None, window_right=None, axis="T", padding="same", **kwargs):
     """
     :param int window_size:
+    :param int|None window_left:
+    :param int|None window_right:
     :param str|int axis: see Data.get_axis_from_description()
     :param str padding: "same" or "valid"
     :param kwargs:
     """
     super(WindowLayer, self).__init__(**kwargs)
     data = self.input_data.copy_as_batch_major()
-    axis = data.get_axis_from_description(axis)
-    from TFUtil import windowed_nd
-    self.output.placeholder = windowed_nd(
-      data.placeholder,
-      window=window_size, padding=padding, time_axis=axis, new_window_axis=axis + 1)
+    if axis == "T" and data.time_dim_axis is None:
+      # Assume inside RecLayer.
+      assert self._rec_previous_layer, "%s: expected to be used inside a RecLayer" % self
+      assert padding == "same"
+      prev_state = self._rec_previous_layer.rec_vars_outputs["state"]  # (batch,window,...)
+      next_state = tf.concat(
+        [prev_state[:, 1:], tf.expand_dims(data.placeholder, axis=1)], axis=1)  # (batch,window,...)
+      self.rec_vars_outputs["state"] = next_state
+      self.output.placeholder = next_state
+    else:
+      axis = data.get_axis_from_description(axis)
+      from TFUtil import windowed_nd
+      self.output.placeholder = windowed_nd(
+        data.placeholder,
+        window_size=window_size, window_left=window_left, window_right=window_right,
+        padding=padding, time_axis=axis, new_window_axis=axis + 1)
     self.output.placeholder.set_shape(tf.TensorShape(self.output.batch_shape))
     # Note: size_placeholder not correct with padding="valid" in time axis...
     self.output.size_placeholder = self.input_data.size_placeholder.copy()
@@ -1923,9 +1936,24 @@ class WindowLayer(_ConcatInputLayer):
   def get_out_data_from_opts(cls, window_size, axis="T", sources=(), **kwargs):
     data = get_concat_sources_data_template(sources)
     data = data.copy_as_batch_major()
-    axis = data.get_axis_from_description(axis)
+    if axis == "T" and data.time_dim_axis is None:
+      # Assume inside RecLayer.
+      axis = 1
+    else:
+      axis = data.get_axis_from_description(axis)
     data.shape = data.shape[:axis] + (window_size,) + data.shape[axis:]  # add new axis right after
     return data
+
+  @classmethod
+  def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, window_size, axis="T", sources=(), **kwargs):
+    data = get_concat_sources_data_template(sources)
+    data = data.copy_as_batch_major()
+    if axis == "T" and data.time_dim_axis is None:
+      # Assume inside RecLayer.
+      axis = 1
+      shape = data.shape[:axis] + (window_size,) + data.shape[axis:]  # add new axis right after
+      return {"state": tf.zeros(shape, dtype=data.dtype)}
+    return {}
 
 
 class PadLayer(_ConcatInputLayer):

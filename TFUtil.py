@@ -3061,13 +3061,16 @@ def opt_logical_and(*args):
   return res
 
 
-def windowed_nd(source, window, padding="same", time_axis=1, new_window_axis=2):
+def windowed_nd(source, window_size, window_left=None, window_right=None,
+                padding="same", time_axis=1, new_window_axis=2):
   """
   Constructs a new "window" axis which is a moving input over the time-axis.
   If you want to take out a window, i.e. a slice, see :func:`slice_nd`.
 
   :param tf.Tensor source: N-D tensor of shape (..., n_time, ...)
-  :param int|tf.Tensor window: window size
+  :param int|tf.Tensor window_size: window size
+  :param int|tf.Tensor|None window_left:
+  :param int|tf.Tensor|None window_right:
   :param str padding: "same" or "valid"
   :param int time_axis:
   :param int new_window_axis:
@@ -3081,27 +3084,38 @@ def windowed_nd(source, window, padding="same", time_axis=1, new_window_axis=2):
     n_time = source_shape[0]
     if padding == "same":
       n_out_time = n_time
-      w_right = window // 2
-      w_left = window - w_right - 1
-      pad_left = tf.zeros(tf.concat([[w_left], source_shape[1:]], axis=0), dtype=source.dtype)
-      pad_right = tf.zeros(tf.concat([[w_right], source_shape[1:]], axis=0), dtype=source.dtype)
+      if window_right is None:
+        window_right = window_size // 2
+      if window_left is None:
+        window_left = window_size - window_right - 1
+      else:
+        if isinstance(window_size, int) and isinstance(window_left, int) and isinstance(window_right, int):
+          assert window_size == window_left + window_right + 1
+        else:
+          with tf.control_dependencies([tf.assert_equal(
+                window_size, window_left + window_right + 1,
+                data=["window != w_left + w_right + 1.", window_size, " ", window_left, " ", window_right])]):
+            window_size = tf.identity(window_size)
+      pad_left = tf.zeros(tf.concat([[window_left], source_shape[1:]], axis=0), dtype=source.dtype)
+      pad_right = tf.zeros(tf.concat([[window_right], source_shape[1:]], axis=0), dtype=source.dtype)
       source = tf.concat([pad_left, source, pad_right], axis=0)  # shape[0] == n_time + window - 1
     elif padding == "valid":
-      n_out_time = n_time - window + 1
+      assert window_left is None and window_right is None
+      n_out_time = n_time - window_size + 1
     else:
       raise Exception("invalid padding %r" % padding)
-    tiled_dimshuffle = expand_dims_unbroadcast(source, axis=0, dim=window)  # (window,n_time+window-1,...)
+    tiled_dimshuffle = expand_dims_unbroadcast(source, axis=0, dim=window_size)  # (window,n_time+window-1,...)
     # We want to shift every dim*time block by one to the left.
     # To do this, we interpret that we have one more time frame (i.e. n_time+window).
     # We have to do some dimshuffling so that we get the right layout, then we can flatten,
     # add some padding, and then dimshuffle it back.
     # Then we can take out the first n_time frames.
     tiled_flat = tf.reshape(tiled_dimshuffle, [-1])
-    rem = window * tf.reduce_prod(source_shape[1:])
+    rem = window_size * tf.reduce_prod(source_shape[1:])
     tiled_flat_pad_right = tf.concat([tiled_flat, tf.zeros((rem,), dtype=source.dtype)], axis=0)
     tiled_reshape_shift = tf.reshape(
       tiled_flat_pad_right,
-      tf.concat([(window, n_time + window),
+      tf.concat([(window_size, n_time + window_size),
                  source_shape[1:]], axis=0))  # add time frame, (window,n_time+window,...)
     final = tiled_reshape_shift
     if new_window_axis != 0:
