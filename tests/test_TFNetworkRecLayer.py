@@ -1247,6 +1247,127 @@ def test_rec_subnet_simple_rnn():
     print("rnn_cell also fine.")
 
 
+def test_subnet_load_on_init_rec():
+  import tempfile
+  model_tmp_dir = tempfile.mkdtemp("tmp-checkpoint")
+  model_filename = model_tmp_dir + "/model"
+  with make_scope() as session:
+    config = Config()
+    n_in, n_hidden, n_out = 2, 5, 3
+    config.update({
+      "num_outputs": n_out,
+      "num_inputs": n_in,
+      "network": {
+        "input": {"class": "linear", "n_out": n_hidden, "activation": "identity",
+                  "forward_weights_init": "random_normal_initializer(mean=0.0, stddev=1.0)"},
+        "lstm0": {"class": "rec", "unit": "lstm",
+                  "forward_weights_init": "random_normal_initializer(mean=0.0, stddev=1.0)",
+                  "recurrent_weights_init": "random_normal_initializer(mean=0.0, stddev=1.0)",
+                  "bias_init": "random_normal_initializer(mean=0.0, stddev=0.1)",
+                  "n_out": n_hidden, "direction": 1, "from": ["input"]},
+        "lstm1": {"class": "rec", "unit": "lstm",
+                  "forward_weights_init": "random_normal_initializer(mean=0.0, stddev=1.0)",
+                  "recurrent_weights_init": "random_normal_initializer(mean=0.0, stddev=1.0)",
+                  "bias_init": "random_normal_initializer(mean=0.0, stddev=0.1)",
+                  "n_out": n_hidden, "direction": 1, "from": ["lstm0"]},
+        "output": {"class": "linear", "activation": "identity",
+                   "forward_weights_init": "random_normal_initializer(mean=0.0, stddev=1.0)",
+                   "bias_init": "random_normal_initializer(mean=0.0, stddev=0.1)",
+                   "n_out": n_out, "from": ["lstm1"]}
+      }
+    })
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    network.initialize_params(session)
+    params_orig_dump = network.get_params_serialized(session)
+    print("lstm0:")
+    print(params_orig_dump.values_dict["lstm0"]["W"])
+    assert(params_orig_dump.values_dict["lstm0"]["W"].any())
+    network.save_params_to_file(filename=model_filename, session=session)
+
+    # Simple forward.
+    input_np = [
+      [[0.7, 0.1], [-0.3, -0.1], [0.2, -0.1]],
+      [[1.0, -0.4], [-0.2, 0.3], [0.0, 0.0]]]
+    input_np = numpy.array(input_np, dtype="float32")
+    input_seq_lens = [3, 2]
+    n_batch = len(input_seq_lens)
+    assert_equal(input_np.shape, (n_batch, max(input_seq_lens), n_in))
+    input_placeholder = network.extern_data.data["data"].placeholder
+    input_seq_lens_placeholder = network.extern_data.data["data"].size_placeholder[0]
+    output_layer = network.get_default_output_layer(must_exist=True)
+    output_orig_np, output_seq_lens = session.run(
+      (output_layer.output.get_placeholder_as_batch_major(), output_layer.output.get_sequence_lengths()),
+      feed_dict={input_placeholder: input_np, input_seq_lens_placeholder: input_seq_lens})
+    assert_equal(list(output_seq_lens), input_seq_lens)
+    assert_equal(output_orig_np.shape, (n_batch, max(input_seq_lens), n_out))
+    for t in range(max(output_seq_lens)):
+      for b in range(n_batch):
+        if t >= output_seq_lens[b]:
+          output_orig_np[b, t] = 0.0
+    print("LSTM direct, output:")
+    print(output_orig_np)
+
+  with make_scope() as session:
+    config = Config()
+    config.update({
+      "num_outputs": n_out,
+      "num_inputs": n_in,
+      "network": {
+        "output": {
+          "class": "rec",
+          "optimize_move_layers_out": False,  # We esp. want to test it perform a single step, for debugging.
+          "unit": {
+            # Recurrent subnet here, operate on a single time-step:
+            "output": {
+              "class": "subnetwork",
+              "from": ["data:source"],
+              # Note: This has to convert the params into the right format.
+              "load_on_init": model_filename,
+              "subnetwork": {
+                "input": {"class": "linear", "n_out": n_hidden, "activation": "identity"},
+                "lstm0": {"class": "rnn_cell", "unit": "LSTMBlock", "n_out": n_hidden, "from": ["input"]},
+                "lstm1": {"class": "rnn_cell", "unit": "LSTMBlock", "n_out": n_hidden, "from": ["lstm0"]},
+                "output": {"class": "linear", "activation": "identity", "n_out": n_out, "from": ["lstm1"]}
+              },
+              "n_out": n_out},
+          },
+          "n_out": n_out},
+      }
+    })
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    network.initialize_params(session)
+
+    # First just check whether the params are the same.
+    params_dump = network.get_params_serialized(session)
+    params_dump = params_dump.values_dict["output"]
+    for layer_name in ["input", "output"]:  # not lstms, their layout differs
+      layer_orig = params_orig_dump.values_dict[layer_name]
+      for param_name in ["W", "b"]:
+        param_orig = layer_orig[param_name]
+        param_subnet = params_dump["output/%s/%s" % (layer_name, param_name)]
+        numpy.testing.assert_array_equal(param_orig, param_subnet)
+
+    # Now also forward, and compare with previous.
+    input_placeholder = network.extern_data.data["data"].placeholder
+    input_seq_lens_placeholder = network.extern_data.data["data"].size_placeholder[0]
+    output_layer = network.get_default_output_layer(must_exist=True)
+    output_np, output_seq_lens = session.run(
+      (output_layer.output.get_placeholder_as_batch_major(), output_layer.output.get_sequence_lengths()),
+      feed_dict={input_placeholder: input_np, input_seq_lens_placeholder: input_seq_lens})
+    assert_equal(list(output_seq_lens), input_seq_lens)
+    assert_equal(output_np.shape, (n_batch, max(input_seq_lens), n_out))
+    for t in range(max(output_seq_lens)):
+      for b in range(n_batch):
+        if t >= output_seq_lens[b]:
+          output_np[b, t] = 0.0
+    print("LSTM rec subnet, output:")
+    print(output_np)
+    # assert_almost_equal(output_orig_np, output_np)  # TODO
+    # print("They are equal!")
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()

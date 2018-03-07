@@ -648,10 +648,10 @@ class LstmGenericBase(NativeOpGenBase):
       void lstm_kernel(float* data, const float* old_state, bool old_state_strided,
                        float* output, float* state_out, int n_cells, int n_batch, const float* i) {
         //layout:
-        //data[0*n_cells..1*n_cells-1] : input gate
-        //data[1*n_cells..2*n_cells-1] : forget gate
-        //data[2*n_cells..3*n_cells-1] : output gate
-        //data[3*n_cells..4*n_cells-1] : cell state
+        //data[0*n_cells..1*n_cells-1] : cell state
+        //data[1*n_cells..2*n_cells-1] : input gate
+        //data[2*n_cells..3*n_cells-1] : forget gate
+        //data[3*n_cells..4*n_cells-1] : output gate
         //output[0*n_cells..1*n_cells-1]: cell output
         //repeated for every mini-batch
 

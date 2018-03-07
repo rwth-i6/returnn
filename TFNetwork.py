@@ -1238,11 +1238,13 @@ class CustomCheckpointLoader:
     obsolete_var_names = self.obsolete_var_names
 
     # This map_list can be extended by all the mappings in checkpoint_convert.py.
+    # Old name (in checkpoint) -> new name (current variable name).
     map_list = {
       "lstm_cell/biases": "lstm_cell/bias",
       "lstm_cell/weights": "lstm_cell/kernel",
       "cudnn/params_canonical/rnn/multi_rnn_cell/cell_0/cudnn_compatible_lstm_cell/bias": "lstm_block_wrapper/bias",
-      "cudnn/params_canonical/rnn/multi_rnn_cell/cell_0/cudnn_compatible_lstm_cell/kernel": "lstm_block_wrapper/kernel"}
+      "cudnn/params_canonical/rnn/multi_rnn_cell/cell_0/cudnn_compatible_lstm_cell/kernel": "lstm_block_wrapper/kernel",
+    }
 
     print("Variables to restore which are not in checkpoint:", missing_var_names, file=log.v2)
 
@@ -1253,6 +1255,43 @@ class CustomCheckpointLoader:
         return reader.get_tensor(old_name)
 
       return load_old
+
+    def make_load_weights_nativelstm_to_basic(new_name):
+      assert new_name.endswith("/lstm_cell/kernel")
+      old_name1 = new_name[:-len("/lstm_cell/kernel")] + "/W_re"
+      old_name2 = new_name[:-len("/lstm_cell/kernel")] + "/W"
+
+      def load_native_lstm_weights():
+        # i = input_gate, j = new_input, f = forget_gate, o = output_gate
+        # BasicLSTM: i, j, f, o; Input: [inputs, h]
+        # LstmGenericBase/NativeLstm: j, i, f, o
+        # NativeLstm2: j, i, f, o
+        W_re = reader.get_tensor(old_name1)  # (n_out,n_out*4)
+        W_ff = reader.get_tensor(old_name2)  # (n_in,n_out*4)
+        assert W_re.ndim == W_ff.ndim == 2 and W_re.shape[1] == W_ff.shape[1] and W_re.shape[1] // 4 == W_re.shape[0]
+        W = numpy.concatenate([W_ff, W_re], axis=0)  # (n_in+n_out,n_out*4)
+        W_j, W_i, W_f, W_o = numpy.split(W, 4, axis=1)
+        W = numpy.concatenate([W_i, W_j, W_f, W_o], axis=1)
+        return W
+
+      return load_native_lstm_weights
+
+    def make_load_bias_nativelstm_to_basic(new_name):
+      assert new_name.endswith("/lstm_cell/bias")
+      old_name = new_name[:-len("/lstm_cell/bias")] + "/b"
+
+      def load_native_lstm_bias():
+        # i = input_gate, j = new_input, f = forget_gate, o = output_gate
+        # BasicLSTM: i, j, f, o; Input: [inputs, h]
+        # LstmGenericBase/NativeLstm: j, i, f, o
+        # NativeLstm2: j, i, f, o
+        b = reader.get_tensor(old_name)  # (n_out*4,)
+        assert b.ndim == 1
+        b_j, b_i, b_f, b_o = numpy.split(b, 4, axis=0)
+        b = numpy.concatenate([b_i, b_j, b_f, b_o], axis=0)
+        return b
+
+      return load_native_lstm_bias
 
     class make_load_cudnn_rnn:
       cudnn_postfix = "/cudnn/CudnnRNNParamsToCanonical:0"
@@ -1279,6 +1318,17 @@ class CustomCheckpointLoader:
       def get_lazy_dict(self):
         return {self.prefix + k: self.make_getter(self.prefix + k) for k in self.keys}
 
+    # Here we try to make matches of missing vars and vars which seem to be obsolete.
+    for v in missing_var_names:
+      if v.endswith("/lstm_cell/kernel"):
+        old_name1 = v[:-len("/lstm_cell/kernel")] + "/W_re"
+        old_name2 = v[:-len("/lstm_cell/kernel")] + "/W"
+        if old_name1 in obsolete_var_names and old_name2 in obsolete_var_names:
+          var_name_map[v] = make_load_weights_nativelstm_to_basic(v)
+      if v.endswith("/lstm_cell/bias"):
+        old_name = v[:-len("/lstm_cell/bias")] + "/b"
+        if old_name in obsolete_var_names:
+          var_name_map[v] = make_load_bias_nativelstm_to_basic(v)
     for v in obsolete_var_names:
       for k_old, k_new in map_list.items():
         if v.endswith("/%s" % k_old):
@@ -1311,7 +1361,7 @@ class CustomCheckpointLoader:
       print("Could not find mappings for these variables:", could_not_find_map_list, "var_name_map:", var_name_map,
             file=log.v3)
       print("All variables in checkpoint:", file=log.v3)
-      print(reader.debug_string(), file=log.v3)
+      print(reader.debug_string().decode("utf8"), file=log.v3)
       print("All variables to restore:", file=log.v3)
       for v in net_vars + net_saveables:
         print(v, file=log.v3)
@@ -1326,6 +1376,10 @@ class CustomCheckpointLoader:
       for v in sorted(var_ckpt_names):
         if v in var_net_names:
           continue
+        print(v, file=log.v3)
+      print(file=log.v3)
+      print("Probably we can restore these:", file=log.v3)
+      for v in sorted(var_name_map.keys()):
         print(v, file=log.v3)
       print(file=log.v3)
       raise tf.errors.NotFoundError(
