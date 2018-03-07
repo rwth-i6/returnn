@@ -14,6 +14,7 @@ from numpy.testing.utils import assert_almost_equal, assert_allclose
 import unittest
 import numpy.testing
 from pprint import pprint
+import contextlib
 import better_exchook
 better_exchook.replace_traceback_format_tb()
 
@@ -26,6 +27,16 @@ import TFUtil
 TFUtil.debugRegisterBetterRepr()
 
 log.initialize(verbosity=[5])
+
+
+@contextlib.contextmanager
+def make_scope():
+  """
+  :rtype: tf.Session
+  """
+  with tf.Graph().as_default() as graph:
+    with tf.Session(graph=graph) as session:
+      yield session
 
 
 def test_rec_subnet_with_choice():
@@ -1125,6 +1136,115 @@ def test_RnnCellLayer_with_time():
       assert_equal(set(l1.params.keys()), set(l2.params.keys()))
       for key in l1.params.keys():
         assert l1.params[key].shape == l2.params[key].shape
+
+
+def test_rec_subnet_simple_rnn():
+  with make_scope() as session:
+    n_in, n_out = 2, 3
+    config = Config()
+    config.update({
+      "num_outputs": n_out,
+      "num_inputs": n_in,
+      "network": {
+        "output": {
+          "class": "rec",
+          "unit": {
+            # Recurrent subnet here, operate on a single time-step:
+            "output": {
+              "class": "linear",
+              "from": ["prev:output", "data:source"],
+              "activation": "relu",
+              "n_out": n_out},
+          },
+          "n_out": n_out},
+      }
+    })
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    network.initialize_params(session)
+    weights_var = network.layers["output"].params["output/W"]
+    assert_equal(weights_var.get_shape().as_list(), [n_out + n_in, n_out])
+    weights_np = (numpy.arange(0, (n_out + n_in) * n_out) - (n_out + n_in) * n_out * 0.5) * 0.1
+    weights_np = weights_np.reshape((n_out + n_in, n_out))
+    network.get_var_assigner(weights_var).assign(value=weights_np, session=session)
+    input_np = [
+      [[0.7, 0.1], [-0.3, -0.1], [0.2, -0.1]],
+      [[1.0, -0.4], [-0.2, 0.3], [0.0, 0.0]]]
+    input_np = numpy.array(input_np, dtype="float32")
+    input_seq_lens = [3, 2]
+    n_batch = len(input_seq_lens)
+    assert_equal(input_np.shape, (n_batch, max(input_seq_lens), n_in))
+    input_placeholder = network.extern_data.data["data"].placeholder
+    input_seq_lens_placeholder = network.extern_data.data["data"].size_placeholder[0]
+    output_layer = network.get_default_output_layer(must_exist=True)
+    output_np, output_seq_lens = session.run(
+      (output_layer.output.get_placeholder_as_batch_major(), output_layer.output.get_sequence_lengths()),
+      feed_dict={input_placeholder: input_np, input_seq_lens_placeholder: input_seq_lens})
+    assert_equal(list(output_seq_lens), input_seq_lens)
+    assert_equal(output_np.shape, (n_batch, max(input_seq_lens), n_out))
+    output_last_np = numpy.zeros((n_batch, n_out), dtype="float32")
+    output_calc_np = numpy.zeros((n_batch, max(input_seq_lens), n_out), dtype="float32")
+    for t in range(max(input_seq_lens)):
+      _in = numpy.concatenate([output_last_np, input_np[:, t]], axis=1)
+      assert_equal(_in.shape, (n_batch, n_out + n_in))
+      _out = numpy.dot(_in, weights_np)
+      assert_equal(_out.shape, (n_batch, n_out))
+      _out = numpy.maximum(_out, 0.0)  # relu
+      output_last_np = _out
+      output_calc_np[:, t] = _out
+    print("Manually calculated output:")
+    print(output_calc_np)
+    assert_almost_equal(output_np, output_calc_np)
+    print("Simple RNN is fine!")
+
+  # Now, kind of a separate test: rnn_cell in subnetwork.
+  with make_scope() as session:
+    print("Test rnn_cell in subnet.")
+    config = Config()
+    config.update({
+      "num_outputs": n_out,
+      "num_inputs": n_in,
+      "network": {
+        "output": {
+          "class": "rec",
+          "optimize_move_layers_out": False,  # We esp. want to test it perform a single step, for debugging.
+          "unit": {
+            # Recurrent subnet here, operate on a single time-step:
+            "output": {
+              "class": "subnetwork", "from": ["data:source"], "subnetwork": {
+                # RnnCellLayer inside subnetwork
+                "output": {
+                  "class": "rnn_cell",
+                  "unit": "BasicRNN",
+                  "unit_opts": {"activation": tf.nn.relu},
+                  "from": ["data"],
+                  "n_out": n_out},
+                },
+              "n_out": n_out}
+          },
+          "n_out": n_out},
+      }
+    })
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    network.initialize_params(session)
+    output_layer = network.layers["output"]
+    weights_var = output_layer.params["output/output/rec/basic_rnn_cell/kernel"]
+    assert_equal(weights_var.get_shape().as_list(), [n_out + n_in, n_out])
+    # BasicRNNCell expects it as [inputs, state], but we have it as [state, inputs].
+    weights_conv_np = numpy.concatenate([weights_np[n_out:], weights_np[:n_out]])
+    network.get_var_assigner(weights_var).assign(value=weights_conv_np, session=session)
+    input_placeholder = network.extern_data.data["data"].placeholder
+    input_seq_lens_placeholder = network.extern_data.data["data"].size_placeholder[0]
+    output_np, output_seq_lens = session.run(
+      (output_layer.output.get_placeholder_as_batch_major(), output_layer.output.get_sequence_lengths()),
+      feed_dict={input_placeholder: input_np, input_seq_lens_placeholder: input_seq_lens})
+    assert_equal(list(output_seq_lens), input_seq_lens)
+    assert_equal(output_np.shape, (n_batch, max(input_seq_lens), n_out))
+    print("rnn_cell subnet output:")
+    print(output_np)
+    assert_almost_equal(output_np, output_calc_np)
+    print("rnn_cell also fine.")
 
 
 if __name__ == "__main__":

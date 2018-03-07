@@ -16,6 +16,8 @@ class RecLayer(_ConcatInputLayer):
   A subnetwork can also be given which will be evaluated step-by-step,
   which can use attention over some separate input,
   which can be used to implement a decoder in a sequence-to-sequence scenario.
+  The subnetwork will get the extern data from the parent net as templates,
+  and if there is input to us, then it will be available as the "source" data key.
   """
 
   layer_class = "rec"
@@ -630,8 +632,12 @@ class _SubnetworkRecCell(object):
       parent_net=parent_net)
     if source_data:
       self.net.extern_data.data["source"] = \
-          source_data.copy_template_excluding_time_dim()
+        source_data.copy_template_excluding_time_dim()
     for key in parent_net.extern_data.data.keys():
+      if key in self.net.extern_data.data:
+        continue  # Don't overwrite existing, e.g. "source".
+      # These are just templates. You can use them as possible targets for dimension information,
+      # but not as actual sources or targets.
       self.net.extern_data.data[key] = \
         parent_net.extern_data.data[key].copy_template_excluding_time_dim()
     if parent_net.search_flag and parent_rec_layer and parent_rec_layer.output.beam_size:

@@ -1253,6 +1253,10 @@ class SourceLayer(LayerBase):
     assert not sources, "source layer does not expect sources"
     data = network.get_extern_data(data_key, mark_data_key_as_used=True).copy()
     super(SourceLayer, self).__init__(network=network, **kwargs)
+    if data.placeholder is None:
+      raise Exception("%r: data %r:%r only exists as template. You can only use %r." % (
+        self, data_key, data,
+        {k: v for (k, v) in network.extern_data.data.items() if v.placeholder is not None}))
     self.output = data
 
   @classmethod
@@ -3692,13 +3696,28 @@ class SubnetworkLayer(LayerBase):
       train_flag=self.network.train_flag,
       extern_data=sub_extern_data,
       parent_layer=self)
+    if self._rec_previous_layer:
+      # Make some rec_previous_layer for the subnet layers.
+      subnetwork = subnetwork.copy()
+      for layer_name in list(subnetwork.keys()):
+        # The actual layer is not so important.
+        # In some cases (e.g. RnnCellLayer), we just want rec_vars_outputs.
+        dummy_rec_previous_layer = InternalLayer(
+          name=layer_name, network=net, output=Data(name="dummy_rec_previous_layer(%s)" % layer_name, dim=1))
+        dummy_rec_previous_layer.rec_vars_outputs.update({
+          key[len(layer_name + "/"):]: value
+          for (key, value) in self._rec_previous_layer.rec_vars_outputs.items()
+          if key.startswith(layer_name + "/")})
+        subnetwork[layer_name] = subnetwork[layer_name].copy()
+        subnetwork[layer_name]["rec_previous_layer"] = dummy_rec_previous_layer
     net.construct_from_dict(subnetwork)
     self.subnetwork = net
     self.output = net.get_default_output_layer().output
     for layer in net.layers.values():
-      if layer.params.items():
+      if layer.params:
         assert layer.trainable == self.trainable, "partly trainable subnetworks not yet supported"
       self.params.update({"%s/%s" % (layer.name, k): v for (k, v) in layer.params.items()})
+      self.rec_vars_outputs.update({"%s/%s" % (layer.name, k): v for (k, v) in layer.rec_vars_outputs.items()})
     if load_on_init:
       reader = tf.train.NewCheckpointReader(load_on_init)
       var_ckpt_names = set(reader.get_variable_to_shape_map())
@@ -3737,6 +3756,8 @@ class SubnetworkLayer(LayerBase):
     """
     if n_out or out_type:
       return super(SubnetworkLayer, cls).get_out_data_from_opts(n_out=n_out, out_type=out_type, **kwargs)
+    # Currently, very simple (hacky) template construction of the output-layer in the subnet.
+    # See also the template network construction for the RecLayer subnet.
     layer_desc = subnetwork["output"].copy()
     class_name = layer_desc.pop("class")
     layer_class = get_layer_class(class_name)
@@ -3778,6 +3799,53 @@ class SubnetworkLayer(LayerBase):
     if h is not None:
       return h
     return super(SubnetworkLayer, self).get_last_hidden_state()
+
+  @classmethod
+  def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, subnetwork, **kwargs):
+    """
+    :param tf.Tensor batch_dim: for this layer, might be with beam
+    :param TFNetworkRecLayer.RecLayer rec_layer:
+    :param dict[str,dict[str]] subnetwork:
+    :rtype: dict[str,tf.Tensor]
+    """
+    extra_outputs = {}
+    for layer_name, layer_desc in subnetwork.items():
+      layer_desc = layer_desc.copy()
+      layer_class_name = layer_desc.pop("class")
+      cl = get_layer_class(layer_class_name)
+      # Note: This is not totally correct. We should call transform_config_dict.
+      # But that will make it quite complicated...
+      layer_desc["name"] = layer_name
+      assert issubclass(cl, LayerBase)
+      with cl.cls_layer_scope(layer_name):
+        d = cl.get_rec_initial_extra_outputs(
+          batch_dim=batch_dim, rec_layer=rec_layer, **layer_desc)
+        for key, value in d.items():
+          extra_outputs["%s/%s" % (layer_name, key)] = value
+    return extra_outputs
+
+  @classmethod
+  def get_rec_initial_extra_outputs_shape_invariants(cls, subnetwork, **kwargs):
+    """
+    :param dict[str,dict[str]] subnetwork:
+    :return: optional shapes for the tensors by get_rec_initial_extra_outputs
+    :rtype: dict[str,tf.TensorShape]
+    """
+    # Very similar to get_rec_initial_extra_outputs.
+    shape_invariants = {}
+    for layer_name, layer_desc in subnetwork.items():
+      layer_desc = layer_desc.copy()
+      layer_class_name = layer_desc.pop("class")
+      cl = get_layer_class(layer_class_name)
+      # Note: This is not totally correct. We should call transform_config_dict.
+      # But that will make it quite complicated...
+      layer_desc["name"] = layer_name
+      assert issubclass(cl, LayerBase)
+      with cl.cls_layer_scope(layer_name):
+        d = cl.get_rec_initial_extra_outputs_shape_invariants(**layer_desc)
+        for key, value in d.items():
+          shape_invariants["%s/%s" % (layer_name, key)] = value
+    return shape_invariants
 
 
 class AccumulateMeanLayer(ReduceLayer):
