@@ -1326,8 +1326,10 @@ def test_subnet_load_on_init_rec():
               "load_on_init": model_filename,
               "subnetwork": {
                 "input": {"class": "linear", "n_out": n_hidden, "activation": "identity"},
-                "lstm0": {"class": "rnn_cell", "unit": "LSTMBlock", "n_out": n_hidden, "from": ["input"]},
-                "lstm1": {"class": "rnn_cell", "unit": "LSTMBlock", "n_out": n_hidden, "from": ["lstm0"]},
+                "lstm0": {"class": "rnn_cell", "unit": "LSTMBlock", "unit_opts": {"forget_bias": 0.0},
+                          "n_out": n_hidden, "from": ["input"]},
+                "lstm1": {"class": "rnn_cell", "unit": "LSTMBlock", "unit_opts": {"forget_bias": 0.0},
+                          "n_out": n_hidden, "from": ["lstm0"]},
                 "output": {"class": "linear", "activation": "identity", "n_out": n_out, "from": ["lstm1"]}
               },
               "n_out": n_out},
@@ -1364,8 +1366,8 @@ def test_subnet_load_on_init_rec():
           output_np[b, t] = 0.0
     print("LSTM rec subnet, output:")
     print(output_np)
-    # assert_almost_equal(output_orig_np, output_np)  # TODO
-    # print("They are equal!")
+    assert_almost_equal(output_orig_np, output_np)
+    print("They are equal!")
 
 
 if __name__ == "__main__":
