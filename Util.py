@@ -2240,7 +2240,7 @@ class NativeCodeCompiler(object):
     compiler_opts = ["-fPIC"]
     common_opts += self._transform_compiler_opts(compiler_opts)
     common_opts += ["-D_GLIBCXX_USE_CXX11_ABI=0"]  # might be obsolete in the future
-    common_opts += ["-D%s=%s" % item for item in sorted(self.c_macro_defines)]
+    common_opts += ["-D%s=%s" % item for item in sorted(self.c_macro_defines.items())]
     common_opts += ["-g"]
     opts = common_opts + [self._c_filename, "-o", self._so_filename]
     opts += self.ld_flags
