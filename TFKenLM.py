@@ -178,6 +178,7 @@ def get_tf_mod(verbose=False):
   src_code += _kenlm_src_code_workarounds
   for fn in files:
     f_code = open(fn).read()
+    f_code = ''.join([x for x in f_code if ord(x) < 128])  # enforce ASCII
     # We need to do some replacements to not clash symbol names.
     fn_short = os.path.basename(fn).replace(".", "_")
     for word in ["kConverter"]:
