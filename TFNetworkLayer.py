@@ -1956,6 +1956,52 @@ class WindowLayer(_ConcatInputLayer):
     return {}
 
 
+class CumsumLayer(_ConcatInputLayer):
+  """
+  Basically wraps tf.cumsum. Also supports that in the RecLayer.
+  """
+  layer_class = "cumsum"
+  recurrent = True  # order matters
+
+  def __init__(self, axis="T", additional_left_summand_per_element=None, **kwargs):
+    """
+    :param str axis: see :func:`Data.get_axis_from_description`
+    :param str|int|float|None additional_left_summand_per_element: the order matters for tf.string
+    """
+    super(CumsumLayer, self).__init__(**kwargs)
+    data = self.input_data
+    x = data.placeholder
+    if additional_left_summand_per_element is not None:
+      x = additional_left_summand_per_element + x
+    if axis == "T" and data.time_dim_axis is None:
+      # Assume inside RecLayer.
+      assert self._rec_previous_layer, "%s: expected to be used inside a RecLayer" % self
+      prev_state = self._rec_previous_layer.rec_vars_outputs["state"]  # (batch,window,...)
+      next_state = prev_state + x
+      self.rec_vars_outputs["state"] = next_state
+      self.output.placeholder = next_state
+    else:
+      axis = data.get_axis_from_description(axis)
+      self.output.placeholder = tf.cumsum(x, axis=axis)
+    self.output.placeholder.set_shape(data.placeholder.get_shape())
+    self.output.placeholder.set_shape(tf.TensorShape(self.output.batch_shape))
+    self.output.size_placeholder = self.input_data.size_placeholder.copy()
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, **kwargs):
+    # Just same format.
+    return get_concat_sources_data_template(sources, name="%s_output" % name)
+
+  @classmethod
+  def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, axis="T", sources=(), **kwargs):
+    data = get_concat_sources_data_template(sources)
+    data = data.copy_as_batch_major()
+    if axis == "T" and data.time_dim_axis is None:
+      # Assume inside RecLayer.
+      return {"state": tf.zeros(data.shape, dtype=data.dtype)}
+    return {}
+
+
 class PadLayer(_ConcatInputLayer):
   """
   Adds (e.g. zero) padding in some axis or axes.
