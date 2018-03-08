@@ -4155,6 +4155,7 @@ class TFArrayContainer(object):
     #include "tensorflow/core/platform/macros.h"
     #include "tensorflow/core/platform/mutex.h"
     #include "tensorflow/core/platform/types.h"
+    #include "tensorflow/core/common_runtime/device.h"
 
     using namespace tensorflow;
 
@@ -4174,7 +4175,6 @@ class TFArrayContainer(object):
     ;
 
     REGISTER_OP("ArrayContainerSetSize")
-    .Attr("T: type")
     .Input("handle: resource")
     .Input("size: int32")
     ;
@@ -4242,26 +4242,6 @@ class TFArrayContainer(object):
 
     };
 
-    ResourceHandle OwnMakeResourceHandle(OpKernelContext* ctx, const string& container,
-                                         const string& name,
-                                         const TypeIndex& type_index) {
-      ResourceHandle result;
-      result.set_device(ctx->device()->attributes().name());
-      printf("make dev %s\\n", result.device().c_str());
-      string actual_container;
-      if (!container.empty()) {
-        actual_container = container;
-      } else {
-        actual_container = ctx->resource_manager()->default_container();
-      }
-      result.set_container(actual_container);
-      result.set_name(name);
-      result.set_hash_code(type_index.hash_code());
-      result.set_maybe_type_name(type_index.name());
-      printf("make dev %s\\n", result.device().c_str());
-      return result;
-    }
-
     // https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/resource_op_kernel.h
     class ArrayContainerCreateOp : public ResourceOpKernel<ArrayContainer> {
     public:
@@ -4269,21 +4249,6 @@ class TFArrayContainer(object):
         OP_REQUIRES_OK(context, context->GetAttr("T", &dtype_));
       }
 
-      void Compute(OpKernelContext* context) override {
-        ResourceOpKernel<ArrayContainer>::Compute(context);
-        mutex_lock l(mu_);
-        ResourceHandle rhandle = OwnMakeResourceHandle(context, cinfo_.container(), cinfo_.name(), MakeTypeIndex<ArrayContainer>());
-        printf("created. device: %s\\n", rhandle.device().c_str());
-        printf("container: %s\\n", rhandle.container().c_str());
-        printf("name: %s\\n", rhandle.name().c_str());
-        printf("actual device: %s\\n", context->device()->attributes().name().c_str());
-        printf("actual name: %s\\n", cinfo_.name().c_str());
-        rhandle.set_device("foo");
-        printf("now device: %s\\n", rhandle.device().c_str());
-        ResourceHandle cpy = rhandle;
-        printf("cpy device: %s\\n", cpy.device().c_str());
-      }
-      
     private:
       virtual bool IsCancellable() const { return false; }
       virtual void Cancel() {}
@@ -4314,12 +4279,7 @@ class TFArrayContainer(object):
         ArrayContainer* ar;
         
         const Tensor* handle;
-        OP_REQUIRES_OK(context, context->input("handle", &handle));
-        const ResourceHandle& rhandle = handle->scalar<ResourceHandle>()();
-        printf("device: %s\\n", rhandle.device().c_str());
-        printf("container: %s\\n", rhandle.container().c_str());
-        printf("name: %s\\n", rhandle.name().c_str());
-        
+        OP_REQUIRES_OK(context, context->input("handle", &handle));        
         OP_REQUIRES_OK(context, GetResourceFromContext(context, "handle", &ar));
         core::ScopedUnref unref(ar);
 
@@ -4436,27 +4396,12 @@ class TFArrayContainer(object):
   def _make_mod(cls):
     if cls._mod:
       return cls._mod
-
-    # Fix for undefined symbol: _ZN6google8protobuf8internal26fixed_address_empty_stringE.
-    # https://github.com/tensorflow/tensorflow/issues/1419
-    # noinspection PyUnresolvedReferences
-    from google.protobuf.pyext import _message as msg
-    lib = msg.__file__
-    #lib = "/u/zeyer/.local/lib/python2.7/site-packages/tensorflow/python/_pywrap_tensorflow_internal.so"
-    #lib = "/u/zeyer/.local/lib/python2.7/site-packages/tensorflow/contrib/tfprof/python/tools/tfprof/_pywrap_tensorflow_print_model_analysis_lib.so"
-    #lib = "/u/zeyer/.local/lib/python2.7/site-packages/google/protobuf/pyext/_message.so"
-    #lib = "/u/zeyer/.local/lib/python2.7/site-packages/external/protobuf/python/google/protobuf/pyext/_message.so"
-
     comp = OpCodeCompiler(
       base_name="TFArrayContainer",
       code_version=1,  # code also ends up in hash, thus this doesn't always needs to be increased
       code=cls.code,
       include_deps=[],
-      use_cuda_if_available=False,
-      ld_flags=[
-        "-Xlinker", "-rpath", "-Xlinker", os.path.dirname(lib),
-        "-L", os.path.dirname(lib), "-l", ":" + os.path.basename(lib)])
-
+      use_cuda_if_available=False)
     mod = comp.load_tf_module()
     cls._mod = mod
     return mod
@@ -4512,7 +4457,7 @@ class TFArrayContainer(object):
     :rtype: tf.Operation
     """
     op = self._get_op("ArrayContainerSet")
-    return op(T=self.dtype, handle=self.handle, index=index, value=value)
+    return op(handle=self.handle, index=index, value=value)
 
 
 class ExplicitRandomShuffleQueue(object):

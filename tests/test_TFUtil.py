@@ -706,10 +706,8 @@ def test_GlobalTensorArray():
   GlobalTensorArrayOpMaker().get_op()
 
 
-@unittest.skip("remove this when it works. see https://github.com/tensorflow/tensorflow/issues/10950")
 def test_TFArrayContainer():
   # Bug #10950 is fixed upstream, should be in TF 1.2.2.
-  # TODO...
   # https://stackoverflow.com/questions/44455722/create-my-own-resource-types-tf-resource
   # https://github.com/tensorflow/tensorflow/issues/1419
   ta = TFArrayContainer(dtype=tf.int32)
