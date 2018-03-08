@@ -1200,6 +1200,23 @@ def test_string_words_calc_wer():
   assert_equal(ref_num_words.tolist(), [3, 4, 3, 1])
 
 
+def test_kenlm():
+  import TFKenLM
+  input_strings = ["hello world </s>"]
+  test_lm_file = TFKenLM.kenlm_dir + "/lm/test.arpa"
+  assert os.path.exists(test_lm_file)
+  lm_tf = TFKenLM.ken_lm_load(filename=test_lm_file)
+  input_strings_tf = tf.placeholder(tf.string, [None])
+  output_scores_tf = TFKenLM.ken_lm_score_strings(handle=lm_tf, strings=input_strings_tf)
+  with tf.Session() as session:
+    output_scores = session.run(output_scores_tf, feed_dict={input_strings_tf: input_strings})
+  print("input strings:", input_strings)
+  print("output scores:", output_scores)
+  assert isinstance(output_scores, numpy.ndarray)
+  assert_almost_equal(output_scores, [-40.44010162])
+  print("Score is as expected.")
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()
