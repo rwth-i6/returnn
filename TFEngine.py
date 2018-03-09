@@ -330,6 +330,9 @@ class Runner(object):
     from TFNetworkLayer import LayerBase
     from TFUtil import Data
     for k, v in self.extra_fetches.items():
+      if v is None:
+        d[k] = None
+        continue
       r = fetches_results["extra:%s" % k]
       if isinstance(v, tf.Tensor):
         d[k] = r
