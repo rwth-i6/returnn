@@ -1438,8 +1438,10 @@ class Engine(object):
     if output_file:
       if dataset.have_corpus_seq_idx():
         # We can sort it. Sort it in reverse to make sure that we have enough memory right at the beginning.
+        print("Dataset have_corpus_seq_idx == True, i.e. it will be sorted for optimal performance.", file=log.v3)
         dataset.seq_ordering = "sorted_reverse"
       else:
+        print("Dataset have_corpus_seq_idx == False, i.e. it will not be sorted for optimal performance.", file=log.v3)
         dataset.seq_ordering = "default"  # enforce order as-is, so that the order in the written file corresponds
     dataset.init_seq_order(epoch=self.epoch)
     batches = dataset.generate_batches(

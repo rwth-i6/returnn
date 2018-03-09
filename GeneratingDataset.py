@@ -1763,6 +1763,12 @@ class LibriSpeechCorpus(CachedDataset2):
     """
     return self._seq_order[seq_idx]
 
+  def have_corpus_seq_idx(self):
+    return True
+
+  def get_corpus_seq_idx(self, seq_idx):
+    return self._get_ref_seq_idx(seq_idx)
+
   def get_tag(self, seq_idx):
     """
     :param int seq_idx:
