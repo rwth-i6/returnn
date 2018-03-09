@@ -384,6 +384,9 @@ class Runner(object):
     self.data_provider.start_threads()
     self.start_time = time.time()
     step = None
+    fetches_dict = None
+    feed_dict = None
+    meta_step_info = None
     try:
       # step is like mini-batch in our usual terminology
       step = 0
@@ -442,9 +445,7 @@ class Runner(object):
               writer.add_summary(fetches_results["summary"], step + step_offset)
         except tf.errors.OpError as exc:
           print("TensorFlow exception:", exc, file=log.v1)
-          help_on_tf_exception(
-            exception=exc, feed_dict=feed_dict, meta_step_info=meta_step_info,
-            extern_data=self.data_provider.extern_data, file=log.v2)
+          # Extra info will be printed below.
           raise
 
         eval_info = self._collect_eval_info(fetches_results=fetches_results)
@@ -478,6 +479,9 @@ class Runner(object):
     except BaseException as exc:
       print("Exception %r in step %r." % (exc, step), file=log.v1)
       if not isinstance(exc, CancelTrainingException):
+        help_on_tf_exception(
+          exception=exc, feed_dict=feed_dict, meta_step_info=meta_step_info,
+          extern_data=self.data_provider.extern_data, file=log.v2)
         sys.excepthook(*sys.exc_info())
       self.device_crash_batch = step
       self.run_exception = exc
