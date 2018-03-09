@@ -2329,7 +2329,7 @@ class ExpandDimsLayer(_ConcatInputLayer):
     This is supposed to be after the specified axis, e.g. after the feature-dim.
 
     :param Data data:
-    :param str axis: e.g. "F"|"feature" or "spatial"
+    :param str axis: e.g. "F"|"feature" or "spatial"|"time"
     :return: axis as int for data.placeholder
     :rtype: int
     """
@@ -2340,7 +2340,7 @@ class ExpandDimsLayer(_ConcatInputLayer):
     if axis in ["f", "feature"]:
       assert not data.sparse
       return data.batch_ndim
-    elif axis == "spatial":
+    elif axis in ["spatial", "time"]:
       if data.sparse:
         return data.batch_ndim
       else:
@@ -2357,7 +2357,10 @@ class ExpandDimsLayer(_ConcatInputLayer):
     axis = cls._get_axis(data=data, axis=axis)
     if axis == data.batch_ndim and not data.sparse:
       data.dim = dim
+    axis -= 1  # subtract batch axis
     data.shape = data.shape[:axis] + (dim,) + data.shape[axis:]
+    if axis == "time":
+      data.time_dim_axis = axis
     return data
 
 
