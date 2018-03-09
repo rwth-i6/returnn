@@ -145,7 +145,7 @@ class Runner(object):
         if isinstance(v, LayerBase):
           v = v.output
         assert isinstance(v, Data)
-        d["extra:%s" % k] = v.get_placeholder_as_batch_major()
+        d["extra:%s" % k] = v.placeholder  # see _maybe_handle_extra_fetches, it will transform to batch-major there
         for i, s in v.size_placeholder.items():
           d["extra:%s:size_%i" % (k, i)] = s
     if self.engine.get_all_merged_summaries() is not None:
