@@ -1486,6 +1486,10 @@ class Engine(object):
       n_batch = len(seq_idx)  # without beam
       assert n_batch == len(seq_tag)
       assert n_batch * (out_beam_size or 1) == len(output)
+      if targets is not None:
+        assert n_batch == len(targets)
+      if beam_scores is not None:
+        assert beam_scores.shape == (n_batch, out_beam_size)
       if output_layer.output.dim == 256 and output_layer.output.sparse:
         # Interpret output as bytes/utf8-string.
         output = [bytearray(o).decode("utf8") for o in output]
@@ -1498,7 +1502,7 @@ class Engine(object):
             seq_idx[i], seq_tag[i], output[i * out_beam_size:(i + 1)*out_beam_size]), file=log.v1)
           out_idx = i * out_beam_size
         if target_key and dataset.can_serialize_data(target_key):
-          print("  ref:", dataset.serialize_data(key=target_key, data=targets[out_idx]), file=log.v1)
+          print("  ref:", dataset.serialize_data(key=target_key, data=targets[i]), file=log.v1)
           if out_beam_size is None:
             print("  hyp:", dataset.serialize_data(key=target_key, data=output[out_idx]), file=log.v1)
           else:
