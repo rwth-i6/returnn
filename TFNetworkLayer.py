@@ -1090,9 +1090,9 @@ class SearchChoices(object):
     self.owner = owner
     self._done_src_layer = False
     self._src_layer = None  # type: LayerBase
-    self.src_beams = src_beams
+    self.src_beams = src_beams  # (batch, beam)
     self.beam_size = beam_size
-    self.beam_scores = None  # type: tf.Tensor
+    self.beam_scores = None  # type: tf.Tensor  # (batch, beam)
     self.is_decided = is_decided
 
   def __repr__(self):

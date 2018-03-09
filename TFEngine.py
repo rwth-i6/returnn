@@ -137,13 +137,15 @@ class Runner(object):
       from TFNetworkLayer import LayerBase
       from TFUtil import Data
       for k, v in self.extra_fetches.items():
+        if v is None:
+          continue
         if isinstance(v, tf.Tensor):
           d["extra:%s" % k] = v
           continue
         if isinstance(v, LayerBase):
           v = v.output
         assert isinstance(v, Data)
-        d["extra:%s" % k] = v.placeholder
+        d["extra:%s" % k] = v.get_placeholder_as_batch_major()
         for i, s in v.size_placeholder.items():
           d["extra:%s:size_%i" % (k, i)] = s
     if self.engine.get_all_merged_summaries() is not None:
@@ -1449,10 +1451,12 @@ class Engine(object):
 
     output_layer = self.network.layers[output_layer_name]
     out_beam_size = output_layer.output.beam_size
+    output_layer_beam_scores = None
     if out_beam_size is None:
       print("Given output %r is after decision (no beam)." % output_layer, file=log.v1)
     else:
       print("Given output %r has beam size %i." % (output_layer, out_beam_size), file=log.v1)
+      output_layer_beam_scores = output_layer.get_search_choices().beam_scores
     target_key = output_layer.target or self.network.extern_data.default_target
 
     out_cache = None
@@ -1465,12 +1469,13 @@ class Engine(object):
       output_file = open(output_file, "w")
       out_cache = {}  # corpus-seq-idx -> str
 
-    def extra_fetches_callback(seq_idx, seq_tag, output, targets=None):
+    def extra_fetches_callback(seq_idx, seq_tag, output, targets=None, beam_scores=None):
       """
       :param list[int] seq_idx: of length batch (without beam)
       :param list[str] seq_tag: of length batch (without beam)
       :param list[numpy.ndarray] output: of length batch (with beam)
       :param list[numpy.ndarray] targets: of length batch (without beam)
+      :param list[numpy.ndarray] beam_scores: batch, beam
       """
       n_batch = len(seq_idx)  # without beam
       assert n_batch == len(seq_tag)
@@ -1487,8 +1492,16 @@ class Engine(object):
             seq_idx[i], seq_tag[i], output[i * out_beam_size:(i + 1)*out_beam_size]), file=log.v1)
           out_idx = i * out_beam_size
         if target_key and dataset.can_serialize_data(target_key):
-          print("  hyp:", dataset.serialize_data(key=target_key, data=output[out_idx]), file=log.v1)
           print("  ref:", dataset.serialize_data(key=target_key, data=targets[out_idx]), file=log.v1)
+          if out_beam_size is None:
+            print("  hyp:", dataset.serialize_data(key=target_key, data=output[out_idx]), file=log.v1)
+          else:
+            assert beam_scores is not None
+            for b in range(out_beam_size):
+              print(
+                "  hyp %i, score %f:" % (b, beam_scores[i][b]),
+                dataset.serialize_data(key=target_key, data=output[out_idx + b]),
+                file=log.v1)
         if out_cache is not None:
           corpus_seq_idx = dataset.get_corpus_seq_idx(seq_idx[i])
           assert corpus_seq_idx not in out_cache
@@ -1499,6 +1512,7 @@ class Engine(object):
       engine=self, dataset=dataset, batches=batches, train=False, eval=do_eval,
       extra_fetches={
         "output": output_layer,
+        "beam_scores": output_layer_beam_scores,
         "seq_idx": self.network.get_extern_data("seq_idx", mark_data_key_as_used=True),
         "seq_tag": self.network.get_extern_data("seq_tag", mark_data_key_as_used=True),
         "targets": self.network.get_extern_data(target_key, mark_data_key_as_used=True)},
