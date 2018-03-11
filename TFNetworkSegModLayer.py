@@ -3,6 +3,42 @@ from __future__ import print_function
 import tensorflow as tf
 from TFNetworkLayer import LayerBase, _ConcatInputLayer, get_concat_sources_data_template
 
+# ---------- Utilities ----------
+
+def batch_sizes_after_windowing(sizes, window):
+  """
+  :param tf.Tensor sizes: (batch_sizes)
+  :param int window: size of the applied window
+  :return: sizes for each batch after applying a window on each batch
+  :rtype: tf.Tensor
+  """
+  def fold_times(acc, x):
+    r1 = tf.tile([window], [tf.maximum(x - window + 1, 0)])
+    r2 = tf.range(tf.minimum(x, window - 1), 0, -1)
+    return tf.concat([acc, r1, r2], 0)
+  return tf.foldl(fold_times, sizes, tf.placeholder_with_default(tf.zeros([0], dtype='int32'), [None]), name='fold_sizes')
+
+
+def batch_indices_after_windowing(sizes, window):
+  """
+  here we compute the start and end times for each of the new batches when applying a window
+  :param tf.Tensor sizes: (batch_sizes)
+  :param int window: size of the applied window
+  :return: tensor of shape (?, 3), contains batch index, start-frame and end-frame for each batch after applying a window
+  :rtype: tf.Tensor
+  """
+  def fold_batches(acc, x):
+    b = x[0]
+    l = x[1]
+    batch = tf.tile([b], [l])
+    start = tf.range(l)
+    end   = tf.minimum(tf.range(window, l + window), l)
+    return tf.concat([acc, tf.transpose(tf.stack([batch, start, end]))], axis=0)
+
+  return tf.foldl(fold_batches, tf.stack([tf.range(tf.shape(sizes)[0]), sizes], axis=1),
+                  tf.placeholder_with_default(tf.zeros([0, 3], dtype='int32'), [None, 3]), name="fold_batches")
+
+# ---------- Layers ----------
 
 class SegmentInputLayer(_ConcatInputLayer):
   """
@@ -424,39 +460,6 @@ class ApplyLengthDistributionLayer(LayerBase):
   def get_out_data_from_opts(cls, name, sources, **kwargs):
     return sources[0].output.copy()
 
-
-def batch_sizes_after_windowing(sizes, window):
-  """
-  :param tf.Tensor sizes: (batch_sizes)
-  :param int window: size of the applied window
-  :return: sizes for each batch after applying a window on each batch
-  :rtype: tf.Tensor
-  """
-  def fold_times(acc, x):
-    r1 = tf.tile([window], [tf.maximum(x - window + 1, 0)])
-    r2 = tf.range(tf.minimum(x, window - 1), 0, -1)
-    return tf.concat([acc, r1, r2], 0)
-  return tf.foldl(fold_times, sizes, tf.placeholder_with_default(tf.zeros([0], dtype='int32'), [None]), name='fold_sizes')
-
-
-def batch_indices_after_windowing(sizes, window):
-  """
-  here we compute the start and end times for each of the new batches when applying a window
-  :param tf.Tensor sizes: (batch_sizes)
-  :param int window: size of the applied window
-  :return: tensor of shape (?, 3), contains batch index, start-frame and end-frame for each batch after applying a window
-  :rtype: tf.Tensor
-  """
-  def fold_batches(acc, x):
-    b = x[0]
-    l = x[1]
-    batch = tf.tile([b], [l])
-    start = tf.range(l)
-    end   = tf.minimum(tf.range(window, l + window), l)
-    return tf.concat([acc, tf.transpose(tf.stack([batch, start, end]))], axis=0)
-
-  return tf.foldl(fold_batches, tf.stack([tf.range(tf.shape(sizes)[0]), sizes], axis=1),
-                  tf.placeholder_with_default(tf.zeros([0, 3], dtype='int32'), [None, 3]), name="fold_batches")
 
 class NormalizeLengthScoresLayer(LayerBase):
   layer_class = "normalize_length_scores"
