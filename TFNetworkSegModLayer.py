@@ -458,3 +458,21 @@ def batch_indices_after_windowing(sizes, window):
   return tf.foldl(fold_batches, tf.stack([tf.range(tf.shape(sizes)[0]), sizes], axis=1),
                   tf.placeholder_with_default(tf.zeros([0, 3], dtype='int32'), [None, 3]), name="fold_batches")
 
+class NormalizeLengthScoresLayer(LayerBase):
+  layer_class = "normalize_length_scores"
+
+  def __init__(self, **kwargs):
+    super(NormalizeLengthScoresLayer, self).__init__(**kwargs)
+    time_axis  = 0 if self.sources[0].output.is_time_major else 1
+    batch_axis = 1 if self.sources[0].output.is_time_major else 0
+
+    self.output = self.sources[0].output.copy()
+    p = self.sources[0].output.placeholder
+    win_size = tf.cast(tf.shape(p)[time_axis], dtype=tf.float32)
+    s = tf.log(p) * tf.expand_dims(tf.expand_dims(tf.range(win_size, dtype=tf.float32) + 1.0, -1), batch_axis)
+    self.output.placeholder = tf.exp(s)
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, **kwargs):
+    return sources[0].output.copy()
+
