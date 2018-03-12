@@ -1228,7 +1228,73 @@ class NltkTimitDataset(TimitDataset):
     return self._data_reader.phones(seq_tag)
 
 
-class BytePairEncoding:
+class Vocabulary:
+  """
+  Represents a vocabulary (set of words, and their ids).
+  Used by :class:`BytePairEncoding`.
+  """
+
+  def __init__(self, vocab_file, unknown_label="UNK"):
+    """
+    :param str vocab_file:
+    :param str unknown_label:
+    """
+    self.unknown_label = unknown_label
+    self._parse_vocab(vocab_file)
+
+  def _parse_vocab(self, filename):
+    """
+    :param str filename:
+    """
+    d = eval(open(filename, "r").read())
+    assert isinstance(d, dict)
+    assert self.unknown_label in d
+    labels = {idx: label for (label, idx) in sorted(d.items())}
+    min_label, max_label, num_labels = min(labels), max(labels), len(labels)
+    assert 0 == min_label
+    if num_labels - 1 < max_label:
+      print("Vocab error: not all indices used? max label: %i" % max_label, file=log.v1)
+      print("unused labels: %r" % ([i for i in range(max_label + 1) if i not in labels],), file=log.v2)
+    assert num_labels - 1 == max_label
+    self.num_labels = len(labels)
+    self.vocab = d
+    self.labels = [label for (idx, label) in sorted(labels.items())]
+    self.unknown_label_id = self.vocab[self.unknown_label]
+
+  @classmethod
+  def create_vocab_dict_from_labels(cls, labels):
+    """
+    This is exactly the format which we expect when we read it in self._parse_vocab.
+
+    :param list[str] labels:
+    :rtype: dict[str,int]
+    """
+    d = {label: idx for (idx, label) in enumerate(labels)}
+    assert len(d) == len(labels), "some labels are provided multiple times"
+    return d
+
+  def tf_get_init_variable_func(self, var):
+    """
+    :param tensorflow.Variable var:
+    :rtype: (tensorflow.Session)->None
+    """
+    import tensorflow as tf
+    from TFUtil import VariableAssigner
+    assert isinstance(var, tf.Variable)
+    assert var.dtype.base_dtype == tf.string
+    assert var.shape.as_list() == [self.num_labels]
+    assert len(self.labels) == self.num_labels
+
+    def init_vocab_var(session):
+      """
+      :param tensorflow.Session session:
+      """
+      VariableAssigner(var).assign(session=session, value=self.labels)
+
+    return init_vocab_var
+
+
+class BytePairEncoding(Vocabulary):
   """
   Code is partly taken from subword-nmt/apply_bpe.py.
   Author: Rico Sennrich, code under MIT license.
@@ -1249,14 +1315,14 @@ class BytePairEncoding:
     :param list[int]|None seq_postfix: labels will be added to the seq in self.get_seq
     :param str unknown_label:
     """
+    super(BytePairEncoding, self).__init__(vocab_file=vocab_file, unknown_label=unknown_label)
     # check version information
-    firstline = open(bpe_file, "r").readline()
-    if firstline.startswith('#version:'):
-        self.version = tuple([int(x) for x in re.sub(r'(\.0+)*$','', firstline.split()[-1]).split(".")])
+    bpe_file_first_line = open(bpe_file, "r").readline()
+    if bpe_file_first_line.startswith('#version:'):
+      self._bpe_file_version = tuple(
+        [int(x) for x in re.sub(r'(\.0+)*$', '', bpe_file_first_line.split()[-1]).split(".")])
     else:
-        self.version = (0, 1)
-    self._unknown_label = unknown_label
-    self._parse_vocab(vocab_file)
+      self._bpe_file_version = (0, 1)
     self._bpe_codes = [tuple(item.split()) for item in open(bpe_file, "r").read().splitlines()]
     # some hacking to deal with duplicates (only consider first instance)
     self._bpe_codes = dict([(code, i) for (i, code) in reversed(list(enumerate(self._bpe_codes)))])
@@ -1264,24 +1330,6 @@ class BytePairEncoding:
     self._bpe_encode_cache = {}
     self._bpe_separator = '@@'
     self.seq_postfix = seq_postfix or []
-
-  def _parse_vocab(self, filename):
-    """
-    :param str filename:
-    """
-    d = eval(open(filename, "r").read())
-    assert isinstance(d, dict)
-    assert self._unknown_label in d
-    labels = {idx: label for (label, idx) in sorted(d.items())}
-    min_label, max_label, num_labels = min(labels), max(labels), len(labels)
-    assert 0 == min_label
-    if num_labels - 1 < max_label:
-      print("Vocab error: not all indices used? max label: %i" % max_label, file=log.v1)
-      print("unused labels: %r" % ([i for i in range(max_label + 1) if i not in labels],), file=log.v2)
-    assert num_labels - 1 == max_label
-    self.num_labels = len(labels)
-    self.vocab = d
-    self.labels = [label for (idx, label) in sorted(labels.items())]
 
   @staticmethod
   def _get_pairs(word):
@@ -1307,17 +1355,16 @@ class BytePairEncoding:
     if orig in self._bpe_encode_cache:
       return self._bpe_encode_cache[orig]
 
-    if self.version == (0, 1):
-        word = tuple(orig) + ('</w>',)
-    elif self.version == (0, 2): # more consistent handling of word-final segments
-        word = tuple(orig[:-1]) + ( orig[-1] + '</w>',)
+    if self._bpe_file_version == (0, 1):
+      word = tuple(orig) + ('</w>',)
+    elif self._bpe_file_version == (0, 2): # more consistent handling of word-final segments
+      word = tuple(orig[:-1]) + ( orig[-1] + '</w>',)
     else:
-        raise NotImplementedError
+      raise NotImplementedError
 
     pairs = self._get_pairs(word)
-
     if not pairs:
-        return orig
+      return orig
 
     while True:
       bigram = min(pairs, key=lambda pair: self._bpe_codes.get(pair, float('inf')))
@@ -1449,8 +1496,7 @@ class BytePairEncoding:
     :rtype: list[int]
     """
     segments = self._segment_sentence(sentence)
-    unk_id = self.vocab[self._unknown_label]
-    seq = [self.vocab.get(k, unk_id) for k in segments]
+    seq = [self.vocab.get(k, self.unknown_label_id) for k in segments]
     return seq + self.seq_postfix
 
 

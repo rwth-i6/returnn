@@ -1202,7 +1202,7 @@ def test_string_words_calc_wer():
 
 def test_kenlm():
   import TFKenLM
-  input_strings = ["hello world </s>"]
+  input_strings = ["beyond immediate concerns </s>"]
   test_lm_file = TFKenLM.kenlm_dir + "/lm/test.arpa"
   assert os.path.exists(test_lm_file)
   lm_tf = TFKenLM.ken_lm_load(filename=test_lm_file)
@@ -1213,8 +1213,33 @@ def test_kenlm():
   print("input strings:", input_strings)
   print("output scores:", output_scores)
   assert isinstance(output_scores, numpy.ndarray)
-  assert_almost_equal(output_scores, [-40.44010162])
+  assert_almost_equal(output_scores, [-9.251298])  # +log space, not +log10
   print("Score is as expected.")
+
+
+def test_kenlm_bpe():
+  import TFKenLM
+  input_strings = [
+    "beyond immediate concerns </s>",
+    "be@@ yond imm@@ edi@@ ate conc@@ erns </s>",
+    "be@@ yond imm@@",
+    "be@@ yond <unk>"
+    ]
+  test_lm_file = TFKenLM.kenlm_dir + "/lm/test.arpa"
+  assert os.path.exists(test_lm_file)
+  lm_tf = TFKenLM.ken_lm_load(filename=test_lm_file)
+  input_strings_tf = tf.placeholder(tf.string, [None])
+  output_scores_tf = TFKenLM.ken_lm_score_bpe_strings(handle=lm_tf, strings=input_strings_tf, bpe_merge_symbol="@@")
+  with tf.Session() as session:
+    output_scores = session.run(output_scores_tf, feed_dict={input_strings_tf: input_strings})
+  print("input strings:", input_strings)
+  print("output scores:", output_scores)
+  assert isinstance(output_scores, numpy.ndarray)
+  assert_equal(output_scores.shape, (len(input_strings),))
+  assert_almost_equal(output_scores[0], -9.251298)  # example from above
+  assert_equal(output_scores[0], output_scores[1])
+  assert_equal(output_scores[2], output_scores[3])
+  print("Scores are as expected.")
 
 
 if __name__ == "__main__":

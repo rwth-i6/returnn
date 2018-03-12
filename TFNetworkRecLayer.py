@@ -3216,3 +3216,79 @@ class SelfAttentionLayer(_ConcatInputLayer):
     else:
       out.shape = (n_out,)
     return out
+
+
+class KenLmStateLayer(_ConcatInputLayer):
+  """
+  Get next word (or subword) each frame,
+  accumulates string,
+  keeps state of seen string so far,
+  returns score (+log space, natural base e) of sequence,
+  using KenLM (http://kheafield.com/code/kenlm/) (see :mod:`TFKenLM`).
+  EOS (</s>) token must be used explicitly.
+  """
+  layer_class = "kenlm"
+  recurrent = True
+
+  def __init__(self, lm_file, vocab_file=None, vocab_unknown_label="UNK", bpe_merge_symbol=None, **kwargs):
+    """
+    :param str lm_file: ARPA file or so. whatever KenLM supports
+    :param str|None vocab_file: if the inputs are symbols, this must be provided. see :class:`Vocabulary`
+    :param str vocab_unknown_label: for the vocabulary
+    :param str|None bpe_merge_symbol: e.g. "@@" if you want to apply BPE merging
+    """
+    import TFKenLM
+    super(KenLmStateLayer, self).__init__(**kwargs)
+    # Note: We later could extend it and have the state-behavior just as the :class:`CumsumLayer`.
+    assert self._rec_previous_layer and self.input_data.time_dim_axis is None, (
+      "%s: currently expected to run inside rec layer" % self)
+    # Create KenLM handle. Use var scope to explicitly have it outside the loop.
+    with self.var_creation_scope():
+      self.lm_handle = TFKenLM.ken_lm_load(filename=lm_file)
+    new_input = self.input_data.placeholder
+    input_dtype = tf.as_dtype(self.input_data.dtype)
+    assert isinstance(input_dtype, tf.DType)
+    self.vocab = None
+    self.tf_vocab = None
+    if input_dtype.is_integer:  # assume word-id in vocab
+      with self.var_creation_scope():
+        assert vocab_file
+        from GeneratingDataset import Vocabulary
+        from TFNetwork import set_custom_post_init
+        self.vocab = Vocabulary(vocab_file=vocab_file, unknown_label=vocab_unknown_label)
+        assert self.input_data.sparse and self.vocab.num_labels == self.input_data.dim
+        self.tf_vocab = tf.get_variable(
+          name="vocab", shape=(self.vocab.num_labels,), dtype=tf.string, trainable=False,
+          initializer=tf.zeros_initializer(tf.string))
+        self.add_param(self.tf_vocab, saveable=False, trainable=False)
+        set_custom_post_init(var=self.tf_vocab, func=self.vocab.tf_get_init_variable_func(var=self.tf_vocab))
+      new_input = " " + tf.gather(self.tf_vocab, indices=new_input)
+    else:
+      assert input_dtype == tf.string
+    assert new_input.dtype == tf.string
+    # See :class:`CumsumLayer` for comparison.
+    prev_strings = self._rec_previous_layer.rec_vars_outputs["state"]
+    next_strings = prev_strings + new_input
+    self.rec_vars_outputs["state"] = next_strings
+    self.output.placeholder = TFKenLM.ken_lm_score_bpe_strings(
+      handle=self.lm_handle,
+      bpe_merge_symbol=bpe_merge_symbol or "",
+      strings=next_strings)
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, **kwargs):
+    data = get_concat_sources_data_template(sources, name="%s_output" % name)
+    dtype = tf.as_dtype(data.dtype)
+    assert isinstance(dtype, tf.DType)
+    assert (data.sparse and dtype.is_integer) or dtype == tf.string
+    data.dtype = "float32"
+    data.dim = None
+    data.sparse = False
+    return data
+
+  @classmethod
+  def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, sources=(), **kwargs):
+    data = get_concat_sources_data_template(sources)
+    # Assume inside RecLayer.
+    assert all(data.shape)
+    return {"state": tf.zeros(data.get_batch_shape(batch_dim=batch_dim), dtype=tf.string)}

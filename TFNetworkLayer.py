@@ -113,7 +113,7 @@ class LayerBase(object):
     self.sources = sources
     self.params = {}  # type: dict[str,tf.Variable]
     self.saveable_param_replace = {}  # see get_saveable_params_dict()
-    " :type: dict[tf.Variable,tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject] "
+    " :type: dict[tf.Variable,tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject|None] "
     self.reuse_params = reuse_params
     self.L2 = L2
     self.darc1 = darc1
@@ -449,10 +449,12 @@ class LayerBase(object):
         with reuse_name_scope(tf.get_variable_scope(), **kwargs) as scope:
           yield scope
 
-  def add_param(self, param, custom_update=None):
+  def add_param(self, param, custom_update=None, trainable=None, saveable=None):
     """
     :param tf.Variable|tf.Tensor param:
     :param None|CustomUpdate custom_update: will be applied in training, instead of taking the gradient
+    :param bool|None trainable:
+    :param bool|None saveable:
     :return: param
     :rtype tf.Variable
     """
@@ -462,7 +464,12 @@ class LayerBase(object):
       # where we only want to store tf.Variable objects.
       return param
     assert isinstance(param, tf.Variable)
+    if trainable is None:
+      trainable = param in param.graph.get_collection_ref(tf.GraphKeys.TRAINABLE_VARIABLES)
+    if saveable is None:
+      saveable = True
     if custom_update:
+      assert trainable
       custom_update.set_on_var(param)
     if self.reuse_params:
       name_scope_prefix = self.reuse_params.get_base_absolute_name_scope_prefix(base_layer=self, param=param)
@@ -476,6 +483,8 @@ class LayerBase(object):
       self.params[param_name] = param
     else:
       assert self.params[param_name] is param
+    if not saveable:
+      self.saveable_param_replace[param] = None
     return param
 
   def set_param_values_by_dict(self, values_dict, session, ignore_wrong_shape=False):
@@ -519,6 +528,8 @@ class LayerBase(object):
     for param_name, param in self.params.items():
       if param in self.saveable_param_replace:
         param = self.saveable_param_replace[param]
+        if param is None:
+          continue
       d[param_name] = param
     return d
 
@@ -1976,7 +1987,7 @@ class CumsumLayer(_ConcatInputLayer):
     if axis == "T" and data.time_dim_axis is None:
       # Assume inside RecLayer.
       assert self._rec_previous_layer, "%s: expected to be used inside a RecLayer" % self
-      prev_state = self._rec_previous_layer.rec_vars_outputs["state"]  # (batch,window,...)
+      prev_state = self._rec_previous_layer.rec_vars_outputs["state"]
       next_state = prev_state + x
       self.rec_vars_outputs["state"] = next_state
       self.output.placeholder = next_state
@@ -1988,17 +1999,17 @@ class CumsumLayer(_ConcatInputLayer):
     self.output.size_placeholder = self.input_data.size_placeholder.copy()
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, axis="T", **kwargs):
     # Just same format.
     return get_concat_sources_data_template(sources, name="%s_output" % name)
 
   @classmethod
   def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, axis="T", sources=(), **kwargs):
     data = get_concat_sources_data_template(sources)
-    data = data.copy_as_batch_major()
     if axis == "T" and data.time_dim_axis is None:
       # Assume inside RecLayer.
-      return {"state": tf.zeros(data.shape, dtype=data.dtype)}
+      assert all(data.shape)
+      return {"state": tf.zeros(data.get_batch_shape(batch_dim=batch_dim), dtype=data.dtype)}
     return {}
 
 

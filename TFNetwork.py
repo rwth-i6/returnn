@@ -1422,7 +1422,17 @@ class CustomCheckpointLoader:
       return var_post_init
 
     for var in self.saveable_params:
-      # This custom attribute is a big ugly but simple.
-      # It's read in TFNetwork.initialize_params().
-      var.custom_post_init = make_var_post_init(var)
+      set_custom_post_init(var=var, func=make_var_post_init(var))
 
+
+def set_custom_post_init(var, func):
+  """
+  It registers the provided `func` such that it gets called for this variable
+  in TFNetwork.initialize_params().
+
+  :param tf.Variable var:
+  :param (tf.Session)->None func:
+  """
+  # This custom attribute is a big ugly but simple.
+  # It's read in TFNetwork.initialize_params().
+  var.custom_post_init = func

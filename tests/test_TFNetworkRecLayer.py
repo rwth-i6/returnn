@@ -1370,6 +1370,74 @@ def test_subnet_load_on_init_rec():
     print("They are equal!")
 
 
+def test_KenLmStateLayer():
+  import TFKenLM
+  test_lm_file = TFKenLM.kenlm_dir + "/lm/test.arpa"
+  assert os.path.exists(test_lm_file)
+  from GeneratingDataset import Vocabulary
+  from TFNetworkLayer import InternalLayer
+  import tempfile
+  with make_scope() as session:
+    with tempfile.NamedTemporaryFile(mode="w", prefix="vocab") as tmp_bpe_vocab_file:
+      labels = "</s> <unk> be@@ yond imm@@ edi@@ ate conc@@ erns".split()
+      bpe_vocab_dict = Vocabulary.create_vocab_dict_from_labels(labels)
+      print("BPE vocab dict:", bpe_vocab_dict)
+      tmp_bpe_vocab_file.write(repr(bpe_vocab_dict))
+      tmp_bpe_vocab_file.flush()
+      assert os.path.exists(tmp_bpe_vocab_file.name)
+
+      net = TFNetwork(extern_data=ExternData())
+      net.extern_data.register_data(Data(
+        name="data", shape=(), time_dim_axis=None, dim=len(labels), dtype="int32",
+        auto_create_placeholders=True))
+      data_layer = net.construct_layer(name="data", net_dict={})
+      layer_base_opts = dict(name="output", network=net, sources=[data_layer])
+      layer_out = KenLmStateLayer.get_out_data_from_opts(**layer_base_opts)
+      prev_layer = InternalLayer(name="prev:%s" % layer_base_opts["name"], network=net, output=layer_out.copy())
+      prev_layer.rec_vars_outputs["state"] = tf.placeholder(
+        name="prev_layer_state", shape=layer_out.get_batch_shape(batch_dim=1), dtype=tf.string)
+      rec_state = session.run(
+        KenLmStateLayer.get_rec_initial_extra_outputs(batch_dim=1, rec_layer=None, **layer_base_opts))
+      print("initial recurrent state:", rec_state)
+      with reuse_name_scope(KenLmStateLayer.cls_get_tf_scope_name(layer_base_opts["name"])):
+        layer = KenLmStateLayer(
+          lm_file=test_lm_file,
+          vocab_file=tmp_bpe_vocab_file.name, vocab_unknown_label="<unk>",
+          bpe_merge_symbol="@@",
+          output=layer_out, rec_previous_layer=prev_layer, **layer_base_opts)
+        net.layers[layer.name] = layer
+
+      print("Init.")
+      net.initialize_params(session=session)
+
+      print("Ref score.")
+      input_word_ids = [labels.index(w) for w in "be@@ yond imm@@ edi@@ ate conc@@ erns </s>".split()]
+      ref_score_str_placeholder = tf.placeholder(tf.string, shape=(), name="ref_score_str_placeholder")
+      tf_ref_score = TFKenLM.ken_lm_score_strings(handle=layer.lm_handle, strings=ref_score_str_placeholder)
+      ref_score = session.run(tf_ref_score, feed_dict={ref_score_str_placeholder: "beyond immediate concerns </s>"})
+      print("ref score:", ref_score)
+      assert_almost_equal(ref_score, -9.251298)  # example from :func:`test_kenlm`
+
+      print("Loop over %r." % ([labels[i] for i in input_word_ids],))
+      res = None
+      for i, word_id in enumerate(input_word_ids):
+        print("input %i, word-idx %i, word %r" % (i, word_id, labels[word_id]))
+        res, rec_state = session.run(
+          (layer.output.placeholder, layer.rec_vars_outputs),
+          {
+            net.extern_data.data["data"].placeholder: [word_id],
+            prev_layer.rec_vars_outputs["state"]: rec_state["state"]})
+        print("  score res:", res, "state:", rec_state)
+        word_seq_so_far = rec_state["state"][0].decode("utf8").replace("@@ ", "").strip().split(" ")
+        word_seq_so_far = ["<unk>" if "@@" in w else w for w in word_seq_so_far]
+        res2 = session.run(tf_ref_score, feed_dict={ref_score_str_placeholder: " ".join(word_seq_so_far)})
+        print("  word seq so far: %r" % (word_seq_so_far,), "score:", res2)
+        assert_equal(res2, res[0])
+
+      assert_almost_equal(res, ref_score)
+      print("Scores are as expected.")
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()

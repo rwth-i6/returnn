@@ -476,8 +476,16 @@ class Data(object):
     :return: shape with added batch-dim. e.g. (batch,time,feat) = (None,None,128)
     :rtype: tuple[int|None]
     """
+    return self.get_batch_shape(batch_dim=None)
+
+  def get_batch_shape(self, batch_dim):
+    """
+    :param int|tf.Tensor|None batch_dim:
+    :return: shape with added batch-dim. e.g. (batch,time,feat) = (None,None,128)
+    :rtype: tuple[int|None]
+    """
     if self.batch_dim_axis is not None:
-      return self.shape[:self.batch_dim_axis] + (None,) + self.shape[self.batch_dim_axis:]
+      return self.shape[:self.batch_dim_axis] + (batch_dim,) + self.shape[self.batch_dim_axis:]
     return self.shape
 
   @property
@@ -2206,7 +2214,7 @@ class VariableAssigner(object):
 
   def assign(self, value, session):
     """
-    :param numpy.ndarray|int|float value:
+    :param numpy.ndarray|int|float|list[str] value:
     :param tf.Session session:
     """
     session.run(self.assign_op, feed_dict={self.assign_op.inputs[1]: value})

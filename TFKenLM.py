@@ -1,5 +1,5 @@
 """
-Uses KenLM (extern/kenlm) to read n-gram LMs (ARPA format),
+Uses KenLM (http://kheafield.com/code/kenlm/) (extern/kenlm) to read n-gram LMs (ARPA format),
 and provides a TF op to use them.
 
 """
@@ -45,7 +45,20 @@ REGISTER_OP("KenLmScoreStrings")
   c->set_output(0, c->input(1));
   return Status::OK();
 })
-.Doc("KenLmScoreStrings: scores texts");
+.Doc("KenLmScoreStrings: scores texts. returns in +log space (natural log, not base 10)");
+
+
+REGISTER_OP("KenLmScoreBpeStrings")
+.Input("handle: resource")
+.Input("bpe_merge_symbol: string")
+.Input("strings: string")
+.Output("scores: float32")
+.SetShapeFn([](::tensorflow::shape_inference::InferenceContext* c) {
+  c->set_output(0, c->input(2));
+  return Status::OK();
+})
+.Doc("KenLmScoreBpeStrings: optionally BPE-merges, remove surrounding whitespaces and scores texts."
+  " returns in +log space (natural log, not base 10)");
 
 
 // https://github.com/kpu/kenlm/blob/master/lm/model.hh
@@ -65,7 +78,10 @@ struct KenLmModel : public ResourceBase {
       total += model_.BaseScore(&state, word_idx, &out_state);
       state = out_state;
     }
-    return total;
+    // KenLM returns score in +log10 space.
+    // We want to return in (natural) +log space.
+    // 10 ** x = e ** (x * log(10))
+    return total * logf(10.);
   }
   
   string DebugString() override {
@@ -138,6 +154,48 @@ class KenLmScoreStringsOp : public OpKernel {
 };
 
 REGISTER_KERNEL_BUILDER(Name("KenLmScoreStrings").Device(DEVICE_CPU), KenLmScoreStringsOp);
+
+
+class KenLmScoreBpeStringsOp : public OpKernel {
+ public:
+  using OpKernel::OpKernel;
+
+  void Compute(OpKernelContext* context) override {
+    KenLmModel* lm;
+    {
+      const Tensor* handle;
+      OP_REQUIRES_OK(context, context->input("handle", &handle));        
+      OP_REQUIRES_OK(context, GetResourceFromContext(context, "handle", &lm));
+    }
+    core::ScopedUnref unref(lm);
+
+    OP_REQUIRES(context, context->input(1).NumElements() == 1,
+      errors::InvalidArgument(
+        "bpe_merge_symbol must be a single element but got shape ",
+        context->input(1).shape().DebugString()));
+    const string& bpe_merge_symbol = context->input(1).flat<string>()(0);
+
+    const Tensor& input_tensor = context->input(2);
+    auto input_flat = input_tensor.flat<string>();
+
+    Tensor* output_tensor = NULL;
+    OP_REQUIRES_OK(context, context->allocate_output(0, input_tensor.shape(), &output_tensor));
+    auto output_flat = output_tensor->flat<float>();
+
+    for(int i = 0; i < input_flat.size(); ++i) {
+      string text = input_flat(i);
+      if(!bpe_merge_symbol.empty())
+        text = tensorflow::str_util::StringReplace(text, bpe_merge_symbol + " ", "", /* replace_all */ true);
+      tensorflow::StringPiece sp(text);
+      tensorflow::str_util::RemoveWhitespaceContext(&sp);
+      text = sp.ToString();
+      output_flat(i) = lm->score(text);
+    }
+  }
+};
+
+REGISTER_KERNEL_BUILDER(Name("KenLmScoreBpeStrings").Device(DEVICE_CPU), KenLmScoreBpeStringsOp);
+
 """
 
 _kenlm_src_code_workarounds = """
@@ -203,11 +261,33 @@ def get_tf_mod(verbose=False):
 
 
 def ken_lm_load(filename):
+  """
+  :param str filename:
+  :return: TF resource handle
+  :rtype: tf.Tensor
+  """
   return get_tf_mod().ken_lm_load_model(filename=filename)
 
 
 def ken_lm_score_strings(handle, strings):
+  """
+  :param tf.Tensor handle: TF resource handle returned by :func:`ken_lm_load`
+  :param tf.Tensor strings: strings which are being scores. white-space delimited words.
+  :return: same shape as `strings`, float32
+  :rtype: tf.Tensor
+  """
   return get_tf_mod().ken_lm_score_strings(handle=handle, strings=strings)
+
+
+def ken_lm_score_bpe_strings(handle, bpe_merge_symbol, strings):
+  """
+  :param tf.Tensor handle: TF resource handle returned by :func:`ken_lm_load`
+  :param str bpe_merge_symbol: e.g. "@@"
+  :param tf.Tensor strings: strings which are being scores. white-space delimited words.
+  :return: same shape as `strings`, float32
+  :rtype: tf.Tensor
+  """
+  return get_tf_mod().ken_lm_score_bpe_strings(handle=handle, bpe_merge_symbol=bpe_merge_symbol, strings=strings)
 
 
 if __name__ == "__main__":
