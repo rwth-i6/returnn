@@ -3796,6 +3796,7 @@ class SubnetworkLayer(LayerBase):
       self.params.update({"%s/%s" % (layer.name, k): v for (k, v) in layer.params.items()})
       self.rec_vars_outputs.update({"%s/%s" % (layer.name, k): v for (k, v) in layer.rec_vars_outputs.items()})
     if load_on_init:
+      print("loading initial weights from", load_on_init, file=log.v2)
       self_prefix = self.get_absolute_name_scope_prefix()  # with "/" at end
       from TFNetwork import CustomCheckpointLoader
       loader = CustomCheckpointLoader(

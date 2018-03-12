@@ -907,7 +907,7 @@ class TFNetwork(object):
         loader = CustomCheckpointLoader(
           filename=filename, saveable_params=self.get_saveable_params_list())
         if not loader.missing_var_names:
-          print("Strange, nothing missing?", file=log.v2)
+          print("Strange, nothing missing? Pre-loaded missing variables from other checkpoints?", file=log.v2)
         loader.load_now(session=session)
       except tf.errors.NotFoundError:
         print("Error, some entry is missing in the checkpoint %r: %s: %s" % (filename, type(exc), exc), file=log.v1)
@@ -1190,8 +1190,14 @@ class CustomCheckpointLoader:
     :param str filename: filepattern for NewCheckpointReader
     :param list[tf.Variable|tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject] saveable_params:
     """
+    self.saveable_params = []
+    for param in saveable_params:
+      custom_post_init = getattr(param, "custom_post_init", None)
+      if not custom_post_init:
+        self.saveable_params.append(param)
+      else:
+        print("Not loading pre-initialized variables %s" % param, file=log.v2)
     self.reader = tf.train.NewCheckpointReader(filename)
-    self.saveable_params = saveable_params
     self.params_prefix = params_prefix
     self.net_vars = [v for v in self.saveable_params if isinstance(v, tf.Variable)]
     self.net_saveables = [v for v in self.saveable_params if not isinstance(v, tf.Variable)]
