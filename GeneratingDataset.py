@@ -1234,6 +1234,8 @@ class Vocabulary:
   Used by :class:`BytePairEncoding`.
   """
 
+  _cache = {}  # filename -> vocab, labels
+
   def __init__(self, vocab_file, unknown_label="UNK"):
     """
     :param str vocab_file:
@@ -1246,19 +1248,25 @@ class Vocabulary:
     """
     :param str filename:
     """
-    d = eval(open(filename, "r").read())
-    assert isinstance(d, dict)
-    assert self.unknown_label in d
-    labels = {idx: label for (label, idx) in sorted(d.items())}
-    min_label, max_label, num_labels = min(labels), max(labels), len(labels)
-    assert 0 == min_label
-    if num_labels - 1 < max_label:
-      print("Vocab error: not all indices used? max label: %i" % max_label, file=log.v1)
-      print("unused labels: %r" % ([i for i in range(max_label + 1) if i not in labels],), file=log.v2)
-    assert num_labels - 1 == max_label
-    self.num_labels = len(labels)
-    self.vocab = d
-    self.labels = [label for (idx, label) in sorted(labels.items())]
+    if filename in self._cache:
+      self.vocab, self.labels = self._cache[filename]
+      assert self.unknown_label in self.vocab
+      self.num_labels = len(self.labels)
+    else:
+      d = eval(open(filename, "r").read())
+      assert isinstance(d, dict)
+      assert self.unknown_label in d
+      labels = {idx: label for (label, idx) in sorted(d.items())}
+      min_label, max_label, num_labels = min(labels), max(labels), len(labels)
+      assert 0 == min_label
+      if num_labels - 1 < max_label:
+        print("Vocab error: not all indices used? max label: %i" % max_label, file=log.v1)
+        print("unused labels: %r" % ([i for i in range(max_label + 1) if i not in labels],), file=log.v2)
+      assert num_labels - 1 == max_label
+      self.num_labels = len(labels)
+      self.vocab = d
+      self.labels = [label for (idx, label) in sorted(labels.items())]
+      self._cache[filename] = (self.vocab, self.labels)
     self.unknown_label_id = self.vocab[self.unknown_label]
 
   @classmethod

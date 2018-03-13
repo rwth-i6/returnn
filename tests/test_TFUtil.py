@@ -1207,7 +1207,7 @@ def test_kenlm():
   assert os.path.exists(test_lm_file)
   lm_tf = TFKenLM.ken_lm_load(filename=test_lm_file)
   input_strings_tf = tf.placeholder(tf.string, [None])
-  output_scores_tf = TFKenLM.ken_lm_score_strings(handle=lm_tf, strings=input_strings_tf)
+  output_scores_tf = TFKenLM.ken_lm_abs_score_strings(handle=lm_tf, strings=input_strings_tf)
   with tf.Session() as session:
     output_scores = session.run(output_scores_tf, feed_dict={input_strings_tf: input_strings})
   print("input strings:", input_strings)
@@ -1229,7 +1229,7 @@ def test_kenlm_bpe():
   assert os.path.exists(test_lm_file)
   lm_tf = TFKenLM.ken_lm_load(filename=test_lm_file)
   input_strings_tf = tf.placeholder(tf.string, [None])
-  output_scores_tf = TFKenLM.ken_lm_score_bpe_strings(handle=lm_tf, strings=input_strings_tf, bpe_merge_symbol="@@")
+  output_scores_tf = TFKenLM.ken_lm_abs_score_bpe_strings(handle=lm_tf, strings=input_strings_tf, bpe_merge_symbol="@@")
   with tf.Session() as session:
     output_scores = session.run(output_scores_tf, feed_dict={input_strings_tf: input_strings})
   print("input strings:", input_strings)

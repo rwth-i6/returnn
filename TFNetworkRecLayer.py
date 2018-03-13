@@ -3230,12 +3230,16 @@ class KenLmStateLayer(_ConcatInputLayer):
   layer_class = "kenlm"
   recurrent = True
 
-  def __init__(self, lm_file, vocab_file=None, vocab_unknown_label="UNK", bpe_merge_symbol=None, **kwargs):
+  def __init__(self, lm_file, vocab_file=None, vocab_unknown_label="UNK", bpe_merge_symbol=None,
+               input_step_offset=0, dense_output=False,
+               **kwargs):
     """
     :param str lm_file: ARPA file or so. whatever KenLM supports
     :param str|None vocab_file: if the inputs are symbols, this must be provided. see :class:`Vocabulary`
     :param str vocab_unknown_label: for the vocabulary
     :param str|None bpe_merge_symbol: e.g. "@@" if you want to apply BPE merging
+    :param int input_step_offset: if provided, will consider the input only from this step onwards
+    :param bool dense_output: whether we output the score for all possible succeeding tokens
     """
     import TFKenLM
     super(KenLmStateLayer, self).__init__(**kwargs)
@@ -3245,14 +3249,16 @@ class KenLmStateLayer(_ConcatInputLayer):
     # Create KenLM handle. Use var scope to explicitly have it outside the loop.
     with self.var_creation_scope():
       self.lm_handle = TFKenLM.ken_lm_load(filename=lm_file)
+    prev_step = self._rec_previous_layer.rec_vars_outputs["step"]
+    next_step = prev_step + 1
+    self.rec_vars_outputs["step"] = next_step
     new_input = self.input_data.placeholder
     input_dtype = tf.as_dtype(self.input_data.dtype)
     assert isinstance(input_dtype, tf.DType)
     self.vocab = None
     self.tf_vocab = None
-    if input_dtype.is_integer:  # assume word-id in vocab
+    if vocab_file:
       with self.var_creation_scope():
-        assert vocab_file
         from GeneratingDataset import Vocabulary
         from TFNetwork import set_custom_post_init
         self.vocab = Vocabulary(vocab_file=vocab_file, unknown_label=vocab_unknown_label)
@@ -3262,28 +3268,55 @@ class KenLmStateLayer(_ConcatInputLayer):
           initializer=tf.zeros_initializer(tf.string))
         self.add_param(self.tf_vocab, saveable=False, trainable=False)
         set_custom_post_init(var=self.tf_vocab, func=self.vocab.tf_get_init_variable_func(var=self.tf_vocab))
-      new_input = " " + tf.gather(self.tf_vocab, indices=new_input)
+    if input_dtype.is_integer:  # assume word-id in vocab
+      assert self.tf_vocab, "%s: provide vocab_file" % self
+      new_input = tf.gather(self.tf_vocab, indices=new_input) + " "
     else:
       assert input_dtype == tf.string
     assert new_input.dtype == tf.string
+    if input_step_offset:
+      new_input = tf.where(
+        tf.greater_equal(prev_step, input_step_offset),
+        new_input, tf.zeros_like(new_input))
     # See :class:`CumsumLayer` for comparison.
     prev_strings = self._rec_previous_layer.rec_vars_outputs["state"]
     next_strings = prev_strings + new_input
     self.rec_vars_outputs["state"] = next_strings
-    self.output.placeholder = TFKenLM.ken_lm_score_bpe_strings(
-      handle=self.lm_handle,
-      bpe_merge_symbol=bpe_merge_symbol or "",
-      strings=next_strings)
+    prev_scores = self._rec_previous_layer.rec_vars_outputs["scores"]
+    if dense_output:
+      assert self.tf_vocab, "%s: provide vocab_file" % self
+      new_abs_scores, new_abs_scores_dense = TFKenLM.ken_lm_abs_score_bpe_strings_dense(
+        handle=self.lm_handle,
+        bpe_merge_symbol=bpe_merge_symbol or "",
+        strings=next_strings,
+        labels=self.tf_vocab)
+      new_rel_scores = new_abs_scores_dense - new_abs_scores
+    else:
+      new_abs_scores = TFKenLM.ken_lm_abs_score_bpe_strings(
+        handle=self.lm_handle,
+        bpe_merge_symbol=bpe_merge_symbol or "",
+        strings=next_strings)
+      new_rel_scores = new_abs_scores - prev_scores
+    self.rec_vars_outputs["scores"] = new_abs_scores
+    self.output.placeholder = new_rel_scores
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, **kwargs):
+  def get_out_data_from_opts(cls, name, sources,
+                             vocab_file=None, vocab_unknown_label="UNK", dense_output=False,
+                             **kwargs):
     data = get_concat_sources_data_template(sources, name="%s_output" % name)
     dtype = tf.as_dtype(data.dtype)
     assert isinstance(dtype, tf.DType)
     assert (data.sparse and dtype.is_integer) or dtype == tf.string
     data.dtype = "float32"
-    data.dim = None
     data.sparse = False
+    if dense_output:
+      from GeneratingDataset import Vocabulary
+      vocab = Vocabulary(vocab_file=vocab_file, unknown_label=vocab_unknown_label)
+      data.dim = vocab.num_labels
+      data.shape = data.shape + (vocab.num_labels,)
+    else:
+      data.dim = None
     return data
 
   @classmethod
@@ -3291,4 +3324,8 @@ class KenLmStateLayer(_ConcatInputLayer):
     data = get_concat_sources_data_template(sources)
     # Assume inside RecLayer.
     assert all(data.shape)
-    return {"state": tf.zeros(data.get_batch_shape(batch_dim=batch_dim), dtype=tf.string)}
+    batch_shape = data.get_batch_shape(batch_dim=batch_dim)
+    return {
+      "state": tf.zeros(batch_shape, dtype=tf.string),
+      "step": tf.constant(0, dtype=tf.int32),
+      "scores": tf.zeros(batch_shape, dtype=tf.float32)}

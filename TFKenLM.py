@@ -13,6 +13,10 @@ kenlm_dir = returnn_dir + "/extern/kenlm"
 
 # https://www.tensorflow.org/extend/adding_an_op
 # Also see TFUitl.TFArrayContainer for TF resources.
+# https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/tensor.h
+# https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/tensor_shape.h
+# https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/tensor_types.h
+# https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/lib/strings/str_util.h
 _src_code = """
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/op_kernel.h"
@@ -37,7 +41,7 @@ REGISTER_OP("KenLmLoadModel")
 .Doc("KenLmLoadModel: loads KenLM model, creates TF resource, persistent across runs in the session");
 
 
-REGISTER_OP("KenLmScoreStrings")
+REGISTER_OP("KenLmAbsScoreStrings")
 .Input("handle: resource")
 .Input("strings: string")
 .Output("scores: float32")
@@ -48,7 +52,7 @@ REGISTER_OP("KenLmScoreStrings")
 .Doc("KenLmScoreStrings: scores texts. returns in +log space (natural log, not base 10)");
 
 
-REGISTER_OP("KenLmScoreBpeStrings")
+REGISTER_OP("KenLmAbsScoreBpeStrings")
 .Input("handle: resource")
 .Input("bpe_merge_symbol: string")
 .Input("strings: string")
@@ -57,31 +61,93 @@ REGISTER_OP("KenLmScoreBpeStrings")
   c->set_output(0, c->input(2));
   return Status::OK();
 })
-.Doc("KenLmScoreBpeStrings: optionally BPE-merges, remove surrounding whitespaces and scores texts."
-  " returns in +log space (natural log, not base 10)");
+.Doc("KenLmAbsScoreBpeStrings: optionally BPE-merges, remove surrounding whitespaces and scores texts."
+  " returns in +log space (natural log, not base 10)."
+  " relative score, relative to previous text."
+  );
+
+
+REGISTER_OP("KenLmAbsScoreBpeStringsDense")
+.Input("handle: resource")
+.Input("bpe_merge_symbol: string")
+.Input("strings: string")
+.Input("labels: string")
+.Output("scores: float32")
+.Output("dense_scores: float32")
+.SetShapeFn([](::tensorflow::shape_inference::InferenceContext* c) {
+  c->set_output(0, c->input(2));
+  ::tensorflow::shape_inference::ShapeHandle out_shape;
+  TF_RETURN_IF_ERROR(c->Concatenate(c->input(2), c->input(3), &out_shape));
+  c->set_output(1, out_shape);
+  return Status::OK();
+})
+.Doc("KenLmAbsScoreBpeStrings: optionally BPE-merges, remove surrounding whitespaces and scores texts."
+  " returns in +log space (natural log, not base 10)."
+  " relative score, relative to previous text."
+  " dense output, for all possible succeeding labels.");
 
 
 // https://github.com/kpu/kenlm/blob/master/lm/model.hh
+// https://github.com/kpu/kenlm/blob/master/lm/virtual_interface.hh
+// https://github.com/kpu/kenlm/blob/master/python/kenlm.pyx
 struct KenLmModel : public ResourceBase {
   explicit KenLmModel(const string& filename)
       : filename_(filename), model_(filename.c_str()) {}
 
-  float score(const string& text) {
+  float abs_score(const string& text) {
     float total = 0;
     mutex_lock l(mu_);
-    lm::ngram::State state;
+    lm::ngram::State state, out_state;
     model_.BeginSentenceWrite(&state);
-    lm::ngram::State out_state;
     for(const string& word : tensorflow::str_util::Split(text, ' ')) {
       if(word.empty()) continue;
       auto word_idx = model_.BaseVocabulary().Index(word);
-      total += model_.BaseScore(&state, word_idx, &out_state);
+      total += model_.FullScore(state, word_idx, out_state).prob;
       state = out_state;
     }
     // KenLM returns score in +log10 space.
     // We want to return in (natural) +log space.
     // 10 ** x = e ** (x * log(10))
     return total * logf(10.);
+  }
+
+  // See comments below.
+  // We expect that the text either ends with a space or not, i.e. "... word " or "... subword".
+  float abs_score_dense(
+        const string& text, const string& last_word_join,
+        const TTypes<string>::ConstFlat labels, TTypes<float>::Flat out_dense_scores) {
+    assert(labels.size() == out_dense_scores.size());
+    mutex_lock l(mu_);
+    lm::ngram::State state, out_state;
+    model_.BeginSentenceWrite(&state);
+    // We expect that the text either ends with a space or not, i.e. "... word " or "... subword".
+    // We split the text into words. In the first case, we would have an empty word at the end, otherwise not.
+    std::vector<string> words = tensorflow::str_util::Split(text, ' ');
+    float total_score = 0;
+    string last_word = "";
+    if(!words.empty()) {
+      last_word = words[words.size() - 1];
+      // Only up to the last word, which is either empty or a subword, which we join below.
+      for(int i = 0; i < words.size() - 1; ++i) {
+        const string& word = words[i];
+        if(word.empty()) continue;
+        auto word_idx = model_.BaseVocabulary().Index(word);
+        total_score += model_.FullScore(state, word_idx, out_state).prob;
+        state = out_state;
+      }
+    }
+    for(int i = 0; i < labels.size(); ++i) {
+      string word = last_word + labels(i);
+      auto word_idx = model_.BaseVocabulary().Index(word);
+      float score = model_.FullScore(state, word_idx, out_state).prob;
+      out_dense_scores(i) = (total_score + score) * logf(10.);
+    }
+    // Return the score from the prev step.
+    if(!last_word.empty()) {
+      auto word_idx = model_.BaseVocabulary().Index(last_word + last_word_join);
+      total_score += model_.FullScore(state, word_idx, out_state).prob;    
+    }
+    return total_score * logf(10.);
   }
   
   string DebugString() override {
@@ -127,7 +193,7 @@ class KenLmLoadModelOp : public ResourceOpKernel<KenLmModel> {
 REGISTER_KERNEL_BUILDER(Name("KenLmLoadModel").Device(DEVICE_CPU), KenLmLoadModelOp);
 
 
-class KenLmScoreStringsOp : public OpKernel {
+class KenLmAbsScoreStringsOp : public OpKernel {
  public:
   using OpKernel::OpKernel;
 
@@ -148,15 +214,15 @@ class KenLmScoreStringsOp : public OpKernel {
     auto output_flat = output_tensor->flat<float>();
 
     for(int i = 0; i < input_flat.size(); ++i) {
-      output_flat(i) = lm->score(input_flat(i));
+      output_flat(i) = lm->abs_score(input_flat(i));
     }
   }
 };
 
-REGISTER_KERNEL_BUILDER(Name("KenLmScoreStrings").Device(DEVICE_CPU), KenLmScoreStringsOp);
+REGISTER_KERNEL_BUILDER(Name("KenLmAbsScoreStrings").Device(DEVICE_CPU), KenLmAbsScoreStringsOp);
 
 
-class KenLmScoreBpeStringsOp : public OpKernel {
+class KenLmAbsScoreBpeStringsOp : public OpKernel {
  public:
   using OpKernel::OpKernel;
 
@@ -189,12 +255,65 @@ class KenLmScoreBpeStringsOp : public OpKernel {
       tensorflow::StringPiece sp(text);
       tensorflow::str_util::RemoveWhitespaceContext(&sp);
       text = sp.ToString();
-      output_flat(i) = lm->score(text);
+      output_flat(i) = lm->abs_score(text);
     }
   }
 };
 
-REGISTER_KERNEL_BUILDER(Name("KenLmScoreBpeStrings").Device(DEVICE_CPU), KenLmScoreBpeStringsOp);
+REGISTER_KERNEL_BUILDER(Name("KenLmAbsScoreBpeStrings").Device(DEVICE_CPU), KenLmAbsScoreBpeStringsOp);
+
+
+class KenLmAbsScoreBpeStringsDenseOp : public OpKernel {
+ public:
+  using OpKernel::OpKernel;
+
+  void Compute(OpKernelContext* context) override {
+    KenLmModel* lm;
+    {
+      const Tensor* handle;
+      OP_REQUIRES_OK(context, context->input("handle", &handle));        
+      OP_REQUIRES_OK(context, GetResourceFromContext(context, "handle", &lm));
+    }
+    core::ScopedUnref unref(lm);
+
+    OP_REQUIRES(context, context->input(1).NumElements() == 1,
+      errors::InvalidArgument(
+        "bpe_merge_symbol must be a single element but got shape ",
+        context->input(1).shape().DebugString()));
+    const string& bpe_merge_symbol = context->input(1).flat<string>()(0);
+
+    const Tensor& input_tensor = context->input(2);
+    auto input_flat = input_tensor.flat<string>();
+
+    const Tensor& labels_tensor = context->input(3);
+    auto labels_flat = labels_tensor.flat<string>();
+
+    Tensor* output_tensor = NULL;
+    OP_REQUIRES_OK(context, context->allocate_output(0, input_tensor.shape(), &output_tensor));
+    auto output_flat = output_tensor->flat<float>();
+
+    Tensor* output_dense_tensor = NULL;
+    TensorShape output_dense_shape(input_tensor.shape());
+    output_dense_shape.AppendShape(labels_tensor.shape());
+    OP_REQUIRES_OK(context, context->allocate_output(1, output_dense_shape, &output_dense_tensor));
+    Tensor output_dense_flat_tensor;
+    OP_REQUIRES(context,
+      output_dense_flat_tensor.CopyFrom(
+        *output_dense_tensor,
+        TensorShape({input_tensor.NumElements(), labels_tensor.NumElements()})),
+      errors::Internal("CopyFrom failed"));
+
+    for(int i = 0; i < input_flat.size(); ++i) {
+      string text = input_flat(i);
+      if(!bpe_merge_symbol.empty())
+        text = tensorflow::str_util::StringReplace(text, bpe_merge_symbol + " ", "", /* replace_all */ true);
+      output_flat(i) = lm->abs_score_dense(
+        text, bpe_merge_symbol, labels_flat, output_dense_flat_tensor.Slice(i, i + 1).flat<float>());
+    }
+  }
+};
+
+REGISTER_KERNEL_BUILDER(Name("KenLmAbsScoreBpeStringsDense").Device(DEVICE_CPU), KenLmAbsScoreBpeStringsDenseOp);
 
 """
 
@@ -255,7 +374,7 @@ def get_tf_mod(verbose=False):
     is_cpp=True, use_cuda_if_available=False,
     verbose=verbose)
   tf_mod = compiler.load_tf_module()
-  assert hasattr(tf_mod, "ken_lm_score_strings"), "content of mod: %r" % (dir(tf_mod),)
+  assert hasattr(tf_mod, "ken_lm_abs_score_strings"), "content of mod: %r" % (dir(tf_mod),)
   _tf_mod = tf_mod
   return tf_mod
 
@@ -269,17 +388,17 @@ def ken_lm_load(filename):
   return get_tf_mod().ken_lm_load_model(filename=filename)
 
 
-def ken_lm_score_strings(handle, strings):
+def ken_lm_abs_score_strings(handle, strings):
   """
   :param tf.Tensor handle: TF resource handle returned by :func:`ken_lm_load`
   :param tf.Tensor strings: strings which are being scores. white-space delimited words.
   :return: same shape as `strings`, float32
   :rtype: tf.Tensor
   """
-  return get_tf_mod().ken_lm_score_strings(handle=handle, strings=strings)
+  return get_tf_mod().ken_lm_abs_score_strings(handle=handle, strings=strings)
 
 
-def ken_lm_score_bpe_strings(handle, bpe_merge_symbol, strings):
+def ken_lm_abs_score_bpe_strings(handle, bpe_merge_symbol, strings):
   """
   :param tf.Tensor handle: TF resource handle returned by :func:`ken_lm_load`
   :param str bpe_merge_symbol: e.g. "@@"
@@ -287,7 +406,21 @@ def ken_lm_score_bpe_strings(handle, bpe_merge_symbol, strings):
   :return: same shape as `strings`, float32
   :rtype: tf.Tensor
   """
-  return get_tf_mod().ken_lm_score_bpe_strings(handle=handle, bpe_merge_symbol=bpe_merge_symbol, strings=strings)
+  return get_tf_mod().ken_lm_abs_score_bpe_strings(
+    handle=handle, bpe_merge_symbol=bpe_merge_symbol, strings=strings)
+
+
+def ken_lm_abs_score_bpe_strings_dense(handle, bpe_merge_symbol, strings, labels):
+  """
+  :param tf.Tensor handle: TF resource handle returned by :func:`ken_lm_load`
+  :param str bpe_merge_symbol: e.g. "@@"
+  :param tf.Tensor strings: strings which are being scores. white-space delimited words.
+  :param tf.Tensor|tf.Variable labels:
+  :return: same shape as `strings`, float32
+  :rtype: tf.Tensor
+  """
+  return get_tf_mod().ken_lm_abs_score_bpe_strings_dense(
+    handle=handle, bpe_merge_symbol=bpe_merge_symbol, strings=strings, labels=labels)
 
 
 if __name__ == "__main__":
@@ -301,7 +434,7 @@ if __name__ == "__main__":
   assert os.path.exists(test_lm_file)
   lm_tf = ken_lm_load(filename=test_lm_file)
   input_strings_tf = tf.placeholder(tf.string, [None])
-  output_scores_tf = ken_lm_score_strings(handle=lm_tf, strings=input_strings_tf)
+  output_scores_tf = ken_lm_abs_score_strings(handle=lm_tf, strings=input_strings_tf)
   with tf.Session() as session:
     output_scores = session.run(output_scores_tf, feed_dict={input_strings_tf: input_strings})
     print("input strings:", input_strings, "(sys.argv[1:])")
