@@ -3318,10 +3318,11 @@ class KenLmStateLayer(_ConcatInputLayer):
   def get_out_data_from_opts(cls, name, sources,
                              vocab_file=None, vocab_unknown_label="UNK", dense_output=False,
                              **kwargs):
-    data = get_concat_sources_data_template(sources, name="%s_output" % name)
+    data = get_concat_sources_data_template(sources)
     dtype = tf.as_dtype(data.dtype)
     assert isinstance(dtype, tf.DType)
     assert (data.sparse and dtype.is_integer) or dtype == tf.string
+    data = data.copy(name="%s_output" % name)
     data.dtype = "float32"
     data.sparse = False
     if dense_output:
