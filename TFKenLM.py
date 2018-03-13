@@ -347,7 +347,7 @@ def get_tf_mod(verbose=False):
   files += glob('%s/util/double-conversion/*.cc' % kenlm_dir)
   files = [fn for fn in files if not (fn.endswith('main.cc') or fn.endswith('test.cc'))]
   assert files, "submodule in %r not checked out?" % kenlm_dir
-  libs = []
+  libs = ["z"]
   if platform.system() != 'Darwin':
     libs.append('rt')
 
@@ -370,7 +370,7 @@ def get_tf_mod(verbose=False):
   compiler = OpCodeCompiler(
     base_name="KenLM", code_version=1, code=src_code,
     include_paths=(kenlm_dir, kenlm_dir + "/util/double-conversion"),
-    c_macro_defines={"NDEBUG": 1, "KENLM_MAX_ORDER": 6},
+    c_macro_defines={"NDEBUG": 1, "KENLM_MAX_ORDER": 6, "HAVE_ZLIB": 1},
     ld_flags=["-l%s" % lib for lib in libs],
     is_cpp=True, use_cuda_if_available=False,
     verbose=verbose)
