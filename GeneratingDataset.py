@@ -1228,7 +1228,7 @@ class NltkTimitDataset(TimitDataset):
     return self._data_reader.phones(seq_tag)
 
 
-class Vocabulary:
+class Vocabulary(object):
   """
   Represents a vocabulary (set of words, and their ids).
   Used by :class:`BytePairEncoding`.
