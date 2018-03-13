@@ -685,6 +685,9 @@ class _SubnetworkRecCell(object):
       # Stack of layers:
       layers = []  # type: list[_TemplateLayer]
 
+    def get_none_layer(name):
+      return None
+
     def get_templated_layer(name):
       """
       :param str name:
@@ -710,8 +713,18 @@ class _SubnetworkRecCell(object):
         construct_ctx.layers[-1].dependencies.add(layer)
       construct_ctx.layers.append(layer)
       self.layer_data_templates[name] = layer
+      try:
+        # First, see how far we can get without recursive layer construction.
+        # We only want to get the data template for now.
+        self.net.construct_layer(
+          net_dict=self.net_dict, name=name, get_layer=get_none_layer, add_layer=add_templated_layer)
+      except Exception:
+        # Pretty generic exception handling but anything could happen.
+        # Not so nice but should work for now.
+        pass
+      # Now, do again, but with recursive layer construction, to determine the dependencies.
       self.net.construct_layer(
-        self.net_dict, name, get_layer=get_templated_layer, add_layer=add_templated_layer)
+        net_dict=self.net_dict, name=name, get_layer=get_templated_layer, add_layer=add_templated_layer)
       assert construct_ctx.layers[-1] is layer
       construct_ctx.layers.pop(-1)
       return layer
@@ -1881,7 +1894,8 @@ class _TemplateLayer(LayerBase):
     """
     # Init with some dummy.
     super(_TemplateLayer, self).__init__(
-      out_type={"shape": ()}, name=name, network=network)
+      out_type={"shape": (), "name": "dummy_initial_template_data"},
+      name=name, network=network)
     self.output.size_placeholder = {}  # must be initialized
     self.layer_class = ":uninitialized-template"
     self.is_data_template = False
