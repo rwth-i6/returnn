@@ -115,7 +115,7 @@ struct KenLmModel : public ResourceBase {
   // We expect that the text either ends with a space or not, i.e. "... word " or "... subword".
   float abs_score_dense(
         const string& text, const string& last_word_join,
-        const TTypes<string>::ConstFlat labels, TTypes<float>::Flat out_dense_scores) {
+        const TTypes<string>::ConstFlat labels, TTypes<float>::UnalignedFlat out_dense_scores) {
     assert(labels.size() == out_dense_scores.size());
     mutex_lock l(mu_);
     lm::ngram::State state, out_state;
@@ -308,7 +308,7 @@ class KenLmAbsScoreBpeStringsDenseOp : public OpKernel {
       if(!bpe_merge_symbol.empty())
         text = tensorflow::str_util::StringReplace(text, bpe_merge_symbol + " ", "", /* replace_all */ true);
       output_flat(i) = lm->abs_score_dense(
-        text, bpe_merge_symbol, labels_flat, output_dense_flat_tensor.Slice(i, i + 1).flat<float>());
+        text, bpe_merge_symbol, labels_flat, output_dense_flat_tensor.Slice(i, i + 1).unaligned_flat<float>());
     }
   }
 };
