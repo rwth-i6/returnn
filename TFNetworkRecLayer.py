@@ -3256,6 +3256,7 @@ class KenLmStateLayer(_ConcatInputLayer):
     :param bool dense_output: whether we output the score for all possible succeeding tokens
     """
     import TFKenLM
+    from TFUtil import expand_multiple_dims
     super(KenLmStateLayer, self).__init__(**kwargs)
     # Note: We later could extend it and have the state-behavior just as the :class:`CumsumLayer`.
     assert self._rec_previous_layer and self.input_data.time_dim_axis is None, (
@@ -3304,7 +3305,9 @@ class KenLmStateLayer(_ConcatInputLayer):
         bpe_merge_symbol=bpe_merge_symbol or "",
         strings=next_strings,
         labels=self.tf_vocab)
-      new_rel_scores = new_abs_scores_dense - new_abs_scores
+      new_abs_scores_bc = expand_multiple_dims(
+        new_abs_scores, [i + new_abs_scores.get_shape().ndims for i in range(self.tf_vocab.get_shape().ndims)])
+      new_rel_scores = new_abs_scores_dense - new_abs_scores_bc
     else:
       new_abs_scores = TFKenLM.ken_lm_abs_score_bpe_strings(
         handle=self.lm_handle,
