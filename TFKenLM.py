@@ -145,11 +145,11 @@ struct KenLmModel : public ResourceBase {
     // Return the score from the prev step.
     if(!last_word.empty()) {
       auto word_idx = model_.BaseVocabulary().Index(last_word + last_word_join);
-      total_score += model_.FullScore(state, word_idx, out_state).prob;    
+      total_score += model_.FullScore(state, word_idx, out_state).prob;
     }
     return total_score * logf(10.);
   }
-  
+
   string DebugString() override {
     return strings::StrCat("KenLmModel[", filename_, "]");
   }
@@ -201,7 +201,7 @@ class KenLmAbsScoreStringsOp : public OpKernel {
     KenLmModel* lm;
     {
       const Tensor* handle;
-      OP_REQUIRES_OK(context, context->input("handle", &handle));        
+      OP_REQUIRES_OK(context, context->input("handle", &handle));
       OP_REQUIRES_OK(context, GetResourceFromContext(context, "handle", &lm));
     }
     core::ScopedUnref unref(lm);
@@ -230,7 +230,7 @@ class KenLmAbsScoreBpeStringsOp : public OpKernel {
     KenLmModel* lm;
     {
       const Tensor* handle;
-      OP_REQUIRES_OK(context, context->input("handle", &handle));        
+      OP_REQUIRES_OK(context, context->input("handle", &handle));
       OP_REQUIRES_OK(context, GetResourceFromContext(context, "handle", &lm));
     }
     core::ScopedUnref unref(lm);
@@ -271,7 +271,7 @@ class KenLmAbsScoreBpeStringsDenseOp : public OpKernel {
     KenLmModel* lm;
     {
       const Tensor* handle;
-      OP_REQUIRES_OK(context, context->input("handle", &handle));        
+      OP_REQUIRES_OK(context, context->input("handle", &handle));
       OP_REQUIRES_OK(context, GetResourceFromContext(context, "handle", &lm));
     }
     core::ScopedUnref unref(lm);
@@ -346,6 +346,7 @@ def get_tf_mod(verbose=False):
   files += glob('%s/lm/*.cc' % kenlm_dir)
   files += glob('%s/util/double-conversion/*.cc' % kenlm_dir)
   files = [fn for fn in files if not (fn.endswith('main.cc') or fn.endswith('test.cc'))]
+  assert files, "submodule in %r not checked out?" % kenlm_dir
   libs = []
   if platform.system() != 'Darwin':
     libs.append('rt')
