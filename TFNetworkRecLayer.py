@@ -135,7 +135,29 @@ class RecLayer(_ConcatInputLayer):
         # Note that for the TF RNN cells, there is no other way to do this.
         # Also, see the usage of :func:`LayerBase.cls_layer_scope`, e.g. for initial vars.
         params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=re.escape(scope_name_prefix))
-        self.params.update({p.name[len(scope_name_prefix):-2]: p for p in params})
+        self._add_params(params=params, scope_name_prefix=scope_name_prefix)
+        # More specific way. Should not really add anything anymore but you never know.
+        # Also, this will update self.saveable_param_replace.
+        if isinstance(self.cell, _SubnetworkRecCell):
+          self._add_params(params=self.cell.net.get_params_list(), scope_name_prefix=scope_name_prefix)
+          self.saveable_param_replace.update(self.cell.net.get_saveable_param_replace_dict())
+          if self.cell.input_layers_net:
+            self._add_params(params=self.cell.input_layers_net.get_params_list(), scope_name_prefix=scope_name_prefix)
+            self.saveable_param_replace.update(self.cell.input_layers_net.get_saveable_param_replace_dict())
+          if self.cell.output_layers_net:
+            self._add_params(params=self.cell.output_layers_net.get_params_list(), scope_name_prefix=scope_name_prefix)
+            self.saveable_param_replace.update(self.cell.output_layers_net.get_saveable_param_replace_dict())
+
+  def _add_params(self, scope_name_prefix, params):
+    """
+    :param str scope_name_prefix:
+    :param list[tf.Variable] params:
+    """
+    for p in params:
+      if not p.name.startswith(scope_name_prefix):
+        continue
+      assert p.name.startswith(scope_name_prefix) and p.name.endswith(":0")
+      self.params[p.name[len(scope_name_prefix):-2]] = p
 
   def get_dep_layers(self):
     l = super(RecLayer, self).get_dep_layers()

@@ -678,6 +678,17 @@ class TFNetwork(object):
         l.append(param)
     return l
 
+  def get_saveable_param_replace_dict(self):
+    """
+    :return: params and saveable_param_replace resolved, union of all layers
+    :rtype: dict[str,tf.Variable|tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject]
+    """
+    d = {}
+    for layer_name, layer in sorted(self.layers.items()):
+      assert isinstance(layer, LayerBase)
+      d.update(layer.get_saveable_params_dict())
+    return d
+
   def get_saveable_params_list(self):
     """
     :return: list of model variables or SaveableObject, to save/restore
