@@ -18,6 +18,7 @@ kenlm_dir = returnn_dir + "/extern/kenlm"
 # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/tensor_types.h
 # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/lib/strings/str_util.h
 _src_code = """
+#include <exception>
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/shape_inference.h"
@@ -174,7 +175,11 @@ class KenLmLoadModelOp : public ResourceOpKernel<KenLmModel> {
   virtual void Cancel() {}
 
   Status CreateResource(KenLmModel** ret) override EXCLUSIVE_LOCKS_REQUIRED(mu_) {
-    *ret = new KenLmModel(filename_);
+    try {
+      *ret = new KenLmModel(filename_);
+    } catch (std::exception& exc) {
+      return errors::Internal("Could not load KenLmModel ", filename_, ", exception: ", exc.what());
+    }
     if(*ret == nullptr)
       return errors::ResourceExhausted("Failed to allocate");
     return Status::OK();
