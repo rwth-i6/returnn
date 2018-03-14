@@ -3246,15 +3246,19 @@ class KenLmStateLayer(_ConcatInputLayer):
 
   def __init__(self, lm_file, vocab_file=None, vocab_unknown_label="UNK", bpe_merge_symbol=None,
                input_step_offset=0, dense_output=False,
+               debug=False,
                **kwargs):
     """
-    :param str lm_file: ARPA file or so. whatever KenLM supports
+    :param str|()->str lm_file: ARPA file or so. whatever KenLM supports
     :param str|None vocab_file: if the inputs are symbols, this must be provided. see :class:`Vocabulary`
     :param str vocab_unknown_label: for the vocabulary
     :param str|None bpe_merge_symbol: e.g. "@@" if you want to apply BPE merging
     :param int input_step_offset: if provided, will consider the input only from this step onwards
     :param bool dense_output: whether we output the score for all possible succeeding tokens
+    :param bool debug: prints debug info
     """
+    if callable(lm_file):
+      lm_file = lm_file()
     import TFKenLM
     from TFUtil import expand_multiple_dims
     super(KenLmStateLayer, self).__init__(**kwargs)
@@ -3314,6 +3318,18 @@ class KenLmStateLayer(_ConcatInputLayer):
         bpe_merge_symbol=bpe_merge_symbol or "",
         strings=next_strings)
       new_rel_scores = new_abs_scores - prev_scores
+    if debug:
+      # Print some info. Only for the first 3 steps because it will spam a lot.
+      new_rel_scores = tf.cond(tf.less_equal(prev_step, 2), lambda: tf.Print(new_rel_scores, [
+        str(self), "; step: ", prev_step,
+        "; input shape: ", tf.shape(self.input_data.placeholder), str(self.input_data),
+        "; input: ", self.input_data.placeholder,
+        "; strings shape: ", tf.shape(next_strings),
+        "; strings: ", "'" + next_strings + "'", "; new_abs_scores: ", new_abs_scores,
+        "; sparse rel scores: ", new_abs_scores - prev_scores,
+        "; min/max/mean rel scores: ", tf.reduce_min(new_rel_scores), "/", tf.reduce_max(new_rel_scores), "/", tf.reduce_mean(new_rel_scores)] +
+        ["; vocab: ", self.tf_vocab] if self.tf_vocab else []),
+        lambda: new_rel_scores)
     self.rec_vars_outputs["scores"] = new_abs_scores
     self.output.placeholder = new_rel_scores
 
