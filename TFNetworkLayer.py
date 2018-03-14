@@ -275,7 +275,7 @@ class LayerBase(object):
     :param TFNetwork.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
 
-    Will modify `d` such that it becomes the kwargs for `self.__init__()`.
+    Will modify `d` inplace such that it becomes the kwargs for `self.__init__()`.
     Mostly leaves `d` as-is.
     This is used by :func:`TFNetwork.construct_from_dict`.
     """
@@ -3916,6 +3916,82 @@ class SubnetworkLayer(LayerBase):
         for key, value in d.items():
           shape_invariants["%s/%s" % (layer_name, key)] = value
     return shape_invariants
+
+
+class VariableLayer(LayerBase):
+  """
+  Represents a variable. Can add batch/time dimension if wanted. Can be trainable.
+  See defaults.
+  """
+  layer_class = "variable"
+
+  def __init__(self, shape, dtype="float32", add_batch_axis=True, add_time_axis=False, trainable=True,
+               init=0,
+               **kwargs):
+    """
+    :param tuple[int]|list[int] shape:
+    :param str dtype:
+    :param bool add_batch_axis:
+    :param bool add_time_axis:
+    :param bool trainable:
+    :param str|float|int init: see :func:`TFUtil.get_initializer`
+    """
+    super(VariableLayer, self).__init__(**kwargs)
+    assert not self.sources, "%s: does not expect any sources" % self
+    from TFUtil import get_initializer, expand_dims_unbroadcast
+    initializer = get_initializer(init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
+    with self.var_creation_scope():
+      var = self.add_param(tf.get_variable(
+        name=self.name, shape=shape, dtype=dtype,
+        initializer=initializer, trainable=trainable
+      ))
+      out = var
+      if add_batch_axis:
+        # Unbroadcast to not confuse some other layers
+        batch_dim = self.get_batch_dim()
+        out = expand_dims_unbroadcast(out, axis=self.output.batch_dim_axis, dim=batch_dim)
+      if add_time_axis:
+        out = tf.expand_dims(out, axis=self.output.time_dim_axis)
+    self.output.placeholder = out
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d: will modify inplace
+    :param TFNetwork.TFNetwork network:
+    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
+    """
+    # Overwrite default behavior for default sources.
+    # Here: none by default.
+    d.setdefault("from", [])
+    super(VariableLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, shape, dtype="float32", add_batch_axis=True, add_time_axis=False, **kwargs):
+    """
+    :param str name:
+    :param tuple[int]|list[int] shape:
+    :param str dtype:
+    :param bool add_batch_axis:
+    :param bool add_time_axis:
+    :rtype: Data
+    """
+    assert isinstance(shape, (list, int))
+    assert len(shape) == 0 or all(shape)
+    shape = list(shape)
+    batch_dim_axis = 0 if add_batch_axis else None
+    if add_time_axis:
+      shape.insert(0, 1)
+      if add_batch_axis:
+        time_dim_axis = 1
+      else:
+        time_dim_axis = 0
+    else:
+      time_dim_axis = None
+    return Data(
+      name="%s_output" % name, shape=shape, dtype=dtype,
+      dim=shape[-1] if shape else None,
+      batch_dim_axis=batch_dim_axis, time_dim_axis=time_dim_axis)
 
 
 class AccumulateMeanLayer(ReduceLayer):

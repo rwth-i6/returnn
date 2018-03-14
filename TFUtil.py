@@ -1735,17 +1735,28 @@ def xavier_initializer(uniform=True, seed=None, dtype=tf.float32):
     scale=1.0, mode='fan_avg', distribution="uniform" if uniform else "normal", seed=seed, dtype=dtype)
 
 
-def get_initializer(s, seed=None, eval_local_ns=None):
+def get_initializer(s, seed=None, eval_local_ns=None, dtype=tf.float32):
   """
   :param str|dict[str]|float s: e.g. "glorot_uniform" or "truncated_normal" or "orthogonal", or config dict with "class",
     or string to be `eval`ed if it contains "(". constant if a float is given.
   :param int|tf.Tensor seed:
   :param dict[str]|None eval_local_ns:
+  :param tf.DType|str dtype:
   :return: (function (shape) -> tf.Tensor) | tf.Initializer
   :rtype: ((tuple[int]) -> tf.Tensor) | tf.Initializer
   """
+  dtype = tf.as_dtype(dtype).base_dtype
+  assert isinstance(dtype, tf.DType)
   if isinstance(s, (float, int)):
-    return tf.constant_initializer(s, dtype=tf.float32)
+    if s == 0:
+      return tf.zeros_initializer(dtype=dtype)
+    if s == 1:
+      return tf.ones_initializer(dtype=dtype)
+    return tf.constant_initializer(s, dtype=dtype)
+  if not s and dtype == tf.string:
+    return tf.zeros_initializer(dtype=dtype)
+  if not s and dtype.is_integer:
+    return tf.zeros_initializer(dtype=dtype)
   import numpy
   import math
   from tensorflow.python.ops import init_ops
@@ -1786,7 +1797,11 @@ def get_initializer(s, seed=None, eval_local_ns=None):
     else:
       raise ValueError("invalid get_initializer argument, expected string or dict, got: %r" % s)
     if isinstance(f, (float, int)):
-      return tf.constant_initializer(f, dtype=tf.float32)
+      if f == 0:
+        return tf.zeros_initializer(dtype=dtype)
+      if f == 1:
+        return tf.ones_initializer(dtype=dtype)
+      return tf.constant_initializer(f, dtype=dtype)
     if not f:
       raise Exception("invalid initializer: %r" % s)
     if seed is not None:
