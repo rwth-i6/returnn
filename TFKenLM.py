@@ -157,7 +157,7 @@ struct KenLmModel : public ResourceBase {
 
   const string filename_;
   mutex mu_;
-  lm::ngram::RestProbingModel model_ GUARDED_BY(mu_);
+  lm::ngram::ProbingModel model_ GUARDED_BY(mu_);
 };
 
 
