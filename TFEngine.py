@@ -1476,7 +1476,9 @@ class Engine(object):
       assert not os.path.exists(output_file)
       print("Will write outputs to: %s" % output_file, file=log.v2)
       output_file = open(output_file, "w")
-      out_cache = {}  # corpus-seq-idx -> str
+      out_cache = {}  # corpus-seq-idx -> str|list[(float,str)]
+    if not log.verbose[4]:
+      print("Set log_verbosity to level 4 or higher to see seq info on stdout.", file=log.v2)
 
     def extra_fetches_callback(seq_idx, seq_tag, output, targets=None, beam_scores=None):
       """
@@ -1498,28 +1500,34 @@ class Engine(object):
         output = [bytearray(o).decode("utf8") for o in output]
       for i in range(len(seq_idx)):
         if out_beam_size is None:
-          print("seq_idx: %i, seq_tag: %r, output: %r" % (seq_idx[i], seq_tag[i], output[i]), file=log.v1)
+          print("seq_idx: %i, seq_tag: %r, output: %r" % (seq_idx[i], seq_tag[i], output[i]), file=log.v4)
           out_idx = i
         else:
           print("seq_idx: %i, seq_tag: %r, outputs: %r" % (
-            seq_idx[i], seq_tag[i], output[i * out_beam_size:(i + 1)*out_beam_size]), file=log.v1)
+            seq_idx[i], seq_tag[i], output[i * out_beam_size:(i + 1)*out_beam_size]), file=log.v4)
           out_idx = i * out_beam_size
         if target_key and dataset.can_serialize_data(target_key):
-          print("  ref:", dataset.serialize_data(key=target_key, data=targets[i]), file=log.v1)
+          print("  ref:", dataset.serialize_data(key=target_key, data=targets[i]), file=log.v4)
           if out_beam_size is None:
-            print("  hyp:", dataset.serialize_data(key=target_key, data=output[out_idx]), file=log.v1)
+            print("  hyp:", dataset.serialize_data(key=target_key, data=output[out_idx]), file=log.v4)
           else:
             assert beam_scores is not None
             for b in range(out_beam_size):
               print(
                 "  hyp %i, score %f:" % (b, beam_scores[i][b]),
                 dataset.serialize_data(key=target_key, data=output[out_idx + b]),
-                file=log.v1)
+                file=log.v4)
         if out_cache is not None:
           corpus_seq_idx = dataset.get_corpus_seq_idx(seq_idx[i])
           assert corpus_seq_idx not in out_cache
-          out_cache[corpus_seq_idx] = dataset.serialize_data(key=target_key, data=output[out_idx])
           seq_idx_to_tag[corpus_seq_idx] = seq_tag[i]
+          if out_beam_size is None:
+            out_cache[corpus_seq_idx] = dataset.serialize_data(key=target_key, data=output[out_idx])
+          else:
+            assert beam_scores is not None
+            out_cache[corpus_seq_idx] = [
+              (beam_scores[i][b], dataset.serialize_data(key=target_key, data=output[out_idx + b]))
+              for b in range(out_beam_size)]
 
     runner = Runner(
       engine=self, dataset=dataset, batches=batches, train=False, eval=do_eval,
