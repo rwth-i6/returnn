@@ -1814,11 +1814,12 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
   """
   layer_class = "softmax_over_spatial"
 
-  def __init__(self, energy_factor=None, **kwargs):
+  def __init__(self, energy_factor=None, local=False, **kwargs):
     """
     :param float|None energy_factor: the energy will be scaled by this factor.
       This is like a temperature for the softmax.
       In Attention-is-all-you-need, this is set to 1/sqrt(base_ctx.dim).
+    :param bool local: if true, assume the source is a slice so we skip masking the seq
     """
     from TFUtil import move_axis, sequence_mask, sequence_mask_time_major
     import numpy
@@ -1828,12 +1829,14 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
     energy = energy_data.placeholder
     energy_shape = tf.shape(energy, name="energy_shape")
     energy_shape = [energy_shape[i] for i in range(energy_data.batch_ndim)]
-    # We must mask all values behind seq_lens. Set them to -inf, because we use softmax afterwards.
-    energy_mask = energy_data.get_sequence_mask()
-    energy_mask_flat = tf.reshape(energy_mask, [numpy.prod(energy_shape[:2])], name="energy_mask_flat")
-    energy_flat = tf.reshape(energy, [numpy.prod(energy_shape[:2])] + energy_shape[2:], name="energy_flat")
-    energy_flat = tf.where(energy_mask_flat, energy_flat, float("-inf") * tf.ones_like(energy_flat), "energy_masked")
-    energy = tf.reshape(energy_flat, energy_shape, name="energy_unflat")
+    # if we operate on sliced data, skip the following masking
+    if not local:
+        # We must mask all values behind seq_lens. Set them to -inf, because we use softmax afterwards.
+        energy_mask = energy_data.get_sequence_mask()
+        energy_mask_flat = tf.reshape(energy_mask, [numpy.prod(energy_shape[:2])], name="energy_mask_flat")
+        energy_flat = tf.reshape(energy, [numpy.prod(energy_shape[:2])] + energy_shape[2:], name="energy_flat")
+        energy_flat = tf.where(energy_mask_flat, energy_flat, float("-inf") * tf.ones_like(energy_flat), "energy_masked")
+        energy = tf.reshape(energy_flat, energy_shape, name="energy_unflat")
     if energy_factor:
       energy = tf.multiply(energy, energy_factor, name="energy_scaled")
     energy = move_axis(energy, old_axis=energy_data.time_dim_axis, new_axis=-1, name="tr_time_last")  # (...,T)
