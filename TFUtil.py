@@ -1735,6 +1735,27 @@ def xavier_initializer(uniform=True, seed=None, dtype=tf.float32):
     scale=1.0, mode='fan_avg', distribution="uniform" if uniform else "normal", seed=seed, dtype=dtype)
 
 
+def load_txt_file_initializer(filename, dtype=tf.float32):
+  """
+  :param str filename:
+  :param tf.DType dtype:
+  :return: function, when called, will return the content
+  :rtype: ()->tf.Tensor
+  """
+  assert dtype == tf.float32, "only float32 supported currently"
+
+  def py_loader():
+    # Alternative: numpy.loadtxt.
+    import numpy
+    from Util import load_txt_vector
+    return numpy.array(load_txt_vector(filename))
+
+  def loader():
+    return tf.py_func(py_loader, [], dtype)
+
+  return loader
+
+
 def get_initializer(s, seed=None, eval_local_ns=None, dtype=tf.float32):
   """
   :param str|dict[str]|float s: e.g. "glorot_uniform" or "truncated_normal" or "orthogonal", or config dict with "class",
