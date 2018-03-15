@@ -1376,7 +1376,8 @@ class Engine(object):
     """
     :param Dataset.Dataset data:
     :param list[str]|None statistics: ignored at the moment
-    :return: nothing, will print everything to log.v1
+    :return: print everything to log.v1, and return the Runner instance to get access to all the stats
+    :rtype: Runner
     """
     print("Analyze with network on %r." % data, file=log.v1)
 
@@ -1420,6 +1421,7 @@ class Engine(object):
     if not analyzer.finalized:
       print("WARNING: Did not finished through the whole epoch.", file=log.v1)
       sys.exit(1)
+    return runner
 
   def search(self, dataset, do_eval=True, output_layer_name="output", output_file=None, output_file_format="txt"):
     """
