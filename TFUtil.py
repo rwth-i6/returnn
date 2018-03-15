@@ -1743,17 +1743,22 @@ def load_txt_file_initializer(filename, dtype=tf.float32):
   :rtype: ()->tf.Tensor
   """
   assert dtype == tf.float32, "only float32 supported currently"
+  dtype_ = dtype
 
   def py_loader():
     # Alternative: numpy.loadtxt.
     import numpy
     from Util import load_txt_vector
-    return numpy.array(load_txt_vector(filename))
+    return numpy.array(load_txt_vector(filename), dtype="float32")
 
-  def loader():
-    return tf.py_func(py_loader, [], dtype)
+  from tensorflow.python.ops import init_ops
+  class LoadTxtFileInitializer(init_ops.Initializer):
+    def __call__(self, shape, dtype=None, partition_info=None):
+      v = tf.py_func(py_loader, [], dtype_)
+      v.set_shape(shape)
+      return v
 
-  return loader
+  return LoadTxtFileInitializer()
 
 
 def get_initializer(s, seed=None, eval_local_ns=None, dtype=tf.float32):

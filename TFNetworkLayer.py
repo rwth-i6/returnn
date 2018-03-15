@@ -3936,7 +3936,7 @@ class VariableLayer(LayerBase):
     :param bool trainable:
     :param str|float|int init: see :func:`TFUtil.get_initializer`
     """
-    super(VariableLayer, self).__init__(**kwargs)
+    super(VariableLayer, self).__init__(trainable=trainable, **kwargs)
     assert not self.sources, "%s: does not expect any sources" % self
     from TFUtil import get_initializer, expand_dims_unbroadcast
     initializer = get_initializer(init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
@@ -3976,7 +3976,7 @@ class VariableLayer(LayerBase):
     :param bool add_time_axis:
     :rtype: Data
     """
-    assert isinstance(shape, (list, int))
+    assert isinstance(shape, (list, tuple))
     assert len(shape) == 0 or all(shape)
     shape = list(shape)
     batch_dim_axis = 0 if add_batch_axis else None
