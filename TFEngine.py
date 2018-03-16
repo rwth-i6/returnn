@@ -1421,7 +1421,7 @@ class Engine(object):
     if not analyzer.finalized:
       print("WARNING: Did not finished through the whole epoch.", file=log.v1)
       sys.exit(1)
-    return runner
+    return analyzer
 
   def search(self, dataset, do_eval=True, output_layer_name="output", output_file=None, output_file_format="txt"):
     """
