@@ -433,15 +433,17 @@ class Data(object):
     :rtype: Data
     """
     assert self.batch_dim_axis is not None
-    assert self.time_dim_axis is None
     new_shape = list(self.shape)
-    new_shape.insert(time_dim_axis, None)
     kwargs = self.get_kwargs()
-    kwargs["batch_dim_axis"] = (
-      self.batch_dim_axis
-      if (self.batch_dim_axis < time_dim_axis)
-      else (self.batch_dim_axis + 1))
-    kwargs["time_dim_axis"] = time_dim_axis
+    if self.time_dim_axis is None:
+      new_shape.insert(time_dim_axis, None)
+      kwargs["batch_dim_axis"] = (
+        self.batch_dim_axis
+        if (self.batch_dim_axis < time_dim_axis)
+        else (self.batch_dim_axis + 1))
+      kwargs["time_dim_axis"] = time_dim_axis
+    else:
+      assert self.time_dim_axis == time_dim_axis
     kwargs["shape"] = new_shape
     if name:
       kwargs["name"] = name
