@@ -4040,10 +4040,11 @@ class FastBaumWelchLayer(_ConcatInputLayer):
   layer_class = "fast_bw"
   recurrent = True
 
-  def __init__(self, align_target, sprint_opts=None, **kwargs):
+  def __init__(self, align_target, sprint_opts=None, tdp_scale=1.0, **kwargs):
     """
     :param str align_target: e.g. "sprint"
     :param dict[str] sprint_opts:
+    :param float tdp_scale:
     """
     super(FastBaumWelchLayer, self).__init__(**kwargs)
     assert align_target == "sprint", "not yet implemented otherwise, align_target %r" % align_target
@@ -4054,6 +4055,7 @@ class FastBaumWelchLayer(_ConcatInputLayer):
     seq_tags = self.network.get_seq_tags()
     fwdbwd, obs_scores = fast_baum_welch_by_sprint_automata(
       sprint_opts=sprint_opts,
+      tdp_scale=tdp_scale,
       am_scores=-data.placeholder,  # it wants the scores in -log space
       float_idx=seq_mask,
       tags=seq_tags)
