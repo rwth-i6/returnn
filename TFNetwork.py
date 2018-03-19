@@ -1157,27 +1157,30 @@ def help_on_tf_exception(exception, feed_dict, meta_step_info, extern_data, file
   print("Step meta information:", file=file)
   pprint(meta_step_info, stream=file)
   print("Feed dict:", file=file)
-  for key, value in sorted(feed_dict.items(), key=lambda item: item[0].name):
-    assert isinstance(key, tf.Tensor)
-    if isinstance(value, numpy.ndarray):
-      v_minmax = numpy.min(value), numpy.max(value)
-      info = "shape %s, dtype %s" % (value.shape, value.dtype)
-      info += ", min/max %s/%s" % v_minmax
-      if value.dtype.kind == "f":
-        info += ", mean/stddev %s/%s" % (numpy.mean(value), numpy.std(value))
-    else:
-      v_minmax = -1, -1
-      info = "type %r" % type(value)
-    data = None
-    if key.name.startswith("extern_data/"):
-      data_key = get_base_name(key)
-      if data_key in extern_data.data:
-        data = extern_data.data[data_key]
-        info += ", %s" % data
-    print("  %r: %s" % (key, info), file=file)
-    if data and data.sparse:
-      if v_minmax[0] < 0 or v_minmax[1] >= data.dim:
-        print("  WARNING, invalid label for data", data, file=file)
+  if isinstance(feed_dict, dict):
+    for key, value in sorted(feed_dict.items(), key=lambda item: item[0].name):
+      assert isinstance(key, tf.Tensor)
+      if isinstance(value, numpy.ndarray):
+        v_minmax = numpy.min(value), numpy.max(value)
+        info = "shape %s, dtype %s" % (value.shape, value.dtype)
+        info += ", min/max %s/%s" % v_minmax
+        if value.dtype.kind == "f":
+          info += ", mean/stddev %s/%s" % (numpy.mean(value), numpy.std(value))
+      else:
+        v_minmax = -1, -1
+        info = "type %r" % type(value)
+      data = None
+      if key.name.startswith("extern_data/"):
+        data_key = get_base_name(key)
+        if data_key in extern_data.data:
+          data = extern_data.data[data_key]
+          info += ", %s" % data
+      print("  %r: %s" % (key, info), file=file)
+      if data and data.sparse:
+        if v_minmax[0] < 0 or v_minmax[1] >= data.dim:
+          print("  WARNING, invalid label for data", data, file=file)
+  else:
+    pprint(feed_dict, stream=file)
 
 
 class CustomCheckpointLoader:
