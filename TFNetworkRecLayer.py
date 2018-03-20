@@ -2452,6 +2452,7 @@ class ChoiceLayer(LayerBase):
 
   def __init__(self, beam_size, input_type="prob", explicit_search_source=None, length_normalization=True,
                scheduled_sampling=False,
+               cheating=False,
                **kwargs):
     """
     :param int beam_size: the outgoing beam size. i.e. our output will be (batch * beam_size, ...)
@@ -2460,6 +2461,7 @@ class ChoiceLayer(LayerBase):
     :param LayerBase|None explicit_search_source: will mark it as an additional dependency
     :param dict|None scheduled_sampling:
     :param bool length_normalization: evaluates score_t/len in search
+    :param bool cheating: if True, will always add the true target in the beam
     """
     super(ChoiceLayer, self).__init__(**kwargs)
     from Util import CollectionReadCheckCovered
@@ -2480,6 +2482,7 @@ class ChoiceLayer(LayerBase):
         # It's not a probability distribution, so there is no search here.
         net_batch_dim = self.network.get_data_batch_dim()
         assert self.search_choices.beam_size == 1
+        assert not cheating
         self.output = self.sources[0].output.copy_compatible_to(self.output)
         self.search_choices.src_beams = tf.zeros((net_batch_dim, 1), dtype=tf.int32)
         self.search_choices.set_beam_scores(self.search_choices.src_layer.search_choices.beam_scores)
@@ -2558,6 +2561,21 @@ class ChoiceLayer(LayerBase):
         # `tf.nn.top_k` is the core function performing our search.
         # We get scores/labels of shape (batch, beam) with indices in [0..beam_in*dim-1].
         scores, labels = tf.nn.top_k(scores_comb_flat, k=beam_size)
+        if cheating:
+          # It assumes that sorted=True in top_k, and the last entries in scores/labels are the worst.
+          # We replace them by the true labels.
+          gold_targets = self._static_get_target_value(
+            target=self.target, network=self.network,
+            mark_data_key_as_used=True).get_placeholder_as_batch_major()  # (batch,), int32
+          gold_beam_in_idx = base_beam_in - 1  # also assume last index
+          gold_labels = gold_beam_in_idx * scores_in_dim + gold_targets  # (batch,)
+          gold_labels_bc = tf.expand_dims(gold_labels, axis=1)  # (batch,1)
+          labels = tf.concat([labels[:, beam_size - 1], gold_labels_bc], axis=1)  # (batch,beam)
+          from TFUtil import nd_indices
+          gold_scores = tf.gather_nd(
+            scores_comb[:, gold_beam_in_idx], indices=nd_indices(gold_targets))  # (batch,)
+          gold_scores_bc = tf.expand_dims(gold_scores, axis=1)  # (batch,1)
+          scores = tf.concat([scores[:, beam_size - 1], gold_scores_bc], axis=1)  # (batch,beam)
         self.search_choices.src_beams = labels // scores_in_dim  # (batch, beam) -> beam_in idx
         labels = labels % scores_in_dim  # (batch, beam) -> dim idx
         labels = tf.reshape(labels, [net_batch_dim * beam_size])  # (batch * beam)
