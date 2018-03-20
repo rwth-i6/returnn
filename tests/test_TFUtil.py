@@ -533,20 +533,21 @@ def test_windowed_nd_big():
   real = windowed_nd(source, window_size=window, time_axis=0, new_window_axis=1).eval()
   numpy.testing.assert_almost_equal(naive, real)
 
+
 def naive_slice_nd(x, start, size):
   slices_shape = [x.shape[0], size] + list(x.shape)[2:]
   ys = numpy.zeros(shape=slices_shape)
   for i in range(len(start)):
-      time_len = len(x[i])
-      end = start[i] + size
-      if time_len < end:
-          end = time_len
-      y = x[i][start[i]:end]
+    time_len = len(x[i])
+    end = start[i] + size
+    if time_len < end:
+      end = time_len
+    y = x[i][start[i]:end]
 
-      # padding
-      if time_len < start[i] + size:
-         y = numpy.pad(y, [[0,start[i]+size-time_len], [0,0]], mode='constant')
-      ys[i] = y
+    # padding
+    if time_len < start[i] + size:
+       y = numpy.pad(y, [[0,start[i]+size-time_len], [0,0]], mode='constant')
+    ys[i] = y
   return ys
 
 
@@ -568,6 +569,7 @@ def test_slice_nd_small():
   print(real)
   numpy.testing.assert_almost_equal(naive, real)
 
+
 def test_slice_nd_big():
   n_batch = 8
   n_time = 12
@@ -586,7 +588,6 @@ def test_slice_nd_big():
   print("real:")
   print(real)
   numpy.testing.assert_almost_equal(naive, real)
-
 
 
 def test_CustomGradient_register_new_graph_generic_loss_and_error_signal():

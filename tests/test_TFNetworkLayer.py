@@ -491,6 +491,8 @@ def test_DotLayer():
     assert_equal(seq_lens.tolist(), a_seq_lens)
     assert_equal(out.shape, (B, H, max(a_seq_lens), 1))
 
+
+@unittest.skip("broken...")
 def test_SliceNdLayer():
   with make_scope() as session:
     B = 8
@@ -509,7 +511,6 @@ def test_SliceNdLayer():
     x.output.size_placeholder = {0: tf.constant(x_seq_lens, dtype=tf.int32)}
     kwargs = dict(
       name="dot", network=net, sources=[x], debug=True,
-      start
       red1=-1, red2=-1, var1="T", var2=None)
     layer = SliceNdLayer(output=SliceNdLayer.get_out_data_from_opts(**kwargs), **kwargs)
     print(layer, layer.output)
@@ -523,7 +524,7 @@ def test_SliceNdLayer():
     assert isinstance(out, numpy.ndarray)
     assert isinstance(seq_lens, numpy.ndarray)
     assert_equal(seq_lens.tolist(), a_seq_lens)
- 
+
 
 def test_subnet_load_on_init():
   import tempfile

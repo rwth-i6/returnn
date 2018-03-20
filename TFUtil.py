@@ -3203,7 +3203,6 @@ def slice_nd(x, start, size, seq_lens=None):
     batch_idxs = expand_dims_unbroadcast(tf.range(n_batch), 1, size)  # (n_batch, size)
     batch_idxs = tf.reshape(batch_idxs, (-1,))  # (n_batch*size,)
 
-
     window_pos = tf.expand_dims(start,1) + tf.range(size)  # (n_batch, size)
     window_pos = tf.reshape(window_pos, (-1,))  # (n_batch*size,)
 
@@ -3214,7 +3213,6 @@ def slice_nd(x, start, size, seq_lens=None):
     clip_time_idx = tf.clip_by_value(window_pos, 0, shape[1]-1)
     indices = tf.stack([batch_idxs, clip_time_idx])  # (n_batch*size, 2)
     indices = tf.transpose(indices)  # (2, n_batch*size)
-
 
     slices = tf.gather_nd(x, indices)  # (n_batch*size, ...)
 

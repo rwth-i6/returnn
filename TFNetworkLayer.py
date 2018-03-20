@@ -1706,8 +1706,6 @@ class SliceNdLayer(_ConcatInputLayer):
     d["start"] = get_layer(d["start"])
 
 
-
-
 class LinearLayer(_ConcatInputLayer):
   """
   Linear/forward/fully-connected/1x1-conv layer.
