@@ -492,40 +492,6 @@ def test_DotLayer():
     assert_equal(out.shape, (B, H, max(a_seq_lens), 1))
 
 
-@unittest.skip("broken...")
-def test_SliceNdLayer():
-  with make_scope() as session:
-    B = 8
-    T = 12
-    D = 4
-    net = TFNetwork(extern_data=ExternData())
-    x = InternalLayer(name="A", network=net, out_type={"shape": (None, H, D)})
-    assert x.output.batch_dim_axis == 0
-    assert x.output.time_dim_axis == 1
-    assert x.output.shape == (None, T, D)
-    assert x.output.dim == D
-    x_seq_lens = [7, 3, 4, 5, 8, 12, 7, 11]
-    assert len(x_seq_lens) == B
-    x.output.placeholder = tf.reshape(
-      tf.range(B * max(x_seq_lens) * D, dtype=tf.float32), (B, max(x_seq_lens), D))
-    x.output.size_placeholder = {0: tf.constant(x_seq_lens, dtype=tf.int32)}
-    kwargs = dict(
-      name="dot", network=net, sources=[x], debug=True,
-      red1=-1, red2=-1, var1="T", var2=None)
-    layer = SliceNdLayer(output=SliceNdLayer.get_out_data_from_opts(**kwargs), **kwargs)
-    print(layer, layer.output)
-    assert layer.output.batch_dim_axis == 0
-    assert layer.output.time_dim_axis == 1
-    assert layer.output.shape == (B, W, D)
-    assert layer.output.dim == D
-    out, seq_lens = session.run([layer.output.placeholder, layer.output.size_placeholder[1]])
-    print(out)
-    print(seq_lens)
-    assert isinstance(out, numpy.ndarray)
-    assert isinstance(seq_lens, numpy.ndarray)
-    assert_equal(seq_lens.tolist(), a_seq_lens)
-
-
 def test_subnet_load_on_init():
   import tempfile
   model_tmp_dir = tempfile.mkdtemp("tmp-checkpoint")
