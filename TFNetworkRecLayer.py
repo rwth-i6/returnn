@@ -2572,7 +2572,9 @@ class ChoiceLayer(LayerBase):
           # We replace them by the true labels.
           gold_targets = self._static_get_target_value(
             target=self.target, network=self.network,
-            mark_data_key_as_used=True).get_placeholder_as_batch_major()  # (batch,), int32
+            mark_data_key_as_used=True).get_placeholder_as_batch_major()  # (batch*beam,), int32
+          # gold_targets will get automatically expanded for the beam. Undo that.
+          gold_targets = tf.reshape(gold_targets, [net_batch_dim, beam_size])[:, 0]
           gold_beam_in_idx = base_beam_in - 1  # also assume last index
           gold_labels = gold_beam_in_idx * scores_in_dim + gold_targets  # (batch,)
           gold_labels_bc = tf.expand_dims(gold_labels, axis=1)  # (batch,1)
