@@ -1812,7 +1812,7 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
   """
   layer_class = "softmax_over_spatial"
 
-  def __init__(self, energy_factor=None, local=False, **kwargs):
+  def __init__(self, energy_factor=None, **kwargs):
     """
     :param float|None energy_factor: the energy will be scaled by this factor.
       This is like a temperature for the softmax.
@@ -1827,8 +1827,8 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
     energy = energy_data.placeholder
     energy_shape = tf.shape(energy, name="energy_shape")
     energy_shape = [energy_shape[i] for i in range(energy_data.batch_ndim)]
-    # if we operate on sliced data, skip the following masking
-    if not local:
+    # if the time-axis is static, we can skip the masking
+    if energy_data.time_dim_axis is None:
         # We must mask all values behind seq_lens. Set them to -inf, because we use softmax afterwards.
         energy_mask = energy_data.get_sequence_mask()
         energy_mask_flat = tf.reshape(energy_mask, [numpy.prod(energy_shape[:2])], name="energy_mask_flat")
