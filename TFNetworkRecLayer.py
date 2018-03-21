@@ -30,6 +30,7 @@ class RecLayer(_ConcatInputLayer):
                max_seq_len=None,
                forward_weights_init=None, recurrent_weights_init=None, bias_init=None,
                optimize_move_layers_out=None,
+               cheating=False,
                **kwargs):
     """
     :param str|dict[str,dict[str]] unit: the RNNCell/etc name, e.g. "nativelstm". see comment below.
@@ -44,6 +45,7 @@ class RecLayer(_ConcatInputLayer):
     :param str recurrent_weights_init: see :func:`TFUtil.get_initializer`
     :param str bias_init: see :func:`TFUtil.get_initializer`
     :param bool|None optimize_move_layers_out: will automatically move layers out of the loop when possible
+    :param bool cheating: make targets available, and determine length by them
     """
     super(RecLayer, self).__init__(**kwargs)
     import re
@@ -65,6 +67,7 @@ class RecLayer(_ConcatInputLayer):
     if optimize_move_layers_out is None:
       optimize_move_layers_out = self.network.get_config().bool("optimize_move_layers_out", True)
     self._optimize_move_layers_out = optimize_move_layers_out
+    self._cheating = cheating
     self._sub_loss = None
     self._sub_error = None
     self._sub_loss_normalization_factor = None
@@ -1070,7 +1073,8 @@ class _SubnetworkRecCell(object):
       # TODO: Better check for train_flag.
       # Maybe more generic via sampling options later.
       y_ta = None
-      if rec_layer.target and rec_layer.network.train_flag is not False and not self.parent_net.search_flag:
+      if rec_layer.target and ((
+            rec_layer.network.train_flag is not False and not self.parent_net.search_flag) or rec_layer._cheating):
         # TODO check subnet, which extern data keys are used...
         y_data = rec_layer.network.get_extern_data(rec_layer.target, mark_data_key_as_used=True)
         y = y_data.get_placeholder_as_time_major()
@@ -1089,6 +1093,8 @@ class _SubnetworkRecCell(object):
           size=y_max_len,
           infer_shape=True)
         y_ta = y_ta.unstack(y, name="y_ta_unstack")
+        if max_seq_len is None:
+          max_seq_len = y_max_len
 
       # Note: tf.while_loop() will not give us all intermediate outputs, but we want them.
       # tf.scan() would do that but tf.scan() will loop over some input sequence -
