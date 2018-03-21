@@ -2576,12 +2576,12 @@ class ChoiceLayer(LayerBase):
           gold_beam_in_idx = base_beam_in - 1  # also assume last index
           gold_labels = gold_beam_in_idx * scores_in_dim + gold_targets  # (batch,)
           gold_labels_bc = tf.expand_dims(gold_labels, axis=1)  # (batch,1)
-          labels = tf.concat([labels[:, beam_size - 1], gold_labels_bc], axis=1)  # (batch,beam)
+          labels = tf.concat([labels[:, :beam_size - 1], gold_labels_bc], axis=1)  # (batch,beam)
           from TFUtil import nd_indices
           gold_scores = tf.gather_nd(
             scores_comb[:, gold_beam_in_idx], indices=nd_indices(gold_targets))  # (batch,)
           gold_scores_bc = tf.expand_dims(gold_scores, axis=1)  # (batch,1)
-          scores = tf.concat([scores[:, beam_size - 1], gold_scores_bc], axis=1)  # (batch,beam)
+          scores = tf.concat([scores[:, :beam_size - 1], gold_scores_bc], axis=1)  # (batch,beam)
         self.search_choices.src_beams = labels // scores_in_dim  # (batch, beam) -> beam_in idx
         labels = labels % scores_in_dim  # (batch, beam) -> dim idx
         labels = tf.reshape(labels, [net_batch_dim * beam_size])  # (batch * beam)
