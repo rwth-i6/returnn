@@ -1828,13 +1828,13 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
     energy_shape = tf.shape(energy, name="energy_shape")
     energy_shape = [energy_shape[i] for i in range(energy_data.batch_ndim)]
     # if the time-axis is static, we can skip the masking
-    if energy_data.time_dim_axis is None:
-        # We must mask all values behind seq_lens. Set them to -inf, because we use softmax afterwards.
-        energy_mask = energy_data.get_sequence_mask()
-        energy_mask_flat = tf.reshape(energy_mask, [numpy.prod(energy_shape[:2])], name="energy_mask_flat")
-        energy_flat = tf.reshape(energy, [numpy.prod(energy_shape[:2])] + energy_shape[2:], name="energy_flat")
-        energy_flat = tf.where(energy_mask_flat, energy_flat, float("-inf") * tf.ones_like(energy_flat), "energy_masked")
-        energy = tf.reshape(energy_flat, energy_shape, name="energy_unflat")
+    if energy_data.time_dim_axis is not None:
+      # We must mask all values behind seq_lens. Set them to -inf, because we use softmax afterwards.
+      energy_mask = energy_data.get_sequence_mask()
+      energy_mask_flat = tf.reshape(energy_mask, [numpy.prod(energy_shape[:2])], name="energy_mask_flat")
+      energy_flat = tf.reshape(energy, [numpy.prod(energy_shape[:2])] + energy_shape[2:], name="energy_flat")
+      energy_flat = tf.where(energy_mask_flat, energy_flat, float("-inf") * tf.ones_like(energy_flat), "energy_masked")
+      energy = tf.reshape(energy_flat, energy_shape, name="energy_unflat")
     if energy_factor:
       energy = tf.multiply(energy, energy_factor, name="energy_scaled")
     energy = move_axis(energy, old_axis=energy_data.time_dim_axis, new_axis=-1, name="tr_time_last")  # (...,T)
