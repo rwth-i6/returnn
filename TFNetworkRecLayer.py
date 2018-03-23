@@ -679,6 +679,7 @@ class _SubnetworkRecCell(object):
     self.layers_in_loop = None   # type: list[str]
     self.input_layers_net = None  # type: TFNetwork
     self.output_layers_net = None  # type: TFNetwork
+    self.final_acc_tas_dict = None  # type: dict[str, tf.TensorArray]
 
   def _construct_template(self):
     """
@@ -1245,6 +1246,13 @@ class _SubnetworkRecCell(object):
       if "output" in self.layers_in_loop:
         add_output_to_acc("output")
 
+      # if a layer declares it is a output, we should save the values as well
+      for name, template in self.layer_data_templates.items():
+        if template.is_output_layer() and name not in needed_outputs:
+          needed_outputs.add(name)
+          add_output_to_acc(name)
+
+
       # Maybe some of the moved-out output-layers depend on data inside the loop,
       # so we should accumulate it to have access to it.
       for layer_name in self.output_layers_moved_out:
@@ -1461,11 +1469,11 @@ class _SubnetworkRecCell(object):
     if len(outputs_to_accumulate) > 0:
       assert isinstance(final_acc_tas[0], tf.TensorArray)
     assert len(final_acc_tas) == len(outputs_to_accumulate)
-    final_acc_tas_dict = {
+    self.final_acc_tas_dict = {
       out.name: final_acc_ta
       for (final_acc_ta, out) in zip(final_acc_tas, outputs_to_accumulate)}  # type: dict[str,tf.TensorArray]
 
-    self._construct_output_layers_moved_out(loop_accumulated=final_acc_tas_dict, seq_len=seq_len)
+    self._construct_output_layers_moved_out(loop_accumulated=self.final_acc_tas_dict, seq_len=seq_len)
 
     sub_loss = sub_error = sub_loss_normalization_factor = None
     if layer_names_with_losses:
@@ -1488,8 +1496,8 @@ class _SubnetworkRecCell(object):
             sub_error = error_value
           else:
             layer_with_loss_inst = self.net.layers[layer_name]
-            loss_value = final_acc_tas_dict["loss_%s" % layer_name].stack(name="loss_%s_stack" % layer_name)
-            error_value = final_acc_tas_dict["error_%s" % layer_name].stack(name="error_%s_stack" % layer_name)
+            loss_value = self.final_acc_tas_dict["loss_%s" % layer_name].stack(name="loss_%s_stack" % layer_name)
+            error_value = self.final_acc_tas_dict["error_%s" % layer_name].stack(name="error_%s_stack" % layer_name)
             loss_value.set_shape(tf.TensorShape((None, None)))  # (time, batch)
             error_value.set_shape(tf.TensorShape((None, None)))  # (time, batch)
 
@@ -1547,7 +1555,7 @@ class _SubnetworkRecCell(object):
           while True:
             assert choice_base.network is rec_layer.cell.net, "not yet implemented otherwise"
 
-            src_choice_beams = final_acc_tas_dict["choice_%s" % choice_base.name].read(i)  # (batch, beam) -> beam_in idx
+            src_choice_beams = self.final_acc_tas_dict["choice_%s" % choice_base.name].read(i)  # (batch, beam) -> beam_in idx
             assert src_choice_beams.get_shape().ndims == 2
 
             with tf.name_scope("choice_beams"):
@@ -1557,7 +1565,7 @@ class _SubnetworkRecCell(object):
               src_choice_beams = tf.gather_nd(src_choice_beams, idxs_exp)  # (batch, beam_out)
             if is_output_choice:
               with tf.name_scope("output"):
-                output = final_acc_tas_dict["output_output"].read(i)  # (batch * beam, [n_out])
+                output = self.final_acc_tas_dict["output_output"].read(i)  # (batch * beam, [n_out])
                 out_shape = list(rec_layer.output.batch_shape[1:])  # without time-dim
                 output.set_shape(tf.TensorShape(out_shape))
                 output = tf.reshape(
@@ -1592,7 +1600,7 @@ class _SubnetworkRecCell(object):
           initial_beam_choices,
           new_acc_output_ta),
         back_prop=self.net.train_flag is not False)
-      final_acc_tas_dict["output_output"] = new_acc_output_ta
+      self.final_acc_tas_dict["output_output"] = new_acc_output_ta
 
       # Collect the search choices for the rec layer itself.
       # Our output will be of shape (time, batch * beam, dim).
@@ -1610,7 +1618,7 @@ class _SubnetworkRecCell(object):
       elif "output" in self.output_layers_moved_out:
         output = self.output_layers_net.layers["output"].output.get_placeholder_as_time_major()
       else:
-        output = final_acc_tas_dict["output_output"].stack(name="output_stack")  # e.g. (time, batch, dim)
+        output = self.final_acc_tas_dict["output_output"].stack(name="output_stack")  # e.g. (time, batch, dim)
         if not have_known_seq_len:
           with tf.name_scope("output_sub_slice"):
             output = output[:tf.reduce_max(seq_len)]  # usually one less
@@ -1956,6 +1964,7 @@ class _TemplateLayer(LayerBase):
     self.layer_class_type = layer_class
     self.kwargs = kwargs
     self.kwargs["output"] = output
+    self._is_output_layer = kwargs.get("is_output_layer", None)
     if self._has_search_choices():
       self.search_choices = SearchChoices(owner=self, beam_size=self._get_search_choices_beam_size())
 
@@ -2436,6 +2445,61 @@ class GetLastHiddenStateLayer(LayerBase):
   def get_out_data_from_opts(cls, n_out, **kwargs):
     return super(GetLastHiddenStateLayer, cls).get_out_data_from_opts(
       out_type={"shape": (n_out,), "dim": n_out, "batch_dim_axis": 0, "time_dim_axis": None}, **kwargs)
+
+
+class GetRecAccumulatedOutput(LayerBase):
+  """
+  Retrieves the accumulated output from a Subnet-layer.
+  Note: the source-layer must be marked as output layer
+        with "is_output_layer": True
+  """
+
+  layer_class = "get_rec_accumulated"
+
+  def __init__(self, **kwargs):
+    """
+    """
+    super(GetRecAccumulatedOutput, self).__init__(**kwargs)
+    assert len(self.sources) == 1
+    self.output.placeholder = self.sources[0].output.placeholder
+    self.output.size_placeholder = self.sources[0].output.size_placeholder
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d: will modify inplace, the loss_opts
+    :param TFNetwork.TFNetwork network:
+    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
+    """
+    assert "from" in d
+    sources = d.pop("from", [])
+    if isinstance(sources, str):
+      sources = [sources]
+    assert len(sources) == 1
+    assert isinstance(sources[0], str)
+    assert ":" in sources[0], "Syntax for the source-layer is 'base:layer'"
+    parts = sources[0].split(":")
+    assert len(parts) == 2
+    base, layer = parts
+    cell = get_layer(base).cell
+    assert isinstance(cell, _SubnetworkRecCell)
+    template = cell.layer_data_templates[layer]
+
+    template.output.placeholder = cell.final_acc_tas_dict["output_%s" % layer].stack()
+    template.output.size_placeholder = {  # tf.stack() adds an 0-th dimension
+      axis+1: placeholder for axis, placeholder in template.output.size_placeholder.items()
+    }
+    d["sources"] = [template]
+
+  @classmethod
+  def get_out_data_from_opts(cls, **kwargs):
+    sources = kwargs["sources"]
+    assert len(sources) == 1
+    return Data(
+      name="%s_output" % kwargs["name"],
+      shape=(None,) + sources[0].output.shape,
+      dtype=sources[0].output.dtype,
+      batch_dim_axis=sources[0].output.batch_dim_axis + 1)
 
 
 class ChoiceLayer(LayerBase):

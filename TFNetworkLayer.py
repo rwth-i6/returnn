@@ -4277,6 +4277,69 @@ class FramewiseStatisticsLayer(LayerBase):
     return Data(name="framewise_statistics_dummy_output", shape=(), dtype="int32", batch_dim_axis=None)
 
 
+class DumpLayer(LayerBase):
+  """Dumps the sources to console/log"""
+  layer_class = "dump"
+
+  def __init__(self, **kwargs):
+    super(DumpLayer, self).__init__(**kwargs)
+    with tf.name_scope("dump_layer"):
+      source = self.sources[0]
+      output = tf.Print(source.output.placeholder, [source.output.placeholder], kwargs["name"], summarize=99)
+
+      self.output.placeholder = output
+      self.output.size_placeholder = source.output.size_placeholder.copy()
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d: will modify inplace, the loss_opts
+    :param TFNetwork.TFNetwork network:
+    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
+    """
+    d["sources"] = [get_layer(d.pop("from"))]
+
+  @classmethod
+  def get_out_data_from_opts(cls, **kwargs):
+    assert "n_out" not in kwargs, "Don't set n_out explicity in this layer"
+    kwargs["n_out"] = kwargs["sources"][0].output.dim
+    return super(DumpLayer, cls).get_out_data_from_opts(**kwargs)
+
+
+class ImageSummaryLayer(LayerBase):
+  """Creates image summaries which can be viewed in TensorBoard.
+  This layer expects the source to be in (T1, B, T2, 1).
+  """
+  layer_class = "image_summary"
+
+  def __init__(self, max_outputs=3, **kwargs):
+    """
+    :param max_outputs: number of images to generate per step
+    """
+    super(ImageSummaryLayer, self).__init__(**kwargs)
+    with tf.name_scope("image_summary"):
+      input_data = self.sources[0].output
+      img = tf.transpose(input_data.placeholder, [1, 0, 2, 3])  # (B, T-dec, T-enc, 1)
+      tf.summary.image(kwargs["name"], img, max_outputs=max_outputs)
+      self.output.placeholder = input_data.placeholder
+      self.output.size_placeholder = input_data.size_placeholder.copy()
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d: will modify inplace, the loss_opts
+    :param TFNetwork.TFNetwork network:
+    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
+    """
+    d["sources"] = [get_layer(d.pop("from"))]
+
+  @classmethod
+  def get_out_data_from_opts(cls, **kwargs):
+    assert "n_out" not in kwargs, "Don't set n_out explicitly in this layer"
+    kwargs["n_out"] = kwargs["sources"][0].output.dim
+    return super(ImageSummaryLayer, cls).get_out_data_from_opts(**kwargs)
+
+
 # ------------------------------------------------------------------------------
 
 class Loss(object):
