@@ -4286,7 +4286,6 @@ class PrintLayer(LayerBase):
     with tf.name_scope("print_layer"):
       source = self.sources[0]
       output = tf.Print(source.output.placeholder, [source.output.placeholder], kwargs["name"], summarize=99)
-
       self.output.placeholder = output
       self.output.size_placeholder = source.output.size_placeholder.copy()
 
@@ -4308,7 +4307,7 @@ class PrintLayer(LayerBase):
 
 class ImageSummaryLayer(LayerBase):
   """Creates image summaries which can be viewed in TensorBoard.
-  This layer expects the source to be in (T1, B, T2, 1).
+  This layer expects the source to be in (T-decoder, T-encoder, B, 1).
   """
   layer_class = "image_summary"
 
@@ -4319,7 +4318,7 @@ class ImageSummaryLayer(LayerBase):
     super(ImageSummaryLayer, self).__init__(**kwargs)
     with tf.name_scope("image_summary"):
       input_data = self.sources[0].output
-      img = tf.transpose(input_data.placeholder, [1, 0, 2, 3])  # (B, T-dec, T-enc, 1)
+      img = tf.transpose(input_data.placeholder, [2, 0, 1, 3])  # (B, T-dec, T-enc, 1)
       tf.summary.image(kwargs["name"], img, max_outputs=max_outputs)
       self.output.placeholder = input_data.placeholder
       self.output.size_placeholder = input_data.size_placeholder.copy()

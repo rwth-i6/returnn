@@ -2496,7 +2496,7 @@ class GetRecAccumulatedOutput(LayerBase):
   def get_out_data_from_opts(cls, sources, sub_layer, **kwargs):
     """
     :param list[LayerBase] sources:
-    :param LayberBase sub_layer:
+    :param LayerBase sub_layer:
     :rtype: Data
     """
     assert len(sources) == 1
