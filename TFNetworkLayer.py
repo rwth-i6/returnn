@@ -4277,13 +4277,13 @@ class FramewiseStatisticsLayer(LayerBase):
     return Data(name="framewise_statistics_dummy_output", shape=(), dtype="int32", batch_dim_axis=None)
 
 
-class DumpLayer(LayerBase):
-  """Dumps the sources to console/log"""
-  layer_class = "dump"
+class PrintLayer(LayerBase):
+  """Prints the sources to console/log"""
+  layer_class = "print"
 
   def __init__(self, **kwargs):
-    super(DumpLayer, self).__init__(**kwargs)
-    with tf.name_scope("dump_layer"):
+    super(PrintLayer, self).__init__(**kwargs)
+    with tf.name_scope("print_layer"):
       source = self.sources[0]
       output = tf.Print(source.output.placeholder, [source.output.placeholder], kwargs["name"], summarize=99)
 
@@ -4303,7 +4303,7 @@ class DumpLayer(LayerBase):
   def get_out_data_from_opts(cls, **kwargs):
     assert "n_out" not in kwargs, "Don't set n_out explicity in this layer"
     kwargs["n_out"] = kwargs["sources"][0].output.dim
-    return super(DumpLayer, cls).get_out_data_from_opts(**kwargs)
+    return super(PrintLayer, cls).get_out_data_from_opts(**kwargs)
 
 
 class ImageSummaryLayer(LayerBase):
