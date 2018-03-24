@@ -2456,50 +2456,56 @@ class GetRecAccumulatedOutput(LayerBase):
 
   layer_class = "get_rec_accumulated"
 
-  def __init__(self, **kwargs):
+  def __init__(self, sub_layer, **kwargs):
     """
+    :param LayerBase sub_layer: sub-layer to get the outputs from
     """
     super(GetRecAccumulatedOutput, self).__init__(**kwargs)
     assert len(self.sources) == 1
-    self.output.placeholder = self.sources[0].output.placeholder
-    self.output.size_placeholder = self.sources[0].output.size_placeholder
+    assert sub_layer is not None
+    rec_layer = self.sources[0]  # type: RecLayer
+    cell = rec_layer.cell  # type: _SubnetworkRecCell
+    self.output.placeholder = cell.final_acc_tas_dict["output_%s" % sub_layer.name].stack()
+    self.output.size_placeholder = {
+      axis + 1: placeholder for axis, placeholder in sub_layer.output.size_placeholder.items()
+    }
+    self.output.size_placeholder[0] = rec_layer.output.size_placeholder[0]
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
     """
-    :param dict[str] d: will modify inplace, the loss_opts
+    :param dict[str] d: will modify inplace
     :param TFNetwork.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     """
     assert "from" in d
     sources = d.pop("from", [])
+    sub_layer = d.pop("sub_layer", None)
+    assert sub_layer is not None, "Set sub_layer"
     if isinstance(sources, str):
       sources = [sources]
     assert len(sources) == 1
     assert isinstance(sources[0], str)
-    assert ":" in sources[0], "Syntax for the source-layer is 'base:layer'"
-    parts = sources[0].split(":")
-    assert len(parts) == 2
-    base, layer = parts
-    cell = get_layer(base).cell
-    assert isinstance(cell, _SubnetworkRecCell)
-    template = cell.layer_data_templates[layer]
-
-    template.output.placeholder = cell.final_acc_tas_dict["output_%s" % layer].stack()
-    template.output.size_placeholder = {  # tf.stack() adds an 0-th dimension
-      axis+1: placeholder for axis, placeholder in template.output.size_placeholder.items()
-    }
-    d["sources"] = [template]
+    rec_layer = get_layer(sources[0])
+    assert isinstance(rec_layer.cell, _SubnetworkRecCell)
+    template = rec_layer.cell.layer_data_templates[sub_layer]
+    d["sub_layer"] = template
+    d["sources"] = [rec_layer]
 
   @classmethod
-  def get_out_data_from_opts(cls, **kwargs):
-    sources = kwargs["sources"]
+  def get_out_data_from_opts(cls, sources, sub_layer, **kwargs):
+    """
+    :param list[LayerBase] sources:
+    :param LayberBase sub_layer:
+    :rtype: Data
+    """
     assert len(sources) == 1
     return Data(
       name="%s_output" % kwargs["name"],
-      shape=(None,) + sources[0].output.shape,
-      dtype=sources[0].output.dtype,
-      batch_dim_axis=sources[0].output.batch_dim_axis + 1)
+      shape=(None,) + sub_layer.output.shape,
+      dtype=sub_layer.output.dtype,
+      time_dim_axis=0,
+      batch_dim_axis=sub_layer.output.batch_dim_axis + 1)
 
 
 class ChoiceLayer(LayerBase):
