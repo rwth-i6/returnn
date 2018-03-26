@@ -1638,6 +1638,106 @@ class Engine(object):
       numpy.savetxt(f, log_average_posterior, delimiter=' ')
     print("Saved prior in %r in +log space." % output_file, file=log.v1)
 
+  def web_server(self, port):
+    assert sys.version_info[0] >= 3, "only Python 3 supported"
+    from http.server import HTTPServer, BaseHTTPRequestHandler, SimpleHTTPRequestHandler
+    from cgi import parse_header, parse_multipart
+    from urllib.parse import parse_qs
+    import soundfile  # pip install pysoundfile
+    from GeneratingDataset import StaticDataset, BytePairEncoding, ExtractAudioFeatures
+
+    if not self.use_search_flag or not self.network or self.use_dynamic_train_flag:
+      self.use_search_flag = True
+      # At the moment this is probably not intended to use search with train flag.
+      # Also see LayerBase._post_init_output() about setting size_placeholder to the target seq len,
+      # so you would have have_known_seq_len=True in the RecLayer, with the given target seq len.
+      self.use_dynamic_train_flag = False
+      if self.network:
+        print("Reinit network with search flag.", file=log.v3)
+      self.init_network_from_config(self.config)
+
+    engine = self
+    bpe = BytePairEncoding(**self.config.typed_dict["web_server_bpe"])
+    labels = {"classes": bpe.labels}
+    feature_extractor = ExtractAudioFeatures(**self.config.typed_dict["web_server_audio"])
+    num_inputs = feature_extractor.get_feature_dimension()
+    num_outputs = {
+      "data": [num_inputs, 2], "classes": [bpe.num_labels, 1], "raw": {"dtype": "string", "shape": ()}}
+
+    output_layer_name = self.config.value("search_output_layer", "output")
+    output_layer = self.network.layers[output_layer_name]
+    output_t = output_layer.output.get_placeholder_as_batch_major()
+    output_seq_lens_t = output_layer.output.get_sequence_lengths()
+    out_beam_size = output_layer.output.beam_size
+    output_layer_beam_scores_t = None
+    if out_beam_size is None:
+      print("Given output %r is after decision (no beam)." % output_layer, file=log.v1)
+    else:
+      print("Given output %r has beam size %i." % (output_layer, out_beam_size), file=log.v1)
+      output_layer_beam_scores_t = output_layer.get_search_choices().beam_scores
+    target_key = output_layer.target or self.network.extern_data.default_target
+
+    class Handler(BaseHTTPRequestHandler):
+      def parse_POST(self):
+        ctype, pdict = parse_header(self.headers['content-type'])
+        if ctype == 'multipart/form-data':
+          postvars = parse_multipart(self.rfile, pdict)
+        elif ctype == 'application/x-www-form-urlencoded':
+          length = int(self.headers['content-length'])
+          postvars = parse_qs(
+            self.rfile.read(length),
+            keep_blank_values=1)
+        else:
+          postvars = {}
+        return postvars
+
+      def do_POST(self):
+        #data = self.parse_POST()
+
+        import cgi
+        form = cgi.FieldStorage(
+          fp=self.rfile,
+          headers=self.headers,
+          environ={'REQUEST_METHOD': 'POST'}
+        )
+        audio, sample_rate = soundfile.read(form.file)
+        features = feature_extractor.get_audio_features(audio=audio, sample_rate=sample_rate)
+        bpe, txt = [], ""
+        targets = numpy.array(bpe, dtype="int32")
+        raw = numpy.array(txt, dtype="object")
+        dataset = StaticDataset(
+          data=[{"data": features, "classes": targets, "raw": raw}], input_dim=num_inputs, output_dim=num_outputs)
+
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        output_d = engine.run_single(dataset=dataset, seq_idx=0, output_dict={
+          "output": output_t,
+          "seq_lens": output_seq_lens_t,
+          "beam_scores": output_layer_beam_scores_t})
+        output = output_d["output"]
+        seq_lens = output_d["seq_lens"]
+        beam_scores = output_d["beam_scores"]
+        assert len(output) == len(seq_lens) == out_beam_size or 1
+        if out_beam_size:
+          assert beam_scores.shape == (1, out_beam_size)
+
+        if out_beam_size:
+          self.wfile.write("[\n")
+          for i in range(out_beam_size):
+            txt = " ".join(map(labels["classes"].__getitem__, output[i][:seq_lens[i]]))
+            score = beam_scores[0][i]
+            self.wfile.write("(%r, %r)\n" % (score, txt))
+          self.wfile.write("]\n")
+
+        else:
+          txt = " ".join(map(labels["classes"].__getitem__, output[0][:seq_lens[0]]))
+          self.wfile("%r\n" % txt)
+
+    server_address = ('', port)
+    self.httpd = HTTPServer(server_address, Handler)
+    self.httpd.serve_forever()
+
 
 def get_global_engine():
   """
