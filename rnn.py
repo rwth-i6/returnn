@@ -458,6 +458,10 @@ def executeMainTask():
   elif task == "server":
     print("Server Initiating", file=log.v1)
     server.run()
+  elif task == "search_server":
+    engine.use_search_flag = True
+    engine.init_network_from_config(config)
+    engine.web_server(port=config.int("web_server_port", 12380))
   elif task.startswith("config:"):
     action = config.typed_dict[task[len("config:"):]]
     print("Task: %r" % action, file=log.v1)

@@ -1640,9 +1640,7 @@ class Engine(object):
 
   def web_server(self, port):
     assert sys.version_info[0] >= 3, "only Python 3 supported"
-    from http.server import HTTPServer, BaseHTTPRequestHandler, SimpleHTTPRequestHandler
-    from cgi import parse_header, parse_multipart
-    from urllib.parse import parse_qs
+    from http.server import HTTPServer, BaseHTTPRequestHandler
     import soundfile  # pip install pysoundfile
     from GeneratingDataset import StaticDataset, BytePairEncoding, ExtractAudioFeatures
 
@@ -1675,31 +1673,15 @@ class Engine(object):
     else:
       print("Given output %r has beam size %i." % (output_layer, out_beam_size), file=log.v1)
       output_layer_beam_scores_t = output_layer.get_search_choices().beam_scores
-    target_key = output_layer.target or self.network.extern_data.default_target
 
     class Handler(BaseHTTPRequestHandler):
-      def parse_POST(self):
-        ctype, pdict = parse_header(self.headers['content-type'])
-        if ctype == 'multipart/form-data':
-          postvars = parse_multipart(self.rfile, pdict)
-        elif ctype == 'application/x-www-form-urlencoded':
-          length = int(self.headers['content-length'])
-          postvars = parse_qs(
-            self.rfile.read(length),
-            keep_blank_values=1)
-        else:
-          postvars = {}
-        return postvars
-
       def do_POST(self):
-        #data = self.parse_POST()
-
         import cgi
         form = cgi.FieldStorage(
           fp=self.rfile,
           headers=self.headers,
-          environ={'REQUEST_METHOD': 'POST'}
-        )
+          environ={'REQUEST_METHOD': 'POST'})
+        print("HTTP server, got POST:", form)
         audio, sample_rate = soundfile.read(form.file)
         features = feature_extractor.get_audio_features(audio=audio, sample_rate=sample_rate)
         bpe, txt = [], ""
@@ -1734,6 +1716,7 @@ class Engine(object):
           txt = " ".join(map(labels["classes"].__getitem__, output[0][:seq_lens[0]]))
           self.wfile("%r\n" % txt)
 
+    print("Simple search web server, listening on port %i." % port, file=log.v2)
     server_address = ('', port)
     self.httpd = HTTPServer(server_address, Handler)
     self.httpd.serve_forever()
