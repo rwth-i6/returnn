@@ -1655,12 +1655,18 @@ class Engine(object):
       self.init_network_from_config(self.config)
 
     engine = self
-    bpe = BytePairEncoding(**self.config.typed_dict["web_server_bpe"])
+    bpe_opts = None
+    audio_opts = None
+    if isinstance(self.config.typed_dict.get("dev", None), dict):
+      # A bit hacky. Assumes that this is a dataset description for e.g. LibriSpeechCorpus.
+      bpe_opts = self.config.typed_dict["dev"]["bpe"]
+      audio_opts = self.config.typed_dict["dev"]["audio"]
+    bpe = BytePairEncoding(**bpe_opts)
     labels = {"classes": bpe.labels}
-    feature_extractor = ExtractAudioFeatures(**self.config.typed_dict["web_server_audio"])
+    feature_extractor = ExtractAudioFeatures(**audio_opts)
     num_inputs = feature_extractor.get_feature_dimension()
     num_outputs = {
-      "data": [num_inputs, 2], "classes": [bpe.num_labels, 1], "raw": {"dtype": "string", "shape": ()}}
+      "data": [num_inputs, 2], "classes": [bpe.num_labels, 1]}
 
     output_layer_name = self.config.value("search_output_layer", "output")
     output_layer = self.network.layers[output_layer_name]
@@ -1676,19 +1682,30 @@ class Engine(object):
 
     class Handler(BaseHTTPRequestHandler):
       def do_POST(self):
+        try:
+          self._do_POST()
+        except Exception:
+          sys.excepthook(*sys.exc_info())
+          raise
+
+      def _do_POST(self):
         import cgi
         form = cgi.FieldStorage(
           fp=self.rfile,
           headers=self.headers,
           environ={'REQUEST_METHOD': 'POST'})
-        print("HTTP server, got POST:", form)
-        audio, sample_rate = soundfile.read(form.file)
+        print("HTTP server, got POST.", file=log.v3)
+        from io import BytesIO
+        f = BytesIO(form["file"].file.read())
+        audio, sample_rate = soundfile.read(f)
+        print("audio len %i (%.1f secs), sample rate %i" % (len(audio), float(len(audio)) / sample_rate, sample_rate), file=log.v4)
+        if audio.ndim == 2:  # multiple channels:
+          audio = numpy.mean(audio, axis=1)  # mix together
         features = feature_extractor.get_audio_features(audio=audio, sample_rate=sample_rate)
-        bpe, txt = [], ""
-        targets = numpy.array(bpe, dtype="int32")
-        raw = numpy.array(txt, dtype="object")
+        targets = numpy.array([], dtype="int32")  # empty...
         dataset = StaticDataset(
-          data=[{"data": features, "classes": targets, "raw": raw}], input_dim=num_inputs, output_dim=num_outputs)
+          data=[{"data": features, "classes": targets}], input_dim=num_inputs, output_dim=num_outputs)
+        dataset.init_seq_order(epoch=1)
 
         self.send_response(200)
         self.send_header('Content-type', 'text/plain')
@@ -1705,16 +1722,16 @@ class Engine(object):
           assert beam_scores.shape == (1, out_beam_size)
 
         if out_beam_size:
-          self.wfile.write("[\n")
+          self.wfile.write(b"[\n")
           for i in range(out_beam_size):
             txt = " ".join(map(labels["classes"].__getitem__, output[i][:seq_lens[i]]))
             score = beam_scores[0][i]
-            self.wfile.write("(%r, %r)\n" % (score, txt))
-          self.wfile.write("]\n")
+            self.wfile.write(("(%r, %r)\n" % (score, txt)).encode("utf8"))
+          self.wfile.write(b"]\n")
 
         else:
           txt = " ".join(map(labels["classes"].__getitem__, output[0][:seq_lens[0]]))
-          self.wfile("%r\n" % txt)
+          self.wfile(("%r\n" % txt).encode("utf8"))
 
     print("Simple search web server, listening on port %i." % port, file=log.v2)
     server_address = ('', port)
