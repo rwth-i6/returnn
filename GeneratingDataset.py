@@ -1897,12 +1897,14 @@ class Enwik8Corpus(CachedDataset2):
   # Use a single HDF file, and cache it across all instances.
   _hdf_file = None
 
-  def __init__(self, path, subset, seq_len, fixed_random_seed=None, **kwargs):
+  def __init__(self, path, subset, seq_len, fixed_random_seed=None, batch_num_seqs=None, **kwargs):
     """
     :param str path:
     :param str subset: "training", "validation", "test"
     :param int seq_len:
     :param int|None fixed_random_seed:
+    :param int|None batch_num_seqs: if given, will not shuffle the data but have it in such order,
+      that with a given batch num_seqs setting, you could reuse the hidden state in an RNN
     """
     assert subset in ["training", "validation", "test"]
     import os
@@ -1918,7 +1920,8 @@ class Enwik8Corpus(CachedDataset2):
     self._data = self._hdf_file["split/%s/default" % subset]
     self._seq_len = seq_len
     self._fixed_random_seed = fixed_random_seed
-    self._random = numpy.random.RandomState(1)
+    self._batch_num_seqs = batch_num_seqs
+    self._random = numpy.random.RandomState(1)  # seed will be set in init_seq_order
     self._seq_starts = numpy.arange(0, len(self._data) - 1, seq_len)
 
   def get_data_dtype(self, key):
@@ -1931,8 +1934,19 @@ class Enwik8Corpus(CachedDataset2):
     self._random.seed(self._fixed_random_seed or epoch or 1)
     self._num_seqs = len(self._seq_starts)
     self._num_timesteps = len(self._data) - 1
-    self._seq_order = self.get_seq_order_for_epoch(
-      epoch=epoch or 1, num_seqs=self._num_seqs, get_seq_len=lambda _: self._seq_len)
+    if self._batch_num_seqs is None:
+      self._seq_order = self.get_seq_order_for_epoch(
+        epoch=epoch or 1, num_seqs=self._num_seqs, get_seq_len=lambda _: self._seq_len)
+    else:
+      if self._num_seqs % self._batch_num_seqs > 0:
+        self._num_seqs -= self._num_seqs % self._batch_num_seqs
+        self._num_timesteps = None
+      assert self._num_seqs % self._batch_num_seqs == 0
+      seq_index = numpy.array(list(range(self._num_seqs)))
+      seq_index = seq_index.reshape((self._batch_num_seqs, self._num_seqs // self._batch_num_seqs))
+      seq_index = seq_index.transpose()
+      seq_index = seq_index.flatten()
+      self._seq_order = seq_index
     return True
 
   def _collect_single_seq(self, seq_idx):
