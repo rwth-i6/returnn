@@ -39,6 +39,63 @@ def make_scope():
       yield session
 
 
+def _check_train_simple_network(network, num_steps=10):
+  num_inputs = 4
+  num_outputs = 3
+
+  config = Config()
+  config.update({
+    "num_inputs": num_inputs,
+    "num_outputs": {"data": [num_inputs, 2], "classes": [num_outputs, 2]},  # dense output
+    "network": network,
+    "adam": True,
+    "learning_rate": 0.1,
+    "debug_add_check_numerics_ops": True,
+  })
+
+  random = numpy.random.RandomState(seed=1)
+  limit = 1.0
+
+  def make_feed_dict(seq_len=10):
+    return {
+      network.extern_data.data["data"].placeholder: random.uniform(-limit, limit, (1, seq_len, num_inputs)),
+      network.extern_data.data["data"].size_placeholder[0]: numpy.array([seq_len]),
+      network.extern_data.data["classes"].placeholder: random.uniform(-limit, limit, (1, seq_len, num_outputs)),
+      network.extern_data.data["classes"].size_placeholder[0]: numpy.array([seq_len]),
+    }
+
+  with make_scope() as session:
+    print("Create network...")
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    network.print_network_info()
+    network.initialize_params(session=session)
+
+    from TFUpdater import Updater
+    updater = Updater(config=config, tf_session=session, network=network)
+    updater.set_learning_rate(config.float("learning_rate", 1.0))
+    updater.set_trainable_vars(network.get_trainable_params())
+
+    for step in range(num_steps):
+      loss, _ = session.run([network.get_total_loss(), updater.get_optim_op()], feed_dict=make_feed_dict())
+      print("step %i, loss: %f" % (step, loss))
+
+
+def test_rec_nativelstm():
+  _check_train_simple_network({"output": {"class": "rec", "unit": "nativelstm", "loss": "mse"}})
+
+
+def test_rec_nativelstm2():
+  _check_train_simple_network({"output": {"class": "rec", "unit": "nativelstm2", "loss": "mse"}})
+
+
+def test_rec_rhn():
+  _check_train_simple_network({
+    "output": {
+      "class": "rec", "unit": "rhn", "unit_opts": {"dropout": 0.1},
+      "loss": "mse"}})
+
+
 def test_rec_subnet_with_choice():
   with tf.Session():
     config = Config()

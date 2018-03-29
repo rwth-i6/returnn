@@ -83,6 +83,7 @@ class LayerBase(object):
     """
     self.name = name
     self.network = network
+    self._register_layer()
     self.target = target
     self.loss = loss
     if self.loss and self.loss.recurrent:
@@ -267,6 +268,27 @@ class LayerBase(object):
       with reuse_name_scope(cls.cls_get_tf_scope_name(name)) as scope:
         yield scope
     return layer_scope_ctx()
+
+  @classmethod
+  def get_global_layer_list(cls):
+    """
+    :rtype: list[LayerBase]
+    """
+    coll = tf.get_collection_ref("_RETURNN_layers")
+    assert isinstance(coll, list)
+    return coll
+
+  @classmethod
+  def get_recent_layer(cls):
+    """
+    :rtype: LayerBase
+    """
+    coll = cls.get_global_layer_list()
+    assert coll
+    return coll[-1]
+
+  def _register_layer(self):
+    self.get_global_layer_list().append(self)
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):

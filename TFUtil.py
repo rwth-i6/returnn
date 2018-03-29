@@ -3257,6 +3257,8 @@ def global_tensor(f, name):
 
 def get_global_train_flag_placeholder():
   """
+  Also consider :func:`TFNetwork.get_current_network().train_flag`.
+
   :return: bool scalar tensor
   :rtype: tf.Tensor
   """

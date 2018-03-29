@@ -4,6 +4,7 @@ from __future__ import print_function
 import tensorflow as tf
 import sys
 import numpy
+import contextlib
 from Log import log
 from TFNetworkLayer import Data, LayerBase, get_layer_class
 from TFUtil import reuse_name_scope, VariableAssigner
@@ -414,7 +415,7 @@ class TFNetwork(object):
     debug_print_layer_output_template = self.get_config().bool("debug_print_layer_output_template", False)
     debug_print_layer_output_shape = self.get_config().bool("debug_print_layer_output_shape", False)
     debug_add_check_numerics_on_output = self.get_config().bool("debug_add_check_numerics_on_output", False)  # also see debug_add_check_numerics_ops
-    with reuse_name_scope(layer_class.cls_get_tf_scope_name(name)):
+    with reuse_name_scope(layer_class.cls_get_tf_scope_name(name)), self.register_network_scope():
       try:
         if "output" not in layer_desc:
           layer_desc["output"] = layer_class.get_out_data_from_opts(**layer_desc)
@@ -1101,6 +1102,34 @@ class TFNetwork(object):
     if fallback_dummy_config:
       return Config()
     return None
+
+  @classmethod
+  def get_network_stack(cls):
+    """
+    :rtype: list[TFNetwork]
+    """
+    coll = tf.get_collection_ref("_RETURNN_network_stack")
+    assert isinstance(coll, list)
+    return coll
+
+  @classmethod
+  def get_current_network(cls):
+    """
+    :rtype: TFNetwork
+    """
+    coll = cls.get_network_stack()
+    assert coll
+    return coll[-1]
+
+  @contextlib.contextmanager
+  def register_network_scope(self):
+    coll = self.get_network_stack()
+    coll.append(self)
+    try:
+      yield
+    finally:
+      assert coll[-1] is self
+      coll.pop(-1)
 
 
 class TFNetworkParamsSerialized(object):

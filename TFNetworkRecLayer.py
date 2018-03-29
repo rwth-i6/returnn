@@ -2,6 +2,7 @@
 from __future__ import print_function
 
 import tensorflow as tf
+from tensorflow.python.ops.nn import rnn_cell
 from TFNetworkLayer import LayerBase, _ConcatInputLayer, SearchChoices, get_concat_sources_data_template
 from TFUtil import Data, reuse_name_scope
 from Log import log
@@ -267,7 +268,7 @@ class RecLayer(_ConcatInputLayer):
     from TFUtil import is_gpu_available
     from tensorflow.contrib import rnn as rnn_contrib
     import TFNativeOp
-    allowed_types = (rnn_contrib.RNNCell, rnn_contrib.FusedRNNCell, TFNativeOp.RecSeqCellOp)
+    allowed_types = (rnn_cell.RNNCell, rnn_contrib.FusedRNNCell, TFNativeOp.RecSeqCellOp)
     if is_gpu_available():
       from tensorflow.contrib import cudnn_rnn
       allowed_types += (cudnn_rnn.CudnnLSTM, cudnn_rnn.CudnnGRU)
@@ -281,6 +282,8 @@ class RecLayer(_ConcatInputLayer):
         name = name.lower()
         assert cls._rnn_cells_dict.get(name) in [v, None]
         cls._rnn_cells_dict[name] = v
+    for key, v in globals().items():
+      maybe_add(key, v)
     for key, v in vars(rnn_contrib).items():
       maybe_add(key, v)
     for key, v in vars(TFNativeOp).items():
@@ -3491,3 +3494,105 @@ class KenLmStateLayer(_ConcatInputLayer):
       "state": tf.zeros(batch_shape, dtype=tf.string),
       "step": tf.constant(0, dtype=tf.int32),
       "scores": tf.zeros(batch_shape, dtype=tf.float32)}
+
+
+class RHNCell(rnn_cell.RNNCell):
+  """Variational Recurrent Highway Layer
+  Reference: https://arxiv.org/abs/1607.03474
+  """
+
+  def __init__(self, num_units, is_training=None, depth=5, dropout=0.0, dropout_seed=None, transform_bias=None):
+    """
+    :param int num_units:
+    :param bool|tf.Tensor|None is_training:
+    :param int depth:
+    :param float dropout:
+    :param int dropout_seed:
+    :param float|None transform_bias:
+    """
+    from TFNetwork import TFNetwork
+    super(RHNCell, self).__init__()
+    self._num_units = num_units
+    if is_training is None:
+      is_training = TFNetwork.get_current_network().train_flag
+    self.is_training = is_training
+    self.depth = depth
+    self.dropout = dropout
+    if dropout_seed is None:
+      dropout_seed = TFNetwork.get_current_network().random.randint(2 ** 31)
+    self.dropout_seed = dropout_seed
+    self.transform_bias = transform_bias or 0.0
+
+  @property
+  def output_size(self):
+    return self._num_units
+
+  @property
+  def state_size(self):
+    return self._num_units
+
+  @staticmethod
+  def _linear(xs, output_dim, bias_init=0.0):
+    """
+    :param list[tf.Tensor] xs:
+    :param int output_dim:
+    :param float bias_init:
+    :rtype: tf.Tensor
+    """
+    from TFUtil import var_creation_scope, dot
+    if len(xs) == 1:
+      x = xs[0]
+    else:
+      x = tf.concat(xs, axis=-1)
+    input_dim = x.get_shape().dims[-1].value
+    assert input_dim is not None
+    with var_creation_scope():
+      weights = tf.get_variable("W", shape=(input_dim, output_dim))
+      bias = tf.get_variable("b", shape=(output_dim,), initializer=tf.constant_initializer(bias_init))
+    assert x.get_shape().ndims == 2  # (batch,input_dim)
+    return dot(x, weights) + bias
+
+  def call(self, inputs, state):
+    """
+    :param tf.Tensor inputs:
+    :param tf.Tensor state:
+    :return: (output, state)
+    :rtype: (tf.Tensor, tf.Tensor)
+    """
+    from TFUtil import var_creation_scope
+    linear = self._linear
+    assert inputs.get_shape().ndims == 2
+    if self.dropout:
+      # Create the dropout masks outside the loop:
+      with var_creation_scope():
+        from TFNetworkLayer import LayerBase
+        batch_size = LayerBase.get_recent_layer().get_batch_dim()
+        keep_prob = 1.0 - self.dropout
+        # uniform [keep_prob, 1.0 + keep_prob)
+        random_tensor = keep_prob
+        random_tensor += tf.random_uniform((batch_size, self._num_units), seed=self.dropout_seed, dtype=state.dtype)
+        # 0. if [keep_prob, 1.0) and 1. if [1.0, 1.0 + keep_prob)
+        binary_tensor = tf.floor(random_tensor)
+        noise_h = binary_tensor / keep_prob
+    else:
+      noise_h = None
+
+    # Carry-gate coupled with transform gate: C = 1 − T
+    current_state = state
+    for i in range(self.depth):
+      if noise_h is not None:
+        current_state *= noise_h
+      with tf.variable_scope('h_%i' % i):
+        if i == 0:
+          h = tf.tanh(linear([inputs, current_state], self._num_units))
+        else:
+          h = tf.tanh(linear([current_state], self._num_units))
+      with tf.variable_scope('t_%i' % i):
+        if i == 0:
+          t = tf.sigmoid(linear([inputs, current_state], self._num_units, self.transform_bias))
+        else:
+          t = tf.sigmoid(linear([current_state], self._num_units, self.transform_bias))
+      # Simplified equation for better numerical stability.
+      current_state += t * (h - current_state)
+
+    return current_state, current_state
