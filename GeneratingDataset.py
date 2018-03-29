@@ -1890,6 +1890,127 @@ class LibriSpeechCorpus(CachedDataset2):
       seq_tag=self.get_tag(seq_idx))
 
 
+class Enwik8Corpus(CachedDataset2):
+  """
+  enwik8
+  """
+  # Use a single HDF file, and cache it across all instances.
+  _hdf_file = None
+
+  def __init__(self, path, subset, seq_len, fixed_random_seed=None, **kwargs):
+    """
+    :param str path:
+    :param str subset: "training", "validation", "test"
+    :param int seq_len:
+    :param int|None fixed_random_seed:
+    """
+    assert subset in ["training", "validation", "test"]
+    import os
+    super(Enwik8Corpus, self).__init__(**kwargs)
+    self.path = path
+    assert os.path.isdir(path)
+    self._prepare()
+    self._unique = self._hdf_file.attrs['unique']  # array label-idx -> byte idx (uint8, 0-255)
+    labels = [bytes([b]) for b in self._unique]
+    self.labels = {"data": labels, "classes": labels}
+    self.num_inputs = len(labels)
+    self.num_outputs = {"data": [self.num_inputs, 1], "classes": [self.num_inputs, 1]}
+    self._data = self._hdf_file["split/%s/default" % subset]
+    self._seq_len = seq_len
+    self._fixed_random_seed = fixed_random_seed
+    self._random = numpy.random.RandomState(1)
+    self._seq_starts = numpy.arange(0, len(self._data) - 1, seq_len)
+
+  def get_data_dtype(self, key):
+    return "uint8"
+
+  def init_seq_order(self, epoch=None, seq_list=None):
+    super(Enwik8Corpus, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+    if not epoch:
+      epoch = 1
+    self._random.seed(self._fixed_random_seed or epoch or 1)
+    self._num_seqs = len(self._seq_starts)
+    self._num_timesteps = len(self._data) - 1
+    self._seq_order = self.get_seq_order_for_epoch(
+      epoch=epoch or 1, num_seqs=self._num_seqs, get_seq_len=lambda _: self._seq_len)
+    return True
+
+  def _collect_single_seq(self, seq_idx):
+    idx = self._seq_order[seq_idx]
+    src_seq_start = self._seq_starts[idx]
+    tgt_seq_start = src_seq_start + 1
+    tgt_seq_end = min(tgt_seq_start + self._seq_len, len(self._data))
+    src_seq_end = tgt_seq_end - 1
+    assert tgt_seq_end - tgt_seq_start == src_seq_end - src_seq_start > 0
+    data = numpy.array(self._data[src_seq_start:tgt_seq_end], dtype="uint8")
+    return DatasetSeq(
+      seq_idx=seq_idx,
+      features=data[:-1],
+      targets=data[1:],
+      seq_tag="offset_%i_%i" % (src_seq_start, src_seq_end - src_seq_start))
+
+  @property
+  def _hdf_filename(self):
+    return self.path + "/enwik8.hdf5"
+
+  @property
+  def _zip_filename(self):
+    return self.path + "/enwik8.zip"
+
+  def _prepare(self):
+    """
+    Reference:
+    https://github.com/julian121266/RecurrentHighwayNetworks/blob/master/data/create_enwik8.py
+    """
+    if self._hdf_file:
+      return
+    import os
+    import h5py
+    if not os.path.exists(self._hdf_filename):
+      self._create_hdf()
+    Enwik8Corpus._hdf_file = h5py.File(self._hdf_filename, "r")
+
+  def _create_hdf(self):
+    import os
+    import h5py
+    import zipfile
+
+    if not os.path.exists(self._zip_filename):
+      self._download_zip()
+
+    print("%s: create %s" % (self, self._hdf_filename), file=log.v2)
+    num_test_chars = 5000000
+
+    raw_data = zipfile.ZipFile(self._zip_filename).read('enwik8')
+    raw_data = numpy.fromstring(raw_data, dtype=numpy.uint8)
+    unique, data = numpy.unique(raw_data, return_inverse=True)
+
+    train_data = data[: -2 * num_test_chars]
+    valid_data = data[-2 * num_test_chars: -num_test_chars]
+    test_data = data[-num_test_chars:]
+
+    f = h5py.File(self._hdf_filename, "w")
+    f.attrs['unique'] = unique
+
+    variant = f.create_group('split')
+    group = variant.create_group('training')
+    group.create_dataset(name='default', data=train_data, compression='gzip')
+
+    group = variant.create_group('validation')
+    group.create_dataset(name='default', data=valid_data, compression='gzip')
+
+    group = variant.create_group('test')
+    group.create_dataset(name='default', data=test_data, compression='gzip')
+
+    f.close()
+
+  def _download_zip(self):
+    url = 'http://mattmahoney.net/dc/enwik8.zip'
+    print("%s: download %s" % (self, url), file=log.v2)
+    from six.moves.urllib.request import urlretrieve
+    urlretrieve(url, self._zip_filename)
+
+
 def demo():
   import better_exchook
   better_exchook.install()
