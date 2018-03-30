@@ -3577,7 +3577,7 @@ class RHNCell(rnn_cell.RNNCell):
     else:
       noise_h = None
 
-    # Carry-gate coupled with transform gate: C = 1 − T
+    # Carry-gate coupled with transform gate: C = 1 - T
     current_state = state
     for i in range(self.depth):
       if noise_h is not None:
