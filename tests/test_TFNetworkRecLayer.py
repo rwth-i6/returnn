@@ -101,7 +101,6 @@ def test_rec_rhn():
       "loss": "mse"}})
 
 
-@unittest.skip("TODO... gets nan currently...")
 def test_rec_rhn_nan():
   _check_train_simple_network({
     "output": {
@@ -112,13 +111,14 @@ def test_rec_rhn_nan():
 def test_rhn_nan():
   """
   Behaves just like :func:`test_rec_rhn_nan`.
-  TODO but does not get nan currently... reproduce that...
   """
   random = numpy.random.RandomState(seed=1)
   num_inputs = 4
   num_outputs = 3
   seq_len = 10
   limit = 1.0
+  loop_variants = ["RecLayer", 'dynamic_rnn', 'while_loop', 'unroll', "unroll_simple"]
+  loop_variant = "unroll_simple"
 
   with make_scope() as session:
     print("create graph")
@@ -133,48 +133,95 @@ def test_rhn_nan():
         tgt_placeholder: random.uniform(-limit, limit, (1, seq_len, num_outputs)),
       }
 
-    rhn = RHNCell(num_units=num_outputs, is_training=True, dropout=0.9, dropout_seed=1, batch_size=batch_size)
-    state = rhn.zero_state(batch_size, tf.float32)
-    input_ta = tf.TensorArray(tf.float32, size=seq_len, element_shape=(None, num_inputs))
-    input_ta = input_ta.unstack(tf.transpose(src_placeholder, [1, 0, 2]))
-    loss_ta = tf.TensorArray(tf.float32, size=seq_len, element_shape=(None,))
+    from TFUtil import xavier_initializer, var_creation_scope
+    default_var_initializer = xavier_initializer(seed=13)
+    with tf.variable_scope(tf.get_variable_scope(), initializer=default_var_initializer) as scope:
+      assert loop_variant in loop_variants
+      if loop_variant in ["RecLayer", "dynamic_rnn"]:
+        if loop_variant == "RecLayer":
+          # Here I get nan.
+          net = TFNetwork(config=Config(), extern_data=ExternData(), train_flag=True)
+          with net.register_network_scope():
+            from TFNetworkLayer import InternalLayer
+            src_layer = InternalLayer(name='src', network=net, output=Data(
+              'src', shape=(None, num_inputs), placeholder=src_placeholder, size_placeholder={0: [seq_len]}))
+            with tf.name_scope("output"):
+              rec_layer = RecLayer(
+                name='output', network=net, output=Data("out", shape=(None, num_outputs)), sources=[src_layer],
+                unit='rhn', unit_opts={"dropout": 0.9, "dropout_seed": 1, "batch_size": batch_size})
+          y = rec_layer.output.placeholder
+          y = tf.transpose(y, [1, 0, 2])
+        elif loop_variant == "dynamic_rnn":
+          rhn = RHNCell(num_units=num_outputs, is_training=True, dropout=0.9, dropout_seed=1, batch_size=batch_size)
+          # Will get y in (time,batch,ydim).
+          from tensorflow.python.ops import rnn
+          y, final_state = rnn.dynamic_rnn(
+            cell=rhn, inputs=tf.transpose(src_placeholder, [1, 0, 2]), time_major=True,
+            sequence_length=[seq_len], dtype=tf.float32)
+          y = tf.transpose(y, [1, 0, 2])
+        loss = tf.reduce_sum(tf.reduce_mean(tf.squared_difference(tgt_placeholder, y), axis=-1))
+      else:
+        rhn = RHNCell(num_units=num_outputs, is_training=True, dropout=0.9, dropout_seed=1, batch_size=batch_size)
+        state = rhn.zero_state(batch_size, tf.float32)
+        input_ta = tf.TensorArray(tf.float32, size=seq_len, element_shape=(None, num_inputs))
+        input_ta = input_ta.unstack(tf.transpose(src_placeholder, [1, 0, 2]))
+        target_ta = tf.TensorArray(tf.float32, size=seq_len, element_shape=(None, num_outputs))
+        target_ta = target_ta.unstack(tf.transpose(tgt_placeholder, [1, 0, 2]))
+        loss_ta = tf.TensorArray(tf.float32, size=seq_len, element_shape=(None,))
 
-    def loop_iter(i, state, loss_ta):
-      output, state = rhn(inputs=input_ta.read(i), state=state)
-      frame_loss = tf.reduce_mean(tf.squared_difference(tgt_placeholder[:, i], output), axis=1)
-      assert frame_loss.get_shape().ndims == 1  # (batch,)
-      #frame_loss = tf.Print(frame_loss, ["frame", i, "loss", tf.reduce_sum(frame_loss)])
-      loss_ta = loss_ta.write(i, frame_loss)
-      return i + 1, state, loss_ta
+        def loop_iter(i, state, loss_ta):
+          output, state = rhn(inputs=input_ta.read(i), state=state)
+          frame_loss = tf.reduce_mean(tf.squared_difference(target_ta.read(i), output), axis=1)
+          assert frame_loss.get_shape().ndims == 1  # (batch,)
+          # frame_loss = tf.Print(frame_loss, ["frame", i, "loss", tf.reduce_sum(frame_loss)])
+          loss_ta = loss_ta.write(i, frame_loss)
+          return i + 1, state, loss_ta
 
-    if True:  # tf.while_loop
-      i, state, loss_ta = tf.while_loop(
-        lambda i, *args: tf.less(i, seq_len),
-        loop_iter,
-        (0, state, loss_ta))
-    else:
-      # Unroll the loop here.
-      i = 0
-      while i < seq_len:
-        i, state, loss_ta = loop_iter(i, state, loss_ta)
-    loss = tf.reduce_sum(loss_ta.stack())
+        if loop_variant == "while_loop":
+          i, state, loss_ta = tf.while_loop(
+            lambda i, *args: tf.less(i, seq_len),
+            loop_iter,
+            (0, state, loss_ta))
+          loss = tf.reduce_sum(loss_ta.stack())
+        elif loop_variant == "unroll":
+          # Unroll the loop here.
+          i = 0
+          while i < seq_len:
+            i, state, loss_ta = loop_iter(i, state, loss_ta)
+          loss = tf.reduce_sum(loss_ta.stack())
+        elif loop_variant == "unroll_simple":
+          loss = 0.0
+          for i in range(seq_len):
+            output, state = rhn(inputs=src_placeholder[:, i], state=state)
+            frame_loss = tf.reduce_mean(tf.squared_difference(tgt_placeholder[:, i], output), axis=1)
+            #frame_loss = tf.Print(frame_loss, ['frame', i, 'loss', frame_loss, 'SE of', tgt_placeholder[:, i], output])
+            assert frame_loss.get_shape().ndims == 1  # (batch,)
+            loss += tf.reduce_sum(frame_loss)
+        else:
+          assert False, "unexpected loop variant %r" % loop_variant
     optimizer = tf.train.AdamOptimizer(learning_rate=0.1, epsilon=1e-16, use_locking=False)
     minimize_op = optimizer.minimize(loss)
     from TFUtil import add_check_numerics_ops
-    add_check_numerics_ops()
+    #check_op = add_check_numerics_ops()
+    check_op = tf.no_op()
 
     print('variables:')
     train_vars = (
       tf.trainable_variables() +
       tf.get_collection(tf.GraphKeys.TRAINABLE_RESOURCE_VARIABLES))
     print(train_vars)
+    var_norms = [tf.nn.l2_loss(v) for v in train_vars]
     print('init vars')
     session.run(tf.global_variables_initializer())
     print('graph size:', session.graph_def.ByteSize())
     print('train')
     for s in range(10):
-      loss_val, _ = session.run([loss, minimize_op], feed_dict=make_feed_dict())
+      loss_val, _, _ = session.run([loss, minimize_op, check_op], feed_dict=make_feed_dict())
       print("step %i, loss: %f" % (s, loss_val))
+      var_norm_vals = session.run(var_norms)
+      #print('var norms:')
+      #for (v, x) in zip(train_vars, var_norm_vals):
+      #  print(' ', v, ':', x)
 
 
 def test_slow_TensorArray():
@@ -190,16 +237,16 @@ def test_slow_TensorArray():
     init vars
     graph size: 222234
     train
-    step 0, loss: 6.300317, time: 10.314005
-    step 1, loss: 5.061264, time: 0.001082
-    step 2, loss: 3.432691, time: 0.000960
-    step 3, loss: 2.960499, time: 0.000978
-    step 4, loss: 2.910479, time: 0.000947
-    step 5, loss: 3.191801, time: 0.000897
-    step 6, loss: 4.098809, time: 0.000904
-    step 7, loss: 3.601481, time: 0.000903
-    step 8, loss: 3.448281, time: 0.000951
-    step 9, loss: 3.846815, time: 0.000944
+    step 0, loss: 5.506713, time: 10.675434
+    step 1, loss: 7.865020, time: 0.003913
+    step 2, loss: 5.450877, time: 0.003354
+    step 3, loss: 3.361173, time: 0.003227
+    step 4, loss: 4.493120, time: 0.003563
+    step 5, loss: 5.137649, time: 0.003203
+    step 6, loss: 3.610677, time: 0.003376
+    step 7, loss: 3.657249, time: 0.003544
+    step 8, loss: 4.405594, time: 0.003454
+    step 9, loss: 4.380188, time: 0.003491
 
   My output with TF 1.7.0:
     ...

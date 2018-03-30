@@ -3604,18 +3604,20 @@ class RHNCell(rnn_cell.RNNCell):
     # Carry-gate coupled with transform gate: C = 1 - T
     current_state = state
     for i in range(self.depth):
-      current_state = self._optional_dropout(current_state)
+      current_state_masked = self._optional_dropout(current_state)
       with tf.variable_scope('h_%i' % i):
         if i == 0:
-          h = tf.tanh(linear([inputs, current_state], self._num_units))
+          h = tf.tanh(linear([inputs, current_state_masked], self._num_units))
         else:
-          h = tf.tanh(linear([current_state], self._num_units))
+          h = tf.tanh(linear([current_state_masked], self._num_units))
       with tf.variable_scope('t_%i' % i):
         if i == 0:
-          t = tf.sigmoid(linear([inputs, current_state], self._num_units, self.transform_bias))
+          t = tf.sigmoid(linear([inputs, current_state_masked], self._num_units, self.transform_bias))
         else:
-          t = tf.sigmoid(linear([current_state], self._num_units, self.transform_bias))
+          t = tf.sigmoid(linear([current_state_masked], self._num_units, self.transform_bias))
       # Simplified equation for better numerical stability.
+      # The current_state here should be without the dropout applied,
+      # because dropout would divide by keep_prop, which can blow up the state.
       current_state += t * (h - current_state)
 
     return current_state, current_state
