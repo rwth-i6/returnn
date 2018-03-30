@@ -3497,11 +3497,17 @@ class KenLmStateLayer(_ConcatInputLayer):
 
 
 class RHNCell(rnn_cell.RNNCell):
-  """Variational Recurrent Highway Layer
-  Reference: https://arxiv.org/abs/1607.03474
+  """
+  Recurrent Highway Layer.
+  With optional dropout for recurrent state (fixed over all frames - some call this variational).
+
+  References:
+    https://github.com/julian121266/RecurrentHighwayNetworks/
+    https://arxiv.org/abs/1607.03474
   """
 
-  def __init__(self, num_units, is_training=None, depth=5, dropout=0.0, dropout_seed=None, transform_bias=None):
+  def __init__(self, num_units, is_training=None, depth=5, dropout=0.0, dropout_seed=None, transform_bias=None,
+               batch_size=None):
     """
     :param int num_units:
     :param bool|tf.Tensor|None is_training:
@@ -3509,6 +3515,7 @@ class RHNCell(rnn_cell.RNNCell):
     :param float dropout:
     :param int dropout_seed:
     :param float|None transform_bias:
+    :param int|tf.Tensor|None batch_size:
     """
     from TFNetwork import TFNetwork
     super(RHNCell, self).__init__()
@@ -3522,6 +3529,8 @@ class RHNCell(rnn_cell.RNNCell):
       dropout_seed = TFNetwork.get_current_network().random.randint(2 ** 31)
     self.dropout_seed = dropout_seed
     self.transform_bias = transform_bias or 0.0
+    self.batch_size = batch_size
+    self._dropout_mask = None
 
   @property
   def output_size(self):
@@ -3552,6 +3561,36 @@ class RHNCell(rnn_cell.RNNCell):
     assert x.get_shape().ndims == 2  # (batch,input_dim)
     return dot(x, weights) + bias
 
+  def _get_dropout_mask(self):
+    if self._dropout_mask is not None:
+      return self._dropout_mask
+
+    from TFUtil import var_creation_scope, cond
+    # Create the dropout masks outside the loop:
+    with var_creation_scope():
+      def get_mask():
+        if self.batch_size is not None:
+          batch_size = self.batch_size
+        else:
+          from TFNetworkLayer import LayerBase
+          batch_size = LayerBase.get_recent_layer().get_batch_dim()
+        keep_prob = 1.0 - self.dropout
+        # uniform [keep_prob, 1.0 + keep_prob)
+        random_tensor = keep_prob
+        random_tensor += tf.random_uniform((batch_size, self._num_units), seed=self.dropout_seed, dtype=tf.float32)
+        # 0. if [keep_prob, 1.0) and 1. if [1.0, 1.0 + keep_prob)
+        binary_tensor = tf.floor(random_tensor)
+        return binary_tensor * (1.0 / keep_prob)
+      self._dropout_mask = cond(self.is_training, get_mask, lambda: 1.0)
+    return self._dropout_mask
+
+  def _optional_dropout(self, state):
+    if not self.dropout:
+      return state
+    if self.is_training is False:
+      return state
+    return state * self._get_dropout_mask()
+
   def call(self, inputs, state):
     """
     :param tf.Tensor inputs:
@@ -3559,29 +3598,13 @@ class RHNCell(rnn_cell.RNNCell):
     :return: (output, state)
     :rtype: (tf.Tensor, tf.Tensor)
     """
-    from TFUtil import var_creation_scope
     linear = self._linear
     assert inputs.get_shape().ndims == 2
-    if self.dropout:
-      # Create the dropout masks outside the loop:
-      with var_creation_scope():
-        from TFNetworkLayer import LayerBase
-        batch_size = LayerBase.get_recent_layer().get_batch_dim()
-        keep_prob = 1.0 - self.dropout
-        # uniform [keep_prob, 1.0 + keep_prob)
-        random_tensor = keep_prob
-        random_tensor += tf.random_uniform((batch_size, self._num_units), seed=self.dropout_seed, dtype=state.dtype)
-        # 0. if [keep_prob, 1.0) and 1. if [1.0, 1.0 + keep_prob)
-        binary_tensor = tf.floor(random_tensor)
-        noise_h = binary_tensor / keep_prob
-    else:
-      noise_h = None
 
     # Carry-gate coupled with transform gate: C = 1 - T
     current_state = state
     for i in range(self.depth):
-      if noise_h is not None:
-        current_state *= noise_h
+      current_state = self._optional_dropout(current_state)
       with tf.variable_scope('h_%i' % i):
         if i == 0:
           h = tf.tanh(linear([inputs, current_state], self._num_units))

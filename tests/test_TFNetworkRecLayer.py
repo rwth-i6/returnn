@@ -28,6 +28,8 @@ TFUtil.debugRegisterBetterRepr()
 
 log.initialize(verbosity=[5])
 
+print("TensorFlow:", tf.__version__)
+
 
 @contextlib.contextmanager
 def make_scope():
@@ -66,6 +68,7 @@ def _check_train_simple_network(network, num_steps=10):
 
   with make_scope() as session:
     print("Create network...")
+    tf.set_random_seed(42)
     network = TFNetwork(config=config, train_flag=True)
     network.construct_from_dict(config.typed_dict["network"])
     network.print_network_info()
@@ -76,9 +79,11 @@ def _check_train_simple_network(network, num_steps=10):
     updater.set_learning_rate(config.float("learning_rate", 1.0))
     updater.set_trainable_vars(network.get_trainable_params())
 
+    loss = None
     for step in range(num_steps):
       loss, _ = session.run([network.get_total_loss(), updater.get_optim_op()], feed_dict=make_feed_dict())
       print("step %i, loss: %f" % (step, loss))
+  return loss
 
 
 def test_rec_nativelstm():
@@ -94,6 +99,248 @@ def test_rec_rhn():
     "output": {
       "class": "rec", "unit": "rhn", "unit_opts": {"dropout": 0.1},
       "loss": "mse"}})
+
+
+@unittest.skip("TODO... gets nan currently...")
+def test_rec_rhn_nan():
+  _check_train_simple_network({
+    "output": {
+      "class": "rec", "unit": "rhn", "unit_opts": {"dropout": 0.9, "dropout_seed": 1},
+      "loss": "mse"}})
+
+
+def test_rhn_nan():
+  """
+  Behaves just like :func:`test_rec_rhn_nan`.
+  TODO but does not get nan currently... reproduce that...
+  """
+  random = numpy.random.RandomState(seed=1)
+  num_inputs = 4
+  num_outputs = 3
+  seq_len = 10
+  limit = 1.0
+
+  with make_scope() as session:
+    print("create graph")
+    tf.set_random_seed(42)
+    src_placeholder = tf.placeholder(tf.float32, (None, seq_len, num_inputs), name="src_placeholder")
+    tgt_placeholder = tf.placeholder(tf.float32, (None, seq_len, num_outputs), name="tgt_placeholder")
+    batch_size = tf.shape(src_placeholder)[0]
+
+    def make_feed_dict():
+      return {
+        src_placeholder: random.uniform(-limit, limit, (1, seq_len, num_inputs)),
+        tgt_placeholder: random.uniform(-limit, limit, (1, seq_len, num_outputs)),
+      }
+
+    rhn = RHNCell(num_units=num_outputs, is_training=True, dropout=0.9, dropout_seed=1, batch_size=batch_size)
+    state = rhn.zero_state(batch_size, tf.float32)
+    input_ta = tf.TensorArray(tf.float32, size=seq_len, element_shape=(None, num_inputs))
+    input_ta = input_ta.unstack(tf.transpose(src_placeholder, [1, 0, 2]))
+    loss_ta = tf.TensorArray(tf.float32, size=seq_len, element_shape=(None,))
+
+    def loop_iter(i, state, loss_ta):
+      output, state = rhn(inputs=input_ta.read(i), state=state)
+      frame_loss = tf.reduce_mean(tf.squared_difference(tgt_placeholder[:, i], output), axis=1)
+      assert frame_loss.get_shape().ndims == 1  # (batch,)
+      #frame_loss = tf.Print(frame_loss, ["frame", i, "loss", tf.reduce_sum(frame_loss)])
+      loss_ta = loss_ta.write(i, frame_loss)
+      return i + 1, state, loss_ta
+
+    if True:  # tf.while_loop
+      i, state, loss_ta = tf.while_loop(
+        lambda i, *args: tf.less(i, seq_len),
+        loop_iter,
+        (0, state, loss_ta))
+    else:
+      # Unroll the loop here.
+      i = 0
+      while i < seq_len:
+        i, state, loss_ta = loop_iter(i, state, loss_ta)
+    loss = tf.reduce_sum(loss_ta.stack())
+    optimizer = tf.train.AdamOptimizer(learning_rate=0.1, epsilon=1e-16, use_locking=False)
+    minimize_op = optimizer.minimize(loss)
+    from TFUtil import add_check_numerics_ops
+    add_check_numerics_ops()
+
+    print('variables:')
+    train_vars = (
+      tf.trainable_variables() +
+      tf.get_collection(tf.GraphKeys.TRAINABLE_RESOURCE_VARIABLES))
+    print(train_vars)
+    print('init vars')
+    session.run(tf.global_variables_initializer())
+    print('graph size:', session.graph_def.ByteSize())
+    print('train')
+    for s in range(10):
+      loss_val, _ = session.run([loss, minimize_op], feed_dict=make_feed_dict())
+      print("step %i, loss: %f" % (s, loss_val))
+
+
+def test_slow_TensorArray():
+  """
+  Seems to be some strange hang, probably related to tf.TensorArray.
+  https://github.com/tensorflow/tensorflow/issues/18117
+
+  My output with TF 1.5.0:
+    ...
+    create graph
+    variables:
+    ...
+    init vars
+    graph size: 222234
+    train
+    step 0, loss: 6.300317, time: 10.314005
+    step 1, loss: 5.061264, time: 0.001082
+    step 2, loss: 3.432691, time: 0.000960
+    step 3, loss: 2.960499, time: 0.000978
+    step 4, loss: 2.910479, time: 0.000947
+    step 5, loss: 3.191801, time: 0.000897
+    step 6, loss: 4.098809, time: 0.000904
+    step 7, loss: 3.601481, time: 0.000903
+    step 8, loss: 3.448281, time: 0.000951
+    step 9, loss: 3.846815, time: 0.000944
+
+  My output with TF 1.7.0:
+    ...
+    init vars
+    graph size: 225096
+    train
+    step 0, loss: 4.614282, time: 0.329974
+    step 1, loss: 7.103771, time: 0.003420
+    step 2, loss: 4.263576, time: 0.003305
+    step 3, loss: 2.140168, time: 0.003355
+    step 4, loss: 3.948706, time: 0.003271
+    step 5, loss: 3.063313, time: 0.003162
+    step 6, loss: 4.229179, time: 0.003354
+    step 7, loss: 4.908344, time: 0.003289
+    step 8, loss: 4.345730, time: 0.003188
+  """
+  import time
+  random = numpy.random.RandomState(seed=1)
+  num_inputs = 4
+  num_outputs = 3
+  seq_len = 10
+  limit = 1.0
+
+  def linear(x, output_dim):
+    input_dim = x.get_shape().dims[-1].value
+    assert input_dim is not None
+    with tf.variable_scope("linear", reuse=tf.AUTO_REUSE):
+      weights = tf.get_variable("W", shape=(input_dim, output_dim))
+      bias = tf.get_variable("b", shape=(output_dim,))
+    assert x.get_shape().ndims == 2  # (batch,input_dim)
+    return tf.matmul(x, weights) + bias
+
+  with make_scope() as session:
+    print("create graph")
+    src_placeholder = tf.placeholder(tf.float32, (None, seq_len, num_inputs), name="src_placeholder")
+    tgt_placeholder = tf.placeholder(tf.float32, (None, seq_len, num_outputs), name="tgt_placeholder")
+    batch_size = tf.shape(src_placeholder)[0]
+
+    def make_feed_dict():
+      return {
+        src_placeholder: random.uniform(-limit, limit, (1, seq_len, num_inputs)),
+        tgt_placeholder: random.uniform(-limit, limit, (1, seq_len, num_outputs)),
+      }
+
+    state = tf.zeros((batch_size, num_outputs))
+    loss_ta = tf.TensorArray(tf.float32, size=seq_len, element_shape=(None,))
+    # Unroll the loop here.
+    for f in range(seq_len):
+      inputs = src_placeholder[:, f]
+      x = tf.concat([inputs, state], axis=-1)
+      with tf.variable_scope('h'):
+        h = tf.tanh(linear(x, num_outputs))
+      with tf.variable_scope('t'):
+        t = tf.sigmoid(linear(x, num_outputs))
+      state += t * (h - state)
+      frame_loss = tf.reduce_mean(tf.squared_difference(tgt_placeholder[:, f], state), axis=1)
+      assert frame_loss.get_shape().ndims == 1  # (batch,)
+      loss_ta = loss_ta.write(f, frame_loss)
+    loss = tf.reduce_sum(loss_ta.stack())
+    optimizer = tf.train.AdamOptimizer(learning_rate=0.1, epsilon=1e-16, use_locking=False)
+    minimize_op = optimizer.minimize(loss)
+
+    print('variables:')
+    train_vars = (
+      tf.trainable_variables() +
+      tf.get_collection(tf.GraphKeys.TRAINABLE_RESOURCE_VARIABLES))
+    print(train_vars)
+    print('init vars')
+    session.run(tf.global_variables_initializer())
+    print('graph size:', session.graph_def.ByteSize())
+    print('train')
+    for s in range(10):
+      start_time = time.time()
+      loss_val, _ = session.run([loss, minimize_op], feed_dict=make_feed_dict())
+      print("step %i, loss: %f, time: %f" % (s, loss_val, time.time() - start_time))
+
+
+def test_deterministic_TensorArray():
+  num_inputs = 4
+  num_outputs = 3
+  seq_len = 10
+  limit = 1.0
+
+  first_run_loss = None
+  for r in range(3):
+    print('>>> run %i' % r)
+    random = numpy.random.RandomState(seed=1)
+
+    with make_scope() as session:
+      tf.set_random_seed(42)
+      print("create graph")
+      src_placeholder = tf.placeholder(tf.float32, (None, seq_len, num_inputs), name="src_placeholder")
+      tgt_placeholder = tf.placeholder(tf.float32, (None, seq_len, num_outputs), name="tgt_placeholder")
+      batch_size = tf.shape(src_placeholder)[0]
+
+      def make_feed_dict():
+        return {
+          src_placeholder: random.uniform(-limit, limit, (1, seq_len, num_inputs)),
+          tgt_placeholder: random.uniform(-limit, limit, (1, seq_len, num_outputs)),
+        }
+
+      cell = rnn_cell.BasicRNNCell(num_units=num_outputs)
+      state = cell.zero_state(batch_size, tf.float32)
+      loss_ta = tf.TensorArray(tf.float32, size=seq_len, element_shape=(None,))
+      # Unroll the loop here.
+      for i in range(seq_len):
+        keep_prob = 0.9
+        # uniform [keep_prob, 1.0 + keep_prob)
+        random_tensor = keep_prob
+        random_tensor += tf.random_uniform((batch_size, cell.state_size), seed=1, dtype=state.dtype)
+        # 0. if [keep_prob, 1.0) and 1. if [1.0, 1.0 + keep_prob)
+        binary_tensor = tf.floor(random_tensor)
+        noise_h = binary_tensor / keep_prob
+        state *= noise_h
+
+        output, state = cell(inputs=src_placeholder[:, i], state=state)
+        frame_loss = tf.reduce_mean(tf.squared_difference(tgt_placeholder[:, i], output), axis=1)
+        assert frame_loss.get_shape().ndims == 1  # (batch,)
+        loss_ta = loss_ta.write(i, frame_loss)
+      loss = tf.reduce_sum(loss_ta.stack())
+      optimizer = tf.train.AdamOptimizer(learning_rate=0.1, epsilon=1e-16, use_locking=False)
+      minimize_op = optimizer.minimize(loss)
+
+      print('variables:')
+      train_vars = (
+        tf.trainable_variables() +
+        tf.get_collection(tf.GraphKeys.TRAINABLE_RESOURCE_VARIABLES))
+      print(train_vars)
+      print('init vars')
+      session.run(tf.global_variables_initializer())
+      print('graph size:', session.graph_def.ByteSize())
+      print('train')
+      loss_val = None
+      for s in range(10):
+        loss_val, _ = session.run([loss, minimize_op], feed_dict=make_feed_dict())
+        print("step %i, loss: %f" % (s, loss_val))
+      assert loss_val is not None
+      if r == 0:
+        first_run_loss = loss_val
+      else:
+        assert numpy.isclose(first_run_loss, loss_val)
 
 
 def test_rec_subnet_with_choice():
