@@ -155,16 +155,20 @@ def test_rhn_nan():
           rhn = RHNCell(num_units=num_outputs, is_training=True, dropout=0.9, dropout_seed=1, batch_size=batch_size)
           # Will get y in (time,batch,ydim).
           from tensorflow.python.ops import rnn
+          x = tf.transpose(src_placeholder, [1, 0, 2])
+          x = rhn.get_input_transformed(x)
           y, final_state = rnn.dynamic_rnn(
-            cell=rhn, inputs=tf.transpose(src_placeholder, [1, 0, 2]), time_major=True,
+            cell=rhn, inputs=x, time_major=True,
             sequence_length=[seq_len], dtype=tf.float32)
           y = tf.transpose(y, [1, 0, 2])
         loss = tf.reduce_sum(tf.reduce_mean(tf.squared_difference(tgt_placeholder, y), axis=-1))
       else:
         rhn = RHNCell(num_units=num_outputs, is_training=True, dropout=0.9, dropout_seed=1, batch_size=batch_size)
         state = rhn.zero_state(batch_size, tf.float32)
-        input_ta = tf.TensorArray(tf.float32, size=seq_len, element_shape=(None, num_inputs))
-        input_ta = input_ta.unstack(tf.transpose(src_placeholder, [1, 0, 2]))
+        x = tf.transpose(src_placeholder, [1, 0, 2])
+        x = rhn.get_input_transformed(x)
+        input_ta = tf.TensorArray(tf.float32, size=seq_len, element_shape=(None, num_outputs * 2))
+        input_ta = input_ta.unstack(x)
         target_ta = tf.TensorArray(tf.float32, size=seq_len, element_shape=(None, num_outputs))
         target_ta = target_ta.unstack(tf.transpose(tgt_placeholder, [1, 0, 2]))
         loss_ta = tf.TensorArray(tf.float32, size=seq_len, element_shape=(None,))
@@ -192,7 +196,7 @@ def test_rhn_nan():
         elif loop_variant == "unroll_simple":
           loss = 0.0
           for i in range(seq_len):
-            output, state = rhn(inputs=src_placeholder[:, i], state=state)
+            output, state = rhn(inputs=x[i], state=state)
             frame_loss = tf.reduce_mean(tf.squared_difference(tgt_placeholder[:, i], output), axis=1)
             #frame_loss = tf.Print(frame_loss, ['frame', i, 'loss', frame_loss, 'SE of', tgt_placeholder[:, i], output])
             assert frame_loss.get_shape().ndims == 1  # (batch,)
