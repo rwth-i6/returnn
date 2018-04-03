@@ -350,10 +350,12 @@ class Updater(object):
     for slot_name in self.optimizer.get_slot_names():
       for v in trainable_vars_for_gradients:
         slot_var = self.optimizer.get_slot(var=v, name=slot_name)
-        assert slot_var is not None, (
-          "No slot_var found for variable %r, slot_name %r. Maybe no gradient for this var?" % (v, slot_name))
-        assert isinstance(slot_var, tf.Variable)
-        slot_vars.append(slot_var)
+        if slot_var is None:
+          print("Warning: No slot_var found for variable %r, slot_name %r. Maybe no gradient for this var?" % (
+            v, slot_name), file=log.v3)
+        else:
+          assert isinstance(slot_var, tf.Variable)
+          slot_vars.append(slot_var)
     self.optimizer_vars = slot_vars
 
     # Check if there were any other variables added.
