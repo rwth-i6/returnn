@@ -276,6 +276,11 @@ def test_lstm_initial_state_var():
     "output": {"class": "rec", "unit": "lstm", "loss": "mse", "initial_state": "var"}})
 
 
+def test_nativelstm2_initial_state_var():
+  _check_train_simple_network({
+    "output": {"class": "rec", "unit": "nativelstm2", "loss": "mse", "initial_state": "var"}})
+
+
 def test_slow_TensorArray():
   """
   Seems to be some strange hang, probably related to tf.TensorArray.

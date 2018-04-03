@@ -534,6 +534,10 @@ class RecSeqCellOp(object):
     self.input_is_sparse = input_is_sparse
     self.step = step if self.does_direction_handling else None
 
+  @property
+  def state_size(self):
+    return self.n_hidden
+
   def __call__(self, inputs, index, initial_state=None, recurrent_weights_initializer=None):
     """
     :param tf.Tensor inputs: shape (time,batch,n_input_dim)
@@ -665,6 +669,11 @@ class NativeLstm2(RecSeqCellOp):
     self.n_input_dim = self.n_hidden * 4
     self.op = make_op(NativeOp.NativeLstm2)
 
+  @property
+  def state_size(self):
+    from tensorflow.python.ops.nn import rnn_cell
+    return rnn_cell.LSTMStateTuple(c=self.n_hidden, h=self.n_hidden)
+
   def map_layer_inputs_to_op(self, X, W, i, initial_state=None):
     """
     Just like NativeOp.LstmGenericBase.map_layer_inputs_to_op().
@@ -674,6 +683,7 @@ class NativeLstm2(RecSeqCellOp):
     :param tf.Tensor|None initial_state: shape (batch,n_hidden)
     :rtype: tuple[tf.Tensor]
     """
+    from tensorflow.python.ops.nn import rnn_cell
     X.set_shape(tf.TensorShape([None, None, self.n_hidden * 4]))
     W.set_shape(tf.TensorShape([self.n_hidden, self.n_hidden * 4]))
     i.set_shape(tf.TensorShape([None, None]))
@@ -685,12 +695,15 @@ class NativeLstm2(RecSeqCellOp):
         i.cast_float32 = i_cast_float32
       i = i.cast_float32
     n_batch = tf.shape(X)[1]
-    if initial_state is not None:
-      c0 = initial_state
-    else:
+    if initial_state is None:
       c0 = tf.zeros((n_batch, self.n_hidden), dtype=tf.float32, name="initial_c")
-    # We could make `h` a variable exactly if `c` is a trainable variable.
-    y0 = tf.zeros((n_batch, self.n_hidden), dtype=tf.float32, name="initial_h")
+      y0 = tf.zeros((n_batch, self.n_hidden), dtype=tf.float32, name="initial_h")
+    elif isinstance(initial_state, rnn_cell.LSTMStateTuple):
+      c0 = initial_state.c
+      y0 = initial_state.h
+    else:
+      c0 = initial_state
+      y0 = tf.zeros((n_batch, self.n_hidden), dtype=tf.float32, name="initial_h")
     start = tf.constant(0, name="start")
     step = tf.constant(self.step or 1, name="step")
     return X, W, y0, c0, i, start, step

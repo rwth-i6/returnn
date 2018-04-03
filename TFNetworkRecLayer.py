@@ -23,6 +23,15 @@ class RecLayer(_ConcatInputLayer):
 
   layer_class = "rec"
   recurrent = True
+  # Some possible LSTM implementations are (in all cases for both CPU and GPU):
+  # * BasicLSTM (the cell), via official TF, pure TF implementation
+  # * LSTMBlock (the cell), via tf.contrib.rnn.
+  # * LSTMBlockFused, via tf.contrib.rnn. should be much faster than BasicLSTM
+  # * NativeLSTM, our own native LSTM. should be faster than LSTMBlockFused
+  # * CudnnLSTM, via tf.contrib.cudnn_rnn. This is experimental yet.
+  # We default to the current tested fastest one, i.e. NativeLSTM.
+  # Note that they are currently not compatible to each other, i.e. the way the parameters are represented.
+  _default_lstm_unit = "nativelstm"  # TFNativeOp.NativeLstmCell
 
   def __init__(self,
                unit="lstm", unit_opts=None,
@@ -301,7 +310,7 @@ class RecLayer(_ConcatInputLayer):
   def get_rnn_cell_class(cls, name):
     """
     :param str name: cell name, minus the "Cell" at the end
-    :rtype: () -> tensorflow.contrib.rnn.RNNCell
+    :rtype: () -> rnn_cell.RNNCell|TFNativeOp.RecSeqCellOp
     """
     if not cls._rnn_cells_dict:
       cls._create_rnn_cells_dict()
@@ -314,6 +323,8 @@ class RecLayer(_ConcatInputLayer):
                 (name, m[name.lower()]), file=log.v2)
           cls._warn_msg_once_for_cell_name.add(name.lower())
         name = m[name.lower()]
+    if name.lower() in ["lstmp", "lstm"]:
+      name = cls._default_lstm_unit
     return cls._rnn_cells_dict[name.lower()]
 
   def _get_input(self):
@@ -368,16 +379,6 @@ class RecLayer(_ConcatInputLayer):
       assert unit_opts is None
       return _SubnetworkRecCell(parent_rec_layer=self, net_dict=unit)
     assert isinstance(unit, str)
-    if unit.lower() in ["lstmp", "lstm"]:
-      # Some possible LSTM implementations are (in all cases for both CPU and GPU):
-      # * BasicLSTM (the cell), via official TF, pure TF implementation
-      # * LSTMBlock (the cell), via tf.contrib.rnn.
-      # * LSTMBlockFused, via tf.contrib.rnn. should be much faster than BasicLSTM
-      # * NativeLSTM, our own native LSTM. should be faster than LSTMBlockFused
-      # * CudnnLSTM, via tf.contrib.cudnn_rnn. This is experimental yet.
-      # We default to the current tested fastest one, i.e. NativeLSTM.
-      # Note that they are currently not compatible to each other, i.e. the way the parameters are represented.
-      unit = "nativelstm"  # TFNativeOp.NativeLstmCell
     rnn_cell_class = self.get_rnn_cell_class(unit)
     n_hidden = self.output.dim
     if unit_opts is None:
@@ -2137,14 +2138,21 @@ class RnnCellLayer(_ConcatInputLayer):
       assert isinstance(scope, tf.VariableScope)
       scope_name_prefix = scope.name + "/"  # e.g. "layer1/rec/"
       self.cell = self._get_cell(n_out=n_out, unit=unit, unit_opts=unit_opts)
+      assert isinstance(self.cell, rnn_cell.RNNCell)
       if self._rec_previous_layer:
+        x = self.input_data.placeholder
+        if isinstance(self.cell, BaseRNNCell):
+          x = self.cell.get_input_transformed(x)
         assert not self.input_data or self.input_data.time_dim_axis is None
         self.output.time_dim_axis = None
         self.output.batch_dim_axis = 0
         prev_state = self._rec_previous_layer.rec_vars_outputs["state"]
-        self.output.placeholder, state = self.cell(self.input_data.placeholder, prev_state)
+        self.output.placeholder, state = self.cell(x, prev_state)
       else:
         assert self.input_data and self.input_data.time_dim_axis is not None
+        x = self.input_data.get_placeholder_as_time_major()
+        if isinstance(self.cell, BaseRNNCell):
+          x = self.cell.get_input_transformed(x)
         self.output.time_dim_axis = 0
         self.output.batch_dim_axis = 1
         state0 = self.get_rec_initial_state(
@@ -2153,7 +2161,7 @@ class RnnCellLayer(_ConcatInputLayer):
           initial_state=initial_state)
         self.output.placeholder, state = tf.nn.dynamic_rnn(
           self.cell,
-          inputs=self.input_data.get_placeholder_as_time_major(),
+          inputs=x,
           sequence_length=self.input_data.get_sequence_lengths(),
           initial_state=state0, time_major=True, scope=scope)
       self._hidden_state = state
@@ -2168,21 +2176,25 @@ class RnnCellLayer(_ConcatInputLayer):
     :param int n_out:
     :param str|rnn_cell.RNNCell unit:
     :param dict[str]|None unit_opts:
-    :rtype: rnn_cell.RNNCell
+    :rtype: rnn_cell.RNNCell|TFNativeOp.RecSeqCellOp
     """
     if isinstance(unit, rnn_cell.RNNCell):
       return unit
     rnn_cell_class = RecLayer.get_rnn_cell_class(unit)
     # E.g. rnn_cell_class is :class:`rnn_cell.LSTMCell`.
-    assert issubclass(rnn_cell_class, rnn_cell.RNNCell)
-    if unit_opts is None:
-      unit_opts = {}
-    assert isinstance(unit_opts, dict)
-    # This should not have any side-effects, i.e. it should not add to the current computation graph,
-    # it should also not create any vars yet, etc.
-    cell = rnn_cell_class(n_out, **unit_opts)
-    assert isinstance(cell, rnn_cell.RNNCell)
-    return cell
+    if issubclass(rnn_cell_class, rnn_cell.RNNCell):
+      if unit_opts is None:
+        unit_opts = {}
+      assert isinstance(unit_opts, dict)
+      # This should not have any side-effects, i.e. it should not add to the current computation graph,
+      # it should also not create any vars yet, etc.
+      cell = rnn_cell_class(n_out, **unit_opts)
+      assert isinstance(cell, rnn_cell.RNNCell)
+      return cell
+    import TFNativeOp
+    if issubclass(rnn_cell_class, TFNativeOp.RecSeqCellOp):
+      return rnn_cell_class(n_hidden=n_out)
+    raise TypeError("does not expect %r here for unit %r" % (rnn_cell_class, unit))
 
   @classmethod
   def get_out_data_from_opts(cls, n_out, name, sources=(), **kwargs):
@@ -2238,7 +2250,6 @@ class RnnCellLayer(_ConcatInputLayer):
     :rtype: int|tuple[int]
     """
     cell = cls._get_cell(unit=unit, unit_opts=unit_opts, n_out=n_out)
-    assert isinstance(cell, rnn_cell.RNNCell)
     return cell.state_size
 
   @classmethod
