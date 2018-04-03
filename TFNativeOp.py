@@ -575,6 +575,9 @@ class NativeLstmCell(RecSeqCellOp):
     n_batch = tf.shape(Z)[1]
     n_out = tf.shape(V_h)[0]
     if initial_state is not None:
+      from tensorflow.python.ops.nn import rnn_cell
+      if isinstance(initial_state, rnn_cell.LSTMStateTuple):
+        initial_state = initial_state.c
       c = initial_state
     else:
       c = tf.zeros((n_batch, n_out), dtype=tf.float32)

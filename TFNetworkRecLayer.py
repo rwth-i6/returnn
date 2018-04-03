@@ -2166,23 +2166,22 @@ class RnnCellLayer(_ConcatInputLayer):
   def _get_cell(cls, n_out, unit, unit_opts=None):
     """
     :param int n_out:
-    :param str|tf.contrib.rnn.RNNCell unit:
+    :param str|rnn_cell.RNNCell unit:
     :param dict[str]|None unit_opts:
-    :rtype: tf.contrib.rnn.RNNCell
+    :rtype: rnn_cell.RNNCell
     """
-    import tensorflow.contrib.rnn as rnn_contrib
-    if isinstance(unit, rnn_contrib.RNNCell):
+    if isinstance(unit, rnn_cell.RNNCell):
       return unit
     rnn_cell_class = RecLayer.get_rnn_cell_class(unit)
-    # E.g. rnn_cell_class is :class:`rnn_contrib.LSTMCell`.
-    assert issubclass(rnn_cell_class, rnn_contrib.RNNCell)
+    # E.g. rnn_cell_class is :class:`rnn_cell.LSTMCell`.
+    assert issubclass(rnn_cell_class, rnn_cell.RNNCell)
     if unit_opts is None:
       unit_opts = {}
     assert isinstance(unit_opts, dict)
     # This should not have any side-effects, i.e. it should not add to the current computation graph,
     # it should also not create any vars yet, etc.
     cell = rnn_cell_class(n_out, **unit_opts)
-    assert isinstance(cell, rnn_contrib.RNNCell)
+    assert isinstance(cell, rnn_cell.RNNCell)
     return cell
 
   @classmethod
@@ -2239,8 +2238,7 @@ class RnnCellLayer(_ConcatInputLayer):
     :rtype: int|tuple[int]
     """
     cell = cls._get_cell(unit=unit, unit_opts=unit_opts, n_out=n_out)
-    import tensorflow.contrib.rnn as rnn_contrib
-    assert isinstance(cell, rnn_contrib.RNNCell)
+    assert isinstance(cell, rnn_cell.RNNCell)
     return cell.state_size
 
   @classmethod
@@ -2456,7 +2454,7 @@ class RnnCellLayer(_ConcatInputLayer):
   @classmethod
   def get_rec_initial_output(cls, unit, initial_output=None, initial_state=None, **kwargs):
     assert initial_output is None, "layer %r: use initial_state instead" % kwargs["name"]
-    if initial_state in [None, 0, "zero"]:
+    if initial_state in [None, 0, "zeros"]:
       # We can just return 0.
       return super(RnnCellLayer, cls).get_rec_initial_output(initial_output=0, **kwargs)
     state = cls.get_rec_initial_state(unit=unit, initial_state=initial_state, **kwargs)

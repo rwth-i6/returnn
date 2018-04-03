@@ -266,6 +266,11 @@ def test_state_keep_over_epoch():
   print('ok!')
 
 
+def test_lstm_initial_state_zero():
+  _check_train_simple_network({
+    "output": {"class": "rec", "unit": "lstm", "loss": "mse", "initial_state": "zeros"}})
+
+
 def test_slow_TensorArray():
   """
   Seems to be some strange hang, probably related to tf.TensorArray.
