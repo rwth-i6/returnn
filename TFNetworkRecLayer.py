@@ -2354,7 +2354,7 @@ class RnnCellLayer(_ConcatInputLayer):
           with rec_layer.var_creation_scope() if rec_layer else dummy_noop_ctx():
             var = tf.get_variable("initial_%s" % key_name, shape=(d,), initializer=tf.zeros_initializer())
           from TFUtil import expand_dims_unbroadcast
-          var = expand_dims_unbroadcast(v, axis=0, dim=batch_dim)  # (batch,dim)
+          var = expand_dims_unbroadcast(var, axis=0, dim=batch_dim)  # (batch,dim)
           return var
         elif v == "keep_over_epoch":
           assert rec_layer is not None
