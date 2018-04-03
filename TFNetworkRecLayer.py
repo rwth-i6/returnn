@@ -120,7 +120,8 @@ class RecLayer(_ConcatInputLayer):
       with self.var_creation_scope():
         self._initial_state = RnnCellLayer.get_rec_initial_state(
           initial_state=initial_state, n_out=self.output.dim, unit=unit, unit_opts=unit_opts,
-          batch_dim=self.network.get_data_batch_dim(), name=self.name) if initial_state is not None else None
+          batch_dim=self.network.get_data_batch_dim(), name=self.name,
+          rec_layer=self) if initial_state is not None else None
         self.cell = self._get_cell(unit, unit_opts=unit_opts)
         if isinstance(self.cell, (rnn_cell.RNNCell, rnn_contrib.FusedRNNCell)):
           y = self._get_output_cell(self.cell)
@@ -2302,10 +2303,39 @@ class RnnCellLayer(_ConcatInputLayer):
       init_value = initial_state
       dim = cls.get_hidden_state_size(n_out=n_out, unit=unit, unit_opts=unit_opts, **kwargs)
 
-      def make(d, v, name):
+      def get(state, key):
+        """
+        Gets the tensor from the state, given the key.
+        Matches :func:`make`.
+
+        :param tf.Tensor|tuple[tf.Tensor]|namedtuple state:
+        :param str|int|None key:
+        :rtype: tf.Tensor
+        """
+        if key is None:
+          assert isinstance(state, tf.Tensor)
+          return state
+        if isinstance(key, int):
+          s = state[key]
+          assert isinstance(s, tf.Tensor), "invalid state %r, key %r" % (state, key)
+          return s
+        assert isinstance(key, str)
+        s = getattr(state, key)
+        assert isinstance(s, tf.Tensor), "invalid state %r, key %r" % (state, key)
+        return s
+
+      def make(d, v, key):
+        """
+        :param int d: dim
+        :param LayerBase|int|float|str|None v: value
+        :param str|int|None key:
+        :return: tensor/variable for the state
+        :rtype: tf.Tensor
+        """
         assert isinstance(d, int)
         assert isinstance(v, (LayerBase, int, float, str, type(None)))
-        assert isinstance(name, str)
+        assert isinstance(key, (str, int, type(None)))
+        key_name = str(key if key is not None else "var")
         shape = [batch_dim, d]
         if isinstance(v, LayerBase):
           h = v.get_last_hidden_state()
@@ -2322,12 +2352,32 @@ class RnnCellLayer(_ConcatInputLayer):
           return tf.ones(shape)
         elif v == "var":
           with rec_layer.var_creation_scope() if rec_layer else dummy_noop_ctx():
-            v = tf.get_variable("initial_%s" % name, shape=(d,), initializer=tf.zeros_initializer())
+            var = tf.get_variable("initial_%s" % key_name, shape=(d,), initializer=tf.zeros_initializer())
           from TFUtil import expand_dims_unbroadcast
-          v = expand_dims_unbroadcast(v, axis=0, dim=batch_dim)  # (batch,dim)
-          return v
+          var = expand_dims_unbroadcast(v, axis=0, dim=batch_dim)  # (batch,dim)
+          return var
+        elif v == "keep_over_epoch":
+          assert rec_layer is not None
+          with rec_layer.var_creation_scope():
+            var = tf.get_variable(
+              'keep_state_%s' % key_name,
+              validate_shape=False, initializer=tf.zeros(()),  # dummy state, will not be used like this
+              trainable=False)
+          assert isinstance(var, tf.Variable)
+          var.set_shape((None, d))
+          rec_layer.saveable_param_replace[var] = None  # Do not save this variable.
+
+          def update_var():
+            with tf.control_dependencies([
+                  tf.assign(var, get(rec_layer.get_last_hidden_state(), key), validate_shape=False)]):
+              rec_layer.output.placeholder = tf.identity(rec_layer.output.placeholder)
+          rec_layer.post_init_hooks.append(update_var)
+          step = rec_layer.network.get_epoch_step()
+          s = tf.cond(tf.equal(step, 0), lambda: tf.zeros(shape), lambda: var.value())
+          s.set_shape((None, d))
+          return s
         else:
-          raise Exception("invalid initial state type %r for sub-layer %r" % (v, name))
+          raise Exception("invalid initial state type %r for sub-layer %r, key %r" % (v, name, key))
 
       def make_list(keys):
         assert isinstance(keys, (tuple, list))
@@ -2350,18 +2400,18 @@ class RnnCellLayer(_ConcatInputLayer):
         if isinstance(init_value, dict):
           assert set(init_value.keys()) == set(keys), "You must specify all keys for the state dimensions %r." % dim
           assert len(init_value) == len(dim)
-          s = {k: make(d, init_value[k], k) for (k, d) in zip(keys, dim)}
+          s = {k: make(d, init_value[k], key=k) for (k, d) in zip(keys, dim)}
         else:
-          s = make_list(keys)
+          s = make_list(keys=keys)
           assert len(s) == len(keys)
           s = {k: s_ for (k, s_) in zip(keys, s)}
         return type(dim)(**s)
       elif isinstance(dim, (tuple, list)):
-        s = make_list([str(i) for i in range(len(dim))])
+        s = make_list(keys=[i for i in range(len(dim))])
         assert len(s) == len(dim)
         return type(dim)(s)
       elif isinstance(dim, int):
-        return make(dim, init_value, "var")
+        return make(dim, init_value, key=None)
       else:
         raise Exception("Did not expect hidden_state_size %r." % dim)
 
@@ -2389,7 +2439,7 @@ class RnnCellLayer(_ConcatInputLayer):
     """
     def resolve(v):
       if isinstance(v, str):
-        if v in ["zeros", "ones", "var"]:
+        if v in ["zeros", "ones", "var", "keep_over_epoch"]:
           return v
         return get_layer(v)
       if isinstance(v, (tuple, list)):

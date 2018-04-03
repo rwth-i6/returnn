@@ -111,6 +111,7 @@ class LayerBase(object):
     self.search_choices = None  # type: SearchChoices
     self._initial_output = initial_output
     self._rec_previous_layer = rec_previous_layer
+    self.post_init_hooks = []  # list of functions
     self.sources = sources
     self.params = {}  # type: dict[str,tf.Variable]
     self.saveable_param_replace = {}  # see get_saveable_params_dict()
@@ -140,6 +141,8 @@ class LayerBase(object):
     if self.register_as_extern_data:
       self.network.extern_data.extra_added_keys.add(self.register_as_extern_data)
       self.network.extern_data.data[self.register_as_extern_data] = self.output
+    for func in self.post_init_hooks:
+      func()
 
   def __repr__(self):
     return "<%s %r out_type=%s>" % (

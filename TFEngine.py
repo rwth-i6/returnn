@@ -403,6 +403,8 @@ class Runner(object):
         feed_dict, meta_step_info = self.data_provider.get_feed_dict()
         if isinstance(self.engine.network.train_flag, tf.Tensor):
           feed_dict[self.engine.network.train_flag] = self._should_train
+        if isinstance(self.engine.network.epoch_step, tf.Tensor):
+          feed_dict[self.engine.network.epoch_step] = step
         start_time = time.time()
         if self._should_train and self.reset_updater_vars_mod_step and step % self.reset_updater_vars_mod_step == 0:
           print("Reset updater vars in step %i." % step, file=log.v5)

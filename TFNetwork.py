@@ -222,6 +222,7 @@ class TFNetwork(object):
     else:
       self.global_train_step = tf.Variable(
         name="global_step", initial_value=0, dtype="int64", collections=[tf.GraphKeys.GLOBAL_STEP], trainable=False)
+    self.epoch_step = None
     self.saver = None  # type: tf.train.Saver
     self.extra_vars_to_save = []  # type: list[tf.Variable]
     self.recurrent = False
@@ -244,6 +245,14 @@ class TFNetwork(object):
     if self.search_flag:
       s += " search"
     return "<%s>" % s
+
+  def get_root_network(self):
+    """
+    :rtype: TFNetwork
+    """
+    if self.parent_net:
+      return self.parent_net.get_root_network()
+    return self
 
   def get_absolute_name_scope_prefix(self):
     """
@@ -777,6 +786,7 @@ class TFNetwork(object):
     session.run(initializer_op)
     for var in var_list:
       # Some of our code could set this, e.g. the SubnetworkLayer.
+      # See :func:`set_custom_post_init`
       custom_post_init = getattr(var, "custom_post_init", None)
       if custom_post_init:
         assert callable(custom_post_init)
@@ -855,6 +865,16 @@ class TFNetwork(object):
     :rtype: int
     """
     return self.global_train_step.eval(session=session)
+
+  def get_epoch_step(self):
+    """
+    :return: int64
+    :rtype: tf.Tensor
+    """
+    if self.parent_net:
+      return self.parent_net.get_epoch_step()
+    self.epoch_step = tf.placeholder(name="local_step", shape=(), dtype=tf.int64)
+    return self.epoch_step
 
   def reset_saver(self):
     """

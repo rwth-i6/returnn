@@ -218,10 +218,48 @@ def test_rhn_nan():
     for s in range(10):
       loss_val, _, _ = session.run([loss, minimize_op, check_op], feed_dict=make_feed_dict())
       print("step %i, loss: %f" % (s, loss_val))
-      var_norm_vals = session.run(var_norms)
+      #var_norm_vals = session.run(var_norms)
       #print('var norms:')
       #for (v, x) in zip(train_vars, var_norm_vals):
       #  print(' ', v, ':', x)
+
+
+def test_state_keep_over_epoch():
+  random = numpy.random.RandomState(seed=1)
+  num_inputs = 4
+  num_outputs = 3
+  batch_size = 5
+  seq_len = 10
+  limit = 1.0
+  src_seq = random.uniform(-limit, limit, (batch_size, seq_len, num_inputs))
+  net_dict = {"output": {
+    "class": "rec", "unit": "rhn", "initial_state": 'keep_over_epoch', 'n_out': num_outputs}}
+
+  with make_scope() as session:
+    print("create graph")
+    tf.set_random_seed(42)
+    net = TFNetwork(extern_data=ExternData({'data': {"shape": (None, num_inputs)}}))
+    net.construct_from_dict(net_dict)
+    net.initialize_params(session)
+    print("vars:")
+    print(tf.global_variables())
+    src = net.extern_data.data["data"].placeholder
+    src_seq_len = net.extern_data.data["data"].size_placeholder[0]
+    out = net.get_default_output_layer().output.get_placeholder_as_batch_major()
+    out_val = numpy.zeros((batch_size, 0, num_outputs))
+    print('run on parts')
+    part_seq_len = 2
+    for step, t in enumerate(range(0, seq_len, part_seq_len)):
+      out_val_part = session.run(out, feed_dict={
+        net.epoch_step: step, src_seq_len: [part_seq_len] * batch_size, src: src_seq[:, t:t + part_seq_len]})
+      assert out_val_part.shape == (batch_size, part_seq_len, num_outputs)
+      out_val = numpy.concatenate([out_val, out_val_part], axis=1)
+    assert out_val.shape == (batch_size, seq_len, num_outputs)
+    print('run full')
+    out_val_full = session.run(out, feed_dict={net.epoch_step: 0, src_seq_len: [seq_len] * batch_size, src: src_seq})
+    assert out_val_full.shape == out_val.shape
+    assert_almost_equal(out_val, out_val_full)
+  print('ok!')
 
 
 def test_slow_TensorArray():
