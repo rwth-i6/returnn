@@ -3653,7 +3653,9 @@ class RHNCell(BaseRNNCell):
       return state
     if self.is_training is False:
       return state
-    return state * self._get_dropout_mask()
+    state *= self._get_dropout_mask()
+    state.set_shape((None, self._num_units))
+    return state
 
   def get_input_transformed(self, x):
     """
@@ -3678,7 +3680,8 @@ class RHNCell(BaseRNNCell):
     :return: (output, state)
     :rtype: (tf.Tensor, tf.Tensor)
     """
-    assert inputs.get_shape().ndims == 2
+    inputs.set_shape((None, self._num_units * 2))
+    state.set_shape((None, self._num_units))
 
     # Carry-gate coupled with transform gate: C = 1 - T
     current_state = state

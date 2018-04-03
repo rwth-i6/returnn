@@ -4989,13 +4989,13 @@ def filter_ended_scores(x, end_flags, batch_dim=None, dim=None, score_zero=0.0, 
 
 def to_int32_64(x):
   """
-  :param tf.Tensor x: dtype int8, int16, int32, int64
+  :param tf.Tensor x: dtype uint8, int8, int16, int32, int64
   :rtype: tf.Tensor
   :return: dtype int32 or int64
   """
   if x.dtype in [tf.int32, tf.int64]:
     return x
-  assert x.dtype in [tf.int8, tf.int16]
+  assert x.dtype in [tf.uint8, tf.int8, tf.int16]
   return tf.cast(x, tf.int32)
 
 
