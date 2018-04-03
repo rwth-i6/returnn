@@ -874,7 +874,10 @@ class TFNetwork(object):
     """
     if self.parent_net:
       return self.parent_net.get_epoch_step()
-    self.epoch_step = tf.placeholder(name="local_step", shape=(), dtype=tf.int64)
+    if self.epoch_step is not None:
+      return self.epoch_step
+    with reuse_name_scope("", absolute=True):
+      self.epoch_step = tf.placeholder(name="epoch_step", shape=(), dtype=tf.int64)
     return self.epoch_step
 
   def reset_saver(self):

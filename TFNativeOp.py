@@ -719,9 +719,10 @@ class NativeLstm2(RecSeqCellOp):
     """
     W = tf.get_variable(
       name="W_re", shape=(self.n_hidden, self.n_hidden * 4), initializer=recurrent_weights_initializer)
-    out, _, _, final_state = self.op(
+    out, _, _, final_cell_state = self.op(
       *self.map_layer_inputs_to_op(X=inputs, W=W, i=index, initial_state=initial_state))
-    return out, final_state
+    from tensorflow.python.ops.nn import rnn_cell
+    return out, rnn_cell.LSTMStateTuple(h=out[-1], c=final_cell_state)
 
 
 def make_fast_baum_welch_op(**kwargs):

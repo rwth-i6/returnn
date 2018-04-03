@@ -58,13 +58,16 @@ def _check_train_simple_network(network, num_steps=10):
   random = numpy.random.RandomState(seed=1)
   limit = 1.0
 
-  def make_feed_dict(seq_len=10):
-    return {
+  def make_feed_dict(step, seq_len=10):
+    d = {
       network.extern_data.data["data"].placeholder: random.uniform(-limit, limit, (1, seq_len, num_inputs)),
       network.extern_data.data["data"].size_placeholder[0]: numpy.array([seq_len]),
       network.extern_data.data["classes"].placeholder: random.uniform(-limit, limit, (1, seq_len, num_outputs)),
       network.extern_data.data["classes"].size_placeholder[0]: numpy.array([seq_len]),
     }
+    if isinstance(network.epoch_step, tf.Tensor):
+      d[network.epoch_step] = step
+    return d
 
   with make_scope() as session:
     print("Create network...")
@@ -81,7 +84,7 @@ def _check_train_simple_network(network, num_steps=10):
 
     loss = None
     for step in range(num_steps):
-      loss, _ = session.run([network.get_total_loss(), updater.get_optim_op()], feed_dict=make_feed_dict())
+      loss, _ = session.run([network.get_total_loss(), updater.get_optim_op()], feed_dict=make_feed_dict(step=step))
       print("step %i, loss: %f" % (step, loss))
   return loss
 
@@ -279,6 +282,11 @@ def test_lstm_initial_state_var():
 def test_nativelstm2_initial_state_var():
   _check_train_simple_network({
     "output": {"class": "rec", "unit": "nativelstm2", "loss": "mse", "initial_state": "var"}})
+
+
+def test_nativelstm2_initial_state_keep_epoch():
+  _check_train_simple_network({
+    "output": {"class": "rec", "unit": "nativelstm2", "loss": "mse", "initial_state": "keep_over_epoch"}})
 
 
 def test_slow_TensorArray():
