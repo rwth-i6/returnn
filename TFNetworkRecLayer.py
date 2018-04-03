@@ -122,7 +122,7 @@ class RecLayer(_ConcatInputLayer):
           initial_state=initial_state, n_out=self.output.dim, unit=unit, unit_opts=unit_opts,
           batch_dim=self.network.get_data_batch_dim(), name=self.name) if initial_state is not None else None
         self.cell = self._get_cell(unit, unit_opts=unit_opts)
-        if isinstance(self.cell, (rnn_contrib.RNNCell, rnn_contrib.FusedRNNCell)):
+        if isinstance(self.cell, (rnn_cell.RNNCell, rnn_contrib.FusedRNNCell)):
           y = self._get_output_cell(self.cell)
         elif cudnn_rnn and isinstance(self.cell, (cudnn_rnn.CudnnLSTM, cudnn_rnn.CudnnGRU)):
           y = self._get_output_cudnn(self.cell)
@@ -411,9 +411,11 @@ class RecLayer(_ConcatInputLayer):
     assert self.input_data
     assert not self.input_data.sparse
     x, seq_len = self._get_input()
+    if isinstance(cell, BaseRNNCell):
+      x = cell.get_input_transformed(x)
     if self._direction == -1:
       x = tf.reverse_sequence(x, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
-    if isinstance(cell, rnn_contrib.RNNCell):  # e.g. BasicLSTMCell
+    if isinstance(cell, rnn_cell.RNNCell):  # e.g. BasicLSTMCell
       # Will get (time,batch,ydim).
       y, final_state = rnn.dynamic_rnn(
         cell=cell, inputs=x, time_major=True, sequence_length=seq_len, dtype=tf.float32,
@@ -3496,7 +3498,25 @@ class KenLmStateLayer(_ConcatInputLayer):
       "scores": tf.zeros(batch_shape, dtype=tf.float32)}
 
 
-class RHNCell(rnn_cell.RNNCell):
+class BaseRNNCell(rnn_cell.RNNCell):
+  """
+  Extends :class:`rnn_cell.RNNCell` by having explicit static attributes describing some properties.
+  """
+
+  def get_input_transformed(self, x):
+    """
+    Usually the cell itself does the transformation on the input.
+    However, it would be faster to do it outside the recurrent loop.
+    This function will get called outside the loop.
+
+    :param tf.Tensor x: (time, batch, dim)
+    :return: like x, maybe other feature-dim
+    :rtype: tf.Tensor
+    """
+    return x
+
+
+class RHNCell(BaseRNNCell):
   """
   Recurrent Highway Layer.
   With optional dropout for recurrent state (fixed over all frames - some call this variational).
@@ -3541,25 +3561,19 @@ class RHNCell(rnn_cell.RNNCell):
     return self._num_units
 
   @staticmethod
-  def _linear(xs, output_dim, bias_init=0.0):
+  def _linear(x, output_dim):
     """
-    :param list[tf.Tensor] xs:
+    :param tf.Tensor x:
     :param int output_dim:
-    :param float bias_init:
     :rtype: tf.Tensor
     """
     from TFUtil import var_creation_scope, dot
-    if len(xs) == 1:
-      x = xs[0]
-    else:
-      x = tf.concat(xs, axis=-1)
     input_dim = x.get_shape().dims[-1].value
-    assert input_dim is not None
+    assert input_dim is not None, "%r shape unknown" % (x,)
     with var_creation_scope():
       weights = tf.get_variable("W", shape=(input_dim, output_dim))
-      bias = tf.get_variable("b", shape=(output_dim,), initializer=tf.constant_initializer(bias_init))
-    assert x.get_shape().ndims == 2  # (batch,input_dim)
-    return dot(x, weights) + bias
+    x = dot(x, weights)
+    return x
 
   def _get_dropout_mask(self):
     if self._dropout_mask is not None:
@@ -3591,6 +3605,22 @@ class RHNCell(rnn_cell.RNNCell):
       return state
     return state * self._get_dropout_mask()
 
+  def get_input_transformed(self, x):
+    """
+    :param tf.Tensor x: (time, batch, dim)
+    :return: (time, batch, num_units * 2)
+    :rtype: tf.Tensor
+    """
+    from TFUtil import var_creation_scope
+    x = self._linear(x, self._num_units * 2)
+    with var_creation_scope():
+      bias = tf.get_variable(
+        "b", shape=(self._num_units * 2,),
+        initializer=tf.constant_initializer(
+          [0.0] * self._num_units + [self.transform_bias] * self._num_units))
+    x += bias
+    return x
+
   def call(self, inputs, state):
     """
     :param tf.Tensor inputs:
@@ -3598,23 +3628,19 @@ class RHNCell(rnn_cell.RNNCell):
     :return: (output, state)
     :rtype: (tf.Tensor, tf.Tensor)
     """
-    linear = self._linear
     assert inputs.get_shape().ndims == 2
 
     # Carry-gate coupled with transform gate: C = 1 - T
     current_state = state
     for i in range(self.depth):
       current_state_masked = self._optional_dropout(current_state)
-      with tf.variable_scope('h_%i' % i):
-        if i == 0:
-          h = tf.tanh(linear([inputs, current_state_masked], self._num_units))
-        else:
-          h = tf.tanh(linear([current_state_masked], self._num_units))
-      with tf.variable_scope('t_%i' % i):
-        if i == 0:
-          t = tf.sigmoid(linear([inputs, current_state_masked], self._num_units, self.transform_bias))
-        else:
-          t = tf.sigmoid(linear([current_state_masked], self._num_units, self.transform_bias))
+      with tf.variable_scope('depth_%i' % i):
+        state_transformed = self._linear(current_state_masked, self._num_units * 2)
+      if i == 0:
+        state_transformed += inputs
+      h, t = tf.split(state_transformed, 2, axis=-1)
+      h = tf.tanh(h)
+      t = tf.sigmoid(t)
       # Simplified equation for better numerical stability.
       # The current_state here should be without the dropout applied,
       # because dropout would divide by keep_prop, which can blow up the state.
