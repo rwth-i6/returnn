@@ -386,7 +386,7 @@ def executeMainTask():
     engine.epoch = config.int("epoch", None)
     assert engine.epoch
     print("Evaluate epoch", engine.epoch, file=log.v4)
-    engine.eval_model()
+    engine.eval_model(config.value("eval_output_file", ""))
   elif task in ['forward','hpx']:
     assert eval_data is not None, 'no eval data provided'
     combine_labels = config.value('combine_labels', '')

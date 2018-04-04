@@ -1045,9 +1045,17 @@ class Engine(object):
     return " ".join(["%s %s" % (key.split(':', 2)[-1], str(score[key]))
                      for key in sorted(score.keys())])
 
-  def eval_model(self):
+  def eval_model(self, output_file=None):
+    """
+    Eval the current model on the eval datasets (dev + eval, whatever is set).
+    See also :func:`self.search` for performing beam search.
+
+    :param str|None output_file: if given, will save the results to this file
+    :return: nothing
+    """
     # It's constructed lazily and it will set used_data_keys, so make sure that we have it now.
     self.network.get_all_errors()
+    results = {}
     eval_dump_str = []
     for dataset_name, dataset in self.get_eval_datasets().items():
       if dataset_name not in self.dataset_batches or not dataset.batch_set_generator_cache_whole_epoch():
@@ -1065,10 +1073,16 @@ class Engine(object):
       assert tester.finalized
       eval_dump_str += [" %s: score %s error %s" % (
                         dataset_name, self.format_score(tester.score), self.format_score(tester.error))]
+      results[dataset_name] = {"score": tester.score, "error": tester.error}
       if dataset_name == "dev":
         self.learning_rate_control.setEpochError(self.epoch, {"dev_score": tester.score, "dev_error": tester.error})
         self.learning_rate_control.save()
     print(" ".join(eval_dump_str).strip(), file=log.v1)
+    if output_file:
+      print('Write eval results to %r' % output_file, file=log.v3)
+      from Util import betterRepr
+      with open(output_file, 'w') as f:
+        f.write(betterRepr(results) + '\n')
 
   def check_last_epoch(self):
     if self.start_epoch == 1:
