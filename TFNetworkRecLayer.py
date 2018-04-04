@@ -414,7 +414,8 @@ class RecLayer(_ConcatInputLayer):
     assert not self.input_data.sparse
     x, seq_len = self._get_input()
     if isinstance(cell, BaseRNNCell):
-      x = cell.get_input_transformed(x)
+      with tf.variable_scope(tf.get_variable_scope(), initializer=self._fwd_weights_initializer):
+        x = cell.get_input_transformed(x)
     if self._direction == -1:
       x = tf.reverse_sequence(x, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
     if isinstance(cell, rnn_cell.RNNCell):  # e.g. BasicLSTMCell
