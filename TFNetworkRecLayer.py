@@ -615,10 +615,10 @@ class RecLayer(_ConcatInputLayer):
     self.search_choices = search_choices
     return output
 
-  def get_last_hidden_state(self):
+  def get_last_hidden_state(self, key):
     assert self._last_hidden_state is not None, (
       "last-hidden-state not implemented/supported for this layer-type. try another unit. see the code.")
-    return self._last_hidden_state
+    return RnnCellLayer.get_state_by_key(self._last_hidden_state, key=key)
 
   @classmethod
   def is_prev_step_layer(cls, layer):
@@ -2059,10 +2059,10 @@ class _TemplateLayer(LayerBase):
       return self.rec_vars_outputs["state"]
     return super(_TemplateLayer, self).get_hidden_state()
 
-  def get_last_hidden_state(self):
+  def get_last_hidden_state(self, key):
     if issubclass(self.layer_class_type, RnnCellLayer):
-      return RnnCellLayer.flatten_hidden_state(self.rec_vars_outputs["state"])
-    return super(_TemplateLayer, self).get_last_hidden_state()
+      return RnnCellLayer.get_state_by_key(self.rec_vars_outputs["state"], key=key)
+    return super(_TemplateLayer, self).get_last_hidden_state(key=key)
 
 
 class RecStepInfoLayer(LayerBase):
@@ -2274,15 +2274,38 @@ class RnnCellLayer(_ConcatInputLayer):
     return self._hidden_state
 
   @classmethod
-  def flatten_hidden_state(cls, state):
+  def get_state_by_key(cls, state, key):
+    """
+    :param tf.Tensor|tuple[tf.Tensor]|namedtuple state:
+    :param int|str|None key:
+    :rtype: tf.Tensor
+    """
     from tensorflow.python.util import nest
-    if nest.is_sequence(state):
-      state = tf.concat(state, axis=1)  # in dim-axis
-    state.set_shape(tf.TensorShape([None, None]))  # (batch,dim)
-    return state
+    from Util import is_namedtuple
+    if key == "*":
+      if nest.is_sequence(state):
+        x = tf.concat(state, axis=-1)  # in dim-axis
+      else:
+        x = state
+    elif key == "flat":
+      assert nest.is_sequence(state), "only a sequence can be flattened, but got %r" % (state,)
+      x = tf.concat(state, axis=-1)  # in dim-axis
+    elif is_namedtuple(type(state)):
+      assert isinstance(key, str), "state %r is a named tuple, thus key %r must be a string" % (state, key)
+      x = getattr(state, key)
+    elif nest.is_sequence(state):
+      assert isinstance(key, int), "state %r is a tuple, thus key %r must be an int" % (state, key)
+      x = state[key]
+    else:
+      assert isinstance(state, tf.Tensor), "unexpected state %r" % (state,)
+      assert key is None, "state %r is a tensor, thus key %r must be None" % (state, key)
+      x = state
+    assert isinstance(x, tf.Tensor)
+    x.set_shape(tf.TensorShape([None, None]))  # (batch,dim)
+    return x
 
-  def get_last_hidden_state(self):
-    return self.flatten_hidden_state(self._hidden_state)
+  def get_last_hidden_state(self, key):
+    return self.get_state_by_key(self._hidden_state, key=key)
 
   @classmethod
   def get_rec_initial_state(cls, batch_dim, name, n_out, unit, initial_state=None, unit_opts=None,
@@ -2312,27 +2335,6 @@ class RnnCellLayer(_ConcatInputLayer):
       init_value = initial_state
       dim = cls.get_hidden_state_size(n_out=n_out, unit=unit, unit_opts=unit_opts, **kwargs)
 
-      def get(state, key):
-        """
-        Gets the tensor from the state, given the key.
-        Matches :func:`make`.
-
-        :param tf.Tensor|tuple[tf.Tensor]|namedtuple state:
-        :param str|int|None key:
-        :rtype: tf.Tensor
-        """
-        if key is None:
-          assert isinstance(state, tf.Tensor)
-          return state
-        if isinstance(key, int):
-          s = state[key]
-          assert isinstance(s, tf.Tensor), "invalid state %r, key %r" % (state, key)
-          return s
-        assert isinstance(key, str)
-        s = getattr(state, key)
-        assert isinstance(s, tf.Tensor), "invalid state %r, key %r" % (state, key)
-        return s
-
       def make(d, v, key):
         """
         :param int d: dim
@@ -2347,7 +2349,7 @@ class RnnCellLayer(_ConcatInputLayer):
         key_name = str(key if key is not None else "var")
         shape = [batch_dim, d]
         if isinstance(v, LayerBase):
-          h = v.get_last_hidden_state()
+          h = v.get_last_hidden_state(key="*")
           if h is not None:
             h.set_shape(tf.TensorShape((None, d)))
             return h
@@ -2378,7 +2380,7 @@ class RnnCellLayer(_ConcatInputLayer):
 
           def update_var():
             with tf.control_dependencies([
-                  tf.assign(var, get(rec_layer.get_last_hidden_state(), key), validate_shape=False)]):
+                  tf.assign(var, rec_layer.get_last_hidden_state(key=key), validate_shape=False)]):
               rec_layer.output.placeholder = tf.identity(rec_layer.output.placeholder)
           rec_layer.post_init_hooks.append(update_var)
           step = rec_layer.network.get_epoch_step()
@@ -2479,20 +2481,21 @@ class GetLastHiddenStateLayer(LayerBase):
 
   layer_class = "get_last_hidden_state"
 
-  def __init__(self, n_out, combine="concat", **kwargs):
+  def __init__(self, n_out, combine="concat", key='*', **kwargs):
     """
     :param int n_out: dimension. output will be of shape (batch, n_out)
     :param str combine: "concat" or "add"
+    :param str|int|None key: for the state, which could be a namedtuple. see :func:`RnnCellLayer.get_state_by_key`
     """
     super(GetLastHiddenStateLayer, self).__init__(**kwargs)
     assert len(self.sources) > 0
-    last_states = [s.get_last_hidden_state() for s in self.sources]
+    last_states = [s.get_last_hidden_state(key=key) for s in self.sources]
     assert all([s is not None for s in last_states])
     if len(last_states) == 1:
       h = last_states[0]
     else:
       if combine == "concat":
-        h = tf.concat(last_states, axis=1, name="concat_hidden_states")
+        h = tf.concat(last_states, axis=-1, name="concat_hidden_states")
       elif combine == "add":
         h = tf.add_n(last_states, name="add_hidden_states")
       else:
@@ -2502,7 +2505,8 @@ class GetLastHiddenStateLayer(LayerBase):
     h = check_input_dim(h, 1, n_out)
     self.output.placeholder = h
 
-  def get_last_hidden_state(self):
+  def get_last_hidden_state(self, key):
+    assert key in [None, '*']
     return self.output.placeholder
 
   @classmethod

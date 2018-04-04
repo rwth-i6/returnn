@@ -781,10 +781,11 @@ class LayerBase(object):
     """
     return None
 
-  def get_last_hidden_state(self):
+  def get_last_hidden_state(self, key):
     """
     If this is a recurrent layer, this would return the last hidden state.
     Otherwise, we return None.
+    :param int|str|None key: also the special key "*"
     :rtype: tf.Tensor | None
     :return: optional tensor with shape (batch, dim)
     """
@@ -3922,11 +3923,11 @@ class SubnetworkLayer(LayerBase):
       return errors[name]
     return sorted(errors.items())[0][1]  # first alphabetically
 
-  def get_last_hidden_state(self):
-    h = self.subnetwork.get_default_output_layer().get_last_hidden_state()
+  def get_last_hidden_state(self, key):
+    h = self.subnetwork.get_default_output_layer().get_last_hidden_state(key=key)
     if h is not None:
       return h
-    return super(SubnetworkLayer, self).get_last_hidden_state()
+    return super(SubnetworkLayer, self).get_last_hidden_state(key=key)
 
   @classmethod
   def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, subnetwork, **kwargs):
