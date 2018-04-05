@@ -519,11 +519,12 @@ class LayerBase(object):
     :param tf.Session session:
     """
     for param_name, values in values_dict.items():
+      assert param_name in self.params, '%s: param %r unknown' % (self, param_name)
       param = self.params[param_name]
       assert isinstance(param, tf.Variable)
       shape = param.get_shape()
       assert isinstance(shape, tf.TensorShape)
-      assert shape.is_fully_defined()
+      assert shape.is_fully_defined(), '%s: shape of param %r %r not fully defined?' % (self, param_name, param)
       if not ignore_wrong_shape:
         assert tuple(shape.as_list()) == values.shape, "var %r: shape %s != %s" % (param, shape.as_list(), values.shape)
       elif tuple(shape.as_list()) != values.shape:
@@ -538,7 +539,7 @@ class LayerBase(object):
     :rtype: dict[str,numpy.ndarray]
     """
     d = {}
-    for param_name, param in self.params.items():
+    for param_name, param in self.get_saveable_params_dict().items():
       d[param_name] = param.eval(session)
     return d
 
