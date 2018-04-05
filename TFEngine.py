@@ -1069,7 +1069,7 @@ class Engine(object):
         print("reusing previous dataset batch order for %r dataset" % dataset_name, file=log.v4)
         self.dataset_batches[dataset_name].reset()
       tester = Runner(engine=self, dataset=dataset, batches=self.dataset_batches[dataset_name], train=False)
-      tester.run(report_prefix=self.get_epoch_str() + " eval")
+      tester.run(report_prefix=self.get_epoch_str() + " %r eval" % dataset_name)
       assert tester.finalized
       eval_dump_str += [" %s: score %s error %s" % (
                         dataset_name, self.format_score(tester.score), self.format_score(tester.error))]
