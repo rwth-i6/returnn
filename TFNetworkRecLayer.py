@@ -3714,3 +3714,45 @@ class RHNCell(BaseRNNCell):
       current_state += t * (h - current_state)
 
     return current_state, current_state
+
+
+class BlocksparseLSTM(BaseRNNCell):
+  """
+  Standard LSTM but uses OpenAI blocksparse kernels to support bigger matrices.
+
+  Refs:
+
+    https://blog.openai.com/block-sparse-gpu-kernels/
+    https://github.com/openai/blocksparse
+    https://s3-us-west-2.amazonaws.com/openai-assets/blocksparse/blocksparsepaper.pdf
+
+  It uses our own wrapper, see :func:`TFNativeOp.init_blocksparse`.
+  """
+
+  def __init__(self, *args, **kwargs):
+    """
+    :param int num_units:
+    """
+    super(BlocksparseLSTM, self).__init__()
+    self._init_blocksparse()
+    from blocksparse.lstm import BlocksparseLSTM as CellImpl
+    self.cell = CellImpl(*args, **kwargs)
+
+  @property
+  def output_size(self):
+    return self.cell.output_size
+
+  @property
+  def state_size(self):
+    return self.cell.state_size
+
+  @staticmethod
+  def _init_blocksparse():
+    from TFNativeOp import init_blocksparse
+    init_blocksparse()
+
+  def get_input_transformed(self, x):
+    return self.cell.get_input_transformed(x)
+
+  def call(self, inputs, state):
+    return self.cell.call(inputs, state)
