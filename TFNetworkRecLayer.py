@@ -3716,7 +3716,7 @@ class RHNCell(BaseRNNCell):
     return current_state, current_state
 
 
-class BlocksparseLSTM(BaseRNNCell):
+class BlocksparseLSTMCell(BaseRNNCell):
   """
   Standard LSTM but uses OpenAI blocksparse kernels to support bigger matrices.
 
@@ -3733,7 +3733,7 @@ class BlocksparseLSTM(BaseRNNCell):
     """
     :param int num_units:
     """
-    super(BlocksparseLSTM, self).__init__()
+    super(BlocksparseLSTMCell, self).__init__()
     self._init_blocksparse()
     from blocksparse.lstm import BlocksparseLSTM as CellImpl
     self.cell = CellImpl(*args, **kwargs)
