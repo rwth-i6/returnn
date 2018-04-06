@@ -3716,7 +3716,34 @@ class RHNCell(BaseRNNCell):
     return current_state, current_state
 
 
-class BlocksparseLSTMCell(BaseRNNCell):
+class _WrapBaseCell(BaseRNNCell):
+  cell_type = None
+
+  def __init__(self, *args, **kwargs):
+    """
+    :param int num_units:
+    """
+    super(_WrapBaseCell, self).__init__()
+    self.cell = self.cell_type(*args, **kwargs)
+    assert isinstance(self.cell, rnn_cell.RNNCell)
+    assert hasattr(self.cell, "get_input_transformed")
+
+  @property
+  def output_size(self):
+    return self.cell.output_size
+
+  @property
+  def state_size(self):
+    return self.cell.state_size
+
+  def get_input_transformed(self, x):
+    return self.cell.get_input_transformed(x)
+
+  def call(self, inputs, state):
+    return self.cell.call(inputs, state)
+
+
+class BlocksparseLSTMCell(_WrapBaseCell):
   """
   Standard LSTM but uses OpenAI blocksparse kernels to support bigger matrices.
 
@@ -3730,29 +3757,8 @@ class BlocksparseLSTMCell(BaseRNNCell):
   """
 
   def __init__(self, *args, **kwargs):
-    """
-    :param int num_units:
-    """
-    super(BlocksparseLSTMCell, self).__init__()
-    self._init_blocksparse()
-    from blocksparse.lstm import BlocksparseLSTM as CellImpl
-    self.cell = CellImpl(*args, **kwargs)
-
-  @property
-  def output_size(self):
-    return self.cell.output_size
-
-  @property
-  def state_size(self):
-    return self.cell.state_size
-
-  @staticmethod
-  def _init_blocksparse():
     from TFNativeOp import init_blocksparse
     init_blocksparse()
-
-  def get_input_transformed(self, x):
-    return self.cell.get_input_transformed(x)
-
-  def call(self, inputs, state):
-    return self.cell.call(inputs, state)
+    from blocksparse.lstm import BlocksparseLSTMCell as CellImpl
+    self.cell_type = CellImpl
+    super(BlocksparseLSTMCell, self).__init__(*args, **kwargs)
