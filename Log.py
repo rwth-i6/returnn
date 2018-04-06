@@ -11,6 +11,8 @@ except ImportError:
 import threading
 from threading import RLock
 import contextlib
+import string
+import time
 
 
 class Stream():
@@ -76,6 +78,8 @@ class Log:
         handler = logging.StreamHandler(proc.stdin)
         handler.setLevel(logging.DEBUG)
       elif os.path.isdir(os.path.dirname(t)):
+        if "$" in t:
+          t = string.Template(t).substitute(date=time.strftime("%Y-%m-%d-%H-%M-%S", time.gmtime()))
         handler = logging.FileHandler(t)
         handler.setLevel(logging.DEBUG)
       else:
