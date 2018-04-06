@@ -819,7 +819,7 @@ def prod(ls):
   return x
 
 
-def parse_orthography_into_symbols(orthography, upper_case_special=True, word_based=False):
+def parse_orthography_into_symbols(orthography, upper_case_special=True, word_based=False, square_brackets_for_specials=True):
   """
   For Speech.
   Example:
@@ -854,7 +854,7 @@ def parse_orthography_into_symbols(orthography, upper_case_special=True, word_ba
       else:
         ret[-1] += c
     else:  # not in_special
-      if c == "[":
+      if square_brackets_for_specials and c == "[":
         in_special = 1
         ret += ["["]
       else:
