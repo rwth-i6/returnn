@@ -1005,7 +1005,10 @@ class TranslationDataset(CachedDataset2):
     """
     words = s.split()
     if self._unknown_label is None:
-      words_idxs = list(map(vocab.__getitem__, words))
+      try:
+        words_idxs = list(map(vocab.__getitem__, words))
+      except KeyError as e:
+        raise Exception("Can not handle unknown token without unknown_label: %s (%s)" % (str(e), bytes(str(e), 'utf-8')))
     else:
       unknown_label_id = vocab[self._unknown_label]
       words_idxs = [vocab.get(w, unknown_label_id) for w in words]
