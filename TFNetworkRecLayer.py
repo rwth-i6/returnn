@@ -3762,3 +3762,24 @@ class BlocksparseLSTMCell(_WrapBaseCell):
     from blocksparse.lstm import BlocksparseLSTMCell as CellImpl
     self.cell_type = CellImpl
     super(BlocksparseLSTMCell, self).__init__(*args, **kwargs)
+
+
+class BlocksparseMultiplicativeMultistepLSTMCell(_WrapBaseCell):
+  """
+  Multiplicative LSTM with multiple steps, as in the OpenAI blocksparse paper.
+  Uses OpenAI blocksparse kernels to support bigger matrices.
+
+  Refs:
+
+    https://blog.openai.com/block-sparse-gpu-kernels/
+    https://github.com/openai/blocksparse
+    https://s3-us-west-2.amazonaws.com/openai-assets/blocksparse/blocksparsepaper.pdf
+
+  """
+
+  def __init__(self, *args, **kwargs):
+    from TFNativeOp import init_blocksparse
+    init_blocksparse()
+    from blocksparse.lstm import BlocksparseMultiplicativeMultistepLSTMCell as CellImpl
+    self.cell_type = CellImpl
+    super(BlocksparseMultiplicativeMultistepLSTMCell, self).__init__(*args, **kwargs)
