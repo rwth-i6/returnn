@@ -1842,7 +1842,7 @@ def get_initializer(s, seed=None, eval_local_ns=None, dtype=tf.float32):
   return f
 
 
-def dropout(x, keep_prob, noise_shape=None, seed=None, name=None):
+def dropout(x, keep_prob, noise_shape=None, seed=None, name=None, cond_on_train=False):
   """
   Computes dropout.
   Like :func:`tf.nn.dropout` but avoid :func:`tf.div` if possible.
@@ -1852,7 +1852,12 @@ def dropout(x, keep_prob, noise_shape=None, seed=None, name=None):
   :param tf.Tensor|tuple[int] noise_shape:
   :param int seed:
   :param str name:
+  :param bool cond_on_train: automatically wrap through :func:`cond_on_train_flag`
   """
+  if cond_on_train:
+    return cond_on_train_flag(
+      lambda: dropout(x, keep_prob=keep_prob, noise_shape=noise_shape, seed=seed, name=name),
+      lambda: x)
   with tf.name_scope(name, "dropout", [x]):
     x = tf.convert_to_tensor(x, name="x")
     assert isinstance(x, tf.Tensor)
@@ -3257,7 +3262,8 @@ def global_tensor(f, name):
 
 def get_global_train_flag_placeholder():
   """
-  Also consider :func:`TFNetwork.get_current_network().train_flag`.
+  Also consider :func:`TFNetwork.get_current_network().train_flag`,
+  or :func:`get_global_train_flag`.
 
   :return: bool scalar tensor
   :rtype: tf.Tensor
@@ -3265,6 +3271,33 @@ def get_global_train_flag_placeholder():
   return global_tensor(
     lambda: tf.placeholder(tf.bool, shape=(), name="train_flag"),
     name="train_flag")
+
+
+def get_global_train_flag():
+  """
+  :rtype: tf.Tensor|bool
+  :return: global train flag
+  """
+  from TFNetwork import TFNetwork
+  network = TFNetwork.get_current_network(must_exist=False)
+  if network:
+    return network.train_flag
+  return get_global_train_flag_placeholder()
+
+
+def cond_on_train_flag(fn_train, fn_eval):
+  """
+  Uses fn_train() or fn_eval() base on train_flag.
+  It will be a branched evaluation.
+  train_flag is determined via :func:`get_global_train_flag`.
+
+  :param ()->tf.Tensor fn_train:
+  :param ()->tf.Tensor fn_eval:
+  :return: fn_train() if self.train_flag else fn_eval()
+  :rtype: tf.Tensor
+  """
+  train_flag = get_global_train_flag()
+  return cond(train_flag, fn_train, fn_eval)
 
 
 def encode_raw(x, axis=-1, seq_lens=None):

@@ -664,9 +664,13 @@ class NativeLstm2(RecSeqCellOp):
   does_input_projection = False
   does_direction_handling = True
 
-  def __init__(self, **kwargs):
+  def __init__(self, rec_weight_dropout=0.0, **kwargs):
+    """
+    :param float rec_weight_dropout: weight dropout in the recurrent matrix, https://openreview.net/pdf?id=SyyGPP0TZ
+    """
     super(NativeLstm2, self).__init__(**kwargs)
     self.n_input_dim = self.n_hidden * 4
+    self.rec_weight_dropout = rec_weight_dropout
     self.op = make_op(NativeOp.NativeLstm2)
 
   @property
@@ -719,6 +723,9 @@ class NativeLstm2(RecSeqCellOp):
     """
     W = tf.get_variable(
       name="W_re", shape=(self.n_hidden, self.n_hidden * 4), initializer=recurrent_weights_initializer)
+    if self.rec_weight_dropout:
+      from TFUtil import dropout
+      W = dropout(W, keep_prob=1.0 - self.rec_weight_dropout, cond_on_train=True)
     out, _, _, final_cell_state = self.op(
       *self.map_layer_inputs_to_op(X=inputs, W=W, i=index, initial_state=initial_state))
     from tensorflow.python.ops.nn import rnn_cell

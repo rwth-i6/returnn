@@ -1137,12 +1137,16 @@ class TFNetwork(object):
     return coll
 
   @classmethod
-  def get_current_network(cls):
+  def get_current_network(cls, must_exist=True):
     """
-    :rtype: TFNetwork
+    :param bool must_exist:
+    :rtype: TFNetwork|None
     """
     coll = cls.get_network_stack()
-    assert coll
+    if must_exist:
+      assert coll
+    elif not coll:
+      return None
     return coll[-1]
 
   @contextlib.contextmanager
