@@ -3783,3 +3783,18 @@ class BlocksparseMultiplicativeMultistepLSTMCell(_WrapBaseCell):
     from blocksparse.lstm import BlocksparseMultiplicativeMultistepLSTMCell as CellImpl
     self.cell_type = CellImpl
     super(BlocksparseMultiplicativeMultistepLSTMCell, self).__init__(*args, **kwargs)
+
+  def call(self, *args, **kwargs):
+    y = super(BlocksparseMultiplicativeMultistepLSTMCell, self).call(*args, **kwargs)
+    from blocksparse.lstm import BlocksparseMultiplicativeMultistepLSTMCell as CellImpl
+    from blocksparse.matmul import BlocksparseMatMul
+    assert isinstance(self.cell, CellImpl)
+    print("BlocksparseMultiplicativeMultistepLSTMCell, matmuls:", file=log.v4)
+    for d in self.cell.linear.matmuls:
+      bsmm = d["bsmm"]
+      if bsmm:
+        assert isinstance(bsmm, BlocksparseMatMul)
+        print('  %s: sparsity %.4f%%' % (d["weights"], 100.0 - 100.0 * bsmm.sparsity), file=log.v4)
+      else:
+        print('  %s: dense' % d["weights"], file=log.v4)
+    return y
