@@ -413,11 +413,11 @@ class RecLayer(_ConcatInputLayer):
     assert self.input_data
     assert not self.input_data.sparse
     x, seq_len = self._get_input()
+    if self._direction == -1:
+      x = tf.reverse_sequence(x, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
     if isinstance(cell, BaseRNNCell):
       with tf.variable_scope(tf.get_variable_scope(), initializer=self._fwd_weights_initializer):
         x = cell.get_input_transformed(x)
-    if self._direction == -1:
-      x = tf.reverse_sequence(x, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
     if isinstance(cell, rnn_cell.RNNCell):  # e.g. BasicLSTMCell
       # Will get (time,batch,ydim).
       y, final_state = rnn.dynamic_rnn(
@@ -3575,7 +3575,7 @@ class BaseRNNCell(rnn_cell.RNNCell):
 
     :param tf.Tensor x: (time, batch, dim)
     :return: like x, maybe other feature-dim
-    :rtype: tf.Tensor
+    :rtype: tf.Tensor|tuple[tf.Tensor]
     """
     return x
 
