@@ -296,6 +296,8 @@ def returnnGreeting(configFilename=None, commandLineOptions=None):
       print("RETURNN config is symlink to: %s" % os.readlink(configFilename), file=log.v4)
   if commandLineOptions is not None:
     print("RETURNN command line options: %s" % (commandLineOptions,), file=log.v4)
+  import socket
+  print("Hostname:", socket.gethostname(), file=log.v4)
 
 
 def initBackendEngine():
