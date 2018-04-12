@@ -1315,18 +1315,20 @@ def test_layer_norms():
         with tf.name_scope('test_axis_%i' % axis):
           print('ndim %i, axis %i' % (ndim, axis))
           ln = layer_norm(x=x, gain=g, bias=b, axis=axis)
-          ln2 = openai_layer_norm(x=x, gain=g, bias=b, axis=axis)
-          ln3 = tf_contrib_layer_norm(x, center=False, scale=False, begin_norm_axis=axis, begin_params_axis=axis)
           if not have_blocksparse_requirements():
             print('  OpenAI cannot be used')
             ln2 = ln
           # OpenAI seems to be broken for these cases:
-          if axis < ndim - 1:
+          elif axis < ndim - 1:
             print('  ignore OpenAI layer norm for this case')
             ln2 = ln
+          else:
+            ln2 = openai_layer_norm(x=x, gain=g, bias=b, axis=axis)
           if axis < ndim - 1:
             print('  cannot use tf.contrib layer norm for this case')
             ln3 = ln  # cannot use tf_contrib_layer_norm
+          else:
+            ln3 = tf_contrib_layer_norm(x, center=False, scale=False, begin_norm_axis=axis, begin_params_axis=axis)
           ln_np, ln2_np, ln3_np = session.run((ln, ln2, ln3))
           print('layer norm:')
           print(ln_np)
