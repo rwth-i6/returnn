@@ -1881,6 +1881,64 @@ def dropout(x, keep_prob, noise_shape=None, seed=None, name=None, cond_on_train=
     return ret
 
 
+def layer_norm(x, gain, bias, axis, epsilon=1e-6):
+  """
+  Layer normalization.
+  Also see :func:`openai_layer_norm`.
+  Also see :func:`tensorflow.contrib.layers.layer_norm`.
+
+  :param tf.Tensor x:
+  :param tf.Tensor gain:
+  :param tf.Tensor bias:
+  :param int axis:
+  :param float epsilon: OpenAI uses 1e-6, TF contrib uses 1e-12, pbhatia243 uses 1e-5.
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope('layer_norm'):
+    ndim = x.get_shape().ndims
+    if axis < 0:
+      axis += ndim
+      assert axis >= 0
+    dim = get_shape_dim(x, axis=axis)
+    if gain.get_shape().ndims == 1:
+      gain = tf.reshape(gain, [dim if i == axis else 1 for i in range(ndim)], "gain_bc")
+    if bias.get_shape().ndims == 1:
+      bias = tf.reshape(bias, [dim if i == axis else 1 for i in range(ndim)], "bias_bc")
+    m, v = tf.nn.moments(x, axes=[axis], keep_dims=True)
+    inv = tf.rsqrt(v + epsilon)
+    inv *= gain
+    return x * inv - m * inv + bias
+
+
+def openai_layer_norm(x, gain, bias, axis, epsilon=1e-6):
+  """
+  Layer normalization, like :func:`layer_norm`,
+  but fast kernel by OpenAI (implemented as part of their blocksparse).
+  To use it, init the git submodule in extern/blocksparse.
+
+  :param tf.Tensor x:
+  :param tf.Tensor gain:
+  :param tf.Tensor bias:
+  :param int axis:
+  :param float epsilon:
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope("openai_layer_norm"):
+    ndim = x.get_shape().ndims
+    if axis < 0:
+      axis += ndim
+      assert axis >= 0
+    assert axis == ndim - 1, "OpenAI kernel seems broken otherwise. see test_layer_norms."
+    if gain.get_shape().ndims > 1:
+      gain = tf.reshape(gain, [x.get_shape().dims[axis].value or -1], "gain_flat")
+    if bias.get_shape().ndims > 1:
+      bias = tf.reshape(bias, [x.get_shape().dims[axis].value or -1], "bias_flat")
+    from TFNativeOp import init_blocksparse
+    init_blocksparse()
+    from blocksparse.norms import layer_norm
+    return layer_norm(x, g=gain, b=bias, axis=axis, epsilon=epsilon)
+
+
 def swapaxes(x, axis1, axis2):
   """
   :param tf.Tensor x:

@@ -11,7 +11,7 @@ import sys
 sys.path += ["."]  # Python 3 hack
 from TFUtil import *
 from nose.tools import assert_equal, assert_is_instance, assert_is, assert_in
-from numpy.testing.utils import assert_almost_equal
+from numpy.testing.utils import assert_almost_equal, assert_allclose
 import unittest
 import numpy.testing
 import better_exchook
@@ -1296,6 +1296,47 @@ def test_kenlm_bpe():
   assert_equal(output_scores[0], output_scores[1])
   assert_equal(output_scores[2], output_scores[3])
   print("Scores are as expected.")
+
+
+def test_layer_norms():
+  from TFNativeOp import have_blocksparse_requirements
+  from tensorflow.contrib.layers import layer_norm as tf_contrib_layer_norm
+  rnd = numpy.random.RandomState(3)
+  for ndim in [2, 3, 4]:
+    dims = [3] * ndim
+    x_np = rnd.rand(*dims).astype('float32')
+    print('x:')
+    print(x_np)
+    with tf.name_scope("test_ndim_%i" % ndim):
+      x = tf.constant(x_np, name='x')
+      g = tf.ones([3])
+      b = tf.zeros([3])
+      for axis in range(ndim):
+        with tf.name_scope('test_axis_%i' % axis):
+          print('ndim %i, axis %i' % (ndim, axis))
+          ln = layer_norm(x=x, gain=g, bias=b, axis=axis)
+          ln2 = openai_layer_norm(x=x, gain=g, bias=b, axis=axis)
+          ln3 = tf_contrib_layer_norm(x, center=False, scale=False, begin_norm_axis=axis, begin_params_axis=axis)
+          if not have_blocksparse_requirements():
+            print('  OpenAI cannot be used')
+            ln2 = ln
+          # OpenAI seems to be broken for these cases:
+          if axis < ndim - 1:
+            print('  ignore OpenAI layer norm for this case')
+            ln2 = ln
+          if axis < ndim - 1:
+            print('  cannot use tf.contrib layer norm for this case')
+            ln3 = ln  # cannot use tf_contrib_layer_norm
+          ln_np, ln2_np, ln3_np = session.run((ln, ln2, ln3))
+          print('layer norm:')
+          print(ln_np)
+          assert isinstance(ln_np, numpy.ndarray)
+          assert isinstance(ln2_np, numpy.ndarray)
+          assert isinstance(ln3_np, numpy.ndarray)
+          assert x_np.shape == ln_np.shape == ln2_np.shape == ln3_np.shape
+          assert_allclose(ln_np, ln2_np, rtol=1e-4)
+          assert_allclose(ln_np, ln3_np, rtol=5e-2)
+          print('ok')
 
 
 if __name__ == "__main__":
