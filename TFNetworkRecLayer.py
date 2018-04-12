@@ -3782,6 +3782,10 @@ class BlocksparseMultiplicativeMultistepLSTMCell(_WrapBaseCell):
     init_blocksparse()
     from blocksparse.lstm import BlocksparseMultiplicativeMultistepLSTMCell as CellImpl
     self.cell_type = CellImpl
+    kwargs = kwargs.copy()
+    if kwargs.get('is_training', None) is None:
+      from TFNetwork import TFNetwork
+      kwargs['is_training'] = TFNetwork.get_current_network().train_flag
     super(BlocksparseMultiplicativeMultistepLSTMCell, self).__init__(*args, **kwargs)
 
   def call(self, *args, **kwargs):
