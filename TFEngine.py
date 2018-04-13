@@ -34,7 +34,7 @@ from Network import LayerNetwork
 from Pretrain import pretrainFromConfig
 from TFNetwork import TFNetwork, ExternData, help_on_tf_exception
 from TFUpdater import Updater
-from Util import hms, NumbersDict
+from Util import hms, NumbersDict, PY3
 from pprint import pprint
 
 
@@ -459,7 +459,8 @@ class Runner(object):
         self._print_process(report_prefix=report_prefix, step=step, step_duration=duration, eval_info=eval_info)
         if step <= 10:
           writer.flush()
-          os.sync()
+          if PY3:
+            os.sync()
         step += 1
         if self.cancel_flag:
           raise CancelTrainingException("cancel_flag is set")
