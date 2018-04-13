@@ -1830,6 +1830,100 @@ class SoftmaxLayer(LinearLayer):
     super(SoftmaxLayer, self).__init__(activation=activation, **kwargs)
 
 
+class SampledSoftmax(_ConcatInputLayer):
+  """
+  Linear/forward/fully-connected/1x1-conv layer.
+  Does a linear transformation on the feature-dimension of the input
+  with an optional bias term and an optional activation function.
+  """
+  layer_class = "sampledSoftmax"
+
+  def __init__(self, with_bias=True, grad_filter=None,
+               forward_weights_init="glorot_uniform", bias_init=0.0,
+               **kwargs):
+    """
+    :param bool with_bias:
+    :param float|None grad_filter: if grad norm is higher than this threshold (before activation), the grad is removed
+    :param str forward_weights_init: see :func:`TFUtil.get_initializer`
+    :param str|float bias_init: see :func:`TFUtil.get_initializer`
+    """
+    super(SampledSoftmax, self).__init__(**kwargs)
+
+    # Start by looking up sizes of input and output
+    from TFUtil import get_initializer
+    self.grad_filter = grad_filter
+    self.with_bias = with_bias
+    input_data = self.input_data
+    n_in = input_data.dim
+    n_out = self.output.dim
+    assert n_in and n_out, "%r and %r" % (input_data, self.output)
+
+    # Create variables we need (i.e. bias (if specified by self.with_bias) and weight terms
+    with self.var_creation_scope():
+      # Our Theano default: normal distribution, std_dev = sqrt(12. / (fan_in + fan_out))
+      # glorot_normal = variance_scaling_initializer(scale=1.0, mode="fan_avg", distribution="normal")
+      #  -> std_dev = sqrt(2. / (fan_in + fan_out)).
+      #  Or use VarianceScaling(scale=6.0, mode="fan_avg", distribution="normal") to get the same as in Theano.
+      fwd_weights_initializer = get_initializer(
+        forward_weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
+
+      # Note: the normal shape of the weight matrix is shape=(n_in, n_out). But unfortunately, the
+      #   sampled_softmax_loss(..) function by TensorFlow which is used in the sampledSoftmaxLoss layer for training
+      #   expects the transposed matrix. For performance reasons we don't transpose the matrix but create it with the
+      #   other shape. This however means, that this matrix has to be transposed in some evaluation parts where the
+      #   shape has to be the other way around.
+      self.W = self.add_param(tf.get_variable(
+        name="W", shape=(n_out, n_in), dtype=tf.float32, initializer=fwd_weights_initializer))
+
+      if self.with_bias:
+        bias_initializer = get_initializer(
+          bias_init, seed=self.network.random.randint(2 ** 31) if bias_init else 0, eval_local_ns={"layer": self})
+        self.b = self.add_param(tf.get_variable(
+          name="b", shape=(n_out,), dtype=tf.float32, initializer=bias_initializer))
+      else:
+        assert not bias_init
+        self.b = None
+
+    with tf.name_scope("linear"):
+      self.x = input_data.placeholder
+      self.ndim = self.x.get_shape().ndims
+      self.input_data = input_data
+
+      # Branch in TensorFlow graph for evaluation phase
+      from TFUtil import dot
+      if self.input_data.sparse:
+        if self.x.dtype in [tf.uint8, tf.int8, tf.uint16, tf.int16]:
+          self.x = tf.cast(self.x, tf.int32)
+
+        # Maybe optionally we could also use tf.contrib.layers.safe_embedding_lookup_sparse().
+        self.x = tf.nn.embedding_lookup(tf.transpose(self.W), self.x)
+        self.ndim += 1
+      else:
+        # Consult note to shape of self.W
+        self.x = tf.transpose(dot(self.W, tf.transpose(self.x)))
+
+      assert self.x.get_shape().ndims == self.ndim
+      if self.with_bias:
+        self.x = tf.add(self.x, self.b, name="add_bias")
+        assert self.x.get_shape().ndims == self.ndim
+
+      if self.grad_filter:
+        self.x = TFUtil.filter_grad(
+          self.x,
+          threshold=self.grad_filter,
+          axis=[i for i in range(self.input_data.batch_ndim) if i != self.input_data.batch_dim_axis])
+
+      # perform softmax output
+      from TFUtil import get_activation_function
+      act_func = get_activation_function("softmax")
+      self.output_before_activation = OutputWithActivation(self.x, act_func=act_func)
+      self.x = self.output_before_activation.y
+
+      assert self.output.batch_dim_axis == self.input_data.batch_dim_axis
+      assert self.output.time_dim_axis == self.input_data.time_dim_axis
+      self.output.placeholder = self.x
+
+
 class SoftmaxOverSpatialLayer(_ConcatInputLayer):
   """
   This applies a softmax over spatial axis/axes (currently only time axis supported).
@@ -5379,6 +5473,113 @@ class ViaLayerLoss(Loss):
     return super(ViaLayerLoss, self).get_error()
 
 
+class SampledSoftmaxLoss(Loss):
+  """
+  Sampled Softmax loss. This layer performs sampled_softmax_loss (see
+  https://www.tensorflow.org/api_docs/python/tf/nn/sampled_softmax_loss) when training. This loss performs like CE when
+  in evaluation mode. See cond_on_train(...) for more details on branching between train and eval phase. For detailed
+  explanation on SampledSoftmax see https://www.tensorflow.org/api_docs/python/tf/nn/sampled_softmax_loss
+  """
+  class_name = "sampledSoftmaxLoss"
+
+  def __init__(self,
+               num_sampled=None,
+               remove_accidental_hits=True,
+               partition_strategy='mod',
+               sampler="log_uniform",
+               **kwargs):
+    """
+    :param int num_sampled: how many samples you wanna draw
+    :param bool remove_accidental_hits: True is a common default. Whether to remove "accidental hits" where a sampled
+                class equals one of the target classes.
+    :param str partition_strategy: 'mod' is common default. See TensorFlow documentation on sampled_softmax_loss
+    :param str sampler: "log_uniform" is common default. Element of {"uniform","log_uniform","learned_unigram"}
+    """
+    super(SampledSoftmaxLoss, self).__init__(**kwargs)
+
+    assert num_sampled is not None, "You have to make sure, that you set the num_sampled variable in the config file."
+    assert num_sampled >= 1, "num_sampled is too small!"
+    self.num_sampled = num_sampled
+    self.remove_accidental_hits = remove_accidental_hits
+    self.partition_strategy = partition_strategy
+
+    assert sampler in ["uniform","log_uniform","learned_unigram"], "Not implemented sampler selected"
+    self.sampler = sampler
+
+  def get_output_target_scores(self):
+    """
+    :return: shape (time_flat,), type float32
+    :rtype: tf.Tensor
+    """
+    output_flat = self.output_flat
+    if output_flat is None:
+      output_flat = self.output.get_placeholder_time_flattened()
+    target_flat_exp = tf.stack(
+      [tf.range(tf.shape(self.target_flat)[0], dtype=tf.int32),
+       tf.cast(self.target_flat, tf.int32)], axis=1)  # (time,2)
+    out = tf.gather_nd(output_flat, target_flat_exp)
+    return out
+
+  def get_value(self):
+    assert isinstance(self.layer, SampledSoftmax)
+    assert self.target.sparse, "Sampled softmax is only useful for big (i.e. sparse) target vectors"
+    assert self.target.ndim_dense == self.output.ndim_dense
+
+    with tf.name_scope("loss_sampled_softmax"):
+
+      # The function that is called for the training branch
+      def train_fn():
+        labels = tf.expand_dims(self.target.get_placeholder_flattened(), 1)
+        from tensorflow.python.framework import dtypes
+        from tensorflow.python.ops import candidate_sampling_ops, math_ops
+
+        if labels.dtype != dtypes.int64:
+          labels = math_ops.cast(labels, dtypes.int64)
+
+        # This is a dict containing all samplers provided by TensorFlow which share the same parameters
+        all_samplers = {
+          "log_uniform": candidate_sampling_ops.log_uniform_candidate_sampler,
+          "uniform": candidate_sampling_ops.uniform_candidate_sampler,
+          "learned_unigram": candidate_sampling_ops.learned_unigram_candidate_sampler
+        }
+
+        sampler = all_samplers[self.sampler]
+        sampled_values = sampler(
+          true_classes=labels,  # shape: [batch_size, num_true]
+          num_true=1,  # Note that this loss layer does not support multiple correct classes as target values
+          num_sampled=self.num_sampled,  # How many samples do we wanna draw
+          unique=True,
+          range_max=self.target.dim)
+
+        return tf.nn.sampled_softmax_loss(
+          weights=self.layer.W,  # shape: [num_classes, dim]
+          biases=self.layer.b,  # shape: [num_classes]
+          labels=labels,  # shape: [batch_size, num_true]
+          inputs=self.layer.input_data.get_placeholder_flattened(),  # shape: [batch_size, dim]
+          num_sampled=self.num_sampled,  # How many samples do we wanna draw
+          num_classes=self.target.dim,  # How many classes do we have
+          num_true=1,  # Note that this loss layer does not support multiple correct classes as target values
+          sampled_values=sampled_values,  # The sampling
+          remove_accidental_hits=self.remove_accidental_hits,
+          partition_strategy=self.partition_strategy,
+          name="sampled_softmax_loss"  # Name for the scope we produce
+        )
+
+      # The function that is called for the evaluation branch
+      def eval_fn():
+        assert self.target.sparse is True
+        from TFUtil import to_int32_64
+        loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
+          logits=self.output_before_softmax_flat,
+          labels=to_int32_64(self.target_flat))
+        return loss
+
+      # Create a new branch in the TensorFlow graph, one side for the training using the sampled_softmax_loss(...)
+      #   function and one for the evaluation using the normal cross entropy
+      tensor = self.base_network.cond_on_train(train_fn, eval_fn)
+      return self.reduce_func(tensor)
+
+
 _LossClassDict = {}  # type: dict[str,type(Loss)]
 
 def _init_loss_class_dict():
@@ -5440,3 +5641,4 @@ def get_layer_class_name_list():
   if not _LayerClassDict:
     _init_layer_class_dict()
   return sorted(_LayerClassDict.keys())
+
