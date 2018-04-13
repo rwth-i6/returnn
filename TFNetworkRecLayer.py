@@ -3761,7 +3761,26 @@ class BlocksparseLSTMCell(_WrapBaseCell):
     init_blocksparse()
     from blocksparse.lstm import BlocksparseLSTMCell as CellImpl
     self.cell_type = CellImpl
+    kwargs = kwargs.copy()
+    if kwargs.get('is_training', None) is None:
+      from TFNetwork import TFNetwork
+      kwargs['is_training'] = TFNetwork.get_current_network().train_flag
     super(BlocksparseLSTMCell, self).__init__(*args, **kwargs)
+
+  def call(self, *args, **kwargs):
+    y = super(BlocksparseLSTMCell, self).call(*args, **kwargs)
+    from blocksparse.lstm import BlocksparseLSTMCell as CellImpl
+    from blocksparse.matmul import BlocksparseMatMul
+    assert isinstance(self.cell, CellImpl)
+    print("BlocksparseLSTMCell, matmuls:", file=log.v4)
+    for d in self.cell.linear.matmuls:
+      bsmm = d["bsmm"]
+      if bsmm:
+        assert isinstance(bsmm, BlocksparseMatMul)
+        print('  %s: sparsity %.4f%%' % (d["weights"], 100.0 - 100.0 * bsmm.sparsity), file=log.v4)
+      else:
+        print('  %s: dense' % d["weights"], file=log.v4)
+    return y
 
 
 class BlocksparseMultiplicativeMultistepLSTMCell(_WrapBaseCell):
