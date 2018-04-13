@@ -1966,6 +1966,17 @@ def is_running_on_cluster():
   return get_hostname().startswith("cluster-cn-")
 
 
+start_time = time.time()
+
+
+def get_utc_start_time_filename_part():
+  """
+  :return: string which can be used as part of a filename, which represents the start time of RETURNN in UTC
+  :rtype: str
+  """
+  return time.strftime("%Y-%m-%d-%H-%M-%S", time.gmtime(start_time))
+
+
 def log_runtime_info_to_dir(path, config):
   """
   This will write multiple logging information into the path.
@@ -1977,27 +1988,29 @@ def log_runtime_info_to_dir(path, config):
   """
   import os
   import sys
-  import socket
   import shutil
   from Config import Config
   try:
+    hostname = get_hostname()
     content = [
-      "Time: %s" % time.strftime("%Y-%m-%d %H:%M:%S"),
+      "Time: %s" % time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(start_time)),
       "Call: %s" % (sys.argv,),
       "Path: %s" % (os.getcwd(),),
+      "Hostname: %s" % get_hostname(),
+      "PID: %i" % os.getpid(),
       "Returnn: %s" % (describe_crnn_version(),),
       "TensorFlow: %s" % (describe_tensorflow_version(),),
       "Config files: %s" % (config.files,),
     ]
     if not os.path.exists(path):
       os.makedirs(path)
-    hostname = get_hostname()
-    with open("%s/returnn.%s.%i.%s.log" % (
-      path, hostname, os.getpid(), time.strftime("%Y-%m-%d-%H-%M-%S")), "w") as f:
-      f.write(
-        "Returnn log file:\n" +
-        "".join(["%s\n" % s for s in content]) +
-        "\n")
+    log_fn = "%s/returnn.%s.%s.%i.log" % (path, get_utc_start_time_filename_part(), hostname, os.getpid())
+    if not os.path.exists(log_fn):
+      with open(log_fn, "w") as f:
+        f.write(
+          "Returnn log file:\n" +
+          "".join(["%s\n" % s for s in content]) +
+          "\n")
     for fn in config.files:
       base_fn = os.path.basename(fn)
       target_fn = "%s/%s" % (path, base_fn)

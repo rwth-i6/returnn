@@ -362,13 +362,13 @@ class Runner(object):
     else:
       logdir = os.path.dirname(self.engine.model_filename) or os.getcwd()
     if logdir:
-      from Util import log_runtime_info_to_dir
-      log_runtime_info_to_dir(logdir, config=self.engine.config)
-      logdir += "/%s" % self.data_provider.get_dataset_name()
+      from Util import log_runtime_info_to_dir, get_utc_start_time_filename_part
+      logdir += "/%s-%s" % (self.data_provider.get_dataset_name(), get_utc_start_time_filename_part())
       if not self._should_train:  # like eval
         logdir += "-%i" % self.engine.epoch
       if self.engine.use_search_flag:
         logdir += "-search"
+      log_runtime_info_to_dir(logdir, config=self.engine.config)
       writer = tf.summary.FileWriter(logdir)
     else:
       writer = None
@@ -457,6 +457,9 @@ class Runner(object):
         self._maybe_handle_extra_fetches(fetches_results)
         duration = time.time() - start_time
         self._print_process(report_prefix=report_prefix, step=step, step_duration=duration, eval_info=eval_info)
+        if step <= 10:
+          writer.flush()
+          os.sync()
         step += 1
         if self.cancel_flag:
           raise CancelTrainingException("cancel_flag is set")

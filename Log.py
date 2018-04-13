@@ -79,7 +79,8 @@ class Log:
         handler.setLevel(logging.DEBUG)
       elif os.path.isdir(os.path.dirname(t)):
         if "$" in t:
-          t = string.Template(t).substitute(date=time.strftime("%Y-%m-%d-%H-%M-%S", time.gmtime()))
+          from Util import get_utc_start_time_filename_part
+          t = string.Template(t).substitute(date=get_utc_start_time_filename_part())
         handler = logging.FileHandler(t)
         handler.setLevel(logging.DEBUG)
       else:
