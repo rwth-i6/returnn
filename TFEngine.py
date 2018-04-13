@@ -1090,7 +1090,8 @@ class Engine(object):
     self.epoch = self.start_epoch - 1
     if self.learning_rate_control.need_error_info:
       if self.dev_data:
-        if "dev_score" not in self.learning_rate_control.getEpochErrorDict(self.epoch):
+        if all([not k.startswith("dev_score")
+                for k in self.learning_rate_control.getEpochErrorDict(self.epoch).keys()]):
           # This can happen when we have a previous model but did not test it yet.
           print("Last epoch model not yet evaluated on dev. Doing that now.", file=log.v4)
           self.eval_model()
