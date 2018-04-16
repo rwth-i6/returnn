@@ -388,7 +388,8 @@ def executeMainTask():
   elif task == "eval":
     engine.init_train_from_config(config, train_data, dev_data, eval_data)
     engine.epoch = config.int("epoch", None)
-    assert engine.epoch
+    assert engine.epoch, "set epoch in config"
+    config.set('load_epoch', engine.epoch)
     print("Evaluate epoch", engine.epoch, file=log.v4)
     engine.eval_model(config.value("eval_output_file", ""))
   elif task in ['forward','hpx']:
