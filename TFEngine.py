@@ -1061,6 +1061,23 @@ class Engine(object):
     self.network.get_all_errors()
     results = {}
     eval_dump_str = []
+    train = False
+    if self.config.get_of_type("train_in_eval", bool, False):
+      # We update the model params in-place.
+      # In training, we don't want that, because it should not use the validation data.
+      # We could reset it later when continuing the training, but it's not implemented.
+      assert self.config.value('task', 'train') != 'train', (
+        "task %r should be just 'eval' or so. training will break." % self.config.value('task', None))
+      train = True
+      if not self.updater:
+        self.updater = Updater(
+          config=self.config, tf_session=self.tf_session, network=self.network,
+          initial_learning_rate=self.initial_learning_rate)
+        self.updater.set_trainable_vars(self.network.get_trainable_params())
+      eval_learning_rate = self.config.get_of_type(
+        'eval_learning_rate', float, default=self.config.float('learning_rate', 1.0))
+      print("train in eval, learning rate %f" % eval_learning_rate, file=log.v2)
+      self.updater.set_learning_rate(eval_learning_rate)
     for dataset_name, dataset in self.get_eval_datasets().items():
       if dataset_name not in self.dataset_batches or not dataset.batch_set_generator_cache_whole_epoch():
         self.dataset_batches[dataset_name] = dataset.generate_batches(
@@ -1072,7 +1089,7 @@ class Engine(object):
       else:
         print("reusing previous dataset batch order for %r dataset" % dataset_name, file=log.v4)
         self.dataset_batches[dataset_name].reset()
-      tester = Runner(engine=self, dataset=dataset, batches=self.dataset_batches[dataset_name], train=False)
+      tester = Runner(engine=self, dataset=dataset, batches=self.dataset_batches[dataset_name], train=train)
       tester.run(report_prefix=self.get_epoch_str() + " %r eval" % dataset_name)
       assert tester.finalized
       eval_dump_str += [" %s: score %s error %s" % (
