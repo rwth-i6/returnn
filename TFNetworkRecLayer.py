@@ -2392,11 +2392,14 @@ class RnnCellLayer(_ConcatInputLayer):
               last_state = cls.get_state_by_key(final_rec_vars['state'], key=key)
             else:
               last_state = rec_layer.get_last_hidden_state(key=key)
-            with tf.control_dependencies([
-                  tf.assign(var, last_state, validate_shape=False)]):
-              rec_layer.output.placeholder = tf.identity(rec_layer.output.placeholder)
+            last_state.set_shape((None, d))
+            rec_layer.network.register_post_control_dependencies([
+              tf.assert_equal(tf.shape(last_state), shape),
+              tf.assign(var, last_state, validate_shape=False)])
           rec_layer.post_init_hooks.append(update_var)
           step = rec_layer.network.get_epoch_step()
+          # Note: If you get somewhere an error like `In[0] is not a matrix` or so,
+          # likely `update_var` was not correctly called or handled.
           s = tf.cond(tf.equal(step, 0), lambda: tf.zeros(shape), lambda: var.value())
           s.set_shape((None, d))
           return s
