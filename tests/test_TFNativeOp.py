@@ -1007,22 +1007,32 @@ def test_blocksparse_simple():
   bsmm = BlocksparseMatMul(sparsity, block_size=block_size, feature_axis=0)
 
   # Input to graph
-  x = tf.placeholder(tf.float32, shape=[None, hidden_size])
+  x = tf.placeholder(tf.float32, shape=[hidden_size, None])
+  x_np = np.ones((hidden_size, minibatch_size), dtype='float32')
 
   # Initialize block-sparse weights
-  w = tf.get_variable("w", bsmm.w_shape, dtype=tf.float32)
+  w = tf.get_variable("w", bsmm.w_shape, dtype=tf.float32, initializer=tf.random_uniform_initializer(-0.1, 0.1, seed=3))
 
   # Block-sparse matrix multiplication
   y = bsmm(x, w)
 
   # Run
+  print('init vars')
   session.run(tf.global_variables_initializer())
-  result = session.run([y], feed_dict={x: np.ones((minibatch_size, hidden_size), dtype='float32')})
+  print('blocksparse matmul')
+  result = session.run(y, feed_dict={x: x_np})
   print(result)
+  print('test')
+  w_np = session.run(w)
+  y_test = bsmm.fprop_test(x_np, w_np)
+  print(y_test)
+  i = numpy.argmax((y_test - result) ** 2)
+  print('biggest diff at %i: %r vs %r' % (i, y_test.flatten()[i], result.flatten()[i]))
+  assert_allclose(result, y_test, rtol=1e-2)  # rtol=1e-03 still fails
 
 
 @unittest.skipIf(not have_blocksparse_requirements(), "do not have Blocksparse requirements")
-def test_blocksparse_simple2():
+def test_blocksparse_simple_identity():
   init_blocksparse()
 
   from blocksparse.matmul import BlocksparseMatMul
@@ -1032,14 +1042,15 @@ def test_blocksparse_simple2():
   n_in = 64
   n_out = 32 * 32
   block_size = 32
-  n_batch = 1
+  # Note: It seems everything less than 4 fails, as well as non-power-of-2.
+  n_batch = 4
 
   # Create a dense sparsity pattern
   mask = numpy.ones((n_in // block_size, n_out // block_size), dtype=numpy.int32)
   # MatMul object
   bsmm = BlocksparseMatMul(mask, block_size=block_size, feature_axis=0, name="bsmm")
   # Input
-  x_np = numpy.arange(n_in, dtype=numpy.float32).reshape((n_in, n_batch)) + 1.0
+  x_np = numpy.arange(n_in * n_batch, dtype=numpy.float32).reshape((n_in, n_batch)) + 1.0
   x = tf.constant(x_np, name='x')
   # Block-sparse weights
   w_np = bsmm.identity_init()()
@@ -1053,7 +1064,45 @@ def test_blocksparse_simple2():
   print('L2:', numpy.sum(result ** 2))
   y_test = bsmm.fprop_test(x_np, w_np)
   print(y_test)
-  # assert_allclose(result, y_test)  # fails?
+  i = numpy.argmax((y_test - result) ** 2)
+  print('biggest diff at %i: %r vs %r' % (i, y_test.flatten()[i], result.flatten()[i]))
+  assert_allclose(result, y_test, rtol=1e-2)
+
+
+@unittest.skip('broken?')
+@unittest.skipIf(not have_blocksparse_requirements(), "do not have Blocksparse requirements")
+def test_blocksparse_simple_feature_axis1():
+  init_blocksparse()
+
+  from blocksparse.matmul import BlocksparseMatMul
+  import tensorflow as tf
+  import numpy
+
+  n_in = 64
+  n_out = 32 * 32
+  block_size = 32
+  n_batch = 4
+
+  # Create a dense sparsity pattern
+  mask = numpy.ones((n_in // block_size, n_out // block_size), dtype=numpy.int32)
+  # MatMul object
+  bsmm = BlocksparseMatMul(mask, block_size=block_size, feature_axis=1, name="bsmm")
+  # Input
+  x_np = numpy.arange(n_in * n_batch, dtype=numpy.float32).reshape((n_batch, n_in)) + 1.0
+  x = tf.constant(x_np, name='x')
+  # Block-sparse weights
+  w_np = bsmm.identity_init()()
+  w = tf.constant(w_np, name="w")
+  # Block-sparse matrix multiplication
+  y = bsmm(x, w)
+  y.set_shape((n_batch, n_out))
+  # Run
+  result = session.run(y)
+  print(result)
+  print('L2:', numpy.sum(result ** 2))
+  y_test = bsmm.fprop_test(x_np, w_np)
+  print(y_test)
+  assert_allclose(result, y_test)
 
 
 if __name__ == "__main__":
