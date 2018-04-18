@@ -127,6 +127,8 @@ class RecLayer(_ConcatInputLayer):
       self._rec_scope = scope
       scope_name_prefix = scope.name + "/"  # e.g. "layer1/rec/"
       with self.var_creation_scope():
+        if initial_state:
+          assert isinstance(unit, str), 'initial_state not supported currently for custom unit'
         self._initial_state = RnnCellLayer.get_rec_initial_state(
           initial_state=initial_state, n_out=self.output.dim, unit=unit, unit_opts=unit_opts,
           batch_dim=self.network.get_data_batch_dim(), name=self.name,
@@ -614,6 +616,7 @@ class RecLayer(_ConcatInputLayer):
     self._sub_error = sub_error
     self._sub_loss_normalization_factor = sub_loss_norm_factor
     self.search_choices = search_choices
+    self._last_hidden_state = cell
     return output
 
   def get_last_hidden_state(self, key):
@@ -688,6 +691,7 @@ class _SubnetworkRecCell(object):
     self.input_layers_net = None  # type: TFNetwork
     self.output_layers_net = None  # type: TFNetwork
     self.final_acc_tas_dict = None  # type: dict[str, tf.TensorArray]
+    self.get_final_rec_vars = None
 
   def _construct_template(self):
     """
@@ -1470,6 +1474,9 @@ class _SubnetworkRecCell(object):
       _, final_net_vars, final_acc_tas = final_loop_vars
     else:
       _, final_net_vars, final_acc_tas, (_, seq_len) = final_loop_vars
+    self.get_final_rec_vars = lambda layer_name: self.get_layer_rec_var_from_loop_vars(
+      loop_vars=final_net_vars,
+      layer_name=layer_name)
     if rec_layer.output.size_placeholder is None:
       rec_layer.output.size_placeholder = {}
     rec_layer.output.size_placeholder[0] = seq_len
@@ -2380,8 +2387,13 @@ class RnnCellLayer(_ConcatInputLayer):
           rec_layer.saveable_param_replace[var] = None  # Do not save this variable.
 
           def update_var():
+            if isinstance(rec_layer.cell, _SubnetworkRecCell):
+              final_rec_vars = rec_layer.cell.get_final_rec_vars(name)
+              last_state = cls.get_state_by_key(final_rec_vars['state'], key=key)
+            else:
+              last_state = rec_layer.get_last_hidden_state(key=key)
             with tf.control_dependencies([
-                  tf.assign(var, rec_layer.get_last_hidden_state(key=key), validate_shape=False)]):
+                  tf.assign(var, last_state, validate_shape=False)]):
               rec_layer.output.placeholder = tf.identity(rec_layer.output.placeholder)
           rec_layer.post_init_hooks.append(update_var)
           step = rec_layer.network.get_epoch_step()
@@ -3567,13 +3579,14 @@ class BaseRNNCell(rnn_cell.RNNCell):
   Extends :class:`rnn_cell.RNNCell` by having explicit static attributes describing some properties.
   """
 
-  def get_input_transformed(self, x):
+  def get_input_transformed(self, x, batch_dim=None):
     """
     Usually the cell itself does the transformation on the input.
     However, it would be faster to do it outside the recurrent loop.
     This function will get called outside the loop.
 
-    :param tf.Tensor x: (time, batch, dim)
+    :param tf.Tensor x: (time, batch, dim), or (batch, dim)
+    :param tf.Tensor|None batch_dim:
     :return: like x, maybe other feature-dim
     :rtype: tf.Tensor|tuple[tf.Tensor]
     """
@@ -3671,7 +3684,7 @@ class RHNCell(BaseRNNCell):
     state.set_shape((None, self._num_units))
     return state
 
-  def get_input_transformed(self, x):
+  def get_input_transformed(self, x, batch_dim=None):
     """
     :param tf.Tensor x: (time, batch, dim)
     :return: (time, batch, num_units * 2)
@@ -3736,8 +3749,13 @@ class _WrapBaseCell(BaseRNNCell):
   def state_size(self):
     return self.cell.state_size
 
-  def get_input_transformed(self, x):
-    return self.cell.get_input_transformed(x)
+  def get_input_transformed(self, x, batch_dim=None):
+    if x.get_shape().ndims == 2 and batch_dim is None:
+      # In that case, we are probably inside the recurrent loop,
+      # so the best way to get the batch dim but not depend on `x`:
+      from TFNetworkLayer import LayerBase
+      batch_dim = LayerBase.get_recent_layer().get_batch_dim()
+    return self.cell.get_input_transformed(x, batch_dim=batch_dim)
 
   def call(self, inputs, state):
     return self.cell.call(inputs, state)

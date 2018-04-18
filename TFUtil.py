@@ -5090,6 +5090,22 @@ def to_int32_64(x):
   return tf.cast(x, tf.int32)
 
 
+def batch_gather(x, indices, keep_dims=False):
+  """
+  :param tf.Tensor x: (batch,dim,...)
+  :param tf.Tensor indices: (batch,) -> [0..dim-1]
+  :param bool keep_dims:
+  :return: x[batches,indices[batches]], (batch,...). or (batch,1,...) with keep_dims
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope('batch_gather'):
+    idx_ext = nd_indices(to_int32_64(indices))
+    y = tf.gather_nd(x, indices=idx_ext)
+    if keep_dims:
+      y = tf.expand_dims(y, axis=1)
+    return y
+
+
 def kernels_registered_for_op(op_name):
   """
   This just wraps the TF C++ function tensorflow::KernelsRegisteredForOp().

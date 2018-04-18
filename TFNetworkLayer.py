@@ -3790,9 +3790,11 @@ class CombineLayer(LayerBase):
     :rtype: tf.Tensor
     """
     used_sources = set()  # type: set[int]
-    def source(i):
+
+    def source(i, auto_convert=True):
       """
       :param int i: layer index
+      :param bool auto_convert:
       :return: output placeholder from source i, compatible to source 0
       :rtype: tf.Tensor
       """
@@ -3801,8 +3803,11 @@ class CombineLayer(LayerBase):
       if isinstance(sources[i], LayerBase):
         if i == 0:
           return sources[i].output.placeholder
-        return sources[i].output.copy_compatible_to(sources[0].output).placeholder
+        if auto_convert:
+          return sources[i].output.copy_compatible_to(sources[0].output).placeholder
+        return sources[i].output.placeholder
       return sources[i]
+
     vs = vars(TFUtil).copy()
     vs.update({"tf": tf, "source": source, "self": self})
     vs.update(eval_locals or {})
