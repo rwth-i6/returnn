@@ -1091,7 +1091,9 @@ class Engine(object):
         self.dataset_batches[dataset_name].reset()
       tester = Runner(engine=self, dataset=dataset, batches=self.dataset_batches[dataset_name], train=train)
       tester.run(report_prefix=self.get_epoch_str() + " %r eval" % dataset_name)
-      assert tester.finalized
+      if not tester.finalized:
+        print("Tester not finalized, quitting.", file=log.v1)
+        sys.exit(1)
       eval_dump_str += [" %s: score %s error %s" % (
                         dataset_name, self.format_score(tester.score), self.format_score(tester.error))]
       results[dataset_name] = {"score": tester.score, "error": tester.error}
