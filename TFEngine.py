@@ -363,11 +363,12 @@ class Runner(object):
       logdir = os.path.dirname(self.engine.model_filename) or os.getcwd()
     if logdir:
       from Util import log_runtime_info_to_dir, get_utc_start_time_filename_part
-      logdir += "/%s-%s" % (self.data_provider.get_dataset_name(), get_utc_start_time_filename_part())
+      logdir += "/%s" % self.data_provider.get_dataset_name()
       if not self._should_train:  # like eval
         logdir += "-%i" % self.engine.epoch
       if self.engine.use_search_flag:
         logdir += "-search"
+      logdir += "-%s" % get_utc_start_time_filename_part()
       log_runtime_info_to_dir(logdir, config=self.engine.config)
       writer = tf.summary.FileWriter(logdir)
     else:
