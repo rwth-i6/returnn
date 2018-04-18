@@ -1021,6 +1021,41 @@ def test_blocksparse_simple():
   print(result)
 
 
+@unittest.skipIf(not have_blocksparse_requirements(), "do not have Blocksparse requirements")
+def test_blocksparse_simple2():
+  init_blocksparse()
+
+  from blocksparse.matmul import BlocksparseMatMul
+  import tensorflow as tf
+  import numpy
+
+  n_in = 64
+  n_out = 32 * 32
+  block_size = 32
+  n_batch = 1
+
+  # Create a dense sparsity pattern
+  mask = numpy.ones((n_in // block_size, n_out // block_size), dtype=numpy.int32)
+  # MatMul object
+  bsmm = BlocksparseMatMul(mask, block_size=block_size, feature_axis=0, name="bsmm")
+  # Input
+  x_np = numpy.arange(n_in, dtype=numpy.float32).reshape((n_in, n_batch)) + 1.0
+  x = tf.constant(x_np, name='x')
+  # Block-sparse weights
+  w_np = bsmm.identity_init()()
+  w = tf.constant(w_np, name="w")
+  # Block-sparse matrix multiplication
+  y = bsmm(x, w)
+  y.set_shape((n_out, n_batch))
+  # Run
+  result = session.run(y)
+  print(result)
+  print('L2:', numpy.sum(result ** 2))
+  y_test = bsmm.fprop_test(x_np, w_np)
+  print(y_test)
+  # assert_allclose(result, y_test)  # fails?
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()
