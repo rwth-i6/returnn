@@ -1055,6 +1055,9 @@ def test_blocksparse_simple_identity():
   # Block-sparse weights
   w_np = bsmm.identity_init()()
   w = tf.constant(w_np, name="w")
+  #for b in range(bsmm.blocks):
+  #  cb, kb = bsmm.updat_list[b]
+  #  print("block %i/%i, cb %i/%i, kb %i/%i" % (b, bsmm.blocks, cb, bsmm.KB, kb, bsmm.CB))
   # Block-sparse matrix multiplication
   y = bsmm(x, w)
   y.set_shape((n_out, n_batch))
