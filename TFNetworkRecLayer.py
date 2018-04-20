@@ -2335,7 +2335,7 @@ class RnnCellLayer(_ConcatInputLayer):
     :param str unit: cell name
     :param dict[str]|None unit_opts:
     :param LayerBase|str|int|float|None|list|tuple|namedtuple initial_state: see code
-    :param RecLayer|None rec_layer: for the scope
+    :param RecLayer|LayerBase|None rec_layer: for the scope
     :rtype: tf.Tensor|tuple[tf.Tensor]|namedtuple
     """
     from Util import dummy_noop_ctx
@@ -2387,7 +2387,7 @@ class RnnCellLayer(_ConcatInputLayer):
           rec_layer.saveable_param_replace[var] = None  # Do not save this variable.
 
           def update_var():
-            if isinstance(rec_layer.cell, _SubnetworkRecCell):
+            if isinstance(rec_layer, RecLayer) and isinstance(rec_layer.cell, _SubnetworkRecCell):
               final_rec_vars = rec_layer.cell.get_final_rec_vars(name)
               last_state = cls.get_state_by_key(final_rec_vars['state'], key=key)
             else:

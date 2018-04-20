@@ -691,13 +691,8 @@ class NativeLstm2(RecSeqCellOp):
     X.set_shape(tf.TensorShape([None, None, self.n_hidden * 4]))
     W.set_shape(tf.TensorShape([self.n_hidden, self.n_hidden * 4]))
     i.set_shape(tf.TensorShape([None, None]))
-    if i.dtype != tf.float32:
-      if not hasattr(i, "cast_float32"):
-        from TFUtil import reuse_name_scope_of_tensor
-        with reuse_name_scope_of_tensor(i):
-          i_cast_float32 = tf.cast(i, dtype=tf.float32, name="index_cast_float32")
-        i.cast_float32 = i_cast_float32
-      i = i.cast_float32
+    from TFUtil import to_float32
+    i = to_float32(i)
     n_batch = tf.shape(X)[1]
     if initial_state is None:
       c0 = tf.zeros((n_batch, self.n_hidden), dtype=tf.float32, name="initial_c")

@@ -5577,7 +5577,7 @@ def _init_loss_class_dict():
       assert v.class_name not in _LossClassDict
       _LossClassDict[v.class_name] = v
   for alias, v in {"sse_sigmoid": BinaryCrossEntropy}.items():
-      _LossClassDict[alias] = v
+    _LossClassDict[alias] = v
 
 
 def get_loss_class(loss):
@@ -5592,26 +5592,58 @@ def get_loss_class(loss):
   return _LossClassDict[loss]
 
 
+_LayerClassDictInitialized = False
 _LayerClassDict = {}  # type: dict[str,type(LayerBase)]
 
 def _init_layer_class_dict():
+  global _LayerClassDictInitialized
+  _LayerClassDictInitialized = True
   import TFNetworkRecLayer
   import TFNetworkSigProcLayer
   import TFNetworkSegModLayer
 
-  all_vars = []
-  all_vars += list(globals().values())
+  auto_register_layer_classes(list(globals().values()))
   for mod in [TFNetworkRecLayer, TFNetworkSigProcLayer, TFNetworkSegModLayer]:
-    all_vars += list(vars(mod).values())
-
-  for v in all_vars:
-    if isinstance(v, type) and issubclass(v, LayerBase) and v.layer_class:
-      assert v.layer_class not in _LayerClassDict
-      _LayerClassDict[v.layer_class] = v
+    auto_register_layer_classes(list(vars(mod).values()))
 
   for alias, v in {"forward": LinearLayer, "hidden": LinearLayer}.items():
     assert alias not in _LayerClassDict
     _LayerClassDict[alias] = v
+
+
+def auto_register_layer_classes(vars_values):
+  """
+  Example usage::
+
+      from TFNetworkLayer import auto_register_layer_classes
+      auto_register_layer_classes('extern_private/your_stuff/CoolThingy.py')
+
+
+  :param list|types.ModuleType|str vars_values: e.g. use list(globals().values()).
+    str is considered as a module-filename
+  :return: nothing
+  """
+  import inspect
+  if isinstance(vars_values, str):
+    from Util import generic_import_module
+    vars_values = generic_import_module(vars_values)
+  if inspect.ismodule(vars_values):
+    vars_values = list(vars(vars_values).values())
+  for v in vars_values:
+    if isinstance(v, type) and issubclass(v, LayerBase) and v.layer_class:
+      register_layer_class(v)
+
+
+def register_layer_class(layer_class):
+  """
+  Registers a layer class such that it can be used in network construction.
+
+  :param type[LayerBase] layer_class:
+  :return: nothing
+  """
+  assert isinstance(layer_class, type) and issubclass(layer_class, LayerBase) and layer_class.layer_class
+  assert _LayerClassDict.get(layer_class.layer_class, None) in [None, layer_class]
+  _LayerClassDict[layer_class.layer_class] = layer_class
 
 
 def get_layer_class(name):
@@ -5619,7 +5651,7 @@ def get_layer_class(name):
   :param str name: matches layer_class
   :rtype: (() -> LayerBase) | type[LayerBase] | LayerBase
   """
-  if not _LayerClassDict:
+  if not _LayerClassDictInitialized:
     _init_layer_class_dict()
   if name not in _LayerClassDict:
     raise Exception("unknown layer class %r" % name)
@@ -5627,7 +5659,7 @@ def get_layer_class(name):
 
 
 def get_layer_class_name_list():
-  if not _LayerClassDict:
+  if not _LayerClassDictInitialized:
     _init_layer_class_dict()
   return sorted(_LayerClassDict.keys())
 

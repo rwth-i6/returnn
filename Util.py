@@ -33,6 +33,8 @@ else:
   long = builtins.long
   input = builtins.raw_input
 
+my_dir = os.path.dirname(os.path.abspath(__file__))
+
 
 class NotSpecified(object):
   """
@@ -2689,3 +2691,43 @@ def binary_search_any(cmp, low, high):
     else:
       return mid
   return None
+
+
+def generic_import_module(filename):
+  """
+  :param str filename:
+    We try to be clever about filename.
+    If it looks like a module name, just do importlib.import_module.
+    If it looks like a filename, search for a base path (which does not have __init__.py),
+    add that path to sys.path if needed, and import the remaining where "/" is replaced by "."
+    and the file extension is removed.
+  :return: the module
+  :rtype: types.ModuleType
+  """
+  assert filename
+  import importlib
+  if "/" not in filename:
+    return importlib.import_module(filename)
+  prefix_dir = ''
+  if not os.path.exists(filename):
+    assert filename[0] != '/'
+    # Maybe relative to Returnn?
+    prefix_dir = "%s/" % my_dir
+  assert os.path.exists(prefix_dir + filename)
+  assert filename.endswith('.py') or os.path.isdir(prefix_dir + filename)
+  dirs = filename.split("/")
+  dirs, base_fn = dirs[:-1], dirs[-1]
+  assert len(dirs) >= 1
+  for i in reversed(range(len(dirs))):
+    d = prefix_dir + "/".join(dirs[:i + 1])
+    print('d:',d)
+    assert os.path.isdir(d)
+    if os.path.exists("%s/__init__.py" % d):
+      continue
+    if d not in sys.path:
+      sys.path.append(d)
+    m = ".".join(dirs[i + 1:] + [base_fn])
+    if base_fn.endswith('.py'):
+      m = m[:-3]
+    return importlib.import_module(m)
+  raise ValueError('cannot figure out base module path from %r' % filename)

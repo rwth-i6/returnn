@@ -5090,6 +5090,21 @@ def to_int32_64(x):
   return tf.cast(x, tf.int32)
 
 
+def to_float32(x):
+  """
+  :param tf.Tensor x:
+  :return: x as float32
+  :rtype: tf.Tensor
+  """
+  if x.dtype == tf.float32:
+    return x
+  if not hasattr(x, "cast_float32"):
+    with reuse_name_scope_of_tensor(x):
+      x_cast_float32 = tf.cast(x, dtype=tf.float32, name="cast_float32")
+    x.cast_float32 = x_cast_float32
+  return x.cast_float32
+
+
 def batch_gather(x, indices, keep_dims=False):
   """
   :param tf.Tensor x: (batch,dim,...)
