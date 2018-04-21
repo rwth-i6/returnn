@@ -84,7 +84,9 @@ def _check_train_simple_network(network, num_steps=10):
 
     loss = None
     for step in range(num_steps):
-      loss, _ = session.run([network.get_total_loss(), updater.get_optim_op()], feed_dict=make_feed_dict(step=step))
+      loss, _, _ = session.run(
+        [network.get_total_loss(), updater.get_optim_op(), network.post_control_dependencies],
+        feed_dict=make_feed_dict(step=step))
       print("step %i, loss: %f" % (step, loss))
   return loss
 
