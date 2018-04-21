@@ -2720,7 +2720,6 @@ def generic_import_module(filename):
   assert len(dirs) >= 1
   for i in reversed(range(len(dirs))):
     d = prefix_dir + "/".join(dirs[:i + 1])
-    print('d:',d)
     assert os.path.isdir(d)
     if os.path.exists("%s/__init__.py" % d):
       continue
