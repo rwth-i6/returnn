@@ -1897,7 +1897,9 @@ class Enwik8Corpus(CachedDataset2):
   # Use a single HDF file, and cache it across all instances.
   _hdf_file = None
 
-  def __init__(self, path, subset, seq_len, fixed_random_seed=None, batch_num_seqs=None, subsubset=None, **kwargs):
+  def __init__(self, path, subset, seq_len, fixed_random_seed=None, batch_num_seqs=None,
+               subsubset=None, partition_epoch=None,
+               **kwargs):
     """
     :param str path:
     :param str subset: "training", "validation", "test"
@@ -1906,6 +1908,7 @@ class Enwik8Corpus(CachedDataset2):
     :param int|None batch_num_seqs: if given, will not shuffle the data but have it in such order,
       that with a given batch num_seqs setting, you could reuse the hidden state in an RNN
     :param int|(int,int)|None subsubset: end, (start,end), or full
+    :param int|None partition_epoch:
     """
     assert subset in ["training", "validation", "test"]
     import os
@@ -1930,6 +1933,7 @@ class Enwik8Corpus(CachedDataset2):
     self._batch_num_seqs = batch_num_seqs
     self._random = numpy.random.RandomState(1)  # seed will be set in init_seq_order
     self._seq_starts = numpy.arange(0, len(self._data) - 1, seq_len)
+    self._partition_epoch = partition_epoch
 
   def get_data_dtype(self, key):
     return "uint8"
@@ -1938,6 +1942,10 @@ class Enwik8Corpus(CachedDataset2):
     super(Enwik8Corpus, self).init_seq_order(epoch=epoch, seq_list=seq_list)
     if not epoch:
       epoch = 1
+    epoch_part = None
+    if self._partition_epoch:
+      epoch_part = (epoch - 1) % self._partition_epoch
+      epoch = ((epoch - 1) // self._partition_epoch) + 1
     self._random.seed(self._fixed_random_seed or epoch or 1)
     self._num_seqs = len(self._seq_starts)
     self._num_timesteps = len(self._data) - 1
@@ -1956,6 +1964,20 @@ class Enwik8Corpus(CachedDataset2):
       seq_index = seq_index.flatten()
       self._seq_order = seq_index
     assert len(self._seq_order) == self._num_seqs > 0
+    if self._partition_epoch:
+      assert self._num_seqs >= self._partition_epoch
+      partition_epoch_num_seqs = [self._num_seqs // self._partition_epoch] * self._partition_epoch
+      i = 0
+      while sum(partition_epoch_num_seqs) < self._num_seqs:
+        partition_epoch_num_seqs[i] += 1
+        i += 1
+        assert i < self._partition_epoch
+      assert sum(partition_epoch_num_seqs) == self._num_seqs
+      self._num_seqs = partition_epoch_num_seqs[epoch_part]
+      i = 0
+      for n in partition_epoch_num_seqs[:epoch_part]:
+        i += n
+      self._seq_order = self._seq_order[i:i + self._num_seqs]
     return True
 
   def _collect_single_seq(self, seq_idx):
