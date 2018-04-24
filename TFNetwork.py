@@ -44,6 +44,26 @@ class ExternData(object):
       self.data[key] = Data(name=key, auto_create_placeholders=True, **init_args)
     self.default_target = config.value('target', 'classes')
 
+  @classmethod
+  def data_kwargs_from_dataset_key(cls, dataset, key):
+    """
+    :param Dataset.Dataset dataset:
+    :param str key:
+    :rtype: dict[str]
+    """
+    if key in dataset.get_target_list():
+      available_for_inference = False
+    else:
+      available_for_inference = True
+    dim = dataset.get_data_dim(key)
+    shape = [None] + list(dataset.get_data_shape(key))
+    sparse = dataset.is_data_sparse(key)
+    dtype = dataset.get_data_dtype(key)
+    return dict(
+      batch_dim_axis=0, time_dim_axis=1,
+      shape=shape, dim=dim, sparse=sparse, dtype=dtype,
+      available_for_inference=available_for_inference)
+
   def init_from_dataset(self, dataset):
     """
     :param Dataset.Dataset dataset:
@@ -62,18 +82,9 @@ class ExternData(object):
       else:
         self.default_input = input_keys[0]
     for key in data_keys:
-      if key in dataset.get_target_list():
-        available_for_inference = False
-      else:
-        available_for_inference = True
-      dim = dataset.get_data_dim(key)
-      shape = [None] + list(dataset.get_data_shape(key))
-      sparse = dataset.is_data_sparse(key)
-      dtype = dataset.get_data_dtype(key)
       self.data[key] = Data(
-        name=key, auto_create_placeholders=True, batch_dim_axis=0, time_dim_axis=1,
-        shape=shape, dim=dim, sparse=sparse, dtype=dtype,
-        available_for_inference=available_for_inference)
+        name=key, auto_create_placeholders=True,
+        **self.data_kwargs_from_dataset_key(dataset=dataset, key=key))
 
   def check_matched_dataset(self, dataset, used_data_keys=None):
     """

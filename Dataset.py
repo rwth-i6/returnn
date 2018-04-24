@@ -935,4 +935,13 @@ def set_config_num_inputs_outputs_from_dataset(config, dataset):
   :param Dataset dataset:
   """
   config.set("num_inputs", dataset.num_inputs)
-  config.set("num_outputs", dataset.num_outputs)
+  from Util import BackendEngine
+  if BackendEngine.is_tensorflow_selected():
+    # TF supports more fine-grained specification,
+    # however the dataset does not store that in num_outputs.
+    from TFNetwork import ExternData
+    config.set("num_outputs", {
+      key: ExternData.data_kwargs_from_dataset_key(dataset=dataset, key=key)
+      for key in dataset.get_data_keys()})
+  else:
+    config.set("num_outputs", dataset.num_outputs)
