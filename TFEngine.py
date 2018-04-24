@@ -34,7 +34,7 @@ from Network import LayerNetwork
 from Pretrain import pretrainFromConfig
 from TFNetwork import TFNetwork, ExternData, help_on_tf_exception
 from TFUpdater import Updater
-from Util import hms, NumbersDict, PY3
+from Util import hms, NumbersDict, PY3, BackendEngine
 from pprint import pprint
 
 
@@ -524,6 +524,9 @@ class Engine(object):
       config = get_global_config(auto_create=True)
     if not log.initialized:
       log.init_by_config(config)
+    if BackendEngine.selectedEngine is None:
+      BackendEngine.select_engine(engine=BackendEngine.TensorFlow)
+    assert BackendEngine.is_tensorflow_selected()
     self.config = config
     self.orig_config = {}  # see _maybe_update_config
     self.devices_config = self._get_devices_config()
