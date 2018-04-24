@@ -44,7 +44,11 @@ class Stream():
 
 
 class Log:
+  def __init__(self):
+    self.initialized = False
+
   def initialize(self, logs = [], verbosity = [], formatter = []):
+    self.initialized = True
     fmt = { 'default' : logging.Formatter('%(message)s'),
             'timed' : logging.Formatter('%(asctime)s %(message)s', datefmt = '%Y-%m-%d,%H:%M:%S.%MS'),
             'raw' : logging.Formatter('%(message)s'),
@@ -104,8 +108,15 @@ class Log:
     self.v4 = Stream(self.v[4], logging.DEBUG)
     self.v5 = Stream(self.v[5], logging.DEBUG)
 
-  def write(self, msg):
-    self.info(msg)
+  def init_by_config(self, config):
+    """
+    :param Config.Config config:
+    """
+    logs = config.list('log', [])
+    log_verbosity = config.int_list('log_verbosity', [])
+    log_format = config.list('log_format', [])
+    self.initialize(logs=logs, verbosity=log_verbosity, formatter=log_format)
+
 
 log = Log()
 

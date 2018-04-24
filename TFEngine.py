@@ -517,7 +517,9 @@ class Engine(object):
     """
     if config is None:
       from Config import get_global_config
-      config = get_global_config()
+      config = get_global_config(auto_create=True)
+    if not log.initialized:
+      log.init_by_config(config)
     self.config = config
     self.orig_config = {}  # see _maybe_update_config
     self.devices_config = self._get_devices_config()
@@ -687,6 +689,9 @@ class Engine(object):
     """
     if not config:
       config = self.config
+    if not config.has("num_inputs") and not config.has("num_outputs") and (train_data or dev_data or eval_data):
+      from Dataset import set_config_num_inputs_outputs_from_dataset
+      set_config_num_inputs_outputs_from_dataset(config=config, dataset=train_data or dev_data or eval_data)
     self.use_dynamic_train_flag = True
     self.train_data = train_data
     self.dev_data = dev_data
@@ -1784,7 +1789,7 @@ class Engine(object):
 
 def get_global_engine():
   """
-  Similar as get_global_config().
+  Similar as :func:`Config.get_global_config`.
 
   :rtype: Engine
   """

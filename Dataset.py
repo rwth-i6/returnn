@@ -927,3 +927,12 @@ def shapes_for_batches(batches, data_keys, dataset=None, extern_data=None):
     for k in all_data_keys:
       d[k] += dataset.get_data_shape(k)
   return d
+
+
+def set_config_num_inputs_outputs_from_dataset(config, dataset):
+  """
+  :param Config.Config config:
+  :param Dataset dataset:
+  """
+  config.set("num_inputs", dataset.num_inputs)
+  config.set("num_outputs", dataset.num_outputs)

@@ -112,10 +112,7 @@ def initConfig(configFilename=None, commandLineOptions=(), extra_updates=None):
 
 
 def initLog():
-  logs = config.list('log', [])
-  log_verbosity = config.int_list('log_verbosity', [])
-  log_format = config.list('log_format', [])
-  log.initialize(logs=logs, verbosity=log_verbosity, formatter=log_format)
+  log.init_by_config(config)
 
 
 def initConfigJsonNetwork():
