@@ -1708,6 +1708,8 @@ def get_activation_function(s):
   """
   if not s or s in ["none", "identity"]:
     return identity
+  if "(" in s:
+    return eval("lambda x: %s" %s, {"tf": tf})
   if any(k in s for k in _bin_ops):
     return _get_act_func_with_op(s)
   if hasattr(tf.nn, s):
