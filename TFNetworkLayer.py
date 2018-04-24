@@ -1404,6 +1404,7 @@ def concat_sources_with_opt_dropout(src_layers, dropout=0):
     dropout = 0
   if not dropout:
     return data.copy()
+  assert not data.sparse, "need dense data when dropout is used; sources: %r" % (src_layers,)
   if (tuple(src_layers), float(dropout)) in network.concat_sources_dropout_cache:
     return network.concat_sources_dropout_cache[(tuple(src_layers), float(dropout))].copy()
   data = data.copy()
