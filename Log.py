@@ -46,6 +46,7 @@ class Stream():
 class Log:
   def __init__(self):
     self.initialized = False
+    self.filename = None
 
   def initialize(self, logs = [], verbosity = [], formatter = []):
     self.initialized = True
@@ -85,6 +86,7 @@ class Log:
         if "$" in t:
           from Util import get_utc_start_time_filename_part
           t = string.Template(t).substitute(date=get_utc_start_time_filename_part())
+        self.filename = t
         handler = logging.FileHandler(t)
         handler.setLevel(logging.DEBUG)
       else:

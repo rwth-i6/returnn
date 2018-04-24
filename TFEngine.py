@@ -361,8 +361,12 @@ class Runner(object):
     sess = self.engine.tf_session
     if self.engine.config.has("tf_log_dir"):
       logdir = self.engine.config.value("tf_log_dir", None)
+    elif self.engine.model_filename:
+      logdir = os.path.dirname(self.engine.model_filename)
+    elif log.filename:
+      logdir = os.path.dirname(log.filename)
     else:
-      logdir = os.path.dirname(self.engine.model_filename) or os.getcwd()
+      logdir = os.getcwd()
     if logdir:
       from Util import log_runtime_info_to_dir, get_utc_start_time_filename_part
       logdir += "/%s" % self.data_provider.get_dataset_name()
