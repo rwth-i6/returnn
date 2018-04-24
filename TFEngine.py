@@ -464,7 +464,7 @@ class Runner(object):
         self._maybe_handle_extra_fetches(fetches_results)
         duration = time.time() - start_time
         self._print_process(report_prefix=report_prefix, step=step, step_duration=duration, eval_info=eval_info)
-        if step <= 10:
+        if step <= 10 and writer:
           writer.flush()
           if PY3:
             os.sync()
