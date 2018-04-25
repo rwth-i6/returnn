@@ -474,12 +474,13 @@ class LayerBase(object):
         with reuse_name_scope(tf.get_variable_scope(), **kwargs) as scope:
           yield scope
 
-  def add_param(self, param, custom_update=None, trainable=None, saveable=None):
+  def add_param(self, param, custom_update=None, trainable=None, saveable=None, axes_split_info=None):
     """
     :param tf.Variable|tf.Tensor param:
     :param None|CustomUpdate custom_update: will be applied in training, instead of taking the gradient
     :param bool|None trainable:
     :param bool|None saveable:
+    :param list[list[int]]|None axes_split_info: e.g. [[n],[n]*4] for LSTM matrices
     :return: param
     :rtype tf.Variable
     """
@@ -496,6 +497,9 @@ class LayerBase(object):
     if custom_update:
       assert trainable
       custom_update.set_on_var(param)
+    if axes_split_info:
+      from TFUtil import set_param_axes_split_info
+      set_param_axes_split_info(param, axes_split_info)
     if self.reuse_params:
       name_scope_prefix = self.reuse_params.get_base_absolute_name_scope_prefix(base_layer=self, param=param)
     else:
@@ -512,12 +516,16 @@ class LayerBase(object):
       self.saveable_param_replace[param] = None
     return param
 
-  def set_param_values_by_dict(self, values_dict, session, ignore_wrong_shape=False):
+  def set_param_values_by_dict(self, values_dict, session, ignore_wrong_shape=False, copy_param_mode=None):
     """
     :param dict[str,numpy.ndarray] values_dict:
     :param bool ignore_wrong_shape:
+    :param str|None copy_param_mode:
     :param tf.Session session:
     """
+    assert copy_param_mode in [None, "ifpossible", "subset"]
+    if copy_param_mode:
+      ignore_wrong_shape = True
     for param_name, values in values_dict.items():
       assert param_name in self.params, '%s: param %r unknown' % (self, param_name)
       param = self.params[param_name]
@@ -525,11 +533,32 @@ class LayerBase(object):
       shape = param.get_shape()
       assert isinstance(shape, tf.TensorShape)
       assert shape.is_fully_defined(), '%s: shape of param %r %r not fully defined?' % (self, param_name, param)
+      param_shape = tuple(shape.as_list())
       if not ignore_wrong_shape:
-        assert tuple(shape.as_list()) == values.shape, "var %r: shape %s != %s" % (param, shape.as_list(), values.shape)
-      elif tuple(shape.as_list()) != values.shape:
-        print("Will not set param %r because its shape %s != %s." % (param, shape.as_list(), values.shape), file=log.v3)
-        continue
+        assert param_shape == values.shape, "var %r: shape %s != %s" % (param, shape.as_list(), values.shape)
+      if param_shape != values.shape:
+        if copy_param_mode == "subset":
+          assert len(param_shape) == len(values.shape), "param %r ndim must match" % param
+          param_axes_split_info = TFUtil.get_param_axes_split_info(param)
+          if param_axes_split_info:
+            TFUtil.check_param_axes_split_info(param.get_shape().as_list(), param_axes_split_info)
+            old_axes_splits = TFUtil.transform_param_axes_split_info_to_new_shape(
+              param_axes_split_info, values.shape)
+            print("Param %r: transform old values of shape parts %r into new shape parts %r." % (
+              param, old_axes_splits, param_axes_split_info), file=log.v3)
+            values = TFUtil.copy_with_new_split_axes(
+              old_axis_splits=old_axes_splits, new_axis_splits=param_axes_split_info, old_values=values)
+          else:
+            print("Param %r: transform old values of shape %r into new shape %r." % (
+              param, values.shape, param_shape), file=log.v3)
+            values = TFUtil.copy_with_new_split_axes(
+              old_axis_splits=[[d] for d in values.shape],
+              new_axis_splits=[[d] for d in param_shape],
+              old_values=values)
+        else:
+          print(
+            "Will not set param %r because its shape %s != %s." % (param, shape.as_list(), values.shape), file=log.v3)
+          continue
       self.network.get_var_assigner(param).assign(values, session=session)
 
   def get_param_values_dict(self, session):

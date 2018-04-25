@@ -62,12 +62,14 @@ class Pretrain:
   # Note: If we want to add other pretraining schemes, make this a base class.
 
   def __init__(self, original_network_json, network_init_args,
-               copy_output_layer=None, greedy=None, repetitions=None,
+               copy_param_mode=None, copy_output_layer=None, greedy=None,
+               repetitions=None,
                construction_algo="from_output", output_layers=("output",), input_layers=("data",)):
     """
     :type original_network_json: dict[str]
     :param dict[str] network_init_args: additional args we use for LayerNetwork.from_json().
       must have n_in, n_out.
+    :param str copy_param_mode:
     :param bool|str copy_output_layer: whether to copy the output layer params from last epoch or reinit
     :param bool greedy: if True, only train output+last layer, otherwise train all
     :param None | int | list[int] | dict repetitions: how often to repeat certain pretrain steps. default is one epoch.
@@ -76,10 +78,14 @@ class Pretrain:
     :param list[str]|tuple[str] output_layers: used for construction
     :param list[str]|tuple[str] input_layers: used for construction
     """
+    assert copy_param_mode in [None, "ifpossible", "subset"]
+    if copy_output_layer is None:
+      copy_output_layer = copy_param_mode
     if copy_output_layer is None:
       copy_output_layer = "ifpossible"
     if copy_output_layer:
-      assert copy_output_layer is True or copy_output_layer == "ifpossible"
+      assert copy_output_layer is True or copy_output_layer in ["ifpossible", "subset"]
+    self.copy_param_mode = copy_param_mode
     self.copy_output_layer = copy_output_layer
     if greedy is None:
       greedy = False

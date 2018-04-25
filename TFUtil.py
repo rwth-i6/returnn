@@ -920,10 +920,18 @@ def set_param_axes_split_info(param, axes_split_info):
   :param tf.Variable|tf.Tensor param:
   :param list[list[int]] axes_split_info: e.g. [[n],[n]*4] for LSTM matrices
   """
-  assert len(axes_split_info) == param.get_shape().ndims
-  for i, parts in enumerate(axes_split_info):
-    assert param.get_shape().dims[i].value == sum(parts)
+  check_param_axes_split_info(param.get_shape().as_list(), axes_split_info)
   setattr(param, "returnn_axes_split_info", axes_split_info)
+
+
+def check_param_axes_split_info(param_shape, axes_split_info):
+  """
+  :param list[int]|tuple[int] param_shape:
+  :param list[list[int]] axes_split_info: e.g. [[n],[n]*4] for LSTM matrices
+  """
+  assert len(axes_split_info) == len(param_shape)
+  for i, parts in enumerate(axes_split_info):
+    assert param_shape[i] == sum(parts)
 
 
 def get_param_axes_split_info(param):
@@ -934,6 +942,76 @@ def get_param_axes_split_info(param):
   :rtype: list[list[int]]|None
   """
   return getattr(param, "returnn_axes_split_info", None)
+
+
+def transform_param_axes_split_info_to_new_shape(axes_split_info, new_shape):
+  """
+  new_shape can be bigger or smaller than the old shape.
+  In some simple cases, it is obvious how that should be done, e.g. [[a],[b]*4], [a*2,b*8] -> [[a*2],[b*2]*4]
+  In some, it is not so. E.g. [[a+b],[b]*4], [a+b*2,b*8] -> [[a+b*2],[b*2]*4].
+  See test cases as well, :func:`test_transform_param_axes_split_info_to_new_shape`.
+  No TF involved here, however, fits better to the functions above.
+
+  :param list[list[int]] axes_split_info:
+  :param list[int]|tuple[int] new_shape:
+  :return: new axes-split-info for the new shape
+  :rtype: list[list[int]]
+  """
+  new_axes_split_info = []
+  assert len(axes_split_info) == len(new_shape)
+  dim_diff = {}  # old-dim -> new-dim
+  for new_dim, parts in zip(new_shape, axes_split_info):
+    if len(parts) == 1:
+      dim_diff[parts[0]] = new_dim
+    elif len(set(parts)) == 1:  # all the same
+      if new_dim % len(parts) == 0:
+        dim_diff[parts[0]] = new_dim // len(parts)  # just a heuristic
+  for i, (new_dim, parts) in enumerate(zip(new_shape, axes_split_info)):
+    assert len(parts) >= 1
+    if len(parts) == 1:  # simple case
+      new_axes_split_info.append([new_dim])
+      continue
+    new_parts = [dim_diff.get(d) for d in parts]
+    if any([d is None for d in new_parts]):
+      assert sum([d is None for d in new_parts]) == 1
+      j = [d is None for d in new_parts].index(True)
+      new_parts[j] = new_dim - sum([d for d in new_parts if d is not None])
+      assert new_parts[j] > 0
+    elif sum(new_parts) != new_dim:
+      # another heuristic. assume that the first is wrong.
+      new_parts[0] = new_dim - sum(new_parts[1:])
+      assert new_parts[0] > 0
+    assert sum(new_parts) == new_dim
+    new_axes_split_info.append(new_parts)
+  return new_axes_split_info
+
+
+def copy_with_new_split_axes(old_axis_splits, new_axis_splits, old_values):
+  """
+  On Numpy arrays only, however, fits better to the functions above.
+
+  :param list[list[int]] old_axis_splits:
+  :param list[list[int]] new_axis_splits:
+  :param numpy.ndarray old_values:
+  :return: new values
+  :rtype: numpy.ndarray
+  """
+  import numpy
+  assert len(old_axis_splits) == len(new_axis_splits)
+  assert all([len(old_parts) == len(new_parts) for (old_parts, new_parts) in zip(old_axis_splits, new_axis_splits)])
+  old_shape = [sum(parts) for parts in old_axis_splits]
+  assert tuple(old_shape) == old_values.shape
+  new_shape = [sum(parts) for parts in new_axis_splits]
+  new_values = numpy.zeros(new_shape, dtype=old_values.dtype)
+  for idxs in numpy.ndindex(tuple([len(parts) for parts in old_axis_splits])):
+    assert len(idxs) == len(old_axis_splits) == len(new_axis_splits)
+    old_offsets = [sum(parts[:i]) for i, parts in zip(idxs, old_axis_splits)]
+    new_offsets = [sum(parts[:i]) for i, parts in zip(idxs, new_axis_splits)]
+    dims = [min(old_parts[i], new_parts[i]) for i, old_parts, new_parts in zip(idxs, old_axis_splits, new_axis_splits)]
+    old_slices = tuple([slice(offset, offset + dim) for offset, dim in zip(old_offsets, dims)])
+    new_slices = tuple([slice(offset, offset + dim) for offset, dim in zip(new_offsets, dims)])
+    new_values[new_slices] = old_values[old_slices]
+  return new_values
 
 
 class OutputWithActivation(object):

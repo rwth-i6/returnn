@@ -520,17 +520,20 @@ class RecSeqCellOp(object):
   does_input_projection = False
   does_direction_handling = False
 
-  def __init__(self, n_hidden, n_input_dim=None, input_is_sparse=False, step=None):
+  def __init__(self, n_hidden, n_input_dim_parts=None, input_is_sparse=False, step=None):
     """
     :param int n_hidden:
-    :param int n_input_dim:
+    :param int|list[int] n_input_dim_parts:
     :param bool input_is_sparse:
     :param int step: what direction and step to use
     """
-    if n_input_dim is None:
-      n_input_dim = n_hidden
+    if n_input_dim_parts is None:
+      n_input_dim_parts = [n_hidden]
+    if not isinstance(n_input_dim_parts, (list, tuple)):
+      n_input_dim_parts = [n_input_dim_parts]
     self.n_hidden = n_hidden  # hidden-dim and output-dim
-    self.n_input_dim = n_input_dim  # input dim for the inputs in __call__
+    self.n_input_dim_parts = n_input_dim_parts
+    self.n_input_dim = sum(n_input_dim_parts)  # input dim for the inputs in __call__
     self.input_is_sparse = input_is_sparse
     self.step = step if self.does_direction_handling else None
 
@@ -553,6 +556,7 @@ class RecSeqCellOp(object):
 class NativeLstmCell(RecSeqCellOp):
   def __init__(self, **kwargs):
     super(NativeLstmCell, self).__init__(**kwargs)
+    self.n_input_dim_parts = [self.n_hidden] * 4
     self.n_input_dim = self.n_hidden * 4
     self.op = make_lstm_op()
 
@@ -598,6 +602,7 @@ class NativeLstmCell(RecSeqCellOp):
     """
     W_re = tf.get_variable(
       name="W_re", shape=(self.n_hidden, self.n_hidden * 4), initializer=recurrent_weights_initializer)
+    TFUtil.set_param_axes_split_info(W_re, [[self.n_hidden], [self.n_hidden] * 4])
     out, _, final_state = self.op(
       *self.map_layer_inputs_to_op(Z=inputs, V_h=W_re, i=index, initial_state=initial_state))
     return out, final_state
@@ -655,6 +660,8 @@ class NativeLstmLowMemCell(RecSeqCellOp):
     W = tf.get_variable(
       name="W", shape=(self.n_input_dim + self.n_hidden, self.n_hidden * 4), initializer=recurrent_weights_initializer)
     b = tf.get_variable(name="b", shape=(self.n_hidden * 4,), initializer=tf.zeros_initializer())
+    TFUtil.set_param_axes_split_info(W, [[self.n_input_dim, self.n_hidden], [self.n_hidden] * 4])
+    TFUtil.set_param_axes_split_info(b, [[self.n_hidden] * 4])
     out, _, final_state = self.op(
       *self.map_layer_inputs_to_op(X=inputs, W=W, b=b, i=index, initial_state=initial_state))
     return out, final_state
@@ -669,6 +676,7 @@ class NativeLstm2(RecSeqCellOp):
     :param float rec_weight_dropout: weight dropout in the recurrent matrix, https://openreview.net/pdf?id=SyyGPP0TZ
     """
     super(NativeLstm2, self).__init__(**kwargs)
+    self.n_input_dim_parts = [self.n_hidden] * 4
     self.n_input_dim = self.n_hidden * 4
     self.rec_weight_dropout = rec_weight_dropout
     self.op = make_op(NativeOp.NativeLstm2)
@@ -718,6 +726,7 @@ class NativeLstm2(RecSeqCellOp):
     """
     W = tf.get_variable(
       name="W_re", shape=(self.n_hidden, self.n_hidden * 4), initializer=recurrent_weights_initializer)
+    TFUtil.set_param_axes_split_info(W, [[self.n_hidden], [self.n_hidden] * 4])
     if self.rec_weight_dropout:
       from TFUtil import dropout
       W = dropout(W, keep_prob=1.0 - self.rec_weight_dropout, cond_on_train=True)

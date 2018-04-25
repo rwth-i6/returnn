@@ -309,7 +309,7 @@ class Updater(object):
     trainable_vars_for_gradients = list(self.trainable_vars)
     trainable_vars_custom_update = []  # type: list[tf.Variable]
     for v in self.trainable_vars:
-      if hasattr(v, "custom_update"):
+      if hasattr(v, "returnn_custom_update"):
         trainable_vars_custom_update.append(v)
         trainable_vars_for_gradients.remove(v)
 
@@ -330,7 +330,7 @@ class Updater(object):
       with tf.variable_scope("custom_update"):
         updates = [self.optim_op]
         for param in trainable_vars_custom_update:
-          custom_update = getattr(param, "custom_update")
+          custom_update = getattr(param, "returnn_custom_update")
           assert isinstance(custom_update, CustomUpdate)
           updates.append(custom_update.update_var(param))
         self.optim_op = tf.group(*updates)

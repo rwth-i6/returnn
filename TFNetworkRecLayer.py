@@ -570,7 +570,8 @@ class RecLayer(_ConcatInputLayer):
     :return: output of shape (time, batch, dim)
     :rtype: tf.Tensor
     """
-    from TFUtil import dot, sequence_mask_time_major, directed, to_int32_64
+    from TFUtil import dot, sequence_mask_time_major, directed, to_int32_64, set_param_axes_split_info
+
     assert self._max_seq_len is None
     assert self.input_data
     x, seq_len = self._get_input()
@@ -587,6 +588,9 @@ class RecLayer(_ConcatInputLayer):
         else:
           x = dot(x, W)
         b = tf.get_variable(name="b", shape=(cell.n_input_dim,), dtype=tf.float32, initializer=self._bias_initializer)
+        if len(cell.n_input_dim_parts) > 1:
+          set_param_axes_split_info(W, [[self.input_data.dim], cell.n_input_dim_parts])
+          set_param_axes_split_info(b, [cell.n_input_dim_parts])
         x += b
     else:
       assert not cell.does_input_projection

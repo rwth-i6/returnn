@@ -902,7 +902,9 @@ class Engine(object):
     # In that case initialize output parameters randomly.
     self.network.set_params_by_serialized(
       old_network_params, session=self.tf_session,
-      ignore_wrong_shape=self.is_pretrain_epoch(), ignore_non_existing=self.is_pretrain_epoch())
+      ignore_wrong_shape=self.is_pretrain_epoch(),
+      copy_param_mode=self.pretrain.copy_param_mode if self.is_pretrain_epoch() else None,
+      ignore_non_existing=self.is_pretrain_epoch())
 
   def train(self):
     print("start training at epoch %i and step %i" % (self.start_epoch, self.start_batch), file=log.v3)

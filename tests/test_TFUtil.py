@@ -1341,6 +1341,23 @@ def test_layer_norms():
           print('ok')
 
 
+def test_transform_param_axes_split_info_to_new_shape():
+  assert_equal(transform_param_axes_split_info_to_new_shape([[7],[7]*4], [7*2,7*8]), [[7*2],[7*2]*4])
+  assert_equal(transform_param_axes_split_info_to_new_shape([[3,7],[7]*4], [3+7*2,7*8]), [[3,7*2],[7*2]*4])
+  assert_equal(transform_param_axes_split_info_to_new_shape([[3,7],[7]*4], [1+7*2,7*8]), [[1,7*2],[7*2]*4])
+  assert_equal(transform_param_axes_split_info_to_new_shape([[7,7],[7]*4], [3+7*2,7*8]), [[3,7*2],[7*2]*4])
+  assert_equal(transform_param_axes_split_info_to_new_shape([[7,7],[7]*4], [7*2+7*2,7*8]), [[7*2,7*2],[7*2]*4])
+  assert_equal(transform_param_axes_split_info_to_new_shape([[7],[7]*4], [7,7*8]), [[7],[7*2]*4])
+
+
+def test_copy_with_new_split_axes():
+  old_values = numpy.arange((3+5)*5*4).reshape((3+5),5*4)
+  new_values = copy_with_new_split_axes([[3,5],[5]*4], [[5,7],[7]*4], old_values)
+  for p in range(4):
+    assert (new_values[:3,p*7:p*7+5] == old_values[:3,p*5:p*5+5]).all()
+    assert (new_values[5:5+5,p*7:p*7+5] == old_values[3:,p*5:p*5+5]).all()
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()
