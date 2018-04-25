@@ -520,20 +520,22 @@ class RecSeqCellOp(object):
   does_input_projection = False
   does_direction_handling = False
 
-  def __init__(self, n_hidden, n_input_dim_parts=None, input_is_sparse=False, step=None):
+  def __init__(self, n_hidden, n_input_dim=None, n_input_dim_parts=None, input_is_sparse=False, step=None):
     """
     :param int n_hidden:
+    :param int n_input_dim:
     :param int|list[int] n_input_dim_parts:
     :param bool input_is_sparse:
     :param int step: what direction and step to use
     """
+    if n_input_dim is None:
+      n_input_dim = n_hidden
     if n_input_dim_parts is None:
-      n_input_dim_parts = [n_hidden]
-    if not isinstance(n_input_dim_parts, (list, tuple)):
-      n_input_dim_parts = [n_input_dim_parts]
+      n_input_dim_parts = [n_input_dim]
+    assert n_input_dim == sum(n_input_dim_parts)
     self.n_hidden = n_hidden  # hidden-dim and output-dim
     self.n_input_dim_parts = n_input_dim_parts
-    self.n_input_dim = sum(n_input_dim_parts)  # input dim for the inputs in __call__
+    self.n_input_dim = n_input_dim  # input dim for the inputs in __call__
     self.input_is_sparse = input_is_sparse
     self.step = step if self.does_direction_handling else None
 
