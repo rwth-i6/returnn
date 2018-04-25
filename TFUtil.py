@@ -887,7 +887,7 @@ class CustomUpdate(object):
     :param tf.Variable var: variable to update. this will be recognized by :class:`TFUpdater.Updater`
     """
     # A bit ugly, but simple.
-    setattr(var, "custom_update", self)
+    setattr(var, "returnn_custom_update", self)
 
   def update_var(self, var):
     """
@@ -913,6 +913,27 @@ class CustomUpdateExpAverage(CustomUpdate):
 
   def update_var(self, var):
     return tf.assign_add(var, self.alpha * (self.average - var))  # ((alpha - 1) * old + alpha * new)
+
+
+def set_param_axes_split_info(param, axes_split_info):
+  """
+  :param tf.Variable|tf.Tensor param:
+  :param list[list[int]] axes_split_info: e.g. [[n],[n]*4] for LSTM matrices
+  """
+  assert len(axes_split_info) == param.get_shape().ndims
+  for i, parts in enumerate(axes_split_info):
+    assert param.get_shape().dims[i].value == sum(parts)
+  setattr(param, "returnn_axes_split_info", axes_split_info)
+
+
+def get_param_axes_split_info(param):
+  """
+  See :func:`set_param_axes_split_info`.
+
+  :param tf.Variable|tf.Tensor param:
+  :rtype: list[list[int]]|None
+  """
+  return getattr(param, "returnn_axes_split_info", None)
 
 
 class OutputWithActivation(object):
