@@ -539,6 +539,7 @@ class LayerBase(object):
       if param_shape != values.shape:
         if copy_param_mode == "subset":
           assert len(param_shape) == len(values.shape), "param %r ndim must match" % param
+          new_values = session.run(param)  # use currently (randomly) initialized params as base
           param_axes_split_info = TFUtil.get_param_axes_split_info(param)
           if param_axes_split_info:
             TFUtil.check_param_axes_split_info(param.get_shape().as_list(), param_axes_split_info)
@@ -547,14 +548,15 @@ class LayerBase(object):
             print("Param %r: transform old values of shape parts %r into new shape parts %r." % (
               param, old_axes_splits, param_axes_split_info), file=log.v3)
             values = TFUtil.copy_with_new_split_axes(
-              old_axis_splits=old_axes_splits, new_axis_splits=param_axes_split_info, old_values=values)
+              old_axis_splits=old_axes_splits, new_axis_splits=param_axes_split_info,
+              old_values=values, new_values=new_values)
           else:
             print("Param %r: transform old values of shape %r into new shape %r." % (
               param, values.shape, param_shape), file=log.v3)
             values = TFUtil.copy_with_new_split_axes(
               old_axis_splits=[[d] for d in values.shape],
               new_axis_splits=[[d] for d in param_shape],
-              old_values=values)
+              old_values=values, new_values=new_values)
         else:
           print(
             "Will not set param %r because its shape %s != %s." % (param, shape.as_list(), values.shape), file=log.v3)

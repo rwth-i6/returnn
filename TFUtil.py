@@ -986,13 +986,14 @@ def transform_param_axes_split_info_to_new_shape(axes_split_info, new_shape):
   return new_axes_split_info
 
 
-def copy_with_new_split_axes(old_axis_splits, new_axis_splits, old_values):
+def copy_with_new_split_axes(old_axis_splits, new_axis_splits, old_values, new_values=None):
   """
   On Numpy arrays only, however, fits better to the functions above.
 
   :param list[list[int]] old_axis_splits:
   :param list[list[int]] new_axis_splits:
   :param numpy.ndarray old_values:
+  :param numpy.ndarray new_values:
   :return: new values
   :rtype: numpy.ndarray
   """
@@ -1002,7 +1003,8 @@ def copy_with_new_split_axes(old_axis_splits, new_axis_splits, old_values):
   old_shape = [sum(parts) for parts in old_axis_splits]
   assert tuple(old_shape) == old_values.shape
   new_shape = [sum(parts) for parts in new_axis_splits]
-  new_values = numpy.zeros(new_shape, dtype=old_values.dtype)
+  if new_values is None:
+    new_values = numpy.zeros(new_shape, dtype=old_values.dtype)
   for idxs in numpy.ndindex(tuple([len(parts) for parts in old_axis_splits])):
     assert len(idxs) == len(old_axis_splits) == len(new_axis_splits)
     old_offsets = [sum(parts[:i]) for i, parts in zip(idxs, old_axis_splits)]
