@@ -866,6 +866,7 @@ class TranslationDataset(CachedDataset2):
   MapToDataKeys = {"source": "data", "target": "classes"}  # just by our convention
 
   def __init__(self, path, file_postfix, partition_epoch=None, source_postfix="", target_postfix="",
+               source_only=False,
                unknown_label=None, **kwargs):
     """
     :param str path: the directory containing the files
@@ -875,6 +876,7 @@ class TranslationDataset(CachedDataset2):
     :param None|str source_postfix: will concat this at the end of the source. e.g.
     :param None|str target_postfix: will concat this at the end of the target.
       You might want to add some sentence-end symbol.
+    :param bool source_only: if targets are not available
     :param str|None unknown_label: "UNK" or so. if not given, then will not replace unknowns but throw an error
     """
     super(TranslationDataset, self).__init__(**kwargs)
@@ -887,6 +889,9 @@ class TranslationDataset(CachedDataset2):
     self._partition_epoch_num_seqs = []
     import os
     assert os.path.isdir(path)
+    if source_only:
+      self.MapToDataKeys = self.__class__.MapToDataKeys.copy()
+      del self.MapToDataKeys["target"]
     self._data_files = {data_key: self._get_data_file(prefix) for (prefix, data_key) in self.MapToDataKeys.items()}
     self._data = {data_key: [] for data_key in self._data_files.keys()}  # type: dict[str,list[numpy.ndarray]]
     self._data_len = None  # type: int|None
