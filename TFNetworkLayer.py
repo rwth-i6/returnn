@@ -1910,34 +1910,31 @@ class SampledSoftmax(_ConcatInputLayer):
 
     # Linear layer plus softmax activation
     with tf.name_scope("linear"):
-      self.x = input_data.placeholder
-      self.ndim = self.x.get_shape().ndims
-      self.input_data = input_data
+      x = input_data.placeholder
+      ndim = x.get_shape().ndims
 
       from TFUtil import dot
       if self.input_data.sparse:
-        if self.x.dtype in [tf.uint8, tf.int8, tf.uint16, tf.int16]:
-          self.x = tf.cast(self.x, tf.int32)
+        if x.dtype in [tf.uint8, tf.int8, tf.uint16, tf.int16]:
+          x = tf.cast(x, tf.int32)
 
         # Consult note to shape of self.W for reasons for "tf.transpose(..)"
-        self.x = tf.nn.embedding_lookup(tf.transpose(self.W), self.x)
-        self.ndim += 1
+        x = tf.nn.embedding_lookup(tf.transpose(self.W), x)
+        ndim += 1
       else:
         # Consult note to shape of self.W for reasons for "tf.transpose(..)"
-        self.x = tf.transpose(dot(self.W, tf.transpose(self.x)))
-
-      self.x = tf.add(self.x, self.b, name="add_bias")
-      assert self.x.get_shape().ndims == self.ndim
+        x = dot(tf.transpose(self.W), x)
+      x = tf.add(x, self.b, name="add_bias")
+      assert x.get_shape().ndims == ndim
 
       # perform softmax output
       from tensorflow.python.ops.nn_ops import softmax
-      act_func = softmax
-      self.output_before_activation = OutputWithActivation(self.x, act_func=act_func)
-      self.x = self.output_before_activation.y
+      self.output_before_activation = OutputWithActivation(x, act_func=softmax)
+      x = self.output_before_activation.y
 
       assert self.output.batch_dim_axis == self.input_data.batch_dim_axis
       assert self.output.time_dim_axis == self.input_data.time_dim_axis
-      self.output.placeholder = self.x
+      self.output.placeholder = x
 
 
 class SoftmaxOverSpatialLayer(_ConcatInputLayer):
