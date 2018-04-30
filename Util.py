@@ -2043,6 +2043,7 @@ class NativeCodeCompiler(object):
   """
 
   CacheDirName = "returnn_native"
+  CollectedCompilers = None  # type: None|list[NativeCodeCompiler]
 
   def __init__(self, base_name, code_version, code,
                is_cpp=True, c_macro_defines=None, ld_flags=None,
@@ -2066,6 +2067,8 @@ class NativeCodeCompiler(object):
     :param bool should_cleanup_old_mydir: whether we should delete our op dir before we compile there.
     :param bool verbose: be slightly more verbose
     """
+    if self.CollectedCompilers is not None:
+      self.CollectedCompilers.append(self)
     self.verbose = verbose
     self.cache_dir = "%s/%s" % (get_temp_dir(), self.CacheDirName)
     self._include_paths = list(include_paths)

@@ -71,6 +71,13 @@ class OpMaker(object):
         cls._load_cuda_blas_gemm()
 
   @classmethod
+  def cuda_blas_gemm_so_filename(cls):
+    from tensorflow.contrib.rnn.python.ops import lstm_ops
+    lstm_ops_so = "%s/_lstm_ops.so" % os.path.dirname(lstm_ops.__file__)
+    assert os.path.exists(lstm_ops_so)
+    return lstm_ops_so
+
+  @classmethod
   def _load_cuda_blas_gemm(cls):
     """
     https://github.com/tensorflow/tensorflow/issues/6602
@@ -80,9 +87,7 @@ class OpMaker(object):
     """
     if TFUtil.CudaEnv.verbose_find_cuda:
       print("Load tf.contrib lstm_ops...")
-    from tensorflow.contrib.rnn.python.ops import lstm_ops
-    lstm_ops_so = "%s/_lstm_ops.so" % os.path.dirname(lstm_ops.__file__)
-    assert os.path.exists(lstm_ops_so)
+    lstm_ops_so = cls.cuda_blas_gemm_so_filename()
     if TFUtil.CudaEnv.verbose_find_cuda:
       print("Load tf.contrib lstm_ops lib:", lstm_ops_so)
     # Maybe a bit hacky: Just load all symbols into the global namespace.
