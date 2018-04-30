@@ -67,6 +67,7 @@ def main(argv):
   argparser.add_argument('--config', help="filename to config-file")
   argparser.add_argument('--native_op', help="op name. e.g. 'LstmGenericBase'")
   argparser.add_argument("--verbosity", default=4, type=int, help="5 for all seqs (default: 4)")
+  argparser.add_argument("--output_file", help='if given, will write the list of libs to this file')
   args = argparser.parse_args(argv[1:])
   init(config_filename=args.config, log_verbosity=args.verbosity)
 
@@ -94,6 +95,12 @@ def main(argv):
       print(fn)
   else:
     print("no libs compiled. use --native_op or --config")
+
+  if args.output_file:
+    with open(args.output_file, "w") as f:
+      for fn in libs:
+        f.write(fn)
+    print("Wrote lib list to file:", args.output_file)
 
 
 if __name__ == '__main__':
