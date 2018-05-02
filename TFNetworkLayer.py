@@ -55,6 +55,7 @@ class LayerBase(object):
                initial_output=None,
                rec_previous_layer=None,
                trainable=True,
+               custom_param_importer=None,
                register_as_extern_data=None):
     """
     :param str name:
@@ -79,6 +80,7 @@ class LayerBase(object):
     :param str|float initial_output: used for recurrent layer, see self.get_rec_initial_output()
     :param LayerBase|None rec_previous_layer: via the recurrent layer, layer (template) which represents the past of us
     :param bool trainable: whether the parameters of this layer will be trained
+    :param str|callable|None custom_param_importer: used by :func:`set_param_values_by_dict`
     :param str|None register_as_extern_data:
     """
     self.name = name
@@ -125,6 +127,7 @@ class LayerBase(object):
     self.use_batch_norm = batch_norm
     self.spatial_smoothing = spatial_smoothing
     self.trainable = trainable
+    self.custom_param_importer = custom_param_importer
     self.register_as_extern_data = register_as_extern_data
     # Stats will be collected by the engine.
     self.stats = {}  # type: dict[str,tf.Tensor]
@@ -3985,7 +3988,7 @@ class SubnetworkLayer(LayerBase):
       self_prefix = self.get_absolute_name_scope_prefix()  # with "/" at end
       from TFNetwork import CustomCheckpointLoader
       loader = CustomCheckpointLoader(
-        filename=load_on_init, saveable_params=list(self.params.values()), params_prefix=self_prefix)
+        filename=load_on_init, saveable_params=list(self.params.values()), params_prefix=self_prefix, network=net)
       loader.set_as_custom_init()
 
   @classmethod

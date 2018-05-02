@@ -940,6 +940,12 @@ class TFNetwork(object):
     :param str filename:
     :param tf.Session session:
     """
+    if any([layer.custom_param_importer for layer in self.layers.values()]):
+      # Need to use CustomCheckpointLoader because only that handles custom_param_importer correctly.
+      loader = CustomCheckpointLoader(
+        filename=filename, saveable_params=self.get_saveable_params_list(), network=self)
+      loader.load_now(session=session)
+      return
     if not self.saver:
       self._create_saver()
     # Note:
@@ -953,7 +959,7 @@ class TFNetwork(object):
       print("load_params_from_file: some variables not found", file=log.v2)
       try:
         loader = CustomCheckpointLoader(
-          filename=filename, saveable_params=self.get_saveable_params_list())
+          filename=filename, saveable_params=self.get_saveable_params_list(), network=self)
         if not loader.missing_var_names:
           print("Strange, nothing missing? Pre-loaded missing variables from other checkpoints?", file=log.v2)
         loader.load_now(session=session)
@@ -1282,11 +1288,13 @@ class CustomCheckpointLoader:
 
   """
 
-  def __init__(self, filename, saveable_params, params_prefix=""):
+  def __init__(self, filename, saveable_params, params_prefix="", network=None):
     """
     :param str filename: filepattern for NewCheckpointReader
     :param list[tf.Variable|tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject] saveable_params:
+    :param TFNetwork network:
     """
+    self.network = network
     self.saveable_params = []
     for param in saveable_params:
       custom_post_init = getattr(param, "custom_post_init", None)
@@ -1484,6 +1492,8 @@ class CustomCheckpointLoader:
       print("Probably we can restore these:", file=log.v3)
       for v in sorted(var_name_map.keys()):
         print(v, file=log.v3)
+      if not var_name_map:
+        print("(None)", file=log.v3)
       print(file=log.v3)
       raise tf.errors.NotFoundError(
         node_def=None, op=None,
