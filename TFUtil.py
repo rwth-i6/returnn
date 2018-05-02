@@ -3763,26 +3763,39 @@ def view_as(x, dtype):
   return y
 
 
+def broadcast_gradient_args(shape_x, shape_y):
+  """
+  :param tf.Tensor shape_x:
+  :param tf.Tensor shape_y:
+  :return: (axis reduce arg for grad x, axis reduce arg for grad y)
+  :rtype: (tf.Tensor, tf.Tensor)
+  """
+  from tensorflow.python.ops import gen_array_ops
+  if hasattr(gen_array_ops, '_broadcast_gradient_args'):  # earlier TF
+    return gen_array_ops._broadcast_gradient_args(shape_x, shape_y)
+  # Since TF 1.8.0, this is public.
+  return gen_array_ops.broadcast_gradient_args(shape_x, shape_y)
+
+
 def _alternative_minmax_grad(op, grad):
   """
   :param tf.Operation op: e.g. tf.minimum(x, y) or tf.maximum(x, y)
   :param tf.Tensor grad:
   :rtype: tf.Tensor, tf.Tensor
   """
-  from tensorflow.python.ops import gen_array_ops
   x = op.inputs[0]
   y = op.inputs[1]
   sx = tf.shape(x)
   sy = tf.shape(y)
-  rx, ry = gen_array_ops._broadcast_gradient_args(sx, sy)
-  gx = tf.reshape(tf.reduce_sum(grad, rx), sx)
-  gy = tf.reshape(tf.reduce_sum(grad, ry), sy)
+  rx, ry = broadcast_gradient_args(sx, sy)
+  gx = tf.reshape(tf.reduce_sum(grad, axis=rx), sx)
+  gy = tf.reshape(tf.reduce_sum(grad, axis=ry), sy)
   return gx, gy
 
 
 def _register_alternative_minmax_grad():
   """
-  :return: the name to use with gradient_override_map
+  :return: the op name to use with gradient_override_map
   :rtype: str
   """
   grad_name = "alternative_minmax_grad"
