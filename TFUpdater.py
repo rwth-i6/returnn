@@ -80,15 +80,13 @@ class Updater(object):
   Also relevant are config options ``debug_add_check_numerics_on_output`` and ``debug_grad_summaries``.
   """
 
-  def __init__(self, config, tf_session, network, initial_learning_rate=1.):
+  def __init__(self, config, network, initial_learning_rate=1.):
     """
     :param Config.Config config:
-    :param tf.Session tf_session:
     :param TFNetwork network:
     :param float initial_learning_rate:
     """
     self.config = config
-    self.tf_session = tf_session
     self.learning_rate_var = tf.Variable(name="learning_rate", initial_value=0.0, trainable=False, dtype="float32")
     self.trainable_vars = []  # type: list[tf.Variable]
     self.network = network
@@ -123,11 +121,13 @@ class Updater(object):
     self.trainable_vars = trainable_vars
     self.reset_optim_op()
 
-  def set_learning_rate(self, value):
+  def set_learning_rate(self, value, session):
     """
     :param float value:
+    :param tf.Session session:
     """
-    self.network.get_var_assigner(self.learning_rate_var).assign(value, session=self.tf_session)
+    from TFUtil import VariableAssigner
+    VariableAssigner(self.learning_rate_var).assign(value, session=session)
 
   def get_current_step_learning_rate(self):
     """
@@ -375,7 +375,6 @@ class Updater(object):
       self.optimizer_vars += other_new_vars
     with tf.name_scope("optimizer_init_vars"):
       self.optimizer_init_vars_op = tf.variables_initializer(self.optimizer_vars, name="init_optim_slot_vars")
-    self.init_optimizer_vars()
 
     if self.config.bool("debug_grad_summaries", False):
       from TFUtil import variable_summaries, get_base_name, reuse_name_scope_of_tensor
@@ -409,8 +408,12 @@ class Updater(object):
         callback_on_new()
     return self.optim_op
 
-  def init_optimizer_vars(self):
-    self.tf_session.run(self.optimizer_init_vars_op)
+  def init_optimizer_vars(self, session):
+    """
+    :param tf.Session session:
+    """
+    self.get_optim_op()  # make sure it is initialized
+    session.run(self.optimizer_init_vars_op)
 
 
 def accum_grad_multiple_step(grad, var, train_step, num_accum_steps):

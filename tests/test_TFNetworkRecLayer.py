@@ -78,9 +78,10 @@ def _check_train_simple_network(network, num_steps=10):
     network.initialize_params(session=session)
 
     from TFUpdater import Updater
-    updater = Updater(config=config, tf_session=session, network=network)
-    updater.set_learning_rate(config.float("learning_rate", 1.0))
+    updater = Updater(config=config, network=network)
+    updater.set_learning_rate(config.float("learning_rate", 1.0), session=session)
     updater.set_trainable_vars(network.get_trainable_params())
+    updater.init_optimizer_vars(session=session)
 
     loss = None
     for step in range(num_steps):
@@ -730,9 +731,10 @@ def test_RecLayer_NativeLstm_Nan():
 
     print("Create updater...")
     from TFUpdater import Updater
-    updater = Updater(config=config, network=network, tf_session=session)
+    updater = Updater(config=config, network=network)
     updater.set_trainable_vars(network.get_trainable_params())
-    updater.set_learning_rate(0.1)
+    updater.set_learning_rate(0.1, session=session)
+    updater.init_optimizer_vars(session=session)
     optim_op = updater.get_optim_op()
     assert isinstance(updater.optimizer, tf.train.AdamOptimizer)
     adam_weights_m_t = updater.optimizer.get_slot(var=weights_t, name="m")

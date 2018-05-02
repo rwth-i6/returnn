@@ -130,6 +130,7 @@ class Runner(object):
       def callback_on_new():
         # Force a new check.
         self.engine._checked_uninitialized_vars = False
+        self.engine.updater.init_optimizer_vars(session=self.engine.tf_session)
       d["optim_op"] = self.engine.updater.get_optim_op(callback_on_new=callback_on_new)
       if self.engine.updater.optim_meta_losses:
         d.update(self.engine.updater.optim_meta_losses)
@@ -415,7 +416,7 @@ class Runner(object):
         start_time = time.time()
         if self._should_train and self.reset_updater_vars_mod_step and step % self.reset_updater_vars_mod_step == 0:
           print("Reset updater vars in step %i." % step, file=log.v5)
-          self.engine.updater.init_optimizer_vars()
+          self.engine.updater.init_optimizer_vars(session=sess)
 
         if step == 0:
           if self.engine.config.bool("check_unsupported_device", False) and self.engine.is_requesting_for_gpu():
@@ -846,17 +847,38 @@ class Engine(object):
       extern_data = ExternData()
       extern_data.init_from_config(self.config)
       # TODO...
-    network = TFNetwork(
-      name="root",
+    self.network, self.updater = self.create_network(
       config=self.config,
       rnd_seed=epoch,
+      train_flag=train_flag, eval_flag=self.use_eval_flag, search_flag=self.use_search_flag,
+      initial_learning_rate=getattr(self, "initial_learning_rate", None),
+      net_dict=net_desc)
+    self.network.initialize_params(session=self.tf_session)
+
+  @classmethod
+  def create_network(cls, config, rnd_seed, train_flag, eval_flag, search_flag, net_dict, initial_learning_rate=1.0):
+    """
+    :param Config.Config config:
+    :param int rnd_seed:
+    :param bool|tf.Tensor train_flag:
+    :param float initial_learning_rate:
+    :param bool eval_flag:
+    :param bool search_flag:
+    :param dict[str,dict[str]] net_dict:
+    :return: network, updater
+    :rtype: (TFNetwork, Updater|None)
+    """
+    network = TFNetwork(
+      name="root",
+      config=config,
+      rnd_seed=rnd_seed,
       train_flag=train_flag,
-      eval_flag=self.use_eval_flag,
-      search_flag=self.use_search_flag)
-    network.construct_from_dict(net_desc)
-    if train_flag is not False and self.config.list("search_train_network_layers"):
+      eval_flag=eval_flag,
+      search_flag=search_flag)
+    network.construct_from_dict(net_dict)
+    if train_flag is not False and config.list("search_train_network_layers"):
       network.construct_extra_net(
-        net_desc, layer_list=self.config.list("search_train_network_layers"), search_flag=True)
+        net_dict, layer_list=config.list("search_train_network_layers"), search_flag=True)
       print("search train network layers:")
       for layer_name, layer in sorted(network.extra_net.layers.items()):
         print("  layer %s %r #: %s" % (layer.layer_class, layer_name, layer.output.dim), file=log.v2)
@@ -866,16 +888,16 @@ class Engine(object):
       net_params = network.get_params_list()
       for extra_param in network.extra_net.get_params_list():
         assert extra_param in net_params
-    network.initialize_params(session=self.tf_session)
-    network.layers_desc = net_desc
-    self.network = network
-    if self.train_data:
+    network.layers_desc = net_dict
+    updater = None
+    if train_flag is not False:
       # Need to create new Updater because it has the learning_rate var which must be in the current graph.
-      self.updater = Updater(
-        config=self.config, tf_session=self.tf_session, network=network,
-        initial_learning_rate=self.initial_learning_rate)
-      self.updater.set_trainable_vars(network.get_trainable_params())
+      updater = Updater(
+        config=config, network=network,
+        initial_learning_rate=initial_learning_rate)
+      updater.set_trainable_vars(network.get_trainable_params())
     network.print_network_info()
+    return network, updater
 
   def maybe_init_new_network(self, net_desc):
     """
@@ -1008,7 +1030,7 @@ class Engine(object):
              self.learning_rate_control.getEpochErrorDict(last_best_epoch)),
             file=log.v2)
       self.load_model(epoch=last_best_epoch)
-      self.updater.init_optimizer_vars()  # reset the optimizer vars
+      self.updater.init_optimizer_vars(session=self.tf_session)  # reset the optimizer vars
 
   def train_epoch(self):
     print("start", self.get_epoch_str(), "with learning rate", self.learning_rate, "...", file=log.v4)
@@ -1031,7 +1053,7 @@ class Engine(object):
       self.dataset_batches['train'].reset()
     train_batches = self.dataset_batches['train']
 
-    self.updater.set_learning_rate(self.learning_rate)
+    self.updater.set_learning_rate(self.learning_rate, session=self.tf_session)
     trainer = Runner(engine=self, dataset=self.train_data, batches=train_batches, train=True)
     trainer.run(report_prefix=("pre" if self.is_pretrain_epoch() else "") + "train epoch %s" % self.epoch)
 
@@ -1088,13 +1110,14 @@ class Engine(object):
       train = True
       if not self.updater:
         self.updater = Updater(
-          config=self.config, tf_session=self.tf_session, network=self.network,
+          config=self.config, network=self.network,
           initial_learning_rate=self.initial_learning_rate)
         self.updater.set_trainable_vars(self.network.get_trainable_params())
+        self.updater.init_optimizer_vars(session=self.tf_session)
       eval_learning_rate = self.config.get_of_type(
         'eval_learning_rate', float, default=self.config.float('learning_rate', 1.0))
       print("train in eval, learning rate %f" % eval_learning_rate, file=log.v2)
-      self.updater.set_learning_rate(eval_learning_rate)
+      self.updater.set_learning_rate(eval_learning_rate, session=self.tf_session)
     for dataset_name, dataset in self.get_eval_datasets().items():
       if dataset_name not in self.dataset_batches or not dataset.batch_set_generator_cache_whole_epoch():
         self.dataset_batches[dataset_name] = dataset.generate_batches(

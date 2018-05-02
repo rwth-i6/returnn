@@ -52,9 +52,10 @@ def test_Updater_GradientDescent():
   network.add_layer(name="output", layer_class=DummyLayer, initial_value=5.0, loss_value_factor=3.0)
   network.initialize_params(session=session)
 
-  updater = Updater(config=config, tf_session=session, network=network)
-  updater.set_learning_rate(1.0)
+  updater = Updater(config=config, network=network)
+  updater.set_learning_rate(1.0, session=session)
   updater.set_trainable_vars(network.get_trainable_params())
+  updater.init_optimizer_vars(session=session)
   session.run(updater.get_optim_op())
   # One gradient descent step from 3.0 * x: gradient is 3, thus 5 - 3 = 2.
   assert_almost_equal(session.run(network.get_default_output_layer().output.placeholder), 2.0)
@@ -76,9 +77,10 @@ def test_Updater_CustomUpdate():
       return tf.assign_add(var, 13.0)
   CustomUpdateAdd13().set_on_var(layer.x)
 
-  updater = Updater(config=config, tf_session=session, network=network)
-  updater.set_learning_rate(1000.0)  # should be ignored
+  updater = Updater(config=config, network=network)
+  updater.set_learning_rate(1000.0, session=session)  # should be ignored
   updater.set_trainable_vars(network.get_trainable_params())
+  updater.init_optimizer_vars(session=session)
   session.run(updater.get_optim_op())
   # Should have applied CustomUpdateAdd13.
   assert_almost_equal(session.run(network.get_default_output_layer().output.placeholder), 17.0)
@@ -154,9 +156,10 @@ def test_Updater_add_check_numerics_ops():
   network.add_layer(name="output", layer_class=_Layer, initial_value=1.0)
   network.initialize_params(session=session)
 
-  updater = Updater(config=config, tf_session=session, network=network)
-  updater.set_learning_rate(1.0)
+  updater = Updater(config=config, network=network)
+  updater.set_learning_rate(1.0, session=session)
   updater.set_trainable_vars(network.get_trainable_params())
+  updater.init_optimizer_vars(session=session)
   # Should succeed.
   session.run(updater.get_optim_op())
   # One gradient descent step from ln(x), x = 1.0: gradient is 1.0 / x, thus x - 1.0 = 0.0.
