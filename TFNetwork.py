@@ -1345,8 +1345,8 @@ class CustomCheckpointLoader:
     map_list = {
       "lstm_cell/biases": "lstm_cell/bias",
       "lstm_cell/weights": "lstm_cell/kernel",
-      "cudnn/params_canonical/rnn/multi_rnn_cell/cell_0/cudnn_compatible_lstm_cell/bias": "lstm_block_wrapper/bias",
-      "cudnn/params_canonical/rnn/multi_rnn_cell/cell_0/cudnn_compatible_lstm_cell/kernel": "lstm_block_wrapper/kernel",
+      "cudnn/params_canonical/rnn/multi_rnn_cell/cell_0/cudnn_compatible_lstm_cell/bias": "lstm_fused_cell/bias",
+      "cudnn/params_canonical/rnn/multi_rnn_cell/cell_0/cudnn_compatible_lstm_cell/kernel": "lstm_fused_cell/kernel",
     }
 
     print("Variables to restore which are not in checkpoint:", missing_var_names, file=log.v2)

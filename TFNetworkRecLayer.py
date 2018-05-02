@@ -134,7 +134,7 @@ class RecLayer(_ConcatInputLayer):
           batch_dim=self.network.get_data_batch_dim(), name=self.name,
           rec_layer=self) if initial_state is not None else None
         self.cell = self._get_cell(unit, unit_opts=unit_opts)
-        if isinstance(self.cell, (rnn_cell.RNNCell, rnn_contrib.FusedRNNCell)):
+        if isinstance(self.cell, (rnn_cell.RNNCell, rnn_contrib.FusedRNNCell, rnn_contrib.LSTMBlockWrapper)):
           y = self._get_output_cell(self.cell)
         elif cudnn_rnn and isinstance(self.cell, (cudnn_rnn.CudnnLSTM, cudnn_rnn.CudnnGRU)):
           y = self._get_output_cudnn(self.cell)
@@ -280,7 +280,7 @@ class RecLayer(_ConcatInputLayer):
     from TFUtil import is_gpu_available
     from tensorflow.contrib import rnn as rnn_contrib
     import TFNativeOp
-    allowed_types = (rnn_cell.RNNCell, rnn_contrib.FusedRNNCell, TFNativeOp.RecSeqCellOp)
+    allowed_types = (rnn_cell.RNNCell, rnn_contrib.FusedRNNCell, rnn_contrib.LSTMBlockWrapper, TFNativeOp.RecSeqCellOp)
     if is_gpu_available():
       from tensorflow.contrib import cudnn_rnn
       allowed_types += (cudnn_rnn.CudnnLSTM, cudnn_rnn.CudnnGRU)
@@ -327,6 +327,8 @@ class RecLayer(_ConcatInputLayer):
         name = m[name.lower()]
     if name.lower() in ["lstmp", "lstm"]:
       name = cls._default_lstm_unit
+    if name.lower() not in cls._rnn_cells_dict:
+      raise Exception("unknown cell %r. known cells: %r" % (name, sorted(cls._rnn_cells_dict.keys())))
     return cls._rnn_cells_dict[name.lower()]
 
   def _get_input(self):
@@ -389,7 +391,7 @@ class RecLayer(_ConcatInputLayer):
       from tensorflow.contrib import cudnn_rnn
       if issubclass(rnn_cell_class, (cudnn_rnn.CudnnLSTM, cudnn_rnn.CudnnGRU)):
         cell = rnn_cell_class(
-          num_layers=1, num_units=n_hidden, input_size=self.input_data.dim,
+          num_layers=1, num_units=n_hidden,
           input_mode='linear_input', direction='unidirectional', dropout=0.0, **unit_opts)
         return cell
     if issubclass(rnn_cell_class, TFNativeOp.RecSeqCellOp):
@@ -400,7 +402,7 @@ class RecLayer(_ConcatInputLayer):
       return cell
     cell = rnn_cell_class(n_hidden, **unit_opts)
     assert isinstance(
-      cell, (rnn_contrib.RNNCell, rnn_contrib.FusedRNNCell))  # e.g. BasicLSTMCell
+      cell, (rnn_contrib.RNNCell, rnn_contrib.FusedRNNCell, rnn_contrib.LSTMBlockWrapper))  # e.g. BasicLSTMCell
     return cell
 
   def _get_output_cell(self, cell):
@@ -426,7 +428,7 @@ class RecLayer(_ConcatInputLayer):
         cell=cell, inputs=x, time_major=True, sequence_length=seq_len, dtype=tf.float32,
         initial_state=self._initial_state)
       self._last_hidden_state = final_state
-    elif isinstance(cell, rnn_contrib.FusedRNNCell):  # e.g. LSTMBlockFusedCell
+    elif isinstance(cell, (rnn_contrib.FusedRNNCell, rnn_contrib.LSTMBlockWrapper)):  # e.g. LSTMBlockFusedCell
       # Will get (time,batch,ydim).
       y, final_state = cell(
         inputs=x, sequence_length=seq_len, dtype=tf.float32,
@@ -525,6 +527,7 @@ class RecLayer(_ConcatInputLayer):
     if self._direction == -1:
       x = tf.reverse_sequence(x, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
     with tf.variable_scope("cudnn"):
+      cell.build(x.get_shape())
       num_layers = 1
       param_size = self._get_cudnn_param_size(
         num_units=self.output.dim, input_size=self.input_data.dim, rnn_mode=cell._rnn_mode, num_layers=num_layers)
@@ -533,8 +536,8 @@ class RecLayer(_ConcatInputLayer):
       # For the checkpoint save/restore, we will use Cudnn*Saveable, which also makes it easier in CPU mode
       # to import the params for another unit like LSTMBlockCell.
       # Also see: https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/cudnn_rnn/python/kernel_tests/cudnn_rnn_ops_test.py
-      params = tf.Variable(
-        tf.random_uniform([param_size], minval=-0.01, maxval=0.01, seed=42), name="params_raw", trainable=True)
+      params = cell.kernel
+      params.set_shape([param_size])
       if cell._rnn_mode == cudnn_rnn_ops.CUDNN_LSTM:
         fn = cudnn_rnn_ops.CudnnLSTMSaveable
       elif cell._rnn_mode == cudnn_rnn_ops.CUDNN_GRU:
@@ -559,7 +562,7 @@ class RecLayer(_ConcatInputLayer):
       # It's like a fused cell, i.e. operates on the full sequence.
       input_h = tf.zeros((num_layers, n_batch, self.output.dim), dtype=tf.float32)
       input_c = tf.zeros((num_layers, n_batch, self.output.dim), dtype=tf.float32)
-      y, _, _ = cell(x, input_h=input_h, input_c=input_c, params=params)
+      y, _ = cell(x, initial_state=(input_h, input_c))
     if self._direction == -1:
       y = tf.reverse_sequence(y, seq_lengths=seq_len, batch_dim=1, seq_dim=0)
     return y
