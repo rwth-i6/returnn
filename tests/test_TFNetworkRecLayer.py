@@ -1949,6 +1949,72 @@ def test_KenLmStateLayer_dense():
       print("Scores are as expected.")
 
 
+@unittest.skipIf(not is_gpu_available(), "no gpu on this system")
+def test_BlocksparseLSTM_load_params_from_native_lstm():
+  from TFNativeOp import have_blocksparse_requirements, init_blocksparse
+  if not have_blocksparse_requirements():
+    raise unittest.SkipTest("no blocksparse requirements")
+  init_blocksparse()
+
+  random = numpy.random.RandomState(seed=1)
+  num_inputs = 32
+  num_outputs = 63
+  num_outputs_sparse = 256
+  batch_dim = 8
+  seq_len = 5
+
+  with make_scope() as session:
+    print("create graph")
+    tf.set_random_seed(42)
+    src_placeholder = tf.placeholder(tf.float32, (batch_dim, seq_len, num_inputs), name="src_placeholder")
+    seq_len_placeholder = tf.placeholder(tf.int32, (batch_dim,), name="seq_len_placeholder")
+    feed_dict = {
+      src_placeholder: random.uniform(-1.0, 1.0, (batch_dim, seq_len, num_inputs)),
+      seq_len_placeholder: [seq_len] * batch_dim
+    }
+
+    from TFUtil import xavier_initializer, var_creation_scope
+    default_var_initializer = xavier_initializer(seed=13)
+    with tf.variable_scope(tf.get_variable_scope(), initializer=default_var_initializer) as scope:
+      net = TFNetwork(config=Config(), extern_data=ExternData(), train_flag=False)
+      with net.register_network_scope():
+        from TFNetworkLayer import InternalLayer
+        src_layer = InternalLayer(name='src', network=net, output=Data(
+          'src', shape=(None, num_inputs), placeholder=src_placeholder, size_placeholder={0: seq_len_placeholder}))
+        print("source layer:", src_layer)
+        with tf.name_scope("nativelstm"):
+          layer1 = RecLayer(
+            name='nativelstm', network=net, output=Data("out", shape=(None, num_outputs)), sources=[src_layer],
+            unit='NativeLSTM2')
+        with tf.name_scope("blocksparselstm"):
+          layer2 = RecLayer(
+            name='blocksparselstm', network=net, output=Data("out", shape=(None, num_outputs_sparse)),
+            sources=[src_layer],
+            unit='BlocksparseLSTM',
+            unit_opts={'seed': 5, 'connectivity': 1, 'connectivity_dense': 2, 'layer_norm': False})
+        y1 = layer1.output.get_placeholder_as_batch_major()
+        y2 = layer2.output.get_placeholder_as_batch_major()
+
+    print("run")
+    session.run(tf.global_variables_initializer())
+    native_lstm_params = layer1.get_param_values_dict(session=session)
+    np_y1 = session.run(y1, feed_dict=feed_dict)
+    assert np_y1.shape == (batch_dim, seq_len, num_outputs)
+    print('native output:')
+    print(np_y1)
+    bsmm_cell = layer2.cell
+    assert isinstance(bsmm_cell, BlocksparseLSTMCell)
+    for param in layer2.params.values():
+      print('blocksparse LSTM param:', param)
+      assert isinstance(param, tf.Variable)
+      param.load(numpy.zeros(param.get_shape().as_list(), dtype='float32'), session=session)
+    bsmm_cell.load_params_from_native_lstm(native_lstm_params, session=session)
+    np_y2 = session.run(y2, feed_dict=feed_dict)
+    assert np_y2.shape == (batch_dim, seq_len, num_outputs_sparse)
+    np_y2 = np_y2[:, :, :num_outputs]
+    assert_almost_equal(np_y1, np_y2)
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()

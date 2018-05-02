@@ -3810,6 +3810,44 @@ class BlocksparseLSTMCell(_WrapBaseCell):
         print('  %s: dense' % d["weights"], file=log.v4)
     return y
 
+  def load_params_from_native_lstm(self, values_dict, session):
+    """
+    :param tf.Session session:
+    :param dict[str,numpy.ndarray] values_dict:
+    """
+    assert set(values_dict.keys()) == {"W", "W_re", "b"}
+    assert len(self.cell.linear.matmuls) == 2
+    m1, m2 = self.cell.linear.matmuls
+    assert m1["bsmm"] and m2["bsmm"], 'both sparse'
+    w_ff = values_dict["W"]
+    w_re = values_dict["W_re"]
+    w_b = values_dict["b"]
+    assert w_ff.shape[-1] == w_re.shape[-1] == w_b.shape[-1]
+    assert w_ff.shape[-1] % 4 == 0
+    old_dim = w_ff.shape[-1] // 4
+    assert m1["bias"].get_shape().dims[-1].value % 4 == 0
+    new_dim = m1["bias"].get_shape().dims[-1].value // 4
+    assert new_dim > old_dim
+    bsize = m1["bsmm"].bsize
+    assert bsize == m2["bsmm"].bsize
+    assert new_dim % bsize == 0
+    assert m1["bsmm"].KB == new_dim * 4 // bsize
+    assert m2["bsmm"].CB == new_dim // bsize
+    assert m2["bsmm"].KB == new_dim * 4 // bsize
+
+    for w_old, m in ((w_ff, m1), (w_re, m2)):
+      w_new = session.run(m["weights"])
+      assert w_new.shape == (m["bsmm"].blocks, bsize, bsize)
+      m["bsmm"].np_update_parts(w_new, w_old, last_dim_num_splits=4)
+      m["weights"].load(w_new, session=session)
+
+    b_old = w_b
+    b_new = session.run(m1["bias"])
+    assert b_new.shape == (new_dim * 4,)
+    for gate_idx in range(4):
+      b_new[gate_idx * new_dim:gate_idx * new_dim + old_dim] = b_old[gate_idx * old_dim:(gate_idx + 1) * old_dim]
+    m1["bias"].load(b_new, session=session)
+
 
 class BlocksparseMultiplicativeMultistepLSTMCell(_WrapBaseCell):
   """
