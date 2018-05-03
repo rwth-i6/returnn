@@ -1306,10 +1306,77 @@ class CustomCheckpointLoader:
     self.params_prefix = params_prefix
     self.net_vars = [v for v in self.saveable_params if isinstance(v, tf.Variable)]
     self.net_saveables = [v for v in self.saveable_params if not isinstance(v, tf.Variable)]
+    # All variables in the checkpoint:
     self.var_ckpt_names = set(self.reader.get_variable_to_shape_map())
+    # All variables of the model to be loaded:
     self.var_net_names = set([self._get_param_name(v) for v in self.saveable_params])
+    # Model variables missing in the checkpoint:
     self.missing_var_names = [v for v in sorted(self.var_net_names) if v not in self.var_ckpt_names]
+    # Checkpoint variables which are not used in this model:
     self.obsolete_var_names = [v for v in sorted(self.var_ckpt_names) if v not in self.var_net_names]
+    self.custom_param_importers = [
+      self.CustomParamImporter(layer=layer, checkpoint_loader=self)
+      for layer in network.layers.values() if layer.custom_param_importer] if network else []
+
+  class CustomParamImporter:
+    def __init__(self, layer, checkpoint_loader):
+      """
+      :param LayerBase layer:
+      :param CustomCheckpointLoader checkpoint_loader:
+      """
+      self.layer = layer
+      self.prefix_param_name = layer.get_absolute_name_scope_prefix()
+      self.checkpoint_param_names = []
+      prefix = self.prefix_param_name
+      # Collect checkpoint params, and remove them from the lists.
+      for name in list(checkpoint_loader.var_ckpt_names):
+        if name.startswith(prefix):
+          checkpoint_loader.var_ckpt_names.remove(name)
+          self.checkpoint_param_names.append(name[len(prefix):])
+      # Don't treat any of them as missing.
+      for name in list(checkpoint_loader.missing_var_names):
+        if name.startswith(prefix):
+          checkpoint_loader.missing_var_names.remove(name)
+      # Also not obsolete.
+      for name in list(checkpoint_loader.obsolete_var_names):
+        if name.startswith(prefix):
+          checkpoint_loader.obsolete_var_names.remove(name)
+      # When we load the params, we need this.
+      self.reader = checkpoint_loader.reader
+      self.assigned = False
+
+    def __repr__(self):
+      return "<CustomParamImporter %r on layer %r>" % (self.layer.custom_param_importer, self.layer.name)
+
+    def assign_var(self, var, session):
+      """
+      :param tf.Variable var:
+      :param tf.Session session:
+      """
+      # This function gets called for every param of the layer.
+      # However, the underlying custom_param_importer API
+      # will assign all the layer params together,
+      # so we want to call it exactly once.
+      if self.assigned:
+        return
+      self.assigned = True
+      values_dict = {
+        name: self.reader.get_tensor(self.prefix_param_name + name)
+        for name in self.checkpoint_param_names}
+      self.reader = None  # Allow GC now, we do not need it anymore.
+      print("Custom param import of layer %r with original params %r." % (
+        self.layer, sorted(values_dict.keys())), file=log.v3)
+      self.layer.set_param_values_by_dict(values_dict=values_dict, session=session)
+
+  def _find_custom_param_importer(self, v_name):
+    """
+    :param str v_name:
+    :rtype: CustomParamImporter|None
+    """
+    for importer in self.custom_param_importers:
+      if v_name.startswith(importer.prefix_param_name):
+        return importer
+    return None
 
   def _get_param_name(self, v):
     """
@@ -1325,19 +1392,39 @@ class CustomCheckpointLoader:
       v_name = v_name[len(self.params_prefix):]
     return v_name
 
+  class VariableValue:
+    def __init__(self, value=None, custom_param_importer=None):
+      """
+      :param numpy.ndarray|None value:
+      :param CustomCheckpointLoader.CustomParamImporter custom_param_importer:
+      """
+      assert value is not None or custom_param_importer
+      self.value = value
+      self.custom_param_importer = custom_param_importer
+
+    def assign_var(self, var, session):
+      """
+      :param tf.Variable var:
+      :param tf.Session session:
+      """
+      if self.value is not None:
+        VariableAssigner(var=var).assign(value=self.value, session=session)
+      else:
+        self.custom_param_importer.assign_var(var=var, session=session)
+
   def get_variable_value_map(self):
     """
     :return: var -> numpy array
-    :rtype: dict[tf.Variable,numpy.ndarray]
+    :rtype: dict[tf.Variable,CustomCheckpointLoader.VariableValue]
     """
     variable_values = {}
-    if not self.missing_var_names:
+    if not self.missing_var_names and not self.custom_param_importers:
       # Fast path.
       for v in self.saveable_params:
         assert isinstance(v, tf.Variable), "not yet implemented otherwise..."
         v_name = self._get_param_name(v)
         value = self.reader.get_tensor(v_name)
-        variable_values[v] = value
+        variable_values[v] = self.VariableValue(value=value)
       return variable_values
 
     reader = self.reader
@@ -1455,16 +1542,19 @@ class CustomCheckpointLoader:
     if not could_not_find_map_list:
       # We can restore all.
       print("We found these corresponding variables in the checkpoint:", var_name_map, file=log.v2)
+      print("Custom param importers:", self.custom_param_importers, file=log.v2)
       print("Loading now...", file=log.v3)
       # Similar: from tensorflow.contrib.framework.python.ops import assign_from_checkpoint
       for v in self.saveable_params:
         assert isinstance(v, tf.Variable), "not yet implemented otherwise..."
         v_name = self._get_param_name(v)  # current name
-        if v_name in var_ckpt_names:
-          value = reader.get_tensor(v_name)
+        custom_importer = self._find_custom_param_importer(v_name)
+        if custom_importer:
+          variable_values[v] = self.VariableValue(custom_param_importer=custom_importer)
+        elif v_name in var_ckpt_names:
+          variable_values[v] = self.VariableValue(value=reader.get_tensor(v_name))
         else:
-          value = var_name_map[v_name]()
-        variable_values[v] = value
+          variable_values[v] = self.VariableValue(value=var_name_map[v_name]())
       print("Successfully loaded all variables. Any new save will use the updated variable names.", file=log.v3)
       return variable_values
 
@@ -1505,7 +1595,7 @@ class CustomCheckpointLoader:
     :return: nothing, will assign the variables in the session
     """
     for var, value in self.get_variable_value_map().items():
-      VariableAssigner(var=var).assign(value=value, session=session)
+      value.assign_var(var=var, session=session)
 
   def set_as_custom_init(self):
     var_value_map = self.get_variable_value_map()
@@ -1524,7 +1614,7 @@ class CustomCheckpointLoader:
         assert var not in read_vars, "Cannot initialize this twice. On purpose, to free memory."
         read_vars.add(var)
         value = var_value_map.pop(var)
-        VariableAssigner(var).assign(value=value, session=session)
+        value.assign_var(var=var, session=session)
 
       return var_post_init
 

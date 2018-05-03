@@ -526,6 +526,11 @@ class LayerBase(object):
     :param str|None copy_param_mode:
     :param tf.Session session:
     """
+    if callable(self.custom_param_importer):
+      self.custom_param_importer(layer=self, values_dict=values_dict, session=session)
+      return
+    if self.custom_param_importer:
+      copy_param_mode = self.custom_param_importer
     assert copy_param_mode in [None, "ifpossible", "subset"]
     if copy_param_mode:
       ignore_wrong_shape = True
