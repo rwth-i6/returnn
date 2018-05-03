@@ -1896,10 +1896,6 @@ class SampledSoftmax(_ConcatInputLayer):
 
     # Create variables we need (i.e. bias and weight terms)
     with self.var_creation_scope():
-      # Our Theano default: normal distribution, std_dev = sqrt(12. / (fan_in + fan_out))
-      # glorot_normal = variance_scaling_initializer(scale=1.0, mode="fan_avg", distribution="normal")
-      #  -> std_dev = sqrt(2. / (fan_in + fan_out)).
-      #  Or use VarianceScaling(scale=6.0, mode="fan_avg", distribution="normal") to get the same as in Theano.
       fwd_weights_initializer = get_initializer(
         forward_weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
 
@@ -1910,7 +1906,6 @@ class SampledSoftmax(_ConcatInputLayer):
       #   shape has to be the other way around.
       self.W = self.add_param(tf.get_variable(
         name="W", shape=(n_out, n_in), dtype=tf.float32, initializer=fwd_weights_initializer))
-
       bias_initializer = get_initializer(
         bias_init, seed=self.network.random.randint(2 ** 31) if bias_init else 0, eval_local_ns={"layer": self})
       self.b = self.add_param(tf.get_variable(
@@ -1918,31 +1913,45 @@ class SampledSoftmax(_ConcatInputLayer):
 
     # Linear layer plus softmax activation
     with tf.name_scope("linear"):
-      x = input_data.placeholder
-      ndim = x.get_shape().ndims
+      def fn_train():
+        x = tf.ones_like(input_data.placeholder)
+        return x
 
-      from TFUtil import dot
-      if self.input_data.sparse:
-        if x.dtype in [tf.uint8, tf.int8, tf.uint16, tf.int16]:
-          x = tf.cast(x, tf.int32)
+      def fn_eval():
+        x = self.input_data.placeholder
+        ndim = x.get_shape().ndims
 
-        # Consult note to shape of self.W for reasons for "tf.transpose(..)"
-        x = tf.nn.embedding_lookup(tf.transpose(self.W), x)
-        ndim += 1
-      else:
-        # Consult note to shape of self.W for reasons for "tf.transpose(..)"
-        x = dot(tf.transpose(self.W), x)
-      x = tf.add(x, self.b, name="add_bias")
-      assert x.get_shape().ndims == ndim
+        from TFUtil import dot
+        if self.input_data.sparse:
+          if x.dtype in [tf.uint8, tf.int8, tf.uint16, tf.int16]:
+            x = tf.cast(x, tf.int32)
+          x = tf.nn.embedding_lookup(tf.transpose(self.W), x)
+          ndim += 1
+        else:
+          x = dot(x, tf.transpose(self.W))
 
-      # perform softmax output
-      from tensorflow.python.ops.nn_ops import softmax
-      self.output_before_activation = OutputWithActivation(x, act_func=softmax)
-      x = self.output_before_activation.y
+        assert x.get_shape().ndims == ndim
+        return x
+
+      # branch for calculation of x into train and eval mode
+      x = self.network.cond_on_train(fn_train, fn_eval)
+
+      # Make an empty OutputWithActivation object to store components individually
+      self.output_before_activation = OutputWithActivation(None,None)
+      self.output_before_activation.x = x
+
+      def fn_eval_activation():
+        from tensorflow.python.ops.nn_ops import softmax
+        self.output_before_activation.act_func = softmax
+        with tf.name_scope("activation"):
+          return softmax(self.output_before_activation.x)
+
+      # perform softmax output if in eval mode
+      self.output_before_activation.y = self.network.cond_on_train(lambda: x, fn_eval_activation)
 
       assert self.output.batch_dim_axis == self.input_data.batch_dim_axis
       assert self.output.time_dim_axis == self.input_data.time_dim_axis
-      self.output.placeholder = x
+      self.output.placeholder = self.output_before_activation.y
 
 
 class SoftmaxOverSpatialLayer(_ConcatInputLayer):
