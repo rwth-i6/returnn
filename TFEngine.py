@@ -1088,6 +1088,36 @@ class Engine(object):
     return " ".join(["%s %s" % (key.split(':', 2)[-1], str(score[key]))
                      for key in sorted(score.keys())])
 
+  def _maybe_prepare_train_in_eval(self, targets_via_search=False):
+    """
+    :param bool targets_via_search:
+    :return: whether train in eval should be used
+    :rtype: bool
+    """
+    if not self.config.get_of_type("train_in_eval", bool, False):
+      return False
+    if targets_via_search:
+      # TODO. This will require a new network.
+      # TFNetwork construct_extra_net also does not quite work for this.
+      # We need to create a new net, where we set the search as the targets.
+      raise NotImplementedError
+    # We update the model params in-place.
+    # In training, we don't want that, because it should not use the validation data.
+    # We could reset it later when continuing the training, but it's not implemented.
+    assert self.config.value('task', 'train') != 'train', (
+      "task %r should be just 'eval' or so. training will break." % self.config.value('task', None))
+    if not self.updater:
+      self.updater = Updater(
+        config=self.config, network=self.network,
+        initial_learning_rate=self.initial_learning_rate)
+      self.updater.set_trainable_vars(self.network.get_trainable_params())
+      self.updater.init_optimizer_vars(session=self.tf_session)
+    eval_learning_rate = self.config.get_of_type(
+      'eval_learning_rate', float, default=self.config.float('learning_rate', 1.0))
+    print("train in eval, learning rate %f" % eval_learning_rate, file=log.v2)
+    self.updater.set_learning_rate(eval_learning_rate, session=self.tf_session)
+    return True
+
   def eval_model(self, output_file=None):
     """
     Eval the current model on the eval datasets (dev + eval, whatever is set).
@@ -1100,24 +1130,7 @@ class Engine(object):
     self.network.get_all_errors()
     results = {}
     eval_dump_str = []
-    train = False
-    if self.config.get_of_type("train_in_eval", bool, False):
-      # We update the model params in-place.
-      # In training, we don't want that, because it should not use the validation data.
-      # We could reset it later when continuing the training, but it's not implemented.
-      assert self.config.value('task', 'train') != 'train', (
-        "task %r should be just 'eval' or so. training will break." % self.config.value('task', None))
-      train = True
-      if not self.updater:
-        self.updater = Updater(
-          config=self.config, network=self.network,
-          initial_learning_rate=self.initial_learning_rate)
-        self.updater.set_trainable_vars(self.network.get_trainable_params())
-        self.updater.init_optimizer_vars(session=self.tf_session)
-      eval_learning_rate = self.config.get_of_type(
-        'eval_learning_rate', float, default=self.config.float('learning_rate', 1.0))
-      print("train in eval, learning rate %f" % eval_learning_rate, file=log.v2)
-      self.updater.set_learning_rate(eval_learning_rate, session=self.tf_session)
+    train = self._maybe_prepare_train_in_eval()
     for dataset_name, dataset in self.get_eval_datasets().items():
       if dataset_name not in self.dataset_batches or not dataset.batch_set_generator_cache_whole_epoch():
         self.dataset_batches[dataset_name] = dataset.generate_batches(
@@ -1611,8 +1624,9 @@ class Engine(object):
               (beam_scores[i][b], dataset.serialize_data(key=target_key, data=output[out_idx + b]))
               for b in range(out_beam_size)]
 
+    train = self._maybe_prepare_train_in_eval(targets_via_search=True)
     runner = Runner(
-      engine=self, dataset=dataset, batches=batches, train=False, eval=do_eval,
+      engine=self, dataset=dataset, batches=batches, train=train, eval=do_eval,
       extra_fetches={
         "output": output_layer,
         "beam_scores": output_layer_beam_scores,

@@ -340,6 +340,7 @@ class TFNetwork(object):
     The purpose is to create another net like `self` but with different flags,
     e.g. with `search_flag = True`.
     That `extra_net` can have different losses, which will be added.
+    It will not recreate any already existing layers.
 
     :param dict[str,dict[str]] net_dict:
     :param list[str] layer_list:
@@ -353,6 +354,8 @@ class TFNetwork(object):
         extra_parent_net=self)
 
     def extra_get_layer(layer_name):
+      # Do not recreate layers which exist in the main net.
+      # Only construct not-yet-existing layers.
       if layer_name in self.extra_net.layers:
         return self.extra_net.layers[layer_name]
       if layer_name in self.layers:
@@ -1234,7 +1237,7 @@ class LayerNotFound(Exception):
 
 def help_on_tf_exception(exception, feed_dict, meta_step_info, extern_data, file=sys.stdout):
   """
-  :param tf.errors.OpError exception:
+  :param tf.errors.OpError|BaseException exception:
   :param dict[tf.Tensor,numpy.ndarray] feed_dict:
   :param dict[str] meta_step_info:
   :param ExternData extern_data:
