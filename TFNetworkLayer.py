@@ -12,7 +12,7 @@ from Log import log
 class LayerBase(object):
   """
   This is the base class for all layers.
-  Every layer by default has a list of source layers `sources` and defines `self.output` which is of type Data.
+  Every layer by default has a list of source layers `sources` and defines `self.output` which is of type :class:`Data`.
   It shares some common functionality across all layers, such as explicitly defining the output format,
   some parameter regularization, and more.
 
@@ -58,6 +58,10 @@ class LayerBase(object):
                custom_param_importer=None,
                register_as_extern_data=None):
     """
+    Usually the arguments, when specified in the network dict,
+    are going through :func:`transform_config_dict`, before they are passed to here.
+    See :func:`TFNetwork.construct_from_dict`.
+
     :param str name:
     :param TFNetwork.TFNetwork network:
     :param Data output:
@@ -67,7 +71,11 @@ class LayerBase(object):
     :param str|None target: if some loss is set, this is the target data-key, i.e. network.extern_data.get_data(target)
       alternatively, this also can be a layer name.
     :param str|None size_target: like target but this is only used to set our output size in case of training
-    :param Loss|None loss: via self.transform_config_dict()
+    :param Loss|None loss: via :func:`transform_config_dict`.
+      Every layer can have one loss (of type :class:`Loss`), or none loss.
+      In the net dict, it is specified as a string.
+      In :class:`TFNetwork`, all losses from all layers will be collected.
+      That is what :class:`TFUpdater.Updater` will use for training.
     :param float loss_scale: scale factor for loss (1.0 by default)
     :param ReuseParams|None reuse_params: if given, will opt reuse the params. see :func:`self.var_creation_scope`
     :param float|None L2: for constraints
@@ -306,6 +314,12 @@ class LayerBase(object):
     Will modify `d` inplace such that it becomes the kwargs for `self.__init__()`.
     Mostly leaves `d` as-is.
     This is used by :func:`TFNetwork.construct_from_dict`.
+    It resolves certain arguments,
+    e.g. it resolves the `"from"` argument which is a list of strings,
+    to make it the `"sources"` argument in kwargs, with a list of :class:`LayerBase` instances.
+    Subclasses can extend/overwrite this.
+    Usually the only reason to overwrite this is when some argument might be a reference to a layer
+    which should be resolved.
     """
     src_names = d.pop("from", ["data"])
     if not isinstance(src_names, (list, tuple)):
@@ -1466,7 +1480,7 @@ def concat_sources_with_opt_dropout(src_layers, dropout=0):
 class _ConcatInputLayer(LayerBase):
   """
   Base layer which concatenates all incoming source layers in the feature dimension,
-  and provides that as `self.input_data`.
+  and provides that as `self.input_data`, which is of type :class:`Data`.
   This is the most common thing what many layers do with the input sources.
   If there is only a single source, will not do anything.
   This layer also optionally can do dropout on the input.
