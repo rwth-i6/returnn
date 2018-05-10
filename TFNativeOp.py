@@ -832,11 +832,12 @@ def have_blocksparse_requirements():
   return True
 
 
-def init_blocksparse():
+def init_blocksparse(with_native_module=True):
   import TFUtil
-  assert TFUtil.is_gpu_available(), "we currently need a GPU"
-  min_compute_capability = TFUtil.get_available_gpu_min_compute_capability()
-  assert min_compute_capability and min_compute_capability >= 3.5, "we need at least compute capability 3.5"
+  if with_native_module:
+    assert TFUtil.is_gpu_available(), "we currently need a GPU"
+    min_compute_capability = TFUtil.get_available_gpu_min_compute_capability()
+    assert min_compute_capability and min_compute_capability >= 3.5, "we need at least compute capability 3.5"
   path = os.path.dirname(__file__) + "/extern/blocksparse"
   assert os.path.exists(path), "maybe submodule not checked out?"
   import sys
@@ -844,8 +845,9 @@ def init_blocksparse():
     # At the beginning, to make sure we find it firs.t
     sys.path.insert(0, path)
   # test it
-  from blocksparse import op_module
-  op_module.get_module()
+  if with_native_module:
+    from blocksparse import op_module
+    op_module.get_module()
 
 
 def demo():

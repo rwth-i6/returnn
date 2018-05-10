@@ -3786,13 +3786,16 @@ class BlocksparseLSTMCell(_WrapBaseCell):
 
   def __init__(self, *args, **kwargs):
     from TFNativeOp import init_blocksparse
-    init_blocksparse()
+    init_blocksparse(with_native_module=not kwargs.get("always_dense", False))
     from blocksparse.lstm import BlocksparseLSTMCell as CellImpl
     self.cell_type = CellImpl
     kwargs = kwargs.copy()
     if kwargs.get('is_training', None) is None:
       from TFNetwork import TFNetwork
       kwargs['is_training'] = TFNetwork.get_current_network().train_flag
+    from TFUtil import is_gpu_available
+    if not is_gpu_available():
+      kwargs.setdefault("fast_layer_norm", False)
     super(BlocksparseLSTMCell, self).__init__(*args, **kwargs)
 
   def call(self, *args, **kwargs):
@@ -3864,24 +3867,27 @@ class BlocksparseMultiplicativeMultistepLSTMCell(_WrapBaseCell):
 
   def __init__(self, *args, **kwargs):
     from TFNativeOp import init_blocksparse
-    init_blocksparse()
+    init_blocksparse(with_native_module=not kwargs.get("always_dense", False))
     from blocksparse.lstm import BlocksparseMultiplicativeMultistepLSTMCell as CellImpl
     self.cell_type = CellImpl
     kwargs = kwargs.copy()
     if kwargs.get('is_training', None) is None:
       from TFNetwork import TFNetwork
       kwargs['is_training'] = TFNetwork.get_current_network().train_flag
+    from TFUtil import is_gpu_available
+    if not is_gpu_available():
+      kwargs.setdefault("fast_layer_norm", False)
     super(BlocksparseMultiplicativeMultistepLSTMCell, self).__init__(*args, **kwargs)
 
   def call(self, *args, **kwargs):
     y = super(BlocksparseMultiplicativeMultistepLSTMCell, self).call(*args, **kwargs)
     from blocksparse.lstm import BlocksparseMultiplicativeMultistepLSTMCell as CellImpl
-    from blocksparse.matmul import BlocksparseMatMul
     assert isinstance(self.cell, CellImpl)
     print("BlocksparseMultiplicativeMultistepLSTMCell, matmuls:", file=log.v4)
     for d in self.cell.linear.matmuls:
       bsmm = d["bsmm"]
       if bsmm:
+        from blocksparse.matmul import BlocksparseMatMul
         assert isinstance(bsmm, BlocksparseMatMul)
         print('  %s: sparsity %.4f%%' % (d["weights"], 100.0 - 100.0 * bsmm.sparsity), file=log.v4)
       else:
