@@ -1950,19 +1950,10 @@ class SampledSoftmax(_ConcatInputLayer):
       # branch for calculation of x into train and eval mode
       x = self.network.cond_on_train(fn_train, fn_eval)
 
-      # Make an empty OutputWithActivation object to store components individually
-      self.output_before_activation = OutputWithActivation(None,None)
-      self.output_before_activation.x = x
-
-      def fn_eval_activation():
-        from tensorflow.python.ops.nn_ops import softmax
-        self.output_before_activation.act_func = softmax
-        with tf.name_scope("activation"):
-          return softmax(self.output_before_activation.x)
+      from tensorflow.python.ops.nn_ops import softmax
+      self.output_before_activation = OutputWithActivation(x,softmax)
 
       # perform softmax output if in eval mode
-      self.output_before_activation.y = self.network.cond_on_train(lambda: x, fn_eval_activation)
-
       assert self.output.batch_dim_axis == self.input_data.batch_dim_axis
       assert self.output.time_dim_axis == self.input_data.time_dim_axis
       self.output.placeholder = self.output_before_activation.y
@@ -5575,10 +5566,14 @@ class SampledSoftmaxLoss(Loss):
     assert self.target.ndim_dense == self.output.ndim_dense
 
     with tf.name_scope("loss_sampled_softmax"):
-
       # The function that is called for the training branch
       def train_fn():
-        labels = tf.expand_dims(self.target.get_placeholder_flattened(), 1)
+        labels = self.target_flat
+        labels = tf.expand_dims(labels, 1)
+
+        # labels = tf.reshape(self.target.placeholder, [-1])
+        # labels = tf.expand_dims(labels, 1)
+
         from tensorflow.python.framework import dtypes
         from tensorflow.python.ops import candidate_sampling_ops, math_ops
 
