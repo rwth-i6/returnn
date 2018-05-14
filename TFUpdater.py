@@ -241,8 +241,18 @@ class Updater(object):
     grads_and_vars = self.optimizer.compute_gradients(
       loss, var_list=trainable_vars_for_gradients,
       aggregation_method=aggregation_method)
-    if not [v for g, v in grads_and_vars if g is not None]:
+    var_grads = {var: grad for (grad, var) in grads_and_vars if grad is not None}
+    if not var_grads:
       raise Exception("no single variable to train")
+    if self.config.float("maximize_grad_norm", 0):
+      f = self.config.float("maximize_grad_norm", 0)
+      grad_norm = tf.add_n([tf.nn.l2_loss(g) for g in var_grads.values()], name="grad_norm_half") * 2.0
+      loss_ext = grad_norm * (-f)
+      grads_and_vars_ext = self.optimizer.compute_gradients(
+        loss_ext, var_list=list(var_grads.keys()),
+        aggregation_method=aggregation_method)
+      var_grads_ext = {var: grad for (grad, var) in grads_and_vars_ext if grad is not None}
+      grads_and_vars = [(grad + var_grads_ext.get(var, 0.0), var) for (grad, var) in grads_and_vars]
     if accum_grad_multiple_num_steps >= 1:
       grads_and_vars = [
         (accum_grad_multiple_step(
