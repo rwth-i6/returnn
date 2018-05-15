@@ -41,6 +41,7 @@ class RecLayer(_ConcatInputLayer):
                forward_weights_init=None, recurrent_weights_init=None, bias_init=None,
                optimize_move_layers_out=None,
                cheating=False,
+               unroll=False,
                **kwargs):
     """
     :param str|dict[str,dict[str]] unit: the RNNCell/etc name, e.g. "nativelstm". see comment below.
@@ -56,6 +57,7 @@ class RecLayer(_ConcatInputLayer):
     :param str bias_init: see :func:`TFUtil.get_initializer`
     :param bool|None optimize_move_layers_out: will automatically move layers out of the loop when possible
     :param bool cheating: make targets available, and determine length by them
+    :param bool unroll: if possible, unroll the loop (implementation detail)
     """
     super(RecLayer, self).__init__(**kwargs)
     import re
@@ -78,6 +80,7 @@ class RecLayer(_ConcatInputLayer):
       optimize_move_layers_out = self.network.get_config().bool("optimize_move_layers_out", True)
     self._optimize_move_layers_out = optimize_move_layers_out
     self._cheating = cheating
+    self._unroll = unroll
     self._sub_loss = None
     self._sub_error = None
     self._sub_loss_normalization_factor = None
@@ -413,7 +416,6 @@ class RecLayer(_ConcatInputLayer):
     """
     from tensorflow.python.ops import rnn
     from tensorflow.contrib import rnn as rnn_contrib
-    assert self._max_seq_len is None
     assert self.input_data
     assert not self.input_data.sparse
     x, seq_len = self._get_input()
@@ -423,13 +425,23 @@ class RecLayer(_ConcatInputLayer):
       with tf.variable_scope(tf.get_variable_scope(), initializer=self._fwd_weights_initializer):
         x = cell.get_input_transformed(x)
     if isinstance(cell, rnn_cell.RNNCell):  # e.g. BasicLSTMCell
-      # Will get (time,batch,ydim).
-      y, final_state = rnn.dynamic_rnn(
-        cell=cell, inputs=x, time_major=True, sequence_length=seq_len, dtype=tf.float32,
-        initial_state=self._initial_state)
+      if self._unroll:
+        assert self._max_seq_len is not None
+        y, final_state = rnn.static_rnn(
+          cell=cell, dtype=tf.float32,
+          inputs=tf.unstack(x, axis=0, num=self._max_seq_len), sequence_length=seq_len,
+          initial_state=self._initial_state)
+        y = tf.stack(y, axis=0)[:tf.maximum(tf.reduce_max(seq_len), self._max_seq_len)]
+      else:
+        # Will get (time,batch,ydim).
+        assert self._max_seq_len is None
+        y, final_state = rnn.dynamic_rnn(
+          cell=cell, inputs=x, time_major=True, sequence_length=seq_len, dtype=tf.float32,
+          initial_state=self._initial_state)
       self._last_hidden_state = final_state
     elif isinstance(cell, (rnn_contrib.FusedRNNCell, rnn_contrib.LSTMBlockWrapper)):  # e.g. LSTMBlockFusedCell
       # Will get (time,batch,ydim).
+      assert self._max_seq_len is None
       y, final_state = cell(
         inputs=x, sequence_length=seq_len, dtype=tf.float32,
         initial_state=self._initial_state)
