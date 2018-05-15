@@ -1,5 +1,5 @@
 
-from __future__ import print_function
+from __future__ import print_function, division
 
 import tensorflow as tf
 from tensorflow.python.client import device_lib
@@ -1838,6 +1838,76 @@ def xavier_initializer(uniform=True, seed=None, dtype=tf.float32):
   from tensorflow.python.ops import init_ops
   return init_ops.variance_scaling_initializer(
     scale=1.0, mode='fan_avg', distribution="uniform" if uniform else "normal", seed=seed, dtype=dtype)
+
+
+def wrap_distribution_non_zero(x, zero_limit, limit):
+  """
+  :param tf.Tensor x: values in [-limit,limit]
+  :param float zero_limit:
+  :param float limit:
+  :return: same shape as x.
+    rescale and shifts such that values from [-zero_limit,zero_limit] are excluded.
+    still values are in [-limit,limit].
+  :rtype: tf.Tensor
+  """
+  assert limit > 0 and limit > zero_limit > 0
+  # Rescale the range [0,limit] to [zero_limit,limit] (and same in negative).
+  x_rescaled = x * ((limit - zero_limit) / limit)
+  shift = tf.ones_like(x) * zero_limit
+  return x_rescaled + tf.where(tf.greater_equal(x, 0.0), shift, -shift)
+
+
+class VarianceScalingNonZero(tf.initializers.variance_scaling):
+  """
+  Same as :class:`tf.VarianceScaling`, i.e. truncated normal or uniform from [-limit,limit] for some limit,
+  except that we exclude the range [-limit*non_zero_fraction,limit*non_zero_fraction].
+  non_zero_fraction=0 would yield no difference.
+
+  For reference, to get the behavior of glorot_uniform, use these args:
+    mode="fan_avg", distribution="uniform"
+  """
+
+  def __init__(self, non_zero_fraction=0.5, **kwargs):
+    super(VarianceScalingNonZero, self).__init__(**kwargs)
+    assert 0 <= non_zero_fraction <= 1
+    self.non_zero_fraction = non_zero_fraction
+
+  def __call__(self, shape, dtype=None, partition_info=None):
+    """
+    :param tuple[int] shape:
+    :param tf.DType dtype:
+    :param partition_info:
+    :rtype: tf.Tensor
+    """
+    import numpy
+    from tensorflow.python.ops import init_ops
+    if dtype is None:
+      dtype = self.dtype
+    scale = self.scale
+    scale_shape = shape
+    if partition_info is not None:
+      scale_shape = partition_info.full_shape
+    fan_in, fan_out = init_ops._compute_fans(scale_shape)
+    if self.mode == "fan_in":
+      scale /= max(1., fan_in)
+    elif self.mode == "fan_out":
+      scale /= max(1., fan_out)
+    else:
+      assert self.mode == "fan_avg"
+      scale /= max(1., (fan_in + fan_out) / 2.)
+    if self.distribution == "normal":
+      stddev = numpy.sqrt(scale)
+      limit = stddev * 2
+      x = tf.truncated_normal(shape, mean=0.0, stddev=stddev, dtype=dtype, seed=self.seed)
+    else:
+      assert self.distribution == "uniform"
+      limit = numpy.sqrt(3.0 * scale)
+      x = tf.random_uniform(shape, minval=-limit, maxval=limit, dtype=dtype, seed=self.seed)
+    x = wrap_distribution_non_zero(x, zero_limit=self.non_zero_fraction * limit, limit=limit)
+    return x
+
+
+variance_scaling_non_zero_initializer = VarianceScalingNonZero
 
 
 def load_txt_file_initializer(filename, dtype=tf.float32):

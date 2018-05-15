@@ -173,6 +173,11 @@ def test_get_initializer_gauss():
   assert_equal(session.run(v).shape, shape)  # returns some random matrix
 
 
+def test_wrap_distribution_non_zero():
+  assert_almost_equal(session.run(wrap_distribution_non_zero(0.1, zero_limit=0.5, limit=2.)), 0.575)
+  assert_almost_equal(session.run(wrap_distribution_non_zero(-0.1, zero_limit=0.5, limit=2.)), -0.575)
+
+
 def test_close_event_writer_thread():
   import threading
   import tempfile
