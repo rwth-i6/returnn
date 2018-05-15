@@ -736,7 +736,8 @@ class NativeLstm2(RecSeqCellOp):
     TFUtil.set_param_axes_split_info(W, [[self.n_hidden], [self.n_hidden] * 4])
     if self.rec_weight_dropout:
       from TFUtil import dropout
-      W = dropout(W, keep_prob=1.0 - self.rec_weight_dropout, cond_on_train=True)
+      W = dropout(W, keep_prob=1.0 - self.rec_weight_dropout, cond_on_train=True,
+                  seed=TFUtil.get_random_seed())
     out, _, _, final_cell_state = self.op(
       *self.map_layer_inputs_to_op(X=inputs, W=W, i=index, initial_state=initial_state))
     from tensorflow.python.ops.nn import rnn_cell

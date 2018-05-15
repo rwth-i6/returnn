@@ -5598,7 +5598,9 @@ class SampledSoftmaxLoss(Loss):
           num_true=1,  # Note that this loss layer does not support multiple correct classes as target values
           num_sampled=self.num_sampled,  # How many samples do we wanna draw
           unique=True,
-          range_max=self.target.dim)
+          range_max=self.target.dim,
+          seed=TFUtil.get_random_seed()
+        )
 
         return tf.nn.sampled_softmax_loss(
           weights=self.layer.W,  # shape: [num_classes, dim]

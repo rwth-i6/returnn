@@ -644,7 +644,7 @@ def test_cudnn_rnn_params_to_canonical():
     def check(**kwargs):
       print("kwargs:", kwargs)
       model = CudnnLSTM(**kwargs)
-      params = tf.Variable(tf.random_uniform([model.params_size()]), validate_shape=False)
+      params = tf.Variable(tf.random_uniform([model.params_size()], seed=1), validate_shape=False)
       session.run(params.initializer)
       s1 = model.params_size().eval()
       print("param size:", s1)

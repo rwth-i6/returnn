@@ -4,7 +4,7 @@ from __future__ import print_function
 import tensorflow as tf
 from tensorflow.python.ops.nn import rnn_cell
 from TFNetworkLayer import LayerBase, _ConcatInputLayer, SearchChoices, get_concat_sources_data_template
-from TFUtil import Data, reuse_name_scope
+from TFUtil import Data, reuse_name_scope, get_random_seed
 from Log import log
 
 
@@ -2818,7 +2818,7 @@ class ChoiceLayer(LayerBase):
         pass
       else:
         raise Exception("%r: invalid input type %r" % (self, input_type))
-      samples = tf.multinomial(scores_in, num_samples=1)  # (batch, num_samples), int64
+      samples = tf.multinomial(scores_in, num_samples=1, seed=get_random_seed())  # (batch, num_samples), int64
       samples = tf.to_int32(tf.reshape(samples, [-1]))  # (batch,), int32
       if self.scheduled_sampling.get("gold_mixin_prob"):
         gold_targets = self._static_get_target_value(
