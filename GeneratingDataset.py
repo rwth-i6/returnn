@@ -674,7 +674,7 @@ class ExtractAudioFeatures:
   def __init__(self,
                window_len=0.025, step_len=0.010,
                num_feature_filters=40, with_delta=False, norm_mean=None, norm_std_dev=None,
-               random_permute=None, random_state=None):
+               features="mfcc", random_permute=None, random_state=None):
     """
     :param numpy.ndarray audio: raw audio samples, shape (audio_len,)
     :param int sample_rate: e.g. 22050
@@ -684,6 +684,7 @@ class ExtractAudioFeatures:
     :param bool|int with_delta:
     :param numpy.ndarray|str|None norm_mean:
     :param numpy.ndarray|str|None norm_std_dev:
+    :param str features: "mfcc" or "mel_spectrogram"
     :param CollectionReadCheckCovered|dict[str]|bool|None random_permute:
     :param numpy.random.RandomState|None random_state:
     :return: (audio_len // int(step_len * sample_rate), max(1, with_delta) * num_feature_filters), float32
@@ -706,6 +707,7 @@ class ExtractAudioFeatures:
       random_permute = CollectionReadCheckCovered.from_bool_or_dict(random_permute)
     self.random_permute_opts = random_permute
     self.random_state = random_state
+    self.features = features
 
   def _load_feature_vec(self, value):
     """
@@ -727,19 +729,63 @@ class ExtractAudioFeatures:
     :param int sample_rate: e.g. 22050
     :rtype: numpy.ndarray
     """
-    return _get_audio_features(
-      audio=audio, sample_rate=sample_rate,
-      window_len=self.window_len, step_len=self.step_len, num_feature_filters=self.num_feature_filters,
-      with_delta=self.with_delta, norm_mean=self.norm_mean, norm_std_dev=self.norm_std_dev,
-      random_permute_opts=self.random_permute_opts, random_state=self.random_state)
+    kwargs = {
+      "sample_rate": sample_rate,
+      "window_len": self.window_len,
+      "step_len": self.step_len,
+      "num_feature_filters": self.num_feature_filters,
+    }
+    assert self.features in ("mfcc", "mel_spectrogram")
+    peak = numpy.max(numpy.abs(audio))
+    audio /= peak
+
+    if self.random_permute_opts and not isinstance(self.random_permute_opts, CollectionReadCheckCovered):
+      random_permute_opts = CollectionReadCheckCovered.from_bool_or_dict(self.random_permute_opts)
+    if self.random_permute_opts and random_permute_opts.truth_value:
+      audio = _get_random_permuted_audio(
+        audio=audio,
+        sample_rate=sample_rate,
+        opts=self.random_permute_opts,
+        random_state=self.random_state)
+    kwargs["audio"] = audio
+
+    if self.features == "mfcc":
+      feature_data = _get_audio_features_mfcc(**kwargs)
+    elif self.features == "mel_spectrogram":
+      feature_data = _get_audio_mel_spectrogram(**kwargs)
+    else:
+      assert False, "non-supported feature type %s" % self.features
+
+    if self.norm_mean is not None:
+      feature_data -= self.norm_mean[None, :]
+    if self.norm_std_dev is not None:
+      feature_data /= self.norm_std_dev[None, :]
+    return feature_data
 
   def get_feature_dimension(self):
-    return max(self.with_delta, 1) * self.num_feature_filters
+    return max(int(self.with_delta), 1) * self.num_feature_filters
 
 
-def _get_audio_features(audio, sample_rate, window_len=0.025, step_len=0.010,
-                        num_feature_filters=40, with_delta=False, norm_mean=None, norm_std_dev=None,
-                        random_permute_opts=None, random_state=None):
+def _get_audio_mel_spectrogram(audio, sample_rate, window_len=0.025, step_len=0.010,
+                               num_feature_filters=80, with_delta=False):
+  import librosa
+  mel_spectrogram = librosa.feature.melspectrogram(
+    audio, sr=sample_rate,
+    n_mels=num_feature_filters,
+    hop_length=int(step_len * sample_rate), n_fft=int(window_len * sample_rate))
+  log_noise_floor = 1e-3  # prevent numeric overflow in log
+  mel_spectrogram = numpy.log(numpy.maximum(log_noise_floor, mel_spectrogram))
+  assert mel_spectrogram.shape[0] == num_feature_filters
+  if with_delta:
+    deltas = [librosa.feature.delta(mel_spectrogram, order=i) for i in range(1, with_delta + 1)]
+    mel_spectrogram = numpy.vstack([mel_spectrogram] + deltas)
+  mel_spectrogram = mel_spectrogram.transpose().astype("float32")  # (time, dim)
+  return mel_spectrogram
+
+
+def _get_audio_features_mfcc(audio, sample_rate, window_len=0.025, step_len=0.010,
+                             num_feature_filters=40, with_delta=False, norm_mean=None, norm_std_dev=None,
+                             feature="mfcc", random_permute_opts=None, random_state=None):
   """
   :param numpy.ndarray audio: raw audio samples, shape (audio_len,)
   :param int sample_rate: e.g. 22050
@@ -749,19 +795,12 @@ def _get_audio_features(audio, sample_rate, window_len=0.025, step_len=0.010,
   :param bool|int with_delta:
   :param numpy.ndarray|None norm_mean:
   :param numpy.ndarray|None norm_std_dev:
+  :param str: type of feature to compute, "mfcc" or "melspectrogram"
   :param CollectionReadCheckCovered|dict[str]|bool|None random_permute_opts:
   :param numpy.random.RandomState|None random_state:
-  :return: (audio_len // int(step_len * sample_rate), max(1, with_delta) * num_feature_filters), float32
+  :return: (audio_len // int(step_len * sample_rate), (max(1, with_delta)+1) * num_feature_filters), float32
   :rtype: numpy.ndarray
   """
-  peak = numpy.max(numpy.abs(audio))
-  audio /= peak
-
-  if random_permute_opts and not isinstance(random_permute_opts, CollectionReadCheckCovered):
-    random_permute_opts = CollectionReadCheckCovered.from_bool_or_dict(random_permute_opts)
-  if random_permute_opts and random_permute_opts.truth_value:
-    audio = _get_random_permuted_audio(
-      audio=audio, sample_rate=sample_rate, opts=random_permute_opts, random_state=random_state)
 
   import librosa
   mfccs = librosa.feature.mfcc(
@@ -777,10 +816,6 @@ def _get_audio_features(audio, sample_rate, window_len=0.025, step_len=0.010,
     deltas = [librosa.feature.delta(mfccs, order=i) for i in range(1, with_delta + 1)]
     mfccs = numpy.vstack([mfccs] + deltas)
   mfccs = mfccs.transpose().astype("float32")  # (time, dim)
-  if norm_mean is not None:
-    mfccs -= norm_mean[None, :]
-  if norm_std_dev is not None:
-    mfccs /= norm_std_dev[None, :]
   return mfccs
 
 
@@ -1162,7 +1197,7 @@ class TimitDataset(CachedDataset2):
     # see: https://github.com/rdadolf/fathom/blob/master/fathom/speech/preproc.py
     # and: https://groups.google.com/forum/#!topic/librosa/V4Z1HpTKn8Q
     audio, sample_rate = self._get_audio(seq_tag)
-    mfccs = _get_audio_features(
+    mfccs = _get_audio_features_mfcc(
       audio=audio, sample_rate=sample_rate, window_len=self._feature_window_len, step_len=self._feature_step_len,
       num_feature_filters=self._num_feature_filters, with_delta=self._with_delta,
       norm_mean=self._norm_mean, norm_std_dev=self._norm_std_dev,
