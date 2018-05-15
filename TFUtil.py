@@ -2675,7 +2675,8 @@ def add_scaled_noise_to_gradients(grads_and_vars, gradient_noise_scale, sparse_g
         gradient_shape = gradient_values.get_shape()
       if isinstance(gradient_shape, tf.TensorShape) and not gradient_shape.is_fully_defined():
         gradient_shape = tf.shape(gradient_values)
-      noise = tf.truncated_normal(gradient_shape, stddev=gradient_noise_scale, name="%s_grad_noise" % name)
+      noise = tf.truncated_normal(
+        gradient_shape, stddev=gradient_noise_scale, name="%s_grad_noise" % name, seed=get_random_seed())
       gradient_values = tf.add(gradient_values, noise, name="%s_add_grad_noise" % name)
       if sparse_grads and isinstance(gradient, tf.IndexedSlices):
         gradient = tf.IndexedSlices(values=gradient_values, indices=gradient.indices, dense_shape=gradient.dense_shape)
@@ -3459,6 +3460,17 @@ def cond_on_train_flag(fn_train, fn_eval):
   """
   train_flag = get_global_train_flag()
   return cond(train_flag, fn_train, fn_eval)
+
+
+def get_random_seed():
+  """
+  :rtype: int|None
+  """
+  from TFNetwork import TFNetwork
+  network = TFNetwork.get_current_network(must_exist=False)
+  if network:
+    return network.random.randint(2 ** 31)
+  return tf.get_seed(None)[1]
 
 
 def encode_raw(x, axis=-1, seq_lens=None):
