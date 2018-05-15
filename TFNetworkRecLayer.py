@@ -427,11 +427,23 @@ class RecLayer(_ConcatInputLayer):
     if isinstance(cell, rnn_cell.RNNCell):  # e.g. BasicLSTMCell
       if self._unroll:
         assert self._max_seq_len is not None
+        # We must get x.shape[0] == self._max_seq_len, so pad it, or truncate.
+        x_shape = x.get_shape().as_list()
+        original_len = tf.shape(x)[0]
+        pad_len = tf.maximum(0, self._max_seq_len - original_len)
+        x = tf.pad(x, [(0, pad_len), (0, 0), (0, 0)])
+        x = x[:self._max_seq_len]
+        x.set_shape([self._max_seq_len] + x_shape[1:])
+        x = tf.unstack(x, axis=0, num=self._max_seq_len)
         y, final_state = rnn.static_rnn(
-          cell=cell, dtype=tf.float32,
-          inputs=tf.unstack(x, axis=0, num=self._max_seq_len), sequence_length=seq_len,
+          cell=cell, dtype=tf.float32, inputs=x, sequence_length=seq_len,
           initial_state=self._initial_state)
-        y = tf.stack(y, axis=0)[:tf.maximum(tf.reduce_max(seq_len), self._max_seq_len)]
+        y = tf.stack(y, axis=0)
+        y.set_shape([self._max_seq_len, None, self.output.dim])  # (time,batch,ydim)
+        # Now, recover the original len.
+        pad_len = tf.maximum(0, original_len - self._max_seq_len)
+        y = tf.pad(y, [(0, pad_len), (0, 0), (0, 0)])
+        y = y[:original_len]
       else:
         # Will get (time,batch,ydim).
         assert self._max_seq_len is None
