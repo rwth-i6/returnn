@@ -4665,12 +4665,15 @@ class CrossEntropyLoss(Loss):
                label_smoothing=0.0, label_smoothing_gaussian=False,
                debug_dump=False,
                safe_log_opts=None,
+               use_fused=True,
                **kwargs):
     """
     :param float focal_loss_factor: see https://arxiv.org/abs/1708.02002. 0 means disabled
     :param float label_smoothing: 0.1 is a common default. see :func:`TFUtil.smoothing_cross_entropy`
     :param bool label_smoothing_gaussian: see :func:`TFUtil.smoothing_cross_entropy`
     :param bool debug_dump:
+    :param dict[str] safe_log_opts: passed to :func:`safe_log`
+    :param bool use_fused: if possible, use fused opts
     """
     super(CrossEntropyLoss, self).__init__(**kwargs)
     self.focal_loss_factor = focal_loss_factor
@@ -4678,6 +4681,7 @@ class CrossEntropyLoss(Loss):
     self.label_smoothing_gaussian = label_smoothing_gaussian
     self.debug_dump = debug_dump
     self.safe_log_opts = safe_log_opts or {}
+    self.use_fused = use_fused
 
   def get_output_target_scores(self):
     """
@@ -4698,7 +4702,7 @@ class CrossEntropyLoss(Loss):
     with tf.name_scope("loss_ce"):
       assert self.target.ndim_dense == self.output.ndim_dense
       if self.target.sparse:
-        if self.output_before_softmax_flat is not None:
+        if self.use_fused and self.output_before_softmax_flat is not None:
           target_flat = self.target_flat
           if self.debug_dump:
             target_flat = tf.Print(target_flat, [target_flat], summarize=10000, message='target word IDs ')
@@ -4724,7 +4728,7 @@ class CrossEntropyLoss(Loss):
         assert not self.focal_loss_factor, "not implemented"
         assert not self.label_smoothing, "not implemented"
         assert not self.debug_dump, "not implemented"
-        if self.output_before_softmax_flat is not None:
+        if self.use_fused and self.output_before_softmax_flat is not None:
           out = tf.nn.softmax_cross_entropy_with_logits(logits=self.output_before_softmax_flat, labels=self.target_flat)
           return self.reduce_func(out)
         else:
