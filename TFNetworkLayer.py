@@ -5602,6 +5602,10 @@ class SampledSoftmaxLoss(Loss):
           seed=TFUtil.get_random_seed()
         )
 
+        kwargs = {}
+        if TFUtil.tf_version_tuple() >= (1, 8, 0):
+          kwargs["seed"] = TFUtil.get_random_seed()
+
         return tf.nn.sampled_softmax_loss(
           weights=self.layer.W,  # shape: [num_classes, dim]
           biases=self.layer.b,  # shape: [num_classes]
@@ -5613,7 +5617,8 @@ class SampledSoftmaxLoss(Loss):
           sampled_values=sampled_values,  # The sampling
           remove_accidental_hits=self.remove_accidental_hits,
           partition_strategy=self.partition_strategy,
-          name="sampled_softmax_loss"  # Name for the scope we produce
+          name="sampled_softmax_loss",  # Name for the scope we produce
+          **kwargs
         )
 
       # The function that is called for the evaluation branch
