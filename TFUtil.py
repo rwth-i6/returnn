@@ -3,6 +3,7 @@ from __future__ import print_function, division
 
 import tensorflow as tf
 from tensorflow.python.client import device_lib
+from tensorflow.python.ops import init_ops
 import contextlib
 import os
 import sys
@@ -1857,7 +1858,7 @@ def wrap_distribution_non_zero(x, zero_limit, limit):
   return x_rescaled + tf.where(tf.greater_equal(x, 0.0), shift, -shift)
 
 
-class VarianceScalingNonZero(tf.initializers.variance_scaling):
+class VarianceScalingNonZero(init_ops.VarianceScaling):
   """
   Same as :class:`tf.VarianceScaling`, i.e. truncated normal or uniform from [-limit,limit] for some limit,
   except that we exclude the range [-limit*non_zero_fraction,limit*non_zero_fraction].
