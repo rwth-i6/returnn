@@ -305,7 +305,7 @@ class NeuralTransducerLoss(Loss):
         targets = self.target.copy_as_time_major().placeholder
 
         # Get alignment info into our targets
-        new_targets, mask = tf.py_func(func=self.get_alignment_from_logits_manager, inumpy=[logits, targets],
+        new_targets, mask = tf.py_func(func=self.get_alignment_from_logits_manager, inp=[logits, targets],
                                        Tout=(tf.int64, tf.bool), stateful=False)
 
         # Get CE

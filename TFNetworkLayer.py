@@ -5638,8 +5638,10 @@ class SampledSoftmaxLoss(Loss):
 
 _LossClassDict = {}  # type: dict[str,type(Loss)]
 
+
 def _init_loss_class_dict():
-  for v in globals().values():
+  from TFNetworkNeuralTransducer import NeuralTransducerLoss
+  for v in [globals().values(), NeuralTransducerLoss]:
     if isinstance(v, type) and issubclass(v, Loss) and v.class_name:
       assert v.class_name not in _LossClassDict
       _LossClassDict[v.class_name] = v
@@ -5668,9 +5670,10 @@ def _init_layer_class_dict():
   import TFNetworkRecLayer
   import TFNetworkSigProcLayer
   import TFNetworkSegModLayer
+  import TFNetworkNeuralTransducer
 
   auto_register_layer_classes(list(globals().values()))
-  for mod in [TFNetworkRecLayer, TFNetworkSigProcLayer, TFNetworkSegModLayer]:
+  for mod in [TFNetworkRecLayer, TFNetworkSigProcLayer, TFNetworkSegModLayer, TFNetworkNeuralTransducer]:
     auto_register_layer_classes(list(vars(mod).values()))
 
   for alias, v in {"forward": LinearLayer, "hidden": LinearLayer}.items():

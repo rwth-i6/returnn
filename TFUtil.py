@@ -5550,7 +5550,7 @@ def string_words_calc_wer(hyps, refs):
   return wer, get_sparse_tensor_length(refs_sparse)
 
 
-def simple_softmax(cls, x, axis=None):
+def simple_softmax(x, axis=None):
     import numpy
     e_x = numpy.exp(x - numpy.max(x, axis=axis, keepdims=True))
     return e_x / numpy.sum(e_x, axis=axis, keepdims=True)
