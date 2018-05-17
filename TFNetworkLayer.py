@@ -5641,7 +5641,14 @@ _LossClassDict = {}  # type: dict[str,type(Loss)]
 
 def _init_loss_class_dict():
   from TFNetworkNeuralTransducer import NeuralTransducerLoss
-  for v in [globals().values(), NeuralTransducerLoss]:
+
+  for v in globals().values():
+    if isinstance(v, type) and issubclass(v, Loss) and v.class_name:
+      assert v.class_name not in _LossClassDict
+      _LossClassDict[v.class_name] = v
+
+  # Outside loss functions
+  for v in [NeuralTransducerLoss]:
     if isinstance(v, type) and issubclass(v, Loss) and v.class_name:
       assert v.class_name not in _LossClassDict
       _LossClassDict[v.class_name] = v
