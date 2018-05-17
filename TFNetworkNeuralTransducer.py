@@ -1,6 +1,7 @@
 import tensorflow as tf
 from TFNetworkLayer import LayerBase, _ConcatInputLayer, Loss, get_concat_sources_data_template
-from TFUtil import softmax, Data
+from TFUtil import Data
+from Util import softmax
 
 
 class NeuralTransducerLayer(_ConcatInputLayer):
