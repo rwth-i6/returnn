@@ -1,6 +1,6 @@
 import tensorflow as tf
 from TFNetworkLayer import LayerBase, _ConcatInputLayer, Loss, get_concat_sources_data_template
-from TFUtil import simple_softmax, Data
+from TFUtil import softmax, Data
 
 
 class NeuralTransducerLayer(_ConcatInputLayer):
@@ -363,7 +363,7 @@ class NeuralTransducerLoss(Loss):
 
             def run_transducer(current_block, transducer_width):
                 # apply softmax on the correct outputs
-                transducer_out = simple_softmax(split_logits[current_block][0:transducer_width], axis=2)
+                transducer_out = softmax(split_logits[current_block][0:transducer_width], axis=2)
                 return transducer_out
 
             # Look into every existing alignment

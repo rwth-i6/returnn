@@ -2733,3 +2733,9 @@ def generic_import_module(filename):
       m = m[:-3]
     return importlib.import_module(m)
   raise ValueError('cannot figure out base module path from %r' % filename)
+
+
+def softmax(x, axis=None):
+    import numpy
+    e_x = numpy.exp(x - numpy.max(x, axis=axis, keepdims=True))
+    return e_x / numpy.sum(e_x, axis=axis, keepdims=True)
