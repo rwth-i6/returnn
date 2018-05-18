@@ -765,6 +765,7 @@ class Engine(object):
     self._init_network(net_desc=net_dict, epoch=self.epoch)
 
     if self.preload_from_files:
+      print("WARNING: Option 'preload_from_files' is currently not compatible with 'load_on_init' in SubnetworkLayer")
       print("Start pre-loading weights...", file=log.v2)
       for model_name in self.preload_from_files.keys():
         model_filename = self.preload_from_files.get(model_name)['filename']
@@ -775,6 +776,7 @@ class Engine(object):
         loader = CustomCheckpointLoader(
           filename=model_filename, saveable_params=self.network.get_trainable_params(), params_prefix=self_prefix, var_prefix_file_id=var_prefix_file_id)
         loader.set_as_custom_init()
+      self.network.initialize_params(session=self.tf_session)
 
     if model_epoch_filename:
       print("loading weights from", model_epoch_filename, file=log.v2)

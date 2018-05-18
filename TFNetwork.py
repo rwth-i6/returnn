@@ -1404,8 +1404,7 @@ class CustomCheckpointLoader:
 
   def _get_name_with_prefix(self):
     """
-    :param tf.Variable|tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject v:
-    :return:
+    :return: set: a set of variable names containing var_prefix_file_id
     """
     var_net_names = set()
     for v in self.saveable_params:
@@ -1415,7 +1414,10 @@ class CustomCheckpointLoader:
         v_name = v.name
       if self.var_prefix_file_id in v_name:
         v_name = v_name.replace(self.var_prefix_file_id,'')
-        var_net_names.add(v_name[len(self.params_prefix):])
+        if self.params_prefix:
+          var_net_names.add(v_name[len(self.params_prefix):])
+        else:
+          var_net_names.add(v_name)
     return var_net_names
 
 
@@ -1655,8 +1657,8 @@ class CustomCheckpointLoader:
     for var in self.saveable_params:
       if self.var_prefix_file_id:
         if self.var_prefix_file_id in var.name:
-          print("%s pre-loaded." % var.name, file=log.v2)
           set_custom_post_init(var=var, func=make_var_post_init(var))
+          print("%s registered for pre-loading." % var.name, file=log.v2)
       else:
         set_custom_post_init(var=var, func=make_var_post_init(var))
 
