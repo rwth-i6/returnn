@@ -739,6 +739,7 @@ class Engine(object):
     if not config:
       config = self.config
     self.model_filename = config.value('model', None)
+    self.preload_from_files = config.typed_value('preload_from_files', {})
     self.pretrain = pretrainFromConfig(config)
     self.max_seqs = config.int('max_seqs', -1)
 
@@ -762,6 +763,18 @@ class Engine(object):
       net_dict = LayerNetwork.json_from_config(config)
 
     self._init_network(net_desc=net_dict, epoch=self.epoch)
+
+    if self.preload_from_files:
+      print("Start pre-loading weights...", file=log.v2)
+      for model_name in self.preload_from_files.keys():
+        model_filename = self.preload_from_files.get(model_name)['filename']
+        print("loading weights from", model_filename, file=log.v2)
+        self_prefix = self.network.get_absolute_name_scope_prefix()  # with "/" at end
+        var_prefix_file_id = self.preload_from_files.get(model_name)['prefix']  # prefix to identify the variables to be restored from the file
+        from TFNetwork import CustomCheckpointLoader
+        loader = CustomCheckpointLoader(
+          filename=model_filename, saveable_params=self.network.get_trainable_params(), params_prefix=self_prefix, var_prefix_file_id=var_prefix_file_id)
+        loader.set_as_custom_init()
 
     if model_epoch_filename:
       print("loading weights from", model_epoch_filename, file=log.v2)
