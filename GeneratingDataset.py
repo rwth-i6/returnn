@@ -1508,6 +1508,29 @@ class BytePairEncoding(Vocabulary):
     return seq + self.seq_postfix
 
 
+class CharacterTargets(Vocabulary):
+  """
+  Uses characters as target labels.
+  """
+
+  def __init__(self, vocab_file, seq_postfix=None, unknown_label="@"):
+    """
+    :param str vocab_file:
+    :param list[int]|None seq_postfix: labels will be added to the seq in self.get_seq
+    :param str unknown_label:
+    """
+    super(CharacterTargets, self).__init__(vocab_file=vocab_file, unknown_label=unknown_label)
+    self.seq_postfix = seq_postfix or []
+
+  def get_seq(self, sentence):
+    """
+    :param str sentence:
+    :rtype: list[int]
+    """
+    seq = [self.vocab.get(k, self.unknown_label_id) for k in sentence]
+    return seq + self.seq_postfix
+
+
 class BlissDataset(CachedDataset2):
   """
   Reads in a Bliss XML corpus (similar as :class:`LmDataset`),
@@ -1635,7 +1658,7 @@ class LibriSpeechCorpus(CachedDataset2):
     Min/max: 1 / 161
   "train-*" mean transcription len: 177.009085 (chars), i.e. ~3 chars per BPE label
   """
-  def __init__(self, path, prefix, bpe, audio, use_zip=False, use_cache_manager=False,
+  def __init__(self, path, prefix, audio, targets=None, chars=None, bpe=None, use_zip=False, use_cache_manager=False,
                partition_epoch=None, fixed_random_seed=None, fixed_random_subset=None,
                epoch_wise_filter=None,
                name=None,
@@ -1643,8 +1666,10 @@ class LibriSpeechCorpus(CachedDataset2):
     """
     :param str path: dir, should contain "train-*/*/*/{*.flac,*.trans.txt}", or "train-*.zip"
     :param str prefix: "train", "dev", "test", "dev-clean", "dev-other", ...
-    :param dict[str] bpe: options for :class:`BytePairEncoding`
+    :param str targets|None: "bpe" or "chars" currently, if `None`, then "bpe"
     :param dict[str] audio: options for :class:`ExtractAudioFeatures`
+    :param dict[str] bpe: options for :class:`BytePairEncoding`
+    :param dict[str] chars: options for :class:`CharacterTargets`
     :param bool use_zip: whether to use the ZIP files instead (better for NFS)
     :param bool use_cache_manager: uses :func:`Util.cf`
     :param int|None partition_epoch:
@@ -1677,14 +1702,22 @@ class LibriSpeechCorpus(CachedDataset2):
         for fn in zip_fns}  # e.g. "train-clean-100" -> ZipFile
     assert prefix.split("-")[0] in ["train", "dev", "test"]
     assert os.path.exists(path + "/train-clean-100" + (".zip" if use_zip else ""))
-    self.bpe = BytePairEncoding(**bpe)
-    self.labels = {"classes": self.bpe.labels}
+    assert targets in ("bpe", "chars", None), "Unknown target type %s" % targets
+    assert bpe or chars
+    if targets == "bpe" or (targets is None and bpe is not None):
+      self.bpe = BytePairEncoding(**bpe)
+      self.targets = self.bpe
+      self.labels = {"classes": self.bpe.labels}
+    elif targets == "chars":
+      self.chars = CharacterTargets(**chars)
+      self.labels = {"classes": self.chars.labels}
+      self.targets = self.chars
     self._fixed_random_seed = fixed_random_seed
     self._audio_random = numpy.random.RandomState(1)
     self.feature_extractor = ExtractAudioFeatures(random_state=self._audio_random, **audio)
     self.num_inputs = self.feature_extractor.get_feature_dimension()
     self.num_outputs = {
-      "data": [self.num_inputs, 2], "classes": [self.bpe.num_labels, 1], "raw": {"dtype": "string", "shape": ()}}
+      "data": [self.num_inputs, 2], "classes": [self.targets.num_labels, 1], "raw": {"dtype": "string", "shape": ()}}
     self.partition_epoch = partition_epoch
     self.transs = self._collect_trans()
     self._reference_seq_order = sorted(self.transs.keys())
@@ -1840,7 +1873,7 @@ class LibriSpeechCorpus(CachedDataset2):
     """
     seq_key = self._reference_seq_order[self._get_ref_seq_idx(seq_idx)]
     targets_txt = self.transs[seq_key]
-    return self.bpe.get_seq(targets_txt), targets_txt
+    return self.targets.get_seq(targets_txt), targets_txt
 
   def _open_audio_file(self, seq_idx):
     """
