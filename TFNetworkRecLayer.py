@@ -3378,16 +3378,25 @@ class SelfAttentionLayer(_ConcatInputLayer):
       att(Q x, K x, V x),
 
   where `att` is multi-head dot-attention for now, `Q`, `K`, `V` are matrices.
+  The attention will be over the time-dimension.
+  If there is no time-dimension, we expect to be inside a :class:`RecLayer`;
+  also, this is only valid with `attention_to_past_only=True`.
+
+  See also `dot_product_attention` here:
+    https://github.com/tensorflow/tensor2tensor/blob/master/tensor2tensor/layers/common_attention.py
   """
   layer_class = "self_attention"
   recurrent = True
 
-  def __init__(self, num_heads, total_key_dim, forward_weights_init="glorot_uniform", attention_dropout=0.0, **kwargs):
+  def __init__(self, num_heads, total_key_dim, forward_weights_init="glorot_uniform", attention_dropout=0.0,
+               attention_to_past_only=False,
+               **kwargs):
     """
     :param int num_heads:
     :param int total_key_dim:
     :param str forward_weights_init: see :func:`TFUtil.get_initializer`
     :param float attention_dropout:
+    :param bool attention_to_past_only: will mask out the future. see Attention is all you need.
     """
     super(SelfAttentionLayer, self).__init__(**kwargs)
     total_value_dim = self.output.dim
@@ -3421,10 +3430,18 @@ class SelfAttentionLayer(_ConcatInputLayer):
     q, k, v = tf.split(
       x, [total_key_dim // num_heads, total_key_dim // num_heads, total_value_dim // num_heads], axis=-1, name="qkv")
     q *= (total_key_dim // num_heads) ** -0.5
+    # Dot-attention. Resulting last time dimension will be used to perform the softmax over, and will the be reduced.
     energy = tf.matmul(q, k, transpose_b=True)  # (batch,heads,time,time)
-    energy_mask = tf.sequence_mask(
-      self.input_data.get_sequence_lengths(), maxlen=tf.shape(energy)[-1])  # (batch,time)
-    energy_mask = tf.reshape(energy_mask, [tf.shape(energy)[0], 1, 1, tf.shape(energy)[-1]])  # (batch,1,1,time)
+    if attention_to_past_only:
+      # We also ignore the input data sequence length, because we expect that frames outside the seq length
+      # are anyway ignored.
+      from TFUtil import matrix_triangular
+      time = tf.shape(energy)[-1]
+      energy_mask = matrix_triangular((1, 1, time, time), dtype=tf.bool, lower=True)  # (1,1,time,time)
+    else:
+      energy_mask = tf.sequence_mask(
+        self.input_data.get_sequence_lengths(), maxlen=tf.shape(energy)[-1])  # (batch,time)
+      energy_mask = tf.reshape(energy_mask, [tf.shape(energy)[0], 1, 1, tf.shape(energy)[-1]])  # (batch,1,1,time)
     # Currently tf.where does not support broadcasting...
     energy_mask = tf.logical_and(energy_mask, tf.ones_like(energy, dtype=tf.bool))
     energy = tf.where(energy_mask, energy, float("-inf") * tf.ones_like(energy), name="energy_masked")

@@ -2482,6 +2482,20 @@ def batched_uniq(x, seq_lens):
   return z, new_seq_lens
 
 
+def matrix_triangular(shape, dtype=tf.float32, lower=False, upper=False):
+  """
+  :param tuple[int|tf.Tensor]|tf.Tensor shape:
+  :param tf.DType dtype:
+  :param bool lower:
+  :param bool upper:
+  :rtype: tf.Tensor
+  """
+  assert (lower or upper) and (not lower or not upper)
+  x = tf.ones(shape, dtype=dtype)
+  return tf.matrix_band_part(x, num_lower=-1 if lower else 0, num_upper=-1 if upper else 0)
+
+
+
 class VariableAssigner(object):
   def __init__(self, var):
     """
