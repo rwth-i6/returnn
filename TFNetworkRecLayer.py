@@ -3389,20 +3389,20 @@ class SelfAttentionLayer(_ConcatInputLayer):
   recurrent = True
 
   def __init__(self, num_heads, total_key_dim, forward_weights_init="glorot_uniform", attention_dropout=0.0,
-               attention_to_past_only=False,
+               attention_left_only=False,
                **kwargs):
     """
     :param int num_heads:
     :param int total_key_dim:
     :param str forward_weights_init: see :func:`TFUtil.get_initializer`
     :param float attention_dropout:
-    :param bool attention_to_past_only: will mask out the future. see Attention is all you need.
+    :param bool attention_left_only: will mask out the future. see Attention is all you need.
     """
     super(SelfAttentionLayer, self).__init__(**kwargs)
     total_value_dim = self.output.dim
     assert total_key_dim % num_heads == 0, "must be divisible"
     assert total_value_dim % num_heads == 0, "must be divisible. total_value_dim = n_out"
-    from TFUtil import get_initializer, dot, get_shape, move_axis
+    from TFUtil import get_initializer, dot, get_shape, to_int32_64
     with self.var_creation_scope():
       fwd_weights_initializer = get_initializer(
         forward_weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
@@ -3412,16 +3412,20 @@ class SelfAttentionLayer(_ConcatInputLayer):
         name="QKV", shape=(n_in, mat_n_out), dtype=tf.float32, initializer=fwd_weights_initializer))
     x = self.input_data.placeholder
     if self.input_data.sparse:
-      if x.dtype in [tf.uint8, tf.int8, tf.uint16, tf.int16]:
-        x = tf.cast(x, tf.int32)
-      x = tf.nn.embedding_lookup(mat, x)
+      x = tf.nn.embedding_lookup(mat, to_int32_64(x))
     else:
       x = dot(x, mat)
     x.set_shape(tf.TensorShape(self.input_data.batch_shape_dense[:-1] + (mat_n_out,)))
-    x_shape = [-1, -1, num_heads, mat_n_out // num_heads]
+    x_shape = [-1, -1, num_heads, mat_n_out // num_heads]  # without time
+    if self.input_data.time_dim_axis is None:
+      assert self.input_data.batch_dim_axis == 0
+      x_shape[1] = 1
+    else:
+      assert self.input_data.time_dim_axis in (0, 1)
     assert self.input_data.batch_dim_axis in (0, 1)
-    x_shape[self.input_data.batch_dim_axis] = tf.shape(x)[self.input_data.batch_dim_axis]
-    x = tf.reshape(x, x_shape)  # (batch,time)|(time,batch) + (heads,qkv-dim//heads)
+    batch_dim = tf.shape(x)[self.input_data.batch_dim_axis]
+    x_shape[self.input_data.batch_dim_axis] = batch_dim
+    x = tf.reshape(x, x_shape)  # (batch,time|1)|(time|1,batch) + (heads,qkv-dim//heads)
     x.set_shape(tf.TensorShape([None, None, num_heads, mat_n_out // num_heads]))
     assert self.input_data.batch_dim_axis in (0, 1)
     # (batch,heads,time,qkv-dim//heads)
@@ -3430,21 +3434,37 @@ class SelfAttentionLayer(_ConcatInputLayer):
     q, k, v = tf.split(
       x, [total_key_dim // num_heads, total_key_dim // num_heads, total_value_dim // num_heads], axis=-1, name="qkv")
     q *= (total_key_dim // num_heads) ** -0.5
+    if self.input_data.time_dim_axis is None:
+      assert attention_left_only
+      # Memory for kv.
+      kv_cur = tf.concat([k, v], axis=-1)  # (batch,heads,1,kv-dim//heads)
+      kv_left_ta = tf.TensorArray(
+        name="kv_left_ta",
+        dtype=kv_cur.dtype, size=0, dynamic_size=True, clear_after_read=False,
+        infer_shape=True, element_shape=kv_cur.get_shape().as_list())
+      time = kv_left_ta.size()
+      kv_left_ta = kv_left_ta.write(time, kv_cur)
+      kv = kv_left_ta.concat()  # (time,batch,heads,1,kv-dim//heads)
+      # (time,batch,heads,kv-dim//heads)
+      kv = tf.reshape(kv, (time, batch_dim, num_heads, (total_key_dim + total_value_dim) / num_heads))
+      kv = tf.transpose(kv, (1, 2, 0, 3))  # (batch,heads,time,kv-dim//heads)
+      k, v = tf.split(kv, [total_key_dim // num_heads, total_value_dim // num_heads], axis=-1)
     # Dot-attention. Resulting last time dimension will be used to perform the softmax over, and will the be reduced.
     energy = tf.matmul(q, k, transpose_b=True)  # (batch,heads,time,time)
-    if attention_to_past_only:
-      # We also ignore the input data sequence length, because we expect that frames outside the seq length
-      # are anyway ignored.
-      from TFUtil import matrix_triangular
-      time = tf.shape(energy)[-1]
-      energy_mask = matrix_triangular((1, 1, time, time), dtype=tf.bool, lower=True)  # (1,1,time,time)
-    else:
-      energy_mask = tf.sequence_mask(
-        self.input_data.get_sequence_lengths(), maxlen=tf.shape(energy)[-1])  # (batch,time)
-      energy_mask = tf.reshape(energy_mask, [tf.shape(energy)[0], 1, 1, tf.shape(energy)[-1]])  # (batch,1,1,time)
-    # Currently tf.where does not support broadcasting...
-    energy_mask = tf.logical_and(energy_mask, tf.ones_like(energy, dtype=tf.bool))
-    energy = tf.where(energy_mask, energy, float("-inf") * tf.ones_like(energy), name="energy_masked")
+    if self.input_data.time_dim_axis is not None:
+      if attention_left_only:
+        # We also ignore the input data sequence length, because we expect that frames outside the seq length
+        # are anyway ignored.
+        from TFUtil import matrix_triangular
+        time = tf.shape(energy)[-1]
+        energy_mask = matrix_triangular((1, 1, time, time), dtype=tf.bool, lower=True)  # (1,1,time,time)
+      else:
+        energy_mask = tf.sequence_mask(
+          self.input_data.get_sequence_lengths(), maxlen=tf.shape(energy)[-1])  # (batch,time)
+        energy_mask = tf.reshape(energy_mask, [tf.shape(energy)[0], 1, 1, tf.shape(energy)[-1]])  # (batch,1,1,time)
+      # Currently tf.where does not support broadcasting...
+      energy_mask = tf.logical_and(energy_mask, tf.ones_like(energy, dtype=tf.bool))
+      energy = tf.where(energy_mask, energy, float("-inf") * tf.ones_like(energy), name="energy_masked")
     weights = tf.nn.softmax(energy)  # (batch,heads,time,time)
     if attention_dropout:
       import TFUtil
@@ -3464,6 +3484,9 @@ class SelfAttentionLayer(_ConcatInputLayer):
       assert len(self.output.shape) == 1
       v = tf.reshape(v, get_shape(v)[:1] + [total_value_dim])  # (batch,v-dim)
       v.set_shape(tf.TensorShape([None, total_value_dim]))
+    if self.input_data.time_dim_axis is None:
+      # Squeeze away the time-dim, which should be 1.
+      v = tf.squeeze(v, axis=1)
     self.output.placeholder = v
     self.output.size_placeholder = self.input_data.size_placeholder.copy()
 
