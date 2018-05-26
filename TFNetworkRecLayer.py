@@ -13,24 +13,59 @@ class RecLayer(_ConcatInputLayer):
   Recurrent layer, has support for several implementations of LSTMs (via ``unit`` argument),
   see :ref:`tf_lstm_benchmark` (http://returnn.readthedocs.io/en/latest/tf_lstm_benchmark.html),
   and also GRU, or simple RNN.
+  Via `unit` parameter, you specify the operation/model performed in the recurrence.
+  It can be a string and specify a RNN cell, where all TF cells can be used,
+  and the `"Cell"` suffix can be omitted; and case is ignored.
+  Some possible LSTM implementations are (in all cases for both CPU and GPU):
+
+   * BasicLSTM (the cell), via official TF, pure TF implementation
+   * LSTMBlock (the cell), via tf.contrib.rnn.
+   * LSTMBlockFused, via tf.contrib.rnn. should be much faster than BasicLSTM
+   * CudnnLSTM, via tf.contrib.cudnn_rnn. This is experimental yet.
+   * NativeLSTM, our own native LSTM. should be faster than LSTMBlockFused.
+   * NativeLstm2, improved own native LSTM, should be the fastest and most powerful.
+
+  We default to the current tested fastest one, i.e. NativeLSTM.
+  Note that they are currently not compatible to each other, i.e. the way the parameters are represented.
 
   A subnetwork can also be given which will be evaluated step-by-step,
   which can use attention over some separate input,
   which can be used to implement a decoder in a sequence-to-sequence scenario.
   The subnetwork will get the extern data from the parent net as templates,
-  and if there is input to us, then it will be available as the "source" data key.
+  and if there is input to the RecLayer,
+  then it will be available as the "source" data key in the subnetwork.
+  The subnetwork is specified as a `dict` for the `unit` parameter.
+  In the subnetwork, you can access outputs from layers from the previous time step when they
+  are referred to with the "prev:" prefix.
+
+  Example::
+
+      {
+          "class": "rec",
+          "from": ["input"],
+          "unit": {
+            # Recurrent subnet here, operate on a single time-step:
+            "output": {
+              "class": "linear",
+              "from": ["prev:output", "data:source"],
+              "activation": "relu",
+              "n_out": n_out},
+          },
+          "n_out": n_out},
+      }
+
+  More examples can be seen in :mod:`test_TFNetworkRecLayer` and :mod:`test_TFEngine`.
+
+  The subnetwork can automatically optimize the inner recurrent loop
+  by moving layers out of the loop if possible.
+  It will try to do that greedily. This can be disabled via the option `optimize_move_layers_out`.
+  It assumes that those layers behave the same with time-dimension or without time-dimension and used per-step.
+  Examples for such layers are :class:`LinearLayer`, :class:`RnnCellLayer`
+  or :class:`SelfAttentionLayer` with option `attention_left_only`.
   """
 
   layer_class = "rec"
   recurrent = True
-  # Some possible LSTM implementations are (in all cases for both CPU and GPU):
-  # * BasicLSTM (the cell), via official TF, pure TF implementation
-  # * LSTMBlock (the cell), via tf.contrib.rnn.
-  # * LSTMBlockFused, via tf.contrib.rnn. should be much faster than BasicLSTM
-  # * NativeLSTM, our own native LSTM. should be faster than LSTMBlockFused
-  # * CudnnLSTM, via tf.contrib.cudnn_rnn. This is experimental yet.
-  # We default to the current tested fastest one, i.e. NativeLSTM.
-  # Note that they are currently not compatible to each other, i.e. the way the parameters are represented.
   _default_lstm_unit = "nativelstm"  # TFNativeOp.NativeLstmCell
 
   def __init__(self,
