@@ -1669,6 +1669,73 @@ def test_rec_subnet_simple_rnn():
     print("rnn_cell also fine.")
 
 
+def check_reclayer_optimize_out(subnet_layer_dict):
+  """
+  :param dict[str] subnet_layer_dict:
+  """
+  subnet_layer_dict = subnet_layer_dict.copy()
+  n_in = 13
+  n_out = subnet_layer_dict.get("n_out", 17)
+  n_batch = 5
+  n_time = 7
+  subnet_layer_dict["n_out"] = n_out
+  rec_layer_dict = {
+    "class": "rec",
+    "from": ["data"],
+    "unit": {"output": subnet_layer_dict},
+    "n_out": n_out,
+    "is_output_layer": True
+  }
+  config = Config({
+    "num_inputs": n_in,
+    "num_outputs": n_out
+  })
+  with make_scope() as session:
+    net1 = TFNetwork(config=config, train_flag=True, name="<root_opt>")
+    net1.construct_from_dict({"output_opt": rec_layer_dict})
+    rec_layer_dict["optimize_move_layers_out"] = False
+    net2 = TFNetwork(extern_data=net1.extern_data, train_flag=True, name="<root_not_opt>")
+    net2.construct_from_dict({"output_not_opt": rec_layer_dict})
+    net1_reclayer = net1.layers["output_opt"]
+    assert isinstance(net1_reclayer, RecLayer)
+    net1_subnet = net1_reclayer.cell
+    assert isinstance(net1_subnet, _SubnetworkRecCell)
+    net2_reclayer = net2.layers["output_not_opt"]
+    assert isinstance(net2_reclayer, RecLayer)
+    net2_subnet = net2_reclayer.cell
+    assert isinstance(net2_subnet, _SubnetworkRecCell)
+    assert_equal(set(net1_subnet.input_layers_moved_out), {"output"})
+    assert_equal(set(net2_subnet.input_layers_moved_out), set())
+    assert_equal([v.name for v in net1.get_params_list()], [v.name for v in net2.get_params_list()])
+    net1.initialize_params(session=session)
+    net1_params_serialized = net1.get_params_serialized(session=session)
+    net2.set_params_by_serialized(serialized=net1_params_serialized, session=session)
+    x_np = net1.random.normal(size=(n_batch, n_time, n_in))
+    net1_output = net1.get_default_output_layer().output.get_placeholder_as_batch_major()
+    net2_output = net2.get_default_output_layer().output.get_placeholder_as_batch_major()
+    feed_dict = {
+      net1.extern_data.data["data"].placeholder: x_np,
+      net1.extern_data.data["data"].size_placeholder[0]: [n_time] * n_batch}
+    y1_np = session.run(net1_output, feed_dict=feed_dict)
+    y2_np = session.run(net2_output, feed_dict=feed_dict)
+    assert_equal(y1_np.shape, (n_batch, n_time, n_out))
+    assert_equal(y2_np.shape, (n_batch, n_time, n_out))
+    assert_allclose(y1_np, y2_np)
+
+
+def test_reclayer_optimize_out_linear():
+  check_reclayer_optimize_out({"class": "linear", "activation": "relu"})
+
+
+def test_reclayer_optimize_out_rnncell():
+  check_reclayer_optimize_out({"class": "rnn_cell", "unit": "BasicLSTM"})
+
+
+def test_reclayer_optimize_out_selfatt_left():
+  check_reclayer_optimize_out({
+    "class": "self_attention", "attention_left_only": True, "num_heads": 2, "total_key_dim": 3})
+
+
 def test_subnet_load_on_init_rec():
   import tempfile
   model_tmp_dir = tempfile.mkdtemp("tmp-checkpoint")
