@@ -650,7 +650,7 @@ class TFNetwork(object):
       return "output"
     output_layers = self.get_output_layers()
     if len(output_layers) == 1:
-      return output_layers[1]
+      return output_layers[0]
     return None  # no sensible default
 
   def get_default_output_layer(self, must_exist=True):

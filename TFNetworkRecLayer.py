@@ -1987,10 +1987,10 @@ class _SubnetworkRecCell(object):
         return self.parent_net.layers[name[len("base:"):]]
       if name in self.input_layers_moved_out:
         return self.input_layers_net.layers[name]
-      if name not in self.output_layers_moved_out:
-        # It means that the layer is inside the loop.
-        return get_loop_acc_layer(name)
-      return self.output_layers_net.construct_layer(self.net_dict, name=name, get_layer=get_layer)
+      if name in self.output_layers_moved_out or name.startswith("data:"):
+        return self.output_layers_net.construct_layer(self.net_dict, name=name, get_layer=get_layer)
+      # It means that the layer is inside the loop.
+      return get_loop_acc_layer(name)
 
     # Same scope as the main subnet, so that it stays compatible.
     with reuse_name_scope(self.parent_rec_layer._rec_scope):
