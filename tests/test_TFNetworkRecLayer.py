@@ -1728,17 +1728,17 @@ def check_reclayer_optimize_out(subnet_layer_dict):
     assert_allclose(y1_np, y2_np)
 
 
-@unittest.SkipTest("TODO fix...")
+@unittest.skip("TODO fix...")
 def test_reclayer_optimize_out_linear():
   check_reclayer_optimize_out({"class": "linear", "activation": "relu"})
 
 
-@unittest.SkipTest("TODO fix...")
+@unittest.skip("TODO fix...")
 def test_reclayer_optimize_out_rnncell():
   check_reclayer_optimize_out({"class": "rnn_cell", "unit": "BasicLSTM"})
 
 
-@unittest.SkipTest("TODO fix...")
+@unittest.skip("TODO fix...")
 def test_reclayer_optimize_out_selfatt_left():
   check_reclayer_optimize_out({
     "class": "self_attention", "attention_left_only": True, "num_heads": 2, "total_key_dim": 3})
