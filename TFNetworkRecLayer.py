@@ -3481,7 +3481,8 @@ class SelfAttentionLayer(_ConcatInputLayer):
       time = kv_left_ta.size()
       kv_left_ta = kv_left_ta.write(time, kv_cur)
       self.rec_vars_outputs["kv_left_ta"] = kv_left_ta
-      kv = kv_left_ta.concat()  # (time,batch,heads,1,kv-dim//heads)
+      kv = kv_left_ta.stack()  # (time,batch,heads,1,kv-dim//heads)
+      kv.set_shape((None, None, num_heads, 1, (total_key_dim + total_value_dim) // num_heads))
       # (time,batch,heads,kv-dim//heads)
       kv = tf.reshape(kv, (time + 1, batch_dim, num_heads, (total_key_dim + total_value_dim) // num_heads))
       kv = tf.transpose(kv, (1, 2, 0, 3))  # (batch,heads,time,kv-dim//heads)

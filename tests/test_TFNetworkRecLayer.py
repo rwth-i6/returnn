@@ -1693,9 +1693,11 @@ def check_reclayer_optimize_out(subnet_layer_dict, rtol=1e-5):
   })
   from TFNetworkRecLayer import _SubnetworkRecCell
   with make_scope() as session:
+    print("Create optimized rec layer (with subnet layer moved out)")
     net1 = TFNetwork(config=config, train_flag=True, name="<root_opt>")
     net1.construct_from_dict({"output_opt": rec_layer_dict})
     rec_layer_dict["optimize_move_layers_out"] = False
+    print("Create non-optimized rec layer (with subnet layer inside loop)")
     net2 = TFNetwork(extern_data=net1.extern_data, train_flag=True, name="<root_not_opt>")
     net2.construct_from_dict({"output_not_opt": rec_layer_dict})
     net1_reclayer = net1.layers["output_opt"]
