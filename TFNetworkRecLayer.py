@@ -3478,13 +3478,16 @@ class SelfAttentionLayer(_ConcatInputLayer):
       kv_cur.set_shape((None, num_heads, 1, (total_key_dim + total_value_dim) // num_heads))
       kv_left_ta = self._rec_previous_layer.rec_vars_outputs["kv_left_ta"]
       assert isinstance(kv_left_ta, tf.TensorArray)
-      time = kv_left_ta.size()
+      time = self.network.get_rec_step_index()
       kv_left_ta = kv_left_ta.write(time, kv_cur)
       self.rec_vars_outputs["kv_left_ta"] = kv_left_ta
-      kv = kv_left_ta.stack()  # (time,batch,heads,1,kv-dim//heads)
+      kv = kv_left_ta.stack()  # (time',batch,heads,1,kv-dim//heads)
       kv.set_shape((None, None, num_heads, 1, (total_key_dim + total_value_dim) // num_heads))
+      kv = kv[:time + 1]  # it could happen that another thread already has appended another vector in the meantime
       # (time,batch,heads,kv-dim//heads)
-      kv = tf.reshape(kv, (time + 1, batch_dim, num_heads, (total_key_dim + total_value_dim) // num_heads))
+      kv = tf.reshape(
+        kv, (time + 1, batch_dim, num_heads, (total_key_dim + total_value_dim) // num_heads),
+        name="reshape_check")
       kv = tf.transpose(kv, (1, 2, 0, 3))  # (batch,heads,time,kv-dim//heads)
       k, v = tf.split(kv, [total_key_dim // num_heads, total_value_dim // num_heads], axis=-1)
     # Dot-attention. Resulting last time dimension will be used to perform the softmax over, and will the be reduced.
