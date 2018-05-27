@@ -3276,6 +3276,8 @@ def identity_op_nested(x, name="identity"):
     return {k: identity_op_nested(x[k], name="%s_%s" % (name, k)) for k in x}
   if isinstance(x, (list, tuple)):
     return [identity_op_nested(x[i], name="%s_%i" % (name, i)) for i in range(len(x))]
+  if isinstance(x, tf.TensorArray):
+    return x  # could be nicer, but good enough for now...
   assert isinstance(x, tf.Tensor)
   return tf.identity(x, name=name)
 
@@ -5188,6 +5190,8 @@ def nested_get_shapes(x):
     return make_seq_of_type(type(x), [nested_get_shapes(v) for v in x])
   if isinstance(x, dict):
     return {k: nested_get_shapes(v) for (k, v) in x.items()}
+  if isinstance(x, tf.TensorArray):
+    return tf.TensorShape(())
   raise TypeError("invalid type %r of %r" % (type(x), x))
 
 

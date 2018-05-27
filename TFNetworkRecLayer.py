@@ -3434,6 +3434,8 @@ class SelfAttentionLayer(_ConcatInputLayer):
     :param bool attention_left_only: will mask out the future. see Attention is all you need.
     """
     super(SelfAttentionLayer, self).__init__(**kwargs)
+    assert self._rec_previous_layer or self.input_data.time_dim_axis is not None, (
+      "%s: This layer is expected to be used inside a RecLayer, or to have input with time." % self)
     total_value_dim = self.output.dim
     assert total_key_dim % num_heads == 0, "must be divisible"
     assert total_value_dim % num_heads == 0, "must be divisible. total_value_dim = n_out"
@@ -3473,15 +3475,15 @@ class SelfAttentionLayer(_ConcatInputLayer):
       assert attention_left_only
       # Memory for kv.
       kv_cur = tf.concat([k, v], axis=-1)  # (batch,heads,1,kv-dim//heads)
-      kv_left_ta = tf.TensorArray(
-        name="kv_left_ta",
-        dtype=kv_cur.dtype, size=0, dynamic_size=True, clear_after_read=False,
-        infer_shape=True, element_shape=kv_cur.get_shape().as_list())
+      kv_cur.set_shape((None, num_heads, 1, (total_key_dim + total_value_dim) // num_heads))
+      kv_left_ta = self._rec_previous_layer.rec_vars_outputs["kv_left_ta"]
+      assert isinstance(kv_left_ta, tf.TensorArray)
       time = kv_left_ta.size()
       kv_left_ta = kv_left_ta.write(time, kv_cur)
+      self.rec_vars_outputs["kv_left_ta"] = kv_left_ta
       kv = kv_left_ta.concat()  # (time,batch,heads,1,kv-dim//heads)
       # (time,batch,heads,kv-dim//heads)
-      kv = tf.reshape(kv, (time, batch_dim, num_heads, (total_key_dim + total_value_dim) / num_heads))
+      kv = tf.reshape(kv, (time + 1, batch_dim, num_heads, (total_key_dim + total_value_dim) // num_heads))
       kv = tf.transpose(kv, (1, 2, 0, 3))  # (batch,heads,time,kv-dim//heads)
       k, v = tf.split(kv, [total_key_dim // num_heads, total_value_dim // num_heads], axis=-1)
     # Dot-attention. Resulting last time dimension will be used to perform the softmax over, and will the be reduced.
@@ -3509,16 +3511,11 @@ class SelfAttentionLayer(_ConcatInputLayer):
         seed=self.network.random.randint(2 ** 31))
       fn_eval = lambda: weights
       weights = self.network.cond_on_train(fn_train, fn_eval)
-    v = tf.matmul(weights, v)  # (batch,heads,time,v-dim//heads)
+    v = tf.matmul(weights, v, name="reduce_att")  # (batch,heads,time,v-dim//heads)
     v.set_shape(tf.TensorShape([None, num_heads, None, total_value_dim // num_heads]))
     v = tf.transpose(v, [0, 2, 1, 3])  # (batch,time,heads,v-dim//heads)
-    if len(self.output.shape) == 2:
-      v = tf.reshape(v, get_shape(v)[:2] + [total_value_dim])
-      v.set_shape(tf.TensorShape([None, None, total_value_dim]))
-    else:
-      assert len(self.output.shape) == 1
-      v = tf.reshape(v, get_shape(v)[:1] + [total_value_dim])  # (batch,v-dim)
-      v.set_shape(tf.TensorShape([None, total_value_dim]))
+    v = tf.reshape(v, get_shape(v)[:2] + [total_value_dim], name="merge_vdim")  # (batch,time,v-dim)
+    v.set_shape(tf.TensorShape([None, None, total_value_dim]))
     if self.input_data.time_dim_axis is None:
       # Squeeze away the time-dim, which should be 1.
       v = tf.squeeze(v, axis=1)
@@ -3549,6 +3546,21 @@ class SelfAttentionLayer(_ConcatInputLayer):
     else:
       out.shape = (n_out,)
     return out
+
+  @classmethod
+  def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, num_heads, total_key_dim, n_out, sources=(), **kwargs):
+    data = get_concat_sources_data_template(sources)
+    data = data.copy_as_batch_major()
+    if data.time_dim_axis is None:
+      # Assume inside RecLayer.
+      total_value_dim = n_out
+      kv_left_ta = tf.TensorArray(
+        name="kv_left_ta",
+        dtype=tf.float32, size=0, dynamic_size=True, clear_after_read=False,
+        infer_shape=True,
+        element_shape=(None, num_heads, 1, (total_key_dim + total_value_dim) // num_heads))
+      return {"kv_left_ta": kv_left_ta}
+    return {}
 
 
 class KenLmStateLayer(_ConcatInputLayer):

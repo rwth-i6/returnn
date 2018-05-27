@@ -1669,7 +1669,7 @@ def test_rec_subnet_simple_rnn():
     print("rnn_cell also fine.")
 
 
-def check_reclayer_optimize_out(subnet_layer_dict):
+def check_reclayer_optimize_out(subnet_layer_dict, rtol=1e-5):
   """
   :param dict[str] subnet_layer_dict:
   """
@@ -1722,13 +1722,18 @@ def check_reclayer_optimize_out(subnet_layer_dict):
       net1.extern_data.data["data"].placeholder: x_np,
       net1.extern_data.data["data"].size_placeholder[0]: [n_time] * n_batch}
     y1_np = session.run(net1_output, feed_dict=feed_dict)
-    print("y:")
+    print("y: (shape %r)" % (y1_np.shape,))
     print(y1_np)
     y2_np = session.run(net2_output, feed_dict=feed_dict)
     assert_equal(y1_np.shape, (n_batch, n_time, n_out))
     assert_equal(y2_np.shape, (n_batch, n_time, n_out))
-    assert_allclose(y1_np, y2_np, rtol=1e-5)
-    assert y1_np.any()
+    assert y1_np.any() and y2_np.any()
+    if not numpy.allclose(y1_np, y2_np, rtol=rtol):
+      print("Not equal!")
+      for b in range(n_batch):
+        for t in range(n_time):
+          assert_allclose(y1_np[b, t], y2_np[b, t])
+      assert_allclose(y1_np, y2_np, rtol=rtol)
 
 
 def test_reclayer_optimize_out_linear():
@@ -1741,7 +1746,7 @@ def test_reclayer_optimize_out_rnncell():
 
 def test_reclayer_optimize_out_selfatt_left():
   check_reclayer_optimize_out({
-    "class": "self_attention", "attention_left_only": True, "num_heads": 2, "total_key_dim": 3})
+    "class": "self_attention", "attention_left_only": True, "num_heads": 2, "total_key_dim": 6, "n_out": 18})
 
 
 def test_subnet_load_on_init_rec():
