@@ -306,7 +306,9 @@ def initBackendEngine():
     if get_tensorflow_version_tuple()[0] == 0:
       print("Warning: TF <1.0 is not supported and likely broken.", file=log.v2)
     from TFUtil import debugRegisterBetterRepr, setup_tf_thread_pools
-    setup_tf_thread_pools(log_file=log.v2)
+    tf_session_opts = config.typed_value("tf_session_opts", {})
+    assert isinstance(tf_session_opts, dict)
+    setup_tf_thread_pools(log_file=log.v3, tf_session_opts=tf_session_opts)
     debugRegisterBetterRepr()
   else:
     raise NotImplementedError

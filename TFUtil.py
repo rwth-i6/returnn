@@ -1544,7 +1544,7 @@ def identity_with_ops(x, ops):
 
 _setup_tf_thread_pools_called_once = False
 
-def setup_tf_thread_pools(num_threads=None, log_file=None):
+def setup_tf_thread_pools(num_threads=None, log_file=None, tf_session_opts=None):
   """
   See here for documentation of intra_op_parallelism_threads and inter_op_parallelism_threads:
   https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/protobuf/config.proto
@@ -1570,6 +1570,7 @@ def setup_tf_thread_pools(num_threads=None, log_file=None):
 
   :param int num_threads: used for both intra and inter parallelism thread pools
   :param stream|None log_file:
+  :param dict[str] tf_session_opts:
   """
   global _setup_tf_thread_pools_called_once
   if _setup_tf_thread_pools_called_once:
@@ -1578,14 +1579,20 @@ def setup_tf_thread_pools(num_threads=None, log_file=None):
   if not num_threads:
     from Util import guess_requested_max_num_threads
     num_threads = guess_requested_max_num_threads(log_file=log_file, fallback_num_cpus=False)
-  if log_file:
-    print("Setup TF inter and intra global thread pools, num_threads=%r." % num_threads, file=log_file)
-  opts = {}
+  # See options here:
+  # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/protobuf/config.proto
+  if tf_session_opts:
+    opts = tf_session_opts.copy()
+  else:
+    opts = {}
+  assert isinstance(opts, dict)
   opts.setdefault("log_device_placement", False)
   opts.setdefault("device_count", {}).setdefault("GPU", 0)
   if num_threads:
     opts.setdefault("intra_op_parallelism_threads", num_threads)
     opts.setdefault("inter_op_parallelism_threads", num_threads)
+  if log_file:
+    print("Setup TF inter and intra global thread pools, num_threads %r, session opts %r." % (num_threads, opts), file=log_file)
   with tf.Session(config=tf.ConfigProto(**opts)) as session:
     session.close()
 
