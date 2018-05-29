@@ -765,16 +765,17 @@ class Engine(object):
     self._init_network(net_desc=net_dict, epoch=self.epoch)
 
     if self.preload_from_files:
-      print("WARNING: Option 'preload_from_files' is currently not compatible with 'load_on_init' in SubnetworkLayer")
+      # This option is to be replaced by a load_on_init option for each layer in the future.
+      print("WARNING: Option 'preload_from_files' is currently not compatible with 'load_on_init' in SubnetworkLayer", file=log.v2)
       print("Start pre-loading weights...", file=log.v2)
       for model_name in self.preload_from_files.keys():
         model_filename = self.preload_from_files.get(model_name)['filename']
         print("loading weights from", model_filename, file=log.v2)
         self_prefix = self.network.get_absolute_name_scope_prefix()  # with "/" at end
-        var_prefix_file_id = self.preload_from_files.get(model_name)['prefix']  # prefix to identify the variables to be restored from the file
+        load_if_prefix = self.preload_from_files.get(model_name)['prefix']  # prefix to identify the variables to be restored from the file
         from TFNetwork import CustomCheckpointLoader
         loader = CustomCheckpointLoader(
-          filename=model_filename, saveable_params=self.network.get_trainable_params(), params_prefix=self_prefix, var_prefix_file_id=var_prefix_file_id)
+          filename=model_filename, saveable_params=self.network.get_trainable_params(), params_prefix=self_prefix, load_if_prefix=load_if_prefix)
         loader.set_as_custom_init()
       self.network.initialize_params(session=self.tf_session)
 

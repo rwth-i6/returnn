@@ -1291,11 +1291,12 @@ class CustomCheckpointLoader:
 
   """
 
-  def __init__(self, filename, saveable_params, params_prefix="", var_prefix_file_id="", network=None):
+  def __init__(self, filename, saveable_params, params_prefix="", load_if_prefix="", network=None):
     """
     :param str filename: filepattern for NewCheckpointReader
     :param list[tf.Variable|tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject] saveable_params:
-    :param str var_prefix_file_id: prefix to identify the variables to be loaded from the file
+    :param str load_if_prefix: if given, only load variables with a name containing this string.
+      the variables in the file are expected to have the same name but without this string.
     :param TFNetwork network:
     """
     self.network = network
@@ -1313,17 +1314,15 @@ class CustomCheckpointLoader:
     # All variables in the checkpoint:
     self.var_ckpt_names = set(self.reader.get_variable_to_shape_map())
     # All variables of the model to be loaded:
-    self.var_prefix_file_id = var_prefix_file_id
-    if self.var_prefix_file_id:
+    self.load_if_prefix = load_if_prefix
+    if self.load_if_prefix:
       self.var_net_names = self._get_name_with_prefix()
-      self.missing_var_names = []  # not implemented yet.
-      self.obsolete_var_names = []
     else:
       self.var_net_names = set([self._get_param_name(v) for v in self.saveable_params])
     # Model variables missing in the checkpoint:
-      self.missing_var_names = [v for v in sorted(self.var_net_names) if v not in self.var_ckpt_names]
+    self.missing_var_names = [v for v in sorted(self.var_net_names) if v not in self.var_ckpt_names]
     # Checkpoint variables which are not used in this model:
-      self.obsolete_var_names = [v for v in sorted(self.var_ckpt_names) if v not in self.var_net_names]
+    self.obsolete_var_names = [v for v in sorted(self.var_ckpt_names) if v not in self.var_net_names]
     self.custom_param_importers = [
       self.CustomParamImporter(layer=layer, checkpoint_loader=self)
       for layer in network.layers.values() if layer.custom_param_importer] if network else []
@@ -1404,7 +1403,7 @@ class CustomCheckpointLoader:
 
   def _get_name_with_prefix(self):
     """
-    :return: set: a set of variable names containing var_prefix_file_id
+    :return: set: a set of variable names containing load_if_prefix
     """
     var_net_names = set()
     for v in self.saveable_params:
@@ -1412,8 +1411,8 @@ class CustomCheckpointLoader:
         v_name = v.name[:-2]
       else:
         v_name = v.name
-      if self.var_prefix_file_id in v_name:
-        v_name = v_name.replace(self.var_prefix_file_id,'')
+      if self.load_if_prefix in v_name:
+        v_name = v_name.replace(self.load_if_prefix,'')
         if self.params_prefix:
           var_net_names.add(v_name[len(self.params_prefix):])
         else:
@@ -1451,10 +1450,10 @@ class CustomCheckpointLoader:
       # Fast path.
       for v in self.saveable_params:
         assert isinstance(v, tf.Variable), "not yet implemented otherwise..."
-        if self.var_prefix_file_id:
+        if self.load_if_prefix:
           v_name = self._get_param_name(v)
-          if self.var_prefix_file_id in v_name:
-            v_name = v_name.replace(self.var_prefix_file_id,'')
+          if self.load_if_prefix in v_name:
+            v_name = v_name.replace(self.load_if_prefix,'')
             value = self.reader.get_tensor(v_name)
             variable_values[v] = self.VariableValue(value=value)
         else:
@@ -1583,7 +1582,13 @@ class CustomCheckpointLoader:
       # Similar: from tensorflow.contrib.framework.python.ops import assign_from_checkpoint
       for v in self.saveable_params:
         assert isinstance(v, tf.Variable), "not yet implemented otherwise..."
-        v_name = self._get_param_name(v)  # current name
+        if self.load_if_prefix:
+          if self.load_if_prefix not in v.name:
+            continue
+          else:
+            v_name = self._get_param_name(v).replace(self.load_if_prefix,'')
+        else:
+          v_name = self._get_param_name(v)  # current name
         custom_importer = self._find_custom_param_importer(v_name)
         if custom_importer:
           variable_values[v] = self.VariableValue(custom_param_importer=custom_importer)
@@ -1655,8 +1660,8 @@ class CustomCheckpointLoader:
       return var_post_init
 
     for var in self.saveable_params:
-      if self.var_prefix_file_id:
-        if self.var_prefix_file_id in var.name:
+      if self.load_if_prefix:
+        if self.load_if_prefix in var.name:
           set_custom_post_init(var=var, func=make_var_post_init(var))
           print("%s registered for pre-loading." % var.name, file=log.v2)
       else:
