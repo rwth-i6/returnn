@@ -1999,12 +1999,14 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
   """
   layer_class = "softmax_over_spatial"
 
-  def __init__(self, energy_factor=None, **kwargs):
+  def __init__(self, energy_factor=None, energy_mask="sequence", window_start=None, window_size=10, **kwargs):
     """
     :param float|None energy_factor: the energy will be scaled by this factor.
       This is like a temperature for the softmax.
       In Attention-is-all-you-need, this is set to 1/sqrt(base_ctx.dim).
-    :param bool local: if true, assume the source is a slice so we skip masking the seq
+    :param str energy_mask: either "sequence" (for masking the sequence) or "window"
+    :param LayerBase|None window_start: Tensor of shape (B,) indicating the window start
+    :param int window_size:
     """
     from TFUtil import move_axis, sequence_mask, sequence_mask_time_major
     import numpy
@@ -2016,8 +2018,23 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
     energy_shape = [energy_shape[i] for i in range(energy_data.batch_ndim)]
     # if the time-axis is static, we can skip the masking
     if energy_data.time_dim_axis is not None:
-      # We must mask all values behind seq_lens. Set them to -inf, because we use softmax afterwards.
-      energy_mask = energy_data.get_sequence_mask()
+      if energy_mask == "sequence":
+        # We must mask all values behind seq_lens. Set them to -inf, because we use softmax afterwards.
+        energy_mask = energy_data.get_sequence_mask()
+      elif energy_mask == "window":
+        assert window_start is not None
+        from TFUtil import nd_indices, expand_dims_unbroadcast
+        window_start = window_start.output.get_placeholder_as_batch_major()
+        n_batch = energy_shape[energy_data.batch_dim_axis]
+        # time-major: (W,B), batch-major(B,W)
+        # untested for batch_major
+        indices = expand_dims_unbroadcast(tf.range(window_size), energy_data.batch_dim_axis, n_batch)
+        indices += tf.expand_dims(tf.to_int32(window_start), axis=energy_data.time_dim_axis)  # (W, B) + (1,B) = (W,B)
+        idxs = nd_indices(indices)
+        mask_shape = energy_shape[:2]  # (T, B)
+        mask_shape[energy_data.time_dim_axis] = window_size  # (W, B) | (B, W)
+        energy_mask = tf.scatter_nd(idxs, tf.ones(shape=mask_shape), energy_shape[:2])
+        energy_mask = tf.cast(energy_mask, tf.bool)
       energy_mask_flat = tf.reshape(energy_mask, [numpy.prod(energy_shape[:2])], name="energy_mask_flat")
       energy_flat = tf.reshape(energy, [numpy.prod(energy_shape[:2])] + energy_shape[2:], name="energy_flat")
       energy_flat = tf.where(energy_mask_flat, energy_flat, float("-inf") * tf.ones_like(energy_flat), "energy_masked")
@@ -2035,6 +2052,12 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
     if concat_sources.time_dim_axis is None:  # for use in subnet
       return concat_sources.copy_as_batch_major()
     return concat_sources.copy_as_bt_or_tb_major()
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    super(SoftmaxOverSpatialLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    if d.get("window_start", None):
+      d["window_start"] = get_layer(d["window_start"])
 
 
 class BatchSoftmaxLayer(_ConcatInputLayer):
