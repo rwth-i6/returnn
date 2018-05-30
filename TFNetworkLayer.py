@@ -5627,11 +5627,19 @@ class SampledSoftmaxLoss(Loss):
     with tf.name_scope("loss_sampled_softmax"):
       # The function that is called for the training branch
       def train_fn():
-        labels = self.target_flat
+        #first switch target vector for dimension alignment with input_data tensor
+        labels = self.target.placeholder
+        current_labels_shape = tf.shape(self.target.placeholder)
+        labels = tf.reshape(self.target.placeholder, [current_labels_shape[1], current_labels_shape[0]])
+        labels = tf.reshape(labels, [-1])
         labels = tf.expand_dims(labels, 1)
 
-        # labels = tf.reshape(self.target.placeholder, [-1])
-        # labels = tf.expand_dims(labels, 1)
+        inputs = self.layer.input_data.get_placeholder_flattened()
+        inputs = self.layer.input_data.placeholder
+
+        current_input_shape = tf.shape(self.layer.input_data.placeholder)
+        new_input_shape = [-1, current_input_shape[self.layer.input_data.ndim]]
+        inputs = tf.reshape(inputs, new_input_shape)
 
         from tensorflow.python.framework import dtypes
         from tensorflow.python.ops import candidate_sampling_ops, math_ops
@@ -5652,27 +5660,20 @@ class SampledSoftmaxLoss(Loss):
           num_true=1,  # Note that this loss layer does not support multiple correct classes as target values
           num_sampled=self.num_sampled,  # How many samples do we wanna draw
           unique=True,
-          range_max=self.target.dim,
-          seed=TFUtil.get_random_seed()
-        )
-
-        kwargs = {}
-        if TFUtil.tf_version_tuple() >= (1, 8, 0):
-          kwargs["seed"] = TFUtil.get_random_seed()
+          range_max=self.target.dim)
 
         return tf.nn.sampled_softmax_loss(
           weights=self.layer.W,  # shape: [num_classes, dim]
           biases=self.layer.b,  # shape: [num_classes]
           labels=labels,  # shape: [batch_size, num_true]
-          inputs=self.layer.input_data.get_placeholder_flattened(),  # shape: [batch_size, dim]
+          inputs=inputs,  # shape: [batch_size, dim]
           num_sampled=self.num_sampled,  # How many samples do we wanna draw
           num_classes=self.target.dim,  # How many classes do we have
           num_true=1,  # Note that this loss layer does not support multiple correct classes as target values
           sampled_values=sampled_values,  # The sampling
           remove_accidental_hits=self.remove_accidental_hits,
           partition_strategy=self.partition_strategy,
-          name="sampled_softmax_loss",  # Name for the scope we produce
-          **kwargs
+          name="sampled_softmax_loss"  # Name for the scope we produce
         )
 
       # The function that is called for the evaluation branch
