@@ -1,5 +1,6 @@
 import tensorflow as tf
 from TFNetworkLayer import LayerBase, _ConcatInputLayer, Loss, get_concat_sources_data_template
+from TFNetworkRecLayer import RecLayer
 from TFUtil import Data
 from Util import softmax
 
@@ -12,7 +13,7 @@ class NeuralTransducerLayer(_ConcatInputLayer):
     layer_class = "neural_transducer"
 
     def __init__(self, transducer_hidden_units, n_out, transducer_max_width, input_block_size,
-                 embedding_size, e_symbol_index, **kwargs):
+                 embedding_size, e_symbol_index, use_prev_state_as_start=False, **kwargs):
         """
         Initialize the Neural Transducer.
         :param int transducer_hidden_units: Amount of units the transducer should have.
@@ -21,12 +22,14 @@ class NeuralTransducerLayer(_ConcatInputLayer):
         :param int input_block_size: Amount of inputs to use for each NT block.
         :param int embedding_size: Embedding dimension size.
         :param int e_symbol_index: Index of e symbol that is used in the NT block. 0 <= e_symbol_index < num_outputs
+        :param bool use_prev_state_as_start: Whether to use the last state of the previous recurrent layer as the ]
+        initial state of the transducer. NOTE: For this to work, you have to watch out for:
+        previous_layer.hidden_units = previous_layer.n_out = transducer.transducer_hidden_units
         """
 
         super(NeuralTransducerLayer, self).__init__(**kwargs)
 
-        # TODO: Check if we can retrieve the encoder's last state as init state for transducer
-        #   -TODO: Use get_last_hidden_state from previous source using "*" as keys, maybe use encoder_outputs as hidden vector
+        #  TODO: Use last_hidden_c not from last state but from state at timestep input_block_size
         # TODO: Build optimized version
 
         # Get embedding
@@ -44,13 +47,29 @@ class NeuralTransducerLayer(_ConcatInputLayer):
         # Do assertions
         assert 0 <= e_symbol_index < n_out, 'NT: E symbol outside possible outputs!'
 
+        # Get prev state as start state
+        last_hidden = None
+        if use_prev_state_as_start is True and isinstance(self.sources[0], RecLayer) is True:
+            # TODO: add better checking whether the settings are correct
+            last_hidden_c = self.sources[0].get_last_hidden_state('*')  # Get last c after all blocks
+            last_hidden_h = encoder_outputs[input_block_size]  # Get last hidden after the first block
+            last_hidden = tf.stack([last_hidden_c, last_hidden_h], axis=0)
+
+        # Note down data
+        self.transducer_hidden_units = transducer_hidden_units
+        self.num_outputs = n_out
+        self.transducer_max_width = transducer_max_width
+        self.input_block_size = input_block_size
+        self.e_symbol_index = e_symbol_index
+
         # self.output.placeholder is of shape [transducer_max_width * amount_of_blocks, batch_size, n_out]
         self.output.placeholder = self.build_full_transducer(transducer_hidden_units=transducer_hidden_units,
                                                              embeddings=embeddings,
                                                              num_outputs=n_out,
                                                              input_block_size=input_block_size,
                                                              transducer_max_width=transducer_max_width,
-                                                             encoder_outputs=encoder_outputs)
+                                                             encoder_outputs=encoder_outputs,
+                                                             trans_hidden_init=last_hidden)
 
         # Set correct logit lengths
         output_size = self.round_vector_to_closest_input_block(vector=self.input_data.size_placeholder[0],
@@ -69,7 +88,7 @@ class NeuralTransducerLayer(_ConcatInputLayer):
             self._add_all_trainable_params(tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=scope.name))
 
     def build_full_transducer(self, transducer_hidden_units, embeddings, num_outputs, input_block_size,
-                              transducer_max_width, encoder_outputs):
+                              transducer_max_width, encoder_outputs, trans_hidden_init):
         """
         Builds the complete transducer.
         :param int transducer_hidden_units:  Amount of units the transducer should have.
@@ -78,6 +97,9 @@ class NeuralTransducerLayer(_ConcatInputLayer):
         :param int input_block_size: Amount of inputs to use for each NT block.
         :param int transducer_max_width: The max amount of outputs in one NT block (including the final <E> symbol)
         :param tf.tensor encoder_outputs: The outputs of the encode in shape of [max_time, batch_size, encoder_hidden]
+        :param tf.tensor trans_hidden_init: The init state of the transducer. Needs to be of shape
+        [2, batch_size, transducer_hidden_units]. The trans_hidden_init[0] is the c vector of the lstm,
+        trans_hidden_init[1] the hidden vector.
         :return: Returns a reference to the tf.tensor containing the logits.
         :rtype: tf.tensor
         """
@@ -85,7 +107,8 @@ class NeuralTransducerLayer(_ConcatInputLayer):
         with self.var_creation_scope():
             # Get meta variables
             batch_size = tf.shape(encoder_outputs)[1]
-            trans_hidden_init = tf.zeros([2, batch_size, transducer_hidden_units], dtype=tf.float32)
+            if trans_hidden_init is None:
+              trans_hidden_init = tf.zeros([2, batch_size, transducer_hidden_units], dtype=tf.float32)
 
             # Pad encoder outputs with zeros so that it its cleanly divisible by the input_block_size
             time_length_to_append = input_block_size - tf.mod(tf.shape(encoder_outputs)[0], input_block_size)
@@ -157,7 +180,6 @@ class NeuralTransducerLayer(_ConcatInputLayer):
                 from tensorflow.contrib.rnn import LSTMStateTuple
                 trans_hidden_state_t = LSTMStateTuple(trans_hidden_c, trans_hidden_h)
 
-                #with self.var_creation_scope():
                 decoder = tf.contrib.seq2seq.BasicDecoder(
                     decoder_cell, helper,
                     decoder_cell.zero_state(batch_size, tf.float32).clone(cell_state=trans_hidden_state_t),
@@ -300,8 +322,7 @@ class NeuralTransducerLoss(Loss):
             self.log_prob += self.__compute_sum_probabilities(transducer_outputs, targets, transducer_amount_outputs)
             self.last_state_transducer = new_transducer_state
 
-    def __init__(self, transducer_hidden_units, num_outputs, transducer_max_width, input_block_size,
-                 e_symbol_index, debug=False, **kwargs):
+    def __init__(self, debug=False, **kwargs):
         """
         Initialize the Neural Transducer loss.
         :param int transducer_hidden_units: Amount of units the transducer should have.
@@ -314,15 +335,28 @@ class NeuralTransducerLoss(Loss):
         """
         super(NeuralTransducerLoss, self).__init__(**kwargs)
 
-        # TODO: Get setup vars from sources
-
-        self.transducer_hidden_units = transducer_hidden_units
-        self.num_outputs = num_outputs
-        self.transducer_max_width = transducer_max_width
-        self.input_block_size = input_block_size
-        self.e_symbol_index = e_symbol_index
+        self.transducer_hidden_units = 0
+        self.num_outputs = 0
+        self.transducer_max_width = 0
+        self.input_block_size = 0
+        self.e_symbol_index = 0
         self.debug = debug
         self.reduce_func = tf.reduce_sum
+
+    def init(self, **kwargs):
+        super(NeuralTransducerLoss, self).init(**kwargs)
+        # Get setup vars from sources
+        base_class = None
+        for c in self.base_network.layers:
+            if isinstance(self.base_network.layers[c], NeuralTransducerLayer):
+                base_class = self.base_network.layers[c]
+
+        assert base_class is not None, "Neural Transducer layer not found!"
+        self.transducer_hidden_units = base_class.transducer_hidden_units
+        self.num_outputs = base_class.num_outputs
+        self.transducer_max_width = base_class.transducer_max_width
+        self.input_block_size = base_class.input_block_size
+        self.e_symbol_index = base_class.e_symbol_index
 
     def get_value(self):
         logits = self.output.copy_as_time_major().placeholder
@@ -353,7 +387,6 @@ class NeuralTransducerLoss(Loss):
 
         # Normalize CE based on amount of False elements, as the rest of the normalization is handled by RETURNN
         loss = tf.reduce_sum(stepwise_cross_entropy) #/ tf.to_float(tf.reduce_sum(tf.cast(tf.logical_not(mask), tf.float32)))
-        # TODO: Re-check this
         return loss
 
     def get_alignment_from_logits(self, logits, targets, amount_of_blocks, transducer_max_width):
@@ -544,7 +577,6 @@ class NeuralTransducerLoss(Loss):
         return target_dim + 1  # one added for <E>
 
     def get_error(self):
-        # TODO: Debug whether this is correct, maybe tf.edit_distance?
         with tf.name_scope("loss_frame_error"):
             logits = self.output.copy_as_time_major().placeholder
             logits_lengths = self.output.size_placeholder[0]
@@ -563,6 +595,6 @@ class NeuralTransducerLoss(Loss):
             not_equal = tf.where(mask, not_equal, zeros)
 
             total = tf.reduce_sum(tf.cast(not_equal, tf.float32))
-            # TODO: Check normalization
+            # TODO: Check normalization, some small error
             total = total  #/ tf.to_float(tf.reduce_sum(tf.cast(mask, tf.float32)))
             return total
