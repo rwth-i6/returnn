@@ -394,6 +394,7 @@ class Runner(object):
     threads = tf.train.start_queue_runners(sess=sess, coord=coord)
     self.data_provider.start_threads()
     self.start_time = time.time()
+    elapsed_time_tf = 0.0
     step = None
     fetches_dict = None
     feed_dict = None
@@ -441,11 +442,13 @@ class Runner(object):
             run_options = tf.RunOptions(
               trace_level=tf.RunOptions.FULL_TRACE)
             # We could use tfdbg.add_debug_tensor_watch here.
+            session_run_start_time = time.time()
             fetches_results = sess.run(
               fetches_dict,
               feed_dict=feed_dict,
               options=run_options,
               run_metadata=run_metadata)  # type: dict[str,numpy.ndarray|str]
+            elapsed_time_tf += time.time() - session_run_start_time
             writer.add_summary(fetches_results["summary"], step + step_offset)
             writer.add_run_metadata(run_metadata, 'step_{:04d}'.format(step + step_offset))
             tl = timeline.Timeline(run_metadata.step_stats)
@@ -453,7 +456,9 @@ class Runner(object):
             with open(timeline_path, 'w') as f:
               f.write(tl.generate_chrome_trace_format(show_memory=True))
           else:
+            session_run_start_time = time.time()
             fetches_results = sess.run(fetches_dict, feed_dict=feed_dict)  # type: dict[str,numpy.ndarray|str]
+            elapsed_time_tf += time.time() - session_run_start_time
             if writer and "summary" in fetches_results:
               writer.add_summary(fetches_results["summary"], step + step_offset)
         except tf.errors.OpError as exc:
@@ -488,6 +493,10 @@ class Runner(object):
         print("Stats:", file=log.v1)
         for k, v in sorted(self.stats.items()):
           print("  %s:" % k, v, file=log.v1)
+      elapsed = time.time() - self.start_time
+      elapsed_tf_percentage = (elapsed_time_tf / elapsed) if (elapsed > 0) else 0.0
+      print("%s, finished after %i steps, %s elapsed (%.1f%% computing time)" % (
+        report_prefix, step, hms(elapsed), (elapsed_tf_percentage * 100.)), file=log.v3)
 
     except KeyboardInterrupt as exc:
       print("KeyboardInterrupt in step %r." % step)
@@ -1090,7 +1099,8 @@ class Engine(object):
     self.learning_rate_control.setEpochError(self.epoch, {"train_score": trainer.score, "train_error": trainer.error})
     self.learning_rate_control.save()
 
-    print(self.get_epoch_str(), "score:", self.format_score(trainer.score), "elapsed:", hms(trainer.elapsed), end=" ", file=log.v1)
+    print(
+      self.get_epoch_str(), "score:", self.format_score(trainer.score), "elapsed:", hms(trainer.elapsed), file=log.v1)
     self.eval_model()
 
     if self.config.bool_or_other("cleanup_old_models", None):
@@ -1163,13 +1173,13 @@ class Engine(object):
       if not tester.finalized:
         print("Tester not finalized, quitting.", file=log.v1)
         sys.exit(1)
-      eval_dump_str += [" %s: score %s error %s" % (
+      eval_dump_str += ["%s: score %s error %s" % (
                         dataset_name, self.format_score(tester.score), self.format_score(tester.error))]
       results[dataset_name] = {"score": tester.score, "error": tester.error}
       if dataset_name == "dev":
         self.learning_rate_control.setEpochError(self.epoch, {"dev_score": tester.score, "dev_error": tester.error})
         self.learning_rate_control.save()
-    print(" ".join(eval_dump_str).strip(), file=log.v1)
+    print(" ".join(eval_dump_str), file=log.v1)
     if output_file:
       print('Write eval results to %r' % output_file, file=log.v3)
       from Util import betterRepr
