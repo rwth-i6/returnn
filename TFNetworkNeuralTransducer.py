@@ -315,12 +315,6 @@ class NeuralTransducerLoss(Loss):
         super(NeuralTransducerLoss, self).__init__(**kwargs)
 
         # TODO: Get setup vars from sources
-        print("------------------------- TEST -----------------------")
-        for s in self.base_network.layers:
-            print(s)
-        print("------------------------- TEST -----------------------")
-        print(self.layer)
-        print("------------------------- TEST -----------------------")
 
         self.transducer_hidden_units = transducer_hidden_units
         self.num_outputs = num_outputs
