@@ -1959,6 +1959,37 @@ class SampledSoftmax(_ConcatInputLayer):
       self.output.placeholder = self.output_before_activation.y
 
 
+class LengthLayer(_ConcatInputLayer):
+  """
+  Returns the length of sources as (B,).
+  """
+  layer_class = "length"
+
+  def __init__(self, add_time_axis=True, **kwargs):
+    super(LengthLayer, self).__init__(**kwargs)
+    data = self.input_data.get_placeholder_as_batch_major()
+    out = tf.cast(self.sources[0].output.size_placeholder[self.sources[0].output.time_dim_axis], tf.int32)
+    if add_time_axis:
+      out = tf.expand_dims(out, axis=self.output.time_dim_axis)
+    self.output.placeholder = out
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, add_time_axis=True, **kwargs):
+    if add_time_axis:
+      shape = (1,)
+      time_dim_axis = 1
+    else:
+      shape = ()
+      time_dim_axis = None
+    return Data(
+      name="%s_length" % name,
+      shape=shape,
+      batch_dim_axis=0,
+      time_dim_axis=time_dim_axis,
+      dtype="int32",
+      sparse=False)
+
+
 class SoftmaxOverSpatialLayer(_ConcatInputLayer):
   """
   This applies a softmax over spatial axis/axes (currently only time axis supported).
