@@ -5629,15 +5629,14 @@ class SampledSoftmaxLoss(Loss):
       def train_fn():
         #first switch target vector for dimension alignment with input_data tensor
         labels = self.target.placeholder
-        current_labels_shape = tf.shape(self.target.placeholder)
-        labels = tf.reshape(self.target.placeholder, [current_labels_shape[1], current_labels_shape[0]])
+        current_labels_shape = tf.shape(labels)
+        labels = tf.reshape(labels, [current_labels_shape[1], current_labels_shape[0]])
         labels = tf.reshape(labels, [-1])
         labels = tf.expand_dims(labels, 1)
 
-        inputs = self.layer.input_data.get_placeholder_flattened()
         inputs = self.layer.input_data.placeholder
 
-        current_input_shape = tf.shape(self.layer.input_data.placeholder)
+        current_input_shape = tf.shape(inputs)
         new_input_shape = [-1, current_input_shape[self.layer.input_data.ndim]]
         inputs = tf.reshape(inputs, new_input_shape)
 
