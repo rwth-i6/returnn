@@ -26,6 +26,7 @@ class NeuralTransducerLayer(_ConcatInputLayer):
         super(NeuralTransducerLayer, self).__init__(**kwargs)
 
         # TODO: Check if we can retrieve the encoder's last state as init state for transducer
+        #   -TODO: Use get_last_hidden_state from previous source using "*" as keys, maybe use encoder_outputs as hidden vector
         # TODO: Build optimized version
 
         # Get embedding
@@ -51,9 +52,14 @@ class NeuralTransducerLayer(_ConcatInputLayer):
                                                              transducer_max_width=transducer_max_width,
                                                              encoder_outputs=encoder_outputs)
 
+        # Set correct logit lengths
+        output_size = self.round_vector_to_closest_input_block(vector=self.input_data.size_placeholder[0],
+                                                               input_block_size=input_block_size,
+                                                               transducer_max_width=transducer_max_width)
+
         # Set shaping info
         self.output.size_placeholder = {
-          0: tf.ones([self.input_data.get_batch_dim()], dtype=tf.int32) * tf.shape(self.output.placeholder)[0]
+          0: output_size
         }
         self.output.time_dim_axis = 0
         self.output.batch_dim_axis = 1
@@ -190,6 +196,19 @@ class NeuralTransducerLayer(_ConcatInputLayer):
         for var in tf_vars:
             self.add_param(param=var, trainable=True, saveable=True)
 
+    def round_vector_to_closest_input_block(self, vector, input_block_size, transducer_max_width):
+        """
+        Rounds up the provided vector so that every entry is a multiple of input_block_size.
+        :param tf.tensor vector: A vector.
+        :param int input_block_size: Input block size as specified in the __init__ function.
+        :return: tf.tensor A vector the same shape as 'vector'.
+        """
+        vector = tf.cast(tf.ceil(tf.cast(vector, tf.float32) / input_block_size), tf.float32) * tf.cast(transducer_max_width, tf.float32)
+        vector = tf.cast(vector, tf.int32)
+
+        return vector
+
+
     @classmethod
     def get_out_data_from_opts(cls, n_out, **kwargs):
         data = get_concat_sources_data_template(kwargs["sources"], name="%s_output" % kwargs["name"])
@@ -245,13 +264,13 @@ class NeuralTransducerLoss(Loss):
                 if timestep + start_index < len(targets):
                     # For normal operations
                     if transducer_outputs[timestep][0][targets[start_index + timestep]] <= 0:
-                        return -10000000.0  # Some large negative number
+                        return -10000000.0 + numpy.random.uniform(-100, -500)  # Some large negative number
                     else:
                         return numpy.log(transducer_outputs[timestep][0][targets[start_index + timestep]])
                 else:
                     # For last timestep, so the <e> symbol
                     if transducer_outputs[timestep][0][self.E_SYMBOL] <= 0:
-                        return -10000000.0  # Some large negative number
+                        return -10000000.0 + numpy.random.uniform(-100, -500)  # Some large negative number
                     else:
                         return numpy.log(transducer_outputs[timestep][0][self.E_SYMBOL])
 
@@ -294,19 +313,32 @@ class NeuralTransducerLoss(Loss):
         :param int e_symbol_index: Index of e symbol that is used in the NT block. 0 <= e_symbol_index < num_outputs
         """
         super(NeuralTransducerLoss, self).__init__(**kwargs)
+
+        # TODO: Get setup vars from sources
+        print("------------------------- TEST -----------------------")
+        for s in self.base_network.layers:
+            print(s)
+        print("------------------------- TEST -----------------------")
+        print(self.layer)
+        print("------------------------- TEST -----------------------")
+
         self.transducer_hidden_units = transducer_hidden_units
         self.num_outputs = num_outputs
         self.transducer_max_width = transducer_max_width
-        self.inumpyut_block_size = input_block_size
+        self.input_block_size = input_block_size
         self.e_symbol_index = e_symbol_index
         self.debug = debug
+        self.reduce_func = tf.reduce_sum
 
     def get_value(self):
         logits = self.output.copy_as_time_major().placeholder
+        logits_lengths = self.output.size_placeholder[0]
         targets = self.target.copy_as_time_major().placeholder
+        targets_lengths = self.target.size_placeholder[0]
 
         # Get alignment info into our targets
-        new_targets, mask = tf.py_func(func=self.get_alignment_from_logits_manager, inp=[logits, targets],
+        new_targets, mask = tf.py_func(func=self.get_alignment_from_logits_manager,
+                                       inp=[logits, targets, logits_lengths, targets_lengths],
                                        Tout=(tf.int64, tf.bool), stateful=False)
 
         # Get CE
@@ -325,9 +357,9 @@ class NeuralTransducerLoss(Loss):
         zeros = tf.zeros_like(stepwise_cross_entropy)
         stepwise_cross_entropy = tf.where(mask, stepwise_cross_entropy, zeros)
 
-        # Normalize CE based on amount of True (relevant) elements in the mask
-        loss = tf.reduce_sum(stepwise_cross_entropy) / tf.to_float(tf.reduce_sum(tf.cast(mask, tf.float32)))
-        loss *= tf.to_float(tf.shape(logits)[0])  # TODO: see if this is correct
+        # Normalize CE based on amount of False elements, as the rest of the normalization is handled by RETURNN
+        loss = tf.reduce_sum(stepwise_cross_entropy) #/ tf.to_float(tf.reduce_sum(tf.cast(tf.logical_not(mask), tf.float32)))
+        # TODO: Re-check this
         return loss
 
     def get_alignment_from_logits(self, logits, targets, amount_of_blocks, transducer_max_width):
@@ -374,6 +406,7 @@ class NeuralTransducerLoss(Loss):
 
                 # Expand the alignment for each transducer width, only look at valid options
                 targets_length = len(targets)
+
                 min_index = alignment.alignment_position[0] + transducer_max_width + \
                             max(-transducer_max_width,
                                 targets_length - ((total_blocks - block_index + 1) * transducer_max_width
@@ -399,15 +432,17 @@ class NeuralTransducerLoss(Loss):
                         if a in new_alignments:
                             new_alignments.remove(a)
 
+            assert len(new_alignments) > 0, 'Error in amount of alignments! %s' % str(targets)
+
             return new_alignments
 
         # Manage variables
         current_block_index = 1
         current_alignments = [self.Alignment(transducer_hidden_units=self.transducer_hidden_units,
-                                              E_SYMBOL=self.e_symbol_index)]
+                                             E_SYMBOL=self.e_symbol_index)]
 
         # Do assertions to check whether everything was correctly set up.
-        assert transducer_max_width * amount_of_blocks >= len(
+        assert (transducer_max_width - 1) * amount_of_blocks >= len(
             targets), 'transducer_max_width to small for targets'
 
         for block in range(current_block_index, amount_of_blocks + 1):
@@ -417,11 +452,10 @@ class NeuralTransducerLoss(Loss):
                                                transducer_max_width=transducer_max_width - 1,  # -1 due to offset for e
                                                targets=targets, total_blocks=amount_of_blocks)
             # for alignment in current_alignments:
-            # print str(alignment.alignment_locations) + ' ' + str(alignment.log_prob)
 
         # Select first alignment if we have multiple with the same log prob (happens with ~1% probability in training)
-
-        # print('Alignment:' + str(current_alignments[0].alignment_locations))
+        if self.debug is True:
+            print('Alignment: ' + str(current_alignments[0].alignment_locations) + ' for targets: ' + str(targets))
 
         def modify_targets(targets, alignment):
             # Calc lengths for each transducer block
@@ -468,7 +502,7 @@ class NeuralTransducerLoss(Loss):
 
         return m_targets, mask
 
-    def get_alignment_from_logits_manager(self, logits, targets):
+    def get_alignment_from_logits_manager(self, logits, targets, logit_lengths, targets_lengths):
         """
         Get the modified targets & mask.
         :param logits: Logits of shape [max_time, batch_size, vocab_size]
@@ -485,14 +519,23 @@ class NeuralTransducerLoss(Loss):
         m_targets = []
         masks = []
 
-        amount_of_blocks = int(logits.shape[0]/self.transducer_max_width)
+        # amount_of_blocks = int(logits.shape[0]/self.transducer_max_width)
 
         # Go over every sequence in batch
         for batch_index in range(logits.shape[1]):
-            temp_target, temp_mask = self.get_alignment_from_logits(logits=logits[:, batch_index, :],
-                                                                    targets=targets[:, batch_index],
+            # Slice correct logits & targets
+            logit_length = logit_lengths[batch_index]
+            target_length = targets_lengths[batch_index]
+            amount_of_blocks = int(logit_length/self.transducer_max_width)
+
+            temp_target, temp_mask = self.get_alignment_from_logits(logits=logits[0:logit_length, batch_index, :],
+                                                                    targets=targets[0:target_length, batch_index],
                                                                     amount_of_blocks=amount_of_blocks,
                                                                     transducer_max_width=self.transducer_max_width)
+            # Pad afterwards each target (based on targets_lengths) & mask (based on logit_lengths)
+            temp_target = numpy.append(temp_target, numpy.zeros(shape=(logits.shape[0] - temp_target.shape[0], 1), dtype=int), axis=0)
+            temp_mask = numpy.append(temp_mask, numpy.zeros(shape=(logits.shape[0] - logit_length, 1), dtype=bool), axis=0)
+
             m_targets.append(temp_target)
             masks.append(temp_mask)
 
@@ -507,5 +550,25 @@ class NeuralTransducerLoss(Loss):
         return target_dim + 1  # one added for <E>
 
     def get_error(self):
-        # TODO: Implement frame error rate
-        return None
+        # TODO: Debug whether this is correct, maybe tf.edit_distance?
+        with tf.name_scope("loss_frame_error"):
+            logits = self.output.copy_as_time_major().placeholder
+            logits_lengths = self.output.size_placeholder[0]
+            targets = self.target.copy_as_time_major().placeholder
+            targets_lengths = self.target.size_placeholder[0]
+
+            # Get alignment info into our targets
+            new_targets, mask = tf.py_func(func=self.get_alignment_from_logits_manager,
+                                           inp=[logits, targets, logits_lengths, targets_lengths],
+                                           Tout=(tf.int64, tf.bool), stateful=False)
+
+            output_label = tf.cast(tf.argmax(logits, axis=2), tf.int64)
+            not_equal = tf.not_equal(output_label, new_targets)
+
+            zeros = tf.zeros_like(not_equal)
+            not_equal = tf.where(mask, not_equal, zeros)
+
+            total = tf.reduce_sum(tf.cast(not_equal, tf.float32))
+            # TODO: Check normalization
+            total = total  #/ tf.to_float(tf.reduce_sum(tf.cast(mask, tf.float32)))
+            return total
