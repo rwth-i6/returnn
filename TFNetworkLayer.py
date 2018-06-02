@@ -1965,7 +1965,7 @@ class LengthLayer(_ConcatInputLayer):
   """
   layer_class = "length"
 
-  def __init__(self, add_time_axis=True, **kwargs):
+  def __init__(self, add_time_axis=False, **kwargs):
     super(LengthLayer, self).__init__(**kwargs)
     data = self.input_data.get_placeholder_as_batch_major()
     out = tf.cast(self.sources[0].output.size_placeholder[self.sources[0].output.time_dim_axis], tf.int32)
@@ -1974,7 +1974,7 @@ class LengthLayer(_ConcatInputLayer):
     self.output.placeholder = out
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, add_time_axis=True, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, add_time_axis=False, **kwargs):
     if add_time_axis:
       shape = (1,)
       time_dim_axis = 1
