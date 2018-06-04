@@ -3106,6 +3106,7 @@ def cond(pred, fn1, fn2, name=None):
   or at least the resulting graph will be evaluated.
   If pred can is constant at the call, only the corresponding fn will be called.
   This is similar as the TF internal _smart_cond().
+  And similar as tf.contrib.framework.smart_cond.
 
   :param tf.Tensor|bool pred:
   :param ()->(tf.Tensor|list[tf.Tensor]) fn1:
@@ -5234,13 +5235,86 @@ def same_context(x):
   yield None
 
 
+def get_protobuf_fields(obj):
+  """
+  :param obj: protobuf object
+  :rtype: dict[str]
+  """
+  return {k.name: v for (k, v) in obj.ListFields()}
+
+
+def get_op_attrib_keys(op):
+  """
+  :param tf.Operation|tf.Tensor|tf.TensorArray op:
+  :rtype: list[str]
+  :return: list of attribs. op.get_attr(key) should work
+  """
+  if isinstance(op, tf.Tensor):
+    op = op.op
+  elif isinstance(op, tf.TensorArray):
+    op = op.handle.op
+  assert isinstance(op, tf.Operation)
+  node_def_fields = get_protobuf_fields(op.node_def)
+  attribs = node_def_fields["attr"]
+  return list(attribs.keys())
+
+
+def tensor_array_is_dynamic_size(ta):
+  """
+  :param tf.TensorArray ta:
+  :rtype: bool
+  """
+  return ta.handle.op.get_attr("dynamic_size")
+
+
+def tensor_array_is_clear_after_read(ta):
+  """
+  :param tf.TensorArray ta:
+  :rtype: bool
+  """
+  return ta.handle.op.get_attr("clear_after_read")
+
+
+def tensor_array_like(ta, **kwargs):
+  """
+  :param tf.TensorArray ta:
+  :param kwargs: passed to tf.TensorArray constructor
+  :return: another tensor array, just like ta
+  :rtype: tf.TensorArray
+  """
+  return tf.TensorArray(
+    dtype=ta.dtype, size=ta.size(), dynamic_size=tensor_array_is_dynamic_size(ta),
+    clear_after_read=tensor_array_is_clear_after_read(ta),
+    infer_shape=ta._infer_shape, element_shape=ta._element_shape,
+    **kwargs)
+
+
+def _tensor_array_select_src_beams(ta, src_beams):
+  """
+  Currently this is a quite inefficient implementation.
+
+  :param tf.TensorArray ta:
+  :param tf.Tensor src_beams:
+  :rtype: tf.TensorArray
+  """
+  x = ta.stack()  # (time,batch,...)
+  x = swapaxes(x, 0, 1)  # (batch,time,...)
+  x = select_src_beams(x, src_beams=src_beams)
+  x = swapaxes(x, 0, 1)  # (time,batch,...)
+  ta_new = tensor_array_like(ta)
+  ta_new = ta_new.unstack(x)
+  return ta_new
+
+
 def select_src_beams(x, src_beams):
   """
-  :param tf.Tensor x: (batch * src-beam, ...)
+  :param tf.Tensor|tf.TensorArray|T x: (batch * src-beam, ...)
   :param tf.Tensor src_beams: (batch, beam) -> src-beam-idx
   :return: (batch * beam, ...)
-  :rtype: tf.Tensor
+  :rtype: tf.Tensor|T
   """
+  if isinstance(x, tf.TensorArray):
+    return _tensor_array_select_src_beams(x, src_beams=src_beams)
   assert isinstance(x, tf.Tensor)
   assert isinstance(src_beams, tf.Tensor)
   with tf.name_scope("select_src_beams"):

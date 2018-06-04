@@ -1355,6 +1355,33 @@ def test_transform_param_axes_split_info_to_new_shape():
   assert_equal(transform_param_axes_split_info_to_new_shape([[7],[7]*4], [7,7*8]), [[7],[7*2]*4])
 
 
+def test_get_op_attrib_keys():
+  x = tf.matmul(a=tf.zeros((3, 4, 5)), b=tf.zeros((3, 5, 7)))
+  assert isinstance(x, tf.Tensor)
+  assert isinstance(x.op, tf.Operation)
+  print("x op:", x.op.name)
+  assert_equal(x.op.name, "MatMul")
+  assert_equal(x.get_shape().as_list(), [3, 4, 7])
+  attrib_keys = get_op_attrib_keys(x)
+  print("matmul attrib keys:", attrib_keys)
+  assert_equal(sorted(attrib_keys), ['T', 'adj_x', 'adj_y'])
+  dtype = x.op.get_attr("T")
+  assert_equal(dtype, tf.float32)
+
+
+def test_tensor_array_is_dynamic_size():
+  ta1 = tf.TensorArray(tf.float32, size=0, dynamic_size=True)
+  assert_equal(tensor_array_is_dynamic_size(ta1), True)
+  ta2 = tf.TensorArray(tf.float32, size=0, dynamic_size=False)
+  assert_equal(tensor_array_is_dynamic_size(ta2), False)
+
+
+def test_tensor_array_like():
+  ta1 = tf.TensorArray(tf.float32, size=0, dynamic_size=True)
+  ta1 = tensor_array_like(ta1)
+  assert_equal(tensor_array_is_dynamic_size(ta1), True)
+
+
 def test_copy_with_new_split_axes():
   old_values = numpy.arange((3+5)*5*4).reshape((3+5),5*4)
   new_values = copy_with_new_split_axes([[3,5],[5]*4], [[5,7],[7]*4], old_values)

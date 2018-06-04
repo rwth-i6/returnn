@@ -1570,8 +1570,8 @@ class SelectSearchSourcesLayer(InternalLayer):
         if isinstance(v, (tuple, list)):
           from Util import make_seq_of_type
           return make_seq_of_type(type(v), [transform(v_) for v_ in v])
-        assert isinstance(v, tf.Tensor)
-        if v.get_shape().ndims == 0:
+        assert isinstance(v, (tf.Tensor, tf.TensorArray))
+        if isinstance(v, tf.Tensor) and v.get_shape().ndims == 0:
           return v  # leave scalars as-is
         for base_src_choices in reversed(search_choices_seq):
           assert isinstance(base_src_choices, SearchChoices)
