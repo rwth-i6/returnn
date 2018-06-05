@@ -49,15 +49,19 @@ def create_graph(train_flag, eval_flag, search_flag):
   :param bool train_flag:
   :param bool eval_flag:
   :param bool search_flag:
-  :return: nothing, adds to the current graph
+  :return: adds to the current graph, and then returns the network
+  :rtype: TFNetwork.TFNetwork
   """
   assert 'network' in config.typed_dict
   print("Loading network, train flag %s, eval flag %s, search flag %s" % (train_flag, eval_flag, search_flag))
   from TFEngine import Engine
-  Engine.create_network(
+  from TFNetwork import TFNetwork
+  network, updater = Engine.create_network(
     config=config, rnd_seed=1,
     train_flag=train_flag, eval_flag=eval_flag, search_flag=search_flag,
     net_dict=config.typed_dict["network"])
+  assert isinstance(network, TFNetwork)
+  return network
 
 
 def main(argv):
@@ -67,6 +71,7 @@ def main(argv):
   argparser.add_argument('--eval', type=int, default=0, help='calculate losses. 0 disable (default), 1 enable')
   argparser.add_argument('--search', type=int, default=0, help='beam search. 0 disable (default), 1 enable')
   argparser.add_argument("--verbosity", default=4, type=int, help="5 for all seqs (default: 4)")
+  argparser.add_argument("--summaries_tensor_name")
   argparser.add_argument("--output_file", help='output pb or pbtxt file')
   args = argparser.parse_args(argv[1:])
   assert args.train in [0, 1, 2] and args.eval in [0, 1] and args.search in [0, 1]
@@ -83,7 +88,20 @@ def main(argv):
       train_flag = bool(args.train)
     eval_flag = bool(args.eval)
     search_flag = bool(args.search)
-    create_graph(train_flag=train_flag, eval_flag=eval_flag, search_flag=search_flag)
+    network = create_graph(train_flag=train_flag, eval_flag=eval_flag, search_flag=search_flag)
+
+    from TFNetworkLayer import LayerBase
+    for layer in network.layers.values():
+      assert isinstance(layer, LayerBase)
+      if layer.output.time_dim_axis is None:
+        continue
+      with layer.cls_layer_scope(layer.name):
+        tf.identity(layer.output.get_placeholder_as_batch_major(), name="output_batch_major")
+
+    if args.summaries_tensor_name:
+      summaries_tensor = tf.summary.merge_all()
+      assert isinstance(summaries_tensor, tf.Tensor), "no summaries in the graph?"
+      tf.identity(summaries_tensor, name=args.summaries_tensor_name)
 
     print("Graph collection keys:", graph.get_all_collection_keys())
     print("Graph num operations:", len(graph.get_operations()))
