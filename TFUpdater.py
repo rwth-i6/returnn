@@ -535,8 +535,32 @@ class CustomGradientDescentOptimizer(_BaseCustomOptimizer):
   """
 
   def _apply(self, grad, var, indices=None):
+    """
+    :param tf.Tensor grad:
+    :param tf.Variable|resource_variable_ops.ResourceVariable var:
+    :param tf.Tensor|None indices: if this is a sparse update, the indices of the grad values
+    :return: update
+    :rtype: tf.Tensor|tf.Operation
+    """
     lr = tf.cast(self._learning_rate_tensor, grad.dtype.base_dtype)
     return self._assign_sub(ref=var, updates=lr * grad, indices=indices).op
+
+
+class NormalizedSGD(CustomGradientDescentOptimizer):
+  """
+  All grads are L2 normalized (via :func:`tf.nn.l2_normalize`), otherwise it's standard SGD.
+  Via: https://github.com/kmkolasinski/deep-learning-notes/tree/master/max-normed-optimizer
+  """
+
+  def _apply(self, grad, var, indices=None):
+    """
+    :param tf.Tensor grad:
+    :param tf.Variable|resource_variable_ops.ResourceVariable var:
+    :param tf.Tensor|None indices: if this is a sparse update, the indices of the grad values
+    :return: update
+    :rtype: tf.Tensor|tf.Operation
+    """
+    return super(NormalizedSGD, self)._apply(grad=tf.nn.l2_normalize(grad), var=var, indices=indices)
 
 
 class NeuralOptimizer1(_BaseCustomOptimizer):
