@@ -560,7 +560,7 @@ class NormalizedSGD(CustomGradientDescentOptimizer):
     :return: update
     :rtype: tf.Tensor|tf.Operation
     """
-    return super(NormalizedSGD, self)._apply(grad=tf.nn.l2_normalize(grad), var=var, indices=indices)
+    return super(NormalizedSGD, self)._apply(grad=tf.nn.l2_normalize(grad, None), var=var, indices=indices)
 
 
 class NeuralOptimizer1(_BaseCustomOptimizer):
