@@ -202,9 +202,10 @@ class NeuralTransducerLayer(_ConcatInputLayer):
 
                 return current_block + 1, outputs_int, \
                     transducer_hidden_state_new, total_output + transducer_max_output
-
-            _, outputs_final, _, _ = tf.while_loop(cond, body, init_state,
-                                                                             parallel_iterations=1)
+            
+            with tf.device("/cpu:0"):
+                _, outputs_final, _, _ = tf.while_loop(cond, body, init_state,
+                                                           parallel_iterations=1)
 
             # Process outputs
             logits = outputs_final.concat()  # And now its [max_output_time, batch_size, num_outputs]
