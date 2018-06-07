@@ -44,6 +44,12 @@ class NeuralTransducerLayer(_ConcatInputLayer):
         # Ensure encoder is time major
         encoder_outputs = self.input_data.get_placeholder_as_time_major()
 
+        # Pad encoder outputs with zeros so that it its cleanly divisible by the input_block_size
+        batch_size = tf.shape(encoder_outputs)[1]
+        time_length_to_append = input_block_size - tf.mod(tf.shape(encoder_outputs)[0], input_block_size)
+        padding_tensor = tf.zeros([time_length_to_append, batch_size, tf.shape(encoder_outputs)[2]],
+                                  dtype=tf.float32)
+        encoder_outputs = tf.concat([encoder_outputs, padding_tensor], axis=0)
         # Do assertions
         assert 0 <= e_symbol_index < n_out, 'NT: E symbol outside possible outputs!'
 
@@ -52,7 +58,7 @@ class NeuralTransducerLayer(_ConcatInputLayer):
         if use_prev_state_as_start is True and isinstance(self.sources[0], RecLayer) is True:
             # TODO: add better checking whether the settings are correct
             last_hidden_c = self.sources[0].get_last_hidden_state('*')  # Get last c after all blocks
-            last_hidden_h = encoder_outputs[input_block_size]  # Get last hidden after the first block
+            last_hidden_h = encoder_outputs[input_block_size - 1]  # Get last hidden after the first block
             last_hidden = tf.stack([last_hidden_c, last_hidden_h], axis=0)
 
         # Note down data
@@ -108,13 +114,8 @@ class NeuralTransducerLayer(_ConcatInputLayer):
             # Get meta variables
             batch_size = tf.shape(encoder_outputs)[1]
             if trans_hidden_init is None:
-              trans_hidden_init = tf.zeros([2, batch_size, transducer_hidden_units], dtype=tf.float32)
+                trans_hidden_init = tf.zeros([2, batch_size, transducer_hidden_units], dtype=tf.float32)
 
-            # Pad encoder outputs with zeros so that it its cleanly divisible by the input_block_size
-            time_length_to_append = input_block_size - tf.mod(tf.shape(encoder_outputs)[0], input_block_size)
-            padding_tensor = tf.zeros([time_length_to_append, batch_size, tf.shape(encoder_outputs)[2]],
-                                      dtype=tf.float32)
-            encoder_outputs = tf.concat([encoder_outputs, padding_tensor], axis=0)
             # Do some more post processing
             max_blocks = tf.to_int32(tf.shape(encoder_outputs)[0]/input_block_size)
             transducer_list_outputs = tf.ones([max_blocks, batch_size], dtype=tf.int32) * transducer_max_width
@@ -202,13 +203,12 @@ class NeuralTransducerLayer(_ConcatInputLayer):
 
                 return current_block + 1, outputs_int, \
                     transducer_hidden_state_new, total_output + transducer_max_output
-            
-            with tf.device("/cpu:0"):
-                _, outputs_final, _, _ = tf.while_loop(cond, body, init_state,
-                                                           parallel_iterations=1)
+
+            _, outputs_final, _, _ = tf.while_loop(cond, body, init_state, parallel_iterations=1)
 
             # Process outputs
-            logits = outputs_final.concat()  # And now its [max_output_time, batch_size, num_outputs]
+            with tf.device('/cpu:0'):
+              logits = outputs_final.concat()  # And now its [max_output_time, batch_size, num_outputs]
 
             # For loading the model later on
             logits = tf.identity(logits, name='logits')
