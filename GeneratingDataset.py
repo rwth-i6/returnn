@@ -739,9 +739,7 @@ class ExtractAudioFeatures:
     peak = numpy.max(numpy.abs(audio))
     audio /= peak
 
-    if self.random_permute_opts and not isinstance(self.random_permute_opts, CollectionReadCheckCovered):
-      random_permute_opts = CollectionReadCheckCovered.from_bool_or_dict(self.random_permute_opts)
-    if self.random_permute_opts and random_permute_opts.truth_value:
+    if self.random_permute_opts and self.random_permute_opts.truth_value:
       audio = _get_random_permuted_audio(
         audio=audio,
         sample_rate=sample_rate,
@@ -755,6 +753,14 @@ class ExtractAudioFeatures:
       feature_data = _get_audio_mel_spectrogram(**kwargs)
     else:
       assert False, "non-supported feature type %s" % self.features
+    assert feature_data.ndim == 2
+    assert feature_data.shape[1] == self.num_feature_filters
+
+    if self.with_delta:
+      import librosa
+      deltas = [librosa.feature.delta(feature_data, order=i, axis=0) for i in range(1, self.with_delta + 1)]
+      feature_data = numpy.stack([feature_data] + deltas, axis=1)
+      assert feature_data.shape[1] == self.get_feature_dimension()
 
     if self.norm_mean is not None:
       feature_data -= self.norm_mean[None, :]
@@ -763,11 +769,19 @@ class ExtractAudioFeatures:
     return feature_data
 
   def get_feature_dimension(self):
-    return max(int(self.with_delta), 1) * self.num_feature_filters
+    return (max(int(self.with_delta), 1) + 1) * self.num_feature_filters
 
 
-def _get_audio_mel_spectrogram(audio, sample_rate, window_len=0.025, step_len=0.010,
-                               num_feature_filters=80, with_delta=False):
+def _get_audio_mel_spectrogram(audio, sample_rate, window_len=0.025, step_len=0.010, num_feature_filters=80):
+  """
+  :param numpy.ndarray audio: raw audio samples, shape (audio_len,)
+  :param int sample_rate: e.g. 22050
+  :param float window_len: in seconds
+  :param float step_len: in seconds
+  :param int num_feature_filters:
+  :return: (audio_len // int(step_len * sample_rate), num_feature_filters), float32
+  :rtype: numpy.ndarray
+  """
   import librosa
   mel_spectrogram = librosa.feature.melspectrogram(
     audio, sr=sample_rate,
@@ -776,32 +790,20 @@ def _get_audio_mel_spectrogram(audio, sample_rate, window_len=0.025, step_len=0.
   log_noise_floor = 1e-3  # prevent numeric overflow in log
   mel_spectrogram = numpy.log(numpy.maximum(log_noise_floor, mel_spectrogram))
   assert mel_spectrogram.shape[0] == num_feature_filters
-  if with_delta:
-    deltas = [librosa.feature.delta(mel_spectrogram, order=i) for i in range(1, with_delta + 1)]
-    mel_spectrogram = numpy.vstack([mel_spectrogram] + deltas)
   mel_spectrogram = mel_spectrogram.transpose().astype("float32")  # (time, dim)
   return mel_spectrogram
 
 
-def _get_audio_features_mfcc(audio, sample_rate, window_len=0.025, step_len=0.010,
-                             num_feature_filters=40, with_delta=False, norm_mean=None, norm_std_dev=None,
-                             feature="mfcc", random_permute_opts=None, random_state=None):
+def _get_audio_features_mfcc(audio, sample_rate, window_len=0.025, step_len=0.010, num_feature_filters=40):
   """
   :param numpy.ndarray audio: raw audio samples, shape (audio_len,)
   :param int sample_rate: e.g. 22050
   :param float window_len: in seconds
   :param float step_len: in seconds
   :param int num_feature_filters:
-  :param bool|int with_delta:
-  :param numpy.ndarray|None norm_mean:
-  :param numpy.ndarray|None norm_std_dev:
-  :param str: type of feature to compute, "mfcc" or "melspectrogram"
-  :param CollectionReadCheckCovered|dict[str]|bool|None random_permute_opts:
-  :param numpy.random.RandomState|None random_state:
-  :return: (audio_len // int(step_len * sample_rate), (max(1, with_delta)+1) * num_feature_filters), float32
+  :return: (audio_len // int(step_len * sample_rate), num_feature_filters), float32
   :rtype: numpy.ndarray
   """
-
   import librosa
   mfccs = librosa.feature.mfcc(
     audio, sr=sample_rate,
@@ -812,9 +814,6 @@ def _get_audio_features_mfcc(audio, sample_rate, window_len=0.025, step_len=0.01
     hop_length=int(step_len * sample_rate), frame_length=int(window_len * sample_rate))
   mfccs[0] = energy  # replace first MFCC with energy, per convention
   assert mfccs.shape[0] == num_feature_filters  # (dim, time)
-  if with_delta:
-    deltas = [librosa.feature.delta(mfccs, order=i) for i in range(1, with_delta + 1)]
-    mfccs = numpy.vstack([mfccs] + deltas)
   mfccs = mfccs.transpose().astype("float32")  # (time, dim)
   return mfccs
 
@@ -1197,11 +1196,13 @@ class TimitDataset(CachedDataset2):
     # see: https://github.com/rdadolf/fathom/blob/master/fathom/speech/preproc.py
     # and: https://groups.google.com/forum/#!topic/librosa/V4Z1HpTKn8Q
     audio, sample_rate = self._get_audio(seq_tag)
-    mfccs = _get_audio_features_mfcc(
-      audio=audio, sample_rate=sample_rate, window_len=self._feature_window_len, step_len=self._feature_step_len,
+    audio_feature_extractor = ExtractAudioFeatures(
+      window_len=self._feature_window_len, step_len=self._feature_step_len,
       num_feature_filters=self._num_feature_filters, with_delta=self._with_delta,
       norm_mean=self._norm_mean, norm_std_dev=self._norm_std_dev,
-      random_permute_opts=self._random_permute_audio, random_state=self._random)
+      random_permute=self._random_permute_audio, random_state=self._random)
+    mfccs = audio_feature_extractor.get_audio_features(
+      audio=audio, sample_rate=sample_rate, )
     return DatasetSeq(seq_idx=seq_idx, seq_tag=seq_tag, features=mfccs, targets=phone_id_seq)
 
 
