@@ -389,7 +389,8 @@ class NeuralTransducerLoss(Loss):
         # Normalize CE based on amount of False elements, as the rest of the normalization is handled by RETURNN
         loss = tf.reduce_sum(stepwise_cross_entropy) #/ tf.to_float(tf.reduce_sum(tf.cast(tf.logical_not(mask), tf.float32)))
         if self.debug is True:
-            loss = tf.Print(loss, [loss], message='Loss: ')
+            loss = tf.Print(loss, [loss/(tf.to_float(
+                    tf.shape(stepwise_cross_entropy)[0] * tf.shape(stepwise_cross_entropy)[1]))], message='Loss: ')
         return loss
 
     def get_alignment_from_logits(self, logits, targets, amount_of_blocks, transducer_max_width):
