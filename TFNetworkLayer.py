@@ -5627,22 +5627,21 @@ class SampledSoftmaxLoss(Loss):
     with tf.name_scope("loss_sampled_softmax"):
       # The function that is called for the training branch
       def train_fn():
-        #first switch target vector for dimension alignment with input_data tensor
+        # First switch target vector for dimension alignment with input_data tensor
         labels = self.target.placeholder
         current_labels_shape = tf.shape(labels)
         labels = tf.reshape(labels, [current_labels_shape[1], current_labels_shape[0]])
         labels = tf.reshape(labels, [-1])
         labels = tf.expand_dims(labels, 1)
 
+        # Get input from current layer
         inputs = self.layer.input_data.placeholder
-
         current_input_shape = tf.shape(inputs)
         new_input_shape = [-1, current_input_shape[self.layer.input_data.ndim]]
         inputs = tf.reshape(inputs, new_input_shape)
 
         from tensorflow.python.framework import dtypes
         from tensorflow.python.ops import candidate_sampling_ops, math_ops
-
         if labels.dtype != dtypes.int64:
           labels = math_ops.cast(labels, dtypes.int64)
 
@@ -5653,6 +5652,7 @@ class SampledSoftmaxLoss(Loss):
           "learned_unigram": candidate_sampling_ops.learned_unigram_candidate_sampler
         }
 
+        # Get sampler to sample from
         sampler = all_samplers[self.sampler]
         sampled_values = sampler(
           true_classes=labels,  # shape: [batch_size, num_true]
@@ -5661,7 +5661,7 @@ class SampledSoftmaxLoss(Loss):
           unique=True,
           range_max=self.target.dim)
 
-        return tf.nn.sampled_softmax_loss(
+        out = tf.nn.sampled_softmax_loss(
           weights=self.layer.W,  # shape: [num_classes, dim]
           biases=self.layer.b,  # shape: [num_classes]
           labels=labels,  # shape: [batch_size, num_true]
@@ -5675,13 +5675,25 @@ class SampledSoftmaxLoss(Loss):
           name="sampled_softmax_loss"  # Name for the scope we produce
         )
 
+        # we set invalid values to zero by masking them away
+        mask = self.target.get_sequence_mask()
+
+        # Note required reshaping of labels before tf.sampled_softmax_loss(..)
+        current_mask_shape = tf.shape(self.target.placeholder)
+        mask = tf.reshape(mask, [current_mask_shape[1], current_mask_shape[0]])
+        mask = tf.reshape(mask, [-1])
+        out = tf.where(mask, out, tf.zeros(tf.shape(out)))
+        return out
+
       # The function that is called for the evaluation branch
       def eval_fn():
         assert self.target.sparse is True
+        # Old code:
         from TFUtil import to_int32_64
         loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
           logits=self.output_before_softmax_flat,
           labels=to_int32_64(self.target_flat))
+
         return loss
 
       # Create a new branch in the TensorFlow graph, one side for the training using the sampled_softmax_loss(...)
