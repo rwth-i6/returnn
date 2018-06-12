@@ -1381,6 +1381,9 @@ class Engine(object):
 
   def forward_single(self, dataset, seq_idx, output_layer_name=None):
     """
+    Forwards a single sequence.
+    If you want to perform search, and get a number of hyps out, use :func:`search_single`.
+
     :param Dataset.Dataset dataset:
     :param int seq_idx:
     :param str|None output_layer_name: e.g. "output". if not set, will read from config "forward_output_layer"
@@ -1682,6 +1685,72 @@ class Engine(object):
         raise Exception("invalid output_file_format %r" % output_file_format)
       output_file.close()
 
+  def search_single(self, dataset, seq_idx, output_layer_name=None):
+    """
+    Performs search.
+    See also :func:`forward_single`.
+
+    :param Dataset.Dataset dataset:
+    :param int seq_idx:
+    :param str|None output_layer_name: e.g. "output". if not set, will read from config "search_output_layer"
+    :return: list of score and numpy array, each numpy arry in format (time,dim)
+    :rtype: list[(float,numpy.ndarray)]
+    """
+    output_layer_name = output_layer_name or self.config.value("search_output_layer", "output")
+    output_layer = self.network.layers[output_layer_name]
+    output_t = output_layer.output.get_placeholder_as_batch_major()
+    output_seq_lens_t = output_layer.output.get_sequence_lengths()
+    out_beam_size = output_layer.output.beam_size
+    output_layer_beam_scores_t = None
+    if out_beam_size is None:
+      print("Given output %r is after decision (no beam)." % output_layer, file=log.v4)
+    else:
+      print("Given output %r has beam size %i." % (output_layer, out_beam_size), file=log.v4)
+      output_layer_beam_scores_t = output_layer.get_search_choices().beam_scores
+
+    output_d = self.run_single(dataset=dataset, seq_idx=seq_idx, output_dict={
+      "output": output_t,
+      "seq_lens": output_seq_lens_t,
+      "beam_scores": output_layer_beam_scores_t})
+    output = output_d["output"]
+    seq_lens = output_d["seq_lens"]
+    beam_scores = output_d["beam_scores"]
+    assert len(output) == len(seq_lens) == (out_beam_size or 1)
+    if out_beam_size:
+      assert beam_scores.shape == (1, out_beam_size)  # (batch,beam)
+
+    results = []
+    for i in range(out_beam_size or 1):
+      hyp_seq = output[i][:seq_lens[i]]
+      # txt = " ".join(map(labels["classes"].__getitem__, output[i][:seq_lens[i]]))
+      score = beam_scores[0][i]
+      results += [(score, hyp_seq)]
+    return results
+
+  def search_single_bpe_to_bpe_seq(self, source, source_bpe, target_bpe, output_layer_name=None):
+    """
+    :param str source: source as a string
+    :param GeneratingDataset.BytePairEncoding source_bpe:
+    :param GeneratingDataset.BytePairEncoding target_bpe:
+    :param str|None output_layer_name: e.g. "output". if not set, will read from config "search_output_layer"
+    :return: list of all hyps, which is a tuple of score and string
+    :rtype: list[(float,str)]
+    """
+    num_outputs = {"data": [source_bpe.num_labels, 1], "classes": [target_bpe.num_labels, 1]}
+    source_seq_list = source_bpe.get_seq(source)
+    source_seq = numpy.array(source_seq_list, dtype="int32")
+    targets_empty_seq = numpy.array([], dtype="int32")  # empty...
+    from GeneratingDataset import StaticDataset
+    dataset = StaticDataset(
+      data=[{"data": source_seq, "classes": targets_empty_seq}], output_dim=num_outputs)
+    dataset.init_seq_order(epoch=1)
+    results_raw = self.search_single(dataset=dataset, seq_idx=0, output_layer_name=output_layer_name)
+    results = []
+    for (score, raw) in results_raw:
+      txt = " ".join(map(target_bpe.labels.__getitem__, raw))
+      results += [(score, txt)]
+    return results
+
   def compute_priors(self, dataset, config=None):
     """
     :param Dataset dataset:
@@ -1837,9 +1906,9 @@ class Engine(object):
         output = output_d["output"]
         seq_lens = output_d["seq_lens"]
         beam_scores = output_d["beam_scores"]
-        assert len(output) == len(seq_lens) == out_beam_size or 1
+        assert len(output) == len(seq_lens) == (out_beam_size or 1)
         if out_beam_size:
-          assert beam_scores.shape == (1, out_beam_size)
+          assert beam_scores.shape == (1, out_beam_size)  # (batch, beam)
 
         if out_beam_size:
           self.wfile.write(b"[\n")
