@@ -557,7 +557,9 @@ class StaticDataset(GeneratingDataset):
 
   def __init__(self, data, target_list=None, output_dim=None, input_dim=None, **kwargs):
     """
-    :type data: list[dict[str,numpy.ndarray]]
+    :param list[dict[str,numpy.ndarray]] data: list of seqs, each provide the data for each data-key
+    :param int input_dim:
+    :param int|dict[str,(int,int)|list[int]] output_dim:
     """
     assert len(data) > 0
     self.data = data
