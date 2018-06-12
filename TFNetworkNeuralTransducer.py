@@ -323,16 +323,12 @@ class NeuralTransducerLoss(Loss):
             self.log_prob += self.__compute_sum_probabilities(transducer_outputs, targets, transducer_amount_outputs)
             self.last_state_transducer = new_transducer_state
 
-    def __init__(self, debug=False, **kwargs):
+    def __init__(self, debug=False, max_variance=999999.9, **kwargs):
         """
         Initialize the Neural Transducer loss.
-        :param int transducer_hidden_units: Amount of units the transducer should have.
-        :param int num_outputs: The size of the output layer, i.e. the size of the vocabulary including <E> and <GO>
-        symbols.
-        :param int transducer_max_width: The max amount of outputs in one NT block (including the final <E> symbol)
-        :param int input_block_size: Amount of inputs to use for each NT block.
-        :param int go_symbol_index: Index of go symbol that is used in the NT block. 0 <= go_symbol_index < num_outputs
-        :param int e_symbol_index: Index of e symbol that is used in the NT block. 0 <= e_symbol_index < num_outputs
+        :param bool debug: Whether to output debug info such as alignments, argmax, variance etc...
+        :param float max_variance: If a time step (in CE) has a too high variance in within the batch, then the gradient
+        for that time step will be ignored. Set this value lower if you have outliers that disrupt training.
         """
         super(NeuralTransducerLoss, self).__init__(**kwargs)
 
@@ -343,6 +339,7 @@ class NeuralTransducerLoss(Loss):
         self.e_symbol_index = 0
         self.debug = debug
         self.reduce_func = tf.reduce_sum
+        self.max_variance = max_variance
 
     def init(self, **kwargs):
         super(NeuralTransducerLoss, self).init(**kwargs)
@@ -386,11 +383,22 @@ class NeuralTransducerLoss(Loss):
         zeros = tf.zeros_like(stepwise_cross_entropy)
         stepwise_cross_entropy = tf.where(mask, stepwise_cross_entropy, zeros)
 
-        # Normalize CE based on amount of False elements, as the rest of the normalization is handled by RETURNN
-        loss = tf.reduce_sum(stepwise_cross_entropy) #/ tf.to_float(tf.reduce_sum(tf.cast(tf.logical_not(mask), tf.float32)))
+        # Check for outliers and set their gradient to 0
+        loss_time = tf.reduce_sum(stepwise_cross_entropy, axis=1)
+        mean, variance = tf.nn.moments(stepwise_cross_entropy, axes=[1])
+        loss_mask = tf.to_float(variance > self.max_variance)
+        stepwise_cross_entropy = tf.stop_gradient(tf.multiply(loss_mask, loss_time)) + \
+                                  tf.multiply(tf.to_float(tf.logical_not(tf.cast(loss_mask, tf.bool))), loss_time)
+
         if self.debug is True:
-            loss = tf.Print(loss, [loss/(tf.to_float(
-                    tf.shape(stepwise_cross_entropy)[0] * tf.shape(stepwise_cross_entropy)[1]))], message='Loss: ')
+            stepwise_cross_entropy = tf.cond(tf.reduce_sum(loss_mask) >= 1,
+                                             lambda: tf.Print(stepwise_cross_entropy, [variance, loss_mask],
+                                                              message='High Variance: ', summarize=500),
+                                             lambda: stepwise_cross_entropy)
+
+        # Get full loss
+        loss = tf.reduce_sum(stepwise_cross_entropy)
+
         return loss
 
     def get_alignment_from_logits(self, logits, targets, amount_of_blocks, transducer_max_width):
