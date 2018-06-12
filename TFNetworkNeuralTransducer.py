@@ -396,8 +396,11 @@ class NeuralTransducerLoss(Loss):
                                                               message='High Variance: ', summarize=500),
                                              lambda: stepwise_cross_entropy)
 
+        # TODO: add forwarding layer
+
         # Get full loss
-        loss = tf.reduce_sum(stepwise_cross_entropy)
+        norm = tf.to_float(tf.reduce_sum(targets_lengths)) / tf.reduce_sum(tf.to_float(mask))
+        loss = tf.reduce_sum(stepwise_cross_entropy) * norm
 
         return loss
 
@@ -606,7 +609,8 @@ class NeuralTransducerLoss(Loss):
             zeros = tf.zeros_like(not_equal)
             not_equal = tf.where(mask, not_equal, zeros)
 
-            total = tf.reduce_sum(tf.cast(not_equal, tf.float32))
-            # TODO: Check normalization, some small error
-            total = total  #/ tf.to_float(tf.reduce_sum(tf.cast(mask, tf.float32)))
+            # Apply final normalization
+            norm = tf.to_float(tf.reduce_sum(targets_lengths)) / tf.reduce_sum(tf.to_float(mask))
+            total = tf.reduce_sum(tf.cast(not_equal, tf.float32)) * norm
+
             return total
