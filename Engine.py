@@ -228,6 +228,7 @@ class Engine:
     self.seq_drop_freq = config.float('seq_drop_freq', 10)
     self.max_seq_length = config.float('max_seq_length', 0)
     self.inc_seq_length = config.float('inc_seq_length', 0)
+    self.max_seq_length_eval = config.int('max_seq_length_eval', 2e31)
     self.output_precision = config.int('output_precision', 12)
     if self.max_seq_length == 0:
       self.max_seq_length = sys.maxsize
@@ -241,6 +242,7 @@ class Engine:
   def init_network_from_config(self, config):
     self.pretrain = pretrainFromConfig(config)
     self.max_seqs = config.int('max_seqs', -1)
+    self.max_seq_length_eval = config.int('max_seq_length_eval', 2e31)
     self.compression = config.bool('compression', False)
 
     epoch, model_epoch_filename = self.get_epoch_model(config)
@@ -536,7 +538,7 @@ class Engine:
         self.dataset_batches[dataset_name] = dataset.generate_batches(recurrent_net=self.network.recurrent,
                                                                       batch_size=self.batch_size_eval,
                                                                       max_seqs=self.max_seqs_eval,
-                                                                      max_seq_length=(int(self.max_seq_length) if dataset_name == 'dev' else sys.maxsize))
+                                                                      max_seq_length=(int(self.max_seq_length) if dataset_name == 'dev' else self.max_seq_length_eval))
       else:
         self.dataset_batches[dataset_name].reset()
       tester = EvalTaskThread(self.network, self.devices, data=dataset, batches=self.dataset_batches[dataset_name],
@@ -579,7 +581,7 @@ class Engine:
     :type combine_labels: str
     """
     cache = h5py.File(output_file, "w")
-    batches = data.generate_batches(recurrent_net=self.network.recurrent, batch_size=batch_size, max_seqs=self.max_seqs)
+    batches = data.generate_batches(recurrent_net=self.network.recurrent, batch_size=batch_size, max_seqs=self.max_seqs, max_seq_length=self.max_seq_length_eval)
     forwarder = HDFForwardTaskThread(self.network, self.devices, data, batches, cache,
                                      "gzip" if self.compression else None)
     forwarder.join()
