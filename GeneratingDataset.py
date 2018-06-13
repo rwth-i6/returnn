@@ -1339,6 +1339,13 @@ class Vocabulary(object):
 
     return init_vocab_var
 
+  def get_seq_indices(self, seq):
+    """
+    :param list[str] seq:
+    :rtype: list[int]
+    """
+    return [self.vocab.get(k, self.unknown_label_id) for k in seq]
+
 
 class BytePairEncoding(Vocabulary):
   """
@@ -1542,7 +1549,7 @@ class BytePairEncoding(Vocabulary):
     :rtype: list[int]
     """
     segments = self._segment_sentence(sentence)
-    seq = [self.vocab.get(k, self.unknown_label_id) for k in segments]
+    seq = self.get_seq_indices(segments)
     return seq + self.seq_postfix
 
 
