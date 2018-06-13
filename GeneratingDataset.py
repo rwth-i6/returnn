@@ -1460,20 +1460,20 @@ class BytePairEncoding(Vocabulary):
     out = []
 
     for segment in orig[:-1]:
-        if segment + separator in vocab:
-            out.append(segment)
-        else:
-            #sys.stderr.write('OOV: {0}\n'.format(segment))
-            for item in self.recursive_split(segment, bpe_codes, vocab, separator, False):
-                out.append(item)
+      if segment + separator in vocab:
+        out.append(segment)
+      else:
+        # sys.stderr.write('OOV: {0}\n'.format(segment))
+        for item in self.recursive_split(segment, bpe_codes, vocab, separator, False):
+          out.append(item)
 
     segment = orig[-1]
     if segment in vocab:
-        out.append(segment)
+      out.append(segment)
     else:
-        #sys.stderr.write('OOV: {0}\n'.format(segment))
-        for item in self.recursive_split(segment, bpe_codes, vocab, separator, True):
-            out.append(item)
+      # sys.stderr.write('OOV: {0}\n'.format(segment))
+      for item in self.recursive_split(segment, bpe_codes, vocab, separator, True):
+        out.append(item)
 
     return out
 
@@ -1482,27 +1482,27 @@ class BytePairEncoding(Vocabulary):
     until all units are either in-vocabulary, or cannot be split futher."""
 
     try:
-        if final:
-            left, right = bpe_codes[segment + '</w>']
-            right = right[:-4]
-        else:
-            left, right = bpe_codes[segment]
-    except:
-        #sys.stderr.write('cannot split {0} further.\n'.format(segment))
-        yield segment
-        return
+      if final:
+        left, right = bpe_codes[segment + '</w>']
+        right = right[:-4]
+      else:
+        left, right = bpe_codes[segment]
+    except Exception:
+      # sys.stderr.write('cannot split {0} further.\n'.format(segment))
+      yield segment
+      return
 
     if left + separator in vocab:
-        yield left
+      yield left
     else:
-        for item in self.recursive_split(left, bpe_codes, vocab, separator, False):
-            yield item
+      for item in self.recursive_split(left, bpe_codes, vocab, separator, False):
+        yield item
 
     if (final and right in vocab) or (not final and right + separator in vocab):
-        yield right
+      yield right
     else:
-        for item in self.recursive_split(right, bpe_codes, vocab, separator, final):
-            yield item
+      for item in self.recursive_split(right, bpe_codes, vocab, separator, final):
+        yield item
 
   def _segment_sentence(self, sentence):
     """
