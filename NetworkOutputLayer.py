@@ -186,7 +186,7 @@ class OutputLayer(Layer):
 
     if target_delay > 0:
       self.z = self.z[target_delay:]
-      self.norm *= T.sum(self.index[target_delay:],dtype='float32') / T.sum(self.index,dtype='float32')
+      self.norm *= T.sum(self.index,dtype='float32') / T.sum(self.index[target_delay:],dtype='float32')
       self.index = self.index[target_delay:]
       self.y = y = self.y[:-target_delay]
       self.y_data_flat = time_batch_make_flat(self.y)
