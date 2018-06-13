@@ -2443,12 +2443,13 @@ class RnnCellLayer(_ConcatInputLayer):
           var = expand_dims_unbroadcast(var, axis=0, dim=batch_dim)  # (batch,dim)
           return var
         elif v == "keep_over_epoch":
+          from TFUtil import CollectionKeys
           assert rec_layer is not None
           with rec_layer.var_creation_scope():
             var = tf.get_variable(
               'keep_state_%s' % key_name,
               validate_shape=False, initializer=tf.zeros(()),  # dummy state, will not be used like this
-              trainable=False)
+              trainable=False, collections=[CollectionKeys.STATE_VARS])
           assert isinstance(var, tf.Variable)
           var.set_shape((None, d))
           rec_layer.saveable_param_replace[var] = None  # Do not save this variable.

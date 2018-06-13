@@ -11,6 +11,15 @@ import threading
 from Util import NotSpecified, NativeCodeCompiler
 
 
+class CollectionKeys:
+  """
+  Extension of :class:`tf.GraphKeys`
+  """
+  RETURNN_LAYERS = "_RETURNN_layers"  # LayerBase instances
+  RETURNN_NET_STACK = "_RETURNN_network_stack"  # TFNetwork instance stack
+  STATE_VARS = "_RETURNN_state_vars"  # tf.Variable, like e.g. tf.GraphKeys.LOCAL_VARIABLES
+
+
 def tf_version_tuple():
   """
   :return: version tuple, e.g. (1, 1, 0), parsed from tf.__version__

@@ -74,6 +74,7 @@ def main(argv):
   argparser.add_argument("--summaries_tensor_name")
   argparser.add_argument("--output_file", help='output pb or pbtxt file')
   argparser.add_argument("--output_file_model_params_list", help="line-based, names of model params")
+  argparser.add_argument("--output_file_state_vars_list", help="line-based, name of state vars")
   args = argparser.parse_args(argv[1:])
   assert args.train in [0, 1, 2] and args.eval in [0, 1] and args.search in [0, 1]
   init(config_filename=args.config, log_verbosity=args.verbosity)
@@ -125,9 +126,17 @@ def main(argv):
       print("Use --output_file if you want to store the graph.")
 
     if args.output_file_model_params_list:
-      print("Write param list to:", args.output_file_model_params_list)
+      print("Write model param list to:", args.output_file_model_params_list)
       with open(args.output_file_model_params_list, "w") as f:
         for param in network.get_params_list():
+          assert param.name[-2:] == ":0"
+          f.write("%s\n" % param.name[:-2])
+
+    if args.output_file_state_vars_list:
+      print("Write state var list to:", args.output_file_state_vars_list)
+      from TFUtil import CollectionKeys
+      with open(args.output_file_state_vars_list, "w") as f:
+        for param in tf.get_collection(CollectionKeys.STATE_VARS):
           assert param.name[-2:] == ":0"
           f.write("%s\n" % param.name[:-2])
 

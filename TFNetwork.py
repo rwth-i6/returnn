@@ -1167,7 +1167,8 @@ class TFNetwork(object):
     """
     :rtype: list[TFNetwork]
     """
-    coll = tf.get_collection_ref("_RETURNN_network_stack")
+    from TFUtil import CollectionKeys
+    coll = tf.get_collection_ref(CollectionKeys.RETURNN_NET_STACK)
     assert isinstance(coll, list)
     return coll
 

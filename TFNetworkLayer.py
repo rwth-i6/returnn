@@ -288,7 +288,8 @@ class LayerBase(object):
     """
     :rtype: list[LayerBase]
     """
-    coll = tf.get_collection_ref("_RETURNN_layers")
+    from TFUtil import CollectionKeys
+    coll = tf.get_collection_ref(CollectionKeys.RETURNN_LAYERS)
     assert isinstance(coll, list)
     return coll
 
