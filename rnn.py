@@ -112,10 +112,7 @@ def initConfig(configFilename=None, commandLineOptions=(), extra_updates=None):
 
 
 def initLog():
-  logs = config.list('log', [])
-  log_verbosity = config.int_list('log_verbosity', [])
-  log_format = config.list('log_format', [])
-  log.initialize(logs=logs, verbosity=log_verbosity, formatter=log_format)
+  log.init_by_config(config)
 
 
 def initConfigJsonNetwork():
@@ -198,7 +195,7 @@ def load_data(config, cache_byte_size, files_config_key, **kwargs):
   :rtype: (Dataset,int)
   :returns the dataset, and the cache byte size left over if we cache the whole dataset.
   """
-  if not config.has(files_config_key):
+  if not config.bool_or_other(files_config_key, None):
     return None, 0
   kwargs = kwargs.copy()
   kwargs.setdefault("name", files_config_key)
@@ -286,14 +283,18 @@ def initEngine(devices):
 
 
 def returnnGreeting(configFilename=None, commandLineOptions=None):
-  print("RETURNN starting up, version %s, pid %i, cwd %s" % (
-    describe_crnn_version(), os.getpid(), os.getcwd()), file=log.v3)
+  print(
+    "RETURNN starting up, version %s, date/time %s, pid %i, cwd %s, Python %s" % (
+      describe_crnn_version(), time.strftime("%Y-%m-%d-%H-%M-%S (UTC%z)"), os.getpid(), os.getcwd(), sys.executable),
+    file=log.v3)
   if configFilename:
     print("RETURNN config: %s" % configFilename, file=log.v4)
     if os.path.islink(configFilename):
       print("RETURNN config is symlink to: %s" % os.readlink(configFilename), file=log.v4)
   if commandLineOptions is not None:
     print("RETURNN command line options: %s" % (commandLineOptions,), file=log.v4)
+  import socket
+  print("Hostname:", socket.gethostname(), file=log.v4)
 
 
 def initBackendEngine():
@@ -305,7 +306,9 @@ def initBackendEngine():
     if get_tensorflow_version_tuple()[0] == 0:
       print("Warning: TF <1.0 is not supported and likely broken.", file=log.v2)
     from TFUtil import debugRegisterBetterRepr, setup_tf_thread_pools
-    setup_tf_thread_pools(log_file=log.v2)
+    tf_session_opts = config.typed_value("tf_session_opts", {})
+    assert isinstance(tf_session_opts, dict)
+    setup_tf_thread_pools(log_file=log.v3, tf_session_opts=tf_session_opts)
     debugRegisterBetterRepr()
   else:
     raise NotImplementedError
@@ -384,9 +387,10 @@ def executeMainTask():
   elif task == "eval":
     engine.init_train_from_config(config, train_data, dev_data, eval_data)
     engine.epoch = config.int("epoch", None)
-    assert engine.epoch
+    assert engine.epoch, "set epoch in config"
+    config.set('load_epoch', engine.epoch)
     print("Evaluate epoch", engine.epoch, file=log.v4)
-    engine.eval_model()
+    engine.eval_model(config.value("eval_output_file", ""))
   elif task in ['forward','hpx']:
     assert eval_data is not None, 'no eval data provided'
     combine_labels = config.value('combine_labels', '')
@@ -408,6 +412,7 @@ def executeMainTask():
       data = init_dataset(config.opt_typed_value("search_data"))
     engine.search(
       data,
+      do_eval=config.bool("search_do_eval", True),
       output_layer_name=config.value("search_output_layer", "output"),
       output_file=config.value("search_output_file", ""),
       output_file_format=config.value("search_output_file_format", "txt"))
@@ -457,6 +462,10 @@ def executeMainTask():
   elif task == "server":
     print("Server Initiating", file=log.v1)
     server.run()
+  elif task == "search_server":
+    engine.use_search_flag = True
+    engine.init_network_from_config(config)
+    engine.web_server(port=config.int("web_server_port", 12380))
   elif task.startswith("config:"):
     action = config.typed_dict[task[len("config:"):]]
     print("Task: %r" % action, file=log.v1)

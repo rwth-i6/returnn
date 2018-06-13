@@ -11,7 +11,7 @@ import sys
 sys.path += ["."]  # Python 3 hack
 from TFUtil import *
 from nose.tools import assert_equal, assert_is_instance, assert_is, assert_in
-from numpy.testing.utils import assert_almost_equal
+from numpy.testing.utils import assert_almost_equal, assert_allclose
 import unittest
 import numpy.testing
 import better_exchook
@@ -171,6 +171,11 @@ def test_get_initializer_gauss():
   initializer = get_initializer("RandomNormal(0.0, 0.01)")
   v = initializer(shape)
   assert_equal(session.run(v).shape, shape)  # returns some random matrix
+
+
+def test_wrap_distribution_non_zero():
+  assert_almost_equal(session.run(wrap_distribution_non_zero(0.1, zero_limit=0.5, limit=2.)), 0.575)
+  assert_almost_equal(session.run(wrap_distribution_non_zero(-0.1, zero_limit=0.5, limit=2.)), -0.575)
 
 
 def test_close_event_writer_thread():
@@ -514,7 +519,7 @@ def test_windowed_nd_small():
   print("source:")
   print(source)
   naive = naive_windowed_batch(source, window=window)
-  real = windowed_nd(source, window=window, time_axis=0, new_window_axis=1).eval()
+  real = windowed_nd(source, window_size=window, time_axis=0, new_window_axis=1).eval()
   print("naive:")
   print(naive)
   print("real:")
@@ -530,7 +535,63 @@ def test_windowed_nd_big():
   numpy.random.seed(123)
   source = numpy.random.random((n_time, n_batch, n_dim)).astype("float32")
   naive = naive_windowed_batch(source, window=window)
-  real = windowed_nd(source, window=window, time_axis=0, new_window_axis=1).eval()
+  real = windowed_nd(source, window_size=window, time_axis=0, new_window_axis=1).eval()
+  numpy.testing.assert_almost_equal(naive, real)
+
+
+def naive_slice_nd(x, start, size):
+  slices_shape = [x.shape[0], size] + list(x.shape)[2:]
+  ys = numpy.zeros(shape=slices_shape)
+  for i in range(len(start)):
+    time_len = len(x[i])
+    end = start[i] + size
+    if time_len < end:
+      end = time_len
+    y = x[i][start[i]:end]
+
+    # padding
+    if time_len < start[i] + size:
+       y = numpy.pad(y, [[0,start[i]+size-time_len], [0,0]], mode='constant')
+    ys[i] = y
+  return ys
+
+
+def test_slice_nd_small():
+  n_batch = 3
+  n_time = 4
+  n_dim = 2
+  size = 2
+  start = numpy.array([0,2,3]).astype("int32")
+  source = numpy.arange(1, n_batch*n_time*n_dim + 1, dtype=numpy.float32).reshape(n_batch, n_time, n_dim).astype("float32")
+  source_tf = tf.constant(source)
+  naive = naive_slice_nd(source, start, size)
+  real = slice_nd(source_tf, start=start, size=size).eval()
+  print("source:")
+  print(source)
+  print("naive:")
+  print(naive)
+  print("real:")
+  print(real)
+  numpy.testing.assert_almost_equal(naive, real)
+
+
+def test_slice_nd_big():
+  n_batch = 8
+  n_time = 12
+  n_dim = 4
+  size = 4
+  numpy.random.seed(123)
+  start = numpy.random.randint(low=0, high=12, size=(n_batch,), dtype="int32")
+  source = numpy.random.random((n_batch, n_time, n_dim)).astype("float32")
+  source_tf = tf.constant(source)
+  naive = naive_slice_nd(source, start, size)
+  real = slice_nd(source_tf, start=start, size=size).eval()
+  print("source:")
+  print(source)
+  print("naive:")
+  print(naive)
+  print("real:")
+  print(real)
   numpy.testing.assert_almost_equal(naive, real)
 
 
@@ -706,10 +767,8 @@ def test_GlobalTensorArray():
   GlobalTensorArrayOpMaker().get_op()
 
 
-@unittest.skip("remove this when it works. see https://github.com/tensorflow/tensorflow/issues/10950")
 def test_TFArrayContainer():
   # Bug #10950 is fixed upstream, should be in TF 1.2.2.
-  # TODO...
   # https://stackoverflow.com/questions/44455722/create-my-own-resource-types-tf-resource
   # https://github.com/tensorflow/tensorflow/issues/1419
   ta = TFArrayContainer(dtype=tf.int32)
@@ -1094,6 +1153,241 @@ def test_lin_exp_normed_limits_not_nan():
     assert numpy.isfinite(y).all() and numpy.isfinite(err_x).all()
     # We constructed the examples in such a way that there should always be a gradient.
     assert any(err_x != 0.0)
+
+
+def test_check_base_op_type_and_replace_softmax():
+  with tf.name_scope("test_check_base_op_type_and_replace_softmax"):
+    z = tf.constant([1.0, 2.0])
+    x = tf.nn.softmax(z)
+    y = tf.log(x)
+    print("x:", x, list(x.op.inputs), "y:", y)
+    y2 = check_base_op_type_and_replace(x, "Softmax", "LogSoftmax")
+    print("y2:", y2)
+    assert y2 is not None
+    vy1, vy2 = session.run([y, y2])
+    print("eval:", vy1, vy2)
+    assert_almost_equal(vy1, vy2)
+
+
+def test_check_base_op_type_and_replace_sigmoid():
+  with tf.name_scope("test_check_base_op_type_and_replace_sigmoid"):
+    z = tf.constant([1.0, 2.0])
+    x = tf.sigmoid(z)
+    y = tf.log(x)
+    print("x:", x, list(x.op.inputs), "y:", y)
+    y2 = check_base_op_type_and_replace(x, "Sigmoid", "LogSigmoid")
+    print("y2:", y2)
+    assert y2 is not None
+    vy1, vy2 = session.run([y, y2])
+    print("eval:", vy1, vy2)
+    assert_almost_equal(vy1, vy2)
+
+
+def test_string_merge():
+  strings = [
+    ["sub@@", "word", "test"],
+    ["hel@@", "lo", "wo@@", "r@@", "ld"],
+    ["foo"]]
+  seq_lens = [len(seq) for seq in strings]
+  max_len = max(seq_lens)
+  strings = [seq + [""] * (max_len - len(seq)) for seq in strings]
+
+  tf_strings = tf.placeholder(tf.string, [None, None])
+  tf_seq_lens = tf.placeholder(tf.int32, [None])
+  tf_res = string_merge(tf_strings, tf_seq_lens)
+  res = session.run(tf_res, feed_dict={tf_strings: strings, tf_seq_lens: seq_lens})
+  print(res)
+  assert isinstance(res, numpy.ndarray)
+  assert res.shape == (len(seq_lens),)
+  res = res.tolist()
+  print(res)
+  res = [s.decode("utf8") for s in res]
+  print(res)
+  assert_equal(res, ["sub@@ word test", "hel@@ lo wo@@ r@@ ld", "foo"])
+
+
+def test_string_replace():
+  strings = ["sub@@ word test", "hel@@ lo wo@@ r@@ ld", "foo"]
+  tf_strings = tf.placeholder(tf.string, [None])
+  tf_res = string_replace(tf_strings, old="@@ ", new="")
+  res = session.run(tf_res, feed_dict={tf_strings: strings})
+  print(res)
+  assert isinstance(res, numpy.ndarray)
+  assert res.shape == (len(strings),)
+  res = res.tolist()
+  print(res)
+  res = [s.decode("utf8") for s in res]
+  print(res)
+  assert_equal(res, ["subword test", "hello world", "foo"])
+
+
+def test_words_split_get_sparse_tensor_length():
+  strings = ["subword test", "a b c d", "hello world", "foo"]
+  word_lens = [len(s.split(" ")) for s in strings]
+  tf_strings = tf.placeholder(tf.string, [None])
+  tf_words = words_split(tf_strings)
+  tf_dense_words = tf.sparse_to_dense(
+    tf_words.indices, tf_words.dense_shape, tf_words.values, default_value="")
+  tf_num_words = get_sparse_tensor_length(tf_words)
+  words, dense_words, num_words = session.run(
+    [tf_words, tf_dense_words, tf_num_words], feed_dict={tf_strings: strings})
+  print(words)
+  print(dense_words)
+  print(num_words)
+  assert isinstance(words, tf.SparseTensorValue)
+  assert isinstance(dense_words, numpy.ndarray)
+  assert isinstance(num_words, numpy.ndarray)
+  assert dense_words.shape == (len(word_lens), max(word_lens))
+  assert num_words.shape == (len(strings),)
+  dense_words = dense_words.tolist()
+  print(dense_words)
+  assert_equal(dense_words, [
+    [b"subword", b"test", b"", b""], [b"a", b"b", b"c", b"d"],
+    [b"hello", b"world", b"", b""], [b"foo", b"", b"", b""]])
+  assert_equal(num_words.tolist(), word_lens)
+
+
+def test_string_words_calc_wer():
+  hyps = ["hello world", "a b c", "how are you", "good"]
+  refs = ["hello nice world", "a x c d", "how are we", "good"]
+  tf_hyps = tf.placeholder(tf.string, [None])
+  tf_refs = tf.placeholder(tf.string, [None])
+  tf_wer, tf_ref_num_words = string_words_calc_wer(hyps=tf_hyps, refs=tf_refs)
+  wer, ref_num_words = session.run([tf_wer, tf_ref_num_words], {tf_hyps: hyps, tf_refs: refs})
+  print(wer, ref_num_words)
+  assert isinstance(wer, numpy.ndarray)
+  assert isinstance(ref_num_words, numpy.ndarray)
+  assert_equal(wer.tolist(), [1, 2, 1, 0])
+  assert_equal(ref_num_words.tolist(), [3, 4, 3, 1])
+
+
+def test_kenlm():
+  import TFKenLM
+  input_strings = ["beyond immediate concerns </s>"]
+  test_lm_file = TFKenLM.kenlm_dir + "/lm/test.arpa"
+  assert os.path.exists(test_lm_file)
+  lm_tf = TFKenLM.ken_lm_load(filename=test_lm_file)
+  input_strings_tf = tf.placeholder(tf.string, [None])
+  output_scores_tf = TFKenLM.ken_lm_abs_score_strings(handle=lm_tf, strings=input_strings_tf)
+  with tf.Session() as session:
+    output_scores = session.run(output_scores_tf, feed_dict={input_strings_tf: input_strings})
+  print("input strings:", input_strings)
+  print("output scores:", output_scores)
+  assert isinstance(output_scores, numpy.ndarray)
+  assert_almost_equal(output_scores, [-9.251298])  # +log space, not +log10
+  print("Score is as expected.")
+
+
+def test_kenlm_bpe():
+  import TFKenLM
+  input_strings = [
+    "beyond immediate concerns </s>",
+    "be@@ yond imm@@ edi@@ ate conc@@ erns </s>",
+    "be@@ yond imm@@",
+    "be@@ yond <unk>"
+    ]
+  test_lm_file = TFKenLM.kenlm_dir + "/lm/test.arpa"
+  assert os.path.exists(test_lm_file)
+  lm_tf = TFKenLM.ken_lm_load(filename=test_lm_file)
+  input_strings_tf = tf.placeholder(tf.string, [None])
+  output_scores_tf = TFKenLM.ken_lm_abs_score_bpe_strings(handle=lm_tf, strings=input_strings_tf, bpe_merge_symbol="@@")
+  with tf.Session() as session:
+    output_scores = session.run(output_scores_tf, feed_dict={input_strings_tf: input_strings})
+  print("input strings:", input_strings)
+  print("output scores:", output_scores)
+  assert isinstance(output_scores, numpy.ndarray)
+  assert_equal(output_scores.shape, (len(input_strings),))
+  assert_almost_equal(output_scores[0], -9.251298)  # example from above
+  assert_equal(output_scores[0], output_scores[1])
+  assert_equal(output_scores[2], output_scores[3])
+  print("Scores are as expected.")
+
+
+def test_layer_norms():
+  from TFNativeOp import have_blocksparse_requirements
+  from tensorflow.contrib.layers import layer_norm as tf_contrib_layer_norm
+  rnd = numpy.random.RandomState(3)
+  for ndim in [2, 3, 4]:
+    dims = [3] * ndim
+    x_np = rnd.rand(*dims).astype('float32')
+    print('x:')
+    print(x_np)
+    with tf.name_scope("test_ndim_%i" % ndim):
+      x = tf.constant(x_np, name='x')
+      g = tf.ones([3])
+      b = tf.zeros([3])
+      for axis in range(ndim):
+        with tf.name_scope('test_axis_%i' % axis):
+          print('ndim %i, axis %i' % (ndim, axis))
+          ln = layer_norm(x=x, gain=g, bias=b, axis=axis)
+          if not have_blocksparse_requirements():
+            print('  OpenAI cannot be used')
+            ln2 = ln
+          # OpenAI seems to be broken for these cases:
+          elif axis < ndim - 1:
+            print('  ignore OpenAI layer norm for this case')
+            ln2 = ln
+          else:
+            ln2 = openai_layer_norm(x=x, gain=g, bias=b, axis=axis)
+          if axis < ndim - 1:
+            print('  cannot use tf.contrib layer norm for this case')
+            ln3 = ln  # cannot use tf_contrib_layer_norm
+          else:
+            ln3 = tf_contrib_layer_norm(x, center=False, scale=False, begin_norm_axis=axis, begin_params_axis=axis)
+          ln_np, ln2_np, ln3_np = session.run((ln, ln2, ln3))
+          print('layer norm:')
+          print(ln_np)
+          assert isinstance(ln_np, numpy.ndarray)
+          assert isinstance(ln2_np, numpy.ndarray)
+          assert isinstance(ln3_np, numpy.ndarray)
+          assert x_np.shape == ln_np.shape == ln2_np.shape == ln3_np.shape
+          assert_allclose(ln_np, ln2_np, rtol=1e-4)
+          assert_allclose(ln_np, ln3_np, rtol=5e-2)
+          print('ok')
+
+
+def test_transform_param_axes_split_info_to_new_shape():
+  assert_equal(transform_param_axes_split_info_to_new_shape([[7],[7]*4], [7*2,7*8]), [[7*2],[7*2]*4])
+  assert_equal(transform_param_axes_split_info_to_new_shape([[3,7],[7]*4], [3+7*2,7*8]), [[3,7*2],[7*2]*4])
+  assert_equal(transform_param_axes_split_info_to_new_shape([[3,7],[7]*4], [1+7*2,7*8]), [[1,7*2],[7*2]*4])
+  assert_equal(transform_param_axes_split_info_to_new_shape([[7,7],[7]*4], [3+7*2,7*8]), [[3,7*2],[7*2]*4])
+  assert_equal(transform_param_axes_split_info_to_new_shape([[7,7],[7]*4], [7*2+7*2,7*8]), [[7*2,7*2],[7*2]*4])
+  assert_equal(transform_param_axes_split_info_to_new_shape([[7],[7]*4], [7,7*8]), [[7],[7*2]*4])
+
+
+def test_get_op_attrib_keys():
+  x = tf.matmul(a=tf.zeros((3, 4, 5)), b=tf.zeros((3, 5, 7)))
+  assert isinstance(x, tf.Tensor)
+  assert isinstance(x.op, tf.Operation)
+  print("x op:", x.op.name)
+  assert_equal(x.op.name, "MatMul")
+  assert_equal(x.get_shape().as_list(), [3, 4, 7])
+  attrib_keys = get_op_attrib_keys(x)
+  print("matmul attrib keys:", attrib_keys)
+  assert_equal(sorted(attrib_keys), ['T', 'adj_x', 'adj_y'])
+  dtype = x.op.get_attr("T")
+  assert_equal(dtype, tf.float32)
+
+
+def test_tensor_array_is_dynamic_size():
+  ta1 = tf.TensorArray(tf.float32, size=0, dynamic_size=True)
+  assert_equal(tensor_array_is_dynamic_size(ta1), True)
+  ta2 = tf.TensorArray(tf.float32, size=0, dynamic_size=False)
+  assert_equal(tensor_array_is_dynamic_size(ta2), False)
+
+
+def test_tensor_array_like():
+  ta1 = tf.TensorArray(tf.float32, size=0, dynamic_size=True)
+  ta1 = tensor_array_like(ta1)
+  assert_equal(tensor_array_is_dynamic_size(ta1), True)
+
+
+def test_copy_with_new_split_axes():
+  old_values = numpy.arange((3+5)*5*4).reshape((3+5),5*4)
+  new_values = copy_with_new_split_axes([[3,5],[5]*4], [[5,7],[7]*4], old_values)
+  for p in range(4):
+    assert (new_values[:3,p*7:p*7+5] == old_values[:3,p*5:p*5+5]).all()
+    assert (new_values[5:5+5,p*7:p*7+5] == old_values[3:,p*5:p*5+5]).all()
 
 
 if __name__ == "__main__":

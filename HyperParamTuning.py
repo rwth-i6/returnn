@@ -599,7 +599,7 @@ class _IndividualTrainer:
       seq_drop=engine.seq_drop,
       shuffle_batches=engine.shuffle_batches,
       used_data_keys=engine.network.used_data_keys)
-    engine.updater.set_learning_rate(engine.learning_rate)
+    engine.updater.set_learning_rate(engine.learning_rate, session=engine.tf_session)
     trainer = Runner(engine=engine, dataset=train_data, batches=batches, train=True)
     self.runner = trainer
     if self.cancel_flag:

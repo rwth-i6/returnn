@@ -4,6 +4,7 @@ from __future__ import print_function
 import tensorflow as tf
 import sys
 import numpy
+import contextlib
 from Log import log
 from TFNetworkLayer import Data, LayerBase, get_layer_class
 from TFUtil import reuse_name_scope, VariableAssigner
@@ -43,6 +44,26 @@ class ExternData(object):
       self.data[key] = Data(name=key, auto_create_placeholders=True, **init_args)
     self.default_target = config.value('target', 'classes')
 
+  @classmethod
+  def data_kwargs_from_dataset_key(cls, dataset, key):
+    """
+    :param Dataset.Dataset dataset:
+    :param str key:
+    :rtype: dict[str]
+    """
+    if key in dataset.get_target_list():
+      available_for_inference = False
+    else:
+      available_for_inference = True
+    dim = dataset.get_data_dim(key)
+    shape = [None] + list(dataset.get_data_shape(key))
+    sparse = dataset.is_data_sparse(key)
+    dtype = dataset.get_data_dtype(key)
+    return dict(
+      batch_dim_axis=0, time_dim_axis=1,
+      shape=shape, dim=dim, sparse=sparse, dtype=dtype,
+      available_for_inference=available_for_inference)
+
   def init_from_dataset(self, dataset):
     """
     :param Dataset.Dataset dataset:
@@ -61,18 +82,9 @@ class ExternData(object):
       else:
         self.default_input = input_keys[0]
     for key in data_keys:
-      if key in dataset.get_target_list():
-        available_for_inference = False
-      else:
-        available_for_inference = True
-      dim = dataset.get_data_dim(key)
-      shape = [None] + list(dataset.get_data_shape(key))
-      sparse = dataset.is_data_sparse(key)
-      dtype = dataset.get_data_dtype(key)
       self.data[key] = Data(
-        name=key, auto_create_placeholders=True, batch_dim_axis=0, time_dim_axis=1,
-        shape=shape, dim=dim, sparse=sparse, dtype=dtype,
-        available_for_inference=available_for_inference)
+        name=key, auto_create_placeholders=True,
+        **self.data_kwargs_from_dataset_key(dataset=dataset, key=key))
 
   def check_matched_dataset(self, dataset, used_data_keys=None):
     """
@@ -221,12 +233,14 @@ class TFNetwork(object):
     else:
       self.global_train_step = tf.Variable(
         name="global_step", initial_value=0, dtype="int64", collections=[tf.GraphKeys.GLOBAL_STEP], trainable=False)
+    self.epoch_step = None
     self.saver = None  # type: tf.train.Saver
     self.extra_vars_to_save = []  # type: list[tf.Variable]
     self.recurrent = False
     self._assigner_cache = {}  # type: dict[tf.Variable,VariableAssigner]
     self.concat_sources_dropout_cache = {}  # type: dict[(tuple[LayerBase],float),Data]
     self._batch_dim = None  # see get_batch_dim
+    self.post_control_dependencies = []
 
   def __repr__(self):
     s = "TFNetwork %r" % self.name
@@ -243,6 +257,14 @@ class TFNetwork(object):
     if self.search_flag:
       s += " search"
     return "<%s>" % s
+
+  def get_root_network(self):
+    """
+    :rtype: TFNetwork
+    """
+    if self.parent_net:
+      return self.parent_net.get_root_network()
+    return self
 
   def get_absolute_name_scope_prefix(self):
     """
@@ -318,6 +340,7 @@ class TFNetwork(object):
     The purpose is to create another net like `self` but with different flags,
     e.g. with `search_flag = True`.
     That `extra_net` can have different losses, which will be added.
+    It will not recreate any already existing layers.
 
     :param dict[str,dict[str]] net_dict:
     :param list[str] layer_list:
@@ -331,6 +354,8 @@ class TFNetwork(object):
         extra_parent_net=self)
 
     def extra_get_layer(layer_name):
+      # Do not recreate layers which exist in the main net.
+      # Only construct not-yet-existing layers.
       if layer_name in self.extra_net.layers:
         return self.extra_net.layers[layer_name]
       if layer_name in self.layers:
@@ -414,7 +439,7 @@ class TFNetwork(object):
     debug_print_layer_output_template = self.get_config().bool("debug_print_layer_output_template", False)
     debug_print_layer_output_shape = self.get_config().bool("debug_print_layer_output_shape", False)
     debug_add_check_numerics_on_output = self.get_config().bool("debug_add_check_numerics_on_output", False)  # also see debug_add_check_numerics_ops
-    with reuse_name_scope(layer_class.cls_get_tf_scope_name(name)):
+    with reuse_name_scope(layer_class.cls_get_tf_scope_name(name)), self.register_network_scope():
       try:
         if "output" not in layer_desc:
           layer_desc["output"] = layer_class.get_out_data_from_opts(**layer_desc)
@@ -527,8 +552,12 @@ class TFNetwork(object):
         with reuse_name_scope("loss"):
           if loss is not None:
             self.loss_by_layer[name] = loss
-            if layer.loss_scale != 1:
+          if loss is not None and layer.loss_scale != 1:
+            if not layer.loss_scale:
+              loss = None
+            else:
               loss *= layer.loss_scale
+          if loss is not None:
             if self.total_loss is 0:
               self.total_loss = loss
             else:
@@ -621,7 +650,7 @@ class TFNetwork(object):
       return "output"
     output_layers = self.get_output_layers()
     if len(output_layers) == 1:
-      return output_layers[1]
+      return output_layers[0].name
     return None  # no sensible default
 
   def get_default_output_layer(self, must_exist=True):
@@ -673,6 +702,17 @@ class TFNetwork(object):
         assert isinstance(param, tf.Variable)
         l.append(param)
     return l
+
+  def get_saveable_param_replace_dict(self):
+    """
+    :return: params and saveable_param_replace resolved, union of all layers
+    :rtype: dict[str,tf.Variable|tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject]
+    """
+    d = {}
+    for layer_name, layer in sorted(self.layers.items()):
+      assert isinstance(layer, LayerBase)
+      d.update(layer.get_saveable_params_dict())
+    return d
 
   def get_saveable_params_list(self):
     """
@@ -742,7 +782,8 @@ class TFNetwork(object):
     params = self.get_params_list()
     for param in params:
       shape = param.get_shape().as_list()
-      num_params += numpy.prod(shape)
+      if all(shape):
+        num_params += numpy.prod(shape)
     return num_params
 
   def initialize_params(self, session):
@@ -761,6 +802,7 @@ class TFNetwork(object):
     session.run(initializer_op)
     for var in var_list:
       # Some of our code could set this, e.g. the SubnetworkLayer.
+      # See :func:`set_custom_post_init`
       custom_post_init = getattr(var, "custom_post_init", None)
       if custom_post_init:
         assert callable(custom_post_init)
@@ -790,15 +832,19 @@ class TFNetwork(object):
       l[layer_name] = layer.get_param_values_dict(session)
     return l
 
-  def set_param_values_by_dict(self, values_dict, **kwargs):
+  def set_param_values_by_dict(self, values_dict, ignore_non_existing=False, **kwargs):
     """
     :param dict[str,dict[str,numpy.ndarray]] values_dict:
+    :param bool ignore_non_existing:
     :param kwargs: passed to :func:`LayerBase.set_param_values_by_dict`
 
     Note that this excludes auxiliary params.
     """
     for layer_name, layer_values_dict in values_dict.items():
       if layer_values_dict:
+        if ignore_non_existing and layer_name not in self.layers:
+          print("Will not set layer %r because it does not exist." % (layer_name,), file=log.v3)
+          continue
         self.layers[layer_name].set_param_values_by_dict(values_dict=layer_values_dict, **kwargs)
 
   def get_auxiliary_params(self):
@@ -835,6 +881,19 @@ class TFNetwork(object):
     :rtype: int
     """
     return self.global_train_step.eval(session=session)
+
+  def get_epoch_step(self):
+    """
+    :return: int64
+    :rtype: tf.Tensor
+    """
+    if self.parent_net:
+      return self.parent_net.get_epoch_step()
+    if self.epoch_step is not None:
+      return self.epoch_step
+    with reuse_name_scope("", absolute=True):
+      self.epoch_step = tf.placeholder(name="epoch_step", shape=(), dtype=tf.int64)
+    return self.epoch_step
 
   def reset_saver(self):
     """
@@ -884,6 +943,12 @@ class TFNetwork(object):
     :param str filename:
     :param tf.Session session:
     """
+    if any([layer.custom_param_importer for layer in self.layers.values()]):
+      # Need to use CustomCheckpointLoader because only that handles custom_param_importer correctly.
+      loader = CustomCheckpointLoader(
+        filename=filename, saveable_params=self.get_saveable_params_list(), network=self)
+      loader.load_now(session=session)
+      return
     if not self.saver:
       self._create_saver()
     # Note:
@@ -895,111 +960,16 @@ class TFNetwork(object):
       self.saver.restore(sess=session, save_path=filename)
     except tf.errors.NotFoundError as exc:
       print("load_params_from_file: some variables not found", file=log.v2)
-      # First, the short version, we will try to automatically resolve this, similar to this:
-      # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/rnn/python/tools/checkpoint_convert.py
-      # Also see:
-      # https://github.com/tensorflow/tensorflow/issues/11168
-      # https://github.com/tensorflow/tensorflow/commit/92da8abfd35b93488ed7a55308b8f589ee23b622
-      # https://github.com/tensorflow/tensorflow/commit/157370e5916b85c65958ed8383ae31d727228ed7
-      # This map_list can be extended by all the mappings in checkpoint_convert.py.
-      map_list = {
-        "lstm_cell/biases": "lstm_cell/bias",
-        "lstm_cell/weights": "lstm_cell/kernel",
-        "cudnn/params_canonical/rnn/multi_rnn_cell/cell_0/cudnn_compatible_lstm_cell/bias": "lstm_block_wrapper/bias",
-        "cudnn/params_canonical/rnn/multi_rnn_cell/cell_0/cudnn_compatible_lstm_cell/kernel": "lstm_block_wrapper/kernel"}
-      reader = tf.train.NewCheckpointReader(filename)
-      net_vars = [v for v in self.get_saveable_params_list() if isinstance(v, tf.Variable)]
-      net_saveables = [v for v in self.get_saveable_params_list() if not isinstance(v, tf.Variable)]
-      var_ckpt_names = set(reader.get_variable_to_shape_map())
-      var_net_names = set([v.name[:-2] for v in net_vars] + [v.name for v in net_saveables])
-      missing_var_names = [v for v in sorted(var_net_names) if v not in var_ckpt_names]
-      obsolete_var_names = [v for v in sorted(var_ckpt_names) if v not in var_net_names]
-      print("Variables to restore which are not in checkpoint:", missing_var_names, file=log.v2)
-      if not missing_var_names:
-        print("Strange, nothing missing?", file=log.v2)
-        print("Original exception:", exc, file=log.v2)
-
-      var_name_map = {}  # type: dict[str,()->numpy.ndarray]  # current name -> value-loader
-
-      def make_load_renamed(old_name):
-        def load_old():
-          return reader.get_tensor(old_name)
-        return load_old
-
-      class make_load_cudnn_rnn:
-        cudnn_postfix = "/cudnn/CudnnRNNParamsToCanonical:0"
-
-        def __init__(self, prefix, target="lstm_block_wrapper/"):
-          self.target = target
-          self.keys = [target + "bias", target + "kernel"]
-          self.prefix = prefix
-          self.data = None
-
-        def _load(self):
-          from TFNetworkRecLayer import RecLayer
-          self.data = RecLayer.convert_cudnn_canonical_to_lstm_block(
-            reader=reader, prefix=self.prefix, target=self.target)
-
-        def make_getter(self, key):
-          def get():
-            if self.data is None:
-              self._load()
-            return self.data[key]
-          return get
-
-        def get_lazy_dict(self):
-          return {self.prefix + k: self.make_getter(self.prefix + k) for k in self.keys}
-
-      for v in obsolete_var_names:
-        for k_old, k_new in map_list.items():
-          if v.endswith("/%s" % k_old):
-            v2 = v[:-len(k_old)] + k_new
-            if v2 in missing_var_names:
-              var_name_map[v2] = make_load_renamed(old_name=v)
-              break
-        if v.endswith(make_load_cudnn_rnn.cudnn_postfix):
-          var_name_map.update(
-            make_load_cudnn_rnn(prefix=v[:-len(make_load_cudnn_rnn.cudnn_postfix) + 1]).get_lazy_dict())
-
-      could_not_find_map_list = [v for v in missing_var_names if v not in var_name_map]
-      if not could_not_find_map_list:
-        # We can restore all.
-        print("We found these corresponding variables in the checkpoint:", var_name_map, file=log.v2)
-        print("Loading now...", file=log.v3)
-        # Similar: from tensorflow.contrib.framework.python.ops import assign_from_checkpoint
-        for v in self.get_saveable_params_list():
-          assert isinstance(v, tf.Variable), "not yet implemented otherwise..."
-          v_name = v.name[:-2]  # current name
-          if v_name in var_ckpt_names:
-            value = reader.get_tensor(v_name)
-          else:
-            value = var_name_map[v_name]()
-          assigner = self.get_var_assigner(v)
-          assigner.assign(value=value, session=session)
-        print("Successfully loaded all variables. Any new save will use the updated variable names.", file=log.v3)
-
-      else:
-        print("Could not find mappings for these variables:", could_not_find_map_list, "var_name_map:", var_name_map)
+      try:
+        loader = CustomCheckpointLoader(
+          filename=filename, saveable_params=self.get_saveable_params_list(), network=self)
+        if not loader.missing_var_names:
+          print("Strange, nothing missing? Pre-loaded missing variables from other checkpoints?", file=log.v2)
+        loader.load_now(session=session)
+      except tf.errors.NotFoundError:
         print("Error, some entry is missing in the checkpoint %r: %s: %s" % (filename, type(exc), exc), file=log.v1)
-        print("All variables in checkpoint:")
-        print(reader.debug_string())
-        print("All variables to restore:")
-        for v in net_vars + net_saveables:
-          print(v)
-        print()
-        print("Variables to restore which are not in checkpoint:")
-        for v in sorted(var_net_names):
-          if v in var_ckpt_names:
-            continue
-          print(v)
-        print()
-        print("Variables in checkpoint which are not needed for restore:")
-        for v in sorted(var_ckpt_names):
-          if v in var_net_names:
-            continue
-          print(v)
-        print()
-        raise exc
+        print("CustomCheckpointLoader was not able to recover.", file=log.v2)
+        raise
 
   def print_network_info(self, name="Network"):
     print("%s layer topology:" % name, file=log.v2)
@@ -1178,6 +1148,53 @@ class TFNetwork(object):
       return Config()
     return None
 
+  def register_post_control_dependencies(self, deps):
+    """
+    Will register the control dependencies
+    or globally for a session run on this network.
+    This can e.g. be called inside `self.post_init`.
+
+    :param list[tf.Tensor|tf.Operation] deps:
+    :return: nothing
+    """
+    if self.parent_net:
+      self.parent_net.register_post_control_dependencies(deps)
+      return
+    self.post_control_dependencies.extend(deps)
+
+  @classmethod
+  def get_network_stack(cls):
+    """
+    :rtype: list[TFNetwork]
+    """
+    from TFUtil import CollectionKeys
+    coll = tf.get_collection_ref(CollectionKeys.RETURNN_NET_STACK)
+    assert isinstance(coll, list)
+    return coll
+
+  @classmethod
+  def get_current_network(cls, must_exist=True):
+    """
+    :param bool must_exist:
+    :rtype: TFNetwork|None
+    """
+    coll = cls.get_network_stack()
+    if must_exist:
+      assert coll
+    elif not coll:
+      return None
+    return coll[-1]
+
+  @contextlib.contextmanager
+  def register_network_scope(self):
+    coll = self.get_network_stack()
+    coll.append(self)
+    try:
+      yield
+    finally:
+      assert coll[-1] is self
+      coll.pop(-1)
+
 
 class TFNetworkParamsSerialized(object):
   """
@@ -1185,7 +1202,7 @@ class TFNetworkParamsSerialized(object):
   """
   def __init__(self, values_dict, global_train_step):
     """
-    :param dict[str,dict[str,numpy.ndarray]] values_dict:
+    :param dict[str,dict[str,numpy.ndarray]] values_dict: dict: layer_name -> param_name -> variable numpy array
     :param int global_train_step:
     """
     self.values_dict = values_dict
@@ -1217,3 +1234,449 @@ class LayerNotFound(Exception):
   """
   Via :func:`TFNetwork.get_layer`.
   """
+
+
+def help_on_tf_exception(exception, feed_dict, meta_step_info, extern_data, file=sys.stdout):
+  """
+  :param tf.errors.OpError|BaseException exception:
+  :param dict[tf.Tensor,numpy.ndarray] feed_dict:
+  :param dict[str] meta_step_info:
+  :param ExternData extern_data:
+  :param typing.IO[str] file:
+  """
+  from pprint import pprint
+  import numpy
+  from TFUtil import get_base_name
+  print("Step meta information:", file=file)
+  pprint(meta_step_info, stream=file)
+  print("Feed dict:", file=file)
+  if isinstance(feed_dict, dict):
+    for key, value in sorted(feed_dict.items(), key=lambda item: item[0].name):
+      assert isinstance(key, tf.Tensor)
+      if isinstance(value, numpy.ndarray):
+        v_minmax = numpy.min(value), numpy.max(value)
+        info = "shape %s, dtype %s" % (value.shape, value.dtype)
+        info += ", min/max %s/%s" % v_minmax
+        if value.dtype.kind == "f":
+          info += ", mean/stddev %s/%s" % (numpy.mean(value), numpy.std(value))
+      else:
+        v_minmax = -1, -1
+        info = "type %r" % type(value)
+      data = None
+      if key.name.startswith("extern_data/"):
+        data_key = get_base_name(key)
+        if data_key in extern_data.data:
+          data = extern_data.data[data_key]
+          info += ", %s" % data
+      print("  %r: %s" % (key, info), file=file)
+      if data and data.sparse:
+        if v_minmax[0] < 0 or v_minmax[1] >= data.dim:
+          print("  WARNING, invalid label for data", data, file=file)
+  else:
+    pprint(feed_dict, stream=file)
+
+
+class CustomCheckpointLoader:
+  """
+  This uses `tf.train.NewCheckpointReader`.
+  It would do automatic conversions if needed, e.g. between different LSTM implementations.
+  It tries to automatically resolve renames, similar to this:
+
+    https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/rnn/python/tools/checkpoint_convert.py
+
+  Also see:
+
+    https://github.com/tensorflow/tensorflow/issues/11168
+    https://github.com/tensorflow/tensorflow/commit/92da8abfd35b93488ed7a55308b8f589ee23b622
+    https://github.com/tensorflow/tensorflow/commit/157370e5916b85c65958ed8383ae31d727228ed7
+
+  """
+
+  def __init__(self, filename, saveable_params, params_prefix="", load_if_prefix="", network=None):
+    """
+    :param str filename: filepattern for NewCheckpointReader
+    :param list[tf.Variable|tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject] saveable_params:
+    :param str load_if_prefix: if given, only load variables with a name containing this string.
+      the variables in the file are expected to have the same name but without this string.
+    :param TFNetwork network:
+    """
+    self.network = network
+    self.saveable_params = []
+    for param in saveable_params:
+      custom_post_init = getattr(param, "custom_post_init", None)
+      if not custom_post_init:
+        self.saveable_params.append(param)
+      else:
+        print("Not loading pre-initialized variables %s" % param, file=log.v2)
+    self.reader = tf.train.NewCheckpointReader(filename)
+    self.params_prefix = params_prefix
+    self.net_vars = [v for v in self.saveable_params if isinstance(v, tf.Variable)]
+    self.net_saveables = [v for v in self.saveable_params if not isinstance(v, tf.Variable)]
+    # All variables in the checkpoint:
+    self.var_ckpt_names = set(self.reader.get_variable_to_shape_map())
+    # All variables of the model to be loaded:
+    self.load_if_prefix = load_if_prefix
+    if self.load_if_prefix:
+      self.var_net_names = self._get_name_with_prefix()
+    else:
+      self.var_net_names = set([self._get_param_name(v) for v in self.saveable_params])
+    # Model variables missing in the checkpoint:
+    self.missing_var_names = [v for v in sorted(self.var_net_names) if v not in self.var_ckpt_names]
+    # Checkpoint variables which are not used in this model:
+    self.obsolete_var_names = [v for v in sorted(self.var_ckpt_names) if v not in self.var_net_names]
+    self.custom_param_importers = [
+      self.CustomParamImporter(layer=layer, checkpoint_loader=self)
+      for layer in network.layers.values() if layer.custom_param_importer] if network else []
+
+  class CustomParamImporter:
+    def __init__(self, layer, checkpoint_loader):
+      """
+      :param LayerBase layer:
+      :param CustomCheckpointLoader checkpoint_loader:
+      """
+      self.layer = layer
+      self.prefix_param_name = layer.get_absolute_name_scope_prefix()
+      self.checkpoint_param_names = []
+      prefix = self.prefix_param_name
+      # Collect checkpoint params, and remove them from the lists.
+      for name in list(checkpoint_loader.var_ckpt_names):
+        if name.startswith(prefix):
+          checkpoint_loader.var_ckpt_names.remove(name)
+          self.checkpoint_param_names.append(name[len(prefix):])
+      # Don't treat any of them as missing.
+      for name in list(checkpoint_loader.missing_var_names):
+        if name.startswith(prefix):
+          checkpoint_loader.missing_var_names.remove(name)
+      # Also not obsolete.
+      for name in list(checkpoint_loader.obsolete_var_names):
+        if name.startswith(prefix):
+          checkpoint_loader.obsolete_var_names.remove(name)
+      # When we load the params, we need this.
+      self.reader = checkpoint_loader.reader
+      self.assigned = False
+
+    def __repr__(self):
+      return "<CustomParamImporter %r on layer %r>" % (self.layer.custom_param_importer, self.layer.name)
+
+    def assign_var(self, var, session):
+      """
+      :param tf.Variable var:
+      :param tf.Session session:
+      """
+      # This function gets called for every param of the layer.
+      # However, the underlying custom_param_importer API
+      # will assign all the layer params together,
+      # so we want to call it exactly once.
+      if self.assigned:
+        return
+      self.assigned = True
+      values_dict = {
+        name: self.reader.get_tensor(self.prefix_param_name + name)
+        for name in self.checkpoint_param_names}
+      self.reader = None  # Allow GC now, we do not need it anymore.
+      print("Custom param import of layer %r with original params %r." % (
+        self.layer, sorted(values_dict.keys())), file=log.v3)
+      self.layer.set_param_values_by_dict(values_dict=values_dict, session=session)
+
+  def _find_custom_param_importer(self, v_name):
+    """
+    :param str v_name:
+    :rtype: CustomParamImporter|None
+    """
+    for importer in self.custom_param_importers:
+      if v_name.startswith(importer.prefix_param_name):
+        return importer
+    return None
+
+  def _get_param_name(self, v):
+    """
+    :param tf.Variable|tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject v:
+    :return:
+    """
+    if isinstance(v, tf.Variable):
+      v_name = v.name[:-2]
+    else:  # saveable
+      v_name = v.name
+    if self.params_prefix:
+      assert v_name.startswith(self.params_prefix), "did not expect %r" % v
+      v_name = v_name[len(self.params_prefix):]
+    return v_name
+
+  def _get_name_with_prefix(self):
+    """
+    :return: set: a set of variable names containing load_if_prefix
+    """
+    var_net_names = set()
+    for v in self.saveable_params:
+      if isinstance(v, tf.Variable):
+        v_name = v.name[:-2]
+      else:
+        v_name = v.name
+      if self.load_if_prefix in v_name:
+        v_name = v_name.replace(self.load_if_prefix,'')
+        if self.params_prefix:
+          var_net_names.add(v_name[len(self.params_prefix):])
+        else:
+          var_net_names.add(v_name)
+    return var_net_names
+
+
+  class VariableValue:
+    def __init__(self, value=None, custom_param_importer=None):
+      """
+      :param numpy.ndarray|None value:
+      :param CustomCheckpointLoader.CustomParamImporter custom_param_importer:
+      """
+      assert value is not None or custom_param_importer
+      self.value = value
+      self.custom_param_importer = custom_param_importer
+
+    def assign_var(self, var, session):
+      """
+      :param tf.Variable var:
+      :param tf.Session session:
+      """
+      if self.value is not None:
+        VariableAssigner(var=var).assign(value=self.value, session=session)
+      else:
+        self.custom_param_importer.assign_var(var=var, session=session)
+
+  def get_variable_value_map(self):
+    """
+    :return: var -> numpy array
+    :rtype: dict[tf.Variable,CustomCheckpointLoader.VariableValue]
+    """
+    variable_values = {}
+    if not self.missing_var_names and not self.custom_param_importers:
+      # Fast path.
+      for v in self.saveable_params:
+        assert isinstance(v, tf.Variable), "not yet implemented otherwise..."
+        if self.load_if_prefix:
+          v_name = self._get_param_name(v)
+          if self.load_if_prefix in v_name:
+            v_name = v_name.replace(self.load_if_prefix,'')
+            value = self.reader.get_tensor(v_name)
+            variable_values[v] = self.VariableValue(value=value)
+        else:
+          v_name = self._get_param_name(v)
+          value = self.reader.get_tensor(v_name)
+          variable_values[v] = self.VariableValue(value=value)
+      return variable_values
+
+    reader = self.reader
+    net_vars = self.net_vars
+    net_saveables = self.net_saveables
+    var_ckpt_names = self.var_ckpt_names
+    var_net_names = self.var_net_names
+    missing_var_names = self.missing_var_names
+    obsolete_var_names = self.obsolete_var_names
+
+    # This map_list can be extended by all the mappings in checkpoint_convert.py.
+    # Old name (in checkpoint) -> new name (current variable name).
+    map_list = {
+      "lstm_cell/biases": "lstm_cell/bias",
+      "lstm_cell/weights": "lstm_cell/kernel",
+      "cudnn/params_canonical/rnn/multi_rnn_cell/cell_0/cudnn_compatible_lstm_cell/bias": "lstm_fused_cell/bias",
+      "cudnn/params_canonical/rnn/multi_rnn_cell/cell_0/cudnn_compatible_lstm_cell/kernel": "lstm_fused_cell/kernel",
+    }
+
+    print("Variables to restore which are not in checkpoint:", missing_var_names, file=log.v2)
+
+    var_name_map = {}  # type: dict[str,()->numpy.ndarray]  # current name -> value-loader
+
+    def make_load_renamed(old_name):
+      def load_old():
+        return reader.get_tensor(old_name)
+
+      return load_old
+
+    def make_load_weights_nativelstm_to_basic(new_name):
+      assert new_name.endswith("/lstm_cell/kernel")
+      old_name1 = new_name[:-len("/lstm_cell/kernel")] + "/W_re"
+      old_name2 = new_name[:-len("/lstm_cell/kernel")] + "/W"
+
+      def load_native_lstm_weights():
+        # i = input_gate, j = new_input, f = forget_gate, o = output_gate
+        # BasicLSTM: i, j, f, o; Input: [inputs, h]
+        # LstmGenericBase/NativeLstm: j, i, f, o
+        # NativeLstm2: j, i, f, o
+        W_re = reader.get_tensor(old_name1)  # (n_out,n_out*4)
+        W_ff = reader.get_tensor(old_name2)  # (n_in,n_out*4)
+        assert W_re.ndim == W_ff.ndim == 2 and W_re.shape[1] == W_ff.shape[1] and W_re.shape[1] // 4 == W_re.shape[0]
+        W = numpy.concatenate([W_ff, W_re], axis=0)  # (n_in+n_out,n_out*4)
+        W_j, W_i, W_f, W_o = numpy.split(W, 4, axis=1)
+        W = numpy.concatenate([W_i, W_j, W_f, W_o], axis=1)
+        return W
+
+      return load_native_lstm_weights
+
+    def make_load_bias_nativelstm_to_basic(new_name):
+      assert new_name.endswith("/lstm_cell/bias")
+      old_name = new_name[:-len("/lstm_cell/bias")] + "/b"
+
+      def load_native_lstm_bias():
+        # i = input_gate, j = new_input, f = forget_gate, o = output_gate
+        # BasicLSTM: i, j, f, o; Input: [inputs, h]
+        # LstmGenericBase/NativeLstm: j, i, f, o
+        # NativeLstm2: j, i, f, o
+        b = reader.get_tensor(old_name)  # (n_out*4,)
+        assert b.ndim == 1
+        b_j, b_i, b_f, b_o = numpy.split(b, 4, axis=0)
+        b = numpy.concatenate([b_i, b_j, b_f, b_o], axis=0)
+        return b
+
+      return load_native_lstm_bias
+
+    class make_load_cudnn_rnn:
+      cudnn_postfix = "/cudnn/CudnnRNNParamsToCanonical:0"
+
+      def __init__(self, prefix, target="lstm_block_wrapper/"):
+        self.target = target
+        self.keys = [target + "bias", target + "kernel"]
+        self.prefix = prefix
+        self.data = None
+
+      def _load(sself):
+        from TFNetworkRecLayer import RecLayer
+        sself.data = RecLayer.convert_cudnn_canonical_to_lstm_block(
+          reader=reader, prefix=sself.prefix, target=sself.target)
+
+      def make_getter(self, key):
+        def get():
+          if self.data is None:
+            self._load()
+          return self.data[key]
+
+        return get
+
+      def get_lazy_dict(self):
+        return {self.prefix + k: self.make_getter(self.prefix + k) for k in self.keys}
+
+    # Here we try to make matches of missing vars and vars which seem to be obsolete.
+    for v in missing_var_names:
+      if v.endswith("/lstm_cell/kernel"):
+        old_name1 = v[:-len("/lstm_cell/kernel")] + "/W_re"
+        old_name2 = v[:-len("/lstm_cell/kernel")] + "/W"
+        if old_name1 in obsolete_var_names and old_name2 in obsolete_var_names:
+          var_name_map[v] = make_load_weights_nativelstm_to_basic(v)
+      if v.endswith("/lstm_cell/bias"):
+        old_name = v[:-len("/lstm_cell/bias")] + "/b"
+        if old_name in obsolete_var_names:
+          var_name_map[v] = make_load_bias_nativelstm_to_basic(v)
+    for v in obsolete_var_names:
+      for k_old, k_new in map_list.items():
+        if v.endswith("/%s" % k_old):
+          v2 = v[:-len(k_old)] + k_new
+          if v2 in missing_var_names:
+            var_name_map[v2] = make_load_renamed(old_name=v)
+            break
+      if v.endswith(make_load_cudnn_rnn.cudnn_postfix):
+        var_name_map.update(
+          make_load_cudnn_rnn(prefix=v[:-len(make_load_cudnn_rnn.cudnn_postfix) + 1]).get_lazy_dict())
+
+    could_not_find_map_list = [v for v in missing_var_names if v not in var_name_map]
+    if not could_not_find_map_list:
+      # We can restore all.
+      print("We found these corresponding variables in the checkpoint:", var_name_map, file=log.v2)
+      print("Custom param importers:", self.custom_param_importers, file=log.v2)
+      print("Loading now...", file=log.v3)
+      # Similar: from tensorflow.contrib.framework.python.ops import assign_from_checkpoint
+      for v in self.saveable_params:
+        assert isinstance(v, tf.Variable), "not yet implemented otherwise..."
+        if self.load_if_prefix:
+          if self.load_if_prefix not in v.name:
+            continue
+          else:
+            v_name = self._get_param_name(v).replace(self.load_if_prefix,'')
+        else:
+          v_name = self._get_param_name(v)  # current name
+        custom_importer = self._find_custom_param_importer(v_name)
+        if custom_importer:
+          variable_values[v] = self.VariableValue(custom_param_importer=custom_importer)
+        elif v_name in var_ckpt_names:
+          variable_values[v] = self.VariableValue(value=reader.get_tensor(v_name))
+        else:
+          variable_values[v] = self.VariableValue(value=var_name_map[v_name]())
+      print("Successfully loaded all variables. Any new save will use the updated variable names.", file=log.v3)
+      return variable_values
+
+    else:
+      print("Could not find mappings for these variables:", could_not_find_map_list, "var_name_map:", var_name_map,
+            file=log.v3)
+      print("All variables in checkpoint:", file=log.v3)
+      print(reader.debug_string().decode("utf8"), file=log.v3)
+      print("All variables to restore:", file=log.v3)
+      for v in net_vars + net_saveables:
+        print(v, file=log.v3)
+      print(file=log.v3)
+      print("Variables to restore which are not in checkpoint:", file=log.v3)
+      for v in sorted(var_net_names):
+        if v in var_ckpt_names:
+          continue
+        print(v, file=log.v3)
+      print(file=log.v3)
+      print("Variables in checkpoint which are not needed for restore:", file=log.v3)
+      for v in sorted(var_ckpt_names):
+        if v in var_net_names:
+          continue
+        print(v, file=log.v3)
+      print(file=log.v3)
+      print("Probably we can restore these:", file=log.v3)
+      for v in sorted(var_name_map.keys()):
+        print(v, file=log.v3)
+      if not var_name_map:
+        print("(None)", file=log.v3)
+      print(file=log.v3)
+      raise tf.errors.NotFoundError(
+        node_def=None, op=None,
+        message="CustomCheckpointLoader. could_not_find_map_list: %r" % (could_not_find_map_list,))
+
+  def load_now(self, session):
+    """
+    :param tf.Session session:
+    :return: nothing, will assign the variables in the session
+    """
+    for var, value in self.get_variable_value_map().items():
+      value.assign_var(var=var, session=session)
+
+  def set_as_custom_init(self):
+    var_value_map = self.get_variable_value_map()
+    read_vars = set()
+
+    def make_var_post_init(var):
+      """
+      :param tf.Variable var:
+      :return: function
+      :rtype: (tf.Session)->None
+      """
+      def var_post_init(session):
+        """
+        :param tf.Session session:
+        """
+        assert var not in read_vars, "Cannot initialize this twice. On purpose, to free memory."
+        read_vars.add(var)
+        value = var_value_map.pop(var)
+        value.assign_var(var=var, session=session)
+
+      return var_post_init
+
+    for var in self.saveable_params:
+      if self.load_if_prefix:
+        if self.load_if_prefix in var.name:
+          set_custom_post_init(var=var, func=make_var_post_init(var))
+          print("%s registered for pre-loading." % var.name, file=log.v2)
+      else:
+        set_custom_post_init(var=var, func=make_var_post_init(var))
+
+
+def set_custom_post_init(var, func):
+  """
+  It registers the provided `func` such that it gets called for this variable
+  in TFNetwork.initialize_params().
+
+  :param tf.Variable var:
+  :param (tf.Session)->None func:
+  """
+  # This custom attribute is a big ugly but simple.
+  # It's read in TFNetwork.initialize_params().
+  var.custom_post_init = func

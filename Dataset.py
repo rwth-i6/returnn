@@ -752,7 +752,8 @@ class DatasetSeq:
     :rtype: NumbersDict
     """
     d = {"data": self.features.shape[0]}
-    d.update({k: self.targets[k].shape[0] for k in self.targets.keys()})
+    d.update({k: (v.shape[0] if v.ndim >= 1 else 1)
+              for (k, v) in self.targets.items()})
     return NumbersDict(d)
 
   def get_data(self, key):
@@ -790,7 +791,10 @@ def init_dataset(kwargs):
   if callable(kwargs):
     return init_dataset(kwargs())
   if isinstance(kwargs, (str, unicode)):
-    return init_dataset_via_str(config_str=kwargs)
+    if kwargs.startswith("{"):
+      kwargs = eval(kwargs)
+    else:
+      return init_dataset_via_str(config_str=kwargs)
   assert isinstance(kwargs, dict)
   kwargs = kwargs.copy()
   assert "class" in kwargs
@@ -924,3 +928,21 @@ def shapes_for_batches(batches, data_keys, dataset=None, extern_data=None):
     for k in all_data_keys:
       d[k] += dataset.get_data_shape(k)
   return d
+
+
+def set_config_num_inputs_outputs_from_dataset(config, dataset):
+  """
+  :param Config.Config config:
+  :param Dataset dataset:
+  """
+  config.set("num_inputs", dataset.num_inputs)
+  from Util import BackendEngine
+  if BackendEngine.is_tensorflow_selected():
+    # TF supports more fine-grained specification,
+    # however the dataset does not store that in num_outputs.
+    from TFNetwork import ExternData
+    config.set("num_outputs", {
+      key: ExternData.data_kwargs_from_dataset_key(dataset=dataset, key=key)
+      for key in dataset.get_data_keys()})
+  else:
+    config.set("num_outputs", dataset.num_outputs)

@@ -32,9 +32,10 @@ from LearningRateControl import loadLearningRateControlFromConfig, LearningRateC
 from Log import log
 from Network import LayerNetwork
 from Pretrain import pretrainFromConfig
-from TFNetwork import TFNetwork, ExternData
+from TFNetwork import TFNetwork, ExternData, help_on_tf_exception
 from TFUpdater import Updater
-from Util import hms, NumbersDict
+from Util import hms, NumbersDict, PY3, BackendEngine
+from pprint import pprint
 
 
 class CancelTrainingException(Exception):
@@ -129,6 +130,7 @@ class Runner(object):
       def callback_on_new():
         # Force a new check.
         self.engine._checked_uninitialized_vars = False
+        self.engine.updater.init_optimizer_vars(session=self.engine.tf_session)
       d["optim_op"] = self.engine.updater.get_optim_op(callback_on_new=callback_on_new)
       if self.engine.updater.optim_meta_losses:
         d.update(self.engine.updater.optim_meta_losses)
@@ -136,13 +138,15 @@ class Runner(object):
       from TFNetworkLayer import LayerBase
       from TFUtil import Data
       for k, v in self.extra_fetches.items():
+        if v is None:
+          continue
         if isinstance(v, tf.Tensor):
           d["extra:%s" % k] = v
           continue
         if isinstance(v, LayerBase):
           v = v.output
         assert isinstance(v, Data)
-        d["extra:%s" % k] = v.placeholder
+        d["extra:%s" % k] = v.placeholder  # see _maybe_handle_extra_fetches, it will transform to batch-major there
         for i, s in v.size_placeholder.items():
           d["extra:%s:size_%i" % (k, i)] = s
     if self.engine.get_all_merged_summaries() is not None:
@@ -154,6 +158,8 @@ class Runner(object):
           # mem_usage_for_dev currently only works for GPU
           continue
         d["mem_usage:%s" % os.path.basename(dev.name.replace("/device:", "/"))] = mem_usage_for_dev(dev.name)
+    if self.engine.network.post_control_dependencies:
+      d["post_control_dependencies"] = self.engine.network.post_control_dependencies
     return d
 
   def _print_process(self, report_prefix, step, step_duration, eval_info):
@@ -327,6 +333,9 @@ class Runner(object):
     from TFNetworkLayer import LayerBase
     from TFUtil import Data
     for k, v in self.extra_fetches.items():
+      if v is None:
+        d[k] = None
+        continue
       r = fetches_results["extra:%s" % k]
       if isinstance(v, tf.Tensor):
         d[k] = r
@@ -353,16 +362,21 @@ class Runner(object):
     sess = self.engine.tf_session
     if self.engine.config.has("tf_log_dir"):
       logdir = self.engine.config.value("tf_log_dir", None)
+    elif self.engine.model_filename:
+      logdir = os.path.dirname(self.engine.model_filename)
+    elif log.filename:
+      logdir = os.path.dirname(log.filename)
     else:
-      logdir = os.path.dirname(self.engine.model_filename) or os.getcwd()
+      logdir = os.getcwd()
     if logdir:
-      from Util import log_runtime_info_to_dir
-      log_runtime_info_to_dir(logdir, config=self.engine.config)
+      from Util import log_runtime_info_to_dir, get_utc_start_time_filename_part
       logdir += "/%s" % self.data_provider.get_dataset_name()
       if not self._should_train:  # like eval
         logdir += "-%i" % self.engine.epoch
       if self.engine.use_search_flag:
         logdir += "-search"
+      logdir += "-%s" % get_utc_start_time_filename_part()
+      log_runtime_info_to_dir(logdir, config=self.engine.config)
       writer = tf.summary.FileWriter(logdir)
     else:
       writer = None
@@ -380,7 +394,11 @@ class Runner(object):
     threads = tf.train.start_queue_runners(sess=sess, coord=coord)
     self.data_provider.start_threads()
     self.start_time = time.time()
+    elapsed_time_tf = 0.0
     step = None
+    fetches_dict = None
+    feed_dict = None
+    meta_step_info = None
     try:
       # step is like mini-batch in our usual terminology
       step = 0
@@ -391,17 +409,18 @@ class Runner(object):
       if writer:
         writer.add_graph(sess.graph)
       while self.data_provider.have_more_data(session=sess):
-        feed_dict = self.data_provider.get_feed_dict()
+        feed_dict, meta_step_info = self.data_provider.get_feed_dict()
         if isinstance(self.engine.network.train_flag, tf.Tensor):
           feed_dict[self.engine.network.train_flag] = self._should_train
+        if isinstance(self.engine.network.epoch_step, tf.Tensor):
+          feed_dict[self.engine.network.epoch_step] = step
         start_time = time.time()
         if self._should_train and self.reset_updater_vars_mod_step and step % self.reset_updater_vars_mod_step == 0:
           print("Reset updater vars in step %i." % step, file=log.v5)
-          self.engine.updater.init_optimizer_vars()
+          self.engine.updater.init_optimizer_vars(session=sess)
 
         if step == 0:
           if self.engine.config.bool("check_unsupported_device", False) and self.engine.is_requesting_for_gpu():
-            from pprint import pprint
             from TFUtil import find_unsupported_devices_in_graph
             ops = find_unsupported_devices_in_graph(graph=sess.graph, dev_name="GPU")
             if not ops:
@@ -423,11 +442,13 @@ class Runner(object):
             run_options = tf.RunOptions(
               trace_level=tf.RunOptions.FULL_TRACE)
             # We could use tfdbg.add_debug_tensor_watch here.
+            session_run_start_time = time.time()
             fetches_results = sess.run(
               fetches_dict,
               feed_dict=feed_dict,
               options=run_options,
               run_metadata=run_metadata)  # type: dict[str,numpy.ndarray|str]
+            elapsed_time_tf += time.time() - session_run_start_time
             writer.add_summary(fetches_results["summary"], step + step_offset)
             writer.add_run_metadata(run_metadata, 'step_{:04d}'.format(step + step_offset))
             tl = timeline.Timeline(run_metadata.step_stats)
@@ -435,23 +456,24 @@ class Runner(object):
             with open(timeline_path, 'w') as f:
               f.write(tl.generate_chrome_trace_format(show_memory=True))
           else:
+            session_run_start_time = time.time()
             fetches_results = sess.run(fetches_dict, feed_dict=feed_dict)  # type: dict[str,numpy.ndarray|str]
+            elapsed_time_tf += time.time() - session_run_start_time
             if writer and "summary" in fetches_results:
               writer.add_summary(fetches_results["summary"], step + step_offset)
-        except tf.errors.ResourceExhaustedError:
-          print("ResourceExhaustedError. Shapes of feed_dict:", file=log.v1)
-          for key, value in sorted(feed_dict.items(), key=lambda item: item[0].name):
-            print(
-              "  %r: %s" % (
-                key,
-                ("shape %s" % (value.shape,)) if isinstance(value, numpy.ndarray) else ("type %r" % type(value))),
-              file=log.v1)
+        except tf.errors.OpError as exc:
+          print("TensorFlow exception:", exc, file=log.v1)
+          # Extra info will be printed below.
           raise
 
         eval_info = self._collect_eval_info(fetches_results=fetches_results)
         self._maybe_handle_extra_fetches(fetches_results)
         duration = time.time() - start_time
         self._print_process(report_prefix=report_prefix, step=step, step_duration=duration, eval_info=eval_info)
+        if step <= 10 and writer:
+          writer.flush()
+          if PY3:
+            os.sync()
         step += 1
         if self.cancel_flag:
           raise CancelTrainingException("cancel_flag is set")
@@ -471,6 +493,10 @@ class Runner(object):
         print("Stats:", file=log.v1)
         for k, v in sorted(self.stats.items()):
           print("  %s:" % k, v, file=log.v1)
+      elapsed = time.time() - self.start_time
+      elapsed_tf_percentage = (elapsed_time_tf / elapsed) if (elapsed > 0) else 0.0
+      print("%s, finished after %i steps, %s elapsed (%.1f%% computing time)" % (
+        report_prefix, step, hms(elapsed), (elapsed_tf_percentage * 100.)), file=log.v3)
 
     except KeyboardInterrupt as exc:
       print("KeyboardInterrupt in step %r." % step)
@@ -479,6 +505,9 @@ class Runner(object):
     except BaseException as exc:
       print("Exception %r in step %r." % (exc, step), file=log.v1)
       if not isinstance(exc, CancelTrainingException):
+        help_on_tf_exception(
+          exception=exc, feed_dict=feed_dict, meta_step_info=meta_step_info,
+          extern_data=self.data_provider.extern_data, file=log.v2)
         sys.excepthook(*sys.exc_info())
       self.device_crash_batch = step
       self.run_exception = exc
@@ -502,7 +531,12 @@ class Engine(object):
     """
     if config is None:
       from Config import get_global_config
-      config = get_global_config()
+      config = get_global_config(auto_create=True)
+    if not log.initialized:
+      log.init_by_config(config)
+    if BackendEngine.selectedEngine is None:
+      BackendEngine.select_engine(engine=BackendEngine.TensorFlow)
+    assert BackendEngine.is_tensorflow_selected()
     self.config = config
     self.orig_config = {}  # see _maybe_update_config
     self.devices_config = self._get_devices_config()
@@ -672,6 +706,9 @@ class Engine(object):
     """
     if not config:
       config = self.config
+    if not config.has("num_inputs") and not config.has("num_outputs") and (train_data or dev_data or eval_data):
+      from Dataset import set_config_num_inputs_outputs_from_dataset
+      set_config_num_inputs_outputs_from_dataset(config=config, dataset=train_data or dev_data or eval_data)
     self.use_dynamic_train_flag = True
     self.train_data = train_data
     self.dev_data = dev_data
@@ -711,6 +748,7 @@ class Engine(object):
     if not config:
       config = self.config
     self.model_filename = config.value('model', None)
+    self.preload_from_files = config.typed_value('preload_from_files', {})
     self.pretrain = pretrainFromConfig(config)
     self.max_seqs = config.int('max_seqs', -1)
 
@@ -734,6 +772,21 @@ class Engine(object):
       net_dict = LayerNetwork.json_from_config(config)
 
     self._init_network(net_desc=net_dict, epoch=self.epoch)
+
+    if self.preload_from_files:
+      # This option is to be replaced by a load_on_init option for each layer in the future.
+      print("WARNING: Option 'preload_from_files' is currently not compatible with 'load_on_init' in SubnetworkLayer", file=log.v2)
+      print("Start pre-loading weights...", file=log.v2)
+      for model_name in self.preload_from_files.keys():
+        model_filename = self.preload_from_files.get(model_name)['filename']
+        print("loading weights from", model_filename, file=log.v2)
+        self_prefix = self.network.get_absolute_name_scope_prefix()  # with "/" at end
+        load_if_prefix = self.preload_from_files.get(model_name)['prefix']  # prefix to identify the variables to be restored from the file
+        from TFNetwork import CustomCheckpointLoader
+        loader = CustomCheckpointLoader(
+          filename=model_filename, saveable_params=self.network.get_trainable_params(), params_prefix=self_prefix, load_if_prefix=load_if_prefix)
+        loader.set_as_custom_init()
+      self.network.initialize_params(session=self.tf_session)
 
     if model_epoch_filename:
       print("loading weights from", model_epoch_filename, file=log.v2)
@@ -819,17 +872,38 @@ class Engine(object):
       extern_data = ExternData()
       extern_data.init_from_config(self.config)
       # TODO...
-    network = TFNetwork(
-      name="root",
+    self.network, self.updater = self.create_network(
       config=self.config,
       rnd_seed=epoch,
+      train_flag=train_flag, eval_flag=self.use_eval_flag, search_flag=self.use_search_flag,
+      initial_learning_rate=getattr(self, "initial_learning_rate", None),
+      net_dict=net_desc)
+    self.network.initialize_params(session=self.tf_session)
+
+  @classmethod
+  def create_network(cls, config, rnd_seed, train_flag, eval_flag, search_flag, net_dict, initial_learning_rate=1.0):
+    """
+    :param Config.Config config:
+    :param int rnd_seed:
+    :param bool|tf.Tensor train_flag:
+    :param float initial_learning_rate:
+    :param bool eval_flag:
+    :param bool search_flag:
+    :param dict[str,dict[str]] net_dict:
+    :return: network, updater
+    :rtype: (TFNetwork, Updater|None)
+    """
+    network = TFNetwork(
+      name="root",
+      config=config,
+      rnd_seed=rnd_seed,
       train_flag=train_flag,
-      eval_flag=self.use_eval_flag,
-      search_flag=self.use_search_flag)
-    network.construct_from_dict(net_desc)
-    if train_flag is not False and self.config.list("search_train_network_layers"):
+      eval_flag=eval_flag,
+      search_flag=search_flag)
+    network.construct_from_dict(net_dict)
+    if train_flag is not False and config.list("search_train_network_layers"):
       network.construct_extra_net(
-        net_desc, layer_list=self.config.list("search_train_network_layers"), search_flag=True)
+        net_dict, layer_list=config.list("search_train_network_layers"), search_flag=True)
       print("search train network layers:")
       for layer_name, layer in sorted(network.extra_net.layers.items()):
         print("  layer %s %r #: %s" % (layer.layer_class, layer_name, layer.output.dim), file=log.v2)
@@ -839,16 +913,16 @@ class Engine(object):
       net_params = network.get_params_list()
       for extra_param in network.extra_net.get_params_list():
         assert extra_param in net_params
-    network.initialize_params(session=self.tf_session)
-    network.layers_desc = net_desc
-    self.network = network
-    if self.train_data:
+    network.layers_desc = net_dict
+    updater = None
+    if train_flag is not False:
       # Need to create new Updater because it has the learning_rate var which must be in the current graph.
-      self.updater = Updater(
-        config=self.config, tf_session=self.tf_session, network=network,
-        initial_learning_rate=self.initial_learning_rate)
-      self.updater.set_trainable_vars(network.get_trainable_params())
+      updater = Updater(
+        config=config, network=network,
+        initial_learning_rate=initial_learning_rate)
+      updater.set_trainable_vars(network.get_trainable_params())
     network.print_network_info()
+    return network, updater
 
   def maybe_init_new_network(self, net_desc):
     """
@@ -874,7 +948,10 @@ class Engine(object):
     # not equal to the dimension in the current epoch, due to difference in layer size.
     # In that case initialize output parameters randomly.
     self.network.set_params_by_serialized(
-      old_network_params, session=self.tf_session, ignore_wrong_shape=self.is_pretrain_epoch())
+      old_network_params, session=self.tf_session,
+      ignore_wrong_shape=self.is_pretrain_epoch(),
+      copy_param_mode=self.pretrain.copy_param_mode if self.is_pretrain_epoch() else None,
+      ignore_non_existing=self.is_pretrain_epoch())
 
   def train(self):
     print("start training at epoch %i and step %i" % (self.start_epoch, self.start_batch), file=log.v3)
@@ -978,7 +1055,7 @@ class Engine(object):
              self.learning_rate_control.getEpochErrorDict(last_best_epoch)),
             file=log.v2)
       self.load_model(epoch=last_best_epoch)
-      self.updater.init_optimizer_vars()  # reset the optimizer vars
+      self.updater.init_optimizer_vars(session=self.tf_session)  # reset the optimizer vars
 
   def train_epoch(self):
     print("start", self.get_epoch_str(), "with learning rate", self.learning_rate, "...", file=log.v4)
@@ -1001,7 +1078,7 @@ class Engine(object):
       self.dataset_batches['train'].reset()
     train_batches = self.dataset_batches['train']
 
-    self.updater.set_learning_rate(self.learning_rate)
+    self.updater.set_learning_rate(self.learning_rate, session=self.tf_session)
     trainer = Runner(engine=self, dataset=self.train_data, batches=train_batches, train=True)
     trainer.run(report_prefix=("pre" if self.is_pretrain_epoch() else "") + "train epoch %s" % self.epoch)
 
@@ -1012,16 +1089,18 @@ class Engine(object):
       sys.exit(1)
 
     if any(numpy.isinf(list(trainer.score.values()))) or any(numpy.isnan(list(trainer.score.values()))):
-      self.save_model(self.get_epoch_model_filename() + ".broken")
       print("Model seems broken, got inf or nan final score: %s" % trainer.score, file=log.v1)
-      sys.exit(1)
+      if self.config.bool("stop_on_nonfinite_train_score", True):
+        self.save_model(self.get_epoch_model_filename() + ".broken")
+        sys.exit(1)
 
     if self.model_filename and (self.epoch % self.save_model_epoch_interval == 0):
       self.save_model(self.get_epoch_model_filename())
     self.learning_rate_control.setEpochError(self.epoch, {"train_score": trainer.score, "train_error": trainer.error})
     self.learning_rate_control.save()
 
-    print(self.get_epoch_str(), "score:", self.format_score(trainer.score), "elapsed:", hms(trainer.elapsed), end=" ", file=log.v1)
+    print(
+      self.get_epoch_str(), "score:", self.format_score(trainer.score), "elapsed:", hms(trainer.elapsed), file=log.v1)
     self.eval_model()
 
     if self.config.bool_or_other("cleanup_old_models", None):
@@ -1035,10 +1114,49 @@ class Engine(object):
     return " ".join(["%s %s" % (key.split(':', 2)[-1], str(score[key]))
                      for key in sorted(score.keys())])
 
-  def eval_model(self):
+  def _maybe_prepare_train_in_eval(self, targets_via_search=False):
+    """
+    :param bool targets_via_search:
+    :return: whether train in eval should be used
+    :rtype: bool
+    """
+    if not self.config.get_of_type("train_in_eval", bool, False):
+      return False
+    if targets_via_search:
+      # TODO. This will require a new network.
+      # TFNetwork construct_extra_net also does not quite work for this.
+      # We need to create a new net, where we set the search as the targets.
+      raise NotImplementedError
+    # We update the model params in-place.
+    # In training, we don't want that, because it should not use the validation data.
+    # We could reset it later when continuing the training, but it's not implemented.
+    assert self.config.value('task', 'train') != 'train', (
+      "task %r should be just 'eval' or so. training will break." % self.config.value('task', None))
+    if not self.updater:
+      self.updater = Updater(
+        config=self.config, network=self.network,
+        initial_learning_rate=self.initial_learning_rate)
+      self.updater.set_trainable_vars(self.network.get_trainable_params())
+      self.updater.init_optimizer_vars(session=self.tf_session)
+    eval_learning_rate = self.config.get_of_type(
+      'eval_learning_rate', float, default=self.config.float('learning_rate', 1.0))
+    print("train in eval, learning rate %f" % eval_learning_rate, file=log.v2)
+    self.updater.set_learning_rate(eval_learning_rate, session=self.tf_session)
+    return True
+
+  def eval_model(self, output_file=None):
+    """
+    Eval the current model on the eval datasets (dev + eval, whatever is set).
+    See also :func:`self.search` for performing beam search.
+
+    :param str|None output_file: if given, will save the results to this file
+    :return: nothing
+    """
     # It's constructed lazily and it will set used_data_keys, so make sure that we have it now.
     self.network.get_all_errors()
+    results = {}
     eval_dump_str = []
+    train = self._maybe_prepare_train_in_eval()
     for dataset_name, dataset in self.get_eval_datasets().items():
       if dataset_name not in self.dataset_batches or not dataset.batch_set_generator_cache_whole_epoch():
         self.dataset_batches[dataset_name] = dataset.generate_batches(
@@ -1050,15 +1168,23 @@ class Engine(object):
       else:
         print("reusing previous dataset batch order for %r dataset" % dataset_name, file=log.v4)
         self.dataset_batches[dataset_name].reset()
-      tester = Runner(engine=self, dataset=dataset, batches=self.dataset_batches[dataset_name], train=False)
-      tester.run(report_prefix=self.get_epoch_str() + " eval")
-      assert tester.finalized
-      eval_dump_str += [" %s: score %s error %s" % (
+      tester = Runner(engine=self, dataset=dataset, batches=self.dataset_batches[dataset_name], train=train)
+      tester.run(report_prefix=self.get_epoch_str() + " %r eval" % dataset_name)
+      if not tester.finalized:
+        print("Tester not finalized, quitting.", file=log.v1)
+        sys.exit(1)
+      eval_dump_str += ["%s: score %s error %s" % (
                         dataset_name, self.format_score(tester.score), self.format_score(tester.error))]
+      results[dataset_name] = {"score": tester.score, "error": tester.error}
       if dataset_name == "dev":
         self.learning_rate_control.setEpochError(self.epoch, {"dev_score": tester.score, "dev_error": tester.error})
         self.learning_rate_control.save()
-    print(" ".join(eval_dump_str).strip(), file=log.v1)
+    print(" ".join(eval_dump_str), file=log.v1)
+    if output_file:
+      print('Write eval results to %r' % output_file, file=log.v3)
+      from Util import betterRepr
+      with open(output_file, 'w') as f:
+        f.write(betterRepr(results) + '\n')
 
   def check_last_epoch(self):
     if self.start_epoch == 1:
@@ -1066,7 +1192,8 @@ class Engine(object):
     self.epoch = self.start_epoch - 1
     if self.learning_rate_control.need_error_info:
       if self.dev_data:
-        if "dev_score" not in self.learning_rate_control.getEpochErrorDict(self.epoch):
+        if all([not k.startswith("dev_score")
+                for k in self.learning_rate_control.getEpochErrorDict(self.epoch).keys()]):
           # This can happen when we have a previous model but did not test it yet.
           print("Last epoch model not yet evaluated on dev. Doing that now.", file=log.v4)
           self.eval_model()
@@ -1223,7 +1350,7 @@ class Engine(object):
       tf_session=self.tf_session, extern_data=self.network.extern_data,
       data_keys=self.network.used_data_keys,
       dataset=dataset, batches=batches)
-    feed_dict = data_provider.get_feed_dict(single_threaded=True)
+    feed_dict, _ = data_provider.get_feed_dict(single_threaded=True)
     return feed_dict
 
   def run_single(self, dataset, seq_idx, output_dict, ext_feed_dict=None):
@@ -1254,6 +1381,9 @@ class Engine(object):
 
   def forward_single(self, dataset, seq_idx, output_layer_name=None):
     """
+    Forwards a single sequence.
+    If you want to perform search, and get a number of hyps out, use :func:`search_single`.
+
     :param Dataset.Dataset dataset:
     :param int seq_idx:
     :param str|None output_layer_name: e.g. "output". if not set, will read from config "forward_output_layer"
@@ -1368,7 +1498,8 @@ class Engine(object):
     """
     :param Dataset.Dataset data:
     :param list[str]|None statistics: ignored at the moment
-    :return: nothing, will print everything to log.v1
+    :return: print everything to log.v1, and return the Runner instance to get access to all the stats
+    :rtype: Runner
     """
     print("Analyze with network on %r." % data, file=log.v1)
 
@@ -1412,6 +1543,7 @@ class Engine(object):
     if not analyzer.finalized:
       print("WARNING: Did not finished through the whole epoch.", file=log.v1)
       sys.exit(1)
+    return analyzer
 
   def search(self, dataset, do_eval=True, output_layer_name="output", output_file=None, output_file_format="txt"):
     """
@@ -1437,8 +1569,10 @@ class Engine(object):
     if output_file:
       if dataset.have_corpus_seq_idx():
         # We can sort it. Sort it in reverse to make sure that we have enough memory right at the beginning.
+        print("Dataset have_corpus_seq_idx == True, i.e. it will be sorted for optimal performance.", file=log.v3)
         dataset.seq_ordering = "sorted_reverse"
       else:
+        print("Dataset have_corpus_seq_idx == False, i.e. it will not be sorted for optimal performance.", file=log.v3)
         dataset.seq_ordering = "default"  # enforce order as-is, so that the order in the written file corresponds
     dataset.init_seq_order(epoch=self.epoch)
     batches = dataset.generate_batches(
@@ -1450,10 +1584,12 @@ class Engine(object):
 
     output_layer = self.network.layers[output_layer_name]
     out_beam_size = output_layer.output.beam_size
+    output_layer_beam_scores = None
     if out_beam_size is None:
       print("Given output %r is after decision (no beam)." % output_layer, file=log.v1)
     else:
       print("Given output %r has beam size %i." % (output_layer, out_beam_size), file=log.v1)
+      output_layer_beam_scores = output_layer.get_search_choices().beam_scores
     target_key = output_layer.target or self.network.extern_data.default_target
 
     out_cache = None
@@ -1464,42 +1600,65 @@ class Engine(object):
       assert not os.path.exists(output_file)
       print("Will write outputs to: %s" % output_file, file=log.v2)
       output_file = open(output_file, "w")
-      out_cache = {}  # corpus-seq-idx -> str
+      out_cache = {}  # corpus-seq-idx -> str|list[(float,str)]
+    if not log.verbose[4]:
+      print("Set log_verbosity to level 4 or higher to see seq info on stdout.", file=log.v2)
 
-    def extra_fetches_callback(seq_idx, seq_tag, output, targets=None):
+    def extra_fetches_callback(seq_idx, seq_tag, output, targets=None, beam_scores=None):
       """
       :param list[int] seq_idx: of length batch (without beam)
       :param list[str] seq_tag: of length batch (without beam)
       :param list[numpy.ndarray] output: of length batch (with beam)
       :param list[numpy.ndarray] targets: of length batch (without beam)
+      :param list[numpy.ndarray] beam_scores: batch, beam
       """
       n_batch = len(seq_idx)  # without beam
       assert n_batch == len(seq_tag)
       assert n_batch * (out_beam_size or 1) == len(output)
+      if targets is not None:
+        assert n_batch == len(targets)
+      if beam_scores is not None:
+        assert beam_scores.shape == (n_batch, out_beam_size)
       if output_layer.output.dim == 256 and output_layer.output.sparse:
         # Interpret output as bytes/utf8-string.
         output = [bytearray(o).decode("utf8") for o in output]
       for i in range(len(seq_idx)):
         if out_beam_size is None:
-          print("seq_idx: %i, seq_tag: %r, output: %r" % (seq_idx[i], seq_tag[i], output[i]), file=log.v1)
+          print("seq_idx: %i, seq_tag: %r, output: %r" % (seq_idx[i], seq_tag[i], output[i]), file=log.v4)
           out_idx = i
         else:
           print("seq_idx: %i, seq_tag: %r, outputs: %r" % (
-            seq_idx[i], seq_tag[i], output[i * out_beam_size:(i + 1)*out_beam_size]), file=log.v1)
+            seq_idx[i], seq_tag[i], output[i * out_beam_size:(i + 1)*out_beam_size]), file=log.v4)
           out_idx = i * out_beam_size
         if target_key and dataset.can_serialize_data(target_key):
-          print("  hyp:", dataset.serialize_data(key=target_key, data=output[out_idx]), file=log.v1)
-          print("  ref:", dataset.serialize_data(key=target_key, data=targets[out_idx]), file=log.v1)
+          print("  ref:", dataset.serialize_data(key=target_key, data=targets[i]), file=log.v4)
+          if out_beam_size is None:
+            print("  hyp:", dataset.serialize_data(key=target_key, data=output[out_idx]), file=log.v4)
+          else:
+            assert beam_scores is not None
+            for b in range(out_beam_size):
+              print(
+                "  hyp %i, score %f:" % (b, beam_scores[i][b]),
+                dataset.serialize_data(key=target_key, data=output[out_idx + b]),
+                file=log.v4)
         if out_cache is not None:
           corpus_seq_idx = dataset.get_corpus_seq_idx(seq_idx[i])
           assert corpus_seq_idx not in out_cache
-          out_cache[corpus_seq_idx] = dataset.serialize_data(key=target_key, data=output[out_idx])
           seq_idx_to_tag[corpus_seq_idx] = seq_tag[i]
+          if out_beam_size is None:
+            out_cache[corpus_seq_idx] = dataset.serialize_data(key=target_key, data=output[out_idx])
+          else:
+            assert beam_scores is not None
+            out_cache[corpus_seq_idx] = [
+              (beam_scores[i][b], dataset.serialize_data(key=target_key, data=output[out_idx + b]))
+              for b in range(out_beam_size)]
 
+    train = self._maybe_prepare_train_in_eval(targets_via_search=True)
     runner = Runner(
-      engine=self, dataset=dataset, batches=batches, train=False, eval=do_eval,
+      engine=self, dataset=dataset, batches=batches, train=train, eval=do_eval,
       extra_fetches={
         "output": output_layer,
+        "beam_scores": output_layer_beam_scores,
         "seq_idx": self.network.get_extern_data("seq_idx", mark_data_key_as_used=True),
         "seq_tag": self.network.get_extern_data("seq_tag", mark_data_key_as_used=True),
         "targets": self.network.get_extern_data(target_key, mark_data_key_as_used=True)},
@@ -1525,6 +1684,86 @@ class Engine(object):
       else:
         raise Exception("invalid output_file_format %r" % output_file_format)
       output_file.close()
+
+  def search_single(self, dataset, seq_idx, output_layer_name=None):
+    """
+    Performs search.
+    See also :func:`forward_single`.
+
+    :param Dataset.Dataset dataset:
+    :param int seq_idx:
+    :param str|None output_layer_name: e.g. "output". if not set, will read from config "search_output_layer"
+    :return: list of score and numpy array, each numpy arry in format (time,dim)
+    :rtype: list[(float,numpy.ndarray)]
+    """
+    output_layer_name = output_layer_name or self.config.value("search_output_layer", "output")
+    output_layer = self.network.layers[output_layer_name]
+    output_t = output_layer.output.get_placeholder_as_batch_major()
+    output_seq_lens_t = output_layer.output.get_sequence_lengths()
+    out_beam_size = output_layer.output.beam_size
+    output_layer_beam_scores_t = None
+    if out_beam_size is None:
+      print("Given output %r is after decision (no beam)." % output_layer, file=log.v4)
+    else:
+      print("Given output %r has beam size %i." % (output_layer, out_beam_size), file=log.v4)
+      output_layer_beam_scores_t = output_layer.get_search_choices().beam_scores
+
+    output_d = self.run_single(dataset=dataset, seq_idx=seq_idx, output_dict={
+      "output": output_t,
+      "seq_lens": output_seq_lens_t,
+      "beam_scores": output_layer_beam_scores_t})
+    output = output_d["output"]
+    seq_lens = output_d["seq_lens"]
+    beam_scores = output_d["beam_scores"]
+    assert len(output) == len(seq_lens) == (out_beam_size or 1)
+    if out_beam_size:
+      assert beam_scores.shape == (1, out_beam_size)  # (batch,beam)
+
+    results = []
+    for i in range(out_beam_size or 1):
+      hyp_seq = output[i][:seq_lens[i]]
+      # txt = " ".join(map(labels["classes"].__getitem__, output[i][:seq_lens[i]]))
+      score = beam_scores[0][i]
+      results += [(score, hyp_seq)]
+    return results
+
+  def search_single_seq(self, source, output_layer_name=None):
+    """
+    :param list[int]|numpy.ndarray source: source as a list of indices
+    :param str|None output_layer_name: e.g. "output". if not set, will read from config "search_output_layer"
+    :return: list of all hyps, which is a tuple of score and string
+    :rtype: list[(float,str)]
+    """
+    num_outputs = {
+      "data": [self.network.extern_data.data["data"].dim, 1],
+      "classes": [self.network.extern_data.data["classes"].dim, 1]}
+    source_seq = numpy.array(source, dtype="int32")
+    assert source_seq.ndim == 1
+    targets_empty_seq = numpy.array([], dtype="int32")  # empty...
+    from GeneratingDataset import StaticDataset
+    dataset = StaticDataset(
+      data=[{"data": source_seq, "classes": targets_empty_seq}], output_dim=num_outputs)
+    dataset.init_seq_order(epoch=1)
+    return self.search_single(dataset=dataset, seq_idx=0, output_layer_name=output_layer_name)
+
+  def search_single_bpe_to_bpe_seq(self, source, source_bpe, target_bpe, output_layer_name=None):
+    """
+    :param str source: source as a string
+    :param GeneratingDataset.BytePairEncoding source_bpe:
+    :param GeneratingDataset.BytePairEncoding target_bpe:
+    :param str|None output_layer_name: e.g. "output". if not set, will read from config "search_output_layer"
+    :return: list of all hyps, which is a tuple of score and string
+    :rtype: list[(float,str)]
+    """
+    assert source_bpe.num_labels == self.network.extern_data.data["data"].dim
+    assert target_bpe.num_labels == self.network.extern_data.data["classes"].dim
+    source_seq_list = source_bpe.get_seq(source)
+    results_raw = self.search_single_seq(source=source_seq_list, output_layer_name=output_layer_name)
+    results = []
+    for (score, raw) in results_raw:
+      txt = " ".join(map(target_bpe.labels.__getitem__, raw))
+      results += [(score, txt)]
+    return results
 
   def compute_priors(self, dataset, config=None):
     """
@@ -1602,10 +1841,110 @@ class Engine(object):
       numpy.savetxt(f, log_average_posterior, delimiter=' ')
     print("Saved prior in %r in +log space." % output_file, file=log.v1)
 
+  def web_server(self, port):
+    assert sys.version_info[0] >= 3, "only Python 3 supported"
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    import soundfile  # pip install pysoundfile
+    from GeneratingDataset import StaticDataset, BytePairEncoding, ExtractAudioFeatures
+
+    if not self.use_search_flag or not self.network or self.use_dynamic_train_flag:
+      self.use_search_flag = True
+      # At the moment this is probably not intended to use search with train flag.
+      # Also see LayerBase._post_init_output() about setting size_placeholder to the target seq len,
+      # so you would have have_known_seq_len=True in the RecLayer, with the given target seq len.
+      self.use_dynamic_train_flag = False
+      if self.network:
+        print("Reinit network with search flag.", file=log.v3)
+      self.init_network_from_config(self.config)
+
+    engine = self
+    bpe_opts = None
+    audio_opts = None
+    if isinstance(self.config.typed_dict.get("dev", None), dict):
+      # A bit hacky. Assumes that this is a dataset description for e.g. LibriSpeechCorpus.
+      bpe_opts = self.config.typed_dict["dev"]["bpe"]
+      audio_opts = self.config.typed_dict["dev"]["audio"]
+    bpe = BytePairEncoding(**bpe_opts)
+    labels = {"classes": bpe.labels}
+    feature_extractor = ExtractAudioFeatures(**audio_opts)
+    num_inputs = feature_extractor.get_feature_dimension()
+    num_outputs = {
+      "data": [num_inputs, 2], "classes": [bpe.num_labels, 1]}
+
+    output_layer_name = self.config.value("search_output_layer", "output")
+    output_layer = self.network.layers[output_layer_name]
+    output_t = output_layer.output.get_placeholder_as_batch_major()
+    output_seq_lens_t = output_layer.output.get_sequence_lengths()
+    out_beam_size = output_layer.output.beam_size
+    output_layer_beam_scores_t = None
+    if out_beam_size is None:
+      print("Given output %r is after decision (no beam)." % output_layer, file=log.v1)
+    else:
+      print("Given output %r has beam size %i." % (output_layer, out_beam_size), file=log.v1)
+      output_layer_beam_scores_t = output_layer.get_search_choices().beam_scores
+
+    class Handler(BaseHTTPRequestHandler):
+      def do_POST(self):
+        try:
+          self._do_POST()
+        except Exception:
+          sys.excepthook(*sys.exc_info())
+          raise
+
+      def _do_POST(self):
+        import cgi
+        form = cgi.FieldStorage(
+          fp=self.rfile,
+          headers=self.headers,
+          environ={'REQUEST_METHOD': 'POST'})
+        print("HTTP server, got POST.", file=log.v3)
+        from io import BytesIO
+        f = BytesIO(form["file"].file.read())
+        audio, sample_rate = soundfile.read(f)
+        print("audio len %i (%.1f secs), sample rate %i" % (len(audio), float(len(audio)) / sample_rate, sample_rate), file=log.v4)
+        if audio.ndim == 2:  # multiple channels:
+          audio = numpy.mean(audio, axis=1)  # mix together
+        features = feature_extractor.get_audio_features(audio=audio, sample_rate=sample_rate)
+        targets = numpy.array([], dtype="int32")  # empty...
+        dataset = StaticDataset(
+          data=[{"data": features, "classes": targets}], input_dim=num_inputs, output_dim=num_outputs)
+        dataset.init_seq_order(epoch=1)
+
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        output_d = engine.run_single(dataset=dataset, seq_idx=0, output_dict={
+          "output": output_t,
+          "seq_lens": output_seq_lens_t,
+          "beam_scores": output_layer_beam_scores_t})
+        output = output_d["output"]
+        seq_lens = output_d["seq_lens"]
+        beam_scores = output_d["beam_scores"]
+        assert len(output) == len(seq_lens) == (out_beam_size or 1)
+        if out_beam_size:
+          assert beam_scores.shape == (1, out_beam_size)  # (batch, beam)
+
+        if out_beam_size:
+          self.wfile.write(b"[\n")
+          for i in range(out_beam_size):
+            txt = " ".join(map(labels["classes"].__getitem__, output[i][:seq_lens[i]]))
+            score = beam_scores[0][i]
+            self.wfile.write(("(%r, %r)\n" % (score, txt)).encode("utf8"))
+          self.wfile.write(b"]\n")
+
+        else:
+          txt = " ".join(map(labels["classes"].__getitem__, output[0][:seq_lens[0]]))
+          self.wfile(("%r\n" % txt).encode("utf8"))
+
+    print("Simple search web server, listening on port %i." % port, file=log.v2)
+    server_address = ('', port)
+    self.httpd = HTTPServer(server_address, Handler)
+    self.httpd.serve_forever()
+
 
 def get_global_engine():
   """
-  Similar as get_global_config().
+  Similar as :func:`Config.get_global_config`.
 
   :rtype: Engine
   """

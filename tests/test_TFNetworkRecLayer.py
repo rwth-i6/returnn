@@ -14,6 +14,7 @@ from numpy.testing.utils import assert_almost_equal, assert_allclose
 import unittest
 import numpy.testing
 from pprint import pprint
+import contextlib
 import better_exchook
 better_exchook.replace_traceback_format_tb()
 
@@ -26,6 +27,437 @@ import TFUtil
 TFUtil.debugRegisterBetterRepr()
 
 log.initialize(verbosity=[5])
+
+print("TensorFlow:", tf.__version__)
+
+
+@contextlib.contextmanager
+def make_scope():
+  """
+  :rtype: tf.Session
+  """
+  with tf.Graph().as_default() as graph:
+    with tf.Session(graph=graph) as session:
+      yield session
+
+
+def _check_train_simple_network(network, num_steps=10):
+  num_inputs = 4
+  num_outputs = 3
+
+  config = Config()
+  config.update({
+    "num_inputs": num_inputs,
+    "num_outputs": {"data": [num_inputs, 2], "classes": [num_outputs, 2]},  # dense output
+    "network": network,
+    "adam": True,
+    "learning_rate": 0.1,
+    "debug_add_check_numerics_ops": True,
+  })
+
+  random = numpy.random.RandomState(seed=1)
+  limit = 1.0
+
+  def make_feed_dict(step, seq_len=10):
+    d = {
+      network.extern_data.data["data"].placeholder: random.uniform(-limit, limit, (1, seq_len, num_inputs)),
+      network.extern_data.data["data"].size_placeholder[0]: numpy.array([seq_len]),
+      network.extern_data.data["classes"].placeholder: random.uniform(-limit, limit, (1, seq_len, num_outputs)),
+      network.extern_data.data["classes"].size_placeholder[0]: numpy.array([seq_len]),
+    }
+    if isinstance(network.epoch_step, tf.Tensor):
+      d[network.epoch_step] = step
+    return d
+
+  with make_scope() as session:
+    print("Create network...")
+    tf.set_random_seed(42)
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    network.print_network_info()
+    network.initialize_params(session=session)
+
+    from TFUpdater import Updater
+    updater = Updater(config=config, network=network)
+    updater.set_learning_rate(config.float("learning_rate", 1.0), session=session)
+    updater.set_trainable_vars(network.get_trainable_params())
+    updater.init_optimizer_vars(session=session)
+
+    loss = None
+    for step in range(num_steps):
+      loss, _, _ = session.run(
+        [network.get_total_loss(), updater.get_optim_op(), network.post_control_dependencies],
+        feed_dict=make_feed_dict(step=step))
+      print("step %i, loss: %f" % (step, loss))
+  return loss
+
+
+def test_rec_nativelstm():
+  _check_train_simple_network({"output": {"class": "rec", "unit": "nativelstm", "loss": "mse"}})
+
+
+def test_rec_nativelstm2():
+  _check_train_simple_network({"output": {"class": "rec", "unit": "nativelstm2", "loss": "mse"}})
+
+
+def test_rec_rhn():
+  _check_train_simple_network({
+    "output": {
+      "class": "rec", "unit": "rhn", "unit_opts": {"dropout": 0.1},
+      "loss": "mse"}})
+
+
+def test_rec_rhn_nan():
+  _check_train_simple_network({
+    "output": {
+      "class": "rec", "unit": "rhn", "unit_opts": {"dropout": 0.9, "dropout_seed": 1},
+      "loss": "mse"}})
+
+
+def test_rhn_nan():
+  """
+  Behaves just like :func:`test_rec_rhn_nan`.
+  """
+  random = numpy.random.RandomState(seed=1)
+  num_inputs = 4
+  num_outputs = 3
+  seq_len = 10
+  limit = 1.0
+  loop_variants = ["RecLayer", 'dynamic_rnn', 'while_loop', 'unroll', "unroll_simple"]
+  loop_variant = "unroll_simple"
+
+  with make_scope() as session:
+    print("create graph")
+    tf.set_random_seed(42)
+    src_placeholder = tf.placeholder(tf.float32, (None, seq_len, num_inputs), name="src_placeholder")
+    tgt_placeholder = tf.placeholder(tf.float32, (None, seq_len, num_outputs), name="tgt_placeholder")
+    batch_size = tf.shape(src_placeholder)[0]
+
+    def make_feed_dict():
+      return {
+        src_placeholder: random.uniform(-limit, limit, (1, seq_len, num_inputs)),
+        tgt_placeholder: random.uniform(-limit, limit, (1, seq_len, num_outputs)),
+      }
+
+    from TFUtil import xavier_initializer, var_creation_scope
+    default_var_initializer = xavier_initializer(seed=13)
+    with tf.variable_scope(tf.get_variable_scope(), initializer=default_var_initializer) as scope:
+      assert loop_variant in loop_variants
+      if loop_variant in ["RecLayer", "dynamic_rnn"]:
+        if loop_variant == "RecLayer":
+          # Here I get nan.
+          net = TFNetwork(config=Config(), extern_data=ExternData(), train_flag=True)
+          with net.register_network_scope():
+            from TFNetworkLayer import InternalLayer
+            src_layer = InternalLayer(name='src', network=net, output=Data(
+              'src', shape=(None, num_inputs), placeholder=src_placeholder, size_placeholder={0: [seq_len]}))
+            with tf.name_scope("output"):
+              rec_layer = RecLayer(
+                name='output', network=net, output=Data("out", shape=(None, num_outputs)), sources=[src_layer],
+                unit='rhn', unit_opts={"dropout": 0.9, "dropout_seed": 1, "batch_size": batch_size})
+          y = rec_layer.output.placeholder
+          y = tf.transpose(y, [1, 0, 2])
+        elif loop_variant == "dynamic_rnn":
+          rhn = RHNCell(num_units=num_outputs, is_training=True, dropout=0.9, dropout_seed=1, batch_size=batch_size)
+          # Will get y in (time,batch,ydim).
+          from tensorflow.python.ops import rnn
+          x = tf.transpose(src_placeholder, [1, 0, 2])
+          x = rhn.get_input_transformed(x)
+          y, final_state = rnn.dynamic_rnn(
+            cell=rhn, inputs=x, time_major=True,
+            sequence_length=[seq_len], dtype=tf.float32)
+          y = tf.transpose(y, [1, 0, 2])
+        loss = tf.reduce_sum(tf.reduce_mean(tf.squared_difference(tgt_placeholder, y), axis=-1))
+      else:
+        rhn = RHNCell(num_units=num_outputs, is_training=True, dropout=0.9, dropout_seed=1, batch_size=batch_size)
+        state = rhn.zero_state(batch_size, tf.float32)
+        x = tf.transpose(src_placeholder, [1, 0, 2])
+        x = rhn.get_input_transformed(x)
+        input_ta = tf.TensorArray(tf.float32, size=seq_len, element_shape=(None, num_outputs * 2))
+        input_ta = input_ta.unstack(x)
+        target_ta = tf.TensorArray(tf.float32, size=seq_len, element_shape=(None, num_outputs))
+        target_ta = target_ta.unstack(tf.transpose(tgt_placeholder, [1, 0, 2]))
+        loss_ta = tf.TensorArray(tf.float32, size=seq_len, element_shape=(None,))
+
+        def loop_iter(i, state, loss_ta):
+          output, state = rhn(inputs=input_ta.read(i), state=state)
+          frame_loss = tf.reduce_mean(tf.squared_difference(target_ta.read(i), output), axis=1)
+          assert frame_loss.get_shape().ndims == 1  # (batch,)
+          # frame_loss = tf.Print(frame_loss, ["frame", i, "loss", tf.reduce_sum(frame_loss)])
+          loss_ta = loss_ta.write(i, frame_loss)
+          return i + 1, state, loss_ta
+
+        if loop_variant == "while_loop":
+          i, state, loss_ta = tf.while_loop(
+            lambda i, *args: tf.less(i, seq_len),
+            loop_iter,
+            (0, state, loss_ta))
+          loss = tf.reduce_sum(loss_ta.stack())
+        elif loop_variant == "unroll":
+          # Unroll the loop here.
+          i = 0
+          while i < seq_len:
+            i, state, loss_ta = loop_iter(i, state, loss_ta)
+          loss = tf.reduce_sum(loss_ta.stack())
+        elif loop_variant == "unroll_simple":
+          loss = 0.0
+          for i in range(seq_len):
+            output, state = rhn(inputs=x[i], state=state)
+            frame_loss = tf.reduce_mean(tf.squared_difference(tgt_placeholder[:, i], output), axis=1)
+            #frame_loss = tf.Print(frame_loss, ['frame', i, 'loss', frame_loss, 'SE of', tgt_placeholder[:, i], output])
+            assert frame_loss.get_shape().ndims == 1  # (batch,)
+            loss += tf.reduce_sum(frame_loss)
+        else:
+          assert False, "unexpected loop variant %r" % loop_variant
+    optimizer = tf.train.AdamOptimizer(learning_rate=0.1, epsilon=1e-16, use_locking=False)
+    minimize_op = optimizer.minimize(loss)
+    from TFUtil import add_check_numerics_ops
+    #check_op = add_check_numerics_ops()
+    check_op = tf.no_op()
+
+    print('variables:')
+    train_vars = (
+      tf.trainable_variables() +
+      tf.get_collection(tf.GraphKeys.TRAINABLE_RESOURCE_VARIABLES))
+    print(train_vars)
+    var_norms = [tf.nn.l2_loss(v) for v in train_vars]
+    print('init vars')
+    session.run(tf.global_variables_initializer())
+    print('graph size:', session.graph_def.ByteSize())
+    print('train')
+    for s in range(10):
+      loss_val, _, _ = session.run([loss, minimize_op, check_op], feed_dict=make_feed_dict())
+      print("step %i, loss: %f" % (s, loss_val))
+      #var_norm_vals = session.run(var_norms)
+      #print('var norms:')
+      #for (v, x) in zip(train_vars, var_norm_vals):
+      #  print(' ', v, ':', x)
+
+
+def test_state_keep_over_epoch():
+  random = numpy.random.RandomState(seed=1)
+  num_inputs = 4
+  num_outputs = 3
+  batch_size = 5
+  seq_len = 10
+  limit = 1.0
+  src_seq = random.uniform(-limit, limit, (batch_size, seq_len, num_inputs))
+  net_dict = {"output": {
+    "class": "rec", "unit": "rhn", "initial_state": 'keep_over_epoch', 'n_out': num_outputs}}
+
+  with make_scope() as session:
+    print("create graph")
+    tf.set_random_seed(42)
+    net = TFNetwork(extern_data=ExternData({'data': {"shape": (None, num_inputs)}}))
+    net.construct_from_dict(net_dict)
+    net.initialize_params(session)
+    print("vars:")
+    print(tf.global_variables())
+    src = net.extern_data.data["data"].placeholder
+    src_seq_len = net.extern_data.data["data"].size_placeholder[0]
+    out = net.get_default_output_layer().output.get_placeholder_as_batch_major()
+    out_val = numpy.zeros((batch_size, 0, num_outputs))
+    print('run on parts')
+    part_seq_len = 2
+    for step, t in enumerate(range(0, seq_len, part_seq_len)):
+      out_val_part, _ = session.run([out, net.post_control_dependencies], feed_dict={
+        net.epoch_step: step, src_seq_len: [part_seq_len] * batch_size, src: src_seq[:, t:t + part_seq_len]})
+      assert out_val_part.shape == (batch_size, part_seq_len, num_outputs)
+      out_val = numpy.concatenate([out_val, out_val_part], axis=1)
+    assert out_val.shape == (batch_size, seq_len, num_outputs)
+    print('run full')
+    out_val_full, _ = session.run(
+      [out, net.post_control_dependencies],
+      feed_dict={net.epoch_step: 0, src_seq_len: [seq_len] * batch_size, src: src_seq})
+    assert out_val_full.shape == out_val.shape
+    assert_almost_equal(out_val, out_val_full)
+  print('ok!')
+
+
+def test_lstm_initial_state_zero():
+  _check_train_simple_network({
+    "output": {"class": "rec", "unit": "lstm", "loss": "mse", "initial_state": "zeros"}})
+
+
+def test_lstm_initial_state_var():
+  _check_train_simple_network({
+    "output": {"class": "rec", "unit": "lstm", "loss": "mse", "initial_state": "var"}})
+
+
+def test_nativelstm2_initial_state_var():
+  _check_train_simple_network({
+    "output": {"class": "rec", "unit": "nativelstm2", "loss": "mse", "initial_state": "var"}})
+
+
+def test_nativelstm2_initial_state_keep_epoch():
+  _check_train_simple_network({
+    "output": {"class": "rec", "unit": "nativelstm2", "loss": "mse", "initial_state": "keep_over_epoch"}})
+
+
+def test_slow_TensorArray():
+  """
+  Seems to be some strange hang, probably related to tf.TensorArray.
+  https://github.com/tensorflow/tensorflow/issues/18117
+
+  My output with TF 1.5.0:
+    ...
+    create graph
+    variables:
+    ...
+    init vars
+    graph size: 222234
+    train
+    step 0, loss: 5.506713, time: 10.675434
+    step 1, loss: 7.865020, time: 0.003913
+    step 2, loss: 5.450877, time: 0.003354
+    step 3, loss: 3.361173, time: 0.003227
+    step 4, loss: 4.493120, time: 0.003563
+    step 5, loss: 5.137649, time: 0.003203
+    step 6, loss: 3.610677, time: 0.003376
+    step 7, loss: 3.657249, time: 0.003544
+    step 8, loss: 4.405594, time: 0.003454
+    step 9, loss: 4.380188, time: 0.003491
+
+  My output with TF 1.7.0:
+    ...
+    init vars
+    graph size: 225096
+    train
+    step 0, loss: 4.614282, time: 0.329974
+    step 1, loss: 7.103771, time: 0.003420
+    step 2, loss: 4.263576, time: 0.003305
+    step 3, loss: 2.140168, time: 0.003355
+    step 4, loss: 3.948706, time: 0.003271
+    step 5, loss: 3.063313, time: 0.003162
+    step 6, loss: 4.229179, time: 0.003354
+    step 7, loss: 4.908344, time: 0.003289
+    step 8, loss: 4.345730, time: 0.003188
+  """
+  import time
+  random = numpy.random.RandomState(seed=1)
+  num_inputs = 4
+  num_outputs = 3
+  seq_len = 10
+  limit = 1.0
+
+  def linear(x, output_dim):
+    input_dim = x.get_shape().dims[-1].value
+    assert input_dim is not None
+    with tf.variable_scope("linear", reuse=tf.AUTO_REUSE):
+      weights = tf.get_variable("W", shape=(input_dim, output_dim))
+      bias = tf.get_variable("b", shape=(output_dim,))
+    assert x.get_shape().ndims == 2  # (batch,input_dim)
+    return tf.matmul(x, weights) + bias
+
+  with make_scope() as session:
+    print("create graph")
+    src_placeholder = tf.placeholder(tf.float32, (None, seq_len, num_inputs), name="src_placeholder")
+    tgt_placeholder = tf.placeholder(tf.float32, (None, seq_len, num_outputs), name="tgt_placeholder")
+    batch_size = tf.shape(src_placeholder)[0]
+
+    def make_feed_dict():
+      return {
+        src_placeholder: random.uniform(-limit, limit, (1, seq_len, num_inputs)),
+        tgt_placeholder: random.uniform(-limit, limit, (1, seq_len, num_outputs)),
+      }
+
+    state = tf.zeros((batch_size, num_outputs))
+    loss_ta = tf.TensorArray(tf.float32, size=seq_len, element_shape=(None,))
+    # Unroll the loop here.
+    for f in range(seq_len):
+      inputs = src_placeholder[:, f]
+      x = tf.concat([inputs, state], axis=-1)
+      with tf.variable_scope('h'):
+        h = tf.tanh(linear(x, num_outputs))
+      with tf.variable_scope('t'):
+        t = tf.sigmoid(linear(x, num_outputs))
+      state += t * (h - state)
+      frame_loss = tf.reduce_mean(tf.squared_difference(tgt_placeholder[:, f], state), axis=1)
+      assert frame_loss.get_shape().ndims == 1  # (batch,)
+      loss_ta = loss_ta.write(f, frame_loss)
+    loss = tf.reduce_sum(loss_ta.stack())
+    optimizer = tf.train.AdamOptimizer(learning_rate=0.1, epsilon=1e-16, use_locking=False)
+    minimize_op = optimizer.minimize(loss)
+
+    print('variables:')
+    train_vars = (
+      tf.trainable_variables() +
+      tf.get_collection(tf.GraphKeys.TRAINABLE_RESOURCE_VARIABLES))
+    print(train_vars)
+    print('init vars')
+    session.run(tf.global_variables_initializer())
+    print('graph size:', session.graph_def.ByteSize())
+    print('train')
+    for s in range(10):
+      start_time = time.time()
+      loss_val, _ = session.run([loss, minimize_op], feed_dict=make_feed_dict())
+      print("step %i, loss: %f, time: %f" % (s, loss_val, time.time() - start_time))
+
+
+def test_deterministic_TensorArray():
+  num_inputs = 4
+  num_outputs = 3
+  seq_len = 10
+  limit = 1.0
+
+  first_run_loss = None
+  for r in range(3):
+    print('>>> run %i' % r)
+    random = numpy.random.RandomState(seed=1)
+
+    with make_scope() as session:
+      tf.set_random_seed(42)
+      print("create graph")
+      src_placeholder = tf.placeholder(tf.float32, (None, seq_len, num_inputs), name="src_placeholder")
+      tgt_placeholder = tf.placeholder(tf.float32, (None, seq_len, num_outputs), name="tgt_placeholder")
+      batch_size = tf.shape(src_placeholder)[0]
+
+      def make_feed_dict():
+        return {
+          src_placeholder: random.uniform(-limit, limit, (1, seq_len, num_inputs)),
+          tgt_placeholder: random.uniform(-limit, limit, (1, seq_len, num_outputs)),
+        }
+
+      cell = rnn_cell.BasicRNNCell(num_units=num_outputs)
+      state = cell.zero_state(batch_size, tf.float32)
+      loss_ta = tf.TensorArray(tf.float32, size=seq_len, element_shape=(None,))
+      # Unroll the loop here.
+      for i in range(seq_len):
+        keep_prob = 0.9
+        # uniform [keep_prob, 1.0 + keep_prob)
+        random_tensor = keep_prob
+        random_tensor += tf.random_uniform((batch_size, cell.state_size), seed=1, dtype=state.dtype)
+        # 0. if [keep_prob, 1.0) and 1. if [1.0, 1.0 + keep_prob)
+        binary_tensor = tf.floor(random_tensor)
+        noise_h = binary_tensor / keep_prob
+        state *= noise_h
+
+        output, state = cell(inputs=src_placeholder[:, i], state=state)
+        frame_loss = tf.reduce_mean(tf.squared_difference(tgt_placeholder[:, i], output), axis=1)
+        assert frame_loss.get_shape().ndims == 1  # (batch,)
+        loss_ta = loss_ta.write(i, frame_loss)
+      loss = tf.reduce_sum(loss_ta.stack())
+      optimizer = tf.train.AdamOptimizer(learning_rate=0.1, epsilon=1e-16, use_locking=False)
+      minimize_op = optimizer.minimize(loss)
+
+      print('variables:')
+      train_vars = (
+        tf.trainable_variables() +
+        tf.get_collection(tf.GraphKeys.TRAINABLE_RESOURCE_VARIABLES))
+      print(train_vars)
+      print('init vars')
+      session.run(tf.global_variables_initializer())
+      print('graph size:', session.graph_def.ByteSize())
+      print('train')
+      loss_val = None
+      for s in range(10):
+        loss_val, _ = session.run([loss, minimize_op], feed_dict=make_feed_dict())
+        print("step %i, loss: %f" % (s, loss_val))
+      assert loss_val is not None
+      if r == 0:
+        first_run_loss = loss_val
+      else:
+        assert numpy.isclose(first_run_loss, loss_val)
 
 
 def test_rec_subnet_with_choice():
@@ -212,7 +644,7 @@ def test_cudnn_rnn_params_to_canonical():
     def check(**kwargs):
       print("kwargs:", kwargs)
       model = CudnnLSTM(**kwargs)
-      params = tf.Variable(tf.random_uniform([model.params_size()]), validate_shape=False)
+      params = tf.Variable(tf.random_uniform([model.params_size()], seed=1), validate_shape=False)
       session.run(params.initializer)
       s1 = model.params_size().eval()
       print("param size:", s1)
@@ -299,9 +731,10 @@ def test_RecLayer_NativeLstm_Nan():
 
     print("Create updater...")
     from TFUpdater import Updater
-    updater = Updater(config=config, network=network, tf_session=session)
+    updater = Updater(config=config, network=network)
     updater.set_trainable_vars(network.get_trainable_params())
-    updater.set_learning_rate(0.1)
+    updater.set_learning_rate(0.1, session=session)
+    updater.init_optimizer_vars(session=session)
     optim_op = updater.get_optim_op()
     assert isinstance(updater.optimizer, tf.train.AdamOptimizer)
     adam_weights_m_t = updater.optimizer.get_slot(var=weights_t, name="m")
@@ -903,7 +1336,7 @@ def test_rec_layer_move_out_of_loop():
         tf_session=session, extern_data=extern_data,
         data_keys=["data", "classes"],
         dataset=dataset, batches=batches)
-      feed_dict = data_provider.get_feed_dict(single_threaded=True)
+      feed_dict, meta_step_info = data_provider.get_feed_dict(single_threaded=True)
       if isinstance(net.train_flag, tf.Tensor):
         feed_dict[net.train_flag] = True
       try:
@@ -1125,6 +1558,543 @@ def test_RnnCellLayer_with_time():
       assert_equal(set(l1.params.keys()), set(l2.params.keys()))
       for key in l1.params.keys():
         assert l1.params[key].shape == l2.params[key].shape
+
+
+def test_rec_subnet_simple_rnn():
+  with make_scope() as session:
+    n_in, n_out = 2, 3
+    config = Config()
+    config.update({
+      "num_outputs": n_out,
+      "num_inputs": n_in,
+      "network": {
+        "output": {
+          "class": "rec",
+          "unit": {
+            # Recurrent subnet here, operate on a single time-step:
+            "output": {
+              "class": "linear",
+              "from": ["prev:output", "data:source"],
+              "activation": "relu",
+              "n_out": n_out},
+          },
+          "n_out": n_out},
+      }
+    })
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    network.initialize_params(session)
+    weights_var = network.layers["output"].params["output/W"]
+    assert_equal(weights_var.get_shape().as_list(), [n_out + n_in, n_out])
+    weights_np = (numpy.arange(0, (n_out + n_in) * n_out) - (n_out + n_in) * n_out * 0.5) * 0.1
+    weights_np = weights_np.reshape((n_out + n_in, n_out))
+    network.get_var_assigner(weights_var).assign(value=weights_np, session=session)
+    input_np = [
+      [[0.7, 0.1], [-0.3, -0.1], [0.2, -0.1]],
+      [[1.0, -0.4], [-0.2, 0.3], [0.0, 0.0]]]
+    input_np = numpy.array(input_np, dtype="float32")
+    input_seq_lens = [3, 2]
+    n_batch = len(input_seq_lens)
+    assert_equal(input_np.shape, (n_batch, max(input_seq_lens), n_in))
+    input_placeholder = network.extern_data.data["data"].placeholder
+    input_seq_lens_placeholder = network.extern_data.data["data"].size_placeholder[0]
+    output_layer = network.get_default_output_layer(must_exist=True)
+    output_np, output_seq_lens = session.run(
+      (output_layer.output.get_placeholder_as_batch_major(), output_layer.output.get_sequence_lengths()),
+      feed_dict={input_placeholder: input_np, input_seq_lens_placeholder: input_seq_lens})
+    assert_equal(list(output_seq_lens), input_seq_lens)
+    assert_equal(output_np.shape, (n_batch, max(input_seq_lens), n_out))
+    output_last_np = numpy.zeros((n_batch, n_out), dtype="float32")
+    output_calc_np = numpy.zeros((n_batch, max(input_seq_lens), n_out), dtype="float32")
+    for t in range(max(input_seq_lens)):
+      _in = numpy.concatenate([output_last_np, input_np[:, t]], axis=1)
+      assert_equal(_in.shape, (n_batch, n_out + n_in))
+      _out = numpy.dot(_in, weights_np)
+      assert_equal(_out.shape, (n_batch, n_out))
+      _out = numpy.maximum(_out, 0.0)  # relu
+      output_last_np = _out
+      output_calc_np[:, t] = _out
+    print("Manually calculated output:")
+    print(output_calc_np)
+    assert_almost_equal(output_np, output_calc_np)
+    print("Simple RNN is fine!")
+
+  # Now, kind of a separate test: rnn_cell in subnetwork.
+  with make_scope() as session:
+    print("Test rnn_cell in subnet.")
+    config = Config()
+    config.update({
+      "num_outputs": n_out,
+      "num_inputs": n_in,
+      "network": {
+        "output": {
+          "class": "rec",
+          "optimize_move_layers_out": False,  # We esp. want to test it perform a single step, for debugging.
+          "unit": {
+            # Recurrent subnet here, operate on a single time-step:
+            "output": {
+              "class": "subnetwork", "from": ["data:source"], "subnetwork": {
+                # RnnCellLayer inside subnetwork
+                "output": {
+                  "class": "rnn_cell",
+                  "unit": "BasicRNN",
+                  "unit_opts": {"activation": tf.nn.relu},
+                  "from": ["data"],
+                  "n_out": n_out},
+                },
+              "n_out": n_out}
+          },
+          "n_out": n_out},
+      }
+    })
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    network.initialize_params(session)
+    output_layer = network.layers["output"]
+    weights_var = output_layer.params["output/output/rec/basic_rnn_cell/kernel"]
+    assert_equal(weights_var.get_shape().as_list(), [n_out + n_in, n_out])
+    # BasicRNNCell expects it as [inputs, state], but we have it as [state, inputs].
+    weights_conv_np = numpy.concatenate([weights_np[n_out:], weights_np[:n_out]])
+    network.get_var_assigner(weights_var).assign(value=weights_conv_np, session=session)
+    input_placeholder = network.extern_data.data["data"].placeholder
+    input_seq_lens_placeholder = network.extern_data.data["data"].size_placeholder[0]
+    output_np, output_seq_lens = session.run(
+      (output_layer.output.get_placeholder_as_batch_major(), output_layer.output.get_sequence_lengths()),
+      feed_dict={input_placeholder: input_np, input_seq_lens_placeholder: input_seq_lens})
+    assert_equal(list(output_seq_lens), input_seq_lens)
+    assert_equal(output_np.shape, (n_batch, max(input_seq_lens), n_out))
+    print("rnn_cell subnet output:")
+    print(output_np)
+    assert_almost_equal(output_np, output_calc_np)
+    print("rnn_cell also fine.")
+
+
+def check_reclayer_optimize_out(subnet_layer_dict, rtol=1e-5):
+  """
+  :param dict[str] subnet_layer_dict:
+  """
+  subnet_layer_dict = subnet_layer_dict.copy()
+  n_in = 13
+  n_out = subnet_layer_dict.get("n_out", 17)
+  n_batch = 5
+  n_time = 7
+  subnet_layer_dict["n_out"] = n_out
+  subnet_layer_dict.setdefault("from", "data:source")
+  rec_layer_dict = {
+    "class": "rec",
+    "from": ["data"],
+    "unit": {"output": subnet_layer_dict},
+    "n_out": n_out,
+    "is_output_layer": True
+  }
+  config = Config({
+    "num_inputs": n_in,
+    "num_outputs": n_out
+  })
+  from TFNetworkRecLayer import _SubnetworkRecCell
+  with make_scope() as session:
+    print("Create optimized rec layer (with subnet layer moved out)")
+    net1 = TFNetwork(config=config, train_flag=True, name="<root_opt>")
+    net1.construct_from_dict({"output_opt": rec_layer_dict})
+    rec_layer_dict["optimize_move_layers_out"] = False
+    print("Create non-optimized rec layer (with subnet layer inside loop)")
+    net2 = TFNetwork(extern_data=net1.extern_data, train_flag=True, name="<root_not_opt>")
+    net2.construct_from_dict({"output_not_opt": rec_layer_dict})
+    net1_reclayer = net1.layers["output_opt"]
+    assert isinstance(net1_reclayer, RecLayer)
+    net1_subnet = net1_reclayer.cell
+    assert isinstance(net1_subnet, _SubnetworkRecCell)
+    net2_reclayer = net2.layers["output_not_opt"]
+    assert isinstance(net2_reclayer, RecLayer)
+    net2_subnet = net2_reclayer.cell
+    assert isinstance(net2_subnet, _SubnetworkRecCell)
+    assert_equal(set(net1_subnet.input_layers_moved_out), set())
+    assert_equal(set(net2_subnet.input_layers_moved_out), set())
+    assert_equal(set(net1_subnet.output_layers_moved_out), {"output"})
+    assert_equal(set(net2_subnet.output_layers_moved_out), set())
+    assert_equal([
+      v.name.split("/")[1:] for v in net1.get_params_list()], [v.name.split("/")[1:] for v in net2.get_params_list()])
+    net1.initialize_params(session=session)
+    net1_params = net1.get_default_output_layer().get_param_values_dict(session=session)
+    net2.get_default_output_layer().set_param_values_by_dict(values_dict=net1_params, session=session)
+    x_np = net1.random.normal(size=(n_batch, n_time, n_in))
+    net1_output = net1.get_default_output_layer().output.get_placeholder_as_batch_major()
+    net2_output = net2.get_default_output_layer().output.get_placeholder_as_batch_major()
+    feed_dict = {
+      net1.extern_data.data["data"].placeholder: x_np,
+      net1.extern_data.data["data"].size_placeholder[0]: [n_time] * n_batch}
+    y1_np = session.run(net1_output, feed_dict=feed_dict)
+    print("y: (shape %r)" % (y1_np.shape,))
+    print(y1_np)
+    y2_np = session.run(net2_output, feed_dict=feed_dict)
+    assert_equal(y1_np.shape, (n_batch, n_time, n_out))
+    assert_equal(y2_np.shape, (n_batch, n_time, n_out))
+    assert y1_np.any() and y2_np.any()
+    if not numpy.allclose(y1_np, y2_np, rtol=rtol):
+      print("Not equal!")
+      for b in range(n_batch):
+        for t in range(n_time):
+          assert_allclose(y1_np[b, t], y2_np[b, t])
+      assert_allclose(y1_np, y2_np, rtol=rtol)
+
+
+def test_reclayer_optimize_out_linear():
+  check_reclayer_optimize_out({"class": "linear", "activation": "relu"})
+
+
+def test_reclayer_optimize_out_rnncell():
+  check_reclayer_optimize_out({"class": "rnn_cell", "unit": "BasicLSTM"})
+
+
+def test_reclayer_optimize_out_selfatt_left():
+  check_reclayer_optimize_out({
+    "class": "self_attention", "attention_left_only": True, "num_heads": 2, "total_key_dim": 6, "n_out": 18})
+
+
+def test_subnet_load_on_init_rec():
+  import tempfile
+  model_tmp_dir = tempfile.mkdtemp("tmp-checkpoint")
+  model_filename = model_tmp_dir + "/model"
+  with make_scope() as session:
+    config = Config()
+    n_in, n_hidden, n_out = 2, 5, 3
+    config.update({
+      "num_outputs": n_out,
+      "num_inputs": n_in,
+      "network": {
+        "input": {"class": "linear", "n_out": n_hidden, "activation": "identity",
+                  "forward_weights_init": "random_normal_initializer(mean=0.0, stddev=1.0)"},
+        "lstm0": {"class": "rec", "unit": "lstm",
+                  "forward_weights_init": "random_normal_initializer(mean=0.0, stddev=1.0)",
+                  "recurrent_weights_init": "random_normal_initializer(mean=0.0, stddev=1.0)",
+                  "bias_init": "random_normal_initializer(mean=0.0, stddev=0.1)",
+                  "n_out": n_hidden, "direction": 1, "from": ["input"]},
+        "lstm1": {"class": "rec", "unit": "lstm",
+                  "forward_weights_init": "random_normal_initializer(mean=0.0, stddev=1.0)",
+                  "recurrent_weights_init": "random_normal_initializer(mean=0.0, stddev=1.0)",
+                  "bias_init": "random_normal_initializer(mean=0.0, stddev=0.1)",
+                  "n_out": n_hidden, "direction": 1, "from": ["lstm0"]},
+        "output": {"class": "linear", "activation": "identity",
+                   "forward_weights_init": "random_normal_initializer(mean=0.0, stddev=1.0)",
+                   "bias_init": "random_normal_initializer(mean=0.0, stddev=0.1)",
+                   "n_out": n_out, "from": ["lstm1"]}
+      }
+    })
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    network.initialize_params(session)
+    params_orig_dump = network.get_params_serialized(session)
+    print("lstm0:")
+    print(params_orig_dump.values_dict["lstm0"]["W"])
+    assert(params_orig_dump.values_dict["lstm0"]["W"].any())
+    network.save_params_to_file(filename=model_filename, session=session)
+
+    # Simple forward.
+    input_np = [
+      [[0.7, 0.1], [-0.3, -0.1], [0.2, -0.1]],
+      [[1.0, -0.4], [-0.2, 0.3], [0.0, 0.0]]]
+    input_np = numpy.array(input_np, dtype="float32")
+    input_seq_lens = [3, 2]
+    n_batch = len(input_seq_lens)
+    assert_equal(input_np.shape, (n_batch, max(input_seq_lens), n_in))
+    input_placeholder = network.extern_data.data["data"].placeholder
+    input_seq_lens_placeholder = network.extern_data.data["data"].size_placeholder[0]
+    output_layer = network.get_default_output_layer(must_exist=True)
+    output_orig_np, output_seq_lens = session.run(
+      (output_layer.output.get_placeholder_as_batch_major(), output_layer.output.get_sequence_lengths()),
+      feed_dict={input_placeholder: input_np, input_seq_lens_placeholder: input_seq_lens})
+    assert_equal(list(output_seq_lens), input_seq_lens)
+    assert_equal(output_orig_np.shape, (n_batch, max(input_seq_lens), n_out))
+    for t in range(max(output_seq_lens)):
+      for b in range(n_batch):
+        if t >= output_seq_lens[b]:
+          output_orig_np[b, t] = 0.0
+    print("LSTM direct, output:")
+    print(output_orig_np)
+
+  with make_scope() as session:
+    config = Config()
+    config.update({
+      "num_outputs": n_out,
+      "num_inputs": n_in,
+      "network": {
+        "output": {
+          "class": "rec",
+          "optimize_move_layers_out": False,  # We esp. want to test it perform a single step, for debugging.
+          "unit": {
+            # Recurrent subnet here, operate on a single time-step:
+            "output": {
+              "class": "subnetwork",
+              "from": ["data:source"],
+              # Note: This has to convert the params into the right format.
+              "load_on_init": model_filename,
+              "subnetwork": {
+                "input": {"class": "linear", "n_out": n_hidden, "activation": "identity"},
+                "lstm0": {"class": "rnn_cell", "unit": "LSTMBlock", "unit_opts": {"forget_bias": 0.0},
+                          "n_out": n_hidden, "from": ["input"]},
+                "lstm1": {"class": "rnn_cell", "unit": "LSTMBlock", "unit_opts": {"forget_bias": 0.0},
+                          "n_out": n_hidden, "from": ["lstm0"]},
+                "output": {"class": "linear", "activation": "identity", "n_out": n_out, "from": ["lstm1"]}
+              },
+              "n_out": n_out},
+          },
+          "n_out": n_out},
+      }
+    })
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    network.initialize_params(session)
+
+    # First just check whether the params are the same.
+    params_dump = network.get_params_serialized(session)
+    params_dump = params_dump.values_dict["output"]
+    for layer_name in ["input", "output"]:  # not lstms, their layout differs
+      layer_orig = params_orig_dump.values_dict[layer_name]
+      for param_name in ["W", "b"]:
+        param_orig = layer_orig[param_name]
+        param_subnet = params_dump["output/%s/%s" % (layer_name, param_name)]
+        numpy.testing.assert_array_equal(param_orig, param_subnet)
+
+    # Now also forward, and compare with previous.
+    input_placeholder = network.extern_data.data["data"].placeholder
+    input_seq_lens_placeholder = network.extern_data.data["data"].size_placeholder[0]
+    output_layer = network.get_default_output_layer(must_exist=True)
+    output_np, output_seq_lens = session.run(
+      (output_layer.output.get_placeholder_as_batch_major(), output_layer.output.get_sequence_lengths()),
+      feed_dict={input_placeholder: input_np, input_seq_lens_placeholder: input_seq_lens})
+    assert_equal(list(output_seq_lens), input_seq_lens)
+    assert_equal(output_np.shape, (n_batch, max(input_seq_lens), n_out))
+    for t in range(max(output_seq_lens)):
+      for b in range(n_batch):
+        if t >= output_seq_lens[b]:
+          output_np[b, t] = 0.0
+    print("LSTM rec subnet, output:")
+    print(output_np)
+    assert_almost_equal(output_orig_np, output_np)
+    print("They are equal!")
+
+
+def test_KenLmStateLayer():
+  import TFKenLM
+  TFKenLM.get_tf_mod(verbose=True)
+  test_lm_file = TFKenLM.kenlm_dir + "/lm/test.arpa"
+  assert os.path.exists(test_lm_file)
+  from GeneratingDataset import Vocabulary
+  from TFNetworkLayer import InternalLayer
+  import tempfile
+  with make_scope() as session:
+    with tempfile.NamedTemporaryFile(mode="w", prefix="vocab") as tmp_bpe_vocab_file:
+      labels = "</s> <unk> be@@ yond imm@@ edi@@ ate conc@@ erns".split()
+      bpe_vocab_dict = Vocabulary.create_vocab_dict_from_labels(labels)
+      print("BPE vocab dict:", bpe_vocab_dict)
+      tmp_bpe_vocab_file.write(repr(bpe_vocab_dict))
+      tmp_bpe_vocab_file.flush()
+      assert os.path.exists(tmp_bpe_vocab_file.name)
+
+      net = TFNetwork(extern_data=ExternData())
+      net.extern_data.register_data(Data(
+        name="data", shape=(), time_dim_axis=None, dim=len(labels), dtype="int32",
+        auto_create_placeholders=True))
+      data_layer = net.construct_layer(name="data", net_dict={})
+      layer_base_opts = dict(name="output", network=net, sources=[data_layer])
+      layer_out = KenLmStateLayer.get_out_data_from_opts(**layer_base_opts)
+      rec_state = session.run(
+        KenLmStateLayer.get_rec_initial_extra_outputs(batch_dim=1, rec_layer=None, **layer_base_opts))
+      print("initial recurrent state:", rec_state)
+      assert isinstance(rec_state, dict)
+      prev_layer = InternalLayer(name="prev:%s" % layer_base_opts["name"], network=net, output=layer_out.copy())
+      prev_layer.rec_vars_outputs = {
+        k: tf.placeholder(name="prev_layer_%s" % k, shape=v.shape, dtype=v.dtype) for (k, v) in rec_state.items()}
+      with reuse_name_scope(KenLmStateLayer.cls_get_tf_scope_name(layer_base_opts["name"])):
+        layer = KenLmStateLayer(
+          lm_file=test_lm_file,
+          vocab_file=tmp_bpe_vocab_file.name, vocab_unknown_label="<unk>",
+          bpe_merge_symbol="@@",
+          output=layer_out, rec_previous_layer=prev_layer, **layer_base_opts)
+        net.layers[layer.name] = layer
+
+      print("Init.")
+      net.initialize_params(session=session)
+
+      print("Ref score.")
+      input_word_ids = [labels.index(w) for w in "be@@ yond imm@@ edi@@ ate conc@@ erns </s>".split()]
+      ref_score_str_placeholder = tf.placeholder(tf.string, shape=(), name="ref_score_str_placeholder")
+      tf_ref_score = TFKenLM.ken_lm_abs_score_strings(handle=layer.lm_handle, strings=ref_score_str_placeholder)
+      ref_score = session.run(tf_ref_score, feed_dict={ref_score_str_placeholder: "beyond immediate concerns </s>"})
+      print("ref score:", ref_score)
+      assert_almost_equal(ref_score, -9.251298)  # example from :func:`test_kenlm`
+
+      print("Loop over %r." % ([labels[i] for i in input_word_ids],))
+      abs_score = 0.0
+      for i, word_id in enumerate(input_word_ids):
+        print("input %i, word-idx %i, word %r" % (i, word_id, labels[word_id]))
+        feed_dict = {net.extern_data.data["data"].placeholder: [word_id]}
+        feed_dict.update({prev_layer.rec_vars_outputs[p]: v for (p, v) in rec_state.items()})
+        rel_score_res, rec_state = session.run(
+          (layer.output.placeholder, layer.rec_vars_outputs), feed_dict=feed_dict)
+        print("  score rel res:", rel_score_res, "state:", rec_state)
+        abs_score += rel_score_res[0]
+        print("  abs score:", abs_score)
+        word_seq_so_far = rec_state["state"][0].decode("utf8").replace("@@ ", "").strip().split(" ")
+        word_seq_so_far = ["<unk>" if "@@" in w else w for w in word_seq_so_far]
+        res2 = session.run(tf_ref_score, feed_dict={ref_score_str_placeholder: " ".join(word_seq_so_far)})
+        print("  word seq so far: %r" % (word_seq_so_far,), "score:", res2)
+        assert_equal(res2, abs_score)
+
+      assert_almost_equal(abs_score, ref_score)
+      print("Scores are as expected.")
+
+
+def test_KenLmStateLayer_dense():
+  import TFKenLM
+  TFKenLM.get_tf_mod(verbose=True)
+  test_lm_file = TFKenLM.kenlm_dir + "/lm/test.arpa"
+  assert os.path.exists(test_lm_file)
+  from GeneratingDataset import Vocabulary
+  from TFNetworkLayer import InternalLayer
+  import tempfile
+  with make_scope() as session:
+    with tempfile.NamedTemporaryFile(mode="w", prefix="vocab") as tmp_bpe_vocab_file:
+      labels = "</s> <unk> be@@ yond imm@@ edi@@ ate conc@@ erns".split()
+      bpe_vocab_dict = Vocabulary.create_vocab_dict_from_labels(labels)
+      print("BPE vocab dict:", bpe_vocab_dict)
+      tmp_bpe_vocab_file.write(repr(bpe_vocab_dict))
+      tmp_bpe_vocab_file.flush()
+      assert os.path.exists(tmp_bpe_vocab_file.name)
+
+      net = TFNetwork(extern_data=ExternData())
+      net.extern_data.register_data(Data(
+        name="data", shape=(), time_dim_axis=None, dim=len(labels), dtype="int32",
+        auto_create_placeholders=True))
+      data_layer = net.construct_layer(name="data", net_dict={})
+      layer_base_opts = dict(
+        name="output", network=net, sources=[data_layer],
+        lm_file=test_lm_file,
+        vocab_file=tmp_bpe_vocab_file.name, vocab_unknown_label="<unk>",
+        bpe_merge_symbol="@@",
+        input_step_offset=1,
+        dense_output=True)
+      layer_out = KenLmStateLayer.get_out_data_from_opts(**layer_base_opts)
+      batch_dim = 1
+      rec_state = session.run(
+        KenLmStateLayer.get_rec_initial_extra_outputs(batch_dim=batch_dim, rec_layer=None, **layer_base_opts))
+      print("initial recurrent state:", rec_state)
+      assert isinstance(rec_state, dict)
+      prev_layer = InternalLayer(name="prev:%s" % layer_base_opts["name"], network=net, output=layer_out.copy())
+      prev_layer.rec_vars_outputs = {
+        k: tf.placeholder(name="prev_layer_%s" % k, shape=v.shape, dtype=v.dtype) for (k, v) in rec_state.items()}
+      with reuse_name_scope(KenLmStateLayer.cls_get_tf_scope_name(layer_base_opts["name"])):
+        layer = KenLmStateLayer(
+          output=layer_out, rec_previous_layer=prev_layer, **layer_base_opts)
+        net.layers[layer.name] = layer
+
+      print("Init.")
+      net.initialize_params(session=session)
+
+      print("Ref score.")
+      input_word_ids = [labels.index(w) for w in "be@@ yond imm@@ edi@@ ate conc@@ erns </s>".split()]
+      ref_score_str_placeholder = tf.placeholder(tf.string, shape=(), name="ref_score_str_placeholder")
+      tf_ref_score = TFKenLM.ken_lm_abs_score_strings(handle=layer.lm_handle, strings=ref_score_str_placeholder)
+      ref_score = session.run(tf_ref_score, feed_dict={ref_score_str_placeholder: "beyond immediate concerns </s>"})
+      print("ref score:", ref_score)
+      assert_almost_equal(ref_score, -9.251298)  # example from :func:`test_kenlm`
+
+      print("Loop over %r." % ([labels[i] for i in input_word_ids],))
+      abs_score = 0.0
+      for i in range(len(input_word_ids)):
+        if i == 0:
+          word_id = 0
+          word = ""
+        else:
+          word_id = input_word_ids[i - 1]
+          word = labels[word_id]
+        next_word_id = input_word_ids[i]
+        next_word = labels[next_word_id]
+        print("input %i, word-idx %i, word %r, next-word-idx %i, next-word %r" % (
+          i, word_id, word, next_word_id, next_word))
+        feed_dict = {net.extern_data.data["data"].placeholder: [word_id]}
+        feed_dict.update({prev_layer.rec_vars_outputs[p]: v for (p, v) in rec_state.items()})
+        rel_score_res, rec_state = session.run(
+          (layer.output.placeholder, layer.rec_vars_outputs), feed_dict=feed_dict)
+        print("  score rel res:", rel_score_res)
+        print("  state:", rec_state)
+        assert rel_score_res.shape == (batch_dim, layer.vocab.num_labels)
+        abs_score += rel_score_res[0][next_word_id]
+        print("  abs score:", abs_score)
+        word_seq_so_far = (rec_state["state"][0].decode("utf8") + next_word).replace("@@ ", "").strip().split(" ")
+        word_seq_so_far = ["<unk>" if "@@" in w else w for w in word_seq_so_far]
+        res2 = session.run(tf_ref_score, feed_dict={ref_score_str_placeholder: " ".join(word_seq_so_far)})
+        print("  word seq so far: %r" % (word_seq_so_far,), "score:", res2)
+        assert_equal(res2, abs_score)
+
+      assert_almost_equal(abs_score, ref_score)
+      print("Scores are as expected.")
+
+
+@unittest.skipIf(not is_gpu_available(), "no gpu on this system")
+def test_BlocksparseLSTM_load_params_from_native_lstm():
+  from TFNativeOp import have_blocksparse_requirements, init_blocksparse
+  if not have_blocksparse_requirements():
+    raise unittest.SkipTest("no blocksparse requirements")
+  init_blocksparse()
+
+  random = numpy.random.RandomState(seed=1)
+  num_inputs = 32
+  num_outputs = 63
+  num_outputs_sparse = 256
+  batch_dim = 8
+  seq_len = 5
+
+  with make_scope() as session:
+    print("create graph")
+    tf.set_random_seed(42)
+    src_placeholder = tf.placeholder(tf.float32, (batch_dim, seq_len, num_inputs), name="src_placeholder")
+    seq_len_placeholder = tf.placeholder(tf.int32, (batch_dim,), name="seq_len_placeholder")
+    feed_dict = {
+      src_placeholder: random.uniform(-1.0, 1.0, (batch_dim, seq_len, num_inputs)),
+      seq_len_placeholder: [seq_len] * batch_dim
+    }
+
+    from TFUtil import xavier_initializer, var_creation_scope
+    default_var_initializer = xavier_initializer(seed=13)
+    with tf.variable_scope(tf.get_variable_scope(), initializer=default_var_initializer) as scope:
+      net = TFNetwork(config=Config(), extern_data=ExternData(), train_flag=False)
+      with net.register_network_scope():
+        from TFNetworkLayer import InternalLayer
+        src_layer = InternalLayer(name='src', network=net, output=Data(
+          'src', shape=(None, num_inputs), placeholder=src_placeholder, size_placeholder={0: seq_len_placeholder}))
+        print("source layer:", src_layer)
+        with tf.name_scope("nativelstm"):
+          layer1 = RecLayer(
+            name='nativelstm', network=net, output=Data("out", shape=(None, num_outputs)), sources=[src_layer],
+            unit='NativeLSTM2')
+        with tf.name_scope("blocksparselstm"):
+          layer2 = RecLayer(
+            name='blocksparselstm', network=net, output=Data("out", shape=(None, num_outputs_sparse)),
+            sources=[src_layer],
+            unit='BlocksparseLSTM',
+            unit_opts={'seed': 5, 'connectivity': 1, 'connectivity_dense': 2, 'layer_norm': False})
+        y1 = layer1.output.get_placeholder_as_batch_major()
+        y2 = layer2.output.get_placeholder_as_batch_major()
+
+    print("run")
+    session.run(tf.global_variables_initializer())
+    native_lstm_params = layer1.get_param_values_dict(session=session)
+    np_y1 = session.run(y1, feed_dict=feed_dict)
+    assert np_y1.shape == (batch_dim, seq_len, num_outputs)
+    print('native output:')
+    print(np_y1)
+    bsmm_cell = layer2.cell
+    assert isinstance(bsmm_cell, BlocksparseLSTMCell)
+    for param in layer2.params.values():
+      print('blocksparse LSTM param:', param)
+      assert isinstance(param, tf.Variable)
+      param.load(numpy.zeros(param.get_shape().as_list(), dtype='float32'), session=session)
+    bsmm_cell.load_params_from_native_lstm(native_lstm_params, session=session)
+    np_y2 = session.run(y2, feed_dict=feed_dict)
+    assert np_y2.shape == (batch_dim, seq_len, num_outputs_sparse)
+    np_y2 = np_y2[:, :, :num_outputs]
+    assert_almost_equal(np_y1, np_y2)
 
 
 if __name__ == "__main__":

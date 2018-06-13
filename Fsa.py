@@ -1157,6 +1157,45 @@ class FastBwFsaShared:
       start_end_states=self.get_start_end_states(n_batch))
 
 
+def fast_bw_fsa_staircase(seq_lens, max_skip=None):
+  """
+  Builds up a staircase FSA, returns a FastBaumWelchBatchFsa.
+
+  :param list[int] seq_lens:
+  :param int max_skip:
+  :rtype: FastBaumWelchBatchFsa
+  """
+  n_batch = len(seq_lens)
+  # numpy.ndarray edges: (4,num_edges), edges of the graph (from,to,emission_idx,sequence_idx)
+  # numpy.ndarray weights: (num_edges,), weights of the edges
+  # numpy.ndarray start_end_states: (2, batch), (start,end) state idx in automaton.
+  state_idx = 0
+  edges = []
+  start_end_states = []
+  for batch in range(n_batch):
+    seq_len = seq_lens[batch]
+    start_state_idx = state_idx
+    for i in range(seq_len):
+      cur_state_idx = state_idx
+      for j in range(i + 1, seq_len + 1):
+        skip_len = j - i
+        assert skip_len > 0
+        if max_skip and skip_len > max_skip:
+          continue
+        target_state_idx = cur_state_idx + j - i
+        for t in range(i, j):
+          emission_idx = t
+          edges += [(cur_state_idx, target_state_idx, emission_idx, batch)]
+      state_idx += 1
+    end_state_idx = state_idx
+    start_end_states += [(start_state_idx, end_state_idx)]
+  weights = [0.0] * len(edges)
+  return FastBaumWelchBatchFsa(
+    edges=numpy.array(edges).transpose(),
+    weights=numpy.array(weights),
+    start_end_states=numpy.array(start_end_states).transpose())
+
+
 class LoadWfstOp(theano.Op):
   """
   Op: maps segment names (tags) to fsa automata (load from disk) that can be used to compute a BW-alignment

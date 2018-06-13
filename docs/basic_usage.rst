@@ -124,7 +124,7 @@ num_epochs
     The number of epochs to train.
 
 log_verbosity
-    An integer. Common values are 3 or 4. Starting with 4, you will get an output per mini-batch.
+    An integer. Common values are 3 or 4. Starting with 5, you will get an output per mini-batch.
 
 
 There are much more params, and more details to many of the listed ones.

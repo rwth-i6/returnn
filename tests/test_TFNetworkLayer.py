@@ -492,6 +492,60 @@ def test_DotLayer():
     assert_equal(out.shape, (B, H, max(a_seq_lens), 1))
 
 
+def test_subnet_load_on_init():
+  import tempfile
+  model_tmp_dir = tempfile.mkdtemp("tmp-checkpoint")
+  model_filename = model_tmp_dir + "/model"
+  with make_scope() as session:
+    config = Config()
+    n_in, n_hidden, n_out = 2, 5, 3
+    config.update({
+      "num_outputs": n_out,
+      "num_inputs": n_in,
+      "network": {
+        "l1": {"class": "linear", "activation": None, "n_out": n_hidden},
+        "output": {"class": "linear", "activation": None, "n_out": n_out, "from": ["l1"]}
+      }
+    })
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    network.initialize_params(session)
+    params_orig_dump = network.get_params_serialized(session)
+    print("l1:")
+    print(params_orig_dump.values_dict["l1"]["W"])
+    print("output:")
+    print(params_orig_dump.values_dict["output"]["W"])
+    assert(params_orig_dump.values_dict["l1"]["W"].any())
+    assert(params_orig_dump.values_dict["output"]["W"].any())
+    network.save_params_to_file(filename=model_filename, session=session)
+
+  with make_scope() as session:
+    config = Config()
+    config.update({
+      "num_outputs": n_out,
+      "num_inputs": n_in,
+      "network": {
+        "l0": {"class": "linear", "activation": None, "n_out": n_in},
+        "subnet": {"class": "subnetwork", "from": ["l0"], "load_on_init": model_filename, "subnetwork": {
+          "l1": {"class": "linear", "activation": None, "n_out": n_hidden},
+          "output": {"class": "linear", "activation": None, "n_out": n_out, "from": ["l1"]}
+        }},
+        "output": {"class": "linear", "activation": None, "n_out": n_out, "from": ["subnet"]}
+      }
+    })
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    network.initialize_params(session)
+    params_dump = network.get_params_serialized(session)
+    params_dump_subnet = params_dump.values_dict["subnet"]
+    for layer_name in ["l1", "output"]:
+      layer_orig = params_orig_dump.values_dict[layer_name]
+      for param_name in ["W", "b"]:
+        param_orig = layer_orig[param_name]
+        param_subnet = params_dump_subnet[layer_name + "/" + param_name]
+        numpy.testing.assert_array_equal(param_orig, param_subnet)
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()

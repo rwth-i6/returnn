@@ -1,13 +1,23 @@
 
-from __future__ import print_function
+from __future__ import print_function, division
 
 import tensorflow as tf
 from tensorflow.python.client import device_lib
+from tensorflow.python.ops import init_ops
 import contextlib
 import os
 import sys
 import threading
 from Util import NotSpecified, NativeCodeCompiler
+
+
+class CollectionKeys:
+  """
+  Extension of :class:`tf.GraphKeys`
+  """
+  RETURNN_LAYERS = "_RETURNN_layers"  # LayerBase instances
+  RETURNN_NET_STACK = "_RETURNN_network_stack"  # TFNetwork instance stack
+  STATE_VARS = "_RETURNN_state_vars"  # tf.Variable, like e.g. tf.GraphKeys.LOCAL_VARIABLES
 
 
 def tf_version_tuple():
@@ -433,15 +443,17 @@ class Data(object):
     :rtype: Data
     """
     assert self.batch_dim_axis is not None
-    assert self.time_dim_axis is None
     new_shape = list(self.shape)
-    new_shape.insert(time_dim_axis, None)
     kwargs = self.get_kwargs()
-    kwargs["batch_dim_axis"] = (
-      self.batch_dim_axis
-      if (self.batch_dim_axis < time_dim_axis)
-      else (self.batch_dim_axis + 1))
-    kwargs["time_dim_axis"] = time_dim_axis
+    if self.time_dim_axis is None:
+      new_shape.insert(time_dim_axis, None)
+      kwargs["batch_dim_axis"] = (
+        self.batch_dim_axis
+        if (self.batch_dim_axis < time_dim_axis)
+        else (self.batch_dim_axis + 1))
+      kwargs["time_dim_axis"] = time_dim_axis
+    else:
+      assert self.time_dim_axis == time_dim_axis
     kwargs["shape"] = new_shape
     if name:
       kwargs["name"] = name
@@ -476,8 +488,16 @@ class Data(object):
     :return: shape with added batch-dim. e.g. (batch,time,feat) = (None,None,128)
     :rtype: tuple[int|None]
     """
+    return self.get_batch_shape(batch_dim=None)
+
+  def get_batch_shape(self, batch_dim):
+    """
+    :param int|tf.Tensor|None batch_dim:
+    :return: shape with added batch-dim. e.g. (batch,time,feat) = (None,None,128)
+    :rtype: tuple[int|None]
+    """
     if self.batch_dim_axis is not None:
-      return self.shape[:self.batch_dim_axis] + (None,) + self.shape[self.batch_dim_axis:]
+      return self.shape[:self.batch_dim_axis] + (batch_dim,) + self.shape[self.batch_dim_axis:]
     return self.shape
 
   @property
@@ -877,7 +897,7 @@ class CustomUpdate(object):
     :param tf.Variable var: variable to update. this will be recognized by :class:`TFUpdater.Updater`
     """
     # A bit ugly, but simple.
-    setattr(var, "custom_update", self)
+    setattr(var, "returnn_custom_update", self)
 
   def update_var(self, var):
     """
@@ -903,6 +923,107 @@ class CustomUpdateExpAverage(CustomUpdate):
 
   def update_var(self, var):
     return tf.assign_add(var, self.alpha * (self.average - var))  # ((alpha - 1) * old + alpha * new)
+
+
+def set_param_axes_split_info(param, axes_split_info):
+  """
+  :param tf.Variable|tf.Tensor param:
+  :param list[list[int]] axes_split_info: e.g. [[n],[n]*4] for LSTM matrices
+  """
+  check_param_axes_split_info(param.get_shape().as_list(), axes_split_info)
+  setattr(param, "returnn_axes_split_info", axes_split_info)
+
+
+def check_param_axes_split_info(param_shape, axes_split_info):
+  """
+  :param list[int]|tuple[int] param_shape:
+  :param list[list[int]] axes_split_info: e.g. [[n],[n]*4] for LSTM matrices
+  """
+  assert len(axes_split_info) == len(param_shape)
+  for i, parts in enumerate(axes_split_info):
+    assert param_shape[i] == sum(parts)
+
+
+def get_param_axes_split_info(param):
+  """
+  See :func:`set_param_axes_split_info`.
+
+  :param tf.Variable|tf.Tensor param:
+  :rtype: list[list[int]]|None
+  """
+  return getattr(param, "returnn_axes_split_info", None)
+
+
+def transform_param_axes_split_info_to_new_shape(axes_split_info, new_shape):
+  """
+  new_shape can be bigger or smaller than the old shape.
+  In some simple cases, it is obvious how that should be done, e.g. [[a],[b]*4], [a*2,b*8] -> [[a*2],[b*2]*4]
+  In some, it is not so. E.g. [[a+b],[b]*4], [a+b*2,b*8] -> [[a+b*2],[b*2]*4].
+  See test cases as well, :func:`test_transform_param_axes_split_info_to_new_shape`.
+  No TF involved here, however, fits better to the functions above.
+
+  :param list[list[int]] axes_split_info:
+  :param list[int]|tuple[int] new_shape:
+  :return: new axes-split-info for the new shape
+  :rtype: list[list[int]]
+  """
+  new_axes_split_info = []
+  assert len(axes_split_info) == len(new_shape)
+  dim_diff = {}  # old-dim -> new-dim
+  for new_dim, parts in zip(new_shape, axes_split_info):
+    if len(parts) == 1:
+      dim_diff[parts[0]] = new_dim
+    elif len(set(parts)) == 1:  # all the same
+      if new_dim % len(parts) == 0:
+        dim_diff[parts[0]] = new_dim // len(parts)  # just a heuristic
+  for i, (new_dim, parts) in enumerate(zip(new_shape, axes_split_info)):
+    assert len(parts) >= 1
+    if len(parts) == 1:  # simple case
+      new_axes_split_info.append([new_dim])
+      continue
+    new_parts = [dim_diff.get(d) for d in parts]
+    if any([d is None for d in new_parts]):
+      assert sum([d is None for d in new_parts]) == 1
+      j = [d is None for d in new_parts].index(True)
+      new_parts[j] = new_dim - sum([d for d in new_parts if d is not None])
+      assert new_parts[j] > 0
+    elif sum(new_parts) != new_dim:
+      # another heuristic. assume that the first is wrong.
+      new_parts[0] = new_dim - sum(new_parts[1:])
+      assert new_parts[0] > 0
+    assert sum(new_parts) == new_dim
+    new_axes_split_info.append(new_parts)
+  return new_axes_split_info
+
+
+def copy_with_new_split_axes(old_axis_splits, new_axis_splits, old_values, new_values=None):
+  """
+  On Numpy arrays only, however, fits better to the functions above.
+
+  :param list[list[int]] old_axis_splits:
+  :param list[list[int]] new_axis_splits:
+  :param numpy.ndarray old_values:
+  :param numpy.ndarray new_values:
+  :return: new values
+  :rtype: numpy.ndarray
+  """
+  import numpy
+  assert len(old_axis_splits) == len(new_axis_splits)
+  assert all([len(old_parts) == len(new_parts) for (old_parts, new_parts) in zip(old_axis_splits, new_axis_splits)])
+  old_shape = [sum(parts) for parts in old_axis_splits]
+  assert tuple(old_shape) == old_values.shape
+  new_shape = [sum(parts) for parts in new_axis_splits]
+  if new_values is None:
+    new_values = numpy.zeros(new_shape, dtype=old_values.dtype)
+  for idxs in numpy.ndindex(tuple([len(parts) for parts in old_axis_splits])):
+    assert len(idxs) == len(old_axis_splits) == len(new_axis_splits)
+    old_offsets = [sum(parts[:i]) for i, parts in zip(idxs, old_axis_splits)]
+    new_offsets = [sum(parts[:i]) for i, parts in zip(idxs, new_axis_splits)]
+    dims = [min(old_parts[i], new_parts[i]) for i, old_parts, new_parts in zip(idxs, old_axis_splits, new_axis_splits)]
+    old_slices = tuple([slice(offset, offset + dim) for offset, dim in zip(old_offsets, dims)])
+    new_slices = tuple([slice(offset, offset + dim) for offset, dim in zip(new_offsets, dims)])
+    new_values[new_slices] = old_values[old_slices]
+  return new_values
 
 
 class OutputWithActivation(object):
@@ -1432,7 +1553,7 @@ def identity_with_ops(x, ops):
 
 _setup_tf_thread_pools_called_once = False
 
-def setup_tf_thread_pools(num_threads=None, log_file=None):
+def setup_tf_thread_pools(num_threads=None, log_file=None, tf_session_opts=None):
   """
   See here for documentation of intra_op_parallelism_threads and inter_op_parallelism_threads:
   https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/protobuf/config.proto
@@ -1458,6 +1579,7 @@ def setup_tf_thread_pools(num_threads=None, log_file=None):
 
   :param int num_threads: used for both intra and inter parallelism thread pools
   :param stream|None log_file:
+  :param dict[str] tf_session_opts:
   """
   global _setup_tf_thread_pools_called_once
   if _setup_tf_thread_pools_called_once:
@@ -1466,14 +1588,20 @@ def setup_tf_thread_pools(num_threads=None, log_file=None):
   if not num_threads:
     from Util import guess_requested_max_num_threads
     num_threads = guess_requested_max_num_threads(log_file=log_file, fallback_num_cpus=False)
-  if log_file:
-    print("Setup TF inter and intra global thread pools, num_threads=%r." % num_threads, file=log_file)
-  opts = {}
+  # See options here:
+  # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/protobuf/config.proto
+  if tf_session_opts:
+    opts = tf_session_opts.copy()
+  else:
+    opts = {}
+  assert isinstance(opts, dict)
   opts.setdefault("log_device_placement", False)
   opts.setdefault("device_count", {}).setdefault("GPU", 0)
   if num_threads:
     opts.setdefault("intra_op_parallelism_threads", num_threads)
     opts.setdefault("inter_op_parallelism_threads", num_threads)
+  if log_file:
+    print("Setup TF inter and intra global thread pools, num_threads %r, session opts %r." % (num_threads, opts), file=log_file)
   with tf.Session(config=tf.ConfigProto(**opts)) as session:
     session.close()
 
@@ -1581,6 +1709,24 @@ def get_available_gpu_devices():
   return [x for x in get_tf_list_local_devices() if x.device_type == 'GPU']
 
 
+def get_available_gpu_min_compute_capability():
+  """
+  Uses :func:`get_available_gpu_devices`.
+
+  :return: e.g. 3.0, or 5.0, etc, or None
+  :rtype: float|None
+  """
+  cap = None
+  for dev in get_available_gpu_devices():
+    desc = _parse_physical_device_desc(dev.physical_device_desc)
+    dev_cap = float(desc['compute capability'])
+    if cap is None:
+      cap = dev_cap
+    else:
+      cap = min(cap, dev_cap)
+  return cap
+
+
 def dot(a, b):
   """
   :param tf.Tensor a: shape [...da...,d]
@@ -1680,6 +1826,8 @@ def get_activation_function(s):
   """
   if not s or s in ["none", "identity"]:
     return identity
+  if "(" in s:
+    return eval("lambda x: %s" %s, {"tf": tf})
   if any(k in s for k in _bin_ops):
     return _get_act_func_with_op(s)
   if hasattr(tf.nn, s):
@@ -1709,17 +1857,124 @@ def xavier_initializer(uniform=True, seed=None, dtype=tf.float32):
     scale=1.0, mode='fan_avg', distribution="uniform" if uniform else "normal", seed=seed, dtype=dtype)
 
 
-def get_initializer(s, seed=None, eval_local_ns=None):
+def wrap_distribution_non_zero(x, zero_limit, limit):
+  """
+  :param tf.Tensor x: values in [-limit,limit]
+  :param float zero_limit:
+  :param float limit:
+  :return: same shape as x.
+    rescale and shifts such that values from [-zero_limit,zero_limit] are excluded.
+    still values are in [-limit,limit].
+  :rtype: tf.Tensor
+  """
+  assert limit > 0 and limit > zero_limit > 0
+  # Rescale the range [0,limit] to [zero_limit,limit] (and same in negative).
+  x_rescaled = x * ((limit - zero_limit) / limit)
+  shift = tf.ones_like(x) * zero_limit
+  return x_rescaled + tf.where(tf.greater_equal(x, 0.0), shift, -shift)
+
+
+class VarianceScalingNonZero(init_ops.VarianceScaling):
+  """
+  Same as :class:`tf.VarianceScaling`, i.e. truncated normal or uniform from [-limit,limit] for some limit,
+  except that we exclude the range [-limit*non_zero_fraction,limit*non_zero_fraction].
+  non_zero_fraction=0 would yield no difference.
+
+  For reference, to get the behavior of glorot_uniform, use these args:
+    mode="fan_avg", distribution="uniform"
+  """
+
+  def __init__(self, non_zero_fraction=0.5, **kwargs):
+    super(VarianceScalingNonZero, self).__init__(**kwargs)
+    assert 0 <= non_zero_fraction <= 1
+    self.non_zero_fraction = non_zero_fraction
+
+  def __call__(self, shape, dtype=None, partition_info=None):
+    """
+    :param tuple[int] shape:
+    :param tf.DType dtype:
+    :param partition_info:
+    :rtype: tf.Tensor
+    """
+    import numpy
+    from tensorflow.python.ops import init_ops
+    if dtype is None:
+      dtype = self.dtype
+    scale = self.scale
+    scale_shape = shape
+    if partition_info is not None:
+      scale_shape = partition_info.full_shape
+    fan_in, fan_out = init_ops._compute_fans(scale_shape)
+    if self.mode == "fan_in":
+      scale /= max(1., fan_in)
+    elif self.mode == "fan_out":
+      scale /= max(1., fan_out)
+    else:
+      assert self.mode == "fan_avg"
+      scale /= max(1., (fan_in + fan_out) / 2.)
+    if self.distribution == "normal":
+      stddev = numpy.sqrt(scale)
+      limit = stddev * 2
+      x = tf.truncated_normal(shape, mean=0.0, stddev=stddev, dtype=dtype, seed=self.seed)
+    else:
+      assert self.distribution == "uniform"
+      limit = numpy.sqrt(3.0 * scale)
+      x = tf.random_uniform(shape, minval=-limit, maxval=limit, dtype=dtype, seed=self.seed)
+    x = wrap_distribution_non_zero(x, zero_limit=self.non_zero_fraction * limit, limit=limit)
+    return x
+
+
+variance_scaling_non_zero_initializer = VarianceScalingNonZero
+
+
+def load_txt_file_initializer(filename, dtype=tf.float32):
+  """
+  :param str filename:
+  :param tf.DType dtype:
+  :return: function, when called, will return the content
+  :rtype: ()->tf.Tensor
+  """
+  assert dtype == tf.float32, "only float32 supported currently"
+  dtype_ = dtype
+
+  def py_loader():
+    # Alternative: numpy.loadtxt.
+    import numpy
+    from Util import load_txt_vector
+    return numpy.array(load_txt_vector(filename), dtype="float32")
+
+  from tensorflow.python.ops import init_ops
+  class LoadTxtFileInitializer(init_ops.Initializer):
+    def __call__(self, shape, dtype=None, partition_info=None):
+      v = tf.py_func(py_loader, [], dtype_)
+      v.set_shape(shape)
+      return v
+
+  return LoadTxtFileInitializer()
+
+
+def get_initializer(s, seed=None, eval_local_ns=None, dtype=tf.float32):
   """
   :param str|dict[str]|float s: e.g. "glorot_uniform" or "truncated_normal" or "orthogonal", or config dict with "class",
     or string to be `eval`ed if it contains "(". constant if a float is given.
   :param int|tf.Tensor seed:
   :param dict[str]|None eval_local_ns:
+  :param tf.DType|str dtype:
   :return: (function (shape) -> tf.Tensor) | tf.Initializer
   :rtype: ((tuple[int]) -> tf.Tensor) | tf.Initializer
   """
+  dtype = tf.as_dtype(dtype).base_dtype
+  assert isinstance(dtype, tf.DType)
   if isinstance(s, (float, int)):
-    return tf.constant_initializer(s, dtype=tf.float32)
+    if s == 0:
+      return tf.zeros_initializer(dtype=dtype)
+    if s == 1:
+      return tf.ones_initializer(dtype=dtype)
+    return tf.constant_initializer(s, dtype=dtype)
+  if not s and dtype == tf.string:
+    return tf.zeros_initializer(dtype=dtype)
+  if not s and dtype.is_integer:
+    return tf.zeros_initializer(dtype=dtype)
   import numpy
   import math
   from tensorflow.python.ops import init_ops
@@ -1760,7 +2015,11 @@ def get_initializer(s, seed=None, eval_local_ns=None):
     else:
       raise ValueError("invalid get_initializer argument, expected string or dict, got: %r" % s)
     if isinstance(f, (float, int)):
-      return tf.constant_initializer(f, dtype=tf.float32)
+      if f == 0:
+        return tf.zeros_initializer(dtype=dtype)
+      if f == 1:
+        return tf.ones_initializer(dtype=dtype)
+      return tf.constant_initializer(f, dtype=dtype)
     if not f:
       raise Exception("invalid initializer: %r" % s)
     if seed is not None:
@@ -1773,7 +2032,7 @@ def get_initializer(s, seed=None, eval_local_ns=None):
   return f
 
 
-def dropout(x, keep_prob, noise_shape=None, seed=None, name=None):
+def dropout(x, keep_prob, noise_shape=None, seed=None, name=None, cond_on_train=False):
   """
   Computes dropout.
   Like :func:`tf.nn.dropout` but avoid :func:`tf.div` if possible.
@@ -1783,7 +2042,12 @@ def dropout(x, keep_prob, noise_shape=None, seed=None, name=None):
   :param tf.Tensor|tuple[int] noise_shape:
   :param int seed:
   :param str name:
+  :param bool cond_on_train: automatically wrap through :func:`cond_on_train_flag`
   """
+  if cond_on_train:
+    return cond_on_train_flag(
+      lambda: dropout(x, keep_prob=keep_prob, noise_shape=noise_shape, seed=seed, name=name),
+      lambda: x)
   with tf.name_scope(name, "dropout", [x]):
     x = tf.convert_to_tensor(x, name="x")
     assert isinstance(x, tf.Tensor)
@@ -1805,6 +2069,64 @@ def dropout(x, keep_prob, noise_shape=None, seed=None, name=None):
     assert isinstance(ret, tf.Tensor)
     ret.set_shape(x.get_shape())
     return ret
+
+
+def layer_norm(x, gain, bias, axis, epsilon=1e-6):
+  """
+  Layer normalization.
+  Also see :func:`openai_layer_norm`.
+  Also see :func:`tensorflow.contrib.layers.layer_norm`.
+
+  :param tf.Tensor x:
+  :param tf.Tensor gain:
+  :param tf.Tensor bias:
+  :param int axis:
+  :param float epsilon: OpenAI uses 1e-6, TF contrib uses 1e-12, pbhatia243 uses 1e-5.
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope('layer_norm'):
+    ndim = x.get_shape().ndims
+    if axis < 0:
+      axis += ndim
+      assert axis >= 0
+    dim = get_shape_dim(x, axis=axis)
+    if gain.get_shape().ndims == 1:
+      gain = tf.reshape(gain, [dim if i == axis else 1 for i in range(ndim)], "gain_bc")
+    if bias.get_shape().ndims == 1:
+      bias = tf.reshape(bias, [dim if i == axis else 1 for i in range(ndim)], "bias_bc")
+    m, v = tf.nn.moments(x, axes=[axis], keep_dims=True)
+    inv = tf.rsqrt(v + epsilon)
+    inv *= gain
+    return x * inv - m * inv + bias
+
+
+def openai_layer_norm(x, gain, bias, axis, epsilon=1e-6):
+  """
+  Layer normalization, like :func:`layer_norm`,
+  but fast kernel by OpenAI (implemented as part of their blocksparse).
+  To use it, init the git submodule in extern/blocksparse.
+
+  :param tf.Tensor x:
+  :param tf.Tensor gain:
+  :param tf.Tensor bias:
+  :param int axis:
+  :param float epsilon:
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope("openai_layer_norm"):
+    ndim = x.get_shape().ndims
+    if axis < 0:
+      axis += ndim
+      assert axis >= 0
+    assert axis == ndim - 1, "OpenAI kernel seems broken otherwise. see test_layer_norms."
+    if gain.get_shape().ndims > 1:
+      gain = tf.reshape(gain, [x.get_shape().dims[axis].value or -1], "gain_flat")
+    if bias.get_shape().ndims > 1:
+      bias = tf.reshape(bias, [x.get_shape().dims[axis].value or -1], "bias_flat")
+    from TFNativeOp import init_blocksparse
+    init_blocksparse()
+    from blocksparse.norms import layer_norm
+    return layer_norm(x, g=gain, b=bias, axis=axis, epsilon=epsilon)
 
 
 def swapaxes(x, axis1, axis2):
@@ -2176,6 +2498,20 @@ def batched_uniq(x, seq_lens):
   return z, new_seq_lens
 
 
+def matrix_triangular(shape, dtype=tf.float32, lower=False, upper=False):
+  """
+  :param tuple[int|tf.Tensor]|tf.Tensor shape:
+  :param tf.DType dtype:
+  :param bool lower:
+  :param bool upper:
+  :rtype: tf.Tensor
+  """
+  assert (lower or upper) and (not lower or not upper)
+  x = tf.ones(shape, dtype=dtype)
+  return tf.matrix_band_part(x, num_lower=-1 if lower else 0, num_upper=-1 if upper else 0)
+
+
+
 class VariableAssigner(object):
   def __init__(self, var):
     """
@@ -2188,7 +2524,7 @@ class VariableAssigner(object):
 
   def assign(self, value, session):
     """
-    :param numpy.ndarray|int|float value:
+    :param numpy.ndarray|int|float|list[str] value:
     :param tf.Session session:
     """
     session.run(self.assign_op, feed_dict={self.assign_op.inputs[1]: value})
@@ -2315,6 +2651,12 @@ class OpCodeCompiler(NativeCodeCompiler):
 
   def __init__(self, use_cuda_if_available=True, include_paths=(), ld_flags=(), **kwargs):
     self._cuda_env = use_cuda_if_available and CudaEnv.get_instance()
+    self._nvcc_opts = []
+    if self._with_cuda():
+      # Get CUDA compute capability of the current GPU device.
+      min_compute_capability = get_available_gpu_min_compute_capability()
+      if min_compute_capability:
+        self._nvcc_opts += ["-arch", "compute_%i" % int(min_compute_capability * 10)]
     tf_include = tf.sysconfig.get_include()  # e.g. "...python2.7/site-packages/tensorflow/include"
     tf_include_nsync = tf_include + "/external/nsync/public"  # https://github.com/tensorflow/tensorflow/issues/2412
     include_paths = list(include_paths) + [tf_include, tf_include_nsync]
@@ -2325,27 +2667,32 @@ class OpCodeCompiler(NativeCodeCompiler):
     super(OpCodeCompiler, self).__init__(include_paths=include_paths, ld_flags=ld_flags, **kwargs)
     self._tf_mod = None
 
-  _relevant_info_keys = NativeCodeCompiler._relevant_info_keys + ("tf_version", "with_cuda")
+  _relevant_info_keys = NativeCodeCompiler._relevant_info_keys + ("tf_version", "with_cuda", "nvcc_opts")
 
   def _make_info_dict(self):
     d = super(OpCodeCompiler, self)._make_info_dict()
     d.update({
       "tf_version": tf.__version__,
-      "with_cuda": bool(self._cuda_env and self._cuda_env.is_available())
+      "with_cuda": self._with_cuda(),
+      "nvcc_opts": tuple(self._nvcc_opts),
     })
     return d
 
+  def _with_cuda(self):
+    return bool(self._cuda_env and self._cuda_env.is_available())
+
   def _get_compiler_bin(self):
-    if self._cuda_env and self._cuda_env.is_available():
+    if self._with_cuda():
       return self._cuda_env.get_compiler_bin()
     return super(OpCodeCompiler, self)._get_compiler_bin()
 
   def _transform_compiler_opts(self, opts):
-    if self._cuda_env and self._cuda_env.is_available():
+    if self._with_cuda():
       nvcc_opts = self._cuda_env.get_compiler_opts()
       nvcc_opts += ["-DGOOGLE_CUDA=1"]
       for opt in opts:
         nvcc_opts += ["-Xcompiler", opt]
+      nvcc_opts += self._nvcc_opts
       return nvcc_opts
     return super(OpCodeCompiler, self)._transform_compiler_opts(opts)
 
@@ -2429,7 +2776,8 @@ def add_scaled_noise_to_gradients(grads_and_vars, gradient_noise_scale, sparse_g
         gradient_shape = gradient_values.get_shape()
       if isinstance(gradient_shape, tf.TensorShape) and not gradient_shape.is_fully_defined():
         gradient_shape = tf.shape(gradient_values)
-      noise = tf.truncated_normal(gradient_shape, stddev=gradient_noise_scale, name="%s_grad_noise" % name)
+      noise = tf.truncated_normal(
+        gradient_shape, stddev=gradient_noise_scale, name="%s_grad_noise" % name, seed=get_random_seed())
       gradient_values = tf.add(gradient_values, noise, name="%s_add_grad_noise" % name)
       if sparse_grads and isinstance(gradient, tf.IndexedSlices):
         gradient = tf.IndexedSlices(values=gradient_values, indices=gradient.indices, dense_shape=gradient.dense_shape)
@@ -2767,6 +3115,7 @@ def cond(pred, fn1, fn2, name=None):
   or at least the resulting graph will be evaluated.
   If pred can is constant at the call, only the corresponding fn will be called.
   This is similar as the TF internal _smart_cond().
+  And similar as tf.contrib.framework.smart_cond.
 
   :param tf.Tensor|bool pred:
   :param ()->(tf.Tensor|list[tf.Tensor]) fn1:
@@ -2944,6 +3293,8 @@ def identity_op_nested(x, name="identity"):
     return {k: identity_op_nested(x[k], name="%s_%s" % (name, k)) for k in x}
   if isinstance(x, (list, tuple)):
     return [identity_op_nested(x[i], name="%s_%i" % (name, i)) for i in range(len(x))]
+  if isinstance(x, tf.TensorArray):
+    return x  # could be nicer, but good enough for now...
   assert isinstance(x, tf.Tensor)
   return tf.identity(x, name=name)
 
@@ -3032,13 +3383,16 @@ def opt_logical_and(*args):
   return res
 
 
-def windowed_nd(source, window, padding="same", time_axis=1, new_window_axis=2):
+def windowed_nd(source, window_size, window_left=None, window_right=None,
+                padding="same", time_axis=1, new_window_axis=2):
   """
   Constructs a new "window" axis which is a moving input over the time-axis.
   If you want to take out a window, i.e. a slice, see :func:`slice_nd`.
 
   :param tf.Tensor source: N-D tensor of shape (..., n_time, ...)
-  :param int|tf.Tensor window: window size
+  :param int|tf.Tensor window_size: window size
+  :param int|tf.Tensor|None window_left:
+  :param int|tf.Tensor|None window_right:
   :param str padding: "same" or "valid"
   :param int time_axis:
   :param int new_window_axis:
@@ -3052,27 +3406,38 @@ def windowed_nd(source, window, padding="same", time_axis=1, new_window_axis=2):
     n_time = source_shape[0]
     if padding == "same":
       n_out_time = n_time
-      w_right = window // 2
-      w_left = window - w_right - 1
-      pad_left = tf.zeros(tf.concat([[w_left], source_shape[1:]], axis=0), dtype=source.dtype)
-      pad_right = tf.zeros(tf.concat([[w_right], source_shape[1:]], axis=0), dtype=source.dtype)
+      if window_right is None:
+        window_right = window_size // 2
+      if window_left is None:
+        window_left = window_size - window_right - 1
+      else:
+        if isinstance(window_size, int) and isinstance(window_left, int) and isinstance(window_right, int):
+          assert window_size == window_left + window_right + 1
+        else:
+          with tf.control_dependencies([tf.assert_equal(
+                window_size, window_left + window_right + 1,
+                data=["window != w_left + w_right + 1.", window_size, " ", window_left, " ", window_right])]):
+            window_size = tf.identity(window_size)
+      pad_left = tf.zeros(tf.concat([[window_left], source_shape[1:]], axis=0), dtype=source.dtype)
+      pad_right = tf.zeros(tf.concat([[window_right], source_shape[1:]], axis=0), dtype=source.dtype)
       source = tf.concat([pad_left, source, pad_right], axis=0)  # shape[0] == n_time + window - 1
     elif padding == "valid":
-      n_out_time = n_time - window + 1
+      assert window_left is None and window_right is None
+      n_out_time = n_time - window_size + 1
     else:
       raise Exception("invalid padding %r" % padding)
-    tiled_dimshuffle = expand_dims_unbroadcast(source, axis=0, dim=window)  # (window,n_time+window-1,...)
+    tiled_dimshuffle = expand_dims_unbroadcast(source, axis=0, dim=window_size)  # (window,n_time+window-1,...)
     # We want to shift every dim*time block by one to the left.
     # To do this, we interpret that we have one more time frame (i.e. n_time+window).
     # We have to do some dimshuffling so that we get the right layout, then we can flatten,
     # add some padding, and then dimshuffle it back.
     # Then we can take out the first n_time frames.
     tiled_flat = tf.reshape(tiled_dimshuffle, [-1])
-    rem = window * tf.reduce_prod(source_shape[1:])
+    rem = window_size * tf.reduce_prod(source_shape[1:])
     tiled_flat_pad_right = tf.concat([tiled_flat, tf.zeros((rem,), dtype=source.dtype)], axis=0)
     tiled_reshape_shift = tf.reshape(
       tiled_flat_pad_right,
-      tf.concat([(window, n_time + window),
+      tf.concat([(window_size, n_time + window_size),
                  source_shape[1:]], axis=0))  # add time frame, (window,n_time+window,...)
     final = tiled_reshape_shift
     if new_window_axis != 0:
@@ -3103,7 +3468,33 @@ def slice_nd(x, start, size, seq_lens=None):
   :rtype: tf.Tensor
   """
   with tf.name_scope("slice_nd"):
-    pass  # TODO...
+    shape = get_shape(x)
+    n_batch = shape[0]
+
+    batch_idxs = expand_dims_unbroadcast(tf.range(n_batch), 1, size)  # (n_batch, size)
+    batch_idxs = tf.reshape(batch_idxs, (-1,))  # (n_batch*size,)
+
+    window_pos = tf.expand_dims(start,1) + tf.range(size)  # (n_batch, size)
+    window_pos = tf.reshape(window_pos, (-1,))  # (n_batch*size,)
+
+    # build mask for zero-padding
+    mask = window_pos > shape[1]-1  # (n_batch*size,) tf.bool
+
+    # clip indices so that gather_nd doesn't fail, will zero-pad later
+    clip_time_idx = tf.clip_by_value(window_pos, 0, shape[1]-1)
+    indices = tf.stack([batch_idxs, clip_time_idx])  # (n_batch*size, 2)
+    indices = tf.transpose(indices)  # (2, n_batch*size)
+
+    slices = tf.gather_nd(x, indices)  # (n_batch*size, ...)
+
+    # (B, size, ...), we assume time-axis is/was 1
+    new_shape = tf.concat([[shape[0], size], shape[2:]], axis=0)
+
+    # zero-pad
+    slices = tf.where(mask, tf.zeros_like(slices), slices)
+
+    slices = tf.reshape(slices, new_shape)  # (B, size, ...)
+    return slices
 
 
 def global_tensor(f, name):
@@ -3137,12 +3528,53 @@ def global_tensor(f, name):
 
 def get_global_train_flag_placeholder():
   """
+  Also consider :func:`TFNetwork.get_current_network().train_flag`,
+  or :func:`get_global_train_flag`.
+
   :return: bool scalar tensor
   :rtype: tf.Tensor
   """
   return global_tensor(
     lambda: tf.placeholder(tf.bool, shape=(), name="train_flag"),
     name="train_flag")
+
+
+def get_global_train_flag():
+  """
+  :rtype: tf.Tensor|bool
+  :return: global train flag
+  """
+  from TFNetwork import TFNetwork
+  network = TFNetwork.get_current_network(must_exist=False)
+  if network:
+    return network.train_flag
+  return get_global_train_flag_placeholder()
+
+
+def cond_on_train_flag(fn_train, fn_eval):
+  """
+  Uses fn_train() or fn_eval() base on train_flag.
+  It will be a branched evaluation.
+  train_flag is determined via :func:`get_global_train_flag`.
+
+  :param ()->tf.Tensor fn_train:
+  :param ()->tf.Tensor fn_eval:
+  :return: fn_train() if self.train_flag else fn_eval()
+  :rtype: tf.Tensor
+  """
+  train_flag = get_global_train_flag()
+  return cond(train_flag, fn_train, fn_eval)
+
+
+def get_random_seed():
+  """
+  :rtype: int|None
+  """
+  from TFNetwork import TFNetwork
+  network = TFNetwork.get_current_network(must_exist=False)
+  if network:
+    return network.random.randint(2 ** 31)
+  return tf.get_seed(None)[1]
 
 
 def encode_raw(x, axis=-1, seq_lens=None):
@@ -3447,26 +3879,39 @@ def view_as(x, dtype):
   return y
 
 
+def broadcast_gradient_args(shape_x, shape_y):
+  """
+  :param tf.Tensor shape_x:
+  :param tf.Tensor shape_y:
+  :return: (axis reduce arg for grad x, axis reduce arg for grad y)
+  :rtype: (tf.Tensor, tf.Tensor)
+  """
+  from tensorflow.python.ops import gen_array_ops
+  if hasattr(gen_array_ops, '_broadcast_gradient_args'):  # earlier TF
+    return gen_array_ops._broadcast_gradient_args(shape_x, shape_y)
+  # Since TF 1.8.0, this is public.
+  return gen_array_ops.broadcast_gradient_args(shape_x, shape_y)
+
+
 def _alternative_minmax_grad(op, grad):
   """
   :param tf.Operation op: e.g. tf.minimum(x, y) or tf.maximum(x, y)
   :param tf.Tensor grad:
   :rtype: tf.Tensor, tf.Tensor
   """
-  from tensorflow.python.ops import gen_array_ops
   x = op.inputs[0]
   y = op.inputs[1]
   sx = tf.shape(x)
   sy = tf.shape(y)
-  rx, ry = gen_array_ops._broadcast_gradient_args(sx, sy)
-  gx = tf.reshape(tf.reduce_sum(grad, rx), sx)
-  gy = tf.reshape(tf.reduce_sum(grad, ry), sy)
+  rx, ry = broadcast_gradient_args(sx, sy)
+  gx = tf.reshape(tf.reduce_sum(grad, axis=rx), sx)
+  gy = tf.reshape(tf.reduce_sum(grad, axis=ry), sy)
   return gx, gy
 
 
 def _register_alternative_minmax_grad():
   """
-  :return: the name to use with gradient_override_map
+  :return: the op name to use with gradient_override_map
   :rtype: str
   """
   grad_name = "alternative_minmax_grad"
@@ -3525,17 +3970,28 @@ def clip_by_value_with_identity_grad(x, clip_value_min, clip_value_max):
       return x
 
 
-def safe_log(x, eps=1e-20):
+def safe_log(x, eps=1e-20, use_fake_grad=True):
   """
   Safe wrapper around :func:`tf.log` which avoids infs or nans in the gradient.
 
   :param tf.Tensor x:
   :param float|tf.Tensor eps:
+  :param bool use_fake_grad: True -> use maximum_with_identity_grad, False -> use tf.maximum
   :return: log(max(x, eps))
   :rtype: tf.Tensor
   """
   with tf.name_scope("safe_log"):
-    return tf.log(maximum_with_identity_grad(x, eps))
+    y = check_base_op_type_and_replace(x, "Softmax", "LogSoftmax")
+    if y is not None:
+      return y
+    y = check_base_op_type_and_replace(x, "Sigmoid", "LogSigmoid")
+    if y is not None:
+      return y
+    if use_fake_grad:
+      x = maximum_with_identity_grad(x, eps)
+    else:
+      x = tf.maximum(x, eps)
+    return tf.log(x)
 
 
 def safe_exp(x, eps=1e-20):
@@ -3605,6 +4061,61 @@ def lin_exp_normed(x, axis=-1, eps=1e-10):
   """
   with tf.name_scope("lin_exp_normed"):
     return l1_normalized(lin_exp(x), axis=axis, eps=eps, is_not_negative=True)
+
+
+def check_base_op_type_and_replace(x, op_type, new_op_type):
+  """
+  Suppose you have ``x = tf.nn.softmax(z)`` and you want to get ``y = tf.nn.log_softmax(z)``.
+  This function will test to see if ``x`` is of that kind and then return ``y``.
+
+  :param tf.Tensor x:
+  :param str op_type: e.g. "Softmax"
+  :param str new_op_type: e.g. "LogSoftmax"
+  :return: x with new_op_type instead of op_type, or None if not matched
+  :rtype: tf.Tensor|None
+  """
+  assert isinstance(x, tf.Tensor)
+  assert x.op.outputs[0] is x
+  if op_type != "Reshape" and x.op.type == "Reshape":
+    if x.op.inputs[0].op.type != op_type:
+      return None
+    inner = check_base_op_type_and_replace(x.op.inputs[0], op_type=op_type, new_op_type=new_op_type)
+    assert inner is not None
+    op = copy_op(x.op, inputs=[inner] + x.op.inputs[1:])
+    return op.outputs[0]
+  if x.op.type != op_type:
+    return None
+  op = copy_op(x.op, op_type=new_op_type)
+  return op.outputs[0]
+
+
+def copy_op(op, op_type=None, inputs=None):
+  """
+  :param tf.Operation op:
+  :param str|None op_type:
+  :param list[tf.Tensor]|None inputs:
+  :return: copy of op but optionally change op.type == op_type or op.inputs == inputs
+  :rtype: tf.Operation
+  """
+  assert isinstance(op, tf.Operation)
+  g = op.graph
+  if op_type is None:
+    op_type = op.type
+  if inputs is None:
+    inputs = list(op.inputs)
+  # Use some aliases, for simplicity.
+  # Maybe in the future we would also wrap some deprecated/outdated ops.
+  if op_type == "LogSigmoid":
+    assert len(inputs) == 1
+    return tf.log_sigmoid(inputs[0]).op
+  # Fallback to the generic case.
+  new_op = g.create_op(
+    op_type=op_type,
+    inputs=inputs,
+    input_types=[x.dtype for x in inputs],
+    dtypes=[x.dtype for x in op.outputs],  # output types
+    attrs=dict(op.node_def.attr.items()))
+  return new_op
 
 
 def smoothing_cross_entropy(logits,
@@ -3723,6 +4234,7 @@ def prod(ls):
 class Lock(object):
   """
   A pure TensorFlow implementation of a mutex / lock.
+  Probably obsolete now, as with TF 1.6.0, there is ``tf.contrib.framework.CriticalSection``.
   """
   def __init__(self, name="Lock"):
     self._name = name
@@ -4045,6 +4557,7 @@ class TFArrayContainer(object):
     #include "tensorflow/core/platform/macros.h"
     #include "tensorflow/core/platform/mutex.h"
     #include "tensorflow/core/platform/types.h"
+    #include "tensorflow/core/common_runtime/device.h"
 
     using namespace tensorflow;
 
@@ -4064,7 +4577,6 @@ class TFArrayContainer(object):
     ;
 
     REGISTER_OP("ArrayContainerSetSize")
-    .Attr("T: type")
     .Input("handle: resource")
     .Input("size: int32")
     ;
@@ -4132,26 +4644,6 @@ class TFArrayContainer(object):
 
     };
 
-    ResourceHandle OwnMakeResourceHandle(OpKernelContext* ctx, const string& container,
-                                         const string& name,
-                                         const TypeIndex& type_index) {
-      ResourceHandle result;
-      result.set_device(ctx->device()->attributes().name());
-      printf("make dev %s\\n", result.device().c_str());
-      string actual_container;
-      if (!container.empty()) {
-        actual_container = container;
-      } else {
-        actual_container = ctx->resource_manager()->default_container();
-      }
-      result.set_container(actual_container);
-      result.set_name(name);
-      result.set_hash_code(type_index.hash_code());
-      result.set_maybe_type_name(type_index.name());
-      printf("make dev %s\\n", result.device().c_str());
-      return result;
-    }
-
     // https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/resource_op_kernel.h
     class ArrayContainerCreateOp : public ResourceOpKernel<ArrayContainer> {
     public:
@@ -4159,21 +4651,6 @@ class TFArrayContainer(object):
         OP_REQUIRES_OK(context, context->GetAttr("T", &dtype_));
       }
 
-      void Compute(OpKernelContext* context) override {
-        ResourceOpKernel<ArrayContainer>::Compute(context);
-        mutex_lock l(mu_);
-        ResourceHandle rhandle = OwnMakeResourceHandle(context, cinfo_.container(), cinfo_.name(), MakeTypeIndex<ArrayContainer>());
-        printf("created. device: %s\\n", rhandle.device().c_str());
-        printf("container: %s\\n", rhandle.container().c_str());
-        printf("name: %s\\n", rhandle.name().c_str());
-        printf("actual device: %s\\n", context->device()->attributes().name().c_str());
-        printf("actual name: %s\\n", cinfo_.name().c_str());
-        rhandle.set_device("foo");
-        printf("now device: %s\\n", rhandle.device().c_str());
-        ResourceHandle cpy = rhandle;
-        printf("cpy device: %s\\n", cpy.device().c_str());
-      }
-      
     private:
       virtual bool IsCancellable() const { return false; }
       virtual void Cancel() {}
@@ -4204,12 +4681,7 @@ class TFArrayContainer(object):
         ArrayContainer* ar;
         
         const Tensor* handle;
-        OP_REQUIRES_OK(context, context->input("handle", &handle));
-        const ResourceHandle& rhandle = handle->scalar<ResourceHandle>()();
-        printf("device: %s\\n", rhandle.device().c_str());
-        printf("container: %s\\n", rhandle.container().c_str());
-        printf("name: %s\\n", rhandle.name().c_str());
-        
+        OP_REQUIRES_OK(context, context->input("handle", &handle));        
         OP_REQUIRES_OK(context, GetResourceFromContext(context, "handle", &ar));
         core::ScopedUnref unref(ar);
 
@@ -4326,27 +4798,12 @@ class TFArrayContainer(object):
   def _make_mod(cls):
     if cls._mod:
       return cls._mod
-
-    # Fix for undefined symbol: _ZN6google8protobuf8internal26fixed_address_empty_stringE.
-    # https://github.com/tensorflow/tensorflow/issues/1419
-    # noinspection PyUnresolvedReferences
-    from google.protobuf.pyext import _message as msg
-    lib = msg.__file__
-    #lib = "/u/zeyer/.local/lib/python2.7/site-packages/tensorflow/python/_pywrap_tensorflow_internal.so"
-    #lib = "/u/zeyer/.local/lib/python2.7/site-packages/tensorflow/contrib/tfprof/python/tools/tfprof/_pywrap_tensorflow_print_model_analysis_lib.so"
-    #lib = "/u/zeyer/.local/lib/python2.7/site-packages/google/protobuf/pyext/_message.so"
-    #lib = "/u/zeyer/.local/lib/python2.7/site-packages/external/protobuf/python/google/protobuf/pyext/_message.so"
-
     comp = OpCodeCompiler(
       base_name="TFArrayContainer",
       code_version=1,  # code also ends up in hash, thus this doesn't always needs to be increased
       code=cls.code,
       include_deps=[],
-      use_cuda_if_available=False,
-      ld_flags=[
-        "-Xlinker", "-rpath", "-Xlinker", os.path.dirname(lib),
-        "-L", os.path.dirname(lib), "-l", ":" + os.path.basename(lib)])
-
+      use_cuda_if_available=False)
     mod = comp.load_tf_module()
     cls._mod = mod
     return mod
@@ -4402,7 +4859,7 @@ class TFArrayContainer(object):
     :rtype: tf.Operation
     """
     op = self._get_op("ArrayContainerSet")
-    return op(T=self.dtype, handle=self.handle, index=index, value=value)
+    return op(handle=self.handle, index=index, value=value)
 
 
 class ExplicitRandomShuffleQueue(object):
@@ -4750,6 +5207,8 @@ def nested_get_shapes(x):
     return make_seq_of_type(type(x), [nested_get_shapes(v) for v in x])
   if isinstance(x, dict):
     return {k: nested_get_shapes(v) for (k, v) in x.items()}
+  if isinstance(x, tf.TensorArray):
+    return tf.TensorShape(())
   raise TypeError("invalid type %r of %r" % (type(x), x))
 
 
@@ -4785,13 +5244,86 @@ def same_context(x):
   yield None
 
 
+def get_protobuf_fields(obj):
+  """
+  :param obj: protobuf object
+  :rtype: dict[str]
+  """
+  return {k.name: v for (k, v) in obj.ListFields()}
+
+
+def get_op_attrib_keys(op):
+  """
+  :param tf.Operation|tf.Tensor|tf.TensorArray op:
+  :rtype: list[str]
+  :return: list of attribs. op.get_attr(key) should work
+  """
+  if isinstance(op, tf.Tensor):
+    op = op.op
+  elif isinstance(op, tf.TensorArray):
+    op = op.handle.op
+  assert isinstance(op, tf.Operation)
+  node_def_fields = get_protobuf_fields(op.node_def)
+  attribs = node_def_fields["attr"]
+  return list(attribs.keys())
+
+
+def tensor_array_is_dynamic_size(ta):
+  """
+  :param tf.TensorArray ta:
+  :rtype: bool
+  """
+  return ta.handle.op.get_attr("dynamic_size")
+
+
+def tensor_array_is_clear_after_read(ta):
+  """
+  :param tf.TensorArray ta:
+  :rtype: bool
+  """
+  return ta.handle.op.get_attr("clear_after_read")
+
+
+def tensor_array_like(ta, **kwargs):
+  """
+  :param tf.TensorArray ta:
+  :param kwargs: passed to tf.TensorArray constructor
+  :return: another tensor array, just like ta
+  :rtype: tf.TensorArray
+  """
+  return tf.TensorArray(
+    dtype=ta.dtype, size=ta.size(), dynamic_size=tensor_array_is_dynamic_size(ta),
+    clear_after_read=tensor_array_is_clear_after_read(ta),
+    infer_shape=ta._infer_shape, element_shape=ta._element_shape,
+    **kwargs)
+
+
+def _tensor_array_select_src_beams(ta, src_beams):
+  """
+  Currently this is a quite inefficient implementation.
+
+  :param tf.TensorArray ta:
+  :param tf.Tensor src_beams:
+  :rtype: tf.TensorArray
+  """
+  x = ta.stack()  # (time,batch,...)
+  x = swapaxes(x, 0, 1)  # (batch,time,...)
+  x = select_src_beams(x, src_beams=src_beams)
+  x = swapaxes(x, 0, 1)  # (time,batch,...)
+  ta_new = tensor_array_like(ta)
+  ta_new = ta_new.unstack(x)
+  return ta_new
+
+
 def select_src_beams(x, src_beams):
   """
-  :param tf.Tensor x: (batch * src-beam, ...)
+  :param tf.Tensor|tf.TensorArray|T x: (batch * src-beam, ...)
   :param tf.Tensor src_beams: (batch, beam) -> src-beam-idx
   :return: (batch * beam, ...)
-  :rtype: tf.Tensor
+  :rtype: tf.Tensor|T
   """
+  if isinstance(x, tf.TensorArray):
+    return _tensor_array_select_src_beams(x, src_beams=src_beams)
   assert isinstance(x, tf.Tensor)
   assert isinstance(src_beams, tf.Tensor)
   with tf.name_scope("select_src_beams"):
@@ -4855,14 +5387,45 @@ def filter_ended_scores(x, end_flags, batch_dim=None, dim=None, score_zero=0.0, 
 
 def to_int32_64(x):
   """
-  :param tf.Tensor x: dtype int8, int16, int32, int64
+  :param tf.Tensor x: dtype uint8, int8, int16, int32, int64
   :rtype: tf.Tensor
   :return: dtype int32 or int64
   """
   if x.dtype in [tf.int32, tf.int64]:
     return x
-  assert x.dtype in [tf.int8, tf.int16]
+  assert x.dtype in [tf.uint8, tf.int8, tf.int16]
   return tf.cast(x, tf.int32)
+
+
+def to_float32(x):
+  """
+  :param tf.Tensor x:
+  :return: x as float32
+  :rtype: tf.Tensor
+  """
+  if x.dtype == tf.float32:
+    return x
+  if not hasattr(x, "cast_float32"):
+    with reuse_name_scope_of_tensor(x):
+      x_cast_float32 = tf.cast(x, dtype=tf.float32, name="cast_float32")
+    x.cast_float32 = x_cast_float32
+  return x.cast_float32
+
+
+def batch_gather(x, indices, keep_dims=False):
+  """
+  :param tf.Tensor x: (batch,dim,...)
+  :param tf.Tensor indices: (batch,) -> [0..dim-1]
+  :param bool keep_dims:
+  :return: x[batches,indices[batches]], (batch,...). or (batch,1,...) with keep_dims
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope('batch_gather'):
+    idx_ext = nd_indices(to_int32_64(indices))
+    y = tf.gather_nd(x, indices=idx_ext)
+    if keep_dims:
+      y = tf.expand_dims(y, axis=1)
+    return y
 
 
 def kernels_registered_for_op(op_name):
@@ -4946,41 +5509,151 @@ def find_unsupported_devices_in_graph(graph, dev_name, ignore=None):
   return ops
 
 
-# -------------------- BEGIN Segment model related helpers --------------------
-
-def batch_sizes_after_windowing(sizes, window):
+def print_graph_output(fetches):
   """
-  :param tf.Tensor sizes: (batch_sizes)
-  :param int window: size of the applied window
-  :return: sizes for each batch after applying a window on each batch
+  :param tf.Operation|tf.Tensor|list[tf.Tensor|tf.Operation] fetches:
+  """
+  if not isinstance(fetches, (list, tuple)):
+    fetches = [fetches]
+  fetch_ops = [v.op if isinstance(v, tf.Tensor) else v for v in fetches]
+  assert all([isinstance(op, tf.Operation) for op in fetch_ops])
+  # TODO: We could print it a bit like Theano does.
+  # So far this is not really implemented...
+  from tensorflow.contrib import graph_editor
+  ops = graph_editor.get_backward_walk_ops(fetch_ops, inclusive=True, control_inputs=True)
+  from pprint import pprint
+  pprint(ops)
+
+
+def add_control_input(op, control_input):
+  """
+  :param tf.Operation op:
+  :param tf.Operation control_input:
+  """
+  op._control_inputs.append(control_input)
+  op._recompute_node_def()
+
+
+def bpe_idx_to_bpe_string(labels, vocab):
+  """
+  Just does a lookup on vocab.
+
+  :param tf.Tensor labels: (batch,max_len), int32, indices in vocab
+  :param tf.Tensor vocab: (bpe_units,), string
+  :return: (batch,max_len), string
   :rtype: tf.Tensor
   """
-  def fold_times(acc, x):
-    r1 = tf.tile([window], [tf.maximum(x - window + 1, 0)])
-    r2 = tf.range(tf.minimum(x, window - 1), 0, -1)
-    return tf.concat([acc, r1, r2], 0)
-  return tf.foldl(fold_times, sizes, tf.placeholder_with_default(tf.zeros([0], dtype='int32'), [None]), name='fold_sizes')
+  return tf.gather(params=vocab, indices=labels, axis=0)
 
 
-def batch_indices_after_windowing(sizes, window):
+def string_merge(strings, seq_lens, separator=" "):
   """
-  here we compute the start and end times for each of the new batches when applying a window
-  :param tf.Tensor sizes: (batch_sizes)
-  :param int window: size of the applied window
-  :return: tensor of shape (?, 3), contains batch index, start-frame and end-frame for each batch after applying a window
+  Also see TFEngine.Engine.search().
+
+  :param tf.Tensor strings: (batch,max_len)
+  :param tf.Tensor seq_lens: (batch,)
+  :param str|tf.Tensor separator: string
+  :return: (batch,), string
   :rtype: tf.Tensor
   """
-  def fold_batches(acc, x):
-    b = x[0]
-    l = x[1]
-    batch = tf.tile([b], [l])
-    start = tf.range(l)
-    end   = tf.minimum(tf.range(window, l + window), l)
-    return tf.concat([acc, tf.transpose(tf.stack([batch, start, end]))], axis=0)
+  input_shape = tf.shape(strings)
+  n_batch, max_len = input_shape[0], input_shape[1]
+  strings = tf.reshape(strings, [n_batch, max_len, 1])
+  seps = tf.zeros_like(strings, dtype=tf.string) + separator
+  strings = tf.concat([strings, seps], axis=2)  # (batch,max_len,2)
+  strings = tf.reshape(strings, [n_batch, max_len * 2])
+  mask = tf.sequence_mask(seq_lens * 2 - 1, maxlen=max_len * 2)  # (batch,)
+  strings = tf.where(mask, strings, tf.zeros_like(strings, dtype=tf.string))  # (batch,max_len*2)
+  strings = tf.reduce_join(strings, axis=1)
+  return strings
 
-  return tf.foldl(fold_batches, tf.stack([tf.range(tf.shape(sizes)[0]), sizes], axis=1),
-                  tf.placeholder_with_default(tf.zeros([0, 3], dtype='int32'), [None, 3]), name="fold_batches")
+
+def string_replace(strings, old, new, count=-1):
+  """
+  Like str.replace.
+
+  :param tf.Tensor strings: (batch,), string
+  :param tf.Tensor|str old:
+  :param tf.Tensor|str new:
+  :param tf.Tensor|int count:
+  :return: (batch,), string
+  :rtype: tf.Tensor
+  """
+  import numpy
+
+  def str_replace(strings, old, new, count):
+    assert isinstance(strings, (numpy.ndarray, bytes)), "strings is %r" % (strings,)
+    assert isinstance(old, bytes), "old is %r" % (new,)
+    assert isinstance(new, bytes), "new is %r" % (new,)
+    assert isinstance(count, numpy.int32), "count is %r" % (count,)
+    if isinstance(strings, numpy.ndarray):
+      return numpy.array(
+        [s.replace(old, new, count) for s in strings.flatten()], dtype=strings.dtype).reshape(strings.shape)
+    else:
+      return strings.replace(old, new, count)
+
+  res, = tf.py_func(
+    str_replace,
+    [tf.cast(strings, tf.string),
+     tf.cast(old, tf.string),
+     tf.cast(new, tf.string),
+     tf.cast(count, tf.int32)],
+    [tf.string],
+    stateful=False,
+    name="string_replace")
+  assert isinstance(res, tf.Tensor)
+  res.set_shape(strings.get_shape())
+  return res
 
 
-# --------------------- END Segment model related helpers ---------------------
+def bpe_merge(strings):
+  """
+  :param tf.Tensor strings: (batch,), string
+  :param tf.Tensor|str replace_str:
+  :return: (batch,), string. strings after BPE merging
+  :rtype: tf.Tensor
+  """
+  return string_replace(strings, old="@@ ", new="")
+
+
+def words_split(strings):
+  """
+  Basically just tf.string_split with delimiter=" ".
+
+  :param tf.Tensor strings: (batch,), string
+  :return: sparse tensor of shape (batch,max_len), string
+  :rtype: tf.SparseTensor
+  """
+  return tf.string_split(strings)
+
+
+def get_sparse_tensor_length(x):
+  """
+  :param tf.SparseTensor x: of shape prefix + (max_len,), where prefix can be anything, e.g. prefix=(batch,)
+  :return: shape prefix, int64
+  :rtype: tf.Tensor
+  """
+  # x.indices is of shape (N,R), where R==rank(x), and each x.indices[i] is the index entry.
+  # So, x.indices[i, -1] is the position.
+  # We just do it in a simple way here.
+  mask = tf.sparse_to_dense(
+    x.indices, output_shape=x.dense_shape, sparse_values=tf.ones_like(x.values, dtype=tf.int64))  # prefix+(max_len,)
+  return tf.reduce_sum(mask, axis=-1)  # prefix
+
+
+def string_words_calc_wer(hyps, refs):
+  """
+  :param tf.Tensor hyps: (batch,)
+  :param tf.Tensor refs: (batch,)
+  :return: (WER (batch,), num ref words (batch,))
+  :rtype: (tf.Tensor, tf.Tensor)
+  """
+  refs.set_shape(hyps.get_shape())
+  hyps.set_shape(refs.get_shape())
+  hyps_sparse = words_split(hyps)
+  refs_sparse = words_split(refs)
+  wer = tf.edit_distance(hypothesis=hyps_sparse, truth=refs_sparse, normalize=False)
+  wer.set_shape(hyps.get_shape())
+  wer = tf.cast(wer, tf.int64)  # no normalization, should be an integer
+  return wer, get_sparse_tensor_length(refs_sparse)
 

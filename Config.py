@@ -23,11 +23,16 @@ else:
 
 
 class Config:
-  def __init__(self):
+  def __init__(self, items=None):
+    """
+    :param dict[str]|None items: optional initial typed_dict
+    """
     self.dict = {}; """ :type: dict[str, list[str]] """
     self.typed_dict = {}; """ :type: dict[str] """  # could be loaded via JSON or so
     self.network_topology_json = None; """ :type: str | None """
     self.files = []
+    if items is not None:
+      self.typed_dict.update(items)
 
   def load_file(self, f):
     """
@@ -237,7 +242,7 @@ class Config:
   def set(self, key, value):
     """
     :type key: str
-    :type value: list[str] | str | int | float | bool | None
+    :type value: list[str] | str | int | float | bool | dict | None
     """
     self.typed_dict[key] = value
 
@@ -456,11 +461,27 @@ class Config:
       return int(value), int(value)
 
 
-def get_global_config(raise_exception=True):
+_global_config = None  # type: Config
+
+
+def set_global_config(config):
+  """
+  Will define the global config, returned by :func:`get_global_config`
+
+  :param Config config:
+  """
+  global _global_config
+  _global_config = config
+
+
+def get_global_config(raise_exception=True, auto_create=False):
   """
   :param bool raise_exception: if no global config is found, raise an exception, otherwise return None
+  :param bool auto_create: if no global config is found, it creates one and returns it
   :rtype: Config|None
   """
+  if _global_config:
+    return _global_config
   import TaskSystem
   import Device
   if not TaskSystem.isMainProcess:
@@ -477,6 +498,10 @@ def get_global_config(raise_exception=True):
   import rnn
   if isinstance(rnn.config, Config):
     return rnn.config
+  if auto_create:
+    config = Config()
+    set_global_config(config)
+    return config
   if raise_exception:
     raise Exception("No global config found.")
   return None

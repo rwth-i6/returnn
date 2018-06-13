@@ -6,10 +6,14 @@ from __future__ import print_function
 import logging
 logging.getLogger('tensorflow').disabled = True
 import tensorflow as tf
+import os
 import sys
-sys.path += ["."]  # Python 3 hack
+print("__file__:", __file__)
+base_path = os.path.realpath(os.path.dirname(os.path.abspath(__file__)) + "/..")
+print("base path:", base_path)
+sys.path.insert(0, base_path)
 from TFNativeOp import *
-from TFUtil import is_gpu_available, CudaEnv
+from TFUtil import is_gpu_available, get_available_gpu_min_compute_capability, CudaEnv
 import Util
 import unittest
 from nose.tools import assert_equal, assert_is_instance
@@ -20,6 +24,8 @@ import os
 import better_exchook
 better_exchook.replace_traceback_format_tb()
 
+
+print("TF version:", tf.__version__)
 
 CudaEnv.verbose_find_cuda = True
 session = tf.InteractiveSession()
@@ -973,6 +979,133 @@ def test_fast_bw_uniform():
     print("max square diff:", numpy.max(numpy.square(ref_align - bw)))
     assert_allclose(ref_align, bw, rtol=1e-5)
   print("Done.")
+
+
+@unittest.skipIf(not is_gpu_available(), "no gpu on this system")
+@unittest.skipIf(is_gpu_available() and get_available_gpu_min_compute_capability() < 3.5, "too low compute capability")
+def test_init_blocksparse():
+  assert have_blocksparse_requirements()
+  init_blocksparse()
+
+
+@unittest.skipIf(not have_blocksparse_requirements(), "do not have Blocksparse requirements")
+def test_blocksparse_simple():
+  init_blocksparse()
+
+  from blocksparse.matmul import BlocksparseMatMul
+  import tensorflow as tf
+  import numpy as np
+
+  hidden_size = 4096
+  block_size = 32
+  minibatch_size = 64
+
+  # Create a (random) sparsity pattern
+  sparsity = np.random.randint(2, size=(hidden_size // block_size, hidden_size // block_size))
+
+  # Initialize the sparse matrix multiplication object
+  bsmm = BlocksparseMatMul(sparsity, block_size=block_size, feature_axis=0)
+
+  # Input to graph
+  x = tf.placeholder(tf.float32, shape=[hidden_size, None])
+  x_np = np.ones((hidden_size, minibatch_size), dtype='float32')
+
+  # Initialize block-sparse weights
+  w = tf.get_variable("w", bsmm.w_shape, dtype=tf.float32, initializer=tf.random_uniform_initializer(-0.1, 0.1, seed=3))
+
+  # Block-sparse matrix multiplication
+  y = bsmm(x, w)
+
+  # Run
+  print('init vars')
+  session.run(tf.global_variables_initializer())
+  print('blocksparse matmul')
+  result = session.run(y, feed_dict={x: x_np})
+  print(result)
+  print('test')
+  w_np = session.run(w)
+  y_test = bsmm.fprop_test(x_np, w_np)
+  print(y_test)
+  i = numpy.argmax((y_test - result) ** 2)
+  print('biggest diff at %i: %r vs %r' % (i, y_test.flatten()[i], result.flatten()[i]))
+  assert_allclose(result, y_test, rtol=1e-2)  # rtol=1e-03 still fails
+
+
+@unittest.skipIf(not have_blocksparse_requirements(), "do not have Blocksparse requirements")
+def test_blocksparse_simple_identity():
+  init_blocksparse()
+
+  from blocksparse.matmul import BlocksparseMatMul
+  import tensorflow as tf
+  import numpy
+
+  n_in = 64
+  n_out = 32 * 32
+  block_size = 32
+  # Note: It seems everything less than 4 fails, as well as non-power-of-2.
+  n_batch = 4
+
+  # Create a dense sparsity pattern
+  mask = numpy.ones((n_in // block_size, n_out // block_size), dtype=numpy.int32)
+  # MatMul object
+  bsmm = BlocksparseMatMul(mask, block_size=block_size, feature_axis=0, name="bsmm")
+  # Input
+  x_np = numpy.arange(n_in * n_batch, dtype=numpy.float32).reshape((n_in, n_batch)) + 1.0
+  x = tf.constant(x_np, name='x')
+  # Block-sparse weights
+  w_np = bsmm.identity_init()()
+  w = tf.constant(w_np, name="w")
+  #for b in range(bsmm.blocks):
+  #  cb, kb = bsmm.updat_list[b]
+  #  print("block %i/%i, cb %i/%i, kb %i/%i" % (b, bsmm.blocks, cb, bsmm.KB, kb, bsmm.CB))
+  # Block-sparse matrix multiplication
+  y = bsmm(x, w)
+  y.set_shape((n_out, n_batch))
+  # Run
+  result = session.run(y)
+  print(result)
+  print('L2:', numpy.sum(result ** 2))
+  y_test = bsmm.fprop_test(x_np, w_np)
+  print(y_test)
+  i = numpy.argmax((y_test - result) ** 2)
+  print('biggest diff at %i: %r vs %r' % (i, y_test.flatten()[i], result.flatten()[i]))
+  assert_allclose(result, y_test, rtol=1e-2)
+
+
+@unittest.skip('broken?')
+@unittest.skipIf(not have_blocksparse_requirements(), "do not have Blocksparse requirements")
+def test_blocksparse_simple_feature_axis1():
+  init_blocksparse()
+
+  from blocksparse.matmul import BlocksparseMatMul
+  import tensorflow as tf
+  import numpy
+
+  n_in = 64
+  n_out = 32 * 32
+  block_size = 32
+  n_batch = 4
+
+  # Create a dense sparsity pattern
+  mask = numpy.ones((n_in // block_size, n_out // block_size), dtype=numpy.int32)
+  # MatMul object
+  bsmm = BlocksparseMatMul(mask, block_size=block_size, feature_axis=1, name="bsmm")
+  # Input
+  x_np = numpy.arange(n_in * n_batch, dtype=numpy.float32).reshape((n_batch, n_in)) + 1.0
+  x = tf.constant(x_np, name='x')
+  # Block-sparse weights
+  w_np = bsmm.identity_init()()
+  w = tf.constant(w_np, name="w")
+  # Block-sparse matrix multiplication
+  y = bsmm(x, w)
+  y.set_shape((n_batch, n_out))
+  # Run
+  result = session.run(y)
+  print(result)
+  print('L2:', numpy.sum(result ** 2))
+  y_test = bsmm.fprop_test(x_np, w_np)
+  print(y_test)
+  assert_allclose(result, y_test)
 
 
 if __name__ == "__main__":

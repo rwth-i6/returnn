@@ -2,7 +2,43 @@ from __future__ import print_function
 
 import tensorflow as tf
 from TFNetworkLayer import LayerBase, _ConcatInputLayer, get_concat_sources_data_template
-import TFUtil
+
+# ---------- Utilities ----------
+
+def batch_sizes_after_windowing(sizes, window):
+  """
+  :param tf.Tensor sizes: (batch_sizes)
+  :param int window: size of the applied window
+  :return: sizes for each batch after applying a window on each batch
+  :rtype: tf.Tensor
+  """
+  def fold_times(acc, x):
+    r1 = tf.tile([window], [tf.maximum(x - window + 1, 0)])
+    r2 = tf.range(tf.minimum(x, window - 1), 0, -1)
+    return tf.concat([acc, r1, r2], 0)
+  return tf.foldl(fold_times, sizes, tf.placeholder_with_default(tf.zeros([0], dtype='int32'), [None]), name='fold_sizes')
+
+
+def batch_indices_after_windowing(sizes, window):
+  """
+  here we compute the start and end times for each of the new batches when applying a window
+  :param tf.Tensor sizes: (batch_sizes)
+  :param int window: size of the applied window
+  :return: tensor of shape (?, 3), contains batch index, start-frame and end-frame for each batch after applying a window
+  :rtype: tf.Tensor
+  """
+  def fold_batches(acc, x):
+    b = x[0]
+    l = x[1]
+    batch = tf.tile([b], [l])
+    start = tf.range(l)
+    end   = tf.minimum(tf.range(window, l + window), l)
+    return tf.concat([acc, tf.transpose(tf.stack([batch, start, end]))], axis=0)
+
+  return tf.foldl(fold_batches, tf.stack([tf.range(tf.shape(sizes)[0]), sizes], axis=1),
+                  tf.placeholder_with_default(tf.zeros([0, 3], dtype='int32'), [None, 3]), name="fold_batches")
+
+# ---------- Layers ----------
 
 class SegmentInputLayer(_ConcatInputLayer):
   """
@@ -14,7 +50,7 @@ class SegmentInputLayer(_ConcatInputLayer):
   def __init__(self, window=15, **kwargs):
     super(SegmentInputLayer, self).__init__(**kwargs)
     sizes = self.input_data.size_placeholder[0]
-    new_sizes = TFUtil.batch_sizes_after_windowing(sizes, window)
+    new_sizes = batch_sizes_after_windowing(sizes, window)
 
     def fold_data(acc, x):
       batch_idx = x[0]
@@ -59,8 +95,8 @@ class ClassesToSegmentsLayer(_ConcatInputLayer):
     assert(self.input_data.sparse)
 
     sizes = self.input_data.size_placeholder[0]
-    new_sizes = TFUtil.batch_sizes_after_windowing(sizes, window)
-    batches = TFUtil.batch_indices_after_windowing(sizes, window)
+    new_sizes = batch_sizes_after_windowing(sizes, window)
+    batches = batch_indices_after_windowing(sizes, window)
 
     onehot = tf.one_hot(self.input_data.get_placeholder_as_batch_major(), num_classes)
     def compute(x):
@@ -98,7 +134,7 @@ class ClassesToLengthDistributionLayer(_ConcatInputLayer):
     assert(self.input_data.sparse)
 
     sizes = self.input_data.size_placeholder[0]
-    batches = TFUtil.batch_indices_after_windowing(sizes, window)
+    batches = batch_indices_after_windowing(sizes, window)
     new_sizes = tf.fill((tf.shape(batches)[0],), 1)
     classes = self.input_data.get_placeholder_as_batch_major()
 
@@ -142,7 +178,7 @@ class ClassesToLengthDistributionGlobalLayer(_ConcatInputLayer):
     assert broadcast_axis in ['time', 'feature']
 
     sizes = self.input_data.size_placeholder[0]
-    batches = TFUtil.batch_indices_after_windowing(sizes, window)
+    batches = batch_indices_after_windowing(sizes, window)
     new_sizes = tf.fill((tf.shape(batches)[0],), 1)
     classes = self.input_data.get_placeholder_as_batch_major()
     cls_not_eq = tf.not_equal(classes[:,:-1], classes[:,1:])
@@ -230,7 +266,7 @@ class SegmentAlignmentLayer(_ConcatInputLayer):
     assert self.input_data.sparse
 
     sizes = tf.div(self.input_data.size_placeholder[0], 2)
-    batches = TFUtil.batch_indices_after_windowing(sizes, window)
+    batches = batch_indices_after_windowing(sizes, window)
     new_sizes = tf.fill((tf.shape(batches)[0],), window)
 
     input = self.input_data.get_placeholder_as_batch_major()
@@ -419,6 +455,25 @@ class ApplyLengthDistributionLayer(LayerBase):
     if length_model_scale != 1.0:
       len_mod = tf.pow(len_mod, length_model_scale)
     self.output.placeholder *= len_mod
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, **kwargs):
+    return sources[0].output.copy()
+
+
+class NormalizeLengthScoresLayer(LayerBase):
+  layer_class = "normalize_length_scores"
+
+  def __init__(self, **kwargs):
+    super(NormalizeLengthScoresLayer, self).__init__(**kwargs)
+    time_axis  = 0 if self.sources[0].output.is_time_major else 1
+    batch_axis = 1 if self.sources[0].output.is_time_major else 0
+
+    self.output = self.sources[0].output.copy()
+    p = self.sources[0].output.placeholder
+    win_size = tf.cast(tf.shape(p)[time_axis], dtype=tf.float32)
+    s = tf.log(p) * tf.expand_dims(tf.expand_dims(tf.range(win_size, dtype=tf.float32) + 1.0, -1), batch_axis)
+    self.output.placeholder = tf.exp(s)
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources, **kwargs):

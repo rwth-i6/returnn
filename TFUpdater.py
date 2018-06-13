@@ -80,15 +80,13 @@ class Updater(object):
   Also relevant are config options ``debug_add_check_numerics_on_output`` and ``debug_grad_summaries``.
   """
 
-  def __init__(self, config, tf_session, network, initial_learning_rate=1.):
+  def __init__(self, config, network, initial_learning_rate=1.):
     """
     :param Config.Config config:
-    :param tf.Session tf_session:
     :param TFNetwork network:
     :param float initial_learning_rate:
     """
     self.config = config
-    self.tf_session = tf_session
     self.learning_rate_var = tf.Variable(name="learning_rate", initial_value=0.0, trainable=False, dtype="float32")
     self.trainable_vars = []  # type: list[tf.Variable]
     self.network = network
@@ -123,11 +121,13 @@ class Updater(object):
     self.trainable_vars = trainable_vars
     self.reset_optim_op()
 
-  def set_learning_rate(self, value):
+  def set_learning_rate(self, value, session):
     """
     :param float value:
+    :param tf.Session session:
     """
-    self.network.get_var_assigner(self.learning_rate_var).assign(value, session=self.tf_session)
+    from TFUtil import VariableAssigner
+    VariableAssigner(self.learning_rate_var).assign(value, session=session)
 
   def get_current_step_learning_rate(self):
     """
@@ -241,8 +241,18 @@ class Updater(object):
     grads_and_vars = self.optimizer.compute_gradients(
       loss, var_list=trainable_vars_for_gradients,
       aggregation_method=aggregation_method)
-    if not [v for g, v in grads_and_vars if g is not None]:
+    var_grads = {var: grad for (grad, var) in grads_and_vars if grad is not None}
+    if not var_grads:
       raise Exception("no single variable to train")
+    if self.config.float("maximize_grad_norm", 0):
+      f = self.config.float("maximize_grad_norm", 0)
+      grad_norm = tf.add_n([tf.nn.l2_loss(g) for g in var_grads.values()], name="grad_norm_half") * 2.0
+      loss_ext = grad_norm * (-f)
+      grads_and_vars_ext = self.optimizer.compute_gradients(
+        loss_ext, var_list=list(var_grads.keys()),
+        aggregation_method=aggregation_method)
+      var_grads_ext = {var: grad for (grad, var) in grads_and_vars_ext if grad is not None}
+      grads_and_vars = [(grad + var_grads_ext.get(var, 0.0), var) for (grad, var) in grads_and_vars]
     if accum_grad_multiple_num_steps >= 1:
       grads_and_vars = [
         (accum_grad_multiple_step(
@@ -309,7 +319,7 @@ class Updater(object):
     trainable_vars_for_gradients = list(self.trainable_vars)
     trainable_vars_custom_update = []  # type: list[tf.Variable]
     for v in self.trainable_vars:
-      if hasattr(v, "custom_update"):
+      if hasattr(v, "returnn_custom_update"):
         trainable_vars_custom_update.append(v)
         trainable_vars_for_gradients.remove(v)
 
@@ -330,7 +340,7 @@ class Updater(object):
       with tf.variable_scope("custom_update"):
         updates = [self.optim_op]
         for param in trainable_vars_custom_update:
-          custom_update = getattr(param, "custom_update")
+          custom_update = getattr(param, "returnn_custom_update")
           assert isinstance(custom_update, CustomUpdate)
           updates.append(custom_update.update_var(param))
         self.optim_op = tf.group(*updates)
@@ -350,10 +360,12 @@ class Updater(object):
     for slot_name in self.optimizer.get_slot_names():
       for v in trainable_vars_for_gradients:
         slot_var = self.optimizer.get_slot(var=v, name=slot_name)
-        assert slot_var is not None, (
-          "No slot_var found for variable %r, slot_name %r. Maybe no gradient for this var?" % (v, slot_name))
-        assert isinstance(slot_var, tf.Variable)
-        slot_vars.append(slot_var)
+        if slot_var is None:
+          print("Warning: No slot_var found for variable %r, slot_name %r. Maybe no gradient for this var?" % (
+            v, slot_name), file=log.v3)
+        else:
+          assert isinstance(slot_var, tf.Variable)
+          slot_vars.append(slot_var)
     self.optimizer_vars = slot_vars
 
     # Check if there were any other variables added.
@@ -373,7 +385,6 @@ class Updater(object):
       self.optimizer_vars += other_new_vars
     with tf.name_scope("optimizer_init_vars"):
       self.optimizer_init_vars_op = tf.variables_initializer(self.optimizer_vars, name="init_optim_slot_vars")
-    self.init_optimizer_vars()
 
     if self.config.bool("debug_grad_summaries", False):
       from TFUtil import variable_summaries, get_base_name, reuse_name_scope_of_tensor
@@ -407,8 +418,12 @@ class Updater(object):
         callback_on_new()
     return self.optim_op
 
-  def init_optimizer_vars(self):
-    self.tf_session.run(self.optimizer_init_vars_op)
+  def init_optimizer_vars(self, session):
+    """
+    :param tf.Session session:
+    """
+    self.get_optim_op()  # make sure it is initialized
+    session.run(self.optimizer_init_vars_op)
 
 
 def accum_grad_multiple_step(grad, var, train_step, num_accum_steps):
@@ -520,8 +535,32 @@ class CustomGradientDescentOptimizer(_BaseCustomOptimizer):
   """
 
   def _apply(self, grad, var, indices=None):
+    """
+    :param tf.Tensor grad:
+    :param tf.Variable|resource_variable_ops.ResourceVariable var:
+    :param tf.Tensor|None indices: if this is a sparse update, the indices of the grad values
+    :return: update
+    :rtype: tf.Tensor|tf.Operation
+    """
     lr = tf.cast(self._learning_rate_tensor, grad.dtype.base_dtype)
     return self._assign_sub(ref=var, updates=lr * grad, indices=indices).op
+
+
+class NormalizedSGD(CustomGradientDescentOptimizer):
+  """
+  All grads are L2 normalized (via :func:`tf.nn.l2_normalize`), otherwise it's standard SGD.
+  Via: https://github.com/kmkolasinski/deep-learning-notes/tree/master/max-normed-optimizer
+  """
+
+  def _apply(self, grad, var, indices=None):
+    """
+    :param tf.Tensor grad:
+    :param tf.Variable|resource_variable_ops.ResourceVariable var:
+    :param tf.Tensor|None indices: if this is a sparse update, the indices of the grad values
+    :return: update
+    :rtype: tf.Tensor|tf.Operation
+    """
+    return super(NormalizedSGD, self)._apply(grad=tf.nn.l2_normalize(grad, None), var=var, indices=indices)
 
 
 class NeuralOptimizer1(_BaseCustomOptimizer):
@@ -644,6 +683,7 @@ class AMSGradOptimizer(tf.train.Optimizer):
   https://openreview.net/pdf?id=ryQu7f-RZ
   https://keras.io/optimizers/
   http://ruder.io/deep-learning-optimization-2017/index.html#fixingtheexponentialmovingaverage
+  https://github.com/taki0112/AMSGrad-Tensorflow
   """
   def __init__(self, learning_rate=0.001, decay=False, beta1=0.9, beta2=0.99,
                epsilon=0.0, var_list=[]):

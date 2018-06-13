@@ -324,14 +324,14 @@ static const char *_cudaGetErrorEnum(cublasStatus_t error) {
 
 static void _cudaHandleError(cudaError_t err, const char *file, int line) {
 	if (err != cudaSuccess) {
-		printf("%s in %s at line %d\n", cudaGetErrorString(err), file, line);
+		printf("NativeOp: CUDA runtime error: '%s' in %s at line %d\n", cudaGetErrorString(err), file, line);
 		exit(EXIT_FAILURE);
 	}
 }
 
 static void _cudaHandleError(cublasStatus_t status, const char *file, int line) {
 	if (status != CUBLAS_STATUS_SUCCESS) {
-		printf("%s in %s at line %d\n", _cudaGetErrorEnum(status), file, line);
+		printf("NativeOp: cuBLAS runtime error: '%s' in %s at line %d\n", _cudaGetErrorEnum(status), file, line);
 		exit(EXIT_FAILURE);
 	}
 }
@@ -516,7 +516,11 @@ void* _malloc(size_t num_bytes) {
     //auto* stream = context->op_device_context()->stream();
     Allocator* allocator =
         context->device()->GetAllocator(AllocatorAttributes());
-    return (void*)allocator->Allocate<uint8_t>(num_bytes);
+    void* ptr = (void*)allocator->Allocate<uint8_t>(num_bytes);
+    if(!ptr)
+        context->CtxFailure(
+            errors::InvalidArgument("NativeOp: cannot allocate ", num_bytes, " bytes on ", allocator->Name()));
+    return ptr;
 }
 void _free(void* ptr) {
     Allocator* allocator =

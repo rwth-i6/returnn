@@ -1,17 +1,19 @@
-
 from __future__ import print_function
 
-import numpy
+import collections
+from math import ceil
 import sys
 import threading
 import time
+
+import numpy
 import theano
+
+from Device import Device
 from EngineUtil import assign_dev_data
 from Log import log
-from Util import hms, progress_bar, terminal_size, hdf5_strings, interrupt_main, NumbersDict
-from Device import Device
 from TaskSystem import ProcConnectionDied
-from math import ceil
+from Util import hms, progress_bar, terminal_size, hdf5_strings, interrupt_main, NumbersDict
 
 
 class TaskThread(threading.Thread):
@@ -141,11 +143,6 @@ class TaskThread(threading.Thread):
         target = self._get_target_for_key(key)
         eval_info[key] = value / float(num_frames[target])
 
-      #if numpy.isinf(score) or numpy.isnan(score):
-      #  for i, res in enumerate(results):
-      #    if numpy.isinf(res["cost"]) or numpy.isnan(res["cost"]):
-      #      raise ModelBrokenError("Model is broken, got %s score." % score, batchess[i])
-      #  assert False  # Should not get here.
       return eval_info
 
     def initialize(self):
@@ -218,9 +215,9 @@ class TaskThread(threading.Thread):
 
       def allocate(self):
         self.devices_batches_idx = self.parent.batches.get_current_batch_idx()
-        self.devices_batches = self.parent.allocate_devices(self.alloc_devices)
+        self.allocated_devices_batches = self.parent.allocate_devices(self.alloc_devices)
         self.run_frames = NumbersDict(0)
-        for batches, device in zip(self.devices_batches,self.alloc_devices):
+        for batches, device in zip(self.allocated_devices_batches, self.alloc_devices):
           assert batches
           assert batches[0].seqs
           #assert batches[0].seqs[0].frame_length[1] > 0
@@ -242,7 +239,7 @@ class TaskThread(threading.Thread):
           self.parent.device_crash_batch = self.run_start_batch_idx
           self.crashed = True
           return False
-        assert len(device_results) == len(self.alloc_devices) == len(self.devices_batches)
+        assert len(device_results) == len(self.alloc_devices) == len(self.running_devices_batches)
 
         if outputs_format and any([k.startswith("gparam:") for k in outputs_format]):
           # WARNING: this code is untested and likely broken!
@@ -266,7 +263,10 @@ class TaskThread(threading.Thread):
             self.parent.updater.update()
             self.alloc_devices[i].set_net_params(self.parent.network)
 
-        self.result = { 'batchess': self.devices_batches, 'results': device_results, 'result_format': outputs_format, 'num_frames': self.num_frames }
+        self.result = { 'batchess': self.running_devices_batches,
+                        'results': device_results,
+                        'result_format': outputs_format,
+                        'num_frames': self.num_frames }
         self.eval_info = self.parent.evaluate(**self.result)
         self.parent.lock.acquire()
         self.print_process()
@@ -297,8 +297,9 @@ class TaskThread(threading.Thread):
 
       def device_run(self):
         batch_idx = self.run_start_batch_idx = self.devices_batches_idx
-        assert len(self.alloc_devices) == len(self.devices_batches)
-        for device, batches in zip(self.alloc_devices, self.devices_batches):
+        assert len(self.alloc_devices) == len(self.allocated_devices_batches)
+        self.running_devices_batches = self.allocated_devices_batches
+        for device, batches in zip(self.alloc_devices, self.running_devices_batches):
           if self.parent.network.recurrent:
             print("running", device.targets["data"].shape[1], \
                              "sequence slices (%i nts)" % (device.targets["data"].shape[0] * device.targets["data"].shape[1]), end=' ', file=log.v5)
@@ -659,6 +660,27 @@ class EvalTaskThread(TaskThread):
       super(EvalTaskThread, self).initialize()
       for device in self.devices:
         device.set_net_params(self.network)
+
+class ForwardTaskThread(TaskThread):
+    def __init__(self, network, devices, data, batches, eval_batch_size=0):
+      super(ForwardTaskThread, self).__init__('extract', network, devices, data, batches, eval_batch_size=eval_batch_size)
+      self.result = {}
+
+    def evaluate(self, batchess, results, result_format, num_frames):
+      fragments = collections.defaultdict(list)
+      for device_idx, batches in enumerate(batchess):
+        for batch_idx, batch in enumerate(batches):
+          for seq_idx, seq in enumerate(batch.seqs):
+            fragments[seq.seq_idx].append((seq.seq_start_frame['data'], seq, results[device_idx][batch_idx]))
+      for seq, parts in fragments.items():
+        prev_end_frame = -1
+        seq_idx = None
+        for part in sorted(parts):
+          assert part[0] == prev_end_frame + 1
+          prev_end_frame = part[1].seq_end_frame
+        self.result[seq] = numpy.concatenate([r[s.batch_frame_offset['data']:(s.seq_end_frame['data'] - s.seq_start_frame['data']),s.batch_slice,:]
+                                             for _, s, r in parts], axis=0)
+
 
 class HDFForwardTaskThread(TaskThread):
     def __init__(self, network, devices, data, batches, cache, compression="none"):

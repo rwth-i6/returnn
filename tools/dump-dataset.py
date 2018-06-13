@@ -4,6 +4,7 @@ from __future__ import print_function
 
 import os
 import sys
+import time
 
 my_dir = os.path.dirname(os.path.abspath(__file__))
 returnn_dir = os.path.dirname(my_dir)
@@ -14,7 +15,8 @@ from Log import log
 import argparse
 import numpy
 from better_exchook import pretty_print
-from Util import Stats
+from Util import Stats, hms
+import Util
 
 
 def plot(m):
@@ -65,6 +67,8 @@ def dump_dataset(dataset, options):
     print("Dump files: %r*%r" % (options.dump_prefix, options.dump_postfix), file=log.v3)
   elif options.type == "stdout":
     print("Dump to stdout", file=log.v3)
+  elif options.type == "print_shape":
+    print("Dump shape to stdout", file=log.v3)
   elif options.type == "plot":
     print("Plot.", file=log.v3)
   elif options.type == "null":
@@ -72,6 +76,7 @@ def dump_dataset(dataset, options):
   else:
     raise Exception("unknown dump option type %r" % options.type)
 
+  start_time = time.time()
   stats = Stats() if (options.stats or options.dump_stats) else None
   seq_len_stats = {key: Stats() for key in dataset.get_data_keys()}
   seq_idx = options.startseq
@@ -79,11 +84,28 @@ def dump_dataset(dataset, options):
     options.endseq = float("inf")
   while dataset.is_less_than_num_seqs(seq_idx) and seq_idx <= options.endseq:
     dataset.load_seqs(seq_idx, seq_idx + 1)
+    complete_frac = dataset.get_complete_frac(seq_idx)
+    start_elapsed = time.time() - start_time
+    try:
+      num_seqs_s = str(dataset.num_seqs)
+    except NotImplementedError:
+      try:
+        num_seqs_s = "~%i" % dataset.estimated_num_seqs
+      except TypeError:  # a number is required, not NoneType
+        num_seqs_s = "?"
+    progress_prefix = "%i/%s" % (seq_idx, num_seqs_s)
+    progress = "%s (%.02f%%)" % (progress_prefix, complete_frac * 100)
+    if complete_frac > 0:
+      total_time_estimated = start_elapsed / complete_frac
+      remaining_estimated = total_time_estimated - start_elapsed
+      progress += " (%s)" % hms(remaining_estimated)
     data = dataset.get_data(seq_idx, options.key)
     if options.type == "numpy":
       numpy.savetxt("%s%i.data%s" % (options.dump_prefix, seq_idx, options.dump_postfix), data)
     elif options.type == "stdout":
-      print("seq %i data:" % seq_idx, pretty_print(data))
+      print("seq %s data:" % progress, pretty_print(data))
+    elif options.type == "print_shape":
+      print("seq %s data shape:" % progress, data.shape)
     elif options.type == "plot":
       plot(data)
     for target in dataset.get_target_list():
@@ -92,15 +114,20 @@ def dump_dataset(dataset, options):
         numpy.savetxt("%s%i.targets.%s%s" % (options.dump_prefix, seq_idx, target, options.dump_postfix), targets, fmt='%i')
       elif options.type == "stdout":
         print("seq %i target %r:" % (seq_idx, target), pretty_print(targets))
+      elif options.type == "print_shape":
+        print("seq %i target %r shape:" % (seq_idx, target), targets.shape)
     seq_len = dataset.get_seq_length(seq_idx)
     for key in dataset.get_data_keys():
       seq_len_stats[key].collect([seq_len[key]])
     if stats:
       stats.collect(data)
+    if options.type == "null":
+      Util.progress_bar_with_time(complete_frac, prefix=progress_prefix)
 
     seq_idx += 1
 
-  print("Done. More seqs which we did not dumped: %s" % dataset.is_less_than_num_seqs(seq_idx), file=log.v1)
+  print("Done. Total time %s. More seqs which we did not dumped: %s" % (
+    hms(time.time() - start_time), dataset.is_less_than_num_seqs(seq_idx)), file=log.v1)
   for key in dataset.get_data_keys():
     seq_len_stats[key].dump(stream_prefix="Seq-length %r " % key, stream=log.v2)
   if stats:
@@ -126,6 +153,7 @@ def init(config_str):
   global config
   config = rnn.config
   config.set("log", None)
+  config.set("log_verbosity", 4)
   if datasetDict:
     config.set("train", datasetDict)
   rnn.initLog()

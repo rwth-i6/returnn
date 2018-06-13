@@ -62,12 +62,14 @@ class Pretrain:
   # Note: If we want to add other pretraining schemes, make this a base class.
 
   def __init__(self, original_network_json, network_init_args,
-               copy_output_layer=None, greedy=None, repetitions=None,
+               copy_param_mode=None, copy_output_layer=None, greedy=None,
+               repetitions=None,
                construction_algo="from_output", output_layers=("output",), input_layers=("data",)):
     """
     :type original_network_json: dict[str]
     :param dict[str] network_init_args: additional args we use for LayerNetwork.from_json().
       must have n_in, n_out.
+    :param str copy_param_mode:
     :param bool|str copy_output_layer: whether to copy the output layer params from last epoch or reinit
     :param bool greedy: if True, only train output+last layer, otherwise train all
     :param None | int | list[int] | dict repetitions: how often to repeat certain pretrain steps. default is one epoch.
@@ -76,10 +78,14 @@ class Pretrain:
     :param list[str]|tuple[str] output_layers: used for construction
     :param list[str]|tuple[str] input_layers: used for construction
     """
+    assert copy_param_mode in [None, "ifpossible", "subset"]
+    if copy_output_layer is None:
+      copy_output_layer = copy_param_mode
     if copy_output_layer is None:
       copy_output_layer = "ifpossible"
     if copy_output_layer:
-      assert copy_output_layer is True or copy_output_layer == "ifpossible"
+      assert copy_output_layer is True or copy_output_layer in ["ifpossible", "subset"]
+    self.copy_param_mode = copy_param_mode
     self.copy_output_layer = copy_output_layer
     if greedy is None:
       greedy = False
@@ -237,18 +243,21 @@ class Pretrain:
           sources.remove(v)
     return outs
 
-  def _find_existing_inputs(self, json, layer_name):
-    l = []
+  def _find_existing_inputs(self, json, layer_name, _collected=None, _visited=None):
+    if _collected is None:
+      _collected = []
+    if _visited is None:
+      _visited = {layer_name: None}
     sources = self._original_network_json[layer_name].get("from", ["data"])
     for src in sources:
       if src in json or src == "data":
-        if src not in l:
-          l.append(src)
+        if src not in _collected:
+          _collected.append(src)
       else:
-        for csrc in self._find_existing_inputs(json, src):
-          if csrc not in l:
-            l.append(csrc)
-    return l
+        if src not in _visited:
+          _visited[src] = layer_name
+          self._find_existing_inputs(json=json, layer_name=src, _collected=_collected, _visited=_visited)
+    return _collected
 
   def _construct_next_epoch_from_input(self, num_steps):
     """

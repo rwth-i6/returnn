@@ -11,6 +11,8 @@ except ImportError:
 import threading
 from threading import RLock
 import contextlib
+import string
+import time
 
 
 class Stream():
@@ -42,10 +44,15 @@ class Stream():
 
 
 class Log:
+  def __init__(self):
+    self.initialized = False
+    self.filename = None
+
   def initialize(self, logs = [], verbosity = [], formatter = []):
+    self.initialized = True
     fmt = { 'default' : logging.Formatter('%(message)s'),
             'timed' : logging.Formatter('%(asctime)s %(message)s', datefmt = '%Y-%m-%d,%H:%M:%S.%MS'),
-            'raw''' : logging.Formatter('%(message)s'),
+            'raw' : logging.Formatter('%(message)s'),
             'verbose': logging.Formatter('%(levelname)s - %(asctime)s %(message)s', datefmt = '%Y-%m-%d,%H:%M:%S.%MS')
           }
     self.v = [ logging.getLogger('v' + str(v)) for v in range(6) ]
@@ -54,6 +61,9 @@ class Log:
       l.handlers = []
     if not 'stdout' in logs:
       logs.append('stdout')
+    if len(formatter) == 1:
+        # if only one format provided, use it for all logs
+        formatter = [formatter[0]] * len(logs)
     for i in range(len(logs)):
       t = logs[i]
       v = 3
@@ -73,6 +83,10 @@ class Log:
         handler = logging.StreamHandler(proc.stdin)
         handler.setLevel(logging.DEBUG)
       elif os.path.isdir(os.path.dirname(t)):
+        if "$" in t:
+          from Util import get_utc_start_time_filename_part
+          t = string.Template(t).substitute(date=get_utc_start_time_filename_part())
+        self.filename = t
         handler = logging.FileHandler(t)
         handler.setLevel(logging.DEBUG)
       else:
@@ -96,8 +110,15 @@ class Log:
     self.v4 = Stream(self.v[4], logging.DEBUG)
     self.v5 = Stream(self.v[5], logging.DEBUG)
 
-  def write(self, msg):
-    self.info(msg)
+  def init_by_config(self, config):
+    """
+    :param Config.Config config:
+    """
+    logs = config.list('log', [])
+    log_verbosity = config.int_list('log_verbosity', [])
+    log_format = config.list('log_format', [])
+    self.initialize(logs=logs, verbosity=log_verbosity, formatter=log_format)
+
 
 log = Log()
 

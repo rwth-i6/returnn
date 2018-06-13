@@ -865,7 +865,9 @@ class TranslationDataset(CachedDataset2):
 
   MapToDataKeys = {"source": "data", "target": "classes"}  # just by our convention
 
-  def __init__(self, path, file_postfix, partition_epoch=None, source_postfix="", target_postfix="", **kwargs):
+  def __init__(self, path, file_postfix, partition_epoch=None, source_postfix="", target_postfix="",
+               source_only=False,
+               unknown_label=None, **kwargs):
     """
     :param str path: the directory containing the files
     :param str file_postfix: e.g. "train" or "dev". it will then search for "source." + postfix and "target." + postfix.
@@ -874,6 +876,8 @@ class TranslationDataset(CachedDataset2):
     :param None|str source_postfix: will concat this at the end of the source. e.g.
     :param None|str target_postfix: will concat this at the end of the target.
       You might want to add some sentence-end symbol.
+    :param bool source_only: if targets are not available
+    :param str|None unknown_label: "UNK" or so. if not given, then will not replace unknowns but throw an error
     """
     super(TranslationDataset, self).__init__(**kwargs)
     self.path = path
@@ -885,6 +889,9 @@ class TranslationDataset(CachedDataset2):
     self._partition_epoch_num_seqs = []
     import os
     assert os.path.isdir(path)
+    if source_only:
+      self.MapToDataKeys = self.__class__.MapToDataKeys.copy()
+      del self.MapToDataKeys["target"]
     self._data_files = {data_key: self._get_data_file(prefix) for (prefix, data_key) in self.MapToDataKeys.items()}
     self._data = {data_key: [] for data_key in self._data_files.keys()}  # type: dict[str,list[numpy.ndarray]]
     self._data_len = None  # type: int|None
@@ -894,6 +901,7 @@ class TranslationDataset(CachedDataset2):
     self.num_inputs = self.num_outputs["data"][0]
     self._reversed_vocabs = {k: self._reverse_vocab(k) for k in self._vocabs.keys()}
     self.labels = {k: self._get_label_list(k) for k in self._vocabs.keys()}
+    self._unknown_label = unknown_label
     self._seq_order = None  # type: None|list[int]  # seq_idx -> line_nr
     self._thread = Thread(name="%r reader" % self, target=self._thread_main)
     self._thread.daemon = True
@@ -994,15 +1002,22 @@ class TranslationDataset(CachedDataset2):
     num_labels = self.num_outputs[data_key][0]
     return list(map(reversed_vocab.__getitem__, range(num_labels)))
 
-  @staticmethod
-  def _data_str_to_numpy(vocab, s):
+  def _data_str_to_numpy(self, vocab, s):
     """
     :param dict[str,int] vocab:
     :param str s:
     :rtype: numpy.ndarray
     """
     words = s.split()
-    return numpy.array(list(map(vocab.__getitem__, words)), dtype=numpy.int32)
+    if self._unknown_label is None:
+      try:
+        words_idxs = list(map(vocab.__getitem__, words))
+      except KeyError as e:
+        raise Exception("Can not handle unknown token without unknown_label: %s (%s)" % (str(e), bytes(str(e), 'utf-8')))
+    else:
+      unknown_label_id = vocab[self._unknown_label]
+      words_idxs = [vocab.get(w, unknown_label_id) for w in words]
+    return numpy.array(words_idxs, dtype=numpy.int32)
 
   def _get_data(self, key, line_nr):
     """

@@ -422,7 +422,7 @@ class Engine:
     """
     if sys.platform == "win32" and model_filename.startswith("/tmp/"):
       import tempfile
-      model_filename = tempfile.gettempdir() + model_filename[len("/tmp")]
+      model_filename = tempfile.gettempdir() + model_filename[len("/tmp"):]
     return model_filename + (".pretrain" if is_pretrain else "") + ".%03d" % epoch
 
   def get_epoch_model_filename(self):

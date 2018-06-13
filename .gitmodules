@@ -1,0 +1,8 @@
+[submodule "extern/blocksparse"]
+	path = extern/blocksparse
+	url = https://github.com/albertz/blocksparse.git
+	branch = master
+[submodule "extern/kenlm"]
+	path = extern/kenlm
+	url = https://github.com/kpu/kenlm.git
+	branch = master

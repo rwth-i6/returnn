@@ -36,6 +36,7 @@ class OutputLayer(Layer):
                input_output_similarity_scale=1,
                scale_by_error=False,
                copy_weights=False,
+               target_delay=0,
                **kwargs):
     """
     :param theano.Variable index: index for batches
@@ -183,6 +184,13 @@ class OutputLayer(Layer):
       self.norm = num / T.cast(T.sum(self.index), 'float32')
       self.z = T.set_subtensor(self.z[end:], T.zeros_like(self.z[end:]))
 
+    if target_delay > 0:
+      self.z = self.z[target_delay:]
+      self.norm *= T.sum(self.index,dtype='float32') / T.sum(self.index[target_delay:],dtype='float32')
+      self.index = self.index[target_delay:]
+      self.y = y = self.y[:-target_delay]
+      self.y_data_flat = time_batch_make_flat(self.y)
+
     self.set_attr('from', ",".join([s.name for s in self.sources]))
     index_flat = self.index.flatten()
     assert not (exclude_labels and include_labels)
@@ -293,7 +301,7 @@ class OutputLayer(Layer):
         self.set_attr('compute_priors_exp_average', compute_priors_exp_average)
       if compute_priors_accumulate_batches:
         self.set_attr("compute_priors_accumulate_batches", compute_priors_accumulate_batches)
-      custom = T.mean(self.p_y_given_x_flat[(self.sources[0].index.flatten()>0).nonzero()], axis=0)
+      custom = T.mean(self.p_y_given_x_flat[(self.sources[0].index[target_delay:].flatten()>0).nonzero()], axis=0)
 
       custom_init = numpy.ones((self.attrs['n_out'],), 'float32') / numpy.float32(self.attrs['n_out'])
       if use_label_priors > 0:  # use labels to compute priors in first epoch

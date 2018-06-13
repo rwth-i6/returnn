@@ -33,6 +33,8 @@ else:
   long = builtins.long
   input = builtins.raw_input
 
+my_dir = os.path.dirname(os.path.abspath(__file__))
+
 
 class NotSpecified(object):
   """
@@ -819,7 +821,7 @@ def prod(ls):
   return x
 
 
-def parse_orthography_into_symbols(orthography, upper_case_special=True, word_based=False):
+def parse_orthography_into_symbols(orthography, upper_case_special=True, word_based=False, square_brackets_for_specials=True):
   """
   For Speech.
   Example:
@@ -854,7 +856,7 @@ def parse_orthography_into_symbols(orthography, upper_case_special=True, word_ba
       else:
         ret[-1] += c
     else:  # not in_special
-      if c == "[":
+      if square_brackets_for_specials and c == "[":
         in_special = 1
         ret += ["["]
       else:
@@ -1948,6 +1950,35 @@ def camel_case_to_snake_case(name):
   return re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
 
 
+def get_hostname():
+  """
+  :return: e.g. "cluster-cn-211"
+  :rtype: str
+  """
+  # check_output(["hostname"]).strip().decode("utf8")
+  import socket
+  return socket.gethostname()
+
+
+def is_running_on_cluster():
+  """
+  :return: i6 specific. Whether we run on some of the cluster nodes.
+  :rtype: bool
+  """
+  return get_hostname().startswith("cluster-cn-")
+
+
+start_time = time.time()
+
+
+def get_utc_start_time_filename_part():
+  """
+  :return: string which can be used as part of a filename, which represents the start time of RETURNN in UTC
+  :rtype: str
+  """
+  return time.strftime("%Y-%m-%d-%H-%M-%S", time.gmtime(start_time))
+
+
 def log_runtime_info_to_dir(path, config):
   """
   This will write multiple logging information into the path.
@@ -1959,27 +1990,29 @@ def log_runtime_info_to_dir(path, config):
   """
   import os
   import sys
-  import socket
   import shutil
   from Config import Config
   try:
+    hostname = get_hostname()
     content = [
-      "Time: %s" % time.strftime("%Y-%m-%d %H:%M:%S"),
+      "Time: %s" % time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(start_time)),
       "Call: %s" % (sys.argv,),
       "Path: %s" % (os.getcwd(),),
+      "Hostname: %s" % get_hostname(),
+      "PID: %i" % os.getpid(),
       "Returnn: %s" % (describe_crnn_version(),),
       "TensorFlow: %s" % (describe_tensorflow_version(),),
       "Config files: %s" % (config.files,),
     ]
     if not os.path.exists(path):
       os.makedirs(path)
-    hostname = socket.gethostname()
-    with open("%s/returnn.%s.%i.%s.log" % (
-      path, hostname, os.getpid(), time.strftime("%Y-%m-%d-%H-%M-%S")), "w") as f:
-      f.write(
-        "Returnn log file:\n" +
-        "".join(["%s\n" % s for s in content]) +
-        "\n")
+    log_fn = "%s/returnn.%s.%s.%i.log" % (path, get_utc_start_time_filename_part(), hostname, os.getpid())
+    if not os.path.exists(log_fn):
+      with open(log_fn, "w") as f:
+        f.write(
+          "Returnn log file:\n" +
+          "".join(["%s\n" % s for s in content]) +
+          "\n")
     for fn in config.files:
       base_fn = os.path.basename(fn)
       target_fn = "%s/%s" % (path, base_fn)
@@ -2010,6 +2043,7 @@ class NativeCodeCompiler(object):
   """
 
   CacheDirName = "returnn_native"
+  CollectedCompilers = None  # type: None|list[NativeCodeCompiler]
 
   def __init__(self, base_name, code_version, code,
                is_cpp=True, c_macro_defines=None, ld_flags=None,
@@ -2033,6 +2067,8 @@ class NativeCodeCompiler(object):
     :param bool should_cleanup_old_mydir: whether we should delete our op dir before we compile there.
     :param bool verbose: be slightly more verbose
     """
+    if self.CollectedCompilers is not None:
+      self.CollectedCompilers.append(self)
     self.verbose = verbose
     self.cache_dir = "%s/%s" % (get_temp_dir(), self.CacheDirName)
     self._include_paths = list(include_paths)
@@ -2222,7 +2258,7 @@ class NativeCodeCompiler(object):
     compiler_opts = ["-fPIC"]
     common_opts += self._transform_compiler_opts(compiler_opts)
     common_opts += ["-D_GLIBCXX_USE_CXX11_ABI=0"]  # might be obsolete in the future
-    common_opts += ["-D%s=%s" % item for item in sorted(self.c_macro_defines)]
+    common_opts += ["-D%s=%s" % item for item in sorted(self.c_macro_defines.items())]
     common_opts += ["-g"]
     opts = common_opts + [self._c_filename, "-o", self._so_filename]
     opts += self.ld_flags
@@ -2564,3 +2600,142 @@ def compute_bleu(reference_corpus,
       bp = 1.0
   bleu = geo_mean * bp
   return np.float32(bleu)
+
+
+def monkeyfix_glib():
+  """
+  Fixes some stupid bugs such that SIGINT is not working.
+  This is used by audioread, and indirectly by librosa for loading audio.
+  https://stackoverflow.com/questions/16410852/
+  See also :func:`monkeypatch_audioread`.
+  """
+  try:
+    import gi
+  except ImportError:
+    return
+  try:
+    from gi.repository import GLib
+  except ImportError:
+    from gi.overrides import GLib
+  # Do nothing.
+  # The original behavior would install a SIGINT handler which calls GLib.MainLoop.quit(),
+  # and then reraise a KeyboardInterrupt in that thread.
+  # However, we want and expect to get the KeyboardInterrupt in the main thread.
+  GLib.MainLoop.__init__ = lambda *args, **kwargs: None
+
+
+def monkeypatch_audioread():
+  """
+  audioread does not behave optimal in some cases.
+  E.g. each call to _ca_available() takes quite long because of the ctypes.util.find_library usage.
+  We will patch this.
+
+  However, the recommendation would be to not use audioread (librosa.load).
+  audioread uses Gstreamer as a backend by default currently (on Linux).
+  Gstreamer has multiple issues. See also :func:`monkeyfix_glib`, and here for discussion:
+  https://github.com/beetbox/audioread/issues/62
+  https://github.com/beetbox/audioread/issues/63
+
+  Instead, use PySoundFile, which is also faster. See here for discussions:
+  https://github.com/beetbox/audioread/issues/64
+  https://github.com/librosa/librosa/issues/681
+  """
+  try:
+    import audioread
+  except ImportError:
+    return
+  res = audioread._ca_available()
+  audioread._ca_available = lambda: res
+
+
+_cf_cache = {}
+
+def cf(filename):
+  """
+  Cache manager. i6 specific.
+
+  :return: filename
+  :rtype: str
+  """
+  import os
+  from subprocess import check_output
+  if filename in _cf_cache:
+    return _cf_cache[filename]
+  debug_mode = int(os.environ.get("DEBUG", 0))
+  if debug_mode or get_hostname() == "cluster-cn-211" or not is_running_on_cluster():
+    print("use local file: %s" % filename)
+    return filename  # for debugging
+  try:
+    cached_fn = check_output(["cf", filename]).strip().decode("utf8")
+  except CalledProcessError:
+    print("Cache manager: Error occured, using local file")
+    return filename
+  assert os.path.exists(cached_fn)
+  _cf_cache[filename] = cached_fn
+  return cached_fn
+
+
+def binary_search_any(cmp, low, high):
+  """
+  Binary search for a custom compare function.
+
+  :param (int)->int cmp: e.g. cmp(idx) == compare(array[idx], key)
+  :param int low: inclusive
+  :param int high: exclusive
+  :rtype: int|None
+  """
+  while low < high:
+    mid = (low + high) // 2
+    r = cmp(mid)
+    if r < 0:
+      low = mid + 1
+    elif r > 0:
+      high = mid
+    else:
+      return mid
+  return None
+
+
+def generic_import_module(filename):
+  """
+  :param str filename:
+    We try to be clever about filename.
+    If it looks like a module name, just do importlib.import_module.
+    If it looks like a filename, search for a base path (which does not have __init__.py),
+    add that path to sys.path if needed, and import the remaining where "/" is replaced by "."
+    and the file extension is removed.
+  :return: the module
+  :rtype: types.ModuleType
+  """
+  assert filename
+  import importlib
+  if "/" not in filename:
+    return importlib.import_module(filename)
+  prefix_dir = ''
+  if not os.path.exists(filename):
+    assert filename[0] != '/'
+    # Maybe relative to Returnn?
+    prefix_dir = "%s/" % my_dir
+  assert os.path.exists(prefix_dir + filename)
+  assert filename.endswith('.py') or os.path.isdir(prefix_dir + filename)
+  dirs = filename.split("/")
+  dirs, base_fn = dirs[:-1], dirs[-1]
+  assert len(dirs) >= 1
+  for i in reversed(range(len(dirs))):
+    d = prefix_dir + "/".join(dirs[:i + 1])
+    assert os.path.isdir(d)
+    if os.path.exists("%s/__init__.py" % d):
+      continue
+    if d not in sys.path:
+      sys.path.append(d)
+    m = ".".join(dirs[i + 1:] + [base_fn])
+    if base_fn.endswith('.py'):
+      m = m[:-3]
+    return importlib.import_module(m)
+  raise ValueError('cannot figure out base module path from %r' % filename)
+
+
+def softmax(x, axis=None):
+    import numpy
+    e_x = numpy.exp(x - numpy.max(x, axis=axis, keepdims=True))
+    return e_x / numpy.sum(e_x, axis=axis, keepdims=True)

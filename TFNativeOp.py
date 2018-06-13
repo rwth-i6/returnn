@@ -71,6 +71,13 @@ class OpMaker(object):
         cls._load_cuda_blas_gemm()
 
   @classmethod
+  def cuda_blas_gemm_so_filename(cls):
+    from tensorflow.contrib.rnn.python.ops import lstm_ops
+    lstm_ops_so = "%s/_lstm_ops.so" % os.path.dirname(lstm_ops.__file__)
+    assert os.path.exists(lstm_ops_so)
+    return lstm_ops_so
+
+  @classmethod
   def _load_cuda_blas_gemm(cls):
     """
     https://github.com/tensorflow/tensorflow/issues/6602
@@ -80,9 +87,7 @@ class OpMaker(object):
     """
     if TFUtil.CudaEnv.verbose_find_cuda:
       print("Load tf.contrib lstm_ops...")
-    from tensorflow.contrib.rnn.python.ops import lstm_ops
-    lstm_ops_so = "%s/_lstm_ops.so" % os.path.dirname(lstm_ops.__file__)
-    assert os.path.exists(lstm_ops_so)
+    lstm_ops_so = cls.cuda_blas_gemm_so_filename()
     if TFUtil.CudaEnv.verbose_find_cuda:
       print("Load tf.contrib lstm_ops lib:", lstm_ops_so)
     # Maybe a bit hacky: Just load all symbols into the global namespace.
@@ -520,19 +525,28 @@ class RecSeqCellOp(object):
   does_input_projection = False
   does_direction_handling = False
 
-  def __init__(self, n_hidden, n_input_dim=None, input_is_sparse=False, step=None):
+  def __init__(self, n_hidden, n_input_dim=None, n_input_dim_parts=None, input_is_sparse=False, step=None):
     """
     :param int n_hidden:
     :param int n_input_dim:
+    :param int|list[int] n_input_dim_parts:
     :param bool input_is_sparse:
     :param int step: what direction and step to use
     """
     if n_input_dim is None:
       n_input_dim = n_hidden
+    if n_input_dim_parts is None:
+      n_input_dim_parts = [n_input_dim]
+    assert n_input_dim == sum(n_input_dim_parts)
     self.n_hidden = n_hidden  # hidden-dim and output-dim
+    self.n_input_dim_parts = n_input_dim_parts
     self.n_input_dim = n_input_dim  # input dim for the inputs in __call__
     self.input_is_sparse = input_is_sparse
     self.step = step if self.does_direction_handling else None
+
+  @property
+  def state_size(self):
+    return self.n_hidden
 
   def __call__(self, inputs, index, initial_state=None, recurrent_weights_initializer=None):
     """
@@ -549,6 +563,7 @@ class RecSeqCellOp(object):
 class NativeLstmCell(RecSeqCellOp):
   def __init__(self, **kwargs):
     super(NativeLstmCell, self).__init__(**kwargs)
+    self.n_input_dim_parts = [self.n_hidden] * 4
     self.n_input_dim = self.n_hidden * 4
     self.op = make_lstm_op()
 
@@ -575,6 +590,9 @@ class NativeLstmCell(RecSeqCellOp):
     n_batch = tf.shape(Z)[1]
     n_out = tf.shape(V_h)[0]
     if initial_state is not None:
+      from tensorflow.python.ops.nn import rnn_cell
+      if isinstance(initial_state, rnn_cell.LSTMStateTuple):
+        initial_state = initial_state.c
       c = initial_state
     else:
       c = tf.zeros((n_batch, n_out), dtype=tf.float32)
@@ -591,6 +609,7 @@ class NativeLstmCell(RecSeqCellOp):
     """
     W_re = tf.get_variable(
       name="W_re", shape=(self.n_hidden, self.n_hidden * 4), initializer=recurrent_weights_initializer)
+    TFUtil.set_param_axes_split_info(W_re, [[self.n_hidden], [self.n_hidden] * 4])
     out, _, final_state = self.op(
       *self.map_layer_inputs_to_op(Z=inputs, V_h=W_re, i=index, initial_state=initial_state))
     return out, final_state
@@ -648,6 +667,8 @@ class NativeLstmLowMemCell(RecSeqCellOp):
     W = tf.get_variable(
       name="W", shape=(self.n_input_dim + self.n_hidden, self.n_hidden * 4), initializer=recurrent_weights_initializer)
     b = tf.get_variable(name="b", shape=(self.n_hidden * 4,), initializer=tf.zeros_initializer())
+    TFUtil.set_param_axes_split_info(W, [[self.n_input_dim, self.n_hidden], [self.n_hidden] * 4])
+    TFUtil.set_param_axes_split_info(b, [[self.n_hidden] * 4])
     out, _, final_state = self.op(
       *self.map_layer_inputs_to_op(X=inputs, W=W, b=b, i=index, initial_state=initial_state))
     return out, final_state
@@ -657,10 +678,20 @@ class NativeLstm2(RecSeqCellOp):
   does_input_projection = False
   does_direction_handling = True
 
-  def __init__(self, **kwargs):
+  def __init__(self, rec_weight_dropout=0.0, **kwargs):
+    """
+    :param float rec_weight_dropout: weight dropout in the recurrent matrix, https://openreview.net/pdf?id=SyyGPP0TZ
+    """
     super(NativeLstm2, self).__init__(**kwargs)
+    self.n_input_dim_parts = [self.n_hidden] * 4
     self.n_input_dim = self.n_hidden * 4
+    self.rec_weight_dropout = rec_weight_dropout
     self.op = make_op(NativeOp.NativeLstm2)
+
+  @property
+  def state_size(self):
+    from tensorflow.python.ops.nn import rnn_cell
+    return rnn_cell.LSTMStateTuple(c=self.n_hidden, h=self.n_hidden)
 
   def map_layer_inputs_to_op(self, X, W, i, initial_state=None):
     """
@@ -671,23 +702,22 @@ class NativeLstm2(RecSeqCellOp):
     :param tf.Tensor|None initial_state: shape (batch,n_hidden)
     :rtype: tuple[tf.Tensor]
     """
+    from tensorflow.python.ops.nn import rnn_cell
     X.set_shape(tf.TensorShape([None, None, self.n_hidden * 4]))
     W.set_shape(tf.TensorShape([self.n_hidden, self.n_hidden * 4]))
     i.set_shape(tf.TensorShape([None, None]))
-    if i.dtype != tf.float32:
-      if not hasattr(i, "cast_float32"):
-        from TFUtil import reuse_name_scope_of_tensor
-        with reuse_name_scope_of_tensor(i):
-          i_cast_float32 = tf.cast(i, dtype=tf.float32, name="index_cast_float32")
-        i.cast_float32 = i_cast_float32
-      i = i.cast_float32
+    from TFUtil import to_float32
+    i = to_float32(i)
     n_batch = tf.shape(X)[1]
-    if initial_state is not None:
-      c0 = initial_state
-    else:
+    if initial_state is None:
       c0 = tf.zeros((n_batch, self.n_hidden), dtype=tf.float32, name="initial_c")
-    # We could make `h` a variable exactly if `c` is a trainable variable.
-    y0 = tf.zeros((n_batch, self.n_hidden), dtype=tf.float32, name="initial_h")
+      y0 = tf.zeros((n_batch, self.n_hidden), dtype=tf.float32, name="initial_h")
+    elif isinstance(initial_state, rnn_cell.LSTMStateTuple):
+      c0 = initial_state.c
+      y0 = initial_state.h
+    else:
+      c0 = initial_state
+      y0 = tf.zeros((n_batch, self.n_hidden), dtype=tf.float32, name="initial_h")
     start = tf.constant(0, name="start")
     step = tf.constant(self.step or 1, name="step")
     return X, W, y0, c0, i, start, step
@@ -703,9 +733,15 @@ class NativeLstm2(RecSeqCellOp):
     """
     W = tf.get_variable(
       name="W_re", shape=(self.n_hidden, self.n_hidden * 4), initializer=recurrent_weights_initializer)
-    out, _, _, final_state = self.op(
+    TFUtil.set_param_axes_split_info(W, [[self.n_hidden], [self.n_hidden] * 4])
+    if self.rec_weight_dropout:
+      from TFUtil import dropout
+      W = dropout(W, keep_prob=1.0 - self.rec_weight_dropout, cond_on_train=True,
+                  seed=TFUtil.get_random_seed())
+    out, _, _, final_cell_state = self.op(
       *self.map_layer_inputs_to_op(X=inputs, W=W, i=index, initial_state=initial_state))
-    return out, final_state
+    from tensorflow.python.ops.nn import rnn_cell
+    return out, rnn_cell.LSTMStateTuple(h=out[-1], c=final_cell_state)
 
 
 def make_fast_baum_welch_op(**kwargs):
@@ -738,17 +774,23 @@ def fast_baum_welch(am_scores, edges, weights, start_end_states, float_idx, stat
   return fwdbwd, obs_scores
 
 
-def fast_baum_welch_by_sprint_automata(am_scores, float_idx, tags, sprint_opts):
+def fast_baum_welch_by_sprint_automata(am_scores, float_idx, tags, sprint_opts, tdp_scale=1.0):
   """
   :param tf.Tensor am_scores: (time, batch, dim), in -log space
   :param tf.Tensor float_idx: (time, batch) -> 0 or 1 (index mask, via seq lens)
   :param tf.Tensor tags: (batch,) -> seq name (str)
+  :param float tdp_scale: weights are multiplied by this
   :param dict[str] sprint_opts:
   :return: (fwdbwd, obs_scores), fwdbwd is (time, batch, dim), obs_scores is (time, batch), in -log space
   :rtype: (tf.Tensor, tf.Tensor)
   """
   from TFSprint import get_sprint_automata_for_batch_op
   edges, weights, start_end_states = get_sprint_automata_for_batch_op(sprint_opts=sprint_opts, tags=tags)
+  if tdp_scale != 1:
+    if tdp_scale == 0:
+      weights = tf.zeros_like(weights)
+    else:
+      weights *= tdp_scale
   return fast_baum_welch(
     am_scores=am_scores, float_idx=float_idx,
     edges=edges, weights=weights, start_end_states=start_end_states)
@@ -779,6 +821,34 @@ def _debug_dumped_fast_baum_welch(prefix, postfix=".dump"):
       print("run...")
       out_list = fast_baum_welch(**args)
       return session.run(out_list)
+
+
+def have_blocksparse_requirements():
+  import TFUtil
+  if not TFUtil.is_gpu_available():
+    return False
+  min_compute_capability = TFUtil.get_available_gpu_min_compute_capability()
+  if min_compute_capability < 3.5:
+    return False
+  return True
+
+
+def init_blocksparse(with_native_module=True):
+  import TFUtil
+  if with_native_module:
+    assert TFUtil.is_gpu_available(), "we currently need a GPU"
+    min_compute_capability = TFUtil.get_available_gpu_min_compute_capability()
+    assert min_compute_capability and min_compute_capability >= 3.5, "we need at least compute capability 3.5"
+  path = os.path.dirname(__file__) + "/extern/blocksparse"
+  assert os.path.exists(path), "maybe submodule not checked out?"
+  import sys
+  if path not in sys.path:
+    # At the beginning, to make sure we find it firs.t
+    sys.path.insert(0, path)
+  # test it
+  if with_native_module:
+    from blocksparse import op_module
+    op_module.get_module()
 
 
 def demo():

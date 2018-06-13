@@ -3,10 +3,10 @@ from __future__ import print_function
 
 from Dataset import Dataset, DatasetSeq, convert_data_dims
 from CachedDataset2 import CachedDataset2
-from Util import class_idx_seq_to_1_of_k
+from Util import class_idx_seq_to_1_of_k, CollectionReadCheckCovered
 from Log import log
 import numpy
-
+import re
 
 class GeneratingDataset(Dataset):
 
@@ -557,7 +557,9 @@ class StaticDataset(GeneratingDataset):
 
   def __init__(self, data, target_list=None, output_dim=None, input_dim=None, **kwargs):
     """
-    :type data: list[dict[str,numpy.ndarray]]
+    :param list[dict[str,numpy.ndarray]] data: list of seqs, each provide the data for each data-key
+    :param int input_dim:
+    :param int|dict[str,(int,int)|list[int]] output_dim:
     """
     assert len(data) > 0
     self.data = data
@@ -662,6 +664,189 @@ class _NltkCorpusReaderDataset(CachedDataset2):
   TODO: Should maybe be moved to a separate file, e.g. CorpusReaderDataset.py or so?
   """
   # TODO ...
+
+
+class ExtractAudioFeatures:
+  """
+  Currently uses librosa to extract MFCC features.
+  We could also use python_speech_features.
+  We could also add support e.g. to directly extract log-filterbanks or so.
+  """
+
+  def __init__(self,
+               window_len=0.025, step_len=0.010,
+               num_feature_filters=40, with_delta=False, norm_mean=None, norm_std_dev=None,
+               features="mfcc", random_permute=None, random_state=None):
+    """
+    :param numpy.ndarray audio: raw audio samples, shape (audio_len,)
+    :param int sample_rate: e.g. 22050
+    :param float window_len: in seconds
+    :param float step_len: in seconds
+    :param int num_feature_filters:
+    :param bool|int with_delta:
+    :param numpy.ndarray|str|None norm_mean:
+    :param numpy.ndarray|str|None norm_std_dev:
+    :param str features: "mfcc" or "mel_spectrogram"
+    :param CollectionReadCheckCovered|dict[str]|bool|None random_permute:
+    :param numpy.random.RandomState|None random_state:
+    :return: (audio_len // int(step_len * sample_rate), max(1, with_delta) * num_feature_filters), float32
+    :rtype: numpy.ndarray
+    """
+    self.window_len = window_len
+    self.step_len = step_len
+    self.num_feature_filters = num_feature_filters
+    if isinstance(with_delta, bool):
+      with_delta = 1 if with_delta else 0
+    assert isinstance(with_delta, int)
+    self.with_delta = with_delta
+    if norm_mean is not None:
+      norm_mean = self._load_feature_vec(norm_mean)
+    if norm_std_dev is not None:
+      norm_std_dev = self._load_feature_vec(norm_std_dev)
+    self.norm_mean = norm_mean
+    self.norm_std_dev = norm_std_dev
+    if random_permute and not isinstance(random_permute, CollectionReadCheckCovered):
+      random_permute = CollectionReadCheckCovered.from_bool_or_dict(random_permute)
+    self.random_permute_opts = random_permute
+    self.random_state = random_state
+    self.features = features
+
+  def _load_feature_vec(self, value):
+    """
+    :param str|None value:
+    :return: shape (self.num_inputs,), float32
+    :rtype: numpy.ndarray|None
+    """
+    if value is None:
+      return None
+    if isinstance(value, str):
+      value = numpy.loadtxt(value)
+    assert isinstance(value, numpy.ndarray)
+    assert value.shape == (self.get_feature_dimension(),)
+    return value.astype("float32")
+
+  def get_audio_features(self, audio, sample_rate):
+    """
+    :param numpy.ndarray audio: raw audio samples, shape (audio_len,)
+    :param int sample_rate: e.g. 22050
+    :rtype: numpy.ndarray
+    """
+    kwargs = {
+      "sample_rate": sample_rate,
+      "window_len": self.window_len,
+      "step_len": self.step_len,
+      "num_feature_filters": self.num_feature_filters,
+    }
+    assert self.features in ("mfcc", "mel_spectrogram")
+    peak = numpy.max(numpy.abs(audio))
+    audio /= peak
+
+    if self.random_permute_opts and self.random_permute_opts.truth_value:
+      audio = _get_random_permuted_audio(
+        audio=audio,
+        sample_rate=sample_rate,
+        opts=self.random_permute_opts,
+        random_state=self.random_state)
+    kwargs["audio"] = audio
+
+    if self.features == "mfcc":
+      feature_data = _get_audio_features_mfcc(**kwargs)
+    elif self.features == "mel_spectrogram":
+      feature_data = _get_audio_mel_spectrogram(**kwargs)
+    else:
+      assert False, "non-supported feature type %s" % self.features
+    assert feature_data.ndim == 2
+    assert feature_data.shape[1] == self.num_feature_filters
+
+    if self.with_delta:
+      import librosa
+      deltas = [librosa.feature.delta(feature_data, order=i, axis=0) for i in range(1, self.with_delta + 1)]
+      feature_data = numpy.stack([feature_data] + deltas, axis=1)
+      assert feature_data.shape[1] == self.get_feature_dimension()
+
+    if self.norm_mean is not None:
+      feature_data -= self.norm_mean[None, :]
+    if self.norm_std_dev is not None:
+      feature_data /= self.norm_std_dev[None, :]
+    return feature_data
+
+  def get_feature_dimension(self):
+    return (max(int(self.with_delta), 1) + 1) * self.num_feature_filters
+
+
+def _get_audio_mel_spectrogram(audio, sample_rate, window_len=0.025, step_len=0.010, num_feature_filters=80):
+  """
+  :param numpy.ndarray audio: raw audio samples, shape (audio_len,)
+  :param int sample_rate: e.g. 22050
+  :param float window_len: in seconds
+  :param float step_len: in seconds
+  :param int num_feature_filters:
+  :return: (audio_len // int(step_len * sample_rate), num_feature_filters), float32
+  :rtype: numpy.ndarray
+  """
+  import librosa
+  mel_spectrogram = librosa.feature.melspectrogram(
+    audio, sr=sample_rate,
+    n_mels=num_feature_filters,
+    hop_length=int(step_len * sample_rate), n_fft=int(window_len * sample_rate))
+  log_noise_floor = 1e-3  # prevent numeric overflow in log
+  mel_spectrogram = numpy.log(numpy.maximum(log_noise_floor, mel_spectrogram))
+  assert mel_spectrogram.shape[0] == num_feature_filters
+  mel_spectrogram = mel_spectrogram.transpose().astype("float32")  # (time, dim)
+  return mel_spectrogram
+
+
+def _get_audio_features_mfcc(audio, sample_rate, window_len=0.025, step_len=0.010, num_feature_filters=40):
+  """
+  :param numpy.ndarray audio: raw audio samples, shape (audio_len,)
+  :param int sample_rate: e.g. 22050
+  :param float window_len: in seconds
+  :param float step_len: in seconds
+  :param int num_feature_filters:
+  :return: (audio_len // int(step_len * sample_rate), num_feature_filters), float32
+  :rtype: numpy.ndarray
+  """
+  import librosa
+  mfccs = librosa.feature.mfcc(
+    audio, sr=sample_rate,
+    n_mfcc=num_feature_filters,
+    hop_length=int(step_len * sample_rate), n_fft=int(window_len * sample_rate))
+  energy = librosa.feature.rmse(
+    audio,
+    hop_length=int(step_len * sample_rate), frame_length=int(window_len * sample_rate))
+  mfccs[0] = energy  # replace first MFCC with energy, per convention
+  assert mfccs.shape[0] == num_feature_filters  # (dim, time)
+  mfccs = mfccs.transpose().astype("float32")  # (time, dim)
+  return mfccs
+
+
+def _get_random_permuted_audio(audio, sample_rate, opts, random_state):
+  """
+  :param numpy.ndarray audio: raw time signal
+  :param int sample_rate:
+  :param CollectionReadCheckCovered opts:
+  :param numpy.random.RandomState random_state:
+  :return: audio randomly permuted
+  :rtype: numpy.ndarray
+  """
+  import librosa
+  import scipy.ndimage
+  import warnings
+  audio = audio * random_state.uniform(opts.get("rnd_scale_lower", 0.8), opts.get("rnd_scale_upper", 1.0))
+  if random_state.uniform(0.0, 1.0) < opts.get("rnd_zoom_switch", 0.2):
+    with warnings.catch_warnings():
+      warnings.simplefilter("ignore")
+      # Alternative: scipy.interpolate.interp2d
+      factor = random_state.uniform(opts.get("rnd_zoom_lower", 0.9), opts.get("rnd_zoom_upper", 1.1))
+      audio = scipy.ndimage.zoom(audio, factor, order=3)
+  if random_state.uniform(0.0, 1.0) < opts.get("rnd_stretch_switch", 0.2):
+    rate = random_state.uniform(opts.get("rnd_stretch_lower", 0.9), opts.get("rnd_stretch_upper", 1.2))
+    audio = librosa.effects.time_stretch(audio, rate=rate)
+  if random_state.uniform(0.0, 1.0) < opts.get("rnd_pitch_switch", 0.2):
+    n_steps = random_state.uniform(opts.get("rnd_pitch_lower", -1.), opts.get("rnd_pitch_upper", 1.))
+    audio = librosa.effects.pitch_shift(audio, sr=sample_rate, n_steps=n_steps)
+  opts.assert_all_read()
+  return audio
 
 
 class TimitDataset(CachedDataset2):
@@ -990,25 +1175,8 @@ class TimitDataset(CachedDataset2):
     :return: audio randomly permuted
     :rtype: numpy.ndarray
     """
-    opts = self._random_permute_audio
-    import librosa
-    import scipy.ndimage
-    import warnings
-    audio = audio * self._random.uniform(opts.get("rnd_scale_lower", 0.8), opts.get("rnd_scale_upper", 1.0))
-    if self._random.uniform(0.0, 1.0) < opts.get("rnd_zoom_switch", 0.2):
-      with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        # Alternative: scipy.interpolate.interp2d
-        factor = self._random.uniform(opts.get("rnd_zoom_lower", 0.9), opts.get("rnd_zoom_upper", 1.1))
-        audio = scipy.ndimage.zoom(audio, factor, order=3)
-    if self._random.uniform(0.0, 1.0) < opts.get("rnd_stretch_switch", 0.2):
-      rate = self._random.uniform(opts.get("rnd_stretch_lower", 0.9), opts.get("rnd_stretch_upper", 1.2))
-      audio = librosa.effects.time_stretch(audio, rate=rate)
-    if self._random.uniform(0.0, 1.0) < opts.get("rnd_pitch_switch", 0.2):
-      n_steps = self._random.uniform(opts.get("rnd_pitch_lower", -1.), opts.get("rnd_pitch_upper", 1.))
-      audio = librosa.effects.pitch_shift(audio, sr=sample_rate, n_steps=n_steps)
-    opts.assert_all_read()
-    return audio
+    return _get_random_permuted_audio(
+      audio=audio, sample_rate=sample_rate, opts=self._random_permute_audio, random_state=self._random)
 
   def _collect_single_seq(self, seq_idx):
     """
@@ -1030,32 +1198,13 @@ class TimitDataset(CachedDataset2):
     # see: https://github.com/rdadolf/fathom/blob/master/fathom/speech/preproc.py
     # and: https://groups.google.com/forum/#!topic/librosa/V4Z1HpTKn8Q
     audio, sample_rate = self._get_audio(seq_tag)
-    peak = numpy.max(numpy.abs(audio))
-    audio /= peak
-    if self._random_permute_audio.truth_value:
-      audio = self._get_random_permuted_audio(audio=audio, sample_rate=sample_rate)
-    if self._demo_play_audio:
-      print("play %r" % seq_tag, "min/max:", numpy.min(audio), numpy.max(audio))
-      self._demo_audio_play(audio=audio, sample_rate=sample_rate)
-    window_len = self._feature_window_len
-    step_len = self._feature_step_len
-    mfccs = librosa.feature.mfcc(
-      audio, sr=sample_rate,
-      n_mfcc=self._num_feature_filters,
-      hop_length=int(step_len * sample_rate), n_fft=int(window_len * sample_rate))
-    energy = librosa.feature.rmse(
-      audio,
-      hop_length=int(step_len * sample_rate), n_fft=int(window_len * sample_rate))
-    mfccs[0] = energy  # replace first MFCC with energy, per convention
-    assert mfccs.shape[0] == self._num_feature_filters  # (dim, time)
-    if self._with_delta:
-      deltas = [librosa.feature.delta(mfccs, order=i) for i in range(1, self._with_delta + 1)]
-      mfccs = numpy.vstack([mfccs] + deltas)
-    mfccs = mfccs.transpose().astype("float32")  # (time, dim)
-    if self._norm_mean is not None:
-      mfccs -= self._norm_mean[None, :]
-    if self._norm_std_dev is not None:
-      mfccs /= self._norm_std_dev[None, :]
+    audio_feature_extractor = ExtractAudioFeatures(
+      window_len=self._feature_window_len, step_len=self._feature_step_len,
+      num_feature_filters=self._num_feature_filters, with_delta=self._with_delta,
+      norm_mean=self._norm_mean, norm_std_dev=self._norm_std_dev,
+      random_permute=self._random_permute_audio, random_state=self._random)
+    mfccs = audio_feature_extractor.get_audio_features(
+      audio=audio, sample_rate=sample_rate, )
     return DatasetSeq(seq_idx=seq_idx, seq_tag=seq_tag, features=mfccs, targets=phone_id_seq)
 
 
@@ -1117,7 +1266,81 @@ class NltkTimitDataset(TimitDataset):
     return self._data_reader.phones(seq_tag)
 
 
-class BytePairEncoding:
+class Vocabulary(object):
+  """
+  Represents a vocabulary (set of words, and their ids).
+  Used by :class:`BytePairEncoding`.
+  """
+
+  _cache = {}  # filename -> vocab, labels
+
+  def __init__(self, vocab_file, unknown_label="UNK"):
+    """
+    :param str vocab_file:
+    :param str unknown_label:
+    """
+    self.unknown_label = unknown_label
+    self._parse_vocab(vocab_file)
+
+  def _parse_vocab(self, filename):
+    """
+    :param str filename:
+    """
+    if filename in self._cache:
+      self.vocab, self.labels = self._cache[filename]
+      assert self.unknown_label in self.vocab
+      self.num_labels = len(self.labels)
+    else:
+      d = eval(open(filename, "r").read())
+      assert isinstance(d, dict)
+      assert self.unknown_label in d
+      labels = {idx: label for (label, idx) in sorted(d.items())}
+      min_label, max_label, num_labels = min(labels), max(labels), len(labels)
+      assert 0 == min_label
+      if num_labels - 1 < max_label:
+        print("Vocab error: not all indices used? max label: %i" % max_label, file=log.v1)
+        print("unused labels: %r" % ([i for i in range(max_label + 1) if i not in labels],), file=log.v2)
+      assert num_labels - 1 == max_label
+      self.num_labels = len(labels)
+      self.vocab = d
+      self.labels = [label for (idx, label) in sorted(labels.items())]
+      self._cache[filename] = (self.vocab, self.labels)
+    self.unknown_label_id = self.vocab[self.unknown_label]
+
+  @classmethod
+  def create_vocab_dict_from_labels(cls, labels):
+    """
+    This is exactly the format which we expect when we read it in self._parse_vocab.
+
+    :param list[str] labels:
+    :rtype: dict[str,int]
+    """
+    d = {label: idx for (idx, label) in enumerate(labels)}
+    assert len(d) == len(labels), "some labels are provided multiple times"
+    return d
+
+  def tf_get_init_variable_func(self, var):
+    """
+    :param tensorflow.Variable var:
+    :rtype: (tensorflow.Session)->None
+    """
+    import tensorflow as tf
+    from TFUtil import VariableAssigner
+    assert isinstance(var, tf.Variable)
+    assert var.dtype.base_dtype == tf.string
+    assert var.shape.as_list() == [self.num_labels]
+    assert len(self.labels) == self.num_labels
+
+    def init_vocab_var(session):
+      """
+      :param tensorflow.Session session:
+      """
+      VariableAssigner(var).assign(session=session, value=self.labels)
+
+    return init_vocab_var
+
+
+class BytePairEncoding(Vocabulary):
   """
   Code is partly taken from subword-nmt/apply_bpe.py.
   Author: Rico Sennrich, code under MIT license.
@@ -1131,32 +1354,28 @@ class BytePairEncoding:
   Proceedings of the 54th Annual Meeting of the Association for Computational Linguistics (ACL 2016). Berlin, Germany.
   """
 
-  def __init__(self, vocab_file, bpe_file, seq_postfix=None):
+  def __init__(self, vocab_file, bpe_file, seq_postfix=None, unknown_label="UNK"):
     """
     :param str vocab_file:
     :param str bpe_file:
     :param list[int]|None seq_postfix: labels will be added to the seq in self.get_seq
+    :param str unknown_label:
     """
-    self._parse_vocab(vocab_file)
+    super(BytePairEncoding, self).__init__(vocab_file=vocab_file, unknown_label=unknown_label)
+    # check version information
+    bpe_file_first_line = open(bpe_file, "r").readline()
+    if bpe_file_first_line.startswith('#version:'):
+      self._bpe_file_version = tuple(
+        [int(x) for x in re.sub(r'(\.0+)*$', '', bpe_file_first_line.split()[-1]).split(".")])
+    else:
+      self._bpe_file_version = (0, 1)
     self._bpe_codes = [tuple(item.split()) for item in open(bpe_file, "r").read().splitlines()]
     # some hacking to deal with duplicates (only consider first instance)
     self._bpe_codes = dict([(code, i) for (i, code) in reversed(list(enumerate(self._bpe_codes)))])
+    self._bpe_codes_reverse = dict([(pair[0] + pair[1], pair) for pair,i in self._bpe_codes.items()])
     self._bpe_encode_cache = {}
     self._bpe_separator = '@@'
     self.seq_postfix = seq_postfix or []
-
-  def _parse_vocab(self, filename):
-    """
-    :param str filename:
-    """
-    d = eval(open(filename, "r").read())
-    assert isinstance(d, dict)
-    labels = {idx: label for (label, idx) in sorted(d.items())}
-    assert 0 in labels
-    assert len(labels) - 1 in labels
-    self.num_labels = len(labels)
-    self.vocab = d
-    self.labels = [label for (idx, label) in sorted(labels.items())]
 
   @staticmethod
   def _get_pairs(word):
@@ -1182,8 +1401,16 @@ class BytePairEncoding:
     if orig in self._bpe_encode_cache:
       return self._bpe_encode_cache[orig]
 
-    word = tuple(orig) + ('</w>',)
+    if self._bpe_file_version == (0, 1):
+      word = tuple(orig) + ('</w>',)
+    elif self._bpe_file_version == (0, 2): # more consistent handling of word-final segments
+      word = tuple(orig[:-1]) + ( orig[-1] + '</w>',)
+    else:
+      raise NotImplementedError
+
     pairs = self._get_pairs(word)
+    if not pairs:
+      return orig
 
     while True:
       bigram = min(pairs, key=lambda pair: self._bpe_codes.get(pair, float('inf')))
@@ -1220,8 +1447,62 @@ class BytePairEncoding:
     elif word[-1].endswith('</w>'):
       word = word[:-1] + (word[-1].replace('</w>', ''),)
 
+    if self.labels:
+      word = self.check_vocab_and_split(word, self._bpe_codes_reverse, self.labels, self._bpe_separator)
+
     self._bpe_encode_cache[orig] = word
     return word
+
+  def check_vocab_and_split(self, orig, bpe_codes, vocab, separator):
+    """Check for each segment in word if it is in-vocabulary,
+    and segment OOV segments into smaller units by reversing the BPE merge operations"""
+
+    out = []
+
+    for segment in orig[:-1]:
+        if segment + separator in vocab:
+            out.append(segment)
+        else:
+            #sys.stderr.write('OOV: {0}\n'.format(segment))
+            for item in self.recursive_split(segment, bpe_codes, vocab, separator, False):
+                out.append(item)
+
+    segment = orig[-1]
+    if segment in vocab:
+        out.append(segment)
+    else:
+        #sys.stderr.write('OOV: {0}\n'.format(segment))
+        for item in self.recursive_split(segment, bpe_codes, vocab, separator, True):
+            out.append(item)
+
+    return out
+
+  def recursive_split(self, segment, bpe_codes, vocab, separator, final=False):
+    """Recursively split segment into smaller units (by reversing BPE merges)
+    until all units are either in-vocabulary, or cannot be split futher."""
+
+    try:
+        if final:
+            left, right = bpe_codes[segment + '</w>']
+            right = right[:-4]
+        else:
+            left, right = bpe_codes[segment]
+    except:
+        #sys.stderr.write('cannot split {0} further.\n'.format(segment))
+        yield segment
+        return
+
+    if left + separator in vocab:
+        yield left
+    else:
+        for item in self.recursive_split(left, bpe_codes, vocab, separator, False):
+            yield item
+
+    if (final and right in vocab) or (not final and right + separator in vocab):
+        yield right
+    else:
+        for item in self.recursive_split(right, bpe_codes, vocab, separator, final):
+            yield item
 
   def _segment_sentence(self, sentence):
     """
@@ -1261,8 +1542,30 @@ class BytePairEncoding:
     :rtype: list[int]
     """
     segments = self._segment_sentence(sentence)
-    unk_id = self.vocab["UNK"]
-    seq = [self.vocab.get(k, unk_id) for k in segments]
+    seq = [self.vocab.get(k, self.unknown_label_id) for k in segments]
+    return seq + self.seq_postfix
+
+
+class CharacterTargets(Vocabulary):
+  """
+  Uses characters as target labels.
+  """
+
+  def __init__(self, vocab_file, seq_postfix=None, unknown_label="@"):
+    """
+    :param str vocab_file:
+    :param list[int]|None seq_postfix: labels will be added to the seq in self.get_seq
+    :param str unknown_label:
+    """
+    super(CharacterTargets, self).__init__(vocab_file=vocab_file, unknown_label=unknown_label)
+    self.seq_postfix = seq_postfix or []
+
+  def get_seq(self, sentence):
+    """
+    :param str sentence:
+    :rtype: list[int]
+    """
+    seq = [self.vocab.get(k, self.unknown_label_id) for k in sentence]
     return seq + self.seq_postfix
 
 
@@ -1375,6 +1678,453 @@ class BlissDataset(CachedDataset2):
 
   def _collect_single_seq(self, seq_idx):
     raise NotImplementedError  # TODO...
+
+
+class LibriSpeechCorpus(CachedDataset2):
+  """
+  LibriSpeech. http://www.openslr.org/12/
+
+  "train-*" Seq-length 'data' Stats (default MFCC, every 10ms):
+    281241 seqs
+    Mean: 1230.94154835176
+    Std dev: 383.5126785278322
+    Min/max: 84 / 2974
+  "train-*" Seq-length 'classes' Stats (BPE with 10k symbols):
+    281241 seqs
+    Mean: 58.46585312952222
+    Std dev: 20.54464373013634
+    Min/max: 1 / 161
+  "train-*" mean transcription len: 177.009085 (chars), i.e. ~3 chars per BPE label
+  """
+  def __init__(self, path, prefix, audio, targets=None, chars=None, bpe=None, use_zip=False, use_cache_manager=False,
+               partition_epoch=None, fixed_random_seed=None, fixed_random_subset=None,
+               epoch_wise_filter=None,
+               name=None,
+               **kwargs):
+    """
+    :param str path: dir, should contain "train-*/*/*/{*.flac,*.trans.txt}", or "train-*.zip"
+    :param str prefix: "train", "dev", "test", "dev-clean", "dev-other", ...
+    :param str targets|None: "bpe" or "chars" currently, if `None`, then "bpe"
+    :param dict[str] audio: options for :class:`ExtractAudioFeatures`
+    :param dict[str] bpe: options for :class:`BytePairEncoding`
+    :param dict[str] chars: options for :class:`CharacterTargets`
+    :param bool use_zip: whether to use the ZIP files instead (better for NFS)
+    :param bool use_cache_manager: uses :func:`Util.cf`
+    :param int|None partition_epoch:
+    :param int|None fixed_random_seed: for the shuffling, e.g. for seq_ordering='random'. otherwise epoch will be used
+    :param float|int|None fixed_random_subset:
+      Value in [0,1] to specify the fraction, or integer >=1 which specifies number of seqs.
+      If given, will use this random subset. This will be applied initially at loading time,
+      i.e. not dependent on the epoch. It will use an internally hardcoded fixed random seed, i.e. its deterministic.
+    :param dict|None epoch_wise_filter: see init_seq_order
+    """
+    if not name:
+      name = "prefix:" + prefix
+    super(LibriSpeechCorpus, self).__init__(name=name, **kwargs)
+    import os
+    from glob import glob
+    import zipfile
+    import Util
+    self.path = path
+    self.prefix = prefix
+    self.use_zip = use_zip
+    self._zip_files = None
+    if use_zip:
+      zip_fn_pattern = "%s/%s*.zip" % (self.path, self.prefix)
+      zip_fns = sorted(glob(zip_fn_pattern))
+      assert zip_fns, "no files found: %r" % zip_fn_pattern
+      if use_cache_manager:
+        zip_fns = [Util.cf(fn) for fn in zip_fns]
+      self._zip_files = {
+        os.path.splitext(os.path.basename(fn))[0]: zipfile.ZipFile(fn)
+        for fn in zip_fns}  # e.g. "train-clean-100" -> ZipFile
+    assert prefix.split("-")[0] in ["train", "dev", "test"]
+    assert os.path.exists(path + "/train-clean-100" + (".zip" if use_zip else ""))
+    assert targets in ("bpe", "chars", None), "Unknown target type %s" % targets
+    assert bpe or chars
+    if targets == "bpe" or (targets is None and bpe is not None):
+      self.bpe = BytePairEncoding(**bpe)
+      self.targets = self.bpe
+      self.labels = {"classes": self.bpe.labels}
+    elif targets == "chars":
+      self.chars = CharacterTargets(**chars)
+      self.labels = {"classes": self.chars.labels}
+      self.targets = self.chars
+    self._fixed_random_seed = fixed_random_seed
+    self._audio_random = numpy.random.RandomState(1)
+    self.feature_extractor = ExtractAudioFeatures(random_state=self._audio_random, **audio)
+    self.num_inputs = self.feature_extractor.get_feature_dimension()
+    self.num_outputs = {
+      "data": [self.num_inputs, 2], "classes": [self.targets.num_labels, 1], "raw": {"dtype": "string", "shape": ()}}
+    self.partition_epoch = partition_epoch
+    self.transs = self._collect_trans()
+    self._reference_seq_order = sorted(self.transs.keys())
+    if fixed_random_subset:
+      if 0 < fixed_random_subset < 1:
+        fixed_random_subset = int(len(self._reference_seq_order) * fixed_random_subset)
+      assert isinstance(fixed_random_subset, int) and fixed_random_subset > 0
+      rnd = numpy.random.RandomState(42)
+      seqs = self._reference_seq_order
+      rnd.shuffle(seqs)
+      seqs = seqs[:fixed_random_subset]
+      self._reference_seq_order = seqs
+      self.transs = {s: self.transs[s] for s in seqs}
+    self.epoch_wise_filter = epoch_wise_filter
+    self.init_seq_order()
+
+  def _collect_trans(self):
+    from glob import glob
+    import os
+    import zipfile
+    transs = {}  # type: dict[(str,int,int,int),str]  # (subdir, speaker-id, chapter-id, seq-id) -> transcription
+    if self.use_zip:
+      for name, zip_file in self._zip_files.items():
+        assert isinstance(zip_file, zipfile.ZipFile)
+        assert zip_file.filelist
+        assert zip_file.filelist[0].filename.startswith("LibriSpeech/")
+        for info in zip_file.filelist:
+          assert isinstance(info, zipfile.ZipInfo)
+          path = info.filename.split("/")
+          assert path[0] == "LibriSpeech", "does not expect %r (%r)" % (info, info.filename)
+          if path[1].startswith(self.prefix):
+            subdir = path[1]  # e.g. "train-clean-100"
+            assert subdir == name
+            if path[-1].endswith(".trans.txt"):
+              for l in zip_file.read(info).decode("utf8").splitlines():
+                seq_name, txt = l.split(" ", 1)
+                speaker_id, chapter_id, seq_id = map(int, seq_name.split("-"))
+                transs[(subdir, speaker_id, chapter_id, seq_id)] = txt
+    else:  # not zipped, directly read extracted files
+      for subdir in glob("%s/%s*" % (self.path, self.prefix)):
+        if not os.path.isdir(subdir):
+          continue
+        subdir = os.path.basename(subdir)  # e.g. "train-clean-100"
+        for fn in glob("%s/%s/*/*/*.trans.txt" % (self.path, subdir)):
+          for l in open(fn).read().splitlines():
+            seq_name, txt = l.split(" ", 1)
+            speaker_id, chapter_id, seq_id = map(int, seq_name.split("-"))
+            transs[(subdir, speaker_id, chapter_id, seq_id)] = txt
+      assert transs, "did not found anything %s/%s*" % (self.path, self.prefix)
+    assert transs
+    return transs
+
+  def init_seq_order(self, epoch=None, seq_list=None):
+    """
+    If random_shuffle_epoch1, for epoch 1 with "random" ordering, we leave the given order as is.
+    Otherwise, this is mostly the default behavior.
+
+    :param int|None epoch:
+    :param list[str]|None seq_list: In case we want to set a predefined order.
+    :rtype: bool
+    :returns whether the order changed (True is always safe to return)
+    """
+    import Util
+    super(LibriSpeechCorpus, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+    if not epoch:
+      epoch = 1
+    self._audio_random.seed(self._fixed_random_seed or epoch or 1)
+    if self.partition_epoch:
+      real_epoch = (epoch - 1) // self.partition_epoch + 1  # count starting from epoch 1
+    else:
+      real_epoch = epoch
+    if seq_list is not None:
+      self._seq_order = list(seq_list)
+      self._num_seqs = len(self._seq_order)
+    else:
+      num_seqs = len(self._reference_seq_order)
+      self._seq_order = self.get_seq_order_for_epoch(
+        epoch=real_epoch, num_seqs=num_seqs, get_seq_len=lambda i: len(self.transs[self._reference_seq_order[i]]))
+      self._num_seqs = num_seqs
+    if self.partition_epoch:
+      partition_epoch_num_seqs = [self._num_seqs // self.partition_epoch] * self.partition_epoch
+      i = 0
+      while sum(partition_epoch_num_seqs) < self._num_seqs:
+        partition_epoch_num_seqs[i] += 1
+        i += 1
+        assert i < self.partition_epoch
+      assert sum(partition_epoch_num_seqs) == self._num_seqs
+      self._num_seqs = partition_epoch_num_seqs[(self.epoch - 1) % self.partition_epoch]
+      i = 0
+      for n in partition_epoch_num_seqs[:(epoch - 1) % self.partition_epoch]:
+        i += n
+      self._seq_order = self._seq_order[i:i + self._num_seqs]
+    if self.epoch_wise_filter:
+      old_num_seqs = self._num_seqs
+      any_filter = False
+      for (ep_start, ep_end), value in sorted(self.epoch_wise_filter.items()):
+        assert isinstance(ep_start, int) and isinstance(ep_end, int) and 1 <= ep_start <= ep_end
+        assert isinstance(value, dict)
+        if ep_start <= epoch <= ep_end:
+          any_filter = True
+          opts = CollectionReadCheckCovered(value)
+          if opts.get("subdirs") is not None:
+            subdirs = opts.get("subdirs", None)
+            assert isinstance(subdirs, list)
+            self._seq_order = [idx for idx in self._seq_order if self._reference_seq_order[idx][0] in subdirs]
+            assert self._seq_order, "subdir filter %r invalid?" % (subdirs,)
+          if opts.get("max_mean_len"):
+            max_mean_len = opts.get("max_mean_len")
+            seqs = numpy.array(
+              sorted([(len(self.transs[self._reference_seq_order[idx]]), idx) for idx in self._seq_order]))
+            num = Util.binary_search_any(
+              cmp=lambda num: numpy.mean(seqs[:num, 0]) > max_mean_len, low=1, high=len(seqs) + 1)
+            assert num is not None
+            self._seq_order = list(seqs[:num, 1])
+            print("%s, epoch %i. Old mean seq len (transcription) is %f, new is %f." % (
+              self, epoch, float(numpy.mean(seqs[:, 0])), float(numpy.mean(seqs[:num, 0]))), file=log.v4)
+          self._num_seqs = len(self._seq_order)
+      if any_filter:
+        print("%s, epoch %i. Old num seqs %i, new num seqs %i." % (
+          self, epoch, old_num_seqs, self._num_seqs), file=log.v4)
+      else:
+        print("%s, epoch %i. No filter for this epoch." % (self, epoch), file=log.v4)
+    return True
+
+  def _get_ref_seq_idx(self, seq_idx):
+    """
+    :param int seq_idx:
+    :return: idx in self._reference_seq_order
+    :rtype: int
+    """
+    return self._seq_order[seq_idx]
+
+  def have_corpus_seq_idx(self):
+    return True
+
+  def get_corpus_seq_idx(self, seq_idx):
+    return self._get_ref_seq_idx(seq_idx)
+
+  def get_tag(self, seq_idx):
+    """
+    :param int seq_idx:
+    :rtype: str
+    """
+    subdir, speaker_id, chapter_id, seq_id = self._reference_seq_order[self._get_ref_seq_idx(seq_idx)]
+    return "%(sd)s-%(sp)i-%(ch)i-%(i)04i" % {
+      "sd": subdir, "sp": speaker_id, "ch": chapter_id, "i": seq_id}
+
+  def _get_transcription(self, seq_idx):
+    """
+    :param int seq_idx:
+    :return: (bpe, txt)
+    :rtype: (list[int], str)
+    """
+    seq_key = self._reference_seq_order[self._get_ref_seq_idx(seq_idx)]
+    targets_txt = self.transs[seq_key]
+    return self.targets.get_seq(targets_txt), targets_txt
+
+  def _open_audio_file(self, seq_idx):
+    """
+    :param int seq_idx:
+    :return: io.FileIO
+    """
+    import io
+    import os
+    import zipfile
+    subdir, speaker_id, chapter_id, seq_id = self._reference_seq_order[self._get_ref_seq_idx(seq_idx)]
+    audio_fn = "%(sd)s/%(sp)i/%(ch)i/%(sp)i-%(ch)i-%(i)04i.flac" % {
+      "sd": subdir, "sp": speaker_id, "ch": chapter_id, "i": seq_id}
+    if self.use_zip:
+      audio_fn = "LibriSpeech/%s" % (audio_fn,)
+      zip_file = self._zip_files[subdir]
+      assert isinstance(zip_file, zipfile.ZipFile)
+      raw_bytes = zip_file.read(audio_fn)
+      return io.BytesIO(raw_bytes)
+    else:
+      audio_fn = "%s/%s" % (self.path, audio_fn)
+      assert os.path.exists(audio_fn)
+      return open(audio_fn, "rb")
+
+  def _collect_single_seq(self, seq_idx):
+    """
+    :param int seq_idx:
+    :rtype: DatasetSeq
+    """
+    # Don't use librosa.load which internally uses audioread which would use Gstreamer as a backend,
+    # which has multiple issues:
+    # https://github.com/beetbox/audioread/issues/62
+    # https://github.com/beetbox/audioread/issues/63
+    # Instead, use PySoundFile, which is also faster. See here for discussions:
+    # https://github.com/beetbox/audioread/issues/64
+    # https://github.com/librosa/librosa/issues/681
+    import soundfile  # pip install pysoundfile
+    with self._open_audio_file(seq_idx) as audio_file:
+      audio, sample_rate = soundfile.read(audio_file)
+    features = self.feature_extractor.get_audio_features(audio=audio, sample_rate=sample_rate)
+    bpe, txt = self._get_transcription(seq_idx)
+    targets = numpy.array(bpe, dtype="int32")
+    raw = numpy.array(txt, dtype="object")
+    return DatasetSeq(
+      features=features,
+      targets={"classes": targets, "raw": raw},
+      seq_idx=seq_idx,
+      seq_tag=self.get_tag(seq_idx))
+
+
+class Enwik8Corpus(CachedDataset2):
+  """
+  enwik8
+  """
+  # Use a single HDF file, and cache it across all instances.
+  _hdf_file = None
+
+  def __init__(self, path, subset, seq_len, fixed_random_seed=None, batch_num_seqs=None,
+               subsubset=None, partition_epoch=None,
+               **kwargs):
+    """
+    :param str path:
+    :param str subset: "training", "validation", "test"
+    :param int seq_len:
+    :param int|None fixed_random_seed:
+    :param int|None batch_num_seqs: if given, will not shuffle the data but have it in such order,
+      that with a given batch num_seqs setting, you could reuse the hidden state in an RNN
+    :param int|(int,int)|None subsubset: end, (start,end), or full
+    :param int|None partition_epoch:
+    """
+    assert subset in ["training", "validation", "test"]
+    import os
+    super(Enwik8Corpus, self).__init__(**kwargs)
+    self.path = path
+    assert os.path.isdir(path)
+    self._prepare()
+    self._unique = self._hdf_file.attrs['unique']  # array label-idx -> byte idx (uint8, 0-255)
+    labels = [bytes([b]) for b in self._unique]
+    self.labels = {"data": labels, "classes": labels}
+    self.num_inputs = len(labels)
+    self.num_outputs = {"data": [self.num_inputs, 1], "classes": [self.num_inputs, 1]}
+    self._data = self._hdf_file["split/%s/default" % subset]  # raw data, uint8 array
+    if subsubset:
+      if isinstance(subsubset, int):
+        self._data = self._data[:subsubset]
+      else:
+        self._data = self._data[subsubset[0]:subsubset[1]]
+    assert len(self._data) > 1
+    self._seq_len = seq_len
+    self._fixed_random_seed = fixed_random_seed
+    self._batch_num_seqs = batch_num_seqs
+    self._random = numpy.random.RandomState(1)  # seed will be set in init_seq_order
+    self._seq_starts = numpy.arange(0, len(self._data) - 1, seq_len)
+    self._partition_epoch = partition_epoch
+
+  def get_data_dtype(self, key):
+    return "uint8"
+
+  def init_seq_order(self, epoch=None, seq_list=None):
+    super(Enwik8Corpus, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+    if not epoch:
+      epoch = 1
+    epoch_part = None
+    if self._partition_epoch:
+      epoch_part = (epoch - 1) % self._partition_epoch
+      epoch = ((epoch - 1) // self._partition_epoch) + 1
+    self._random.seed(self._fixed_random_seed or epoch or 1)
+    self._num_seqs = len(self._seq_starts)
+    self._num_timesteps = len(self._data) - 1
+    if self._batch_num_seqs is None:
+      self._seq_order = self.get_seq_order_for_epoch(
+        epoch=epoch or 1, num_seqs=self._num_seqs, get_seq_len=lambda _: self._seq_len)
+    else:
+      if self._num_seqs % self._batch_num_seqs > 0:
+        self._num_seqs -= self._num_seqs % self._batch_num_seqs
+        self._num_timesteps = None
+        assert self._num_seqs > 0
+      assert self._num_seqs % self._batch_num_seqs == 0
+      seq_index = numpy.array(list(range(self._num_seqs)))
+      seq_index = seq_index.reshape((self._batch_num_seqs, self._num_seqs // self._batch_num_seqs))
+      seq_index = seq_index.transpose()
+      seq_index = seq_index.flatten()
+      self._seq_order = seq_index
+    assert len(self._seq_order) == self._num_seqs > 0
+    if self._partition_epoch:
+      assert self._num_seqs >= self._partition_epoch
+      partition_epoch_num_seqs = [self._num_seqs // self._partition_epoch] * self._partition_epoch
+      i = 0
+      while sum(partition_epoch_num_seqs) < self._num_seqs:
+        partition_epoch_num_seqs[i] += 1
+        i += 1
+        assert i < self._partition_epoch
+      assert sum(partition_epoch_num_seqs) == self._num_seqs
+      self._num_seqs = partition_epoch_num_seqs[epoch_part]
+      i = 0
+      for n in partition_epoch_num_seqs[:epoch_part]:
+        i += n
+      self._seq_order = self._seq_order[i:i + self._num_seqs]
+    return True
+
+  def _collect_single_seq(self, seq_idx):
+    idx = self._seq_order[seq_idx]
+    src_seq_start = self._seq_starts[idx]
+    tgt_seq_start = src_seq_start + 1
+    tgt_seq_end = min(tgt_seq_start + self._seq_len, len(self._data))
+    src_seq_end = tgt_seq_end - 1
+    assert tgt_seq_end - tgt_seq_start == src_seq_end - src_seq_start > 0
+    data = numpy.array(self._data[src_seq_start:tgt_seq_end], dtype="uint8")
+    return DatasetSeq(
+      seq_idx=seq_idx,
+      features=data[:-1],
+      targets=data[1:],
+      seq_tag="offset_%i_%i" % (src_seq_start, src_seq_end - src_seq_start))
+
+  @property
+  def _hdf_filename(self):
+    return self.path + "/enwik8.hdf5"
+
+  @property
+  def _zip_filename(self):
+    return self.path + "/enwik8.zip"
+
+  def _prepare(self):
+    """
+    Reference:
+    https://github.com/julian121266/RecurrentHighwayNetworks/blob/master/data/create_enwik8.py
+    """
+    if self._hdf_file:
+      return
+    import os
+    import h5py
+    if not os.path.exists(self._hdf_filename):
+      self._create_hdf()
+    Enwik8Corpus._hdf_file = h5py.File(self._hdf_filename, "r")
+
+  def _create_hdf(self):
+    import os
+    import h5py
+    import zipfile
+
+    if not os.path.exists(self._zip_filename):
+      self._download_zip()
+
+    print("%s: create %s" % (self, self._hdf_filename), file=log.v2)
+    num_test_chars = 5000000
+
+    raw_data = zipfile.ZipFile(self._zip_filename).read('enwik8')
+    raw_data = numpy.fromstring(raw_data, dtype=numpy.uint8)
+    unique, data = numpy.unique(raw_data, return_inverse=True)
+
+    train_data = data[: -2 * num_test_chars]
+    valid_data = data[-2 * num_test_chars: -num_test_chars]
+    test_data = data[-num_test_chars:]
+
+    f = h5py.File(self._hdf_filename, "w")
+    f.attrs['unique'] = unique
+
+    variant = f.create_group('split')
+    group = variant.create_group('training')
+    group.create_dataset(name='default', data=train_data, compression='gzip')
+
+    group = variant.create_group('validation')
+    group.create_dataset(name='default', data=valid_data, compression='gzip')
+
+    group = variant.create_group('test')
+    group.create_dataset(name='default', data=test_data, compression='gzip')
+
+    f.close()
+
+  def _download_zip(self):
+    url = 'http://mattmahoney.net/dc/enwik8.zip'
+    print("%s: download %s" % (self, url), file=log.v2)
+    from six.moves.urllib.request import urlretrieve
+    urlretrieve(url, self._zip_filename)
 
 
 def demo():

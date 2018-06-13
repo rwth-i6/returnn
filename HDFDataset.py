@@ -1,5 +1,6 @@
 from __future__ import print_function
 import collections
+import functools as fun
 import gc
 import h5py
 import numpy
@@ -147,7 +148,7 @@ class HDFDataset(CachedDataset):
     for i in range(len(self.files)):
       if len(file_info[i]) == 0:
         continue
-      print("loading file", self.files[i], file=log.v4)
+      print("loading file %d/%d" % (i+1, len(self.files)), self.files[i], file=log.v4)
       fin = h5py.File(self.files[i], 'r')
       for idc, ids in file_info[i]:
         s = ids - self.file_start[i]
@@ -299,10 +300,11 @@ class NextGenHDFDataset(CachedDataset2):
               'sparse'            : SparseStreamParser,
               'segment_alignment' : SegmentAlignmentStreamParser }
 
-  def __init__(self, input_stream_name, *args, **kwargs):
+  def __init__(self, input_stream_name, partition_epoch=1, *args, **kwargs):
     super(NextGenHDFDataset, self).__init__(*args, **kwargs)
 
     self.input_stream_name = input_stream_name
+    self.partition_epoch   = partition_epoch
 
     self.files           = []
     self.h5_files        = []
@@ -311,6 +313,9 @@ class NextGenHDFDataset(CachedDataset2):
     self.file_indices    = []
     self.seq_order       = []
     self.all_parsers     = collections.defaultdict(list)
+
+    self.partitions        = []
+    self.current_partition = 1
 
 
   def add_file(self, path):
@@ -322,6 +327,7 @@ class NextGenHDFDataset(CachedDataset2):
     assert {'seq_names', 'streams'}.issubset(set(cur_file.keys())), "%s does not contain all required datasets/groups" % path
 
     seqs = list(cur_file['seq_names'])
+    norm_seqs = [self._normalize_seq_name(s) for s in seqs]
 
     prev_no_seqs      = len(self.all_seq_names)
     seqs_in_this_file = len(seqs)
@@ -333,7 +339,7 @@ class NextGenHDFDataset(CachedDataset2):
     all_streams = set(cur_file['streams'].keys())
     assert self.input_stream_name in all_streams, "%s does not contain the input stream %s" % (path, self.input_stream_name)
 
-    parsers = { name : NextGenHDFDataset.parsers[stream.attrs['parser']](seqs, stream) for name, stream in cur_file['streams'].items()}
+    parsers = { name : NextGenHDFDataset.parsers[stream.attrs['parser']](norm_seqs, stream) for name, stream in cur_file['streams'].items()}
     for k, v in parsers.items():
       self.all_parsers[k].append(v)
 
@@ -346,10 +352,16 @@ class NextGenHDFDataset(CachedDataset2):
 
 
   def initialize(self):
-    super(NextGenHDFDataset, self).initialize()
+    total_seqs               = len(self.all_seq_names)
+    seqs_per_epoch           = total_seqs // self.partition_epoch
+    self._num_seqs           = seqs_per_epoch
+    self._estimated_num_seqs = seqs_per_epoch
 
-    self._num_seqs           = len(self.all_seq_names)
-    self._estimated_num_seqs = self._num_seqs
+    partition_sizes =   [seqs_per_epoch + 1] * (total_seqs % self.partition_epoch)\
+                      + [seqs_per_epoch]     * (self.partition_epoch - total_seqs % self.partition_epoch)
+    self.partitions = fun.reduce(lambda a, x: a + [a[-1] + x], partition_sizes, [0])  # cumulative sum
+
+    super(NextGenHDFDataset, self).initialize()
 
 
   def init_seq_order(self, epoch=None, seq_list=None):
@@ -362,15 +374,19 @@ class NextGenHDFDataset(CachedDataset2):
     if seq_list is not None:
       self.seq_order = [self.seq_name_to_idx[s] for s in seq_list]
     else:
-      self.seq_order = self.get_seq_order_for_epoch(epoch, len(self.all_seq_names), self._get_seq_length)
+      epoch = epoch or 1
+      self.current_partition = (epoch - 1) % self.partition_epoch
+      partition_size         = self.partitions[self.current_partition + 1] - self.partitions[self.current_partition]
+      self.seq_order         = self.get_seq_order_for_epoch(epoch, partition_size, self._get_seq_length)
 
   def _get_seq_length(self, orig_seq_idx):
     """
     :type orig_seq_idx: int
     :rtype int
     """
-    parser = self.all_parsers[self.input_stream_name][self.file_indices[orig_seq_idx]]
-    return parser.get_seq_length(self.all_seq_names[orig_seq_idx])
+    partition_offset = self.partitions[self.current_partition]
+    parser = self.all_parsers[self.input_stream_name][self.file_indices[partition_offset + orig_seq_idx]]
+    return parser.get_seq_length(self._normalize_seq_name(self.all_seq_names[partition_offset + orig_seq_idx]))
 
 
   def _collect_single_seq(self, seq_idx):
@@ -381,11 +397,13 @@ class NextGenHDFDataset(CachedDataset2):
     if seq_idx >= len(self.seq_order):
       return None
 
-    real_seq_index = self.seq_order[seq_idx]
-    file_index     = self.file_indices[real_seq_index]
-    seq_name       = self.all_seq_names[real_seq_index]
-    targets        = { name : parsers[file_index].get_data(seq_name) for name, parsers in self.all_parsers.items() }
-    features       = targets[self.input_stream_name]
+    partition_offset = self.partitions[self.current_partition]
+    real_seq_index   = partition_offset + self.seq_order[seq_idx]
+    file_index       = self.file_indices[real_seq_index]
+    seq_name         = self.all_seq_names[real_seq_index]
+    norm_seq_name    = self._normalize_seq_name(seq_name)
+    targets          = { name : parsers[file_index].get_data(norm_seq_name) for name, parsers in self.all_parsers.items() }
+    features         = targets[self.input_stream_name]
     return DatasetSeq(seq_idx=seq_idx,
                       seq_tag=seq_name,
                       features=features,
@@ -395,3 +413,13 @@ class NextGenHDFDataset(CachedDataset2):
     if key == 'data':
       return self.get_data_dtype(self.input_stream_name)
     return self.all_parsers[key][0].get_dtype()
+
+  @staticmethod
+  def _normalize_seq_name(name):
+    """
+    HDF Datasets cannot contain '/' in their name (this would create subgroups), we do not
+    want this and thus replace it with '\' when asking for data from the parsers
+    :type name: string
+    :rtype: string
+    """
+    return name.replace('/', '\\')
