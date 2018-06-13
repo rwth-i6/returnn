@@ -2449,7 +2449,7 @@ class RnnCellLayer(_ConcatInputLayer):
             var = tf.get_variable(
               'keep_state_%s' % key_name,
               validate_shape=False, initializer=tf.zeros(()),  # dummy state, will not be used like this
-              trainable=False, collections=[CollectionKeys.STATE_VARS])
+              trainable=False, collections=[tf.GraphKeys.GLOBAL_VARIABLES, CollectionKeys.STATE_VARS])
           assert isinstance(var, tf.Variable)
           var.set_shape((None, d))
           rec_layer.saveable_param_replace[var] = None  # Do not save this variable.
