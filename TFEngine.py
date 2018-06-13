@@ -1727,6 +1727,25 @@ class Engine(object):
       results += [(score, hyp_seq)]
     return results
 
+  def search_single_seq(self, source, output_layer_name=None):
+    """
+    :param list[int]|numpy.ndarray source: source as a list of indices
+    :param str|None output_layer_name: e.g. "output". if not set, will read from config "search_output_layer"
+    :return: list of all hyps, which is a tuple of score and string
+    :rtype: list[(float,str)]
+    """
+    num_outputs = {
+      "data": [self.network.extern_data.data["data"].dim, 1],
+      "classes": [self.network.extern_data.data["classes"].dim, 1]}
+    source_seq = numpy.array(source, dtype="int32")
+    assert source_seq.ndim == 1
+    targets_empty_seq = numpy.array([], dtype="int32")  # empty...
+    from GeneratingDataset import StaticDataset
+    dataset = StaticDataset(
+      data=[{"data": source_seq, "classes": targets_empty_seq}], output_dim=num_outputs)
+    dataset.init_seq_order(epoch=1)
+    return self.search_single(dataset=dataset, seq_idx=0, output_layer_name=output_layer_name)
+
   def search_single_bpe_to_bpe_seq(self, source, source_bpe, target_bpe, output_layer_name=None):
     """
     :param str source: source as a string
@@ -1736,15 +1755,10 @@ class Engine(object):
     :return: list of all hyps, which is a tuple of score and string
     :rtype: list[(float,str)]
     """
-    num_outputs = {"data": [source_bpe.num_labels, 1], "classes": [target_bpe.num_labels, 1]}
+    assert source_bpe.num_labels == self.network.extern_data.data["data"].dim
+    assert target_bpe.num_labels == self.network.extern_data.data["classes"].dim
     source_seq_list = source_bpe.get_seq(source)
-    source_seq = numpy.array(source_seq_list, dtype="int32")
-    targets_empty_seq = numpy.array([], dtype="int32")  # empty...
-    from GeneratingDataset import StaticDataset
-    dataset = StaticDataset(
-      data=[{"data": source_seq, "classes": targets_empty_seq}], output_dim=num_outputs)
-    dataset.init_seq_order(epoch=1)
-    results_raw = self.search_single(dataset=dataset, seq_idx=0, output_layer_name=output_layer_name)
+    results_raw = self.search_single_seq(source=source_seq_list, output_layer_name=output_layer_name)
     results = []
     for (score, raw) in results_raw:
       txt = " ".join(map(target_bpe.labels.__getitem__, raw))
