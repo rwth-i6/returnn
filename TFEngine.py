@@ -1746,24 +1746,33 @@ class Engine(object):
     dataset.init_seq_order(epoch=1)
     return self.search_single(dataset=dataset, seq_idx=0, output_layer_name=output_layer_name)
 
-  def search_single_bpe_to_bpe_seq(self, source, source_bpe, target_bpe, output_layer_name=None):
+  def search_single_string_to_string_seq(self, source, source_voc, target_voc, output_layer_name=None):
     """
     :param str source: source as a string
-    :param GeneratingDataset.BytePairEncoding source_bpe:
-    :param GeneratingDataset.BytePairEncoding target_bpe:
+    :param GeneratingDataset.Vocabulary source_voc:
+    :param GeneratingDataset.Vocabulary target_voc:
     :param str|None output_layer_name: e.g. "output". if not set, will read from config "search_output_layer"
     :return: list of all hyps, which is a tuple of score and string
     :rtype: list[(float,str)]
     """
-    assert source_bpe.num_labels == self.network.extern_data.data["data"].dim
-    assert target_bpe.num_labels == self.network.extern_data.data["classes"].dim
-    source_seq_list = source_bpe.get_seq(source)
+    assert source_voc.num_labels == self.network.extern_data.data["data"].dim
+    assert target_voc.num_labels == self.network.extern_data.data["classes"].dim
+    source_seq_list = source_voc.get_seq(source)
     results_raw = self.search_single_seq(source=source_seq_list, output_layer_name=output_layer_name)
     results = []
     for (score, raw) in results_raw:
-      txt = " ".join(map(target_bpe.labels.__getitem__, raw))
+      txt = target_voc.get_seq_labels(raw)
       results += [(score, txt)]
     return results
+
+  def translate(self, source): 
+    """
+    :param str source: source as a string. The assumption is that config.source_voc and config.target_voc exists (which may be BytePairEncoding classes)
+    :return: tuple of (best score, best hyp)
+    :rtype: (float,str)
+    """   
+    results = self.search_single_string_to_string_seq(source, self.config.source_voc, self.config.target_voc)
+    return results[0]
 
   def compute_priors(self, dataset, config=None):
     """
