@@ -1772,10 +1772,15 @@ def test_reclayer_optimize_out_dot():
   EncKeyPerHeadDim = 5
   EncValuePerHeadDim = 7
   EncKeyTotalDim = AttNumHeads * EncKeyPerHeadDim
-  EncValueTotalDim = AttNumHeads = EncValuePerHeadDim
+  EncValueTotalDim = AttNumHeads * EncValuePerHeadDim
   check_reclayer_optimize_out(
     {"class": "linear", "activation": None, "from": ["att"]},
     other_subnet_layers={
+      "s": {"class": "linear", "activation": None, "with_bias": False, "from": ["data:source"],
+            "n_out": EncKeyTotalDim},  # (B, D)  -- Q (query). D should be same as enc_ctx
+      "att_query": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncKeyPerHeadDim),
+                    "from": ["s"]},  # (B, H, D/H)
+      # Here is the main test, the dot-layer:
       "energy": {"class": "dot", "red1": -1, "red2": -1, "var1": "T", "var2": None,
                  "from": ["base:enc_ctx", "att_query"]},
       "att_weights": {"class": "softmax_over_spatial", "from": ["energy"]},  # (B, enc-T, H, 1)
