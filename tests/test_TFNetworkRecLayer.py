@@ -1669,9 +1669,12 @@ def test_rec_subnet_simple_rnn():
     print("rnn_cell also fine.")
 
 
-def check_reclayer_optimize_out(subnet_layer_dict, rtol=1e-5):
+def check_reclayer_optimize_out(subnet_layer_dict, other_subnet_layers=None, shared_base_net=None, rtol=1e-5):
   """
-  :param dict[str] subnet_layer_dict:
+  :param dict[str] subnet_layer_dict: opts for the output layer inside the rec-layer subnet
+  :param dict[str,dict[str]] other_subnet_layers: other layers for the rec-layer subnet
+  :param dict[str,dict[str]] shared_base_net:
+  :param float rtol: for the final comparison check
   """
   subnet_layer_dict = subnet_layer_dict.copy()
   n_in = 13
@@ -1679,7 +1682,7 @@ def check_reclayer_optimize_out(subnet_layer_dict, rtol=1e-5):
   n_batch = 5
   n_time = 7
   subnet_layer_dict["n_out"] = n_out
-  subnet_layer_dict.setdefault("from", "data:source")
+  subnet_layer_dict.setdefault("from", ["data:source"])
   rec_layer_dict = {
     "class": "rec",
     "from": ["data"],
@@ -1687,31 +1690,42 @@ def check_reclayer_optimize_out(subnet_layer_dict, rtol=1e-5):
     "n_out": n_out,
     "is_output_layer": True
   }
+  if other_subnet_layers:
+    assert "output" not in other_subnet_layers
+    rec_layer_dict["unit"].update(other_subnet_layers)
   config = Config({
     "num_inputs": n_in,
     "num_outputs": n_out
   })
   from TFNetworkRecLayer import _SubnetworkRecCell
   with make_scope() as session:
-    print("Create optimized rec layer (with subnet layer moved out)")
-    net1 = TFNetwork(config=config, train_flag=True, name="<root_opt>")
-    net1.construct_from_dict({"output_opt": rec_layer_dict})
+    print("Create non-optimized rec layer (with subnet layer moved out)")
     rec_layer_dict["optimize_move_layers_out"] = False
-    print("Create non-optimized rec layer (with subnet layer inside loop)")
-    net2 = TFNetwork(extern_data=net1.extern_data, train_flag=True, name="<root_not_opt>")
-    net2.construct_from_dict({"output_not_opt": rec_layer_dict})
-    net1_reclayer = net1.layers["output_opt"]
+    net1 = TFNetwork(config=config, train_flag=True, name="<root_not_opt>")
+    if shared_base_net:
+      net1.construct_from_dict(shared_base_net)
+      for key in shared_base_net:
+        assert key in net1.layers
+    net1.construct_from_dict({"output_not_opt": rec_layer_dict})
+    rec_layer_dict["optimize_move_layers_out"] = True
+    print("Create optimized rec layer (with subnet layer inside loop)")
+    net2 = TFNetwork(extern_data=net1.extern_data, train_flag=True, name="<root_opt>")
+    if shared_base_net:
+      for key in shared_base_net:
+        net2.layers[key] = net1.layers[key]
+    net2.construct_from_dict({"output_opt": rec_layer_dict})
+    net1_reclayer = net1.layers["output_not_opt"]
     assert isinstance(net1_reclayer, RecLayer)
     net1_subnet = net1_reclayer.cell
     assert isinstance(net1_subnet, _SubnetworkRecCell)
-    net2_reclayer = net2.layers["output_not_opt"]
+    net2_reclayer = net2.layers["output_opt"]
     assert isinstance(net2_reclayer, RecLayer)
     net2_subnet = net2_reclayer.cell
     assert isinstance(net2_subnet, _SubnetworkRecCell)
     assert_equal(set(net1_subnet.input_layers_moved_out), set())
     assert_equal(set(net2_subnet.input_layers_moved_out), set())
-    assert_equal(set(net1_subnet.output_layers_moved_out), {"output"})
-    assert_equal(set(net2_subnet.output_layers_moved_out), set())
+    assert_equal(set(net1_subnet.output_layers_moved_out), set())
+    assert_equal(set(net2_subnet.output_layers_moved_out), {"output"}.union(set(other_subnet_layers or [])))
     assert_equal([
       v.name.split("/")[1:] for v in net1.get_params_list()], [v.name.split("/")[1:] for v in net2.get_params_list()])
     net1.initialize_params(session=session)
@@ -1749,6 +1763,36 @@ def test_reclayer_optimize_out_rnncell():
 def test_reclayer_optimize_out_selfatt_left():
   check_reclayer_optimize_out({
     "class": "self_attention", "attention_left_only": True, "num_heads": 2, "total_key_dim": 6, "n_out": 18})
+
+
+@unittest.skip("WIP...")
+def test_reclayer_optimize_out_dot():
+  # Used for multi-head dot-attention.
+  AttNumHeads = 4
+  EncKeyPerHeadDim = 5
+  EncValuePerHeadDim = 7
+  EncKeyTotalDim = AttNumHeads * EncKeyPerHeadDim
+  EncValueTotalDim = AttNumHeads = EncValuePerHeadDim
+  check_reclayer_optimize_out(
+    {"class": "linear", "activation": None, "from": ["att"]},
+    other_subnet_layers={
+      "energy": {"class": "dot", "red1": -1, "red2": -1, "var1": "T", "var2": None,
+                 "from": ["base:enc_ctx", "att_query"]},
+      "att_weights": {"class": "softmax_over_spatial", "from": ["energy"]},  # (B, enc-T, H, 1)
+      "att0": {"class": "generic_attention", "weights": "att_weights", "base": "base:enc_value"},  # (B, H, V)
+      "att": {"class": "merge_dims", "axes": "except_batch", "from": ["att0"]},  # (B, H*V)
+      },
+    shared_base_net={
+      "encoder": {"class": "copy", "from": ["data"]},
+      "enc_ctx0": {"class": "linear", "activation": None, "with_bias": False, "from": ["encoder"],
+                   "n_out": EncKeyTotalDim},  # (B, enc-T, D)
+      "enc_ctx": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncKeyPerHeadDim),
+                  "from": ["enc_ctx0"], "is_output_layer": True},  # (B, enc-T, H, D/H)
+      "enc_value0": {"class": "linear", "activation": None, "with_bias": False, "from": ["encoder"],
+                     "n_out": EncValueTotalDim},
+      "enc_value": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncValuePerHeadDim),
+                    "from": ["enc_value0"], "is_output_layer": True},  # (B, enc-T, H, D/H)
+    })
 
 
 def test_subnet_load_on_init_rec():
