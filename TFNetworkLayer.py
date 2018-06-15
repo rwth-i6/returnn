@@ -2009,7 +2009,7 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
     :param LayerBase|None window_start: Tensor of shape (B,) indicating the window start
     :param int window_size:
     """
-    from TFUtil import move_axis, sequence_mask, sequence_mask_time_major
+    from TFUtil import move_axis
     import numpy
     super(SoftmaxOverSpatialLayer, self).__init__(**kwargs)
     energy_data = self.input_data.copy_as_bt_or_tb_major()  # e.g. (B,T,dim)
@@ -2050,10 +2050,9 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources, **kwargs):
-    concat_sources = get_concat_sources_data_template(sources, name="%s_output" % name)
-    if concat_sources.time_dim_axis is None:  # for use in subnet
-      return concat_sources.copy_as_batch_major()
-    return concat_sources.copy_as_bt_or_tb_major()
+    output = get_concat_sources_data_template(sources, name="%s_output" % name)
+    assert output.have_time_axis()
+    return output.copy_as_bt_or_tb_major()
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
