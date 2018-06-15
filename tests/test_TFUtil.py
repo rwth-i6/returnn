@@ -1390,6 +1390,35 @@ def test_copy_with_new_split_axes():
     assert (new_values[5:5+5,p*7:p*7+5] == old_values[3:,p*5:p*5+5]).all()
 
 
+def test_same_context_loop():
+  outer_loop_val = tf.constant(3) + tf.constant(4)
+  print("outer_loop_var control flow:", outer_loop_val.op._control_flow_context)
+  assert not has_control_flow_context(outer_loop_val)
+
+  def body(t, _x):
+    assert isinstance(_x, tf.Tensor)
+    print("in loop x control flow:", _x.op._control_flow_context)
+    assert has_control_flow_context(_x)
+    v0 = _x + 1
+    assert isinstance(v0, tf.Tensor)
+    print("v0 control flow:", v0.op._control_flow_context)
+    assert has_control_flow_context(v0)
+    v1 = outer_loop_val + 1
+    print("v1 control flow:", v1.op._control_flow_context)
+    assert has_control_flow_context(v1)  # because +1 is done here in the loop
+    with same_context(outer_loop_val):
+      v2 = outer_loop_val + 2
+    print("v2 control flow:", v2.op._control_flow_context)
+    assert not has_control_flow_context(v2)  # should be done outside now, because `same_context` usage
+    return t + 1, v0 + v1 + v2
+
+  x = tf.while_loop(
+    cond=lambda t, _x: tf.less(t, 3),
+    body=body,
+    loop_vars=(0, 0))
+  print("magic (totally arbitrary) res:", session.run(x))
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()

@@ -800,8 +800,9 @@ class Data(object):
       return self.size_placeholder[self.time_dim_axis_excluding_batch]
     with tf.name_scope("fixed_seq_len"):
       assert self.shape[self.time_dim_axis_excluding_batch] is not None
-      return expand_dims_unbroadcast(
-        self.shape[self.time_dim_axis_excluding_batch], axis=0, dim=tf.shape(self.placeholder)[self.batch_dim_axis])
+      with same_context(self.placeholder):
+        return expand_dims_unbroadcast(
+          self.shape[self.time_dim_axis_excluding_batch], axis=0, dim=tf.shape(self.placeholder)[self.batch_dim_axis])
 
   def get_sequence_mask(self):
     """
@@ -1276,6 +1277,7 @@ def var_creation_scope():
     https://github.com/tensorflow/tensorflow/issues/8604
   The solution is to reset the current frame.
   Resetting all control dependencies has this effect.
+  See also :func:`same_context`
   """
   with tf.control_dependencies(None) as dep:
     yield dep
@@ -2216,7 +2218,7 @@ def sequence_mask(lengths, **kwargs):
   """
   if hasattr(lengths, "_sequence_mask"):
     return lengths._sequence_mask
-  with reuse_name_scope_of_tensor(lengths):
+  with same_context(lengths), reuse_name_scope_of_tensor(lengths):
     mask = tf.sequence_mask(lengths, **kwargs)
   lengths._sequence_mask = mask
   return mask
@@ -2235,7 +2237,7 @@ def sequence_mask_time_major(lengths, **kwargs):
   if hasattr(lengths, "_sequence_mask_time_major"):
     return lengths._sequence_mask_time_major
   mask = sequence_mask(lengths=lengths, **kwargs)  # shape (time,batch)
-  with reuse_name_scope_of_tensor(lengths):
+  with same_context(mask), reuse_name_scope_of_tensor(lengths), tf.name_scope("sequence_mask_time_major"):
     with tf.name_scope("sequence_mask_time_major"):
       mask = tf.transpose(mask, (1, 0))  # shape (batch,time)
   lengths._sequence_mask_time_major = mask
@@ -5226,28 +5228,46 @@ def nested_get_shapes(x):
   raise TypeError("invalid type %r of %r" % (type(x), x))
 
 
+def _get_control_flow_ops(v):
+  if isinstance(v, (list, tuple)):
+    for elem in v:
+      for t in _get_control_flow_ops(elem):
+        yield t
+    return
+  if isinstance(v, (int, float, type(None))):
+    return
+  if isinstance(v, tf.Tensor):
+    v = v.op
+  assert isinstance(v, tf.Operation), "unexpected type %r" % type(v)
+  # Control flow context will be set to the context of the loop or so, if there is one, otherwise None.
+  if not v._control_flow_context:
+    return
+  yield v
+
+
+def has_control_flow_context(x):
+  """
+  :param tf.Tensor|tf.Operation|int|float|None|list[tf.Tensor|tf.Operation|int|float] x:
+  :return: whether `x` has a control flow, i.e. is e.g. inside a while loop
+  :rtype: bool
+  """
+  ops = list(_get_control_flow_ops(x))
+  return len(ops) > 0
+
+
 @contextlib.contextmanager
 def same_context(x):
   """
-  Will use the same context as `x`.
+  Will use the same (flow) context as `x`.
   E.g. if `x` is a constant, it can be outside the loop,
   so we will yield a context which is not inside the loop.
+  See also :func:`var_creation_scope`.
 
-  :param tf.Tensor|int|float|None|list[tf.Tensor|int|float] x:
+  :param tf.Tensor|tf.Operation|int|float|None|list[tf.Tensor|tf.Operation|int|float] x:
   :return: yields context (via tf.control_dependencies)
   """
-  def get_tensors(v):
-    if isinstance(v, (list, tuple)):
-      for elem in v:
-        for t in get_tensors(elem):
-          yield t
-      return
-    if isinstance(v, (int, float, type(None))):
-      return
-    assert isinstance(v, tf.Tensor), "unexpected type %r" % type(v)
-    yield v
-  tensors = list(get_tensors(x))
-  if not tensors:
+  ops = list(_get_control_flow_ops(x))
+  if not ops:
     # No TF tensor given, so we can consider the input as constant
     # and can use a clean context (e.g. not within the current loop or so).
     with tf.control_dependencies(None) as dep:  # this will reset the context
