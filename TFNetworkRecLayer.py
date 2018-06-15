@@ -1806,6 +1806,14 @@ class _SubnetworkRecCell(object):
       layers_in_loop.remove(layer)
       self.input_layers_moved_out.append(layer.name)
 
+    # First try out to move as much output-layers as possible.
+    while True:
+      output_layer = find_output_layer_to_move_out()
+      if output_layer:
+        output_move_out(output_layer)
+      else:
+        break
+    # Now, both input-layers and output-layers.
     while True:
       output_layer = find_output_layer_to_move_out()
       if output_layer:
