@@ -399,8 +399,8 @@ def check_engine_search(extra_rec_kwargs=None):
   assert isinstance(rec_layer, RecLayer)
   assert isinstance(rec_layer.cell, _SubnetworkRecCell)
   if rec_layer._optimize_move_layers_out:
-    assert_equal(set(rec_layer.cell.input_layers_moved_out), {"output"})
-    assert_equal(set(rec_layer.cell.output_layers_moved_out), {"prob"})
+    assert_equal(set(rec_layer.cell.input_layers_moved_out), set())
+    assert_equal(set(rec_layer.cell.output_layers_moved_out), {"output", "prob"})
     assert_equal(set(rec_layer.cell.layers_in_loop), set())
   else:
     assert_equal(set(rec_layer.cell.layers_in_loop), {"prob", "output", "end"})
@@ -624,8 +624,8 @@ def test_rec_optim_all_out():
   assert isinstance(rec_layer.cell, _SubnetworkRecCell)
   assert rec_layer._optimize_move_layers_out
   # Now it was initialized and optimized for training.
-  assert_equal(set(rec_layer.cell.input_layers_moved_out), {"output"})
-  assert_equal(set(rec_layer.cell.output_layers_moved_out), {"prob"})
+  assert_equal(set(rec_layer.cell.input_layers_moved_out), set())
+  assert_equal(set(rec_layer.cell.output_layers_moved_out), {"output", "prob"})
   assert_equal(set(rec_layer.cell.layers_in_loop), set())
 
   # Now reinit for search.
