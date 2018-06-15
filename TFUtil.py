@@ -290,6 +290,7 @@ class Data(object):
     :rtype: Data
     :return: copy of myself in batch-time-major or time-batch-major
     """
+    assert self.have_batch_axis() and self.have_time_axis()
     if self.batch_dim_axis == 0:
       return self.copy_with_time_dim_axis(1)
     if self.time_dim_axis == 0:
