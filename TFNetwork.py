@@ -434,6 +434,7 @@ class TFNetwork(object):
       there is one notable exception: the InternalLayer, where you predefine the output.
     :rtype: LayerBase
     """
+    from pprint import pprint
     from Util import help_on_type_error_wrong_args
     layer_desc = self._create_layer_layer_desc(name=name, layer_desc=layer_desc)
     debug_print_layer_output_template = self.get_config().bool("debug_print_layer_output_template", False)
@@ -444,10 +445,14 @@ class TFNetwork(object):
         if "output" not in layer_desc:
           layer_desc["output"] = layer_class.get_out_data_from_opts(**layer_desc)
         if debug_print_layer_output_template:
-          print("layer %s%r output: %r" % (self.get_absolute_name_scope_prefix(), name, layer_desc["output"]))
+          print("layer %s/%r output: %r" % (self.name, name, layer_desc["output"]))
         layer = layer_class(**layer_desc)
       except TypeError:
         help_on_type_error_wrong_args(cls=layer_class, kwargs=list(layer_desc.keys()))
+        raise
+      except Exception:
+        print("Exception creating layer %s/%r of class %s with opts:" % (self.name, name, layer_class.__name__))
+        pprint(layer_desc)
         raise
       layer.post_init()
       if debug_print_layer_output_shape:

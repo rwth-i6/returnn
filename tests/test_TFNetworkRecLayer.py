@@ -1694,6 +1694,7 @@ def check_reclayer_optimize_out(subnet_layer_dict, other_subnet_layers=None, sha
     assert "output" not in other_subnet_layers
     rec_layer_dict["unit"].update(other_subnet_layers)
   config = Config({
+    "debug_print_layer_output_template": True,
     "num_inputs": n_in,
     "num_outputs": n_out
   })
@@ -1709,7 +1710,7 @@ def check_reclayer_optimize_out(subnet_layer_dict, other_subnet_layers=None, sha
     net1.construct_from_dict({"output_not_opt": rec_layer_dict})
     rec_layer_dict["optimize_move_layers_out"] = True
     print("Create optimized rec layer (with subnet layer inside loop)")
-    net2 = TFNetwork(extern_data=net1.extern_data, train_flag=True, name="<root_opt>")
+    net2 = TFNetwork(config=config, extern_data=net1.extern_data, train_flag=True, name="<root_opt>")
     if shared_base_net:
       for key in shared_base_net:
         net2.layers[key] = net1.layers[key]
@@ -1781,7 +1782,7 @@ def test_reclayer_optimize_out_dot():
       "att_query": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncKeyPerHeadDim),
                     "from": ["s"]},  # (B, H, D/H)
       # Here is the main test, the dot-layer:
-      "energy": {"class": "dot", "red1": -1, "red2": -1, "var1": "T", "var2": None,
+      "energy": {"class": "dot", "red1": -1, "red2": -1, "var1": "T", "var2": "T?",
                  "from": ["base:enc_ctx", "att_query"]},
       "att_weights": {"class": "softmax_over_spatial", "from": ["energy"]},  # (B, enc-T, H, 1)
       "att0": {"class": "generic_attention", "weights": "att_weights", "base": "base:enc_value"},  # (B, H, V)

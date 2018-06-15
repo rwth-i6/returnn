@@ -3376,7 +3376,7 @@ class DotLayer(LayerBase):
     b_shape = [b_out.batch_shape[i] or b_shape[i] for i in range(b_out.batch_ndim)]
     a_rem_dims = [a_shape[i] for i in a_rem_axes]
     b_rem_dims = [b_shape[i] for i in b_rem_axes]
-    assert len(a_rem_axes) == len(b_rem_axes)
+    assert len(a_rem_axes) == len(b_rem_axes), "remaining shared (batch) axes do not match"
     assert all([
       isinstance(d1, tf.Tensor) or isinstance(d2, tf.Tensor) or d1 == d2
       for (d1, d2) in zip(a_rem_dims, b_rem_dims)])
