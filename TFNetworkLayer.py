@@ -2017,8 +2017,9 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
     energy = energy_data.placeholder
     energy_shape = tf.shape(energy, name="energy_shape")
     energy_shape = [energy_shape[i] for i in range(energy_data.batch_ndim)]
+    assert energy_data.have_time_axis()
     # if the time-axis is static, we can skip the masking
-    if energy_data.time_dim_axis is not None:
+    if energy_data.is_time_axis_dynamic():
       if energy_mask == "sequence":
         # We must mask all values behind seq_lens. Set them to -inf, because we use softmax afterwards.
         energy_mask = energy_data.get_sequence_mask()

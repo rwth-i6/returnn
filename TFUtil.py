@@ -778,13 +778,24 @@ class Data(object):
   def have_time_axis(self):
     return self.time_dim_axis is not None
 
+  def is_time_axis_dynamic(self):
+    """
+    :return: whether there are different seq-lens for the time, or all the same (static)
+    :rtype: bool
+    """
+    assert self.time_dim_axis is not None
+    if self.time_dim_axis_excluding_batch in self.size_placeholder:
+      return True
+    assert isinstance(self.shape[self.time_dim_axis_excluding_batch], int)
+    return False
+
   def get_sequence_lengths(self):
     """
     :return: seq lens tensor of shape (batch,) of dtype int32
     :rtype: tf.Tensor
     """
     assert self.time_dim_axis is not None
-    if self.time_dim_axis_excluding_batch in self.size_placeholder:
+    if self.is_time_axis_dynamic():
       return self.size_placeholder[self.time_dim_axis_excluding_batch]
     with tf.name_scope("fixed_seq_len"):
       assert self.shape[self.time_dim_axis_excluding_batch] is not None
