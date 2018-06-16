@@ -2238,8 +2238,7 @@ def sequence_mask_time_major(lengths, **kwargs):
     return lengths._sequence_mask_time_major
   mask = sequence_mask(lengths=lengths, **kwargs)  # shape (time,batch)
   with same_context(mask), reuse_name_scope_of_tensor(lengths), tf.name_scope("sequence_mask_time_major"):
-    with tf.name_scope("sequence_mask_time_major"):
-      mask = tf.transpose(mask, (1, 0))  # shape (batch,time)
+    mask = tf.transpose(mask, (1, 0))  # shape (batch,time)
   lengths._sequence_mask_time_major = mask
   return mask
 
