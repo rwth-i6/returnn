@@ -1730,11 +1730,11 @@ def check_reclayer_optimize_out(subnet_layer_dict, other_subnet_layers=None, sha
     assert_equal([
       v.name.split("/")[1:] for v in net1.get_params_list()], [v.name.split("/")[1:] for v in net2.get_params_list()])
     net1.initialize_params(session=session)
-    net1_params = net1.get_default_output_layer().get_param_values_dict(session=session)
-    net2.get_default_output_layer().set_param_values_by_dict(values_dict=net1_params, session=session)
+    net1_params = net1.layers["output_not_opt"].get_param_values_dict(session=session)
+    net2.layers["output_opt"].set_param_values_by_dict(values_dict=net1_params, session=session)
     x_np = net1.random.normal(size=(n_batch, n_time, n_in))
-    net1_output = net1.get_default_output_layer().output.get_placeholder_as_batch_major()
-    net2_output = net2.get_default_output_layer().output.get_placeholder_as_batch_major()
+    net1_output = net1.layers["output_not_opt"].output.get_placeholder_as_batch_major()
+    net2_output = net2.layers["output_opt"].output.get_placeholder_as_batch_major()
     feed_dict = {
       net1.extern_data.data["data"].placeholder: x_np,
       net1.extern_data.data["data"].size_placeholder[0]: [n_time] * n_batch}
@@ -1749,7 +1749,8 @@ def check_reclayer_optimize_out(subnet_layer_dict, other_subnet_layers=None, sha
       print("Not equal!")
       for b in range(n_batch):
         for t in range(n_time):
-          assert_allclose(y1_np[b, t], y2_np[b, t])
+          for d in range(n_out):
+            assert_allclose(y1_np[b, t, d], y2_np[b, t, d], rtol=rtol)
       assert_allclose(y1_np, y2_np, rtol=rtol)
 
 
@@ -1766,7 +1767,6 @@ def test_reclayer_optimize_out_selfatt_left():
     "class": "self_attention", "attention_left_only": True, "num_heads": 2, "total_key_dim": 6, "n_out": 18})
 
 
-@unittest.skip("WIP...")
 def test_reclayer_optimize_out_dot():
   # Used for multi-head dot-attention.
   AttNumHeads = 4
@@ -1782,11 +1782,11 @@ def test_reclayer_optimize_out_dot():
       "att_query": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncKeyPerHeadDim),
                     "from": ["s"]},  # (B, H, D/H)
       # Here is the main test, the dot-layer:
-      "energy": {"class": "dot", "red1": -1, "red2": -1, "var1": "T", "var2": "T?",
+      "energy": {"class": "dot", "red1": -1, "red2": -1, "var1": "T", "var2": "T?",  # Note the "T?".
                  "from": ["base:enc_ctx", "att_query"]},
       "att_weights": {"class": "softmax_over_spatial", "from": ["energy"]},  # (B, enc-T, H, 1)
       "att0": {"class": "generic_attention", "weights": "att_weights", "base": "base:enc_value"},  # (B, H, V)
-      "att": {"class": "merge_dims", "axes": "except_batch", "from": ["att0"]},  # (B, H*V)
+      "att": {"class": "merge_dims", "axes": "static", "from": ["att0"]},  # (B, H*V); Use "static" here.
       },
     shared_base_net={
       "encoder": {"class": "copy", "from": ["data"]},
@@ -1798,7 +1798,8 @@ def test_reclayer_optimize_out_dot():
                      "n_out": EncValueTotalDim},
       "enc_value": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncValuePerHeadDim),
                     "from": ["enc_value0"], "is_output_layer": True},  # (B, enc-T, H, D/H)
-    })
+    },
+    rtol=1e-4)
 
 
 def test_subnet_load_on_init_rec():

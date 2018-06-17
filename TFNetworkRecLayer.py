@@ -3200,6 +3200,10 @@ class GenericAttentionLayer(AttentionBaseLayer):
     out.shape = (
       out.shape[:min(len(base_rem_axes), len(out.shape) - 1)] +
       tuple([weights.output.batch_shape[a] for a in weights_rem_axes]) + out.shape[-1:])
+    # Automatically select new time-dim-axis if there seems to be one, otherwise None.
+    if None in out.shape:
+      assert out.batch_dim_axis == 0
+      out.time_dim_axis = out.batch_shape.index(None, 1)
     return out
 
 
