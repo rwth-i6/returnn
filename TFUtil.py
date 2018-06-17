@@ -798,11 +798,10 @@ class Data(object):
     assert self.time_dim_axis is not None
     if self.is_time_axis_dynamic():
       return self.size_placeholder[self.time_dim_axis_excluding_batch]
-    with tf.name_scope("fixed_seq_len"):
-      assert self.shape[self.time_dim_axis_excluding_batch] is not None
-      with same_context(self.placeholder):
-        return expand_dims_unbroadcast(
-          self.shape[self.time_dim_axis_excluding_batch], axis=0, dim=tf.shape(self.placeholder)[self.batch_dim_axis])
+    assert self.shape[self.time_dim_axis_excluding_batch] is not None
+    with same_context(self.placeholder), tf.name_scope("fixed_seq_len"):
+      return expand_dims_unbroadcast(
+        self.shape[self.time_dim_axis_excluding_batch], axis=0, dim=self.get_batch_dim())
 
   def get_sequence_mask(self):
     """
@@ -2269,9 +2268,8 @@ def reversed(x):
   """
   if hasattr(x, "_reversed_dim0"):
     return x._reversed_dim0
-  with reuse_name_scope_of_tensor(x):
-    with tf.name_scope("reversed"):
-      y = x[::-1]
+  with reuse_name_scope_of_tensor(x), tf.name_scope("reversed"):
+    y = x[::-1]
   x._reversed_dim0 = y
   y._reversed_dim0 = x
   return y
