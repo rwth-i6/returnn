@@ -245,6 +245,37 @@ def test_SplitDimsLayer_resolve_dims():
   assert_equal(SplitDimsLayer._resolve_dims(old_dim=2 * 3 * 5, new_dims=(2, 3, -1, 1)), (2, 3, 5, 1))
 
 
+def test_MergeDimsLayer():
+  with make_scope() as session:
+    net = TFNetwork(extern_data=ExternData())
+    rnd = numpy.random.RandomState(42)
+
+    def check(in_data_opts, in_static_shape, opts, out_data_shape, out_static_shape):
+      """
+      :param dict[str] in_data_opts:
+      :param tuple[int] in_static_shape:
+      :param dict[str] opts:
+      :param tuple[int|None] out_data_shape:
+      :param tuple[int] out_static_shape:
+      """
+      src = InternalLayer(name="src", network=net, out_type=in_data_opts)
+      print("input:", src.output)
+      src.output.placeholder = tf.constant(rnd.normal(size=in_static_shape).astype("float32"), dtype=tf.float32)
+      src.output.size_placeholder = {}  # not sure if enough...
+      opts = opts.copy()
+      opts.update({"network": net, "name": "merge_dims_test", "sources": [src]})
+      out_data = MergeDimsLayer.get_out_data_from_opts(**opts)
+      print("output:", out_data)
+      assert_equal(out_data.shape, out_data_shape)
+      layer = MergeDimsLayer(output=out_data, **opts)
+      assert_equal(layer.output.shape, out_data_shape)
+      out_np = session.run(layer.output.placeholder)
+      assert_equal(out_np.shape, out_static_shape)
+
+    check({"shape": (4, 7)}, (2, 4, 7), {"axes": "except_batch"}, (4 * 7,), (2, 4 * 7))
+    check({"shape": (4, None, 7)}, (2, 4, 3, 7), {"axes": "static"}, (None, 4 * 7), (2, 3, 4 * 7))
+
+
 def test_ConvLayer_get_valid_out_dim():
   assert_equal(ConvLayer.calc_out_dim(in_dim=10, stride=1, filter_size=2, padding="same"), 10)
   assert_equal(ConvLayer.calc_out_dim(in_dim=10, stride=1, filter_size=3, padding="same"), 10)

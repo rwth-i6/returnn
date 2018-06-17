@@ -714,6 +714,8 @@ class Data(object):
       elif axes == "except_batch":
         axes = list(range(self.batch_ndim))
         axes.remove(self.batch_dim_axis)
+      elif axes == "static":
+        axes = [i for i in range(self.batch_ndim) if self.batch_shape[i] is not None]
       elif axes in ["f", "feature", "non_spatial"]:
         axes = self.get_feature_batch_axes()
       elif all([a in "btf" for a in axes]):
