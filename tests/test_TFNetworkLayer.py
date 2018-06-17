@@ -272,8 +272,9 @@ def test_MergeDimsLayer():
       out_np = session.run(layer.output.placeholder)
       assert_equal(out_np.shape, out_static_shape)
 
-    check({"shape": (4, 7)}, (2, 4, 7), {"axes": "except_batch"}, (4 * 7,), (2, 4 * 7))
-    check({"shape": (4, None, 7)}, (2, 4, 3, 7), {"axes": "static"}, (None, 4 * 7), (2, 3, 4 * 7))
+    check({"shape": (4, 7), "time_dim_axis": None}, (2, 4, 7), {"axes": "except_batch"}, (4 * 7,), (2, 4 * 7))
+    check({"shape": (4, None, 7), "time_dim_axis": None}, (2, 4, 3, 7), {"axes": "static"}, (None, 4 * 7), (2, 3, 4 * 7))
+    check({"shape": (4, None, 7), "time_dim_axis": 2}, (2, 4, 3, 7), {"axes": "static"}, (None, 4 * 7), (2, 3, 4 * 7))
 
 
 def test_ConvLayer_get_valid_out_dim():

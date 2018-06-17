@@ -2407,7 +2407,7 @@ class MergeDimsLayer(_ConcatInputLayer):
         new_axis -= 1
       if i == target_axis:
         new_axis += 1
-      if i >= old_axis:
+      if i >= new_axis:
         break
     assert new_axis != target_axis
     return new_axis
