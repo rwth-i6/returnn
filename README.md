@@ -1,7 +1,8 @@
 RETURNN development tree
 ========================
 
-[RETURNN paper](https://arxiv.org/abs/1608.00895).
+[RETURNN paper 2016](https://arxiv.org/abs/1608.00895),
+[RETURNN paper 2018](https://arxiv.org/abs/1805.05225).
 
 RETURNN - RWTH extensible training framework for universal recurrent neural networks,
 is a Theano/TensorFlow-based implementation of modern recurrent neural network architectures.
