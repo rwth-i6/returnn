@@ -8,7 +8,8 @@ from Util import softmax
 class NeuralTransducerLayer(_ConcatInputLayer):
     """
     Creates a neural transducer based on the paper "A Neural Transducer": https://arxiv.org/abs/1511.04868.
-    NOTE: Requires that the loss be neural_transducer_loss and be configured with the same parameters as this layer.
+    NOTE: Requires that the loss be neural_transducer_loss.
+    NOTE: When training with BiLSTM as input, set an appropriate gradient clipping parameter.
     """
     layer_class = "neural_transducer"
 
@@ -29,7 +30,6 @@ class NeuralTransducerLayer(_ConcatInputLayer):
 
         super(NeuralTransducerLayer, self).__init__(**kwargs)
 
-        #  TODO: Use last_hidden_c not from last state but from state at timestep input_block_size
         # TODO: Build optimized version
 
         # Get embedding
@@ -59,6 +59,13 @@ class NeuralTransducerLayer(_ConcatInputLayer):
             # TODO: add better checking whether the settings are correct
             last_hidden_c = self.sources[0].get_last_hidden_state('*')  # Get last c after all blocks
             last_hidden_h = encoder_outputs[input_block_size - 1]  # Get last hidden after the first block
+
+            # Padding so that last hidden_c & _h are the same (this is needed for when using BiLSTM)
+            c_shape = tf.shape(last_hidden_c)
+            h_shape = tf.shape(last_hidden_h)
+            padding = tf.zeros([c_shape[0], h_shape[1] - c_shape[1]])
+            last_hidden_c = tf.concat([last_hidden_c, padding], axis=1)
+
             last_hidden = tf.stack([last_hidden_c, last_hidden_h], axis=0)
 
         # Note down data
@@ -146,6 +153,13 @@ class NeuralTransducerLayer(_ConcatInputLayer):
 
                 encoder_raw_outputs = encoder_outputs[input_block_size * current_block:
                                                       input_block_size * (current_block + 1)]
+
+                encoder_raw_outputs = tf.Print(encoder_raw_outputs, [encoder_raw_outputs[:, 0]], summarize=40, message='Out: ')
+
+                encoder_raw_outputs = tf.where(tf.is_nan(encoder_raw_outputs), tf.zeros_like(encoder_raw_outputs),
+                                               encoder_raw_outputs)
+
+                trans_hidden = tf.where(tf.is_nan(trans_hidden), tf.zeros_like(trans_hidden), trans_hidden)
 
                 # Save/load the state as one tensor, use top encoder layer state as init if this is the first block
                 trans_hidden_state = trans_hidden
