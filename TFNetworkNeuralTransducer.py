@@ -154,8 +154,6 @@ class NeuralTransducerLayer(_ConcatInputLayer):
                 encoder_raw_outputs = encoder_outputs[input_block_size * current_block:
                                                       input_block_size * (current_block + 1)]
 
-                encoder_raw_outputs = tf.Print(encoder_raw_outputs, [encoder_raw_outputs[:, 0]], summarize=40, message='Out: ')
-
                 encoder_raw_outputs = tf.where(tf.is_nan(encoder_raw_outputs), tf.zeros_like(encoder_raw_outputs),
                                                encoder_raw_outputs)
 
