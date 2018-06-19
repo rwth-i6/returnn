@@ -3155,10 +3155,11 @@ class SqueezeLayer(_ConcatInputLayer):
       it also accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature"
     """
     super(SqueezeLayer, self).__init__(**kwargs)
-    axes = ReduceLayer.get_axes(axis, input_data=self.input_data)
-    x = self.input_data.placeholder
-    if self.input_data.batch_dim_axis != enforce_batch_dim_axis:
-      x = swapaxes(x, self.input_data.batch_dim_axis, enforce_batch_dim_axis)
+    input_data = self.input_data
+    if enforce_batch_dim_axis is not None and input_data.batch_dim_axis != enforce_batch_dim_axis:
+      input_data = input_data.copy_with_batch_dim_axis(enforce_batch_dim_axis)
+    axes = ReduceLayer.get_axes(axis, input_data=input_data)
+    x = input_data.placeholder
     for i in reversed(sorted(axes)):
       x = tf.squeeze(x, axis=i)
     self.output.placeholder = x
