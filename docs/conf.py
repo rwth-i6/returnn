@@ -13,6 +13,11 @@ import sys
 import os
 sys.path += [".", "crnn"]
 
+import shutil
+if os.path.exists(os.path.expanduser("~/.theano")):
+  # Delete old Theano cache. You might get illegal instruction otherwise.
+  shutil.rmtree(os.path.expanduser("~/.theano"), ignore_errors=True)
+
 import logging
 logging.getLogger('tensorflow').disabled = True
 
