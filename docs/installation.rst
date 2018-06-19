@@ -5,8 +5,14 @@ Installation
 ============
 
 Installation is easy.
-Install all dependencies, which are just Theano and h5py (:code:`pip install theano h5py`).
+Checkout the Git repository of RETURNN (https://github.com/rwth-i6/returnn/).
+Install all dependencies, which are just Theano and h5py (:code:`pip install -r requirements.txt`).
+For Theano usage, make sure that you have this in your ``~/.theanorc``::
+
+    [global]
+    device = cpu
+    floatX = float32
+
 For TensorFlow, use :code:`pip install tensorflow-gpu` and make sure that CUDA and cuDNN can be found.
-Then just checkout the Git repository of RETURNN (https://github.com/rwth-i6/returnn/) and you are ready to go.
 
 See :ref:`basic_usage` for the basic usage.
