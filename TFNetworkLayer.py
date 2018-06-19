@@ -2474,6 +2474,7 @@ class SplitDimsLayer(_ConcatInputLayer):
   i.e. the input is (batch, time, window * feature),
   you can set axis="F", dims=(window, -1),
   and you will get the output (batch, time, window, feature).
+  Also see :class:`SplitBatchTimeLayer`.
   """
   layer_class = "split_dims"
 
@@ -2541,12 +2542,13 @@ class SplitBatchTimeLayer(_ConcatInputLayer):
   """
   A very specific layer which expects to get input of shape (batch * time, ...)
   and converts it into (batch, time, ...), where it recovers the seq-lens from some other layer.
+  See :class:`SplitDimsLayer` for a more generic layer.
   """
   layer_class = "split_batch_time"
 
   def __init__(self, base, **kwargs):
     """
-    :param LayerBase base:
+    :param LayerBase base: used to recover the seq-lens
     """
     super(SplitBatchTimeLayer, self).__init__(**kwargs)
     assert base.output.time_dim_axis is not None

@@ -3167,6 +3167,9 @@ class GenericAttentionLayer(AttentionBaseLayer):
       rem_dims = [d for d in rem_dims if d != 1]
     base = self.base.output.copy_as_batch_major().copy_with_time_dim_axis(-2)  # (B,...,T,n_out)
     base_t = base.placeholder
+    # According to https://github.com/tensorflow/tensorflow/issues/10765, reduce_sum might be faster.
+    # However, it would also require more memory.
+    # I did not do the comparison.
     out = tf.matmul(weights_t, base_t)  # (B,?,n_out)
     out = tf.reshape(out, shape[:rem_dims_start_axis] + rem_dims + [self.output.dim])  # (batch, ..., n_out)
     self.output.placeholder = out
