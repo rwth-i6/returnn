@@ -1293,10 +1293,10 @@ class Vocabulary(object):
       self.num_labels = len(self.labels)
     else:
       d = None
-      if filename[:-4] == ".pkl":
-         d = pickle.load(open(filename, "rb"))
+      if filename[-4:] == ".pkl":
+        d = pickle.load(open(filename, "rb"))
       else:
-         d = eval(open(filename, "r").read())
+        d = eval(open(filename, "r").read())
       assert isinstance(d, dict)
       assert self.unknown_label in d
       labels = {idx: label for (label, idx) in sorted(d.items())}

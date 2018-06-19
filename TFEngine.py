@@ -554,6 +554,8 @@ class Engine(object):
     self.use_search_flag = config.value("task", None) == "search"
     self.use_eval_flag = config.value("task", None) != "forward"
     self._const_cache = {}  # type: dict[str,tf.Tensor]
+    self.source_voc = None
+    self.target_voc = None
 
   def finalize(self):
     self._close_tf_session()
@@ -795,6 +797,10 @@ class Engine(object):
       except tf.errors.NotFoundError:
         print("Exiting now because model cannot be loaded.", file=log.v1)
         sys.exit(1)
+    if config.has("source_voc"):
+      self.source_voc = Vocabulary(config.value("source_voc", ""), "<UNK>")
+    if config.has("target_voc"):
+      self.target_voc = Vocabulary(config.value("target_voc", ""), "<UNK>")
 
   def _maybe_update_config(self, net_desc, epoch):
     """
@@ -1746,7 +1752,7 @@ class Engine(object):
     dataset.init_seq_order(epoch=1)
     return self.search_single(dataset=dataset, seq_idx=0, output_layer_name=output_layer_name)
 
-  def search_single_string_to_string_seq(self, source, source_voc, target_voc, output_layer_name=None):
+  def search_single_string_to_string_seq(self, source, output_layer_name=None):
     """
     :param str source: source as a string
     :param GeneratingDataset.Vocabulary source_voc:
@@ -1755,23 +1761,25 @@ class Engine(object):
     :return: list of all hyps, which is a tuple of score and string
     :rtype: list[(float,str)]
     """
-    assert source_voc.num_labels == self.network.extern_data.data["data"].dim
-    assert target_voc.num_labels == self.network.extern_data.data["classes"].dim
-    source_seq_list = source_voc.get_seq(source)
+    assert self.source_voc != None
+    assert self.target_voc != None
+    assert self.source_voc.num_labels == self.network.extern_data.data["data"].dim
+    assert self.target_voc.num_labels == self.network.extern_data.data["classes"].dim
+    source_seq_list = self.source_voc.get_seq(source)
     results_raw = self.search_single_seq(source=source_seq_list, output_layer_name=output_layer_name)
     results = []
     for (score, raw) in results_raw:
-      txt = target_voc.get_seq_labels(raw)
+      txt = self.target_voc.get_seq_labels(raw)
       results += [(score, txt)]
     return results
 
   def translate(self, source): 
     """
-    :param str source: source as a string. The assumption is that config.source_voc and config.target_voc exists (which may be BytePairEncoding classes)
+    :param str source: source as a string. 
     :return: tuple of (best score, best hyp)
     :rtype: (float,str)
     """   
-    results = self.search_single_string_to_string_seq(source, self.config.source_voc, self.config.target_voc)
+    results = self.search_single_string_to_string_seq(source)
     return results[0]
 
   def compute_priors(self, dataset, config=None):
