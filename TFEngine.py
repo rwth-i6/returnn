@@ -1366,7 +1366,11 @@ class Engine(object):
     if ext_feed_dict:
       feed_dict.update(ext_feed_dict)
     self.check_uninitialized_vars()  # Maybe some new uninitialized vars. Last check.
-    return self.tf_session.run(output_dict, feed_dict=feed_dict)
+    none_output_values = {k: v for (k, v) in output_dict.items() if v is None}
+    output_dict = {k: v for (k, v) in output_dict.items() if v is not None}
+    output_values = self.tf_session.run(output_dict, feed_dict=feed_dict)
+    output_values.update(none_output_values)
+    return output_values
 
   def _get_output_layer(self, output_layer_name=None):
     """
