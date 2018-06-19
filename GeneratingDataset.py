@@ -669,7 +669,7 @@ class _NltkCorpusReaderDataset(CachedDataset2):
 class ExtractAudioFeatures:
   """
   Currently uses librosa to extract MFCC features.
-  We could also use python_speech_features.
+  (Alternatives: python_speech_features, talkbox.features.mfcc, librosa)
   We could also add support e.g. to directly extract log-filterbanks or so.
   """
 
@@ -689,7 +689,7 @@ class ExtractAudioFeatures:
     :param str features: "mfcc" or "mel_spectrogram"
     :param CollectionReadCheckCovered|dict[str]|bool|None random_permute:
     :param numpy.random.RandomState|None random_state:
-    :return: (audio_len // int(step_len * sample_rate), max(1, with_delta) * num_feature_filters), float32
+    :return: (audio_len // int(step_len * sample_rate), (with_delta + 1) * num_feature_filters), float32
     :rtype: numpy.ndarray
     """
     self.window_len = window_len
@@ -697,7 +697,7 @@ class ExtractAudioFeatures:
     self.num_feature_filters = num_feature_filters
     if isinstance(with_delta, bool):
       with_delta = 1 if with_delta else 0
-    assert isinstance(with_delta, int)
+    assert isinstance(with_delta, int) and with_delta >= 0
     self.with_delta = with_delta
     if norm_mean is not None:
       norm_mean = self._load_feature_vec(norm_mean)
@@ -771,7 +771,7 @@ class ExtractAudioFeatures:
     return feature_data
 
   def get_feature_dimension(self):
-    return (max(int(self.with_delta), 1) + 1) * self.num_feature_filters
+    return (self.with_delta + 1) * self.num_feature_filters
 
 
 def _get_audio_mel_spectrogram(audio, sample_rate, window_len=0.025, step_len=0.010, num_feature_filters=80):
@@ -960,7 +960,7 @@ class TimitDataset(CachedDataset2):
     self.num_inputs = self._num_feature_filters
     if isinstance(with_delta, bool):
       with_delta = 1 if with_delta else 0
-    assert isinstance(with_delta, int)
+    assert isinstance(with_delta, int) and with_delta >= 0
     self._with_delta = with_delta
     self.num_inputs *= (1 + with_delta)
     self._norm_mean = self._load_feature_vec(norm_mean)
@@ -1186,9 +1186,6 @@ class TimitDataset(CachedDataset2):
     """
     if seq_idx >= len(self._seq_order):
       return None
-
-    # Alternatives for MFCC: python_speech_features, talkbox.features.mfcc, librosa
-    import librosa
 
     seq_tag = self._seq_tags[self._seq_order[seq_idx]]
     phone_seq = self._get_phone_seq(seq_tag)
