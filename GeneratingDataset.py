@@ -1286,12 +1286,17 @@ class Vocabulary(object):
     """
     :param str filename:
     """
+    import pickle
     if filename in self._cache:
       self.vocab, self.labels = self._cache[filename]
       assert self.unknown_label in self.vocab
       self.num_labels = len(self.labels)
     else:
-      d = eval(open(filename, "r").read())
+      d = None
+      if filename[:-4] == ".pkl":
+         d = pickle.load(open(filename, "rb"))
+      else:
+         d = eval(open(filename, "r").read())
       assert isinstance(d, dict)
       assert self.unknown_label in d
       labels = {idx: label for (label, idx) in sorted(d.items())}
