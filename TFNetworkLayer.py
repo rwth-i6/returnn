@@ -3164,8 +3164,8 @@ class SqueezeLayer(_ConcatInputLayer):
     self.output.placeholder = x
 
   @classmethod
-  def get_out_data_from_opts(cls, **kwargs):
-    return ReduceLayer.get_out_data_from_opts(keep_dims=False, **kwargs)
+  def get_out_data_from_opts(cls, enforce_batch_dim_axis=0, **kwargs):
+    return ReduceLayer.get_out_data_from_opts(keep_dims=False, enforce_batch_dim_axis=enforce_batch_dim_axis, **kwargs)
 
 
 class WeightedSumLayer(_ConcatInputLayer):
