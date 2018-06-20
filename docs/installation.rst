@@ -14,5 +14,8 @@ For Theano usage, make sure that you have this in your ``~/.theanorc``::
     floatX = float32
 
 For TensorFlow, use :code:`pip install tensorflow-gpu` and make sure that CUDA and cuDNN can be found.
+For some specific datasets or special layers, additional dependencies might be needed,
+such as ``librosa``.
+For running the tests, you need ``nose``.
 
-See :ref:`basic_usage` for the basic usage.
+See :ref:`basic_usage` for the basic usage of RETURNN.
