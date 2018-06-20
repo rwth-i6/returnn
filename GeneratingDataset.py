@@ -686,7 +686,7 @@ class ExtractAudioFeatures:
     :param bool|int with_delta:
     :param numpy.ndarray|str|None norm_mean:
     :param numpy.ndarray|str|None norm_std_dev:
-    :param str features: "mfcc" or "mel_spectrogram"
+    :param str features: "mfcc", "log_mel_filterbank", "log_log_mel_filterbank"
     :param CollectionReadCheckCovered|dict[str]|bool|None random_permute:
     :param numpy.random.RandomState|None random_state:
     :return: (audio_len // int(step_len * sample_rate), (with_delta + 1) * num_feature_filters), float32
@@ -737,7 +737,6 @@ class ExtractAudioFeatures:
       "step_len": self.step_len,
       "num_feature_filters": self.num_feature_filters,
     }
-    assert self.features in ("mfcc", "mel_spectrogram")
     peak = numpy.max(numpy.abs(audio))
     audio /= peak
 
@@ -751,8 +750,10 @@ class ExtractAudioFeatures:
 
     if self.features == "mfcc":
       feature_data = _get_audio_features_mfcc(**kwargs)
-    elif self.features == "mel_spectrogram":
-      feature_data = _get_audio_mel_spectrogram(**kwargs)
+    elif self.features == "log_mel_filterbank":
+      feature_data = _get_audio_log_mel_filterbank(**kwargs)
+    elif self.features == "log_log_mel_filterbank":
+      feature_data = _get_audio_log_log_mel_filterbank(**kwargs)
     else:
       assert False, "non-supported feature type %s" % self.features
     assert feature_data.ndim == 2
@@ -772,28 +773,6 @@ class ExtractAudioFeatures:
 
   def get_feature_dimension(self):
     return (self.with_delta + 1) * self.num_feature_filters
-
-
-def _get_audio_mel_spectrogram(audio, sample_rate, window_len=0.025, step_len=0.010, num_feature_filters=80):
-  """
-  :param numpy.ndarray audio: raw audio samples, shape (audio_len,)
-  :param int sample_rate: e.g. 22050
-  :param float window_len: in seconds
-  :param float step_len: in seconds
-  :param int num_feature_filters:
-  :return: (audio_len // int(step_len * sample_rate), num_feature_filters), float32
-  :rtype: numpy.ndarray
-  """
-  import librosa
-  mel_spectrogram = librosa.feature.melspectrogram(
-    audio, sr=sample_rate,
-    n_mels=num_feature_filters,
-    hop_length=int(step_len * sample_rate), n_fft=int(window_len * sample_rate))
-  log_noise_floor = 1e-3  # prevent numeric overflow in log
-  mel_spectrogram = numpy.log(numpy.maximum(log_noise_floor, mel_spectrogram))
-  assert mel_spectrogram.shape[0] == num_feature_filters
-  mel_spectrogram = mel_spectrogram.transpose().astype("float32")  # (time, dim)
-  return mel_spectrogram
 
 
 def _get_audio_features_mfcc(audio, sample_rate, window_len=0.025, step_len=0.010, num_feature_filters=40):
@@ -818,6 +797,63 @@ def _get_audio_features_mfcc(audio, sample_rate, window_len=0.025, step_len=0.01
   assert mfccs.shape[0] == num_feature_filters  # (dim, time)
   mfccs = mfccs.transpose().astype("float32")  # (time, dim)
   return mfccs
+
+
+def _get_audio_log_mel_filterbank(audio, sample_rate, window_len=0.025, step_len=0.010, num_feature_filters=80):
+  """
+  Computes log Mel-filterbank features from an audio signal.
+  References:
+
+    https://github.com/jameslyons/python_speech_features/blob/master/python_speech_features/base.py
+    https://github.com/tensorflow/tensor2tensor/blob/master/tensor2tensor/data_generators/speech_recognition.py
+
+  :param numpy.ndarray audio: raw audio samples, shape (audio_len,)
+  :param int sample_rate: e.g. 22050
+  :param float window_len: in seconds
+  :param float step_len: in seconds
+  :param int num_feature_filters:
+  :return: (audio_len // int(step_len * sample_rate), num_feature_filters), float32
+  :rtype: numpy.ndarray
+  """
+  import librosa
+  mel_filterbank = librosa.feature.melspectrogram(
+    audio, sr=sample_rate,
+    n_mels=num_feature_filters,
+    hop_length=int(step_len * sample_rate), n_fft=int(window_len * sample_rate))
+  log_noise_floor = 1e-3  # prevent numeric overflow in log
+  log_mel_filterbank = numpy.log(numpy.maximum(log_noise_floor, mel_filterbank))
+  assert log_mel_filterbank.shape[0] == num_feature_filters
+  log_mel_filterbank = log_mel_filterbank.transpose().astype("float32")  # (time, dim)
+  return log_mel_filterbank
+
+
+def _get_audio_log_log_mel_filterbank(audio, sample_rate, window_len=0.025, step_len=0.010, num_feature_filters=80):
+  """
+  Computes log-log Mel-filterbank features from an audio signal.
+  References:
+
+    https://github.com/jameslyons/python_speech_features/blob/master/python_speech_features/base.py
+    https://github.com/tensorflow/tensor2tensor/blob/master/tensor2tensor/data_generators/speech_recognition.py
+
+  :param numpy.ndarray audio: raw audio samples, shape (audio_len,)
+  :param int sample_rate: e.g. 22050
+  :param float window_len: in seconds
+  :param float step_len: in seconds
+  :param int num_feature_filters:
+  :return: (audio_len // int(step_len * sample_rate), num_feature_filters), float32
+  :rtype: numpy.ndarray
+  """
+  import librosa
+  mel_filterbank = librosa.feature.melspectrogram(
+    audio, sr=sample_rate,
+    n_mels=num_feature_filters,
+    hop_length=int(step_len * sample_rate), n_fft=int(window_len * sample_rate))
+  log_noise_floor = 1e-3  # prevent numeric overflow in log
+  log_mel_filterbank = numpy.log(numpy.maximum(log_noise_floor, mel_filterbank))
+  log_log_mel_filterbank = librosa.core.amplitude_to_db(log_mel_filterbank)
+  assert log_log_mel_filterbank.shape[0] == num_feature_filters
+  log_log_mel_filterbank = log_log_mel_filterbank.transpose().astype("float32")  # (time, dim)
+  return log_log_mel_filterbank
 
 
 def _get_random_permuted_audio(audio, sample_rate, opts, random_state):
