@@ -678,14 +678,12 @@ class ExtractAudioFeatures:
                num_feature_filters=40, with_delta=False, norm_mean=None, norm_std_dev=None,
                features="mfcc", random_permute=None, random_state=None):
     """
-    :param numpy.ndarray audio: raw audio samples, shape (audio_len,)
-    :param int sample_rate: e.g. 22050
     :param float window_len: in seconds
     :param float step_len: in seconds
     :param int num_feature_filters:
     :param bool|int with_delta:
-    :param numpy.ndarray|str|None norm_mean:
-    :param numpy.ndarray|str|None norm_std_dev:
+    :param numpy.ndarray|str|None norm_mean: if str, will interpret as filename
+    :param numpy.ndarray|str|None norm_std_dev: if str, will interpret as filename
     :param str features: "mfcc", "log_mel_filterbank", "log_log_mel_filterbank"
     :param CollectionReadCheckCovered|dict[str]|bool|None random_permute:
     :param numpy.random.RandomState|None random_state:
