@@ -760,7 +760,7 @@ class ExtractAudioFeatures:
     if self.with_delta:
       import librosa
       deltas = [librosa.feature.delta(feature_data, order=i, axis=0) for i in range(1, self.with_delta + 1)]
-      feature_data = numpy.stack([feature_data] + deltas, axis=1)
+      feature_data = numpy.concatenate([feature_data] + deltas, axis=1)
       assert feature_data.shape[1] == self.get_feature_dimension()
 
     if self.norm_mean is not None:
