@@ -1321,6 +1321,8 @@ class Engine(object):
     with tf.name_scope("check_uninitialized_vars"):
       # Like tf.report_uninitialized_variables().
       var_list = tf.global_variables() + tf.local_variables()
+      if not var_list:
+        return
       # Get a 1-D boolean tensor listing whether each variable is initialized.
       var_mask = tf.logical_not(tf.stack(
         [tf.is_variable_initialized(v) for v in var_list])).eval(session=self.tf_session)
