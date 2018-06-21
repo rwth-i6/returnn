@@ -1734,7 +1734,8 @@ class LibriSpeechCorpus(CachedDataset2):
     Min/max: 1 / 161
   "train-*" mean transcription len: 177.009085 (chars), i.e. ~3 chars per BPE label
   """
-  def __init__(self, path, prefix, audio, targets=None, chars=None, bpe=None, use_zip=False, use_cache_manager=False,
+  def __init__(self, path, prefix, audio, targets=None, chars=None, bpe=None,
+               use_zip=False, use_ogg=False, use_cache_manager=False,
                partition_epoch=None, fixed_random_seed=None, fixed_random_subset=None,
                epoch_wise_filter=None,
                name=None,
@@ -1747,6 +1748,7 @@ class LibriSpeechCorpus(CachedDataset2):
     :param dict[str] bpe: options for :class:`BytePairEncoding`
     :param dict[str] chars: options for :class:`CharacterTargets`
     :param bool use_zip: whether to use the ZIP files instead (better for NFS)
+    :param bool use_ogg: add .ogg postfix to all files
     :param bool use_cache_manager: uses :func:`Util.cf`
     :param int|None partition_epoch:
     :param int|None fixed_random_seed: for the shuffling, e.g. for seq_ordering='random'. otherwise epoch will be used
@@ -1766,6 +1768,7 @@ class LibriSpeechCorpus(CachedDataset2):
     self.path = path
     self.prefix = prefix
     self.use_zip = use_zip
+    self.use_ogg = use_ogg
     self._zip_files = None
     if use_zip:
       zip_fn_pattern = "%s/%s*.zip" % (self.path, self.prefix)
@@ -1962,6 +1965,8 @@ class LibriSpeechCorpus(CachedDataset2):
     subdir, speaker_id, chapter_id, seq_id = self._reference_seq_order[self._get_ref_seq_idx(seq_idx)]
     audio_fn = "%(sd)s/%(sp)i/%(ch)i/%(sp)i-%(ch)i-%(i)04i.flac" % {
       "sd": subdir, "sp": speaker_id, "ch": chapter_id, "i": seq_id}
+    if self.use_ogg:
+      audio_fn += ".ogg"
     if self.use_zip:
       audio_fn = "LibriSpeech/%s" % (audio_fn,)
       zip_file = self._zip_files[subdir]
