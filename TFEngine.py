@@ -27,6 +27,7 @@ import tensorflow as tf
 from tensorflow.python.client import timeline
 
 from Dataset import Dataset, Batch, BatchSetGenerator
+from GeneratingDataset import Vocabulary
 from Engine import Engine as TheanoEngine
 from LearningRateControl import loadLearningRateControlFromConfig, LearningRateControl
 from Log import log
@@ -1765,7 +1766,7 @@ class Engine(object):
     assert self.target_voc != None
     assert self.source_voc.num_labels == self.network.extern_data.data["data"].dim
     assert self.target_voc.num_labels == self.network.extern_data.data["classes"].dim
-    source_seq_list = self.source_voc.get_seq(source)
+    source_seq_list = self.source_voc.get_seq(source.split())
     results_raw = self.search_single_seq(source=source_seq_list, output_layer_name=output_layer_name)
     results = []
     for (score, raw) in results_raw:
@@ -1779,6 +1780,7 @@ class Engine(object):
     :return: tuple of (best score, best hyp)
     :rtype: (float,str)
     """   
+    self._checked_uninitialized_vars = True
     results = self.search_single_string_to_string_seq(source)
     return results[0]
 
