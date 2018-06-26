@@ -3586,7 +3586,7 @@ class SelfAttentionLayer(_ConcatInputLayer):
     return {}
 
 
-class PositionalEncodingLayer(LayerBase):
+class PositionalEncodingLayer(_ConcatInputLayer):
   """
   Provides positional encoding in the form of (batch, time, n_out),
   where n_out is the number of channels,
@@ -3610,7 +3610,7 @@ class PositionalEncodingLayer(LayerBase):
     """
     super(PositionalEncodingLayer, self).__init__(**kwargs)
     assert len(self.sources) == 1, "%s: expect a single source" % self
-    source = self.sources[0].output
+    source = self.input_data
     if add_to_input:
       assert source.dim == self.output.dim
     from TFUtil import get_positional_encoding
@@ -3650,9 +3650,9 @@ class PositionalEncodingLayer(LayerBase):
     :param list[LayerBase] sources:
     :rtype: Data
     """
-    assert len(sources) == 1, "%s %r: must have exactly one source" % (cls, name)
+    assert len(sources) > 0, "%s %r: must have one source" % (cls, name)
     if add_to_input:
-      return sources[0].output.copy(name="%s_output" % name)
+      return get_concat_sources_data_template(sources, name="%s_output")  # just the same as the input
     return super(PositionalEncodingLayer, cls).get_out_data_from_opts(
       name=name, network=network, sources=sources, **kwargs)
 
