@@ -5690,3 +5690,53 @@ def string_words_calc_wer(hyps, refs):
   wer = tf.cast(wer, tf.int64)  # no normalization, should be an integer
   return wer, get_sparse_tensor_length(refs_sparse)
 
+
+def get_positional_encoding(num_channels, length=None, position=None, min_timescale=1.0, max_timescale=1.0e4):
+  """
+  Gets a bunch of sinusoids of different frequencies.
+
+  Each channel of the input Tensor is incremented by a sinusoid of a different
+  frequency and phase.
+
+  This allows attention to learn to use absolute and relative positions.
+  Timing signals should be added to some precursors of both the query and the
+  memory inputs to attention.
+
+  The use of relative position is possible because sin(x+y) and cos(x+y) can be
+  experessed in terms of y, sin(x) and cos(x).
+
+  In particular, we use a geometric sequence of timescales starting with
+  min_timescale and ending with max_timescale.  The number of different
+  timescales is equal to channels / 2. For each timescale, we
+  generate the two sinusoidal signals sin(timestep/timescale) and
+  cos(timestep/timescale).  All of these sinusoids are concatenated in
+  the channels dimension.
+
+  The code is adapted from Tensor2Tensor get_timing_signal_1d (https://github.com/tensorflow/tensor2tensor).
+
+  :param int num_channels: scalar, size of timing embeddings to create. The number of
+    different timescales is equal to channels / 2.
+  :param tf.Tensor|None length: scalar, length of timing signal sequence. if not given, is shape(position)[0]
+  :param tf.Tensor|None position: could be provided directly. int32, shape (length,)
+  :param float min_timescale: a float
+  :param float max_timescale: a float
+  :return: a Tensor of timing signals (length, channels)
+  :rtype: tf.Tensor
+  """
+  import math
+  if position is None:
+    assert length is not None
+    position = tf.range(length)
+  else:
+    assert length is None
+    position.set_shape((None,))
+  position = tf.to_float(position)
+  num_timescales = num_channels // 2
+  log_timescale_increment = (
+    math.log(float(max_timescale) / float(min_timescale)) / (float(num_timescales - 1)))
+  inv_timescales = min_timescale * tf.exp(
+    tf.to_float(tf.range(num_timescales)) * -log_timescale_increment)
+  scaled_time = tf.expand_dims(position, 1) * tf.expand_dims(inv_timescales, 0)
+  signal = tf.concat([tf.sin(scaled_time), tf.cos(scaled_time)], axis=1)
+  signal = tf.pad(signal, [[0, 0], [0, num_channels % 2]])  # (length, channels)
+  return signal
