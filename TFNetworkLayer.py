@@ -1960,7 +1960,7 @@ class SampledSoftmax(_ConcatInputLayer):
       self.output.placeholder = self.output_before_activation.y
 
 
-class LengthLayer(_ConcatInputLayer):
+class LengthLayer(LayerBase):
   """
   Returns the length of sources as (B,).
   """
@@ -1968,7 +1968,7 @@ class LengthLayer(_ConcatInputLayer):
 
   def __init__(self, add_time_axis=False, **kwargs):
     super(LengthLayer, self).__init__(**kwargs)
-    data = self.input_data.get_placeholder_as_batch_major()
+    assert len(self.sources) == 1, "%s: expects one source" % self
     out = tf.cast(self.sources[0].output.size_placeholder[self.sources[0].output.time_dim_axis], tf.int32)
     if add_time_axis:
       out = tf.expand_dims(out, axis=self.output.time_dim_axis)
