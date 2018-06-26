@@ -1,7 +1,7 @@
 import tensorflow as tf
 from TFNetworkLayer import LayerBase, _ConcatInputLayer, Loss, get_concat_sources_data_template
 from TFNetworkRecLayer import RecLayer
-from TFUtil import Data
+from TFUtil import Data, sparse_labels_with_seq_lens
 from Util import softmax
 
 
@@ -616,13 +616,24 @@ class NeuralTransducerLoss(Loss):
                                            Tout=(tf.int64, tf.bool), stateful=False)
 
             output_label = tf.cast(tf.argmax(logits, axis=2), tf.int64)
-            not_equal = tf.not_equal(output_label, new_targets)
+            zeros = tf.zeros_like(output_label)
 
-            zeros = tf.zeros_like(not_equal)
-            not_equal = tf.where(mask, not_equal, zeros)
+            # Calculate edit distance
+            # First modify outputs so that only those outputs in the mask are considered
+            mod_logits = tf.where(mask, output_label, zeros)
 
-            # Apply final normalization
+            # Get find seq lens (due to having blank spaces in the modified targets we need to use this method to get
+            # the correct seq lens)
+            seq_lens = tf.argmax(tf.cumsum(tf.to_int32(mask), axis=0), axis=0)
+            seq_lens = tf.reshape(seq_lens, shape=[tf.shape(seq_lens)[0]])
+
+            logits_sparse = sparse_labels_with_seq_lens(tf.transpose(mod_logits), seq_lens=seq_lens)
+            targets_sparse = sparse_labels_with_seq_lens(tf.transpose(new_targets), seq_lens=seq_lens)
+            
+            e = tf.edit_distance(logits_sparse[0], targets_sparse[0], normalize=False)
+            total = tf.reduce_sum(e)
+
             norm = tf.to_float(tf.reduce_sum(targets_lengths)) / tf.reduce_sum(tf.to_float(mask))
-            total = tf.reduce_sum(tf.cast(not_equal, tf.float32)) * norm
+            total = total * norm
 
             return total
