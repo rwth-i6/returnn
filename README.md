@@ -33,5 +33,9 @@ The results are in the [RETURNN paper 2016](https://arxiv.org/abs/1608.00895).
 Performance benchmarks of our LSTM kernel vs CuDNN and other TensorFlow kernels
 are [here](http://returnn.readthedocs.io/en/latest/tf_lstm_benchmark.html).
 
+There is also [a wiki](https://github.com/rwth-i6/returnn/wiki).
+Questions can also be asked on
+[StackOverflow using the `returnn` tag](https://stackoverflow.com/questions/tagged/returnn).
+
 [![Test Status](https://travis-ci.org/rwth-i6/returnn.svg?branch=master)](https://travis-ci.org/rwth-i6/returnn)
 
