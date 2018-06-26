@@ -3601,6 +3601,9 @@ class PositionalEncodingLayer(LayerBase):
   The positional encoding is the same as in Tensor2Tensor.
   See :func:`TFUtil.get_positional_encoding`.
   """
+  layer_class = "positional_encoding"
+  recurrent = True
+
   def __init__(self, add_to_input=False, **kwargs):
     """
     :param bool add_to_input: will add the signal to the input
