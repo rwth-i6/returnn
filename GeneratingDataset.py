@@ -1306,13 +1306,21 @@ class Vocabulary(object):
 
   _cache = {}  # filename -> vocab, labels
 
-  def __init__(self, vocab_file, unknown_label="UNK"):
+  def __init__(self, vocab_file, unknown_label="UNK", num_labels=None):
     """
     :param str vocab_file:
     :param str unknown_label:
+    :param int num_labels: just for verification
     """
+    self.vocab_file = vocab_file
     self.unknown_label = unknown_label
+    self.num_labels = None  # will be set by _parse_vocab
     self._parse_vocab(vocab_file)
+    if num_labels is not None:
+      assert self.num_labels == num_labels
+
+  def __repr__(self):
+    return "Vocabulary(%r, num_labels=%s, unknown_label=%r)" % (self.vocab_file, self.num_labels, self.unknown_label)
 
   def _parse_vocab(self, filename):
     """

@@ -71,6 +71,7 @@ class Data(object):
                time_dim_axis=NotSpecified,
                available_for_inference=True,
                auto_create_placeholders=False,
+               vocab=None,
                beam_size=None):
     """
     :param str name:
@@ -89,6 +90,7 @@ class Data(object):
     :param dict[int,tf.Tensor] tf.Tensor size_placeholder: for every None in shape, this will describe the size.
       The size is always a tensor of shape (batch,), i.e. the size can be different for each sequence in a batch.
     :param bool available_for_inference: e.g. the extern data "classes" is usually not available for inference
+    :param str|dict[str]|GeneratingDataset.Vocabulary|None vocab:
     :param int|None beam_size: the batch-dim could be extended by a beam-size,
       such that it represents the merged dims [batch, beam_size].
     """
@@ -145,6 +147,16 @@ class Data(object):
     self.size_placeholder = size_placeholder  # type: dict[int,tf.Tensor]  # axis w.o. batch -> size of shape (batch,)
     self.available_for_inference = available_for_inference
     self.beam_size = beam_size
+    if vocab is not None:
+      from GeneratingDataset import Vocabulary
+      if isinstance(vocab, str):
+        vocab = Vocabulary(vocab)
+      elif isinstance(vocab, dict):
+        vocab = Vocabulary(**vocab)
+      assert isinstance(vocab, Vocabulary)
+      assert self.sparse, "%s should represent indices of %s" % (self, vocab)
+      assert self.dim == vocab.num_labels, "%s dims do not match with vocab %s" % (self, vocab)
+    self.vocab = vocab
 
   def get_placeholder_kwargs(self, with_batch=True):
     return dict(name=self.name, dtype=self.dtype, shape=self.batch_shape if with_batch else self.shape)
