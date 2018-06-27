@@ -3652,7 +3652,7 @@ class PositionalEncodingLayer(_ConcatInputLayer):
     """
     assert len(sources) > 0, "%s %r: must have one source" % (cls, name)
     if add_to_input:
-      return get_concat_sources_data_template(sources, name="%s_output")  # just the same as the input
+      return get_concat_sources_data_template(sources, name="%s_output" % name)  # just the same as the input
     return super(PositionalEncodingLayer, cls).get_out_data_from_opts(
       name=name, network=network, sources=sources, **kwargs)
 
