@@ -5630,20 +5630,6 @@ class SampledSoftmaxLoss(Loss):
     assert sampler in ["uniform", "log_uniform", "learned_unigram"], "Not implemented sampler selected"
     self.sampler = sampler
 
-  def get_output_target_scores(self):
-    """
-    :return: shape (time_flat,), type float32
-    :rtype: tf.Tensor
-    """
-    output_flat = self.output_flat
-    if output_flat is None:
-      output_flat = self.output.get_placeholder_time_flattened()
-    target_flat_exp = tf.stack(
-      [tf.range(tf.shape(self.target_flat)[0], dtype=tf.int32),
-       tf.cast(self.target_flat, tf.int32)], axis=1)  # (time,2)
-    out = tf.gather_nd(output_flat, target_flat_exp)
-    return out
-
   def get_value(self):
     assert isinstance(self.layer, SampledSoftmax)
     assert self.target.sparse, "Sampled softmax is only useful for big (i.e. sparse) target vectors"
@@ -5713,11 +5699,34 @@ class SampledSoftmaxLoss(Loss):
       # The function that is called for the evaluation branch
       def eval_fn():
         assert self.target.sparse is True
-        # Old code:
-        from TFUtil import to_int32_64
+
+        # First switch target vector for dimension alignment with input_data tensor
+        labels = self.target.placeholder
+        current_labels_shape = tf.shape(labels)
+        labels = tf.reshape(labels, [current_labels_shape[1], current_labels_shape[0]])
+        labels = tf.reshape(labels, [-1])
+
+        # Get input from current layer
+        inputs = self.layer.input_data.placeholder
+        current_input_shape = tf.shape(inputs)
+        new_input_shape = [-1, current_input_shape[self.layer.input_data.ndim]]
+        inputs = tf.reshape(inputs, new_input_shape)
+
+        from TFUtil import dot
+        logits = dot(inputs, tf.transpose(self.layer.W))
+        logits = tf.nn.bias_add(logits, self.layer.b)
+
         loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
-          logits=self.output_before_softmax_flat,
-          labels=to_int32_64(self.target_flat))
+          labels=labels,
+          logits=logits)
+
+        # mask loss on invalid frames
+        mask = self.target.get_sequence_mask()
+        current_mask_shape = tf.shape(self.target.placeholder)
+        mask = tf.reshape(mask, [current_mask_shape[1], current_mask_shape[0]])
+        mask = tf.reshape(mask, [-1])
+
+        loss = tf.where(mask, loss, tf.zeros(tf.shape(loss)))
 
         return loss
 
