@@ -1756,8 +1756,6 @@ class Engine(object):
   def search_single_string_to_string_seq(self, source, output_layer_name=None):
     """
     :param str source: source as a string
-    :param GeneratingDataset.Vocabulary source_voc:
-    :param GeneratingDataset.Vocabulary target_voc:
     :param str|None output_layer_name: e.g. "output". if not set, will read from config "search_output_layer"
     :return: list of all hyps, which is a tuple of score and string
     :rtype: list[(float,str)]
