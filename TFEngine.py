@@ -1765,7 +1765,7 @@ class Engine(object):
     self._checked_uninitialized_vars = True
     assert self.source_voc.num_labels == self.network.extern_data.data["data"].dim
     assert self.target_voc.num_labels == self.network.extern_data.data["classes"].dim
-    source_seq_list = self.source_voc.get_seq(source.split())
+    source_seq_list = self.source_voc.get_seq_indices(source.split())
     results_raw = self.search_single_seq(source=source_seq_list, output_layer_name=output_layer_name)
     results = []
     for (score, raw) in results_raw:
