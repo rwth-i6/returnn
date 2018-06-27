@@ -1344,7 +1344,7 @@ class Vocabulary(object):
 
     return init_vocab_var
 
-  def get_seq(self, seq):
+  def get_seq_indices(self, seq):
     """
     :param list[str] seq:
     :rtype: list[int]
@@ -1354,7 +1354,7 @@ class Vocabulary(object):
   def get_seq_labels(self, seq):
     """
     :param list[int] seq:
-    :rtype: string
+    :rtype: str
     """
     return " ".join(map(self.labels.__getitem__, seq))
 
@@ -1561,7 +1561,7 @@ class BytePairEncoding(Vocabulary):
     :rtype: list[int]
     """
     segments = self._segment_sentence(sentence)
-    seq = super(BytePairEncoding, self).get_seq(segments)
+    seq = super(BytePairEncoding, self).get_seq_indices(segments)
     return seq + self.seq_postfix
 
 

@@ -1764,6 +1764,7 @@ class Engine(object):
     """
     assert self.source_voc != None
     assert self.target_voc != None
+    self._checked_uninitialized_vars = True
     assert self.source_voc.num_labels == self.network.extern_data.data["data"].dim
     assert self.target_voc.num_labels == self.network.extern_data.data["classes"].dim
     source_seq_list = self.source_voc.get_seq(source.split())
@@ -1773,16 +1774,6 @@ class Engine(object):
       txt = self.target_voc.get_seq_labels(raw)
       results += [(score, txt)]
     return results
-
-  def translate(self, source): 
-    """
-    :param str source: source as a string. 
-    :return: tuple of (best score, best hyp)
-    :rtype: (float,str)
-    """   
-    self._checked_uninitialized_vars = True
-    results = self.search_single_string_to_string_seq(source)
-    return results[0]
 
   def compute_priors(self, dataset, config=None):
     """
