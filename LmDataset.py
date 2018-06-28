@@ -1009,7 +1009,6 @@ class TranslationDataset(CachedDataset2):
     :rtype: numpy.ndarray
     """
     words = s.split()
-
     if self._unknown_label is None:
       try:
         words_idxs = list(map(vocab.__getitem__, words))

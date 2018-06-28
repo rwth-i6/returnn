@@ -1609,7 +1609,7 @@ class BytePairEncoding(Vocabulary):
     :rtype: list[int]
     """
     segments = self._segment_sentence(sentence)
-    seq = super(BytePairEncoding, self).get_seq_indices(segments)
+    seq = self.get_seq_indices(segments)
     return seq + self.seq_postfix
 
 
