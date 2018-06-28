@@ -1752,22 +1752,22 @@ class Engine(object):
     dataset.init_seq_order(epoch=1)
     return self.search_single(dataset=dataset, seq_idx=0, output_layer_name=output_layer_name)
 
-  def search_single_bpe_to_bpe_seq(self, source, source_bpe, target_bpe, output_layer_name=None):
+  def search_single_string_to_string_seq(self, source, output_layer_name=None):
     """
     :param str source: source as a string
-    :param GeneratingDataset.BytePairEncoding source_bpe:
-    :param GeneratingDataset.BytePairEncoding target_bpe:
     :param str|None output_layer_name: e.g. "output". if not set, will read from config "search_output_layer"
     :return: list of all hyps, which is a tuple of score and string
     :rtype: list[(float,str)]
     """
-    assert source_bpe.num_labels == self.network.extern_data.data["data"].dim
-    assert target_bpe.num_labels == self.network.extern_data.data["classes"].dim
-    source_seq_list = source_bpe.get_seq(source)
+    source_voc = self.network.extern_data.data["data"].vocab
+    target_voc = self.network.extern_data.data["targets"].vocab
+    assert source_voc.num_labels == self.network.extern_data.data["data"].dim
+    assert target_voc.num_labels == self.network.extern_data.data["classes"].dim
+    source_seq_list = source_voc.get_seq(source)
     results_raw = self.search_single_seq(source=source_seq_list, output_layer_name=output_layer_name)
     results = []
     for (score, raw) in results_raw:
-      txt = " ".join(map(target_bpe.labels.__getitem__, raw))
+      txt = target_voc.get_seq_labels(raw)
       results += [(score, txt)]
     return results
 

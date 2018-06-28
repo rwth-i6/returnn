@@ -1326,12 +1326,17 @@ class Vocabulary(object):
     """
     :param str filename:
     """
+    import pickle
     if filename in self._cache:
       self.vocab, self.labels = self._cache[filename]
       assert self.unknown_label in self.vocab
       self.num_labels = len(self.labels)
     else:
-      d = eval(open(filename, "r").read())
+      d = None
+      if filename[-4:] == ".pkl":
+        d = pickle.load(open(filename, "rb"))
+      else:
+        d = eval(open(filename, "r").read())
       assert isinstance(d, dict)
       assert self.unknown_label in d
       labels = {idx: label for (label, idx) in sorted(d.items())}
@@ -1378,13 +1383,28 @@ class Vocabulary(object):
       VariableAssigner(var).assign(session=session, value=self.labels)
 
     return init_vocab_var
-
+  
+  def get_seq(self, seq):
+    """
+    :param str sentence:
+    :rtype: list[int]
+    """
+    segments = seq.split()
+    return self.get_seq_indices(segments)
+  
   def get_seq_indices(self, seq):
     """
     :param list[str] seq:
     :rtype: list[int]
     """
     return [self.vocab.get(k, self.unknown_label_id) for k in seq]
+  
+  def get_seq_labels(self, seq):
+    """
+    :param list[int] seq:
+    :rtype: str
+    """
+    return " ".join(map(self.labels.__getitem__, seq))
 
 
 class BytePairEncoding(Vocabulary):
