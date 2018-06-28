@@ -217,7 +217,7 @@ class WindowLayer(_NoOpLayer):
 class WindowContextLayer(_NoOpLayer):
   layer_class = "window_context"
 
-  def __init__(self, window, average='uniform', scan=False, n_out=None, **kwargs):
+  def __init__(self, window, average='concat', direction = -1, scan=False, n_out=None, **kwargs):
     super(WindowContextLayer, self).__init__(**kwargs)
     source, n_in = concat_sources(self.sources, unsparse=False)
     if n_out is not None:
@@ -230,11 +230,14 @@ class WindowContextLayer(_NoOpLayer):
     self.set_attr('n_out', n_out)
     self.set_attr('window', window)
     self.set_attr('average', average)
+    self.set_attr('direction', direction)
 
     if average == 'exponential':
       weights = numpy.float32(1) / T.arange(1, window + 1,dtype='float32')[::-1]
     elif average == 'uniform':
       weights = numpy.float32(1) / (T.cast(window,'float32') * T.ones((window,),'float32'))
+    elif average == 'concat':
+      weights = None
     else:
       assert False, "invalid averaging method: " + str(average)
 
@@ -246,9 +249,13 @@ class WindowContextLayer(_NoOpLayer):
       self.make_output(mapped_out[0])
     else:
       from TheanoUtil import context_batched
-      tiled_out = context_batched(source, window=window)
-      windows = tiled_out.reshape((source.shape[0],source.shape[1],window,source.shape[2])).dimshuffle(0,1,3,2)
-      out = T.dot(windows, weights)
+      tiled_out = context_batched(source[::-direction], window=window)
+      windows = tiled_out.reshape((source.shape[0],source.shape[1],window,source.shape[2])).dimshuffle(0,1,3,2)[::-direction]
+      if weights is not None:
+        out = T.dot(windows, weights)
+      else:
+        out = windows
+        self.set_attr('n_out', n_out * window)
       self.make_output(out)
 
 
