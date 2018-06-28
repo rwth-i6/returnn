@@ -154,7 +154,7 @@ class Data(object):
       if isinstance(vocab, str):
         vocab = Vocabulary(vocab, unknown_label=unknown_label)
       elif isinstance(vocab, dict):
-        vocab = Vocabulary(**vocab, unknown_label=unknown_label)
+        vocab = Vocabulary(**vocab)
       assert isinstance(vocab, Vocabulary)
       assert self.sparse, "%s should represent indices of %s" % (self, vocab)
       assert self.dim == vocab.num_labels, "%s dims do not match with vocab %s" % (self, vocab)
