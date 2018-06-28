@@ -72,6 +72,7 @@ class Data(object):
                available_for_inference=True,
                auto_create_placeholders=False,
                vocab=None,
+               unknown_label = "UNK",
                beam_size=None):
     """
     :param str name:
@@ -91,6 +92,7 @@ class Data(object):
       The size is always a tensor of shape (batch,), i.e. the size can be different for each sequence in a batch.
     :param bool available_for_inference: e.g. the extern data "classes" is usually not available for inference
     :param str|dict[str]|GeneratingDataset.Vocabulary|None vocab:
+    :param str|"UNK" unknown_label: unknown word label for the optional vocabulary
     :param int|None beam_size: the batch-dim could be extended by a beam-size,
       such that it represents the merged dims [batch, beam_size].
     """
@@ -150,9 +152,9 @@ class Data(object):
     if vocab is not None:
       from GeneratingDataset import Vocabulary
       if isinstance(vocab, str):
-        vocab = Vocabulary(vocab)
+        vocab = Vocabulary(vocab, unknown_label=unknown_label)
       elif isinstance(vocab, dict):
-        vocab = Vocabulary(**vocab)
+        vocab = Vocabulary(**vocab, unknown_label=unknown_label)
       assert isinstance(vocab, Vocabulary)
       assert self.sparse, "%s should represent indices of %s" % (self, vocab)
       assert self.dim == vocab.num_labels, "%s dims do not match with vocab %s" % (self, vocab)
