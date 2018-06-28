@@ -1759,14 +1759,11 @@ class Engine(object):
     :return: list of all hyps, which is a tuple of score and string
     :rtype: list[(float,str)]
     """
-    self._checked_uninitialized_vars = True
     source_voc = self.network.extern_data.data["data"].vocab
     target_voc = self.network.extern_data.data["targets"].vocab
     assert source_voc.num_labels == self.network.extern_data.data["data"].dim
     assert target_voc.num_labels == self.network.extern_data.data["classes"].dim
-
     source_seq_list = source_voc.get_seq(source)
-    
     results_raw = self.search_single_seq(source=source_seq_list, output_layer_name=output_layer_name)
     results = []
     for (score, raw) in results_raw:
