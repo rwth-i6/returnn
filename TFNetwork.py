@@ -728,6 +728,8 @@ class TFNetwork(object):
     for layer_name, layer in sorted(self.layers.items()):
       assert isinstance(layer, LayerBase)
       for param_name, param in sorted(layer.get_saveable_params_dict().items()):
+        if param in l:  # could happen with reuse_params
+          continue
         l.append(param)
     l += self.get_auxiliary_params()
     l += self.extra_vars_to_save
