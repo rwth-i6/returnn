@@ -1761,8 +1761,8 @@ class Engine(object):
     :rtype: list[(float,str)]
     """
     self._checked_uninitialized_vars = True
-    source_voc = self.network.extern_data.get_default_input_data().vocab
-    target_voc = self.network.extern_data.get_default_target_data().vocab
+    source_voc = self.network.extern_data.data["data"].vocab
+    target_voc = self.network.extern_data.data["targets"].vocab
     assert source_voc.num_labels == self.network.extern_data.data["data"].dim
     assert target_voc.num_labels == self.network.extern_data.data["classes"].dim
 

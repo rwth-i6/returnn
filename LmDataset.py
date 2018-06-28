@@ -1010,10 +1010,6 @@ class TranslationDataset(CachedDataset2):
     """
     words = s.split()
 
-
-    word_to_idx = [vocab[word] if word in vocab else vocab['<UNK>'] for word in words]
-    return numpy.array(word_to_idx, dtype=numpy.int32)
-    '''
     if self._unknown_label is None:
       try:
         words_idxs = list(map(vocab.__getitem__, words))
@@ -1023,7 +1019,6 @@ class TranslationDataset(CachedDataset2):
       unknown_label_id = vocab[self._unknown_label]
       words_idxs = [vocab.get(w, unknown_label_id) for w in words]
     return numpy.array(words_idxs, dtype=numpy.int32)
-    '''
 
   def _get_data(self, key, line_nr):
     """
