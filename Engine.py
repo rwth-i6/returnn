@@ -574,6 +574,28 @@ class Engine:
           continue
         raise
 
+  def forward_single(self, dataset, seq_idx, output_layer_name=None):
+    """
+    Forwards a single sequence.
+    If you want to perform search, and get a number of hyps out, use :func:`search_single`.
+
+    :param Dataset.Dataset dataset:
+    :param int seq_idx:
+    :param str|None output_layer_name: e.g. "output". if not set, will read from config "forward_output_layer"
+    :return: numpy array, output in time major format (time,dim)
+    :rtype: numpy.ndarray
+    """
+
+    batch = Batch()
+    batch.init_with_one_full_sequence(seq_idx=seq_idx, dataset=dataset)
+    batch_generator = iter([batch])
+    batches = BatchSetGenerator(dataset, generator=batch_generator)
+
+    forwarder = ClassificationTaskThread(self.network, self.devices, dataset, batches)
+    forwarder.join()
+    assert forwarder.output.shape[1] == 1
+    return forwarder.output[:, 0]
+
   def forward_to_hdf(self, data, output_file, combine_labels='', batch_size=0):
     """
     :type data: Dataset.Dataset
