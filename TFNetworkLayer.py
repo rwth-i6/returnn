@@ -2644,6 +2644,49 @@ class ExpandDimsLayer(_ConcatInputLayer):
     return data
 
 
+class SwapAxesLayer(_ConcatInputLayer):
+  """
+  Swaps two axes. Basically a wrapper around :func:`TFUtil.swapaxes`.
+  See also :class:`ReinterpretDataLayer`.
+  """
+  layer_class = "swap_axes"
+
+  def __init__(self, axis1, axis2, **kwargs):
+    """
+    :param int|str axis1:
+    :param int|str axis2:
+    """
+    super(SwapAxesLayer, self).__init__(**kwargs)
+    from TFUtil import swapaxes
+    axis1 = self.input_data.get_axis_from_description(axis1)
+    axis2 = self.input_data.get_axis_from_description(axis2)
+    self.output.placeholder = swapaxes(self.input_data.placeholder, axis1=axis1, axis2=axis2)
+    self.output.size_placeholder = self.input_data.size_placeholder.copy()  # might be wrong, not checking that now...
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, axis1, axis2, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :param int|str axis1:
+    :param int|str axis2:
+    :rtype: Data
+    """
+    out = get_concat_sources_data_template(sources, name="%s_output" % name)
+    axis1 = out.get_axis_from_description(axis1)
+    axis2 = out.get_axis_from_description(axis2)
+    assert axis1 != axis2, "would be no-op. currently this is an error."
+    assert axis1 != out.batch_dim_axis and axis2 != out.batch_dim_axis, "currently not supported..."
+    axis1_wo_b = out.get_batch_axis_excluding_batch(axis1)
+    axis2_wo_b = out.get_batch_axis_excluding_batch(axis2)
+    shape = list(out.shape)
+    shape[axis1_wo_b], shape[axis2_wo_b] = shape[axis2_wo_b], shape[axis1_wo_b]
+    out.shape = tuple(shape)
+    if not out.sparse:
+      out.dim = out.shape[-1]
+    return out
+
+
 class ReinterpretDataLayer(_ConcatInputLayer):
   """
   Acts like the :class:`CopyLayer` but reinterprets the role of some axes or data.
@@ -3524,8 +3567,10 @@ class DotLayer(LayerBase):
 
 class ShiftAxisLayer(_ConcatInputLayer):
   """
-  Shifts a axis around.
+  Shifts the dimensions in an axis around.
   This layer may change the axis-dimension.
+
+  This name might be confusing. No axis will be shifted here. See :class:`SwapAxesLayer` for that.
   """
   layer_class = "shift_axis"
 
