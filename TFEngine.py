@@ -555,8 +555,6 @@ class Engine(object):
     self.use_search_flag = config.value("task", None) == "search"
     self.use_eval_flag = config.value("task", None) != "forward"
     self._const_cache = {}  # type: dict[str,tf.Tensor]
-    self.source_voc = None
-    self.target_voc = None
 
   def finalize(self):
     self._close_tf_session()
@@ -798,10 +796,6 @@ class Engine(object):
       except tf.errors.NotFoundError:
         print("Exiting now because model cannot be loaded.", file=log.v1)
         sys.exit(1)
-    if config.has("source_voc"):
-      self.source_voc = Vocabulary(config.value("source_voc", ""), "<UNK>")
-    if config.has("target_voc"):
-      self.target_voc = Vocabulary(config.value("target_voc", ""), "<UNK>")
 
   def _maybe_update_config(self, net_desc, epoch):
     """
@@ -1766,16 +1760,18 @@ class Engine(object):
     :return: list of all hyps, which is a tuple of score and string
     :rtype: list[(float,str)]
     """
-    assert self.source_voc != None
-    assert self.target_voc != None
     self._checked_uninitialized_vars = True
-    assert self.source_voc.num_labels == self.network.extern_data.data["data"].dim
-    assert self.target_voc.num_labels == self.network.extern_data.data["classes"].dim
-    source_seq_list = self.source_voc.get_seq_indices(source.split())
+    source_voc = self.network.extern_data.get_default_input_data().vocab
+    target_voc = self.network.extern_data.get_default_target_data().vocab
+    assert source_voc.num_labels == self.network.extern_data.data["data"].dim
+    assert target_voc.num_labels == self.network.extern_data.data["classes"].dim
+
+    source_seq_list = source_voc.get_seq(source)
+    
     results_raw = self.search_single_seq(source=source_seq_list, output_layer_name=output_layer_name)
     results = []
     for (score, raw) in results_raw:
-      txt = self.target_voc.get_seq_labels(raw)
+      txt = target_voc.get_seq_labels(raw)
       results += [(score, txt)]
     return results
 

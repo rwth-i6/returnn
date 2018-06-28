@@ -1383,7 +1383,15 @@ class Vocabulary(object):
       VariableAssigner(var).assign(session=session, value=self.labels)
 
     return init_vocab_var
-
+  
+  def get_seq(self, seq):
+    """
+    :param str sentence:
+    :rtype: list[int]
+    """
+    segments = seq.split()
+    return self.get_seq_indices(segments)
+  
   def get_seq_indices(self, seq):
     """
     :param list[str] seq:
