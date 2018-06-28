@@ -71,6 +71,7 @@ class Data(object):
                time_dim_axis=NotSpecified,
                available_for_inference=True,
                auto_create_placeholders=False,
+               vocab=None,
                beam_size=None):
     """
     :param str name:
@@ -89,6 +90,7 @@ class Data(object):
     :param dict[int,tf.Tensor] tf.Tensor size_placeholder: for every None in shape, this will describe the size.
       The size is always a tensor of shape (batch,), i.e. the size can be different for each sequence in a batch.
     :param bool available_for_inference: e.g. the extern data "classes" is usually not available for inference
+    :param str|dict[str]|GeneratingDataset.Vocabulary|None vocab:
     :param int|None beam_size: the batch-dim could be extended by a beam-size,
       such that it represents the merged dims [batch, beam_size].
     """
@@ -145,6 +147,16 @@ class Data(object):
     self.size_placeholder = size_placeholder  # type: dict[int,tf.Tensor]  # axis w.o. batch -> size of shape (batch,)
     self.available_for_inference = available_for_inference
     self.beam_size = beam_size
+    if vocab is not None:
+      from GeneratingDataset import Vocabulary
+      if isinstance(vocab, str):
+        vocab = Vocabulary(vocab)
+      elif isinstance(vocab, dict):
+        vocab = Vocabulary(**vocab)
+      assert isinstance(vocab, Vocabulary)
+      assert self.sparse, "%s should represent indices of %s" % (self, vocab)
+      assert self.dim == vocab.num_labels, "%s dims do not match with vocab %s" % (self, vocab)
+    self.vocab = vocab
 
   def get_placeholder_kwargs(self, with_batch=True):
     return dict(name=self.name, dtype=self.dtype, shape=self.batch_shape if with_batch else self.shape)
@@ -290,6 +302,7 @@ class Data(object):
     :rtype: Data
     :return: copy of myself in batch-time-major or time-batch-major
     """
+    assert self.have_batch_axis() and self.have_time_axis()
     if self.batch_dim_axis == 0:
       return self.copy_with_time_dim_axis(1)
     if self.time_dim_axis == 0:
@@ -703,6 +716,8 @@ class Data(object):
       elif axes in ["t", "time"]:
         assert self.time_dim_axis is not None
         axes = self.time_dim_axis
+      elif axes == "t?":
+        axes = [self.time_dim_axis] if self.time_dim_axis is not None else []
       elif axes == "except_time":  # also except batch
         axes = list(range(self.batch_ndim))
         axes.remove(self.batch_dim_axis)
@@ -711,6 +726,8 @@ class Data(object):
       elif axes == "except_batch":
         axes = list(range(self.batch_ndim))
         axes.remove(self.batch_dim_axis)
+      elif axes == "static":
+        axes = [i for i in range(self.batch_ndim) if self.batch_shape[i] is not None]
       elif axes in ["f", "feature", "non_spatial"]:
         axes = self.get_feature_batch_axes()
       elif all([a in "btf" for a in axes]):
@@ -776,18 +793,29 @@ class Data(object):
   def have_time_axis(self):
     return self.time_dim_axis is not None
 
+  def is_time_axis_dynamic(self):
+    """
+    :return: whether there are different seq-lens for the time, or all the same (static)
+    :rtype: bool
+    """
+    assert self.time_dim_axis is not None
+    if self.time_dim_axis_excluding_batch in self.size_placeholder:
+      return True
+    assert isinstance(self.shape[self.time_dim_axis_excluding_batch], int)
+    return False
+
   def get_sequence_lengths(self):
     """
     :return: seq lens tensor of shape (batch,) of dtype int32
     :rtype: tf.Tensor
     """
     assert self.time_dim_axis is not None
-    if self.time_dim_axis_excluding_batch in self.size_placeholder:
+    if self.is_time_axis_dynamic():
       return self.size_placeholder[self.time_dim_axis_excluding_batch]
-    with tf.name_scope("fixed_seq_len"):
-      assert self.shape[self.time_dim_axis_excluding_batch] is not None
+    assert self.shape[self.time_dim_axis_excluding_batch] is not None
+    with same_context(self.placeholder), tf.name_scope("fixed_seq_len"):
       return expand_dims_unbroadcast(
-        self.shape[self.time_dim_axis_excluding_batch], axis=0, dim=tf.shape(self.placeholder)[self.batch_dim_axis])
+        self.shape[self.time_dim_axis_excluding_batch], axis=0, dim=self.get_batch_dim())
 
   def get_sequence_mask(self):
     """
@@ -1262,6 +1290,7 @@ def var_creation_scope():
     https://github.com/tensorflow/tensorflow/issues/8604
   The solution is to reset the current frame.
   Resetting all control dependencies has this effect.
+  See also :func:`same_context`
   """
   with tf.control_dependencies(None) as dep:
     yield dep
@@ -2202,7 +2231,7 @@ def sequence_mask(lengths, **kwargs):
   """
   if hasattr(lengths, "_sequence_mask"):
     return lengths._sequence_mask
-  with reuse_name_scope_of_tensor(lengths):
+  with same_context(lengths), reuse_name_scope_of_tensor(lengths):
     mask = tf.sequence_mask(lengths, **kwargs)
   lengths._sequence_mask = mask
   return mask
@@ -2221,9 +2250,8 @@ def sequence_mask_time_major(lengths, **kwargs):
   if hasattr(lengths, "_sequence_mask_time_major"):
     return lengths._sequence_mask_time_major
   mask = sequence_mask(lengths=lengths, **kwargs)  # shape (time,batch)
-  with reuse_name_scope_of_tensor(lengths):
-    with tf.name_scope("sequence_mask_time_major"):
-      mask = tf.transpose(mask, (1, 0))  # shape (batch,time)
+  with same_context(mask), reuse_name_scope_of_tensor(lengths), tf.name_scope("sequence_mask_time_major"):
+    mask = tf.transpose(mask, (1, 0))  # shape (batch,time)
   lengths._sequence_mask_time_major = mask
   return mask
 
@@ -2254,9 +2282,8 @@ def reversed(x):
   """
   if hasattr(x, "_reversed_dim0"):
     return x._reversed_dim0
-  with reuse_name_scope_of_tensor(x):
-    with tf.name_scope("reversed"):
-      y = x[::-1]
+  with reuse_name_scope_of_tensor(x), tf.name_scope("reversed"):
+    y = x[::-1]
   x._reversed_dim0 = y
   y._reversed_dim0 = x
   return y
@@ -5212,28 +5239,46 @@ def nested_get_shapes(x):
   raise TypeError("invalid type %r of %r" % (type(x), x))
 
 
+def _get_control_flow_ops(v):
+  if isinstance(v, (list, tuple)):
+    for elem in v:
+      for t in _get_control_flow_ops(elem):
+        yield t
+    return
+  if isinstance(v, (int, float, type(None))):
+    return
+  if isinstance(v, tf.Tensor):
+    v = v.op
+  assert isinstance(v, tf.Operation), "unexpected type %r" % type(v)
+  # Control flow context will be set to the context of the loop or so, if there is one, otherwise None.
+  if not v._control_flow_context:
+    return
+  yield v
+
+
+def has_control_flow_context(x):
+  """
+  :param tf.Tensor|tf.Operation|int|float|None|list[tf.Tensor|tf.Operation|int|float] x:
+  :return: whether `x` has a control flow, i.e. is e.g. inside a while loop
+  :rtype: bool
+  """
+  ops = list(_get_control_flow_ops(x))
+  return len(ops) > 0
+
+
 @contextlib.contextmanager
 def same_context(x):
   """
-  Will use the same context as `x`.
+  Will use the same (flow) context as `x`.
   E.g. if `x` is a constant, it can be outside the loop,
   so we will yield a context which is not inside the loop.
+  See also :func:`var_creation_scope`.
 
-  :param tf.Tensor|int|float|None|list[tf.Tensor|int|float] x:
+  :param tf.Tensor|tf.Operation|int|float|None|list[tf.Tensor|tf.Operation|int|float] x:
   :return: yields context (via tf.control_dependencies)
   """
-  def get_tensors(v):
-    if isinstance(v, (list, tuple)):
-      for elem in v:
-        for t in get_tensors(elem):
-          yield t
-      return
-    if isinstance(v, (int, float, type(None))):
-      return
-    assert isinstance(v, tf.Tensor), "unexpected type %r" % type(v)
-    yield v
-  tensors = list(get_tensors(x))
-  if not tensors:
+  ops = list(_get_control_flow_ops(x))
+  if not ops:
     # No TF tensor given, so we can consider the input as constant
     # and can use a clean context (e.g. not within the current loop or so).
     with tf.control_dependencies(None) as dep:  # this will reset the context
@@ -5657,3 +5702,53 @@ def string_words_calc_wer(hyps, refs):
   wer = tf.cast(wer, tf.int64)  # no normalization, should be an integer
   return wer, get_sparse_tensor_length(refs_sparse)
 
+
+def get_positional_encoding(num_channels, length=None, position=None, min_timescale=1.0, max_timescale=1.0e4):
+  """
+  Gets a bunch of sinusoids of different frequencies.
+
+  Each channel of the input Tensor is incremented by a sinusoid of a different
+  frequency and phase.
+
+  This allows attention to learn to use absolute and relative positions.
+  Timing signals should be added to some precursors of both the query and the
+  memory inputs to attention.
+
+  The use of relative position is possible because sin(x+y) and cos(x+y) can be
+  experessed in terms of y, sin(x) and cos(x).
+
+  In particular, we use a geometric sequence of timescales starting with
+  min_timescale and ending with max_timescale.  The number of different
+  timescales is equal to channels / 2. For each timescale, we
+  generate the two sinusoidal signals sin(timestep/timescale) and
+  cos(timestep/timescale).  All of these sinusoids are concatenated in
+  the channels dimension.
+
+  The code is adapted from Tensor2Tensor get_timing_signal_1d (https://github.com/tensorflow/tensor2tensor).
+
+  :param int num_channels: scalar, size of timing embeddings to create. The number of
+    different timescales is equal to channels / 2.
+  :param tf.Tensor|None length: scalar, length of timing signal sequence. if not given, is shape(position)[0]
+  :param tf.Tensor|None position: could be provided directly. int32, shape (length,)
+  :param float min_timescale: a float
+  :param float max_timescale: a float
+  :return: a Tensor of timing signals (length, channels)
+  :rtype: tf.Tensor
+  """
+  import math
+  if position is None:
+    assert length is not None
+    position = tf.range(length)
+  else:
+    assert length is None
+    position.set_shape((None,))
+  position = tf.to_float(position)
+  num_timescales = num_channels // 2
+  log_timescale_increment = (
+    math.log(float(max_timescale) / float(min_timescale)) / (float(num_timescales - 1)))
+  inv_timescales = min_timescale * tf.exp(
+    tf.to_float(tf.range(num_timescales)) * -log_timescale_increment)
+  scaled_time = tf.expand_dims(position, 1) * tf.expand_dims(inv_timescales, 0)
+  signal = tf.concat([tf.sin(scaled_time), tf.cos(scaled_time)], axis=1)
+  signal = tf.pad(signal, [[0, 0], [0, num_channels % 2]])  # (length, channels)
+  return signal

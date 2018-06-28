@@ -13,6 +13,9 @@ import sys
 import os
 sys.path += [".", "crnn"]
 
+import faulthandler
+faulthandler.enable()
+
 import logging
 logging.getLogger('tensorflow').disabled = True
 

@@ -1418,7 +1418,7 @@ def get_concat_sources_data_template(src_layers, name=None):
   """
   :param list[LayerBase] src_layers:
   :param str|None name: name of the Data
-  :return: data with no placeholders set
+  :return: data with no placeholders set. it is always a copy or new instance, so safe to manipulate
   :rtype: Data
   """
   assert src_layers, "need source layers"
@@ -1960,7 +1960,7 @@ class SampledSoftmax(_ConcatInputLayer):
       self.output.placeholder = self.output_before_activation.y
 
 
-class LengthLayer(_ConcatInputLayer):
+class LengthLayer(LayerBase):
   """
   Returns the length of sources as (B,).
   """
@@ -1968,7 +1968,7 @@ class LengthLayer(_ConcatInputLayer):
 
   def __init__(self, add_time_axis=False, **kwargs):
     super(LengthLayer, self).__init__(**kwargs)
-    data = self.input_data.get_placeholder_as_batch_major()
+    assert len(self.sources) == 1, "%s: expects one source" % self
     out = tf.cast(self.sources[0].output.size_placeholder[self.sources[0].output.time_dim_axis], tf.int32)
     if add_time_axis:
       out = tf.expand_dims(out, axis=self.output.time_dim_axis)
@@ -2009,7 +2009,7 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
     :param LayerBase|None window_start: Tensor of shape (B,) indicating the window start
     :param int window_size:
     """
-    from TFUtil import move_axis, sequence_mask, sequence_mask_time_major
+    from TFUtil import move_axis
     import numpy
     super(SoftmaxOverSpatialLayer, self).__init__(**kwargs)
     energy_data = self.input_data.copy_as_bt_or_tb_major()  # e.g. (B,T,dim)
@@ -2017,8 +2017,9 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
     energy = energy_data.placeholder
     energy_shape = tf.shape(energy, name="energy_shape")
     energy_shape = [energy_shape[i] for i in range(energy_data.batch_ndim)]
+    assert energy_data.have_time_axis()
     # if the time-axis is static, we can skip the masking
-    if energy_data.time_dim_axis is not None:
+    if energy_data.is_time_axis_dynamic():
       if energy_mask == "sequence":
         # We must mask all values behind seq_lens. Set them to -inf, because we use softmax afterwards.
         energy_mask = energy_data.get_sequence_mask()
@@ -2049,10 +2050,9 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources, **kwargs):
-    concat_sources = get_concat_sources_data_template(sources, name="%s_output" % name)
-    if concat_sources.time_dim_axis is None:  # for use in subnet
-      return concat_sources.copy_as_batch_major()
-    return concat_sources.copy_as_bt_or_tb_major()
+    output = get_concat_sources_data_template(sources, name="%s_output" % name)
+    assert output.have_time_axis()
+    return output.copy_as_bt_or_tb_major()
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
@@ -2345,25 +2345,19 @@ class MergeDimsLayer(_ConcatInputLayer):
     """
     super(MergeDimsLayer, self).__init__(**kwargs)
     axes = self.input_data.get_axes_from_description(axes)
-    if self.input_data.batch_dim_axis not in axes:
-      merge_target_axis = axes[0]
-    else:
-      # In case we also merge the batch-dim-axis, we will merge everything into
-      merge_target_axis = self.input_data.batch_dim_axis
+    axes = sorted(axes)
+    merge_target_axis = self._get_target_axis(input_data=self.input_data, merge_axes=axes)
     x = self.input_data.placeholder
     if len(axes) > 1:
       axes = sorted(axes)
       # Transpose so that all axes are behind each other.
-      perm = list(range(self.input_data.batch_ndim))
-      i0 = merge_target_axis
-      for i, a in enumerate([a for a in axes if a != i0]):
-        perm.remove(a)
-        if a < i0:
-          i0 -= 1
-        perm.insert(i0 + i + 1, a)
+      perm = [i for i in range(self.input_data.batch_ndim) if i not in axes]
+      for i, a in enumerate(axes):
+        perm.insert(merge_target_axis + i, a)
       x = tf.transpose(x, perm)
       # Now merge all dims with a reshape.
       shape = tf.shape(x)
+      i0 = merge_target_axis
       i1 = i0 + len(axes)
       x = tf.reshape(
         x,
@@ -2375,21 +2369,58 @@ class MergeDimsLayer(_ConcatInputLayer):
       from TFUtil import check_input_dim
       x = check_input_dim(x, axis=-1, dim=n_out)
     self.output.placeholder = x
-    self.output.size_placeholder = self._get_output_sizes(axes=axes, target_axis=merge_target_axis)
+    self.output.size_placeholder = self._get_output_sizes(merge_axes=axes)
 
-  def _get_output_sizes(self, axes, target_axis):
+  @classmethod
+  def _get_target_axis(cls, input_data, merge_axes):
     """
-    :param list[int] axes:
-    :param int target_axis:
+    :param Data input_data:
+    :param list[int] merge_axes:
+    :rtype: int
     """
-    removed_axes = [a for a in axes if a != target_axis]
-    assert len(removed_axes) == len(axes) - 1
+    if input_data.batch_dim_axis not in merge_axes:
+      if input_data.feature_dim_axis in merge_axes:
+        # We want it to become the new feature dim axis.
+        return input_data.feature_dim_axis - len(merge_axes) + 1
+      else:
+        return merge_axes[0]
+    else:
+      # In case we also merge the batch-dim-axis, we will merge everything into
+      return input_data.batch_dim_axis
+
+  @classmethod
+  def _old_axis_to_new_axis(cls, input_data, merge_axes, old_axis):
+    """
+    :param Data input_data:
+    :param list[int] merge_axes:
+    :param int|None old_axis:
+    :rtype: int|None
+    """
+    if old_axis is None:
+      return old_axis
+    target_axis = cls._get_target_axis(input_data=input_data, merge_axes=merge_axes)
+    if old_axis in merge_axes:
+      return target_axis
+    new_axis = old_axis
+    for i in range(input_data.batch_ndim):
+      if i in merge_axes:
+        new_axis -= 1
+      if i == target_axis:
+        new_axis += 1
+      if i >= new_axis:
+        break
+    assert new_axis != target_axis
+    return new_axis
+
+  def _get_output_sizes(self, merge_axes):
+    """
+    :param list[int] merge_axes:
+    :rtype: dict[int,tf.Tensor]
+    """
     d = {}
     for i, v in sorted(self.input_data.size_placeholder.items()):
       axis = self.input_data.get_batch_axis(i)
-      if axis in axes and axis != target_axis:
-        continue
-      axis -= len([a for a in axes if a < axis])
+      axis = self._old_axis_to_new_axis(input_data=self.input_data, merge_axes=merge_axes, old_axis=axis)
       if axis == self.input_data.batch_dim_axis:
         continue
       j = self.input_data.get_batch_axis_excluding_batch(axis)
@@ -2402,19 +2433,17 @@ class MergeDimsLayer(_ConcatInputLayer):
   @classmethod
   def get_out_data_from_opts(cls, name, axes, sources=(), n_out=None, out_type=None, **kwargs):
     assert not out_type, "currently ignored"
-    data = get_concat_sources_data_template(sources)
-    data.name = "%s_output" % name
-    axes = data.get_axes_from_description(axes)
+    input_data = get_concat_sources_data_template(sources)
+    data = input_data.copy(name="%s_output" % name)
+    axes = input_data.get_axes_from_description(axes)
     if len(axes) <= 1:
       return data
     axes = sorted(axes)
     import numpy
-    new_shape = list(data.shape)
     res_dim = None
     if all([data.batch_shape[i] is not None for i in axes]):
       res_dim = numpy.prod([data.batch_shape[i] for i in axes])
     if not data.sparse and data.feature_dim_axis in axes:  # will also merge the feature dim
-      assert axes == list(range(axes[0], data.batch_ndim)), "not supported currently with holes"
       if res_dim is not None and n_out is not None:
         assert res_dim == n_out
       elif res_dim is not None and n_out is None:
@@ -2424,25 +2453,17 @@ class MergeDimsLayer(_ConcatInputLayer):
       else:
         raise Exception(
           "You need to provide n_out for layer %r, we are merging axes %r with dims %r. Input is %r." % (
-          name, axes, [data.batch_shape[i] for i in axes], data))
+            name, axes, [data.batch_shape[i] for i in axes], data))
       data.dim = res_dim
-    if data.batch_dim_axis not in axes:
-      merge_target_axis = axes[0]
-      new_shape[data.get_batch_axis_excluding_batch(merge_target_axis)] = res_dim
-    else:
-      # In case we also merge the batch-dim-axis, we will merge everything into
-      merge_target_axis = data.batch_dim_axis
-    for i in reversed(axes):
-      if i == merge_target_axis:
-        continue
-      if i == data.batch_dim_axis:
-        continue
-      new_shape.pop(data.get_batch_axis_excluding_batch(i))
-      if data.batch_dim_axis >= i:
-        data.batch_dim_axis -= 1
-      if data.time_dim_axis is not None and data.time_dim_axis >= i:
-        data.time_dim_axis -= 1
+    merge_target_axis = cls._get_target_axis(input_data=data, merge_axes=axes)
+    new_shape = [d for (i, d) in enumerate(data.batch_shape) if i not in axes]
+    new_shape.insert(merge_target_axis, res_dim)
+    new_shape.pop(data.batch_dim_axis)
     data.shape = tuple(new_shape)
+    data.batch_dim_axis = cls._old_axis_to_new_axis(
+      input_data=input_data, merge_axes=axes, old_axis=input_data.batch_dim_axis)
+    data.time_dim_axis = cls._old_axis_to_new_axis(
+      input_data=input_data, merge_axes=axes, old_axis=input_data.time_dim_axis)
     return data
 
 
@@ -2453,6 +2474,7 @@ class SplitDimsLayer(_ConcatInputLayer):
   i.e. the input is (batch, time, window * feature),
   you can set axis="F", dims=(window, -1),
   and you will get the output (batch, time, window, feature).
+  Also see :class:`SplitBatchTimeLayer`.
   """
   layer_class = "split_dims"
 
@@ -2520,12 +2542,13 @@ class SplitBatchTimeLayer(_ConcatInputLayer):
   """
   A very specific layer which expects to get input of shape (batch * time, ...)
   and converts it into (batch, time, ...), where it recovers the seq-lens from some other layer.
+  See :class:`SplitDimsLayer` for a more generic layer.
   """
   layer_class = "split_batch_time"
 
   def __init__(self, base, **kwargs):
     """
-    :param LayerBase base:
+    :param LayerBase base: used to recover the seq-lens
     """
     super(SplitBatchTimeLayer, self).__init__(**kwargs)
     assert base.output.time_dim_axis is not None
@@ -3132,17 +3155,18 @@ class SqueezeLayer(_ConcatInputLayer):
       it also accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature"
     """
     super(SqueezeLayer, self).__init__(**kwargs)
-    axes = ReduceLayer.get_axes(axis, input_data=self.input_data)
-    x = self.input_data.placeholder
-    if self.input_data.batch_dim_axis != enforce_batch_dim_axis:
-      x = swapaxes(x, self.input_data.batch_dim_axis, enforce_batch_dim_axis)
+    input_data = self.input_data
+    if enforce_batch_dim_axis is not None and input_data.batch_dim_axis != enforce_batch_dim_axis:
+      input_data = input_data.copy_with_batch_dim_axis(enforce_batch_dim_axis)
+    axes = ReduceLayer.get_axes(axis, input_data=input_data)
+    x = input_data.placeholder
     for i in reversed(sorted(axes)):
       x = tf.squeeze(x, axis=i)
     self.output.placeholder = x
 
   @classmethod
-  def get_out_data_from_opts(cls, **kwargs):
-    return ReduceLayer.get_out_data_from_opts(keep_dims=False, **kwargs)
+  def get_out_data_from_opts(cls, enforce_batch_dim_axis=0, **kwargs):
+    return ReduceLayer.get_out_data_from_opts(keep_dims=False, enforce_batch_dim_axis=enforce_batch_dim_axis, **kwargs)
 
 
 class WeightedSumLayer(_ConcatInputLayer):
@@ -3376,7 +3400,7 @@ class DotLayer(LayerBase):
     b_shape = [b_out.batch_shape[i] or b_shape[i] for i in range(b_out.batch_ndim)]
     a_rem_dims = [a_shape[i] for i in a_rem_axes]
     b_rem_dims = [b_shape[i] for i in b_rem_axes]
-    assert len(a_rem_axes) == len(b_rem_axes)
+    assert len(a_rem_axes) == len(b_rem_axes), "remaining shared (batch) axes do not match"
     assert all([
       isinstance(d1, tf.Tensor) or isinstance(d2, tf.Tensor) or d1 == d2
       for (d1, d2) in zip(a_rem_dims, b_rem_dims)])
@@ -5606,20 +5630,6 @@ class SampledSoftmaxLoss(Loss):
     assert sampler in ["uniform", "log_uniform", "learned_unigram"], "Not implemented sampler selected"
     self.sampler = sampler
 
-  def get_output_target_scores(self):
-    """
-    :return: shape (time_flat,), type float32
-    :rtype: tf.Tensor
-    """
-    output_flat = self.output_flat
-    if output_flat is None:
-      output_flat = self.output.get_placeholder_time_flattened()
-    target_flat_exp = tf.stack(
-      [tf.range(tf.shape(self.target_flat)[0], dtype=tf.int32),
-       tf.cast(self.target_flat, tf.int32)], axis=1)  # (time,2)
-    out = tf.gather_nd(output_flat, target_flat_exp)
-    return out
-
   def get_value(self):
     assert isinstance(self.layer, SampledSoftmax)
     assert self.target.sparse, "Sampled softmax is only useful for big (i.e. sparse) target vectors"
@@ -5689,11 +5699,34 @@ class SampledSoftmaxLoss(Loss):
       # The function that is called for the evaluation branch
       def eval_fn():
         assert self.target.sparse is True
-        # Old code:
-        from TFUtil import to_int32_64
+
+        # First switch target vector for dimension alignment with input_data tensor
+        labels = self.target.placeholder
+        current_labels_shape = tf.shape(labels)
+        labels = tf.reshape(labels, [current_labels_shape[1], current_labels_shape[0]])
+        labels = tf.reshape(labels, [-1])
+
+        # Get input from current layer
+        inputs = self.layer.input_data.placeholder
+        current_input_shape = tf.shape(inputs)
+        new_input_shape = [-1, current_input_shape[self.layer.input_data.ndim]]
+        inputs = tf.reshape(inputs, new_input_shape)
+
+        from TFUtil import dot
+        logits = dot(inputs, tf.transpose(self.layer.W))
+        logits = tf.nn.bias_add(logits, self.layer.b)
+
         loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
-          logits=self.output_before_softmax_flat,
-          labels=to_int32_64(self.target_flat))
+          labels=labels,
+          logits=logits)
+
+        # mask loss on invalid frames
+        mask = self.target.get_sequence_mask()
+        current_mask_shape = tf.shape(self.target.placeholder)
+        mask = tf.reshape(mask, [current_mask_shape[1], current_mask_shape[0]])
+        mask = tf.reshape(mask, [-1])
+
+        loss = tf.where(mask, loss, tf.zeros(tf.shape(loss)))
 
         return loss
 

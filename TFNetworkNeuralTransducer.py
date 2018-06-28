@@ -1,14 +1,15 @@
 import tensorflow as tf
 from TFNetworkLayer import LayerBase, _ConcatInputLayer, Loss, get_concat_sources_data_template
 from TFNetworkRecLayer import RecLayer
-from TFUtil import Data
+from TFUtil import Data, sparse_labels_with_seq_lens
 from Util import softmax
 
 
 class NeuralTransducerLayer(_ConcatInputLayer):
     """
     Creates a neural transducer based on the paper "A Neural Transducer": https://arxiv.org/abs/1511.04868.
-    NOTE: Requires that the loss be neural_transducer_loss and be configured with the same parameters as this layer.
+    NOTE: Requires that the loss be neural_transducer_loss.
+    NOTE: When training with BiLSTM as input, set an appropriate gradient clipping parameter.
     """
     layer_class = "neural_transducer"
 
@@ -29,7 +30,6 @@ class NeuralTransducerLayer(_ConcatInputLayer):
 
         super(NeuralTransducerLayer, self).__init__(**kwargs)
 
-        #  TODO: Use last_hidden_c not from last state but from state at timestep input_block_size
         # TODO: Build optimized version
 
         # Get embedding
@@ -59,6 +59,13 @@ class NeuralTransducerLayer(_ConcatInputLayer):
             # TODO: add better checking whether the settings are correct
             last_hidden_c = self.sources[0].get_last_hidden_state('*')  # Get last c after all blocks
             last_hidden_h = encoder_outputs[input_block_size - 1]  # Get last hidden after the first block
+
+            # Padding so that last hidden_c & _h are the same (this is needed for when using BiLSTM)
+            c_shape = tf.shape(last_hidden_c)
+            h_shape = tf.shape(last_hidden_h)
+            padding = tf.zeros([c_shape[0], h_shape[1] - c_shape[1]])
+            last_hidden_c = tf.concat([last_hidden_c, padding], axis=1)
+
             last_hidden = tf.stack([last_hidden_c, last_hidden_h], axis=0)
 
         # Note down data
@@ -146,6 +153,11 @@ class NeuralTransducerLayer(_ConcatInputLayer):
 
                 encoder_raw_outputs = encoder_outputs[input_block_size * current_block:
                                                       input_block_size * (current_block + 1)]
+
+                encoder_raw_outputs = tf.where(tf.is_nan(encoder_raw_outputs), tf.zeros_like(encoder_raw_outputs),
+                                               encoder_raw_outputs)
+
+                trans_hidden = tf.where(tf.is_nan(trans_hidden), tf.zeros_like(trans_hidden), trans_hidden)
 
                 # Save/load the state as one tensor, use top encoder layer state as init if this is the first block
                 trans_hidden_state = trans_hidden
@@ -604,13 +616,24 @@ class NeuralTransducerLoss(Loss):
                                            Tout=(tf.int64, tf.bool), stateful=False)
 
             output_label = tf.cast(tf.argmax(logits, axis=2), tf.int64)
-            not_equal = tf.not_equal(output_label, new_targets)
+            zeros = tf.zeros_like(output_label)
 
-            zeros = tf.zeros_like(not_equal)
-            not_equal = tf.where(mask, not_equal, zeros)
+            # Calculate edit distance
+            # First modify outputs so that only those outputs in the mask are considered
+            mod_logits = tf.where(mask, output_label, zeros)
 
-            # Apply final normalization
+            # Get find seq lens (due to having blank spaces in the modified targets we need to use this method to get
+            # the correct seq lens)
+            seq_lens = tf.argmax(tf.cumsum(tf.to_int32(mask), axis=0), axis=0)
+            seq_lens = tf.reshape(seq_lens, shape=[tf.shape(seq_lens)[0]])
+
+            logits_sparse = sparse_labels_with_seq_lens(tf.transpose(mod_logits), seq_lens=seq_lens)
+            targets_sparse = sparse_labels_with_seq_lens(tf.transpose(new_targets), seq_lens=seq_lens)
+            
+            e = tf.edit_distance(logits_sparse[0], targets_sparse[0], normalize=False)
+            total = tf.reduce_sum(e)
+
             norm = tf.to_float(tf.reduce_sum(targets_lengths)) / tf.reduce_sum(tf.to_float(mask))
-            total = tf.reduce_sum(tf.cast(not_equal, tf.float32)) * norm
+            total = total * norm
 
             return total

@@ -669,7 +669,7 @@ class _NltkCorpusReaderDataset(CachedDataset2):
 class ExtractAudioFeatures:
   """
   Currently uses librosa to extract MFCC features.
-  We could also use python_speech_features.
+  (Alternatives: python_speech_features, talkbox.features.mfcc, librosa)
   We could also add support e.g. to directly extract log-filterbanks or so.
   """
 
@@ -678,18 +678,16 @@ class ExtractAudioFeatures:
                num_feature_filters=40, with_delta=False, norm_mean=None, norm_std_dev=None,
                features="mfcc", random_permute=None, random_state=None):
     """
-    :param numpy.ndarray audio: raw audio samples, shape (audio_len,)
-    :param int sample_rate: e.g. 22050
     :param float window_len: in seconds
     :param float step_len: in seconds
     :param int num_feature_filters:
     :param bool|int with_delta:
-    :param numpy.ndarray|str|None norm_mean:
-    :param numpy.ndarray|str|None norm_std_dev:
-    :param str features: "mfcc" or "mel_spectrogram"
+    :param numpy.ndarray|str|None norm_mean: if str, will interpret as filename
+    :param numpy.ndarray|str|None norm_std_dev: if str, will interpret as filename
+    :param str features: "mfcc", "log_mel_filterbank", "log_log_mel_filterbank"
     :param CollectionReadCheckCovered|dict[str]|bool|None random_permute:
     :param numpy.random.RandomState|None random_state:
-    :return: (audio_len // int(step_len * sample_rate), max(1, with_delta) * num_feature_filters), float32
+    :return: (audio_len // int(step_len * sample_rate), (with_delta + 1) * num_feature_filters), float32
     :rtype: numpy.ndarray
     """
     self.window_len = window_len
@@ -697,7 +695,7 @@ class ExtractAudioFeatures:
     self.num_feature_filters = num_feature_filters
     if isinstance(with_delta, bool):
       with_delta = 1 if with_delta else 0
-    assert isinstance(with_delta, int)
+    assert isinstance(with_delta, int) and with_delta >= 0
     self.with_delta = with_delta
     if norm_mean is not None:
       norm_mean = self._load_feature_vec(norm_mean)
@@ -737,7 +735,6 @@ class ExtractAudioFeatures:
       "step_len": self.step_len,
       "num_feature_filters": self.num_feature_filters,
     }
-    assert self.features in ("mfcc", "mel_spectrogram")
     peak = numpy.max(numpy.abs(audio))
     audio /= peak
 
@@ -751,8 +748,10 @@ class ExtractAudioFeatures:
 
     if self.features == "mfcc":
       feature_data = _get_audio_features_mfcc(**kwargs)
-    elif self.features == "mel_spectrogram":
-      feature_data = _get_audio_mel_spectrogram(**kwargs)
+    elif self.features == "log_mel_filterbank":
+      feature_data = _get_audio_log_mel_filterbank(**kwargs)
+    elif self.features == "log_log_mel_filterbank":
+      feature_data = _get_audio_log_log_mel_filterbank(**kwargs)
     else:
       assert False, "non-supported feature type %s" % self.features
     assert feature_data.ndim == 2
@@ -760,8 +759,9 @@ class ExtractAudioFeatures:
 
     if self.with_delta:
       import librosa
-      deltas = [librosa.feature.delta(feature_data, order=i, axis=0) for i in range(1, self.with_delta + 1)]
-      feature_data = numpy.stack([feature_data] + deltas, axis=1)
+      deltas = [librosa.feature.delta(feature_data, order=i, axis=0).astype("float32")
+                for i in range(1, self.with_delta + 1)]
+      feature_data = numpy.concatenate([feature_data] + deltas, axis=1)
       assert feature_data.shape[1] == self.get_feature_dimension()
 
     if self.norm_mean is not None:
@@ -771,29 +771,7 @@ class ExtractAudioFeatures:
     return feature_data
 
   def get_feature_dimension(self):
-    return (max(int(self.with_delta), 1) + 1) * self.num_feature_filters
-
-
-def _get_audio_mel_spectrogram(audio, sample_rate, window_len=0.025, step_len=0.010, num_feature_filters=80):
-  """
-  :param numpy.ndarray audio: raw audio samples, shape (audio_len,)
-  :param int sample_rate: e.g. 22050
-  :param float window_len: in seconds
-  :param float step_len: in seconds
-  :param int num_feature_filters:
-  :return: (audio_len // int(step_len * sample_rate), num_feature_filters), float32
-  :rtype: numpy.ndarray
-  """
-  import librosa
-  mel_spectrogram = librosa.feature.melspectrogram(
-    audio, sr=sample_rate,
-    n_mels=num_feature_filters,
-    hop_length=int(step_len * sample_rate), n_fft=int(window_len * sample_rate))
-  log_noise_floor = 1e-3  # prevent numeric overflow in log
-  mel_spectrogram = numpy.log(numpy.maximum(log_noise_floor, mel_spectrogram))
-  assert mel_spectrogram.shape[0] == num_feature_filters
-  mel_spectrogram = mel_spectrogram.transpose().astype("float32")  # (time, dim)
-  return mel_spectrogram
+    return (self.with_delta + 1) * self.num_feature_filters
 
 
 def _get_audio_features_mfcc(audio, sample_rate, window_len=0.025, step_len=0.010, num_feature_filters=40):
@@ -818,6 +796,63 @@ def _get_audio_features_mfcc(audio, sample_rate, window_len=0.025, step_len=0.01
   assert mfccs.shape[0] == num_feature_filters  # (dim, time)
   mfccs = mfccs.transpose().astype("float32")  # (time, dim)
   return mfccs
+
+
+def _get_audio_log_mel_filterbank(audio, sample_rate, window_len=0.025, step_len=0.010, num_feature_filters=80):
+  """
+  Computes log Mel-filterbank features from an audio signal.
+  References:
+
+    https://github.com/jameslyons/python_speech_features/blob/master/python_speech_features/base.py
+    https://github.com/tensorflow/tensor2tensor/blob/master/tensor2tensor/data_generators/speech_recognition.py
+
+  :param numpy.ndarray audio: raw audio samples, shape (audio_len,)
+  :param int sample_rate: e.g. 22050
+  :param float window_len: in seconds
+  :param float step_len: in seconds
+  :param int num_feature_filters:
+  :return: (audio_len // int(step_len * sample_rate), num_feature_filters), float32
+  :rtype: numpy.ndarray
+  """
+  import librosa
+  mel_filterbank = librosa.feature.melspectrogram(
+    audio, sr=sample_rate,
+    n_mels=num_feature_filters,
+    hop_length=int(step_len * sample_rate), n_fft=int(window_len * sample_rate))
+  log_noise_floor = 1e-3  # prevent numeric overflow in log
+  log_mel_filterbank = numpy.log(numpy.maximum(log_noise_floor, mel_filterbank))
+  assert log_mel_filterbank.shape[0] == num_feature_filters
+  log_mel_filterbank = log_mel_filterbank.transpose().astype("float32")  # (time, dim)
+  return log_mel_filterbank
+
+
+def _get_audio_log_log_mel_filterbank(audio, sample_rate, window_len=0.025, step_len=0.010, num_feature_filters=80):
+  """
+  Computes log-log Mel-filterbank features from an audio signal.
+  References:
+
+    https://github.com/jameslyons/python_speech_features/blob/master/python_speech_features/base.py
+    https://github.com/tensorflow/tensor2tensor/blob/master/tensor2tensor/data_generators/speech_recognition.py
+
+  :param numpy.ndarray audio: raw audio samples, shape (audio_len,)
+  :param int sample_rate: e.g. 22050
+  :param float window_len: in seconds
+  :param float step_len: in seconds
+  :param int num_feature_filters:
+  :return: (audio_len // int(step_len * sample_rate), num_feature_filters), float32
+  :rtype: numpy.ndarray
+  """
+  import librosa
+  mel_filterbank = librosa.feature.melspectrogram(
+    audio, sr=sample_rate,
+    n_mels=num_feature_filters,
+    hop_length=int(step_len * sample_rate), n_fft=int(window_len * sample_rate))
+  log_noise_floor = 1e-3  # prevent numeric overflow in log
+  log_mel_filterbank = numpy.log(numpy.maximum(log_noise_floor, mel_filterbank))
+  log_log_mel_filterbank = librosa.core.amplitude_to_db(log_mel_filterbank)
+  assert log_log_mel_filterbank.shape[0] == num_feature_filters
+  log_log_mel_filterbank = log_log_mel_filterbank.transpose().astype("float32")  # (time, dim)
+  return log_log_mel_filterbank
 
 
 def _get_random_permuted_audio(audio, sample_rate, opts, random_state):
@@ -960,7 +995,7 @@ class TimitDataset(CachedDataset2):
     self.num_inputs = self._num_feature_filters
     if isinstance(with_delta, bool):
       with_delta = 1 if with_delta else 0
-    assert isinstance(with_delta, int)
+    assert isinstance(with_delta, int) and with_delta >= 0
     self._with_delta = with_delta
     self.num_inputs *= (1 + with_delta)
     self._norm_mean = self._load_feature_vec(norm_mean)
@@ -1187,9 +1222,6 @@ class TimitDataset(CachedDataset2):
     if seq_idx >= len(self._seq_order):
       return None
 
-    # Alternatives for MFCC: python_speech_features, talkbox.features.mfcc, librosa
-    import librosa
-
     seq_tag = self._seq_tags[self._seq_order[seq_idx]]
     phone_seq = self._get_phone_seq(seq_tag)
     phone_seq = [self._phone_map[p] for p in phone_seq]
@@ -1274,13 +1306,21 @@ class Vocabulary(object):
 
   _cache = {}  # filename -> vocab, labels
 
-  def __init__(self, vocab_file, unknown_label="UNK"):
+  def __init__(self, vocab_file, unknown_label="UNK", num_labels=None):
     """
     :param str vocab_file:
     :param str unknown_label:
+    :param int num_labels: just for verification
     """
+    self.vocab_file = vocab_file
     self.unknown_label = unknown_label
+    self.num_labels = None  # will be set by _parse_vocab
     self._parse_vocab(vocab_file)
+    if num_labels is not None:
+      assert self.num_labels == num_labels
+
+  def __repr__(self):
+    return "Vocabulary(%r, num_labels=%s, unknown_label=%r)" % (self.vocab_file, self.num_labels, self.unknown_label)
 
   def _parse_vocab(self, filename):
     """
@@ -1715,7 +1755,8 @@ class LibriSpeechCorpus(CachedDataset2):
     Min/max: 1 / 161
   "train-*" mean transcription len: 177.009085 (chars), i.e. ~3 chars per BPE label
   """
-  def __init__(self, path, prefix, audio, targets=None, chars=None, bpe=None, use_zip=False, use_cache_manager=False,
+  def __init__(self, path, prefix, audio, targets=None, chars=None, bpe=None,
+               use_zip=False, use_ogg=False, use_cache_manager=False,
                partition_epoch=None, fixed_random_seed=None, fixed_random_subset=None,
                epoch_wise_filter=None,
                name=None,
@@ -1728,6 +1769,7 @@ class LibriSpeechCorpus(CachedDataset2):
     :param dict[str] bpe: options for :class:`BytePairEncoding`
     :param dict[str] chars: options for :class:`CharacterTargets`
     :param bool use_zip: whether to use the ZIP files instead (better for NFS)
+    :param bool use_ogg: add .ogg postfix to all files
     :param bool use_cache_manager: uses :func:`Util.cf`
     :param int|None partition_epoch:
     :param int|None fixed_random_seed: for the shuffling, e.g. for seq_ordering='random'. otherwise epoch will be used
@@ -1747,6 +1789,7 @@ class LibriSpeechCorpus(CachedDataset2):
     self.path = path
     self.prefix = prefix
     self.use_zip = use_zip
+    self.use_ogg = use_ogg
     self._zip_files = None
     if use_zip:
       zip_fn_pattern = "%s/%s*.zip" % (self.path, self.prefix)
@@ -1943,6 +1986,8 @@ class LibriSpeechCorpus(CachedDataset2):
     subdir, speaker_id, chapter_id, seq_id = self._reference_seq_order[self._get_ref_seq_idx(seq_idx)]
     audio_fn = "%(sd)s/%(sp)i/%(ch)i/%(sp)i-%(ch)i-%(i)04i.flac" % {
       "sd": subdir, "sp": speaker_id, "ch": chapter_id, "i": seq_id}
+    if self.use_ogg:
+      audio_fn += ".ogg"
     if self.use_zip:
       audio_fn = "LibriSpeech/%s" % (audio_fn,)
       zip_file = self._zip_files[subdir]

@@ -1328,6 +1328,8 @@ class Engine(object):
     with tf.name_scope("check_uninitialized_vars"):
       # Like tf.report_uninitialized_variables().
       var_list = tf.global_variables() + tf.local_variables()
+      if not var_list:
+        return
       # Get a 1-D boolean tensor listing whether each variable is initialized.
       var_mask = tf.logical_not(tf.stack(
         [tf.is_variable_initialized(v) for v in var_list])).eval(session=self.tf_session)
@@ -1373,7 +1375,11 @@ class Engine(object):
     if ext_feed_dict:
       feed_dict.update(ext_feed_dict)
     self.check_uninitialized_vars()  # Maybe some new uninitialized vars. Last check.
-    return self.tf_session.run(output_dict, feed_dict=feed_dict)
+    none_output_values = {k: v for (k, v) in output_dict.items() if v is None}
+    output_dict = {k: v for (k, v) in output_dict.items() if v is not None}
+    output_values = self.tf_session.run(output_dict, feed_dict=feed_dict)
+    output_values.update(none_output_values)
+    return output_values
 
   def _get_output_layer(self, output_layer_name=None):
     """

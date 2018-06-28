@@ -851,6 +851,9 @@ class _SubnetworkRecCell(object):
                  data=None, classes=None,
                  inputs_moved_out_tas=None, needed_outputs=("output",)):
     """
+    This is called from within the `tf.while_loop` of the :class:`RecLayer`,
+    to construct the subnetwork, which is performed step by step.
+
     :param dict[str,tf.Tensor] prev_outputs: outputs of the layers from the previous step
     :param dict[str,dict[str,tf.Tensor]] prev_extra: extra output / hidden states of the previous step for layers
     :param tf.Tensor i: loop counter. scalar, int32, current step (time)
@@ -1806,6 +1809,14 @@ class _SubnetworkRecCell(object):
       layers_in_loop.remove(layer)
       self.input_layers_moved_out.append(layer.name)
 
+    # First try out to move as much output-layers as possible.
+    while True:
+      output_layer = find_output_layer_to_move_out()
+      if output_layer:
+        output_move_out(output_layer)
+      else:
+        break
+    # Now, both input-layers and output-layers.
     while True:
       output_layer = find_output_layer_to_move_out()
       if output_layer:
@@ -3159,6 +3170,9 @@ class GenericAttentionLayer(AttentionBaseLayer):
       rem_dims = [d for d in rem_dims if d != 1]
     base = self.base.output.copy_as_batch_major().copy_with_time_dim_axis(-2)  # (B,...,T,n_out)
     base_t = base.placeholder
+    # According to https://github.com/tensorflow/tensorflow/issues/10765, reduce_sum might be faster.
+    # However, it would also require more memory.
+    # I did not do the comparison.
     out = tf.matmul(weights_t, base_t)  # (B,?,n_out)
     out = tf.reshape(out, shape[:rem_dims_start_axis] + rem_dims + [self.output.dim])  # (batch, ..., n_out)
     self.output.placeholder = out
@@ -3192,6 +3206,10 @@ class GenericAttentionLayer(AttentionBaseLayer):
     out.shape = (
       out.shape[:min(len(base_rem_axes), len(out.shape) - 1)] +
       tuple([weights.output.batch_shape[a] for a in weights_rem_axes]) + out.shape[-1:])
+    # Automatically select new time-dim-axis if there seems to be one, otherwise None.
+    if None in out.shape:
+      assert out.batch_dim_axis == 0
+      out.time_dim_axis = out.batch_shape.index(None, 1)
     return out
 
 
@@ -3566,6 +3584,77 @@ class SelfAttentionLayer(_ConcatInputLayer):
         element_shape=(None, num_heads, 1, (total_key_dim + total_value_dim) // num_heads))
       return {"kv_left_ta": kv_left_ta}
     return {}
+
+
+class PositionalEncodingLayer(_ConcatInputLayer):
+  """
+  Provides positional encoding in the form of (batch, time, n_out),
+  where n_out is the number of channels,
+  if it is run outside a :class:`RecLayer`,
+  or (batch, n_out)
+  if run inside a :class:`RecLayer`, where it will depend on the current time frame.
+
+  Assumes one source input with a time dimension if outside a :class:`RecLayer`.
+  By default ("from" key not provided), it would either use "data", or ":i".
+  With `add_to_input`, it will calculate `x + input`.
+
+  The positional encoding is the same as in Tensor2Tensor.
+  See :func:`TFUtil.get_positional_encoding`.
+  """
+  layer_class = "positional_encoding"
+  recurrent = True
+
+  def __init__(self, add_to_input=False, **kwargs):
+    """
+    :param bool add_to_input: will add the signal to the input
+    """
+    super(PositionalEncodingLayer, self).__init__(**kwargs)
+    assert len(self.sources) == 1, "%s: expect a single source" % self
+    source = self.input_data
+    if add_to_input:
+      assert source.dim == self.output.dim
+    from TFUtil import get_positional_encoding
+    if source.have_time_axis():
+      length = tf.shape(source.placeholder)[source.time_dim_axis]
+      signal = get_positional_encoding(num_channels=self.output.dim, length=length)  # (len,n_out)
+    else:
+      position = tf.convert_to_tensor([self.network.get_rec_step_index()])
+      signal = get_positional_encoding(num_channels=self.output.dim, position=position)  # (1,n_out)
+      signal = tf.squeeze(signal, axis=0)  # (n_out,)
+    if self.output.batch_dim_axis is not None:
+      signal = tf.expand_dims(signal, axis=self.output.batch_dim_axis)  # e.g. (len,batch,n_out)
+    if add_to_input:
+      signal += source.placeholder
+    self.output.placeholder = signal
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d:
+    :param TFNetwork.TFNetwork network:
+    :param ((str)->LayerBase) get_layer:
+    """
+    if d.get("from", None) is None:
+      if network.is_inside_rec_layer():
+        d["from"] = [":i"]
+      else:
+        d["from"] = ["data"]
+    super(PositionalEncodingLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, network, add_to_input=False, sources=(), **kwargs):
+    """
+    :param str name:
+    :param TFNetwork.TFNetwork network:
+    :param bool add_to_input:
+    :param list[LayerBase] sources:
+    :rtype: Data
+    """
+    assert len(sources) > 0, "%s %r: must have one source" % (cls, name)
+    if add_to_input:
+      return get_concat_sources_data_template(sources, name="%s_output" % name)  # just the same as the input
+    return super(PositionalEncodingLayer, cls).get_out_data_from_opts(
+      name=name, network=network, sources=sources, **kwargs)
 
 
 class KenLmStateLayer(_ConcatInputLayer):

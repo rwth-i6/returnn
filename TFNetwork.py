@@ -434,6 +434,7 @@ class TFNetwork(object):
       there is one notable exception: the InternalLayer, where you predefine the output.
     :rtype: LayerBase
     """
+    from pprint import pprint
     from Util import help_on_type_error_wrong_args
     layer_desc = self._create_layer_layer_desc(name=name, layer_desc=layer_desc)
     debug_print_layer_output_template = self.get_config().bool("debug_print_layer_output_template", False)
@@ -444,10 +445,14 @@ class TFNetwork(object):
         if "output" not in layer_desc:
           layer_desc["output"] = layer_class.get_out_data_from_opts(**layer_desc)
         if debug_print_layer_output_template:
-          print("layer %s%r output: %r" % (self.get_absolute_name_scope_prefix(), name, layer_desc["output"]))
+          print("layer %s/%r output: %r" % (self.name, name, layer_desc["output"]))
         layer = layer_class(**layer_desc)
       except TypeError:
         help_on_type_error_wrong_args(cls=layer_class, kwargs=list(layer_desc.keys()))
+        raise
+      except Exception:
+        print("Exception creating layer %s/%r of class %s with opts:" % (self.name, name, layer_class.__name__))
+        pprint(layer_desc)
         raise
       layer.post_init()
       if debug_print_layer_output_shape:
@@ -1103,18 +1108,42 @@ class TFNetwork(object):
     self.layers[":i"] = RecStepInfoLayer(
       name=":i", network=self, i=i, end_flag=end_flag, seq_lens=seq_lens)
 
-  def have_rec_step_info(self):
-    return ":i" in self.layers
+  def is_inside_rec_layer(self):
+    """
+    :return: whether we are inside a :class:`RecLayer`. see :func:`get_rec_parent_layer`
+    :rtype: bool
+    """
+    return self.get_rec_parent_layer() is not None
 
-  def get_rec_step_info(self):
+  def get_rec_parent_layer(self):
     """
-    Assumes that have_rec_step_info is True.
-    :rtype: TFNetworkRecLayer.RecStepInfoLayer
+    :return: if we are a subnet of a :class:`RecLayer`, will return the RecLayer instance
+    :rtype: TFNetworkRecLayer.RecLayer|None
     """
-    from TFNetworkRecLayer import RecStepInfoLayer
-    layer = self.layers[":i"]
-    assert isinstance(layer, RecStepInfoLayer)
-    return layer
+    from TFNetworkRecLayer import RecLayer
+    if isinstance(self.parent_layer, RecLayer):
+      return self.parent_layer
+    if self.parent_net:
+      return self.parent_net.get_rec_parent_layer()
+    return None
+
+  def have_rec_step_info(self):
+    return self.get_rec_step_info(must_exist=False) is not None
+
+  def get_rec_step_info(self, must_exist=True):
+    """
+    :param bool must_exist: if True, will throw exception if not available
+    :rtype: TFNetworkRecLayer.RecStepInfoLayer|None
+    """
+    from TFNetworkRecLayer import RecStepInfoLayer, _SubnetworkRecCell
+    rec_layer = self.get_rec_parent_layer()
+    if not rec_layer:
+      assert not must_exist, "%s: We expect to be the subnet of a RecLayer, but we are not." % self
+      return None
+    assert isinstance(rec_layer.cell, _SubnetworkRecCell)
+    step_info_layer = rec_layer.cell.net.layers[":i"]
+    assert isinstance(step_info_layer, RecStepInfoLayer)
+    return step_info_layer
 
   def get_rec_step_index(self):
     """

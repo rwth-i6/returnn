@@ -3,7 +3,8 @@ scipy
 h5py
 theano==0.9
 nose
-tensorflow
+# illegal instruction for later
+tensorflow==1.5
 numpydoc
 tornado
 futures
