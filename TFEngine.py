@@ -27,7 +27,6 @@ import tensorflow as tf
 from tensorflow.python.client import timeline
 
 from Dataset import Dataset, Batch, BatchSetGenerator
-from GeneratingDataset import Vocabulary
 from Engine import Engine as TheanoEngine
 from LearningRateControl import loadLearningRateControlFromConfig, LearningRateControl
 from Log import log
