@@ -53,7 +53,7 @@ FLAGS_hparams = "num_hidden_layers=2" # default is empty
 
 
 
-def create_hparams():
+def create_t2t_hparams():
   return trainer_lib.create_hparams(
       FLAGS_hparams_set,
       FLAGS_hparams,
@@ -61,14 +61,14 @@ def create_hparams():
       problem_name=FLAGS_problem)
 
 
-def score_file(filename):
+def t2t_score_file(filename):
   """
   Score each line in a file and return the scores.
 
   :param str filename: T2T checkpoint
   """
   # Prepare model.
-  hparams = create_hparams()
+  hparams = create_t2t_hparams()
   encoders = registry.problem(FLAGS_problem).feature_encoders(FLAGS_data_dir)
 
   # Prepare features for feeding into the model.
@@ -125,7 +125,110 @@ def score_file(filename):
       ipdb.set_trace()
 
 
+FFDim = 512
+EncKeyTotalDim = 256
+AttNumHeads = 8
+EncKeyPerHeadDim = EncKeyTotalDim // AttNumHeads
+EncValueTotalDim = 256
+EncValuePerHeadDim = EncValueTotalDim // AttNumHeads
 
+
+def add_trafo_enc_layer(d, inp, output):
+  d[output + '_self_att_ln'] = {"class": "layer_norm", "from": [inp]}
+  d[output + '_self_att'] = {"class": "self_attention", "num_heads": AttNumHeads, "total_key_dim": EncKeyTotalDim,
+                             "n_out": EncValueTotalDim, "from": [output + '_self_att_ln'], "attention_left_only": False}
+  d[output + '_self_att_drop'] = {"class": "dropout", "from": [output + '_self_att'], "dropout": 0.1}
+  d[output + '_self_att_res'] = {"class": "combine", "kind": "add", "from": [inp, output + '_self_att_drop'],
+                                 "n_out": EncValueTotalDim}
+  d[output + '_self_att_out'] = {"class": "copy", "from": [output + '_self_att_res']}
+  #####
+  d[output + '_ff_ln'] = {"class": "layer_norm", "from": [output + '_self_att_out']}
+  d[output + '_ff_lin1'] = {"class": "linear", "activation": "relu", "with_bias": True, "from": [output + '_ff_ln'],
+                            "n_out": FFDim}
+  d[output + '_ff_lin2'] = {"class": "linear", "activation": None, "with_bias": True, "from": [output + '_ff_lin1'],
+                            "n_out": EncValueTotalDim}
+  d[output + '_ff_drop'] = {"class": "dropout", "from": [output + '_ff_lin2'], "dropout": 0.1}
+  d[output + '_ff_res'] = {"class": "combine", "kind": "add", "from": [output + '_self_att_out', output + '_ff_drop'],
+                           "n_out": EncValueTotalDim}
+  d[output] = {"class": "copy", "from": [output + '_ff_res']}
+
+
+def add_trafo_dec_layer(db, d, inp, output):
+  d[output + '_self_att__'] = {"class": "self_attention", "num_heads": AttNumHeads, "total_key_dim": EncKeyTotalDim,
+                               "n_out": EncValueTotalDim, "from": [inp], "attention_left_only": True}
+  d[output + '_self_att_'] = {"class": "combine", "kind": "add", "from": [inp, output + '_self_att__'],
+                              "n_out": EncValueTotalDim}
+  d[output + '_self_att'] = {"class": "layer_norm", "from": [output + '_self_att_']}
+  #####
+  db[output + '_enc_key0'] = {"class": "linear", "activation": None, "with_bias": True, "from": ["encoder"],
+                              "n_out": EncKeyTotalDim}  # (B, enc-T, D)
+  db[output + '_enc_key'] = {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncKeyPerHeadDim),
+                             "from": [output + '_enc_key0']}  # (B, enc-T, H, D/H)
+  db[output + '_enc_value0'] = {"class": "linear", "activation": None, "with_bias": True, "from": ["encoder"],
+                                "n_out": EncValueTotalDim}
+  db[output + '_enc_value'] = {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncValuePerHeadDim),
+                               "from": [output + '_enc_value0']}  # (B, enc-T, H, D'/H)
+  d[output + '_enc_query0'] = {"class": "linear", "activation": None, "with_bias": True, "from": [output + '_self_att'],
+                               "n_out": EncValueTotalDim}
+  d[output + '_att_query'] = {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncKeyPerHeadDim),
+                              "from": [output + '_enc_query0']}  # (B, H, D/H)
+  d[output + '_energy'] = {"class": "dot", "red1": -1, "red2": -1, "var1": "T", "var2": "T?",
+                           "from": ['base:' + output + '_enc_key', output + '_att_query']}  # (B, H, enc-T, 1)
+  d[output + '_att_weights'] = {"class": "softmax_over_spatial", "from": [output + '_energy'],
+                                "energy_factor": EncKeyPerHeadDim ** -0.5}  # (B, enc-T, H, 1)
+  d[output + '_att0'] = {"class": "generic_attention", "weights": output + '_att_weights',
+                         "base": 'base:' + output + '_enc_value'}  # (B, H, V)
+  d[output + '_att___'] = {"class": "merge_dims", "axes": "static", "from": [output + '_att0']}  # (B, H*V) except_batch
+  d[output + '_att__'] = {"class": "linear", "activation": None, "with_bias": True, "from": [output + '_att___'],
+                          "n_out": EncValueTotalDim}
+  d[output + '_att_'] = {"class": "combine", "kind": "add", "from": [output + '_self_att', output + '_att__'],
+                         "n_out": EncValueTotalDim}
+  d[output + '_att'] = {"class": "layer_norm", "from": [output + '_att_']}
+  #####
+  d[output + '_ff___'] = {"class": "linear", "activation": "relu", "with_bias": True, "from": [output + '_att'],
+                          "n_out": FFDim}
+  d[output + '_ff__'] = {"class": "linear", "activation": None, "with_bias": True, "from": [output + '_ff___'],
+                         "n_out": EncValueTotalDim}
+  d[output + '_ff_'] = {"class": "combine", "kind": "add", "from": [output + '_att', output + '_ff__'],
+                        "n_out": EncValueTotalDim}
+  d[output] = {"class": "layer_norm", "from": [output + '_ff_']}
+
+
+# network
+# (also defined by num_inputs & num_outputs)
+returnn_network = {
+  "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": EncValueTotalDim},
+  "source_embed_pos": {"class": "positional_encoding", "add_to_input": True, "from": ["source_embed"]},
+
+  ## trafo layer added later
+
+  "encoder": {"class": "copy", "from": ["enc_N"]},
+
+  "output": {"class": "rec", "from": [], "unit": {
+    'output': {'class': 'choice', 'target': 'classes', 'beam_size': 12, 'from': ["output_prob"],
+               "initial_output": 0},
+    "end": {"class": "compare", "from": ["output"], "value": 0},
+    'target_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'],
+                     "n_out": EncValueTotalDim, "initial_output": 0},  # feedback_input
+    "target_embed_pos": {"class": "positional_encoding", "add_to_input": True, "from": ["target_embed"]},
+
+    ## trafo layer added later
+
+    # ToDo: Add last linear layer???
+
+    "output_prob": {
+      "class": "softmax", "from": ["dec_N"], "dropout": 0.3,
+      "target": "classes", "loss": "ce", "loss_opts": {"label_smoothing": 0.1}
+    }
+
+  }, "target": "classes", "max_seq_len": "max_len_from('base:encoder') * 3"},
+
+}
+
+add_trafo_enc_layer(returnn_network, "source_embed_pos", "enc_1")
+add_trafo_enc_layer(returnn_network, "enc_1", "enc_N")
+add_trafo_dec_layer(returnn_network, returnn_network["output"]["unit"], "prev:target_embed_pos", "dec_1")
+add_trafo_dec_layer(returnn_network, returnn_network["output"]["unit"], "dec_1", "dec_N")
 
 
 def main():
@@ -137,10 +240,10 @@ def main():
   print("Loading returnn config")
 
   rnn.init(
-    commandLineOptions=['/work/schamper/sandbox/returnn-transformer/2-layer-trafo_posemb/config.py'], #sys.argv[1:],
     config_updates={
       "task": "nop", "log": None, "device": "cpu",
-      #"allow_random_model_init": True,
+      "network": returnn_network,
+      "debug_print_layer_output_template": True,
       "debug_add_check_numerics_on_output": False},
     extra_greeting="Import t2t model.")
   assert Util.BackendEngine.is_tensorflow_selected()
