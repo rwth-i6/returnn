@@ -1527,6 +1527,13 @@ class CopyLayer(_ConcatInputLayer):
     return get_concat_sources_data_template(sources, name="%s_output" % name)
 
 
+class DropoutLayer(CopyLayer):
+  """
+  Just the same as :class:`CopyLayer`, because that one already supports dropout.
+  """
+  layer_class = "dropout"
+
+
 class InternalLayer(LayerBase):
   """
   This is not supposed to be used by the user.
