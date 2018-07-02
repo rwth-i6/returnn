@@ -862,7 +862,13 @@ class Engine(object):
     self._maybe_update_config(net_desc=net_desc, epoch=epoch)
     # The new session will by default use the newly created default graph.
     self._make_tf_session()
-    tf.set_random_seed(42)
+    tf_random_seed = 42
+    net_random_seed = epoch
+    if self.config.int("random_seed", None):
+      seed = self.config.int("random_seed", None)
+      net_random_seed = (epoch * 3 + seed * 5 + 7) % (2 ** 31)
+      tf_random_seed = (net_random_seed * 2 + 3) % (2 ** 31)
+    tf.set_random_seed(tf_random_seed)
     from TFUtil import get_global_train_flag_placeholder
     if self.use_dynamic_train_flag:
       train_flag = get_global_train_flag_placeholder()
@@ -874,7 +880,7 @@ class Engine(object):
       # TODO...
     self.network, self.updater = self.create_network(
       config=self.config,
-      rnd_seed=epoch,
+      rnd_seed=net_random_seed,
       train_flag=train_flag, eval_flag=self.use_eval_flag, search_flag=self.use_search_flag,
       initial_learning_rate=getattr(self, "initial_learning_rate", None),
       net_dict=net_desc)
