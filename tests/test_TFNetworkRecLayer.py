@@ -1799,7 +1799,7 @@ def test_reclayer_optimize_out_dot():
       "enc_value": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncValuePerHeadDim),
                     "from": ["enc_value0"], "is_output_layer": True},  # (B, enc-T, H, D/H)
     },
-    rtol=1e-4)
+    rtol=1e-3)
 
 
 def test_subnet_load_on_init_rec():
