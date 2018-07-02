@@ -129,13 +129,12 @@ def score_file(filename):
 
 
 def main():
+  print("#####################################################")
+  print("Loading t2t model + scoring")
+  #score_file(FLAGS_score_file)
 
   print("#####################################################")
   print("Loading returnn config")
-
-  score_file(FLAGS_score_file)
-
-  return
 
   rnn.init(
     commandLineOptions=['/work/schamper/sandbox/returnn-transformer/2-layer-trafo_posemb/config.py'], #sys.argv[1:],
@@ -147,13 +146,13 @@ def main():
   assert Util.BackendEngine.is_tensorflow_selected()
   config = rnn.config
 
-  ipdb.set_trace()
-
-  rnn.engine.init_network_from_config()
+  rnn.engine.init_train_from_config(config=config)
+  network = rnn.engine.network
+  assert isinstance(network, TFNetwork)
   print("Our network model params:")
   our_params = {}  # type: dict[str,tf.Variable]
   our_total_num_params = 0
-  for v in rnn.engine.network.get_params_list():
+  for v in network.get_params_list():
     key = v.name[:-2]
     our_params[key] = v
     print("  %s: %s, %s" % (key, v.shape, v.dtype.base_dtype.name))
@@ -163,8 +162,6 @@ def main():
   ipdb.set_trace()
 
 
-  print("#####################################################")
-  print("Loading t2t model + scoring")
 
 
 if __name__ == "__main__":
