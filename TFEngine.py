@@ -864,7 +864,7 @@ class Engine(object):
     self._make_tf_session()
     tf_random_seed = 42
     net_random_seed = epoch
-    if self.config.int("random_seed", None):
+    if self.config.opt_typed_value("random_seed", None):
       seed = self.config.int("random_seed", None)
       net_random_seed = (epoch * 3 + seed * 5 + 7) % (2 ** 31)
       tf_random_seed = (net_random_seed * 2 + 3) % (2 ** 31)
