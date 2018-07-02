@@ -173,14 +173,14 @@ class ExternData(object):
 
 
 class TFNetwork(object):
-  def __init__(self, config=None, extern_data=None, rnd_seed=42,
+  def __init__(self, config=None, extern_data=None, rnd_seed=None,
                train_flag=False, eval_flag=False, search_flag=False,
                parent_layer=None, parent_net=None, extra_parent_net=None,
                name=None):
     """
     :param Config.Config config: only needed to init extern_data if not specified explicitly
     :param ExternData|None extern_data:
-    :param int rnd_seed:
+    :param int|None rnd_seed:
     :param bool|tf.Tensor train_flag: True if we want to use this model in training, False if in eval, or dynamic
     :param bool eval_flag: whether to calculate losses. if train_flag is not False, this will be set to True
     :param bool search_flag: whether we perform a beam-search. see usage
@@ -206,6 +206,11 @@ class TFNetwork(object):
     self.extern_data = extern_data
     self._config = config
     self.used_data_keys = set()  # type: set[str]  # keys from extern_data
+    if rnd_seed is None:
+      if parent_net:
+        rnd_seed = parent_net.random.randint(2 ** 31)
+      else:
+        rnd_seed = 42
     self.rnd_seed = rnd_seed
     self.random = numpy.random.RandomState(rnd_seed)
     assert isinstance(train_flag, (bool, tf.Tensor))
