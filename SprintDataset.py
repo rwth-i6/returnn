@@ -50,11 +50,13 @@ class SprintDatasetBase(Dataset):
   SprintCachedSeqsMax = 200
   SprintCachedSeqsMin = 100
 
-  def __init__(self, target_maps=None, str_add_final_zero=False, input_stddev=1., bpe=None, **kwargs):
+  def __init__(self, target_maps=None, str_add_final_zero=False, input_stddev=1.,
+               orth_post_process=None, bpe=None, **kwargs):
     """
     :param dict[str,str|dict] target_maps: e.g. {"speaker": "speaker_map.txt"}
     :param bool str_add_final_zero: adds e.g. "orth0" with '\0'-ending
     :param float input_stddev: if != 1, will divide the input "data" by that
+    :param str|list[str]|None orth_post_process: :func:`get_post_processor_function`, applied on orth
     :param None|dict[str] bpe: if given, will be opts for :class:`BytePairEncoding`
     """
     super(SprintDatasetBase, self).__init__(**kwargs)
@@ -69,6 +71,10 @@ class SprintDatasetBase(Dataset):
     self.target_maps = target_maps
     self.str_add_final_zero = str_add_final_zero
     self.input_stddev = input_stddev
+    self.orth_post_process = None
+    if orth_post_process:
+      from LmDataset import get_post_processor_function
+      self.orth_post_process = get_post_processor_function(orth_post_process)
     self.bpe = None
     if bpe:
       from GeneratingDataset import BytePairEncoding
@@ -279,6 +285,8 @@ class SprintDatasetBase(Dataset):
       # 'classes' is always the alignment
       assert targets["classes"].shape == (T,), (  # is in format (time,)
         "Number of targets %s does not equal to number of features %s" % (targets["classes"].shape, (T,)))
+    if "orth" in targets and self.orth_post_process:
+      targets["orth"] = self.orth_post_process(targets["orth"])
     if self.bpe:
       assert "orth" in targets
       orth = targets["orth"]
