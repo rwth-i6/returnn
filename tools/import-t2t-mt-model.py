@@ -41,7 +41,8 @@ from tensor2tensor.utils import usr_dir
 import ipdb
 
 
-T2T_MODEL_DIR = "/work/smt3/schamper/sandbox/t2t-multi30k_2layers"
+#T2T_MODEL_DIR = "/work/smt3/schamper/sandbox/t2t-multi30k_2layers"
+T2T_MODEL_DIR = "/work/smt3/schamper/sandbox/out_model_2layer_512"
 FLAGS_data_dir = T2T_MODEL_DIR + "/datadir" # the data created by the self defined problem
 FLAGS_output_dir = T2T_MODEL_DIR + "/out_model" # the trained t2tmodel
 FLAGS_score_file = T2T_MODEL_DIR + "/to_score" # The data we want to test on
@@ -49,7 +50,8 @@ FLAGS_score_file = T2T_MODEL_DIR + "/to_score" # The data we want to test on
 FLAGS_problem = "translate_tmp" # a self defined problem to handle own data
 FLAGS_model = "transformer"
 FLAGS_hparams_set = "transformer_base_single_gpu"
-FLAGS_hparams = "num_hidden_layers=2" # default is empty
+#FLAGS_hparams = "num_hidden_layers=2" # default is empty
+FLAGS_hparams = "num_hidden_layers=2,hidden_size=256,shared_embedding_and_softmax_weights=False,symbol_modality_num_shards=1,conv_first_kernel=0,use_target_space_embedding=False,filter_size=512"
 
 
 
@@ -90,39 +92,39 @@ def t2t_score_file(filename):
   assert isinstance(losses, dict)
   saver = tf.train.Saver()
 
-  with tf.Session() as sess:
-    # Load weights from checkpoint.
-    ckpts = tf.train.get_checkpoint_state(FLAGS_output_dir)
-    ckpt = ckpts.model_checkpoint_path
-    saver.restore(sess, ckpt)
+  sess = tf.Session()
+  # Load weights from checkpoint.
+  ckpts = tf.train.get_checkpoint_state(FLAGS_output_dir)
+  ckpt = ckpts.model_checkpoint_path
+  saver.restore(sess, ckpt)
 
-    print(tf.trainable_variables())
+  print(tf.trainable_variables())
 
-    # Run on each line.
-    results = []
-    for line in open(filename):
-      tab_split = line.split("\t")
-      if len(tab_split) > 2:
-        raise ValueError("Each line must have at most one tab separator.")
-      assert len(tab_split) == 2
-      targets = tab_split[1].strip()
-      inputs = tab_split[0].strip()
-      # Run encoders and append EOS symbol.
-      targets_numpy = encoders["targets"].encode(targets) + [text_encoder.EOS_ID]
-      inputs_numpy = encoders["inputs"].encode(inputs) + [text_encoder.EOS_ID]
-      print(inputs_numpy)
-      # Prepare the feed.
-      feed = {
-          inputs_ph: [inputs_numpy],
-          targets_ph: [targets_numpy]
-      }
+  # Run on each line.
+  results = []
+  for line in open(filename):
+    tab_split = line.split("\t")
+    if len(tab_split) > 2:
+      raise ValueError("Each line must have at most one tab separator.")
+    assert len(tab_split) == 2
+    targets = tab_split[1].strip()
+    inputs = tab_split[0].strip()
+    # Run encoders and append EOS symbol.
+    targets_numpy = encoders["targets"].encode(targets) + [text_encoder.EOS_ID]
+    inputs_numpy = encoders["inputs"].encode(inputs) + [text_encoder.EOS_ID]
+    print(inputs_numpy)
+    # Prepare the feed.
+    feed = {
+        inputs_ph: [inputs_numpy],
+        targets_ph: [targets_numpy]
+    }
 
-      np_res = sess.run({"losses": losses, "final_output": final_output}, feed_dict=feed)
-      pprint(np_res)
+    np_res = sess.run({"losses": losses, "final_output": final_output}, feed_dict=feed)
+    pprint(np_res)
 
-      tvars = tf.trainable_variables()
+    tvars = tf.trainable_variables()
+    return sess, tvars
 
-      ipdb.set_trace()
 
 
 FFDim = 512
@@ -132,6 +134,8 @@ EncKeyPerHeadDim = EncKeyTotalDim // AttNumHeads
 EncValueTotalDim = 256
 EncValuePerHeadDim = EncValueTotalDim // AttNumHeads
 
+
+# consider: /work/smt3/bahar/debug/returnn/t2t-test/02.07-2018-test/returnn/config-new.py
 
 def add_trafo_enc_layer(d, inp, output):
   d[output + '_self_att_ln'] = {"class": "layer_norm", "from": [inp]}
@@ -231,7 +235,7 @@ add_trafo_dec_layer(returnn_network, returnn_network["output"]["unit"], "prev:ta
 add_trafo_dec_layer(returnn_network, returnn_network["output"]["unit"], "dec_1", "dec_N")
 
 
-num_outputs = {'classes': [3874, 1], 'data': [5071, 1]}
+num_outputs = {'classes': [6115, 1], 'data': [6115, 1]}
 num_inputs = num_outputs["data"][0]
 
 
@@ -240,7 +244,8 @@ num_inputs = num_outputs["data"][0]
 def main():
   print("#####################################################")
   print("Loading t2t model + scoring")
-  #score_file(FLAGS_score_file)
+  t2t_sess, t2t_tvars = t2t_score_file(FLAGS_score_file)
+
 
   print("#####################################################")
   print("Loading returnn config")
@@ -261,6 +266,20 @@ def main():
   rnn.engine.init_train_from_config(config=config)
   network = rnn.engine.network
   assert isinstance(network, TFNetwork)
+
+  print("t2t network model params:")
+  t2t_params = {} # type: dict[str,tf.Variable]
+  t2t_total_num_params = 0
+  for v in t2t_tvars:
+    key = v.name[:-2]
+    t2t_params[key] = v
+    print("  %s: %s, %s" % (key, v.shape, v.dtype.base_dtype.name))
+    t2t_total_num_params += numpy.prod(v.shape.as_list())
+  print("t2t total num params: %i" % t2t_total_num_params)
+
+
+
+
   print("Our network model params:")
   our_params = {}  # type: dict[str,tf.Variable]
   our_total_num_params = 0
@@ -271,7 +290,34 @@ def main():
     our_total_num_params += numpy.prod(v.shape.as_list())
   print("Our total num params: %i" % our_total_num_params)
 
+
+  print("Loading t2t params into our network:")
+  for t2t_var in t2t_tvars:
+    if t2t_var.name in t2t_to_ret:
+      ret_name = t2t_to_ret[t2t_var.name]
+      ret_var = our_params[ret_name]
+      ret_var.load(t2t_var.eval(t2t_sess), rnn.engine.tf_session)
+    else:
+      print("skpipped over %s" % t2t_var.name)
+
   ipdb.set_trace()
+
+
+
+
+# maps names of trainable para
+t2t_to_ret = { 'transformer/body/decoder/layer_0/encdec_attention/multihead_attention/q/kernel': 'output/rec/dec_1_enc_query0/W',
+               'transformer/body/decoder/layer_0/encdec_attention/multihead_attention/k/kernel': 'dec_1_enc_key0/W',
+               'transformer/body/decoder/layer_0/encdec_attention/multihead_attention/v/kernel': 'dec_1_enc_value0/W'
+               }
+
+
+
+
+
+
+
+
 
 
 
@@ -279,44 +325,3 @@ def main():
 if __name__ == "__main__":
   better_exchook.install()
   main()
-
-
-
-
-
-
-def im():
-  from tensorflow.python import pywrap_tensorflow
-  file_name = "/work/smt3/bahar/debug/returnn/t2t-test/t2t-multi30k/out_model/model.ckpt-7506"
-  reader = pywrap_tensorflow.NewCheckpointReader(file_name)
-  var_to_shape_map = reader.get_variable_to_shape_map()
-  # print (var_to_shape_map) ## a dictionary with tensor names as key and tensor shape as values
-
-  print(var_to_shape_map.values())
-  for key in sorted(var_to_shape_map):
-    print("tensor_name: ", key)  ## Tensor name
-  print("tensor_shape: ", var_to_shape_map[key])  ## Tensor shape
-
-
-def im2():
-  from tensorflow.python import pywrap_tensorflow
-  file_name = "/work/smt3/bahar/debug/returnn/t2t-test/t2t-multi30k/out_model/model.ckpt-7506"
-  reader = pywrap_tensorflow.NewCheckpointReader(file_name)
-  var_to_shape_map = reader.get_variable_to_shape_map()
-  # print (var_to_shape_map) ## a dictionary with tensor names as key and tensor shape as values
-
-  # print (var_to_shape_map.values())
-  tot_params = 0
-  for key in sorted(var_to_shape_map):
-    if not key.startswith('training'):
-      val = var_to_shape_map[key]
-      print("tensor_name:{: <120}{}".format(key, str(val)))
-      tot_params = tot_params + reader.get_tensor(key).size
-  # Print total number of params
-  print("Total number of parameters: {}".format(tot_params))
-
-
-def sssd():
-  tf.get_default_graph().get_tensor_by_name(
-    "transformer/body/decoder/layer_prepostprocess/layer_norm/layer_norm_scale:0")
-
