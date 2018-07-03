@@ -11,6 +11,7 @@ from Util import parse_orthography, parse_orthography_into_symbols, load_json, B
 from Log import log
 import numpy
 import time
+import re
 from random import Random
 
 
@@ -1151,6 +1152,211 @@ class TranslationDataset(CachedDataset2):
       targets=targets)
 
 
+'''
+Cleaners are transformations that run over the input text at both training and eval time.
+Cleaners can be selected by passing a comma-delimited list of cleaner names as the "cleaners"
+hyperparameter. Some cleaners are English-specific. You'll typically want to use:
+  1. "english_cleaners" for English text
+  2. "transliteration_cleaners" for non-English text that can be transliterated to ASCII using
+     the Unidecode library (https://pypi.python.org/pypi/Unidecode)
+  3. "basic_cleaners" if you do not want to transliterate (in this case, you should also update
+     the symbols in symbols.py to match your data).
+
+Code from here:
+https://github.com/keithito/tacotron/blob/master/text/cleaners.py
+https://github.com/keithito/tacotron/blob/master/text/numbers.py
+'''
+
+
+# Regular expression matching whitespace:
+_whitespace_re = re.compile(r'\s+')
+
+# List of (regular expression, replacement) pairs for abbreviations:
+_abbreviations = [(re.compile('\\b%s\\.' % x[0], re.IGNORECASE), x[1]) for x in [
+  ('mrs', 'misess'),
+  ('mr', 'mister'),
+  ('dr', 'doctor'),
+  ('st', 'saint'),
+  ('co', 'company'),
+  ('jr', 'junior'),
+  ('maj', 'major'),
+  ('gen', 'general'),
+  ('drs', 'doctors'),
+  ('rev', 'reverend'),
+  ('lt', 'lieutenant'),
+  ('hon', 'honorable'),
+  ('sgt', 'sergeant'),
+  ('capt', 'captain'),
+  ('esq', 'esquire'),
+  ('ltd', 'limited'),
+  ('col', 'colonel'),
+  ('ft', 'fort'),
+]]
+
+
+def expand_abbreviations(text):
+  for regex, replacement in _abbreviations:
+    text = re.sub(regex, replacement, text)
+  return text
+
+
+def expand_numbers(text):
+  return normalize_numbers(text)
+
+
+def lowercase(text):
+  return text.lower()
+
+
+def collapse_whitespace(text):
+  return re.sub(_whitespace_re, ' ', text)
+
+
+def convert_to_ascii(text):
+  from unidecode import unidecode
+  return unidecode(text)
+
+
+def basic_cleaners(text):
+  """Basic pipeline that lowercases and collapses whitespace without transliteration."""
+  text = lowercase(text)
+  text = collapse_whitespace(text)
+  return text
+
+
+def transliteration_cleaners(text):
+  """Pipeline for non-English text that transliterates to ASCII."""
+  text = convert_to_ascii(text)
+  text = lowercase(text)
+  text = collapse_whitespace(text)
+  return text
+
+
+def english_cleaners(text):
+  """
+  Pipeline for English text, including number and abbreviation expansion.
+  """
+  text = convert_to_ascii(text)
+  text = lowercase(text)
+  text = expand_numbers(text)
+  text = expand_abbreviations(text)
+  text = collapse_whitespace(text)
+  return text
+
+
+_inflect = None
+
+
+def _get_inflect():
+  global _inflect
+  if _inflect:
+    return _inflect
+  import inflect
+  _inflect = inflect.engine()
+  return _inflect
+
+
+_comma_number_re = re.compile(r'([0-9][0-9\,]+[0-9])')
+_decimal_number_re = re.compile(r'([0-9]+\.[0-9]+)')
+_pounds_re = re.compile(r'£([0-9\,]*[0-9]+)')
+_dollars_re = re.compile(r'\$([0-9\.\,]*[0-9]+)')
+_ordinal_re = re.compile(r'[0-9]+(st|nd|rd|th)')
+_number_re = re.compile(r'[0-9]+')
+
+
+def _remove_commas(m):
+  return m.group(1).replace(',', '')
+
+
+def _expand_decimal_point(m):
+  return m.group(1).replace('.', ' point ')
+
+
+def _expand_dollars(m):
+  match = m.group(1)
+  parts = match.split('.')
+  if len(parts) > 2:
+    return match + ' dollars'  # Unexpected format
+  dollars = int(parts[0]) if parts[0] else 0
+  cents = int(parts[1]) if len(parts) > 1 and parts[1] else 0
+  if dollars and cents:
+    dollar_unit = 'dollar' if dollars == 1 else 'dollars'
+    cent_unit = 'cent' if cents == 1 else 'cents'
+    return '%s %s, %s %s' % (dollars, dollar_unit, cents, cent_unit)
+  elif dollars:
+    dollar_unit = 'dollar' if dollars == 1 else 'dollars'
+    return '%s %s' % (dollars, dollar_unit)
+  elif cents:
+    cent_unit = 'cent' if cents == 1 else 'cents'
+    return '%s %s' % (cents, cent_unit)
+  else:
+    return 'zero dollars'
+
+
+def _expand_ordinal(m):
+  return _get_inflect().number_to_words(m.group(0))
+
+
+def _expand_number(m):
+  num = int(m.group(0))
+  if 1000 < num < 3000:
+    if num == 2000:
+      return 'two thousand'
+    elif 2000 < num < 2010:
+      return 'two thousand ' + _get_inflect().number_to_words(num % 100)
+    elif num % 100 == 0:
+      return _get_inflect().number_to_words(num // 100) + ' hundred'
+    else:
+      return _get_inflect().number_to_words(num, andword='', zero='oh', group=2).replace(', ', ' ')
+  else:
+    return _get_inflect().number_to_words(num, andword='')
+
+
+def normalize_numbers(text):
+  text = re.sub(_comma_number_re, _remove_commas, text)
+  text = re.sub(_pounds_re, r'\1 pounds', text)
+  text = re.sub(_dollars_re, _expand_dollars, text)
+  text = re.sub(_decimal_number_re, _expand_decimal_point, text)
+  text = re.sub(_ordinal_re, _expand_ordinal, text)
+  text = re.sub(_number_re, _expand_number, text)
+  return text
+
+
+def _dummy_identity_pp(text):
+  return text
+
+
+def get_post_processor_function(opts):
+  """
+  You might want to use :mod:`inflect` or :mod:`unidecode`
+  for some normalization / cleanup.
+  This function can be used to get such functions.
+
+  :param str|list[str] opts: e.g. "english_cleaners"
+  :return: function
+  :rtype: (str)->str
+  """
+  if not opts:
+    return _dummy_identity_pp
+  if isinstance(opts, str):
+    f = globals()[opts]
+    assert callable(f)
+    res_test = f("test")
+    assert isinstance(res_test, str), "%r does not seem as a valid function str->str" % (opts,)
+    return f
+  assert isinstance(opts, list)
+  if len(opts) == 1:
+    return get_post_processor_function(opts[0])
+  pps = [get_post_processor_function(pp) for pp in opts]
+
+  def chained_post_processors(text):
+    for pp in pps:
+      text = pp(text)
+    return text
+
+  return chained_post_processors
+
+
 def _main():
   import better_exchook
   better_exchook.install()
@@ -1159,9 +1365,14 @@ def _main():
   arg_parser.add_argument(
     "lm_dataset", help="Python eval string, should eval to dict" +
                        ", or otherwise filename, and will just dump")
+  arg_parser.add_argument("--post_processor", nargs="*")
   args = arg_parser.parse_args()
   if not args.lm_dataset.startswith("{") and os.path.isfile(args.lm_dataset):
-    iter_corpus(args.lm_dataset, print)
+    callback = print
+    if args.post_processor:
+      pp = get_post_processor_function(args.post_processor)
+      callback = lambda text: print(pp(text))
+    iter_corpus(args.lm_dataset, callback)
     sys.exit(0)
 
   log.initialize(verbosity=[5])
