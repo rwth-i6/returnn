@@ -1383,7 +1383,7 @@ class Vocabulary(object):
       VariableAssigner(var).assign(session=session, value=self.labels)
 
     return init_vocab_var
-  
+
   def get_seq(self, seq):
     """
     :param str sentence:
@@ -1391,14 +1391,14 @@ class Vocabulary(object):
     """
     segments = seq.split()
     return self.get_seq_indices(segments)
-  
+
   def get_seq_indices(self, seq):
     """
     :param list[str] seq:
     :rtype: list[int]
     """
     return [self.vocab.get(k, self.unknown_label_id) for k in seq]
-  
+
   def get_seq_labels(self, seq):
     """
     :param list[int] seq:
@@ -1763,7 +1763,9 @@ class LibriSpeechCorpus(CachedDataset2):
     Min/max: 1 / 161
   "train-*" mean transcription len: 177.009085 (chars), i.e. ~3 chars per BPE label
   """
-  def __init__(self, path, prefix, audio, targets=None, chars=None, bpe=None,
+  def __init__(self, path, prefix, audio,
+               orth_post_process=None,
+               targets=None, chars=None, bpe=None,
                use_zip=False, use_ogg=False, use_cache_manager=False,
                partition_epoch=None, fixed_random_seed=None, fixed_random_subset=None,
                epoch_wise_filter=None,
@@ -1772,7 +1774,8 @@ class LibriSpeechCorpus(CachedDataset2):
     """
     :param str path: dir, should contain "train-*/*/*/{*.flac,*.trans.txt}", or "train-*.zip"
     :param str prefix: "train", "dev", "test", "dev-clean", "dev-other", ...
-    :param str targets|None: "bpe" or "chars" currently, if `None`, then "bpe"
+    :param str|list[str]|None orth_post_process: :func:`get_post_processor_function`, applied on orth
+    :param str|None targets: "bpe" or "chars" currently, if `None`, then "bpe"
     :param dict[str] audio: options for :class:`ExtractAudioFeatures`
     :param dict[str] bpe: options for :class:`BytePairEncoding`
     :param dict[str] chars: options for :class:`CharacterTargets`
@@ -1810,16 +1813,23 @@ class LibriSpeechCorpus(CachedDataset2):
         for fn in zip_fns}  # e.g. "train-clean-100" -> ZipFile
     assert prefix.split("-")[0] in ["train", "dev", "test"]
     assert os.path.exists(path + "/train-clean-100" + (".zip" if use_zip else ""))
-    assert targets in ("bpe", "chars", None), "Unknown target type %s" % targets
+    self.orth_post_process = None
+    if orth_post_process:
+      from LmDataset import get_post_processor_function
+      self.orth_post_process = get_post_processor_function(orth_post_process)
     assert bpe or chars
     if targets == "bpe" or (targets is None and bpe is not None):
+      assert bpe is not None and chars is None
       self.bpe = BytePairEncoding(**bpe)
       self.targets = self.bpe
       self.labels = {"classes": self.bpe.labels}
-    elif targets == "chars":
+    elif targets == "chars" or (targets is None and chars is not None):
+      assert bpe is None and chars is not None
       self.chars = CharacterTargets(**chars)
       self.labels = {"classes": self.chars.labels}
       self.targets = self.chars
+    else:
+      raise Exception("invalid targets %r. provide bpe or chars" % targets)
     self._fixed_random_seed = fixed_random_seed
     self._audio_random = numpy.random.RandomState(1)
     self.feature_extractor = ExtractAudioFeatures(random_state=self._audio_random, **audio)
@@ -1863,6 +1873,8 @@ class LibriSpeechCorpus(CachedDataset2):
               for l in zip_file.read(info).decode("utf8").splitlines():
                 seq_name, txt = l.split(" ", 1)
                 speaker_id, chapter_id, seq_id = map(int, seq_name.split("-"))
+                if self.orth_post_process:
+                  txt = self.orth_post_process(txt)
                 transs[(subdir, speaker_id, chapter_id, seq_id)] = txt
     else:  # not zipped, directly read extracted files
       for subdir in glob("%s/%s*" % (self.path, self.prefix)):
@@ -1873,6 +1885,8 @@ class LibriSpeechCorpus(CachedDataset2):
           for l in open(fn).read().splitlines():
             seq_name, txt = l.split(" ", 1)
             speaker_id, chapter_id, seq_id = map(int, seq_name.split("-"))
+            if self.orth_post_process:
+              txt = self.orth_post_process(txt)
             transs[(subdir, speaker_id, chapter_id, seq_id)] = txt
       assert transs, "did not found anything %s/%s*" % (self.path, self.prefix)
     assert transs
