@@ -1892,7 +1892,7 @@ class SoftmaxLayer(LinearLayer):
     super(SoftmaxLayer, self).__init__(activation=activation, **kwargs)
 
 
-class SampledSoftmax(_ConcatInputLayer):
+class SampledSoftmaxLayer(_ConcatInputLayer):
   """
   This layer is a modified version of the linear layer using softmax as activation function.
   The main difference is, that the weight matrix is created transposed (see note to self.W
@@ -1907,7 +1907,7 @@ class SampledSoftmax(_ConcatInputLayer):
     :param str forward_weights_init: see :func:`TFUtil.get_initializer`
     :param str|float bias_init: see :func:`TFUtil.get_initializer`
     """
-    super(SampledSoftmax, self).__init__(**kwargs)
+    super(SampledSoftmaxLayer, self).__init__(**kwargs)
 
     # Start by looking up sizes of input and output
     from TFUtil import get_initializer
@@ -1969,7 +1969,7 @@ class SampledSoftmax(_ConcatInputLayer):
 
 class LengthLayer(LayerBase):
   """
-  Returns the length of sources as (B,).
+  Returns the length of sources as (B,), via input size_placeholder.
   """
   layer_class = "length"
 
@@ -5683,7 +5683,7 @@ class SampledSoftmaxLoss(Loss):
     self.sampler = sampler
 
   def get_value(self):
-    assert isinstance(self.layer, SampledSoftmax)
+    assert isinstance(self.layer, SampledSoftmaxLayer)
     assert self.target.sparse, "Sampled softmax is only useful for big (i.e. sparse) target vectors"
     assert self.target.ndim_dense == self.output.ndim_dense
 
