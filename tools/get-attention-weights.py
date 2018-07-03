@@ -71,7 +71,7 @@ def init(configFilename, commandLineOptions, args):
   config_updates={
       "log": None,
       "task": "eval",
-      "eval": "config:get_dataset(%r)" % args.data,
+      "eval": "config:get_sprint_dataset(%r)" % args.data,
       "train": None,
       "dev": None,
       "need_data": True,
@@ -81,7 +81,7 @@ def init(configFilename, commandLineOptions, args):
   if args.do_search:
     config_updates.update({
       "task": "search",
-      "search_data": "config:get_dataset(%r)" % args.data,
+      "search_data": "config:get_sprint_dataset(%r)" % args.data,
       "search_do_eval": False,
       "beam_size": int(args.beam_size),
       "max_seq_length": 0,
@@ -142,7 +142,7 @@ def main(argv):
     "seq_idx": network.get_extern_data("seq_idx", mark_data_key_as_used=True),
     "seq_tag": network.get_extern_data("seq_tag", mark_data_key_as_used=True),
     "target_data": network.get_extern_data("data", mark_data_key_as_used=True),
-    "target_classes": network.get_extern_data("classes", mark_data_key_as_used=True),
+    "target_classes": network.get_extern_data("bpe", mark_data_key_as_used=True),
   })
   dataset_batch = rnn.eval_data.generate_batches(
     recurrent_net=network.recurrent,

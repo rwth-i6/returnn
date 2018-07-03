@@ -37,6 +37,9 @@ from TFUpdater import Updater
 from Util import hms, NumbersDict, PY3, BackendEngine
 from pprint import pprint
 
+#  for att-weights, python2 only
+from subprocess import call
+
 
 class CancelTrainingException(Exception):
   pass
@@ -996,6 +999,25 @@ class Engine(object):
 
       self.init_train_epoch()
       self.train_epoch()
+
+      if self.config.is_true("run_att_recog_every_epoch"):
+        f = self.config.files[0]
+        model_ = os.path.splitext(f.split('/')[-1])[0]
+        cmd = ["./compute-att-weights.sh", model_, str(epoch)]
+        print("$ " + " ".join(cmd))
+        print()
+        call(cmd, cwd=os.path.expanduser("~/setups/2018-02-15--thesis-attention"))
+
+        cmd = ["./create-recog.sh", model_, str(epoch)]
+        print("$ " + " ".join(cmd))
+        print()
+        call(cmd, cwd=os.path.expanduser("~/setups/2018-02-15--thesis-attention"))
+
+        cmd = ["./start-recog.sh", model_, str(epoch)]
+        print("$ " + " ".join(cmd))
+        print()
+        call(cmd, cwd=os.path.expanduser("~/setups/2018-02-15--thesis-attention"))
+
       epoch += 1
 
     if self.start_epoch <= self.final_epoch:  # We did train at least one epoch.
