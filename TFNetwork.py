@@ -245,7 +245,6 @@ class TFNetwork(object):
     self._assigner_cache = {}  # type: dict[tf.Variable,VariableAssigner]
     self.concat_sources_dropout_cache = {}  # type: dict[(tuple[LayerBase],float),Data]
     self._batch_dim = None  # see get_batch_dim
-    self.post_control_dependencies = []
 
   def __repr__(self):
     s = "TFNetwork %r" % self.name
@@ -1184,19 +1183,25 @@ class TFNetwork(object):
       return Config()
     return None
 
-  def register_post_control_dependencies(self, deps):
+  @staticmethod
+  def register_post_control_dependencies(deps):
     """
     Will register the control dependencies
     or globally for a session run on this network.
     This can e.g. be called inside `self.post_init`.
+    We use UPDATE_OPS, as that is also e.g. used by batchnorm. See:
+      https://github.com/tensorflow/tensorflow/issues/1122
 
     :param list[tf.Tensor|tf.Operation] deps:
     :return: nothing
     """
-    if self.parent_net:
-      self.parent_net.register_post_control_dependencies(deps)
-      return
-    self.post_control_dependencies.extend(deps)
+    ls = tf.get_collection_ref(tf.GraphKeys.UPDATE_OPS)
+    assert isinstance(ls, list)
+    ls.extend(deps)
+
+  @staticmethod
+  def get_post_control_dependencies():
+    return tf.get_collection(tf.GraphKeys.UPDATE_OPS)
 
   @classmethod
   def get_network_stack(cls):

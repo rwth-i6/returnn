@@ -86,7 +86,7 @@ def _check_train_simple_network(network, num_steps=10):
     loss = None
     for step in range(num_steps):
       loss, _, _ = session.run(
-        [network.get_total_loss(), updater.get_optim_op(), network.post_control_dependencies],
+        [network.get_total_loss(), updater.get_optim_op(), network.get_post_control_dependencies()],
         feed_dict=make_feed_dict(step=step))
       print("step %i, loss: %f" % (step, loss))
   return loss
@@ -260,14 +260,14 @@ def test_state_keep_over_epoch():
     print('run on parts')
     part_seq_len = 2
     for step, t in enumerate(range(0, seq_len, part_seq_len)):
-      out_val_part, _ = session.run([out, net.post_control_dependencies], feed_dict={
+      out_val_part, _ = session.run([out, net.get_post_control_dependencies()], feed_dict={
         net.epoch_step: step, src_seq_len: [part_seq_len] * batch_size, src: src_seq[:, t:t + part_seq_len]})
       assert out_val_part.shape == (batch_size, part_seq_len, num_outputs)
       out_val = numpy.concatenate([out_val, out_val_part], axis=1)
     assert out_val.shape == (batch_size, seq_len, num_outputs)
     print('run full')
     out_val_full, _ = session.run(
-      [out, net.post_control_dependencies],
+      [out, net.get_post_control_dependencies()],
       feed_dict={net.epoch_step: 0, src_seq_len: [seq_len] * batch_size, src: src_seq})
     assert out_val_full.shape == out_val.shape
     assert_almost_equal(out_val, out_val_full)

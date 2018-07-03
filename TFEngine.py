@@ -158,8 +158,8 @@ class Runner(object):
           # mem_usage_for_dev currently only works for GPU
           continue
         d["mem_usage:%s" % os.path.basename(dev.name.replace("/device:", "/"))] = mem_usage_for_dev(dev.name)
-    if self.engine.network.post_control_dependencies:
-      d["post_control_dependencies"] = self.engine.network.post_control_dependencies
+    if self.engine.network.get_post_control_dependencies():
+      d["post_control_dependencies"] = self.engine.network.get_post_control_dependencies()
     return d
 
   def _print_process(self, report_prefix, step, step_duration, eval_info):

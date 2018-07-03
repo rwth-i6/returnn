@@ -100,7 +100,7 @@ def main(argv):
       with layer.cls_layer_scope(layer.name):
         tf.identity(layer.output.get_placeholder_as_batch_major(), name="output_batch_major")
 
-    tf.group(*network.post_control_dependencies, name="post_control_dependencies")
+    tf.group(*network.get_post_control_dependencies(), name="post_control_dependencies")
 
     if args.summaries_tensor_name:
       summaries_tensor = tf.summary.merge_all()
