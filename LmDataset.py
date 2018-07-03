@@ -341,18 +341,26 @@ def _iter_txt(filename, callback):
     callback(l)
 
 
+def iter_corpus(filename, callback):
+  """
+  :param str filename:
+  :param ((str)->None) callback:
+  """
+  if _is_bliss(filename):
+    iter_f = _iter_bliss
+  else:
+    iter_f = _iter_txt
+  iter_f(filename, callback)
+
+
 def read_corpus(filename):
   """
   :param str filename:
   :return: list of orthographies
   :rtype: list[str]
   """
-  if _is_bliss(filename):
-    iter_f = _iter_bliss
-  else:
-    iter_f = _iter_txt
   out_list = []
-  iter_f(filename, out_list.append)
+  iter_corpus(filename, out_list.append)
   return out_list
 
 
@@ -1143,12 +1151,23 @@ class TranslationDataset(CachedDataset2):
       targets=targets)
 
 
-def _main(argv):
+def _main():
   import better_exchook
   better_exchook.install()
+  from argparse import ArgumentParser
+  arg_parser = ArgumentParser()
+  arg_parser.add_argument(
+    "lm_dataset", help="Python eval string, should eval to dict" +
+                       ", or otherwise filename, and will just dump")
+  args = arg_parser.parse_args()
+  if not args.lm_dataset.startswith("{") and os.path.isfile(args.lm_dataset):
+    iter_corpus(args.lm_dataset, print)
+    sys.exit(0)
+
   log.initialize(verbosity=[5])
   print("LmDataset demo startup")
-  kwargs = eval(argv[0])
+  kwargs = eval(args.lm_dataset)
+  assert isinstance(kwargs, dict), "arg should be str of dict: %s" % args.lm_dataset
   print("Creating LmDataset with kwargs=%r ..." % kwargs)
   dataset = LmDataset(**kwargs)
   print("init_seq_order ...")
@@ -1178,4 +1197,4 @@ def _main(argv):
 
 
 if __name__ == "__main__":
-  _main(sys.argv[1:])
+  _main()
