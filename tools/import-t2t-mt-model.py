@@ -231,6 +231,12 @@ add_trafo_dec_layer(returnn_network, returnn_network["output"]["unit"], "prev:ta
 add_trafo_dec_layer(returnn_network, returnn_network["output"]["unit"], "dec_1", "dec_N")
 
 
+num_outputs = {'classes': [3874, 1], 'data': [5071, 1]}
+num_inputs = num_outputs["data"][0]
+
+
+
+
 def main():
   print("#####################################################")
   print("Loading t2t model + scoring")
@@ -241,6 +247,9 @@ def main():
 
   rnn.init(
     config_updates={
+      "use_tensorflow": True,
+      "num_outputs": num_outputs,
+      "num_inputs": num_inputs,
       "task": "nop", "log": None, "device": "cpu",
       "network": returnn_network,
       "debug_print_layer_output_template": True,
