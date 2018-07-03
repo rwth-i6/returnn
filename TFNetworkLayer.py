@@ -1800,7 +1800,7 @@ class LinearLayer(_ConcatInputLayer):
   Linear/forward/fully-connected/1x1-conv layer.
   Does a linear transformation on the feature-dimension of the input
   with an optional bias term and an optional activation function.
-  See also :class:`DotLayer`, :class:`ElemwiseProdLayer`.
+  See also :class:`DotLayer`, :class:`ElemwiseProdLayer`, :class:`WeightedSumLayer`.
   """
   layer_class = "linear"
 
@@ -3224,6 +3224,10 @@ class WeightedSumLayer(_ConcatInputLayer):
   """
   Calculates a weighted sum, either over a complete axis of fixed dimension, or over some window.
   Can also do that for multiple axes.
+  The weights are a trainable parameter matrix.
+  Similar would be to use :class:`ElemwiseProdLayer` and :class:`ReduceLayer`,
+  or just a :class:`DotLayer` with a :class:`VariableLayer`.
+  See also :class:`LinearLayer`.
   """
   layer_class = "weighted_sum"
 
@@ -3346,6 +3350,8 @@ class ElemwiseProdLayer(_ConcatInputLayer):
   """
   Element-wise product in some axes.
   Microsoft calls this "static attention", in Deep Conv. NN with Layer-wise Context Expansion and Attention (LACE).
+  The matrix/tensor to be used for the product are given as a trainable parameter.
+  See also :class:`LinearLayer`.
   """
   layer_class = "elemwise_prod"
 
