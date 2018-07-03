@@ -1800,6 +1800,7 @@ class LinearLayer(_ConcatInputLayer):
   Linear/forward/fully-connected/1x1-conv layer.
   Does a linear transformation on the feature-dimension of the input
   with an optional bias term and an optional activation function.
+  See also :class:`DotLayer`, :class:`ElemwiseProdLayer`.
   """
   layer_class = "linear"
 
