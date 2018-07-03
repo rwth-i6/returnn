@@ -149,12 +149,7 @@ class LmDataset(CachedDataset2):
     if add_delayed_seq_data:
       self.num_outputs["delayed"] = self.num_outputs["data"]
 
-    if _is_bliss(corpus_file):
-      iter_f = _iter_bliss
-    else:
-      iter_f = _iter_txt
-    self.orths = []
-    iter_f(corpus_file, self.orths.append)
+    self.orths = read_corpus(corpus_file)
     # It's only estimated because we might filter some out or so.
     self._estimated_num_seqs = len(self.orths) // self.partition_epoch
     print("  done, loaded %i sequences" % len(self.orths), file=log.v4)
@@ -344,6 +339,21 @@ def _iter_txt(filename, callback):
     l = l.strip()
     if not l: continue
     callback(l)
+
+
+def read_corpus(filename):
+  """
+  :param str filename:
+  :return: list of orthographies
+  :rtype: list[str]
+  """
+  if _is_bliss(filename):
+    iter_f = _iter_bliss
+  else:
+    iter_f = _iter_txt
+  out_list = []
+  iter_f(filename, out_list.append)
+  return out_list
 
 
 class AllophoneState:
