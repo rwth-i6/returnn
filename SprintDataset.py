@@ -708,8 +708,8 @@ class ExternSprintDataset(SprintDatasetBase):
   @property
   def num_seqs(self):
     with self.lock:
-      # assert self._num_seqs is not None
-      return self._num_seqs or self._estimated_num_seqs
+      assert self._num_seqs is not None
+      return self._num_seqs
 
 
 class SprintCacheDataset(CachedDataset2):

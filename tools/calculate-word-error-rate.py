@@ -98,7 +98,7 @@ def calc_wer_on_dataset(dataset, refs, options, hyps):
       complete_frac = (seq_idx + 1) / float(len(refs))
       seq_tag, ref = refs[seq_idx]
       assert isinstance(seq_tag, str)
-      assert isinstance(ref, str) or isinstance(ref, unicode)
+      assert isinstance(ref, str)
       num_seqs_s = str(len(refs))
 
     start_elapsed = time.time() - start_time
@@ -180,7 +180,7 @@ def load_hyps_refs(filename):
   assert len(content) > 0
   example_hyp = next(iter(content.items()))
   assert isinstance(example_hyp[0], str)  # seq tag
-  assert isinstance(example_hyp[1], str) or isinstance(example_hyp[1], unicode)  # hyp
+  assert isinstance(example_hyp[1], str)  # hyp
   return content
 
 

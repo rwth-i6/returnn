@@ -1321,8 +1321,7 @@ class SearchChoices(object):
     :rtype: list[LayerBase]|dict[str,LayerBase|object]
     """
     from tensorflow.python.util import nest
-    from TFNetworkRecLayer import _TemplateLayer
-    layers_flat = [v for v in nest.flatten(sources) if isinstance(v, LayerBase) and not isinstance(v, _TemplateLayer)]
+    layers_flat = [v for v in nest.flatten(sources) if isinstance(v, LayerBase)]
     if len(layers_flat) <= 1:
       return sources
     from functools import cmp_to_key
@@ -1975,17 +1974,16 @@ class LengthLayer(LayerBase):
   """
   layer_class = "length"
 
-  def __init__(self, add_time_axis=False, dtype="int32", **kwargs):
+  def __init__(self, add_time_axis=False, **kwargs):
     super(LengthLayer, self).__init__(**kwargs)
     assert len(self.sources) == 1, "%s: expects one source" % self
-    out = tf.cast(self.sources[0].output.size_placeholder[self.sources[0].output.time_dim_axis], dtype)
-    data = self.input_data.get_placeholder_as_batch_major()
+    out = tf.cast(self.sources[0].output.size_placeholder[self.sources[0].output.time_dim_axis], tf.int32)
     if add_time_axis:
       out = tf.expand_dims(out, axis=self.output.time_dim_axis)
     self.output.placeholder = out
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, add_time_axis=False, dtype="int32", **kwargs):
+  def get_out_data_from_opts(cls, name, sources, add_time_axis=False, **kwargs):
     if add_time_axis:
       shape = (1,)
       time_dim_axis = 1
@@ -1997,7 +1995,7 @@ class LengthLayer(LayerBase):
       shape=shape,
       batch_dim_axis=0,
       time_dim_axis=time_dim_axis,
-      dtype=dtype,
+      dtype="int32",
       sparse=False)
 
 

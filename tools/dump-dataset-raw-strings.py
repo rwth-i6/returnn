@@ -38,14 +38,13 @@ def get_raw_strings(dataset, options):
     dataset.load_seqs(seq_idx, seq_idx + 1)
     complete_frac = dataset.get_complete_frac(seq_idx)
     start_elapsed = time.time() - start_time
-    num_seqs_s = "?"
-    # try:
-      # num_seqs_s = str(dataset.num_seqs)
-    # except NotImplementedError:
-      # try:
-        # num_seqs_s = "~%i" % dataset.estimated_num_seqs
-      # except TypeError:  # a number is required, not NoneType
-        # num_seqs_s = "?"
+    try:
+      num_seqs_s = str(dataset.num_seqs)
+    except NotImplementedError:
+      try:
+        num_seqs_s = "~%i" % dataset.estimated_num_seqs
+      except TypeError:  # a number is required, not NoneType
+        num_seqs_s = "?"
     progress_prefix = "%i/%s" % (seq_idx, num_seqs_s,)
     progress = "%s (%.02f%%)" % (progress_prefix, complete_frac * 100)
     if complete_frac > 0:
@@ -56,26 +55,11 @@ def get_raw_strings(dataset, options):
     assert isinstance(seq_tag, str)
     ref = dataset.get_data(seq_idx, options.key)
     if isinstance(ref, numpy.ndarray):
-      if len(ref.shape) == 1:  # eg for 'orth'
-        if options.key == 'orth':
-          ref = "".join(map(chr, ref)).strip()
-        elif options.key == 'bpe':
-          import ipdb; ipdb.set_trace()
-          ref = " ".join([dataset.labels['bpe'][r] for r in ref if r != 0])  # except for <s>
-          # ref = ref.replace('(%hesitation)', 'hesitation@@ ')
-          # print(ref)
-          # ref = ref.replace(' UNK', '').replace('UNK ', '')
-          # ref = ref.replace("hesi@@ ", "")
-          ref = ref.replace("@@ ", "")
-          # ref = ref.replace('hesitationUNK', 'hesitation UNK')
-          # print(ref)
-          # print()
-      else:
-        assert ref.shape == ()
-        ref = ref.flatten()[0]  # get the entry itself (str or bytes)
+      assert ref.shape == ()
+      ref = ref.flatten()[0]  # get the entry itself (str or bytes)
     if isinstance(ref, bytes):
       ref = ref.decode("utf8")
-    assert isinstance(ref, (str, unicode))
+    assert isinstance(ref, str)
     seq_len_stats.collect([len(ref)])
     refs.append((seq_tag, ref))
     if interactive:
@@ -108,10 +92,6 @@ def init(config_filename, log_verbosity):
   config.set("log", None)
   config.set("log_verbosity", log_verbosity)
   rnn.initLog()
-  rnn.initFaulthandler()
-  rnn.initConfigJsonNetwork()
-  rnn.initData()
-  rnn.printTaskProperties()
   print("Returnn dump-dataset-raw-strings starting up.", file=log.v1)
   rnn.returnnGreeting()
   rnn.initFaulthandler()
