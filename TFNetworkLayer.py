@@ -2043,7 +2043,7 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
         mask_shape[energy_data.time_dim_axis] = window_size  # (W, B) | (B, W)
         energy_mask_window = tf.scatter_nd(idxs, tf.ones(shape=mask_shape), energy_shape[:2])
         energy_mask_window = tf.cast(energy_mask_window, tf.bool)
-        energy_mask = tf.logical_or(energy_mask, energy_mask_window)
+        energy_mask = tf.logical_and(energy_mask, energy_mask_window)
       energy_mask_flat = tf.reshape(energy_mask, [numpy.prod(energy_shape[:2])], name="energy_mask_flat")
       energy_flat = tf.reshape(energy, [numpy.prod(energy_shape[:2])] + energy_shape[2:], name="energy_flat")
       energy_flat = tf.where(energy_mask_flat, energy_flat, float("-inf") * tf.ones_like(energy_flat), "energy_masked")
