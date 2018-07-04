@@ -2008,12 +2008,11 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
   """
   layer_class = "softmax_over_spatial"
 
-  def __init__(self, energy_factor=None, energy_mask="sequence", window_start=None, window_size=10, **kwargs):
+  def __init__(self, energy_factor=None, window_start=None, window_size=10, **kwargs):
     """
     :param float|None energy_factor: the energy will be scaled by this factor.
       This is like a temperature for the softmax.
       In Attention-is-all-you-need, this is set to 1/sqrt(base_ctx.dim).
-    :param str energy_mask: either "sequence" (for masking the sequence) or "window"
     :param LayerBase|None window_start: Tensor of shape (B,) indicating the window start
     :param int window_size:
     """
@@ -2028,11 +2027,8 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
     assert energy_data.have_time_axis()
     # if the time-axis is static, we can skip the masking
     if energy_data.is_time_axis_dynamic():
-      if energy_mask == "sequence":
-        # We must mask all values behind seq_lens. Set them to -inf, because we use softmax afterwards.
-        energy_mask = energy_data.get_sequence_mask()
-      elif energy_mask == "window":
-        assert window_start is not None
+      energy_mask = energy_data.get_sequence_mask()
+      if window_start is not None:
         from TFUtil import nd_indices, expand_dims_unbroadcast
         window_start = window_start.output.get_placeholder_as_batch_major()
         n_batch = energy_shape[energy_data.batch_dim_axis]
@@ -2043,8 +2039,9 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
         idxs = nd_indices(indices)
         mask_shape = energy_shape[:2]  # (T, B)
         mask_shape[energy_data.time_dim_axis] = window_size  # (W, B) | (B, W)
-        energy_mask = tf.scatter_nd(idxs, tf.ones(shape=mask_shape), energy_shape[:2])
-        energy_mask = tf.cast(energy_mask, tf.bool)
+        energy_mask_window = tf.scatter_nd(idxs, tf.ones(shape=mask_shape), energy_shape[:2])
+        energy_mask_window = tf.cast(energy_mask_window, tf.bool)
+        energy_mask = tf.logical_or(energy_mask, energy_mask_window)
       energy_mask_flat = tf.reshape(energy_mask, [numpy.prod(energy_shape[:2])], name="energy_mask_flat")
       energy_flat = tf.reshape(energy, [numpy.prod(energy_shape[:2])] + energy_shape[2:], name="energy_flat")
       energy_flat = tf.where(energy_mask_flat, energy_flat, float("-inf") * tf.ones_like(energy_flat), "energy_masked")
