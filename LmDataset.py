@@ -1173,8 +1173,11 @@ https://github.com/keithito/tacotron/blob/master/text/numbers.py
 _whitespace_re = re.compile(r'\s+')
 
 # List of (regular expression, replacement) pairs for abbreviations:
+# WARNING: Every change here means an incompatible change,
+# so better leave it always as it is!
 _abbreviations = [(re.compile('\\b%s\\.' % x[0], re.IGNORECASE), x[1]) for x in [
-  ('mrs', 'misess'),
+  ('mrs', 'misses'),
+  ('ms', 'miss'),
   ('mr', 'mister'),
   ('dr', 'doctor'),
   ('st', 'saint'),
@@ -1199,10 +1202,6 @@ def expand_abbreviations(text):
   for regex, replacement in _abbreviations:
     text = re.sub(regex, replacement, text)
   return text
-
-
-def expand_numbers(text):
-  return normalize_numbers(text)
 
 
 def lowercase(text):
@@ -1236,13 +1235,32 @@ def transliteration_cleaners(text):
 def english_cleaners(text):
   """
   Pipeline for English text, including number and abbreviation expansion.
+  :param str text:
+  :rtype: str
   """
   text = convert_to_ascii(text)
   text = lowercase(text)
-  text = expand_numbers(text)
+  text = normalize_numbers(text)
   text = expand_abbreviations(text)
   text = collapse_whitespace(text)
   return text
+
+
+def get_remove_chars(chars):
+  """
+  :param str|list[str] chars:
+  :rtype: (str)->str
+  """
+  def remove_chars(text):
+    """
+    :param str text:
+    :rtype: str
+    """
+    for c in chars:
+      text = text.replace(c, " ")
+    text = collapse_whitespace(text)
+    return text
+  return remove_chars
 
 
 _inflect = None
@@ -1333,14 +1351,17 @@ def get_post_processor_function(opts):
   for some normalization / cleanup.
   This function can be used to get such functions.
 
-  :param str|list[str] opts: e.g. "english_cleaners"
+  :param str|list[str] opts: e.g. "english_cleaners", or "get_remove_chars(',/')"
   :return: function
   :rtype: (str)->str
   """
   if not opts:
     return _dummy_identity_pp
   if isinstance(opts, str):
-    f = globals()[opts]
+    if "(" in opts:
+      f = eval(opts)
+    else:
+      f = globals()[opts]
     assert callable(f)
     res_test = f("test")
     assert isinstance(res_test, str), "%r does not seem as a valid function str->str" % (opts,)
