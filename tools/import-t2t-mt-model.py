@@ -308,9 +308,9 @@ def main():
   ipdb.set_trace()
 
   print("Loading t2t params into our network:")
-  for ret_var in our_params:
-    if ret_var.name in ret_to_t2t:
-      t2t_var = t2t_params[ret_to_t2t[ret_var.name]]
+  for ret_var_name, ret_var in our_params.items():
+    if ret_var_name in ret_to_t2t:
+      t2t_var = t2t_params[ret_to_t2t[ret_var_name]]
       ret_var.load(t2t_var.eval(t2t_sess), rnn.engine.tf_session)
     else:
       print("skpipped over %s" % ret_var.name)
@@ -321,80 +321,80 @@ def main():
 
 # maps names of trainable para
 ret_to_t2t = {
-  'output/rec/target_embed_raw/W' : 'target_emb/weights_0',
-  'source_embed_raw/W' : 'input_emb/weights_0',
-  'encoder/scale' : 'encoder/layer_prepostprocess/layer_norm/layer_norm_scale',
-  'encoder/bias' : 'encoder/layer_prepostprocess/layer_norm/layer_norm_bias',
-  'output/rec/decoder/scale' : 'decoder/layer_prepostprocess/layer_norm/layer_norm_scale',
-  'output/rec/decoder/bias' : 'decoder/layer_prepostprocess/layer_norm/layer_norm_bias',
-  'output/rec/output_prob/W' : 'softmax/weights_0',
+  'output/rec/target_embed_raw/W' : 'transformer/symbol_modality_6115_256/target_emb/weights_0',
+  'source_embed_raw/W' : 'transformer/symbol_modality_6115_256/input_emb/weights_0',
+  'encoder/scale' : 'transformer/body/encoder/layer_prepostprocess/layer_norm/layer_norm_scale',
+  'encoder/bias' : 'transformer/body/encoder/layer_prepostprocess/layer_norm/layer_norm_bias',
+  'output/rec/decoder/scale' : 'transformer/body/decoder/layer_prepostprocess/layer_norm/layer_norm_scale',
+  'output/rec/decoder/bias' : 'transformer/body/decoder/layer_prepostprocess/layer_norm/layer_norm_bias',
+  'output/rec/output_prob/W' : 'transformer/symbol_modality_6115_256/softmax/weights_0',
 
 
-  'enc_1_self_att_laynorm/scale' : 'encoder/layer_0/self_attention/layer_prepostprocess/layer_norm/layer_norm_scale',
-  'enc_1_self_att_laynorm/bias' : 'encoder/layer_0/self_attention/layer_prepostprocess/layer_norm/layer_norm_bias',
-  'enc_1_self_att_/QKV' : ('encoder/layer_0/self_attention/multihead_attention/q/kernel',
-                           'encoder/layer_0/self_attention/multihead_attention/k/kernel',
-                           'encoder/layer_0/self_attention/multihead_attention/v/kernel'),
-  'enc_1_self_att_lin/W' : 'encoder/layer_0/self_attention/multihead_attention/output_transform/kernel',
-  'enc_1_ff_laynorm/scale' : 'encoder/layer_0/ffn/layer_prepostprocess/layer_norm/layer_norm_scale',
-  'enc_1_ff_laynorm/bias' : 'encoder/layer_0/ffn/layer_prepostprocess/layer_norm/layer_norm_bias',
-  'enc_1_ff_conv1/W' : 'encoder/layer_0/ffn/conv1/kernel',
-  'enc_1_ff_conv1/b' : 'encoder/layer_0/ffn/conv1/bias',
-  'enc_1_ff_conv2/W' : 'encoder/layer_0/ffn/conv2/kernel',
-  'enc_1_ff_conv2/b' : 'encoder/layer_0/ffn/conv2/bias',
+  'enc_1_self_att_laynorm/scale' : 'transformer/body/encoder/layer_0/self_attention/layer_prepostprocess/layer_norm/layer_norm_scale',
+  'enc_1_self_att_laynorm/bias' : 'transformer/body/encoder/layer_0/self_attention/layer_prepostprocess/layer_norm/layer_norm_bias',
+  'enc_1_self_att_/QKV' : ('transformer/body/encoder/layer_0/self_attention/multihead_attention/q/kernel',
+                           'transformer/body/encoder/layer_0/self_attention/multihead_attention/k/kernel',
+                           'transformer/body/encoder/layer_0/self_attention/multihead_attention/v/kernel'),
+  'enc_1_self_att_lin/W' : 'transformer/body/encoder/layer_0/self_attention/multihead_attention/output_transform/kernel',
+  'enc_1_ff_laynorm/scale' : 'transformer/body/encoder/layer_0/ffn/layer_prepostprocess/layer_norm/layer_norm_scale',
+  'enc_1_ff_laynorm/bias' : 'transformer/body/encoder/layer_0/ffn/layer_prepostprocess/layer_norm/layer_norm_bias',
+  'enc_1_ff_conv1/W' : 'transformer/body/encoder/layer_0/ffn/conv1/kernel',
+  'enc_1_ff_conv1/b' : 'transformer/body/encoder/layer_0/ffn/conv1/bias',
+  'enc_1_ff_conv2/W' : 'transformer/body/encoder/layer_0/ffn/conv2/kernel',
+  'enc_1_ff_conv2/b' : 'transformer/body/encoder/layer_0/ffn/conv2/bias',
 
-  'enc_N_self_att_laynorm/scale' : 'encoder/layer_1/self_attention/layer_prepostprocess/layer_norm/layer_norm_scale',
-  'enc_N_self_att_laynorm/bias' : 'encoder/layer_1/self_attention/layer_prepostprocess/layer_norm/layer_norm_bias',
-  'enc_N_self_att_/QKV' : ('encoder/layer_1/self_attention/multihead_attention/q/kernel',
-                           'encoder/layer_1/self_attention/multihead_attention/k/kernel',
-                           'encoder/layer_1/self_attention/multihead_attention/v/kernel'),
-  'enc_N_self_att_lin/W' : 'encoder/layer_1/self_attention/multihead_attention/output_transform/kernel',
-  'enc_N_ff_laynorm/scale' : 'encoder/layer_1/ffn/layer_prepostprocess/layer_norm/layer_norm_scale',
-  'enc_N_ff_laynorm/bias' : 'encoder/layer_1/ffn/layer_prepostprocess/layer_norm/layer_norm_bias',
-  'enc_N_ff_conv1/W' : 'encoder/layer_1/ffn/conv1/kernel',
-  'enc_N_ff_conv1/b' : 'encoder/layer_1/ffn/conv1/bias',
-  'enc_N_ff_conv2/W' : 'encoder/layer_1/ffn/conv2/kernel',
-  'enc_N_ff_conv2/b' : 'encoder/layer_1/ffn/conv2/bias',
+  'enc_N_self_att_laynorm/scale' : 'transformer/body/encoder/layer_1/self_attention/layer_prepostprocess/layer_norm/layer_norm_scale',
+  'enc_N_self_att_laynorm/bias' : 'transformer/body/encoder/layer_1/self_attention/layer_prepostprocess/layer_norm/layer_norm_bias',
+  'enc_N_self_att_/QKV' : ('transformer/body/encoder/layer_1/self_attention/multihead_attention/q/kernel',
+                           'transformer/body/encoder/layer_1/self_attention/multihead_attention/k/kernel',
+                           'transformer/body/encoder/layer_1/self_attention/multihead_attention/v/kernel'),
+  'enc_N_self_att_lin/W' : 'transformer/body/encoder/layer_1/self_attention/multihead_attention/output_transform/kernel',
+  'enc_N_ff_laynorm/scale' : 'transformer/body/encoder/layer_1/ffn/layer_prepostprocess/layer_norm/layer_norm_scale',
+  'enc_N_ff_laynorm/bias' : 'transformer/body/encoder/layer_1/ffn/layer_prepostprocess/layer_norm/layer_norm_bias',
+  'enc_N_ff_conv1/W' : 'transformer/body/encoder/layer_1/ffn/conv1/kernel',
+  'enc_N_ff_conv1/b' : 'transformer/body/encoder/layer_1/ffn/conv1/bias',
+  'enc_N_ff_conv2/W' : 'transformer/body/encoder/layer_1/ffn/conv2/kernel',
+  'enc_N_ff_conv2/b' : 'transformer/body/encoder/layer_1/ffn/conv2/bias',
 
 
 
-  'output/rec/dec_1_self_att_laynorm/scale' : 'decoder/layer_0/self_attention/layer_prepostprocess/layer_norm/layer_norm_scale',
-  'output/rec/dec_1_self_att_laynorm/bias' : 'decoder/layer_0/self_attention/layer_prepostprocess/layer_norm/layer_norm_bias:',
-  'output/rec/dec_1_self_att_/QKV' : '(decoder/layer_0/self_attention/multihead_attention/q/kernel,'
-       'decoder/layer_0/self_attention/multihead_attention/k/kernel,'
-       'decoder/layer_0/self_attention/multihead_attention/v/kernel)',
-  'output/rec/dec_1_self_att_lin/W' : 'decoder/layer_0/self_attention/multihead_attention/output_transform/kernel',
-  'output/rec/dec_1_att_laynorm/scale' : 'decoder/layer_0/encdec_attention/layer_prepostprocess/layer_norm/layer_norm_scale',
-  'output/rec/dec_1_att_laynorm/bias' : 'decoder/layer_0/encdec_attention/layer_prepostprocess/layer_norm/layer_norm_bias',
-  'output/rec/dec_1_att_query0/W' : 'decoder/layer_0/encdec_attention/multihead_attention/q/kernel',
-  'dec_1_att_key0/W' : 'decoder/layer_0/encdec_attention/multihead_attention/k/kernel',
-  'dec_1_att_value0/W' : 'decoder/layer_0/encdec_attention/multihead_attention/v/kernel',
-  'output/rec/dec_1_att_lin/W' : 'decoder/layer_0/encdec_attention/multihead_attention/output_transform/kernel',
-  'output/rec/dec_1_ff_laynorm/scale' : 'decoder/layer_0/ffn/layer_prepostprocess/layer_norm/layer_norm_scale',
-  'output/rec/dec_1_ff_laynorm/bias' : 'decoder/layer_0/ffn/layer_prepostprocess/layer_norm/layer_norm_bias',
-  'output/rec/dec_1_ff_conv1/W' : 'decoder/layer_0/ffn/conv1/kernel',
-  'output/rec/dec_1_ff_conv1/b' : 'decoder/layer_0/ffn/conv1/bias',
-  'output/rec/dec_1_ff_conv2/W' : 'decoder/layer_0/ffn/conv2/kernel',
-  'output/rec/dec_1_ff_conv2/b' : 'decoder/layer_0/ffn/conv2/bias',
+  'output/rec/dec_1_self_att_laynorm/scale' : 'transformer/body/decoder/layer_0/self_attention/layer_prepostprocess/layer_norm/layer_norm_scale',
+  'output/rec/dec_1_self_att_laynorm/bias' : 'transformer/body/decoder/layer_0/self_attention/layer_prepostprocess/layer_norm/layer_norm_bias:',
+  'output/rec/dec_1_self_att_/QKV' : '(transformer/body/decoder/layer_0/self_attention/multihead_attention/q/kernel,'
+       'transformer/body/decoder/layer_0/self_attention/multihead_attention/k/kernel,'
+       'transformer/body/decoder/layer_0/self_attention/multihead_attention/v/kernel)',
+  'output/rec/dec_1_self_att_lin/W' : 'transformer/body/decoder/layer_0/self_attention/multihead_attention/output_transform/kernel',
+  'output/rec/dec_1_att_laynorm/scale' : 'transformer/body/decoder/layer_0/encdec_attention/layer_prepostprocess/layer_norm/layer_norm_scale',
+  'output/rec/dec_1_att_laynorm/bias' : 'transformer/body/decoder/layer_0/encdec_attention/layer_prepostprocess/layer_norm/layer_norm_bias',
+  'output/rec/dec_1_att_query0/W' : 'transformer/body/decoder/layer_0/encdec_attention/multihead_attention/q/kernel',
+  'dec_1_att_key0/W' : 'transformer/body/decoder/layer_0/encdec_attention/multihead_attention/k/kernel',
+  'dec_1_att_value0/W' : 'transformer/body/decoder/layer_0/encdec_attention/multihead_attention/v/kernel',
+  'output/rec/dec_1_att_lin/W' : 'transformer/body/decoder/layer_0/encdec_attention/multihead_attention/output_transform/kernel',
+  'output/rec/dec_1_ff_laynorm/scale' : 'transformer/body/decoder/layer_0/ffn/layer_prepostprocess/layer_norm/layer_norm_scale',
+  'output/rec/dec_1_ff_laynorm/bias' : 'transformer/body/decoder/layer_0/ffn/layer_prepostprocess/layer_norm/layer_norm_bias',
+  'output/rec/dec_1_ff_conv1/W' : 'transformer/body/decoder/layer_0/ffn/conv1/kernel',
+  'output/rec/dec_1_ff_conv1/b' : 'transformer/body/decoder/layer_0/ffn/conv1/bias',
+  'output/rec/dec_1_ff_conv2/W' : 'transformer/body/decoder/layer_0/ffn/conv2/kernel',
+  'output/rec/dec_1_ff_conv2/b' : 'transformer/body/decoder/layer_0/ffn/conv2/bias',
 
-  'output/rec/dec_N_self_att_laynorm/scale' : 'decoder/layer_1/self_attention/layer_prepostprocess/layer_norm/layer_norm_scale',
-  'output/rec/dec_N_self_att_laynorm/bias' : 'decoder/layer_1/self_attention/layer_prepostprocess/layer_norm/layer_norm_bias:',
-  'output/rec/dec_N_self_att_/QKV' : '(decoder/layer_1/self_attention/multihead_attention/q/kernel,'
-       'decoder/layer_1/self_attention/multihead_attention/k/kernel,'
-       'decoder/layer_1/self_attention/multihead_attention/v/kernel)',
-  'output/rec/dec_N_self_att_lin/W' : 'decoder/layer_1/self_attention/multihead_attention/output_transform/kernel',
-  'output/rec/dec_N_att_laynorm/scale' : 'decoder/layer_1/encdec_attention/layer_prepostprocess/layer_norm/layer_norm_scale',
-  'output/rec/dec_N_att_laynorm/bias' : 'decoder/layer_1/encdec_attention/layer_prepostprocess/layer_norm/layer_norm_bias',
-  'output/rec/dec_N_att_query0/W' : 'decoder/layer_1/encdec_attention/multihead_attention/q/kernel',
-  'dec_N_att_key0/W' : 'decoder/layer_1/encdec_attention/multihead_attention/k/kernel',
-  'dec_N_att_value0/W' : 'decoder/layer_1/encdec_attention/multihead_attention/v/kernel',
-  'output/rec/dec_N_att_lin/W' : 'decoder/layer_1/encdec_attention/multihead_attention/output_transform/kernel',
-  'output/rec/dec_N_ff_laynorm/scale' : 'decoder/layer_1/ffn/layer_prepostprocess/layer_norm/layer_norm_scale',
-  'output/rec/dec_N_ff_laynorm/bias' : 'decoder/layer_1/ffn/layer_prepostprocess/layer_norm/layer_norm_bias',
-  'output/rec/dec_N_ff_conv1/W' : 'decoder/layer_1/ffn/conv1/kernel',
-  'output/rec/dec_N_ff_conv1/b' : 'decoder/layer_1/ffn/conv1/bias',
-  'output/rec/dec_N_ff_conv2/W' : 'decoder/layer_1/ffn/conv2/kernel',
-  'output/rec/dec_N_ff_conv2/b' : 'decoder/layer_1/ffn/conv2/bias',
+  'output/rec/dec_N_self_att_laynorm/scale' : 'transformer/body/decoder/layer_1/self_attention/layer_prepostprocess/layer_norm/layer_norm_scale',
+  'output/rec/dec_N_self_att_laynorm/bias' : 'transformer/body/decoder/layer_1/self_attention/layer_prepostprocess/layer_norm/layer_norm_bias:',
+  'output/rec/dec_N_self_att_/QKV' : '(transformer/body/decoder/layer_1/self_attention/multihead_attention/q/kernel,'
+       'transformer/body/decoder/layer_1/self_attention/multihead_attention/k/kernel,'
+       'transformer/body/decoder/layer_1/self_attention/multihead_attention/v/kernel)',
+  'output/rec/dec_N_self_att_lin/W' : 'transformer/body/decoder/layer_1/self_attention/multihead_attention/output_transform/kernel',
+  'output/rec/dec_N_att_laynorm/scale' : 'transformer/body/decoder/layer_1/encdec_attention/layer_prepostprocess/layer_norm/layer_norm_scale',
+  'output/rec/dec_N_att_laynorm/bias' : 'transformer/body/decoder/layer_1/encdec_attention/layer_prepostprocess/layer_norm/layer_norm_bias',
+  'output/rec/dec_N_att_query0/W' : 'transformer/body/decoder/layer_1/encdec_attention/multihead_attention/q/kernel',
+  'dec_N_att_key0/W' : 'transformer/body/decoder/layer_1/encdec_attention/multihead_attention/k/kernel',
+  'dec_N_att_value0/W' : 'transformer/body/decoder/layer_1/encdec_attention/multihead_attention/v/kernel',
+  'output/rec/dec_N_att_lin/W' : 'transformer/body/decoder/layer_1/encdec_attention/multihead_attention/output_transform/kernel',
+  'output/rec/dec_N_ff_laynorm/scale' : 'transformer/body/decoder/layer_1/ffn/layer_prepostprocess/layer_norm/layer_norm_scale',
+  'output/rec/dec_N_ff_laynorm/bias' : 'transformer/body/decoder/layer_1/ffn/layer_prepostprocess/layer_norm/layer_norm_bias',
+  'output/rec/dec_N_ff_conv1/W' : 'transformer/body/decoder/layer_1/ffn/conv1/kernel',
+  'output/rec/dec_N_ff_conv1/b' : 'transformer/body/decoder/layer_1/ffn/conv1/bias',
+  'output/rec/dec_N_ff_conv2/W' : 'transformer/body/decoder/layer_1/ffn/conv2/kernel',
+  'output/rec/dec_N_ff_conv2/b' : 'transformer/body/decoder/layer_1/ffn/conv2/bias',
 }
 
 
