@@ -3,7 +3,10 @@
 from __future__ import print_function
 from __future__ import division
 
+import logging
+logging.getLogger('tensorflow').disabled = True
 
+import os
 import sys
 import datetime
 import unittest
@@ -11,9 +14,16 @@ import time
 import numpy
 import tensorflow as tf
 
-sys.path += ["."]  # Python 3 hack
+print("TF version:", tf.__version__)
 
+print("__file__:", __file__)
+base_path = os.path.realpath(os.path.dirname(os.path.abspath(__file__)) + "/..")
+print("base path:", base_path)
+sys.path.insert(0, base_path)
+
+# Returnn imports
 import Fsa
+from TFUtil import is_gpu_available
 
 
 class Lexicon:
@@ -325,6 +335,8 @@ def check_fast_bw_fsa_staircase(num_classes, out_seq_len, with_loop):
   assert is_close
 
 
+# Note: we could replace tf_baum_welch by some CPU/Python code...
+@unittest.skipIf(not is_gpu_available(), "no gpu on this system; needed for tf_baum_welch")
 def test_fast_bw_fsa_staircase():
   check_fast_bw_fsa_staircase(2, 2, with_loop=False)
   check_fast_bw_fsa_staircase(2, 2, with_loop=True)
@@ -332,22 +344,6 @@ def test_fast_bw_fsa_staircase():
   check_fast_bw_fsa_staircase(3, 2, with_loop=True)
   check_fast_bw_fsa_staircase(3, 3, with_loop=False)
   check_fast_bw_fsa_staircase(3, 3, with_loop=True)
-
-
-def test_fast_bw_fsa_staircase_without_loop():
-  num_classes = 2
-  out_seq_len = 2
-  expected = slow_full_sum_staircase_uniform(num_classes=num_classes, out_seq_len=out_seq_len, with_loop=True)
-  print("expected full sum:")
-  print(expected)
-  fsa = Fsa.fast_bw_fsa_staircase(seq_lens=[num_classes], with_loop=True)
-  with tf.Session().as_default():
-    res = tf_baum_welch(fsa, num_classes=num_classes, out_seq_len=out_seq_len)
-  print("baum-welch:")
-  print(res)
-  is_close = numpy.isclose(expected, res).all()
-  print("close:", is_close)
-  assert is_close
 
 
 if __name__ == "__main__":
