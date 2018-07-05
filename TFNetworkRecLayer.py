@@ -1329,11 +1329,13 @@ class _SubnetworkRecCell(object):
         add_output_to_acc("output")
 
       # if a layer declares it is a output, we should save the values as well
+      extra_output_layers = set()
       for name, template in self.layer_data_templates.items():
         if template.is_output_layer() and name not in needed_outputs:
           needed_outputs.add(name)
-          add_output_to_acc(name)
-
+          extra_output_layers.add(name)
+          if name in self.layers_in_loop:
+            add_output_to_acc(name)
 
       # Maybe some of the moved-out output-layers depend on data inside the loop,
       # so we should accumulate it to have access to it.
@@ -1558,7 +1560,8 @@ class _SubnetworkRecCell(object):
       out.name: final_acc_ta
       for (final_acc_ta, out) in zip(final_acc_tas, outputs_to_accumulate)}  # type: dict[str,tf.TensorArray]
 
-    self._construct_output_layers_moved_out(loop_accumulated=self.final_acc_tas_dict, seq_len=seq_len)
+    self._construct_output_layers_moved_out(
+      loop_accumulated=self.final_acc_tas_dict, seq_len=seq_len, extra_output_layers=extra_output_layers)
 
     sub_loss = sub_error = sub_loss_normalization_factor = None
     if layer_names_with_losses:
@@ -1913,7 +1916,7 @@ class _SubnetworkRecCell(object):
       for layer_name in self.input_layers_moved_out:
         get_layer(layer_name)
 
-  def _construct_output_layers_moved_out(self, loop_accumulated, seq_len):
+  def _construct_output_layers_moved_out(self, loop_accumulated, seq_len, extra_output_layers):
     """
     See self._move_outside_loop().
     The output layers will be constructed in self.output_layers_net.
@@ -1921,9 +1924,10 @@ class _SubnetworkRecCell(object):
     :param dict[str,tf.TensorArray] loop_accumulated:
       keys, see self.get_output(). should be like "output_<layer_name>"
     :param tf.Tensor seq_len: shape (batch,)
+    :param set[str] extra_output_layers:
     :return: nothing, will init self.output_layers_net
     """
-    if not self.output_layers_moved_out:
+    if not self.output_layers_moved_out and not extra_output_layers:
       return
 
     from TFNetwork import TFNetwork, ExternData
@@ -2007,6 +2011,8 @@ class _SubnetworkRecCell(object):
     with reuse_name_scope(self.parent_rec_layer._rec_scope):
       for layer_name in self.output_layers_moved_out:
         get_layer(layer_name)
+      for layer_name in extra_output_layers:
+        self.output_layers_net.layers[layer_name] = get_layer(layer_name)
 
 
 class _TemplateLayer(LayerBase):
@@ -2183,6 +2189,40 @@ class RecStepInfoLayer(LayerBase):
       with reuse_name_scope_of_tensor(self.step, postfix="/end_flag"):
         self.end_flag = tf.greater_equal(self.step, self.seq_lens)
     return self.end_flag
+
+
+class RecExtraOutputLayer(LayerBase):
+  """
+  For :class:`RecLayer` with a subnet.
+  If some layer is explicitly marked as an additional output layer (via 'is_output_layer': True),
+  you can get that subnet layer output via this accessor.
+  """
+  layer_class = "rec_extra_output"
+
+  def __init__(self, output_layer_name, **kwargs):
+    """
+    :param str output_layer_name: layer of subnet in RecLayer source, which has 'is_output_layer': True
+    """
+    super(RecExtraOutputLayer, self).__init__(**kwargs)
+    # Nothing needs to be done, all logic in self.get_out_data_from_opts already.
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, output_layer_name, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :param str output_layer_name:
+    :rtype: Data
+    """
+    assert len(sources) == 1, "%s %r: expect exactly one source" % (cls, name)
+    rec_layer = sources[0]
+    assert isinstance(rec_layer, RecLayer), "%s %r: expect that the source is a RecLayer" % (cls, name)
+    assert isinstance(rec_layer.cell, _SubnetworkRecCell), "%s %r: expect a RecLayer with subnet" % (cls, name)
+    assert rec_layer.cell.output_layers_net, "%s %r: expect a RecLayer with output net" % (cls, name)
+    subnet = rec_layer.cell.output_layers_net
+    assert output_layer_name in subnet.layers, "%s %r: maybe %r not with 'is_output_layer'?" % (
+      cls, name, output_layer_name)
+    return subnet.layers[output_layer_name]
 
 
 class RnnCellLayer(_ConcatInputLayer):
