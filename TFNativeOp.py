@@ -826,7 +826,7 @@ def tf_fast_bw_fsa_staircase(seq_lens, **opts):
 def fast_baum_welch_staircase(am_scores, seq_lens, **opts):
   """
   :param tf.Tensor am_scores: (time, batch, dim), in -log space
-  :param tf.Tensor seq_lens: (batch,)
+  :param tf.Tensor seq_lens: (batch,) -> values in [1, ..., dim-1]
   :param opts: passed to :func:`Fsa.fast_bw_fsa_staircase`
   :return: (fwdbwd, obs_scores), fwdbwd is (time, batch, dim), obs_scores is (time, batch), in -log space
   :rtype: (tf.Tensor, tf.Tensor)
