@@ -796,6 +796,48 @@ def fast_baum_welch_by_sprint_automata(am_scores, float_idx, tags, sprint_opts, 
     edges=edges, weights=weights, start_end_states=start_end_states)
 
 
+def tf_fast_bw_fsa_staircase(seq_lens, **opts):
+  """
+  :param tf.Tensor seq_lens: shape (batch,)
+  :param opts: passed to :func:`Fsa.fast_bw_fsa_staircase`
+  :return: edges, weights, start_end_states
+  :rtype: (tf.Tensor, tf.Tensor, tf.Tensor)
+  """
+  from Fsa import fast_bw_fsa_staircase
+
+  def tf_fast_bw_fsa_staircase_wrapper(seq_lens):
+    fsa = fast_bw_fsa_staircase(seq_lens, **opts)
+    return fsa.edges, fsa.weights, fsa.start_end_states
+
+  edges, weights, start_end_states = tf.py_func(
+    tf_fast_bw_fsa_staircase_wrapper,
+    [seq_lens],
+    [tf.int32, tf.float32, tf.int32],
+    stateful=False)
+  # edges: (4, num_edges), edges of the graph (from,to,emission_idx,sequence_idx)
+  # weights: (num_edges,), weights of the edges
+  # start_end_states: (2, batch), (start,end) state idx in automaton.
+  edges.set_shape((4, None))
+  weights.set_shape((None,))
+  start_end_states.set_shape((2, None))
+  return edges, weights, start_end_states
+
+
+def fast_baum_welch_staircase(am_scores, seq_lens, **opts):
+  """
+  :param tf.Tensor am_scores: (time, batch, dim), in -log space
+  :param tf.Tensor seq_lens: (batch,)
+  :param opts: passed to :func:`Fsa.fast_bw_fsa_staircase`
+  :return: (fwdbwd, obs_scores), fwdbwd is (time, batch, dim), obs_scores is (time, batch), in -log space
+  :rtype: (tf.Tensor, tf.Tensor)
+  """
+  from TFUtil import sequence_mask_time_major
+  edges, weights, start_end_states = tf_fast_bw_fsa_staircase(seq_lens, **opts)
+  float_idx = sequence_mask_time_major(seq_lens)
+  return fast_baum_welch(
+    am_scores=am_scores, edges=edges, weights=weights, start_end_states=start_end_states, float_idx=float_idx)
+
+
 def _debug_dumped_fast_baum_welch(prefix, postfix=".dump"):
   """
   If you uncomment the debug_print statements in FastBaumWelchOp, as well as dump_to_file inside debug_print,
