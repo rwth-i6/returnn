@@ -3416,12 +3416,13 @@ class DotLayer(LayerBase):
   """
   layer_class = "dot"
 
-  def __init__(self, red1=-1, red2=-2, var1=-2, var2=-1, debug=False, **kwargs):
+  def __init__(self, red1=-1, red2=-2, var1=-2, var2=-1, add_var2_if_empty=True, debug=False, **kwargs):
     """
     :param str|int|tuple[str|int] red1: reduce axes of first source
     :param str|int|tuple[str|int] red2: reduce axes of second source
     :param str|int|tuple[str|int]|None var1: var axes of first source
     :param str|int|tuple[str|int]|None var2: var axes of second source
+    :param bool add_var2_if_empty: if var2=None, add dim=1 at the end
     :param bool debug: will print debug shapes, etc.
     """
     from TFUtil import prod
@@ -3500,7 +3501,10 @@ class DotLayer(LayerBase):
       b = tf.reshape(b, b_rem_dims + [b_var_dim, b_reduce_dim])
     # `res` will be of shape: a_rem_dims + [a_var_dim, b_var_dim]
     res = tf.matmul(a, b, transpose_a=transpose_a, transpose_b=transpose_b)
-    res = tf.reshape(res, a_rem_dims + a_var_dims + (b_var_dims or [1]))
+    if not b_var_dims and add_var2_if_empty:
+      b_var_dims.append(1)
+      b_var_axes.append(None)
+    res = tf.reshape(res, a_rem_dims + a_var_dims + b_var_dims)
     self.output.placeholder = res
     # Collect dynamic size info.
     self.output.size_placeholder = {}
@@ -3527,13 +3531,13 @@ class DotLayer(LayerBase):
   @staticmethod
   def _axis2_to_output(axis, b_rem_axes, a_var_axes, b_var_axes):
     # Output will be of shape a_rem_dims + [a_var_dim, b_var_dim].
-    out_axes = b_rem_axes + [None for i in a_var_axes] + (b_var_axes or [None])
+    out_axes = b_rem_axes + [None for i in a_var_axes] + b_var_axes
     if axis not in out_axes:
       return None
     return out_axes.index(axis)
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, red1=-1, red2=-2, var1=-2, var2=-1, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, red1=-1, red2=-2, var1=-2, var2=-1, add_var2_if_empty=True, **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
@@ -3541,6 +3545,7 @@ class DotLayer(LayerBase):
     :param str|int|tuple[str|int] red2: reduce axes of second source
     :param str|int|tuple[str|int]|None var1: var axes of first source
     :param str|int|tuple[str|int]|None var2: var axes of second source
+    :param bool add_var2_if_empty:
     :rtype: Data
     """
     import numpy
@@ -3568,9 +3573,11 @@ class DotLayer(LayerBase):
     if time_dim_axis is None and b_out.time_dim_axis is not None:
       time_dim_axis = cls._axis2_to_output(
         b_out.time_dim_axis, b_rem_axes=b_rem_axes, a_var_axes=a_var_axes, b_var_axes=b_var_axes)
+    if not b_var_dims and add_var2_if_empty:
+      b_var_dims.append(1)
     return Data(
       name="%s_output" % name,
-      shape=tuple(a_rem_dims[1:] + a_var_dims + (b_var_dims or [1])),
+      shape=tuple(a_rem_dims[1:] + a_var_dims + b_var_dims),
       batch_dim_axis=0,
       time_dim_axis=time_dim_axis,
       dtype=a_out.dtype)
