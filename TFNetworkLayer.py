@@ -4372,30 +4372,58 @@ class AccumulateMeanLayer(ReduceLayer):
 class FastBaumWelchLayer(_ConcatInputLayer):
   """
   Calls :func:`fast_baum_welch` or :func:`fast_baum_welch_by_sprint_automata`.
-  We expect that our input are +log scores.
+  We expect that our input are +log scores, e.g. use log-softmax.
   """
   layer_class = "fast_bw"
   recurrent = True
 
-  def __init__(self, align_target, sprint_opts=None, tdp_scale=1.0, **kwargs):
+  def __init__(self, align_target, sprint_opts=None,
+               input_type="log_prob",
+               tdp_scale=1.0, am_scale=1.0, min_prob=0.0,
+               **kwargs):
     """
-    :param str align_target: e.g. "sprint"
+    :param str align_target: e.g. "sprint" or "staircase"
     :param dict[str] sprint_opts:
+    :param str input_type: "log_prob" or "prob"
     :param float tdp_scale:
+    :param float am_scale:
+    :param float min_prob: clips the minimum prob (value in [0,1])
     """
+    import numpy
     super(FastBaumWelchLayer, self).__init__(**kwargs)
-    assert align_target == "sprint", "not yet implemented otherwise, align_target %r" % align_target
     data = self.input_data.copy_as_time_major()
-    from TFUtil import sequence_mask_time_major
-    seq_mask = sequence_mask_time_major(data.get_sequence_lengths())
-    from TFNativeOp import fast_baum_welch_by_sprint_automata
-    seq_tags = self.network.get_seq_tags()
-    fwdbwd, obs_scores = fast_baum_welch_by_sprint_automata(
-      sprint_opts=sprint_opts,
-      tdp_scale=tdp_scale,
-      am_scores=-data.placeholder,  # it wants the scores in -log space
-      float_idx=seq_mask,
-      tags=seq_tags)
+    # We want the scores in -log space.
+    if input_type == "log_prob":
+      am_scores = -data.placeholder
+    elif input_type == "prob":
+      if len(self.sources) == 1 and self.sources[0].output_before_activation:
+        am_scores = -self.sources[0].output_before_activation.get_log_output()
+      else:
+        from TFUtil import safe_log
+        am_scores = -safe_log(data.placeholder)
+    else:
+      raise Exception("%s: invalid input_type %r" % (self, input_type))
+    if min_prob > 0:
+      am_scores = tf.minimum(am_scores, -numpy.log(min_prob))  # in -log space
+    if am_scale != 1:
+      am_scores *= am_scale
+    if align_target == "sprint":
+      from TFUtil import sequence_mask_time_major
+      seq_mask = sequence_mask_time_major(data.get_sequence_lengths())
+      from TFNativeOp import fast_baum_welch_by_sprint_automata
+      seq_tags = self.network.get_seq_tags()
+      fwdbwd, obs_scores = fast_baum_welch_by_sprint_automata(
+        sprint_opts=sprint_opts,
+        tdp_scale=tdp_scale,
+        am_scores=am_scores,
+        float_idx=seq_mask,
+        tags=seq_tags)
+    elif align_target == "staircase":
+      from TFNativeOp import fast_baum_welch_staircase
+      fwdbwd, obs_scores = fast_baum_welch_staircase(
+        am_scores=am_scores, seq_lens=data.get_sequence_lengths())
+    else:
+      raise Exception("%s: invalid align_target %r" % (self, align_target))
     loss = tf.reduce_sum(obs_scores[0])
     self.output_loss = loss
     bw = tf.exp(-fwdbwd)
