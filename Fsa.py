@@ -1215,11 +1215,17 @@ def fast_bw_fsa_staircase(seq_lens, with_loop=False, max_skip=None, start_max_sk
           edges += [(cur_state_idx, target_state_idx, emission_idx, batch)]
         else:  # see comment above. extra rule for first state
           for t in range(i, j):
+            if with_loop and i == t and j < seq_len:
+              continue
             emission_idx = t
+            edges += [(cur_state_idx, target_state_idx, emission_idx, batch)]
+          if with_loop and j < seq_len:
+            emission_idx = j
             edges += [(cur_state_idx, target_state_idx, emission_idx, batch)]
       state_idx += 1
     end_state_idx = state_idx
     start_end_states += [(start_state_idx, end_state_idx)]
+    state_idx += 1
   weights = [0.0] * len(edges)
   return FastBaumWelchBatchFsa(
     edges=numpy.array(edges).transpose(),

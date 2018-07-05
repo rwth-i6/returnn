@@ -6,8 +6,13 @@ from __future__ import division
 
 import sys
 import datetime
+import unittest
 import time
-sys.path += ["./.."]
+import numpy
+import tensorflow as tf
+
+sys.path += ["."]  # Python 3 hack
+
 import Fsa
 
 
@@ -24,7 +29,7 @@ class StateTying:
     self.allo_map = {}
 
 
-def main():
+def main_custom():
   start_time = time.time()
   date_str = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
 
@@ -225,5 +230,145 @@ def main():
     timings.write("Total program time: {}\n\n".format(end_time - start_time))
 
 
+def slow_full_sum_staircase_uniform(num_classes, out_seq_len, with_loop=False):
+  """
+  :param int num_classes:
+  :param int out_seq_len:
+  :param bool with_loop:
+  :return: array shape (out_seq_len, num_classes)
+  :rtype: numpy.ndarray
+  """
+  def iter_seqs(t, c):
+    if c >= num_classes:
+      return
+    for c_ in range(c, num_classes):
+      if t == out_seq_len - 1:
+        yield [c_]
+      else:
+        for seq in iter_seqs(t + 1, c_ if with_loop else (c_ + 1)):
+          yield [c_] + seq
+  seqs = list(iter_seqs(0, 0))
+  print("slow_full_sum_staircase_uniform(%i, %i, with_loop=%r)" % (num_classes, out_seq_len, with_loop))
+  print("  num seqs:", len(seqs))
+  assert seqs, "did not found any"
+  seqs = numpy.array(seqs)
+  assert seqs.shape[1] == out_seq_len
+  print("  seqs:")
+  print(seqs)
+  res = numpy.zeros((out_seq_len, num_classes))
+  for t in range(out_seq_len):
+    for c in range(num_classes):
+      count = numpy.count_nonzero(seqs[:, t] == c)
+      res[t, c] = float(count) / seqs.shape[0]
+  print("  res sums (should be close to 1):", res.sum(axis=1))
+  return res
+
+
+def tf_baum_welch(fsa, am_scores=None, num_classes=None, out_seq_len=None):
+  """
+  :param Fsa.FastBaumWelchBatchFsa fsa:
+  :param numpy.ndarray am_scores:
+  :param int num_classes:
+  :param int out_seq_len:
+  :return: shape (out_seq_len, num_classes)
+  :rtype: numpy.ndarray
+  """
+  print("tf_baum_welch...")
+  n_batch = fsa.num_batch
+  assert n_batch == 1
+  edges = tf.constant(fsa.edges, dtype=tf.int32)
+  weights = tf.constant(fsa.weights, dtype=tf.float32)
+  start_end_states = tf.constant(fsa.start_end_states, dtype=tf.int32)
+  if am_scores is None:
+    am_scores = numpy.ones((out_seq_len, n_batch, num_classes), dtype="float32") * numpy.float32(1.0 / num_classes)
+  else:
+    if am_scores.shape == (out_seq_len, num_classes):
+        am_scores = am_scores[:, None, :]
+    assert am_scores.shape == (out_seq_len, n_batch, num_classes)
+  am_scores = -numpy.log(am_scores)  # in -log space
+  am_scores = tf.constant(am_scores, dtype=tf.float32)
+  float_idx = tf.ones((out_seq_len, n_batch), dtype=tf.float32)
+  # from TFUtil import sequence_mask_time_major
+  # float_idx = tf.cast(sequence_mask_time_major(tf.convert_to_tensor(list(range(seq_len - n_batch + 1, seq_len + 1)))), dtype=tf.float32)
+  print("Construct call...")
+  from TFNativeOp import fast_baum_welch
+  fwdbwd, obs_scores = fast_baum_welch(
+    am_scores=am_scores, float_idx=float_idx,
+    edges=edges, weights=weights, start_end_states=start_end_states)
+  print("Done.")
+  print("Eval:")
+  session = tf.get_default_session()
+  fwdbwd, score = session.run([fwdbwd, obs_scores])
+  print("BW score:")
+  print(repr(score))
+  assert score.shape == (out_seq_len, n_batch)
+  #bw = numpy.maximum(-fwdbwd, -100.)
+  bw = numpy.exp(-fwdbwd)
+  #print("Baum-Welch soft alignment:")
+  #print(repr(bw))
+  assert bw.shape == (out_seq_len, n_batch, num_classes)
+  return bw[:, 0]  # expect single batch...
+
+
+def check_fast_bw_fsa_staircase(num_classes, out_seq_len, with_loop):
+  print("check_fast_bw_fsa_staircase(%i, %i, with_loop=%r)" % (num_classes, out_seq_len, with_loop))
+  expected = slow_full_sum_staircase_uniform(num_classes=num_classes, out_seq_len=out_seq_len, with_loop=with_loop)
+  print("expected full sum:")
+  print(expected)
+  fsa = Fsa.fast_bw_fsa_staircase(seq_lens=[num_classes], with_loop=with_loop)
+  with tf.Session().as_default():
+    res = tf_baum_welch(fsa, num_classes=num_classes, out_seq_len=out_seq_len)
+  print("baum-welch:")
+  print(res)
+  is_close = numpy.isclose(expected, res).all()
+  print("close:", is_close)
+  assert is_close
+
+
+def test_fast_bw_fsa_staircase():
+  check_fast_bw_fsa_staircase(2, 2, with_loop=False)
+  check_fast_bw_fsa_staircase(2, 2, with_loop=True)
+  check_fast_bw_fsa_staircase(3, 2, with_loop=False)
+  check_fast_bw_fsa_staircase(3, 2, with_loop=True)
+  check_fast_bw_fsa_staircase(3, 3, with_loop=False)
+  check_fast_bw_fsa_staircase(3, 3, with_loop=True)
+
+
+def test_fast_bw_fsa_staircase_without_loop():
+  num_classes = 2
+  out_seq_len = 2
+  expected = slow_full_sum_staircase_uniform(num_classes=num_classes, out_seq_len=out_seq_len, with_loop=True)
+  print("expected full sum:")
+  print(expected)
+  fsa = Fsa.fast_bw_fsa_staircase(seq_lens=[num_classes], with_loop=True)
+  with tf.Session().as_default():
+    res = tf_baum_welch(fsa, num_classes=num_classes, out_seq_len=out_seq_len)
+  print("baum-welch:")
+  print(res)
+  is_close = numpy.isclose(expected, res).all()
+  print("close:", is_close)
+  assert is_close
+
+
 if __name__ == "__main__":
-  main()
+  import better_exchook
+  better_exchook.install()
+  if len(sys.argv) <= 1:
+    for k, v in sorted(globals().items()):
+      if k.startswith("test_"):
+        print("-" * 40)
+        print("Executing: %s" % k)
+        try:
+          v()
+        except unittest.SkipTest as exc:
+          print("SkipTest:", exc)
+        print("-" * 40)
+    print("Finished all tests.")
+  else:
+    assert len(sys.argv) >= 2
+    for arg in sys.argv[1:]:
+      print("Executing: %s" % arg)
+      if arg in globals():
+        globals()[arg]()  # assume function and execute
+      else:
+        eval(arg)  # assume Python code and execute

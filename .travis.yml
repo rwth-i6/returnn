@@ -32,7 +32,14 @@ install:
   - python -c "import tensorflow as tf; print(tf.GIT_VERSION, tf.VERSION)"
   - python -c "import theano; print(theano.__version__)"
 
+# TF tests first, because more relevant (for me), then ordered by alphabet
 env:
+  - TEST=TFEngine
+  - TEST=TFNativeOp
+  - TEST=TFNetworkLayer
+  - TEST=TFNetworkRecLayer
+  - TEST=TFUpdater
+  - TEST=TFUtil
   - TEST=Config
   - TEST=Dataset
   - TEST=demos
@@ -40,6 +47,7 @@ env:
   - TEST=EngineTask
   - TEST=EngineUtil
   - TEST=fork_exec
+  - TEST=Fsa
   - TEST=GeneratingDataset
   - TEST=hdf_dump
   - TEST=HDFDataset
@@ -60,12 +68,6 @@ env:
   - TEST=SprintInterface
   - TEST=TaskSystem
   - TEST=TaskSystem_SharedMem
-  - TEST=TFEngine
-  - TEST=TFNativeOp
-  - TEST=TFNetworkLayer
-  - TEST=TFNetworkRecLayer
-  - TEST=TFUpdater
-  - TEST=TFUtil
   - TEST=TheanoUtil
   - TEST=Util
 
