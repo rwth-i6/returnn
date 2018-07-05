@@ -2191,40 +2191,6 @@ class RecStepInfoLayer(LayerBase):
     return self.end_flag
 
 
-class RecExtraOutputLayer(LayerBase):
-  """
-  For :class:`RecLayer` with a subnet.
-  If some layer is explicitly marked as an additional output layer (via 'is_output_layer': True),
-  you can get that subnet layer output via this accessor.
-  """
-  layer_class = "rec_extra_output"
-
-  def __init__(self, output_layer_name, **kwargs):
-    """
-    :param str output_layer_name: layer of subnet in RecLayer source, which has 'is_output_layer': True
-    """
-    super(RecExtraOutputLayer, self).__init__(**kwargs)
-    # Nothing needs to be done, all logic in self.get_out_data_from_opts already.
-
-  @classmethod
-  def get_out_data_from_opts(cls, name, sources, output_layer_name, **kwargs):
-    """
-    :param str name:
-    :param list[LayerBase] sources:
-    :param str output_layer_name:
-    :rtype: Data
-    """
-    assert len(sources) == 1, "%s %r: expect exactly one source" % (cls, name)
-    rec_layer = sources[0]
-    assert isinstance(rec_layer, RecLayer), "%s %r: expect that the source is a RecLayer" % (cls, name)
-    assert isinstance(rec_layer.cell, _SubnetworkRecCell), "%s %r: expect a RecLayer with subnet" % (cls, name)
-    assert rec_layer.cell.output_layers_net, "%s %r: expect a RecLayer with output net" % (cls, name)
-    subnet = rec_layer.cell.output_layers_net
-    assert output_layer_name in subnet.layers, "%s %r: maybe %r not with 'is_output_layer'?" % (
-      cls, name, output_layer_name)
-    return subnet.layers[output_layer_name]
-
-
 class RnnCellLayer(_ConcatInputLayer):
   """
   Wrapper around tf.contrib.rnn.RNNCell.
@@ -2234,6 +2200,7 @@ class RnnCellLayer(_ConcatInputLayer):
   """
 
   layer_class = "rnn_cell"
+  recurrent = True
 
   def __init__(self, n_out, unit, unit_opts=None,
                initial_state=None, initial_output=None,
@@ -2650,65 +2617,39 @@ class GetLastHiddenStateLayer(LayerBase):
       out_type={"shape": (n_out,), "dim": n_out, "batch_dim_axis": 0, "time_dim_axis": None}, **kwargs)
 
 
-class GetRecAccumulatedOutput(LayerBase):
+class GetRecAccumulatedOutputLayer(LayerBase):
   """
-  Retrieves the accumulated output from a Subnet-layer.
-  Note: the source-layer must be marked as output layer
-        with "is_output_layer": True
+  For :class:`RecLayer` with a subnet.
+  If some layer is explicitly marked as an additional output layer (via 'is_output_layer': True),
+  you can get that subnet layer output via this accessor.
+  Retrieves the accumulated output.
   """
-
   layer_class = "get_rec_accumulated"
 
   def __init__(self, sub_layer, **kwargs):
     """
-    :param LayerBase sub_layer: sub-layer to get the outputs from
+    :param str sub_layer: layer of subnet in RecLayer source, which has 'is_output_layer': True
     """
-    super(GetRecAccumulatedOutput, self).__init__(**kwargs)
-    assert len(self.sources) == 1
-    assert sub_layer is not None
-    rec_layer = self.sources[0]  # type: RecLayer
-    cell = rec_layer.cell  # type: _SubnetworkRecCell
-    self.output.placeholder = cell.final_acc_tas_dict["output_%s" % sub_layer.name].stack()
-    self.output.size_placeholder = {
-      axis + 1: placeholder for axis, placeholder in sub_layer.output.size_placeholder.items()
-    }
-    self.output.size_placeholder[0] = rec_layer.output.size_placeholder[0]
+    super(GetRecAccumulatedOutputLayer, self).__init__(**kwargs)
+    # Nothing needs to be done, all logic in self.get_out_data_from_opts already.
 
   @classmethod
-  def transform_config_dict(cls, d, network, get_layer):
+  def get_out_data_from_opts(cls, name, sources, sub_layer, **kwargs):
     """
-    :param dict[str] d: will modify inplace
-    :param TFNetwork.TFNetwork network:
-    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
-    """
-    assert "from" in d
-    sources = d.pop("from", [])
-    sub_layer = d.pop("sub_layer", None)
-    assert sub_layer is not None, "Set sub_layer"
-    if isinstance(sources, str):
-      sources = [sources]
-    assert len(sources) == 1
-    assert isinstance(sources[0], str)
-    rec_layer = get_layer(sources[0])
-    assert isinstance(rec_layer.cell, _SubnetworkRecCell)
-    template = rec_layer.cell.layer_data_templates[sub_layer]
-    d["sub_layer"] = template
-    d["sources"] = [rec_layer]
-
-  @classmethod
-  def get_out_data_from_opts(cls, sources, sub_layer, **kwargs):
-    """
+    :param str name:
     :param list[LayerBase] sources:
-    :param LayerBase sub_layer:
+    :param str sub_layer:
     :rtype: Data
     """
-    assert len(sources) == 1
-    return Data(
-      name="%s_output" % kwargs["name"],
-      shape=(None,) + sub_layer.output.shape,
-      dtype=sub_layer.output.dtype,
-      time_dim_axis=0,
-      batch_dim_axis=sub_layer.output.batch_dim_axis + 1)
+    assert len(sources) == 1, "%s %r: expect exactly one source" % (cls, name)
+    rec_layer = sources[0]
+    assert isinstance(rec_layer, RecLayer), "%s %r: expect that the source is a RecLayer" % (cls, name)
+    assert isinstance(rec_layer.cell, _SubnetworkRecCell), "%s %r: expect a RecLayer with subnet" % (cls, name)
+    assert rec_layer.cell.output_layers_net, "%s %r: expect a RecLayer with output net" % (cls, name)
+    subnet = rec_layer.cell.output_layers_net
+    assert sub_layer in subnet.layers, "%s %r: maybe %r not with 'is_output_layer'?" % (
+      cls, name, sub_layer)
+    return subnet.layers[sub_layer]
 
 
 class ChoiceLayer(LayerBase):
@@ -3357,6 +3298,7 @@ class GenericWindowAttentionLayer(AttentionBaseLayer):
     super(GenericWindowAttentionLayer, self).__init__(**kwargs)
     with tf.name_scope("base"):
       base = self.base.output.get_placeholder_as_time_major()
+
 
 class GaussWindowAttentionLayer(AttentionBaseLayer):
   """
