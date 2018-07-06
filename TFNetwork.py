@@ -450,6 +450,7 @@ class TFNetwork(object):
           layer_desc["output"] = layer_class.get_out_data_from_opts(**layer_desc)
         if debug_print_layer_output_template:
           print("layer %s/%r output: %r" % (self.name, name, layer_desc["output"]))
+        assert isinstance(layer_desc["output"], Data)
         layer = layer_class(**layer_desc)
       except TypeError:
         help_on_type_error_wrong_args(cls=layer_class, kwargs=list(layer_desc.keys()))

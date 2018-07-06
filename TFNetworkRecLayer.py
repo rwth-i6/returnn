@@ -2660,7 +2660,7 @@ class GetRecAccumulatedOutputLayer(LayerBase):
     subnet = rec_layer.cell.output_layers_net
     assert sub_layer in subnet.layers, "%s %r: maybe %r not with 'is_output_layer'?" % (
       cls, name, sub_layer)
-    return subnet.layers[sub_layer]
+    return subnet.layers[sub_layer].output
 
 
 class ChoiceLayer(LayerBase):
