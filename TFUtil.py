@@ -450,23 +450,23 @@ class Data(object):
 
   def copy_template_adding_time_dim(self, name=None, time_dim_axis=0):
     """
+    Adds a time-dim-axis.
+    If a time-dim-axis already exists, it will anyway create this new one.
+
     :param str|None name: if set, this will be the new name
     :param int time_dim_axis: the new time-dim-axis index
     :return: copy of myself adding the time-dimension without placeholder
     :rtype: Data
     """
     assert self.batch_dim_axis is not None
-    new_shape = list(self.shape)
     kwargs = self.get_kwargs()
-    if self.time_dim_axis is None:
-      new_shape.insert(time_dim_axis, None)
-      kwargs["batch_dim_axis"] = (
-        self.batch_dim_axis
-        if (self.batch_dim_axis < time_dim_axis)
-        else (self.batch_dim_axis + 1))
-      kwargs["time_dim_axis"] = time_dim_axis
-    else:
-      assert self.time_dim_axis == time_dim_axis
+    new_shape = list(self.shape)
+    new_shape.insert(time_dim_axis, None)
+    kwargs["batch_dim_axis"] = (
+      self.batch_dim_axis
+      if (self.batch_dim_axis < time_dim_axis)
+      else (self.batch_dim_axis + 1))
+    kwargs["time_dim_axis"] = time_dim_axis
     kwargs["shape"] = new_shape
     if name:
       kwargs["name"] = name
