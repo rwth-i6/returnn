@@ -833,19 +833,27 @@ class _SubnetworkRecCell(object):
       construct_ctx.layers.pop(-1)
       return layer
 
-    assert not self.layer_data_templates, "do not call this multiple times"
-    get_templated_layer("output")
-    assert "output" in self.layer_data_templates
-    assert not construct_ctx.layers
+    try:
+      assert not self.layer_data_templates, "do not call this multiple times"
+      get_templated_layer("output")
+      assert "output" in self.layer_data_templates
+      assert not construct_ctx.layers
 
-    if "end" in self.net_dict:  # used to specify ending of a sequence
-      get_templated_layer("end")
+      if "end" in self.net_dict:  # used to specify ending of a sequence
+        get_templated_layer("end")
 
-    for layer_name, layer in self.net_dict.items():
-      if layer.get("is_output_layer"):
-        get_templated_layer(layer_name)
-      if self.parent_net.eval_flag and layer.get("loss"):  # only collect losses if we need them
-        get_templated_layer(layer_name)
+      for layer_name, layer in self.net_dict.items():
+        if layer.get("is_output_layer"):
+          get_templated_layer(layer_name)
+        if self.parent_net.eval_flag and layer.get("loss"):  # only collect losses if we need them
+          get_templated_layer(layer_name)
+
+    except Exception:
+      print("%r: exception constructing template network (for deps and data shapes)")
+      print("Template network so far:")
+      from pprint import pprint
+      pprint(self.layer_data_templates)
+      raise
 
   def _construct(self, prev_outputs, prev_extra, i,
                  data=None, classes=None,
