@@ -5714,7 +5714,7 @@ class ViaLayerLoss(Loss):
       seq_mask_bc = self.output.get_sequence_mask_broadcast()
       error_signal = tf.where(
         tf.logical_and(seq_mask_bc, tf.ones_like(error_signal, dtype=tf.bool)),
-        error_signal, 0.0)
+        error_signal, tf.zeros_like(error_signal))
       if self.loss_wrt_to_act_in:
         assert self.output_with_activation, "activation unknown, via %r" % self.output
         if isinstance(self.loss_wrt_to_act_in, (str, unicode)):
