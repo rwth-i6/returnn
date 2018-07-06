@@ -1284,6 +1284,12 @@ class _SubnetworkRecCell(object):
         assert have_known_seq_len, (
           "You need to have an 'end' layer in your rec subnet if the generated seq len is unknown.")
 
+      extra_output_layers = set()
+      for name, template in self.layer_data_templates.items():
+        if template.is_output_layer():
+          extra_output_layers.add(name)
+          needed_outputs.add(name)
+
       if self.parent_rec_layer._optimize_move_layers_out:
         self._move_outside_loop(needed_outputs=needed_outputs)
       else:
@@ -1338,13 +1344,9 @@ class _SubnetworkRecCell(object):
         add_output_to_acc("output")
 
       # if a layer declares it is a output, we should save the values as well
-      extra_output_layers = set()
-      for name, template in self.layer_data_templates.items():
-        if template.is_output_layer() and name not in needed_outputs:
-          needed_outputs.add(name)
-          extra_output_layers.add(name)
-          if name in self.layers_in_loop:
-            add_output_to_acc(name)
+      for name in extra_output_layers:
+        if name in self.layers_in_loop:
+          add_output_to_acc(name)
 
       # Maybe some of the moved-out output-layers depend on data inside the loop,
       # so we should accumulate it to have access to it.
