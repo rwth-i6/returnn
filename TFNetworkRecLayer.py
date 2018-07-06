@@ -843,13 +843,14 @@ class _SubnetworkRecCell(object):
         get_templated_layer("end")
 
       for layer_name, layer in self.net_dict.items():
-        if layer.get("is_output_layer"):
-          get_templated_layer(layer_name)
         if self.parent_net.eval_flag and layer.get("loss"):  # only collect losses if we need them
+          get_templated_layer(layer_name)
+      for layer_name, layer in self.net_dict.items():
+        if layer.get("is_output_layer"):
           get_templated_layer(layer_name)
 
     except Exception:
-      print("%r: exception constructing template network (for deps and data shapes)")
+      print("%r: exception constructing template network (for deps and data shapes)" % self)
       print("Template network so far:")
       from pprint import pprint
       pprint(self.layer_data_templates)
