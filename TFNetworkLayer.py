@@ -4380,6 +4380,7 @@ class FastBaumWelchLayer(_ConcatInputLayer):
   def __init__(self, align_target, sprint_opts=None,
                input_type="log_prob",
                tdp_scale=1.0, am_scale=1.0, min_prob=0.0,
+               staircase_seq_len_source=None,
                **kwargs):
     """
     :param str align_target: e.g. "sprint" or "staircase"
@@ -4388,6 +4389,7 @@ class FastBaumWelchLayer(_ConcatInputLayer):
     :param float tdp_scale:
     :param float am_scale:
     :param float min_prob: clips the minimum prob (value in [0,1])
+    :param LayerBase|None staircase_seq_len_source:
     """
     import numpy
     super(FastBaumWelchLayer, self).__init__(**kwargs)
@@ -4421,7 +4423,7 @@ class FastBaumWelchLayer(_ConcatInputLayer):
     elif align_target == "staircase":
       from TFNativeOp import fast_baum_welch_staircase
       fwdbwd, obs_scores = fast_baum_welch_staircase(
-        am_scores=am_scores, seq_lens=data.get_sequence_lengths())
+        am_scores=am_scores, seq_lens=staircase_seq_len_source.output.get_sequence_lengths())
     else:
       raise Exception("%s: invalid align_target %r" % (self, align_target))
     loss = tf.reduce_sum(obs_scores[0])
@@ -4429,6 +4431,12 @@ class FastBaumWelchLayer(_ConcatInputLayer):
     bw = tf.exp(-fwdbwd)
     self.output.placeholder = bw
     self.output.size_placeholder = data.size_placeholder.copy()
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    super(FastBaumWelchLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    if d.get("staircase_seq_len_source"):
+      d["staircase_seq_len_source"] = get_layer(d["staircase_seq_len_source"])
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources, **kwargs):
