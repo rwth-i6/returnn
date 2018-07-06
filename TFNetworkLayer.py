@@ -4771,6 +4771,8 @@ class Loss(object):
     Does some checks on self.target and self.output, e.g. if the dense shapes matches.
     You can overwrite this if those checks don't make sense for your derived loss class.
     """
+    if not self.target:
+      return
     assert self.target.ndim_dense == self.output.ndim_dense, (
       "Number of dimensions mismatch. Target: %s, output: %s" % (self.target, self.output))
     expected_output_dim = self.get_auto_output_layer_dim(self.target.dim)
