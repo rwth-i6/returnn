@@ -61,14 +61,14 @@ class Pretrain:
   """
   # Note: If we want to add other pretraining schemes, make this a base class.
 
-  def __init__(self, original_network_json, network_init_args,
+  def __init__(self, original_network_json, network_init_args=None,
                copy_param_mode=None, copy_output_layer=None, greedy=None,
                repetitions=None,
                construction_algo="from_output", output_layers=("output",), input_layers=("data",)):
     """
     :type original_network_json: dict[str]
-    :param dict[str] network_init_args: additional args we use for LayerNetwork.from_json().
-      must have n_in, n_out.
+    :param dict[str]|None network_init_args: additional args we use for LayerNetwork.from_json().
+      must have n_in, n_out. (for Theano only, thus optional now)
     :param str copy_param_mode:
     :param bool|str copy_output_layer: whether to copy the output layer params from last epoch or reinit
     :param bool greedy: if True, only train output+last layer, otherwise train all
@@ -91,8 +91,6 @@ class Pretrain:
       greedy = False
     self.greedy = greedy
     self.network_init_args = network_init_args
-    assert "n_in" in network_init_args
-    assert "n_out" in network_init_args
     self._original_network_json = original_network_json
     self._construction_algo = construction_algo
     self._input_layers = input_layers
@@ -483,9 +481,13 @@ def pretrainFromConfig(config):
   :type config: Config.Config
   :rtype: Pretrain | None
   """
+  import Util
   pretrainType = config.bool_or_other("pretrain", None)
   if pretrainType == "default" or (isinstance(pretrainType, dict) and pretrainType) or pretrainType is True:
-    network_init_args = LayerNetwork.init_args_from_config(config)
+    if Util.BackendEngine.is_theano_selected():
+      network_init_args = LayerNetwork.init_args_from_config(config)
+    else:
+      network_init_args = None
     original_network_json = LayerNetwork.json_from_config(config)
     opts = config.get_of_type("pretrain", dict, {})
     if config.has("pretrain_copy_output_layer"):
