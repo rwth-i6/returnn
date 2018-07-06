@@ -5678,7 +5678,10 @@ class ViaLayerLoss(Loss):
       else:
         assert self.align_layer
         error_signal = self.output.placeholder - self.align_layer.output.copy_compatible_to(self.output).placeholder
-      error_signal *= tf.cast(self.output.get_sequence_mask_broadcast(), dtype=tf.float32)
+      error_signal = tf.where(
+        tf.logical_and(self.output.get_sequence_mask_broadcast(), tf.ones_like(error_signal, dtype=tf.bool)),
+        error_signal,
+        0.0)
       if self.loss_wrt_to_act_in:
         assert self.output_with_activation, "activation unknown, via %r" % self.output
         if isinstance(self.loss_wrt_to_act_in, (str, unicode)):
