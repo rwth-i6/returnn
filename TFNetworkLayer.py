@@ -4400,6 +4400,9 @@ class FastBaumWelchLayer(_ConcatInputLayer):
     elif input_type == "prob":
       if len(self.sources) == 1 and self.sources[0].output_before_activation:
         am_scores = -self.sources[0].output_before_activation.get_log_output()
+        if self.sources[0].output.is_batch_major:
+          from TFUtil import swapaxes
+          am_scores = swapaxes(am_scores, 0, 1)
       else:
         from TFUtil import safe_log
         am_scores = -safe_log(data.placeholder)
