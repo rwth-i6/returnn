@@ -2093,6 +2093,7 @@ class SeqLenMaskLayer(_ConcatInputLayer):
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
     super(SeqLenMaskLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    d["seq_len_source"] = get_layer(d["seq_len_source"])
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources, **kwargs):
