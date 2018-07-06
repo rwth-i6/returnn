@@ -807,6 +807,8 @@ def tf_fast_bw_fsa_staircase(seq_lens, **opts):
 
   def tf_fast_bw_fsa_staircase_wrapper(seq_lens):
     fsa = fast_bw_fsa_staircase(seq_lens, **opts)
+    assert fsa.start_end_states.shape == (2, len(seq_lens)), "shape missmatch %r, n_batch %r, seq lens %r" % (
+      fsa.start_end_states.shape, len(seq_lens), seq_lens)
     return fsa.edges.astype("int32"), fsa.weights.astype("float32"), fsa.start_end_states.astype("int32")
 
   edges, weights, start_end_states = tf.py_func(
