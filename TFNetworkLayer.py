@@ -2066,6 +2066,39 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
       d["window_start"] = get_layer(d["window_start"])
 
 
+class SeqLenMaskLayer(_ConcatInputLayer):
+  """
+  Masks some values away given the seq_len_source with mask_value.
+  """
+  layer_class = "seq_len_mask"
+
+  def __init__(self, seq_len_source, axis, mask_value, **kwargs):
+    """
+    :param LayerBase seq_len_source:
+    :param str|int axis:
+    :param float mask_value:
+    """
+    super(SeqLenMaskLayer, self).__init__(**kwargs)
+    x = self.input_data.copy_as_batch_major()  # e.g. (B,T',T)
+    axis = x.get_axis_from_description(axis)
+    energy_mask = seq_len_source.output.copy_as_batch_major().get_sequence_mask()  # e.g. (B,T)
+    from TFUtil import expand_multiple_dims
+    energy_mask = expand_multiple_dims(
+      energy_mask, [i for i in range(x.batch_ndim) if i not in [x.batch_dim_axis, axis]])  # e.g. (B,1,T) with axis=-1
+    energy_mask = tf.logical_and(energy_mask, tf.ones_like(x.placeholder, dtype=energy_mask.dtype))
+    x_ = tf.where(energy_mask, x.placeholder, mask_value * tf.ones_like(x.placeholder), "energy_masked")
+    self.output.placeholder = x_
+    self.output.size_placeholder = x.size_placeholder.copy()
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    super(SeqLenMaskLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, **kwargs):
+    return get_concat_sources_data_template(sources, name="%s_output" % name).copy_as_batch_major()
+
+
 class BatchSoftmaxLayer(_ConcatInputLayer):
   """
   Softmax over spacial and feature axis
@@ -5678,10 +5711,10 @@ class ViaLayerLoss(Loss):
       else:
         assert self.align_layer
         error_signal = self.output.placeholder - self.align_layer.output.copy_compatible_to(self.output).placeholder
+      seq_mask_bc = self.output.get_sequence_mask_broadcast()
       error_signal = tf.where(
-        tf.logical_and(self.output.get_sequence_mask_broadcast(), tf.ones_like(error_signal, dtype=tf.bool)),
-        error_signal,
-        0.0)
+        tf.logical_and(seq_mask_bc, tf.ones_like(error_signal, dtype=tf.bool)),
+        error_signal, 0.0)
       if self.loss_wrt_to_act_in:
         assert self.output_with_activation, "activation unknown, via %r" % self.output
         if isinstance(self.loss_wrt_to_act_in, (str, unicode)):
