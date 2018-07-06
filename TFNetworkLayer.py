@@ -4775,7 +4775,7 @@ class Loss(object):
       "Number of dimensions mismatch. Target: %s, output: %s" % (self.target, self.output))
     expected_output_dim = self.get_auto_output_layer_dim(self.target.dim)
     assert expected_output_dim == self.output.dim, (
-      "Expected output dim is %i but the output has dim %i. " % (expected_output_dim, self.output.dim) +
+      "Expected output dim is %i but the output has dim %r. " % (expected_output_dim, self.output.dim) +
       "Target: %s, output: %s" % (self.target, self.output))
 
   def get_error(self):
@@ -5414,7 +5414,7 @@ class DeepClusteringLoss(Loss):
       "Number of dimensions mismatch. Target: %s, output: %s" % (self.target, self.output))
     expected_output_dim = self._embedding_dimension * ( self.target.shape[1] / self._nr_of_sources)
     assert expected_output_dim == self.output.dim, (
-      "Expected output dim is %i but the output has dim %i. " % (expected_output_dim, self.output.dim) +
+      "Expected output dim is %i but the output has dim %r. " % (expected_output_dim, self.output.dim) +
       "Target: %s, output: %s" % (self.target, self.output))
 
   def get_error(self):
