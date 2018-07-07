@@ -98,7 +98,10 @@ def t2t_score_file(filename):
   ckpt = ckpts.model_checkpoint_path
   saver.restore(sess, ckpt)
 
-  print(tf.trainable_variables())
+  writer = tf.summary.FileWriter('logs', sess.graph)
+
+  writer.close()
+
 
   # Run on each line.
   results = []
@@ -123,7 +126,10 @@ def t2t_score_file(filename):
     pprint(np_res)
 
     tvars = tf.trainable_variables()
-    return sess, tvars
+
+    print('t2t inputs_ph:', inputs_ph)
+
+    return sess, tvars, inputs_ph, targets_ph, losses
 
 
 
@@ -211,7 +217,7 @@ def add_trafo_dec_layer(db, d, inp, output):
 returnn_network = {
   "source_embed_raw": {"class": "linear", "activation": None, "with_bias": False, "n_out": EncValueTotalDim},
   "source_embed_with_pos": {"class": "positional_encoding", "add_to_input": True, "from": ["source_embed_raw"],  "dropout": 0.1},
-  "source_embed": {"class": "dropout", "from": ["source_embed_with_pos"], "dropout": 0.1},
+  "source_embed": {"class": "copy", "from": ["source_embed_with_pos"]},
 
   ## trafo layer added later
 
@@ -257,7 +263,7 @@ num_inputs = num_outputs["data"][0]
 def main():
   print("#####################################################")
   print("Loading t2t model + scoring")
-  t2t_sess, t2t_tvars = t2t_score_file(FLAGS_score_file)
+  t2t_sess, t2t_tvars, t2t_inputs_ph, t2t_targets_ph, t2t_losses = t2t_score_file(FLAGS_score_file)
 
 
   print("#####################################################")
@@ -265,6 +271,7 @@ def main():
 
   rnn.init(
     config_updates={
+      "optimize_move_layers_out": True,
       "use_tensorflow": True,
       "num_outputs": num_outputs,
       "num_inputs": num_inputs,
@@ -318,13 +325,64 @@ def main():
         params_np = t2t_var.eval(t2t_sess)
       if ret_var_name == 'output/rec/output_prob/W':
         params_np = params_np.transpose()
+      if ret_var_name in ["source_embed_raw/W"]:
+        params_np = params_np * (EncValueTotalDim**0.5) # ToDo: Only because of weight-tying?
       ret_var.load(params_np, rnn.engine.tf_session)
       print("loaded %s" % ret_var.name)
     else:
       print("skpipped over %s" % ret_var.name)
 
+
+
+  ret_ph_train = rnn.engine.tf_session.graph.get_tensor_by_name("global_tensor_train_flag/train_flag:0")
+  ret_ph_data = rnn.engine.tf_session.graph.get_tensor_by_name("extern_data/placeholders/data/data:0")
+  ret_ph_data_dim =  rnn.engine.tf_session.graph.get_tensor_by_name("extern_data/placeholders/data/data_dim0_size:0")
+  ret_ph_classes=  rnn.engine.tf_session.graph.get_tensor_by_name("extern_data/placeholders/classes/classes:0")
+  ret_ph_classes_dim = rnn.engine.tf_session.graph.get_tensor_by_name("extern_data/placeholders/classes/classes_dim0_size:0")
+
+  #ret_feed = {ret_ph_train: True, ret_ph_data: [[11, 78, 42, 670, 2415, 2, 134, 2, 61, 522, 2, 847, 2, 3353, 15, 33, 2534, 1], [3,6]], ret_ph_data_dim: [18, 2],
+  #            ret_ph_classes: [[4, 60, 18, 46, 26, 2937, 520, 2, 1317, 2, 10, 642, 4, 639, 1], [2,5]], ret_ph_classes_dim:[14, 2]}
+
+  ret_feed = {ret_ph_train: False, ret_ph_data: [[11, 78, 42]], ret_ph_data_dim: [3], ret_ph_classes: [[4, 60]], ret_ph_classes_dim: [2]}
+  t2t_feed = {t2t_inputs_ph: [[11, 78, 42]], t2t_targets_ph: [[4, 60]]}
+
+
+  compare_acts(network, t2t_sess, ret_feed, t2t_feed, act_ret_to_t2t)
+
+#  ret_act = rnn.engine.tf_session.graph.get_tensor_by_name("output/rec/dec_N_ff_conv1/activation/Relu:0")
+#  print(rnn.engine.tf_session.run(ret_act, ret_feed))
+
+  #ret_feed = {ret_ph_train: False, ret_ph_data: [[11, 78, 42]], ret_ph_data_dim: [3], ret_ph_classes: [[4, 60]], ret_ph_classes_dim: [2]}
+  #ret_feed = {ret_ph_train: False, ret_ph_data: [[3, 6]], ret_ph_data_dim: [2], ret_ph_classes: [[2, 5, 4]], ret_ph_classes_dim: [3]}
+
+  #print(rnn.engine.tf_session.run(ret_layer.output.get_placeholder_as_batch_major(), ret_feed))
+
+
+  filtered = [op for op in t2t_sess.graph.get_operations() if '/encoder/layer_0/self_attention' in op.name and op.type == 'Add']
+#  filtered = [op for op in filtered_ if 'transformer/parallel_0_4/transformer/' in op.name]
+#  for op in filtered: print(op.name)
+#
+
+
+
   ipdb.set_trace()
 
+def compare_acts(network, t2t_sess, ret_feed, t2t_feed, act_ret_to_t2t):
+  for ret_l_name, t2t_t_name in act_ret_to_t2t.items():
+    ret_layer = network.layers[ret_l_name]
+    t2t_act = t2t_sess.graph.get_tensor_by_name(t2t_t_name)
+    print(ret_l_name, ':')
+    print(rnn.engine.tf_session.run(ret_layer.output.get_placeholder_as_batch_major(), ret_feed)[:,:,0:12])
+    print(t2t_t_name, ':')
+    print(t2t_sess.run(t2t_act, t2t_feed)[:,:,0:12])
+    print("-----------------------------------------------------------------------------------------------------------")
+
+
+act_ret_to_t2t = {
+    'enc_1_self_att_laynorm' : 'transformer/parallel_0_4/transformer/transformer/body/encoder/layer_0/self_attention/layer_prepostprocess/layer_norm/add_1:0',
+    'enc_1_self_att_out' : 'transformer/parallel_0_4/transformer/transformer/body/encoder/layer_0/self_attention/layer_postprocess/add:0'
+  #  'enc_N_self_att_laynorm' : 'transformer/parallel_0_4/transformer/transformer/body/encoder/layer_1/self_attention/layer_prepostprocess/layer_norm/add_1:0'
+  }
 
 
 
