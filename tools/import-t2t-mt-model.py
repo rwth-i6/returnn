@@ -99,9 +99,9 @@ def t2t_score_file(filename):
   ckpt = ckpts.model_checkpoint_path
   saver.restore(sess, ckpt)
 
-  writer = tf.summary.FileWriter('logs', sess.graph)
+  # writer = tf.summary.FileWriter('logs', sess.graph)
 
-  writer.close()
+  # writer.close()
 
 
   # Run on each line.
@@ -368,6 +368,11 @@ def main():
 
 
   ipdb.set_trace()
+
+def eval_ret_tensor(ret_lt_name, ret_feed):
+  ret_act = rnn.engine.tf_session.graph.get_tensor_by_name(ret_lt_name)
+  return rnn.engine.tf_session.run(ret_act, ret_feed)
+
 
 def compare_acts(network, t2t_sess, ret_feed, t2t_feed, act_ret_to_t2t):
   for ret_lt_name, t2t_t_names in act_ret_to_t2t.items():
