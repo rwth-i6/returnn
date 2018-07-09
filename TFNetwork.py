@@ -1296,11 +1296,15 @@ def help_on_tf_exception(exception, feed_dict, meta_step_info, extern_data, file
     for key, value in sorted(feed_dict.items(), key=lambda item: item[0].name):
       assert isinstance(key, tf.Tensor)
       if isinstance(value, numpy.ndarray):
-        v_minmax = numpy.min(value), numpy.max(value)
         info = "shape %s, dtype %s" % (value.shape, value.dtype)
-        info += ", min/max %s/%s" % v_minmax
-        if value.dtype.kind == "f":
-          info += ", mean/stddev %s/%s" % (numpy.mean(value), numpy.std(value))
+        if value.size > 0:
+          v_minmax = numpy.min(value), numpy.max(value)
+          info += ", min/max %s/%s" % v_minmax
+          if value.dtype.kind == "f":
+            info += ", mean/stddev %s/%s" % (numpy.mean(value), numpy.std(value))
+        else:
+          v_minmax = 0, 0
+          info += ", EMPTY"
       else:
         v_minmax = -1, -1
         info = "type %r" % type(value)
