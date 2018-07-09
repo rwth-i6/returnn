@@ -1760,7 +1760,7 @@ def dot(a, b):
   """
   :param tf.Tensor a: shape [...da...,d]
   :param tf.Tensor b: shape [d,...db...]
-  :return: tensor of shape [...da...,d,...db...]
+  :return: tensor of shape [...da...,...db...]
   :rtype: tf.Tensor
   """
   with tf.name_scope("dot"):
