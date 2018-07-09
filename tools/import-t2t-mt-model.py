@@ -322,7 +322,20 @@ def main():
       t2t_var_names = ret_to_t2t[ret_var_name]
       # in return QKV params are concatenated into one tensor
       if isinstance(t2t_var_names, tuple):
-        params_np = numpy.concatenate([t2t_params[var_name].eval(t2t_sess) for var_name in t2t_var_names], axis=1) # ToDo: transpose????
+        # params_np = numpy.concatenate([t2t_params[var_name].eval(t2t_sess) for var_name in t2t_var_names], axis=1) # Not enough...
+        # More complex stacking necessary: head1 Q, head1 K, head1 V,   head2 Q, head2 K, head2 V, ...
+        q_np = t2t_params[t2t_var_names[0]].eval(t2t_sess)
+        k_np = t2t_params[t2t_var_names[1]].eval(t2t_sess)
+        v_np = t2t_params[t2t_var_names[2]].eval(t2t_sess)
+        qkv_dim_total = 2*EncKeyTotalDim+EncValueTotalDim
+        params_np = numpy.empty((EncValueTotalDim, qkv_dim_total) ,dtype=q_np.dtype)
+        qkv_dim_per_head = qkv_dim_total // AttNumHeads
+        for i in range(EncKeyPerHeadDim):
+          params_np[:, i::qkv_dim_per_head]                      = q_np[:, i::EncKeyPerHeadDim]
+        for i in range(EncKeyPerHeadDim):
+          params_np[:, i+EncKeyPerHeadDim::qkv_dim_per_head]     = k_np[:, i::EncKeyPerHeadDim]
+        for i in range(EncValuePerHeadDim):
+          params_np[:, i+2*EncKeyPerHeadDim::qkv_dim_per_head]   = v_np[:, i::EncValuePerHeadDim]
       else:
         t2t_var = t2t_params[t2t_var_names]
         params_np = t2t_var.eval(t2t_sess)
