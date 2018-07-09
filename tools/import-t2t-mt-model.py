@@ -13,6 +13,7 @@ from pprint import pprint
 import tensorflow as tf
 
 import numpy
+#from numpy.testing import assert_almost_equal
 
 my_dir = os.path.dirname(os.path.abspath(__file__))
 returnn_dir = os.path.dirname(my_dir)
@@ -319,13 +320,13 @@ def main():
       t2t_var_names = ret_to_t2t[ret_var_name]
       # in return QKV params are concatenated into one tensor
       if isinstance(t2t_var_names, tuple):
-        params_np = numpy.concatenate([t2t_params[var_name].eval(t2t_sess) for var_name in t2t_var_names], axis=1)
+        params_np = numpy.concatenate([t2t_params[var_name].eval(t2t_sess) for var_name in t2t_var_names], axis=1) # ToDo: transpose????
       else:
         t2t_var = t2t_params[t2t_var_names]
         params_np = t2t_var.eval(t2t_sess)
-      if ret_var_name == 'output/rec/output_prob/W':
+      if ret_var_name in ['output/rec/output_prob/W']: # ToDo: Something else to transpose?
         params_np = params_np.transpose()
-      if ret_var_name in ["source_embed_raw/W"]:
+      if ret_var_name in ["source_embed_raw/W", 'output/rec/target_embed_raw/W']:
         params_np = params_np * (EncValueTotalDim**0.5) # ToDo: Only because of weight-tying?
       ret_var.load(params_np, rnn.engine.tf_session)
       print("loaded %s" % ret_var.name)
@@ -358,7 +359,8 @@ def main():
   #print(rnn.engine.tf_session.run(ret_layer.output.get_placeholder_as_batch_major(), ret_feed))
 
 
-  filtered = [op for op in t2t_sess.graph.get_operations() if '/encoder/layer_0/self_attention' in op.name and op.type == 'Add']
+  filtered = [op for op in t2t_sess.graph.get_operations() if '/encoder/layer_0/self_attention' in op.name and op.type == 'MatMul']
+  filtered = [op for op in rnn.engine.tf_session.graph.get_operations() if 'enc_1_self_att_/' in op.name and op.type == 'MatMul']
 #  filtered = [op for op in filtered_ if 'transformer/parallel_0_4/transformer/' in op.name]
 #  for op in filtered: print(op.name)
 #
@@ -368,22 +370,52 @@ def main():
   ipdb.set_trace()
 
 def compare_acts(network, t2t_sess, ret_feed, t2t_feed, act_ret_to_t2t):
-  for ret_l_name, t2t_t_name in act_ret_to_t2t.items():
-    ret_layer = network.layers[ret_l_name]
-    t2t_act = t2t_sess.graph.get_tensor_by_name(t2t_t_name)
-    print(ret_l_name, ':')
-    print(rnn.engine.tf_session.run(ret_layer.output.get_placeholder_as_batch_major(), ret_feed)[:,:,0:12])
-    print(t2t_t_name, ':')
-    print(t2t_sess.run(t2t_act, t2t_feed)[:,:,0:12])
+  for ret_lt_name, t2t_t_names in act_ret_to_t2t.items():
+    ######################################################
+    print(ret_lt_name, ':')
+    if ':' in ret_lt_name: # activations are either extracted from graph (more fine-grained) or from a returnn layer
+      ret_act = rnn.engine.tf_session.graph.get_tensor_by_name(ret_lt_name)
+    else:
+      ret_act = network.layers[ret_lt_name].output.get_placeholder_as_batch_major()
+    ret_np = rnn.engine.tf_session.run(ret_act, ret_feed)
+    print(ret_np.shape)
+    if len(ret_np.shape) < 3:
+      print(ret_np)
+    else:
+      print(ret_np[:,:,0:12])
+
+    #####################################################
+    print(t2t_t_names, ':')
+    if isinstance(t2t_t_names, tuple):
+      t2t_np = numpy.concatenate([t2t_sess.run(t2t_sess.graph.get_tensor_by_name(t2t_t_name), t2t_feed) for t2t_t_name in t2t_t_names], axis=1)
+    else:
+      t2t_np = t2t_sess.run(t2t_sess.graph.get_tensor_by_name(t2t_t_names), t2t_feed)
+    print(t2t_np.shape)
+    if len(ret_np.shape) < 3:
+      print(t2t_np)
+    else:
+      print(t2t_np[:,:,0:12])
+
+    print('allclose:', numpy.allclose(ret_np, t2t_np, rtol=0.01))
+
+    if 'enc_1_self_att_/dot/MatMul:0' in ret_lt_name:
+      q = t2t_np[:, 0:32] * ((256 / 8) ** (-0.5))
+      k = t2t_np[:, 256 * 1 + 0:256 * 1 + 32]
+      energy = numpy.dot(q, k.T)
+      print("Calculating attention for first head manually:")
+      print(rnn.engine.tf_session.run(tf.nn.softmax(energy, axis=-1)))
     print("-----------------------------------------------------------------------------------------------------------")
 
 
 act_ret_to_t2t = {
     'enc_1_self_att_laynorm' : 'transformer/parallel_0_4/transformer/transformer/body/encoder/layer_0/self_attention/layer_prepostprocess/layer_norm/add_1:0',
-    'enc_1_self_att_out' : 'transformer/parallel_0_4/transformer/transformer/body/encoder/layer_0/self_attention/layer_postprocess/add:0'
+#    'enc_1_self_att_' : 'transformer/parallel_0_4/transformer/transformer/body/encoder/layer_0/self_attention/multihead_attention/combine_heads/transpose:0',
+    'enc_1_self_att_out' : 'transformer/parallel_0_4/transformer/transformer/body/encoder/layer_0/self_attention/layer_postprocess/add:0',
   #  'enc_N_self_att_laynorm' : 'transformer/parallel_0_4/transformer/transformer/body/encoder/layer_1/self_attention/layer_prepostprocess/layer_norm/add_1:0'
+  'enc_1_self_att_/Softmax:0' : 'transformer/parallel_0_4/transformer/transformer/body/encoder/layer_0/self_attention/multihead_attention/dot_product_attention/Softmax:0',
+  'enc_1_self_att_/dot/MatMul:0' : tuple ('transformer/parallel_0_4/transformer/transformer/body/encoder/layer_0/self_attention/multihead_attention/%s/Tensordot/MatMul:0' % t for t in ['q', 'k', 'v']),
   }
-
+#act_ret_to_t2t = {'enc_1_self_att_/dot/MatMul:0' : tuple ('transformer/parallel_0_4/transformer/transformer/body/encoder/layer_0/self_attention/multihead_attention/%s/Tensordot/MatMul:0' % t for t in ['q', 'k', 'v']),}
 
 
 # maps names of trainable params (returnn to t2t)
