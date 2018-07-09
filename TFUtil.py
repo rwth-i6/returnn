@@ -257,7 +257,7 @@ class Data(object):
     if data.batch_dim_axis != batch_dim_axis:
       if data.placeholder is not None:
         with tf.name_scope("%s_with_batch_axis_%i" % (data.name, batch_dim_axis)):
-          data.placeholder = swapaxes(data.placeholder, batch_dim_axis, data.batch_dim_axis)
+          data.placeholder = move_axis(data.placeholder, new_axis=batch_dim_axis, old_axis=data.batch_dim_axis)
       other_special_axes = data.get_special_axes_dict(counted_with_batch_dim=False, only_available=True)
       data.batch_dim_axis = batch_dim_axis
       for k, a in other_special_axes.items():
@@ -2160,6 +2160,8 @@ def openai_layer_norm(x, gain, bias, axis, epsilon=1e-6):
 
 def swapaxes(x, axis1, axis2):
   """
+  Also see :func:`move_axis` or :func:`dimshuffle`.
+
   :param tf.Tensor x:
   :param tf.Tensor|int axis1:
   :param tf.Tensor|int axis2:
@@ -2197,6 +2199,8 @@ def swapaxes(x, axis1, axis2):
 
 def move_axis(x, old_axis, new_axis, name="move_axis"):
   """
+  Also see :func:`swapaxes` or :func:`dimshuffle`.
+
   :param tf.Tensor x:
   :param int old_axis: can also be negative
   :param int new_axis: can also be negative
