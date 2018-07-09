@@ -406,11 +406,17 @@ def compare_acts(network, t2t_sess, ret_feed, t2t_feed, act_ret_to_t2t):
     print('allclose:', numpy.allclose(ret_np, t2t_np, rtol=0.01))
 
     if 'enc_1_self_att_/dot/MatMul:0' in ret_lt_name:
-      q = t2t_np[:, 0:32] * ((256 / 8) ** (-0.5))
+      print("Calculating attention for first head manually:")
+      q = t2t_np[:, 0:32]
+      q = q * ((256 / 8) ** (-0.5))
       k = t2t_np[:, 256 * 1 + 0:256 * 1 + 32]
       energy = numpy.dot(q, k.T)
-      print("Calculating attention for first head manually:")
+      print(energy)
+      print("after softmax")
       print(rnn.engine.tf_session.run(tf.nn.softmax(energy, axis=-1)))
+
+      k_false = eval_ret_tensor('enc_1_self_att_/qkv:1', ret_feed)[0, 0]
+      k_true = eval_ret_tensor('enc_1_self_att_/dot/MatMul:0', ret_feed)[:, 256 * 1 + 0:256 * 1 + 32]
     print("-----------------------------------------------------------------------------------------------------------")
 
 
@@ -423,6 +429,7 @@ act_ret_to_t2t = {
   'enc_1_self_att_/dot/MatMul:0' : tuple ('transformer/parallel_0_4/transformer/transformer/body/encoder/layer_0/self_attention/multihead_attention/%s/Tensordot/MatMul:0' % t for t in ['q', 'k', 'v']),
   }
 #act_ret_to_t2t = {'enc_1_self_att_/dot/MatMul:0' : tuple ('transformer/parallel_0_4/transformer/transformer/body/encoder/layer_0/self_attention/multihead_attention/%s/Tensordot/MatMul:0' % t for t in ['q', 'k', 'v']),}
+
 
 
 # maps names of trainable params (returnn to t2t)
