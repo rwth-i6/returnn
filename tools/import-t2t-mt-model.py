@@ -48,7 +48,9 @@ FLAGS_data_dir = T2T_MODEL_DIR + "/datadir" # the data created by the self defin
 FLAGS_output_dir = T2T_MODEL_DIR + "/out_model" # the trained t2tmodel
 FLAGS_score_file = T2T_MODEL_DIR + "/to_score" # The data we want to test on
 
-FLAGS_problem = "translate_tmp" # a self defined problem to handle own data
+# model was trained with self defined problem 'translate_tmp' to handle own data paths
+# but importing works also with compatible standard problem
+FLAGS_problem = "translate_ende_wmt8k"
 FLAGS_model = "transformer"
 FLAGS_hparams_set = "transformer_base_single_gpu"
 #FLAGS_hparams = "num_hidden_layers=2" # default is empty
