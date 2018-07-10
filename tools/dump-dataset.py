@@ -36,6 +36,9 @@ def dump_dataset(dataset, options):
   """
   print("Epoch: %i" % options.epoch, file=log.v3)
   dataset.init_seq_order(epoch=options.epoch)
+  print("Dataset keys:", dataset.get_data_keys(), file=log.v3)
+  print("Dataset target keys:", dataset.get_target_list(), file=log.v3)
+  assert options.key in dataset.get_data_keys()
 
   if options.get_num_seqs:
     print("Get num seqs.")

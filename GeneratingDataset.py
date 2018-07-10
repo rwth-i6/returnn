@@ -8,6 +8,7 @@ from Log import log
 import numpy
 import re
 
+
 class GeneratingDataset(Dataset):
 
   _input_classes = None
@@ -98,7 +99,7 @@ class GeneratingDataset(Dataset):
     seqs = [self.generate_seq(seq_idx=seq_idx) for seq_idx in range(start, end)]
     if self.window > 1:
       for seq in seqs:
-        seq.features = self.sliding_window(seq.features)
+        seq.features["data"] = self.sliding_window(seq.features["data"])
     self._num_timesteps += sum([seq.num_frames for seq in seqs])
     self.added_data += seqs
 
@@ -127,13 +128,14 @@ class GeneratingDataset(Dataset):
     self.load_seqs(self.expected_load_seq_start, sorted_seq_idx + 1)
     return self._get_seq(sorted_seq_idx).num_frames
 
-  def get_input_data(self, sorted_seq_idx):
-    self._check_loaded_seq_idx(sorted_seq_idx)
-    return self._get_seq(sorted_seq_idx).features
+  def get_data(self, seq_idx, key):
+    return self._get_seq(seq_idx).features[key]
 
-  def get_targets(self, target, sorted_seq_idx):
-    self._check_loaded_seq_idx(sorted_seq_idx)
-    return self._get_seq(sorted_seq_idx).targets[target]
+  def get_input_data(self, seq_idx):
+    return self.get_data(seq_idx, "data")
+
+  def get_targets(self, target, seq_idx):
+    return self.get_data(seq_idx, target)
 
   def get_ctc_targets(self, sorted_seq_idx):
     self._check_loaded_seq_idx(sorted_seq_idx)
@@ -2229,8 +2231,8 @@ def demo():
     print("Seq idx %i:" % i)
     s = dataset.generate_seq(i)
     assert isinstance(s, DatasetSeq)
-    features = s.features
-    output_seq = s.targets["classes"]
+    features = s.features["data"]
+    output_seq = s.features["classes"]
     assert features.ndim == 2
     assert output_seq.ndim == 1
     input_seq = numpy.argmax(features, axis=1)

@@ -726,24 +726,28 @@ class DatasetSeq:
   def __init__(self, seq_idx, features, targets, ctc_targets=None, seq_tag=None):
     """
     :param int seq_idx: sorted seq idx in the Dataset
-    :param numpy.ndarray features: format 2d (time,feature) (float)
-    :param dict[str,numpy.ndarray] | numpy.ndarray | None targets: name -> format 1d (time) (idx of output-feature)
-    :param numpy.ndarray | None ctc_targets: format 1d (time) (idx of output-feature)
+    :param numpy.ndarray|dict[str,numpy.ndarray] features: format 2d (time,feature) (float)
+    :param dict[str,numpy.ndarray]|numpy.ndarray|None targets: name -> format 1d (time) (idx of output-feature)
+    :param numpy.ndarray|None ctc_targets: format 1d (time) (idx of output-feature)
     :param str seq_tag: sequence name / tag
     """
     assert isinstance(seq_idx, int)
-    assert isinstance(features, numpy.ndarray)
-    if targets is None:
-      targets = {}
-    if isinstance(targets, numpy.ndarray):  # old format
-      targets = {"classes": targets}
-    assert isinstance(targets, dict)
-    for target_values in targets.values():
-      assert isinstance(target_values, numpy.ndarray)
     self.seq_idx = seq_idx
     self.seq_tag = seq_tag or ("seq-%i" % seq_idx)
+    if not isinstance(features, dict):
+      assert isinstance(features, numpy.ndarray)
+      features = {"data": features}
+      if targets is None:
+        targets = {}
+      if isinstance(targets, numpy.ndarray):  # old format
+        targets = {"classes": targets}
+      assert isinstance(targets, dict)
+      features.update(targets)
+      targets = None
+    assert isinstance(features, dict) and targets is None
+    for v in features.values():
+      assert isinstance(v, numpy.ndarray)
     self.features = features
-    self.targets = targets
     self.ctc_targets = ctc_targets
 
   @property
@@ -751,18 +755,15 @@ class DatasetSeq:
     """
     :rtype: NumbersDict
     """
-    d = {"data": self.features.shape[0]}
-    d.update({k: (v.shape[0] if v.ndim >= 1 else 1)
-              for (k, v) in self.targets.items()})
+    d = {k: (v.shape[0] if v.ndim >= 1 else 1)
+         for (k, v) in self.features.items()}
     return NumbersDict(d)
 
   def get_data(self, key):
-    if key == "data":
-      return self.features
-    return self.targets[key]
+    return self.features[key]
 
   def get_data_keys(self):
-    return ["data"] + self.targets.keys()
+    return self.features.keys()
 
   def __repr__(self):
     return "<DataCache seq_idx=%i>" % self.seq_idx

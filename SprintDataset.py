@@ -240,7 +240,7 @@ class SprintDatasetBase(Dataset):
     if start == end: return
     with self.lock:
       super(SprintDatasetBase, self).load_seqs(start, end)
-      print("first features shape:", self._getSeq(start).features.shape, file=log.v5)
+      print("first features shape:", self._getSeq(start).features["data"].shape, file=log.v5)
 
   def _load_seqs(self, start, end):
     # Called by CRNN train thread.
@@ -398,12 +398,15 @@ class SprintDatasetBase(Dataset):
       self._waitForSeq(n)
       return n < self.next_seq_to_be_added
 
-  def get_target_list(self):
+  def get_data_keys(self):
     with self.lock:
       if not self.added_data:
         self._waitForSeq(0)
       assert self.added_data
-      return self.added_data[0].targets.keys()
+      return sorted(self.added_data[0].features.keys())
+
+  def get_target_list(self):
+    return self.get_data_keys()
 
   def set_complete_frac(self, frac):
     self._complete_frac = frac
@@ -426,15 +429,20 @@ class SprintDatasetBase(Dataset):
       self._waitForSeq(sorted_seq_idx)
       return self._getSeq(sorted_seq_idx).num_frames
 
+  def get_data(self, seq_idx, key):
+    with self.lock:
+      self._waitForSeq(seq_idx)
+      return self._getSeq(seq_idx).features[key]
+
   def get_input_data(self, sorted_seq_idx):
     with self.lock:
       self._waitForSeq(sorted_seq_idx)
-      return self._getSeq(sorted_seq_idx).features
+      return self._getSeq(sorted_seq_idx).features["data"]
 
   def get_targets(self, target, sorted_seq_idx):
     with self.lock:
       self._waitForSeq(sorted_seq_idx)
-      return self._getSeq(sorted_seq_idx).targets.get(target, None)
+      return self._getSeq(sorted_seq_idx).features.get(target, None)
 
   def get_ctc_targets(self, sorted_seq_idx):
     assert False, "No CTC targets."
@@ -920,10 +928,10 @@ def demo():
       dataset_seq = sprint_cache_dataset.get_dataset_seq_for_name(tag)
       data = dataset.get_data(seq_idx, "data")
       targets = dataset.get_data(seq_idx, "classes")
-      assert data.shape == dataset_seq.features.shape
-      assert targets.shape == dataset_seq.targets["classes"].shape
-      assert numpy.allclose(data, dataset_seq.features)
-      assert numpy.allclose(targets, dataset_seq.targets["classes"])
+      assert data.shape == dataset_seq.features["data"].shape
+      assert targets.shape == dataset_seq.features["classes"].shape
+      assert numpy.allclose(data, dataset_seq.features["data"])
+      assert numpy.allclose(targets, dataset_seq.features["classes"])
       seq_idx += 1
       progress_bar_with_time(dataset.get_complete_frac(seq_idx))
 
