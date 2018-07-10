@@ -357,7 +357,7 @@ class Runner(object):
 
   def run(self, report_prefix):
     """
-    :param str report_prefix: prefix for logging
+    :param str report_prefix: prefix for logging, e.g. "train"
     """
     sess = self.engine.tf_session
     if self.engine.config.has("tf_log_dir"):
