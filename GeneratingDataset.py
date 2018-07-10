@@ -1914,7 +1914,11 @@ class LibriSpeechCorpus(CachedDataset2):
     else:
       real_epoch = epoch
     if seq_list is not None:
-      self._seq_order = list(seq_list)
+      seqs = [i for i in range(len(self._reference_seq_order)) if self._get_tag(i) in seq_list]
+      seqs = {self._get_tag(i): i for i in seqs}
+      for seq_tag in seq_list:
+        assert seq_tag in seqs, "did not found all requested seqs. we have eg: %s" % (self._get_tag(0),)
+      self._seq_order = [seqs[seq_tag] for seq_tag in seq_list]
       self._num_seqs = len(self._seq_order)
     else:
       num_seqs = len(self._reference_seq_order)
@@ -1980,14 +1984,21 @@ class LibriSpeechCorpus(CachedDataset2):
   def get_corpus_seq_idx(self, seq_idx):
     return self._get_ref_seq_idx(seq_idx)
 
+  def _get_tag(self, ref_seq_idx):
+    """
+    :param int ref_seq_idx:
+    :rtype: str
+    """
+    subdir, speaker_id, chapter_id, seq_id = self._reference_seq_order[ref_seq_idx]
+    return "%(sd)s-%(sp)i-%(ch)i-%(i)04i" % {
+      "sd": subdir, "sp": speaker_id, "ch": chapter_id, "i": seq_id}
+
   def get_tag(self, seq_idx):
     """
     :param int seq_idx:
     :rtype: str
     """
-    subdir, speaker_id, chapter_id, seq_id = self._reference_seq_order[self._get_ref_seq_idx(seq_idx)]
-    return "%(sd)s-%(sp)i-%(ch)i-%(i)04i" % {
-      "sd": subdir, "sp": speaker_id, "ch": chapter_id, "i": seq_id}
+    return self._get_tag(self._get_ref_seq_idx(seq_idx))
 
   def _get_transcription(self, seq_idx):
     """
