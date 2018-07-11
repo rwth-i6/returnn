@@ -118,7 +118,6 @@ def t2t_score_file(filename):
     # Run encoders and append EOS symbol.
     targets_numpy = encoders["targets"].encode(targets) + [text_encoder.EOS_ID]
     inputs_numpy = encoders["inputs"].encode(inputs) + [text_encoder.EOS_ID]
-    print(inputs_numpy)
     # Prepare the feed.
     feed = {
         inputs_ph: [inputs_numpy],
@@ -130,7 +129,8 @@ def t2t_score_file(filename):
 
     tvars = tf.trainable_variables()
 
-    print('t2t inputs_ph:', inputs_ph)
+    print('t2t inputs_ph:', inputs_ph, inputs_numpy)
+    print('t2t targets_ph:', targets_ph, targets_numpy)
 
     return sess, tvars, inputs_ph, targets_ph, losses
 
@@ -227,12 +227,11 @@ returnn_network = {
   "encoder": {"class": "layer_norm", "from": ["enc_N"]},
 
   "output": {"class": "rec", "from": [], "unit": {
-    'output': {'class': 'choice', 'target': 'classes', 'beam_size': 12, 'from': ["output_prob"],
-               "initial_output": 0},
+    'output': {'class': 'choice', 'target': 'classes', 'beam_size': 12, 'from': ["output_prob"]},
     "end": {"class": "compare", "from": ["output"], "value": 0},
     'target_embed_raw': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'],
-                     "n_out": EncValueTotalDim, "initial_output": 0},  # feedback_input
-    "target_embed_with_pos": {"class": "positional_encoding", "add_to_input": True, "from": ["target_embed_raw"]},
+                     "n_out": EncValueTotalDim, "initial_output": 0},  # there seems to be no <s> in t2t, they seem to use just the zero vector
+    "target_embed_with_pos": {"class": "positional_encoding", "add_to_input": True, "from": ["prev:target_embed_raw"]},
     "target_embed": {"class": "dropout", "from": ["target_embed_with_pos"], "dropout": 0.1},
 
     ## trafo layer added later
@@ -253,7 +252,7 @@ returnn_network = {
 
 add_trafo_enc_layer(returnn_network, "source_embed", "enc_1")
 add_trafo_enc_layer(returnn_network, "enc_1", "enc_N")
-add_trafo_dec_layer(returnn_network, returnn_network["output"]["unit"], "prev:target_embed", "dec_1")
+add_trafo_dec_layer(returnn_network, returnn_network["output"]["unit"], "target_embed", "dec_1")
 add_trafo_dec_layer(returnn_network, returnn_network["output"]["unit"], "dec_1", "dec_N")
 
 
@@ -360,28 +359,17 @@ def main():
   #ret_feed = {ret_ph_train: True, ret_ph_data: [[11, 78, 42, 670, 2415, 2, 134, 2, 61, 522, 2, 847, 2, 3353, 15, 33, 2534, 1], [3,6]], ret_ph_data_dim: [18, 2],
   #            ret_ph_classes: [[4, 60, 18, 46, 26, 2937, 520, 2, 1317, 2, 10, 642, 4, 639, 1], [2,5]], ret_ph_classes_dim:[14, 2]}
 
-  ret_feed = {ret_ph_train: False, ret_ph_data: [[11, 78, 42]], ret_ph_data_dim: [3], ret_ph_classes: [[4, 60]], ret_ph_classes_dim: [2]}
-  t2t_feed = {t2t_inputs_ph: [[11, 78, 42]], t2t_targets_ph: [[4, 60]]}
+  #src = [[78, 1,0], [2, 134, 1]]; src_lens = [2,3]; trg = [[4, 60, 1], [639, 1, 0]]; trg_lens = [3,2]; ret_feed = {ret_ph_train: False, ret_ph_data: src, ret_ph_data_dim: src_lens, ret_ph_classes: trg, ret_ph_classes_dim: trg_lens}; t2t_feed = {t2t_inputs_ph: src, t2t_targets_ph: trg}
 
-  #ret_feed = {ret_ph_train: False, ret_ph_data: [[11, 78, 42], [3, 6,0]], ret_ph_data_dim: [3,2], ret_ph_classes: [[4, 60,0], [2, 5, 4]], ret_ph_classes_dim: [2,3]}
-  #t2t_feed = {t2t_inputs_ph: [[11, 78, 42], [3, 6,0]], t2t_targets_ph: [[4, 60,0], [2, 5, 4]]}
+  src = [[2, 134, 1]]; src_lens = [3]; trg = [[4, 60, 1]]; trg_lens = [3]; ret_feed = {ret_ph_train: False, ret_ph_data: src, ret_ph_data_dim: src_lens, ret_ph_classes: trg, ret_ph_classes_dim: trg_lens}; t2t_feed = {t2t_inputs_ph: src, t2t_targets_ph: trg}
 
 
   compare_acts(network, t2t_sess, ret_feed, t2t_feed, act_ret_to_t2t)
 
-#  ret_act = rnn.engine.tf_session.graph.get_tensor_by_name("output/rec/dec_N_ff_conv1/activation/Relu:0")
-#  print(rnn.engine.tf_session.run(ret_act, ret_feed))
 
-  #ret_feed = {ret_ph_train: False, ret_ph_data: [[11, 78, 42]], ret_ph_data_dim: [3], ret_ph_classes: [[4, 60]], ret_ph_classes_dim: [2]}
-  #ret_feed = {ret_ph_train: False, ret_ph_data: [[3, 6]], ret_ph_data_dim: [2], ret_ph_classes: [[2, 5, 4]], ret_ph_classes_dim: [3]}
-
-  #print(rnn.engine.tf_session.run(ret_layer.output.get_placeholder_as_batch_major(), ret_feed))
-
-
-  filtered = [op for op in t2t_sess.graph.get_operations() if '/encoder/layer_0/self_attention' in op.name and op.type == 'MatMul']
-  filtered = [op for op in rnn.engine.tf_session.graph.get_operations() if 'enc_1_self_att_/' in op.name and op.type == 'MatMul']
-#  filtered = [op for op in filtered_ if 'transformer/parallel_0_4/transformer/' in op.name]
-#  for op in filtered: print(op.name)
+  # filtered = [op for op in t2t_sess.graph.get_operations() if '/encoder/layer_0/self_attention' in op.name and op.type == 'MatMul']
+  # filtered = [op for op in rnn.engine.tf_session.graph.get_operations() if 'enc_1_self_att_/' in op.name and op.type == 'MatMul']
+  # for op in filtered: print(op.name)
 #
 
 
@@ -425,7 +413,7 @@ def compare_acts(network, t2t_sess, ret_feed, t2t_feed, act_ret_to_t2t):
     else:
       print(t2t_np[:,:,0:12])
 
-    print('allclose:', numpy.allclose(ret_np, t2t_np, rtol=0.01))
+    print('allclose:', numpy.allclose(ret_np, t2t_np, rtol=1.e-3, atol=1.e-6,))
 
     if 'enc_1_self_att_/dot/MatMul:0' in ret_lt_name:
       print("Calculating attention for first head manually:")
@@ -447,10 +435,13 @@ act_ret_to_t2t = {
     'enc_N_self_att_out' : 'transformer/parallel_0_4/transformer/transformer/body/encoder/layer_1/self_attention/layer_postprocess/add:0',
     'enc_1_self_att_/Softmax:0' : 'transformer/parallel_0_4/transformer/transformer/body/encoder/layer_0/self_attention/multihead_attention/dot_product_attention/Softmax:0',
     'encoder' : 'transformer/parallel_0_4/transformer/transformer/body/encoder/layer_prepostprocess/layer_norm/add_1:0',
+    'output/rec/dec_1_self_att_laynorm/add:0' :  'transformer/parallel_0_4/transformer/transformer/body/decoder/layer_0/self_attention/layer_prepostprocess/layer_norm/add_1:0',
     'output/rec/dec_1_self_att_out/Add:0' : 'transformer/parallel_0_4/transformer/transformer/body/decoder/layer_0/self_attention/layer_postprocess/add:0',
+    'output/rec/dec_N_self_att_out/Add:0' : 'transformer/parallel_0_4/transformer/transformer/body/decoder/layer_1/self_attention/layer_postprocess/add:0',
+    'output/rec/output_prob/linear/dot/MatMul:0' : 'transformer/parallel_0_4/transformer/transformer/symbol_modality_6115_256_2/softmax/MatMul:0',
   }
-#act_ret_to_t2t = { 'output/rec/dec_1_self_att_out/Add:0' : 'transformer/parallel_0_4/transformer/transformer/body/decoder/layer_0/self_attention/layer_postprocess/add:0', }
-#act_ret_to_t2t = { 'output/rec/dec_1_self_att_laynorm/add:0' :  'transformer/parallel_0_4/transformer/transformer/body/decoder/layer_0/self_attention/layer_prepostprocess/layer_norm/add_1:0', }
+
+#act_ret_to_t2t = { 'output/rec/dec_N_self_att_out/Add:0' : 'transformer/parallel_0_4/transformer/transformer/body/decoder/layer_1/self_attention/layer_postprocess/add:0', }
 #act_ret_to_t2t = {'enc_1_self_att_/dot/MatMul:0' : tuple ('transformer/parallel_0_4/transformer/transformer/body/encoder/layer_0/self_attention/multihead_attention/%s/Tensordot/MatMul:0' % t for t in ['q', 'k', 'v']),}
 
 
