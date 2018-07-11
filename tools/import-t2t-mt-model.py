@@ -219,7 +219,8 @@ def add_trafo_dec_layer(db, d, inp, output):
 # (also defined by num_inputs & num_outputs)
 returnn_network = {
   "source_embed_raw": {"class": "linear", "activation": None, "with_bias": False, "n_out": EncValueTotalDim},
-  "source_embed_with_pos": {"class": "positional_encoding", "add_to_input": True, "from": ["source_embed_raw"],  "dropout": 0.1},
+  "source_embed_weighted": {"class": "eval", "from": ["source_embed_raw"], "eval": "source(0) * (%i**0.5)" % EncValueTotalDim},
+  "source_embed_with_pos": {"class": "positional_encoding", "add_to_input": True, "from": ["source_embed_weighted"],  "dropout": 0.1},
   "source_embed": {"class": "copy", "from": ["source_embed_with_pos"]},
 
   ## trafo layer added later
@@ -231,7 +232,8 @@ returnn_network = {
     "end": {"class": "compare", "from": ["output"], "value": 0},
     'target_embed_raw': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'],
                      "n_out": EncValueTotalDim, "initial_output": 0},  # there seems to be no <s> in t2t, they seem to use just the zero vector
-    "target_embed_with_pos": {"class": "positional_encoding", "add_to_input": True, "from": ["prev:target_embed_raw"]},
+    "target_embed_weighted": {"class": "eval", "from": ["prev:target_embed_raw"], "eval": "source(0) * (%i**0.5)" % EncValueTotalDim},
+    "target_embed_with_pos": {"class": "positional_encoding", "add_to_input": True, "from": ["target_embed_weighted"]},
     "target_embed": {"class": "dropout", "from": ["target_embed_with_pos"], "dropout": 0.1},
 
     ## trafo layer added later
@@ -341,13 +343,12 @@ def main():
       if ret_var_name in ['output/rec/output_prob/W']: # ToDo: Something else to transpose?
         params_np = params_np.transpose()
       if ret_var_name in ["source_embed_raw/W", 'output/rec/target_embed_raw/W']:
-        params_np = params_np * (EncValueTotalDim**0.5) # ToDo: Only because of weight-tying?
-        print("loading %s with * (EncValueTotalDim**0.5)" % ret_var.name)
+        #params_np = params_np * (EncValueTotalDim**0.5) # ToDo: Only because of weight-tying?
+        print("loading %s with * (EncValueTotalDim**0.5) or doing it in config" % ret_var.name)
       ret_var.load(params_np, rnn.engine.tf_session)
       print("loaded %s" % ret_var.name)
     else:
       print("skpipped over %s" % ret_var.name)
-
 
 
   ret_ph_train = rnn.engine.tf_session.graph.get_tensor_by_name("global_tensor_train_flag/train_flag:0")
