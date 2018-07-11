@@ -88,29 +88,6 @@ Ndarray* Ndarray_Copy(const Ndarray* self) {
 // https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/rnn/kernels/blas_gemm.cc
 // https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/matmul_op.cc
 
-// https://github.com/tensorflow/tensorflow/issues/6602
-// TODO: Fixed now, check if it works, maybe we can remove this workaround.
-#define TF_issue_6602_workaround 1
-
-#if TF_issue_6602_workaround
-
-#if GOOGLE_CUDA && !CUDA
-// GOOGLE_CUDA && !CUDA: Make this only for the main namespace.
-// Via: https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/rnn/kernels/blas_gemm.cc
-namespace tensorflow {
-namespace functor {
-template <typename T>
-struct TensorCuBlasGemm {
-  void operator()(OpKernelContext* ctx, bool transa, bool transb, uint64 m,
-                  uint64 n, uint64 k, T alpha, const T* a, int lda, const T* b,
-                  int ldb, T beta, T* c, int ldc);
-};
-}
-}
-#endif  // GOOGLE_CUDA && !CUDA
-
-#else  // TF_issue_6602_workaround
-
 // http://stackoverflow.com/questions/41428756/own-tensorflow-op-with-cublassgemm
 #if GOOGLE_CUDA
 // or tensorflow/include/tensorflow/core/util/stream_executor_util.h ?
@@ -121,7 +98,7 @@ perftools::gputools::DeviceMemory<T> AsDeviceMemory(const T* cuda_memory) {
   return typed;
 }
 
-static perftools::gputools::blas::Transpose int get_transpose(char t) {
+static perftools::gputools::blas::Transpose get_transpose(char t) {
     switch(t) {
     case 'T':
         return perftools::gputools::blas::Transpose::kTranspose;
@@ -134,7 +111,6 @@ static perftools::gputools::blas::Transpose int get_transpose(char t) {
     }
 }
 #endif  // GOOGLE_CUDA
-#endif  // TF_issue_6602_workaround
 
 template<typename T>
 static void tf_cuda_sgemm(
@@ -149,15 +125,6 @@ static void tf_cuda_sgemm(
     T beta = *beta_;
 // https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/rnn/kernels/blas_gemm.cc
 #if GOOGLE_CUDA
-#if TF_issue_6602_workaround
-    functor::TensorCuBlasGemm<T>() (
-        context,
-        transa != 'N', transb != 'N',
-        m, n, k,
-        alpha, a, lda, b, ldb, beta, c, ldc
-    );
-
-#else  // TF_issue_6602_workaround
     auto a_ptr = AsDeviceMemory(a);
     auto b_ptr = AsDeviceMemory(b);
     auto c_ptr = AsDeviceMemory(c);
@@ -177,7 +144,6 @@ static void tf_cuda_sgemm(
                             lda, b_ptr, ldb, beta, &c_ptr, ldc)
              .ok();
     OP_REQUIRES(context, blas_launch_status, errors::Aborted("CuBlasGemm failed!"));
-#endif  // TF_issue_6602_workaround
 #else  // GOOGLE_CUDA
     context->SetStatus(errors::InvalidArgument("CuBlasGemm needs CUDA."));
 #endif  // GOOGLE_CUDA
