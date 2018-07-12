@@ -94,7 +94,7 @@ def main(argv):
   if args.output_file:
     with open(args.output_file, "w") as f:
       for fn in libs:
-        f.write(fn)
+        f.write(fn + '\n')
     print("Wrote lib list to file:", args.output_file)
 
 
