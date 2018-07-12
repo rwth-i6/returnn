@@ -492,13 +492,21 @@ def test_constant_with_shape():
   assert_equal(x.flatten().tolist(), [True] * 2 * 3)
 
 
-def naive_windowed_batch(source, window):
+def naive_windowed_batch(source, window, padding='same'):
   assert source.ndim == 3  # (time,batch,dim). not sure how to handle other cases
-  n_time = source.shape[0]
+  if padding == 'same':
+    n_time = source.shape[0]
+    w_right = window // 2
+    w_left = window - w_right - 1
+  elif padding == 'valid':
+    n_time = source.shape[0] - window + 1
+    w_right = 0
+    w_left = 0
+  else:
+    raise Exception("invalid padding %r" % padding)
+
   n_batch = source.shape[1]
   n_dim = source.shape[2]
-  w_right = window // 2
-  w_left = window - w_right - 1
   dtype = source.dtype
   pad_left = numpy.zeros((w_left, n_batch, n_dim), dtype=dtype)
   pad_right = numpy.zeros((w_right, n_batch, n_dim), dtype=dtype)
@@ -520,6 +528,23 @@ def test_windowed_nd_small():
   print(source)
   naive = naive_windowed_batch(source, window=window)
   real = windowed_nd(source, window_size=window, time_axis=0, new_window_axis=1).eval()
+  print("naive:")
+  print(naive)
+  print("real:")
+  print(real)
+  numpy.testing.assert_almost_equal(naive, real)
+
+
+def test_windowed_pad_valid_nd_small():
+  n_time = 10
+  n_batch = 1
+  n_dim = 1
+  window = 3
+  source = numpy.arange(1, n_time*n_batch*n_dim + 1).reshape(n_time, n_batch, n_dim)
+  print("source:")
+  print(source)
+  naive = naive_windowed_batch(source, window=window, padding='valid')
+  real = windowed_nd(source, window_size=window, time_axis=0, new_window_axis=1, padding='valid').eval()
   print("naive:")
   print(naive)
   print("real:")
