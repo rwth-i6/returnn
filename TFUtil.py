@@ -3468,7 +3468,7 @@ def windowed_nd(source, window_size, window_left=None, window_right=None,
     tiled_flat_pad_right = tf.concat([tiled_flat, tf.zeros((rem,), dtype=source.dtype)], axis=0)
     tiled_reshape_shift = tf.reshape(
       tiled_flat_pad_right,
-      tf.concat([(window_size, n_time + window_size),
+      tf.concat([(window_size, n_out_time + window_size),
                  source_shape[1:]], axis=0))  # add time frame, (window,n_time+window,...)
     final = tiled_reshape_shift
     if new_window_axis != 0:
