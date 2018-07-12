@@ -4738,7 +4738,7 @@ class OfficialResNetLayer(_ConcatInputLayer):
                **kwargs):
     import re
     from extern.official_tf_resnet.resnet_model import Model
-    super(OfficialResNet, self).__init__(**kwargs)
+    super(OfficialResNetLayer, self).__init__(**kwargs)
     self.model = Model(
       resnet_size=resnet_size, bottleneck=bottleneck,
       num_classes=num_classes, num_filters=num_filters, kernel_size=kernel_size,
