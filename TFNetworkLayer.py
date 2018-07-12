@@ -4716,6 +4716,57 @@ class ImageSummaryLayer(LayerBase):
     return super(ImageSummaryLayer, cls).get_out_data_from_opts(**kwargs)
 
 
+class OfficialResNetLayer(_ConcatInputLayer):
+  """
+  Wrapper around extern/official_tf_resnet.
+
+  This operates on NHWC (batch, height, width, channel) data, and returns ND, where D = num_classes.
+  If you have (batch, time, width, channel) as input,
+  you probably want to use :class:`WindowLayer` to get (batch,time,window,width,channel),
+  and then :class:`MergeDimsLayer` to get (batch*time,window,width,channel),
+  such that we would interpret window = height here.
+  Then the output is (batch*time,D),
+  and you can use :class:`SplitBatchTimeLayer` to get (batch,time,D).
+  As you get logits, you can then use :class:`ActivationLayer` with softmax.
+  """
+  layer_class = "official_resnet"
+
+  def __init__(self, resnet_size, bottleneck, num_classes, num_filters, kernel_size,
+               conv_stride, first_pool_size, first_pool_stride,
+               block_sizes, block_strides,
+               final_size, resnet_version=2, data_format=None,
+               **kwargs):
+    import re
+    from extern.official_tf_resnet.resnet_model import Model
+    super(OfficialResNet, self).__init__(**kwargs)
+    self.model = Model(
+      resnet_size=resnet_size, bottleneck=bottleneck,
+      num_classes=num_classes, num_filters=num_filters, kernel_size=kernel_size,
+      conv_stride=conv_stride, first_pool_size=first_pool_size, first_pool_stride=first_pool_stride,
+      block_sizes=block_sizes, block_strides=block_strides,
+      final_size=final_size,
+      resnet_version=resnet_version, data_format=data_format)
+    # Model assumes always NHWC input format.
+    inputs_data = self.input_data.copy_as_batch_major()
+    assert inputs_data.batch_ndim == 4 and inputs_data.batch_dim_axis == 0 and inputs_data.feature_dim_axis == 3
+    output = self.model.__call__(inputs=inputs_data.placeholder, training=self.network.train_flag)
+    # Output is logits with [<batch_size>, self.num_classes].
+    self.output.placeholder = output
+    # Very generic way to collect all created params.
+    # Also, see the usage of :func:`LayerBase.cls_layer_scope`, e.g. for initial vars.
+    scope_name_prefix = tf.get_variable_scope().name + "/"  # e.g. "layer1/"
+    params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=re.escape(scope_name_prefix))
+    for p in params:
+      if not p.name.startswith(scope_name_prefix):
+        continue
+      assert p.name.startswith(scope_name_prefix) and p.name.endswith(":0")
+      self.params[p.name[len(scope_name_prefix):-2]] = p
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, num_classes, **kwargs):
+    return Data(name="%s_output" % name, shape=(num_classes,), dtype="float32", batch_dim_axis=0, time_dim_axis=None)
+
+
 # ------------------------------------------------------------------------------
 
 class Loss(object):
