@@ -2225,8 +2225,12 @@ class WindowLayer(_ConcatInputLayer):
         window_size=window_size, window_left=window_left, window_right=window_right,
         padding=padding, time_axis=axis, new_window_axis=axis + 1)
     self.output.placeholder.set_shape(tf.TensorShape(self.output.batch_shape))
-    # Note: size_placeholder not correct with padding="valid" in time axis...
     self.output.size_placeholder = self.input_data.size_placeholder.copy()
+    axis_wo_b = self.output.get_batch_axis_excluding_batch(axis)
+    if axis_wo_b in self.output.size_placeholder:
+      self.output.size_placeholder[axis_wo_b] = ConvLayer.calc_out_dim(
+        in_dim=self.output.size_placeholder[axis_wo_b],
+        filter_size=window_size, stride=1, dilation_rate=1, padding=padding)
 
   @classmethod
   def get_out_data_from_opts(cls, window_size, axis="T", sources=(), **kwargs):
@@ -2917,13 +2921,13 @@ class ConvLayer(_ConcatInputLayer):
   @classmethod
   def calc_out_dim(cls, in_dim, filter_size, stride, padding, dilation_rate=1):
     """
-    :param int|tf.Tensor in_dim: dimension in some axis
+    :param int|tf.Tensor|T in_dim: dimension in some axis
     :param int filter_size: e.g. 2, for the corresponding axis
     :param int stride: e.g. 1, for the corresponding axis
     :param int dilation_rate: e.g. 1
     :param str padding: "valid" or "same"
     :return: the output dimension
-    :rtype: int
+    :rtype: T
     """
     def ceildiv(a, b):
       return -(-a // b)
