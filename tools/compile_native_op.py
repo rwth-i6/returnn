@@ -78,6 +78,11 @@ def main(argv):
     make_op(getattr(NativeOp, args.native_op), compiler_opts={"verbose": True})
 
   libs = []
+  if OpMaker.with_cuda and OpMaker.tf_blas_gemm_workaround:
+    print('CUDA BLAS lib:', OpMaker.cuda_blas_gemm_so_filename())
+    libs.append(OpMaker.cuda_blas_gemm_so_filename())
+  elif OpMaker.with_cuda is False:
+    print('No CUDA.')
 
   for compiler in NativeCodeCompiler.CollectedCompilers:
     assert isinstance(compiler, NativeCodeCompiler)

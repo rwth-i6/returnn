@@ -49,6 +49,8 @@ class OpMaker(object):
   https://www.tensorflow.org/versions/master/how_tos/adding_an_op/
   """
   with_cuda = None  # type: None|bool
+  # https://github.com/tensorflow/tensorflow/issues/6602
+  tf_blas_gemm_workaround = tuple(int(v) for v in tf.VERSION.split('.')) < (1, 5, 0)
   global_lock = RLock()
   mod_cache = {}  # cache_key -> mod
   op_cache = {}  # cache_key -> op
@@ -67,6 +69,35 @@ class OpMaker(object):
   def _cls_init(cls):
     if cls.with_cuda is None:
       cls.with_cuda = TFUtil.CudaEnv.get_instance().is_available()
+      if cls.with_cuda and cls.tf_blas_gemm_workaround:
+        cls._load_cuda_blas_gemm()
+
+  @classmethod
+  def cuda_blas_gemm_so_filename(cls):
+    from tensorflow.contrib.rnn.python.ops import lstm_ops
+    lstm_ops_so = "%s/_lstm_ops.so" % os.path.dirname(lstm_ops.__file__)
+    assert os.path.exists(lstm_ops_so)
+    return lstm_ops_so
+
+  @classmethod
+  def _load_cuda_blas_gemm(cls):
+    """
+    https://github.com/tensorflow/tensorflow/issues/6602
+    As a workaround for TF issue 6602, we link to some functions which are implemented in contrib.rnn.kernels.blas_gemm.
+    See NativeOp.cpp.
+    To make the symbols available in the namespace, load the library now.
+    This issue if fixed with tensorflow 1.5
+    """
+    if TFUtil.CudaEnv.verbose_find_cuda:
+      print("Load tf.contrib lstm_ops...")
+    lstm_ops_so = cls.cuda_blas_gemm_so_filename()
+    if TFUtil.CudaEnv.verbose_find_cuda:
+      print("Load tf.contrib lstm_ops lib:", lstm_ops_so)
+    # Maybe a bit hacky: Just load all symbols into the global namespace.
+    from ctypes import RTLD_GLOBAL, CDLL
+    CDLL(lstm_ops_so, mode=RTLD_GLOBAL)
+    if TFUtil.CudaEnv.verbose_find_cuda:
+      print("tf.contrib lstm_ops lib loaded.")
 
   @property
   def op_name(self):
@@ -263,8 +294,11 @@ class OpMaker(object):
       #include <cublas_v2.h>
       #include <math_constants.h>
 
-      #include "tensorflow/core/platform/stream_executor.h"
       """
+
+      if not self.tf_blas_gemm_workaround:
+        # https://github.com/tensorflow/tensorflow/issues/6602 ?
+        code_header += '#include "tensorflow/core/platform/stream_executor.h"\n'
     # sgemm
     code_header += """
     typedef float real;
