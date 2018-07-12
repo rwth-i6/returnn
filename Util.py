@@ -2049,7 +2049,7 @@ class NativeCodeCompiler(object):
                is_cpp=True, c_macro_defines=None, ld_flags=None,
                include_paths=(), include_deps=None,
                static_version_name=None, should_cleanup_old_all=True, should_cleanup_old_mydir=False,
-               verbose=False):
+               use_cxx11_abi=False, verbose=False):
     """
     :param str base_name: base name for the module, e.g. "zero_out"
     :param int|tuple[int] code_version: check for the cache whether to reuse
@@ -2087,6 +2087,7 @@ class NativeCodeCompiler(object):
     if should_cleanup_old_all:
       self._cleanup_old()
     self._should_cleanup_old_mydir = should_cleanup_old_mydir
+    self.use_cxx11_abi = use_cxx11_abi
     if self.verbose:
       print("%s: %r" % (self.__class__.__name__, self))
 
@@ -2257,7 +2258,8 @@ class NativeCodeCompiler(object):
       common_opts += ["-I", include_path]
     compiler_opts = ["-fPIC"]
     common_opts += self._transform_compiler_opts(compiler_opts)
-    common_opts += ["-D_GLIBCXX_USE_CXX11_ABI=0"]  # might be obsolete in the future
+    if not self.use_cxx11_abi:
+      common_opts += ["-D_GLIBCXX_USE_CXX11_ABI=0"]  # might be obsolete in the future
     common_opts += ["-D%s=%s" % item for item in sorted(self.c_macro_defines.items())]
     common_opts += ["-g"]
     opts = common_opts + [self._c_filename, "-o", self._so_filename]

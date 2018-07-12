@@ -2695,7 +2695,8 @@ class OpCodeCompiler(NativeCodeCompiler):
     if have_min_tf_version((1, 4)):
       # https://github.com/tensorflow/tensorflow/issues/13607
       ld_flags += ["-L%s" % tf.sysconfig.get_lib(), "-ltensorflow_framework"]
-    super(OpCodeCompiler, self).__init__(include_paths=include_paths, ld_flags=ld_flags, **kwargs)
+    use_cxx11_abi = hasattr(tf, 'CXX11_ABI_FLAG') and tf.CXX11_ABI_FLAG
+    super(OpCodeCompiler, self).__init__(include_paths=include_paths, ld_flags=ld_flags, use_cxx11_abi=use_cxx11_abi, **kwargs)
     self._tf_mod = None
 
   _relevant_info_keys = NativeCodeCompiler._relevant_info_keys + ("tf_version", "with_cuda", "nvcc_opts")
@@ -2750,7 +2751,8 @@ class TFNativeUtilCompiler(NativeCodeCompiler):
     if have_min_tf_version((1, 4)):
       # https://github.com/tensorflow/tensorflow/issues/13607
       ld_flags += ["-L%s" % tf.sysconfig.get_lib(), "-ltensorflow_framework"]
-    super(TFNativeUtilCompiler, self).__init__(include_paths=include_paths, ld_flags=ld_flags, **kwargs)
+    use_cxx11_abi = hasattr(tf, 'CXX11_ABI_FLAG') and tf.CXX11_ABI_FLAG
+    super(TFNativeUtilCompiler, self).__init__(include_paths=include_paths, ld_flags=ld_flags, use_cxx11_abi=use_cxx11_abi, **kwargs)
 
   _relevant_info_keys = NativeCodeCompiler._relevant_info_keys + ("tf_version",)
 
