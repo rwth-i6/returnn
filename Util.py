@@ -236,7 +236,7 @@ def get_tensorflow_version_tuple():
   """
   import tensorflow as tf
   import re
-  return tuple([int(re.sub('-rc[0-9]', '', s)) for s in tf.__version__.split(".")])
+  return tuple([int(re.sub('(-rc[0-9]|-dev[0-9]*)', '', s)) for s in tf.__version__.split(".")])
 
 def eval_shell_env(token):
   if token.startswith("$"):
