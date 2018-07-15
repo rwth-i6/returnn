@@ -16,8 +16,8 @@ class GeneratingDataset(Dataset):
 
   def __init__(self, input_dim, output_dim, num_seqs=float("inf"), fixed_random_seed=None, **kwargs):
     """
-    :param int input_dim:
-    :param int|dict[str,int|(int,int)|dict] output_dim:
+    :param int|None input_dim:
+    :param int|dict[str,int|(int,int)|dict] output_dim: if dict, can specify all data-keys
     :param int|float num_seqs:
     :param int fixed_random_seed:
     """
@@ -25,8 +25,8 @@ class GeneratingDataset(Dataset):
     assert self.shuffle_frames_of_nseqs == 0
 
     self.num_inputs = input_dim
-    output_dim = convert_data_dims(output_dim, leave_dict_as_is=True)
-    if "data" not in output_dim:
+    output_dim = convert_data_dims(output_dim, leave_dict_as_is=False)
+    if "data" not in output_dim and input_dim is not None:
       output_dim["data"] = [input_dim, 2]  # not sparse
     self.num_outputs = output_dim
     self.expected_load_seq_start = 0
@@ -531,6 +531,9 @@ class DummyDataset(GeneratingDataset):
 
 
 class StaticDataset(GeneratingDataset):
+  """
+  Provide all the data as a list of dict of numpy arrays.
+  """
 
   @classmethod
   def copy_from_dataset(cls, dataset, start_seq_idx=0, max_seqs=None):
@@ -560,58 +563,47 @@ class StaticDataset(GeneratingDataset):
   def __init__(self, data, target_list=None, output_dim=None, input_dim=None, **kwargs):
     """
     :param list[dict[str,numpy.ndarray]] data: list of seqs, each provide the data for each data-key
-    :param int input_dim:
+    :param int|None input_dim:
     :param int|dict[str,(int,int)|list[int]] output_dim:
     """
     assert len(data) > 0
     self.data = data
     num_seqs = len(data)
     first_data = data[0]
-    assert "data" in first_data  # input
-    if target_list is None:
-      target_list = []
-      for target in first_data.keys():
-        if target == "data": continue
-        target_list.append(target)
+    self.data_keys = sorted(first_data.keys())
+    if target_list is not None:
+      for key in target_list:
+        assert key in self.data_keys
     else:
-      for target in target_list:
-        assert target in first_data
+      target_list = self.data_keys
     self.target_list = target_list
 
     if output_dim is None:
+      assert input_dim is None
       output_dim = {}
-    output_dim = convert_data_dims(output_dim, leave_dict_as_is=True)
-
-    first_data_input = first_data["data"]
-    assert len(first_data_input.shape) <= 2  # (time[,dim])
-    if input_dim is None:
-      if "data" in output_dim:
-        if isinstance(output_dim["data"], (list, tuple)):
-          input_dim = output_dim["data"][0]
-        elif isinstance(output_dim["data"], dict):
-          input_dim = output_dim["data"]["dim"]
-        else:
-          raise TypeError(type(output_dim["data"]))
-      else:
-        input_dim = first_data_input.shape[1]
-
-    for target in target_list:
-      first_data_output = first_data[target]
+      for key, value in first_data.items():
+        output_dim[key] = [value.shape[-1] if value.ndim >= 2 else 0, len(value.shape)]
+    output_dim = convert_data_dims(output_dim, leave_dict_as_is=False)
+    if input_dim is not None and "data" not in output_dim:
+      assert "data" in self.data_keys
+      output_dim["data"] = [input_dim, 2]  # assume dense, not sparse
+    for key in self.data_keys:
+      first_data_output = first_data[key]
       assert len(first_data_output.shape) <= 2  # (time[,dim])
-      if target in output_dim:
-        assert output_dim[target][1] == len(first_data_output.shape)
-        if len(first_data_output.shape) >= 2:
-          assert output_dim[target][0] == first_data_output.shape[1]
-      else:
-        print("%r: Warning: Data-key %r not specified in output_dim (%r)." % (self, target, output_dim), file=log.v2)
+      assert key in output_dim
+      assert output_dim[key][1] == len(first_data_output.shape)
+      if len(first_data_output.shape) >= 2:
+        assert output_dim[key][0] == first_data_output.shape[-1]
+    assert sorted(output_dim.keys()) == self.data_keys, "output_dim does noth match the given data"
 
     super(StaticDataset, self).__init__(input_dim=input_dim, output_dim=output_dim, num_seqs=num_seqs, **kwargs)
 
   def generate_seq(self, seq_idx):
     data = self.data[seq_idx]
-    return DatasetSeq(seq_idx=seq_idx,
-                      features=data["data"],
-                      targets={target: data[target] for target in self.target_list})
+    return DatasetSeq(seq_idx=seq_idx, features={key: data[key] for key in self.data_keys})
+
+  def get_data_keys(self):
+    return self.data_keys
 
   def get_target_list(self):
     return self.target_list
