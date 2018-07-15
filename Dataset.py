@@ -289,7 +289,7 @@ class Dataset(object):
     # We expect that the following attributes are already set elsewhere, by a derived class.
     assert self.num_outputs
     if not self.num_inputs:
-      assert not self.window or self.window in (0, 1)
+      assert not self.window or self.window in (0, 1) or "data" in self.num_outputs
       return
     assert self.num_inputs > 0
     assert self.window > 0
@@ -457,7 +457,9 @@ class Dataset(object):
     :return: number of classes, no matter if sparse or not
     :rtype: int
     """
-    if key == "data":
+    if self.window > 1 and key == "data":
+      if "data" in self.num_outputs:
+        return self.num_outputs["data"][0] * self.window
       return self.num_inputs * self.window
     if key in self.num_outputs:
       return self.num_outputs[key][0]

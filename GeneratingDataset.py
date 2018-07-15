@@ -579,14 +579,14 @@ class StaticDataset(GeneratingDataset):
     self.target_list = target_list
 
     if output_dim is None:
-      assert input_dim is None
       output_dim = {}
-      for key, value in first_data.items():
-        output_dim[key] = [value.shape[-1] if value.ndim >= 2 else 0, len(value.shape)]
     output_dim = convert_data_dims(output_dim, leave_dict_as_is=False)
     if input_dim is not None and "data" not in output_dim:
       assert "data" in self.data_keys
       output_dim["data"] = [input_dim, 2]  # assume dense, not sparse
+    for key, value in first_data.items():
+      if key not in output_dim:
+        output_dim[key] = [value.shape[-1] if value.ndim >= 2 else 0, len(value.shape)]
     for key in self.data_keys:
       first_data_output = first_data[key]
       assert len(first_data_output.shape) <= 2  # (time[,dim])
