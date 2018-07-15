@@ -1306,7 +1306,23 @@ class Vocabulary(object):
   Used by :class:`BytePairEncoding`.
   """
 
-  _cache = {}  # filename -> vocab, labels
+  _cache = {}  # filename -> vocab dict, labels dict (see _parse_vocab)
+
+  @classmethod
+  def create_vocab(cls, **opts):
+    """
+    :param opts: kwargs for class
+    :rtype: Vocabulary|BytePairEncoding
+    """
+    opts = opts.copy()
+    clz = cls
+    if "class" in opts:
+      class_name = opts.pop("class")
+      clz = globals()[class_name]
+      assert issubclass(clz, Vocabulary), "class %r %r is not a subclass of %r" % (class_name, clz, cls)
+    elif "bpe_file" in opts:
+      clz = BytePairEncoding
+    return clz(**opts)
 
   def __init__(self, vocab_file, unknown_label="UNK", num_labels=None):
     """
@@ -1334,7 +1350,6 @@ class Vocabulary(object):
       assert self.unknown_label in self.vocab
       self.num_labels = len(self.labels)
     else:
-      d = None
       if filename[-4:] == ".pkl":
         d = pickle.load(open(filename, "rb"))
       else:
