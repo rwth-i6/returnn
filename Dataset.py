@@ -457,12 +457,12 @@ class Dataset(object):
     :return: number of classes, no matter if sparse or not
     :rtype: int
     """
-    if self.window > 1 and key == "data":
-      if "data" in self.num_outputs:
-        return self.num_outputs["data"][0] * self.window
-      return self.num_inputs * self.window
     if key in self.num_outputs:
+      # num_outputs should have the correct dimension, even for key "data" with self.window > 1.
       return self.num_outputs[key][0]
+    if self.window > 1 and key == "data":
+      assert self.num_inputs
+      return self.num_inputs * self.window
     return 1  # unknown
 
   def get_data_dtype(self, key):
