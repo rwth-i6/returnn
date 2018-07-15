@@ -1393,12 +1393,12 @@ class Vocabulary(object):
 
     return init_vocab_var
 
-  def get_seq(self, seq):
+  def get_seq(self, sentence):
     """
-    :param str sentence:
+    :param str sentence: assumed to be seq of vocab entries separated by whitespace
     :rtype: list[int]
     """
-    segments = seq.split()
+    segments = sentence.split()
     return self.get_seq_indices(segments)
 
   def get_seq_indices(self, seq):

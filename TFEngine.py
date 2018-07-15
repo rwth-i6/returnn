@@ -1854,10 +1854,17 @@ class Engine(object):
     print("Saved prior in %r in +log space." % output_file, file=log.v1)
 
   def web_server(self, port):
+    """
+    Starts a web-server with a simple API to forward data through the network
+    (or search if the flag is set).
+
+    :param int port: for the http server
+    :return:
+    """
     assert sys.version_info[0] >= 3, "only Python 3 supported"
+    # noinspection PyCompatibility
     from http.server import HTTPServer, BaseHTTPRequestHandler
-    import soundfile  # pip install pysoundfile
-    from GeneratingDataset import StaticDataset, BytePairEncoding, ExtractAudioFeatures
+    from GeneratingDataset import StaticDataset, Vocabulary, BytePairEncoding, ExtractAudioFeatures
 
     if not self.use_search_flag or not self.network or self.use_dynamic_train_flag:
       self.use_search_flag = True
@@ -1870,18 +1877,28 @@ class Engine(object):
       self.init_network_from_config(self.config)
 
     engine = self
-    bpe_opts = None
-    audio_opts = None
-    if isinstance(self.config.typed_dict.get("dev", None), dict):
+    soundfile = None
+    input_data = self.network.extern_data.get_default_input_data()
+    input_vocab = input_data.vocab
+    input_audio_feature_extractor = None
+    output_data = self.network.extern_data.get_default_target_data()
+    output_vocab = output_data.vocab
+    if isinstance(self.config.typed_dict.get("dev", None), dict) and self.config.typed_dict["dev"]["class"] == "LibriSpeechCorpus":
       # A bit hacky. Assumes that this is a dataset description for e.g. LibriSpeechCorpus.
+      import soundfile  # pip install pysoundfile
       bpe_opts = self.config.typed_dict["dev"]["bpe"]
       audio_opts = self.config.typed_dict["dev"]["audio"]
-    bpe = BytePairEncoding(**bpe_opts)
-    labels = {"classes": bpe.labels}
-    feature_extractor = ExtractAudioFeatures(**audio_opts)
-    num_inputs = feature_extractor.get_feature_dimension()
+      bpe = BytePairEncoding(**bpe_opts)
+      assert output_data.sparse
+      assert bpe.num_labels == output_data.dim
+      output_vocab = bpe
+      input_audio_feature_extractor = ExtractAudioFeatures(**audio_opts)
+    else:
+      assert isinstance(input_vocab, Vocabulary)
+    assert isinstance(output_vocab, Vocabulary)
     num_outputs = {
-      "data": [num_inputs, 2], "classes": [bpe.num_labels, 1]}
+      input_data.name: [input_data.dim, input_data.ndim],
+      output_data.name: [output_data.dim, output_data.ndim]}
 
     output_layer_name = self.config.value("search_output_layer", "output")
     output_layer = self.network.layers[output_layer_name]
@@ -1912,14 +1929,21 @@ class Engine(object):
         print("HTTP server, got POST.", file=log.v3)
         from io import BytesIO
         f = BytesIO(form["file"].file.read())
-        audio, sample_rate = soundfile.read(f)
-        print("audio len %i (%.1f secs), sample rate %i" % (len(audio), float(len(audio)) / sample_rate, sample_rate), file=log.v4)
-        if audio.ndim == 2:  # multiple channels:
-          audio = numpy.mean(audio, axis=1)  # mix together
-        features = feature_extractor.get_audio_features(audio=audio, sample_rate=sample_rate)
+        if input_audio_feature_extractor:
+          audio, sample_rate = soundfile.read(f)
+          print("audio len %i (%.1f secs), sample rate %i" % (len(audio), float(len(audio)) / sample_rate, sample_rate), file=log.v4)
+          if audio.ndim == 2:  # multiple channels:
+            audio = numpy.mean(audio, axis=1)  # mix together
+          features = input_audio_feature_extractor.get_audio_features(audio=audio, sample_rate=sample_rate)
+        else:
+          sentence = f.read().decode("utf8").strip()
+          print("input:", sentence, file=log.v4)
+          seq = input_vocab.get_seq(sentence)
+          print("input seq:", input_vocab.get_seq_labels(seq), file=log.v4)
+          features = numpy.array(seq, dtype="int32")
         targets = numpy.array([], dtype="int32")  # empty...
         dataset = StaticDataset(
-          data=[{"data": features, "classes": targets}], input_dim=num_inputs, output_dim=num_outputs)
+          data=[{input_data.name: features, output_data.name: targets}], output_dim=num_outputs)
         dataset.init_seq_order(epoch=1)
 
         self.send_response(200)
@@ -1939,13 +1963,13 @@ class Engine(object):
         if out_beam_size:
           self.wfile.write(b"[\n")
           for i in range(out_beam_size):
-            txt = " ".join(map(labels["classes"].__getitem__, output[i][:seq_lens[i]]))
+            txt = output_vocab.get_seq_labels(output[i][:seq_lens[i]])
             score = beam_scores[0][i]
             self.wfile.write(("(%r, %r)\n" % (score, txt)).encode("utf8"))
           self.wfile.write(b"]\n")
 
         else:
-          txt = " ".join(map(labels["classes"].__getitem__, output[0][:seq_lens[0]]))
+          txt = output_vocab.get_seq_labels(output[0][:seq_lens[0]])
           self.wfile(("%r\n" % txt).encode("utf8"))
 
     print("Simple search web server, listening on port %i." % port, file=log.v2)
