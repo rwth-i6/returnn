@@ -1929,8 +1929,13 @@ class Engine(object):
         print("HTTP server, got POST.", file=log.v3)
         from io import BytesIO
         f = BytesIO(form["file"].file.read())
+        print("input file size:", f.getbuffer().nbytes, "bytes", file=log.v4)
         if input_audio_feature_extractor:
-          audio, sample_rate = soundfile.read(f)
+          try:
+            audio, sample_rate = soundfile.read(f)
+          except Exception as exc:
+            print("Error reading audio (%s). Invalid format? Size %i, first few bytes %r." % (exc, f.getbuffer().nbytes, f.getbuffer().tobytes()[:20]), file=log.v2)
+            raise
           print("audio len %i (%.1f secs), sample rate %i" % (len(audio), float(len(audio)) / sample_rate, sample_rate), file=log.v4)
           if audio.ndim == 2:  # multiple channels:
             audio = numpy.mean(audio, axis=1)  # mix together
