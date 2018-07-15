@@ -27,7 +27,7 @@ class GeneratingDataset(Dataset):
     self.num_inputs = input_dim
     output_dim = convert_data_dims(output_dim, leave_dict_as_is=False)
     if "data" not in output_dim and input_dim is not None:
-      output_dim["data"] = [input_dim, 2]  # not sparse
+      output_dim["data"] = [input_dim * self.window, 2]  # not sparse
     self.num_outputs = output_dim
     self.expected_load_seq_start = 0
     self._num_seqs = num_seqs
