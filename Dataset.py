@@ -70,7 +70,7 @@ class Dataset(object):
     """
     self.name = name
     self.lock = RLock()  # Used when manipulating our data potentially from multiple threads.
-    self.num_inputs = 0
+    self.num_inputs = 0  # usually not used, but num_outputs instead, which is more generic
     self.num_outputs = None; " :type: dict[str,(int,int)] "  # tuple is num-classes, len(shape).
     self.window = window
     self.seq_ordering = seq_ordering  # "default", "sorted" or "random". See self.get_seq_order_for_epoch().
@@ -284,9 +284,14 @@ class Dataset(object):
     return False
 
   def _base_init(self):
+    self.nbytes = 0
+    self.zpad = None
     # We expect that the following attributes are already set elsewhere, by a derived class.
-    assert self.num_inputs > 0
     assert self.num_outputs
+    if not self.num_inputs:
+      assert not self.window or self.window in (0, 1) or "data" in self.num_outputs
+      return
+    assert self.num_inputs > 0
     assert self.window > 0
 
     if int(self.window) % 2 == 0:
@@ -452,10 +457,12 @@ class Dataset(object):
     :return: number of classes, no matter if sparse or not
     :rtype: int
     """
-    if key == "data":
-      return self.num_inputs * self.window
     if key in self.num_outputs:
+      # num_outputs should have the correct dimension, even for key "data" with self.window > 1.
       return self.num_outputs[key][0]
+    if self.window > 1 and key == "data":
+      assert self.num_inputs
+      return self.num_inputs * self.window
     return 1  # unknown
 
   def get_data_dtype(self, key):
@@ -723,7 +730,7 @@ class Dataset(object):
 
 
 class DatasetSeq:
-  def __init__(self, seq_idx, features, targets, ctc_targets=None, seq_tag=None):
+  def __init__(self, seq_idx, features, targets=None, ctc_targets=None, seq_tag=None):
     """
     :param int seq_idx: sorted seq idx in the Dataset
     :param numpy.ndarray|dict[str,numpy.ndarray] features: format 2d (time,feature) (float)
@@ -866,7 +873,9 @@ def convert_data_dims(data_dims, leave_dict_as_is=False):
   This converts what we called num_outputs originally,
   from the various formats which were allowed in the past
   (just an int, or dict[str,int]) into the format which we currently expect.
-  :param int | dict[str,int|(int,int)|dict] data_dims: what we called num_outputs originally
+  In all cases, the output will be a new copy of the dict.
+
+  :param int|dict[str,int|(int,int)|dict] data_dims: what we called num_outputs originally
   :param bool leave_dict_as_is:
   :rtype: dict[str,(int,int)|dict]
   :returns dict data-key -> (data-dimension, len(shape) (1 ==> sparse))
@@ -875,6 +884,7 @@ def convert_data_dims(data_dims, leave_dict_as_is=False):
   if isinstance(data_dims, int):
     data_dims = {"classes": data_dims}
   assert isinstance(data_dims, dict)
+  data_dims = data_dims.copy()
   for k, v in list(data_dims.items()):
     if isinstance(v, int):
       v = [v, 2 if k == "data" else 1]

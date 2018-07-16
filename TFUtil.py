@@ -152,7 +152,7 @@ class Data(object):
       if isinstance(vocab, str):
         vocab = Vocabulary(vocab)
       elif isinstance(vocab, dict):
-        vocab = Vocabulary(**vocab)
+        vocab = Vocabulary.create_vocab(**vocab)
       assert isinstance(vocab, Vocabulary)
       assert self.sparse, "%s should represent indices of %s" % (self, vocab)
       assert self.dim == vocab.num_labels, "%s dims do not match with vocab %s" % (self, vocab)
