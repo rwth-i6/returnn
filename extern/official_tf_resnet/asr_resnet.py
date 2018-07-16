@@ -94,15 +94,11 @@ def fixed_crop(inputs, crop_size, data_format):
   Returns:
     A tensor with the same format as the input with the cropped data.
   """
-  crop_beg = crop_size
-  crop_total = crop_size * 2
 
   if data_format == 'channels_first':
-    crop_shape = [inputs.get_shape()[0], inputs.get_shape()[1], inputs.get_shape()[2] - crop_total, inputs.get_shape()[3]]
-    croped_inputs = tf.slice(inputs, [0, 0, crop_beg, 0], crop_shape)
+    croped_inputs = inputs[:,:,crop_size:-crop_size,:]
   else:
-    crop_shape = [inputs.get_shape()[0], inputs.get_shape()[1] - crop_total, inputs.get_shape()[2], inputs.get_shape()[3]]
-    croped_inputs = tf.slice(inputs, [0, crop_beg, 0, 0], crop_shape)
+    croped_inputs = inputs[:, crop_size:-crop_size, :, :]
   return croped_inputs
 
 
@@ -382,18 +378,16 @@ def block_layer(inputs, filters, bottleneck, block_fn, blocks, strides,
 class Model(object):
   """Base class for building the Resnet Model."""
 
-  def __init__(self, resnet_size, bottleneck, num_classes, num_filters,
-               kernel_size,
-               conv_stride, first_pool_size, first_pool_stride,
+  def __init__(self, resnet_size, bottleneck, num_filters,
+               kernel_size, conv_stride, first_pool_size, first_pool_stride,
                block_sizes, block_strides,
-               final_size, resnet_version=DEFAULT_VERSION, data_format=None,
+               resnet_version=DEFAULT_VERSION, data_format=None,
                dtype=DEFAULT_DTYPE):
     """Creates a model for classifying an image.
 
     Args:
       resnet_size: A single integer for the size of the ResNet model.
       bottleneck: Use regular blocks or bottleneck blocks.
-      num_classes: The number of classes used as labels.
       num_filters: The number of filters to use for the first block layer
         of the model. This number is then doubled for each subsequent block
         layer.
@@ -408,7 +402,6 @@ class Model(object):
         i-th set.
       block_strides: List of integers representing the desired stride size for
         each of the sets of block layers. Should be same length as block_sizes.
-      final_size: The expected size of the model after the second pooling.
       resnet_version: Integer representing which version of the ResNet network
         to use. See README for details. Valid values: [1, 2]
       data_format: Input format ('channels_last', 'channels_first', or None).
@@ -446,7 +439,6 @@ class Model(object):
       raise ValueError('dtype must be one of: {}'.format(ALLOWED_TYPES))
 
     self.data_format = data_format
-    self.num_classes = num_classes
     self.num_filters = num_filters
     self.kernel_size = kernel_size
     self.conv_stride = conv_stride
@@ -454,7 +446,6 @@ class Model(object):
     self.first_pool_stride = first_pool_stride
     self.block_sizes = block_sizes
     self.block_strides = block_strides
-    self.final_size = final_size
     self.dtype = dtype
     self.pre_activation = resnet_version == 2
 
@@ -521,7 +512,8 @@ class Model(object):
         training the classifier.
 
     Returns:
-      A logits Tensor with shape [<batch_size>, self.num_classes].
+      A logits Tensor with shape [<batch_size>, <time_dim - crop>, num_filters * (2**3)].
+                              or [<batch_size>, <time_dim - crop>, num_filters * (2**5)] if bottleneck = True
     """
 
     with self._model_variable_scope():
@@ -531,14 +523,10 @@ class Model(object):
         # https://www.tensorflow.org/performance/performance_guide#data_formats
         inputs = tf.transpose(inputs, [0, 3, 1, 2])
 
-      print(inputs)
-
       inputs = conv2d_fixed_padding(
           inputs=inputs, filters=self.num_filters, kernel_size=self.kernel_size,
           strides=self.conv_stride, data_format=self.data_format)
       inputs = tf.identity(inputs, 'initial_conv')
-
-      print(inputs)
 
       # We do not include batch normalization or activation functions in V2
       # for the initial conv1 because the first ResNet unit will perform these
@@ -548,16 +536,13 @@ class Model(object):
         inputs = batch_norm(inputs, training, self.data_format)
         inputs = tf.nn.relu(inputs)
 
-      print(inputs)
-
       if self.first_pool_size:
         inputs = tf.layers.max_pooling2d(
             inputs=inputs, pool_size=(self.first_pool_size, 1),
-            strides=self.first_pool_stride, padding='VALID',
+            strides=self.first_pool_stride, padding='SAME',
             data_format=self.data_format)
         inputs = tf.identity(inputs, 'initial_max_pool')
 
-      print(inputs)
 
       for i, num_blocks in enumerate(self.block_sizes):
         num_filters = self.num_filters * (2**i)
@@ -567,35 +552,26 @@ class Model(object):
             strides=self.block_strides[i], training=training,
             name='block_layer{}'.format(i + 1), data_format=self.data_format)
 
-        print(inputs)
       # Only apply the BN and ReLU for model that does pre_activation in each
       # building/bottleneck block, eg resnet V2.
       if self.pre_activation:
         inputs = batch_norm(inputs, training, self.data_format)
         inputs = tf.nn.relu(inputs)
 
-      inputs = tf.layers.max_pooling2d(
-          inputs=inputs, pool_size=(self.first_pool_size, 1),
-          strides=1, padding='VALID',
-          data_format=self.data_format)
-      inputs = tf.identity(inputs, 'final_max_pool')
-
-      print(inputs)
-
       # The current top layer has shape
       # `batch_size x pool_size x pool_size x final_size`.
       # ResNet does an Average Pooling layer over pool_size,
       # but that is the same as doing a reduce_mean. We do a reduce_mean
       # here because it performs better than AveragePooling2D.
-      axes = [2, 3] if self.data_format == 'channels_first' else [1, 2]
+      axes = [3] if self.data_format == 'channels_first' else [2]
       inputs = tf.reduce_mean(inputs, axes, keep_dims=True)
-      inputs = tf.identity(inputs, 'final_reduce_mean')
 
-      print(inputs)
-
-      inputs = tf.reshape(inputs, [-1, self.final_size])
+      inputs = tf.squeeze(inputs)
       #inputs = tf.layers.dense(inputs=inputs, units=self.num_classes)
+      #inputs = tf.reshape(inputs, [-1, num_filters])
+
       inputs = tf.identity(inputs, 'final_dense')
-      print(inputs)
+
+      # print(inputs)
 
       return inputs

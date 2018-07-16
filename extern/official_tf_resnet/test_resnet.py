@@ -201,7 +201,7 @@ def resnet_model_fn(features, labels, mode, model_class,
       predictions=predictions,
       loss=loss,
       train_op=train_op,
-      eval_metric_ops=metrics), model
+      eval_metric_ops=metrics), model, logits
 
 
 class Cifar10Model(resnet_model.Model):
@@ -230,7 +230,7 @@ class Cifar10Model(resnet_model.Model):
 
     #num_blocks = (resnet_size - 2) // 6
     num_blocks = 3
-    bottleneck = True
+    bottleneck = False
     num_filters = 64
 
 
@@ -239,7 +239,6 @@ class Cifar10Model(resnet_model.Model):
     super(Cifar10Model, self).__init__(
         resnet_size=resnet_size,
         bottleneck=bottleneck,
-        num_classes=num_classes,
         num_filters=num_filters,
         kernel_size=5,
         conv_stride=2,
@@ -247,7 +246,6 @@ class Cifar10Model(resnet_model.Model):
         first_pool_stride=1,
         block_sizes=[num_blocks] * 4,
         block_strides=[1, 2, 2, 2],
-        final_size=final_size,
         resnet_version=resnet_version,
         data_format=data_format,
         dtype=dtype
@@ -307,7 +305,7 @@ def cifar10_model_fn(features, labels, mode, params):
 sess = tf.Session()
 
 feat = tf.zeros([_BATCH_SIZE, _DEFAULT_IMAGE_BYTES])
-lbl = tf.zeros([_BATCH_SIZE], tf.int32)
+lbl = tf.zeros([_BATCH_SIZE * 75], tf.int32)
 mode = tf.estimator.ModeKeys.TRAIN
 params = {
   'resnet_size': 32,  # 32
@@ -317,7 +315,7 @@ params = {
   'loss_scale': 1,
   'dtype': tf.float32
 }
-ret, model = cifar10_model_fn(feat, lbl, mode, params)
+ret, model, logits = cifar10_model_fn(feat, lbl, mode, params)
 
 tf.summary.scalar('loss', ret.loss)
 merged = tf.summary.merge_all()
