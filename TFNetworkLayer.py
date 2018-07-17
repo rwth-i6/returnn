@@ -3110,18 +3110,38 @@ class ReduceLayer(_ConcatInputLayer):
       f = tf.reduce_mean
     else:
       raise Exception("invalid mode %r" % mode)
-    if x.time_dim_axis in axes:
-      assert not keep_dims, "not yet implemented otherwise"
-      assert x.batch_dim_axis in axes, "not yet implemented otherwise"
-      axes = [a if (a < x.time_dim_axis) else (a - 1)
-              for a in axes if a != x.time_dim_axis]
-      x = x.copy_time_flattened()
-    y = f(x.placeholder, axis=axes, keep_dims=keep_dims)
+    x_ = x.placeholder
+    # Check if we should ignore some frames, e.g. via masking.
+    if f is tf.reduce_sum:
+      # For sum, the fastest and simplest way is masking.
+      for axis in axes:
+        if axis == x.batch_dim_axis:
+          continue
+        axis_wo_b = x.get_batch_axis_excluding_batch(axis)
+        if axis_wo_b not in x.size_placeholder:
+          continue
+        assert axis == x.time_dim_axis
+        mask = x.get_sequence_mask()  # e.g. (B,T)
+        from TFUtil import expand_multiple_dims
+        mask = expand_multiple_dims(
+          mask, [i for i in range(x.batch_ndim) if i not in [x.batch_dim_axis, axis]])  # e.g. (B,1,T) with axis=-1
+        mask = tf.logical_and(mask, tf.ones_like(x_, dtype=mask.dtype))
+        x_ = tf.where(mask, x_, tf.zeros_like(x.placeholder), "x_masked_axis_%i" % axis)
+    else:  # not sum, e.g. mean or max
+      # Flattening.
+      if x.time_dim_axis in axes:
+        assert not keep_dims, "not yet implemented otherwise"
+        assert x.batch_dim_axis in axes, "not yet implemented otherwise"
+        axes = [a if (a < x.time_dim_axis) else (a - 1)
+                for a in axes if a != x.time_dim_axis]
+        x = x.copy_time_flattened()
+        x_ = x.placeholder
+    y = f(x_, axis=axes, keep_dims=keep_dims)
     y_dyn_sizes = x.size_placeholder.copy()
     if keep_dims:
       for i in axes:
         if i in y_dyn_sizes:
-          y_dyn_sizes[i] = 1
+          del y_dyn_sizes[i]
     else:
       for i in reversed(sorted(axes)):
         if i in y_dyn_sizes:
