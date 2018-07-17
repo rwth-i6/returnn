@@ -4737,14 +4737,14 @@ class OfficialResNetLayer(_ConcatInputLayer):
 
   def __init__(self, resnet_size, bottleneck, num_classes, num_filters, kernel_size,
                conv_stride, first_pool_size, first_pool_stride,
-               block_sizes, block_strides,
+               block_sizes, block_strides, conv_time_dim,
                final_size, resnet_version=2, data_format=None,
                **kwargs):
     import re
     from extern.official_tf_resnet.resnet_model import Model
     super(OfficialResNetLayer, self).__init__(**kwargs)
     self.model = Model(
-      resnet_size=resnet_size, bottleneck=bottleneck,
+      resnet_size=resnet_size, bottleneck=bottleneck, conv_time_dim=conv_time_dim,
       num_classes=num_classes, num_filters=num_filters, kernel_size=kernel_size,
       conv_stride=conv_stride, first_pool_size=first_pool_size, first_pool_stride=first_pool_stride,
       block_sizes=block_sizes, block_strides=block_strides,
@@ -4766,9 +4766,36 @@ class OfficialResNetLayer(_ConcatInputLayer):
       assert p.name.startswith(scope_name_prefix) and p.name.endswith(":0")
       self.params[p.name[len(scope_name_prefix):-2]] = p
 
+    if bottleneck:
+      crop = 28
+    else:
+      crop = 52
+
+    self.output.size_placeholder = self.input_data.size_placeholder.copy()
+    if conv_time_dim:
+      self.output.size_placeholder[0] -= crop
+
+
+
   @classmethod
-  def get_out_data_from_opts(cls, name, num_classes, **kwargs):
-    return Data(name="%s_output" % name, shape=(num_classes,), dtype="float32", batch_dim_axis=0, time_dim_axis=None)
+  def get_out_data_from_opts(cls, name, bottleneck, conv_time_dim, num_filters, block_sizes=[3, 3, 3, 3], sources=(), **kwargs):
+
+    if bottleneck:
+      out_size = num_filters * (4 * 2 ** (len(block_sizes) - 1))
+    else:
+      out_size = num_filters * (2 ** (len(block_sizes) - 1))
+
+    if conv_time_dim:
+      data = get_concat_sources_data_template(sources)
+      data.name = "%s_output" % name
+      data.time_dim_axis = 1
+      data.dim = out_size
+
+      data.shape = data.shape[:-2] + (out_size,)
+    else:
+      data = Data(name="%s_output" % name, shape=(out_size,), dtype="float32", batch_dim_axis=0, time_dim_axis=None)
+
+    return data
 
 
 # ------------------------------------------------------------------------------
