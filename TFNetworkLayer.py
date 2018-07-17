@@ -4800,11 +4800,13 @@ class Loss(object):
   class_name = None  # type: str  # used by get_loss_class()
   recurrent = False  # if this is a frame-wise criteria, this will be False
 
-  def __init__(self, base_network):
+  def __init__(self, base_network, use_flatten_frames=True):
     """
     :param TFNetwork.TFNetwork base_network:
+    :param bool use_flatten_frames:
     """
     self.base_network = base_network
+    self.use_flatten_frames = use_flatten_frames
     self.layer = None  # type: LayerBase|None
     # All are initialized in self.init().
     self.output = None  # type: Data
@@ -4819,6 +4821,27 @@ class Loss(object):
     # Maybe make configurable. For now, same as in our Theano behavior.
     self.reduce_func = tf.reduce_sum  # or tf.reduce_mean
     self.loss_norm_factor = None  # type: tf.Tensor
+
+  def reduce_func(self, loss):
+    """
+    Reduces the frames. Currently the sum, and we do averaging later.
+    We might change this logic at some point.
+    Also, some code overwrites this function externally, e.g. with TFUtil.identity, to not do reducing.
+
+    :param tf.Tensor loss: e.g. (batch,time), or (time_flat,), or (batch,time,dim), etc
+    :rtype: tf.Tensor
+    """
+    if (not self.use_flatten_frames
+        and not self.recurrent
+        and self.output.have_time_axis()):
+      # We expect to get (batch*time) or (time*batch) in the first dimension of the loss and the output.
+      assert {self.output.batch_dim_axis, self.output.time_dim_axis} == {0, 1}
+      if loss.get_shape().ndims > 1:
+        loss = tf.reduce_sum(loss, axis=list(range(1, loss.get_shape().ndims)))  # reduce remaining dims already
+      mask = self.output.get_sequence_mask()  # e.g. (B,T)
+      loss = tf.reshape(loss, tf.shape(mask))
+      loss = tf.where(mask, loss, tf.zeros_like(loss), "loss_masked")
+    return tf.reduce_sum(loss)
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
@@ -4839,7 +4862,14 @@ class Loss(object):
     :param Data target: reference target from dataset
     :param LayerBase|None layer:
     """
-    from TFUtil import flatten_with_seq_len_mask
+    def flatten_or_merge(x, seq_lens, time_major):
+      if self.use_flatten_frames:
+        from TFUtil import flatten_with_seq_len_mask
+        return flatten_with_seq_len_mask(x, seq_lens, time_major=time_major)
+      x_shape = tf.shape(x)
+      x_shape = [x_shape[i] for i in range(x.get_shape().ndims)]
+      return tf.reshape(x, [x_shape[0] * x_shape[1]] + x_shape[2:], name="merge_batch_time")
+
     with tf.name_scope("loss_init"):
       self.layer = layer
       if target:
@@ -4863,14 +4893,14 @@ class Loss(object):
         time_and_batch_dims = (self.output.time_dim_axis, self.output.batch_dim_axis)
         assert time_and_batch_dims in [(0, 1), (1, 0)], "output time-batch-dim unexpected: %s" % self.output
         if output_with_activation and output_with_activation.act_func is tf.nn.softmax:
-          self.output_before_softmax_flat = flatten_with_seq_len_mask(output_with_activation.x, self.output_seq_lens, time_major=output.is_time_major)
+          self.output_before_softmax_flat = flatten_or_merge(output_with_activation.x, self.output_seq_lens, time_major=output.is_time_major)
         else:
-          self.output_flat = flatten_with_seq_len_mask(output.placeholder, self.output_seq_lens, time_major=output.is_time_major)
+          self.output_flat = flatten_or_merge(output.placeholder, self.output_seq_lens, time_major=output.is_time_major)
           self.output_flat.set_shape(tf.TensorShape(output.shape))
         if target:
           assert target.have_time_axis()
           self.target_seq_lens = target.get_sequence_lengths()
-          self.target_flat = flatten_with_seq_len_mask(target.placeholder, self.target_seq_lens, time_major=target.is_time_major)
+          self.target_flat = flatten_or_merge(target.placeholder, self.target_seq_lens, time_major=target.is_time_major)
           self.loss_norm_factor = 1.0 / tf.cast(tf.reduce_sum(self.target_seq_lens), tf.float32)
         else:
           self.loss_norm_factor = 1.0 / tf.cast(tf.reduce_sum(self.output_seq_lens), tf.float32)
