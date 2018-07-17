@@ -1407,6 +1407,14 @@ def test_tensor_array_like():
   assert_equal(tensor_array_is_dynamic_size(ta1), True)
 
 
+def test_tensor_array_like_elem_shape():
+  ta1 = tf.TensorArray(tf.float32, size=0, dynamic_size=True, element_shape=tf.TensorShape([None, 13]))
+  ta2 = tensor_array_like(ta1)
+  assert_equal(tensor_array_is_dynamic_size(ta2), True)
+  assert_equal(tensor_array_element_shape(ta1).as_list(), [None, 13])
+  assert_equal(tensor_array_element_shape(ta2).as_list(), [None, 13])
+
+
 def test_copy_with_new_split_axes():
   old_values = numpy.arange((3+5)*5*4).reshape((3+5),5*4)
   new_values = copy_with_new_split_axes([[3,5],[5]*4], [[5,7],[7]*4], old_values)

@@ -5335,6 +5335,21 @@ def tensor_array_is_clear_after_read(ta):
   return ta.handle.op.get_attr("clear_after_read")
 
 
+def tensor_array_element_shape(ta):
+  """
+  :param tf.TensorArray ta:
+  :rtype: tf.TensorShape
+  """
+  # If it is know, _element_shape is a list with 1 entry, the element shape as tf.TensorShape.
+  # Otherwise it is an empty list.
+  assert isinstance(ta._element_shape, list)
+  assert len(ta._element_shape) <= 1
+  if ta._element_shape:
+    assert isinstance(ta._element_shape[0], tf.TensorShape)
+    return ta._element_shape[0]
+  return tf.TensorShape(None)
+
+
 def tensor_array_like(ta, **kwargs):
   """
   :param tf.TensorArray ta:
@@ -5345,7 +5360,7 @@ def tensor_array_like(ta, **kwargs):
   return tf.TensorArray(
     dtype=ta.dtype, size=ta.size(), dynamic_size=tensor_array_is_dynamic_size(ta),
     clear_after_read=tensor_array_is_clear_after_read(ta),
-    infer_shape=ta._infer_shape, element_shape=ta._element_shape,
+    infer_shape=ta._infer_shape, element_shape=tensor_array_element_shape(ta),
     **kwargs)
 
 
