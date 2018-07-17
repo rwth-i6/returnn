@@ -1321,6 +1321,9 @@ class _SubnetworkRecCell(object):
             else:
               assert False, "return_error or return_loss"
             assert isinstance(value, tf.Tensor)
+            assert value.get_shape().ndims >= 1
+            if value.get_shape().ndims > 1:  # e.g. BinaryCrossEntropy
+              value = tf.reduce_sum(value, axis=list(range(1, value.get_shape().ndims)))
             value.set_shape(tf.TensorShape((None,)))  # (batch,)
             return value
 
