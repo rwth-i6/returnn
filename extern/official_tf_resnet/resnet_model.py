@@ -54,7 +54,7 @@ def batch_norm(inputs, training, data_format):
       scale=True, training=training, fused=True)
 
 
-def fixed_padding(inputs, kernel_size, data_format):
+def fixed_padding(inputs, kernel_size, data_format, conv_time_dim):
   """Pads the input along the spatial dimensions independently of input size.
 
   Args:
@@ -69,28 +69,59 @@ def fixed_padding(inputs, kernel_size, data_format):
     (if kernel_size == 1) or padded (if kernel_size > 1).
   """
   pad_total = kernel_size - 1
-  pad_beg = pad_total // 2
-  pad_end = pad_total - pad_beg
+  feature_pad_beg = pad_total // 2
+  feature_pad_end = pad_total - feature_pad_beg
+
+  if conv_time_dim:
+    time_pad_beg = 0
+    time_pad_end = 0
+  else:
+    time_pad_beg = feature_pad_beg
+    time_pad_end = feature_pad_end
 
   if data_format == 'channels_first':
     padded_inputs = tf.pad(inputs, [[0, 0], [0, 0],
-                                    [pad_beg, pad_end], [pad_beg, pad_end]])
+                                    [time_pad_beg, time_pad_end], [feature_pad_beg, feature_pad_end]])
   else:
-    padded_inputs = tf.pad(inputs, [[0, 0], [pad_beg, pad_end],
-                                    [pad_beg, pad_end], [0, 0]])
+    padded_inputs = tf.pad(inputs, [[0, 0], [time_pad_beg, time_pad_end],
+                                    [feature_pad_end, feature_pad_end], [0, 0]])
   return padded_inputs
 
 
-def conv2d_fixed_padding(inputs, filters, kernel_size, strides, data_format):
+def fixed_crop(inputs, crop_size, data_format):
+  """crops the input along the first spatial dimension independently of input size.
+
+  Args:
+    inputs: A tensor of size [batch, channels, height_in, width_in] or
+      [batch, height_in, width_in, channels] depending on data_format.
+    crop_size: The number of cropped elements from one side.
+                 Should be a positive integer.
+    data_format: The input format ('channels_last' or 'channels_first').
+
+  Returns:
+    A tensor with the same format as the input with the cropped data.
+  """
+
+  if data_format == 'channels_first':
+    croped_inputs = inputs[:,:,crop_size:-crop_size,:]
+  else:
+    croped_inputs = inputs[:, crop_size:-crop_size, :, :]
+  return croped_inputs
+
+
+def conv2d_fixed_padding(inputs, filters, kernel_size, strides, data_format, conv_time_dim):
   """Strided 2-D convolution with explicit padding."""
   # The padding is consistent and is based only on `kernel_size`, not on the
   # dimensions of `inputs` (as opposed to using `tf.layers.conv2d` alone).
-  if strides > 1:
-    inputs = fixed_padding(inputs, kernel_size, data_format)
+  if strides > 1 or conv_time_dim:
+    inputs = fixed_padding(inputs, kernel_size, data_format, conv_time_dim)
+
+  padding = 'VALID' if strides > 1 or conv_time_dim else 'SAME'
+  strides = (1, strides) if conv_time_dim else strides
 
   return tf.layers.conv2d(
       inputs=inputs, filters=filters, kernel_size=kernel_size, strides=strides,
-      padding=('SAME' if strides == 1 else 'VALID'), use_bias=False,
+      padding=padding, use_bias=False,
       kernel_initializer=tf.variance_scaling_initializer(),
       data_format=data_format)
 
@@ -99,7 +130,7 @@ def conv2d_fixed_padding(inputs, filters, kernel_size, strides, data_format):
 # ResNet block definitions.
 ################################################################################
 def _building_block_v1(inputs, filters, training, projection_shortcut, strides,
-                       data_format):
+                       data_format, conv_time_dim):
   """A single block for ResNet v1, without a bottleneck.
 
   Convolution then batch normalization then ReLU as described by:
@@ -129,15 +160,18 @@ def _building_block_v1(inputs, filters, training, projection_shortcut, strides,
     shortcut = batch_norm(inputs=shortcut, training=training,
                           data_format=data_format)
 
+  if conv_time_dim:
+    shortcut = fixed_crop(shortcut, crop_size=2, data_format=data_format)
+
   inputs = conv2d_fixed_padding(
       inputs=inputs, filters=filters, kernel_size=3, strides=strides,
-      data_format=data_format)
+      data_format=data_format, conv_time_dim=conv_time_dim)
   inputs = batch_norm(inputs, training, data_format)
   inputs = tf.nn.relu(inputs)
 
   inputs = conv2d_fixed_padding(
       inputs=inputs, filters=filters, kernel_size=3, strides=1,
-      data_format=data_format)
+      data_format=data_format, conv_time_dim=conv_time_dim)
   inputs = batch_norm(inputs, training, data_format)
   inputs += shortcut
   inputs = tf.nn.relu(inputs)
@@ -146,7 +180,7 @@ def _building_block_v1(inputs, filters, training, projection_shortcut, strides,
 
 
 def _building_block_v2(inputs, filters, training, projection_shortcut, strides,
-                       data_format):
+                       data_format, conv_time_dim):
   """A single block for ResNet v2, without a bottleneck.
 
   Batch normalization then ReLu then convolution as described by:
@@ -170,6 +204,7 @@ def _building_block_v2(inputs, filters, training, projection_shortcut, strides,
     The output tensor of the block; shape should match inputs.
   """
   shortcut = inputs
+
   inputs = batch_norm(inputs, training, data_format)
   inputs = tf.nn.relu(inputs)
 
@@ -178,21 +213,26 @@ def _building_block_v2(inputs, filters, training, projection_shortcut, strides,
   if projection_shortcut is not None:
     shortcut = projection_shortcut(inputs)
 
+
+  if conv_time_dim:
+    shortcut = fixed_crop(shortcut, crop_size=2, data_format=data_format)
+
+
   inputs = conv2d_fixed_padding(
       inputs=inputs, filters=filters, kernel_size=3, strides=strides,
-      data_format=data_format)
+      data_format=data_format, conv_time_dim=conv_time_dim)
 
   inputs = batch_norm(inputs, training, data_format)
   inputs = tf.nn.relu(inputs)
   inputs = conv2d_fixed_padding(
       inputs=inputs, filters=filters, kernel_size=3, strides=1,
-      data_format=data_format)
+      data_format=data_format, conv_time_dim=conv_time_dim)
 
   return inputs + shortcut
 
 
 def _bottleneck_block_v1(inputs, filters, training, projection_shortcut,
-                         strides, data_format):
+                         strides, data_format, conv_time_dim):
   """A single block for ResNet v1, with a bottleneck.
 
   Similar to _building_block_v1(), except using the "bottleneck" blocks
@@ -224,21 +264,24 @@ def _bottleneck_block_v1(inputs, filters, training, projection_shortcut,
     shortcut = batch_norm(inputs=shortcut, training=training,
                           data_format=data_format)
 
+  if conv_time_dim:
+    shortcut = fixed_crop(shortcut, crop_size=1, data_format=data_format)
+
   inputs = conv2d_fixed_padding(
       inputs=inputs, filters=filters, kernel_size=1, strides=1,
-      data_format=data_format)
+      data_format=data_format, conv_time_dim=conv_time_dim)
   inputs = batch_norm(inputs, training, data_format)
   inputs = tf.nn.relu(inputs)
 
   inputs = conv2d_fixed_padding(
       inputs=inputs, filters=filters, kernel_size=3, strides=strides,
-      data_format=data_format)
+      data_format=data_format, conv_time_dim=conv_time_dim)
   inputs = batch_norm(inputs, training, data_format)
   inputs = tf.nn.relu(inputs)
 
   inputs = conv2d_fixed_padding(
       inputs=inputs, filters=4 * filters, kernel_size=1, strides=1,
-      data_format=data_format)
+      data_format=data_format, conv_time_dim=conv_time_dim)
   inputs = batch_norm(inputs, training, data_format)
   inputs += shortcut
   inputs = tf.nn.relu(inputs)
@@ -247,7 +290,7 @@ def _bottleneck_block_v1(inputs, filters, training, projection_shortcut,
 
 
 def _bottleneck_block_v2(inputs, filters, training, projection_shortcut,
-                         strides, data_format):
+                         strides, data_format, conv_time_dim):
   """A single block for ResNet v2, without a bottleneck.
 
   Similar to _building_block_v2(), except using the "bottleneck" blocks
@@ -287,27 +330,31 @@ def _bottleneck_block_v2(inputs, filters, training, projection_shortcut,
   if projection_shortcut is not None:
     shortcut = projection_shortcut(inputs)
 
+  if conv_time_dim:
+    shortcut = fixed_crop(shortcut, crop_size=1, data_format=data_format)
+
+
   inputs = conv2d_fixed_padding(
       inputs=inputs, filters=filters, kernel_size=1, strides=1,
-      data_format=data_format)
+      data_format=data_format, conv_time_dim=conv_time_dim)
 
   inputs = batch_norm(inputs, training, data_format)
   inputs = tf.nn.relu(inputs)
   inputs = conv2d_fixed_padding(
       inputs=inputs, filters=filters, kernel_size=3, strides=strides,
-      data_format=data_format)
+      data_format=data_format, conv_time_dim=conv_time_dim)
 
   inputs = batch_norm(inputs, training, data_format)
   inputs = tf.nn.relu(inputs)
   inputs = conv2d_fixed_padding(
       inputs=inputs, filters=4 * filters, kernel_size=1, strides=1,
-      data_format=data_format)
+      data_format=data_format, conv_time_dim=conv_time_dim)
 
   return inputs + shortcut
 
 
 def block_layer(inputs, filters, bottleneck, block_fn, blocks, strides,
-                training, name, data_format):
+                training, name, data_format, conv_time_dim):
   """Creates one layer of blocks for the ResNet model.
 
   Args:
@@ -335,14 +382,14 @@ def block_layer(inputs, filters, bottleneck, block_fn, blocks, strides,
   def projection_shortcut(inputs):
     return conv2d_fixed_padding(
         inputs=inputs, filters=filters_out, kernel_size=1, strides=strides,
-        data_format=data_format)
+        data_format=data_format, conv_time_dim=conv_time_dim)
 
   # Only the first block per block_layer uses projection_shortcut and strides
   inputs = block_fn(inputs, filters, training, projection_shortcut, strides,
-                    data_format)
+                    data_format, conv_time_dim)
 
   for _ in range(1, blocks):
-    inputs = block_fn(inputs, filters, training, None, 1, data_format)
+    inputs = block_fn(inputs, filters, training, None, 1, data_format, conv_time_dim)
 
   return tf.identity(inputs, name)
 
@@ -350,7 +397,7 @@ def block_layer(inputs, filters, bottleneck, block_fn, blocks, strides,
 class Model(object):
   """Base class for building the Resnet Model."""
 
-  def __init__(self, resnet_size, bottleneck, num_classes, num_filters,
+  def __init__(self, resnet_size, conv_time_dim, bottleneck, num_classes, num_filters,
                kernel_size,
                conv_stride, first_pool_size, first_pool_stride,
                block_sizes, block_strides,
@@ -414,6 +461,7 @@ class Model(object):
       raise ValueError('dtype must be one of: {}'.format(ALLOWED_TYPES))
 
     self.data_format = data_format
+    self.conv_time_dim = conv_time_dim
     self.num_classes = num_classes
     self.num_filters = num_filters
     self.kernel_size = kernel_size
@@ -498,11 +546,14 @@ class Model(object):
         # This provides a large performance boost on GPU. See
         # https://www.tensorflow.org/performance/performance_guide#data_formats
         inputs = tf.transpose(inputs, [0, 3, 1, 2])
+      print(inputs)
 
       inputs = conv2d_fixed_padding(
           inputs=inputs, filters=self.num_filters, kernel_size=self.kernel_size,
-          strides=self.conv_stride, data_format=self.data_format)
+          strides=self.conv_stride, data_format=self.data_format, conv_time_dim=self.conv_time_dim)
       inputs = tf.identity(inputs, 'initial_conv')
+
+      print(inputs)
 
       # We do not include batch normalization or activation functions in V2
       # for the initial conv1 because the first ResNet unit will perform these
@@ -519,13 +570,18 @@ class Model(object):
             data_format=self.data_format)
         inputs = tf.identity(inputs, 'initial_max_pool')
 
+        print(inputs)
+
       for i, num_blocks in enumerate(self.block_sizes):
         num_filters = self.num_filters * (2**i)
         inputs = block_layer(
             inputs=inputs, filters=num_filters, bottleneck=self.bottleneck,
             block_fn=self.block_fn, blocks=num_blocks,
             strides=self.block_strides[i], training=training,
-            name='block_layer{}'.format(i + 1), data_format=self.data_format)
+            name='block_layer{}'.format(i + 1), data_format=self.data_format,
+            conv_time_dim=self.conv_time_dim)
+
+        print(inputs)
 
       # Only apply the BN and ReLU for model that does pre_activation in each
       # building/bottleneck block, eg resnet V2.
@@ -538,11 +594,24 @@ class Model(object):
       # ResNet does an Average Pooling layer over pool_size,
       # but that is the same as doing a reduce_mean. We do a reduce_mean
       # here because it performs better than AveragePooling2D.
-      axes = [2, 3] if self.data_format == 'channels_first' else [1, 2]
+      if self.conv_time_dim:
+        axes = [3] if self.data_format == 'channels_first' else [2]
+      else:
+        axes = [2, 3] if self.data_format == 'channels_first' else [1, 2]
+
       inputs = tf.reduce_mean(inputs, axes, keep_dims=True)
       inputs = tf.identity(inputs, 'final_reduce_mean')
 
-      inputs = tf.reshape(inputs, [-1, self.final_size])
+      print(inputs)
+
+      if self.conv_time_dim:
+        inputs = tf.squeeze(inputs, axis=axes)
+        if self.data_format == 'channels_first':
+          inputs = tf.transpose(inputs, [0, 2, 1])
+      else:
+        inputs = tf.reshape(inputs, [-1, self.final_size])
+
       #inputs = tf.layers.dense(inputs=inputs, units=self.num_classes)
       inputs = tf.identity(inputs, 'final_dense')
+
       return inputs
