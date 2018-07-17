@@ -1929,22 +1929,24 @@ class Engine(object):
         print("HTTP server, got POST.", file=log.v3)
         from io import BytesIO
         f = BytesIO(form["file"].file.read())
-        print("input file size:", f.getbuffer().nbytes, "bytes", file=log.v4)
+        print("Input file size:", f.getbuffer().nbytes, "bytes", file=log.v4)
+        audio_len = None
         if input_audio_feature_extractor:
           try:
             audio, sample_rate = soundfile.read(f)
           except Exception as exc:
             print("Error reading audio (%s). Invalid format? Size %i, first few bytes %r." % (exc, f.getbuffer().nbytes, f.getbuffer().tobytes()[:20]), file=log.v2)
             raise
-          print("audio len %i (%.1f secs), sample rate %i" % (len(audio), float(len(audio)) / sample_rate, sample_rate), file=log.v4)
+          audio_len = float(len(audio)) / sample_rate
+          print("audio len %i (%.1f secs), sample rate %i" % (len(audio), audio_len, sample_rate), file=log.v4)
           if audio.ndim == 2:  # multiple channels:
             audio = numpy.mean(audio, axis=1)  # mix together
           features = input_audio_feature_extractor.get_audio_features(audio=audio, sample_rate=sample_rate)
         else:
           sentence = f.read().decode("utf8").strip()
-          print("input:", sentence, file=log.v4)
+          print("Input:", sentence, file=log.v4)
           seq = input_vocab.get_seq(sentence)
-          print("input seq:", input_vocab.get_seq_labels(seq), file=log.v4)
+          print("Input seq:", input_vocab.get_seq_labels(seq), file=log.v4)
           features = numpy.array(seq, dtype="int32")
         targets = numpy.array([], dtype="int32")  # empty...
         dataset = StaticDataset(
@@ -1954,16 +1956,24 @@ class Engine(object):
         self.send_response(200)
         self.send_header('Content-type', 'text/plain')
         self.end_headers()
+        start_time = time.time()
         output_d = engine.run_single(dataset=dataset, seq_idx=0, output_dict={
           "output": output_t,
           "seq_lens": output_seq_lens_t,
           "beam_scores": output_layer_beam_scores_t})
+        delta_time = time.time() - start_time
+        print("Took %.3f secs for decoding." % delta_time, file=log.v4)
+        if audio_len:
+          print("Real-time-factor: %.3f" % (delta_time / audio_len), file=log.v4)
         output = output_d["output"]
         seq_lens = output_d["seq_lens"]
         beam_scores = output_d["beam_scores"]
         assert len(output) == len(seq_lens) == (out_beam_size or 1)
         if out_beam_size:
           assert beam_scores.shape == (1, out_beam_size)  # (batch, beam)
+
+        first_best_txt = output_vocab.get_seq_labels(output[0][:seq_lens[0]])
+        print("Best output: %s" % first_best_txt, file=log.v4)
 
         if out_beam_size:
           self.wfile.write(b"[\n")
@@ -1974,8 +1984,7 @@ class Engine(object):
           self.wfile.write(b"]\n")
 
         else:
-          txt = output_vocab.get_seq_labels(output[0][:seq_lens[0]])
-          self.wfile(("%r\n" % txt).encode("utf8"))
+          self.wfile(("%r\n" % first_best_txt).encode("utf8"))
 
     print("Simple search web server, listening on port %i." % port, file=log.v2)
     server_address = ('', port)
