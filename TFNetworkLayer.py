@@ -5087,6 +5087,22 @@ class CrossEntropyLoss(Loss):
           return -self.reduce_func(out)
 
 
+class BinaryCrossEntropyLoss(Loss):
+  """
+  Binary cross entropy.
+  We expect the output as logits, not in probability space!
+  Per frame: mean(target * log(sigmoid(output)) + (1 - target) * log(1 - sigmoid(output)))
+  """
+  class_name = "bin_ce"
+
+  def get_value(self):
+    assert not self.target.sparse, "sparse is not supported yet"
+    assert self.target.dim == self.output.dim
+    with tf.name_scope("loss_bin_ce"):
+      out = tf.nn.sigmoid_cross_entropy_with_logits(logits=self.output_flat, labels=self.target_flat)
+      return self.reduce_func(out * (1.0 / self.target.dim))
+
+
 class GenericCELoss(Loss):
   class_name = "generic_ce"
 
@@ -5550,22 +5566,6 @@ class ExpectedLoss(Loss):
 
   def get_error(self):
     return None
-
-
-class BinaryCrossEntropy(Loss):
-  """
-  Binary cross entropy.
-  We expect the output as logits, not in probability space!
-  Per frame: mean(target * log(sigmoid(output)) + (1 - target) * log(1 - sigmoid(output)))
-  """
-  class_name = "bin_ce"
-
-  def get_value(self):
-    assert not self.target.sparse, "sparse is not supported yet"
-    assert self.target.dim == self.output.dim
-    with tf.name_scope("loss_bin_ce"):
-      out = tf.nn.sigmoid_cross_entropy_with_logits(logits=self.output_flat, labels=self.target_flat)
-      return self.reduce_func(out * (1.0 / self.target.dim))
 
 
 class DeepClusteringLoss(Loss):
