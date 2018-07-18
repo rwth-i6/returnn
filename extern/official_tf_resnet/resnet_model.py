@@ -391,11 +391,8 @@ def block_layer(inputs, filters, bottleneck, block_fn, blocks, strides,
   inputs = block_fn(inputs, filters, training, projection_shortcut, strides,
                     kernel_size, data_format, conv_time_dim)
 
-  print(inputs)
-
   for _ in range(1, blocks):
     inputs = block_fn(inputs, filters, training, None, 1, kernel_size, data_format, conv_time_dim)
-    print(inputs)
 
   return tf.identity(inputs, name)
 
