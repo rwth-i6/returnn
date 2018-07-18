@@ -3196,10 +3196,10 @@ class ReduceLayer(_ConcatInputLayer):
         y_shape[i] = 1
       y_shape.remove(x.batch_dim_axis)
     else:
-      for i in reversed(sorted(set(axes + [x.batch_dim_axis]))):
+      if out_batch_dim_axis in axes:
+        out_batch_dim_axis = None
+      for i in reversed(sorted(set(axes + [out_batch_dim_axis] if out_batch_dim_axis is not None else []))):
         del y_shape[i]
-        if i == out_batch_dim_axis:
-          out_batch_dim_axis = None
         if out_batch_dim_axis and i < out_batch_dim_axis:
           out_batch_dim_axis -= 1
     return Data(
