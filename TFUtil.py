@@ -26,7 +26,7 @@ def tf_version_tuple():
   :rtype: tuple[int]
   """
   import re
-  return tuple([int(s) for s in re.sub('-rc[0-9]+', '', tf.__version__).split(".")])
+  return tuple([int(s) for s in re.sub('-rc[0-9]|-dev[0-9]*', '', tf.__version__).split(".")])
 
 
 def assert_min_tf_version(version, reason):
