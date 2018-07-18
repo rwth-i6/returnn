@@ -6030,7 +6030,7 @@ def _init_loss_class_dict():
     if isinstance(v, type) and issubclass(v, Loss) and v.class_name:
       assert v.class_name not in _LossClassDict
       _LossClassDict[v.class_name] = v
-  for alias, v in {"sse_sigmoid": BinaryCrossEntropy}.items():
+  for alias, v in {"sse_sigmoid": BinaryCrossEntropyLoss}.items():
     _LossClassDict[alias] = v
 
 
