@@ -3190,6 +3190,7 @@ class ReduceLayer(_ConcatInputLayer):
       x = x.copy_with_batch_dim_axis(enforce_batch_dim_axis)
     axes = cls.get_axes(axis=axes, input_data=x)
     y_shape = list(x.batch_shape)
+    out_batch_dim_axis = x.batch_dim_axis
     if keep_dims:
       for i in axes:
         y_shape[i] = 1
@@ -3197,10 +3198,14 @@ class ReduceLayer(_ConcatInputLayer):
     else:
       for i in reversed(sorted(set(axes + [x.batch_dim_axis]))):
         del y_shape[i]
+        if i == out_batch_dim_axis:
+          out_batch_dim_axis = None
+        if out_batch_dim_axis and i < out_batch_dim_axis:
+          out_batch_dim_axis -= 1
     return Data(
       name="%s_output" % name,
       shape=y_shape,
-      batch_dim_axis=x.batch_dim_axis if (x.batch_dim_axis not in axes) else None,
+      batch_dim_axis=out_batch_dim_axis,
       dtype=x.dtype,
       sparse=False,
       beam_size=x.beam_size)
