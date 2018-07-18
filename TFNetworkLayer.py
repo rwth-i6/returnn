@@ -4759,22 +4759,23 @@ class OfficialResNetLayer(_ConcatInputLayer):
   As you get logits, you can then use :class:`ActivationLayer` with softmax.
   """
   layer_class = "official_resnet"
+  recurrent = True #actually it's a conv net, but it needs time_dim -> it's true
 
-  def __init__(self, resnet_size, bottleneck, num_classes, num_filters, kernel_size,
-               conv_stride, first_pool_size, first_pool_stride,
-               block_sizes, block_strides, conv_time_dim,
-               final_size, resnet_version=2, data_format=None,
-               **kwargs):
+  def __init__(self, num_filters, kernel_size,
+               conv_stride, first_pool_size, first_pool_stride, first_kernel_size=3,
+               block_sizes=[5, 5, 5], block_strides=[1, 2, 2], conv_time_dim=False,
+               bottleneck=False, resnet_version=2, data_format=None, **kwargs):
     import re
     from extern.official_tf_resnet.resnet_model import Model
     super(OfficialResNetLayer, self).__init__(**kwargs)
-    self.model = Model(
-      resnet_size=resnet_size, bottleneck=bottleneck, conv_time_dim=conv_time_dim,
-      num_classes=num_classes, num_filters=num_filters, kernel_size=kernel_size,
-      conv_stride=conv_stride, first_pool_size=first_pool_size, first_pool_stride=first_pool_stride,
-      block_sizes=block_sizes, block_strides=block_strides,
-      final_size=final_size,
-      resnet_version=resnet_version, data_format=data_format)
+
+    self.model = Model(num_filters=num_filters, conv_time_dim=conv_time_dim,
+                       first_kernel_size=first_kernel_size, kernel_size=kernel_size,
+                       conv_stride=conv_stride, first_pool_size=first_pool_size,
+                       first_pool_stride=first_pool_stride, block_sizes=block_sizes,
+                       block_strides=block_strides, bottleneck=bottleneck,
+                       resnet_version=resnet_version,data_format = data_format)
+
     # Model assumes always NHWC input format.
     inputs_data = self.input_data.copy_as_batch_major()
     assert inputs_data.batch_ndim == 4 and inputs_data.batch_dim_axis == 0 and inputs_data.feature_dim_axis == 3
@@ -4791,19 +4792,14 @@ class OfficialResNetLayer(_ConcatInputLayer):
       assert p.name.startswith(scope_name_prefix) and p.name.endswith(":0")
       self.params[p.name[len(scope_name_prefix):-2]] = p
 
-    if bottleneck:
-      crop = 28
-    else:
-      crop = 52
-
+    crop = self.model.time_dim_reduction
     self.output.size_placeholder = self.input_data.size_placeholder.copy()
-    if conv_time_dim:
-      self.output.size_placeholder[0] -= crop
+    self.output.size_placeholder[0] -= crop
 
 
 
   @classmethod
-  def get_out_data_from_opts(cls, name, bottleneck, conv_time_dim, num_filters, block_sizes=[3, 3, 3, 3], sources=(), **kwargs):
+  def get_out_data_from_opts(cls, name, bottleneck, conv_time_dim, num_filters, block_sizes=[5, 5, 5], sources=(), **kwargs):
 
     if bottleneck:
       out_size = num_filters * (4 * 2 ** (len(block_sizes) - 1))
