@@ -1306,20 +1306,22 @@ def test_rec_subnet_eval_init_out_apply0():
 def test_net_safe_log_to_log_softmax():
   n_out = 5
   net_dict = {
-    "ff_in_window": {"class": "window", "window_size": 3, "trainable": False},
-    "ff_in": {"class": "merge_dims", "axes": "except_time", "from": ["ff_in_window"], "trainable": False},
-    "ff0": {"class": "hidden", "activation": "relu", "n_out": 8, "L2": 0.01, "from": ["ff_in"]},
-    "ff_out": {"class": "softmax", "n_out": n_out, "from": ["ff0"]},
+    "ff_in_window": {"class": "window", "window_size": 3, "trainable": False},  # (B,T,3,3)
+    "ff_in": {"class": "merge_dims", "axes": "except_time", "from": ["ff_in_window"], "trainable": False},  # (B,T,9)
+    "ff0": {"class": "hidden", "activation": "relu", "n_out": 8, "L2": 0.01, "from": ["ff_in"]},  # (B,T,8)
+    "ff_out": {"class": "softmax", "n_out": n_out, "from": ["ff0"]},  # (B,T,5)
     "ff_out_prior": {
       "class": "accumulate_mean", "exp_average": 0.001,
-      "is_prob_distribution": True, "from": ["ff_out"]},
+      "is_prob_distribution": True, "from": ["ff_out"]},  # (5,)
     "output": {
       "class": "combine", "kind": "eval", "from": ["ff_out", "ff_out_prior"],
       "eval": "safe_log(source(0)) - safe_log(source(1))",
       "eval_locals": {"am_scale": 0.1, "prior_scale": 0.5 * 0.1}
     },
   }
-  net = TFNetwork(extern_data=ExternData(data={"data": {"dim": 3}, "classes": {"dim": n_out, "sparse": True}}))
+  net = TFNetwork(
+    extern_data=ExternData(data={"data": {"dim": 3}, "classes": {"dim": n_out, "sparse": True}}),
+    config=Config({"debug_print_layer_output_template": True}))
   net.construct_from_dict(net_dict)
   output_layer = net.get_default_output_layer(must_exist=True)
   out = output_layer.output.placeholder

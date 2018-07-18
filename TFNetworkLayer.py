@@ -3198,7 +3198,7 @@ class ReduceLayer(_ConcatInputLayer):
     else:
       if out_batch_dim_axis in axes:
         out_batch_dim_axis = None
-      for i in reversed(sorted(set(axes + [out_batch_dim_axis] if out_batch_dim_axis is not None else []))):
+      for i in reversed(sorted(set(axes + [x.batch_dim_axis] if x.batch_dim_axis is not None else []))):
         del y_shape[i]
         if out_batch_dim_axis and i < out_batch_dim_axis:
           out_batch_dim_axis -= 1
@@ -4396,7 +4396,7 @@ class VariableLayer(LayerBase):
 
 class AccumulateMeanLayer(ReduceLayer):
   """
-  Accumulates the mean of the input (in training).
+  Accumulates the mean of the input (in training) (over batch-dim and time-dim by default).
   It's similar to :class:`ReduceLayer`
   """
   layer_class = "accumulate_mean"
