@@ -477,7 +477,7 @@ class Model(object):
 
 
   def calculate_time_dim_reduction(self):
-    if self.kernel_size:
+    if self.conv_time_dim:
       multiplier = 1 if self.bottleneck else 2
       building_block_reduction = multiplier * 2 * (self.kernel_size // 2)
       total_reduction = 2 * (self.first_kernel_size // 2)
