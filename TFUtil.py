@@ -824,16 +824,13 @@ class Data(object):
     """
     assert self.time_dim_axis is not None
     assert self.batch_dim_axis is not None
-    maxlen = None
-    if self.placeholder is not None:
-      maxlen = tf.shape(self.placeholder)[self.time_dim_axis]
     if self.is_time_major:
       assert self.batch_dim_axis == 1
-      return sequence_mask_time_major(self.get_sequence_lengths(), maxlen=maxlen)
+      return sequence_mask_time_major(self.get_sequence_lengths())
     else:
       assert self.batch_dim_axis == 0
       assert self.time_dim_axis == 1
-      return sequence_mask(self.get_sequence_lengths(), maxlen=maxlen)
+      return sequence_mask(self.get_sequence_lengths())
 
   def get_sequence_mask_broadcast(self):
     """
