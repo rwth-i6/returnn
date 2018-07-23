@@ -1647,12 +1647,19 @@ class _SubnetworkRecCell(object):
         size=final_acc_tas[0].size(),
         infer_shape=True)
 
-      # TODO: Maybe we could use tf.contrib.seq2seq.GatherTree op here instead...
       def search_resolve_body(i, choice_beams, new_acc_output_ta):
-        # This loops goes backwards through time.
-        # This starts at i == seq_len - 1.
-        # choice_beams are from the previous step, shape (batch, beam_out) -> beam idx of output,
-        # output is of shape (batch * beam, n_out).
+        """
+        This loops goes backwards through time.
+        This starts at i == seq_len - 1.
+        choice_beams are from the previous step, shape (batch, beam_out) -> beam idx of output,
+        output is of shape (batch * beam, n_out).
+        Similar as tf.contrib.seq2seq.GatherTree.
+
+        :param tf.Tensor i:
+        :param tf.Tensor choice_beams:
+        :param tf.TensorArray new_acc_output_ta:
+        :return: (i, choice_beams, new_acc_output_ta)
+        """
         with reuse_name_scope(rec_layer._rec_scope.name + "/while_loop_search_body", absolute=True):
           # We start at the output layer choice base, and search for its source, i.e. for the previous time frame.
           choice_base = output_choice_base
