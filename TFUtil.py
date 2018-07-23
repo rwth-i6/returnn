@@ -5378,10 +5378,8 @@ def tensor_array_stack(ta, start=0, stop=None, name=None):
   """
   if start is 0 and stop is None:
     return ta.stack(name=name)
-  # noinspection PyProtectedMember
-  with tf.colocate_with(ta._handle):
-    # noinspection PyProtectedMember
-    with tf.name_scope(name, "TensorArrayStack", [ta._handle]):
+  with tf.colocate_with(ta.handle):
+    with tf.name_scope(name, "TensorArrayStack", [ta.handle]):
       if stop is None:
         stop = ta.size()
       return ta.gather(tf.range(start, stop), name=name)
