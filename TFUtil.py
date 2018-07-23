@@ -5335,6 +5335,7 @@ def tensor_array_is_clear_after_read(ta):
   return ta.handle.op.get_attr("clear_after_read")
 
 
+# noinspection PyProtectedMember
 def tensor_array_element_shape(ta):
   """
   :param tf.TensorArray ta:
@@ -5357,11 +5358,33 @@ def tensor_array_like(ta, **kwargs):
   :return: another tensor array, just like ta
   :rtype: tf.TensorArray
   """
+  # noinspection PyProtectedMember
   return tf.TensorArray(
     dtype=ta.dtype, size=ta.size(), dynamic_size=tensor_array_is_dynamic_size(ta),
     clear_after_read=tensor_array_is_clear_after_read(ta),
     infer_shape=ta._infer_shape, element_shape=tensor_array_element_shape(ta),
     **kwargs)
+
+
+def tensor_array_stack(ta, start=0, stop=None, name=None):
+  """
+  Extends tf.TensorArray.stack by start/stop options.
+
+  :param tf.TensorArray ta:
+  :param int|tf.Tensor start:
+  :param int|tf.Tensor|None stop:
+  :param str name:
+  :rtype: tf.Tensor
+  """
+  if start is 0 and stop is None:
+    return ta.stack(name=name)
+  # noinspection PyProtectedMember
+  with tf.colocate_with(ta._handle):
+    # noinspection PyProtectedMember
+    with tf.name_scope(name, "TensorArrayStack", [ta._handle]):
+      if stop is None:
+        stop = ta.size()
+      return ta.gather(tf.range(start, stop), name=name)
 
 
 def _tensor_array_select_src_beams(ta, src_beams):

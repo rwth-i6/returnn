@@ -1114,7 +1114,7 @@ class _SubnetworkRecCell(object):
     :rtype: (tf.Tensor, (tf.Tensor, tf.Tensor, tf.Tensor), SearchChoices)
     """
     self._check_output_template_shape()
-    from TFUtil import check_input_dim
+    from TFUtil import check_input_dim, tensor_array_stack
 
     with tf.name_scope("subnet_base"):
       batch_dim = rec_layer.network.get_data_batch_dim()
@@ -1560,6 +1560,7 @@ class _SubnetworkRecCell(object):
       _, final_net_vars, final_acc_tas = final_loop_vars
     else:
       _, final_net_vars, final_acc_tas, (_, seq_len) = final_loop_vars
+      max_seq_len = tf.reduce_max(seq_len, name="dyn_max_seq_len")
     self.get_final_rec_vars = lambda layer_name: self.get_layer_rec_var_from_loop_vars(
       loop_vars=final_net_vars,
       layer_name=layer_name)
@@ -1598,8 +1599,10 @@ class _SubnetworkRecCell(object):
             sub_error = error_value
           else:
             layer_with_loss_inst = self.net.layers[layer_name]
-            loss_value = self.final_acc_tas_dict["loss_%s" % layer_name].stack(name="loss_%s_stack" % layer_name)
-            error_value = self.final_acc_tas_dict["error_%s" % layer_name].stack(name="error_%s_stack" % layer_name)
+            loss_value = tensor_array_stack(
+              self.final_acc_tas_dict["loss_%s" % layer_name], stop=max_seq_len, name="loss_%s_stack" % layer_name)
+            error_value = tensor_array_stack(
+              self.final_acc_tas_dict["error_%s" % layer_name], stop=max_seq_len, name="error_%s_stack" % layer_name)
             loss_value.set_shape(tf.TensorShape((None, None)))  # (time, batch)
             error_value.set_shape(tf.TensorShape((None, None)))  # (time, batch)
 
@@ -1720,10 +1723,8 @@ class _SubnetworkRecCell(object):
       elif "output" in self.output_layers_moved_out:
         output = self.output_layers_net.layers["output"].output.get_placeholder_as_time_major()
       else:
-        output = self.final_acc_tas_dict["output_output"].stack(name="output_stack")  # e.g. (time, batch, dim)
-        if not have_known_seq_len:
-          with tf.name_scope("output_sub_slice"):
-            output = output[:tf.reduce_max(seq_len)]  # usually one less
+        output = tensor_array_stack(
+          self.final_acc_tas_dict["output_output"], stop=max_seq_len, name="output_stack")  # e.g. (time, batch, dim)
 
     for key in self.net.used_data_keys | (self.input_layers_net.used_data_keys if self.input_layers_net else set()) | (self.output_layers_net.used_data_keys if self.output_layers_net else set()):
       if key == "source":
@@ -1944,6 +1945,8 @@ class _SubnetworkRecCell(object):
     if not self.output_layers_moved_out and not extra_output_layers:
       return
 
+    max_len = tf.reduce_max(seq_len)
+    from TFUtil import tensor_array_stack
     from TFNetwork import TFNetwork, ExternData
     from TFNetworkLayer import InternalLayer
     self.output_layers_net = TFNetwork(
@@ -1973,7 +1976,8 @@ class _SubnetworkRecCell(object):
       with tf.name_scope(self.layer_data_templates[name].layer_class_type.cls_get_tf_scope_name(name)):
         output = self.layer_data_templates[name].output.copy_template_adding_time_dim(time_dim_axis=0)
         # We should have accumulated it.
-        output.placeholder = loop_accumulated["output_%s" % name].stack()  # e.g. (time,batch,dim)
+        output.placeholder = tensor_array_stack(
+          loop_accumulated["output_%s" % name], stop=max_len)  # e.g. (time,batch,dim)
         output.size_placeholder = {0: seq_len}
         assert isinstance(self.output_layers_net, TFNetwork)
         layer = self.output_layers_net.add_layer(name=name, output=output, layer_class=InternalLayer)
