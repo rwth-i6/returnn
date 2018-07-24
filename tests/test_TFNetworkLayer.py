@@ -124,6 +124,17 @@ def test_combine_layer_net_construct():
     network.construct_from_dict(net_dict)
 
 
+def test_dropout_layer_net_construct():
+  with make_scope() as session:
+    net_dict = {
+      "drop": {"class": "dropout", "dropout": 0.3, "dropout_noise_shape": {"*": None}},
+      "output": {"class": "softmax", "loss": "ce", "from": ["drop"]}
+    }
+    config = Config({"num_inputs": 4, "num_outputs": 9, "debug_print_layer_output_template": True})
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(net_dict)
+
+
 def test_subnetwork_layer_net_construct():
   with make_scope() as session:
     net_dict = {
