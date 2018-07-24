@@ -1900,81 +1900,6 @@ class SoftmaxLayer(LinearLayer):
     super(SoftmaxLayer, self).__init__(activation=activation, **kwargs)
 
 
-class SampledSoftmaxLayer(_ConcatInputLayer):
-  """
-  This layer is a modified version of the linear layer using softmax as activation function.
-  The main difference is, that the weight matrix is created transposed (see note to self.W
-  for detailed information). This layer has to be used for some loss layers like sampled softmax,
-  since TensorFlow requires some specific shapes for the weight matrices.
-  """
-  layer_class = "sampled_softmax"
-
-  def __init__(self, forward_weights_init="glorot_uniform", bias_init=0.0,
-               **kwargs):
-    """
-    :param str forward_weights_init: see :func:`TFUtil.get_initializer`
-    :param str|float bias_init: see :func:`TFUtil.get_initializer`
-    """
-    super(SampledSoftmaxLayer, self).__init__(**kwargs)
-
-    # Start by looking up sizes of input and output
-    from TFUtil import get_initializer
-    input_data = self.input_data
-    n_in = input_data.dim
-    n_out = self.output.dim
-    assert n_in and n_out, "%r and %r" % (input_data, self.output)
-
-    # Create variables we need (i.e. bias and weight terms)
-    with self.var_creation_scope():
-      fwd_weights_initializer = get_initializer(
-        forward_weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
-
-      # Note: the normal shape of the weight matrix is shape=(n_in, n_out). But unfortunately, the
-      #   sampled_softmax_loss(..) function by TensorFlow which is used in the sampledSoftmaxLoss layer for training
-      #   expects the transposed matrix. For performance reasons we don't transpose the matrix but create it with the
-      #   other shape. This however means, that this matrix has to be transposed in some evaluation parts where the
-      #   shape has to be the other way around.
-      self.W = self.add_param(tf.get_variable(
-        name="W", shape=(n_out, n_in), dtype=tf.float32, initializer=fwd_weights_initializer))
-      bias_initializer = get_initializer(
-        bias_init, seed=self.network.random.randint(2 ** 31) if bias_init else 0, eval_local_ns={"layer": self})
-      self.b = self.add_param(tf.get_variable(
-        name="b", shape=(n_out,), dtype=tf.float32, initializer=bias_initializer))
-
-    # Linear layer plus softmax activation
-    with tf.name_scope("linear"):
-      def fn_train():
-        x = tf.ones_like(input_data.placeholder)
-        return x
-
-      def fn_eval():
-        x = self.input_data.placeholder
-        ndim = x.get_shape().ndims
-
-        from TFUtil import dot
-        if self.input_data.sparse:
-          if x.dtype in [tf.uint8, tf.int8, tf.uint16, tf.int16]:
-            x = tf.cast(x, tf.int32)
-          x = tf.nn.embedding_lookup(tf.transpose(self.W), x)
-          ndim += 1
-        else:
-          x = dot(x, tf.transpose(self.W))
-
-        assert x.get_shape().ndims == ndim
-        return x
-
-      # branch for calculation of x into train and eval mode
-      x = self.network.cond_on_train(fn_train, fn_eval)
-
-      from tensorflow.python.ops.nn_ops import softmax
-      self.output_before_activation = OutputWithActivation(x,softmax)
-
-      # perform softmax output if in eval mode
-      assert self.output.batch_dim_axis == self.input_data.batch_dim_axis
-      assert self.output.time_dim_axis == self.input_data.time_dim_axis
-      self.output.placeholder = self.output_before_activation.y
-
-
 class LengthLayer(LayerBase):
   """
   Returns the length of sources as (B,), via input size_placeholder.
@@ -5913,7 +5838,7 @@ class SampledSoftmaxLoss(Loss):
     self.sampler = sampler
 
   def get_value(self):
-    assert isinstance(self.layer, SampledSoftmaxLayer)
+    assert isinstance(self.layer, SoftmaxLayer)
     assert self.target.sparse, "Sampled softmax is only useful for big (i.e. sparse) target vectors"
     assert self.target.ndim_dense == self.output.ndim_dense
 
@@ -5955,7 +5880,7 @@ class SampledSoftmaxLoss(Loss):
           range_max=self.target.dim)
 
         out = tf.nn.sampled_softmax_loss(
-          weights=self.layer.W,  # shape: [num_classes, dim]
+          weights=tf.transpose(self.layer.W),  # shape: [num_classes, dim]
           biases=self.layer.b,  # shape: [num_classes]
           labels=labels,  # shape: [batch_size, num_true]
           inputs=inputs,  # shape: [batch_size, dim]
@@ -5981,35 +5906,13 @@ class SampledSoftmaxLoss(Loss):
       # The function that is called for the evaluation branch
       def eval_fn():
         assert self.target.sparse is True
-
-        # First switch target vector for dimension alignment with input_data tensor
-        labels = self.target.placeholder
-        current_labels_shape = tf.shape(labels)
-        labels = tf.reshape(labels, [current_labels_shape[1], current_labels_shape[0]])
-        labels = tf.reshape(labels, [-1])
-
-        # Get input from current layer
-        inputs = self.layer.input_data.placeholder
-        current_input_shape = tf.shape(inputs)
-        new_input_shape = [-1, current_input_shape[self.layer.input_data.ndim]]
-        inputs = tf.reshape(inputs, new_input_shape)
-
-        from TFUtil import dot
-        logits = dot(inputs, tf.transpose(self.layer.W))
-        logits = tf.nn.bias_add(logits, self.layer.b)
-
-        loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
-          labels=labels,
-          logits=logits)
-
-        # mask loss on invalid frames
-        mask = self.target.get_sequence_mask()
-        current_mask_shape = tf.shape(self.target.placeholder)
-        mask = tf.reshape(mask, [current_mask_shape[1], current_mask_shape[0]])
+        target = self.target.copy_compatible_to(self.output)
+        labels = tf.reshape(target.placeholder, [-1])
+        logits = tf.reshape(self.output_with_activation.x, [-1])
+        loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=labels, logits=logits)
+        mask = target.get_sequence_mask()
         mask = tf.reshape(mask, [-1])
-
         loss = tf.where(mask, loss, tf.zeros(tf.shape(loss)))
-
         return loss
 
       # Create a new branch in the TensorFlow graph, one side for the training using the sampled_softmax_loss(...)
