@@ -49,7 +49,11 @@ def filter_out(ls):
   i = 0
   while i < len(ls):
     s = ls[i]
-    if i + 1 < len(ls) and ls[i + 1].startswith("  from "):
+    if "tensorflow/core/" in s:  # some TF warnings
+      i += 1
+      continue
+    # RuntimeWarning|FutureWarning are warnings and they include the code-line in the next output line
+    if i + 1 < len(ls) and ls[i + 1].startswith("  "):
       if re.match(".*:\d+: RuntimeWarning: numpy.*", s) or re.match(".*:\d+: FutureWarning: .*", s):
         i += 2
         continue
@@ -115,7 +119,6 @@ def test_returnn_tf_startup():
   out = run([py, "rnn.py", "-x", "nop", "++use_tensorflow", "1", "++log_verbosity", "5"])
   ls = out.splitlines()
   ls = filter_out(ls)
-  ls = [l for l in ls if "tensorflow/core/" not in l]  # filter out TF warnings
   assert 3 <= len(ls) <= 40, "\n".join(ls)  # not fixed because might change
   assert_equal(count_start_with(ls, "RETURNN starting up, version "), 1)
   assert_equal(count_start_with(ls, "TensorFlow: "), 1)
