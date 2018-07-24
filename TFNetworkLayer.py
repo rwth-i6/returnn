@@ -1392,8 +1392,9 @@ def concat_sources(src_layers):
   if len(src_layers) == 1:
     return src_layers[0].output.copy()
   network = src_layers[0].network
-  if (tuple(src_layers), 0.0) in network.concat_sources_dropout_cache:
-    return network.concat_sources_dropout_cache[(tuple(src_layers), 0.0)].copy()
+  cache_key = (tuple(src_layers), 0.0, None)
+  if cache_key in network.concat_sources_dropout_cache:
+    return network.concat_sources_dropout_cache[cache_key].copy()
   data = get_concat_sources_data_template(src_layers)
   prefix_shape = data.shape[:-1]  # without batch-dim
   for layer in src_layers:
@@ -1410,7 +1411,7 @@ def concat_sources(src_layers):
       axis=len(prefix_shape) + 1,  # one more because this is with batch-dim
       values=[layer.output.get_placeholder_with_specific_batch_dim_axis(data.batch_dim_axis) for layer in src_layers])
   data.size_placeholder = src_layers[0].output.size_placeholder.copy()
-  network.concat_sources_dropout_cache[(tuple(src_layers), 0.0)] = data.copy()
+  network.concat_sources_dropout_cache[cache_key] = data.copy()
   return data
 
 
@@ -1478,7 +1479,7 @@ def concat_sources_with_opt_dropout(src_layers, dropout=0, dropout_noise_shape=N
       seed=network.random.randint(2 ** 31))
     fn_eval = lambda: data.placeholder
     data.placeholder = network.cond_on_train(fn_train, fn_eval)
-  network.concat_sources_dropout_cache[(tuple(src_layers), float(dropout))] = data.copy()
+  network.concat_sources_dropout_cache[cache_key] = data.copy()
   return data
 
 

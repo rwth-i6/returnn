@@ -243,7 +243,7 @@ class TFNetwork(object):
     self.extra_vars_to_save = []  # type: list[tf.Variable]
     self.recurrent = False
     self._assigner_cache = {}  # type: dict[tf.Variable,VariableAssigner]
-    self.concat_sources_dropout_cache = {}  # type: dict[(tuple[LayerBase],float),Data]
+    self.concat_sources_dropout_cache = {}  # type: dict[(tuple[LayerBase],float,tuple[int|None]|None),Data]
     self._batch_dim = None  # see get_batch_dim
 
   def __repr__(self):
