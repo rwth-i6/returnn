@@ -90,6 +90,36 @@ def test_Data_spatial_batch_axes():
   assert_equal(spatial_axes1, spatial_axes2)
 
 
+def test_Data_spatial_batch_axes_2():
+  d = Data(name="data", shape=(None, 9000))
+  assert_equal(d.get_spatial_batch_axes(), [1])
+  d = Data(name="data", shape=(13, 9000))
+  assert_equal(d.get_spatial_batch_axes(), [1])
+  d = Data(name="data", shape=(None, 13, 9000))
+  assert_equal(d.get_spatial_batch_axes(), [1, 2])
+
+
+def test_Data_get_bc_spatial_batch_shape():
+  d = Data(name="data", shape=(None, 9000))
+  assert_equal(d.get_bc_spatial_batch_shape(), (1, 1, 9000))
+  d = Data(name="data", shape=(13, 9000))
+  assert_equal(d.get_bc_spatial_batch_shape(), (1, 1, 9000))
+  d = Data(name="data", shape=(None, 13, 9000))
+  assert_equal(d.get_bc_spatial_batch_shape(), (1, 1, 1, 9000))
+
+
+def test_Data_get_bc_shape():
+  d = Data(name="data", shape=(None, 9000))
+  assert_equal(d.get_bc_shape(), (1, 1, 9000))
+  d = Data(name="data", shape=(13, 9000))
+  assert_equal(d.get_bc_shape(), (1, 1, 9000))
+  d = Data(name="data", shape=(None, 13, 9000))
+  assert_equal(d.get_bc_shape(), (1, 1, 1, 9000))
+  d = Data(name="data", shape=(None, 13, 9000))
+  assert_equal(d.get_bc_shape({"*": None}), (None, None, 13, 9000))
+  assert_equal(d.get_bc_shape({("B", "s:1"): None}), (None, 1, 13, 9000))
+
+
 def test_Data_copy_compatible_to_time_major():
   d1 = Data(name='ff_out_output', shape=(None, 9001), dtype='float32', batch_dim_axis=1)
   d2 = Data(name='ff_out_prior_output', shape=(9001,), dtype='float32', batch_dim_axis=None, time_dim_axis=None)

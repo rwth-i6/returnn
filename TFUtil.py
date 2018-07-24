@@ -726,6 +726,8 @@ class Data(object):
       elif axes == "except_batch":
         axes = list(range(self.batch_ndim))
         axes.remove(self.batch_dim_axis)
+      elif axes == "*":
+        axes = list(range(self.batch_ndim))
       elif axes == "static":
         axes = [i for i in range(self.batch_ndim) if self.batch_shape[i] is not None]
       elif axes in ["f", "feature", "non_spatial"]:
@@ -910,13 +912,50 @@ class Data(object):
   def get_bc_spatial_batch_shape(self):
     """
     :return: shape which will broadcast along all spatial dimensions and time/batch dim
-    :rtype: tuple[int]
+    :rtype: tuple[int|None]
     """
     dyn_axes = self.get_spatial_batch_axes()
     if self.batch_dim_axis is not None:
       dyn_axes += [self.batch_dim_axis]
-    return [1 if (axis in dyn_axes) else dim
-            for axis, dim in enumerate(self.batch_shape)]
+    return tuple([1 if (axis in dyn_axes) else dim
+                  for axis, dim in enumerate(self.batch_shape)])
+
+  def get_bc_shape(self, opts=None):
+    """
+    :param dict[str|list|tuple,int|str|None]|None opts:
+      ``key`` specifies the axes.
+      ``value`` 1 ('x') is broadcasting, -1 (None) is not broadcasting
+      Axes should not be defined multiple times.
+      The default behavior if an axis is not specified is like :func:`get_bc_spatial_batch_shape`,
+      i.e. it will broadcast in batch and spatial dims only.
+    :return: shape where 1 means broadcasting, None or >1 means not broadcasting. can be used for :func:`TFUtil.dropout`
+    :rtype: tuple[int|None]
+    """
+    if opts is None:
+      opts = {}
+    axes_map = {}  # int -> int|None
+    for key, value in opts.items():
+      assert value in (-1, 1, 'x', None), "%r get_bc_shape: invalid value in opts %r" % (self, opts)
+      if value == 'x':
+        value = 1
+      if value == -1:
+        value = None
+      key_axes = self.get_axes_from_description(key)
+      for key_axis in key_axes:
+        assert key_axis not in axes_map, (
+          "%r get_bc_shape: axis %i is defined multiple times in opts %r" % (self, key_axis, opts))
+        assert 0 <= key_axis < self.batch_ndim, "%r get_bc_shape: invalid axis %i in opts %r" % (self, key_axis, opts)
+        axes_map[key_axis] = self.batch_shape[key_axis] if value is None else value
+    # Fill in remaining axes by defaults, just as in get_bc_spatial_batch_shape.
+    remaining_axes = sorted(set(range(self.batch_ndim)).difference(axes_map.keys()))
+    if remaining_axes:
+      dyn_axes_list = self.get_spatial_batch_axes()
+      if self.batch_dim_axis is not None:
+        dyn_axes_list += [self.batch_dim_axis]
+      for axis in remaining_axes:
+        axes_map[axis] = 1 if axis in dyn_axes_list else self.batch_shape[axis]
+    assert sorted(axes_map.keys()) == list(range(self.batch_ndim))
+    return tuple([axes_map[i] for i in range(self.batch_ndim)])
 
 
 class CustomUpdate(object):
@@ -2068,7 +2107,7 @@ def dropout(x, keep_prob, noise_shape=None, seed=None, name=None, cond_on_train=
 
   :param tf.Tensor x:
   :param float|tf.Tensor keep_prop:
-  :param tf.Tensor|tuple[int] noise_shape:
+  :param tf.Tensor|tuple[int|None] noise_shape: 1 will broadcast in that dimension, None will not broadcast
   :param int seed:
   :param str name:
   :param bool cond_on_train: automatically wrap through :func:`cond_on_train_flag`
@@ -2089,6 +2128,8 @@ def dropout(x, keep_prob, noise_shape=None, seed=None, name=None, cond_on_train=
     inv_keep_prob = 1.0 / keep_prob
 
     noise_shape = noise_shape if noise_shape is not None else tf.shape(x)
+    if isinstance(noise_shape, (list, tuple)):
+      noise_shape = [d if isinstance(d, int) else tf.shape(x)[i] for (i, d) in enumerate(noise_shape)]
     # uniform [keep_prob, 1.0 + keep_prob)
     random_tensor = keep_prob
     random_tensor += tf.random_uniform(noise_shape, seed=seed, dtype=x.dtype)
