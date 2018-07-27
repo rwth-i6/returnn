@@ -5653,23 +5653,28 @@ def print_graph_output(fetches):
   pprint(ops)
 
 
-def find_ops_with_tensor_input(tensor, graph=None):
+def find_ops_with_tensor_input(tensors, graph=None):
   """
-  :param tf.Tensor|tf.Variable tensor:
+  :param tf.Tensor|tf.Variable|list[tf.Tensor] tensors:
   :param tf.Graph|None graph:
   :return: list of ops
   :rtype: list[tf.Operation]
   """
   if graph is None:
     graph = tf.get_default_graph()
-  if isinstance(tensor, tf.Variable):
-    tensor = tf.convert_to_tensor(tensor)  # should always lead to the same read
-  assert isinstance(tensor, tf.Tensor)
+  if isinstance(tensors, tf.Variable):
+    # noinspection PyProtectedMember
+    tensors = [tensors._ref(), tensors.value()]
+  if isinstance(tensors, tf.Tensor):
+    tensors = [tensors]
+  assert all([isinstance(x, tf.Tensor) for x in tensors])
   ops = []
   for op in graph.get_operations():
     assert isinstance(op, tf.Operation)
-    if tensor in op.inputs:
-      ops.append(op)
+    for x in tensors:
+      if x in op.inputs:
+        ops.append(op)
+        break
   return ops
 
 

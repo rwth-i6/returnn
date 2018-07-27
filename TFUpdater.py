@@ -368,10 +368,10 @@ class Updater(object):
         assert isinstance(var, tf.Variable)
         ops = find_ops_with_tensor_input(var)
         assert ops, "we expect that var %r is used somewhere" % var
-        ops_ = [op for op in ops if op.type in {"AssignAdd"}]
-        assert len(ops_) == 1, "we expect to have exactly one AssignAdd op in %r" % (ops,)
+        ops_ = [op for op in ops if op.type in {"Assign", "AssignAdd"}]
+        assert len(ops_) == 1, "we expect to have exactly one Assign op in %r" % (ops,)
         with tf.control_dependencies(ops_):
-          op = func(var)
+          op = func(var=var, network=self.network)
           assert isinstance(op, (tf.Operation, tf.Tensor))
           extra_updates_op_list.append(op)
         self.optim_op = tf.group(self.optim_op, *extra_updates_op_list)
