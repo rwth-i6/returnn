@@ -448,6 +448,29 @@ def test_reuse_params_map_custom_dep_loop():
     search_net.construct_from_dict(config.typed_dict["network"])
 
 
+def test_SliceLayer_output_placeholder():
+  with make_scope() as session:
+    net = TFNetwork(extern_data=ExternData())
+    src = InternalLayer(name="src", network=net, out_type={"dim": 20, "sparse": True})
+    src.output.placeholder = tf.constant([[1, 2, 3, 4, 5], [6, 7, 8, 9, 10], [11, 12, 13, 14, 15]], dtype=tf.int32)
+    src.output.size_placeholder = {0: tf.constant([5, 3, 2], dtype=tf.int32)}
+    layer = SliceLayer(
+      name="slice", network=net, axis="T", slice_step=2, slice_start=1, sources=[src],
+      output=SliceLayer.get_out_data_from_opts(
+        name="slice", network=net, axis="T", slice_step=2, slice_start=1, sources=[src]))
+    out, seq_lens = session.run([layer.output.placeholder, layer.output.size_placeholder[0]])
+    print(out)
+    print(seq_lens)
+    assert isinstance(out, numpy.ndarray)
+    assert isinstance(seq_lens, numpy.ndarray)
+    assert_equal(
+      out.tolist(),
+      [[2, 4],
+       [7, 9],
+       [12, 14]])
+    assert_equal(seq_lens.tolist(), [2, 1, 1])
+
+
 def test_ResizeLayer_fill_value():
   with make_scope() as session:
     net = TFNetwork(extern_data=ExternData())

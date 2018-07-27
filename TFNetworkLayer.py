@@ -1731,7 +1731,8 @@ class SliceLayer(_ConcatInputLayer):
             tf.shape(self.input_data.placeholder)[self.input_data.time_dim_axis] - slice_end,
             self.output.size_placeholder[self.input_data.time_dim_axis_excluding_batch])
       if slice_step:
-        self.output.size_placeholder[self.input_data.time_dim_axis_excluding_batch] //= slice_step
+        self.output.size_placeholder[self.input_data.time_dim_axis_excluding_batch] = \
+          tf.ceil(tf.divide(self.output.size_placeholder[self.input_data.time_dim_axis_excluding_batch], slice_step))
     elif axis_wo_batch is not None:
       assert axis_wo_batch not in self.output.size_placeholder
     self.output.placeholder = self.input_data.placeholder[slices]
