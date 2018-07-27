@@ -2869,7 +2869,8 @@ class ConvLayer(_ConcatInputLayer):
     if padding == "SAME":
       return ceildiv(in_dim, stride)
     elif padding == "VALID":
-      return ceildiv((in_dim - (filter_size - 1) * dilation_rate), stride)
+      max_func = tf.maximum if isinstance(in_dim, tf.Tensor) else max
+      return max_func(ceildiv((in_dim - (filter_size - 1) * dilation_rate), stride), 0)
     else:
       raise Exception("invalid padding %r" % padding)
 
