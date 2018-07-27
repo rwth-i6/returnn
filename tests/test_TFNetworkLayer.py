@@ -299,6 +299,7 @@ def test_ConvLayer_get_valid_out_dim():
   assert_equal(ConvLayer.calc_out_dim(in_dim=10, stride=3, filter_size=2, padding="same"), 4)
   assert_equal(ConvLayer.calc_out_dim(in_dim=41, stride=1, filter_size=2, padding="valid"), 40)
   assert_equal(ConvLayer.calc_out_dim(in_dim=40, stride=2, filter_size=2, padding="valid"), 20)
+  assert_equal(ConvLayer.calc_out_dim(in_dim=2, stride=1, filter_size=3, padding="valid"), 0)
 
 
 def test_reuse_params():
@@ -469,6 +470,29 @@ def test_SliceLayer_output_placeholder():
        [7, 9],
        [12, 14]])
     assert_equal(seq_lens.tolist(), [2, 1, 1])
+
+
+def test_WindowLayer_output_placeholder():
+  with make_scope() as session:
+    net = TFNetwork(extern_data=ExternData())
+    src = InternalLayer(name="src", network=net, out_type={"dim": 20, "sparse": True})
+    src.output.placeholder = tf.constant([[1, 2, 3, 4, 5], [6, 7, 8, 9, 10], [11, 12, 13, 14, 15]], dtype=tf.int32)
+    src.output.size_placeholder = {0: tf.constant([5, 3, 1], dtype=tf.int32)}
+    layer = WindowLayer(
+      name="window", network=net, axis="T", window_size=3, padding='valid', sources=[src],
+      output=WindowLayer.get_out_data_from_opts(
+        name="window", network=net, axis="T", window_size=3, padding='valid', sources=[src]))
+    out, seq_lens = session.run([layer.output.placeholder, layer.output.size_placeholder[0]])
+    print(out)
+    print(seq_lens)
+    assert isinstance(out, numpy.ndarray)
+    assert isinstance(seq_lens, numpy.ndarray)
+    assert_equal(
+      out.tolist(),
+      [[[1, 2, 3], [2, 3, 4], [3, 4, 5]],
+       [[6, 7, 8], [7, 8, 9], [8, 9, 10]],
+       [[11, 12, 13], [12, 13, 14], [13, 14, 15]]])
+    assert_equal(seq_lens.tolist(), [3, 1, 0])
 
 
 def test_ResizeLayer_fill_value():
