@@ -5653,6 +5653,26 @@ def print_graph_output(fetches):
   pprint(ops)
 
 
+def find_ops_with_tensor_input(tensor, graph=None):
+  """
+  :param tf.Tensor|tf.Variable tensor:
+  :param tf.Graph|None graph:
+  :return: list of ops
+  :rtype: list[tf.Operation]
+  """
+  if graph is None:
+    graph = tf.get_default_graph()
+  if isinstance(tensor, tf.Variable):
+    tensor = tf.convert_to_tensor(tensor)  # should always lead to the same read
+  assert isinstance(tensor, tf.Tensor)
+  ops = []
+  for op in graph.get_operations():
+    assert isinstance(op, tf.Operation)
+    if tensor in op.inputs:
+      ops.append(op)
+  return ops
+
+
 def add_control_input(op, control_input):
   """
   :param tf.Operation op:

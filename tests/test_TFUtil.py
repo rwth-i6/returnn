@@ -1424,6 +1424,19 @@ def test_get_op_attrib_keys():
   assert_equal(dtype, tf.float32)
 
 
+def test_find_ops_with_tensor_input():
+  x0 = tf.constant(1.0)
+  v1 = tf.get_variable("test_find_ops_with_tensor_input_var1", ())
+  v2 = tf.get_variable("test_find_ops_with_tensor_input_var2", ())
+  x1a = x0 + v1
+  x1 = x1a + v2
+  x2a = v1 * v2
+  x2 = x2a * x0
+  assert_equal(find_ops_with_tensor_input(x0), [x1a.op, x2.op])
+  assert_equal(find_ops_with_tensor_input(v1), [x1a.op, x2a.op])
+  assert_equal(find_ops_with_tensor_input(v2), [x1.op, x2a.op])
+
+
 def test_tensor_array_is_dynamic_size():
   ta1 = tf.TensorArray(tf.float32, size=0, dynamic_size=True)
   assert_equal(tensor_array_is_dynamic_size(ta1), True)
