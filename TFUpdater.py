@@ -355,6 +355,27 @@ class Updater(object):
         with tf.control_dependencies([self.optim_op]):
           self.optim_op = sgd_optimizer.minimize(self.constraints, var_list=self.trainable_vars)
 
+    if self.config.opt_typed_value("extra_updates"):
+      extra_updates = self.config.typed_dict["extra_updates"]
+      assert isinstance(extra_updates, dict)  # dict var_name -> function(var)
+      vars_by_name = {v.name[:-2]: v for v in all_prev_existing_vars}
+      extra_updates_op_list = []
+      from TFUtil import find_ops_with_tensor_input
+      for var_name, func in extra_updates.items():
+        assert var_name in vars_by_name, "var with name %r not found. vars:\n%s" % (
+          var_name, "\n".join(sorted(vars_by_name.keys())))
+        var = vars_by_name[var_name]
+        assert isinstance(var, tf.Variable)
+        ops = find_ops_with_tensor_input(var)
+        assert ops, "we expect that var %r is used somewhere" % var
+        ops_ = [op for op in ops if op.type in {"AssignAdd"}]
+        assert len(ops_) == 1, "we expect to have exactly one AssignAdd op in %r" % (ops,)
+        with tf.control_dependencies(ops_):
+          op = func(var)
+          assert isinstance(op, (tf.Operation, tf.Tensor))
+          extra_updates_op_list.append(op)
+        self.optim_op = tf.group(self.optim_op, *extra_updates_op_list)
+
     print("Initialize optimizer with slots %s." % self.optimizer.get_slot_names(), file=log.v3)
     slot_vars = []
     for slot_name in self.optimizer.get_slot_names():
