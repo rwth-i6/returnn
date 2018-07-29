@@ -1424,24 +1424,39 @@ def test_get_op_attrib_keys():
   assert_equal(dtype, tf.float32)
 
 
+def test_get_var_ops():
+  with tf.variable_scope("test_get_var_ops"):
+    v = tf.get_variable("v", ())
+    assert_equal(find_ops_with_tensor_input(v), [v.initializer])
+
+
 def test_find_ops_with_tensor_input():
   with tf.variable_scope("test_find_ops_with_tensor_input"):
     x0 = tf.constant(1.0, name="x0")
     v1 = tf.get_variable("v1", ())
     v2 = tf.get_variable("v2", ())
-    assert isinstance(v1, tf.Variable)
-    assert isinstance(v2, tf.Variable)
-    v1_ops = [v1._initializer_op, v1._snapshot.op]
-    v2_ops = [v2._initializer_op, v2._snapshot.op]
-    assert_equal(find_ops_with_tensor_input(v1), v1_ops)
-    assert_equal(find_ops_with_tensor_input(v2), v2_ops)
     x1a = tf.add(x0, v1, name="x1a")
     x1b = tf.add(x1a, v2, name="x1b")
     x2a = tf.multiply(v1, v2, name="x2a")
     x2b = tf.multiply(x2a, x0, name="x2b")
     assert_equal(find_ops_with_tensor_input(x0), [x1a.op, x2b.op])
-    assert_equal(find_ops_with_tensor_input(v1), v1_ops + [x1a.op, x2a.op])
-    assert_equal(find_ops_with_tensor_input(v2), v2_ops + [x1b.op, x2a.op])
+    assert_equal(find_ops_with_tensor_input(v1), [v1.initializer, x1a.op, x2a.op])
+    assert_equal(find_ops_with_tensor_input(v2), [v2.initializer, x1b.op, x2a.op])
+    assert_equal(find_ops_with_tensor_input(v2, fetches=[x2b]), [x2a.op])
+
+
+def test_get_var_update_ops():
+  with tf.variable_scope("test_get_var_update_ops"):
+    v = tf.get_variable("v", ())
+    loss = (v - 1.0) ** 2
+    opt = tf.train.AdamOptimizer()
+    minimize_op = opt.minimize(loss=loss, var_list=[v])
+    assert isinstance(minimize_op, tf.Operation)
+    print("find_ops_with_tensor_input:", find_ops_with_tensor_input(v, fetches=minimize_op))
+    print("get_var_update_ops:", get_var_update_ops(v, fetches=minimize_op))
+    update_ops = get_var_update_ops(v, fetches=minimize_op)
+    assert len(update_ops) == 1
+    assert update_ops[0].type == "ApplyAdam"
 
 
 def test_tensor_array_is_dynamic_size():

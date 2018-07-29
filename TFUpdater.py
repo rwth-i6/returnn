@@ -360,17 +360,14 @@ class Updater(object):
       assert isinstance(extra_updates, dict)  # dict var_name -> function(var)
       vars_by_name = {v.name[:-2]: v for v in all_prev_existing_vars}
       extra_updates_op_list = []
-      from TFUtil import find_ops_with_tensor_input
+      from TFUtil import get_var_update_ops
       for var_name, func in extra_updates.items():
         assert var_name in vars_by_name, "var with name %r not found. vars:\n%s" % (
           var_name, "\n".join(sorted(vars_by_name.keys())))
         var = vars_by_name[var_name]
         assert isinstance(var, tf.Variable)
-        ops = find_ops_with_tensor_input(var)
-        assert ops, "we expect that var %r is used somewhere" % var
-        ops_ = [op for op in ops if op.type in {"Assign", "AssignAdd"}]
-        assert len(ops_) == 1, "we expect to have exactly one Assign op in %r" % (ops,)
-        with tf.control_dependencies(ops_):
+        ops = get_var_update_ops(var)
+        with tf.control_dependencies(ops):
           op = func(var=var, network=self.network)
           assert isinstance(op, (tf.Operation, tf.Tensor))
           extra_updates_op_list.append(op)

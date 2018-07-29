@@ -2583,7 +2583,6 @@ def matrix_triangular(shape, dtype=tf.float32, lower=False, upper=False):
   return tf.matrix_band_part(x, num_lower=-1 if lower else 0, num_upper=-1 if upper else 0)
 
 
-
 class VariableAssigner(object):
   def __init__(self, var):
     """
@@ -5653,29 +5652,65 @@ def print_graph_output(fetches):
   pprint(ops)
 
 
-def find_ops_with_tensor_input(tensors, graph=None):
+def find_ops_with_tensor_input(tensors, fetches=None, graph=None):
   """
   :param tf.Tensor|tf.Variable|list[tf.Tensor] tensors:
+  :param tf.Operation|tf.Tensor|list[tf.Operation|tf.Tensor]|None fetches:
   :param tf.Graph|None graph:
   :return: list of ops
   :rtype: list[tf.Operation]
   """
-  if graph is None:
-    graph = tf.get_default_graph()
   if isinstance(tensors, tf.Variable):
     # noinspection PyProtectedMember
     tensors = [tensors._ref(), tensors.value()]
   if isinstance(tensors, tf.Tensor):
     tensors = [tensors]
   assert all([isinstance(x, tf.Tensor) for x in tensors])
+  assert len(tensors) > 0
+  if fetches is not None:
+    if isinstance(fetches, (tf.Operation, tf.Tensor)):
+      fetches = [fetches]
+    fetches = [x.op if isinstance(x, tf.Tensor) else x for x in fetches]
+    assert all([isinstance(x, tf.Operation) for x in fetches])
+    from tensorflow.contrib import graph_editor
+    all_ops = graph_editor.get_backward_walk_ops(
+      fetches, inclusive=True, control_inputs=True, stop_at_ts=tensors)
+  else:
+    if graph is None:
+      graph = tensors[0].graph
+    all_ops = graph.get_operations()
   ops = []
-  for op in graph.get_operations():
+  for op in all_ops:
     assert isinstance(op, tf.Operation)
+    if any([x.op == op for x in tensors]):
+      continue
     for x in tensors:
       if x in op.inputs:
         ops.append(op)
         break
   return ops
+
+
+def get_var_update_ops(var, fetches=None):
+  """
+  :param tf.Variable var:
+  :param tf.Operation|tf.Tensor|list[tf.Operation|tf.Tensor]|None fetches: e.g. the Optimizer.minimize() op
+  :return: list of ops that update var; currently expected to be of length 1
+  :rtype: list[tf.Operation]
+  """
+  ops = find_ops_with_tensor_input(var, fetches=fetches)
+  assert ops, "we expect that var %r is used somewhere" % var
+  apply_op_names = {
+    "Assign", "AssignAdd",
+    # This list might need to be extended for your need...
+    "ApplyAdam", "ApplyGradientDescent", "ApplyAdadelta", "ApplyAdagrad", "ApplyAdagradDA",
+    "ApplyCenteredRMSProp", "ApplyFtrl", "ApplyMomentum", "ApplyProximalAdagrad",
+    "ApplyProximalGradientDescent", "ApplyRMSProp"}
+  apply_op_names.update(["Resource%s" % name for name in apply_op_names])
+  ops_ = [op for op in ops if op.type in apply_op_names]
+  # Maybe we may loosen this restriction to be >= 1 or so later on.
+  assert len(ops_) == 1, "we expect to have exactly one Assign/Apply op in %r" % (ops,)
+  return ops_
 
 
 def add_control_input(op, control_input):
