@@ -1522,7 +1522,7 @@ def test_get_variable_grad_from_update_ops():
 
 
 def test_get_variable_grad_from_update_ops_mix_sparse_dense():
-  with tf.variable_scope("test_get_variable_grad_from_update_ops"):
+  with tf.variable_scope("test_get_variable_grad_from_update_ops_mix_sparse_dense"):
     var = tf.get_variable("var", (3, 5), initializer=tf.ones_initializer())
     loss = tf.reduce_sum((tf.matmul(tf.nn.embedding_lookup(var, [1]) - 1.0, tf.transpose(var)) - 1.0) ** 2)
     ref_grad, = tf.gradients(loss, var)
