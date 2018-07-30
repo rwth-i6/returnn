@@ -18,6 +18,8 @@ import better_exchook
 better_exchook.replace_traceback_format_tb()
 
 
+print("TF version:", tf.__version__)
+
 session = tf.InteractiveSession()
 
 
@@ -1457,6 +1459,40 @@ def test_get_var_update_ops():
     update_ops = get_var_update_ops(v, fetches=minimize_op)
     assert len(update_ops) == 1
     assert update_ops[0].type == "ApplyAdam"
+
+
+def test_get_var_update_ops__get_variable_value_copy_before_update_ops():
+  with tf.variable_scope("test_get_var_update_ops__get_variable_value_copy_before_update_ops"):
+    v = tf.get_variable("v", (), initializer=tf.zeros_initializer())
+    assert isinstance(v, tf.Variable)
+    loss = (v - 1.0) ** 2
+    assert isinstance(loss, tf.Tensor)
+    opt = tf.train.GradientDescentOptimizer(learning_rate=1.0)
+    minimize_op = opt.minimize(loss=loss, var_list=[v])
+    assert isinstance(minimize_op, tf.Operation)
+    print("find_ops_with_tensor_input:", find_ops_with_tensor_input(v, fetches=minimize_op))
+    print("get_var_update_ops:", get_var_update_ops(v, fetches=minimize_op))
+    update_ops = get_var_update_ops(v, fetches=minimize_op)
+    assert len(update_ops) == 1
+    assert update_ops[0].type == "ApplyGradientDescent"
+    with tf.control_dependencies(update_ops):
+      # v.value() is the last snapshot (no new op), i.e. it points to the actual memory.
+      # To make sure we get the value before the update (0), we must do a copy at the right point.
+      v_val = get_variable_value_copy_before_update_ops(v, update_ops)
+      # v.read_value() is a new read op to the current value.
+      # Anyway, make sure that we have the same everywhere below.
+      # This should be the value after the update, and the grad is -2, lr 1, thus should be 2.
+      v_read_val = tf.identity(v.read_value())
+      res = [
+        tf.Print(0, ["loss:", loss]), tf.Assert(tf.equal(loss, 1.0), ["loss ", loss, " == 1"]),
+        tf.Print(0, ["v:", v]),
+        tf.Print(0, ["v.value:", v_val]),
+        tf.Assert(tf.equal(v_val, 0.0), ["v.value ", v_val, " == 0"]),  # last snapshot
+        tf.Print(0, ["v.read_value:", v_read_val]),
+        tf.Assert(tf.equal(v_read_val, 2.0), ["v.read_value ", v_read_val, " == 2"])  # after update
+      ]
+    session.run(v.initializer)
+    session.run([loss, minimize_op, res])
 
 
 def test_tensor_array_is_dynamic_size():

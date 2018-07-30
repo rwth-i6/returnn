@@ -4164,6 +4164,8 @@ def check_base_op_type_and_replace(x, op_type, new_op_type):
 
 def copy_op(op, op_type=None, inputs=None):
   """
+  Copies a tf.Operation.
+
   :param tf.Operation op:
   :param str|None op_type:
   :param list[tf.Tensor]|None inputs:
@@ -4189,6 +4191,21 @@ def copy_op(op, op_type=None, inputs=None):
     dtypes=[x.dtype for x in op.outputs],  # output types
     attrs=dict(op.node_def.attr.items()))
   return new_op
+
+
+def copy_tensor(x):
+  """
+  Similar as tf.identity, but we ensure here that the return value has its own memory.
+  This can be relevant when you want to keep a copy of the original variable value.
+  See :func:`get_variable_value_copy_before_update_ops` for usage.
+
+  :param tf.Tensor x:
+  :return: a copy of x (points to new memory)
+  :rtype: tf.Tensor
+  """
+  # I think there is a copy op also in TF, but I don't see it in the Python API.
+  with tf.name_scope("copy"):
+    return tf.add(x, tf.constant(0, dtype=x.dtype, name="dummy_zero"), name="copy")
 
 
 def smoothing_cross_entropy(logits,
@@ -5713,11 +5730,32 @@ def get_var_update_ops(var, fetches=None):
   return ops_
 
 
+def get_variable_value_copy_before_update_ops(var, update_ops):
+  """
+  :param tf.Variable var:
+  :param list[tf.Operation] update_ops:
+  :return: var value before any of the update_ops are executed
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope("get_variable_value_copy_before_update_ops"):
+    with tf.control_dependencies(None):
+      v_val = copy_tensor(var.value())
+      for op in update_ops:
+        add_control_input(op, v_val.op)  # Do it before op is executed.
+    return v_val
+
+
 def add_control_input(op, control_input):
   """
   :param tf.Operation op:
   :param tf.Operation control_input:
   """
+  assert isinstance(op, tf.Operation)
+  assert isinstance(control_input, tf.Operation)
+  if hasattr(op, "_add_control_input"):  # some later TF version
+    op._add_control_input(control_input)
+    return
+  # Fallback. I think I have seen this in OpenAI code.
   op._control_inputs.append(control_input)
   op._recompute_node_def()
 
