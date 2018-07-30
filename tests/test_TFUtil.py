@@ -1495,6 +1495,32 @@ def test_get_var_update_ops__get_variable_value_copy_before_update_ops():
     session.run([loss, minimize_op, res])
 
 
+def test_get_variable_grad_from_update_ops():
+  with tf.variable_scope("test_get_variable_grad_from_update_ops"):
+    var = tf.get_variable("var", (), initializer=tf.zeros_initializer())
+    loss = (var - 1.0) ** 2
+    for opt in [
+      tf.train.AdamOptimizer(),
+      tf.train.GradientDescentOptimizer(learning_rate=1.0),
+      tf.train.MomentumOptimizer(learning_rate=0.1, momentum=0.9),
+      tf.train.RMSPropOptimizer(learning_rate=0.1),
+    ]:
+      print("Optimizer:", opt)
+      minimize_op = opt.minimize(loss=loss, var_list=[var])
+      assert isinstance(minimize_op, tf.Operation)
+      update_ops = get_var_update_ops(var, fetches=minimize_op)
+      print("update ops:", update_ops)
+      print("update op keys:", get_op_attrib_keys(update_ops[0]))
+      print("update op inputs by name:", get_op_input_names(update_ops[0]))
+      session.run(var.initializer)  # reset
+      session.run(tf.global_variables_initializer())  # from Adam or so
+      assert_equal(session.run(var), 0.0)
+      grad = get_variable_grad_from_update_ops(var, update_ops)
+      print("grad:", grad)
+      _, grad_np = session.run([minimize_op, grad])
+      assert_equal(grad_np, -2.0)
+
+
 def test_tensor_array_is_dynamic_size():
   ta1 = tf.TensorArray(tf.float32, size=0, dynamic_size=True)
   assert_equal(tensor_array_is_dynamic_size(ta1), True)

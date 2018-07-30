@@ -5376,6 +5376,28 @@ def get_op_attrib_keys(op):
   return list(attribs.keys())
 
 
+def get_op_input_names(op):
+  """
+  Also see: https://stackoverflow.com/questions/50723310/get-tensorflow-tf-operation-inputs-by-name
+
+  :param tf.Operation op:
+  :return: list of names with same len as op.inputs
+  :rtype: list[str]
+  """
+  op_def_fields = get_protobuf_fields(op.op_def)
+  args_pb = [get_protobuf_fields(a) for a in op_def_fields["input_arg"]]
+  return [a["name"] for a in args_pb]
+
+
+def get_op_inputs_by_name(op):
+  """
+  :param tf.Operation op:
+  :return: dict input_name -> input
+  :rtype: dict[str,tf.Tensor]
+  """
+  return dict(zip(get_op_input_names(op), op.inputs))
+
+
 def tensor_array_is_dynamic_size(ta):
   """
   :param tf.TensorArray ta:
@@ -5743,6 +5765,29 @@ def get_variable_value_copy_before_update_ops(var, update_ops):
       for op in update_ops:
         add_control_input(op, v_val.op)  # Do it before op is executed.
     return v_val
+
+
+def get_variable_grad_from_update_ops(var, update_ops):
+  """
+  :param tf.Variable var:
+  :param list[tf.Operation] update_ops: via :func:`get_var_update_ops`
+  :return: grad of loss w.r.t. var, as it is used in the update_ops, e.g. via ApplyAdam or ApplyGradientDescent
+    (not all kind of updates are supported currently)
+  :rtype: tf.Tensor
+  """
+  assert len(update_ops) == 1
+  op = update_ops[0]
+  op_inputs = get_op_inputs_by_name(op)
+  assert "var" in op_inputs
+  assert op_inputs["var"] == var._ref()
+  if "grad" in op_inputs:  # e.g. ApplyAdam
+    grad = op_inputs["grad"]
+  elif "delta" in op_inputs:  # e.g. ApplyGradientDescent
+    grad = op_inputs["delta"]
+  else:
+    raise Exception("Don't know how to get grad from op %r with inputs %r." % (op, op_inputs))
+  assert "gradients" in grad.name
+  return grad
 
 
 def add_control_input(op, control_input):
