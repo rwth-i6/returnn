@@ -5683,12 +5683,32 @@ def print_graph_output(fetches):
     fetches = [fetches]
   fetch_ops = [v.op if isinstance(v, tf.Tensor) else v for v in fetches]
   assert all([isinstance(op, tf.Operation) for op in fetch_ops])
-  # TODO: We could print it a bit like Theano does.
-  # So far this is not really implemented...
-  from tensorflow.contrib import graph_editor
-  ops = graph_editor.get_backward_walk_ops(fetch_ops, inclusive=True, control_inputs=True)
-  from pprint import pprint
-  pprint(ops)
+  visited = set()
+
+  def p(op, prefix="", indent=""):
+    """
+    :param tf.Operation op:
+    :param str prefix:
+    :param str indent:
+    """
+    assert isinstance(op, tf.Operation)
+    print("%s%s%r" % (indent, prefix, op))
+    if indent:
+      if op in visited:
+        return
+    visited.add(op)
+    if op.inputs:
+      input_names = get_op_input_names(op)
+      if len(input_names) < len(op.inputs):  # can happen?
+        input_names.extend(["?"] * (len(op.inputs) - len(input_names)))
+      for i, x in enumerate(op.inputs):
+        p(x.op, prefix="inputs[%i] %r: " % (i, input_names[i]), indent=indent + "  ")
+    if op.control_inputs:
+      for i, x in enumerate(op.control_inputs):
+        p(x, prefix="control_inputs[%i]: " % (i,), indent=indent + "  ")
+
+  for op in fetches:
+    p(op, prefix="fetch: ")
 
 
 def find_ops_with_tensor_input(tensors, fetches=None, graph=None):
