@@ -5740,7 +5740,7 @@ def get_var_update_ops(var, fetches=None):
   ops = find_ops_with_tensor_input(var, fetches=fetches)
   assert ops, "we expect that var %r is used somewhere" % var
   apply_op_names = {
-    "Assign", "AssignAdd",
+    "Assign", "AssignAdd", "AssignSub",
     # This list might need to be extended for your need...
     "ApplyAdam", "ApplyGradientDescent", "ApplyAdadelta", "ApplyAdagrad", "ApplyAdagradDA",
     "ApplyCenteredRMSProp", "ApplyFtrl", "ApplyMomentum", "ApplyProximalAdagrad",
