@@ -1521,6 +1521,34 @@ def test_get_variable_grad_from_update_ops():
       assert_equal(grad_np, -2.0)
 
 
+@unittest.skip("WIP ...")
+def test_get_variable_grad_from_update_ops_2():
+  with tf.variable_scope("test_get_variable_grad_from_update_ops"):
+    var = tf.get_variable("var", (3, 5), initializer=tf.ones_initializer())
+    loss = tf.reduce_sum((tf.matmul(tf.nn.embedding_lookup(var, [1]) - 1.0, tf.transpose(var)) - 1.0) ** 2)
+    for opt in [
+      tf.train.AdamOptimizer(),
+      tf.train.GradientDescentOptimizer(learning_rate=1.0),
+      tf.train.MomentumOptimizer(learning_rate=0.1, momentum=0.9),
+      tf.train.RMSPropOptimizer(learning_rate=0.1),
+    ]:
+      print("Optimizer:", opt)
+      minimize_op = opt.minimize(loss=loss, var_list=[var])
+      assert isinstance(minimize_op, tf.Operation)
+      print("find_ops_with_tensor_input:", find_ops_with_tensor_input(var, fetches=minimize_op))
+      update_ops = get_var_update_ops(var, fetches=minimize_op)
+      print("update ops:", update_ops)
+      print("update op keys:", get_op_attrib_keys(update_ops[0]))
+      print("update op inputs by name:", get_op_input_names(update_ops[0]))
+      session.run(var.initializer)  # reset
+      session.run(tf.global_variables_initializer())  # from Adam or so
+      grad = get_variable_grad_from_update_ops(var, update_ops)
+      print("grad:", grad)
+      _, grad_np = session.run([minimize_op, grad])
+      print("grad value:")
+      print(grad_np)
+
+
 def test_tensor_array_is_dynamic_size():
   ta1 = tf.TensorArray(tf.float32, size=0, dynamic_size=True)
   assert_equal(tensor_array_is_dynamic_size(ta1), True)
