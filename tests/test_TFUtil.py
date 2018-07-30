@@ -10,7 +10,7 @@ import tensorflow as tf
 import sys
 sys.path += ["."]  # Python 3 hack
 from TFUtil import *
-from nose.tools import assert_equal, assert_is_instance, assert_is, assert_in
+from nose.tools import assert_equal, assert_not_equal, assert_is_instance, assert_is, assert_in
 from numpy.testing.utils import assert_almost_equal, assert_allclose
 import unittest
 import numpy.testing
@@ -1521,11 +1521,16 @@ def test_get_variable_grad_from_update_ops():
       assert_equal(grad_np, -2.0)
 
 
-@unittest.skip("WIP ...")
-def test_get_variable_grad_from_update_ops_2():
+def test_get_variable_grad_from_update_ops_mix_sparse_dense():
   with tf.variable_scope("test_get_variable_grad_from_update_ops"):
     var = tf.get_variable("var", (3, 5), initializer=tf.ones_initializer())
     loss = tf.reduce_sum((tf.matmul(tf.nn.embedding_lookup(var, [1]) - 1.0, tf.transpose(var)) - 1.0) ** 2)
+    ref_grad, = tf.gradients(loss, var)
+    ref_grad = tf.convert_to_tensor(ref_grad)
+    session.run(var.initializer)  # reset
+    ref_grad_np = session.run(ref_grad)
+    print("ref grad value:")
+    print(ref_grad_np)
     for opt in [
       tf.train.AdamOptimizer(),
       tf.train.GradientDescentOptimizer(learning_rate=1.0),
@@ -1542,11 +1547,42 @@ def test_get_variable_grad_from_update_ops_2():
       print("update op inputs by name:", get_op_input_names(update_ops[0]))
       session.run(var.initializer)  # reset
       session.run(tf.global_variables_initializer())  # from Adam or so
-      grad = get_variable_grad_from_update_ops(var, update_ops)
+      try:
+        grad = get_variable_grad_from_update_ops(var, update_ops)
+      except Exception:
+        print_graph_output(update_ops)
+        raise
       print("grad:", grad)
-      _, grad_np = session.run([minimize_op, grad])
+      _, grad_np, grad_dense_np = session.run([minimize_op, grad, tf.convert_to_tensor(grad)])
       print("grad value:")
       print(grad_np)
+      print("grad dense value:")
+      print(grad_dense_np)
+      assert_almost_equal(ref_grad_np, grad_dense_np)
+
+
+def test_mixed_dense_sparse_grad():
+  with tf.variable_scope("test_mixed_dense_sparse_grad"):
+    var = tf.get_variable("var", (3, 5), initializer=tf.ones_initializer())
+    session.run(var.initializer)
+    loss = tf.reduce_sum(tf.nn.embedding_lookup(var, [1]) ** 2) + tf.reduce_sum(var ** 2)
+    grad, = tf.gradients(loss, var)
+    print("grad:", grad)
+    # It is an IndexedSlices.
+    # https://github.com/tensorflow/tensorflow/issues/21243
+    grad_dense = tf.convert_to_tensor(grad)
+    print("grad dense:", grad_dense)
+    print("grad value:")
+    print(session.run(grad))
+    print("grad dense value:")
+    print(session.run(grad_dense))
+    opt = tf.train.GradientDescentOptimizer(learning_rate=1.0)
+    session.run(opt.minimize(loss=loss, var_list=[var]))
+    var_np = session.run(var)
+    print("var:")
+    print(var_np)
+    assert_equal(var_np[0, 0], var_np[2, 0])
+    assert_not_equal(var_np[0, 0], var_np[1, 0])
 
 
 def test_tensor_array_is_dynamic_size():

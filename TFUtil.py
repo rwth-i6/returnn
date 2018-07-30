@@ -5707,7 +5707,7 @@ def print_graph_output(fetches):
       for i, x in enumerate(op.control_inputs):
         p(x, prefix="control_inputs[%i]: " % (i,), indent=indent + "  ")
 
-  for op in fetches:
+  for op in fetch_ops:
     p(op, prefix="fetch: ")
 
 
@@ -5760,11 +5760,12 @@ def get_var_update_ops(var, fetches=None):
   ops = find_ops_with_tensor_input(var, fetches=fetches)
   assert ops, "we expect that var %r is used somewhere" % var
   apply_op_names = {
-    "Assign", "AssignAdd", "AssignSub",
+    "Assign", "AssignAdd", "AssignSub", "ScatterSub",
     # This list might need to be extended for your need...
     "ApplyAdam", "ApplyGradientDescent", "ApplyAdadelta", "ApplyAdagrad", "ApplyAdagradDA",
     "ApplyCenteredRMSProp", "ApplyFtrl", "ApplyMomentum", "ApplyProximalAdagrad",
     "ApplyProximalGradientDescent", "ApplyRMSProp"}
+  apply_op_names.update(["Sparse%s" % name for name in apply_op_names])
   apply_op_names.update(["Resource%s" % name for name in apply_op_names])
   ops_ = [op for op in ops if op.type in apply_op_names]
   # Maybe we may loosen this restriction to be >= 1 or so later on.
@@ -5792,12 +5793,39 @@ def get_variable_grad_from_update_ops(var, update_ops):
   :param tf.Variable var:
   :param list[tf.Operation] update_ops: via :func:`get_var_update_ops`
   :return: grad of loss w.r.t. var, as it is used in the update_ops, e.g. via ApplyAdam or ApplyGradientDescent
-    (not all kind of updates are supported currently)
-  :rtype: tf.Tensor
+    (not all kind of updates are supported currently).
+    If the gradient is sparse, it will return a tf.IndexedSlices.
+  :rtype: tf.Tensor|tf.IndexedSlices
   """
   assert len(update_ops) == 1
   op = update_ops[0]
   op_inputs = get_op_inputs_by_name(op)
+  if op.type == "ScatterSub":  # e.g. sparse grad with GradientDescentOptimizer
+    assert op_inputs["ref"] == var._ref()
+    indices = op_inputs["indices"]
+    delta = op_inputs["updates"]
+    assert delta.op.type == "Mul"  # mul with learning rate
+    grad = delta.op.inputs[0]
+    assert "gradients" in grad.name
+    return tf.IndexedSlices(values=grad, indices=indices, dense_shape=tf.convert_to_tensor(get_shape(var)))
+  if op.type == "AssignSub":
+    op_name_prefix = os.path.dirname(op.name) + "/"
+    assert op_inputs["ref"] == var._ref()
+    # Case for sparse update in Adam:
+    # m_scaled_g_values = grad * (1 - beta1_t)
+    # m_t = scatter_add(m, indices, m_scaled_g_values)
+    from tensorflow.contrib import graph_editor
+    all_ops = graph_editor.get_backward_walk_ops(update_ops, inclusive=True, control_inputs=True)
+    all_ops = [x for x in all_ops if x.name.startswith(op_name_prefix)]
+    scatter_add_ops = [x for x in all_ops if x.type == "ScatterAdd"]
+    # print(scatter_add_ops, [x.inputs[0] for x in scatter_add_ops])
+    indices = scatter_add_ops[0].inputs[1]
+    m_scaled_g_values = scatter_add_ops[0].inputs[2]
+    assert m_scaled_g_values.op.type == "Mul"
+    grad = m_scaled_g_values.op.inputs[0]
+    # We should either have the gradient directly now, or an UnsortedSegmentSum, via _apply_sparse_duplicate_indices.
+    assert "gradients" in grad.name or grad.op.type == "UnsortedSegmentSum"
+    return tf.IndexedSlices(values=grad, indices=indices, dense_shape=tf.convert_to_tensor(get_shape(var)))
   assert "var" in op_inputs
   assert op_inputs["var"] == var._ref()
   if "grad" in op_inputs:  # e.g. ApplyAdam
@@ -5806,6 +5834,11 @@ def get_variable_grad_from_update_ops(var, update_ops):
     grad = op_inputs["delta"]
   else:
     raise Exception("Don't know how to get grad from op %r with inputs %r." % (op, op_inputs))
+  if op.type.startswith("SparseApply"):  # e.g. SparseApplyMomentum
+    # We should either have the gradient directly now, or an UnsortedSegmentSum, via _apply_sparse_duplicate_indices.
+    assert "gradients" in grad.name or grad.op.type == "UnsortedSegmentSum"
+    indices = op_inputs["indices"]
+    return tf.IndexedSlices(values=grad, indices=indices, dense_shape=tf.convert_to_tensor(get_shape(var)))
   assert "gradients" in grad.name
   return grad
 
