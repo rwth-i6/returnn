@@ -360,15 +360,24 @@ class Updater(object):
       assert isinstance(extra_updates, dict)  # dict var_name -> function(var)
       vars_by_name = {v.name[:-2]: v for v in all_prev_existing_vars}
       extra_updates_op_list = []
-      from TFUtil import get_var_update_ops
+      from Util import getargspec
+      from TFUtil import get_var_update_ops, get_variable_grad_from_update_ops
       for var_name, func in extra_updates.items():
+        func_arg_names = getargspec(func).args
         assert var_name in vars_by_name, "var with name %r not found. vars:\n%s" % (
           var_name, "\n".join(sorted(vars_by_name.keys())))
         var = vars_by_name[var_name]
         assert isinstance(var, tf.Variable)
         ops = get_var_update_ops(var, fetches=self.optim_op)
         with tf.control_dependencies(ops):
-          op = func(var=var, network=self.network)
+          func_kwargs = {"var": var}
+          if "network" in func_arg_names:
+            func_kwargs["network"] = self.network
+          if "update_ops" in func_arg_names:
+            func_kwargs["update_ops"] = ops
+          if "grad" in func_arg_names:
+            func_kwargs["grad"] = get_variable_grad_from_update_ops(var, ops)
+          op = func(**func_kwargs)
           assert isinstance(op, (tf.Operation, tf.Tensor))
           extra_updates_op_list.append(op)
         self.optim_op = tf.group(self.optim_op, *extra_updates_op_list)

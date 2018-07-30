@@ -1268,10 +1268,6 @@ def collect_class_init_kwargs(cls, only_with_default=False):
     kwargs = OrderedDict()
   else:
     kwargs = []
-  if PY3:
-    getargspec = inspect.getfullargspec
-  else:
-    getargspec = inspect.getargspec
   for cls_ in inspect.getmro(cls):
     # Check Python function. Could be builtin func or so. Python 2 getargspec does not work in that case.
     if not inspect.ismethod(cls_.__init__) and not inspect.isfunction(cls_.__init__):
@@ -1290,6 +1286,13 @@ def collect_class_init_kwargs(cls, only_with_default=False):
         if arg not in kwargs:
           kwargs.append(arg)
   return kwargs
+
+
+def getargspec(func):
+  if PY3:
+    return inspect.getfullargspec(func)
+  else:
+    return inspect.getargspec(func)
 
 
 def collect_mandatory_class_init_kwargs(cls):
