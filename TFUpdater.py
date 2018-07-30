@@ -366,7 +366,7 @@ class Updater(object):
           var_name, "\n".join(sorted(vars_by_name.keys())))
         var = vars_by_name[var_name]
         assert isinstance(var, tf.Variable)
-        ops = get_var_update_ops(var)
+        ops = get_var_update_ops(var, fetches=self.optim_op)
         with tf.control_dependencies(ops):
           op = func(var=var, network=self.network)
           assert isinstance(op, (tf.Operation, tf.Tensor))
