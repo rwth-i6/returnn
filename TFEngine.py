@@ -60,10 +60,7 @@ class Runner(object):
     engine.network.extern_data.check_matched_dataset(
       dataset=dataset, used_data_keys=engine.network.used_data_keys)
     self.engine = engine
-    self.data_provider = FeedDictDataProvider(
-      tf_session=engine.tf_session, extern_data=engine.network.extern_data,
-      data_keys=engine.network.used_data_keys,
-      dataset=dataset, batches=batches)
+    self.data_provider = self.engine._get_new_data_provider(dataset=dataset, batches=batches)
     assert isinstance(self.data_provider, DataProviderBase)
     self._should_train = train
     self._should_eval = eval
@@ -1339,6 +1336,20 @@ class Engine(object):
         self.tf_session.run(tf.variables_initializer(uninitialized_vars))
       self._checked_uninitialized_vars = True
 
+  def _get_new_data_provider(self, dataset, batches):
+    """
+    :param Dataset.Dataset dataset:
+    :param BatchSetGenerator batches:
+    :rtype: TFDataPipeline.FeedDictDataProvider
+    """
+    from TFDataPipeline import FeedDictDataProvider
+    data_provider = FeedDictDataProvider(
+      tf_session=self.tf_session, extern_data=self.network.extern_data,
+      data_keys=self.network.used_data_keys,
+      dataset=dataset, batches=batches,
+      enforce_min_len1=self.config.is_true("enforce_min_len1", False))
+    return data_provider
+
   def get_specific_feed_dict(self, dataset, seq_idx):
     """
     :param Dataset.Dataset dataset:
@@ -1353,11 +1364,7 @@ class Engine(object):
     batch.init_with_one_full_sequence(seq_idx=seq_idx, dataset=dataset)
     batch_generator = iter([batch])
     batches = BatchSetGenerator(dataset, generator=batch_generator)
-    from TFDataPipeline import FeedDictDataProvider
-    data_provider = FeedDictDataProvider(
-      tf_session=self.tf_session, extern_data=self.network.extern_data,
-      data_keys=self.network.used_data_keys,
-      dataset=dataset, batches=batches)
+    data_provider = self._get_new_data_provider(dataset=dataset, batches=batches)
     feed_dict, _ = data_provider.get_feed_dict(single_threaded=True)
     return feed_dict
 

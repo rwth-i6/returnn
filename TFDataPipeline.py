@@ -833,11 +833,12 @@ class FeedDictDataProvider(DataProviderBase):
   It will run a background thread which reads the data from a dataset and puts it into a queue.
   """
 
-  def __init__(self, tf_session, dataset, batches, capacity=10, tf_queue=None, **kwargs):
+  def __init__(self, tf_session, dataset, batches, enforce_min_len1=False, capacity=10, tf_queue=None, **kwargs):
     """
     :param tf.Session|tf.InteractiveSession tf_session:
     :param Dataset dataset:
     :param BatchSetGenerator batches:
+    :param bool enforce_min_len1:
     :param ExternData extern_data:
     :param set(str)|None data_keys:
     :param int capacity:
@@ -847,6 +848,7 @@ class FeedDictDataProvider(DataProviderBase):
     self.tf_session = tf_session
     self.dataset = dataset
     self.batches = batches
+    self.enforce_min_len1 = enforce_min_len1
     self.state_change_cond = Condition()
     self.queue = None  # type: Queue
     self.tf_queue = tf_queue
@@ -882,7 +884,8 @@ class FeedDictDataProvider(DataProviderBase):
     # In TensorFlow, the default is (batch,time,feature).
     # This is also what we use here, i.e. batch_dim_first=True.
     # This must match the Data specification in TFNetwork.ExternData.init_from_config().
-    shapes = shapes_for_batches([batch], data_keys=self.data_keys, extern_data=self.extern_data)
+    shapes = shapes_for_batches(
+      [batch], data_keys=self.data_keys, extern_data=self.extern_data, enforce_min_len1=self.enforce_min_len1)
     data = {k: numpy.zeros(shape=shapes[k], dtype=self.extern_data.data[k].dtype)
             for k in self.data_keys if self.extern_data.data[k].dtype != "string"}
     # Numpy cannot handle "string" dtype. Just make it a list[str], which is what TF can handle.

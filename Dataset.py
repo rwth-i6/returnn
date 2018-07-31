@@ -899,12 +899,13 @@ def convert_data_dims(data_dims, leave_dict_as_is=False):
   return data_dims
 
 
-def shapes_for_batches(batches, data_keys, dataset=None, extern_data=None):
+def shapes_for_batches(batches, data_keys, dataset=None, extern_data=None, enforce_min_len1=False):
   """
   :param list[EngineBatch.Batch] batches:
   :param list[str] data_keys:
   :param Dataset dataset:
   :param TFNetwork.ExternData extern_data: detailed data description. only used for TensorFlow
+  :param bool enforce_min_len1:
   :rtype: dict[str,list[int]] | None
   """
   assert dataset or extern_data
@@ -921,7 +922,7 @@ def shapes_for_batches(batches, data_keys, dataset=None, extern_data=None):
   # We will just use one dummy frame in that case.
   # The index will stay zero in that case. (see EngineUtil.assign_dev_data())
   # However, also see the OutputLayer.output_index() behavior for forwarding.
-  if not extern_data:  # not needed if TensorFlow is used
+  if not extern_data or enforce_min_len1:  # not needed if TensorFlow is used
     for k in all_data_keys:
       shape[0][k] = max(shape[0][k], 1)
 
