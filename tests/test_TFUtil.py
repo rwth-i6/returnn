@@ -12,6 +12,7 @@ sys.path += ["."]  # Python 3 hack
 from TFUtil import *
 from nose.tools import assert_equal, assert_not_equal, assert_is_instance, assert_is, assert_in
 from numpy.testing.utils import assert_almost_equal, assert_allclose
+from pprint import pprint
 import unittest
 import numpy.testing
 import better_exchook
@@ -1117,6 +1118,21 @@ def test_bleu_score_empty():
   assert_almost_equal(tf_res, [0.0])
 
 
+def test_safe_log_softmax():
+  x = tf.constant(0.5, shape=(3, 7))
+  x = tf.nn.softmax(x)
+  print("x (softmax) op_def:")
+  pprint(x.op.op_def)
+  x = safe_log(x)
+  print("x (safe_log(softmax)) op_def")
+  pprint(x.op.op_def)
+  print("x.op.inputs[0] op_def")
+  pprint(x.op.inputs[0].op.op_def)
+  print("graph:")
+  print_graph_output(x)
+  assert x.op.type == "LogSoftmax"
+
+
 def test_clip_by_value_with_identity_grad():
   err_y = 42.0
   limit = 1.0
@@ -1424,6 +1440,37 @@ def test_get_op_attrib_keys():
   assert_equal(sorted(attrib_keys), ['T', 'adj_x', 'adj_y'])
   dtype = x.op.get_attr("T")
   assert_equal(dtype, tf.float32)
+
+
+def test_get_op_input_names_MatMul():
+  x = tf.matmul(a=tf.zeros((3, 4, 5)), b=tf.zeros((3, 5, 7)))
+  assert isinstance(x, tf.Tensor)
+  assert isinstance(x.op, tf.Operation)
+  print("x op:", x.op.name)
+  assert_equal(x.op.name, "MatMul")
+  input_names = get_op_input_names(x.op)
+  print("matmul input names:", input_names)
+  assert_equal(sorted(input_names), ['x', 'y'])
+
+
+def test_get_op_input_names_Constant():
+  x = tf.constant(1)
+  assert isinstance(x, tf.Tensor)
+  assert isinstance(x.op, tf.Operation)
+  print("x op:", x.op.name)
+  assert_equal(x.op.name, "Const")
+  input_names = get_op_input_names(x.op)
+  print("constant input names:", input_names)
+  assert_equal(sorted(input_names), [])
+
+
+def test_print_graph_output():
+  x = tf.matmul(a=tf.zeros((3, 4, 5)), b=tf.zeros((3, 5, 7)))
+  x.set_shape((3, 4, 7))
+  x = tf.reshape(x, [3, 4 * 7])
+  x = x + tf.constant(3.0)
+  x = safe_log(tf.nn.softmax(x))
+  print_graph_output(x)
 
 
 def test_get_var_ops():

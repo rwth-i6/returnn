@@ -4186,6 +4186,7 @@ def copy_op(op, op_type=None, inputs=None):
   # Fallback to the generic case.
   new_op = g.create_op(
     op_type=op_type,
+    op_def=op.op_def if op_type == op.type else None,  # Can only copy op_def if it is the same op_type.
     inputs=inputs,
     input_types=[x.dtype for x in inputs],
     dtypes=[x.dtype for x in op.outputs],  # output types
@@ -5384,9 +5385,20 @@ def get_op_input_names(op):
   :return: list of names with same len as op.inputs
   :rtype: list[str]
   """
-  op_def_fields = get_protobuf_fields(op.op_def)
-  args_pb = [get_protobuf_fields(a) for a in op_def_fields["input_arg"]]
-  return [a["name"] for a in args_pb]
+  num_inputs = len(op.inputs)
+  if op.op_def is None:
+    # We could maybe do a lookup via the C++ API, similar as kernels_registered_for_op.
+    # Or we could return None.
+    # But this is simpler for now.
+    names = []
+  else:
+    op_def_fields = get_protobuf_fields(op.op_def)
+    args_pb = [get_protobuf_fields(a) for a in op_def_fields["input_arg"]]
+    names = [a["name"] for a in args_pb]
+  assert len(names) <= num_inputs  # Not exactly sure why/when `<` can happen (except the unknown case above).
+  names += ["?%i" % i for i in range(num_inputs - len(names))]
+  assert len(names) == num_inputs
+  return names
 
 
 def get_op_inputs_by_name(op):
@@ -5699,8 +5711,6 @@ def print_graph_output(fetches):
     visited.add(op)
     if op.inputs:
       input_names = get_op_input_names(op)
-      if len(input_names) < len(op.inputs):  # can happen?
-        input_names.extend(["?"] * (len(op.inputs) - len(input_names)))
       for i, x in enumerate(op.inputs):
         p(x.op, prefix="inputs[%i] %r: " % (i, input_names[i]), indent=indent + "  ")
     if op.control_inputs:
