@@ -73,6 +73,12 @@ class BatchMedianPoolingLayer(_ConcatInputLayer):
       time_dim_axis=1)
 
 
+class ComplexLinearProjectionLayer(_ConcatInputLayer):
+  def __init__(self, transformation_kernel=None, **kwargs):
+    super(ComplexLinearProjectionLayer, self).__init__(**kwargs)
+    pass
+
+
 class MelFilterbankLayer(_ConcatInputLayer):
   """
   This layer applies the log Mel filterbank to the input
