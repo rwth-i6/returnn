@@ -74,9 +74,42 @@ class BatchMedianPoolingLayer(_ConcatInputLayer):
 
 
 class ComplexLinearProjectionLayer(_ConcatInputLayer):
-  def __init__(self, transformation_kernel=None, **kwargs):
+  layer_class = "complex_linear_projection"
+
+  def __init__(self, nr_of_filters, clp_weights_init="glorot_uniform", **kwargs):
+    if ('n_out' in kwargs and (kwargs['n_out'] != nr_of_filters)):
+        raise Exception('argument n_out of layer MelFilterbankLayer can not be different from nr_of_filters')
+    kwargs['n_out'] = nr_of_filters
+    self._nr_of_filters = nr_of_filters
     super(ComplexLinearProjectionLayer, self).__init__(**kwargs)
-    pass
+    self._clp_kernel = self._build_kernel(clp_weights_init)
+    self.output.placeholder = self._build_clp_multiplication(self._clp_kernel)
+
+  def _build_kernel(self, clp_weights_init):
+    from TFUtil import get_initializer
+    input_placeholder = self.input_data.get_placeholder_as_batch_major()
+    kernel_width = input_placeholder.shape[2].value // 2
+    kernel_height = self._nr_of_filters
+    with self.var_creation_scope():
+      clp_weights_initializer = get_initializer(
+        clp_weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
+      clp_kernel = self.add_param(tf.get_variable(
+        name="clp_kernel", shape=(2, kernel_width, kernel_height), dtype=tf.float32, initializer=clp_weights_initializer))
+    return clp_kernel
+
+  def _build_clp_multiplication(self, clp_kernel):
+    input_placeholder = self.input_data.get_placeholder_as_batch_major()
+    tf.assert_equal(tf.shape(clp_kernel)[1], tf.shape(input_placeholder)[2] // 2)
+    tf.assert_equal(tf.shape(clp_kernel)[2], self._nr_of_filters)
+    input_real = tf.strided_slice(input_placeholder, [0, 0, 0], tf.shape(input_placeholder), [1, 1, 2])
+    input_imag = tf.strided_slice(input_placeholder, [0, 0, 1], tf.shape(input_placeholder), [1, 1, 2])
+    kernel_real = self._clp_kernel[0, :, :]
+    kernel_imag = self._clp_kernel[1, :, :]
+    output_real = tf.einsum('btf,fp->btp', input_real, kernel_real) - tf.einsum('btf,fp->btp', input_imag, kernel_imag)
+    output_imag = tf.einsum('btf,fp->btp', input_imag, kernel_real) + tf.einsum('btf,fp->btp', input_real, kernel_imag)
+    output_uncompressed = tf.sqrt(tf.pow(output_real, 2) + tf.pow(output_imag, 2))
+    output_compressed = tf.log(output_uncompressed)
+    return output_compressed
 
 
 class MelFilterbankLayer(_ConcatInputLayer):
