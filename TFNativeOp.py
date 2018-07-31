@@ -731,7 +731,7 @@ class NativeLstm2(RecSeqCellOp):
     start = tf.constant(0, name="start")
     step = tf.constant(self.step or 1, name="step")
     out, _, _, final_cell_state = self.op(inputs, W, y0, c0, index, start, step)
-    if out.get_shape().as_list()[0] > 0:
+    if out.get_shape().as_list()[0] is None or out.get_shape().as_list()[0] > 0:
       final_output = out[-1]
     else:
       final_output = y0
