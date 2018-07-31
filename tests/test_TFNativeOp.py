@@ -262,7 +262,7 @@ def test_NativeLstm2_run():
   n_batch = 1
   n_hidden = 3
   with tf.Session() as session:
-    with tf.variable_scope("test_NativeLstmCell_run"):
+    with tf.variable_scope("test_NativeLstm2_run"):
       cell = NativeLstm2(n_hidden=n_hidden)
       inputs = tf.zeros([n_time, n_batch, n_hidden * 4])
       index = tf.ones([n_time, n_batch])
@@ -280,7 +280,7 @@ def test_NativeLstm2_0len_run():
   n_batch = 1
   n_hidden = 3
   with tf.Session() as session:
-    with tf.variable_scope("test_NativeLstmCell_run"):
+    with tf.variable_scope("test_NativeLstm2_0len_run"):
       cell = NativeLstm2(n_hidden=n_hidden)
       inputs = tf.zeros([n_time, n_batch, n_hidden * 4])
       index = tf.ones([n_time, n_batch])
