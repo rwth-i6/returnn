@@ -4075,6 +4075,47 @@ class CompareLayer(LayerBase):
     return super(CompareLayer, cls).get_out_data_from_opts(n_out=n_out, out_type=out_type, sources=sources, **kwargs)
 
 
+class SwitchLayer(LayerBase):
+  """
+  Wrapper around tf.where(). Uses three inputs: condition, true_from and false_from. The output of this layer contains elements of true_from
+  where condition is True, otherwise elements of false_from. condition has to be of dtype bool. true_from and false_from must have the same shape.
+  """
+
+  layer_class = "switch"
+
+  def __init__(self, condition, true_from, false_from, **kwargs):
+    """
+    :param LayerBase condition:
+    :param LayerBase true_from:
+    :param LayerBase false_from:
+    """
+    super(SwitchLayer, self).__init__(**kwargs)
+
+    assert condition.output.dtype == "bool"
+    assert true_from.output.shape == false_from.output.shape
+
+    self.output.placeholder = tf.where(condition=condition.output.placeholder, x=true_from.output.placeholder, y=false_from.output.placeholder)
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d: will modify inplace
+    :param TFNetwork.TFNetwork network:
+    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
+    """
+    d.setdefault("from", [])
+
+    super(SwitchLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+
+    d["condition"] = get_layer(d["condition"])
+    d["true_from"] = get_layer(d["true_from"])
+    d["false_from"] = get_layer(d["false_from"])
+
+  @classmethod
+  def get_out_data_from_opts(cls, true_from, **kwargs):
+      return true_from.output.copy(name="%s_output" % kwargs["name"])
+
+
 class SubnetworkLayer(LayerBase):
   """
   You can define a whole subnetwork as a single layer by this class.
