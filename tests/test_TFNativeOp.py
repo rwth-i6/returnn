@@ -254,6 +254,42 @@ def test_LstmLowMem_bwd_simple_1():
   assert_allclose(vDc, vDc0)
 
 
+def test_NativeLstm2_run():
+  from pprint import pprint
+  from Util import describe_tensorflow_version
+  print("TensorFlow:", describe_tensorflow_version())
+  n_time = 2
+  n_batch = 1
+  n_hidden = 3
+  with tf.Session() as session:
+    with tf.variable_scope("test_NativeLstmCell_run"):
+      cell = NativeLstm2(n_hidden=n_hidden)
+      inputs = tf.zeros([n_time, n_batch, n_hidden * 4])
+      index = tf.ones([n_time, n_batch])
+      outputs, final_state = cell(inputs, index)
+      session.run(tf.global_variables_initializer())
+      res = session.run(outputs)
+      pprint(res)
+
+
+def test_NativeLstm2_0len_run():
+  from pprint import pprint
+  from Util import describe_tensorflow_version
+  print("TensorFlow:", describe_tensorflow_version())
+  n_time = 0
+  n_batch = 1
+  n_hidden = 3
+  with tf.Session() as session:
+    with tf.variable_scope("test_NativeLstmCell_run"):
+      cell = NativeLstm2(n_hidden=n_hidden)
+      inputs = tf.zeros([n_time, n_batch, n_hidden * 4])
+      index = tf.ones([n_time, n_batch])
+      outputs, final_state = cell(inputs, index)
+      session.run(tf.global_variables_initializer())
+      res = session.run(outputs)
+      pprint(res)
+
+
 def lstm_step_op(x_t, h_tm1, c_tm1, mask_t, W_f, W_r, b, n_batch, n_in_dim, n_cells):
   """
   :param tf.Tensor x_t: shape (n_batch, n_in_dim)

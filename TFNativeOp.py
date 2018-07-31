@@ -696,22 +696,29 @@ class NativeLstm2(RecSeqCellOp):
     from tensorflow.python.ops.nn import rnn_cell
     return rnn_cell.LSTMStateTuple(c=self.n_hidden, h=self.n_hidden)
 
-  def map_layer_inputs_to_op(self, X, W, i, initial_state=None):
+  def __call__(self, inputs, index, initial_state=None, recurrent_weights_initializer=None):
     """
-    Just like NativeOp.LstmGenericBase.map_layer_inputs_to_op().
-    :param tf.Tensor X: inputs: shape (time,batch,n_input_dim)
-    :param tf.Tensor W: shape (n_input_dim+n_hidden,n_hidden*4)
-    :param tf.Tensor i: index: shape (time,batch)
+    :param tf.Tensor inputs: shape (time,batch,n_hidden)
+    :param tf.Tensor index: shape (time,batch)
     :param tf.Tensor|None initial_state: shape (batch,n_hidden)
-    :rtype: tuple[tf.Tensor]
+    :param ()->tf.Tensor recurrent_weights_initializer:
+    :returns: shape (time,batch,n_hidden), shape (batch,n_hidden)
+    :rtype: (tf.Tensor, tf.Tensor)
     """
     from tensorflow.python.ops.nn import rnn_cell
-    X.set_shape(tf.TensorShape([None, None, self.n_hidden * 4]))
+    W = tf.get_variable(
+      name="W_re", shape=(self.n_hidden, self.n_hidden * 4), initializer=recurrent_weights_initializer)
+    TFUtil.set_param_axes_split_info(W, [[self.n_hidden], [self.n_hidden] * 4])
+    if self.rec_weight_dropout:
+      from TFUtil import dropout
+      W = dropout(W, keep_prob=1.0 - self.rec_weight_dropout, cond_on_train=True,
+                  seed=TFUtil.get_random_seed())
+    inputs.set_shape(tf.TensorShape([None, None, self.n_hidden * 4]))
     W.set_shape(tf.TensorShape([self.n_hidden, self.n_hidden * 4]))
-    i.set_shape(tf.TensorShape([None, None]))
+    index.set_shape(tf.TensorShape([None, None]))
     from TFUtil import to_float32
-    i = to_float32(i)
-    n_batch = tf.shape(X)[1]
+    index = to_float32(index)
+    n_batch = tf.shape(inputs)[1]
     if initial_state is None:
       c0 = tf.zeros((n_batch, self.n_hidden), dtype=tf.float32, name="initial_c")
       y0 = tf.zeros((n_batch, self.n_hidden), dtype=tf.float32, name="initial_h")
@@ -723,28 +730,12 @@ class NativeLstm2(RecSeqCellOp):
       y0 = tf.zeros((n_batch, self.n_hidden), dtype=tf.float32, name="initial_h")
     start = tf.constant(0, name="start")
     step = tf.constant(self.step or 1, name="step")
-    return X, W, y0, c0, i, start, step
-
-  def __call__(self, inputs, index, initial_state=None, recurrent_weights_initializer=None):
-    """
-    :param tf.Tensor inputs: shape (time,batch,n_hidden)
-    :param tf.Tensor index: shape (time,batch)
-    :param tf.Tensor|None initial_state: shape (batch,n_hidden)
-    :param ()->tf.Tensor recurrent_weights_initializer:
-    :returns: shape (time,batch,n_hidden), shape (batch,n_hidden)
-    :rtype: (tf.Tensor, tf.Tensor)
-    """
-    W = tf.get_variable(
-      name="W_re", shape=(self.n_hidden, self.n_hidden * 4), initializer=recurrent_weights_initializer)
-    TFUtil.set_param_axes_split_info(W, [[self.n_hidden], [self.n_hidden] * 4])
-    if self.rec_weight_dropout:
-      from TFUtil import dropout
-      W = dropout(W, keep_prob=1.0 - self.rec_weight_dropout, cond_on_train=True,
-                  seed=TFUtil.get_random_seed())
-    out, _, _, final_cell_state = self.op(
-      *self.map_layer_inputs_to_op(X=inputs, W=W, i=index, initial_state=initial_state))
-    from tensorflow.python.ops.nn import rnn_cell
-    return out, rnn_cell.LSTMStateTuple(h=out[-1], c=final_cell_state)
+    out, _, _, final_cell_state = self.op(inputs, W, y0, c0, index, start, step)
+    if out.get_shape().as_list()[0] > 0:
+      final_output = out[-1]
+    else:
+      final_output = y0
+    return out, rnn_cell.LSTMStateTuple(h=final_output, c=final_cell_state)
 
 
 def make_fast_baum_welch_op(**kwargs):
