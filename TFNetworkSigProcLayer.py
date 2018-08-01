@@ -111,6 +111,12 @@ class ComplexLinearProjectionLayer(_ConcatInputLayer):
     output_compressed = tf.log(output_uncompressed)
     return output_compressed
 
+  @classmethod
+  def get_out_data_from_opts(cls, nr_of_filters, **kwargs):
+    if not 'n_out' in kwargs:
+      kwargs['n_out'] = nr_of_filters
+    return super(ComplexLinearProjectionLayer, cls).get_out_data_from_opts(**kwargs)
+
 
 class MelFilterbankLayer(_ConcatInputLayer):
   """
