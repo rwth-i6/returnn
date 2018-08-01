@@ -98,6 +98,7 @@ class ComplexLinearProjectionLayer(_ConcatInputLayer):
     return clp_kernel
 
   def _build_clp_multiplication(self, clp_kernel):
+    eps=1e-20
     input_placeholder = self.input_data.get_placeholder_as_batch_major()
     tf.assert_equal(tf.shape(clp_kernel)[1], tf.shape(input_placeholder)[2] // 2)
     tf.assert_equal(tf.shape(clp_kernel)[2], self._nr_of_filters)
@@ -108,7 +109,7 @@ class ComplexLinearProjectionLayer(_ConcatInputLayer):
     output_real = tf.einsum('btf,fp->btp', input_real, kernel_real) - tf.einsum('btf,fp->btp', input_imag, kernel_imag)
     output_imag = tf.einsum('btf,fp->btp', input_imag, kernel_real) + tf.einsum('btf,fp->btp', input_real, kernel_imag)
     output_uncompressed = tf.sqrt(tf.pow(output_real, 2) + tf.pow(output_imag, 2))
-    output_compressed = tf.log(output_uncompressed)
+    output_compressed = tf.log(tf.maximum(output_uncompressed, eps))
     return output_compressed
 
   @classmethod
