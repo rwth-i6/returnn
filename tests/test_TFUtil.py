@@ -1434,7 +1434,7 @@ def test_get_op_attrib_keys():
   assert isinstance(x, tf.Tensor)
   assert isinstance(x.op, tf.Operation)
   print("x op:", x.op.type)
-  assert_equal(x.op.type, "MatMul")
+  assert_equal(x.op.type, "BatchMatMul")
   assert_equal(x.get_shape().as_list(), [3, 4, 7])
   attrib_keys = get_op_attrib_keys(x)
   print("matmul attrib keys:", attrib_keys)
@@ -1448,7 +1448,7 @@ def test_get_op_input_names_MatMul():
   assert isinstance(x, tf.Tensor)
   assert isinstance(x.op, tf.Operation)
   print("x op:", x.op.type)
-  assert_equal(x.op.type, "MatMul")
+  assert_equal(x.op.type, "BatchMatMul")
   input_names = get_op_input_names(x.op)
   print("matmul input names:", input_names)
   assert_equal(sorted(input_names), ['x', 'y'])
@@ -1586,6 +1586,11 @@ def test_get_variable_grad_from_update_ops_mix_sparse_dense():
       tf.train.RMSPropOptimizer(learning_rate=0.1),
     ]:
       print("Optimizer:", opt)
+      if isinstance(opt, (tf.train.MomentumOptimizer, tf.train.RMSPropOptimizer)):
+        if is_gpu_available():
+          print("Skipping because SparseApplyMomentum/SparseApplyRMSProp does not support GPU")
+          print("supported_devices_for_op:", supported_devices_for_op("SparseApplyMomentum"))
+          continue  # SparseApplyMomentum only supports CPU currently, and this might break then
       minimize_op = opt.minimize(loss=loss, var_list=[var])
       assert isinstance(minimize_op, tf.Operation)
       print("find_ops_with_tensor_input:", find_ops_with_tensor_input(var, fetches=minimize_op))
