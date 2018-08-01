@@ -5373,7 +5373,7 @@ def get_op_attrib_keys(op):
     op = op.handle.op
   assert isinstance(op, tf.Operation)
   node_def_fields = get_protobuf_fields(op.node_def)
-  attribs = node_def_fields["attr"]
+  attribs = node_def_fields.get("attr", {})
   return list(attribs.keys())
 
 
@@ -5393,7 +5393,7 @@ def get_op_input_names(op):
     names = []
   else:
     op_def_fields = get_protobuf_fields(op.op_def)
-    args_pb = [get_protobuf_fields(a) for a in op_def_fields["input_arg"]]
+    args_pb = [get_protobuf_fields(a) for a in op_def_fields.get("input_arg", [])]
     names = [a["name"] for a in args_pb]
   assert len(names) <= num_inputs  # Not exactly sure why/when `<` can happen (except the unknown case above).
   names += ["?%i" % i for i in range(num_inputs - len(names))]
