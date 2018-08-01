@@ -4782,7 +4782,6 @@ class Loss(object):
     self.output_before_softmax_flat = None  # type: tf.Tensor
     self.target_flat = None  # type: tf.Tensor
     # Maybe make configurable. For now, same as in our Theano behavior.
-    self.reduce_func = tf.reduce_sum  # or tf.reduce_mean
     self.loss_norm_factor = None  # type: tf.Tensor
 
   def reduce_func(self, loss):
