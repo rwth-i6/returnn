@@ -73,8 +73,9 @@ class Runner(object):
     self.device_crash_batch = None  # type: int|None
     self.start_time = None
     self.elapsed = None
-    self._results_accumulated = {}  # type: dict[str,float]  # entries like "cost:output" or "loss"
-    self.num_frames_accumulated = NumbersDict()  # for each result key, the corresponding number of frames
+    self._results_accumulated = NumbersDict()  # entries like "cost:output" or "loss"
+    self._inv_norm_accumulated = NumbersDict()  # entries like "output"
+    self.num_frames_accumulated = NumbersDict()  # for each data key (eg. "classes"), corresponding number of frames
     self.results = {}  # type: dict[str,float]  # entries like "cost:output" or "loss"
     self.score = {}  # type: dict[str,float]  # entries like "cost:output"
     self.error = {}  # type: dict[str,float]  # entries like "error:output"
@@ -115,10 +116,18 @@ class Runner(object):
           continue
         d["error:%s" % layer_name] = error
       for layer in self.engine.network.layers.values():
+        if layer.only_on_eval and self._should_train:
+          continue
+        # Maybe store additional size info of layer targets.
         if layer.target and layer.target.startswith("layer:"):
           target_data = layer.loss.target
           for dim, v in target_data.size_placeholder.items():
             d["size:%s:%i" % (layer.target, dim)] = v
+        # Store the loss normalization factor.
+        if layer.name in self.engine.network.loss_by_layer or layer.name in self.engine.network.error_by_layer:
+          loss_norm_factor = layer.get_loss_normalization_factor()
+          assert loss_norm_factor is not None
+          d["loss_norm_factor:%s" % layer.name] = loss_norm_factor
     for layer in self.engine.network.layers.values():
       for k, v in layer.stats.items():
         d["stats:%s:%s" % (layer.name, k)] = v
@@ -213,8 +222,7 @@ class Runner(object):
     :return: factor to multiply with such accumulated values for the final epoch stats
     :rtype: float
     """
-    # Default: Normalize by number of frames.
-    return 1.0 / self.num_frames_accumulated[key]
+    return 1.0 / self._inv_norm_accumulated[self._loss_norm_key(key, self._inv_norm_accumulated.keys())]
 
   def _finalize(self, num_steps):
     """
@@ -262,6 +270,30 @@ class Runner(object):
       # We assume that this data-key has no time axis. Use the batch-dim instead.
       return self._get_batch_dim_from_fetches(fetches_results)
 
+  def _loss_norm_key(self, key, loss_norm_keys):
+    """
+    :param str key: e.g. "cost:output", "error:output" or "loss"
+    :param list[str]|iterable loss_norm_keys: e.g. "output" (layer names)
+    :return: e.g. "output"
+    :rtype: str
+    """
+    assert len(loss_norm_keys) > 0
+    if key == "loss":
+      # This is a special case. This is the total loss. Not sure what normalization factor to take by default.
+      if len(loss_norm_keys) == 1:
+        return list(loss_norm_keys)[0]
+      if self.engine.network.get_default_output_layer_name() in loss_norm_keys:
+        return self.engine.network.get_default_output_layer_name()
+      if "output" in loss_norm_keys:
+        return "output"
+      # I do not have any better idea.
+      return sorted(loss_norm_keys)[0]
+    # Assume "cost:output" or "error:output" or so.
+    assert ":" in key
+    sub_key = key[key.find(":") + 1:]
+    assert sub_key in loss_norm_keys, "unexpected key %r" % key
+    return sub_key
+
   def _collect_eval_info(self, fetches_results):
     """
     :param dict[str,numpy.ndarray|None] fetches_results: results of calculations, see self._get_fetches_dict()
@@ -269,28 +301,26 @@ class Runner(object):
     :rtype: dict[str,float]
     """
     # See see self._get_fetches_dict() for the keys.
+    # keys are e.g. "cost:output", "error:output" or "loss".
     keys = [k for k in fetches_results.keys() if k.startswith("cost:") or k.startswith("error:") or k == "loss"]
-    step_seq_lens = {}  # key -> int
-    for key in keys:
-      target = self._get_target_for_key(key)
-      step_seq_lens[key] = self._step_seq_len(
-        fetches_results=fetches_results, data_key=target)
+    # step_seq_lens keys are e.g. "data" or "classes".
+    step_seq_lens = {
+      k[len("size:"):-2]: v for (k, v) in fetches_results.items() if k.startswith("size:") and k.endswith(":0")}
+    # loss_norm_factors keys are e.g. "output" (layer names).
+    loss_norm_factors = {
+      k[len("loss_norm_factor:"):]: v for (k, v) in fetches_results.items() if k.startswith("loss_norm_factor:")}
 
     # Accumulate for epoch stats.
+    self._results_accumulated += NumbersDict({key: fetches_results[key] for key in keys})
+    self._inv_norm_accumulated += NumbersDict({k: 1.0 / v for (k, v) in loss_norm_factors.items()})
     self.num_frames_accumulated += NumbersDict(step_seq_lens)
-    for key in keys:
-      value = fetches_results[key]
-      if key not in self._results_accumulated:
-        self._results_accumulated[key] = value
-      else:
-        self._results_accumulated[key] += value
 
     # Prepare eval info stats for this batch run.
     eval_info = {}
     for key in keys:
       value = fetches_results[key]
       if value:
-        value /= float(step_seq_lens[key])
+        value *= loss_norm_factors[self._loss_norm_key(key, loss_norm_factors.keys())]
       eval_info[key] = value
       if self.engine.config.bool("calculate_exp_loss", False) and key.startswith("cost:"):
         eval_info[key + ":exp"] = numpy.exp(value)

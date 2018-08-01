@@ -553,15 +553,16 @@ class TFNetwork(object):
                 from TFUtil import identity_with_check_numerics
                 loss = identity_with_check_numerics(
                   loss, name="%s_identity_with_check_numerics_loss" % tf_flat_scope_name)
+              self.loss_by_layer[name] = loss
             if error is not None:
               tf.summary.scalar("error_%s" % tf_flat_scope_name, error * layer.get_loss_normalization_factor())
+              self.error_by_layer[name] = error
+
         with reuse_name_scope("constraints"):
           with reuse_name_scope(tf_scope_name):
             constraints = layer.get_constraints_value()
 
         with reuse_name_scope("loss"):
-          if loss is not None:
-            self.loss_by_layer[name] = loss
           if loss is not None and layer.loss_scale != 1:
             if not layer.loss_scale:
               loss = None
@@ -572,8 +573,6 @@ class TFNetwork(object):
               self.total_loss = loss
             else:
               self.total_loss += loss
-          if error is not None:
-            self.error_by_layer[name] = error
         with reuse_name_scope("constraints"):
           if constraints is not None:
             if self.total_constraints is 0:

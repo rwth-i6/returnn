@@ -2983,7 +2983,7 @@ class SyntheticGradient(object):
 
     def register_loss(self, loss):
       """
-      :param tf.Tenosr loss:
+      :param tf.Tensor loss:
       """
       self.losses.append(loss)
 

@@ -691,6 +691,10 @@ class LayerBase(object):
       return self.loss.get_error()
 
   def get_loss_normalization_factor(self):
+    """
+    :return: used for tf.summary and printing on screen
+    :rtype: tf.Tensor|float|None
+    """
     if not self.loss:
       return None
     self._init_loss()
@@ -5515,7 +5519,7 @@ class ExpectedLoss(Loss):
         raise ValueError("invalid loss_kind %r" % self.loss_kind)
       assert losses is not None, "no value for loss_kind %r with loss %r" % (self.loss_kind, self.losses)
       beam_scores = self.search_choices.beam_scores  # (batch,beam), +log scores
-      # We currently expect that v is of shape (batch*beam,), as we set reduce_func = identity,
+      # We currently expect that `losses` is of shape (batch*beam,), as we set reduce_func = identity,
       # and that self.losses is a sequence criterion.
       # This does not work for frame-wise criteria yet where we get (batch*beam*time') flattened.
       losses = tf.reshape(losses, tf.shape(beam_scores), name="losses")  # (batch,beam)

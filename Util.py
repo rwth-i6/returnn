@@ -1050,6 +1050,12 @@ class NumbersDict:
   def values(self):
     return list(self.dict.values()) + ([self.value] if self.value is not None else [])
 
+  def items(self):
+    """
+    :return: dict items. this excludes self.value
+    """
+    return self.dict.items()
+
   def has_values(self):
     return bool(self.dict) or self.value is not None
 
