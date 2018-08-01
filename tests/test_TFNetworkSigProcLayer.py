@@ -8,10 +8,6 @@ from TFNetworkSigProcLayer import *
 from Config import Config
 import contextlib
 
-import returnn_testSuite
-
-returnnTestSuitePath = os.path.dirname(returnn_testSuite.__file__)
-
 @contextlib.contextmanager
 def make_scope():
   with tf.Graph().as_default() as graph:

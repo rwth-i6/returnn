@@ -38,6 +38,7 @@ env:
   - TEST=TFNativeOp
   - TEST=TFNetworkLayer
   - TEST=TFNetworkRecLayer
+  - TEST=TFNetworkSigProcLayer
   - TEST=TFUpdater
   - TEST=TFUtil
   - TEST=Config
