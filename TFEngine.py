@@ -304,7 +304,9 @@ class Runner(object):
     keys = [k for k in fetches_results.keys() if k.startswith("cost:") or k.startswith("error:") or k == "loss"]
     # step_seq_lens keys are e.g. "data" or "classes".
     step_seq_lens = {
-      k[len("size:"):-2]: v for (k, v) in fetches_results.items() if k.startswith("size:") and k.endswith(":0")}
+      k[len("size:"):-2]: numpy.sum(v)
+      for (k, v) in fetches_results.items()
+      if k.startswith("size:") and k.endswith(":0")}
     # loss_norm_factors keys are e.g. "output" (layer names).
     loss_norm_factors = {
       k[len("loss_norm_factor:"):]: v for (k, v) in fetches_results.items() if k.startswith("loss_norm_factor:")}
