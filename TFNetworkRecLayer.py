@@ -1594,7 +1594,7 @@ class _SubnetworkRecCell(object):
             with reuse_name_scope(layer_with_loss_inst.tf_scope_name):
               loss_value = layer_with_loss_inst.get_loss_value()
               error_value = layer_with_loss_inst.get_error_value()
-            sub_loss += loss_value * layer_with_loss_inst.loss_scale
+            sub_loss += loss_value * layer_with_loss_inst.loss.scale
             # Only one error, not summed up. Determined by sorted layers.
             sub_error = error_value
           else:
@@ -1613,7 +1613,7 @@ class _SubnetworkRecCell(object):
             loss_value = tf.reduce_sum(loss_value)
             error_value = tf.reduce_sum(error_value)
 
-            sub_loss += loss_value * layer_with_loss_inst.loss_scale
+            sub_loss += loss_value * layer_with_loss_inst.loss.scale
             # Only one error, not summed up. Determined by sorted layers.
             sub_error = error_value
 

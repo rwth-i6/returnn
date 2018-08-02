@@ -76,7 +76,7 @@ class LayerBase(object):
       In the net dict, it is specified as a string.
       In :class:`TFNetwork`, all losses from all layers will be collected.
       That is what :class:`TFUpdater.Updater` will use for training.
-    :param float loss_scale: scale factor for loss (1.0 by default)
+    :param float loss_scale: scale factor for loss (1.0 by default). DEPRECATED: use loss.scale instead.
     :param ReuseParams|None reuse_params: if given, will opt reuse the params. see :func:`self.var_creation_scope`
     :param float|None L2: for constraints
     :param float|None darc1: for constraints. see Generalization in Deep Learning, https://arxiv.org/abs/1710.05468
@@ -98,7 +98,10 @@ class LayerBase(object):
     self.loss = loss
     if self.loss and self.loss.recurrent:
       self.recurrent = True
-    self.loss_scale = loss_scale
+    if loss_scale != 1.0:
+      assert self.loss, "loss_scale is set, but no loss"
+      assert self.loss.scale == 1.0, "do not use loss_scale and loss with 'scale' option together"
+      self.loss.scale = loss_scale
     if output:
       self.output = output
       if n_out:
@@ -4808,10 +4811,12 @@ class Loss(object):
   class_name = None  # type: str  # used by get_loss_class()
   recurrent = False  # if this is a frame-wise criteria, this will be False
 
-  def __init__(self, base_network, use_flatten_frames=True):
+  def __init__(self, base_network, use_flatten_frames=True, use_normalized_loss=False, scale=1.0):
     """
     :param TFNetwork.TFNetwork base_network:
-    :param bool use_flatten_frames:
+    :param bool use_flatten_frames: will use :func:`TFUtil.flatten_with_seq_len_mask`
+    :param bool use_normalized_loss: the loss used in optimization will be normalized
+    :param float scale: additional scale factor for the loss
     """
     self.base_network = base_network
     self.use_flatten_frames = use_flatten_frames
@@ -4828,6 +4833,8 @@ class Loss(object):
     self.target_flat = None  # type: tf.Tensor
     # Maybe make configurable. For now, same as in our Theano behavior.
     self.loss_norm_factor = None  # type: tf.Tensor
+    self.use_normalized_loss = use_normalized_loss
+    self.scale = scale
 
   def reduce_func(self, loss):
     """
