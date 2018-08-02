@@ -653,7 +653,7 @@ class LayerBase(object):
 
   def get_loss_value(self):
     """
-    :return: the loss, a scalar value, or None if not set. not multiplied by loss_scale
+    :return: the loss, a scalar value, or None if not set. not multiplied by loss.scale
     :rtype: tf.Tensor | None
     """
     if not self.loss:
@@ -4989,6 +4989,14 @@ class Loss(object):
     :rtype: int
     """
     return target_dim
+
+
+class _PlaceholderLoss(Loss):
+  """
+  Use this when the layer can specify its own custom loss, e.g. like the :class:`SubnetworkLayer`.
+  """
+  def __init__(self, **kwargs):
+    super(_PlaceholderLoss, self).__init__(**kwargs)
 
 
 class CrossEntropyLoss(Loss):
