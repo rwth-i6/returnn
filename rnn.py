@@ -134,6 +134,9 @@ def initDevices():
       config.set("device", os.environ.get("TF_DEVICE"))
       print("Devices: Use %s via TF_DEVICE instead of %s." %
             (os.environ.get("TF_DEVICE"), oldDeviceConfig), file=log.v4)
+    if config.is_true("use_horovod"):
+      import horovod.tensorflow as hvd
+      hvd.init()
   if not BackendEngine.is_theano_selected():
     return None
   if config.value("task", "train") == "nop":

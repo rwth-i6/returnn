@@ -636,7 +636,16 @@ class Engine(object):
     # See options here:
     # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/protobuf/config.proto
     opts.setdefault("log_device_placement", False)
-    opts.setdefault("device_count", {}).setdefault("GPU", 1 if self.is_requesting_for_gpu() else 0)
+    opts.setdefault("device_count", {})
+    if self.is_requesting_for_gpu():
+      opts["device_count"].setdefault("GPU", 1)
+      if self.config.is_true("use_horovod"):
+        import horovod.tensorflow as hvd
+        opts.setdefault("gpu_options", {})
+        assert "visible_device_list" not in opts["gpu_options"]
+        opts["gpu_options"]["visible_device_list"] = str(hvd.local_rank())
+    else:
+      opts["device_count"].setdefault("GPU", 0)
     # Note: We don't set intra_op_parallelism_threads and inter_op_parallelism_threads here anymore
     # because it is saver to do it via setup_tf_thread_pools() which we call very early.
     print("Setup tf.Session with options %r ..." % opts, file=log.v2)
@@ -699,6 +708,8 @@ class Engine(object):
     """
     :param str filename: full filename for model
     """
+    if not self._do_save():
+      return
     if not filename:
       filename = self.get_epoch_model_filename()
     print("Save model under %s" % (filename,), file=log.v4)
@@ -913,6 +924,10 @@ class Engine(object):
       initial_learning_rate=getattr(self, "initial_learning_rate", None),
       net_dict=net_desc)
     self.network.initialize_params(session=self.tf_session)
+    if self.config.is_true("use_horovod"):
+      import horovod.tensorflow as hvd
+      bcast_op = hvd.broadcast_global_variables(0)
+      session.run(bcast_op)
 
   @classmethod
   def create_network(cls, config, rnd_seed, train_flag, eval_flag, search_flag, net_dict, initial_learning_rate=1.0):
@@ -1131,7 +1146,8 @@ class Engine(object):
     if self.model_filename and (self.epoch % self.save_model_epoch_interval == 0):
       self.save_model(self.get_epoch_model_filename())
     self.learning_rate_control.setEpochError(self.epoch, {"train_score": trainer.score, "train_error": trainer.error})
-    self.learning_rate_control.save()
+    if self._do_save():
+      self.learning_rate_control.save()
 
     print(
       self.get_epoch_str(), "score:", self.format_score(trainer.score), "elapsed:", hms(trainer.elapsed), file=log.v1)
@@ -1178,6 +1194,17 @@ class Engine(object):
     self.updater.set_learning_rate(eval_learning_rate, session=self.tf_session)
     return True
 
+  def _do_save(self):
+    """
+    :return: whether to perform save on disk in this process. e.g. for Horovod rank != 0, do not save.
+    :rtype: bool
+    """
+    if self.config.is_true("use_horovod"):
+      import horovod.tensorflow as hvd
+      if hvd.rank() != 0:
+        return False
+    return True
+
   def eval_model(self, output_file=None):
     """
     Eval the current model on the eval datasets (dev + eval, whatever is set).
@@ -1212,7 +1239,8 @@ class Engine(object):
       results[dataset_name] = {"score": tester.score, "error": tester.error}
       if dataset_name == "dev":
         self.learning_rate_control.setEpochError(self.epoch, {"dev_score": tester.score, "dev_error": tester.error})
-        self.learning_rate_control.save()
+        if self._do_save():
+          self.learning_rate_control.save()
     print(" ".join(eval_dump_str), file=log.v1)
     if output_file:
       print('Write eval results to %r' % output_file, file=log.v3)

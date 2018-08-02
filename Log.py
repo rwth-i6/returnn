@@ -117,6 +117,9 @@ class Log:
     logs = config.list('log', [])
     log_verbosity = config.int_list('log_verbosity', [])
     log_format = config.list('log_format', [])
+    if config.is_true("use_horovod"):
+      import horovod.tensorflow as hvd
+      logs = ["horovod-%i-%i.%s" % (hvd.rank(), hvd.size(), fn) for fn in logs]
     self.initialize(logs=logs, verbosity=log_verbosity, formatter=log_format)
 
 
