@@ -98,6 +98,12 @@ class LayerBase(object):
     self.loss = loss
     if self.loss and self.loss.recurrent:
       self.recurrent = True
+    if not self.loss and self.__class__.get_loss_value is not LayerBase.get_loss_value:
+      # This is slightly unclean workaround:
+      # If get_loss_value is overridden, we expect that the layer class defines its own loss.
+      # In TFNetwork when collecting the losses,
+      # it will use `self.loss` to get e.g. the loss.scale and other things.
+      self.loss = _PlaceholderLoss(base_network=network)
     if loss_scale != 1.0:
       assert self.loss, "loss_scale is set, but no loss"
       assert self.loss.scale == 1.0, "do not use loss_scale and loss with 'scale' option together"
@@ -658,6 +664,8 @@ class LayerBase(object):
     """
     if not self.loss:
       return None
+    if isinstance(self.loss, _PlaceholderLoss):
+      return None
     self._init_loss()
     with tf.name_scope("loss"):
       if self.only_on_eval:
@@ -685,6 +693,8 @@ class LayerBase(object):
     :rtype: tf.Tensor | None
     """
     if not self.loss:
+      return None
+    if isinstance(self.loss, _PlaceholderLoss):
       return None
     self._init_loss()
     with tf.name_scope("error"):
@@ -4993,10 +5003,8 @@ class Loss(object):
 
 class _PlaceholderLoss(Loss):
   """
-  Use this when the layer can specify its own custom loss, e.g. like the :class:`SubnetworkLayer`.
+  Use this when the layer specifies its own custom loss, e.g. like the :class:`SubnetworkLayer`.
   """
-  def __init__(self, **kwargs):
-    super(_PlaceholderLoss, self).__init__(**kwargs)
 
 
 class CrossEntropyLoss(Loss):
