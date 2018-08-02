@@ -216,21 +216,13 @@ class Runner(object):
         return layer.target
     return self.engine.network.extern_data.default_target
 
-  def _epoch_norm_factor_for_result(self, key):
-    """
-    :param str key: e.g. "cost:output"
-    :return: factor to multiply with such accumulated values for the final epoch stats
-    :rtype: float
-    """
-    return 1.0 / self._inv_norm_accumulated[self._loss_norm_key(key, self._inv_norm_accumulated.keys())]
-
   def _finalize(self, num_steps):
     """
     Called at the end of an epoch.
     :param int num_steps: number of steps we did for this epoch
     """
     assert not self.data_provider.have_more_data(session=self.engine.tf_session)
-    results = {key: value * self._epoch_norm_factor_for_result(key)
+    results = {key: self._normalize_loss(value, key, self._inv_norm_accumulated)
                for (key, value) in self._results_accumulated.items()}
     self.results = results
     self.score = {key: value for (key, value) in results.items() if key.startswith("cost:")}
@@ -270,29 +262,36 @@ class Runner(object):
       # We assume that this data-key has no time axis. Use the batch-dim instead.
       return self._get_batch_dim_from_fetches(fetches_results)
 
-  def _loss_norm_key(self, key, loss_norm_keys):
+  def _normalize_loss(self, value, key, inv_loss_norm_factors):
     """
+    :param T value:
     :param str key: e.g. "cost:output", "error:output" or "loss"
-    :param list[str]|iterable loss_norm_keys: e.g. "output" (layer names)
-    :return: e.g. "output"
-    :rtype: str
+    :param NumbersDict inv_loss_norm_factors: keys e.g. e.g. "output" (layer names)
+    :return: normalized value
+    :rtype: T
     """
+    if not value:
+      return value
+    loss_norm_keys = inv_loss_norm_factors.keys()
     assert len(loss_norm_keys) > 0
     if key == "loss":
       # This is a special case. This is the total loss. Not sure what normalization factor to take by default.
       if len(loss_norm_keys) == 1:
-        return list(loss_norm_keys)[0]
-      if self.engine.network.get_default_output_layer_name() in loss_norm_keys:
-        return self.engine.network.get_default_output_layer_name()
-      if "output" in loss_norm_keys:
-        return "output"
-      # I do not have any better idea.
-      return sorted(loss_norm_keys)[0]
-    # Assume "cost:output" or "error:output" or so.
-    assert ":" in key
-    sub_key = key[key.find(":") + 1:]
-    assert sub_key in loss_norm_keys, "unexpected key %r" % key
-    return sub_key
+        loss_norm_key = list(loss_norm_keys)[0]
+      elif self.engine.network.get_default_output_layer_name() in loss_norm_keys:
+        loss_norm_key = self.engine.network.get_default_output_layer_name()
+      elif "output" in loss_norm_keys:
+        loss_norm_key = "output"
+      else:
+        # I do not have any better idea.
+        loss_norm_key = sorted(loss_norm_keys)[0]
+    else:
+      # Assume "cost:output" or "error:output" or so.
+      assert ":" in key
+      loss_norm_key = key[key.find(":") + 1:]
+      assert loss_norm_key in loss_norm_keys, "unexpected key %r" % key
+    value = value / inv_loss_norm_factors[loss_norm_key]
+    return value
 
   def _collect_eval_info(self, fetches_results):
     """
@@ -309,18 +308,18 @@ class Runner(object):
     # loss_norm_factors keys are e.g. "output" (layer names).
     loss_norm_factors = {
       k[len("loss_norm_factor:"):]: v for (k, v) in fetches_results.items() if k.startswith("loss_norm_factor:")}
+    inv_loss_norm_factors = NumbersDict({k: 1.0 / v for (k, v) in loss_norm_factors.items()})
 
     # Accumulate for epoch stats.
     self._results_accumulated += NumbersDict({key: fetches_results[key] for key in keys})
-    self._inv_norm_accumulated += NumbersDict({k: 1.0 / v for (k, v) in loss_norm_factors.items()})
+    self._inv_norm_accumulated += inv_loss_norm_factors
     self.num_frames_accumulated += NumbersDict(step_seq_lens)
 
     # Prepare eval info stats for this batch run.
     eval_info = {}
     for key in keys:
       value = fetches_results[key]
-      if value:
-        value *= loss_norm_factors[self._loss_norm_key(key, loss_norm_factors.keys())]
+      value = self._normalize_loss(value, key, inv_loss_norm_factors)
       eval_info[key] = value
       if self.engine.config.bool("calculate_exp_loss", False) and key.startswith("cost:"):
         eval_info[key + ":exp"] = numpy.exp(value)
