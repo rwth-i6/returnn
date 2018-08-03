@@ -5015,12 +5015,15 @@ class Loss(object):
         else:
           self.loss_norm_factor = 1.0 / tf.cast(tf.reduce_sum(self.output_seq_lens), tf.float32)
       else:  # no time axis
-        assert self.output.batch_ndim == 2
         if output_with_activation and output_with_activation.act_func is tf.nn.softmax:
           self.output_before_softmax_flat = output_with_activation.x
         else:
           self.output_flat = output.placeholder
-        self.loss_norm_factor = 1.0 / tf.cast(tf.shape(self.output.placeholder)[self.output.batch_dim_axis], tf.float32)
+        if self.output.have_batch_axis():
+          self.loss_norm_factor = (
+            1.0 / tf.cast(tf.shape(self.output.placeholder)[self.output.batch_dim_axis], tf.float32))
+        else:
+          self.loss_norm_factor = 1.0
         if target:
           assert not self.target.have_time_axis()
           self.target_flat = target.placeholder

@@ -795,6 +795,9 @@ class Data(object):
   def have_time_axis(self):
     return self.time_dim_axis is not None
 
+  def have_feature_axis(self):
+    return self.feature_dim_axis is not None
+
   def is_time_axis_dynamic(self):
     """
     :return: whether there are different seq-lens for the time, or all the same (static)

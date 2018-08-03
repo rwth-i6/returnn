@@ -172,3 +172,26 @@ def test_Updater_add_check_numerics_ops():
     print("Expected exception: %r" % exc)
   else:
     assert False, "should have raised an exception"
+
+
+if __name__ == "__main__":
+  better_exchook.install()
+  if len(sys.argv) <= 1:
+    for k, v in sorted(globals().items()):
+      if k.startswith("test_"):
+        print("-" * 40)
+        print("Executing: %s" % k)
+        try:
+          v()
+        except unittest.SkipTest as exc:
+          print("SkipTest:", exc)
+        print("-" * 40)
+    print("Finished all tests.")
+  else:
+    assert len(sys.argv) >= 2
+    for arg in sys.argv[1:]:
+      print("Executing: %s" % arg)
+      if arg in globals():
+        globals()[arg]()  # assume function and execute
+      else:
+        eval(arg)  # assume Python code and execute
