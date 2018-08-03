@@ -711,7 +711,7 @@ def test_RecLayer_NativeLstm_Nan():
     assert_equal(output_data1.shape, (5, 1, num_outputs))  # (time, batch, dim)
 
     layer = network.layers["output"]
-    loss_t = network.get_total_loss() * layer.get_loss_normalization_factor()
+    loss_t = network.get_total_loss() * layer.loss.get_loss_normalization_factor()
     weights_t = layer.params["W"]
     weights_grad_t, = tf.gradients(network.get_objective(), weights_t)
 

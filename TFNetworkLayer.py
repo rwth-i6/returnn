@@ -713,16 +713,6 @@ class LayerBase(object):
         return self._cond_only_on_eval_opt(self.loss.get_error, default_value=0.0)
       return self.loss.get_error()
 
-  def get_loss_normalization_factor(self):
-    """
-    :return: used for tf.summary and printing on screen
-    :rtype: tf.Tensor|float|None
-    """
-    if not self.loss:
-      return None
-    self._init_loss()
-    return self.loss.get_normalization_factor()
-
   def get_losses(self):
     """
     Losses will get constructed here.
@@ -744,7 +734,7 @@ class LayerBase(object):
       local_name=self.name,
       layer=self, loss=self.loss, only_on_eval=self.only_on_eval,
       loss_value=loss, error_value=error,
-      norm_factor=self.get_loss_normalization_factor())
+      norm_factor=self.loss.get_normalization_factor())
     return [loss_obj]
 
   def get_params_l2_norm(self):
