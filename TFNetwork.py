@@ -403,6 +403,7 @@ class TFNetwork(object):
     layer_class = get_layer_class(class_name)
     self._constructing_layers.append(name)
     try:
+      # This call would also resolve dependencies, and e.g. recursively then create them (via get_layer calls).
       layer_class.transform_config_dict(layer_desc, network=self, get_layer=get_layer)
     finally:
       self._constructing_layers.remove(name)

@@ -4154,7 +4154,7 @@ class SubnetworkLayer(LayerBase):
   layer_class = "subnetwork"
   recurrent = True  # we don't know. depends on the subnetwork.
 
-  def __init__(self, subnetwork, concat_sources=True, load_on_init=None, **kwargs):
+  def __init__(self, subnetwork, concat_sources=True, load_on_init=None, dropout=0, dropout_noise_shape=None, **kwargs):
     """
     :param dict[str,dict] subnetwork: subnetwork as dict (JSON content). must have an "output" layer-
     :param bool concat_sources: if we concatenate all sources into one, like it is standard for most other layers
@@ -4162,22 +4162,16 @@ class SubnetworkLayer(LayerBase):
       we will load the given model file.
     """
     super(SubnetworkLayer, self).__init__(**kwargs)
-    from TFNetwork import TFNetwork, ExternData
-    sub_extern_data = ExternData()
-    if concat_sources:
-      sub_extern_data.data[sub_extern_data.default_input] = \
-        concat_sources_with_opt_dropout(
-          self.sources, dropout=kwargs.get("dropout", 0), dropout_noise_shape=kwargs.get("dropout_noise_shape", None))
-    else:
-      assert not kwargs.get("dropout", 0), "not supported without concat_sources"
-      for source in self.sources:
-        assert isinstance(source, LayerBase)
-        sub_extern_data.data[source.name] = source.output
+    from TFNetwork import TFNetwork
+    sub_extern_data = self._get_subnet_extern_data(
+      base_network=self.network,
+      sources=self.sources, concat_sources=concat_sources,
+      dropout=dropout, dropout_noise_shape=dropout_noise_shape)
     net = TFNetwork(
       name="%s/%s:subnet" % (self.network.name, self.name),
-      rnd_seed=self.network.random.randint(2**31),
-      train_flag=self.network.train_flag,
       extern_data=sub_extern_data,
+      train_flag=self.network.train_flag,
+      search_flag=self.network.search_flag,
       parent_layer=self)
     if self._rec_previous_layer:
       # Make some rec_previous_layer for the subnet layers.
@@ -4196,6 +4190,13 @@ class SubnetworkLayer(LayerBase):
     net.construct_from_dict(subnetwork)
     self.subnetwork = net
     self.output = net.get_default_output_layer().output
+    # See _get_subnet_extern_data for which data keys we expect to be used.
+    if concat_sources:
+      assert sub_extern_data.default_input in self.subnetwork.used_data_keys, "%s: inputs are not used" % self
+    else:
+      for source in self.sources:
+        assert source.name in self.subnetwork.used_data_keys, "%s: some input is not used" % self
+    self._update_used_data_keys()
     for layer in net.layers.values():
       if layer.params:
         assert layer.trainable == self.trainable, "partly trainable subnetworks not yet supported"
@@ -4210,7 +4211,39 @@ class SubnetworkLayer(LayerBase):
       loader.set_as_custom_init()
 
   @classmethod
-  def get_out_data_from_opts(cls, subnetwork, n_out=None, out_type=None, **kwargs):
+  def _get_subnet_extern_data(cls, base_network, sources, concat_sources, dropout=0, dropout_noise_shape=None):
+    """
+    :param TFNetwork.TFNetwork base_network:
+    :param list[LayerBase] sources:
+    :param bool concat_sources:
+    :param float dropout:
+    :param dropout_noise_shape:
+    :rtype: TFNetwork.ExternData
+    """
+    from TFNetwork import ExternData
+    sub_extern_data = ExternData()
+    if concat_sources:
+      sub_extern_data.data[sub_extern_data.default_input] = \
+        concat_sources_with_opt_dropout(
+          sources, dropout=dropout, dropout_noise_shape=dropout_noise_shape)
+    else:
+      assert not dropout, "not implemented without concat_sources"
+      for source in sources:
+        assert isinstance(source, LayerBase)
+        sub_extern_data.data[source.name] = source.output
+    # Copy data (e.g. target classes) over from base network.
+    for key, data in base_network.extern_data.data.items():
+      sub_extern_data.data.setdefault(key, data)
+    return sub_extern_data
+
+  def _update_used_data_keys(self):
+    # Maybe update self.network.used_data_keys.
+    for key in self.subnetwork.used_data_keys:
+      if self.subnetwork.extern_data.data[key] is self.network.extern_data.data.get(key, None):
+        self.network.used_data_keys.add(key)
+
+  @classmethod
+  def get_out_data_from_opts(cls, subnetwork, concat_sources=True, n_out=None, out_type=None, **kwargs):
     """
     :param dict[str,dict[str]] subnetwork:
     :param int|None n_out:
@@ -4219,6 +4252,7 @@ class SubnetworkLayer(LayerBase):
     """
     if n_out or out_type:
       return super(SubnetworkLayer, cls).get_out_data_from_opts(n_out=n_out, out_type=out_type, **kwargs)
+    network = kwargs["network"]
     # Currently, very simple (hacky) template construction of the output-layer in the subnet.
     # See also the template network construction for the RecLayer subnet.
     layer_desc = subnetwork["output"].copy()
@@ -4227,9 +4261,20 @@ class SubnetworkLayer(LayerBase):
     def _get_layer(name):
       raise Exception("not available at this point; provide n_out or out_type explicitly.")
     layer_desc["from"] = []  # that wont work here
-    layer_class.transform_config_dict(layer_desc, get_layer=_get_layer, network=kwargs["network"])
+    layer_class.transform_config_dict(layer_desc, get_layer=_get_layer, network=network)
     layer_desc["name"] = "output"
-    layer_desc["network"] = None
+    from TFNetwork import TFNetwork
+    # Placeholder, will not be used.
+    sub_extern_data = cls._get_subnet_extern_data(
+      base_network=network, sources=kwargs["sources"], concat_sources=concat_sources)
+    subnet = TFNetwork(
+      name="%s/%s:subnet" % (network.name, kwargs["name"]),
+      extern_data=sub_extern_data,
+      train_flag=network.train_flag,
+      search_flag=network.search_flag,
+      parent_net=network,
+      rnd_seed=0)
+    layer_desc["network"] = subnet
     # Note: This can likely fail because we don't provide all the right args.
     # In that case, you must provide n_out or out_type explicitly.
     return layer_class.get_out_data_from_opts(**layer_desc)
@@ -4244,6 +4289,7 @@ class SubnetworkLayer(LayerBase):
     v = self.subnetwork.get_total_loss()
     if v is 0:
       return None
+    self._update_used_data_keys()  # maybe needs an update now
     return v
 
   def get_error_value(self):
