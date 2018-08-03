@@ -723,6 +723,28 @@ class LayerBase(object):
     self._init_loss()
     return self.loss.get_normalization_factor()
 
+  def get_losses(self):
+    """
+    Losses will get constructed here.
+
+    :rtype: list[TFNetwork.LossHolder]
+    :return: the losses defined by this layer
+    """
+    if not self.loss:
+      return []
+    self._init_loss()
+    from TFNetwork import LossHolder
+    loss = self.get_loss_value()
+    error = self.get_error_value()
+    if loss is None and error is None:
+      return []
+    loss_obj = LossHolder(
+      name=self.name,  # loss name. currently just layer name
+      layer=self, loss=self.loss, only_on_eval=self.only_on_eval,
+      loss_value=loss, error_value=error,
+      norm_factor=self.get_loss_normalization_factor())
+    return [loss_obj]
+
   def get_params_l2_norm(self):
     """
     :return: scalar

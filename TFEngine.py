@@ -110,8 +110,8 @@ class Runner(object):
       for loss_name, loss in self.engine.network.losses_dict.items():
         if loss.only_on_eval and self._should_train:
           continue
-        if loss.loss_value is not None:
-          d["cost:%s" % loss_name] = loss.loss_value
+        if loss.loss_value_for_fetch is not None:
+          d["cost:%s" % loss_name] = loss.loss_value_for_fetch
         if loss.error_value is not None:
           d["error:%s" % loss_name] = loss.error_value
         d["loss_norm_factor:%s" % loss_name] = loss.norm_factor

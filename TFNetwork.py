@@ -541,44 +541,22 @@ class TFNetwork(object):
         assert isinstance(layer, LayerBase)
         with reuse_name_scope("loss"):
           with reuse_name_scope(tf_scope_name):
-            loss = layer.get_loss_value()
-            error = layer.get_error_value()
-            if loss is not None:
-              tf.summary.scalar("loss_%s" % tf_flat_scope_name, loss * layer.get_loss_normalization_factor())
-              if self.get_config().bool("calculate_exp_loss", False):
-                tf.summary.scalar("exp_loss_%s" % tf_flat_scope_name, tf.exp(loss * layer.get_loss_normalization_factor()))
-              if self.get_config().bool("debug_add_check_numerics_on_output", False):
-                print("debug_add_check_numerics_on_output: add for layer loss %r: %r" % (name, layer.output.placeholder))
-                from TFUtil import identity_with_check_numerics
-                loss = identity_with_check_numerics(
-                  loss, name="%s_identity_with_check_numerics_loss" % tf_flat_scope_name)
-            if error is not None:
-              tf.summary.scalar("error_%s" % tf_flat_scope_name, error * layer.get_loss_normalization_factor())
-            if loss is not None or error is not None:
-              loss_obj = LossHolder(
-                name=name, layer=layer, only_on_eval=layer.only_on_eval,
-                loss_value=loss, error_value=error,
-                norm_factor=layer.get_loss_normalization_factor())
+            losses = layer.get_losses()
+            for loss_obj in losses:
               self.losses_dict[loss_obj.name] = loss_obj
+              loss_obj.tf_summary(tf_flat_scope_name=tf_flat_scope_name)
+              loss_obj.prepare(tf_flat_scope_name=tf_flat_scope_name)
+          # Accumulate losses (outside of layer scope name).
+          for loss_obj in losses:
+            if loss_obj.loss_value_for_objective is not None:
+              if self.total_loss is 0:
+                self.total_loss = loss_obj.loss_value_for_objective
+              else:
+                self.total_loss += loss_obj.loss_value_for_objective
 
         with reuse_name_scope("constraints"):
           with reuse_name_scope(tf_scope_name):
             constraints = layer.get_constraints_value()
-
-        with reuse_name_scope("loss"):
-          if loss is not None and layer.loss.scale != 1:
-            if not layer.loss.scale:
-              loss = None  # scale 0 means to not use this loss
-            else:
-              loss *= layer.loss.scale
-          if loss is not None:
-            if layer.loss.use_normalized_loss:
-              loss *= layer.get_loss_normalization_factor()
-            if self.total_loss is 0:
-              self.total_loss = loss
-            else:
-              self.total_loss += loss
-        with reuse_name_scope("constraints"):
           if constraints is not None:
             if self.total_constraints is 0:
               self.total_constraints = constraints
@@ -1244,7 +1222,7 @@ class TFNetworkParamsSerialized(object):
 
 
 class LossHolder:
-  def __init__(self, name, layer, loss_value, error_value, norm_factor, only_on_eval):
+  def __init__(self, name, layer, loss, loss_value, error_value, norm_factor, only_on_eval):
     """
     :param str name: The name uniquely identifies the loss. Earlier, this was the same as the layer name.
       This is still true for simple cases,
@@ -1252,17 +1230,57 @@ class LossHolder:
       it can be something else.
       However, we can always point to a layer where this comes from (either in the subnet, or the parent layer).
     :param LayerBase layer:
+    :param TFNetworkLayer.Loss loss:
     :param tf.Tensor|None loss_value:
     :param tf.Tensor|None error_value:
     :param tf.Tensor norm_factor:
     :param bool only_on_eval:
     """
     self.name = name
+    self.network = layer.network
     self.layer = layer
+    self.loss = loss
     self.loss_value = loss_value
+    self.loss_value_for_fetch = None  # call self.prepare
+    self.loss_value_for_objective = None  # call self.prepare
     self.error_value = error_value
     self.norm_factor = norm_factor
     self.only_on_eval = only_on_eval
+
+  def tf_summary(self, tf_flat_scope_name):
+    """
+    :param str tf_flat_scope_name: e.g. "output" or "extra_search_output" or so
+    :return: nothing, will use tf.summary
+    """
+    if self.loss_value is not None:
+      tf.summary.scalar("loss_%s" % tf_flat_scope_name, self.loss_value * self.norm_factor)
+      if self.network.get_config().bool("calculate_exp_loss", False):
+        tf.summary.scalar("exp_loss_%s" % tf_flat_scope_name, tf.exp(self.loss_value * self.norm_factor))
+    if self.error_value is not None:
+      tf.summary.scalar("error_%s" % tf_flat_scope_name, self.error_value * self.norm_factor)
+
+  def prepare(self, tf_flat_scope_name):
+    """
+    :param str tf_flat_scope_name: e.g. "output" or "extra_search_output" or so
+    :return: nothing, will prepare
+    """
+    loss_value = self.loss_value
+    if loss_value is not None:
+      if self.network.get_config().bool("debug_add_check_numerics_on_output", False):
+        print("debug_add_check_numerics_on_output: add for layer loss %r: %r" % (
+        self.layer.name, self.layer.output.placeholder))
+        from TFUtil import identity_with_check_numerics
+        loss_value = identity_with_check_numerics(
+          loss_value, name="%s_identity_with_check_numerics_loss" % tf_flat_scope_name)
+    self.loss_value_for_fetch = loss_value
+    if self.loss.scale != 1 and loss_value is not None:
+      if not self.loss.scale:
+        loss_value = None  # scale 0 means to not use this loss
+      else:
+        loss_value *= self.loss.scale
+    if self.loss.use_normalized_loss and loss_value is not None:
+      loss_value *= self.norm_factor
+    self.loss_value_for_objective = loss_value
 
 
 class NetworkConstructionDependencyLoopException(Exception):
