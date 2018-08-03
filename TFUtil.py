@@ -1762,6 +1762,7 @@ def is_gpu_available():
 
   :rtype: bool
   """
+  # Also, we could maybe use tf.test.is_gpu_available().
   return len(get_available_gpu_devices()) > 0
 
 

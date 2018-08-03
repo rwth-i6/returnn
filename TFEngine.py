@@ -618,6 +618,7 @@ class Engine(object):
     print_available_devices(file=log.v2)
     assert len(self.devices_config) == 1, "multiple devices not supported yet for TF"
     if self.is_requesting_for_gpu():
+      assert tf.test.is_built_with_cuda(), "You use a CPU-only TF version. Use tensorflow-gpu."
       assert is_gpu_available(), "no GPU available"
     else:
       if is_gpu_available():
