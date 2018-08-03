@@ -726,6 +726,7 @@ class LayerBase(object):
   def get_losses(self):
     """
     Losses will get constructed here.
+    This gets called inside a loss name scope of the layer.
 
     :rtype: list[TFNetwork.LossHolder]
     :return: the losses defined by this layer
@@ -740,9 +741,12 @@ class LayerBase(object):
       return []
     loss_obj = LossHolder(
       name=self.name,  # loss name. currently just layer name
+      local_name=self.name,
       layer=self, loss=self.loss, only_on_eval=self.only_on_eval,
       loss_value=loss, error_value=error,
       norm_factor=self.get_loss_normalization_factor())
+    loss_obj.tf_summary()
+    loss_obj.prepare()
     return [loss_obj]
 
   def get_params_l2_norm(self):

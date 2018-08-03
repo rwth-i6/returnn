@@ -537,15 +537,12 @@ class TFNetwork(object):
         assert isinstance(name, str)
         assert isinstance(layer, LayerBase)
         tf_scope_name = layer.cls_get_tf_scope_name(name=name.replace(":", "/", 1))
-        tf_flat_scope_name = layer.cls_get_tf_scope_name(name=name.replace(":", "_"))
         assert isinstance(layer, LayerBase)
         with reuse_name_scope("loss"):
           with reuse_name_scope(tf_scope_name):
             losses = layer.get_losses()
             for loss_obj in losses:
               self.losses_dict[loss_obj.name] = loss_obj
-              loss_obj.tf_summary(tf_flat_scope_name=tf_flat_scope_name)
-              loss_obj.prepare(tf_flat_scope_name=tf_flat_scope_name)
           # Accumulate losses (outside of layer scope name).
           for loss_obj in losses:
             if loss_obj.loss_value_for_objective is not None:
@@ -1222,14 +1219,16 @@ class TFNetworkParamsSerialized(object):
 
 
 class LossHolder:
-  def __init__(self, name, layer, loss, loss_value, error_value, norm_factor, only_on_eval):
+  def __init__(self, name, local_name, layer, loss, loss_value, error_value, norm_factor, only_on_eval):
     """
     :param str name: The name uniquely identifies the loss. Earlier, this was the same as the layer name.
       This is still true for simple cases,
       but for losses coming from a subnetwork or other extended losses,
       it can be something else.
-      However, we can always point to a layer where this comes from (either in the subnet, or the parent layer).
+      It could look like "output", or "output/sublayer".
+    :param str local_name: E.g. layer name, but just the name itself, relative to the layer; should not contain "/".
     :param LayerBase layer:
+      We can always point to a layer where this comes from (either in the subnet, or the parent layer).
     :param TFNetworkLayer.Loss loss:
     :param tf.Tensor|None loss_value:
     :param tf.Tensor|None error_value:
@@ -1237,6 +1236,7 @@ class LossHolder:
     :param bool only_on_eval:
     """
     self.name = name
+    self.local_name = local_name
     self.network = layer.network
     self.layer = layer
     self.loss = loss
@@ -1247,31 +1247,35 @@ class LossHolder:
     self.norm_factor = norm_factor
     self.only_on_eval = only_on_eval
 
-  def tf_summary(self, tf_flat_scope_name):
+  def tf_summary(self):
     """
-    :param str tf_flat_scope_name: e.g. "output" or "extra_search_output" or so
+    This gets called inside a loss name scope of the layer.
+
     :return: nothing, will use tf.summary
     """
+    name = LayerBase.cls_get_tf_scope_name(self.local_name)
     if self.loss_value is not None:
-      tf.summary.scalar("loss_%s" % tf_flat_scope_name, self.loss_value * self.norm_factor)
+      tf.summary.scalar("loss_%s" % name, self.loss_value * self.norm_factor)
       if self.network.get_config().bool("calculate_exp_loss", False):
-        tf.summary.scalar("exp_loss_%s" % tf_flat_scope_name, tf.exp(self.loss_value * self.norm_factor))
+        tf.summary.scalar("exp_loss_%s" % name, tf.exp(self.loss_value * self.norm_factor))
     if self.error_value is not None:
-      tf.summary.scalar("error_%s" % tf_flat_scope_name, self.error_value * self.norm_factor)
+      tf.summary.scalar("error_%s" % name, self.error_value * self.norm_factor)
 
-  def prepare(self, tf_flat_scope_name):
+  def prepare(self):
     """
-    :param str tf_flat_scope_name: e.g. "output" or "extra_search_output" or so
+    This gets called inside a loss name scope of the layer.
+
     :return: nothing, will prepare
     """
+    name = LayerBase.cls_get_tf_scope_name(self.local_name)
     loss_value = self.loss_value
     if loss_value is not None:
       if self.network.get_config().bool("debug_add_check_numerics_on_output", False):
         print("debug_add_check_numerics_on_output: add for layer loss %r: %r" % (
-        self.layer.name, self.layer.output.placeholder))
+          self.layer.name, self.layer.output.placeholder))
         from TFUtil import identity_with_check_numerics
         loss_value = identity_with_check_numerics(
-          loss_value, name="%s_identity_with_check_numerics_loss" % tf_flat_scope_name)
+          loss_value, name="%s_identity_with_check_numerics_loss" % name)
     self.loss_value_for_fetch = loss_value
     if self.loss.scale != 1 and loss_value is not None:
       if not self.loss.scale:
