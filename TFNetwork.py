@@ -531,12 +531,12 @@ class TFNetwork(object):
         if self.extra_net.search_flag and not self.search_flag:
           extra_name_prefix += "_search"
         layer_items += [
-          ("%s:%s" % (extra_name_prefix, name), layer)
+          ("%s/%s" % (extra_name_prefix, name), layer)
           for (name, layer) in sorted(self.extra_net.layers.items())]
       for name, layer in layer_items:
         assert isinstance(name, str)
         assert isinstance(layer, LayerBase)
-        tf_scope_name = layer.cls_get_tf_scope_name(name=name.replace(":", "/", 1))
+        tf_scope_name = layer.cls_get_tf_scope_name(name=name)
         assert isinstance(layer, LayerBase)
         with reuse_name_scope("loss"):
           with reuse_name_scope(tf_scope_name):
@@ -1246,6 +1246,11 @@ class LossHolder:
     self.error_value = error_value
     self.norm_factor = norm_factor
     self.only_on_eval = only_on_eval
+    self.tf_summary()
+    self.prepare()
+
+  def __repr__(self):
+    return "<LossHolder name=%r loss=%r>" % (self.name, self.loss)
 
   def tf_summary(self):
     """

@@ -1067,6 +1067,8 @@ def test_rec_subnet_auto_optimize():
     else:
       assert not rec_layer.cell.input_layers_moved_out
       assert not rec_layer.cell.output_layers_moved_out
+    print("Losses:")
+    pprint(engine.network.losses_dict)
 
     print("Run %i: Train now..." % run_idx)
     engine.train()

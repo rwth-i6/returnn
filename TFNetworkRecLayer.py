@@ -116,9 +116,7 @@ class RecLayer(_ConcatInputLayer):
     self._optimize_move_layers_out = optimize_move_layers_out
     self._cheating = cheating
     self._unroll = unroll
-    self._sub_loss = None
-    self._sub_error = None
-    self._sub_loss_normalization_factor = None
+    self._sub_loss_objs = []  # # type: list[TFNetwork.LossHolder]
     # On the random initialization:
     # For many cells, e.g. NativeLSTM: there will be a single recurrent weight matrix, (output.dim, output.dim * 4),
     # and a single input weight matrix (input_data.dim, output.dim * 4), and a single bias (output.dim * 4,).
@@ -383,22 +381,8 @@ class RecLayer(_ConcatInputLayer):
     seq_len = self.input_data.get_sequence_lengths()
     return x, seq_len
 
-  def get_loss_value(self):
-    v = super(RecLayer, self).get_loss_value()
-    from TFUtil import optional_add
-    return optional_add(v, self._sub_loss)
-
-  def get_error_value(self):
-    v = super(RecLayer, self).get_error_value()
-    if v is not None:
-      return v
-    return self._sub_error
-
-  def get_loss_normalization_factor(self):
-    v = super(RecLayer, self).get_loss_normalization_factor()
-    if v is not None:
-      return v
-    return self._sub_loss_normalization_factor
+  def get_losses(self):
+    return super(RecLayer, self).get_losses() + self._sub_loss_objs
 
   def get_constraints_value(self):
     v = super(RecLayer, self).get_constraints_value()
@@ -677,10 +661,8 @@ class RecLayer(_ConcatInputLayer):
     :return: output of shape (time, batch, dim)
     :rtype: tf.Tensor
     """
-    output, (sub_loss, sub_error, sub_loss_norm_factor), search_choices = cell.get_output(rec_layer=self)
-    self._sub_loss = sub_loss
-    self._sub_error = sub_error
-    self._sub_loss_normalization_factor = sub_loss_norm_factor
+    output, losses, search_choices = cell.get_output(rec_layer=self)
+    self._sub_loss_objs = losses
     self.search_choices = search_choices
     self._last_hidden_state = cell
     return output
@@ -1111,7 +1093,7 @@ class _SubnetworkRecCell(object):
     """
     :param RecLayer rec_layer:
     :return: output of shape (time, batch, dim), (loss, error, loss_norm_factor), search choices
-    :rtype: (tf.Tensor, (tf.Tensor, tf.Tensor, tf.Tensor), SearchChoices)
+    :rtype: (tf.Tensor, list[TFNetwork.LossHolder], SearchChoices)
     """
     self._check_output_template_shape()
     from TFUtil import check_input_dim, tensor_array_stack
@@ -1578,12 +1560,12 @@ class _SubnetworkRecCell(object):
     self._construct_output_layers_moved_out(
       loop_accumulated=self.final_acc_tas_dict, seq_len=seq_len, extra_output_layers=extra_output_layers)
 
-    sub_loss = sub_error = sub_loss_normalization_factor = None
+    sub_losses = []
     if layer_names_with_losses:
+      from TFNetwork import LossHolder
       with tf.name_scope("sub_net_loss"):
         with tf.name_scope("sub_loss_normalization_factor"):
           sub_loss_normalization_factor = 1.0 / tf.cast(tf.reduce_sum(seq_len), tf.float32)
-        sub_loss = 0.0  # accumulated
         for layer_name in sorted(layer_names_with_losses):
           if layer_name in self.input_layers_moved_out + self.output_layers_moved_out:
             if layer_name in self.input_layers_moved_out:
@@ -1594,9 +1576,7 @@ class _SubnetworkRecCell(object):
             with reuse_name_scope(layer_with_loss_inst.tf_scope_name):
               loss_value = layer_with_loss_inst.get_loss_value()
               error_value = layer_with_loss_inst.get_error_value()
-            sub_loss += loss_value * layer_with_loss_inst.loss.scale
-            # Only one error, not summed up. Determined by sorted layers.
-            sub_error = error_value
+
           else:
             layer_with_loss_inst = self.net.layers[layer_name]
             loss_value = tensor_array_stack(
@@ -1613,9 +1593,15 @@ class _SubnetworkRecCell(object):
             loss_value = tf.reduce_sum(loss_value)
             error_value = tf.reduce_sum(error_value)
 
-            sub_loss += loss_value * layer_with_loss_inst.loss.scale
-            # Only one error, not summed up. Determined by sorted layers.
-            sub_error = error_value
+          sub_losses.append(LossHolder(
+            name=self.parent_rec_layer.name + "/" + layer_name,
+            local_name=layer_name,
+            layer=layer_with_loss_inst,
+            loss=layer_with_loss_inst.loss,
+            norm_factor=sub_loss_normalization_factor,
+            loss_value=loss_value,
+            error_value=error_value,
+            only_on_eval=layer_with_loss_inst.only_on_eval))
 
     # Check if collected_choices has all the right layers.
     # At the moment, _TemplateLayer.has_search_choices() might be incomplete, that is why we check here.
@@ -1738,7 +1724,7 @@ class _SubnetworkRecCell(object):
         continue
       self.parent_net.used_data_keys.add(key)
 
-    return output, (sub_loss, sub_error, sub_loss_normalization_factor), search_choices
+    return output, sub_losses, search_choices
 
   def _input_layer_used_inside_loop(self, layer_name):
     """
