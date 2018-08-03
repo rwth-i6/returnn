@@ -107,14 +107,14 @@ class Runner(object):
       if loss is 0:
         loss = self.engine.get_const_tensor(key="zero_loss", value=0.0)
       d["loss"] = loss
-      for layer_name, loss in self.engine.network.loss_by_layer.items():
-        if self.engine.network.get_layer(layer_name).only_on_eval and self._should_train:
+      for loss_name, loss in self.engine.network.losses_dict.items():
+        if loss.only_on_eval and self._should_train:
           continue
-        d["cost:%s" % layer_name] = loss
-      for layer_name, error in self.engine.network.error_by_layer.items():
-        if self.engine.network.get_layer(layer_name).only_on_eval and self._should_train:
-          continue
-        d["error:%s" % layer_name] = error
+        if loss.loss_value is not None:
+          d["cost:%s" % loss_name] = loss.loss_value
+        if loss.error_value is not None:
+          d["error:%s" % loss_name] = loss.error_value
+        d["loss_norm_factor:%s" % loss_name] = loss.norm_factor
       for layer in self.engine.network.layers.values():
         if layer.only_on_eval and self._should_train:
           continue
@@ -123,11 +123,6 @@ class Runner(object):
           target_data = layer.loss.target
           for dim, v in target_data.size_placeholder.items():
             d["size:%s:%i" % (layer.target, dim)] = v
-        # Store the loss normalization factor.
-        if layer.name in self.engine.network.loss_by_layer or layer.name in self.engine.network.error_by_layer:
-          loss_norm_factor = layer.get_loss_normalization_factor()
-          assert loss_norm_factor is not None
-          d["loss_norm_factor:%s" % layer.name] = loss_norm_factor
     for layer in self.engine.network.layers.values():
       for k, v in layer.stats.items():
         d["stats:%s:%s" % (layer.name, k)] = v
@@ -1215,7 +1210,7 @@ class Engine(object):
     :return: nothing
     """
     # It's constructed lazily and it will set used_data_keys, so make sure that we have it now.
-    self.network.get_all_errors()
+    self.network.maybe_construct_objective()
     results = {}
     eval_dump_str = []
     train = self._maybe_prepare_train_in_eval()
@@ -1591,7 +1586,7 @@ class Engine(object):
         sources=self.network.get_output_layers())
 
     # It's constructed lazily and it will set used_data_keys, so make sure that we have it now.
-    self.network.get_all_errors()
+    self.network.maybe_construct_objective()
 
     batch_size = self.config.int('batch_size', 1)
     max_seqs = self.config.int('max_seqs', -1)
@@ -1644,7 +1639,7 @@ class Engine(object):
       self.init_network_from_config(self.config)
     if do_eval:
       # It's constructed lazily and it will set used_data_keys, so make sure that we have it now.
-      self.network.get_all_errors()
+      self.network.maybe_construct_objective()
     if output_file:
       if dataset.have_corpus_seq_idx():
         # We can sort it. Sort it in reverse to make sure that we have enough memory right at the beginning.

@@ -491,9 +491,9 @@ def check_engine_search(extra_rec_kwargs=None):
 
   engine.search(dataset=dataset)
   print("error keys:")
-  pprint(engine.network.error_by_layer)
+  pprint(engine.network.losses_dict)
   assert engine.network.total_objective is not None
-  assert "decision" in engine.network.error_by_layer
+  assert "decision" in engine.network.losses_dict
 
   engine.finalize()
 
@@ -574,9 +574,9 @@ def check_engine_search_attention(extra_rec_kwargs=None):
   print("Search...")
   engine.search(dataset=dataset)
   print("error keys:")
-  pprint(engine.network.error_by_layer)
+  pprint(engine.network.losses_dict)
   assert engine.network.total_objective is not None
-  assert "decision" in engine.network.error_by_layer
+  assert "decision" in engine.network.losses_dict
 
   engine.finalize()
 
@@ -723,9 +723,9 @@ def test_rec_optim_all_out():
 
   engine.search(dataset=dataset)
   print("error keys:")
-  pprint(engine.network.error_by_layer)
+  pprint(engine.network.losses_dict)
   assert engine.network.total_objective is not None
-  assert "decision" in engine.network.error_by_layer
+  assert "decision" in engine.network.losses_dict
 
   engine.finalize()
 

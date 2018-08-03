@@ -4303,15 +4303,20 @@ class SubnetworkLayer(LayerBase):
     return v
 
   def get_error_value(self):
-    errors = self.subnetwork.get_all_errors()
+    self.subnetwork.maybe_construct_objective()
+    errors = self.subnetwork.losses_dict
     if not errors:
       return None
+    errors = {key: loss for (key, loss) in errors.items() if loss.error_value is not None}
     if len(errors) == 1:
-      return list(errors.values())[0]
-    name = self.subnetwork.get_default_output_layer_name()
-    if name in errors:
-      return errors[name]
-    return sorted(errors.items())[0][1]  # first alphabetically
+      loss = list(errors.values())[0]
+    else:
+      name = self.subnetwork.get_default_output_layer_name()
+      if name in errors:
+        loss = errors[name]
+      else:
+        loss = sorted(errors.items())[0][1]  # first alphabetically
+    return loss.error_value
 
   def get_last_hidden_state(self, key):
     h = self.subnetwork.get_default_output_layer().get_last_hidden_state(key=key)

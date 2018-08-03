@@ -228,8 +228,7 @@ class TFNetwork(object):
     self._constructing_layers = []  # type: list[str]
     self.layers_desc = {}  # type: dict[str,dict[str]]
     self.layers = {}  # type: dict[str,LayerBase]
-    self.loss_by_layer = {}  # type: dict[str,tf.Tensor]
-    self.error_by_layer = {}  # type: dict[str,tf.Tensor]
+    self.losses_dict = {}  # type: dict[str,LossHolder]
     self.total_loss = None  # type: tf.Tensor
     self.total_constraints = None  # type: tf.Tensor
     self.total_objective = None  # type: tf.Tensor
@@ -525,8 +524,7 @@ class TFNetwork(object):
     with tf.name_scope("objective"):
       self.total_loss = 0
       self.total_constraints = 0
-      self.loss_by_layer.clear()
-      self.error_by_layer.clear()
+      self.losses_dict.clear()
       layer_items = sorted(self.layers.items())
       if self.extra_net:
         extra_name_prefix = "extra"
@@ -554,10 +552,14 @@ class TFNetwork(object):
                 from TFUtil import identity_with_check_numerics
                 loss = identity_with_check_numerics(
                   loss, name="%s_identity_with_check_numerics_loss" % tf_flat_scope_name)
-              self.loss_by_layer[name] = loss
             if error is not None:
               tf.summary.scalar("error_%s" % tf_flat_scope_name, error * layer.get_loss_normalization_factor())
-              self.error_by_layer[name] = error
+            if loss is not None or error is not None:
+              loss_obj = LossHolder(
+                name=name, layer=layer, only_on_eval=layer.only_on_eval,
+                loss_value=loss, error_value=error,
+                norm_factor=layer.get_loss_normalization_factor())
+              self.losses_dict[loss_obj.name] = loss_obj
 
         with reuse_name_scope("constraints"):
           with reuse_name_scope(tf_scope_name):
@@ -591,18 +593,6 @@ class TFNetwork(object):
   def maybe_construct_objective(self):
     if self.total_objective is None:
       self.construct_objective()
-
-  def get_all_losses(self):
-    self.maybe_construct_objective()
-    return self.loss_by_layer
-
-  def get_all_errors(self):
-    """
-    :rtype: dict[str|tf.Tensor]
-    :return: layer-name -> error dict. contains only the layers which have some error value
-    """
-    self.maybe_construct_objective()
-    return self.error_by_layer
 
   def get_objective(self):
     self.maybe_construct_objective()
@@ -1251,6 +1241,28 @@ class TFNetworkParamsSerialized(object):
     """
     self.values_dict = values_dict
     self.global_train_step = global_train_step
+
+
+class LossHolder:
+  def __init__(self, name, layer, loss_value, error_value, norm_factor, only_on_eval):
+    """
+    :param str name: The name uniquely identifies the loss. Earlier, this was the same as the layer name.
+      This is still true for simple cases,
+      but for losses coming from a subnetwork or other extended losses,
+      it can be something else.
+      However, we can always point to a layer where this comes from (either in the subnet, or the parent layer).
+    :param LayerBase layer:
+    :param tf.Tensor|None loss_value:
+    :param tf.Tensor|None error_value:
+    :param tf.Tensor norm_factor:
+    :param bool only_on_eval:
+    """
+    self.name = name
+    self.layer = layer
+    self.loss_value = loss_value
+    self.error_value = error_value
+    self.norm_factor = norm_factor
+    self.only_on_eval = only_on_eval
 
 
 class NetworkConstructionDependencyLoopException(Exception):
