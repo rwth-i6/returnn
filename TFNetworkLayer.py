@@ -2633,6 +2633,7 @@ class ExpandDimsLayer(_ConcatInputLayer):
 
   @classmethod
   def get_out_data_from_opts(cls, name, axis, dim=1, sources=(), **kwargs):
+    init_axis = axis # Initial axis used for later comparison
     data = get_concat_sources_data_template(sources)
     data.name = "%s_output" % name
     if isinstance(axis, int):
@@ -2642,7 +2643,7 @@ class ExpandDimsLayer(_ConcatInputLayer):
       data.dim = dim
     axis -= 1  # subtract batch axis
     data.shape = data.shape[:axis] + (dim,) + data.shape[axis:]
-    if axis == "time":
+    if init_axis == "time":
       data.time_dim_axis = axis
     return data
 
