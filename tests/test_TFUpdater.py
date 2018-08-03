@@ -31,9 +31,6 @@ class DummyLayer(LayerBase):
     self.x = self.add_param(tf.Variable(initial_value))
     self.output.placeholder = self.x
 
-  def get_loss_normalization_factor(self):
-    return 1.0
-
   def get_loss_value(self):
     return self.loss_value_factor * self.x
 
