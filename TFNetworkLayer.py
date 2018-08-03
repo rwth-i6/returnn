@@ -98,12 +98,6 @@ class LayerBase(object):
     self.loss = loss
     if self.loss and self.loss.recurrent:
       self.recurrent = True
-    if not self.loss and self.__class__.get_loss_value is not LayerBase.get_loss_value:
-      # This is slightly unclean workaround:
-      # If get_loss_value is overridden, we expect that the layer class defines its own loss.
-      # In TFNetwork when collecting the losses,
-      # it will use `self.loss` to get e.g. the loss.scale and other things.
-      self.loss = _PlaceholderLoss(base_network=network)
     if loss_scale != 1.0:
       assert self.loss, "loss_scale is set, but no loss"
       assert self.loss.scale == 1.0, "do not use loss_scale and loss with 'scale' option together"
@@ -674,25 +668,16 @@ class LayerBase(object):
       return None
     return res
 
-  def _init_loss(self):
-    if self.loss.output is self.output:
-      return
-    self.loss.init(
-      output=self.output,
-      output_with_activation=self.output_before_activation,
-      target=self._get_target_value(),
-      layer=self)
-
   def get_loss_value(self):
     """
+    NOTE: This function will get removed very soon. Do not use it! Use self.get_losses.
+
     :return: the loss, a scalar value, or None if not set. not multiplied by loss.scale
     :rtype: tf.Tensor | None
     """
     if not self.loss:
       return None
-    if isinstance(self.loss, _PlaceholderLoss):
-      return None
-    self._init_loss()
+    self.loss.init_by_layer(self)
     with tf.name_scope("loss"):
       if self.only_on_eval:
         return self._cond_only_on_eval_opt(self.loss.get_value, default_value=0.0)
@@ -700,14 +685,14 @@ class LayerBase(object):
 
   def get_error_value(self):
     """
+    NOTE: This function will get removed very soon. Do not use it! Use self.get_losses.
+
     :return: usually the frame error rate, or None if not defined
     :rtype: tf.Tensor | None
     """
     if not self.loss:
       return None
-    if isinstance(self.loss, _PlaceholderLoss):
-      return None
-    self._init_loss()
+    self.loss.init_by_layer(self)
     with tf.name_scope("error"):
       if self.only_on_eval:
         return self._cond_only_on_eval_opt(self.loss.get_error, default_value=0.0)
@@ -723,7 +708,7 @@ class LayerBase(object):
     """
     if not self.loss:
       return []
-    self._init_loss()
+    self.loss.init_by_layer(self)
     from TFNetwork import LossHolder
     loss = self.get_loss_value()
     error = self.get_error_value()
@@ -4310,28 +4295,16 @@ class SubnetworkLayer(LayerBase):
       return None
     return v
 
-  def get_loss_value(self):
-    v = self.subnetwork.get_total_loss()
-    if v is 0:
-      return None
-    self._update_used_data_keys()  # maybe needs an update now
-    return v
-
-  def get_error_value(self):
+  def get_losses(self):
+    """
+    :rtype: list[TFNetwork.LossHolder]
+    """
+    losses = super(SubnetworkLayer, self).get_losses()
     self.subnetwork.maybe_construct_objective()
-    errors = self.subnetwork.losses_dict
-    if not errors:
-      return None
-    errors = {key: loss for (key, loss) in errors.items() if loss.error_value is not None}
-    if len(errors) == 1:
-      loss = list(errors.values())[0]
-    else:
-      name = self.subnetwork.get_default_output_layer_name()
-      if name in errors:
-        loss = errors[name]
-      else:
-        loss = sorted(errors.items())[0][1]  # first alphabetically
-    return loss.error_value
+    self._update_used_data_keys()  # maybe needs an update now
+    for loss_name, loss in sorted(self.subnetwork.losses_dict.items()):
+      losses.append(loss.copy_new_base(network=self.network, name="%s/%s" % (self.name, loss_name)))
+    return losses
 
   def get_last_hidden_state(self, key):
     h = self.subnetwork.get_default_output_layer().get_last_hidden_state(key=key)
@@ -4955,6 +4928,18 @@ class Loss(object):
     This is used by `LayerBase.transform_config_dict`.
     """
 
+  def init_by_layer(self, layer):
+    """
+    :param LayerBase|None layer:
+    """
+    if self.output is layer.output:
+      return
+    self.init(
+      output=layer.output,
+      output_with_activation=layer.output_before_activation,
+      target=layer._get_target_value(),
+      layer=layer)
+
   def init(self, output, output_with_activation=None, target=None, layer=None):
     """
     :param Data output: generated output
@@ -5084,6 +5069,11 @@ class _PlaceholderLoss(Loss):
   """
   Use this when the layer specifies its own custom loss, e.g. like the :class:`SubnetworkLayer`.
   """
+  def get_value(self):
+    raise AssertionError("This should not get called.")
+
+  def get_error(self):
+    raise AssertionError("This should not get called.")
 
 
 class CrossEntropyLoss(Loss):

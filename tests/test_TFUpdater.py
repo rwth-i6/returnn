@@ -31,8 +31,9 @@ class DummyLayer(LayerBase):
     self.x = self.add_param(tf.Variable(initial_value))
     self.output.placeholder = self.x
 
-  def get_loss_value(self):
-    return self.loss_value_factor * self.x
+  def get_losses(self):
+    from TFNetwork import LossHolder
+    return [LossHolder(layer=self, loss_value=self.loss_value_factor * self.x, error_value=None)]
 
   @classmethod
   def get_out_data_from_opts(cls, name, **kwargs):
@@ -141,8 +142,9 @@ def test_grad_add_check_numerics_ops():
 
 def test_Updater_add_check_numerics_ops():
   class _Layer(DummyLayer):
-    def get_loss_value(self):
-      return tf.log(self.x)
+    def get_losses(self):
+      from TFNetwork import LossHolder
+      return [LossHolder(layer=self, loss_value=tf.log(self.x), error_value=None)]
 
   from TFNetwork import TFNetwork, ExternData
   from Config import Config

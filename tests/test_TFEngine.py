@@ -190,6 +190,71 @@ def test_engine_train_subnet_loss():
   engine.finalize()
 
 
+def test_engine_train_rec_subnet_loss_optimized():
+  from GeneratingDataset import DummyDataset
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 3
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
+  train_data.init_seq_order(epoch=1)
+  cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  cv_data.init_seq_order(epoch=1)
+
+  config = Config()
+  config.update({
+    "model": "/tmp/model",
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": {
+      "output": {
+        "class": "rec",
+        "target": "classes",
+        "unit": {
+          "output": {"class": "softmax", "loss": "ce", "from": "data:source"}
+        }}},
+    "start_epoch": 1,
+    "num_epochs": 1,
+    "batch_size": 50
+  })
+  engine = Engine(config=config)
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
+  engine.train()
+  engine.finalize()
+
+
+def test_engine_train_rec_subnet_loss_non_optimized():
+  from GeneratingDataset import DummyDataset
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 3
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
+  train_data.init_seq_order(epoch=1)
+  cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  cv_data.init_seq_order(epoch=1)
+
+  config = Config()
+  config.update({
+    "model": "/tmp/model",
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": {
+      "output": {
+        "class": "rec",
+        "optimize_move_layers_out": False,
+        "target": "classes",
+        "unit": {
+          "output": {"class": "softmax", "loss": "ce", "from": "data:source"}
+        }}},
+    "start_epoch": 1,
+    "num_epochs": 1,
+    "batch_size": 50
+  })
+  engine = Engine(config=config)
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
+  engine.train()
+  engine.finalize()
+
+
 def test_engine_train_accum_grad_multiple_step():
   from GeneratingDataset import DummyDataset
   seq_len = 5

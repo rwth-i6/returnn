@@ -1219,7 +1219,10 @@ class TFNetworkParamsSerialized(object):
 
 
 class LossHolder:
-  def __init__(self, name, local_name, layer, loss, loss_value, error_value, norm_factor, only_on_eval):
+  def __init__(self, layer, loss_value, error_value,
+               loss=None, norm_factor=None,
+               only_on_eval=None, local_name=None, name=None,
+               network=None):
     """
     :param str name: The name uniquely identifies the loss. Earlier, this was the same as the layer name.
       This is still true for simple cases,
@@ -1229,15 +1232,30 @@ class LossHolder:
     :param str local_name: E.g. layer name, but just the name itself, relative to the layer; should not contain "/".
     :param LayerBase layer:
       We can always point to a layer where this comes from (either in the subnet, or the parent layer).
+    :param TFNetwork network:
     :param TFNetworkLayer.Loss loss:
     :param tf.Tensor|None loss_value:
     :param tf.Tensor|None error_value:
     :param tf.Tensor norm_factor:
     :param bool only_on_eval:
     """
+    if local_name is None:
+      local_name = layer.name
+    if name is None:
+      name = local_name
+    if only_on_eval is None:
+      only_on_eval = layer.only_on_eval
+    if loss is None:
+      from TFNetworkLayer import _PlaceholderLoss
+      loss = _PlaceholderLoss(base_network=layer.network)
+      loss.init_by_layer(layer)
+    if norm_factor is None:
+      norm_factor = loss.get_normalization_factor()
+    if network is None:
+      network = layer.network
     self.name = name
     self.local_name = local_name
-    self.network = layer.network
+    self.network = network
     self.layer = layer
     self.loss = loss
     self.loss_value = loss_value
@@ -1258,6 +1276,8 @@ class LossHolder:
 
     :return: nothing, will use tf.summary
     """
+    if self.network.parent_net:
+      return  # skip summaries. the root net should also do this
     name = LayerBase.cls_get_tf_scope_name(self.local_name)
     if self.loss_value is not None:
       tf.summary.scalar("loss_%s" % name, self.loss_value * self.norm_factor)
@@ -1290,6 +1310,24 @@ class LossHolder:
     if self.loss.use_normalized_loss and loss_value is not None:
       loss_value *= self.norm_factor
     self.loss_value_for_objective = loss_value
+
+  def copy_new_base(self, name, layer=None, network=None):
+    """
+    :param LayerBase layer:
+    :param TFNetwork network:
+    :param str name:
+    :return: new copy of LossHolder
+    :rtype: LossHolder
+    """
+    if not layer:
+      layer = self.layer
+    if not network:
+      network = self.network
+    return LossHolder(
+      name=name, layer=layer, network=network,
+      local_name=self.local_name, loss=self.loss,
+      loss_value=self.loss_value, error_value=self.error_value,
+      norm_factor=self.norm_factor, only_on_eval=self.only_on_eval)
 
 
 class NetworkConstructionDependencyLoopException(Exception):
