@@ -648,6 +648,32 @@ class LayerBase(object):
     return self._static_get_target_value(
       target=self.target, network=self.network, mark_data_key_as_used=mark_data_key_as_used)
 
+  def _cond_only_on_eval_opt(self, on_eval_func, default_value):
+    """
+    :param ()->(tf.Tensor|None) on_eval_func:
+    :param float|tf.Tensor default_value:
+    :return: tensor (coming from tf.cond if needed) if on_eval_func returned a tensor, otherwise None
+    :rtype: tf.Tensor|None
+    """
+    if not isinstance(default_value, tf.Tensor):
+      default_value = tf.constant(default_value, name="only_on_eval_dummy_zero")
+
+    class OnEval:
+      have_output = True
+
+      @classmethod
+      def get_value(cls):
+        res = on_eval_func()
+        if res is None:
+          cls.have_output = False
+          return default_value  # Doesn't matter, will not be used anyway.
+        return res
+
+    res = self.network.cond_on_train(lambda: default_value, OnEval.get_value)
+    if not OnEval.have_output:
+      return None
+    return res
+
   def _init_loss(self):
     if self.loss.output is self.output:
       return
@@ -669,22 +695,7 @@ class LayerBase(object):
     self._init_loss()
     with tf.name_scope("loss"):
       if self.only_on_eval:
-        class OnEval:
-          have_output = True
-
-          @classmethod
-          def get_value(cls):
-            res = self.loss.get_value()
-            if res is None:
-              cls.have_output = False
-              return 0.0
-            return res
-
-        res = self.network.cond_on_train(
-          lambda: tf.constant(0.0, name="only_on_eval_dummy_zero"), OnEval.get_value)
-        if not OnEval.have_output:
-          return None
-        return res
+        return self._cond_only_on_eval_opt(self.loss.get_value, default_value=0.0)
       return self.loss.get_value()
 
   def get_error_value(self):
@@ -699,8 +710,7 @@ class LayerBase(object):
     self._init_loss()
     with tf.name_scope("error"):
       if self.only_on_eval:
-        return self.network.cond_on_train(
-          lambda: tf.constant(0.0, name="only_on_eval_dummy_zero"), self.loss.get_error)
+        return self._cond_only_on_eval_opt(self.loss.get_error, default_value=0.0)
       return self.loss.get_error()
 
   def get_loss_normalization_factor(self):
