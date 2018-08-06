@@ -1422,20 +1422,24 @@ def concat_sources(src_layers):
   if cache_key in network.concat_sources_dropout_cache:
     return network.concat_sources_dropout_cache[cache_key].copy()
   data = get_concat_sources_data_template(src_layers)
-  prefix_shape = data.shape[:-1]  # without batch-dim
-  for layer in src_layers:
-    assert not layer.output.sparse, "sparse concat not supported"
-    assert layer.output.dtype == data.dtype, "incompatible dtype with layer %r" % layer
-    assert layer.output.time_dim_axis_excluding_batch == data.time_dim_axis_excluding_batch
-    shape = layer.output.shape
-    assert layer.output.placeholder.get_shape().ndims == len(shape) + 1  # with batch-dim
-    assert shape, "source must not be a scalar of layer %r" % layer
-    assert shape[:-1] == prefix_shape, "incompatible concat with layer %r" % layer
-    assert shape[-1], "source last-dim must be specified of layer %r" % layer
+  layers_data = []
   with _name_scope_for_concat_src_layers(src_layers, "concat_sources"):
+    data_dyn_shape = list(data.batch_shape)
+    if any([d is None for d in data_dyn_shape]):
+      # Currently we assume that get_concat_sources_data_template will match the first layer,
+      # and thus the first layer output shape should be correct.
+      assert src_layers[0].output.batch_ndim == data.batch_ndim
+      for axis in range(data.batch_ndim):
+        if data_dyn_shape[axis] is None:
+          data_dyn_shape[axis] = tf.shape(src_layers[0].output.placeholder)[axis]
+    for layer in src_layers:
+      assert not layer.output.sparse, "sparse concat not supported"
+      assert layer.output.dtype == data.dtype, "incompatible dtype with layer %r" % layer
+      # unbroadcast is needed for tf.concat.
+      layers_data.append(layer.output.copy_compatible_to(data, unbroadcast=True, data_dyn_shape=data_dyn_shape))
     data.placeholder = tf.concat(
-      axis=len(prefix_shape) + 1,  # one more because this is with batch-dim
-      values=[layer.output.get_placeholder_with_specific_batch_dim_axis(data.batch_dim_axis) for layer in src_layers])
+      axis=data.feature_dim_axis,
+      values=[l.placeholder for l in layers_data])
   data.size_placeholder = src_layers[0].output.size_placeholder.copy()
   network.concat_sources_dropout_cache[cache_key] = data.copy()
   return data
@@ -1443,6 +1447,11 @@ def concat_sources(src_layers):
 
 def get_concat_sources_data_template(src_layers, name=None):
   """
+  This just creates a template :class:`Data` instance,
+  without creating any real TF tensors.
+  :func:`conact_sources` (and related) are the equivalent functions
+  which would create a :class:`Data` together with the tensor.
+
   :param list[LayerBase] src_layers:
   :param str|None name: name of the Data
   :return: data with no placeholders set. it is always a copy or new instance, so safe to manipulate
@@ -1454,9 +1463,12 @@ def get_concat_sources_data_template(src_layers, name=None):
   dim = 0
   beam_size = None
   for layer in src_layers:
-    shape = layer.output.shape
-    assert shape[-1], "source last-dim must be specified of layer %r" % layer
-    dim += shape[-1]
+    # Note: We do not perform much compatibility checks at this point,
+    # as this is for a template only anyway.
+    # The real checks are in concat_sources.
+    assert not layer.output.sparse
+    assert layer.output.dim is not None
+    dim += layer.output.dim
     beam_size = beam_size or layer.output.beam_size
   data = Data(
     name=name or ("concat_" + "_".join([l.name for l in src_layers])),

@@ -31,6 +31,88 @@ def make_scope():
       yield session
 
 
+def test_concat_sources():
+  with make_scope() as session:
+    network = TFNetwork(train_flag=True, extern_data=ExternData())
+    n_batch = 5
+    n_time = 3
+    size_placeholder = {0: tf.constant(n_time, dtype=tf.int32, shape=(n_batch,))}
+    src1 = InternalLayer(
+      name="src1", network=network,
+      output=Data(
+        name="src1_output", shape=(None, 11), placeholder=tf.zeros((n_batch, n_time, 11)),
+        size_placeholder=size_placeholder))
+    print("src1 output:", src1.output)
+    src2 = InternalLayer(
+      name="src2", network=network,
+      output=Data(
+        name="src2_output", shape=(None, 13), placeholder=tf.zeros((n_batch, n_time, 13)),
+        size_placeholder=size_placeholder))
+    print("src2 output:", src2.output)
+    out_kwargs = dict(name="out", sources=[src1, src2], network=network)
+    out_output = CopyLayer.get_out_data_from_opts(**out_kwargs)
+    print("out output:", out_output)
+    assert out_output.dim == 11 + 13
+    out = CopyLayer(output=out_output, **out_kwargs)
+    session.run(out.output.placeholder)
+
+
+def test_concat_sources_batch_dim():
+  with make_scope() as session:
+    network = TFNetwork(train_flag=True, extern_data=ExternData())
+    n_batch = 5
+    n_time = 3
+    size_placeholder = {0: tf.constant(n_time, dtype=tf.int32, shape=(n_batch,))}
+    src1 = InternalLayer(
+      name="src1", network=network,
+      output=Data(
+        name="src1_output", shape=(None, 11), placeholder=tf.zeros((n_batch, n_time, 11)),
+        size_placeholder=size_placeholder))
+    print("src1 output:", src1.output)
+    src2 = InternalLayer(
+      name="src2", network=network,
+      output=Data(
+        name="src2_output", shape=(None, 13), time_dim_axis=0, batch_dim_axis=1,
+        placeholder=tf.zeros((n_time, n_batch, 13)),
+        size_placeholder=size_placeholder))
+    print("src2 output:", src2.output)
+    out_kwargs = dict(name="out", sources=[src1, src2], network=network)
+    out_output = CopyLayer.get_out_data_from_opts(**out_kwargs)
+    print("out output:", out_output)
+    assert out_output.dim == 11 + 13
+    assert out_output.batch_dim_axis == 0 and out_output.time_dim_axis == 1
+    out = CopyLayer(output=out_output, **out_kwargs)
+    session.run(out.output.placeholder)
+
+
+def test_concat_sources_missing_dim():
+  with make_scope() as session:
+    network = TFNetwork(train_flag=True, extern_data=ExternData())
+    n_batch = 5
+    n_time = 3
+    size_placeholder = {0: tf.constant(n_time, dtype=tf.int32, shape=(n_batch,))}
+    src1 = InternalLayer(
+      name="src1", network=network,
+      output=Data(
+        name="src1_output", shape=(None, 11), placeholder=tf.zeros((n_batch, n_time, 11)),
+        size_placeholder=size_placeholder))
+    print("src1 output:", src1.output)
+    src2 = InternalLayer(
+      name="src2", network=network,
+      output=Data(
+        name="src2_output", shape=(13,), time_dim_axis=None, batch_dim_axis=0,
+        placeholder=tf.zeros((n_batch, 13)),
+        size_placeholder={}))
+    print("src2 output:", src2.output)
+    out_kwargs = dict(name="out", sources=[src1, src2], network=network)
+    out_output = CopyLayer.get_out_data_from_opts(**out_kwargs)
+    print("out output:", out_output)
+    assert out_output.dim == 11 + 13
+    assert out_output.batch_dim_axis == 0 and out_output.time_dim_axis == 1
+    out = CopyLayer(output=out_output, **out_kwargs)
+    session.run(out.output.placeholder)
+
+
 def test_batch_norm_vars():
   with make_scope() as session:
     n_in, n_out = 2, 3

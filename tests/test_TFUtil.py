@@ -143,6 +143,18 @@ def test_Data_copy_compatible_to_batch_major():
   assert d2a.feature_dim_axis == d1.feature_dim_axis
 
 
+def test_Data_copy_compatible_to_feature_dim():
+  # copy_compatible_to should leave the feature dim as-is.
+  d1 = Data(name='d1', shape=(None, 11), dtype='float32')
+  d2 = Data(name='d2', shape=(13,), dtype='float32', batch_dim_axis=None, time_dim_axis=None)
+  assert d1.dim != d2.dim
+  d2a = d2.copy_compatible_to(d1)
+  assert d2a.shape == (1, 13)
+  assert d2a.batch_dim_axis == d1.batch_dim_axis
+  assert d2a.time_dim_axis == d1.time_dim_axis
+  assert d2a.feature_dim_axis == d1.feature_dim_axis
+
+
 def test_get_initializer_zero():
   shape = (2, 3)
   initializer = get_initializer(0.0)

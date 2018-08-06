@@ -346,9 +346,14 @@ class Data(object):
       setattr(data, k, a if (a < spatial_dim_axis) else (a + 1))
     return data
 
-  def copy_compatible_to(self, data):
+  def copy_compatible_to(self, data, unbroadcast=False, data_dyn_shape=None):
     """
     :param Data data: other data which the returned tensor should be compatible to
+      It would add any missing axes with a dim 1 axis for automatic broadcasting.
+      It currently does not check whether existing dims match.
+    :param bool unbroadcast: if True, all broadcast axes (axes with dim 1) will be tiled such that they match
+    :param tf.Tensor|list[tf.Tensor|int]|tuple[tf.Tensor|int]|None data_dyn_shape:
+      For unbroadcast, if we do not want to rely on tf.shape(data.placeholder).
     :returns: Data, might add broadcast dimensions
     :rtype: Data
     """
@@ -372,7 +377,35 @@ class Data(object):
         # Note that it might be important here that we added any missing spatial dims before.
         v = v.copy_add_batch_dim(data.batch_dim_axis)
     assert v.batch_dim_axis == data.batch_dim_axis
-    assert data.feature_dim_axis == v.feature_dim_axis
+    assert v.feature_dim_axis == data.feature_dim_axis
+    assert v.batch_ndim == data.batch_ndim
+    if unbroadcast and any([d1 != 1 and d2 == 1 for (d1, d2) in zip(data.batch_shape, v.batch_shape)]):
+      v.size_placeholder.update(data.size_placeholder or {})
+      if v.placeholder is not None:
+        with tf.name_scope("copy_compatible_to_unbroadcast"):
+          tiles = [1] * v.batch_ndim
+          for axis in range(v.batch_ndim):
+            if v.batch_shape[axis] != 1:
+              continue
+            if data.batch_shape[axis] is not None:
+              tiles[axis] = data.batch_shape[axis]
+            elif data_dyn_shape is not None:
+              tiles[axis] = data_dyn_shape[axis]
+            else:
+              assert data.placeholder, "need data.placeholder for unbroadcast (target data: %r)" % v
+              tiles[axis] = tf.shape(data.placeholder)[axis]
+          v.placeholder = tf.tile(v.placeholder, tiles)
+      new_shape = list(v.batch_shape)
+      for axis in range(v.batch_ndim):
+        if data.batch_shape[axis] != 1 and new_shape[axis] == 1:
+          new_shape[axis] = data.batch_shape[axis]
+      if v.feature_dim_axis is not None:
+        v.dim = new_shape[v.feature_dim_axis]
+      if v.batch_dim_axis is not None:
+        del new_shape[v.batch_dim_axis]
+      v.shape = tuple(new_shape)
+      if v.placeholder is not None:
+        v.placeholder.set_shape(v.batch_shape)
     return v
 
   def copy_time_flattened(self):
