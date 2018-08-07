@@ -84,6 +84,7 @@ class Runner(object):
     if extra_fetches is not None:
       assert extra_fetches_callback
     self.extra_fetches_callback = extra_fetches_callback
+    self._horovod_stopped_runner = False
 
     from Util import terminal_size
     terminal_width, _ = terminal_size()
@@ -373,6 +374,59 @@ class Runner(object):
         d[k] = list(r)
     self.extra_fetches_callback(**d)
 
+  def _horovod_finish_data(self):
+    self._horovod_signal_broadcast(have_more_data=False)
+
+  def _horovod_signal_error(self):
+    self._horovod_signal_broadcast(have_more_data=False, error=True)
+
+  def _horovod_signal_have_more_data(self):
+    """
+    :return: whether to stop (because some other instance stopped), whether an error occured
+    :rtype: (bool, bool)
+    """
+    return self._horovod_signal_broadcast(have_more_data=True)
+
+  def _horovod_signal_broadcast(self, have_more_data=True, error=False):
+    """
+    :param bool have_more_data: whether we have more data in this instance
+    :param bool error: whether some error occured here
+    :return: whether to stop (because some other instance stopped), whether an error occured
+    :rtype: (bool, bool)
+    """
+    if not self.engine.config.is_true("use_horovod"):
+      return False, False
+    # Stopped before? Keep in sync -> Don't send anything anymore, other peers do not expect it.
+    if self._horovod_stopped_runner:
+      return True, False
+    import horovod.tensorflow as hvd
+    from TFUtil import global_tensor
+    have_more_data_placeholder = global_tensor(
+      lambda: tf.placeholder(tf.int32, shape=(), name="horovod_have_more_data_placeholder"),
+      name="horovod_have_more_data_placeholder")  # 0 or 1
+    sum_have_data_t = global_tensor(
+      lambda: hvd.allreduce(have_more_data_placeholder, average=False),
+      name="horovod_sum_have_data")  # 0..size
+    have_error_placeholder = global_tensor(
+      lambda: tf.placeholder(tf.int32, shape=(), name="horovod_have_error_placeholder"),
+      name="horovod_have_error_placeholder")  # 0 or 1
+    sum_have_error_t = global_tensor(
+      lambda: hvd.allreduce(have_error_placeholder, average=False),
+      name="horovod_sum_have_error")  # 0..size
+    sum_have_data, sum_have_error = self.engine.tf_session.run(
+      (sum_have_data_t, sum_have_error_t),
+      feed_dict={
+        have_more_data_placeholder: 1 if have_more_data else 0,
+        have_error_placeholder: 1 if error else 0})
+    stop = False
+    if sum_have_data < hvd.size() or sum_have_error > 0:
+      # Some of the peers do not have data anymore. Or some peer had an error.
+      # This means we should stop. Other peers will not expect further signals.
+      stop = True
+      self._horovod_stopped_runner = True
+    error_occured = sum_have_error > 0
+    return stop, error_occured
+
   def run(self, report_prefix):
     """
     :param str report_prefix: prefix for logging, e.g. "train"
@@ -426,7 +480,14 @@ class Runner(object):
       # Also, add graph to summary here because the updater/optimizer might not have been created before.
       if writer:
         writer.add_graph(sess.graph)
+      hvd_stop = hvd_error = False
       while self.data_provider.have_more_data(session=sess):
+        hvd_stop, hvd_error = self._horovod_signal_have_more_data()
+        if hvd_error:
+          raise Exception("Some other Horovod peer failed.")
+        if hvd_stop:
+          # Some other peer does not have data anymore, but no error occurred.
+          break
         feed_dict, meta_step_info = self.data_provider.get_feed_dict()
         if isinstance(self.engine.network.train_flag, tf.Tensor):
           feed_dict[self.engine.network.train_flag] = self._should_train
@@ -498,7 +559,7 @@ class Runner(object):
 
       self._print_finish_process()
 
-      if not self.data_provider.have_reached_end():
+      if not hvd_stop and not self.data_provider.have_reached_end():
         raise Exception("Did not successfully reached the end of the dataset.")
 
       if self._should_train:
@@ -506,6 +567,7 @@ class Runner(object):
         assert step + step_offset == final_global_train_step
 
       self._finalize(num_steps=step)
+      self._horovod_finish_data()
 
       if self.stats:
         print("Stats:", file=log.v1)
@@ -531,8 +593,10 @@ class Runner(object):
       self.run_exception = exc
 
     finally:
+      # Try and ignore certain exceptions as we anyway should try to clean up as much as possible.
       from Util import try_and_ignore_exception
       from TFUtil import stop_event_writer_thread
+      try_and_ignore_exception(self._horovod_signal_error)  # ignored if _horovod_finish_data was called before
       if writer:
         try_and_ignore_exception(writer.close)
         try_and_ignore_exception(lambda: stop_event_writer_thread(writer.event_writer))
@@ -634,6 +698,7 @@ class Engine(object):
         import horovod.tensorflow as hvd
         opts.setdefault("gpu_options", {})
         assert "visible_device_list" not in opts["gpu_options"]
+        # visible_device_list should be a subset of the CUDA_VISIBLE_DEVICES list.
         opts["gpu_options"]["visible_device_list"] = str(hvd.local_rank())
     else:
       opts["device_count"].setdefault("GPU", 0)
@@ -916,6 +981,7 @@ class Engine(object):
       net_dict=net_desc)
     self.network.initialize_params(session=self.tf_session)
     if self.config.is_true("use_horovod"):
+      # Note: Might not be needed as it should be deterministic. But just to be sure...
       import horovod.tensorflow as hvd
       bcast_op = hvd.broadcast_global_variables(0)
       session.run(bcast_op)
