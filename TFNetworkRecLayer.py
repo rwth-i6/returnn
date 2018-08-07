@@ -3,7 +3,7 @@ from __future__ import print_function
 
 import tensorflow as tf
 from tensorflow.python.ops.nn import rnn_cell
-from TFNetworkLayer import LayerBase, _ConcatInputLayer, SearchChoices, get_concat_sources_data_template
+from TFNetworkLayer import LayerBase, _ConcatInputLayer, SearchChoices, get_concat_sources_data_template, Loss
 from TFUtil import Data, reuse_name_scope, get_random_seed
 from Log import log
 
@@ -116,7 +116,6 @@ class RecLayer(_ConcatInputLayer):
     self._optimize_move_layers_out = optimize_move_layers_out
     self._cheating = cheating
     self._unroll = unroll
-    self._sub_loss_objs = []  # # type: list[TFNetwork.LossHolder]
     # On the random initialization:
     # For many cells, e.g. NativeLSTM: there will be a single recurrent weight matrix, (output.dim, output.dim * 4),
     # and a single input weight matrix (input_data.dim, output.dim * 4), and a single bias (output.dim * 4,).
@@ -381,8 +380,44 @@ class RecLayer(_ConcatInputLayer):
     seq_len = self.input_data.get_sequence_lengths()
     return x, seq_len
 
-  def get_losses(self):
-    return super(RecLayer, self).get_losses() + self._sub_loss_objs
+  @classmethod
+  def get_losses(cls, name, network, output, loss=None, reduce_func=None, layer=None, **kwargs):
+    """
+    :param str name: layer name
+    :param TFNetwork.TFNetwork network:
+    :param Loss|None loss: argument just as for __init__
+    :param Data output: the output (template) for the layer
+    :param ((tf.Tensor)->tf.Tensor)|None reduce_func:
+    :param LayerBase|None layer:
+    :param kwargs: other layer kwargs
+    :rtype: list[TFNetwork.LossHolder]
+    """
+    from TFNetwork import LossHolder
+    losses = super(RecLayer, cls).get_losses(
+      name=name, network=network, output=output, loss=loss, layer=layer, reduce_func=reduce_func, **kwargs)
+    unit = kwargs["unit"]
+    if isinstance(unit, dict):  # subnet
+      if layer:
+        assert isinstance(layer, RecLayer)
+        assert isinstance(layer.cell, _SubnetworkRecCell)
+        subnet = layer.cell
+      else:
+        sources = kwargs["sources"]
+        source_data = get_concat_sources_data_template(sources) if sources else None
+        subnet = _SubnetworkRecCell(parent_net=network, net_dict=unit, source_data=source_data)
+      for layer_name, template_layer in sorted(subnet.layer_data_templates.items()):
+        assert isinstance(template_layer, _TemplateLayer)
+        assert issubclass(template_layer.layer_class_type, LayerBase)
+        for loss in template_layer.layer_class_type.get_losses(reduce_func=reduce_func, **template_layer.kwargs):
+          assert isinstance(loss, LossHolder)
+          if layer:
+            assert loss.name in subnet.accumulated_losses
+            loss = subnet.accumulated_losses[loss.name]
+            assert isinstance(loss, LossHolder)
+            assert loss.get_layer()
+          loss = loss.copy_new_base(network=network, name="%s/%s" % (name, loss.name))
+          losses.append(loss)
+    return losses
 
   def get_constraints_value(self):
     v = super(RecLayer, self).get_constraints_value()
@@ -661,8 +696,7 @@ class RecLayer(_ConcatInputLayer):
     :return: output of shape (time, batch, dim)
     :rtype: tf.Tensor
     """
-    output, losses, search_choices = cell.get_output(rec_layer=self)
-    self._sub_loss_objs = losses
+    output, search_choices = cell.get_output(rec_layer=self)
     self.search_choices = search_choices
     self._last_hidden_state = cell
     return output
@@ -740,6 +774,7 @@ class _SubnetworkRecCell(object):
     self.output_layers_net = None  # type: TFNetwork
     self.final_acc_tas_dict = None  # type: dict[str, tf.TensorArray]
     self.get_final_rec_vars = None
+    self.accumulated_losses = {}  # type: dict[str,TFNetwork.LossHolder]
 
   def _construct_template(self):
     """
@@ -1092,8 +1127,8 @@ class _SubnetworkRecCell(object):
   def get_output(self, rec_layer):
     """
     :param RecLayer rec_layer:
-    :return: output of shape (time, batch, dim), (loss, error, loss_norm_factor), search choices
-    :rtype: (tf.Tensor, list[TFNetwork.LossHolder], SearchChoices)
+    :return: output of shape (time, batch, dim), search choices
+    :rtype: (tf.Tensor, SearchChoices)
     """
     self._check_output_template_shape()
     from TFUtil import check_input_dim, tensor_array_stack
@@ -1190,7 +1225,8 @@ class _SubnetworkRecCell(object):
       from collections import namedtuple
       OutputToAccumulate = namedtuple("OutputToAccumulate", ["name", "dtype", "element_shape", "get"])
       outputs_to_accumulate = []  # type: list[OutputToAccumulate]
-      needed_outputs = {"output"}
+      needed_outputs = {"output"}  # names. these are needed somewhere
+      extra_output_layers = set()  # names. will create accumulated output layer in any case for these
 
       def add_output_to_acc(layer_name):
         name = "output_%s" % layer_name
@@ -1201,6 +1237,11 @@ class _SubnetworkRecCell(object):
           dtype=self.layer_data_templates[layer_name].output.dtype,
           element_shape=self.layer_data_templates[layer_name].output.batch_shape,
           get=lambda: self.net.layers[layer_name].output.placeholder))
+
+      for name, template in self.layer_data_templates.items():
+        if template.is_output_layer():
+          needed_outputs.add(name)
+          extra_output_layers.add(name)
 
       layer_names_with_losses = []
       if rec_layer.network.eval_flag:  # only collect losses if we need them
@@ -1266,40 +1307,31 @@ class _SubnetworkRecCell(object):
         assert have_known_seq_len, (
           "You need to have an 'end' layer in your rec subnet if the generated seq len is unknown.")
 
-      extra_output_layers = set()
-      for name, template in self.layer_data_templates.items():
-        if template.is_output_layer():
-          extra_output_layers.add(name)
-          needed_outputs.add(name)
-
       if self.parent_rec_layer._optimize_move_layers_out:
         self._move_outside_loop(needed_outputs=needed_outputs)
       else:
         self.layers_in_loop = sorted(self.layer_data_templates.keys())
 
+      accumulated_loop_losses = {}  # name -> loss holder. only losses inside the loop
       if layer_names_with_losses:
-        def make_get_loss_in_loop_frame(layer_name, return_error=False, return_loss=False):
+        def make_get_loss_in_loop_frame(loss, layer_name, return_error=False, return_loss=False):
           """
+          :param LossHolder loss:
           :param str layer_name:
           :param bool return_error:
           :param bool return_loss:
           :rtype: ()->tf.Tensor
           """
-          from TFNetworkLayer import Loss
-          from TFUtil import identity
+          from TFNetwork import LossHolder
+          assert isinstance(loss, LossHolder)
 
-          def get_loss():
+          def get_loop_loss():
             layer = self.net.layers[layer_name]
-            assert isinstance(layer.loss, Loss)
-            # This is a bit hacky but we want to not reduce the loss to a scalar
-            # in the loop but get it as shape (batch,).
-            # This should work with all current implementations
-            # but might need some redesign later.
-            layer.loss.reduce_func = identity
+            loss.init(layer)
             if return_loss:
-              value = layer.get_loss_value()
+              value = loss.get_loss_value()
             elif return_error:
-              value = layer.get_error_value()
+              value = loss.get_error_value()
             else:
               assert False, "return_error or return_loss"
             assert isinstance(value, tf.Tensor)
@@ -1309,21 +1341,32 @@ class _SubnetworkRecCell(object):
             value.set_shape(tf.TensorShape((None,)))  # (batch,)
             return value
 
-          return get_loss
+          return get_loop_loss
 
+        from TFUtil import identity
         for layer_name in layer_names_with_losses:
           if layer_name not in self.layers_in_loop:
             continue  # will get loss out of them below
-          outputs_to_accumulate.append(OutputToAccumulate(
-            name="loss_%s" % layer_name,
-            dtype=tf.float32,
-            element_shape=(None,),  # (batch,)
-            get=make_get_loss_in_loop_frame(layer_name, return_loss=True)))
-          outputs_to_accumulate.append(OutputToAccumulate(
-            name="error_%s" % layer_name,
-            dtype=tf.float32,
-            element_shape=(None,),  # (batch,)
-            get=make_get_loss_in_loop_frame(layer_name, return_error=True)))
+          layer = self.layer_data_templates[layer_name]
+          assert issubclass(layer.layer_class_type, LayerBase)
+          # Using the identity reduce_func is a bit hacky
+          # but we do not want to reduce the loss to a scalar in the loop
+          # but get it as shape (batch,).
+          # This should work with all current implementations
+          # but might need some redesign later.
+          for loss in layer.layer_class_type.get_losses(reduce_func=identity, **layer.kwargs):
+            assert loss.name not in accumulated_loop_losses, "layer %r loss name %r not unique" % (layer, loss.name)
+            accumulated_loop_losses[loss.name] = loss
+            outputs_to_accumulate.append(OutputToAccumulate(
+              name="loss_%s" % loss.name,
+              dtype=tf.float32,
+              element_shape=(None,),  # (batch,)
+              get=make_get_loss_in_loop_frame(loss=loss, layer_name=layer_name, return_loss=True)))
+            outputs_to_accumulate.append(OutputToAccumulate(
+              name="error_%s" % loss.name,
+              dtype=tf.float32,
+              element_shape=(None,),  # (batch,)
+              get=make_get_loss_in_loop_frame(loss=loss, layer_name=layer_name, return_error=True)))
 
       if "output" in self.layers_in_loop:
         add_output_to_acc("output")
@@ -1560,12 +1603,10 @@ class _SubnetworkRecCell(object):
     self._construct_output_layers_moved_out(
       loop_accumulated=self.final_acc_tas_dict, seq_len=seq_len, extra_output_layers=extra_output_layers)
 
-    sub_losses = []
     if layer_names_with_losses:
       from TFNetwork import LossHolder
       with tf.name_scope("sub_net_loss"):
-        with tf.name_scope("sub_loss_normalization_factor"):
-          sub_loss_normalization_factor = 1.0 / tf.cast(tf.reduce_sum(seq_len), tf.float32)
+        # Losses from layers moved out of the loop.
         for layer_name in sorted(layer_names_with_losses):
           if layer_name in self.input_layers_moved_out + self.output_layers_moved_out:
             if layer_name in self.input_layers_moved_out:
@@ -1573,35 +1614,36 @@ class _SubnetworkRecCell(object):
             else:
               layer_with_loss_inst = self.output_layers_net.layers[layer_name]
             assert isinstance(layer_with_loss_inst, LayerBase)
-            with reuse_name_scope(layer_with_loss_inst.tf_scope_name):
-              loss_value = layer_with_loss_inst.get_loss_value()
-              error_value = layer_with_loss_inst.get_error_value()
+            for loss in layer_with_loss_inst.get_losses_initialized():
+              assert loss.name not in self.accumulated_losses, "loss name not unique"
+              self.accumulated_losses[loss.name] = loss
 
-          else:
-            layer_with_loss_inst = self.net.layers[layer_name]
-            loss_value = tensor_array_stack(
-              self.final_acc_tas_dict["loss_%s" % layer_name], stop=max_seq_len, name="loss_%s_stack" % layer_name)
-            error_value = tensor_array_stack(
-              self.final_acc_tas_dict["error_%s" % layer_name], stop=max_seq_len, name="error_%s_stack" % layer_name)
-            loss_value.set_shape(tf.TensorShape((None, None)))  # (time, batch)
-            error_value.set_shape(tf.TensorShape((None, None)))  # (time, batch)
-
-            from TFUtil import sequence_mask_time_major
-            mask = sequence_mask_time_major(seq_len)
-            loss_value = tf.where(mask, loss_value, tf.zeros_like(loss_value))
-            error_value = tf.where(mask, error_value, tf.zeros_like(error_value))
-            loss_value = tf.reduce_sum(loss_value)
-            error_value = tf.reduce_sum(error_value)
-
-          sub_losses.append(LossHolder(
-            name=self.parent_rec_layer.name + "/" + layer_name,
-            local_name=layer_name,
-            layer=layer_with_loss_inst,
-            loss=layer_with_loss_inst.loss,
-            norm_factor=sub_loss_normalization_factor,
-            loss_value=loss_value,
-            error_value=error_value,
-            only_on_eval=layer_with_loss_inst.only_on_eval))
+        # Now collect the losses from layers inside the loop.
+        with tf.name_scope("sub_loss_normalization_factor"):
+          sub_loss_normalization_factor = 1.0 / tf.cast(tf.reduce_sum(seq_len), tf.float32)
+        for _, loss in sorted(accumulated_loop_losses.items()):
+          assert isinstance(loss, LossHolder)
+          assert loss.loss.layer, "sub loss init not called?"
+          assert loss.name not in self.accumulated_losses, "loss name not unique"
+          loss_value = tensor_array_stack(
+            self.final_acc_tas_dict["loss_%s" % loss.name], stop=max_seq_len, name="loss_%s_stack" % loss.name)
+          error_value = tensor_array_stack(
+            self.final_acc_tas_dict["error_%s" % loss.name], stop=max_seq_len, name="error_%s_stack" % loss.name)
+          loss_value.set_shape(tf.TensorShape((None, None)))  # (time, batch)
+          error_value.set_shape(tf.TensorShape((None, None)))  # (time, batch)
+          from TFUtil import sequence_mask_time_major
+          mask = sequence_mask_time_major(seq_len)
+          loss_value = tf.where(mask, loss_value, tf.zeros_like(loss_value))
+          error_value = tf.where(mask, error_value, tf.zeros_like(error_value))
+          loss_wrapped = _SubnetworkRecWrappedLoss(
+            base_loss=loss.loss,
+            loss_value=loss_value, error_value=error_value,
+            norm_factor=sub_loss_normalization_factor)
+          self.accumulated_losses[loss.name] = LossHolder(
+            name=loss.name,
+            layer=loss.loss.layer,
+            layer_output=loss.layer_output,
+            loss=loss_wrapped)
 
     # Check if collected_choices has all the right layers.
     # At the moment, _TemplateLayer.has_search_choices() might be incomplete, that is why we check here.
@@ -1724,7 +1766,7 @@ class _SubnetworkRecCell(object):
         continue
       self.parent_net.used_data_keys.add(key)
 
-    return output, sub_losses, search_choices
+    return output, search_choices
 
   def _input_layer_used_inside_loop(self, layer_name):
     """
@@ -2166,6 +2208,36 @@ class _TemplateLayer(LayerBase):
     if issubclass(self.layer_class_type, RnnCellLayer):
       return RnnCellLayer.get_state_by_key(self.rec_vars_outputs["state"], key=key)
     return super(_TemplateLayer, self).get_last_hidden_state(key=key)
+
+
+class _SubnetworkRecWrappedLoss(Loss):
+  """
+  This wraps losses inside the loop of :class:`RecLayer`.
+  """
+
+  def __init__(self, base_loss, loss_value, error_value, norm_factor):
+    """
+    :param Loss base_loss: the loss from the layer inside the loop
+    :param tf.Tensor loss_value: shape (batch,time)
+    :param tf.Tensor error_value: shape (batch,time)
+    :param tf.Tensor norm_factor: scalar for the whole batch
+    """
+    super(_SubnetworkRecWrappedLoss, self).__init__(
+      base_network=base_loss.base_network,
+      use_flatten_frames=base_loss.use_flatten_frames, use_normalized_loss=base_loss.use_normalized_loss,
+      scale=base_loss.scale)
+    assert base_loss.layer
+    self.base_loss = base_loss
+    self.layer = base_loss.layer  # avoid that init() gets executed again
+    self.loss_value = loss_value
+    self.error_value = error_value
+    self.loss_norm_factor = norm_factor
+
+  def get_value(self):
+    return self.reduce_func(self.loss_value)
+
+  def get_error(self):
+    return self.reduce_func(self.error_value)
 
 
 class RecStepInfoLayer(LayerBase):

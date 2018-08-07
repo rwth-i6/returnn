@@ -459,7 +459,7 @@ class TFNetwork(object):
         print("Exception creating layer %s/%r of class %s with opts:" % (self.name, name, layer_class.__name__))
         pprint(layer_desc)
         raise
-      layer.post_init()
+      layer.post_init(layer_desc)
       if debug_print_layer_output_shape:
         layer.output.placeholder = tf.Print(
           layer.output.placeholder, [layer_class.cls_get_tf_scope_name(name), "shape:", tf.shape(layer.output.placeholder)],
@@ -540,16 +540,17 @@ class TFNetwork(object):
         assert isinstance(layer, LayerBase)
         with reuse_name_scope("loss"):
           with reuse_name_scope(tf_scope_name):
-            losses = layer.get_losses()
+            losses = layer.get_losses_initialized()
             for loss_obj in losses:
+              assert loss_obj.name not in self.losses_dict, "layer %r loss name %r not unique" % (layer, loss_obj.name)
               self.losses_dict[loss_obj.name] = loss_obj
           # Accumulate losses (outside of layer scope name).
           for loss_obj in losses:
-            if loss_obj.loss_value_for_objective is not None:
+            if loss_obj.get_loss_value_for_objective() is not None:
               if self.total_loss is 0:
-                self.total_loss = loss_obj.loss_value_for_objective
+                self.total_loss = loss_obj.get_loss_value_for_objective()
               else:
-                self.total_loss += loss_obj.loss_value_for_objective
+                self.total_loss += loss_obj.get_loss_value_for_objective()
 
         with reuse_name_scope("constraints"):
           with reuse_name_scope(tf_scope_name):
@@ -1219,115 +1220,243 @@ class TFNetworkParamsSerialized(object):
 
 
 class LossHolder:
-  def __init__(self, layer, loss_value, error_value,
-               loss=None, norm_factor=None,
-               only_on_eval=None, local_name=None, name=None,
+  """
+  This object just keeps a reference to the loss/error value,
+  and does the necessary logic to collect it, and also the normalization logic.
+  Every new computation (nodes in the computation graph) must be constructed on demand,
+  to allow first to collect all possible losses without calculating them,
+  and then calculating them in the right context (e.g. inside a while_loop, or so).
+  """
+
+  def __init__(self, name, loss, layer_output, reduce_func=None,
+               layer=None, loss_value=None, error_value=None,
+               norm_factor=None,
+               only_on_eval=None,
                network=None):
     """
+    After construction, you should call init() before usage, in case you do not provide `layer` here.
+
     :param str name: The name uniquely identifies the loss. Earlier, this was the same as the layer name.
       This is still true for simple cases,
       but for losses coming from a subnetwork or other extended losses,
       it can be something else.
       It could look like "output", or "output/sublayer".
-    :param str local_name: E.g. layer name, but just the name itself, relative to the layer; should not contain "/".
     :param LayerBase layer:
       We can always point to a layer where this comes from (either in the subnet, or the parent layer).
-    :param TFNetwork network:
+    :param Data layer_output: template describing the layer output
+    :param TFNetwork network: for which network to create this LossHolder. might be different from layer.network
     :param TFNetworkLayer.Loss loss:
+    :param ((tf.Tensor)->tf.Tensor)|None reduce_func: if given, will overwrite the reduce func for the loss.
+      By default, every loss_value and error_value is a scalar
+      (sum or average over the batches, and over the frames for frame-wise losses).
+      However, if you provide reduce_func = TFUtil.identity, you can get the unreduced tensor.
     :param tf.Tensor|None loss_value:
     :param tf.Tensor|None error_value:
     :param tf.Tensor norm_factor:
     :param bool only_on_eval:
     """
-    if local_name is None:
-      local_name = layer.name
-    if name is None:
-      name = local_name
-    if only_on_eval is None:
-      only_on_eval = layer.only_on_eval
-    if loss is None:
-      from TFNetworkLayer import _PlaceholderLoss
-      loss = _PlaceholderLoss(base_network=layer.network)
-      loss.init_by_layer(layer)
-    if norm_factor is None:
-      norm_factor = loss.get_normalization_factor()
-    if network is None:
+    if layer and not network:
       network = layer.network
+    if layer and only_on_eval is None:
+      only_on_eval = layer.only_on_eval
+    assert name and loss and network  # these must always be provided
+    if layer:
+      assert isinstance(layer, LayerBase)
+    if reduce_func:
+      loss.reduce_func = reduce_func
     self.name = name
-    self.local_name = local_name
-    self.network = network
-    self.layer = layer
     self.loss = loss
-    self.loss_value = loss_value
-    self.loss_value_for_fetch = None  # call self.prepare
-    self.loss_value_for_objective = None  # call self.prepare
-    self.error_value = error_value
-    self.norm_factor = norm_factor
-    self.only_on_eval = only_on_eval
-    self.tf_summary()
-    self.prepare()
+    self.layer_output = layer_output
+    self.reduce_func = reduce_func
+    self._network = network
+    self._layer = layer
+    self._is_prepared = False
+    self._loss_value = loss_value
+    self._loss_value_for_fetch = None  # via self._prepare
+    self._loss_value_for_objective = None  # via self._prepare
+    self._error_value = error_value
+    self._norm_factor = norm_factor
+    self._only_on_eval = only_on_eval
 
   def __repr__(self):
     return "<LossHolder name=%r loss=%r>" % (self.name, self.loss)
 
-  def tf_summary(self):
+  def init(self, layer):
+    """
+    :param LayerBase layer:
+    :return: self
+    :rtype: LossHolder
+    """
+    self._layer = layer
+    if self._only_on_eval is None:
+      self._only_on_eval = layer.only_on_eval
+    if self._network is None:
+      self._network = layer.network
+    return self
+
+  def set_layer_loss_error_value(self, layer, loss_value, error_value):
+    """
+    :param LayerBase layer:
+    :param tf.Tensor|None loss_value:
+    :param tf.Tensor|None error_value:
+    """
+    assert not self._is_prepared
+    self._layer = layer
+    self._loss_value = loss_value
+    self._error_value = error_value
+
+  def get_layer(self):
+    """
+    :return: layer. assumes that it is set
+    :rtype: LayerBase
+    """
+    assert self._layer, "call init()"
+    return self._layer
+
+  def get_only_on_eval(self):
+    """
+    :return: only_on_eval flag. assumes that it is set
+    :rtype: bool
+    """
+    assert self._only_on_eval is not None, "call init()"
+    return self._only_on_eval
+
+  def get_tf_name(self):
+    """
+    :return: name which can be used for a TF op, thus contains no "/" or other special chars
+    :rtype: str
+    """
+    return LayerBase.cls_get_tf_scope_name(self.name.replace("/", "_"))
+
+  def get_loss_value(self):
+    """
+    :return: loss value
+    :rtype: tf.Tensor|None
+    """
+    self._prepare()
+    return self._loss_value
+
+  def get_loss_value_for_fetch(self):
+    """
+    :return: loss value for fetch
+    :rtype: tf.Tensor|None
+    """
+    self._prepare()
+    return self._loss_value_for_fetch
+
+  def get_loss_value_for_objective(self):
+    """
+    :return: loss value for objective
+    :rtype: tf.Tensor|None
+    """
+    self._prepare()
+    return self._loss_value_for_objective
+
+  def get_error_value(self):
+    """
+    :return: error value for fetch
+    :rtype: tf.Tensor|None
+    """
+    self._prepare()
+    return self._error_value
+
+  def get_norm_factor(self):
+    """
+    :return: norm factor for loss and error
+    :rtype: tf.Tensor
+    """
+    self._prepare()
+    return self._norm_factor
+
+  def _tf_summary(self):
     """
     This gets called inside a loss name scope of the layer.
 
     :return: nothing, will use tf.summary
     """
-    if self.network.parent_net:
+    if self._network.parent_net:
       return  # skip summaries. the root net should also do this
-    name = LayerBase.cls_get_tf_scope_name(self.local_name)
-    if self.loss_value is not None:
-      tf.summary.scalar("loss_%s" % name, self.loss_value * self.norm_factor)
-      if self.network.get_config().bool("calculate_exp_loss", False):
-        tf.summary.scalar("exp_loss_%s" % name, tf.exp(self.loss_value * self.norm_factor))
-    if self.error_value is not None:
-      tf.summary.scalar("error_%s" % name, self.error_value * self.norm_factor)
+    name = self.get_tf_name()
+    if self._loss_value is not None:
+      tf.summary.scalar("loss_%s" % name, self._loss_value * self._norm_factor)
+      if self._network.get_config().bool("calculate_exp_loss", False):
+        tf.summary.scalar("exp_loss_%s" % name, tf.exp(self._loss_value * self._norm_factor))
+    if self._error_value is not None:
+      tf.summary.scalar("error_%s" % name, self._error_value * self._norm_factor)
 
-  def prepare(self):
+  def _prepare(self):
     """
     This gets called inside a loss name scope of the layer.
 
     :return: nothing, will prepare
     """
-    name = LayerBase.cls_get_tf_scope_name(self.local_name)
-    loss_value = self.loss_value
+    if self._is_prepared:
+      return
+    assert self._layer, "call init()"
+    self.loss.init_by_layer(layer=self._layer)
+    if self._loss_value is None and self._error_value is None:
+      with reuse_name_scope("loss"):
+        if self._only_on_eval:
+          self._loss_value = self._layer._cond_only_on_eval_opt(self.loss.get_value, default_value=0.0)
+        else:
+          self._loss_value = self.loss.get_value()
+      with reuse_name_scope("error"):
+        if self._only_on_eval:
+          self._error_value = self._layer._cond_only_on_eval_opt(self.loss.get_error, default_value=0.0)
+        else:
+          self._error_value = self.loss.get_error()
+      assert self._loss_value is not None or self._error_value is not None, (
+        "layer %r loss %r return None for loss and error" % (self._layer, self.loss))
+    if self._norm_factor is None:
+      self._norm_factor = self.loss.get_normalization_factor()
+    self._tf_summary()
+    loss_value = self._loss_value
     if loss_value is not None:
-      if self.network.get_config().bool("debug_add_check_numerics_on_output", False):
+      if self._network.get_config().bool("debug_add_check_numerics_on_output", False):
         print("debug_add_check_numerics_on_output: add for layer loss %r: %r" % (
-          self.layer.name, self.layer.output.placeholder))
+          self._layer.name, self._layer.output.placeholder))
         from TFUtil import identity_with_check_numerics
         loss_value = identity_with_check_numerics(
-          loss_value, name="%s_identity_with_check_numerics_loss" % name)
-    self.loss_value_for_fetch = loss_value
+          loss_value, name="%s_identity_with_check_numerics_loss" % self.get_tf_name())
+    self._loss_value_for_fetch = loss_value
     if self.loss.scale != 1 and loss_value is not None:
       if not self.loss.scale:
         loss_value = None  # scale 0 means to not use this loss
       else:
         loss_value *= self.loss.scale
     if self.loss.use_normalized_loss and loss_value is not None:
-      loss_value *= self.norm_factor
-    self.loss_value_for_objective = loss_value
+      loss_value *= self._norm_factor
+    self._loss_value_for_objective = loss_value
+    self._is_prepared = True
 
-  def copy_new_base(self, name, layer=None, network=None):
+  def copy_new_base(self, name=None, layer=None, network=None, reduce_func=None):
     """
     :param LayerBase layer:
     :param TFNetwork network:
     :param str name:
+    :param ((tf.Tensor)->tf.Tensor)|None reduce_func:
     :return: new copy of LossHolder
     :rtype: LossHolder
     """
     if not layer:
-      layer = self.layer
+      layer = self._layer
     if not network:
-      network = self.network
+      network = self._network
+    if not name:
+      name = self.name
+    loss_value = self._loss_value
+    error_value = self._error_value
+    if reduce_func is None:
+      reduce_func = self.loss.reduce_func
+    if reduce_func and reduce_func != self.loss.reduce_func:
+      # Must recreate those.
+      loss_value = None
+      error_value = None
     return LossHolder(
-      name=name, layer=layer, network=network,
-      local_name=self.local_name, loss=self.loss,
-      loss_value=self.loss_value, error_value=self.error_value,
-      norm_factor=self.norm_factor, only_on_eval=self.only_on_eval)
+      name=name, layer=layer, layer_output=self.layer_output, network=network,
+      loss=self.loss, reduce_func=reduce_func,
+      loss_value=loss_value, error_value=error_value,
+      norm_factor=self._norm_factor, only_on_eval=self._only_on_eval)
 
 
 class NetworkConstructionDependencyLoopException(Exception):

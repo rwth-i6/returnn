@@ -94,6 +94,7 @@ class LayerBase(object):
     self.name = name
     self.network = network
     self._register_layer()
+    self.kwargs = None  # type: dict[str] # set via self.post_init
     self.target = target
     self.loss = loss
     if self.loss and self.loss.recurrent:
@@ -143,10 +144,13 @@ class LayerBase(object):
     # Stats will be collected by the engine.
     self.stats = {}  # type: dict[str,tf.Tensor]
 
-  def post_init(self):
+  def post_init(self, layer_desc):
     """
     This gets called right after self.__init__().
+
+    :param dict[str] layer_desc: kwargs as they are passed to self.__init__
     """
+    self.kwargs = layer_desc
     if self.use_batch_norm:
       opts = {}
       if isinstance(self.use_batch_norm, dict):
@@ -668,59 +672,44 @@ class LayerBase(object):
       return None
     return res
 
-  def get_loss_value(self):
-    """
-    NOTE: This function will get removed very soon. Do not use it! Use self.get_losses.
-
-    :return: the loss, a scalar value, or None if not set. not multiplied by loss.scale
-    :rtype: tf.Tensor | None
-    """
-    if not self.loss:
-      return None
-    self.loss.init_by_layer(self)
-    with tf.name_scope("loss"):
-      if self.only_on_eval:
-        return self._cond_only_on_eval_opt(self.loss.get_value, default_value=0.0)
-      return self.loss.get_value()
-
-  def get_error_value(self):
-    """
-    NOTE: This function will get removed very soon. Do not use it! Use self.get_losses.
-
-    :return: usually the frame error rate, or None if not defined
-    :rtype: tf.Tensor | None
-    """
-    if not self.loss:
-      return None
-    self.loss.init_by_layer(self)
-    with tf.name_scope("error"):
-      if self.only_on_eval:
-        return self._cond_only_on_eval_opt(self.loss.get_error, default_value=0.0)
-      return self.loss.get_error()
-
-  def get_losses(self):
+  @classmethod
+  def get_losses(cls, name, network, output, loss=None, reduce_func=None, layer=None, **kwargs):
     """
     Losses will get constructed here.
     This gets called inside a loss name scope of the layer.
+    When overriding this, make sure that it works both with `layer` set and unset.
 
-    :rtype: list[TFNetwork.LossHolder]
+    :param str name: layer name
+    :param TFNetwork.TFNetwork network:
+    :param Loss|None loss: argument just as for __init__
+    :param Data output: the output (template) for the layer
+    :param LayerBase|None layer:
+      The real layer instance, if it exists at the current point.
+      If not given, init() must be called at a later point.
+    :param ((tf.Tensor)->tf.Tensor)|None reduce_func: if given, will overwrite the reduce func for the loss.
+      By default, every loss_value and error_value is a scalar
+      (sum or average over the batches, and over the frames for frame-wise losses).
+      However, if you provide reduce_func = TFUtil.identity, you can get the unreduced tensor.
+    :param kwargs: all the remaining __init__ args
     :return: the losses defined by this layer
+    :rtype: list[TFNetwork.LossHolder]
     """
-    if not self.loss:
+    if not loss:
       return []
-    self.loss.init_by_layer(self)
     from TFNetwork import LossHolder
-    loss = self.get_loss_value()
-    error = self.get_error_value()
-    if loss is None and error is None:
-      return []
-    loss_obj = LossHolder(
-      name=self.name,  # loss name. currently just layer name
-      local_name=self.name,
-      layer=self, loss=self.loss, only_on_eval=self.only_on_eval,
-      loss_value=loss, error_value=error,
-      norm_factor=self.loss.get_normalization_factor())
-    return [loss_obj]
+    return [LossHolder(
+      name=name, network=network, loss=loss, layer_output=output, layer=layer, reduce_func=reduce_func)]
+
+  def get_losses_initialized(self, reduce_func=None):
+    """
+    As self.get_losses, but here we return them all initialized.
+    You should not override this method but rather :func:`get_losses`.
+
+    :param ((tf.Tensor)->tf.Tensor)|None reduce_func: as in get_losses
+    :return: the losses defined by this layer
+    :rtype: list[TFNetwork.LossHolder]
+    """
+    return self.__class__.get_losses(reduce_func=reduce_func, layer=self, **self.kwargs)
 
   def get_params_l2_norm(self):
     """
@@ -4211,6 +4200,8 @@ class SubnetworkLayer(LayerBase):
         subnetwork[layer_name]["rec_previous_layer"] = dummy_rec_previous_layer
     net.construct_from_dict(subnetwork)
     self.subnetwork = net
+    if self.network.eval_flag:
+      self.subnetwork.maybe_construct_objective()
     self.output = net.get_default_output_layer().output
     # See _get_subnet_extern_data for which data keys we expect to be used.
     if concat_sources:
@@ -4274,32 +4265,89 @@ class SubnetworkLayer(LayerBase):
     """
     if n_out or out_type:
       return super(SubnetworkLayer, cls).get_out_data_from_opts(n_out=n_out, out_type=out_type, **kwargs)
-    network = kwargs["network"]
-    # Currently, very simple (hacky) template construction of the output-layer in the subnet.
-    # See also the template network construction for the RecLayer subnet.
-    layer_desc = subnetwork["output"].copy()
-    class_name = layer_desc.pop("class")
-    layer_class = get_layer_class(class_name)
-    def _get_layer(name):
-      raise Exception("not available at this point; provide n_out or out_type explicitly.")
-    layer_desc["from"] = []  # that wont work here
-    layer_class.transform_config_dict(layer_desc, get_layer=_get_layer, network=network)
-    layer_desc["name"] = "output"
+    subnet = cls._construct_template_subnet(
+      name=kwargs["name"], network=kwargs["network"],
+      subnetwork=subnetwork,
+      concat_sources=concat_sources, sources=kwargs["sources"])
+    return subnet.layers["output"].output
+
+  @classmethod
+  def _construct_template_subnet(cls, name, network, subnetwork, sources, concat_sources=True):
+    """
+    Very similar to _SubnetworkRecCell._construct_template, but simpler.
+
+    :param str name:
+    :param TFNetwork.TFNetwork network: parent net
+    :param dict[str,dict[str]] subnetwork:
+    :param int|None n_out:
+    :param dict[str]|None out_type:
+    :rtype: TFNetwork.TFNetwork
+    """
+    assert "output" in subnetwork
     from TFNetwork import TFNetwork
+    from TFNetworkRecLayer import _TemplateLayer
     # Placeholder, will not be used.
     sub_extern_data = cls._get_subnet_extern_data(
-      base_network=network, sources=kwargs["sources"], concat_sources=concat_sources)
+      base_network=network, sources=sources, concat_sources=concat_sources)
     subnet = TFNetwork(
-      name="%s/%s:subnet" % (network.name, kwargs["name"]),
+      name="%s/%s:subnet" % (network.name, name),
       extern_data=sub_extern_data,
       train_flag=network.train_flag,
       search_flag=network.search_flag,
       parent_net=network,
-      rnd_seed=0)
-    layer_desc["network"] = subnet
-    # Note: This can likely fail because we don't provide all the right args.
-    # In that case, you must provide n_out or out_type explicitly.
-    return layer_class.get_out_data_from_opts(**layer_desc)
+      rnd_seed=0)  # seed 0, will not be used, as we only construct the templates
+
+    def add_templated_layer(name, layer_class, **layer_desc):
+      """
+      :param str name:
+      :param type[LayerBase]|LayerBase layer_class:
+      :param dict[str] layer_desc:
+      :rtype: LayerBase
+      """
+      layer = _TemplateLayer(name=name, network=subnet)
+      subnet.layers[name] = layer
+      layer_desc = layer_desc.copy()
+      layer_desc["name"] = name
+      layer_desc["network"] = subnet
+      output = layer_class.get_out_data_from_opts(**layer_desc)
+      layer.init(layer_class=layer_class, output=output, **layer_desc)
+      if layer_class.recurrent:
+        subnet.recurrent = True
+      return layer
+
+    def get_templated_layer(name):
+      """
+      :param str name:
+      :rtype: _TemplateLayer|LayerBase
+      """
+      if name in subnet.layers:
+        layer = subnet.layers[name]
+        return layer
+      if name.startswith("base:"):
+        layer = network.get_layer(name[len("base:"):])
+        return layer
+      return subnet.construct_layer(
+        net_dict=subnetwork, name=name, get_layer=get_templated_layer, add_layer=add_templated_layer)
+
+    try:
+      get_templated_layer("output")
+      assert "output" in subnet.layers
+
+      for layer_name, layer in subnetwork.items():
+        if network.eval_flag and layer.get("loss"):  # only collect losses if we need them
+          get_templated_layer(layer_name)
+      for layer_name, layer in subnetwork.items():
+        if layer.get("is_output_layer"):
+          get_templated_layer(layer_name)
+
+    except Exception:
+      print("%r: exception constructing template network (for deps and data shapes)" % cls)
+      print("Template network so far:")
+      from pprint import pprint
+      pprint(subnet.layers)
+      raise
+
+    return subnet
 
   def get_constraints_value(self):
     v = self.subnetwork.get_total_constraints()
@@ -4307,15 +4355,43 @@ class SubnetworkLayer(LayerBase):
       return None
     return v
 
-  def get_losses(self):
+  @classmethod
+  def get_losses(cls, name, network, output, loss=None, reduce_func=None, layer=None, **kwargs):
     """
+    :param str name: layer name
+    :param TFNetwork.TFNetwork network:
+    :param Loss|None loss: argument just as for __init__
+    :param Data output: the output (template) for the layer
+    :param LayerBase|None layer:
+    :param ((tf.Tensor)->tf.Tensor)|None reduce_func:
+    :param kwargs: other layer kwargs
     :rtype: list[TFNetwork.LossHolder]
     """
-    losses = super(SubnetworkLayer, self).get_losses()
-    self.subnetwork.maybe_construct_objective()
-    self._update_used_data_keys()  # maybe needs an update now
-    for loss_name, loss in sorted(self.subnetwork.losses_dict.items()):
-      losses.append(loss.copy_new_base(network=self.network, name="%s/%s" % (self.name, loss_name)))
+    from TFNetwork import LossHolder
+    from TFNetworkRecLayer import _TemplateLayer
+    losses = super(SubnetworkLayer, cls).get_losses(
+      name=name, network=network, output=output, loss=loss, layer=layer, reduce_func=reduce_func, **kwargs)
+    if layer:
+      assert isinstance(layer, SubnetworkLayer)
+      subnet = layer.subnetwork
+    else:
+      subnet = cls._construct_template_subnet(
+        name=name, network=network, subnetwork=kwargs["subnetwork"],
+        sources=kwargs["sources"], concat_sources=kwargs["concat_sources"])
+    for layer_name, sub_layer in sorted(subnet.layers.items()):
+      if layer:
+        assert isinstance(layer, SubnetworkLayer)
+        sub_layer_class = sub_layer.__class__
+        real_sub_layer = sub_layer
+      else:
+        real_sub_layer = None
+        assert isinstance(sub_layer, _TemplateLayer)
+        assert issubclass(sub_layer.layer_class_type, LayerBase)
+        sub_layer_class = sub_layer.layer_class_type
+      for loss in sub_layer_class.get_losses(reduce_func=reduce_func, layer=real_sub_layer, **sub_layer.kwargs):
+        assert isinstance(loss, LossHolder)
+        losses.append(loss.copy_new_base(
+          network=network, name="%s/%s" % (name, loss.name)))
     return losses
 
   def get_last_hidden_state(self, key):
@@ -4944,6 +5020,8 @@ class Loss(object):
     """
     :param LayerBase|None layer:
     """
+    if layer is self.layer:
+      return
     if self.output is layer.output:
       return
     self.init(
@@ -5065,6 +5143,7 @@ class Loss(object):
     :return: factor as a float scalar, usually 1.0 / num_frames. see self.reduce_func.
     :rtype: tf.Tensor
     """
+    assert self.loss_norm_factor is not None, "init not called?"
     return self.loss_norm_factor
 
   @classmethod
@@ -5075,17 +5154,6 @@ class Loss(object):
     :rtype: int
     """
     return target_dim
-
-
-class _PlaceholderLoss(Loss):
-  """
-  Use this when the layer specifies its own custom loss, e.g. like the :class:`SubnetworkLayer`.
-  """
-  def get_value(self):
-    raise AssertionError("This should not get called.")
-
-  def get_error(self):
-    raise AssertionError("This should not get called.")
 
 
 class CrossEntropyLoss(Loss):

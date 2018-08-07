@@ -106,15 +106,17 @@ class Runner(object):
       loss = self.engine.network.get_objective()
       if loss is 0:
         loss = self.engine.get_const_tensor(key="zero_loss", value=0.0)
+      else:  # non-constant-zero loss
+        assert self.engine.network.losses_dict
       d["loss"] = loss
       for loss_name, loss in self.engine.network.losses_dict.items():
-        if loss.only_on_eval and self._should_train:
+        if loss.get_only_on_eval() and self._should_train:
           continue
-        if loss.loss_value_for_fetch is not None:
-          d["cost:%s" % loss_name] = loss.loss_value_for_fetch
-        if loss.error_value is not None:
-          d["error:%s" % loss_name] = loss.error_value
-        d["loss_norm_factor:%s" % loss_name] = loss.norm_factor
+        if loss.get_loss_value_for_fetch() is not None:
+          d["cost:%s" % loss_name] = loss.get_loss_value_for_fetch()
+        if loss.get_error_value() is not None:
+          d["error:%s" % loss_name] = loss.get_error_value()
+        d["loss_norm_factor:%s" % loss_name] = loss.get_norm_factor()
       for layer in self.engine.network.layers.values():
         if layer.only_on_eval and self._should_train:
           continue
