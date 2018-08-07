@@ -239,6 +239,9 @@ class BatchSetGenerator:
 
   def has_more(self):
     """
+    This would also try to advance further in the dataset, thus it might block.
+    If it returns False, no more data is available in the dataset.
+
     :rtype: bool
     """
     if len(self.buffer) > 0:
