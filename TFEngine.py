@@ -1458,11 +1458,16 @@ class Engine(object):
     :param BatchSetGenerator batches:
     :rtype: TFDataPipeline.FeedDictDataProvider
     """
+    batch_slice = None
+    if self.config.is_true("use_horovod"):
+      import horovod.tensorflow as hvd
+      batch_slice = slice(hvd.rank(), None, hvd.size())
     from TFDataPipeline import FeedDictDataProvider
     data_provider = FeedDictDataProvider(
       tf_session=self.tf_session, extern_data=self.network.extern_data,
       data_keys=self.network.used_data_keys,
       dataset=dataset, batches=batches,
+      batch_slice=batch_slice,
       enforce_min_len1=self.config.is_true("enforce_min_len1", False))
     return data_provider
 
