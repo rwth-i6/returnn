@@ -97,13 +97,29 @@ class Runner(object):
     """
     # Note that it is important that we do not recreate graph nodes for every call to this function.
     # Thus everything which we access here should be cached.
-    # TODO: We should take Horovod allreduce here into account, for accumulated losses...
-    # This is also relevant when we do the scoring on the dev-set.
+
+    def reduce_sum(x, name, average=False):
+      if not self.engine.config.is_true("use_horovod"):
+        return x
+      from TFUtil import global_tensor
+      import horovod.tensorflow as hvd
+      return global_tensor(
+        lambda: hvd.allreduce(x, average=average),
+        name="fetch_reduce_sum__" + name.replace(":", "__").replace("/", "_"))
+
+    def inv_reduce_sum(x, name):
+      if not self.engine.config.is_true("use_horovod"):
+        return x
+      from TFUtil import global_tensor
+      return global_tensor(
+        lambda: tf.reciprocal(reduce_sum(tf.reciprocal(x), name=name)),
+        name="fetch_inv_reduce_sum__" + name.replace(":", "__").replace("/", "_"))
+
     d = {}
     for key in self.data_provider.data_keys:
       data = self.data_provider.extern_data.get_data(key)
       for dim, v in data.size_placeholder.items():
-        d["size:%s:%i" % (key, dim)] = v
+        d["size:%s:%i" % (key, dim)] = reduce_sum(v, name="size:%s:%i" % (key, dim))
     if self._should_train or self._should_eval:
       # These values are cached internally and the graph nodes are created on the first call.
       loss = self.engine.network.get_objective()
@@ -111,15 +127,16 @@ class Runner(object):
         loss = self.engine.get_const_tensor(key="zero_loss", value=0.0)
       else:  # non-constant-zero loss
         assert self.engine.network.losses_dict
-      d["loss"] = loss
+      d["loss"] = reduce_sum(loss, name="loss", average=True)
       for loss_name, loss in self.engine.network.losses_dict.items():
         if loss.get_only_on_eval() and self._should_train:
           continue
         if loss.get_loss_value_for_fetch() is not None:
-          d["cost:%s" % loss_name] = loss.get_loss_value_for_fetch()
+          d["cost:%s" % loss_name] = reduce_sum(loss.get_loss_value_for_fetch(), name="cost:%s" % loss_name)
         if loss.get_error_value() is not None:
-          d["error:%s" % loss_name] = loss.get_error_value()
-        d["loss_norm_factor:%s" % loss_name] = loss.get_norm_factor()
+          d["error:%s" % loss_name] = reduce_sum(loss.get_error_value(), name="error:%s" % loss_name)
+        d["loss_norm_factor:%s" % loss_name] = inv_reduce_sum(
+          loss.get_norm_factor(), name="loss_norm_factor:%s" % loss_name)
       for layer in self.engine.network.layers.values():
         if layer.only_on_eval and self._should_train:
           continue
@@ -127,7 +144,7 @@ class Runner(object):
         if layer.target and layer.target.startswith("layer:"):
           target_data = layer.loss.target
           for dim, v in target_data.size_placeholder.items():
-            d["size:%s:%i" % (layer.target, dim)] = v
+            d["size:%s:%i" % (layer.target, dim)] = reduce_sum(v, name="size:%s:%i" % (layer.target, dim))
     for layer in self.engine.network.layers.values():
       for k, v in layer.stats.items():
         d["stats:%s:%s" % (layer.name, k)] = v
