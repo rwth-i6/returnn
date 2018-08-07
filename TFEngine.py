@@ -269,24 +269,17 @@ class Runner(object):
     """
     if not value:
       return value
+    if key == "loss":
+      # This is a special case. This is the total loss.
+      # Do not normalize this, as it is also used as-is for the gradient.
+      # You can use the `use_normalized_loss` for a flag if you want to have this normalized.
+      return value
     loss_norm_keys = inv_loss_norm_factors.keys()
     assert len(loss_norm_keys) > 0
-    if key == "loss":
-      # This is a special case. This is the total loss. Not sure what normalization factor to take by default.
-      if len(loss_norm_keys) == 1:
-        loss_norm_key = list(loss_norm_keys)[0]
-      elif self.engine.network.get_default_output_layer_name() in loss_norm_keys:
-        loss_norm_key = self.engine.network.get_default_output_layer_name()
-      elif "output" in loss_norm_keys:
-        loss_norm_key = "output"
-      else:
-        # I do not have any better idea.
-        loss_norm_key = sorted(loss_norm_keys)[0]
-    else:
-      # Assume "cost:output" or "error:output" or so.
-      assert ":" in key
-      loss_norm_key = key[key.find(":") + 1:]
-      assert loss_norm_key in loss_norm_keys, "unexpected key %r" % key
+    # Assume "cost:output" or "error:output" or so.
+    assert ":" in key
+    loss_norm_key = key[key.find(":") + 1:]
+    assert loss_norm_key in loss_norm_keys, "unexpected key %r" % key
     value = value / inv_loss_norm_factors[loss_norm_key]
     return value
 
