@@ -97,6 +97,8 @@ class Runner(object):
     """
     # Note that it is important that we do not recreate graph nodes for every call to this function.
     # Thus everything which we access here should be cached.
+    # TODO: We should take Horovod allreduce here into account, for accumulated losses...
+    # This is also relevant when we do the scoring on the dev-set.
     d = {}
     for key in self.data_provider.data_keys:
       data = self.data_provider.extern_data.get_data(key)
@@ -448,7 +450,8 @@ class Runner(object):
       if self.engine.use_search_flag:
         logdir += "-search"
       logdir += "-%s" % get_utc_start_time_filename_part()
-      log_runtime_info_to_dir(logdir, config=self.engine.config)
+      if self.engine._do_save():
+        log_runtime_info_to_dir(logdir, config=self.engine.config)
       writer = tf.summary.FileWriter(logdir)
     else:
       writer = None
@@ -983,8 +986,11 @@ class Engine(object):
     if self.config.is_true("use_horovod"):
       # Note: Might not be needed as it should be deterministic. But just to be sure...
       import horovod.tensorflow as hvd
-      bcast_op = hvd.broadcast_global_variables(0)
-      session.run(bcast_op)
+      # like hvd.broadcast_global_variables but selected vars only:
+      bcast_op = tf.group(*[
+        tf.assign(var, hvd.broadcast(var, root_rank=0))
+        for var in self.network.get_params_list() + self.network.get_auxiliary_params()])
+      self.tf_session.run(bcast_op)
 
   @classmethod
   def create_network(cls, config, rnd_seed, train_flag, eval_flag, search_flag, net_dict, initial_learning_rate=1.0):
