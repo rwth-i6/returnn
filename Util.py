@@ -1744,6 +1744,7 @@ class LockFile(object):
   def lock(self):
     import time
     import errno
+    wait_count = 0
     while True:
       # Try to create directory if it does not exist.
       try:
@@ -1765,6 +1766,9 @@ class LockFile(object):
       self.maybe_remove_old_lockfile()
       # Wait a bit, and then retry.
       time.sleep(1)
+      wait_count += 1
+      if wait_count == 10:
+        print("Waiting for lock-file: %s" % self.lockfile)
 
   def unlock(self):
     os.close(self.fd)
