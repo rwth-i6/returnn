@@ -1740,6 +1740,42 @@ def get_tf_list_local_devices():
   return _list_local_devices
 
 
+class LocalCudaVisibleDevicesSubset:
+  """
+  Selects a subset of CUDA visible devices.
+  Obviously this is not multi-threading safe.
+  """
+
+  def __init__(self, subset):
+    """
+    :param str subset: e.g. "1,2", relative to current CUDA_VISIBLE_DEVICES
+    """
+    self.subset = [int(d) for d in subset.split(",")] if subset else []
+    self.orig_cuda_visible_devs = None
+
+  def __enter__(self):
+    self.orig_cuda_visible_devs = os.environ.get("CUDA_VISIBLE_DEVICES", None)
+    if self.orig_cuda_visible_devs is not None:
+      orig_cuda_visible_devs_str = os.environ["CUDA_VISIBLE_DEVICES"]
+      orig_cuda_visible_devs = \
+        [int(d) for d in orig_cuda_visible_devs_str.split(",")] if orig_cuda_visible_devs_str else []
+      assert len(self.subset) <= len(orig_cuda_visible_devs) and max(self.subset) < len(orig_cuda_visible_devs)
+      new_cuda_visible_devs = [orig_cuda_visible_devs[d] for d in self.subset]
+    else:
+      new_cuda_visible_devs = self.subset
+    new_cuda_visible_devs_str = ",".join([str(d) for d in new_cuda_visible_devs])
+    print("LocalCudaVisibleDevicesSubset: set CUDA_VISIBLE_DEVICES = %r" % new_cuda_visible_devs_str)
+    os.environ["CUDA_VISIBLE_DEVICES"] = new_cuda_visible_devs_str
+
+  def __exit__(self, exc_type, exc_val, exc_tb):
+    if self.orig_cuda_visible_devs is None:
+      os.unsetenv("CUDA_VISIBLE_DEVICES")
+    else:
+      os.environ["CUDA_VISIBLE_DEVICES"] = self.orig_cuda_visible_devs
+    print("LocalCudaVisibleDevicesSubset: recover CUDA_VISIBLE_DEVICES = %r" % (
+      os.environ.get("CUDA_VISIBLE_DEVICES", None),))
+
+
 def _parse_physical_device_desc(s):
   """
   :param str s: string via dev.physical_device_desc. e.g. "device: 0, name: GeForce GTX 980, pci bus id: 0000:41:00.0"
