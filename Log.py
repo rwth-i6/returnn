@@ -119,7 +119,14 @@ class Log:
     log_format = config.list('log_format', [])
     if config.is_true("use_horovod"):
       import horovod.tensorflow as hvd
-      logs = ["horovod-%i-%i.%s" % (hvd.rank(), hvd.size(), fn) for fn in logs]
+      from TFUtil import init_horovod
+      init_horovod()  # make sure it is initialized
+      new_logs = []
+      for fn in logs:
+        fn_prefix, fn_ext = os.path.splitext(fn)
+        fn_ext = ".horovod-%i-%i%s" % (hvd.rank(), hvd.size(), fn_ext)
+        new_logs.append(fn_prefix + fn_ext)
+      logs = new_logs
     self.initialize(logs=logs, verbosity=log_verbosity, formatter=log_format)
 
 

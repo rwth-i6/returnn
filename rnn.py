@@ -307,12 +307,9 @@ def initBackendEngine():
         os.environ.get("TF_DEVICE"), config.opt_typed_value("device")), file=log.v4)
       config.set("device", os.environ.get("TF_DEVICE"))
     if config.is_true("use_horovod"):
-      import socket
       import horovod.tensorflow as hvd
-      hvd.init()
-      print(
-        "Horovod initialized. Hostname %s, pid %i, rank %i / size %i, local rank %i / local size %i." %(
-          socket.gethostname(), os.getpid(), hvd.rank(), hvd.size(), hvd.local_rank(), hvd.local_size()), file=log.v3)
+      from TFUtil import init_horovod
+      init_horovod()  # make sure it is initialized
       if "gpu" in config.value("device", "") or os.environ.get("CUDA_VISIBLE_DEVICES", ""):
         # We assume that we want to use a GPU.
         gpu_opts = config.typed_dict.setdefault("tf_session_opts", {}).setdefault("gpu_options", {})
