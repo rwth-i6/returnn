@@ -2018,7 +2018,13 @@ def log_runtime_info_to_dir(path, config):
       "Config files: %s" % (config.files,),
     ]
     if not os.path.exists(path):
-      os.makedirs(path)
+      try:
+        os.makedirs(path)
+      except Exception as exc:
+        print("log_runtime_info_to_dir: exception creating dir:", exc)
+        # Maybe a concurrent process, e.g. tf.summary.FileWriter created it in the mean-while,
+        # so then it would be ok now if it exists, but fail if it does not exist.
+        assert os.path.exists(path)
     log_fn = "%s/returnn.%s.%s.%i.log" % (path, get_utc_start_time_filename_part(), hostname, os.getpid())
     if not os.path.exists(log_fn):
       with open(log_fn, "w") as f:
