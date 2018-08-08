@@ -1710,17 +1710,41 @@ def setup_tf_thread_pools(num_threads=None, log_file=None, tf_session_opts=None)
     session.close()
 
 
-def check_initial_tf_thread_pool_init():
+def check_initial_tf_thread_pool_init(tf_session_opts=None):
   if not _setup_tf_thread_pools_called_once:
     from Util import try_get_caller_name
     print("setup_tf_thread_pools() not yet called (via func %s), calling it now." %
           try_get_caller_name(fallback="<unknown>"))
-    setup_tf_thread_pools(log_file=sys.stdout)
+    setup_tf_thread_pools(tf_session_opts=tf_session_opts, log_file=sys.stdout)
+
+
+class _DeviceAttributes:
+  """
+  Like tf.python.client.session._DeviceAttributes but extended by physical_device_desc.
+  """
+  def __init__(self, dev, physical_device_desc):
+    """
+    :param tensorflow.python.client.session._DeviceAttributes dev:
+    :param bytes|str physical_device_desc:
+    """
+    self.name = dev.name  # type: str
+    self.device_type = dev.device_type  # type: str
+    self.memory_limit_bytes = dev.memory_limit_bytes  # type: int
+    self.physical_device_desc = physical_device_desc.decode("utf8")
+
+  def __str__(self):
+    # Similar as tensorflow.core.framework.device_attributes_pb2.DeviceAttributes.
+    return "".join([
+      "%s: %r\n" % (k, getattr(self, k))
+      for k in ["name", "device_type", "memory_limit_bytes", "physical_device_desc"]])
+
+  def __repr__(self):
+    return "<%s %s>" % (self.__class__.__name__, self.__str__().strip().replace("\n", ", "))
 
 
 _list_local_devices = None
 
-def get_tf_list_local_devices():
+def get_tf_list_local_devices(tf_session_opts=None):
   """
   This uses tensorflow.device_lib.list_local_devices().
   Note that a call to this will trigger the internal TF thread pool inits,
@@ -1729,14 +1753,31 @@ def get_tf_list_local_devices():
   Any TF session might only use a subset of these.
   You can get the list available in a given TF session by :func:`tf.Session.list_devices`.
 
-  :rtype: list[tensorflow.core.framework.device_attributes_pb2.DeviceAttributes]
+  :param dict[str]|None tf_session_opts: if given, will init a temp tf.Session with these opts
+  :rtype: list[tensorflow.core.framework.device_attributes_pb2.DeviceAttributes|_DeviceAttributes]
   """
-  check_initial_tf_thread_pool_init()
+  check_initial_tf_thread_pool_init(tf_session_opts=tf_session_opts)
   global _list_local_devices
   if _list_local_devices:
     return _list_local_devices
   print("Collecting TensorFlow device list...")
-  _list_local_devices = list(device_lib.list_local_devices())
+  if tf_session_opts and tf_session_opts.get("gpu_options", {}).get("visible_device_list", None):
+    # Note that LocalCudaVisibleDevicesSubset will not work because
+    # CUDA will internally cache the devices, thus the first call to list_local_devices will init
+    # all visible devices at that point, and TF/CUDA will get confused later
+    # when another set of devices is visible.
+    # However, getting the list via tf.Session.list_devices() will not provide us with a full DeviceAttributes
+    # with all needed information, as dev.physical_device_desc is missing,
+    # and we need that for e.g. get_available_gpu_min_compute_capability.
+    # See also: https://github.com/tensorflow/tensorflow/issues/9374
+    # However, we have get_device_attr, which provides gives us physical_device_desc.
+    with tf.Session(config=tf.ConfigProto(**tf_session_opts)) as session:
+      devs = list(session.list_devices())
+      _list_local_devices = [
+        _DeviceAttributes(dev=dev, physical_device_desc=session.run(get_device_attr(dev.name))) for dev in devs]
+      session.close()
+  else:
+    _list_local_devices = list(device_lib.list_local_devices())
   return _list_local_devices
 
 
@@ -1791,13 +1832,14 @@ def _parse_physical_device_desc(s):
   return d
 
 
-def print_available_devices(file=None):
+def print_available_devices(tf_session_opts=None, file=None):
   """
   Prints the available TF devices on `file` (stdout by default).
   This uses tensorflow.device_lib.list_local_devices().
   Note that a call to this will trigger the internal TF thread pool inits,
   so you should call :func:`setup_tf_thread_pools` first.
 
+  :param dict[str]|None tf_session_opts: if given, will init a temp tf.Session with these opts
   :param io.FileIO file:
   """
   if file is None:
@@ -1808,7 +1850,10 @@ def print_available_devices(file=None):
     cuda_visible_devs = dict(enumerate([int(d) for d in os.environ["CUDA_VISIBLE_DEVICES"].split(",") if d]))
   else:
     print("CUDA_VISIBLE_DEVICES is not set.", file=file)
-  devs = get_tf_list_local_devices()
+  if tf_session_opts and tf_session_opts.get("gpu_options", {}).get("visible_device_list", None):
+    print("TF session gpu_options.visible_device_list is set to %r." % (
+      tf_session_opts["gpu_options"]["visible_device_list"],), file=file)
+  devs = get_tf_list_local_devices(tf_session_opts=tf_session_opts)
   print("Local devices available to TensorFlow:", file=file)
   for i, dev in enumerate(devs):
     print("  %i/%i: %s" % (i + 1, len(devs), "\n       ".join(str(dev).splitlines())), file=file)
