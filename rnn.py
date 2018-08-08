@@ -315,31 +315,16 @@ def initBackendEngine():
           socket.gethostname(), os.getpid(), hvd.rank(), hvd.size(), hvd.local_rank(), hvd.local_size()), file=log.v3)
       if "gpu" in config.value("device", "") or os.environ.get("CUDA_VISIBLE_DEVICES", ""):
         # We assume that we want to use a GPU.
-        # If CUDA_VISIBLE_DEVICES is set, we assume that we need exclusive access to the GPU(s).
-        if "CUDA_VISIBLE_DEVICES" in os.environ:
-          cuda_visible_devs = os.environ["CUDA_VISIBLE_DEVICES"]
-          # NOTE: We should not have initialized any tf.Session yet,
-          # such that CUDA_VISIBLE_DEVICES can still be adapted.
-          # Setting session opts gpu_options.visible_device_list is not enough for exclusive access.
-          assert cuda_visible_devs, "CUDA_VISIBLE_DEVICES set to empty string but GPU requested"
-          devs = cuda_visible_devs.split(",")
-          assert len(devs) == hvd.local_size(), "CUDA_VISIBLE_DEVICES %r would not match to local size %i" % (
-            cuda_visible_devs, hvd.local_size())
-          os.environ["CUDA_VISIBLE_DEVICES"] = devs[hvd.local_rank()]
-          print("Horovod rank %i filtered CUDA_VISIBLE_DEVICES: %r (out of %r)" % (
-            hvd.rank(), os.environ["CUDA_VISIBLE_DEVICES"], cuda_visible_devs), file=log.v3)
-        else:  # CUDA_VISIBLE_DEVICES is not set
-          print("Horovod rank %i CUDA_VISIBLE_DEVICES unset" % hvd.rank(), file=log.v4)
-          # We assume that we do not need exclusive access via CUDA_VISIBLE_DEVICES,
-          # and that we can use tf.Session option gpu_options.visible_device_list.
-          gpu_opts = config.typed_dict.setdefault("tf_session_opts", {}).setdefault("gpu_options", {})
-          assert "visible_device_list" not in gpu_opts
-          gpu_opts["visible_device_list"] = str(hvd.local_rank())
-    from TFUtil import debugRegisterBetterRepr, setup_tf_thread_pools
+        gpu_opts = config.typed_dict.setdefault("tf_session_opts", {}).setdefault("gpu_options", {})
+        assert "visible_device_list" not in gpu_opts
+        gpu_opts["visible_device_list"] = str(hvd.local_rank())
+    from TFUtil import debugRegisterBetterRepr, setup_tf_thread_pools, print_available_devices
     tf_session_opts = config.typed_value("tf_session_opts", {})
     assert isinstance(tf_session_opts, dict)
     # This must be done after the Horovod logic, such that we only touch the devices we are supposed to touch.
     setup_tf_thread_pools(log_file=log.v3, tf_session_opts=tf_session_opts)
+    # Print available devices. Also make sure that get_tf_list_local_devices uses the correct TF session opts.
+    print_available_devices(tf_session_opts=tf_session_opts, file=log.v2)
     debugRegisterBetterRepr()
   else:
     raise NotImplementedError

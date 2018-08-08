@@ -688,8 +688,7 @@ class Engine(object):
     return any([d["device"].startswith("gpu") for d in self.devices_config])
 
   def _check_devices(self):
-    from TFUtil import print_available_devices, is_gpu_available
-    print_available_devices(file=log.v2)
+    from TFUtil import is_gpu_available
     assert len(self.devices_config) == 1, "multiple devices not supported yet for TF"
     if self.is_requesting_for_gpu():
       assert tf.test.is_built_with_cuda(), "You use a CPU-only TF version. Use tensorflow-gpu."
