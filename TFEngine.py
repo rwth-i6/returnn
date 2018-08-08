@@ -714,12 +714,6 @@ class Engine(object):
     opts.setdefault("device_count", {})
     if self.is_requesting_for_gpu():
       opts["device_count"].setdefault("GPU", 1)
-      if self.config.is_true("use_horovod"):
-        import horovod.tensorflow as hvd
-        opts.setdefault("gpu_options", {})
-        assert "visible_device_list" not in opts["gpu_options"]
-        # visible_device_list should be a subset of the CUDA_VISIBLE_DEVICES list.
-        opts["gpu_options"]["visible_device_list"] = str(hvd.local_rank())
     else:
       opts["device_count"].setdefault("GPU", 0)
     # Note: We don't set intra_op_parallelism_threads and inter_op_parallelism_threads here anymore

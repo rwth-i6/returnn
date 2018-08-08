@@ -124,25 +124,15 @@ def initConfigJsonNetwork():
     config.network_topology_json = open(json_file).read()
 
 
-def initDevices():
+def initTheanoDevices():
   """
+  Only for Theano.
+
   :rtype: list[Device]
   """
-  oldDeviceConfig = ",".join(config.list('device', ['default']))
-  if BackendEngine.is_tensorflow_selected():
-    if os.environ.get("TF_DEVICE"):
-      config.set("device", os.environ.get("TF_DEVICE"))
-      print("Devices: Use %s via TF_DEVICE instead of %s." %
-            (os.environ.get("TF_DEVICE"), oldDeviceConfig), file=log.v4)
-    if config.is_true("use_horovod"):
-      import socket
-      import horovod.tensorflow as hvd
-      hvd.init()
-      print(
-        "Horovod initialized. Hostname %s, pid %i, rank %i / size %i, local rank %i / local size %i." %(
-          socket.gethostname(), os.getpid(), hvd.rank(), hvd.size(), hvd.local_rank(), hvd.local_size()), file=log.v3)
   if not BackendEngine.is_theano_selected():
     return None
+  oldDeviceConfig = ",".join(config.list('device', ['default']))
   if config.value("task", "train") == "nop":
     return []
   if "device" in TheanoFlags:
@@ -312,9 +302,43 @@ def initBackendEngine():
     print("TensorFlow:", describe_tensorflow_version(), file=log.v3)
     if get_tensorflow_version_tuple()[0] == 0:
       print("Warning: TF <1.0 is not supported and likely broken.", file=log.v2)
+    if os.environ.get("TF_DEVICE"):
+      print("Devices: Use %s via TF_DEVICE instead of %s." % (
+        os.environ.get("TF_DEVICE"), config.opt_typed_value("device")), file=log.v4)
+      config.set("device", os.environ.get("TF_DEVICE"))
+    if config.is_true("use_horovod"):
+      import socket
+      import horovod.tensorflow as hvd
+      hvd.init()
+      print(
+        "Horovod initialized. Hostname %s, pid %i, rank %i / size %i, local rank %i / local size %i." %(
+          socket.gethostname(), os.getpid(), hvd.rank(), hvd.size(), hvd.local_rank(), hvd.local_size()), file=log.v3)
+      if "gpu" in config.value("device", "") or os.environ.get("CUDA_VISIBLE_DEVICES", ""):
+        # We assume that we want to use a GPU.
+        # If CUDA_VISIBLE_DEVICES is set, we assume that we need exclusive access to the GPU(s).
+        if "CUDA_VISIBLE_DEVICES" in os.environ:
+          cuda_visible_devs = os.environ["CUDA_VISIBLE_DEVICES"]
+          # NOTE: We should not have initialized any tf.Session yet,
+          # such that CUDA_VISIBLE_DEVICES can still be adapted.
+          # Setting session opts gpu_options.visible_device_list is not enough for exclusive access.
+          assert cuda_visible_devs, "CUDA_VISIBLE_DEVICES set to empty string but GPU requested"
+          devs = cuda_visible_devs.split(",")
+          assert len(devs) == hvd.local_size(), "CUDA_VISIBLE_DEVICES %r would not match to local size %i" % (
+            cuda_visible_devs, hvd.local_size())
+          os.environ["CUDA_VISIBLE_DEVICES"] = devs[hvd.local_rank()]
+          print("Horovod rank %i filtered CUDA_VISIBLE_DEVICES: %r (out of %r)" % (
+            hvd.rank(), os.environ["CUDA_VISIBLE_DEVICES"], cuda_visible_devs), file=log.v3)
+        else:  # CUDA_VISIBLE_DEVICES is not set
+          print("Horovod rank %i CUDA_VISIBLE_DEVICES unset" % hvd.rank(), file=log.v4)
+          # We assume that we do not need exclusive access via CUDA_VISIBLE_DEVICES,
+          # and that we can use tf.Session option gpu_options.visible_device_list.
+          gpu_opts = config.typed_dict.setdefault("tf_session_opts", {}).setdefault("gpu_options", {})
+          assert "visible_device_list" not in gpu_opts
+          gpu_opts["visible_device_list"] = str(hvd.local_rank())
     from TFUtil import debugRegisterBetterRepr, setup_tf_thread_pools
     tf_session_opts = config.typed_value("tf_session_opts", {})
     assert isinstance(tf_session_opts, dict)
+    # This must be done after the Horovod logic, such that we only touch the devices we are supposed to touch.
     setup_tf_thread_pools(log_file=log.v3, tf_session_opts=tf_session_opts)
     debugRegisterBetterRepr()
   else:
@@ -348,7 +372,7 @@ def init(configFilename=None, commandLineOptions=(), config_updates=None, extra_
   if config.bool('ipython', False):
     initIPythonKernel()
   initConfigJsonNetwork()
-  devices = initDevices()
+  devices = initTheanoDevices()
   if needData():
     initData()
   printTaskProperties(devices)
