@@ -2793,10 +2793,11 @@ class OpCodeCompiler(NativeCodeCompiler):
 
   CacheDirName = "returnn_tf_cache/ops"
 
-  def __init__(self, use_cuda_if_available=True, include_paths=(), ld_flags=(), **kwargs):
+  def __init__(self, use_cuda_if_available=True, cuda_auto_min_compute_capability=True,
+               include_paths=(), ld_flags=(), **kwargs):
     self._cuda_env = use_cuda_if_available and CudaEnv.get_instance()
     self._nvcc_opts = []
-    if self._with_cuda():
+    if self._with_cuda() and cuda_auto_min_compute_capability:
       # Get CUDA compute capability of the current GPU device.
       min_compute_capability = get_available_gpu_min_compute_capability()
       if min_compute_capability:
@@ -5758,6 +5759,74 @@ def find_unsupported_devices_in_graph(graph, dev_name, ignore=None):
     if dev_name not in supported_devices_for_op(op.type):
       ops.append(op)
   return ops
+
+
+class _DeviceAttrMod:
+
+  _tf_mod = None
+
+  @classmethod
+  def get_mod(cls, verbose=False):
+    if cls._tf_mod:
+      return cls._tf_mod
+
+    src_code = """
+    #include "tensorflow/core/framework/common_shape_fns.h"
+    #include "tensorflow/core/framework/op.h"
+    #include "tensorflow/core/framework/op_kernel.h"
+    #include "tensorflow/core/framework/device_attributes.pb.h"
+
+    using namespace tensorflow;
+
+    REGISTER_OP("GetDeviceAttr")
+      .Output("out: string")
+      .SetShapeFn(shape_inference::ScalarShape);
+
+    class GetDeviceAttrOp : public OpKernel {
+    public:
+      explicit GetDeviceAttrOp(OpKernelConstruction* context) : OpKernel(context) {}
+
+      void Compute(OpKernelContext* context) override {
+        const DeviceAttributes& attribs = context->device()->attributes();
+        Tensor* output_tensor = nullptr;
+        OP_REQUIRES_OK(
+            context, context->allocate_output(0, TensorShape({}), &output_tensor));
+        output_tensor->scalar<string>()() = attribs.physical_device_desc();
+      }
+    };
+
+    REGISTER_KERNEL_BUILDER(Name("GetDeviceAttr").Device(DEVICE_CPU), GetDeviceAttrOp);
+    REGISTER_KERNEL_BUILDER(Name("GetDeviceAttr").Device(DEVICE_GPU).HostMemory("out"), GetDeviceAttrOp);
+    """
+
+    compiler = OpCodeCompiler(
+      base_name="GetDeviceAttr", code_version=1, code=src_code,
+      is_cpp=True, use_cuda_if_available=True,
+      # This would lead to a get_tf_list_local_devices call, which we might not want at this point.
+      cuda_auto_min_compute_capability=False,
+      verbose=verbose)
+    tf_mod = compiler.load_tf_module()
+    assert hasattr(tf_mod, "get_device_attr"), "content of mod: %r" % (dir(tf_mod),)
+    cls._tf_mod = tf_mod
+    return tf_mod
+
+  @classmethod
+  def get_device_attr(cls):
+    """
+    :return: scalar string
+    :rtype: tf.Tensor
+    """
+    return cls.get_mod().get_device_attr()
+
+
+def get_device_attr(dev):
+  """
+  :param str dev: eg. "/device:GPU:0", or any argument tf.device
+  :return: scalar string, eg. b'device: 2, name: GeForce GTX 1080 Ti, pci bus id: 0000:82:00.0, compute capability: 6.1'
+  :rtype: tf.Tensor
+  """
+  with tf.device(dev):
+    return _DeviceAttrMod.get_device_attr()
 
 
 def print_graph_output(fetches):
