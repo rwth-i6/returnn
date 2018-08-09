@@ -1337,6 +1337,8 @@ class Engine(object):
     """
     :param bool ask_for_confirmation: if True, will ask the user interactively to confirm
     """
+    if not self._do_save():
+      return
     from Util import CollectionReadCheckCovered, human_bytes_size, confirm
     from itertools import count
     opts = CollectionReadCheckCovered(self.config.get_of_type("cleanup_old_models", dict, {}))
