@@ -119,7 +119,7 @@ class Runner(object):
     for key in self.data_provider.data_keys:
       data = self.data_provider.extern_data.get_data(key)
       for dim, v in data.size_placeholder.items():
-        d["size:%s:%i" % (key, dim)] = reduce_sum(v, name="size:%s:%i" % (key, dim))
+        d["size:%s:%i" % (key, dim)] = v
     if self._should_train or self._should_eval:
       # These values are cached internally and the graph nodes are created on the first call.
       loss = self.engine.network.get_objective()
@@ -144,7 +144,7 @@ class Runner(object):
         if layer.target and layer.target.startswith("layer:"):
           target_data = layer.loss.target
           for dim, v in target_data.size_placeholder.items():
-            d["size:%s:%i" % (layer.target, dim)] = reduce_sum(v, name="size:%s:%i" % (layer.target, dim))
+            d["size:%s:%i" % (layer.target, dim)] = v
     for layer in self.engine.network.layers.values():
       for k, v in layer.stats.items():
         d["stats:%s:%s" % (layer.name, k)] = v
