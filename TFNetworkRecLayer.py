@@ -2543,7 +2543,7 @@ class RnnCellLayer(_ConcatInputLayer):
           from TFUtil import expand_dims_unbroadcast
           var = expand_dims_unbroadcast(var, axis=0, dim=batch_dim)  # (batch,dim)
           return var
-        elif v == "keep_over_epoch":
+        elif v == "keep_over_epoch" or v == "keep_over_epoch_no_init":  # the latter should only be used to build a graph for use outside returnn
           from TFUtil import CollectionKeys
           assert rec_layer is not None
           with rec_layer.var_creation_scope():
@@ -2566,12 +2566,15 @@ class RnnCellLayer(_ConcatInputLayer):
               tf.assert_equal(tf.shape(last_state), shape),
               tf.assign(var, last_state, validate_shape=False)])
           rec_layer.post_init_hooks.append(update_var)
-          step = rec_layer.network.get_epoch_step()
-          # Note: If you get somewhere an error like `In[0] is not a matrix` or so,
-          # likely `update_var` was not correctly called or handled.
-          s = tf.cond(tf.equal(step, 0), lambda: tf.zeros(shape), lambda: var.value())
-          s.set_shape((None, d))
-          return s
+          if v == "keep_over_epoch_no_init":
+            return var.value()
+          else:
+            step = rec_layer.network.get_epoch_step()
+            # Note: If you get somewhere an error like `In[0] is not a matrix` or so,
+            # likely `update_var` was not correctly called or handled.
+            s = tf.cond(tf.equal(step, 0), lambda: tf.zeros(shape), lambda: var.value())
+            s.set_shape((None, d))
+            return s
         else:
           raise Exception("invalid initial state type %r for sub-layer %r, key %r" % (v, name, key))
 
@@ -2635,7 +2638,7 @@ class RnnCellLayer(_ConcatInputLayer):
     """
     def resolve(v):
       if isinstance(v, str):
-        if v in ["zeros", "ones", "var", "keep_over_epoch"]:
+        if v in ["zeros", "ones", "var", "keep_over_epoch", "keep_over_epoch_no_init"]:
           return v
         return get_layer(v)
       if isinstance(v, (tuple, list)):
