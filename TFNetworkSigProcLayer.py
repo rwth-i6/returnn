@@ -98,7 +98,7 @@ class ComplexLinearProjectionLayer(_ConcatInputLayer):
     return clp_kernel
 
   def _build_clp_multiplication(self, clp_kernel):
-    from TFUtil import safe_log 
+    from TFUtil import safe_log
     input_placeholder = self.input_data.get_placeholder_as_batch_major()
     tf.assert_equal(tf.shape(clp_kernel)[1], tf.shape(input_placeholder)[2] // 2)
     tf.assert_equal(tf.shape(clp_kernel)[2], self._nr_of_filters)
@@ -114,7 +114,7 @@ class ComplexLinearProjectionLayer(_ConcatInputLayer):
 
   @classmethod
   def get_out_data_from_opts(cls, nr_of_filters, **kwargs):
-    if not 'n_out' in kwargs:
+    if 'n_out' not in kwargs:
       kwargs['n_out'] = nr_of_filters
     return super(ComplexLinearProjectionLayer, cls).get_out_data_from_opts(**kwargs)
 
@@ -132,12 +132,93 @@ class MelFilterbankLayer(_ConcatInputLayer):
     :param fft_size int: fft_size with which the time signal was transformed into the intput
     :param nr_of_filters int: number of output filter bins
     """
+    def tfMelFilterBank(fMin, fMax, samplingRate, fftSize, nrOfFilters):
+      """
+      Returns the filter matrix which yields the mel filter bank features, when applied to the spectrum as
+      tf.matmul(freqDom, filterMatrix), where freqDom has dimension (time, frequency) and filterMatrix is the matrix returned
+      by this function
+      The filter matrix is computed according to equation 6.141 in
+      [Huang & Acero+, 2001] "Spoken Language Processing - A Guide to Theroy, Algorithm, and System Development"
+
+      :type fMin: float | int
+      :param fMin: minimum frequency
+      :type fMax: float | int
+      :param fMax: maximum frequency
+      :type samplingRate: float
+      :param samplingRate: sampling rate of audio signal
+      :type fftSize: int
+      :param fftSize: dimension of discrete fourier transformation
+      :type nrOfFilters: int
+      :param nrOfFilters: number of mel frequency filter banks to be created
+
+      :rtype: tf.tensor, shape=(filterValue, nrOfFilters)
+      :return: matrix yielding the mel frequency cepstral coefficients
+      """
+      import numpy as np
+
+      def melScale(freq):
+        """
+        returns the respective value on the mel scale
+
+        :type freq: float
+        :param freq: frequency value to transform onto mel scale
+        :rtype: float
+        """
+        return 1125.0 * np.log(1 + float(freq) / 700)
+
+      def invMelScale(melVal):
+        """
+        returns the respective value in the frequency domain
+
+        :type melVal: float
+        :param melVal: value in mel domain
+        :rtype: float
+        """
+        return 700.0 * (np.exp(float(melVal) / 1125) - 1)
+
+      def filterCenter(filterId, fMin, fMax, samplingRate, fftSize, nrOfFilters):
+        """
+        :type filterId: int
+        :param filterId: filter to compute the center frequency for
+        :type fMin: float | int
+        :param fMin: minimum frequency
+        :type fMax: float | int
+        :param fMax: maximum frequency
+        :type samplingRate: float
+        :param samplingRate: sampling rate of audio signal
+        :type fftSize: int
+        :param fftSize: dimension of discrete fourier transformation
+        :type nrOfFilters: int
+        :param nrOfFilters: number of mel frequency filter banks to be created
+
+        :rtype: float
+        :return: center frequency of filter
+        """
+        return (float(fftSize) / samplingRate) * invMelScale(melScale(fMin) + filterId * ((melScale(fMax) - melScale(fMin)) / (nrOfFilters + 1)))
+
+      filtCent = np.zeros(shape=(nrOfFilters + 2,), dtype=np.float32)
+      for i1 in range(nrOfFilters + 2):
+        filtCent[i1] = filterCenter(i1, fMin, fMax, samplingRate, fftSize, nrOfFilters)
+      fMat = np.zeros(shape=(int(np.floor(fftSize / 2) + 1), nrOfFilters))
+      for i1 in range(fMat.shape[0]):
+        for i2 in range(1, nrOfFilters + 1):
+          if (i1 > filtCent[i2 - 1]) and (i1 < filtCent[i2 + 1]):
+            if i1 < filtCent[i2]:
+              num = i1 - filtCent[i2 - 1]
+              denom = filtCent[i2] - filtCent[i2 - 1]
+            else:
+              num = filtCent[i2 + 1] - i1
+              denom = filtCent[i2 + 1] - filtCent[i2]
+            elVal = num / denom
+          else:
+            elVal = 0
+          fMat[i1, i2 - 1] = elVal
+      return tf.constant(fMat, dtype=tf.float32)
+
     if ('n_out' in kwargs and (kwargs['n_out'] != nr_of_filters)):
         raise Exception('argument n_out of layer MelFilterbankLayer can not be different from nr_of_filters')
     kwargs['n_out'] = nr_of_filters
     super(MelFilterbankLayer, self).__init__(**kwargs)
-
-    from tfSi6Proc.basics.transformation.fourier import tfMelFilterBank
 
     input_placeholder = self.input_data.get_placeholder_as_batch_major()
 
