@@ -55,7 +55,7 @@ class OpMaker(object):
   mod_cache = {}  # cache_key -> mod
   op_cache = {}  # cache_key -> op
 
-  def __init__(self, description, compiler_opts=None):
+  def __init__(self, description, compiler_opts=None, search_for_numpy_blas=True):
     """
     :param OpDescription description:
     :param dict[str]|None compiler_opts: passed on to OpCodeCompiler as kwargs
@@ -64,6 +64,7 @@ class OpMaker(object):
     self.description = description
     self.name = description.name
     self.compiler_opts = compiler_opts or {}
+    self.search_for_numpy_blas = search_for_numpy_blas
 
   @classmethod
   def _cls_init(cls):
@@ -402,18 +403,19 @@ class OpMaker(object):
     if find_lib("f77blas"):
       ld_flags += ["-lf77blas"]
     # Another option to find some BLAS lib.
-    import numpy
-    numpy_dir = os.path.dirname(numpy.__file__)
-    if os.path.exists("%s/.libs" % numpy_dir):
-      ld_flags += ["-L%s/.libs" % numpy_dir]
-      from glob import glob
-      for f in glob("%s/.libs/*.so" % numpy_dir):
-        f = os.path.basename(f)
-        if f.startswith("lib"):
-          f = f[3:]
-        if f.endswith(".so"):
-          f = f[:-3]
-        ld_flags += ["-l%s" % f]
+    if self.search_for_numpy_blas:
+      import numpy
+      numpy_dir = os.path.dirname(numpy.__file__)
+      if os.path.exists("%s/.libs" % numpy_dir):
+        ld_flags += ["-L%s/.libs" % numpy_dir]
+        from glob import glob
+        for f in glob("%s/.libs/*.so" % numpy_dir):
+          f = os.path.basename(f)
+          if f.startswith("lib"):
+            f = f[3:]
+          if f.endswith(".so"):
+            f = f[:-3]
+          ld_flags += ["-l%s" % f]
     comp = TFUtil.OpCodeCompiler(
       base_name=self.name, code_version=self.description.code_version,
       code=self._make_code(),
@@ -435,7 +437,8 @@ class OpMaker(object):
 
       if self.description.is_grad_defined:
         grad_description = self.description.grad()
-        grad_op_maker = OpMaker(description=grad_description, compiler_opts=self.compiler_opts)
+        grad_op_maker = OpMaker(description=grad_description, compiler_opts=self.compiler_opts,
+                                search_for_numpy_blas=self.search_for_numpy_blas)
         grad_op = grad_op_maker.make_op()
 
         from tensorflow.python.framework import ops
