@@ -875,7 +875,7 @@ class FeedDictDataProvider(DataProviderBase):
     self._flush_all_data()
     self.thread.join()
 
-  def get_next_batch(self, consider_batch_slice=False):
+  def get_next_batch(self, consider_batch_slice):
     """
     This assumes that we have more data, i.e. self.batches.has_more().
 
@@ -955,7 +955,7 @@ class FeedDictDataProvider(DataProviderBase):
       better_exchook.install()
 
       while self.batches.has_more() and not self.coord.should_stop():
-        enqueue_args = self.get_next_batch()
+        enqueue_args = self.get_next_batch(consider_batch_slice=True)
         if enqueue_args is not None:
           if self.queue:
             self.queue.put(enqueue_args)
