@@ -238,7 +238,6 @@ class Runner(object):
     Called at the end of an epoch.
     :param int num_steps: number of steps we did for this epoch
     """
-    assert not self.data_provider.have_more_data(session=self.engine.tf_session)
     results = {key: self._normalize_loss(value, key, self._inv_norm_accumulated)
                for (key, value) in self._results_accumulated.items()}
     self.results = results
