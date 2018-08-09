@@ -1937,7 +1937,7 @@ class LengthLayer(LayerBase):
   def __init__(self, add_time_axis=False, dtype="int32", **kwargs):
     super(LengthLayer, self).__init__(**kwargs)
     assert len(self.sources) == 1, "%s: expects one source" % self
-    out = tf.cast(self.sources[0].output.size_placeholder[self.sources[0].output.time_dim_axis], dtype)
+    out = tf.cast(self.sources[0].output.get_sequence_lengths(), dtype)
     if add_time_axis:
       out = tf.expand_dims(out, axis=self.output.time_dim_axis)
     self.output.placeholder = out
