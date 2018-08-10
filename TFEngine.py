@@ -860,6 +860,7 @@ class Engine(object):
     self.max_seqs = config.int('max_seqs', -1)
 
     epoch, model_epoch_filename = self.get_epoch_model(config)
+    # Note that model_epoch_filename could be set but epoch could be None or 0.
     if not model_epoch_filename and not self.start_epoch:
       if self.config.bool("allow_random_model_init", False):
         print("No model will be loaded. Randomly initializing model.", file=log.v2)
@@ -868,6 +869,10 @@ class Engine(object):
         raise Exception(
           "You are not using training, otherwise start_epoch would be set via self.init_train_from_config(). "
           "There was also no model found which we could load. Set one via 'load'.")
+    # self.start_epoch is used as the start epoch in training.
+    # If there is an existing model, it might be higher than 1.
+    # In that case, epoch == self.start_epoch - 1.
+    is_first_train_epoch = not epoch
     self.epoch = epoch or self.start_epoch
     assert self.epoch
 
@@ -880,18 +885,22 @@ class Engine(object):
 
     self._init_network(net_desc=net_dict, epoch=self.epoch)
 
-    if self.preload_from_files:
-      # This option is to be replaced by a load_on_init option for each layer in the future.
-      print("WARNING: Option 'preload_from_files' is currently not compatible with 'load_on_init' in SubnetworkLayer", file=log.v2)
+    if self.preload_from_files and is_first_train_epoch:
+      # Notes for related options:
+      # - import_model_train_epoch1. This however requires all params to exist in the checkpoint.
+      # - SubnetworkLayer also has a load_on_init option.
+      # - LayerBase has custom_param_importer which is quite flexible.
       print("Start pre-loading weights...", file=log.v2)
-      for model_name in self.preload_from_files.keys():
-        model_filename = self.preload_from_files.get(model_name)['filename']
+      for model_name, opts in sorted(self.preload_from_files.items()):
+        assert isinstance(opts, dict)
+        model_filename = opts['filename']
         print("loading weights from", model_filename, file=log.v2)
         self_prefix = self.network.get_absolute_name_scope_prefix()  # with "/" at end
-        load_if_prefix = self.preload_from_files.get(model_name)['prefix']  # prefix to identify the variables to be restored from the file
+        load_if_prefix = opts['prefix']  # prefix to identify the variables to be restored from the file
         from TFNetwork import CustomCheckpointLoader
         loader = CustomCheckpointLoader(
-          filename=model_filename, saveable_params=self.network.get_trainable_params(), params_prefix=self_prefix, load_if_prefix=load_if_prefix)
+          filename=model_filename, saveable_params=self.network.get_trainable_params(),
+          params_prefix=self_prefix, load_if_prefix=load_if_prefix)
         loader.set_as_custom_init()
       self.network.initialize_params(session=self.tf_session)
 
