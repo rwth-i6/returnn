@@ -94,6 +94,8 @@ class Data(object):
     :param int|None beam_size: the batch-dim could be extended by a beam-size,
       such that it represents the merged dims [batch, beam_size].
     """
+    assert isinstance(name, str)
+    assert dtype is None or isinstance(dtype, str)
     self.name = name
     if sparse is None:
       if dtype and (dtype.startswith("int") or dtype.startswith("uint")):

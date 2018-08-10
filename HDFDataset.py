@@ -121,7 +121,7 @@ class HDFDataset(CachedDataset):
     else:
       self.targets = { 'classes' : numpy.zeros((self._num_timesteps,), dtype=theano.config.floatX)  }
       self.data_dtype['classes'] = 'int32'
-    self.data_dtype["data"] = fin['inputs'].dtype
+    self.data_dtype["data"] = str(fin['inputs'].dtype)
     assert len(self.target_keys) == len(self._seq_lengths[0]) - 1
     fin.close()
 
