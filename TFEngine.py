@@ -872,7 +872,8 @@ class Engine(object):
     # self.start_epoch is used as the start epoch in training.
     # If there is an existing model, it might be higher than 1.
     # In that case, epoch == self.start_epoch - 1.
-    is_first_train_epoch = not epoch
+    is_training = config.value('task', 'train') == 'train'
+    is_first_train_epoch = is_training and not epoch
     self.epoch = epoch or self.start_epoch
     assert self.epoch
 
@@ -885,7 +886,7 @@ class Engine(object):
 
     self._init_network(net_desc=net_dict, epoch=self.epoch)
 
-    if self.preload_from_files and is_first_train_epoch:
+    if self.preload_from_files:
       # Notes for related options:
       # - import_model_train_epoch1. This however requires all params to exist in the checkpoint.
       # - SubnetworkLayer also has a load_on_init option.
@@ -893,10 +894,16 @@ class Engine(object):
       print("Start pre-loading weights...", file=log.v2)
       for model_name, opts in sorted(self.preload_from_files.items()):
         assert isinstance(opts, dict)
+        if opts.get("init_for_train", False):
+          if not is_first_train_epoch:
+            continue
+        else:  # default: init for recog
+          if is_training:
+            continue
         model_filename = opts['filename']
         print("loading weights from", model_filename, file=log.v2)
         self_prefix = self.network.get_absolute_name_scope_prefix()  # with "/" at end
-        load_if_prefix = opts['prefix']  # prefix to identify the variables to be restored from the file
+        load_if_prefix = opts.get('prefix', '')  # prefix to identify the variables to be restored from the file
         from TFNetwork import CustomCheckpointLoader
         loader = CustomCheckpointLoader(
           filename=model_filename, saveable_params=self.network.get_trainable_params(),

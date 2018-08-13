@@ -1645,7 +1645,8 @@ class CustomCheckpointLoader:
   def _get_param_name(self, v):
     """
     :param tf.Variable|tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject v:
-    :return:
+    :return: var name. self.params_prefix removed if given
+    :rtype: str
     """
     if isinstance(v, tf.Variable):
       v_name = v.name[:-2]
@@ -1658,7 +1659,8 @@ class CustomCheckpointLoader:
 
   def _get_name_with_prefix(self):
     """
-    :return: set: a set of variable names containing load_if_prefix
+    :return: a set of variable names containing load_if_prefix
+    :rtype: set[str]
     """
     var_net_names = set()
     for v in self.saveable_params:
@@ -1667,7 +1669,7 @@ class CustomCheckpointLoader:
       else:
         v_name = v.name
       if self.load_if_prefix in v_name:
-        v_name = v_name.replace(self.load_if_prefix,'')
+        v_name = v_name.replace(self.load_if_prefix, '')
         if self.params_prefix:
           var_net_names.add(v_name[len(self.params_prefix):])
         else:
