@@ -1544,7 +1544,7 @@ class Engine(object):
   def get_specific_feed_dict(self, dataset, seq_idx):
     """
     :param Dataset.Dataset dataset:
-    :param int seq_idx:
+    :param int seq_idx: index of sequence, -1 for all sequences in dataset
     :return: feed_dict for self.tf_session.run()
     :rtype: dict[tf.Tensor,numpy.ndarray]
     """
@@ -1552,7 +1552,11 @@ class Engine(object):
     # First we need a custom DataProvider with a custom BatchSetGenerator
     # which will yield only one single batch for the provided sequence idx.
     batch = Batch()
-    batch.init_with_one_full_sequence(seq_idx=seq_idx, dataset=dataset)
+    if seq_idx == -1:  # load all sequences in dataset
+      for seq_idx_loop in range(dataset.num_seqs):
+        batch.add_sequence_as_slice(seq_idx=seq_idx_loop, seq_start_frame=0, length=dataset.get_seq_length(seq_idx_loop))
+    else:
+      batch.init_with_one_full_sequence(seq_idx=seq_idx, dataset=dataset)
     batch_generator = iter([batch])
     batches = BatchSetGenerator(dataset, generator=batch_generator)
     data_provider = self._get_new_data_provider(dataset=dataset, batches=batches)
@@ -1562,7 +1566,7 @@ class Engine(object):
   def run_single(self, dataset, seq_idx, output_dict, ext_feed_dict=None):
     """
     :param Dataset dataset:
-    :param int seq_idx:
+    :param int seq_idx: index of sequence, -1 for all sequences in dataset
     :param dict[str,tf.Tensor] output_dict: key -> tf.Tensor
     :param dict[tf.Tensor,numpy.ndarray] ext_feed_dict:
     :return: output_dict but values evaluated
@@ -1901,7 +1905,7 @@ class Engine(object):
     See also :func:`forward_single`.
 
     :param Dataset.Dataset dataset:
-    :param int seq_idx:
+    :param int seq_idx: index of sequence, -1 for all sequences in dataset
     :param str|None output_layer_name: e.g. "output". if not set, will read from config "search_output_layer"
     :return: list of score and numpy array, each numpy arry in format (time,dim)
     :rtype: list[(float,numpy.ndarray)]
@@ -1925,21 +1929,21 @@ class Engine(object):
     output = output_d["output"]
     seq_lens = output_d["seq_lens"]
     beam_scores = output_d["beam_scores"]
-    assert len(output) == len(seq_lens) == (out_beam_size or 1)
+    assert len(output) == len(seq_lens) == (out_beam_size or 1) * dataset.num_seqs
     if out_beam_size:
-      assert beam_scores.shape == (1, out_beam_size)  # (batch,beam)
+      assert beam_scores.shape == (dataset.num_seqs, out_beam_size)  # (batch,beam)
 
     results = []
-    for i in range(out_beam_size or 1):
+    for i in range(len(output)):
       hyp_seq = output[i][:seq_lens[i]]
       # txt = " ".join(map(labels["classes"].__getitem__, output[i][:seq_lens[i]]))
-      score = beam_scores[0][i]
+      score = beam_scores[i // out_beam_size][i % out_beam_size] if beam_scores is not None else 0
       results += [(score, hyp_seq)]
     return results
 
-  def search_single_seq(self, source, output_layer_name=None):
+  def search_single_seq(self, sources, output_layer_name=None):
     """
-    :param list[int]|numpy.ndarray source: source as a list of indices
+    :param list[numpy.ndarray] sources: source sequences as a list of indices
     :param str|None output_layer_name: e.g. "output". if not set, will read from config "search_output_layer"
     :return: list of all hyps, which is a tuple of score and string
     :rtype: list[(float,str)]
@@ -1947,18 +1951,19 @@ class Engine(object):
     num_outputs = {
       "data": [self.network.extern_data.data["data"].dim, 1],
       "classes": [self.network.extern_data.data["classes"].dim, 1]}
-    source_seq = numpy.array(source, dtype="int32")
-    assert source_seq.ndim == 1
+    source_seqs = [numpy.array(s, dtype="int32") for s in sources]
+    assert source_seqs[0].ndim == 1
     targets_empty_seq = numpy.array([], dtype="int32")  # empty...
     from GeneratingDataset import StaticDataset
     dataset = StaticDataset(
-      data=[{"data": source_seq, "classes": targets_empty_seq}], output_dim=num_outputs)
+      data=[{"data": source_seq, "classes": targets_empty_seq} for source_seq in source_seqs], output_dim=num_outputs)
     dataset.init_seq_order(epoch=1)
-    return self.search_single(dataset=dataset, seq_idx=0, output_layer_name=output_layer_name)
+    seq_idx = 0 if len(sources) == 1 else -1
+    return self.search_single(dataset=dataset, seq_idx=seq_idx, output_layer_name=output_layer_name)
 
-  def search_single_string_to_string_seq(self, source, output_layer_name=None):
+  def search_single_string_to_string_seq(self, sources, output_layer_name=None):
     """
-    :param str source: source as a string
+    :param str|list[str] sources: source text as a string (list for batch translation)
     :param str|None output_layer_name: e.g. "output". if not set, will read from config "search_output_layer"
     :return: list of all hyps, which is a tuple of score and string
     :rtype: list[(float,str)]
@@ -1967,8 +1972,10 @@ class Engine(object):
     target_voc = self.network.extern_data.data["targets"].vocab
     assert source_voc.num_labels == self.network.extern_data.data["data"].dim
     assert target_voc.num_labels == self.network.extern_data.data["classes"].dim
-    source_seq_list = source_voc.get_seq(source)
-    results_raw = self.search_single_seq(source=source_seq_list, output_layer_name=output_layer_name)
+    if not isinstance(sources, list):
+      sources = [sources]
+    source_seq_lists = [source_voc.get_seq(s) for s in sources]
+    results_raw = self.search_single_seq(sources=source_seq_lists, output_layer_name=output_layer_name)
     results = []
     for (score, raw) in results_raw:
       txt = target_voc.get_seq_labels(raw)
