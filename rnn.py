@@ -315,6 +315,18 @@ def initBackendEngine():
         gpu_opts = config.typed_dict.setdefault("tf_session_opts", {}).setdefault("gpu_options", {})
         assert "visible_device_list" not in gpu_opts
         gpu_opts["visible_device_list"] = str(hvd.local_rank())
+        print("Horovod: Using GPU %s." % gpu_opts["visible_device_list"], file=log.v3)
+      else:
+        if hvd.rank() == 0:  # Don't spam in all ranks.
+          print("Horovod: Not using GPU.", file=log.v3)
+      horovod_reduce_type = config.value("horovod_reduce_type", "")
+      if horovod_reduce_type == "":
+        horovod_reduce_type = "grad"
+        config.set("horovod_reduce_type", horovod_reduce_type)
+      else:
+        assert horovod_reduce_type in ["grad", "param"], "config option 'horovod_reduce_type' invalid"
+      if hvd.rank() == 0:  # Don't spam in all ranks.
+        print("Horovod: Reduce type:", horovod_reduce_type, file=log.v3)
     from TFUtil import debugRegisterBetterRepr, setup_tf_thread_pools, print_available_devices
     tf_session_opts = config.typed_value("tf_session_opts", {})
     assert isinstance(tf_session_opts, dict)

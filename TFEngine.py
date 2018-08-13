@@ -445,6 +445,41 @@ class Runner(object):
     error_occured = sum_have_error > 0
     return stop, error_occured
 
+  def _horovod_sync_params(self, local_step, is_final=False):
+    """
+    Horovod reduce type 'param', i.e. each node (rank) does update independently,
+    but after N steps, we average params.
+
+    :param int local_step: step of this epoch
+    :param bool is_final:
+    """
+    if not self.engine.config.is_true("use_horovod"):
+      return
+    if self.engine.config.value("horovod_reduce_type", "") != "param":
+      return
+    if not self._should_train:
+      return
+    sync_step = self.engine.config.int("horovod_param_sync_step", 1)
+    assert sync_step >= 1
+    if not is_final and local_step % sync_step != sync_step - 1:
+      return
+    from TFUtil import global_tensor
+    import horovod.tensorflow as hvd
+
+    def assign_avg_var(var):
+      """
+      :param tf.Variable var:
+      :rtype: tf.Tensor
+      """
+      return tf.assign(var, hvd.allreduce(var.read_value(), average=True))
+
+    assign_ops = []
+    for var in self.engine.updater.trainable_vars:
+      assign_ops.append(global_tensor(
+        lambda: assign_avg_var(var),
+        name="horovod_sync_params__var_%s" % var.name[:-2].replace("/", "_")).op)
+    self.engine.tf_session.run(assign_ops)
+
   def run(self, report_prefix):
     """
     :param str report_prefix: prefix for logging, e.g. "train"
@@ -566,6 +601,7 @@ class Runner(object):
 
         eval_info = self._collect_eval_info(fetches_results=fetches_results)
         self._maybe_handle_extra_fetches(fetches_results)
+        self._horovod_sync_params(local_step=step)
         duration = time.time() - start_time
         self._print_process(report_prefix=report_prefix, step=step, step_duration=duration, eval_info=eval_info)
         if step <= 10 and writer:
@@ -587,6 +623,7 @@ class Runner(object):
 
       self._finalize(num_steps=step)
       self._horovod_finish_data()
+      self._horovod_sync_params(local_step=step, is_final=True)
 
       if self.stats:
         print("Stats:", file=log.v1)

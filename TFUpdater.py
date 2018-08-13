@@ -244,7 +244,7 @@ class Updater(object):
     grads_and_vars = self.optimizer.compute_gradients(
       loss, var_list=trainable_vars_for_gradients,
       aggregation_method=aggregation_method)
-    if self.config.is_true("use_horovod"):
+    if self.config.is_true("use_horovod") and self.config.value("horovod_reduce_type", "") == "grad":
       import horovod.tensorflow as hvd
       grads_and_vars = [
         (hvd.allreduce(grad, average=self.config.is_true("horovod_avg_grad")) if grad is not None else None, var)
