@@ -2277,8 +2277,7 @@ class NativeCodeCompiler(object):
       common_opts += ["-I", include_path]
     compiler_opts = ["-fPIC"]
     common_opts += self._transform_compiler_opts(compiler_opts)
-    if not self.use_cxx11_abi:
-      common_opts += ["-D_GLIBCXX_USE_CXX11_ABI=0"]  # might be obsolete in the future
+    common_opts += ["-D_GLIBCXX_USE_CXX11_ABI=%i" % (1 if self.use_cxx11_abi else 0)]
     common_opts += ["-D%s=%s" % item for item in sorted(self.c_macro_defines.items())]
     common_opts += ["-g"]
     opts = common_opts + [self._c_filename, "-o", self._so_filename]
@@ -2299,7 +2298,7 @@ class NativeCodeCompiler(object):
     with open("%s/compile.log" % self._mod_path, "wb") as f:
       if self.verbose:
         print("%s: write compile log to: %s" % (self.__class__.__name__, f.name))
-      f.write(("+ %s" % " ".join(cmd_args)).encode("utf8"))
+      f.write(("+ %s\n" % " ".join(cmd_args)).encode("utf8"))
       f.write(stdout)
     self._save_info()
     assert not self._need_recompile()
