@@ -132,6 +132,7 @@ from tensorflow.python.ops.data_flow_ops import StagingArea
 from Dataset import Dataset, BatchSetGenerator
 from TFNetwork import ExternData, Data
 from Util import NumbersDict
+from Log import log
 
 
 class PipeBase(object):
@@ -968,7 +969,7 @@ class FeedDictDataProvider(DataProviderBase):
       self.reached_end = not self.batches.has_more()
 
     except Exception as exc:
-      print("Exception in DataProvider thread: %r" % exc)
+      print("Exception in DataProvider thread: %r" % exc, file=log.v1)
       sys.excepthook(*sys.exc_info())
 
     finally:
