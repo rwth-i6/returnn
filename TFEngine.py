@@ -452,17 +452,19 @@ class Runner(object):
 
     :param int local_step: step of this epoch
     :param bool is_final:
+    :return: TF runtime
+    :rtype: float
     """
     if not self.engine.config.is_true("use_horovod"):
-      return
+      return 0.0
     if self.engine.config.value("horovod_reduce_type", "") != "param":
-      return
+      return 0.0
     if not self._should_train:
-      return
+      return 0.0
     sync_step = self.engine.config.int("horovod_param_sync_step", 1)
     assert sync_step >= 1
     if not is_final and local_step % sync_step != sync_step - 1:
-      return
+      return 0.0
     from TFUtil import global_tensor
     import horovod.tensorflow as hvd
 
@@ -478,7 +480,9 @@ class Runner(object):
       assign_ops.append(global_tensor(
         lambda: assign_avg_var(var),
         name="horovod_sync_params__var_%s" % var.name[:-2].replace("/", "_")).op)
+    start_time = time.time()
     self.engine.tf_session.run(assign_ops)
+    return time.time() - start_time
 
   def run(self, report_prefix):
     """
@@ -601,7 +605,7 @@ class Runner(object):
 
         eval_info = self._collect_eval_info(fetches_results=fetches_results)
         self._maybe_handle_extra_fetches(fetches_results)
-        self._horovod_sync_params(local_step=step)
+        elapsed_time_tf += self._horovod_sync_params(local_step=step)
         duration = time.time() - start_time
         self._print_process(report_prefix=report_prefix, step=step, step_duration=duration, eval_info=eval_info)
         if step <= 10 and writer:
