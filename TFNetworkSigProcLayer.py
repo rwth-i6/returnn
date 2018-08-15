@@ -354,6 +354,73 @@ class SplitConcatMultiChannel(_ConcatInputLayer):
       time_dim_axis=1)
 
 
+class MultiChannelStftLayer(_ConcatInputLayer):
+  """
+  The layer applys a STFT to every channel separately and concatenates the frequency domain vectors for every frame
+  """
+  layer_class = "multichannel_stft_layer"
+
+  def __init__(self, frame_shift=160, frame_size=400, fft_size=400, window="hanning", use_rfft=True, nr_of_channels=1, **kwargs):
+    n_out = self._get_n_out_by_fft_config(fft_size, use_rfft, nr_of_channels)
+    if ('n_out' in kwargs and (kwargs['n_out'] != n_out)):
+        raise Exception('argument n_out of layer MultiChannelStftLayer does not match the fft configuration')
+    kwargs['n_out'] = n_out
+    super(MultiChannelStftLayer, self).__init__(**kwargs)
+    tf.assert_equal(nr_of_channels, self._get_nr_of_channels_from_input_placeholder())
+    self._nr_of_channels = nr_of_channels
+    self._frame_shift = frame_shift
+    self._frame_size = frame_size
+    self._fft_size = fft_size
+    self._window = window
+    self._use_rfft = use_rfft
+    self.output.placeholder = self._apply_stft_to_input()
+
+  def _get_nr_of_channels_from_input_placeholder(self):
+    input_placeholder = self.input_data.get_placeholder_as_batch_major()
+    return input_placeholder.shape[2]
+
+  def _apply_stft_to_input(self):
+    input_placeholder = self.input_data.get_placeholder_as_batch_major()
+    if self._use_rfft:
+      channel_wise_stft = tf.contrib.signal.stft(
+        signals=tf.transpose(input_placeholder, [0, 2, 1]),
+        frame_length=self._frame_size,
+        frame_step=self._frame_shift,
+        fft_length=self._fft_size,
+        window_fn=self._get_window,
+        pad_end=False
+      )
+      channel_wise_stft = tf.transpose(channel_wise_stft, [0, 2, 1, 3])
+      batch_dim = tf.shape(channel_wise_stft)[0]
+      time_dim = tf.shape(channel_wise_stft)[1]
+      concat_feature_dim = channel_wise_stft.shape[2] * channel_wise_stft.shape[3]
+      channel_concatenated_stft = tf.reshape(channel_wise_stft, (batch_dim, time_dim, concat_feature_dim))
+      output_placeholder = channel_concatenated_stft
+    return output_placeholder
+
+  def _get_window(self, window_length, dtype):
+    if self._window == "hanning":
+        window = tf.contrib.signal.hann_window(window_length, dtype=dtype)
+    if self._window == "None" or self._window == "ones":
+      window = tf.ones((window_length,), dtype=dtype)
+    return window
+
+  @classmethod
+  def _get_n_out_by_fft_config(cls, fft_size, use_rfft, nr_of_channels):
+    n_out = fft_size
+    if use_rfft:
+        n_out = int(fft_size / 2) + 1
+    n_out *= nr_of_channels
+    return n_out
+
+  @classmethod
+  def get_out_data_from_opts(cls, fft_size, use_rfft, nr_of_channels=1, **kwargs):
+    n_out = cls._get_n_out_by_fft_config(fft_size, use_rfft, nr_of_channels)
+    if 'n_out' not in kwargs:
+      kwargs['n_out'] = n_out
+    return super(MultiChannelStftLayer, cls).get_out_data_from_opts(**kwargs)
+
+
 class TileFeaturesLayer(_ConcatInputLayer):
   """
   This function is tiling features with giving number of repetitions
