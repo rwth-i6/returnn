@@ -38,7 +38,7 @@ class Dataset(object):
         kwargs[key] = value
     set_or_remove("window", config.int('window', 0) or None)
     set_or_remove("context_window", config.typed_value("context_window"))
-    set_or_remove("chunking", config.value("chunking", None))
+    set_or_remove("chunking", config.opt_typed_value("chunking", None))
     set_or_remove("seq_ordering", config.value("batching", None))
     set_or_remove("shuffle_frames_of_nseqs", config.int('shuffle_frames_of_nseqs', 0) or None)
     set_or_remove("min_chunk_size", config.int('min_chunk_size', 0) or None)
@@ -54,7 +54,7 @@ class Dataset(object):
     return cls(**kwargs)
 
   def __init__(self, name="dataset",
-               window=1, context_window=None, chunking="0",
+               window=1, context_window=None, chunking=None,
                seq_ordering='default', shuffle_frames_of_nseqs=0, min_chunk_size=0,
                estimated_num_seqs=None,):
     """
@@ -62,7 +62,7 @@ class Dataset(object):
     :param int window: features will be of dimension window * feature_dim, as we add a context-window around.
       not all datasets support this option.
     :param None|int|dict|NumbersDict context_window: will add this context for each chunk
-    :param str chunking: "chunk_size:chunk_step"
+    :param None|str|int|(int,int)|dict|(dict,dict) chunking: "chunk_size:chunk_step"
     :param str seq_ordering: "batching"-option in config. e.g. "default", "sorted" or "random".
       See self.get_seq_order_for_epoch() for more details.
     :param int shuffle_frames_of_nseqs: shuffles the frames. not always supported
@@ -82,14 +82,31 @@ class Dataset(object):
     self._num_codesteps = None; " :type: int "  # Num output frames, could be different from input, seq2seq, ctc.
     self._num_seqs = 0
     self._estimated_num_seqs = estimated_num_seqs
-    self.chunk_size = int(chunking.split(':')[0])
     self.min_chunk_size = min_chunk_size
-    if ':' in chunking:
-      self.chunk_step = int(chunking.split(':')[1])
-      assert self.chunk_step > 0, "chunking step must be positive"
-    else:
-      self.chunk_step = self.chunk_size
-    assert self.chunk_size >= 0, "chunk size must not be negative"
+    if isinstance(chunking, str):
+      if ":" in chunking:
+        chunking = tuple(map(int, chunking.split(":")))
+      else:
+        chunking = int(chunking)
+    if not isinstance(chunking, (tuple, list)):
+      chunking = (chunking, None)
+    chunk_size, chunk_step = chunking
+    if chunk_size is None:
+      chunk_size = 0
+    if isinstance(chunk_size, dict):
+      chunk_size = NumbersDict(chunk_size)
+    assert isinstance(chunk_size, (int, NumbersDict))
+    if isinstance(chunk_size, int):
+      assert chunk_size >= 0, "chunk size must not be negative"
+    self.chunk_size = chunk_size
+    if chunk_step in (None, 0):
+      chunk_step = self.chunk_size
+    if isinstance(chunk_step, dict):
+      chunk_step = NumbersDict(chunk_step)
+    assert isinstance(chunk_step, (int, NumbersDict))
+    if self.chunk_size != 0 and isinstance(chunk_step, int):
+      assert chunk_step > 0, "chunking step must be positive"
+    self.chunk_step = chunk_step
     if context_window is None:
       context_window = NumbersDict(0)
     elif isinstance(context_window, int):
@@ -551,8 +568,8 @@ class Dataset(object):
   def iterate_seqs(self, chunk_size=None, chunk_step=None, used_data_keys=None):
     """
     Takes chunking into consideration.
-    :param int chunk_size:
-    :param int chunk_step:
+    :param int|NumbersDict chunk_size:
+    :param int|NumbersDict chunk_step:
     :param set(str)|None used_data_keys:
     :return: generator which yields tuples (seq index, seq start, seq end)
     :rtype: list[(int,NumbersDict,NumbersDict)]
