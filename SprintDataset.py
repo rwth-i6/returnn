@@ -51,13 +51,14 @@ class SprintDatasetBase(Dataset):
   SprintCachedSeqsMin = 100
 
   def __init__(self, target_maps=None, str_add_final_zero=False, input_stddev=1.,
-               orth_post_process=None, bpe=None, **kwargs):
+               orth_post_process=None, bpe=None, orth_vocab=None, **kwargs):
     """
     :param dict[str,str|dict] target_maps: e.g. {"speaker": "speaker_map.txt"}
     :param bool str_add_final_zero: adds e.g. "orth0" with '\0'-ending
     :param float input_stddev: if != 1, will divide the input "data" by that
     :param str|list[str]|None orth_post_process: :func:`get_post_processor_function`, applied on orth
     :param None|dict[str] bpe: if given, will be opts for :class:`BytePairEncoding`
+    :param None|dict[str] orth_vocab: if given, orth_vocab is applied to orth and orth_classes is an available target`
     """
     super(SprintDatasetBase, self).__init__(**kwargs)
     if target_maps:
@@ -79,6 +80,10 @@ class SprintDatasetBase(Dataset):
     if bpe:
       from GeneratingDataset import BytePairEncoding
       self.bpe = BytePairEncoding(**bpe)
+    if orth_vocab:
+      assert not bpe, "bpe has its own vocab"
+      from GeneratingDataset import Vocabulary
+      self.orth_vocab = Vocabulary(**orth_vocab)
     self.cond = Condition(lock=self.lock)
     self.add_data_thread_id = thread.get_ident()  # This will be created in the Sprint thread.
     self.ready_for_data = False
@@ -114,6 +119,8 @@ class SprintDatasetBase(Dataset):
     if self.bpe:
       self.num_outputs["bpe"] = (self.bpe.num_labels, 1)
       self.labels["bpe"] = self.bpe.labels
+    if self.orth_vocab:
+      self.num_outputs["orth_classes"] = (self.orth_vocab.num_labels, 1)
     self._base_init()
     # At this point, we are ready for data. In case we don't use the Sprint PythonSegmentOrdering
     # (SprintInterface.getSegmentList()), we must call this at least once.
@@ -293,6 +300,13 @@ class SprintDatasetBase(Dataset):
       assert isinstance(orth, (str, unicode))
       assert "bpe" not in targets
       targets["bpe"] = numpy.array(self.bpe.get_seq(orth.strip()), dtype="int32")
+    if self.orth_vocab:
+      assert not self.orth_post_process
+      assert "orth" in targets
+      orth = targets["orth"]
+      assert isinstance(orth, (str, unicode))
+      assert "orth_classes" not in targets
+      targets["orth_classes"] = numpy.array(self.orth_vocab.get_seq(orth.strip()))
 
     # Maybe convert some targets.
     if self.target_maps:
