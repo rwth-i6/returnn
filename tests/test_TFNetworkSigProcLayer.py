@@ -82,6 +82,49 @@ def test_complexLinearProjectionLayer():
     assert test_clp_output[0, 0, 0] - 6.00722122 < 1e-5
 
 
+def test_MultichannelStftLayer():
+  def _get_ref_output(time_sig, fft_size, frame_size, frame_shift, window_name, frame_nr, channel_nr):
+      import numpy as np
+      frame_start = frame_nr * frame_shift
+      frame_end = frame_start + frame_size
+      frame = time_sig[0, frame_start:frame_end, channel_nr] 
+      if window_name == "hanning":
+          window = np.hanning(frame_size)
+      windowed_frame = window * frame
+      out = np.fft.rfft(windowed_frame, fft_size)
+      return out
+
+  def test_rfftStftConfig_01():
+    with make_scope() as session:
+      layer_name = "stft_layer"
+      fft_size = 400
+      frame_size = 400
+      frame_shift = 160
+      window = "hanning"
+      test_input = np.ones((1, 32000, 2), dtype=np.float32)
+      config = Config()
+      config.update({
+        "num_outputs": int(fft_size / 2) + 1 * test_input.shape[2],
+        "num_inputs": test_input.shape[2],
+        "network": {
+          layer_name: {
+            "class": "multichannel_stft_layer", "frame_shift": frame_shift, "frame_size": frame_size, "window": window, "fft_size": fft_size, "use_rfft": True, "nr_of_channels": 2, "is_output_layer": True}
+        }})
+      network = TFNetwork(config=config, train_flag=True)
+      network.construct_from_dict(config.typed_value("network"))
+      layer = network.layers[layer_name]
+      test_output = session.run(layer.output.placeholder, {network.get_extern_data('data').placeholder: test_input})
+      ref0 = _get_ref_output(test_input, fft_size, frame_size, frame_shift, window, 0, 0)
+      # np.fft.rfft and tensorflow.python.ops.rfft differ a little bit in their 
+      # results, thus an error margin is allowed in the result
+      resultDiff = np.abs(test_output[0, 0, 0:(int(fft_size / 2) + 1)] - ref0)
+      assert np.mean(resultDiff) < 0.02 
+      assert np.max(resultDiff) < 1 
+      pass
+
+  test_rfftStftConfig_01()
+
+
 if __name__ == "__main__":
   better_exchook.install()
   if len(sys.argv) <= 1:
