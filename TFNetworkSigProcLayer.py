@@ -388,6 +388,11 @@ class MultiChannelStftLayer(_ConcatInputLayer):
     self._use_rfft = use_rfft
     self._pad_last_frame = pad_last_frame
     self.output.placeholder = self._apply_stft_to_input()
+    def _compute_size_placeholder():
+      size_placeholder_dict = {}
+      size_placeholder_dict[0] = (self.input_data.size_placeholder[0] - self._frame_size) / self._frame_shift + 1
+      return size_placeholder_dict
+    self.output.size_placeholder = _compute_size_placeholder()
 
   def _get_nr_of_channels_from_input_placeholder(self):
     input_placeholder = self.input_data.get_placeholder_as_batch_major()
