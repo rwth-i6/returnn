@@ -360,7 +360,7 @@ class MultiChannelStftLayer(_ConcatInputLayer):
   """
   layer_class = "multichannel_stft_layer"
 
-  def __init__(self, frame_shift=160, frame_size=400, fft_size=400, window="hanning", use_rfft=True, nr_of_channels=1, **kwargs):
+  def __init__(self, frame_shift=160, frame_size=400, fft_size=400, window="hanning", use_rfft=True, nr_of_channels=1, padd_last_frame=False, **kwargs):
     n_out = self._get_n_out_by_fft_config(fft_size, use_rfft, nr_of_channels)
     if ('n_out' in kwargs and (kwargs['n_out'] != n_out)):
         raise Exception('argument n_out of layer MultiChannelStftLayer does not match the fft configuration')
@@ -373,6 +373,7 @@ class MultiChannelStftLayer(_ConcatInputLayer):
     self._fft_size = fft_size
     self._window = window
     self._use_rfft = use_rfft
+    self._padd_last_frame = padd_last_frame
     self.output.placeholder = self._apply_stft_to_input()
 
   def _get_nr_of_channels_from_input_placeholder(self):
@@ -388,7 +389,7 @@ class MultiChannelStftLayer(_ConcatInputLayer):
         frame_step=self._frame_shift,
         fft_length=self._fft_size,
         window_fn=self._get_window,
-        pad_end=False
+        pad_end=self._padd_last_frame
       )
       channel_wise_stft = tf.transpose(channel_wise_stft, [0, 2, 1, 3])
       batch_dim = tf.shape(channel_wise_stft)[0]
