@@ -1344,11 +1344,12 @@ class Vocabulary(object):
       clz = BytePairEncoding
     return clz(**opts)
 
-  def __init__(self, vocab_file, unknown_label="UNK", num_labels=None):
+  def __init__(self, vocab_file, seq_postfix=None, unknown_label="UNK", num_labels=None):
     """
     :param str vocab_file:
     :param str unknown_label:
     :param int num_labels: just for verification
+    :param list[int]|None seq_postfix: labels will be added to the seq in self.get_seq
     """
     self.vocab_file = vocab_file
     self.unknown_label = unknown_label
@@ -1356,6 +1357,7 @@ class Vocabulary(object):
     self._parse_vocab(vocab_file)
     if num_labels is not None:
       assert self.num_labels == num_labels
+    self.seq_postfix = seq_postfix or []
 
   def __repr__(self):
     return "Vocabulary(%r, num_labels=%s, unknown_label=%r)" % (self.vocab_file, self.num_labels, self.unknown_label)
@@ -1427,7 +1429,7 @@ class Vocabulary(object):
     :rtype: list[int]
     """
     segments = sentence.split()
-    return self.get_seq_indices(segments)
+    return self.get_seq_indices(segments) + self.seq_postfix
 
   def get_seq_indices(self, seq):
     """
@@ -1465,7 +1467,7 @@ class BytePairEncoding(Vocabulary):
     :param list[int]|None seq_postfix: labels will be added to the seq in self.get_seq
     :param str unknown_label:
     """
-    super(BytePairEncoding, self).__init__(vocab_file=vocab_file, unknown_label=unknown_label)
+    super(BytePairEncoding, self).__init__(vocab_file=vocab_file, seq_postfix=seq_postfix, unknown_label=unknown_label)
     # check version information
     bpe_file_first_line = open(bpe_file, "r").readline()
     if bpe_file_first_line.startswith('#version:'):
@@ -1479,7 +1481,6 @@ class BytePairEncoding(Vocabulary):
     self._bpe_codes_reverse = dict([(pair[0] + pair[1], pair) for pair,i in self._bpe_codes.items()])
     self._bpe_encode_cache = {}
     self._bpe_separator = '@@'
-    self.seq_postfix = seq_postfix or []
 
   @staticmethod
   def _get_pairs(word):
@@ -1661,8 +1662,7 @@ class CharacterTargets(Vocabulary):
     :param list[int]|None seq_postfix: labels will be added to the seq in self.get_seq
     :param str unknown_label:
     """
-    super(CharacterTargets, self).__init__(vocab_file=vocab_file, unknown_label=unknown_label)
-    self.seq_postfix = seq_postfix or []
+    super(CharacterTargets, self).__init__(vocab_file=vocab_file, seq_postfix=seq_postfix, unknown_label=unknown_label)
 
   def get_seq(self, sentence):
     """
