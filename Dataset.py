@@ -578,6 +578,8 @@ class Dataset(object):
       chunk_size = self.chunk_size
     if chunk_step is None:
       chunk_step = self.chunk_step
+    chunk_size = NumbersDict(chunk_size)
+    chunk_step = NumbersDict(chunk_step)
     s = 0
     while self.is_less_than_num_seqs(s):
       length = self.get_seq_length(s)
@@ -599,7 +601,8 @@ class Dataset(object):
           if length[key] <= 1:
             keys_with_full_seqs.append(key)
             continue
-          raise Exception("Chunking with multiple data-keys of different length: %r" % length)
+          else:
+            assert chunk_size[key] / chunk_size[default_key] == chunk_step[key] / chunk_step[default_key]
         while length[default_key] > t[default_key]:
           chunk_start = NumbersDict(t)
           chunk_end = NumbersDict.min([t + chunk_size, length])
