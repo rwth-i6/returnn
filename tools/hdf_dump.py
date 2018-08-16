@@ -180,9 +180,8 @@ def init(config_filename, cmd_line_opts, dataset_config_str):
     rnn.initLog()
   else:
     log.initialize(verbosity=[5])
-  print("CRNN dump-dataset starting up.", file=log.v3)
+  print("Returnn hdf_dump starting up.", file=log.v3)
   rnn.initFaulthandler()
-  rnn.initConfigJsonNetwork()
   if config_filename:
     rnn.initData()
     rnn.printTaskProperties()
@@ -198,6 +197,8 @@ def init(config_filename, cmd_line_opts, dataset_config_str):
 def _is_crnn_config(filename):
   if filename.endswith(".gz"):
     return False
+  if filename.endswith(".config"):
+    return True
   try:
     config = Config()
     config.load_file(filename)
