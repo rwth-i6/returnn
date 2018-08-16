@@ -93,19 +93,17 @@ class Dataset(object):
     chunk_size, chunk_step = chunking
     if chunk_size is None:
       chunk_size = 0
-    if isinstance(chunk_size, dict):
-      chunk_size = NumbersDict(chunk_size)
-    assert isinstance(chunk_size, (int, NumbersDict))
-    if isinstance(chunk_size, int):
-      assert chunk_size >= 0, "chunk size must not be negative"
+    assert isinstance(chunk_size, (int, dict, NumbersDict))
+    chunk_size = NumbersDict(chunk_size)
+    assert chunk_size == 0 or chunk_size.min_value() > 0, "chunk size must not be negative"
     self.chunk_size = chunk_size
     if chunk_step in (None, 0):
       chunk_step = self.chunk_size
-    if isinstance(chunk_step, dict):
-      chunk_step = NumbersDict(chunk_step)
-    assert isinstance(chunk_step, (int, NumbersDict))
-    if self.chunk_size != 0 and isinstance(chunk_step, int):
-      assert chunk_step > 0, "chunking step must be positive"
+    assert isinstance(chunk_step, (int, dict, NumbersDict))
+    chunk_step = NumbersDict(chunk_step)
+    if self.chunk_size != 0:
+      assert sorted(chunk_step.keys()) == sorted(chunk_size.keys())
+      assert chunk_step.max_value() > 0, "chunking step must be positive (for some key)"
     self.chunk_step = chunk_step
     if context_window is None:
       context_window = NumbersDict(0)
@@ -590,6 +588,11 @@ class Dataset(object):
           length = NumbersDict({k: length[k] for k in used_data_keys})
         t = length.constant_like(0)
         default_key = "data"
+        if default_key not in used_data_keys:
+          default_key = sorted(used_data_keys)[0]
+        if chunk_step[default_key] == 0:  # allow some keys with zero chunk-step
+          assert chunk_step.max_value() > 0
+          default_key = [key for key in sorted(used_data_keys) if chunk_step[key] > 0][0]
         # There are usually the 'data' (input) and 'classes' (targets) data-keys in `length` but there can be others.
         # We expect them all of the same length so that we can do chunking.
         # In case that some length is 0 or 1,
@@ -682,7 +685,7 @@ class Dataset(object):
     chunk_step = self.chunk_step
     if not recurrent_net:
       if chunk_size != 0:
-        print("Non-recurrent network, chunk size %i:%i ignored" % (chunk_size, chunk_step), file=log.v4)
+        print("Non-recurrent network, chunk size %s:%s ignored" % (chunk_size, chunk_step), file=log.v4)
         chunk_size = 0
     batch = Batch()
     ctx_lr = self._get_context_window_left_right()
