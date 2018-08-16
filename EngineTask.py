@@ -813,7 +813,7 @@ class PriorEstimationTaskThread(TaskThread):
         print("HINT: You can set extract=posteriors-sum in your config to speed up the estimation.", file=log.v1)
       if extract_type.startswith("log-"):
         print("NOTE: Posteriors are averaged in log-space. std-space might be better. Set extract=posteriors-sum.", file=log.v1)
-      if data.chunk_size > 0:
+      if data.chunk_size != 0:
         print("WARNING: Dataset uses chunking. You might want to disable that.", file=log.v1)
 
     def evaluate(self, batchess, results, result_format, num_frames):
