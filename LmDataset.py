@@ -887,7 +887,9 @@ class TranslationDataset(CachedDataset2):
 
   def __init__(self, path, file_postfix, partition_epoch=None, source_postfix="", target_postfix="",
                source_only=False,
-               unknown_label=None, **kwargs):
+               unknown_label=None,
+               use_cache_manager=False,
+               **kwargs):
     """
     :param str path: the directory containing the files
     :param str file_postfix: e.g. "train" or "dev". it will then search for "source." + postfix and "target." + postfix.
@@ -898,11 +900,13 @@ class TranslationDataset(CachedDataset2):
       You might want to add some sentence-end symbol.
     :param bool source_only: if targets are not available
     :param str|None unknown_label: "UNK" or so. if not given, then will not replace unknowns but throw an error
+    :param bool use_cache_manager: uses :func:`Util.cf` for files
     """
     super(TranslationDataset, self).__init__(**kwargs)
     self.path = path
     self.file_postfix = file_postfix
     self.partition_epoch = partition_epoch
+    self._use_cache_manager = use_cache_manager
     self._add_postfix = {"data": source_postfix, "classes": target_postfix}
     from threading import Lock, Thread
     self._lock = Lock()
@@ -971,6 +975,17 @@ class TranslationDataset(CachedDataset2):
       sys.excepthook(*sys.exc_info())
       interrupt_main()
 
+  def _transform_filename(self, filename):
+    """
+    :param str filename:
+    :return: maybe transformed filename, e.g. via cache manager
+    :rtype: str
+    """
+    if self._use_cache_manager:
+      import Util
+      filename = Util.cf(filename)
+    return filename
+
   def _get_data_file(self, prefix):
     """
     :param str prefix: e.g. "source" or "target"
@@ -980,10 +995,10 @@ class TranslationDataset(CachedDataset2):
     import os
     filename = "%s/%s.%s" % (self.path, prefix, self.file_postfix)
     if os.path.exists(filename):
-      return open(filename, "rb")
+      return open(self._transform_filename(filename), "rb")
     if os.path.exists(filename + ".gz"):
       import gzip
-      return gzip.GzipFile(filename + ".gz", "rb")
+      return gzip.GzipFile(self._transform_filename(filename + ".gz"), "rb")
     raise Exception("Data file not found: %r (.gz)?" % filename)
 
   def _get_vocab(self, prefix):
@@ -996,7 +1011,7 @@ class TranslationDataset(CachedDataset2):
     if not os.path.exists(filename):
       raise Exception("Vocab file not found: %r" % filename)
     import pickle
-    vocab = pickle.load(open(filename, "rb"))
+    vocab = pickle.load(open(self._transform_filename(filename), "rb"))
     assert isinstance(vocab, dict)
     return vocab
 
