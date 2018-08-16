@@ -584,15 +584,16 @@ class Dataset(object):
       if chunk_size == 0:
         yield (s, length.constant_like(0), length)
       else:
+        default_key = "data"
         if used_data_keys is not None:
           length = NumbersDict({k: length[k] for k in used_data_keys})
+          if default_key not in used_data_keys:
+            default_key = sorted(used_data_keys)[0]
+          if chunk_step[default_key] == 0:  # allow some keys with zero chunk-step
+            assert chunk_step.max_value() > 0
+            default_key = [key for key in sorted(used_data_keys) if chunk_step[key] > 0][0]
+        assert chunk_step[default_key] > 0
         t = length.constant_like(0)
-        default_key = "data"
-        if default_key not in used_data_keys:
-          default_key = sorted(used_data_keys)[0]
-        if chunk_step[default_key] == 0:  # allow some keys with zero chunk-step
-          assert chunk_step.max_value() > 0
-          default_key = [key for key in sorted(used_data_keys) if chunk_step[key] > 0][0]
         # There are usually the 'data' (input) and 'classes' (targets) data-keys in `length` but there can be others.
         # We expect them all of the same length so that we can do chunking.
         # In case that some length is 0 or 1,
