@@ -609,8 +609,9 @@ class Dataset(object):
           if chunk_step[key] == chunk_step[default_key]:
             raise Exception("Chunking with multiple data-keys of different length: %r" % length)
           else:
-            # Note: We do not check for the total seq length currently, just for the chunk step/size factor.
-            assert chunk_size[key] * chunk_step[default_key] == chunk_step[key] * chunk_size[default_key]
+            nr_of_full_chunks_key = (length[key] - chunk_size[key]) // chunk_step[key] + 1
+            nr_of_full_chunks_default_key = (length[default_key] - chunk_size[default_key]) // chunk_step[default_key] + 1
+            assert nr_of_full_chunks_key == nr_of_full_chunks_default_key
         while length[default_key] > t[default_key]:
           chunk_start = NumbersDict(t)
           chunk_end = NumbersDict.min([t + chunk_size, length])
