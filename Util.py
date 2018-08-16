@@ -988,6 +988,11 @@ class NumbersDict:
   """
 
   def __init__(self, auto_convert=None, numbers_dict=None, broadcast_value=None):
+    """
+    :param dict|NumbersDict|T auto_convert: first argument, so that we can automatically convert/copy
+    :param dict numbers_dict:
+    :param T broadcast_value:
+    """
     if auto_convert is not None:
       assert broadcast_value is None
       assert numbers_dict is None
@@ -1069,6 +1074,13 @@ class NumbersDict:
 
   @classmethod
   def bin_op_scalar_optional(cls, self, other, zero, op):
+    """
+    :param T self:
+    :param T other:
+    :param T zero:
+    :param (T,T)->T op:
+    :rtype: T
+    """
     if self is None and other is None:
       return None
     if self is None:
@@ -1079,6 +1091,14 @@ class NumbersDict:
 
   @classmethod
   def bin_op(cls, self, other, op, zero, result=None):
+    """
+    :param NumbersDict|int|float|T self:
+    :param NumbersDict|int|float|T other:
+    :param (T,T)->T op:
+    :param T zero:
+    :param NumbersDict|None result:
+    :rtype: NumbersDict
+    """
     if not isinstance(self, NumbersDict):
       if isinstance(other, NumbersDict):
         self = other.constant_like(self)
@@ -1153,6 +1173,10 @@ class NumbersDict:
       Then, all(res.values()) == False, even when all other values are True.
       This is sometimes not what we want.
       You can control the behavior via result_with_default.
+
+    :param NumbersDict|T other:
+    :param bool result_with_default:
+    :rtype: NumbersDict
     """
     def op(a, b):
       if a is None:
@@ -1166,9 +1190,19 @@ class NumbersDict:
     return res
 
   def __eq__(self, other):
+    """
+    :param NumbersDict|T other:
+    :return: whether self == other elemwise. see self.elem_eq
+    :rtype: bool
+    """
     return all(self.elem_eq(other).values())
 
   def __ne__(self, other):
+    """
+    :param NumbersDict|T other:
+    :return: not (self == other)
+    :rtype: bool
+    """
     return not (self == other)
 
   def __cmp__(self, other):
@@ -1250,6 +1284,12 @@ class NumbersDict:
     Maximum of our values.
     """
     return max(self.values())
+
+  def min_value(self):
+    """
+    Minimum of our values.
+    """
+    return min(self.values())
 
   def __repr__(self):
     if self.value is None and not self.dict:
