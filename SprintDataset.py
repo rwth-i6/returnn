@@ -80,6 +80,7 @@ class SprintDatasetBase(Dataset):
     if bpe:
       from GeneratingDataset import BytePairEncoding
       self.bpe = BytePairEncoding(**bpe)
+    self.orth_vocab = None
     if orth_vocab:
       assert not bpe, "bpe has its own vocab"
       from GeneratingDataset import Vocabulary
@@ -306,7 +307,7 @@ class SprintDatasetBase(Dataset):
       orth = targets["orth"]
       assert isinstance(orth, (str, unicode))
       assert "orth_classes" not in targets
-      targets["orth_classes"] = numpy.array(self.orth_vocab.get_seq(orth.strip()))
+      targets["orth_classes"] = numpy.array(self.orth_vocab.get_seq(orth.decode("utf8").strip()), dtype="int32")
 
     # Maybe convert some targets.
     if self.target_maps:

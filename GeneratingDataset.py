@@ -1344,7 +1344,7 @@ class Vocabulary(object):
       clz = BytePairEncoding
     return clz(**opts)
 
-  def __init__(self, vocab_file, unknown_label="UNK", num_labels=None, seq_postfix=[]):
+  def __init__(self, vocab_file, unknown_label="UNK", num_labels=None, seq_postfix=None):
     """
     :param str vocab_file:
     :param str unknown_label:
@@ -1357,7 +1357,7 @@ class Vocabulary(object):
     self._parse_vocab(vocab_file)
     if num_labels is not None:
       assert self.num_labels == num_labels
-    self.seq_postfix = seq_postfix
+    self.seq_postfix = seq_postfix or []
 
   def __repr__(self):
     return "Vocabulary(%r, num_labels=%s, unknown_label=%r)" % (self.vocab_file, self.num_labels, self.unknown_label)
