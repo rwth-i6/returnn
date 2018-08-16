@@ -390,7 +390,11 @@ class MultiChannelStftLayer(_ConcatInputLayer):
     self.output.placeholder = self._apply_stft_to_input()
     def _compute_size_placeholder():
       size_placeholder_dict = {}
-      size_placeholder_dict[0] = (self.input_data.size_placeholder[0] - self._frame_size) / self._frame_shift + 1
+      nr_of_full_frames = (self.input_data.size_placeholder[0] - self._frame_size) // self._frame_shift + 1
+      nf_of_paded_frames = 0
+      if (self._pad_last_frame) and ((self.input_data.size_placeholder[0] - self._frame_size) - (nr_of_full_frames - 1) * self._frame_shift > 0):
+        nf_of_paded_frames = 1
+      size_placeholder_dict[0] = nr_of_full_frames + nf_of_paded_frames
       return size_placeholder_dict
     self.output.size_placeholder = _compute_size_placeholder()
 
