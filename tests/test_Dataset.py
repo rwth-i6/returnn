@@ -10,6 +10,7 @@ from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_i
 from GeneratingDataset import GeneratingDataset, DummyDataset, DummyDatasetMultipleSequenceLength
 from EngineBatch import Batch
 from Dataset import DatasetSeq
+from Util import NumbersDict
 import numpy as np
 
 import better_exchook
