@@ -7,7 +7,7 @@ import sys
 sys.path += ["."]  # Python 3 hack
 
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_in, assert_true, assert_false
-from GeneratingDataset import GeneratingDataset, DummyDataset
+from GeneratingDataset import GeneratingDataset, DummyDataset, DummyDatasetMultipleSequenceLength
 from EngineBatch import Batch
 from Dataset import DatasetSeq
 import numpy as np
@@ -59,6 +59,23 @@ def test_iterate_seqs_chunking_1():
   assert_equal(seqs[3], (1, 0, 10))
   assert_equal(seqs[4], (1, 5, 11))
   assert_equal(seqs[5], (1, 10, 11))
+
+
+def test_iterate_seqs_chunking_varying_sequence_length():
+  dataset = DummyDatasetMultipleSequenceLength(input_dim=2, output_dim=3, num_seqs=2, seq_len={'data': 24, 'classes': 12})
+  dataset.init_seq_order(1)
+  seqs = list(dataset.iterate_seqs(chunk_size={'data': 12, 'classes': 6}, chunk_step={'data': 6, 'classes': 3}, used_data_keys=None))
+  for s in seqs:
+    print(s)
+  assert_equal(len(seqs), 8)
+  assert_equal(seqs[0], (0, NumbersDict({'data':0, 'classes': 0}), NumbersDict({'data':12, 'classes': 6})))
+  assert_equal(seqs[1], (0, NumbersDict({'data':6, 'classes': 3}), NumbersDict({'data':18, 'classes': 9})))
+  assert_equal(seqs[2], (0, NumbersDict({'data':12, 'classes': 6}), NumbersDict({'data':24, 'classes': 12})))
+  assert_equal(seqs[3], (0, NumbersDict({'data':18, 'classes': 9}), NumbersDict({'data':24, 'classes': 12})))
+  assert_equal(seqs[4], (1, NumbersDict({'data':0, 'classes': 0}), NumbersDict({'data':12, 'classes': 6})))
+  assert_equal(seqs[5], (1, NumbersDict({'data':6, 'classes': 3}), NumbersDict({'data':18, 'classes': 9})))
+  assert_equal(seqs[6], (1, NumbersDict({'data':12, 'classes': 6}), NumbersDict({'data':24, 'classes': 12})))
+  assert_equal(seqs[7], (1, NumbersDict({'data':18, 'classes': 9}), NumbersDict({'data':24, 'classes': 12})))
 
 
 def test_batches_recurrent_1():

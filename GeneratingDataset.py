@@ -530,6 +530,34 @@ class DummyDataset(GeneratingDataset):
     return DatasetSeq(seq_idx=seq_idx, features=features, targets=targets)
 
 
+class DummyDatasetMultipleSequenceLength(DummyDataset):
+
+  def __init__(self, input_dim, output_dim, num_seqs, seq_len={'data': 10, 'classes':20},
+               input_max_value=10.0, input_shift=None, input_scale=None, **kwargs):
+    super(DummyDatasetMultipleSequenceLength, self).__init__(
+      input_dim=input_dim,
+      output_dim=output_dim,
+      num_seqs=num_seqs,
+      seq_len=seq_len,
+      input_max_value=input_max_value,
+      input_shift=input_shift,
+      input_scale=input_scale,
+      **kwargs
+    )
+
+  def generate_seq(self, seq_idx):
+    seq_len_data = self.seq_len['data']
+    seq_len_classes = self.seq_len['classes']
+    i1 = seq_idx
+    i2 = i1 + seq_len_data * self.num_inputs
+    features = numpy.array([((i % self.input_max_value) + self.input_shift) * self.input_scale
+                            for i in range(i1, i2)]).reshape((seq_len_data, self.num_inputs))
+    i1, i2 = i2, i2 + seq_len_classes
+    targets = numpy.array([i % self.num_outputs["classes"][0]
+                           for i in range(i1, i2)])
+    return DatasetSeq(seq_idx=seq_idx, features=features, targets=targets)
+
+
 class StaticDataset(GeneratingDataset):
   """
   Provide all the data as a list of dict of numpy arrays.
