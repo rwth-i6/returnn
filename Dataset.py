@@ -602,6 +602,7 @@ class Dataset(object):
             keys_with_full_seqs.append(key)
             continue
           else:
+            # TODO: Maybe a more rigorous check is needed here
             assert chunk_size[key] / chunk_size[default_key] == chunk_step[key] / chunk_step[default_key]
         while length[default_key] > t[default_key]:
           chunk_start = NumbersDict(t)
