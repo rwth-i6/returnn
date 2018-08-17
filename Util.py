@@ -27,11 +27,18 @@ if PY3:
   unicode = str
   long = int
   input = builtins.input
+  from io import BytesIO
 else:
   import __builtin__ as builtins
   unicode = builtins.unicode
   long = builtins.long
   input = builtins.raw_input
+  try:
+    # noinspection PyUnresolvedReferences
+    from cStringIO import StringIO as BytesIO
+  except ImportError:
+    # noinspection PyUnresolvedReferences
+    from StringIO import StringIO as BytesIO
 
 my_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -1507,20 +1514,15 @@ def deepcopy(x):
   # See also class Pickler from TaskSystem.
   # Or: https://mail.python.org/pipermail/python-ideas/2013-July/021959.html
   from TaskSystem import Pickler, Unpickler
-  if PY3:
-    from io import BytesIO as StringIO
-  else:
-    # noinspection PyUnresolvedReferences
-    from StringIO import StringIO
 
   def pickle_dumps(obj):
-    sio = StringIO()
+    sio = BytesIO()
     p = Pickler(sio)
     p.dump(obj)
     return sio.getvalue()
 
   def pickle_loads(s):
-    p = Unpickler(StringIO(s))
+    p = Unpickler(BytesIO(s))
     return p.load()
 
   s = pickle_dumps(x)
