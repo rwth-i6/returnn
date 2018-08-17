@@ -84,9 +84,11 @@ def main(argv):
           kwargs["orthography"] = dataset.get_targets("orth", seq_idx)
         if "classes" in dataset.get_target_list():
           kwargs["alignment"] = dataset.get_targets("classes", seq_idx)
+        print("DummySprintExec seq_idx %i feedInputAndTarget(**%r)" % (seq_idx, kwargs))
         SprintAPI.feedInputAndTarget(**kwargs)
       else:
         raise NotImplementedError("targetMode = %s" % targetMode)
+      seq_idx += 1
 
   print("DummySprintExec exit")
   SprintAPI.exit()

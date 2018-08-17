@@ -12,7 +12,7 @@ import sys
 import os
 import TaskSystem
 from TaskSystem import Pickler, Unpickler
-from Util import to_bool, unicode
+from Util import to_bool, unicode, PY3, BytesIO
 
 # Start Sprint PythonSegmentOrder interface. {
 # We use the PythonSegmentOrder just to get an estimate (upper limit) about the number of sequences.
@@ -212,11 +212,17 @@ class ExternSprintDatasetSource:
     self._send("init", (inputDim, outputDim, numSegments))
 
   def _send(self, dataType, args=None):
-    Pickler(self.pipe_c2p).dump((dataType, args))
+    import struct
+    stream = BytesIO()
+    Pickler(stream).dump((dataType, args))
+    raw_data = stream.getvalue()
+    self.pipe_c2p.write(struct.pack("<i", len(raw_data)))
+    self.pipe_c2p.write(raw_data)
     self.pipe_c2p.flush()
 
   def addNewData(self, segmentName, features, targets):
     """
+    :param str segmentName:
     :param numpy.ndarray features: 2D array, (feature,time)
     :param dict[str,numpy.ndarray] targets: each target is either 1D (time->idx) or 2D (time,class)
     """

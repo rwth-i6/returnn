@@ -24,7 +24,7 @@ from Dataset import Dataset, DatasetSeq
 from CachedDataset2 import CachedDataset2
 from Log import log
 from TaskSystem import Unpickler, numpy_copy_and_set_unused
-from Util import eval_shell_str, interrupt_main, unicode
+from Util import eval_shell_str, interrupt_main, unicode, PY3, BytesIO
 
 
 class SprintDatasetBase(Dataset):
@@ -269,6 +269,7 @@ class SprintDatasetBase(Dataset):
     This is called via the Sprint main thread.
     :param numpy.ndarray features: format (input-feature,time) (via Sprint)
     :param dict[str,numpy.ndarray|str] targets: format (time) (idx of output-feature)
+    :param str|None segmentName:
     :returns the sorted seq index
     :rtype: int
     """
@@ -293,6 +294,8 @@ class SprintDatasetBase(Dataset):
       # 'classes' is always the alignment
       assert targets["classes"].shape == (T,), (  # is in format (time,)
         "Number of targets %s does not equal to number of features %s" % (targets["classes"].shape, (T,)))
+    if "orth" in targets:
+      targets["orth"] = targets["orth"].decode("utf8").strip()
     if "orth" in targets and self.orth_post_process:
       targets["orth"] = self.orth_post_process(targets["orth"])
     if self.bpe:
@@ -300,14 +303,14 @@ class SprintDatasetBase(Dataset):
       orth = targets["orth"]
       assert isinstance(orth, (str, unicode))
       assert "bpe" not in targets
-      targets["bpe"] = numpy.array(self.bpe.get_seq(orth.strip()), dtype="int32")
+      targets["bpe"] = numpy.array(self.bpe.get_seq(orth), dtype="int32")
     if self.orth_vocab:
       assert not self.orth_post_process
       assert "orth" in targets
       orth = targets["orth"]
       assert isinstance(orth, (str, unicode))
       assert "orth_classes" not in targets
-      targets["orth_classes"] = numpy.array(self.orth_vocab.get_seq(orth.decode("utf8").strip()), dtype="int32")
+      targets["orth_classes"] = numpy.array(self.orth_vocab.get_seq(orth), dtype="int32")
 
     # Maybe convert some targets.
     if self.target_maps:
@@ -331,7 +334,11 @@ class SprintDatasetBase(Dataset):
       if isinstance(v, unicode):
         v = v.encode("utf8")
       if isinstance(v, (str, bytes)):
-        v = list(map(ord, v))
+        if PY3:
+          assert isinstance(v, bytes)
+          v = list(v)
+        else:
+          v = list(map(ord, v))
         v = numpy.array(v, dtype="uint8")
         targets[key] = v
         if self.str_add_final_zero:
@@ -398,7 +405,8 @@ class SprintDatasetBase(Dataset):
     with self.lock:
       if self.predefined_seq_list_order:
         return len(self.predefined_seq_list_order)
-      assert self.reached_final_seq
+      if not self.reached_final_seq:
+        raise NotImplementedError
       return self.next_seq_to_be_added
 
   def have_seqs(self):
@@ -421,7 +429,10 @@ class SprintDatasetBase(Dataset):
       return sorted(self.added_data[0].features.keys())
 
   def get_target_list(self):
-    return self.get_data_keys()
+    keys = list(self.get_data_keys())
+    if "data" in keys:
+      keys.remove("data")
+    return keys
 
   def set_complete_frac(self, frac):
     self._complete_frac = frac
@@ -560,14 +571,14 @@ class ExternSprintDataset(SprintDatasetBase):
 
     try:
       initSignal, (inputDim, outputDim, num_segments) = self._read_next_raw()
-      assert initSignal == "init"
+      assert initSignal == b"init"
       assert isinstance(inputDim, int) and isinstance(outputDim, int)
       # Ignore num_segments. It can be totally different than the real number of sequences.
       self.setDimensions(inputDim, outputDim)
     except Exception:
       print("ExternSprintDataset: Sprint child process (%r) caused an exception." % args, file=log.v1)
       sys.excepthook(*sys.exc_info())
-      self._join_child()
+      self._exit_child(wait_thread=False)
       self.child_pid = None
       raise Exception("ExternSprintDataset Sprint init failed")
 
@@ -628,7 +639,20 @@ class ExternSprintDataset(SprintDatasetBase):
     return args
 
   def _read_next_raw(self):
-    dataType, args = Unpickler(self.pipe_c2p[0]).load()
+    import struct
+    size_raw = self.pipe_c2p[0].read(4)
+    size, = struct.unpack("<i", size_raw)
+    stream = BytesIO()
+    read_size = 0
+    while read_size < size:
+      read_size += stream.write(self.pipe_c2p[0].read(size - read_size))
+    stream.seek(0)
+    if PY3:
+      # encoding is for converting Python2 strings to Python3.
+      # Cannot use utf8 because Numpy will also encode the data as strings and there we need it as bytes.
+      dataType, args = Unpickler(stream, encoding="bytes").load()
+    else:
+      dataType, args = Unpickler(stream).load()
     return dataType, args
 
   def _join_child(self, wait=True, expected_exit_status=None):
@@ -667,10 +691,18 @@ class ExternSprintDataset(SprintDatasetBase):
           if self.python_exit or not self.child_pid:
             break
 
-          if dataType == "data":
+          if dataType == b"data":
             segmentName, features, targets = args
-            self.addNewData(numpy_copy_and_set_unused(features), numpy_copy_and_set_unused(targets), segmentName=segmentName)
-          elif dataType == "exit":
+            if segmentName is not None:
+              segmentName = segmentName.decode("utf8")
+            assert isinstance(features, numpy.ndarray)
+            if isinstance(targets, dict):
+              targets = {key.decode("utf8"): value for (key, value) in targets.items()}
+            self.addNewData(
+              numpy_copy_and_set_unused(features),
+              numpy_copy_and_set_unused(targets),
+              segmentName=segmentName)
+          elif dataType == b"exit":
             haveSeenTheWhole = True
             break
           else:
@@ -731,7 +763,8 @@ class ExternSprintDataset(SprintDatasetBase):
   @property
   def num_seqs(self):
     with self.lock:
-      assert self._num_seqs is not None
+      if self._num_seqs is None:
+        raise NotImplementedError
       return self._num_seqs
 
 
