@@ -269,8 +269,12 @@ class RecLayer(_ConcatInputLayer):
           layer = get_layer(src)
         return tf.reduce_max(layer.output.get_sequence_lengths(), name="max_seq_len_%s" % layer.tf_scope_name)
 
-      with tf.name_scope("user_max_seq_len"):
-        d["max_seq_len"] = eval(d["max_seq_len"], {"max_len_from": max_len_from, "tf": tf})
+      # Note: Normally we do not expect that anything is added to the TF computation graph
+      # within transform_config_dict, so this is kind of bad practice.
+      # However, we must make sure at this point that any layers will get resolved via get_layer calls.
+      # Also make sure that we do not introduce any new name-scope here
+      # as this would confuse recursive get_layer calls.
+      d["max_seq_len"] = eval(d["max_seq_len"], {"max_len_from": max_len_from, "tf": tf})
 
   @classmethod
   def get_out_data_from_opts(cls, unit, sources=(), initial_state=None, **kwargs):
