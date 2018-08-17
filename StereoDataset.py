@@ -44,10 +44,13 @@ class StereoDataset(CachedDataset2):
       return self._num_seqs
     raise NotImplementedError
 
+  def _get_total_number_of_sequences(self):
+    raise NotImplementedError
+
   @property
   def seqs_per_epoch(self):
     if self._seqs_per_epoch is None:
-      self._seqs_per_epoch = self.num_seqs // self._partition_epoch
+      self._seqs_per_epoch = self._get_total_number_of_sequences() // self._partition_epoch
     return self._seqs_per_epoch
 
   def _collect_single_seq(self, seq_idx):
@@ -179,6 +182,9 @@ class StereoHdfDataset(StereoDataset):
       self._fileHandlers.append(h5py.File(hdfFile, 'r'))
 
   def _calculateNumberOfSequences(self):
+    return self.seqs_per_epoch
+
+  def _get_total_number_of_sequences(self):
     """Calculate and return the number of sequences in the dataset.
     This method also initializes a sequences map which maps sequence
     indices into HDF file handlers.
@@ -297,12 +303,13 @@ class StereoHdfDataset(StereoDataset):
     :rtype: DatasetSeq | None
     :returns: None if seq_idx >= num_seqs or the corresponding sequence.
     """
-    if seq_idx >= self.num_seqs:
+    if self._seq_index_list is None:
+        self.init_seq_order()
+
+    if seq_idx >= len(self._seq_index_list):
       return None
 
     # map the seq_idx to the shuffled sequence indices
-    if self._seq_index_list is None:
-        self.init_seq_order()
     shuf_seq_idx = self._seq_index_list[seq_idx]
     partition_offset = int(np.sum([self._get_partition_size(i1) for i1 in range(self._current_partition)]))
     shuf_seq_idx += partition_offset
