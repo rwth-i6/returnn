@@ -19,7 +19,7 @@ dist: trusty
 # quiet (-qq) to keep log smaller
 # |cat to avoid interactive banner (which blows up the log)
 install:
-  - pip2 install numpy | cat  # need for Python2<->Python3 communication tests
+  - pip2 install --user numpy | cat  # need for Python2<->Python3 communication tests
   - pip install -qq --upgrade pip setuptools wheel
   - pip install --upgrade numpy scipy  | cat
   - pip install -r requirements.txt  | cat
