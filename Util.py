@@ -597,22 +597,28 @@ def find_ranges(l):
   return ranges
 
 
+_thread_join_hack_installed = False
+
+
 def initThreadJoinHack():
-  if PY3:
-    # Not sure if needed, but also, the code below is slightly broken.
+  global _thread_join_hack_installed
+  if _thread_join_hack_installed:  # don't install twice
     return
+  _thread_join_hack_installed = True
   mainThread = threading.currentThread()
   assert isinstance(mainThread, threading._MainThread)
   mainThreadId = thread.get_ident()
 
   # Patch Thread.join().
   join_orig = threading.Thread.join
+
   def join_hacked(threadObj, timeout=None):
     """
     :type threadObj: threading.Thread
     :type timeout: float|None
+    :return: always None
     """
-    if timeout is None and thread.get_ident() == mainThreadId:
+    if thread.get_ident() == mainThreadId and timeout is None:
       # This is a HACK for Thread.join() if we are in the main thread.
       # In that case, a Thread.join(timeout=None) would hang and even not respond to signals
       # because signals will get delivered to other threads and Python would forward
@@ -621,20 +627,59 @@ def initThreadJoinHack():
       # Currently the best solution I can think of:
       while threadObj.isAlive():
         join_orig(threadObj, timeout=0.1)
+    elif thread.get_ident() == mainThreadId and timeout > 0.1:
+      # Limit the timeout. This should not matter for the underlying code.
+      join_orig(threadObj, timeout=0.1)
     else:
       # In all other cases, we can use the original.
       join_orig(threadObj, timeout=timeout)
   threading.Thread.join = join_hacked
 
   # Mostly the same for Condition.wait().
-  cond_wait_orig = threading._Condition.wait
+  if PY3:
+    Condition = threading.Condition
+  else:
+    Condition = threading._Condition
+  cond_wait_orig = Condition.wait
+
   def cond_wait_hacked(cond, timeout=None, *args):
-    if timeout is None and thread.get_ident() == mainThreadId:
-      # Use a timeout anyway. This should not matter for the underlying code.
-      cond_wait_orig(cond, timeout=0.1)
+    if thread.get_ident() == mainThreadId and (timeout is None or timeout > 0.1):
+      # Use a timeout anyway (or shorter). This should not matter for the underlying code.
+      return cond_wait_orig(cond, timeout=0.1)
     else:
-      cond_wait_orig(cond, timeout=timeout)
-  threading._Condition.wait = cond_wait_hacked
+      return cond_wait_orig(cond, timeout=timeout)
+  Condition.wait = cond_wait_hacked
+
+  # And the same for Lock.acquire, very similar to Condition.wait.
+  # However: can't set attributes of built-in/extension type 'thread.lock'.
+  # We could wrap the whole threading.Lock, but that is too annoying for me now...
+  Lock = False
+  if Lock:
+    lock_acquire_orig = Lock.acquire
+
+    # Note: timeout argument was introduced in Python 3.
+    def lock_acquire_hacked(lock, blocking=True, timeout=-1):
+      if not blocking:
+        return lock_acquire_orig(lock, blocking=False)  # no timeout if not blocking
+      # Everything is blocking now.
+      if thread.get_ident() == mainThreadId:
+        if timeout is None or timeout < 0:  # blocking without timeout
+          if PY3:
+            while not lock_acquire_orig(lock, blocking=True, timeout=0.1):
+              pass
+            return True
+          else:  # Python 2. cannot use timeout
+            while not lock_acquire_orig(lock, blocking=False):
+              time.sleep(0.1)
+            return True
+        else:  # timeout is set. (Can only be with Python 3.)
+          # Use a capped timeout. This should not matter for the underlying code.
+          return lock_acquire_orig(lock, blocking=True, timeout=min(timeout, 0.1))
+      # Fallback to default.
+      if PY3:
+        return lock_acquire_orig(lock, blocking=True, timeout=timeout)
+      return lock_acquire_orig(lock, blocking=True)
+    Lock.acquire = lock_acquire_hacked
 
 
 def start_daemon_thread(target, args=()):
@@ -1551,6 +1596,13 @@ class CollectionReadCheckCovered:
 
 
 def which(program):
+  """
+  Finds `program` in some of the dirs of the PATH env var.
+
+  :param str program: e.g. "python"
+  :return: full path, e.g. "/usr/bin/python", or None
+  :rtype: str|None
+  """
   def is_exe(fpath):
     return os.path.isfile(fpath) and os.access(fpath, os.X_OK)
 
