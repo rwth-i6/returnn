@@ -461,9 +461,17 @@ class Dataset(object):
     return None
 
   def get_data_keys(self):
+    """
+    :return: all available data keys (for get_data and all other functions)
+    :rtype: list[str]
+    """
     return ["data"] + self.get_target_list()
 
   def get_target_list(self):
+    """
+    :return: subset of :func:`get_data_keys`. target keys are usually not available during inference
+    :rtype: list[str]
+    """
     return ["classes"]
 
   def get_data_dim(self, key):
