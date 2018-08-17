@@ -647,7 +647,9 @@ class ExternSprintDataset(SprintDatasetBase):
     stream = BytesIO()
     read_size = 0
     while read_size < size:
-      read_size += stream.write(self.pipe_c2p[0].read(size - read_size))
+      data_raw = self.pipe_c2p[0].read(size - read_size)
+      read_size += len(data_raw)
+      stream.write(data_raw)
     stream.seek(0)
     if PY3:
       # encoding is for converting Python2 strings to Python3.
