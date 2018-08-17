@@ -1720,7 +1720,7 @@ class BlissDataset(CachedDataset2):
     self._parse_bliss_xml(filename=path)
     # TODO: loading audio like in TimitDataset, and in parallel
     self._bpe = BytePairEncoding(vocab_file=vocab_file, bpe_file=bpe_file)
-    self.labels = self._bpe.labels
+    self.labels["classes"] = self._bpe.labels
     self.num_outputs = {'data': (self.num_inputs, 2), "classes": (self._bpe.num_labels, 1)}
     print("%s: Loaded %r, num seqs: %i, elapsed: %s" % (
       self.__class__.__name__, path, len(self._seqs), hms_fraction(time.time() - start_time)), file=log.v3)

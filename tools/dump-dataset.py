@@ -116,7 +116,15 @@ def dump_dataset(dataset, options):
       if options.type == "numpy":
         numpy.savetxt("%s%i.targets.%s%s" % (options.dump_prefix, seq_idx, target, options.dump_postfix), targets, fmt='%i')
       elif options.type == "stdout":
-        print("seq %i target %r:" % (seq_idx, target), pretty_print(targets))
+        extra = ""
+        if target in dataset.labels:
+          labels = dataset.labels[target]
+          if len(labels) < 1000 and all([len(l) == 1 for l in labels]):
+            join_str = ""
+          else:
+            join_str = " "
+          extra += " (%r)" % join_str.join(map(dataset.labels[target].__getitem__, targets))
+        print("seq %i target %r: %s%s" % (seq_idx, target, pretty_print(targets), extra))
       elif options.type == "print_shape":
         print("seq %i target %r shape:" % (seq_idx, target), targets.shape)
     seq_len = dataset.get_seq_length(seq_idx)
@@ -175,7 +183,7 @@ def main(argv):
   argparser.add_argument('--startseq', type=int, default=0, help='start seq idx (inclusive) (default: 0)')
   argparser.add_argument('--endseq', type=int, default=10, help='end seq idx (inclusive) or -1 (default: 10)')
   argparser.add_argument('--get_num_seqs', action="store_true")
-  argparser.add_argument('--type', default='stdout', help="'numpy', 'stdout', 'plot', 'null'")
+  argparser.add_argument('--type', default='stdout', help="'numpy', 'stdout', 'plot', 'null' (default 'stdout')")
   argparser.add_argument('--dump_prefix', default='/tmp/crnn.dump-dataset.')
   argparser.add_argument('--dump_postfix', default='.txt.gz')
   argparser.add_argument("--key", default="data", help="data-key, e.g. 'data' or 'classes'. (default: 'data')")

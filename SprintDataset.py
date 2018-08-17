@@ -72,6 +72,7 @@ class SprintDatasetBase(Dataset):
     self.target_maps = target_maps
     self.str_add_final_zero = str_add_final_zero
     self.input_stddev = input_stddev
+    self.labels["orth"] = [chr(i) for i in range(255)]
     self.orth_post_process = None
     if orth_post_process:
       from LmDataset import get_post_processor_function
@@ -80,11 +81,13 @@ class SprintDatasetBase(Dataset):
     if bpe:
       from GeneratingDataset import BytePairEncoding
       self.bpe = BytePairEncoding(**bpe)
+      self.labels["bpe"] = self.bpe.labels
     self.orth_vocab = None
     if orth_vocab:
       assert not bpe, "bpe has its own vocab"
       from GeneratingDataset import Vocabulary
       self.orth_vocab = Vocabulary(**orth_vocab)
+      self.labels["orth_classes"] = self.orth_vocab.labels
     self.cond = Condition(lock=self.lock)
     self.add_data_thread_id = thread.get_ident()  # This will be created in the Sprint thread.
     self.ready_for_data = False
@@ -119,7 +122,6 @@ class SprintDatasetBase(Dataset):
       self.num_outputs["classes"] = (outputDim, 1)
     if self.bpe:
       self.num_outputs["bpe"] = (self.bpe.num_labels, 1)
-      self.labels["bpe"] = self.bpe.labels
     if self.orth_vocab:
       self.num_outputs["orth_classes"] = (self.orth_vocab.num_labels, 1)
     self._base_init()
