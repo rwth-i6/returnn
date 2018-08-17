@@ -68,10 +68,10 @@ class StereoDataset(CachedDataset2):
 
     self._seq_index_list = seq_index
     if epoch is not None:
-      # Give some hint to the user in case he is wondering why the cache is reloading.
       print >> log.v4, "Reinitialize dataset seq order for epoch %i." % epoch
 
     return True
+
 
 class StereoHdfDataset(StereoDataset):
   """A stereo dataset which needs an hdf file as input. The hdf file
@@ -148,14 +148,12 @@ class StereoHdfDataset(StereoDataset):
     """
     self._filePaths = []
     self._fileHandlers = []
-    if hdfFile.endswith('.bundle'):
-      # a bundle file containing a list of hdf files is given
+    if hdfFile.endswith('.bundle'):  # a bundle file containing a list of hdf files is given
       bundle = BundleFile(hdfFile)
       for hdfFilePath in bundle.datasetFilePaths:
         self._filePaths.append(hdfFilePath)
         self._fileHandlers.append(h5py.File(hdfFilePath, 'r'))
-    else:
-      # only a single hdf file is given
+    else:  # only a single hdf file is given
       self._filePaths.append(hdfFile)
       self._fileHandlers.append(h5py.File(hdfFile, 'r'))
 
@@ -207,7 +205,7 @@ class StereoHdfDataset(StereoDataset):
         outputFeatDim = 1
       else:
         outputFeatDim = someSequence.get_data('classes').shape[1]
-      if outputFeatDim == 1 and num_outputs != None:
+      if outputFeatDim == 1 and num_outputs is not None:
         self.num_outputs = {
           'classes': (num_outputs, outputFeatDim)
         }
@@ -298,10 +296,8 @@ class StereoHdfDataset(StereoDataset):
     # optional normalization
     if self._normData is not None:
       assert isinstance(self._normData, NormalizationData)
-      # inputs
       if self._flag_normalizeInputs:
         inputFeatures = StereoHdfDataset._normalizeVector(inputFeatures, self._normData.inputMean, self._normData.inputVariance)
-      # outputs
       if self._flag_normalizeTargets:
         targets = StereoHdfDataset._normalizeVector(targets, self._normData.outputMean, self._normData.outputVariance)
 
@@ -389,7 +385,7 @@ class DatasetWithTimeContext(StereoHdfDataset):
         rightContext.append(np.zeros(bins))
     for t in range(frames):
       f = inputFeatures[t, ...]
-      newFeature = np.concatenate([np.concatenate(leftContext, axis=0), f, np.concatenate(rightContext, axis=0)],axis=0)
+      newFeature = np.concatenate([np.concatenate(leftContext, axis=0), f, np.concatenate(rightContext, axis=0)], axis=0)
       inFeatWithContext.append(newFeature)
       leftContext.popleft()
       leftContext.append(f)

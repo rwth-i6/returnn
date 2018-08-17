@@ -364,13 +364,13 @@ class MultiChannelStftLayer(_ConcatInputLayer):
   def __init__(self, frame_shift, frame_size, fft_size, window="hanning", use_rfft=True, nr_of_channels=1, pad_last_frame=False, **kwargs):
     """
     :param int frame_shift: frame shift for stft in samples
-    :param int frame_size: frame size for stft in samples 
-    :param int fft_size: fft size in samples 
+    :param int frame_size: frame size for stft in samples
+    :param int fft_size: fft size in samples
     :param str window: id of the windowing function used. Possible options are:
       - hanning
     :param bool use_rfft: if set to true a real input signal is expected and only
       the significant half of the FFT bins are returned
-    :param int nr_of_channels: number of input channels 
+    :param int nr_of_channels: number of input channels
     :param bool pad_last_frame: padding of last frame with zeros or discarding of
       last frame
     """
@@ -388,6 +388,7 @@ class MultiChannelStftLayer(_ConcatInputLayer):
     self._use_rfft = use_rfft
     self._pad_last_frame = pad_last_frame
     self.output.placeholder = self._apply_stft_to_input()
+
     def _compute_size_placeholder():
       size_placeholder_dict = {}
       nr_of_full_frames = (self.input_data.size_placeholder[0] - self._frame_size) // self._frame_shift + 1
