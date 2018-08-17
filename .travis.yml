@@ -19,6 +19,7 @@ dist: trusty
 # quiet (-qq) to keep log smaller
 # |cat to avoid interactive banner (which blows up the log)
 install:
+  - pip2 install -qq --user --upgrade pip setuptools wheel six | cat  # Python2<->Python3
   - pip2 install --user -r requirements.txt | cat  # need for Python2<->Python3 communication tests
   - pip install -qq --upgrade pip setuptools wheel
   - pip install --upgrade numpy scipy  | cat
