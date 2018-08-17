@@ -17,7 +17,7 @@ import argparse
 import HDFDataset
 from Dataset import Dataset, init_dataset_via_str
 from Config import Config
-from Util import NumbersDict, human_size, progress_bar_with_time, try_run
+from Util import NumbersDict, human_size, progress_bar_with_time, try_run, PY3
 
 
 def hdf_dataset_init(file_name):
@@ -124,6 +124,8 @@ def hdf_dump_from_dataset(dataset, hdf_dataset, parser_args):
 
     if data_key in dataset.labels:
       labels = dataset.labels[data_key]
+      if PY3:
+        labels = [label.encode("utf8") for label in labels]
       assert len(labels) == dataset.num_outputs[data_key][0]
     else:
       labels = ["%s-class-%i" % (data_key, i) for i in range(dataset.get_data_dim(data_key))]
