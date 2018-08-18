@@ -9,20 +9,25 @@ from Util import NumbersDict
 
 class CachedDataset(Dataset):
 
-  def __init__(self, cache_byte_size=0, **kwargs):
+  def __init__(self, cache_byte_size=0, partition_epoch=1, **kwargs):
+    """
+    :param int cache_byte_size:
+    :param int partition_epoch:
+    """
     super(CachedDataset, self).__init__(**kwargs)
+    self.partition_epoch = partition_epoch
     self.cache_byte_size_total_limit = cache_byte_size
     if cache_byte_size < 0:
       self.cache_byte_size_limit_at_start = 1
     else:
-      self.cache_byte_size_limit_at_start = cache_byte_size * 2 / 3
-      self.cache_byte_size_total_limit = max(cache_byte_size / 3, 1)
+      self.cache_byte_size_limit_at_start = cache_byte_size * 2 // 3
+      self.cache_byte_size_total_limit = max(cache_byte_size // 3, 1)
     self.num_seqs_cached_at_start = 0
     self.cached_bytes_at_start = 0
     self.max_ctc_length = 0
     self.ctc_targets = None
     self.alloc_intervals = None
-    self._seq_start = [] # [numpy.array([0,0])]  # uses sorted seq idx, see set_batching()
+    self._seq_start = []  # [numpy.array([0,0])]  # uses sorted seq idx, see set_batching()
     self._seq_index = []; """ :type: list[int] """  # Via init_seq_order().
     self._index_map = range(len(self._seq_index))
     self._seq_lengths = []; """ :type: list[(int,int)] """  # uses real seq idx
@@ -38,7 +43,7 @@ class CachedDataset(Dataset):
     temp_cache_size_bytes = \
       max(0, self.cache_byte_size_total_limit) - self.cached_bytes_at_start
     self.definite_cache_leftover = temp_cache_size_bytes if self.num_seqs_cached_at_start == self.num_seqs else 0
-    self.cache_num_frames_free = temp_cache_size_bytes / self.nbytes
+    self.cache_num_frames_free = temp_cache_size_bytes // self.nbytes
 
     print("cached %i seqs" % self.num_seqs_cached_at_start,
           "%s GB" % (self.cached_bytes_at_start / float(1024 * 1024 * 1024)),
@@ -53,6 +58,8 @@ class CachedDataset(Dataset):
     Initialize lists:
       self.seq_index  # sorted seq idx
     """
+    if self.partition_epoch != 1:
+      raise NotImplementedError  # TODO, wip...
     old_index_map = self._index_map[:]
     self._index_map = range(self.num_seqs)
     super(CachedDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
@@ -352,6 +359,7 @@ class CachedDataset(Dataset):
 
   def insert_alloc_interval(self, start, end=None):
     return self._modify_alloc_intervals(start, end, True)
+
   def remove_alloc_interval(self, start, end=None):
     return self._modify_alloc_intervals(start, end, False)
 
@@ -426,8 +434,6 @@ class CachedDataset(Dataset):
     d = {"data": lengths[0]}
     for k, l in zip(self.target_keys, lengths[1:]):
       d[k] = l
-    #d.update(self.get_output_lengths)
-    #d.update({k: output_len for k in self.get_target_list()})
     return NumbersDict(d)
 
   def get_seq_start(self, sorted_seq_idx):
@@ -436,7 +442,6 @@ class CachedDataset(Dataset):
     :rtype: (int,int)
     """
     return self._seq_start[sorted_seq_idx]
-    return self._seq_start[self._index_map[sorted_seq_idx]]
 
   def get_times(self, sorted_seq_idx):
     seq_start = self.get_seq_start(sorted_seq_idx)[0]
@@ -444,7 +449,6 @@ class CachedDataset(Dataset):
     return self.timestamps[seq_start:seq_start + seq_len]
 
   def get_input_data(self, sorted_seq_idx):
-    #sorted_seq_idx = self._index_map[sorted_seq_idx]
     seq_idx = self._index_map[sorted_seq_idx]
     idi = self.alloc_interval_index(seq_idx)
     assert idi >= 0, "failed to get data for seq %i" % sorted_seq_idx

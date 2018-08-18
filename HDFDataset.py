@@ -196,6 +196,7 @@ class HDFDataset(CachedDataset):
                       "sequences: %i" % self.num_seqs,
                       "frames: %i" % self.get_num_timesteps()])
 
+
 # ------------------------------------------------------------------------------
 
 class StreamParser(object):
