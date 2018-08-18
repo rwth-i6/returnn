@@ -1,3 +1,4 @@
+
 from __future__ import print_function
 import collections
 import functools as fun
@@ -11,6 +12,7 @@ from CachedDataset2 import CachedDataset2
 from Dataset import Dataset, DatasetSeq
 from Log import log
 
+
 # Common attribute names for HDF dataset, which should be used in order to be proceed with HDFDataset class.
 attr_seqLengths = 'seqLengths'
 attr_inputPattSize = 'inputPattSize'
@@ -18,16 +20,23 @@ attr_numLabels = 'numLabels'
 attr_times = 'times'
 attr_ctcIndexTranscription = 'ctcIndexTranscription'
 
+
 class HDFDataset(CachedDataset):
 
-  def __init__(self, *args, **kwargs):
-    super(HDFDataset, self).__init__(*args, **kwargs)
-    self.files = []; """ :type: list[str] """
+  def __init__(self, files=None, **kwargs):
+    """
+    :param None|list[str] files:
+    """
+    super(HDFDataset, self).__init__(**kwargs)
+    self.files = []; """ :type: list[str] """  # file names
     self.file_start = [0]
     self.file_seq_start = []; """ :type: list[list[int]] """
     self.file_index = []; """ :type: list[int] """
     self.data_dtype = {}; ":type: dict[str,str]"
     self.data_sparse = {}; ":type: dict[str,bool]"
+    if files:
+      for fn in files:
+        self.add_file(fn)
 
   def add_file(self, filename):
     """
@@ -292,6 +301,7 @@ class SegmentAlignmentStreamParser(StreamParser):
   def get_seq_length(self, seq_name):
     return 2 * sum(self.stream['data'][seq_name][:,1])
 
+
 class NextGenHDFDataset(CachedDataset2):
   """
   """
@@ -300,8 +310,13 @@ class NextGenHDFDataset(CachedDataset2):
               'sparse'            : SparseStreamParser,
               'segment_alignment' : SegmentAlignmentStreamParser }
 
-  def __init__(self, input_stream_name, partition_epoch=1, *args, **kwargs):
-    super(NextGenHDFDataset, self).__init__(*args, **kwargs)
+  def __init__(self, input_stream_name, files=None, partition_epoch=1, **kwargs):
+    """
+    :param str input_stream_name:
+    :param None|list[str] files:
+    :param int partition_epoch:
+    """
+    super(NextGenHDFDataset, self).__init__(**kwargs)
 
     self.input_stream_name = input_stream_name
     self.partition_epoch   = partition_epoch
@@ -317,6 +332,9 @@ class NextGenHDFDataset(CachedDataset2):
     self.partitions        = []
     self.current_partition = 1
 
+    if files:
+      for fn in files:
+        self.add_file(fn)
 
   def add_file(self, path):
     self.files.append(path)
@@ -350,7 +368,6 @@ class NextGenHDFDataset(CachedDataset2):
       num_features = [(name, self.num_outputs[name][0], parser.num_features) for name, parser in parsers.items()]
       assert all(nf[1] == nf[2] for nf in num_features), '\n'.join("Number of features does not match for parser %s: %d (config) vs. %d (hdf-file)" % nf for nf in num_features if nf[1] != nf[2])
 
-
   def initialize(self):
     total_seqs               = len(self.all_seq_names)
     seqs_per_epoch           = total_seqs // self.partition_epoch
@@ -362,7 +379,6 @@ class NextGenHDFDataset(CachedDataset2):
     self.partitions = fun.reduce(lambda a, x: a + [a[-1] + x], partition_sizes, [0])  # cumulative sum
 
     super(NextGenHDFDataset, self).initialize()
-
 
   def init_seq_order(self, epoch=None, seq_list=None):
     """
@@ -387,7 +403,6 @@ class NextGenHDFDataset(CachedDataset2):
     partition_offset = self.partitions[self.current_partition]
     parser = self.all_parsers[self.input_stream_name][self.file_indices[partition_offset + orig_seq_idx]]
     return parser.get_seq_length(self._normalize_seq_name(self.all_seq_names[partition_offset + orig_seq_idx]))
-
 
   def _collect_single_seq(self, seq_idx):
     """

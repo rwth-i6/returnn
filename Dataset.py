@@ -847,14 +847,8 @@ def init_dataset(kwargs):
   clazz = get_dataset_class(clazz_name)
   if not clazz:
     raise Exception("Dataset class %r not found" % clazz_name)
-  files = kwargs.pop("files", [])
   obj = clazz(**kwargs)
   assert isinstance(obj, Dataset)
-  if files:
-    from HDFDataset import HDFDataset, NextGenHDFDataset
-    assert isinstance(obj, (HDFDataset, NextGenHDFDataset))
-    for f in files:
-      obj.add_file(f)
   obj.initialize()
   return obj
 

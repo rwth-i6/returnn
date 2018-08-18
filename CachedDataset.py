@@ -1,7 +1,7 @@
+
 from __future__ import print_function
 import gc
 import numpy
-import theano
 from Dataset import Dataset
 from Log import log
 from Util import NumbersDict
@@ -40,9 +40,9 @@ class CachedDataset(Dataset):
     self.definite_cache_leftover = temp_cache_size_bytes if self.num_seqs_cached_at_start == self.num_seqs else 0
     self.cache_num_frames_free = temp_cache_size_bytes / self.nbytes
 
-    print("cached %i seqs" % self.num_seqs_cached_at_start, \
-          "%s GB" % (self.cached_bytes_at_start / float(1024 * 1024 * 1024)), \
-          ("(fully loaded, %s GB left over)" if self.definite_cache_leftover else "(%s GB free)") % \
+    print("cached %i seqs" % self.num_seqs_cached_at_start,
+          "%s GB" % (self.cached_bytes_at_start / float(1024 * 1024 * 1024)),
+          ("(fully loaded, %s GB left over)" if self.definite_cache_leftover else "(%s GB free)") %
           max(temp_cache_size_bytes / float(1024 * 1024 * 1024), 0),
           file=log.v4)
 
@@ -70,7 +70,7 @@ class CachedDataset(Dataset):
 
     if self.num_seqs_cached_at_start != len(seq_index):
       self._seq_index = seq_index
-      self._seq_index_inv = dict(zip(seq_index,range(len(seq_index))))
+      self._seq_index_inv = dict(zip(seq_index, range(len(seq_index))))
       self._init_seq_starts()
       self._init_alloc_intervals()
       self._init_start_cache()
