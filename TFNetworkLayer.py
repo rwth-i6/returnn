@@ -4949,6 +4949,121 @@ class OfficialResNetLayer(_ConcatInputLayer):
     return data
 
 
+class ResnetConv2DLayer(_ConcatInputLayer):
+  ""
+  ""
+  layer_class = "conv2D_resnet"
+  recurrent = True #actually it's a conv net, but it needs time_dim -> it's true
+
+  def __init__(self, filters, kernel_size, strides, data_format='channels_first', conv_time_dim=True, **kwargs):
+    import re
+    super(ResnetConv2DLayer, self).__init__(**kwargs)
+
+    inputs = self.input_data.copy_as_batch_major().placeholder
+
+    if strides > (1, 1) or conv_time_dim:
+      inputs = self.fixed_padding(inputs, kernel_size, data_format, conv_time_dim)
+
+    padding = "VALID" if strides > (1, 1) or conv_time_dim else "SAME"
+
+    output = tf.layers.conv2d(inputs=inputs, filters=filters, kernel_size=kernel_size, strides=strides,
+                              padding=padding, use_bias=False,
+                              kernel_initializer=tf.variance_scaling_initializer(),
+                              data_format=data_format)
+
+    self.output.placeholder = output
+
+    scope_name_prefix = tf.get_variable_scope().name + "/"  # e.g. "layer1/"
+    params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=re.escape(scope_name_prefix))
+    for p in params:
+      if not p.name.startswith(scope_name_prefix):
+        continue
+      assert p.name.startswith(scope_name_prefix) and p.name.endswith(":0")
+      self.params[p.name[len(scope_name_prefix):-2]] = p
+
+    self.output.size_placeholder = self.input_data.size_placeholder.copy()
+
+    if conv_time_dim:
+      self.output.size_placeholder[0] = self.calc_out_dim(in_dim=self.output.size_placeholder[0],
+                                                          filter_size=kernel_size, stride=strides[0], padding=padding)
+
+
+  def fixed_padding(self, inputs, kernel_size, data_format, conv_time_dim):
+    """
+    """
+    pad_total = kernel_size - 1
+    feature_pad_beg = pad_total // 2
+    feature_pad_end = pad_total - feature_pad_beg
+
+    if conv_time_dim:
+      time_pad_beg = 0
+      time_pad_end = 0
+    else:
+      time_pad_beg = feature_pad_beg
+      time_pad_end = feature_pad_end
+
+    if data_format == "channels_first":
+      padded_inputs = tf.pad(inputs, [[0, 0], [0, 0],
+                                      [time_pad_beg, time_pad_end], [feature_pad_beg, feature_pad_end]])
+    else:
+      padded_inputs = tf.pad(inputs, [[0, 0], [time_pad_beg, time_pad_end],
+                                      [feature_pad_end, feature_pad_end], [0, 0]])
+    return padded_inputs
+   
+  @classmethod
+  def calc_out_dim(cls, in_dim, filter_size, stride, padding, dilation_rate=1):
+    """
+    :param int|tf.Tensor|T in_dim: dimension in some axis
+    :param int filter_size: e.g. 2, for the corresponding axis
+    :param int stride: e.g. 1, for the corresponding axis
+    :param int dilation_rate: e.g. 1
+    :param str padding: "valid" or "same"
+    :return: the output dimension
+    :rtype: T
+    """
+    def ceildiv(a, b):
+      return -(-a // b)
+    
+    # See tf.nn.convolution() documentation for more.
+    if padding == "SAME":
+      return ceildiv(in_dim, stride)
+    elif padding == "VALID":
+      max_func = tf.maximum if isinstance(in_dim, tf.Tensor) else max
+      return max_func(ceildiv((in_dim - (filter_size - 1) * dilation_rate), stride), 0)
+    else:
+      raise Exception("invalid padding %r" % padding)
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, filters, kernel_size, strides, data_format="channels_first", conv_time_dim=True, sources=(), **kwargs): 
+    data = get_concat_sources_data_template(sources)
+    data.name = name
+    data.dim = filters
+
+    padding = "VALID" if strides > (1, 1) or conv_time_dim else "SAME"
+
+    time_dim_padding = 0
+    if strides > (1, 1) or conv_time_dim:
+      time_dim_padding = kernel_size // 2
+  
+    if conv_time_dim:
+      data.size_placeholder[0] = cls.calc_out_dim(in_dim=data.size_placeholder[0], filter_size=kernel_size, stride=strides[0], padding=padding)
+      idx = 2 if data_format == "channels_first" else 1
+      idx_shape = cls.calc_out_dim(in_dim=(data.shape[idx] + time_dim_padding), filter_size=kernel_size, stride=strides[1], padding=padding)
+      data.shape = data.shape[:idx] + (idx_shape,) + data.shape[idx+1:]
+    else:
+      pass
+      #TODO
+
+    if data_format == "channels_first":
+      data.time_dim_axis = 3
+      data.shape = (filters,) + data.shape[1:]
+    else:
+      data.time_dim_axis = 1
+      data.shape = data.shape[:-1] + (filters,)
+      
+    return data
+
+
 # ------------------------------------------------------------------------------
 
 class Loss(object):
@@ -4956,7 +5071,7 @@ class Loss(object):
   Base class for all losses.
   """
   class_name = None  # type: str  # used by get_loss_class()
-  recurrent = False  # if this is a frame-wise criteria, this will be False
+  recurrent = False  # if this is a frame-wise cteria, this will be False
 
   def __init__(self, base_network, use_flatten_frames=True, use_normalized_loss=False, scale=1.0):
     """
