@@ -5,12 +5,12 @@ import functools as fun
 import gc
 import h5py
 import numpy
-import random
 import theano
 from CachedDataset import CachedDataset
 from CachedDataset2 import CachedDataset2
 from Dataset import Dataset, DatasetSeq
 from Log import log
+import Util
 
 
 # Common attribute names for HDF dataset, which should be used in order to be proceed with HDFDataset class.
@@ -23,11 +23,13 @@ attr_ctcIndexTranscription = 'ctcIndexTranscription'
 
 class HDFDataset(CachedDataset):
 
-  def __init__(self, files=None, **kwargs):
+  def __init__(self, files=None, use_cache_manager=False, **kwargs):
     """
     :param None|list[str] files:
+    :param bool use_cache_manager: uses :func:`Util.cf` for files
     """
     super(HDFDataset, self).__init__(**kwargs)
+    self._use_cache_manager = use_cache_manager
     self.files = []; """ :type: list[str] """  # file names
     self.file_start = [0]
     self.file_seq_start = []; """ :type: list[list[int]] """
@@ -48,13 +50,15 @@ class HDFDataset(CachedDataset):
     Use load_seqs() to load the actual data.
     :type filename: str
     """
+    if self._use_cache_manager:
+      filename = Util.cf(filename)
     fin = h5py.File(filename, "r")
     decode = lambda s: s if isinstance(s, str) else s.decode('utf-8')
     if 'targets' in fin:
       self.labels = { k : [ decode(item).split('\0')[0] for item in fin["targets/labels"][k][...].tolist() ] for k in fin['targets/labels'] }
     if not self.labels:
       labels = [ item.split('\0')[0] for item in fin["labels"][...].tolist() ]; """ :type: list[str] """
-      self.labels = { 'classes' : labels }
+      self.labels = {'classes': labels}
       assert len(self.labels['classes']) == len(labels), "expected " + str(len(self.labels['classes'])) + " got " + str(len(labels))
     tags = [ decode(item).split('\0')[0] for item in fin["seqTags"][...].tolist() ]; """ :type: list[str] """
     self.files.append(filename)
