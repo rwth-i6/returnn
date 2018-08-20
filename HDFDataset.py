@@ -107,9 +107,15 @@ class HDFDataset(CachedDataset):
     assert self.num_inputs == num_inputs[0], "wrong input dimension in file %s (expected %s got %s)" % (
                                              filename, self.num_inputs, num_inputs[0])
     if 'targets/size' in fin:
-      num_outputs = { k : [fin['targets/size'].attrs[k], len(fin['targets/data'][k].shape)] for k in fin['targets/size'].attrs }
+      num_outputs = {}
+      for k in fin['targets/size'].attrs:
+        if numpy.isscalar(fin['targets/size'].attrs[k]):
+          num_outputs[k] = (fin['targets/size'].attrs[k], len(fin['targets/data'][k].shape))
+        else:  # hdf_dump will give directly as tuple
+          assert fin['targets/size'].attrs[k].shape == (2,)
+          num_outputs[k] = tuple(fin['targets/size'].attrs[k])
     else:
-      num_outputs = { 'classes' : fin.attrs[attr_numLabels] }
+      num_outputs = {'classes': fin.attrs[attr_numLabels]}
     num_outputs["data"] = num_inputs
     if not self.num_outputs:
       self.num_outputs = num_outputs
