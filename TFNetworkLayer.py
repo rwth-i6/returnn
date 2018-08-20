@@ -4956,7 +4956,7 @@ class Loss(object):
   Base class for all losses.
   """
   class_name = None  # type: str  # used by get_loss_class()
-  recurrent = False  # if this is a frame-wise crinteria, this will be False
+  recurrent = False  # if this is a frame-wise criteria, this will be False
 
   def __init__(self, base_network, use_flatten_frames=True, use_normalized_loss=False, scale=1.0):
     """
