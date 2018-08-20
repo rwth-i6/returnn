@@ -66,7 +66,7 @@ class CachedDataset(Dataset):
     else:
       full_epoch = epoch or 1
       if self.partition_epoch != 1:
-        full_epoch = ((epoch or 1) - 1) // self.partition_epoch
+        full_epoch = ((epoch or 1) - 1) // self.partition_epoch + 1
       seq_index = self.get_seq_order_for_epoch(full_epoch, self._num_seqs, lambda s: self._seq_lengths[s][0])
       if self.partition_epoch != 1:
         current_partition = ((epoch or 1) - 1) % self.partition_epoch
