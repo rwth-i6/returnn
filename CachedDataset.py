@@ -2,6 +2,7 @@
 from __future__ import print_function
 import gc
 import numpy
+import functools
 from Dataset import Dataset
 from Log import log
 from Util import NumbersDict
@@ -28,8 +29,8 @@ class CachedDataset(Dataset):
     self.ctc_targets = None
     self.alloc_intervals = None
     self._seq_start = []  # [numpy.array([0,0])]  # uses sorted seq idx, see set_batching()
-    self._seq_index = []; """ :type: list[int] """  # Via init_seq_order().
-    self._index_map = range(len(self._seq_index))
+    self._seq_index = []; """ :type: list[int] """  # Via init_seq_order(). seq_index idx -> hdf seq idx
+    self._index_map = range(len(self._seq_index))  # sorted seq idx -> seq_index idx
     self._seq_lengths = []; """ :type: list[(int,int)] """  # uses real seq idx
     self.tags = []; """ :type: list[str] """  # uses real seq idx
     self.tag_idx = {}; ":type: dict[str,int] "  # map of tag -> real-seq-idx
@@ -58,15 +59,28 @@ class CachedDataset(Dataset):
     Initialize lists:
       self.seq_index  # sorted seq idx
     """
-    if self.partition_epoch != 1:
-      raise NotImplementedError  # TODO, wip...
-    old_index_map = self._index_map[:]
-    self._index_map = range(self.num_seqs)
     super(CachedDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
-    if seq_list:
+    if seq_list is not None:
       seq_index = [self.tag_idx[tag] for tag in seq_list]
     else:
-      seq_index = self.get_seq_order_for_epoch(epoch, self.num_seqs, lambda s: self._seq_lengths[s][0])
+      full_epoch = epoch or 1
+      if self.partition_epoch != 1:
+        full_epoch = ((epoch or 1) - 1) // self.partition_epoch
+      seq_index = self.get_seq_order_for_epoch(full_epoch, self._num_seqs, lambda s: self._seq_lengths[s][0])
+      if self.partition_epoch != 1:
+        current_partition = ((epoch or 1) - 1) % self.partition_epoch
+        total_seqs = self._num_seqs
+        seqs_per_epoch = total_seqs // self.partition_epoch
+        partition_sizes = [seqs_per_epoch + 1] * (total_seqs % self.partition_epoch) \
+                          + [seqs_per_epoch] * (self.partition_epoch - total_seqs % self.partition_epoch)
+        assert sum(partition_sizes) == total_seqs and len(partition_sizes) == self.partition_epoch
+        partitions = functools.reduce(lambda a, x: a + [a[-1] + x], partition_sizes, [0])  # cumulative sum
+        assert len(partitions) == self.partition_epoch + 1
+        seq_index = seq_index[partitions[current_partition]:partitions[current_partition + 1]]
+        assert len(seq_index) == partition_sizes[current_partition]
+
+    old_index_map = self._index_map[:]
+    self._index_map = range(len(seq_index))  # sorted seq idx -> seq_index idx
 
     if self._seq_index == seq_index and self.num_seqs_cached_at_start == len(seq_index):
       return False
@@ -77,12 +91,12 @@ class CachedDataset(Dataset):
 
     if self.num_seqs_cached_at_start != len(seq_index):
       self._seq_index = seq_index
-      self._seq_index_inv = dict(zip(seq_index, range(len(seq_index))))
+      self._seq_index_inv = dict(zip(seq_index, range(len(seq_index))))  # hdf seq idx -> seq_index idx
       self._init_seq_starts()
       self._init_alloc_intervals()
       self._init_start_cache()
     else:
-      self._index_map = [ self._seq_index_inv[i] for i in seq_index ]
+      self._index_map = [self._seq_index_inv[i] for i in seq_index]  # sorted seq idx -> seq_index idx
       if self._index_map == old_index_map:
         return False
     return True
@@ -388,6 +402,8 @@ class CachedDataset(Dataset):
 
   @property
   def num_seqs(self):
+    if self._index_map:
+      return len(self._index_map)
     return self._num_seqs
 
   def is_cached(self, start, end):
