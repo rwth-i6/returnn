@@ -400,7 +400,7 @@ def block_layer(inputs, filters, bottleneck, block_fn, blocks, strides,
 class Model(object):
   """Base class for building the Resnet Model."""
 
-  def __init__(self, num_filters,
+  def __init__(self, resnet_size, num_classes, num_filters,
                conv_time_dim, first_kernel_size, kernel_size, conv_stride,
                first_pool_size, first_pool_stride,
                block_sizes, block_strides, bottleneck=False, resnet_version=DEFAULT_VERSION,
@@ -435,6 +435,7 @@ class Model(object):
     Raises:
       ValueError: if invalid version is selected.
     """
+    self.resnet_size = resnet_size
 
     if not data_format:
       data_format = (
@@ -461,6 +462,7 @@ class Model(object):
       raise ValueError('dtype must be one of: {}'.format(ALLOWED_TYPES))
 
     self.data_format = data_format
+    self.num_classes = num_classes
     self.conv_time_dim = conv_time_dim
     self.num_filters = num_filters
     self.first_kernel_size = first_kernel_size
@@ -626,8 +628,8 @@ class Model(object):
       else:
         inputs = tf.reshape(inputs, [-1, inputs.shape[-1]])
 
-      #let's add final dense layer by "softmax" layer later
-      #inputs = tf.layers.dense(inputs=inputs, units=self.num_classes)
-      inputs = tf.identity(inputs, 'final_output')
+      
+      inputs = tf.layers.dense(inputs=inputs, units=self.num_classes)
+      inputs = tf.identity(inputs, 'final_dense')
 
       return inputs
