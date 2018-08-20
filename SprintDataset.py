@@ -515,13 +515,15 @@ class ExternSprintDataset(SprintDatasetBase):
 
   def _exit_child(self, wait_thread=True):
     if self.child_pid:
-      interrupt = False
       expected_exit_status = 0 if not self.python_exit else None
       if self._join_child(wait=False, expected_exit_status=expected_exit_status) is False:  # Not yet terminated.
         interrupt = not self.reached_final_seq_seen_all
         if interrupt:
           print("ExternSprintDataset: interrupt child proc %i" % self.child_pid, file=log.v5)
           os.kill(self.child_pid, signal.SIGKILL)
+          # Also join such that the process is cleaned up, and pipes get closed.
+          self._join_child(wait=True, expected_exit_status=None)
+          self.child_pid = None
       else:
         self.child_pid = None
       if wait_thread:
@@ -534,7 +536,7 @@ class ExternSprintDataset(SprintDatasetBase):
       try: self.pipe_c2p[0].close()
       except IOError: pass
       if self.child_pid:
-        self._join_child(wait=True, expected_exit_status=0 if not interrupt else None)
+        self._join_child(wait=True, expected_exit_status=0)
         self.child_pid = None
 
   def _start_child(self, epoch):
@@ -722,7 +724,7 @@ class ExternSprintDataset(SprintDatasetBase):
         finally:
           self.seq_list_file = None
 
-      if not self.python_exit and self.child_pid:
+      if not self.python_exit:
         with self.lock:
           self.finishSprintEpoch(seen_all=haveSeenTheWhole)
           if haveSeenTheWhole:
