@@ -4891,24 +4891,28 @@ class OfficialResNetLayer(_ConcatInputLayer):
   layer_class = "official_resnet"
   recurrent = True #actually it's a conv net, but it needs time_dim -> it's true
 
-  def __init__(self, num_filters, kernel_size,
+  def __init__(self, num_classes, final_size, num_filters, kernel_size,
                conv_stride, first_pool_size, first_pool_stride, first_kernel_size=3,
                block_sizes=[5, 5, 5], block_strides=[1, 2, 2], conv_time_dim=False,
-               bottleneck=False, resnet_version=2, data_format=None, **kwargs):
+               bottleneck=False, resnet_size=32, resnet_version=2, data_format=None, **kwargs):
     import re
     from extern.official_tf_resnet.resnet_model import Model
     super(OfficialResNetLayer, self).__init__(**kwargs)
 
-    self.model = Model(num_filters=num_filters, conv_time_dim=conv_time_dim,
+    self.model = Model(resnet_size=resnet_size, num_classes=num_classes,
+                       num_filters=num_filters, conv_time_dim=conv_time_dim,
                        first_kernel_size=first_kernel_size, kernel_size=kernel_size,
                        conv_stride=conv_stride, first_pool_size=first_pool_size,
                        first_pool_stride=first_pool_stride, block_sizes=block_sizes,
-                       block_strides=block_strides, bottleneck=bottleneck,
-                       resnet_version=resnet_version,data_format = data_format)
+                       final_size=final_size, block_strides=block_strides,
+                       bottleneck=bottleneck, resnet_version=resnet_version,
+                       data_format = data_format)
 
     # Model assumes always NHWC input format.
     inputs_data = self.input_data.copy_as_batch_major()
-    assert inputs_data.batch_ndim == 4 and inputs_data.batch_dim_axis == 0 and inputs_data.feature_dim_axis == 3
+    assert inputs_data.batch_ndim == 4 and \
+           inputs_data.batch_dim_axis == 0 and \
+           inputs_data.feature_dim_axis == 3
     output = self.model.__call__(inputs=inputs_data.placeholder, training=self.network.train_flag)
     # Output is logits with [<batch_size>, self.num_classes].
     self.output.placeholder = output
@@ -4926,29 +4930,27 @@ class OfficialResNetLayer(_ConcatInputLayer):
     self.output.size_placeholder = self.input_data.size_placeholder.copy()
     self.output.size_placeholder[0] -= crop
 
-
-
   @classmethod
-  def get_out_data_from_opts(cls, name, bottleneck, conv_time_dim, num_filters, block_sizes=[5, 5, 5], sources=(), **kwargs):
+  def get_out_data_from_opts(cls, name, num_classes, bottleneck, conv_time_dim, num_filters,
+                             block_sizes=[5, 5, 5], sources=(), **kwargs):
 
-    if bottleneck:
-      out_size = num_filters * (4 * 2 ** (len(block_sizes) - 1))
-    else:
-      out_size = num_filters * (2 ** (len(block_sizes) - 1))
+    # if bottleneck:
+    #   out_size = num_filters * (4 * 2 ** (len(block_sizes) - 1))
+    # else:
+    #   out_size = num_filters * (2 ** (len(block_sizes) - 1))
 
     if conv_time_dim:
       data = get_concat_sources_data_template(sources)
       data.name = "%s_output" % name
       data.time_dim_axis = 1
-      data.dim = out_size
+      data.dim = num_classes
 
-      data.shape = data.shape[:-2] + (out_size,)
+      data.shape = data.shape[:-2] + (num_classes,)
     else:
-      data = Data(name="%s_output" % name, shape=(out_size,), dtype="float32", batch_dim_axis=0, time_dim_axis=None)
+      data = Data(name="%s_output" % name, shape=(num_classes,), dtype="float32",
+                  batch_dim_axis=0, time_dim_axis=None)
 
     return data
-
-
 # ------------------------------------------------------------------------------
 
 class Loss(object):
