@@ -40,6 +40,13 @@ class HDFDataset(CachedDataset):
       for fn in files:
         self.add_file(fn)
 
+  @staticmethod
+  def _decode(s):
+    if not isinstance(s, str):
+      s = s.decode("utf-8")
+    s = s.split('\0')[0]
+    return s
+
   def add_file(self, filename):
     """
     Setups data:
@@ -53,21 +60,21 @@ class HDFDataset(CachedDataset):
     if self._use_cache_manager:
       filename = Util.cf(filename)
     fin = h5py.File(filename, "r")
-    decode = lambda s: s if isinstance(s, str) else s.decode('utf-8')
     if 'targets' in fin:
-      self.labels = { k : [ decode(item).split('\0')[0] for item in fin["targets/labels"][k][...].tolist() ] for k in fin['targets/labels'] }
+      self.labels = {
+        k: [self._decode(item) for item in fin["targets/labels"][k][...].tolist()]
+        for k in fin['targets/labels']}
     if not self.labels:
-      labels = [ item.split('\0')[0] for item in fin["labels"][...].tolist() ]; """ :type: list[str] """
+      labels = [item.split('\0')[0] for item in fin["labels"][...].tolist()]; """ :type: list[str] """
       self.labels = {'classes': labels}
       assert len(self.labels['classes']) == len(labels), "expected " + str(len(self.labels['classes'])) + " got " + str(len(labels))
-    tags = [ decode(item).split('\0')[0] for item in fin["seqTags"][...].tolist() ]; """ :type: list[str] """
     self.files.append(filename)
     print("parsing file", filename, file=log.v5)
     if 'times' in fin:
       if self.timestamps is None:
         self.timestamps = fin[attr_times][...]
       else:
-        self.timestamps = numpy.concatenate([self.timestamps, fin[attr_times][...]],axis=0) #.extend(fin[attr_times][...].tolist())
+        self.timestamps = numpy.concatenate([self.timestamps, fin[attr_times][...]], axis=0)
     seq_lengths = fin[attr_seqLengths][...]
     if 'targets' in fin:
       self.target_keys = sorted(fin['targets/labels'].keys())
@@ -77,17 +84,15 @@ class HDFDataset(CachedDataset):
     if len(seq_lengths.shape) == 1:
       seq_lengths = numpy.array(zip(*[seq_lengths.tolist() for i in range(len(self.target_keys)+1)]))
 
-    seq_start = [numpy.zeros((seq_lengths.shape[1],),'int64')]
+    seq_start = [numpy.zeros((seq_lengths.shape[1],), 'int64')]
     if not self._seq_start:
-      self._seq_start = [numpy.zeros((seq_lengths.shape[1],),'int64')]
+      self._seq_start = [numpy.zeros((seq_lengths.shape[1],), 'int64')]
     for l in seq_lengths:
       self._seq_lengths.append(numpy.array(l))
       seq_start.append(seq_start[-1] + l)
-    self.tags += tags
+    self._tags += fin["seqTags"][...].tolist()
     self.file_seq_start.append(seq_start)
     nseqs = len(seq_start) - 1
-    for i in range(nseqs):
-      self.tag_idx[tags[i]] = i + self._num_seqs
     self._num_seqs += nseqs
     self.file_index.extend([len(self.files) - 1] * nseqs)
     self.file_start.append(self.file_start[-1] + nseqs)
@@ -187,9 +192,14 @@ class HDFDataset(CachedDataset):
     gc.collect()
     assert self.is_cached(start, end)
 
+  def _get_tag_by_real_idx(self, real_idx):
+    s = self._tags[real_idx]
+    s = self._decode(s)
+    return s
+
   def get_tag(self, sorted_seq_idx):
     ids = self._seq_index[self._index_map[sorted_seq_idx]]
-    return self.tags[ids]
+    return self._get_tag_by_real_idx(ids)
 
   def is_data_sparse(self, key):
     if key in self.num_outputs:

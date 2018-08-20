@@ -32,8 +32,8 @@ class CachedDataset(Dataset):
     self._seq_index = []; """ :type: list[int] """  # Via init_seq_order(). seq_index idx -> hdf seq idx
     self._index_map = range(len(self._seq_index))  # sorted seq idx -> seq_index idx
     self._seq_lengths = []; """ :type: list[(int,int)] """  # uses real seq idx
-    self.tags = []; """ :type: list[str] """  # uses real seq idx
-    self.tag_idx = {}; ":type: dict[str,int] "  # map of tag -> real-seq-idx
+    self._tags = []; """ :type: list[str|bytes] """  # uses real seq idx. access via _get_tag_by_real_idx
+    self._tag_idx = {}; ":type: dict[str,int] "  # map of tag -> real-seq-idx. call _update_tag_idx
     self.targets = {}
     self.target_keys = []
 
@@ -61,7 +61,8 @@ class CachedDataset(Dataset):
     """
     super(CachedDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
     if seq_list is not None:
-      seq_index = [self.tag_idx[tag] for tag in seq_list]
+      self._update_tag_idx()
+      seq_index = [self._tag_idx[tag] for tag in seq_list]
     else:
       full_epoch = epoch or 1
       if self.partition_epoch != 1:
@@ -100,6 +101,15 @@ class CachedDataset(Dataset):
       if self._index_map == old_index_map:
         return False
     return True
+
+  def _get_tag_by_real_idx(self, real_idx):
+    return self._tags[real_idx]
+
+  def _update_tag_idx(self):
+    if self._tag_idx:
+      return
+    for i in range(self._num_seqs):
+      self._tag_idx[self._get_tag_by_real_idx(i)] = i
 
   def batch_set_generator_cache_whole_epoch(self):
     return True
