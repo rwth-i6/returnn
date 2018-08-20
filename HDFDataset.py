@@ -32,7 +32,7 @@ class HDFDataset(CachedDataset):
     self._use_cache_manager = use_cache_manager
     self.files = []; """ :type: list[str] """  # file names
     self.file_start = [0]
-    self.file_seq_start = []; """ :type: list[list[int]] """
+    self.file_seq_start = []; """ :type: list[numpy.ndarray] """
     self.file_index = []; """ :type: list[int] """
     self.data_dtype = {}; ":type: dict[str,str]"
     self.data_sparse = {}; ":type: dict[str,bool]"
@@ -84,23 +84,25 @@ class HDFDataset(CachedDataset):
     if len(seq_lengths.shape) == 1:
       seq_lengths = numpy.array(zip(*[seq_lengths.tolist() for i in range(len(self.target_keys)+1)]))
 
-    seq_start = [numpy.zeros((seq_lengths.shape[1],), 'int64')]
+    if len(self._seq_lengths) == 0:
+      self._seq_lengths = numpy.array(seq_lengths)
+    else:
+      self._seq_lengths = numpy.concatenate((self._seq_lengths, seq_lengths), axis=0)
     if not self._seq_start:
       self._seq_start = [numpy.zeros((seq_lengths.shape[1],), 'int64')]
-    for l in seq_lengths:
-      self._seq_lengths.append(numpy.array(l))
-      seq_start.append(seq_start[-1] + l)
+    seq_start = numpy.zeros((seq_lengths.shape[0] + 1, seq_lengths.shape[1]), dtype="int64")
+    numpy.cumsum(seq_lengths, axis=0, dtype="int64", out=seq_start[1:])
     self._tags += fin["seqTags"][...].tolist()
     self.file_seq_start.append(seq_start)
     nseqs = len(seq_start) - 1
     self._num_seqs += nseqs
     self.file_index.extend([len(self.files) - 1] * nseqs)
     self.file_start.append(self.file_start[-1] + nseqs)
-    self._num_timesteps += sum([s[0] for s in seq_lengths])
+    self._num_timesteps += numpy.sum(seq_lengths[:, 0])
     if self._num_codesteps is None:
-      self._num_codesteps = [ 0 for i in range(1,len(seq_lengths[0])) ]
-    for i in range(1,len(seq_lengths[0])):
-      self._num_codesteps[i-1] += sum([s[i] for s in seq_lengths])
+      self._num_codesteps = [0 for i in range(1, len(seq_lengths[0]))]
+    for i in range(1, len(seq_lengths[0])):
+      self._num_codesteps[i - 1] += numpy.sum(seq_lengths[:, i])
     if 'maxCTCIndexTranscriptionLength' in fin.attrs:
       self.max_ctc_length = max(self.max_ctc_length, fin.attrs['maxCTCIndexTranscriptionLength'])
     if len(fin['inputs'].shape) == 1:  # sparse

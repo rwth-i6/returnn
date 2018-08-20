@@ -31,7 +31,7 @@ class CachedDataset(Dataset):
     self._seq_start = []  # [numpy.array([0,0])]  # uses sorted seq idx, see set_batching()
     self._seq_index = []; """ :type: list[int] """  # Via init_seq_order(). seq_index idx -> hdf seq idx
     self._index_map = range(len(self._seq_index))  # sorted seq idx -> seq_index idx
-    self._seq_lengths = []; """ :type: list[(int,int)] """  # uses real seq idx
+    self._seq_lengths = numpy.zeros((0, 0))  # real seq idx -> tuple of len of data and all targets
     self._tags = []; """ :type: list[str|bytes] """  # uses real seq idx. access via _get_tag_by_real_idx
     self._tag_idx = {}; ":type: dict[str,int] "  # map of tag -> real-seq-idx. call _update_tag_idx
     self.targets = {}
