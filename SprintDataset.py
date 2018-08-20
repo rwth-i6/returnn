@@ -643,6 +643,8 @@ class ExternSprintDataset(SprintDatasetBase):
   def _read_next_raw(self):
     import struct
     size_raw = self.pipe_c2p[0].read(4)
+    if len(size_raw) < 4:
+      raise EOFError
     size, = struct.unpack("<i", size_raw)
     stream = BytesIO()
     read_size = 0
