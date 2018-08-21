@@ -393,6 +393,22 @@ class Data(object):
     data.feature_dim_axis = feature_dim_axis
     for k, a in other_special_axes.items():
       setattr(data, k, a if (a < feature_dim_axis) else (a + 1))
+    axis_old_wo_batch = self.get_batch_axis_excluding_batch(self.feature_dim_axis)
+    axis_new_wo_batch = data.get_batch_axis_excluding_batch(feature_dim_axis)
+    if self.size_placeholder:
+      new_size_placeholder = {}
+      for i, s in self.size_placeholder.items():
+        if i >= axis_new_wo_batch:
+          if i < axis_old_wo_batch:
+            i += 1
+          else:
+            assert i > axis_new_wo_batch
+        else:  # i < axis_new_wo_batch
+          if i > axis_old_wo_batch:
+            assert i > 0
+            i -= 1
+        new_size_placeholder[i] = s
+      data.size_placeholder = new_size_placeholder
     data._sanity_check()
     return data
 
