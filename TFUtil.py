@@ -65,7 +65,7 @@ class Data(object):
                shape=None, dtype=None,
                placeholder=None,
                sparse=None,
-               dim=None,
+               dim=NotSpecified,
                size_placeholder=None,
                batch_dim_axis=0,
                time_dim_axis=NotSpecified,
@@ -88,7 +88,7 @@ class Data(object):
       if this Data does not have a batch-dim.
     :param int|None time_dim_axis: where we have the time dim axis, after we added the batch-dim.
       this is often 1. however, can be None if there is no time-dim.
-    :param int|None feature_dim_axis: feature dim axis. by default it's the last one
+    :param int|None|NotSpecified feature_dim_axis: feature dim axis. by default it's the last one
     :param dict[int,tf.Tensor] tf.Tensor size_placeholder: for every None in shape, this will describe the size.
       The size is always a tensor of shape (batch,), i.e. the size can be different for each sequence in a batch.
     :param bool available_for_inference: e.g. the extern data "classes" is usually not available for inference
@@ -105,46 +105,71 @@ class Data(object):
       else:
         sparse = False
     self.sparse = sparse
-    if shape is None:
-      assert dim, "no shape specified, need dim"
-      if time_dim_axis is not None:
-        shape = (None,)
-      else:
-        shape = ()
-      if not sparse:
-        shape = shape + (dim,)
-    self.shape = tuple(shape)  # type: tuple[int|None]  # excluding batch-dim. see self.batch_shape
     if dtype is None:
       if sparse:
         dtype = "int32"
       else:
         dtype = "float32"
-    if dim is None and len(shape):
-      assert not sparse, "need dim"
-      dim = shape[-1]
-    self.dim = dim  # type: int
-    self.batch_dim_axis = batch_dim_axis  # type: int|None  # usually not None
-    if time_dim_axis is NotSpecified:
-      if batch_dim_axis is None:
-        time_dim_axis = None
-      elif (sparse and len(shape) >= 1) or ((not sparse) and len(shape) >= 2):
-        if batch_dim_axis >= 1:
-          time_dim_axis = 0
+    self.dtype = dtype  # type: str
+    assert batch_dim_axis is None or isinstance(batch_dim_axis, int)
+    self.batch_dim_axis = batch_dim_axis  # type: int|None  # None -> no batch dim axis
+    if shape is None:
+      if time_dim_axis is NotSpecified:  # need to determine this now
+        if self.batch_dim_axis is None:
+          time_dim_axis = None
         else:
-          time_dim_axis = 1
-      else:
-        time_dim_axis = None
-    if time_dim_axis is not None:
-      assert 0 <= time_dim_axis < self.batch_ndim
-    self.time_dim_axis = time_dim_axis  # type: int|None  # counted with batch-dim
+          # By default if not specified, we have a time dim.
+          taken_axes = {self.batch_dim_axis}
+          if isinstance(feature_dim_axis, int):
+            taken_axes.add(feature_dim_axis)
+          time_dim_axis = [i for i in range(max(taken_axes) + 2) if i not in taken_axes][0]
+      if time_dim_axis is not None:
+        assert time_dim_axis != self.batch_dim_axis
+        shape = (None,) * (self.get_batch_axis_excluding_batch(time_dim_axis) + 1)
+      else:  # no time-dim-axis
+        shape = ()
+      if not sparse and feature_dim_axis is not None:
+        assert dim is not NotSpecified, "no shape specified, not sparse, feature_dim_axis existing -> need dim"
+        if feature_dim_axis is NotSpecified or feature_dim_axis == -1:
+          shape = shape + (dim,)
+        else:
+          assert 0 <= feature_dim_axis != self.batch_dim_axis
+          feature_dim_axis_wo_batch = self.get_batch_axis_excluding_batch(feature_dim_axis)
+          if feature_dim_axis_wo_batch < len(shape):
+            shape = shape[:-feature_dim_axis_wo_batch] + (dim,) + shape[feature_dim_axis_wo_batch + 1:]
+          else:
+            shape = shape + (None,) * (feature_dim_axis_wo_batch - len(shape)) + (dim,)
+            assert len(shape) == feature_dim_axis_wo_batch + 1
+    self.shape = tuple(shape)  # type: tuple[int|None]  # excluding batch-dim. see self.batch_shape
     if feature_dim_axis is not NotSpecified:
       if isinstance(feature_dim_axis, int):
+        assert not self.sparse, "cannot have feature_dim_axis when sparse"
         if feature_dim_axis < 0:
           feature_dim_axis += self.batch_ndim
         assert 0 <= feature_dim_axis < self.batch_ndim
-      if feature_dim_axis != self._default_feature_dim_axis():
-        raise NotImplementedError
-    self.dtype = dtype  # type: str
+    self._feature_dim_axis = feature_dim_axis
+    if time_dim_axis is NotSpecified:
+      if self.batch_dim_axis is None:
+        time_dim_axis = None
+      else:
+        taken_axes = {self.batch_dim_axis}
+        if self.feature_dim_axis is not None:
+          taken_axes.add(self.feature_dim_axis)
+        available_axes = [i for i in range(self.batch_ndim) if i not in taken_axes]
+        if available_axes:
+          time_dim_axis = available_axes[0]
+        else:
+          time_dim_axis = None
+    if time_dim_axis is not None:
+      assert 0 <= time_dim_axis < self.batch_ndim
+    self.time_dim_axis = time_dim_axis  # type: int|None  # counted with batch-dim
+    if dim is NotSpecified:
+      assert not sparse, "need dim (num classes) if sparse"
+      if self.feature_dim_axis is None:
+        dim = None
+      else:
+        dim = self.batch_shape[self.feature_dim_axis]
+    self.dim = dim  # type: int|None
     if placeholder is None and auto_create_placeholders:
       with tf.name_scope("extern_data/placeholders/%s/" % name):
         placeholder = tf.placeholder(**self.get_placeholder_kwargs(with_batch=True))
@@ -170,6 +195,19 @@ class Data(object):
       assert self.sparse, "%s should represent indices of %s" % (self, vocab)
       assert self.dim == vocab.num_labels, "%s dims do not match with vocab %s" % (self, vocab)
     self.vocab = vocab
+    self._sanity_check()
+
+  def _sanity_check(self):
+    for axis_name, axis in self.get_special_axes_dict().items():
+      assert axis is None or 0 <= axis < self.batch_ndim, "axis %s (%i) invalid" % (axis_name, axis)
+    if self.batch_dim_axis is not None:
+      for axis_name, axis in self.get_special_axes_dict(include_batch_dim_axis=False).items():
+        assert axis != self.batch_dim_axis, "axis %s (%i) must be different from batch_dim_axis (%i)" % (
+          axis_name, axis, self.batch_dim_axis)
+    if self.sparse:
+      assert self.feature_dim_axis is None, "If sparse, there cannot be a feature dim axis."
+    if self.feature_dim_axis is not None:
+      assert self.dim == self.batch_shape[self.feature_dim_axis]
 
   def get_placeholder_kwargs(self, with_batch=True):
     return dict(name=self.name, dtype=self.dtype, shape=self.batch_shape if with_batch else self.shape)
@@ -189,7 +227,7 @@ class Data(object):
 
   def get_kwargs(self):
     keys = ["name", "shape", "dtype", "sparse", "dim", "batch_dim_axis", "time_dim_axis"]
-    if self.feature_dim_axis != self._default_feature_dim_axis():
+    if self._feature_dim_axis is not NotSpecified:
       keys += ["feature_dim_axis"]
     if not self.available_for_inference:
       keys += ["available_for_inference"]
@@ -214,7 +252,7 @@ class Data(object):
       keys.append("available_for_inference")
     if self.beam_size is not None:
       keys.append("beam_size")
-    return "Data(%s)" % ", ".join(["%s=%r" % (key, getattr(self, key, NotSpecified)) for key in keys])
+    return "Data(%s)" % ", ".join(["%s=%r" % (key, getattr(self, key)) for key in keys])
 
   def __repr__(self):
     return self.get_description()
@@ -628,6 +666,10 @@ class Data(object):
     return self.batch_dim_axis == 0
 
   def _default_feature_dim_axis(self):
+    """
+    :return: feature dim axis, counted with batch-dim
+    :rtype: int|None
+    """
     if self.sparse:
       return None
     if not self.shape:
@@ -640,11 +682,19 @@ class Data(object):
     :return: feature dim axis, counted with batch-dim
     :rtype: int|None
     """
+    if self._feature_dim_axis is not NotSpecified:
+      return self._feature_dim_axis
     return self._default_feature_dim_axis()
 
   @feature_dim_axis.setter
   def feature_dim_axis(self, value):
-    assert value == self.feature_dim_axis, "feature_dim_axis cannot be set at the moment"
+    """
+    :param int|None|NotSpecified value:
+    """
+    assert value is NotSpecified or value is None or isinstance(value, int)
+    if isinstance(value, int):
+      assert 0 <= value < self.batch_ndim
+    self._feature_dim_axis = value
 
   @property
   def time_dim_axis_excluding_batch(self):

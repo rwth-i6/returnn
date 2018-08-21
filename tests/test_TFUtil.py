@@ -159,7 +159,13 @@ def test_Data_feature_dim_axis_btd():
   d1 = Data(name="d1", shape=(None, 11), feature_dim_axis=-1)
   d2 = Data(name="d2", shape=(None, 11), feature_dim_axis=2)
   d3 = Data(name="d3", shape=(None, 11))
-  assert d1.feature_dim_axis == d2.feature_dim_axis == d3.feature_dim_axis == 2
+  d4 = Data(name="d4", feature_dim_axis=2, dim=11)
+  assert d1.batch_dim_axis == d2.batch_dim_axis == d3.batch_dim_axis == d4.batch_dim_axis == 0
+  assert d1.time_dim_axis == d2.time_dim_axis == d3.time_dim_axis == d4.time_dim_axis == 1
+  assert d1.feature_dim_axis == d2.feature_dim_axis == d3.feature_dim_axis == d4.feature_dim_axis == 2
+  assert d1.batch_shape == d2.batch_shape == d3.batch_shape == d4.batch_shape == (None, None, 11)
+  assert d1._feature_dim_axis == 2
+  assert d3._feature_dim_axis is NotSpecified
 
 
 def test_Data_feature_dim_axis_none():
@@ -168,7 +174,72 @@ def test_Data_feature_dim_axis_none():
   d3 = Data(name="d3", shape=(None,), sparse=True, dim=7)
   d4 = Data(name="d4", shape=(None,), sparse=True, dim=7, feature_dim_axis=None)
   assert d1.feature_dim_axis == d2.feature_dim_axis == d3.feature_dim_axis == d4.feature_dim_axis == None
+  assert d1._feature_dim_axis is NotSpecified
+  assert d2._feature_dim_axis is None
 
+
+def test_Data_feature_dim_axis_bdt():
+  d1 = Data(name="d1", shape=(11, None), feature_dim_axis=1)
+  d2 = Data(name="d2", time_dim_axis=2, feature_dim_axis=1, dim=11)
+  d3 = Data(name="d3", dim=11, feature_dim_axis=1)  # will add time-dim by default
+  assert d1.batch_ndim == d2.batch_ndim == d3.batch_ndim == 3
+  assert d1.batch_dim_axis == d2.batch_dim_axis == d3.batch_dim_axis == 0
+  assert d1.feature_dim_axis == d2.feature_dim_axis == d3.feature_dim_axis == 1
+  assert d1.time_dim_axis == d2.time_dim_axis == d3.time_dim_axis == 2
+  assert d1.dim == d2.dim == d3.dim == 11
+  assert d1.batch_shape == d2.batch_shape == d3.batch_shape == (None, 11, None)
+
+
+def test_Data_feature_dim_axis_bd():
+  d1 = Data(name="d1", time_dim_axis=None, dim=11)
+  d2 = Data(name="d2", shape=(11,))
+  assert d1.batch_dim_axis == d2.batch_dim_axis == 0
+  assert d1.time_dim_axis == d2.time_dim_axis == None
+  assert d1.feature_dim_axis == d2.feature_dim_axis == 1
+  assert d1.dim == d2.dim == 11
+  assert d1.batch_shape == d2.batch_shape == (None, 11)
+
+
+def test_Data_feature_dim_axis_d():
+  d1 = Data(name="d1", batch_dim_axis=None, time_dim_axis=None, dim=11)
+  d2 = Data(name="d2", batch_dim_axis=None, shape=(11,))
+  assert d1.batch_dim_axis == d2.batch_dim_axis == None
+  assert d1.time_dim_axis == d2.time_dim_axis == None
+  assert d1.feature_dim_axis == d2.feature_dim_axis == 0
+  assert d1.dim == d2.dim == 11
+  assert d1.batch_shape == d2.batch_shape == (11,)
+
+
+def test_Data_feature_dim_axis_NHWC():
+  d1 = Data(name="d1", shape=(None, None, 11))
+  d2 = Data(name="d2", shape=(None, None, 11), feature_dim_axis=-1)
+  d3 = Data(name="d3", dim=11, feature_dim_axis=3)
+  assert d1.batch_ndim == d2.batch_ndim == d3.batch_ndim == 4
+  assert d1.batch_dim_axis == d2.batch_dim_axis == d3.batch_dim_axis == 0
+  assert d1.time_dim_axis == d2.time_dim_axis == d3.time_dim_axis == 1
+  assert d1.feature_dim_axis == d2.feature_dim_axis == d3.feature_dim_axis == 3
+  assert d1.dim == d2.dim == d3.dim == 11
+  assert d1.batch_shape == d2.batch_shape == d3.batch_shape == (None, None, None, 11)
+
+
+def test_Data_feature_dim_axis_NCHW():
+  d1 = Data(name="d1", shape=(11, None, None), feature_dim_axis=1)
+  d2 = Data(name="d2", shape=(11, None, None), time_dim_axis=2, feature_dim_axis=1, dim=11)
+  assert d1.batch_ndim == d2.batch_ndim == 4
+  assert d1.batch_dim_axis == d2.batch_dim_axis == 0
+  assert d1.feature_dim_axis == d2.feature_dim_axis == 1
+  assert d1.time_dim_axis == d2.time_dim_axis == 2
+  assert d1.dim == d2.dim == 11
+  assert d1.batch_shape == d2.batch_shape == (None, 11, None, None)
+
+
+def test_Data_scalar():
+  d1 = Data(name="d1", batch_dim_axis=None, time_dim_axis=None, feature_dim_axis=None)
+  assert d1.batch_dim_axis is None
+  assert d1.time_dim_axis is None
+  assert d1.feature_dim_axis is None
+  assert d1.dim is None
+  assert d1.batch_shape == ()
 
 
 def test_get_initializer_zero():
