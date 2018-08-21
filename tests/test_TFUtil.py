@@ -278,6 +278,24 @@ def test_Data_copy_template_excluding_time_dim_explicit_feature():
   assert d2.batch_shape == (None, 12) and d2.time_dim_axis is None and d2.feature_dim_axis == 1
 
 
+def test_Data_copy_add_spatial_dim_no_batch():
+  d1 = Data(name='d1', shape=(3,), batch_dim_axis=None, time_dim_axis=None)
+  assert d1.batch_dim_axis is None and d1.time_dim_axis is None and d1.feature_dim_axis == 0
+  assert d1.batch_shape == (3,) and d1.dim == 3
+  d2 = d1.copy_add_spatial_dim(0)
+  assert d2.batch_dim_axis is None and d2.time_dim_axis == 0 and d2.feature_dim_axis == 1
+  assert d2.batch_shape == (1, 3) and d2.dim == 3
+
+
+def test_Data_copy_add_spatial_dim_no_batch_explicit_feature():
+  d1 = Data(name='d1', shape=(3,), batch_dim_axis=None, time_dim_axis=None, feature_dim_axis=0)
+  assert d1.batch_dim_axis is None and d1.time_dim_axis is None and d1.feature_dim_axis == 0
+  assert d1.batch_shape == (3,) and d1.dim == 3
+  d2 = d1.copy_add_spatial_dim(0)
+  assert d2.batch_dim_axis is None and d2.time_dim_axis == 0 and d2.feature_dim_axis == 1
+  assert d2.batch_shape == (1, 3) and d2.dim == 3
+
+
 def test_get_initializer_zero():
   shape = (2, 3)
   initializer = get_initializer(0.0)

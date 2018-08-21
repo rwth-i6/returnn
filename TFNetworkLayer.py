@@ -932,6 +932,7 @@ class LayerBase(object):
           zeroed_src_shape[src_output.batch_dim_axis] = batch_dim
         src_output.placeholder = tf.zeros(
           zeroed_src_shape, dtype=src_output.dtype, name="init_%s_zeros" % src.name)
+        src_output.sanity_check()
         zeroed_src = InternalLayer(name="%s_zeroed" % src.name, output=src_output, network=src.network)
         zeroed_sources.append(zeroed_src)
       layer = cls(name=name, output=output.copy(), sources=tuple(zeroed_sources), **kwargs)
@@ -1062,6 +1063,7 @@ class ReuseParams:
         output = layer_class.get_out_data_from_opts(**layer_desc).copy()
         output.placeholder = tf.zeros(
           [d or 1 for d in output.batch_shape], dtype=output.dtype, name="%s_dummy" % output.name)
+        output.sanity_check()
         return InternalLayer(name=layer_name, network=self.network, output=output)
 
       layer_desc = dep_loop_exception.net_dict[self.layer_name].copy()

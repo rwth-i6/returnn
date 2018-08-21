@@ -195,9 +195,9 @@ class Data(object):
       assert self.sparse, "%s should represent indices of %s" % (self, vocab)
       assert self.dim == vocab.num_labels, "%s dims do not match with vocab %s" % (self, vocab)
     self.vocab = vocab
-    self._sanity_check()
+    self.sanity_check()
 
-  def _sanity_check(self):
+  def sanity_check(self):
     for axis_name, axis in self.get_special_axes_dict().items():
       assert axis is None or 0 <= axis < self.batch_ndim, "axis %s (%i) invalid" % (axis_name, axis)
     if self.batch_dim_axis is not None:
@@ -246,6 +246,8 @@ class Data(object):
       keys.append("batch_dim_axis")
     if self.time_dim_axis is None or self.time_dim_axis >= 2:
       keys.append("time_dim_axis")
+    if self._feature_dim_axis is not NotSpecified:
+      keys.append("feature_dim_axis")
     if with_name:
       keys.insert(0, "name")
     if with_placeholder:
@@ -296,7 +298,7 @@ class Data(object):
       if data.batch_dim_axis <= data.time_dim_axis:
         data.batch_dim_axis += 1
       data.time_dim_axis = 0
-    data._sanity_check()
+    data.sanity_check()
     return data
 
   def copy_with_batch_dim_axis(self, batch_dim_axis):
@@ -318,7 +320,7 @@ class Data(object):
       data.batch_dim_axis = batch_dim_axis
       for k, a in other_special_axes.items():
         setattr(data, k, data.get_batch_axis(a))
-    data._sanity_check()
+    data.sanity_check()
     return data
 
   def copy_with_time_dim_axis(self, time_dim_axis):
@@ -352,7 +354,7 @@ class Data(object):
           axis_wo_b = data.get_batch_axis_excluding_batch(axis_wb)
           assert axis_wo_b is not None
           data.size_placeholder[axis_wo_b] = size
-    data._sanity_check()
+    data.sanity_check()
     return data
 
   def copy_as_bt_or_tb_major(self):
@@ -409,7 +411,7 @@ class Data(object):
             i -= 1
         new_size_placeholder[i] = s
       data.size_placeholder = new_size_placeholder
-    data._sanity_check()
+    data.sanity_check()
     return data
 
   def copy_as_batch_feature_major(self):
@@ -439,7 +441,7 @@ class Data(object):
     other_special_axes = self.get_special_axes_dict(counted_with_batch_dim=True, only_available=True)
     for k, a in other_special_axes.items():
       setattr(data, k, a if (a < batch_dim_axis) else (a + 1))
-    data._sanity_check()
+    data.sanity_check()
     return data
 
   def copy_add_spatial_dim(self, spatial_dim_axis=None):
@@ -466,7 +468,7 @@ class Data(object):
       counted_with_batch_dim=True, only_available=True, include_batch_dim_axis=True)
     for k, a in other_special_axes.items():
       setattr(data, k, a if (a < spatial_dim_axis) else (a + 1))
-    data._sanity_check()
+    data.sanity_check()
     return data
 
   def copy_add_feature_dim(self):
@@ -492,7 +494,7 @@ class Data(object):
     v.feature_dim_axis = new_feature_dim_axis
     if v.placeholder is not None:
       v.placeholder = tf.expand_dims(v.placeholder, new_feature_dim_axis, name="copy_add_feature_dim")
-    v._sanity_check()
+    v.sanity_check()
     return v
 
   def copy_split_feature_dim(self, new_feature_dim):
@@ -525,7 +527,7 @@ class Data(object):
                    [old_feature_dim, new_feature_dim] +
                    old_shape[new_feature_dim_axis + 1:])
       v.placeholder = tf.reshape(v.placeholder, new_shape, name="copy_split_feature_dim")
-    v._sanity_check()
+    v.sanity_check()
     return v
 
   def copy_compatible_to(self, data, unbroadcast=False, data_dyn_shape=None):
@@ -588,7 +590,7 @@ class Data(object):
       v.shape = tuple(new_shape)
       if v.placeholder is not None:
         v.placeholder.set_shape(v.batch_shape)
-    v._sanity_check()
+    v.sanity_check()
     return v
 
   def copy_time_flattened(self):
@@ -609,7 +611,7 @@ class Data(object):
       if data.time_dim_axis_excluding_batch in data.size_placeholder:
         del data.size_placeholder[data.time_dim_axis_excluding_batch]
     data.time_dim_axis = None
-    data._sanity_check()
+    data.sanity_check()
     return data
 
   def copy_extend_with_beam(self, beam_size, dyn_beam_size=None):

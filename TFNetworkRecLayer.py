@@ -960,6 +960,7 @@ class _SubnetworkRecCell(object):
             lambda: inputs_moved_out_tas[layer_name].read(i - 1))
         else:
           output.placeholder = inputs_moved_out_tas[layer_name].read(i)
+        output.sanity_check()
       layer = self.net.add_layer(name=name, output=output, layer_class=InternalLayer)
       inputs_moved_out[name] = layer
       return layer
