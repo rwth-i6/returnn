@@ -100,10 +100,7 @@ class Data(object):
     assert dtype is None or isinstance(dtype, str)
     self.name = name
     if sparse is None:
-      if dtype and (dtype.startswith("int") or dtype.startswith("uint")):
-        sparse = True
-      else:
-        sparse = False
+      sparse = False
     self.sparse = sparse
     if dtype is None:
       if sparse:

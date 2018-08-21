@@ -242,6 +242,12 @@ def test_Data_scalar():
   assert d1.batch_shape == ()
 
 
+def test_Data_scalar_default():
+  d1 = Data(name="d1", shape=(), dtype="int32", batch_dim_axis=None)
+  assert not d1.sparse
+  assert d1.batch_shape == () and d1.dim is None and d1.feature_dim_axis is None and d1.batch_dim_axis is None
+
+
 def test_Data_copy_add_feature_dim():
   d1 = Data(name="d1", shape=(None, 11))
   d2 = d1.copy_add_feature_dim()
