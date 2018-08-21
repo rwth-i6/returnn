@@ -2825,19 +2825,12 @@ class ConvLayer(_ConcatInputLayer):
       input_data = input_data.copy_as_batch_feature_major()
     else:
       input_data = input_data.copy_with_feature_dim_axis(-1)
-    # We want to prepare the input data such that the batch-dim is the very first,
-    # the feature-dim is the very last, and all in between are where we convolve over.
-    # In the common terminology, this is the "NHWC" format, which is the default for TF convolution.
-    x = input_data.placeholder
-    dyn_axes = input_data.get_spatial_axes()  # conv-dims, or also called spatial dims
-    static_axes = input_data.get_feature_axes()  # feature-dims
-    assert dyn_axes + static_axes == list(range(input_data.ndim)), (
-      "we expect the static dims at the end. input data is: %r" % input_data.get_description())
-    assert len(static_axes) == 1, "this should be our single input feature dim now. otherwise use input_add_feature_dim"
-    assert dyn_axes == list(range(len(filter_size))), (
+    assert input_data.feature_dim_axis is not None, (
+      "this should be our single input feature dim now. otherwise use input_add_feature_dim")
+    assert len(input_data.get_spatial_axes()) == len(filter_size), (
       "filter-size-dimension does not match the input data. " +
       "this is %i-D conv but number of spatial dims is %i in the input %s. " % (
-        len(filter_size), len(dyn_axes), self.input_data.get_description()) +
+        len(filter_size), len(input_data.get_spatial_axes()), self.input_data.get_description()) +
       "consider using input_expand_dims or input_add_feature_dim.")
     filter_shape = list(filter_size) + [input_data.dim, n_out]
     from TFUtil import get_initializer
@@ -2850,7 +2843,9 @@ class ConvLayer(_ConcatInputLayer):
       assert self.output.is_batch_feature_major
       data_format = {1: "NCW", 2: "NCHW", 3: "NCDHW"}[len(filter_size)]
     y = tf.nn.convolution(
-      x, filter=filters, padding=padding, strides=strides, dilation_rate=dilation_rate, data_format=data_format)
+      input_data.placeholder, data_format=data_format,
+      filter=filters,
+      padding=padding, strides=strides, dilation_rate=dilation_rate)
     # y shape is [batch] + dynamic_dims + [n_out].
     if with_bias:
       with self.var_creation_scope():
@@ -2867,9 +2862,9 @@ class ConvLayer(_ConcatInputLayer):
     y = self.output_before_activation.y
     self.output.placeholder = y
     self.output.size_placeholder = {
-      i: self.input_data.size_placeholder[i]
-      for i in dyn_axes
-      if i in self.input_data.size_placeholder}
+      i: input_data.size_placeholder[i]
+      for i in input_data.get_spatial_axes()
+      if i in input_data.size_placeholder}
     for i in list(self.output.size_placeholder.keys()):
       self.output.size_placeholder[i] = self.calc_out_dim(
         in_dim=self.output.size_placeholder[i],
