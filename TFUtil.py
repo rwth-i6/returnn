@@ -235,10 +235,14 @@ class Data(object):
     return {key: getattr(self, key) for key in keys}
 
   def get_description(self, with_name=True, with_placeholder=False):
-    keys = ["shape", "dtype"]
+    keys = ["shape"]
     if self.sparse:
+      keys.append("dtype")
       keys.append("sparse")
       keys.append("dim")
+    else:
+      if self.dtype != "float32":
+        keys.append("dtype")
     if self.batch_dim_axis != 0:
       keys.append("batch_dim_axis")
     if self.time_dim_axis is None or self.time_dim_axis >= 2:
@@ -543,8 +547,7 @@ class Data(object):
     v = self.copy()
     # Add feature dim, if needed.
     if data.feature_dim_axis is not None and v.feature_dim_axis is None:
-      v.dim = 1
-      v.shape = v.shape + (1,)
+      v = v.copy_add_feature_dim()
     # Add spatial dims, in case we miss any.
     for axis in data.get_spatial_batch_axes():
       if len(data.get_spatial_batch_axes()) > len(v.get_spatial_batch_axes()):

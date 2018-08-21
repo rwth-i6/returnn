@@ -1434,7 +1434,8 @@ def test_rec_subnet_eval_init_out_apply0():
     "num_epochs": 2,
     "batch_size": 10,
     "nadam": True,
-    "learning_rate": 0.01
+    "learning_rate": 0.01,
+    "debug_print_layer_output_template": True
   })
 
   print("Create engine.")

@@ -155,6 +155,15 @@ def test_Data_copy_compatible_to_feature_dim():
   assert d2a.feature_dim_axis == d1.feature_dim_axis
 
 
+def test_Data_copy_compatible_to_src_no_batch():
+  d1 = Data(name="d1", shape=(None, 1), time_dim_axis=None)
+  d1.placeholder = tf.zeros([d if (d is not None) else 1 for d in d1.batch_shape])
+  d2 = Data(name="d2", shape=(), batch_dim_axis=None, time_dim_axis=None)
+  d2.placeholder = tf.zeros([d if (d is not None) else 1 for d in d2.batch_shape])
+  d3 = d2.copy_compatible_to(d1)
+  assert d3.batch_shape == (None, 1, 1)
+
+
 def test_Data_feature_dim_axis_btd():
   d1 = Data(name="d1", shape=(None, 11), feature_dim_axis=-1)
   d2 = Data(name="d2", shape=(None, 11), feature_dim_axis=2)
