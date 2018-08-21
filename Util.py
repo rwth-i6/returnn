@@ -47,6 +47,11 @@ class NotSpecified(object):
   """
   This is just a placeholder, to be used as default argument to mark that it is not specified.
   """
+  def __str__(self):
+    return "NotSpecified"
+
+  def __repr__(self):
+    return "<NotSpecified>"
 
 
 def is_64bit_platform():
