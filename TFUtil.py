@@ -69,6 +69,7 @@ class Data(object):
                size_placeholder=None,
                batch_dim_axis=0,
                time_dim_axis=NotSpecified,
+               feature_dim_axis=NotSpecified,
                available_for_inference=True,
                auto_create_placeholders=False,
                vocab=None,
@@ -87,6 +88,7 @@ class Data(object):
       if this Data does not have a batch-dim.
     :param int|None time_dim_axis: where we have the time dim axis, after we added the batch-dim.
       this is often 1. however, can be None if there is no time-dim.
+    :param int|None feature_dim_axis: feature dim axis. by default it's the last one
     :param dict[int,tf.Tensor] tf.Tensor size_placeholder: for every None in shape, this will describe the size.
       The size is always a tensor of shape (batch,), i.e. the size can be different for each sequence in a batch.
     :param bool available_for_inference: e.g. the extern data "classes" is usually not available for inference
@@ -132,7 +134,17 @@ class Data(object):
           time_dim_axis = 1
       else:
         time_dim_axis = None
+    if time_dim_axis is not None:
+      assert 0 <= time_dim_axis < self.batch_ndim
     self.time_dim_axis = time_dim_axis  # type: int|None  # counted with batch-dim
+    if feature_dim_axis is not NotSpecified:
+      if feature_dim_axis is None:
+        raise NotImplementedError
+      if feature_dim_axis < 0:
+        feature_dim_axis += self.batch_ndim
+      assert 0 <= feature_dim_axis < self.batch_ndim
+      if feature_dim_axis != self.batch_ndim - 1:
+        raise NotImplementedError
     self.dtype = dtype  # type: str
     if placeholder is None and auto_create_placeholders:
       with tf.name_scope("extern_data/placeholders/%s/" % name):

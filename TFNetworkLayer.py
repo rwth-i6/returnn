@@ -2810,22 +2810,23 @@ class ConvLayer(_ConcatInputLayer):
     else:
       dilation_rate = list(dilation_rate)
     assert len(dilation_rate) == len(filter_size)
-    assert not self.input_data.sparse
+    input_data = self.input_data
+    assert not input_data.sparse
     # We want to prepare the input data such that the batch-dim is the very first,
     # the feature-dim is the very last, and all in between are where we convolve over.
     # In the common terminology, this is the "NHWC" format, which is the default for TF convolution.
-    x = self.input_data.get_placeholder_as_batch_major()
-    x = check_input_dim(x, -1, self.input_data.dim)
-    input_num_features = self.input_data.dim
-    dyn_axes = self.input_data.get_spatial_axes()  # conv-dims, or also called spatial dims
-    static_axes = self.input_data.get_feature_axes()  # feature-dims
-    assert dyn_axes + static_axes == list(range(self.input_data.ndim)), (
-      "we expect the static dims at the end. input data is: %r" % self.input_data.get_description())
+    x = input_data.get_placeholder_as_batch_major()
+    x = check_input_dim(x, -1, input_data.dim)
+    input_num_features = input_data.dim
+    dyn_axes = input_data.get_spatial_axes()  # conv-dims, or also called spatial dims
+    static_axes = input_data.get_feature_axes()  # feature-dims
+    assert dyn_axes + static_axes == list(range(input_data.ndim)), (
+      "we expect the static dims at the end. input data is: %r" % input_data.get_description())
     if input_split_feature_dim:
       # Split the last two dimensions.
-      assert self.input_data.dim % input_split_feature_dim == 0, "must be a multiple of the input feature dim"
+      assert input_data.dim % input_split_feature_dim == 0, "must be a multiple of the input feature dim"
       x = tf.reshape(
-        x, get_shape(x)[:-1] + [self.input_data.dim // input_split_feature_dim, input_split_feature_dim])
+        x, get_shape(x)[:-1] + [input_data.dim // input_split_feature_dim, input_split_feature_dim])
       static_axes += [x.get_shape().ndims - 2]  # last without batch-dim
       input_num_features = input_split_feature_dim
     if input_add_feature_dim:
@@ -2854,7 +2855,12 @@ class ConvLayer(_ConcatInputLayer):
       fwd_weights_initializer = get_initializer(
         forward_weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
       filters = self.add_param(tf.get_variable(name="W", shape=filter_shape, initializer=fwd_weights_initializer))
-    y = tf.nn.convolution(x, filter=filters, padding=padding, strides=strides, dilation_rate=dilation_rate)
+    data_format = None
+    if input_data.feature_dim_axis == 1:  # format NC...
+      assert self.output.feature_dim_axis == 1
+      data_format = {1: "NCW", 2: "NCHW", 3: "NCDHW"}[len(filter_size)]
+    y = tf.nn.convolution(
+      x, filter=filters, padding=padding, strides=strides, dilation_rate=dilation_rate, data_format=data_format)
     # y shape is [batch] + dynamic_dims + [n_out].
     if with_bias:
       with self.var_creation_scope():
@@ -2903,17 +2909,19 @@ class ConvLayer(_ConcatInputLayer):
       raise Exception("invalid padding %r" % padding)
 
   @classmethod
-  def _get_out_type_from_opts(cls, name, n_out, filter_size, padding, strides=1, dilation_rate=1, sources=(),
+  def _get_out_type_from_opts(cls, n_out, filter_size, padding, strides=1, dilation_rate=1, sources=(),
                               input_expand_dims=0, input_add_feature_dim=False, input_split_feature_dim=None, **kwargs):
     shape = [None] * len(filter_size) + [n_out]
     if isinstance(strides, int):
       strides = [strides] * len(filter_size)
     else:
+      assert isinstance(strides, (tuple, list))
       strides = list(strides)
     assert len(strides) == len(filter_size)
     if isinstance(dilation_rate, int):
       dilation_rate = [dilation_rate] * len(filter_size)
     else:
+      assert isinstance(dilation_rate, (tuple, list))
       dilation_rate = list(dilation_rate)
     assert len(dilation_rate) == len(filter_size)
     padding = padding.upper()
@@ -2925,10 +2933,15 @@ class ConvLayer(_ConcatInputLayer):
           shape[i] = cls.calc_out_dim(
             in_dim=data.shape[i],
             filter_size=filter_size[i], stride=strides[i], dilation_rate=dilation_rate[i], padding=padding)
+    feature_dim_axis = -1
+    if TFUtil.is_gpu_available() and False:  # TODO...
+      feature_dim_axis = 1
+      shape = shape[-1:] + shape[:-1]
     return {
       "dim": n_out,
       "shape": shape,
       "batch_dim_axis": 0,
+      "feature_dim_axis": feature_dim_axis,
       "sparse": False}
 
   @classmethod

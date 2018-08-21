@@ -155,6 +155,13 @@ def test_Data_copy_compatible_to_feature_dim():
   assert d2a.feature_dim_axis == d1.feature_dim_axis
 
 
+def test_Data_feature_dim_axis():
+  d1 = Data(name="d1", shape=(None, 11), feature_dim_axis=-1)
+  d2 = Data(name="d2", shape=(None, 11), feature_dim_axis=2)
+  d3 = Data(name="d3", shape=(None, 11))
+  assert d1.feature_dim_axis == d2.feature_dim_axis == d3.feature_dim_axis == 2
+
+
 def test_get_initializer_zero():
   shape = (2, 3)
   initializer = get_initializer(0.0)
