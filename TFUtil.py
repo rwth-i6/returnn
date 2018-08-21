@@ -639,10 +639,11 @@ class Data(object):
     new_shape = list(self.shape)
     del new_shape[self.time_dim_axis_excluding_batch]
     kwargs = self.get_kwargs()
-    kwargs["batch_dim_axis"] = (
-      self.batch_dim_axis
-      if (self.batch_dim_axis < self.time_dim_axis)
-      else (self.batch_dim_axis - 1))
+    other_special_axes = self.get_special_axes_dict(
+      counted_with_batch_dim=True, only_available=True, include_batch_dim_axis=True)
+    other_special_axes.pop("time_dim_axis", None)
+    for axis_name, axis in other_special_axes.items():
+      kwargs[axis_name] = axis if (axis < self.time_dim_axis) else (axis - 1)
     kwargs["time_dim_axis"] = None
     kwargs["shape"] = new_shape
     if name:
@@ -1138,6 +1139,8 @@ class Data(object):
            for (k, v) in d.items()}
     if only_available:
       d = {k: v for (k, v) in d.items() if v is not None}
+      if self._feature_dim_axis is NotSpecified:  # special rule
+        d.pop("feature_dim_axis", None)
     return d
 
   def get_bc_spatial_batch_shape(self):

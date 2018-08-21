@@ -264,6 +264,20 @@ def test_Data_copy_as_batch_feature_major():
   assert d2.dim == 12
 
 
+def test_Data_copy_template_excluding_time_dim():
+  d1 = Data(name='d1', shape=(None, 12))
+  assert d1.batch_shape == (None, None, 12) and d1.time_dim_axis == 1 and d1.feature_dim_axis == 2
+  d2 = d1.copy_template_excluding_time_dim()
+  assert d2.batch_shape == (None, 12) and d2.time_dim_axis is None and d2.feature_dim_axis == 1
+
+
+def test_Data_copy_template_excluding_time_dim_explicit_feature():
+  d1 = Data(name='d1', shape=(None, 12), feature_dim_axis=2)
+  assert d1.batch_shape == (None, None, 12) and d1.time_dim_axis == 1 and d1.feature_dim_axis == 2
+  d2 = d1.copy_template_excluding_time_dim()
+  assert d2.batch_shape == (None, 12) and d2.time_dim_axis is None and d2.feature_dim_axis == 1
+
+
 def test_get_initializer_zero():
   shape = (2, 3)
   initializer = get_initializer(0.0)
