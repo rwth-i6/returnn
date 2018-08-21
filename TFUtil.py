@@ -208,6 +208,8 @@ class Data(object):
       assert self.feature_dim_axis is None, "If sparse, there cannot be a feature dim axis."
     if self.feature_dim_axis is not None:
       assert self.dim == self.batch_shape[self.feature_dim_axis]
+    if self.placeholder is not None:
+      self.placeholder.set_shape(self.batch_shape)
 
   def get_placeholder_kwargs(self, with_batch=True):
     return dict(name=self.name, dtype=self.dtype, shape=self.batch_shape if with_batch else self.shape)
@@ -294,6 +296,7 @@ class Data(object):
       if data.batch_dim_axis <= data.time_dim_axis:
         data.batch_dim_axis += 1
       data.time_dim_axis = 0
+    data._sanity_check()
     return data
 
   def copy_with_batch_dim_axis(self, batch_dim_axis):
@@ -315,6 +318,7 @@ class Data(object):
       data.batch_dim_axis = batch_dim_axis
       for k, a in other_special_axes.items():
         setattr(data, k, data.get_batch_axis(a))
+    data._sanity_check()
     return data
 
   def copy_with_time_dim_axis(self, time_dim_axis):
@@ -348,6 +352,7 @@ class Data(object):
           axis_wo_b = data.get_batch_axis_excluding_batch(axis_wb)
           assert axis_wo_b is not None
           data.size_placeholder[axis_wo_b] = size
+    data._sanity_check()
     return data
 
   def copy_as_bt_or_tb_major(self):
@@ -361,6 +366,46 @@ class Data(object):
     if self.time_dim_axis == 0:
       return self.copy_with_batch_dim_axis(1)
     raise ValueError("cannot convert %r to BT|TB major" % self)
+
+  def copy_with_feature_dim_axis(self, feature_dim_axis):
+    """
+    :param int feature_dim_axis: can also be negative
+    :return: copy of myself with specific feature dim axis
+    :rtype: Data
+    """
+    assert self.feature_dim_axis is not None
+    if feature_dim_axis < 0:
+      feature_dim_axis += self.batch_ndim
+    assert 0 <= feature_dim_axis < self.batch_ndim
+    data = self.copy()
+    if data.feature_dim_axis == feature_dim_axis:
+      return data
+    if data.placeholder is not None:
+      data.placeholder = move_axis(
+        data.placeholder, new_axis=feature_dim_axis, old_axis=data.feature_dim_axis)
+    new_shape = list(data.shape)
+    new_shape.pop(data.get_batch_axis_excluding_batch(self.feature_dim_axis))
+    new_shape.insert(data.get_batch_axis_excluding_batch(feature_dim_axis), data.dim)
+    data.shape = tuple(new_shape)
+    other_special_axes = data.get_special_axes_dict(
+      counted_with_batch_dim=True, only_available=True, include_batch_dim_axis=True)
+    other_special_axes.pop("feature_dim_axis", None)
+    data.feature_dim_axis = feature_dim_axis
+    for k, a in other_special_axes.items():
+      setattr(data, k, a if (a < feature_dim_axis) else (a + 1))
+    data._sanity_check()
+    return data
+
+  def copy_as_batch_feature_major(self):
+    """
+    :return: self with batch_dim_axis == 0 and feature_dim_axis == 1
+    :rtype: Data
+    """
+    assert self.batch_dim_axis is not None
+    assert self.feature_dim_axis is not None
+    data = self.copy_as_batch_major()
+    data = data.copy_with_feature_dim_axis(1)
+    return data
 
   def copy_add_batch_dim(self, batch_dim_axis):
     """
@@ -378,15 +423,23 @@ class Data(object):
     other_special_axes = self.get_special_axes_dict(counted_with_batch_dim=True, only_available=True)
     for k, a in other_special_axes.items():
       setattr(data, k, a if (a < batch_dim_axis) else (a + 1))
+    data._sanity_check()
     return data
 
-  def copy_add_spatial_dim(self, spatial_dim_axis):
+  def copy_add_spatial_dim(self, spatial_dim_axis=None):
     """
-    :param int spatial_dim_axis: counted with batch-dim. if there is no time-dim, this will be it
+    :param int|None spatial_dim_axis: counted with batch-dim. if there is no time-dim, this will be it.
     :return: copy of myself with added spatial-dim
     :rtype: Data
     """
     data = self.copy()
+    if spatial_dim_axis is None:
+      if self.time_dim_axis is not None:
+        spatial_dim_axis = self.time_dim_axis + 1  # after the existing spatial dim
+      elif self.feature_dim_axis is not None:
+        spatial_dim_axis = self.feature_dim_axis  # add it before the feature dim
+      else:
+        spatial_dim_axis = self.batch_ndim  # add it at the end
     if data.placeholder is not None:
       data.placeholder = tf.expand_dims(data.placeholder, spatial_dim_axis, name="%s_add_spatial_dim" % self.name)
     axis_wo_batch = spatial_dim_axis if (spatial_dim_axis <= (self.batch_dim_axis or 0)) else (spatial_dim_axis - 1)
@@ -397,7 +450,67 @@ class Data(object):
       counted_with_batch_dim=True, only_available=True, include_batch_dim_axis=True)
     for k, a in other_special_axes.items():
       setattr(data, k, a if (a < spatial_dim_axis) else (a + 1))
+    data._sanity_check()
     return data
+
+  def copy_add_feature_dim(self):
+    """
+    :return: self with a new feature dim axis with dim 1.
+      If there is an existing feature dim, the new feature dim will be added right after.
+    :rtype: Data
+    """
+    v = self.copy()
+    assert not v.sparse
+    if v.feature_dim_axis is not None:
+      new_feature_dim_axis = v.feature_dim_axis + 1
+    else:
+      new_feature_dim_axis = v.batch_ndim
+    other_special_axes = self.get_special_axes_dict(
+      counted_with_batch_dim=True, only_available=True, include_batch_dim_axis=True)
+    other_special_axes.pop("feature_dim_axis", None)
+    new_feature_dim_axis_wo_batch = self.get_batch_axis_excluding_batch(new_feature_dim_axis)
+    v.shape = v.shape[:new_feature_dim_axis_wo_batch] + (1,) + v.shape[new_feature_dim_axis_wo_batch:]
+    v.dim = 1
+    for k, a in other_special_axes.items():
+      setattr(v, k, a if (a < new_feature_dim_axis) else (a + 1))
+    v.feature_dim_axis = new_feature_dim_axis
+    if v.placeholder is not None:
+      v.placeholder = tf.expand_dims(v.placeholder, new_feature_dim_axis, name="copy_add_feature_dim")
+    v._sanity_check()
+    return v
+
+  def copy_split_feature_dim(self, new_feature_dim):
+    """
+    :param int new_feature_dim: will be the new dim
+    :rtype: Data
+    """
+    assert not self.sparse
+    assert self.feature_dim_axis is not None
+    assert self.dim is not None
+    assert self.dim % new_feature_dim == 0, "must be a multiple of the input feature dim"
+    old_feature_dim = self.dim // new_feature_dim
+    new_feature_dim_axis = self.feature_dim_axis + 1
+    v = self.copy()
+    other_special_axes = self.get_special_axes_dict(
+      counted_with_batch_dim=True, only_available=True, include_batch_dim_axis=True)
+    other_special_axes.pop("feature_dim_axis", None)
+    old_feature_dim_axis_wo_batch = self.get_batch_axis_excluding_batch(self.feature_dim_axis)
+    v.shape = (v.shape[:old_feature_dim_axis_wo_batch] +
+               (old_feature_dim, new_feature_dim) +
+               v.shape[old_feature_dim_axis_wo_batch + 1:])
+    v.dim = new_feature_dim
+    for k, a in other_special_axes.items():
+      setattr(v, k, a if (a < new_feature_dim_axis) else (a + 1))
+    v.feature_dim_axis = new_feature_dim_axis
+    if v.placeholder is not None:
+      v.placeholder.set_shape(self.batch_shape)
+      old_shape = get_shape(v.placeholder)
+      new_shape = (old_shape[:self.feature_dim_axis] +
+                   [old_feature_dim, new_feature_dim] +
+                   old_shape[new_feature_dim_axis + 1:])
+      v.placeholder = tf.reshape(v.placeholder, new_shape, name="copy_split_feature_dim")
+    v._sanity_check()
+    return v
 
   def copy_compatible_to(self, data, unbroadcast=False, data_dyn_shape=None):
     """
@@ -459,6 +572,7 @@ class Data(object):
       v.shape = tuple(new_shape)
       if v.placeholder is not None:
         v.placeholder.set_shape(v.batch_shape)
+    v._sanity_check()
     return v
 
   def copy_time_flattened(self):
@@ -479,6 +593,7 @@ class Data(object):
       if data.time_dim_axis_excluding_batch in data.size_placeholder:
         del data.size_placeholder[data.time_dim_axis_excluding_batch]
     data.time_dim_axis = None
+    data._sanity_check()
     return data
 
   def copy_extend_with_beam(self, beam_size, dyn_beam_size=None):
@@ -664,6 +779,14 @@ class Data(object):
     :rtype: bool
     """
     return self.batch_dim_axis == 0
+
+  @property
+  def is_batch_feature_major(self):
+    """
+    :return: whether this is in batch-feature-major format, i.e. (batch,feature,...) (NC...)
+    :rtype: bool
+    """
+    return self.batch_dim_axis == 0 and self.feature_dim_axis == 1
 
   def _default_feature_dim_axis(self):
     """

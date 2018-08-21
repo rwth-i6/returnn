@@ -242,6 +242,28 @@ def test_Data_scalar():
   assert d1.batch_shape == ()
 
 
+def test_Data_copy_add_feature_dim():
+  d1 = Data(name="d1", shape=(None, 11))
+  d2 = d1.copy_add_feature_dim()
+  assert d2.batch_shape == (None, None, 11, 1)
+  assert d2.dim == 1
+
+
+def test_Data_copy_split_feature_dim():
+  d1 = Data(name="d1", shape=(None, 12))
+  d2 = d1.copy_split_feature_dim(4)
+  assert d2.batch_shape == (None, None, 3, 4)
+  assert d2.dim == 4
+
+
+def test_Data_copy_as_batch_feature_major():
+  d1 = Data(name="d1", shape=(None, 12))
+  assert d1.batch_shape == (None, None, 12) and d1.time_dim_axis == 1 and d1.feature_dim_axis == 2
+  d2 = d1.copy_as_batch_feature_major()
+  assert d2.batch_shape == (None, 12, None) and d2.time_dim_axis == 2 and d2.feature_dim_axis == 1
+  assert d2.dim == 12
+
+
 def test_get_initializer_zero():
   shape = (2, 3)
   initializer = get_initializer(0.0)

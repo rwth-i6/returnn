@@ -2810,54 +2810,44 @@ class ConvLayer(_ConcatInputLayer):
     else:
       dilation_rate = list(dilation_rate)
     assert len(dilation_rate) == len(filter_size)
-    input_data = self.input_data
-    assert not input_data.sparse
+    assert not self.input_data.sparse
+    input_data = self.input_data.copy_as_batch_major()
+    if input_expand_dims:
+      for i in range(input_expand_dims):
+        input_data = input_data.copy_add_spatial_dim()
+    if input_split_feature_dim:
+      # Split the feature dimension.
+      input_data = input_data.copy_split_feature_dim(input_split_feature_dim)
+    if input_add_feature_dim:
+      # Add a feature dimension; any other static dims will be used as dynamic dims below.
+      input_data = input_data.copy_add_feature_dim()
+    if self.output.is_batch_feature_major:
+      input_data = input_data.copy_as_batch_feature_major()
+    else:
+      input_data = input_data.copy_with_feature_dim_axis(-1)
     # We want to prepare the input data such that the batch-dim is the very first,
     # the feature-dim is the very last, and all in between are where we convolve over.
     # In the common terminology, this is the "NHWC" format, which is the default for TF convolution.
-    x = input_data.get_placeholder_as_batch_major()
-    x = check_input_dim(x, -1, input_data.dim)
-    input_num_features = input_data.dim
+    x = input_data.placeholder
     dyn_axes = input_data.get_spatial_axes()  # conv-dims, or also called spatial dims
     static_axes = input_data.get_feature_axes()  # feature-dims
     assert dyn_axes + static_axes == list(range(input_data.ndim)), (
       "we expect the static dims at the end. input data is: %r" % input_data.get_description())
-    if input_split_feature_dim:
-      # Split the last two dimensions.
-      assert input_data.dim % input_split_feature_dim == 0, "must be a multiple of the input feature dim"
-      x = tf.reshape(
-        x, get_shape(x)[:-1] + [input_data.dim // input_split_feature_dim, input_split_feature_dim])
-      static_axes += [x.get_shape().ndims - 2]  # last without batch-dim
-      input_num_features = input_split_feature_dim
-    if input_add_feature_dim:
-      # Add a dimension at the very end; any other static dims will be used as dynamic dims below.
-      x = tf.expand_dims(x, axis=x.get_shape().ndims, name="input_use_feature_dim")
-      static_axes += [x.get_shape().ndims - 2]  # last without batch-dim
-      input_num_features = 1
-    if len(static_axes) > 1:
-      # Just treat them as dynamic axes, except the last.
-      dyn_axes += static_axes[:-1]
-      del static_axes[:-1]
     assert len(static_axes) == 1, "this should be our single input feature dim now. otherwise use input_add_feature_dim"
-    while input_expand_dims:
-      x = tf.expand_dims(x, axis=len(dyn_axes) + 1, name="input_expand_dims")  # axis including batch-dim
-      dyn_axes += [len(dyn_axes)]
-      static_axes = [axis + 1 for axis in static_axes]
-      input_expand_dims -= 1
     assert dyn_axes == list(range(len(filter_size))), (
       "filter-size-dimension does not match the input data. " +
       "this is %i-D conv but number of spatial dims is %i in the input %s. " % (
         len(filter_size), len(dyn_axes), self.input_data.get_description()) +
       "consider using input_expand_dims or input_add_feature_dim.")
-    filter_shape = list(filter_size) + [input_num_features, n_out]
+    filter_shape = list(filter_size) + [input_data.dim, n_out]
     from TFUtil import get_initializer
     with self.var_creation_scope():
       fwd_weights_initializer = get_initializer(
         forward_weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
       filters = self.add_param(tf.get_variable(name="W", shape=filter_shape, initializer=fwd_weights_initializer))
     data_format = None
-    if input_data.feature_dim_axis == 1:  # format NC...
-      assert self.output.feature_dim_axis == 1
+    if input_data.is_batch_feature_major:
+      assert self.output.is_batch_feature_major
       data_format = {1: "NCW", 2: "NCHW", 3: "NCDHW"}[len(filter_size)]
     y = tf.nn.convolution(
       x, filter=filters, padding=padding, strides=strides, dilation_rate=dilation_rate, data_format=data_format)
