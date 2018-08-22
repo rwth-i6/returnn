@@ -1944,7 +1944,7 @@ def test_KenLmStateLayer():
 
       net = TFNetwork(extern_data=ExternData())
       net.extern_data.register_data(Data(
-        name="data", shape=(), time_dim_axis=None, dim=len(labels), dtype="int32",
+        name="data", shape=(), time_dim_axis=None, dim=len(labels), sparse=True,
         auto_create_placeholders=True))
       data_layer = net.construct_layer(name="data", net_dict={})
       layer_base_opts = dict(name="output", network=net, sources=[data_layer])
@@ -2015,7 +2015,7 @@ def test_KenLmStateLayer_dense():
 
       net = TFNetwork(extern_data=ExternData())
       net.extern_data.register_data(Data(
-        name="data", shape=(), time_dim_axis=None, dim=len(labels), dtype="int32",
+        name="data", shape=(), time_dim_axis=None, dim=len(labels), sparse=True,
         auto_create_placeholders=True))
       data_layer = net.construct_layer(name="data", net_dict={})
       layer_base_opts = dict(
