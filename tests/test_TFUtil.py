@@ -123,6 +123,26 @@ def test_Data_get_bc_shape():
   assert_equal(d.get_bc_shape({("B", "s:1"): None}), (None, 1, 13, 9000))
 
 
+def test_Data_copy_template_adding_time_dim_no_feature():
+  d1 = Data(name="d1", shape=(), time_dim_axis=None)
+  assert d1.batch_dim_axis == 0 and d1.batch_shape == (None,)
+  assert d1.feature_dim_axis is None
+  d2 = d1.copy_template_adding_time_dim()
+  assert d2.batch_dim_axis == 1 and d2.time_dim_axis == 0 and d2.batch_shape == (None, None)
+  # assert d2.feature_dim_axis is None  # not sure what we would want here...
+
+
+def test_Data_time_no_feature():
+  d1 = Data(name="d1", shape=(None,), batch_dim_axis=0, time_dim_axis=1, dim=None)
+  assert d1.time_dim_axis == 1
+
+
+def test_Data_unknown_feature_no_time():
+  d1 = Data(name="d1", shape=(None,), batch_dim_axis=0, time_dim_axis=None, dim=None)
+  assert d1.batch_dim_axis == 0 and d1.time_dim_axis is None and d1.feature_dim_axis == 1
+  assert d1.batch_shape == (None, None)
+
+
 def test_Data_copy_compatible_to_time_major():
   d1 = Data(name='ff_out_output', shape=(None, 9001), dtype='float32', batch_dim_axis=1)
   d2 = Data(name='ff_out_prior_output', shape=(9001,), dtype='float32', batch_dim_axis=None, time_dim_axis=None)

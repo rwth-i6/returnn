@@ -691,10 +691,11 @@ class Data(object):
     kwargs = self.get_kwargs()
     new_shape = list(self.shape)
     new_shape.insert(time_dim_axis, None)
-    kwargs["batch_dim_axis"] = (
-      self.batch_dim_axis
-      if (self.batch_dim_axis < time_dim_axis)
-      else (self.batch_dim_axis + 1))
+    other_special_axes = self.get_special_axes_dict(
+      counted_with_batch_dim=True, only_available=True, include_batch_dim_axis=True)
+    other_special_axes.pop("time_dim_axis", None)
+    for axis_name, axis in other_special_axes.items():
+      kwargs[axis_name] = axis if (axis < time_dim_axis) else (axis + 1)
     kwargs["time_dim_axis"] = time_dim_axis
     kwargs["shape"] = new_shape
     if name:
@@ -744,12 +745,20 @@ class Data(object):
 
   @property
   def shape_dense(self):
+    """
+    :return: shape with feature dim axis
+    :rtype: tuple[int|None]
+    """
     if self.sparse:
-      return self.shape + (self.dim,)
+      return self.shape + (self.dim,)  # by default, assume at the end
     return self.shape
 
   @property
   def shape_sparse(self):
+    """
+    :return: shape without feature dim axis
+    :rtype: tuple[int|None]
+    """
     if self.sparse:
       return self.shape
     return self.shape[:self.feature_dim_axis] + self.shape[self.feature_dim_axis + 1:]
@@ -831,7 +840,8 @@ class Data(object):
       return None
     if not self.shape:
       return None
-    return self.batch_ndim - 1
+    # Allow same as time-dim-axis...
+    return [i for i in range(self.batch_ndim) if i != self.batch_dim_axis][-1]
 
   @property
   def feature_dim_axis(self):
