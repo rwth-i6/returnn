@@ -216,17 +216,21 @@ class LayerBase(object):
     if n_out is not None:
       out_type.setdefault("dim", n_out)
       assert out_type["dim"] == n_out
-    if sources_data:
-      if out_type.get("sparse", False):
-        out_type.setdefault("shape", sources_data.shape_sparse)
-      else:
-        out_type.setdefault("shape", sources_data.shape_dense)
     # You are supposed to set self.output.{batch_dim_axis,time_dim_axis} explicitly,
     # as well as check the inputs if they are as you would suggest.
     # However, a good default is often to use the same as the input.
     if sources_data and "batch_dim_axis" not in out_type:
       out_type.setdefault("batch_dim_axis", sources_data.batch_dim_axis)
       out_type.setdefault("time_dim_axis", sources_data.time_dim_axis)
+    if sources_data:
+      if out_type.get("sparse", False):
+        out_type.setdefault("shape", sources_data.shape_sparse)
+      else:
+        default_shape = list(sources_data.shape_dense)
+        default_shape.insert(sources_data.batch_dim_axis, None)
+        default_shape[out_type.get("feature_dim_axis", -1)] = out_type["dim"]
+        default_shape.pop(out_type.get("batch_dim_axis"))
+        out_type.setdefault("shape", tuple(default_shape))
     # Note: No special handling for feature_dim_axis here for now...
     beam_size = None
     for src in sources:
@@ -1863,7 +1867,7 @@ class LinearLayer(_ConcatInputLayer):
     self.activation = activation
     self.with_bias = with_bias
 
-    input_data = self.input_data.copy_with_feature_last()
+    input_data = self.input_data
     n_in = input_data.dim
     n_out = self.output.dim
     assert n_in and n_out, "%r and %r" % (input_data, self.output)
