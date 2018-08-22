@@ -4,7 +4,7 @@ from __future__ import print_function
 import tensorflow as tf
 import contextlib
 import TFUtil
-from Util import unicode
+from Util import unicode, NotSpecified
 from TFUtil import Data, OutputWithActivation, CustomUpdate, dimshuffle, swapaxes
 from Log import log
 
@@ -209,7 +209,7 @@ class LayerBase(object):
     out_type = out_type.copy()
     out_type.setdefault("name", "%s_output" % name)
     sources_data = None
-    if sources:
+    if sources and sources[0]:
       sources_data = sources[0].output.copy_template()
     if sources_data and not sources_data.sparse and not out_type.get("sparse", False):
       out_type.setdefault("dtype", sources_data.dtype)
@@ -219,9 +219,18 @@ class LayerBase(object):
     # You are supposed to set self.output.{batch_dim_axis,time_dim_axis} explicitly,
     # as well as check the inputs if they are as you would suggest.
     # However, a good default is often to use the same as the input.
-    if sources_data and "batch_dim_axis" not in out_type:
-      out_type.setdefault("batch_dim_axis", sources_data.batch_dim_axis)
-      out_type.setdefault("time_dim_axis", sources_data.time_dim_axis)
+    if all([k not in out_type for k in Data.SpecialAxesNames]):
+      if sources_data:
+        out_type.setdefault("batch_dim_axis", sources_data.batch_dim_axis)
+        out_type.setdefault("time_dim_axis", sources_data.time_dim_axis)
+        if not out_type.get("sparse", False) and sources_data.feature_dim_axis_or_unspecified is not NotSpecified:
+          if sources_data.feature_dim_axis_or_unspecified is not None:
+            out_type.setdefault("feature_dim_axis", sources_data.feature_dim_axis_or_unspecified)
+          else:  # None
+            if out_type.get("dim", None) is None:
+              out_type.setdefault("feature_dim_axis", None)
+      elif network.is_inside_rec_layer():
+        out_type.setdefault("time_dim_axis", None)
     if sources_data:
       if out_type.get("sparse", False):
         out_type.setdefault("shape", sources_data.shape_sparse)
