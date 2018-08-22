@@ -425,6 +425,10 @@ class MultiChannelStftLayer(_ConcatInputLayer):
   def _get_window(self, window_length, dtype):
     if self._window == "hanning":
         window = tf.contrib.signal.hann_window(window_length, dtype=dtype)
+    if self._window == "blackman":
+        tf.assert_equal(self._frame_size, window_length)
+        import scipy.signal
+        window = tf.constant(scipy.signal.blackman(self._frame_size), dtype=tf.float32)
     if self._window == "None" or self._window == "ones":
       window = tf.ones((window_length,), dtype=dtype)
     return window
