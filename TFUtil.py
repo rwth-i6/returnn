@@ -417,7 +417,7 @@ class Data(object):
 
   def copy_as_batch_feature_major(self):
     """
-    :return: self with batch_dim_axis == 0 and feature_dim_axis == 1
+    :return: copy of self with batch_dim_axis == 0 and feature_dim_axis == 1
     :rtype: Data
     """
     assert self.batch_dim_axis is not None
@@ -425,6 +425,14 @@ class Data(object):
     data = self.copy_as_batch_major()
     data = data.copy_with_feature_dim_axis(1)
     return data
+
+  def copy_with_feature_last(self):
+    """
+    :return: copy of self with feature_dim_axis being the very last axis
+    :rtype: Data
+    """
+    assert self.feature_dim_axis is not None
+    return self.copy_with_feature_dim_axis(-1)
 
   def copy_add_batch_dim(self, batch_dim_axis):
     """
@@ -555,6 +563,7 @@ class Data(object):
         v = v.copy_add_spatial_dim(v.get_batch_axis(axis_wo_batch))
     assert data.get_spatial_axes() == v.get_spatial_axes()
     if v.batch_dim_axis != data.batch_dim_axis:
+      assert data.batch_dim_axis is not None
       if v.batch_dim_axis is not None:
         v = v.copy_with_batch_dim_axis(data.batch_dim_axis)
       else:
@@ -740,6 +749,12 @@ class Data(object):
     return self.shape
 
   @property
+  def shape_sparse(self):
+    if self.sparse:
+      return self.shape
+    return self.shape[:self.feature_dim_axis] + self.shape[self.feature_dim_axis + 1:]
+
+  @property
   def batch_shape_dense(self):
     if self.sparse:
       return self.batch_shape + (self.dim,)
@@ -837,6 +852,14 @@ class Data(object):
     if isinstance(value, int):
       assert 0 <= value < self.batch_ndim
     self._feature_dim_axis = value
+
+  @property
+  def feature_dim_axis_or_unspecified(self):
+    """
+    :return: feature dim axis, counted with batch-dim. could also be unspecified
+    :rtype: int|None|NotSpecified
+    """
+    return self._feature_dim_axis
 
   @property
   def time_dim_axis_excluding_batch(self):
@@ -5889,7 +5912,7 @@ def to_int32_64(x):
   """
   if x.dtype in [tf.int32, tf.int64]:
     return x
-  assert x.dtype in [tf.uint8, tf.int8, tf.int16]
+  assert x.dtype in [tf.uint8, tf.int8, tf.uint16, tf.int16]
   return tf.cast(x, tf.int32)
 
 

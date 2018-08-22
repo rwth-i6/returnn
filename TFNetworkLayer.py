@@ -208,22 +208,26 @@ class LayerBase(object):
       out_type = {"dim": n_out}
     out_type = out_type.copy()
     out_type.setdefault("name", "%s_output" % name)
-    if sources and not sources[0].output.sparse and not out_type.get("sparse", False):
-      out_type.setdefault("dtype", sources[0].output.dtype)
+    sources_data = None
+    if sources:
+      sources_data = sources[0].output.copy_template()
+    if sources_data and not sources_data.sparse and not out_type.get("sparse", False):
+      out_type.setdefault("dtype", sources_data.dtype)
     if n_out is not None:
       out_type.setdefault("dim", n_out)
       assert out_type["dim"] == n_out
-    if sources:
+    if sources_data:
       if out_type.get("sparse", False):
-        out_type.setdefault("shape", sources[0].output.shape_dense[:-1])
+        out_type.setdefault("shape", sources_data.shape_sparse)
       else:
-        out_type.setdefault("shape", sources[0].output.shape_dense[:-1] + (out_type.get("dim"),))
+        out_type.setdefault("shape", sources_data.shape_dense)
     # You are supposed to set self.output.{batch_dim_axis,time_dim_axis} explicitly,
     # as well as check the inputs if they are as you would suggest.
     # However, a good default is often to use the same as the input.
-    if sources and "batch_dim_axis" not in out_type:
-      out_type.setdefault("batch_dim_axis", sources[0].output.batch_dim_axis)
-      out_type.setdefault("time_dim_axis", sources[0].output.time_dim_axis)
+    if sources_data and "batch_dim_axis" not in out_type:
+      out_type.setdefault("batch_dim_axis", sources_data.batch_dim_axis)
+      out_type.setdefault("time_dim_axis", sources_data.time_dim_axis)
+    # Note: No special handling for feature_dim_axis here for now...
     beam_size = None
     for src in sources:
       beam_size = beam_size or src.output.beam_size
@@ -1468,6 +1472,7 @@ def get_concat_sources_data_template(src_layers, name=None):
     sparse=False,
     batch_dim_axis=src_layers[0].output.batch_dim_axis,
     time_dim_axis=src_layers[0].output.time_dim_axis,
+    feature_dim_axis=src_layers[0].output.feature_dim_axis_or_unspecified,
     dtype=src_layers[0].output.dtype,
     beam_size=beam_size)
   return data
@@ -1858,7 +1863,7 @@ class LinearLayer(_ConcatInputLayer):
     self.activation = activation
     self.with_bias = with_bias
 
-    input_data = self.input_data
+    input_data = self.input_data.copy_with_feature_last()
     n_in = input_data.dim
     n_out = self.output.dim
     assert n_in and n_out, "%r and %r" % (input_data, self.output)
@@ -1883,15 +1888,13 @@ class LinearLayer(_ConcatInputLayer):
         b = None
 
     with tf.name_scope("linear"):
-      from TFUtil import dot
+      from TFUtil import dot, to_int32_64
       x = input_data.placeholder
       ndim = x.get_shape().ndims
 
       if self.input_data.sparse:
-        if x.dtype in [tf.uint8, tf.int8, tf.uint16, tf.int16]:
-          x = tf.cast(x, tf.int32)
         # Maybe optionally we could also use tf.contrib.layers.safe_embedding_lookup_sparse().
-        x = tf.nn.embedding_lookup(W, x)
+        x = tf.nn.embedding_lookup(W, to_int32_64(x))
         ndim += 1
       else:
         x = dot(x, W)
