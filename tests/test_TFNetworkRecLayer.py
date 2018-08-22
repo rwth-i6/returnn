@@ -1583,6 +1583,16 @@ def test_rec_subnet_simple_rnn():
     })
     network = TFNetwork(config=config, train_flag=True)
     network.construct_from_dict(config.typed_dict["network"])
+    output_layer = network.get_default_output_layer(must_exist=True)
+    assert isinstance(output_layer, RecLayer)
+    cell = output_layer.cell
+    from TFNetworkRecLayer import _SubnetworkRecCell
+    assert isinstance(cell, _SubnetworkRecCell)
+    cell_sub_layer_out = cell.layer_data_templates["output"].output
+    assert isinstance(cell_sub_layer_out, Data)
+    assert cell_sub_layer_out.time_dim_axis is None and cell_sub_layer_out.batch_dim_axis == 0
+    assert cell_sub_layer_out.feature_dim_axis == 1 and cell_sub_layer_out.dim == n_out
+    assert cell_sub_layer_out.batch_shape == (None, n_out)
     network.initialize_params(session)
     weights_var = network.layers["output"].params["output/W"]
     assert_equal(weights_var.get_shape().as_list(), [n_out + n_in, n_out])
@@ -1598,7 +1608,6 @@ def test_rec_subnet_simple_rnn():
     assert_equal(input_np.shape, (n_batch, max(input_seq_lens), n_in))
     input_placeholder = network.extern_data.data["data"].placeholder
     input_seq_lens_placeholder = network.extern_data.data["data"].size_placeholder[0]
-    output_layer = network.get_default_output_layer(must_exist=True)
     output_np, output_seq_lens = session.run(
       (output_layer.output.get_placeholder_as_batch_major(), output_layer.output.get_sequence_lengths()),
       feed_dict={input_placeholder: input_np, input_seq_lens_placeholder: input_seq_lens})
