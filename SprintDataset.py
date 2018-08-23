@@ -652,6 +652,8 @@ class ExternSprintDataset(SprintDatasetBase):
     read_size = 0
     while read_size < size:
       data_raw = self.pipe_c2p[0].read(size - read_size)
+      if len(data_raw) == 0:
+        raise EOFError
       read_size += len(data_raw)
       stream.write(data_raw)
     stream.seek(0)
