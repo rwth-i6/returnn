@@ -194,6 +194,8 @@ class SprintDatasetBase(Dataset):
   def _waitForSeq(self, seqStart, seqEnd=None):
     """
     Called by CRNN train thread.
+    Wait until we have seqs [seqStart,..,seqEnd-1] loaded,
+    or we now that they will not be loaded anymore because we reached the end.
     """
     if seqEnd is None:
       seqEnd = seqStart + 1
@@ -210,8 +212,8 @@ class SprintDatasetBase(Dataset):
       return
     # We need to wait.
     assert thread.get_ident() != self.add_data_thread_id
-    print("%s wait for seqs (%i,%i) (last added: %s) (current time: %s)" % (
-      self, seqStart, seqEnd, self._latestAddedSeq(), time.strftime("%H:%M:%S")), file=log.v5)
+    print("%s %s: wait for seqs (%i,%i) (last added: %s) (current time: %s)" % (
+      self, currentThread().name, seqStart, seqEnd, self._latestAddedSeq(), time.strftime("%H:%M:%S")), file=log.v5)
     while not check():
       self.cond.wait()
 
@@ -505,6 +507,7 @@ class ExternSprintDataset(SprintDatasetBase):
     self._num_seqs = None
     self.child_pid = None  # type: int|None
     self.parent_pid = os.getpid()
+    self.reader_thread = None  # type: Thread
     self.seq_list_file = None
     self.useMultipleEpochs()
     # There is no generic way to see whether Python is exiting.
@@ -524,13 +527,14 @@ class ExternSprintDataset(SprintDatasetBase):
           # Also join such that the process is cleaned up, and pipes get closed.
           self._join_child(wait=True, expected_exit_status=None)
           self.child_pid = None
-      else:
+      else:  # child process terminated
         self.child_pid = None
       if wait_thread:
         # Load all remaining data so that the reader thread is not waiting in self.addNewData().
         while self.is_less_than_num_seqs(self.expected_load_seq_start + 1):
           self.load_seqs(self.expected_load_seq_start + 1, self.expected_load_seq_start + 2)
         self.reader_thread.join()
+        self.reader_thread = None
       try: self.pipe_p2c[1].close()
       except IOError: pass
       try: self.pipe_c2p[0].close()
@@ -541,6 +545,7 @@ class ExternSprintDataset(SprintDatasetBase):
 
   def _start_child(self, epoch):
     assert self.child_pid is None
+    assert self.reader_thread is None
     self.pipe_c2p = self._pipe_open()
     self.pipe_p2c = self._pipe_open()
     args = self._build_sprint_args()
@@ -583,7 +588,6 @@ class ExternSprintDataset(SprintDatasetBase):
       print("%s: Sprint child process (%r) caused an exception." % (self, args), file=log.v1)
       sys.excepthook(*sys.exc_info())
       self._exit_child(wait_thread=False)
-      self.child_pid = None
       raise Exception("%s Sprint init failed" % self)
 
     self.reader_thread = Thread(target=self.reader_thread_proc, args=(pid, epoch,),
@@ -683,6 +687,7 @@ class ExternSprintDataset(SprintDatasetBase):
       self.initSprintEpoch(epoch)
       haveSeenTheWhole = False
 
+      seq_count = 0
       while not self.python_exit and self.child_pid:
         try:
           dataType, args = self._read_next_raw()
@@ -702,6 +707,7 @@ class ExternSprintDataset(SprintDatasetBase):
             break
 
           if dataType == b"data":
+            seq_count += 1
             segmentName, features, targets = args
             if segmentName is not None:
               segmentName = segmentName.decode("utf8")
@@ -731,7 +737,8 @@ class ExternSprintDataset(SprintDatasetBase):
           self.finishSprintEpoch(seen_all=haveSeenTheWhole)
           if haveSeenTheWhole:
             self._num_seqs = self.next_seq_to_be_added
-      print("%s finished reading epoch %i, seen all %r" % (self, epoch, haveSeenTheWhole), file=log.v5)
+      print("%s (proc %i) finished reading epoch %i, seen all %r (finished), num seqs %i" % (
+        self, child_pid, epoch, haveSeenTheWhole, seq_count), file=log.v5)
 
     except Exception as exc:
       if not self.python_exit:
