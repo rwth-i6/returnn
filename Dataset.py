@@ -827,19 +827,20 @@ def get_dataset_class(name):
   return None
 
 
-def init_dataset(kwargs):
+def init_dataset(kwargs, extra_kwargs=None):
   """
   :param dict[str]|str|(()->dict[str]) kwargs:
+  :param dict[str]|None extra_kwargs:
   :rtype: Dataset
   """
   assert kwargs
   if callable(kwargs):
-    return init_dataset(kwargs())
+    return init_dataset(kwargs(), extra_kwargs=extra_kwargs)
   if isinstance(kwargs, (str, unicode)):
     if kwargs.startswith("{"):
       kwargs = eval(kwargs)
     else:
-      return init_dataset_via_str(config_str=kwargs)
+      return init_dataset_via_str(config_str=kwargs, **(extra_kwargs or {}))
   assert isinstance(kwargs, dict)
   kwargs = kwargs.copy()
   assert "class" in kwargs
@@ -847,6 +848,8 @@ def init_dataset(kwargs):
   clazz = get_dataset_class(clazz_name)
   if not clazz:
     raise Exception("Dataset class %r not found" % clazz_name)
+  if extra_kwargs:
+    kwargs.update(extra_kwargs)
   obj = clazz(**kwargs)
   assert isinstance(obj, Dataset)
   obj.initialize()

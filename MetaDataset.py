@@ -69,7 +69,9 @@ class MetaDataset(CachedDataset2):
       self._num_timesteps = None
 
     # Will only init the needed datasets.
-    self.datasets = {key: init_dataset(datasets[key]) for key in self.dataset_keys}
+    self.datasets = {
+      key: init_dataset(datasets[key], extra_kwargs={"name": "%s_%s" % (self.name, key)})
+      for key in self.dataset_keys}
 
   def init_seq_order(self, epoch=None, seq_list=None):
     need_reinit = self.epoch is None or self.epoch != epoch
