@@ -210,8 +210,8 @@ class SprintDatasetBase(Dataset):
       return
     # We need to wait.
     assert thread.get_ident() != self.add_data_thread_id
-    print("SprintDataset wait for seqs (%i,%i) (last added: %s) (current time: %s)" % \
-                     (seqStart, seqEnd, self._latestAddedSeq(), time.strftime("%H:%M:%S")), file=log.v5)
+    print("%s wait for seqs (%i,%i) (last added: %s) (current time: %s)" % (
+      self, seqStart, seqEnd, self._latestAddedSeq(), time.strftime("%H:%M:%S")), file=log.v5)
     while not check():
       self.cond.wait()
 
