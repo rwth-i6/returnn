@@ -246,7 +246,7 @@ class SprintDatasetBase(Dataset):
 
   def load_seqs(self, start, end):
     # Called by CRNN train thread.
-    print("SprintDataset load_seqs in %s:" % currentThread().name, start, end, end=' ', file=log.v5)
+    print("%s load_seqs in %s:" % (self, currentThread().name), start, end, end=' ', file=log.v5)
     if start == end: return
     with self.lock:
       super(SprintDatasetBase, self).load_seqs(start, end)
@@ -348,7 +348,7 @@ class SprintDatasetBase(Dataset):
           assert key + "0" not in targets
           targets[key + "0"] = v
         continue
-      print("SprintDataset, we will ignore the target %r because it is not a numpy array: %r" % (key, v), file=log.v3)
+      print("%s, we will ignore the target %r because it is not a numpy array: %r" % (self, key, v), file=log.v3)
       self._target_black_list += [key]
       del targets[key]
 
@@ -371,7 +371,7 @@ class SprintDatasetBase(Dataset):
       self.cond.notify_all()
 
       if seq_idx > self.requested_load_seq_end - 1 + self.SprintCachedSeqsMax:
-        print("SprintDataset addNewData: seq=%i, len=%i. Cache filled, waiting to get loaded..." % (seq_idx, T), file=log.v5)
+        print("%s addNewData: seq=%i, len=%i. Cache filled, waiting to get loaded..." % (self, seq_idx, T), file=log.v5)
         while seq_idx > self.requested_load_seq_end - 1 + self.SprintCachedSeqsMin:
           assert not self.reached_final_seq
           assert seq_idx + 1 == self.next_seq_to_be_added
@@ -519,7 +519,7 @@ class ExternSprintDataset(SprintDatasetBase):
       if self._join_child(wait=False, expected_exit_status=expected_exit_status) is False:  # Not yet terminated.
         interrupt = not self.reached_final_seq_seen_all
         if interrupt:
-          print("ExternSprintDataset: interrupt child proc %i" % self.child_pid, file=log.v5)
+          print("%s: interrupt child proc %s" % (self, self.child_pid), file=log.v5)
           os.kill(self.child_pid, signal.SIGKILL)
           # Also join such that the process is cleaned up, and pipes get closed.
           self._join_child(wait=True, expected_exit_status=None)
@@ -544,7 +544,7 @@ class ExternSprintDataset(SprintDatasetBase):
     self.pipe_c2p = self._pipe_open()
     self.pipe_p2c = self._pipe_open()
     args = self._build_sprint_args()
-    print("ExternSprintDataset: epoch", epoch, "exec", args, file=log.v5)
+    print("%s: epoch" % self, epoch, "exec", args, file=log.v5)
 
     pid = os.fork()
     if pid == 0:  # child
@@ -559,12 +559,12 @@ class ExternSprintDataset(SprintDatasetBase):
         self.pipe_c2p[0].close()
         self.pipe_p2c[1].close()
         os.execv(args[0], args)  # Does not return if successful.
-        print("ExternSprintDataset child exec failed.")
+        print("%s child exec failed." % self)
       except BaseException:
-        print("ExternSprintDataset child: Error when starting Sprint %r." % args)
+        print("%s child: Error when starting Sprint %r." % (self, args))
         sys.excepthook(*sys.exc_info())
       finally:
-        print("ExternSprintDataset child: exit")
+        print("%s child: exit" % self)
         os._exit(1)
         return  # Not reached.
 
@@ -580,14 +580,14 @@ class ExternSprintDataset(SprintDatasetBase):
       # Ignore num_segments. It can be totally different than the real number of sequences.
       self.setDimensions(inputDim, outputDim)
     except Exception:
-      print("ExternSprintDataset: Sprint child process (%r) caused an exception." % args, file=log.v1)
+      print("%s: Sprint child process (%r) caused an exception." % (self, args), file=log.v1)
       sys.excepthook(*sys.exc_info())
       self._exit_child(wait_thread=False)
       self.child_pid = None
-      raise Exception("ExternSprintDataset Sprint init failed")
+      raise Exception("%s Sprint init failed" % self)
 
     self.reader_thread = Thread(target=self.reader_thread_proc, args=(pid, epoch,),
-                                name="ExternSprintDataset reader thread")
+                                name="%s reader thread" % self)
     self.reader_thread.daemon = True
     self.reader_thread.start()
 
@@ -671,7 +671,7 @@ class ExternSprintDataset(SprintDatasetBase):
       return False
     assert pid == self.child_pid
     if expected_exit_status is not None:
-      assert exit_status == expected_exit_status, "Sprint exit code is %i" % exit_status
+      assert exit_status == expected_exit_status, "%s: Sprint exit code is %i" % (self, exit_status)
     return True
 
   def reader_thread_proc(self, child_pid, epoch):
@@ -720,7 +720,7 @@ class ExternSprintDataset(SprintDatasetBase):
         try:
           os.remove(self.seq_list_file)
         except Exception as e:
-          print("ExternSprintDataset: error when removing %r: %r" % (self.seq_list_file, e), file=log.v5)
+          print("%s: error when removing %r: %r" % (self, self.seq_list_file, e), file=log.v5)
         finally:
           self.seq_list_file = None
 
@@ -729,16 +729,16 @@ class ExternSprintDataset(SprintDatasetBase):
           self.finishSprintEpoch(seen_all=haveSeenTheWhole)
           if haveSeenTheWhole:
             self._num_seqs = self.next_seq_to_be_added
-      print("ExternSprintDataset finished reading epoch %i, seen all %r" % (epoch, haveSeenTheWhole), file=log.v5)
+      print("%s finished reading epoch %i, seen all %r" % (self, epoch, haveSeenTheWhole), file=log.v5)
 
-    except Exception:
+    except Exception as exc:
       if not self.python_exit:
         # Catch all standard exceptions.
         # Don't catch KeyboardInterrupt here because that will get send by the main thread
         # when it is exiting. It's never by the user because SIGINT will always
         # trigger KeyboardInterrupt in the main thread only.
         try:
-          print("ExternSprintDataset reader failed", file=log.v1)
+          print("%s reader failed (%s)" % (self, exc), file=log.v1)
           sys.excepthook(*sys.exc_info())
           print("")
         finally:
