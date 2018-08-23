@@ -53,7 +53,7 @@ class Dataset(object):
     cls.kwargs_update_from_config(config, kwargs)
     return cls(**kwargs)
 
-  def __init__(self, name="dataset",
+  def __init__(self, name=None,
                window=1, context_window=None, chunking=None,
                seq_ordering='default', shuffle_frames_of_nseqs=0, min_chunk_size=0,
                estimated_num_seqs=None,):
@@ -68,7 +68,7 @@ class Dataset(object):
     :param int shuffle_frames_of_nseqs: shuffles the frames. not always supported
     :param None|int estimated_num_seqs: for progress reporting in case the real num_seqs is unknown
     """
-    self.name = name
+    self.name = name or ("dataset_%s" % id(self))
     self.lock = RLock()  # Used when manipulating our data potentially from multiple threads.
     self.num_inputs = 0  # usually not used, but num_outputs instead, which is more generic
     self.num_outputs = None; " :type: dict[str,(int,int)] "  # tuple is num-classes, len(shape).
