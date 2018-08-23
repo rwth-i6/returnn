@@ -4969,6 +4969,9 @@ class OfficialResNetLayer(_ConcatInputLayer):
       data = Data(name="%s_output" % name, shape=(num_classes,), dtype="float32",
                   batch_dim_axis=0, time_dim_axis=None)
 
+    data = Data(name="%s_output" % name, shape=(1, num_classes), dtype="float32",
+                  batch_dim_axis=0, time_dim_axis=1)
+
     return data
 # ------------------------------------------------------------------------------
 
