@@ -191,6 +191,19 @@ class SprintDatasetBase(Dataset):
         assert epoch > self.crnnEpoch
         self.cond.wait()
 
+  def _wait_for_seq_can_pass_check(self, seq_start, seq_end):
+    """
+    :param int seq_start:
+    :param int seq_end:
+    :return: True if _waitForSeq can pass/return. False means that we need to wait more (until next signal)
+    :rtype: bool
+    """
+    if self.reached_final_seq:
+      return True
+    if self._haveSeqsAdded(seq_start, seq_end):
+      return True
+    return False
+
   def _waitForSeq(self, seqStart, seqEnd=None):
     """
     Called by CRNN train thread.
@@ -202,19 +215,13 @@ class SprintDatasetBase(Dataset):
     if seqEnd > self.requested_load_seq_end:
       self.requested_load_seq_end = seqEnd
       self.cond.notify_all()
-    def check():
-      if self.reached_final_seq:
-        return True
-      if self._haveSeqsAdded(seqStart, seqEnd):
-        return True
-      return False
-    if check():
+    if self._wait_for_seq_can_pass_check(seq_start=seqStart, seq_end=seqEnd):
       return
     # We need to wait.
     assert thread.get_ident() != self.add_data_thread_id
     print("%s %s: wait for seqs (%i,%i) (last added: %s) (current time: %s)" % (
       self, currentThread().name, seqStart, seqEnd, self._latestAddedSeq(), time.strftime("%H:%M:%S")), file=log.v5)
-    while not check():
+    while not self._wait_for_seq_can_pass_check(seq_start=seqStart, seq_end=seqEnd):
       self.cond.wait()
 
   def _latestAddedSeq(self):
@@ -753,6 +760,19 @@ class ExternSprintDataset(SprintDatasetBase):
         finally:
           # Exceptions are fatal. If we can recover, we should handle it in run_inner().
           interrupt_main()
+
+  def _wait_for_seq_can_pass_check(self, seq_start, seq_end):
+    """
+    :param int seq_start:
+    :param int seq_end:
+    :return: True if _waitForSeq can pass/return. False means that we need to wait more (until next signal)
+    :rtype: bool
+    """
+    if self.child_pid is None:
+      return True
+    if super(ExternSprintDataset, self)._wait_for_seq_can_pass_check(seq_start=seq_start, seq_end=seq_end):
+      return True
+    return False
 
   def exit_handler(self):
     assert os.getpid() == self.parent_pid
