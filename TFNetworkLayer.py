@@ -2607,7 +2607,7 @@ class ExpandDimsLayer(_ConcatInputLayer):
 
   def __init__(self, axis, dim=1, **kwargs):
     """
-    :param str|int axis: axis to add, e.g. "F"|"feature" or "spatial".
+    :param str|int axis: axis to add, e.g. "F"|"feature" or "spatial"|"time"|"T".
       if this is an integer, the input data is first converted into batch-major mode,
       and then this is counted with batch-dim.
     :param int dim: dimension of new axis (1 by default)
@@ -2630,7 +2630,7 @@ class ExpandDimsLayer(_ConcatInputLayer):
     This is supposed to be after the specified axis, e.g. after the feature-dim.
 
     :param Data data:
-    :param str axis: e.g. "F"|"feature" or "spatial"|"time"
+    :param str|int axis: e.g. "F"|"feature" or "spatial"|"time"
     :return: axis as int for data.placeholder
     :rtype: int
     """
@@ -2640,8 +2640,9 @@ class ExpandDimsLayer(_ConcatInputLayer):
     axis = axis.lower()
     if axis in ["f", "feature"]:
       assert not data.sparse
+      assert data.feature_dim_axis_or_unspecified is NotSpecified
       return data.batch_ndim
-    elif axis in ["spatial", "time"]:
+    elif axis in ["spatial", "time", "t"]:
       if data.sparse:
         return data.batch_ndim
       else:
@@ -2651,18 +2652,20 @@ class ExpandDimsLayer(_ConcatInputLayer):
 
   @classmethod
   def get_out_data_from_opts(cls, name, axis, dim=1, sources=(), **kwargs):
-    init_axis = axis # Initial axis used for later comparison
+    init_axis = axis
     data = get_concat_sources_data_template(sources)
     data.name = "%s_output" % name
     if isinstance(axis, int):
       data = data.copy_as_batch_major()
     axis = cls._get_axis(data=data, axis=axis)
     if axis == data.batch_ndim and not data.sparse:
+      assert data.feature_dim_axis_or_unspecified is NotSpecified
       data.dim = dim
-    axis -= 1  # subtract batch axis
-    data.shape = data.shape[:axis] + (dim,) + data.shape[axis:]
-    if init_axis == "time":
-      data.time_dim_axis = axis
+    axis_wo_batch = data.get_batch_axis_excluding_batch(axis)
+    data.shape = data.shape[:axis_wo_batch] + (dim,) + data.shape[axis_wo_batch:]
+    if isinstance(init_axis, str):
+      if init_axis.lower() in ["spatial", "time", "t"] and data.time_dim_axis is None:
+        data.time_dim_axis = axis
     return data
 
 
