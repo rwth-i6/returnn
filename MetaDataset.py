@@ -364,6 +364,8 @@ class CombinedDataset(CachedDataset2):
   For each sequence idx, it will select one of the given datasets, fill in the data-keys of this dataset
   and will return empty sequences for the remaining datasets.
   The selection of the dataset will be random and equally distributed, over the sum of num-seqs.
+
+  Also see :class:`MetaDataset`.
   """
 
   def __init__(self,
@@ -383,7 +385,6 @@ class CombinedDataset(CachedDataset2):
     assert self.shuffle_frames_of_nseqs == 0  # not implemented. anyway only for non-recurrent nets
 
     self.rnd = Random(self.epoch)
-#    self.data_map = data_map
     self.dataset_keys = set(datasets.keys()); ":type: set[str]"
     self.dataset_idxs = dict(enumerate(sorted(self.dataset_keys)))  # idx -> dataset-key
     self.data_keys = set(data_map.values()); ":type: set[str]"
@@ -398,7 +399,6 @@ class CombinedDataset(CachedDataset2):
         target_lookup_table[dataset_key].setdefault(key,None)
 
     self.target_lookup_table = target_lookup_table
-
 
     data_dims = convert_data_dims(data_dims)
     self.data_dims = data_dims
@@ -416,12 +416,9 @@ class CombinedDataset(CachedDataset2):
     try:
       self._num_seqs = sum([self.datasets[k].num_seqs for k in sorted(self.datasets.keys())])
       self.know_num_seqs_beforehand = True
-#      print "Dont need to set estimations for num_seqs. Currently is {s}".format(s=[ds.num_seqs for ds in self.datasets.values()])
     except Exception:
       self._estimated_num_seqs = sum([self.datasets[k].estimated_num_seqs for k in sorted(self.datasets.keys())])
       self.estimated_num_seq_per_subset = [self.datasets[k].estimated_num_seqs for k in sorted(self.datasets.keys())]
-#      TODO this estimate seems broken on a small test corpus; needs further testing
-#      print "Need to set estimations for num_seqs. Currently is {s}".format(s=[ds.estimated_num_seqs for ds in self.datasets.values()])
       self.know_num_seqs_beforehand = False
 
   def _canonical_seqs_dataset_idxs(self):
@@ -483,7 +480,6 @@ class CombinedDataset(CachedDataset2):
 
   def _expand_dataset_sec_idxs(self, num_values):
     """
-
     :param num_values: int Add num_values entries to the dataset-segment-idx mapping table
     :return:
     """
@@ -539,10 +535,7 @@ class CombinedDataset(CachedDataset2):
       self.used_num_seqs_per_subset[dataset_idx] += 1
     return True
 
-
-
   def _load_seqs(self, start, end):
-
     # If the segment order is not yet known, fix the next few segments
     if not self.know_num_seqs_beforehand and end > len(self.dataset_seq_idxs):
       self._expand_dataset_sec_idxs(end-len(self.dataset_seq_idxs))
@@ -581,7 +574,6 @@ class CombinedDataset(CachedDataset2):
     else:
       return numpy.array([])
 
-
   def _collect_single_seq(self, seq_idx):
     """
     :type seq_idx: int
@@ -606,7 +598,6 @@ class CombinedDataset(CachedDataset2):
         return True
       else:
         return self._expand_dataset_sec_idxs(n-len(self.dataset_seq_idxs)+1)
-
 
   def get_target_list(self):
     return self.target_list
