@@ -521,7 +521,7 @@ class ExternSprintDataset(SprintDatasetBase):
     # This is our workaround. We check for it in self.run_inner().
     self.python_exit = False
     atexit.register(self.exit_handler)
-    self.init_epoch()
+    self.init_seq_order()
 
   def _exit_child(self, wait_thread=True):
     if self.child_pid:
@@ -539,6 +539,8 @@ class ExternSprintDataset(SprintDatasetBase):
       if wait_thread:
         # Load all remaining data so that the reader thread is not waiting in self.addNewData().
         while self.is_less_than_num_seqs(self.expected_load_seq_start + 1):
+          if self.reached_final_seq:  # this is set by the reader thread
+            break
           self.load_seqs(self.expected_load_seq_start + 1, self.expected_load_seq_start + 2)
         self.reader_thread.join()
         self.reader_thread = None
@@ -779,30 +781,19 @@ class ExternSprintDataset(SprintDatasetBase):
     self.python_exit = True
     self._exit_child(wait_thread=False)
 
-  def init_epoch(self, epoch=None, seq_list=None):
+  def init_seq_order(self, epoch=None, seq_list=None):
     if epoch is None:
       epoch = 1
     with self.lock:
-      if epoch == self.crnnEpoch and self.expected_load_seq_start == 0:
+      if epoch == self.crnnEpoch and self.expected_load_seq_start == 0 and seq_list == self.predefined_seq_list_order:
         return
-      if epoch != self.crnnEpoch:
-        if self._num_seqs is not None:
-          self._estimated_num_seqs = self._num_seqs  # last epoch num_seqs is a good estimate
-          self._num_seqs = None  # but we are not certain whether we have the same num_seqs for this epoch
+      if self._num_seqs:
+        self._estimated_num_seqs = self._num_seqs  # last epoch num_seqs is a good estimate
+      self._num_seqs = None  # we are not certain whether we have the same num_seqs for this epoch
       super(ExternSprintDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
     self._exit_child(wait_thread=True)
     self._start_child(epoch)
-
-  def init_seq_order(self, epoch=None, seq_list=None):
-    self.init_epoch(epoch=epoch, seq_list=seq_list)
     return True
-
-  @property
-  def num_seqs(self):
-    with self.lock:
-      if self._num_seqs is None:
-        raise NotImplementedError
-      return self._num_seqs
 
 
 class SprintCacheDataset(CachedDataset2):
