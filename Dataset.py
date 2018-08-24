@@ -77,7 +77,7 @@ class Dataset(object):
     self.num_outputs = None; " :type: dict[str,(int,int)] "  # tuple is num-classes, len(shape).
     self.window = window
     self.seq_ordering = seq_ordering  # "default", "sorted" or "random". See self.get_seq_order_for_epoch().
-    self.partition_epoch = partition_epoch
+    self.partition_epoch = partition_epoch or 1
     self.timestamps = None
     self.labels = {}; """ :type: dict[str,list[str]] """
     self.nbytes = 0
@@ -254,12 +254,10 @@ class Dataset(object):
     :rtype: list[int]
     """
     partition_epoch = self.partition_epoch
-    if not partition_epoch:
-      partition_epoch = 1
     if not epoch:
       epoch = 1
     full_epoch = epoch
-    if partition_epoch != 1:
+    if partition_epoch > 1:
       full_epoch = (epoch - 1) // partition_epoch + 1
     assert num_seqs > 0
     seq_index = list(range(num_seqs)); """ :type: list[int]. the real seq idx after sorting """
@@ -297,7 +295,7 @@ class Dataset(object):
       rnd.shuffle(seq_index)
     else:
       assert False, "invalid batching specified: " + self.seq_ordering
-    if partition_epoch != 1:
+    if partition_epoch > 1:
       current_partition = ((epoch or 1) - 1) % partition_epoch
       total_seqs = self._num_seqs
       seqs_per_epoch = total_seqs // partition_epoch

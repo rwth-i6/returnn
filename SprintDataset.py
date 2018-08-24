@@ -627,16 +627,17 @@ class ExternSprintDataset(SprintDatasetBase):
     if TaskSystem.SharedMemNumpyConfig["enabled"]:
       config_str += ",EnableAutoNumpySharedMemPickling:True"
     epoch = self.crnnEpoch or 1
+    assert epoch >= 1
     if isinstance(self.sprintTrainerExecPath, (list, tuple)):
       args = list(self.sprintTrainerExecPath)
     else:
       args = [self.sprintTrainerExecPath]
     args += [
-      "--*.seed=%i" % (epoch // self.partition_epoch)]
+      "--*.seed=%i" % ((epoch - 1) // self.partition_epoch)]
     if self.partition_epoch > 1:
       args += [
         "--*.corpus.partition=%i" % self.partition_epoch,
-        "--*.corpus.select-partition=%i" % (epoch % self.partition_epoch)]
+        "--*.corpus.select-partition=%i" % ((epoch - 1) % self.partition_epoch)]
     args += [
       "--*.python-segment-order=true",
       "--*.python-segment-order-pymod-path=%s" % self._my_python_mod_path,
