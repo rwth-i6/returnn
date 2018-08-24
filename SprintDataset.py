@@ -520,7 +520,7 @@ class ExternSprintDataset(SprintDatasetBase):
     self.sprintTrainerExecPath = sprintTrainerExecPath
     self.sprintConfig = sprintConfigStr
     if partitionEpoch:
-      assert not self.partition_epoch, "don't provide partitionEpoch and partition_epoch"
+      assert self.partition_epoch == 1, "don't provide partitionEpoch and partition_epoch"
       self.partition_epoch = partitionEpoch
     self._num_seqs = None
     self.child_pid = None  # type: int|None
