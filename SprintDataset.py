@@ -656,6 +656,7 @@ class ExternSprintDataset(SprintDatasetBase):
           f.write("\n")
         f.close()
       args += ["--*.corpus.segments.file=%s" % self.seq_list_file]
+      args += ["--*.corpus.segment-order=%s" % self.seq_list_file]
     args += eval_shell_str(self.sprintConfig)
     return args
 
