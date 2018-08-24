@@ -43,7 +43,7 @@ class MetaDataset(CachedDataset2):
     self.dataset_keys = set([m[0] for m in self.data_map.values()]); ":type: set[str]"
     self.data_keys = set(self.data_map.keys()); ":type: set[str]"
     assert "data" in self.data_keys
-    self.target_list = sorted(self.data_keys - ["data"])
+    self.target_list = sorted(self.data_keys - {"data"})
 
     data_dims = convert_data_dims(data_dims)
     self.data_dims = data_dims
