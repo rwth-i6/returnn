@@ -17,7 +17,6 @@ import sys
 import os
 import numpy
 import functools
-import theano
 
 from Log import log
 from EngineBatch import Batch, BatchSetGenerator
@@ -336,10 +335,10 @@ class Dataset(object):
     if int(self.window) % 2 == 0:
       self.window += 1
 
-    self.nbytes = numpy.array([], dtype=theano.config.floatX).itemsize * (self.num_inputs * self.window + 1 + 1)
+    self.nbytes = numpy.array([], dtype=numpy.float32).itemsize * (self.num_inputs * self.window + 1 + 1)
 
     if self.window > 1:
-      self.zpad = numpy.zeros((int(self.window) // 2, self.num_inputs), dtype=theano.config.floatX)
+      self.zpad = numpy.zeros((int(self.window) // 2, self.num_inputs), dtype=numpy.float32)
 
   def initialize(self):
     """
@@ -586,14 +585,14 @@ class Dataset(object):
     return " ".join(map(self.labels[key].__getitem__, data))
 
   def calculate_priori(self, target="classes"):
-    priori = numpy.zeros((self.num_outputs[target][0],), dtype=theano.config.floatX)
+    priori = numpy.zeros((self.num_outputs[target][0],), dtype=numpy.float32)
     i = 0
     while self.is_less_than_num_seqs(i):
       self.load_seqs(i, i + 1)
       for t in self.get_targets(target, i):
         priori[t] += 1
       i += 1
-    return numpy.array(priori / self.get_num_timesteps(), dtype=theano.config.floatX)
+    return numpy.array(priori / self.get_num_timesteps(), dtype=numpy.float32)
 
   def iterate_seqs(self, chunk_size=None, chunk_step=None, used_data_keys=None):
     """
