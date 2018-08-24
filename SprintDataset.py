@@ -501,16 +501,19 @@ class ExternSprintDataset(SprintDatasetBase):
   The Sprint subprocess will use SprintExternInterface to communicate with us.
   """
 
-  def __init__(self, sprintTrainerExecPath, sprintConfigStr, partitionEpoch=1, **kwargs):
+  def __init__(self, sprintTrainerExecPath, sprintConfigStr, partitionEpoch=None, **kwargs):
     """
     :param str|list[str] sprintTrainerExecPath:
     :param str | list[str] | ()->str | list[()->str] | ()->list[str] | ()->list[()->str] sprintConfigStr: via eval_shell_str
+    :param int|None partitionEpoch: deprecated. use partition_epoch instead
     """
     super(ExternSprintDataset, self).__init__(**kwargs)
     self.add_data_thread_id = None
     self.sprintTrainerExecPath = sprintTrainerExecPath
     self.sprintConfig = sprintConfigStr
-    self.partitionEpoch = partitionEpoch
+    if partitionEpoch:
+      assert not self.partition_epoch, "don't provide partitionEpoch and partition_epoch"
+      self.partition_epoch = partitionEpoch
     self._num_seqs = None
     self.child_pid = None  # type: int|None
     self.parent_pid = os.getpid()
@@ -629,11 +632,11 @@ class ExternSprintDataset(SprintDatasetBase):
     else:
       args = [self.sprintTrainerExecPath]
     args += [
-      "--*.seed=%i" % (epoch // self.partitionEpoch)]
-    if self.partitionEpoch > 1:
+      "--*.seed=%i" % (epoch // self.partition_epoch)]
+    if self.partition_epoch > 1:
       args += [
-        "--*.corpus.partition=%i" % self.partitionEpoch,
-        "--*.corpus.select-partition=%i" % (epoch % self.partitionEpoch)]
+        "--*.corpus.partition=%i" % self.partition_epoch,
+        "--*.corpus.select-partition=%i" % (epoch % self.partition_epoch)]
     args += [
       "--*.python-segment-order=true",
       "--*.python-segment-order-pymod-path=%s" % self._my_python_mod_path,
