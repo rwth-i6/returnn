@@ -76,6 +76,7 @@ class MetaDataset(CachedDataset2):
   def init_seq_order(self, epoch=None, seq_list=None):
     need_reinit = self.epoch is None or self.epoch != epoch or seq_list
     super(MetaDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+    self._num_seqs = len(self.seq_list_original)
     if not need_reinit:
       return False
 
