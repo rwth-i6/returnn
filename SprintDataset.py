@@ -373,7 +373,15 @@ class SprintDatasetBase(Dataset):
 
       if self.predefined_seq_list_order:
         # Note: Only in ExternSprintDataset, we can reliably set the seq order for now.
-        assert self.predefined_seq_list_order[seq_idx] == segmentName, "seq-order not as expected"
+        assert seq_idx < len(self.predefined_seq_list_order), "seq_idx %i, expected predef num seqs %i" % (
+          seq_idx, len(self.predefined_seq_list_order))
+        expected_seq_name = self.predefined_seq_list_order[seq_idx]
+        if expected_seq_name != segmentName:
+          if segmentName in self.predefined_seq_list_order:
+            raise Exception("seq_idx %i expected to be tag %r but got tag %r; tag %r is at idx %i" % (
+              seq_idx, expected_seq_name, segmentName, segmentName, self.predefined_seq_list_order.index(segmentName)))
+          raise Exception("seq_idx %i expected to be tag %r but got tag %r; tag %r not found" % (
+            seq_idx, expected_seq_name, segmentName, segmentName))
 
       self.next_seq_to_be_added += 1
       self._num_timesteps += T
