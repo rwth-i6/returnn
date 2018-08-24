@@ -35,15 +35,26 @@ class MetaDataset(CachedDataset2):
     super(MetaDataset, self).__init__(**kwargs)
     assert self.shuffle_frames_of_nseqs == 0  # not implemented. anyway only for non-recurrent nets
 
-    self.seq_list_original = open(seq_list_file).read().splitlines()
-    self.tag_idx = {tag: idx for (idx, tag) in enumerate(self.seq_list_original)}
-    self._num_seqs = len(self.seq_list_original)
-
     self.data_map = data_map
     self.dataset_keys = set([m[0] for m in self.data_map.values()]); ":type: set[str]"
     self.data_keys = set(self.data_map.keys()); ":type: set[str]"
     assert "data" in self.data_keys
     self.target_list = sorted(self.data_keys - {"data"})
+    self.default_dataset_key = self.data_map["data"][0]
+
+    if seq_list_file.endswith(".pkl"):
+      import pickle
+      seq_list = pickle.load(open(seq_list_file, 'rb'))
+    else:
+      seq_list = open(seq_list_file).read().splitlines()
+    assert isinstance(seq_list, (list, dict))
+    if isinstance(seq_list, list):
+      seq_list = {key: seq_list for key in self.dataset_keys}
+    self.seq_list_original = seq_list  # type: dict[str,list[str]]  # dataset key -> seq list
+    self._num_seqs = len(self.seq_list_original[self.default_dataset_key])
+    for key in self.data_keys:
+      assert len(self.seq_list_original[key]) == self._num_seqs
+    self.tag_idx = {tag: idx for (idx, tag) in enumerate(self.seq_list_original[self.default_dataset_key])}
 
     data_dims = convert_data_dims(data_dims)
     self.data_dims = data_dims
@@ -64,7 +75,7 @@ class MetaDataset(CachedDataset2):
       self._seq_lens = None
 
     if self._seq_lens:
-      self._num_timesteps = sum([self._seq_lens[s] for s in self.seq_list_original])
+      self._num_timesteps = sum([self._seq_lens[s] for s in self.seq_list_original[self.default_dataset_key]])
     else:
       self._num_timesteps = None
 
@@ -76,7 +87,7 @@ class MetaDataset(CachedDataset2):
   def init_seq_order(self, epoch=None, seq_list=None):
     need_reinit = self.epoch is None or self.epoch != epoch or seq_list
     super(MetaDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
-    self._num_seqs = len(self.seq_list_original)
+    self._num_seqs = len(self.seq_list_original[self.default_dataset_key])
     if not need_reinit:
       return False
 
@@ -84,14 +95,14 @@ class MetaDataset(CachedDataset2):
       seq_index = [self.tag_idx[tag] for tag in seq_list]
     else:
       if self._seq_lens:
-        get_seq_len = lambda s: self._seq_lens[self.seq_list_original[s]]["data"]
+        get_seq_len = lambda s: self._seq_lens[self.seq_list_original[self.default_dataset_key][s]]["data"]
       else:
         get_seq_len = None
       seq_index = self.get_seq_order_for_epoch(epoch, self.num_seqs, get_seq_len)
-    self.seq_list_ordered = [self.seq_list_original[s] for s in seq_index]
+    self.seq_list_ordered = {key: [ls[s] for s in seq_index] for (key, ls) in self.seq_list_original.items()}
 
-    for dataset in self.datasets.values():
-      dataset.init_seq_order(epoch=epoch, seq_list=self.seq_list_ordered)
+    for dataset_key, dataset in self.datasets.items():
+      dataset.init_seq_order(epoch=epoch, seq_list=self.seq_list_ordered[dataset_key])
     return True
 
   def _load_seqs(self, start, end):
