@@ -16,6 +16,7 @@ from random import Random, random
 import sys
 import os
 import numpy
+import functools
 import theano
 
 from Log import log
@@ -55,7 +56,8 @@ class Dataset(object):
 
   def __init__(self, name=None,
                window=1, context_window=None, chunking=None,
-               seq_ordering='default', shuffle_frames_of_nseqs=0, min_chunk_size=0,
+               seq_ordering='default', partition_epoch=None,
+               shuffle_frames_of_nseqs=0, min_chunk_size=0,
                estimated_num_seqs=None,):
     """
     :param str name: e.g. "train" or "eval"
@@ -65,6 +67,7 @@ class Dataset(object):
     :param None|str|int|(int,int)|dict|(dict,dict) chunking: "chunk_size:chunk_step"
     :param str seq_ordering: "batching"-option in config. e.g. "default", "sorted" or "random".
       See self.get_seq_order_for_epoch() for more details.
+    :param int|None partition_epoch:
     :param int shuffle_frames_of_nseqs: shuffles the frames. not always supported
     :param None|int estimated_num_seqs: for progress reporting in case the real num_seqs is unknown
     """
@@ -74,6 +77,7 @@ class Dataset(object):
     self.num_outputs = None; " :type: dict[str,(int,int)] "  # tuple is num-classes, len(shape).
     self.window = window
     self.seq_ordering = seq_ordering  # "default", "sorted" or "random". See self.get_seq_order_for_epoch().
+    self.partition_epoch = partition_epoch
     self.timestamps = None
     self.labels = {}; """ :type: dict[str,list[str]] """
     self.nbytes = 0
@@ -249,6 +253,14 @@ class Dataset(object):
     :return: the order for the given epoch. such that seq_idx -> underlying idx
     :rtype: list[int]
     """
+    partition_epoch = self.partition_epoch
+    if not partition_epoch:
+      partition_epoch = 1
+    if not epoch:
+      epoch = 1
+    full_epoch = epoch
+    if partition_epoch != 1:
+      full_epoch = (epoch - 1) // partition_epoch + 1
     assert num_seqs > 0
     seq_index = list(range(num_seqs)); """ :type: list[int]. the real seq idx after sorting """
     if self.seq_ordering == 'default':
@@ -264,7 +276,7 @@ class Dataset(object):
       tmp = self.seq_ordering.split(':')
       bins = int(tmp[1]) if len(tmp) > 1 else 2
       nth = int(tmp[2]) if len(tmp) > 2 else 1
-      rnd_seed = ((epoch - 1) // nth + 1) if epoch else 1
+      rnd_seed = ((full_epoch - 1) // nth + 1) if full_epoch else 1
       rnd = Random(rnd_seed)
       rnd.shuffle(seq_index)
       out_index = []
@@ -273,18 +285,29 @@ class Dataset(object):
           part = seq_index[i * len(seq_index) // bins:][:]
         else:
           part = seq_index[i * len(seq_index) // bins:(i + 1) * len(seq_index) // bins][:]
-        part.sort(key=get_seq_len, reverse=(i%2 == 1))
+        part.sort(key=get_seq_len, reverse=(i % 2 == 1))
         out_index += part
       seq_index = out_index
     elif self.seq_ordering.startswith('random'):
       tmp = self.seq_ordering.split(':')
       nth = int(tmp[1]) if len(tmp) > 1 else 1
       # Keep this deterministic! Use fixed seed.
-      rnd_seed = ((epoch-1) / nth + 1) if epoch else 1
+      rnd_seed = (full_epoch - 1) / nth + 1
       rnd = Random(rnd_seed)
       rnd.shuffle(seq_index)
     else:
       assert False, "invalid batching specified: " + self.seq_ordering
+    if partition_epoch != 1:
+      current_partition = ((epoch or 1) - 1) % partition_epoch
+      total_seqs = self._num_seqs
+      seqs_per_epoch = total_seqs // partition_epoch
+      partition_sizes = ([seqs_per_epoch + 1] * (total_seqs % partition_epoch) +
+                         [seqs_per_epoch] * (partition_epoch - total_seqs % partition_epoch))
+      assert sum(partition_sizes) == total_seqs and len(partition_sizes) == partition_epoch
+      partitions = functools.reduce(lambda a, x: a + [a[-1] + x], partition_sizes, [0])  # cumulative sum
+      assert len(partitions) == partition_epoch + 1
+      seq_index = seq_index[partitions[current_partition]:partitions[current_partition + 1]]
+      assert len(seq_index) == partition_sizes[current_partition]
     return seq_index
 
   def init_seq_order(self, epoch=None, seq_list=None):

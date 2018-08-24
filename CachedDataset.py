@@ -10,13 +10,11 @@ from Util import NumbersDict
 
 class CachedDataset(Dataset):
 
-  def __init__(self, cache_byte_size=0, partition_epoch=1, **kwargs):
+  def __init__(self, cache_byte_size=0, **kwargs):
     """
     :param int cache_byte_size:
-    :param int partition_epoch:
     """
     super(CachedDataset, self).__init__(**kwargs)
-    self.partition_epoch = partition_epoch
     self.cache_byte_size_total_limit = cache_byte_size
     if cache_byte_size < 0:
       self.cache_byte_size_limit_at_start = 1
@@ -64,21 +62,7 @@ class CachedDataset(Dataset):
       self._update_tag_idx()
       seq_index = [self._tag_idx[tag] for tag in seq_list]
     else:
-      full_epoch = epoch or 1
-      if self.partition_epoch != 1:
-        full_epoch = ((epoch or 1) - 1) // self.partition_epoch + 1
-      seq_index = self.get_seq_order_for_epoch(full_epoch, self._num_seqs, lambda s: self._seq_lengths[s][0])
-      if self.partition_epoch != 1:
-        current_partition = ((epoch or 1) - 1) % self.partition_epoch
-        total_seqs = self._num_seqs
-        seqs_per_epoch = total_seqs // self.partition_epoch
-        partition_sizes = [seqs_per_epoch + 1] * (total_seqs % self.partition_epoch) \
-                          + [seqs_per_epoch] * (self.partition_epoch - total_seqs % self.partition_epoch)
-        assert sum(partition_sizes) == total_seqs and len(partition_sizes) == self.partition_epoch
-        partitions = functools.reduce(lambda a, x: a + [a[-1] + x], partition_sizes, [0])  # cumulative sum
-        assert len(partitions) == self.partition_epoch + 1
-        seq_index = seq_index[partitions[current_partition]:partitions[current_partition + 1]]
-        assert len(seq_index) == partition_sizes[current_partition]
+      seq_index = self.get_seq_order_for_epoch(epoch, self._num_seqs, lambda s: self._seq_lengths[s][0])
 
     old_index_map = self._index_map[:]
     self._index_map = range(len(seq_index))  # sorted seq idx -> seq_index idx
