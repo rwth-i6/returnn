@@ -52,7 +52,7 @@ class MetaDataset(CachedDataset2):
       seq_list = {key: seq_list for key in self.dataset_keys}
     self.seq_list_original = seq_list  # type: dict[str,list[str]]  # dataset key -> seq list
     self._num_seqs = len(self.seq_list_original[self.default_dataset_key])
-    for key in self.data_keys:
+    for key in self.dataset_keys:
       assert len(self.seq_list_original[key]) == self._num_seqs
     self.tag_idx = {tag: idx for (idx, tag) in enumerate(self.seq_list_original[self.default_dataset_key])}
 
@@ -136,18 +136,18 @@ class MetaDataset(CachedDataset2):
     :type seq_idx: int
     :rtype: DatasetSeq
     """
-    seq_tag = self.seq_list_ordered[seq_idx]
+    seq_tag = self.seq_list_ordered[self.default_dataset_key][seq_idx]
     features = self._get_data(seq_idx, "data")
     targets = {target: self._get_data(seq_idx, target) for target in self.target_list}
     return DatasetSeq(seq_idx=seq_idx, seq_tag=seq_tag, features=features, targets=targets)
 
   def get_seq_length(self, sorted_seq_idx):
     if self._seq_lens:
-      return self._seq_lens[self.seq_list_ordered[sorted_seq_idx]]
+      return self._seq_lens[self.seq_list_ordered[self.default_dataset_key][sorted_seq_idx]]
     return super(MetaDataset, self).get_seq_length(sorted_seq_idx)
 
   def get_tag(self, sorted_seq_idx):
-    return self.seq_list_ordered[sorted_seq_idx]
+    return self.seq_list_ordered[self.default_dataset_key][sorted_seq_idx]
 
   def get_target_list(self):
     return self.target_list
