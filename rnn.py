@@ -416,7 +416,7 @@ def executeMainTask():
     config.set('load_epoch', engine.epoch)
     print("Evaluate epoch", engine.epoch, file=log.v4)
     engine.eval_model(config.value("eval_output_file", ""))
-  elif task in ['forward','hpx']:
+  elif task in ['forward', 'hpx']:
     assert eval_data is not None, 'no eval data provided'
     combine_labels = config.value('combine_labels', '')
     engine.use_search_flag = config.bool("forward_use_search", False)

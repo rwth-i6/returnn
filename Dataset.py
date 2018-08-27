@@ -70,7 +70,7 @@ class Dataset(object):
     :param int shuffle_frames_of_nseqs: shuffles the frames. not always supported
     :param None|int estimated_num_seqs: for progress reporting in case the real num_seqs is unknown
     """
-    self.name = name or ("dataset_%s" % id(self))
+    self.name = name or ("dataset_id%s" % id(self))
     self.lock = RLock()  # Used when manipulating our data potentially from multiple threads.
     self.num_inputs = 0  # usually not used, but num_outputs instead, which is more generic
     self.num_outputs = None; " :type: dict[str,(int,int)] "  # tuple is num-classes, len(shape).
@@ -850,20 +850,27 @@ def get_dataset_class(name):
   return None
 
 
-def init_dataset(kwargs, extra_kwargs=None):
+def init_dataset(kwargs, extra_kwargs=None, default_kwargs=None):
   """
   :param dict[str]|str|(()->dict[str]) kwargs:
   :param dict[str]|None extra_kwargs:
+  :param dict[str]|None default_kwargs:
   :rtype: Dataset
   """
   assert kwargs
   if callable(kwargs):
-    return init_dataset(kwargs(), extra_kwargs=extra_kwargs)
+    return init_dataset(kwargs(), extra_kwargs=extra_kwargs, default_kwargs=default_kwargs)
   if isinstance(kwargs, (str, unicode)):
     if kwargs.startswith("{"):
       kwargs = eval(kwargs)
     else:
-      return init_dataset_via_str(config_str=kwargs, **(extra_kwargs or {}))
+      config_str = kwargs
+      kwargs = {}
+      if default_kwargs:
+        kwargs.update(default_kwargs)
+      if extra_kwargs:
+        kwargs.update(extra_kwargs)
+      return init_dataset_via_str(config_str=config_str, **kwargs)
   assert isinstance(kwargs, dict)
   kwargs = kwargs.copy()
   assert "class" in kwargs
@@ -871,6 +878,9 @@ def init_dataset(kwargs, extra_kwargs=None):
   clazz = get_dataset_class(clazz_name)
   if not clazz:
     raise Exception("Dataset class %r not found" % clazz_name)
+  if default_kwargs:
+    for key, value in default_kwargs.items():
+      kwargs.setdefault(key, value)
   if extra_kwargs:
     kwargs.update(extra_kwargs)
   obj = clazz(**kwargs)
