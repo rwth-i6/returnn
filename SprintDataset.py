@@ -800,11 +800,15 @@ class ExternSprintDataset(SprintDatasetBase):
     with self.lock:
       if epoch == self.crnnEpoch and self.expected_load_seq_start == 0 and seq_list == self.predefined_seq_list_order:
         return
+      # Reset epoch such that exiting the child will go smoothly.
+      super(ExternSprintDataset, self).init_seq_order(epoch=None, seq_list=None)
+    # Exit child, before we overwrite anything, such as new epoch or seq_list.
+    self._exit_child(wait_thread=True)
+    with self.lock:  # Lock should not be needed now, but just to make it clean.
       if self._num_seqs:
         self._estimated_num_seqs = self._num_seqs  # last epoch num_seqs is a good estimate
       self._num_seqs = None  # we are not certain whether we have the same num_seqs for this epoch
       super(ExternSprintDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
-    self._exit_child(wait_thread=True)
     self._start_child(epoch)
     return True
 
