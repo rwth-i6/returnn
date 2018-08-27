@@ -3058,9 +3058,11 @@ class ReduceLayer(_ConcatInputLayer):
   def __init__(self, mode, axes=None, axis=None, keep_dims=False, enforce_batch_dim_axis=None, **kwargs):
     """
     :param str mode: "sum" or "max" or "mean"
-    :param int|list[int]|str axes: one axis or multiple axis to reduce.
-      this is counted with batch-dim, which by default is axis 0 (see enforce_batch_dim_axis).
-      it also accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature"
+    :param int|list[int]|str axes: One axis or multiple axis to reduce.
+      This is counted with batch-dim, which by default is axis 0 (see enforce_batch_dim_axis).
+      It also accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature",
+      which should be preferred.
+      See :func:`Data.get_axes_from_description`.
     :param int|list[int]|str axis: for compatibility, can be used instead of ``axes``
     :param bool keep_dims: if dimensions should be kept (will be 1)
     :param int enforce_batch_dim_axis: will swap the batch-dim-axis of the input with the given axis.
@@ -3175,7 +3177,7 @@ class ReduceLayer(_ConcatInputLayer):
     if keep_dims:
       for i in axes:
         y_shape[i] = 1
-      y_shape.remove(x.batch_dim_axis)
+      del y_shape[x.batch_dim_axis]
     else:
       if out_batch_dim_axis in axes:
         out_batch_dim_axis = None

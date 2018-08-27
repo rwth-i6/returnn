@@ -328,6 +328,29 @@ def test_layer_base_get_out_data_from_opts():
     assert out.dtype == "float32"
 
 
+def test_ReduceLayer_reduce4d():
+  config = Config()
+  config.update({
+    "num_inputs": 4,
+    "num_outputs": 3,
+    "debug_print_layer_output_template": True
+  })
+  network = TFNetwork(config=config)
+  src_layer = InternalLayer(
+    name="src", network=network, output=Data(name="src", shape=(None, 4, 512), auto_create_placeholders=True))
+  print("src:", src_layer)
+  opts = {
+    'axes': "s:1",
+    'keep_dims': True,
+    'mode': 'mean',
+    'name': 'c_out_reduce',
+    'network': network,
+    'sources': [src_layer]}
+  out = ReduceLayer.get_out_data_from_opts(**opts)
+  layer = ReduceLayer(output=out, **opts)
+  print("layer:", layer)
+
+
 def test_SplitDimsLayer_resolve_dims():
   assert_equal(SplitDimsLayer._resolve_dims(old_dim=3 * 5, new_dims=(3, -1)), (3, 5))
   assert_equal(SplitDimsLayer._resolve_dims(old_dim=3 * 5, new_dims=(3, 5)), (3, 5))
