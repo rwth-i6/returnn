@@ -449,6 +449,48 @@ class MultiChannelStftLayer(_ConcatInputLayer):
     return super(MultiChannelStftLayer, cls).get_out_data_from_opts(**kwargs)
 
 
+class ParametricWienerFilter(LayerBase):
+  """
+  This layer applies the parametric wiener filter to source[0]
+  source[0] needs to be the complex valued signal in the STFT domain 
+  source[1] needs to be a layer with 3 output units (between 0 and 1) used as parameters for the wiener filter
+  source[2] needs to be a layer with the same nr of output units as source[0] and is used as estimate of the noise power spectrum
+  """
+  layer_class = "parametric_wiener_filter"
+
+  def __init__(self, **kwargs):
+    from tfSi6Proc.audioProcessing.enhancement.singleChannel import TfParametricWienerFilter 
+    super(ParametricWienerFilter, self).__init__(**kwargs)
+    class _NoiseEstimator(object):
+      def __init__(self, noise_power_spectrum_tensor):
+        self._noise_power_spectrum_tensor = noise_power_spectrum_tensor
+
+      @classmethod
+      def from_layer(cls, layer):
+        return cls(layer.output.get_placeholder_as_batch_major())
+
+      def getNoisePowerSpectrum(self):
+        return self._noise_power_spectrum_tensor
+
+    input_placeholder = self.sources[0].output.get_placeholder_as_batch_major()
+    self._noise_estimation_layer = self.sources[2] 
+    self._parameter_vector = self.sources[1].output.get_placeholder_as_batch_major()
+    tf.assert_equal(self._parameter_vector.shape[-1], 3)
+    tf.assert_equal(self._noise_estimation_layer.output.get_placeholder_as_batch_major().shape[-1], input_placeholder.shape[-1])
+    ne = _NoiseEstimator.from_layer(self._noise_estimation_layer)
+    if input_placeholder.dtype != tf.complex64:
+      input_placeholder = tf.cast(input_placeholder, dtype=tf.complex64)
+    l = tf.expand_dims(self._parameter_vector[:, :, 0], axis=-1)
+    p = tf.expand_dims(self._parameter_vector[:, :, 1], axis=-1)
+    q = tf.expand_dims(self._parameter_vector[:, :, 2], axis=-1)
+    wiener = TfParametricWienerFilter(ne, [], l, p, q, inputTensorFreqDomain=input_placeholder)
+    self.output.placeholder = wiener.getFrequencyDomainOutputSignal()
+
+  @classmethod
+  def get_out_data_from_opts(cls, **kwargs):
+    return super(ParametricWienerFilter, cls).get_out_data_from_opts(**kwargs)
+
+
 class TileFeaturesLayer(_ConcatInputLayer):
   """
   This function is tiling features with giving number of repetitions
