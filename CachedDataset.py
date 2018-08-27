@@ -496,3 +496,15 @@ class CachedDataset(Dataset):
   def get_tag(self, sorted_seq_idx):
     raise NotImplementedError
 
+  def have_corpus_seq_idx(self):
+    return True
+
+  def get_corpus_seq_idx(self, seq_idx):
+    """
+    :param int seq_idx: sorted sequence index from the current epoch, depending on seq_ordering
+    :return: the sequence index as-is in the original corpus. only defined if self.have_corpus_seq_idx()
+    :rtype: int
+    """
+    if self.seq_ordering == "default":
+      return seq_idx
+    return self._seq_index[self._index_map[seq_idx]]
