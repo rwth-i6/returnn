@@ -296,11 +296,10 @@ class Dataset(object):
       assert False, "invalid batching specified: " + self.seq_ordering
     if partition_epoch > 1:
       current_partition = ((epoch or 1) - 1) % partition_epoch
-      total_seqs = self._num_seqs
-      seqs_per_epoch = total_seqs // partition_epoch
-      partition_sizes = ([seqs_per_epoch + 1] * (total_seqs % partition_epoch) +
-                         [seqs_per_epoch] * (partition_epoch - total_seqs % partition_epoch))
-      assert sum(partition_sizes) == total_seqs and len(partition_sizes) == partition_epoch
+      seqs_per_epoch = num_seqs // partition_epoch
+      partition_sizes = ([seqs_per_epoch + 1] * (num_seqs % partition_epoch) +
+                         [seqs_per_epoch] * (partition_epoch - num_seqs % partition_epoch))
+      assert sum(partition_sizes) == num_seqs and len(partition_sizes) == partition_epoch
       partitions = functools.reduce(lambda a, x: a + [a[-1] + x], partition_sizes, [0])  # cumulative sum
       assert len(partitions) == partition_epoch + 1
       seq_index = seq_index[partitions[current_partition]:partitions[current_partition + 1]]
