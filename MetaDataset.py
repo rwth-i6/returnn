@@ -83,6 +83,11 @@ class MetaDataset(CachedDataset2):
     self.datasets = {
       key: init_dataset(datasets[key], extra_kwargs={"name": "%s_%s" % (self.name, key)})
       for key in self.dataset_keys}
+    for data_key in self.data_keys:
+      dataset_key, dataset_data_key = self.data_map[data_key]
+      dataset = self.datasets[dataset_key]
+      if dataset_data_key in dataset.labels:
+        self.labels[data_key] = dataset.labels[dataset_data_key]
 
   def init_seq_order(self, epoch=None, seq_list=None):
     need_reinit = self.epoch is None or self.epoch != epoch or seq_list
