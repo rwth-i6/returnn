@@ -458,7 +458,7 @@ class ParametricWienerFilterLayer(LayerBase):
   """
   layer_class = "parametric_wiener_filter"
 
-  def __init__(self, **kwargs):
+  def __init__(self, l_overwrite=None, p_overwrite=None, q_overwrite=None, **kwargs):
     from tfSi6Proc.audioProcessing.enhancement.singleChannel import TfParametricWienerFilter
     super(ParametricWienerFilterLayer, self).__init__(**kwargs)
 
@@ -474,16 +474,29 @@ class ParametricWienerFilterLayer(LayerBase):
         return self._noise_power_spectrum_tensor
 
     input_placeholder = self.sources[0].output.get_placeholder_as_batch_major()
-    self._noise_estimation_layer = self.sources[2]
-    self._parameter_vector = self.sources[1].output.get_placeholder_as_batch_major()
-    tf.assert_equal(self._parameter_vector.shape[-1], 3)
+    if len(self.sources) > 2:
+      self._noise_estimation_layer = self.sources[2]
+      self._parameter_vector = self.sources[1].output.get_placeholder_as_batch_major()
+      tf.assert_equal(self._parameter_vector.shape[-1], 3)
+    else:
+      self._noise_estimation_layer = self.sources[1]
+      self._parameter_vector = None 
     tf.assert_equal(self._noise_estimation_layer.output.get_placeholder_as_batch_major().shape[-1], input_placeholder.shape[-1])
     ne = _NoiseEstimator.from_layer(self._noise_estimation_layer)
     if input_placeholder.dtype != tf.complex64:
       input_placeholder = tf.cast(input_placeholder, dtype=tf.complex64)
-    l = tf.expand_dims(self._parameter_vector[:, :, 0], axis=-1)
-    p = tf.expand_dims(self._parameter_vector[:, :, 1], axis=-1)
-    q = tf.expand_dims(self._parameter_vector[:, :, 2], axis=-1)
+    if l_overwrite is not None:
+      l = tf.constant(l_overwrite, dtype=tf.float32)
+    else:
+      l = tf.expand_dims(self._parameter_vector[:, :, 0], axis=-1)
+    if p_overwrite is not None:
+      p = tf.constant(p_overwrite, dtype=tf.float32)
+    else:
+      p = tf.expand_dims(self._parameter_vector[:, :, 1], axis=-1)
+    if q_overwrite is not None:
+      q = tf.constant(q_overwrite, dtype=tf.float32)
+    else:
+      q = tf.expand_dims(self._parameter_vector[:, :, 2], axis=-1)
     wiener = TfParametricWienerFilter(ne, [], l, p, q, inputTensorFreqDomain=input_placeholder)
     self.output.placeholder = wiener.getFrequencyDomainOutputSignal()
 
