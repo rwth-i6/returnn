@@ -31,7 +31,7 @@ class StereoDataset(CachedDataset2):
     self._seqs_per_epoch = None
 
   def initialize(self):
-    self._seq_overhead = self._num_seqs % self._partition_epoch
+    self._seq_overhead = self._get_total_number_of_sequences() % self._partition_epoch
     super(StereoDataset, self).initialize()
 
   @property
