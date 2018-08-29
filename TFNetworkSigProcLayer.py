@@ -455,10 +455,16 @@ class ParametricWienerFilterLayer(LayerBase):
   source[0] needs to be the complex valued signal in the STFT domain
   source[1] needs to be a layer with 3 output units (between 0 and 1) used as parameters for the wiener filter
   source[2] needs to be a layer with the same nr of output units as source[0] and is used as estimate of the noise power spectrum
+  Note: source[1] (parameter layer) can be ommitted such that the noise estimation layer becomes source[1] if only two sources are given
   """
   layer_class = "parametric_wiener_filter"
 
   def __init__(self, l_overwrite=None, p_overwrite=None, q_overwrite=None, **kwargs):
+    """
+    :param float|None l_overwrite: if given overwrites the l value of the parametric wiener filter with the given constant 
+    :param float|None p_overwrite: if given overwrites the p value of the parametric wiener filter with the given constant 
+    :param float|None q_overwrite: if given overwrites the q value of the parametric wiener filter with the given constant 
+    """
     from tfSi6Proc.audioProcessing.enhancement.singleChannel import TfParametricWienerFilter
     super(ParametricWienerFilterLayer, self).__init__(**kwargs)
 
@@ -473,30 +479,41 @@ class ParametricWienerFilterLayer(LayerBase):
       def getNoisePowerSpectrum(self):
         return self._noise_power_spectrum_tensor
 
+    def _getParametersFromConstructorInputs():
+      parameter_vector = None
+      if len(self.sources) > 2:
+        parameter_vector = self.sources[1].output.get_placeholder_as_batch_major()
+        tf.assert_equal(parameter_vector.shape[-1], 3)
+      if (l_overwrite is None) or (p_overwrite is None) or (q_overwrite is None):
+        assert parameter_vector is not None
+      if l_overwrite is not None:
+        l = tf.constant(l_overwrite, dtype=tf.float32)
+      else:
+        l = tf.expand_dims(parameter_vector[:, :, 0], axis=-1)
+      if p_overwrite is not None:
+        p = tf.constant(p_overwrite, dtype=tf.float32)
+      else:
+        p = tf.expand_dims(parameter_vector[:, :, 1], axis=-1)
+      if q_overwrite is not None:
+        q = tf.constant(q_overwrite, dtype=tf.float32)
+      else:
+        q = tf.expand_dims(parameter_vector[:, :, 2], axis=-1)
+      return l, p, q
+
+    def _getNoiseEstimationLayerFromSources(sources):
+      if len(sources) > 2:
+        noise_estimation_layer = sources[2]
+      else:
+        noise_estimation_layer = sources[1]
+      return noise_estimation_layer
+
     input_placeholder = self.sources[0].output.get_placeholder_as_batch_major()
-    if len(self.sources) > 2:
-      self._noise_estimation_layer = self.sources[2]
-      self._parameter_vector = self.sources[1].output.get_placeholder_as_batch_major()
-      tf.assert_equal(self._parameter_vector.shape[-1], 3)
-    else:
-      self._noise_estimation_layer = self.sources[1]
-      self._parameter_vector = None 
-    tf.assert_equal(self._noise_estimation_layer.output.get_placeholder_as_batch_major().shape[-1], input_placeholder.shape[-1])
-    ne = _NoiseEstimator.from_layer(self._noise_estimation_layer)
     if input_placeholder.dtype != tf.complex64:
       input_placeholder = tf.cast(input_placeholder, dtype=tf.complex64)
-    if l_overwrite is not None:
-      l = tf.constant(l_overwrite, dtype=tf.float32)
-    else:
-      l = tf.expand_dims(self._parameter_vector[:, :, 0], axis=-1)
-    if p_overwrite is not None:
-      p = tf.constant(p_overwrite, dtype=tf.float32)
-    else:
-      p = tf.expand_dims(self._parameter_vector[:, :, 1], axis=-1)
-    if q_overwrite is not None:
-      q = tf.constant(q_overwrite, dtype=tf.float32)
-    else:
-      q = tf.expand_dims(self._parameter_vector[:, :, 2], axis=-1)
+    self._noise_estimation_layer = _getNoiseEstimationLayerFromSources(self.sources)
+    tf.assert_equal(self._noise_estimation_layer.output.get_placeholder_as_batch_major().shape[-1], input_placeholder.shape[-1])
+    ne = _NoiseEstimator.from_layer(self._noise_estimation_layer)
+    l, p, q = _getParametersFromConstructorInputs()
     wiener = TfParametricWienerFilter(ne, [], l, p, q, inputTensorFreqDomain=input_placeholder)
     self.output.placeholder = wiener.getFrequencyDomainOutputSignal()
 
