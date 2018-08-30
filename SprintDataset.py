@@ -776,19 +776,6 @@ class ExternSprintDataset(SprintDatasetBase):
           # Exceptions are fatal. If we can recover, we should handle it in run_inner().
           interrupt_main()
 
-  def _wait_for_seq_can_pass_check(self, seq_start, seq_end):
-    """
-    :param int seq_start:
-    :param int seq_end:
-    :return: True if _waitForSeq can pass/return. False means that we need to wait more (until next signal)
-    :rtype: bool
-    """
-    if self.child_pid is None:
-      return True
-    if super(ExternSprintDataset, self)._wait_for_seq_can_pass_check(seq_start=seq_start, seq_end=seq_end):
-      return True
-    return False
-
   def exit_handler(self):
     assert os.getpid() == self.parent_pid
     self.python_exit = True
