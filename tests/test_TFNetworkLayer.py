@@ -600,6 +600,87 @@ def test_WindowLayer_output_placeholder():
     assert_equal(seq_lens.tolist(), [3, 1, 0])
 
 
+def test_conv_window_merge_dims():
+  n_in = 1
+  n_out = 13
+  net_dict = {
+    'conv_1': {'activation': 'abs',
+               'class': 'conv',
+               'filter_size': (4,),
+               'n_out': 64,
+               'padding': 'valid',
+               'strides': 10},
+    'pad_conv_1_time_dim': {'axes': 'time',
+                            'class': 'pad',
+                            'from': ['conv_1'],
+                            'padding': 20},
+    'conv_2': {'activation': 'abs',
+               'class': 'conv',
+               'filter_size': (2, 6),
+               'from': ['pad_conv_1_time_dim'],
+               'input_add_feature_dim': True,
+               'n_out': 12,
+               'padding': 'valid',
+               'strides': 16},
+    'flatten_conv': {'axes': 'except_time',
+                     'class': 'merge_dims',
+                     'from': ['conv_2'],
+                     'n_out': 12},
+    'window_1': {'class': 'window',
+                 'from': ['flatten_conv'],
+                 'window_size': 17},
+    'flatten_window': {'axes': 'except_time',
+                       'class': 'merge_dims',
+                       'from': ['window_1']},
+    'output': {'activation': None,
+               'class': 'linear',
+               'from': ['flatten_window'],
+               'n_out': n_out},
+  }
+  config = Config({
+    "num_outputs": n_out,
+    "num_inputs": n_in,
+    "debug_print_layer_output_template": True
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    print("extern data:")
+    print(net.extern_data)
+    # The construction itself is also the test.
+    net.construct_from_dict(net_dict)
+    out = net.get_default_output_layer()
+    # Maybe this will not be the case in the future anymore;
+    # however, if this test runs on CPU, currently the feature_dim_axis should always stay the default.
+    # See also test_ConvLayer_feature_dim_unspecified.
+    assert out.output.feature_dim_axis_or_unspecified is NotSpecified
+
+
+def test_ConvLayer_feature_dim_unspecified():
+  n_in = 1
+  n_out = 13
+  net_dict = {
+    'output': {'activation': 'abs',
+               'class': 'conv',
+               'filter_size': (4,),
+               'n_out': 64,
+               'padding': 'valid',
+               'strides': 10}}
+  config = Config({
+    "num_outputs": n_out,
+    "num_inputs": n_in,
+    "debug_print_layer_output_template": True
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    print("extern data:")
+    print(net.extern_data)
+    net.construct_from_dict(net_dict)
+    out = net.get_default_output_layer()
+    # Maybe this will not be the case in the future anymore;
+    # however, if this test runs on CPU, currently the feature_dim_axis should always stay the default.
+    assert out.output.feature_dim_axis_or_unspecified is NotSpecified
+
+
 def test_ResizeLayer_fill_value():
   with make_scope() as session:
     net = TFNetwork(extern_data=ExternData())

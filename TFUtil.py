@@ -453,9 +453,10 @@ class Data(object):
     data.sanity_check()
     return data
 
-  def copy_add_spatial_dim(self, spatial_dim_axis=None):
+  def copy_add_spatial_dim(self, spatial_dim_axis=None, dim=1):
     """
     :param int|None spatial_dim_axis: counted with batch-dim. if there is no time-dim, this will be it.
+    :param int|None dim:
     :return: copy of myself with added spatial-dim
     :rtype: Data
     """
@@ -468,9 +469,10 @@ class Data(object):
       else:
         spatial_dim_axis = self.batch_ndim  # add it at the end
     if data.placeholder is not None:
+      assert dim == 1
       data.placeholder = tf.expand_dims(data.placeholder, spatial_dim_axis, name="%s_add_spatial_dim" % self.name)
     axis_wo_batch = spatial_dim_axis if (spatial_dim_axis <= (self.batch_dim_axis or 0)) else (spatial_dim_axis - 1)
-    data.shape = data.shape[:axis_wo_batch] + (1,) + data.shape[axis_wo_batch:]
+    data.shape = data.shape[:axis_wo_batch] + (dim,) + data.shape[axis_wo_batch:]
     if data.time_dim_axis is None:
       data.time_dim_axis = spatial_dim_axis
     other_special_axes = self.get_special_axes_dict(

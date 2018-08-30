@@ -234,10 +234,13 @@ class LayerBase(object):
     if sources_data:
       if out_type.get("sparse", False):
         out_type.setdefault("shape", sources_data.shape_sparse)
-      else:
+      else:  # not sparse
+        feature_dim_axis = out_type.get("feature_dim_axis", NotSpecified)
+        if feature_dim_axis is NotSpecified:
+          feature_dim_axis = -1
         default_shape = list(sources_data.shape_dense)
         default_shape.insert(sources_data.batch_dim_axis, None)
-        default_shape[out_type.get("feature_dim_axis", -1)] = out_type["dim"]
+        default_shape[feature_dim_axis] = out_type["dim"]
         default_shape.pop(out_type.get("batch_dim_axis"))
         out_type.setdefault("shape", tuple(default_shape))
     # Note: No special handling for feature_dim_axis here for now...
@@ -2211,17 +2214,16 @@ class WindowLayer(_ConcatInputLayer):
         filter_size=window_size, stride=1, dilation_rate=1, padding=padding)
 
   @classmethod
-  def get_out_data_from_opts(cls, window_size, axis="T", sources=(), **kwargs):
+  def get_out_data_from_opts(cls, name, window_size, axis="T", sources=(), **kwargs):
     data = get_concat_sources_data_template(sources)
+    data = data.copy_template(name="%s_output" % name)
     data = data.copy_as_batch_major()
     if axis == "T" and data.time_dim_axis is None:
       # Assume inside RecLayer.
-      axis = 1
+      axis = 0
     else:
       axis = data.get_axis_from_description(axis)
-    data.shape = data.shape[:axis] + (window_size,) + data.shape[axis:]  # add new axis right after
-    if axis <= data.feature_dim_axis:
-      data.feature_dim_axis += 1
+    data = data.copy_add_spatial_dim(spatial_dim_axis=axis + 1, dim=window_size)  # add new axis right after
     return data
 
   @classmethod
@@ -2230,8 +2232,9 @@ class WindowLayer(_ConcatInputLayer):
     data = data.copy_as_batch_major()
     if axis == "T" and data.time_dim_axis is None:
       # Assume inside RecLayer.
-      axis = 1
-      shape = data.shape[:axis] + (window_size,) + data.shape[axis:]  # add new axis right after
+      shape = list(data.batch_shape)
+      shape[0] = batch_dim
+      shape.insert(1, window_size)
       return {"state": tf.zeros(shape, dtype=data.dtype)}
     return {}
 
@@ -2416,10 +2419,10 @@ class MergeDimsLayer(_ConcatInputLayer):
     """
     :param Data input_data:
     :param list[int] merge_axes:
-    :param int|None old_axis:
+    :param int|None|NotSpecified old_axis:
     :rtype: int|None
     """
-    if old_axis is None:
+    if old_axis is None or old_axis is NotSpecified:
       return old_axis
     target_axis = cls._get_target_axis(input_data=input_data, merge_axes=merge_axes)
     if old_axis in merge_axes:
@@ -2488,7 +2491,7 @@ class MergeDimsLayer(_ConcatInputLayer):
     data.time_dim_axis = cls._old_axis_to_new_axis(
       input_data=input_data, merge_axes=axes, old_axis=input_data.time_dim_axis)
     data.feature_dim_axis = cls._old_axis_to_new_axis(
-      input_data=input_data, merge_axes=axes, old_axis=input_data.feature_dim_axis)
+      input_data=input_data, merge_axes=axes, old_axis=input_data.feature_dim_axis_or_unspecified)
     return data
 
 
@@ -2943,7 +2946,7 @@ class ConvLayer(_ConcatInputLayer):
           shape[i] = cls.calc_out_dim(
             in_dim=data.shape[i],
             filter_size=filter_size[i], stride=strides[i], dilation_rate=dilation_rate[i], padding=padding)
-    feature_dim_axis = -1
+    feature_dim_axis = NotSpecified
     if TFUtil.is_gpu_available() and False:  # TODO...
       feature_dim_axis = 1
       shape = shape[-1:] + shape[:-1]
