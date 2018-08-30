@@ -2220,6 +2220,8 @@ class WindowLayer(_ConcatInputLayer):
     else:
       axis = data.get_axis_from_description(axis)
     data.shape = data.shape[:axis] + (window_size,) + data.shape[axis:]  # add new axis right after
+    if axis <= data.feature_dim_axis:
+      data.feature_dim_axis += 1
     return data
 
   @classmethod
@@ -2485,6 +2487,8 @@ class MergeDimsLayer(_ConcatInputLayer):
       input_data=input_data, merge_axes=axes, old_axis=input_data.batch_dim_axis)
     data.time_dim_axis = cls._old_axis_to_new_axis(
       input_data=input_data, merge_axes=axes, old_axis=input_data.time_dim_axis)
+    data.feature_dim_axis = cls._old_axis_to_new_axis(
+      input_data=input_data, merge_axes=axes, old_axis=input_data.feature_dim_axis)
     return data
 
 
