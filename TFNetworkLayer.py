@@ -3066,7 +3066,7 @@ class ReduceLayer(_ConcatInputLayer):
 
   def __init__(self, mode, axes=None, axis=None, keep_dims=False, enforce_batch_dim_axis=None, **kwargs):
     """
-    :param str mode: "sum" or "max" or "mean"
+    :param str mode: "sum" or "max", "min", or "mean"
     :param int|list[int]|str axes: One axis or multiple axis to reduce.
       This is counted with batch-dim, which by default is axis 0 (see enforce_batch_dim_axis).
       It also accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature",
@@ -3088,7 +3088,7 @@ class ReduceLayer(_ConcatInputLayer):
       assert kwargs["n_out"] == self.output.dim
     assert "out_type" not in kwargs
     mode = mode.lower()
-    assert mode in ["max", "sum", "avg", "mean"]
+    assert mode in ["max", "min", "sum", "avg", "mean"]
     assert not self.input_data.sparse
     x = self.input_data
     if enforce_batch_dim_axis is not None and x.batch_dim_axis != enforce_batch_dim_axis:
@@ -3096,6 +3096,8 @@ class ReduceLayer(_ConcatInputLayer):
     axes = self.get_axes(axes, input_data=x)
     if mode == "max":
       f = tf.reduce_max
+    elif mode == "min":
+      f = tf.reduce_min
     elif mode == "sum":
       f = tf.reduce_sum
     elif mode in ["avg", "mean"]:
