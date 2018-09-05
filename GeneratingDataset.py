@@ -1804,7 +1804,7 @@ class LibriSpeechCorpus(CachedDataset2):
                orth_post_process=None,
                targets=None, chars=None, bpe=None,
                use_zip=False, use_ogg=False, use_cache_manager=False,
-               partition_epoch=None, fixed_random_seed=None, fixed_random_subset=None,
+               fixed_random_seed=None, fixed_random_subset=None,
                epoch_wise_filter=None,
                name=None,
                **kwargs):
@@ -1819,7 +1819,6 @@ class LibriSpeechCorpus(CachedDataset2):
     :param bool use_zip: whether to use the ZIP files instead (better for NFS)
     :param bool use_ogg: add .ogg postfix to all files
     :param bool use_cache_manager: uses :func:`Util.cf`
-    :param int|None partition_epoch:
     :param int|None fixed_random_seed: for the shuffling, e.g. for seq_ordering='random'. otherwise epoch will be used
     :param float|int|None fixed_random_subset:
       Value in [0,1] to specify the fraction, or integer >=1 which specifies number of seqs.
@@ -1873,7 +1872,6 @@ class LibriSpeechCorpus(CachedDataset2):
     self.num_inputs = self.feature_extractor.get_feature_dimension()
     self.num_outputs = {
       "data": [self.num_inputs, 2], "classes": [self.targets.num_labels, 1], "raw": {"dtype": "string", "shape": ()}}
-    self.partition_epoch = partition_epoch
     self.transs = self._collect_trans()
     self._reference_seq_order = sorted(self.transs.keys())
     if fixed_random_subset:
@@ -1944,10 +1942,6 @@ class LibriSpeechCorpus(CachedDataset2):
     if not epoch:
       epoch = 1
     self._audio_random.seed(self._fixed_random_seed or epoch or 1)
-    if self.partition_epoch:
-      real_epoch = (epoch - 1) // self.partition_epoch + 1  # count starting from epoch 1
-    else:
-      real_epoch = epoch
     if seq_list is not None:
       seqs = [i for i in range(len(self._reference_seq_order)) if self._get_tag(i) in seq_list]
       seqs = {self._get_tag(i): i for i in seqs}
@@ -1958,21 +1952,8 @@ class LibriSpeechCorpus(CachedDataset2):
     else:
       num_seqs = len(self._reference_seq_order)
       self._seq_order = self.get_seq_order_for_epoch(
-        epoch=real_epoch, num_seqs=num_seqs, get_seq_len=lambda i: len(self.transs[self._reference_seq_order[i]]))
-      self._num_seqs = num_seqs
-    if self.partition_epoch:
-      partition_epoch_num_seqs = [self._num_seqs // self.partition_epoch] * self.partition_epoch
-      i = 0
-      while sum(partition_epoch_num_seqs) < self._num_seqs:
-        partition_epoch_num_seqs[i] += 1
-        i += 1
-        assert i < self.partition_epoch
-      assert sum(partition_epoch_num_seqs) == self._num_seqs
-      self._num_seqs = partition_epoch_num_seqs[(self.epoch - 1) % self.partition_epoch]
-      i = 0
-      for n in partition_epoch_num_seqs[:(epoch - 1) % self.partition_epoch]:
-        i += n
-      self._seq_order = self._seq_order[i:i + self._num_seqs]
+        epoch=epoch, num_seqs=num_seqs, get_seq_len=lambda i: len(self.transs[self._reference_seq_order[i]]))
+      self._num_seqs = len(self._seq_order)
     if self.epoch_wise_filter:
       old_num_seqs = self._num_seqs
       any_filter = False
