@@ -3064,7 +3064,8 @@ class ReduceLayer(_ConcatInputLayer):
   """
   layer_class = "reduce"
 
-  def __init__(self, mode, axes=None, axis=None, keep_dims=False, enforce_batch_dim_axis=None, **kwargs):
+  def __init__(self, mode, axes=None, axis=None, keep_dims=False, enforce_batch_dim_axis=None, use_time_mask=None,
+               **kwargs):
     """
     :param str mode: "sum" or "max", "min", or "mean"
     :param int|list[int]|str axes: One axis or multiple axis to reduce.
@@ -3076,6 +3077,8 @@ class ReduceLayer(_ConcatInputLayer):
     :param bool keep_dims: if dimensions should be kept (will be 1)
     :param int enforce_batch_dim_axis: will swap the batch-dim-axis of the input with the given axis.
       e.g. 0: will convert the input into batch-major format if not already like that.
+    :param bool use_time_mask: if we reduce over the time-dim axis, use the seq len info.
+      By default, in that case, it will be True.
     """
     super(ReduceLayer, self).__init__(**kwargs)
     if axis is not None:
@@ -3094,6 +3097,12 @@ class ReduceLayer(_ConcatInputLayer):
     if enforce_batch_dim_axis is not None and x.batch_dim_axis != enforce_batch_dim_axis:
       x = x.copy_with_batch_dim_axis(enforce_batch_dim_axis)
     axes = self.get_axes(axes, input_data=x)
+    if use_time_mask is None:
+      if x.time_dim_axis in axes:
+        use_time_mask = True
+      else:
+        use_time_mask = False
+    assert isinstance(use_time_mask, bool)
     if mode == "max":
       f = tf.reduce_max
     elif mode == "min":
@@ -3106,30 +3115,31 @@ class ReduceLayer(_ConcatInputLayer):
       raise Exception("invalid mode %r" % mode)
     x_ = x.placeholder
     # Check if we should ignore some frames, e.g. via masking.
-    if f is tf.reduce_sum:
-      # For sum, the fastest and simplest way is masking.
-      for axis in axes:
-        if axis == x.batch_dim_axis:
-          continue
-        axis_wo_b = x.get_batch_axis_excluding_batch(axis)
-        if axis_wo_b not in x.size_placeholder:
-          continue
-        assert axis == x.time_dim_axis
-        mask = x.get_sequence_mask()  # e.g. (B,T)
-        from TFUtil import expand_multiple_dims
-        mask = expand_multiple_dims(
-          mask, [i for i in range(x.batch_ndim) if i not in [x.batch_dim_axis, axis]])  # e.g. (B,1,T) with axis=-1
-        mask = tf.logical_and(mask, tf.ones_like(x_, dtype=mask.dtype))
-        x_ = tf.where(mask, x_, tf.zeros_like(x.placeholder), "x_masked_axis_%i" % axis)
-    else:  # not sum, e.g. mean or max
-      # Flattening.
-      if x.time_dim_axis in axes:
-        assert not keep_dims, "not yet implemented otherwise"
-        assert x.batch_dim_axis in axes, "not yet implemented otherwise"
-        axes = [a if (a < x.time_dim_axis) else (a - 1)
-                for a in axes if a != x.time_dim_axis]
-        x = x.copy_time_flattened()
-        x_ = x.placeholder
+    if use_time_mask:
+      if f is tf.reduce_sum:
+        # For sum, the fastest and simplest way is masking.
+        for axis in axes:
+          if axis == x.batch_dim_axis:
+            continue
+          axis_wo_b = x.get_batch_axis_excluding_batch(axis)
+          if axis_wo_b not in x.size_placeholder:
+            continue
+          assert axis == x.time_dim_axis
+          mask = x.get_sequence_mask()  # e.g. (B,T)
+          from TFUtil import expand_multiple_dims
+          mask = expand_multiple_dims(
+            mask, [i for i in range(x.batch_ndim) if i not in [x.batch_dim_axis, axis]])  # e.g. (B,1,T) with axis=-1
+          mask = tf.logical_and(mask, tf.ones_like(x_, dtype=mask.dtype))
+          x_ = tf.where(mask, x_, tf.zeros_like(x.placeholder), "x_masked_axis_%i" % axis)
+      else:  # not sum, e.g. mean or max
+        # Flattening.
+        if x.time_dim_axis in axes:
+          assert not keep_dims, "not yet implemented otherwise"
+          assert x.batch_dim_axis in axes, "not yet implemented otherwise"
+          axes = [a if (a < x.time_dim_axis) else (a - 1)
+                  for a in axes if a != x.time_dim_axis]
+          x = x.copy_time_flattened()
+          x_ = x.placeholder
     y = f(x_, axis=axes, keep_dims=keep_dims)
     y_dyn_sizes = x.size_placeholder.copy()
     if keep_dims:
