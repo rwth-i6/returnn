@@ -2246,10 +2246,11 @@ class CumsumLayer(_ConcatInputLayer):
   layer_class = "cumsum"
   recurrent = True  # order matters
 
-  def __init__(self, axis="T", additional_left_summand_per_element=None, **kwargs):
+  def __init__(self, axis="T", additional_left_summand_per_element=None, reverse=False, **kwargs):
     """
     :param str axis: see :func:`Data.get_axis_from_description`
     :param str|int|float|None additional_left_summand_per_element: the order matters for tf.string
+    :param bool reverse:
     """
     super(CumsumLayer, self).__init__(**kwargs)
     data = self.input_data
@@ -2259,13 +2260,14 @@ class CumsumLayer(_ConcatInputLayer):
     if axis == "T" and data.time_dim_axis is None:
       # Assume inside RecLayer.
       assert self._rec_previous_layer, "%s: expected to be used inside a RecLayer" % self
+      assert not reverse
       prev_state = self._rec_previous_layer.rec_vars_outputs["state"]
       next_state = prev_state + x
       self.rec_vars_outputs["state"] = next_state
       self.output.placeholder = next_state
     else:
       axis = data.get_axis_from_description(axis)
-      self.output.placeholder = tf.cumsum(x, axis=axis)
+      self.output.placeholder = tf.cumsum(x, axis=axis, reverse=reverse)
     self.output.placeholder.set_shape(data.placeholder.get_shape())
     self.output.placeholder.set_shape(tf.TensorShape(self.output.batch_shape))
     self.output.size_placeholder = self.input_data.size_placeholder.copy()
