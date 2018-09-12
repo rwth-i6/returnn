@@ -238,24 +238,20 @@ class WindowContextLayer(_NoOpLayer):
       weights = numpy.float32(1) / (T.cast(window,'float32') * T.ones((window,),'float32'))
     elif average == 'concat':
       weights = None
+      self.set_attr('n_out', n_out * window)
     else:
       assert False, "invalid averaging method: " + str(average)
 
     if scan:
+      source = source[::-direction]
       inp = T.concatenate([T.zeros((window - 1, source.shape[1], source.shape[2]), 'float32'), source], axis=0)
       def wnd(x, i, inp, weights):
         return T.dot(inp[i:i + window].dimshuffle(1, 2, 0), weights), i
       mapped_out, _ = theano.map(wnd, sequences=[source, T.arange(source.shape[0])], non_sequences=[inp, weights])
-      self.make_output(mapped_out[0])
+      self.make_output(mapped_out[0][::-direction])
     else:
       from TheanoUtil import context_batched
-      tiled_out = context_batched(source[::-direction], window=window)
-      windows = tiled_out.reshape((source.shape[0],source.shape[1],window,source.shape[2])).dimshuffle(0,1,3,2)[::-direction]
-      if weights is not None:
-        out = T.dot(windows, weights)
-      else:
-        out = windows
-        self.set_attr('n_out', n_out * window)
+      out = context_batched(source[::-direction], window=window)[::-direction]
       self.make_output(out)
 
 
@@ -1817,6 +1813,18 @@ class ChunkingLayer(ForwardLayer): # Time axis reduction like in pLSTM described
     self.make_output(output)
 
 
+class DimToTimeLayer(ForwardLayer):
+  layer_class = "dim_to_time"
+
+  def __init__(self, n_time, **kwargs):
+    kwargs['n_out'] = sum([s.attrs['n_out'] for s in kwargs['sources']]) // n_time
+    super(DimToTimeLayer, self).__init__(**kwargs)
+    self.params = {}
+    x = T.concatenate([s.output for s in self.sources], axis=2) # TBD
+    z = x.reshape((x.shape[0], x.shape[1], n_time, x.shape[2]//n_time))
+    self.output = z.dimshuffle(0,2,1,3).reshape((x.shape[0] * n_time, x.shape[1], x.shape[2]//n_time))
+    self.index = self.index.dimshuffle(0,'x',1).repeat(n_time,axis=1).reshape((self.index.shape[0] * n_time, self.index.shape[1]))
+
 class TimeToBatchLayer(ForwardLayer):
   layer_class = "time_to_batch"
 
@@ -1840,9 +1848,10 @@ class BatchToTimeLayer(ForwardLayer):
     self.params = {}
     z = T.concatenate([s.output for s in self.sources], axis=2) # TBD
     z = z.reshape((z.shape[0] * z.shape[1],z.shape[2]))
-    self.output = z.reshape((z.shape[0]/n_batch,n_batch,z.shape[1]))
+    self.output = z.reshape((z.shape[0]//n_batch,n_batch,z.shape[1]))
     self.index = self.index.reshape((self.index.shape[0] * self.index.shape[1],))
-    self.index = self.index.reshape((self.index.shape[0]/n_batch,n_batch))
+    self.index = self.index.reshape((self.index.shape[0]//n_batch,n_batch))
+
 
 class ConcatBatchLayer(_NoOpLayer):
   layer_class = "concat_batch"
@@ -4156,4 +4165,3 @@ class SegmentClassTargets(_NoOpLayer):
                                                                   T.TensorConstant(theano.tensor.iscalar, self.attrs['window']),
                                                                   self.sources[0].output, self.sources[0].index)
     self.output = self.y_out
-

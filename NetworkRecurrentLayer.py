@@ -448,7 +448,7 @@ class GRU(Unit):
   Gated recurrent unit as described in http://arxiv.org/abs/1502.02367
   """
   def __init__(self, n_units, **kwargs):
-    super(GRU, self).__init__(n_units, n_units * 3, n_units, n_units * 2, 1)
+    super(GRU, self).__init__(n_units, n_units * 3, n_units, n_units * 2, 2)
     l = sqrt(6.) / sqrt(n_units * 3)
     rng = numpy.random.RandomState(1234)
     values = numpy.asarray(rng.uniform(low=-l, high=l, size=(n_units, n_units)), dtype=theano.config.floatX)
@@ -459,8 +459,8 @@ class GRU(Unit):
     CI, GR, GU = [T.tanh, T.nnet.sigmoid, T.nnet.sigmoid]
     u_t = GU(z_t[:,:self.slice] + z_p[:,:self.slice])
     r_t = GR(z_t[:,self.slice:2*self.slice] + z_p[:,self.slice:2*self.slice])
-    h_c = CI(z_t[:,2*self.slice:] + self.dot(r_t * h_p, self.W_reset))
-    return u_t * h_p + (1 - u_t) * h_c
+    h_c = CI(z_t[:,2*self.slice:] + T.dot(r_t * h_p, self.W_reset))
+    return z_t, u_t * h_p + (1 - u_t) * h_c
 
 
 class SRU(Unit):
