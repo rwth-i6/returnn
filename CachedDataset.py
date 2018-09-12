@@ -1,7 +1,8 @@
+
 from __future__ import print_function
 import gc
 import numpy
-import theano
+import functools
 from Dataset import Dataset
 from Log import log
 from Util import NumbersDict
@@ -10,24 +11,27 @@ from Util import NumbersDict
 class CachedDataset(Dataset):
 
   def __init__(self, cache_byte_size=0, **kwargs):
+    """
+    :param int cache_byte_size:
+    """
     super(CachedDataset, self).__init__(**kwargs)
     self.cache_byte_size_total_limit = cache_byte_size
     if cache_byte_size < 0:
       self.cache_byte_size_limit_at_start = 1
     else:
-      self.cache_byte_size_limit_at_start = cache_byte_size * 2 / 3
-      self.cache_byte_size_total_limit = max(cache_byte_size / 3, 1)
+      self.cache_byte_size_limit_at_start = cache_byte_size * 2 // 3
+      self.cache_byte_size_total_limit = max(cache_byte_size // 3, 1)
     self.num_seqs_cached_at_start = 0
     self.cached_bytes_at_start = 0
     self.max_ctc_length = 0
     self.ctc_targets = None
     self.alloc_intervals = None
-    self._seq_start = [] # [numpy.array([0,0])]  # uses sorted seq idx, see set_batching()
-    self._seq_index = []; """ :type: list[int] """  # Via init_seq_order().
-    self._index_map = range(len(self._seq_index))
-    self._seq_lengths = []; """ :type: list[(int,int)] """  # uses real seq idx
-    self.tags = []; """ :type: list[str] """  # uses real seq idx
-    self.tag_idx = {}; ":type: dict[str,int] "  # map of tag -> real-seq-idx
+    self._seq_start = []  # [numpy.array([0,0])]  # uses sorted seq idx, see set_batching()
+    self._seq_index = []; """ :type: list[int] """  # Via init_seq_order(). seq_index idx -> hdf seq idx
+    self._index_map = range(len(self._seq_index))  # sorted seq idx -> seq_index idx
+    self._seq_lengths = numpy.zeros((0, 0))  # real seq idx -> tuple of len of data and all targets
+    self._tags = []; """ :type: list[str|bytes] """  # uses real seq idx. access via _get_tag_by_real_idx
+    self._tag_idx = {}; ":type: dict[str,int] "  # map of tag -> real-seq-idx. call _update_tag_idx
     self.targets = {}
     self.target_keys = []
 
@@ -38,11 +42,11 @@ class CachedDataset(Dataset):
     temp_cache_size_bytes = \
       max(0, self.cache_byte_size_total_limit) - self.cached_bytes_at_start
     self.definite_cache_leftover = temp_cache_size_bytes if self.num_seqs_cached_at_start == self.num_seqs else 0
-    self.cache_num_frames_free = temp_cache_size_bytes / self.nbytes
+    self.cache_num_frames_free = temp_cache_size_bytes // self.nbytes
 
-    print("cached %i seqs" % self.num_seqs_cached_at_start, \
-          "%s GB" % (self.cached_bytes_at_start / float(1024 * 1024 * 1024)), \
-          ("(fully loaded, %s GB left over)" if self.definite_cache_leftover else "(%s GB free)") % \
+    print("cached %i seqs" % self.num_seqs_cached_at_start,
+          "%s GB" % (self.cached_bytes_at_start / float(1024 * 1024 * 1024)),
+          ("(fully loaded, %s GB left over)" if self.definite_cache_leftover else "(%s GB free)") %
           max(temp_cache_size_bytes / float(1024 * 1024 * 1024), 0),
           file=log.v4)
 
@@ -53,13 +57,15 @@ class CachedDataset(Dataset):
     Initialize lists:
       self.seq_index  # sorted seq idx
     """
-    old_index_map = self._index_map[:]
-    self._index_map = range(self.num_seqs)
     super(CachedDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
-    if seq_list:
-      seq_index = [self.tag_idx[tag] for tag in seq_list]
+    if seq_list is not None:
+      self._update_tag_idx()
+      seq_index = [self._tag_idx[tag] for tag in seq_list]
     else:
-      seq_index = self.get_seq_order_for_epoch(epoch, self.num_seqs, lambda s: self._seq_lengths[s][0])
+      seq_index = self.get_seq_order_for_epoch(epoch, self._num_seqs, lambda s: self._seq_lengths[s][0])
+
+    old_index_map = self._index_map[:]
+    self._index_map = range(len(seq_index))  # sorted seq idx -> seq_index idx
 
     if self._seq_index == seq_index and self.num_seqs_cached_at_start == len(seq_index):
       return False
@@ -70,15 +76,24 @@ class CachedDataset(Dataset):
 
     if self.num_seqs_cached_at_start != len(seq_index):
       self._seq_index = seq_index
-      self._seq_index_inv = dict(zip(seq_index,range(len(seq_index))))
+      self._seq_index_inv = dict(zip(seq_index, range(len(seq_index))))  # hdf seq idx -> seq_index idx
       self._init_seq_starts()
       self._init_alloc_intervals()
       self._init_start_cache()
     else:
-      self._index_map = [ self._seq_index_inv[i] for i in seq_index ]
+      self._index_map = [self._seq_index_inv[i] for i in seq_index]  # sorted seq idx -> seq_index idx
       if self._index_map == old_index_map:
         return False
     return True
+
+  def _get_tag_by_real_idx(self, real_idx):
+    return self._tags[real_idx]
+
+  def _update_tag_idx(self):
+    if self._tag_idx:
+      return
+    for i in range(self._num_seqs):
+      self._tag_idx[self._get_tag_by_real_idx(i)] = i
 
   def batch_set_generator_cache_whole_epoch(self):
     return True
@@ -352,6 +367,7 @@ class CachedDataset(Dataset):
 
   def insert_alloc_interval(self, start, end=None):
     return self._modify_alloc_intervals(start, end, True)
+
   def remove_alloc_interval(self, start, end=None):
     return self._modify_alloc_intervals(start, end, False)
 
@@ -380,6 +396,8 @@ class CachedDataset(Dataset):
 
   @property
   def num_seqs(self):
+    if self._index_map:
+      return len(self._index_map)
     return self._num_seqs
 
   def is_cached(self, start, end):
@@ -426,8 +444,6 @@ class CachedDataset(Dataset):
     d = {"data": lengths[0]}
     for k, l in zip(self.target_keys, lengths[1:]):
       d[k] = l
-    #d.update(self.get_output_lengths)
-    #d.update({k: output_len for k in self.get_target_list()})
     return NumbersDict(d)
 
   def get_seq_start(self, sorted_seq_idx):
@@ -436,7 +452,6 @@ class CachedDataset(Dataset):
     :rtype: (int,int)
     """
     return self._seq_start[sorted_seq_idx]
-    return self._seq_start[self._index_map[sorted_seq_idx]]
 
   def get_times(self, sorted_seq_idx):
     seq_start = self.get_seq_start(sorted_seq_idx)[0]
@@ -444,7 +459,6 @@ class CachedDataset(Dataset):
     return self.timestamps[seq_start:seq_start + seq_len]
 
   def get_input_data(self, sorted_seq_idx):
-    #sorted_seq_idx = self._index_map[sorted_seq_idx]
     seq_idx = self._index_map[sorted_seq_idx]
     idi = self.alloc_interval_index(seq_idx)
     assert idi >= 0, "failed to get data for seq %i" % sorted_seq_idx
@@ -482,3 +496,15 @@ class CachedDataset(Dataset):
   def get_tag(self, sorted_seq_idx):
     raise NotImplementedError
 
+  def have_corpus_seq_idx(self):
+    return True
+
+  def get_corpus_seq_idx(self, seq_idx):
+    """
+    :param int seq_idx: sorted sequence index from the current epoch, depending on seq_ordering
+    :return: the sequence index as-is in the original corpus. only defined if self.have_corpus_seq_idx()
+    :rtype: int
+    """
+    if self.seq_ordering == "default":
+      return seq_idx
+    return self._seq_index[self._index_map[seq_idx]]

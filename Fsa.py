@@ -1157,15 +1157,25 @@ class FastBwFsaShared:
       start_end_states=self.get_start_end_states(n_batch))
 
 
-def fast_bw_fsa_staircase(seq_lens, max_skip=None):
+def fast_bw_fsa_staircase(seq_lens, with_loop=False, max_skip=None, start_max_skip=None, end_max_skip=None):
   """
   Builds up a staircase FSA, returns a FastBaumWelchBatchFsa.
+  The emissions are indices [0, ..., seq_len - 1].
 
   :param list[int] seq_lens:
-  :param int max_skip:
+  :param bool with_loop:
+  :param int|list[int] max_skip: per batch if a list
+  :param int|list[int] start_max_skip: per batch if a list
+  :param int|list[int] end_max_skip: per batch if a list
   :rtype: FastBaumWelchBatchFsa
   """
   n_batch = len(seq_lens)
+  if not isinstance(max_skip, list):
+    max_skip = [max_skip] * n_batch
+  if not isinstance(start_max_skip, list):
+    start_max_skip = [start_max_skip] * n_batch
+  if not isinstance(end_max_skip, list):
+    end_max_skip = [end_max_skip] * n_batch
   # numpy.ndarray edges: (4,num_edges), edges of the graph (from,to,emission_idx,sequence_idx)
   # numpy.ndarray weights: (num_edges,), weights of the edges
   # numpy.ndarray start_end_states: (2, batch), (start,end) state idx in automaton.
@@ -1174,21 +1184,48 @@ def fast_bw_fsa_staircase(seq_lens, max_skip=None):
   start_end_states = []
   for batch in range(n_batch):
     seq_len = seq_lens[batch]
+    assert seq_len > 0
     start_state_idx = state_idx
+    # Conventions:
+    # * create seq_len + 1 states
+    # * state 't': all outgoing edges have emission 't'
+    # * state t=0 is initial/first; state t=seq_len is final.
+    # * need extra handling for first:
+    #   - all outgoing edges can have emissions up to the skip-len
     for i in range(seq_len):
       cur_state_idx = state_idx
-      for j in range(i + 1, seq_len + 1):
-        skip_len = j - i
-        assert skip_len > 0
-        if max_skip and skip_len > max_skip:
-          continue
+      cur_max_skip = None
+      if not cur_max_skip and i == 0:
+        cur_max_skip = start_max_skip[batch]
+      if not cur_max_skip and end_max_skip[batch] and i + end_max_skip[batch] >= seq_len:
+        cur_max_skip = end_max_skip[batch]
+      if not cur_max_skip:
+        cur_max_skip = max_skip[batch]
+      j_max = seq_len
+      if cur_max_skip:
+        j_max = min(j_max, i + cur_max_skip)
+      if with_loop:
+        emission_idx = i
+        target_state_idx = cur_state_idx
+        edges += [(cur_state_idx, target_state_idx, emission_idx, batch)]
+      for j in range(i + 1, j_max + 1):
         target_state_idx = cur_state_idx + j - i
-        for t in range(i, j):
-          emission_idx = t
+        if i > 0:
+          emission_idx = i
           edges += [(cur_state_idx, target_state_idx, emission_idx, batch)]
+        else:  # see comment above. extra rule for first state
+          for t in range(i, j):
+            if with_loop and i == t and j < seq_len:
+              continue
+            emission_idx = t
+            edges += [(cur_state_idx, target_state_idx, emission_idx, batch)]
+          if with_loop and j < seq_len:
+            emission_idx = j
+            edges += [(cur_state_idx, target_state_idx, emission_idx, batch)]
       state_idx += 1
     end_state_idx = state_idx
     start_end_states += [(start_state_idx, end_state_idx)]
+    state_idx += 1
   weights = [0.0] * len(edges)
   return FastBaumWelchBatchFsa(
     edges=numpy.array(edges).transpose(),

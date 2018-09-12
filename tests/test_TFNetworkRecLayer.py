@@ -86,7 +86,7 @@ def _check_train_simple_network(network, num_steps=10):
     loss = None
     for step in range(num_steps):
       loss, _, _ = session.run(
-        [network.get_total_loss(), updater.get_optim_op(), network.post_control_dependencies],
+        [network.get_total_loss(), updater.get_optim_op(), network.get_post_control_dependencies()],
         feed_dict=make_feed_dict(step=step))
       print("step %i, loss: %f" % (step, loss))
   return loss
@@ -260,14 +260,14 @@ def test_state_keep_over_epoch():
     print('run on parts')
     part_seq_len = 2
     for step, t in enumerate(range(0, seq_len, part_seq_len)):
-      out_val_part, _ = session.run([out, net.post_control_dependencies], feed_dict={
+      out_val_part, _ = session.run([out, net.get_post_control_dependencies()], feed_dict={
         net.epoch_step: step, src_seq_len: [part_seq_len] * batch_size, src: src_seq[:, t:t + part_seq_len]})
       assert out_val_part.shape == (batch_size, part_seq_len, num_outputs)
       out_val = numpy.concatenate([out_val, out_val_part], axis=1)
     assert out_val.shape == (batch_size, seq_len, num_outputs)
     print('run full')
     out_val_full, _ = session.run(
-      [out, net.post_control_dependencies],
+      [out, net.get_post_control_dependencies()],
       feed_dict={net.epoch_step: 0, src_seq_len: [seq_len] * batch_size, src: src_seq})
     assert out_val_full.shape == out_val.shape
     assert_almost_equal(out_val, out_val_full)
@@ -711,7 +711,7 @@ def test_RecLayer_NativeLstm_Nan():
     assert_equal(output_data1.shape, (5, 1, num_outputs))  # (time, batch, dim)
 
     layer = network.layers["output"]
-    loss_t = network.get_total_loss() * layer.get_loss_normalization_factor()
+    loss_t = network.get_total_loss() * layer.loss.get_normalization_factor()
     weights_t = layer.params["W"]
     weights_grad_t, = tf.gradients(network.get_objective(), weights_t)
 
@@ -1583,6 +1583,16 @@ def test_rec_subnet_simple_rnn():
     })
     network = TFNetwork(config=config, train_flag=True)
     network.construct_from_dict(config.typed_dict["network"])
+    output_layer = network.get_default_output_layer(must_exist=True)
+    assert isinstance(output_layer, RecLayer)
+    cell = output_layer.cell
+    from TFNetworkRecLayer import _SubnetworkRecCell
+    assert isinstance(cell, _SubnetworkRecCell)
+    cell_sub_layer_out = cell.layer_data_templates["output"].output
+    assert isinstance(cell_sub_layer_out, Data)
+    assert cell_sub_layer_out.time_dim_axis is None and cell_sub_layer_out.batch_dim_axis == 0
+    assert cell_sub_layer_out.feature_dim_axis == 1 and cell_sub_layer_out.dim == n_out
+    assert cell_sub_layer_out.batch_shape == (None, n_out)
     network.initialize_params(session)
     weights_var = network.layers["output"].params["output/W"]
     assert_equal(weights_var.get_shape().as_list(), [n_out + n_in, n_out])
@@ -1598,7 +1608,6 @@ def test_rec_subnet_simple_rnn():
     assert_equal(input_np.shape, (n_batch, max(input_seq_lens), n_in))
     input_placeholder = network.extern_data.data["data"].placeholder
     input_seq_lens_placeholder = network.extern_data.data["data"].size_placeholder[0]
-    output_layer = network.get_default_output_layer(must_exist=True)
     output_np, output_seq_lens = session.run(
       (output_layer.output.get_placeholder_as_batch_major(), output_layer.output.get_sequence_lengths()),
       feed_dict={input_placeholder: input_np, input_seq_lens_placeholder: input_seq_lens})
@@ -1799,7 +1808,7 @@ def test_reclayer_optimize_out_dot():
       "enc_value": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncValuePerHeadDim),
                     "from": ["enc_value0"], "is_output_layer": True},  # (B, enc-T, H, D/H)
     },
-    rtol=1e-4)
+    rtol=1e-3)
 
 
 def test_subnet_load_on_init_rec():
@@ -1944,7 +1953,7 @@ def test_KenLmStateLayer():
 
       net = TFNetwork(extern_data=ExternData())
       net.extern_data.register_data(Data(
-        name="data", shape=(), time_dim_axis=None, dim=len(labels), dtype="int32",
+        name="data", shape=(), time_dim_axis=None, dim=len(labels), sparse=True,
         auto_create_placeholders=True))
       data_layer = net.construct_layer(name="data", net_dict={})
       layer_base_opts = dict(name="output", network=net, sources=[data_layer])
@@ -2015,7 +2024,7 @@ def test_KenLmStateLayer_dense():
 
       net = TFNetwork(extern_data=ExternData())
       net.extern_data.register_data(Data(
-        name="data", shape=(), time_dim_axis=None, dim=len(labels), dtype="int32",
+        name="data", shape=(), time_dim_axis=None, dim=len(labels), sparse=True,
         auto_create_placeholders=True))
       data_layer = net.construct_layer(name="data", net_dict={})
       layer_base_opts = dict(

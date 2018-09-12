@@ -134,4 +134,10 @@ Contains code from tensor2tensor:
  - Copyright 2017 The Tensor2Tensor Authors
  - Some code in TFUtil.py, Util.py.
 
+Contains code from keithito-tacotron:
+ - Website: https://github.com/keithito/tacotron
+ - MIT License (MIT)
+ - Copyright (c) 2017 Keith Ito
+ - Some code in LmDataset.py.
+
 Various code snippets from StackOverflow, which are under Creative Commons / Public Domain.

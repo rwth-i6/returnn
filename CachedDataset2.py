@@ -138,11 +138,14 @@ class CachedDataset2(Dataset):
     self.load_seqs(self.expected_load_seq_start, sorted_seq_idx + 1)
     return self._get_seq(sorted_seq_idx).num_frames
 
-  def get_input_data(self, sorted_seq_idx):
-    return self._get_seq(sorted_seq_idx).features
+  def get_data(self, seq_idx, key):
+    return self._get_seq(seq_idx).features[key]
 
-  def get_targets(self, target, sorted_seq_idx):
-    return self._get_seq(sorted_seq_idx).targets[target]
+  def get_input_data(self, seq_idx):
+    return self.get_data(seq_idx, "data")
+
+  def get_targets(self, target, seq_idx):
+    return self.get_data(seq_idx, target)
 
   def get_ctc_targets(self, sorted_seq_idx):
     return self._get_seq(sorted_seq_idx).ctc_targets
@@ -150,9 +153,19 @@ class CachedDataset2(Dataset):
   def get_tag(self, sorted_seq_idx):
     return self._get_seq(sorted_seq_idx).seq_tag
 
-  def get_target_list(self):
+  def get_data_keys(self):
     self._load_something()
-    return sorted(self.added_data[0].targets.keys())
+    return sorted(self.added_data[0].get_data_keys())
+
+  def get_target_list(self):
+    """
+    Target data keys are usually not available during inference.
+    Overwrite this if your dataset is more custom.
+    """
+    keys = list(self.get_data_keys())
+    if "data" in keys:
+      keys.remove("data")
+    return keys
 
   def is_data_sparse(self, key):
     """
@@ -161,9 +174,8 @@ class CachedDataset2(Dataset):
     """
     if key in self.num_outputs:
       return self.num_outputs[key][1] == 1
-    assert key == "data"
     self._load_something()
-    return len(self.added_data[0].features.shape) == 1
+    return len(self.added_data[0].features[key].shape) == 1
 
   def get_data_dim(self, key):
     """

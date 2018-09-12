@@ -1,5 +1,7 @@
+from __future__ import print_function
 
 from Util import simpleObjRepr, hdf5_dimension, hdf5_group, hdf5_shape
+from Log import log
 
 
 class LayerNetworkDescription:
@@ -135,11 +137,17 @@ class LayerNetworkDescription:
     :return: dict data_key -> kwargs of Data
     :rtype: dict[str,dict[str]]
     """
-    num_inputs, num_outputs = cls.num_inputs_outputs_from_config(config)
-    data_dims = num_outputs.copy()
-    sparse_input = config.bool("sparse_input", False)
-    input_data_key = "data"
-    data_dims.setdefault(input_data_key, (num_inputs, 1 if sparse_input else 2))
+    input_data_key = config.value('default_input', 'data')
+    if config.has("extern_data"):
+      data_dims = config.typed_dict["extern_data"]
+      assert isinstance(data_dims, dict), "extern_data in config must be a dict"
+      if config.has("num_inputs") or config.has("num_outputs"):
+        print("Warning: Using extern_data and will ignore num_inputs/num_outputs in config.", file=log.v2)
+    else:
+      num_inputs, num_outputs = cls.num_inputs_outputs_from_config(config)
+      data_dims = num_outputs.copy()
+      sparse_input = config.bool("sparse_input", False)
+      data_dims.setdefault(input_data_key, (num_inputs, 1 if sparse_input else 2))
     data = {}
     for key, data_type in data_dims.items():
       if isinstance(data_type, dict):

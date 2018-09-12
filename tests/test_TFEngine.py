@@ -113,6 +113,148 @@ def test_engine_train():
   engine.finalize()
 
 
+def test_engine_train_uneven_batches():
+  rnd = numpy.random.RandomState(42)
+  from GeneratingDataset import StaticDataset
+  n_data_dim = 2
+  n_classes_dim = 3
+
+  def get_data(num_seqs):
+    return [
+      {
+        "data": rnd.uniform(-1., 1., (seq_len, n_data_dim)),
+        "classes": rnd.choice(range(n_classes_dim), (seq_len,))
+      }
+      for seq_len in [rnd.choice(list(range(1, 50)) + list(range(1, 20))) for _ in range(num_seqs)]]
+
+  train_data = StaticDataset(
+    input_dim=n_data_dim, output_dim=n_classes_dim,
+    data=get_data(20))
+  print("train data seq lens:", [len(d["data"]) for d in train_data.data])
+  train_data.init_seq_order(epoch=1)
+  cv_data = StaticDataset(input_dim=n_data_dim, output_dim=n_classes_dim, data=get_data(3))
+  print("cv data seq lens:", [len(d["data"]) for d in cv_data.data])
+  cv_data.init_seq_order(epoch=1)
+
+  config = Config()
+  config.update({
+    "model": "/tmp/model",
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": {
+      "rnn": {"class": "rec", "unit": "lstm", "n_out": 3},  # make it recurrent
+      "output": {"class": "softmax", "loss": "ce", "from": "rnn"}},
+    "start_epoch": 1,
+    "num_epochs": 2,
+    "batch_size": 50,  # set it such that sometimes we have num-seqs 1, 2 or 3 in a single batch
+    "adam": True,
+    "learning_rate": 0.001,
+    "tf_log_memory_usage": True,
+    "log_batch_size": True
+  })
+  engine = Engine(config=config)
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
+  engine.train()
+
+  engine.finalize()
+
+
+def test_engine_train_subnet_loss():
+  from GeneratingDataset import DummyDataset
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 3
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
+  train_data.init_seq_order(epoch=1)
+  cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  cv_data.init_seq_order(epoch=1)
+
+  config = Config()
+  config.update({
+    "model": "/tmp/model",
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": {
+      "output": {
+        "class": "subnetwork",
+        "subnetwork": {
+          "output": {"class": "softmax", "loss": "ce"}
+        }}},
+    "start_epoch": 1,
+    "num_epochs": 1,
+    "batch_size": 50
+  })
+  engine = Engine(config=config)
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
+  engine.train()
+  engine.finalize()
+
+
+def test_engine_train_rec_subnet_loss_optimized():
+  from GeneratingDataset import DummyDataset
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 3
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
+  train_data.init_seq_order(epoch=1)
+  cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  cv_data.init_seq_order(epoch=1)
+
+  config = Config()
+  config.update({
+    "model": "/tmp/model",
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": {
+      "output": {
+        "class": "rec",
+        "target": "classes",
+        "unit": {
+          "output": {"class": "softmax", "loss": "ce", "from": "data:source"}
+        }}},
+    "start_epoch": 1,
+    "num_epochs": 1,
+    "batch_size": 50
+  })
+  engine = Engine(config=config)
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
+  engine.train()
+  engine.finalize()
+
+
+def test_engine_train_rec_subnet_loss_non_optimized():
+  from GeneratingDataset import DummyDataset
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 3
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
+  train_data.init_seq_order(epoch=1)
+  cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  cv_data.init_seq_order(epoch=1)
+
+  config = Config()
+  config.update({
+    "model": "/tmp/model",
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": {
+      "output": {
+        "class": "rec",
+        "optimize_move_layers_out": False,
+        "target": "classes",
+        "unit": {
+          "output": {"class": "softmax", "loss": "ce", "from": "data:source"}
+        }}},
+    "start_epoch": 1,
+    "num_epochs": 1,
+    "batch_size": 50
+  })
+  engine = Engine(config=config)
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
+  engine.train()
+  engine.finalize()
+
+
 def test_engine_train_accum_grad_multiple_step():
   from GeneratingDataset import DummyDataset
   seq_len = 5
@@ -414,9 +556,9 @@ def check_engine_search(extra_rec_kwargs=None):
 
   engine.search(dataset=dataset)
   print("error keys:")
-  pprint(engine.network.error_by_layer)
+  pprint(engine.network.losses_dict)
   assert engine.network.total_objective is not None
-  assert "decision" in engine.network.error_by_layer
+  assert "decision" in engine.network.losses_dict
 
   engine.finalize()
 
@@ -497,9 +639,9 @@ def check_engine_search_attention(extra_rec_kwargs=None):
   print("Search...")
   engine.search(dataset=dataset)
   print("error keys:")
-  pprint(engine.network.error_by_layer)
+  pprint(engine.network.losses_dict)
   assert engine.network.total_objective is not None
-  assert "decision" in engine.network.error_by_layer
+  assert "decision" in engine.network.losses_dict
 
   engine.finalize()
 
@@ -646,9 +788,9 @@ def test_rec_optim_all_out():
 
   engine.search(dataset=dataset)
   print("error keys:")
-  pprint(engine.network.error_by_layer)
+  pprint(engine.network.losses_dict)
   assert engine.network.total_objective is not None
-  assert "decision" in engine.network.error_by_layer
+  assert "decision" in engine.network.losses_dict
 
   engine.finalize()
 
@@ -990,6 +1132,8 @@ def test_rec_subnet_auto_optimize():
     else:
       assert not rec_layer.cell.input_layers_moved_out
       assert not rec_layer.cell.output_layers_moved_out
+    print("Losses:")
+    pprint(engine.network.losses_dict)
 
     print("Run %i: Train now..." % run_idx)
     engine.train()
@@ -1290,7 +1434,8 @@ def test_rec_subnet_eval_init_out_apply0():
     "num_epochs": 2,
     "batch_size": 10,
     "nadam": True,
-    "learning_rate": 0.01
+    "learning_rate": 0.01,
+    "debug_print_layer_output_template": True
   })
 
   print("Create engine.")
@@ -1306,20 +1451,22 @@ def test_rec_subnet_eval_init_out_apply0():
 def test_net_safe_log_to_log_softmax():
   n_out = 5
   net_dict = {
-    "ff_in_window": {"class": "window", "window_size": 3, "trainable": False},
-    "ff_in": {"class": "merge_dims", "axes": "except_time", "from": ["ff_in_window"], "trainable": False},
-    "ff0": {"class": "hidden", "activation": "relu", "n_out": 8, "L2": 0.01, "from": ["ff_in"]},
-    "ff_out": {"class": "softmax", "n_out": n_out, "from": ["ff0"]},
+    "ff_in_window": {"class": "window", "window_size": 3, "trainable": False},  # (B,T,3,3)
+    "ff_in": {"class": "merge_dims", "axes": "except_time", "from": ["ff_in_window"], "trainable": False},  # (B,T,9)
+    "ff0": {"class": "hidden", "activation": "relu", "n_out": 8, "L2": 0.01, "from": ["ff_in"]},  # (B,T,8)
+    "ff_out": {"class": "softmax", "n_out": n_out, "from": ["ff0"]},  # (B,T,5)
     "ff_out_prior": {
       "class": "accumulate_mean", "exp_average": 0.001,
-      "is_prob_distribution": True, "from": ["ff_out"]},
+      "is_prob_distribution": True, "from": ["ff_out"]},  # (5,)
     "output": {
       "class": "combine", "kind": "eval", "from": ["ff_out", "ff_out_prior"],
       "eval": "safe_log(source(0)) - safe_log(source(1))",
       "eval_locals": {"am_scale": 0.1, "prior_scale": 0.5 * 0.1}
     },
   }
-  net = TFNetwork(extern_data=ExternData(data={"data": {"dim": 3}, "classes": {"dim": n_out, "sparse": True}}))
+  net = TFNetwork(
+    extern_data=ExternData(data={"data": {"dim": 3}, "classes": {"dim": n_out, "sparse": True}}),
+    config=Config({"debug_print_layer_output_template": True}))
   net.construct_from_dict(net_dict)
   output_layer = net.get_default_output_layer(must_exist=True)
   out = output_layer.output.placeholder

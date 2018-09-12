@@ -22,10 +22,17 @@ class StereoDataset(CachedDataset2):
   have an easy to use interface for using RETURNN as a regression tool
   """
 
-  def __init__(self, **kwargs):
+  def __init__(self, partition_epoch=1, **kwargs):
     """constructor"""
     super(StereoDataset, self).__init__(**kwargs)
     self._seq_index_list = None
+    self._partition_epoch = partition_epoch
+    self._current_partition = 0
+    self._seqs_per_epoch = None
+
+  def initialize(self):
+    self._seq_overhead = self._get_total_number_of_sequences() % self._partition_epoch
+    super(StereoDataset, self).initialize()
 
   @property
   def num_seqs(self):
@@ -37,6 +44,15 @@ class StereoDataset(CachedDataset2):
       return self._num_seqs
     raise NotImplementedError
 
+  def _get_total_number_of_sequences(self):
+    raise NotImplementedError
+
+  @property
+  def seqs_per_epoch(self):
+    if self._seqs_per_epoch is None:
+      self._seqs_per_epoch = self._get_total_number_of_sequences() // self._partition_epoch
+    return self._seqs_per_epoch
+
   def _collect_single_seq(self, seq_idx):
     """returns the sequence specified by the index seq_idx
 
@@ -46,6 +62,12 @@ class StereoDataset(CachedDataset2):
     """
     raise NotImplementedError
 
+  def _get_partition_size(self, partition):
+    partition_size = self.seqs_per_epoch
+    if partition == self._partition_epoch-1:
+      partition_size += self._seq_overhead
+    return partition_size
+    
   def init_seq_order(self, epoch=None, seq_list=None):
     """
     :type epoch: int|None
@@ -56,22 +78,24 @@ class StereoDataset(CachedDataset2):
       self.seq_index  # sorted seq idx
     """
     super(StereoDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
-
     if epoch is None:
         self._seq_index_list = range(self.num_seqs)
         return True
 
+    self._current_partition = (epoch - 1) % self._partition_epoch
+    partition_size = self._get_partition_size(self._current_partition)
+
     if seq_list:
       raise NotImplementedError('init_seq_order of StereoDataset does not support a predefined seq_list yet.')
     else:
-      seq_index = self.get_seq_order_for_epoch(epoch, self.num_seqs, lambda s: self.get_seq_length(s).get('data', None))
+      seq_index = self.get_seq_order_for_epoch(epoch, partition_size, lambda s: self.get_seq_length(s).get('data', None))
 
     self._seq_index_list = seq_index
     if epoch is not None:
-      # Give some hint to the user in case he is wondering why the cache is reloading.
       print >> log.v4, "Reinitialize dataset seq order for epoch %i." % epoch
 
     return True
+
 
 class StereoHdfDataset(StereoDataset):
   """A stereo dataset which needs an hdf file as input. The hdf file
@@ -148,18 +172,19 @@ class StereoHdfDataset(StereoDataset):
     """
     self._filePaths = []
     self._fileHandlers = []
-    if hdfFile.endswith('.bundle'):
-      # a bundle file containing a list of hdf files is given
+    if hdfFile.endswith('.bundle'):  # a bundle file containing a list of hdf files is given
       bundle = BundleFile(hdfFile)
       for hdfFilePath in bundle.datasetFilePaths:
         self._filePaths.append(hdfFilePath)
         self._fileHandlers.append(h5py.File(hdfFilePath, 'r'))
-    else:
-      # only a single hdf file is given
+    else:  # only a single hdf file is given
       self._filePaths.append(hdfFile)
       self._fileHandlers.append(h5py.File(hdfFile, 'r'))
 
   def _calculateNumberOfSequences(self):
+    return self.seqs_per_epoch
+
+  def _get_total_number_of_sequences(self):
     """Calculate and return the number of sequences in the dataset.
     This method also initializes a sequences map which maps sequence
     indices into HDF file handlers.
@@ -207,7 +232,7 @@ class StereoHdfDataset(StereoDataset):
         outputFeatDim = 1
       else:
         outputFeatDim = someSequence.get_data('classes').shape[1]
-      if outputFeatDim == 1 and num_outputs != None:
+      if outputFeatDim == 1 and num_outputs is not None:
         self.num_outputs = {
           'classes': (num_outputs, outputFeatDim)
         }
@@ -278,13 +303,16 @@ class StereoHdfDataset(StereoDataset):
     :rtype: DatasetSeq | None
     :returns: None if seq_idx >= num_seqs or the corresponding sequence.
     """
-    if seq_idx >= self.num_seqs:
+    if self._seq_index_list is None:
+        self.init_seq_order()
+
+    if seq_idx >= len(self._seq_index_list):
       return None
 
     # map the seq_idx to the shuffled sequence indices
-    if self._seq_index_list is None:
-        self.init_seq_order()
     shuf_seq_idx = self._seq_index_list[seq_idx]
+    partition_offset = int(np.sum([self._get_partition_size(i1) for i1 in range(self._current_partition)]))
+    shuf_seq_idx += partition_offset
 
     seqMapping = self._seqMap[shuf_seq_idx]
     fileIdx = seqMapping[0]
@@ -298,10 +326,8 @@ class StereoHdfDataset(StereoDataset):
     # optional normalization
     if self._normData is not None:
       assert isinstance(self._normData, NormalizationData)
-      # inputs
       if self._flag_normalizeInputs:
         inputFeatures = StereoHdfDataset._normalizeVector(inputFeatures, self._normData.inputMean, self._normData.inputVariance)
-      # outputs
       if self._flag_normalizeTargets:
         targets = StereoHdfDataset._normalizeVector(targets, self._normData.outputMean, self._normData.outputVariance)
 
@@ -389,7 +415,7 @@ class DatasetWithTimeContext(StereoHdfDataset):
         rightContext.append(np.zeros(bins))
     for t in range(frames):
       f = inputFeatures[t, ...]
-      newFeature = np.concatenate([np.concatenate(leftContext, axis=0), f, np.concatenate(rightContext, axis=0)],axis=0)
+      newFeature = np.concatenate([np.concatenate(leftContext, axis=0), f, np.concatenate(rightContext, axis=0)], axis=0)
       inFeatWithContext.append(newFeature)
       leftContext.popleft()
       leftContext.append(f)

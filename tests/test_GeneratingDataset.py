@@ -52,3 +52,29 @@ def test_Enwik8Corpus_batch_num_seqs():
     batch_data[n % batch_size] += new_data
     n += 1
   assert data.startswith(batch_data[0])
+
+
+def test_StaticDataset_custom_keys():
+  dataset = StaticDataset([{"source": numpy.array([1, 2, 3]), "target": numpy.array([3, 4, 5, 6, 7])}])
+  dataset.init_seq_order(epoch=1)
+  assert dataset.num_seqs == 1
+  assert_equal(dataset.get_data_keys(), ["source", "target"])
+  assert_equal(dataset.num_outputs["source"][1], 1)
+  assert_equal(dataset.num_outputs["target"][1], 1)
+  dataset.load_seqs(0, 1)
+  assert_equal(list(dataset.get_data(0, "source")), [1, 2, 3])
+  assert_equal(list(dataset.get_data(0, "target")), [3, 4, 5, 6, 7])
+
+
+def test_StaticDataset_custom_keys_with_dims():
+  dataset = StaticDataset(
+    data=[{"source": numpy.array([1, 2, 3]), "target": numpy.array([3, 4, 5, 6, 7])}],
+    output_dim={"source": [5, 1], "target": [10, 1]})
+  dataset.init_seq_order(epoch=1)
+  assert dataset.num_seqs == 1
+  assert_equal(dataset.get_data_keys(), ["source", "target"])
+  assert_equal(dataset.num_outputs["source"][1], 1)
+  assert_equal(dataset.num_outputs["target"][1], 1)
+  dataset.load_seqs(0, 1)
+  assert_equal(list(dataset.get_data(0, "source")), [1, 2, 3])
+  assert_equal(list(dataset.get_data(0, "target")), [3, 4, 5, 6, 7])

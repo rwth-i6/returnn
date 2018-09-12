@@ -10,13 +10,16 @@ import tensorflow as tf
 import sys
 sys.path += ["."]  # Python 3 hack
 from TFUtil import *
-from nose.tools import assert_equal, assert_is_instance, assert_is, assert_in
+from nose.tools import assert_equal, assert_not_equal, assert_is_instance, assert_is, assert_in
 from numpy.testing.utils import assert_almost_equal, assert_allclose
+from pprint import pprint
 import unittest
 import numpy.testing
 import better_exchook
 better_exchook.replace_traceback_format_tb()
 
+
+print("TF version:", tf.__version__)
 
 session = tf.InteractiveSession()
 
@@ -90,6 +93,56 @@ def test_Data_spatial_batch_axes():
   assert_equal(spatial_axes1, spatial_axes2)
 
 
+def test_Data_spatial_batch_axes_2():
+  d = Data(name="data", shape=(None, 9000))
+  assert_equal(d.get_spatial_batch_axes(), [1])
+  d = Data(name="data", shape=(13, 9000))
+  assert_equal(d.get_spatial_batch_axes(), [1])
+  d = Data(name="data", shape=(None, 13, 9000))
+  assert_equal(d.get_spatial_batch_axes(), [1, 2])
+
+
+def test_Data_get_bc_spatial_batch_shape():
+  d = Data(name="data", shape=(None, 9000))
+  assert_equal(d.get_bc_spatial_batch_shape(), (1, 1, 9000))
+  d = Data(name="data", shape=(13, 9000))
+  assert_equal(d.get_bc_spatial_batch_shape(), (1, 1, 9000))
+  d = Data(name="data", shape=(None, 13, 9000))
+  assert_equal(d.get_bc_spatial_batch_shape(), (1, 1, 1, 9000))
+
+
+def test_Data_get_bc_shape():
+  d = Data(name="data", shape=(None, 9000))
+  assert_equal(d.get_bc_shape(), (1, 1, 9000))
+  d = Data(name="data", shape=(13, 9000))
+  assert_equal(d.get_bc_shape(), (1, 1, 9000))
+  d = Data(name="data", shape=(None, 13, 9000))
+  assert_equal(d.get_bc_shape(), (1, 1, 1, 9000))
+  d = Data(name="data", shape=(None, 13, 9000))
+  assert_equal(d.get_bc_shape({"*": None}), (None, None, 13, 9000))
+  assert_equal(d.get_bc_shape({("B", "s:1"): None}), (None, 1, 13, 9000))
+
+
+def test_Data_copy_template_adding_time_dim_no_feature():
+  d1 = Data(name="d1", shape=(), time_dim_axis=None)
+  assert d1.batch_dim_axis == 0 and d1.batch_shape == (None,)
+  assert d1.feature_dim_axis is None
+  d2 = d1.copy_template_adding_time_dim()
+  assert d2.batch_dim_axis == 1 and d2.time_dim_axis == 0 and d2.batch_shape == (None, None)
+  # assert d2.feature_dim_axis is None  # not sure what we would want here...
+
+
+def test_Data_time_no_feature():
+  d1 = Data(name="d1", shape=(None,), batch_dim_axis=0, time_dim_axis=1, dim=None)
+  assert d1.time_dim_axis == 1
+
+
+def test_Data_unknown_feature_no_time():
+  d1 = Data(name="d1", shape=(None,), batch_dim_axis=0, time_dim_axis=None, dim=None)
+  assert d1.batch_dim_axis == 0 and d1.time_dim_axis is None and d1.feature_dim_axis == 1
+  assert d1.batch_shape == (None, None)
+
+
 def test_Data_copy_compatible_to_time_major():
   d1 = Data(name='ff_out_output', shape=(None, 9001), dtype='float32', batch_dim_axis=1)
   d2 = Data(name='ff_out_prior_output', shape=(9001,), dtype='float32', batch_dim_axis=None, time_dim_axis=None)
@@ -108,6 +161,174 @@ def test_Data_copy_compatible_to_batch_major():
   assert d2a.batch_dim_axis == d1.batch_dim_axis
   assert d2a.time_dim_axis == d1.time_dim_axis
   assert d2a.feature_dim_axis == d1.feature_dim_axis
+
+
+def test_Data_copy_compatible_to_feature_dim():
+  # copy_compatible_to should leave the feature dim as-is.
+  d1 = Data(name='d1', shape=(None, 11), dtype='float32')
+  d2 = Data(name='d2', shape=(13,), dtype='float32', batch_dim_axis=None, time_dim_axis=None)
+  assert d1.dim != d2.dim
+  d2a = d2.copy_compatible_to(d1)
+  assert d2a.shape == (1, 13)
+  assert d2a.batch_dim_axis == d1.batch_dim_axis
+  assert d2a.time_dim_axis == d1.time_dim_axis
+  assert d2a.feature_dim_axis == d1.feature_dim_axis
+
+
+def test_Data_copy_compatible_to_src_no_batch():
+  d1 = Data(name="d1", shape=(None, 1), time_dim_axis=None)
+  d1.placeholder = tf.zeros([d if (d is not None) else 1 for d in d1.batch_shape])
+  d2 = Data(name="d2", shape=(), batch_dim_axis=None, time_dim_axis=None)
+  d2.placeholder = tf.zeros([d if (d is not None) else 1 for d in d2.batch_shape])
+  d3 = d2.copy_compatible_to(d1)
+  assert d3.batch_shape == (None, 1, 1)
+
+
+def test_Data_feature_dim_axis_btd():
+  d1 = Data(name="d1", shape=(None, 11), feature_dim_axis=-1)
+  d2 = Data(name="d2", shape=(None, 11), feature_dim_axis=2)
+  d3 = Data(name="d3", shape=(None, 11))
+  d4 = Data(name="d4", feature_dim_axis=2, dim=11)
+  assert d1.batch_dim_axis == d2.batch_dim_axis == d3.batch_dim_axis == d4.batch_dim_axis == 0
+  assert d1.time_dim_axis == d2.time_dim_axis == d3.time_dim_axis == d4.time_dim_axis == 1
+  assert d1.feature_dim_axis == d2.feature_dim_axis == d3.feature_dim_axis == d4.feature_dim_axis == 2
+  assert d1.batch_shape == d2.batch_shape == d3.batch_shape == d4.batch_shape == (None, None, 11)
+  assert d1._feature_dim_axis == 2
+  assert d3._feature_dim_axis is NotSpecified
+
+
+def test_Data_feature_dim_axis_none():
+  d1 = Data(name="d1", shape=())
+  d2 = Data(name="d2", shape=(), feature_dim_axis=None)
+  d3 = Data(name="d3", shape=(None,), sparse=True, dim=7)
+  d4 = Data(name="d4", shape=(None,), sparse=True, dim=7, feature_dim_axis=None)
+  assert d1.feature_dim_axis == d2.feature_dim_axis == d3.feature_dim_axis == d4.feature_dim_axis == None
+  assert d1._feature_dim_axis is NotSpecified
+  assert d2._feature_dim_axis is None
+
+
+def test_Data_feature_dim_axis_bdt():
+  d1 = Data(name="d1", shape=(11, None), feature_dim_axis=1)
+  d2 = Data(name="d2", time_dim_axis=2, feature_dim_axis=1, dim=11)
+  d3 = Data(name="d3", dim=11, feature_dim_axis=1)  # will add time-dim by default
+  assert d1.batch_ndim == d2.batch_ndim == d3.batch_ndim == 3
+  assert d1.batch_dim_axis == d2.batch_dim_axis == d3.batch_dim_axis == 0
+  assert d1.feature_dim_axis == d2.feature_dim_axis == d3.feature_dim_axis == 1
+  assert d1.time_dim_axis == d2.time_dim_axis == d3.time_dim_axis == 2
+  assert d1.dim == d2.dim == d3.dim == 11
+  assert d1.batch_shape == d2.batch_shape == d3.batch_shape == (None, 11, None)
+
+
+def test_Data_feature_dim_axis_bd():
+  d1 = Data(name="d1", time_dim_axis=None, dim=11)
+  d2 = Data(name="d2", shape=(11,))
+  assert d1.batch_dim_axis == d2.batch_dim_axis == 0
+  assert d1.time_dim_axis == d2.time_dim_axis == None
+  assert d1.feature_dim_axis == d2.feature_dim_axis == 1
+  assert d1.dim == d2.dim == 11
+  assert d1.batch_shape == d2.batch_shape == (None, 11)
+
+
+def test_Data_feature_dim_axis_d():
+  d1 = Data(name="d1", batch_dim_axis=None, time_dim_axis=None, dim=11)
+  d2 = Data(name="d2", batch_dim_axis=None, shape=(11,))
+  assert d1.batch_dim_axis == d2.batch_dim_axis == None
+  assert d1.time_dim_axis == d2.time_dim_axis == None
+  assert d1.feature_dim_axis == d2.feature_dim_axis == 0
+  assert d1.dim == d2.dim == 11
+  assert d1.batch_shape == d2.batch_shape == (11,)
+
+
+def test_Data_feature_dim_axis_NHWC():
+  d1 = Data(name="d1", shape=(None, None, 11))
+  d2 = Data(name="d2", shape=(None, None, 11), feature_dim_axis=-1)
+  d3 = Data(name="d3", dim=11, feature_dim_axis=3)
+  assert d1.batch_ndim == d2.batch_ndim == d3.batch_ndim == 4
+  assert d1.batch_dim_axis == d2.batch_dim_axis == d3.batch_dim_axis == 0
+  assert d1.time_dim_axis == d2.time_dim_axis == d3.time_dim_axis == 1
+  assert d1.feature_dim_axis == d2.feature_dim_axis == d3.feature_dim_axis == 3
+  assert d1.dim == d2.dim == d3.dim == 11
+  assert d1.batch_shape == d2.batch_shape == d3.batch_shape == (None, None, None, 11)
+
+
+def test_Data_feature_dim_axis_NCHW():
+  d1 = Data(name="d1", shape=(11, None, None), feature_dim_axis=1)
+  d2 = Data(name="d2", shape=(11, None, None), time_dim_axis=2, feature_dim_axis=1, dim=11)
+  assert d1.batch_ndim == d2.batch_ndim == 4
+  assert d1.batch_dim_axis == d2.batch_dim_axis == 0
+  assert d1.feature_dim_axis == d2.feature_dim_axis == 1
+  assert d1.time_dim_axis == d2.time_dim_axis == 2
+  assert d1.dim == d2.dim == 11
+  assert d1.batch_shape == d2.batch_shape == (None, 11, None, None)
+
+
+def test_Data_scalar():
+  d1 = Data(name="d1", batch_dim_axis=None, time_dim_axis=None, feature_dim_axis=None)
+  assert d1.batch_dim_axis is None
+  assert d1.time_dim_axis is None
+  assert d1.feature_dim_axis is None
+  assert d1.dim is None
+  assert d1.batch_shape == ()
+
+
+def test_Data_scalar_default():
+  d1 = Data(name="d1", shape=(), dtype="int32", batch_dim_axis=None)
+  assert not d1.sparse
+  assert d1.batch_shape == () and d1.dim is None and d1.feature_dim_axis is None and d1.batch_dim_axis is None
+
+
+def test_Data_copy_add_feature_dim():
+  d1 = Data(name="d1", shape=(None, 11))
+  d2 = d1.copy_add_feature_dim()
+  assert d2.batch_shape == (None, None, 11, 1)
+  assert d2.dim == 1
+
+
+def test_Data_copy_split_feature_dim():
+  d1 = Data(name="d1", shape=(None, 12))
+  d2 = d1.copy_split_feature_dim(4)
+  assert d2.batch_shape == (None, None, 3, 4)
+  assert d2.dim == 4
+
+
+def test_Data_copy_as_batch_feature_major():
+  d1 = Data(name="d1", shape=(None, 12))
+  assert d1.batch_shape == (None, None, 12) and d1.time_dim_axis == 1 and d1.feature_dim_axis == 2
+  d2 = d1.copy_as_batch_feature_major()
+  assert d2.batch_shape == (None, 12, None) and d2.time_dim_axis == 2 and d2.feature_dim_axis == 1
+  assert d2.dim == 12
+
+
+def test_Data_copy_template_excluding_time_dim():
+  d1 = Data(name='d1', shape=(None, 12))
+  assert d1.batch_shape == (None, None, 12) and d1.time_dim_axis == 1 and d1.feature_dim_axis == 2
+  d2 = d1.copy_template_excluding_time_dim()
+  assert d2.batch_shape == (None, 12) and d2.time_dim_axis is None and d2.feature_dim_axis == 1
+
+
+def test_Data_copy_template_excluding_time_dim_explicit_feature():
+  d1 = Data(name='d1', shape=(None, 12), feature_dim_axis=2)
+  assert d1.batch_shape == (None, None, 12) and d1.time_dim_axis == 1 and d1.feature_dim_axis == 2
+  d2 = d1.copy_template_excluding_time_dim()
+  assert d2.batch_shape == (None, 12) and d2.time_dim_axis is None and d2.feature_dim_axis == 1
+
+
+def test_Data_copy_add_spatial_dim_no_batch():
+  d1 = Data(name='d1', shape=(3,), batch_dim_axis=None, time_dim_axis=None)
+  assert d1.batch_dim_axis is None and d1.time_dim_axis is None and d1.feature_dim_axis == 0
+  assert d1.batch_shape == (3,) and d1.dim == 3
+  d2 = d1.copy_add_spatial_dim(0)
+  assert d2.batch_dim_axis is None and d2.time_dim_axis == 0 and d2.feature_dim_axis == 1
+  assert d2.batch_shape == (1, 3) and d2.dim == 3
+
+
+def test_Data_copy_add_spatial_dim_no_batch_explicit_feature():
+  d1 = Data(name='d1', shape=(3,), batch_dim_axis=None, time_dim_axis=None, feature_dim_axis=0)
+  assert d1.batch_dim_axis is None and d1.time_dim_axis is None and d1.feature_dim_axis == 0
+  assert d1.batch_shape == (3,) and d1.dim == 3
+  d2 = d1.copy_add_spatial_dim(0)
+  assert d2.batch_dim_axis is None and d2.time_dim_axis == 0 and d2.feature_dim_axis == 1
+  assert d2.batch_shape == (1, 3) and d2.dim == 3
 
 
 def test_get_initializer_zero():
@@ -492,13 +713,21 @@ def test_constant_with_shape():
   assert_equal(x.flatten().tolist(), [True] * 2 * 3)
 
 
-def naive_windowed_batch(source, window):
+def naive_windowed_batch(source, window, padding='same'):
   assert source.ndim == 3  # (time,batch,dim). not sure how to handle other cases
-  n_time = source.shape[0]
+  if padding == 'same':
+    n_time = source.shape[0]
+    w_right = window // 2
+    w_left = window - w_right - 1
+  elif padding == 'valid':
+    n_time = source.shape[0] - window + 1
+    w_right = 0
+    w_left = 0
+  else:
+    raise Exception("invalid padding %r" % padding)
+
   n_batch = source.shape[1]
   n_dim = source.shape[2]
-  w_right = window // 2
-  w_left = window - w_right - 1
   dtype = source.dtype
   pad_left = numpy.zeros((w_left, n_batch, n_dim), dtype=dtype)
   pad_right = numpy.zeros((w_right, n_batch, n_dim), dtype=dtype)
@@ -520,6 +749,23 @@ def test_windowed_nd_small():
   print(source)
   naive = naive_windowed_batch(source, window=window)
   real = windowed_nd(source, window_size=window, time_axis=0, new_window_axis=1).eval()
+  print("naive:")
+  print(naive)
+  print("real:")
+  print(real)
+  numpy.testing.assert_almost_equal(naive, real)
+
+
+def test_windowed_pad_valid_nd_small():
+  n_time = 10
+  n_batch = 1
+  n_dim = 1
+  window = 3
+  source = numpy.arange(1, n_time*n_batch*n_dim + 1).reshape(n_time, n_batch, n_dim)
+  print("source:")
+  print(source)
+  naive = naive_windowed_batch(source, window=window, padding='valid')
+  real = windowed_nd(source, window_size=window, time_axis=0, new_window_axis=1, padding='valid').eval()
   print("naive:")
   print(naive)
   print("real:")
@@ -1060,6 +1306,22 @@ def test_bleu_score_empty():
   assert_almost_equal(tf_res, [0.0])
 
 
+def test_safe_log_softmax():
+  x = tf.constant(0.5, shape=(3, 7))
+  x = tf.nn.softmax(x)
+  print("x (softmax) op_def:")
+  pprint(x.op.op_def)
+  assert x.op.type == "Softmax"
+  x = safe_log(x)
+  print("x (safe_log(softmax)) op_def")
+  pprint(x.op.op_def)
+  print("x.op.inputs[0] op_def")
+  pprint(x.op.inputs[0].op.op_def)
+  print("graph:")
+  print_graph_output(x)
+  assert x.op.type == "LogSoftmax"
+
+
 def test_clip_by_value_with_identity_grad():
   err_y = 42.0
   limit = 1.0
@@ -1359,14 +1621,229 @@ def test_get_op_attrib_keys():
   x = tf.matmul(a=tf.zeros((3, 4, 5)), b=tf.zeros((3, 5, 7)))
   assert isinstance(x, tf.Tensor)
   assert isinstance(x.op, tf.Operation)
-  print("x op:", x.op.name)
-  assert_equal(x.op.name, "MatMul")
+  print("x op:", x.op.type)
+  assert_equal(x.op.type, "BatchMatMul")
   assert_equal(x.get_shape().as_list(), [3, 4, 7])
   attrib_keys = get_op_attrib_keys(x)
   print("matmul attrib keys:", attrib_keys)
   assert_equal(sorted(attrib_keys), ['T', 'adj_x', 'adj_y'])
   dtype = x.op.get_attr("T")
   assert_equal(dtype, tf.float32)
+
+
+def test_get_op_input_names_MatMul():
+  x = tf.matmul(a=tf.zeros((3, 4, 5)), b=tf.zeros((3, 5, 7)))
+  assert isinstance(x, tf.Tensor)
+  assert isinstance(x.op, tf.Operation)
+  print("x op:", x.op.type)
+  assert_equal(x.op.type, "BatchMatMul")
+  input_names = get_op_input_names(x.op)
+  print("matmul input names:", input_names)
+  assert_equal(sorted(input_names), ['x', 'y'])
+
+
+def test_get_op_input_names_Constant():
+  x = tf.constant(1)
+  assert isinstance(x, tf.Tensor)
+  assert isinstance(x.op, tf.Operation)
+  print("x op:", x.op.type)
+  assert_equal(x.op.type, "Const")
+  input_names = get_op_input_names(x.op)
+  print("constant input names:", input_names)
+  assert_equal(sorted(input_names), [])
+
+
+def test_get_op_attrib_keys__is_variable_initialized():
+  with tf.variable_scope("test_get_op_attrib_keys__is_variable_initialized"):
+    var = tf.get_variable("var", shape=(3,))
+    check = tf.is_variable_initialized(var)
+    print("check:", check)
+    assert isinstance(check, tf.Tensor)
+    print("op:", check.op)
+    assert_equal(check.op.type, "IsVariableInitialized")
+    print("attrib keys:", get_op_attrib_keys(check.op))
+
+
+def test_get_op_attrib_keys__string_strip():
+  x = tf.string_strip("  foo  ")
+  print("x:", x)
+  assert isinstance(x, tf.Tensor)
+  print("op:", x.op)
+  assert_equal(x.op.type, "StringStrip")
+  print("attrib keys:", get_op_attrib_keys(x.op))
+
+
+def test_print_graph_output():
+  x = tf.matmul(a=tf.zeros((3, 4, 5)), b=tf.zeros((3, 5, 7)))
+  x.set_shape((3, 4, 7))
+  x = tf.reshape(x, [3, 4 * 7])
+  x = x + tf.constant(3.0)
+  x = safe_log(tf.nn.softmax(x))
+  print_graph_output(x)
+
+
+def test_get_var_ops():
+  with tf.variable_scope("test_get_var_ops"):
+    v = tf.get_variable("v", ())
+    assert_equal(find_ops_with_tensor_input(v), [v.initializer])
+
+
+def test_find_ops_with_tensor_input():
+  with tf.variable_scope("test_find_ops_with_tensor_input"):
+    x0 = tf.constant(1.0, name="x0")
+    v1 = tf.get_variable("v1", ())
+    v2 = tf.get_variable("v2", ())
+    x1a = tf.add(x0, v1, name="x1a")
+    x1b = tf.add(x1a, v2, name="x1b")
+    x2a = tf.multiply(v1, v2, name="x2a")
+    x2b = tf.multiply(x2a, x0, name="x2b")
+    assert_equal(find_ops_with_tensor_input(x0), [x1a.op, x2b.op])
+    assert_equal(find_ops_with_tensor_input(v1), [v1.initializer, x1a.op, x2a.op])
+    assert_equal(find_ops_with_tensor_input(v2), [v2.initializer, x1b.op, x2a.op])
+    assert_equal(find_ops_with_tensor_input(v2, fetches=[x2b]), [x2a.op])
+
+
+def test_get_var_update_ops():
+  with tf.variable_scope("test_get_var_update_ops"):
+    v = tf.get_variable("v", ())
+    loss = (v - 1.0) ** 2
+    opt = tf.train.AdamOptimizer()
+    minimize_op = opt.minimize(loss=loss, var_list=[v])
+    assert isinstance(minimize_op, tf.Operation)
+    print("find_ops_with_tensor_input:", find_ops_with_tensor_input(v, fetches=minimize_op))
+    print("get_var_update_ops:", get_var_update_ops(v, fetches=minimize_op))
+    update_ops = get_var_update_ops(v, fetches=minimize_op)
+    assert len(update_ops) == 1
+    assert update_ops[0].type == "ApplyAdam"
+
+
+def test_get_var_update_ops__get_variable_value_copy_before_update_ops():
+  with tf.variable_scope("test_get_var_update_ops__get_variable_value_copy_before_update_ops"):
+    v = tf.get_variable("v", (), initializer=tf.zeros_initializer())
+    assert isinstance(v, tf.Variable)
+    loss = (v - 1.0) ** 2
+    assert isinstance(loss, tf.Tensor)
+    opt = tf.train.GradientDescentOptimizer(learning_rate=1.0)
+    minimize_op = opt.minimize(loss=loss, var_list=[v])
+    assert isinstance(minimize_op, tf.Operation)
+    print("find_ops_with_tensor_input:", find_ops_with_tensor_input(v, fetches=minimize_op))
+    print("get_var_update_ops:", get_var_update_ops(v, fetches=minimize_op))
+    update_ops = get_var_update_ops(v, fetches=minimize_op)
+    assert len(update_ops) == 1
+    assert update_ops[0].type == "ApplyGradientDescent"
+    with tf.control_dependencies(update_ops):
+      # v.value() is the last snapshot (no new op), i.e. it points to the actual memory.
+      # To make sure we get the value before the update (0), we must do a copy at the right point.
+      v_val = get_variable_value_copy_before_update_ops(v, update_ops)
+      # v.read_value() is a new read op to the current value.
+      # Anyway, make sure that we have the same everywhere below.
+      # This should be the value after the update, and the grad is -2, lr 1, thus should be 2.
+      v_read_val = tf.identity(v.read_value())
+      res = [
+        tf.Print(0, ["loss:", loss]), tf.Assert(tf.equal(loss, 1.0), ["loss ", loss, " == 1"]),
+        tf.Print(0, ["v:", v]),
+        tf.Print(0, ["v.value:", v_val]),
+        tf.Assert(tf.equal(v_val, 0.0), ["v.value ", v_val, " == 0"]),  # last snapshot
+        tf.Print(0, ["v.read_value:", v_read_val]),
+        tf.Assert(tf.equal(v_read_val, 2.0), ["v.read_value ", v_read_val, " == 2"])  # after update
+      ]
+    session.run(v.initializer)
+    session.run([loss, minimize_op, res])
+
+
+def test_get_variable_grad_from_update_ops():
+  with tf.variable_scope("test_get_variable_grad_from_update_ops"):
+    var = tf.get_variable("var", (), initializer=tf.zeros_initializer())
+    loss = (var - 1.0) ** 2
+    for opt in [
+      tf.train.AdamOptimizer(),
+      tf.train.GradientDescentOptimizer(learning_rate=1.0),
+      tf.train.MomentumOptimizer(learning_rate=0.1, momentum=0.9),
+      tf.train.RMSPropOptimizer(learning_rate=0.1),
+    ]:
+      print("Optimizer:", opt)
+      minimize_op = opt.minimize(loss=loss, var_list=[var])
+      assert isinstance(minimize_op, tf.Operation)
+      update_ops = get_var_update_ops(var, fetches=minimize_op)
+      print("update ops:", update_ops)
+      print("update op keys:", get_op_attrib_keys(update_ops[0]))
+      print("update op inputs by name:", get_op_input_names(update_ops[0]))
+      session.run(var.initializer)  # reset
+      session.run(tf.global_variables_initializer())  # from Adam or so
+      assert_equal(session.run(var), 0.0)
+      grad = get_variable_grad_from_update_ops(var, update_ops)
+      print("grad:", grad)
+      _, grad_np = session.run([minimize_op, grad])
+      assert_equal(grad_np, -2.0)
+
+
+def test_get_variable_grad_from_update_ops_mix_sparse_dense():
+  with tf.variable_scope("test_get_variable_grad_from_update_ops_mix_sparse_dense"):
+    var = tf.get_variable("var", (3, 5), initializer=tf.ones_initializer())
+    loss = tf.reduce_sum((tf.matmul(tf.nn.embedding_lookup(var, [1]) - 1.0, tf.transpose(var)) - 1.0) ** 2)
+    ref_grad, = tf.gradients(loss, var)
+    ref_grad = tf.convert_to_tensor(ref_grad)
+    session.run(var.initializer)  # reset
+    ref_grad_np = session.run(ref_grad)
+    print("ref grad value:")
+    print(ref_grad_np)
+    for opt in [
+      tf.train.AdamOptimizer(),
+      tf.train.GradientDescentOptimizer(learning_rate=1.0),
+      tf.train.MomentumOptimizer(learning_rate=0.1, momentum=0.9),
+      tf.train.RMSPropOptimizer(learning_rate=0.1),
+    ]:
+      print("Optimizer:", opt)
+      if isinstance(opt, (tf.train.MomentumOptimizer, tf.train.RMSPropOptimizer)):
+        if is_gpu_available():
+          print("Skipping because SparseApplyMomentum/SparseApplyRMSProp does not support GPU")
+          print("supported_devices_for_op:", supported_devices_for_op("SparseApplyMomentum"))
+          continue  # SparseApplyMomentum only supports CPU currently, and this might break then
+      minimize_op = opt.minimize(loss=loss, var_list=[var])
+      assert isinstance(minimize_op, tf.Operation)
+      print("find_ops_with_tensor_input:", find_ops_with_tensor_input(var, fetches=minimize_op))
+      update_ops = get_var_update_ops(var, fetches=minimize_op)
+      print("update ops:", update_ops)
+      print("update op keys:", get_op_attrib_keys(update_ops[0]))
+      print("update op inputs by name:", get_op_input_names(update_ops[0]))
+      session.run(var.initializer)  # reset
+      session.run(tf.global_variables_initializer())  # from Adam or so
+      try:
+        grad = get_variable_grad_from_update_ops(var, update_ops)
+      except Exception:
+        print_graph_output(update_ops)
+        raise
+      print("grad:", grad)
+      _, grad_np, grad_dense_np = session.run([minimize_op, grad, tf.convert_to_tensor(grad)])
+      print("grad value:")
+      print(grad_np)
+      print("grad dense value:")
+      print(grad_dense_np)
+      assert_almost_equal(ref_grad_np, grad_dense_np)
+
+
+def test_mixed_dense_sparse_grad():
+  with tf.variable_scope("test_mixed_dense_sparse_grad"):
+    var = tf.get_variable("var", (3, 5), initializer=tf.ones_initializer())
+    session.run(var.initializer)
+    loss = tf.reduce_sum(tf.nn.embedding_lookup(var, [1]) ** 2) + tf.reduce_sum(var ** 2)
+    grad, = tf.gradients(loss, var)
+    print("grad:", grad)
+    # It is an IndexedSlices.
+    # https://github.com/tensorflow/tensorflow/issues/21243
+    grad_dense = tf.convert_to_tensor(grad)
+    print("grad dense:", grad_dense)
+    print("grad value:")
+    print(session.run(grad))
+    print("grad dense value:")
+    print(session.run(grad_dense))
+    opt = tf.train.GradientDescentOptimizer(learning_rate=1.0)
+    session.run(opt.minimize(loss=loss, var_list=[var]))
+    var_np = session.run(var)
+    print("var:")
+    print(var_np)
+    assert_equal(var_np[0, 0], var_np[2, 0])
+    assert_not_equal(var_np[0, 0], var_np[1, 0])
 
 
 def test_tensor_array_is_dynamic_size():
@@ -1380,6 +1857,14 @@ def test_tensor_array_like():
   ta1 = tf.TensorArray(tf.float32, size=0, dynamic_size=True)
   ta1 = tensor_array_like(ta1)
   assert_equal(tensor_array_is_dynamic_size(ta1), True)
+
+
+def test_tensor_array_like_elem_shape():
+  ta1 = tf.TensorArray(tf.float32, size=0, dynamic_size=True, element_shape=tf.TensorShape([None, 13]))
+  ta2 = tensor_array_like(ta1)
+  assert_equal(tensor_array_is_dynamic_size(ta2), True)
+  assert_equal(tensor_array_element_shape(ta1).as_list(), [None, 13])
+  assert_equal(tensor_array_element_shape(ta2).as_list(), [None, 13])
 
 
 def test_copy_with_new_split_axes():

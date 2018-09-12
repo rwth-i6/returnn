@@ -124,18 +124,15 @@ def initConfigJsonNetwork():
     config.network_topology_json = open(json_file).read()
 
 
-def initDevices():
+def initTheanoDevices():
   """
+  Only for Theano.
+
   :rtype: list[Device]
   """
-  oldDeviceConfig = ",".join(config.list('device', ['default']))
-  if BackendEngine.is_tensorflow_selected():
-    if os.environ.get("TF_DEVICE"):
-      config.set("device", os.environ.get("TF_DEVICE"))
-      print("Devices: Use %s via TF_DEVICE instead of %s." %
-            (os.environ.get("TF_DEVICE"), oldDeviceConfig), file=log.v4)
   if not BackendEngine.is_theano_selected():
     return None
+  oldDeviceConfig = ",".join(config.list('device', ['default']))
   if config.value("task", "train") == "nop":
     return []
   if "device" in TheanoFlags:
@@ -305,10 +302,38 @@ def initBackendEngine():
     print("TensorFlow:", describe_tensorflow_version(), file=log.v3)
     if get_tensorflow_version_tuple()[0] == 0:
       print("Warning: TF <1.0 is not supported and likely broken.", file=log.v2)
-    from TFUtil import debugRegisterBetterRepr, setup_tf_thread_pools
+    if os.environ.get("TF_DEVICE"):
+      print("Devices: Use %s via TF_DEVICE instead of %s." % (
+        os.environ.get("TF_DEVICE"), config.opt_typed_value("device")), file=log.v4)
+      config.set("device", os.environ.get("TF_DEVICE"))
+    if config.is_true("use_horovod"):
+      import horovod.tensorflow as hvd
+      from TFUtil import init_horovod
+      init_horovod()  # make sure it is initialized
+      if "gpu" in config.value("device", "") or os.environ.get("CUDA_VISIBLE_DEVICES", ""):
+        # We assume that we want to use a GPU.
+        gpu_opts = config.typed_dict.setdefault("tf_session_opts", {}).setdefault("gpu_options", {})
+        assert "visible_device_list" not in gpu_opts
+        gpu_opts["visible_device_list"] = str(hvd.local_rank())
+        print("Horovod: Using GPU %s." % gpu_opts["visible_device_list"], file=log.v3)
+      else:
+        if hvd.rank() == 0:  # Don't spam in all ranks.
+          print("Horovod: Not using GPU.", file=log.v3)
+      horovod_reduce_type = config.value("horovod_reduce_type", "")
+      if horovod_reduce_type == "":
+        horovod_reduce_type = "grad"
+        config.set("horovod_reduce_type", horovod_reduce_type)
+      else:
+        assert horovod_reduce_type in ["grad", "param"], "config option 'horovod_reduce_type' invalid"
+      if hvd.rank() == 0:  # Don't spam in all ranks.
+        print("Horovod: Reduce type:", horovod_reduce_type, file=log.v3)
+    from TFUtil import debugRegisterBetterRepr, setup_tf_thread_pools, print_available_devices
     tf_session_opts = config.typed_value("tf_session_opts", {})
     assert isinstance(tf_session_opts, dict)
+    # This must be done after the Horovod logic, such that we only touch the devices we are supposed to touch.
     setup_tf_thread_pools(log_file=log.v3, tf_session_opts=tf_session_opts)
+    # Print available devices. Also make sure that get_tf_list_local_devices uses the correct TF session opts.
+    print_available_devices(tf_session_opts=tf_session_opts, file=log.v2)
     debugRegisterBetterRepr()
   else:
     raise NotImplementedError
@@ -341,7 +366,7 @@ def init(configFilename=None, commandLineOptions=(), config_updates=None, extra_
   if config.bool('ipython', False):
     initIPythonKernel()
   initConfigJsonNetwork()
-  devices = initDevices()
+  devices = initTheanoDevices()
   if needData():
     initData()
   printTaskProperties(devices)
@@ -391,7 +416,7 @@ def executeMainTask():
     config.set('load_epoch', engine.epoch)
     print("Evaluate epoch", engine.epoch, file=log.v4)
     engine.eval_model(config.value("eval_output_file", ""))
-  elif task in ['forward','hpx']:
+  elif task in ['forward', 'hpx']:
     assert eval_data is not None, 'no eval data provided'
     combine_labels = config.value('combine_labels', '')
     engine.use_search_flag = config.bool("forward_use_search", False)

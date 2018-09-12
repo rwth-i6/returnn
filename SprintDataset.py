@@ -24,7 +24,7 @@ from Dataset import Dataset, DatasetSeq
 from CachedDataset2 import CachedDataset2
 from Log import log
 from TaskSystem import Unpickler, numpy_copy_and_set_unused
-from Util import eval_shell_str, interrupt_main, unicode
+from Util import eval_shell_str, interrupt_main, unicode, PY3, BytesIO
 
 
 class SprintDatasetBase(Dataset):
@@ -50,12 +50,15 @@ class SprintDatasetBase(Dataset):
   SprintCachedSeqsMax = 200
   SprintCachedSeqsMin = 100
 
-  def __init__(self, target_maps=None, str_add_final_zero=False, input_stddev=1., bpe=None, **kwargs):
+  def __init__(self, target_maps=None, str_add_final_zero=False, input_stddev=1.,
+               orth_post_process=None, bpe=None, orth_vocab=None, **kwargs):
     """
     :param dict[str,str|dict] target_maps: e.g. {"speaker": "speaker_map.txt"}
     :param bool str_add_final_zero: adds e.g. "orth0" with '\0'-ending
     :param float input_stddev: if != 1, will divide the input "data" by that
+    :param str|list[str]|None orth_post_process: :func:`get_post_processor_function`, applied on orth
     :param None|dict[str] bpe: if given, will be opts for :class:`BytePairEncoding`
+    :param None|dict[str] orth_vocab: if given, orth_vocab is applied to orth and orth_classes is an available target`
     """
     super(SprintDatasetBase, self).__init__(**kwargs)
     if target_maps:
@@ -69,10 +72,22 @@ class SprintDatasetBase(Dataset):
     self.target_maps = target_maps
     self.str_add_final_zero = str_add_final_zero
     self.input_stddev = input_stddev
+    self.labels["orth"] = [chr(i) for i in range(255)]
+    self.orth_post_process = None
+    if orth_post_process:
+      from LmDataset import get_post_processor_function
+      self.orth_post_process = get_post_processor_function(orth_post_process)
     self.bpe = None
     if bpe:
       from GeneratingDataset import BytePairEncoding
       self.bpe = BytePairEncoding(**bpe)
+      self.labels["bpe"] = self.bpe.labels
+    self.orth_vocab = None
+    if orth_vocab:
+      assert not bpe, "bpe has its own vocab"
+      from GeneratingDataset import Vocabulary
+      self.orth_vocab = Vocabulary(**orth_vocab)
+      self.labels["orth_classes"] = self.orth_vocab.labels
     self.cond = Condition(lock=self.lock)
     self.add_data_thread_id = thread.get_ident()  # This will be created in the Sprint thread.
     self.ready_for_data = False
@@ -107,7 +122,8 @@ class SprintDatasetBase(Dataset):
       self.num_outputs["classes"] = (outputDim, 1)
     if self.bpe:
       self.num_outputs["bpe"] = (self.bpe.num_labels, 1)
-      self.labels["bpe"] = self.bpe.labels
+    if self.orth_vocab:
+      self.num_outputs["orth_classes"] = (self.orth_vocab.num_labels, 1)
     self._base_init()
     # At this point, we are ready for data. In case we don't use the Sprint PythonSegmentOrdering
     # (SprintInterface.getSegmentList()), we must call this at least once.
@@ -175,28 +191,37 @@ class SprintDatasetBase(Dataset):
         assert epoch > self.crnnEpoch
         self.cond.wait()
 
+  def _wait_for_seq_can_pass_check(self, seq_start, seq_end):
+    """
+    :param int seq_start:
+    :param int seq_end:
+    :return: True if _waitForSeq can pass/return. False means that we need to wait more (until next signal)
+    :rtype: bool
+    """
+    if self.reached_final_seq:
+      return True
+    if self._haveSeqsAdded(seq_start, seq_end):
+      return True
+    return False
+
   def _waitForSeq(self, seqStart, seqEnd=None):
     """
     Called by CRNN train thread.
+    Wait until we have seqs [seqStart,..,seqEnd-1] loaded,
+    or we now that they will not be loaded anymore because we reached the end.
     """
     if seqEnd is None:
       seqEnd = seqStart + 1
     if seqEnd > self.requested_load_seq_end:
       self.requested_load_seq_end = seqEnd
       self.cond.notify_all()
-    def check():
-      if self.reached_final_seq:
-        return True
-      if self._haveSeqsAdded(seqStart, seqEnd):
-        return True
-      return False
-    if check():
+    if self._wait_for_seq_can_pass_check(seq_start=seqStart, seq_end=seqEnd):
       return
     # We need to wait.
     assert thread.get_ident() != self.add_data_thread_id
-    print("SprintDataset wait for seqs (%i,%i) (last added: %s) (current time: %s)" % \
-                     (seqStart, seqEnd, self._latestAddedSeq(), time.strftime("%H:%M:%S")), file=log.v5)
-    while not check():
+    print("%s %s: wait for seqs (%i,%i) (last added: %s) (current time: %s)" % (
+      self, currentThread().name, seqStart, seqEnd, self._latestAddedSeq(), time.strftime("%H:%M:%S")), file=log.v5)
+    while not self._wait_for_seq_can_pass_check(seq_start=seqStart, seq_end=seqEnd):
       self.cond.wait()
 
   def _latestAddedSeq(self):
@@ -230,11 +255,11 @@ class SprintDatasetBase(Dataset):
 
   def load_seqs(self, start, end):
     # Called by CRNN train thread.
-    print("SprintDataset load_seqs in %s:" % currentThread().name, start, end, end=' ', file=log.v5)
+    print("%s load_seqs in %s:" % (self, currentThread().name), start, end, end=' ', file=log.v5)
     if start == end: return
     with self.lock:
       super(SprintDatasetBase, self).load_seqs(start, end)
-      print("first features shape:", self._getSeq(start).features.shape, file=log.v5)
+      print("first features shape:", self._getSeq(start).features["data"].shape, file=log.v5)
 
   def _load_seqs(self, start, end):
     # Called by CRNN train thread.
@@ -255,6 +280,7 @@ class SprintDatasetBase(Dataset):
     This is called via the Sprint main thread.
     :param numpy.ndarray features: format (input-feature,time) (via Sprint)
     :param dict[str,numpy.ndarray|str] targets: format (time) (idx of output-feature)
+    :param str|None segmentName:
     :returns the sorted seq index
     :rtype: int
     """
@@ -279,12 +305,23 @@ class SprintDatasetBase(Dataset):
       # 'classes' is always the alignment
       assert targets["classes"].shape == (T,), (  # is in format (time,)
         "Number of targets %s does not equal to number of features %s" % (targets["classes"].shape, (T,)))
+    if "orth" in targets:
+      targets["orth"] = targets["orth"].decode("utf8").strip()
+    if "orth" in targets and self.orth_post_process:
+      targets["orth"] = self.orth_post_process(targets["orth"])
     if self.bpe:
       assert "orth" in targets
       orth = targets["orth"]
       assert isinstance(orth, (str, unicode))
       assert "bpe" not in targets
-      targets["bpe"] = numpy.array(self.bpe.get_seq(orth.strip()), dtype="int32")
+      targets["bpe"] = numpy.array(self.bpe.get_seq(orth), dtype="int32")
+    if self.orth_vocab:
+      assert not self.orth_post_process
+      assert "orth" in targets
+      orth = targets["orth"]
+      assert isinstance(orth, (str, unicode))
+      assert "orth_classes" not in targets
+      targets["orth_classes"] = numpy.array(self.orth_vocab.get_seq(orth), dtype="int32")
 
     # Maybe convert some targets.
     if self.target_maps:
@@ -308,7 +345,11 @@ class SprintDatasetBase(Dataset):
       if isinstance(v, unicode):
         v = v.encode("utf8")
       if isinstance(v, (str, bytes)):
-        v = list(map(ord, v))
+        if PY3:
+          assert isinstance(v, bytes)
+          v = list(v)
+        else:
+          v = list(map(ord, v))
         v = numpy.array(v, dtype="uint8")
         targets[key] = v
         if self.str_add_final_zero:
@@ -316,7 +357,7 @@ class SprintDatasetBase(Dataset):
           assert key + "0" not in targets
           targets[key + "0"] = v
         continue
-      print("SprintDataset, we will ignore the target %r because it is not a numpy array: %r" % (key, v), file=log.v3)
+      print("%s, we will ignore the target %r because it is not a numpy array: %r" % (self, key, v), file=log.v3)
       self._target_black_list += [key]
       del targets[key]
 
@@ -332,14 +373,22 @@ class SprintDatasetBase(Dataset):
 
       if self.predefined_seq_list_order:
         # Note: Only in ExternSprintDataset, we can reliably set the seq order for now.
-        assert self.predefined_seq_list_order[seq_idx] == segmentName, "seq-order not as expected"
+        assert seq_idx < len(self.predefined_seq_list_order), "seq_idx %i, expected predef num seqs %i" % (
+          seq_idx, len(self.predefined_seq_list_order))
+        expected_seq_name = self.predefined_seq_list_order[seq_idx]
+        if expected_seq_name != segmentName:
+          if segmentName in self.predefined_seq_list_order:
+            raise Exception("seq_idx %i expected to be tag %r but got tag %r; tag %r is at idx %i" % (
+              seq_idx, expected_seq_name, segmentName, segmentName, self.predefined_seq_list_order.index(segmentName)))
+          raise Exception("seq_idx %i expected to be tag %r but got tag %r; tag %r not found" % (
+            seq_idx, expected_seq_name, segmentName, segmentName))
 
       self.next_seq_to_be_added += 1
       self._num_timesteps += T
       self.cond.notify_all()
 
       if seq_idx > self.requested_load_seq_end - 1 + self.SprintCachedSeqsMax:
-        print("SprintDataset addNewData: seq=%i, len=%i. Cache filled, waiting to get loaded..." % (seq_idx, T), file=log.v5)
+        print("%s addNewData: seq=%i, len=%i. Cache filled, waiting to get loaded..." % (self, seq_idx, T), file=log.v5)
         while seq_idx > self.requested_load_seq_end - 1 + self.SprintCachedSeqsMin:
           assert not self.reached_final_seq
           assert seq_idx + 1 == self.next_seq_to_be_added
@@ -375,7 +424,8 @@ class SprintDatasetBase(Dataset):
     with self.lock:
       if self.predefined_seq_list_order:
         return len(self.predefined_seq_list_order)
-      assert self.reached_final_seq
+      if not self.reached_final_seq:
+        raise NotImplementedError
       return self.next_seq_to_be_added
 
   def have_seqs(self):
@@ -390,12 +440,18 @@ class SprintDatasetBase(Dataset):
       self._waitForSeq(n)
       return n < self.next_seq_to_be_added
 
-  def get_target_list(self):
+  def get_data_keys(self):
     with self.lock:
       if not self.added_data:
         self._waitForSeq(0)
       assert self.added_data
-      return self.added_data[0].targets.keys()
+      return sorted(self.added_data[0].features.keys())
+
+  def get_target_list(self):
+    keys = list(self.get_data_keys())
+    if "data" in keys:
+      keys.remove("data")
+    return keys
 
   def set_complete_frac(self, frac):
     self._complete_frac = frac
@@ -418,15 +474,20 @@ class SprintDatasetBase(Dataset):
       self._waitForSeq(sorted_seq_idx)
       return self._getSeq(sorted_seq_idx).num_frames
 
+  def get_data(self, seq_idx, key):
+    with self.lock:
+      self._waitForSeq(seq_idx)
+      return self._getSeq(seq_idx).features[key]
+
   def get_input_data(self, sorted_seq_idx):
     with self.lock:
       self._waitForSeq(sorted_seq_idx)
-      return self._getSeq(sorted_seq_idx).features
+      return self._getSeq(sorted_seq_idx).features["data"]
 
   def get_targets(self, target, sorted_seq_idx):
     with self.lock:
       self._waitForSeq(sorted_seq_idx)
-      return self._getSeq(sorted_seq_idx).targets.get(target, None)
+      return self._getSeq(sorted_seq_idx).features.get(target, None)
 
   def get_ctc_targets(self, sorted_seq_idx):
     assert False, "No CTC targets."
@@ -448,57 +509,67 @@ class ExternSprintDataset(SprintDatasetBase):
   The Sprint subprocess will use SprintExternInterface to communicate with us.
   """
 
-  def __init__(self, sprintTrainerExecPath, sprintConfigStr, partitionEpoch=1, **kwargs):
+  def __init__(self, sprintTrainerExecPath, sprintConfigStr, partitionEpoch=None, **kwargs):
     """
     :param str|list[str] sprintTrainerExecPath:
     :param str | list[str] | ()->str | list[()->str] | ()->list[str] | ()->list[()->str] sprintConfigStr: via eval_shell_str
+    :param int|None partitionEpoch: deprecated. use partition_epoch instead
     """
     super(ExternSprintDataset, self).__init__(**kwargs)
     self.add_data_thread_id = None
     self.sprintTrainerExecPath = sprintTrainerExecPath
     self.sprintConfig = sprintConfigStr
-    self.partitionEpoch = partitionEpoch
+    if partitionEpoch:
+      assert self.partition_epoch == 1, "don't provide partitionEpoch and partition_epoch"
+      self.partition_epoch = partitionEpoch
     self._num_seqs = None
     self.child_pid = None  # type: int|None
     self.parent_pid = os.getpid()
+    self.reader_thread = None  # type: Thread
     self.seq_list_file = None
     self.useMultipleEpochs()
     # There is no generic way to see whether Python is exiting.
     # This is our workaround. We check for it in self.run_inner().
     self.python_exit = False
     atexit.register(self.exit_handler)
-    self.init_epoch()
+    self.init_seq_order()
 
   def _exit_child(self, wait_thread=True):
     if self.child_pid:
-      interrupt = False
       expected_exit_status = 0 if not self.python_exit else None
       if self._join_child(wait=False, expected_exit_status=expected_exit_status) is False:  # Not yet terminated.
         interrupt = not self.reached_final_seq_seen_all
         if interrupt:
-          print("ExternSprintDataset: interrupt child proc %i" % self.child_pid, file=log.v5)
+          print("%s: interrupt child proc %s" % (self, self.child_pid), file=log.v5)
           os.kill(self.child_pid, signal.SIGKILL)
-      else:
+          # Also join such that the process is cleaned up, and pipes get closed.
+          self._join_child(wait=True, expected_exit_status=None)
+          self.child_pid = None
+      else:  # child process terminated
         self.child_pid = None
       if wait_thread:
         # Load all remaining data so that the reader thread is not waiting in self.addNewData().
         while self.is_less_than_num_seqs(self.expected_load_seq_start + 1):
+          if self.reached_final_seq:  # this is set by the reader thread
+            break
           self.load_seqs(self.expected_load_seq_start + 1, self.expected_load_seq_start + 2)
         self.reader_thread.join()
+        self.reader_thread = None
       try: self.pipe_p2c[1].close()
       except IOError: pass
       try: self.pipe_c2p[0].close()
       except IOError: pass
       if self.child_pid:
-        self._join_child(wait=True, expected_exit_status=0 if not interrupt else None)
+        self._join_child(wait=True, expected_exit_status=0)
         self.child_pid = None
 
   def _start_child(self, epoch):
     assert self.child_pid is None
+    assert self.reader_thread is None
     self.pipe_c2p = self._pipe_open()
     self.pipe_p2c = self._pipe_open()
     args = self._build_sprint_args()
-    print("ExternSprintDataset: epoch", epoch, "exec", args, file=log.v5)
+    print("%s: epoch" % self, epoch, "exec", args, file=log.v5)
 
     pid = os.fork()
     if pid == 0:  # child
@@ -513,12 +584,12 @@ class ExternSprintDataset(SprintDatasetBase):
         self.pipe_c2p[0].close()
         self.pipe_p2c[1].close()
         os.execv(args[0], args)  # Does not return if successful.
-        print("ExternSprintDataset child exec failed.")
+        print("%s child exec failed." % self)
       except BaseException:
-        print("ExternSprintDataset child: Error when starting Sprint %r." % args)
+        print("%s child: Error when starting Sprint %r." % (self, args))
         sys.excepthook(*sys.exc_info())
       finally:
-        print("ExternSprintDataset child: exit")
+        print("%s child: exit" % self)
         os._exit(1)
         return  # Not reached.
 
@@ -529,19 +600,18 @@ class ExternSprintDataset(SprintDatasetBase):
 
     try:
       initSignal, (inputDim, outputDim, num_segments) = self._read_next_raw()
-      assert initSignal == "init"
+      assert initSignal == b"init"
       assert isinstance(inputDim, int) and isinstance(outputDim, int)
       # Ignore num_segments. It can be totally different than the real number of sequences.
       self.setDimensions(inputDim, outputDim)
     except Exception:
-      print("ExternSprintDataset: Sprint child process (%r) caused an exception." % args, file=log.v1)
+      print("%s: Sprint child process (%r) caused an exception." % (self, args), file=log.v1)
       sys.excepthook(*sys.exc_info())
-      self._join_child()
-      self.child_pid = None
-      raise Exception("ExternSprintDataset Sprint init failed")
+      self._exit_child(wait_thread=False)
+      raise Exception("%s Sprint init failed" % self)
 
     self.reader_thread = Thread(target=self.reader_thread_proc, args=(pid, epoch,),
-                                name="ExternSprintDataset reader thread")
+                                name="%s reader thread" % self)
     self.reader_thread.daemon = True
     self.reader_thread.start()
 
@@ -565,16 +635,17 @@ class ExternSprintDataset(SprintDatasetBase):
     if TaskSystem.SharedMemNumpyConfig["enabled"]:
       config_str += ",EnableAutoNumpySharedMemPickling:True"
     epoch = self.crnnEpoch or 1
+    assert epoch >= 1
     if isinstance(self.sprintTrainerExecPath, (list, tuple)):
       args = list(self.sprintTrainerExecPath)
     else:
       args = [self.sprintTrainerExecPath]
     args += [
-      "--*.seed=%i" % (epoch // self.partitionEpoch)]
-    if self.partitionEpoch > 1:
+      "--*.seed=%i" % ((epoch - 1) // self.partition_epoch)]
+    if self.partition_epoch > 1:
       args += [
-        "--*.corpus.partition=%i" % self.partitionEpoch,
-        "--*.corpus.select-partition=%i" % (epoch % self.partitionEpoch)]
+        "--*.corpus.partition=%i" % self.partition_epoch,
+        "--*.corpus.select-partition=%i" % ((epoch - 1) % self.partition_epoch)]
     args += [
       "--*.python-segment-order=true",
       "--*.python-segment-order-pymod-path=%s" % self._my_python_mod_path,
@@ -593,11 +664,31 @@ class ExternSprintDataset(SprintDatasetBase):
           f.write("\n")
         f.close()
       args += ["--*.corpus.segments.file=%s" % self.seq_list_file]
+      args += ["--*.corpus.segment-order=%s" % self.seq_list_file]
     args += eval_shell_str(self.sprintConfig)
     return args
 
   def _read_next_raw(self):
-    dataType, args = Unpickler(self.pipe_c2p[0]).load()
+    import struct
+    size_raw = self.pipe_c2p[0].read(4)
+    if len(size_raw) < 4:
+      raise EOFError
+    size, = struct.unpack("<i", size_raw)
+    stream = BytesIO()
+    read_size = 0
+    while read_size < size:
+      data_raw = self.pipe_c2p[0].read(size - read_size)
+      if len(data_raw) == 0:
+        raise EOFError
+      read_size += len(data_raw)
+      stream.write(data_raw)
+    stream.seek(0)
+    if PY3:
+      # encoding is for converting Python2 strings to Python3.
+      # Cannot use utf8 because Numpy will also encode the data as strings and there we need it as bytes.
+      dataType, args = Unpickler(stream, encoding="bytes").load()
+    else:
+      dataType, args = Unpickler(stream).load()
     return dataType, args
 
   def _join_child(self, wait=True, expected_exit_status=None):
@@ -608,7 +699,7 @@ class ExternSprintDataset(SprintDatasetBase):
       return False
     assert pid == self.child_pid
     if expected_exit_status is not None:
-      assert exit_status == expected_exit_status, "Sprint exit code is %i" % exit_status
+      assert exit_status == expected_exit_status, "%s: Sprint exit code is %i" % (self, exit_status)
     return True
 
   def reader_thread_proc(self, child_pid, epoch):
@@ -618,6 +709,7 @@ class ExternSprintDataset(SprintDatasetBase):
       self.initSprintEpoch(epoch)
       haveSeenTheWhole = False
 
+      seq_count = 0
       while not self.python_exit and self.child_pid:
         try:
           dataType, args = self._read_next_raw()
@@ -636,10 +728,19 @@ class ExternSprintDataset(SprintDatasetBase):
           if self.python_exit or not self.child_pid:
             break
 
-          if dataType == "data":
+          if dataType == b"data":
+            seq_count += 1
             segmentName, features, targets = args
-            self.addNewData(numpy_copy_and_set_unused(features), numpy_copy_and_set_unused(targets), segmentName=segmentName)
-          elif dataType == "exit":
+            if segmentName is not None:
+              segmentName = segmentName.decode("utf8")
+            assert isinstance(features, numpy.ndarray)
+            if isinstance(targets, dict):
+              targets = {key.decode("utf8"): value for (key, value) in targets.items()}
+            self.addNewData(
+              numpy_copy_and_set_unused(features),
+              numpy_copy_and_set_unused(targets),
+              segmentName=segmentName)
+          elif dataType == b"exit":
             haveSeenTheWhole = True
             break
           else:
@@ -649,25 +750,26 @@ class ExternSprintDataset(SprintDatasetBase):
         try:
           os.remove(self.seq_list_file)
         except Exception as e:
-          print("ExternSprintDataset: error when removing %r: %r" % (self.seq_list_file, e), file=log.v5)
+          print("%s: error when removing %r: %r" % (self, self.seq_list_file, e), file=log.v5)
         finally:
           self.seq_list_file = None
 
-      if not self.python_exit and self.child_pid:
+      if not self.python_exit:
         with self.lock:
           self.finishSprintEpoch(seen_all=haveSeenTheWhole)
           if haveSeenTheWhole:
             self._num_seqs = self.next_seq_to_be_added
-      print("ExternSprintDataset finished reading epoch %i, seen all %r" % (epoch, haveSeenTheWhole), file=log.v5)
+      print("%s (proc %i) finished reading epoch %i, seen all %r (finished), num seqs %i" % (
+        self, child_pid, epoch, haveSeenTheWhole, seq_count), file=log.v5)
 
-    except Exception:
+    except Exception as exc:
       if not self.python_exit:
         # Catch all standard exceptions.
         # Don't catch KeyboardInterrupt here because that will get send by the main thread
         # when it is exiting. It's never by the user because SIGINT will always
         # trigger KeyboardInterrupt in the main thread only.
         try:
-          print("ExternSprintDataset reader failed", file=log.v1)
+          print("%s reader failed (%s)" % (self, exc), file=log.v1)
           sys.excepthook(*sys.exc_info())
           print("")
         finally:
@@ -679,29 +781,23 @@ class ExternSprintDataset(SprintDatasetBase):
     self.python_exit = True
     self._exit_child(wait_thread=False)
 
-  def init_epoch(self, epoch=None, seq_list=None):
+  def init_seq_order(self, epoch=None, seq_list=None):
     if epoch is None:
       epoch = 1
     with self.lock:
-      if epoch == self.crnnEpoch and self.expected_load_seq_start == 0:
+      if epoch == self.crnnEpoch and self.expected_load_seq_start == 0 and seq_list == self.predefined_seq_list_order:
         return
-      if epoch != self.crnnEpoch:
-        if self._num_seqs is not None:
-          self._estimated_num_seqs = self._num_seqs  # last epoch num_seqs is a good estimate
-          self._num_seqs = None  # but we are not certain whether we have the same num_seqs for this epoch
-      super(ExternSprintDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+      # Reset epoch such that exiting the child will go smoothly.
+      super(ExternSprintDataset, self).init_seq_order(epoch=None, seq_list=None)
+    # Exit child, before we overwrite anything, such as new epoch or seq_list.
     self._exit_child(wait_thread=True)
+    with self.lock:  # Lock should not be needed now, but just to make it clean.
+      if self._num_seqs:
+        self._estimated_num_seqs = self._num_seqs  # last epoch num_seqs is a good estimate
+      self._num_seqs = None  # we are not certain whether we have the same num_seqs for this epoch
+      super(ExternSprintDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
     self._start_child(epoch)
-
-  def init_seq_order(self, epoch=None, seq_list=None):
-    self.init_epoch(epoch=epoch, seq_list=seq_list)
     return True
-
-  @property
-  def num_seqs(self):
-    with self.lock:
-      assert self._num_seqs is not None
-      return self._num_seqs
 
 
 class SprintCacheDataset(CachedDataset2):
@@ -912,10 +1008,10 @@ def demo():
       dataset_seq = sprint_cache_dataset.get_dataset_seq_for_name(tag)
       data = dataset.get_data(seq_idx, "data")
       targets = dataset.get_data(seq_idx, "classes")
-      assert data.shape == dataset_seq.features.shape
-      assert targets.shape == dataset_seq.targets["classes"].shape
-      assert numpy.allclose(data, dataset_seq.features)
-      assert numpy.allclose(targets, dataset_seq.targets["classes"])
+      assert data.shape == dataset_seq.features["data"].shape
+      assert targets.shape == dataset_seq.features["classes"].shape
+      assert numpy.allclose(data, dataset_seq.features["data"])
+      assert numpy.allclose(targets, dataset_seq.features["classes"])
       seq_idx += 1
       progress_bar_with_time(dataset.get_complete_frac(seq_idx))
 

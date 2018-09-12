@@ -49,11 +49,13 @@ class OpMaker(object):
   https://www.tensorflow.org/versions/master/how_tos/adding_an_op/
   """
   with_cuda = None  # type: None|bool
+  # https://github.com/tensorflow/tensorflow/issues/6602
+  tf_blas_gemm_workaround = TFUtil.tf_version_tuple() < (1, 5, 0)
   global_lock = RLock()
   mod_cache = {}  # cache_key -> mod
   op_cache = {}  # cache_key -> op
 
-  def __init__(self, description, compiler_opts=None):
+  def __init__(self, description, compiler_opts=None, search_for_numpy_blas=True):
     """
     :param OpDescription description:
     :param dict[str]|None compiler_opts: passed on to OpCodeCompiler as kwargs
@@ -62,12 +64,13 @@ class OpMaker(object):
     self.description = description
     self.name = description.name
     self.compiler_opts = compiler_opts or {}
+    self.search_for_numpy_blas = search_for_numpy_blas
 
   @classmethod
   def _cls_init(cls):
     if cls.with_cuda is None:
       cls.with_cuda = TFUtil.CudaEnv.get_instance().is_available()
-      if cls.with_cuda:
+      if cls.with_cuda and cls.tf_blas_gemm_workaround:
         cls._load_cuda_blas_gemm()
 
   @classmethod
@@ -84,6 +87,7 @@ class OpMaker(object):
     As a workaround for TF issue 6602, we link to some functions which are implemented in contrib.rnn.kernels.blas_gemm.
     See NativeOp.cpp.
     To make the symbols available in the namespace, load the library now.
+    This issue if fixed with tensorflow 1.5
     """
     if TFUtil.CudaEnv.verbose_find_cuda:
       print("Load tf.contrib lstm_ops...")
@@ -291,11 +295,11 @@ class OpMaker(object):
       #include <cublas_v2.h>
       #include <math_constants.h>
 
-      // https://github.com/tensorflow/tensorflow/issues/6602 ?
-      //#include "tensorflow/core/platform/stream_executor.h"
-      //#include "tensorflow/core/common_runtime/gpu/gpu_util.h"
-      //#include "tensorflow/core/common_runtime/gpu_device_context.h"
       """
+
+      if not self.tf_blas_gemm_workaround:
+        # https://github.com/tensorflow/tensorflow/issues/6602 ?
+        code_header += '#include "tensorflow/core/platform/stream_executor.h"\n'
     # sgemm
     code_header += """
     typedef float real;
@@ -399,18 +403,19 @@ class OpMaker(object):
     if find_lib("f77blas"):
       ld_flags += ["-lf77blas"]
     # Another option to find some BLAS lib.
-    import numpy
-    numpy_dir = os.path.dirname(numpy.__file__)
-    if os.path.exists("%s/.libs" % numpy_dir):
-      ld_flags += ["-L%s/.libs" % numpy_dir]
-      from glob import glob
-      for f in glob("%s/.libs/*.so" % numpy_dir):
-        f = os.path.basename(f)
-        if f.startswith("lib"):
-          f = f[3:]
-        if f.endswith(".so"):
-          f = f[:-3]
-        ld_flags += ["-l%s" % f]
+    if self.search_for_numpy_blas:
+      import numpy
+      numpy_dir = os.path.dirname(numpy.__file__)
+      if os.path.exists("%s/.libs" % numpy_dir):
+        ld_flags += ["-L%s/.libs" % numpy_dir]
+        from glob import glob
+        for f in glob("%s/.libs/*.so" % numpy_dir):
+          f = os.path.basename(f)
+          if f.startswith("lib"):
+            f = f[3:]
+          if f.endswith(".so"):
+            f = f[:-3]
+          ld_flags += ["-l%s" % f]
     comp = TFUtil.OpCodeCompiler(
       base_name=self.name, code_version=self.description.code_version,
       code=self._make_code(),
@@ -432,7 +437,8 @@ class OpMaker(object):
 
       if self.description.is_grad_defined:
         grad_description = self.description.grad()
-        grad_op_maker = OpMaker(description=grad_description, compiler_opts=self.compiler_opts)
+        grad_op_maker = OpMaker(description=grad_description, compiler_opts=self.compiler_opts,
+                                search_for_numpy_blas=self.search_for_numpy_blas)
         grad_op = grad_op_maker.make_op()
 
         from tensorflow.python.framework import ops
@@ -693,22 +699,29 @@ class NativeLstm2(RecSeqCellOp):
     from tensorflow.python.ops.nn import rnn_cell
     return rnn_cell.LSTMStateTuple(c=self.n_hidden, h=self.n_hidden)
 
-  def map_layer_inputs_to_op(self, X, W, i, initial_state=None):
+  def __call__(self, inputs, index, initial_state=None, recurrent_weights_initializer=None):
     """
-    Just like NativeOp.LstmGenericBase.map_layer_inputs_to_op().
-    :param tf.Tensor X: inputs: shape (time,batch,n_input_dim)
-    :param tf.Tensor W: shape (n_input_dim+n_hidden,n_hidden*4)
-    :param tf.Tensor i: index: shape (time,batch)
+    :param tf.Tensor inputs: shape (time,batch,n_hidden)
+    :param tf.Tensor index: shape (time,batch)
     :param tf.Tensor|None initial_state: shape (batch,n_hidden)
-    :rtype: tuple[tf.Tensor]
+    :param ()->tf.Tensor recurrent_weights_initializer:
+    :returns: shape (time,batch,n_hidden), shape (batch,n_hidden)
+    :rtype: (tf.Tensor, tf.Tensor)
     """
     from tensorflow.python.ops.nn import rnn_cell
-    X.set_shape(tf.TensorShape([None, None, self.n_hidden * 4]))
+    W = tf.get_variable(
+      name="W_re", shape=(self.n_hidden, self.n_hidden * 4), initializer=recurrent_weights_initializer)
+    TFUtil.set_param_axes_split_info(W, [[self.n_hidden], [self.n_hidden] * 4])
+    if self.rec_weight_dropout:
+      from TFUtil import dropout
+      W = dropout(W, keep_prob=1.0 - self.rec_weight_dropout, cond_on_train=True,
+                  seed=TFUtil.get_random_seed())
+    inputs.set_shape(tf.TensorShape([None, None, self.n_hidden * 4]))
     W.set_shape(tf.TensorShape([self.n_hidden, self.n_hidden * 4]))
-    i.set_shape(tf.TensorShape([None, None]))
+    index.set_shape(tf.TensorShape([None, None]))
     from TFUtil import to_float32
-    i = to_float32(i)
-    n_batch = tf.shape(X)[1]
+    index = to_float32(index)
+    n_batch = tf.shape(inputs)[1]
     if initial_state is None:
       c0 = tf.zeros((n_batch, self.n_hidden), dtype=tf.float32, name="initial_c")
       y0 = tf.zeros((n_batch, self.n_hidden), dtype=tf.float32, name="initial_h")
@@ -720,28 +733,12 @@ class NativeLstm2(RecSeqCellOp):
       y0 = tf.zeros((n_batch, self.n_hidden), dtype=tf.float32, name="initial_h")
     start = tf.constant(0, name="start")
     step = tf.constant(self.step or 1, name="step")
-    return X, W, y0, c0, i, start, step
-
-  def __call__(self, inputs, index, initial_state=None, recurrent_weights_initializer=None):
-    """
-    :param tf.Tensor inputs: shape (time,batch,n_hidden)
-    :param tf.Tensor index: shape (time,batch)
-    :param tf.Tensor|None initial_state: shape (batch,n_hidden)
-    :param ()->tf.Tensor recurrent_weights_initializer:
-    :returns: shape (time,batch,n_hidden), shape (batch,n_hidden)
-    :rtype: (tf.Tensor, tf.Tensor)
-    """
-    W = tf.get_variable(
-      name="W_re", shape=(self.n_hidden, self.n_hidden * 4), initializer=recurrent_weights_initializer)
-    TFUtil.set_param_axes_split_info(W, [[self.n_hidden], [self.n_hidden] * 4])
-    if self.rec_weight_dropout:
-      from TFUtil import dropout
-      W = dropout(W, keep_prob=1.0 - self.rec_weight_dropout, cond_on_train=True,
-                  seed=TFUtil.get_random_seed())
-    out, _, _, final_cell_state = self.op(
-      *self.map_layer_inputs_to_op(X=inputs, W=W, i=index, initial_state=initial_state))
-    from tensorflow.python.ops.nn import rnn_cell
-    return out, rnn_cell.LSTMStateTuple(h=out[-1], c=final_cell_state)
+    out, _, _, final_cell_state = self.op(inputs, W, y0, c0, index, start, step)
+    if out.get_shape().as_list()[0] is None or out.get_shape().as_list()[0] > 0:
+      final_output = out[-1]
+    else:
+      final_output = y0
+    return out, rnn_cell.LSTMStateTuple(h=final_output, c=final_cell_state)
 
 
 def make_fast_baum_welch_op(**kwargs):
@@ -794,6 +791,50 @@ def fast_baum_welch_by_sprint_automata(am_scores, float_idx, tags, sprint_opts, 
   return fast_baum_welch(
     am_scores=am_scores, float_idx=float_idx,
     edges=edges, weights=weights, start_end_states=start_end_states)
+
+
+def tf_fast_bw_fsa_staircase(seq_lens, **opts):
+  """
+  :param tf.Tensor seq_lens: shape (batch,)
+  :param opts: passed to :func:`Fsa.fast_bw_fsa_staircase`
+  :return: edges, weights, start_end_states
+  :rtype: (tf.Tensor, tf.Tensor, tf.Tensor)
+  """
+  from Fsa import fast_bw_fsa_staircase
+
+  def tf_fast_bw_fsa_staircase_wrapper(seq_lens):
+    fsa = fast_bw_fsa_staircase(seq_lens, **opts)
+    assert fsa.start_end_states.shape == (2, len(seq_lens)), "shape missmatch %r, n_batch %r, seq lens %r" % (
+      fsa.start_end_states.shape, len(seq_lens), seq_lens)
+    return fsa.edges.astype("int32"), fsa.weights.astype("float32"), fsa.start_end_states.astype("int32")
+
+  edges, weights, start_end_states = tf.py_func(
+    tf_fast_bw_fsa_staircase_wrapper,
+    [seq_lens],
+    [tf.int32, tf.float32, tf.int32],
+    stateful=False)
+  # edges: (4, num_edges), edges of the graph (from,to,emission_idx,sequence_idx)
+  # weights: (num_edges,), weights of the edges
+  # start_end_states: (2, batch), (start,end) state idx in automaton.
+  edges.set_shape((4, None))
+  weights.set_shape((None,))
+  start_end_states.set_shape((2, None))
+  return edges, weights, start_end_states
+
+
+def fast_baum_welch_staircase(am_scores, seq_lens, **opts):
+  """
+  :param tf.Tensor am_scores: (time, batch, dim), in -log space
+  :param tf.Tensor seq_lens: (batch,) -> values in [1, ..., dim-1]
+  :param opts: passed to :func:`Fsa.fast_bw_fsa_staircase`
+  :return: (fwdbwd, obs_scores), fwdbwd is (time, batch, dim), obs_scores is (time, batch), in -log space
+  :rtype: (tf.Tensor, tf.Tensor)
+  """
+  from TFUtil import sequence_mask_time_major
+  edges, weights, start_end_states = tf_fast_bw_fsa_staircase(seq_lens, **opts)
+  float_idx = sequence_mask_time_major(seq_lens)
+  return fast_baum_welch(
+    am_scores=am_scores, edges=edges, weights=weights, start_end_states=start_end_states, float_idx=float_idx)
 
 
 def _debug_dumped_fast_baum_welch(prefix, postfix=".dump"):

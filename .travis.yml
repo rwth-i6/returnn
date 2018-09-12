@@ -19,6 +19,8 @@ dist: trusty
 # quiet (-qq) to keep log smaller
 # |cat to avoid interactive banner (which blows up the log)
 install:
+  - pip2 install -qq --user --upgrade pip setuptools wheel six | cat  # Python2<->Python3
+  - pip2 install --user -r requirements.txt | cat  # need for Python2<->Python3 communication tests
   - pip install -qq --upgrade pip setuptools wheel
   - pip install --upgrade numpy scipy  | cat
   - pip install -r requirements.txt  | cat
@@ -32,7 +34,15 @@ install:
   - python -c "import tensorflow as tf; print(tf.GIT_VERSION, tf.VERSION)"
   - python -c "import theano; print(theano.__version__)"
 
+# TF tests first, because more relevant (for me), then ordered by alphabet
 env:
+  - TEST=TFEngine
+  - TEST=TFNativeOp
+  - TEST=TFNetworkLayer
+  - TEST=TFNetworkRecLayer
+  - TEST=TFNetworkSigProcLayer
+  - TEST=TFUpdater
+  - TEST=TFUtil
   - TEST=Config
   - TEST=Dataset
   - TEST=demos
@@ -40,6 +50,7 @@ env:
   - TEST=EngineTask
   - TEST=EngineUtil
   - TEST=fork_exec
+  - TEST=Fsa
   - TEST=GeneratingDataset
   - TEST=hdf_dump
   - TEST=HDFDataset
@@ -60,12 +71,6 @@ env:
   - TEST=SprintInterface
   - TEST=TaskSystem
   - TEST=TaskSystem_SharedMem
-  - TEST=TFEngine
-  - TEST=TFNativeOp
-  - TEST=TFNetworkLayer
-  - TEST=TFNetworkRecLayer
-  - TEST=TFUpdater
-  - TEST=TFUtil
   - TEST=TheanoUtil
   - TEST=Util
 

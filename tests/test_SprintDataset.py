@@ -8,15 +8,18 @@ from EngineUtil import assign_dev_data, assign_dev_data_single_seq
 from EngineBatch import Batch
 from Log import log
 from Config import Config
+import Util
 from GeneratingDataset import GeneratingDataset
 from Dataset import DatasetSeq
 from SprintDataset import ExternSprintDataset
 import numpy as np
 import os
 import sys
+import unittest
 import better_exchook
 better_exchook.install()
 better_exchook.replace_traceback_format_tb()
+Util.initThreadJoinHack()
 
 
 dummyconfig_dict = {
@@ -50,17 +53,40 @@ def generate_batch(seq_idx, dataset):
   return batch
 
 
+def test_read_all():
+  config = Config()
+  config.update(dummyconfig_dict)
+  print("Create ExternSprintDataset")
+  python2_exec = Util.which("python2")
+  if python2_exec is None:
+    raise unittest.SkipTest("python2 not found")
+  num_seqs = 4
+  dataset = ExternSprintDataset(
+    [python2_exec, sprintExecPath],
+    "--*.feature-dimension=2 --*.trainer-output-dimension=3 "
+    "--*.crnn-dataset=DummyDataset(2,3,num_seqs=%i,seq_len=10)" % num_seqs)
+  dataset.init_seq_order(epoch=1)
+  seq_idx = 0
+  while dataset.is_less_than_num_seqs(seq_idx):
+    dataset.load_seqs(seq_idx, seq_idx + 1)
+    for key in dataset.get_data_keys():
+      value = dataset.get_data(seq_idx, key)
+      print("seq idx %i, data %r: %r" % (seq_idx, key, value))
+    seq_idx += 1
+  assert seq_idx == num_seqs
+
+
 def test_assign_dev_data():
   config = Config()
   config.update(dummyconfig_dict)
   print("Create ExternSprintDataset")
   dataset = ExternSprintDataset(
     [sys.executable, sprintExecPath],
-    "--*.feature-dimension=2 --*.trainer-output-dimension=3 --*.crnn-dataset=DummyDataset(2,3,4)")
+    "--*.feature-dimension=2 --*.trainer-output-dimension=3 --*.crnn-dataset=DummyDataset(2,3,num_seqs=4,seq_len=10)")
   dataset.init_seq_order(epoch=1)
   assert_true(dataset.is_less_than_num_seqs(0))
   recurrent = False
-  batch_generator = dataset.generate_batches(recurrent_net=recurrent, batch_size=512)
+  batch_generator = dataset.generate_batches(recurrent_net=recurrent, batch_size=5)
   batches = batch_generator.peek_next_n(2)
   assert_equal(len(batches), 2)
   print("Create Device")
@@ -119,5 +145,48 @@ def test_window():
     dataset2.exit_handler()
 
 
+def test_py2_client():
+  # like test_read_all
+  config = Config()
+  config.update(dummyconfig_dict)
+  print("Create ExternSprintDataset")
+  python2_exec = Util.which("python2")
+  if python2_exec is None:
+    raise unittest.SkipTest("python2 not found")
+  num_seqs = 4
+  dataset = ExternSprintDataset(
+    [python2_exec, sprintExecPath],
+    "--*.feature-dimension=2 --*.trainer-output-dimension=3 "
+    "--*.crnn-dataset=DummyDataset(2,3,num_seqs=%i,seq_len=10)" % num_seqs)
+  dataset.init_seq_order(epoch=1)
+  seq_idx = 0
+  while dataset.is_less_than_num_seqs(seq_idx):
+    dataset.load_seqs(seq_idx, seq_idx + 1)
+    for key in dataset.get_data_keys():
+      value = dataset.get_data(seq_idx, key)
+      print("seq idx %i, data %r: %r" % (seq_idx, key, value))
+    seq_idx += 1
+  assert seq_idx == num_seqs
+
+
 if __name__ == "__main__":
-  test_assign_dev_data()
+  better_exchook.install()
+  if len(sys.argv) <= 1:
+    for k, v in sorted(globals().items()):
+      if k.startswith("test_"):
+        print("-" * 40)
+        print("Executing: %s" % k)
+        try:
+          v()
+        except unittest.SkipTest as exc:
+          print("SkipTest:", exc)
+        print("-" * 40)
+    print("Finished all tests.")
+  else:
+    assert len(sys.argv) >= 2
+    for arg in sys.argv[1:]:
+      print("Executing: %s" % arg)
+      if arg in globals():
+        globals()[arg]()  # assume function and execute
+      else:
+        eval(arg)  # assume Python code and execute

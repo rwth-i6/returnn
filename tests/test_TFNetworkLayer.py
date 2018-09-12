@@ -31,6 +31,88 @@ def make_scope():
       yield session
 
 
+def test_concat_sources():
+  with make_scope() as session:
+    network = TFNetwork(train_flag=True, extern_data=ExternData())
+    n_batch = 5
+    n_time = 3
+    size_placeholder = {0: tf.constant(n_time, dtype=tf.int32, shape=(n_batch,))}
+    src1 = InternalLayer(
+      name="src1", network=network,
+      output=Data(
+        name="src1_output", shape=(None, 11), placeholder=tf.zeros((n_batch, n_time, 11)),
+        size_placeholder=size_placeholder))
+    print("src1 output:", src1.output)
+    src2 = InternalLayer(
+      name="src2", network=network,
+      output=Data(
+        name="src2_output", shape=(None, 13), placeholder=tf.zeros((n_batch, n_time, 13)),
+        size_placeholder=size_placeholder))
+    print("src2 output:", src2.output)
+    out_kwargs = dict(name="out", sources=[src1, src2], network=network)
+    out_output = CopyLayer.get_out_data_from_opts(**out_kwargs)
+    print("out output:", out_output)
+    assert out_output.dim == 11 + 13
+    out = CopyLayer(output=out_output, **out_kwargs)
+    session.run(out.output.placeholder)
+
+
+def test_concat_sources_batch_dim():
+  with make_scope() as session:
+    network = TFNetwork(train_flag=True, extern_data=ExternData())
+    n_batch = 5
+    n_time = 3
+    size_placeholder = {0: tf.constant(n_time, dtype=tf.int32, shape=(n_batch,))}
+    src1 = InternalLayer(
+      name="src1", network=network,
+      output=Data(
+        name="src1_output", shape=(None, 11), placeholder=tf.zeros((n_batch, n_time, 11)),
+        size_placeholder=size_placeholder))
+    print("src1 output:", src1.output)
+    src2 = InternalLayer(
+      name="src2", network=network,
+      output=Data(
+        name="src2_output", shape=(None, 13), time_dim_axis=0, batch_dim_axis=1,
+        placeholder=tf.zeros((n_time, n_batch, 13)),
+        size_placeholder=size_placeholder))
+    print("src2 output:", src2.output)
+    out_kwargs = dict(name="out", sources=[src1, src2], network=network)
+    out_output = CopyLayer.get_out_data_from_opts(**out_kwargs)
+    print("out output:", out_output)
+    assert out_output.dim == 11 + 13
+    assert out_output.batch_dim_axis == 0 and out_output.time_dim_axis == 1
+    out = CopyLayer(output=out_output, **out_kwargs)
+    session.run(out.output.placeholder)
+
+
+def test_concat_sources_missing_dim():
+  with make_scope() as session:
+    network = TFNetwork(train_flag=True, extern_data=ExternData())
+    n_batch = 5
+    n_time = 3
+    size_placeholder = {0: tf.constant(n_time, dtype=tf.int32, shape=(n_batch,))}
+    src1 = InternalLayer(
+      name="src1", network=network,
+      output=Data(
+        name="src1_output", shape=(None, 11), placeholder=tf.zeros((n_batch, n_time, 11)),
+        size_placeholder=size_placeholder))
+    print("src1 output:", src1.output)
+    src2 = InternalLayer(
+      name="src2", network=network,
+      output=Data(
+        name="src2_output", shape=(13,), time_dim_axis=None, batch_dim_axis=0,
+        placeholder=tf.zeros((n_batch, 13)),
+        size_placeholder={}))
+    print("src2 output:", src2.output)
+    out_kwargs = dict(name="out", sources=[src1, src2], network=network)
+    out_output = CopyLayer.get_out_data_from_opts(**out_kwargs)
+    print("out output:", out_output)
+    assert out_output.dim == 11 + 13
+    assert out_output.batch_dim_axis == 0 and out_output.time_dim_axis == 1
+    out = CopyLayer(output=out_output, **out_kwargs)
+    session.run(out.output.placeholder)
+
+
 def test_batch_norm_vars():
   with make_scope() as session:
     n_in, n_out = 2, 3
@@ -120,6 +202,17 @@ def test_combine_layer_net_construct():
     }
     config = Config()
     config.update(dict(num_inputs=4, num_outputs=9))
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(net_dict)
+
+
+def test_dropout_layer_net_construct():
+  with make_scope() as session:
+    net_dict = {
+      "drop": {"class": "dropout", "dropout": 0.3, "dropout_noise_shape": {"*": None}},
+      "output": {"class": "softmax", "loss": "ce", "from": ["drop"]}
+    }
+    config = Config({"num_inputs": 4, "num_outputs": 9, "debug_print_layer_output_template": True})
     network = TFNetwork(config=config, train_flag=True)
     network.construct_from_dict(net_dict)
 
@@ -235,6 +328,29 @@ def test_layer_base_get_out_data_from_opts():
     assert out.dtype == "float32"
 
 
+def test_ReduceLayer_reduce4d():
+  config = Config()
+  config.update({
+    "num_inputs": 4,
+    "num_outputs": 3,
+    "debug_print_layer_output_template": True
+  })
+  network = TFNetwork(config=config)
+  src_layer = InternalLayer(
+    name="src", network=network, output=Data(name="src", shape=(None, 4, 512), auto_create_placeholders=True))
+  print("src:", src_layer)
+  opts = {
+    'axes': "s:1",
+    'keep_dims': True,
+    'mode': 'mean',
+    'name': 'c_out_reduce',
+    'network': network,
+    'sources': [src_layer]}
+  out = ReduceLayer.get_out_data_from_opts(**opts)
+  layer = ReduceLayer(output=out, **opts)
+  print("layer:", layer)
+
+
 def test_SplitDimsLayer_resolve_dims():
   assert_equal(SplitDimsLayer._resolve_dims(old_dim=3 * 5, new_dims=(3, -1)), (3, 5))
   assert_equal(SplitDimsLayer._resolve_dims(old_dim=3 * 5, new_dims=(3, 5)), (3, 5))
@@ -288,6 +404,7 @@ def test_ConvLayer_get_valid_out_dim():
   assert_equal(ConvLayer.calc_out_dim(in_dim=10, stride=3, filter_size=2, padding="same"), 4)
   assert_equal(ConvLayer.calc_out_dim(in_dim=41, stride=1, filter_size=2, padding="valid"), 40)
   assert_equal(ConvLayer.calc_out_dim(in_dim=40, stride=2, filter_size=2, padding="valid"), 20)
+  assert_equal(ConvLayer.calc_out_dim(in_dim=2, stride=1, filter_size=3, padding="valid"), 0)
 
 
 def test_reuse_params():
@@ -435,6 +552,133 @@ def test_reuse_params_map_custom_dep_loop():
   with make_scope() as session:
     search_net = TFNetwork(config=config, train_flag=False, eval_flag=True, search_flag=True)
     search_net.construct_from_dict(config.typed_dict["network"])
+
+
+def test_SliceLayer_output_placeholder():
+  with make_scope() as session:
+    net = TFNetwork(extern_data=ExternData())
+    src = InternalLayer(name="src", network=net, out_type={"dim": 20, "sparse": True})
+    src.output.placeholder = tf.constant([[1, 2, 3, 4, 5], [6, 7, 8, 9, 10], [11, 12, 13, 14, 15]], dtype=tf.int32)
+    src.output.size_placeholder = {0: tf.constant([5, 3, 2], dtype=tf.int32)}
+    layer = SliceLayer(
+      name="slice", network=net, axis="T", slice_step=2, slice_start=1, sources=[src],
+      output=SliceLayer.get_out_data_from_opts(
+        name="slice", network=net, axis="T", slice_step=2, slice_start=1, sources=[src]))
+    out, seq_lens = session.run([layer.output.placeholder, layer.output.size_placeholder[0]])
+    print(out)
+    print(seq_lens)
+    assert isinstance(out, numpy.ndarray)
+    assert isinstance(seq_lens, numpy.ndarray)
+    assert_equal(
+      out.tolist(),
+      [[2, 4],
+       [7, 9],
+       [12, 14]])
+    assert_equal(seq_lens.tolist(), [2, 1, 1])
+
+
+def test_WindowLayer_output_placeholder():
+  with make_scope() as session:
+    net = TFNetwork(extern_data=ExternData())
+    src = InternalLayer(name="src", network=net, out_type={"dim": 20, "sparse": True})
+    src.output.placeholder = tf.constant([[1, 2, 3, 4, 5], [6, 7, 8, 9, 10], [11, 12, 13, 14, 15]], dtype=tf.int32)
+    src.output.size_placeholder = {0: tf.constant([5, 3, 1], dtype=tf.int32)}
+    layer = WindowLayer(
+      name="window", network=net, axis="T", window_size=3, padding='valid', sources=[src],
+      output=WindowLayer.get_out_data_from_opts(
+        name="window", network=net, axis="T", window_size=3, padding='valid', sources=[src]))
+    out, seq_lens = session.run([layer.output.placeholder, layer.output.size_placeholder[0]])
+    print(out)
+    print(seq_lens)
+    assert isinstance(out, numpy.ndarray)
+    assert isinstance(seq_lens, numpy.ndarray)
+    assert_equal(
+      out.tolist(),
+      [[[1, 2, 3], [2, 3, 4], [3, 4, 5]],
+       [[6, 7, 8], [7, 8, 9], [8, 9, 10]],
+       [[11, 12, 13], [12, 13, 14], [13, 14, 15]]])
+    assert_equal(seq_lens.tolist(), [3, 1, 0])
+
+
+def test_conv_window_merge_dims():
+  n_in = 1
+  n_out = 13
+  net_dict = {
+    'conv_1': {'activation': 'abs',
+               'class': 'conv',
+               'filter_size': (4,),
+               'n_out': 64,
+               'padding': 'valid',
+               'strides': 10},
+    'pad_conv_1_time_dim': {'axes': 'time',
+                            'class': 'pad',
+                            'from': ['conv_1'],
+                            'padding': 20},
+    'conv_2': {'activation': 'abs',
+               'class': 'conv',
+               'filter_size': (2, 6),
+               'from': ['pad_conv_1_time_dim'],
+               'input_add_feature_dim': True,
+               'n_out': 12,
+               'padding': 'valid',
+               'strides': 16},
+    'flatten_conv': {'axes': 'except_time',
+                     'class': 'merge_dims',
+                     'from': ['conv_2'],
+                     'n_out': 12},
+    'window_1': {'class': 'window',
+                 'from': ['flatten_conv'],
+                 'window_size': 17},
+    'flatten_window': {'axes': 'except_time',
+                       'class': 'merge_dims',
+                       'from': ['window_1']},
+    'output': {'activation': None,
+               'class': 'linear',
+               'from': ['flatten_window'],
+               'n_out': n_out},
+  }
+  config = Config({
+    "num_outputs": n_out,
+    "num_inputs": n_in,
+    "debug_print_layer_output_template": True
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    print("extern data:")
+    print(net.extern_data)
+    # The construction itself is also the test.
+    net.construct_from_dict(net_dict)
+    out = net.get_default_output_layer()
+    # Maybe this will not be the case in the future anymore;
+    # however, if this test runs on CPU, currently the feature_dim_axis should always stay the default.
+    # See also test_ConvLayer_feature_dim_unspecified.
+    assert out.output.feature_dim_axis_or_unspecified is NotSpecified
+
+
+def test_ConvLayer_feature_dim_unspecified():
+  n_in = 1
+  n_out = 13
+  net_dict = {
+    'output': {'activation': 'abs',
+               'class': 'conv',
+               'filter_size': (4,),
+               'n_out': 64,
+               'padding': 'valid',
+               'strides': 10}}
+  config = Config({
+    "num_outputs": n_out,
+    "num_inputs": n_in,
+    "debug_print_layer_output_template": True
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config)
+    print("extern data:")
+    print(net.extern_data)
+    net.construct_from_dict(net_dict)
+    out = net.get_default_output_layer()
+    # Maybe this will not be the case in the future anymore;
+    # however, if this test runs on CPU, currently the feature_dim_axis should always stay the default.
+    assert out.output.feature_dim_axis_or_unspecified is NotSpecified
 
 
 def test_ResizeLayer_fill_value():

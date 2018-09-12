@@ -8,6 +8,7 @@ from Log import log
 import numpy
 import re
 
+
 class GeneratingDataset(Dataset):
 
   _input_classes = None
@@ -15,8 +16,8 @@ class GeneratingDataset(Dataset):
 
   def __init__(self, input_dim, output_dim, num_seqs=float("inf"), fixed_random_seed=None, **kwargs):
     """
-    :param int input_dim:
-    :param int|dict[str,int|(int,int)|dict] output_dim:
+    :param int|None input_dim:
+    :param int|dict[str,int|(int,int)|dict] output_dim: if dict, can specify all data-keys
     :param int|float num_seqs:
     :param int fixed_random_seed:
     """
@@ -24,9 +25,9 @@ class GeneratingDataset(Dataset):
     assert self.shuffle_frames_of_nseqs == 0
 
     self.num_inputs = input_dim
-    output_dim = convert_data_dims(output_dim, leave_dict_as_is=True)
-    if "data" not in output_dim:
-      output_dim["data"] = [input_dim, 2]  # not sparse
+    output_dim = convert_data_dims(output_dim, leave_dict_as_is=False)
+    if "data" not in output_dim and input_dim is not None:
+      output_dim["data"] = [input_dim * self.window, 2]  # not sparse
     self.num_outputs = output_dim
     self.expected_load_seq_start = 0
     self._num_seqs = num_seqs
@@ -98,7 +99,7 @@ class GeneratingDataset(Dataset):
     seqs = [self.generate_seq(seq_idx=seq_idx) for seq_idx in range(start, end)]
     if self.window > 1:
       for seq in seqs:
-        seq.features = self.sliding_window(seq.features)
+        seq.features["data"] = self.sliding_window(seq.features["data"])
     self._num_timesteps += sum([seq.num_frames for seq in seqs])
     self.added_data += seqs
 
@@ -127,13 +128,14 @@ class GeneratingDataset(Dataset):
     self.load_seqs(self.expected_load_seq_start, sorted_seq_idx + 1)
     return self._get_seq(sorted_seq_idx).num_frames
 
-  def get_input_data(self, sorted_seq_idx):
-    self._check_loaded_seq_idx(sorted_seq_idx)
-    return self._get_seq(sorted_seq_idx).features
+  def get_data(self, seq_idx, key):
+    return self._get_seq(seq_idx).features[key]
 
-  def get_targets(self, target, sorted_seq_idx):
-    self._check_loaded_seq_idx(sorted_seq_idx)
-    return self._get_seq(sorted_seq_idx).targets[target]
+  def get_input_data(self, seq_idx):
+    return self.get_data(seq_idx, "data")
+
+  def get_targets(self, target, seq_idx):
+    return self.get_data(seq_idx, target)
 
   def get_ctc_targets(self, sorted_seq_idx):
     self._check_loaded_seq_idx(sorted_seq_idx)
@@ -528,7 +530,38 @@ class DummyDataset(GeneratingDataset):
     return DatasetSeq(seq_idx=seq_idx, features=features, targets=targets)
 
 
+class DummyDatasetMultipleSequenceLength(DummyDataset):
+
+  def __init__(self, input_dim, output_dim, num_seqs, seq_len={'data': 10, 'classes':20},
+               input_max_value=10.0, input_shift=None, input_scale=None, **kwargs):
+    super(DummyDatasetMultipleSequenceLength, self).__init__(
+      input_dim=input_dim,
+      output_dim=output_dim,
+      num_seqs=num_seqs,
+      seq_len=seq_len,
+      input_max_value=input_max_value,
+      input_shift=input_shift,
+      input_scale=input_scale,
+      **kwargs
+    )
+
+  def generate_seq(self, seq_idx):
+    seq_len_data = self.seq_len['data']
+    seq_len_classes = self.seq_len['classes']
+    i1 = seq_idx
+    i2 = i1 + seq_len_data * self.num_inputs
+    features = numpy.array([((i % self.input_max_value) + self.input_shift) * self.input_scale
+                            for i in range(i1, i2)]).reshape((seq_len_data, self.num_inputs))
+    i1, i2 = i2, i2 + seq_len_classes
+    targets = numpy.array([i % self.num_outputs["classes"][0]
+                           for i in range(i1, i2)])
+    return DatasetSeq(seq_idx=seq_idx, features=features, targets=targets)
+
+
 class StaticDataset(GeneratingDataset):
+  """
+  Provide all the data as a list of dict of numpy arrays.
+  """
 
   @classmethod
   def copy_from_dataset(cls, dataset, start_seq_idx=0, max_seqs=None):
@@ -558,58 +591,47 @@ class StaticDataset(GeneratingDataset):
   def __init__(self, data, target_list=None, output_dim=None, input_dim=None, **kwargs):
     """
     :param list[dict[str,numpy.ndarray]] data: list of seqs, each provide the data for each data-key
-    :param int input_dim:
+    :param int|None input_dim:
     :param int|dict[str,(int,int)|list[int]] output_dim:
     """
     assert len(data) > 0
     self.data = data
     num_seqs = len(data)
     first_data = data[0]
-    assert "data" in first_data  # input
-    if target_list is None:
-      target_list = []
-      for target in first_data.keys():
-        if target == "data": continue
-        target_list.append(target)
+    self.data_keys = sorted(first_data.keys())
+    if target_list is not None:
+      for key in target_list:
+        assert key in self.data_keys
     else:
-      for target in target_list:
-        assert target in first_data
+      target_list = self.data_keys
     self.target_list = target_list
 
     if output_dim is None:
       output_dim = {}
-    output_dim = convert_data_dims(output_dim, leave_dict_as_is=True)
-
-    first_data_input = first_data["data"]
-    assert len(first_data_input.shape) <= 2  # (time[,dim])
-    if input_dim is None:
-      if "data" in output_dim:
-        if isinstance(output_dim["data"], (list, tuple)):
-          input_dim = output_dim["data"][0]
-        elif isinstance(output_dim["data"], dict):
-          input_dim = output_dim["data"]["dim"]
-        else:
-          raise TypeError(type(output_dim["data"]))
-      else:
-        input_dim = first_data_input.shape[1]
-
-    for target in target_list:
-      first_data_output = first_data[target]
+    output_dim = convert_data_dims(output_dim, leave_dict_as_is=False)
+    if input_dim is not None and "data" not in output_dim:
+      assert "data" in self.data_keys
+      output_dim["data"] = [input_dim, 2]  # assume dense, not sparse
+    for key, value in first_data.items():
+      if key not in output_dim:
+        output_dim[key] = [value.shape[-1] if value.ndim >= 2 else 0, len(value.shape)]
+    for key in self.data_keys:
+      first_data_output = first_data[key]
       assert len(first_data_output.shape) <= 2  # (time[,dim])
-      if target in output_dim:
-        assert output_dim[target][1] == len(first_data_output.shape)
-        if len(first_data_output.shape) >= 2:
-          assert output_dim[target][0] == first_data_output.shape[1]
-      else:
-        print("%r: Warning: Data-key %r not specified in output_dim (%r)." % (self, target, output_dim), file=log.v2)
+      assert key in output_dim
+      assert output_dim[key][1] == len(first_data_output.shape)
+      if len(first_data_output.shape) >= 2:
+        assert output_dim[key][0] == first_data_output.shape[-1]
+    assert sorted(output_dim.keys()) == self.data_keys, "output_dim does noth match the given data"
 
     super(StaticDataset, self).__init__(input_dim=input_dim, output_dim=output_dim, num_seqs=num_seqs, **kwargs)
 
   def generate_seq(self, seq_idx):
     data = self.data[seq_idx]
-    return DatasetSeq(seq_idx=seq_idx,
-                      features=data["data"],
-                      targets={target: data[target] for target in self.target_list})
+    return DatasetSeq(seq_idx=seq_idx, features={key: data[key] for key in self.data_keys})
+
+  def get_data_keys(self):
+    return self.data_keys
 
   def get_target_list(self):
     return self.target_list
@@ -1304,13 +1326,30 @@ class Vocabulary(object):
   Used by :class:`BytePairEncoding`.
   """
 
-  _cache = {}  # filename -> vocab, labels
+  _cache = {}  # filename -> vocab dict, labels dict (see _parse_vocab)
 
-  def __init__(self, vocab_file, unknown_label="UNK", num_labels=None):
+  @classmethod
+  def create_vocab(cls, **opts):
+    """
+    :param opts: kwargs for class
+    :rtype: Vocabulary|BytePairEncoding
+    """
+    opts = opts.copy()
+    clz = cls
+    if "class" in opts:
+      class_name = opts.pop("class")
+      clz = globals()[class_name]
+      assert issubclass(clz, Vocabulary), "class %r %r is not a subclass of %r" % (class_name, clz, cls)
+    elif "bpe_file" in opts:
+      clz = BytePairEncoding
+    return clz(**opts)
+
+  def __init__(self, vocab_file, seq_postfix=None, unknown_label="UNK", num_labels=None):
     """
     :param str vocab_file:
     :param str unknown_label:
     :param int num_labels: just for verification
+    :param list[int]|None seq_postfix: labels will be added to the seq in self.get_seq
     """
     self.vocab_file = vocab_file
     self.unknown_label = unknown_label
@@ -1318,6 +1357,7 @@ class Vocabulary(object):
     self._parse_vocab(vocab_file)
     if num_labels is not None:
       assert self.num_labels == num_labels
+    self.seq_postfix = seq_postfix or []
 
   def __repr__(self):
     return "Vocabulary(%r, num_labels=%s, unknown_label=%r)" % (self.vocab_file, self.num_labels, self.unknown_label)
@@ -1332,7 +1372,6 @@ class Vocabulary(object):
       assert self.unknown_label in self.vocab
       self.num_labels = len(self.labels)
     else:
-      d = None
       if filename[-4:] == ".pkl":
         d = pickle.load(open(filename, "rb"))
       else:
@@ -1383,22 +1422,22 @@ class Vocabulary(object):
       VariableAssigner(var).assign(session=session, value=self.labels)
 
     return init_vocab_var
-  
-  def get_seq(self, seq):
+
+  def get_seq(self, sentence):
     """
-    :param str sentence:
+    :param str sentence: assumed to be seq of vocab entries separated by whitespace
     :rtype: list[int]
     """
-    segments = seq.split()
-    return self.get_seq_indices(segments)
-  
+    segments = sentence.split()
+    return self.get_seq_indices(segments) + self.seq_postfix
+
   def get_seq_indices(self, seq):
     """
     :param list[str] seq:
     :rtype: list[int]
     """
     return [self.vocab.get(k, self.unknown_label_id) for k in seq]
-  
+
   def get_seq_labels(self, seq):
     """
     :param list[int] seq:
@@ -1428,7 +1467,7 @@ class BytePairEncoding(Vocabulary):
     :param list[int]|None seq_postfix: labels will be added to the seq in self.get_seq
     :param str unknown_label:
     """
-    super(BytePairEncoding, self).__init__(vocab_file=vocab_file, unknown_label=unknown_label)
+    super(BytePairEncoding, self).__init__(vocab_file=vocab_file, seq_postfix=seq_postfix, unknown_label=unknown_label)
     # check version information
     bpe_file_first_line = open(bpe_file, "r").readline()
     if bpe_file_first_line.startswith('#version:'):
@@ -1442,7 +1481,6 @@ class BytePairEncoding(Vocabulary):
     self._bpe_codes_reverse = dict([(pair[0] + pair[1], pair) for pair,i in self._bpe_codes.items()])
     self._bpe_encode_cache = {}
     self._bpe_separator = '@@'
-    self.seq_postfix = seq_postfix or []
 
   @staticmethod
   def _get_pairs(word):
@@ -1624,8 +1662,7 @@ class CharacterTargets(Vocabulary):
     :param list[int]|None seq_postfix: labels will be added to the seq in self.get_seq
     :param str unknown_label:
     """
-    super(CharacterTargets, self).__init__(vocab_file=vocab_file, unknown_label=unknown_label)
-    self.seq_postfix = seq_postfix or []
+    super(CharacterTargets, self).__init__(vocab_file=vocab_file, seq_postfix=seq_postfix, unknown_label=unknown_label)
 
   def get_seq(self, sentence):
     """
@@ -1683,7 +1720,7 @@ class BlissDataset(CachedDataset2):
     self._parse_bliss_xml(filename=path)
     # TODO: loading audio like in TimitDataset, and in parallel
     self._bpe = BytePairEncoding(vocab_file=vocab_file, bpe_file=bpe_file)
-    self.labels = self._bpe.labels
+    self.labels["classes"] = self._bpe.labels
     self.num_outputs = {'data': (self.num_inputs, 2), "classes": (self._bpe.num_labels, 1)}
     print("%s: Loaded %r, num seqs: %i, elapsed: %s" % (
       self.__class__.__name__, path, len(self._seqs), hms_fraction(time.time() - start_time)), file=log.v3)
@@ -1763,23 +1800,25 @@ class LibriSpeechCorpus(CachedDataset2):
     Min/max: 1 / 161
   "train-*" mean transcription len: 177.009085 (chars), i.e. ~3 chars per BPE label
   """
-  def __init__(self, path, prefix, audio, targets=None, chars=None, bpe=None,
+  def __init__(self, path, prefix, audio,
+               orth_post_process=None,
+               targets=None, chars=None, bpe=None,
                use_zip=False, use_ogg=False, use_cache_manager=False,
-               partition_epoch=None, fixed_random_seed=None, fixed_random_subset=None,
+               fixed_random_seed=None, fixed_random_subset=None,
                epoch_wise_filter=None,
                name=None,
                **kwargs):
     """
     :param str path: dir, should contain "train-*/*/*/{*.flac,*.trans.txt}", or "train-*.zip"
     :param str prefix: "train", "dev", "test", "dev-clean", "dev-other", ...
-    :param str targets|None: "bpe" or "chars" currently, if `None`, then "bpe"
+    :param str|list[str]|None orth_post_process: :func:`get_post_processor_function`, applied on orth
+    :param str|None targets: "bpe" or "chars" currently, if `None`, then "bpe"
     :param dict[str] audio: options for :class:`ExtractAudioFeatures`
     :param dict[str] bpe: options for :class:`BytePairEncoding`
     :param dict[str] chars: options for :class:`CharacterTargets`
     :param bool use_zip: whether to use the ZIP files instead (better for NFS)
     :param bool use_ogg: add .ogg postfix to all files
     :param bool use_cache_manager: uses :func:`Util.cf`
-    :param int|None partition_epoch:
     :param int|None fixed_random_seed: for the shuffling, e.g. for seq_ordering='random'. otherwise epoch will be used
     :param float|int|None fixed_random_subset:
       Value in [0,1] to specify the fraction, or integer >=1 which specifies number of seqs.
@@ -1810,23 +1849,29 @@ class LibriSpeechCorpus(CachedDataset2):
         for fn in zip_fns}  # e.g. "train-clean-100" -> ZipFile
     assert prefix.split("-")[0] in ["train", "dev", "test"]
     assert os.path.exists(path + "/train-clean-100" + (".zip" if use_zip else ""))
-    assert targets in ("bpe", "chars", None), "Unknown target type %s" % targets
+    self.orth_post_process = None
+    if orth_post_process:
+      from LmDataset import get_post_processor_function
+      self.orth_post_process = get_post_processor_function(orth_post_process)
     assert bpe or chars
     if targets == "bpe" or (targets is None and bpe is not None):
+      assert bpe is not None and chars is None
       self.bpe = BytePairEncoding(**bpe)
       self.targets = self.bpe
       self.labels = {"classes": self.bpe.labels}
-    elif targets == "chars":
+    elif targets == "chars" or (targets is None and chars is not None):
+      assert bpe is None and chars is not None
       self.chars = CharacterTargets(**chars)
       self.labels = {"classes": self.chars.labels}
       self.targets = self.chars
+    else:
+      raise Exception("invalid targets %r. provide bpe or chars" % targets)
     self._fixed_random_seed = fixed_random_seed
     self._audio_random = numpy.random.RandomState(1)
     self.feature_extractor = ExtractAudioFeatures(random_state=self._audio_random, **audio)
     self.num_inputs = self.feature_extractor.get_feature_dimension()
     self.num_outputs = {
       "data": [self.num_inputs, 2], "classes": [self.targets.num_labels, 1], "raw": {"dtype": "string", "shape": ()}}
-    self.partition_epoch = partition_epoch
     self.transs = self._collect_trans()
     self._reference_seq_order = sorted(self.transs.keys())
     if fixed_random_subset:
@@ -1863,6 +1908,8 @@ class LibriSpeechCorpus(CachedDataset2):
               for l in zip_file.read(info).decode("utf8").splitlines():
                 seq_name, txt = l.split(" ", 1)
                 speaker_id, chapter_id, seq_id = map(int, seq_name.split("-"))
+                if self.orth_post_process:
+                  txt = self.orth_post_process(txt)
                 transs[(subdir, speaker_id, chapter_id, seq_id)] = txt
     else:  # not zipped, directly read extracted files
       for subdir in glob("%s/%s*" % (self.path, self.prefix)):
@@ -1873,6 +1920,8 @@ class LibriSpeechCorpus(CachedDataset2):
           for l in open(fn).read().splitlines():
             seq_name, txt = l.split(" ", 1)
             speaker_id, chapter_id, seq_id = map(int, seq_name.split("-"))
+            if self.orth_post_process:
+              txt = self.orth_post_process(txt)
             transs[(subdir, speaker_id, chapter_id, seq_id)] = txt
       assert transs, "did not found anything %s/%s*" % (self.path, self.prefix)
     assert transs
@@ -1893,31 +1942,18 @@ class LibriSpeechCorpus(CachedDataset2):
     if not epoch:
       epoch = 1
     self._audio_random.seed(self._fixed_random_seed or epoch or 1)
-    if self.partition_epoch:
-      real_epoch = (epoch - 1) // self.partition_epoch + 1  # count starting from epoch 1
-    else:
-      real_epoch = epoch
     if seq_list is not None:
-      self._seq_order = list(seq_list)
+      seqs = [i for i in range(len(self._reference_seq_order)) if self._get_tag(i) in seq_list]
+      seqs = {self._get_tag(i): i for i in seqs}
+      for seq_tag in seq_list:
+        assert seq_tag in seqs, "did not found all requested seqs. we have eg: %s" % (self._get_tag(0),)
+      self._seq_order = [seqs[seq_tag] for seq_tag in seq_list]
       self._num_seqs = len(self._seq_order)
     else:
       num_seqs = len(self._reference_seq_order)
       self._seq_order = self.get_seq_order_for_epoch(
-        epoch=real_epoch, num_seqs=num_seqs, get_seq_len=lambda i: len(self.transs[self._reference_seq_order[i]]))
-      self._num_seqs = num_seqs
-    if self.partition_epoch:
-      partition_epoch_num_seqs = [self._num_seqs // self.partition_epoch] * self.partition_epoch
-      i = 0
-      while sum(partition_epoch_num_seqs) < self._num_seqs:
-        partition_epoch_num_seqs[i] += 1
-        i += 1
-        assert i < self.partition_epoch
-      assert sum(partition_epoch_num_seqs) == self._num_seqs
-      self._num_seqs = partition_epoch_num_seqs[(self.epoch - 1) % self.partition_epoch]
-      i = 0
-      for n in partition_epoch_num_seqs[:(epoch - 1) % self.partition_epoch]:
-        i += n
-      self._seq_order = self._seq_order[i:i + self._num_seqs]
+        epoch=epoch, num_seqs=num_seqs, get_seq_len=lambda i: len(self.transs[self._reference_seq_order[i]]))
+      self._num_seqs = len(self._seq_order)
     if self.epoch_wise_filter:
       old_num_seqs = self._num_seqs
       any_filter = False
@@ -1964,14 +2000,21 @@ class LibriSpeechCorpus(CachedDataset2):
   def get_corpus_seq_idx(self, seq_idx):
     return self._get_ref_seq_idx(seq_idx)
 
+  def _get_tag(self, ref_seq_idx):
+    """
+    :param int ref_seq_idx:
+    :rtype: str
+    """
+    subdir, speaker_id, chapter_id, seq_id = self._reference_seq_order[ref_seq_idx]
+    return "%(sd)s-%(sp)i-%(ch)i-%(i)04i" % {
+      "sd": subdir, "sp": speaker_id, "ch": chapter_id, "i": seq_id}
+
   def get_tag(self, seq_idx):
     """
     :param int seq_idx:
     :rtype: str
     """
-    subdir, speaker_id, chapter_id, seq_id = self._reference_seq_order[self._get_ref_seq_idx(seq_idx)]
-    return "%(sd)s-%(sp)i-%(ch)i-%(i)04i" % {
-      "sd": subdir, "sp": speaker_id, "ch": chapter_id, "i": seq_id}
+    return self._get_tag(self._get_ref_seq_idx(seq_idx))
 
   def _get_transcription(self, seq_idx):
     """
@@ -2215,8 +2258,8 @@ def demo():
     print("Seq idx %i:" % i)
     s = dataset.generate_seq(i)
     assert isinstance(s, DatasetSeq)
-    features = s.features
-    output_seq = s.targets["classes"]
+    features = s.features["data"]
+    output_seq = s.features["classes"]
     assert features.ndim == 2
     assert output_seq.ndim == 1
     input_seq = numpy.argmax(features, axis=1)
