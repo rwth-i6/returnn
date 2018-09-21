@@ -252,7 +252,7 @@ class Dataset(object):
     :return: the order for the given epoch. such that seq_idx -> underlying idx
     :rtype: list[int]
     """
-    partition_epoch = self.partition_epoch
+    partition_epoch = self.partition_epoch or 1
     if not epoch:
       epoch = 1
     full_epoch = epoch

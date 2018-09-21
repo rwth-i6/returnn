@@ -885,7 +885,7 @@ class TranslationDataset(CachedDataset2):
 
   MapToDataKeys = {"source": "data", "target": "classes"}  # just by our convention
 
-  def __init__(self, path, file_postfix, partition_epoch=None, source_postfix="", target_postfix="",
+  def __init__(self, path, file_postfix, source_postfix="", target_postfix="",
                source_only=False,
                unknown_label=None,
                use_cache_manager=False,
@@ -894,7 +894,6 @@ class TranslationDataset(CachedDataset2):
     :param str path: the directory containing the files
     :param str file_postfix: e.g. "train" or "dev". it will then search for "source." + postfix and "target." + postfix.
     :param bool random_shuffle_epoch1: if True, will also randomly shuffle epoch 1. see self.init_seq_order().
-    :param int partition_epoch: if provided, will partition the dataset into multiple epochs
     :param None|str source_postfix: will concat this at the end of the source. e.g.
     :param None|str target_postfix: will concat this at the end of the target.
       You might want to add some sentence-end symbol.
@@ -905,12 +904,10 @@ class TranslationDataset(CachedDataset2):
     super(TranslationDataset, self).__init__(**kwargs)
     self.path = path
     self.file_postfix = file_postfix
-    self.partition_epoch = partition_epoch
     self._use_cache_manager = use_cache_manager
     self._add_postfix = {"data": source_postfix, "classes": target_postfix}
     from threading import Lock, Thread
     self._lock = Lock()
-    self._partition_epoch_num_seqs = []
     import os
     assert os.path.isdir(path)
     if source_only:
@@ -1093,26 +1090,13 @@ class TranslationDataset(CachedDataset2):
       time.sleep(1)
       t += 1
 
-  def _get_line_nr(self, seq_idx):
-    """
-    :param int seq_idx:
-    :return: line-nr, i.e. index in any of the lists `self.data[key]`
-    :rtype: int
-    """
-    if self.partition_epoch:
-      epoch = self.epoch or 1
-      assert self._partition_epoch_num_seqs
-      for n in self._partition_epoch_num_seqs[:(epoch - 1) % self.partition_epoch]:
-        seq_idx += n
-    if self._seq_order is None:
-      return seq_idx
-    return self._seq_order[seq_idx]
-
   def have_corpus_seq_idx(self):
     return True
 
   def get_corpus_seq_idx(self, seq_idx):
-    return self._get_line_nr(seq_idx)
+    if self._seq_order is None:
+      return None
+    return self._seq_order[seq_idx]
 
   def is_data_sparse(self, key):
     return True  # all is sparse
@@ -1133,31 +1117,19 @@ class TranslationDataset(CachedDataset2):
     super(TranslationDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
     if not epoch:
       epoch = 1
-    if self.partition_epoch:
-      epoch = (epoch - 1) // self.partition_epoch + 1  # count starting from epoch 1
     if seq_list is not None:
       self._seq_order = list(seq_list)
-      self._num_seqs = len(self._seq_order)
     else:
       num_seqs = self._get_data_len()
       self._seq_order = self.get_seq_order_for_epoch(
         epoch=epoch, num_seqs=num_seqs, get_seq_len=lambda i: len(self._get_data(key="data", line_nr=i)))
-      self._num_seqs = num_seqs
-    if self.partition_epoch:
-      self._partition_epoch_num_seqs = [self._num_seqs // self.partition_epoch] * self.partition_epoch
-      i = 0
-      while sum(self._partition_epoch_num_seqs) < self._num_seqs:
-        self._partition_epoch_num_seqs[i] += 1
-        i += 1
-        assert i < self.partition_epoch
-      assert sum(self._partition_epoch_num_seqs) == self._num_seqs
-      self._num_seqs = self._partition_epoch_num_seqs[(self.epoch - 1) % self.partition_epoch]
+    self._num_seqs = len(self._seq_order)
     return True
 
   def _collect_single_seq(self, seq_idx):
     if seq_idx >= self._num_seqs:
       return None
-    line_nr = self._get_line_nr(seq_idx)
+    line_nr = self._seq_order[seq_idx]
     features = self._get_data(key="data", line_nr=line_nr)
     targets = self._get_data(key="classes", line_nr=line_nr)
     assert features is not None and targets is not None
