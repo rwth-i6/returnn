@@ -932,6 +932,7 @@ class TranslationDataset(CachedDataset2):
     self.labels = {k: self._get_label_list(k) for k in self._vocabs.keys()}
     self._unknown_label = unknown_label
     self._seq_order = None  # type: None|list[int]  # seq_idx -> line_nr
+    self._tag_prefix = "line-"  # sequence tag is "line-n", where n is the line number
     self._thread = Thread(name="%r reader" % self, target=self._thread_main)
     self._thread.daemon = True
     self._thread.start()
@@ -1132,7 +1133,7 @@ class TranslationDataset(CachedDataset2):
     if seq_list is None and self.seq_list:
       seq_list = self.seq_list
     if seq_list is not None:
-      self._seq_order = list(seq_list)
+      self._seq_order = [int(s[len(self._tag_prefix):]) for s in seq_list]
     else:
       num_seqs = self._get_data_len()
       self._seq_order = self.get_seq_order_for_epoch(
@@ -1150,7 +1151,7 @@ class TranslationDataset(CachedDataset2):
     assert features is not None and targets is not None
     return DatasetSeq(
       seq_idx=seq_idx,
-      seq_tag="line-%i" % line_nr,
+      seq_tag=self._tag_prefix + str(line_nr),
       features=features,
       targets=targets)
 
@@ -1294,7 +1295,7 @@ class ConfusionNetworkDataset(TranslationDataset):
         features['sparse_weights'][n][0] = 1
     return DatasetSeq(
       seq_idx=seq_idx,
-      seq_tag="line-%i" % line_nr,
+      seq_tag=self._tag_prefix + str(line_nr),
       features=features, targets=None)
 
 
