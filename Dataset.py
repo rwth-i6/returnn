@@ -975,7 +975,7 @@ def shapes_for_batches(batches, data_keys, dataset=None, extern_data=None, enfor
   :rtype: dict[str,list[int]] | None
   """
   assert dataset or extern_data
-  all_data_keys = set(data_keys) | {"data"}
+  all_data_keys = set(data_keys)
 
   # The final device.data.shape is in format (time,batch,feature) in case of Theano.
   shape = [NumbersDict(0), 0]  # time,batch
