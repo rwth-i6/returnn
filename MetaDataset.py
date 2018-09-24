@@ -92,8 +92,9 @@ class MetaDataset(CachedDataset2):
   def init_seq_order(self, epoch=None, seq_list=None):
     need_reinit = self.epoch is None or self.epoch != epoch or seq_list
     super(MetaDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
-    self._num_seqs = len(self.seq_list_original[self.default_dataset_key])
+
     if not need_reinit:
+      self._num_seqs = len(self.seq_list_ordered[self.default_dataset_key])
       return False
 
     if seq_list:
@@ -103,7 +104,9 @@ class MetaDataset(CachedDataset2):
         get_seq_len = lambda s: self._seq_lens[self.seq_list_original[self.default_dataset_key][s]]["data"]
       else:
         get_seq_len = None
-      seq_index = self.get_seq_order_for_epoch(epoch, self.num_seqs, get_seq_len)
+      total_seqs = len(self.seq_list_original[self.default_dataset_key])
+      seq_index = self.get_seq_order_for_epoch(epoch, total_seqs, get_seq_len)
+    self._num_seqs = len(seq_index)
     self.seq_list_ordered = {key: [ls[s] for s in seq_index] for (key, ls) in self.seq_list_original.items()}
 
     for dataset_key, dataset in self.datasets.items():
