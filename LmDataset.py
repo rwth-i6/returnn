@@ -29,7 +29,6 @@ class LmDataset(CachedDataset2):
                parse_orth_opts=None,
                phone_info=None,
                add_random_phone_seqs=0,
-               partition_epoch=1,
                auto_replace_unknown_symbol=False,
                log_auto_replace_unknown_symbols=10,
                log_skipped_seqs=10,
@@ -56,7 +55,6 @@ class LmDataset(CachedDataset2):
     :param bool add_delayed_seq_data: will add another data-key "delayed" which will have the sequence
       delayed_seq_data_start_symbol + original_sequence[:-1]
     :param str delayed_seq_data_start_symbol: used for add_delayed_seq_data
-    :param int partition_epoch: whether to partition the epochs into multiple parts. like epoch_split
     """
     super(LmDataset, self).__init__(**kwargs)
 
@@ -142,7 +140,6 @@ class LmDataset(CachedDataset2):
     self.log_auto_replace_unknown_symbols = log_auto_replace_unknown_symbols
     self.log_skipped_seqs = log_skipped_seqs
     self.error_on_invalid_seq = error_on_invalid_seq
-    self.partition_epoch = partition_epoch
     self.add_random_phone_seqs = add_random_phone_seqs
     for i in range(add_random_phone_seqs):
       self.num_outputs["random%i" % i] = self.num_outputs["data"]
@@ -166,11 +163,8 @@ class LmDataset(CachedDataset2):
     assert seq_list is None
     super(LmDataset, self).init_seq_order(epoch=epoch)
     epoch = epoch or 1
-    self.orths_epoch = self.orths[
-                       len(self.orths) * (epoch % self.partition_epoch) // self.partition_epoch:
-                       len(self.orths) * ((epoch % self.partition_epoch) + 1) // self.partition_epoch]
     self.seq_order = self.get_seq_order_for_epoch(
-      epoch=epoch, num_seqs=len(self.orths_epoch), get_seq_len=lambda i: len(self.orths_epoch[i]))
+      epoch=epoch, num_seqs=len(self.orths), get_seq_len=lambda i: len(self.orths[i]))
     self.next_orth_idx = 0
     self.next_seq_idx = 0
     self.num_skipped = 0
@@ -204,13 +198,13 @@ class LmDataset(CachedDataset2):
     :returns DatasetSeq or None if seq_idx >= num_seqs.
     """
     while True:
-      if self.next_orth_idx >= len(self.orths_epoch):
+      if self.next_orth_idx >= len(self.seq_order):
         assert self.next_seq_idx <= seq_idx, "We expect that we iterate through all seqs."
         if self.num_skipped > 0:
           print("LmDataset: reached end, skipped %i sequences" % self.num_skipped)
         return None
       assert self.next_seq_idx == seq_idx, "We expect that we iterate through all seqs."
-      orth = self.orths_epoch[self.seq_order[self.next_orth_idx]]
+      orth = self.orths[self.seq_order[self.next_orth_idx]]
       self.next_orth_idx += 1
       if orth == "</s>": continue  # special sentence end symbol. empty seq, ignore.
 
