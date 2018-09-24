@@ -114,19 +114,20 @@ class MetaDataset(CachedDataset2):
     return True
 
   def _load_seqs(self, start, end):
-    for dataset in self.datasets.values():
-      dataset.load_seqs(start, end)
+    for dataset_key in self.dataset_keys:
+      self.datasets[dataset_key].load_seqs(start, end)
       for seq_idx in range(start, end):
-        self._check_dataset_seq(dataset, seq_idx)
+        self._check_dataset_seq(dataset_key, seq_idx)
     super(MetaDataset, self)._load_seqs(start=start, end=end)
 
-  def _check_dataset_seq(self, dataset, seq_idx):
+  def _check_dataset_seq(self, dataset_key, seq_idx):
     """
     :type dataset: Dataset
     :type seq_idx: int
     """
-    dataset_seq_tag = dataset.get_tag(seq_idx)
-    self_seq_tag = self.get_tag(seq_idx)
+    dataset_seq_tag = self.datasets[dataset_key].get_tag(seq_idx)
+    self_seq_tag = self.get_partial_tag(dataset_key, seq_idx)
+
     assert dataset_seq_tag == self_seq_tag
 
   def _get_data(self, seq_idx, data_key):
@@ -154,8 +155,12 @@ class MetaDataset(CachedDataset2):
       return self._seq_lens[self.seq_list_ordered[self.default_dataset_key][sorted_seq_idx]]
     return super(MetaDataset, self).get_seq_length(sorted_seq_idx)
 
+  def get_partial_tag(self, dataset_key, sorted_seq_idx):
+    return self.seq_list_ordered[dataset_key][sorted_seq_idx]
+
   def get_tag(self, sorted_seq_idx):
-    return self.seq_list_ordered[self.default_dataset_key][sorted_seq_idx]
+    partial_tags = [ self.seq_list_ordered[dataset_key][sorted_seq_idx] for dataset_key in self.dataset_keys ]
+    return "<->".join(t for t in partial_tags)
 
   def get_target_list(self):
     return self.target_list
