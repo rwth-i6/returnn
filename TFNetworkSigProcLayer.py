@@ -119,6 +119,87 @@ class ComplexLinearProjectionLayer(_ConcatInputLayer):
     return super(ComplexLinearProjectionLayer, cls).get_out_data_from_opts(**kwargs)
 
 
+class MaskBasedGevBeamformingLayer(LayerBase):
+  """
+  This layer applies GEV beamforming to a multichannel signal. The different
+  channels are assumed to be concatenated to the
+  input feature vector. The first source to the layer must contain the complex
+  spectrograms of the single channels and the
+  second source must contain the noise and speech masks
+  """
+
+  layer_class = "mask_based_gevbeamforming"
+
+  def __init__(self, nr_of_channels=1, postfilter_id=0, qralgorithm_steps=None, **kwargs):
+    """
+    :param int nr_of_channels: number of input channels to beamforming (needed to split the feature vector)
+    :param int postfilter_id: Id which is specifying which post filter to apply in gev beamforming.
+                              For more information see
+                              tfSi6Proc.audioProcessing.enhancement.beamforming.TfMaskBasedGevBeamformer
+    """
+    super(MaskBasedGevBeamformingLayer, self).__init__(**kwargs)
+    assert len(self.sources) == 2
+
+    from tfSi6Proc.audioProcessing.enhancement.beamforming import TfMaskBasedGevBeamformer
+
+    complexSpectrogram = self.sources[0].output.get_placeholder_as_batch_major()
+    complexSpectrogram = tf.transpose(tf.reshape(complexSpectrogram, (tf.shape(complexSpectrogram)[0], tf.shape(complexSpectrogram)[1], nr_of_channels, tf.shape(complexSpectrogram)[2] // nr_of_channels)), [0, 1, 3, 2])
+    masks = tf.transpose(self.sources[1].output.placeholder, [self.sources[1].output.batch_dim_axis, self.sources[1].output.time_dim_axis, self.sources[1].output.feature_dim_axis])
+    masks = tf.transpose(tf.reshape(masks, (tf.shape(masks)[0], tf.shape(masks)[1], nr_of_channels, tf.shape(masks)[2] / nr_of_channels)), [0, 1, 3, 2])
+    noiseMasks = masks[:, :, :(tf.shape(masks)[2] // 2), :]
+    speechMasks = masks[:, :, (tf.shape(masks)[2] // 2):, :]
+
+    gevBf = TfMaskBasedGevBeamformer(flag_inputHasBatch=1, tfFreqDomInput=complexSpectrogram, tfNoiseMask=noiseMasks, tfSpeechMask=speechMasks, postFilterId=postfilter_id, qrAlgorithmSteps=qralgorithm_steps)
+    bfOut = gevBf.getFrequencyDomainOutputSignal()
+    self.output.placeholder = bfOut
+
+  @classmethod
+  def get_out_data_from_opts(cls, out_type={}, n_out=None, **kwargs):
+    out_type.setdefault("dim", n_out)
+    out_type["batch_dim_axis"] = 0
+    out_type["time_dim_axis"] = 1
+    return super(MaskBasedGevBeamformingLayer, cls).get_out_data_from_opts(out_type=out_type, **kwargs)
+
+
+class MaskBasedMvdrBeamformingWithDiagLoadingLayer(LayerBase):
+  """
+  This layer applies GEV beamforming to a multichannel signal. The different
+  channels are assumed to be concatenated to the
+  input feature vector. The first source to the layer must contain the complex
+  spectrograms of the single channels and the
+  second source must contain the noise and speech masks
+  """
+
+  layer_class = "mask_based_mvdrbeamforming"
+
+  def __init__(self, nr_of_channels=1, diag_loading_coeff=0, qralgorithm_steps=None, **kwargs):
+    """
+    :param int nr_of_channels: number of input channels to beamforming (needed to split the feature vector)
+    :param int diag_loading_coeff: weighting coefficient for diagonal loading.
+    """
+    super(MaskBasedMvdrBeamformingWithDiagLoadingLayer, self).__init__(**kwargs)
+    assert len(self.sources) == 2
+
+    from tfSi6Proc.audioProcessing.enhancement.beamforming import TfMaskBasedMvdrBeamformer
+
+    complexSpectrogramWithConcatChannels = self.sources[0].output.get_placeholder_as_batch_major()
+    complexSpectrogram = tf.transpose(tf.reshape(complexSpectrogramWithConcatChannels, (tf.shape(complexSpectrogramWithConcatChannels)[0], tf.shape(complexSpectrogramWithConcatChannels)[1], nr_of_channels, tf.shape(complexSpectrogramWithConcatChannels)[2] // nr_of_channels)), [0, 1, 3, 2])
+#    noiseMasks = tf.transpose(self.sources[1].output.placeholder, [self.sources[1].output.batch_dim_axis, self.sources[1].output.time_dim_axis, self.sources[1].output.feature_dim_axis])
+    noiseMasks = self.sources[1].output.get_placeholder_as_batch_major()
+    noiseMasks = tf.transpose(tf.reshape(noiseMasks, (tf.shape(noiseMasks)[0], tf.shape(noiseMasks)[1], nr_of_channels, tf.shape(noiseMasks)[2] // nr_of_channels)), [0, 1, 3, 2])
+
+    mvdrBf = TfMaskBasedMvdrBeamformer(flag_inputHasBatch=1, tfFreqDomInput=complexSpectrogram, tfNoiseMask=noiseMasks, tfDiagLoadingCoeff=tf.constant(diag_loading_coeff, dtype=tf.float32), qrAlgorithmSteps=qralgorithm_steps)
+    bfOut = mvdrBf.getFrequencyDomainOutputSignal()
+    self.output.placeholder = bfOut
+
+  @classmethod
+  def get_out_data_from_opts(cls, out_type={}, n_out=None, **kwargs):
+    out_type.setdefault("dim", n_out)
+    out_type["batch_dim_axis"] = 0
+    out_type["time_dim_axis"] = 1
+    return super(MaskBasedMvdrBeamformingWithDiagLoadingLayer, cls).get_out_data_from_opts(out_type=out_type, **kwargs)
+
+
 class MelFilterbankLayer(_ConcatInputLayer):
   """
   This layer applies the log Mel filterbank to the input
@@ -231,129 +312,6 @@ class MelFilterbankLayer(_ConcatInputLayer):
     return super(MelFilterbankLayer, cls).get_out_data_from_opts(name=name, sources=sources, out_type={"dim": n_out, "batch_dim_axis": 0, "time_dim_axis": 1}, **kwargs)
 
 
-class MaskBasedGevBeamformingLayer(LayerBase):
-  """
-  This layer applies GEV beamforming to a multichannel signal. The different
-  channels are assumed to be concatenated to the
-  input feature vector. The first source to the layer must contain the complex
-  spectrograms of the single channels and the
-  second source must contain the noise and speech masks
-  """
-
-  layer_class = "mask_based_gevbeamforming"
-
-  def __init__(self, nr_of_channels=1, postfilter_id=0, qralgorithm_steps=None, **kwargs):
-    """
-    :param int nr_of_channels: number of input channels to beamforming (needed to split the feature vector)
-    :param int postfilter_id: Id which is specifying which post filter to apply in gev beamforming.
-                              For more information see
-                              tfSi6Proc.audioProcessing.enhancement.beamforming.TfMaskBasedGevBeamformer
-    """
-    super(MaskBasedGevBeamformingLayer, self).__init__(**kwargs)
-    assert len(self.sources) == 2
-
-    from tfSi6Proc.audioProcessing.enhancement.beamforming import TfMaskBasedGevBeamformer
-
-    complexSpectrogram = self.sources[0].output.get_placeholder_as_batch_major()
-    complexSpectrogram = tf.transpose(tf.reshape(complexSpectrogram, (tf.shape(complexSpectrogram)[0], tf.shape(complexSpectrogram)[1], nr_of_channels, tf.shape(complexSpectrogram)[2] // nr_of_channels)), [0, 1, 3, 2])
-    masks = tf.transpose(self.sources[1].output.placeholder, [self.sources[1].output.batch_dim_axis, self.sources[1].output.time_dim_axis, self.sources[1].output.feature_dim_axis])
-    masks = tf.transpose(tf.reshape(masks, (tf.shape(masks)[0], tf.shape(masks)[1], nr_of_channels, tf.shape(masks)[2] / nr_of_channels)), [0, 1, 3, 2])
-    noiseMasks = masks[:, :, :(tf.shape(masks)[2] // 2), :]
-    speechMasks = masks[:, :, (tf.shape(masks)[2] // 2):, :]
-
-    gevBf = TfMaskBasedGevBeamformer(flag_inputHasBatch=1, tfFreqDomInput=complexSpectrogram, tfNoiseMask=noiseMasks, tfSpeechMask=speechMasks, postFilterId=postfilter_id, qrAlgorithmSteps=qralgorithm_steps)
-    bfOut = gevBf.getFrequencyDomainOutputSignal()
-    self.output.placeholder = bfOut
-
-  @classmethod
-  def get_out_data_from_opts(cls, out_type={}, n_out=None, **kwargs):
-    out_type.setdefault("dim", n_out)
-    out_type["batch_dim_axis"] = 0
-    out_type["time_dim_axis"] = 1
-    return super(MaskBasedGevBeamformingLayer, cls).get_out_data_from_opts(out_type=out_type, **kwargs)
-
-
-class MaskBasedMvdrBeamformingWithDiagLoadingLayer(LayerBase):
-  """
-  This layer applies GEV beamforming to a multichannel signal. The different
-  channels are assumed to be concatenated to the
-  input feature vector. The first source to the layer must contain the complex
-  spectrograms of the single channels and the
-  second source must contain the noise and speech masks
-  """
-
-  layer_class = "mask_based_mvdrbeamforming"
-
-  def __init__(self, nr_of_channels=1, diag_loading_coeff=0, qralgorithm_steps=None, **kwargs):
-    """
-    :param int nr_of_channels: number of input channels to beamforming (needed to split the feature vector)
-    :param int diag_loading_coeff: weighting coefficient for diagonal loading.
-    """
-    super(MaskBasedMvdrBeamformingWithDiagLoadingLayer, self).__init__(**kwargs)
-    assert len(self.sources) == 2
-
-    from tfSi6Proc.audioProcessing.enhancement.beamforming import TfMaskBasedMvdrBeamformer
-
-    complexSpectrogramWithConcatChannels = self.sources[0].output.get_placeholder_as_batch_major()
-    complexSpectrogram = tf.transpose(tf.reshape(complexSpectrogramWithConcatChannels, (tf.shape(complexSpectrogramWithConcatChannels)[0], tf.shape(complexSpectrogramWithConcatChannels)[1], nr_of_channels, tf.shape(complexSpectrogramWithConcatChannels)[2] // nr_of_channels)), [0, 1, 3, 2])
-#    noiseMasks = tf.transpose(self.sources[1].output.placeholder, [self.sources[1].output.batch_dim_axis, self.sources[1].output.time_dim_axis, self.sources[1].output.feature_dim_axis])
-    noiseMasks = self.sources[1].output.get_placeholder_as_batch_major()
-    noiseMasks = tf.transpose(tf.reshape(noiseMasks, (tf.shape(noiseMasks)[0], tf.shape(noiseMasks)[1], nr_of_channels, tf.shape(noiseMasks)[2] // nr_of_channels)), [0, 1, 3, 2])
-
-    mvdrBf = TfMaskBasedMvdrBeamformer(flag_inputHasBatch=1, tfFreqDomInput=complexSpectrogram, tfNoiseMask=noiseMasks, tfDiagLoadingCoeff=tf.constant(diag_loading_coeff, dtype=tf.float32), qrAlgorithmSteps=qralgorithm_steps)
-    bfOut = mvdrBf.getFrequencyDomainOutputSignal()
-    self.output.placeholder = bfOut
-
-  @classmethod
-  def get_out_data_from_opts(cls, out_type={}, n_out=None, **kwargs):
-    out_type.setdefault("dim", n_out)
-    out_type["batch_dim_axis"] = 0
-    out_type["time_dim_axis"] = 1
-    return super(MaskBasedMvdrBeamformingWithDiagLoadingLayer, cls).get_out_data_from_opts(out_type=out_type, **kwargs)
-
-
-class SplitConcatMultiChannel(_ConcatInputLayer):
-  """
-  This layer assumes the feature vector to be a concatenation of features of
-  multiple channels (of the same size). It splits the feature dimension into
-  equisized number of channel features and stacks them in the batch dimension.
-  Thus the batch size is multiplied with the number of channels and the feature
-  size is divided by the number of channels.
-  The channels of one singal will have consecutive batch indices, meaning the
-  signal of the original batch index n is split
-  and can now be found in batch indices (n * nr_of_channels) to
-  ((n+1) * nr_of_channels - 1)
-  """
-
-  layer_class = "split_concatenated_multichannel"
-
-  def __init__(self, nr_of_channels=1, **kwargs):
-    """
-    :param int nr_of_channels: the number of concatenated channels in the feature dimension
-    """
-    super(SplitConcatMultiChannel, self).__init__(**kwargs)
-
-    input_placeholder = self.input_data.get_placeholder_as_batch_major()
-
-    output = tf.reshape(input_placeholder, [tf.shape(input_placeholder)[0], tf.shape(input_placeholder)[1], nr_of_channels, tf.shape(input_placeholder)[2] / nr_of_channels])
-    self.output.placeholder = tf.transpose(tf.reshape(tf.transpose(output, [1, 3, 0, 2]), (tf.shape(output)[1], tf.shape(output)[3], tf.shape(output)[0] * tf.shape(output)[2])), [2, 0, 1])
-    # work around to obtain result like numpy.repeat(size_placeholder, nr_of_channels)
-    self.output.size_placeholder = {self.output.time_dim_axis_excluding_batch: tf.reshape(tf.tile(tf.reshape(self.input_data.size_placeholder[self.input_data.time_dim_axis_excluding_batch], [-1, 1]), [1, nr_of_channels]), [-1])}
-
-  @classmethod
-  def get_out_data_from_opts(cls, name, sources, nr_of_channels, n_out=None, **kwargs):
-    input_data = get_concat_sources_data_template(sources)
-    assert not input_data.sparse
-    return Data(
-      name="%s_output" % name,
-      shape=[input_data.get_placeholder_as_batch_major().shape[1].value, input_data.get_placeholder_as_batch_major().shape[2].value // nr_of_channels],
-      dtype=input_data.dtype,
-      size_placeholder={0: tf.reshape(tf.tile(tf.reshape(input_data.size_placeholder[input_data.time_dim_axis_excluding_batch], [-1, 1]), [1, nr_of_channels]), [-1])},
-      sparse=False,
-      batch_dim_axis=0,
-      time_dim_axis=1)
-
-
 class MultiChannelStftLayer(_ConcatInputLayer):
   """
   The layer applys a STFT to every channel separately and concatenates the frequency domain vectors for every frame
@@ -448,6 +406,30 @@ class MultiChannelStftLayer(_ConcatInputLayer):
       kwargs['n_out'] = n_out
     return super(MultiChannelStftLayer, cls).get_out_data_from_opts(**kwargs)
 
+class NoiseEstimationByFirstTFramesLayer(_ConcatInputLayer):
+  """
+  """
+  layer_class = "first_t_frames_noise_estimator"
+  recurrent = True
+
+  def __init__(self, nr_of_frames, **kwargs):
+    """
+    :param int nr_of_frames: first nr_of_frames frames are used for averaging
+                             all frames are used if nr_of_frames is -1
+    """
+    super(NoiseEstimationByFirstTFramesLayer, self).__init__(**kwargs)
+    self._nr_of_frames = nr_of_frames
+    noise_vector = self._get_noise_vector()
+    self.output.placeholder = tf.tile(noise_vector, (1, tf.shape(self.input_data.get_placeholder_as_batch_major())[1], 1)) 
+
+  def _get_noise_vector(self):
+    input_placeholder = self.input_data.get_placeholder_as_batch_major()
+    if self._nr_of_frames != -1:
+      noise_vector = tf.reduce_mean(input_placeholder[:, :self._nr_of_frames, :], axis=1, keep_dims=True)
+    else:
+      noise_vector = tf.reduce_mean(input_placeholder, axis=1, keep_dims=True)
+    return noise_vector
+
 
 class ParametricWienerFilterLayer(LayerBase):
   """
@@ -534,6 +516,48 @@ class ParametricWienerFilterLayer(LayerBase):
     if d["parameters"] is not None:
       d["parameters"] = get_layer(d["parameters"])
     d["noise_estimation"] = get_layer(d["noise_estimation"])
+
+
+class SplitConcatMultiChannel(_ConcatInputLayer):
+  """
+  This layer assumes the feature vector to be a concatenation of features of
+  multiple channels (of the same size). It splits the feature dimension into
+  equisized number of channel features and stacks them in the batch dimension.
+  Thus the batch size is multiplied with the number of channels and the feature
+  size is divided by the number of channels.
+  The channels of one singal will have consecutive batch indices, meaning the
+  signal of the original batch index n is split
+  and can now be found in batch indices (n * nr_of_channels) to
+  ((n+1) * nr_of_channels - 1)
+  """
+
+  layer_class = "split_concatenated_multichannel"
+
+  def __init__(self, nr_of_channels=1, **kwargs):
+    """
+    :param int nr_of_channels: the number of concatenated channels in the feature dimension
+    """
+    super(SplitConcatMultiChannel, self).__init__(**kwargs)
+
+    input_placeholder = self.input_data.get_placeholder_as_batch_major()
+
+    output = tf.reshape(input_placeholder, [tf.shape(input_placeholder)[0], tf.shape(input_placeholder)[1], nr_of_channels, tf.shape(input_placeholder)[2] / nr_of_channels])
+    self.output.placeholder = tf.transpose(tf.reshape(tf.transpose(output, [1, 3, 0, 2]), (tf.shape(output)[1], tf.shape(output)[3], tf.shape(output)[0] * tf.shape(output)[2])), [2, 0, 1])
+    # work around to obtain result like numpy.repeat(size_placeholder, nr_of_channels)
+    self.output.size_placeholder = {self.output.time_dim_axis_excluding_batch: tf.reshape(tf.tile(tf.reshape(self.input_data.size_placeholder[self.input_data.time_dim_axis_excluding_batch], [-1, 1]), [1, nr_of_channels]), [-1])}
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, nr_of_channels, n_out=None, **kwargs):
+    input_data = get_concat_sources_data_template(sources)
+    assert not input_data.sparse
+    return Data(
+      name="%s_output" % name,
+      shape=[input_data.get_placeholder_as_batch_major().shape[1].value, input_data.get_placeholder_as_batch_major().shape[2].value // nr_of_channels],
+      dtype=input_data.dtype,
+      size_placeholder={0: tf.reshape(tf.tile(tf.reshape(input_data.size_placeholder[input_data.time_dim_axis_excluding_batch], [-1, 1]), [1, nr_of_channels]), [-1])},
+      sparse=False,
+      batch_dim_axis=0,
+      time_dim_axis=1)
 
 
 class TileFeaturesLayer(_ConcatInputLayer):
