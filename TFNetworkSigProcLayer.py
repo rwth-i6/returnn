@@ -406,6 +406,7 @@ class MultiChannelStftLayer(_ConcatInputLayer):
       kwargs['n_out'] = n_out
     return super(MultiChannelStftLayer, cls).get_out_data_from_opts(**kwargs)
 
+
 class NoiseEstimationByFirstTFramesLayer(_ConcatInputLayer):
   """
   """
@@ -420,7 +421,7 @@ class NoiseEstimationByFirstTFramesLayer(_ConcatInputLayer):
     super(NoiseEstimationByFirstTFramesLayer, self).__init__(**kwargs)
     self._nr_of_frames = nr_of_frames
     noise_vector = self._get_noise_vector()
-    self.output.placeholder = tf.tile(noise_vector, (1, tf.shape(self.input_data.get_placeholder_as_batch_major())[1], 1)) 
+    self.output.placeholder = tf.tile(noise_vector, (1, tf.shape(self.input_data.get_placeholder_as_batch_major())[1], 1))
 
   def _get_noise_vector(self):
     input_placeholder = self.input_data.get_placeholder_as_batch_major()
@@ -438,9 +439,9 @@ class ParametricWienerFilterLayer(LayerBase):
 
   def __init__(self, l_overwrite=None, p_overwrite=None, q_overwrite=None, filter_input=None, parameters=None, noise_estimation=None, **kwargs):
     """
-    :param float|None l_overwrite: if given overwrites the l value of the parametric wiener filter with the given constant 
-    :param float|None p_overwrite: if given overwrites the p value of the parametric wiener filter with the given constant 
-    :param float|None q_overwrite: if given overwrites the q value of the parametric wiener filter with the given constant 
+    :param float|None l_overwrite: if given overwrites the l value of the parametric wiener filter with the given constant
+    :param float|None p_overwrite: if given overwrites the p value of the parametric wiener filter with the given constant
+    :param float|None q_overwrite: if given overwrites the q value of the parametric wiener filter with the given constant
     :param str|None filter_input: name of layer containing input for wiener filter
     :param str|None parameters: name of layer containing parameters for wiener filter
     :param str|None noise_estimation: name of layer containing noise estimate for wiener filter
@@ -500,7 +501,7 @@ class ParametricWienerFilterLayer(LayerBase):
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
     if "from" in d and len(d["from"]) > 0:
-      #This if block is kept for backwards compatibility only and should not be used
+      # This if block is kept for backwards compatibility only and should not be used
       assert ("filter_input" not in d) and ("parameters" not in d) and ("noise_estimation" not in d)
       if len(d["from"]) == 2:
         d["filter_input"] = d["from"][0]
