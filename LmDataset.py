@@ -877,7 +877,7 @@ class TranslationDataset(CachedDataset2):
       target.vocab.pkl
   """
 
-  MapToDataKeys = {"target": "classes"}  # just by our convention
+  MapToDataKeys = {"source": "data", "target": "classes"}  # just by our convention
   _main_data_key = None
   _main_classes_key = None
 
@@ -909,8 +909,6 @@ class TranslationDataset(CachedDataset2):
       self._main_data_key = "data"
     if self._main_classes_key is None:
       self._main_classes_key = "classes"
-    if "source" not in self.MapToDataKeys.keys():
-      self.MapToDataKeys["source"] = "data"
     self._add_postfix = {self._main_data_key: source_postfix, self._main_classes_key: target_postfix}
     self._keys_to_read = [self._main_data_key, self._main_classes_key]
     self._use_cache_manager = use_cache_manager
@@ -1175,6 +1173,8 @@ class ConfusionNetworkDataset(TranslationDataset):
   can e.g. be used to repeat the confusion net part of the training data without loading it several times.
   """
 
+  MapToDataKeys = {"source": "sparse_inputs", "target": "classes"}
+
   def __init__(self, max_density=20, **kwargs):
     """
     :param str path: the directory containing the files
@@ -1187,7 +1187,6 @@ class ConfusionNetworkDataset(TranslationDataset):
     :param str|None unknown_label: "UNK" or so. if not given, then will not replace unknowns but throw an error
     :param int|12 max_density: the density of the confusion network: max number of arcs per slot
     """
-    self.MapToDataKeys["source"] = "sparse_inputs"
     self._main_data_key = "sparse_inputs"
     self._keys_to_read = ["sparse_inputs", "classes"]
     self.density = max_density
@@ -1209,7 +1208,7 @@ class ConfusionNetworkDataset(TranslationDataset):
     return "int32"  # sparse -> label idx
 
   def get_data_shape(self, key):
-    if key != "classes":
+    if key in ["sparse_inputs", "sparse_weights"]:
       return [self.density]
     return []
 

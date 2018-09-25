@@ -165,6 +165,10 @@ class MetaDataset(CachedDataset2):
   def get_target_list(self):
     return self.target_list
 
+  def get_data_shape(self, data_key):
+    dataset_key, dataset_data_key = self.data_map[data_key]
+    return self.datasets[dataset_key].get_data_shape(dataset_data_key)
+
   def get_data_dtype(self, key):
     dtype = self.data_dtypes[key]
     if self.added_data:
