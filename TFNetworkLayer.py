@@ -4161,6 +4161,10 @@ class SwitchLayer(LayerBase):
     """
     super(SwitchLayer, self).__init__(**kwargs)
 
+    self.condition = condition
+    self.true_from = true_from
+    self.false_from = false_from
+
     assert condition.output.dtype == "bool"
     assert true_from.output.shape == false_from.output.shape
 
@@ -4182,8 +4186,11 @@ class SwitchLayer(LayerBase):
     d["false_from"] = get_layer(d["false_from"])
 
   @classmethod
-  def get_out_data_from_opts(cls, true_from, **kwargs):
-      return true_from.output.copy(name="%s_output" % kwargs["name"])
+  def get_out_data_from_opts(cls, true_from, name, **kwargs):
+      return true_from.output.copy(name="%s_output" % name)
+
+  def get_dep_layers(self):
+    return [self.condition, self.true_from, self.false_from]
 
 
 class SubnetworkLayer(LayerBase):
