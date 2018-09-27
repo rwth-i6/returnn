@@ -552,13 +552,12 @@ class SplitConcatMultiChannel(_ConcatInputLayer):
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources, nr_of_channels, n_out=None, **kwargs):
-    input_data = get_concat_sources_data_template(sources)
+    input_data = get_concat_sources_data_template(sources).copy_as_batch_major()
     assert not input_data.sparse
     return Data(
       name="%s_output" % name,
-      shape=[input_data.get_placeholder_as_batch_major().shape[1].value, input_data.get_placeholder_as_batch_major().shape[2].value // nr_of_channels],
+      shape=[input_data.batch_shape[1], input_data.batch_shape[2] // nr_of_channels],
       dtype=input_data.dtype,
-      size_placeholder={0: tf.reshape(tf.tile(tf.reshape(input_data.size_placeholder[input_data.time_dim_axis_excluding_batch], [-1, 1]), [1, nr_of_channels]), [-1])},
       sparse=False,
       batch_dim_axis=0,
       time_dim_axis=1)
