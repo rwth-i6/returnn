@@ -1792,12 +1792,16 @@ class Engine(object):
       else:
         print("Dataset have_corpus_seq_idx == False, i.e. it will not be sorted for optimal performance.", file=log.v3)
         dataset.seq_ordering = "default"  # enforce order as-is, so that the order in the written file corresponds
+
+    max_seq_length=self.config.typed_value('max_seq_length', None) or self.config.float('max_seq_length', 0)
+    assert not max_seq_length, "Set max_seq_length = 0 for search (i.e. no maximal length). We want to keep all source sentences."
+
     dataset.init_seq_order(epoch=self.epoch)
     batches = dataset.generate_batches(
       recurrent_net=self.network.recurrent,
       batch_size=self.config.int('batch_size', 1),
       max_seqs=self.config.int('max_seqs', -1),
-      max_seq_length=self.config.typed_value('max_seq_length', None) or self.config.float('max_seq_length', 0),
+      max_seq_length=max_seq_length,
       used_data_keys=self.network.used_data_keys)
 
     output_layer = self.network.layers[output_layer_name]
