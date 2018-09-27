@@ -130,12 +130,14 @@ class MaskBasedGevBeamformingLayer(LayerBase):
 
   layer_class = "mask_based_gevbeamforming"
 
-  def __init__(self, nr_of_channels=1, postfilter_id=0, qralgorithm_steps=None, **kwargs):
+  def __init__(self, nr_of_channels=1, postfilter_id=0, qralgorithm_steps=None, output_nan_filter=False, **kwargs):
     """
     :param int nr_of_channels: number of input channels to beamforming (needed to split the feature vector)
     :param int postfilter_id: Id which is specifying which post filter to apply in gev beamforming.
                               For more information see
                               tfSi6Proc.audioProcessing.enhancement.beamforming.TfMaskBasedGevBeamformer
+    :param int|None: nr of steps of the qr algorithm to compute eigen vector for beamforming
+    :param bool output_nan_filter: if set to true nan values in the beamforming output are replaced by zero
     """
     super(MaskBasedGevBeamformingLayer, self).__init__(**kwargs)
     assert len(self.sources) == 2
@@ -149,7 +151,7 @@ class MaskBasedGevBeamformingLayer(LayerBase):
     noiseMasks = masks[:, :, :(tf.shape(masks)[2] // 2), :]
     speechMasks = masks[:, :, (tf.shape(masks)[2] // 2):, :]
 
-    gevBf = TfMaskBasedGevBeamformer(flag_inputHasBatch=1, tfFreqDomInput=complexSpectrogram, tfNoiseMask=noiseMasks, tfSpeechMask=speechMasks, postFilterId=postfilter_id, qrAlgorithmSteps=qralgorithm_steps)
+    gevBf = TfMaskBasedGevBeamformer(flag_inputHasBatch=1, tfFreqDomInput=complexSpectrogram, tfNoiseMask=noiseMasks, tfSpeechMask=speechMasks, postFilterId=postfilter_id, qrAlgorithmSteps=qralgorithm_steps, outputNanFilter=output_nan_filter)
     bfOut = gevBf.getFrequencyDomainOutputSignal()
     self.output.placeholder = bfOut
 
@@ -172,10 +174,12 @@ class MaskBasedMvdrBeamformingWithDiagLoadingLayer(LayerBase):
 
   layer_class = "mask_based_mvdrbeamforming"
 
-  def __init__(self, nr_of_channels=1, diag_loading_coeff=0, qralgorithm_steps=None, **kwargs):
+  def __init__(self, nr_of_channels=1, diag_loading_coeff=0, qralgorithm_steps=None, output_nan_filter=False, **kwargs):
     """
     :param int nr_of_channels: number of input channels to beamforming (needed to split the feature vector)
     :param int diag_loading_coeff: weighting coefficient for diagonal loading.
+    :param int|None: nr of steps of the qr algorithm to compute eigen vector for beamforming
+    :param bool output_nan_filter: if set to true nan values in the beamforming output are replaced by zero
     """
     super(MaskBasedMvdrBeamformingWithDiagLoadingLayer, self).__init__(**kwargs)
     assert len(self.sources) == 2
@@ -184,11 +188,10 @@ class MaskBasedMvdrBeamformingWithDiagLoadingLayer(LayerBase):
 
     complexSpectrogramWithConcatChannels = self.sources[0].output.get_placeholder_as_batch_major()
     complexSpectrogram = tf.transpose(tf.reshape(complexSpectrogramWithConcatChannels, (tf.shape(complexSpectrogramWithConcatChannels)[0], tf.shape(complexSpectrogramWithConcatChannels)[1], nr_of_channels, tf.shape(complexSpectrogramWithConcatChannels)[2] // nr_of_channels)), [0, 1, 3, 2])
-#    noiseMasks = tf.transpose(self.sources[1].output.placeholder, [self.sources[1].output.batch_dim_axis, self.sources[1].output.time_dim_axis, self.sources[1].output.feature_dim_axis])
     noiseMasks = self.sources[1].output.get_placeholder_as_batch_major()
     noiseMasks = tf.transpose(tf.reshape(noiseMasks, (tf.shape(noiseMasks)[0], tf.shape(noiseMasks)[1], nr_of_channels, tf.shape(noiseMasks)[2] // nr_of_channels)), [0, 1, 3, 2])
 
-    mvdrBf = TfMaskBasedMvdrBeamformer(flag_inputHasBatch=1, tfFreqDomInput=complexSpectrogram, tfNoiseMask=noiseMasks, tfDiagLoadingCoeff=tf.constant(diag_loading_coeff, dtype=tf.float32), qrAlgorithmSteps=qralgorithm_steps)
+    mvdrBf = TfMaskBasedMvdrBeamformer(flag_inputHasBatch=1, tfFreqDomInput=complexSpectrogram, tfNoiseMask=noiseMasks, tfDiagLoadingCoeff=tf.constant(diag_loading_coeff, dtype=tf.float32), qrAlgorithmSteps=qralgorithm_steps, outputNanFilter=output_nan_filter)
     bfOut = mvdrBf.getFrequencyDomainOutputSignal()
     self.output.placeholder = bfOut
 
