@@ -176,6 +176,9 @@ class HDFDataset(CachedDataset):
         continue
       print("loading file %d/%d" % (i+1, len(self.files)), self.files[i], file=log.v4)
       fin = h5py.File(self.files[i], 'r')
+      inputs = fin['inputs'][...]
+      if 'targets' in fin:
+        targets = {k:fin['targets/data/' + k][...] for k in fin['targets/data']}
       for idc, ids in file_info[i]:
         s = ids - self.file_start[i]
         p = self.file_seq_start[i][s]
@@ -188,8 +191,8 @@ class HDFDataset(CachedDataset):
               else:
                 self.targets[k] = numpy.zeros((self._num_codesteps[self.target_keys.index(k)],tdim), dtype=theano.config.floatX) - 1
             ldx = self.target_keys.index(k) + 1
-            self.targets[k][self.get_seq_start(idc)[ldx]:self.get_seq_start(idc)[ldx] + l[ldx]] = fin['targets/data/' + k][p[ldx] : p[ldx] + l[ldx]]
-        self._set_alloc_intervals_data(idc, data=fin['inputs'][p[0] : p[0] + l[0]][...])
+            self.targets[k][self.get_seq_start(idc)[ldx]:self.get_seq_start(idc)[ldx] + l[ldx]] = targets[k][p[ldx] : p[ldx] + l[ldx]]
+        self._set_alloc_intervals_data(idc, data=inputs[p[0] : p[0] + l[0]])
       fin.close()
     gc.collect()
     assert self.is_cached(start, end)
