@@ -166,6 +166,7 @@ class HDFDataset(CachedDataset):
     assert end <= self.num_seqs
     selection = self.insert_alloc_interval(start, end)
     assert len(selection) <= end - start, "DEBUG: more sequences requested (" + str(len(selection)) + ") as required (" + str(end-start) + ")"
+    self.preload_set |= set(range(start,end)) - set(selection)
     file_info = [ [] for l in range(len(self.files)) ]; """ :type: list[list[int]] """
     # file_info[i] is (sorted seq idx from selection, real seq idx)
     for idc in selection:
@@ -193,6 +194,7 @@ class HDFDataset(CachedDataset):
             ldx = self.target_keys.index(k) + 1
             self.targets[k][self.get_seq_start(idc)[ldx]:self.get_seq_start(idc)[ldx] + l[ldx]] = targets[k][p[ldx] : p[ldx] + l[ldx]]
         self._set_alloc_intervals_data(idc, data=inputs[p[0] : p[0] + l[0]])
+        self.preload_set.add(idc)
       fin.close()
     gc.collect()
     assert self.is_cached(start, end)

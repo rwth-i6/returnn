@@ -1,8 +1,10 @@
 
 from __future__ import print_function
 import gc
+import time
 import numpy
 import functools
+import threading
 from Dataset import Dataset
 from Log import log
 from Util import NumbersDict
@@ -19,10 +21,13 @@ class CachedDataset(Dataset):
     if cache_byte_size < 0:
       self.cache_byte_size_limit_at_start = 1
     else:
-      self.cache_byte_size_limit_at_start = cache_byte_size * 2 // 3
-      self.cache_byte_size_total_limit = max(cache_byte_size // 3, 1)
+     self.cache_byte_size_limit_at_start = max(int(cache_byte_size * 2 / 3),1)
+     self.cache_byte_size_total_limit = max(cache_byte_size - self.cache_byte_size_limit_at_start, 1)
     self.num_seqs_cached_at_start = 0
     self.cached_bytes_at_start = 0
+    self.start_cache_initialized = False
+    self.preload_set = set([])
+    self.preload_end = 0
     self.max_ctc_length = 0
     self.ctc_targets = None
     self.alloc_intervals = None
@@ -39,8 +44,7 @@ class CachedDataset(Dataset):
     super(CachedDataset, self).initialize()
 
     # Calculate cache sizes.
-    temp_cache_size_bytes = \
-      max(0, self.cache_byte_size_total_limit) - self.cached_bytes_at_start
+    temp_cache_size_bytes = max(0, self.cache_byte_size_total_limit)
     self.definite_cache_leftover = temp_cache_size_bytes if self.num_seqs_cached_at_start == self.num_seqs else 0
     self.cache_num_frames_free = temp_cache_size_bytes // self.nbytes
 
@@ -67,19 +71,20 @@ class CachedDataset(Dataset):
     old_index_map = self._index_map[:]
     self._index_map = range(len(seq_index))  # sorted seq idx -> seq_index idx
 
-    if self._seq_index == seq_index and self.num_seqs_cached_at_start == len(seq_index):
+    if self._seq_index == seq_index and self.start_cache_initialized:
       return False
 
     if epoch is not None:
       # Give some hint to the user in case he is wondering why the cache is reloading.
       print("Reinitialize dataset seq order for epoch %i." % epoch, file=log.v4)
 
-    if self.num_seqs_cached_at_start != len(seq_index):
+    if self.num_seqs_cached_at_start != len(seq_index) or not self.start_cache_initialized:
       self._seq_index = seq_index
       self._seq_index_inv = dict(zip(seq_index, range(len(seq_index))))  # hdf seq idx -> seq_index idx
       self._init_seq_starts()
       self._init_alloc_intervals()
       self._init_start_cache()
+      self.start_cache_initialized = True
     else:
       self._index_map = [self._seq_index_inv[i] for i in seq_index]  # sorted seq idx -> seq_index idx
       if self._index_map == old_index_map:
@@ -133,7 +138,8 @@ class CachedDataset(Dataset):
     self.num_seqs_cached_at_start = num_cached
     self.cached_bytes_at_start = cached_bytes
     if num_cached > 0:
-      self.load_seqs(0, num_cached, with_cache=False)
+      self.preload_end = num_cached
+      threading.Thread(target=self._preload_seqs,args=(0,num_cached)).start()
 
   def load_seqs(self, start, end, with_cache=True):
     """
@@ -151,6 +157,11 @@ class CachedDataset(Dataset):
     assert start >= 0
     assert start <= end
     if self.is_cached(start, end): return
+    if with_cache and end <= self.preload_end:
+      required = set(range(start,end))
+      while not required <= self.preload_set:
+        time.sleep(0.1)
+      return
 
     if self.cache_byte_size_total_limit > 0 and with_cache:  # If the cache is enabled.
       self._load_seqs_with_cache(start, end)
@@ -173,26 +184,25 @@ class CachedDataset(Dataset):
     else:
       # First, delete everything.
       self.cache_num_frames_free += self.delete(None)
+      assert self.is_cached(0,self.num_seqs_cached_at_start)
       gc.collect()
-      # Load as much as we can so that we fill up the cache.
+      required = set(range(start,end))
+      # Preload as much as we can so that we fill up the cache.
       while end < self.num_seqs:
         num_needed_cache_frames = self.get_seq_length_2d(end)[0]
         if self.cache_num_frames_free - num_needed_cache_frames < 0:
           break
         self.cache_num_frames_free -= num_needed_cache_frames
         end += 1
-      self.load_seqs(start, end, with_cache=False)
-      if end == self.num_seqs:
-        # Preload from the start for the next epoch.
-        end = 0
-        while end < self.num_seqs_cached_at_start:
-          num_needed_cache_frames = self.get_seq_length_2d(end)[0]
-          if self.cache_num_frames_free - num_needed_cache_frames < 0:
-            break
-          self.cache_num_frames_free -= num_needed_cache_frames
-          end += 1
-        if end != 0:
-          self.load_seqs(0, end, with_cache=False)
+      self.preload_end = end
+      threading.Thread(target=self._preload_seqs,args=(start,end)).start()
+      while not required <= self.preload_set:
+        time.sleep(0.1)
+
+  def _preload_seqs(self,start,end):
+    print("Preloading cache from", start, "to", end, file=log.v4)
+    super(CachedDataset, self).load_seqs(start, end)
+    self.preload_end = 0
 
   def _shuffle_frames_in_seqs(self, start, end):
     """
@@ -271,17 +281,18 @@ class CachedDataset(Dataset):
     xc = self.alloc_intervals[pos][2]
     xn = self.alloc_intervals[pos + 1][2]
     if value[0] == ci and value[1] == ni:
+      nj = self.alloc_intervals[pos][0]
+      nk = self.alloc_intervals[pos + 1][1]
+      del self.alloc_intervals[pos]
+      del self.alloc_intervals[pos]
       self.alloc_intervals.insert(pos,
-        (self.alloc_intervals[pos][0],
-         self.alloc_intervals[pos + 1][1],
+        (nj,nk,
          numpy.concatenate(
            [xc,
             numpy.zeros(
               [self._seq_start[ni][0]] + self.get_data_shape("data"),
               dtype=self.get_data_dtype("data")),
             xn])))
-      del self.alloc_intervals[pos + 1]
-      del self.alloc_intervals[pos + 1]
       return 0
     elif value[0] == ci:
       self.alloc_intervals.insert(pos, (self.alloc_intervals[pos][0],
@@ -388,10 +399,11 @@ class CachedDataset(Dataset):
     while (not nframes or deleted < nframes) and i < len(self.alloc_intervals):
       ai = self.alloc_intervals[i]
       if ai[1] > self.num_seqs_cached_at_start and ai[0] < ai[1]:
-        s = ai[0]
-        deleted += sum([self._seq_lengths[self._seq_index[i]][0]
-                        for i in self.remove_alloc_interval(s, ai[1])])
-      i += 1
+        removed = self.remove_alloc_interval(max(ai[0],self.num_seqs_cached_at_start), ai[1])
+        self.preload_set -= set(removed)
+        deleted += sum([self._seq_lengths[self._seq_index[i]][0] for i in removed])
+      else:
+        i += 1
     return deleted
 
   @property
