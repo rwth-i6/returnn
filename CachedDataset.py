@@ -157,16 +157,18 @@ class CachedDataset(Dataset):
     """
     assert start >= 0
     assert start <= end
-    if self.is_cached(start, end): return
+
+    if self.preload_end == self.num_seqs_cached_at_start and self.is_cached(start, end): return
+
     if with_cache and end <= self.preload_end:
       required = set(range(start,end))
       while not required <= self.preload_set:
-        time.sleep(0.1)
+        time.sleep(0.2)
       return
 
     if self.cache_byte_size_total_limit > 0 and with_cache:  # If the cache is enabled.
       self._load_seqs_with_cache(start, end)
-      return
+      return self.load_seqs(start, end)
 
     super(CachedDataset, self).load_seqs(start, end)
 
@@ -181,13 +183,12 @@ class CachedDataset(Dataset):
         self.cache_num_frames_free += self.delete(num_needed_cache_frames - self.cache_num_frames_free)
         gc.collect()
       self.cache_num_frames_free -= num_needed_cache_frames
-      self.load_seqs(start, end, with_cache=False)
+      threading.Thread(target=self._preload_seqs,args=(start,end)).start()
     else:
       # First, delete everything.
       self.cache_num_frames_free += self.delete(None)
       assert self.is_cached(0,self.num_seqs_cached_at_start)
       gc.collect()
-      required = set(range(start,end))
       # Preload as much as we can so that we fill up the cache.
       while end < self.num_seqs:
         num_needed_cache_frames = self.get_seq_length_2d(end)[0]
@@ -197,13 +198,11 @@ class CachedDataset(Dataset):
         end += 1
       self.preload_end = end
       threading.Thread(target=self._preload_seqs,args=(start,end)).start()
-      while not required <= self.preload_set:
-        time.sleep(0.1)
 
   def _preload_seqs(self,start,end):
     print("Preloading cache from", start, "to", end, file=log.v4)
     super(CachedDataset, self).load_seqs(start, end)
-    self.preload_end = 0
+    self.preload_end = self.num_seqs_cached_at_start
 
   def _shuffle_frames_in_seqs(self, start, end):
     """
@@ -296,16 +295,16 @@ class CachedDataset(Dataset):
             xn])))
       return 0
     elif value[0] == ci:
-      self.alloc_intervals.insert(pos, (self.alloc_intervals[pos][0],
-                                        value[1],
+      nj = self.alloc_intervals[pos][0]
+      del self.alloc_intervals[pos]
+      self.alloc_intervals.insert(pos, (nj,value[1],
                                         numpy.concatenate([xc, numpy.zeros([self._seq_start[value[1]][0] - self._seq_start[ci][0]] + self.get_data_shape("data"), dtype=self.get_data_dtype("data"))])))
-      del self.alloc_intervals[pos + 1]
       return 0
     elif value[1] == ni:
-      self.alloc_intervals.insert(pos + 1, (value[0],
-                                            self.alloc_intervals[pos + 1][1],
+      nk = self.alloc_intervals[pos + 1][1]
+      del self.alloc_intervals[pos + 1]
+      self.alloc_intervals.insert(pos + 1, (value[0], nk,
                                             numpy.concatenate([numpy.zeros([self._seq_start[ni][0] - self._seq_start[value[0]][0]] + self.get_data_shape("data"), dtype=self.get_data_dtype("data")), xc])))
-      del self.alloc_intervals[pos + 2]
       return 0
     else:
       self.alloc_intervals.insert(pos + 1,

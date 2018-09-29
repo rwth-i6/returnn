@@ -177,13 +177,14 @@ class HDFDataset(CachedDataset):
         continue
       print("loading file %d/%d" % (i+1, len(self.files)), self.files[i], file=log.v4)
       fin = h5py.File(self.files[i], 'r')
-      inputs = fin['inputs'][...]
+      inputs = fin['inputs']
       if 'targets' in fin:
-        targets = {k:fin['targets/data/' + k][...] for k in fin['targets/data']}
-      for idc, ids in file_info[i]:
-        s = ids - self.file_start[i]
+        targets = {k:fin['targets/data/' + k] for k in fin['targets/data']}
+      if self.seq_ordering == 'default':
+        length = sum([ self._seq_lengths[ids] for ids,_ in file_info[i] ])
+        seqstart = self.get_seq_start(file_info[i][0][0])
+        s = file_info[i][0][1] - self.file_start[i]
         p = self.file_seq_start[i][s]
-        l = self._seq_lengths[ids]
         if 'targets' in fin:
           for k in fin['targets/data']:
             if self.targets[k] is None:
@@ -191,10 +192,26 @@ class HDFDataset(CachedDataset):
                 self.targets[k] = numpy.zeros((self._num_codesteps[self.target_keys.index(k)],), dtype=theano.config.floatX) - 1
               else:
                 self.targets[k] = numpy.zeros((self._num_codesteps[self.target_keys.index(k)],tdim), dtype=theano.config.floatX) - 1
-            ldx = self.target_keys.index(k) + 1
-            self.targets[k][self.get_seq_start(idc)[ldx]:self.get_seq_start(idc)[ldx] + l[ldx]] = targets[k][p[ldx] : p[ldx] + l[ldx]]
-        self._set_alloc_intervals_data(idc, data=inputs[p[0] : p[0] + l[0]])
-        self.preload_set.add(idc)
+              ldx = self.target_keys.index(k) + 1
+              self.targets[k][seqstart[ldx]:seqstart[ldx] + length[ldx]] = targets[k][p[ldx] : p[ldx] + length[ldx]]
+          self._set_alloc_intervals_data(file_info[i][0][0], data=inputs[p[0] : p[0] + length[0]])
+          self.preload_set |= set([idc for idc,_ in file_info[i]])
+      else:
+        for idc, ids in file_info[i]:
+          s = ids - self.file_start[i]
+          p = self.file_seq_start[i][s]
+          l = self._seq_lengths[ids]
+          if 'targets' in fin:
+            for k in fin['targets/data']:
+              if self.targets[k] is None:
+                if self.data_dtype[k] == 'int32':
+                  self.targets[k] = numpy.zeros((self._num_codesteps[self.target_keys.index(k)],), dtype=theano.config.floatX) - 1
+                else:
+                  self.targets[k] = numpy.zeros((self._num_codesteps[self.target_keys.index(k)],tdim), dtype=theano.config.floatX) - 1
+              ldx = self.target_keys.index(k) + 1
+              self.targets[k][self.get_seq_start(idc)[ldx]:self.get_seq_start(idc)[ldx] + l[ldx]] = targets[k][p[ldx] : p[ldx] + l[ldx]]
+          self._set_alloc_intervals_data(idc, data=inputs[p[0] : p[0] + l[0]])
+          self.preload_set.add(idc)
       fin.close()
     gc.collect()
     assert self.is_cached(start, end)
