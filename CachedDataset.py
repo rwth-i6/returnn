@@ -107,6 +107,7 @@ class CachedDataset(Dataset):
     assert self.num_seqs > 0
     assert self.num_inputs > 0
     assert self.window > 0
+    self.preload_set = set([])
     self.alloc_intervals = \
       [(0, 0, numpy.zeros([1] + self.get_data_shape("data"), dtype=self.get_data_dtype("data"))),
        (self.num_seqs, self.num_seqs, numpy.zeros([1] + self.get_data_shape("data"), dtype=self.get_data_dtype("data")))]
