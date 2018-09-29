@@ -863,7 +863,7 @@ class Engine(object):
     self.eval_data = eval_data
     self.start_epoch, self.start_batch = self.get_train_start_epoch_batch(config)
     self.batch_size = config.int('batch_size', 1)
-    self.shuffle_batches = config.bool('shuffle_batches', True)
+    self.shuffle_batches = config.bool('shuffle_batches', False)
     self.update_batch_size = config.int('update_batch_size', 0)
     self.save_model_epoch_interval = config.int('save_interval', 1)
     self.save_epoch1_initial_model = config.bool('save_epoch1_initial_model', False)

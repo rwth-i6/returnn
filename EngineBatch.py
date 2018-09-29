@@ -151,7 +151,7 @@ class BatchSetGenerator:
   you call self.advance() explicitly to go forward to next batches.
   """
 
-  def __init__(self, dataset, generator, shuffle_batches=True, cache_whole_epoch=True):
+  def __init__(self, dataset, generator, shuffle_batches=False, cache_whole_epoch=True):
     """
     :type dataset: Dataset.Dataset
     :type generator: iter[Batch]
