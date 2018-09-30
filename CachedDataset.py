@@ -142,7 +142,7 @@ class CachedDataset(Dataset):
       self.preload_end = num_cached
       threading.Thread(target=self._preload_seqs,args=(0,num_cached)).start()
 
-  def load_seqs(self, start, end, with_cache=True):
+  def load_seqs(self, start, end):
     """
     Load data sequences.
     As a side effect, will modify / fill-up:
@@ -153,22 +153,15 @@ class CachedDataset(Dataset):
 
     :param int start: start sorted seq idx
     :param int end: end sorted seq idx
-    :param bool with_cache: handle cache
     """
     assert start >= 0
     assert start <= end
 
-    if self.preload_end == self.num_seqs_cached_at_start and self.is_cached(start, end): return
+    if self.is_cached(start, end, blocking=True): return
 
-    if with_cache and end <= self.preload_end:
-      required = set(range(start,end))
-      while not required <= self.preload_set:
-        time.sleep(0.2)
-      return
-
-    if self.cache_byte_size_total_limit > 0 and with_cache:  # If the cache is enabled.
+    if self.cache_byte_size_total_limit > 0:  # If the cache is enabled.
       self._load_seqs_with_cache(start, end)
-      return self.load_seqs(start, end)
+      return self.is_cached(start, end, blocking=True)
 
     super(CachedDataset, self).load_seqs(start, end)
 
@@ -187,7 +180,6 @@ class CachedDataset(Dataset):
     else:
       # First, delete everything.
       self.cache_num_frames_free += self.delete(None)
-      assert self.is_cached(0,self.num_seqs_cached_at_start)
       gc.collect()
       # Preload as much as we can so that we fill up the cache.
       while end < self.num_seqs:
@@ -269,7 +261,7 @@ class CachedDataset(Dataset):
         assert False
     return -1
 
-  def _insert_alloc_interval(self, pos, value):
+  def _insert_alloc_interval(self, pos, value, merge=False):
     """
     Insert np.zeros into self.alloc_intervals.
     :param int pos: idx in self.alloc_intervals
@@ -280,7 +272,7 @@ class CachedDataset(Dataset):
     ni = self.alloc_intervals[pos + 1][0]
     xc = self.alloc_intervals[pos][2]
     xn = self.alloc_intervals[pos + 1][2]
-    if value[0] == ci and value[1] == ni:
+    if value[0] == ci and value[1] == ni and merge:
       nj = self.alloc_intervals[pos][0]
       nk = self.alloc_intervals[pos + 1][1]
       del self.alloc_intervals[pos]
@@ -294,13 +286,13 @@ class CachedDataset(Dataset):
               dtype=self.get_data_dtype("data")),
             xn])))
       return 0
-    elif value[0] == ci:
+    elif value[0] == ci and merge:
       nj = self.alloc_intervals[pos][0]
       del self.alloc_intervals[pos]
       self.alloc_intervals.insert(pos, (nj,value[1],
                                         numpy.concatenate([xc, numpy.zeros([self._seq_start[value[1]][0] - self._seq_start[ci][0]] + self.get_data_shape("data"), dtype=self.get_data_dtype("data"))])))
       return 0
-    elif value[1] == ni:
+    elif value[1] == ni and merge:
       nk = self.alloc_intervals[pos + 1][1]
       del self.alloc_intervals[pos + 1]
       self.alloc_intervals.insert(pos + 1, (value[0], nk,
@@ -412,7 +404,7 @@ class CachedDataset(Dataset):
       return len(self._index_map)
     return self._num_seqs
 
-  def is_cached(self, start, end):
+  def is_cached(self, start, end, blocking = False):
     """
     :param int start: like in load_seqs(), sorted seq idx
     :param int end: like in load_seqs(), sorted seq idx
@@ -422,23 +414,11 @@ class CachedDataset(Dataset):
     """
     if start == end: return True  # Empty.
     assert start < end
-    s = 0
-    e = len(self.alloc_intervals)
-    # Binary search.
-    while s < e:
-      i = (s + e) // 2
-      alloc_start, alloc_end, _ = self.alloc_intervals[i]
-      if alloc_start <= start < alloc_end:
-        return alloc_start < end <= alloc_end
-      elif alloc_start <= start and start >= alloc_end:
-        if s == i: return False
-        s = i
-      elif alloc_start > start:
-        if e == i: return False
-        e = i
-      else:
-        assert False
-    return False
+    if blocking and end <= self.preload_end:
+      while not set(range(start,end)) <= self.preload_set:
+        time.sleep(0.2)
+      return True
+    return set(range(start,end)) <= self.preload_set
 
   def get_seq_length_2d(self, sorted_seq_idx):
     """

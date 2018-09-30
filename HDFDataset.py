@@ -201,7 +201,6 @@ class HDFDataset(CachedDataset):
         self.preload_set.add(idc)
       fin.close()
     gc.collect()
-    assert self.is_cached(start, end)
 
   def _get_tag_by_real_idx(self, real_idx):
     s = self._tags[real_idx]
