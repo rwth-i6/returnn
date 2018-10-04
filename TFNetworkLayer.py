@@ -2873,7 +2873,6 @@ class ConvLayer(_ConcatInputLayer):
     self.output.batch_dim_axis = self.input_data.batch_dim_axis
     self.output.time_dim_axis = self.input_data.time_dim_axis
     self.output.feature_dim_axis = self.input_data.feature_dim_axis
-
     if self.output.is_batch_feature_major:
       input_data = input_data.copy_as_batch_feature_major()
     else:
@@ -2922,9 +2921,6 @@ class ConvLayer(_ConcatInputLayer):
       self.output.size_placeholder[i] = self.calc_out_dim(
         in_dim=self.output.size_placeholder[i],
         filter_size=filter_size[i], stride=strides[i], dilation_rate=dilation_rate[i], padding=padding)
-
-    import Debug
-    Debug.debug_shell(user_ns=locals(), user_global_ns=globals(), exit_afterwards=False)
 
   @classmethod
   def calc_out_dim(cls, in_dim, filter_size, stride, padding, dilation_rate=1):
