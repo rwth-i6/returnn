@@ -2697,19 +2697,6 @@ class SwapAxesLayer(_ConcatInputLayer):
     self.output.placeholder = swapaxes(self.input_data.placeholder, axis1=axis1, axis2=axis2)
     self.output.size_placeholder = self.input_data.size_placeholder.copy()  # might be wrong, not checking that now...
 
-    #we also need to change out.time_dim_axis and out.feature_dim_axis
-    #TODO: out.batch_dim_axis also has to be checked
-
-    if self.input_data.time_dim_axis == axis1:
-      self.output.time_dim_axis = axis2
-    elif self.input_data.time_dim_axis == axis2:
-      self.output.time_dim_axis = axis1
-
-    if self.input_data.feature_dim_axis == axis1:
-      self.output.feature_dim_axis = axis2
-    elif self.input_data.feature_dim_axis == axis2:
-      self.output.feature_dim_axis = axis1
-
   @classmethod
   def get_out_data_from_opts(cls, name, sources, axis1, axis2, **kwargs):
     """
@@ -2729,15 +2716,8 @@ class SwapAxesLayer(_ConcatInputLayer):
     shape = list(out.shape)
     shape[axis1_wo_b], shape[axis2_wo_b] = shape[axis2_wo_b], shape[axis1_wo_b]
     out.shape = tuple(shape)
-
-    if out.feature_dim_axis == axis1:
-      out.feature_dim_axis = axis2
-    elif out.feature_dim_axis == axis2:
-      out.feature_dim_axis = axis1
-
     if not out.sparse:
-      out.dim = out.shape[out.feature_dim_axis - 1] #-1 because batch dim is not included
-
+      out.dim = out.shape[-1]
     return out
 
 
