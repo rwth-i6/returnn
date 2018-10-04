@@ -2696,10 +2696,8 @@ class SwapAxesLayer(_ConcatInputLayer):
     axis2 = self.input_data.get_axis_from_description(axis2)
     self.output.placeholder = swapaxes(self.input_data.placeholder, axis1=axis1, axis2=axis2)
     self.output.size_placeholder = self.input_data.size_placeholder.copy()  # might be wrong, not checking that now...
-
     #we also need to change out.time_dim_axis and out.feature_dim_axis
     #TODO: out.batch_dim_axis also has to be checked
-
     if self.input_data.time_dim_axis == axis1:
       self.output.time_dim_axis = axis2
     elif self.input_data.time_dim_axis == axis2:
@@ -2871,6 +2869,11 @@ class ConvLayer(_ConcatInputLayer):
     if input_add_feature_dim:
       # Add a feature dimension; any other static dims will be used as dynamic dims below.
       input_data = input_data.copy_add_feature_dim()
+    #setting dims explicitly
+    self.output.batch_dim_axis = self.input_data.batch_dim_axis
+    self.output.time_dim_axis = self.input_data.time_dim_axis
+    self.output.feature_dim_axis = self.input_data.feature_dim_axis
+
     if self.output.is_batch_feature_major:
       input_data = input_data.copy_as_batch_feature_major()
     else:
@@ -2920,6 +2923,9 @@ class ConvLayer(_ConcatInputLayer):
         in_dim=self.output.size_placeholder[i],
         filter_size=filter_size[i], stride=strides[i], dilation_rate=dilation_rate[i], padding=padding)
 
+    import Debug
+    Debug.debug_shell(user_ns=locals(), user_global_ns=globals(), exit_afterwards=False)
+
   @classmethod
   def calc_out_dim(cls, in_dim, filter_size, stride, padding, dilation_rate=1):
     """
@@ -2946,7 +2952,15 @@ class ConvLayer(_ConcatInputLayer):
   @classmethod
   def _get_out_type_from_opts(cls, n_out, filter_size, padding, strides=1, dilation_rate=1, sources=(),
                               input_expand_dims=0, input_add_feature_dim=False, input_split_feature_dim=None, **kwargs):
-    shape = [None] * len(filter_size) + [n_out]
+    data = get_concat_sources_data_template(sources)
+    if TFUtil.is_gpu_available() and data.is_batch_feature_major:
+      feature_dim_axis = 1
+      shape = [n_out] + [None] * len(filter_size)
+      shift = 1
+    else:
+      feature_dim_axis = -1
+      shape = [None] * len(filter_size) + [n_out]
+      shift = 0
     if isinstance(strides, int):
       strides = [strides] * len(filter_size)
     else:
@@ -2962,16 +2976,11 @@ class ConvLayer(_ConcatInputLayer):
     padding = padding.upper()
     if input_expand_dims == 0 and not input_add_feature_dim and not input_split_feature_dim:
       # Maybe we have a chance to correctly define the output shapes.
-      data = get_concat_sources_data_template(sources)
       for i in range(len(filter_size)):
-        if data.shape[i] is not None:
-          shape[i] = cls.calc_out_dim(
-            in_dim=data.shape[i],
+        if data.shape[i+shift] is not None:
+          shape[i+shift] = cls.calc_out_dim(
+            in_dim=data.shape[i+shift],
             filter_size=filter_size[i], stride=strides[i], dilation_rate=dilation_rate[i], padding=padding)
-    feature_dim_axis = NotSpecified
-    if TFUtil.is_gpu_available() and False:  # TODO...
-      feature_dim_axis = 1
-      shape = shape[-1:] + shape[:-1]
     return {
       "dim": n_out,
       "shape": shape,
