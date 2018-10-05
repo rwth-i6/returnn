@@ -25,6 +25,13 @@ better_exchook.replace_traceback_format_tb()
 from Log import log
 log.initialize(verbosity=[5])
 
+try:
+  import faulthandler
+  faulthandler.enable()
+except ImportError:
+  print("no faulthandler")
+
+
 session = tf.InteractiveSession()
 
 
