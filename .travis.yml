@@ -19,9 +19,9 @@ install:
   - pip2 install -qq --user --upgrade pip setuptools wheel six | cat  # Python2<->Python3
   - pip2 install --user -r requirements.txt | cat  # need for Python2<->Python3 communication tests
   - pip install -qq --upgrade pip setuptools wheel
-  - pip install --upgrade numpy scipy  | cat
+  - pip install --upgrade numpy scipy  | cat  # TF usually needs the latest Numpy
   - pip install -r requirements.txt  | cat
-  - pip install tensorflow  | cat
+  - pip install $TF_PACKAGE  | cat
   - pip install -qq nose
   - echo "[global]" >> ~/.theanorc
   - echo "device = cpu" >> ~/.theanorc
@@ -31,45 +31,50 @@ install:
   - python -c "import tensorflow as tf; print(tf.GIT_VERSION, tf.VERSION)"
   - python -c "import theano; print(theano.__version__)"
 
+# https://docs.travis-ci.com/user/environment-variables/
 # TF tests first, because more relevant (for me), then ordered by alphabet
 env:
-  - TEST=TFEngine
-  - TEST=TFNativeOp
-  - TEST=TFNetworkLayer
-  - TEST=TFNetworkRecLayer
-  - TEST=TFNetworkSigProcLayer
-  - TEST=TFUpdater
-  - TEST=TFUtil
-  - TEST=Config
-  - TEST=Dataset
-  - TEST=demos
-  - TEST=Device
-  - TEST=EngineTask
-  - TEST=EngineUtil
-  - TEST=fork_exec
-  - TEST=Fsa
-  - TEST=GeneratingDataset
-  - TEST=hdf_dump
-  - TEST=HDFDataset
-  - TEST=LearningRateControl
-  - TEST=Log
-  - TEST=multi_target
-  - TEST=MultiBatchBeam
-  - TEST=NativeOp
-  - TEST=NativeOp_chunk
-  - TEST=NativeOp_sparse
-  - TEST=NativeOp_subtensor_batched_index
-  - TEST=Network
-  - TEST=NetworkBaseLayer
-  - TEST=NetworkDescription
-  - TEST=NetworkLayer
-  - TEST=Pretrain
-  - TEST=SprintDataset
-  - TEST=SprintInterface
-  - TEST=TaskSystem
-  - TEST=TaskSystem_SharedMem
-  - TEST=TheanoUtil
-  - TEST=Util
+  global:
+    - TF_PACKAGE=tensorflow
+  matrix:
+    - TEST=TFEngine
+    - TEST=TFNativeOp
+    - TEST=TFNativeOp TF_PACKAGE=tensorflow==1.8.0
+    - TEST=TFNetworkLayer
+    - TEST=TFNetworkRecLayer
+    - TEST=TFNetworkSigProcLayer
+    - TEST=TFUpdater
+    - TEST=TFUtil
+    - TEST=Config
+    - TEST=Dataset
+    - TEST=demos
+    - TEST=Device
+    - TEST=EngineTask
+    - TEST=EngineUtil
+    - TEST=fork_exec
+    - TEST=Fsa
+    - TEST=GeneratingDataset
+    - TEST=hdf_dump
+    - TEST=HDFDataset
+    - TEST=LearningRateControl
+    - TEST=Log
+    - TEST=multi_target
+    - TEST=MultiBatchBeam
+    - TEST=NativeOp
+    - TEST=NativeOp_chunk
+    - TEST=NativeOp_sparse
+    - TEST=NativeOp_subtensor_batched_index
+    - TEST=Network
+    - TEST=NetworkBaseLayer
+    - TEST=NetworkDescription
+    - TEST=NetworkLayer
+    - TEST=Pretrain
+    - TEST=SprintDataset
+    - TEST=SprintInterface
+    - TEST=TaskSystem
+    - TEST=TaskSystem_SharedMem
+    - TEST=TheanoUtil
+    - TEST=Util
 
 # command to run tests
 script:
