@@ -26,6 +26,12 @@ from TFUtil import is_gpu_available
 import TFUtil
 TFUtil.debugRegisterBetterRepr()
 
+try:
+  import faulthandler
+  faulthandler.enable()
+except ImportError:
+  print("no faulthandler")
+
 log.initialize(verbosity=[5])
 
 print("TensorFlow:", tf.__version__)
