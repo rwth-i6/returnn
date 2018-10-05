@@ -35,6 +35,7 @@
 from __future__ import print_function
 
 import sys, os, os.path
+import threading
 try:
     from traceback import StackSummary, FrameSummary
 except ImportError:
@@ -467,6 +468,7 @@ class Color:
         return out
 
 def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=False, with_color=None):
+    is_at_exit = not threading.main_thread().is_alive()
     color = Color(enable=with_color)
     out = []
     def output(s1, s2=None, **kwargs):
@@ -552,7 +554,11 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
             if source_code:
                 source_code = remove_indent_lines(replace_tab_indents(source_code)).rstrip()
                 output("    line: ", color.py_syntax_highlight(source_code), color="blue")
-                if isinstance(f, DummyFrame) and not f.have_vars_available:
+                if is_at_exit:
+                    # Better to not show __repr__ of some vars, as this might lead to crashes
+                    # when native extensions are involved.
+                    pass
+                elif isinstance(f, DummyFrame) and not f.have_vars_available:
                     pass
                 else:
                     output(color('    locals:', "blue"))
