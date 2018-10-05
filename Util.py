@@ -1489,14 +1489,20 @@ def attr_chain(base, attribs):
 
 
 def to_bool(v):
+  """
+  :param int|float|str v: if it is a string, it should represent some integer, or alternatively "true" or "false"
+  :rtype: bool
+  """
   try:
     return bool(int(v))
   except ValueError:
     pass
   if isinstance(v, (str, unicode)):
     v = v.lower()
-    if v in ["true", "yes", "on", "1"]: return True
-    if v in ["false", "no", "off", "0"]: return False
+    if v in ["true", "yes", "on", "1"]:
+      return True
+    if v in ["false", "no", "off", "0"]:
+      return False
   raise ValueError("to_bool cannot handle %r" % v)
 
 

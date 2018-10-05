@@ -2960,9 +2960,15 @@ class CudaEnv(object):
   verbose_find_cuda = False
 
   def __init__(self):
-    self.cuda_path = self._find_cuda_path()
-    if self.verbose_find_cuda:
-      print("CUDA path:", self.cuda_path)
+    from Util import to_bool
+    if to_bool(os.environ.get("DISABLE_CUDA", "0")):
+      self.cuda_path = None
+      if self.verbose_find_cuda:
+        print("CUDA disabled via env DISABLE_CUDA.")
+    else:
+      self.cuda_path = self._find_cuda_path()
+      if self.verbose_find_cuda:
+        print("CUDA path:", self.cuda_path)
 
   @classmethod
   def _find_nvcc_in_path(cls):
