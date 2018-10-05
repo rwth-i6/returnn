@@ -24,6 +24,12 @@ import os
 import better_exchook
 better_exchook.replace_traceback_format_tb()
 
+try:
+  import faulthandler
+  faulthandler.enable()
+except ImportError:
+  print("no faulthandler")
+
 
 print("TF version:", tf.__version__)
 
