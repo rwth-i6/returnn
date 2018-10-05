@@ -171,6 +171,7 @@ def installNativeSignalHandler():
 
 def installLibSigSegfault():
   try:
+    os.environ.setdefault("SEGFAULT_SIGNALS", "all")
     import ctypes
     import ctypes.util
     # libSegFault on Unix/Linux, not on MacOSX
@@ -193,6 +194,12 @@ def initFaulthandler(sigusr1_chain=False):
 
   :param bool sigusr1_chain: whether the default SIGUSR1 handler should also be called.
   """
+  from Util import to_bool
+  # Enable libSigSegfault first, so that we can have both,
+  # because faulthandler will also call the original sig handler.
+  if os.environ.get("DEBUG_SIGNAL_HANDLER") and to_bool(os.environ.get("DEBUG_SIGNAL_HANDLER")):
+    installLibSigSegfault()
+    installNativeSignalHandler()
   if sys.platform != 'win32':
     # In case that sigusr1_chain, we expect that there is already some handler
     # for SIGUSR1, and then this will not overwrite this handler.
@@ -212,10 +219,6 @@ def initFaulthandler(sigusr1_chain=False):
       faulthandler.enable()
       if sys.platform != 'win32':
         faulthandler.register(signal.SIGUSR1, all_threads=True, chain=sigusr1_chain)
-  from Util import to_bool
-  if os.environ.get("DEBUG_SIGNAL_HANDLER") and to_bool(os.environ.get("DEBUG_SIGNAL_HANDLER")):
-    installLibSigSegfault()
-    installNativeSignalHandler()
 
 
 @auto_exclude_all_new_threads

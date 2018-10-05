@@ -26,8 +26,13 @@ from TFUtil import is_gpu_available
 import TFUtil
 TFUtil.debugRegisterBetterRepr()
 
+import Debug
+Debug.installLibSigSegfault()
+
 try:
   import faulthandler
+  # Enable after libSigSegfault, so that we have both,
+  # because faulthandler will also call the original sig handler.
   faulthandler.enable()
 except ImportError:
   print("no faulthandler")
@@ -35,6 +40,27 @@ except ImportError:
 log.initialize(verbosity=[5])
 
 print("TensorFlow:", tf.__version__)
+
+
+@unittest.skip("for testing only...")
+def test_a_crash_seg_fault():
+  """
+  Just testing our signal handlers...
+  """
+  import ctypes
+  invalid_ptr = ctypes.cast(1, ctypes.POINTER(ctypes.c_int))
+  # Access it. This will crash!
+  print(invalid_ptr.contents)
+
+
+@unittest.skip("for testing only...")
+def test_a_crash_abort():
+  """
+  Just testing our signal handlers...
+  """
+  import ctypes
+  # Warning! Will crash!
+  ctypes.pythonapi.abort()
 
 
 @contextlib.contextmanager
