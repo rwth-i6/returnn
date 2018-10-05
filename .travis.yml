@@ -6,14 +6,11 @@ python:
   - "3.5"
   - "3.6"
 
+# https://docs.travis-ci.com/user/reference/overview/
 # https://blog.travis-ci.com/2017-04-17-precise-EOL
 # Also needed for TensorFlow for glibc 2.7.
 dist: trusty
-
-# https://github.com/travis-ci/travis-ci/issues/2890
-#before_install:
-#  - sudo apt-get build-dep python-scipy
-#  - sudo apt-get install -qq python-numpy python-scipy python-matplotlib
+sudo: false  # should use the faster container based image
 
 # command to install dependencies
 # quiet (-qq) to keep log smaller
