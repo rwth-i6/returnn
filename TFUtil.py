@@ -3053,8 +3053,10 @@ class CudaEnv(object):
 
   def get_compiler_opts(self):
     return [
-      "-I", "%s/include" % self.cuda_path, "-L", "%s/%s" % (self.cuda_path, self._get_lib_dir_name()),
-      "-x", "cu"]
+      "-I", "%s/include" % self.cuda_path,
+      "-L", "%s/%s" % (self.cuda_path, self._get_lib_dir_name()),
+      "-x", "cu",
+      "-v"]
 
   def get_compiler_bin(self):
     assert self.cuda_path

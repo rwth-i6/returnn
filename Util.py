@@ -2380,7 +2380,7 @@ class NativeCodeCompiler(object):
       common_opts += ["-undefined", "dynamic_lookup"]
     for include_path in self._include_paths:
       common_opts += ["-I", include_path]
-    compiler_opts = ["-fPIC"]
+    compiler_opts = ["-fPIC", "-v"]
     common_opts += self._transform_compiler_opts(compiler_opts)
     common_opts += ["-D_GLIBCXX_USE_CXX11_ABI=%i" % (1 if self.use_cxx11_abi else 0)]
     common_opts += ["-D%s=%s" % item for item in sorted(self.c_macro_defines.items())]
@@ -2398,6 +2398,10 @@ class NativeCodeCompiler(object):
       print("%s: %s failed." % (self.__class__.__name__, cmd_bin))
       print("Original stdout/stderr:")
       print(stdout.decode("utf8"))
+      print()
+      if cmd_bin.endswith("/nvcc") and b"error: constexpr function return is non-constant" in stdout:
+        print("This might be the error: https://github.com/tensorflow/tensorflow/issues/22766")
+        print()
       raise CalledProcessError(returncode=proc.returncode, cmd=cmd_args)
     assert os.path.exists(self._so_filename)
     with open("%s/compile.log" % self._mod_path, "wb") as f:
