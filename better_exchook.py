@@ -24,18 +24,36 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 # SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+"""
+https://github.com/albertz/py_better_exchook
 
-# This is a simple replacement for the standard Python exception handler (sys.excepthook).
-# In addition to what the standard handler does, it also prints all referenced variables
-# (no matter if local, global or builtin) of the code line of each stack frame.
-# See below for some examples and some example output.
+This is a simple replacement for the standard Python exception handler (sys.excepthook).
+In addition to what the standard handler does, it also prints all referenced variables
+(no matter if local, global or builtin) of the code line of each stack frame.
+See below for some examples and some example output.
 
-# https://github.com/albertz/py_better_exchook
+See these functions:
+
+- better_exchook
+- format_tb / print_tb
+- iter_traceback
+- dump_all_thread_tracebacks
+- install
+- replace_traceback_format_tb
+
+Although there might be a few more useful functions, thus we export all of them.
+
+Also see the demo/tests at the end.
+"""
 
 from __future__ import print_function
 
-import sys, os, os.path
+import sys
+import os
+import os.path
 import threading
+import keyword
+import inspect
 try:
     from traceback import StackSummary, FrameSummary
 except ImportError:
@@ -43,17 +61,23 @@ except ImportError:
         pass
     StackSummary = FrameSummary = _Dummy
 
+# noinspection PySetFunctionToLiteral,SpellCheckingInspection
+pykeywords = set(keyword.kwlist) | set(["None", "True", "False"])
+
 _cur_pwd = os.getcwd()
 
 try:
+    # noinspection PyUnresolvedReferences,PyUnboundLocalVariable
     unicode
-except NameError: # Python3
+except NameError:  # Python3
     unicode = str   # Python 3 compatibility
 
 try:
+    # noinspection PyUnresolvedReferences,PyUnboundLocalVariable
     raw_input
-except NameError: # Python3
+except NameError:  # Python3
     raw_input = input
+
 
 def parse_py_statement(line):
     state = 0
@@ -109,14 +133,12 @@ def parse_py_statement(line):
     if state == 3: yield ("id", curtoken)
     elif state == 6: yield ("comment", curtoken)
 
+
 def parse_py_statements(source_code):
     for line in source_code.splitlines():
         for t in parse_py_statement(line):
             yield t
 
-
-import keyword
-pykeywords = set(keyword.kwlist) | set(["None", "True", "False"])
 
 def grep_full_py_identifiers(tokens):
     global pykeywords
@@ -134,9 +156,11 @@ def grep_full_py_identifiers(tokens):
         if token[0] in ".0123456789": continue
         yield token
 
+
 def set_linecache(filename, source):
     import linecache
     linecache.cache[filename] = None, None, [line+'\n' for line in source.splitlines()], filename
+
 
 def simple_debug_shell(globals, locals):
     try: import readline
@@ -169,6 +193,7 @@ def simple_debug_shell(globals, locals):
                 except Exception:
                     print("Error printing return value of %r" % s)
                     better_exchook(*sys.exc_info(), autodebugshell=False)
+
 
 def debug_shell(user_ns, user_global_ns, traceback=None, execWrapper=None):
     ipshell = None
@@ -222,8 +247,10 @@ def debug_shell(user_ns, user_global_ns, traceback=None, execWrapper=None):
         else:
             simple_debug_shell(user_global_ns, user_ns)
 
+
 def output_limit():
     return 300
+
 
 def pp_extra_info(obj, depthlimit = 3):
     s = []
@@ -246,6 +273,7 @@ def pp_extra_info(obj, depthlimit = 3):
         except Exception: pass
     return ", ".join(s)
 
+
 def pretty_print(obj):
     s = repr(obj)
     limit = output_limit()
@@ -254,6 +282,7 @@ def pretty_print(obj):
     extra_info = pp_extra_info(obj)
     if extra_info != "": s += ", " + extra_info
     return s
+
 
 def fallback_findfile(filename):
     mods = [m for m in sys.modules.values() if m and hasattr(m, "__file__") and filename in m.__file__]
@@ -273,6 +302,7 @@ def fallback_findfile(filename):
                 if os.path.exists(altfn2):
                     return altfn2
     return altfn
+
 
 def is_source_code_missing_open_brackets(source_code):
     open_brackets = "[{("
@@ -294,6 +324,7 @@ def is_source_code_missing_open_brackets(source_code):
             last_close_bracket += [idx]
     return not all([c == 0 for c in counters])
 
+
 def get_source_code(filename, lineno, module_globals):
     import linecache
     linecache.checkcache(filename)
@@ -306,6 +337,7 @@ def get_source_code(filename, lineno, module_globals):
         source_code = "".join([linecache.getline(filename, lineno, module_globals), source_code])
     return source_code
 
+
 def str_visible_len(s):
     """
     :param str s:
@@ -317,14 +349,17 @@ def str_visible_len(s):
     s = re.sub("[\x1b\x9b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-PRZcf-nqry=><]", "", s)
     return len(s)
 
+
 def add_indent_lines(prefix, s):
     if not s: return prefix
     prefix_len = str_visible_len(prefix)
     lines = s.splitlines(True)
     return "".join([prefix + lines[0]] + [" " * prefix_len + l for l in lines[1:]])
 
+
 def get_indent_prefix(s):
     return s[:len(s) - len(s.lstrip())]
+
 
 def get_same_indent_prefix(lines):
     if not lines: return ""
@@ -334,6 +369,7 @@ def get_same_indent_prefix(lines):
         return prefix
     return None
 
+
 def remove_indent_lines(s):
     if not s: return ""
     lines = s.splitlines(True)
@@ -342,13 +378,16 @@ def remove_indent_lines(s):
         return "".join([l.lstrip() for l in lines])
     return "".join([l[len(prefix):] for l in lines])
 
+
 def replace_tab_indent(s, replace="    "):
     prefix = get_indent_prefix(s)
     return prefix.replace("\t", replace) + s[len(prefix):]
 
+
 def replace_tab_indents(s, replace="    "):
     lines = s.splitlines(True)
     return "".join([replace_tab_indent(l, replace) for l in lines])
+
 
 def to_bool(s, fallback=None):
     """
@@ -365,6 +404,7 @@ def to_bool(s, fallback=None):
     if s in ["0", "false", "no", "n"]:
         return False
     return fallback
+
 
 class Color:
     ColorIdxTable = {k: i for (i, k) in enumerate([
@@ -467,8 +507,34 @@ class Color:
             i = j
         return out
 
-def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=False, with_color=None):
-    is_at_exit = not threading.main_thread().is_alive()
+
+def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=False, with_color=None, with_vars=None):
+    """
+    :param types.TracebackType|types.FrameType|StackSummary tb: traceback. if None, will use sys._getframe
+    :param int|None limit: limit the traceback to this number of frames. by default, will look at sys.tracebacklimit
+    :param dict[str]|None allLocals: if set, will update it with all locals from all frames
+    :param dict[str]|None allGlobals: if set, will update it with all globals from all frames
+    :param bool withTitle:
+    :param bool|None with_color: output with ANSI escape codes for color
+    :param bool with_vars: will print var content which are referenced in the source code line. by default enabled.
+    :return: list of strings (line-based)
+    :rtype: list[str]
+    """
+    if with_vars is None and not threading.main_thread().is_alive():
+        # Better to not show __repr__ of some vars, as this might lead to crashes
+        # when native extensions are involved.
+        with_vars = False
+    if with_vars is None and hasattr(sys, "_getframe"):
+        if any([f.f_code.co_name == "__del__" for f in iter_traceback()]):
+            # __del__ is usually called via the Python garbage collector (GC).
+            # This can happen and very random / non-deterministic places.
+            # There are cases where it is not safe to access some of the vars on the stack
+            # because they might be in a non-well-defined state, thus calling their __repr__ is not safe.
+            # See e.g. this bug:
+            # https://github.com/tensorflow/tensorflow/issues/22770
+            with_vars = False
+    if with_vars is None:
+        with_vars = True
     color = Color(enable=with_color)
     out = []
     def output(s1, s2=None, **kwargs):
@@ -492,8 +558,6 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
         except Exception:
             output(color("format_tb: tb is None and sys._getframe() failed", "red", bold=True))
             return out
-    import inspect
-    import traceback
     def isstacksummary(_tb):
         return isinstance(_tb, StackSummary)
     isframe = inspect.isframe
@@ -510,27 +574,29 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
         _tb = tb
         class NotFound(Exception):
             pass
-        def _resolveIdentifier(namespace, id):
+        def _resolve_identifier(namespace, id):
             if id[0] not in namespace:
                 raise NotFound()
             obj = namespace[id[0]]
             for part in id[1:]:
                 obj = getattr(obj, part)
             return obj
-        def _trySet(old, prefix, func):
+        def _try_set(old, prefix, func):
             if old is not None: return old
             try: return add_indent_lines(prefix, func())
             except NotFound: return old
             except Exception as e:
                 return prefix + "!" + e.__class__.__name__ + ": " + str(e)
         while _tb is not None and (limit is None or n < limit):
-            if isframe(_tb): f = _tb
+            if isframe(_tb):
+                f = _tb
             elif isstacksummary(_tb):
                 if isinstance(_tb[0], ExtendedFrameSummary):
                     f = _tb[0].tb_frame
                 else:
                     f = DummyFrame.from_frame_summary(_tb[0])
-            else: f = _tb.tb_frame
+            else:
+                f = _tb.tb_frame
             if allLocals is not None: allLocals.update(f.f_locals)
             if allGlobals is not None: allGlobals.update(f.f_globals)
             if hasattr(_tb, "tb_lineno"): lineno = _tb.tb_lineno
@@ -554,9 +620,7 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
             if source_code:
                 source_code = remove_indent_lines(replace_tab_indents(source_code)).rstrip()
                 output("    line: ", color.py_syntax_highlight(source_code), color="blue")
-                if is_at_exit:
-                    # Better to not show __repr__ of some vars, as this might lead to crashes
-                    # when native extensions are involved.
+                if not with_vars:
                     pass
                 elif isinstance(f, DummyFrame) and not f.have_vars_available:
                     pass
@@ -568,9 +632,9 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
                         for token in [splittedtoken[0:i] for i in range(1, len(splittedtoken) + 1)]:
                             if token in alreadyPrintedLocals: continue
                             tokenvalue = None
-                            tokenvalue = _trySet(tokenvalue, color("<local> ", "blue"), lambda: format_py_obj(_resolveIdentifier(f.f_locals, token)))
-                            tokenvalue = _trySet(tokenvalue, color("<global> ", "blue"), lambda: format_py_obj(_resolveIdentifier(f.f_globals, token)))
-                            tokenvalue = _trySet(tokenvalue, color("<builtin> ", "blue"), lambda: format_py_obj(_resolveIdentifier(f.f_builtins, token)))
+                            tokenvalue = _try_set(tokenvalue, color("<local> ", "blue"), lambda: format_py_obj(_resolve_identifier(f.f_locals, token)))
+                            tokenvalue = _try_set(tokenvalue, color("<global> ", "blue"), lambda: format_py_obj(_resolve_identifier(f.f_globals, token)))
+                            tokenvalue = _try_set(tokenvalue, color("<builtin> ", "blue"), lambda: format_py_obj(_resolve_identifier(f.f_builtins, token)))
                             tokenvalue = tokenvalue or color("<not found>", "blue")
                             prefix = '      %s ' % color(".", "blue", bold=True).join(token) + color("= ", "blue", bold=True)
                             output(prefix, tokenvalue)
@@ -582,7 +646,7 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
             if isframe(_tb):
                 _tb = _tb.f_back
             elif isstacksummary(_tb):
-                _tb = traceback.StackSummary.from_list(_tb[1:])
+                _tb = StackSummary.from_list(_tb[1:])
                 if not _tb:
                     _tb = None
             else:
@@ -597,6 +661,7 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
 
     return out
 
+
 def print_tb(tb, file=None, **kwargs):
     if file is None:
         file = sys.stderr
@@ -606,6 +671,17 @@ def print_tb(tb, file=None, **kwargs):
 
 
 def better_exchook(etype, value, tb, debugshell=False, autodebugshell=True, file=None, with_color=None):
+    """
+    Replacement for sys.excepthook.
+
+    :param etype: exception type
+    :param value: exception value
+    :param tb: traceback
+    :param bool debugshell: spawn a debug shell at the context of the exception
+    :param bool autodebugshell: if env DEBUG is an integer != 0, it will spawn a debug shell
+    :param file: the output stream where we will print the traceback and exception information
+    :param bool|None with_color: whether to use ANSI escape codes for colored output
+    """
     if file is None:
         file = sys.stderr
     def output(ln): file.write(ln + "\n")
@@ -644,7 +720,15 @@ def better_exchook(etype, value, tb, debugshell=False, autodebugshell=True, file
     file.flush()
 
 
-def dump_all_thread_tracebacks(exclude_thread_ids=set(), file=None):
+def dump_all_thread_tracebacks(exclude_thread_ids=None, file=None):
+    """
+    Prints the traceback of all threads.
+
+    :param set[int]|list[int]|None exclude_thread_ids: threads to exclude
+    :param file: output stream
+    """
+    if exclude_thread_ids is None:
+        exclude_thread_ids = []
     if not file:
         file = sys.stdout
     import threading
@@ -677,13 +761,63 @@ def dump_all_thread_tracebacks(exclude_thread_ids=set(), file=None):
         print("Does not have sys._current_frames, cannot get thread tracebacks.", file=file)
 
 
-def install():
-    sys.excepthook = better_exchook
+def iter_traceback(tb=None, enforce_most_recent_call_first=False):
+    """
+    Iterates a traceback of various formats:
+      - traceback (types.TracebackType)
+      - frame object (types.FrameType)
+      - stack summary (traceback.StackSummary)
+
+    :param types.TracebackType|types.FrameType|StackSummary|None tb: traceback. if None, will use sys._getframe
+    :param bool enforce_most_recent_call_first:
+        Frame or stack summery: most recent call first (top of the stack is the first entry in the result)
+        Traceback: most recent call last
+        If True, and we get traceback, will unroll and reverse, such that we have always the most recent call first.
+    :return: yields the frames (types.FrameType)
+    :rtype: list[types.FrameType|DummyFrame]
+    """
+    if tb is None:
+        tb = sys._getframe()
+
+    def is_stack_summary(_tb):
+        return isinstance(_tb, StackSummary)
+
+    is_frame = inspect.isframe
+    is_traceback = inspect.istraceback
+    assert is_traceback(tb) or is_frame(tb) or is_stack_summary(tb)
+    # Frame or stack summery: most recent call first
+    # Traceback: most recent call last
+    if is_traceback(tb) and enforce_most_recent_call_first:
+        frames = list(iter_traceback(tb))
+        for frame in frames[::-1]:
+            yield frame
+        return
+
+    _tb = tb
+    while _tb is not None:
+        if is_frame(_tb):
+            frame = _tb
+        elif is_stack_summary(_tb):
+            if isinstance(_tb[0], ExtendedFrameSummary):
+                frame = _tb[0].tb_frame
+            else:
+                frame = DummyFrame.from_frame_summary(_tb[0])
+        else:
+            frame = _tb.tb_frame
+        yield frame
+        if is_frame(_tb):
+            _tb = _tb.f_back
+        elif is_stack_summary(_tb):
+            _tb = StackSummary.from_list(_tb[1:])
+            if not _tb:
+                _tb = None
+        else:
+            _tb = _tb.tb_next
 
 
 class ExtendedFrameSummary(FrameSummary):
     def __init__(self, frame, **kwargs):
-        FrameSummary.__init__(self, **kwargs)
+        super(ExtendedFrameSummary, self).__init__(**kwargs)
         self.tb_frame = frame
 
 
@@ -742,7 +876,24 @@ def _StackSummary_extract(frame_gen, limit=None, lookup_lines=True, capture_loca
     return result
 
 
+def install():
+    """
+    Replaces sys.excepthook by our better_exchook.
+    """
+    sys.excepthook = better_exchook
+
+
 def replace_traceback_format_tb():
+    """
+    Replaces these functions from the traceback module by our own:
+
+    - traceback.format_tb
+    - traceback.StackSummary.format
+    - traceback.StackSummary.extract
+
+    Note that this kind of monkey patching might not be safe under all circumstances
+    and is not officially supported by Python.
+    """
     import traceback
     traceback.format_tb = format_tb
     if hasattr(traceback, "StackSummary"):
@@ -750,6 +901,8 @@ def replace_traceback_format_tb():
         traceback.StackSummary.extract = _StackSummary_extract
 
 
+# ------------------------------------------------
+# Test/demo code starts here.
 
 def test_is_source_code_missing_open_brackets():
     assert is_source_code_missing_open_brackets("a") is False
@@ -760,14 +913,17 @@ def test_is_source_code_missing_open_brackets():
     assert is_source_code_missing_open_brackets("fn({a[0]: 'b'}).b()[0]") is False
     assert is_source_code_missing_open_brackets("a[0]: 'b'}).b()[0]") is True
 
+
 def test_add_indent_lines():
     assert add_indent_lines("foo ", " bar") == "foo  bar"
     assert add_indent_lines("foo ", " bar\n baz") == "foo  bar\n     baz"
+
 
 def test_get_same_indent_prefix():
     assert get_same_indent_prefix(["a", "b"]) == ""
     assert get_same_indent_prefix([" a"]) == " "
     assert get_same_indent_prefix([" a", "  b"]) == " "
+
 
 def test_remove_indent_lines():
     assert remove_indent_lines(" a\n  b") == "a\n b"
@@ -806,6 +962,7 @@ if __name__ == "__main__":
         x = {1:2, "a":"b"}
         def f():
             y = "foo"
+            # noinspection PyUnresolvedReferences,PyStatementEffect
             x, 42, sys.stdin.__class__, sys.exc_info, y, z
         f()
     except Exception:
@@ -813,11 +970,13 @@ if __name__ == "__main__":
 
     try:
         f = lambda x: None
+        # noinspection PyUnresolvedReferences,PyUnboundLocalVariable,PyArgumentList
         f(x, y)
     except Exception:
         better_exchook(*sys.exc_info())
 
     try:
+        # noinspection PyArgumentList
         (lambda x: None)(__name__,
                          42)  # multiline
     except Exception:
@@ -837,4 +996,5 @@ if __name__ == "__main__":
     # use this to overwrite the global exception handler
     sys.excepthook = better_exchook
     # and fail
+    # noinspection PyUnresolvedReferences
     finalfail(sys)
