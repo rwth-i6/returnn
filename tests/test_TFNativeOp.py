@@ -24,8 +24,13 @@ import os
 import better_exchook
 better_exchook.replace_traceback_format_tb()
 
+import Debug
+Debug.installLibSigSegfault()
+
 try:
   import faulthandler
+  # Enable after libSigSegfault, so that we have both,
+  # because faulthandler will also call the original sig handler.
   faulthandler.enable()
 except ImportError:
   print("no faulthandler")
