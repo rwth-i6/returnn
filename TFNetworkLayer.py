@@ -338,6 +338,9 @@ class LayerBase(object):
     :param dict[str] d: will modify inplace
     :param TFNetwork.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
+      The name `get_layer` might be misleading, as this should return an existing layer,
+      or construct it if it does not exist yet.
+      `network.get_layer` would just return an existing layer.
 
     Will modify `d` inplace such that it becomes the kwargs for `self.__init__()`.
     Mostly leaves `d` as-is.
@@ -981,10 +984,27 @@ class LayerBase(object):
 
 
 class ReuseParams:
+  """
+  This is for parameter sharing, i.e. reusing existing `tf.Variable` objects in a new layer,
+  instead of creating new variables.
+  :func:`ReuseParams.from_config_dict` will be called via :func:`LayerBase.transform_config_dict`.
+  """
+
   @classmethod
   def from_config_dict(cls, opts, network, get_layer):
     """
-    :param str|dict|None opts:
+    This will be called via :func:`LayerBase.transform_config_dict` on the layer option `"reuse_params"`.
+
+    :param str|dict[str]|None opts:
+      If None, we will return None.
+      If str, it will be interpret as a layer name.
+      If dict, you can specify:
+        "reuse_layer": layer name
+        "map": dict where the keys are parameter names, and the values can be:
+          A str would be interpret as a layer name.
+          None would be interpret as the option `auto_create_missing`.
+          A dict would specify :func:`ReuseParams.__init__` options.
+            The option reuse_layer would be specified as a str, and represents a layer name.
     :param TFNetwork.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     :rtype: ReuseParams|None
@@ -1007,7 +1027,7 @@ class ReuseParams:
     if "reuse_layer" in opts:
       opts["reuse_layer"] = optional_get_layer(opts["reuse_layer"])
     if "map" in opts:
-      assert isinstance(opts["map"], dict)
+      assert isinstance(opts["map"], dict), "reuse_params['map'] should be a dict but is %s" % (type(opts["map"]),)
       opts["map"] = opts["map"].copy()
       for key, value in sorted(opts["map"].items()):
         if isinstance(value, str):

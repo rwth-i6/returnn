@@ -373,7 +373,9 @@ class TFNetwork(object):
     :param dict[str,dict[str]] net_dict:
     :param str name: layer name
     :param ((str) -> LayerBase)|None get_layer: optional, for source layers, for transform_config_dict.
-      by default, this wraps self.construct_layer().
+      By default, this wraps self.construct_layer().
+      I.e. the name might be misleading, as this should return an existing layer,
+      or construct it if it does not exist yet.
     :param ((str, LayerBase, dict) -> LayerBase) | None add_layer: by default self.add_layer
     :rtype: LayerBase
     """
