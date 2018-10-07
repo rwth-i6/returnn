@@ -37,6 +37,7 @@ See these functions:
 - better_exchook
 - format_tb / print_tb
 - iter_traceback
+- get_current_frame
 - dump_all_thread_tracebacks
 - install
 - replace_traceback_format_tb
@@ -524,7 +525,7 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
         # Better to not show __repr__ of some vars, as this might lead to crashes
         # when native extensions are involved.
         with_vars = False
-    if with_vars is None and hasattr(sys, "_getframe"):
+    if with_vars is None:
         if any([f.f_code.co_name == "__del__" for f in iter_traceback()]):
             # __del__ is usually called via the Python garbage collector (GC).
             # This can happen and very random / non-deterministic places.
@@ -553,7 +554,7 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
         return color.py_syntax_highlight(pretty_print(obj))
     if tb is None:
         try:
-            tb = sys._getframe()
+            tb = get_current_frame()
             assert tb
         except Exception:
             output(color("format_tb: tb is None and sys._getframe() failed", "red", bold=True))
@@ -761,6 +762,21 @@ def dump_all_thread_tracebacks(exclude_thread_ids=None, file=None):
         print("Does not have sys._current_frames, cannot get thread tracebacks.", file=file)
 
 
+def get_current_frame():
+    """
+    :return: current frame object (excluding this function call)
+    :rtype: types.FrameType
+
+    Uses sys._getframe if available, otherwise some trickery with sys.exc_info and a dummy exception.
+    """
+    if hasattr(sys, "_getframe"):
+        return sys._getframe(1)
+    try:
+        raise ZeroDivisionError
+    except ZeroDivisionError:
+        return sys.exc_info()[2].tb_frame.f_back
+
+
 def iter_traceback(tb=None, enforce_most_recent_call_first=False):
     """
     Iterates a traceback of various formats:
@@ -777,7 +793,7 @@ def iter_traceback(tb=None, enforce_most_recent_call_first=False):
     :rtype: list[types.FrameType|DummyFrame]
     """
     if tb is None:
-        tb = sys._getframe()
+        tb = get_current_frame()
 
     def is_stack_summary(_tb):
         return isinstance(_tb, StackSummary)
