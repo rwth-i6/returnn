@@ -66,6 +66,7 @@ except ImportError:
 pykeywords = set(keyword.kwlist) | set(["None", "True", "False"])
 
 _cur_pwd = os.getcwd()
+_threading_main_thread = threading.main_thread()
 
 try:
     # noinspection PyUnresolvedReferences,PyUnboundLocalVariable
@@ -509,6 +510,22 @@ class Color:
         return out
 
 
+def is_at_exit():
+    """
+    Some heuristics to figure out whether this is called at a stage where the Python interpreter is shutting down.
+
+    :return: whether the Python interpreter is currently in the process of shutting down
+    :rtype: bool
+    """
+    if not hasattr(threading, "main_thread"):
+        return True
+    if threading.main_thread() != _threading_main_thread:
+        return True
+    if not _threading_main_thread.is_alive():
+        return True
+    return False
+
+
 def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=False, with_color=None, with_vars=None):
     """
     :param types.TracebackType|types.FrameType|StackSummary tb: traceback. if None, will use sys._getframe
@@ -521,7 +538,7 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
     :return: list of strings (line-based)
     :rtype: list[str]
     """
-    if with_vars is None and not threading.main_thread().is_alive():
+    if with_vars is None and is_at_exit():
         # Better to not show __repr__ of some vars, as this might lead to crashes
         # when native extensions are involved.
         with_vars = False
