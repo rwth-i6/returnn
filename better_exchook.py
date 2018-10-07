@@ -66,7 +66,7 @@ except ImportError:
 pykeywords = set(keyword.kwlist) | set(["None", "True", "False"])
 
 _cur_pwd = os.getcwd()
-_threading_main_thread = threading.main_thread()
+_threading_main_thread = threading.main_thread() if hasattr(threading, "main_thread") else None
 
 try:
     # noinspection PyUnresolvedReferences,PyUnboundLocalVariable
@@ -519,10 +519,11 @@ def is_at_exit():
     """
     if not hasattr(threading, "main_thread"):
         return True
-    if threading.main_thread() != _threading_main_thread:
-        return True
-    if not _threading_main_thread.is_alive():
-        return True
+    if _threading_main_thread is not None:
+        if threading.main_thread() != _threading_main_thread:
+            return True
+        if not _threading_main_thread.is_alive():
+            return True
     return False
 
 
