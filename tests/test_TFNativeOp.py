@@ -359,7 +359,7 @@ def lstm_step_op(x_t, h_tm1, c_tm1, mask_t, W_f, W_r, b, n_batch, n_in_dim, n_ce
   return h_t, c_t
 
 
-def lstm(x, h_0, c_0, mask, W_f, W_r, b, n_time, n_batch, n_in_dim, n_cells, start=0, step=1, name="ref_lstm"):
+def pure_tf_unrolled_lstm(x, h_0, c_0, mask, W_f, W_r, b, n_time, n_batch, n_in_dim, n_cells, start=0, step=1, name="ref_lstm"):
   """
   :param tf.Tensor x: (n_time, n_batch, n_in_dim)
   :param tf.Tensor h_0: (n_batch, n_cells)
@@ -509,6 +509,13 @@ def test_tensor_array_strided_slice_grad_grad():
 
 
 def wrap_lstm_slice_start_step(op, x, h_0, c_0, mask, W_f, W_r, b, n_time, n_batch, n_in_dim, n_cells, start, step, name):
+  """
+  Will call the op (e.g. native_lstm2) with default start=0, step=1,
+  and we do the striding/slicing via standard TF functions (e.g. x[start_::step]),
+  as well as reverse the strided slice of the output.
+
+  :param op:
+  """
   x = tf.convert_to_tensor(x)
   mask = tf.convert_to_tensor(mask)
   if step >= 0:
@@ -551,7 +558,7 @@ def wrap_lstm_slice_start_step(op, x, h_0, c_0, mask, W_f, W_r, b, n_time, n_bat
 
 
 def lstm_slice(name, **kwargs):
-  return wrap_lstm_slice_start_step(op=lstm, name="%s_slice" % name, **kwargs)
+  return wrap_lstm_slice_start_step(op=pure_tf_unrolled_lstm, name="%s_slice" % name, **kwargs)
 
 
 def native_lstm2(x, h_0, c_0, mask, W_f, W_r, b, n_time, n_batch, n_in_dim, n_cells, start=0, step=1, name="native_lstm2"):
@@ -644,12 +651,12 @@ def check_lstm_op_start_step(op, name, **kwargs):
 
 
 def lstm_kwargs():
-  kwargs = {
-    "n_time": 3,
-    "n_batch": 2,
-    "n_in_dim": 1,
-    "n_cells": 2}
-  kwargs["mask"] = numpy.array([[1, 1, 0], [1, 0, 0]]).astype("float32").transpose()
+  """
+  :return: kwargs for check_lstm_ops. some dummy input
+  :rtype: dict[str]
+  """
+  kwargs = {"n_time": 3, "n_batch": 2, "n_in_dim": 1, "n_cells": 2,
+            "mask": numpy.array([[1, 1, 0], [1, 0, 0]]).astype("float32").transpose()}
   assert kwargs["mask"].shape == (kwargs["n_time"], kwargs["n_batch"])
   def gen(shape, offset):
     return numpy.sin(numpy.arange(numpy.prod(shape)) + offset).reshape(shape).astype("float32")
@@ -664,7 +671,7 @@ def lstm_kwargs():
 
 def test_ref_lstm_start_step_impl():
   kwargs = lstm_kwargs()
-  check_lstm_op_start_step(op=lstm, name="ref_lstm", **kwargs)
+  check_lstm_op_start_step(op=pure_tf_unrolled_lstm, name="ref_lstm", **kwargs)
 
 
 def test_native_lstm2_start_step_impl():
@@ -675,12 +682,16 @@ def test_native_lstm2_start_step_impl():
 def test_native_lstm2_impl():
   kwargs = lstm_kwargs()
   check_lstm_ops(
-    op1=lstm, op2=native_lstm2, name1="ref_lstm", name2="native_lstm2",
+    op1=pure_tf_unrolled_lstm, op2=native_lstm2, name1="ref_lstm", name2="native_lstm2",
     rtol=1e-6,
     **kwargs)
 
 
 def lstm_grad_kwargs():
+  """
+  :return: kwargs for check_lstm_grad_ops, some dummy input
+  :rtype: dict[str]
+  """
   def gen(shape, offset, factor=3.):
     return numpy.sin(numpy.arange(numpy.prod(shape)) * factor + offset).reshape(shape).astype("float32")
   kwargs = lstm_kwargs()
@@ -692,6 +703,11 @@ def lstm_grad_kwargs():
 
 
 def wrap_lstm_grad(op, x, h_0, c_0, dy, dd, mask, W_f, W_r, b, n_time, n_batch, n_in_dim, n_cells, start, step, name):
+  """
+  Uses the LSTM op (for the forward path), and tf.gradients to get the gradients.
+
+  :param op: lstm, e.g. pure_tf_unrolled_lstm or native_lstm2
+  """
   assert n_time > 0
   assert 0 <= start < n_time
   assert step != 0
@@ -780,6 +796,10 @@ def check_lstm_grad_ops(name1, name2, **kwargs):
 
 
 def check_lstm_grad_start_step(op, name, **kwargs):
+  """
+  :param op: e.g. pure_tf_unrolled_lstm or native_lstm2
+  :param str name: name for the op
+  """
   name2 = "%s_slice" % name
   def wrapped_lstm_op(**kwargs):
     return wrap_lstm_slice_start_step(op=op, **kwargs)
@@ -789,7 +809,7 @@ def check_lstm_grad_start_step(op, name, **kwargs):
 
 def test_ref_lstm_grad_start_step():
   kwargs = lstm_grad_kwargs()
-  check_lstm_grad_start_step(op=lstm, name="ref_lstm", **kwargs)
+  check_lstm_grad_start_step(op=pure_tf_unrolled_lstm, name="ref_lstm", **kwargs)
 
 
 def test_native_lstm2_grad_start_step():
@@ -801,7 +821,7 @@ def test_native_lstm2_grad_start_step():
 def test_native_lstm2_grad():
   kwargs = lstm_grad_kwargs()
   check_lstm_grad_ops(
-    op1=lstm, name1="ref_lstm", op2=native_lstm2, name2="native_lstm2",
+    op1=pure_tf_unrolled_lstm, name1="ref_lstm", op2=native_lstm2, name2="native_lstm2",
     rtol=1e-5, **kwargs)
 
 

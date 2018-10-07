@@ -1602,7 +1602,7 @@ class NativeLstm2(NativeOpGenBase):
     Ndarray_memcpy(Ndarray_DEV_DATA(Dc0), Ndarray_DEV_DATA(Dd), n_batch * n_cells * sizeof(float));
 
     if(T == 0) {
-      // just do nothing
+      // just do nothing. at least do not crash
 
     } else {
       // Need to keep track of (logical) DX[0], which in practice (masking, step<0)
@@ -1660,12 +1660,13 @@ class NativeLstm2(NativeOpGenBase):
       }
 
       //DW = Y[0..T-2]^T * DX[1..T-1]  (if step==1)
-      affine_raw(
-        data_ptr(Y, std::min(start, end) + std::max(0, -step)), (num_steps - 1) * n_batch, n_cells,
-        data_ptr(DX, std::min(start, end) + std::max(0, step)), (num_steps - 1) * n_batch, n_cells * 4,
-        Ndarray_DEV_DATA(DW), n_cells, n_cells * 4,
-        true, false, 0.0f, 1.0f,
-        abs_step, abs_step);
+      if(num_steps > 1)
+        affine_raw(
+          data_ptr(Y, std::min(start, end) + std::max(0, -step)), (num_steps - 1) * n_batch, n_cells,
+          data_ptr(DX, std::min(start, end) + std::max(0, step)), (num_steps - 1) * n_batch, n_cells * 4,
+          Ndarray_DEV_DATA(DW), n_cells, n_cells * 4,
+          true, false, 0.0f, 1.0f,
+          abs_step, abs_step);
 
       //DW += y0^T * DX[0]
       affine_raw(
