@@ -20,6 +20,7 @@ import unittest
 import numpy
 import numpy.testing
 from pprint import pprint
+import contextlib
 import better_exchook
 better_exchook.replace_traceback_format_tb()
 from Log import log
@@ -35,6 +36,16 @@ try:
   faulthandler.enable()
 except ImportError:
   print("no faulthandler")
+
+
+@contextlib.contextmanager
+def make_scope():
+  """
+  :rtype: tf.Session
+  """
+  with tf.Graph().as_default() as graph:
+    with tf.Session(graph=graph) as session:
+      yield session
 
 
 session = tf.InteractiveSession()
@@ -1510,7 +1521,7 @@ def test_preload_from_files():
   import tempfile
   model_tmp_dir = tempfile.mkdtemp("tmp-checkpoint")
   model_filename = model_tmp_dir + "/model"
-  with session.as_default():
+  with make_scope() as session:
     config = Config()
     n_in, n_hidden, n_out = 2, 5, 3
     config.update({
@@ -1591,7 +1602,7 @@ def test_preload_from_files_with_reuse():
   import tempfile
   model_tmp_dir = tempfile.mkdtemp("tmp-checkpoint")
   model_filename = model_tmp_dir + "/model"
-  with session.as_default():
+  with make_scope() as session:
     config = Config()
     n_in, n_hidden, n_out = 2, 5, 3
     config.update({
