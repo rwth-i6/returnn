@@ -98,6 +98,16 @@ def dump_info():
     debug_lib_so(f, ["sgemm"])
 
 
+try:
+  print("travis_fold:start:script.dump_info")  # https://github.com/travis-ci/travis-ci/issues/1065
+  dump_info()
+except Exception as exc:
+  print("dump_info exception:", exc)
+  print("(See more info in test_dummy output.)")
+finally:
+  print("travis_fold:end:script.dump_info")
+
+
 def test_dummy():
   dump_info()
   #assert False
