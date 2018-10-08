@@ -21,6 +21,7 @@ import numpy
 import numpy.testing
 from numpy.testing.utils import assert_almost_equal, assert_allclose
 import os
+from pprint import pprint
 import better_exchook
 better_exchook.replace_traceback_format_tb()
 
@@ -62,6 +63,56 @@ def debug_lib_so(f, syms=()):
     sys_exec(cmd, shell=True)
 
 
+def find_sym_in_exec(fn, sym):
+  """
+  :param str fn: path
+  :param str sym:
+  :return: matched out, or None
+  :rtype: str|None
+  """
+  from subprocess import CalledProcessError
+  objdump = "objdump -T"
+  if sys.platform == "darwin":
+    objdump = "otool -IHGv"
+  cmd = "%s %s | grep %s" % (objdump, fn, sym)
+  try:
+    out = Util.sysexecOut(cmd, shell=True)
+  except CalledProcessError:  # none found
+    return None
+  assert isinstance(out, str)
+  out_lns = out.splitlines()
+  out_lns = [ln for ln in out_lns if ".text" in ln]  # see objdump
+  if not out_lns:
+    return None
+  return "Found %r in %r:\n%s" % (sym, fn, "\n".join(out_lns))
+
+
+def collect_proc_maps_exec_files():
+  """
+  :return: list of mapped executables (libs)
+  :rtype: list[str]
+  """
+  import re
+  pid = os.getpid()
+  fns = []
+  for line in open("/proc/%i/maps" % pid, 'r').read().splitlines():  # for each mapped region
+    # https://stackoverflow.com/questions/1401359/understanding-linux-proc-id-maps
+    # address           perms offset  dev   inode   pathname
+    # E.g.:
+    # 7ff2de91c000-7ff2de91e000 rw-p 0017c000 08:02 794844                     /usr/lib/x86_64-linux-gnu/libstdc+...
+    m = re.match(
+      r'^([0-9A-Fa-f]+)-([0-9A-Fa-f]+)\s+([rwxps\-]+)\s+([0-9A-Fa-f]+)\s+([0-9A-Fa-f:]+)\s+([0-9]+)\s*(.*)$', line)
+    assert m, "no match for %r" % line
+    address_start, address_end, perms, offset, dev, i_node, path_name = m.groups()
+    if "x" not in perms:
+      continue
+    if not path_name or path_name.startswith("["):
+      continue
+    if path_name not in fns:
+      fns.append(path_name)
+  return fns
+
+
 def dump_info():
   # Some generic stuff.
   sys_exec("g++", "--version")
@@ -87,7 +138,20 @@ def dump_info():
     print("Cur flags: %r, RTLD_GLOBAL is set: %r" % (sys.getdlopenflags(), sys.getdlopenflags() & ctypes.RTLD_GLOBAL))
   if os.path.exists("/proc"):
     print("Have /proc")
-    sys_exec("cat", "/proc/%i/maps" % os.getpid())
+    # sys_exec("cat", "/proc/%i/maps" % os.getpid())
+    print("Mapped executables/libs:")
+    fns = collect_proc_maps_exec_files()
+    pprint(fns)
+    fns_with_sgemm = []
+    for fn in fns:
+      out = find_sym_in_exec(fn, "sgemm")
+      if out:
+        print(out)
+        fns_with_sgemm.append(fn)
+    print("Found libs with sgemm:")
+    pprint(fns_with_sgemm)
+  else:
+    print("Does not have /proc.")
   # Numpy stuff, debugging if sgemm was not found:
   numpy_path = os.path.dirname(numpy.__file__)
   print("Numpy path: %r" % numpy_path)
@@ -98,19 +162,30 @@ def dump_info():
     debug_lib_so(f, ["sgemm"])
 
 
+# Do this here such that we always see this log in Travis.
 try:
   print("travis_fold:start:script.dump_info")  # https://github.com/travis-ci/travis-ci/issues/1065
   dump_info()
 except Exception as exc:
   print("dump_info exception:", exc)
   print("(See more info in test_dummy output.)")
+
+  # Define this test only in case we failed.
+  def test_dummy():
+    dump_info()
+
 finally:
   print("travis_fold:end:script.dump_info")
 
 
-def test_dummy():
-  dump_info()
-  #assert False
+# Do this here such that we always see this log in Travis.
+try:
+  print("travis_fold:start:script.nativelstm2compile")
+  make_op(NativeOp.NativeLstm2, compiler_opts={"verbose": True})
+except Exception as exc:
+  print("NativeLstm2 compile exception:", exc)
+finally:
+  print("travis_fold:end:script.nativelstm2compile")
 
 
 def test_make_lstm_op_auto_cuda():

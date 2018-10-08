@@ -395,15 +395,12 @@ class OpMaker(object):
     # it probably is not needed to explicitly link it again for this module.
     # In other cases, it's probably needed, but it's not so clear which lib has the
     # right symbols (e.g. the `sgemm_` symbol).
-    # The current solution is just to link against blas/f77blas
-    # (both can potentially have the symbol) if it finds the lib.
     ld_flags = []
-    if find_lib("blas"):
-      ld_flags += ["-lblas"]
-    if find_lib("f77blas"):
-      ld_flags += ["-lf77blas"]
-    # Another option to find some BLAS lib.
     if self.search_for_numpy_blas:
+      # Find related Numpy libs.
+      # Numpy usually comes with OpenBlas, and Numpy is probably loaded anyway.
+      # Even do this before the other libs below, as it is likely
+      # that this OpenBlas lib is correctly initialized already.
       import numpy
       numpy_dir = os.path.dirname(numpy.__file__)
       if os.path.exists("%s/.libs" % numpy_dir):
@@ -416,6 +413,12 @@ class OpMaker(object):
           if f.endswith(".so"):
             f = f[:-3]
           ld_flags += ["-l%s" % f]
+    # Try to just link against blas/f77blas
+    # (both can potentially have the symbol) if it finds the lib.
+    if find_lib("blas"):
+      ld_flags += ["-lblas"]
+    if find_lib("f77blas"):
+      ld_flags += ["-lf77blas"]
     comp = TFUtil.OpCodeCompiler(
       base_name=self.name, code_version=self.description.code_version,
       code=self._make_code(),
