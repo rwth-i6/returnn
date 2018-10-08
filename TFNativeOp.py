@@ -55,7 +55,7 @@ class OpMaker(object):
   mod_cache = {}  # cache_key -> mod
   op_cache = {}  # cache_key -> op
 
-  def __init__(self, description, compiler_opts=None, search_for_numpy_blas=True):
+  def __init__(self, description, compiler_opts=None, search_for_numpy_blas=True, search_for_system_blas=False):
     """
     :param OpDescription description:
     :param dict[str]|None compiler_opts: passed on to OpCodeCompiler as kwargs
@@ -65,6 +65,7 @@ class OpMaker(object):
     self.name = description.name
     self.compiler_opts = compiler_opts or {}
     self.search_for_numpy_blas = search_for_numpy_blas
+    self.search_for_system_blas = search_for_system_blas
 
   @classmethod
   def _cls_init(cls):
@@ -413,12 +414,13 @@ class OpMaker(object):
           if f.endswith(".so"):
             f = f[:-3]
           ld_flags += ["-l%s" % f]
-    # Try to just link against blas/f77blas
-    # (both can potentially have the symbol) if it finds the lib.
-    if find_lib("blas"):
-      ld_flags += ["-lblas"]
-    if find_lib("f77blas"):
-      ld_flags += ["-lf77blas"]
+    if self.search_for_system_blas:
+      # Try to just link against blas/f77blas
+      # (both can potentially have the symbol) if it finds the lib.
+      if find_lib("blas"):
+        ld_flags += ["-lblas"]
+      if find_lib("f77blas"):
+        ld_flags += ["-lf77blas"]
     comp = TFUtil.OpCodeCompiler(
       base_name=self.name, code_version=self.description.code_version,
       code=self._make_code(),
