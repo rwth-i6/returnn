@@ -2014,6 +2014,25 @@ def read_sge_num_procs(job_id=None):
       exc, opts["num_proc"], job_id, ls[0]))
 
 
+def get_number_available_cpus():
+  """
+  :return: number of available GPUs, if we can figure it out
+  :rtype: int|None
+  """
+  if hasattr(os, "sched_getaffinity"):  # Python >=3.4
+    return len(os.sched_getaffinity(0))
+  try:
+    import psutil
+    return len(psutil.Process().cpu_affinity())
+  except ImportError:
+    pass
+  if hasattr(os, "sysconf") and "SC_NPROCESSORS_ONLN" in os.sysconf_names:
+    return os.sysconf("SC_NPROCESSORS_ONLN")
+  if hasattr(os, "cpu_count"):  # Python >=3.4
+    return os.cpu_count()  # not quite correct; that are all in the system
+  return None
+
+
 def guess_requested_max_num_threads(log_file=None, fallback_num_cpus=True):
   try:
     sge_num_procs = read_sge_num_procs()
@@ -2032,7 +2051,7 @@ def guess_requested_max_num_threads(log_file=None, fallback_num_cpus=True):
       print("Use num_threads=%i (but min 2) via OMP_NUM_THREADS." % omp_num_threads, file=log_file)
     return max(omp_num_threads, 2)
   if fallback_num_cpus:
-    return os.cpu_count()
+    return get_number_available_cpus()
   return None
 
 
