@@ -517,9 +517,9 @@ def is_at_exit():
     :return: whether the Python interpreter is currently in the process of shutting down
     :rtype: bool
     """
-    if not hasattr(threading, "main_thread"):
-        return True
     if _threading_main_thread is not None:
+        if not hasattr(threading, "main_thread"):
+            return True
         if threading.main_thread() != _threading_main_thread:
             return True
         if not _threading_main_thread.is_alive():
