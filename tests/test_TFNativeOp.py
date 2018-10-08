@@ -114,6 +114,13 @@ def collect_proc_maps_exec_files():
   return fns
 
 
+def test_numpy_gemm():
+  a = numpy.random.randn(100, 50).astype(numpy.float32)
+  b = numpy.random.randn(50, 13).astype(numpy.float32)
+  c = numpy.dot(a, b)
+  assert numpy.isfinite(c).all()
+
+
 def dump_info():
   # Some generic stuff.
   sys_exec("g++", "--version")
@@ -156,6 +163,8 @@ def dump_info():
   # Numpy stuff, debugging if sgemm was not found:
   numpy_path = os.path.dirname(numpy.__file__)
   print("Numpy path: %r" % numpy_path)
+  print("Numpy config:")
+  numpy.show_config()
   so_files = Util.sysexecOut("find %s | grep \"\.so\"" % numpy_path, shell=True)
   print("Numpy so files:\n---\n%s\n---\n" % so_files)
   so_files = [f for f in so_files.splitlines() if f]
@@ -192,6 +201,11 @@ except Exception as exc:
 finally:
   print("travis_fold:end:script.nativelstm2compile")
   sys.stdout = orig_stdout
+
+
+# Do this now such that we ensure that some Numpy gemm function was called early,
+# which might trigger OpenBlas init or so.
+test_numpy_gemm()
 
 
 def test_make_lstm_op_auto_cuda():
