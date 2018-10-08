@@ -123,7 +123,10 @@ def test_numpy_gemm():
 
 def dump_info():
   # Some generic stuff.
+  print("Number available CPUs:", Util.get_number_available_cpus())
   sys_exec("g++", "--version")
+  print("TF __file__:", tf.__file__)
+  print("TF version:", tf.__version__)
   print("TF include:", tf.sysconfig.get_include())
   print("TF lib:", tf.sysconfig.get_lib())
   tf_lib_so = tf.sysconfig.get_lib() + "/libtensorflow_framework.so"
