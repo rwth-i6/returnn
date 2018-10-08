@@ -163,7 +163,9 @@ def dump_info():
 
 
 # Do this here such that we always see this log in Travis.
+orig_stdout = sys.stdout
 try:
+  sys.stdout = sys.__stdout__  # Nosetests has overwritten sys.stdout
   print("travis_fold:start:script.dump_info")  # https://github.com/travis-ci/travis-ci/issues/1065
   dump_info()
 except Exception as exc:
@@ -176,16 +178,19 @@ except Exception as exc:
 
 finally:
   print("travis_fold:end:script.dump_info")
+  sys.stdout = orig_stdout
 
 
 # Do this here such that we always see this log in Travis.
 try:
+  sys.stdout = sys.__stdout__
   print("travis_fold:start:script.nativelstm2compile")
   make_op(NativeOp.NativeLstm2, compiler_opts={"verbose": True})
 except Exception as exc:
   print("NativeLstm2 compile exception:", exc)
 finally:
   print("travis_fold:end:script.nativelstm2compile")
+  sys.stdout = orig_stdout
 
 
 def test_make_lstm_op_auto_cuda():
