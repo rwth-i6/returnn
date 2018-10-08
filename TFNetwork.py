@@ -684,6 +684,8 @@ class TFNetwork(object):
       assert isinstance(layer, LayerBase)
       for param_name, param in sorted(layer.params.items()):
         assert isinstance(param, tf.Variable)
+        if param in l:  # could happen with reuse_params
+          continue
         l.append(param)
     return l
 
