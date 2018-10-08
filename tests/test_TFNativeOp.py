@@ -15,6 +15,7 @@ sys.path.insert(0, base_path)
 from TFNativeOp import *
 from TFUtil import is_gpu_available, get_available_gpu_min_compute_capability, CudaEnv
 import Util
+from Util import unicode
 import unittest
 from nose.tools import assert_equal, assert_is_instance
 import numpy
@@ -79,7 +80,7 @@ def find_sym_in_exec(fn, sym):
     out = Util.sysexecOut(cmd, shell=True)
   except CalledProcessError:  # none found
     return None
-  assert isinstance(out, str)
+  assert isinstance(out, (str, unicode))
   out_lns = out.splitlines()
   out_lns = [ln for ln in out_lns if ".text" in ln]  # see objdump
   if not out_lns:
