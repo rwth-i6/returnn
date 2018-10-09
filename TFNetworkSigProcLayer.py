@@ -522,6 +522,28 @@ class ParametricWienerFilterLayer(LayerBase):
     d["noise_estimation"] = get_layer(d["noise_estimation"])
 
 
+class SignalMaskingLayer(LayerBase):
+  """
+  """
+  layer_class = "signal_masking"
+
+  def __init__(self, signal, mask, **kwargs):
+    """
+    :param str signal: name of layer the signal to be masked
+    :param str mask: name of layer containing the mask
+    """
+    super(SignalMaskingLayer, self).__init__(**kwargs)
+    self.output.placeholder = tf.multiply(signal.output.placeholder, mask.output.placeholder)
+    self.output.size_placeholder = signal.output.size_placeholder
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    d.setdefault("from", [])
+    super(SignalMaskingLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    d["signal"] = get_layer(d["signal"])
+    d["mask"] = get_layer(d["mask"])
+
+
 class SplitConcatMultiChannel(_ConcatInputLayer):
   """
   This layer assumes the feature vector to be a concatenation of features of
