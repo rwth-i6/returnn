@@ -231,7 +231,7 @@ class LayerBase(object):
               out_type.setdefault("feature_dim_axis", None)
       elif network.is_inside_rec_layer():
         out_type.setdefault("time_dim_axis", None)
-    if sources_data:
+    if sources_data and "shape" not in out_type:
       if out_type.get("sparse", False):
         out_type.setdefault("shape", sources_data.shape_sparse)
       else:  # not sparse
