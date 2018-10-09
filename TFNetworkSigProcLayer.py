@@ -541,8 +541,8 @@ class SignalMaskingLayer(LayerBase):
       return signal, mask
 
     super(SignalMaskingLayer, self).__init__(**kwargs)
-    self._signal = signal.output.placeholder
-    self._mask = mask.output.placeholder
+    self._signal = signal.output.get_placeholder_as_batch_major()
+    self._mask = mask.output.get_placeholder_as_batch_major()
     self._signal, self._mask = _castSignalAndMaskIfNecessary(self._signal, self._mask)
     self.output.placeholder = tf.multiply(self._signal, self._mask)
     self.output.size_placeholder = signal.output.size_placeholder
