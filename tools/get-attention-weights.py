@@ -30,6 +30,7 @@ import rnn
 from Log import log
 from TFEngine import Runner
 from Dataset import init_dataset
+from Util import NumbersDict
 
 
 def inject_retrieval_code(args, layers):
@@ -133,7 +134,7 @@ def main(argv):
   argparser.add_argument("--enc_layer", default="encoder")
   argparser.add_argument("--batch_size", type=int, default=5000)
   argparser.add_argument("--seq_list", default=[], action="append", help="predefined list of seqs")
-  argparser.add_argument("--min_input_seq_len", type=int, default=0)
+  argparser.add_argument("--min_seq_len", default="0", help="can also be dict")
   argparser.add_argument("--output_format", default="npy", help="npy or png")
   args = argparser.parse_args(argv[1:])
 
@@ -143,6 +144,7 @@ def main(argv):
 
   if args.do_search:
     raise NotImplementedError
+  min_seq_length = NumbersDict(eval(args.min_seq_len))
 
   if not os.path.exists(args.dump_dir):
     os.makedirs(args.dump_dir)
@@ -179,6 +181,7 @@ def main(argv):
     batch_size=args.batch_size,
     max_seqs=rnn.engine.max_seqs,
     max_seq_length=sys.maxsize,
+    min_seq_length=min_seq_length,
     used_data_keys=network.used_data_keys)
 
   # (**dict[str,numpy.ndarray|str|list[numpy.ndarray|str])->None
@@ -204,8 +207,6 @@ def main(argv):
         np.save(fname, data)
     elif args.output_format == "png":
       for i in range(len(seq_idx)):
-        if len(target_data[i]) < args.min_input_seq_len:
-          continue
         for l in layers:
           fname = args.dump_dir + '/%s_ep%03d_plt_%s_%05i.png' % (model_name, rnn.engine.epoch, l, seq_idx[i])
           att_weights = kwargs["rec_%s" % l][i]

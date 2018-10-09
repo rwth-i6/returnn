@@ -690,7 +690,7 @@ class Dataset(object):
     return start, end
 
   def _generate_batches(self, recurrent_net,
-                        batch_size, max_seqs=-1, max_seq_length=sys.maxsize,
+                        batch_size, max_seqs=-1, max_seq_length=sys.maxsize, min_seq_length=0,
                         seq_drop=0.0,
                         used_data_keys=None):
     """
@@ -711,6 +711,7 @@ class Dataset(object):
     if isinstance(max_seq_length, int) and max_seq_length < 0:
       max_seq_length = {"classes": -max_seq_length}
     max_seq_length = NumbersDict(max_seq_length)
+    min_seq_length = NumbersDict(min_seq_length)
     assert max_seqs > 0
     assert seq_drop <= 1.0
     chunk_size = self.chunk_size
@@ -729,6 +730,8 @@ class Dataset(object):
       if recurrent_net:
         length = t_end - t_start
         if length.any_compare(max_seq_length, (lambda a, b: a > b)):
+          continue
+        if length.any_compare(min_seq_length, (lambda a, b: a < b)):
           continue
         if length.max_value() > batch_size:
           print("warning: sequence length (%i) larger than limit (%i)" % (length.max_value(), batch_size), file=log.v4)
