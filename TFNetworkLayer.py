@@ -2009,13 +2009,13 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
   """
   layer_class = "softmax_over_spatial"
 
-  def __init__(self, energy_factor=None, window_start=None, window_size=10, **kwargs):
+  def __init__(self, energy_factor=None, window_start=None, window_size=None, **kwargs):
     """
     :param float|None energy_factor: the energy will be scaled by this factor.
       This is like a temperature for the softmax.
       In Attention-is-all-you-need, this is set to 1/sqrt(base_ctx.dim).
-    :param LayerBase|None window_start: Tensor of shape (B,) indicating the window start
-    :param int window_size:
+    :param LayerBase|None window_start: Tensor of shape (B,1) indicating the window start
+    :param int|None window_size:
     """
     from TFUtil import move_axis
     import numpy
@@ -2030,16 +2030,24 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
     if energy_data.is_time_axis_dynamic():
       energy_mask = energy_data.get_sequence_mask()
       if window_start is not None:
+        assert window_size is not None, "set window_size explicitly"
         from TFUtil import nd_indices, expand_dims_unbroadcast
-        window_start = window_start.output.get_placeholder_as_batch_major()
+        # handle edge cases correctly:
+        # 1. if the energy time-dim is less than `window_size`, we adjust the window size.
+        # 2. for each seq, we adjust the window so that no elements after the seq-len are indexed.
+        window_len = tf.minimum(window_size, energy_shape[energy_data.time_dim_axis])  # case 1.
+        window_start = tf.squeeze(window_start.output.placeholder, axis=window_start.output.feature_dim_axis)  # (B,)
+        window_start = tf.to_int32(window_start)
+        window_start = tf.where(tf.greater(window_start+window_len, energy_shape[energy_data.time_dim_axis]),
+            tf.ones_like(window_start) * (energy_shape[energy_data.time_dim_axis] - window_len),
+            window_start)  # case 2.
         n_batch = energy_shape[energy_data.batch_dim_axis]
-        # time-major: (W,B), batch-major(B,W)
-        # untested for batch_major
-        indices = expand_dims_unbroadcast(tf.range(window_size), energy_data.batch_dim_axis, n_batch)
-        indices += tf.expand_dims(tf.to_int32(window_start), axis=energy_data.time_dim_axis)  # (W, B) + (1,B) = (W,B)
+        indices = expand_dims_unbroadcast(tf.range(window_len), energy_data.batch_dim_axis, n_batch)
+        # time-major: (W,B) + (1,B), batch-major: (B, W) + (1,B)
+        indices += tf.expand_dims(tf.to_int32(window_start), axis=energy_data.time_dim_axis)
         idxs = nd_indices(indices)
         mask_shape = energy_shape[:2]  # (T, B)
-        mask_shape[energy_data.time_dim_axis] = window_size  # (W, B) | (B, W)
+        mask_shape[energy_data.time_dim_axis] = window_len
         energy_mask_window = tf.scatter_nd(idxs, tf.ones(shape=mask_shape), energy_shape[:2])
         energy_mask_window = tf.cast(energy_mask_window, tf.bool)
         energy_mask = tf.logical_and(energy_mask, energy_mask_window)
