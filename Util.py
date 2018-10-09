@@ -2887,3 +2887,95 @@ def softmax(x, axis=None):
     import numpy
     e_x = numpy.exp(x - numpy.max(x, axis=axis, keepdims=True))
     return e_x / numpy.sum(e_x, axis=axis, keepdims=True)
+
+
+def collect_proc_maps_exec_files():
+  """
+  Currently only works on Linux...
+
+  :return: list of mapped executables (libs)
+  :rtype: list[str]
+  """
+  import re
+  pid = os.getpid()
+  fns = []
+  for line in open("/proc/%i/maps" % pid, 'r').read().splitlines():  # for each mapped region
+    # https://stackoverflow.com/questions/1401359/understanding-linux-proc-id-maps
+    # address           perms offset  dev   inode   pathname
+    # E.g.:
+    # 7ff2de91c000-7ff2de91e000 rw-p 0017c000 08:02 794844                     /usr/lib/x86_64-linux-gnu/libstdc+...
+    m = re.match(
+      r'^([0-9A-Fa-f]+)-([0-9A-Fa-f]+)\s+([rwxps\-]+)\s+([0-9A-Fa-f]+)\s+([0-9A-Fa-f:]+)\s+([0-9]+)\s*(.*)$', line)
+    assert m, "no match for %r" % line
+    address_start, address_end, perms, offset, dev, i_node, path_name = m.groups()
+    if "x" not in perms:
+      continue
+    if not path_name or path_name.startswith("["):
+      continue
+    if path_name not in fns:
+      fns.append(path_name)
+  return fns
+
+
+def find_sym_in_exec(fn, sym):
+  """
+  Uses ``objdump`` to list available symbols, and filters them by the given ``sym``.
+
+  :param str fn: path
+  :param str sym:
+  :return: matched out, or None
+  :rtype: str|None
+  """
+  from subprocess import CalledProcessError
+  objdump = "objdump -T"
+  if sys.platform == "darwin":
+    objdump = "otool -IHGv"
+  cmd = "%s %s | grep %s" % (objdump, fn, sym)
+  try:
+    out = sysexecOut(cmd, shell=True)
+  except CalledProcessError:  # none found
+    return None
+  assert isinstance(out, (str, unicode))
+  out_lns = out.splitlines()
+  out_lns = [ln for ln in out_lns if ".text" in ln]  # see objdump
+  out_lns = [ln for ln in out_lns if sym in ln.split()]
+  if not out_lns:
+    return None
+  return "Found %r in %r:\n%s" % (sym, fn, "\n".join(out_lns))
+
+
+def dummy_numpy_gemm_call():
+  import numpy
+  a = numpy.random.randn(5, 3).astype(numpy.float32)
+  b = numpy.random.randn(3, 7).astype(numpy.float32)
+  c = numpy.dot(a, b)
+  assert numpy.isfinite(c).all()
+
+
+_find_sgemm_lib_from_runtime_cached = None
+
+
+def find_sgemm_libs_from_runtime():
+  """
+  Looks through all libs via :func:`collect_proc_maps_exec_files`,
+  and searches for all which have the ``sgemm`` symbol.
+  Currently only works on Linux (because collect_proc_maps_exec_files).
+
+  :return: list of libs (their path)
+  :rtype: list[str]
+  """
+  if not os.path.exists("/proc"):
+    return None
+  global _find_sgemm_lib_from_runtime_cached
+  if _find_sgemm_lib_from_runtime_cached is not None:
+    return _find_sgemm_lib_from_runtime_cached
+  dummy_numpy_gemm_call()  # make sure that Numpy is loaded and Numpy sgemm is available
+  fns = collect_proc_maps_exec_files()
+  fns_with_sgemm = []
+  for fn in fns:
+    out = find_sym_in_exec(fn, "sgemm_")
+    if out:
+      fns_with_sgemm.append(fn)
+  _find_sgemm_lib_from_runtime_cached = fns_with_sgemm
+  return fns_with_sgemm
+

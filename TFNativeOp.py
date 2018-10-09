@@ -55,7 +55,8 @@ class OpMaker(object):
   mod_cache = {}  # cache_key -> mod
   op_cache = {}  # cache_key -> op
 
-  def __init__(self, description, compiler_opts=None, search_for_numpy_blas=True, search_for_system_blas=False):
+  def __init__(self, description, compiler_opts=None,
+               search_for_runtime_blas=True, search_for_numpy_blas=True, search_for_system_blas=True):
     """
     :param OpDescription description:
     :param dict[str]|None compiler_opts: passed on to OpCodeCompiler as kwargs
@@ -64,6 +65,7 @@ class OpMaker(object):
     self.description = description
     self.name = description.name
     self.compiler_opts = compiler_opts or {}
+    self.search_for_runtime_blas = search_for_runtime_blas
     self.search_for_numpy_blas = search_for_numpy_blas
     self.search_for_system_blas = search_for_system_blas
 
@@ -397,7 +399,15 @@ class OpMaker(object):
     # In other cases, it's probably needed, but it's not so clear which lib has the
     # right symbols (e.g. the `sgemm_` symbol).
     ld_flags = []
-    if self.search_for_numpy_blas:
+    have_blas_lib = False
+    if self.search_for_runtime_blas:
+      import Util
+      libs = Util.find_sgemm_libs_from_runtime()
+      if libs:
+        for fn in libs:
+          ld_flags += ["-L%s" % os.path.dirname(fn), "-l:%s" % os.path.basename(fn)]
+          have_blas_lib = True
+    if not have_blas_lib and self.search_for_numpy_blas:
       # Find related Numpy libs.
       # Numpy usually comes with OpenBlas, and Numpy is probably loaded anyway.
       # Even do this before the other libs below, as it is likely
@@ -414,13 +424,18 @@ class OpMaker(object):
           if f.endswith(".so"):
             f = f[:-3]
           ld_flags += ["-l%s" % f]
-    if self.search_for_system_blas:
+          have_blas_lib = True
+    if not have_blas_lib and self.search_for_system_blas:
       # Try to just link against blas/f77blas
       # (both can potentially have the symbol) if it finds the lib.
       if find_lib("blas"):
         ld_flags += ["-lblas"]
+        have_blas_lib = True
       if find_lib("f77blas"):
         ld_flags += ["-lf77blas"]
+        have_blas_lib = True
+    if not have_blas_lib:
+      print("WARNING: OpMaker: no BLAS lib found")
     comp = TFUtil.OpCodeCompiler(
       base_name=self.name, code_version=self.description.code_version,
       code=self._make_code(),

@@ -64,56 +64,6 @@ def debug_lib_so(f, syms=()):
     sys_exec(cmd, shell=True)
 
 
-def find_sym_in_exec(fn, sym):
-  """
-  :param str fn: path
-  :param str sym:
-  :return: matched out, or None
-  :rtype: str|None
-  """
-  from subprocess import CalledProcessError
-  objdump = "objdump -T"
-  if sys.platform == "darwin":
-    objdump = "otool -IHGv"
-  cmd = "%s %s | grep %s" % (objdump, fn, sym)
-  try:
-    out = Util.sysexecOut(cmd, shell=True)
-  except CalledProcessError:  # none found
-    return None
-  assert isinstance(out, (str, unicode))
-  out_lns = out.splitlines()
-  out_lns = [ln for ln in out_lns if ".text" in ln]  # see objdump
-  if not out_lns:
-    return None
-  return "Found %r in %r:\n%s" % (sym, fn, "\n".join(out_lns))
-
-
-def collect_proc_maps_exec_files():
-  """
-  :return: list of mapped executables (libs)
-  :rtype: list[str]
-  """
-  import re
-  pid = os.getpid()
-  fns = []
-  for line in open("/proc/%i/maps" % pid, 'r').read().splitlines():  # for each mapped region
-    # https://stackoverflow.com/questions/1401359/understanding-linux-proc-id-maps
-    # address           perms offset  dev   inode   pathname
-    # E.g.:
-    # 7ff2de91c000-7ff2de91e000 rw-p 0017c000 08:02 794844                     /usr/lib/x86_64-linux-gnu/libstdc+...
-    m = re.match(
-      r'^([0-9A-Fa-f]+)-([0-9A-Fa-f]+)\s+([rwxps\-]+)\s+([0-9A-Fa-f]+)\s+([0-9A-Fa-f:]+)\s+([0-9]+)\s*(.*)$', line)
-    assert m, "no match for %r" % line
-    address_start, address_end, perms, offset, dev, i_node, path_name = m.groups()
-    if "x" not in perms:
-      continue
-    if not path_name or path_name.startswith("["):
-      continue
-    if path_name not in fns:
-      fns.append(path_name)
-  return fns
-
-
 def test_numpy_gemm():
   a = numpy.random.randn(100, 50).astype(numpy.float32)
   b = numpy.random.randn(50, 13).astype(numpy.float32)
@@ -151,11 +101,11 @@ def dump_info():
     print("Have /proc")
     # sys_exec("cat", "/proc/%i/maps" % os.getpid())
     print("Mapped executables/libs:")
-    fns = collect_proc_maps_exec_files()
+    fns = Util.collect_proc_maps_exec_files()
     pprint(fns)
     fns_with_sgemm = []
     for fn in fns:
-      out = find_sym_in_exec(fn, "sgemm")
+      out = Util.find_sym_in_exec(fn, "sgemm_")
       if out:
         print(out)
         fns_with_sgemm.append(fn)
@@ -194,11 +144,15 @@ finally:
   sys.stdout = orig_stdout
 
 
+def test_native2lstm_compile():
+  make_op(NativeOp.NativeLstm2, compiler_opts={"verbose": True})
+
+
 # Do this here such that we always see this log in Travis.
 try:
   sys.stdout = sys.__stdout__
   print("travis_fold:start:script.nativelstm2compile")
-  make_op(NativeOp.NativeLstm2, compiler_opts={"verbose": True})
+  test_native2lstm_compile()
 except Exception as exc:
   print("NativeLstm2 compile exception:", exc)
 finally:
