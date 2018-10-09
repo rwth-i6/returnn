@@ -107,11 +107,12 @@ def init_returnn(config_fn, cmd_line_opts, args):
 
 
 def init_net():
-  if config.has("load_epoch"):
-    rnn.engine.init_network_from_config(config=rnn.config)
-  else:
-    # Will load the latest epoch.
-    rnn.engine.init_train_from_config(config=rnn.config)
+  # TODO: fix this... problem is train flag...
+  #if config.has("load_epoch"):
+  #  rnn.engine.init_network_from_config(config=rnn.config)
+  #else:
+  # Will load the latest epoch.
+  rnn.engine.init_train_from_config(config=rnn.config)
 
   if rnn.engine.pretrain:
     new_network_desc = rnn.engine.pretrain.get_network_json_for_epoch(rnn.engine.epoch)
@@ -151,6 +152,7 @@ def main(argv):
   assert args.output_format in ["npy", "png"]
   if args.output_format == "png":
     import matplotlib.pyplot as plt  # need to import early? https://stackoverflow.com/a/45582103/133374
+    import matplotlib.ticker as ticker
   dataset_str = args.data
   if dataset_str in ["train", "dev", "eval"]:
     dataset_str = "config:%s" % dataset_str
@@ -210,13 +212,22 @@ def main(argv):
         for l in layers:
           fname = args.dump_dir + '/%s_ep%03d_plt_%s_%05i.png' % (model_name, rnn.engine.epoch, l, seq_idx[i])
           att_weights = kwargs["rec_%s" % l][i]
-          att_weights = att_weights.squeeze(axis=2)
+          att_weights = att_weights.squeeze(axis=2)  # (out,enc)
+          assert att_weights.shape[0] >= output_len[i] and att_weights.shape[1] >= encoder_len[i]
+          att_weights = att_weights[:output_len[i], :encoder_len[i]]
           print("Seq %i, %s: Dump att weights with shape %r to: %s" % (
             seq_idx[i], seq_tag[i], att_weights.shape, fname))
           plt.matshow(att_weights)
           title = seq_tag[i]
           if dataset.can_serialize_data(network.extern_data.default_target):
-            title += "\n" + dataset.serialize_data(network.extern_data.default_target, target_classes[i])
+            title += "\n" + dataset.serialize_data(
+              network.extern_data.default_target, target_classes[i][:output_len[i]])
+            ax = plt.gca()
+            tick_labels = [
+              dataset.serialize_data(network.extern_data.default_target, np.array([x], dtype=target_classes[i].dtype))
+              for x in target_classes[i][:output_len[i]]]
+            ax.set_yticklabels([''] + tick_labels, fontsize=8)
+            ax.yaxis.set_major_locator(ticker.MultipleLocator(1))
           plt.title(title)
           plt.savefig(fname)
           plt.close()
