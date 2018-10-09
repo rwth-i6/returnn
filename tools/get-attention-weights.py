@@ -1,5 +1,19 @@
 #!/usr/bin/env python3
 
+"""
+Dumps attention weights to Numpy npy files.
+
+To load them::
+
+    d = np.load("....npy").item()
+    d = [v for (k, v) in d.items()]
+    att_weights = d[-1]['rec_att_weights'].squeeze(axis=2)
+    import matplotlib.pyplot as plt
+    plt.matshow(att_weights)
+    plt.show()
+
+"""
+
 from __future__ import print_function
 
 import os
@@ -104,7 +118,7 @@ def init_net():
 
 
 def main(argv):
-  argparser = argparse.ArgumentParser(description='Get attention weights.')
+  argparser = argparse.ArgumentParser(description=__doc__)
   argparser.add_argument("config_file", type=str)
   argparser.add_argument("--epoch", required=False, type=int)
   argparser.add_argument('--data', default="train",
@@ -119,6 +133,8 @@ def main(argv):
   argparser.add_argument("--enc_layer", default="encoder")
   argparser.add_argument("--batch_size", type=int, default=5000)
   argparser.add_argument("--seq_list", default=[], action="append", help="predefined list of seqs")
+  argparser.add_argument("--min_input_seq_len", type=int, default=0)
+  argparser.add_argument("--output_format", default="npy", help="npy or png")
   args = argparser.parse_args(argv[1:])
 
   model_name = ".".join(args.config_file.split("/")[-1].split(".")[:-1])
@@ -130,6 +146,9 @@ def main(argv):
 
   if not os.path.exists(args.dump_dir):
     os.makedirs(args.dump_dir)
+  assert args.output_format in ["npy", "png"]
+  if args.output_format == "png":
+    import matplotlib.pyplot as plt  # need to import early? https://stackoverflow.com/a/45582103/133374
   dataset_str = args.data
   if dataset_str in ["train", "dev", "eval"]:
     dataset_str = "config:%s" % dataset_str
@@ -164,24 +183,41 @@ def main(argv):
 
   # (**dict[str,numpy.ndarray|str|list[numpy.ndarray|str])->None
   def fetch_callback(seq_idx, seq_tag, target_data, target_classes, output, output_len, encoder_len, **kwargs):
-    data = {}
-    for i in range(len(seq_idx)):
-      data[i] = {
-        'tag': seq_tag[i],
-        'data': target_data[i],
-        'classes': target_classes[i],
-        'output': output[i],
-        'output_len': output_len[i],
-        'encoder_len': encoder_len[i],
-      }
-      for l in [("rec_%s" % l) for l in layers]:
-        assert l in kwargs
-        out = kwargs[l][i]
-        assert out.ndim >= 2
-        assert out.shape[0] >= output_len[i] and out.shape[1] >= encoder_len[i]
-        data[i][l] = out[:output_len[i], :encoder_len[i]]
-      fname = args.dump_dir + '/%s_ep%03d_data_%i_%i.npy' % (model_name, rnn.engine.epoch, seq_idx[0], seq_idx[-1])
-      np.save(fname, data)
+    if args.output_format == "npy":
+      data = {}
+      for i in range(len(seq_idx)):
+        data[i] = {
+          'tag': seq_tag[i],
+          'data': target_data[i],
+          'classes': target_classes[i],
+          'output': output[i],
+          'output_len': output_len[i],
+          'encoder_len': encoder_len[i],
+        }
+        for l in [("rec_%s" % l) for l in layers]:
+          assert l in kwargs
+          out = kwargs[l][i]
+          assert out.ndim >= 2
+          assert out.shape[0] >= output_len[i] and out.shape[1] >= encoder_len[i]
+          data[i][l] = out[:output_len[i], :encoder_len[i]]
+        fname = args.dump_dir + '/%s_ep%03d_data_%i_%i.npy' % (model_name, rnn.engine.epoch, seq_idx[0], seq_idx[-1])
+        np.save(fname, data)
+    elif args.output_format == "png":
+      for i in range(len(seq_idx)):
+        if len(target_data[i]) < args.min_input_seq_len:
+          continue
+        for l in layers:
+          fname = args.dump_dir + '/%s_ep%03d_plt_%s_%05i.png' % (model_name, rnn.engine.epoch, l, seq_idx[i])
+          att_weights = kwargs["rec_%s" % l][i]
+          att_weights = att_weights.squeeze(axis=2)
+          print("Seq %i, %s: Dump att weights with shape %r to: %s" % (
+            seq_idx[i], seq_tag[i], att_weights.shape, fname))
+          plt.matshow(att_weights)
+          plt.title(seq_tag[i])
+          plt.savefig(fname)
+          plt.close()
+    else:
+      raise NotImplementedError("output format %r" % args.output_format)
 
   runner = Runner(engine=rnn.engine, dataset=dataset,
                   batches=dataset_batch, train=False, extra_fetches=extra_fetches,
