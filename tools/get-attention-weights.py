@@ -30,7 +30,7 @@ import rnn
 from Log import log
 from TFEngine import Runner
 from Dataset import init_dataset
-from Util import NumbersDict
+from Util import NumbersDict, Stats
 
 
 def inject_retrieval_code(args, layers):
@@ -53,7 +53,8 @@ def inject_retrieval_code(args, layers):
   assert isinstance(sub_cell, _SubnetworkRecCell)
   subnet = sub_cell.net
   assert isinstance(subnet, TFNetwork)
-  assert all([l in subnet.layers for l in layers]), "layer to retrieve not in subnet"
+  for l in layers:
+    assert l in network.layers_desc[args.rec_layer]['unit'], "layer %r not found" % l
 
   new_layers_descr = network.layers_desc.copy()
   for sub_layer in layers:
@@ -186,8 +187,14 @@ def main(argv):
     min_seq_length=min_seq_length,
     used_data_keys=network.used_data_keys)
 
+  stats = {l: Stats() for l in layers}
+
   # (**dict[str,numpy.ndarray|str|list[numpy.ndarray|str])->None
   def fetch_callback(seq_idx, seq_tag, target_data, target_classes, output, output_len, encoder_len, **kwargs):
+    for i in range(len(seq_idx)):
+      for l in layers:
+        att_weights = kwargs["rec_%s" % l][i]
+        stats[l].collect(att_weights.flatten())
     if args.output_format == "npy":
       data = {}
       for i in range(len(seq_idx)):
@@ -210,7 +217,7 @@ def main(argv):
     elif args.output_format == "png":
       for i in range(len(seq_idx)):
         for l in layers:
-          fname = args.dump_dir + '/%s_ep%03d_plt_%s_%05i.png' % (model_name, rnn.engine.epoch, l, seq_idx[i])
+          fname = args.dump_dir + '/%s_ep%03d_plt_%05i_%s.png' % (model_name, rnn.engine.epoch, seq_idx[i], l)
           att_weights = kwargs["rec_%s" % l][i]
           att_weights = att_weights.squeeze(axis=2)  # (out,enc)
           assert att_weights.shape[0] >= output_len[i] and att_weights.shape[1] >= encoder_len[i]
@@ -238,7 +245,11 @@ def main(argv):
                   batches=dataset_batch, train=False, extra_fetches=extra_fetches,
                   extra_fetches_callback=fetch_callback)
   runner.run(report_prefix="att-weights epoch %i" % rnn.engine.epoch)
-  assert runner.finalized
+  for l in layers:
+    stats[l].dump(stream_prefix="Layer %r " % l)
+  if not runner.finalized:
+    print("Some error occured, not finalized.")
+    sys.exit(1)
 
   rnn.finalize()
 
