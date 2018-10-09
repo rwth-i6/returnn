@@ -532,8 +532,19 @@ class SignalMaskingLayer(LayerBase):
     :param str signal: name of layer the signal to be masked
     :param str mask: name of layer containing the mask
     """
+    def _castSignalAndMaskIfNecessary(signal, mask):
+      if signal.dtype != mask.dtype:
+        if signal.dtype == tf.complex64 and mask.dtype == tf.float32:
+          return signal, tf.cast(mask, dtype=tf.complex64)
+        else:
+          raise NotImplementedError('difference in dtype between mask and signal is not supported yet.')
+      return signal, mask
+
     super(SignalMaskingLayer, self).__init__(**kwargs)
-    self.output.placeholder = tf.multiply(signal.output.placeholder, mask.output.placeholder)
+    self._signal = signal.output.placeholder
+    self._mask = mask.output.placeholder
+    self._signal, self._mask = _castSignalAndMaskIfNecessary(self._signal, self._mask)
+    self.output.placeholder = tf.multiply(self._signal, self._mask)
     self.output.size_placeholder = signal.output.size_placeholder
 
   @classmethod
