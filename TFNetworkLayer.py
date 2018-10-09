@@ -3087,7 +3087,7 @@ class ReduceLayer(_ConcatInputLayer):
   def __init__(self, mode, axes=None, axis=None, keep_dims=False, enforce_batch_dim_axis=None, use_time_mask=None,
                **kwargs):
     """
-    :param str mode: "sum" or "max", "min", or "mean"
+    :param str mode: "sum" or "max", "argmin", "min", "argmin", or "mean"
     :param int|list[int]|str axes: One axis or multiple axis to reduce.
       This is counted with batch-dim, which by default is axis 0 (see enforce_batch_dim_axis).
       It also accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature",
@@ -3111,7 +3111,7 @@ class ReduceLayer(_ConcatInputLayer):
       assert kwargs["n_out"] == self.output.dim
     assert "out_type" not in kwargs
     mode = mode.lower()
-    assert mode in ["max", "min", "sum", "avg", "mean"]
+    assert mode in ["max", "argmax", "min", "argmin", "sum", "avg", "mean"]
     assert not self.input_data.sparse
     x = self.input_data
     if enforce_batch_dim_axis is not None and x.batch_dim_axis != enforce_batch_dim_axis:
@@ -3125,8 +3125,12 @@ class ReduceLayer(_ConcatInputLayer):
     assert isinstance(use_time_mask, bool)
     if mode == "max":
       f = tf.reduce_max
+    elif mode == "argmax":
+      f = tf.argmax
     elif mode == "min":
       f = tf.reduce_min
+    elif mode == "argmin":
+      f = tf.argmin
     elif mode == "sum":
       f = tf.reduce_sum
     elif mode in ["avg", "mean"]:
@@ -3151,7 +3155,7 @@ class ReduceLayer(_ConcatInputLayer):
             mask, [i for i in range(x.batch_ndim) if i not in [x.batch_dim_axis, axis]])  # e.g. (B,1,T) with axis=-1
           mask = tf.logical_and(mask, tf.ones_like(x_, dtype=mask.dtype))
           x_ = tf.where(mask, x_, tf.zeros_like(x.placeholder), "x_masked_axis_%i" % axis)
-      else:  # not sum, e.g. mean or max
+      elif f in (tf.reduce_min, tf.reduce_mean, tf.reduce_max):
         # Flattening.
         if x.time_dim_axis in axes:
           assert not keep_dims, "not yet implemented otherwise"
@@ -3160,7 +3164,15 @@ class ReduceLayer(_ConcatInputLayer):
                   for a in axes if a != x.time_dim_axis]
           x = x.copy_time_flattened()
           x_ = x.placeholder
-    y = f(x_, axis=axes, keep_dims=keep_dims)
+    if f in (tf.argmax, tf.argmin):
+      assert len(axes) == 1, "For argmax/argmin, only one reduction axis is supported"
+      y = tf.to_float(f(x_, axis=axes[0]))
+      # argmax and argmin don't support keep_dims argument
+      # so we emulate it manually
+      if keep_dims:
+        y = expand_multiple_dims(y, axis=axes, dim=1)
+    else:
+      y = f(x_, axis=axes, keep_dims=keep_dims)
     y_dyn_sizes = x.size_placeholder.copy()
     if keep_dims:
       for i in axes:
