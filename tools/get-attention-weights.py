@@ -214,7 +214,10 @@ def main(argv):
           print("Seq %i, %s: Dump att weights with shape %r to: %s" % (
             seq_idx[i], seq_tag[i], att_weights.shape, fname))
           plt.matshow(att_weights)
-          plt.title(seq_tag[i])
+          title = seq_tag[i]
+          if dataset.can_serialize_data(network.extern_data.default_target):
+            title += "\n" + dataset.serialize_data(network.extern_data.default_target, target_classes[i])
+          plt.title(title)
           plt.savefig(fname)
           plt.close()
     else:
