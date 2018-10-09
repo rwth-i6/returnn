@@ -15,6 +15,7 @@ sys.path.append(returnn_dir)
 import rnn
 from Log import log
 from TFEngine import Runner
+from Dataset import init_dataset
 
 
 def inject_retrieval_code(args, layers):
@@ -62,47 +63,52 @@ def inject_retrieval_code(args, layers):
   rnn.engine.maybe_init_new_network(new_layers_descr)
 
 
-def init(configFilename, commandLineOptions, args):
+def init_returnn(config_fn, cmd_line_opts, args):
+  """
+  :param str config_fn:
+  :param list[str] cmd_line_opts:
+  :param args: arg_parse object
+  """
   rnn.initBetterExchook()
-  config_updates={
-      "log": None,
-      "task": "eval",
-      "eval": "config:get_dataset(%r)" % args.data,
-      "train": None,
-      "dev": None,
-      "need_data": True,
-      }
+  config_updates = {
+    "log": [],
+    "task": "eval",
+    "need_data": False}
   if args.epoch:
     config_updates["load_epoch"] = args.epoch
   if args.do_search:
     config_updates.update({
       "task": "search",
-      "search_data": "config:get_dataset(%r)" % args.data,
       "search_do_eval": False,
-      "beam_size": int(args.beam_size),
+      "beam_size": args.beam_size,
       "max_seq_length": 0,
       })
 
   rnn.init(
-    configFilename=configFilename, commandLineOptions=commandLineOptions,
-    config_updates=config_updates, extra_greeting="CRNN dump-forward starting up.")
-  rnn.engine.init_train_from_config(config=rnn.config)
+    configFilename=config_fn, commandLineOptions=cmd_line_opts,
+    config_updates=config_updates, extra_greeting="RETURNN get-attention-weights starting up.")
+  global config
+  config = rnn.config
+
+
+def init_net():
+  if config.has("load_epoch"):
+    rnn.engine.init_network_from_config(config=rnn.config)
+  else:
+    # Will load the latest epoch.
+    rnn.engine.init_train_from_config(config=rnn.config)
 
   if rnn.engine.pretrain:
     new_network_desc = rnn.engine.pretrain.get_network_json_for_epoch(rnn.engine.epoch)
     rnn.engine.maybe_init_new_network(new_network_desc)
-  global config
-  config = rnn.config
-  config.set("log", [])
-  rnn.initLog()
-  print("RETURNN get-attention-weights starting up.", file=log.v3)
 
 
 def main(argv):
   argparser = argparse.ArgumentParser(description='Get attention weights.')
   argparser.add_argument("config_file", type=str)
   argparser.add_argument("--epoch", required=False, type=int)
-  argparser.add_argument('--data', default="test")
+  argparser.add_argument('--data', default="train",
+                         help="e.g. 'train', 'config:train', or sth like 'config:get_dataset('dev')'")
   argparser.add_argument('--do_search', default=False, action='store_true')
   argparser.add_argument('--beam_size', default=12, type=int)
   argparser.add_argument('--dump_dir', required=True)
@@ -115,20 +121,27 @@ def main(argv):
   argparser.add_argument("--seq_list", default=[], action="append", help="predefined list of seqs")
   args = argparser.parse_args(argv[1:])
 
-  if not os.path.exists(args.dump_dir):
-    os.makedirs(args.dump_dir)
-
   model_name = ".".join(args.config_file.split("/")[-1].split(".")[:-1])
 
-  init(configFilename=args.config_file, commandLineOptions=["--device", args.device], args=args)
+  init_returnn(config_fn=args.config_file, cmd_line_opts=["--device", args.device], args=args)
+
+  if args.do_search:
+    raise NotImplementedError
+
+  if not os.path.exists(args.dump_dir):
+    os.makedirs(args.dump_dir)
+  dataset_str = args.data
+  if dataset_str in ["train", "dev", "eval"]:
+    dataset_str = "config:%s" % dataset_str
+  dataset = init_dataset(dataset_str)
+  init_net()
+
   layers = args.layers
   assert isinstance(layers, list)
   inject_retrieval_code(args, layers)
 
   network = rnn.engine.network
 
-  assert rnn.eval_data is not None, "provide evaluation data"
-  dataset = rnn.eval_data
   extra_fetches = {}
   for rec_ret_layer in ["rec_%s" % l for l in layers]:
     extra_fetches[rec_ret_layer] = rnn.engine.network.layers[rec_ret_layer].output.get_placeholder_as_batch_major()
@@ -138,8 +151,8 @@ def main(argv):
     "encoder_len": network.layers[args.enc_layer].output.get_sequence_lengths(),  # encoder length
     "seq_idx": network.get_extern_data("seq_idx"),
     "seq_tag": network.get_extern_data("seq_tag"),
-    "target_data": network.get_extern_data("data"),
-    "target_classes": network.get_extern_data("classes"),
+    "target_data": network.get_extern_data(network.extern_data.default_input),
+    "target_classes": network.get_extern_data(network.extern_data.default_target),
   })
   dataset.init_seq_order(epoch=rnn.engine.epoch, seq_list=args.seq_list or None)
   dataset_batch = dataset.generate_batches(
