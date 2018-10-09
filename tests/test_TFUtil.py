@@ -1322,6 +1322,29 @@ def test_safe_log_softmax():
   assert x.op.type == "LogSoftmax"
 
 
+def test_safe_log_with_identity_check_numerics():
+  x = tf.constant(0.5, shape=(3, 7))
+  x = tf.nn.softmax(x)
+  print("x (softmax) op_def:")
+  pprint(x.op.op_def)
+  assert x.op.type == "Softmax"
+  x = identity_with_check_numerics(x)
+  print("x (identity_with_check_numerics) op_def:")
+  pprint(x.op.op_def)
+  x_ = x
+  assert x.op.type == "Identity"
+  x = safe_log(x)
+  print("x (safe_log(softmax)) op_def")
+  pprint(x.op.op_def)
+  print("x.op.inputs[0] op_def")
+  pprint(x.op.inputs[0].op.op_def)
+  print("graph:")
+  print_graph_output(x)
+  assert x.op.type == x_.op.type == "Identity"
+  x = x.op.inputs[0]
+  assert x.op.type == "LogSoftmax"
+
+
 def test_clip_by_value_with_identity_grad():
   err_y = 42.0
   limit = 1.0

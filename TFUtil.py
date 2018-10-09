@@ -4512,11 +4512,11 @@ def check_base_op_type_and_replace(x, op_type, new_op_type):
   """
   assert isinstance(x, tf.Tensor)
   assert x.op.outputs[0] is x
-  if op_type != "Reshape" and x.op.type == "Reshape":
-    if x.op.inputs[0].op.type != op_type:
-      return None
+  safe_post_op_types = ["Identity", "Reshape"]
+  if op_type not in safe_post_op_types and x.op.type in safe_post_op_types:
     inner = check_base_op_type_and_replace(x.op.inputs[0], op_type=op_type, new_op_type=new_op_type)
-    assert inner is not None
+    if inner is None:
+      return None
     op = copy_op(x.op, inputs=[inner] + x.op.inputs[1:])
     return op.outputs[0]
   if x.op.type != op_type:
