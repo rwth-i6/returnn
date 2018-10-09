@@ -768,6 +768,9 @@ class ExternSprintDataset(SprintDatasetBase):
         # Don't catch KeyboardInterrupt here because that will get send by the main thread
         # when it is exiting. It's never by the user because SIGINT will always
         # trigger KeyboardInterrupt in the main thread only.
+        if epoch == self.crnnEpoch:
+          with self.lock:
+            self.finishSprintEpoch(seen_all=False)
         try:
           print("%s reader failed (%s)" % (self, exc), file=log.v1)
           sys.excepthook(*sys.exc_info())
