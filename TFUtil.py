@@ -921,8 +921,8 @@ class Data(object):
   def get_placeholder_time_flattened(self):
     assert self.placeholder is not None
     assert self.have_time_axis()
-    # flatten_with_seq_len_mask only works for these cases at the moment:
-    assert (self.time_dim_axis, self.batch_dim_axis) in [(0, 1), (1, 0), (0, 2), (2, 0)]
+    # flatten_with_seq_len_mask only works if either time_dim_axis or batch_dim_axis is 0:
+    assert 0 in [self.time_dim_axis, self.batch_dim_axis]
     seq_lens = self.size_placeholder[self.time_dim_axis_excluding_batch]
     return flatten_with_seq_len_mask(self.placeholder, seq_lens, batch_dim_axis=self.batch_dim_axis,
                                      time_dim_axis=self.time_dim_axis)
