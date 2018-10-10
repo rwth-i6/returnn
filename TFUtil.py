@@ -2712,7 +2712,7 @@ def flatten_with_seq_len_mask(x, seq_lens, batch_dim_axis=0, time_dim_axis=1, ti
   :param tf.Tensor seq_lens: shape (batch,) of int32
   :param int batch_dim_axis: index of batch_dim in x
   :param int time_dim_axis: index of time_dim in x
-  :param: bool time_major: whether time axis is 0 (redundant, kept for compatibility)
+  :param bool time_major: whether time axis is 0 (redundant, kept for compatibility)
   :return: tensor of shape (time', ...s...s'...) where time' = sum(seq_len) <= batch*time
   :rtype: tf.Tensor
   """
