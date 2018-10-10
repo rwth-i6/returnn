@@ -444,6 +444,7 @@ class OpMaker(object):
       use_cuda_if_available=self.with_cuda,
       **dict(self.compiler_opts))
     mod = comp.load_tf_module()
+    mod._op_compiler = comp
     self.mod_cache[self.cache_key] = mod
     return mod
 
@@ -453,6 +454,8 @@ class OpMaker(object):
         return self.op_cache[self.cache_key]
       mod = self._make_mod()
       op = getattr(mod, camel_case_to_snake_case(self.op_name))
+      op._op_maker = self
+      op._op_module = mod
       self.op_cache[self.cache_key] = op
 
       if self.description.is_grad_defined:

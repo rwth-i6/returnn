@@ -145,7 +145,17 @@ finally:
 
 
 def test_native2lstm_compile():
-  make_op(NativeOp.NativeLstm2, compiler_opts={"verbose": True})
+  op = make_op(NativeOp.NativeLstm2, compiler_opts={"verbose": True})
+  print("op:", op)
+  maker = op._op_maker
+  print("op maker:", maker)
+  mod = op._op_module
+  print("op mod:", mod)
+  comp = mod._op_compiler
+  print("op compiler:", comp)
+  assert isinstance(comp, TFUtil.OpCodeCompiler)
+  print("info dict:")
+  pprint(comp._info_dict)
 
 
 # Do this here such that we always see this log in Travis.
