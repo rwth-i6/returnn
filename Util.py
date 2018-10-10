@@ -2023,7 +2023,9 @@ def get_number_available_cpus():
     return len(os.sched_getaffinity(0))
   try:
     import psutil
-    return len(psutil.Process().cpu_affinity())
+    proc = psutil.Process()
+    if hasattr(proc, "cpu_affinity"):
+      return len(proc.cpu_affinity())
   except ImportError:
     pass
   if hasattr(os, "sysconf") and "SC_NPROCESSORS_ONLN" in os.sysconf_names:
