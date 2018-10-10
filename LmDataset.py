@@ -13,6 +13,7 @@ from Log import log
 import numpy
 import time
 import re
+import pickle
 from random import Random
 
 
@@ -83,6 +84,12 @@ class LmDataset(CachedDataset2):
       self.orth_symbols_map = {sym: i for (i, sym) in enumerate(orth_symbols)}
       self.orth_symbols = orth_symbols
       self.labels["data"] = orth_symbols
+      self.seq_gen = None
+    if orth_symbols_map_file and orth_symbols_map_file.endswith('.pkl'):
+      with open(orth_symbols_map_file, 'rb') as f:
+        self.orth_symbols_map = pickle.load(f)
+      self.orth_symbols = self.orth_symbols_map.keys()
+      self.labels["data"] = self.orth_symbols
       self.seq_gen = None
     elif orth_symbols_map_file:
       assert not phone_info
