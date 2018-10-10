@@ -2706,7 +2706,7 @@ def reversed(x):
   return y
 
 
-def flatten_with_seq_len_mask(x, seq_lens, batch_dim_axis=0, time_dim_axis=1, time_major=False):
+def flatten_with_seq_len_mask(x, seq_lens, batch_dim_axis=None, time_dim_axis=None, time_major=None):
   """
   :param tf.Tensor x: shape (batch,...s..., time, ...s'...) or shape (time,...s...., batch, ...s'...)
   :param tf.Tensor seq_lens: shape (batch,) of int32
@@ -2716,6 +2716,11 @@ def flatten_with_seq_len_mask(x, seq_lens, batch_dim_axis=0, time_dim_axis=1, ti
   :return: tensor of shape (time', ...s...s'...) where time' = sum(seq_len) <= batch*time
   :rtype: tf.Tensor
   """
+  # time_major is set(old_variant) => batch_dim_axis and time_dim_axis have to be None
+  if time_major is not None:
+    assert batch_dim_axis is None and time_dim_axis is None
+    batch_dim_axis = int(not time_dim_axis)
+    time_dim_axis = int(time_dim_axis)
   with tf.name_scope("flatten_with_seq_len_mask"):
     seq_lens = check_input_ndim(seq_lens, 1)
     if time_dim_axis == 0 or time_major:
