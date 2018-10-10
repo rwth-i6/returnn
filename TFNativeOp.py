@@ -404,6 +404,10 @@ class OpMaker(object):
       import Util
       libs = Util.find_sgemm_libs_from_runtime()
       if libs:
+        numpy_libs = [fn for fn in libs if "/numpy/.libs/" in fn]
+        if numpy_libs:
+          # Prefer Numpy; move to front.
+          libs = numpy_libs + [fn for fn in libs if fn not in numpy_libs]
         for fn in libs:
           ld_flags += ["-L%s" % os.path.dirname(fn), "-l:%s" % os.path.basename(fn)]
           have_blas_lib = True
