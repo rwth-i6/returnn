@@ -445,9 +445,9 @@ class ParametricWienerFilterLayer(LayerBase):
     :param float|None l_overwrite: if given overwrites the l value of the parametric wiener filter with the given constant
     :param float|None p_overwrite: if given overwrites the p value of the parametric wiener filter with the given constant
     :param float|None q_overwrite: if given overwrites the q value of the parametric wiener filter with the given constant
-    :param str|None filter_input: name of layer containing input for wiener filter
-    :param str|None parameters: name of layer containing parameters for wiener filter
-    :param str|None noise_estimation: name of layer containing noise estimate for wiener filter
+    :param LayerBase|None filter_input: name of layer containing input for wiener filter
+    :param LayerBase|None parameters: name of layer containing parameters for wiener filter
+    :param LayerBase|None noise_estimation: name of layer containing noise estimate for wiener filter
     """
     from tfSi6Proc.audioProcessing.enhancement.singleChannel import TfParametricWienerFilter
     super(ParametricWienerFilterLayer, self).__init__(**kwargs)
@@ -529,10 +529,10 @@ class SignalMaskingLayer(LayerBase):
 
   def __init__(self, signal, mask, **kwargs):
     """
-    :param str signal: name of layer the signal to be masked
-    :param str mask: name of layer containing the mask
+    :param LayerBase signal: name of layer the signal to be masked
+    :param LayerBase mask: name of layer containing the mask
     """
-    def _castSignalAndMaskIfNecessary(signal, mask):
+    def _cast_signal_and_mask_if_iecessary(signal, mask):
       if signal.dtype != mask.dtype:
         if signal.dtype == tf.complex64 and mask.dtype == tf.float32:
           return signal, tf.cast(mask, dtype=tf.complex64)
@@ -543,7 +543,7 @@ class SignalMaskingLayer(LayerBase):
     super(SignalMaskingLayer, self).__init__(**kwargs)
     self._signal = signal.output.get_placeholder_as_batch_major()
     self._mask = mask.output.get_placeholder_as_batch_major()
-    self._signal, self._mask = _castSignalAndMaskIfNecessary(self._signal, self._mask)
+    self._signal, self._mask = _cast_signal_and_mask_if_iecessary(self._signal, self._mask)
     self.output.placeholder = tf.multiply(self._signal, self._mask)
     self.output.size_placeholder = signal.output.size_placeholder
 
