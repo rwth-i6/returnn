@@ -43,12 +43,14 @@ class CancelTrainingException(Exception):
 
 
 class Runner(object):
-  def __init__(self, engine, dataset, batches, train, eval=True, extra_fetches=None, extra_fetches_callback=None):
+  def __init__(self, engine, dataset, batches, train, eval=True, train_flag=None,
+               extra_fetches=None, extra_fetches_callback=None):
     """
     :param Engine engine:
     :param Dataset.Dataset dataset:
     :param BatchSetGenerator batches:
     :param bool train: whether to do updates on the model
+    :param bool|None train_flag: normally just as train. but e.g. maybe you want to have the train_flag but not train
     :param bool eval: whether to evaluate (i.e. calculate loss/error)
     :param dict[str,tf.Tensor|TFUtil.Data|TFNetworkLayer.LayerBase]|None extra_fetches: additional fetches per step.
       `extra_fetches_callback` will be called with these. In case of Data/LayerBase, it will return a list,
@@ -62,6 +64,9 @@ class Runner(object):
     self.engine = engine
     self.data_provider = self.engine._get_new_data_provider(dataset=dataset, batches=batches)
     assert isinstance(self.data_provider, DataProviderBase)
+    if train_flag is None:
+      train_flag = train
+    self._train_flag = train_flag
     self._should_train = train
     self._should_eval = eval
     self.store_metadata_mod_step = engine.config.int("store_metadata_mod_step", 0)
@@ -548,7 +553,7 @@ class Runner(object):
           break
         feed_dict, meta_step_info = self.data_provider.get_feed_dict()
         if isinstance(self.engine.network.train_flag, tf.Tensor):
-          feed_dict[self.engine.network.train_flag] = self._should_train
+          feed_dict[self.engine.network.train_flag] = self._train_flag
         if isinstance(self.engine.network.epoch_step, tf.Tensor):
           feed_dict[self.engine.network.epoch_step] = step
         start_time = time.time()
@@ -889,9 +894,10 @@ class Engine(object):
     # And also initialize the network. That depends on some vars here such as pretrain.
     self.init_network_from_config(config)
 
-  def init_network_from_config(self, config=None):
+  def init_network_from_config(self, config=None, net_dict_post_proc=None):
     """
     :param Config.Config|None config:
+    :param ((dict)->dict)|None net_dict_post_proc:
     """
     if not config:
       config = self.config
@@ -924,6 +930,8 @@ class Engine(object):
       net_dict = self.pretrain.get_network_json_for_epoch(self.epoch)
     else:
       net_dict = LayerNetwork.json_from_config(config)
+    if net_dict_post_proc:
+      net_dict = net_dict_post_proc(net_dict)
 
     self._init_network(net_desc=net_dict, epoch=self.epoch)
 

@@ -33,39 +33,33 @@ from Dataset import init_dataset
 from Util import NumbersDict, Stats
 
 
-def inject_retrieval_code(args, layers):
+def inject_retrieval_code(net_dict, rec_layer_name, layers, dropout):
   """
   Injects some retrieval code into the config
 
-  :param list[str] layers:
-  :param args:
+  :param dict[str] net_dict:
+  :param str rec_layer_name: name of rec layer
+  :param list[str] layers: layers in rec layer to extract
+  :param float|None dropout: to override, if given
+  :return: net_dict
+  :rtype: dict[str]
   """
-  global config
-  from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
-  from TFNetwork import TFNetwork
-  network = rnn.engine.network
-
   assert config is not None
-  assert args.rec_layer in network.layers
-  rec_layer = network.layers[args.rec_layer]
-  assert isinstance(rec_layer, RecLayer)
-  sub_cell = rec_layer.cell
-  assert isinstance(sub_cell, _SubnetworkRecCell)
-  subnet = sub_cell.net
-  assert isinstance(subnet, TFNetwork)
+  assert rec_layer_name in net_dict
+  assert net_dict[rec_layer_name]["class"] == "rec"
   for l in layers:
-    assert l in network.layers_desc[args.rec_layer]['unit'], "layer %r not found" % l
+    assert l in net_dict[rec_layer_name]['unit'], "layer %r not found" % l
 
-  new_layers_descr = network.layers_desc.copy()
+  new_layers_descr = net_dict.copy()  # actually better would be deepcopy...
   for sub_layer in layers:
     rec_ret_layer = "rec_%s" % sub_layer
-    if rec_ret_layer in network.layers:
+    if rec_ret_layer in net_dict:
       continue
     # (enc-D, B, enc-E, 1)
     descr = {
       rec_ret_layer: {
         "class": "get_rec_accumulated",
-        "from": args.rec_layer,
+        "from": rec_layer_name,
         "sub_layer": sub_layer,
         "is_output_layer": True
       }}
@@ -73,10 +67,26 @@ def inject_retrieval_code(args, layers):
     new_layers_descr.update(descr)
 
     # assert that sub_layer inside subnet is a output-layer
-    new_layers_descr[args.rec_layer]['unit'][sub_layer]["is_output_layer"] = True
+    new_layers_descr[rec_layer_name]['unit'][sub_layer]["is_output_layer"] = True
 
-  # reload config/network
-  rnn.engine.maybe_init_new_network(new_layers_descr)
+  def visit(net_dict):
+    """
+    :param dict[str] net_dict: layer name -> opts
+    """
+    assert isinstance(net_dict, dict)
+    for layer_name, d in net_dict.items():
+      assert isinstance(layer_name, str) and isinstance(d, dict)
+      assert "class" in d
+      if dropout is not None and "dropout" in d:
+        d["dropout"] = dropout
+      if d["class"] == "rec":
+        if isinstance(d["unit"], dict):
+          visit(d["unit"])
+      if d["class"] == "subnetwork":
+        visit(d["subnetwork"])
+
+  visit(new_layers_descr)
+  return new_layers_descr
 
 
 def init_returnn(config_fn, cmd_line_opts, args):
@@ -107,17 +117,16 @@ def init_returnn(config_fn, cmd_line_opts, args):
   config = rnn.config
 
 
-def init_net():
-  # TODO: fix this... problem is train flag...
-  #if config.has("load_epoch"):
-  #  rnn.engine.init_network_from_config(config=rnn.config)
-  #else:
-  # Will load the latest epoch.
-  rnn.engine.init_train_from_config(config=rnn.config)
+def init_net(args, layers):
+  """
+  :param args:
+  :param list[str] layers:
+  """
+  def net_dict_post_proc(net_dict):
+    return inject_retrieval_code(net_dict, rec_layer_name=args.rec_layer, layers=layers, dropout=args.dropout)
 
-  if rnn.engine.pretrain:
-    new_network_desc = rnn.engine.pretrain.get_network_json_for_epoch(rnn.engine.epoch)
-    rnn.engine.maybe_init_new_network(new_network_desc)
+  rnn.engine.use_dynamic_train_flag = True  # will be set via Runner. maybe enabled if we want dropout
+  rnn.engine.init_network_from_config(config=config, net_dict_post_proc=net_dict_post_proc)
 
 
 def main(argv):
@@ -138,8 +147,12 @@ def main(argv):
   argparser.add_argument("--seq_list", default=[], action="append", help="predefined list of seqs")
   argparser.add_argument("--min_seq_len", default="0", help="can also be dict")
   argparser.add_argument("--output_format", default="npy", help="npy or png")
+  argparser.add_argument("--dropout", default=None, type=float, help="if set, overwrites all dropout values")
+  argparser.add_argument("--train_flag", action="store_true")
   args = argparser.parse_args(argv[1:])
 
+  layers = args.layers
+  assert isinstance(layers, list)
   model_name = ".".join(args.config_file.split("/")[-1].split(".")[:-1])
 
   init_returnn(config_fn=args.config_file, cmd_line_opts=["--device", args.device], args=args)
@@ -158,11 +171,7 @@ def main(argv):
   if dataset_str in ["train", "dev", "eval"]:
     dataset_str = "config:%s" % dataset_str
   dataset = init_dataset(dataset_str)
-  init_net()
-
-  layers = args.layers
-  assert isinstance(layers, list)
-  inject_retrieval_code(args, layers)
+  init_net(args, layers)
 
   network = rnn.engine.network
 
@@ -217,7 +226,13 @@ def main(argv):
     elif args.output_format == "png":
       for i in range(len(seq_idx)):
         for l in layers:
-          fname = args.dump_dir + '/%s_ep%03d_plt_%05i_%s.png' % (model_name, rnn.engine.epoch, seq_idx[i], l)
+          extra_postfix = ""
+          if args.dropout is not None:
+            extra_postfix += "_dropout%.2f" % args.dropout
+          elif args.train_flag:
+            extra_postfix += "_train"
+          fname = args.dump_dir + '/%s_ep%03d_plt_%05i_%s%s.png' % (
+            model_name, rnn.engine.epoch, seq_idx[i], l, extra_postfix)
           att_weights = kwargs["rec_%s" % l][i]
           att_weights = att_weights.squeeze(axis=2)  # (out,enc)
           assert att_weights.shape[0] >= output_len[i] and att_weights.shape[1] >= encoder_len[i]
@@ -241,8 +256,9 @@ def main(argv):
     else:
       raise NotImplementedError("output format %r" % args.output_format)
 
-  runner = Runner(engine=rnn.engine, dataset=dataset,
-                  batches=dataset_batch, train=False, extra_fetches=extra_fetches,
+  runner = Runner(engine=rnn.engine, dataset=dataset, batches=dataset_batch,
+                  train=False, train_flag=args.dropout is not None or args.train_flag,
+                  extra_fetches=extra_fetches,
                   extra_fetches_callback=fetch_callback)
   runner.run(report_prefix="att-weights epoch %i" % rnn.engine.epoch)
   for l in layers:
