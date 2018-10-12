@@ -7,6 +7,7 @@ from Util import class_idx_seq_to_1_of_k, CollectionReadCheckCovered
 from Log import log
 import numpy
 import re
+import sys
 
 
 class GeneratingDataset(Dataset):
@@ -1958,6 +1959,10 @@ class LibriSpeechCorpus(CachedDataset2):
       old_num_seqs = self._num_seqs
       any_filter = False
       for (ep_start, ep_end), value in sorted(self.epoch_wise_filter.items()):
+        if ep_start is None:
+          ep_start = 1
+        if ep_end is None or ep_end == -1:
+          ep_end = sys.maxsize
         assert isinstance(ep_start, int) and isinstance(ep_end, int) and 1 <= ep_start <= ep_end
         assert isinstance(value, dict)
         if ep_start <= epoch <= ep_end:
