@@ -1981,8 +1981,12 @@ class LibriSpeechCorpus(CachedDataset2):
               cmp=lambda num: numpy.mean(seqs[:num, 0]) > max_mean_len, low=1, high=len(seqs) + 1)
             assert num is not None
             self._seq_order = list(seqs[:num, 1])
-            print("%s, epoch %i. Old mean seq len (transcription) is %f, new is %f." % (
-              self, epoch, float(numpy.mean(seqs[:, 0])), float(numpy.mean(seqs[:num, 0]))), file=log.v4)
+            print(
+              ("%s, epoch %i. Old mean seq len (transcription) is %f, new is %f, requested max is %f."
+               " Old num seqs is %i, new num seqs is %i.") %
+              (self, epoch, float(numpy.mean(seqs[:, 0])), float(numpy.mean(seqs[:num, 0])), max_mean_len,
+               len(seqs), num),
+              file=log.v4)
           self._num_seqs = len(self._seq_order)
       if any_filter:
         print("%s, epoch %i. Old num seqs %i, new num seqs %i." % (

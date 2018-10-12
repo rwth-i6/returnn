@@ -2843,7 +2843,7 @@ def binary_search_any(cmp, low, high):
       high = mid
     else:
       return mid
-  return None
+  return low
 
 
 def generic_import_module(filename):
