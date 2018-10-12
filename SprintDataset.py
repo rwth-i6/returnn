@@ -982,7 +982,7 @@ def demo():
   arg_parser = ArgumentParser()
   arg_parser.add_argument("--config", help="config with ExternSprintDataset", required=True)
   arg_parser.add_argument("--sprint_cache_dataset", help="kwargs dict for SprintCacheDataset", required=True)
-  arg_parser.add_argument("--max_num_seqs", default=sys.maxint, type=int)
+  arg_parser.add_argument("--max_num_seqs", default=sys.maxsize, type=int)
   arg_parser.add_argument("--action", default="compare", help="compare or benchmark")
   args = arg_parser.parse_args()
   log.initialize(verbosity=[4])
