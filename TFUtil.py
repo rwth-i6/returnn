@@ -2719,8 +2719,8 @@ def flatten_with_seq_len_mask(x, seq_lens, batch_dim_axis=None, time_dim_axis=No
   # time_major is set(old_variant) => batch_dim_axis and time_dim_axis have to be None
   if time_major is not None:
     assert batch_dim_axis is None and time_dim_axis is None
-    batch_dim_axis = int(not time_major)
-    time_dim_axis = int(time_major)
+    batch_dim_axis = int(time_major)
+    time_dim_axis = int(not time_major)
   with tf.name_scope("flatten_with_seq_len_mask"):
     seq_lens = check_input_ndim(seq_lens, 1)
     if time_dim_axis == 0 or time_major:
