@@ -983,11 +983,13 @@ class _SubnetworkRecCell(object):
           if needed_beam_size:
             assert not layer.output.beam_size
             if layer.output.beam_size != needed_beam_size:
-              layer = self.net.add_layer(
-                name="%s_beam_%i" % (name, needed_beam_size),
+              layer_copy = self.net.add_layer(
+                name="%s_copy_extend_with_beam_%i" % (name, needed_beam_size),
                 output=layer.output.copy_extend_with_beam(needed_beam_size),
                 layer_class=InternalLayer)
-              extended_layers[name] = layer
+              layer_copy.params.update(layer.params)  # maybe ReuseParams wants to access it or so
+              extended_layers[name] = layer_copy
+              layer = layer_copy
           assert layer.output.beam_size == needed_beam_size
         return layer
       if name in self.input_layers_moved_out:
