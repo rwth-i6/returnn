@@ -2706,24 +2706,33 @@ def reversed(x):
   return y
 
 
-def flatten_with_seq_len_mask(x, seq_lens, time_major=False):
+def flatten_with_seq_len_mask(x, seq_lens, batch_dim_axis=0, time_dim_axis=1, time_major=False):
   """
-  :param tf.Tensor x: shape (batch,time,...s...) with time_major=False or otherwise shape (time,batch,...s....)
+  :param tf.Tensor x: shape (batch,...s..., time, ...s'...) or shape (time,...s...., batch, ...s'...)
   :param tf.Tensor seq_lens: shape (batch,) of int32
-  :param bool time_major: if the time-dim is the first dimension in x
-  :return: tensor of shape (time', ...s...) where time' = sum(seq_len) <= batch*time
+  :param int batch_dim_axis: index of batch_dim in x
+  :param int time_dim_axis: index of time_dim in x
+  :param: bool time_major: whether time axis is 0 (redundant, kept for compatibility)
+  :return: tensor of shape (time', ...s...s'...) where time' = sum(seq_len) <= batch*time
   :rtype: tf.Tensor
   """
   with tf.name_scope("flatten_with_seq_len_mask"):
     seq_lens = check_input_ndim(seq_lens, 1)
-    if time_major:
-      x = swapaxes(x, 0, 1)  # get (batch,time,...s...)
-    x = check_dim_equal(x, 0, seq_lens, 0, ["batch-dim does not match"])  # batch dim
+    if time_dim_axis == 0 or time_major:
+      x = swapaxes(x, time_dim_axis, batch_dim_axis)  # get (batch,time,...s...)
+      time_dim_axis, batch_dim_axis = batch_dim_axis, time_dim_axis
+    x = check_dim_equal(x, batch_dim_axis, seq_lens, batch_dim_axis, ["batch-dim does not match"])  # batch dim
     # int64? -> https://github.com/tensorflow/tensorflow/issues/6518
-    mask = sequence_mask(seq_lens, maxlen=tf.shape(x)[1])  # shape (batch,time)
+    # Batch and time dims have to be in front of the tensor in order to apply the mask.
+    dyn_axes = [batch_dim_axis, time_dim_axis]
+    perm = [i for i in dyn_axes] + [i for i in range(len(x.shape)) if i not in dyn_axes]
+    batch_dim_axis = 0
+    time_dim_axis = 1
+    x = tf.transpose(x, perm=perm)
+    mask = sequence_mask(seq_lens, maxlen=tf.shape(x)[time_dim_axis])  # shape (batch,time)
     mask = check_input_ndim(mask, 2)
-    mask = check_dim_equal(mask, 0, x, 0)
-    mask = check_dim_equal(mask, 1, x, 1)
+    mask = check_dim_equal(mask, 0, x, batch_dim_axis)
+    mask = check_dim_equal(mask, 1, x, time_dim_axis)
     res = tf.boolean_mask(x, mask)
     res = check_input_ndim_equal_offset(res, x, -1)
     return res
