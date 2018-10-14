@@ -952,11 +952,11 @@ class Data(object):
       dyn_axes = [(i if (i < removed_axis) else (i - 1))
                   for i in dyn_axes]
       ndim -= 1
+
     if len(dyn_axes) > 1:
-      assert 0 in dyn_axes, "would need some transpose, not supported at the moment"
-      for i in dyn_axes:
-        if i > 0:
-          assert i - 1 in dyn_axes, "would need some transpose, not supported at the moment"
+      # Transpose x to get dyn axes first
+      perm = [i for i in sorted(dyn_axes)] + [i for i in range(ndim) if i not in dyn_axes]
+      x = tf.transpose(x, perm=perm)
       shape = tf.shape(x)
       x = tf.reshape(
         x,
@@ -965,8 +965,10 @@ class Data(object):
       dyn_axes = [0]
     assert dyn_axes == [0]
     if keep_dims and orig_num_dyn_axes >= 2:
-      for i in range(orig_num_dyn_axes - 1):
-        x = tf.expand_dims(x, axis=1)
+      exp_axes = sorted(self.get_spatial_batch_axes() + [self.batch_dim_axis])
+      for i in exp_axes:
+        if i != 0:
+          x = tf.expand_dims(x, axis=i)
     return x
 
   def get_axes(self, exclude_time=False, exclude_batch=False):
