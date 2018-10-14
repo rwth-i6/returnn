@@ -393,19 +393,34 @@ class Data(object):
     other_special_axes = data.get_special_axes_dict(
       counted_with_batch_dim=True, only_available=True, include_batch_dim_axis=True)
     other_special_axes.pop("feature_dim_axis", None)
+    old_feature_axis = data.feature_dim_axis
     data.feature_dim_axis = feature_dim_axis
     for k, a in other_special_axes.items():
-      setattr(data, k, a if (a < feature_dim_axis) else (a + 1))
+      if a == feature_dim_axis:
+        if a < old_feature_axis:
+          a += 1
+        else:
+          a -= 1
+      elif a > feature_dim_axis:
+        if a < old_feature_axis:
+          a += 1
+      else:
+        if a > old_feature_axis:
+          a -= 1
+      setattr(data, k, a)
     axis_old_wo_batch = self.get_batch_axis_excluding_batch(self.feature_dim_axis)
     axis_new_wo_batch = data.get_batch_axis_excluding_batch(feature_dim_axis)
     if self.size_placeholder:
       new_size_placeholder = {}
       for i, s in self.size_placeholder.items():
-        if i >= axis_new_wo_batch:
+        if i == axis_new_wo_batch:
           if i < axis_old_wo_batch:
             i += 1
           else:
-            assert i > axis_new_wo_batch
+            i -= 1
+        elif i > axis_new_wo_batch:
+          if i < axis_old_wo_batch:
+            i += 1
         else:  # i < axis_new_wo_batch
           if i > axis_old_wo_batch:
             assert i > 0
