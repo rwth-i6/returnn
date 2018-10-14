@@ -2931,10 +2931,12 @@ class ConvLayer(_ConcatInputLayer):
       i: input_data.size_placeholder[i]
       for i in input_data.get_spatial_axes()
       if i in input_data.size_placeholder}
+    index_shift = self.output.time_dim_axis_excluding_batch
     for i in list(self.output.size_placeholder.keys()):
       self.output.size_placeholder[i] = self.calc_out_dim(
         in_dim=self.output.size_placeholder[i],
-        filter_size=filter_size[i], stride=strides[i], dilation_rate=dilation_rate[i], padding=padding)
+        filter_size=filter_size[i - index_shift], stride=strides[i - index_shift],
+        dilation_rate=dilation_rate[i - index_shift], padding=padding)
 
   @classmethod
   def calc_out_dim(cls, in_dim, filter_size, stride, padding, dilation_rate=1):
