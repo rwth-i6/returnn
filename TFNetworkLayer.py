@@ -3069,10 +3069,12 @@ class PoolLayer(_ConcatInputLayer):
       i: self.input_data.size_placeholder[i]
       for i in range(len(pool_size))
       if i in self.input_data.size_placeholder}
+    index_shift = self.output.time_dim_axis_excluding_batch
     for i in list(self.output.size_placeholder.keys()):
       self.output.size_placeholder[i] = ConvLayer.calc_out_dim(
         in_dim=self.output.size_placeholder[i],
-        filter_size=pool_size[i], stride=strides[i], dilation_rate=dilation_rate[i], padding=padding)
+        filter_size=pool_size[i - index_shift], stride=strides[i - index_shift],
+        dilation_rate=dilation_rate[i - index_shift], padding=padding)
 
   @classmethod
   def get_out_data_from_opts(cls, name, pool_size, strides=None, dilation_rate=1, sources=(), padding="VALID",
