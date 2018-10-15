@@ -1884,6 +1884,7 @@ class LinearLayer(_ConcatInputLayer):
 
   def __init__(self, activation, with_bias=True, grad_filter=None,
                forward_weights_init="glorot_uniform", bias_init=0.0,
+               out_feature_dim=None,
                **kwargs):
     """
     :param str|None activation: e.g. "relu", or None
@@ -1899,7 +1900,11 @@ class LinearLayer(_ConcatInputLayer):
     self.activation = activation
     self.with_bias = with_bias
 
-    input_data = self.input_data
+    if out_feature_dim is None:
+      input_data = self.input_data
+    else:
+      input_data = self.input_data.copy_with_feature_dim_axis(out_feature_dim)
+      self.output = self.output.copy_with_feature_dim_axis(out_feature_dim)
     n_in = input_data.dim
     n_out = self.output.dim
     assert n_in and n_out, "%r and %r" % (input_data, self.output)
@@ -1954,8 +1959,10 @@ class LinearLayer(_ConcatInputLayer):
       self.output_before_activation = OutputWithActivation(x)
     x = self.output_before_activation.y
 
-    assert self.output.batch_dim_axis == self.input_data.batch_dim_axis
-    assert self.output.time_dim_axis == self.input_data.time_dim_axis
+    if out_feature_dim is None:
+      assert self.output.batch_dim_axis == self.input_data.batch_dim_axis
+      assert self.output.time_dim_axis == self.input_data.time_dim_axis
+
     self.output.placeholder = x
 
 
@@ -1966,7 +1973,7 @@ class SoftmaxLayer(LinearLayer):
   layer_class = "softmax"
 
   def __init__(self, activation="softmax", **kwargs):
-    super(SoftmaxLayer, self).__init__(activation=activation, **kwargs)
+    super(SoftmaxLayer, self).__init__(activation=activation, out_feature_dim = -1, **kwargs)
 
 
 class LengthLayer(LayerBase):
@@ -2831,6 +2838,7 @@ class ConvLayer(_ConcatInputLayer):
 
   def __init__(self, n_out, filter_size, padding, strides=1, dilation_rate=1,
                input_expand_dims=0, input_add_feature_dim=False, input_split_feature_dim=None,
+               auto_use_channel_first = False,
                with_bias=False,
                activation=None,
                forward_weights_init="glorot_uniform", bias_init=0.0,
@@ -2923,10 +2931,12 @@ class ConvLayer(_ConcatInputLayer):
       i: input_data.size_placeholder[i]
       for i in input_data.get_spatial_axes()
       if i in input_data.size_placeholder}
+    index_shift = self.output.time_dim_axis_excluding_batch
     for i in list(self.output.size_placeholder.keys()):
       self.output.size_placeholder[i] = self.calc_out_dim(
         in_dim=self.output.size_placeholder[i],
-        filter_size=filter_size[i], stride=strides[i], dilation_rate=dilation_rate[i], padding=padding)
+        filter_size=filter_size[i - index_shift], stride=strides[i - index_shift],
+        dilation_rate=dilation_rate[i - index_shift], padding=padding)
 
   @classmethod
   def calc_out_dim(cls, in_dim, filter_size, stride, padding, dilation_rate=1):
@@ -2953,8 +2963,14 @@ class ConvLayer(_ConcatInputLayer):
 
   @classmethod
   def _get_out_type_from_opts(cls, n_out, filter_size, padding, strides=1, dilation_rate=1, sources=(),
-                              input_expand_dims=0, input_add_feature_dim=False, input_split_feature_dim=None, **kwargs):
-    shape = [None] * len(filter_size) + [n_out]
+                              input_expand_dims=0, input_add_feature_dim=False, input_split_feature_dim=None,
+                              auto_use_channel_first = False, **kwargs):
+    data = get_concat_sources_data_template(sources)
+    # The output format is the same as the input.
+    if data.feature_dim_axis == 1:
+      shape = [n_out] + [None] * len(filter_size)
+    else:
+      shape = [None] * len(filter_size) + [n_out]
     if isinstance(strides, int):
       strides = [strides] * len(filter_size)
     else:
@@ -2970,14 +2986,15 @@ class ConvLayer(_ConcatInputLayer):
     padding = padding.upper()
     if input_expand_dims == 0 and not input_add_feature_dim and not input_split_feature_dim:
       # Maybe we have a chance to correctly define the output shapes.
-      data = get_concat_sources_data_template(sources)
+      index_shift = data.time_dim_axis_excluding_batch
       for i in range(len(filter_size)):
-        if data.shape[i] is not None:
-          shape[i] = cls.calc_out_dim(
-            in_dim=data.shape[i],
+        if data.shape[i+index_shift] is not None:
+          shape[i+index_shift] = cls.calc_out_dim(
+            in_dim=data.shape[i+index_shift],
             filter_size=filter_size[i], stride=strides[i], dilation_rate=dilation_rate[i], padding=padding)
-    feature_dim_axis = NotSpecified
-    if TFUtil.is_gpu_available() and False:  # TODO...
+    feature_dim_axis = data.feature_dim_axis
+    # Swap the dims if the input dim order doesn't fit the flag auto_use_channel_first
+    if TFUtil.is_gpu_available() and auto_use_channel_first and data.feature_dim_axis != 1:
       feature_dim_axis = 1
       shape = shape[-1:] + shape[:-1]
     return {
@@ -3002,13 +3019,15 @@ class PoolLayer(_ConcatInputLayer):
   layer_class = "pool"
   recurrent = True  # we should not shuffle in the time-dimension
 
-  def __init__(self, mode, pool_size, padding="VALID", dilation_rate=1, strides=None, **kwargs):
+  def __init__(self, mode, pool_size, padding="VALID", dilation_rate=1, strides=None,
+               auto_use_channel_first=False, **kwargs):
     """
     :param str mode: "max" or "avg"
     :param tuple[int] pool_size: shape of the window of each reduce
     :param str padding: "valid" or "same"
     :param tuple[int]|int dilation_rate:
     :param tuple[int]|int|None strides: in contrast to tf.nn.pool, the default (if it is None) will be set to pool_size
+    :param bool auto_use_channel_first: if set, will transform input to NCHW format
     """
     assert "n_out" not in kwargs
     assert "out_type" not in kwargs
@@ -3031,29 +3050,44 @@ class PoolLayer(_ConcatInputLayer):
       self.output = self.input_data.copy("%s_output" % self.name)
       return
     # We want to prepare the input data such that the batch-dim is the very first,
-    # the feature-dim is the very last, and all in between are where we convolve over.
-    # In the common terminology, this is the "NHWC" format, which is the default for TF convolution/pooling.
-    x = self.input_data.get_placeholder_as_batch_major()
-    x = check_input_dim(x, -1, self.input_data.dim)
+    # the feature-dim is the very last ("NHWC" format) or right after batch-dim ("NCHW"),
+    # and all other dims are where we convolve over.
+    if self.output.is_batch_feature_major:
+      x = self.input_data.copy_as_batch_feature_major()
+      x = check_input_dim(x.placeholder, 1, self.input_data.dim)
+    else:
+      x = self.input_data.get_placeholder_as_batch_major()
+      x = check_input_dim(x, -1, self.input_data.dim)
+    data_format = None
+    if self.input_data.is_batch_feature_major:
+      assert self.output.is_batch_feature_major
+      data_format = {1: "NCW", 2: "NCHW", 3: "NCDHW"}[len(pool_size)]
     y = tf.nn.pool(
       x, window_shape=pool_size, pooling_type=mode, padding=padding,
-      dilation_rate=dilation_rate, strides=strides)
+      dilation_rate=dilation_rate, strides=strides, data_format=data_format)
     # y shape is [batch] + spatial_dims + [n_out].
     self.output.placeholder = y
     self.output.size_placeholder = {
       i: self.input_data.size_placeholder[i]
       for i in range(len(pool_size))
       if i in self.input_data.size_placeholder}
+    index_shift = self.output.time_dim_axis_excluding_batch
     for i in list(self.output.size_placeholder.keys()):
       self.output.size_placeholder[i] = ConvLayer.calc_out_dim(
         in_dim=self.output.size_placeholder[i],
-        filter_size=pool_size[i], stride=strides[i], dilation_rate=dilation_rate[i], padding=padding)
+        filter_size=pool_size[i - index_shift], stride=strides[i - index_shift],
+        dilation_rate=dilation_rate[i - index_shift], padding=padding)
 
   @classmethod
-  def get_out_data_from_opts(cls, name, pool_size, strides=None, dilation_rate=1, sources=(), padding="VALID", **kwargs):
+  def get_out_data_from_opts(cls, name, pool_size, strides=None, dilation_rate=1, sources=(), padding="VALID",
+                             auto_use_channel_first=False, **kwargs):
     # y shape is [batch] + spatial_dims + [n_out].
     data = get_concat_sources_data_template(sources, name="%s_output" % name)
-    shape = [None] * len(pool_size) + [data.dim]
+    #The output format is the same as the input.
+    if data.feature_dim_axis == 1:
+      shape = [data.dim] + [None] * len(pool_size)
+    else:
+      shape = [None] * len(pool_size) + [data.dim]
     if strides is None:
       strides = pool_size
     if isinstance(strides, int):
@@ -3070,11 +3104,17 @@ class PoolLayer(_ConcatInputLayer):
       # Identity function. Just copy and don't do anything.
       return data
     padding = padding.upper()
+    index_shift = data.time_dim_axis_excluding_batch
     for i in range(len(pool_size)):
-      if data.shape[i] is not None:
-        shape[i] = ConvLayer.calc_out_dim(
-          in_dim=data.shape[i],
+      if data.shape[i+index_shift] is not None:
+        shape[i+index_shift] = ConvLayer.calc_out_dim(
+          in_dim=data.shape[i+index_shift],
           filter_size=pool_size[i], stride=strides[i], dilation_rate=dilation_rate[i], padding=padding)
+    feature_dim_axis = data.feature_dim_axis
+    #Swap the dims if the input dim order doesn't fit the flag auto_use_channel_first
+    if TFUtil.is_gpu_available() and auto_use_channel_first and data.feature_dim_axis != 1:
+      feature_dim_axis = 1
+      shape = shape[-1:] + shape[:-1]
     return Data(
       name="%s_output" % name,
       shape=tuple(shape),
@@ -3082,6 +3122,7 @@ class PoolLayer(_ConcatInputLayer):
       dtype=data.dtype,
       sparse=False,
       batch_dim_axis=0,
+      feature_dim_axis=feature_dim_axis,
       beam_size=data.beam_size)
 
 
