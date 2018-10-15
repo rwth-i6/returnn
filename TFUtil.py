@@ -393,19 +393,34 @@ class Data(object):
     other_special_axes = data.get_special_axes_dict(
       counted_with_batch_dim=True, only_available=True, include_batch_dim_axis=True)
     other_special_axes.pop("feature_dim_axis", None)
+    old_feature_axis = data.feature_dim_axis
     data.feature_dim_axis = feature_dim_axis
     for k, a in other_special_axes.items():
-      setattr(data, k, a if (a < feature_dim_axis) else (a + 1))
+      if a == feature_dim_axis:
+        if a < old_feature_axis:
+          a += 1
+        else:
+          a -= 1
+      elif a > feature_dim_axis:
+        if a < old_feature_axis:
+          a += 1
+      else:
+        if a > old_feature_axis:
+          a -= 1
+      setattr(data, k, a)
     axis_old_wo_batch = self.get_batch_axis_excluding_batch(self.feature_dim_axis)
     axis_new_wo_batch = data.get_batch_axis_excluding_batch(feature_dim_axis)
     if self.size_placeholder:
       new_size_placeholder = {}
       for i, s in self.size_placeholder.items():
-        if i >= axis_new_wo_batch:
+        if i == axis_new_wo_batch:
           if i < axis_old_wo_batch:
             i += 1
           else:
-            assert i > axis_new_wo_batch
+            i -= 1
+        elif i > axis_new_wo_batch:
+          if i < axis_old_wo_batch:
+            i += 1
         else:  # i < axis_new_wo_batch
           if i > axis_old_wo_batch:
             assert i > 0
@@ -906,10 +921,11 @@ class Data(object):
   def get_placeholder_time_flattened(self):
     assert self.placeholder is not None
     assert self.have_time_axis()
-    # flatten_with_seq_len_mask only works for these two cases at the moment:
-    assert (self.time_dim_axis, self.batch_dim_axis) == (0, 1) or (self.time_dim_axis, self.batch_dim_axis) == (1, 0)
+    # flatten_with_seq_len_mask only works if either time_dim_axis or batch_dim_axis is 0:
+    assert 0 in [self.time_dim_axis, self.batch_dim_axis]
     seq_lens = self.size_placeholder[self.time_dim_axis_excluding_batch]
-    return flatten_with_seq_len_mask(self.placeholder, seq_lens, time_major=self.is_time_major)
+    return flatten_with_seq_len_mask(self.placeholder, seq_lens, batch_dim_axis=self.batch_dim_axis,
+                                     time_dim_axis=self.time_dim_axis)
 
   def get_placeholder_flattened(self, keep_dims=False):
     """
@@ -937,10 +953,7 @@ class Data(object):
                   for i in dyn_axes]
       ndim -= 1
     if len(dyn_axes) > 1:
-      assert 0 in dyn_axes, "would need some transpose, not supported at the moment"
-      for i in dyn_axes:
-        if i > 0:
-          assert i - 1 in dyn_axes, "would need some transpose, not supported at the moment"
+      # Transpose x to get dyn axes first
       shape = tf.shape(x)
       x = tf.reshape(
         x,
@@ -949,8 +962,9 @@ class Data(object):
       dyn_axes = [0]
     assert dyn_axes == [0]
     if keep_dims and orig_num_dyn_axes >= 2:
-      for i in range(orig_num_dyn_axes - 1):
-        x = tf.expand_dims(x, axis=1)
+      for i in self.get_spatial_batch_axes() + [self.batch_dim_axis]:
+        if i != 0:
+          x = tf.expand_dims(x, axis=i)
     return x
 
   def get_axes(self, exclude_time=False, exclude_batch=False):
@@ -2688,24 +2702,38 @@ def reversed(x):
   return y
 
 
-def flatten_with_seq_len_mask(x, seq_lens, time_major=False):
+def flatten_with_seq_len_mask(x, seq_lens, batch_dim_axis=None, time_dim_axis=None, time_major=None):
   """
-  :param tf.Tensor x: shape (batch,time,...s...) with time_major=False or otherwise shape (time,batch,...s....)
+  :param tf.Tensor x: shape (batch,...s..., time, ...s'...) or shape (time,...s...., batch, ...s'...)
   :param tf.Tensor seq_lens: shape (batch,) of int32
-  :param bool time_major: if the time-dim is the first dimension in x
-  :return: tensor of shape (time', ...s...) where time' = sum(seq_len) <= batch*time
+  :param int batch_dim_axis: index of batch_dim in x
+  :param int time_dim_axis: index of time_dim in x
+  :param bool time_major: whether time axis is 0 (redundant, kept for compatibility)
+  :return: tensor of shape (time', ...s...s'...) where time' = sum(seq_len) <= batch*time
   :rtype: tf.Tensor
   """
+  # time_major is set(old_variant) => batch_dim_axis and time_dim_axis have to be None
+  if time_major is not None:
+    assert batch_dim_axis is None and time_dim_axis is None
+    batch_dim_axis = int(time_major)
+    time_dim_axis = int(not time_major)
   with tf.name_scope("flatten_with_seq_len_mask"):
     seq_lens = check_input_ndim(seq_lens, 1)
-    if time_major:
-      x = swapaxes(x, 0, 1)  # get (batch,time,...s...)
-    x = check_dim_equal(x, 0, seq_lens, 0, ["batch-dim does not match"])  # batch dim
+    if time_dim_axis == 0 or time_major:
+      x = swapaxes(x, time_dim_axis, batch_dim_axis)  # get (batch,time,...s...)
+      time_dim_axis, batch_dim_axis = batch_dim_axis, time_dim_axis
+    x = check_dim_equal(x, batch_dim_axis, seq_lens, batch_dim_axis, ["batch-dim does not match"])  # batch dim
     # int64? -> https://github.com/tensorflow/tensorflow/issues/6518
-    mask = sequence_mask(seq_lens, maxlen=tf.shape(x)[1])  # shape (batch,time)
+    # Batch and time dims have to be in front of the tensor in order to apply the mask.
+    dyn_axes = [batch_dim_axis, time_dim_axis]
+    perm = [i for i in dyn_axes] + [i for i in range(len(x.shape)) if i not in dyn_axes]
+    batch_dim_axis = 0
+    time_dim_axis = 1
+    x = tf.transpose(x, perm=perm)
+    mask = sequence_mask(seq_lens, maxlen=tf.shape(x)[time_dim_axis])  # shape (batch,time)
     mask = check_input_ndim(mask, 2)
-    mask = check_dim_equal(mask, 0, x, 0)
-    mask = check_dim_equal(mask, 1, x, 1)
+    mask = check_dim_equal(mask, 0, x, batch_dim_axis)
+    mask = check_dim_equal(mask, 1, x, time_dim_axis)
     res = tf.boolean_mask(x, mask)
     res = check_input_ndim_equal_offset(res, x, -1)
     return res
