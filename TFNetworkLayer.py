@@ -3010,13 +3010,15 @@ class PoolLayer(_ConcatInputLayer):
   layer_class = "pool"
   recurrent = True  # we should not shuffle in the time-dimension
 
-  def __init__(self, mode, pool_size, padding="VALID", dilation_rate=1, strides=None, **kwargs):
+  def __init__(self, mode, pool_size, padding="VALID", dilation_rate=1, strides=None,
+               auto_use_channel_first=False, **kwargs):
     """
     :param str mode: "max" or "avg"
     :param tuple[int] pool_size: shape of the window of each reduce
     :param str padding: "valid" or "same"
     :param tuple[int]|int dilation_rate:
     :param tuple[int]|int|None strides: in contrast to tf.nn.pool, the default (if it is None) will be set to pool_size
+    :param bool auto_use_channel_first: if set, will transform input to NCHW format
     """
     assert "n_out" not in kwargs
     assert "out_type" not in kwargs
@@ -3039,13 +3041,21 @@ class PoolLayer(_ConcatInputLayer):
       self.output = self.input_data.copy("%s_output" % self.name)
       return
     # We want to prepare the input data such that the batch-dim is the very first,
-    # the feature-dim is the very last, and all in between are where we convolve over.
-    # In the common terminology, this is the "NHWC" format, which is the default for TF convolution/pooling.
-    x = self.input_data.get_placeholder_as_batch_major()
-    x = check_input_dim(x, -1, self.input_data.dim)
+    # the feature-dim is the very last ("NHWC" format) or right after batch-dim ("NCHW"),
+    # and all other dims are where we convolve over.
+    if self.output.is_batch_feature_major:
+      x = self.input_data.copy_as_batch_feature_major()
+      x = check_input_dim(x.placeholder, 1, self.input_data.dim)
+    else:
+      x = self.input_data.get_placeholder_as_batch_major()
+      x = check_input_dim(x, -1, self.input_data.dim)
+    data_format = None
+    if self.input_data.is_batch_feature_major:
+      assert self.output.is_batch_feature_major
+      data_format = {1: "NCW", 2: "NCHW", 3: "NCDHW"}[len(pool_size)]
     y = tf.nn.pool(
       x, window_shape=pool_size, pooling_type=mode, padding=padding,
-      dilation_rate=dilation_rate, strides=strides)
+      dilation_rate=dilation_rate, strides=strides, data_format=data_format)
     # y shape is [batch] + spatial_dims + [n_out].
     self.output.placeholder = y
     self.output.size_placeholder = {
@@ -3058,10 +3068,15 @@ class PoolLayer(_ConcatInputLayer):
         filter_size=pool_size[i], stride=strides[i], dilation_rate=dilation_rate[i], padding=padding)
 
   @classmethod
-  def get_out_data_from_opts(cls, name, pool_size, strides=None, dilation_rate=1, sources=(), padding="VALID", **kwargs):
+  def get_out_data_from_opts(cls, name, pool_size, strides=None, dilation_rate=1, sources=(), padding="VALID",
+                             auto_use_channel_first=False, **kwargs):
     # y shape is [batch] + spatial_dims + [n_out].
     data = get_concat_sources_data_template(sources, name="%s_output" % name)
-    shape = [None] * len(pool_size) + [data.dim]
+    #The output format is the same as the input.
+    if data.feature_dim_axis == 1:
+      shape = [data.dim] + [None] * len(pool_size)
+    else:
+      shape = [None] * len(pool_size) + [data.dim]
     if strides is None:
       strides = pool_size
     if isinstance(strides, int):
@@ -3078,11 +3093,17 @@ class PoolLayer(_ConcatInputLayer):
       # Identity function. Just copy and don't do anything.
       return data
     padding = padding.upper()
+    index_shift = data.time_dim_axis_excluding_batch
     for i in range(len(pool_size)):
-      if data.shape[i] is not None:
-        shape[i] = ConvLayer.calc_out_dim(
-          in_dim=data.shape[i],
+      if data.shape[i+index_shift] is not None:
+        shape[i+index_shift] = ConvLayer.calc_out_dim(
+          in_dim=data.shape[i+index_shift],
           filter_size=pool_size[i], stride=strides[i], dilation_rate=dilation_rate[i], padding=padding)
+    feature_dim_axis = data.feature_dim_axis
+    #Swap the dims if the input dim order doesn't fit the flag auto_use_channel_first
+    if TFUtil.is_gpu_available() and auto_use_channel_first and data.feature_dim_axis != 1:
+      feature_dim_axis = 1
+      shape = shape[-1:] + shape[:-1]
     return Data(
       name="%s_output" % name,
       shape=tuple(shape),
@@ -3090,6 +3111,7 @@ class PoolLayer(_ConcatInputLayer):
       dtype=data.dtype,
       sparse=False,
       batch_dim_axis=0,
+      feature_dim_axis=feature_dim_axis,
       beam_size=data.beam_size)
 
 
