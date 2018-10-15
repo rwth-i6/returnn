@@ -829,6 +829,8 @@ def wrap_lstm_grad(op, x, h_0, c_0, dy, dd, mask, W_f, W_r, b, n_time, n_batch, 
 
 
 def check_lstm_grad_ops_single(op1, op2, name1, name2, dy, dd, rtol=1e-7, exclude=(), **kwargs):
+  dy = tf.convert_to_tensor(dy)
+  dd = tf.convert_to_tensor(dd)
   mask_bc = tf.expand_dims(kwargs["mask"], axis=2)
   mask_bc.set_shape(tf.TensorShape((kwargs["n_time"], kwargs["n_batch"], 1)))
   y1, d1, dx1, dh01, dc01, dWf1, dWr1, db1 = wrap_lstm_grad(op=op1, dy=dy, dd=dd, name=name1, **kwargs)
@@ -845,6 +847,8 @@ def check_lstm_grad_ops_single(op1, op2, name1, name2, dy, dd, rtol=1e-7, exclud
     for i in (1, 2):
       print("%s%i:" % (k, i))
       print(locals()["v%s%i" % (k, i)])
+  not_all_close = []
+  nan_tensors = []
   for k in ["y", "d", "dx", "dh0", "dc0", "dWf", "dWr", "db"]:
     if k in exclude:
       continue
@@ -854,7 +858,57 @@ def check_lstm_grad_ops_single(op1, op2, name1, name2, dy, dd, rtol=1e-7, exclud
       v1 = (v1 * vmask)[start_::step]
       v2 = (v2 * vmask)[start_::step]
     print("check", k)
-    assert_allclose(v1, v2, rtol=rtol, err_msg="no match for %s" % k)
+    if not numpy.allclose(v1, v2, rtol=rtol, equal_nan=True):
+      print("ERROR, not all close %s1 vs %s2" % (k, k))
+      print("%s1:" % k)
+      print(v1)
+      print("%s2:")
+      print(v2)
+      not_all_close.append(k)
+      if numpy.isnan(v1).any():
+        nan_tensors.append(locals()[k + "1"])
+      if numpy.isnan(v2).any():
+        nan_tensors.append(locals()[k + "2"])
+  if not_all_close:
+    if nan_tensors:
+      print("Have nan tensors:", nan_tensors)
+      from TFUtil import add_check_numerics_ops
+      check_op = add_check_numerics_ops(nan_tensors)
+      try:
+        session.run(nan_tensors + [check_op])
+      except tf.errors.OpError as exc:
+        print("As expected, got TF exception with add_check_numerics_ops:")
+        print(exc)
+    from TFUtil import print_graph_output
+    print_graph_output(dWr1)
+    from tensorflow.contrib import graph_editor
+    all_ops = graph_editor.get_backward_walk_ops(
+      [y1, dWr1, y2, dWr2], inclusive=True, stop_at_ts=[dy, dd])
+    print("all relevant ops:")
+    pprint(all_ops)
+  assert isinstance(dWr1, tf.Tensor)
+  print("dWr1 op:", dWr1.op)
+  v_op_ins, v_op_outs = session.run([list(dWr1.op.inputs), list(dWr1.op.outputs)])
+  if not_all_close:
+    print("inputs:")
+    for x, v in zip(dWr1.op.inputs, v_op_ins):
+      print("%s:" % x)
+      print(v)
+    print("outputs:")
+    for x, v in zip(dWr1.op.outputs, v_op_outs):
+      print("%s:" % x)
+      print(v)
+  for i in range(5):  # run multiple times. maybe this triggers an exception
+    v_op_outs_direct = session.run(list(dWr1.op.outputs), {x: v for (x, v) in zip(dWr1.op.inputs, v_op_ins)})
+    if not_all_close:
+      print("outputs direct:")
+      for x, v, v_ in zip(dWr1.op.outputs, v_op_outs_direct, v_op_outs):
+        print("%s:" % x)
+        print(v)
+    for x, v, v_ in zip(dWr1.op.outputs, v_op_outs_direct, v_op_outs):
+      assert_allclose(v, v_, rtol=rtol, err_msg="mismatch for %s" % x)
+  if not_all_close:
+    raise Exception("not all close: %r" % (not_all_close,))
 
 
 def check_lstm_grad_ops(name1, name2, **kwargs):
