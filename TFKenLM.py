@@ -254,12 +254,12 @@ class KenLmAbsScoreBpeStringsOp : public OpKernel {
     auto output_flat = output_tensor->flat<float>();
 
     for(int i = 0; i < input_flat.size(); ++i) {
-      string text = input_flat(i);
+      std::string text = input_flat(i);
       if(!bpe_merge_symbol.empty())
         text = tensorflow::str_util::StringReplace(text, bpe_merge_symbol + " ", "", /* replace_all */ true);
       tensorflow::StringPiece sp(text);
       tensorflow::str_util::RemoveWhitespaceContext(&sp);
-      text = sp.ToString();
+      text = std::string(sp.data(), sp.size());
       output_flat(i) = lm->abs_score(text);
     }
   }

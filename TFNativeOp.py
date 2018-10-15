@@ -49,11 +49,14 @@ class OpMaker(object):
   https://www.tensorflow.org/versions/master/how_tos/adding_an_op/
   """
   with_cuda = None  # type: None|bool
+  # https://github.com/tensorflow/tensorflow/issues/6602
+  tf_blas_gemm_workaround = TFUtil.tf_version_tuple() < (1, 5, 0)
   global_lock = RLock()
   mod_cache = {}  # cache_key -> mod
   op_cache = {}  # cache_key -> op
 
-  def __init__(self, description, compiler_opts=None):
+  def __init__(self, description, compiler_opts=None,
+               search_for_runtime_blas=True, search_for_numpy_blas=True, search_for_system_blas=True):
     """
     :param OpDescription description:
     :param dict[str]|None compiler_opts: passed on to OpCodeCompiler as kwargs
@@ -62,12 +65,15 @@ class OpMaker(object):
     self.description = description
     self.name = description.name
     self.compiler_opts = compiler_opts or {}
+    self.search_for_runtime_blas = search_for_runtime_blas
+    self.search_for_numpy_blas = search_for_numpy_blas
+    self.search_for_system_blas = search_for_system_blas
 
   @classmethod
   def _cls_init(cls):
     if cls.with_cuda is None:
       cls.with_cuda = TFUtil.CudaEnv.get_instance().is_available()
-      if cls.with_cuda:
+      if cls.with_cuda and cls.tf_blas_gemm_workaround:
         cls._load_cuda_blas_gemm()
 
   @classmethod
@@ -84,6 +90,7 @@ class OpMaker(object):
     As a workaround for TF issue 6602, we link to some functions which are implemented in contrib.rnn.kernels.blas_gemm.
     See NativeOp.cpp.
     To make the symbols available in the namespace, load the library now.
+    This issue if fixed with tensorflow 1.5
     """
     if TFUtil.CudaEnv.verbose_find_cuda:
       print("Load tf.contrib lstm_ops...")
@@ -291,11 +298,11 @@ class OpMaker(object):
       #include <cublas_v2.h>
       #include <math_constants.h>
 
-      // https://github.com/tensorflow/tensorflow/issues/6602 ?
-      //#include "tensorflow/core/platform/stream_executor.h"
-      //#include "tensorflow/core/common_runtime/gpu/gpu_util.h"
-      //#include "tensorflow/core/common_runtime/gpu_device_context.h"
       """
+
+      if not self.tf_blas_gemm_workaround:
+        # https://github.com/tensorflow/tensorflow/issues/6602 ?
+        code_header += '#include "tensorflow/core/platform/stream_executor.h"\n'
     # sgemm
     code_header += """
     typedef float real;
@@ -391,26 +398,48 @@ class OpMaker(object):
     # it probably is not needed to explicitly link it again for this module.
     # In other cases, it's probably needed, but it's not so clear which lib has the
     # right symbols (e.g. the `sgemm_` symbol).
-    # The current solution is just to link against blas/f77blas
-    # (both can potentially have the symbol) if it finds the lib.
     ld_flags = []
-    if find_lib("blas"):
-      ld_flags += ["-lblas"]
-    if find_lib("f77blas"):
-      ld_flags += ["-lf77blas"]
-    # Another option to find some BLAS lib.
-    import numpy
-    numpy_dir = os.path.dirname(numpy.__file__)
-    if os.path.exists("%s/.libs" % numpy_dir):
-      ld_flags += ["-L%s/.libs" % numpy_dir]
-      from glob import glob
-      for f in glob("%s/.libs/*.so" % numpy_dir):
-        f = os.path.basename(f)
-        if f.startswith("lib"):
-          f = f[3:]
-        if f.endswith(".so"):
-          f = f[:-3]
-        ld_flags += ["-l%s" % f]
+    have_blas_lib = False
+    if self.search_for_runtime_blas:
+      import Util
+      libs = Util.find_sgemm_libs_from_runtime()
+      if libs:
+        numpy_libs = [fn for fn in libs if "/numpy/.libs/" in fn]
+        if numpy_libs:
+          # Prefer Numpy; move to front.
+          libs = numpy_libs + [fn for fn in libs if fn not in numpy_libs]
+        for fn in libs:
+          ld_flags += ["-L%s" % os.path.dirname(fn), "-l:%s" % os.path.basename(fn)]
+          have_blas_lib = True
+    if not have_blas_lib and self.search_for_numpy_blas:
+      # Find related Numpy libs.
+      # Numpy usually comes with OpenBlas, and Numpy is probably loaded anyway.
+      # Even do this before the other libs below, as it is likely
+      # that this OpenBlas lib is correctly initialized already.
+      import numpy
+      numpy_dir = os.path.dirname(numpy.__file__)
+      if os.path.exists("%s/.libs" % numpy_dir):
+        ld_flags += ["-L%s/.libs" % numpy_dir]
+        from glob import glob
+        for f in glob("%s/.libs/*.so" % numpy_dir):
+          f = os.path.basename(f)
+          if f.startswith("lib"):
+            f = f[3:]
+          if f.endswith(".so"):
+            f = f[:-3]
+          ld_flags += ["-l%s" % f]
+          have_blas_lib = True
+    if not have_blas_lib and self.search_for_system_blas:
+      # Try to just link against blas/f77blas
+      # (both can potentially have the symbol) if it finds the lib.
+      if find_lib("blas"):
+        ld_flags += ["-lblas"]
+        have_blas_lib = True
+      if find_lib("f77blas"):
+        ld_flags += ["-lf77blas"]
+        have_blas_lib = True
+    if not have_blas_lib:
+      print("WARNING: OpMaker: no BLAS lib found")
     comp = TFUtil.OpCodeCompiler(
       base_name=self.name, code_version=self.description.code_version,
       code=self._make_code(),
@@ -419,6 +448,7 @@ class OpMaker(object):
       use_cuda_if_available=self.with_cuda,
       **dict(self.compiler_opts))
     mod = comp.load_tf_module()
+    mod._op_compiler = comp
     self.mod_cache[self.cache_key] = mod
     return mod
 
@@ -428,11 +458,14 @@ class OpMaker(object):
         return self.op_cache[self.cache_key]
       mod = self._make_mod()
       op = getattr(mod, camel_case_to_snake_case(self.op_name))
+      op._op_maker = self
+      op._op_module = mod
       self.op_cache[self.cache_key] = op
 
       if self.description.is_grad_defined:
         grad_description = self.description.grad()
-        grad_op_maker = OpMaker(description=grad_description, compiler_opts=self.compiler_opts)
+        grad_op_maker = OpMaker(description=grad_description, compiler_opts=self.compiler_opts,
+                                search_for_numpy_blas=self.search_for_numpy_blas)
         grad_op = grad_op_maker.make_op()
 
         from tensorflow.python.framework import ops
@@ -693,22 +726,29 @@ class NativeLstm2(RecSeqCellOp):
     from tensorflow.python.ops.nn import rnn_cell
     return rnn_cell.LSTMStateTuple(c=self.n_hidden, h=self.n_hidden)
 
-  def map_layer_inputs_to_op(self, X, W, i, initial_state=None):
+  def __call__(self, inputs, index, initial_state=None, recurrent_weights_initializer=None):
     """
-    Just like NativeOp.LstmGenericBase.map_layer_inputs_to_op().
-    :param tf.Tensor X: inputs: shape (time,batch,n_input_dim)
-    :param tf.Tensor W: shape (n_input_dim+n_hidden,n_hidden*4)
-    :param tf.Tensor i: index: shape (time,batch)
+    :param tf.Tensor inputs: shape (time,batch,n_hidden)
+    :param tf.Tensor index: shape (time,batch)
     :param tf.Tensor|None initial_state: shape (batch,n_hidden)
-    :rtype: tuple[tf.Tensor]
+    :param ()->tf.Tensor recurrent_weights_initializer:
+    :returns: shape (time,batch,n_hidden), shape (batch,n_hidden)
+    :rtype: (tf.Tensor, tf.Tensor)
     """
     from tensorflow.python.ops.nn import rnn_cell
-    X.set_shape(tf.TensorShape([None, None, self.n_hidden * 4]))
+    W = tf.get_variable(
+      name="W_re", shape=(self.n_hidden, self.n_hidden * 4), initializer=recurrent_weights_initializer)
+    TFUtil.set_param_axes_split_info(W, [[self.n_hidden], [self.n_hidden] * 4])
+    if self.rec_weight_dropout:
+      from TFUtil import dropout
+      W = dropout(W, keep_prob=1.0 - self.rec_weight_dropout, cond_on_train=True,
+                  seed=TFUtil.get_random_seed())
+    inputs.set_shape(tf.TensorShape([None, None, self.n_hidden * 4]))
     W.set_shape(tf.TensorShape([self.n_hidden, self.n_hidden * 4]))
-    i.set_shape(tf.TensorShape([None, None]))
+    index.set_shape(tf.TensorShape([None, None]))
     from TFUtil import to_float32
-    i = to_float32(i)
-    n_batch = tf.shape(X)[1]
+    index = to_float32(index)
+    n_batch = tf.shape(inputs)[1]
     if initial_state is None:
       c0 = tf.zeros((n_batch, self.n_hidden), dtype=tf.float32, name="initial_c")
       y0 = tf.zeros((n_batch, self.n_hidden), dtype=tf.float32, name="initial_h")
@@ -720,28 +760,12 @@ class NativeLstm2(RecSeqCellOp):
       y0 = tf.zeros((n_batch, self.n_hidden), dtype=tf.float32, name="initial_h")
     start = tf.constant(0, name="start")
     step = tf.constant(self.step or 1, name="step")
-    return X, W, y0, c0, i, start, step
-
-  def __call__(self, inputs, index, initial_state=None, recurrent_weights_initializer=None):
-    """
-    :param tf.Tensor inputs: shape (time,batch,n_hidden)
-    :param tf.Tensor index: shape (time,batch)
-    :param tf.Tensor|None initial_state: shape (batch,n_hidden)
-    :param ()->tf.Tensor recurrent_weights_initializer:
-    :returns: shape (time,batch,n_hidden), shape (batch,n_hidden)
-    :rtype: (tf.Tensor, tf.Tensor)
-    """
-    W = tf.get_variable(
-      name="W_re", shape=(self.n_hidden, self.n_hidden * 4), initializer=recurrent_weights_initializer)
-    TFUtil.set_param_axes_split_info(W, [[self.n_hidden], [self.n_hidden] * 4])
-    if self.rec_weight_dropout:
-      from TFUtil import dropout
-      W = dropout(W, keep_prob=1.0 - self.rec_weight_dropout, cond_on_train=True,
-                  seed=TFUtil.get_random_seed())
-    out, _, _, final_cell_state = self.op(
-      *self.map_layer_inputs_to_op(X=inputs, W=W, i=index, initial_state=initial_state))
-    from tensorflow.python.ops.nn import rnn_cell
-    return out, rnn_cell.LSTMStateTuple(h=out[-1], c=final_cell_state)
+    out, _, _, final_cell_state = self.op(inputs, W, y0, c0, index, start, step)
+    if out.get_shape().as_list()[0] is None or out.get_shape().as_list()[0] > 0:
+      final_output = out[-1]
+    else:
+      final_output = y0
+    return out, rnn_cell.LSTMStateTuple(h=final_output, c=final_cell_state)
 
 
 def make_fast_baum_welch_op(**kwargs):

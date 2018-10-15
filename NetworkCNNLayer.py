@@ -105,7 +105,7 @@ class CNN(_NoOpLayer):
       # check whether the number of inputs is more than 1 and not resnet for inception
       if self.status[1] != 1 and (not is_resnet):
         # check the spatial dimension of all inputs
-        assert all((s.attrs["n_out"] / s.attrs["n_features"]) == dimension
+        assert all((s.attrs["n_out"] // s.attrs["n_features"]) == dimension
                    for s in src), \
           "The spatial dimension of all inputs have to be the same!"
         stack_size = sum([s.attrs["n_features"] for s in src])  # set the stack_size by concatenating feature maps
@@ -116,14 +116,14 @@ class CNN(_NoOpLayer):
         if d_row == -1:
           d_row = dimension
         else:
-          stack_size = dimension / d_row
+          stack_size = dimension // d_row
       elif d_row == -1:
         d_row = int(sqrt(dimension))
 
       assert self.status[1] == 1, "Except CNN, the input is only one!"
 
     # calculate the width of input
-    d_col = dimension/d_row
+    d_col = dimension//d_row
 
     # set filter size to tuple
     if type(filter) == int:
@@ -224,7 +224,7 @@ class CNN(_NoOpLayer):
            inputs.shape[3])
         )
       )
-      return inputs.reshape((inputs.shape[0] / B, B, inputs.shape[1],
+      return inputs.reshape((inputs.shape[0] // B, B, inputs.shape[1],
                              inputs.shape[2])).dimshuffle(1, 2, 3, 0)
 
   def calculate_dropout(self, dropout, inputs):
@@ -243,7 +243,7 @@ class CNN(_NoOpLayer):
 
   def convolution(self, inputs, filter_shape, stride, border_mode, factor, pool_size, filter_dilation):
     fan_in = numpy.prod(filter_shape[1:])  # stack_size * filter_row * filter_col
-    fan_out = (filter_shape[0] * numpy.prod(filter_shape[2:]) / numpy.prod(pool_size))
+    fan_out = (filter_shape[0] * numpy.prod(filter_shape[2:]) // numpy.prod(pool_size))
     #         (n_features * (filter_row * filter_col)) / (pool_size[0] * pool_size[1])
 
     W_bound = numpy.sqrt(6. / (fan_in + fan_out)) * factor
@@ -304,10 +304,10 @@ class CNN(_NoOpLayer):
 
     pool_out = pool.pool_2d(
       input=inputs,
-      ds=pool_size, # TODO(theano 0.9): change to ws
+      ws=pool_size, # TODO(theano 0.9): change to ws
       ignore_border=ignore_border,
-      st=stride, # TODO(theano 0.9): change to stride
-      padding=pad, # TODO(theano 0.9): change to pad
+      stride=stride, # TODO(theano 0.9): change to stride
+      pad=pad, # TODO(theano 0.9): change to pad
       mode=mode
     )
     pool_out.name = "pool_out_"+self.name
@@ -412,7 +412,7 @@ class NewConv(CNN):
 
     if self.modes[3] == 'maxout':
       self.Output = T.max(self.Output, axis=1).dimshuffle(0, 'x', 1, 2)
-      self.attrs['n_out'] /= self.attrs['n_features']
+      self.attrs['n_out'] //= self.attrs['n_features']
       self.attrs['n_features'] = 1
 
     output2 = self.Output.dimshuffle(0, 2, 3, 1)  # (batch, out-row, out-col, nb feature maps)

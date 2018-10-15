@@ -10,7 +10,7 @@ import tensorflow as tf
 import sys
 sys.path += ["."]  # Python 3 hack
 from TFUpdater import *
-from TFNetworkLayer import LayerBase
+from TFNetworkLayer import LayerBase, Loss
 from Log import log
 from nose.tools import assert_equal, assert_is_instance, assert_is, assert_in
 from numpy.testing.utils import assert_almost_equal
@@ -24,6 +24,15 @@ log.initialize(verbosity=[5])
 session = tf.InteractiveSession()
 
 
+class DummyLoss(Loss):
+  def get_value(self):
+    assert self.layer and isinstance(self.layer, DummyLayer)
+    return self.layer._get_loss_value()
+
+  def get_error(self):
+    return None
+
+
 class DummyLayer(LayerBase):
   def __init__(self, initial_value=0.0, loss_value_factor=1.0, **kwargs):
     super(DummyLayer, self).__init__(**kwargs)
@@ -31,11 +40,15 @@ class DummyLayer(LayerBase):
     self.x = self.add_param(tf.Variable(initial_value))
     self.output.placeholder = self.x
 
-  def get_loss_normalization_factor(self):
-    return 1.0
-
-  def get_loss_value(self):
+  def _get_loss_value(self):
     return self.loss_value_factor * self.x
+
+  @classmethod
+  def get_losses(cls, name, network, output, loss=None, reduce_func=None, layer=None, **kwargs):
+    assert not loss
+    loss = DummyLoss(base_network=network)
+    return super(DummyLayer, cls).get_losses(
+      name=name, network=network, output=output, loss=loss, reduce_func=reduce_func, layer=layer, **kwargs)
 
   @classmethod
   def get_out_data_from_opts(cls, name, **kwargs):
@@ -144,7 +157,7 @@ def test_grad_add_check_numerics_ops():
 
 def test_Updater_add_check_numerics_ops():
   class _Layer(DummyLayer):
-    def get_loss_value(self):
+    def _get_loss_value(self):
       return tf.log(self.x)
 
   from TFNetwork import TFNetwork, ExternData
@@ -172,3 +185,26 @@ def test_Updater_add_check_numerics_ops():
     print("Expected exception: %r" % exc)
   else:
     assert False, "should have raised an exception"
+
+
+if __name__ == "__main__":
+  better_exchook.install()
+  if len(sys.argv) <= 1:
+    for k, v in sorted(globals().items()):
+      if k.startswith("test_"):
+        print("-" * 40)
+        print("Executing: %s" % k)
+        try:
+          v()
+        except unittest.SkipTest as exc:
+          print("SkipTest:", exc)
+        print("-" * 40)
+    print("Finished all tests.")
+  else:
+    assert len(sys.argv) >= 2
+    for arg in sys.argv[1:]:
+      print("Executing: %s" % arg)
+      if arg in globals():
+        globals()[arg]()  # assume function and execute
+      else:
+        eval(arg)  # assume Python code and execute

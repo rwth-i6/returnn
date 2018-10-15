@@ -15,14 +15,27 @@ sys.path.insert(0, base_path)
 from TFNativeOp import *
 from TFUtil import is_gpu_available, get_available_gpu_min_compute_capability, CudaEnv
 import Util
+from Util import unicode
 import unittest
 from nose.tools import assert_equal, assert_is_instance
 import numpy
 import numpy.testing
 from numpy.testing.utils import assert_almost_equal, assert_allclose
 import os
+from pprint import pprint
 import better_exchook
 better_exchook.replace_traceback_format_tb()
+
+import Debug
+Debug.installLibSigSegfault()
+
+try:
+  import faulthandler
+  # Enable after libSigSegfault, so that we have both,
+  # because faulthandler will also call the original sig handler.
+  faulthandler.enable()
+except ImportError:
+  print("no faulthandler")
 
 
 print("TF version:", tf.__version__)
@@ -51,9 +64,19 @@ def debug_lib_so(f, syms=()):
     sys_exec(cmd, shell=True)
 
 
+def test_numpy_gemm():
+  a = numpy.random.randn(100, 50).astype(numpy.float32)
+  b = numpy.random.randn(50, 13).astype(numpy.float32)
+  c = numpy.dot(a, b)
+  assert numpy.isfinite(c).all()
+
+
 def dump_info():
   # Some generic stuff.
+  print("Number available CPUs:", Util.get_number_available_cpus())
   sys_exec("g++", "--version")
+  print("TF __file__:", tf.__file__)
+  print("TF version:", tf.__version__)
   print("TF include:", tf.sysconfig.get_include())
   print("TF lib:", tf.sysconfig.get_lib())
   tf_lib_so = tf.sysconfig.get_lib() + "/libtensorflow_framework.so"
@@ -76,10 +99,25 @@ def dump_info():
     print("Cur flags: %r, RTLD_GLOBAL is set: %r" % (sys.getdlopenflags(), sys.getdlopenflags() & ctypes.RTLD_GLOBAL))
   if os.path.exists("/proc"):
     print("Have /proc")
-    sys_exec("cat", "/proc/%i/maps" % os.getpid())
+    # sys_exec("cat", "/proc/%i/maps" % os.getpid())
+    print("Mapped executables/libs:")
+    fns = Util.collect_proc_maps_exec_files()
+    pprint(fns)
+    fns_with_sgemm = []
+    for fn in fns:
+      out = Util.find_sym_in_exec(fn, "sgemm_")
+      if out:
+        print(out)
+        fns_with_sgemm.append(fn)
+    print("Found libs with sgemm:")
+    pprint(fns_with_sgemm)
+  else:
+    print("Does not have /proc.")
   # Numpy stuff, debugging if sgemm was not found:
   numpy_path = os.path.dirname(numpy.__file__)
   print("Numpy path: %r" % numpy_path)
+  print("Numpy config:")
+  numpy.show_config()
   so_files = Util.sysexecOut("find %s | grep \"\.so\"" % numpy_path, shell=True)
   print("Numpy so files:\n---\n%s\n---\n" % so_files)
   so_files = [f for f in so_files.splitlines() if f]
@@ -87,9 +125,54 @@ def dump_info():
     debug_lib_so(f, ["sgemm"])
 
 
-def test_dummy():
+# Do this here such that we always see this log in Travis.
+orig_stdout = sys.stdout
+try:
+  sys.stdout = sys.__stdout__  # Nosetests has overwritten sys.stdout
+  print("travis_fold:start:script.dump_info")  # https://github.com/travis-ci/travis-ci/issues/1065
   dump_info()
-  #assert False
+except Exception as exc:
+  print("dump_info exception:", exc)
+  print("(See more info in test_dummy output.)")
+
+  # Define this test only in case we failed.
+  def test_dummy():
+    dump_info()
+
+finally:
+  print("travis_fold:end:script.dump_info")
+  sys.stdout = orig_stdout
+
+
+def test_native2lstm_compile():
+  op = make_op(NativeOp.NativeLstm2, compiler_opts={"verbose": True})
+  print("op:", op)
+  maker = op._op_maker
+  print("op maker:", maker)
+  mod = op._op_module
+  print("op mod:", mod)
+  comp = mod._op_compiler
+  print("op compiler:", comp)
+  assert isinstance(comp, TFUtil.OpCodeCompiler)
+  print("info dict:")
+  pprint(comp._info_dict)
+
+
+# Do this here such that we always see this log in Travis.
+try:
+  sys.stdout = sys.__stdout__
+  print("travis_fold:start:script.nativelstm2compile")
+  test_native2lstm_compile()
+except Exception as exc:
+  print("NativeLstm2 compile exception:", exc)
+finally:
+  print("travis_fold:end:script.nativelstm2compile")
+  sys.stdout = orig_stdout
+
+
+# Do this now such that we ensure that some Numpy gemm function was called early,
+# which might trigger OpenBlas init or so.
+test_numpy_gemm()
 
 
 def test_make_lstm_op_auto_cuda():
@@ -254,6 +337,42 @@ def test_LstmLowMem_bwd_simple_1():
   assert_allclose(vDc, vDc0)
 
 
+def test_NativeLstm2_run():
+  from pprint import pprint
+  from Util import describe_tensorflow_version
+  print("TensorFlow:", describe_tensorflow_version())
+  n_time = 2
+  n_batch = 1
+  n_hidden = 3
+  with tf.Session() as session:
+    with tf.variable_scope("test_NativeLstm2_run"):
+      cell = NativeLstm2(n_hidden=n_hidden)
+      inputs = tf.zeros([n_time, n_batch, n_hidden * 4])
+      index = tf.ones([n_time, n_batch])
+      outputs, final_state = cell(inputs, index)
+      session.run(tf.global_variables_initializer())
+      res = session.run(outputs)
+      pprint(res)
+
+
+def test_NativeLstm2_0len_run():
+  from pprint import pprint
+  from Util import describe_tensorflow_version
+  print("TensorFlow:", describe_tensorflow_version())
+  n_time = 0
+  n_batch = 1
+  n_hidden = 3
+  with tf.Session() as session:
+    with tf.variable_scope("test_NativeLstm2_0len_run"):
+      cell = NativeLstm2(n_hidden=n_hidden)
+      inputs = tf.zeros([n_time, n_batch, n_hidden * 4])
+      index = tf.ones([n_time, n_batch])
+      outputs, final_state = cell(inputs, index)
+      session.run(tf.global_variables_initializer())
+      res = session.run(outputs)
+      pprint(res)
+
+
 def lstm_step_op(x_t, h_tm1, c_tm1, mask_t, W_f, W_r, b, n_batch, n_in_dim, n_cells):
   """
   :param tf.Tensor x_t: shape (n_batch, n_in_dim)
@@ -312,7 +431,7 @@ def lstm_step_op(x_t, h_tm1, c_tm1, mask_t, W_f, W_r, b, n_batch, n_in_dim, n_ce
   return h_t, c_t
 
 
-def lstm(x, h_0, c_0, mask, W_f, W_r, b, n_time, n_batch, n_in_dim, n_cells, start=0, step=1, name="ref_lstm"):
+def pure_tf_unrolled_lstm(x, h_0, c_0, mask, W_f, W_r, b, n_time, n_batch, n_in_dim, n_cells, start=0, step=1, name="ref_lstm"):
   """
   :param tf.Tensor x: (n_time, n_batch, n_in_dim)
   :param tf.Tensor h_0: (n_batch, n_cells)
@@ -462,6 +581,13 @@ def test_tensor_array_strided_slice_grad_grad():
 
 
 def wrap_lstm_slice_start_step(op, x, h_0, c_0, mask, W_f, W_r, b, n_time, n_batch, n_in_dim, n_cells, start, step, name):
+  """
+  Will call the op (e.g. native_lstm2) with default start=0, step=1,
+  and we do the striding/slicing via standard TF functions (e.g. x[start_::step]),
+  as well as reverse the strided slice of the output.
+
+  :param op:
+  """
   x = tf.convert_to_tensor(x)
   mask = tf.convert_to_tensor(mask)
   if step >= 0:
@@ -504,7 +630,7 @@ def wrap_lstm_slice_start_step(op, x, h_0, c_0, mask, W_f, W_r, b, n_time, n_bat
 
 
 def lstm_slice(name, **kwargs):
-  return wrap_lstm_slice_start_step(op=lstm, name="%s_slice" % name, **kwargs)
+  return wrap_lstm_slice_start_step(op=pure_tf_unrolled_lstm, name="%s_slice" % name, **kwargs)
 
 
 def native_lstm2(x, h_0, c_0, mask, W_f, W_r, b, n_time, n_batch, n_in_dim, n_cells, start=0, step=1, name="native_lstm2"):
@@ -597,12 +723,12 @@ def check_lstm_op_start_step(op, name, **kwargs):
 
 
 def lstm_kwargs():
-  kwargs = {
-    "n_time": 3,
-    "n_batch": 2,
-    "n_in_dim": 1,
-    "n_cells": 2}
-  kwargs["mask"] = numpy.array([[1, 1, 0], [1, 0, 0]]).astype("float32").transpose()
+  """
+  :return: kwargs for check_lstm_ops. some dummy input
+  :rtype: dict[str]
+  """
+  kwargs = {"n_time": 3, "n_batch": 2, "n_in_dim": 1, "n_cells": 2,
+            "mask": numpy.array([[1, 1, 0], [1, 0, 0]]).astype("float32").transpose()}
   assert kwargs["mask"].shape == (kwargs["n_time"], kwargs["n_batch"])
   def gen(shape, offset):
     return numpy.sin(numpy.arange(numpy.prod(shape)) + offset).reshape(shape).astype("float32")
@@ -617,7 +743,7 @@ def lstm_kwargs():
 
 def test_ref_lstm_start_step_impl():
   kwargs = lstm_kwargs()
-  check_lstm_op_start_step(op=lstm, name="ref_lstm", **kwargs)
+  check_lstm_op_start_step(op=pure_tf_unrolled_lstm, name="ref_lstm", **kwargs)
 
 
 def test_native_lstm2_start_step_impl():
@@ -628,12 +754,16 @@ def test_native_lstm2_start_step_impl():
 def test_native_lstm2_impl():
   kwargs = lstm_kwargs()
   check_lstm_ops(
-    op1=lstm, op2=native_lstm2, name1="ref_lstm", name2="native_lstm2",
+    op1=pure_tf_unrolled_lstm, op2=native_lstm2, name1="ref_lstm", name2="native_lstm2",
     rtol=1e-6,
     **kwargs)
 
 
 def lstm_grad_kwargs():
+  """
+  :return: kwargs for check_lstm_grad_ops, some dummy input
+  :rtype: dict[str]
+  """
   def gen(shape, offset, factor=3.):
     return numpy.sin(numpy.arange(numpy.prod(shape)) * factor + offset).reshape(shape).astype("float32")
   kwargs = lstm_kwargs()
@@ -645,6 +775,11 @@ def lstm_grad_kwargs():
 
 
 def wrap_lstm_grad(op, x, h_0, c_0, dy, dd, mask, W_f, W_r, b, n_time, n_batch, n_in_dim, n_cells, start, step, name):
+  """
+  Uses the LSTM op (for the forward path), and tf.gradients to get the gradients.
+
+  :param op: lstm, e.g. pure_tf_unrolled_lstm or native_lstm2
+  """
   assert n_time > 0
   assert 0 <= start < n_time
   assert step != 0
@@ -733,6 +868,10 @@ def check_lstm_grad_ops(name1, name2, **kwargs):
 
 
 def check_lstm_grad_start_step(op, name, **kwargs):
+  """
+  :param op: e.g. pure_tf_unrolled_lstm or native_lstm2
+  :param str name: name for the op
+  """
   name2 = "%s_slice" % name
   def wrapped_lstm_op(**kwargs):
     return wrap_lstm_slice_start_step(op=op, **kwargs)
@@ -742,7 +881,7 @@ def check_lstm_grad_start_step(op, name, **kwargs):
 
 def test_ref_lstm_grad_start_step():
   kwargs = lstm_grad_kwargs()
-  check_lstm_grad_start_step(op=lstm, name="ref_lstm", **kwargs)
+  check_lstm_grad_start_step(op=pure_tf_unrolled_lstm, name="ref_lstm", **kwargs)
 
 
 def test_native_lstm2_grad_start_step():
@@ -754,7 +893,7 @@ def test_native_lstm2_grad_start_step():
 def test_native_lstm2_grad():
   kwargs = lstm_grad_kwargs()
   check_lstm_grad_ops(
-    op1=lstm, name1="ref_lstm", op2=native_lstm2, name2="native_lstm2",
+    op1=pure_tf_unrolled_lstm, name1="ref_lstm", op2=native_lstm2, name2="native_lstm2",
     rtol=1e-5, **kwargs)
 
 

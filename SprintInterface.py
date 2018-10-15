@@ -642,7 +642,7 @@ def initBase(configfile=None, targetMode=None, epoch=None):
 
   global engine
   if not engine:
-    devices = rnn.initDevices()
+    devices = rnn.initTheanoDevices()
     rnn.printTaskProperties(devices)
     rnn.initEngine(devices)
     engine = rnn.engine

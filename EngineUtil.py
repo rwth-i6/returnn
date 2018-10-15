@@ -50,7 +50,7 @@ def assign_dev_data(device, dataset, batches, load_seqs=True):
           device.targets[k][o[k]:o[k] + ls, q] = data
         # Only copy ctc targets if chunking is inactive to avoid out of range access.
         # CTC is not compatible with chunking anyway.
-        chunking_active = dataset.chunk_size > 0
+        chunking_active = dataset.chunk_size != 0
         if dataset.has_ctc_targets() and not chunking_active:
           device.ctc_targets[q] = dataset.get_ctc_targets(seq.seq_idx)
 

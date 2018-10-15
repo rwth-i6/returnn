@@ -158,7 +158,14 @@ class CachedDataset2(Dataset):
     return sorted(self.added_data[0].get_data_keys())
 
   def get_target_list(self):
-    return self.get_data_keys()
+    """
+    Target data keys are usually not available during inference.
+    Overwrite this if your dataset is more custom.
+    """
+    keys = list(self.get_data_keys())
+    if "data" in keys:
+      keys.remove("data")
+    return keys
 
   def is_data_sparse(self, key):
     """

@@ -43,12 +43,14 @@ class CancelTrainingException(Exception):
 
 
 class Runner(object):
-  def __init__(self, engine, dataset, batches, train, eval=True, extra_fetches=None, extra_fetches_callback=None):
+  def __init__(self, engine, dataset, batches, train, eval=True, train_flag=None,
+               extra_fetches=None, extra_fetches_callback=None):
     """
     :param Engine engine:
     :param Dataset.Dataset dataset:
     :param BatchSetGenerator batches:
     :param bool train: whether to do updates on the model
+    :param bool|None train_flag: normally just as train. but e.g. maybe you want to have the train_flag but not train
     :param bool eval: whether to evaluate (i.e. calculate loss/error)
     :param dict[str,tf.Tensor|TFUtil.Data|TFNetworkLayer.LayerBase]|None extra_fetches: additional fetches per step.
       `extra_fetches_callback` will be called with these. In case of Data/LayerBase, it will return a list,
@@ -60,11 +62,11 @@ class Runner(object):
     engine.network.extern_data.check_matched_dataset(
       dataset=dataset, used_data_keys=engine.network.used_data_keys)
     self.engine = engine
-    self.data_provider = FeedDictDataProvider(
-      tf_session=engine.tf_session, extern_data=engine.network.extern_data,
-      data_keys=engine.network.used_data_keys,
-      dataset=dataset, batches=batches)
+    self.data_provider = self.engine._get_new_data_provider(dataset=dataset, batches=batches)
     assert isinstance(self.data_provider, DataProviderBase)
+    if train_flag is None:
+      train_flag = train
+    self._train_flag = train_flag
     self._should_train = train
     self._should_eval = eval
     self.store_metadata_mod_step = engine.config.int("store_metadata_mod_step", 0)
@@ -76,8 +78,9 @@ class Runner(object):
     self.device_crash_batch = None  # type: int|None
     self.start_time = None
     self.elapsed = None
-    self._results_accumulated = {}  # type: dict[str,float]  # entries like "cost:output" or "loss"
-    self.num_frames_accumulated = NumbersDict()  # for each result key, the corresponding number of frames
+    self._results_accumulated = NumbersDict()  # entries like "cost:output" or "loss"
+    self._inv_norm_accumulated = NumbersDict()  # entries like "output"
+    self.num_frames_accumulated = NumbersDict()  # for each data key (eg. "classes"), corresponding number of frames
     self.results = {}  # type: dict[str,float]  # entries like "cost:output" or "loss"
     self.score = {}  # type: dict[str,float]  # entries like "cost:output"
     self.error = {}  # type: dict[str,float]  # entries like "error:output"
@@ -86,6 +89,7 @@ class Runner(object):
     if extra_fetches is not None:
       assert extra_fetches_callback
     self.extra_fetches_callback = extra_fetches_callback
+    self._horovod_stopped_runner = False
 
     from Util import terminal_size
     terminal_width, _ = terminal_size()
@@ -98,6 +102,24 @@ class Runner(object):
     """
     # Note that it is important that we do not recreate graph nodes for every call to this function.
     # Thus everything which we access here should be cached.
+
+    def reduce_sum(x, name, average=False):
+      if not self.engine.config.is_true("use_horovod"):
+        return x
+      from TFUtil import global_tensor
+      import horovod.tensorflow as hvd
+      return global_tensor(
+        lambda: hvd.allreduce(x, average=average),
+        name="fetch_reduce_sum__" + name.replace(":", "__").replace("/", "_"))
+
+    def inv_reduce_sum(x, name):
+      if not self.engine.config.is_true("use_horovod"):
+        return x
+      from TFUtil import global_tensor
+      return global_tensor(
+        lambda: tf.reciprocal(reduce_sum(tf.reciprocal(x), name=name)),
+        name="fetch_inv_reduce_sum__" + name.replace(":", "__").replace("/", "_"))
+
     d = {}
     for key in self.data_provider.data_keys:
       data = self.data_provider.extern_data.get_data(key)
@@ -108,16 +130,22 @@ class Runner(object):
       loss = self.engine.network.get_objective()
       if loss is 0:
         loss = self.engine.get_const_tensor(key="zero_loss", value=0.0)
-      d["loss"] = loss
-      for layer_name, loss in self.engine.network.loss_by_layer.items():
-        if self.engine.network.get_layer(layer_name).only_on_eval and self._should_train:
+      else:  # non-constant-zero loss
+        assert self.engine.network.losses_dict
+      d["loss"] = reduce_sum(loss, name="loss", average=True)
+      for loss_name, loss in self.engine.network.losses_dict.items():
+        if loss.get_only_on_eval() and self._should_train:
           continue
-        d["cost:%s" % layer_name] = loss
-      for layer_name, error in self.engine.network.error_by_layer.items():
-        if self.engine.network.get_layer(layer_name).only_on_eval and self._should_train:
-          continue
-        d["error:%s" % layer_name] = error
+        if loss.get_loss_value_for_fetch() is not None:
+          d["cost:%s" % loss_name] = reduce_sum(loss.get_loss_value_for_fetch(), name="cost:%s" % loss_name)
+        if loss.get_error_value() is not None:
+          d["error:%s" % loss_name] = reduce_sum(loss.get_error_value(), name="error:%s" % loss_name)
+        d["loss_norm_factor:%s" % loss_name] = inv_reduce_sum(
+          loss.get_norm_factor(), name="loss_norm_factor:%s" % loss_name)
       for layer in self.engine.network.layers.values():
+        if layer.only_on_eval and self._should_train:
+          continue
+        # Maybe store additional size info of layer targets.
         if layer.target and layer.target.startswith("layer:"):
           target_data = layer.loss.target
           for dim, v in target_data.size_placeholder.items():
@@ -210,22 +238,12 @@ class Runner(object):
         return layer.target
     return self.engine.network.extern_data.default_target
 
-  def _epoch_norm_factor_for_result(self, key):
-    """
-    :param str key: e.g. "cost:output"
-    :return: factor to multiply with such accumulated values for the final epoch stats
-    :rtype: float
-    """
-    # Default: Normalize by number of frames.
-    return 1.0 / self.num_frames_accumulated[key]
-
   def _finalize(self, num_steps):
     """
     Called at the end of an epoch.
     :param int num_steps: number of steps we did for this epoch
     """
-    assert not self.data_provider.have_more_data(session=self.engine.tf_session)
-    results = {key: value * self._epoch_norm_factor_for_result(key)
+    results = {key: self._normalize_loss(value, key, self._inv_norm_accumulated)
                for (key, value) in self._results_accumulated.items()}
     self.results = results
     self.score = {key: value for (key, value) in results.items() if key.startswith("cost:")}
@@ -265,6 +283,30 @@ class Runner(object):
       # We assume that this data-key has no time axis. Use the batch-dim instead.
       return self._get_batch_dim_from_fetches(fetches_results)
 
+  def _normalize_loss(self, value, key, inv_loss_norm_factors):
+    """
+    :param T value:
+    :param str key: e.g. "cost:output", "error:output" or "loss"
+    :param NumbersDict inv_loss_norm_factors: keys e.g. e.g. "output" (layer names)
+    :return: normalized value
+    :rtype: T
+    """
+    if not value:
+      return value
+    if key == "loss":
+      # This is a special case. This is the total loss.
+      # Do not normalize this, as it is also used as-is for the gradient.
+      # You can use the `use_normalized_loss` for a flag if you want to have this normalized.
+      return value
+    loss_norm_keys = inv_loss_norm_factors.keys()
+    assert len(loss_norm_keys) > 0
+    # Assume "cost:output" or "error:output" or so.
+    assert ":" in key
+    loss_norm_key = key[key.find(":") + 1:]
+    assert loss_norm_key in loss_norm_keys, "unexpected key %r" % key
+    value = value / inv_loss_norm_factors[loss_norm_key]
+    return value
+
   def _collect_eval_info(self, fetches_results):
     """
     :param dict[str,numpy.ndarray|None] fetches_results: results of calculations, see self._get_fetches_dict()
@@ -272,28 +314,28 @@ class Runner(object):
     :rtype: dict[str,float]
     """
     # See see self._get_fetches_dict() for the keys.
+    # keys are e.g. "cost:output", "error:output" or "loss".
     keys = [k for k in fetches_results.keys() if k.startswith("cost:") or k.startswith("error:") or k == "loss"]
-    step_seq_lens = {}  # key -> int
-    for key in keys:
-      target = self._get_target_for_key(key)
-      step_seq_lens[key] = self._step_seq_len(
-        fetches_results=fetches_results, data_key=target)
+    # step_seq_lens keys are e.g. "data" or "classes".
+    step_seq_lens = {
+      k[len("size:"):-2]: numpy.sum(v)
+      for (k, v) in fetches_results.items()
+      if k.startswith("size:") and k.endswith(":0")}
+    # loss_norm_factors keys are e.g. "output" (layer names).
+    loss_norm_factors = {
+      k[len("loss_norm_factor:"):]: v for (k, v) in fetches_results.items() if k.startswith("loss_norm_factor:")}
+    inv_loss_norm_factors = NumbersDict({k: 1.0 / v for (k, v) in loss_norm_factors.items()})
 
     # Accumulate for epoch stats.
+    self._results_accumulated += NumbersDict({key: fetches_results[key] for key in keys})
+    self._inv_norm_accumulated += inv_loss_norm_factors
     self.num_frames_accumulated += NumbersDict(step_seq_lens)
-    for key in keys:
-      value = fetches_results[key]
-      if key not in self._results_accumulated:
-        self._results_accumulated[key] = value
-      else:
-        self._results_accumulated[key] += value
 
     # Prepare eval info stats for this batch run.
     eval_info = {}
     for key in keys:
       value = fetches_results[key]
-      if value:
-        value /= float(step_seq_lens[key])
+      value = self._normalize_loss(value, key, inv_loss_norm_factors)
       eval_info[key] = value
       if self.engine.config.bool("calculate_exp_loss", False) and key.startswith("cost:"):
         eval_info[key + ":exp"] = numpy.exp(value)
@@ -355,6 +397,98 @@ class Runner(object):
         d[k] = list(r)
     self.extra_fetches_callback(**d)
 
+  def _horovod_finish_data(self):
+    self._horovod_signal_broadcast(have_more_data=False)
+
+  def _horovod_signal_error(self):
+    self._horovod_signal_broadcast(have_more_data=False, error=True)
+
+  def _horovod_signal_have_more_data(self):
+    """
+    :return: whether to stop (because some other instance stopped), whether an error occured
+    :rtype: (bool, bool)
+    """
+    return self._horovod_signal_broadcast(have_more_data=True)
+
+  def _horovod_signal_broadcast(self, have_more_data=True, error=False):
+    """
+    :param bool have_more_data: whether we have more data in this instance
+    :param bool error: whether some error occured here
+    :return: whether to stop (because some other instance stopped), whether an error occured
+    :rtype: (bool, bool)
+    """
+    if not self.engine.config.is_true("use_horovod"):
+      return False, False
+    # Stopped before? Keep in sync -> Don't send anything anymore, other peers do not expect it.
+    if self._horovod_stopped_runner:
+      return True, False
+    import horovod.tensorflow as hvd
+    from TFUtil import global_tensor
+    have_more_data_placeholder = global_tensor(
+      lambda: tf.placeholder(tf.int32, shape=(), name="horovod_have_more_data_placeholder"),
+      name="horovod_have_more_data_placeholder")  # 0 or 1
+    sum_have_data_t = global_tensor(
+      lambda: hvd.allreduce(have_more_data_placeholder, average=False),
+      name="horovod_sum_have_data")  # 0..size
+    have_error_placeholder = global_tensor(
+      lambda: tf.placeholder(tf.int32, shape=(), name="horovod_have_error_placeholder"),
+      name="horovod_have_error_placeholder")  # 0 or 1
+    sum_have_error_t = global_tensor(
+      lambda: hvd.allreduce(have_error_placeholder, average=False),
+      name="horovod_sum_have_error")  # 0..size
+    sum_have_data, sum_have_error = self.engine.tf_session.run(
+      (sum_have_data_t, sum_have_error_t),
+      feed_dict={
+        have_more_data_placeholder: 1 if have_more_data else 0,
+        have_error_placeholder: 1 if error else 0})
+    stop = False
+    if sum_have_data < hvd.size() or sum_have_error > 0:
+      # Some of the peers do not have data anymore. Or some peer had an error.
+      # This means we should stop. Other peers will not expect further signals.
+      stop = True
+      self._horovod_stopped_runner = True
+    error_occured = sum_have_error > 0
+    return stop, error_occured
+
+  def _horovod_sync_params(self, local_step, is_final=False):
+    """
+    Horovod reduce type 'param', i.e. each node (rank) does update independently,
+    but after N steps, we average params.
+
+    :param int local_step: step of this epoch
+    :param bool is_final:
+    :return: TF runtime
+    :rtype: float
+    """
+    if not self.engine.config.is_true("use_horovod"):
+      return 0.0
+    if self.engine.config.value("horovod_reduce_type", "") != "param":
+      return 0.0
+    if not self._should_train:
+      return 0.0
+    sync_step = self.engine.config.int("horovod_param_sync_step", 1)
+    assert sync_step >= 1
+    if not is_final and local_step % sync_step != sync_step - 1:
+      return 0.0
+    from TFUtil import global_tensor
+    import horovod.tensorflow as hvd
+
+    def assign_avg_var(var):
+      """
+      :param tf.Variable var:
+      :rtype: tf.Tensor
+      """
+      return tf.assign(var, hvd.allreduce(var.read_value(), average=True))
+
+    assign_ops = []
+    for var in self.engine.updater.trainable_vars:
+      assign_ops.append(global_tensor(
+        lambda: assign_avg_var(var),
+        name="horovod_sync_params__var_%s" % var.name[:-2].replace("/", "_")).op)
+    start_time = time.time()
+    self.engine.tf_session.run(assign_ops)
+    return time.time() - start_time
+
   def run(self, report_prefix):
     """
     :param str report_prefix: prefix for logging, e.g. "train"
@@ -376,7 +510,8 @@ class Runner(object):
       if self.engine.use_search_flag:
         logdir += "-search"
       logdir += "-%s" % get_utc_start_time_filename_part()
-      log_runtime_info_to_dir(logdir, config=self.engine.config)
+      if self.engine._do_save():
+        log_runtime_info_to_dir(logdir, config=self.engine.config)
       writer = tf.summary.FileWriter(logdir)
     else:
       writer = None
@@ -408,10 +543,17 @@ class Runner(object):
       # Also, add graph to summary here because the updater/optimizer might not have been created before.
       if writer:
         writer.add_graph(sess.graph)
+      hvd_stop = hvd_error = False
       while self.data_provider.have_more_data(session=sess):
+        hvd_stop, hvd_error = self._horovod_signal_have_more_data()
+        if hvd_error:
+          raise Exception("Some other Horovod peer failed.")
+        if hvd_stop:
+          # Some other peer does not have data anymore, but no error occurred.
+          break
         feed_dict, meta_step_info = self.data_provider.get_feed_dict()
         if isinstance(self.engine.network.train_flag, tf.Tensor):
-          feed_dict[self.engine.network.train_flag] = self._should_train
+          feed_dict[self.engine.network.train_flag] = self._train_flag
         if isinstance(self.engine.network.epoch_step, tf.Tensor):
           feed_dict[self.engine.network.epoch_step] = step
         start_time = time.time()
@@ -468,6 +610,7 @@ class Runner(object):
 
         eval_info = self._collect_eval_info(fetches_results=fetches_results)
         self._maybe_handle_extra_fetches(fetches_results)
+        elapsed_time_tf += self._horovod_sync_params(local_step=step)
         duration = time.time() - start_time
         self._print_process(report_prefix=report_prefix, step=step, step_duration=duration, eval_info=eval_info)
         if step <= 10 and writer:
@@ -480,7 +623,7 @@ class Runner(object):
 
       self._print_finish_process()
 
-      if not self.data_provider.have_reached_end():
+      if not hvd_stop and not self.data_provider.have_reached_end():
         raise Exception("Did not successfully reached the end of the dataset.")
 
       if self._should_train:
@@ -488,6 +631,8 @@ class Runner(object):
         assert step + step_offset == final_global_train_step
 
       self._finalize(num_steps=step)
+      self._horovod_finish_data()
+      self._horovod_sync_params(local_step=step, is_final=True)
 
       if self.stats:
         print("Stats:", file=log.v1)
@@ -513,8 +658,10 @@ class Runner(object):
       self.run_exception = exc
 
     finally:
+      # Try and ignore certain exceptions as we anyway should try to clean up as much as possible.
       from Util import try_and_ignore_exception
       from TFUtil import stop_event_writer_thread
+      try_and_ignore_exception(self._horovod_signal_error)  # ignored if _horovod_finish_data was called before
       if writer:
         try_and_ignore_exception(writer.close)
         try_and_ignore_exception(lambda: stop_event_writer_thread(writer.event_writer))
@@ -586,10 +733,10 @@ class Engine(object):
     return any([d["device"].startswith("gpu") for d in self.devices_config])
 
   def _check_devices(self):
-    from TFUtil import print_available_devices, is_gpu_available
-    print_available_devices(file=log.v2)
+    from TFUtil import is_gpu_available
     assert len(self.devices_config) == 1, "multiple devices not supported yet for TF"
     if self.is_requesting_for_gpu():
+      assert tf.test.is_built_with_cuda(), "You use a CPU-only TF version. Use tensorflow-gpu."
       assert is_gpu_available(), "no GPU available"
     else:
       if is_gpu_available():
@@ -608,7 +755,11 @@ class Engine(object):
     # See options here:
     # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/protobuf/config.proto
     opts.setdefault("log_device_placement", False)
-    opts.setdefault("device_count", {}).setdefault("GPU", 1 if self.is_requesting_for_gpu() else 0)
+    opts.setdefault("device_count", {})
+    if self.is_requesting_for_gpu():
+      opts["device_count"].setdefault("GPU", 1)
+    else:
+      opts["device_count"].setdefault("GPU", 0)
     # Note: We don't set intra_op_parallelism_threads and inter_op_parallelism_threads here anymore
     # because it is saver to do it via setup_tf_thread_pools() which we call very early.
     print("Setup tf.Session with options %r ..." % opts, file=log.v2)
@@ -671,6 +822,8 @@ class Engine(object):
     """
     :param str filename: full filename for model
     """
+    if not self._do_save():
+      return
     if not filename:
       filename = self.get_epoch_model_filename()
     print("Save model under %s" % (filename,), file=log.v4)
@@ -715,7 +868,7 @@ class Engine(object):
     self.eval_data = eval_data
     self.start_epoch, self.start_batch = self.get_train_start_epoch_batch(config)
     self.batch_size = config.int('batch_size', 1)
-    self.shuffle_batches = config.bool('shuffle_batches', True)
+    self.shuffle_batches = config.bool('shuffle_batches', False)
     self.update_batch_size = config.int('update_batch_size', 0)
     self.save_model_epoch_interval = config.int('save_interval', 1)
     self.save_epoch1_initial_model = config.bool('save_epoch1_initial_model', False)
@@ -741,9 +894,10 @@ class Engine(object):
     # And also initialize the network. That depends on some vars here such as pretrain.
     self.init_network_from_config(config)
 
-  def init_network_from_config(self, config=None):
+  def init_network_from_config(self, config=None, net_dict_post_proc=None):
     """
     :param Config.Config|None config:
+    :param ((dict)->dict)|None net_dict_post_proc:
     """
     if not config:
       config = self.config
@@ -753,6 +907,7 @@ class Engine(object):
     self.max_seqs = config.int('max_seqs', -1)
 
     epoch, model_epoch_filename = self.get_epoch_model(config)
+    # Note that model_epoch_filename could be set but epoch could be None or 0.
     if not model_epoch_filename and not self.start_epoch:
       if self.config.bool("allow_random_model_init", False):
         print("No model will be loaded. Randomly initializing model.", file=log.v2)
@@ -761,6 +916,11 @@ class Engine(object):
         raise Exception(
           "You are not using training, otherwise start_epoch would be set via self.init_train_from_config(). "
           "There was also no model found which we could load. Set one via 'load'.")
+    # self.start_epoch is used as the start epoch in training.
+    # If there is an existing model, it might be higher than 1.
+    # In that case, epoch == self.start_epoch - 1.
+    is_training = config.value('task', 'train') == 'train'
+    is_first_train_epoch = is_training and not epoch
     self.epoch = epoch or self.start_epoch
     assert self.epoch
 
@@ -770,21 +930,33 @@ class Engine(object):
       net_dict = self.pretrain.get_network_json_for_epoch(self.epoch)
     else:
       net_dict = LayerNetwork.json_from_config(config)
+    if net_dict_post_proc:
+      net_dict = net_dict_post_proc(net_dict)
 
     self._init_network(net_desc=net_dict, epoch=self.epoch)
 
     if self.preload_from_files:
-      # This option is to be replaced by a load_on_init option for each layer in the future.
-      print("WARNING: Option 'preload_from_files' is currently not compatible with 'load_on_init' in SubnetworkLayer", file=log.v2)
+      # Notes for related options:
+      # - import_model_train_epoch1. This however requires all params to exist in the checkpoint.
+      # - SubnetworkLayer also has a load_on_init option.
+      # - LayerBase has custom_param_importer which is quite flexible.
       print("Start pre-loading weights...", file=log.v2)
-      for model_name in self.preload_from_files.keys():
-        model_filename = self.preload_from_files.get(model_name)['filename']
+      for model_name, opts in sorted(self.preload_from_files.items()):
+        assert isinstance(opts, dict)
+        if opts.get("init_for_train", False):
+          if not is_first_train_epoch:
+            continue
+        else:  # default: init for recog
+          if is_training:
+            continue
+        model_filename = opts['filename']
         print("loading weights from", model_filename, file=log.v2)
         self_prefix = self.network.get_absolute_name_scope_prefix()  # with "/" at end
-        load_if_prefix = self.preload_from_files.get(model_name)['prefix']  # prefix to identify the variables to be restored from the file
+        load_if_prefix = opts.get('prefix', '')  # prefix to identify the variables to be restored from the file
         from TFNetwork import CustomCheckpointLoader
         loader = CustomCheckpointLoader(
-          filename=model_filename, saveable_params=self.network.get_trainable_params(), params_prefix=self_prefix, load_if_prefix=load_if_prefix)
+          filename=model_filename, saveable_params=self.network.get_trainable_params(),
+          params_prefix=self_prefix, load_if_prefix=load_if_prefix)
         loader.set_as_custom_init()
       self.network.initialize_params(session=self.tf_session)
 
@@ -885,6 +1057,14 @@ class Engine(object):
       initial_learning_rate=getattr(self, "initial_learning_rate", None),
       net_dict=net_desc)
     self.network.initialize_params(session=self.tf_session)
+    if self.config.is_true("use_horovod"):
+      # Note: Might not be needed as it should be deterministic. But just to be sure...
+      import horovod.tensorflow as hvd
+      # like hvd.broadcast_global_variables but selected vars only:
+      bcast_op = tf.group(*[
+        tf.assign(var, hvd.broadcast(var, root_rank=0))
+        for var in self.network.get_params_list() + self.network.get_auxiliary_params()])
+      self.tf_session.run(bcast_op)
 
   @classmethod
   def create_network(cls, config, rnd_seed, train_flag, eval_flag, search_flag, net_dict, initial_learning_rate=1.0):
@@ -1103,7 +1283,8 @@ class Engine(object):
     if self.model_filename and (self.epoch % self.save_model_epoch_interval == 0):
       self.save_model(self.get_epoch_model_filename())
     self.learning_rate_control.setEpochError(self.epoch, {"train_score": trainer.score, "train_error": trainer.error})
-    self.learning_rate_control.save()
+    if self._do_save():
+      self.learning_rate_control.save()
 
     print(
       self.get_epoch_str(), "score:", self.format_score(trainer.score), "elapsed:", hms(trainer.elapsed), file=log.v1)
@@ -1150,6 +1331,17 @@ class Engine(object):
     self.updater.set_learning_rate(eval_learning_rate, session=self.tf_session)
     return True
 
+  def _do_save(self):
+    """
+    :return: whether to perform save on disk in this process. e.g. for Horovod rank != 0, do not save.
+    :rtype: bool
+    """
+    if self.config.is_true("use_horovod"):
+      import horovod.tensorflow as hvd
+      if hvd.rank() != 0:
+        return False
+    return True
+
   def eval_model(self, output_file=None):
     """
     Eval the current model on the eval datasets (dev + eval, whatever is set).
@@ -1159,7 +1351,7 @@ class Engine(object):
     :return: nothing
     """
     # It's constructed lazily and it will set used_data_keys, so make sure that we have it now.
-    self.network.get_all_errors()
+    self.network.maybe_construct_objective()
     results = {}
     eval_dump_str = []
     train = self._maybe_prepare_train_in_eval()
@@ -1184,7 +1376,8 @@ class Engine(object):
       results[dataset_name] = {"score": tester.score, "error": tester.error}
       if dataset_name == "dev":
         self.learning_rate_control.setEpochError(self.epoch, {"dev_score": tester.score, "dev_error": tester.error})
-        self.learning_rate_control.save()
+        if self._do_save():
+          self.learning_rate_control.save()
     print(" ".join(eval_dump_str), file=log.v1)
     if output_file:
       print('Write eval results to %r' % output_file, file=log.v3)
@@ -1208,6 +1401,8 @@ class Engine(object):
     """
     :param bool ask_for_confirmation: if True, will ask the user interactively to confirm
     """
+    if not self._do_save():
+      return
     from Util import CollectionReadCheckCovered, human_bytes_size, confirm
     from itertools import count
     opts = CollectionReadCheckCovered(self.config.get_of_type("cleanup_old_models", dict, {}))
@@ -1339,10 +1534,29 @@ class Engine(object):
         self.tf_session.run(tf.variables_initializer(uninitialized_vars))
       self._checked_uninitialized_vars = True
 
+  def _get_new_data_provider(self, dataset, batches):
+    """
+    :param Dataset.Dataset dataset:
+    :param BatchSetGenerator batches:
+    :rtype: TFDataPipeline.FeedDictDataProvider
+    """
+    batch_slice = None
+    if self.config.is_true("use_horovod"):
+      import horovod.tensorflow as hvd
+      batch_slice = slice(hvd.rank(), None, hvd.size())
+    from TFDataPipeline import FeedDictDataProvider
+    data_provider = FeedDictDataProvider(
+      tf_session=self.tf_session, extern_data=self.network.extern_data,
+      data_keys=self.network.used_data_keys,
+      dataset=dataset, batches=batches,
+      batch_slice=batch_slice,
+      enforce_min_len1=self.config.is_true("enforce_min_len1", False))
+    return data_provider
+
   def get_specific_feed_dict(self, dataset, seq_idx):
     """
     :param Dataset.Dataset dataset:
-    :param int seq_idx:
+    :param int seq_idx: index of sequence, -1 for all sequences in dataset
     :return: feed_dict for self.tf_session.run()
     :rtype: dict[tf.Tensor,numpy.ndarray]
     """
@@ -1350,21 +1564,21 @@ class Engine(object):
     # First we need a custom DataProvider with a custom BatchSetGenerator
     # which will yield only one single batch for the provided sequence idx.
     batch = Batch()
-    batch.init_with_one_full_sequence(seq_idx=seq_idx, dataset=dataset)
+    if seq_idx == -1:  # load all sequences in dataset
+      for seq_idx_loop in range(dataset.num_seqs):
+        batch.add_sequence_as_slice(seq_idx=seq_idx_loop, seq_start_frame=0, length=dataset.get_seq_length(seq_idx_loop))
+    else:
+      batch.init_with_one_full_sequence(seq_idx=seq_idx, dataset=dataset)
     batch_generator = iter([batch])
     batches = BatchSetGenerator(dataset, generator=batch_generator)
-    from TFDataPipeline import FeedDictDataProvider
-    data_provider = FeedDictDataProvider(
-      tf_session=self.tf_session, extern_data=self.network.extern_data,
-      data_keys=self.network.used_data_keys,
-      dataset=dataset, batches=batches)
+    data_provider = self._get_new_data_provider(dataset=dataset, batches=batches)
     feed_dict, _ = data_provider.get_feed_dict(single_threaded=True)
     return feed_dict
 
   def run_single(self, dataset, seq_idx, output_dict, ext_feed_dict=None):
     """
     :param Dataset dataset:
-    :param int seq_idx:
+    :param int seq_idx: index of sequence, -1 for all sequences in dataset
     :param dict[str,tf.Tensor] output_dict: key -> tf.Tensor
     :param dict[tf.Tensor,numpy.ndarray] ext_feed_dict:
     :return: output_dict but values evaluated
@@ -1524,7 +1738,7 @@ class Engine(object):
         sources=self.network.get_output_layers())
 
     # It's constructed lazily and it will set used_data_keys, so make sure that we have it now.
-    self.network.get_all_errors()
+    self.network.maybe_construct_objective()
 
     batch_size = self.config.int('batch_size', 1)
     max_seqs = self.config.int('max_seqs', -1)
@@ -1577,7 +1791,7 @@ class Engine(object):
       self.init_network_from_config(self.config)
     if do_eval:
       # It's constructed lazily and it will set used_data_keys, so make sure that we have it now.
-      self.network.get_all_errors()
+      self.network.maybe_construct_objective()
     if output_file:
       if dataset.have_corpus_seq_idx():
         # We can sort it. Sort it in reverse to make sure that we have enough memory right at the beginning.
@@ -1586,12 +1800,16 @@ class Engine(object):
       else:
         print("Dataset have_corpus_seq_idx == False, i.e. it will not be sorted for optimal performance.", file=log.v3)
         dataset.seq_ordering = "default"  # enforce order as-is, so that the order in the written file corresponds
+
+    max_seq_length=self.config.typed_value('max_seq_length', None) or self.config.float('max_seq_length', 0)
+    assert not max_seq_length, "Set max_seq_length = 0 for search (i.e. no maximal length). We want to keep all source sentences."
+
     dataset.init_seq_order(epoch=self.epoch)
     batches = dataset.generate_batches(
       recurrent_net=self.network.recurrent,
       batch_size=self.config.int('batch_size', 1),
       max_seqs=self.config.int('max_seqs', -1),
-      max_seq_length=self.config.typed_value('max_seq_length', None) or self.config.float('max_seq_length', 0),
+      max_seq_length=max_seq_length,
       used_data_keys=self.network.used_data_keys)
 
     output_layer = self.network.layers[output_layer_name]
@@ -1703,7 +1921,7 @@ class Engine(object):
     See also :func:`forward_single`.
 
     :param Dataset.Dataset dataset:
-    :param int seq_idx:
+    :param int seq_idx: index of sequence, -1 for all sequences in dataset
     :param str|None output_layer_name: e.g. "output". if not set, will read from config "search_output_layer"
     :return: list of score and numpy array, each numpy arry in format (time,dim)
     :rtype: list[(float,numpy.ndarray)]
@@ -1727,21 +1945,21 @@ class Engine(object):
     output = output_d["output"]
     seq_lens = output_d["seq_lens"]
     beam_scores = output_d["beam_scores"]
-    assert len(output) == len(seq_lens) == (out_beam_size or 1)
+    assert len(output) == len(seq_lens) == (out_beam_size or 1) * dataset.num_seqs
     if out_beam_size:
-      assert beam_scores.shape == (1, out_beam_size)  # (batch,beam)
+      assert beam_scores.shape == (dataset.num_seqs, out_beam_size)  # (batch,beam)
 
     results = []
-    for i in range(out_beam_size or 1):
+    for i in range(len(output)):
       hyp_seq = output[i][:seq_lens[i]]
       # txt = " ".join(map(labels["classes"].__getitem__, output[i][:seq_lens[i]]))
-      score = beam_scores[0][i]
+      score = beam_scores[i // out_beam_size][i % out_beam_size] if beam_scores is not None else 0
       results += [(score, hyp_seq)]
     return results
 
-  def search_single_seq(self, source, output_layer_name=None):
+  def search_single_seq(self, sources, output_layer_name=None):
     """
-    :param list[int]|numpy.ndarray source: source as a list of indices
+    :param list[numpy.ndarray] sources: source sequences as a list of indices
     :param str|None output_layer_name: e.g. "output". if not set, will read from config "search_output_layer"
     :return: list of all hyps, which is a tuple of score and string
     :rtype: list[(float,str)]
@@ -1749,18 +1967,19 @@ class Engine(object):
     num_outputs = {
       "data": [self.network.extern_data.data["data"].dim, 1],
       "classes": [self.network.extern_data.data["classes"].dim, 1]}
-    source_seq = numpy.array(source, dtype="int32")
-    assert source_seq.ndim == 1
+    source_seqs = [numpy.array(s, dtype="int32") for s in sources]
+    assert source_seqs[0].ndim == 1
     targets_empty_seq = numpy.array([], dtype="int32")  # empty...
     from GeneratingDataset import StaticDataset
     dataset = StaticDataset(
-      data=[{"data": source_seq, "classes": targets_empty_seq}], output_dim=num_outputs)
+      data=[{"data": source_seq, "classes": targets_empty_seq} for source_seq in source_seqs], output_dim=num_outputs)
     dataset.init_seq_order(epoch=1)
-    return self.search_single(dataset=dataset, seq_idx=0, output_layer_name=output_layer_name)
+    seq_idx = 0 if len(sources) == 1 else -1
+    return self.search_single(dataset=dataset, seq_idx=seq_idx, output_layer_name=output_layer_name)
 
-  def search_single_string_to_string_seq(self, source, output_layer_name=None):
+  def search_single_string_to_string_seq(self, sources, output_layer_name=None):
     """
-    :param str source: source as a string
+    :param str|list[str] sources: source text as a string (list for batch translation)
     :param str|None output_layer_name: e.g. "output". if not set, will read from config "search_output_layer"
     :return: list of all hyps, which is a tuple of score and string
     :rtype: list[(float,str)]
@@ -1769,8 +1988,10 @@ class Engine(object):
     target_voc = self.network.extern_data.data["targets"].vocab
     assert source_voc.num_labels == self.network.extern_data.data["data"].dim
     assert target_voc.num_labels == self.network.extern_data.data["classes"].dim
-    source_seq_list = source_voc.get_seq(source)
-    results_raw = self.search_single_seq(source=source_seq_list, output_layer_name=output_layer_name)
+    if not isinstance(sources, list):
+      sources = [sources]
+    source_seq_lists = [source_voc.get_seq(s) for s in sources]
+    results_raw = self.search_single_seq(sources=source_seq_lists, output_layer_name=output_layer_name)
     results = []
     for (score, raw) in results_raw:
       txt = target_voc.get_seq_labels(raw)
@@ -1854,10 +2075,17 @@ class Engine(object):
     print("Saved prior in %r in +log space." % output_file, file=log.v1)
 
   def web_server(self, port):
+    """
+    Starts a web-server with a simple API to forward data through the network
+    (or search if the flag is set).
+
+    :param int port: for the http server
+    :return:
+    """
     assert sys.version_info[0] >= 3, "only Python 3 supported"
+    # noinspection PyCompatibility
     from http.server import HTTPServer, BaseHTTPRequestHandler
-    import soundfile  # pip install pysoundfile
-    from GeneratingDataset import StaticDataset, BytePairEncoding, ExtractAudioFeatures
+    from GeneratingDataset import StaticDataset, Vocabulary, BytePairEncoding, ExtractAudioFeatures
 
     if not self.use_search_flag or not self.network or self.use_dynamic_train_flag:
       self.use_search_flag = True
@@ -1870,18 +2098,28 @@ class Engine(object):
       self.init_network_from_config(self.config)
 
     engine = self
-    bpe_opts = None
-    audio_opts = None
-    if isinstance(self.config.typed_dict.get("dev", None), dict):
+    soundfile = None
+    input_data = self.network.extern_data.get_default_input_data()
+    input_vocab = input_data.vocab
+    input_audio_feature_extractor = None
+    output_data = self.network.extern_data.get_default_target_data()
+    output_vocab = output_data.vocab
+    if isinstance(self.config.typed_dict.get("dev", None), dict) and self.config.typed_dict["dev"]["class"] == "LibriSpeechCorpus":
       # A bit hacky. Assumes that this is a dataset description for e.g. LibriSpeechCorpus.
+      import soundfile  # pip install pysoundfile
       bpe_opts = self.config.typed_dict["dev"]["bpe"]
       audio_opts = self.config.typed_dict["dev"]["audio"]
-    bpe = BytePairEncoding(**bpe_opts)
-    labels = {"classes": bpe.labels}
-    feature_extractor = ExtractAudioFeatures(**audio_opts)
-    num_inputs = feature_extractor.get_feature_dimension()
+      bpe = BytePairEncoding(**bpe_opts)
+      assert output_data.sparse
+      assert bpe.num_labels == output_data.dim
+      output_vocab = bpe
+      input_audio_feature_extractor = ExtractAudioFeatures(**audio_opts)
+    else:
+      assert isinstance(input_vocab, Vocabulary)
+    assert isinstance(output_vocab, Vocabulary)
     num_outputs = {
-      "data": [num_inputs, 2], "classes": [bpe.num_labels, 1]}
+      input_data.name: [input_data.dim, input_data.ndim],
+      output_data.name: [output_data.dim, output_data.ndim]}
 
     output_layer_name = self.config.value("search_output_layer", "output")
     output_layer = self.network.layers[output_layer_name]
@@ -1912,23 +2150,42 @@ class Engine(object):
         print("HTTP server, got POST.", file=log.v3)
         from io import BytesIO
         f = BytesIO(form["file"].file.read())
-        audio, sample_rate = soundfile.read(f)
-        print("audio len %i (%.1f secs), sample rate %i" % (len(audio), float(len(audio)) / sample_rate, sample_rate), file=log.v4)
-        if audio.ndim == 2:  # multiple channels:
-          audio = numpy.mean(audio, axis=1)  # mix together
-        features = feature_extractor.get_audio_features(audio=audio, sample_rate=sample_rate)
+        print("Input file size:", f.getbuffer().nbytes, "bytes", file=log.v4)
+        audio_len = None
+        if input_audio_feature_extractor:
+          try:
+            audio, sample_rate = soundfile.read(f)
+          except Exception as exc:
+            print("Error reading audio (%s). Invalid format? Size %i, first few bytes %r." % (exc, f.getbuffer().nbytes, f.getbuffer().tobytes()[:20]), file=log.v2)
+            raise
+          audio_len = float(len(audio)) / sample_rate
+          print("audio len %i (%.1f secs), sample rate %i" % (len(audio), audio_len, sample_rate), file=log.v4)
+          if audio.ndim == 2:  # multiple channels:
+            audio = numpy.mean(audio, axis=1)  # mix together
+          features = input_audio_feature_extractor.get_audio_features(audio=audio, sample_rate=sample_rate)
+        else:
+          sentence = f.read().decode("utf8").strip()
+          print("Input:", sentence, file=log.v4)
+          seq = input_vocab.get_seq(sentence)
+          print("Input seq:", input_vocab.get_seq_labels(seq), file=log.v4)
+          features = numpy.array(seq, dtype="int32")
         targets = numpy.array([], dtype="int32")  # empty...
         dataset = StaticDataset(
-          data=[{"data": features, "classes": targets}], input_dim=num_inputs, output_dim=num_outputs)
+          data=[{input_data.name: features, output_data.name: targets}], output_dim=num_outputs)
         dataset.init_seq_order(epoch=1)
 
         self.send_response(200)
         self.send_header('Content-type', 'text/plain')
         self.end_headers()
+        start_time = time.time()
         output_d = engine.run_single(dataset=dataset, seq_idx=0, output_dict={
           "output": output_t,
           "seq_lens": output_seq_lens_t,
           "beam_scores": output_layer_beam_scores_t})
+        delta_time = time.time() - start_time
+        print("Took %.3f secs for decoding." % delta_time, file=log.v4)
+        if audio_len:
+          print("Real-time-factor: %.3f" % (delta_time / audio_len), file=log.v4)
         output = output_d["output"]
         seq_lens = output_d["seq_lens"]
         beam_scores = output_d["beam_scores"]
@@ -1936,17 +2193,19 @@ class Engine(object):
         if out_beam_size:
           assert beam_scores.shape == (1, out_beam_size)  # (batch, beam)
 
+        first_best_txt = output_vocab.get_seq_labels(output[0][:seq_lens[0]])
+        print("Best output: %s" % first_best_txt, file=log.v4)
+
         if out_beam_size:
           self.wfile.write(b"[\n")
           for i in range(out_beam_size):
-            txt = " ".join(map(labels["classes"].__getitem__, output[i][:seq_lens[i]]))
+            txt = output_vocab.get_seq_labels(output[i][:seq_lens[i]])
             score = beam_scores[0][i]
             self.wfile.write(("(%r, %r)\n" % (score, txt)).encode("utf8"))
           self.wfile.write(b"]\n")
 
         else:
-          txt = " ".join(map(labels["classes"].__getitem__, output[0][:seq_lens[0]]))
-          self.wfile(("%r\n" % txt).encode("utf8"))
+          self.wfile(("%r\n" % first_best_txt).encode("utf8"))
 
     print("Simple search web server, listening on port %i." % port, file=log.v2)
     server_address = ('', port)

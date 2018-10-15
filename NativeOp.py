@@ -1469,49 +1469,54 @@ class NativeLstm2(NativeOpGenBase):
     assert_cmp(Ndarray_DIMS(d)[0], ==, n_batch);
     assert_cmp(Ndarray_DIMS(d)[1], ==, n_cells);
 
-    // It makes the backprop with step<0 easier to implement,
-    // esp. the DW = Y[0..T-2]^T * DX[1..T-1] calculation,
-    // if we can have Y[t] = 0 where mask[t] = 0.
-    // That is why we need to keep track of Y[t-1] explicitly.
-    float* y_prev = (float*) device_malloc(n_batch * n_cells * sizeof(float));
+    if(T == 0) {
+      Ndarray_memcpy(Ndarray_DEV_DATA(d), Ndarray_DEV_DATA(c0), n_batch * n_cells * sizeof(float));
 
-    // H = X
-    Ndarray_memcpy(Ndarray_DEV_DATA(H), Ndarray_DEV_DATA(X), T * n_batch * n_cells * 4 * sizeof(float));
+    } else {  // T > 0
+      // It makes the backprop with step<0 easier to implement,
+      // esp. the DW = Y[0..T-2]^T * DX[1..T-1] calculation,
+      // if we can have Y[t] = 0 where mask[t] = 0.
+      // That is why we need to keep track of Y[t-1] explicitly.
+      float* y_prev = (float*) device_malloc(n_batch * n_cells * sizeof(float));
+  
+      // H = X
+      Ndarray_memcpy(Ndarray_DEV_DATA(H), Ndarray_DEV_DATA(X), T * n_batch * n_cells * 4 * sizeof(float));
+  
+      assert_cmp(T, >, 0);
+      assert_cmp(start, >=, 0);
+      assert_cmp(start, <, T);
+      assert_cmp(step, !=, 0);
+      int end = T - 1;
+      if(step < 0) {
+        end = 0;
+        start = T - start - 1;
+      }
+      int t = start;
+      for(; (step > 0) ? (t <= end) : (t >= end); t += step) {
+        // H[t] += Y[t-1] * W
+        affine_raw(
+          (t != start) ? y_prev : Ndarray_DEV_DATA(y0), n_batch, n_cells,
+          Ndarray_DEV_DATA(W), n_cells, n_cells * 4,
+          data_ptr(H, t), n_batch, n_cells * 4,
+          false, false);
+  
+        start_dev_kernel(lstm_kernel, (
+          n_batch,
+          n_cells,
+          Ndarray_DEV_DATA(i) + t * n_batch,
+          data_ptr(H, t),  // inplace
+          (t != start) ? y_prev : Ndarray_DEV_DATA(y0),
+          (t != start) ? data_ptr(C, t-step) : Ndarray_DEV_DATA(c0),
+          data_ptr(Y, t),  // out
+          data_ptr(C, t),  // out
+          y_prev  // out
+        ));
+      }
 
-    assert_cmp(T, >, 0);
-    assert_cmp(start, >=, 0);
-    assert_cmp(start, <, T);
-    assert_cmp(step, !=, 0);
-    int end = T - 1;
-    if(step < 0) {
-      end = 0;
-      start = T - start - 1;
+      Ndarray_memcpy(Ndarray_DEV_DATA(d), data_ptr(C, t - step), n_batch * n_cells * sizeof(float));
+
+      device_free(y_prev);
     }
-    int t = start;
-    for(; (step > 0) ? (t <= end) : (t >= end); t += step) {
-      // H[t] += Y[t-1] * W
-      affine_raw(
-        (t != start) ? y_prev : Ndarray_DEV_DATA(y0), n_batch, n_cells,
-        Ndarray_DEV_DATA(W), n_cells, n_cells * 4,
-        data_ptr(H, t), n_batch, n_cells * 4,
-        false, false);
-
-      start_dev_kernel(lstm_kernel, (
-        n_batch,
-        n_cells,
-        Ndarray_DEV_DATA(i) + t * n_batch,
-        data_ptr(H, t),  // inplace
-        (t != start) ? y_prev : Ndarray_DEV_DATA(y0),
-        (t != start) ? data_ptr(C, t-step) : Ndarray_DEV_DATA(c0),
-        data_ptr(Y, t),  // out
-        data_ptr(C, t),  // out
-        y_prev  // out
-      ));
-    }
-
-    Ndarray_memcpy(Ndarray_DEV_DATA(d), data_ptr(C, t - step), n_batch * n_cells * sizeof(float));
-
-    device_free(y_prev);
   """
 
   # language=C++
@@ -1596,76 +1601,82 @@ class NativeLstm2(NativeOpGenBase):
     // We will work inplace on (Dc0) DC[t], and init it with Dd.
     Ndarray_memcpy(Ndarray_DEV_DATA(Dc0), Ndarray_DEV_DATA(Dd), n_batch * n_cells * sizeof(float));
 
-    // Need to keep track of (logical) DX[0], which in practice (masking, step<0)
-    // can be different from data_ptr(DX, start).
-    float* dx0 = (float*) device_malloc(n_batch * n_cells * 4 * sizeof(float));
-    Ndarray_memset(dx0, 0, n_batch * n_cells * 4 * sizeof(float));
-    
-    assert_cmp(T, >, 0);
-    assert_cmp(start, >=, 0);
-    assert_cmp(start, <, T);
-    assert_cmp(step, !=, 0);
-    int abs_step = std::abs(step);
-    // e.g.:
-    // step=1, start=0, T=10 -> num_steps=10=T
-    // step=5, start=0, T=10 -> num_steps=2=T/step
-    // step=5, start=0, T=9  -> num_steps=2=(T+step-1)/step
-    // step=5, start=0, T=6  -> num_steps=2=(T+step-1)/step
-    // step=5, start=0, T=5  -> num_steps=1=(T+step-1)/step
-    // step=5, start=4, T=10 -> num_steps=2=(T-start+step-1)/step
-    // step=-5, start=0, T=10 -> num_steps=2=T/abs_step
-    // step=-5, start=0, T=9  -> num_steps=2=(T+abs_step-1)/abs_step
-    // step=-5, start=4, T=10 -> num_steps=2=(T-start+abs_step-1)/abs_step
-    int num_steps = (T - start + abs_step - 1) / abs_step;
-    assert_cmp(num_steps, >, 0);
-    if(step < 0)
-      start = T - start - 1;
-    int end = start + (num_steps - 1) * step;  // inclusive
-    assert_cmp(end, >=, 0);
-    assert_cmp(end, <, T);
-    int t = end;  // go backwards
-    for(; (step > 0) ? (t >= start) : (t <= start); t -= step) {
-      bool right = (step > 0) ? (t - step >= start) : (t - step <= start);
+    if(T == 0) {
+      // just do nothing. at least do not crash
 
-      start_dev_kernel(lstm_bwd_kernel, (
-        n_batch,
-        n_cells,
-        Ndarray_DEV_DATA(i) + t * n_batch,
-        data_ptr(H, t),
-        right ? data_ptr(C, t-step) : Ndarray_DEV_DATA(c0),
-        data_ptr(Y, t),
-        data_ptr(C, t),
-        data_ptr(DY, t),
-        Ndarray_DEV_DATA(Dy0),  // in+out, error from prev frame, excluding DY. reset here, updated below
-        Ndarray_DEV_DATA(Dc0),  // in+out, working inplace. also error from prev frame, initially Dd
-        data_ptr(DX, t),  // out
-        dx0  // out
-      ));
+    } else {
+      // Need to keep track of (logical) DX[0], which in practice (masking, step<0)
+      // can be different from data_ptr(DX, start).
+      float* dx0 = (float*) device_malloc(n_batch * n_cells * 4 * sizeof(float));
+      Ndarray_memset(dx0, 0, n_batch * n_cells * 4 * sizeof(float));
 
-      // (Dy0) DY[t-1] += DX[t] * W^T
+      assert_cmp(T, >, 0);
+      assert_cmp(start, >=, 0);
+      assert_cmp(start, <, T);
+      assert_cmp(step, !=, 0);
+      int abs_step = std::abs(step);
+      // e.g.:
+      // step=1, start=0, T=10 -> num_steps=10=T
+      // step=5, start=0, T=10 -> num_steps=2=T/step
+      // step=5, start=0, T=9  -> num_steps=2=(T+step-1)/step
+      // step=5, start=0, T=6  -> num_steps=2=(T+step-1)/step
+      // step=5, start=0, T=5  -> num_steps=1=(T+step-1)/step
+      // step=5, start=4, T=10 -> num_steps=2=(T-start+step-1)/step
+      // step=-5, start=0, T=10 -> num_steps=2=T/abs_step
+      // step=-5, start=0, T=9  -> num_steps=2=(T+abs_step-1)/abs_step
+      // step=-5, start=4, T=10 -> num_steps=2=(T-start+abs_step-1)/abs_step
+      int num_steps = (T - start + abs_step - 1) / abs_step;
+      assert_cmp(num_steps, >, 0);
+      if(step < 0)
+        start = T - start - 1;
+      int end = start + (num_steps - 1) * step;  // inclusive
+      assert_cmp(end, >=, 0);
+      assert_cmp(end, <, T);
+      int t = end;  // go backwards
+      for(; (step > 0) ? (t >= start) : (t <= start); t -= step) {
+        bool right = (step > 0) ? (t - step >= start) : (t - step <= start);
+
+        start_dev_kernel(lstm_bwd_kernel, (
+          n_batch,
+          n_cells,
+          Ndarray_DEV_DATA(i) + t * n_batch,
+          data_ptr(H, t),
+          right ? data_ptr(C, t-step) : Ndarray_DEV_DATA(c0),
+          data_ptr(Y, t),
+          data_ptr(C, t),
+          data_ptr(DY, t),
+          Ndarray_DEV_DATA(Dy0),  // in+out, error from prev frame, excluding DY. reset here, updated below
+          Ndarray_DEV_DATA(Dc0),  // in+out, working inplace. also error from prev frame, initially Dd
+          data_ptr(DX, t),  // out
+          dx0  // out
+        ));
+
+        // (Dy0) DY[t-1] += DX[t] * W^T
+        affine_raw(
+          data_ptr(DX, t), n_batch, n_cells * 4,
+          Ndarray_DEV_DATA(W), n_cells, n_cells * 4,
+          Ndarray_DEV_DATA(Dy0), n_batch, n_cells,
+          false, true);
+      }
+
+      //DW = Y[0..T-2]^T * DX[1..T-1]  (if step==1)
+      if(num_steps > 1)
+        affine_raw(
+          data_ptr(Y, std::min(start, end) + std::max(0, -step)), (num_steps - 1) * n_batch, n_cells,
+          data_ptr(DX, std::min(start, end) + std::max(0, step)), (num_steps - 1) * n_batch, n_cells * 4,
+          Ndarray_DEV_DATA(DW), n_cells, n_cells * 4,
+          true, false, 0.0f, 1.0f,
+          abs_step, abs_step);
+
+      //DW += y0^T * DX[0]
       affine_raw(
-        data_ptr(DX, t), n_batch, n_cells * 4,
-        Ndarray_DEV_DATA(W), n_cells, n_cells * 4,
-        Ndarray_DEV_DATA(Dy0), n_batch, n_cells,
-        false, true);
+        Ndarray_DEV_DATA(y0), n_batch, n_cells,
+        dx0, n_batch, n_cells * 4,
+        Ndarray_DEV_DATA(DW), n_cells, n_cells * 4,
+        true, false);
+
+      device_free(dx0);
     }
-
-    //DW = Y[0..T-2]^T * DX[1..T-1]  (if step==1)
-    affine_raw(
-      data_ptr(Y, std::min(start, end) + std::max(0, -step)), (num_steps - 1) * n_batch, n_cells,
-      data_ptr(DX, std::min(start, end) + std::max(0, step)), (num_steps - 1) * n_batch, n_cells * 4,
-      Ndarray_DEV_DATA(DW), n_cells, n_cells * 4,
-      true, false, 0.0f, 1.0f,
-      abs_step, abs_step);
-
-    //DW += y0^T * DX[0]
-    affine_raw(
-      Ndarray_DEV_DATA(y0), n_batch, n_cells,
-      dx0, n_batch, n_cells * 4,
-      Ndarray_DEV_DATA(DW), n_cells, n_cells * 4,
-      true, false);
-    
-    device_free(dx0);
   """
 
 

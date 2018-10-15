@@ -132,6 +132,7 @@ from tensorflow.python.ops.data_flow_ops import StagingArea
 from Dataset import Dataset, BatchSetGenerator
 from TFNetwork import ExternData, Data
 from Util import NumbersDict
+from Log import log
 
 
 class PipeBase(object):
@@ -833,20 +834,25 @@ class FeedDictDataProvider(DataProviderBase):
   It will run a background thread which reads the data from a dataset and puts it into a queue.
   """
 
-  def __init__(self, tf_session, dataset, batches, capacity=10, tf_queue=None, **kwargs):
+  def __init__(self, tf_session, dataset, batches, enforce_min_len1=False, capacity=10, tf_queue=None,
+               batch_slice=None, **kwargs):
     """
     :param tf.Session|tf.InteractiveSession tf_session:
     :param Dataset dataset:
     :param BatchSetGenerator batches:
+    :param bool enforce_min_len1:
     :param ExternData extern_data:
     :param set(str)|None data_keys:
     :param int capacity:
     :param TFDataQueues|None tf_queue:
+    :param slice|None batch_slice: select a subset of the batches
     """
     super(FeedDictDataProvider, self).__init__(**kwargs)
     self.tf_session = tf_session
     self.dataset = dataset
     self.batches = batches
+    self.enforce_min_len1 = enforce_min_len1
+    self.batch_slice = batch_slice
     self.state_change_cond = Condition()
     self.queue = None  # type: Queue
     self.tf_queue = tf_queue
@@ -854,6 +860,7 @@ class FeedDictDataProvider(DataProviderBase):
       self.queue = Queue(maxsize=capacity)
     self.thread = None  # type: Thread
     self.thread_finished = False
+    self.cur_batch_idx = 0
     self.reached_end = False
 
   def start_threads(self):
@@ -869,20 +876,37 @@ class FeedDictDataProvider(DataProviderBase):
     self._flush_all_data()
     self.thread.join()
 
-  def _get_next_batch(self):
+  def get_next_batch(self, consider_batch_slice):
     """
-    :returns (batch-data-value-dict, batch-seq-lens)
-    :rtype: (dict[str,numpy.ndarray], dict[str,numpy.ndarray])
+    This assumes that we have more data, i.e. self.batches.has_more().
+
+    :param bool consider_batch_slice:
+    :returns: batch-data-value-dict or None. if not consider_batch_slice, will never be None
+    :rtype: dict[str,numpy.ndarray]|None
     """
     # See EngineUtil.assign_dev_data() for reference.
+    cur_batch_idx = self.cur_batch_idx
     batch, = self.batches.peek_next_n(1)
+    self.cur_batch_idx += 1
+    if consider_batch_slice and self.batch_slice is not None:
+      assert (self.batch_slice.start or 0) >= 0
+      start = self.batch_slice.start or 0
+      assert (self.batch_slice.step or 1) >= 1
+      step = self.batch_slice.step or 1
+      if cur_batch_idx < start:
+        return None
+      if self.batch_slice.stop is not None and cur_batch_idx >= self.batch_slice.stop:
+        return None
+      if step > 1 and (cur_batch_idx - start) % step != 0:
+        return None
     from Dataset import Batch, shapes_for_batches
     assert isinstance(batch, Batch)
     # In Returnn with Theano, we usually have the shape (time,batch,feature).
     # In TensorFlow, the default is (batch,time,feature).
     # This is also what we use here, i.e. batch_dim_first=True.
     # This must match the Data specification in TFNetwork.ExternData.init_from_config().
-    shapes = shapes_for_batches([batch], data_keys=self.data_keys, extern_data=self.extern_data)
+    shapes = shapes_for_batches(
+      [batch], data_keys=self.data_keys, extern_data=self.extern_data, enforce_min_len1=self.enforce_min_len1)
     data = {k: numpy.zeros(shape=shapes[k], dtype=self.extern_data.data[k].dtype)
             for k in self.data_keys if self.extern_data.data[k].dtype != "string"}
     # Numpy cannot handle "string" dtype. Just make it a list[str], which is what TF can handle.
@@ -922,15 +946,9 @@ class FeedDictDataProvider(DataProviderBase):
             data[k][q] = v
         data["seq_idx"][q] = seq.seq_idx
         data["seq_tag"][q] = self.dataset.get_tag(seq.seq_idx)
-    return data, seq_lens
-
-  def get_next_batch(self):
-    data, seq_lens = self._get_next_batch()
-    enqueue_args = data.copy()
-    for k in data.keys():
-      if k in seq_lens:
-        enqueue_args["%s_seq_lens" % k] = seq_lens[k]
-    return enqueue_args
+    for k in seq_lens.keys():
+      data["%s_seq_lens" % k] = seq_lens[k]
+    return data
 
   def thread_main(self):
     try:
@@ -938,11 +956,12 @@ class FeedDictDataProvider(DataProviderBase):
       better_exchook.install()
 
       while self.batches.has_more() and not self.coord.should_stop():
-        enqueue_args = self.get_next_batch()
-        if self.queue:
-          self.queue.put(enqueue_args)
-        else:
-          self.tf_queue.enqueue(tf_session=self.tf_session, data=enqueue_args)
+        enqueue_args = self.get_next_batch(consider_batch_slice=True)
+        if enqueue_args is not None:
+          if self.queue:
+            self.queue.put(enqueue_args)
+          else:
+            self.tf_queue.enqueue(tf_session=self.tf_session, data=enqueue_args)
         with self.state_change_cond:
           self.state_change_cond.notifyAll()
         self.batches.advance(1)
@@ -950,7 +969,7 @@ class FeedDictDataProvider(DataProviderBase):
       self.reached_end = not self.batches.has_more()
 
     except Exception as exc:
-      print("Exception in DataProvider thread: %r" % exc)
+      print("Exception in DataProvider thread: %r" % exc, file=log.v1)
       sys.excepthook(*sys.exc_info())
 
     finally:
@@ -960,6 +979,8 @@ class FeedDictDataProvider(DataProviderBase):
 
   def have_more_data(self, session):
     """
+    :param tf.Session|None session:
+    :rtype: bool
     :return: when we go through an epoch and finished reading, this will return False
     If this returns True, you can definitely read another item from the queue.
     Threading safety: This assumes that there is no other consumer thread for the queue.
@@ -1004,7 +1025,8 @@ class FeedDictDataProvider(DataProviderBase):
       return {}  # not needed to feed anything, it gets it via the queues
     if single_threaded:
       assert self.batches.has_more()
-      output = self.get_next_batch()
+      assert self.batch_slice is None
+      output = self.get_next_batch(consider_batch_slice=False)
     else:
       output = self.queue.get()
     assert isinstance(output, dict)

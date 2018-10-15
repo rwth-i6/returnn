@@ -240,6 +240,13 @@ def test_deepcopy_builtins():
   assert o["__builtins__"] is user_ns["__builtins__"]  # no copy, directly reference this module dict
 
 
+def test_get_func_kwargs():
+  def dummy_func(net, var, update_ops):
+    pass
+
+  assert_equal(list(getargspec(dummy_func).args), ["net", "var", "update_ops"])
+
+
 if __name__ == "__main__":
   better_exchook.install()
   if len(sys.argv) <= 1:

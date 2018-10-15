@@ -1,15 +1,17 @@
+
 from __future__ import print_function
 import collections
 import functools as fun
 import gc
 import h5py
 import numpy
-import random
 import theano
 from CachedDataset import CachedDataset
 from CachedDataset2 import CachedDataset2
 from Dataset import Dataset, DatasetSeq
 from Log import log
+import Util
+
 
 # Common attribute names for HDF dataset, which should be used in order to be proceed with HDFDataset class.
 attr_seqLengths = 'seqLengths'
@@ -18,16 +20,32 @@ attr_numLabels = 'numLabels'
 attr_times = 'times'
 attr_ctcIndexTranscription = 'ctcIndexTranscription'
 
+
 class HDFDataset(CachedDataset):
 
-  def __init__(self, *args, **kwargs):
-    super(HDFDataset, self).__init__(*args, **kwargs)
-    self.files = []; """ :type: list[str] """
+  def __init__(self, files=None, use_cache_manager=False, **kwargs):
+    """
+    :param None|list[str] files:
+    :param bool use_cache_manager: uses :func:`Util.cf` for files
+    """
+    super(HDFDataset, self).__init__(**kwargs)
+    self._use_cache_manager = use_cache_manager
+    self.files = []; """ :type: list[str] """  # file names
     self.file_start = [0]
-    self.file_seq_start = []; """ :type: list[list[int]] """
+    self.file_seq_start = []; """ :type: list[numpy.ndarray] """
     self.file_index = []; """ :type: list[int] """
     self.data_dtype = {}; ":type: dict[str,str]"
     self.data_sparse = {}; ":type: dict[str,bool]"
+    if files:
+      for fn in files:
+        self.add_file(fn)
+
+  @staticmethod
+  def _decode(s):
+    if not isinstance(s, str):
+      s = s.decode("utf-8")
+    s = s.split('\0')[0]
+    return s
 
   def add_file(self, filename):
     """
@@ -39,22 +57,24 @@ class HDFDataset(CachedDataset):
     Use load_seqs() to load the actual data.
     :type filename: str
     """
+    if self._use_cache_manager:
+      filename = Util.cf(filename)
     fin = h5py.File(filename, "r")
-    decode = lambda s: s if isinstance(s, str) else s.decode('utf-8')
     if 'targets' in fin:
-      self.labels = { k : [ decode(item).split('\0')[0] for item in fin["targets/labels"][k][...].tolist() ] for k in fin['targets/labels'] }
+      self.labels = {
+        k: [self._decode(item) for item in fin["targets/labels"][k][...].tolist()]
+        for k in fin['targets/labels']}
     if not self.labels:
-      labels = [ item.split('\0')[0] for item in fin["labels"][...].tolist() ]; """ :type: list[str] """
-      self.labels = { 'classes' : labels }
+      labels = [item.split('\0')[0] for item in fin["labels"][...].tolist()]; """ :type: list[str] """
+      self.labels = {'classes': labels}
       assert len(self.labels['classes']) == len(labels), "expected " + str(len(self.labels['classes'])) + " got " + str(len(labels))
-    tags = [ decode(item).split('\0')[0] for item in fin["seqTags"][...].tolist() ]; """ :type: list[str] """
     self.files.append(filename)
     print("parsing file", filename, file=log.v5)
     if 'times' in fin:
       if self.timestamps is None:
         self.timestamps = fin[attr_times][...]
       else:
-        self.timestamps = numpy.concatenate([self.timestamps, fin[attr_times][...]],axis=0) #.extend(fin[attr_times][...].tolist())
+        self.timestamps = numpy.concatenate([self.timestamps, fin[attr_times][...]], axis=0)
     seq_lengths = fin[attr_seqLengths][...]
     if 'targets' in fin:
       self.target_keys = sorted(fin['targets/labels'].keys())
@@ -64,25 +84,25 @@ class HDFDataset(CachedDataset):
     if len(seq_lengths.shape) == 1:
       seq_lengths = numpy.array(zip(*[seq_lengths.tolist() for i in range(len(self.target_keys)+1)]))
 
-    seq_start = [numpy.zeros((seq_lengths.shape[1],),'int64')]
+    if len(self._seq_lengths) == 0:
+      self._seq_lengths = numpy.array(seq_lengths)
+    else:
+      self._seq_lengths = numpy.concatenate((self._seq_lengths, seq_lengths), axis=0)
     if not self._seq_start:
-      self._seq_start = [numpy.zeros((seq_lengths.shape[1],),'int64')]
-    for l in seq_lengths:
-      self._seq_lengths.append(numpy.array(l))
-      seq_start.append(seq_start[-1] + l)
-    self.tags += tags
+      self._seq_start = [numpy.zeros((seq_lengths.shape[1],), 'int64')]
+    seq_start = numpy.zeros((seq_lengths.shape[0] + 1, seq_lengths.shape[1]), dtype="int64")
+    numpy.cumsum(seq_lengths, axis=0, dtype="int64", out=seq_start[1:])
+    self._tags += fin["seqTags"][...].tolist()
     self.file_seq_start.append(seq_start)
     nseqs = len(seq_start) - 1
-    for i in range(nseqs):
-      self.tag_idx[tags[i]] = i + self._num_seqs
     self._num_seqs += nseqs
     self.file_index.extend([len(self.files) - 1] * nseqs)
     self.file_start.append(self.file_start[-1] + nseqs)
-    self._num_timesteps += sum([s[0] for s in seq_lengths])
+    self._num_timesteps += numpy.sum(seq_lengths[:, 0])
     if self._num_codesteps is None:
-      self._num_codesteps = [ 0 for i in range(1,len(seq_lengths[0])) ]
-    for i in range(1,len(seq_lengths[0])):
-      self._num_codesteps[i-1] += sum([s[i] for s in seq_lengths])
+      self._num_codesteps = [0 for i in range(1, len(seq_lengths[0]))]
+    for i in range(1, len(seq_lengths[0])):
+      self._num_codesteps[i - 1] += numpy.sum(seq_lengths[:, i])
     if 'maxCTCIndexTranscriptionLength' in fin.attrs:
       self.max_ctc_length = max(self.max_ctc_length, fin.attrs['maxCTCIndexTranscriptionLength'])
     if len(fin['inputs'].shape) == 1:  # sparse
@@ -94,9 +114,15 @@ class HDFDataset(CachedDataset):
     assert self.num_inputs == num_inputs[0], "wrong input dimension in file %s (expected %s got %s)" % (
                                              filename, self.num_inputs, num_inputs[0])
     if 'targets/size' in fin:
-      num_outputs = { k : [fin['targets/size'].attrs[k], len(fin['targets/data'][k].shape)] for k in fin['targets/size'].attrs }
+      num_outputs = {}
+      for k in fin['targets/size'].attrs:
+        if numpy.isscalar(fin['targets/size'].attrs[k]):
+          num_outputs[k] = (fin['targets/size'].attrs[k], len(fin['targets/data'][k].shape))
+        else:  # hdf_dump will give directly as tuple
+          assert fin['targets/size'].attrs[k].shape == (2,)
+          num_outputs[k] = tuple(fin['targets/size'].attrs[k])
     else:
-      num_outputs = { 'classes' : fin.attrs[attr_numLabels] }
+      num_outputs = {'classes': fin.attrs[attr_numLabels]}
     num_outputs["data"] = num_inputs
     if not self.num_outputs:
       self.num_outputs = num_outputs
@@ -121,7 +147,7 @@ class HDFDataset(CachedDataset):
     else:
       self.targets = { 'classes' : numpy.zeros((self._num_timesteps,), dtype=theano.config.floatX)  }
       self.data_dtype['classes'] = 'int32'
-    self.data_dtype["data"] = fin['inputs'].dtype
+    self.data_dtype["data"] = str(fin['inputs'].dtype)
     assert len(self.target_keys) == len(self._seq_lengths[0]) - 1
     fin.close()
 
@@ -140,6 +166,7 @@ class HDFDataset(CachedDataset):
     assert end <= self.num_seqs
     selection = self.insert_alloc_interval(start, end)
     assert len(selection) <= end - start, "DEBUG: more sequences requested (" + str(len(selection)) + ") as required (" + str(end-start) + ")"
+    self.preload_set |= set(range(start,end)) - set(selection)
     file_info = [ [] for l in range(len(self.files)) ]; """ :type: list[list[int]] """
     # file_info[i] is (sorted seq idx from selection, real seq idx)
     for idc in selection:
@@ -150,6 +177,13 @@ class HDFDataset(CachedDataset):
         continue
       print("loading file %d/%d" % (i+1, len(self.files)), self.files[i], file=log.v4)
       fin = h5py.File(self.files[i], 'r')
+      inputs = fin['inputs']
+      if 'targets' in fin:
+        targets = {k:fin['targets/data/' + k] for k in fin['targets/data']}
+      if self.seq_ordering == 'default':
+        inputs = inputs[...]
+        if 'targets' in fin:
+          targets = {k:targets[k][...] for k in targets}
       for idc, ids in file_info[i]:
         s = ids - self.file_start[i]
         p = self.file_seq_start[i][s]
@@ -162,15 +196,20 @@ class HDFDataset(CachedDataset):
               else:
                 self.targets[k] = numpy.zeros((self._num_codesteps[self.target_keys.index(k)],tdim), dtype=theano.config.floatX) - 1
             ldx = self.target_keys.index(k) + 1
-            self.targets[k][self.get_seq_start(idc)[ldx]:self.get_seq_start(idc)[ldx] + l[ldx]] = fin['targets/data/' + k][p[ldx] : p[ldx] + l[ldx]]
-        self._set_alloc_intervals_data(idc, data=fin['inputs'][p[0] : p[0] + l[0]][...])
+            self.targets[k][self.get_seq_start(idc)[ldx]:self.get_seq_start(idc)[ldx] + l[ldx]] = targets[k][p[ldx] : p[ldx] + l[ldx]]
+        self._set_alloc_intervals_data(idc, data=inputs[p[0] : p[0] + l[0]])
+        self.preload_set.add(idc)
       fin.close()
     gc.collect()
-    assert self.is_cached(start, end)
+
+  def _get_tag_by_real_idx(self, real_idx):
+    s = self._tags[real_idx]
+    s = self._decode(s)
+    return s
 
   def get_tag(self, sorted_seq_idx):
     ids = self._seq_index[self._index_map[sorted_seq_idx]]
-    return self.tags[ids]
+    return self._get_tag_by_real_idx(ids)
 
   def is_data_sparse(self, key):
     if key in self.num_outputs:
@@ -186,6 +225,7 @@ class HDFDataset(CachedDataset):
     return ", ".join(["HDF dataset",
                       "sequences: %i" % self.num_seqs,
                       "frames: %i" % self.get_num_timesteps()])
+
 
 # ------------------------------------------------------------------------------
 
@@ -292,6 +332,7 @@ class SegmentAlignmentStreamParser(StreamParser):
   def get_seq_length(self, seq_name):
     return 2 * sum(self.stream['data'][seq_name][:,1])
 
+
 class NextGenHDFDataset(CachedDataset2):
   """
   """
@@ -300,8 +341,13 @@ class NextGenHDFDataset(CachedDataset2):
               'sparse'            : SparseStreamParser,
               'segment_alignment' : SegmentAlignmentStreamParser }
 
-  def __init__(self, input_stream_name, partition_epoch=1, *args, **kwargs):
-    super(NextGenHDFDataset, self).__init__(*args, **kwargs)
+  def __init__(self, input_stream_name, files=None, partition_epoch=1, **kwargs):
+    """
+    :param str input_stream_name:
+    :param None|list[str] files:
+    :param int partition_epoch:
+    """
+    super(NextGenHDFDataset, self).__init__(**kwargs)
 
     self.input_stream_name = input_stream_name
     self.partition_epoch   = partition_epoch
@@ -317,6 +363,9 @@ class NextGenHDFDataset(CachedDataset2):
     self.partitions        = []
     self.current_partition = 1
 
+    if files:
+      for fn in files:
+        self.add_file(fn)
 
   def add_file(self, path):
     self.files.append(path)
@@ -350,7 +399,6 @@ class NextGenHDFDataset(CachedDataset2):
       num_features = [(name, self.num_outputs[name][0], parser.num_features) for name, parser in parsers.items()]
       assert all(nf[1] == nf[2] for nf in num_features), '\n'.join("Number of features does not match for parser %s: %d (config) vs. %d (hdf-file)" % nf for nf in num_features if nf[1] != nf[2])
 
-
   def initialize(self):
     total_seqs               = len(self.all_seq_names)
     seqs_per_epoch           = total_seqs // self.partition_epoch
@@ -362,7 +410,6 @@ class NextGenHDFDataset(CachedDataset2):
     self.partitions = fun.reduce(lambda a, x: a + [a[-1] + x], partition_sizes, [0])  # cumulative sum
 
     super(NextGenHDFDataset, self).initialize()
-
 
   def init_seq_order(self, epoch=None, seq_list=None):
     """
@@ -387,7 +434,6 @@ class NextGenHDFDataset(CachedDataset2):
     partition_offset = self.partitions[self.current_partition]
     parser = self.all_parsers[self.input_stream_name][self.file_indices[partition_offset + orig_seq_idx]]
     return parser.get_seq_length(self._normalize_seq_name(self.all_seq_names[partition_offset + orig_seq_idx]))
-
 
   def _collect_single_seq(self, seq_idx):
     """

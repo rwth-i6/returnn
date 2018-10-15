@@ -206,7 +206,7 @@ class Engine:
     self.eval_data = eval_data
     self.start_epoch, self.start_batch = self.get_train_start_epoch_batch(config)
     self.batch_size = config.int('batch_size', 1)
-    self.shuffle_batches = config.bool('shuffle_batches', True)
+    self.shuffle_batches = config.bool('shuffle_batches', False)
     self.update_batch_size = config.int('update_batch_size', 0)
     self.batch_size_eval = config.int('batch_size_eval', self.update_batch_size)
     self.model_filename = config.value('model', None)

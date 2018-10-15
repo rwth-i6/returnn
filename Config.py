@@ -259,7 +259,7 @@ class Config:
       res = orig_value_func(*args, **kwargs)
       print("Config.value(%s) -> %r" % (", ".join(list(map(repr, args)) + ["%s=%r" for (k, v) in kwargs.items()]), res))
       return res
-    self.value = wrapped_value_func
+    setattr(self, "value", wrapped_value_func)
 
   def value(self, key, default, index=None, list_join_str=","):
     """

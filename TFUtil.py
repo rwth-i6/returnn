@@ -26,7 +26,7 @@ def tf_version_tuple():
   :rtype: tuple[int]
   """
   import re
-  return tuple([int(s) for s in re.sub('-rc[0-9]+', '', tf.__version__).split(".")])
+  return tuple([int(s) for s in re.sub('-rc[0-9]|-dev[0-9]*', '', tf.__version__).split(".")])
 
 
 def assert_min_tf_version(version, reason):
@@ -65,10 +65,11 @@ class Data(object):
                shape=None, dtype=None,
                placeholder=None,
                sparse=None,
-               dim=None,
+               dim=NotSpecified,
                size_placeholder=None,
                batch_dim_axis=0,
                time_dim_axis=NotSpecified,
+               feature_dim_axis=NotSpecified,
                available_for_inference=True,
                auto_create_placeholders=False,
                vocab=None,
@@ -87,6 +88,7 @@ class Data(object):
       if this Data does not have a batch-dim.
     :param int|None time_dim_axis: where we have the time dim axis, after we added the batch-dim.
       this is often 1. however, can be None if there is no time-dim.
+    :param int|None|NotSpecified feature_dim_axis: feature dim axis. by default it's the last one
     :param dict[int,tf.Tensor] tf.Tensor size_placeholder: for every None in shape, this will describe the size.
       The size is always a tensor of shape (batch,), i.e. the size can be different for each sequence in a batch.
     :param bool available_for_inference: e.g. the extern data "classes" is usually not available for inference
@@ -94,44 +96,77 @@ class Data(object):
     :param int|None beam_size: the batch-dim could be extended by a beam-size,
       such that it represents the merged dims [batch, beam_size].
     """
+    assert isinstance(name, str)
+    assert dtype is None or isinstance(dtype, str)
     self.name = name
     if sparse is None:
-      if dtype and (dtype.startswith("int") or dtype.startswith("uint")):
-        sparse = True
-      else:
-        sparse = False
+      sparse = False
     self.sparse = sparse
-    if shape is None:
-      assert dim, "no shape specified, need dim"
-      if time_dim_axis is not None:
-        shape = (None,)
-      else:
-        shape = ()
-      if not sparse:
-        shape = shape + (dim,)
-    self.shape = tuple(shape)  # type: tuple[int|None]  # excluding batch-dim. see self.batch_shape
     if dtype is None:
       if sparse:
         dtype = "int32"
       else:
         dtype = "float32"
-    if dim is None and len(shape):
-      assert not sparse, "need dim"
-      dim = shape[-1]
-    self.dim = dim  # type: int
-    self.batch_dim_axis = batch_dim_axis  # type: int|None  # usually not None
-    if time_dim_axis is NotSpecified:
-      if batch_dim_axis is None:
-        time_dim_axis = None
-      elif (sparse and len(shape) >= 1) or ((not sparse) and len(shape) >= 2):
-        if batch_dim_axis >= 1:
-          time_dim_axis = 0
-        else:
-          time_dim_axis = 1
-      else:
-        time_dim_axis = None
-    self.time_dim_axis = time_dim_axis  # type: int|None  # counted with batch-dim
     self.dtype = dtype  # type: str
+    assert batch_dim_axis is None or isinstance(batch_dim_axis, int)
+    self.batch_dim_axis = batch_dim_axis  # type: int|None  # None -> no batch dim axis
+    if shape is None:
+      if time_dim_axis is NotSpecified:  # need to determine this now
+        if self.batch_dim_axis is None:
+          time_dim_axis = None
+        else:
+          # By default if not specified, we have a time dim.
+          taken_axes = {self.batch_dim_axis}
+          if isinstance(feature_dim_axis, int):
+            taken_axes.add(feature_dim_axis)
+          time_dim_axis = [i for i in range(max(taken_axes) + 2) if i not in taken_axes][0]
+      if time_dim_axis is not None:
+        assert time_dim_axis != self.batch_dim_axis
+        shape = (None,) * (self.get_batch_axis_excluding_batch(time_dim_axis) + 1)
+      else:  # no time-dim-axis
+        shape = ()
+      if not sparse and feature_dim_axis is not None:
+        assert dim is not NotSpecified, "no shape specified, not sparse, feature_dim_axis existing -> need dim"
+        if feature_dim_axis is NotSpecified or feature_dim_axis == -1:
+          shape = shape + (dim,)
+        else:
+          assert 0 <= feature_dim_axis != self.batch_dim_axis
+          feature_dim_axis_wo_batch = self.get_batch_axis_excluding_batch(feature_dim_axis)
+          if feature_dim_axis_wo_batch < len(shape):
+            shape = shape[:-feature_dim_axis_wo_batch] + (dim,) + shape[feature_dim_axis_wo_batch + 1:]
+          else:
+            shape = shape + (None,) * (feature_dim_axis_wo_batch - len(shape)) + (dim,)
+            assert len(shape) == feature_dim_axis_wo_batch + 1
+    self.shape = tuple(shape)  # type: tuple[int|None]  # excluding batch-dim. see self.batch_shape
+    if feature_dim_axis is not NotSpecified:
+      if isinstance(feature_dim_axis, int):
+        assert not self.sparse, "cannot have feature_dim_axis when sparse"
+        if feature_dim_axis < 0:
+          feature_dim_axis += self.batch_ndim
+        assert 0 <= feature_dim_axis < self.batch_ndim
+    self._feature_dim_axis = feature_dim_axis
+    if time_dim_axis is NotSpecified:
+      if self.batch_dim_axis is None:
+        time_dim_axis = None
+      else:
+        taken_axes = {self.batch_dim_axis}
+        if self.feature_dim_axis is not None:
+          taken_axes.add(self.feature_dim_axis)
+        available_axes = [i for i in range(self.batch_ndim) if i not in taken_axes]
+        if available_axes:
+          time_dim_axis = available_axes[0]
+        else:
+          time_dim_axis = None
+    if time_dim_axis is not None:
+      assert 0 <= time_dim_axis < self.batch_ndim
+    self.time_dim_axis = time_dim_axis  # type: int|None  # counted with batch-dim
+    if dim is NotSpecified:
+      assert not sparse, "need dim (num classes) if sparse"
+      if self.feature_dim_axis is None:
+        dim = None
+      else:
+        dim = self.batch_shape[self.feature_dim_axis]
+    self.dim = dim  # type: int|None
     if placeholder is None and auto_create_placeholders:
       with tf.name_scope("extern_data/placeholders/%s/" % name):
         placeholder = tf.placeholder(**self.get_placeholder_kwargs(with_batch=True))
@@ -152,11 +187,26 @@ class Data(object):
       if isinstance(vocab, str):
         vocab = Vocabulary(vocab)
       elif isinstance(vocab, dict):
-        vocab = Vocabulary(**vocab)
+        vocab = Vocabulary.create_vocab(**vocab)
       assert isinstance(vocab, Vocabulary)
       assert self.sparse, "%s should represent indices of %s" % (self, vocab)
       assert self.dim == vocab.num_labels, "%s dims do not match with vocab %s" % (self, vocab)
     self.vocab = vocab
+    self.sanity_check()
+
+  def sanity_check(self):
+    for axis_name, axis in self.get_special_axes_dict().items():
+      assert axis is None or 0 <= axis < self.batch_ndim, "axis %s (%i) invalid" % (axis_name, axis)
+    if self.batch_dim_axis is not None:
+      for axis_name, axis in self.get_special_axes_dict(include_batch_dim_axis=False).items():
+        assert axis != self.batch_dim_axis, "axis %s (%i) must be different from batch_dim_axis (%i)" % (
+          axis_name, axis, self.batch_dim_axis)
+    if self.sparse:
+      assert self.feature_dim_axis is None, "If sparse, there cannot be a feature dim axis."
+    if self.feature_dim_axis is not None:
+      assert self.dim == self.batch_shape[self.feature_dim_axis]
+    if self.placeholder is not None:
+      self.placeholder.set_shape(self.batch_shape)
 
   def get_placeholder_kwargs(self, with_batch=True):
     return dict(name=self.name, dtype=self.dtype, shape=self.batch_shape if with_batch else self.shape)
@@ -176,6 +226,8 @@ class Data(object):
 
   def get_kwargs(self):
     keys = ["name", "shape", "dtype", "sparse", "dim", "batch_dim_axis", "time_dim_axis"]
+    if self._feature_dim_axis is not NotSpecified:
+      keys += ["feature_dim_axis"]
     if not self.available_for_inference:
       keys += ["available_for_inference"]
     if self.beam_size is not None:
@@ -183,14 +235,20 @@ class Data(object):
     return {key: getattr(self, key) for key in keys}
 
   def get_description(self, with_name=True, with_placeholder=False):
-    keys = ["shape", "dtype"]
+    keys = ["shape"]
     if self.sparse:
+      keys.append("dtype")
       keys.append("sparse")
       keys.append("dim")
+    else:
+      if self.dtype != "float32":
+        keys.append("dtype")
     if self.batch_dim_axis != 0:
       keys.append("batch_dim_axis")
     if self.time_dim_axis is None or self.time_dim_axis >= 2:
       keys.append("time_dim_axis")
+    if self._feature_dim_axis is not NotSpecified:
+      keys.append("feature_dim_axis")
     if with_name:
       keys.insert(0, "name")
     if with_placeholder:
@@ -241,6 +299,7 @@ class Data(object):
       if data.batch_dim_axis <= data.time_dim_axis:
         data.batch_dim_axis += 1
       data.time_dim_axis = 0
+    data.sanity_check()
     return data
 
   def copy_with_batch_dim_axis(self, batch_dim_axis):
@@ -262,6 +321,7 @@ class Data(object):
       data.batch_dim_axis = batch_dim_axis
       for k, a in other_special_axes.items():
         setattr(data, k, data.get_batch_axis(a))
+    data.sanity_check()
     return data
 
   def copy_with_time_dim_axis(self, time_dim_axis):
@@ -295,6 +355,7 @@ class Data(object):
           axis_wo_b = data.get_batch_axis_excluding_batch(axis_wb)
           assert axis_wo_b is not None
           data.size_placeholder[axis_wo_b] = size
+    data.sanity_check()
     return data
 
   def copy_as_bt_or_tb_major(self):
@@ -308,6 +369,70 @@ class Data(object):
     if self.time_dim_axis == 0:
       return self.copy_with_batch_dim_axis(1)
     raise ValueError("cannot convert %r to BT|TB major" % self)
+
+  def copy_with_feature_dim_axis(self, feature_dim_axis):
+    """
+    :param int feature_dim_axis: can also be negative
+    :return: copy of myself with specific feature dim axis
+    :rtype: Data
+    """
+    assert self.feature_dim_axis is not None
+    if feature_dim_axis < 0:
+      feature_dim_axis += self.batch_ndim
+    assert 0 <= feature_dim_axis < self.batch_ndim
+    data = self.copy()
+    if data.feature_dim_axis == feature_dim_axis:
+      return data
+    if data.placeholder is not None:
+      data.placeholder = move_axis(
+        data.placeholder, new_axis=feature_dim_axis, old_axis=data.feature_dim_axis)
+    new_shape = list(data.shape)
+    new_shape.pop(data.get_batch_axis_excluding_batch(self.feature_dim_axis))
+    new_shape.insert(data.get_batch_axis_excluding_batch(feature_dim_axis), data.dim)
+    data.shape = tuple(new_shape)
+    other_special_axes = data.get_special_axes_dict(
+      counted_with_batch_dim=True, only_available=True, include_batch_dim_axis=True)
+    other_special_axes.pop("feature_dim_axis", None)
+    data.feature_dim_axis = feature_dim_axis
+    for k, a in other_special_axes.items():
+      setattr(data, k, a if (a < feature_dim_axis) else (a + 1))
+    axis_old_wo_batch = self.get_batch_axis_excluding_batch(self.feature_dim_axis)
+    axis_new_wo_batch = data.get_batch_axis_excluding_batch(feature_dim_axis)
+    if self.size_placeholder:
+      new_size_placeholder = {}
+      for i, s in self.size_placeholder.items():
+        if i >= axis_new_wo_batch:
+          if i < axis_old_wo_batch:
+            i += 1
+          else:
+            assert i > axis_new_wo_batch
+        else:  # i < axis_new_wo_batch
+          if i > axis_old_wo_batch:
+            assert i > 0
+            i -= 1
+        new_size_placeholder[i] = s
+      data.size_placeholder = new_size_placeholder
+    data.sanity_check()
+    return data
+
+  def copy_as_batch_feature_major(self):
+    """
+    :return: copy of self with batch_dim_axis == 0 and feature_dim_axis == 1
+    :rtype: Data
+    """
+    assert self.batch_dim_axis is not None
+    assert self.feature_dim_axis is not None
+    data = self.copy_as_batch_major()
+    data = data.copy_with_feature_dim_axis(1)
+    return data
+
+  def copy_with_feature_last(self):
+    """
+    :return: copy of self with feature_dim_axis being the very last axis
+    :rtype: Data
+    """
+    assert self.feature_dim_axis is not None
+    return self.copy_with_feature_dim_axis(-1)
 
   def copy_add_batch_dim(self, batch_dim_axis):
     """
@@ -325,30 +450,105 @@ class Data(object):
     other_special_axes = self.get_special_axes_dict(counted_with_batch_dim=True, only_available=True)
     for k, a in other_special_axes.items():
       setattr(data, k, a if (a < batch_dim_axis) else (a + 1))
+    data.sanity_check()
     return data
 
-  def copy_add_spatial_dim(self, spatial_dim_axis):
+  def copy_add_spatial_dim(self, spatial_dim_axis=None, dim=1):
     """
-    :param int spatial_dim_axis: counted with batch-dim. if there is no time-dim, this will be it
+    :param int|None spatial_dim_axis: counted with batch-dim. if there is no time-dim, this will be it.
+    :param int|None dim:
     :return: copy of myself with added spatial-dim
     :rtype: Data
     """
     data = self.copy()
+    if spatial_dim_axis is None:
+      if self.time_dim_axis is not None:
+        spatial_dim_axis = self.time_dim_axis + 1  # after the existing spatial dim
+      elif self.feature_dim_axis is not None:
+        spatial_dim_axis = self.feature_dim_axis  # add it before the feature dim
+      else:
+        spatial_dim_axis = self.batch_ndim  # add it at the end
     if data.placeholder is not None:
+      assert dim == 1
       data.placeholder = tf.expand_dims(data.placeholder, spatial_dim_axis, name="%s_add_spatial_dim" % self.name)
     axis_wo_batch = spatial_dim_axis if (spatial_dim_axis <= (self.batch_dim_axis or 0)) else (spatial_dim_axis - 1)
-    data.shape = data.shape[:axis_wo_batch] + (1,) + data.shape[axis_wo_batch:]
+    data.shape = data.shape[:axis_wo_batch] + (dim,) + data.shape[axis_wo_batch:]
     if data.time_dim_axis is None:
       data.time_dim_axis = spatial_dim_axis
     other_special_axes = self.get_special_axes_dict(
       counted_with_batch_dim=True, only_available=True, include_batch_dim_axis=True)
     for k, a in other_special_axes.items():
       setattr(data, k, a if (a < spatial_dim_axis) else (a + 1))
+    data.sanity_check()
     return data
 
-  def copy_compatible_to(self, data):
+  def copy_add_feature_dim(self):
+    """
+    :return: self with a new feature dim axis with dim 1.
+      If there is an existing feature dim, the new feature dim will be added right after.
+    :rtype: Data
+    """
+    v = self.copy()
+    assert not v.sparse
+    if v.feature_dim_axis is not None:
+      new_feature_dim_axis = v.feature_dim_axis + 1
+    else:
+      new_feature_dim_axis = v.batch_ndim
+    other_special_axes = self.get_special_axes_dict(
+      counted_with_batch_dim=True, only_available=True, include_batch_dim_axis=True)
+    other_special_axes.pop("feature_dim_axis", None)
+    new_feature_dim_axis_wo_batch = self.get_batch_axis_excluding_batch(new_feature_dim_axis)
+    v.shape = v.shape[:new_feature_dim_axis_wo_batch] + (1,) + v.shape[new_feature_dim_axis_wo_batch:]
+    v.dim = 1
+    for k, a in other_special_axes.items():
+      setattr(v, k, a if (a < new_feature_dim_axis) else (a + 1))
+    v.feature_dim_axis = new_feature_dim_axis
+    if v.placeholder is not None:
+      v.placeholder = tf.expand_dims(v.placeholder, new_feature_dim_axis, name="copy_add_feature_dim")
+    v.sanity_check()
+    return v
+
+  def copy_split_feature_dim(self, new_feature_dim):
+    """
+    :param int new_feature_dim: will be the new dim
+    :rtype: Data
+    """
+    assert not self.sparse
+    assert self.feature_dim_axis is not None
+    assert self.dim is not None
+    assert self.dim % new_feature_dim == 0, "must be a multiple of the input feature dim"
+    old_feature_dim = self.dim // new_feature_dim
+    new_feature_dim_axis = self.feature_dim_axis + 1
+    v = self.copy()
+    other_special_axes = self.get_special_axes_dict(
+      counted_with_batch_dim=True, only_available=True, include_batch_dim_axis=True)
+    other_special_axes.pop("feature_dim_axis", None)
+    old_feature_dim_axis_wo_batch = self.get_batch_axis_excluding_batch(self.feature_dim_axis)
+    v.shape = (v.shape[:old_feature_dim_axis_wo_batch] +
+               (old_feature_dim, new_feature_dim) +
+               v.shape[old_feature_dim_axis_wo_batch + 1:])
+    v.dim = new_feature_dim
+    for k, a in other_special_axes.items():
+      setattr(v, k, a if (a < new_feature_dim_axis) else (a + 1))
+    v.feature_dim_axis = new_feature_dim_axis
+    if v.placeholder is not None:
+      v.placeholder.set_shape(self.batch_shape)
+      old_shape = get_shape(v.placeholder)
+      new_shape = (old_shape[:self.feature_dim_axis] +
+                   [old_feature_dim, new_feature_dim] +
+                   old_shape[new_feature_dim_axis + 1:])
+      v.placeholder = tf.reshape(v.placeholder, new_shape, name="copy_split_feature_dim")
+    v.sanity_check()
+    return v
+
+  def copy_compatible_to(self, data, unbroadcast=False, data_dyn_shape=None):
     """
     :param Data data: other data which the returned tensor should be compatible to
+      It would add any missing axes with a dim 1 axis for automatic broadcasting.
+      It currently does not check whether existing dims match.
+    :param bool unbroadcast: if True, all broadcast axes (axes with dim 1) will be tiled such that they match
+    :param tf.Tensor|list[tf.Tensor|int]|tuple[tf.Tensor|int]|None data_dyn_shape:
+      For unbroadcast, if we do not want to rely on tf.shape(data.placeholder).
     :returns: Data, might add broadcast dimensions
     :rtype: Data
     """
@@ -357,8 +557,7 @@ class Data(object):
     v = self.copy()
     # Add feature dim, if needed.
     if data.feature_dim_axis is not None and v.feature_dim_axis is None:
-      v.dim = 1
-      v.shape = v.shape + (1,)
+      v = v.copy_add_feature_dim()
     # Add spatial dims, in case we miss any.
     for axis in data.get_spatial_batch_axes():
       if len(data.get_spatial_batch_axes()) > len(v.get_spatial_batch_axes()):
@@ -366,13 +565,43 @@ class Data(object):
         v = v.copy_add_spatial_dim(v.get_batch_axis(axis_wo_batch))
     assert data.get_spatial_axes() == v.get_spatial_axes()
     if v.batch_dim_axis != data.batch_dim_axis:
+      assert data.batch_dim_axis is not None
       if v.batch_dim_axis is not None:
         v = v.copy_with_batch_dim_axis(data.batch_dim_axis)
       else:
         # Note that it might be important here that we added any missing spatial dims before.
         v = v.copy_add_batch_dim(data.batch_dim_axis)
     assert v.batch_dim_axis == data.batch_dim_axis
-    assert data.feature_dim_axis == v.feature_dim_axis
+    assert v.feature_dim_axis == data.feature_dim_axis
+    assert v.batch_ndim == data.batch_ndim
+    if unbroadcast and any([d1 != 1 and d2 == 1 for (d1, d2) in zip(data.batch_shape, v.batch_shape)]):
+      v.size_placeholder.update(data.size_placeholder or {})
+      if v.placeholder is not None:
+        with tf.name_scope("copy_compatible_to_unbroadcast"):
+          tiles = [1] * v.batch_ndim
+          for axis in range(v.batch_ndim):
+            if v.batch_shape[axis] != 1:
+              continue
+            if data.batch_shape[axis] is not None:
+              tiles[axis] = data.batch_shape[axis]
+            elif data_dyn_shape is not None:
+              tiles[axis] = data_dyn_shape[axis]
+            else:
+              assert data.placeholder, "need data.placeholder for unbroadcast (target data: %r)" % v
+              tiles[axis] = tf.shape(data.placeholder)[axis]
+          v.placeholder = tf.tile(v.placeholder, tiles)
+      new_shape = list(v.batch_shape)
+      for axis in range(v.batch_ndim):
+        if data.batch_shape[axis] != 1 and new_shape[axis] == 1:
+          new_shape[axis] = data.batch_shape[axis]
+      if v.feature_dim_axis is not None:
+        v.dim = new_shape[v.feature_dim_axis]
+      if v.batch_dim_axis is not None:
+        del new_shape[v.batch_dim_axis]
+      v.shape = tuple(new_shape)
+      if v.placeholder is not None:
+        v.placeholder.set_shape(v.batch_shape)
+    v.sanity_check()
     return v
 
   def copy_time_flattened(self):
@@ -393,6 +622,7 @@ class Data(object):
       if data.time_dim_axis_excluding_batch in data.size_placeholder:
         del data.size_placeholder[data.time_dim_axis_excluding_batch]
     data.time_dim_axis = None
+    data.sanity_check()
     return data
 
   def copy_extend_with_beam(self, beam_size, dyn_beam_size=None):
@@ -438,10 +668,11 @@ class Data(object):
     new_shape = list(self.shape)
     del new_shape[self.time_dim_axis_excluding_batch]
     kwargs = self.get_kwargs()
-    kwargs["batch_dim_axis"] = (
-      self.batch_dim_axis
-      if (self.batch_dim_axis < self.time_dim_axis)
-      else (self.batch_dim_axis - 1))
+    other_special_axes = self.get_special_axes_dict(
+      counted_with_batch_dim=True, only_available=True, include_batch_dim_axis=True)
+    other_special_axes.pop("time_dim_axis", None)
+    for axis_name, axis in other_special_axes.items():
+      kwargs[axis_name] = axis if (axis < self.time_dim_axis) else (axis - 1)
     kwargs["time_dim_axis"] = None
     kwargs["shape"] = new_shape
     if name:
@@ -462,10 +693,11 @@ class Data(object):
     kwargs = self.get_kwargs()
     new_shape = list(self.shape)
     new_shape.insert(time_dim_axis, None)
-    kwargs["batch_dim_axis"] = (
-      self.batch_dim_axis
-      if (self.batch_dim_axis < time_dim_axis)
-      else (self.batch_dim_axis + 1))
+    other_special_axes = self.get_special_axes_dict(
+      counted_with_batch_dim=True, only_available=True, include_batch_dim_axis=True)
+    other_special_axes.pop("time_dim_axis", None)
+    for axis_name, axis in other_special_axes.items():
+      kwargs[axis_name] = axis if (axis < time_dim_axis) else (axis + 1)
     kwargs["time_dim_axis"] = time_dim_axis
     kwargs["shape"] = new_shape
     if name:
@@ -515,9 +747,23 @@ class Data(object):
 
   @property
   def shape_dense(self):
+    """
+    :return: shape with feature dim axis
+    :rtype: tuple[int|None]
+    """
     if self.sparse:
-      return self.shape + (self.dim,)
+      return self.shape + (self.dim,)  # by default, assume at the end
     return self.shape
+
+  @property
+  def shape_sparse(self):
+    """
+    :return: shape without feature dim axis
+    :rtype: tuple[int|None]
+    """
+    if self.sparse:
+      return self.shape
+    return self.shape[:self.feature_dim_axis] + self.shape[self.feature_dim_axis + 1:]
 
   @property
   def batch_shape_dense(self):
@@ -578,6 +824,54 @@ class Data(object):
     :rtype: bool
     """
     return self.batch_dim_axis == 0
+
+  @property
+  def is_batch_feature_major(self):
+    """
+    :return: whether this is in batch-feature-major format, i.e. (batch,feature,...) (NC...)
+    :rtype: bool
+    """
+    return self.batch_dim_axis == 0 and self.feature_dim_axis == 1
+
+  def _default_feature_dim_axis(self):
+    """
+    :return: feature dim axis, counted with batch-dim
+    :rtype: int|None
+    """
+    if self.sparse:
+      return None
+    if not self.shape:
+      return None
+    # Allow same as time-dim-axis...
+    return [i for i in range(self.batch_ndim) if i != self.batch_dim_axis][-1]
+
+  @property
+  def feature_dim_axis(self):
+    """
+    :return: feature dim axis, counted with batch-dim
+    :rtype: int|None
+    """
+    if self._feature_dim_axis is not NotSpecified:
+      return self._feature_dim_axis
+    return self._default_feature_dim_axis()
+
+  @feature_dim_axis.setter
+  def feature_dim_axis(self, value):
+    """
+    :param int|None|NotSpecified value:
+    """
+    assert value is NotSpecified or value is None or isinstance(value, int)
+    if isinstance(value, int):
+      assert 0 <= value < self.batch_ndim
+    self._feature_dim_axis = value
+
+  @property
+  def feature_dim_axis_or_unspecified(self):
+    """
+    :return: feature dim axis, counted with batch-dim. could also be unspecified
+    :rtype: int|None|NotSpecified
+    """
+    return self._feature_dim_axis
 
   @property
   def time_dim_axis_excluding_batch(self):
@@ -659,18 +953,6 @@ class Data(object):
         x = tf.expand_dims(x, axis=1)
     return x
 
-  @property
-  def feature_dim_axis(self):
-    if self.sparse:
-      return None
-    if not self.shape:
-      return None
-    return self.batch_ndim - 1
-
-  @feature_dim_axis.setter
-  def feature_dim_axis(self, value):
-    assert value == self.feature_dim_axis, "feature_dim_axis cannot be set at the moment"
-
   def get_axes(self, exclude_time=False, exclude_batch=False):
     """
     :param bool exclude_time: will filter out the time-axis
@@ -706,9 +988,11 @@ class Data(object):
         axes = self.get_spatial_batch_axes()
       elif re.match("(s|spatial):-?\\d+$", axes):
         s = int(axes.split(":")[1])
-        axes = self.get_spatial_batch_axes()
-        assert s < len(axes)
-        axes = axes[s]
+        spatial_axes = self.get_spatial_batch_axes()
+        if s < 0:
+          s += len(spatial_axes)
+        assert s < len(spatial_axes), "%s get_axes_from_description: %r invalid" % (self, axes)
+        axes = spatial_axes[s]
       elif axes == "spatial_except_time":
         axes = self.get_spatial_batch_axes()
         assert self.time_dim_axis is not None
@@ -726,6 +1010,8 @@ class Data(object):
       elif axes == "except_batch":
         axes = list(range(self.batch_ndim))
         axes.remove(self.batch_dim_axis)
+      elif axes == "*":
+        axes = list(range(self.batch_ndim))
       elif axes == "static":
         axes = [i for i in range(self.batch_ndim) if self.batch_shape[i] is not None]
       elif axes in ["f", "feature", "non_spatial"]:
@@ -792,6 +1078,9 @@ class Data(object):
 
   def have_time_axis(self):
     return self.time_dim_axis is not None
+
+  def have_feature_axis(self):
+    return self.feature_dim_axis is not None
 
   def is_time_axis_dynamic(self):
     """
@@ -905,18 +1194,76 @@ class Data(object):
            for (k, v) in d.items()}
     if only_available:
       d = {k: v for (k, v) in d.items() if v is not None}
+      if self._feature_dim_axis is NotSpecified:  # special rule
+        d.pop("feature_dim_axis", None)
     return d
 
   def get_bc_spatial_batch_shape(self):
     """
     :return: shape which will broadcast along all spatial dimensions and time/batch dim
-    :rtype: tuple[int]
+    :rtype: tuple[int|None]
     """
     dyn_axes = self.get_spatial_batch_axes()
     if self.batch_dim_axis is not None:
       dyn_axes += [self.batch_dim_axis]
-    return [1 if (axis in dyn_axes) else dim
-            for axis, dim in enumerate(self.batch_shape)]
+    return tuple([1 if (axis in dyn_axes) else dim
+                  for axis, dim in enumerate(self.batch_shape)])
+
+  def get_bc_shape(self, opts=None):
+    """
+    :param dict[str|list|tuple,int|str|None]|None opts:
+      ``key`` specifies the axes.
+      ``value`` 1 ('x') is broadcasting, -1 (None) is not broadcasting
+      Axes should not be defined multiple times.
+      The default behavior if an axis is not specified is like :func:`get_bc_spatial_batch_shape`,
+      i.e. it will broadcast in batch and spatial dims only.
+    :return: shape where 1 means broadcasting, None or >1 means not broadcasting. can be used for :func:`TFUtil.dropout`
+    :rtype: tuple[int|None]
+    """
+    if opts is None:
+      opts = {}
+    axes_map = {}  # int -> int|None
+    for key, value in opts.items():
+      assert value in (-1, 1, 'x', None), "%r get_bc_shape: invalid value in opts %r" % (self, opts)
+      if value == 'x':
+        value = 1
+      if value == -1:
+        value = None
+      key_axes = self.get_axes_from_description(key)
+      for key_axis in key_axes:
+        assert key_axis not in axes_map, (
+          "%r get_bc_shape: axis %i is defined multiple times in opts %r" % (self, key_axis, opts))
+        assert 0 <= key_axis < self.batch_ndim, "%r get_bc_shape: invalid axis %i in opts %r" % (self, key_axis, opts)
+        axes_map[key_axis] = self.batch_shape[key_axis] if value is None else value
+    # Fill in remaining axes by defaults, just as in get_bc_spatial_batch_shape.
+    remaining_axes = sorted(set(range(self.batch_ndim)).difference(axes_map.keys()))
+    if remaining_axes:
+      dyn_axes_list = self.get_spatial_batch_axes()
+      if self.batch_dim_axis is not None:
+        dyn_axes_list += [self.batch_dim_axis]
+      for axis in remaining_axes:
+        axes_map[axis] = 1 if axis in dyn_axes_list else self.batch_shape[axis]
+    assert sorted(axes_map.keys()) == list(range(self.batch_ndim))
+    return tuple([axes_map[i] for i in range(self.batch_ndim)])
+
+
+_horovod_is_initialized = False
+
+def init_horovod():
+  """
+  Initializes Horovod.
+  Provide this here such that we can remember whether we already initialized before.
+  """
+  global _horovod_is_initialized
+  if _horovod_is_initialized:
+    return
+  import socket
+  import horovod.tensorflow as hvd
+  hvd.init()
+  print(
+    "Horovod initialized. Hostname %s, pid %i, rank %i / size %i, local rank %i / local size %i." % (
+      socket.gethostname(), os.getpid(), hvd.rank(), hvd.size(), hvd.local_rank(), hvd.local_size()))
+  _horovod_is_initialized = True
 
 
 class CustomUpdate(object):
@@ -1635,17 +1982,41 @@ def setup_tf_thread_pools(num_threads=None, log_file=None, tf_session_opts=None)
     session.close()
 
 
-def check_initial_tf_thread_pool_init():
+def check_initial_tf_thread_pool_init(tf_session_opts=None):
   if not _setup_tf_thread_pools_called_once:
     from Util import try_get_caller_name
     print("setup_tf_thread_pools() not yet called (via func %s), calling it now." %
           try_get_caller_name(fallback="<unknown>"))
-    setup_tf_thread_pools(log_file=sys.stdout)
+    setup_tf_thread_pools(tf_session_opts=tf_session_opts, log_file=sys.stdout)
+
+
+class _DeviceAttributes:
+  """
+  Like tf.python.client.session._DeviceAttributes but extended by physical_device_desc.
+  """
+  def __init__(self, dev, physical_device_desc):
+    """
+    :param tensorflow.python.client.session._DeviceAttributes dev:
+    :param bytes|str physical_device_desc:
+    """
+    self.name = dev.name  # type: str
+    self.device_type = dev.device_type  # type: str
+    self.memory_limit_bytes = dev.memory_limit_bytes  # type: int
+    self.physical_device_desc = physical_device_desc.decode("utf8")
+
+  def __str__(self):
+    # Similar as tensorflow.core.framework.device_attributes_pb2.DeviceAttributes.
+    return "".join([
+      "%s: %r\n" % (k, getattr(self, k))
+      for k in ["name", "device_type", "memory_limit_bytes", "physical_device_desc"]])
+
+  def __repr__(self):
+    return "<%s %s>" % (self.__class__.__name__, self.__str__().strip().replace("\n", ", "))
 
 
 _list_local_devices = None
 
-def get_tf_list_local_devices():
+def get_tf_list_local_devices(tf_session_opts=None):
   """
   This uses tensorflow.device_lib.list_local_devices().
   Note that a call to this will trigger the internal TF thread pool inits,
@@ -1654,14 +2025,31 @@ def get_tf_list_local_devices():
   Any TF session might only use a subset of these.
   You can get the list available in a given TF session by :func:`tf.Session.list_devices`.
 
-  :rtype: list[tensorflow.core.framework.device_attributes_pb2.DeviceAttributes]
+  :param dict[str]|None tf_session_opts: if given, will init a temp tf.Session with these opts
+  :rtype: list[tensorflow.core.framework.device_attributes_pb2.DeviceAttributes|_DeviceAttributes]
   """
-  check_initial_tf_thread_pool_init()
+  check_initial_tf_thread_pool_init(tf_session_opts=tf_session_opts)
   global _list_local_devices
   if _list_local_devices:
     return _list_local_devices
   print("Collecting TensorFlow device list...")
-  _list_local_devices = list(device_lib.list_local_devices())
+  if tf_session_opts and tf_session_opts.get("gpu_options", {}).get("visible_device_list", None):
+    # Note that setting CUDA_VISIBLE_DEVICES to the corresponding subset will not work because
+    # CUDA will internally cache the devices, thus the first call to list_local_devices will init
+    # all visible devices at that point, and TF/CUDA will get confused later
+    # when another set of devices is visible.
+    # However, getting the list via tf.Session.list_devices() will not provide us with a full DeviceAttributes
+    # with all needed information, as dev.physical_device_desc is missing,
+    # and we need that for e.g. get_available_gpu_min_compute_capability.
+    # See also: https://github.com/tensorflow/tensorflow/issues/9374
+    # However, we have get_device_attr, which provides gives us physical_device_desc.
+    with tf.Session(config=tf.ConfigProto(**tf_session_opts)) as session:
+      devs = list(session.list_devices())
+      _list_local_devices = [
+        _DeviceAttributes(dev=dev, physical_device_desc=session.run(get_device_attr(dev.name))) for dev in devs]
+      session.close()
+  else:
+    _list_local_devices = list(device_lib.list_local_devices())
   return _list_local_devices
 
 
@@ -1680,13 +2068,14 @@ def _parse_physical_device_desc(s):
   return d
 
 
-def print_available_devices(file=None):
+def print_available_devices(tf_session_opts=None, file=None):
   """
   Prints the available TF devices on `file` (stdout by default).
   This uses tensorflow.device_lib.list_local_devices().
   Note that a call to this will trigger the internal TF thread pool inits,
   so you should call :func:`setup_tf_thread_pools` first.
 
+  :param dict[str]|None tf_session_opts: if given, will init a temp tf.Session with these opts
   :param io.FileIO file:
   """
   if file is None:
@@ -1697,7 +2086,10 @@ def print_available_devices(file=None):
     cuda_visible_devs = dict(enumerate([int(d) for d in os.environ["CUDA_VISIBLE_DEVICES"].split(",") if d]))
   else:
     print("CUDA_VISIBLE_DEVICES is not set.", file=file)
-  devs = get_tf_list_local_devices()
+  if tf_session_opts and tf_session_opts.get("gpu_options", {}).get("visible_device_list", None):
+    print("TF session gpu_options.visible_device_list is set to %r." % (
+      tf_session_opts["gpu_options"]["visible_device_list"],), file=file)
+  devs = get_tf_list_local_devices(tf_session_opts=tf_session_opts)
   print("Local devices available to TensorFlow:", file=file)
   for i, dev in enumerate(devs):
     print("  %i/%i: %s" % (i + 1, len(devs), "\n       ".join(str(dev).splitlines())), file=file)
@@ -1723,6 +2115,7 @@ def is_gpu_available():
 
   :rtype: bool
   """
+  # Also, we could maybe use tf.test.is_gpu_available().
   return len(get_available_gpu_devices()) > 0
 
 
@@ -2068,7 +2461,7 @@ def dropout(x, keep_prob, noise_shape=None, seed=None, name=None, cond_on_train=
 
   :param tf.Tensor x:
   :param float|tf.Tensor keep_prop:
-  :param tf.Tensor|tuple[int] noise_shape:
+  :param tf.Tensor|tuple[int|None] noise_shape: 1 will broadcast in that dimension, None will not broadcast
   :param int seed:
   :param str name:
   :param bool cond_on_train: automatically wrap through :func:`cond_on_train_flag`
@@ -2089,6 +2482,8 @@ def dropout(x, keep_prob, noise_shape=None, seed=None, name=None, cond_on_train=
     inv_keep_prob = 1.0 / keep_prob
 
     noise_shape = noise_shape if noise_shape is not None else tf.shape(x)
+    if isinstance(noise_shape, (list, tuple)):
+      noise_shape = [d if isinstance(d, int) else tf.shape(x)[i] for (i, d) in enumerate(noise_shape)]
     # uniform [keep_prob, 1.0 + keep_prob)
     random_tensor = keep_prob
     random_tensor += tf.random_uniform(noise_shape, seed=seed, dtype=x.dtype)
@@ -2542,7 +2937,6 @@ def matrix_triangular(shape, dtype=tf.float32, lower=False, upper=False):
   return tf.matrix_band_part(x, num_lower=-1 if lower else 0, num_upper=-1 if upper else 0)
 
 
-
 class VariableAssigner(object):
   def __init__(self, var):
     """
@@ -2566,9 +2960,15 @@ class CudaEnv(object):
   verbose_find_cuda = False
 
   def __init__(self):
-    self.cuda_path = self._find_cuda_path()
-    if self.verbose_find_cuda:
-      print("CUDA path:", self.cuda_path)
+    from Util import to_bool
+    if to_bool(os.environ.get("DISABLE_CUDA", "0")):
+      self.cuda_path = None
+      if self.verbose_find_cuda:
+        print("CUDA disabled via env DISABLE_CUDA.")
+    else:
+      self.cuda_path = self._find_cuda_path()
+      if self.verbose_find_cuda:
+        print("CUDA path:", self.cuda_path)
 
   @classmethod
   def _find_nvcc_in_path(cls):
@@ -2653,8 +3053,10 @@ class CudaEnv(object):
 
   def get_compiler_opts(self):
     return [
-      "-I", "%s/include" % self.cuda_path, "-L", "%s/%s" % (self.cuda_path, self._get_lib_dir_name()),
-      "-x", "cu"]
+      "-I", "%s/include" % self.cuda_path,
+      "-L", "%s/%s" % (self.cuda_path, self._get_lib_dir_name()),
+      "-x", "cu",
+      "-v"]
 
   def get_compiler_bin(self):
     assert self.cuda_path
@@ -2680,10 +3082,11 @@ class OpCodeCompiler(NativeCodeCompiler):
 
   CacheDirName = "returnn_tf_cache/ops"
 
-  def __init__(self, use_cuda_if_available=True, include_paths=(), ld_flags=(), **kwargs):
+  def __init__(self, use_cuda_if_available=True, cuda_auto_min_compute_capability=True,
+               include_paths=(), ld_flags=(), **kwargs):
     self._cuda_env = use_cuda_if_available and CudaEnv.get_instance()
     self._nvcc_opts = []
-    if self._with_cuda():
+    if self._with_cuda() and cuda_auto_min_compute_capability:
       # Get CUDA compute capability of the current GPU device.
       min_compute_capability = get_available_gpu_min_compute_capability()
       if min_compute_capability:
@@ -2695,7 +3098,8 @@ class OpCodeCompiler(NativeCodeCompiler):
     if have_min_tf_version((1, 4)):
       # https://github.com/tensorflow/tensorflow/issues/13607
       ld_flags += ["-L%s" % tf.sysconfig.get_lib(), "-ltensorflow_framework"]
-    super(OpCodeCompiler, self).__init__(include_paths=include_paths, ld_flags=ld_flags, **kwargs)
+    use_cxx11_abi = hasattr(tf, 'CXX11_ABI_FLAG') and tf.CXX11_ABI_FLAG
+    super(OpCodeCompiler, self).__init__(include_paths=include_paths, ld_flags=ld_flags, use_cxx11_abi=use_cxx11_abi, **kwargs)
     self._tf_mod = None
 
   _relevant_info_keys = NativeCodeCompiler._relevant_info_keys + ("tf_version", "with_cuda", "nvcc_opts")
@@ -2750,7 +3154,8 @@ class TFNativeUtilCompiler(NativeCodeCompiler):
     if have_min_tf_version((1, 4)):
       # https://github.com/tensorflow/tensorflow/issues/13607
       ld_flags += ["-L%s" % tf.sysconfig.get_lib(), "-ltensorflow_framework"]
-    super(TFNativeUtilCompiler, self).__init__(include_paths=include_paths, ld_flags=ld_flags, **kwargs)
+    use_cxx11_abi = hasattr(tf, 'CXX11_ABI_FLAG') and tf.CXX11_ABI_FLAG
+    super(TFNativeUtilCompiler, self).__init__(include_paths=include_paths, ld_flags=ld_flags, use_cxx11_abi=use_cxx11_abi, **kwargs)
 
   _relevant_info_keys = NativeCodeCompiler._relevant_info_keys + ("tf_version",)
 
@@ -2941,7 +3346,7 @@ class SyntheticGradient(object):
 
     def register_loss(self, loss):
       """
-      :param tf.Tenosr loss:
+      :param tf.Tensor loss:
       """
       self.losses.append(loss)
 
@@ -3468,7 +3873,7 @@ def windowed_nd(source, window_size, window_left=None, window_right=None,
     tiled_flat_pad_right = tf.concat([tiled_flat, tf.zeros((rem,), dtype=source.dtype)], axis=0)
     tiled_reshape_shift = tf.reshape(
       tiled_flat_pad_right,
-      tf.concat([(window_size, n_time + window_size),
+      tf.concat([(window_size, n_out_time + window_size),
                  source_shape[1:]], axis=0))  # add time frame, (window,n_time+window,...)
     final = tiled_reshape_shift
     if new_window_axis != 0:
@@ -4107,11 +4512,11 @@ def check_base_op_type_and_replace(x, op_type, new_op_type):
   """
   assert isinstance(x, tf.Tensor)
   assert x.op.outputs[0] is x
-  if op_type != "Reshape" and x.op.type == "Reshape":
-    if x.op.inputs[0].op.type != op_type:
-      return None
+  safe_post_op_types = ["Identity", "Reshape"]
+  if op_type not in safe_post_op_types and x.op.type in safe_post_op_types:
     inner = check_base_op_type_and_replace(x.op.inputs[0], op_type=op_type, new_op_type=new_op_type)
-    assert inner is not None
+    if inner is None:
+      return None
     op = copy_op(x.op, inputs=[inner] + x.op.inputs[1:])
     return op.outputs[0]
   if x.op.type != op_type:
@@ -4122,6 +4527,8 @@ def check_base_op_type_and_replace(x, op_type, new_op_type):
 
 def copy_op(op, op_type=None, inputs=None):
   """
+  Copies a tf.Operation.
+
   :param tf.Operation op:
   :param str|None op_type:
   :param list[tf.Tensor]|None inputs:
@@ -4142,11 +4549,27 @@ def copy_op(op, op_type=None, inputs=None):
   # Fallback to the generic case.
   new_op = g.create_op(
     op_type=op_type,
+    op_def=op.op_def if op_type == op.type else None,  # Can only copy op_def if it is the same op_type.
     inputs=inputs,
     input_types=[x.dtype for x in inputs],
     dtypes=[x.dtype for x in op.outputs],  # output types
     attrs=dict(op.node_def.attr.items()))
   return new_op
+
+
+def copy_tensor(x):
+  """
+  Similar as tf.identity, but we ensure here that the return value has its own memory.
+  This can be relevant when you want to keep a copy of the original variable value.
+  See :func:`get_variable_value_copy_before_update_ops` for usage.
+
+  :param tf.Tensor x:
+  :return: a copy of x (points to new memory)
+  :rtype: tf.Tensor
+  """
+  # I think there is a copy op also in TF, but I don't see it in the Python API.
+  with tf.name_scope("copy"):
+    return tf.add(x, tf.constant(0, dtype=x.dtype, name="dummy_zero"), name="copy")
 
 
 def smoothing_cross_entropy(logits,
@@ -5313,8 +5736,41 @@ def get_op_attrib_keys(op):
     op = op.handle.op
   assert isinstance(op, tf.Operation)
   node_def_fields = get_protobuf_fields(op.node_def)
-  attribs = node_def_fields["attr"]
+  attribs = node_def_fields.get("attr", {})
   return list(attribs.keys())
+
+
+def get_op_input_names(op):
+  """
+  Also see: https://stackoverflow.com/questions/50723310/get-tensorflow-tf-operation-inputs-by-name
+
+  :param tf.Operation op:
+  :return: list of names with same len as op.inputs
+  :rtype: list[str]
+  """
+  num_inputs = len(op.inputs)
+  if op.op_def is None:
+    # We could maybe do a lookup via the C++ API, similar as kernels_registered_for_op.
+    # Or we could return None.
+    # But this is simpler for now.
+    names = []
+  else:
+    op_def_fields = get_protobuf_fields(op.op_def)
+    args_pb = [get_protobuf_fields(a) for a in op_def_fields.get("input_arg", [])]
+    names = [a["name"] for a in args_pb]
+  assert len(names) <= num_inputs  # Not exactly sure why/when `<` can happen (except the unknown case above).
+  names += ["?%i" % i for i in range(num_inputs - len(names))]
+  assert len(names) == num_inputs
+  return names
+
+
+def get_op_inputs_by_name(op):
+  """
+  :param tf.Operation op:
+  :return: dict input_name -> input
+  :rtype: dict[str,tf.Tensor]
+  """
+  return dict(zip(get_op_input_names(op), op.inputs))
 
 
 def tensor_array_is_dynamic_size(ta):
@@ -5333,6 +5789,22 @@ def tensor_array_is_clear_after_read(ta):
   return ta.handle.op.get_attr("clear_after_read")
 
 
+# noinspection PyProtectedMember
+def tensor_array_element_shape(ta):
+  """
+  :param tf.TensorArray ta:
+  :rtype: tf.TensorShape
+  """
+  # If it is know, _element_shape is a list with 1 entry, the element shape as tf.TensorShape.
+  # Otherwise it is an empty list.
+  assert isinstance(ta._element_shape, list)
+  assert len(ta._element_shape) <= 1
+  if ta._element_shape:
+    assert isinstance(ta._element_shape[0], tf.TensorShape)
+    return ta._element_shape[0]
+  return tf.TensorShape(None)
+
+
 def tensor_array_like(ta, **kwargs):
   """
   :param tf.TensorArray ta:
@@ -5340,11 +5812,31 @@ def tensor_array_like(ta, **kwargs):
   :return: another tensor array, just like ta
   :rtype: tf.TensorArray
   """
+  # noinspection PyProtectedMember
   return tf.TensorArray(
     dtype=ta.dtype, size=ta.size(), dynamic_size=tensor_array_is_dynamic_size(ta),
     clear_after_read=tensor_array_is_clear_after_read(ta),
-    infer_shape=ta._infer_shape, element_shape=ta._element_shape,
+    infer_shape=ta._infer_shape, element_shape=tensor_array_element_shape(ta),
     **kwargs)
+
+
+def tensor_array_stack(ta, start=0, stop=None, name=None):
+  """
+  Extends tf.TensorArray.stack by start/stop options.
+
+  :param tf.TensorArray ta:
+  :param int|tf.Tensor start:
+  :param int|tf.Tensor|None stop:
+  :param str name:
+  :rtype: tf.Tensor
+  """
+  if start is 0 and stop is None:
+    return ta.stack(name=name)
+  with tf.colocate_with(ta.handle):
+    with tf.name_scope(name, "TensorArrayStack", [ta.handle]):
+      if stop is None:
+        stop = ta.size()
+      return ta.gather(tf.range(start, stop), name=name)
 
 
 def _tensor_array_select_src_beams(ta, src_beams):
@@ -5442,7 +5934,7 @@ def to_int32_64(x):
   """
   if x.dtype in [tf.int32, tf.int64]:
     return x
-  assert x.dtype in [tf.uint8, tf.int8, tf.int16]
+  assert x.dtype in [tf.uint8, tf.int8, tf.uint16, tf.int16]
   return tf.cast(x, tf.int32)
 
 
@@ -5558,6 +6050,74 @@ def find_unsupported_devices_in_graph(graph, dev_name, ignore=None):
   return ops
 
 
+class _DeviceAttrMod:
+
+  _tf_mod = None
+
+  @classmethod
+  def get_mod(cls, verbose=False):
+    if cls._tf_mod:
+      return cls._tf_mod
+
+    src_code = """
+    #include "tensorflow/core/framework/common_shape_fns.h"
+    #include "tensorflow/core/framework/op.h"
+    #include "tensorflow/core/framework/op_kernel.h"
+    #include "tensorflow/core/framework/device_attributes.pb.h"
+
+    using namespace tensorflow;
+
+    REGISTER_OP("GetDeviceAttr")
+      .Output("out: string")
+      .SetShapeFn(shape_inference::ScalarShape);
+
+    class GetDeviceAttrOp : public OpKernel {
+    public:
+      explicit GetDeviceAttrOp(OpKernelConstruction* context) : OpKernel(context) {}
+
+      void Compute(OpKernelContext* context) override {
+        const DeviceAttributes& attribs = context->device()->attributes();
+        Tensor* output_tensor = nullptr;
+        OP_REQUIRES_OK(
+            context, context->allocate_output(0, TensorShape({}), &output_tensor));
+        output_tensor->scalar<string>()() = attribs.physical_device_desc();
+      }
+    };
+
+    REGISTER_KERNEL_BUILDER(Name("GetDeviceAttr").Device(DEVICE_CPU), GetDeviceAttrOp);
+    REGISTER_KERNEL_BUILDER(Name("GetDeviceAttr").Device(DEVICE_GPU).HostMemory("out"), GetDeviceAttrOp);
+    """
+
+    compiler = OpCodeCompiler(
+      base_name="GetDeviceAttr", code_version=1, code=src_code,
+      is_cpp=True, use_cuda_if_available=True,
+      # This would lead to a get_tf_list_local_devices call, which we might not want at this point.
+      cuda_auto_min_compute_capability=False,
+      verbose=verbose)
+    tf_mod = compiler.load_tf_module()
+    assert hasattr(tf_mod, "get_device_attr"), "content of mod: %r" % (dir(tf_mod),)
+    cls._tf_mod = tf_mod
+    return tf_mod
+
+  @classmethod
+  def get_device_attr(cls):
+    """
+    :return: scalar string
+    :rtype: tf.Tensor
+    """
+    return cls.get_mod().get_device_attr()
+
+
+def get_device_attr(dev):
+  """
+  :param str dev: eg. "/device:GPU:0", or any argument tf.device
+  :return: scalar string, eg. b'device: 2, name: GeForce GTX 1080 Ti, pci bus id: 0000:82:00.0, compute capability: 6.1'
+  :rtype: tf.Tensor
+  """
+  with tf.device(dev):
+    return _DeviceAttrMod.get_device_attr()
+
+
 def print_graph_output(fetches):
   """
   :param tf.Operation|tf.Tensor|list[tf.Tensor|tf.Operation] fetches:
@@ -5566,12 +6126,162 @@ def print_graph_output(fetches):
     fetches = [fetches]
   fetch_ops = [v.op if isinstance(v, tf.Tensor) else v for v in fetches]
   assert all([isinstance(op, tf.Operation) for op in fetch_ops])
-  # TODO: We could print it a bit like Theano does.
-  # So far this is not really implemented...
-  from tensorflow.contrib import graph_editor
-  ops = graph_editor.get_backward_walk_ops(fetch_ops, inclusive=True, control_inputs=True)
-  from pprint import pprint
-  pprint(ops)
+  visited = set()
+
+  def p(op, prefix="", indent=""):
+    """
+    :param tf.Operation op:
+    :param str prefix:
+    :param str indent:
+    """
+    assert isinstance(op, tf.Operation)
+    print("%s%s%r" % (indent, prefix, op))
+    if indent:
+      if op in visited:
+        return
+    visited.add(op)
+    if op.inputs:
+      input_names = get_op_input_names(op)
+      for i, x in enumerate(op.inputs):
+        p(x.op, prefix="inputs[%i] %r: " % (i, input_names[i]), indent=indent + "  ")
+    if op.control_inputs:
+      for i, x in enumerate(op.control_inputs):
+        p(x, prefix="control_inputs[%i]: " % (i,), indent=indent + "  ")
+
+  for op in fetch_ops:
+    p(op, prefix="fetch: ")
+
+
+def find_ops_with_tensor_input(tensors, fetches=None, graph=None):
+  """
+  :param tf.Tensor|tf.Variable|list[tf.Tensor] tensors:
+  :param tf.Operation|tf.Tensor|list[tf.Operation|tf.Tensor]|None fetches:
+  :param tf.Graph|None graph:
+  :return: list of ops
+  :rtype: list[tf.Operation]
+  """
+  if isinstance(tensors, tf.Variable):
+    # noinspection PyProtectedMember
+    tensors = [tensors._ref(), tensors.value()]
+  if isinstance(tensors, tf.Tensor):
+    tensors = [tensors]
+  assert all([isinstance(x, tf.Tensor) for x in tensors])
+  assert len(tensors) > 0
+  if fetches is not None:
+    if isinstance(fetches, (tf.Operation, tf.Tensor)):
+      fetches = [fetches]
+    fetches = [x.op if isinstance(x, tf.Tensor) else x for x in fetches]
+    assert all([isinstance(x, tf.Operation) for x in fetches])
+    from tensorflow.contrib import graph_editor
+    all_ops = graph_editor.get_backward_walk_ops(
+      fetches, inclusive=True, control_inputs=True, stop_at_ts=tensors)
+  else:
+    if graph is None:
+      graph = tensors[0].graph
+    all_ops = graph.get_operations()
+  ops = []
+  for op in all_ops:
+    assert isinstance(op, tf.Operation)
+    if any([x.op == op for x in tensors]):
+      continue
+    for x in tensors:
+      if x in op.inputs:
+        ops.append(op)
+        break
+  return ops
+
+
+def get_var_update_ops(var, fetches=None):
+  """
+  :param tf.Variable var:
+  :param tf.Operation|tf.Tensor|list[tf.Operation|tf.Tensor]|None fetches: e.g. the Optimizer.minimize() op
+  :return: list of ops that update var; currently expected to be of length 1
+  :rtype: list[tf.Operation]
+  """
+  ops = find_ops_with_tensor_input(var, fetches=fetches)
+  assert ops, "we expect that var %r is used somewhere" % var
+  apply_op_names = {
+    "Assign", "AssignAdd", "AssignSub", "ScatterSub",
+    # This list might need to be extended for your need...
+    "ApplyAdam", "ApplyGradientDescent", "ApplyAdadelta", "ApplyAdagrad", "ApplyAdagradDA",
+    "ApplyCenteredRMSProp", "ApplyFtrl", "ApplyMomentum", "ApplyProximalAdagrad",
+    "ApplyProximalGradientDescent", "ApplyRMSProp"}
+  apply_op_names.update(["Sparse%s" % name for name in apply_op_names])
+  apply_op_names.update(["Resource%s" % name for name in apply_op_names])
+  ops_ = [op for op in ops if op.type in apply_op_names]
+  # Maybe we may loosen this restriction to be >= 1 or so later on.
+  assert len(ops_) == 1, "we expect to have exactly one Assign/Apply op in %r" % (ops,)
+  return ops_
+
+
+def get_variable_value_copy_before_update_ops(var, update_ops):
+  """
+  :param tf.Variable var:
+  :param list[tf.Operation] update_ops:
+  :return: var value before any of the update_ops are executed
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope("get_variable_value_copy_before_update_ops"):
+    with tf.control_dependencies(None):
+      v_val = copy_tensor(var.value())
+      for op in update_ops:
+        add_control_input(op, v_val.op)  # Do it before op is executed.
+    return v_val
+
+
+def get_variable_grad_from_update_ops(var, update_ops):
+  """
+  :param tf.Variable var:
+  :param list[tf.Operation] update_ops: via :func:`get_var_update_ops`
+  :return: grad of loss w.r.t. var, as it is used in the update_ops, e.g. via ApplyAdam or ApplyGradientDescent
+    (not all kind of updates are supported currently).
+    If the gradient is sparse, it will return a tf.IndexedSlices.
+  :rtype: tf.Tensor|tf.IndexedSlices
+  """
+  assert len(update_ops) == 1
+  op = update_ops[0]
+  op_inputs = get_op_inputs_by_name(op)
+  if op.type == "ScatterSub":  # e.g. sparse grad with GradientDescentOptimizer
+    assert op_inputs["ref"] == var._ref()
+    indices = op_inputs["indices"]
+    delta = op_inputs["updates"]
+    assert delta.op.type == "Mul"  # mul with learning rate
+    grad = delta.op.inputs[0]
+    assert "gradients" in grad.name
+    return tf.IndexedSlices(values=grad, indices=indices, dense_shape=tf.convert_to_tensor(get_shape(var)))
+  if op.type == "AssignSub":
+    op_name_prefix = os.path.dirname(op.name) + "/"
+    assert op_inputs["ref"] == var._ref()
+    # Case for sparse update in Adam:
+    # m_scaled_g_values = grad * (1 - beta1_t)
+    # m_t = scatter_add(m, indices, m_scaled_g_values)
+    from tensorflow.contrib import graph_editor
+    all_ops = graph_editor.get_backward_walk_ops(update_ops, inclusive=True, control_inputs=True)
+    all_ops = [x for x in all_ops if x.name.startswith(op_name_prefix)]
+    scatter_add_ops = [x for x in all_ops if x.type == "ScatterAdd"]
+    # print(scatter_add_ops, [x.inputs[0] for x in scatter_add_ops])
+    indices = scatter_add_ops[0].inputs[1]
+    m_scaled_g_values = scatter_add_ops[0].inputs[2]
+    assert m_scaled_g_values.op.type == "Mul"
+    grad = m_scaled_g_values.op.inputs[0]
+    # We should either have the gradient directly now, or an UnsortedSegmentSum, via _apply_sparse_duplicate_indices.
+    assert "gradients" in grad.name or grad.op.type == "UnsortedSegmentSum"
+    return tf.IndexedSlices(values=grad, indices=indices, dense_shape=tf.convert_to_tensor(get_shape(var)))
+  assert "var" in op_inputs
+  assert op_inputs["var"] == var._ref()
+  if "grad" in op_inputs:  # e.g. ApplyAdam
+    grad = op_inputs["grad"]
+  elif "delta" in op_inputs:  # e.g. ApplyGradientDescent
+    grad = op_inputs["delta"]
+  else:
+    raise Exception("Don't know how to get grad from op %r with inputs %r." % (op, op_inputs))
+  if op.type.startswith("SparseApply"):  # e.g. SparseApplyMomentum
+    # We should either have the gradient directly now, or an UnsortedSegmentSum, via _apply_sparse_duplicate_indices.
+    assert "gradients" in grad.name or grad.op.type == "UnsortedSegmentSum"
+    indices = op_inputs["indices"]
+    return tf.IndexedSlices(values=grad, indices=indices, dense_shape=tf.convert_to_tensor(get_shape(var)))
+  assert "gradients" in grad.name
+  return grad
 
 
 def add_control_input(op, control_input):
@@ -5579,6 +6289,12 @@ def add_control_input(op, control_input):
   :param tf.Operation op:
   :param tf.Operation control_input:
   """
+  assert isinstance(op, tf.Operation)
+  assert isinstance(control_input, tf.Operation)
+  if hasattr(op, "_add_control_input"):  # some later TF version
+    op._add_control_input(control_input)
+    return
+  # Fallback. I think I have seen this in OpenAI code.
   op._control_inputs.append(control_input)
   op._recompute_node_def()
 

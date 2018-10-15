@@ -1,7 +1,10 @@
+
 from __future__ import print_function
 import gc
+import time
 import numpy
-import theano
+import functools
+import threading
 from Dataset import Dataset
 from Log import log
 from Util import NumbersDict
@@ -10,24 +13,30 @@ from Util import NumbersDict
 class CachedDataset(Dataset):
 
   def __init__(self, cache_byte_size=0, **kwargs):
+    """
+    :param int cache_byte_size:
+    """
     super(CachedDataset, self).__init__(**kwargs)
     self.cache_byte_size_total_limit = cache_byte_size
     if cache_byte_size < 0:
       self.cache_byte_size_limit_at_start = 1
     else:
-      self.cache_byte_size_limit_at_start = cache_byte_size * 2 / 3
-      self.cache_byte_size_total_limit = max(cache_byte_size / 3, 1)
+     self.cache_byte_size_limit_at_start = max(int(cache_byte_size * 2 / 3),1)
+     self.cache_byte_size_total_limit = max(cache_byte_size - self.cache_byte_size_limit_at_start, 1)
     self.num_seqs_cached_at_start = 0
     self.cached_bytes_at_start = 0
+    self.start_cache_initialized = False
+    self.preload_set = set([])
+    self.preload_end = 0
     self.max_ctc_length = 0
     self.ctc_targets = None
     self.alloc_intervals = None
-    self._seq_start = [] # [numpy.array([0,0])]  # uses sorted seq idx, see set_batching()
-    self._seq_index = []; """ :type: list[int] """  # Via init_seq_order().
-    self._index_map = range(len(self._seq_index))
-    self._seq_lengths = []; """ :type: list[(int,int)] """  # uses real seq idx
-    self.tags = []; """ :type: list[str] """  # uses real seq idx
-    self.tag_idx = {}; ":type: dict[str,int] "  # map of tag -> real-seq-idx
+    self._seq_start = []  # [numpy.array([0,0])]  # uses sorted seq idx, see set_batching()
+    self._seq_index = []; """ :type: list[int] """  # Via init_seq_order(). seq_index idx -> hdf seq idx
+    self._index_map = range(len(self._seq_index))  # sorted seq idx -> seq_index idx
+    self._seq_lengths = numpy.zeros((0, 0))  # real seq idx -> tuple of len of data and all targets
+    self._tags = []; """ :type: list[str|bytes] """  # uses real seq idx. access via _get_tag_by_real_idx
+    self._tag_idx = {}; ":type: dict[str,int] "  # map of tag -> real-seq-idx. call _update_tag_idx
     self.targets = {}
     self.target_keys = []
 
@@ -35,14 +44,13 @@ class CachedDataset(Dataset):
     super(CachedDataset, self).initialize()
 
     # Calculate cache sizes.
-    temp_cache_size_bytes = \
-      max(0, self.cache_byte_size_total_limit) - self.cached_bytes_at_start
+    temp_cache_size_bytes = max(0, self.cache_byte_size_total_limit)
     self.definite_cache_leftover = temp_cache_size_bytes if self.num_seqs_cached_at_start == self.num_seqs else 0
-    self.cache_num_frames_free = temp_cache_size_bytes / self.nbytes
+    self.cache_num_frames_free = temp_cache_size_bytes // self.nbytes
 
-    print("cached %i seqs" % self.num_seqs_cached_at_start, \
-          "%s GB" % (self.cached_bytes_at_start / float(1024 * 1024 * 1024)), \
-          ("(fully loaded, %s GB left over)" if self.definite_cache_leftover else "(%s GB free)") % \
+    print("cached %i seqs" % self.num_seqs_cached_at_start,
+          "%s GB" % (self.cached_bytes_at_start / float(1024 * 1024 * 1024)),
+          ("(fully loaded, %s GB left over)" if self.definite_cache_leftover else "(%s GB free)") %
           max(temp_cache_size_bytes / float(1024 * 1024 * 1024), 0),
           file=log.v4)
 
@@ -53,32 +61,44 @@ class CachedDataset(Dataset):
     Initialize lists:
       self.seq_index  # sorted seq idx
     """
-    old_index_map = self._index_map[:]
-    self._index_map = range(self.num_seqs)
     super(CachedDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
-    if seq_list:
-      seq_index = [self.tag_idx[tag] for tag in seq_list]
+    if seq_list is not None:
+      self._update_tag_idx()
+      seq_index = [self._tag_idx[tag] for tag in seq_list]
     else:
-      seq_index = self.get_seq_order_for_epoch(epoch, self.num_seqs, lambda s: self._seq_lengths[s][0])
+      seq_index = self.get_seq_order_for_epoch(epoch, self._num_seqs, lambda s: self._seq_lengths[s][0])
 
-    if self._seq_index == seq_index and self.num_seqs_cached_at_start == len(seq_index):
+    old_index_map = self._index_map[:]
+    self._index_map = range(len(seq_index))  # sorted seq idx -> seq_index idx
+
+    if self._seq_index == seq_index and self.start_cache_initialized:
       return False
 
     if epoch is not None:
       # Give some hint to the user in case he is wondering why the cache is reloading.
       print("Reinitialize dataset seq order for epoch %i." % epoch, file=log.v4)
 
-    if self.num_seqs_cached_at_start != len(seq_index):
+    if self.num_seqs_cached_at_start != len(seq_index) or not self.start_cache_initialized:
       self._seq_index = seq_index
-      self._seq_index_inv = dict(zip(seq_index,range(len(seq_index))))
+      self._seq_index_inv = dict(zip(seq_index, range(len(seq_index))))  # hdf seq idx -> seq_index idx
       self._init_seq_starts()
       self._init_alloc_intervals()
       self._init_start_cache()
+      self.start_cache_initialized = True
     else:
-      self._index_map = [ self._seq_index_inv[i] for i in seq_index ]
+      self._index_map = [self._seq_index_inv[i] for i in seq_index]  # sorted seq idx -> seq_index idx
       if self._index_map == old_index_map:
         return False
     return True
+
+  def _get_tag_by_real_idx(self, real_idx):
+    return self._tags[real_idx]
+
+  def _update_tag_idx(self):
+    if self._tag_idx:
+      return
+    for i in range(self._num_seqs):
+      self._tag_idx[self._get_tag_by_real_idx(i)] = i
 
   def batch_set_generator_cache_whole_epoch(self):
     return True
@@ -87,6 +107,7 @@ class CachedDataset(Dataset):
     assert self.num_seqs > 0
     assert self.num_inputs > 0
     assert self.window > 0
+    self.preload_set = set([])
     self.alloc_intervals = \
       [(0, 0, numpy.zeros([1] + self.get_data_shape("data"), dtype=self.get_data_dtype("data"))),
        (self.num_seqs, self.num_seqs, numpy.zeros([1] + self.get_data_shape("data"), dtype=self.get_data_dtype("data")))]
@@ -118,9 +139,10 @@ class CachedDataset(Dataset):
     self.num_seqs_cached_at_start = num_cached
     self.cached_bytes_at_start = cached_bytes
     if num_cached > 0:
-      self.load_seqs(0, num_cached, with_cache=False)
+      self.preload_end = num_cached
+      threading.Thread(target=self._preload_seqs,args=(0,num_cached)).start()
 
-  def load_seqs(self, start, end, with_cache=True):
+  def load_seqs(self, start, end):
     """
     Load data sequences.
     As a side effect, will modify / fill-up:
@@ -131,15 +153,15 @@ class CachedDataset(Dataset):
 
     :param int start: start sorted seq idx
     :param int end: end sorted seq idx
-    :param bool with_cache: handle cache
     """
     assert start >= 0
     assert start <= end
-    if self.is_cached(start, end): return
 
-    if self.cache_byte_size_total_limit > 0 and with_cache:  # If the cache is enabled.
+    if self.is_cached(start, end, blocking=True): return
+
+    if self.cache_byte_size_total_limit > 0:  # If the cache is enabled.
       self._load_seqs_with_cache(start, end)
-      return
+      return self.is_cached(start, end, blocking=True)
 
     super(CachedDataset, self).load_seqs(start, end)
 
@@ -154,30 +176,25 @@ class CachedDataset(Dataset):
         self.cache_num_frames_free += self.delete(num_needed_cache_frames - self.cache_num_frames_free)
         gc.collect()
       self.cache_num_frames_free -= num_needed_cache_frames
-      self.load_seqs(start, end, with_cache=False)
+      threading.Thread(target=self._preload_seqs,args=(start,end)).start()
     else:
       # First, delete everything.
       self.cache_num_frames_free += self.delete(None)
       gc.collect()
-      # Load as much as we can so that we fill up the cache.
+      # Preload as much as we can so that we fill up the cache.
       while end < self.num_seqs:
         num_needed_cache_frames = self.get_seq_length_2d(end)[0]
         if self.cache_num_frames_free - num_needed_cache_frames < 0:
           break
         self.cache_num_frames_free -= num_needed_cache_frames
         end += 1
-      self.load_seqs(start, end, with_cache=False)
-      if end == self.num_seqs:
-        # Preload from the start for the next epoch.
-        end = 0
-        while end < self.num_seqs_cached_at_start:
-          num_needed_cache_frames = self.get_seq_length_2d(end)[0]
-          if self.cache_num_frames_free - num_needed_cache_frames < 0:
-            break
-          self.cache_num_frames_free -= num_needed_cache_frames
-          end += 1
-        if end != 0:
-          self.load_seqs(0, end, with_cache=False)
+      self.preload_end = end
+      threading.Thread(target=self._preload_seqs,args=(start,end)).start()
+
+  def _preload_seqs(self,start,end):
+    print("Preloading cache from", start, "to", end, file=log.v4)
+    super(CachedDataset, self).load_seqs(start, end)
+    self.preload_end = self.num_seqs_cached_at_start
 
   def _shuffle_frames_in_seqs(self, start, end):
     """
@@ -244,7 +261,7 @@ class CachedDataset(Dataset):
         assert False
     return -1
 
-  def _insert_alloc_interval(self, pos, value):
+  def _insert_alloc_interval(self, pos, value, merge=False):
     """
     Insert np.zeros into self.alloc_intervals.
     :param int pos: idx in self.alloc_intervals
@@ -255,30 +272,31 @@ class CachedDataset(Dataset):
     ni = self.alloc_intervals[pos + 1][0]
     xc = self.alloc_intervals[pos][2]
     xn = self.alloc_intervals[pos + 1][2]
-    if value[0] == ci and value[1] == ni:
+    if value[0] == ci and value[1] == ni and merge:
+      nj = self.alloc_intervals[pos][0]
+      nk = self.alloc_intervals[pos + 1][1]
+      del self.alloc_intervals[pos]
+      del self.alloc_intervals[pos]
       self.alloc_intervals.insert(pos,
-        (self.alloc_intervals[pos][0],
-         self.alloc_intervals[pos + 1][1],
+        (nj,nk,
          numpy.concatenate(
            [xc,
             numpy.zeros(
               [self._seq_start[ni][0]] + self.get_data_shape("data"),
               dtype=self.get_data_dtype("data")),
             xn])))
-      del self.alloc_intervals[pos + 1]
-      del self.alloc_intervals[pos + 1]
       return 0
-    elif value[0] == ci:
-      self.alloc_intervals.insert(pos, (self.alloc_intervals[pos][0],
-                                        value[1],
+    elif value[0] == ci and merge:
+      nj = self.alloc_intervals[pos][0]
+      del self.alloc_intervals[pos]
+      self.alloc_intervals.insert(pos, (nj,value[1],
                                         numpy.concatenate([xc, numpy.zeros([self._seq_start[value[1]][0] - self._seq_start[ci][0]] + self.get_data_shape("data"), dtype=self.get_data_dtype("data"))])))
-      del self.alloc_intervals[pos + 1]
       return 0
-    elif value[1] == ni:
-      self.alloc_intervals.insert(pos + 1, (value[0],
-                                            self.alloc_intervals[pos + 1][1],
+    elif value[1] == ni and merge:
+      nk = self.alloc_intervals[pos + 1][1]
+      del self.alloc_intervals[pos + 1]
+      self.alloc_intervals.insert(pos + 1, (value[0], nk,
                                             numpy.concatenate([numpy.zeros([self._seq_start[ni][0] - self._seq_start[value[0]][0]] + self.get_data_shape("data"), dtype=self.get_data_dtype("data")), xc])))
-      del self.alloc_intervals[pos + 2]
       return 0
     else:
       self.alloc_intervals.insert(pos + 1,
@@ -352,6 +370,7 @@ class CachedDataset(Dataset):
 
   def insert_alloc_interval(self, start, end=None):
     return self._modify_alloc_intervals(start, end, True)
+
   def remove_alloc_interval(self, start, end=None):
     return self._modify_alloc_intervals(start, end, False)
 
@@ -372,17 +391,20 @@ class CachedDataset(Dataset):
     while (not nframes or deleted < nframes) and i < len(self.alloc_intervals):
       ai = self.alloc_intervals[i]
       if ai[1] > self.num_seqs_cached_at_start and ai[0] < ai[1]:
-        s = ai[0]
-        deleted += sum([self._seq_lengths[self._seq_index[i]][0]
-                        for i in self.remove_alloc_interval(s, ai[1])])
-      i += 1
+        removed = self.remove_alloc_interval(max(ai[0],self.num_seqs_cached_at_start), ai[1])
+        self.preload_set -= set(removed)
+        deleted += sum([self._seq_lengths[self._seq_index[i]][0] for i in removed])
+      else:
+        i += 1
     return deleted
 
   @property
   def num_seqs(self):
+    if self._index_map:
+      return len(self._index_map)
     return self._num_seqs
 
-  def is_cached(self, start, end):
+  def is_cached(self, start, end, blocking = False):
     """
     :param int start: like in load_seqs(), sorted seq idx
     :param int end: like in load_seqs(), sorted seq idx
@@ -392,23 +414,11 @@ class CachedDataset(Dataset):
     """
     if start == end: return True  # Empty.
     assert start < end
-    s = 0
-    e = len(self.alloc_intervals)
-    # Binary search.
-    while s < e:
-      i = (s + e) // 2
-      alloc_start, alloc_end, _ = self.alloc_intervals[i]
-      if alloc_start <= start < alloc_end:
-        return alloc_start < end <= alloc_end
-      elif alloc_start <= start and start >= alloc_end:
-        if s == i: return False
-        s = i
-      elif alloc_start > start:
-        if e == i: return False
-        e = i
-      else:
-        assert False
-    return False
+    if blocking and end <= self.preload_end:
+      while not set(range(start,end)) <= self.preload_set:
+        time.sleep(0.2)
+      return True
+    return set(range(start,end)) <= self.preload_set
 
   def get_seq_length_2d(self, sorted_seq_idx):
     """
@@ -426,8 +436,6 @@ class CachedDataset(Dataset):
     d = {"data": lengths[0]}
     for k, l in zip(self.target_keys, lengths[1:]):
       d[k] = l
-    #d.update(self.get_output_lengths)
-    #d.update({k: output_len for k in self.get_target_list()})
     return NumbersDict(d)
 
   def get_seq_start(self, sorted_seq_idx):
@@ -436,7 +444,6 @@ class CachedDataset(Dataset):
     :rtype: (int,int)
     """
     return self._seq_start[sorted_seq_idx]
-    return self._seq_start[self._index_map[sorted_seq_idx]]
 
   def get_times(self, sorted_seq_idx):
     seq_start = self.get_seq_start(sorted_seq_idx)[0]
@@ -444,7 +451,6 @@ class CachedDataset(Dataset):
     return self.timestamps[seq_start:seq_start + seq_len]
 
   def get_input_data(self, sorted_seq_idx):
-    #sorted_seq_idx = self._index_map[sorted_seq_idx]
     seq_idx = self._index_map[sorted_seq_idx]
     idi = self.alloc_interval_index(seq_idx)
     assert idi >= 0, "failed to get data for seq %i" % sorted_seq_idx
@@ -482,3 +488,15 @@ class CachedDataset(Dataset):
   def get_tag(self, sorted_seq_idx):
     raise NotImplementedError
 
+  def have_corpus_seq_idx(self):
+    return True
+
+  def get_corpus_seq_idx(self, seq_idx):
+    """
+    :param int seq_idx: sorted sequence index from the current epoch, depending on seq_ordering
+    :return: the sequence index as-is in the original corpus. only defined if self.have_corpus_seq_idx()
+    :rtype: int
+    """
+    if self.seq_ordering == "default":
+      return seq_idx
+    return self._seq_index[self._index_map[seq_idx]]

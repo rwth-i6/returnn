@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 from __future__ import print_function
 
@@ -15,9 +15,9 @@ from Log import log
 import rnn
 import argparse
 import HDFDataset
-from Dataset import Dataset, init_dataset_via_str
+from Dataset import Dataset, init_dataset
 from Config import Config
-from Util import NumbersDict, human_size, progress_bar_with_time, try_run
+from Util import NumbersDict, human_size, progress_bar_with_time, try_run, PY3
 
 
 def hdf_dataset_init(file_name):
@@ -41,8 +41,14 @@ def hdf_dump_from_dataset(dataset, hdf_dataset, parser_args):
 
   data_keys = sorted(dataset.get_data_keys())
   print("Data keys:", data_keys, file=log.v3)
-  if "orth" in data_keys:
+  if "orth" in data_keys:  # special workaround for now, not handled
     data_keys.remove("orth")
+  data_target_keys = [key for key in dataset.get_target_list() if key in data_keys]
+  # Currently hardcoded, but we can make that more dynamic later...
+  default_data_input_key = "data"
+  default_data_target_key = "classes"
+  assert default_data_input_key in data_keys and default_data_input_key not in data_target_keys
+  assert default_data_target_key in data_target_keys
 
   # We need to do one run through the dataset to collect some stats like total len.
   print("Collect stats, iterate through all data...", file=log.v3)
@@ -94,11 +100,9 @@ def hdf_dump_from_dataset(dataset, hdf_dataset, parser_args):
   print("Set seq len info...", file=log.v3)
   hdf_dataset.create_dataset(HDFDataset.attr_seqLengths, shape=(num_seqs, 2), dtype="int32")
   for i, seq_len in enumerate(seq_lens):
-    data_len = seq_len["data"]
-    targets_len = seq_len["classes"]
-    for data_key in dataset.get_target_list():
-      if data_key == "orth":
-        continue
+    data_len = seq_len[default_data_input_key]
+    targets_len = seq_len[default_data_target_key]
+    for data_key in data_target_keys:
       assert seq_len[data_key] == targets_len, "different lengths in multi-target not supported"
     if targets_len is None:
       targets_len = data_len
@@ -110,7 +114,7 @@ def hdf_dump_from_dataset(dataset, hdf_dataset, parser_args):
   hdf_dataset.create_group('targets/size')
   hdf_dataset.create_group('targets/labels')
   for data_key in data_keys:
-    if data_key == "data":
+    if data_key == default_data_input_key:
       hdf_dataset.create_dataset(
         'inputs', shape=shapes[data_key], dtype=dataset.get_data_dtype(data_key))
     else:
@@ -120,12 +124,14 @@ def hdf_dump_from_dataset(dataset, hdf_dataset, parser_args):
 
     if data_key in dataset.labels:
       labels = dataset.labels[data_key]
+      if PY3:
+        labels = [label.encode("utf8") for label in labels]
       assert len(labels) == dataset.num_outputs[data_key][0]
     else:
       labels = ["%s-class-%i" % (data_key, i) for i in range(dataset.get_data_dim(data_key))]
     print("Labels for %s:" % data_key, labels[:3], "...", file=log.v5)
     max_label_len = max(map(len, labels))
-    if data_key != "data":
+    if data_key != default_data_input_key:
       hdf_dataset['targets/labels'].create_dataset(data_key, (len(labels),), dtype="S%i" % (max_label_len + 1))
       for i, label in enumerate(labels):
         hdf_dataset['targets/labels'][data_key][i] = numpy.array(label, dtype="S%i" % (max_label_len + 1))
@@ -140,14 +146,14 @@ def hdf_dump_from_dataset(dataset, hdf_dataset, parser_args):
     assert tag == tag_  # Just a check for sanity. We expect the same order.
     seq_len = dataset.get_seq_length(seq_idx)
     for data_key in data_keys:
-      if data_key == "data":
+      if data_key == default_data_input_key:
         hdf_data = hdf_dataset['inputs']
       else:
         hdf_data = hdf_dataset['targets/data'][data_key]
       data = dataset.get_data(seq_idx, data_key)
       hdf_data[offsets[data_key]:offsets[data_key] + seq_len[data_key]] = data
 
-    progress_bar_with_time(float(offsets["data"]) / total_seq_len["data"])
+    progress_bar_with_time(float(offsets[default_data_input_key]) / total_seq_len[default_data_input_key])
 
     offsets += seq_len
 
@@ -155,7 +161,7 @@ def hdf_dump_from_dataset(dataset, hdf_dataset, parser_args):
 
   # Set some old-format attribs. Not needed for newer CRNN versions.
   hdf_dataset.attrs[HDFDataset.attr_inputPattSize] = dataset.num_inputs
-  hdf_dataset.attrs[HDFDataset.attr_numLabels] = dataset.num_outputs.get("classes", (0, 0))[0]
+  hdf_dataset.attrs[HDFDataset.attr_numLabels] = dataset.num_outputs.get(default_data_target_key, (0, 0))[0]
 
   print("All done.", file=log.v3)
 
@@ -180,9 +186,8 @@ def init(config_filename, cmd_line_opts, dataset_config_str):
     rnn.initLog()
   else:
     log.initialize(verbosity=[5])
-  print("CRNN dump-dataset starting up.", file=log.v3)
+  print("Returnn hdf_dump starting up.", file=log.v3)
   rnn.initFaulthandler()
-  rnn.initConfigJsonNetwork()
   if config_filename:
     rnn.initData()
     rnn.printTaskProperties()
@@ -190,7 +195,7 @@ def init(config_filename, cmd_line_opts, dataset_config_str):
     return rnn.train_data
   else:
     assert dataset_config_str
-    dataset = init_dataset_via_str(dataset_config_str)
+    dataset = init_dataset(dataset_config_str)
     print("Source dataset:", dataset.len_info(), file=log.v3)
     return dataset
 
@@ -198,6 +203,8 @@ def init(config_filename, cmd_line_opts, dataset_config_str):
 def _is_crnn_config(filename):
   if filename.endswith(".gz"):
     return False
+  if filename.endswith(".config"):
+    return True
   try:
     config = Config()
     config.load_file(filename)

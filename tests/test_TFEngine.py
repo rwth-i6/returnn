@@ -20,10 +20,33 @@ import unittest
 import numpy
 import numpy.testing
 from pprint import pprint
+import contextlib
 import better_exchook
 better_exchook.replace_traceback_format_tb()
 from Log import log
 log.initialize(verbosity=[5])
+
+import Debug
+Debug.installLibSigSegfault()
+
+try:
+  import faulthandler
+  # Enable after libSigSegfault, so that we have both,
+  # because faulthandler will also call the original sig handler.
+  faulthandler.enable()
+except ImportError:
+  print("no faulthandler")
+
+
+@contextlib.contextmanager
+def make_scope():
+  """
+  :rtype: tf.Session
+  """
+  with tf.Graph().as_default() as graph:
+    with tf.Session(graph=graph) as session:
+      yield session
+
 
 session = tf.InteractiveSession()
 
@@ -110,6 +133,148 @@ def test_engine_train():
   engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
   engine.train()
 
+  engine.finalize()
+
+
+def test_engine_train_uneven_batches():
+  rnd = numpy.random.RandomState(42)
+  from GeneratingDataset import StaticDataset
+  n_data_dim = 2
+  n_classes_dim = 3
+
+  def get_data(num_seqs):
+    return [
+      {
+        "data": rnd.uniform(-1., 1., (seq_len, n_data_dim)),
+        "classes": rnd.choice(range(n_classes_dim), (seq_len,))
+      }
+      for seq_len in [rnd.choice(list(range(1, 50)) + list(range(1, 20))) for _ in range(num_seqs)]]
+
+  train_data = StaticDataset(
+    input_dim=n_data_dim, output_dim=n_classes_dim,
+    data=get_data(20))
+  print("train data seq lens:", [len(d["data"]) for d in train_data.data])
+  train_data.init_seq_order(epoch=1)
+  cv_data = StaticDataset(input_dim=n_data_dim, output_dim=n_classes_dim, data=get_data(3))
+  print("cv data seq lens:", [len(d["data"]) for d in cv_data.data])
+  cv_data.init_seq_order(epoch=1)
+
+  config = Config()
+  config.update({
+    "model": "/tmp/model",
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": {
+      "rnn": {"class": "rec", "unit": "lstm", "n_out": 3},  # make it recurrent
+      "output": {"class": "softmax", "loss": "ce", "from": "rnn"}},
+    "start_epoch": 1,
+    "num_epochs": 2,
+    "batch_size": 50,  # set it such that sometimes we have num-seqs 1, 2 or 3 in a single batch
+    "adam": True,
+    "learning_rate": 0.001,
+    "tf_log_memory_usage": True,
+    "log_batch_size": True
+  })
+  engine = Engine(config=config)
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
+  engine.train()
+
+  engine.finalize()
+
+
+def test_engine_train_subnet_loss():
+  from GeneratingDataset import DummyDataset
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 3
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
+  train_data.init_seq_order(epoch=1)
+  cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  cv_data.init_seq_order(epoch=1)
+
+  config = Config()
+  config.update({
+    "model": "/tmp/model",
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": {
+      "output": {
+        "class": "subnetwork",
+        "subnetwork": {
+          "output": {"class": "softmax", "loss": "ce"}
+        }}},
+    "start_epoch": 1,
+    "num_epochs": 1,
+    "batch_size": 50
+  })
+  engine = Engine(config=config)
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
+  engine.train()
+  engine.finalize()
+
+
+def test_engine_train_rec_subnet_loss_optimized():
+  from GeneratingDataset import DummyDataset
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 3
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
+  train_data.init_seq_order(epoch=1)
+  cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  cv_data.init_seq_order(epoch=1)
+
+  config = Config()
+  config.update({
+    "model": "/tmp/model",
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": {
+      "output": {
+        "class": "rec",
+        "target": "classes",
+        "unit": {
+          "output": {"class": "softmax", "loss": "ce", "from": "data:source"}
+        }}},
+    "start_epoch": 1,
+    "num_epochs": 1,
+    "batch_size": 50
+  })
+  engine = Engine(config=config)
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
+  engine.train()
+  engine.finalize()
+
+
+def test_engine_train_rec_subnet_loss_non_optimized():
+  from GeneratingDataset import DummyDataset
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 3
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
+  train_data.init_seq_order(epoch=1)
+  cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  cv_data.init_seq_order(epoch=1)
+
+  config = Config()
+  config.update({
+    "model": "/tmp/model",
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": {
+      "output": {
+        "class": "rec",
+        "optimize_move_layers_out": False,
+        "target": "classes",
+        "unit": {
+          "output": {"class": "softmax", "loss": "ce", "from": "data:source"}
+        }}},
+    "start_epoch": 1,
+    "num_epochs": 1,
+    "batch_size": 50
+  })
+  engine = Engine(config=config)
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
+  engine.train()
   engine.finalize()
 
 
@@ -414,9 +579,9 @@ def check_engine_search(extra_rec_kwargs=None):
 
   engine.search(dataset=dataset)
   print("error keys:")
-  pprint(engine.network.error_by_layer)
+  pprint(engine.network.losses_dict)
   assert engine.network.total_objective is not None
-  assert "decision" in engine.network.error_by_layer
+  assert "decision" in engine.network.losses_dict
 
   engine.finalize()
 
@@ -497,9 +662,9 @@ def check_engine_search_attention(extra_rec_kwargs=None):
   print("Search...")
   engine.search(dataset=dataset)
   print("error keys:")
-  pprint(engine.network.error_by_layer)
+  pprint(engine.network.losses_dict)
   assert engine.network.total_objective is not None
-  assert "decision" in engine.network.error_by_layer
+  assert "decision" in engine.network.losses_dict
 
   engine.finalize()
 
@@ -646,9 +811,9 @@ def test_rec_optim_all_out():
 
   engine.search(dataset=dataset)
   print("error keys:")
-  pprint(engine.network.error_by_layer)
+  pprint(engine.network.losses_dict)
   assert engine.network.total_objective is not None
-  assert "decision" in engine.network.error_by_layer
+  assert "decision" in engine.network.losses_dict
 
   engine.finalize()
 
@@ -990,6 +1155,8 @@ def test_rec_subnet_auto_optimize():
     else:
       assert not rec_layer.cell.input_layers_moved_out
       assert not rec_layer.cell.output_layers_moved_out
+    print("Losses:")
+    pprint(engine.network.losses_dict)
 
     print("Run %i: Train now..." % run_idx)
     engine.train()
@@ -1290,7 +1457,8 @@ def test_rec_subnet_eval_init_out_apply0():
     "num_epochs": 2,
     "batch_size": 10,
     "nadam": True,
-    "learning_rate": 0.01
+    "learning_rate": 0.01,
+    "debug_print_layer_output_template": True
   })
 
   print("Create engine.")
@@ -1306,20 +1474,22 @@ def test_rec_subnet_eval_init_out_apply0():
 def test_net_safe_log_to_log_softmax():
   n_out = 5
   net_dict = {
-    "ff_in_window": {"class": "window", "window_size": 3, "trainable": False},
-    "ff_in": {"class": "merge_dims", "axes": "except_time", "from": ["ff_in_window"], "trainable": False},
-    "ff0": {"class": "hidden", "activation": "relu", "n_out": 8, "L2": 0.01, "from": ["ff_in"]},
-    "ff_out": {"class": "softmax", "n_out": n_out, "from": ["ff0"]},
+    "ff_in_window": {"class": "window", "window_size": 3, "trainable": False},  # (B,T,3,3)
+    "ff_in": {"class": "merge_dims", "axes": "except_time", "from": ["ff_in_window"], "trainable": False},  # (B,T,9)
+    "ff0": {"class": "hidden", "activation": "relu", "n_out": 8, "L2": 0.01, "from": ["ff_in"]},  # (B,T,8)
+    "ff_out": {"class": "softmax", "n_out": n_out, "from": ["ff0"]},  # (B,T,5)
     "ff_out_prior": {
       "class": "accumulate_mean", "exp_average": 0.001,
-      "is_prob_distribution": True, "from": ["ff_out"]},
+      "is_prob_distribution": True, "from": ["ff_out"]},  # (5,)
     "output": {
       "class": "combine", "kind": "eval", "from": ["ff_out", "ff_out_prior"],
       "eval": "safe_log(source(0)) - safe_log(source(1))",
       "eval_locals": {"am_scale": 0.1, "prior_scale": 0.5 * 0.1}
     },
   }
-  net = TFNetwork(extern_data=ExternData(data={"data": {"dim": 3}, "classes": {"dim": n_out, "sparse": True}}))
+  net = TFNetwork(
+    extern_data=ExternData(data={"data": {"dim": 3}, "classes": {"dim": n_out, "sparse": True}}),
+    config=Config({"debug_print_layer_output_template": True}))
   net.construct_from_dict(net_dict)
   output_layer = net.get_default_output_layer(must_exist=True)
   out = output_layer.output.placeholder
@@ -1345,6 +1515,178 @@ def test_net_safe_log_to_log_softmax():
     print("inputs':", list(sub_in0.op.inputs[0].op.inputs))
     print("inputs'':", list(sub_in0.op.inputs[0].op.inputs[0].op.inputs))
   assert sub_in0.op.type == "LogSoftmax" or sub_in0.op.inputs[0].op.type == "LogSoftmax"
+
+
+def test_preload_from_files():
+  import tempfile
+  model_tmp_dir = tempfile.mkdtemp("tmp-checkpoint")
+  model_filename = model_tmp_dir + "/model"
+  with make_scope() as session:
+    config = Config()
+    n_in, n_hidden, n_out = 2, 5, 3
+    config.update({
+      "num_outputs": n_out,
+      "num_inputs": n_in,
+      "network": {
+        "l1": {"class": "linear", "activation": None, "n_out": n_hidden, 'bias_init': 1.0, 'forward_weights_init': 'orthogonal'},
+        "output": {"class": "linear", "activation": None, "n_out": n_out, "from": ["l1"], 'bias_init': 2.0, 'forward_weights_init': 'orthogonal'}
+      }
+    })
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    network.initialize_params(session)
+    params_orig_dump = network.get_params_serialized(session)
+    print("l1:")
+    print(params_orig_dump.values_dict["l1"]["W"])
+    print(params_orig_dump.values_dict["l1"]["b"])
+    print("output:")
+    print(params_orig_dump.values_dict["output"]["W"])
+    print(params_orig_dump.values_dict["output"]["b"])
+    assert(params_orig_dump.values_dict["l1"]["W"].any())
+    assert(params_orig_dump.values_dict["output"]["W"].any())
+    network.save_params_to_file(filename=model_filename, session=session)
+
+  config = Config()
+  config.update({
+    "num_outputs": n_out,
+    "num_inputs": n_in,
+    "network": {
+      "l0": {"class": "linear", "activation": None, "n_out": n_in},
+      "main_l1": {"class": "linear", "activation": None, "n_out": n_hidden, "from": ["l0"]},
+      "main_output": {"is_output_layer": True, "class": "linear", "activation": None, "n_out": n_out, "from": ["main_l1"]},
+    },
+    "preload_from_files": {
+      'train_base': {
+        'filename': model_filename,
+        'prefix': 'main_',
+        'init_for_train': True,
+      }
+    },
+    "device": "cpu",
+    "start_epoch": 1,
+    "num_epochs": 1,
+    "batch_size": 50,
+    "model": model_tmp_dir + "/clone_model",
+  })
+
+  from GeneratingDataset import DummyDataset
+  from TFEngine import Engine
+  seq_len = 5
+  n_data_dim = n_in
+  n_classes_dim = n_out
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
+  train_data.init_seq_order(epoch=1)
+  cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  cv_data.init_seq_order(epoch=1)
+
+  engine = Engine(config=config)
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
+
+  network = engine.network
+  params_dump = network.get_params_serialized(engine.tf_session)
+  for layer_name in ["l1", "output"]:
+    layer_orig = params_orig_dump.values_dict[layer_name]
+    layer_clone_main = params_dump.values_dict["main_" + layer_name]
+    for param_name in ["W", "b"]:
+      param_orig = layer_orig[param_name]
+      param_clone_main = layer_clone_main[param_name]
+      numpy.testing.assert_array_equal(param_orig, param_clone_main)
+
+    main = engine.network.layers["main_" + layer_name]
+    assert_equal(set(main.params.keys()), {"W", "b"})
+
+  engine.finalize()
+
+
+def test_preload_from_files_with_reuse():
+  import tempfile
+  model_tmp_dir = tempfile.mkdtemp("tmp-checkpoint")
+  model_filename = model_tmp_dir + "/model"
+  with make_scope() as session:
+    config = Config()
+    n_in, n_hidden, n_out = 2, 5, 3
+    config.update({
+      "num_outputs": n_out,
+      "num_inputs": n_in,
+      "network": {
+        "l1": {"class": "linear", "activation": None, "n_out": n_hidden, 'bias_init': 1.0, 'forward_weights_init': 'orthogonal'},
+        "output": {"class": "linear", "activation": None, "n_out": n_out, "from": ["l1"], 'bias_init': 2.0, 'forward_weights_init': 'orthogonal'}
+      }
+    })
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    network.initialize_params(session)
+    params_orig_dump = network.get_params_serialized(session)
+    print("l1:")
+    print(params_orig_dump.values_dict["l1"]["W"])
+    print(params_orig_dump.values_dict["l1"]["b"])
+    print("output:")
+    print(params_orig_dump.values_dict["output"]["W"])
+    print(params_orig_dump.values_dict["output"]["b"])
+    assert(params_orig_dump.values_dict["l1"]["W"].any())
+    assert(params_orig_dump.values_dict["output"]["W"].any())
+    network.save_params_to_file(filename=model_filename, session=session)
+
+  config = Config()
+  config.update({
+    "num_outputs": n_out,
+    "num_inputs": n_in,
+    "network": {
+      "l0": {"class": "linear", "activation": None, "n_out": n_in},
+      "main_l1": {"class": "linear", "activation": None, "n_out": n_hidden, "from": ["l0"]},
+      "main_output": {"is_output_layer": True, "class": "linear", "activation": None, "n_out": n_out, "from": ["main_l1"]},
+      "clone_l0": {"class": "linear", "activation": None, "n_out": n_in, "from": "main_output"},
+      "clone_l1": {"class": "linear", "activation": None, "n_out": n_hidden, "from": ["clone_l0"], "reuse_params": "main_l1"},
+      "clone_output": {"is_output_layer": True, "class": "linear", "activation": None, "n_out": n_out, "from": ["clone_l1"], "reuse_params": "main_output"},
+    },
+    "preload_from_files": {
+      'train_base': {
+        'filename': model_filename,
+        'prefix': 'main_',
+        'init_for_train': True,
+      }
+    },
+    "device": "cpu",
+    "start_epoch": 1,
+    "num_epochs": 1,
+    "batch_size": 50,
+    "model": model_tmp_dir + "/clone_model",
+  })
+
+  from GeneratingDataset import DummyDataset
+  from TFEngine import Engine
+  seq_len = 5
+  n_data_dim = n_in
+  n_classes_dim = n_out
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
+  train_data.init_seq_order(epoch=1)
+  cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  cv_data.init_seq_order(epoch=1)
+
+  engine = Engine(config=config)
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
+
+  network = engine.network
+  params_dump = network.get_params_serialized(engine.tf_session)
+  for layer_name in ["l1", "output"]:
+    layer_orig = params_orig_dump.values_dict[layer_name]
+    layer_clone_main = params_dump.values_dict["main_" + layer_name]
+    layer_clone_clone = params_dump.values_dict["clone_" + layer_name]
+    for param_name in ["W", "b"]:
+      param_orig = layer_orig[param_name]
+      param_clone_main = layer_clone_main[param_name]
+      param_clone_clone = layer_clone_clone[param_name]
+      numpy.testing.assert_array_equal(param_orig, param_clone_clone)
+      numpy.testing.assert_array_equal(param_orig, param_clone_main)
+
+    main = engine.network.layers["main_" + layer_name]
+    clone = engine.network.layers["clone_" + layer_name]
+    assert_equal(set(main.params.keys()), {"W", "b"})
+    assert_equal(set(clone.params.keys()), {"W", "b"})
+    assert main.params["W"] is clone.params["W"]
+    assert main.params["b"] is clone.params["b"]
+
+  engine.finalize()
 
 
 if __name__ == "__main__":

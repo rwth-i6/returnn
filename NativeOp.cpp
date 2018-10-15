@@ -89,8 +89,15 @@ Ndarray* Ndarray_Copy(const Ndarray* self) {
 // https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/matmul_op.cc
 
 // https://github.com/tensorflow/tensorflow/issues/6602
-// TODO: Fixed now, check if it works, maybe we can remove this workaround.
+// fixed in TF version >= 1.5
+
+#include "tensorflow/core/public/version.h"
+
+#if (TF_MAJOR_VERSION == 1 && TF_MINOR_VERSION >= 5) || (TF_MAJOR_VERSION > 1)
+#define TF_issue_6602_workaround 0
+#else
 #define TF_issue_6602_workaround 1
+#endif
 
 #if TF_issue_6602_workaround
 
@@ -121,7 +128,7 @@ perftools::gputools::DeviceMemory<T> AsDeviceMemory(const T* cuda_memory) {
   return typed;
 }
 
-static perftools::gputools::blas::Transpose int get_transpose(char t) {
+static perftools::gputools::blas::Transpose get_transpose(char t) {
     switch(t) {
     case 'T':
         return perftools::gputools::blas::Transpose::kTranspose;

@@ -147,6 +147,9 @@ class Updater(object):
           tf.to_float(step_in_interval, name="step_in_interval_float"), name="factor")
         lr *= factor
         opts.assert_all_read()
+    if self.config.is_true("use_horovod") and self.config.is_true("horovod_scale_lr"):
+      import horovod.tensorflow as hvd
+      lr *= hvd.size()
     return lr
 
   def create_optimizer(self):
@@ -241,6 +244,11 @@ class Updater(object):
     grads_and_vars = self.optimizer.compute_gradients(
       loss, var_list=trainable_vars_for_gradients,
       aggregation_method=aggregation_method)
+    if self.config.is_true("use_horovod") and self.config.value("horovod_reduce_type", "") == "grad":
+      import horovod.tensorflow as hvd
+      grads_and_vars = [
+        (hvd.allreduce(grad, average=self.config.is_true("horovod_avg_grad")) if grad is not None else None, var)
+        for (grad, var) in grads_and_vars]
     var_grads = {var: grad for (grad, var) in grads_and_vars if grad is not None}
     if not var_grads:
       raise Exception("no single variable to train")
@@ -354,6 +362,33 @@ class Updater(object):
           learning_rate=factor, use_locking=self.use_locking)
         with tf.control_dependencies([self.optim_op]):
           self.optim_op = sgd_optimizer.minimize(self.constraints, var_list=self.trainable_vars)
+
+    if self.config.opt_typed_value("extra_updates"):
+      extra_updates = self.config.typed_dict["extra_updates"]
+      assert isinstance(extra_updates, dict)  # dict var_name -> function(var)
+      vars_by_name = {v.name[:-2]: v for v in all_prev_existing_vars}
+      extra_updates_op_list = []
+      from Util import getargspec
+      from TFUtil import get_var_update_ops, get_variable_grad_from_update_ops
+      for var_name, func in extra_updates.items():
+        func_arg_names = getargspec(func).args
+        assert var_name in vars_by_name, "var with name %r not found. vars:\n%s" % (
+          var_name, "\n".join(sorted(vars_by_name.keys())))
+        var = vars_by_name[var_name]
+        assert isinstance(var, tf.Variable)
+        ops = get_var_update_ops(var, fetches=self.optim_op)
+        with tf.control_dependencies(ops):
+          func_kwargs = {"var": var}
+          if "network" in func_arg_names:
+            func_kwargs["network"] = self.network
+          if "update_ops" in func_arg_names:
+            func_kwargs["update_ops"] = ops
+          if "grad" in func_arg_names:
+            func_kwargs["grad"] = get_variable_grad_from_update_ops(var, ops)
+          op = func(**func_kwargs)
+          assert isinstance(op, (tf.Operation, tf.Tensor))
+          extra_updates_op_list.append(op)
+        self.optim_op = tf.group(self.optim_op, *extra_updates_op_list)
 
     print("Initialize optimizer with slots %s." % self.optimizer.get_slot_names(), file=log.v3)
     slot_vars = []

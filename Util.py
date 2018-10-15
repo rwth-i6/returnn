@@ -27,11 +27,18 @@ if PY3:
   unicode = str
   long = int
   input = builtins.input
+  from io import BytesIO
 else:
   import __builtin__ as builtins
   unicode = builtins.unicode
   long = builtins.long
   input = builtins.raw_input
+  try:
+    # noinspection PyUnresolvedReferences
+    from cStringIO import StringIO as BytesIO
+  except ImportError:
+    # noinspection PyUnresolvedReferences
+    from StringIO import StringIO as BytesIO
 
 my_dir = os.path.dirname(os.path.abspath(__file__))
 
@@ -40,6 +47,11 @@ class NotSpecified(object):
   """
   This is just a placeholder, to be used as default argument to mark that it is not specified.
   """
+  def __str__(self):
+    return "NotSpecified"
+
+  def __repr__(self):
+    return "<NotSpecified>"
 
 
 def is_64bit_platform():
@@ -236,7 +248,7 @@ def get_tensorflow_version_tuple():
   """
   import tensorflow as tf
   import re
-  return tuple([int(re.sub('-rc[0-9]', '', s)) for s in tf.__version__.split(".")])
+  return tuple([int(re.sub('(-rc[0-9]|-dev[0-9]*)', '', s)) for s in tf.__version__.split(".")])
 
 def eval_shell_env(token):
   if token.startswith("$"):
@@ -597,22 +609,28 @@ def find_ranges(l):
   return ranges
 
 
+_thread_join_hack_installed = False
+
+
 def initThreadJoinHack():
-  if PY3:
-    # Not sure if needed, but also, the code below is slightly broken.
+  global _thread_join_hack_installed
+  if _thread_join_hack_installed:  # don't install twice
     return
+  _thread_join_hack_installed = True
   mainThread = threading.currentThread()
   assert isinstance(mainThread, threading._MainThread)
   mainThreadId = thread.get_ident()
 
   # Patch Thread.join().
   join_orig = threading.Thread.join
+
   def join_hacked(threadObj, timeout=None):
     """
     :type threadObj: threading.Thread
     :type timeout: float|None
+    :return: always None
     """
-    if timeout is None and thread.get_ident() == mainThreadId:
+    if thread.get_ident() == mainThreadId and timeout is None:
       # This is a HACK for Thread.join() if we are in the main thread.
       # In that case, a Thread.join(timeout=None) would hang and even not respond to signals
       # because signals will get delivered to other threads and Python would forward
@@ -621,20 +639,59 @@ def initThreadJoinHack():
       # Currently the best solution I can think of:
       while threadObj.isAlive():
         join_orig(threadObj, timeout=0.1)
+    elif thread.get_ident() == mainThreadId and timeout > 0.1:
+      # Limit the timeout. This should not matter for the underlying code.
+      join_orig(threadObj, timeout=0.1)
     else:
       # In all other cases, we can use the original.
       join_orig(threadObj, timeout=timeout)
   threading.Thread.join = join_hacked
 
   # Mostly the same for Condition.wait().
-  cond_wait_orig = threading._Condition.wait
+  if PY3:
+    Condition = threading.Condition
+  else:
+    Condition = threading._Condition
+  cond_wait_orig = Condition.wait
+
   def cond_wait_hacked(cond, timeout=None, *args):
-    if timeout is None and thread.get_ident() == mainThreadId:
-      # Use a timeout anyway. This should not matter for the underlying code.
-      cond_wait_orig(cond, timeout=0.1)
+    if thread.get_ident() == mainThreadId and (timeout is None or timeout > 0.1):
+      # Use a timeout anyway (or shorter). This should not matter for the underlying code.
+      return cond_wait_orig(cond, timeout=0.1)
     else:
-      cond_wait_orig(cond, timeout=timeout)
-  threading._Condition.wait = cond_wait_hacked
+      return cond_wait_orig(cond, timeout=timeout)
+  Condition.wait = cond_wait_hacked
+
+  # And the same for Lock.acquire, very similar to Condition.wait.
+  # However: can't set attributes of built-in/extension type 'thread.lock'.
+  # We could wrap the whole threading.Lock, but that is too annoying for me now...
+  Lock = False
+  if Lock:
+    lock_acquire_orig = Lock.acquire
+
+    # Note: timeout argument was introduced in Python 3.
+    def lock_acquire_hacked(lock, blocking=True, timeout=-1):
+      if not blocking:
+        return lock_acquire_orig(lock, blocking=False)  # no timeout if not blocking
+      # Everything is blocking now.
+      if thread.get_ident() == mainThreadId:
+        if timeout is None or timeout < 0:  # blocking without timeout
+          if PY3:
+            while not lock_acquire_orig(lock, blocking=True, timeout=0.1):
+              pass
+            return True
+          else:  # Python 2. cannot use timeout
+            while not lock_acquire_orig(lock, blocking=False):
+              time.sleep(0.1)
+            return True
+        else:  # timeout is set. (Can only be with Python 3.)
+          # Use a capped timeout. This should not matter for the underlying code.
+          return lock_acquire_orig(lock, blocking=True, timeout=min(timeout, 0.1))
+      # Fallback to default.
+      if PY3:
+        return lock_acquire_orig(lock, blocking=True, timeout=timeout)
+      return lock_acquire_orig(lock, blocking=True)
+    Lock.acquire = lock_acquire_hacked
 
 
 def start_daemon_thread(target, args=()):
@@ -988,6 +1045,11 @@ class NumbersDict:
   """
 
   def __init__(self, auto_convert=None, numbers_dict=None, broadcast_value=None):
+    """
+    :param dict|NumbersDict|T auto_convert: first argument, so that we can automatically convert/copy
+    :param dict numbers_dict:
+    :param T broadcast_value:
+    """
     if auto_convert is not None:
       assert broadcast_value is None
       assert numbers_dict is None
@@ -1050,6 +1112,12 @@ class NumbersDict:
   def values(self):
     return list(self.dict.values()) + ([self.value] if self.value is not None else [])
 
+  def items(self):
+    """
+    :return: dict items. this excludes self.value
+    """
+    return self.dict.items()
+
   def has_values(self):
     return bool(self.dict) or self.value is not None
 
@@ -1063,6 +1131,13 @@ class NumbersDict:
 
   @classmethod
   def bin_op_scalar_optional(cls, self, other, zero, op):
+    """
+    :param T self:
+    :param T other:
+    :param T zero:
+    :param (T,T)->T op:
+    :rtype: T
+    """
     if self is None and other is None:
       return None
     if self is None:
@@ -1073,6 +1148,14 @@ class NumbersDict:
 
   @classmethod
   def bin_op(cls, self, other, op, zero, result=None):
+    """
+    :param NumbersDict|int|float|T self:
+    :param NumbersDict|int|float|T other:
+    :param (T,T)->T op:
+    :param T zero:
+    :param NumbersDict|None result:
+    :rtype: NumbersDict
+    """
     if not isinstance(self, NumbersDict):
       if isinstance(other, NumbersDict):
         self = other.constant_like(self)
@@ -1147,6 +1230,10 @@ class NumbersDict:
       Then, all(res.values()) == False, even when all other values are True.
       This is sometimes not what we want.
       You can control the behavior via result_with_default.
+
+    :param NumbersDict|T other:
+    :param bool result_with_default:
+    :rtype: NumbersDict
     """
     def op(a, b):
       if a is None:
@@ -1160,9 +1247,19 @@ class NumbersDict:
     return res
 
   def __eq__(self, other):
+    """
+    :param NumbersDict|T other:
+    :return: whether self == other elemwise. see self.elem_eq
+    :rtype: bool
+    """
     return all(self.elem_eq(other).values())
 
   def __ne__(self, other):
+    """
+    :param NumbersDict|T other:
+    :return: not (self == other)
+    :rtype: bool
+    """
     return not (self == other)
 
   def __cmp__(self, other):
@@ -1245,6 +1342,12 @@ class NumbersDict:
     """
     return max(self.values())
 
+  def min_value(self):
+    """
+    Minimum of our values.
+    """
+    return min(self.values())
+
   def __repr__(self):
     if self.value is None and not self.dict:
       return "%s()" % self.__class__.__name__
@@ -1268,10 +1371,6 @@ def collect_class_init_kwargs(cls, only_with_default=False):
     kwargs = OrderedDict()
   else:
     kwargs = []
-  if PY3:
-    getargspec = inspect.getfullargspec
-  else:
-    getargspec = inspect.getargspec
   for cls_ in inspect.getmro(cls):
     # Check Python function. Could be builtin func or so. Python 2 getargspec does not work in that case.
     if not inspect.ismethod(cls_.__init__) and not inspect.isfunction(cls_.__init__):
@@ -1290,6 +1389,13 @@ def collect_class_init_kwargs(cls, only_with_default=False):
         if arg not in kwargs:
           kwargs.append(arg)
   return kwargs
+
+
+def getargspec(func):
+  if PY3:
+    return inspect.getfullargspec(func)
+  else:
+    return inspect.getargspec(func)
 
 
 def collect_mandatory_class_init_kwargs(cls):
@@ -1383,14 +1489,20 @@ def attr_chain(base, attribs):
 
 
 def to_bool(v):
+  """
+  :param int|float|str v: if it is a string, it should represent some integer, or alternatively "true" or "false"
+  :rtype: bool
+  """
   try:
     return bool(int(v))
   except ValueError:
     pass
   if isinstance(v, (str, unicode)):
     v = v.lower()
-    if v in ["true", "yes", "on", "1"]: return True
-    if v in ["false", "no", "off", "0"]: return False
+    if v in ["true", "yes", "on", "1"]:
+      return True
+    if v in ["false", "no", "off", "0"]:
+      return False
   raise ValueError("to_bool cannot handle %r" % v)
 
 
@@ -1413,20 +1525,15 @@ def deepcopy(x):
   # See also class Pickler from TaskSystem.
   # Or: https://mail.python.org/pipermail/python-ideas/2013-July/021959.html
   from TaskSystem import Pickler, Unpickler
-  if PY3:
-    from io import BytesIO as StringIO
-  else:
-    # noinspection PyUnresolvedReferences
-    from StringIO import StringIO
 
   def pickle_dumps(obj):
-    sio = StringIO()
+    sio = BytesIO()
     p = Pickler(sio)
     p.dump(obj)
     return sio.getvalue()
 
   def pickle_loads(s):
-    p = Unpickler(StringIO(s))
+    p = Unpickler(BytesIO(s))
     return p.load()
 
   s = pickle_dumps(x)
@@ -1502,6 +1609,13 @@ class CollectionReadCheckCovered:
 
 
 def which(program):
+  """
+  Finds `program` in some of the dirs of the PATH env var.
+
+  :param str program: e.g. "python"
+  :return: full path, e.g. "/usr/bin/python", or None
+  :rtype: str|None
+  """
   def is_exe(fpath):
     return os.path.isfile(fpath) and os.access(fpath, os.X_OK)
 
@@ -1735,6 +1849,7 @@ class LockFile(object):
   def lock(self):
     import time
     import errno
+    wait_count = 0
     while True:
       # Try to create directory if it does not exist.
       try:
@@ -1756,6 +1871,9 @@ class LockFile(object):
       self.maybe_remove_old_lockfile()
       # Wait a bit, and then retry.
       time.sleep(1)
+      wait_count += 1
+      if wait_count == 10:
+        print("Waiting for lock-file: %s" % self.lockfile)
 
   def unlock(self):
     os.close(self.fd)
@@ -1896,6 +2014,27 @@ def read_sge_num_procs(job_id=None):
       exc, opts["num_proc"], job_id, ls[0]))
 
 
+def get_number_available_cpus():
+  """
+  :return: number of available GPUs, if we can figure it out
+  :rtype: int|None
+  """
+  if hasattr(os, "sched_getaffinity"):  # Python >=3.4
+    return len(os.sched_getaffinity(0))
+  try:
+    import psutil
+    proc = psutil.Process()
+    if hasattr(proc, "cpu_affinity"):
+      return len(proc.cpu_affinity())
+  except ImportError:
+    pass
+  if hasattr(os, "sysconf") and "SC_NPROCESSORS_ONLN" in os.sysconf_names:
+    return os.sysconf("SC_NPROCESSORS_ONLN")
+  if hasattr(os, "cpu_count"):  # Python >=3.4
+    return os.cpu_count()  # not quite correct; that are all in the system
+  return None
+
+
 def guess_requested_max_num_threads(log_file=None, fallback_num_cpus=True):
   try:
     sge_num_procs = read_sge_num_procs()
@@ -1914,7 +2053,7 @@ def guess_requested_max_num_threads(log_file=None, fallback_num_cpus=True):
       print("Use num_threads=%i (but min 2) via OMP_NUM_THREADS." % omp_num_threads, file=log_file)
     return max(omp_num_threads, 2)
   if fallback_num_cpus:
-    return os.cpu_count()
+    return get_number_available_cpus()
   return None
 
 
@@ -2005,7 +2144,13 @@ def log_runtime_info_to_dir(path, config):
       "Config files: %s" % (config.files,),
     ]
     if not os.path.exists(path):
-      os.makedirs(path)
+      try:
+        os.makedirs(path)
+      except Exception as exc:
+        print("log_runtime_info_to_dir: exception creating dir:", exc)
+        # Maybe a concurrent process, e.g. tf.summary.FileWriter created it in the mean-while,
+        # so then it would be ok now if it exists, but fail if it does not exist.
+        assert os.path.exists(path)
     log_fn = "%s/returnn.%s.%s.%i.log" % (path, get_utc_start_time_filename_part(), hostname, os.getpid())
     if not os.path.exists(log_fn):
       with open(log_fn, "w") as f:
@@ -2049,7 +2194,7 @@ class NativeCodeCompiler(object):
                is_cpp=True, c_macro_defines=None, ld_flags=None,
                include_paths=(), include_deps=None,
                static_version_name=None, should_cleanup_old_all=True, should_cleanup_old_mydir=False,
-               verbose=False):
+               use_cxx11_abi=False, verbose=False):
     """
     :param str base_name: base name for the module, e.g. "zero_out"
     :param int|tuple[int] code_version: check for the cache whether to reuse
@@ -2087,6 +2232,7 @@ class NativeCodeCompiler(object):
     if should_cleanup_old_all:
       self._cleanup_old()
     self._should_cleanup_old_mydir = should_cleanup_old_mydir
+    self.use_cxx11_abi = use_cxx11_abi
     if self.verbose:
       print("%s: %r" % (self.__class__.__name__, self))
 
@@ -2255,9 +2401,9 @@ class NativeCodeCompiler(object):
       common_opts += ["-undefined", "dynamic_lookup"]
     for include_path in self._include_paths:
       common_opts += ["-I", include_path]
-    compiler_opts = ["-fPIC"]
+    compiler_opts = ["-fPIC", "-v"]
     common_opts += self._transform_compiler_opts(compiler_opts)
-    common_opts += ["-D_GLIBCXX_USE_CXX11_ABI=0"]  # might be obsolete in the future
+    common_opts += ["-D_GLIBCXX_USE_CXX11_ABI=%i" % (1 if self.use_cxx11_abi else 0)]
     common_opts += ["-D%s=%s" % item for item in sorted(self.c_macro_defines.items())]
     common_opts += ["-g"]
     opts = common_opts + [self._c_filename, "-o", self._so_filename]
@@ -2273,12 +2419,16 @@ class NativeCodeCompiler(object):
       print("%s: %s failed." % (self.__class__.__name__, cmd_bin))
       print("Original stdout/stderr:")
       print(stdout.decode("utf8"))
+      print()
+      if cmd_bin.endswith("/nvcc") and b"error: constexpr function return is non-constant" in stdout:
+        print("This might be the error: https://github.com/tensorflow/tensorflow/issues/22766")
+        print()
       raise CalledProcessError(returncode=proc.returncode, cmd=cmd_args)
     assert os.path.exists(self._so_filename)
     with open("%s/compile.log" % self._mod_path, "wb") as f:
       if self.verbose:
         print("%s: write compile log to: %s" % (self.__class__.__name__, f.name))
-      f.write(("+ %s" % " ".join(cmd_args)).encode("utf8"))
+      f.write(("+ %s\n" % " ".join(cmd_args)).encode("utf8"))
       f.write(stdout)
     self._save_info()
     assert not self._need_recompile()
@@ -2693,7 +2843,7 @@ def binary_search_any(cmp, low, high):
       high = mid
     else:
       return mid
-  return None
+  return low
 
 
 def generic_import_module(filename):
@@ -2739,3 +2889,95 @@ def softmax(x, axis=None):
     import numpy
     e_x = numpy.exp(x - numpy.max(x, axis=axis, keepdims=True))
     return e_x / numpy.sum(e_x, axis=axis, keepdims=True)
+
+
+def collect_proc_maps_exec_files():
+  """
+  Currently only works on Linux...
+
+  :return: list of mapped executables (libs)
+  :rtype: list[str]
+  """
+  import re
+  pid = os.getpid()
+  fns = []
+  for line in open("/proc/%i/maps" % pid, 'r').read().splitlines():  # for each mapped region
+    # https://stackoverflow.com/questions/1401359/understanding-linux-proc-id-maps
+    # address           perms offset  dev   inode   pathname
+    # E.g.:
+    # 7ff2de91c000-7ff2de91e000 rw-p 0017c000 08:02 794844                     /usr/lib/x86_64-linux-gnu/libstdc+...
+    m = re.match(
+      r'^([0-9A-Fa-f]+)-([0-9A-Fa-f]+)\s+([rwxps\-]+)\s+([0-9A-Fa-f]+)\s+([0-9A-Fa-f:]+)\s+([0-9]+)\s*(.*)$', line)
+    assert m, "no match for %r" % line
+    address_start, address_end, perms, offset, dev, i_node, path_name = m.groups()
+    if "x" not in perms:
+      continue
+    if not path_name or path_name.startswith("["):
+      continue
+    if path_name not in fns:
+      fns.append(path_name)
+  return fns
+
+
+def find_sym_in_exec(fn, sym):
+  """
+  Uses ``objdump`` to list available symbols, and filters them by the given ``sym``.
+
+  :param str fn: path
+  :param str sym:
+  :return: matched out, or None
+  :rtype: str|None
+  """
+  from subprocess import CalledProcessError
+  objdump = "objdump -T"
+  if sys.platform == "darwin":
+    objdump = "otool -IHGv"
+  cmd = "%s %s | grep %s" % (objdump, fn, sym)
+  try:
+    out = sysexecOut(cmd, shell=True)
+  except CalledProcessError:  # none found
+    return None
+  assert isinstance(out, (str, unicode))
+  out_lns = out.splitlines()
+  out_lns = [ln for ln in out_lns if ".text" in ln]  # see objdump
+  out_lns = [ln for ln in out_lns if sym in ln.split()]
+  if not out_lns:
+    return None
+  return "Found %r in %r:\n%s" % (sym, fn, "\n".join(out_lns))
+
+
+def dummy_numpy_gemm_call():
+  import numpy
+  a = numpy.random.randn(5, 3).astype(numpy.float32)
+  b = numpy.random.randn(3, 7).astype(numpy.float32)
+  c = numpy.dot(a, b)
+  assert numpy.isfinite(c).all()
+
+
+_find_sgemm_lib_from_runtime_cached = None
+
+
+def find_sgemm_libs_from_runtime():
+  """
+  Looks through all libs via :func:`collect_proc_maps_exec_files`,
+  and searches for all which have the ``sgemm`` symbol.
+  Currently only works on Linux (because collect_proc_maps_exec_files).
+
+  :return: list of libs (their path)
+  :rtype: list[str]
+  """
+  if not os.path.exists("/proc"):
+    return None
+  global _find_sgemm_lib_from_runtime_cached
+  if _find_sgemm_lib_from_runtime_cached is not None:
+    return _find_sgemm_lib_from_runtime_cached
+  dummy_numpy_gemm_call()  # make sure that Numpy is loaded and Numpy sgemm is available
+  fns = collect_proc_maps_exec_files()
+  fns_with_sgemm = []
+  for fn in fns:
+    out = find_sym_in_exec(fn, "sgemm_")
+    if out:
+      fns_with_sgemm.append(fn)
+  _find_sgemm_lib_from_runtime_cached = fns_with_sgemm
+  return fns_with_sgemm
+
