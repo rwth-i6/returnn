@@ -1884,6 +1884,7 @@ class LinearLayer(_ConcatInputLayer):
 
   def __init__(self, activation, with_bias=True, grad_filter=None,
                forward_weights_init="glorot_uniform", bias_init=0.0,
+               out_feature_dim=None,
                **kwargs):
     """
     :param str|None activation: e.g. "relu", or None
@@ -1892,6 +1893,7 @@ class LinearLayer(_ConcatInputLayer):
     :param str forward_weights_init: see :func:`TFUtil.get_initializer`
     :param str recurrent_weights_init: see :func:`TFUtil.get_initializer`
     :param str|float bias_init: see :func:`TFUtil.get_initializer`
+    :param int|None out_feature_dim: if set, will convert feature dim of the input and output data
     """
     super(LinearLayer, self).__init__(**kwargs)
     from TFUtil import get_initializer
@@ -1899,7 +1901,11 @@ class LinearLayer(_ConcatInputLayer):
     self.activation = activation
     self.with_bias = with_bias
 
-    input_data = self.input_data
+    if out_feature_dim is None:
+      input_data = self.input_data
+    else:
+      input_data = self.input_data.copy_with_feature_dim_axis(out_feature_dim)
+      self.output = self.output.copy_with_feature_dim_axis(out_feature_dim)
     n_in = input_data.dim
     n_out = self.output.dim
     assert n_in and n_out, "%r and %r" % (input_data, self.output)
@@ -1954,8 +1960,10 @@ class LinearLayer(_ConcatInputLayer):
       self.output_before_activation = OutputWithActivation(x)
     x = self.output_before_activation.y
 
-    assert self.output.batch_dim_axis == self.input_data.batch_dim_axis
-    assert self.output.time_dim_axis == self.input_data.time_dim_axis
+    if out_feature_dim is None:
+      assert self.output.batch_dim_axis == self.input_data.batch_dim_axis
+      assert self.output.time_dim_axis == self.input_data.time_dim_axis
+
     self.output.placeholder = x
 
 
