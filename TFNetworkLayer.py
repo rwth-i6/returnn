@@ -1884,7 +1884,7 @@ class LinearLayer(_ConcatInputLayer):
 
   def __init__(self, activation, with_bias=True, grad_filter=None,
                forward_weights_init="glorot_uniform", bias_init=0.0,
-               out_feature_dim=None,
+               out_feature_dim_axis=None,
                **kwargs):
     """
     :param str|None activation: e.g. "relu", or None
@@ -1893,7 +1893,7 @@ class LinearLayer(_ConcatInputLayer):
     :param str forward_weights_init: see :func:`TFUtil.get_initializer`
     :param str recurrent_weights_init: see :func:`TFUtil.get_initializer`
     :param str|float bias_init: see :func:`TFUtil.get_initializer`
-    :param int|None out_feature_dim: if set, will convert feature dim of the input and output data
+    :param int|None out_feature_dim_axis: if set, will convert feature dim of the input and output data
     """
     super(LinearLayer, self).__init__(**kwargs)
     from TFUtil import get_initializer
@@ -1901,11 +1901,10 @@ class LinearLayer(_ConcatInputLayer):
     self.activation = activation
     self.with_bias = with_bias
 
-    if out_feature_dim is None:
+    if out_feature_dim_axis is None:
       input_data = self.input_data
     else:
-      input_data = self.input_data.copy_with_feature_dim_axis(out_feature_dim)
-      self.output = self.output.copy_with_feature_dim_axis(out_feature_dim)
+      input_data = self.input_data.copy_with_feature_dim_axis(out_feature_dim_axis)
     n_in = input_data.dim
     n_out = self.output.dim
     assert n_in and n_out, "%r and %r" % (input_data, self.output)
@@ -1960,11 +1959,36 @@ class LinearLayer(_ConcatInputLayer):
       self.output_before_activation = OutputWithActivation(x)
     x = self.output_before_activation.y
 
-    if out_feature_dim is None:
+    if out_feature_dim_axis is None:
       assert self.output.batch_dim_axis == self.input_data.batch_dim_axis
       assert self.output.time_dim_axis == self.input_data.time_dim_axis
 
     self.output.placeholder = x
+
+  @classmethod
+  def _get_out_type_from_opts(cls, n_out, sources=(), out_feature_dim_axis=None,
+                              **kwargs):
+    if out_feature_dim_axis is None:
+      return None
+    data = get_concat_sources_data_template(sources)
+    data = data.copy_with_feature_dim_axis(out_feature_dim_axis)
+
+    shape = list(data.shape)
+    shape[out_feature_dim_axis] = n_out
+    time_dim_axis = data.time_dim_axis
+
+    return {
+      "dim": n_out,
+      "shape": tuple(shape),
+      "batch_dim_axis": 0,
+      "time_dim_axis": time_dim_axis,
+      "feature_dim_axis": out_feature_dim_axis,
+      "sparse": False}
+
+  @classmethod
+  def get_out_data_from_opts(cls, **kwargs):
+    out_type = cls._get_out_type_from_opts(**kwargs)
+    return super(LinearLayer, cls).get_out_data_from_opts(out_type=out_type, **kwargs)
 
 
 class SoftmaxLayer(LinearLayer):
