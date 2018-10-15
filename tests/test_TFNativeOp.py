@@ -888,7 +888,8 @@ def check_lstm_grad_ops_single(op1, op2, name1, name2, dy, dd, rtol=1e-7, exclud
     pprint(all_ops)
   assert isinstance(dWr1, tf.Tensor)
   print("dWr1 op:", dWr1.op)
-  v_op_ins, v_op_outs = session.run([list(dWr1.op.inputs), list(dWr1.op.outputs)])
+  print("dWr2 op:", dWr2.op)
+  v_op_ins, v_op_outs, vdWr1_, vdWr2_ = session.run([list(dWr1.op.inputs), list(dWr1.op.outputs), dWr1, dWr2])
   if not_all_close:
     print("inputs:")
     for x, v in zip(dWr1.op.inputs, v_op_ins):
@@ -898,8 +899,14 @@ def check_lstm_grad_ops_single(op1, op2, name1, name2, dy, dd, rtol=1e-7, exclud
     for x, v in zip(dWr1.op.outputs, v_op_outs):
       print("%s:" % x)
       print(v)
+    print("dWr1:")
+    print(vdWr1_)
+    print("dWr2:")
+    print(vdWr2_)
+  assert_allclose(vdWr1_, vdWr2_, rtol=rtol, err_msg="mismatch for dWr (extra run)")
   for i in range(5):  # run multiple times. maybe this triggers an exception
-    v_op_outs_direct = session.run(list(dWr1.op.outputs), {x: v for (x, v) in zip(dWr1.op.inputs, v_op_ins)})
+    v_op_outs_direct, vdWr1_, vdWr2_ = session.run(
+      [list(dWr1.op.outputs), dWr1, dWr2], {x: v for (x, v) in zip(dWr1.op.inputs, v_op_ins)})
     if not_all_close:
       print("outputs direct:")
       for x, v, v_ in zip(dWr1.op.outputs, v_op_outs_direct, v_op_outs):
@@ -907,6 +914,7 @@ def check_lstm_grad_ops_single(op1, op2, name1, name2, dy, dd, rtol=1e-7, exclud
         print(v)
     for x, v, v_ in zip(dWr1.op.outputs, v_op_outs_direct, v_op_outs):
       assert_allclose(v, v_, rtol=rtol, err_msg="mismatch for %s" % x)
+    assert_allclose(vdWr1_, vdWr2_, rtol=rtol, err_msg="mismatch for dWr (extra run %i)" % i)
   if not_all_close:
     raise Exception("not all close: %r" % (not_all_close,))
 
