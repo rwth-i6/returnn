@@ -1974,7 +1974,7 @@ class SoftmaxLayer(LinearLayer):
   layer_class = "softmax"
 
   def __init__(self, activation="softmax", **kwargs):
-    super(SoftmaxLayer, self).__init__(activation=activation, **kwargs)
+    super(SoftmaxLayer, self).__init__(activation=activation, out_feature_dim=-1, **kwargs)
 
 
 class LengthLayer(LayerBase):
