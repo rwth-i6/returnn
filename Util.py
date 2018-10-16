@@ -617,34 +617,34 @@ def initThreadJoinHack():
   if _thread_join_hack_installed:  # don't install twice
     return
   _thread_join_hack_installed = True
-  mainThread = threading.currentThread()
-  assert isinstance(mainThread, threading._MainThread)
-  mainThreadId = thread.get_ident()
+  main_thread = threading.currentThread()
+  assert isinstance(main_thread, threading._MainThread)
+  main_thread_id = thread.get_ident()
 
   # Patch Thread.join().
   join_orig = threading.Thread.join
 
-  def join_hacked(threadObj, timeout=None):
+  def join_hacked(thread_obj, timeout=None):
     """
-    :type threadObj: threading.Thread
+    :type thread_obj: threading.Thread
     :type timeout: float|None
     :return: always None
     """
-    if thread.get_ident() == mainThreadId and timeout is None:
+    if thread.get_ident() == main_thread_id and timeout is None:
       # This is a HACK for Thread.join() if we are in the main thread.
       # In that case, a Thread.join(timeout=None) would hang and even not respond to signals
       # because signals will get delivered to other threads and Python would forward
       # them for delayed handling to the main thread which hangs.
       # See CPython signalmodule.c.
       # Currently the best solution I can think of:
-      while threadObj.isAlive():
-        join_orig(threadObj, timeout=0.1)
-    elif thread.get_ident() == mainThreadId and timeout > 0.1:
+      while thread_obj.isAlive():
+        join_orig(thread_obj, timeout=0.1)
+    elif thread.get_ident() == main_thread_id and timeout > 0.1:
       # Limit the timeout. This should not matter for the underlying code.
-      join_orig(threadObj, timeout=0.1)
+      join_orig(thread_obj, timeout=0.1)
     else:
       # In all other cases, we can use the original.
-      join_orig(threadObj, timeout=timeout)
+      join_orig(thread_obj, timeout=timeout)
   threading.Thread.join = join_hacked
 
   # Mostly the same for Condition.wait().
@@ -655,9 +655,15 @@ def initThreadJoinHack():
   cond_wait_orig = Condition.wait
 
   def cond_wait_hacked(cond, timeout=None, *args):
-    if thread.get_ident() == mainThreadId and (timeout is None or timeout > 0.1):
-      # Use a timeout anyway (or shorter). This should not matter for the underlying code.
-      return cond_wait_orig(cond, timeout=0.1)
+    if thread.get_ident() == main_thread_id and (timeout is None or timeout > 0.1):
+      # There is some code (e.g. multiprocessing.pool) which relies on that
+      # we respect the real specified timeout.
+      start_time = time.time()
+      while True:
+        if cond_wait_orig(cond, timeout=0.1):
+          return True
+        if timeout is not None and time.time() - start_time >= timeout:
+          return False
     else:
       return cond_wait_orig(cond, timeout=timeout)
   Condition.wait = cond_wait_hacked
@@ -674,7 +680,7 @@ def initThreadJoinHack():
       if not blocking:
         return lock_acquire_orig(lock, blocking=False)  # no timeout if not blocking
       # Everything is blocking now.
-      if thread.get_ident() == mainThreadId:
+      if thread.get_ident() == main_thread_id:
         if timeout is None or timeout < 0:  # blocking without timeout
           if PY3:
             while not lock_acquire_orig(lock, blocking=True, timeout=0.1):
