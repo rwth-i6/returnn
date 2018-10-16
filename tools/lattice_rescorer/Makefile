@@ -25,7 +25,7 @@ CXXFLAGS = -std=c++0x -O2 -m64 -mtune=native -fopenmp -g -D_GLIBCXX_USE_CXX11_AB
            -I$(TENSORFLOW)/bazel-out/k8-py3-opt/genfiles/tensorflow/cc/ops \
            -I$(TENSORFLOW)/tensorflow/contrib/makefile/downloads/eigen \
            -I$(TENSORFLOW)/tensorflow/contrib/makefile/downloads/nsync/public \
-           -I$(TENSORFLOW)/tensorflow/contrib/makefile/downloads/protobuf/src 
+           -I$(TENSORFLOW)/tensorflow/contrib/makefile/downloads/protobuf/src
 
 
 
@@ -46,23 +46,23 @@ LDFLAGS := -L$(BOOST)/lib -lboost_program_options -lboost_filesystem \
            -Wl,-rpath,/u/deng/.local/lib/python3.6/site-packages/numpy/.libs
 
 # default rule
-all: dep rwthlm
+all: dep lattice_rescorer
 
 -include $(DEPENDFILE) # "-" means do not stop if file does not exist
 
-rwthlm: $(OBJ)
+lattice_rescorer: $(OBJ)
 
 .PHONY: clean dep
 
 clean:
-	rm -f *.o rwthlm
+	rm -f *.o lattice_rescorer
 
 dep: $(SRC)
 	$(CXX) $(CXXFLAGS) -MM $(SRC) > $(DEPENDFILE)
 
 # implicit rules (-n show commands, -r no implicit rules)
-rwthlm: $(OBJ)
-	$(CXX) $(CXXFLAGS) -o rwthlm $(OBJ) $(LDFLAGS)
+lattice_rescorer: $(OBJ)
+	$(CXX) $(CXXFLAGS) -o lattice_rescorer $(OBJ) $(LDFLAGS)
 $(OBJ): $(SRC)
 	$(CXX) $(CXXFLAGS) -o $@ -c $(@:%.o=%.cc)
 # CXX = g++
