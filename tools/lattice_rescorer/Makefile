@@ -1,0 +1,68 @@
+SRC = main.cc htklatticerescorer.cc vocabulary.cc
+OBJ = $(SRC:%.cc=%.o)
+DEPENDFILE = .depend
+BOOST = /work/speech/tools/boost/boost_1_53_0
+INTEL = /work/speech/tools/intel-composer
+
+LOCAL = /u/deng/.local
+TENSORFLOW = /u/deng/tensorflow
+CUDA=/usr/local/cuda-9.0
+CUDNN_v7.0=/u/deng/.local/cudnn-9.0-v7.0
+
+# compiler binary
+##CXX = /work/speech/tools/gcc-4.8.0/x64/gcc-4.8.0/bin/g++
+CXX = g++
+#g++-4.8
+
+# compiler and linker options
+CXXFLAGS = -std=c++0x -O2 -m64 -mtune=native -fopenmp -g -D_GLIBCXX_USE_CXX11_ABI=0 \
+           -I. -I$(BOOST)/include \
+           -I$(INTEL)/ipp/include \
+           -I$(INTEL)/mkl/include \
+	   -I/u/deng/.local/include \
+           -I$(TENSORFLOW)/bazel-tensorflow/external/protobuf_archive/src \
+           -I$(TENSORFLOW)/bazel-genfiles -I$(TENSORFLOW) \
+           -I$(TENSORFLOW)/bazel-out/k8-py3-opt/genfiles/tensorflow/cc/ops \
+           -I$(TENSORFLOW)/tensorflow/contrib/makefile/downloads/eigen \
+           -I$(TENSORFLOW)/tensorflow/contrib/makefile/downloads/nsync/public \
+           -I$(TENSORFLOW)/tensorflow/contrib/makefile/downloads/protobuf/src 
+
+
+
+LDFLAGS := -L$(BOOST)/lib -lboost_program_options -lboost_filesystem \
+                          -lboost_system -lboost_random -lboost_iostreams -lm \
+           -L$(INTEL)/ipp/lib/intel64 -lippcore -lipps \
+           -L$(INTEL)/lib/intel64 -liomp5 \
+           -L$(INTEL)/mkl/lib/intel64 -lmkl_rt \
+           -L$(TENSORFLOW)/bazel-bin/tensorflow -ltensorflow_cc -ltensorflow -ltensorflow_framework \
+           -lpthread \
+           -Wl,-rpath,$(BOOST)/lib \
+           -Wl,-rpath,$(INTEL)/ipp/lib/intel64 \
+           -Wl,-rpath,$(INTEL)/lib/intel64 \
+           -Wl,-rpath,$(INTEL)/mkl/lib/intel64 \
+           -Wl,-rpath,$(LOCAL)/lib \
+           -Wl,-rpath,$(CUDA)/lib64 \
+           -Wl,-rpath,$(CUDNN_v7.0)/lib64 \
+           -Wl,-rpath,/u/deng/.local/lib/python3.6/site-packages/numpy/.libs
+
+# default rule
+all: dep rwthlm
+
+-include $(DEPENDFILE) # "-" means do not stop if file does not exist
+
+rwthlm: $(OBJ)
+
+.PHONY: clean dep
+
+clean:
+	rm -f *.o rwthlm
+
+dep: $(SRC)
+	$(CXX) $(CXXFLAGS) -MM $(SRC) > $(DEPENDFILE)
+
+# implicit rules (-n show commands, -r no implicit rules)
+rwthlm: $(OBJ)
+	$(CXX) $(CXXFLAGS) -o rwthlm $(OBJ) $(LDFLAGS)
+$(OBJ): $(SRC)
+	$(CXX) $(CXXFLAGS) -o $@ -c $(@:%.o=%.cc)
+# CXX = g++
