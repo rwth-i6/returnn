@@ -862,14 +862,25 @@ def check_lstm_grad_ops_single(op1, op2, name1, name2, dy, dd, rtol=1e-7, exclud
       print("ERROR, not all close %s1 vs %s2" % (k, k))
       print("%s1:" % k)
       print(v1)
-      print("%s2:")
+      print("%s2:" % k)
       print(v2)
       not_all_close.append(k)
       if numpy.isnan(v1).any():
         nan_tensors.append(locals()[k + "1"])
       if numpy.isnan(v2).any():
         nan_tensors.append(locals()[k + "2"])
+  assert isinstance(dWr1, tf.Tensor) and isinstance(dWr1, tf.Tensor)
+  print("dWr1 op:", dWr1.op.name, dWr1.op.type)
+  print("dWr2 op:", dWr2.op.name, dWr2.op.type)
+  if dWr1 in nan_tensors:
+    example_dWr = dWr1
+  elif dWr2 in nan_tensors:
+    example_dWr = dWr2
+  else:
+    example_dWr = dWr1
+  print("example dWr op:", example_dWr.op.name, example_dWr.op.type)
   if not_all_close:
+    print("not all close (%r). print some debug info." % (not_all_close,))
     if nan_tensors:
       print("Have nan tensors:", nan_tensors)
       from TFUtil import add_check_numerics_ops
@@ -879,40 +890,40 @@ def check_lstm_grad_ops_single(op1, op2, name1, name2, dy, dd, rtol=1e-7, exclud
       except tf.errors.OpError as exc:
         print("As expected, got TF exception with add_check_numerics_ops:")
         print(exc)
+    print("graph of %s:" % example_dWr.name)
     from TFUtil import print_graph_output
-    print_graph_output(dWr1)
+    print_graph_output(example_dWr)
     from tensorflow.contrib import graph_editor
     all_ops = graph_editor.get_backward_walk_ops(
-      [y1, dWr1, y2, dWr2], inclusive=True, stop_at_ts=[dy, dd])
+      [y1, dWr1, y2, dWr2, example_dWr], inclusive=True, stop_at_ts=[dy, dd])
     print("all relevant ops:")
     pprint(all_ops)
-  assert isinstance(dWr1, tf.Tensor)
-  print("dWr1 op:", dWr1.op)
-  print("dWr2 op:", dWr2.op)
-  v_op_ins, v_op_outs, vdWr1_, vdWr2_ = session.run([list(dWr1.op.inputs), list(dWr1.op.outputs), dWr1, dWr2])
+  v_op_ins, v_op_outs, vdWr1_, vdWr2_ = session.run(
+    [list(example_dWr.op.inputs), list(example_dWr.op.outputs), dWr1, dWr2])
   if not_all_close:
     print("inputs:")
-    for x, v in zip(dWr1.op.inputs, v_op_ins):
+    for x, v in zip(example_dWr.op.inputs, v_op_ins):
       print("%s:" % x)
       print(v)
     print("outputs:")
-    for x, v in zip(dWr1.op.outputs, v_op_outs):
+    for x, v in zip(example_dWr.op.outputs, v_op_outs):
       print("%s:" % x)
       print(v)
     print("dWr1:")
     print(vdWr1_)
     print("dWr2:")
     print(vdWr2_)
-  assert_allclose(vdWr1_, vdWr2_, rtol=rtol, err_msg="mismatch for dWr (extra run)")
+  if not numpy.allclose(vdWr1_, vdWr2_, rtol=rtol, equal_nan=True):
+    not_all_close.append("dWr (extra run)")
   for i in range(5):  # run multiple times. maybe this triggers an exception
     v_op_outs_direct, vdWr1_, vdWr2_ = session.run(
-      [list(dWr1.op.outputs), dWr1, dWr2], {x: v for (x, v) in zip(dWr1.op.inputs, v_op_ins)})
+      [list(example_dWr.op.outputs), dWr1, dWr2], {x: v for (x, v) in zip(example_dWr.op.inputs, v_op_ins)})
     if not_all_close:
       print("outputs direct:")
-      for x, v, v_ in zip(dWr1.op.outputs, v_op_outs_direct, v_op_outs):
+      for x, v, v_ in zip(example_dWr.op.outputs, v_op_outs_direct, v_op_outs):
         print("%s:" % x)
         print(v)
-    for x, v, v_ in zip(dWr1.op.outputs, v_op_outs_direct, v_op_outs):
+    for x, v, v_ in zip(example_dWr.op.outputs, v_op_outs_direct, v_op_outs):
       assert_allclose(v, v_, rtol=rtol, err_msg="mismatch for %s" % x)
     assert_allclose(vdWr1_, vdWr2_, rtol=rtol, err_msg="mismatch for dWr (extra run %i)" % i)
   if not_all_close:
