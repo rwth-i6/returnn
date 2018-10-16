@@ -893,7 +893,7 @@ class _SubnetworkRecCell(object):
     :param set[str] needed_outputs: layers where we need outputs
     """
     from TFNetwork import TFNetwork
-    from TFNetworkLayer import InternalLayer
+    from TFNetworkLayer import InternalLayer, ExtendWithBeamLayer
     from TFUtil import tile_transposed
     needed_beam_size = self.layer_data_templates["output"].output.beam_size
     if data is not None:
@@ -983,13 +983,12 @@ class _SubnetworkRecCell(object):
           if needed_beam_size:
             assert not layer.output.beam_size
             if layer.output.beam_size != needed_beam_size:
-              layer_copy = self.net.add_layer(
+              layer = self.net.add_layer(
                 name="%s_copy_extend_with_beam_%i" % (name, needed_beam_size),
-                output=layer.output.copy_extend_with_beam(needed_beam_size),
-                layer_class=InternalLayer)
-              layer_copy.params.update(layer.params)  # maybe ReuseParams wants to access it or so
-              extended_layers[name] = layer_copy
-              layer = layer_copy
+                base_layer=layer,
+                beam_size=needed_beam_size,
+                layer_class=ExtendWithBeamLayer)
+              extended_layers[name] = layer
           assert layer.output.beam_size == needed_beam_size
         return layer
       if name in self.input_layers_moved_out:
