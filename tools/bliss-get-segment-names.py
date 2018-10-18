@@ -33,6 +33,10 @@ class BlissItem:
     keys = ["segment_name", "recording_filename", "start_time", "end_time", "orth"]
     return "BlissItem(%s)" % ", ".join(["%s=%r" % (key, getattr(self, key)) for key in keys])
 
+  @property
+  def delta_time(self):
+    return self.end_time - self.start_time
+
 
 def iter_bliss(filename):
   """
@@ -86,6 +90,7 @@ def main():
   arg_parser.add_argument("--output_type", default="", help="e.g. segment_name")
   arg_parser.add_argument("--merge_swb_ab", action="store_true")
   arg_parser.add_argument("--sort_by_time", action="store_true")
+  arg_parser.add_argument("--merge_segs_up_to_time", type=float)
   args = arg_parser.parse_args()
   rec_filenames = set()
   items_by_rec = {}
@@ -108,15 +113,40 @@ def main():
     assert isinstance(ls, list)
     if args.sort_by_time:
       ls.sort(key=lambda item: item.start_time)
+  if args.merge_segs_up_to_time:
+    for key, ls in items_by_rec.items():
+      i = 0
+      while i < len(ls):
+        j = i + 1
+        dt = ls[i].delta_time
+        while j < len(ls):
+          if dt + ls[j].delta_time > args.merge_segs_up_to_time:
+            break
+          dt += ls[j].delta_time
+          j += 1
+        if j > i + 1:
+          ls[i:j] = [BlissItem(
+            segment_name=";".join([item.segment_name for item in ls[i:j]]),
+            recording_filename=ls[i].recording_filename,  # might be wrong if merge_swb_ab...
+            start_time=0.0, end_time=dt,  # dummy times
+            orth=" ".join([item.orth for item in ls[i:j]]))]
+        i += 1
+  output_types = args.output_type.split(",")
+  for key, ls in items_by_rec.items():
+    assert isinstance(ls, list)
     for item in ls:
       assert isinstance(item, BlissItem)
-      if not args.output_type:
+      if not output_types:
         print(item)
       else:
-        print(getattr(item, args.output_type))
+        print(" ".join([str(getattr(item, key)) for key in output_types]))
 
 
 if __name__ == "__main__":
   import better_exchook
   better_exchook.install()
-  main()
+  try:
+    main()
+  except BrokenPipeError:
+    print("BrokenPipeError")
+    sys.exit(1)
