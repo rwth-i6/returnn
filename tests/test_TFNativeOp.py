@@ -927,6 +927,7 @@ def check_lstm_grad_ops_single(op1, op2, name1, name2, dy, dd, rtol=1e-7, exclud
       assert_allclose(v, v_, rtol=rtol, err_msg="mismatch for %s" % x)
     assert_allclose(vdWr1_, vdWr2_, rtol=rtol, err_msg="mismatch for dWr (extra run %i)" % i)
   if not_all_close:
+    print("raise exception now: not all close: %r" % (not_all_close,))
     raise Exception("not all close: %r" % (not_all_close,))
 
 
