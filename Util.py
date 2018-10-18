@@ -655,15 +655,15 @@ def initThreadJoinHack():
   cond_wait_orig = Condition.wait
 
   def cond_wait_hacked(cond, timeout=None, *args):
-    if thread.get_ident() == main_thread_id and (timeout is None or timeout > 0.1):
+    if thread.get_ident() == main_thread_id:
+      if timeout is None:
+        # Use a timeout anyway. This should not matter for the underlying code.
+        return cond_wait_orig(cond, timeout=0.1)
       # There is some code (e.g. multiprocessing.pool) which relies on that
       # we respect the real specified timeout.
-      start_time = time.time()
-      while True:
-        if cond_wait_orig(cond, timeout=0.1):
-          return True
-        if timeout is not None and time.time() - start_time >= timeout:
-          return False
+      # However, we cannot do multiple repeated calls to cond_wait_orig as we might miss the condition notify.
+      # But in some Python versions, the underlying cond_wait_orig will anyway also use sleep.
+      return cond_wait_orig(cond, timeout=timeout)
     else:
       return cond_wait_orig(cond, timeout=timeout)
   Condition.wait = cond_wait_hacked
