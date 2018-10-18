@@ -327,6 +327,22 @@ def model_epoch_from_filename(filename):
     return int(m.groups()[0])
 
 
+def deep_update_dict_values(d, key, new_value):
+  """
+  Visits all items in `d`.
+  If the value is a dict, it will recursively visit it.
+
+  :param dict[str,T|object|None|dict] d: will update inplace
+  :param str key:
+  :param T new_value:
+  """
+  for value in d.values():
+    if isinstance(value, dict):
+      deep_update_dict_values(value, key=key, new_value=new_value)
+  if key in d:
+    d[key] = new_value
+
+
 def terminal_size(file=sys.stdout):  # this will probably work on linux only
   import os, sys, io
   if not hasattr(file, "fileno"):

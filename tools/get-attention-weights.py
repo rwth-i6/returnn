@@ -30,7 +30,7 @@ import rnn
 from Log import log
 from TFEngine import Runner
 from Dataset import init_dataset
-from Util import NumbersDict, Stats
+from Util import NumbersDict, Stats, deep_update_dict_values
 
 
 def inject_retrieval_code(net_dict, rec_layer_name, layers, dropout):
@@ -69,23 +69,9 @@ def inject_retrieval_code(net_dict, rec_layer_name, layers, dropout):
     # assert that sub_layer inside subnet is a output-layer
     new_layers_descr[rec_layer_name]['unit'][sub_layer]["is_output_layer"] = True
 
-  def visit(net_dict):
-    """
-    :param dict[str] net_dict: layer name -> opts
-    """
-    assert isinstance(net_dict, dict)
-    for layer_name, d in net_dict.items():
-      assert isinstance(layer_name, str) and isinstance(d, dict)
-      assert "class" in d
-      if dropout is not None and "dropout" in d:
-        d["dropout"] = dropout
-      if d["class"] == "rec":
-        if isinstance(d["unit"], dict):
-          visit(d["unit"])
-      if d["class"] == "subnetwork":
-        visit(d["subnetwork"])
-
-  visit(new_layers_descr)
+  if dropout is not None:
+    deep_update_dict_values(net_dict, "dropout", dropout)
+    deep_update_dict_values(net_dict, "rec_weight_dropout", dropout)
   return new_layers_descr
 
 
