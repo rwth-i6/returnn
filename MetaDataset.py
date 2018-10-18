@@ -642,6 +642,85 @@ class CombinedDataset(CachedDataset2):
     return self.data_dims[key][0]
 
 
+class ConcatSeqsDataset(CachedDataset2):
+  """
+  This takes another dataset, and concatenates one or multiple seqs.
+  """
+  def __init__(self, dataset, seq_list_file, seq_tag_delim=";", **kwargs):
+    """
+    :param dict[str] dataset: kwargs for init_dataset
+    :param str seq_list_file: filename. line-separated. seq_tag_delim.join(seq_tags) for concatenated seqs
+    :param str seq_tag_delim:
+    """
+    super(ConcatSeqsDataset, self).__init__(**kwargs)
+    self.sub_dataset = init_dataset(dataset)
+    self.num_outputs = self.sub_dataset.num_outputs
+    self.num_inputs = self.sub_dataset.num_inputs
+    self.labels = self.sub_dataset.labels
+    self.full_seq_list = open(seq_list_file).read().splitlines()
+    self.cur_seq_list = None
+    self.cur_sub_seq_idxs = None
+    self.seq_tag_delim = seq_tag_delim
+
+  def init_seq_order(self, epoch=None, seq_list=None):
+    super(ConcatSeqsDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+    assert not seq_list
+    if not seq_list:
+      seq_order = self.get_seq_order_for_epoch(epoch=epoch, num_seqs=len(self.full_seq_list))
+      seq_list = [self.full_seq_list[i] for i in seq_order]
+    self.cur_seq_list = seq_list
+    self._num_seqs = len(seq_list)
+    sub_seq_list = []
+    sub_seq_idxs = []
+    sub_seq_idx = 0
+    for seq_tag in seq_list:
+      sub_seq_tags = seq_tag.split(self.seq_tag_delim)
+      sub_seq_idxs.append(list(range(sub_seq_idx, sub_seq_idx + len(sub_seq_tags))))
+      sub_seq_idx = sub_seq_idxs[-1][-1]
+      sub_seq_list.extend(sub_seq_tags)
+    assert sub_seq_idx == len(sub_seq_list)
+    self.cur_sub_seq_idxs = sub_seq_idxs
+    return self.sub_dataset.init_seq_order(seq_list=sub_seq_list)
+
+  def _collect_single_seq(self, seq_idx):
+    """
+    :param int seq_idx:
+    :rtype: DatasetSeq | None
+    :returns DatasetSeq or None if seq_idx >= num_seqs.
+    """
+    assert self.cur_seq_list is not None, "call init_seq_order"
+    if seq_idx >= len(self.cur_seq_list):
+      return None
+    seq_tag = self.cur_seq_list[seq_idx]
+    sub_seq_idxs = self.cur_sub_seq_idxs[seq_idx]
+    features = {key: [] for key in self.get_data_keys()}
+    for sub_seq_idx in sub_seq_idxs:
+      self.sub_dataset.load_seqs(sub_seq_idx, sub_seq_idx + 1)
+      for key in self.get_data_keys():
+        data = self.sub_dataset.get_data(seq_idx, key)
+        features[key].append(data)
+    features = {key: numpy.concatenate(values, axis=0) for (key, values) in features.items()}
+    return DatasetSeq(seq_idx=seq_idx, seq_tag=seq_tag, features=features)
+
+  def get_data_keys(self):
+    return self.sub_dataset.get_data_keys()
+
+  def get_target_list(self):
+    return self.sub_dataset.get_target_list()
+
+  def get_data_dtype(self, key):
+    return self.sub_dataset.get_data_dtype(key)
+
+  def get_data_dim(self, key):
+    return self.sub_dataset.get_data_dim(key)
+
+  def is_data_sparse(self, key):
+    return self.sub_dataset.is_data_sparse(key)
+
+  def get_data_shape(self, key):
+    return self.sub_dataset.get_data_shape(key)
+
+
 class ChunkShuffleDataset(CachedDataset2):
   """
   This goes through a dataset, caches some recent chunks
@@ -814,6 +893,7 @@ def _simple_to_bool(v):
   if v == 1: v = True
   assert isinstance(v, bool)
   return v
+
 
 def _select_dtype(key, data_dims, data_dtypes):
   if data_dtypes and key in data_dtypes:
