@@ -646,15 +646,19 @@ class ConcatSeqsDataset(CachedDataset2):
   """
   This takes another dataset, and concatenates one or multiple seqs.
   """
-  def __init__(self, dataset, seq_list_file, seq_len_file, seq_tag_delim=";", use_cache_manager=False, **kwargs):
+  def __init__(self, dataset, seq_list_file, seq_len_file, seq_tag_delim=";", remove_in_between_postfix=None,
+               use_cache_manager=False, **kwargs):
     """
     :param dict[str] dataset: kwargs for init_dataset
     :param str seq_list_file: filename. line-separated. seq_tag_delim.join(seq_tags) for concatenated seqs
     :param str seq_len_file: file with Python dict, (single) seg_name -> len, which is used for sorting
     :param str seq_tag_delim:
     :param bool use_cache_manager:
+    :param dict[str,int]|None remove_in_between_postfix: data_key -> expected postfix label. e.g. {"targets": 0}
     """
     super(ConcatSeqsDataset, self).__init__(**kwargs)
+    self.seq_tag_delim = seq_tag_delim
+    self.remove_in_between_postfix = remove_in_between_postfix or {}
     dataset = dataset.copy()
     dataset.setdefault("name", "%s_subdataset" % self.name)
     self.sub_dataset = init_dataset(dataset)
@@ -668,7 +672,6 @@ class ConcatSeqsDataset(CachedDataset2):
     self.full_seq_list = open(seq_list_file).read().splitlines()
     self.seq_lens = eval(open(seq_len_file).read())
     assert isinstance(self.seq_lens, dict)
-    self.seq_tag_delim = seq_tag_delim
     self.full_seq_len_list = self._get_full_seq_lens_list()
     self.cur_seq_list = None
     self.cur_sub_seq_idxs = None
@@ -722,6 +725,9 @@ class ConcatSeqsDataset(CachedDataset2):
       self.sub_dataset.load_seqs(sub_seq_idx, sub_seq_idx + 1)
       for key in self.get_data_keys():
         data = self.sub_dataset.get_data(sub_seq_idx, key)
+        if key in self.remove_in_between_postfix and sub_seq_idx != sub_seq_idxs[-1]:
+          assert data.ndim == 1 and data[-1] == self.remove_in_between_postfix[key]
+          data = data[:-1]
         features[key].append(data)
     features = {key: numpy.concatenate(values, axis=0) for (key, values) in features.items()}
     return DatasetSeq(seq_idx=seq_idx, seq_tag=seq_tag, features=features)
