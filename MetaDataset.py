@@ -646,18 +646,23 @@ class ConcatSeqsDataset(CachedDataset2):
   """
   This takes another dataset, and concatenates one or multiple seqs.
   """
-  def __init__(self, dataset, seq_list_file, seq_len_file, seq_tag_delim=";", **kwargs):
+  def __init__(self, dataset, seq_list_file, seq_len_file, seq_tag_delim=";", use_cache_manager=False, **kwargs):
     """
     :param dict[str] dataset: kwargs for init_dataset
     :param str seq_list_file: filename. line-separated. seq_tag_delim.join(seq_tags) for concatenated seqs
     :param str seq_len_file: file with Python dict, (single) seg_name -> len, which is used for sorting
     :param str seq_tag_delim:
+    :param bool use_cache_manager:
     """
     super(ConcatSeqsDataset, self).__init__(**kwargs)
     self.sub_dataset = init_dataset(dataset)
     self.num_outputs = self.sub_dataset.num_outputs
     self.num_inputs = self.sub_dataset.num_inputs
     self.labels = self.sub_dataset.labels
+    if use_cache_manager:
+      import Util
+      seq_list_file = Util.cf(seq_list_file)
+      seq_len_file = Util.cf(seq_len_file)
     self.full_seq_list = open(seq_list_file).read().splitlines()
     self.seq_lens = eval(open(seq_len_file).read())
     assert isinstance(self.seq_lens, dict)
