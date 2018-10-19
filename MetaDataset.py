@@ -655,6 +655,8 @@ class ConcatSeqsDataset(CachedDataset2):
     :param bool use_cache_manager:
     """
     super(ConcatSeqsDataset, self).__init__(**kwargs)
+    dataset = dataset.copy()
+    dataset.setdefault("name", "%s_subdataset" % self.name)
     self.sub_dataset = init_dataset(dataset)
     self.num_outputs = self.sub_dataset.num_outputs
     self.num_inputs = self.sub_dataset.num_inputs
