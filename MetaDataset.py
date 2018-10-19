@@ -646,10 +646,11 @@ class ConcatSeqsDataset(CachedDataset2):
   """
   This takes another dataset, and concatenates one or multiple seqs.
   """
-  def __init__(self, dataset, seq_list_file, seq_tag_delim=";", **kwargs):
+  def __init__(self, dataset, seq_list_file, seq_len_file, seq_tag_delim=";", **kwargs):
     """
     :param dict[str] dataset: kwargs for init_dataset
     :param str seq_list_file: filename. line-separated. seq_tag_delim.join(seq_tags) for concatenated seqs
+    :param str seq_len_file: file with Python dict, (single) seg_name -> len, which is used for sorting
     :param str seq_tag_delim:
     """
     super(ConcatSeqsDataset, self).__init__(**kwargs)
@@ -658,15 +659,31 @@ class ConcatSeqsDataset(CachedDataset2):
     self.num_inputs = self.sub_dataset.num_inputs
     self.labels = self.sub_dataset.labels
     self.full_seq_list = open(seq_list_file).read().splitlines()
+    self.seq_lens = eval(open(seq_len_file).read())
+    assert isinstance(self.seq_lens, dict)
+    self.full_seq_len_list = self._get_full_seq_lens_list()
     self.cur_seq_list = None
     self.cur_sub_seq_idxs = None
     self.seq_tag_delim = seq_tag_delim
+
+  def _get_full_seq_lens_list(self):
+    """
+    :return: list where idx is same as in self.full_seq_list, maps to len (via self.seq_lens)
+    :rtype: list[int]
+    """
+    ls = []
+    for seq_tag in self.full_seq_list:
+      sub_seq_tags = seq_tag.split(self.seq_tag_delim)
+      ls.append(sum([self.seq_lens[sub_seq_tag] for sub_seq_tag in sub_seq_tags]))
+    assert len(ls) == len(self.full_seq_list)
+    return ls
 
   def init_seq_order(self, epoch=None, seq_list=None):
     super(ConcatSeqsDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
     assert not seq_list
     if not seq_list:
-      seq_order = self.get_seq_order_for_epoch(epoch=epoch, num_seqs=len(self.full_seq_list))
+      seq_order = self.get_seq_order_for_epoch(
+        epoch=epoch, num_seqs=len(self.full_seq_list), get_seq_len=lambda i: self.full_seq_len_list[i])
       seq_list = [self.full_seq_list[i] for i in seq_order]
     self.cur_seq_list = seq_list
     self._num_seqs = len(seq_list)
@@ -676,7 +693,7 @@ class ConcatSeqsDataset(CachedDataset2):
     for seq_tag in seq_list:
       sub_seq_tags = seq_tag.split(self.seq_tag_delim)
       sub_seq_idxs.append(list(range(sub_seq_idx, sub_seq_idx + len(sub_seq_tags))))
-      sub_seq_idx = sub_seq_idxs[-1][-1]
+      sub_seq_idx = sub_seq_idxs[-1][-1] + 1
       sub_seq_list.extend(sub_seq_tags)
     assert sub_seq_idx == len(sub_seq_list)
     self.cur_sub_seq_idxs = sub_seq_idxs
