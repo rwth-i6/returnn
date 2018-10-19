@@ -640,6 +640,9 @@ class ExternSprintDataset(SprintDatasetBase):
       args = list(self.sprintTrainerExecPath)
     else:
       args = [self.sprintTrainerExecPath]
+    # First the user options. Usually also involves loading some config.
+    args += eval_shell_str(self.sprintConfig)
+    # Now our options. They might overwrite some of the config settings. (That is why we do it after the user opts.)
     args += [
       "--*.seed=%i" % ((epoch - 1) // self.partition_epoch)]
     if self.partition_epoch > 1:
@@ -665,7 +668,6 @@ class ExternSprintDataset(SprintDatasetBase):
         f.close()
       args += ["--*.corpus.segments.file=%s" % self.seq_list_file]
       args += ["--*.corpus.segment-order=%s" % self.seq_list_file]
-    args += eval_shell_str(self.sprintConfig)
     return args
 
   def _read_next_raw(self):
