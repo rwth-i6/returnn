@@ -51,7 +51,9 @@ class SprintDatasetBase(Dataset):
   SprintCachedSeqsMin = 100
 
   def __init__(self, target_maps=None, str_add_final_zero=False, input_stddev=1.,
-               orth_post_process=None, bpe=None, orth_vocab=None, **kwargs):
+               orth_post_process=None, bpe=None, orth_vocab=None,
+               suppress_load_seqs_print=False,
+               **kwargs):
     """
     :param dict[str,str|dict] target_maps: e.g. {"speaker": "speaker_map.txt"}
     :param bool str_add_final_zero: adds e.g. "orth0" with '\0'-ending
@@ -59,8 +61,10 @@ class SprintDatasetBase(Dataset):
     :param str|list[str]|None orth_post_process: :func:`get_post_processor_function`, applied on orth
     :param None|dict[str] bpe: if given, will be opts for :class:`BytePairEncoding`
     :param None|dict[str] orth_vocab: if given, orth_vocab is applied to orth and orth_classes is an available target`
+    :param bool suppress_load_seqs_print: less verbose
     """
     super(SprintDatasetBase, self).__init__(**kwargs)
+    self.suppress_load_seqs_print = suppress_load_seqs_print
     if target_maps:
       assert isinstance(target_maps, dict)
       target_maps = target_maps.copy()
@@ -255,11 +259,14 @@ class SprintDatasetBase(Dataset):
 
   def load_seqs(self, start, end):
     # Called by CRNN train thread.
-    print("%s load_seqs in %s:" % (self, currentThread().name), start, end, end=' ', file=log.v5)
-    if start == end: return
+    if start == end:
+      return
+    if not self.suppress_load_seqs_print:
+      print("%s load_seqs in %s:" % (self, currentThread().name), start, end, end=' ', file=log.v5)
     with self.lock:
       super(SprintDatasetBase, self).load_seqs(start, end)
-      print("first features shape:", self._getSeq(start).features["data"].shape, file=log.v5)
+      if not self.suppress_load_seqs_print:
+        print("first features shape:", self._getSeq(start).features["data"].shape, file=log.v5)
 
   def _load_seqs(self, start, end):
     # Called by CRNN train thread.
