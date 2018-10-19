@@ -270,9 +270,18 @@ class Dataset(object):
       seq_index.sort(key=get_seq_len, reverse=True)  # sort by length, in reverse, starting with longest
     elif self.seq_ordering.startswith('laplace'):
       assert get_seq_len
-      tmp = self.seq_ordering.split(':')
-      bins = int(tmp[1]) if len(tmp) > 1 else 2
-      nth = int(tmp[2]) if len(tmp) > 2 else 1
+      tmp = self.seq_ordering.split(':')[1:]
+      if len(tmp) == 0:
+        bins = 2
+      else:
+        if tmp[0].startswith("."):  # starting with "." -> approx chunk size (num of seqs in one bin)
+          bins = max(num_seqs // int(tmp[0][1:]), 2)
+        else:  # the number of bins
+          bins = int(tmp[0])
+      if len(tmp) <= 1:
+        nth = 1
+      else:
+        nth = int(tmp[1])
       rnd_seed = ((full_epoch - 1) // nth + 1) if full_epoch else 1
       rnd = Random(rnd_seed)
       rnd.shuffle(seq_index)
