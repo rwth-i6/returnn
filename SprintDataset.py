@@ -666,8 +666,10 @@ class ExternSprintDataset(SprintDatasetBase):
           f.write(tag)
           f.write("\n")
         f.close()
-      args += ["--*.corpus.segments.file=%s" % self.seq_list_file]
-      args += ["--*.corpus.segment-order=%s" % self.seq_list_file]
+      args += [
+        "--*.corpus.segment-order-shuffle=false",
+        "--*.corpus.segments.file=%s" % self.seq_list_file,
+        "--*.corpus.segment-order=%s" % self.seq_list_file]
     return args
 
   def _read_next_raw(self):
