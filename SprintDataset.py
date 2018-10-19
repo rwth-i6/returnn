@@ -235,7 +235,7 @@ class SprintDatasetBase(Dataset):
     if start >= end:
       return True
     for data in self.added_data:
-      assert start >= data.seq_idx, "We expect that we only ask about the cache of the upcoming seqs."
+      assert start >= data.seq_idx, "%s: We expect that we only ask about the cache of the upcoming seqs." % self
       if data.seq_idx == start:
         start += 1
       if start >= end:

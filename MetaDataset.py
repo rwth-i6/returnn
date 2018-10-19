@@ -721,7 +721,7 @@ class ConcatSeqsDataset(CachedDataset2):
     for sub_seq_idx in sub_seq_idxs:
       self.sub_dataset.load_seqs(sub_seq_idx, sub_seq_idx + 1)
       for key in self.get_data_keys():
-        data = self.sub_dataset.get_data(seq_idx, key)
+        data = self.sub_dataset.get_data(sub_seq_idx, key)
         features[key].append(data)
     features = {key: numpy.concatenate(values, axis=0) for (key, values) in features.items()}
     return DatasetSeq(seq_idx=seq_idx, seq_tag=seq_tag, features=features)
