@@ -785,6 +785,8 @@ class ExternSprintDataset(SprintDatasetBase):
     self._exit_child(wait_thread=False)
 
   def init_seq_order(self, epoch=None, seq_list=None):
+    if seq_list:
+      assert self.partition_epoch == 1, "specifying partition_epoch and using seq_list not supported"
     if epoch is None:
       epoch = 1
     with self.lock:
