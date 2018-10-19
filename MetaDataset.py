@@ -666,10 +666,10 @@ class ConcatSeqsDataset(CachedDataset2):
     self.full_seq_list = open(seq_list_file).read().splitlines()
     self.seq_lens = eval(open(seq_len_file).read())
     assert isinstance(self.seq_lens, dict)
+    self.seq_tag_delim = seq_tag_delim
     self.full_seq_len_list = self._get_full_seq_lens_list()
     self.cur_seq_list = None
     self.cur_sub_seq_idxs = None
-    self.seq_tag_delim = seq_tag_delim
 
   def _get_full_seq_lens_list(self):
     """
