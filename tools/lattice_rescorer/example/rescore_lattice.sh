@@ -3,7 +3,7 @@
 export OMP_NUM_THREADS=2
 lattice_rescorer="../lattice_rescorer"
 Dir="."
-Vocab="${Dir}/network.040/vocab.txt"
+Vocab=<path-to-your-vocabulary> # Please verify the vocabulary before using the script
 LibsReturnn="${Dir}/libs_list"
 CheckPoint="${Dir}/network.040/network.040"
 

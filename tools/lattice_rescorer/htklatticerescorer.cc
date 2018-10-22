@@ -653,9 +653,6 @@ float HtkLatticeRescorer::TF_ComputeLogProbability(tensorflow::Session* session,
         tensorflow::Tensor epoch_step = tensorflow::Tensor(tensorflow::DT_INT64, tensorflow::TensorShape({}));
 		//this is a scalar, but TensorShape({1}) is a Tensor with shape[1], not a scalar
 	    epoch_step.scalar<tensorflow::int64>()() = word_index;
-        for (int i = 0; i < tensor_names.size(); i++){
-            std::cout << tensor_names[i] << std::endl;
-        }
         std::vector<tensorflow::Tensor> outputs;
         std::vector<std::pair<std::string, tensorflow::Tensor>> inputs;
         inputs = {{tensor_names[0], delayed_dim0_size},

@@ -156,8 +156,8 @@ void ParseCommandLine(const int argc,
         run(), *options);
     po::notify(*options);
     // help option?
-	if (options->count("help")) {
-      std::cout << "Usage: rwthlm [OPTION]...[LATTICE]\n";
+	if (options->count("help")||!options->count("lattices")) {
+      std::cout << "Usage: lattice_rescorer [OPTION]...[LATTICE]\n";
       std::cout << desc;
       exit(0);
     }
