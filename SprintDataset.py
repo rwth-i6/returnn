@@ -51,7 +51,9 @@ class SprintDatasetBase(Dataset):
   SprintCachedSeqsMin = 100
 
   def __init__(self, target_maps=None, str_add_final_zero=False, input_stddev=1.,
-               orth_post_process=None, bpe=None, orth_vocab=None, **kwargs):
+               orth_post_process=None, bpe=None, orth_vocab=None,
+               suppress_load_seqs_print=False,
+               **kwargs):
     """
     :param dict[str,str|dict] target_maps: e.g. {"speaker": "speaker_map.txt"}
     :param bool str_add_final_zero: adds e.g. "orth0" with '\0'-ending
@@ -59,8 +61,10 @@ class SprintDatasetBase(Dataset):
     :param str|list[str]|None orth_post_process: :func:`get_post_processor_function`, applied on orth
     :param None|dict[str] bpe: if given, will be opts for :class:`BytePairEncoding`
     :param None|dict[str] orth_vocab: if given, orth_vocab is applied to orth and orth_classes is an available target`
+    :param bool suppress_load_seqs_print: less verbose
     """
     super(SprintDatasetBase, self).__init__(**kwargs)
+    self.suppress_load_seqs_print = suppress_load_seqs_print
     if target_maps:
       assert isinstance(target_maps, dict)
       target_maps = target_maps.copy()
@@ -235,7 +239,7 @@ class SprintDatasetBase(Dataset):
     if start >= end:
       return True
     for data in self.added_data:
-      assert start >= data.seq_idx, "We expect that we only ask about the cache of the upcoming seqs."
+      assert start >= data.seq_idx, "%s: We expect that we only ask about the cache of the upcoming seqs." % self
       if data.seq_idx == start:
         start += 1
       if start >= end:
@@ -255,11 +259,14 @@ class SprintDatasetBase(Dataset):
 
   def load_seqs(self, start, end):
     # Called by CRNN train thread.
-    print("%s load_seqs in %s:" % (self, currentThread().name), start, end, end=' ', file=log.v5)
-    if start == end: return
+    if start == end:
+      return
+    if not self.suppress_load_seqs_print:
+      print("%s load_seqs in %s:" % (self, currentThread().name), start, end, end=' ', file=log.v5)
     with self.lock:
       super(SprintDatasetBase, self).load_seqs(start, end)
-      print("first features shape:", self._getSeq(start).features["data"].shape, file=log.v5)
+      if not self.suppress_load_seqs_print:
+        print("first features shape:", self._getSeq(start).features["data"].shape, file=log.v5)
 
   def _load_seqs(self, start, end):
     # Called by CRNN train thread.
@@ -640,6 +647,9 @@ class ExternSprintDataset(SprintDatasetBase):
       args = list(self.sprintTrainerExecPath)
     else:
       args = [self.sprintTrainerExecPath]
+    # First the user options. Usually also involves loading some config.
+    args += eval_shell_str(self.sprintConfig)
+    # Now our options. They might overwrite some of the config settings. (That is why we do it after the user opts.)
     args += [
       "--*.seed=%i" % ((epoch - 1) // self.partition_epoch)]
     if self.partition_epoch > 1:
@@ -663,9 +673,10 @@ class ExternSprintDataset(SprintDatasetBase):
           f.write(tag)
           f.write("\n")
         f.close()
-      args += ["--*.corpus.segments.file=%s" % self.seq_list_file]
-      args += ["--*.corpus.segment-order=%s" % self.seq_list_file]
-    args += eval_shell_str(self.sprintConfig)
+      args += [
+        "--*.corpus.segment-order-shuffle=false",
+        "--*.corpus.segments.file=%s" % self.seq_list_file,
+        "--*.corpus.segment-order=%s" % self.seq_list_file]
     return args
 
   def _read_next_raw(self):
@@ -785,6 +796,8 @@ class ExternSprintDataset(SprintDatasetBase):
     self._exit_child(wait_thread=False)
 
   def init_seq_order(self, epoch=None, seq_list=None):
+    if seq_list:
+      assert self.partition_epoch == 1, "specifying partition_epoch and using seq_list not supported"
     if epoch is None:
       epoch = 1
     with self.lock:
