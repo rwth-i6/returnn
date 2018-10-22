@@ -1978,6 +1978,7 @@ class LibriSpeechCorpus(CachedDataset2):
             max_mean_len = opts.get("max_mean_len")
             seqs = numpy.array(
               sorted([(len(self.transs[self._reference_seq_order[idx]]), idx) for idx in self._seq_order]))
+            # Note: This is somewhat incorrect. But keep the behavior, such that old setups are reproducible.
             num = Util.binary_search_any(
               cmp=lambda num: numpy.mean(seqs[:num, 0]) > max_mean_len, low=1, high=len(seqs) + 1)
             assert num is not None
