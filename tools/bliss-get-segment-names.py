@@ -87,28 +87,42 @@ def iter_bliss(filename):
 def main():
   arg_parser = ArgumentParser()
   arg_parser.add_argument("bliss_filename")
+  arg_parser.add_argument("--subset_segment_file")
   arg_parser.add_argument("--output_type", default="", help="e.g. segment_name")
   arg_parser.add_argument("--merge_swb_ab", action="store_true")
   arg_parser.add_argument("--sort_by_time", action="store_true")
   arg_parser.add_argument("--merge_segs_up_to_time", type=float)
   args = arg_parser.parse_args()
+  subset_segment_list = None
+  if args.subset_segment_file:
+    subset_segment_list = set(open(args.subset_segment_file).read().splitlines())
   rec_filenames = set()
   items_by_rec = {}
   for bliss_item in iter_bliss(args.bliss_filename):
+    if subset_segment_list and bliss_item.segment_name not in subset_segment_list:
+      continue
     rec_name = bliss_item.recording_filename
     assert rec_name, "invalid item %r" % bliss_item
-    rec_filenames.add(rec_name)
     if args.merge_swb_ab:
       rec_name = os.path.basename(rec_name)
       rec_name, _ = os.path.splitext(rec_name)
       rec_filenames.add(rec_name)
       assert rec_name[-1] in "AB"
       rec_name = rec_name[:-1]
+    else:
+      rec_filenames.add(rec_name)
     items_by_rec.setdefault(rec_name, []).append(bliss_item)
+  assert items_by_rec
   if args.merge_swb_ab:
-    for key in items_by_rec.keys():
-      assert key + "A" in rec_filenames
-      assert key + "B" in rec_filenames
+    if subset_segment_list:
+      for key in list(items_by_rec.keys()):
+        if key + "A" not in rec_filenames or key + "B" not in rec_filenames:
+          del items_by_rec[key]
+      assert items_by_rec, "rec_filenames %r" % (rec_filenames,)
+    else:
+      for key in items_by_rec.keys():
+        assert key + "A" in rec_filenames
+        assert key + "B" in rec_filenames
   for key, ls in items_by_rec.items():
     assert isinstance(ls, list)
     if args.sort_by_time:
