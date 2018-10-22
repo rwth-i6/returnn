@@ -673,8 +673,8 @@ class ConcatSeqsDataset(CachedDataset2):
     self.seq_lens = eval(open(seq_len_file).read())
     assert isinstance(self.seq_lens, dict)
     self.full_seq_len_list = self._get_full_seq_lens_list()
-    self.cur_seq_list = None
-    self.cur_sub_seq_idxs = None
+    self.cur_seq_list = None  # type: list[str]  # list of seq tags
+    self.cur_sub_seq_idxs = None  # type: list[list[int]]  # list of list of sub seq idxs
 
   def _get_full_seq_lens_list(self):
     """
@@ -694,18 +694,18 @@ class ConcatSeqsDataset(CachedDataset2):
     if not seq_list:
       seq_order = self.get_seq_order_for_epoch(
         epoch=epoch, num_seqs=len(self.full_seq_list), get_seq_len=lambda i: self.full_seq_len_list[i])
-      seq_list = [self.full_seq_list[i] for i in seq_order]
+      seq_list = [self.full_seq_list[i] for i in seq_order]  # tag list
     self.cur_seq_list = seq_list
     self._num_seqs = len(seq_list)
     sub_seq_list = []
-    sub_seq_idxs = []
+    sub_seq_idxs = []  # type: list[list[int]]  # list of list of seqs
     sub_seq_idx = 0
     for seq_tag in seq_list:
       sub_seq_tags = seq_tag.split(self.seq_tag_delim)
       sub_seq_idxs.append(list(range(sub_seq_idx, sub_seq_idx + len(sub_seq_tags))))
       sub_seq_idx = sub_seq_idxs[-1][-1] + 1
       sub_seq_list.extend(sub_seq_tags)
-    assert sub_seq_idx == len(sub_seq_list)
+    assert sub_seq_idx == len(sub_seq_list) and len(seq_list) == len(sub_seq_idxs)
     self.cur_sub_seq_idxs = sub_seq_idxs
     return self.sub_dataset.init_seq_order(seq_list=sub_seq_list)
 
@@ -719,10 +719,20 @@ class ConcatSeqsDataset(CachedDataset2):
     if seq_idx >= len(self.cur_seq_list):
       return None
     seq_tag = self.cur_seq_list[seq_idx]
+    sub_seq_tags = seq_tag.split(self.seq_tag_delim)
     sub_seq_idxs = self.cur_sub_seq_idxs[seq_idx]
+    assert len(sub_seq_tags) == len(sub_seq_idxs)
     features = {key: [] for key in self.get_data_keys()}
-    for sub_seq_idx in sub_seq_idxs:
+    if seq_idx == 0:  # some extra check, but enough to do for first seq only
+      sub_dataset_keys = self.sub_dataset.get_data_keys()
+      for key in self.remove_in_between_postfix:
+        assert key in sub_dataset_keys, "%s: remove_in_between_postfix key %r not in sub dataset data-keys %r" % (
+          self, key, sub_dataset_keys)
+    for sub_seq_idx, sub_seq_tag in zip(sub_seq_idxs, sub_seq_tags):
       self.sub_dataset.load_seqs(sub_seq_idx, sub_seq_idx + 1)
+      sub_dataset_tag = self.sub_dataset.get_tag(sub_seq_idx)
+      assert sub_dataset_tag == sub_seq_tag, "%s: expected tag %r for sub seq idx %i but got %r, part of seq %i %r" % (
+        self, sub_seq_tag, sub_seq_idx, sub_dataset_tag, seq_idx, seq_tag)
       for key in self.get_data_keys():
         data = self.sub_dataset.get_data(sub_seq_idx, key)
         if key in self.remove_in_between_postfix and sub_seq_idx != sub_seq_idxs[-1]:
