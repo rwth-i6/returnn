@@ -1,4 +1,9 @@
 
+"""
+Several wrappers around datasets are defined here, such as :class:`MetaDataset`,
+which are itself datasets again.
+"""
+
 from __future__ import print_function
 
 from Dataset import Dataset, DatasetSeq, init_dataset, convert_data_dims
@@ -7,6 +12,61 @@ from Util import NumbersDict, load_json
 from Log import log
 from random import Random
 import numpy
+import sys
+
+
+class EpochWiseFilter:
+  def __init__(self, epochs_opts, debug_msg_prefix="EpochWiseFilter"):
+    """
+    :param dict[(int,int|None),dict[str]] epochs_opts: (ep_start, ep_end) -> epoch opts
+    :param str debug_msg_prefix:
+    """
+    self.epochs_opts = epochs_opts
+    self.debug_msg_prefix = debug_msg_prefix
+
+  def filter(self, epoch, seq_order, get_seq_len):
+    """
+    :param int epoch:
+    :param list[int] seq_order: list of seq idxs
+    :param ((int)->int) get_seq_len: seq idx -> len
+    :return: new seq_order
+    """
+    import Util
+    old_num_seqs = len(seq_order)
+    any_filter = False
+    for (ep_start, ep_end), value in sorted(self.epochs_opts.items()):
+      if ep_start is None:
+        ep_start = 1
+      if ep_end is None or ep_end == -1:
+        ep_end = sys.maxsize
+      assert isinstance(ep_start, int) and isinstance(ep_end, int) and 1 <= ep_start <= ep_end
+      assert isinstance(value, dict)
+      if ep_start <= epoch <= ep_end:
+        any_filter = True
+        opts = Util.CollectionReadCheckCovered(value)
+        if opts.get("max_mean_len"):
+          max_mean_len = opts.get("max_mean_len")
+          lens_and_seqs = numpy.array(sorted([(get_seq_len(idx), idx) for idx in seq_order]))
+          best_num = Util.binary_search_any(
+            cmp=lambda num: numpy.mean(lens_and_seqs[:num, 0]) > max_mean_len, low=1, high=len(lens_and_seqs) + 1)
+          assert best_num is not None
+          selected_seq_idxs = set(lens_and_seqs[:best_num, 1])
+          # Select subset of seq_order. Keep order as-is.
+          seq_order = [seq_idx for seq_idx in seq_order if seq_idx in selected_seq_idxs]
+          print(
+            ("%s, epoch %i. Old mean seq len (transcription) is %f, new is %f, requested max is %f."
+             " Old num seqs is %i, new num seqs is %i.") %
+            (self.debug_msg_prefix, epoch,
+             float(numpy.mean(lens_and_seqs[:, 0])), float(numpy.mean(lens_and_seqs[:best_num, 0])),
+             max_mean_len, len(lens_and_seqs), best_num),
+            file=log.v4)
+        opts.assert_all_read()
+    if any_filter:
+      print("%s, epoch %i. Old num seqs %i, new num seqs %i." % (
+        self.debug_msg_prefix, epoch, old_num_seqs, len(seq_order)), file=log.v4)
+    else:
+      print("%s, epoch %i. No filter for this epoch." % (self.debug_msg_prefix, epoch), file=log.v4)
+    return seq_order
 
 
 class MetaDataset(CachedDataset2):
@@ -647,18 +707,20 @@ class ConcatSeqsDataset(CachedDataset2):
   This takes another dataset, and concatenates one or multiple seqs.
   """
   def __init__(self, dataset, seq_list_file, seq_len_file, seq_tag_delim=";", remove_in_between_postfix=None,
-               use_cache_manager=False, **kwargs):
+               use_cache_manager=False, epoch_wise_filter=None, **kwargs):
     """
     :param dict[str] dataset: kwargs for init_dataset
     :param str seq_list_file: filename. line-separated. seq_tag_delim.join(seq_tags) for concatenated seqs
     :param str seq_len_file: file with Python dict, (single) seg_name -> len, which is used for sorting
     :param str seq_tag_delim:
     :param bool use_cache_manager:
+    :param dict[(int,int),dict] epoch_wise_filter: see :class:`EpochWiseFilter`
     :param dict[str,int]|None remove_in_between_postfix: data_key -> expected postfix label. e.g. {"targets": 0}
     """
     super(ConcatSeqsDataset, self).__init__(**kwargs)
     self.seq_tag_delim = seq_tag_delim
     self.remove_in_between_postfix = remove_in_between_postfix or {}
+    self.epoch_wise_filter = EpochWiseFilter(epoch_wise_filter) if epoch_wise_filter else None
     dataset = dataset.copy()
     dataset.setdefault("name", "%s_subdataset" % self.name)
     self.sub_dataset = init_dataset(dataset)
@@ -692,8 +754,12 @@ class ConcatSeqsDataset(CachedDataset2):
     super(ConcatSeqsDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
     assert not seq_list
     if not seq_list:
+      get_seq_len = lambda i: self.full_seq_len_list[i]
       seq_order = self.get_seq_order_for_epoch(
-        epoch=epoch, num_seqs=len(self.full_seq_list), get_seq_len=lambda i: self.full_seq_len_list[i])
+        epoch=epoch, num_seqs=len(self.full_seq_list), get_seq_len=get_seq_len)
+      if self.epoch_wise_filter:
+        self.epoch_wise_filter.debug_msg_prefix = str(self)
+        seq_order = self.epoch_wise_filter.filter(epoch=epoch, seq_order=seq_order, get_seq_len=get_seq_len)
       seq_list = [self.full_seq_list[i] for i in seq_order]  # tag list
     self.cur_seq_list = seq_list
     self._num_seqs = len(seq_list)

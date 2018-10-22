@@ -1956,6 +1956,7 @@ class LibriSpeechCorpus(CachedDataset2):
         epoch=epoch, num_seqs=num_seqs, get_seq_len=lambda i: len(self.transs[self._reference_seq_order[i]]))
       self._num_seqs = len(self._seq_order)
     if self.epoch_wise_filter:
+      # Note: A more generic variant of this code is :class:`MetaDataset.EpochWiseFilter`.
       old_num_seqs = self._num_seqs
       any_filter = False
       for (ep_start, ep_end), value in sorted(self.epoch_wise_filter.items()):
@@ -1987,6 +1988,7 @@ class LibriSpeechCorpus(CachedDataset2):
               (self, epoch, float(numpy.mean(seqs[:, 0])), float(numpy.mean(seqs[:num, 0])), max_mean_len,
                len(seqs), num),
               file=log.v4)
+          opts.assert_all_read()
           self._num_seqs = len(self._seq_order)
       if any_filter:
         print("%s, epoch %i. Old num seqs %i, new num seqs %i." % (
