@@ -59,7 +59,7 @@ def get_raw_strings(dataset, options):
       if ref.shape == ():
         ref = ref.flatten()[0]  # get the entry itself (str or bytes)
       else:
-        raise NotImplementedError
+        ref = ref.tobytes()
     if isinstance(ref, bytes):
       ref = ref.decode("utf8")
     assert isinstance(ref, str)
