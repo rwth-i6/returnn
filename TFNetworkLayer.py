@@ -45,7 +45,7 @@ class LayerBase(object):
   recurrent = False  # if the order in the time-dimension is relevant
 
   def __init__(self, name, network, output=None, n_out=None, out_type=None, sources=(),
-               target=None, loss=None, loss_scale=1.0, size_target=None,
+               target=None, loss=None, size_target=None,
                reuse_params=None,
                L2=None, darc1=None,
                is_output_layer=None, only_on_eval=False, only_on_search=False,
@@ -76,7 +76,6 @@ class LayerBase(object):
       In the net dict, it is specified as a string.
       In :class:`TFNetwork`, all losses from all layers will be collected.
       That is what :class:`TFUpdater.Updater` will use for training.
-    :param float loss_scale: scale factor for loss (1.0 by default). DEPRECATED: use loss.scale instead.
     :param ReuseParams|None reuse_params: if given, will opt reuse the params. see :func:`self.var_creation_scope`
     :param float|None L2: for constraints
     :param float|None darc1: for constraints. see Generalization in Deep Learning, https://arxiv.org/abs/1710.05468
@@ -99,10 +98,6 @@ class LayerBase(object):
     self.loss = loss
     if self.loss and self.loss.recurrent:
       self.recurrent = True
-    if loss_scale != 1.0:
-      assert self.loss, "loss_scale is set, but no loss"
-      assert self.loss.scale == 1.0, "do not use loss_scale and loss with 'scale' option together"
-      self.loss.scale = loss_scale
     if output:
       self.output = output
       if n_out:
@@ -375,8 +370,19 @@ class LayerBase(object):
         network=network, target=d["target"], loss_class_name=d.get("loss", None), get_layer=get_layer)
     if d.pop("loss_only_on_non_search", None) and "loss" in d and network.search_flag:
       del d["loss"]
-    d["loss"] = cls._make_loss(
-      class_name=d.pop("loss", None), opts=d.pop("loss_opts", None), network=network, get_layer=get_layer)
+    if d.get("loss", None):
+      loss_opts = d.pop("loss_opts", None)
+      if not loss_opts:
+        loss_opts = {}
+      # loss_scale: scale factor for loss (1.0 by default). DEPRECATED: use loss.scale instead, via loss_opts
+      loss_scale = d.pop("loss_scale", 1.0)
+      if loss_scale != 1.0:
+        assert loss_opts.get("scale", 1.0) == 1.0, "do not use loss_scale and loss with 'scale' option together"
+        loss_opts["scale"] = loss_scale
+      d["loss"] = cls._make_loss(
+        class_name=d.pop("loss", None), opts=loss_opts, network=network, get_layer=get_layer)
+    else:
+      assert "loss_scale" not in d, "loss not set"
 
   @classmethod
   def _guess_n_out_from_target_and_opt_loss(cls, network, target, loss_class_name, get_layer):
