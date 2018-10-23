@@ -923,7 +923,8 @@ class Data(object):
     """
     assert self.placeholder is not None
     x = self.placeholder
-    dyn_axes = self.get_spatial_batch_axes() + [self.batch_dim_axis]
+    orig_dyn_axes = self.get_spatial_batch_axes() + [self.batch_dim_axis]
+    dyn_axes = list(orig_dyn_axes)
     if dyn_axes == [self.batch_dim_axis]:
       return x
     assert 0 in dyn_axes, "would need some transpose, not supported at the moment"
@@ -938,10 +939,6 @@ class Data(object):
                   for i in dyn_axes]
       ndim -= 1
     if len(dyn_axes) > 1:
-      assert 0 in dyn_axes, "would need some transpose, not supported at the moment"
-      for i in dyn_axes:
-        if i > 0:
-          assert i - 1 in dyn_axes, "would need some transpose, not supported at the moment"
       shape = tf.shape(x)
       x = tf.reshape(
         x,
@@ -950,8 +947,10 @@ class Data(object):
       dyn_axes = [0]
     assert dyn_axes == [0]
     if keep_dims and orig_num_dyn_axes >= 2:
-      for i in range(orig_num_dyn_axes - 1):
-        x = tf.expand_dims(x, axis=1)
+      for i in orig_dyn_axes:
+        if i not in dyn_axes:
+          x = tf.expand_dims(x, axis=i)
+      x.set_shape([None] * self.batch_ndim)
     return x
 
   def get_axes(self, exclude_time=False, exclude_batch=False):
