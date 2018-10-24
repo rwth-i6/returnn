@@ -3120,9 +3120,10 @@ class OpCodeCompiler(NativeCodeCompiler):
   _relevant_info_keys = NativeCodeCompiler._relevant_info_keys + ("tf_version", "with_cuda", "cuda_path", "nvcc_opts")
 
   def _make_info_dict(self):
+    from Util import describe_tensorflow_version
     d = super(OpCodeCompiler, self)._make_info_dict()
     d.update({
-      "tf_version": tf.__version__,
+      "tf_version": describe_tensorflow_version(),
       "with_cuda": self._with_cuda(),
       "cuda_path": self._cuda_env.cuda_path,
       "nvcc_opts": (tuple(self._cuda_env.get_compiler_opts()) + tuple(self._nvcc_opts)) if self._with_cuda() else None,
