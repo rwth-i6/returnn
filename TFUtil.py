@@ -3152,7 +3152,7 @@ class OpCodeCompiler(NativeCodeCompiler):
     d.update({
       "tf_version": describe_tensorflow_version(),
       "with_cuda": self._with_cuda(),
-      "cuda_path": self._cuda_env.cuda_path,
+      "cuda_path": self._cuda_env.cuda_path if self._with_cuda() else None,
       "nvcc_opts": (tuple(self._cuda_env.get_compiler_opts()) + tuple(self._nvcc_opts)) if self._with_cuda() else None,
     })
     return d
