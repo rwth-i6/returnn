@@ -3017,7 +3017,27 @@ class CudaEnv(object):
     return "lib"
 
   @classmethod
+  def _cuda_path_candidate_via_proc_map_libcudart(cls):
+    import Util
+    fn = Util.find_libcudart_from_runtime()
+    if cls.verbose_find_cuda:
+      print("libcudart.so found from /proc/maps:", fn)
+    if not fn:
+      return None
+    # fn is e.g. '/usr/local/cuda-8.0/targets/x86_64-linux/lib/libcudart.so.8.0.61',
+    # or maybe '/usr/local/cuda-8.0/lib64/libcudart.so'
+    p = os.path.dirname(os.path.dirname(fn))
+    while not cls._check_valid_cuda_path(p):
+      p = os.path.dirname(p)
+      assert p not in ["", "/"], "No parent dir of %r is a valid CUDA path." % fn
+    assert cls._check_valid_cuda_path(p)
+    return p
+
+  @classmethod
   def _cuda_path_candidates(cls):
+    p = cls._cuda_path_candidate_via_proc_map_libcudart()
+    if p:
+      yield p
     for p in cls._find_nvcc_in_path():
       # Expect p == "/usr/local/cuda-8.0/bin/nvcc" or so.
       postfix = "/bin/nvcc"
