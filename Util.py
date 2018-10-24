@@ -3026,6 +3026,5 @@ def find_libcudart_from_runtime():
     if re.match(".*/libcudart\\.so(\\..*)?", fn):
       _find_libcudart_from_runtime_cached = [fn]
       return fn
-  _find_libcudart_from_runtime_cached = []
+  _find_libcudart_from_runtime_cached = [None]
   return None
-
