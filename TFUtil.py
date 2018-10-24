@@ -3100,6 +3100,13 @@ class OpCodeCompiler(NativeCodeCompiler):
   def __init__(self, use_cuda_if_available=True, cuda_auto_min_compute_capability=True,
                include_paths=(), ld_flags=(), **kwargs):
     self._cuda_env = use_cuda_if_available and CudaEnv.get_instance()
+    if use_cuda_if_available and is_gpu_available():
+      # Currently we assume that if we provide CUDA code (thus set use_cuda_if_available=True),
+      # that if there is a GPU available (as TF reports it),
+      # we also expect that we find CUDA.
+      # Otherwise you would end up with ops compiled for CPU only although they support CUDA
+      # and the user expects them to run on GPU.
+      assert self._with_cuda(), "OpCodeCompiler: use_cuda_if_available=True but no CUDA found"
     self._nvcc_opts = []
     if self._with_cuda() and cuda_auto_min_compute_capability:
       # Get CUDA compute capability of the current GPU device.
