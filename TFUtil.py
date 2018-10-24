@@ -3117,14 +3117,15 @@ class OpCodeCompiler(NativeCodeCompiler):
     super(OpCodeCompiler, self).__init__(include_paths=include_paths, ld_flags=ld_flags, use_cxx11_abi=use_cxx11_abi, **kwargs)
     self._tf_mod = None
 
-  _relevant_info_keys = NativeCodeCompiler._relevant_info_keys + ("tf_version", "with_cuda", "nvcc_opts")
+  _relevant_info_keys = NativeCodeCompiler._relevant_info_keys + ("tf_version", "with_cuda", "cuda_path", "nvcc_opts")
 
   def _make_info_dict(self):
     d = super(OpCodeCompiler, self)._make_info_dict()
     d.update({
       "tf_version": tf.__version__,
       "with_cuda": self._with_cuda(),
-      "nvcc_opts": tuple(self._nvcc_opts),
+      "cuda_path": self._cuda_env.cuda_path,
+      "nvcc_opts": (tuple(self._cuda_env.get_compiler_opts()) + tuple(self._nvcc_opts)) if self._with_cuda() else None,
     })
     return d
 
