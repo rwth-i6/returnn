@@ -457,7 +457,10 @@ class TFNetwork(object):
         if debug_print_layer_output_template:
           print("layer %s/%r output: %r" % (self.name, name, layer_desc["output"]))
         assert isinstance(layer_desc["output"], Data)
+        layer_desc["output"].sanity_check(ignore_placeholder=True)  # placeholder might be overwritten later
         layer = layer_class(**layer_desc)
+        layer.post_init(layer_desc)
+        layer.output.sanity_check()
       except TypeError:
         help_on_type_error_wrong_args(cls=layer_class, kwargs=list(layer_desc.keys()))
         raise
@@ -465,7 +468,6 @@ class TFNetwork(object):
         print("Exception creating layer %s/%r of class %s with opts:" % (self.name, name, layer_class.__name__))
         pprint(layer_desc)
         raise
-      layer.post_init(layer_desc)
       if debug_print_layer_output_shape:
         layer.output.placeholder = tf.Print(
           layer.output.placeholder, [layer_class.cls_get_tf_scope_name(name), "shape:", tf.shape(layer.output.placeholder)],

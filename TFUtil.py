@@ -194,18 +194,23 @@ class Data(object):
     self.vocab = vocab
     self.sanity_check()
 
-  def sanity_check(self):
-    for axis_name, axis in self.get_special_axes_dict().items():
-      assert axis is None or 0 <= axis < self.batch_ndim, "axis %s (%i) invalid" % (axis_name, axis)
+  def sanity_check(self, ignore_placeholder=False):
+    """
+    Performs some sanity checks on self, and raises exceptions if something is not sane.
+
+    :param bool ignore_placeholder:
+    """
+    for axis_name, axis in self.get_special_axes_dict(include_batch_dim_axis=True).items():
+      assert axis is None or 0 <= axis < self.batch_ndim, "%s: axis %s (%i) invalid" % (self, axis_name, axis)
     if self.batch_dim_axis is not None:
       for axis_name, axis in self.get_special_axes_dict(include_batch_dim_axis=False).items():
-        assert axis != self.batch_dim_axis, "axis %s (%i) must be different from batch_dim_axis (%i)" % (
-          axis_name, axis, self.batch_dim_axis)
+        assert axis != self.batch_dim_axis, "%s: axis %s (%i) must be different from batch_dim_axis (%i)" % (
+          self, axis_name, axis, self.batch_dim_axis)
     if self.sparse:
-      assert self.feature_dim_axis is None, "If sparse, there cannot be a feature dim axis."
+      assert self.feature_dim_axis is None, "%s: If sparse, there cannot be a feature dim axis." % self
     if self.feature_dim_axis is not None:
-      assert self.dim == self.batch_shape[self.feature_dim_axis]
-    if self.placeholder is not None:
+      assert self.dim == self.batch_shape[self.feature_dim_axis], "%s: inconsistent dim" % self
+    if not ignore_placeholder and self.placeholder is not None:
       self.placeholder.set_shape(self.batch_shape)
 
   def get_placeholder_kwargs(self, with_batch=True):
