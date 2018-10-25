@@ -223,6 +223,12 @@ class LearningRateControl(object):
       if key in epoch_data.error:
         return key
     for key in sorted(epoch_data.error.keys()):
+      if key == "dev_score_output/output" or key.startswith("dev_score_output/output_"):
+        return key
+    for key in sorted(epoch_data.error.keys()):
+      if key.startswith("dev_score_output/"):
+        return key
+    for key in sorted(epoch_data.error.keys()):
       if key.startswith("dev_"):
         return key
     for key in ["train_score", "train_score_output"]:
