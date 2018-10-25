@@ -54,6 +54,7 @@ class LayerBase(object):
                spatial_smoothing=0.0,
                initial_output=None,
                rec_previous_layer=None,
+               collocate_with=None,
                trainable=True,
                custom_param_importer=None,
                register_as_extern_data=None):
@@ -86,6 +87,7 @@ class LayerBase(object):
     :param bool|dict batch_norm: see self.batch_norm()
     :param str|float initial_output: used for recurrent layer, see self.get_rec_initial_output()
     :param LayerBase|None rec_previous_layer: via the recurrent layer, layer (template) which represents the past of us
+    :param list[LayerBase]|None collocate_with: in the rec layer, collocate with the specified other layers
     :param bool trainable: whether the parameters of this layer will be trained
     :param str|callable|None custom_param_importer: used by :func:`set_param_values_by_dict`
     :param str|None register_as_extern_data:
@@ -120,6 +122,7 @@ class LayerBase(object):
     self.search_choices = None  # type: SearchChoices
     self._initial_output = initial_output
     self._rec_previous_layer = rec_previous_layer
+    self.collocate_with = collocate_with or []
     self.post_init_hooks = []  # list of functions
     self.sources = sources
     self.params = {}  # type: dict[str,tf.Variable]
@@ -354,6 +357,11 @@ class LayerBase(object):
       get_layer(src_name)
       for src_name in src_names
       if not src_name == "none"]
+    if "collocate_with" in d:
+      collocate_with = d["collocate_with"]
+      if not isinstance(collocate_with, (list, tuple)):
+        collocate_with = [collocate_with]
+      d["collocate_with"] = [get_layer(src_name) for src_name in collocate_with]
     if "reuse_params" in d:
       d["reuse_params"] = ReuseParams.from_config_dict(d["reuse_params"], network=network, get_layer=get_layer)
     if d.get("loss", None) and "target" not in d:
@@ -463,7 +471,7 @@ class LayerBase(object):
       normally this is just self.sources but e.g. the attention layer in addition has a base, etc.
     :rtype: list[LayerBase]
     """
-    return list(self.sources)
+    return list(self.sources) + list(self.collocate_with)
 
   def get_search_choices(self):
     """

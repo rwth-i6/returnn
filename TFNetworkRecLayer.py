@@ -1832,6 +1832,8 @@ class _SubnetworkRecCell(object):
       for other_layer in layers_in_loop:
         if layer in other_layer.get_dep_layers():
           return False
+        if other_layer in layer.collocate_with:
+          return False
       return True
 
     def find_output_layer_to_move_out():
@@ -2111,6 +2113,7 @@ class _TemplateLayer(LayerBase):
     :param Data output:
     :param type[LayerBase]|LayerBase layer_class:
     :param str template_type:
+    :param kwargs: via network.construct_layer, i.e. transform_config_dict was called already
     """
     # Overwrite self.__class__ so that checks like isinstance(layer, ChoiceLayer) work.
     # Not sure if this is the nicest way -- probably not, so I guess this will go away later.
@@ -2127,6 +2130,7 @@ class _TemplateLayer(LayerBase):
     self._is_output_layer = kwargs.get("is_output_layer", None)
     if self._has_search_choices():
       self.search_choices = SearchChoices(owner=self, beam_size=self._get_search_choices_beam_size())
+    self.collocate_with = kwargs.get("collocate_with", None) or []
 
   def copy_as_prev_time_frame(self, prev_output=None, rec_vars_prev_outputs=None):
     """
