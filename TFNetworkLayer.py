@@ -2054,7 +2054,7 @@ class LengthLayer(LayerBase):
 class SoftmaxOverSpatialLayer(_ConcatInputLayer):
   """
   This applies a softmax over spatial axis/axes (currently only time axis supported).
-  E.g. when the input is of shape (B,T,dim), the output will be (B,dim).
+  E.g. when the input is of shape (B,T,dim), the output will be (B,T,dim).
   It automatically masks the frames outside the seq defined by the seq-len.
   In contrast to :class:`SoftmaxLayer`, this will not do a linear transformation.
   """
@@ -2158,6 +2158,50 @@ class SeqLenMaskLayer(_ConcatInputLayer):
   @classmethod
   def get_out_data_from_opts(cls, name, sources, **kwargs):
     return get_concat_sources_data_template(sources, name="%s_output" % name).copy_as_batch_major()
+
+
+class RangeInAxisLayer(LayerBase):
+  """
+  Assume that the input is e.g. (B,T,D), and you specify axis="T", you will get (B=1,T,D=1),
+  where the specified axis is filled with ``tf.range``.
+  (Currently always keep_dims.)
+  """
+  layer_class = "range_in_axis"
+  recurrent = True  # if axis=="T", the time-dim order matters
+
+  def __init__(self, axis, dtype="int32", **kwargs):
+    """
+    :param str axis:
+    :param str dtype:
+    """
+    super(RangeInAxisLayer, self).__init__(**kwargs)
+    axis = self.output.get_axis_from_description(axis)
+    source = self.sources[0].output
+    source_shape = tf.shape(source.placeholder)
+    dim = source_shape[axis]
+    out = tf.range(0, dim)
+    out_shape = [dim if (i == axis) else 1 for i in range(self.output.batch_ndim)]
+    out = tf.reshape(out, out_shape)  # add missing axes (keep_dims)
+    out = tf.cast(out, dtype)
+    self.output.placeholder = out
+    axis_wo_b = source.get_batch_axis_excluding_batch(axis)
+    self.output.size_placeholder = {i: size for (i, size) in source.size_placeholder.items() if i == axis_wo_b}
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, axis, dtype="int32", **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :param str axis:
+    :param str dtype:
+    """
+    assert len(sources) == 1, "%s layer %r requires single source" % (cls, name)
+    out = sources[0].output.copy_template(name="%s_output" % name)
+    axis = out.get_axis_from_description(axis)
+    axis_wo_b = out.get_batch_axis_excluding_batch(axis)
+    out.shape = tuple([d if (i == axis_wo_b) else 1 for (i, d) in enumerate(out.shape)])
+    out.dtype = dtype
+    return out
 
 
 class BatchSoftmaxLayer(_ConcatInputLayer):
