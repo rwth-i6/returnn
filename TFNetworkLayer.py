@@ -5146,6 +5146,8 @@ class OfficialResNetLayer(_ConcatInputLayer):
                   batch_dim_axis=0, time_dim_axis=1)
 
     return data
+
+
 # ------------------------------------------------------------------------------
 
 class Loss(object):
@@ -5187,6 +5189,7 @@ class Loss(object):
     Also, some code overwrites this function externally, e.g. with TFUtil.identity, to not do reducing.
 
     :param tf.Tensor loss: e.g. (batch,time), or (time_flat,), or (batch,time,dim), etc
+    :return: by default just a scalar. but this can be overwritten, to not reduce
     :rtype: tf.Tensor
     """
     if (not self.use_flatten_frames
@@ -5235,6 +5238,13 @@ class Loss(object):
     :param LayerBase|None layer:
     """
     def flatten_or_merge(x, seq_lens, time_major):
+      """
+      :param tf.Tensor x: (B,T,...) or (T,B,...)
+      :param tf.Tensor seq_lens: (B,)
+      :param bool time_major:
+      :return: (B*T|B',...)
+      :rtype: tf.Tensor
+      """
       if self.use_flatten_frames:
         from TFUtil import flatten_with_seq_len_mask
         return flatten_with_seq_len_mask(x, seq_lens, time_major=time_major)
@@ -6217,6 +6227,23 @@ class ViaLayerLoss(Loss):
       return None  # we don't have it
     # Use default frame-wise error to reference target.
     return super(ViaLayerLoss, self).get_error()
+
+
+class AsIsLoss(Loss):
+  """
+  Use the output as-is as the loss.
+  """
+  class_name = "as_is"
+
+  def __init__(self, **kwargs):
+    super(AsIsLoss, self).__init__(**kwargs)
+
+  def get_value(self):
+    assert self.output_flat is not None
+    return self.reduce_func(self.output_flat)
+
+  def get_error(self):
+    return None  # not defined
 
 
 class SampledSoftmaxLoss(Loss):
