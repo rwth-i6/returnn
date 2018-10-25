@@ -151,7 +151,7 @@ class PythonControl:
 
   @classmethod
   def init(cls, **kwargs):  # called by global init().
-    print("SprintExternInterface[pid %i]: PythonControl init %r" % (os.getpid(), kwargs))
+    print("SprintExternInterface[pid %i]: PythonControl %s init %r" % (os.getpid(), __file__, kwargs))
     if cls.instance:
       return cls.instance
     cls.instance = cls(**kwargs)
@@ -212,10 +212,12 @@ class ExternSprintDatasetSource:
     self._send("init", (inputDim, outputDim, numSegments))
 
   def _send(self, dataType, args=None):
+    assert dataType is not None
     import struct
     stream = BytesIO()
     Pickler(stream).dump((dataType, args))
     raw_data = stream.getvalue()
+    assert len(raw_data) > 0
     self.pipe_c2p.write(struct.pack("<i", len(raw_data)))
     self.pipe_c2p.write(raw_data)
     self.pipe_c2p.flush()
