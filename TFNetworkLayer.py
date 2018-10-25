@@ -197,8 +197,6 @@ class LayerBase(object):
     :return: Data template (placeholder not set)
     :rtype: Data
     """
-    if loss and not target:
-      target = network.extern_data.default_target
     if n_out is None and target:
       n_out = cls._static_get_target_value(target=target, network=network, mark_data_key_as_used=False).dim
     if out_type is None:
