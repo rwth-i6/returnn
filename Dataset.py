@@ -602,12 +602,13 @@ class Dataset(object):
       i += 1
     return numpy.array(priori / self.get_num_timesteps(), dtype=numpy.float32)
 
-  def iterate_seqs(self, chunk_size=None, chunk_step=None, used_data_keys=None):
+  def iterate_seqs(self, chunk_size=None, chunk_step=None, used_data_keys=None, max_total_num_seqs=-1):
     """
     Takes chunking into consideration.
     :param int|NumbersDict chunk_size:
     :param int|NumbersDict chunk_step:
     :param set(str)|None used_data_keys:
+    :param int max_total_num_seqs:
     :return: generator which yields tuples (seq index, seq start, seq end)
     :rtype: list[(int,NumbersDict,NumbersDict)]
     """
@@ -617,8 +618,10 @@ class Dataset(object):
       chunk_step = self.chunk_step
     chunk_size = NumbersDict(chunk_size)
     chunk_step = NumbersDict(chunk_step)
+    if not max_total_num_seqs or max_total_num_seqs < 0:
+      max_total_num_seqs = float("inf")
     s = 0
-    while self.is_less_than_num_seqs(s):
+    while self.is_less_than_num_seqs(s) and s < max_total_num_seqs:
       length = self.get_seq_length(s)
       if chunk_size == 0:
         yield (s, length.constant_like(0), length)
@@ -700,13 +703,14 @@ class Dataset(object):
 
   def _generate_batches(self, recurrent_net,
                         batch_size, max_seqs=-1, max_seq_length=sys.maxsize, min_seq_length=0,
-                        seq_drop=0.0,
+                        seq_drop=0.0, max_total_num_seqs=-1,
                         used_data_keys=None):
     """
     :param bool recurrent_net: If True, the batch might have a batch seq dimension > 1.
       Otherwise, the batch seq dimension is always 1 and multiple seqs will be concatenated.
     :param int batch_size: Max number of frames in one batch.
     :param int max_seqs: Max number of seqs per batch.
+    :param int max_total_num_seqs:
     :param int|dict[str,int]|NumbersDict max_seq_length:
     :param set(str)|None used_data_keys:
     """
@@ -732,7 +736,8 @@ class Dataset(object):
     batch = Batch()
     ctx_lr = self._get_context_window_left_right()
     for seq_idx, t_start, t_end in self.iterate_seqs(
-          chunk_size=chunk_size, chunk_step=chunk_step, used_data_keys=used_data_keys):
+          chunk_size=chunk_size, chunk_step=chunk_step, max_total_num_seqs=max_total_num_seqs,
+          used_data_keys=used_data_keys):
       if ctx_lr:
         t_start -= ctx_lr[0]
         t_end += ctx_lr[1]

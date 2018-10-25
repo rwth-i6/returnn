@@ -20,6 +20,7 @@ import os
 import sys
 import numpy as np
 import argparse
+from glob import glob
 
 my_dir = os.path.dirname(os.path.abspath(__file__))
 returnn_dir = os.path.dirname(my_dir)
@@ -117,7 +118,7 @@ def init_net(args, layers):
 
 def main(argv):
   argparser = argparse.ArgumentParser(description=__doc__)
-  argparser.add_argument("config_file", type=str)
+  argparser.add_argument("config_file", type=str, help="RETURNN config, or model-dir")
   argparser.add_argument("--epoch", required=False, type=int)
   argparser.add_argument('--data', default="train",
                          help="e.g. 'train', 'config:train', or sth like 'config:get_dataset('dev')'")
@@ -132,6 +133,7 @@ def main(argv):
   argparser.add_argument("--batch_size", type=int, default=5000)
   argparser.add_argument("--seq_list", default=[], action="append", help="predefined list of seqs")
   argparser.add_argument("--min_seq_len", default="0", help="can also be dict")
+  argparser.add_argument("--num_seqs", default=-1, type=int, help="stop after this many seqs")
   argparser.add_argument("--output_format", default="npy", help="npy or png")
   argparser.add_argument("--dropout", default=None, type=float, help="if set, overwrites all dropout values")
   argparser.add_argument("--train_flag", action="store_true")
@@ -139,9 +141,19 @@ def main(argv):
 
   layers = args.layers
   assert isinstance(layers, list)
-  model_name = ".".join(args.config_file.split("/")[-1].split(".")[:-1])
+  config_fn = args.config_file
+  if os.path.isdir(config_fn):
+    # Assume we gave a model dir.
+    train_log_dir_config_pattern = "%s/train-*/*.config" % config_fn
+    train_log_dir_configs = sorted(glob(train_log_dir_config_pattern))
+    assert train_log_dir_configs
+    config_fn = train_log_dir_configs[-1]
+    print("Using this config via model dir:", config_fn)
+  else:
+    assert os.path.isfile(config_fn)
+  model_name = ".".join(config_fn.split("/")[-1].split(".")[:-1])
 
-  init_returnn(config_fn=args.config_file, cmd_line_opts=["--device", args.device], args=args)
+  init_returnn(config_fn=config_fn, cmd_line_opts=["--device", args.device], args=args)
 
   if args.do_search:
     raise NotImplementedError
@@ -173,13 +185,14 @@ def main(argv):
     "target_data": network.get_extern_data(network.extern_data.default_input),
     "target_classes": network.get_extern_data(network.extern_data.default_target),
   })
-  dataset.init_seq_order(epoch=rnn.engine.epoch, seq_list=args.seq_list or None)
+  dataset.init_seq_order(epoch=1, seq_list=args.seq_list or None)  # use always epoch 1, such that we have same seqs
   dataset_batch = dataset.generate_batches(
     recurrent_net=network.recurrent,
     batch_size=args.batch_size,
     max_seqs=rnn.engine.max_seqs,
     max_seq_length=sys.maxsize,
     min_seq_length=min_seq_length,
+    max_total_num_seqs=args.num_seqs,
     used_data_keys=network.used_data_keys)
 
   stats = {l: Stats() for l in layers}
