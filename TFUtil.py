@@ -1090,7 +1090,9 @@ class Data(object):
     assert self.time_dim_axis is not None
     if self.time_dim_axis_excluding_batch in self.size_placeholder:
       return True
-    assert isinstance(self.shape[self.time_dim_axis_excluding_batch], int)
+    assert isinstance(self.shape[self.time_dim_axis_excluding_batch], int), (
+      "%s: dynamic time axis dim (None) (axis %i) but size_placeholder %r misses information" % (
+        self, self.time_dim_axis, self.size_placeholder))
     return False
 
   def get_sequence_lengths(self):
