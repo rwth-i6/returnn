@@ -1474,6 +1474,59 @@ def test_safe_log_with_identity_check_numerics():
   assert x.op.type == "LogSoftmax"
 
 
+def test_safe_log_with_softmax_move_axis():
+  x = tf.constant(0.5, shape=(3, 7))
+  x = tf.nn.softmax(x)
+  print("x (softmax) op_def:")
+  pprint(x.op.op_def)
+  assert x.op.type == "Softmax"
+  x = move_axis(x, 1, 0)
+  print("x (move_axis) op_def:")
+  pprint(x.op.op_def)
+  x_ = x
+  assert x.op.type == "Transpose"
+  x = safe_log(x)
+  print("x (safe_log(softmax)) op_def")
+  pprint(x.op.op_def)
+  print("x.op.inputs[0] op_def")
+  pprint(x.op.inputs[0].op.op_def)
+  print("graph:")
+  print_graph_output(x)
+  assert x.op.type == x_.op.type == "Transpose"
+  x = x.op.inputs[0]
+  assert x.op.type == "LogSoftmax"
+
+
+def _get_relevant_ops(xs, op_types):
+  """
+  :param list[tf.Tensor|tf.Operation] xs:
+  :param list[str] op_types:
+  :return: list of matching ops
+  :rtype: list[tf.Operation]
+  """
+  from tensorflow.contrib import graph_editor
+  return [x for x in graph_editor.get_backward_walk_ops(xs, inclusive=True) if x.type in op_types]
+
+
+def test_safe_log_with_softmax3d_move_axis():
+  x = tf.constant(0.5, shape=(3, 7, 5))
+  x = tf.nn.softmax(x)
+  print("x (softmax):")
+  print_graph_output(x)
+  x_ops = _get_relevant_ops([x], ["Softmax", "LogSoftmax"])
+  assert len(x_ops) == 1 and x_ops[0].type == "Softmax"
+  x = move_axis(x, 2, 1)
+  print("x (move_axis):")
+  print_graph_output(x)
+  x_ops = _get_relevant_ops([x], ["Softmax", "LogSoftmax"])
+  assert len(x_ops) == 1 and x_ops[0].type == "Softmax"
+  x = safe_log(x)
+  print("x (safe_log(softmax)):")
+  print_graph_output(x)
+  x_ops = _get_relevant_ops([x], ["Softmax", "LogSoftmax"])
+  assert len(x_ops) == 1 and x_ops[0].type == "LogSoftmax"
+
+
 def test_clip_by_value_with_identity_grad():
   err_y = 42.0
   limit = 1.0
