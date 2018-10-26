@@ -1381,6 +1381,9 @@ class _SubnetworkRecCell(object):
               value = loss.get_error_value()
             else:
               assert False, "return_error or return_loss"
+            if return_error and value is None:
+              # This is not correctly handled currently...
+              value = tf.zeros_like(loss.get_loss_value())
             assert isinstance(value, tf.Tensor), "layer %r loss %r %s invalid" % (
               layer, loss, "loss_value" if return_loss else "error_value")
             assert value.get_shape().ndims >= 1
