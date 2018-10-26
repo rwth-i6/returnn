@@ -2127,7 +2127,8 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
   @classmethod
   def get_out_data_from_opts(cls, name, sources, **kwargs):
     output = get_concat_sources_data_template(sources, name="%s_output" % name)
-    assert output.have_time_axis()
+    assert output.have_time_axis(), "%s %r: we expect that the source (%r) has a time dim" % (
+      cls.__name__, name, sources)
     return output.copy_as_bt_or_tb_major()
 
   @classmethod
