@@ -833,7 +833,8 @@ class _SubnetworkRecCell(object):
         return layer
       # Need to create layer instance here now to not run into recursive loops.
       # We will extend it later in add_templated_layer().
-      layer = _TemplateLayer(name=name, network=self.net)
+      layer = _TemplateLayer(
+        name=name, network=self.net, construct_stack=construct_ctx.layers[-1] if construct_ctx.layers else None)
       if construct_ctx.layers:
         construct_ctx.layers[-1].dependencies.add(layer)
       construct_ctx.layers.append(layer)
@@ -2083,10 +2084,11 @@ class _TemplateLayer(LayerBase):
   All "prev:" layers also stay instances of _TemplateLayer in the real computation graph.
   """
 
-  def __init__(self, network, name):
+  def __init__(self, network, name, construct_stack=None):
     """
     :param TFNetwork.TFNetwork network:
     :param str name:
+    :param LayerBase|None construct_stack: just for debugging repr
     """
     # Init with some dummy.
     super(_TemplateLayer, self).__init__(
@@ -2098,15 +2100,21 @@ class _TemplateLayer(LayerBase):
     self.layer_class = ":uninitialized-template"
     self.is_data_template = False
     self.is_prev_time_frame = False
+    self.is_initialized = False
     self.layer_class_type = None  # type: type[LayerBase]|LayerBase
     self.kwargs = None  # type: dict[str]
     self.dependencies = set()  # type: set[LayerBase]
+    self.construct_stack = construct_stack
     self._template_base = None  # type: _TemplateLayer
 
   def __repr__(self):
-    return "<%s(%s)(%s) %r out_type=%s>" % (
-      self.__class__.__name__, self.layer_class_type.__name__ if self.layer_class_type else None, self.layer_class,
-      self.name, self.output.get_description(with_name=False))
+    if self.is_initialized:
+      return "<%s(%s)(%s) %r out_type=%s>" % (
+        self.__class__.__name__, self.layer_class_type.__name__ if self.layer_class_type else None, self.layer_class,
+        self.name, self.output.get_description(with_name=False))
+    else:
+      return "<%s %r uninitialized, construction stack %r>" % (
+        self.__class__.__name__, self.name, self.construct_stack.name if self.construct_stack else None)
 
   def init(self, output, layer_class, template_type="template", **kwargs):
     """
@@ -2117,6 +2125,7 @@ class _TemplateLayer(LayerBase):
     """
     # Overwrite self.__class__ so that checks like isinstance(layer, ChoiceLayer) work.
     # Not sure if this is the nicest way -- probably not, so I guess this will go away later.
+    self.is_initialized = True
     self.is_prev_time_frame = (template_type == "prev")
     self.is_data_template = (template_type == "template")
     assert self.is_prev_time_frame or self.is_data_template
