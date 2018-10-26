@@ -4231,7 +4231,7 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
                is_training=None,
                dropout=0.0,
                dropout_seed=None,
-               with_concat=True,
+               with_concat=False,
                global_norm=True,
                per_gate_norm=False,
                cell_norm=False,
@@ -4303,7 +4303,8 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
     normalized_input = (inputs - mean) / tf.sqrt(variance + epsilon)
     return normalized_input * g + s
 
-  def _linear(self, inputs, out_dim, layer_norm=False, name=None):
+  @staticmethod
+  def _linear(inputs, out_dim, layer_norm=False, name=None):
     assert name is not None
     from TFUtil import var_creation_scope, dot
     input_dim = inputs.get_shape().dims[-1].value
@@ -4346,6 +4347,11 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
     state.set_shape((None, self._num_units))
     return state
 
+  def get_input_transformed(self, inputs, batch_dim=None):
+    if self.with_concat:
+      return inputs
+    return self._linear(inputs, 4 * self._num_units, self.global_norm, name='xh')
+
   def __call__(self, inputs, state, scope=None):
     """Run this RNN cell on inputs given a state"""
 
@@ -4358,7 +4364,8 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
       if self.global_norm:
         lstm_out = self._norm(lstm_out, name='lstm_out')
     else:
-      input_below = self._linear(inputs, 4 * self._num_units, self.global_norm, name='xh')
+      # The input is already transformed by `get_input_transformed` function
+      input_below = inputs
       state_below = self._linear(prev_h, 4 * self._num_units, self.global_norm, name='hh')
       if self.global_norm:
         input_below = self._norm(input_below, name='input_below')
