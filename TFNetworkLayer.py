@@ -4238,21 +4238,23 @@ class CombineLayer(LayerBase):
     """
     used_sources = set()  # type: set[int]
 
-    def source(i, auto_convert=True):
+    def source(i, auto_convert=True, enforce_batch_major=False):
       """
       :param int i: layer index
       :param bool auto_convert:
+      :param bool enforce_batch_major: if True, return as batch-major
       :return: output placeholder from source i, compatible to source 0
       :rtype: tf.Tensor
       """
       assert 0 <= i < len(sources)
       used_sources.add(i)
       if isinstance(sources[i], LayerBase):
-        if i == 0:
-          return sources[i].output.placeholder
-        if auto_convert:
-          return sources[i].output.copy_compatible_to(sources[0].output).placeholder
-        return sources[i].output.placeholder
+        output = sources[i].output
+        if auto_convert and i != 0:
+          output = output.copy_compatible_to(sources[0].output)
+        if enforce_batch_major:
+          output = output.copy_as_batch_major()
+        return output.placeholder
       return sources[i]
 
     vs = vars(TFUtil).copy()
