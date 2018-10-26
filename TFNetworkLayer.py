@@ -2066,13 +2066,15 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
   """
   layer_class = "softmax_over_spatial"
 
-  def __init__(self, energy_factor=None, window_start=None, window_size=None, **kwargs):
+  def __init__(self, energy_factor=None, window_start=None, window_size=None, use_time_mask=None, **kwargs):
     """
     :param float|None energy_factor: the energy will be scaled by this factor.
       This is like a temperature for the softmax.
       In Attention-is-all-you-need, this is set to 1/sqrt(base_ctx.dim).
     :param LayerBase|None window_start: Tensor of shape (B,1) indicating the window start
     :param int|None window_size:
+    :param bool use_time_mask: if True, assumes dyn seq len, and use it for masking.
+      By default, if dyn seq len exists, it uses it.
     """
     from TFUtil import move_axis
     import numpy
@@ -2084,7 +2086,10 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
     energy_shape = [energy_shape[i] for i in range(energy_data.batch_ndim)]
     assert energy_data.have_time_axis()
     # if the time-axis is static, we can skip the masking
-    if energy_data.is_time_axis_dynamic():
+    if use_time_mask is None:
+      use_time_mask = energy_data.is_time_axis_dynamic()
+    if use_time_mask:
+      assert energy_data.is_time_axis_dynamic(), "%s: use_time_mask True, dyn time axis expected" % self
       energy_mask = energy_data.get_sequence_mask()
       if window_start is not None:
         assert window_size is not None, "set window_size explicitly"
