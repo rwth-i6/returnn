@@ -4665,7 +4665,7 @@ def smoothing_cross_entropy(logits,
       soft_targets = normal_dist.prob(
         expand_multiple_dims(
           tf.cast(tf.range(vocab_size), tf.float32),
-          axes=[i + 1 for i in range(len(labels.get_shape().ndims))]))  # [vocab_size] + shape(labels)
+          axes=[i + 1 for i in range(labels.get_shape().ndims)]))  # [vocab_size] + shape(labels)
       soft_targets = move_axis(
         soft_targets, old_axis=0, new_axis=labels.get_shape().ndims)  # shape(labels) + [vocab_size]
     else:
