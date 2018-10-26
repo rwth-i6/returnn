@@ -1304,17 +1304,6 @@ class LossHolder:
       self._network = layer.network
     return self
 
-  def set_layer_loss_error_value(self, layer, loss_value, error_value):
-    """
-    :param LayerBase layer:
-    :param tf.Tensor|None loss_value:
-    :param tf.Tensor|None error_value:
-    """
-    assert not self._is_prepared
-    self._layer = layer
-    self._loss_value = loss_value
-    self._error_value = error_value
-
   def get_layer(self):
     """
     :return: layer. assumes that it is set
