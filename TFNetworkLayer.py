@@ -2144,7 +2144,7 @@ class SeqLenMaskLayer(_ConcatInputLayer):
   """
   layer_class = "seq_len_mask"
 
-  def __init__(self, axis, mask_value, seq_len_source=None, **kwargs):
+  def __init__(self, mask_value, axis="T", seq_len_source=None, **kwargs):
     """
     :param LayerBase|None seq_len_source: if not given, uses source
     :param str|int axis:
@@ -2155,7 +2155,9 @@ class SeqLenMaskLayer(_ConcatInputLayer):
     axis = x.get_axis_from_description(axis)
     if not seq_len_source:
       seq_len_source = self.input_data
-    energy_mask = seq_len_source.output.copy_as_batch_major().get_sequence_mask()  # e.g. (B,T)
+    else:
+      seq_len_source = seq_len_source.output
+    energy_mask = seq_len_source.copy_as_batch_major().get_sequence_mask()  # e.g. (B,T)
     from TFUtil import expand_multiple_dims
     energy_mask = expand_multiple_dims(
       energy_mask, [i for i in range(x.batch_ndim) if i not in [x.batch_dim_axis, axis]])  # e.g. (B,1,T) with axis=-1
