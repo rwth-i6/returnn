@@ -1628,28 +1628,29 @@ class _SubnetworkRecCell(object):
         loop_vars=init_loop_vars,
         shape_invariants=shape_invariants,
         back_prop=self.net.train_flag is not False)
+      if have_known_seq_len:
+        assert fixed_seq_len is not None
+        seq_len = fixed_seq_len
+        _, final_net_vars, final_acc_tas = final_loop_vars
+      else:
+        _, final_net_vars, final_acc_tas, (_, seq_len) = final_loop_vars
+        max_seq_len = tf.reduce_max(seq_len, name="dyn_max_seq_len")
+      self.get_final_rec_vars = lambda layer_name: self.get_layer_rec_var_from_loop_vars(
+        loop_vars=final_net_vars,
+        layer_name=layer_name)
+      assert isinstance(final_acc_tas, list)
+      if len(outputs_to_accumulate) > 0:
+        assert isinstance(final_acc_tas[0], tf.TensorArray)
+      assert len(final_acc_tas) == len(outputs_to_accumulate)
+      self.final_acc_tas_dict = {
+        out.name: final_acc_ta
+        for (final_acc_ta, out) in zip(final_acc_tas, outputs_to_accumulate)}  # type: dict[str,tf.TensorArray]
     else:  # no layers inside loop, all optimized out
-      final_loop_vars = init_loop_vars
-    if have_known_seq_len:
-      assert fixed_seq_len is not None
-      seq_len = fixed_seq_len
-      _, final_net_vars, final_acc_tas = final_loop_vars
-    else:
-      _, final_net_vars, final_acc_tas, (_, seq_len) = final_loop_vars
-      max_seq_len = tf.reduce_max(seq_len, name="dyn_max_seq_len")
-    self.get_final_rec_vars = lambda layer_name: self.get_layer_rec_var_from_loop_vars(
-      loop_vars=final_net_vars,
-      layer_name=layer_name)
-    if rec_layer.output.size_placeholder is None:
-      rec_layer.output.size_placeholder = {}
-    rec_layer.output.size_placeholder[0] = seq_len
-    assert isinstance(final_acc_tas, list)
-    if len(outputs_to_accumulate) > 0:
-      assert isinstance(final_acc_tas[0], tf.TensorArray)
-    assert len(final_acc_tas) == len(outputs_to_accumulate)
-    self.final_acc_tas_dict = {
-      out.name: final_acc_ta
-      for (final_acc_ta, out) in zip(final_acc_tas, outputs_to_accumulate)}  # type: dict[str,tf.TensorArray]
+      seq_len = None
+      final_net_vars = None
+      final_acc_tas = None
+      self.get_final_rec_vars = None
+      self.final_acc_tas_dict = None
 
     self._construct_output_layers_moved_out(
       loop_accumulated=self.final_acc_tas_dict, seq_len=seq_len, extra_output_layers=extra_output_layers)
@@ -1669,32 +1670,33 @@ class _SubnetworkRecCell(object):
               assert loss.name not in self.accumulated_losses, "loss name not unique"
               self.accumulated_losses[loss.name] = loss
 
-        # Now collect the losses from layers inside the loop.
-        with tf.name_scope("sub_loss_normalization_factor"):
-          sub_loss_normalization_factor = 1.0 / tf.cast(tf.reduce_sum(seq_len), tf.float32)
-        for _, loss in sorted(accumulated_loop_losses.items()):
-          assert isinstance(loss, LossHolder)
-          assert loss.loss.layer, "sub loss init not called?"
-          assert loss.name not in self.accumulated_losses, "loss name not unique"
-          loss_value = tensor_array_stack(
-            self.final_acc_tas_dict["loss_%s" % loss.name], stop=max_seq_len, name="loss_%s_stack" % loss.name)
-          error_value = tensor_array_stack(
-            self.final_acc_tas_dict["error_%s" % loss.name], stop=max_seq_len, name="error_%s_stack" % loss.name)
-          loss_value.set_shape(tf.TensorShape((None, None)))  # (time, batch)
-          error_value.set_shape(tf.TensorShape((None, None)))  # (time, batch)
-          from TFUtil import sequence_mask_time_major
-          mask = sequence_mask_time_major(seq_len)
-          loss_value = tf.where(mask, loss_value, tf.zeros_like(loss_value))
-          error_value = tf.where(mask, error_value, tf.zeros_like(error_value))
-          loss_wrapped = _SubnetworkRecWrappedLoss(
-            base_loss=loss.loss,
-            loss_value=loss_value, error_value=error_value,
-            norm_factor=sub_loss_normalization_factor)
-          self.accumulated_losses[loss.name] = LossHolder(
-            name=loss.name,
-            layer=loss.loss.layer,
-            layer_output=loss.layer_output,
-            loss=loss_wrapped)
+        if accumulated_loop_losses:
+          # Now collect the losses from layers inside the loop.
+          with tf.name_scope("sub_loss_normalization_factor"):
+            sub_loss_normalization_factor = 1.0 / tf.cast(tf.reduce_sum(seq_len), tf.float32)
+          for _, loss in sorted(accumulated_loop_losses.items()):
+            assert isinstance(loss, LossHolder)
+            assert loss.loss.layer, "sub loss init not called?"
+            assert loss.name not in self.accumulated_losses, "loss name not unique"
+            loss_value = tensor_array_stack(
+              self.final_acc_tas_dict["loss_%s" % loss.name], stop=max_seq_len, name="loss_%s_stack" % loss.name)
+            error_value = tensor_array_stack(
+              self.final_acc_tas_dict["error_%s" % loss.name], stop=max_seq_len, name="error_%s_stack" % loss.name)
+            loss_value.set_shape(tf.TensorShape((None, None)))  # (time, batch)
+            error_value.set_shape(tf.TensorShape((None, None)))  # (time, batch)
+            from TFUtil import sequence_mask_time_major
+            mask = sequence_mask_time_major(seq_len)
+            loss_value = tf.where(mask, loss_value, tf.zeros_like(loss_value))
+            error_value = tf.where(mask, error_value, tf.zeros_like(error_value))
+            loss_wrapped = _SubnetworkRecWrappedLoss(
+              base_loss=loss.loss,
+              loss_value=loss_value, error_value=error_value,
+              norm_factor=sub_loss_normalization_factor)
+            self.accumulated_losses[loss.name] = LossHolder(
+              name=loss.name,
+              layer=loss.loss.layer,
+              layer_output=loss.layer_output,
+              loss=loss_wrapped)
 
     # Check if collected_choices has all the right layers.
     # At the moment, _TemplateLayer.has_search_choices() might be incomplete, that is why we check here.
@@ -1804,11 +1806,21 @@ class _SubnetworkRecCell(object):
       search_choices.set_beam_scores_from_rec(final_choice_rec_vars)
 
     with tf.name_scope("output"):
+      output_layer = None
       if "output" in self.input_layers_moved_out:
-        output = self.input_layers_net.layers["output"].output.get_placeholder_as_time_major()
+        output_layer = self.input_layers_net.layers["output"]
       elif "output" in self.output_layers_moved_out:
-        output = self.output_layers_net.layers["output"].output.get_placeholder_as_time_major()
+        output_layer = self.output_layers_net.layers["output"]
+      if output_layer:
+        assert isinstance(output_layer, LayerBase)
+        output_data = output_layer.output.copy_as_time_major()
+        rec_layer.output.size_placeholder = output_data.size_placeholder.copy()
+        output = output_data.placeholder
       else:
+        if rec_layer.output.size_placeholder is None:
+          rec_layer.output.size_placeholder = {}
+        assert seq_len is not None
+        rec_layer.output.size_placeholder[0] = seq_len
         output = tensor_array_stack(
           self.final_acc_tas_dict["output_output"], stop=max_seq_len, name="output_stack")  # e.g. (time, batch, dim)
 
@@ -2024,16 +2036,16 @@ class _SubnetworkRecCell(object):
     See self._move_outside_loop().
     The output layers will be constructed in self.output_layers_net.
 
-    :param dict[str,tf.TensorArray] loop_accumulated:
+    :param dict[str,tf.TensorArray]|None loop_accumulated:
       keys, see self.get_output(). should be like "output_<layer_name>"
-    :param tf.Tensor seq_len: shape (batch,)
+    :param tf.Tensor|None seq_len: shape (batch,). None if no loop_accumulated
     :param set[str] extra_output_layers:
     :return: nothing, will init self.output_layers_net
     """
     if not self.output_layers_moved_out and not extra_output_layers:
       return
 
-    max_len = tf.reduce_max(seq_len)
+    max_len = tf.reduce_max(seq_len) if seq_len is not None else None
     from TFUtil import tensor_array_stack
     from TFNetwork import TFNetwork, ExternData
     from TFNetworkLayer import InternalLayer
@@ -2059,6 +2071,7 @@ class _SubnetworkRecCell(object):
       :param str name:
       :rtype: LayerBase
       """
+      assert loop_accumulated is not None, "no layers in loop"
       if name in loop_acc_layers:
         return loop_acc_layers[name]
       with tf.name_scope(self.layer_data_templates[name].layer_class_type.cls_get_tf_scope_name(name)):
@@ -2090,7 +2103,7 @@ class _SubnetworkRecCell(object):
         # Note: This seq_len might make sense to use here:
         # output.size_placeholder[0] = tf.minimum(output.size_placeholder[0] + 1, tf.shape(x)[0])
         # However, often we assume that we keep the same seq lens as the output layer.
-        output.size_placeholder[0] = seq_len
+        # output.size_placeholder[0] = seq_len. just don't modify. assert seq_len is not None
         assert isinstance(self.output_layers_net, TFNetwork)
         layer = self.output_layers_net.add_layer(name="prev:%s" % name, output=output, layer_class=InternalLayer)
         prev_layers[name] = layer
