@@ -43,6 +43,7 @@ class LayerBase(object):
 
   layer_class = None  # type: str|None  # for get_layer_class()
   recurrent = False  # if the order in the time-dimension is relevant
+  allow_inf_in_output = False
 
   def __init__(self, name, network, output=None, n_out=None, out_type=None, sources=(),
                target=None, loss=None, size_target=None,
@@ -2165,6 +2166,8 @@ class SeqLenMaskLayer(_ConcatInputLayer):
     x_ = tf.where(energy_mask, x.placeholder, mask_value * tf.ones_like(x.placeholder), "energy_masked")
     self.output.placeholder = x_
     self.output.size_placeholder = x.size_placeholder.copy()
+    if mask_value in [float("-inf"), float("inf")]:
+      self.allow_inf_in_output = True
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
