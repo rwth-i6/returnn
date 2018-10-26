@@ -2144,15 +2144,17 @@ class SeqLenMaskLayer(_ConcatInputLayer):
   """
   layer_class = "seq_len_mask"
 
-  def __init__(self, seq_len_source, axis, mask_value, **kwargs):
+  def __init__(self, axis, mask_value, seq_len_source=None, **kwargs):
     """
-    :param LayerBase seq_len_source:
+    :param LayerBase|None seq_len_source: if not given, uses source
     :param str|int axis:
     :param float mask_value:
     """
     super(SeqLenMaskLayer, self).__init__(**kwargs)
     x = self.input_data.copy_as_batch_major()  # e.g. (B,T',T)
     axis = x.get_axis_from_description(axis)
+    if not seq_len_source:
+      seq_len_source = self.input_data
     energy_mask = seq_len_source.output.copy_as_batch_major().get_sequence_mask()  # e.g. (B,T)
     from TFUtil import expand_multiple_dims
     energy_mask = expand_multiple_dims(
@@ -2165,7 +2167,8 @@ class SeqLenMaskLayer(_ConcatInputLayer):
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
     super(SeqLenMaskLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
-    d["seq_len_source"] = get_layer(d["seq_len_source"])
+    if "seq_len_source" in d:
+      d["seq_len_source"] = get_layer(d["seq_len_source"])
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources, **kwargs):
