@@ -4626,9 +4626,9 @@ def copy_tensor(x):
 
 def smoothing_cross_entropy(logits,
                             labels,
-                            vocab_size,
                             label_smoothing,
-                            gaussian=False):
+                            gaussian=False,
+                            vocab_size=None):
   """
   Cross entropy with label smoothing to limit over-confidence.
   Code adapted from here:
@@ -4636,7 +4636,7 @@ def smoothing_cross_entropy(logits,
 
   :param tf.Tensor logits: Tensor of size shape(labels) + [vocab_size]
   :param tf.Tensor labels: Tensor of size [...]
-  :param int vocab_size: Tensor representing the size of the vocabulary.
+  :param int|tf.Tensor vocab_size: Tensor representing the size of the vocabulary.
   :param float label_smoothing: confidence = 1.0 - label_smoothing.
     Used to determine on and off values for label smoothing.
     If `gaussian` is true, `confidence` is the variance to the gaussian distribution.
@@ -4647,6 +4647,8 @@ def smoothing_cross_entropy(logits,
   :rtype: tf.Tensor
   """
   with tf.name_scope("smoothing_cross_entropy", [logits, labels]):
+    if vocab_size is None:
+      vocab_size = get_shape_dim(logits, -1, name="vocab_size")
     confidence = 1.0 - label_smoothing
     # Low confidence is given to all non-true labels, uniformly.
     low_confidence = (1.0 - confidence) / tf.to_float(vocab_size - 1)
