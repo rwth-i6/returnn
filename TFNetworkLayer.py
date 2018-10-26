@@ -243,7 +243,8 @@ class LayerBase(object):
     # Note: No special handling for feature_dim_axis here for now...
     beam_size = None
     for src in sources:
-      beam_size = beam_size or src.output.beam_size
+      if src:  # might be None if template construction
+        beam_size = beam_size or src.output.beam_size
     out_type.setdefault("beam_size", beam_size)
     output = Data(**out_type)
     cls._post_init_output(
@@ -273,7 +274,7 @@ class LayerBase(object):
         output.size_placeholder = cls._static_get_target_value(
           target=target or size_target, network=network,
           mark_data_key_as_used=network.train_flag is not False).size_placeholder.copy()
-    if any([(not src.output.available_for_inference) for src in sources]):
+    if any([(src and not src.output.available_for_inference) for src in sources]):
       output.available_for_inference = False
 
   @classmethod

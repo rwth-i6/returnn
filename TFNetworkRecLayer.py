@@ -809,51 +809,89 @@ class _SubnetworkRecCell(object):
     class construct_ctx:
       # Stack of layers:
       layers = []  # type: list[_TemplateLayer]
+      most_recent = None
 
-    def get_none_layer(name):
-      return None
+    class GetLayer:
+      def __init__(lself, safe=False, once=False, allow_uninitialized_template=True):
+        lself.safe = safe
+        lself.once = once
+        lself.allow_uninitialized_template = allow_uninitialized_template
+        lself.count = 0
 
-    def get_templated_layer(name):
-      """
-      :param str name:
-      :rtype: _TemplateLayer|LayerBase
-      """
-      if name.startswith("prev:"):
-        name = name[len("prev:"):]
-        self.prev_layers_needed.add(name)
-      if name in self.layer_data_templates:
-        layer = self.layer_data_templates[name]
+      def __repr__(lself):
+        return "<RecLayer construct template GetLayer>(safe %r, once %r, allow_uninitialized_template %r)" % (
+          lself.safe, lself.once, lself.allow_uninitialized_template)
+
+      def __call__(lself, name):
+        """
+        This is the get_layer function implementation.
+
+        :param str name: layer name
+        :return: layer, or None
+        :rtype: LayerBase|None
+        """
+        lself.count += 1
+        if name.startswith("prev:"):
+          name = name[len("prev:"):]
+          self.prev_layers_needed.add(name)
+        if name in self.layer_data_templates:
+          layer = self.layer_data_templates[name]
+          if construct_ctx.layers:
+            construct_ctx.layers[-1].dependencies.add(layer)
+          if lself.allow_uninitialized_template or layer.is_initialized:
+            return layer
+        if name.startswith("base:"):
+          layer = self.parent_net.get_layer(name[len("base:"):])
+          if construct_ctx.layers:
+            construct_ctx.layers[-1].dependencies.add(layer)
+          return layer
+        if lself.once and lself.count <= 1:
+          return None
+        if lself.safe:
+          return None
+        # Need to create layer instance here now to not run into recursive loops.
+        # We will extend it later in add_templated_layer().
+        if name in self.layer_data_templates:  # might exist already
+          layer = self.layer_data_templates[name]
+        else:
+          layer = _TemplateLayer(
+            name=name, network=self.net, construct_stack=construct_ctx.layers[-1] if construct_ctx.layers else None)
         if construct_ctx.layers:
           construct_ctx.layers[-1].dependencies.add(layer)
+        construct_ctx.layers.append(layer)
+        self.layer_data_templates[name] = layer
+        try:
+          # First, see how far we can get without recursive layer construction.
+          # We only want to get the data template for now.
+          # If that fails in some way,
+          # try another time but only allowing recursive layer construction for the first get_layer call.
+          # E.g. the CombineLayer and some other layers determine the output format via the first source.
+          # Also, first try without allowing to access uninitialized templates,
+          # as they might propagate wrong Data format info (they have a dummy Data format set).
+          # Only as a last resort, allow this.
+          for get_layer in [
+            GetLayer(safe=True, allow_uninitialized_template=False),
+            GetLayer(once=True, allow_uninitialized_template=False),
+            GetLayer(safe=True, allow_uninitialized_template=True),
+            GetLayer(once=True, allow_uninitialized_template=True)]:
+            try:
+              self.net.construct_layer(
+                net_dict=self.net_dict, name=name, get_layer=get_layer, add_layer=add_templated_layer)
+              break  # we did it, so get out of the loop
+            except Exception:
+              # Pretty generic exception handling but anything could happen.
+              pass  # go on with the next get_layer
+          # Now, do again, but with full recursive layer construction, to determine the dependencies.
+          construct_ctx.most_recent = list(construct_ctx.layers)
+          self.net.construct_layer(
+            net_dict=self.net_dict, name=name, get_layer=get_templated_layer, add_layer=add_templated_layer)
+        finally:
+          assert construct_ctx.layers[-1] is layer, "invalid stack %r, expected top layer %r" % (
+            construct_ctx.layers, layer)
+          construct_ctx.layers.pop(-1)
         return layer
-      if name.startswith("base:"):
-        layer = self.parent_net.get_layer(name[len("base:"):])
-        if construct_ctx.layers:
-          construct_ctx.layers[-1].dependencies.add(layer)
-        return layer
-      # Need to create layer instance here now to not run into recursive loops.
-      # We will extend it later in add_templated_layer().
-      layer = _TemplateLayer(
-        name=name, network=self.net, construct_stack=construct_ctx.layers[-1] if construct_ctx.layers else None)
-      if construct_ctx.layers:
-        construct_ctx.layers[-1].dependencies.add(layer)
-      construct_ctx.layers.append(layer)
-      self.layer_data_templates[name] = layer
-      try:
-        # First, see how far we can get without recursive layer construction.
-        # We only want to get the data template for now.
-        self.net.construct_layer(
-          net_dict=self.net_dict, name=name, get_layer=get_none_layer, add_layer=add_templated_layer)
-      except Exception:
-        # Pretty generic exception handling but anything could happen.
-        # Not so nice but should work for now.
-        pass
-      # Now, do again, but with recursive layer construction, to determine the dependencies.
-      self.net.construct_layer(
-        net_dict=self.net_dict, name=name, get_layer=get_templated_layer, add_layer=add_templated_layer)
-      assert construct_ctx.layers[-1] is layer
-      construct_ctx.layers.pop(-1)
-      return layer
+
+    get_templated_layer = GetLayer()
 
     try:
       assert not self.layer_data_templates, "do not call this multiple times"
@@ -873,8 +911,10 @@ class _SubnetworkRecCell(object):
 
     except Exception:
       print("%r: exception constructing template network (for deps and data shapes)" % self)
-      print("Template network so far:")
       from pprint import pprint
+      print("Most recent construction stack:")
+      pprint(construct_ctx.most_recent)
+      print("Template network so far:")
       pprint(self.layer_data_templates)
       raise
 
@@ -2109,9 +2149,10 @@ class _TemplateLayer(LayerBase):
 
   def __repr__(self):
     if self.is_initialized:
-      return "<%s(%s)(%s) %r out_type=%s>" % (
+      return "<%s(%s)(%s) %r out_type=%s (construction stack %r)>" % (
         self.__class__.__name__, self.layer_class_type.__name__ if self.layer_class_type else None, self.layer_class,
-        self.name, self.output.get_description(with_name=False))
+        self.name, self.output.get_description(with_name=False),
+        self.construct_stack.name if self.construct_stack else None)
     else:
       return "<%s %r uninitialized, construction stack %r>" % (
         self.__class__.__name__, self.name, self.construct_stack.name if self.construct_stack else None)
