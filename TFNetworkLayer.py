@@ -376,8 +376,10 @@ class LayerBase(object):
       # Must be done here now because loss might be set to None later.
       d["n_out"] = cls._guess_n_out_from_target_and_opt_loss(
         network=network, target=d["target"], loss_class_name=d.get("loss", None), get_layer=get_layer)
-    if d.pop("loss_only_on_non_search", None) and "loss" in d and network.search_flag:
-      del d["loss"]
+    if d.pop("loss_only_on_non_search", None) and network.search_flag:
+      d.pop("loss", None)
+      d.pop("loss_scale", None)
+      d.pop("loss_opts", None)
     if d.get("loss", None):
       loss_opts = d.pop("loss_opts", None)
       if not loss_opts:
@@ -390,7 +392,8 @@ class LayerBase(object):
       d["loss"] = cls._make_loss(
         class_name=d.pop("loss", None), opts=loss_opts, network=network, get_layer=get_layer)
     else:
-      assert "loss_scale" not in d, "loss not set"
+      assert "loss_scale" not in d, "loss not defined, do not set loss_scale"
+      assert "loss_opts" not in d, "loss not defined, do not set loss_opts"
 
   @classmethod
   def _guess_n_out_from_target_and_opt_loss(cls, network, target, loss_class_name, get_layer):
