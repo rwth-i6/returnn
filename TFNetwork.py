@@ -356,19 +356,12 @@ class TFNetwork(object):
         search_flag=search_flag if search_flag is not None else self.search_flag,
         extra_parent_net=self)
 
-    def extra_get_layer(layer_name):
-      # Do not recreate layers which exist in the main net.
-      # Only construct not-yet-existing layers.
-      if layer_name in self.extra_net.layers:
-        return self.extra_net.layers[layer_name]
-      if layer_name in self.layers:
-        return self.layers[layer_name]
-      return self.extra_net.construct_layer(net_dict=net_dict, name=layer_name)
-
     for layer_name in layer_list:
-      self.extra_net.construct_layer(net_dict=net_dict, name=layer_name, get_layer=extra_get_layer)
+      # Always (re)create the specified layer in the layer_list.
+      # However, any dependencies might resolve to the main net.
+      self.extra_net.construct_layer(net_dict=net_dict, name=layer_name, check_existing=False)
 
-  def construct_layer(self, net_dict, name, get_layer=None, add_layer=None):
+  def construct_layer(self, net_dict, name, get_layer=None, add_layer=None, check_existing=True):
     """
     :param dict[str,dict[str]] net_dict:
     :param str name: layer name
@@ -377,14 +370,16 @@ class TFNetwork(object):
       I.e. the name might be misleading, as this should return an existing layer,
       or construct it if it does not exist yet.
     :param ((str, LayerBase, dict) -> LayerBase) | None add_layer: by default self.add_layer
+    :param bool check_existing: check self.get_layer. (self.layers will be checked in any case)
     :rtype: LayerBase
     """
     if name in self.layers:
       return self.layers[name]
-    try:
-      return self.get_layer(name)
-    except LayerNotFound:
-      pass  # ok, we will try to construct it then
+    if check_existing:
+      try:
+        return self.get_layer(name)
+      except LayerNotFound:
+        pass  # ok, we will try to construct it then
     if name in self._constructing_layers:
       raise NetworkConstructionDependencyLoopException(
         layer_name=name, constructing_layers=self._constructing_layers, net_dict=net_dict, network=self)
