@@ -602,13 +602,12 @@ class Dataset(object):
       i += 1
     return numpy.array(priori / self.get_num_timesteps(), dtype=numpy.float32)
 
-  def iterate_seqs(self, chunk_size=None, chunk_step=None, used_data_keys=None, max_total_num_seqs=-1):
+  def iterate_seqs(self, chunk_size=None, chunk_step=None, used_data_keys=None):
     """
     Takes chunking into consideration.
     :param int|NumbersDict chunk_size:
     :param int|NumbersDict chunk_step:
     :param set(str)|None used_data_keys:
-    :param int max_total_num_seqs:
     :return: generator which yields tuples (seq index, seq start, seq end)
     :rtype: list[(int,NumbersDict,NumbersDict)]
     """
@@ -618,10 +617,8 @@ class Dataset(object):
       chunk_step = self.chunk_step
     chunk_size = NumbersDict(chunk_size)
     chunk_step = NumbersDict(chunk_step)
-    if not max_total_num_seqs or max_total_num_seqs < 0:
-      max_total_num_seqs = float("inf")
     s = 0
-    while self.is_less_than_num_seqs(s) and s < max_total_num_seqs:
+    while self.is_less_than_num_seqs(s):
       length = self.get_seq_length(s)
       if chunk_size == 0:
         yield (s, length.constant_like(0), length)
@@ -727,6 +724,8 @@ class Dataset(object):
     min_seq_length = NumbersDict(min_seq_length)
     assert max_seqs > 0
     assert seq_drop <= 1.0
+    if not max_total_num_seqs or max_total_num_seqs < 0:
+      max_total_num_seqs = float("inf")
     chunk_size = self.chunk_size
     chunk_step = self.chunk_step
     if not recurrent_net:
@@ -735,9 +734,13 @@ class Dataset(object):
         chunk_size = 0
     batch = Batch()
     ctx_lr = self._get_context_window_left_right()
+    total_num_seqs = 0
+    last_seq_idx = -1
     for seq_idx, t_start, t_end in self.iterate_seqs(
-          chunk_size=chunk_size, chunk_step=chunk_step, max_total_num_seqs=max_total_num_seqs,
+          chunk_size=chunk_size, chunk_step=chunk_step,
           used_data_keys=used_data_keys):
+      if seq_idx != last_seq_idx and total_num_seqs > max_total_num_seqs:
+        break
       if ctx_lr:
         t_start -= ctx_lr[0]
         t_end += ctx_lr[1]
@@ -766,6 +769,9 @@ class Dataset(object):
             yield batch
             batch = Batch()
           t_start += num_frames
+      if seq_idx != last_seq_idx:
+        last_seq_idx = seq_idx
+        total_num_seqs += 1
 
     if batch.get_all_slices_num_frames() > 0:
       yield batch
