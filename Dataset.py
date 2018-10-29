@@ -739,7 +739,7 @@ class Dataset(object):
     for seq_idx, t_start, t_end in self.iterate_seqs(
           chunk_size=chunk_size, chunk_step=chunk_step,
           used_data_keys=used_data_keys):
-      if seq_idx != last_seq_idx and total_num_seqs > max_total_num_seqs:
+      if seq_idx != last_seq_idx and total_num_seqs >= max_total_num_seqs:
         break
       if ctx_lr:
         t_start -= ctx_lr[0]
