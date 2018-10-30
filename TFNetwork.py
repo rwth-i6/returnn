@@ -356,19 +356,12 @@ class TFNetwork(object):
         search_flag=search_flag if search_flag is not None else self.search_flag,
         extra_parent_net=self)
 
-    def extra_get_layer(layer_name):
-      # Do not recreate layers which exist in the main net.
-      # Only construct not-yet-existing layers.
-      if layer_name in self.extra_net.layers:
-        return self.extra_net.layers[layer_name]
-      if layer_name in self.layers:
-        return self.layers[layer_name]
-      return self.extra_net.construct_layer(net_dict=net_dict, name=layer_name)
-
     for layer_name in layer_list:
-      self.extra_net.construct_layer(net_dict=net_dict, name=layer_name, get_layer=extra_get_layer)
+      # Always (re)create the specified layer in the layer_list.
+      # However, any dependencies might resolve to the main net.
+      self.extra_net.construct_layer(net_dict=net_dict, name=layer_name, check_existing=False)
 
-  def construct_layer(self, net_dict, name, get_layer=None, add_layer=None):
+  def construct_layer(self, net_dict, name, get_layer=None, add_layer=None, check_existing=True):
     """
     :param dict[str,dict[str]] net_dict:
     :param str name: layer name
@@ -377,14 +370,16 @@ class TFNetwork(object):
       I.e. the name might be misleading, as this should return an existing layer,
       or construct it if it does not exist yet.
     :param ((str, LayerBase, dict) -> LayerBase) | None add_layer: by default self.add_layer
+    :param bool check_existing: check self.get_layer. (self.layers will be checked in any case)
     :rtype: LayerBase
     """
     if name in self.layers:
       return self.layers[name]
-    try:
-      return self.get_layer(name)
-    except LayerNotFound:
-      pass  # ok, we will try to construct it then
+    if check_existing:
+      try:
+        return self.get_layer(name)
+      except LayerNotFound:
+        pass  # ok, we will try to construct it then
     if name in self._constructing_layers:
       raise NetworkConstructionDependencyLoopException(
         layer_name=name, constructing_layers=self._constructing_layers, net_dict=net_dict, network=self)
@@ -457,7 +452,10 @@ class TFNetwork(object):
         if debug_print_layer_output_template:
           print("layer %s/%r output: %r" % (self.name, name, layer_desc["output"]))
         assert isinstance(layer_desc["output"], Data)
+        layer_desc["output"].sanity_check(ignore_placeholder=True)  # placeholder might be overwritten later
         layer = layer_class(**layer_desc)
+        layer.post_init(layer_desc)
+        layer.output.sanity_check()
       except TypeError:
         help_on_type_error_wrong_args(cls=layer_class, kwargs=list(layer_desc.keys()))
         raise
@@ -465,12 +463,11 @@ class TFNetwork(object):
         print("Exception creating layer %s/%r of class %s with opts:" % (self.name, name, layer_class.__name__))
         pprint(layer_desc)
         raise
-      layer.post_init(layer_desc)
       if debug_print_layer_output_shape:
         layer.output.placeholder = tf.Print(
           layer.output.placeholder, [layer_class.cls_get_tf_scope_name(name), "shape:", tf.shape(layer.output.placeholder)],
           summarize=10, name="debug_print_layer_output_shape")
-      if debug_add_check_numerics_on_output and layer.output.dtype.startswith("float"):
+      if debug_add_check_numerics_on_output and layer.output.dtype.startswith("float") and not layer.allow_inf_in_output:
         print("debug_add_check_numerics_on_output: add for layer %r: %r" % (name, layer.output.placeholder))
         from TFUtil import identity_with_check_numerics
         layer.output.placeholder = identity_with_check_numerics(
@@ -1301,17 +1298,6 @@ class LossHolder:
     if self._network is None:
       self._network = layer.network
     return self
-
-  def set_layer_loss_error_value(self, layer, loss_value, error_value):
-    """
-    :param LayerBase layer:
-    :param tf.Tensor|None loss_value:
-    :param tf.Tensor|None error_value:
-    """
-    assert not self._is_prepared
-    self._layer = layer
-    self._loss_value = loss_value
-    self._error_value = error_value
 
   def get_layer(self):
     """

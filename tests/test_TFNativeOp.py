@@ -77,6 +77,7 @@ def dump_info():
   sys_exec("g++", "--version")
   print("TF __file__:", tf.__file__)
   print("TF version:", tf.__version__)
+  print("TF describe version:", Util.describe_tensorflow_version())
   print("TF include:", tf.sysconfig.get_include())
   print("TF lib:", tf.sysconfig.get_lib())
   tf_lib_so = tf.sysconfig.get_lib() + "/libtensorflow_framework.so"
@@ -123,6 +124,8 @@ def dump_info():
   so_files = [f for f in so_files.splitlines() if f]
   for f in so_files:
     debug_lib_so(f, ["sgemm"])
+  print("find_libcudart_from_runtime:", Util.find_libcudart_from_runtime())
+  print("_cuda_path_candidate_via_proc_map_libcudart:", TFUtil.CudaEnv._cuda_path_candidate_via_proc_map_libcudart())
 
 
 # Do this here such that we always see this log in Travis.

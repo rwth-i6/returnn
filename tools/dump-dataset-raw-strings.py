@@ -55,8 +55,11 @@ def get_raw_strings(dataset, options):
     assert isinstance(seq_tag, str)
     ref = dataset.get_data(seq_idx, options.key)
     if isinstance(ref, numpy.ndarray):
-      assert ref.shape == ()
-      ref = ref.flatten()[0]  # get the entry itself (str or bytes)
+      assert ref.shape == () or (ref.ndim == 1 and ref.dtype == numpy.uint8)
+      if ref.shape == ():
+        ref = ref.flatten()[0]  # get the entry itself (str or bytes)
+      else:
+        ref = ref.tobytes()
     if isinstance(ref, bytes):
       ref = ref.decode("utf8")
     assert isinstance(ref, str)

@@ -685,21 +685,25 @@ class ExternSprintDataset(SprintDatasetBase):
     if len(size_raw) < 4:
       raise EOFError
     size, = struct.unpack("<i", size_raw)
+    assert size > 0, "%s: We expect to get some non-empty package. Invalid Python mod in Sprint?" % (self,)
     stream = BytesIO()
     read_size = 0
     while read_size < size:
       data_raw = self.pipe_c2p[0].read(size - read_size)
       if len(data_raw) == 0:
-        raise EOFError
+        raise EOFError("%s: expected to read %i bytes but got EOF after %i bytes" % (self, size, read_size))
       read_size += len(data_raw)
       stream.write(data_raw)
     stream.seek(0)
-    if PY3:
-      # encoding is for converting Python2 strings to Python3.
-      # Cannot use utf8 because Numpy will also encode the data as strings and there we need it as bytes.
-      dataType, args = Unpickler(stream, encoding="bytes").load()
-    else:
-      dataType, args = Unpickler(stream).load()
+    try:
+      if PY3:
+        # encoding is for converting Python2 strings to Python3.
+        # Cannot use utf8 because Numpy will also encode the data as strings and there we need it as bytes.
+        dataType, args = Unpickler(stream, encoding="bytes").load()
+      else:
+        dataType, args = Unpickler(stream).load()
+    except EOFError:
+      raise Exception("%s: parse error of %i bytes (%r)" % (self, size, stream.getvalue()))
     return dataType, args
 
   def _join_child(self, wait=True, expected_exit_status=None):

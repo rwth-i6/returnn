@@ -3003,3 +3003,28 @@ def find_sgemm_libs_from_runtime():
   _find_sgemm_lib_from_runtime_cached = fns_with_sgemm
   return fns_with_sgemm
 
+
+_find_libcudart_from_runtime_cached = None
+
+
+def find_libcudart_from_runtime():
+  """
+  Looks through all libs via :func:`collect_proc_maps_exec_files`,
+  and searches for all which have the ``sgemm`` symbol.
+  Currently only works on Linux (because collect_proc_maps_exec_files).
+
+  :return: list of libs (their path)
+  :rtype: str|None
+  """
+  if not os.path.exists("/proc"):
+    return None
+  global _find_libcudart_from_runtime_cached
+  if _find_libcudart_from_runtime_cached is not None:
+    return _find_libcudart_from_runtime_cached[0]
+  fns = collect_proc_maps_exec_files()
+  for fn in fns:
+    if re.match(".*/libcudart\\.so(\\..*)?", fn):
+      _find_libcudart_from_runtime_cached = [fn]
+      return fn
+  _find_libcudart_from_runtime_cached = [None]
+  return None

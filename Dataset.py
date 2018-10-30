@@ -700,13 +700,14 @@ class Dataset(object):
 
   def _generate_batches(self, recurrent_net,
                         batch_size, max_seqs=-1, max_seq_length=sys.maxsize, min_seq_length=0,
-                        seq_drop=0.0,
+                        seq_drop=0.0, max_total_num_seqs=-1,
                         used_data_keys=None):
     """
     :param bool recurrent_net: If True, the batch might have a batch seq dimension > 1.
       Otherwise, the batch seq dimension is always 1 and multiple seqs will be concatenated.
     :param int batch_size: Max number of frames in one batch.
     :param int max_seqs: Max number of seqs per batch.
+    :param int max_total_num_seqs:
     :param int|dict[str,int]|NumbersDict max_seq_length:
     :param set(str)|None used_data_keys:
     """
@@ -723,6 +724,8 @@ class Dataset(object):
     min_seq_length = NumbersDict(min_seq_length)
     assert max_seqs > 0
     assert seq_drop <= 1.0
+    if not max_total_num_seqs or max_total_num_seqs < 0:
+      max_total_num_seqs = float("inf")
     chunk_size = self.chunk_size
     chunk_step = self.chunk_step
     if not recurrent_net:
@@ -731,8 +734,13 @@ class Dataset(object):
         chunk_size = 0
     batch = Batch()
     ctx_lr = self._get_context_window_left_right()
+    total_num_seqs = 0
+    last_seq_idx = -1
     for seq_idx, t_start, t_end in self.iterate_seqs(
-          chunk_size=chunk_size, chunk_step=chunk_step, used_data_keys=used_data_keys):
+          chunk_size=chunk_size, chunk_step=chunk_step,
+          used_data_keys=used_data_keys):
+      if seq_idx != last_seq_idx and total_num_seqs >= max_total_num_seqs:
+        break
       if ctx_lr:
         t_start -= ctx_lr[0]
         t_end += ctx_lr[1]
@@ -761,6 +769,9 @@ class Dataset(object):
             yield batch
             batch = Batch()
           t_start += num_frames
+      if seq_idx != last_seq_idx:
+        last_seq_idx = seq_idx
+        total_num_seqs += 1
 
     if batch.get_all_slices_num_frames() > 0:
       yield batch

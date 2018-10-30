@@ -26,11 +26,12 @@ class EpochWiseFilter:
 
   def filter(self, epoch, seq_order, get_seq_len):
     """
-    :param int epoch:
+    :param int|None epoch:
     :param list[int] seq_order: list of seq idxs
     :param ((int)->int) get_seq_len: seq idx -> len
     :return: new seq_order
     """
+    epoch = epoch or 1
     import Util
     old_num_seqs = len(seq_order)
     any_filter = False
@@ -48,13 +49,13 @@ class EpochWiseFilter:
           max_mean_len = opts.get("max_mean_len")
           lens_and_seqs = numpy.array(sorted([(get_seq_len(idx), idx) for idx in seq_order]))
           best_num = Util.binary_search_any(
-            cmp=lambda num: numpy.mean(lens_and_seqs[:num, 0]) > max_mean_len, low=1, high=len(lens_and_seqs) + 1)
+            cmp=lambda num: numpy.mean(lens_and_seqs[:num, 0]) - max_mean_len, low=1, high=len(lens_and_seqs) + 1)
           assert best_num is not None
           selected_seq_idxs = set(lens_and_seqs[:best_num, 1])
           # Select subset of seq_order. Keep order as-is.
           seq_order = [seq_idx for seq_idx in seq_order if seq_idx in selected_seq_idxs]
           print(
-            ("%s, epoch %i. Old mean seq len (transcription) is %f, new is %f, requested max is %f."
+            ("%s, epoch %i. Old mean seq len is %f, new is %f, requested max is %f."
              " Old num seqs is %i, new num seqs is %i.") %
             (self.debug_msg_prefix, epoch,
              float(numpy.mean(lens_and_seqs[:, 0])), float(numpy.mean(lens_and_seqs[:best_num, 0])),
