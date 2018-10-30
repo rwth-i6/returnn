@@ -60,8 +60,11 @@ Add the following command to .bashrc:
 
 You should download a proper version of TensorFlow source code, [version information](https://www.tensorflow.org/install/source#tested_build_configurations)  
 If you want to download the newest version of TensorFlow source code:
-    $ git clone https://github.com/tensorflow/tensorflow  
+
+    $ git clone https://github.com/tensorflow/tensorflow
+    
 And then
+
     $ cd tensorflow
     $ ./configure
     
@@ -119,7 +122,8 @@ and change LSTM unit "lstm" to "nativelstm2". We tested that the LSTM unit "lstm
     $ ./path-to-your-returnn/tools/compile_tf_graph.py graph_for_inference.config --eval 1 --output_file filename+[".meta", ".metatxt"]
     
 .meta graph: the graph for inference.  
-.metatxt: contains all the node names of the graph.  
+.metatxt: contains all the node names of the graph.
+
 **Note**: we will include the .meta graph for inference in the checkpoint.  
 Suppose network.040.meta is the original .meta file, network.040.inference.meta is the one we create for inference, replace the original one with the new one by:
 

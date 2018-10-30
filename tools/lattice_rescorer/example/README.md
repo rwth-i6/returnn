@@ -19,7 +19,7 @@ vocab.txt
 network.040.data*  
 network.040.index  
 network.040.meta  
-**Note**: .meta graph is NOT the original one in TF checkpoint, the original one is replaced by the .meta graph created using returnn. For more details, check README.md up one directory **"Create the Tensorflow graph for inference"**.
+**Note**: .meta graph is **NOT** the original one in TF checkpoint, the original one is replaced by the .meta graph created using returnn. For more details, check README.md up one directory **"Create the Tensorflow graph for inference"**.
 
 .:
 example lattice (QRBC_ENG_GB_20110119_120000_BBC_WH_POD_0000313109_0000325199.lat.gz)
