@@ -1,13 +1,13 @@
 How to use the lattice rescorer tool.
 =====================================
 
-Tested version infos:
-TensorFlow pip package 1.8.0 
-tensorflow source code 1.7.0 
-bazel 0.11.0
-protoc 3.2.0
-cuda 9.0
-cuDNN 7.0
+Tested version infos:  
+TensorFlow pip package 1.8.0   
+tensorflow source code 1.7.0   
+bazel 0.11.0  
+protoc 3.2.0  
+cuda 9.0  
+cuDNN 7.0  
 
 # Install TensorFlow with pip.
 
@@ -24,25 +24,25 @@ Verify the install:
 You can refer to [install tensorflow from source](https://www.tensorflow.org/install/source),the steps are similar.
 ## Prepare environment for Linux
     
-  Before compiling Tensorflow c++ library on Linux, install the following build tools on your system:
-  *bazel
-  *TensorFlow Python dependencies
-  *cuda, cuDNN.
+  Before compiling Tensorflow c++ library on Linux, install the following build tools on your system:  
+  *bazel  
+  *TensorFlow Python dependencies  
+  *cuda, cuDNN  
     
 ### Install Bazel
 
-You should install a required version of bazel, [version information](https://www.tensorflow.org/install/source#tested_build_configurations)
+You should install a required version of bazel, [version information](https://www.tensorflow.org/install/source#tested_build_configurations).  
 Then [Install bazel using binary installer](https://docs.bazel.build/versions/master/install-ubuntu.html#installing-using-binary-installer)
 
 ### Install TensorFlow for GPU prerequisites
 
 #### Install CUDA and cuDNN
 
-You should install a required version of CUDA and cuDNN, [version information](https://www.tensorflow.org/install/source#tested_build_configurations):
+You should install a required version of CUDA and cuDNN, [version information](https://www.tensorflow.org/install/source#tested_build_configurations):  
 
-[Install CUDA](https://developer.nvidia.com/cuda-toolkit-archive)
+[Install CUDA](https://developer.nvidia.com/cuda-toolkit-archive)  
 
-[Install cuDNN](https://developer.nvidia.com/rdp/cudnn-archive)
+[Install cuDNN](https://developer.nvidia.com/rdp/cudnn-archive)  
 
 Then execute the following commands:
 
@@ -58,10 +58,10 @@ Add the following command to .bashrc:
 
 ## Clone the Tensorflow repository and configure the installation
 
-You should download a proper version of TensorFlow source code, [version information](https://www.tensorflow.org/install/source#tested_build_configurations)
-If you want to download the newest version of TensorFlow source code:
-    $ git clone https://github.com/tensorflow/tensorflow
-And then
+You should download a proper version of TensorFlow source code, [version information](https://www.tensorflow.org/install/source#tested_build_configurations)  
+If you want to download the newest version of TensorFlow source code:  
+    $ git clone https://github.com/tensorflow/tensorflow  
+And then  
     $ cd tensorflow
     $ ./configure
     
@@ -88,7 +88,7 @@ For example:
 
     $ ./path-to-your-returnn/tools/compile_native_op.py --native_op NativeLstm2 --output path-to-libraries.txt
 
-The LSTM cell we used is nativelstm2, path-to-libraries.txt contains the paths to the compiled libraries. The libraries are stored by default in /var/tmp/, please move the libraries to somewhere else.
+The LSTM cell we used is nativelstm2, path-to-libraries.txt contains the paths to the compiled libraries. The libraries are stored by default in /var/tmp/, please move the libraries to somewhere else.  
 Alternatively, you can use the option --config to compile all native ops, see the script compile_native_op.py for more detailes.
 
 # Modifications in the original network config file 
@@ -96,6 +96,7 @@ Alternatively, you can use the option --config to compile all native ops, see th
 1. In the config file, for each LSTM layers, please add 
 
     "initial_state" : "keep_over_epoch"
+    
 and change LSTM unit "lstm" to "nativelstm2". We tested that the LSTM unit "lstm" does not work for inference.
 
 2. You have this in your config:
@@ -103,7 +104,7 @@ and change LSTM unit "lstm" to "nativelstm2". We tested that the LSTM unit "lstm
     num_outputs = {"data": {"dim": num_inputs, "sparse": True, "dtype": "int32"}}  # sparse data
     num_outputs["delayed"] = num_outputs["data"]
 
-Change that to:
+  Change that to:
 
     extern_data = {
       "delayed": {"dim": num_inputs, "sparse": True, "dtype": "int32", "available_in_inference": True},
@@ -117,8 +118,9 @@ Change that to:
 
     $ ./path-to-your-returnn/tools/compile_tf_graph.py graph_for_inference.config --eval 1 --output_file filename+[".meta", ".metatxt"]
     
-We load the .meta graph for inference. And .metatxt contains all the node names of the graph.
-**Note**: we will include the .meta graph for inference in the checkpoint.
+.meta graph: the graph for inference.  
+.metatxt: contains all the node names of the graph.  
+**Note**: we will include the .meta graph for inference in the checkpoint.  
 Suppose network.040.meta is the original .meta file, network.040.inference.meta is the one we create for inference, replace the original one with the new one by:
 
     $ mv network.040.inference.meta network.040.meta
@@ -143,16 +145,16 @@ For command line options information:
 
     $ lattice_rescorer --help 
     
---ops-Returnn arg
+--ops-Returnn arg  
 Text file containing the paths to libraries of the native ops defined in returnn, for more details, please check the part"Compile LSTM op in returnn"
 
---checkpoint-files arg
+--checkpoint-files arg  
 checkpoint of tensorflow model, but we should replace the original .meta graph with the .meta graph for inference created using returnn, please check the part "Create the TensorFlow graph for inference".
 
---state-vars-list arg
+--state-vars-list arg  
 Text file containing the information needed to assign a value to the state variables in LSTM cell. Please check the sample example/state_vars_list
 
---tensor-names-list arg 
+--tensor-names-list arg  
 Text file of tensor names for feeding and fetching 
 
 For the usages of the other options, please check [rwthlm](https://www-i6.informatik.rwth-aachen.de/web/Software/rwthlm.php)
@@ -163,7 +165,7 @@ Please read an example script example/rescore_lattice.sh for more detailes.
 
 The script rescore_lattice.sh is an example to rescore a lattice.
 
-Before using the script, please modify manually the files libs_list, state_vars_list, tensor_names_list. For the details of these three text files, please read example/README.md. And then
+Before using the script, please modify manually the files libs_list, state_vars_list, tensor_names_list. For the details of these three text files, please read **example/README.md**. And then
     
     $ cd example
     $ ./rescore_lattice.sh
