@@ -1,7 +1,7 @@
 How to use the lattice rescorer tool.
 =====================================
 
-Tested version infos:  
+**Tested version infos:**    
 TensorFlow pip package 1.8.0   
 tensorflow source code 1.7.0   
 bazel 0.11.0  
