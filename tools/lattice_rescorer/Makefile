@@ -37,8 +37,7 @@ LDFLAGS := -L$(BOOST)/lib -lboost_program_options -lboost_filesystem \
            -Wl,-rpath,$(INTEL)/lib/intel64 \
            -Wl,-rpath,$(INTEL)/mkl/lib/intel64 \
            -Wl,-rpath,$(CUDA)/lib64 \
-           -Wl,-rpath,$(CUDNN_v7.0)/lib64 \
-           -Wl,-rpath,/u/deng/.local/lib/python3.6/site-packages/numpy/.libs
+           -Wl,-rpath,$(CUDNN_v7.0)/lib64
 
 # default rule
 all: dep lattice_rescorer
