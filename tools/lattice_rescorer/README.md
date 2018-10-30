@@ -32,7 +32,24 @@ You can refer to [install tensorflow from source](https://www.tensorflow.org/ins
 ### Install Bazel
 
 You should install a required version of bazel, [version information](https://www.tensorflow.org/install/source#tested_build_configurations).  
-Then [Install bazel using binary installer](https://docs.bazel.build/versions/master/install-ubuntu.html#installing-using-binary-installer)
+[Install bazel using binary installer](https://docs.bazel.build/versions/master/install-ubuntu.html#install-with-installer-ubuntu)
+
+#### Download Bazel
+
+Download the Bazel binary installer named bazel-<version>-installer-linux-x86_64.sh from the [Bazel releases page on GitHub](https://github.com/bazelbuild/bazel/releases).
+
+#### Run the installer
+
+Run the Bazel installer as follows:
+
+    $ chmod +x bazel-<version>-installer-linux-x86_64.sh
+    $ ./bazel-<version>-installer-linux-x86_64.sh --user
+
+#### Set up your environment
+
+In your .bashrc, add the following line:
+    
+    export PATH="$PATH:$HOME/bin"
 
 ### Install TensorFlow for GPU prerequisites
 
