@@ -59,9 +59,9 @@ Add the following command to .bashrc:
 ## Clone the Tensorflow repository and configure the installation
 
 You should download a proper version of TensorFlow source code, [version information](https://www.tensorflow.org/install/source#tested_build_configurations)  
-If you want to download the newest version of TensorFlow source code:  
+If you want to download the newest version of TensorFlow source code:
     $ git clone https://github.com/tensorflow/tensorflow  
-And then  
+And then
     $ cd tensorflow
     $ ./configure
     
@@ -146,20 +146,20 @@ For command line options information:
     $ lattice_rescorer --help 
     
 --ops-Returnn arg  
-Text file containing the paths to libraries of the native ops defined in returnn, for more details, please check the part"Compile LSTM op in returnn"
+Text file containing the paths to libraries of the native ops defined in returnn, for more details, please check the part **"Compile LSTM op in returnn"**.
 
 --checkpoint-files arg  
-checkpoint of tensorflow model, but we should replace the original .meta graph with the .meta graph for inference created using returnn, please check the part "Create the TensorFlow graph for inference".
+checkpoint of tensorflow model, but we should replace the original .meta graph with the .meta graph for inference created using returnn, please check the part **"Create the TensorFlow graph for inference"**.
 
 --state-vars-list arg  
-Text file containing the information needed to assign a value to the state variables in LSTM cell. Please check the sample example/state_vars_list
+Text file containing the information needed to assign a value to the state variables in LSTM cell. Please check **example/README.md**.
 
 --tensor-names-list arg  
-Text file of tensor names for feeding and fetching 
+Text file of tensor names for feeding and fetching. Please chech **example/README.md**.
 
 For the usages of the other options, please check [rwthlm](https://www-i6.informatik.rwth-aachen.de/web/Software/rwthlm.php)
  
-Please read an example script example/rescore_lattice.sh for more detailes. 
+Please read an example script example/rescore_lattice.sh. 
 
 ## An example script to rescore a lattice
 
