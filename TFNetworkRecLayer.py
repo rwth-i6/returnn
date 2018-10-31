@@ -4470,7 +4470,7 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
     :return: (LSTM output h, LSTM state (consisting of cell state c and output h)
     :rtype: (tf.Tensor, rnn_cell.LSTMStateTuple)
     """
-    prev_c, prev_h = state.c, state.h
+    prev_c, prev_h = state
     prev_h = self._optional_dropout(prev_h, dropout=self.dropout_h)
 
     if self.with_concat:
