@@ -4361,10 +4361,11 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
   def state_size(self):
     return rnn_cell.LSTMStateTuple(self._num_units, self._num_units)
 
-  def _norm(self, inputs, epsilon=1e-6, name=None):
+  def _norm(self, inputs, epsilon=1e-6, with_beta=True, name=None):
     """
     :param tf.Tensor inputs: (B,D), or (T,B,D)
     :param float epsilon:
+    :param bool with_beta:
     :param str name:
     :return: (B,D) or (T,B,D)
     :rtype: tf.Tensor
@@ -4374,12 +4375,15 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
     shape = inputs.get_shape()[-1:]
     gamma_init = tf.constant_initializer(self.norm_grain)
     beta_init = tf.constant_initializer(self.norm_shift)
-    with var_creation_scope():
-      g = tf.get_variable("gamma_" + name, shape=shape, initializer=gamma_init)
-      s = tf.get_variable("beta_" + name, shape=shape, initializer=beta_init)
     mean, variance = tf.nn.moments(inputs, axes=[-1], keep_dims=True)
     normalized_input = (inputs - mean) / tf.sqrt(variance + epsilon)
-    return normalized_input * g + s
+    with var_creation_scope():
+      g = tf.get_variable("gamma_" + name, shape=shape, initializer=gamma_init)
+      s = tf.get_variable("beta_" + name, shape=shape, initializer=beta_init) if with_beta else None
+    y = normalized_input * g
+    if with_beta:
+      y += s
+    return y
 
   @staticmethod
   def _linear(inputs, out_dim, apply_bias=True, name=None):
@@ -4434,12 +4438,13 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
     return state
 
   def get_input_transformed(self, inputs, batch_dim=None):
-    if self.with_concat:
+    if self.with_concat:  # concat inputs, prev_h
       assert not self.global_norm, "%s: global_norm and with_concat together not supported" % self
       return inputs
-    inputs = self._linear(inputs, 4 * self._num_units, apply_bias=not self.global_norm, name='ff')
+    inputs = self._linear(
+      inputs, 4 * self._num_units, apply_bias=not self.global_norm and not self.global_norm_joined, name='ff')
     if self.global_norm:
-      inputs = self._norm(inputs, name='input_below')
+      inputs = self._norm(inputs, name='input_below', with_beta=not self.global_norm_joined)
     return inputs
 
   def __call__(self, inputs, state, scope=None):
@@ -4454,14 +4459,17 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
     prev_c, prev_h = state.c, state.h
 
     if self.with_concat:
+      assert not self.global_norm
       concat_input = tf.concat([inputs, prev_h], axis=-1)
       lstm_in = self._linear(concat_input, 4 * self._num_units, apply_bias=not self.global_norm, name='ff_re')
     else:
       # The input is already transformed by `get_input_transformed` function
       input_below = inputs
-      state_below = self._linear(prev_h, 4 * self._num_units, apply_bias=not self.global_norm, name='re')
+      # Bias already via get_input_transformed (if not global_norm, otherwise anyway should not been used).
+      state_below = self._linear(prev_h, 4 * self._num_units, apply_bias=False, name='re')
       if self.global_norm:
-        state_below = self._norm(state_below, name='state_below')
+        # Beta already in get_input_transformed.
+        state_below = self._norm(state_below, name='state_below', with_beta=False)
       lstm_in = tf.add(input_below, state_below)
     if self.global_norm_joined:
       lstm_in = self._norm(lstm_in, name='lstm_in')
