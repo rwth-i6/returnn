@@ -162,6 +162,17 @@ In the folder returnn/tools/lattice_rescorer, execute the following command
 
     $ make
     
+If you got the following error while compiling using Makefile:
+
+libopenblasp-r0-39a31c03.2.18.so: cannot open shared object file: No such file or directory  
+Please do:
+
+    find -name  libopenblasp-r0-39a31c03.2.18.so
+
+and add the following line in .bashrc:
+
+    export LD_LIBRARY_PATH=/folder-of-the-missing-library:$LD_LIBRARY_PATH
+    
 ## Usage of lattice rescorer tool
 
 lattice_rescorer [OPTION]... [LATTICE]
