@@ -4257,33 +4257,34 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
   1. Layer normalization as in the original paper:
   Ref: https://arxiv.org/abs/1607.06450
   This can be applied by having:
-    all default params
+    all default params (global_norm=True, cell_norm=True, cell_norm_in_output=True)
 
   2. Layer normalization for RNMT+:
   Ref: https://arxiv.org/abs/1804.09849
   This can be applied by having:
     all default params except
-   - global_norm = False,
-   - per_gate_norm = True
+    - global_norm = False
+    - per_gate_norm = True
+    - cell_norm_in_output = False
 
   3. TF official `LayerNormBasicLSTMCell`
   Ref: https://www.tensorflow.org/api_docs/python/tf/contrib/rnn/LayerNormBasicLSTMCell
   This can be reproduced by having:
     all default params except
-  - global_norm = False
-  - per_gate_norm = True,
+    - global_norm = False
+    - per_gate_norm = True
 
   4. Sockeye LSTM layer normalization implementations
   Ref: https://github.com/awslabs/sockeye/blob/master/sockeye/rnn.py
 
   `LayerNormLSTMCell` can be reproduced by having:
     all default params except
-    - with_concat = False
+    - with_concat = False (just efficiency, no difference in the model)
 
   `LayerNormPerGateLSTMCell` can be reproduced by having:
     all default params except:
-    - with_concat = False,
-    - global_norm = False,
+    (- with_concat = False)
+    - global_norm = False
     - per_gate_norm = True
 
   Recurrent dropout is based on:
@@ -4297,13 +4298,16 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
                activation=tf.tanh,
                is_training=None,
                dropout=0.0,
+               dropout_h=0.0,
                dropout_seed=None,
                with_concat=False,
                global_norm=True,
                global_norm_joined=False,
                per_gate_norm=False,
-               cell_norm=False,
-               hidden_norm=False):
+               cell_norm=True,
+               cell_norm_in_output=True,
+               hidden_norm=False,
+               variance_epsilon=1e-12):
     """
 
     :param int num_units: number of lstm units
@@ -4311,7 +4315,8 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
     :param float norm_shift: layer normalization shift (bias) value
     :param activation: Activation function to be applied in the lstm cell
     :param bool is_training: if True then we are in the training phase
-    :param float dropout: dropout rate
+    :param float dropout: dropout rate, applied on cell-in (j)
+    :param float dropout_h: dropout rate, applied on hidden state (h) when it enters the LSTM (variational dropout)
     :param int dropout_seed: used to create random seeds
     :param bool with_concat: if True then the input and prev hidden state
       is concatenated for the computation. this is just about computation performance.
@@ -4323,6 +4328,7 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
       per lstm gate
     :param bool cell_norm: if True then layer normalization is applied
       to the LSTM new cell output
+    :param bool cell_norm_in_output: if True, the normalized cell is also used in the output
     :param bool hidden_norm: if True then layer normalization is applied
       to the LSTM new hidden state output
     """
@@ -4339,10 +4345,10 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
     self.is_training = is_training
 
     self.dropout = dropout
+    self.dropout_h = dropout_h
     if dropout_seed is None:
       dropout_seed = TFNetwork.get_current_network().random.randint(2 ** 31)
     self.dropout_seed = dropout_seed
-    self._dropout_mask = None
 
     self.with_concat = with_concat
 
@@ -4351,7 +4357,9 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
     self.global_norm_joined = global_norm_joined
     self.per_gate_norm = per_gate_norm
     self.cell_norm = cell_norm
+    self.cell_norm_in_output = cell_norm_in_output
     self.hidden_norm = hidden_norm
+    self.variance_epsilon = variance_epsilon
 
   @property
   def output_size(self):
@@ -4361,10 +4369,10 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
   def state_size(self):
     return rnn_cell.LSTMStateTuple(self._num_units, self._num_units)
 
-  def _norm(self, inputs, epsilon=1e-6, name=None):
+  def _norm(self, inputs, with_beta=True, name=None):
     """
     :param tf.Tensor inputs: (B,D), or (T,B,D)
-    :param float epsilon:
+    :param bool with_beta:
     :param str name:
     :return: (B,D) or (T,B,D)
     :rtype: tf.Tensor
@@ -4374,12 +4382,15 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
     shape = inputs.get_shape()[-1:]
     gamma_init = tf.constant_initializer(self.norm_grain)
     beta_init = tf.constant_initializer(self.norm_shift)
+    mean, variance = tf.nn.moments(inputs, axes=[-1], keep_dims=True)
+    normalized_input = (inputs - mean) * tf.rsqrt(variance + self.variance_epsilon)
     with var_creation_scope():
       g = tf.get_variable("gamma_" + name, shape=shape, initializer=gamma_init)
-      s = tf.get_variable("beta_" + name, shape=shape, initializer=beta_init)
-    mean, variance = tf.nn.moments(inputs, axes=[-1], keep_dims=True)
-    normalized_input = (inputs - mean) / tf.sqrt(variance + epsilon)
-    return normalized_input * g + s
+      s = tf.get_variable("beta_" + name, shape=shape, initializer=beta_init) if with_beta else None
+    y = normalized_input * g
+    if with_beta:
+      y += s
+    return y
 
   @staticmethod
   def _linear(inputs, out_dim, apply_bias=True, name=None):
@@ -4404,42 +4415,50 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
       out = tf.nn.bias_add(out, bias)
     return out
 
-  def _get_dropout_mask(self):
-    if self._dropout_mask is not None:
-      return self._dropout_mask
-
+  def _get_dropout_mask(self, dropout):
+    """
+    :param float dropout:
+    :return: scalar (1.0) or shape (batch_size, num_units)
+    :rtype: tf.Tensor
+    """
     from TFUtil import var_creation_scope, cond
     # Create the dropout masks outside the loop:
     with var_creation_scope():
       def get_mask():
         from TFNetworkLayer import LayerBase
         batch_size = LayerBase.get_recent_layer().get_batch_dim()
-        keep_prob = 1.0 - self.dropout
+        keep_prob = 1.0 - dropout
         # uniform [keep_prob, 1.0 + keep_prob)
         random_tensor = keep_prob
         random_tensor += tf.random_uniform((batch_size, self._num_units), seed=self.dropout_seed, dtype=tf.float32)
         # 0. if [keep_prob, 1.0) and 1. if [1.0, 1.0 + keep_prob)
         binary_tensor = tf.floor(random_tensor)
         return binary_tensor * (1.0 / keep_prob)
-      self._dropout_mask = cond(self.is_training, get_mask, lambda: 1.0)
-    return self._dropout_mask
+      return cond(self.is_training, get_mask, lambda: 1.0)
 
-  def _optional_dropout(self, state):
-    if not self.dropout:
-      return state
+  def _optional_dropout(self, x, dropout):
+    """
+    :param tf.Tensor x: (B,D)
+    :param float dropout:
+    :return: x, or x with dropout, (B,D)
+    :rtype: tf.Tensor
+    """
+    if not dropout:
+      return x
     if self.is_training is False:
-      return state
-    state *= self._get_dropout_mask()
-    state.set_shape((None, self._num_units))
-    return state
+      return x
+    x *= self._get_dropout_mask(dropout=dropout)
+    x.set_shape((None, self._num_units))
+    return x
 
   def get_input_transformed(self, inputs, batch_dim=None):
-    if self.with_concat:
+    if self.with_concat:  # concat inputs, prev_h
       assert not self.global_norm, "%s: global_norm and with_concat together not supported" % self
       return inputs
-    inputs = self._linear(inputs, 4 * self._num_units, apply_bias=not self.global_norm, name='ff')
+    inputs = self._linear(
+      inputs, 4 * self._num_units, apply_bias=not self.global_norm and not self.global_norm_joined, name='ff')
     if self.global_norm:
-      inputs = self._norm(inputs, name='input_below')
+      inputs = self._norm(inputs, name='input_below', with_beta=not self.global_norm_joined)
     return inputs
 
   def __call__(self, inputs, state, scope=None):
@@ -4452,16 +4471,20 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
     :rtype: (tf.Tensor, rnn_cell.LSTMStateTuple)
     """
     prev_c, prev_h = state.c, state.h
+    prev_h = self._optional_dropout(prev_h, dropout=self.dropout_h)
 
     if self.with_concat:
+      assert not self.global_norm
       concat_input = tf.concat([inputs, prev_h], axis=-1)
       lstm_in = self._linear(concat_input, 4 * self._num_units, apply_bias=not self.global_norm, name='ff_re')
     else:
       # The input is already transformed by `get_input_transformed` function
       input_below = inputs
-      state_below = self._linear(prev_h, 4 * self._num_units, apply_bias=not self.global_norm, name='re')
+      # Bias already via get_input_transformed (if not global_norm, otherwise anyway should not been used).
+      state_below = self._linear(prev_h, 4 * self._num_units, apply_bias=False, name='re')
       if self.global_norm:
-        state_below = self._norm(state_below, name='state_below')
+        # Beta already in get_input_transformed.
+        state_below = self._norm(state_below, name='state_below', with_beta=False)
       lstm_in = tf.add(input_below, state_below)
     if self.global_norm_joined:
       lstm_in = self._norm(lstm_in, name='lstm_in')
@@ -4474,15 +4497,18 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
       f = self._norm(f, name='f_gate')
       o = self._norm(o, name='o_gate')
 
-    g = self._optional_dropout(self.activation(j))
+    g = self._optional_dropout(self.activation(j), dropout=self.dropout)
 
     from tensorflow.python.ops.math_ops import sigmoid
 
     new_c = sigmoid(f) * prev_c + sigmoid(i) * g
+    new_c_for_output = new_c
     if self.cell_norm:
       new_c = self._norm(new_c, name='new_c')
+      if self.cell_norm_in_output:
+        new_c_for_output = new_c
 
-    new_h = sigmoid(o) * self.activation(new_c)
+    new_h = sigmoid(o) * self.activation(new_c_for_output)
     if self.hidden_norm:
       new_h = self._norm(new_h, name='new_h')
 
