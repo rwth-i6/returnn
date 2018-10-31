@@ -19,9 +19,11 @@ Verify the install:
     
     $ python3 -c "import tensorflow as tf; print(tf.__version__)"
 
-# Compile TensorFlow c++ library from source
+# Compile TensorFlow c++/c library from source
 
-You can refer to [install tensorflow from source](https://www.tensorflow.org/install/source),the steps are similar.
+You can refer to [install tensorflow from source](https://www.tensorflow.org/install/source),the steps are similar.  
+Also, the scirpt in Kaldi [install_tensorflow_cc.sh](https://github.com/kaldi-asr/kaldi/blob/master/tools/extras/install_tensorflow_cc.sh) shows the steps to compile c++/c libraries.
+
 ## Prepare environment for Linux
     
   Before compiling Tensorflow c++ library on Linux, install the following build tools on your system:  
@@ -76,13 +78,14 @@ Add the following command to .bashrc:
 ## Clone the Tensorflow repository and configure the installation
 
 You should download a proper version of TensorFlow source code, [version information](https://www.tensorflow.org/install/source#tested_build_configurations)  
-If you want to download the newest version of TensorFlow source code:
+Use Git to clone the TensorFlow repository
 
     $ git clone https://github.com/tensorflow/tensorflow
-    
-And then
-
     $ cd tensorflow
+    
+The repo defaults to the master development branch. You can also checkout a release branch to build:
+
+    $ git checkout branch_name  # r1.9, r1.10, etc.
     $ ./configure
     
 This script prompts you for the location of TensorFlow dependencies and asks for additional build configuration options (compiler flags, for example).
@@ -91,6 +94,7 @@ This script prompts you for the location of TensorFlow dependencies and asks for
 ## Compile Tensorflow c++ libraries
 
     $ export TEST_TMPDIR=/u/username/bazel_outputRoot
+    $ tensorflow/contrib/makefile/download_dependencies.sh 
     $ bazel build -c opt --config=cuda --local_resources=6144,4,1.0 --jobs=4 //tensorflow:libtensorflow_cc.so
     $ bazel build -c opt --config=cuda --local_resources=6144,4,1.0 --jobs=4 //tensorflow:libtensorflow.so 
     
