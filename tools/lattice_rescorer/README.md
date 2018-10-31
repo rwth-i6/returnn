@@ -8,6 +8,7 @@ bazel 0.11.0
 protoc 3.2.0  
 cuda 9.0  
 cuDNN 7.0  
+g++ 5.4.0  
 
 # Install TensorFlow with pip.
 
