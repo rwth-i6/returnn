@@ -15,6 +15,7 @@
 
 namespace po = boost::program_options;
 
+//loads the lstm op libraries, README.md for more details
 void LoadLibsReturnn(const std::string& path_to_returnn_libs) {
 	std::ifstream infile(path_to_returnn_libs);
     std::string lib;
@@ -32,6 +33,8 @@ void LoadLibsReturnn(const std::string& path_to_returnn_libs) {
         TF_DeleteStatus(status);
 }
 
+//Loads the parameters of the graph
+//path_to_ckpt: path to the checkpoint file, we include the graph for inference in checkpoint, README.md for more details
 void LoadGraphParams(tensorflow::MetaGraphDef& graph_def, const std::string& path_to_ckpt, tensorflow::Session* session ){
 
 	//load the parameters of models using checkpoint files
@@ -43,17 +46,11 @@ void LoadGraphParams(tensorflow::MetaGraphDef& graph_def, const std::string& pat
 	{},
 	{graph_def.saver_def().restore_op_name()},
 	nullptr));
-	//check whether the params have been loaded correctly
-	/*
-    std::vector<tensorflow::Tensor> outputs;
-	TF_CHECK_OK(session->Run({},{"lstm0/rec/b"},{},&outputs));
-	std::cout << outputs[0].DebugString() << "\n";
-	//"lstm0/rec/W"  Tensor<type: float shape: [1024,4096] values: [-0.194920778 -0.262328148 0.135838]...>
-	//"output/b"     Tensor<type: float shape: [30008] values: 3.96770501 11.0447931 -0.630115211...>
-	*/
-    std::cout << "parameters successfully loaded!\n";
+    std::cout << "Graph parameters successfully loaded!\n";
 }
 
+// Read the information about the state variables in LSTM cell from a text file
+// example/README.md for more details
 void StateVars(const std::string path_to_state_vars_list, std::vector<std::string>& state_vars, std::vector<std::string>& state_vars_assign_ops,
 			   std::vector<std::string>& state_vars_assign_inputs, std::vector<int>& state_vars_size) {
 	std::ifstream infile(path_to_state_vars_list);
@@ -62,7 +59,7 @@ void StateVars(const std::string path_to_state_vars_list, std::vector<std::strin
 	if(!infile.eof()){
 		getline(infile, line);
 		while(line.length() != 0)
-		{//TODO code is not clean
+		{
 			std::stringstream stringin(line);
 			stringin >> state_var_item;
 			state_vars.push_back(state_var_item);
@@ -76,7 +73,8 @@ void StateVars(const std::string path_to_state_vars_list, std::vector<std::strin
 		}
 	}
 }
-
+// Read the names of tensors needed for feeding and fetching from a text file
+// example/README.md for more details
 void TensorNames(const std::string path_to_run_tensor_names_list, std::vector<std::string>& tensor_names) {
 	std::ifstream infile(path_to_run_tensor_names_list);
 	std::string line;
@@ -88,6 +86,7 @@ void TensorNames(const std::string path_to_run_tensor_names_list, std::vector<st
         i++;
 	}
 }
+
 void ParseCommandLine(const int argc,
                       const char *const argv[],
                       po::variables_map *options) {
@@ -137,7 +136,7 @@ void ParseCommandLine(const int argc,
 	  ("state-vars-list", po::value<std::string>(),
 	   "list of state variables and their assignment operation names")
 	  ("tensor-names-list", po::value<std::string>(),
-	   "list of tensor names for forwarding");
+	   "list of tensor names for feeding and fetching");
 
 	hidden.add_options()
 		("lattices", po::value<std::vector<std::string>>(),
@@ -171,14 +170,6 @@ void ParseCommandLine(const int argc,
                    "' ..." << std::endl;
       po::store(po::parse_config_file(file, desc), *options);
     }
-    /*
-    else {
-        std::cout << "Config file must be provided!\n";
-        std::cout << "Usage: rwthlm [OPTION]...[LATTICE]\n";
-        std::cout << all;
-        exit(0);
-    }
-    */
   } catch (std::exception &e) {
     // unable to parse: print error message
     std::cerr << e.what() << '\n';
@@ -206,8 +197,6 @@ void EvaluateCommandLine(const po::variables_map &options) {
 		path_to_returnn_libs = options["ops-Returnn"].as<std::string>();
 	if (options.count("checkpoint-files"))
 		path_to_ckpt = options["checkpoint-files"].as<std::string>();
-	//if (options.count("input-lattice"))
-	//	path_to_lattice = options["input-lattice"].as<std::string>();
 	if (options.count("state-vars-list"))
 		path_to_state_vars_list = options["state-vars-list"].as<std::string>();
 	if (options.count("tensor-names-list"))
@@ -219,7 +208,7 @@ void EvaluateCommandLine(const po::variables_map &options) {
         std::cout << "Reading vocabulary from file '" << vocab_file << "' ..." << std::endl;
         vocabulary = Vocabulary::ConstructFromVocabFile(vocab_file, unk, sb);
 
-	std::cout << "parsing arguments for lattice rescoring\n";
+	std::cout << "Parsing arguments for lattice rescoring\n";
     // remaining positional arguments: lattices for rescoring
       const float lambda = options["lambda"].as<float>();
       assert(lambda >= 0. && lambda <= 1.);
@@ -261,6 +250,7 @@ void EvaluateCommandLine(const po::variables_map &options) {
 	TF_CHECK_OK(tensorflow::NewSession(tensorflow::SessionOptions(), &session));
 	std::cout << "Session created!\n";
     tensorflow::MetaGraphDef graph_def;
+    // Loads the meta graph
     TF_CHECK_OK(tensorflow::ReadBinaryProto(tensorflow::Env::Default(), path_to_ckpt+".meta", &graph_def));
     TF_CHECK_OK(session->Create(graph_def.graph_def()));
 	std::cout << "Graph successfully loaded!\n";

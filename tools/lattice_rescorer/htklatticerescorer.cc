@@ -87,21 +87,11 @@ void HtkLatticeRescorer::ParseLine(const std::string &line, int *num_links) {
     ParseField(line, "J", &id);
     ParseField(line, "S", &link.from);
     ParseField(line, "E", &link.to);
-//    assert(link.to != 0);  // assumption: start node == 0
     ParseField(line, "l", &link.lm_score);
-//    assert(link.lm_score <= 0.);
     ParseField(line, "a", &link.am_score);
-//    assert(link.am_score <= 0.);
     ParseField(line, "v", &link.pronunciation);
 
-//	std::cout << "clear initial links?(should be false) " << clear_initial_links_ << std::endl;
 	if (clear_initial_links_ && link.from == 0) {
-//      std::cout << "Setting score of initial epsilon link " << id <<
-//                   " to zero!" << std::endl;
-//      assert(link.lm_score != 0.);
-//      assert(link.am_score != 0.);
-//      assert(nodes_[link.from].time == 0);
-//      assert(nodes_[link.to].time == 0);
       link.lm_score = 0.;
       link.am_score = 0.;
     }
@@ -124,19 +114,12 @@ void HtkLatticeRescorer::ParseLine(const std::string &line, int *num_links) {
 }
 
 void HtkLatticeRescorer::Reset() {
-  // create initial hypothesis
-	//LoadLibsReturnn(path_to_returnn_libs_);
-	//LoadGraphParams(graph_def_, path_to_ckpt_, session_);
-    //std::vector<tensorflow::Tensor> outputs;
   Hypothesis hypothesis;
   hypothesis.score = 0.;
   hypothesis.traceback_id = 0;
-  //std::cout << "lattices rescored independently?(should be true) " << is_dependent_ << std::endl;
   if (is_dependent_)
     nodes_.clear();
-  // set state of initial hypothesis
   if (nodes_.empty()) {
-    // use zero state
 	InitStateVars(session_, state_vars_assign_ops_, state_vars_assign_inputs_, state_vars_size_);
 	TF_ExtractState(session_, state_vars_, &hypothesis.state);
 	}
@@ -170,7 +153,6 @@ void HtkLatticeRescorer::Reset() {
                0,  // predecessor traceback ID
                0,  // current node id
                0.);  // initial cost
-  //std::cout << "htklatticerescorer::Reset() done.\n";
 }
 
 void HtkLatticeRescorer::SortTopologically() {
@@ -209,23 +191,17 @@ void HtkLatticeRescorer::ReadLattice(const std::string &file_name) {
 
   // Terminal links with non-zero LM score should be end-of-sentence links.
   for (Link &link : links_) {
-	  //std::cout << "the word of the link = " << vocabulary_->GetWord(link.word) << std::endl;
     const auto &successors = successor_links_[link.to];
     if (set_sb_last_links_ && successors.empty() ||
         set_sb_next_to_last_links_ && !successors.empty() &&
         successor_links_[links_[successors[0]].to].empty()) {
-//      std::cout << "Setting final epsilon link " <<
-//                   (&link - &links_[0]) << " to <sb>!" << std::endl;
       assert(link.word == unk_index_ || link.word == vocabulary_->sb_index());
-//      assert(link.lm_score > 0.);
-//      assert(link.am_score == 0.);
       assert(successors.empty() || successors.size() == 1);
       link.word = vocabulary_->sb_index();
     }
   }
   // sort nodes by time stamp
   SortTopologically();
-  //std::cout << "SortTopologically is done\n";
   std::stable_sort(sorted_nodes_.begin(), sorted_nodes_.end(),
       [](const Node *const node1, const Node *const node2) {
         return *node1 < *node2;
@@ -236,7 +212,6 @@ void HtkLatticeRescorer::ReadLattice(const std::string &file_name) {
     topological_order_[node->id] = i++;
 
   ComputeLookAheadScores();
-  //std::cout << "ReadLattice is done\n";
 }
 
 void HtkLatticeRescorer::ComputeLookAheadScores() {
@@ -279,7 +254,6 @@ void HtkLatticeRescorer::Prune(const int time) {
          max_num_before = std::numeric_limits<size_t>::min(),
          min_num_after = std::numeric_limits<size_t>::max(),
          max_num_after = std::numeric_limits<size_t>::min();
-  //assert(best_score_by_time_[time] > 0.);
   const float threshold = best_score_by_time_[time] + pruning_threshold_;
   for (const int node_id : nodes_by_time_[time]) {
     std::priority_queue<Hypothesis> &node_hypotheses = hypotheses_[node_id];
@@ -321,26 +295,20 @@ void HtkLatticeRescorer::Prune(const int time) {
 }
 
 void HtkLatticeRescorer::RescoreLattice() {
-    //std::cout << "Begin RescoreLattice\n";
   int last_time = sorted_nodes_[0]->time;
 
   for (const Node *const node : sorted_nodes_) {
     if (node->id == sorted_nodes_.back()->id)
       break;
-    /*
-	if (node->time == 0.){
-		InitStateVars(session_, state_vars_assign_ops_, state_vars_assign_inputs_, state_vars_size_);
-	}
-    */
     if (node->time > last_time) {
       Prune(node->time);
       last_time = node->time;
     }
     std::priority_queue<Hypothesis> &node_hypotheses = hypotheses_[node->id];
     while (!node_hypotheses.empty()) {
-	  //std::cout << "node_hypotheses is not empty!\n";
       const Hypothesis &hypothesis = node_hypotheses.top();
       for (const int link_id : successor_links_[node->id]) {
+        //Sets the current value of state variables in LSTM cell
         TF_SetState(session_, state_vars_assign_ops_, state_vars_assign_inputs_, state_vars_size_, hypothesis.state);
         const Link &link = links_[link_id];
 
@@ -358,6 +326,7 @@ void HtkLatticeRescorer::RescoreLattice() {
 			nn_lambda_ * exp(TF_ComputeLogProbability(session_, tensor_names_, history_word, target_word, word_index))/
             (link.word == unk_index_ ? num_oov_words_ + 1. : 1.))* lm_scale_;
 			new_hypothesis.history_word_index = hypothesis.history_word_index+1;
+            //Extracts the new value of state variables in LSTM cell and store them in the corresponding hypothesis
 			TF_ExtractState(session_, state_vars_, &new_hypothesis.state);
 		  }
         // This must be done, independent of whether we have an LM score or not!
@@ -368,7 +337,7 @@ void HtkLatticeRescorer::RescoreLattice() {
             link_id,
             link.lm_score == 0. ? history_word : link.word,
             hypothesis.traceback_id,
-            link.to,  //FIXME brauchen wir das überhaupt??
+            link.to,
             new_hypothesis.score);
         hypotheses_[link.to].push(new_hypothesis);
       }
@@ -559,16 +528,6 @@ void HtkLatticeRescorer::WriteExpandedHtkLattice(const std::string &file_name) {
                                      score_comparator);
     assert(it != traceback_ids.end());
 
-/* FIXME DELME
-for (int i : traceback_ids) {
-if (i == *it)
-std::cout << "*" << GetScore(i) << " ";
-else
-std::cout << GetScore(i) << " ";
-}
-std::cout << '\n';
-*/
-
     new_node_id[traceback_id] = new_node_id[*it];
   }
 
@@ -597,23 +556,24 @@ std::cout << '\n';
   }
 }
 
-
+// Initialize the state variables with zeros in the LSTM cell
 void HtkLatticeRescorer::InitStateVars(tensorflow::Session* session, const std::vector<std::string> state_vars_assign_ops,
 										const std::vector<std::string> state_vars_assign_inputs,
                                         const std::vector<int> state_vars_size) {
-        //TODO clean the code
 	assert(state_vars_assign_ops.size()==state_vars_assign_inputs.size());
 	std::vector<tensorflow::Tensor> outputs;
 	std::string var_assign_op_name, var_assign_op_input_name;
 	for (int i=0; i < state_vars_assign_ops.size(); i++) {
-        tensorflow::Input::Initializer zeros(0.0f, tensorflow::TensorShape({1, state_vars_size[i]}));//TODO 1024 is hard-coded
+        tensorflow::Input::Initializer zeros(0.0f, tensorflow::TensorShape({1, state_vars_size[i]}));
 		var_assign_op_name = state_vars_assign_ops[i];
 		var_assign_op_input_name = state_vars_assign_inputs[i];
+        //Please check the following link if you don't know how to use session->Run(),
+        //https://haosdent.gitbooks.io/tensorflow-document/content/api_docs/cc/ClassSession.html
 		TF_CHECK_OK(session->Run({{var_assign_op_input_name, zeros.tensor}}, {var_assign_op_name}, {}, &outputs));
 	}
 }
 
-//set the states of LSTM
+//Set the states variables in LSTM cell
 void HtkLatticeRescorer::TF_SetState(tensorflow::Session *session, const std::vector<std::string> state_vars_assign_ops,
 									 const std::vector<std::string> state_vars_assign_inputs, const std::vector<int> state_vars_size, const State &state) {
 	assert(state_vars_assign_ops.size()==state_vars_assign_inputs.size());
@@ -639,19 +599,15 @@ void HtkLatticeRescorer::TF_ExtractState(tensorflow::Session* session, const std
 		std::copy_n(keep_state_var_ptr, lstm_state.size(), lstm_state.begin());
 		state->states.push_back(lstm_state);
 	}
-	//std::cout << "TF_ExtractState done!\n";
 }
-
+//compute p(w|h)
 float HtkLatticeRescorer::TF_ComputeLogProbability(tensorflow::Session* session, const std::vector<std::string> tensor_names,
                                                     const int history_word, const int target_word, const tensorflow::int64 word_index) {
-        //*****compute perplexity on a text file*****//
         tensorflow::Tensor in_word = tensorflow::Tensor(tensorflow::DT_INT32, tensorflow::TensorShape({1, 1}));
         in_word.scalar<int>()() = history_word;
 	    tensorflow::Tensor delayed_dim0_size = tensorflow::Tensor(tensorflow::DT_INT32, tensorflow::TensorShape({1}));
-		//the number of sentences in a batch, the shape should not be TensorShape(), because TensorShape() contains no element.
         delayed_dim0_size.scalar<int>()() = 1;
         tensorflow::Tensor epoch_step = tensorflow::Tensor(tensorflow::DT_INT64, tensorflow::TensorShape({}));
-		//this is a scalar, but TensorShape({1}) is a Tensor with shape[1], not a scalar
 	    epoch_step.scalar<tensorflow::int64>()() = word_index;
         std::vector<tensorflow::Tensor> outputs;
         std::vector<std::pair<std::string, tensorflow::Tensor>> inputs;
@@ -660,19 +616,11 @@ float HtkLatticeRescorer::TF_ComputeLogProbability(tensorflow::Session* session,
             	{tensor_names[2], epoch_step}};
         TF_CHECK_OK(session->Run(inputs,{tensor_names[3]},
 					{tensor_names[4]}, &outputs));
-        /*
-        inputs = {{"extern_data/placeholders/delayed/delayed_dim0_size", delayed_dim0_size},
-                 {"extern_data/placeholders/delayed/delayed", in_word},
-            	{"epoch_step", epoch_step}};
-        TF_CHECK_OK(session->Run(inputs,{"output/output_batch_major"},
-					{"post_control_dependencies"}, &outputs));
-        */
-        tensorflow::Tensor probs = outputs[0]; //score is a 1*1*30008 Tensor//P(w|h)
+        tensorflow::Tensor probs = outputs[0];
         float *probs_ptr = probs.flat<float>().data(); // access the value of the Tensor "score"
 		std::vector<float> probs_vec;
         probs_vec.resize(probs.dim_size(2));
         std::copy(probs_ptr, probs_ptr + probs_vec.size(), probs_vec.begin());
-		//std::cout << "p[" << vocabulary_->GetWord(target_word) << "|...] = " << probs_vec[target_word] << std::endl;
 
 		return log(probs_vec[target_word]);
 }

@@ -14,7 +14,6 @@
 #include "state_ops.h"
 #include "tensorflow/core/protobuf/meta_graph.pb.h"
 #include "tensorflow/cc/framework/ops.h"
-//using namespace tensorflow;
 
 class HtkLatticeRescorer : public Rescorer {
 public:
@@ -82,9 +81,6 @@ private:
     float look_ahead_score;
     bool operator<(const Node &other) const {
       return time < other.time;
-/* XXX DELME
-      return time < other.time || (time == other.time && id < other.id);
-*/
     };
   };
 
@@ -233,12 +229,30 @@ private:
   void WriteCtm(const std::string &file_name);
   void WriteHtkLattice(const std::string &file_name);
   void WriteExpandedHtkLattice(const std::string &file_name);
-  //functions used in tf language model lattice rescoring
+  // Initialize the state variables in LSTM cell with zeros
+  // state_vars_assign_ops: the names of assignment operation nodes of state variables in LSTM cell. These names can be found is .metatxt
+  // state_vars_assign_inputs: the inputs of state variables assignment, each includes the name of a state variable and the name of
   void InitStateVars(tensorflow::Session* session, const std::vector<std::string> state_vars_assign_ops,
 					 const std::vector<std::string> state_vars_assign_inputs, const std::vector<int> state_vars_size);
+  // Set the state variables in LSTM cell
+  // state_vars: the names of state variables in LSTM cell
+  // state: the values of state variables of a hypothesis
   void TF_SetState(tensorflow::Session* session, const std::vector<std::string> state_vars_assign_ops,
 				   const std::vector<std::string> state_vars_assign_inputs, const std::vector<int> state_vars_size, const State &state);
+  // Extract the current value of state variables and store them in the corresponding hypothesis.state
+  // state_vars: the names of state variables in LSTM cell
+  // state: a pointer to new_hypothesis.state, to store the current values of the new hypothesis
   void TF_ExtractState(tensorflow::Session* session, const std::vector<std::string> state_vars, State *state) const;
+  // Compute P(w|h)
+  // tensor_names: the names of tensors needed for feeding and fetching, please check the text file example/tensor_names_list
+  // history_word: the index of the word fed into the graph when doing inference
+  // target_word: the index of the word to be predicted in the next time frame
+  // word_index: the position of the history_word in the sentence,
+  //            e.g a sentence <sb> a b c <sb>
+  //                word_index of <sb> = 0
+  //                word index of 'a' = 1
+  //                work index of 'b' = 2
+  //            TODO: this parameter is NO more needed by the graph created in the newest returnn,but here we still the old version graph
   float TF_ComputeLogProbability(tensorflow::Session* session, const std::vector<std::string> tensor_names, const int history_word,
                                 const int target_word, const tensorflow::int64 word_index);
 
