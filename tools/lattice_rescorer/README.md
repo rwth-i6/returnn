@@ -28,7 +28,6 @@ Also, the scirpt in Kaldi [install_tensorflow_cc.sh](https://github.com/kaldi-as
     
   Before compiling Tensorflow c++ library on Linux, install the following build tools on your system:  
   *bazel  
-  *TensorFlow Python dependencies  
   *cuda, cuDNN  
     
 ### Install Bazel
