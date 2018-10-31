@@ -4359,7 +4359,7 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
 
   @property
   def state_size(self):
-    return self._num_units
+    return rnn_cell.LSTMStateTuple(self._num_units, self._num_units)
 
   def _norm(self, inputs, epsilon=1e-6, name=None):
     """
