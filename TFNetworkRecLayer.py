@@ -4300,6 +4300,7 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
                dropout_seed=None,
                with_concat=False,
                global_norm=True,
+               global_norm_joined=False,
                per_gate_norm=False,
                cell_norm=False,
                hidden_norm=False):
@@ -4313,9 +4314,11 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
     :param float dropout: dropout rate
     :param int dropout_seed: used to create random seeds
     :param bool with_concat: if True then the input and prev hidden state
-      is concatenated for the computation
+      is concatenated for the computation. this is just about computation performance.
     :param bool global_norm: if True then layer normalization is applied
-      for the forward and recurrent outputs
+      for the forward and recurrent outputs (separately).
+    :param bool global_norm_joined: if True, then layer norm is applied on LSTM in
+      (forward and recurrent output together)
     :param bool per_gate_norm: if True then layer normalization is applied
       per lstm gate
     :param bool cell_norm: if True then layer normalization is applied
@@ -4345,6 +4348,7 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
 
     # used for different layer norm variants
     self.global_norm = global_norm
+    self.global_norm_joined = global_norm_joined
     self.per_gate_norm = per_gate_norm
     self.cell_norm = cell_norm
     self.hidden_norm = hidden_norm
@@ -4358,6 +4362,13 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
     return self._num_units
 
   def _norm(self, inputs, epsilon=1e-6, name=None):
+    """
+    :param tf.Tensor inputs: (B,D), or (T,B,D)
+    :param float epsilon:
+    :param str name:
+    :return: (B,D) or (T,B,D)
+    :rtype: tf.Tensor
+    """
     assert name is not None
     from TFUtil import var_creation_scope
     shape = inputs.get_shape()[-1:]
@@ -4366,12 +4377,20 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
     with var_creation_scope():
       g = tf.get_variable("gamma_" + name, shape=shape, initializer=gamma_init)
       s = tf.get_variable("beta_" + name, shape=shape, initializer=beta_init)
-    mean, variance = tf.nn.moments(inputs, axes=[1], keep_dims=True)
+    mean, variance = tf.nn.moments(inputs, axes=[-1], keep_dims=True)
     normalized_input = (inputs - mean) / tf.sqrt(variance + epsilon)
     return normalized_input * g + s
 
   @staticmethod
-  def _linear(inputs, out_dim, layer_norm=False, name=None):
+  def _linear(inputs, out_dim, apply_bias=True, name=None):
+    """
+    :param tf.Tensor inputs: (B,D), or (T,B,D)
+    :param int out_dim:
+    :param bool apply_bias:
+    :param str name:
+    :return: (B,out_dim) or (T,B,out_dim)
+    :rtype: tf.Tensor
+    """
     assert name is not None
     from TFUtil import var_creation_scope, dot
     input_dim = inputs.get_shape().dims[-1].value
@@ -4379,7 +4398,7 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
     with var_creation_scope():
       weights = tf.get_variable("W_" + name, shape=(input_dim, out_dim))
     out = dot(inputs, weights)
-    if not layer_norm:
+    if apply_bias:
       with var_creation_scope():
         bias = tf.get_variable("bias_" + name, shape=[out_dim])
       out = tf.nn.bias_add(out, bias)
@@ -4416,30 +4435,38 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
 
   def get_input_transformed(self, inputs, batch_dim=None):
     if self.with_concat:
+      assert not self.global_norm, "%s: global_norm and with_concat together not supported" % self
       return inputs
-    return self._linear(inputs, 4 * self._num_units, self.global_norm, name='xh')
+    inputs = self._linear(inputs, 4 * self._num_units, apply_bias=not self.global_norm, name='ff')
+    if self.global_norm:
+      inputs = self._norm(inputs, name='input_below')
+    return inputs
 
   def __call__(self, inputs, state, scope=None):
-    """Run this RNN cell on inputs given a state"""
+    """
+    Run this RNN cell on inputs given a state.
 
-    state_transformed = self._linear(state, 2 * self._num_units, name='state_trans')
-    prev_c, prev_h = tf.split(state_transformed, num_or_size_splits=2, axis=1)
+    :param tf.Tensor inputs:
+    :param rnn_cell.LSTMStateTuple state:
+    :return: (LSTM output h, LSTM state (consisting of cell state c and output h)
+    :rtype: (tf.Tensor, rnn_cell.LSTMStateTuple)
+    """
+    prev_c, prev_h = state.c, state.h
 
     if self.with_concat:
-      concat_input = tf.concat([inputs, prev_h], axis=1)
-      lstm_out = self._linear(concat_input, 4 * self._num_units, self.global_norm, name='concat')
-      if self.global_norm:
-        lstm_out = self._norm(lstm_out, name='lstm_out')
+      concat_input = tf.concat([inputs, prev_h], axis=-1)
+      lstm_in = self._linear(concat_input, 4 * self._num_units, apply_bias=not self.global_norm, name='ff_re')
     else:
       # The input is already transformed by `get_input_transformed` function
       input_below = inputs
-      state_below = self._linear(prev_h, 4 * self._num_units, self.global_norm, name='hh')
+      state_below = self._linear(prev_h, 4 * self._num_units, apply_bias=not self.global_norm, name='re')
       if self.global_norm:
-        input_below = self._norm(input_below, name='input_below')
         state_below = self._norm(state_below, name='state_below')
-      lstm_out = tf.add(input_below, state_below)
+      lstm_in = tf.add(input_below, state_below)
+    if self.global_norm_joined:
+      lstm_in = self._norm(lstm_in, name='lstm_in')
 
-    i, j, f, o = tf.split(lstm_out, num_or_size_splits=4, axis=1)
+    i, j, f, o = tf.split(lstm_in, num_or_size_splits=4, axis=-1)
 
     if self.per_gate_norm:
       i = self._norm(i, name='i_gate')
@@ -4459,4 +4486,4 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
     if self.hidden_norm:
       new_h = self._norm(new_h, name='new_h')
 
-    return new_c, new_h
+    return new_h, rnn_cell.LSTMStateTuple(new_c, new_h)
