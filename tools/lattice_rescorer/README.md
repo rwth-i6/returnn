@@ -72,7 +72,7 @@ Then execute the following commands:
 
 Add the following command to .bashrc:
 
-    export LD_LIBRARY_PATH=/path-to-your-cudnn/lib64:LD_LIBRARY_PATH
+    export LD_LIBRARY_PATH=/path-to-your-cudnn/lib64:$LD_LIBRARY_PATH
     export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/path-to-your-cuda/extras/CUPTI/lib64 
 
 ## Clone the Tensorflow repository and configure the installation
@@ -104,7 +104,7 @@ The compiled libraries are stored in /u/username/tensorflow/bazel-bin/tensorflow
 
 Add the following command to .bashrc:
 
-    export LD_LIBRARY_PATH=/u/username/tensorflow/bazel-bin/tensorflow:LD_LIBRARY_PATH
+    export LD_LIBRARY_PATH=/u/username/tensorflow/bazel-bin/tensorflow:$LD_LIBRARY_PATH
 
 # Compile LSTM Op in returnn
 
