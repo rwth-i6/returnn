@@ -4298,6 +4298,7 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
                activation=tf.tanh,
                is_training=None,
                dropout=0.0,
+               dropout_h=0.0,
                dropout_seed=None,
                with_concat=False,
                global_norm=True,
@@ -4314,7 +4315,8 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
     :param float norm_shift: layer normalization shift (bias) value
     :param activation: Activation function to be applied in the lstm cell
     :param bool is_training: if True then we are in the training phase
-    :param float dropout: dropout rate
+    :param float dropout: dropout rate, applied on cell-in (j)
+    :param float dropout_h: dropout rate, applied on hidden state (h) when it enters the LSTM (variational dropout)
     :param int dropout_seed: used to create random seeds
     :param bool with_concat: if True then the input and prev hidden state
       is concatenated for the computation. this is just about computation performance.
@@ -4343,10 +4345,10 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
     self.is_training = is_training
 
     self.dropout = dropout
+    self.dropout_h = dropout_h
     if dropout_seed is None:
       dropout_seed = TFNetwork.get_current_network().random.randint(2 ** 31)
     self.dropout_seed = dropout_seed
-    self._dropout_mask = None
 
     self.with_concat = with_concat
 
@@ -4413,34 +4415,41 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
       out = tf.nn.bias_add(out, bias)
     return out
 
-  def _get_dropout_mask(self):
-    if self._dropout_mask is not None:
-      return self._dropout_mask
-
+  def _get_dropout_mask(self, dropout):
+    """
+    :param float dropout:
+    :return: scalar (1.0) or shape (batch_size, num_units)
+    :rtype: tf.Tensor
+    """
     from TFUtil import var_creation_scope, cond
     # Create the dropout masks outside the loop:
     with var_creation_scope():
       def get_mask():
         from TFNetworkLayer import LayerBase
         batch_size = LayerBase.get_recent_layer().get_batch_dim()
-        keep_prob = 1.0 - self.dropout
+        keep_prob = 1.0 - dropout
         # uniform [keep_prob, 1.0 + keep_prob)
         random_tensor = keep_prob
         random_tensor += tf.random_uniform((batch_size, self._num_units), seed=self.dropout_seed, dtype=tf.float32)
         # 0. if [keep_prob, 1.0) and 1. if [1.0, 1.0 + keep_prob)
         binary_tensor = tf.floor(random_tensor)
         return binary_tensor * (1.0 / keep_prob)
-      self._dropout_mask = cond(self.is_training, get_mask, lambda: 1.0)
-    return self._dropout_mask
+      return cond(self.is_training, get_mask, lambda: 1.0)
 
-  def _optional_dropout(self, state):
-    if not self.dropout:
-      return state
+  def _optional_dropout(self, x, dropout):
+    """
+    :param tf.Tensor x: (B,D)
+    :param float dropout:
+    :return: x, or x with dropout, (B,D)
+    :rtype: tf.Tensor
+    """
+    if not dropout:
+      return x
     if self.is_training is False:
-      return state
-    state *= self._get_dropout_mask()
-    state.set_shape((None, self._num_units))
-    return state
+      return x
+    x *= self._get_dropout_mask(dropout=dropout)
+    x.set_shape((None, self._num_units))
+    return x
 
   def get_input_transformed(self, inputs, batch_dim=None):
     if self.with_concat:  # concat inputs, prev_h
@@ -4462,6 +4471,7 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
     :rtype: (tf.Tensor, rnn_cell.LSTMStateTuple)
     """
     prev_c, prev_h = state.c, state.h
+    prev_h = self._optional_dropout(prev_h, dropout=self.dropout_h)
 
     if self.with_concat:
       assert not self.global_norm
@@ -4487,7 +4497,7 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
       f = self._norm(f, name='f_gate')
       o = self._norm(o, name='o_gate')
 
-    g = self._optional_dropout(self.activation(j))
+    g = self._optional_dropout(self.activation(j), dropout=self.dropout)
 
     from tensorflow.python.ops.math_ops import sigmoid
 
