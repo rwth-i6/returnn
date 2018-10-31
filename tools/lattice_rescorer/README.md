@@ -95,8 +95,8 @@ This script prompts you for the location of TensorFlow dependencies and asks for
 
     $ export TEST_TMPDIR=/u/username/bazel_outputRoot
     $ tensorflow/contrib/makefile/download_dependencies.sh 
-    $ bazel build -c opt --config=cuda --local_resources=6144,4,1.0 --jobs=4 //tensorflow:libtensorflow_cc.so
-    $ bazel build -c opt --config=cuda --local_resources=6144,4,1.0 --jobs=4 //tensorflow:libtensorflow.so 
+    $ bazel build -c opt --config=cuda --cxxopt="-D_GLIBCXX_USE_CXX11_ABI=0" --local_resources=6144,4,1.0 --jobs=4 //tensorflow:libtensorflow_cc.so
+    $ bazel build -c opt --config=cuda --cxxopt="-D_GLIBCXX_USE_CXX11_ABI=0" --local_resources=6144,4,1.0 --jobs=4 //tensorflow:libtensorflow.so 
     
 The compiled libraries are stored in /u/username/tensorflow/bazel-bin/tensorflow
 
