@@ -4376,7 +4376,7 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
     gamma_init = tf.constant_initializer(self.norm_grain)
     beta_init = tf.constant_initializer(self.norm_shift)
     mean, variance = tf.nn.moments(inputs, axes=[-1], keep_dims=True)
-    normalized_input = (inputs - mean) / tf.sqrt(variance + epsilon)
+    normalized_input = (inputs - mean) * tf.rsqrt(variance + epsilon)
     with var_creation_scope():
       g = tf.get_variable("gamma_" + name, shape=shape, initializer=gamma_init)
       s = tf.get_variable("beta_" + name, shape=shape, initializer=beta_init) if with_beta else None
