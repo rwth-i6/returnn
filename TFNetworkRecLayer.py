@@ -809,50 +809,89 @@ class _SubnetworkRecCell(object):
     class construct_ctx:
       # Stack of layers:
       layers = []  # type: list[_TemplateLayer]
+      most_recent = None
 
-    def get_none_layer(name):
-      return None
+    class GetLayer:
+      def __init__(lself, safe=False, once=False, allow_uninitialized_template=True):
+        lself.safe = safe
+        lself.once = once
+        lself.allow_uninitialized_template = allow_uninitialized_template
+        lself.count = 0
 
-    def get_templated_layer(name):
-      """
-      :param str name:
-      :rtype: _TemplateLayer|LayerBase
-      """
-      if name.startswith("prev:"):
-        name = name[len("prev:"):]
-        self.prev_layers_needed.add(name)
-      if name in self.layer_data_templates:
-        layer = self.layer_data_templates[name]
+      def __repr__(lself):
+        return "<RecLayer construct template GetLayer>(safe %r, once %r, allow_uninitialized_template %r)" % (
+          lself.safe, lself.once, lself.allow_uninitialized_template)
+
+      def __call__(lself, name):
+        """
+        This is the get_layer function implementation.
+
+        :param str name: layer name
+        :return: layer, or None
+        :rtype: LayerBase|None
+        """
+        lself.count += 1
+        if name.startswith("prev:"):
+          name = name[len("prev:"):]
+          self.prev_layers_needed.add(name)
+        if name in self.layer_data_templates:
+          layer = self.layer_data_templates[name]
+          if construct_ctx.layers:
+            construct_ctx.layers[-1].dependencies.add(layer)
+          if lself.allow_uninitialized_template or layer.is_initialized:
+            return layer
+        if name.startswith("base:"):
+          layer = self.parent_net.get_layer(name[len("base:"):])
+          if construct_ctx.layers:
+            construct_ctx.layers[-1].dependencies.add(layer)
+          return layer
+        if lself.once and lself.count <= 1:
+          return None
+        if lself.safe:
+          return None
+        # Need to create layer instance here now to not run into recursive loops.
+        # We will extend it later in add_templated_layer().
+        if name in self.layer_data_templates:  # might exist already
+          layer = self.layer_data_templates[name]
+        else:
+          layer = _TemplateLayer(
+            name=name, network=self.net, construct_stack=construct_ctx.layers[-1] if construct_ctx.layers else None)
         if construct_ctx.layers:
           construct_ctx.layers[-1].dependencies.add(layer)
+        construct_ctx.layers.append(layer)
+        self.layer_data_templates[name] = layer
+        try:
+          # First, see how far we can get without recursive layer construction.
+          # We only want to get the data template for now.
+          # If that fails in some way,
+          # try another time but only allowing recursive layer construction for the first get_layer call.
+          # E.g. the CombineLayer and some other layers determine the output format via the first source.
+          # Also, first try without allowing to access uninitialized templates,
+          # as they might propagate wrong Data format info (they have a dummy Data format set).
+          # Only as a last resort, allow this.
+          for get_layer in [
+            GetLayer(safe=True, allow_uninitialized_template=False),
+            GetLayer(once=True, allow_uninitialized_template=False),
+            GetLayer(safe=True, allow_uninitialized_template=True),
+            GetLayer(once=True, allow_uninitialized_template=True)]:
+            try:
+              self.net.construct_layer(
+                net_dict=self.net_dict, name=name, get_layer=get_layer, add_layer=add_templated_layer)
+              break  # we did it, so get out of the loop
+            except Exception:
+              # Pretty generic exception handling but anything could happen.
+              pass  # go on with the next get_layer
+          # Now, do again, but with full recursive layer construction, to determine the dependencies.
+          construct_ctx.most_recent = list(construct_ctx.layers)
+          self.net.construct_layer(
+            net_dict=self.net_dict, name=name, get_layer=get_templated_layer, add_layer=add_templated_layer)
+        finally:
+          assert construct_ctx.layers[-1] is layer, "invalid stack %r, expected top layer %r" % (
+            construct_ctx.layers, layer)
+          construct_ctx.layers.pop(-1)
         return layer
-      if name.startswith("base:"):
-        layer = self.parent_net.get_layer(name[len("base:"):])
-        if construct_ctx.layers:
-          construct_ctx.layers[-1].dependencies.add(layer)
-        return layer
-      # Need to create layer instance here now to not run into recursive loops.
-      # We will extend it later in add_templated_layer().
-      layer = _TemplateLayer(name=name, network=self.net)
-      if construct_ctx.layers:
-        construct_ctx.layers[-1].dependencies.add(layer)
-      construct_ctx.layers.append(layer)
-      self.layer_data_templates[name] = layer
-      try:
-        # First, see how far we can get without recursive layer construction.
-        # We only want to get the data template for now.
-        self.net.construct_layer(
-          net_dict=self.net_dict, name=name, get_layer=get_none_layer, add_layer=add_templated_layer)
-      except Exception:
-        # Pretty generic exception handling but anything could happen.
-        # Not so nice but should work for now.
-        pass
-      # Now, do again, but with recursive layer construction, to determine the dependencies.
-      self.net.construct_layer(
-        net_dict=self.net_dict, name=name, get_layer=get_templated_layer, add_layer=add_templated_layer)
-      assert construct_ctx.layers[-1] is layer
-      construct_ctx.layers.pop(-1)
-      return layer
+
+    get_templated_layer = GetLayer()
 
     try:
       assert not self.layer_data_templates, "do not call this multiple times"
@@ -872,8 +911,10 @@ class _SubnetworkRecCell(object):
 
     except Exception:
       print("%r: exception constructing template network (for deps and data shapes)" % self)
-      print("Template network so far:")
       from pprint import pprint
+      print("Most recent construction stack:")
+      pprint(construct_ctx.most_recent)
+      print("Template network so far:")
       pprint(self.layer_data_templates)
       raise
 
@@ -893,7 +934,7 @@ class _SubnetworkRecCell(object):
     :param set[str] needed_outputs: layers where we need outputs
     """
     from TFNetwork import TFNetwork
-    from TFNetworkLayer import InternalLayer
+    from TFNetworkLayer import InternalLayer, ExtendWithBeamLayer
     from TFUtil import tile_transposed
     needed_beam_size = self.layer_data_templates["output"].output.beam_size
     if data is not None:
@@ -984,9 +1025,10 @@ class _SubnetworkRecCell(object):
             assert not layer.output.beam_size
             if layer.output.beam_size != needed_beam_size:
               layer = self.net.add_layer(
-                name="%s_beam_%i" % (name, needed_beam_size),
-                output=layer.output.copy_extend_with_beam(needed_beam_size),
-                layer_class=InternalLayer)
+                name="%s_copy_extend_with_beam_%i" % (name, needed_beam_size),
+                base_layer=layer,
+                beam_size=needed_beam_size,
+                layer_class=ExtendWithBeamLayer)
               extended_layers[name] = layer
           assert layer.output.beam_size == needed_beam_size
         return layer
@@ -1339,7 +1381,11 @@ class _SubnetworkRecCell(object):
               value = loss.get_error_value()
             else:
               assert False, "return_error or return_loss"
-            assert isinstance(value, tf.Tensor)
+            if return_error and value is None:
+              # This is not correctly handled currently...
+              value = tf.zeros_like(loss.get_loss_value())
+            assert isinstance(value, tf.Tensor), "layer %r loss %r %s invalid" % (
+              layer, loss, "loss_value" if return_loss else "error_value")
             assert value.get_shape().ndims >= 1
             if value.get_shape().ndims > 1:  # e.g. BinaryCrossEntropy
               value = tf.reduce_sum(value, axis=list(range(1, value.get_shape().ndims)))
@@ -1582,28 +1628,29 @@ class _SubnetworkRecCell(object):
         loop_vars=init_loop_vars,
         shape_invariants=shape_invariants,
         back_prop=self.net.train_flag is not False)
+      if have_known_seq_len:
+        assert fixed_seq_len is not None
+        seq_len = fixed_seq_len
+        _, final_net_vars, final_acc_tas = final_loop_vars
+      else:
+        _, final_net_vars, final_acc_tas, (_, seq_len) = final_loop_vars
+        max_seq_len = tf.reduce_max(seq_len, name="dyn_max_seq_len")
+      self.get_final_rec_vars = lambda layer_name: self.get_layer_rec_var_from_loop_vars(
+        loop_vars=final_net_vars,
+        layer_name=layer_name)
+      assert isinstance(final_acc_tas, list)
+      if len(outputs_to_accumulate) > 0:
+        assert isinstance(final_acc_tas[0], tf.TensorArray)
+      assert len(final_acc_tas) == len(outputs_to_accumulate)
+      self.final_acc_tas_dict = {
+        out.name: final_acc_ta
+        for (final_acc_ta, out) in zip(final_acc_tas, outputs_to_accumulate)}  # type: dict[str,tf.TensorArray]
     else:  # no layers inside loop, all optimized out
-      final_loop_vars = init_loop_vars
-    if have_known_seq_len:
-      assert fixed_seq_len is not None
-      seq_len = fixed_seq_len
-      _, final_net_vars, final_acc_tas = final_loop_vars
-    else:
-      _, final_net_vars, final_acc_tas, (_, seq_len) = final_loop_vars
-      max_seq_len = tf.reduce_max(seq_len, name="dyn_max_seq_len")
-    self.get_final_rec_vars = lambda layer_name: self.get_layer_rec_var_from_loop_vars(
-      loop_vars=final_net_vars,
-      layer_name=layer_name)
-    if rec_layer.output.size_placeholder is None:
-      rec_layer.output.size_placeholder = {}
-    rec_layer.output.size_placeholder[0] = seq_len
-    assert isinstance(final_acc_tas, list)
-    if len(outputs_to_accumulate) > 0:
-      assert isinstance(final_acc_tas[0], tf.TensorArray)
-    assert len(final_acc_tas) == len(outputs_to_accumulate)
-    self.final_acc_tas_dict = {
-      out.name: final_acc_ta
-      for (final_acc_ta, out) in zip(final_acc_tas, outputs_to_accumulate)}  # type: dict[str,tf.TensorArray]
+      seq_len = None
+      final_net_vars = None
+      final_acc_tas = None
+      self.get_final_rec_vars = None
+      self.final_acc_tas_dict = None
 
     self._construct_output_layers_moved_out(
       loop_accumulated=self.final_acc_tas_dict, seq_len=seq_len, extra_output_layers=extra_output_layers)
@@ -1623,32 +1670,33 @@ class _SubnetworkRecCell(object):
               assert loss.name not in self.accumulated_losses, "loss name not unique"
               self.accumulated_losses[loss.name] = loss
 
-        # Now collect the losses from layers inside the loop.
-        with tf.name_scope("sub_loss_normalization_factor"):
-          sub_loss_normalization_factor = 1.0 / tf.cast(tf.reduce_sum(seq_len), tf.float32)
-        for _, loss in sorted(accumulated_loop_losses.items()):
-          assert isinstance(loss, LossHolder)
-          assert loss.loss.layer, "sub loss init not called?"
-          assert loss.name not in self.accumulated_losses, "loss name not unique"
-          loss_value = tensor_array_stack(
-            self.final_acc_tas_dict["loss_%s" % loss.name], stop=max_seq_len, name="loss_%s_stack" % loss.name)
-          error_value = tensor_array_stack(
-            self.final_acc_tas_dict["error_%s" % loss.name], stop=max_seq_len, name="error_%s_stack" % loss.name)
-          loss_value.set_shape(tf.TensorShape((None, None)))  # (time, batch)
-          error_value.set_shape(tf.TensorShape((None, None)))  # (time, batch)
-          from TFUtil import sequence_mask_time_major
-          mask = sequence_mask_time_major(seq_len)
-          loss_value = tf.where(mask, loss_value, tf.zeros_like(loss_value))
-          error_value = tf.where(mask, error_value, tf.zeros_like(error_value))
-          loss_wrapped = _SubnetworkRecWrappedLoss(
-            base_loss=loss.loss,
-            loss_value=loss_value, error_value=error_value,
-            norm_factor=sub_loss_normalization_factor)
-          self.accumulated_losses[loss.name] = LossHolder(
-            name=loss.name,
-            layer=loss.loss.layer,
-            layer_output=loss.layer_output,
-            loss=loss_wrapped)
+        if accumulated_loop_losses:
+          # Now collect the losses from layers inside the loop.
+          with tf.name_scope("sub_loss_normalization_factor"):
+            sub_loss_normalization_factor = 1.0 / tf.cast(tf.reduce_sum(seq_len), tf.float32)
+          for _, loss in sorted(accumulated_loop_losses.items()):
+            assert isinstance(loss, LossHolder)
+            assert loss.loss.layer, "sub loss init not called?"
+            assert loss.name not in self.accumulated_losses, "loss name not unique"
+            loss_value = tensor_array_stack(
+              self.final_acc_tas_dict["loss_%s" % loss.name], stop=max_seq_len, name="loss_%s_stack" % loss.name)
+            error_value = tensor_array_stack(
+              self.final_acc_tas_dict["error_%s" % loss.name], stop=max_seq_len, name="error_%s_stack" % loss.name)
+            loss_value.set_shape(tf.TensorShape((None, None)))  # (time, batch)
+            error_value.set_shape(tf.TensorShape((None, None)))  # (time, batch)
+            from TFUtil import sequence_mask_time_major
+            mask = sequence_mask_time_major(seq_len)
+            loss_value = tf.where(mask, loss_value, tf.zeros_like(loss_value))
+            error_value = tf.where(mask, error_value, tf.zeros_like(error_value))
+            loss_wrapped = _SubnetworkRecWrappedLoss(
+              base_loss=loss.loss,
+              loss_value=loss_value, error_value=error_value,
+              norm_factor=sub_loss_normalization_factor)
+            self.accumulated_losses[loss.name] = LossHolder(
+              name=loss.name,
+              layer=loss.loss.layer,
+              layer_output=loss.layer_output,
+              loss=loss_wrapped)
 
     # Check if collected_choices has all the right layers.
     # At the moment, _TemplateLayer.has_search_choices() might be incomplete, that is why we check here.
@@ -1758,11 +1806,21 @@ class _SubnetworkRecCell(object):
       search_choices.set_beam_scores_from_rec(final_choice_rec_vars)
 
     with tf.name_scope("output"):
+      output_layer = None
       if "output" in self.input_layers_moved_out:
-        output = self.input_layers_net.layers["output"].output.get_placeholder_as_time_major()
+        output_layer = self.input_layers_net.layers["output"]
       elif "output" in self.output_layers_moved_out:
-        output = self.output_layers_net.layers["output"].output.get_placeholder_as_time_major()
+        output_layer = self.output_layers_net.layers["output"]
+      if output_layer:
+        assert isinstance(output_layer, LayerBase)
+        output_data = output_layer.output.copy_as_time_major()
+        rec_layer.output.size_placeholder = output_data.size_placeholder.copy()
+        output = output_data.placeholder
       else:
+        if rec_layer.output.size_placeholder is None:
+          rec_layer.output.size_placeholder = {}
+        assert seq_len is not None
+        rec_layer.output.size_placeholder[0] = seq_len
         output = tensor_array_stack(
           self.final_acc_tas_dict["output_output"], stop=max_seq_len, name="output_stack")  # e.g. (time, batch, dim)
 
@@ -1830,6 +1888,8 @@ class _SubnetworkRecCell(object):
       # layer.output is used by other layers?
       for other_layer in layers_in_loop:
         if layer in other_layer.get_dep_layers():
+          return False
+        if other_layer in layer.collocate_with:
           return False
       return True
 
@@ -1976,16 +2036,16 @@ class _SubnetworkRecCell(object):
     See self._move_outside_loop().
     The output layers will be constructed in self.output_layers_net.
 
-    :param dict[str,tf.TensorArray] loop_accumulated:
+    :param dict[str,tf.TensorArray]|None loop_accumulated:
       keys, see self.get_output(). should be like "output_<layer_name>"
-    :param tf.Tensor seq_len: shape (batch,)
+    :param tf.Tensor|None seq_len: shape (batch,). None if no loop_accumulated
     :param set[str] extra_output_layers:
     :return: nothing, will init self.output_layers_net
     """
     if not self.output_layers_moved_out and not extra_output_layers:
       return
 
-    max_len = tf.reduce_max(seq_len)
+    max_len = tf.reduce_max(seq_len) if seq_len is not None else None
     from TFUtil import tensor_array_stack
     from TFNetwork import TFNetwork, ExternData
     from TFNetworkLayer import InternalLayer
@@ -2011,6 +2071,7 @@ class _SubnetworkRecCell(object):
       :param str name:
       :rtype: LayerBase
       """
+      assert loop_accumulated is not None, "no layers in loop"
       if name in loop_acc_layers:
         return loop_acc_layers[name]
       with tf.name_scope(self.layer_data_templates[name].layer_class_type.cls_get_tf_scope_name(name)):
@@ -2042,7 +2103,7 @@ class _SubnetworkRecCell(object):
         # Note: This seq_len might make sense to use here:
         # output.size_placeholder[0] = tf.minimum(output.size_placeholder[0] + 1, tf.shape(x)[0])
         # However, often we assume that we keep the same seq lens as the output layer.
-        output.size_placeholder[0] = seq_len
+        # output.size_placeholder[0] = seq_len. just don't modify. assert seq_len is not None
         assert isinstance(self.output_layers_net, TFNetwork)
         layer = self.output_layers_net.add_layer(name="prev:%s" % name, output=output, layer_class=InternalLayer)
         prev_layers[name] = layer
@@ -2080,10 +2141,11 @@ class _TemplateLayer(LayerBase):
   All "prev:" layers also stay instances of _TemplateLayer in the real computation graph.
   """
 
-  def __init__(self, network, name):
+  def __init__(self, network, name, construct_stack=None):
     """
     :param TFNetwork.TFNetwork network:
     :param str name:
+    :param LayerBase|None construct_stack: just for debugging repr
     """
     # Init with some dummy.
     super(_TemplateLayer, self).__init__(
@@ -2095,24 +2157,33 @@ class _TemplateLayer(LayerBase):
     self.layer_class = ":uninitialized-template"
     self.is_data_template = False
     self.is_prev_time_frame = False
+    self.is_initialized = False
     self.layer_class_type = None  # type: type[LayerBase]|LayerBase
     self.kwargs = None  # type: dict[str]
     self.dependencies = set()  # type: set[LayerBase]
+    self.construct_stack = construct_stack
     self._template_base = None  # type: _TemplateLayer
 
   def __repr__(self):
-    return "<%s(%s)(%s) %r out_type=%s>" % (
-      self.__class__.__name__, self.layer_class_type.__name__ if self.layer_class_type else None, self.layer_class,
-      self.name, self.output.get_description(with_name=False))
+    if self.is_initialized:
+      return "<%s(%s)(%s) %r out_type=%s (construction stack %r)>" % (
+        self.__class__.__name__, self.layer_class_type.__name__ if self.layer_class_type else None, self.layer_class,
+        self.name, self.output.get_description(with_name=False),
+        self.construct_stack.name if self.construct_stack else None)
+    else:
+      return "<%s %r uninitialized, construction stack %r>" % (
+        self.__class__.__name__, self.name, self.construct_stack.name if self.construct_stack else None)
 
   def init(self, output, layer_class, template_type="template", **kwargs):
     """
     :param Data output:
     :param type[LayerBase]|LayerBase layer_class:
     :param str template_type:
+    :param kwargs: via network.construct_layer, i.e. transform_config_dict was called already
     """
     # Overwrite self.__class__ so that checks like isinstance(layer, ChoiceLayer) work.
     # Not sure if this is the nicest way -- probably not, so I guess this will go away later.
+    self.is_initialized = True
     self.is_prev_time_frame = (template_type == "prev")
     self.is_data_template = (template_type == "template")
     assert self.is_prev_time_frame or self.is_data_template
@@ -2126,6 +2197,7 @@ class _TemplateLayer(LayerBase):
     self._is_output_layer = kwargs.get("is_output_layer", None)
     if self._has_search_choices():
       self.search_choices = SearchChoices(owner=self, beam_size=self._get_search_choices_beam_size())
+    self.collocate_with = kwargs.get("collocate_with", None) or []
 
   def copy_as_prev_time_frame(self, prev_output=None, rec_vars_prev_outputs=None):
     """
@@ -4177,3 +4249,267 @@ class BlocksparseMultiplicativeMultistepLSTMCell(_WrapBaseCell):
     return y
 
 
+class LayerNormVariantsLSTMCell(BaseRNNCell):
+  """LSTM unit with layer normalization and recurrent dropout
+
+  This LSTM cell can apply different variants of layer normalization:
+
+  1. Layer normalization as in the original paper:
+  Ref: https://arxiv.org/abs/1607.06450
+  This can be applied by having:
+    all default params (global_norm=True, cell_norm=True, cell_norm_in_output=True)
+
+  2. Layer normalization for RNMT+:
+  Ref: https://arxiv.org/abs/1804.09849
+  This can be applied by having:
+    all default params except
+    - global_norm = False
+    - per_gate_norm = True
+    - cell_norm_in_output = False
+
+  3. TF official `LayerNormBasicLSTMCell`
+  Ref: https://www.tensorflow.org/api_docs/python/tf/contrib/rnn/LayerNormBasicLSTMCell
+  This can be reproduced by having:
+    all default params except
+    - global_norm = False
+    - per_gate_norm = True
+
+  4. Sockeye LSTM layer normalization implementations
+  Ref: https://github.com/awslabs/sockeye/blob/master/sockeye/rnn.py
+
+  `LayerNormLSTMCell` can be reproduced by having:
+    all default params except
+    - with_concat = False (just efficiency, no difference in the model)
+
+  `LayerNormPerGateLSTMCell` can be reproduced by having:
+    all default params except:
+    (- with_concat = False)
+    - global_norm = False
+    - per_gate_norm = True
+
+  Recurrent dropout is based on:
+        https://arxiv.org/abs/1603.05118
+  """
+
+  def __init__(self,
+               num_units,
+               norm_gain=1.0,
+               norm_shift=0.0,
+               activation=tf.tanh,
+               is_training=None,
+               dropout=0.0,
+               dropout_h=0.0,
+               dropout_seed=None,
+               with_concat=False,
+               global_norm=True,
+               global_norm_joined=False,
+               per_gate_norm=False,
+               cell_norm=True,
+               cell_norm_in_output=True,
+               hidden_norm=False,
+               variance_epsilon=1e-12):
+    """
+
+    :param int num_units: number of lstm units
+    :param float norm_gain: layer normalization gain value
+    :param float norm_shift: layer normalization shift (bias) value
+    :param activation: Activation function to be applied in the lstm cell
+    :param bool is_training: if True then we are in the training phase
+    :param float dropout: dropout rate, applied on cell-in (j)
+    :param float dropout_h: dropout rate, applied on hidden state (h) when it enters the LSTM (variational dropout)
+    :param int dropout_seed: used to create random seeds
+    :param bool with_concat: if True then the input and prev hidden state
+      is concatenated for the computation. this is just about computation performance.
+    :param bool global_norm: if True then layer normalization is applied
+      for the forward and recurrent outputs (separately).
+    :param bool global_norm_joined: if True, then layer norm is applied on LSTM in
+      (forward and recurrent output together)
+    :param bool per_gate_norm: if True then layer normalization is applied
+      per lstm gate
+    :param bool cell_norm: if True then layer normalization is applied
+      to the LSTM new cell output
+    :param bool cell_norm_in_output: if True, the normalized cell is also used in the output
+    :param bool hidden_norm: if True then layer normalization is applied
+      to the LSTM new hidden state output
+    """
+
+    super(LayerNormVariantsLSTMCell, self).__init__()
+    from TFNetwork import TFNetwork
+    self._num_units = num_units
+    self.norm_grain = norm_gain
+    self.norm_shift = norm_shift
+    self.activation = activation
+
+    if is_training is None:
+      is_training = TFNetwork.get_current_network().train_flag
+    self.is_training = is_training
+
+    self.dropout = dropout
+    self.dropout_h = dropout_h
+    if dropout_seed is None:
+      dropout_seed = TFNetwork.get_current_network().random.randint(2 ** 31)
+    self.dropout_seed = dropout_seed
+
+    self.with_concat = with_concat
+
+    # used for different layer norm variants
+    self.global_norm = global_norm
+    self.global_norm_joined = global_norm_joined
+    self.per_gate_norm = per_gate_norm
+    self.cell_norm = cell_norm
+    self.cell_norm_in_output = cell_norm_in_output
+    self.hidden_norm = hidden_norm
+    self.variance_epsilon = variance_epsilon
+
+  @property
+  def output_size(self):
+    return self._num_units
+
+  @property
+  def state_size(self):
+    return rnn_cell.LSTMStateTuple(self._num_units, self._num_units)
+
+  def _norm(self, inputs, with_beta=True, name=None):
+    """
+    :param tf.Tensor inputs: (B,D), or (T,B,D)
+    :param bool with_beta:
+    :param str name:
+    :return: (B,D) or (T,B,D)
+    :rtype: tf.Tensor
+    """
+    assert name is not None
+    from TFUtil import var_creation_scope
+    shape = inputs.get_shape()[-1:]
+    gamma_init = tf.constant_initializer(self.norm_grain)
+    beta_init = tf.constant_initializer(self.norm_shift)
+    mean, variance = tf.nn.moments(inputs, axes=[-1], keep_dims=True)
+    normalized_input = (inputs - mean) * tf.rsqrt(variance + self.variance_epsilon)
+    with var_creation_scope():
+      g = tf.get_variable("gamma_" + name, shape=shape, initializer=gamma_init)
+      s = tf.get_variable("beta_" + name, shape=shape, initializer=beta_init) if with_beta else None
+    y = normalized_input * g
+    if with_beta:
+      y += s
+    return y
+
+  @staticmethod
+  def _linear(inputs, out_dim, apply_bias=True, name=None):
+    """
+    :param tf.Tensor inputs: (B,D), or (T,B,D)
+    :param int out_dim:
+    :param bool apply_bias:
+    :param str name:
+    :return: (B,out_dim) or (T,B,out_dim)
+    :rtype: tf.Tensor
+    """
+    assert name is not None
+    from TFUtil import var_creation_scope, dot
+    input_dim = inputs.get_shape().dims[-1].value
+    assert input_dim is not None, "%r shape unknown" % (inputs,)
+    with var_creation_scope():
+      weights = tf.get_variable("W_" + name, shape=(input_dim, out_dim))
+    out = dot(inputs, weights)
+    if apply_bias:
+      with var_creation_scope():
+        bias = tf.get_variable("bias_" + name, shape=[out_dim])
+      out = tf.nn.bias_add(out, bias)
+    return out
+
+  def _get_dropout_mask(self, dropout):
+    """
+    :param float dropout:
+    :return: scalar (1.0) or shape (batch_size, num_units)
+    :rtype: tf.Tensor
+    """
+    from TFUtil import var_creation_scope, cond
+    # Create the dropout masks outside the loop:
+    with var_creation_scope():
+      def get_mask():
+        from TFNetworkLayer import LayerBase
+        batch_size = LayerBase.get_recent_layer().get_batch_dim()
+        keep_prob = 1.0 - dropout
+        # uniform [keep_prob, 1.0 + keep_prob)
+        random_tensor = keep_prob
+        random_tensor += tf.random_uniform((batch_size, self._num_units), seed=self.dropout_seed, dtype=tf.float32)
+        # 0. if [keep_prob, 1.0) and 1. if [1.0, 1.0 + keep_prob)
+        binary_tensor = tf.floor(random_tensor)
+        return binary_tensor * (1.0 / keep_prob)
+      return cond(self.is_training, get_mask, lambda: 1.0)
+
+  def _optional_dropout(self, x, dropout):
+    """
+    :param tf.Tensor x: (B,D)
+    :param float dropout:
+    :return: x, or x with dropout, (B,D)
+    :rtype: tf.Tensor
+    """
+    if not dropout:
+      return x
+    if self.is_training is False:
+      return x
+    x *= self._get_dropout_mask(dropout=dropout)
+    x.set_shape((None, self._num_units))
+    return x
+
+  def get_input_transformed(self, inputs, batch_dim=None):
+    if self.with_concat:  # concat inputs, prev_h
+      assert not self.global_norm, "%s: global_norm and with_concat together not supported" % self
+      return inputs
+    inputs = self._linear(
+      inputs, 4 * self._num_units, apply_bias=not self.global_norm and not self.global_norm_joined, name='ff')
+    if self.global_norm:
+      inputs = self._norm(inputs, name='input_below', with_beta=not self.global_norm_joined)
+    return inputs
+
+  def __call__(self, inputs, state, scope=None):
+    """
+    Run this RNN cell on inputs given a state.
+
+    :param tf.Tensor inputs:
+    :param rnn_cell.LSTMStateTuple state:
+    :return: (LSTM output h, LSTM state (consisting of cell state c and output h)
+    :rtype: (tf.Tensor, rnn_cell.LSTMStateTuple)
+    """
+    prev_c, prev_h = state
+    prev_h = self._optional_dropout(prev_h, dropout=self.dropout_h)
+
+    if self.with_concat:
+      assert not self.global_norm
+      concat_input = tf.concat([inputs, prev_h], axis=-1)
+      lstm_in = self._linear(concat_input, 4 * self._num_units, apply_bias=not self.global_norm, name='ff_re')
+    else:
+      # The input is already transformed by `get_input_transformed` function
+      input_below = inputs
+      # Bias already via get_input_transformed (if not global_norm, otherwise anyway should not been used).
+      state_below = self._linear(prev_h, 4 * self._num_units, apply_bias=False, name='re')
+      if self.global_norm:
+        # Beta already in get_input_transformed.
+        state_below = self._norm(state_below, name='state_below', with_beta=False)
+      lstm_in = tf.add(input_below, state_below)
+    if self.global_norm_joined:
+      lstm_in = self._norm(lstm_in, name='lstm_in')
+
+    i, j, f, o = tf.split(lstm_in, num_or_size_splits=4, axis=-1)
+
+    if self.per_gate_norm:
+      i = self._norm(i, name='i_gate')
+      j = self._norm(j, name='j_gate')
+      f = self._norm(f, name='f_gate')
+      o = self._norm(o, name='o_gate')
+
+    g = self._optional_dropout(self.activation(j), dropout=self.dropout)
+
+    from tensorflow.python.ops.math_ops import sigmoid
+
+    new_c = sigmoid(f) * prev_c + sigmoid(i) * g
+    new_c_for_output = new_c
+    if self.cell_norm:
+      new_c = self._norm(new_c, name='new_c')
+      if self.cell_norm_in_output:
+        new_c_for_output = new_c
+
+    new_h = sigmoid(o) * self.activation(new_c_for_output)
+    if self.hidden_norm:
+      new_h = self._norm(new_h, name='new_h')
+
+    return new_h, rnn_cell.LSTMStateTuple(new_c, new_h)

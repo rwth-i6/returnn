@@ -15,7 +15,7 @@ from Log import log
 import rnn
 import argparse
 import HDFDataset
-from Dataset import Dataset, init_dataset_via_str
+from Dataset import Dataset, init_dataset
 from Config import Config
 from Util import NumbersDict, human_size, progress_bar_with_time, try_run, PY3
 
@@ -195,7 +195,7 @@ def init(config_filename, cmd_line_opts, dataset_config_str):
     return rnn.train_data
   else:
     assert dataset_config_str
-    dataset = init_dataset_via_str(dataset_config_str)
+    dataset = init_dataset(dataset_config_str)
     print("Source dataset:", dataset.len_info(), file=log.v3)
     return dataset
 

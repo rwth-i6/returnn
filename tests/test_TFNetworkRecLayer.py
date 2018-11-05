@@ -2189,6 +2189,115 @@ def test_BlocksparseLSTM_load_params_from_native_lstm():
     assert_almost_equal(np_y1, np_y2)
 
 
+def test_rec_layer_search_select_src_reuse_layer():
+  from TFNetworkRecLayer import _SubnetworkRecCell
+  n_src_dim = 5
+  n_tgt_dim = 7
+  beam_size = 12
+  config = Config()
+  config.update({"debug_print_layer_output_template": True, "optimize_move_layers_out": False})
+
+  def get_net_dict():
+    return {
+      "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6},
+
+      "lstm0_fw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": 1, "from": ["source_embed"]},
+      "lstm0_bw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": -1, "from": ["source_embed"]},
+
+      "lstm1_fw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": 1, "from": ["lstm0_fw", "lstm0_bw"]},
+      "lstm1_bw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": -1, "from": ["lstm0_fw", "lstm0_bw"]},
+
+      "encoder": {"class": "copy", "from": ["lstm1_fw", "lstm1_bw"]},
+      "enc_ctx": {"class": "linear", "activation": None, "with_bias": True, "from": ["encoder"], "n_out": 10},
+      "fertility": {"class": "linear", "activation": "sigmoid", "with_bias": False, "from": ["encoder"], "n_out": 1},
+
+      "output": {"class": "rec", "from": [], "unit": {
+        'output': {'class': 'choice', 'target': 'classes', 'beam_size': beam_size, 'from': ["output_prob"],
+                   "initial_output": 0},
+        "end": {"class": "compare", "from": ["output"], "value": 0},
+        'target_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'], "n_out": 6,
+                         "initial_output": "apply(0)", 'reuse_params': {'map' : {'W' :{'reuse_layer': 'base:source_embed'}, 'b':None}}},
+        "weight_feedback": {"class": "linear", "activation": None, "with_bias": False, "from": ["prev:accum_att_weights"],
+                            "n_out": 10},
+        "prev_s_state": {"class": "get_last_hidden_state", "from": ["prev:s"], "n_out": 20},
+        "prev_s_transformed": {"class": "linear", "activation": None, "with_bias": False, "from": ["prev_s_state"],
+                               "n_out": 10},
+        "energy_in": {"class": "combine", "kind": "add",
+                      "from": ["base:enc_ctx", "weight_feedback", "prev_s_transformed"], "n_out": 10},
+        "energy_tanh": {"class": "activation", "activation": "tanh", "from": ["energy_in"]},
+        "energy": {"class": "linear", "activation": None, "with_bias": False, "from": ["energy_tanh"], "n_out": 1},
+        "att_weights": {"class": "softmax_over_spatial", "from": ["energy"]},  # (B, enc-T, 1)
+        "accum_att_weights": {"class": "eval", "from": ["prev:accum_att_weights", "att_weights", "base:fertility"],
+                              "eval": "source(0) + source(1) / (2.0 * source(2))",
+                              "out_type": {"dim": 1, "shape": (None, 1)}},
+        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder"},
+        "s": {"class": "rnn_cell", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+              "initial_state": "var", "from": ["target_embed", "att"], "n_out": 10},
+        "readout_in": {"class": "linear", "from": ["prev:s", "prev:target_embed", "att"], "activation": None,
+                       "n_out": 10},
+        "readout": {"class": "reduce_out", "mode": "max", "num_pieces": 2, "from": ["readout_in"]},
+        "output_prob": {"class": "softmax", "from": ["readout"], "target": "classes", "loss": "ce"}
+      }, "target": "classes", "max_seq_len": 20},
+
+      "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance", "target": "classes"}
+    }
+
+  print("Constructing search network.")
+  with make_scope() as session:
+    extern_data = ExternData({
+      "data": {"dim": n_src_dim, "sparse": True},
+      "classes": {"dim": n_tgt_dim, "sparse": True, "available_for_inference": False}})
+    search_net = TFNetwork(extern_data=extern_data, search_flag=True, train_flag=False, eval_flag=True, config=config)
+    search_net.construct_from_dict(get_net_dict())
+    search_out_layer = search_net.layers["output"]
+    assert isinstance(search_out_layer, RecLayer)
+    assert isinstance(search_out_layer.cell, _SubnetworkRecCell)
+    assert not search_out_layer.cell.input_layers_moved_out
+    assert not search_out_layer.cell.output_layers_moved_out
+    print("Layers in the loop:")
+    loop_net = search_out_layer.cell.net
+    for name, layer in sorted(loop_net.layers.items()):
+      print("  %r: %s" % (name, layer))
+      print("    search choices:", layer.get_search_choices())
+      print("    sources:")
+      for src in layer.sources:
+        print("      %s" % src)
+      print("    other deps:")
+      for dep in layer.get_dep_layers():
+        if dep in layer.sources:
+          continue
+        print("      %s" % dep)
+    loop_out_layer = loop_net.layers["output"]
+    assert isinstance(loop_out_layer, ChoiceLayer)
+    assert isinstance(loop_out_layer.search_choices, SearchChoices)
+    all_src_choices = loop_out_layer.search_choices.get_all_src_choices()
+    assert len(all_src_choices) == 2
+    cur_out_choice, prev_out_choice = all_src_choices
+    assert isinstance(cur_out_choice, SearchChoices)
+    assert isinstance(prev_out_choice, SearchChoices)
+    assert cur_out_choice == loop_out_layer.search_choices
+    prev_loop_out_layer = loop_net.layers["prev:output"]
+    assert prev_out_choice == prev_loop_out_layer.search_choices
+    assert RecLayer.is_prev_step_layer(prev_out_choice.owner)
+    assert_equal(loop_net.layers["end"].get_search_choices(), cur_out_choice)
+    assert_equal(loop_net.layers["target_embed"].get_search_choices(), cur_out_choice)
+    assert_equal(loop_net.layers["prev:target_embed"].get_search_choices(), prev_out_choice)
+    assert_equal(loop_net.layers["accum_att_weights"].get_search_choices(), prev_out_choice)
+    assert_equal(loop_net.layers["prev:accum_att_weights"].get_search_choices(), prev_out_choice)  # will be transformed
+    assert_equal(loop_net.layers["weight_feedback"].get_search_choices(), prev_out_choice)
+    assert_equal(loop_net.layers["s"].get_search_choices(), cur_out_choice)
+    assert_equal(loop_net.layers["prev:s"].get_search_choices(), prev_out_choice)
+    assert_equal(loop_net.layers["prev_s_state"].get_search_choices(), prev_out_choice)
+    assert_equal(loop_net.layers["energy_in"].get_search_choices(), prev_out_choice)
+    assert_equal(loop_net.layers["att_weights"].get_search_choices(), prev_out_choice)
+    assert_equal(loop_net.layers["att"].get_search_choices(), prev_out_choice)
+    assert_equal(loop_net.layers["output_prob"].get_search_choices(), prev_out_choice)
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()

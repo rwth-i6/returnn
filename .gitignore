@@ -7,3 +7,4 @@ ipython-kernel-*.json
 .nfs*
 *~
 *.so
+/.vscode

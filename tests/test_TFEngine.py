@@ -20,6 +20,7 @@ import unittest
 import numpy
 import numpy.testing
 from pprint import pprint
+import contextlib
 import better_exchook
 better_exchook.replace_traceback_format_tb()
 from Log import log
@@ -35,6 +36,16 @@ try:
   faulthandler.enable()
 except ImportError:
   print("no faulthandler")
+
+
+@contextlib.contextmanager
+def make_scope():
+  """
+  :rtype: tf.Session
+  """
+  with tf.Graph().as_default() as graph:
+    with tf.Session(graph=graph) as session:
+      yield session
 
 
 session = tf.InteractiveSession()
@@ -1504,6 +1515,261 @@ def test_net_safe_log_to_log_softmax():
     print("inputs':", list(sub_in0.op.inputs[0].op.inputs))
     print("inputs'':", list(sub_in0.op.inputs[0].op.inputs[0].op.inputs))
   assert sub_in0.op.type == "LogSoftmax" or sub_in0.op.inputs[0].op.type == "LogSoftmax"
+
+
+def test_preload_from_files():
+  import tempfile
+  model_tmp_dir = tempfile.mkdtemp("tmp-checkpoint")
+  model_filename = model_tmp_dir + "/model"
+  with make_scope() as session:
+    config = Config()
+    n_in, n_hidden, n_out = 2, 5, 3
+    config.update({
+      "num_outputs": n_out,
+      "num_inputs": n_in,
+      "network": {
+        "l1": {"class": "linear", "activation": None, "n_out": n_hidden, 'bias_init': 1.0, 'forward_weights_init': 'orthogonal'},
+        "output": {"class": "linear", "activation": None, "n_out": n_out, "from": ["l1"], 'bias_init': 2.0, 'forward_weights_init': 'orthogonal'}
+      }
+    })
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    network.initialize_params(session)
+    params_orig_dump = network.get_params_serialized(session)
+    print("l1:")
+    print(params_orig_dump.values_dict["l1"]["W"])
+    print(params_orig_dump.values_dict["l1"]["b"])
+    print("output:")
+    print(params_orig_dump.values_dict["output"]["W"])
+    print(params_orig_dump.values_dict["output"]["b"])
+    assert(params_orig_dump.values_dict["l1"]["W"].any())
+    assert(params_orig_dump.values_dict["output"]["W"].any())
+    network.save_params_to_file(filename=model_filename, session=session)
+
+  config = Config()
+  config.update({
+    "num_outputs": n_out,
+    "num_inputs": n_in,
+    "network": {
+      "l0": {"class": "linear", "activation": None, "n_out": n_in},
+      "main_l1": {"class": "linear", "activation": None, "n_out": n_hidden, "from": ["l0"]},
+      "main_output": {"is_output_layer": True, "class": "linear", "activation": None, "n_out": n_out, "from": ["main_l1"]},
+    },
+    "preload_from_files": {
+      'train_base': {
+        'filename': model_filename,
+        'prefix': 'main_',
+        'init_for_train': True,
+      }
+    },
+    "device": "cpu",
+    "start_epoch": 1,
+    "num_epochs": 1,
+    "batch_size": 50,
+    "model": model_tmp_dir + "/clone_model",
+  })
+
+  from GeneratingDataset import DummyDataset
+  from TFEngine import Engine
+  seq_len = 5
+  n_data_dim = n_in
+  n_classes_dim = n_out
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
+  train_data.init_seq_order(epoch=1)
+  cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  cv_data.init_seq_order(epoch=1)
+
+  engine = Engine(config=config)
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
+
+  network = engine.network
+  params_dump = network.get_params_serialized(engine.tf_session)
+  for layer_name in ["l1", "output"]:
+    layer_orig = params_orig_dump.values_dict[layer_name]
+    layer_clone_main = params_dump.values_dict["main_" + layer_name]
+    for param_name in ["W", "b"]:
+      param_orig = layer_orig[param_name]
+      param_clone_main = layer_clone_main[param_name]
+      numpy.testing.assert_array_equal(param_orig, param_clone_main)
+
+    main = engine.network.layers["main_" + layer_name]
+    assert_equal(set(main.params.keys()), {"W", "b"})
+
+  engine.finalize()
+
+
+def test_preload_from_files_with_reuse():
+  import tempfile
+  model_tmp_dir = tempfile.mkdtemp("tmp-checkpoint")
+  model_filename = model_tmp_dir + "/model"
+  with make_scope() as session:
+    config = Config()
+    n_in, n_hidden, n_out = 2, 5, 3
+    config.update({
+      "num_outputs": n_out,
+      "num_inputs": n_in,
+      "network": {
+        "l1": {"class": "linear", "activation": None, "n_out": n_hidden, 'bias_init': 1.0, 'forward_weights_init': 'orthogonal'},
+        "output": {"class": "linear", "activation": None, "n_out": n_out, "from": ["l1"], 'bias_init': 2.0, 'forward_weights_init': 'orthogonal'}
+      }
+    })
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    network.initialize_params(session)
+    params_orig_dump = network.get_params_serialized(session)
+    print("l1:")
+    print(params_orig_dump.values_dict["l1"]["W"])
+    print(params_orig_dump.values_dict["l1"]["b"])
+    print("output:")
+    print(params_orig_dump.values_dict["output"]["W"])
+    print(params_orig_dump.values_dict["output"]["b"])
+    assert(params_orig_dump.values_dict["l1"]["W"].any())
+    assert(params_orig_dump.values_dict["output"]["W"].any())
+    network.save_params_to_file(filename=model_filename, session=session)
+
+  config = Config()
+  config.update({
+    "num_outputs": n_out,
+    "num_inputs": n_in,
+    "network": {
+      "l0": {"class": "linear", "activation": None, "n_out": n_in},
+      "main_l1": {"class": "linear", "activation": None, "n_out": n_hidden, "from": ["l0"]},
+      "main_output": {"is_output_layer": True, "class": "linear", "activation": None, "n_out": n_out, "from": ["main_l1"]},
+      "clone_l0": {"class": "linear", "activation": None, "n_out": n_in, "from": "main_output"},
+      "clone_l1": {"class": "linear", "activation": None, "n_out": n_hidden, "from": ["clone_l0"], "reuse_params": "main_l1"},
+      "clone_output": {"is_output_layer": True, "class": "linear", "activation": None, "n_out": n_out, "from": ["clone_l1"], "reuse_params": "main_output"},
+    },
+    "preload_from_files": {
+      'train_base': {
+        'filename': model_filename,
+        'prefix': 'main_',
+        'init_for_train': True,
+      }
+    },
+    "device": "cpu",
+    "start_epoch": 1,
+    "num_epochs": 1,
+    "batch_size": 50,
+    "model": model_tmp_dir + "/clone_model",
+  })
+
+  from GeneratingDataset import DummyDataset
+  from TFEngine import Engine
+  seq_len = 5
+  n_data_dim = n_in
+  n_classes_dim = n_out
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
+  train_data.init_seq_order(epoch=1)
+  cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  cv_data.init_seq_order(epoch=1)
+
+  engine = Engine(config=config)
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
+
+  network = engine.network
+  params_dump = network.get_params_serialized(engine.tf_session)
+  for layer_name in ["l1", "output"]:
+    layer_orig = params_orig_dump.values_dict[layer_name]
+    layer_clone_main = params_dump.values_dict["main_" + layer_name]
+    layer_clone_clone = params_dump.values_dict["clone_" + layer_name]
+    for param_name in ["W", "b"]:
+      param_orig = layer_orig[param_name]
+      param_clone_main = layer_clone_main[param_name]
+      param_clone_clone = layer_clone_clone[param_name]
+      numpy.testing.assert_array_equal(param_orig, param_clone_clone)
+      numpy.testing.assert_array_equal(param_orig, param_clone_main)
+
+    main = engine.network.layers["main_" + layer_name]
+    clone = engine.network.layers["clone_" + layer_name]
+    assert_equal(set(main.params.keys()), {"W", "b"})
+    assert_equal(set(clone.params.keys()), {"W", "b"})
+    assert main.params["W"] is clone.params["W"]
+    assert main.params["b"] is clone.params["b"]
+
+  engine.finalize()
+
+
+def test_preload_from_files_ignore_missing():
+  import tempfile
+  model_tmp_dir = tempfile.mkdtemp("tmp-checkpoint")
+  model_filename = model_tmp_dir + "/model"
+  with make_scope() as session:
+    config = Config()
+    n_in, n_hidden, n_out = 2, 5, 3
+    config.update({
+      "device": "cpu",
+      "num_outputs": n_out,
+      "num_inputs": n_in,
+      "network": {
+        "l1": {"class": "linear", "activation": None, "n_out": n_hidden},
+        "output": {"class": "linear", "activation": None, "n_out": n_out, "from": ["l1"]}
+      }
+    })
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    network.initialize_params(session)
+    params_orig_dump = network.get_params_serialized(session)
+    print("l1:")
+    print(params_orig_dump.values_dict["l1"]["W"])
+    print(params_orig_dump.values_dict["l1"]["b"])
+    print("output:")
+    print(params_orig_dump.values_dict["output"]["W"])
+    print(params_orig_dump.values_dict["output"]["b"])
+    assert(params_orig_dump.values_dict["l1"]["W"].any())
+    assert(params_orig_dump.values_dict["output"]["W"].any())
+    network.save_params_to_file(filename=model_filename, session=session)
+
+  config = Config()
+  config.update({
+    "num_outputs": n_out,
+    "num_inputs": n_in,
+    "network": {
+      "l0": {"class": "linear", "activation": None, "n_out": n_in},
+      "l1": {"class": "linear", "activation": None, "n_out": n_hidden, "from": ["l0"]},
+      "output": {"is_output_layer": True, "class": "linear", "activation": None, "n_out": n_out, "from": ["l1"]},
+    },
+    "preload_from_files": {
+      'train_base': {
+        'filename': model_filename,
+        'prefix': '',
+        'init_for_train': True,
+        'ignore_missing': True
+      }
+    },
+    "device": "cpu",
+    "start_epoch": 1,
+    "num_epochs": 1,
+    "batch_size": 50,
+    "model": model_tmp_dir + "/clone_model",
+  })
+
+  from GeneratingDataset import DummyDataset
+  from TFEngine import Engine
+  seq_len = 5
+  n_data_dim = n_in
+  n_classes_dim = n_out
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
+  train_data.init_seq_order(epoch=1)
+  cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  cv_data.init_seq_order(epoch=1)
+
+  engine = Engine(config=config)
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
+
+  network = engine.network
+  params_dump = network.get_params_serialized(engine.tf_session)
+  for layer_name in ["l1", "output"]:
+    layer_orig = params_orig_dump.values_dict[layer_name]
+    layer_clone_main = params_dump.values_dict[layer_name]
+    for param_name in ["W", "b"]:
+      param_orig = layer_orig[param_name]
+      param_clone_main = layer_clone_main[param_name]
+      numpy.testing.assert_array_equal(param_orig, param_clone_main)
+
+    main = engine.network.layers[layer_name]
+    assert_equal(set(main.params.keys()), {"W", "b"})
+
+  engine.finalize()
 
 
 if __name__ == "__main__":
