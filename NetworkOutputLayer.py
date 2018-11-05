@@ -445,6 +445,10 @@ class FramewiseOutputLayer(OutputLayer):
           nll, pcx = T.nnet.crossentropy_softmax_1hot(x=xx, y_idx=yy)
         else:
           nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y_data_flat[self.i])
+          i_f = T.cast(self.index.flatten(),'float32')
+          self.seq_nll = -T.log(T.maximum(self.p_y_given_x_flat[T.arange(self.y_m.shape[0]),self.y_data_flat],T.constant(1e-10))) * i_f
+          self.seq_nll = self.seq_nll.reshape(self.index.shape).sum(axis=0,keepdims=True) / self.index.sum(axis=0,dtype='float32',keepdims=True)
+          self.seq_nll = self.seq_nll.dimshuffle(0,1,'x')
       else:
         target  = self.y_data_flat[self.i]
         output = T.clip(self.p_y_given_x_flat[self.i], 1.e-38, 1.e20)
