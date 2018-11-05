@@ -711,7 +711,7 @@ class Dataset(object):
 
   def _generate_batches(self, recurrent_net,
                         batch_size, max_seqs=-1, max_seq_length=sys.maxsize,
-                        pruning=0.0,
+                        min_seq_length=0, pruning=0.0,
                         seq_drop=0.0,
                         used_data_keys=None):
     """
