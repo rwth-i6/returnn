@@ -13,7 +13,7 @@ import gzip
 from argparse import ArgumentParser
 from pprint import pprint
 import xml.etree.ElementTree as etree
-from Dataset import init_dataset_via_str
+from Dataset import init_dataset
 from LmDataset import Lexicon, AllophoneState
 import collections
 from collections import defaultdict
@@ -279,7 +279,7 @@ def main():
   arg_parser.add_argument("--allo_add_all", action="store_true")
   args = arg_parser.parse_args()
 
-  dataset = init_dataset_via_str(config_str=args.dataset) if args.dataset else None
+  dataset = init_dataset(config_str=args.dataset) if args.dataset else None
   corpus = dict(iter_bliss_orth(filename=args.corpus)) if args.corpus else None
   lexicon = Lexicon(filename=args.lexicon) if args.lexicon else None
   silence_label = args.silence

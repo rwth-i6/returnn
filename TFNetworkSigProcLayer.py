@@ -178,7 +178,7 @@ class MaskBasedMvdrBeamformingWithDiagLoadingLayer(LayerBase):
     """
     :param int nr_of_channels: number of input channels to beamforming (needed to split the feature vector)
     :param int diag_loading_coeff: weighting coefficient for diagonal loading.
-    :param int|None: nr of steps of the qr algorithm to compute eigen vector for beamforming
+    :param int|None qralgorithm_steps: nr of steps of the qr algorithm to compute eigen vector for beamforming
     :param bool output_nan_filter: if set to true nan values in the beamforming output are replaced by zero
     """
     super(MaskBasedMvdrBeamformingWithDiagLoadingLayer, self).__init__(**kwargs)
@@ -440,14 +440,15 @@ class ParametricWienerFilterLayer(LayerBase):
   """
   layer_class = "parametric_wiener_filter"
 
-  def __init__(self, l_overwrite=None, p_overwrite=None, q_overwrite=None, filter_input=None, parameters=None, noise_estimation=None, **kwargs):
+  def __init__(self, l_overwrite=None, p_overwrite=None, q_overwrite=None, filter_input=None, parameters=None, noise_estimation=None, average_parameters=False, **kwargs):
     """
     :param float|None l_overwrite: if given overwrites the l value of the parametric wiener filter with the given constant
     :param float|None p_overwrite: if given overwrites the p value of the parametric wiener filter with the given constant
     :param float|None q_overwrite: if given overwrites the q value of the parametric wiener filter with the given constant
-    :param str|None filter_input: name of layer containing input for wiener filter
-    :param str|None parameters: name of layer containing parameters for wiener filter
-    :param str|None noise_estimation: name of layer containing noise estimate for wiener filter
+    :param LayerBase|None filter_input: name of layer containing input for wiener filter
+    :param LayerBase|None parameters: name of layer containing parameters for wiener filter
+    :param LayerBase|None noise_estimation: name of layer containing noise estimate for wiener filter
+    :param bool average_parameters: if set to true the parameters l, p and q are averaged over the time axis
     """
     from tfSi6Proc.audioProcessing.enhancement.singleChannel import TfParametricWienerFilter
     super(ParametricWienerFilterLayer, self).__init__(**kwargs)
@@ -463,13 +464,15 @@ class ParametricWienerFilterLayer(LayerBase):
       def getNoisePowerSpectrum(self):
         return self._noise_power_spectrum_tensor
 
-    def _getParametersFromConstructorInputs(parameters, l_overwrite, p_overwrite, q_overwrite):
+    def _getParametersFromConstructorInputs(parameters, l_overwrite, p_overwrite, q_overwrite, average_parameters):
       parameter_vector = None
       if parameters is not None:
         parameter_vector = parameters.output.get_placeholder_as_batch_major()
         tf.assert_equal(parameter_vector.shape[-1], 3)
       if (l_overwrite is None) or (p_overwrite is None) or (q_overwrite is None):
         assert parameter_vector is not None
+        if average_parameters:
+          parameter_vector= tf.tile(tf.reduce_mean(parameter_vector, axis=1, keep_dims=True), [1, tf.shape(parameter_vector)[1], 1])
       if l_overwrite is not None:
         l = tf.constant(l_overwrite, dtype=tf.float32)
       else:
@@ -484,14 +487,13 @@ class ParametricWienerFilterLayer(LayerBase):
         q = tf.expand_dims(parameter_vector[:, :, 2], axis=-1)
       return l, p, q
 
-    input_placeholder = filter_input.output.get_placeholder_as_batch_major()
-    if input_placeholder.dtype != tf.complex64:
-      input_placeholder = tf.cast(input_placeholder, dtype=tf.complex64)
-    self._noise_estimation_layer = noise_estimation
-    tf.assert_equal(self._noise_estimation_layer.output.get_placeholder_as_batch_major().shape[-1], input_placeholder.shape[-1])
-    ne = _NoiseEstimator.from_layer(self._noise_estimation_layer)
-    l, p, q = _getParametersFromConstructorInputs(parameters, l_overwrite, p_overwrite, q_overwrite)
-    wiener = TfParametricWienerFilter(ne, [], l, p, q, inputTensorFreqDomain=input_placeholder)
+    filter_input_placeholder = filter_input.output.get_placeholder_as_batch_major()
+    if filter_input_placeholder.dtype != tf.complex64:
+      filter_input_placeholder = tf.cast(filter_input_placeholder, dtype=tf.complex64)
+    tf.assert_equal(noise_estimation.output.get_placeholder_as_batch_major().shape[-1], filter_input_placeholder.shape[-1])
+    ne = _NoiseEstimator.from_layer(noise_estimation)
+    l, p, q = _getParametersFromConstructorInputs(parameters, l_overwrite, p_overwrite, q_overwrite, average_parameters)
+    wiener = TfParametricWienerFilter(ne, [], l, p, q, inputTensorFreqDomain=filter_input_placeholder)
     self.output.placeholder = wiener.getFrequencyDomainOutputSignal()
 
   @classmethod
@@ -520,6 +522,39 @@ class ParametricWienerFilterLayer(LayerBase):
     if d["parameters"] is not None:
       d["parameters"] = get_layer(d["parameters"])
     d["noise_estimation"] = get_layer(d["noise_estimation"])
+
+
+class SignalMaskingLayer(LayerBase):
+  """
+  """
+  layer_class = "signal_masking"
+
+  def __init__(self, signal, mask, **kwargs):
+    """
+    :param LayerBase signal: name of layer the signal to be masked
+    :param LayerBase mask: name of layer containing the mask
+    """
+    def _cast_signal_and_mask_if_iecessary(signal, mask):
+      if signal.dtype != mask.dtype:
+        if signal.dtype == tf.complex64 and mask.dtype == tf.float32:
+          return signal, tf.cast(mask, dtype=tf.complex64)
+        else:
+          raise NotImplementedError('difference in dtype between mask and signal is not supported yet.')
+      return signal, mask
+
+    super(SignalMaskingLayer, self).__init__(**kwargs)
+    self._signal = signal.output.get_placeholder_as_batch_major()
+    self._mask = mask.output.get_placeholder_as_batch_major()
+    self._signal, self._mask = _cast_signal_and_mask_if_iecessary(self._signal, self._mask)
+    self.output.placeholder = tf.multiply(self._signal, self._mask)
+    self.output.size_placeholder = signal.output.size_placeholder
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    d.setdefault("from", [])
+    super(SignalMaskingLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    d["signal"] = get_layer(d["signal"])
+    d["mask"] = get_layer(d["mask"])
 
 
 class SplitConcatMultiChannel(_ConcatInputLayer):

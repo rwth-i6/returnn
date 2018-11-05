@@ -1,4 +1,4 @@
-This is a MDLSTM setup for the IAM handwriting database. Please not, that a GPU is required, since our MDLSTM implementation is GPU only.
+This is a MDLSTM setup for the IAM handwriting database. Please note, that a GPU is required, since our MDLSTM implementation is GPU only.
 
 If you find the MDLSTM implementation useful, please consider citing the following paper:
 Paul Voigtlaender, Patrick Doetsch, Hermann Ney

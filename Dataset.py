@@ -271,9 +271,18 @@ class Dataset(object):
       seq_index.sort(key=get_seq_len, reverse=True)  # sort by length, in reverse, starting with longest
     elif self.seq_ordering.startswith('laplace'):
       assert get_seq_len
-      tmp = self.seq_ordering.split(':')
-      bins = int(tmp[1]) if len(tmp) > 1 else 2
-      nth = int(tmp[2]) if len(tmp) > 2 else 1
+      tmp = self.seq_ordering.split(':')[1:]
+      if len(tmp) == 0:
+        bins = 2
+      else:
+        if tmp[0].startswith("."):  # starting with "." -> approx chunk size (num of seqs in one bin)
+          bins = max(num_seqs // int(tmp[0][1:]), 2)
+        else:  # the number of bins
+          bins = int(tmp[0])
+      if len(tmp) <= 1:
+        nth = 1
+      else:
+        nth = int(tmp[1])
       rnd_seed = ((full_epoch - 1) // nth + 1) if full_epoch else 1
       rnd = Random(rnd_seed)
       rnd.shuffle(seq_index)
@@ -710,6 +719,7 @@ class Dataset(object):
       Otherwise, the batch seq dimension is always 1 and multiple seqs will be concatenated.
     :param int batch_size: Max number of frames in one batch.
     :param int max_seqs: Max number of seqs per batch.
+    :param int max_total_num_seqs:
     :param int|dict[str,int]|NumbersDict max_seq_length:
     :param set(str)|None used_data_keys:
     """
@@ -723,8 +733,11 @@ class Dataset(object):
     if isinstance(max_seq_length, int) and max_seq_length < 0:
       max_seq_length = {"classes": -max_seq_length}
     max_seq_length = NumbersDict(max_seq_length)
+    min_seq_length = NumbersDict(min_seq_length)
     assert max_seqs > 0
     assert seq_drop <= 1.0
+    if not max_total_num_seqs or max_total_num_seqs < 0:
+      max_total_num_seqs = float("inf")
     chunk_size = self.chunk_size
     chunk_step = self.chunk_step
     if not recurrent_net:
@@ -735,7 +748,11 @@ class Dataset(object):
     ctx_lr = self._get_context_window_left_right()
     avg_weight = sum([ v[0] for v in self.weights.values()]) / (len(self.weights.keys()) or 1)
     for idx in self.weights:
+<<<<<<< HEAD
       self.weights[idx][1] = random() * avg_weight * pruning
+=======
+      self.weights[idx][1] = random() * avg_weight * 1.5
+>>>>>>> df7086a844262121ae0b9997b423d516189da359
     for seq_idx, t_start, t_end in self.iterate_seqs(
           chunk_size=chunk_size, chunk_step=chunk_step, used_data_keys=used_data_keys):
       if not self.sample(seq_idx):
@@ -746,6 +763,8 @@ class Dataset(object):
       if recurrent_net:
         length = t_end - t_start
         if length.any_compare(max_seq_length, (lambda a, b: a > b)):
+          continue
+        if length.any_compare(min_seq_length, (lambda a, b: a < b)):
           continue
         if length.max_value() > batch_size:
           print("warning: sequence length (%i) larger than limit (%i)" % (length.max_value(), batch_size), file=log.v4)
@@ -766,6 +785,10 @@ class Dataset(object):
             yield batch
             batch = Batch()
           t_start += num_frames
+      if seq_idx != last_seq_idx:
+        last_seq_idx = seq_idx
+        total_num_seqs += 1
+
 
 
     if batch.get_all_slices_num_frames() > 0:

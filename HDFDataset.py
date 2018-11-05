@@ -183,7 +183,7 @@ class HDFDataset(CachedDataset):
       inputs = fin['inputs']
       if 'targets' in fin:
         targets = {k:fin['targets/data/' + k] for k in fin['targets/data']}
-      if self.seq_ordering == 'default':
+      if self.seq_ordering == 'default' or True:
         inputs = inputs[...]
         if 'targets' in fin:
           targets = {k:targets[k][...] for k in targets}

@@ -194,18 +194,23 @@ class Data(object):
     self.vocab = vocab
     self.sanity_check()
 
-  def sanity_check(self):
-    for axis_name, axis in self.get_special_axes_dict().items():
-      assert axis is None or 0 <= axis < self.batch_ndim, "axis %s (%i) invalid" % (axis_name, axis)
+  def sanity_check(self, ignore_placeholder=False):
+    """
+    Performs some sanity checks on self, and raises exceptions if something is not sane.
+
+    :param bool ignore_placeholder:
+    """
+    for axis_name, axis in self.get_special_axes_dict(include_batch_dim_axis=True).items():
+      assert axis is None or 0 <= axis < self.batch_ndim, "%s: axis %s (%i) invalid" % (self, axis_name, axis)
     if self.batch_dim_axis is not None:
       for axis_name, axis in self.get_special_axes_dict(include_batch_dim_axis=False).items():
-        assert axis != self.batch_dim_axis, "axis %s (%i) must be different from batch_dim_axis (%i)" % (
-          axis_name, axis, self.batch_dim_axis)
+        assert axis != self.batch_dim_axis, "%s: axis %s (%i) must be different from batch_dim_axis (%i)" % (
+          self, axis_name, axis, self.batch_dim_axis)
     if self.sparse:
-      assert self.feature_dim_axis is None, "If sparse, there cannot be a feature dim axis."
+      assert self.feature_dim_axis is None, "%s: If sparse, there cannot be a feature dim axis." % self
     if self.feature_dim_axis is not None:
-      assert self.dim == self.batch_shape[self.feature_dim_axis]
-    if self.placeholder is not None:
+      assert self.dim == self.batch_shape[self.feature_dim_axis], "%s: inconsistent dim" % self
+    if not ignore_placeholder and self.placeholder is not None:
       self.placeholder.set_shape(self.batch_shape)
 
   def get_placeholder_kwargs(self, with_batch=True):
@@ -393,23 +398,23 @@ class Data(object):
     other_special_axes = data.get_special_axes_dict(
       counted_with_batch_dim=True, only_available=True, include_batch_dim_axis=True)
     other_special_axes.pop("feature_dim_axis", None)
+    old_feature_axis = data.feature_dim_axis
     data.feature_dim_axis = feature_dim_axis
     for k, a in other_special_axes.items():
-      setattr(data, k, a if (a < feature_dim_axis) else (a + 1))
+      if old_feature_axis < a <= feature_dim_axis:
+        a -= 1
+      elif feature_dim_axis <= a < old_feature_axis:
+        a += 1
+      setattr(data, k, a)
     axis_old_wo_batch = self.get_batch_axis_excluding_batch(self.feature_dim_axis)
     axis_new_wo_batch = data.get_batch_axis_excluding_batch(feature_dim_axis)
     if self.size_placeholder:
       new_size_placeholder = {}
       for i, s in self.size_placeholder.items():
-        if i >= axis_new_wo_batch:
-          if i < axis_old_wo_batch:
-            i += 1
-          else:
-            assert i > axis_new_wo_batch
-        else:  # i < axis_new_wo_batch
-          if i > axis_old_wo_batch:
-            assert i > 0
-            i -= 1
+        if axis_old_wo_batch < i <= axis_new_wo_batch:
+          i -= 1
+        elif axis_new_wo_batch <= i < axis_old_wo_batch:
+          i += 1
         new_size_placeholder[i] = s
       data.size_placeholder = new_size_placeholder
     data.sanity_check()
@@ -906,10 +911,11 @@ class Data(object):
   def get_placeholder_time_flattened(self):
     assert self.placeholder is not None
     assert self.have_time_axis()
-    # flatten_with_seq_len_mask only works for these two cases at the moment:
-    assert (self.time_dim_axis, self.batch_dim_axis) == (0, 1) or (self.time_dim_axis, self.batch_dim_axis) == (1, 0)
+    # flatten_with_seq_len_mask only works if either time_dim_axis or batch_dim_axis is 0:
+    assert 0 in [self.time_dim_axis, self.batch_dim_axis]
     seq_lens = self.size_placeholder[self.time_dim_axis_excluding_batch]
-    return flatten_with_seq_len_mask(self.placeholder, seq_lens, time_major=self.is_time_major)
+    return flatten_with_seq_len_mask(self.placeholder, seq_lens, batch_dim_axis=self.batch_dim_axis,
+                                     time_dim_axis=self.time_dim_axis)
 
   def get_placeholder_flattened(self, keep_dims=False):
     """
@@ -922,7 +928,8 @@ class Data(object):
     """
     assert self.placeholder is not None
     x = self.placeholder
-    dyn_axes = self.get_spatial_batch_axes() + [self.batch_dim_axis]
+    orig_dyn_axes = self.get_spatial_batch_axes() + [self.batch_dim_axis]
+    dyn_axes = list(orig_dyn_axes)
     if dyn_axes == [self.batch_dim_axis]:
       return x
     assert 0 in dyn_axes, "would need some transpose, not supported at the moment"
@@ -937,10 +944,6 @@ class Data(object):
                   for i in dyn_axes]
       ndim -= 1
     if len(dyn_axes) > 1:
-      assert 0 in dyn_axes, "would need some transpose, not supported at the moment"
-      for i in dyn_axes:
-        if i > 0:
-          assert i - 1 in dyn_axes, "would need some transpose, not supported at the moment"
       shape = tf.shape(x)
       x = tf.reshape(
         x,
@@ -949,8 +952,10 @@ class Data(object):
       dyn_axes = [0]
     assert dyn_axes == [0]
     if keep_dims and orig_num_dyn_axes >= 2:
-      for i in range(orig_num_dyn_axes - 1):
-        x = tf.expand_dims(x, axis=1)
+      for i in orig_dyn_axes:
+        if i not in dyn_axes:
+          x = tf.expand_dims(x, axis=i)
+      x.set_shape([None] * self.batch_ndim)
     return x
 
   def get_axes(self, exclude_time=False, exclude_batch=False):
@@ -1090,7 +1095,9 @@ class Data(object):
     assert self.time_dim_axis is not None
     if self.time_dim_axis_excluding_batch in self.size_placeholder:
       return True
-    assert isinstance(self.shape[self.time_dim_axis_excluding_batch], int)
+    assert isinstance(self.shape[self.time_dim_axis_excluding_batch], int), (
+      "%s: dynamic time axis dim (None) (axis %i) but size_placeholder %r misses information" % (
+        self, self.time_dim_axis, self.size_placeholder))
     return False
 
   def get_sequence_lengths(self):
@@ -2688,24 +2695,39 @@ def reversed(x):
   return y
 
 
-def flatten_with_seq_len_mask(x, seq_lens, time_major=False):
+def flatten_with_seq_len_mask(x, seq_lens, batch_dim_axis=None, time_dim_axis=None, time_major=None):
   """
-  :param tf.Tensor x: shape (batch,time,...s...) with time_major=False or otherwise shape (time,batch,...s....)
+  :param tf.Tensor x: shape (batch,...s..., time, ...s'...) or shape (time,...s...., batch, ...s'...)
   :param tf.Tensor seq_lens: shape (batch,) of int32
-  :param bool time_major: if the time-dim is the first dimension in x
-  :return: tensor of shape (time', ...s...) where time' = sum(seq_len) <= batch*time
+  :param int batch_dim_axis: index of batch_dim in x
+  :param int time_dim_axis: index of time_dim in x
+  :param bool time_major: whether time axis is 0 (redundant, kept for compatibility)
+  :return: tensor of shape (time', ...s...s'...) where time' = sum(seq_len) <= batch*time
   :rtype: tf.Tensor
   """
+  if time_major is not None:
+    if time_major:
+      batch_dim_axis, time_dim_axis = 1, 0
+    else:
+      batch_dim_axis, time_dim_axis = 0, 1
+  assert batch_dim_axis is not None and time_dim_axis is not None
+  assert batch_dim_axis != time_dim_axis
   with tf.name_scope("flatten_with_seq_len_mask"):
     seq_lens = check_input_ndim(seq_lens, 1)
-    if time_major:
-      x = swapaxes(x, 0, 1)  # get (batch,time,...s...)
-    x = check_dim_equal(x, 0, seq_lens, 0, ["batch-dim does not match"])  # batch dim
+    # If not (batch,time,...s...), transform.
+    if batch_dim_axis != 0 or time_dim_axis != 1:
+      dyn_axes = [batch_dim_axis, time_dim_axis]
+      perm = dyn_axes + [i for i in range(len(x.shape)) if i not in dyn_axes]
+      x = tf.transpose(x, perm=perm)
+      batch_dim_axis = 0
+      time_dim_axis = 1
+    x = check_dim_equal(x, batch_dim_axis, seq_lens, batch_dim_axis, ["batch-dim does not match"])  # batch dim
     # int64? -> https://github.com/tensorflow/tensorflow/issues/6518
-    mask = sequence_mask(seq_lens, maxlen=tf.shape(x)[1])  # shape (batch,time)
+    # Batch and time dims have to be in front of the tensor in order to apply the mask.
+    mask = sequence_mask(seq_lens, maxlen=tf.shape(x)[time_dim_axis])  # shape (batch,time)
     mask = check_input_ndim(mask, 2)
-    mask = check_dim_equal(mask, 0, x, 0)
-    mask = check_dim_equal(mask, 1, x, 1)
+    mask = check_dim_equal(mask, 0, x, batch_dim_axis)
+    mask = check_dim_equal(mask, 1, x, time_dim_axis)
     res = tf.boolean_mask(x, mask)
     res = check_input_ndim_equal_offset(res, x, -1)
     return res
@@ -3002,7 +3024,27 @@ class CudaEnv(object):
     return "lib"
 
   @classmethod
+  def _cuda_path_candidate_via_proc_map_libcudart(cls):
+    import Util
+    fn = Util.find_libcudart_from_runtime()
+    if cls.verbose_find_cuda:
+      print("libcudart.so found from /proc/maps:", fn)
+    if not fn:
+      return None
+    # fn is e.g. '/usr/local/cuda-8.0/targets/x86_64-linux/lib/libcudart.so.8.0.61',
+    # or maybe '/usr/local/cuda-8.0/lib64/libcudart.so'
+    p = os.path.dirname(os.path.dirname(fn))
+    while not cls._check_valid_cuda_path(p):
+      p = os.path.dirname(p)
+      assert p not in ["", "/"], "No parent dir of %r is a valid CUDA path." % fn
+    assert cls._check_valid_cuda_path(p)
+    return p
+
+  @classmethod
   def _cuda_path_candidates(cls):
+    p = cls._cuda_path_candidate_via_proc_map_libcudart()
+    if p:
+      yield p
     for p in cls._find_nvcc_in_path():
       # Expect p == "/usr/local/cuda-8.0/bin/nvcc" or so.
       postfix = "/bin/nvcc"
@@ -3085,6 +3127,13 @@ class OpCodeCompiler(NativeCodeCompiler):
   def __init__(self, use_cuda_if_available=True, cuda_auto_min_compute_capability=True,
                include_paths=(), ld_flags=(), **kwargs):
     self._cuda_env = use_cuda_if_available and CudaEnv.get_instance()
+    if use_cuda_if_available and is_gpu_available():
+      # Currently we assume that if we provide CUDA code (thus set use_cuda_if_available=True),
+      # that if there is a GPU available (as TF reports it),
+      # we also expect that we find CUDA.
+      # Otherwise you would end up with ops compiled for CPU only although they support CUDA
+      # and the user expects them to run on GPU.
+      assert self._with_cuda(), "OpCodeCompiler: use_cuda_if_available=True but no CUDA found"
     self._nvcc_opts = []
     if self._with_cuda() and cuda_auto_min_compute_capability:
       # Get CUDA compute capability of the current GPU device.
@@ -3102,14 +3151,16 @@ class OpCodeCompiler(NativeCodeCompiler):
     super(OpCodeCompiler, self).__init__(include_paths=include_paths, ld_flags=ld_flags, use_cxx11_abi=use_cxx11_abi, **kwargs)
     self._tf_mod = None
 
-  _relevant_info_keys = NativeCodeCompiler._relevant_info_keys + ("tf_version", "with_cuda", "nvcc_opts")
+  _relevant_info_keys = NativeCodeCompiler._relevant_info_keys + ("tf_version", "with_cuda", "cuda_path", "nvcc_opts")
 
   def _make_info_dict(self):
+    from Util import describe_tensorflow_version
     d = super(OpCodeCompiler, self)._make_info_dict()
     d.update({
-      "tf_version": tf.__version__,
+      "tf_version": describe_tensorflow_version(),
       "with_cuda": self._with_cuda(),
-      "nvcc_opts": tuple(self._nvcc_opts),
+      "cuda_path": self._cuda_env.cuda_path if self._with_cuda() else None,
+      "nvcc_opts": (tuple(self._cuda_env.get_compiler_opts()) + tuple(self._nvcc_opts)) if self._with_cuda() else None,
     })
     return d
 
@@ -4512,11 +4563,12 @@ def check_base_op_type_and_replace(x, op_type, new_op_type):
   """
   assert isinstance(x, tf.Tensor)
   assert x.op.outputs[0] is x
-  if op_type != "Reshape" and x.op.type == "Reshape":
-    if x.op.inputs[0].op.type != op_type:
-      return None
+  # Handle cases like f(tf.nn.softmax(z)) for f in tf.identity, tf.reshape, etc.
+  safe_post_op_types = ["Identity", "Reshape", "Transpose"]
+  if op_type not in safe_post_op_types and x.op.type in safe_post_op_types:
     inner = check_base_op_type_and_replace(x.op.inputs[0], op_type=op_type, new_op_type=new_op_type)
-    assert inner is not None
+    if inner is None:
+      return None
     op = copy_op(x.op, inputs=[inner] + x.op.inputs[1:])
     return op.outputs[0]
   if x.op.type != op_type:
@@ -4574,9 +4626,9 @@ def copy_tensor(x):
 
 def smoothing_cross_entropy(logits,
                             labels,
-                            vocab_size,
                             label_smoothing,
-                            gaussian=False):
+                            gaussian=False,
+                            vocab_size=None):
   """
   Cross entropy with label smoothing to limit over-confidence.
   Code adapted from here:
@@ -4584,7 +4636,7 @@ def smoothing_cross_entropy(logits,
 
   :param tf.Tensor logits: Tensor of size shape(labels) + [vocab_size]
   :param tf.Tensor labels: Tensor of size [...]
-  :param int vocab_size: Tensor representing the size of the vocabulary.
+  :param int|tf.Tensor vocab_size: Tensor representing the size of the vocabulary.
   :param float label_smoothing: confidence = 1.0 - label_smoothing.
     Used to determine on and off values for label smoothing.
     If `gaussian` is true, `confidence` is the variance to the gaussian distribution.
@@ -4595,6 +4647,8 @@ def smoothing_cross_entropy(logits,
   :rtype: tf.Tensor
   """
   with tf.name_scope("smoothing_cross_entropy", [logits, labels]):
+    if vocab_size is None:
+      vocab_size = get_shape_dim(logits, -1, name="vocab_size")
     confidence = 1.0 - label_smoothing
     # Low confidence is given to all non-true labels, uniformly.
     low_confidence = (1.0 - confidence) / tf.to_float(vocab_size - 1)
@@ -4611,7 +4665,7 @@ def smoothing_cross_entropy(logits,
       soft_targets = normal_dist.prob(
         expand_multiple_dims(
           tf.cast(tf.range(vocab_size), tf.float32),
-          axes=[i + 1 for i in range(len(labels.get_shape().ndims))]))  # [vocab_size] + shape(labels)
+          axes=[i + 1 for i in range(labels.get_shape().ndims)]))  # [vocab_size] + shape(labels)
       soft_targets = move_axis(
         soft_targets, old_axis=0, new_axis=labels.get_shape().ndims)  # shape(labels) + [vocab_size]
     else:

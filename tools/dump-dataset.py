@@ -106,6 +106,7 @@ def dump_dataset(dataset, options):
     if options.type == "numpy":
       numpy.savetxt("%s%i.data%s" % (options.dump_prefix, seq_idx, options.dump_postfix), data)
     elif options.type == "stdout":
+      print("seq %s tag:" % progress, dataset.get_tag(seq_idx))
       print("seq %s data:" % progress, pretty_print(data))
     elif options.type == "print_shape":
       print("seq %s data shape:" % progress, data.shape)

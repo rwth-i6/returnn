@@ -1,0 +1,4 @@
+lstm0/rec/keep_state_c lstm0/rec/keep_state_c/Assign lstm0/rec/zeros 600
+lstm0/rec/keep_state_h lstm0/rec/keep_state_h/Assign lstm0/rec/zeros_1 600
+lstm1/rec/keep_state_c lstm1/rec/keep_state_c/Assign lstm1/rec/zeros 600
+lstm1/rec/keep_state_h lstm1/rec/keep_state_h/Assign lstm1/rec/zeros_1 600

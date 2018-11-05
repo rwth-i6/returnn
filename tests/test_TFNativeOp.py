@@ -15,6 +15,7 @@ sys.path.insert(0, base_path)
 from TFNativeOp import *
 from TFUtil import is_gpu_available, get_available_gpu_min_compute_capability, CudaEnv
 import Util
+from Util import unicode
 import unittest
 from nose.tools import assert_equal, assert_is_instance
 import numpy
@@ -63,59 +64,20 @@ def debug_lib_so(f, syms=()):
     sys_exec(cmd, shell=True)
 
 
-def find_sym_in_exec(fn, sym):
-  """
-  :param str fn: path
-  :param str sym:
-  :return: matched out, or None
-  :rtype: str|None
-  """
-  from subprocess import CalledProcessError
-  objdump = "objdump -T"
-  if sys.platform == "darwin":
-    objdump = "otool -IHGv"
-  cmd = "%s %s | grep %s" % (objdump, fn, sym)
-  try:
-    out = Util.sysexecOut(cmd, shell=True)
-  except CalledProcessError:  # none found
-    return None
-  assert isinstance(out, str)
-  out_lns = out.splitlines()
-  out_lns = [ln for ln in out_lns if ".text" in ln]  # see objdump
-  if not out_lns:
-    return None
-  return "Found %r in %r:\n%s" % (sym, fn, "\n".join(out_lns))
-
-
-def collect_proc_maps_exec_files():
-  """
-  :return: list of mapped executables (libs)
-  :rtype: list[str]
-  """
-  import re
-  pid = os.getpid()
-  fns = []
-  for line in open("/proc/%i/maps" % pid, 'r').read().splitlines():  # for each mapped region
-    # https://stackoverflow.com/questions/1401359/understanding-linux-proc-id-maps
-    # address           perms offset  dev   inode   pathname
-    # E.g.:
-    # 7ff2de91c000-7ff2de91e000 rw-p 0017c000 08:02 794844                     /usr/lib/x86_64-linux-gnu/libstdc+...
-    m = re.match(
-      r'^([0-9A-Fa-f]+)-([0-9A-Fa-f]+)\s+([rwxps\-]+)\s+([0-9A-Fa-f]+)\s+([0-9A-Fa-f:]+)\s+([0-9]+)\s*(.*)$', line)
-    assert m, "no match for %r" % line
-    address_start, address_end, perms, offset, dev, i_node, path_name = m.groups()
-    if "x" not in perms:
-      continue
-    if not path_name or path_name.startswith("["):
-      continue
-    if path_name not in fns:
-      fns.append(path_name)
-  return fns
+def test_numpy_gemm():
+  a = numpy.random.randn(100, 50).astype(numpy.float32)
+  b = numpy.random.randn(50, 13).astype(numpy.float32)
+  c = numpy.dot(a, b)
+  assert numpy.isfinite(c).all()
 
 
 def dump_info():
   # Some generic stuff.
+  print("Number available CPUs:", Util.get_number_available_cpus())
   sys_exec("g++", "--version")
+  print("TF __file__:", tf.__file__)
+  print("TF version:", tf.__version__)
+  print("TF describe version:", Util.describe_tensorflow_version())
   print("TF include:", tf.sysconfig.get_include())
   print("TF lib:", tf.sysconfig.get_lib())
   tf_lib_so = tf.sysconfig.get_lib() + "/libtensorflow_framework.so"
@@ -140,11 +102,11 @@ def dump_info():
     print("Have /proc")
     # sys_exec("cat", "/proc/%i/maps" % os.getpid())
     print("Mapped executables/libs:")
-    fns = collect_proc_maps_exec_files()
+    fns = Util.collect_proc_maps_exec_files()
     pprint(fns)
     fns_with_sgemm = []
     for fn in fns:
-      out = find_sym_in_exec(fn, "sgemm")
+      out = Util.find_sym_in_exec(fn, "sgemm_")
       if out:
         print(out)
         fns_with_sgemm.append(fn)
@@ -155,11 +117,15 @@ def dump_info():
   # Numpy stuff, debugging if sgemm was not found:
   numpy_path = os.path.dirname(numpy.__file__)
   print("Numpy path: %r" % numpy_path)
+  print("Numpy config:")
+  numpy.show_config()
   so_files = Util.sysexecOut("find %s | grep \"\.so\"" % numpy_path, shell=True)
   print("Numpy so files:\n---\n%s\n---\n" % so_files)
   so_files = [f for f in so_files.splitlines() if f]
   for f in so_files:
     debug_lib_so(f, ["sgemm"])
+  print("find_libcudart_from_runtime:", Util.find_libcudart_from_runtime())
+  print("_cuda_path_candidate_via_proc_map_libcudart:", TFUtil.CudaEnv._cuda_path_candidate_via_proc_map_libcudart())
 
 
 # Do this here such that we always see this log in Travis.
@@ -181,16 +147,35 @@ finally:
   sys.stdout = orig_stdout
 
 
+def test_native2lstm_compile():
+  op = make_op(NativeOp.NativeLstm2, compiler_opts={"verbose": True})
+  print("op:", op)
+  maker = op._op_maker
+  print("op maker:", maker)
+  mod = op._op_module
+  print("op mod:", mod)
+  comp = mod._op_compiler
+  print("op compiler:", comp)
+  assert isinstance(comp, TFUtil.OpCodeCompiler)
+  print("info dict:")
+  pprint(comp._info_dict)
+
+
 # Do this here such that we always see this log in Travis.
 try:
   sys.stdout = sys.__stdout__
   print("travis_fold:start:script.nativelstm2compile")
-  make_op(NativeOp.NativeLstm2, compiler_opts={"verbose": True})
+  test_native2lstm_compile()
 except Exception as exc:
   print("NativeLstm2 compile exception:", exc)
 finally:
   print("travis_fold:end:script.nativelstm2compile")
   sys.stdout = orig_stdout
+
+
+# Do this now such that we ensure that some Numpy gemm function was called early,
+# which might trigger OpenBlas init or so.
+test_numpy_gemm()
 
 
 def test_make_lstm_op_auto_cuda():
@@ -847,6 +832,8 @@ def wrap_lstm_grad(op, x, h_0, c_0, dy, dd, mask, W_f, W_r, b, n_time, n_batch, 
 
 
 def check_lstm_grad_ops_single(op1, op2, name1, name2, dy, dd, rtol=1e-7, exclude=(), **kwargs):
+  dy = tf.convert_to_tensor(dy)
+  dd = tf.convert_to_tensor(dd)
   mask_bc = tf.expand_dims(kwargs["mask"], axis=2)
   mask_bc.set_shape(tf.TensorShape((kwargs["n_time"], kwargs["n_batch"], 1)))
   y1, d1, dx1, dh01, dc01, dWf1, dWr1, db1 = wrap_lstm_grad(op=op1, dy=dy, dd=dd, name=name1, **kwargs)
@@ -863,6 +850,8 @@ def check_lstm_grad_ops_single(op1, op2, name1, name2, dy, dd, rtol=1e-7, exclud
     for i in (1, 2):
       print("%s%i:" % (k, i))
       print(locals()["v%s%i" % (k, i)])
+  not_all_close = []
+  nan_tensors = []
   for k in ["y", "d", "dx", "dh0", "dc0", "dWf", "dWr", "db"]:
     if k in exclude:
       continue
@@ -872,7 +861,77 @@ def check_lstm_grad_ops_single(op1, op2, name1, name2, dy, dd, rtol=1e-7, exclud
       v1 = (v1 * vmask)[start_::step]
       v2 = (v2 * vmask)[start_::step]
     print("check", k)
-    assert_allclose(v1, v2, rtol=rtol, err_msg="no match for %s" % k)
+    if not numpy.allclose(v1, v2, rtol=rtol, equal_nan=True):
+      print("ERROR, not all close %s1 vs %s2" % (k, k))
+      print("%s1:" % k)
+      print(v1)
+      print("%s2:" % k)
+      print(v2)
+      not_all_close.append(k)
+      if numpy.isnan(v1).any():
+        nan_tensors.append(locals()[k + "1"])
+      if numpy.isnan(v2).any():
+        nan_tensors.append(locals()[k + "2"])
+  assert isinstance(dWr1, tf.Tensor) and isinstance(dWr1, tf.Tensor)
+  print("dWr1 op:", dWr1.op.name, dWr1.op.type)
+  print("dWr2 op:", dWr2.op.name, dWr2.op.type)
+  if dWr1 in nan_tensors:
+    example_dWr = dWr1
+  elif dWr2 in nan_tensors:
+    example_dWr = dWr2
+  else:
+    example_dWr = dWr1
+  print("example dWr op:", example_dWr.op.name, example_dWr.op.type)
+  if not_all_close:
+    print("not all close (%r). print some debug info." % (not_all_close,))
+    if nan_tensors:
+      print("Have nan tensors:", nan_tensors)
+      from TFUtil import add_check_numerics_ops
+      check_op = add_check_numerics_ops(nan_tensors)
+      try:
+        session.run(nan_tensors + [check_op])
+      except tf.errors.OpError as exc:
+        print("As expected, got TF exception with add_check_numerics_ops:")
+        print(exc)
+    print("graph of %s:" % example_dWr.name)
+    from TFUtil import print_graph_output
+    print_graph_output(example_dWr)
+    from tensorflow.contrib import graph_editor
+    all_ops = graph_editor.get_backward_walk_ops(
+      [y1, dWr1, y2, dWr2, example_dWr], inclusive=True, stop_at_ts=[dy, dd])
+    print("all relevant ops:")
+    pprint(all_ops)
+  v_op_ins, v_op_outs, vdWr1_, vdWr2_ = session.run(
+    [list(example_dWr.op.inputs), list(example_dWr.op.outputs), dWr1, dWr2])
+  if not_all_close:
+    print("inputs:")
+    for x, v in zip(example_dWr.op.inputs, v_op_ins):
+      print("%s:" % x)
+      print(v)
+    print("outputs:")
+    for x, v in zip(example_dWr.op.outputs, v_op_outs):
+      print("%s:" % x)
+      print(v)
+    print("dWr1:")
+    print(vdWr1_)
+    print("dWr2:")
+    print(vdWr2_)
+  if not numpy.allclose(vdWr1_, vdWr2_, rtol=rtol, equal_nan=True):
+    not_all_close.append("dWr (extra run)")
+  for i in range(5):  # run multiple times. maybe this triggers an exception
+    v_op_outs_direct, vdWr1_, vdWr2_ = session.run(
+      [list(example_dWr.op.outputs), dWr1, dWr2], {x: v for (x, v) in zip(example_dWr.op.inputs, v_op_ins)})
+    if not_all_close:
+      print("outputs direct:")
+      for x, v, v_ in zip(example_dWr.op.outputs, v_op_outs_direct, v_op_outs):
+        print("%s:" % x)
+        print(v)
+    for x, v, v_ in zip(example_dWr.op.outputs, v_op_outs_direct, v_op_outs):
+      assert_allclose(v, v_, rtol=rtol, err_msg="mismatch for %s" % x)
+    assert_allclose(vdWr1_, vdWr2_, rtol=rtol, err_msg="mismatch for dWr (extra run %i)" % i)
+  if not_all_close:
+    print("raise exception now: not all close: %r" % (not_all_close,))
+    raise Exception("not all close: %r" % (not_all_close,))
 
 
 def check_lstm_grad_ops(name1, name2, **kwargs):

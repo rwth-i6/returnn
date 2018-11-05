@@ -1,6 +1,7 @@
 
 from __future__ import print_function
 
+import sys
 from Network import LayerNetwork
 from NetworkBaseLayer import Layer
 from NetworkCopyUtils import intelli_copy_layer, LayerDoNotMatchForCopy
@@ -538,4 +539,9 @@ def demo():
 if __name__ == "__main__":
   import sys
   sys.modules["Pretrain"] = sys.modules["__main__"]
-  demo()
+  try:
+    demo()
+  except BrokenPipeError:
+    print("BrokenPipeError")
+    sys.exit(1)
+

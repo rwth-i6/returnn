@@ -7,6 +7,7 @@ from Util import class_idx_seq_to_1_of_k, CollectionReadCheckCovered
 from Log import log
 import numpy
 import re
+import sys
 
 
 class GeneratingDataset(Dataset):
@@ -1347,7 +1348,7 @@ class Vocabulary(object):
   def __init__(self, vocab_file, seq_postfix=None, unknown_label="UNK", num_labels=None):
     """
     :param str vocab_file:
-    :param str unknown_label:
+    :param str|None unknown_label:
     :param int num_labels: just for verification
     :param list[int]|None seq_postfix: labels will be added to the seq in self.get_seq
     """
@@ -1369,7 +1370,7 @@ class Vocabulary(object):
     import pickle
     if filename in self._cache:
       self.vocab, self.labels = self._cache[filename]
-      assert self.unknown_label in self.vocab
+      assert self.unknown_label is None or self.unknown_label in self.vocab
       self.num_labels = len(self.labels)
     else:
       if filename[-4:] == ".pkl":
@@ -1377,7 +1378,7 @@ class Vocabulary(object):
       else:
         d = eval(open(filename, "r").read())
       assert isinstance(d, dict)
-      assert self.unknown_label in d
+      assert self.unknown_label is None or self.unknown_label in d
       labels = {idx: label for (label, idx) in sorted(d.items())}
       min_label, max_label, num_labels = min(labels), max(labels), len(labels)
       assert 0 == min_label
@@ -1389,7 +1390,7 @@ class Vocabulary(object):
       self.vocab = d
       self.labels = [label for (idx, label) in sorted(labels.items())]
       self._cache[filename] = (self.vocab, self.labels)
-    self.unknown_label_id = self.vocab[self.unknown_label]
+    self.unknown_label_id = self.vocab[self.unknown_label] if self.unknown_label is not None else None
 
   @classmethod
   def create_vocab_dict_from_labels(cls, labels):
@@ -1436,7 +1437,9 @@ class Vocabulary(object):
     :param list[str] seq:
     :rtype: list[int]
     """
-    return [self.vocab.get(k, self.unknown_label_id) for k in seq]
+    if self.unknown_label is not None:
+      return [self.vocab.get(k, self.unknown_label_id) for k in seq]
+    return [self.vocab[k] for k in seq]
 
   def get_seq_labels(self, seq):
     """
@@ -1465,7 +1468,7 @@ class BytePairEncoding(Vocabulary):
     :param str vocab_file:
     :param str bpe_file:
     :param list[int]|None seq_postfix: labels will be added to the seq in self.get_seq
-    :param str unknown_label:
+    :param str|None unknown_label:
     """
     super(BytePairEncoding, self).__init__(vocab_file=vocab_file, seq_postfix=seq_postfix, unknown_label=unknown_label)
     # check version information
@@ -1660,7 +1663,7 @@ class CharacterTargets(Vocabulary):
     """
     :param str vocab_file:
     :param list[int]|None seq_postfix: labels will be added to the seq in self.get_seq
-    :param str unknown_label:
+    :param str|None unknown_label:
     """
     super(CharacterTargets, self).__init__(vocab_file=vocab_file, seq_postfix=seq_postfix, unknown_label=unknown_label)
 
@@ -1669,7 +1672,10 @@ class CharacterTargets(Vocabulary):
     :param str sentence:
     :rtype: list[int]
     """
-    seq = [self.vocab.get(k, self.unknown_label_id) for k in sentence]
+    if self.unknown_label is not None:
+      seq = [self.vocab.get(k, self.unknown_label_id) for k in sentence]
+    else:
+      seq = [self.vocab[k] for k in sentence]
     return seq + self.seq_postfix
 
 
@@ -1955,9 +1961,14 @@ class LibriSpeechCorpus(CachedDataset2):
         epoch=epoch, num_seqs=num_seqs, get_seq_len=lambda i: len(self.transs[self._reference_seq_order[i]]))
       self._num_seqs = len(self._seq_order)
     if self.epoch_wise_filter:
+      # Note: A more generic variant of this code is :class:`MetaDataset.EpochWiseFilter`.
       old_num_seqs = self._num_seqs
       any_filter = False
       for (ep_start, ep_end), value in sorted(self.epoch_wise_filter.items()):
+        if ep_start is None:
+          ep_start = 1
+        if ep_end is None or ep_end == -1:
+          ep_end = sys.maxsize
         assert isinstance(ep_start, int) and isinstance(ep_end, int) and 1 <= ep_start <= ep_end
         assert isinstance(value, dict)
         if ep_start <= epoch <= ep_end:
@@ -1972,12 +1983,18 @@ class LibriSpeechCorpus(CachedDataset2):
             max_mean_len = opts.get("max_mean_len")
             seqs = numpy.array(
               sorted([(len(self.transs[self._reference_seq_order[idx]]), idx) for idx in self._seq_order]))
+            # Note: This is somewhat incorrect. But keep the behavior, such that old setups are reproducible.
             num = Util.binary_search_any(
               cmp=lambda num: numpy.mean(seqs[:num, 0]) > max_mean_len, low=1, high=len(seqs) + 1)
             assert num is not None
             self._seq_order = list(seqs[:num, 1])
-            print("%s, epoch %i. Old mean seq len (transcription) is %f, new is %f." % (
-              self, epoch, float(numpy.mean(seqs[:, 0])), float(numpy.mean(seqs[:num, 0]))), file=log.v4)
+            print(
+              ("%s, epoch %i. Old mean seq len (transcription) is %f, new is %f, requested max is %f."
+               " Old num seqs is %i, new num seqs is %i.") %
+              (self, epoch, float(numpy.mean(seqs[:, 0])), float(numpy.mean(seqs[:num, 0])), max_mean_len,
+               len(seqs), num),
+              file=log.v4)
+          opts.assert_all_read()
           self._num_seqs = len(self._seq_order)
       if any_filter:
         print("%s, epoch %i. Old num seqs %i, new num seqs %i." % (
