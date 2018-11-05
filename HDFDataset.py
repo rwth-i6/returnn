@@ -170,8 +170,11 @@ class HDFDataset(CachedDataset):
     file_info = [ [] for l in range(len(self.files)) ]; """ :type: list[list[int]] """
     # file_info[i] is (sorted seq idx from selection, real seq idx)
     for idc in selection:
-      ids = self._seq_index[idc]
-      file_info[self.file_index[ids]].append((idc,ids))
+      if self.sample(idc):
+        ids = self._seq_index[idc]
+        file_info[self.file_index[ids]].append((idc,ids))
+      else:
+        self.preload_set.add(idc)
     for i in range(len(self.files)):
       if len(file_info[i]) == 0:
         continue

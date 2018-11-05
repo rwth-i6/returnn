@@ -427,6 +427,8 @@ class Device(object):
     update_specs.setdefault('layers', [])
     self.update_specs = update_specs
     self.block_size = update_specs['block_size']
+    self.seq_weights = {}
+    self.total_cost = 0
     target = config.value('target', 'classes')
     if self.blocking:
       assert os.getpid() == self.main_pid
@@ -543,7 +545,7 @@ class Device(object):
           if hasattr(ctx,member):
             output_streams[key].append(getattr(ctx,member))
           elif member in ctx.attrs:
-            output_streams[key].append(ctx.attrs['member'])
+            output_streams[key].append(ctx.attrs[member])
 
     self.forwarder = None
     self.use_inputs = False
@@ -566,9 +568,15 @@ class Device(object):
       elif self.update_specs['update_rule'] != 'none':
         self.updater = Updater.initRule(self.update_specs['update_rule'], **self.update_specs['update_params'])
 
-      self.train_outputs_format = ["cost:" + out for out in sorted(self.trainnet.costs.keys())]
+      outputs = []
+      self.train_outputs_format = []
+      if config.float('batch_pruning', 0):
+        outputs = [self.trainnet.output["output"].seq_weight]
+        self.train_outputs_format = ["weights"]
+
+      self.train_outputs_format += ["cost:" + out for out in sorted(self.trainnet.costs.keys())]
       # The function output lists must be consistent with TrainTaskThread.evaluate()
-      outputs = output_streams['train'] + [self.trainnet.costs[out] for out in sorted(self.trainnet.costs.keys())]
+      outputs += output_streams['train'] + [self.trainnet.costs[out] for out in sorted(self.trainnet.costs.keys())]
       if self.trainnet.ctc_priors is not None:
         self.train_outputs_format += ["ctc_priors"]
         outputs += [self.trainnet.ctc_priors]
@@ -915,6 +923,11 @@ class Device(object):
       for stream, out in zip(self.streams, stream_outputs):
         stream.update(task, out, self.tags)
 
+    if outputs_format:
+      for fmt, out in zip(outputs_format, output):
+        if fmt.startswith('cost:'):
+          self.total_cost += out
+
     # In train, first output is the score.
     # If this is inf/nan, our model is probably broken.
     model_broken_short_info = self.fast_check_model_is_broken_from_result(output, outputs_format)
@@ -1122,16 +1135,17 @@ class Device(object):
         for k in target_keys:
           self.j[k].set_value(self.output_index[k].astype('int8'), borrow = True)
         try:
-          utf8_tags = [s.encode('utf-8') for s in self.tags]
-        except Exception:
-          utf8_tags = self.tags
-        self.tags_var.set_value(numpy.array(utf8_tags).view(dtype='int8').reshape((len(utf8_tags), max(map(len, utf8_tags)))))
+          self.tags_var.set_value(numpy.array(self.tags).view(dtype='int8').reshape((len(self.tags), max(map(len, self.tags)))))
+        except:
+          tags = [s.encode('utf-8') for s in self.tags]
+          self.tags_var.set_value(numpy.array(tags).view(dtype='int8').reshape((len(tags), max(map(len, tags)))))
         self.update_total_time += time.time() - update_start_time
       elif cmd == "set-learning-rate":  # via self.set_learning_rate()
         learning_rate = input_queue.recv()
         if self.updater:
           self.updater.setLearningRate(learning_rate)
       elif cmd == "set-net-params":  # via self.set_net_params()
+        self.total_cost = 0
         our_params_trainnet = self.trainnet.get_all_params_vars()
         our_params_testnet = self.testnet.get_all_params_vars()
         assert isinstance(our_params_trainnet, list)
@@ -1159,6 +1173,8 @@ class Device(object):
           output_queue.send(int(self.updater.i.get_value()))
         else:
           output_queue.send(0)
+      elif cmd == 'get-total-cost':
+        output_queue.send(self.total_cost)
       elif cmd == "get-net-train-params":  # via self.get_net_train_params()
         output_queue.send("net-train-params")
         output_queue.send(len(network_params))
@@ -1347,6 +1363,14 @@ class Device(object):
       assert self.main_pid == os.getpid()
       self.input_queue.send("get-num-updates")
       return int(self.output_queue.recv())
+
+  def get_total_cost(self):
+    if self.blocking:
+      return self.total_cost
+    else:
+      assert self.main_pid == os.getpid()
+      self.input_queue.send("get-total-cost")
+      return float(self.output_queue.recv())
 
   def start_epoch_stats(self):
     if not self.is_device_proc():
