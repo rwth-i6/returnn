@@ -1,4 +1,5 @@
 #!/bin/bash
+# Please check ../README.md for more details about the command line options
 
 export OMP_NUM_THREADS=2
 lattice_rescorer="../lattice_rescorer"

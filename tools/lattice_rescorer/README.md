@@ -1,8 +1,18 @@
 How to use the lattice rescorer tool.
+=====================================
 
-
+**Tested version infos:**    
+tensorflow-gpu pip package 1.8.0   
+tensorflow source code 1.7.0   
+bazel 0.11.0  
+protoc 3.2.0  
+cuda 9.0  
+cuDNN 7.0  
+g++ 5.4.0  
 
 # Install TensorFlow with pip.
+
+[install tensorflow with pip](https://www.tensorflow.org/install/pip)
 
     $ pip3 install --user --upgrade tensorflow-gpu
     
@@ -10,42 +20,49 @@ Verify the install:
     
     $ python3 -c "import tensorflow as tf; print(tf.__version__)"
 
-If it doesn't work, please read https://www.tensorflow.org/install/pip
+# Compile TensorFlow c++/c library from source
 
-# Compile TensorFlow c++ library from source
+You can refer to [install tensorflow from source](https://www.tensorflow.org/install/source),the steps are similar.  
+Also, the scirpt in Kaldi [install_tensorflow_cc.sh](https://github.com/kaldi-asr/kaldi/blob/master/tools/extras/install_tensorflow_cc.sh) shows the steps to compile c++/c libraries.
 
 ## Prepare environment for Linux
     
-  Before compiling Tensorflow c++ library on Linux, install the following build tools on your system:
-  *bazel
-  *TensorFlow Python dependencies
-  *optionally, NVIDIA packages to support TensorFlow for GPU.
+  Before compiling Tensorflow c++ library on Linux, install the following build tools on your system:  
+  *bazel  
+  *cuda, cuDNN  
     
 ### Install Bazel
 
-Refer to https://docs.bazel.build/versions/master/install-ubuntu.html#installing-using-binary-installer)
+You should install a required version of bazel, [version information](https://www.tensorflow.org/install/source#tested_build_configurations).  
+[Install bazel using binary installer](https://docs.bazel.build/versions/master/install-ubuntu.html#install-with-installer-ubuntu)
 
+#### Download Bazel
 
-### Install Tensorflow Python dependencies
+Download the Bazel binary installer named bazel-<version>-installer-linux-x86_64.sh from the [Bazel releases page on GitHub](https://github.com/bazelbuild/bazel/releases).
 
-To install TensorFlow, you must install the following packages:numpy, dev, pip, wheel
+#### Run the installer
+
+Run the Bazel installer as follows:
+
+    $ chmod +x bazel-<version>-installer-linux-x86_64.sh
+    $ ./bazel-<version>-installer-linux-x86_64.sh --user
+
+#### Set up your environment
+
+In your .bashrc, add the following line:
+    
+    export PATH="$PATH:$HOME/bin"
 
 ### Install TensorFlow for GPU prerequisites
 
-The following NVIDIA hardware must be installed on your system:
-GPU card with CUDA Compute Capability 3.0 or higher. See NVIDIA documentation for a list of 
-supported GPU cards.
-The following NVIDIA software must be installed on your system:
-CUDA Toolkit (>= 7.0). We recommend version 9.0. For details, see NVIDIA's documentation. 
-Ensure that you append the relevant CUDA pathnames to the LD_LIBRARY_PATH environment 
-variable as described in the NVIDIA documentation.
-GPU drivers supporting your version of the CUDA Toolkit.
-cuDNN SDK (>= v3). We recommend version 7.0. For details, see NVIDIA's documentation.
-
 #### Install CUDA and cuDNN
 
-Note: tensorflow c++ library requires libcudnn.so.7. If you have to install cuDNN 7 locally:
-download the cudnn 7.0.5 for cuda 9.0 from https://developer.nvidia.com/rdp/cudnn-archive
+You should install a required version of CUDA and cuDNN, [version information](https://www.tensorflow.org/install/source#tested_build_configurations):  
+
+[Install CUDA](https://developer.nvidia.com/cuda-toolkit-archive)  
+
+[Install cuDNN](https://developer.nvidia.com/rdp/cudnn-archive)  
+
 Then execute the following commands:
 
     $ tar -xzvf cudnn-9.0-linux-x64-v7.tgz
@@ -55,21 +72,31 @@ Then execute the following commands:
 
 Add the following command to .bashrc:
 
-    export LD_LIBRARY_PATH=/path-to-your-cudnn/lib64:LD_LIBRARY_PATH
-    export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/cuda/extras/CUPTI/lib64 
+    export LD_LIBRARY_PATH=/path-to-your-cudnn/lib64:$LD_LIBRARY_PATH
+    export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/path-to-your-cuda/extras/CUPTI/lib64 
 
 ## Clone the Tensorflow repository and configure the installation
 
+You should download a proper version of TensorFlow source code, [version information](https://www.tensorflow.org/install/source#tested_build_configurations)  
+Use Git to clone the TensorFlow repository
+
     $ git clone https://github.com/tensorflow/tensorflow
     $ cd tensorflow
+    
+The repo defaults to the master development branch. You can also checkout a release branch to build:
+
+    $ git checkout branch_name  # r1.9, r1.10, etc.
     $ ./configure
     
+This script prompts you for the location of TensorFlow dependencies and asks for additional build configuration options (compiler flags, for example).
+[A sample configuration session](https://www.tensorflow.org/install/source#configure_the_build)
+
 ## Compile Tensorflow c++ libraries
 
     $ export TEST_TMPDIR=/u/username/bazel_outputRoot
-    $ tensorflow/contrib/makefile/download_dependencies.sh
-    $ bazel build -c opt --config=cuda --local_resources=6144,4,1.0 --jobs=4 //tensorflow:libtensorflow_cc.so
-    $ bazel build -c opt --config=cuda --local_resources=6144,4,1.0 --jobs=4 //tensorflow:libtensorflow.so 
+    $ tensorflow/contrib/makefile/download_dependencies.sh 
+    $ bazel build -c opt --config=cuda --cxxopt="-D_GLIBCXX_USE_CXX11_ABI=0" --local_resources=6144,4,1.0 --jobs=4 //tensorflow:libtensorflow_cc.so
+    $ bazel build -c opt --config=cuda --cxxopt="-D_GLIBCXX_USE_CXX11_ABI=0" --local_resources=6144,4,1.0 --jobs=4 //tensorflow:libtensorflow.so 
     
 The compiled libraries are stored in /u/username/tensorflow/bazel-bin/tensorflow
 
@@ -77,20 +104,52 @@ The compiled libraries are stored in /u/username/tensorflow/bazel-bin/tensorflow
 
 Add the following command to .bashrc:
 
-    export LD_LIBRARY_PATH=/u/username/tensorflow/bazel-bin/tensorflow:LD_LIBRARY_PATH
+    export LD_LIBRARY_PATH=/u/username/tensorflow/bazel-bin/tensorflow:$LD_LIBRARY_PATH
 
-# Compile LSTM Op in RETURNN
+# Compile LSTM Op in returnn
 
 For example:
 
-    $ ./path-to-your-RETURNN/tools/compile_native_op.py --native_op LstmGenericBase --output xyz
+    $ ./path-to-your-returnn/tools/compile_native_op.py --native_op NativeLstm2 --output path-to-libraries.txt
 
-xyz contains the paths to the compiled libraries. The libraries are stored by default in /var/tmp/, please move the libraries to somewhere else.
+The LSTM cell we used is nativelstm2, path-to-libraries.txt contains the paths to the compiled libraries. The libraries are stored by default in /var/tmp/, please move the libraries to somewhere else.  
+Alternatively, you can use the option --config to compile all native ops, see the script compile_native_op.py for more detailes.
 
-# Create the Tensorflow graph for forwarding
+# Modifications in the original network config file 
 
-    $ ./path-to-your-RETURNN/tools/compile_tf_graph.py <filename to config-file> --eval 1 --output_file <filename to output pb or pbtxt file>
+1. In the config file, for each LSTM layers, please add 
 
+    "initial_state" : "keep_over_epoch"
+    
+and change LSTM unit "lstm" to "nativelstm2". We tested that the LSTM unit "lstm" does not work for inference.
+
+2. You have this in your config:
+
+    num_outputs = {"data": {"dim": num_inputs, "sparse": True, "dtype": "int32"}}  # sparse data
+    num_outputs["delayed"] = num_outputs["data"]
+
+  Change that to:
+
+    extern_data = {
+      "delayed": {"dim": num_inputs, "sparse": True, "dtype": "int32", "available_in_inference": True},
+      "data": {"dim": num_inputs, "sparse": True, "dtype": "int32", "available_in_inference": False}}
+
+3. Add the following line to your config file:
+
+    default_input = "delayed"
+
+# Create the Tensorflow graph for inference
+
+    $ ./path-to-your-returnn/tools/compile_tf_graph.py graph_for_inference.config --eval 1 --output_file filename+[".meta", ".metatxt"]
+    
+.meta graph: the graph for inference.  
+.metatxt: contains all the node names of the graph.
+
+**Note**: we will include the .meta graph for inference in the checkpoint.  
+Suppose network.040.meta is the original .meta file, network.040.inference.meta is the one we create for inference, replace the original one with the new one by:
+
+    $ mv network.040.inference.meta network.040.meta
+    
 # Example to use lattice rescorer
 
 ## Makefile
@@ -103,12 +162,46 @@ In the folder returnn/tools/lattice_rescorer, execute the following command
 
     $ make
     
-A executable file named lattice_rescorer will be generated in the same folder.
+If you got the following error while compiling using Makefile:
+
+libopenblasp-r0-39a31c03.2.18.so: cannot open shared object file: No such file or directory  
+Please do:
+
+    find -name  libopenblasp-r0-39a31c03.2.18.so
+
+and add the following line in .bashrc:
+
+    export LD_LIBRARY_PATH=/folder-of-the-missing-library:$LD_LIBRARY_PATH
+    
+## Usage of lattice rescorer tool
+
+lattice_rescorer [OPTION]... [LATTICE]
+
+For command line options information:
+
+    $ lattice_rescorer --help 
+    
+--ops-Returnn arg  
+Text file containing the paths to libraries of the native ops defined in returnn, for more details, please check the part **"Compile LSTM op in returnn"**.
+
+--checkpoint-files arg  
+checkpoint of tensorflow model, but we should replace the original .meta graph with the .meta graph for inference created using returnn, please check the part **"Create the TensorFlow graph for inference"**.
+
+--state-vars-list arg  
+Text file containing the information needed to assign a value to the state variables in LSTM cell. Please check **example/README.md**.
+
+--tensor-names-list arg  
+Text file of tensor names for feeding and fetching. Please chech **example/README.md**.
+
+For the usages of the other options, please check [rwthlm](https://www-i6.informatik.rwth-aachen.de/web/Software/rwthlm.php)
+ 
+Please read an example script example/rescore_lattice.sh. 
 
 ## An example script to rescore a lattice
 
-The script example/rescore_lattice.sh is an example to rescore a lattice.
+The script rescore_lattice.sh is an example to rescore a lattice.
 
-Before using the script, please modify manually the files libs_list, state_vars_list, tensor_names_list, and then
-
+Before using the script, please modify manually the files libs_list, state_vars_list, tensor_names_list. For the details of these three text files, please read **example/README.md**. And then
+    
+    $ cd example
     $ ./rescore_lattice.sh

@@ -79,6 +79,7 @@ class Dataset(object):
     self.partition_epoch = partition_epoch or 1
     self.timestamps = None
     self.labels = {}; """ :type: dict[str,list[str]] """
+    self.weights = {}
     self.nbytes = 0
     self.num_running_chars = 0  # CTC running chars.
     self._num_timesteps = 0
@@ -602,13 +603,12 @@ class Dataset(object):
       i += 1
     return numpy.array(priori / self.get_num_timesteps(), dtype=numpy.float32)
 
-  def iterate_seqs(self, chunk_size=None, chunk_step=None, used_data_keys=None, max_total_num_seqs=-1):
+  def iterate_seqs(self, chunk_size=None, chunk_step=None, used_data_keys=None):
     """
     Takes chunking into consideration.
     :param int|NumbersDict chunk_size:
     :param int|NumbersDict chunk_step:
     :param set(str)|None used_data_keys:
-    :param int max_total_num_seqs:
     :return: generator which yields tuples (seq index, seq start, seq end)
     :rtype: list[(int,NumbersDict,NumbersDict)]
     """
@@ -618,10 +618,8 @@ class Dataset(object):
       chunk_step = self.chunk_step
     chunk_size = NumbersDict(chunk_size)
     chunk_step = NumbersDict(chunk_step)
-    if not max_total_num_seqs or max_total_num_seqs < 0:
-      max_total_num_seqs = float("inf")
     s = 0
-    while self.is_less_than_num_seqs(s) and s < max_total_num_seqs:
+    while self.is_less_than_num_seqs(s):
       length = self.get_seq_length(s)
       if chunk_size == 0:
         yield (s, length.constant_like(0), length)
@@ -701,6 +699,16 @@ class Dataset(object):
       end += ctx_lr[1]
     return start, end
 
+  def sample(self,seq_idx):
+    if seq_idx in self.weights:
+      weight = self.weights[seq_idx]
+      return weight[0] >= weight[1]
+    return True
+
+  def update_weights(self,seqs,weights):
+    for seq,weight in zip(seqs,weights):
+      self.weights[seq.seq_idx] = [weight,0]
+
   def _generate_batches(self, recurrent_net,
                         batch_size, max_seqs=-1, max_seq_length=sys.maxsize, min_seq_length=0,
                         seq_drop=0.0, max_total_num_seqs=-1,
@@ -727,6 +735,8 @@ class Dataset(object):
     min_seq_length = NumbersDict(min_seq_length)
     assert max_seqs > 0
     assert seq_drop <= 1.0
+    if not max_total_num_seqs or max_total_num_seqs < 0:
+      max_total_num_seqs = float("inf")
     chunk_size = self.chunk_size
     chunk_step = self.chunk_step
     if not recurrent_net:
@@ -735,9 +745,13 @@ class Dataset(object):
         chunk_size = 0
     batch = Batch()
     ctx_lr = self._get_context_window_left_right()
+    avg_weight = sum([ v[0] for v in self.weights.values()]) / (len(self.weights.keys()) or 1)
+    for idx in self.weights:
+      self.weights[idx][1] = random() * avg_weight * 1.5
     for seq_idx, t_start, t_end in self.iterate_seqs(
-          chunk_size=chunk_size, chunk_step=chunk_step, max_total_num_seqs=max_total_num_seqs,
-          used_data_keys=used_data_keys):
+          chunk_size=chunk_size, chunk_step=chunk_step, used_data_keys=used_data_keys):
+      if not self.sample(seq_idx):
+        continue
       if ctx_lr:
         t_start -= ctx_lr[0]
         t_end += ctx_lr[1]
@@ -766,6 +780,10 @@ class Dataset(object):
             yield batch
             batch = Batch()
           t_start += num_frames
+      if seq_idx != last_seq_idx:
+        last_seq_idx = seq_idx
+        total_num_seqs += 1
+
 
     if batch.get_all_slices_num_frames() > 0:
       yield batch

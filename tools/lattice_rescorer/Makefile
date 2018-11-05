@@ -5,11 +5,11 @@ DEPENDFILE = .depend
 BOOST = /work/speech/tools/boost/boost_1_53_0
 INTEL = /work/speech/tools/intel-composer
 
-LOCAL = /u/deng/.local
 TENSORFLOW = /u/deng/tensorflow
 CUDA=/usr/local/cuda-9.0
 CUDNN_v7.0=/u/deng/Downloads/cudnn-9.0-v7.0
 
+# g++ 5.4.0
 CXX = g++
 
 # compiler and linker options
@@ -37,8 +37,7 @@ LDFLAGS := -L$(BOOST)/lib -lboost_program_options -lboost_filesystem \
            -Wl,-rpath,$(INTEL)/lib/intel64 \
            -Wl,-rpath,$(INTEL)/mkl/lib/intel64 \
            -Wl,-rpath,$(CUDA)/lib64 \
-           -Wl,-rpath,$(CUDNN_v7.0)/lib64 \
-           -Wl,-rpath,/u/deng/.local/lib/python3.6/site-packages/numpy/.libs
+           -Wl,-rpath,$(CUDNN_v7.0)/lib64
 
 # default rule
 all: dep lattice_rescorer
@@ -50,7 +49,7 @@ lattice_rescorer: $(OBJ)
 .PHONY: clean dep
 
 clean:
-	rm -f *.o lattice_rescorer
+	rm -f *.o .depend lattice_rescorer
 
 dep: $(SRC)
 	$(CXX) $(CXXFLAGS) -MM $(SRC) > $(DEPENDFILE)

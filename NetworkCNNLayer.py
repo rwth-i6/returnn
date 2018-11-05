@@ -302,14 +302,24 @@ class CNN(_NoOpLayer):
       pooled_out, _ = fmp(X, sizes, pool_size[0])
       return pooled_out.dimshuffle(2, 3, 0, 1)
 
-    pool_out = pool.pool_2d(
-      input=inputs,
-      ws=pool_size, # TODO(theano 0.9): change to ws
-      ignore_border=ignore_border,
-      stride=stride, # TODO(theano 0.9): change to stride
-      pad=pad, # TODO(theano 0.9): change to pad
-      mode=mode
-    )
+    try:
+      pool_out = pool.pool_2d(
+        input=inputs,
+        ws=pool_size,
+        ignore_border=ignore_border,
+        stride=stride,
+        pad=pad,
+        mode=mode
+      )
+    except: # old cudnn
+      pool_out = pool.pool_2d(
+        input=inputs,
+        ds=pool_size,
+        ignore_border=ignore_border,
+        st=stride,
+        padding=pad,
+        mode=mode
+      )
     pool_out.name = "pool_out_"+self.name
     return pool_out
 
