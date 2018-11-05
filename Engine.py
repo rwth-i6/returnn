@@ -230,6 +230,7 @@ class Engine:
     self.inc_seq_length = config.float('inc_seq_length', 0)
     self.max_seq_length_eval = config.int('max_seq_length_eval', 2e31)
     self.output_precision = config.int('output_precision', 12)
+    self.reduction_rate = config.float('reduction_rate', 1.0)
     if self.max_seq_length == 0:
       self.max_seq_length = sys.maxsize
     if config.is_typed("seq_train_parallel"):
@@ -495,6 +496,7 @@ class Engine:
                               learning_rate=self.learning_rate, updater=self.updater,
                               eval_batch_size=self.update_batch_size,
                               start_batch=start_batch, share_batches=self.share_batches,
+                              reduction_rate=self.reduction_rate,
                               exclude=self.exclude,
                               seq_train_parallel=self.seq_train_parallel,
                               report_prefix=("pre" if self.is_pretrain_epoch() else "") + "train epoch %s" % self.epoch,

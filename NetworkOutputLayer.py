@@ -444,12 +444,15 @@ class FramewiseOutputLayer(OutputLayer):
           yy = theano.ifelse.ifelse(T.lt(self.y_m[self.i].shape[0], 1), pad(self.y_data_flat[self.i],0,1), self.y_data_flat[self.i])
           nll, pcx = T.nnet.crossentropy_softmax_1hot(x=xx, y_idx=yy)
         else:
-          nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y_data_flat[self.i])
+          nll_raw, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m, y_idx=self.y_data_flat)
+          self.seq_weight = T.sum(nll_raw.reshape((self.z.shape[0],self.z.shape[1])),axis=0) / T.sum(self.index,axis=0,dtype='float32')
+          nll = nll_raw[self.i]
       else:
         target  = self.y_data_flat[self.i]
         output = T.clip(self.p_y_given_x_flat[self.i], 1.e-38, 1.e20)
         nll = -T.log(output) * target
         self.norm *= self.p_y_given_x.shape[1] * T.inv(T.sum(self.index))
+
       if self.attrs.get("auto_fix_target_length"):
         return self.norm * theano.ifelse.ifelse(T.eq(self.index.sum(),0), 0.0, T.sum(nll)), known_grads
       else:
@@ -977,6 +980,7 @@ class SequenceOutputLayer(OutputLayer):
       from theano.tensor.extra_ops import cpu_contiguous
       err, grad, priors = CTCOp()(self.p_y_given_x, cpu_contiguous(self.y.dimshuffle(1, 0)), self.index_for_ctc())
       known_grads = {self.z: grad * numpy.float32(self.attrs.get('cost_scale', 1))}
+      self.seq_weight = err / T.sum(self.index_for_ctc(),axis=0,dtype='float32')
       return err.sum(), known_grads, priors.sum(axis=0)
     elif self.loss == 'hmm':
       from theano.tensor.extra_ops import cpu_contiguous
