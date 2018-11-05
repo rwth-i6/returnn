@@ -570,7 +570,7 @@ class Device(object):
 
       outputs = []
       self.train_outputs_format = []
-      if config.bool('batch_error_pruning', False):
+      if config.float('batch_pruning', 0):
         outputs = [self.trainnet.output["output"].seq_weight]
         self.train_outputs_format = ["weights"]
 

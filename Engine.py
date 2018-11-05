@@ -231,6 +231,7 @@ class Engine:
     self.max_seq_length_eval = config.int('max_seq_length_eval', 2e31)
     self.output_precision = config.int('output_precision', 12)
     self.reduction_rate = config.float('reduction_rate', 1.0)
+    self.batch_pruning = config.float('batch_pruning', 0.0)
     if self.max_seq_length == 0:
       self.max_seq_length = sys.maxsize
     if config.is_typed("seq_train_parallel"):
@@ -483,6 +484,7 @@ class Engine:
     if 'train' not in self.dataset_batches or not self.train_data.batch_set_generator_cache_whole_epoch():
       self.dataset_batches['train'] = self.train_data.generate_batches(recurrent_net=self.network.recurrent,
                                                                        batch_size=self.batch_size,
+                                                                       pruning=self.batch_pruning,
                                                                        max_seqs=self.max_seqs,
                                                                        max_seq_length=int(self.max_seq_length),
                                                                        seq_drop=self.seq_drop,

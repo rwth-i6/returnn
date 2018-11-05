@@ -710,8 +710,9 @@ class Dataset(object):
       self.weights[seq.seq_idx] = [weight,0]
 
   def _generate_batches(self, recurrent_net,
-                        batch_size, max_seqs=-1, max_seq_length=sys.maxsize, min_seq_length=0,
-                        seq_drop=0.0, max_total_num_seqs=-1,
+                        batch_size, max_seqs=-1, max_seq_length=sys.maxsize,
+                        pruning=0.0,
+                        seq_drop=0.0,
                         used_data_keys=None):
     """
     :param bool recurrent_net: If True, the batch might have a batch seq dimension > 1.
@@ -747,7 +748,11 @@ class Dataset(object):
     ctx_lr = self._get_context_window_left_right()
     avg_weight = sum([ v[0] for v in self.weights.values()]) / (len(self.weights.keys()) or 1)
     for idx in self.weights:
+<<<<<<< HEAD
+      self.weights[idx][1] = random() * avg_weight * pruning
+=======
       self.weights[idx][1] = random() * avg_weight * 1.5
+>>>>>>> df7086a844262121ae0b9997b423d516189da359
     for seq_idx, t_start, t_end in self.iterate_seqs(
           chunk_size=chunk_size, chunk_step=chunk_step, used_data_keys=used_data_keys):
       if not self.sample(seq_idx):
@@ -783,6 +788,7 @@ class Dataset(object):
       if seq_idx != last_seq_idx:
         last_seq_idx = seq_idx
         total_num_seqs += 1
+
 
 
     if batch.get_all_slices_num_frames() > 0:
