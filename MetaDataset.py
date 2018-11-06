@@ -72,9 +72,11 @@ class EpochWiseFilter:
 
 class MetaDataset(CachedDataset2):
   """
-  This wraps around one or multiple datasets and might provide extra information.
-  Every dataset is expected to provide the the same sequences, where the sequence list
-  is given by a file.
+  This wraps around one or multiple datasets to make multiple kinds of inputs/outputs available
+  (e.g. to combine text and audio input features). To match corresponding sequences in the
+  datasets, "seq_list_file" has to be provided. It contains a list of sequence tags for each dataset
+  such that sequences at same indices correspond. A tag may be "None" indicating that this sequence is not
+  present in the given dataset.
   """
 
   def __init__(self,
@@ -126,6 +128,7 @@ class MetaDataset(CachedDataset2):
     self.num_outputs = data_dims
 
     self.data_dtypes = {data_key: _select_dtype(data_key, data_dims, data_dtypes) for data_key in self.data_keys}
+    self.empty_data_values = {data_key: numpy.array([0], self.data_dtypes[data_key]) for data_key in self.data_keys}
 
     if seq_lens_file:
       seq_lens = load_json(filename=seq_lens_file)
@@ -170,13 +173,39 @@ class MetaDataset(CachedDataset2):
     self._num_seqs = len(seq_index)
     self.seq_list_ordered = {key: [ls[s] for s in seq_index] for (key, ls) in self.seq_list_original.items()}
 
-    for dataset_key, dataset in self.datasets.items():
-      dataset.init_seq_order(epoch=epoch, seq_list=self.seq_list_ordered[dataset_key])
+    self.available_seq_list_ordered = {}  # sequence list without "None"s, this is passed to the datasets
+    self.full_to_available_index_mapping = {}  # mapping from ids of seq_list_ordered to available_seq_list_ordered
+
+    for dataset_key in self.dataset_keys:
+      if any(s is None for s in self.seq_list_ordered[dataset_key]):
+        self._handle_missing_sequences(dataset_key)
+      else:
+        self.available_seq_list_ordered[dataset_key] = self.seq_list_ordered[dataset_key]
+
+      self.datasets[dataset_key].init_seq_order(epoch=epoch, seq_list=self.available_seq_list_ordered[dataset_key])
+
     return True
+
+  def _handle_missing_sequences(self, dataset_key):
+    self.available_seq_list_ordered[dataset_key] = [s for s in self.seq_list_ordered[dataset_key] if s is not None]
+    # For all seq_idx store the location of the available sequence with next highest seq_idx in self.available_seq_list_ordered[dataset_key]
+    self.full_to_available_index_mapping[dataset_key] = [0] * len(self.seq_list_ordered[dataset_key])
+    counter = 0
+    for i in range(len(self.seq_list_ordered[dataset_key])):
+      self.full_to_available_index_mapping[dataset_key][i] = counter
+      if self.seq_list_ordered[dataset_key][i] is not None:
+        counter += 1
 
   def _load_seqs(self, start, end):
     for dataset_key in self.dataset_keys:
-      self.datasets[dataset_key].load_seqs(start, end)
+      if dataset_key in self.full_to_available_index_mapping:
+        available_start = self.full_to_available_index_mapping[dataset_key][start]  # index of first available sequence after start
+        available_end = self.full_to_available_index_mapping[dataset_key][end - 1] + 1 # index of first available sequence after end (+/- 1 because end in load_seqs is exclusive)
+      else:
+        available_start, available_end = start, end
+      if available_start >= len(self.available_seq_list_ordered[dataset_key]):  # true for non-available seqs at the end of self.seq_list_ordered, everything is already loaded
+        continue
+      self.datasets[dataset_key].load_seqs(available_start, available_end)
       for seq_idx in range(start, end):
         self._check_dataset_seq(dataset_key, seq_idx)
     super(MetaDataset, self)._load_seqs(start=start, end=end)
@@ -186,8 +215,12 @@ class MetaDataset(CachedDataset2):
     :type dataset: Dataset
     :type seq_idx: int
     """
-    dataset_seq_tag = self.datasets[dataset_key].get_tag(seq_idx)
     self_seq_tag = self.get_partial_tag(dataset_key, seq_idx)
+    if self_seq_tag is None:
+      return
+    if dataset_key in self.full_to_available_index_mapping:
+      seq_idx = self.full_to_available_index_mapping[dataset_key][seq_idx]
+    dataset_seq_tag = self.datasets[dataset_key].get_tag(seq_idx)
 
     assert dataset_seq_tag == self_seq_tag
 
@@ -198,8 +231,14 @@ class MetaDataset(CachedDataset2):
     :rtype: numpy.ndarray
     """
     dataset_key, dataset_data_key = self.data_map[data_key]
-    dataset = self.datasets[dataset_key]; ":type: Dataset"
-    return dataset.get_data(seq_idx, dataset_data_key)
+
+    if self.get_partial_tag(dataset_key, seq_idx) is not None:
+      dataset = self.datasets[dataset_key]
+      if dataset_key in self.full_to_available_index_mapping:
+        seq_idx = self.full_to_available_index_mapping[dataset_key][seq_idx]
+      return dataset.get_data(seq_idx, dataset_data_key)
+    else:
+      return self.empty_data_values[data_key]
 
   def _collect_single_seq(self, seq_idx):
     """
@@ -221,7 +260,7 @@ class MetaDataset(CachedDataset2):
 
   def get_tag(self, sorted_seq_idx):
     partial_tags = [ self.seq_list_ordered[dataset_key][sorted_seq_idx] for dataset_key in self.dataset_keys ]
-    return "<->".join(t for t in partial_tags)
+    return "<->".join(t if t is not None else "None" for t in partial_tags)
 
   def get_target_list(self):
     return self.target_list
