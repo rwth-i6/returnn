@@ -394,7 +394,7 @@ class TFNetwork(object):
       layer_desc = net_dict[name]
     if not get_layer:
       def get_layer(src_name):
-        return self.construct_layer(net_dict=net_dict, name=src_name)
+        return self.construct_layer(net_dict=net_dict, name=src_name)  # set get_layer to wrap construct_layer
     if not add_layer:
       add_layer = self.add_layer
     self.layers_desc[name] = layer_desc
