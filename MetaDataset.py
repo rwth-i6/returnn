@@ -484,6 +484,7 @@ class CombinedDataset(CachedDataset2):
     assert window == 1  # not implemented
     super(CombinedDataset, self).__init__(**kwargs)
     assert self.shuffle_frames_of_nseqs == 0  # not implemented. anyway only for non-recurrent nets
+    assert self.partition_epoch == 1, "partition_epoch not supported for CombinedDataset, apply it to the sub-datasets."
 
     self.rnd = Random(self.epoch)
     self.dataset_keys = set(datasets.keys()); ":type: set[str]"
@@ -495,7 +496,7 @@ class CombinedDataset(CachedDataset2):
     # Build target lookup table
     target_lookup_table = {}
     for dataset_key in self.dataset_keys:
-      target_lookup_table[dataset_key] = {datamap_maps: datamap_keys[1] for datamap_keys,datamap_maps in data_map.iteritems() if datamap_keys[0]==dataset_key}
+      target_lookup_table[dataset_key] = {datamap_maps: datamap_keys[1] for datamap_keys,datamap_maps in data_map.items() if datamap_keys[0]==dataset_key}
       for key in self.data_keys:
         target_lookup_table[dataset_key].setdefault(key,None)
 
@@ -550,6 +551,11 @@ class CombinedDataset(CachedDataset2):
     assert seq_list is None, "seq_list not supported for %s" % self.__class__
     need_reinit = self.epoch is None or self.epoch != epoch
     super(CombinedDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+
+    if self.know_num_seqs_beforehand:
+      self._num_seqs = sum([self.datasets[k].num_seqs for k in sorted(self.datasets.keys())])
+      # note that datasets[k].num_seqs is after applying partition_epoch
+
     if not need_reinit:
       return False
 
@@ -673,7 +679,7 @@ class CombinedDataset(CachedDataset2):
     if dataset_data_key is not None:
       return dataset.get_data(dataset_seq_idx, dataset_data_key)
     else:
-      return numpy.array([])
+      return numpy.array([], self.data_dtypes[data_key])
 
   def _collect_single_seq(self, seq_idx):
     """
