@@ -955,7 +955,8 @@ class Engine(object):
         load_if_prefix = opts.get('prefix', '')  # prefix to identify the variables to be restored from the file
         from TFNetwork import CustomCheckpointLoader
         loader = CustomCheckpointLoader(
-          filename=model_filename, saveable_params=self.network.get_trainable_params(),
+          filename=model_filename,
+          saveable_params=self.network.get_params_list(),
           params_prefix=self_prefix, load_if_prefix=load_if_prefix,
           ignore_missing=opts.get("ignore_missing", False))
         loader.set_as_custom_init()
