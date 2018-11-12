@@ -1227,6 +1227,8 @@ class ReuseParams:
     assert not base_scope_name or base_scope_name.endswith("/")
     assert name.startswith(base_scope_name)
     rel_name = name[len(base_scope_name):]  # e.g. "rec/W" or "W"
+    if "rec/" in rel_name:
+      rel_name = name[len(base_scope_name + "rec/"):]
     if self.custom_func:
       return self.custom_func(
         base_layer=base_layer, reuse_layer=self.reuse_layer, name=rel_name, getter=getter, full_name=name, **kwargs)
