@@ -38,6 +38,10 @@ class LmDataset(CachedDataset2):
                delayed_seq_data_start_symbol="[START]",
                **kwargs):
     """
+    After initialization, the corpus is represented by self.orths (as a list of sequences).
+    The vocabulary is given by self.orth_symbols and self.orth_symbols_map gives the corresponding
+    mapping from symbol to integer index.
+
     :param str|()->str corpus_file: Bliss XML or line-based txt. optionally can be gzip.
     :param dict|None phone_info: if you want to get phone seqs, dict with lexicon_file etc. see PhoneSeqGenerator
     :param str|()->str|None orth_symbols_file: list of orthography symbols, if you want to get orth symbol seqs
@@ -143,6 +147,7 @@ class LmDataset(CachedDataset2):
     self.num_outputs = {"data": [len(self.labels["data"]), 1]}
     self.num_inputs = self.num_outputs["data"][0]
     self.seq_order = None
+    self._tag_prefix = "line-"  # sequence tag is "line-n", where n is the line number (to be compatible with translation)
     self.auto_replace_unknown_symbol = auto_replace_unknown_symbol
     self.log_auto_replace_unknown_symbols = log_auto_replace_unknown_symbols
     self.log_skipped_seqs = log_skipped_seqs
@@ -167,11 +172,25 @@ class LmDataset(CachedDataset2):
     return self.dtype
 
   def init_seq_order(self, epoch=None, seq_list=None):
-    assert seq_list is None
-    super(LmDataset, self).init_seq_order(epoch=epoch)
-    epoch = epoch or 1
-    self.seq_order = self.get_seq_order_for_epoch(
-      epoch=epoch, num_seqs=len(self.orths), get_seq_len=lambda i: len(self.orths[i]))
+    """
+    If random_shuffle_epoch1, for epoch 1 with "random" ordering, we leave the given order as is.
+    Otherwise, this is mostly the default behavior.
+
+    :param int|None epoch:
+    :param list[str] | None seq_list: In case we want to set a predefined order.
+    :rtype: bool
+    :returns whether the order changed (True is always safe to return)
+    """
+    super(LmDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+    if not epoch:
+      epoch = 1
+
+    if seq_list is not None:
+      self.seq_order = [int(s[len(self._tag_prefix):]) for s in seq_list]
+    else:
+      self.seq_order = self.get_seq_order_for_epoch(
+        epoch=epoch, num_seqs=len(self.orths), get_seq_len=lambda i: len(self.orths[i]))
+    self._num_seqs = len(self.seq_order)
     self.next_orth_idx = 0
     self.next_seq_idx = 0
     self.num_skipped = 0
@@ -211,7 +230,9 @@ class LmDataset(CachedDataset2):
           print("LmDataset: reached end, skipped %i sequences" % self.num_skipped)
         return None
       assert self.next_seq_idx == seq_idx, "We expect that we iterate through all seqs."
-      orth = self.orths[self.seq_order[self.next_orth_idx]]
+      true_idx = self.seq_order[self.next_orth_idx]
+      orth = self.orths[true_idx]  # get sequence for the next index given by seq_order
+      seq_tag = (self._tag_prefix + str(true_idx))
       self.next_orth_idx += 1
       if orth == "</s>": continue  # special sentence end symbol. empty seq, ignore.
 
@@ -278,7 +299,7 @@ class LmDataset(CachedDataset2):
           ([self.orth_symbols_map[self.delayed_seq_data_start_symbol]], data[:-1])).astype(self.dtype)
         assert targets["delayed"].shape == data.shape
       self.next_seq_idx = seq_idx + 1
-      return DatasetSeq(seq_idx=seq_idx, features=data, targets=targets)
+      return DatasetSeq(seq_idx=seq_idx, features=data, targets=targets, seq_tag=seq_tag)
 
 
 def _is_bliss(filename):
