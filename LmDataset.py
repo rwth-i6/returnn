@@ -190,7 +190,6 @@ class LmDataset(CachedDataset2):
     else:
       self.seq_order = self.get_seq_order_for_epoch(
         epoch=epoch, num_seqs=len(self.orths), get_seq_len=lambda i: len(self.orths[i]))
-    self._num_seqs = len(self.seq_order)
     self.next_orth_idx = 0
     self.next_seq_idx = 0
     self.num_skipped = 0
