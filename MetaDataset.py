@@ -78,18 +78,19 @@ class MetaDataset(CachedDataset2):
   """
 
   def __init__(self,
-               seq_list_file, seq_lens_file,
                datasets,
                data_map, data_dims,
+               seq_list_file,
+               seq_lens_file=None,
                data_dtypes=None,
                window=1, **kwargs):
     """
-    :param str seq_list_file: filename. line-separated
-    :param str seq_lens_file: filename. json. dict[str,dict[str,int]], seq-tag -> data-key -> len
     :param dict[str,dict[str]] datasets: dataset-key -> dataset-kwargs. including keyword 'class' and maybe 'files'
     :param dict[str,(str,str)] data_map: self-data-key -> (dataset-key, dataset-data-key).
       Should contain 'data' as key. Also defines the target-list, which is all except 'data'.
     :param dict[str,(int,int)] data_dims: self-data-key -> data-dimension, len(shape) (1 ==> sparse repr).
+    :param str seq_list_file: filename. pickle. dict[str,list[str]], dataset-key -> list of sequence tags. If tag is the same for all datasets a line-separated plain text file can be used.
+    :param str seq_lens_file: filename. json. dict[str,dict[str,int]], seq-tag -> data-key -> len. Use if getting sequence length from loading data is too costly.
     :param dict[str,str] data_dtypes: self-data-key -> dtype. automatic if not specified
     """
     assert window == 1  # not implemented
@@ -150,6 +151,15 @@ class MetaDataset(CachedDataset2):
       if dataset_data_key in dataset.labels:
         self.labels[data_key] = dataset.labels[dataset_data_key]
 
+  def _get_dataset_seq_length(self, seq_idx):
+    if not self.orig_seq_order_is_initialized:
+      # To use get_seq_length() we first have to init the sequence order once in original order.
+      # If sequence lengths are not needed by get_seq_order_for_epoch this is never executed.
+      self.datasets[self.default_dataset_key].init_seq_order(epoch=self.epoch, seq_list=self.seq_list_original[self.default_dataset_key])
+      self.orig_seq_order_is_initialized = True
+
+    return self.datasets[self.default_dataset_key].get_seq_length(seq_idx)["data"]
+
   def init_seq_order(self, epoch=None, seq_list=None):
     need_reinit = self.epoch is None or self.epoch != epoch or seq_list
     super(MetaDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
@@ -164,7 +174,8 @@ class MetaDataset(CachedDataset2):
       if self._seq_lens:
         get_seq_len = lambda s: self._seq_lens[self.seq_list_original[self.default_dataset_key][s]]["data"]
       else:
-        get_seq_len = None
+        self.orig_seq_order_is_initialized = False
+        get_seq_len = self._get_dataset_seq_length
       total_seqs = len(self.seq_list_original[self.default_dataset_key])
       seq_index = self.get_seq_order_for_epoch(epoch, total_seqs, get_seq_len)
     self._num_seqs = len(seq_index)
