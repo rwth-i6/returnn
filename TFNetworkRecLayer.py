@@ -812,7 +812,7 @@ class _SubnetworkRecCell(object):
       most_recent = None
 
     class GetLayer:
-      def __init__(lself, safe=False, once=False, allow_uninitialized_template=True):
+      def __init__(lself, safe=False, once=False, allow_uninitialized_template=False):
         lself.safe = safe
         lself.once = once
         lself.allow_uninitialized_template = allow_uninitialized_template
@@ -889,6 +889,7 @@ class _SubnetworkRecCell(object):
           assert construct_ctx.layers[-1] is layer, "invalid stack %r, expected top layer %r" % (
             construct_ctx.layers, layer)
           construct_ctx.layers.pop(-1)
+        assert layer.is_initialized
         return layer
 
     get_templated_layer = GetLayer()
@@ -2224,6 +2225,7 @@ class _TemplateLayer(LayerBase):
     return l
 
   def get_dep_layers(self):
+    assert self.is_initialized
     if self.is_data_template:
       # This is from the template construction, a layer in _SubnetworkRecCell.layer_data_templates.
       # Maybe we already have the layer constructed.
