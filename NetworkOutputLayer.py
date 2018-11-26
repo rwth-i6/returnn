@@ -37,6 +37,7 @@ class OutputLayer(Layer):
                scale_by_error=False,
                copy_weights=False,
                target_delay=0,
+               compute_sequence_weights=False,
                **kwargs):
     """
     :param theano.Variable index: index for batches
@@ -67,6 +68,8 @@ class OutputLayer(Layer):
       self.set_attr("use_source_index", use_source_index)
       src_index = self.sources[0].index
       self.index = src_index
+    if compute_sequence_weights:
+      self.set_attr('compute_sequence_weights', compute_sequence_weights)
     if not copy_input or copy_weights:
       if copy_weights:
         self.params = {}
@@ -443,10 +446,13 @@ class FramewiseOutputLayer(OutputLayer):
           xx = theano.ifelse.ifelse(T.lt(self.y_m[self.i].shape[0], 1), pad(self.y_m[self.i],0,1), self.y_m[self.i])
           yy = theano.ifelse.ifelse(T.lt(self.y_m[self.i].shape[0], 1), pad(self.y_data_flat[self.i],0,1), self.y_data_flat[self.i])
           nll, pcx = T.nnet.crossentropy_softmax_1hot(x=xx, y_idx=yy)
-        else:
+        elif self.attrs.get('compute_sequence_weights',False):
+          self.y_data_flat = T.set_subtensor(self.y_data_flat[self.j],numpy.int8(0))
           nll_raw, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m, y_idx=self.y_data_flat)
           self.seq_weight = T.sum(nll_raw.reshape((self.z.shape[0],self.z.shape[1])),axis=0) / T.sum(self.index,axis=0,dtype='float32')
           nll = nll_raw[self.i]
+        else:
+          nll, pcx = T.nnet.crossentropy_softmax_1hot(x=self.y_m[self.i], y_idx=self.y_data_flat[self.i])
       else:
         target  = self.y_data_flat[self.i]
         output = T.clip(self.p_y_given_x_flat[self.i], 1.e-38, 1.e20)

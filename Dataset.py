@@ -751,6 +751,7 @@ class Dataset(object):
     avg_weight = sum([ v[0] for v in self.weights.values()]) / (len(self.weights.keys()) or 1)
     for idx in self.weights:
       self.weights[idx][1] = random() * avg_weight * pruning
+      self.weights[idx][0] *= (1. + pruning)
     for seq_idx, t_start, t_end in self.iterate_seqs(
           chunk_size=chunk_size, chunk_step=chunk_step, used_data_keys=used_data_keys):
       if not self.sample(seq_idx):
