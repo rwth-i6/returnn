@@ -2488,6 +2488,9 @@ class RnnCellLayer(_ConcatInputLayer):
       size_placeholder={} if not sources else sources[0].output.size_placeholder.copy(),
       beam_size=beam_size)
 
+  def get_absolute_name_scope_prefix(self):
+    return self.get_base_absolute_name_scope_prefix() + "rec/"
+
   def get_dep_layers(self):
     l = list(super(RnnCellLayer, self).get_dep_layers())
 
