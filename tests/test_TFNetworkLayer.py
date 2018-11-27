@@ -1009,6 +1009,48 @@ def test_subnet_load_on_init():
         numpy.testing.assert_array_equal(param_orig, param_subnet)
 
 
+def test_ReuseParams_rec():
+  print("test_ReuseParams_rec()")
+  numpy.set_printoptions(precision=15)
+  num_inputs = 100
+  num_outputs = 15
+  config = Config()
+  config.update({
+    "num_inputs": num_inputs,
+    "num_outputs": {"data": [num_inputs, 2], "classes": [num_outputs, 1]},  # dense output
+    "network": {
+      "out1":         {"class": "softmax", "from": ["rec_fwd"], "loss": "ce", "n_out": num_outputs},
+      "out2":         {"class": "softmax", "from": ["rec_fwd_copy"], "loss": "ce", "n_out": num_outputs},
+      "rec_fwd":      {"class": "rec", "direction": 1, "from": ["data"], "n_out": 300, "unit": "lstmp"},
+      "rec_fwd_copy": {"class": "rec", "direction": 1, "from": ["data"], "n_out": 300, "unit": "lstmp", "reuse_params": "rec_fwd"}
+    },
+    "adam": True,
+    "target": "classes",
+    "debug_grad_summaries": True,
+    "debug_save_updater_vars": True,
+    "debug_add_check_numerics_ops": True,
+  })
+  print("Creating network...")
+  network = TFNetwork(config=config, train_flag=True)
+  network.construct_from_dict(config.typed_dict["network"])
+  random = numpy.random.RandomState(seed=1)
+  def make_feed_dict(seq_len=10):
+    return {
+      network.extern_data.data["data"].placeholder: random.uniform(-1, 1, (1, seq_len, num_inputs)),
+      network.extern_data.data["data"].size_placeholder[0]: numpy.array([seq_len]),
+      network.extern_data.data["classes"].placeholder: random.randint(low=0, high=num_outputs, size=(1, seq_len)),
+      network.extern_data.data["classes"].size_placeholder[0]: numpy.array([seq_len]),
+    }
+  print("Creating session...")
+  with tf.Session() as session:
+    print("Init params...")
+    network.initialize_params(session=session)
+    print("Testing reuse_params ...")
+    feed = make_feed_dict(10)
+    fwd_out, fwd_out_copy = session.run([network.layers["rec_fwd"].output.placeholder, network.layers["rec_fwd_copy"].output.placeholder], feed_dict=feed)
+    numpy.testing.assert_array_equal(fwd_out, fwd_out_copy)
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()
