@@ -566,9 +566,9 @@ class LayerBase(object):
       from TFUtil import set_param_axes_split_info
       set_param_axes_split_info(param, axes_split_info)
     if self.reuse_params:
-      name_scope_prefix = self.reuse_params.get_base_absolute_name_scope_prefix(base_layer=self, param=param)
+      name_scope_prefix = self.reuse_params.get_absolute_name_scope_prefix(base_layer=self, param=param)
     else:
-      name_scope_prefix = self.get_base_absolute_name_scope_prefix()
+      name_scope_prefix = self.get_absolute_name_scope_prefix()
     assert param.name
     assert param.name[:len(name_scope_prefix)] == name_scope_prefix
     assert param.name[-2:] == ":0"
@@ -1154,40 +1154,34 @@ class ReuseParams:
       return self._reuse_layer
     return None
 
-  def get_base_absolute_name_scope_prefix(self, base_layer, param):
+  def get_absolute_name_scope_prefix(self, base_layer, param):
     """
     :param LayerBase base_layer:
     :param tf.Variable param: e.g. "base_layer/rec/W"
-    :return: e.g. "base_layer/" (not "base_layer/rec/"), always with "/" at end
+    :return: e.g. "base_layer/" or "base_layer/rec/", always with "/" at end
     :rtype: str
     """
-    base_scope_name = base_layer.get_base_absolute_name_scope_prefix()  # e.g. "current_layer/"
-    assert base_scope_name.endswith("/")
-    from TFUtil import var_creation_scope, get_current_var_scope_name, reuse_name_scope
+    abs_scope_prefix = base_layer.get_absolute_name_scope_prefix()  # e.g. "current_layer/" or "current_layer/rec/"
+    assert abs_scope_prefix.endswith("/")
+    from TFUtil import get_current_var_scope_name
     cur_scope = get_current_var_scope_name() + "/"  # e.g. "current_layer/rec/" or "current_layer/"
-    assert cur_scope.startswith(base_scope_name)
-    ext_scope = cur_scope[len(base_scope_name):]  # e.g. "rec/" or ""
-    assert not ext_scope or ext_scope.endswith("/")
+    assert cur_scope.startswith(abs_scope_prefix)
     assert param.name[-2:] == ":0"
     abs_param_name = param.name[:-2]
     param_name = abs_param_name.split("/")[-1]
     assert param_name
-    rel_name = ext_scope + param_name  # e.g. "rec/W" or "W"
+    assert abs_param_name.endswith("/" + param_name)
     if self.custom_func:  # Could be any base absolute name scope prefix, so just return what we have.
-      if abs_param_name.endswith("/" + rel_name):
-        return abs_param_name[:-len(rel_name)]
-      else:
-        return abs_param_name[:-len(param_name)]
-    if self.param_map is not None and rel_name in self.param_map:
-      return self.param_map[rel_name].get_base_absolute_name_scope_prefix(base_layer=base_layer, param=param)
-    assert abs_param_name.endswith("/" + rel_name)
-    if self.reuse_layer and rel_name in self.reuse_layer.params:
-      reuse_layer_prefix = self.reuse_layer.get_base_absolute_name_scope_prefix()
-      assert reuse_layer_prefix + rel_name == abs_param_name
+      return abs_param_name[:-len(param_name)]
+    if self.param_map is not None and param_name in self.param_map:
+      return self.param_map[param_name].get_absolute_name_scope_prefix(base_layer=base_layer, param=param)
+    if self.reuse_layer and param_name in self.reuse_layer.params:
+      reuse_layer_prefix = self.reuse_layer.get_absolute_name_scope_prefix()
+      assert reuse_layer_prefix + param_name == abs_param_name
       return reuse_layer_prefix
     assert self.auto_create_missing
-    base_layer_prefix = base_layer.get_base_absolute_name_scope_prefix()
-    assert base_layer_prefix + rel_name == abs_param_name
+    base_layer_prefix = base_layer.get_absolute_name_scope_prefix()
+    assert base_layer_prefix + param_name == abs_param_name
     return base_layer_prefix
 
   def get_variable_scope(self, base_layer, **kwargs):
@@ -1219,28 +1213,28 @@ class ReuseParams:
     In addition, we get the argument `base_scope_name`, via :func:`self.get_variable_scope`.
 
     :param (...)->tf.Variable getter:
-    :param str name: absolute name
+    :param str name: absolute param name
     :param LayerBase base_layer: we expect that this is the prefix of ``name``
     :rtype: tf.Variable|tf.Tensor
     """
-    base_scope_name = base_layer.get_base_absolute_name_scope_prefix()
-    assert not base_scope_name or base_scope_name.endswith("/")
-    assert name.startswith(base_scope_name)
-    rel_name = name[len(base_scope_name):]  # e.g. "rec/W" or "W"
+    abs_scope_prefix = base_layer.get_absolute_name_scope_prefix()
+    assert not abs_scope_prefix or abs_scope_prefix.endswith("/")
+    assert name.startswith(abs_scope_prefix)
+    param_name = name[len(abs_scope_prefix):]  # e.g. "W" (not "rec/W")
     if self.custom_func:
       return self.custom_func(
-        base_layer=base_layer, reuse_layer=self.reuse_layer, name=rel_name, getter=getter, full_name=name, **kwargs)
+        base_layer=base_layer, reuse_layer=self.reuse_layer, name=param_name, getter=getter, full_name=name, **kwargs)
     if self.param_map is not None:
       if not self.auto_create_missing:
-        assert rel_name in self.param_map
-      if rel_name in self.param_map:
-        return self.param_map[rel_name].variable_custom_getter(
+        assert param_name in self.param_map
+      if param_name in self.param_map:
+        return self.param_map[param_name].variable_custom_getter(
           getter=getter, name=name, base_layer=base_layer, **kwargs)
     if self.reuse_layer:
       if not self.auto_create_missing:
-        assert rel_name in self.reuse_layer.params
-      if rel_name in self.reuse_layer.params:
-        return self.reuse_layer.params[rel_name]
+        assert param_name in self.reuse_layer.params
+      if param_name in self.reuse_layer.params:
+        return self.reuse_layer.params[param_name]
     assert self.auto_create_missing
     return getter(name=name, **kwargs)
 
