@@ -742,7 +742,7 @@ class LayerBase(object):
 
   def get_losses_initialized(self, reduce_func=None):
     """
-    As self.get_losses, but here we return them all initialized.
+    As self.get_losses, but here we return them all initialized (i.e. the layer is set).
     You should not override this method but rather :func:`get_losses`.
 
     :param ((tf.Tensor)->tf.Tensor)|None reduce_func: as in get_losses

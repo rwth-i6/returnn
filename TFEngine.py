@@ -1343,12 +1343,13 @@ class Engine(object):
         return False
     return True
 
-  def eval_model(self, output_file=None):
+  def eval_model(self, output_file=None, output_per_seq_file=None):
     """
     Eval the current model on the eval datasets (dev + eval, whatever is set).
     See also :func:`self.search` for performing beam search.
 
-    :param str|None output_file: if given, will save the results to this file
+    :param str|None output_file: if given, will save the results to this file (total err/score for each dataset)
+    :param str|None output_per_seq_file: if given, will save the err/score for each sequence
     :return: nothing
     """
     # It's constructed lazily and it will set used_data_keys, so make sure that we have it now.
@@ -1356,6 +1357,10 @@ class Engine(object):
     results = {}
     eval_dump_str = []
     train = self._maybe_prepare_train_in_eval()
+
+    if output_per_seq_file:
+      raise NotImplementedError("yet...")
+
     for dataset_name, dataset in self.get_eval_datasets().items():
       if dataset_name not in self.dataset_batches or not dataset.batch_set_generator_cache_whole_epoch():
         self.dataset_batches[dataset_name] = dataset.generate_batches(
