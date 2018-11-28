@@ -1694,18 +1694,15 @@ class _SubnetworkRecCell(object):
               self.final_acc_tas_dict["error_%s" % loss.name], stop=max_seq_len, name="error_%s_stack" % loss.name)
             loss_value.set_shape(tf.TensorShape((None, None)))  # (time, batch)
             error_value.set_shape(tf.TensorShape((None, None)))  # (time, batch)
-            from TFUtil import sequence_mask_time_major
-            mask = sequence_mask_time_major(seq_len)
-            loss_value = tf.where(mask, loss_value, tf.zeros_like(loss_value))
-            error_value = tf.where(mask, error_value, tf.zeros_like(error_value))
             loss_wrapped = _SubnetworkRecWrappedLoss(
               base_loss=loss.loss,
               loss_value=loss_value, error_value=error_value,
-              norm_factor=sub_loss_normalization_factor)
+              norm_factor=sub_loss_normalization_factor,
+              seq_lens=seq_len)
             self.accumulated_losses[loss.name] = LossHolder(
               name=loss.name,
               layer=loss.loss.layer,
-              layer_output=loss.layer_output,
+              layer_output=rec_layer.output,  # not the correct output, but we only use it to check e.g. for time-dim
               loss=loss_wrapped)
 
     # Check if collected_choices has all the right layers.
@@ -2305,12 +2302,13 @@ class _SubnetworkRecWrappedLoss(Loss):
   This wraps losses inside the loop of :class:`RecLayer`.
   """
 
-  def __init__(self, base_loss, loss_value, error_value, norm_factor):
+  def __init__(self, base_loss, loss_value, error_value, norm_factor, seq_lens):
     """
     :param Loss base_loss: the loss from the layer inside the loop
-    :param tf.Tensor loss_value: shape (batch,time)
-    :param tf.Tensor error_value: shape (batch,time)
+    :param tf.Tensor loss_value: shape (time,batch)
+    :param tf.Tensor error_value: shape (time,batch)
     :param tf.Tensor norm_factor: scalar for the whole batch
+    :param tf.Tensor seq_lens: (batch,)
     """
     super(_SubnetworkRecWrappedLoss, self).__init__(
       base_network=base_loss.base_network,
@@ -2319,9 +2317,15 @@ class _SubnetworkRecWrappedLoss(Loss):
     assert base_loss.layer
     self.base_loss = base_loss
     self.layer = base_loss.layer  # avoid that init() gets executed again
-    self.loss_value = loss_value
-    self.error_value = error_value
+    # Get either (time_flat,) or (time*batch,) for loss_value and error_value.
+    self.loss_value = self._flatten_or_merge(loss_value, seq_lens=seq_lens, time_major=True)
+    self.error_value = self._flatten_or_merge(error_value, seq_lens=seq_lens, time_major=True)
     self.loss_norm_factor = norm_factor
+
+  def init(self, output, output_with_activation=None, target=None, layer=None):
+    self.output = output
+    self.layer = layer
+    # ignore otherwise
 
   def get_value(self):
     return self.reduce_func(self.loss_value)

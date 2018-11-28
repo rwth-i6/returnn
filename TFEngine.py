@@ -1352,14 +1352,45 @@ class Engine(object):
     :param str|None output_per_seq_file: if given, will save the err/score for each sequence
     :return: nothing
     """
+    extra_fetches = None
+    results_per_seq = {}  # seq_tag -> dict[str,float]
+    if output_per_seq_file:
+      extra_fetches = {}
+      from TFUtil import identity
+      losses_dict, _, _ = self.network.get_losses_initialized(reduce_func=identity, with_total=False)
+      for loss_name, loss_holder in losses_dict.items():
+        loss_holder.loss.layer = None  # enforce reinit
+        loss_holder.loss.use_flatten_frames = False  # we need that such that we get (B*T,...) unreduced values
+        loss_value = loss_holder.get_normalized_loss_value_per_seq()
+        error_value = loss_holder.get_normalized_error_value_per_seq()
+        if loss_value is not None:
+          extra_fetches["loss:score:%s" % loss_name] = loss_value
+        if error_value is not None:
+          extra_fetches["loss:error:%s" % loss_name] = error_value
+        if loss_holder.loss.output.have_time_axis():
+          seq_lens = loss_holder.loss.output.get_sequence_lengths()
+          extra_fetches["loss:seq_lens:%s" % loss_name] = seq_lens
+        extra_fetches["seq_tags"] = self.network.get_seq_tags()
+      assert extra_fetches
+
+    def extra_fetches_callback(seq_tags, **extra_fetches_out):
+      """
+      :param list[str] seq_tags:
+      :param dict[str,numpy.ndarray] extra_fetches_out: see extra_fetches
+      """
+      for name, value in extra_fetches_out.items():
+        assert name.startswith("loss:")
+        name = name[len("loss:"):]
+        assert isinstance(value, numpy.ndarray)
+        assert value.shape == (len(seq_tags),)
+        for i, seq_tag in enumerate(seq_tags):
+          results_per_seq.setdefault(seq_tag, {})[name] = value[i]
+
     # It's constructed lazily and it will set used_data_keys, so make sure that we have it now.
     self.network.maybe_construct_objective()
     results = {}
     eval_dump_str = []
     train = self._maybe_prepare_train_in_eval()
-
-    if output_per_seq_file:
-      raise NotImplementedError("yet...")
 
     for dataset_name, dataset in self.get_eval_datasets().items():
       if dataset_name not in self.dataset_batches or not dataset.batch_set_generator_cache_whole_epoch():
@@ -1372,7 +1403,9 @@ class Engine(object):
       else:
         print("reusing previous dataset batch order for %r dataset" % dataset_name, file=log.v4)
         self.dataset_batches[dataset_name].reset()
-      tester = Runner(engine=self, dataset=dataset, batches=self.dataset_batches[dataset_name], train=train)
+      tester = Runner(
+        engine=self, dataset=dataset, batches=self.dataset_batches[dataset_name], train=train,
+        extra_fetches=extra_fetches, extra_fetches_callback=extra_fetches_callback)
       tester.run(report_prefix=self.get_epoch_str() + " %r eval" % dataset_name)
       if not tester.finalized:
         print("Tester not finalized, quitting.", file=log.v1)
@@ -1390,6 +1423,11 @@ class Engine(object):
       from Util import betterRepr
       with open(output_file, 'w') as f:
         f.write(betterRepr(results) + '\n')
+    if output_per_seq_file:
+      print('Write eval results per seq to %r' % output_per_seq_file, file=log.v3)
+      from Util import betterRepr
+      with open(output_per_seq_file, 'w') as f:
+        f.write(betterRepr(results_per_seq) + '\n')
 
   def check_last_epoch(self):
     if self.start_epoch == 1:

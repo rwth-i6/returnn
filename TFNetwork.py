@@ -529,7 +529,7 @@ class TFNetwork(object):
     :param bool with_total: whether to return total loss / constraints
     :return: loss name (e.g. "output" or "rec_layer/output" or so) -> LossHolder (initialized, i.e. layer set),
       and optionally total loss and total constraints (if with_total)
-    :rtype: dict[str,TFNetwork.LossHolder], tf.Tensor|int|None, tf.Tensor|int|None
+    :rtype: (dict[str,LossHolder], tf.Tensor|int|None, tf.Tensor|int|None)
     """
     if with_total:
       total_loss = 0
@@ -1388,11 +1388,37 @@ class LossHolder:
 
   def get_norm_factor(self):
     """
-    :return: norm factor for loss and error
+    :return: norm factor for loss and error. scalar
     :rtype: tf.Tensor
     """
     self._prepare()
     return self._norm_factor
+
+  def _normalized_loss_value_per_seq(self, value):
+    """
+    :param tf.Tensor|None loss:
+    :return: (batch,) or None if loss is None
+    :rtype: tf.Tensor|None
+    """
+    if value is None:
+      return None
+    return self.loss.reduce_to_batch(value, normalize=True)
+
+  def get_normalized_loss_value_per_seq(self):
+    """
+    :return: (batch,) or None if loss is None
+    :rtype: tf.Tensor|None
+    """
+    self._prepare()
+    return self._normalized_loss_value_per_seq(self._loss_value)
+
+  def get_normalized_error_value_per_seq(self):
+    """
+    :return: (batch,) or None if error is None
+    :rtype: tf.Tensor|None
+    """
+    self._prepare()
+    return self._normalized_loss_value_per_seq(self._error_value)
 
   def _tf_summary(self):
     """
@@ -1419,7 +1445,7 @@ class LossHolder:
     if self._is_prepared:
       return
     assert self._layer, "call init()"
-    self.loss.init_by_layer(layer=self._layer)
+    self.loss.init_by_layer(layer=self._layer, layer_output_template=self.layer_output)
     if self._loss_value is None and self._error_value is None:
       with reuse_name_scope("loss"):
         if self._only_on_eval:

@@ -5224,27 +5224,73 @@ class Loss(object):
     self.use_normalized_loss = use_normalized_loss
     self.scale = scale
 
+  def _reduce_batch_time(self):
+    """
+    :return: In self.reduce_func, whether to expect that the loss is of shape (batch*time|time*batch,).
+    :rtype: bool
+    """
+    if self.use_flatten_frames:
+      return False  # we have used flatten_with_seq_len_mask. see self._flatten_or_merge
+    if self.recurrent:
+      return False
+    if not self.output.have_time_axis():
+      return False
+    return True
+
+  def _reduce_to_batch_time_with_mask(self, loss, normalize=False):
+    """
+    :param tf.Tensor loss: (batch*time,...) or (time*batch,...) depending if self.output is batch/time major
+    :param bool normalize: for remaining dims. False -> use tf.reduce_sum, True -> use tf.reduce_mean
+    :return: (batch*time,) or (time*batch,)
+    :rtype: tf.Tensor
+    """
+    assert {self.output.batch_dim_axis, self.output.time_dim_axis} == {0, 1}
+    if loss.get_shape().ndims > 1:
+      reduce_func = tf.reduce_mean if normalize else tf.reduce_sum
+      loss = reduce_func(loss, axis=list(range(1, loss.get_shape().ndims)))  # reduce remaining dims already
+    mask = self.output.get_sequence_mask()  # e.g. (B,T)
+    mask = tf.reshape(mask, tf.shape(loss)[0])
+    loss = tf.where(mask, loss, tf.zeros_like(loss), "loss_masked")
+    return loss
+
   def reduce_func(self, loss):
     """
     Reduces the frames. Currently the sum, and we do averaging later.
     We might change this logic at some point.
     Also, some code overwrites this function externally, e.g. with TFUtil.identity, to not do reducing.
 
-    :param tf.Tensor loss: e.g. (batch,time), or (time_flat,), or (batch,time,dim), etc
+    :param tf.Tensor loss: e.g. (batch*time,), or (time_flat,), or (batch*time,dim), etc
     :return: by default just a scalar. but this can be overwritten, to not reduce
     :rtype: tf.Tensor
     """
-    if (not self.use_flatten_frames
-        and not self.recurrent
-        and self.output.have_time_axis()):
+    if self._reduce_batch_time():
       # We expect to get (batch*time) or (time*batch) in the first dimension of the loss and the output.
-      assert {self.output.batch_dim_axis, self.output.time_dim_axis} == {0, 1}
-      if loss.get_shape().ndims > 1:
-        loss = tf.reduce_sum(loss, axis=list(range(1, loss.get_shape().ndims)))  # reduce remaining dims already
-      mask = self.output.get_sequence_mask()  # e.g. (B,T)
-      loss = tf.reshape(loss, tf.shape(mask))
-      loss = tf.where(mask, loss, tf.zeros_like(loss), "loss_masked")
+      loss = self._reduce_to_batch_time_with_mask(loss)
     return tf.reduce_sum(loss)
+
+  def reduce_to_batch(self, loss, normalize):
+    """
+    :param tf.Tensor loss: e.g. (batch*time,), or (time_flat,), or (batch*time,dim), etc
+    :param bool normalize: reduce mean instead of reduce sum
+    :return: (batch,)
+    :rtype: tf.Tensor
+    """
+    if not self.recurrent and self.output.have_time_axis():
+      assert not self.use_flatten_frames
+      assert self._reduce_batch_time()
+      # We expect to get (batch*time) or (time*batch) in the first dimension of the loss and the output.
+      loss = self._reduce_to_batch_time_with_mask(loss, normalize=normalize)  # (batch*time,) or (time*batch,)
+      loss.set_shape((None,))
+      loss = tf.reshape(loss, tf.shape(self.output.get_sequence_mask()))  # (batch,time) or (time,batch)
+      loss = tf.reduce_sum(loss, axis=self.output.time_dim_axis)  # (batch,)
+      if normalize:
+        loss /= tf.to_float(self.output.get_sequence_lengths())
+    else:
+      # We expect that there is no time-dim, just a batch-dim. It could be like (batch,other_dims...) though.
+      if loss.get_shape().ndims > 1:
+        reduce_func = tf.reduce_mean if normalize else tf.reduce_sum
+        loss = reduce_func(loss, axis=list(range(1, loss.get_shape().ndims)))  # (batch,)
+    return loss
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
@@ -5258,19 +5304,40 @@ class Loss(object):
     This is used by `LayerBase.transform_config_dict`.
     """
 
-  def init_by_layer(self, layer):
+  def init_by_layer(self, layer, layer_output_template=None):
     """
     :param LayerBase|None layer:
+    :param Data|None layer_output_template: maybe alternative template
     """
-    if layer is self.layer:
-      return
-    if self.output is layer.output:
+    if layer_output_template and layer_output_template.have_time_axis() and not layer.output.have_time_axis():
+      # It could be that the layer is from inside a RecLayer loop, and does not have a time dim.
+      # In that case, use our template instead.
+      layer_output = layer_output_template
+    else:
+      # Use the real layer.output instead.
+      layer_output = layer.output
+    if layer is self.layer and self.output is layer_output:
       return
     self.init(
-      output=layer.output,
+      output=layer_output,
       output_with_activation=layer.output_before_activation,
       target=layer._get_target_value(),
       layer=layer)
+
+  def _flatten_or_merge(self, x, seq_lens, time_major):
+    """
+    :param tf.Tensor x: (B,T,...) or (T,B,...)
+    :param tf.Tensor seq_lens: (B,)
+    :param bool time_major:
+    :return: (B*T|B',...)
+    :rtype: tf.Tensor
+    """
+    if self.use_flatten_frames:
+      from TFUtil import flatten_with_seq_len_mask
+      return flatten_with_seq_len_mask(x, seq_lens, time_major=time_major)
+    x_shape = tf.shape(x)
+    x_shape = [x_shape[i] for i in range(x.get_shape().ndims)]
+    return tf.reshape(x, [x_shape[0] * x_shape[1]] + x_shape[2:], name="merge_batch_time")
 
   def init(self, output, output_with_activation=None, target=None, layer=None):
     """
@@ -5279,21 +5346,7 @@ class Loss(object):
     :param Data target: reference target from dataset
     :param LayerBase|None layer:
     """
-    def flatten_or_merge(x, seq_lens, time_major):
-      """
-      :param tf.Tensor x: (B,T,...) or (T,B,...)
-      :param tf.Tensor seq_lens: (B,)
-      :param bool time_major:
-      :return: (B*T|B',...)
-      :rtype: tf.Tensor
-      """
-      if self.use_flatten_frames:
-        from TFUtil import flatten_with_seq_len_mask
-        return flatten_with_seq_len_mask(x, seq_lens, time_major=time_major)
-      x_shape = tf.shape(x)
-      x_shape = [x_shape[i] for i in range(x.get_shape().ndims)]
-      return tf.reshape(x, [x_shape[0] * x_shape[1]] + x_shape[2:], name="merge_batch_time")
-
+    flatten_or_merge = self._flatten_or_merge
     with tf.name_scope("loss_init"):
       self.layer = layer
       if target:
@@ -5359,7 +5412,7 @@ class Loss(object):
 
   def get_error(self):
     """
-    :return: frame error rate as a scalar value
+    :return: frame error rate as a scalar value with the default self.reduce_func (see also self.get_value)
     :rtype: tf.Tensor
     """
     with tf.name_scope("loss_frame_error"):
@@ -5381,7 +5434,8 @@ class Loss(object):
 
   def get_value(self):
     """
-    :return: loss as a scalar float32 value. it should *not* be normalized over frames,
+    :return: self.reduce_func(loss), which is usually a scalar with the default as if does tf.reduce_sum.
+      float32 value. it should *not* be normalized over frames,
       as this will be calculated in :func:`TFEngine.Runner._collect_eval_info`.
     :rtype: tf.Tensor|None
     """
