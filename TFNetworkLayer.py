@@ -1131,7 +1131,7 @@ class ReuseParams:
 
   def __init__(self, reuse_layer=None, map=None, custom=None, auto_create_missing=False):
     """
-    :param LayerBase|()->LayerBase|None reuse_layer:
+    :param LayerBase|ReuseParams.LazyLayerResolver|None reuse_layer:
     :param dict[str,ReuseParams]|None map:
     :param (**kwargs)->(tf.Tensor|tf.Variable) custom: see :func:`self.variable_custom_getter`
     :param bool auto_create_missing:
