@@ -52,6 +52,7 @@ User guide
     basic_usage
     tech_overview
     tf_lstm_benchmark
+    deterministic_training
 
 
 API Reference
