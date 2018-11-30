@@ -181,6 +181,10 @@ class LmDataset(CachedDataset2):
     :rtype: bool
     :returns whether the order changed (True is always safe to return)
     """
+    if seq_list and not self.error_on_invalid_seq:
+      print("Setting error_on_invalid_seq to True since a seq_list is given. "
+            "Please activate auto_replace_unknown_symbol if you want to prevent invalid sequences!")
+      self.error_on_invalid_seq = True
     super(LmDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
     if not epoch:
       epoch = 1
@@ -260,9 +264,9 @@ class LmDataset(CachedDataset2):
               i += 1
           if self.auto_replace_unknown_symbol:
             try:
-              map(self.orth_symbols_map.__getitem__, orth_syms)
+              list(map(self.orth_symbols_map.__getitem__, orth_syms))  # convert to list to trigger map (it's lazy)
             except KeyError as e:
-              orth_sym = e.message
+              orth_sym = e.args[0]
               if self.log_auto_replace_unknown_symbols:
                 print("LmDataset: unknown orth symbol %r, adding to orth_replace_map as %r" % (orth_sym, self.unknown_symbol), file=log.v3)
                 self._reduce_log_auto_replace_unknown_symbols()
