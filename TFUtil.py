@@ -50,6 +50,68 @@ def have_min_tf_version(version):
   return tf_version >= version
 
 
+class DimensionTag(object):
+  """
+  This identifies one axis/dimension, like a time-dimension, etc.
+  This can be used by :class:`Data`.
+  It is not to specify the specific axis in a specific Data/tensor,
+  but to specify the content and dimension.
+  I.e. if we have the same DimensionTag for two Data instances,
+  the dimensions should match. I.e.:
+
+      data1.get_batch_dim_tag(i) == data2.get_batch_dim_tag(j)
+        =>  tf.shape(data1.placeholder)[i] == tf.shape(data2.placeholder)[j]
+  """
+
+  class Types:
+    Unspecified = None
+    Batch = "batch"
+    Spatial = "spatial"  # also time
+    Time = "spatial"  # we don't treat this as different
+    Feature = "feature"
+
+  def __init__(self, kind=Types.Unspecified, description=None, dimension=None, dyn_size=None):
+    """
+    :param str|None kind:
+    :param str|None description:
+    :param int|None dimension:
+    :param tf.Tensor|None dyn_size: e.g. seq_len, (batch,)
+    """
+    self.id = id(self)
+    self.kind = kind
+    self.description = description
+    self.dimension = dimension
+    self.dyn_size = dyn_size
+
+  def __repr__(self):
+    attribs = ["kind"]
+    for attr in ["description", "dimension"]:
+      if getattr(self, attr) is not None:
+        attribs.append(attr)
+    attribs.append("id")
+    return "DimensionTag(%s)" % ", ".join(["%s=%r" % (attr, getattr(self, attr)) for attr in attribs])
+
+  def set_tag_on_size_tensor(self, x):
+    """
+    :param tf.Tensor x:
+    """
+    assert self.dimension is None
+    if hasattr(x, "_is_size_of_dim_tag"):
+      assert x._is_size_of_dim_tag in (None, self)
+    if getattr(x, "_is_size_of_dim_tag", None) is None:
+      setattr(x, "_is_size_of_dim_tag", self)
+    if self.dyn_size is None:
+      self.dyn_size = x
+
+  @classmethod
+  def get_tag_from_size_tensor(cls, x):
+    """
+    :param tf.Tensor x:
+    :rtype: DimensionTag|None
+    """
+    return getattr(x, "_is_size_of_dim_tag", None)
+
+
 class Data(object):
   """
   This class is to describe a tensor,
@@ -177,6 +239,9 @@ class Data(object):
       with tf.name_scope("extern_data/placeholders/%s/" % name):
         for axis in self.get_axes_with_size():
           size_placeholder[axis] = tf.placeholder(**self.get_size_placeholder_kwargs(axis))
+          tag = DimensionTag(
+            description="spatial:%i:extern_data/placeholders/%s" % (axis, self.name), kind=DimensionTag.Types.Spatial)
+          tag.set_tag_on_size_tensor(size_placeholder[axis])
     if not size_placeholder and (self.ndim_dense <= 1 or all([d is not None for d in shape])):
       size_placeholder = {}
     self.size_placeholder = size_placeholder  # type: dict[int,tf.Tensor]  # axis w.o. batch -> size of shape (batch,)
@@ -647,8 +712,11 @@ class Data(object):
       if data.placeholder is not None:
         data.placeholder = tile_transposed(data.placeholder, axis=data.batch_dim_axis, multiples=dyn_beam_size)
       if data.size_placeholder is not None:
-        data.size_placeholder = {
-          i: tile_transposed(v, axis=0, multiples=dyn_beam_size) for (i, v) in data.size_placeholder.items()}
+        for i, v in sorted(data.size_placeholder.items()):
+          tag = DimensionTag.get_tag_from_size_tensor(v)
+          data.size_placeholder[i] = tile_transposed(v, axis=0, multiples=dyn_beam_size)
+          if tag is not None:
+            tag.set_tag_on_size_tensor(data.size_placeholder[i])
       data.beam_size = beam_size * (data.beam_size or 1)
       return data
 
@@ -1100,6 +1168,18 @@ class Data(object):
         self, self.time_dim_axis, self.size_placeholder))
     return False
 
+  def is_same_time_dim(self, other):
+    """
+    :param Data other:
+    :rtype: bool
+    """
+    assert self.have_time_axis()
+    if not other.have_time_axis():
+      return False
+    tag_self = self.get_batch_dim_tag(self.time_dim_axis)
+    tag_other = other.get_batch_dim_tag(other.time_dim_axis)
+    return tag_self == tag_other
+
   def get_sequence_lengths(self):
     """
     :return: seq lens tensor of shape (batch,) of dtype int32
@@ -1252,6 +1332,53 @@ class Data(object):
         axes_map[axis] = 1 if axis in dyn_axes_list else self.batch_shape[axis]
     assert sorted(axes_map.keys()) == list(range(self.batch_ndim))
     return tuple([axes_map[i] for i in range(self.batch_ndim)])
+
+  def get_scope_name(self):
+    """
+    :return: via self.placeholder or any self.size_placeholder, or None
+    :rtype: str|None
+    """
+    if self.placeholder is not None:
+      return os.path.dirname(self.placeholder.name)
+    if self.size_placeholder:
+      for i, v in sorted(self.size_placeholder.items()):
+        if v is not None:
+          return os.path.dirname(v.name)
+    return None
+
+  def get_full_name(self):
+    """
+    :return: if we have a defined scope (via :func:`self.get_scope_name`), then scope_name + "/" + self.name,
+      otherwise just self.name
+    :rtype: str
+    """
+    scope_name = self.get_scope_name()
+    if scope_name:
+      return "%s/%s" % (scope_name, self.name)
+    return self.name
+
+  def get_batch_dim_tag(self, axis):
+    """
+    :param int axis: counted with batch-dim
+    :rtype: DimensionTag
+    """
+    name = self.get_full_name()
+    if axis == self.batch_dim_axis:
+      return DimensionTag(kind=DimensionTag.Types.Batch, description="batch:%s" % name)
+    if axis == self.feature_dim_axis:
+      return DimensionTag(kind=DimensionTag.Types.Feature, dimension=self.dim, description="feature:%s" % name)
+    axis_wo_b = self.get_batch_axis_excluding_batch(axis)
+    dyn_size = self.size_placeholder.get(axis_wo_b) if self.size_placeholder else None
+    if dyn_size is not None:
+      tag = DimensionTag.get_tag_from_size_tensor(dyn_size)
+      if tag:
+        return tag
+    spatial_axes = self.get_spatial_batch_axes()
+    assert axis in spatial_axes
+    tag = DimensionTag(
+      kind=DimensionTag.Types.Spatial, description="spatial:%i:%s" % (spatial_axes.index(axis), name),
+      dimension=self.batch_shape[axis], dyn_size=dyn_size)
+    return tag
 
 
 _horovod_is_initialized = False
