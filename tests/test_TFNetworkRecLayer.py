@@ -1843,6 +1843,75 @@ def test_reclayer_optimize_out_dot():
     rtol=1e-3)
 
 
+def test_reclayer_move_out_input_train_and_search():
+  from TFNetworkRecLayer import _SubnetworkRecCell
+  n_src_dim = 5
+  n_tgt_dim = 7
+  beam_size = 12
+
+  def make_extern_data():
+    return ExternData({
+      "data": {"dim": n_src_dim, "sparse": True},
+      "classes": {"dim": n_tgt_dim, "sparse": True, "available_for_inference": False}})
+
+  config = Config()
+  config.update({
+    "debug_print_layer_output_template": True,
+    "network": {
+      "encoder": {"class": "linear", "activation": "tanh", "n_out": 5},
+
+      "output": {"class": "rec", "from": [], "unit": {
+
+        'target_embed_raw': {'activation': None,
+                             'class': 'linear',
+                             'from': ['prev:output'],
+                             'n_out': 13,
+                             'with_bias': False},
+        # In train, this is in output_layers_moved_out (like all layers).
+        # In search, this is in input_layers_moved_out.
+        'encoder_int': {'activation': None,
+                        'class': 'linear',
+                        'from': ['base:encoder'],
+                        'n_out': 11,
+                        'with_bias': False},
+        "encoder_reduced": {"class": "reduce", "mode": "sum", "axis": "T", "from": ["encoder_int"]},
+
+        "output_prob": {"class": "softmax", "from": ["target_embed_raw", "encoder_reduced"],
+                        "target": "classes", "loss": "ce"},
+        'output': {'class': 'choice', 'target': 'classes', 'beam_size': beam_size, 'from': ["output_prob"],
+                   "initial_output": 0},
+        "end": {"class": "compare", "from": ["output"], "value": 0},
+
+      }, "target": "classes", "max_seq_len": 20},
+
+      "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance", "target": "classes"}
+    }})
+
+  print("Constructing train network.")
+  with make_scope():
+    extern_data = make_extern_data()
+    net = TFNetwork(extern_data=extern_data, train_flag=True, config=config)
+    net.construct_from_dict(config.typed_value("network"))
+    rec_layer = net.get_layer("output")
+    assert isinstance(rec_layer, RecLayer)
+    cell = rec_layer.cell
+    assert isinstance(cell, _SubnetworkRecCell)
+    assert_equal(cell.input_layers_moved_out, [])
+    assert_equal(
+      cell.output_layers_moved_out, ["output_prob", "encoder_reduced", "encoder_int", "target_embed_raw", "output"])
+
+  print("Constructing search network.")
+  with make_scope():
+    extern_data = make_extern_data()
+    net = TFNetwork(extern_data=extern_data, search_flag=True, train_flag=False, eval_flag=True, config=config)
+    net.construct_from_dict(config.typed_value("network"))
+    rec_layer = net.get_layer("output")
+    assert isinstance(rec_layer, RecLayer)
+    cell = rec_layer.cell
+    assert isinstance(cell, _SubnetworkRecCell)
+    assert "encoder_int" in cell.input_layers_moved_out
+
+
 def test_subnet_load_on_init_rec():
   import tempfile
   model_tmp_dir = tempfile.mkdtemp("tmp-checkpoint")
