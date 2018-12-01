@@ -1002,6 +1002,9 @@ class _SubnetworkRecCell(object):
       assert isinstance(self.input_layers_net, TFNetwork)
       layer = self.input_layers_net.layers[layer_name]
       assert isinstance(layer, LayerBase)
+      if not self.parent_rec_layer.output.is_same_time_dim(layer.output):
+        assert not prev, "Time dim does not match: RecLayer %s vs sub layer %s." % (self.parent_rec_layer, layer)
+        return layer
       output = layer.output.copy_template_excluding_time_dim()
       with tf.name_scope("%s_moved_input" % name.replace(":", "_")):
         if prev:
@@ -1456,6 +1459,11 @@ class _SubnetworkRecCell(object):
             # Create only Tensor arrays for those which we use inside the loop.
             if not self._input_layer_used_inside_loop(layer_name):
               continue
+            layer = self.input_layers_net.layers[layer_name]
+            assert isinstance(layer, LayerBase)
+            # Only unroll if that is the same time dim.
+            if not rec_layer.output.is_same_time_dim(layer.output):
+              continue
             assert fixed_seq_len is not None
             inp_ta = tf.TensorArray(
               name="%s_ta" % layer_name,
@@ -1464,7 +1472,7 @@ class _SubnetworkRecCell(object):
               size=tf.reduce_max(fixed_seq_len),
               infer_shape=True)
             inp_ta = inp_ta.unstack(
-              self.input_layers_net.layers[layer_name].output.get_placeholder_as_time_major(),
+              layer.output.get_placeholder_as_time_major(),
               name="%s_ta_unstack" % layer_name)
             input_layers_moved_out_tas[layer_name] = inp_ta
 
