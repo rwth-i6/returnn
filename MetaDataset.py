@@ -79,19 +79,23 @@ class MetaDataset(CachedDataset2):
 
   def __init__(self,
                datasets,
-               data_map, data_dims,
+               data_map,
                seq_list_file,
                seq_lens_file=None,
+               data_dims=None,
                data_dtypes=None,
                window=1, **kwargs):
     """
     :param dict[str,dict[str]] datasets: dataset-key -> dataset-kwargs. including keyword 'class' and maybe 'files'
     :param dict[str,(str,str)] data_map: self-data-key -> (dataset-key, dataset-data-key).
       Should contain 'data' as key. Also defines the target-list, which is all except 'data'.
+    :param str seq_list_file: filename. pickle. dict[str,list[str]], dataset-key -> list of sequence tags.
+      If tag is the same for all datasets a line-separated plain text file can be used.
+    :param str seq_lens_file: filename. json. dict[str,dict[str,int]], seq-tag -> data-key -> len.
+      Use if getting sequence length from loading data is too costly.
     :param dict[str,(int,int)] data_dims: self-data-key -> data-dimension, len(shape) (1 ==> sparse repr).
-    :param str seq_list_file: filename. pickle. dict[str,list[str]], dataset-key -> list of sequence tags. If tag is the same for all datasets a line-separated plain text file can be used.
-    :param str seq_lens_file: filename. json. dict[str,dict[str,int]], seq-tag -> data-key -> len. Use if getting sequence length from loading data is too costly.
-    :param dict[str,str] data_dtypes: self-data-key -> dtype. automatic if not specified
+       Deprecated/Only to double check. Read from data if not specified.
+    :param dict[str,str] data_dtypes: self-data-key -> dtype. Read from data if not specified.
     """
     assert window == 1  # not implemented
     super(MetaDataset, self).__init__(**kwargs)
@@ -118,38 +122,42 @@ class MetaDataset(CachedDataset2):
       assert len(self.seq_list_original[key]) == self._num_seqs
     self.tag_idx = {tag: idx for (idx, tag) in enumerate(self.seq_list_original[self.default_dataset_key])}
 
-    data_dims = convert_data_dims(data_dims)
-    self.data_dims = data_dims
-    assert "data" in data_dims
-    for key in self.target_list:
-      assert key in data_dims
-    self.num_inputs = data_dims["data"][0]
-    self.num_outputs = data_dims
-
-    self.data_dtypes = {data_key: _select_dtype(data_key, data_dims, data_dtypes) for data_key in self.data_keys}
-
     if seq_lens_file:
       seq_lens = load_json(filename=seq_lens_file)
       assert isinstance(seq_lens, dict)
       # dict[str,NumbersDict], seq-tag -> data-key -> len
       self._seq_lens = {tag: NumbersDict(l) for (tag, l) in seq_lens.items()}
-    else:
-      self._seq_lens = None
-
-    if self._seq_lens:
       self._num_timesteps = sum([self._seq_lens[s] for s in self.seq_list_original[self.default_dataset_key]])
     else:
+      self._seq_lens = None
       self._num_timesteps = None
 
     # Will only init the needed datasets.
     self.datasets = {
       key: init_dataset(datasets[key], extra_kwargs={"name": "%s_%s" % (self.name, key)})
       for key in self.dataset_keys}
+
+    if data_dims:
+      data_dims = convert_data_dims(data_dims)
+      self.data_dims = data_dims
+      assert "data" in data_dims
+      for key in self.target_list:
+        assert key in data_dims
+    else:
+      self.data_dims = {}
+
     for data_key in self.data_keys:
       dataset_key, dataset_data_key = self.data_map[data_key]
       dataset = self.datasets[dataset_key]
+      if not data_dims:
+        self.data_dims[data_key] = dataset.num_outputs[dataset_data_key]
       if dataset_data_key in dataset.labels:
         self.labels[data_key] = dataset.labels[dataset_data_key]
+
+    self.num_inputs = self.data_dims["data"][0]
+    self.num_outputs = self.data_dims
+
+    self.data_dtypes = {data_key: _select_dtype(data_key, self.data_dims, data_dtypes) for data_key in self.data_keys}
 
   def _get_dataset_seq_length(self, seq_idx):
     if not self.orig_seq_order_is_initialized:
