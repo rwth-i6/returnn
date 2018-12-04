@@ -80,7 +80,7 @@ class MetaDataset(CachedDataset2):
   def __init__(self,
                datasets,
                data_map,
-               seq_list_file,
+               seq_list_file=None,
                seq_lens_file=None,
                data_dims=None,
                data_dtypes=None,
@@ -89,8 +89,8 @@ class MetaDataset(CachedDataset2):
     :param dict[str,dict[str]] datasets: dataset-key -> dataset-kwargs. including keyword 'class' and maybe 'files'
     :param dict[str,(str,str)] data_map: self-data-key -> (dataset-key, dataset-data-key).
       Should contain 'data' as key. Also defines the target-list, which is all except 'data'.
-    :param str seq_list_file: filename. pickle. dict[str,list[str]], dataset-key -> list of sequence tags.
-      If tag is the same for all datasets a line-separated plain text file can be used.
+    :param str seq_list_file: filename. pickle. dict[str,list[str]], dataset-key -> list of sequence tags. Can be None
+      if tag format is the same for all datasets. Then sequence list will be default sequence order of default dataset.
     :param str seq_lens_file: filename. json. dict[str,dict[str,int]], seq-tag -> data-key -> len.
       Use if getting sequence length from loading data is too costly.
     :param dict[str,(int,int)] data_dims: self-data-key -> data-dimension, len(shape) (1 ==> sparse repr).
@@ -108,19 +108,12 @@ class MetaDataset(CachedDataset2):
     self.target_list = sorted(self.data_keys - {"data"})
     self.default_dataset_key = self.data_map["data"][0]
 
-    if seq_list_file.endswith(".pkl"):
-      import pickle
-      seq_list = pickle.load(open(seq_list_file, 'rb'))
-    else:
-      seq_list = open(seq_list_file).read().splitlines()
-    assert isinstance(seq_list, (list, dict))
-    if isinstance(seq_list, list):
-      seq_list = {key: seq_list for key in self.dataset_keys}
-    self.seq_list_original = seq_list  # type: dict[str,list[str]]  # dataset key -> seq list
-    self._num_seqs = len(self.seq_list_original[self.default_dataset_key])
-    for key in self.dataset_keys:
-      assert len(self.seq_list_original[key]) == self._num_seqs
-    self.tag_idx = {tag: idx for (idx, tag) in enumerate(self.seq_list_original[self.default_dataset_key])}
+    # This will only initialize datasets needed for features occuring in data_map
+    self.datasets = {
+      key: init_dataset(datasets[key], extra_kwargs={"name": "%s_%s" % (self.name, key)})
+      for key in self.dataset_keys}
+
+    self.seq_list_original = self._load_seq_list(seq_list_file) # type: dict[str,list[str]]  # dataset key -> seq list
 
     if seq_lens_file:
       seq_lens = load_json(filename=seq_lens_file)
@@ -131,11 +124,6 @@ class MetaDataset(CachedDataset2):
     else:
       self._seq_lens = None
       self._num_timesteps = None
-
-    # Will only init the needed datasets.
-    self.datasets = {
-      key: init_dataset(datasets[key], extra_kwargs={"name": "%s_%s" % (self.name, key)})
-      for key in self.dataset_keys}
 
     if data_dims:
       data_dims = convert_data_dims(data_dims)
@@ -158,6 +146,38 @@ class MetaDataset(CachedDataset2):
     self.num_outputs = self.data_dims
 
     self.data_dtypes = {data_key: _select_dtype(data_key, self.data_dims, data_dtypes) for data_key in self.data_keys}
+
+  def _load_seq_list(self, seq_list_file=None):
+    if seq_list_file:
+      if seq_list_file.endswith(".pkl"):
+        import pickle
+        seq_list = pickle.load(open(seq_list_file, 'rb'))
+      else:
+        seq_list = open(seq_list_file).read().splitlines()
+    else:
+      # We create a sequence list from all the sequences of the default dataset and hope that it also applies to the
+      # other datasets. This can only work if all datasets have the same tag format and the sequences in the other datasets are
+      # a subset of those in the default dataset.
+      default_dataset = self.datasets[self.default_dataset_key]
+      print("Reading sequence list for MetaDataset '{}' from sub-dataset '{}'".format(self.name, default_dataset.name), file=log.v3)
+      seq_list = [default_dataset.get_tag(seq_idx) for seq_idx in range(default_dataset.num_seqs)]
+      # Catch index out of bounds errors. Whether the tags are actually valid will be checked in _check_dataset_seq().
+      for key in self.dataset_keys:
+        assert self.datasets[key].partition_epoch == 1, "Turn off partition_epoch for sub-dataset '{}' so we can access all sequences!".format(key)
+        assert self.datasets[key].num_seqs >= len(seq_list), \
+            "Dataset '{}' has less sequences than in sequence list read from '{}', this cannot work out!".format(key, self.default_dataset_key)
+
+    assert isinstance(seq_list, (list, dict))
+    if isinstance(seq_list, list):
+      seq_list = {key: seq_list for key in self.dataset_keys}
+
+    self.total_seqs = len(seq_list[self.default_dataset_key])
+    for key in self.dataset_keys:
+      assert len(seq_list[key]) == self.total_seqs
+
+    self.tag_idx = {tag: idx for (idx, tag) in enumerate(seq_list[self.default_dataset_key])}
+
+    return seq_list
 
   def _get_dataset_seq_length(self, seq_idx):
     if not self.orig_seq_order_is_initialized:
@@ -184,8 +204,7 @@ class MetaDataset(CachedDataset2):
       else:
         self.orig_seq_order_is_initialized = False
         get_seq_len = self._get_dataset_seq_length
-      total_seqs = len(self.seq_list_original[self.default_dataset_key])
-      seq_index = self.get_seq_order_for_epoch(epoch, total_seqs, get_seq_len)
+      seq_index = self.get_seq_order_for_epoch(epoch, self.total_seqs, get_seq_len)
     self._num_seqs = len(seq_index)
     self.seq_list_ordered = {key: [ls[s] for s in seq_index] for (key, ls) in self.seq_list_original.items()}
 
