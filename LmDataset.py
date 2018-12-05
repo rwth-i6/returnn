@@ -183,7 +183,8 @@ class LmDataset(CachedDataset2):
     """
     if seq_list and not self.error_on_invalid_seq:
       print("Setting error_on_invalid_seq to True since a seq_list is given. "
-            "Please activate auto_replace_unknown_symbol if you want to prevent invalid sequences!")
+            "Please activate auto_replace_unknown_symbol if you want to prevent invalid sequences!",
+            file=log.v4)
       self.error_on_invalid_seq = True
     super(LmDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
     if not epoch:
