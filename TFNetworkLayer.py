@@ -5249,7 +5249,7 @@ class Loss(object):
       reduce_func = tf.reduce_mean if normalize else tf.reduce_sum
       loss = reduce_func(loss, axis=list(range(1, loss.get_shape().ndims)))  # reduce remaining dims already
     mask = self.output.get_sequence_mask()  # e.g. (B,T)
-    mask = tf.reshape(mask, tf.shape(loss)[0])
+    mask = tf.reshape(mask, [tf.shape(loss)[0]])
     loss = tf.where(mask, loss, tf.zeros_like(loss), "loss_masked")
     return loss
 
