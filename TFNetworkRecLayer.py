@@ -427,7 +427,12 @@ class RecLayer(_ConcatInputLayer):
     v = super(RecLayer, self).get_constraints_value()
     from TFUtil import optional_add
     if isinstance(self.cell, _SubnetworkRecCell):
-      for layer in self.cell.net.layers.values():
+      layers = list(self.cell.net.layers.values())
+      if self.cell.input_layers_net:
+        layers += list(self.cell.input_layers_net.layers.values())
+      if self.cell.output_layers_net:
+        layers += list(self.cell.output_layers_net.layers.values())
+      for layer in layers:
         v = optional_add(v, layer.get_constraints_value())
     return v
 
