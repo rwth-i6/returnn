@@ -868,6 +868,63 @@ def test_pool_layer_NCHW():
     print(seq_lens)
 
 
+def test_batch_norm():
+  with make_scope() as session:
+    import numpy as np
+    from tensorflow.python.client import timeline
+    net = TFNetwork(extern_data=ExternData())
+    net.train_flag = True
+    with tf.variable_scope("src_nchw"):
+      src_nhwc = InternalLayer(name="src_nchw", network=net, out_type={"dim": 16,
+                                                                       "shape": (None, 16, 16),
+                                                                       "batch_dim_axis": 0,
+                                                                       "time_dim_axis": 1,
+                                                                       "feature_dim_axis": 3,
+                                                                       "sparse": False
+                                                                       })
+      src_nhwc.output.placeholder = tf.placeholder(shape=(None, None, 16, 16), dtype=tf.float32)
+      src_nhwc.output.size_placeholder = {0: tf.placeholder(shape=(None,), dtype=tf.int32)}
+
+    mean =  tf.constant(np.random.rand(1, 1, 16, 16), name="rand_mean", dtype=tf.float32)
+    variance = tf.constant(np.random.rand(1, 1, 16, 16), name="rand_var", dtype=tf.float32)
+    input_data = np.random.rand(10, 11, 16, 16)
+    seq_lens = np.array([11, 11, 11, 11, 11, 11, 11, 11, 11, 11])
+
+    with tf.variable_scope("batch_norm_masked_nchw"):
+      batch_norm_1 = BatchNormLayer(name="batch_norm_masked_nchw", network=net, masked_time=True,
+                                    sample_mean=mean, sample_variance=variance,
+                                    sources=[src_nhwc],
+                                    output=BatchNormLayer.get_out_data_from_opts(name="batch_norm_masked_nchw",
+                                                                                 sources=[src_nhwc],
+                                                                                 network=net))
+      batch_norm_1.post_init(layer_desc=None)
+
+    with tf.variable_scope("batch_norm_nonmasked_nchw"):
+      batch_norm_2 = BatchNormLayer(name="batch_norm_nonmasked_nchw", network=net, masked_time=False,
+                                    sample_mean=mean, sample_variance=variance,
+                                    sources=[src_nhwc],
+                                    output=BatchNormLayer.get_out_data_from_opts(name="batch_norm_nonmasked_nchw",
+                                                                                 sources=[src_nhwc],
+                                                                                 network=net))
+      batch_norm_2.post_init(layer_desc=None)
+
+
+    tf.global_variables_initializer().run()
+    out_1, seq_lens_1 = session.run([batch_norm_1.output.placeholder,
+                                 batch_norm_1.output.size_placeholder[0]],
+                                feed_dict={src_nhwc.output.placeholder: input_data,
+                                           src_nhwc.output.size_placeholder[0]: seq_lens}
+                                )
+    out_2, seq_lens_2 = session.run([batch_norm_2.output.placeholder,
+                                 batch_norm_2.output.size_placeholder[0]],
+                                feed_dict={src_nhwc.output.placeholder: input_data,
+                                           src_nhwc.output.size_placeholder[0]: seq_lens}
+                                )
+
+    assert np.array_equal(out_1, out_2)
+    print(np.sum(out_1 - out_2))
+
+
 def test_ResizeLayer_fill_value():
   with make_scope() as session:
     net = TFNetwork(extern_data=ExternData())
