@@ -5848,12 +5848,13 @@ def nested_get_shapes(x):
 
 
 def _get_control_flow_ops(v):
+  import numpy
   if isinstance(v, (list, tuple)):
     for elem in v:
       for t in _get_control_flow_ops(elem):
         yield t
     return
-  if isinstance(v, (int, float, type(None))):
+  if isinstance(v, (int, float, numpy.integer, type(None))):
     return
   if isinstance(v, tf.Tensor):
     v = v.op
