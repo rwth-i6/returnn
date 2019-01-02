@@ -440,7 +440,7 @@ def executeMainTask():
     engine.search(
       data,
       do_eval=config.bool("search_do_eval", True),
-      output_layer_name=config.value("search_output_layer", "output"),
+      output_layer_names=config.typed_value("search_output_layer", "output"),
       output_file=config.value("search_output_file", ""),
       output_file_format=config.value("search_output_file_format", "txt"))
   elif task == 'compute_priors':
