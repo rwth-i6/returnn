@@ -380,7 +380,7 @@ class TFNetwork(object):
         return self.get_layer(name)
       except LayerNotFound:
         pass  # ok, we will try to construct it then
-    if name in self._constructing_layers:
+    if name in self._constructing_layers and not (get_layer and hasattr(get_layer, "safe") and get_layer.safe):
       raise NetworkConstructionDependencyLoopException(
         layer_name=name, constructing_layers=self._constructing_layers, net_dict=net_dict, network=self)
     if name not in net_dict:
