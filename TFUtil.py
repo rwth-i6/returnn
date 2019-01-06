@@ -4773,7 +4773,7 @@ def smoothing_cross_entropy(logits,
   :return: Tensor of the same shape as `labels` and of the same dtype as `logits`.
   :rtype: tf.Tensor
   """
-  with tf.name_scope("smoothing_cross_entropy", [logits, labels]):
+  with tf.name_scope("smoothing_cross_entropy", values=[logits, labels]):
     if vocab_size is None:
       vocab_size = get_shape_dim(logits, -1, name="vocab_size")
     confidence = 1.0 - label_smoothing
