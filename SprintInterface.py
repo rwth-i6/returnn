@@ -316,6 +316,7 @@ def getSegmentList(corpusName, segmentList, **kwargs):
   :type corpusName: str
   :type segmentList: list[str]
   :type segmentsInfo: dict[str,dict[str]]
+  :type config: str
   :rtype: list[str]
   :returns segment list. Can also be an iterator.
   """
@@ -326,7 +327,7 @@ def getSegmentList(corpusName, segmentList, **kwargs):
   # Init what we need. These can be called multiple times.
   # If we use both the PythonSegmentOrder and the PythonTrainer, this will be called first.
   # The PythonTrainer will be called lazily once it gets the first data.
-  initBase()
+  initBase(configfile=kwargs.get('config', None))
   sprintDataset.useMultipleEpochs()
 
   finalEpoch = getFinalEpoch()
