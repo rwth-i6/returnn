@@ -307,6 +307,7 @@ def initBackendEngine():
         os.environ.get("TF_DEVICE"), config.opt_typed_value("device")), file=log.v4)
       config.set("device", os.environ.get("TF_DEVICE"))
     if config.is_true("use_horovod"):
+      import socket
       import horovod.tensorflow as hvd
       from TFUtil import init_horovod
       init_horovod()  # make sure it is initialized
@@ -315,7 +316,8 @@ def initBackendEngine():
         gpu_opts = config.typed_dict.setdefault("tf_session_opts", {}).setdefault("gpu_options", {})
         assert "visible_device_list" not in gpu_opts
         gpu_opts["visible_device_list"] = str(hvd.local_rank())
-        print("Horovod: Using GPU %s." % gpu_opts["visible_device_list"], file=log.v3)
+        print("Horovod: Hostname %s, pid %i, using GPU %s." % (
+          socket.gethostname(), os.getpid(), gpu_opts["visible_device_list"]), file=log.v3)
       else:
         if hvd.rank() == 0:  # Don't spam in all ranks.
           print("Horovod: Not using GPU.", file=log.v3)
