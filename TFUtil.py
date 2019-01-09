@@ -2128,14 +2128,20 @@ class _DeviceAttributes:
   """
   Like tf.python.client.session._DeviceAttributes but extended by physical_device_desc.
   """
-  def __init__(self, dev, physical_device_desc):
+  def __init__(self, dev):
     """
     :param tensorflow.python.client.session._DeviceAttributes dev:
-    :param bytes|str physical_device_desc:
     """
     self.name = dev.name  # type: str
     self.device_type = dev.device_type  # type: str
     self.memory_limit_bytes = dev.memory_limit_bytes  # type: int
+    self.physical_device_desc = None  # type: str
+
+  def set_physical_device_desc(self, session):
+    """
+    :param tf.Session session:
+    """
+    physical_device_desc = session.run(get_device_attr(self.name))
     self.physical_device_desc = physical_device_desc.decode("utf8")
 
   def __str__(self):
@@ -2164,7 +2170,7 @@ def get_tf_list_local_devices(tf_session_opts=None):
   """
   check_initial_tf_thread_pool_init(tf_session_opts=tf_session_opts)
   global _list_local_devices
-  if _list_local_devices:
+  if _list_local_devices is not None:
     return _list_local_devices
   print("Collecting TensorFlow device list...")
   if tf_session_opts and tf_session_opts.get("gpu_options", {}).get("visible_device_list", None):
@@ -2179,8 +2185,12 @@ def get_tf_list_local_devices(tf_session_opts=None):
     # However, we have get_device_attr, which provides gives us physical_device_desc.
     with tf.Session(config=tf.ConfigProto(**tf_session_opts)) as session:
       devs = list(session.list_devices())
-      _list_local_devices = [
-        _DeviceAttributes(dev=dev, physical_device_desc=session.run(get_device_attr(dev.name))) for dev in devs]
+      _list_local_devices = [_DeviceAttributes(dev=dev) for dev in devs]
+      # Set physical_device_desc after we assigned _list_local_devices,
+      # because there might happen recursive calls to this function, e.g. via is_gpu_available,
+      # which will be called via get_device_attr, when the op will be compiled.
+      for dev in _list_local_devices:
+        dev.set_physical_device_desc(session=session)
       session.close()
   else:
     _list_local_devices = list(device_lib.list_local_devices())
@@ -2274,6 +2284,7 @@ def get_available_gpu_min_compute_capability():
   """
   cap = None
   for dev in get_available_gpu_devices():
+    assert dev.physical_device_desc is not None
     desc = _parse_physical_device_desc(dev.physical_device_desc)
     dev_cap = float(desc['compute capability'])
     if cap is None:
