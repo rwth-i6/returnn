@@ -2499,7 +2499,7 @@ class PadLayer(_ConcatInputLayer):
 
 class MergeDimsLayer(_ConcatInputLayer):
   """
-  Merges a list of axes into a single one.
+  Merges a list of axes into a single one. (Flatten the dims.)
   E.g. input is (batch, width, height, dim) and axes=(1,2), then we get (batch, width*height, dim).
   Or input is (batch, time, height, dim) and axes="except_time", then we get (batch, time, height*dim).
   See also :class:`CombineDimsLayer`.
