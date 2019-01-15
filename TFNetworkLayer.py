@@ -405,7 +405,7 @@ class LayerBase(object):
     :return: n_out value
     :rtype: int
     """
-    n_out = cls._static_get_target_value(target=target, network=network, mark_data_key_as_used=False).dim
+    n_out = cls._static_get_target_value(target=target, network=network, mark_data_key_as_used=False, get_layer=get_layer).dim
     if loss_class_name:
       n_out = get_loss_class(loss_class_name).get_auto_output_layer_dim(n_out)
     return n_out
