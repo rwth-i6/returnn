@@ -4326,6 +4326,7 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
                num_units,
                norm_gain=1.0,
                norm_shift=0.0,
+               forget_bias=0.0,
                activation=tf.tanh,
                is_training=None,
                dropout=0.0,
@@ -4344,6 +4345,7 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
     :param int num_units: number of lstm units
     :param float norm_gain: layer normalization gain value
     :param float norm_shift: layer normalization shift (bias) value
+    :param float forget_bias: the bias added to forget gates
     :param activation: Activation function to be applied in the lstm cell
     :param bool is_training: if True then we are in the training phase
     :param float dropout: dropout rate, applied on cell-in (j)
@@ -4369,6 +4371,7 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
     self._num_units = num_units
     self.norm_grain = norm_gain
     self.norm_shift = norm_shift
+    self.forget_bias = forget_bias
     self.activation = activation
 
     if is_training is None:
@@ -4532,7 +4535,7 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
 
     from tensorflow.python.ops.math_ops import sigmoid
 
-    new_c = sigmoid(f) * prev_c + sigmoid(i) * g
+    new_c = sigmoid(f + self.forget_bias) * prev_c + sigmoid(i) * g
     new_c_for_output = new_c
     if self.cell_norm:
       new_c = self._norm(new_c, name='new_c')
