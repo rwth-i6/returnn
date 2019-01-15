@@ -298,6 +298,8 @@ def initBackendEngine():
   BackendEngine.select_engine(config=config)
   if BackendEngine.is_theano_selected():
     print("Theano:", describe_theano_version(), file=log.v3)
+    import TheanoUtil
+    TheanoUtil.monkey_patches()
   elif BackendEngine.is_tensorflow_selected():
     print("TensorFlow:", describe_tensorflow_version(), file=log.v3)
     if get_tensorflow_version_tuple()[0] == 0:
