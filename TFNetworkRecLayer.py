@@ -220,13 +220,15 @@ class RecLayer(_ConcatInputLayer):
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
     """
+    This method transforms the templates in the config dictionary into references
+    of the layer instances (and creates them in the process).
     :param dict[str] d: will modify inplace
     :param TFNetwork.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     """
     if isinstance(d.get("unit"), dict):
       d["n_out"] = d.get("n_out", None)  # disable automatic guessing
-    super(RecLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    super(RecLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)  # everything except "unit"
     if "initial_state" in d:
       d["initial_state"] = RnnCellLayer.transform_initial_state(
         d["initial_state"], network=network, get_layer=get_layer)
@@ -234,7 +236,7 @@ class RecLayer(_ConcatInputLayer):
       def sub_get_layer(name):
         # Only used to resolve deps to base network.
         if name.startswith("base:"):
-          return get_layer(name[len("base:"):])
+          return get_layer(name[len("base:"):])  # calls get_layer of parent network
       from TFNetwork import TFNetwork, ExternData
       subnet = TFNetwork(parent_net=network, extern_data=network.extern_data)  # dummy subnet
       for sub in d["unit"].values():  # iterate over the layers of the subnet
@@ -725,6 +727,17 @@ class RecLayer(_ConcatInputLayer):
       return layer.is_prev_time_frame
     return False
 
+  def get_sub_layer(self, layer_name):
+    """
+    :param str layer_name:  The sub_layer addressed by '/' separated path.
+    :return: The sub_layer addressed in layer_name or None if no sub_layer exists
+    :rtype: LayerBase|None
+    """
+    if isinstance(self.cell, _SubnetworkRecCell):
+      # try to find layer_name in cell:
+      return self.cell.get_layer_from_outside(layer_name)
+    return None
+
 
 class _SubnetworkRecCell(object):
   """
@@ -1066,6 +1079,22 @@ class _SubnetworkRecCell(object):
         continue
       get_layer(layer_name)
       assert layer_name in self.net.layers
+
+  def get_layer_from_outside(self, layer_name):
+    """
+    :param str layer_name: The sub_layer addressed by '/' separated path.
+    :return: The sub_layer addressed in layer_name or None if no sub_layer exists
+    :rtype: LayerBase|None
+    """
+    if self.output_layers_net and layer_name in self.output_layers_net.layers:
+      return self.output_layers_net.layers[layer_name]
+    elif self.input_layers_net and layer_name in self.input_layers_net.layers:
+      return self.input_layers_net.layers[layer_name]
+    elif self.net and layer_name in self.net.layers:
+      raise Exception(
+        "%r: Cannot get layer %r from outside, because it is only available inside the recurrent loop. \
+         Add 'is_output_layer':True to the layer options." % (self.parent_rec_layer, layer_name))
+    return None
 
   def _get_init_output(self, name):
     """
@@ -2138,7 +2167,7 @@ class _SubnetworkRecCell(object):
       if name.startswith("prev:"):
         return get_prev_layer(name[len("prev:"):])
       if name.startswith("base:"):
-        return self.parent_net.layers[name[len("base:"):]]
+        return self.parent_net.get_layer(name[len("base:"):])
       if name in self.input_layers_moved_out:
         return self.input_layers_net.layers[name]
       if name in self.output_layers_moved_out or name.startswith("data:"):
