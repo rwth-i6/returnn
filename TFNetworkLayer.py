@@ -476,6 +476,15 @@ class LayerBase(object):
     """
     return list(self.sources) + list(self.collocate_with)
 
+  def get_sub_layer(self, layer_name):
+    """
+    The default behavior for any layer is to return None.
+    :param str layer_name:  The sub_layer addressed by '/' separated path.
+    :return: The sub_layer addressed in layer_name or None if no sub_layer exists
+    :rtype: LayerBase|None
+    """
+    return None
+
   def get_search_choices(self):
     """
     :rtype: SearchChoices|None
@@ -1037,13 +1046,13 @@ class ReuseParams:
         # This dependency loop is not seen as critical. We allow it to be done later.
         # So any template construction of this layer should work.
         return ReuseParams.LazyLayerResolver(layer_name=layer_name, network=network, get_layer=get_layer)
-    if isinstance(opts, str):
+    if isinstance(opts, str):  # share the whole layer
       return ReuseParams(reuse_layer=optional_get_layer(opts))
     assert isinstance(opts, dict)
     opts = opts.copy()
-    if "reuse_layer" in opts:
+    if "reuse_layer" in opts:  # share the whole layer (+ possibly some more params)
       opts["reuse_layer"] = optional_get_layer(opts["reuse_layer"])
-    if "map" in opts:
+    if "map" in opts:  # share specific parameters
       assert isinstance(opts["map"], dict), "reuse_params['map'] should be a dict but is %s" % (type(opts["map"]),)
       opts["map"] = opts["map"].copy()
       for key, value in sorted(opts["map"].items()):
