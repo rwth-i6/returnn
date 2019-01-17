@@ -4417,12 +4417,14 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
     gamma_init = tf.constant_initializer(self.norm_grain)
     beta_init = tf.constant_initializer(self.norm_shift)
     mean, variance = tf.nn.moments(inputs, axes=[-1], keep_dims=True)
+    normalized_input = (inputs - mean) * tf.rsqrt(variance + self.variance_epsilon)
     with var_creation_scope():
       g = tf.get_variable("gamma_" + name, shape=shape, initializer=gamma_init)
       s = tf.get_variable("beta_" + name, shape=shape, initializer=beta_init) if with_beta else None
-    inv = tf.rsqrt(variance + self.variance_epsilon)
-    inv *= g
-    return inv * inputs + (s - mean * inv if with_beta else -mean * inv)
+    y = normalized_input * g
+    if with_beta:
+      y += s
+    return y
 
   @staticmethod
   def _linear(inputs, out_dim, apply_bias=True, name=None):
@@ -4466,7 +4468,7 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
         # 0. if [keep_prob, 1.0) and 1. if [1.0, 1.0 + keep_prob)
         binary_tensor = tf.floor(random_tensor)
         return binary_tensor * (1.0 / keep_prob)
-      return cond(self.is_training, get_mask, lambda: tf.constant(1.0))
+      return cond(self.is_training, get_mask, lambda: 1.0)
 
   def _optional_dropout(self, x, dropout):
     """
