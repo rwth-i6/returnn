@@ -4468,8 +4468,7 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
       y += s
     return y
 
-  @staticmethod
-  def _linear(inputs, out_dim, apply_bias=True, name=None):
+  def _linear(self, inputs, out_dim, apply_bias=True, name=None):
     """
     :param tf.Tensor inputs: (B,D), or (T,B,D)
     :param int out_dim:
@@ -4488,6 +4487,10 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
     if apply_bias:
       with var_creation_scope():
         bias = tf.get_variable("bias_" + name, shape=[out_dim])
+        # add forget bias
+        if self.forget_bias:
+          assert 4 * self._num_units == out_dim
+          bias[2*self._num_units:3*self._num_units] += self.forget_bias
       out = tf.nn.bias_add(out, bias)
     return out
 
@@ -4577,7 +4580,7 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
 
     from tensorflow.python.ops.math_ops import sigmoid
 
-    new_c = sigmoid(f + self.forget_bias) * prev_c + sigmoid(i) * g
+    new_c = sigmoid(f) * prev_c + sigmoid(i) * g
     new_c_for_output = new_c
     if self.cell_norm:
       new_c = self._norm(new_c, name='new_c')
