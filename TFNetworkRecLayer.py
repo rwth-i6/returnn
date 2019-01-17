@@ -933,8 +933,7 @@ class _SubnetworkRecCell(object):
       pprint(self.layer_data_templates)
       raise
 
-  def _construct(self, prev_outputs, prev_extra, i,
-                 data=None, classes=None,
+  def _construct(self, prev_outputs, prev_extra, i, data=None,
                  inputs_moved_out_tas=None, needed_outputs=("output",)):
     """
     This is called from within the `tf.while_loop` of the :class:`RecLayer`,
@@ -943,8 +942,9 @@ class _SubnetworkRecCell(object):
     :param dict[str,tf.Tensor] prev_outputs: outputs of the layers from the previous step
     :param dict[str,dict[str,tf.Tensor]] prev_extra: extra output / hidden states of the previous step for layers
     :param tf.Tensor i: loop counter. scalar, int32, current step (time)
-    :param tf.Tensor|None data: optional source data, shape e.g. (batch,dim)
-    :param tf.Tensor|None classes: optional target classes, shape e.g. (batch,) if it is sparse
+    :param dict[str,tf.Tensor] data: All data needed from outside of the loop. Possible keys are 'source'
+        (for the input of the recurrent layer) and the keys in parent_net.extern_data, which notably include
+        the target of the recurrent layer, usually called 'classes'.
     :param dict[str,tf.TensorArray]|None inputs_moved_out_tas:
     :param set[str] needed_outputs: layers where we need outputs
     """
@@ -952,21 +952,15 @@ class _SubnetworkRecCell(object):
     from TFNetworkLayer import InternalLayer, ExtendWithBeamLayer
     from TFUtil import tile_transposed
     needed_beam_size = self.layer_data_templates["output"].output.beam_size
-    if data is not None:
+    for key in data:
       if needed_beam_size:
-        assert not self.parent_rec_layer.input_data.beam_size
-        data = tile_transposed(
-          data,
-          axis=self.net.extern_data.data["source"].batch_dim_axis,
+        if key == "source":
+          assert not self.parent_rec_layer.input_data.beam_size
+        data[key] = tile_transposed(
+          data[key],
+          axis=self.net.extern_data.data[key].batch_dim_axis,
           multiples=needed_beam_size)
-      self.net.extern_data.data["source"].placeholder = data
-    if classes is not None:
-      if needed_beam_size:
-        classes = tile_transposed(
-          classes,
-          axis=self.net.extern_data.data[self.parent_rec_layer.target].batch_dim_axis,
-          multiples=needed_beam_size)
-      self.net.extern_data.data[self.parent_rec_layer.target].placeholder = classes
+      self.net.extern_data.data[key].placeholder = data[key]
     for data_key, data in self.net.extern_data.data.items():
       if data_key not in self.net.used_data_keys:
         continue
@@ -1198,26 +1192,30 @@ class _SubnetworkRecCell(object):
     self._check_output_template_shape()
     from TFUtil import check_input_dim, tensor_array_stack
 
+    # dict to collect all data that will be fed from outside of the rec_layer. If present, this includes
+    # the input ('source') and the target, but maybe also other additional extern data that is used inside the subnet.
+    data_tensor_arrays = {}  # dict[str,tf.TensorArray]
+
     with tf.name_scope("subnet_base"):
       batch_dim = rec_layer.network.get_data_batch_dim()
       input_beam_size = None  # type: int | None
       if rec_layer.input_data:
-        with tf.name_scope("x_tensor_array"):
-          x, input_seq_len = rec_layer._get_input()  # x will be (time,batch,..,dim)
-          x_shape = tf.shape(x, name="x_shape")
-          x_ta = tf.TensorArray(
-            name="x_ta",
+        with tf.name_scope("source_tensor_array"):
+          source, input_seq_len = rec_layer._get_input()  # source will be (time,batch,..,dim)
+          source_shape = tf.shape(source, name="source_shape")
+          source_ta = tf.TensorArray(
+            name="source_ta",
             dtype=rec_layer.input_data.dtype,
             element_shape=tf.TensorShape(rec_layer.input_data.copy_template_excluding_time_dim().batch_shape),
-            size=x_shape[0],
+            size=source_shape[0],
             infer_shape=True)
-          x_ta = x_ta.unstack(x, name="x_ta_unstack")
+          source_ta = source_ta.unstack(source, name="source_ta_unstack")
+          data_tensor_arrays["source"] = source_ta
         input_search_choices = rec_layer.network.get_search_choices(sources=rec_layer.sources)
         if input_search_choices:
           input_beam_size = input_search_choices.search_choices.beam_size
           assert self.parent_rec_layer.input_data.beam_size == input_beam_size
       else:
-        x_ta = None
         input_seq_len = None
       if rec_layer.output.size_placeholder and not self.parent_net.search_flag:
         # See LayerBase._post_init_output(). could be set via target or size_target...
@@ -1244,31 +1242,46 @@ class _SubnetworkRecCell(object):
       # if not self.input_data and self.network.search_flag:
       #   assert not have_known_seq_len  # at least for the moment
 
-      # TODO: Better check for train_flag.
-      # Maybe more generic via sampling options later.
-      y_ta = None
-      if rec_layer.target and ((
-            rec_layer.network.train_flag is not False and not self.parent_net.search_flag) or rec_layer._cheating):
-        # TODO check subnet, which extern data keys are used...
-        y_data = rec_layer.network.get_extern_data(rec_layer.target, mark_data_key_as_used=True)
-        y = y_data.get_placeholder_as_time_major()
-        with tf.name_scope("y_max_len"):
-          y_max_len = tf.shape(y)[0]
-          if input_seq_len is not None:
-            with tf.control_dependencies([tf.assert_equal(tf.reduce_max(input_seq_len), y_max_len,
-                ["RecLayer %r with sources %r." % (rec_layer.name, rec_layer.sources),
-                 " The length of the sources (", tf.reduce_max(input_seq_len),
-                 ") differ from the length of the target (", y_max_len, ")."])]):
-              y_max_len = tf.identity(y_max_len)
-        y_ta = tf.TensorArray(
-          name="y_ta",
-          dtype=y_data.dtype,
-          element_shape=tf.TensorShape(y_data.copy_template_excluding_time_dim().batch_shape),
-          size=y_max_len,
+      common_data_len = None  # used to check whether all extern data have same length
+      used_keys = self.net.used_data_keys.copy()
+      if rec_layer.target:
+        used_keys.add(rec_layer.target)  # we always need the target of the recurrent layer
+      for key in sorted(used_keys):
+        # TODO: Better check for train_flag.
+        # Maybe more generic via sampling options later.
+        if key == rec_layer.target and (
+            rec_layer.network.train_flag is False or self.parent_net.search_flag) and not rec_layer._cheating:
+          continue
+        data = rec_layer.network.get_extern_data(key, mark_data_key_as_used=True)
+        data_placeholder = data.get_placeholder_as_time_major()
+        with tf.name_scope("check_data_len"):
+          data_len = tf.shape(data_placeholder)[0]
+          if common_data_len is None:
+            # Check for first key if input length matches data length
+            if input_seq_len is not None:
+              with tf.control_dependencies([tf.assert_equal(tf.reduce_max(input_seq_len), data_len,
+                  ["RecLayer %r with sources %r:" % (rec_layer.name, rec_layer.sources),
+                   " The length of the sources (", tf.reduce_max(input_seq_len),
+                   ") differ from the length of the target ", key, "(", data_len, ")."])]):
+                data_len = tf.identity(data_len)
+            common_data_len = data_len
+          else:
+            # Check from second key on if data length is equal for all external data
+            with tf.control_dependencies([tf.assert_equal(common_data_len, data_len,
+                ["RecLayer %r:" % rec_layer.name, " The length of all targets (%s) " % ", ".join(used_keys),
+                 " has to be the same. Found length ", data_len, " for %s, which does not match length " % key,
+                 common_data_len, " of the other data."])]):
+              data_len = tf.identity(data_len)
+        data_ta = tf.TensorArray(
+          name=key + "_ta",
+          dtype=data.dtype,
+          element_shape=tf.TensorShape(data.copy_template_excluding_time_dim().batch_shape),
+          size=data_len,
           infer_shape=True)
-        y_ta = y_ta.unstack(y, name="y_ta_unstack")
+        data_ta = data_ta.unstack(data_placeholder, name="{}_ta_unstack".format(key))
+        data_tensor_arrays[key] = data_ta
         if max_seq_len is None:
-          max_seq_len = y_max_len
+          max_seq_len = common_data_len
 
       # Note: tf.while_loop() will not give us all intermediate outputs, but we want them.
       # tf.scan() would do that but tf.scan() will loop over some input sequence -
@@ -1525,12 +1538,12 @@ class _SubnetworkRecCell(object):
           for (k, v) in zip(sorted(self._initial_extra_outputs), prev_extra_flat)}
         with tf.name_scope("prev_extra"):
           prev_extra = identity_op_nested(prev_extra)
+        data = {key: ta.read(i, name="{}_ta_read".format(key)) for key, ta in data_tensor_arrays.items()}
         with reuse_name_scope(self.parent_rec_layer._rec_scope):
           self._construct(
             prev_outputs=prev_outputs, prev_extra=prev_extra,
             i=i,
-            data=x_ta.read(i, name="x_ta_read") if x_ta else None,
-            classes=y_ta.read(i, name="y_ta_read") if y_ta else None,
+            data=data,
             inputs_moved_out_tas=input_layers_moved_out_tas,
             needed_outputs=needed_outputs)
 
