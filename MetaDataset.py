@@ -759,15 +759,6 @@ class CombinedDataset(CachedDataset2):
       dataset.load_seqs(sub_start, sub_end + 1)
     super(CombinedDataset, self)._load_seqs(start=start, end=end)
 
-  def _check_dataset_seq(self, dataset, seq_idx): # TODO this check makes no sense here
-    """
-    :type dataset: Dataset
-    :type seq_idx: int
-    """
-    dataset_seq_tag = dataset.get_tag(seq_idx)
-    self_seq_tag = self.get_tag(seq_idx)
-    assert dataset_seq_tag == self_seq_tag
-
   def _get_data(self, dataset_key, dataset_seq_idx, data_key):
     """
     :type dataset_seq_idx: int
