@@ -55,7 +55,7 @@ class Dataset(object):
 
   def __init__(self, name=None,
                window=1, context_window=None, chunking=None,
-               seq_ordering='default', partition_epoch=None,
+               seq_ordering='default', partition_epoch=None, repeat_epoch=None,
                shuffle_frames_of_nseqs=0, min_chunk_size=0,
                estimated_num_seqs=None,):
     """
@@ -67,6 +67,9 @@ class Dataset(object):
     :param str seq_ordering: "batching"-option in config. e.g. "default", "sorted" or "random".
       See self.get_seq_order_for_epoch() for more details.
     :param int|None partition_epoch:
+    :param int|None repeat_epoch: Repeat the sequences in an epoch this many times. Useful to scale the dataset
+      relative to other datasets, e.g. when used in CombinedDataset. Not allowed to be used in combination with
+      partition_epoch.
     :param int shuffle_frames_of_nseqs: shuffles the frames. not always supported
     :param None|int estimated_num_seqs: for progress reporting in case the real num_seqs is unknown
     """
@@ -77,6 +80,10 @@ class Dataset(object):
     self.window = window
     self.seq_ordering = seq_ordering  # "default", "sorted" or "random". See self.get_seq_order_for_epoch().
     self.partition_epoch = partition_epoch or 1
+    self.repeat_epoch = repeat_epoch or 1
+    # There is probably no use case for combining the two, so avoid potential misconfiguration.
+    assert self.partition_epoch == 1 or self.repeat_epoch == 1, \
+        "Combining partition_epoch and repeat_epoch is prohibited."
     self.timestamps = None
     self.labels = {}; """ :type: dict[str,list[str]] """
     self.weights = {}
@@ -254,6 +261,7 @@ class Dataset(object):
     :rtype: list[int]
     """
     partition_epoch = self.partition_epoch or 1
+    repeat_epoch = self.repeat_epoch or 1
     if not epoch:
       epoch = 1
     full_epoch = epoch
@@ -314,6 +322,8 @@ class Dataset(object):
       assert len(partitions) == partition_epoch + 1
       seq_index = seq_index[partitions[current_partition]:partitions[current_partition + 1]]
       assert len(seq_index) == partition_sizes[current_partition]
+    if repeat_epoch > 1:
+      seq_index = seq_index * repeat_epoch
     return seq_index
 
   def init_seq_order(self, epoch=None, seq_list=None):
