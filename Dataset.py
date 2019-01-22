@@ -271,6 +271,8 @@ class Dataset(object):
     seq_index = list(range(num_seqs)); """ :type: list[int]. the real seq idx after sorting """
     if self.seq_ordering == 'default':
       pass  # Keep order as-is.
+    elif self.seq_ordering == 'reverse':
+      seq_index = list(reversed(seq_index))
     elif self.seq_ordering == 'sorted':
       assert get_seq_len
       seq_index.sort(key=get_seq_len)  # sort by length, starting with shortest
