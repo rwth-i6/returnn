@@ -315,17 +315,31 @@ class Dataset(object):
     else:
       assert False, "invalid batching specified: " + self.seq_ordering
     if partition_epoch > 1:
-      current_partition = ((epoch or 1) - 1) % partition_epoch
-      seqs_per_epoch = num_seqs // partition_epoch
-      partition_sizes = ([seqs_per_epoch + 1] * (num_seqs % partition_epoch) +
-                         [seqs_per_epoch] * (partition_epoch - num_seqs % partition_epoch))
-      assert sum(partition_sizes) == num_seqs and len(partition_sizes) == partition_epoch
-      partitions = functools.reduce(lambda a, x: a + [a[-1] + x], partition_sizes, [0])  # cumulative sum
-      assert len(partitions) == partition_epoch + 1
-      seq_index = seq_index[partitions[current_partition]:partitions[current_partition + 1]]
-      assert len(seq_index) == partition_sizes[current_partition]
+      seq_index = self._apply_partition_epoch(seq_index, partition_epoch, epoch)
     if repeat_epoch > 1:
       seq_index = seq_index * repeat_epoch
+    return seq_index
+
+  @classmethod
+  def _apply_partition_epoch(cls, seq_index, partition_epoch, epoch):
+    """
+    :param list[int] seq_index: full list of ordered sequence indices
+    :param int partition_epoch: number of partitions seq_index should be split into
+    :param int|None epoch: current epoch
+    :return: partition of seq_index for current epoch
+    :rtype: list[int]
+    """
+    num_seqs = len(seq_index)
+    current_partition = ((epoch or 1) - 1) % partition_epoch
+    seqs_per_epoch = num_seqs // partition_epoch
+    partition_sizes = ([seqs_per_epoch + 1] * (num_seqs % partition_epoch) +
+                       [seqs_per_epoch] * (partition_epoch - num_seqs % partition_epoch))
+    assert sum(partition_sizes) == num_seqs and len(partition_sizes) == partition_epoch
+    partitions = functools.reduce(lambda a, x: a + [a[-1] + x], partition_sizes, [0])  # cumulative sum
+    assert len(partitions) == partition_epoch + 1
+    seq_index = seq_index[partitions[current_partition]:partitions[current_partition + 1]]
+    assert len(seq_index) == partition_sizes[current_partition]
+
     return seq_index
 
   def init_seq_order(self, epoch=None, seq_list=None):
