@@ -1997,12 +1997,36 @@ class LinearLayer(_ConcatInputLayer):
         # Maybe optionally we could also use tf.contrib.layers.safe_embedding_lookup_sparse().
         x = tf.nn.embedding_lookup(W, to_int32_64(x))
         ndim += 1
-      else:
+      elif self.input_data.feature_dim_axis == self.input_data.batch_ndim - 1:
         x = dot(x, W)
+      elif self.input_data.is_batch_feature_major:
+        # Use conv instead, it has optimized code for batch-feature major.
+        x_shape = None
+        if self.input_data.batch_ndim > 3:
+          x_shape = tf.shape(x)
+          x_shape = [x_shape[i] for i in range(self.input_data.batch_ndim)]
+          x = tf.reshape(x, [x_shape[0], n_in, tf.reduce_prod(x_shape[2:])])  # (B,n_in,x)
+        x = tf.nn.conv1d(
+          x,  # (B,n_in,x)
+          filters=tf.expand_dims(W, 0),  # (1,n_in,n_out)
+          stride=1, padding='SAME', data_format="NCW")  # (B,n_out,x)
+        if self.input_data.batch_ndim > 3:
+          x = tf.reshape(x, x_shape[:1] + [n_out] + x_shape[2:])  # (B,n_out,...)
+      else:
+        raise Exception("%s: does not support input format %r" % (self, self.input_data))
       assert x.get_shape().ndims == ndim
 
       if self.with_bias:
-        x = tf.add(x, b, name="add_bias")
+        if self.input_data.sparse or self.input_data.feature_dim_axis == self.input_data.batch_ndim - 1:
+          x = tf.add(x, b, name="add_bias")
+        else:
+          b_bc_shape = (
+            ([1] * self.input_data.feature_dim_axis) +
+            [n_out] +
+            ([1] * (self.input_data.batch_ndim - self.input_data.feature_dim_axis - 1)))
+          assert len(b_bc_shape) == self.input_data.batch_ndim == x.get_shape().ndims
+          b_bc = tf.reshape(b, b_bc_shape)
+          x = tf.add(x, b_bc, name="add_bias")
         assert x.get_shape().ndims == ndim
 
     if grad_filter:
