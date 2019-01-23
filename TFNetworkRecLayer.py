@@ -4618,3 +4618,279 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
       new_h = self._norm(new_h, name='new_h')
 
     return new_h, rnn_cell.LSTMStateTuple(new_c, new_h)
+
+
+class TwoDLSTMLayer(LayerBase):
+  layer_class = "twod_lstm"
+  recurrent = True
+
+  def __init__(self,
+               pooling='last',
+               unit_opts=None,
+               forward_weights_init=None, recurrent_weights_init=None, bias_init=None,
+               **kwargs):
+    """
+    :param str pooling: defines how the 1D return value is computed based on the 2D lstm result. Either 'last' or 'max'
+    :param None|dict[str] unit_opts: passed to RNNCell creation
+    :param str forward_weights_init: see :func:`TFUtil.get_initializer`
+    :param str recurrent_weights_init: see :func:`TFUtil.get_initializer`
+    :param str bias_init: see :func:`TFUtil.get_initializer`
+    """
+    super(TwoDLSTMLayer, self).__init__(**kwargs)
+    import re
+    from TFUtil import is_gpu_available
+    from tensorflow.contrib import rnn as rnn_contrib
+    from tensorflow.python.util import nest
+    if is_gpu_available():
+      from tensorflow.contrib import cudnn_rnn
+    else:
+      assert False, "currently, there's no CPU support"
+    self.pooling = pooling
+    # On the random initialization:
+    # For many cells, e.g. NativeLSTM: there will be a single recurrent weight matrix, (output.dim, output.dim * 4),
+    # and a single input weight matrix (input_data.dim, output.dim * 4), and a single bias (output.dim * 4,).
+    # The bias is by default initialized with 0.
+    # In the Theano :class:`RecurrentUnitLayer`, create_recurrent_weights() and create_forward_weights() are used,
+    #   where forward_weights_init = "random_uniform(p_add=%i)" % (output.dim * 4)
+    #   and recurrent_weights_init = "random_uniform()",
+    #   thus with in=input_data.dim, out=output.dim,
+    #   for forward weights: uniform sqrt(6. / (in + out*8)), for rec. weights: uniform sqrt(6. / (out*5)).
+    # TensorFlow initializers:
+    #   https://www.tensorflow.org/api_guides/python/contrib.layers#Initializers
+    #   https://www.tensorflow.org/api_docs/python/tf/orthogonal_initializer
+    #   https://github.com/tensorflow/tensorflow/blob/master/tensorflow/python/ops/init_ops.py
+    #   xavier_initializer with uniform=True: uniform sqrt(6 / (fan_in + fan_out)),
+    #     i.e. uniform sqrt(6. / (in + out*4)) for forward, sqrt(6./(out*5)) for rec.
+    #     Ref: https://www.tensorflow.org/api_docs/python/tf/contrib/layers/xavier_initializer
+    # Keras uses these defaults:
+    #   Ref: https://github.com/fchollet/keras/blob/master/keras/layers/recurrent.py
+    #   Ref: https://keras.io/initializers/, https://github.com/fchollet/keras/blob/master/keras/engine/topology.py
+    #   (fwd weights) kernel_initializer='glorot_uniform', recurrent_initializer='orthogonal',
+    #   where glorot_uniform is sqrt(6 / (fan_in + fan_out)), i.e. fwd weights: uniform sqrt(6 / (in + out*4)),
+    #   and orthogonal creates a random orthogonal matrix (fan_in, fan_out), i.e. rec (out, out*4).
+    self._bias_initializer = tf.constant_initializer(0.0)
+    self._fwd_weights_initializer = None
+    self._rec_weights_initializer = None
+    from TFUtil import get_initializer, xavier_initializer
+    if forward_weights_init is not None:
+      self._fwd_weights_initializer = get_initializer(
+        forward_weights_init, seed=self.network.random.randint(2**31), eval_local_ns={"layer": self})
+    if recurrent_weights_init is not None:
+      self._rec_weights_initializer = get_initializer(
+        recurrent_weights_init, seed=self.network.random.randint(2**31), eval_local_ns={"layer": self})
+    if bias_init is not None:
+      self._bias_initializer = get_initializer(
+        bias_init, seed=self.network.random.randint(2**31), eval_local_ns={"layer": self})
+    if self._rec_weights_initializer:
+      default_var_initializer = self._rec_weights_initializer
+    elif self._fwd_weights_initializer:
+      default_var_initializer = self._fwd_weights_initializer
+    else:
+      default_var_initializer = xavier_initializer(seed=self.network.random.randint(2**31))
+    with reuse_name_scope("rec-twod", initializer=default_var_initializer) as scope:
+      assert isinstance(scope, tf.VariableScope)
+      self._rec_scope = scope
+      scope_name_prefix = scope.name + "/"  # e.g. "layer1/rec/"
+      with self.var_creation_scope():
+        self.cell = self._get_cell(unit_opts=unit_opts)
+
+      # this must not be part of var_creation_scope - otherwise the used operations appear to TF to be used outside
+      # of the while loop, leading to errors
+      y = self._get_output_native_rec_op(self.cell)
+
+      self.output.placeholder = y
+
+      # Very generic way to collect all created params.
+      # Note that for the TF RNN cells, there is no other way to do this.
+      # Also, see the usage of :func:`LayerBase.cls_layer_scope`, e.g. for initial vars.
+      params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=re.escape(scope_name_prefix))
+      self._add_params(params=params, scope_name_prefix=scope_name_prefix)
+
+  @classmethod
+  def get_out_data_from_opts(cls, sources, n_out, name, **kwargs):
+    assert len(sources) == 2, "Exactly 2 sources (x and y axis) have to be specified."
+    batch_dim_axis = sources[1].output.batch_dim_axis
+    time_dim_axis = sources[1].output.time_dim_axis
+    shape = sources[1].output.shape[:-1] + (n_out,)
+    size_placeholder = sources[1].output.size_placeholder.copy()
+    beam_size = sources[0].output.beam_size
+    dtype = "float32"
+    available_for_inference = all([(src.output.available_for_inference) for src in sources])
+
+    return Data(
+      name="%s_output" % name,
+      shape=shape,
+      batch_dim_axis=batch_dim_axis,
+      time_dim_axis=time_dim_axis,
+      size_placeholder=size_placeholder,
+      available_for_inference=available_for_inference,
+      dtype=dtype,
+      beam_size = beam_size,
+      sparse=False)
+
+  def _add_params(self, scope_name_prefix, params):
+    """
+    :param str scope_name_prefix:
+    :param list[tf.Variable] params:
+    """
+    for p in params:
+      if not p.name.startswith(scope_name_prefix):
+        continue
+      assert p.name.startswith(scope_name_prefix) and p.name.endswith(":0")
+      self.params[p.name[len(scope_name_prefix):-2]] = p
+
+  def _get_input(self):
+    """
+    :return: (x, seq_len), where x is (time,batch,...,dim) and seq_len is (batch,)
+    :rtype: (tf.Tensor, tf.Tensor)
+    """
+    assert len(self.sources) == 2
+    assert self.sources[0].output
+    assert self.sources[1].output
+    x = self.sources[0].output.get_placeholder_as_time_major()  # (time,batch,[dim])
+    seq_len_src = self.sources[0].output.get_sequence_lengths()
+
+    return x, seq_len_src
+
+  def get_constraints_value(self):
+    v = super(TwoDLSTMLayer, self).get_constraints_value()
+    from TFUtil import optional_add
+    if isinstance(self.cell, _SubnetworkRecCell):
+      for layer in self.cell.net.layers.values():
+        v = optional_add(v, layer.get_constraints_value())
+    return v
+
+  def _get_cell(self, unit_opts=None):
+    """
+    :param None|dict[str] unit_opts:
+    :rtype: _SubnetworkRecCell|tensorflow.contrib.rnn.RNNCell|tensorflow.contrib.rnn.FusedRNNCell|TFNativeOp.RecSeqCellOp
+    """
+    import TFNativeOp
+    rnn_cell_class = TFNativeOp.TwoDNativeLstmCell
+    n_hidden = self.output.dim
+    if unit_opts is None:
+      unit_opts = {}
+
+    assert not self.sources[0].output.sparse
+    n_input_dim_parts = [self.sources[0].output.dim, self.sources[1].output.dim]
+    cell = rnn_cell_class(
+      n_hidden=n_hidden, n_input_dim=sum(n_input_dim_parts), n_input_dim_parts=n_input_dim_parts,
+      input_is_sparse=self.sources[0].output.sparse,
+      pooling=self.pooling,
+      **unit_opts)
+    return cell
+
+  @classmethod
+  def helper_extra_outputs(cls, batch_dim, src_length, features):
+    return {"state": tf.zeros([batch_dim, 1, src_length, 5 * features]),
+            "output": tf.zeros([batch_dim, 1, src_length, features]),
+            "iteration": tf.zeros([batch_dim])}
+
+  @classmethod
+  def get_rec_initial_extra_outputs(cls, batch_dim, n_out, sources, **kwargs):
+    if sources[1].output.time_dim_axis is None:
+      assert sources[0].output.time_dim_axis is not None
+      src_length = tf.reduce_max(sources[0].output.get_sequence_lengths())
+      return cls.helper_extra_outputs(batch_dim, src_length, n_out)
+    else:
+      return {}
+
+  @classmethod
+  def get_rec_initial_extra_outputs_shape_invariants(cls, n_out, sources, **kwargs):
+    """
+    :return: optional shapes for the tensors by get_rec_initial_extra_outputs
+    :rtype: dict[str,tf.TensorShape]
+    """
+    if sources[1].output.time_dim_axis is None:
+      batch_dim = None
+      src_length = None
+
+      return {"state": tf.TensorShape((batch_dim, 1, src_length, 5 * n_out)),
+              "output": tf.TensorShape((batch_dim, 1, src_length, n_out)),
+              "iteration": tf.TensorShape((batch_dim,))}
+    else:
+      return {}
+
+  def _get_output_native_rec_op(self, cell):
+    """
+    :param TFNativeOp.RecSeqCellOp cell:
+    :return: output of shape (time, batch, dim)
+    :rtype: tf.Tensor
+    """
+    from TFUtil import dot, sequence_mask_time_major, directed, to_int32_64, set_param_axes_split_info
+
+    assert self.sources[0].output
+    x, seq_len_src = self._get_input()
+    if cell.does_input_projection:
+      # The cell get's x as-is. It will internally does the matrix mult and add the bias.
+      pass
+    else:
+      W = tf.get_variable(
+        name="W", shape=(self.sources[0].output.dim, cell.n_input_dim), dtype=tf.float32,
+        initializer=self._fwd_weights_initializer)
+      if self.sources[0].output.sparse:
+        x = tf.nn.embedding_lookup(W, to_int32_64(x))
+      else:
+        x = dot(x, W)
+      b = tf.get_variable(name="b", shape=(cell.n_input_dim,), dtype=tf.float32, initializer=self._bias_initializer)
+      if len(cell.n_input_dim_parts) > 1:
+        set_param_axes_split_info(W, [[self.sources[0].output.dim], cell.n_input_dim_parts])
+        set_param_axes_split_info(b, [cell.n_input_dim_parts])
+      x += b
+    index_src = sequence_mask_time_major(seq_len_src, maxlen=self.sources[0].output.time_dimension())
+
+    # If the target does not have a time dimension, we have to add it
+    if self.sources[1].output.time_dim_axis is None:
+      targets = self.sources[1].output.get_placeholder_as_batch_major()  # (batch, trg_features)
+      targets = tf.expand_dims(targets, 0)  # (1, batch, trg_features)
+    else:
+      targets = self.sources[1].output.get_placeholder_as_time_major()  # (trg_length, batch, trg_features)
+
+    if self._rec_previous_layer:
+      previous_state = self._rec_previous_layer.rec_vars_outputs["state"]  # (batch, 1, src_length, n_hidden)
+      previous_output = self._rec_previous_layer.rec_vars_outputs["output"]  # (batch, 1, src_length, n_hidden)
+      iteration = self._rec_previous_layer.rec_vars_outputs["iteration"]  # (batch,)
+    else:
+      batch_dim = tf.shape(targets)[1]
+      sources = self.sources[0].output.get_placeholder_as_time_major()
+      src_length = tf.shape(sources)[0]
+      features = tf.shape(sources)[2]
+      initial_values = TwoDLSTMLayer.helper_extra_outputs(batch_dim, src_length, features)
+
+      previous_state = initial_values["state"]    # (batch, 1, src_length, n_hidden)
+      previous_output = initial_values["output"]  # (batch, 1, src_length, n_hidden)
+      iteration = initial_values["iteration"]     # (batch,)
+
+
+    # to support the selection of the correct previous states and outputs, they have to be stored in batch mayor format
+    # the c code needs them to be in time mayor (trg, src) format, so we have to swap the axes
+    previous_state = tf.transpose(previous_state, perm=[1,2,0,3])    # (1, src_length, batch, n_hidden)
+    previous_output = tf.transpose(previous_output, perm=[1,2,0,3])  # (1, src_length, batch, n_hidden)
+
+    y, complete_output, final_state = cell(
+      source=x, src_mask=index_src,
+      recurrent_weights_initializer=self._rec_weights_initializer,
+      target=targets,
+      previous_state=previous_state,
+      previous_output=previous_output,
+      iteration=iteration)
+    # y (trg_length, batch, n_hidden)
+    # complete_out (trg_length, src_length, batch, n_hidden)
+    # final_state (trg_length, src_length, batch, n_hidden*5)
+
+    # swap axes again, to get back to the batch mayor format that's required by RETURNN
+    final_state = tf.transpose(final_state, perm=[2,0,1,3])          # (batch, trg_length, src_length, features)
+    complete_output = tf.transpose(complete_output, perm=[2,0,1,3])  # (batch, trg_length, src_length, features)
+
+    final_state = final_state[:,-1:,:,:]          # (batch, 1, src_length, features)
+    complete_output = complete_output[:,-1:,:,:]  # (batch, 1, src_length, features)
+
+    self.rec_vars_outputs["state"] = final_state
+    self.rec_vars_outputs["output"] = complete_output
+    self.rec_vars_outputs["iteration"] = iteration + 1
+
+    # during inference, the 2D result has target length 1. This dimension has to be removed to be conform with RETURNN
+    if self.network.have_rec_step_info():
+      y = y[0]
+
+    return y

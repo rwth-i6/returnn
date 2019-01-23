@@ -1162,7 +1162,8 @@ class TFNetwork(object):
     """
     from TFNetworkRecLayer import RecStepInfoLayer, _SubnetworkRecCell
     rec_layer = self.get_rec_parent_layer()
-    if not rec_layer:
+    # the second condition is true if all layers have been optimized out of the rec layer
+    if not rec_layer or len(rec_layer.cell.layers_in_loop) == 0:
       assert not must_exist, "%s: We expect to be the subnet of a RecLayer, but we are not." % self
       return None
     assert isinstance(rec_layer.cell, _SubnetworkRecCell)
