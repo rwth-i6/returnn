@@ -5348,6 +5348,9 @@ class Loss(object):
       return flatten_with_seq_len_mask(x, seq_lens, time_major=time_major)
     x_shape = tf.shape(x)
     x_shape = [x_shape[i] for i in range(x.get_shape().ndims)]
+    if time_major:
+      from TFUtil import swapaxes
+      x = swapaxes(x, 0, 1)  # (B,T,...)
     return tf.reshape(x, [x_shape[0] * x_shape[1]] + x_shape[2:], name="merge_batch_time")
 
   def init(self, output, output_with_activation=None, target=None, layer=None):
