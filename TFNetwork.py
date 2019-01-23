@@ -466,6 +466,8 @@ class TFNetwork(object):
         layer.output.sanity_check()
       except TypeError:
         help_on_type_error_wrong_args(cls=layer_class, kwargs=list(layer_desc.keys()))
+        print("TypeError creating layer %s/%r of class %s with opts:" % (self.name, name, layer_class.__name__))
+        pprint(layer_desc)
         raise
       except Exception:
         print("Exception creating layer %s/%r of class %s with opts:" % (self.name, name, layer_class.__name__))
