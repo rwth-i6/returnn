@@ -1,4 +1,3 @@
-
 from __future__ import print_function
 
 import tensorflow as tf
@@ -4362,6 +4361,11 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
 
   Recurrent dropout is based on:
         https://arxiv.org/abs/1603.05118
+
+  Prohibited LN combinations:
+  - global_norm and global_norm_joined both enabled
+  - per_gate_norm with global_norm or global_norm_joined
+
   """
 
   def __init__(self,
@@ -4383,7 +4387,6 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
                hidden_norm=False,
                variance_epsilon=1e-12):
     """
-
     :param int num_units: number of lstm units
     :param float norm_gain: layer normalization gain value
     :param float norm_shift: layer normalization shift (bias) value
@@ -4437,6 +4440,15 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
     self.hidden_norm = hidden_norm
     self.variance_epsilon = variance_epsilon
 
+    assert not (self.global_norm_joined and self.global_norm), \
+      'global_norm and global_norm_joined can not be enabled together'
+
+    assert not (self.per_gate_norm and self.global_norm), \
+      'per_gate_norm can not be enabled with global_norm'
+
+    assert not (self.per_gate_norm and self.global_norm_joined), \
+      'per_gate_norm can not be enabled with global_norm_joined'
+
   @property
   def output_size(self):
     return self._num_units
@@ -4445,11 +4457,12 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
   def state_size(self):
     return rnn_cell.LSTMStateTuple(self._num_units, self._num_units)
 
-  def _norm(self, inputs, with_beta=True, name=None):
+  def _norm(self, inputs, with_beta=True, add_forget_bias=False, name=None):
     """
     :param tf.Tensor inputs: (B,D), or (T,B,D)
-    :param bool with_beta:
-    :param str name:
+    :param bool with_beta: if True, then add norm shift to the normalized inputs
+    :param bool add_forget_bias: if True, then add forget bias to the initializer
+    :param str name: variable scope name
     :return: (B,D) or (T,B,D)
     :rtype: tf.Tensor
     """
@@ -4457,23 +4470,26 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
     from TFUtil import var_creation_scope
     shape = inputs.get_shape()[-1:]
     gamma_init = tf.constant_initializer(self.norm_grain)
-    beta_init = tf.constant_initializer(self.norm_shift)
+    beta_init = self.norm_shift
+    if add_forget_bias and self.forget_bias > 0:
+      beta_init += self.forget_bias
     mean, variance = tf.nn.moments(inputs, axes=[-1], keep_dims=True)
     normalized_input = (inputs - mean) * tf.rsqrt(variance + self.variance_epsilon)
     with var_creation_scope():
       g = tf.get_variable("gamma_" + name, shape=shape, initializer=gamma_init)
-      s = tf.get_variable("beta_" + name, shape=shape, initializer=beta_init) if with_beta else None
+      s = tf.get_variable("beta_" + name, shape=shape, initializer=tf.constant_initializer(beta_init)) if with_beta else None
     y = normalized_input * g
     if with_beta:
       y += s
     return y
 
-  def _linear(self, inputs, out_dim, apply_bias=True, name=None):
+  def _linear(self, inputs, out_dim, apply_bias=True, add_forget_bias=False, name=None):
     """
     :param tf.Tensor inputs: (B,D), or (T,B,D)
-    :param int out_dim:
-    :param bool apply_bias:
-    :param str name:
+    :param int out_dim: transformed inputs dimension
+    :param bool apply_bias: if True, then add bias to transformed inputs
+    :param bool add_forget_bias: if True, then forget bias is added for forget gates
+    :param str name: weight variable scope name
     :return: (B,out_dim) or (T,B,out_dim)
     :rtype: tf.Tensor
     """
@@ -4486,11 +4502,11 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
     out = dot(inputs, weights)
     if apply_bias:
       with var_creation_scope():
-        bias = tf.get_variable("bias_" + name, shape=[out_dim])
-        # add forget bias
-        if self.forget_bias:
+        bias_init = [0.0] * out_dim
+        if add_forget_bias and self.forget_bias > 0:
           assert 4 * self._num_units == out_dim
-          bias[2*self._num_units:3*self._num_units] += self.forget_bias
+          bias_init[2*self._num_units:3*self._num_units] = [self.forget_bias] * self._num_units
+        bias = tf.get_variable("bias_" + name, shape=[out_dim], initializer=tf.constant_initializer(bias_init))
       out = tf.nn.bias_add(out, bias)
     return out
 
@@ -4513,6 +4529,7 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
         # 0. if [keep_prob, 1.0) and 1. if [1.0, 1.0 + keep_prob)
         binary_tensor = tf.floor(random_tensor)
         return binary_tensor * (1.0 / keep_prob)
+
       return cond(self.is_training, get_mask, lambda: 1.0)
 
   def _optional_dropout(self, x, dropout):
@@ -4534,10 +4551,15 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
     if self.with_concat:  # concat inputs, prev_h
       assert not self.global_norm, "%s: global_norm and with_concat together not supported" % self
       return inputs
-    inputs = self._linear(
-      inputs, 4 * self._num_units, apply_bias=not self.global_norm and not self.global_norm_joined, name='ff')
+    inputs = self._linear(inputs,
+                          4 * self._num_units,
+                          apply_bias=not self.global_norm and not self.global_norm_joined and not self.per_gate_norm,
+                          add_forget_bias=not self.per_gate_norm,
+                          name='ff')
     if self.global_norm:
-      inputs = self._norm(inputs, name='input_below', with_beta=not self.global_norm_joined)
+      # `global_norm_joined` will not be enabled so it is safe to add beta
+      # `per_gate_norm` will not be enabled so it is safe to add forget_bias
+      inputs = self._norm(inputs, add_forget_bias=True, name='input_below')
     return inputs
 
   def __call__(self, inputs, state, scope=None):
@@ -4555,7 +4577,11 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
     if self.with_concat:
       assert not self.global_norm
       concat_input = tf.concat([inputs, prev_h], axis=-1)
-      lstm_in = self._linear(concat_input, 4 * self._num_units, apply_bias=not self.global_norm, name='ff_re')
+      lstm_in = self._linear(concat_input,
+                             4 * self._num_units,
+                             apply_bias=not self.per_gate_norm and not self.global_norm_joined,
+                             add_forget_bias=True,
+                             name='ff_re')
     else:
       # The input is already transformed by `get_input_transformed` function
       input_below = inputs
@@ -4566,14 +4592,14 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
         state_below = self._norm(state_below, name='state_below', with_beta=False)
       lstm_in = tf.add(input_below, state_below)
     if self.global_norm_joined:
-      lstm_in = self._norm(lstm_in, name='lstm_in')
+      lstm_in = self._norm(lstm_in, add_forget_bias=True, name='lstm_in')
 
     i, j, f, o = tf.split(lstm_in, num_or_size_splits=4, axis=-1)
 
     if self.per_gate_norm:
       i = self._norm(i, name='i_gate')
       j = self._norm(j, name='j_gate')
-      f = self._norm(f, name='f_gate')
+      f = self._norm(f, add_forget_bias=True, name='f_gate')
       o = self._norm(o, name='o_gate')
 
     g = self._optional_dropout(self.activation(j), dropout=self.dropout)
