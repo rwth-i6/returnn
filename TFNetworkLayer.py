@@ -1947,9 +1947,8 @@ class LinearLayer(_ConcatInputLayer):
   """
   layer_class = "linear"
 
-  def __init__(self, activation, with_bias=True, grad_filter=None,
-               forward_weights_init="glorot_uniform", bias_init=0.0,
-               **kwargs):
+  def __init__(self, activation, with_bias=True, grad_filter=None, forward_weights_init="glorot_uniform",
+               bias_init=0.0, use_transposed_weight=False, **kwargs):
     """
     :param str|None activation: e.g. "relu", or None
     :param bool with_bias:
@@ -1957,12 +1956,14 @@ class LinearLayer(_ConcatInputLayer):
     :param str forward_weights_init: see :func:`TFUtil.get_initializer`
     :param str recurrent_weights_init: see :func:`TFUtil.get_initializer`
     :param str|float bias_init: see :func:`TFUtil.get_initializer`
+    :param bool use_transposed_weight: If True, define the weight matrix with transposed dimensions (n_out, n_in).
     """
     super(LinearLayer, self).__init__(**kwargs)
     from TFUtil import get_initializer
 
     self.activation = activation
     self.with_bias = with_bias
+    self.use_transposed_weight = use_transposed_weight
 
     input_data = self.input_data
     n_in = input_data.dim
@@ -1976,8 +1977,16 @@ class LinearLayer(_ConcatInputLayer):
       #  Or use VarianceScaling(scale=6.0, mode="fan_avg", distribution="normal") to get the same as in Theano.
       fwd_weights_initializer = get_initializer(
         forward_weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
+      if self.use_transposed_weight:
+        weight_shape = (n_out, n_in)
+      else:
+        weight_shape = (n_in, n_out)
+
       W = self.add_param(tf.get_variable(
-        name="W", shape=(n_in, n_out), dtype=tf.float32, initializer=fwd_weights_initializer))
+        name="W", shape=weight_shape, dtype=tf.float32, initializer=fwd_weights_initializer))
+
+      if self.use_transposed_weight:
+        W = tf.transpose(W)
 
       if self.with_bias:
         bias_initializer = get_initializer(
