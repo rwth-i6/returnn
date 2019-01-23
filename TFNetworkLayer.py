@@ -6528,7 +6528,7 @@ class SamplingBasedLoss(Loss):
 
         mask = self.target.get_sequence_mask()  # [B, T].
         mask = tf.transpose(mask)  # [T, B].
-        mask = tf.reshape(mask, [-1])  # [T * B, 1]
+        mask = tf.reshape(mask, [-1])  # [T * B]
         out = tf.where(mask, out, tf.zeros(tf.shape(out)))
         return out
 
