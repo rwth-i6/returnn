@@ -190,6 +190,80 @@ static void tf_cuda_sgemm(
 #endif  // GOOGLE_CUDA
 }
 
+// This method can be used to perform multiple matrix-matrix multiplications in parallel
+// One possible use-case is the 2D-LSTM layer: There, for performance reasons, a whole diagonal of states are computed
+// in parallel.
+template<typename T>
+static void tf_cuda_sgemm_batched(
+        OpKernelContext* context,
+        char transa, char transb,
+        int m, int n, int k,
+        const T* alpha_, const T** in_x, int lda,
+        const T** in_y, int ldb, const T* beta_,
+        const T** out,
+        int ldc,
+        int batchSize,
+        bool finalize_stream = 0) {
+    T alpha = *alpha_;
+    T beta = *beta_;
+// https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/rnn/kernels/blas_gemm.cc
+#if GOOGLE_CUDA
+    typedef perftools::gputools::DeviceMemory<float> DeviceMemoryType;
+    std::vector<DeviceMemoryType> a_device_memory;
+    std::vector<DeviceMemoryType> b_device_memory;
+    std::vector<DeviceMemoryType> c_device_memory;
+    std::vector<DeviceMemoryType*> a_ptrs;
+    std::vector<DeviceMemoryType*> b_ptrs;
+    std::vector<DeviceMemoryType*> c_ptrs;
+    a_device_memory.reserve(batchSize);
+    b_device_memory.reserve(batchSize);
+    c_device_memory.reserve(batchSize);
+    a_ptrs.reserve(batchSize); // (b, m, k)
+    b_ptrs.reserve(batchSize); // (b, k, n)
+    c_ptrs.reserve(batchSize); // (b, m, n)
+
+    for (int64 i = 0; i < batchSize; ++i) {
+      a_device_memory.push_back(AsDeviceMemory(in_x[i]));
+      b_device_memory.push_back(AsDeviceMemory(in_y[i]));
+      c_device_memory.push_back(AsDeviceMemory(out[i]));
+      a_ptrs.push_back(&a_device_memory.back());
+      b_ptrs.push_back(&b_device_memory.back());
+      c_ptrs.push_back(&c_device_memory.back());
+    }
+
+    cudaStream_t cuda_stream = context->eigen_gpu_device().stream();
+
+    // cublasCreate, http://docs.nvidia.com/cuda/cublas/#cublascreate
+
+    auto dev_ctx = context->op_device_context();
+    perftools::gputools::Stream* dev_stream = dev_ctx->stream();
+    OP_REQUIRES(context, dev_stream, errors::Internal("No GPU stream available."));
+
+    bool blas_launch_status =
+        dev_stream
+             ->ThenBlasGemmBatched(get_transpose(transa), get_transpose(transb),
+                            (uint64)m, (uint64)n, (uint64)k, alpha, a_ptrs,
+                            lda, b_ptrs, ldb, beta, c_ptrs, ldc, batchSize)
+             .ok();
+    OP_REQUIRES(context, blas_launch_status, errors::Aborted("CuBlasGemm failed!"));
+
+    // The above call to ThenBlasGemmBatched allocates temporary memory on the GPU
+    // This memory is only freed once the stream is "finalized", which might not happen automatically
+    // Therefore, if the flag is set, we force a synchronization. This is bad for the performance, so it should be
+    // done as seldom as possible
+    if(finalize_stream) {
+        blas_launch_status =
+            dev_stream
+                ->BlockHostUntilDone()
+                .ok();
+        OP_REQUIRES(context, blas_launch_status, errors::Aborted("BlockHostUntilDone failed!"));
+    }
+#else  // GOOGLE_CUDA
+    context->SetStatus(errors::InvalidArgument("CuBlasGemm needs CUDA."));
+#endif  // GOOGLE_CUDA
+}
+
+
 #if CUDA
 #if !GOOGLE_CUDA
 #error "GOOGLE_CUDA not defined"
@@ -200,6 +274,12 @@ static void tf_cuda_sgemm(
 	transpose_A, transpose_B, \
 	m, n, k, alpha, A, lda, B, ldb, beta, C, ldc) \
     tf_cuda_sgemm<float>(context, transpose_A, transpose_B, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc);
+
+#define Ndarray_sgemm_batched( \
+	transpose_A, transpose_B, \
+	m, n, k, alpha, A, lda, B, ldb, beta, C, ldc, batchSize, finalize_stream) \
+    tf_cuda_sgemm_batched<float>(context, transpose_A, transpose_B, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc, batchSize, finalize_stream);
+
 
 #else  // CUDA
 /*
