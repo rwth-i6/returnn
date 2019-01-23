@@ -728,8 +728,8 @@ class RecLayer(_ConcatInputLayer):
 
   def get_sub_layer(self, layer_name):
     """
-    :param str layer_name:  The sub_layer addressed by '/' separated path.
-    :return: The sub_layer addressed in layer_name or None if no sub_layer exists
+    :param str layer_name: name of the sub_layer (right part of '/' separated path)
+    :return: the sub_layer addressed in layer_name or None if no sub_layer exists
     :rtype: LayerBase|None
     """
     if isinstance(self.cell, _SubnetworkRecCell):
@@ -862,6 +862,16 @@ class _SubnetworkRecCell(object):
           if construct_ctx.layers:
             construct_ctx.layers[-1].dependencies.add(layer)
           return layer
+        if '/' in name:
+          # this is probably a path to a sub-layer
+          root_name = name.split('/')[0]
+          root_layer = lself.__call__(root_name)  # get the root-layer (first part of the path)
+          sub_layer = root_layer.get_sub_layer('/'.join(name.split('/')[1:]))  # get the sub-layer from the root-layer
+          if sub_layer:  # get_sub_layer returns None by default (if sub-layer not found)
+            # add to templates so we will collect output in self.get_output if this is an output layer
+            self.layer_data_templates[name] = sub_layer
+            sub_layer.dependencies.add(root_layer)
+            return sub_layer
         # Need to create layer instance here now to not run into recursive loops.
         # We will extend it later in add_templated_layer().
         if name in self.layer_data_templates:  # might exist already
@@ -1071,12 +1081,13 @@ class _SubnetworkRecCell(object):
       if layer_name in self.input_layers_moved_out + self.output_layers_moved_out:
         continue
       get_layer(layer_name)
-      assert layer_name in self.net.layers
+      if '/' not in layer_name:  # sub-layers are not in self.net
+        assert layer_name in self.net.layers
 
   def get_layer_from_outside(self, layer_name):
     """
-    :param str layer_name: The sub_layer addressed by '/' separated path.
-    :return: The sub_layer addressed in layer_name or None if no sub_layer exists
+    :param str layer_name: name of the sub_layer (addressed by '/' separated path)
+    :return: the sub_layer addressed in layer_name or None if no sub_layer exists
     :rtype: LayerBase|None
     """
     if self.output_layers_net and layer_name in self.output_layers_net.layers:
@@ -1342,7 +1353,7 @@ class _SubnetworkRecCell(object):
           name=name,
           dtype=self.layer_data_templates[layer_name].output.dtype,
           element_shape=self.layer_data_templates[layer_name].output.batch_shape,
-          get=lambda: self.net.layers[layer_name].output.placeholder))
+          get=lambda: self.net.get_layer(layer_name).output.placeholder))
 
       for name, template in self.layer_data_templates.items():
         if template.is_output_layer():
@@ -1505,7 +1516,7 @@ class _SubnetworkRecCell(object):
             # Create only Tensor arrays for those which we use inside the loop.
             if not self._input_layer_used_inside_loop(layer_name):
               continue
-            layer = self.input_layers_net.layers[layer_name]
+            layer = self.input_layers_net.get_layer(layer_name)
             assert isinstance(layer, LayerBase)
             # Only unroll if that is the same time dim.
             if not rec_layer.output.is_same_time_dim(layer.output):
@@ -2016,7 +2027,8 @@ class _SubnetworkRecCell(object):
       print("  %s: (#: %i)" % (s, len(l)), file=log_stream)
       for layer_name in l:
         print("    %s" % layer_name, file=log_stream)
-        remaining_layers.remove(layer_name)
+        if '/' not in layer_name:  # sub-layers are not in the net_dict
+          remaining_layers.remove(layer_name)
       if not l:
         print("    None", file=log_stream)
 
@@ -2181,7 +2193,7 @@ class _SubnetworkRecCell(object):
       if name.startswith("base:"):
         return self.parent_net.get_layer(name[len("base:"):])
       if name in self.input_layers_moved_out:
-        return self.input_layers_net.layers[name]
+        return self.input_layers_net.get_layer(name)
       if name in self.output_layers_moved_out or name.startswith("data:"):
         return self.output_layers_net.construct_layer(self.net_dict, name=name, get_layer=get_layer)
       # It means that the layer is inside the loop.
@@ -2259,6 +2271,29 @@ class _TemplateLayer(LayerBase):
     if self._has_search_choices():
       self.search_choices = SearchChoices(owner=self, beam_size=self._get_search_choices_beam_size())
     self.collocate_with = kwargs.get("collocate_with", None) or []
+
+  def get_sub_layer(self, layer_name):
+    """
+    Creates a sub-layer template using self.layer_class_type.get_sub_layer_out_data_from_opts().
+
+    :param str layer_name: name of the sub_layer (right part of '/' separated path)
+    :return: template for the sub-layer
+    :rtype: _TemplateLayer
+    """
+    full_layer_name = self.name + '/' + layer_name
+
+    # In general, we don't know which information is needed to create the sub-layer template, so provide full kwargs
+    # from the parent layer.
+    res = self.layer_class_type.get_sub_layer_out_data_from_opts(layer_name, self.kwargs)
+    assert res, "Could not get out data for sub-layer template {}.".format(full_layer_name)
+    output, network, sub_layer_class = res
+
+    sub_layer_template = _TemplateLayer(self.network, full_layer_name)
+    is_output_layer = self.is_output_layer()  # make sub-layers output layers too
+    collocate_with = [self]  # we cannot move a sub-layer out of the loop, if parent is inside
+    sub_layer_template.init(output, sub_layer_class, is_output_layer=is_output_layer, collocate_with=collocate_with,
+                            name=full_layer_name, network=network)
+    return sub_layer_template
 
   def copy_as_prev_time_frame(self, prev_output=None, rec_vars_prev_outputs=None):
     """

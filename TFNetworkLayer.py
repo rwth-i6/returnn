@@ -479,9 +479,24 @@ class LayerBase(object):
   def get_sub_layer(self, layer_name):
     """
     The default behavior for any layer is to return None.
-    :param str layer_name:  The sub_layer addressed by '/' separated path.
-    :return: The sub_layer addressed in layer_name or None if no sub_layer exists
+
+    :param str layer_name: name of the sub_layer (right part of '/' separated path)
+    :return: the sub_layer addressed in layer_name or None if no sub_layer exists
     :rtype: LayerBase|None
+    """
+    return None
+
+  @classmethod
+  def get_sub_layer_out_data_from_opts(cls, layer_name, parent_layer_kwargs):
+    """
+    Called by _TemplateLayer.get_sub_layer(). Gets a Data template for the sub-layer with name 'layer_name'.
+    Also returns the network the sub-layer is in and the class type of the sub-layer. There is no good default
+    behaviour here, as this heavily depends on how the current layer uses sub-layers.
+
+    :param str layer_name: name of the sub_layer (right part of '/' separated path)
+    :param dict[str] parent_layer_kwargs: kwargs for the parent layer (as kwargs in cls.get_out_data_from_opts())
+    :return: Data template, network and the class type of the sub-layer
+    :rtype: (Data, TFNetwork, type)|None
     """
     return None
 
