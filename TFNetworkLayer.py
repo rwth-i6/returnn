@@ -2628,10 +2628,6 @@ class MergeDimsLayer(_ConcatInputLayer):
         pass
       elif res_dim is None and n_out is not None:
         res_dim = n_out
-      else:
-        raise Exception(
-          "You need to provide n_out for layer %r, we are merging axes %r with dims %r. Input is %r." % (
-            name, axes, [data.batch_shape[i] for i in axes], data))
       data.dim = res_dim
     merge_target_axis = cls._get_target_axis(input_data=data, merge_axes=axes)
     new_shape = [d for (i, d) in enumerate(data.batch_shape) if i not in axes]
