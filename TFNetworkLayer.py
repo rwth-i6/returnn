@@ -6461,7 +6461,7 @@ class SamplingBasedLoss(Loss):
                **kwargs):
     """
     :param int num_sampled: Number of classes to be sampled. For sampled softmax, this is the number of classes to be
-    used to estimate the sampled softmax. For noise contrastive estimation, this is the number of noise samples.
+      used to estimate the sampled softmax. For noise contrastive estimation, this is the number of noise samples.
     :param str sampler: Specify sampling distribution ("uniform", "log_uniform", or "learned_unigram").
     :param bool nce_loss: If True, use noise contrastive estimation loss. Else (default), use the sampled softmax.
     :param bool use_full_softmax: If True, compute the full softmax instead of sampling (can be used for evaluation).
