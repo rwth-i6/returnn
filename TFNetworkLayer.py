@@ -2897,7 +2897,25 @@ class SwapAxesLayer(_ConcatInputLayer):
     axis1 = self.input_data.get_axis_from_description(axis1)
     axis2 = self.input_data.get_axis_from_description(axis2)
     self.output.placeholder = swapaxes(self.input_data.placeholder, axis1=axis1, axis2=axis2)
-    self.output.size_placeholder = self.input_data.size_placeholder.copy()  # might be wrong, not checking that now...
+    axis1_wo_b = self.output.get_batch_axis_excluding_batch(axis1)
+    axis2_wo_b = self.output.get_batch_axis_excluding_batch(axis2)
+    self.output.size_placeholder = {
+      self._translate_axis(i, axis1_wo_b, axis2_wo_b): v for (i, v) in self.input_data.size_placeholder.items()}
+
+  @classmethod
+  def _translate_axis(cls, axis_to_translate, axis1, axis2):
+    """
+    :param int|None axis_to_translate:
+    :param int axis1:
+    :param int axis2:
+    :return: new axis
+    :rtype: int|None
+    """
+    if axis_to_translate == axis1:
+      return axis2
+    if axis_to_translate == axis2:
+      return axis1
+    return axis_to_translate
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources, axis1, axis2, **kwargs):
@@ -2920,6 +2938,9 @@ class SwapAxesLayer(_ConcatInputLayer):
     out.shape = tuple(shape)
     if not out.sparse:
       out.dim = out.shape[-1]
+    out.time_dim_axis = cls._translate_axis(out.time_dim_axis, axis1, axis2)
+    if out.feature_dim_axis_or_unspecified is not NotSpecified:
+      out.feature_dim_axis = cls._translate_axis(out.feature_dim_axis, axis1, axis2)
     return out
 
 
