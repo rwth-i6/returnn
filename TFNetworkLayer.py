@@ -6432,121 +6432,115 @@ class AsIsLoss(Loss):
     return None  # not defined
 
 
-class SampledSoftmaxLoss(Loss):
+class SamplingBasedLoss(Loss):
   """
-  Sampled Softmax loss. This layer performs sampled_softmax_loss (see
-  https://www.tensorflow.org/api_docs/python/tf/nn/sampled_softmax_loss) when training. This loss performs CE when
-  in evaluation mode. See cond_on_train(...) for more details on branching between train and eval phase. For detailed
-  explanation on SampledSoftmax see https://www.tensorflow.org/api_docs/python/tf/nn/sampled_softmax_loss
+  Implement two sampling based losses, sampled softmax (default) and noise contrastive estimation.
+  https://www.tensorflow.org/api_docs/python/tf/nn/sampled_softmax_loss.
+  https://www.tensorflow.org/api_docs/python/tf/nn/nce_loss.
+
+  Must be used in an output linear layer with a weight matrix of shape [num_classes, dim].
+  When using 'log_uniform' sampler (default), optimal performance is typically achieved with the vocabulary list sorted
+  in decreasing order of frequency (https://www.tensorflow.org/api_docs/python/tf/random/log_uniform_candidate_sampler).
   """
-  class_name = "sampled_softmax"
+  class_name = "sampling_loss"
 
   def __init__(self,
-               num_sampled=None,
-               remove_accidental_hits=True,
-               partition_strategy='mod',
+               num_sampled=128,
                sampler="log_uniform",
+               nce_loss=False,
+               use_full_softmax=False,
                **kwargs):
     """
-    :param int num_sampled: The number of classes to randomly sample per batch.
-    :param bool remove_accidental_hits: True is a common default. Whether to remove "accidental hits" where a sampled
-                class equals one of the target classes.
-    :param str partition_strategy: 'mod' is common default. See TensorFlow documentation of sampled_softmax_loss
-    :param str sampler: "log_uniform" is common default. Element of {"uniform","log_uniform","learned_unigram"}
+    :param int num_sampled: Number of classes to be sampled. For sampled softmax, this is the number of classes to be
+    used to estimate the sampled softmax. For noise contrastive estimation, this is the number of noise samples.
+    :param str sampler: Specify sampling distribution ("uniform", "log_uniform", or "learned_unigram").
+    :param bool nce_loss: If True, use noise contrastive estimation loss. Else (default), use the sampled softmax.
+    :param bool use_full_softmax: If True, compute the full softmax instead of sampling (can be used for evaluation).
     """
-    super(SampledSoftmaxLoss, self).__init__(**kwargs)
-
-    assert num_sampled is not None, "You have to make sure, that you set the num_sampled variable in the config file."
-    assert num_sampled >= 1, "num_sampled is too small!"
+    super(SamplingBasedLoss, self).__init__(**kwargs)
+    assert num_sampled >= 1
+    assert sampler in ["uniform", "log_uniform", "learned_unigram"],\
+      "Sampler must be one of 'uniform', 'log_uniform', or 'learned_unigram'."
     self.num_sampled = num_sampled
-    self.remove_accidental_hits = remove_accidental_hits
-    self.partition_strategy = partition_strategy
-
-    assert sampler in ["uniform", "log_uniform", "learned_unigram"], "Not implemented sampler selected"
     self.sampler = sampler
+    self.use_full_softmax = use_full_softmax
+    self.nce_loss = nce_loss
 
   def get_value(self):
-    assert isinstance(self.layer, SoftmaxLayer)
-    assert self.target.sparse, "Sampled softmax is only useful for big (i.e. sparse) target vectors"
-    assert self.target.ndim_dense == self.output.ndim_dense
+    assert self.target.sparse
+    assert isinstance(self.layer, SoftmaxLayer) or isinstance(self.layer, LinearLayer)
+    with tf.name_scope("loss_with_sampling"):
+      # Compute sampling based loss.
+      def sampled_loss_fn():
+        # Prepare shapes for 'tf.nn.sampled_softmax_loss' and 'tf.nn.nce_loss'.
+        labels = self.target.placeholder  # [B, T].
+        labels = tf.transpose(labels)  # [T, B].
+        labels = tf.reshape(labels, [-1, 1])  # [T * B, 1].
 
-    with tf.name_scope("loss_sampled_softmax"):
-      # The function that is called for the training branch
-      def train_fn():
-        # First switch target vector for dimension alignment with input_data tensor
-        labels = self.target.placeholder
-        current_labels_shape = tf.shape(labels)
-        labels = tf.reshape(labels, [current_labels_shape[1], current_labels_shape[0]])
-        labels = tf.reshape(labels, [-1])
-        labels = tf.expand_dims(labels, 1)
-
-        # Get input from current layer
-        inputs = self.layer.input_data.placeholder
-        current_input_shape = tf.shape(inputs)
-        new_input_shape = [-1, current_input_shape[self.layer.input_data.ndim]]
-        inputs = tf.reshape(inputs, new_input_shape)
+        inputs = self.layer.input_data.placeholder  # [T, B, D].
+        inputs_shape = tf.shape(inputs)
+        inputs = tf.reshape(inputs, [inputs_shape[0] * inputs_shape[1], -1])  # [T * B, D].
 
         from tensorflow.python.framework import dtypes
-        from tensorflow.python.ops import candidate_sampling_ops, math_ops
+        from tensorflow.python.ops import math_ops
         if labels.dtype != dtypes.int64:
           labels = math_ops.cast(labels, dtypes.int64)
 
-        # This is a dict containing all samplers provided by TensorFlow which share the same parameters
-        all_samplers = {
-          "log_uniform": candidate_sampling_ops.log_uniform_candidate_sampler,
-          "uniform": candidate_sampling_ops.uniform_candidate_sampler,
-          "learned_unigram": candidate_sampling_ops.learned_unigram_candidate_sampler
-        }
+        from tensorflow.python.ops import candidate_sampling_ops
+        # Dictionary of available samplers in TensorFlow.
+        sampler_dict = { "log_uniform": candidate_sampling_ops.log_uniform_candidate_sampler,
+                         "uniform": candidate_sampling_ops.uniform_candidate_sampler,
+                         "learned_unigram": candidate_sampling_ops.learned_unigram_candidate_sampler}
+        sampler = sampler_dict[self.sampler]
+        # 'sampled_values' is a tuple of (sampled_candidates, true_expected_count, sampled_expected_count).
+        # See https://www.tensorflow.org/api_docs/python/tf/random/log_uniform_candidate_sampler.
+        sampled_values = sampler(true_classes=labels,
+                                 num_true=1,
+                                 num_sampled=self.num_sampled,
+                                 unique=True,  # Sampling without replacement.
+                                 range_max=self.target.dim)
+        if self.nce_loss:
+          loss_fn = tf.nn.nce_loss
+        else:
+          loss_fn = tf.nn.sampled_softmax_loss
 
-        # Get sampler to sample from
-        sampler = all_samplers[self.sampler]
-        sampled_values = sampler(
-          true_classes=labels,  # shape: [batch_size, num_true]
-          num_true=1,  # Note that this loss layer does not support multiple correct classes as target values
-          num_sampled=self.num_sampled,  # How many samples do we wanna draw
-          unique=True,
-          range_max=self.target.dim)
+        assert self.layer.params["W"].shape[0] == self.target.dim, "Expect weight matrix of shape [num_classes, dim]"
+        out = loss_fn(weights=self.layer.params["W"],  # [num_classes, D].
+                      biases=self.layer.params["b"],  # [num_classes].
+                      labels=labels,  # [T * B, 1].
+                      inputs=inputs,  # [T * B, D].
+                      num_sampled=self.num_sampled,
+                      num_classes=self.target.dim,
+                      num_true=1,
+                      sampled_values=sampled_values,
+                      remove_accidental_hits=True,
+                      partition_strategy="div",
+                      name="sampling_based_loss")
 
-        out = tf.nn.sampled_softmax_loss(
-          weights=tf.transpose(self.layer.W),  # shape: [num_classes, dim]
-          biases=self.layer.b,  # shape: [num_classes]
-          labels=labels,  # shape: [batch_size, num_true]
-          inputs=inputs,  # shape: [batch_size, dim]
-          num_sampled=self.num_sampled,  # How many samples do we wanna draw
-          num_classes=self.target.dim,  # How many classes do we have
-          num_true=1,  # Note that this loss layer does not support multiple correct classes as target values
-          sampled_values=sampled_values,  # The sampling
-          remove_accidental_hits=self.remove_accidental_hits,
-          partition_strategy=self.partition_strategy,
-          name="sampled_softmax_loss"  # Name for the scope we produce
-        )
-
-        # we set invalid values to zero by masking them away
-        mask = self.target.get_sequence_mask()
-
-        # Note required reshaping of labels before tf.sampled_softmax_loss(..)
-        current_mask_shape = tf.shape(self.target.placeholder)
-        mask = tf.reshape(mask, [current_mask_shape[1], current_mask_shape[0]])
-        mask = tf.reshape(mask, [-1])
+        mask = self.target.get_sequence_mask()  # [B, T].
+        mask = tf.transpose(mask)  # [T, B].
+        mask = tf.reshape(mask, [-1])  # [T * B, 1]
         out = tf.where(mask, out, tf.zeros(tf.shape(out)))
         return out
 
-      # The function that is called for the evaluation branch
-      def eval_fn():
+      # Compute full softmax.
+      def full_softmax_fn():
         assert self.target.sparse is True
-        target = self.target.copy_compatible_to(self.output)
-        labels = tf.reshape(target.placeholder, [-1])
-        logits = tf.reshape(self.output_with_activation.x, [-1])
-        loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=labels, logits=logits)
-        mask = target.get_sequence_mask()
-        mask = tf.reshape(mask, [-1])
-        loss = tf.where(mask, loss, tf.zeros(tf.shape(loss)))
-        return loss
+        if self.output_before_softmax_flat is not None:
+          target_flat = self.target_flat
+          from TFUtil import to_int32_64
+          out = tf.nn.sparse_softmax_cross_entropy_with_logits(
+             logits=self.output_before_softmax_flat, labels=to_int32_64(target_flat))
+        else:
+          print("Warning: using numerical unstable sparse Cross-Entropy loss calculation", file=log.v3)
+          from TFUtil import safe_log
+          out = -safe_log(self.get_output_target_scores(), **self.safe_log_opts)
+        return out
 
-      # Create a new branch in the TensorFlow graph, one side for the training using the sampled_softmax_loss(...)
-      #   function and one for the evaluation using the normal cross entropy
-      tensor = self.base_network.cond_on_train(train_fn, eval_fn)
-      return self.reduce_func(tensor)
+      if self.use_full_softmax:  # Used instead of slow 'cond_on_train(train_fn, eval_fn)'.
+        return self.reduce_func(full_softmax_fn())
+      else:
+        return self.reduce_func(sampled_loss_fn())
 
 
 _LossClassDict = {}  # type: dict[str,type(Loss)]
