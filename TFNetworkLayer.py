@@ -2709,13 +2709,19 @@ class SplitDimsLayer(_ConcatInputLayer):
     if isinstance(axis, int):
       data = data.copy_as_batch_major()
     axis = data.get_axis_from_description(axis)
-    assert axis != data.batch_dim_axis
     if data.batch_shape[axis] is not None:
       resolved_shape_dims = cls._resolve_dims(old_dim=data.batch_shape[axis], new_dims=dims)
     else:
       resolved_shape_dims = tuple([(d if (d >= 0) else None) for d in dims])
-    axis_wb = data.get_batch_axis_excluding_batch(axis)
-    data.shape = data.shape[:axis_wb] + resolved_shape_dims + data.shape[axis_wb + 1:]
+    if axis != data.batch_dim_axis:
+      axis_wb = data.get_batch_axis_excluding_batch(axis)
+      data.shape = data.shape[:axis_wb] + resolved_shape_dims + data.shape[axis_wb + 1:]
+    else:  # axis == data.batch_dim_axis
+      new_batch_shape = data.batch_shape[:axis] + resolved_shape_dims + data.batch_shape[axis + 1:]
+      assert any([d == -1 for d in dims])
+      new_batch_axis = data.batch_dim_axis + [d == -1 for d in dims].index(True)
+      data.batch_dim_axis = new_batch_axis
+      data.shape = new_batch_shape[:new_batch_axis] + new_batch_shape[new_batch_axis + 1:]
     if data.feature_dim_axis is None and not data.sparse and any([d > 0 for d in dims]):
       # We want to have the last index where dims[index] > 0.
       i = len(dims) - list(reversed([d > 0 for d in dims])).index(True) - 1
