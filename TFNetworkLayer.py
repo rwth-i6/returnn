@@ -2656,15 +2656,14 @@ class MergeDimsLayer(_ConcatInputLayer):
     merge_target_axis = cls._get_target_axis(input_data=data, merge_axes=axes)
     if data.feature_dim_axis_or_unspecified is NotSpecified:
       new_feature_dim_axis = NotSpecified
+    elif data.feature_dim_axis in axes and merge_target_axis != data.feature_dim_axis:
+      if merge_target_axis == data.batch_dim_axis:
+        new_feature_dim_axis = None
+      else:
+        new_feature_dim_axis = merge_target_axis
     else:
       new_feature_dim_axis = cls._old_axis_to_new_axis(
         input_data=input_data, merge_axes=axes, old_axis=input_data.feature_dim_axis)
-    if data.feature_dim_axis in axes and merge_target_axis != data.feature_dim_axis:
-      if merge_target_axis == data.batch_dim_axis:
-        new_feature_dim_axis = None
-      elif data.feature_dim_axis_or_unspecified is not NotSpecified:
-        new_feature_dim_axis = merge_target_axis
-
     new_shape = [d for (i, d) in enumerate(data.batch_shape) if i not in axes]
     new_shape.insert(merge_target_axis, res_dim)
     new_shape.pop(data.batch_dim_axis)
