@@ -2708,7 +2708,10 @@ class SplitDimsLayer(_ConcatInputLayer):
     else:
       resolved_shape_dims = tuple([(d if (d >= 0) else None) for d in dims])
     if axis == data.feature_dim_axis:
-      data.dim = cls._resolve_dims(old_dim=data.dim, new_dims=dims)[-1]
+      if data.feature_dim_axis_or_unspecified is NotSpecified:
+        data.dim = cls._resolve_dims(old_dim=data.dim, new_dims=dims)[-1]
+      else:
+        data.dim = cls._resolve_dims(old_dim=data.dim, new_dims=dims)[0]
     axis_wb = data.get_batch_axis_excluding_batch(axis)
     data.shape = data.shape[:axis_wb] + resolved_shape_dims + data.shape[axis_wb + 1:]
     return data
