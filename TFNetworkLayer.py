@@ -2571,10 +2571,10 @@ class MergeDimsLayer(_ConcatInputLayer):
     """
     :param Data input_data:
     :param list[int] merge_axes:
-    :param int|None|NotSpecified old_axis:
+    :param int|None old_axis:
     :rtype: int|None
     """
-    if old_axis is None or old_axis is NotSpecified:
+    if old_axis is None:
       return old_axis
     target_axis = cls._get_target_axis(input_data=input_data, merge_axes=merge_axes)
     if old_axis in merge_axes:
@@ -2630,6 +2630,13 @@ class MergeDimsLayer(_ConcatInputLayer):
         res_dim = n_out
       data.dim = res_dim
     merge_target_axis = cls._get_target_axis(input_data=data, merge_axes=axes)
+    if data.feature_dim_axis in axes and merge_target_axis != data.feature_dim_axis:
+      new_feature_dim_axis = None
+    elif data.feature_dim_axis_or_unspecified is NotSpecified:
+      new_feature_dim_axis = NotSpecified
+    else:
+      new_feature_dim_axis = cls._old_axis_to_new_axis(
+        input_data=input_data, merge_axes=axes, old_axis=input_data.feature_dim_axis)
     new_shape = [d for (i, d) in enumerate(data.batch_shape) if i not in axes]
     new_shape.insert(merge_target_axis, res_dim)
     new_shape.pop(data.batch_dim_axis)
@@ -2638,8 +2645,7 @@ class MergeDimsLayer(_ConcatInputLayer):
       input_data=input_data, merge_axes=axes, old_axis=input_data.batch_dim_axis)
     data.time_dim_axis = cls._old_axis_to_new_axis(
       input_data=input_data, merge_axes=axes, old_axis=input_data.time_dim_axis)
-    data.feature_dim_axis = cls._old_axis_to_new_axis(
-      input_data=input_data, merge_axes=axes, old_axis=input_data.feature_dim_axis_or_unspecified)
+    data.feature_dim_axis = new_feature_dim_axis
     return data
 
 
