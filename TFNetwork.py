@@ -387,6 +387,7 @@ class TFNetwork(object):
       def get_layer(src_name):
         return self.construct_layer(net_dict=net_dict, name=src_name)  # set get_layer to wrap construct_layer
     if name not in net_dict:
+      layer_desc = None
       if name == "data":
         layer_desc = {"class": "source", "from": []}
       elif name.startswith("data:"):
@@ -394,12 +395,11 @@ class TFNetwork(object):
       elif '/' in name:
         # it may be a hierarchical path to a sub-layer, which should have been found by get_layer()
         # but maybe it's not constructed yet, so try constructing the root layer
-        get_layer(name.split('/')[0])
-        assert name.split('/')[0] in self.layers, ("Root %r layer was not constructed! "
-                                                   "Unable to get layer %r." % (name.split('/')[0], name))
-        # constructing the root layer should have constructed all its children
-        return self.get_layer(name)  # ...so try again now
-      else:
+        root_layer = get_layer(name.split('/')[0])
+        sub_layer = root_layer.get_sub_layer('/'.join(name.split('/')[1:]))  # get the sub-layer from the root-layer
+        if sub_layer:
+          return sub_layer
+      if not layer_desc:
         raise LayerNotFound("layer %r not found in %r" % (name, self))
     else:
       layer_desc = net_dict[name]
