@@ -2716,12 +2716,17 @@ class SplitDimsLayer(_ConcatInputLayer):
     if axis != data.batch_dim_axis:
       axis_wb = data.get_batch_axis_excluding_batch(axis)
       data.shape = data.shape[:axis_wb] + resolved_shape_dims + data.shape[axis_wb + 1:]
+      if data.batch_dim_axis is not None and axis < data.batch_dim_axis:
+        data.batch_dim_axis += len(dims) - 1
     else:  # axis == data.batch_dim_axis
       new_batch_shape = data.batch_shape[:axis] + resolved_shape_dims + data.batch_shape[axis + 1:]
       assert any([d == -1 for d in dims])
       new_batch_axis = data.batch_dim_axis + [d == -1 for d in dims].index(True)
       data.batch_dim_axis = new_batch_axis
       data.shape = new_batch_shape[:new_batch_axis] + new_batch_shape[new_batch_axis + 1:]
+    assert axis != data.time_dim_axis, "size not yet implemented correctly..."
+    if data.time_dim_axis is not None and axis < data.time_dim_axis:
+      data.time_dim_axis += len(dims) - 1
     if data.feature_dim_axis is None and not data.sparse and any([d > 0 for d in dims]):
       # We want to have the last index where dims[index] > 0.
       i = len(dims) - list(reversed([d > 0 for d in dims])).index(True) - 1
