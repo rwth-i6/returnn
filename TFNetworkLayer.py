@@ -370,16 +370,23 @@ class LayerBase(object):
       d["reuse_params"] = ReuseParams.from_config_dict(d["reuse_params"], network=network, get_layer=get_layer)
     if d.get("loss", None) and "target" not in d:
       d["target"] = network.extern_data.default_target
+    targets = None
     if d.get("target"):
+      targets = d["target"]
+      # we might have multiple targets, e.g. in choice layer, so convert to list
+      if isinstance(targets, str):
+          targets = [targets]
       if network.eval_flag:
-        # Not resolving this in the dict, but call get_layer to make it available.
-        assert isinstance(d["target"], str)
-        if d["target"].startswith("layer:"):
-          get_layer(d["target"][len("layer:"):])
-    if "n_out" not in d and d.get("target", None) and network.eval_flag:
+        for target in targets:
+          assert isinstance(target, str)
+          # Not resolving this in the dict, but call get_layer to make it available.
+          if target.startswith("layer:"):
+            get_layer(target[len("layer:"):])
+    if "n_out" not in d and targets and network.eval_flag:
       # Must be done here now because loss might be set to None later.
+      target = targets[0]  # guess using first target
       d["n_out"] = cls._guess_n_out_from_target_and_opt_loss(
-        network=network, target=d["target"], loss_class_name=d.get("loss", None), get_layer=get_layer)
+        network=network, target=target, loss_class_name=d.get("loss", None), get_layer=get_layer)
     if d.pop("loss_only_on_non_search", None) and network.search_flag:
       d.pop("loss", None)
       d.pop("loss_scale", None)
