@@ -40,6 +40,7 @@ env:
     - TEST=TFEngine
     - TEST=TFNativeOp
     - TEST=TFNativeOp TF_PACKAGE=tensorflow==1.8.0
+    - TEST=TFNativeOp TF_PACKAGE=tensorflow==1.4.0
     - TEST=TFNetworkLayer
     - TEST=TFNetworkRecLayer
     - TEST=TFNetworkSigProcLayer
