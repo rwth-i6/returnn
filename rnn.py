@@ -515,7 +515,7 @@ def executeMainTask():
   elif task == "nop_init_net_train":
     print("Task: No-operation, despite initializing the network (for training)", file=log.v1)
     engine.init_train_from_config(config, train_data, dev_data, eval_data)
-    engine.save_model(config.value('model','dummy'), 0)
+    engine.save_model(config.value('model','dummy'))
   else:
     assert False, "unknown task: %s" % task
 
