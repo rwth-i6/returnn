@@ -556,7 +556,7 @@ class Engine:
         self.learning_rate_control.save()
     print(" ".join(eval_dump_str).strip(), file=log.v1)
 
-  def save_model(self, filename, epoch):
+  def save_model(self, filename, epoch=0):
     """
     :param str filename: full filename for model
     :param int epoch: save epoch idx
