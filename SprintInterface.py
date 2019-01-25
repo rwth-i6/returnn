@@ -111,7 +111,7 @@ def init_python_feature_scorer(config, **kwargs):
   configfile = sprint_opts.get("configfile", None)
   assert sprint_opts.get("action", None) in (None, "forward"), "invalid action: %r" % sprint_opts["action"]
 
-  initBase(targetMode="forward", configfile=configfile, epoch=epoch)
+  initBase(targetMode="forward", configfile=configfile, epoch=epoch, sprint_opts=sprint_opts)
 
   cls = PythonFeatureScorer
   if rnn.config.has("SprintInterfacePythonFeatureScorer"):
@@ -316,6 +316,7 @@ def getSegmentList(corpusName, segmentList, **kwargs):
   :type corpusName: str
   :type segmentList: list[str]
   :type segmentsInfo: dict[str,dict[str]]
+  :type config: str
   :rtype: list[str]
   :returns segment list. Can also be an iterator.
   """
@@ -326,7 +327,7 @@ def getSegmentList(corpusName, segmentList, **kwargs):
   # Init what we need. These can be called multiple times.
   # If we use both the PythonSegmentOrder and the PythonTrainer, this will be called first.
   # The PythonTrainer will be called lazily once it gets the first data.
-  initBase()
+  initBase(configfile=kwargs.get('config', None))
   sprintDataset.useMultipleEpochs()
 
   finalEpoch = getFinalEpoch()
@@ -421,7 +422,7 @@ def init_python_trainer(inputDim, outputDim, config, targetMode, **kwargs):
   else:
     assert False, "unknown action: %r" % action
 
-  initBase(targetMode=targetMode, configfile=configfile, epoch=epoch)
+  initBase(targetMode=targetMode, configfile=configfile, epoch=epoch, sprint_opts=config)
   sprintDataset.setDimensions(inputDim, outputDim)
   sprintDataset.initialize()
 
@@ -579,11 +580,12 @@ def _at_exit_handler():
     Debug.dumpAllThreadTracebacks(exclude_self=True)
 
 
-def initBase(configfile=None, targetMode=None, epoch=None):
+def initBase(configfile=None, targetMode=None, epoch=None, sprint_opts=None):
   """
   :param str|None configfile: filename, via init(), this is set
   :param str|None targetMode: "forward" or so. via init(), this is set
   :param int epoch: via init(), this is set
+  :param dict[str,str]|None sprint_opts: optional parameters to override values in configfile
   """
 
   global isInitialized
@@ -606,6 +608,8 @@ def initBase(configfile=None, targetMode=None, epoch=None):
     assert os.path.exists(configfile)
     rnn.initConfig(configFilename=configfile)
     config = rnn.config
+    if sprint_opts is not None:
+      config.update(sprint_opts)
 
     rnn.initLog()
     rnn.returnnGreeting(configFilename=configfile)

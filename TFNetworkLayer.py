@@ -405,7 +405,7 @@ class LayerBase(object):
     :return: n_out value
     :rtype: int
     """
-    n_out = cls._static_get_target_value(target=target, network=network, mark_data_key_as_used=False).dim
+    n_out = cls._static_get_target_value(target=target, network=network, mark_data_key_as_used=False, get_layer=get_layer).dim
     if loss_class_name:
       n_out = get_loss_class(loss_class_name).get_auto_output_layer_dim(n_out)
     return n_out
@@ -475,6 +475,15 @@ class LayerBase(object):
     :rtype: list[LayerBase]
     """
     return list(self.sources) + list(self.collocate_with)
+
+  def get_sub_layer(self, layer_name):
+    """
+    The default behavior for any layer is to return None.
+    :param str layer_name:  The sub_layer addressed by '/' separated path.
+    :return: The sub_layer addressed in layer_name or None if no sub_layer exists
+    :rtype: LayerBase|None
+    """
+    return None
 
   def get_search_choices(self):
     """
@@ -1037,13 +1046,13 @@ class ReuseParams:
         # This dependency loop is not seen as critical. We allow it to be done later.
         # So any template construction of this layer should work.
         return ReuseParams.LazyLayerResolver(layer_name=layer_name, network=network, get_layer=get_layer)
-    if isinstance(opts, str):
+    if isinstance(opts, str):  # share the whole layer
       return ReuseParams(reuse_layer=optional_get_layer(opts))
     assert isinstance(opts, dict)
     opts = opts.copy()
-    if "reuse_layer" in opts:
+    if "reuse_layer" in opts:  # share the whole layer (+ possibly some more params)
       opts["reuse_layer"] = optional_get_layer(opts["reuse_layer"])
-    if "map" in opts:
+    if "map" in opts:  # share specific parameters
       assert isinstance(opts["map"], dict), "reuse_params['map'] should be a dict but is %s" % (type(opts["map"]),)
       opts["map"] = opts["map"].copy()
       for key, value in sorted(opts["map"].items()):
@@ -1938,9 +1947,8 @@ class LinearLayer(_ConcatInputLayer):
   """
   layer_class = "linear"
 
-  def __init__(self, activation, with_bias=True, grad_filter=None,
-               forward_weights_init="glorot_uniform", bias_init=0.0,
-               **kwargs):
+  def __init__(self, activation, with_bias=True, grad_filter=None, forward_weights_init="glorot_uniform",
+               bias_init=0.0, use_transposed_weight=False, **kwargs):
     """
     :param str|None activation: e.g. "relu", or None
     :param bool with_bias:
@@ -1948,12 +1956,14 @@ class LinearLayer(_ConcatInputLayer):
     :param str forward_weights_init: see :func:`TFUtil.get_initializer`
     :param str recurrent_weights_init: see :func:`TFUtil.get_initializer`
     :param str|float bias_init: see :func:`TFUtil.get_initializer`
+    :param bool use_transposed_weight: If True, define the weight matrix with transposed dimensions (n_out, n_in).
     """
     super(LinearLayer, self).__init__(**kwargs)
     from TFUtil import get_initializer
 
     self.activation = activation
     self.with_bias = with_bias
+    self.use_transposed_weight = use_transposed_weight
 
     input_data = self.input_data
     n_in = input_data.dim
@@ -1967,8 +1977,16 @@ class LinearLayer(_ConcatInputLayer):
       #  Or use VarianceScaling(scale=6.0, mode="fan_avg", distribution="normal") to get the same as in Theano.
       fwd_weights_initializer = get_initializer(
         forward_weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
+      if self.use_transposed_weight:
+        weight_shape = (n_out, n_in)
+      else:
+        weight_shape = (n_in, n_out)
+
       W = self.add_param(tf.get_variable(
-        name="W", shape=(n_in, n_out), dtype=tf.float32, initializer=fwd_weights_initializer))
+        name="W", shape=weight_shape, dtype=tf.float32, initializer=fwd_weights_initializer))
+
+      if self.use_transposed_weight:
+        W = tf.transpose(W)
 
       if self.with_bias:
         bias_initializer = get_initializer(
@@ -1988,12 +2006,36 @@ class LinearLayer(_ConcatInputLayer):
         # Maybe optionally we could also use tf.contrib.layers.safe_embedding_lookup_sparse().
         x = tf.nn.embedding_lookup(W, to_int32_64(x))
         ndim += 1
-      else:
+      elif self.input_data.feature_dim_axis == self.input_data.batch_ndim - 1:
         x = dot(x, W)
+      elif self.input_data.is_batch_feature_major:
+        # Use conv instead, it has optimized code for batch-feature major.
+        x_shape = None
+        if self.input_data.batch_ndim > 3:
+          x_shape = tf.shape(x)
+          x_shape = [x_shape[i] for i in range(self.input_data.batch_ndim)]
+          x = tf.reshape(x, [x_shape[0], n_in, tf.reduce_prod(x_shape[2:])])  # (B,n_in,x)
+        x = tf.nn.conv1d(
+          x,  # (B,n_in,x)
+          filters=tf.expand_dims(W, 0),  # (1,n_in,n_out)
+          stride=1, padding='SAME', data_format="NCW")  # (B,n_out,x)
+        if self.input_data.batch_ndim > 3:
+          x = tf.reshape(x, x_shape[:1] + [n_out] + x_shape[2:])  # (B,n_out,...)
+      else:
+        raise Exception("%s: does not support input format %r" % (self, self.input_data))
       assert x.get_shape().ndims == ndim
 
       if self.with_bias:
-        x = tf.add(x, b, name="add_bias")
+        if self.input_data.sparse or self.input_data.feature_dim_axis == self.input_data.batch_ndim - 1:
+          x = tf.add(x, b, name="add_bias")
+        else:
+          b_bc_shape = (
+            ([1] * self.input_data.feature_dim_axis) +
+            [n_out] +
+            ([1] * (self.input_data.batch_ndim - self.input_data.feature_dim_axis - 1)))
+          assert len(b_bc_shape) == self.input_data.batch_ndim == x.get_shape().ndims
+          b_bc = tf.reshape(b, b_bc_shape)
+          x = tf.add(x, b_bc, name="add_bias")
         assert x.get_shape().ndims == ndim
 
     if grad_filter:
@@ -2499,7 +2541,7 @@ class PadLayer(_ConcatInputLayer):
 
 class MergeDimsLayer(_ConcatInputLayer):
   """
-  Merges a list of axes into a single one.
+  Merges a list of axes into a single one. (Flatten the dims.)
   E.g. input is (batch, width, height, dim) and axes=(1,2), then we get (batch, width*height, dim).
   Or input is (batch, time, height, dim) and axes="except_time", then we get (batch, time, height*dim).
   See also :class:`CombineDimsLayer`.
@@ -2562,10 +2604,10 @@ class MergeDimsLayer(_ConcatInputLayer):
     """
     :param Data input_data:
     :param list[int] merge_axes:
-    :param int|None|NotSpecified old_axis:
+    :param int|None old_axis:
     :rtype: int|None
     """
-    if old_axis is None or old_axis is NotSpecified:
+    if old_axis is None:
       return old_axis
     target_axis = cls._get_target_axis(input_data=input_data, merge_axes=merge_axes)
     if old_axis in merge_axes:
@@ -2619,12 +2661,18 @@ class MergeDimsLayer(_ConcatInputLayer):
         pass
       elif res_dim is None and n_out is not None:
         res_dim = n_out
-      else:
-        raise Exception(
-          "You need to provide n_out for layer %r, we are merging axes %r with dims %r. Input is %r." % (
-            name, axes, [data.batch_shape[i] for i in axes], data))
       data.dim = res_dim
     merge_target_axis = cls._get_target_axis(input_data=data, merge_axes=axes)
+    if data.feature_dim_axis_or_unspecified is NotSpecified:
+      new_feature_dim_axis = NotSpecified
+    elif data.feature_dim_axis in axes and merge_target_axis != data.feature_dim_axis:
+      if merge_target_axis == data.batch_dim_axis:
+        new_feature_dim_axis = None
+      else:
+        new_feature_dim_axis = merge_target_axis
+    else:
+      new_feature_dim_axis = cls._old_axis_to_new_axis(
+        input_data=input_data, merge_axes=axes, old_axis=input_data.feature_dim_axis)
     new_shape = [d for (i, d) in enumerate(data.batch_shape) if i not in axes]
     new_shape.insert(merge_target_axis, res_dim)
     new_shape.pop(data.batch_dim_axis)
@@ -2633,8 +2681,7 @@ class MergeDimsLayer(_ConcatInputLayer):
       input_data=input_data, merge_axes=axes, old_axis=input_data.batch_dim_axis)
     data.time_dim_axis = cls._old_axis_to_new_axis(
       input_data=input_data, merge_axes=axes, old_axis=input_data.time_dim_axis)
-    data.feature_dim_axis = cls._old_axis_to_new_axis(
-      input_data=input_data, merge_axes=axes, old_axis=input_data.feature_dim_axis_or_unspecified)
+    data.feature_dim_axis = new_feature_dim_axis
     return data
 
 
@@ -2692,20 +2739,46 @@ class SplitDimsLayer(_ConcatInputLayer):
 
   @classmethod
   def get_out_data_from_opts(cls, name, axis, dims, sources=(), **kwargs):
+    """
+    :param str name:
+    :param str|int axis:
+    :param tuple[int] dims:
+    :param list[LayerBase] sources:
+    :rtype: Data
+    """
     data = get_concat_sources_data_template(sources)
     data.name = "%s_output" % name
     if isinstance(axis, int):
       data = data.copy_as_batch_major()
     axis = data.get_axis_from_description(axis)
-    assert axis != data.batch_dim_axis
     if data.batch_shape[axis] is not None:
       resolved_shape_dims = cls._resolve_dims(old_dim=data.batch_shape[axis], new_dims=dims)
     else:
       resolved_shape_dims = tuple([(d if (d >= 0) else None) for d in dims])
-    if axis == data.feature_dim_axis:
-      data.dim = cls._resolve_dims(old_dim=data.dim, new_dims=dims)[-1]
-    axis_wb = data.get_batch_axis_excluding_batch(axis)
-    data.shape = data.shape[:axis_wb] + resolved_shape_dims + data.shape[axis_wb + 1:]
+    if axis != data.batch_dim_axis:
+      axis_wb = data.get_batch_axis_excluding_batch(axis)
+      data.shape = data.shape[:axis_wb] + resolved_shape_dims + data.shape[axis_wb + 1:]
+      if data.batch_dim_axis is not None and axis < data.batch_dim_axis:
+        data.batch_dim_axis += len(dims) - 1
+    else:  # axis == data.batch_dim_axis
+      new_batch_shape = data.batch_shape[:axis] + resolved_shape_dims + data.batch_shape[axis + 1:]
+      assert any([d == -1 for d in dims])
+      new_batch_axis = data.batch_dim_axis + [d == -1 for d in dims].index(True)
+      data.batch_dim_axis = new_batch_axis
+      data.shape = new_batch_shape[:new_batch_axis] + new_batch_shape[new_batch_axis + 1:]
+    assert axis != data.time_dim_axis, "size not yet implemented correctly..."
+    if data.time_dim_axis is not None and axis < data.time_dim_axis:
+      data.time_dim_axis += len(dims) - 1
+    if data.feature_dim_axis is None and not data.sparse and any([d > 0 for d in dims]):
+      # We want to have the last index where dims[index] > 0.
+      i = len(dims) - list(reversed([d > 0 for d in dims])).index(True) - 1
+      new_feature_dim_axis = axis + i
+      if new_feature_dim_axis == data.batch_ndim - 1:
+        data.feature_dim_axis = NotSpecified
+      else:
+        data.feature_dim_axis = new_feature_dim_axis
+    if data.feature_dim_axis is not None:
+      data.dim = data.batch_shape[data.feature_dim_axis]
     return data
 
 
@@ -2836,7 +2909,25 @@ class SwapAxesLayer(_ConcatInputLayer):
     axis1 = self.input_data.get_axis_from_description(axis1)
     axis2 = self.input_data.get_axis_from_description(axis2)
     self.output.placeholder = swapaxes(self.input_data.placeholder, axis1=axis1, axis2=axis2)
-    self.output.size_placeholder = self.input_data.size_placeholder.copy()  # might be wrong, not checking that now...
+    axis1_wo_b = self.output.get_batch_axis_excluding_batch(axis1)
+    axis2_wo_b = self.output.get_batch_axis_excluding_batch(axis2)
+    self.output.size_placeholder = {
+      self._translate_axis(i, axis1_wo_b, axis2_wo_b): v for (i, v) in self.input_data.size_placeholder.items()}
+
+  @classmethod
+  def _translate_axis(cls, axis_to_translate, axis1, axis2):
+    """
+    :param int|None axis_to_translate:
+    :param int axis1:
+    :param int axis2:
+    :return: new axis
+    :rtype: int|None
+    """
+    if axis_to_translate == axis1:
+      return axis2
+    if axis_to_translate == axis2:
+      return axis1
+    return axis_to_translate
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources, axis1, axis2, **kwargs):
@@ -2859,6 +2950,9 @@ class SwapAxesLayer(_ConcatInputLayer):
     out.shape = tuple(shape)
     if not out.sparse:
       out.dim = out.shape[-1]
+    out.time_dim_axis = cls._translate_axis(out.time_dim_axis, axis1, axis2)
+    if out.feature_dim_axis_or_unspecified is not NotSpecified:
+      out.feature_dim_axis = cls._translate_axis(out.feature_dim_axis, axis1, axis2)
     return out
 
 
@@ -3803,6 +3897,7 @@ class DotLayer(LayerBase):
     # See __init__.
     a_out = sources[0].output.copy_as_batch_major()
     b_out = sources[1].output.copy_as_batch_major()
+    assert not a_out.beam_size or not b_out.beam_size or a_out.beam_size == b_out.beam_size
     a_reduce_axes = a_out.get_axes_from_description(red1)
     b_reduce_axes = b_out.get_axes_from_description(red2)
     assert a_reduce_axes and b_reduce_axes
@@ -3830,7 +3925,8 @@ class DotLayer(LayerBase):
       shape=tuple(a_rem_dims[1:] + a_var_dims + b_var_dims),
       batch_dim_axis=0,
       time_dim_axis=time_dim_axis,
-      dtype=a_out.dtype)
+      dtype=a_out.dtype,
+      beam_size=a_out.beam_size or b_out.beam_size)
 
 
 class ShiftAxisLayer(_ConcatInputLayer):
@@ -5337,6 +5433,9 @@ class Loss(object):
       return flatten_with_seq_len_mask(x, seq_lens, time_major=time_major)
     x_shape = tf.shape(x)
     x_shape = [x_shape[i] for i in range(x.get_shape().ndims)]
+    if time_major:
+      from TFUtil import swapaxes
+      x = swapaxes(x, 0, 1)  # (B,T,...)
     return tf.reshape(x, [x_shape[0] * x_shape[1]] + x_shape[2:], name="merge_batch_time")
 
   def init(self, output, output_with_activation=None, target=None, layer=None):
@@ -6342,121 +6441,115 @@ class AsIsLoss(Loss):
     return None  # not defined
 
 
-class SampledSoftmaxLoss(Loss):
+class SamplingBasedLoss(Loss):
   """
-  Sampled Softmax loss. This layer performs sampled_softmax_loss (see
-  https://www.tensorflow.org/api_docs/python/tf/nn/sampled_softmax_loss) when training. This loss performs CE when
-  in evaluation mode. See cond_on_train(...) for more details on branching between train and eval phase. For detailed
-  explanation on SampledSoftmax see https://www.tensorflow.org/api_docs/python/tf/nn/sampled_softmax_loss
+  Implement two sampling based losses, sampled softmax (default) and noise contrastive estimation.
+  https://www.tensorflow.org/api_docs/python/tf/nn/sampled_softmax_loss.
+  https://www.tensorflow.org/api_docs/python/tf/nn/nce_loss.
+
+  Must be used in an output linear layer with a weight matrix of shape [num_classes, dim].
+  When using 'log_uniform' sampler (default), optimal performance is typically achieved with the vocabulary list sorted
+  in decreasing order of frequency (https://www.tensorflow.org/api_docs/python/tf/random/log_uniform_candidate_sampler).
   """
-  class_name = "sampled_softmax"
+  class_name = "sampling_loss"
 
   def __init__(self,
-               num_sampled=None,
-               remove_accidental_hits=True,
-               partition_strategy='mod',
+               num_sampled=128,
                sampler="log_uniform",
+               nce_loss=False,
+               use_full_softmax=False,
                **kwargs):
     """
-    :param int num_sampled: The number of classes to randomly sample per batch.
-    :param bool remove_accidental_hits: True is a common default. Whether to remove "accidental hits" where a sampled
-                class equals one of the target classes.
-    :param str partition_strategy: 'mod' is common default. See TensorFlow documentation of sampled_softmax_loss
-    :param str sampler: "log_uniform" is common default. Element of {"uniform","log_uniform","learned_unigram"}
+    :param int num_sampled: Number of classes to be sampled. For sampled softmax, this is the number of classes to be
+      used to estimate the sampled softmax. For noise contrastive estimation, this is the number of noise samples.
+    :param str sampler: Specify sampling distribution ("uniform", "log_uniform", or "learned_unigram").
+    :param bool nce_loss: If True, use noise contrastive estimation loss. Else (default), use the sampled softmax.
+    :param bool use_full_softmax: If True, compute the full softmax instead of sampling (can be used for evaluation).
     """
-    super(SampledSoftmaxLoss, self).__init__(**kwargs)
-
-    assert num_sampled is not None, "You have to make sure, that you set the num_sampled variable in the config file."
-    assert num_sampled >= 1, "num_sampled is too small!"
+    super(SamplingBasedLoss, self).__init__(**kwargs)
+    assert num_sampled >= 1
+    assert sampler in ["uniform", "log_uniform", "learned_unigram"],\
+      "Sampler must be one of 'uniform', 'log_uniform', or 'learned_unigram'."
     self.num_sampled = num_sampled
-    self.remove_accidental_hits = remove_accidental_hits
-    self.partition_strategy = partition_strategy
-
-    assert sampler in ["uniform", "log_uniform", "learned_unigram"], "Not implemented sampler selected"
     self.sampler = sampler
+    self.use_full_softmax = use_full_softmax
+    self.nce_loss = nce_loss
 
   def get_value(self):
-    assert isinstance(self.layer, SoftmaxLayer)
-    assert self.target.sparse, "Sampled softmax is only useful for big (i.e. sparse) target vectors"
-    assert self.target.ndim_dense == self.output.ndim_dense
+    assert self.target.sparse
+    assert isinstance(self.layer, SoftmaxLayer) or isinstance(self.layer, LinearLayer)
+    with tf.name_scope("loss_with_sampling"):
+      # Compute sampling based loss.
+      def sampled_loss_fn():
+        # Prepare shapes for 'tf.nn.sampled_softmax_loss' and 'tf.nn.nce_loss'.
+        labels = self.target.placeholder  # [B, T].
+        labels = tf.transpose(labels)  # [T, B].
+        labels = tf.reshape(labels, [-1, 1])  # [T * B, 1].
 
-    with tf.name_scope("loss_sampled_softmax"):
-      # The function that is called for the training branch
-      def train_fn():
-        # First switch target vector for dimension alignment with input_data tensor
-        labels = self.target.placeholder
-        current_labels_shape = tf.shape(labels)
-        labels = tf.reshape(labels, [current_labels_shape[1], current_labels_shape[0]])
-        labels = tf.reshape(labels, [-1])
-        labels = tf.expand_dims(labels, 1)
-
-        # Get input from current layer
-        inputs = self.layer.input_data.placeholder
-        current_input_shape = tf.shape(inputs)
-        new_input_shape = [-1, current_input_shape[self.layer.input_data.ndim]]
-        inputs = tf.reshape(inputs, new_input_shape)
+        inputs = self.layer.input_data.placeholder  # [T, B, D].
+        inputs_shape = tf.shape(inputs)
+        inputs = tf.reshape(inputs, [inputs_shape[0] * inputs_shape[1], -1])  # [T * B, D].
 
         from tensorflow.python.framework import dtypes
-        from tensorflow.python.ops import candidate_sampling_ops, math_ops
+        from tensorflow.python.ops import math_ops
         if labels.dtype != dtypes.int64:
           labels = math_ops.cast(labels, dtypes.int64)
 
-        # This is a dict containing all samplers provided by TensorFlow which share the same parameters
-        all_samplers = {
-          "log_uniform": candidate_sampling_ops.log_uniform_candidate_sampler,
-          "uniform": candidate_sampling_ops.uniform_candidate_sampler,
-          "learned_unigram": candidate_sampling_ops.learned_unigram_candidate_sampler
-        }
+        from tensorflow.python.ops import candidate_sampling_ops
+        # Dictionary of available samplers in TensorFlow.
+        sampler_dict = { "log_uniform": candidate_sampling_ops.log_uniform_candidate_sampler,
+                         "uniform": candidate_sampling_ops.uniform_candidate_sampler,
+                         "learned_unigram": candidate_sampling_ops.learned_unigram_candidate_sampler}
+        sampler = sampler_dict[self.sampler]
+        # 'sampled_values' is a tuple of (sampled_candidates, true_expected_count, sampled_expected_count).
+        # See https://www.tensorflow.org/api_docs/python/tf/random/log_uniform_candidate_sampler.
+        sampled_values = sampler(true_classes=labels,
+                                 num_true=1,
+                                 num_sampled=self.num_sampled,
+                                 unique=True,  # Sampling without replacement.
+                                 range_max=self.target.dim)
+        if self.nce_loss:
+          loss_fn = tf.nn.nce_loss
+        else:
+          loss_fn = tf.nn.sampled_softmax_loss
 
-        # Get sampler to sample from
-        sampler = all_samplers[self.sampler]
-        sampled_values = sampler(
-          true_classes=labels,  # shape: [batch_size, num_true]
-          num_true=1,  # Note that this loss layer does not support multiple correct classes as target values
-          num_sampled=self.num_sampled,  # How many samples do we wanna draw
-          unique=True,
-          range_max=self.target.dim)
+        assert self.layer.params["W"].shape[0] == self.target.dim, "Expect weight matrix of shape [num_classes, dim]"
+        out = loss_fn(weights=self.layer.params["W"],  # [num_classes, D].
+                      biases=self.layer.params["b"],  # [num_classes].
+                      labels=labels,  # [T * B, 1].
+                      inputs=inputs,  # [T * B, D].
+                      num_sampled=self.num_sampled,
+                      num_classes=self.target.dim,
+                      num_true=1,
+                      sampled_values=sampled_values,
+                      remove_accidental_hits=True,
+                      partition_strategy="div",
+                      name="sampling_based_loss")
 
-        out = tf.nn.sampled_softmax_loss(
-          weights=tf.transpose(self.layer.W),  # shape: [num_classes, dim]
-          biases=self.layer.b,  # shape: [num_classes]
-          labels=labels,  # shape: [batch_size, num_true]
-          inputs=inputs,  # shape: [batch_size, dim]
-          num_sampled=self.num_sampled,  # How many samples do we wanna draw
-          num_classes=self.target.dim,  # How many classes do we have
-          num_true=1,  # Note that this loss layer does not support multiple correct classes as target values
-          sampled_values=sampled_values,  # The sampling
-          remove_accidental_hits=self.remove_accidental_hits,
-          partition_strategy=self.partition_strategy,
-          name="sampled_softmax_loss"  # Name for the scope we produce
-        )
-
-        # we set invalid values to zero by masking them away
-        mask = self.target.get_sequence_mask()
-
-        # Note required reshaping of labels before tf.sampled_softmax_loss(..)
-        current_mask_shape = tf.shape(self.target.placeholder)
-        mask = tf.reshape(mask, [current_mask_shape[1], current_mask_shape[0]])
-        mask = tf.reshape(mask, [-1])
+        mask = self.target.get_sequence_mask()  # [B, T].
+        mask = tf.transpose(mask)  # [T, B].
+        mask = tf.reshape(mask, [-1])  # [T * B]
         out = tf.where(mask, out, tf.zeros(tf.shape(out)))
         return out
 
-      # The function that is called for the evaluation branch
-      def eval_fn():
+      # Compute full softmax.
+      def full_softmax_fn():
         assert self.target.sparse is True
-        target = self.target.copy_compatible_to(self.output)
-        labels = tf.reshape(target.placeholder, [-1])
-        logits = tf.reshape(self.output_with_activation.x, [-1])
-        loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=labels, logits=logits)
-        mask = target.get_sequence_mask()
-        mask = tf.reshape(mask, [-1])
-        loss = tf.where(mask, loss, tf.zeros(tf.shape(loss)))
-        return loss
+        if self.output_before_softmax_flat is not None:
+          target_flat = self.target_flat
+          from TFUtil import to_int32_64
+          out = tf.nn.sparse_softmax_cross_entropy_with_logits(
+             logits=self.output_before_softmax_flat, labels=to_int32_64(target_flat))
+        else:
+          print("Warning: using numerical unstable sparse Cross-Entropy loss calculation", file=log.v3)
+          from TFUtil import safe_log
+          out = -safe_log(self.get_output_target_scores(), **self.safe_log_opts)
+        return out
 
-      # Create a new branch in the TensorFlow graph, one side for the training using the sampled_softmax_loss(...)
-      #   function and one for the evaluation using the normal cross entropy
-      tensor = self.base_network.cond_on_train(train_fn, eval_fn)
-      return self.reduce_func(tensor)
+      if self.use_full_softmax:  # Used instead of slow 'cond_on_train(train_fn, eval_fn)'.
+        return self.reduce_func(full_softmax_fn())
+      else:
+        return self.reduce_func(sampled_loss_fn())
 
 
 _LossClassDict = {}  # type: dict[str,type(Loss)]

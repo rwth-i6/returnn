@@ -9,9 +9,13 @@ from Config import Config
 from Network import LayerNetwork
 from NetworkHiddenLayer import ForwardLayer
 from Util import dict_diff_str
+import TheanoUtil
 from pprint import pprint
 import better_exchook
 better_exchook.replace_traceback_format_tb()
+
+
+TheanoUtil.monkey_patches()
 
 
 def test_init():

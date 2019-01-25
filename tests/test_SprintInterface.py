@@ -13,6 +13,7 @@ from Engine import Engine
 from Config import Config
 from Log import log
 from Network import LayerNetwork
+import TheanoUtil
 import shutil
 import numpy
 import better_exchook
@@ -20,6 +21,8 @@ better_exchook.replace_traceback_format_tb()
 
 
 log.initialize()
+TheanoUtil.monkey_patches()
+
 
 def install_sigint_handler():
   import signal
