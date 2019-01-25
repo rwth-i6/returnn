@@ -48,6 +48,7 @@ class LayerBase(object):
   def __init__(self, name, network, output=None, n_out=None, out_type=None, sources=(),
                target=None, loss=None, size_target=None,
                reuse_params=None,
+               param_device=None,
                L2=None, darc1=None,
                is_output_layer=None, only_on_eval=False, only_on_search=False,
                copy_output_loss_from_source_idx=None,
@@ -79,6 +80,8 @@ class LayerBase(object):
       In :class:`TFNetwork`, all losses from all layers will be collected.
       That is what :class:`TFUpdater.Updater` will use for training.
     :param ReuseParams|None reuse_params: if given, will opt reuse the params. see :func:`self.var_creation_scope`
+    :param str|None param_device: e.g. "CPU", etc. any valid name for tf.device.
+      see https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/util/device_name_utils.h
     :param float|None L2: for constraints
     :param float|None darc1: for constraints. see Generalization in Deep Learning, https://arxiv.org/abs/1710.05468
     :param bool|None is_output_layer:
@@ -130,6 +133,7 @@ class LayerBase(object):
     self.saveable_param_replace = {}  # see get_saveable_params_dict()
     " :type: dict[tf.Variable,tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject|None] "
     self.reuse_params = reuse_params
+    self.param_device = param_device
     self.L2 = L2
     self.darc1 = darc1
     self._is_output_layer = is_output_layer
@@ -540,13 +544,29 @@ class LayerBase(object):
     # e.g. see ReuseParams.LazyLayerResolver.
     kwargs = kwargs.copy()
     kwargs.setdefault("reuse", getattr(tf, "AUTO_REUSE", None))
-    with var_creation_scope() as dep:
-      if self.reuse_params:
-        with reuse_name_scope(self.reuse_params.get_variable_scope(base_layer=self, **kwargs)) as scope:
+
+    @contextlib.contextmanager
+    def inner():
+      with var_creation_scope() as dep:
+        if self.reuse_params:
+          with reuse_name_scope(self.reuse_params.get_variable_scope(base_layer=self, **kwargs)) as scope:
+            yield scope
+        else:
+          with reuse_name_scope(tf.get_variable_scope(), **kwargs) as scope:
+            yield scope
+
+    if self.param_device:
+      device_name = self.param_device
+      if ":" not in device_name:
+        device_name = "%s:*" % device_name
+      if "/" not in device_name:
+        device_name = "/device:%s" % device_name
+      with tf.device(device_name):
+        with inner() as scope:
           yield scope
-      else:
-        with reuse_name_scope(tf.get_variable_scope(), **kwargs) as scope:
-          yield scope
+    else:
+      with inner() as scope:
+        yield scope
 
   def add_param(self, param, custom_update=None, trainable=None, saveable=None, axes_split_info=None):
     """
