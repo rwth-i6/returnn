@@ -50,7 +50,7 @@ class OpMaker(object):
   """
   with_cuda = None  # type: None|bool
   # https://github.com/tensorflow/tensorflow/issues/6602
-  tf_blas_gemm_workaround = TFUtil.tf_version_tuple() < (1, 5, 0)
+  tf_blas_gemm_workaround = TFUtil.tf_version_tuple() < (1, 6, 0)
   global_lock = RLock()
   mod_cache = {}  # cache_key -> mod
   op_cache = {}  # cache_key -> op
