@@ -93,7 +93,7 @@ Ndarray* Ndarray_Copy(const Ndarray* self) {
 
 #include "tensorflow/core/public/version.h"
 
-#if (TF_MAJOR_VERSION == 1 && TF_MINOR_VERSION >= 5) || (TF_MAJOR_VERSION > 1)
+#if (TF_MAJOR_VERSION == 1 && TF_MINOR_VERSION >= 6) || (TF_MAJOR_VERSION > 1)
 #define TF_issue_6602_workaround 0
 #define TWOD_LSTM_SUPPORT 1
 #else
@@ -262,7 +262,7 @@ static void tf_cuda_sgemm_batched(
         OP_REQUIRES(context, blas_launch_status, errors::Aborted("BlockHostUntilDone failed!"));
     }
 #else  // TWOD_LSTM_SUPPORT
-    context->SetStatus(errors::InvalidArgument("For 2D-LSTMs, TensorFlow 1.5 or later is required"));
+    context->SetStatus(errors::InvalidArgument("For 2D-LSTMs, TensorFlow 1.6 or later is required"));
 #endif
 #else  // GOOGLE_CUDA
     context->SetStatus(errors::InvalidArgument("CuBlasGemm needs CUDA."));
