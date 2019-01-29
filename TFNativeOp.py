@@ -56,7 +56,8 @@ class OpMaker(object):
   op_cache = {}  # cache_key -> op
 
   def __init__(self, description, compiler_opts=None,
-               search_for_runtime_blas=True, search_for_numpy_blas=True, search_for_system_blas=True):
+               search_for_runtime_blas=True, search_for_numpy_blas=True, search_for_system_blas=True,
+               skip_openblas=False):
     """
     :param OpDescription description:
     :param dict[str]|None compiler_opts: passed on to OpCodeCompiler as kwargs
@@ -68,6 +69,7 @@ class OpMaker(object):
     self.search_for_runtime_blas = search_for_runtime_blas
     self.search_for_numpy_blas = search_for_numpy_blas
     self.search_for_system_blas = search_for_system_blas
+    self.skip_openblas = skip_openblas
 
   @classmethod
   def _cls_init(cls):
@@ -410,6 +412,9 @@ class OpMaker(object):
         if numpy_libs:
           # Prefer Numpy; move to front.
           libs = numpy_libs + [fn for fn in libs if fn not in numpy_libs]
+          if self.skip_openblas:
+            print("Found Numpy libs, but skipping OpenBLAS.")
+            libs = filter(lambda l: "openblas" not in l, libs)
         for fn in libs:
           ld_flags += ["-L%s" % os.path.dirname(fn), "-l:%s" % os.path.basename(fn)]
           have_blas_lib = True
@@ -467,7 +472,9 @@ class OpMaker(object):
       if self.description.is_grad_defined:
         grad_description = self.description.grad()
         grad_op_maker = OpMaker(description=grad_description, compiler_opts=self.compiler_opts,
-                                search_for_numpy_blas=self.search_for_numpy_blas)
+                                search_for_numpy_blas=self.search_for_numpy_blas,
+                                search_for_runtime_blas=self.search_for_runtime_blas,
+                                skip_openblas=self.skip_openblas)
         grad_op = grad_op_maker.make_op()
 
         from tensorflow.python.framework import ops

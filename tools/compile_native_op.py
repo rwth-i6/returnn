@@ -70,6 +70,12 @@ def main(argv):
                          help="search for blas inside numpys .libs folder")
   argparser.add_argument('--no_search_for_numpy_blas', dest='search_for_numpy_blas', action='store_false',
                          help="do not search for blas inside numpys .libs folder")
+  argparser.add_argument('--no_search_for_runtime_blas', dest='search_for_runtime_blas', action='store_false',
+                         help="do not search for blas in runtime environment")
+  argparser.add_argument('--search_for_runtime_blas', dest='search_for_runtime_blas', action='store_true',
+                         help="search for blas in runtime environment")
+  argparser.add_argument('--skip_openblas', dest='skip_openblas', action='store_true',
+                         help="do not link against openblas")
   argparser.add_argument("--verbosity", default=4, type=int, help="5 for all seqs (default: 4)")
   argparser.add_argument("--output_file", help='if given, will write the list of libs to this file')
   args = argparser.parse_args(argv[1:])
@@ -80,7 +86,9 @@ def main(argv):
   if args.native_op:
     print("Loading native op %r" % args.native_op)
     make_op(getattr(NativeOp, args.native_op), compiler_opts={"verbose": True},
-            search_for_numpy_blas=args.search_for_numpy_blas)
+            search_for_numpy_blas=args.search_for_numpy_blas,
+            search_for_runtime_blas=args.search_for_runtime_blas,
+            skip_openblas=args.skip_openblas)
 
   libs = []
   if OpMaker.with_cuda and OpMaker.tf_blas_gemm_workaround:
