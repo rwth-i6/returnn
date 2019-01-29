@@ -119,6 +119,35 @@ class ComplexLinearProjectionLayer(_ConcatInputLayer):
     return super(ComplexLinearProjectionLayer, cls).get_out_data_from_opts(**kwargs)
 
 
+class ComplexToAlternatingRealLayer(_ConcatInputLayer):
+  """
+  This layer converts a complex valued input tensor into a real valued output
+  tensor.
+  For this the even and odd parts of the output are considered the real and imaginary part of
+  one complex number, respectively
+  """
+
+  layer_class = "complex_to_alternating_real"
+
+  def __init__(self, **kwargs):
+    """
+    """
+    def _interleaveVectors(vec1, vec2):
+        vec1 = tf.expand_dims(vec1, 3)
+        vec2 = tf.expand_dims(vec2, 3)
+        interleaved = tf.concat([vec1, vec2], 3)
+        interleaved = tf.reshape(interleaved, (tf.shape(vec1)[0], tf.shape(vec1)[1], tf.shape(vec1)[2] * 2))
+        return interleaved
+    super(ComplexToAlternatingRealLayer, self).__init__(**kwargs)
+
+    input_placeholder = self.input_data.get_placeholder_as_batch_major()
+
+    real_value = tf.real(input_placeholder)
+    imag_value = tf.imag(input_placeholder)
+    self.output.placeholder = _interleaveVectors(real_value, imag_value)
+    self.output.size_placeholder = {0: self.input_data.size_placeholder[self.input_data.time_dim_axis_excluding_batch]}
+
+    
 class MaskBasedGevBeamformingLayer(LayerBase):
   """
   This layer applies GEV beamforming to a multichannel signal. The different
