@@ -24,6 +24,9 @@ Features include:
 
 See :ref:`basic_usage` and :ref:`tech_overview`.
 
+There are `slides for an introduction to RETURNN <https://www-i6.informatik.rwth-aachen.de/web/Software/returnn/downloads/workshop-2019-01-29/01.returnn-overview.session1.handout.v1.pdf>`_,
+including `some exercise sheet <https://www-i6.informatik.rwth-aachen.de/web/Software/returnn/downloads/workshop-2019-01-29/01.exercise_sheet.pdf>`_.
+
 There are `many example demos <https://github.com/rwth-i6/returnn/blob/master/demos/>`_
 which work on artificially generated data,
 i.e. they should work as-is.
