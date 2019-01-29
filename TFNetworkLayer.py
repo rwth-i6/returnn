@@ -5467,7 +5467,7 @@ class Loss(object):
     :param tf.Tensor x: (B,T,...) or (T,B,...)
     :param tf.Tensor seq_lens: (B,)
     :param bool time_major:
-    :return: (B*T|B',...)
+    :return: (B*T|T*B|B',...)
     :rtype: tf.Tensor
     """
     if self.use_flatten_frames:
@@ -5475,9 +5475,10 @@ class Loss(object):
       return flatten_with_seq_len_mask(x, seq_lens, time_major=time_major)
     x_shape = tf.shape(x)
     x_shape = [x_shape[i] for i in range(x.get_shape().ndims)]
-    if time_major:
+    if time_major != self.output.is_time_major:
+      # We expect at various places (eg. reduce_to_batch) that the loss is the same as self.output.
       from TFUtil import swapaxes
-      x = swapaxes(x, 0, 1)  # (B,T,...)
+      x = swapaxes(x, 0, 1)  # (B,T,...) or (T,B,...)
     return tf.reshape(x, [x_shape[0] * x_shape[1]] + x_shape[2:], name="merge_batch_time")
 
   def init(self, output, output_with_activation=None, target=None, layer=None):
