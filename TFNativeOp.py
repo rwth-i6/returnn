@@ -56,7 +56,8 @@ class OpMaker(object):
   op_cache = {}  # cache_key -> op
 
   def __init__(self, description, compiler_opts=None,
-               search_for_runtime_blas=True, search_for_numpy_blas=True, search_for_system_blas=True):
+               search_for_runtime_blas=True, search_for_numpy_blas=True, search_for_system_blas=True,
+               blas_lib=None):
     """
     :param OpDescription description:
     :param dict[str]|None compiler_opts: passed on to OpCodeCompiler as kwargs
@@ -68,6 +69,7 @@ class OpMaker(object):
     self.search_for_runtime_blas = search_for_runtime_blas
     self.search_for_numpy_blas = search_for_numpy_blas
     self.search_for_system_blas = search_for_system_blas
+    self.blas_lib = blas_lib
 
   @classmethod
   def _cls_init(cls):
@@ -402,7 +404,14 @@ class OpMaker(object):
     # right symbols (e.g. the `sgemm_` symbol).
     ld_flags = []
     have_blas_lib = False
-    if self.search_for_runtime_blas:
+
+    if self.blas_lib is not None and os.path.exists(self.blas_lib):
+      path = os.path.dirname(self.blas_lib)
+      if path == "":
+        path = "."
+      ld_flags += ["-L%s" % path, "-l:%s" % os.path.basename(self.blas_lib)]
+      have_blas_lib = True
+    if not have_blas_lib and self.search_for_runtime_blas:
       import Util
       libs = Util.find_sgemm_libs_from_runtime()
       if libs:
@@ -410,6 +419,8 @@ class OpMaker(object):
         if numpy_libs:
           # Prefer Numpy; move to front.
           libs = numpy_libs + [fn for fn in libs if fn not in numpy_libs]
+        if self.blas_lib is not None:
+          libs = filter(lambda l: self.blas_lib in l, libs)
         for fn in libs:
           ld_flags += ["-L%s" % os.path.dirname(fn), "-l:%s" % os.path.basename(fn)]
           have_blas_lib = True
@@ -425,6 +436,8 @@ class OpMaker(object):
         from glob import glob
         for f in glob("%s/.libs/*.so" % numpy_dir):
           f = os.path.basename(f)
+          if self.blas_lib is not None and self.blas_lib not in f:
+            continue
           if f.startswith("lib"):
             f = f[3:]
           if f.endswith(".so"):
@@ -467,7 +480,8 @@ class OpMaker(object):
       if self.description.is_grad_defined:
         grad_description = self.description.grad()
         grad_op_maker = OpMaker(description=grad_description, compiler_opts=self.compiler_opts,
-                                search_for_numpy_blas=self.search_for_numpy_blas)
+                                search_for_numpy_blas=self.search_for_numpy_blas,
+                                blas_lib=self.blas_lib)
         grad_op = grad_op_maker.make_op()
 
         from tensorflow.python.framework import ops
