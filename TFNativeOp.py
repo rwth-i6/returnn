@@ -420,7 +420,7 @@ class OpMaker(object):
           # Prefer Numpy; move to front.
           libs = numpy_libs + [fn for fn in libs if fn not in numpy_libs]
         if self.blas_lib is not None:
-          libs = filter(lambda l: self.blas_lib in l, libs)
+          libs = [l for l in libs if self.blas_lib in l]
         for fn in libs:
           ld_flags += ["-L%s" % os.path.dirname(fn), "-l:%s" % os.path.basename(fn)]
           have_blas_lib = True
