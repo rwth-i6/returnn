@@ -473,16 +473,15 @@ class FrameCutoffLayer(_NoOpLayer): # TODO: This is not correct for max_seqs > 1
     super(FrameCutoffLayer, self).__init__(**kwargs)
     self.set_attr("num_frames", num_frames)
     self.set_attr("left", left)
-    assert len(self.sources) == 1
-    s = self.sources[0]
-    for attr in ["n_out", "sparse"]:
-      self.set_attr(attr, s.attrs[attr])
+    x_in, n_in = _concat_sources(self.sources, masks=self.masks, mass=self.mass)
+    i_in = self.sources[0].index
+    self.set_attr("n_out", n_in)
     if left:
-      self.output = s.output[num_frames:]
-      self.index = s.index[num_frames:]
+      self.output = x_in[num_frames:]
+      self.index = i_in[num_frames:]
     else:
-      self.output = s.output[:-num_frames]
-      self.index = s.index[:-num_frames]
+      self.output = x_in[:-num_frames]
+      self.index = i_in[:-num_frames]
 
 
 class ReverseLayer(_NoOpLayer):
@@ -573,11 +572,11 @@ class SubnetworkLayer(_NoOpLayer):
     """
     super(SubnetworkLayer, self).__init__(**kwargs)
     self.set_attr("n_out", n_out)
-    if isinstance(subnetwork, (str, unicode)):
+    if isinstance(subnetwork, str):
       subnetwork = json.loads(subnetwork)
     self.set_attr("subnetwork", subnetwork)
     self.set_attr("load", load)
-    if isinstance(data_map, (str, unicode)):
+    if isinstance(data_map, str):
       data_map = json.loads(data_map)
     if data_map:
       self.set_attr("data_map", data_map)
@@ -663,11 +662,11 @@ class ClusterDependentSubnetworkLayer(_NoOpLayer):
     """
     super(ClusterDependentSubnetworkLayer, self).__init__(**kwargs)
     self.set_attr("n_out", n_out)
-    if isinstance(subnetwork, (str, unicode)):
+    if isinstance(subnetwork, str):
       subnetwork = json.loads(subnetwork)
     self.set_attr("subnetwork", subnetwork)
     self.set_attr("load", load)
-    if isinstance(data_map, (str, unicode)):
+    if isinstance(data_map, str):
       data_map = json.loads(data_map)
     if data_map:
       self.set_attr("data_map", data_map)
@@ -837,7 +836,7 @@ class ChunkingSublayer(_NoOpLayer):
     self.set_attr('n_out', n_out)
     self.set_attr('chunk_size', chunk_size)
     self.set_attr('chunk_step', chunk_step)
-    if isinstance(sublayer, (str, unicode)):
+    if isinstance(sublayer, str):
       sublayer = json.loads(sublayer)
     self.set_attr('sublayer', sublayer.copy())
     self.set_attr('chunk_distribution', chunk_distribution)
@@ -4165,3 +4164,33 @@ class SegmentClassTargets(_NoOpLayer):
                                                                   T.TensorConstant(theano.tensor.iscalar, self.attrs['window']),
                                                                   self.sources[0].output, self.sources[0].index)
     self.output = self.y_out
+
+
+class PrfLayer(_NoOpLayer):
+  layer_class = 'prf'
+
+  def __init__(self, yscale=1., **kwargs):
+    super(PrfLayer, self).__init__(**kwargs)
+    target = None if not 'target' in kwargs else kwargs['target']
+    self.attrs['n_out'] = 3
+    assert self.attrs['n_out'] == self.y_in[target].n_out, "%d != %d" % (self.attrs['n_out'], self.y_in[target].n_out)
+    self.params = {}
+    ys = (self.y_in[target] > 0) * numpy.float32(2) - numpy.float32(1)
+    y = T.pow(self.y_in[target]*ys,numpy.float32(yscale))*ys
+    z, n_out = concat_sources(self.sources, masks=self.masks, mass=self.mass, unsparse=True)
+
+    W = self.add_param(self.create_forward_weights(n_out, self.attrs['n_out'], name='W_%s' % self.name), 'W_%s' % self.name)
+    #b = self.add_param(self.create_bias(self.attrs['n_out'], name='b_%s' % self.name), 'b_%s' % self.name)
+
+    r = T.dot(z, W) #+ b
+    r = r.reshape((r.shape[0]*r.shape[1],r.shape[2]))
+    self.output = T.nnet.softmax(r).reshape(r.shape)
+    out = self.output * y
+    self.cost_val = -T.sum(out)
+    self.err_val = T.sum((out.sum(axis=1)<0))
+
+  def cost(self):
+    return self.cost_val, None
+
+  def errors(self):
+    return self.err_val
