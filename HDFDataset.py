@@ -197,6 +197,7 @@ class HDFDataset(CachedDataset):
               if self.data_dtype[k] == 'int32':
                 self.targets[k] = numpy.zeros((self._num_codesteps[self.target_keys.index(k)],), dtype=theano.config.floatX) - 1
               else:
+                tdim = fin['targets/size'].attrs[k]
                 self.targets[k] = numpy.zeros((self._num_codesteps[self.target_keys.index(k)],tdim), dtype=theano.config.floatX) - 1
             ldx = self.target_keys.index(k) + 1
             self.targets[k][self.get_seq_start(idc)[ldx]:self.get_seq_start(idc)[ldx] + l[ldx]] = targets[k][p[ldx] : p[ldx] + l[ldx]]
