@@ -4164,33 +4164,3 @@ class SegmentClassTargets(_NoOpLayer):
                                                                   T.TensorConstant(theano.tensor.iscalar, self.attrs['window']),
                                                                   self.sources[0].output, self.sources[0].index)
     self.output = self.y_out
-
-
-class PrfLayer(_NoOpLayer):
-  layer_class = 'prf'
-
-  def __init__(self, yscale=1., **kwargs):
-    super(PrfLayer, self).__init__(**kwargs)
-    target = None if not 'target' in kwargs else kwargs['target']
-    self.attrs['n_out'] = 3
-    assert self.attrs['n_out'] == self.y_in[target].n_out, "%d != %d" % (self.attrs['n_out'], self.y_in[target].n_out)
-    self.params = {}
-    ys = (self.y_in[target] > 0) * numpy.float32(2) - numpy.float32(1)
-    y = T.pow(self.y_in[target]*ys,numpy.float32(yscale))*ys
-    z, n_out = concat_sources(self.sources, masks=self.masks, mass=self.mass, unsparse=True)
-
-    W = self.add_param(self.create_forward_weights(n_out, self.attrs['n_out'], name='W_%s' % self.name), 'W_%s' % self.name)
-    #b = self.add_param(self.create_bias(self.attrs['n_out'], name='b_%s' % self.name), 'b_%s' % self.name)
-
-    r = T.dot(z, W) #+ b
-    r = r.reshape((r.shape[0]*r.shape[1],r.shape[2]))
-    self.output = T.nnet.softmax(r).reshape(r.shape)
-    out = self.output * y
-    self.cost_val = -T.sum(out)
-    self.err_val = T.sum((out.sum(axis=1)<0))
-
-  def cost(self):
-    return self.cost_val, None
-
-  def errors(self):
-    return self.err_val
