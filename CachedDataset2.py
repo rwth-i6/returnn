@@ -151,6 +151,9 @@ class CachedDataset2(Dataset):
     return self._get_seq(sorted_seq_idx).ctc_targets
 
   def get_tag(self, sorted_seq_idx):
+    # get_tag() can be called before the seq is loaded via load_seqs().
+    # Thus, we just call load_seqs() ourselves here.
+    self.load_seqs(self.expected_load_seq_start, sorted_seq_idx + 1)
     return self._get_seq(sorted_seq_idx).seq_tag
 
   def get_data_keys(self):

@@ -298,6 +298,8 @@ def initBackendEngine():
   BackendEngine.select_engine(config=config)
   if BackendEngine.is_theano_selected():
     print("Theano:", describe_theano_version(), file=log.v3)
+    import TheanoUtil
+    TheanoUtil.monkey_patches()
   elif BackendEngine.is_tensorflow_selected():
     print("TensorFlow:", describe_tensorflow_version(), file=log.v3)
     if get_tensorflow_version_tuple()[0] == 0:
@@ -307,6 +309,7 @@ def initBackendEngine():
         os.environ.get("TF_DEVICE"), config.opt_typed_value("device")), file=log.v4)
       config.set("device", os.environ.get("TF_DEVICE"))
     if config.is_true("use_horovod"):
+      import socket
       import horovod.tensorflow as hvd
       from TFUtil import init_horovod
       init_horovod()  # make sure it is initialized
@@ -315,7 +318,8 @@ def initBackendEngine():
         gpu_opts = config.typed_dict.setdefault("tf_session_opts", {}).setdefault("gpu_options", {})
         assert "visible_device_list" not in gpu_opts
         gpu_opts["visible_device_list"] = str(hvd.local_rank())
-        print("Horovod: Using GPU %s." % gpu_opts["visible_device_list"], file=log.v3)
+        print("Horovod: Hostname %s, pid %i, using GPU %s." % (
+          socket.gethostname(), os.getpid(), gpu_opts["visible_device_list"]), file=log.v3)
       else:
         if hvd.rank() == 0:  # Don't spam in all ranks.
           print("Horovod: Not using GPU.", file=log.v3)
@@ -440,7 +444,7 @@ def executeMainTask():
     engine.search(
       data,
       do_eval=config.bool("search_do_eval", True),
-      output_layer_name=config.value("search_output_layer", "output"),
+      output_layer_names=config.typed_value("search_output_layer", "output"),
       output_file=config.value("search_output_file", ""),
       output_file_format=config.value("search_output_file_format", "txt"))
   elif task == 'compute_priors':
@@ -511,6 +515,9 @@ def executeMainTask():
   elif task == "nop_init_net_train":
     print("Task: No-operation, despite initializing the network (for training)", file=log.v1)
     engine.init_train_from_config(config, train_data, dev_data, eval_data)
+  elif task == "initialize_model":
+    engine.init_train_from_config(config, train_data, dev_data, eval_data)
+    engine.save_model(config.value('model','dummy'))
   else:
     assert False, "unknown task: %s" % task
 

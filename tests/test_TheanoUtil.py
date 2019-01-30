@@ -10,6 +10,9 @@ import numpy.testing
 from TheanoUtil import *
 
 
+monkey_patches()
+
+
 def test_class_idx_seq_to_1_of_k():
   from theano.tensor.extra_ops import to_one_hot
   v = theano.tensor.as_tensor_variable(numpy.array([1, 2, 3, 5, 6]))

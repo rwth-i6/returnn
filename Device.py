@@ -433,12 +433,12 @@ class Device(object):
     if self.blocking:
       assert os.getpid() == self.main_pid
     else:
-      assert os.getpid() != self.main_pid # this won't work on Windows
+      assert os.getpid() != self.main_pid  # this won't work on Windows
     import theano
     import theano.tensor as T
     import h5py
     self.T = T
-    self.seq_train_parallel_control = None  # type: SeqTrainParallelControlDevHost. will be set via SprintErrorSignals
+    self.seq_train_parallel_control = None  # type: SeqTrainParallelControlDevHost  # will be set via SprintErrorSignals
     self.network_task = config.value('task', 'train')
     eval_flag = self.network_task in ['eval', 'forward', 'daemon']
     testnet_kwargs = dict(mask="unity", train_flag=False, eval_flag=eval_flag)
@@ -1037,6 +1037,8 @@ class Device(object):
       print("Device %s proc: THEANO_FLAGS = %r" % (device, os.environ.get("THEANO_FLAGS", None)), file=log.v4)
       rnn.initFaulthandler()
       rnn.initConfigJsonNetwork()
+      import TheanoUtil
+      TheanoUtil.monkey_patches()
       self.process_inner(device, config, self.update_specs, asyncTask)
     except ProcConnectionDied as e:
       print("Device %s proc, pid %i: Parent seem to have died: %s" % (device, os.getpid(), e), file=log.v2)

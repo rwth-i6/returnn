@@ -473,3 +473,250 @@ class NextGenHDFDataset(CachedDataset2):
     :rtype: string
     """
     return name.replace('/', '\\')
+
+
+class SiameseHDFDataset(CachedDataset2):
+  """
+  SiameseHDFDataset class allows to do sequence sampling for weakly-supervised training.
+  It accepts data in the format of NextGenHDFDataset and performs sampling of sequence triplets before each epoch.
+  Triplets are tuples of the format: (anchor seq, random seq with the same label, random seq with a different label)
+  Here we assume that each dataset from the input .hdf has a single label.
+  In the config we can access streams by e.g. ["data:features_0"], ["data:features_1"], ["data:features_2"].
+  Split names depend on stream names in the input data, e.g. "features", "data", "classes", etc.
+  SiameseHDFDataset method _collect_single_seq(self, seq_idx) returns a DatasetSeq with extended dictionary of targets.
+  "data:features_0" key stands for features of anchor sequences from the input data.
+  In NexGenHDFDataset it would correspond to "data:features" or "data".
+  "data:features_1" is a key, which denote a pair of "data:features_0".
+  For each anchor sequence SiameseHDFDataset randomly samples a sequence with the same label.
+  "data:features_2" denotes the third element in a triplet tuple.
+  For each anchor sequence SiameseHDFDataset randomly samples a sequence with a different label.
+  Targets are splitted into different streams as well, e.g. "data:classes_0", "data:classes_1", "data:classes_2".
+
+  SiameseHDFDataset also supports non-uniform sampling and accepts a path to .npz matrix.
+  Rows of this matrix should have probabilities for each of the classes to be sampled.
+  This probability distribution might reflect class similarities.
+
+  This dataset might be useful for metric learning,
+  where we want to learn such representations of input sequences, that those which belong to the same class are close together,
+  while those with different labels should have representations far away from each other.
+  """
+  parsers = { 'feature_sequence'  : FeatureSequenceStreamParser,
+              'sparse'            : SparseStreamParser,
+              'segment_alignment' : SegmentAlignmentStreamParser }
+
+  def __init__(self, input_stream_name, seq_label_stream='words', class_distribution=None, files=None, *args, **kwargs):
+    """
+    :param str input_stream_name: name of a feature stream
+    :param str seq_label_stream: name of a stream with labels
+    :param str class_distribution: path to .npz file of size n x n (n is a number of classes),
+           where each line i contains probs of other classes to be picked in triplets
+           when sampling a pair for element from class i
+    :param files: list of paths to .hdf files
+    :param args: dict[str]
+    :param kwargs: dict[str]
+    """
+    super(SiameseHDFDataset, self).__init__(*args, **kwargs)
+    self.input_stream_name = input_stream_name
+    if class_distribution is not None:
+      self.class_probs = numpy.load(class_distribution)['arr_0']
+    else:
+      self.class_probs = None
+    self.files = []
+    self.h5_files = []
+    self.all_seq_names = []  # all_seq_names[(int)seq_index] = (string) sequence_name
+    self.seq_name_to_idx = {}  # (string) sequence_name -> seq_index (int)
+    self.file_indices = []  # file_indices[(int)seq_index] = file_index => indices of files to which sequences belongs to
+    self.seq_order = []
+    self.all_parsers = collections.defaultdict(list)
+    self.seq_to_target = {}  # (string) sequence_name -> (int) class_index
+    self.target_to_seqs = {}  # (int) class_index -> (string) sequence_names
+    self.curr_epoch_triplets = []
+    self.targets_stream = seq_label_stream
+    if files:
+      for fn in files:
+        self.add_file(fn)
+
+  def add_file(self, path):
+    """
+    register input files and sequences
+    :param path: path to single .hdf file
+    """
+    self.files.append(path)
+    self.h5_files.append(h5py.File(path, "r"))
+    cur_file = self.h5_files[-1]
+    assert {'seq_names', 'streams'}.issubset(set(cur_file.keys())), "%s does not contain all required datasets/groups" % path
+    seqs = list(cur_file['seq_names'])
+    norm_seqs = [self._normalize_seq_name(s) for s in seqs]
+
+    prev_no_seqs = len(self.all_seq_names)
+    seqs_in_this_file = len(seqs)
+    self.seq_name_to_idx.update(zip(seqs, range(prev_no_seqs, prev_no_seqs + seqs_in_this_file + 1)))
+
+    self.all_seq_names.extend(seqs)
+    self.file_indices.extend([len(self.files) - 1] * len(seqs))
+
+    all_streams = set(cur_file['streams'].keys())
+    assert self.input_stream_name in all_streams, "%s does not contain the input stream %s" % (path, self.input_stream_name)
+    if self.targets_stream is not None:
+      assert self.targets_stream in all_streams, "%s does not contain the input stream %s" % (path, self.targets_stream)
+
+    parsers = { name : SiameseHDFDataset.parsers[stream.attrs['parser']](norm_seqs, stream) for name, stream in cur_file['streams'].items()} # name - stream name (words, features, orth_features)
+    for k, v in parsers.items():
+      self.all_parsers[k].append(v)
+
+    if len(self.files) == 1:
+      self.num_outputs = { name : [parser.num_features, parser.feature_type] for name, parser in parsers.items() }
+      self.num_inputs = self.num_outputs[self.input_stream_name][0]
+    else:
+      num_features = [(name, self.num_outputs[name][0], parser.num_features) for name, parser in parsers.items()]
+      assert all(nf[1] == nf[2] for nf in num_features), '\n'.join("Number of features does not match for parser %s: %d (config) vs. %d (hdf-file)" % nf for nf in num_features if nf[1] != nf[2])
+
+  def initialize(self):
+    """
+    initialize target_to_seqs and seq_to_target dicts
+    """
+    self.target_to_seqs = {}
+    self.seq_to_target = {}
+    for cur_file in self.h5_files:
+      sequences = cur_file['streams'][self.targets_stream]['data'] # (string) seq_name -> (int) word_id
+      for seq_name, value in sequences.items():
+        seq_targ = int(value.value[0])
+        if seq_targ in self.target_to_seqs.keys():
+          self.target_to_seqs[seq_targ].append(seq_name)
+        else:
+          self.target_to_seqs[seq_targ] = [seq_name]
+        self.seq_to_target[seq_name] = seq_targ
+
+    super(SiameseHDFDataset, self).initialize()
+
+  def init_seq_order(self, epoch=None, seq_list=None):
+    """
+    :param epoch int|None : current epoch id
+    :param list[str] | None seq_list: In case we want to set a predefined order.
+    """
+    super(SiameseHDFDataset, self).init_seq_order(epoch, seq_list)
+
+    if seq_list is not None:
+      self.seq_order = [self.seq_name_to_idx[s] for s in seq_list]
+    else:
+      epoch = epoch or 1
+      self.seq_order = self.get_seq_order_for_epoch(epoch, len(self.all_seq_names), self._get_seq_length)
+
+    # init random seed for siamese triplet sampling
+    numpy.random.seed()
+    self._init_triplets()
+
+  def _init_triplets(self):
+    """
+    sample triplet for current epoch: (anchor_sample, sample_from_same_class, sample_from_diff_class)
+    """
+    self.curr_epoch_triplets = []
+    # here we will intialize triplets before each epoch
+    for seq_idx, real_seq_idx in enumerate(self.seq_order):
+      seq_name = self.all_seq_names[real_seq_idx]
+      seq_target = self.seq_to_target[seq_name]
+      # randomly sample same pair
+      same_words = self.target_to_seqs[seq_target]
+      if len(same_words) > 1:
+        pair_word_idx = numpy.random.randint(0, len(same_words))
+        # sample again if pair sequence is the same sequence
+        while same_words[pair_word_idx] == seq_name:
+          pair_word_idx = numpy.random.randint(0, len(same_words))
+        pair_seq_name = same_words[pair_word_idx]
+        real_pair_idx = self.seq_name_to_idx[pair_seq_name]
+      else:
+        real_pair_idx = real_seq_idx
+      # randomly sample third element from another class
+      rand_target_val = self._sample_diff_class(seq_target)
+      # sample again if random class is the same class as anchor
+      while rand_target_val == seq_target:
+        rand_target_val = self._sample_diff_class(seq_target)
+      # sample an example from random_target
+      rand_seq_id = numpy.random.randint(0, len(self.target_to_seqs[rand_target_val]))
+      rand_seq_name = self.target_to_seqs[rand_target_val][rand_seq_id]
+      real_third_idx = self.seq_name_to_idx[rand_seq_name]
+      self.curr_epoch_triplets.append(tuple((real_seq_idx, real_pair_idx, real_third_idx)))
+
+  def _sample_diff_class(self, anchor_seq_target):
+    """
+    draw a class from a space of all classes
+    :param int anchor_seq_target: id of anchor class
+    :return: int id of a drawn class
+    """
+    if self.class_probs is not None:
+      distrib = self.class_probs[anchor_seq_target]
+      classes = list(map(int, list(self.target_to_seqs.keys())))
+      probs = numpy.array(distrib[classes])
+      probs /= numpy.sum(probs)
+      rand_target_val = numpy.random.choice(classes, size=1, p=probs)[0]
+    else:
+      random_target = numpy.random.randint(0, len(list(self.target_to_seqs.keys())))
+      rand_target_val = list(self.target_to_seqs.keys())[random_target]
+
+    return rand_target_val
+
+  def _collect_single_seq(self, seq_idx):
+    """
+    :param int seq_idx: sequence id
+    :rtype: DatasetSeq
+    """
+    if seq_idx >= len(self.seq_order):
+      return None
+    real_seq_index = self.seq_order[seq_idx]
+    seq_name = self.all_seq_names[real_seq_index]
+
+    curr_triplet = self.curr_epoch_triplets[seq_idx]
+    targets = {}
+    for id, sample in enumerate(curr_triplet):
+      real_sample_seq_idx = sample
+      sample_seq_name = self.all_seq_names[real_sample_seq_idx]
+      sample_seq_file_index = self.file_indices[real_sample_seq_idx]
+      norm_sample_seq_name = self._normalize_seq_name(sample_seq_name)
+      for name, parsers in self.all_parsers.items():
+        targets['%s_%d' % (name, id)] = parsers[sample_seq_file_index].get_data(norm_sample_seq_name)
+
+    features = targets['%s_%d' % (self.input_stream_name, 0)]
+    return DatasetSeq(seq_idx=seq_idx,
+                      seq_tag=seq_name,
+                      features=features,
+                      targets=targets)
+
+  def _get_seq_length(self, orig_seq_idx):
+    """
+    :type orig_seq_idx: int
+    :rtype int
+    """
+    parser = self.all_parsers[self.input_stream_name][self.file_indices[orig_seq_idx]]
+    return parser.get_seq_length(self._normalize_seq_name(self.all_seq_names[orig_seq_idx]))
+
+  @staticmethod
+  def _normalize_seq_name(name):
+    """
+    HDF Datasets cannot contain '/' in their name (this would create subgroups), we do not
+    want this and thus replace it with '\' when asking for data from the parsers
+    :type name: string
+    :rtype: string
+    """
+    return name.replace('/', '\\')
+
+  def is_data_sparse(self, key):
+    """
+    :param str key: e.g. "features_0" or "orth_features_0" or "words_0"
+    :return: whether the data is sparse
+    :rtype: bool
+    """
+    if "features" in key:
+      return False
+    return True
+
+  def get_data_dim(self, key):
+    """
+    :param str key: e.g. "features_0", "features_1", "classes_0", etc.
+    :return: number of classes, no matter if sparse or not
+    :rtype: int
+    """
+    k = "_".join(key.split("_")[:-1]) if "_" in key else key
+    if k in self.num_outputs:
+      return self.num_outputs[k][0]
+    return 1  # unknown
+

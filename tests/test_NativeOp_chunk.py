@@ -16,6 +16,7 @@ from Log import log
 
 better_exchook.replace_traceback_format_tb()
 log.initialize()  # some code might need it
+TheanoUtil.monkey_patches()
 
 
 chunk = NativeOp.chunk
