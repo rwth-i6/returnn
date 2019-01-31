@@ -125,6 +125,117 @@ def test_MultichannelStftLayer():
   test_rfftStftConfig_01()
 
 
+def test_MultichannelMultiResStftLayer():
+  def _get_ref_output_single_res(time_sig, fft_size, frame_size, frame_shift, window_name, frame_nr, channel_nr):
+      import numpy as np
+      frame_start = frame_nr * frame_shift
+      frame_end = frame_start + frame_size
+      frame = time_sig[0, frame_start:frame_end, channel_nr] 
+      if window_name == "hanning":
+          window = np.hanning(frame_size)
+      windowed_frame = window * frame
+      out = np.fft.rfft(windowed_frame, fft_size)
+      return out
+
+  def test_stftConfig_single_res_01():
+    with make_scope() as session:
+      layer_name = "stft_layer"
+      fft_sizes = [400]
+      frame_sizes = [400]
+      frame_shift = 160
+      window = "hanning"
+      test_input = np.ones((1, 32000, 2), dtype=np.float32)
+      num_outputs = (int(fft_sizes[0] / 2) + 1) * test_input.shape[2]
+      config = Config()
+      config.update({
+        "num_outputs": num_outputs,
+        "num_inputs": test_input.shape[2],
+        "network": {
+          layer_name: {
+            "class": "multichannel_multiresolution_stft_layer", "frame_shift": frame_shift, "frame_sizes": frame_sizes, "window": window, "fft_sizes": fft_sizes, "use_rfft": True, "nr_of_channels": 2, "is_output_layer": True}
+        }})
+      network = TFNetwork(config=config, train_flag=True)
+      network.construct_from_dict(config.typed_value("network"))
+      layer = network.layers[layer_name]
+      test_output = session.run(layer.output.placeholder, {network.get_extern_data('data').placeholder: test_input})
+      ref0 = _get_ref_output_single_res(test_input, fft_sizes[0], frame_sizes[0], frame_shift, window, 0, 0)
+      resultDiff = np.abs(test_output[0, 0, 0:(int(fft_sizes[0] / 2) + 1)] - ref0)
+      assert test_output.shape[2] == num_outputs
+      assert np.mean(resultDiff) < 0.02 
+      assert np.max(resultDiff) < 1 
+
+  def test_stftConfig_multi_res_01():
+    with make_scope() as session:
+      layer_name = "stft_layer"
+      fft_sizes = [400, 200]
+      frame_sizes = [400, 200]
+      frame_shift = 160
+      window = "hanning"
+      test_input = np.ones((1, 32000, 2), dtype=np.float32)
+      test_input[0, 1000:1100, 1] = np.ones((100), dtype=np.float32) * 0.5
+      num_outputs = np.sum([(int(fft_size / 2) + 1) * test_input.shape[2] for fft_size in fft_sizes])
+      config = Config()
+      config.update({
+        "num_outputs": num_outputs,
+        "num_inputs": test_input.shape[2],
+        "network": {
+          layer_name: {
+            "class": "multichannel_multiresolution_stft_layer", "frame_shift": frame_shift, "frame_sizes": frame_sizes, "window": window, "fft_sizes": fft_sizes, "use_rfft": True, "nr_of_channels": 2, "is_output_layer": True}
+        }})
+      network = TFNetwork(config=config, train_flag=True)
+      network.construct_from_dict(config.typed_value("network"))
+      layer = network.layers[layer_name]
+      test_output = session.run(layer.output.placeholder, {network.get_extern_data('data').placeholder: test_input})
+      assert test_output.shape[2] == num_outputs
+      comparison_frame = 6
+      ref00 = _get_ref_output_single_res(test_input, fft_sizes[0], frame_sizes[0], frame_shift, window, comparison_frame, 0)
+      ref01 = _get_ref_output_single_res(test_input, fft_sizes[0], frame_sizes[0], frame_shift, window, comparison_frame, 1)
+      ref10 = _get_ref_output_single_res(test_input, fft_sizes[1], frame_sizes[1], frame_shift, window, comparison_frame, 0)
+      ref11 = _get_ref_output_single_res(test_input, fft_sizes[1], frame_sizes[1], frame_shift, window, comparison_frame, 1)
+      ref = np.concatenate([ref00, ref01, ref10, ref11], axis=0)
+      resultDiff = np.abs(test_output[0, comparison_frame, :] - ref)
+      assert np.mean(resultDiff) < 0.02 
+      assert np.max(resultDiff) < 1 
+
+  def test_stftConfig_multi_res_02():
+    with make_scope() as session:
+      layer_name = "stft_layer"
+      fft_sizes = [400, 200, 800]
+      frame_sizes = [400, 200, 800]
+      frame_shift = 160
+      window = "hanning"
+      test_input = np.random.normal(0, 0.6, (1, 3200, 2))
+      num_outputs = np.sum([(int(fft_size / 2) + 1) * test_input.shape[2] for fft_size in fft_sizes])
+      config = Config()
+      config.update({
+        "num_outputs": num_outputs,
+        "num_inputs": test_input.shape[2],
+        "network": {
+          layer_name: {
+            "class": "multichannel_multiresolution_stft_layer", "frame_shift": frame_shift, "frame_sizes": frame_sizes, "window": window, "fft_sizes": fft_sizes, "use_rfft": True, "nr_of_channels": 2, "is_output_layer": True}
+        }})
+      network = TFNetwork(config=config, train_flag=True)
+      network.construct_from_dict(config.typed_value("network"))
+      layer = network.layers[layer_name]
+      test_output = session.run(layer.output.placeholder, {network.get_extern_data('data').placeholder: test_input})
+      assert test_output.shape[2] == num_outputs
+      comparison_frame = 6
+      ref00 = _get_ref_output_single_res(test_input, fft_sizes[0], frame_sizes[0], frame_shift, window, comparison_frame, 0)
+      ref01 = _get_ref_output_single_res(test_input, fft_sizes[0], frame_sizes[0], frame_shift, window, comparison_frame, 1)
+      ref10 = _get_ref_output_single_res(test_input, fft_sizes[1], frame_sizes[1], frame_shift, window, comparison_frame, 0)
+      ref11 = _get_ref_output_single_res(test_input, fft_sizes[1], frame_sizes[1], frame_shift, window, comparison_frame, 1)
+      ref20 = _get_ref_output_single_res(test_input, fft_sizes[2], frame_sizes[2], frame_shift, window, comparison_frame, 0)
+      ref21 = _get_ref_output_single_res(test_input, fft_sizes[2], frame_sizes[2], frame_shift, window, comparison_frame, 1)
+      ref = np.concatenate([ref00, ref01, ref10, ref11, ref20, ref21], axis=0)
+      resultDiff = np.abs(test_output[0, comparison_frame, :] - ref)
+      assert np.mean(resultDiff) < 0.06
+      assert np.max(resultDiff) < 1 
+
+  test_stftConfig_single_res_01()
+  test_stftConfig_multi_res_01()
+  test_stftConfig_multi_res_02()
+
+
 if __name__ == "__main__":
   better_exchook.install()
   if len(sys.argv) <= 1:
