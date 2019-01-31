@@ -346,7 +346,14 @@ class MelFilterbankLayer(_ConcatInputLayer):
 
 class MultiChannelMultiResolutionStftLayer(_ConcatInputLayer):
   """
-  #TBD !!!
+  The layer applys a STFT to every channel separately and concatenates the frequency domain vectors for every frame.
+  The STFT is applied with multiple different frame- and fft-sizes and the resulting multi-channel stfts are concatenated.
+  Resulting in a tensor with the content [res_0-ch_0, ..., res_0-ch_N, res_1-ch_0, ... res_M-ch_N]
+  The subsampling from T input samples to T' output frames is computed as follows:
+  T' = (T - frame_size) / frame_shift + 1
+  frame_shift is the same for all resolutions and T' is computed according to a reference frame_size which is taken to be
+  frame_sizes[0]. For all other frame sizes the input is zero-padded or the output is cut to obtain the same T' as for the
+  reference frame_size.
   """
   layer_class = "multichannel_multiresolution_stft_layer"
   recurrent = True
@@ -354,8 +361,8 @@ class MultiChannelMultiResolutionStftLayer(_ConcatInputLayer):
   def __init__(self, frame_shift, frame_sizes, fft_sizes, window="hanning", use_rfft=True, nr_of_channels=1, pad_last_frame=False, **kwargs):
     """
     :param int frame_shift: frame shift for stft in samples
-    :param int frame_size: frame size for stft in samples
-    :param int fft_size: fft size in samples
+    :param list(int) frame_sizes: frame size for stft in samples
+    :param list(int) fft_sizes: fft size in samples
     :param str window: id of the windowing function used. Possible options are:
       - hanning
     :param bool use_rfft: if set to true a real input signal is expected and only
