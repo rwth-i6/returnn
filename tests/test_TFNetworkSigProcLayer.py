@@ -173,7 +173,7 @@ def test_MultichannelMultiResStftLayer():
       window = "hanning"
       test_input = np.ones((1, 32000, 2), dtype=np.float32)
       test_input[0, 1000:1100, 1] = np.ones((100), dtype=np.float32) * 0.5
-      num_outputs = np.sum([(int(fft_size / 2) + 1) * test_input.shape[2] for fft_size in fft_sizes])
+      num_outputs = int(np.sum([(int(fft_size / 2) + 1) * test_input.shape[2] for fft_size in fft_sizes]))
       config = Config()
       config.update({
         "num_outputs": num_outputs,
@@ -205,7 +205,7 @@ def test_MultichannelMultiResStftLayer():
       frame_shift = 160
       window = "hanning"
       test_input = np.random.normal(0, 0.6, (1, 3200, 2))
-      num_outputs = np.sum([(int(fft_size / 2) + 1) * test_input.shape[2] for fft_size in fft_sizes])
+      num_outputs = int(np.sum([(int(fft_size / 2) + 1) * test_input.shape[2] for fft_size in fft_sizes]))
       config = Config()
       config.update({
         "num_outputs": num_outputs,
