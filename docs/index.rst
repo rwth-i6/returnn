@@ -56,6 +56,7 @@ User guide
     tech_overview
     tf_lstm_benchmark
     deterministic_training
+    layer_reference/index.rst
 
 
 API Reference
