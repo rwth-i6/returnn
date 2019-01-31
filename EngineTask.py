@@ -7,7 +7,6 @@ import threading
 import time
 
 import numpy
-import theano
 
 from Device import Device
 from EngineUtil import assign_dev_data
@@ -257,7 +256,7 @@ class TaskThread(threading.Thread):
               p.set_value(q)
             gparams = {}
             for p in vars:
-              gparams[p] = numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape, dtype=theano.config.floatX)
+              gparams[p] = numpy.zeros(p.get_value(borrow=True, return_internal_type=True).shape, dtype='float32')
             for p in vars:
               q = res["gparam:%s" % p.name]
               if q.shape == p.get_value().shape:
