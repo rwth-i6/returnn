@@ -6595,6 +6595,112 @@ class SamplingBasedLoss(Loss):
         return self.reduce_func(sampled_loss_fn())
 
 
+class TripletLoss(Loss):
+  """
+  Triplet loss: loss = max(margin + d(x_a, x_s) - d(x_a, x_d), 0.0)
+  Triplet loss is used for metric learning in a siamese/triplet network.
+  It should be used as a part of CopyLayer with 3 inputs corresponding to x_a, x_s and x_d in a loss.
+  Here we assume that x_a are anchor samples, x_s are samples where at each position i in a minibatch
+  x_ai and x_si belong to the same class, while pairs x_ai and x_di belong to different classes.
+  In this implementation the number of training examples is increased
+  by extracting all possible same/different pairs within a minibatch.
+  """
+  class_name = "minibatch_triplet_loss"
+
+  def __init__(self, margin=0.6, multi_view_training=False, **kwargs):
+    super(TripletLoss, self).__init__(**kwargs)
+    """
+    :param margin: how much the distance between instances of the same class should be smaller then distances between instances of different classes.
+    :param multi_view_training: True if we have a pair of inputs (x_a, x_s, x_d) extracted from two different data representations (i.e. acoustic and orthographic)
+    """
+    self.margin = margin
+    self.large_margin_class = False
+    self.multi_view = multi_view_training
+
+  def init(self, output, output_with_activation=None, target=None, **kwargs):
+    """
+    :param Data output: generated output
+    :param OutputWithActivation|None output_with_activation:
+    :param Data target: reference target from dataset
+    """
+    super(TripletLoss, self).init(output=output, output_with_activation=output_with_activation, target=target, **kwargs)
+    self.loss_norm_factor = 1.0 / tf.cast(tf.shape(3.0 * self.output_flat)[0], tf.float32)
+
+  def get_value(self):
+    if self.multi_view:
+      with tf.name_scope("multi_view_loss"):
+        out = self.output_flat
+        sources = tf.split(out, num_or_size_splits=6, axis=1)
+        targets = self.target_flat
+        out_0 = sources[0]
+        out_1 = sources[1]
+        out_2 = sources[2]
+        out_3 = sources[3]
+        out_4 = sources[4]
+        out_5 = sources[5]
+        embeds_1 = tf.concat(values=[out_0, out_4, out_5], axis=0)
+        embeds_2 = tf.concat(values=[out_1, out_4, out_2], axis=0)
+        a = targets[:, 0]
+        p = targets[:, 1]
+        d = targets[:, 2]
+        labels = tf.concat(values=[a, p, d], axis=0)
+        loss_out = self._triplet_loss(embeds_1, labels) + self._triplet_loss(embeds_2, labels)
+    else:
+      with tf.name_scope("acoustic_loss"):
+        out = self.output_flat
+        sources = tf.split(out, num_or_size_splits=3, axis=1)
+        targets = self.target_flat
+        out_0 = sources[0]
+        out_1 = sources[1]
+        out_2 = sources[2]
+        embeds = tf.concat(values=[out_0, out_1, out_2], axis=0)
+        a = targets[:, 0]
+        p = targets[:, 1]
+        d = targets[:, 2]
+        labels = tf.concat(values=[a, p, d], axis=0) 
+        loss_out = self._triplet_loss(embeds, labels)
+
+    return loss_out
+
+  def _triplet_loss(self, embeds, labels):
+    emb_norm = tf.nn.l2_normalize(embeds, axis=1, epsilon=1e-15)
+    sim = tf.matmul(emb_norm, emb_norm, transpose_b=True)
+    dist = 1.0 - sim
+    labels = tf.expand_dims(labels, 0)
+    labels = tf.cast(labels, tf.int32)
+    prod = tf.matmul(tf.transpose(labels), labels)
+    squer = tf.square(labels)
+    same_mask = tf.equal(squer, prod)
+    same_indices = tf.where(same_mask)
+    diff_mask = tf.logical_not(same_mask)
+    diff_indices = tf.where(diff_mask)
+
+    with tf.name_scope("same_loss"):
+      same_distances = tf.gather_nd(dist, same_indices)
+      same_loss = 0.5 * tf.reduce_sum(same_distances, 0)
+
+    with tf.name_scope("diff_loss"):
+      diff_distances = tf.gather_nd(dist, diff_indices)
+      diff_max = tf.maximum(self.margin - diff_distances, 0.0)
+      diff_loss = 0.5 * tf.reduce_sum(diff_max, 0)
+
+    return same_loss + diff_loss
+
+  def _check_init(self):
+    """
+    Does some checks on self.target and self.output, e.g. if the dense shapes matches.
+    Since self.target is not used in triplet_loss, these checks are not relevant
+    """
+    assert self.output.dim != 0
+
+  def get_error(self):
+    """
+    Error is not defined for triplet_loss
+    :return: None
+    """
+    return None
+
+
 _LossClassDict = {}  # type: dict[str,type(Loss)]
 
 
