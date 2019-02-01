@@ -674,6 +674,7 @@ class SiameseHDFDataset(CachedDataset2):
       for name, parsers in self.all_parsers.items():
         targets['%s_%d' % (name, id)] = parsers[sample_seq_file_index].get_data(norm_sample_seq_name)
 
+    targets['%s_all' % self.targets_stream] = numpy.concatenate((targets['%s_0' % self.targets_stream], targets['%s_1'% self.targets_stream], targets['%s_2' % self.targets_stream]), axis=0)    
     features = targets['%s_%d' % (self.input_stream_name, 0)]
     return DatasetSeq(seq_idx=seq_idx,
                       seq_tag=seq_name,
