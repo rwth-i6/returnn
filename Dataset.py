@@ -55,7 +55,7 @@ class Dataset(object):
 
   def __init__(self, name=None,
                window=1, context_window=None, chunking=None,
-               seq_ordering='default', partition_epoch=None,
+               seq_ordering='default', partition_epoch=None, repeat_epoch=None,
                shuffle_frames_of_nseqs=0, min_chunk_size=0,
                estimated_num_seqs=None,):
     """
@@ -67,6 +67,9 @@ class Dataset(object):
     :param str seq_ordering: "batching"-option in config. e.g. "default", "sorted" or "random".
       See self.get_seq_order_for_epoch() for more details.
     :param int|None partition_epoch:
+    :param int|None repeat_epoch: Repeat the sequences in an epoch this many times. Useful to scale the dataset
+      relative to other datasets, e.g. when used in CombinedDataset. Not allowed to be used in combination with
+      partition_epoch.
     :param int shuffle_frames_of_nseqs: shuffles the frames. not always supported
     :param None|int estimated_num_seqs: for progress reporting in case the real num_seqs is unknown
     """
@@ -77,6 +80,10 @@ class Dataset(object):
     self.window = window
     self.seq_ordering = seq_ordering  # "default", "sorted" or "random". See self.get_seq_order_for_epoch().
     self.partition_epoch = partition_epoch or 1
+    self.repeat_epoch = repeat_epoch or 1
+    # There is probably no use case for combining the two, so avoid potential misconfiguration.
+    assert self.partition_epoch == 1 or self.repeat_epoch == 1, \
+        "Combining partition_epoch and repeat_epoch is prohibited."
     self.timestamps = None
     self.labels = {}; """ :type: dict[str,list[str]] """
     self.weights = {}
@@ -254,6 +261,7 @@ class Dataset(object):
     :rtype: list[int]
     """
     partition_epoch = self.partition_epoch or 1
+    repeat_epoch = self.repeat_epoch or 1
     if not epoch:
       epoch = 1
     full_epoch = epoch
@@ -263,6 +271,8 @@ class Dataset(object):
     seq_index = list(range(num_seqs)); """ :type: list[int]. the real seq idx after sorting """
     if self.seq_ordering == 'default':
       pass  # Keep order as-is.
+    elif self.seq_ordering == 'reverse':
+      seq_index = list(reversed(seq_index))
     elif self.seq_ordering == 'sorted':
       assert get_seq_len
       seq_index.sort(key=get_seq_len)  # sort by length, starting with shortest
@@ -305,15 +315,31 @@ class Dataset(object):
     else:
       assert False, "invalid batching specified: " + self.seq_ordering
     if partition_epoch > 1:
-      current_partition = ((epoch or 1) - 1) % partition_epoch
-      seqs_per_epoch = num_seqs // partition_epoch
-      partition_sizes = ([seqs_per_epoch + 1] * (num_seqs % partition_epoch) +
-                         [seqs_per_epoch] * (partition_epoch - num_seqs % partition_epoch))
-      assert sum(partition_sizes) == num_seqs and len(partition_sizes) == partition_epoch
-      partitions = functools.reduce(lambda a, x: a + [a[-1] + x], partition_sizes, [0])  # cumulative sum
-      assert len(partitions) == partition_epoch + 1
-      seq_index = seq_index[partitions[current_partition]:partitions[current_partition + 1]]
-      assert len(seq_index) == partition_sizes[current_partition]
+      seq_index = self._apply_partition_epoch(seq_index, partition_epoch, epoch)
+    if repeat_epoch > 1:
+      seq_index = seq_index * repeat_epoch
+    return seq_index
+
+  @classmethod
+  def _apply_partition_epoch(cls, seq_index, partition_epoch, epoch):
+    """
+    :param list[int] seq_index: full list of ordered sequence indices
+    :param int partition_epoch: number of partitions seq_index should be split into
+    :param int|None epoch: current epoch
+    :return: partition of seq_index for current epoch
+    :rtype: list[int]
+    """
+    num_seqs = len(seq_index)
+    current_partition = ((epoch or 1) - 1) % partition_epoch
+    seqs_per_epoch = num_seqs // partition_epoch
+    partition_sizes = ([seqs_per_epoch + 1] * (num_seqs % partition_epoch) +
+                       [seqs_per_epoch] * (partition_epoch - num_seqs % partition_epoch))
+    assert sum(partition_sizes) == num_seqs and len(partition_sizes) == partition_epoch
+    partitions = functools.reduce(lambda a, x: a + [a[-1] + x], partition_sizes, [0])  # cumulative sum
+    assert len(partitions) == partition_epoch + 1
+    seq_index = seq_index[partitions[current_partition]:partitions[current_partition + 1]]
+    assert len(seq_index) == partition_sizes[current_partition]
+
     return seq_index
 
   def init_seq_order(self, epoch=None, seq_list=None):
@@ -751,6 +777,7 @@ class Dataset(object):
     avg_weight = sum([ v[0] for v in self.weights.values()]) / (len(self.weights.keys()) or 1)
     for idx in self.weights:
       self.weights[idx][1] = random() * avg_weight * pruning
+      self.weights[idx][0] *= (1. + pruning)
     for seq_idx, t_start, t_end in self.iterate_seqs(
           chunk_size=chunk_size, chunk_step=chunk_step, used_data_keys=used_data_keys):
       if not self.sample(seq_idx):

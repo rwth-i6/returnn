@@ -10,9 +10,13 @@ try:
 except ImportError:  # Python 3
   from io import StringIO
 from Network import LayerNetwork
+import TheanoUtil
 import h5py
 import tempfile
 import os
+
+
+TheanoUtil.monkey_patches()
 
 
 config_enc_dec1_json = """

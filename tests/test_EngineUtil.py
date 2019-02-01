@@ -6,6 +6,7 @@ from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_i
 from Device import Device
 from EngineUtil import assign_dev_data, assign_dev_data_single_seq
 from EngineBatch import Batch
+import TheanoUtil
 from Log import log
 from Config import Config
 from GeneratingDataset import GeneratingDataset
@@ -26,6 +27,7 @@ dummyconfig_dict = {
 
 
 log.initialize()
+TheanoUtil.monkey_patches()
 
 
 class DummyDevice(Device):

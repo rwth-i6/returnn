@@ -535,7 +535,8 @@ class Engine:
       return " ".join(["%s %s" % (key.split(':')[-1], str(score[key]))
                        for key in sorted(score.keys())])
 
-  def eval_model(self):
+  def eval_model(self, output_file=None, output_per_seq_file=None):
+    assert not output_file and not output_per_seq_file, "not implemented"
     eval_dump_str = []
     for dataset_name, dataset in self.get_eval_datasets().items():
       if dataset_name not in self.dataset_batches or not dataset.batch_set_generator_cache_whole_epoch():
@@ -555,7 +556,7 @@ class Engine:
         self.learning_rate_control.save()
     print(" ".join(eval_dump_str).strip(), file=log.v1)
 
-  def save_model(self, filename, epoch):
+  def save_model(self, filename, epoch=0):
     """
     :param str filename: full filename for model
     :param int epoch: save epoch idx

@@ -383,18 +383,26 @@ class TFNetwork(object):
     if name in self._constructing_layers:
       raise NetworkConstructionDependencyLoopException(
         layer_name=name, constructing_layers=self._constructing_layers, net_dict=net_dict, network=self)
+    if not get_layer:
+      def get_layer(src_name):
+        return self.construct_layer(net_dict=net_dict, name=src_name)  # set get_layer to wrap construct_layer
     if name not in net_dict:
+      layer_desc = None
       if name == "data":
         layer_desc = {"class": "source", "from": []}
       elif name.startswith("data:"):
         layer_desc = {"class": "source", "data_key": name[len("data:"):], "from": []}
-      else:
+      elif '/' in name:
+        # it may be a hierarchical path to a sub-layer, which should have been found by get_layer()
+        # but maybe it's not constructed yet, so try constructing the root layer
+        root_layer = get_layer(name.split('/')[0])
+        sub_layer = root_layer.get_sub_layer('/'.join(name.split('/')[1:]))  # get the sub-layer from the root-layer
+        if sub_layer:
+          return sub_layer
+      if not layer_desc:
         raise LayerNotFound("layer %r not found in %r" % (name, self))
     else:
       layer_desc = net_dict[name]
-    if not get_layer:
-      def get_layer(src_name):
-        return self.construct_layer(net_dict=net_dict, name=src_name)
     if not add_layer:
       add_layer = self.add_layer
     self.layers_desc[name] = layer_desc
@@ -458,6 +466,8 @@ class TFNetwork(object):
         layer.output.sanity_check()
       except TypeError:
         help_on_type_error_wrong_args(cls=layer_class, kwargs=list(layer_desc.keys()))
+        print("TypeError creating layer %s/%r of class %s with opts:" % (self.name, name, layer_class.__name__))
+        pprint(layer_desc)
         raise
       except Exception:
         print("Exception creating layer %s/%r of class %s with opts:" % (self.name, name, layer_class.__name__))
@@ -523,69 +533,98 @@ class TFNetwork(object):
     """
     return self.get_extern_data(key="seq_tag", mark_data_key_as_used=mark_data_key_as_used).placeholder
 
-  def construct_objective(self):
-    with tf.name_scope("objective"):
-      self.total_loss = 0
-      self.total_constraints = 0
-      self.losses_dict.clear()
-      layer_items = sorted(self.layers.items())
-      if self.extra_net:
-        extra_name_prefix = "extra"
-        if self.extra_net.search_flag and not self.search_flag:
-          extra_name_prefix += "_search"
-        layer_items += [
-          ("%s/%s" % (extra_name_prefix, name), layer)
-          for (name, layer) in sorted(self.extra_net.layers.items())]
-      for name, layer in layer_items:
-        assert isinstance(name, str)
-        assert isinstance(layer, LayerBase)
-        tf_scope_name = layer.cls_get_tf_scope_name(name=name)
-        assert isinstance(layer, LayerBase)
-        with reuse_name_scope("loss"):
-          with reuse_name_scope(tf_scope_name):
-            losses = layer.get_losses_initialized()
-            for loss_obj in losses:
-              assert loss_obj.name not in self.losses_dict, "layer %r loss name %r not unique" % (layer, loss_obj.name)
-              self.losses_dict[loss_obj.name] = loss_obj
+  def get_losses_initialized(self, reduce_func=None, with_total=False):
+    """
+    :param ((tf.Tensor)->tf.Tensor)|None reduce_func: as in get_losses. e.g. TFUtil.identity
+    :param bool with_total: whether to return total loss / constraints
+    :return: loss name (e.g. "output" or "rec_layer/output" or so) -> LossHolder (initialized, i.e. layer set),
+      and optionally total loss and total constraints (if with_total)
+    :rtype: (dict[str,LossHolder], tf.Tensor|int|None, tf.Tensor|int|None)
+    """
+    if with_total:
+      total_loss = 0
+      total_constraints = 0
+    else:
+      total_loss = None
+      total_constraints = None
+    losses_dict = {}
+    layer_items = sorted(self.layers.items())
+    if self.extra_net:
+      extra_name_prefix = "extra"
+      if self.extra_net.search_flag and not self.search_flag:
+        extra_name_prefix += "_search"
+      layer_items += [
+        ("%s/%s" % (extra_name_prefix, name), layer)
+        for (name, layer) in sorted(self.extra_net.layers.items())]
+    for name, layer in layer_items:
+      assert isinstance(name, str)
+      assert isinstance(layer, LayerBase)
+      tf_scope_name = layer.cls_get_tf_scope_name(name=name)
+      assert isinstance(layer, LayerBase)
+      with reuse_name_scope("loss"):
+        with reuse_name_scope(tf_scope_name):
+          losses = layer.get_losses_initialized(reduce_func=reduce_func)
+          for loss_obj in losses:
+            assert loss_obj.name not in losses_dict, "layer %r loss name %r not unique" % (layer, loss_obj.name)
+            losses_dict[loss_obj.name] = loss_obj
+        if with_total:
           # Accumulate losses (outside of layer scope name).
           for loss_obj in losses:
             if loss_obj.get_loss_value_for_objective() is not None:
-              if self.total_loss is 0:
-                self.total_loss = loss_obj.get_loss_value_for_objective()
+              if total_loss is 0:
+                total_loss = loss_obj.get_loss_value_for_objective()
               else:
-                self.total_loss += loss_obj.get_loss_value_for_objective()
+                total_loss += loss_obj.get_loss_value_for_objective()
 
+      if with_total:
         with reuse_name_scope("constraints"):
           with reuse_name_scope(tf_scope_name):
             constraints = layer.get_constraints_value()
           if constraints is not None:
-            if self.total_constraints is 0:
-              self.total_constraints = constraints
+            if total_constraints is 0:
+              total_constraints = constraints
             else:
-              self.total_constraints += constraints
+              total_constraints += constraints
 
+    return losses_dict, total_loss, total_constraints
+
+  def _construct_objective(self):
+    with tf.name_scope("objective"):
+      losses_dict, total_loss, total_constraints = self.get_losses_initialized(with_total=True)
+      self.losses_dict.clear()
+      self.losses_dict.update(losses_dict)
+      self.total_loss = total_loss
+      self.total_constraints = total_constraints
+      self.total_objective = total_loss + total_constraints
       tf.summary.scalar("loss", self.total_loss)
       tf.summary.scalar("constraints", self.total_constraints)
-      self.total_objective = self.total_loss + self.total_constraints
       tf.summary.scalar("objective", self.total_objective)
 
   def maybe_construct_objective(self):
     if self.total_objective is None:
-      self.construct_objective()
+      self._construct_objective()
 
   def get_objective(self):
+    """
+    :rtype: int|tf.Tensor
+    :return: 0 if no loss, or tf.Tensor, scalar. loss + constraints. will be used for the updater.
+    """
     self.maybe_construct_objective()
     return self.total_objective
 
   def get_total_loss(self):
     """
     :rtype: int|tf.Tensor
-    :return: 0 if no loss, or tf.Tensor
+    :return: 0 if no loss, or tf.Tensor, scalar. without constraints. will be used for the updater
     """
     self.maybe_construct_objective()
     return self.total_loss
 
   def get_total_constraints(self):
+    """
+    :rtype: int|tf.Tensor
+    :return: 0 if no constraints, or tf.Tensor, scalar. will be used for the updater
+    """
     self.maybe_construct_objective()
     return self.total_constraints
 
@@ -667,6 +706,12 @@ class TFNetwork(object):
       if not self.parent_net:
         raise LayerNotFound("cannot get layer %r, no parent net for %r" % (layer_name, self))
       return self.parent_net.get_layer(layer_name[len("base:"):])
+    if '/' in layer_name:
+      # this is probably a path to a sub-layer
+      root_layer = self.get_layer(layer_name.split('/')[0])  # get the root-layer (first part of the path)
+      sub_layer = root_layer.get_sub_layer('/'.join(layer_name.split('/')[1:]))  # get the sub-layer from the root-layer
+      if sub_layer:  # get_sub_layer returns None by default (if sub-layer not found)
+        return sub_layer
     if layer_name not in self.layers:
       raise LayerNotFound("layer %r not found in %r" % (layer_name, self))
     return self.layers[layer_name]
@@ -1117,7 +1162,8 @@ class TFNetwork(object):
     """
     from TFNetworkRecLayer import RecStepInfoLayer, _SubnetworkRecCell
     rec_layer = self.get_rec_parent_layer()
-    if not rec_layer:
+    # the second condition is true if all layers have been optimized out of the rec layer
+    if not rec_layer or len(rec_layer.cell.layers_in_loop) == 0:
       assert not must_exist, "%s: We expect to be the subnet of a RecLayer, but we are not." % self
       return None
     assert isinstance(rec_layer.cell, _SubnetworkRecCell)
@@ -1288,6 +1334,9 @@ class LossHolder:
 
   def init(self, layer):
     """
+    It will just set the layer.
+    The `LossHolder` is initialized if the layer is set.
+
     :param LayerBase layer:
     :return: self
     :rtype: LossHolder
@@ -1324,7 +1373,7 @@ class LossHolder:
 
   def get_loss_value(self):
     """
-    :return: loss value
+    :return: loss value. scalar
     :rtype: tf.Tensor|None
     """
     self._prepare()
@@ -1332,7 +1381,7 @@ class LossHolder:
 
   def get_loss_value_for_fetch(self):
     """
-    :return: loss value for fetch
+    :return: loss value for fetch. scalar. same as loss_value, but maybe with additional checks
     :rtype: tf.Tensor|None
     """
     self._prepare()
@@ -1340,7 +1389,7 @@ class LossHolder:
 
   def get_loss_value_for_objective(self):
     """
-    :return: loss value for objective
+    :return: loss value for objective. scalar. might be scaled (scale) and/or normalized (use_normalized_loss)
     :rtype: tf.Tensor|None
     """
     self._prepare()
@@ -1348,7 +1397,7 @@ class LossHolder:
 
   def get_error_value(self):
     """
-    :return: error value for fetch
+    :return: error value for fetch. scalar
     :rtype: tf.Tensor|None
     """
     self._prepare()
@@ -1356,11 +1405,37 @@ class LossHolder:
 
   def get_norm_factor(self):
     """
-    :return: norm factor for loss and error
+    :return: norm factor for loss and error. scalar
     :rtype: tf.Tensor
     """
     self._prepare()
     return self._norm_factor
+
+  def _normalized_loss_value_per_seq(self, value):
+    """
+    :param tf.Tensor|None loss:
+    :return: (batch,) or None if loss is None
+    :rtype: tf.Tensor|None
+    """
+    if value is None:
+      return None
+    return self.loss.reduce_to_batch(value, normalize=True)
+
+  def get_normalized_loss_value_per_seq(self):
+    """
+    :return: (batch,) or None if loss is None
+    :rtype: tf.Tensor|None
+    """
+    self._prepare()
+    return self._normalized_loss_value_per_seq(self._loss_value)
+
+  def get_normalized_error_value_per_seq(self):
+    """
+    :return: (batch,) or None if error is None
+    :rtype: tf.Tensor|None
+    """
+    self._prepare()
+    return self._normalized_loss_value_per_seq(self._error_value)
 
   def _tf_summary(self):
     """
@@ -1387,7 +1462,7 @@ class LossHolder:
     if self._is_prepared:
       return
     assert self._layer, "call init()"
-    self.loss.init_by_layer(layer=self._layer)
+    self.loss.init_by_layer(layer=self._layer, layer_output_template=self.layer_output)
     if self._loss_value is None and self._error_value is None:
       with reuse_name_scope("loss"):
         if self._only_on_eval:

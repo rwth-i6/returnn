@@ -23,12 +23,14 @@ from Config import Config
 from NetworkHiddenLayer import DumpLayer
 import rnn
 import EngineUtil
+import TheanoUtil
 import Network
 import better_exchook
 from Log import log
 
 better_exchook.replace_traceback_format_tb()
 log.initialize()  # some code needs it
+TheanoUtil.monkey_patches()
 
 # Some code uses get_global_config().
 # Not sure about the most clean solution.

@@ -78,19 +78,24 @@ class MetaDataset(CachedDataset2):
   """
 
   def __init__(self,
-               seq_list_file, seq_lens_file,
                datasets,
-               data_map, data_dims,
+               data_map,
+               seq_list_file=None,
+               seq_lens_file=None,
+               data_dims=None,
                data_dtypes=None,
                window=1, **kwargs):
     """
-    :param str seq_list_file: filename. line-separated
-    :param str seq_lens_file: filename. json. dict[str,dict[str,int]], seq-tag -> data-key -> len
     :param dict[str,dict[str]] datasets: dataset-key -> dataset-kwargs. including keyword 'class' and maybe 'files'
     :param dict[str,(str,str)] data_map: self-data-key -> (dataset-key, dataset-data-key).
       Should contain 'data' as key. Also defines the target-list, which is all except 'data'.
+    :param str seq_list_file: filename. pickle. dict[str,list[str]], dataset-key -> list of sequence tags. Can be None
+      if tag format is the same for all datasets. Then sequence list will be default sequence order of default dataset.
+    :param str seq_lens_file: filename. json. dict[str,dict[str,int]], seq-tag -> data-key -> len.
+      Use if getting sequence length from loading data is too costly.
     :param dict[str,(int,int)] data_dims: self-data-key -> data-dimension, len(shape) (1 ==> sparse repr).
-    :param dict[str,str] data_dtypes: self-data-key -> dtype. automatic if not specified
+       Deprecated/Only to double check. Read from data if not specified.
+    :param dict[str,str] data_dtypes: self-data-key -> dtype. Read from data if not specified.
     """
     assert window == 1  # not implemented
     super(MetaDataset, self).__init__(**kwargs)
@@ -103,52 +108,85 @@ class MetaDataset(CachedDataset2):
     self.target_list = sorted(self.data_keys - {"data"})
     self.default_dataset_key = self.data_map["data"][0]
 
-    if seq_list_file.endswith(".pkl"):
-      import pickle
-      seq_list = pickle.load(open(seq_list_file, 'rb'))
-    else:
-      seq_list = open(seq_list_file).read().splitlines()
-    assert isinstance(seq_list, (list, dict))
-    if isinstance(seq_list, list):
-      seq_list = {key: seq_list for key in self.dataset_keys}
-    self.seq_list_original = seq_list  # type: dict[str,list[str]]  # dataset key -> seq list
-    self._num_seqs = len(self.seq_list_original[self.default_dataset_key])
-    for key in self.dataset_keys:
-      assert len(self.seq_list_original[key]) == self._num_seqs
-    self.tag_idx = {tag: idx for (idx, tag) in enumerate(self.seq_list_original[self.default_dataset_key])}
+    # This will only initialize datasets needed for features occuring in data_map
+    self.datasets = {
+      key: init_dataset(datasets[key], extra_kwargs={"name": "%s_%s" % (self.name, key)})
+      for key in self.dataset_keys}
 
-    data_dims = convert_data_dims(data_dims)
-    self.data_dims = data_dims
-    assert "data" in data_dims
-    for key in self.target_list:
-      assert key in data_dims
-    self.num_inputs = data_dims["data"][0]
-    self.num_outputs = data_dims
-
-    self.data_dtypes = {data_key: _select_dtype(data_key, data_dims, data_dtypes) for data_key in self.data_keys}
+    self.seq_list_original = self._load_seq_list(seq_list_file) # type: dict[str,list[str]]  # dataset key -> seq list
 
     if seq_lens_file:
       seq_lens = load_json(filename=seq_lens_file)
       assert isinstance(seq_lens, dict)
       # dict[str,NumbersDict], seq-tag -> data-key -> len
       self._seq_lens = {tag: NumbersDict(l) for (tag, l) in seq_lens.items()}
-    else:
-      self._seq_lens = None
-
-    if self._seq_lens:
       self._num_timesteps = sum([self._seq_lens[s] for s in self.seq_list_original[self.default_dataset_key]])
     else:
+      self._seq_lens = None
       self._num_timesteps = None
 
-    # Will only init the needed datasets.
-    self.datasets = {
-      key: init_dataset(datasets[key], extra_kwargs={"name": "%s_%s" % (self.name, key)})
-      for key in self.dataset_keys}
+    if data_dims:
+      data_dims = convert_data_dims(data_dims)
+      self.data_dims = data_dims
+      assert "data" in data_dims
+      for key in self.target_list:
+        assert key in data_dims
+    else:
+      self.data_dims = {}
+
     for data_key in self.data_keys:
       dataset_key, dataset_data_key = self.data_map[data_key]
       dataset = self.datasets[dataset_key]
+      if not data_dims:
+        self.data_dims[data_key] = dataset.num_outputs[dataset_data_key]
       if dataset_data_key in dataset.labels:
         self.labels[data_key] = dataset.labels[dataset_data_key]
+
+    self.num_inputs = self.data_dims["data"][0]
+    self.num_outputs = self.data_dims
+
+    self.data_dtypes = {data_key: _select_dtype(data_key, self.data_dims, data_dtypes) for data_key in self.data_keys}
+
+  def _load_seq_list(self, seq_list_file=None):
+    if seq_list_file:
+      if seq_list_file.endswith(".pkl"):
+        import pickle
+        seq_list = pickle.load(open(seq_list_file, 'rb'))
+      else:
+        seq_list = open(seq_list_file).read().splitlines()
+    else:
+      # We create a sequence list from all the sequences of the default dataset and hope that it also applies to the
+      # other datasets. This can only work if all datasets have the same tag format and the sequences in the other datasets are
+      # a subset of those in the default dataset.
+      default_dataset = self.datasets[self.default_dataset_key]
+      print("Reading sequence list for MetaDataset '{}' from sub-dataset '{}'".format(self.name, default_dataset.name), file=log.v3)
+      seq_list = [default_dataset.get_tag(seq_idx) for seq_idx in range(default_dataset.num_seqs)]
+      # Catch index out of bounds errors. Whether the tags are actually valid will be checked in _check_dataset_seq().
+      for key in self.dataset_keys:
+        assert self.datasets[key].partition_epoch == 1, "Turn off partition_epoch for sub-dataset '{}' so we can access all sequences!".format(key)
+        assert self.datasets[key].num_seqs >= len(seq_list), \
+            "Dataset '{}' has less sequences than in sequence list read from '{}', this cannot work out!".format(key, self.default_dataset_key)
+
+    assert isinstance(seq_list, (list, dict))
+    if isinstance(seq_list, list):
+      seq_list = {key: seq_list for key in self.dataset_keys}
+
+    self.total_seqs = len(seq_list[self.default_dataset_key])
+    for key in self.dataset_keys:
+      assert len(seq_list[key]) == self.total_seqs
+
+    self.tag_idx = {tag: idx for (idx, tag) in enumerate(seq_list[self.default_dataset_key])}
+
+    return seq_list
+
+  def _get_dataset_seq_length(self, seq_idx):
+    if not self.orig_seq_order_is_initialized:
+      # To use get_seq_length() we first have to init the sequence order once in original order.
+      # If sequence lengths are not needed by get_seq_order_for_epoch this is never executed.
+      self.datasets[self.default_dataset_key].init_seq_order(epoch=self.epoch, seq_list=self.seq_list_original[self.default_dataset_key])
+      self.orig_seq_order_is_initialized = True
+
+    return self.datasets[self.default_dataset_key].get_seq_length(seq_idx)["data"]
 
   def init_seq_order(self, epoch=None, seq_list=None):
     need_reinit = self.epoch is None or self.epoch != epoch or seq_list
@@ -164,9 +202,9 @@ class MetaDataset(CachedDataset2):
       if self._seq_lens:
         get_seq_len = lambda s: self._seq_lens[self.seq_list_original[self.default_dataset_key][s]]["data"]
       else:
-        get_seq_len = None
-      total_seqs = len(self.seq_list_original[self.default_dataset_key])
-      seq_index = self.get_seq_order_for_epoch(epoch, total_seqs, get_seq_len)
+        self.orig_seq_order_is_initialized = False
+        get_seq_len = self._get_dataset_seq_length
+      seq_index = self.get_seq_order_for_epoch(epoch, self.total_seqs, get_seq_len)
     self._num_seqs = len(seq_index)
     self.seq_list_ordered = {key: [ls[s] for s in seq_index] for (key, ls) in self.seq_list_original.items()}
 
@@ -453,14 +491,24 @@ class CombinedDataset(CachedDataset2):
   am-dataset:data -> am-data, am-dataset:classes -> am-classes, lm-dataset:data -> lm-data.
   For each sequence idx, it will select one of the given datasets, fill in the data-keys of this dataset
   and will return empty sequences for the remaining datasets.
-  The selection of the dataset will be random and equally distributed, over the sum of num-seqs.
+  The default sequence ordering is to first go through all sequences of dataset 1, then dataset 2 and so on. If
+  seq_ordering is set to 'random_dataset', we always pick one of the datasets at random (equally distributed over the
+  sum of num-seqs), but still go through the sequences of a particular dataset in the order defined for it in the config
+  (in order if not defined). For 'sorted' or 'laplace' the sequence length as provided by the datasets is used to sort
+  all sequences jointly. Note, that this overrides the sequence order of the sub-datasets (also the case for 'random').
+  'partition_epoch' of the CombinedDataset is applied to the joint sequence order for all sequences.
+  'partition_epoch' of the sub-datasets is still applied. This can be used to adjust the relative size of
+  the datasets. (However, do not combine 'partition_epoch' on both levels, as this leads to an unexpected selection
+  of sequences.) To upscale a dataset, rather than downscaling the others via 'partition_epoch', use the
+  'repeat_epoch' option.
 
   Also see :class:`MetaDataset`.
   """
 
   def __init__(self,
                datasets,
-               data_map, data_dims,
+               data_map,
+               data_dims=None,
                data_dtypes=None,
                window=1, **kwargs):
     """
@@ -468,39 +516,31 @@ class CombinedDataset(CachedDataset2):
     :param dict[(str,str),str] data_map: (dataset-key, dataset-data-key) -> self-data-key.
       Should contain 'data' as key. Also defines the target-list, which is all except 'data'.
     :param dict[str,(int,int)] data_dims: self-data-key -> data-dimension, len(shape) (1 ==> sparse repr).
-    :param dict[str,str] data_dtypes: self-data-key -> dtype. automatic if not specified
+       Deprecated/Only to double check. Read from data if not specified.
+    :param dict[str,str] data_dtypes: self-data-key -> dtype. Read from data if not specified.
     """
     assert window == 1  # not implemented
     super(CombinedDataset, self).__init__(**kwargs)
     assert self.shuffle_frames_of_nseqs == 0  # not implemented. anyway only for non-recurrent nets
 
     self.rnd = Random(self.epoch)
-    self.dataset_keys = set(datasets.keys()); ":type: set[str]"
-    self.dataset_idxs = dict(enumerate(sorted(self.dataset_keys)))  # idx -> dataset-key
+    self.dataset_keys = set([m[0] for m in data_map.keys()]); ":type: set[str]"
+    self.dataset_idx2key_map = dict(enumerate(sorted(self.dataset_keys)))  # idx -> dataset-key
     self.data_keys = set(data_map.values()); ":type: set[str]"
     assert "data" in self.data_keys
     self.target_list = sorted(self.data_keys - {"data"})
 
-    # Build target lookup table
+    # Build target lookup table that maps from dataset_key and data_key (data key used by CombinedDataset)
+    # to dataset_data_key (data_key used by the sub-dataset). This is needed in get_data() to access data
+    # by data_key. Maps to None if data_key does not correspond to a feature in datasets[dataset_key].
     target_lookup_table = {}
     for dataset_key in self.dataset_keys:
-      target_lookup_table[dataset_key] = {datamap_maps: datamap_keys[1] for datamap_keys,datamap_maps in data_map.iteritems() if datamap_keys[0]==dataset_key}
+      target_lookup_table[dataset_key] = {data_key: dataset_key_tuple[1] for dataset_key_tuple, data_key in data_map.items() if dataset_key_tuple[0]==dataset_key}
       for key in self.data_keys:
-        target_lookup_table[dataset_key].setdefault(key,None)
-
+        target_lookup_table[dataset_key].setdefault(key, None)
     self.target_lookup_table = target_lookup_table
 
-    data_dims = convert_data_dims(data_dims)
-    self.data_dims = data_dims
-    assert "data" in data_dims
-    for key in self.target_list:
-      assert key in data_dims
-    self.num_inputs = data_dims["data"][0]
-    self.num_outputs = data_dims
-
-    self.data_dtypes = {data_key: _select_dtype(data_key, data_dims, data_dtypes) for data_key in self.data_keys}
-
-    # Will only init the needed datasets.
+    # This will only initialize datasets needed for features occuring in data_map
     self.datasets = {key: init_dataset(datasets[key]) for key in self.dataset_keys}
 
     try:
@@ -511,62 +551,139 @@ class CombinedDataset(CachedDataset2):
       self.estimated_num_seq_per_subset = [self.datasets[k].estimated_num_seqs for k in sorted(self.datasets.keys())]
       self.know_num_seqs_beforehand = False
 
-  def _canonical_seqs_dataset_idxs(self):
-    """
-    :returns: list of dataset-idx, via self.dataset_idxs, so that we cover the sum of num-seqs
-    :rtype: list[int]
-    """
-    l = []
-    for i in range(len(self.datasets)):
-      dataset = self.datasets[self.dataset_idxs[i]]
-      l += [i] * dataset.num_seqs
-    return l
+    if data_dims:
+      data_dims = convert_data_dims(data_dims)
+      self.data_dims = data_dims
+      assert "data" in data_dims
+      for key in self.target_list:
+        assert key in data_dims
+    else:
+      self.data_dims = {}
 
-  def _dataset_seq_idxs(self, seqs_dataset_idx):
-    """
-    :returns: list of (dataset-idx, dataset-seq-idx)
-    :rtype: list[(int,int)]
-    """
-    l = []
-    seq_idx_counter = [0] * len(self.datasets)  # dataset-idx -> dataset-seq-idx
-    for dataset_idx in seqs_dataset_idx:
-      seq_idx = seq_idx_counter[dataset_idx]
-      seq_idx_counter[dataset_idx] += 1
-      l += [(dataset_idx, seq_idx)]
-    return l
+    for dataset_key_tuple, data_key in data_map.items():
+      dataset_key, dataset_data_key = dataset_key_tuple
+      dataset = self.datasets[dataset_key]
+      if not data_dims:
+        self.data_dims[data_key] = dataset.num_outputs[dataset_data_key]
+      if dataset_data_key in dataset.labels:
+        self.labels[data_key] = dataset.labels[dataset_data_key]
+
+    self.num_inputs = self.data_dims["data"][0]
+    self.num_outputs = self.data_dims
+
+    self.data_dtypes = {data_key: _select_dtype(data_key, self.data_dims, data_dtypes) for data_key in self.data_keys}
 
   def init_seq_order(self, epoch=None, seq_list=None):
     assert seq_list is None, "seq_list not supported for %s" % self.__class__
     need_reinit = self.epoch is None or self.epoch != epoch
     super(CombinedDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
+
     if not need_reinit:
+      if self.know_num_seqs_beforehand:
+        self._num_seqs = len(self.seq_order)
       return False
 
-    if self.know_num_seqs_beforehand:
-      # We just select for which seq-idx we will use which dataset.
-      # The ordering of the seqs in the datasets will not be set here
-      # (do that in the config for the specific dataset).
-
-      seqs_dataset_idx = self._canonical_seqs_dataset_idxs()
-      if self.seq_ordering in ("default", "random"):  # default is random. this is different from base class!
-        self.rnd.shuffle(seqs_dataset_idx)
-      elif self.seq_ordering == "in-order":
-        pass  # keep as-is
-      elif self.seq_ordering == "reversed":
-        seqs_dataset_idx = reversed(seqs_dataset_idx)
-      else:
-        raise Exception("seq_ordering %s not supported" % self.seq_ordering)
-
-      self.dataset_seq_idxs = self._dataset_seq_idxs(seqs_dataset_idx)
-      assert self.num_seqs == len(self.dataset_seq_idxs)
-
-    else:
-      self.dataset_seq_idxs = [] #We will fill this as we go
-      self.used_num_seqs_per_subset = [0] * len(self.datasets)
-
+    # First init sequence order for sub-datasets as usual to get a list of available sequences. This way sorting and
+    # partition epoch of the individual sub-datasets is still supported. Later we will call init_seq_order again with a
+    # sequence list to e.g. apply joint sorting or partition epoch of all sequences.
     for dataset in self.datasets.values():
       dataset.init_seq_order(epoch=epoch)
+
+    if self.know_num_seqs_beforehand:
+      self.dataset_seq_idx_list = self._create_dataset_seq_idx_list()
+
+      if self.seq_ordering == "random_dataset":
+        self.seq_order = self._get_random_dataset_seq_order()
+      else:
+        self.seq_order = self.get_seq_order_for_epoch(
+            epoch=epoch, num_seqs=len(self.dataset_seq_idx_list), get_seq_len=self._get_seq_length)
+      self._num_seqs = len(self.seq_order)
+
+      # We only want to load those sequences in the sub-datasets that appear in self.seq_order. For this, we extract
+      # sequence lists containing the subset of sequences for each dataset from self.seq_order.
+      seq_lists = [[] for _ in self.datasets]
+      for seq_idx in self.seq_order:
+        dataset_idx, dataset_seq_idx = self.dataset_seq_idx_list[seq_idx]
+        dataset = self.datasets[self.dataset_idx2key_map[dataset_idx]]
+        seq_tag = dataset.get_tag(dataset_seq_idx)
+        seq_lists[dataset_idx].append(seq_tag)
+
+      # Re-initialize sequence orders of sub-datasets with created sequence list.
+      for dataset_idx, dataset_key in self.dataset_idx2key_map.items():
+        self.datasets[dataset_key].init_seq_order(epoch=epoch, seq_list=seq_lists[dataset_idx])
+
+      # Apply seq_order to self.dataset_seq_idx.
+      # We have to re-calculate the seq_idx's because we sorted the datasets in the previous step.
+      self.dataset_sorted_seq_idx_list = []
+      counters = [0] * len(self.datasets)
+      for seq_idx in self.seq_order:
+        dataset_idx, _ = self.dataset_seq_idx_list[seq_idx]
+        dataset_seq_idx = counters[dataset_idx]
+        counters[dataset_idx] += 1
+        self.dataset_sorted_seq_idx_list.append((dataset_idx, dataset_seq_idx))
+
+    else:
+      self.dataset_sorted_seq_idx_list = [] # We will fill this as we go
+      self.used_num_seqs_per_subset = [0] * len(self.datasets)
+
     return True
+
+  def _create_dataset_seq_idx_list(self):
+    """
+    Creates a list of all available sequences, to which we can later apply the sequence ordering.
+    It contains the index of the dataset and the sequence index within the dataset for every sequence.
+    The sequences appear sorted by dataset first.
+
+    :returns: list of (dataset-idx, dataset-seq-idx)
+    :rtype: list[(int,int)]
+    """
+    dataset_seq_idxs = []
+    for dataset_idx in range(len(self.datasets)):
+      dataset = self.datasets[self.dataset_idx2key_map[dataset_idx]]
+      for dataset_seq_idx in range(dataset.num_seqs):
+        dataset_seq_idxs.append((dataset_idx, dataset_seq_idx))
+
+    return dataset_seq_idxs
+
+  def _get_random_dataset_seq_order(self):
+    """
+    Choose datasets randomly but preserve order within each dataset. This sorting method is unique to CombinedDataset.
+    """
+    # Create a list containing each dataset_idx dataset.num_seqs-times and shuffle it.
+    dataset_ids = [idx_tuple[0] for idx_tuple in self.dataset_seq_idx_list]
+    self.rnd.shuffle(dataset_ids)
+
+    # Calculate the offset for all datasets (i.e. the index where sequences of a given dataset start
+    # in self.dataset_seq_idx_list).
+    dataset_offsets = [0]
+    for dataset_idx in range(len(self.datasets)):
+      dataset = self.datasets[self.dataset_idx2key_map[dataset_idx]]
+      dataset_offsets.append(dataset_offsets[-1] + dataset.num_seqs)
+
+    # Create the actual seq_order list.
+    # We want to keep the order within the sub-datasets, thus we assign seq_ids by simply counting up for each dataset.
+    # We however have to account for the different offsets needed when accessing self.dataset_seq_idx_list later.
+    seq_order = []
+    counters = [0] * len(self.datasets)
+    for dataset_idx in dataset_ids:
+      seq_order.append(counters[dataset_idx] + dataset_offsets[dataset_idx])
+      counters[dataset_idx] += 1
+
+    total_num_seqs = len(self.dataset_seq_idx_list)
+    assert sum(counters) == total_num_seqs
+
+    if self.partition_epoch:
+      seq_order = self._apply_partition_epoch(seq_order, self.partition_epoch, self.epoch)
+    if self.repeat_epoch:
+      seq_order = seq_order * self.repeat_epoch
+
+    return seq_order
+
+  def _get_seq_length(self, seq_idx):
+    dataset_idx, dataset_seq_idx = self.dataset_seq_idx_list[seq_idx]
+    dataset = self.datasets[self.dataset_idx2key_map[dataset_idx]]
+
+    return dataset.get_seq_length(dataset_seq_idx)["data"]
 
   def _expand_dataset_sec_idxs(self, num_values):
     """
@@ -574,7 +691,25 @@ class CombinedDataset(CachedDataset2):
     :return:
     """
     for i in range(num_values):
-      if self.seq_ordering in ("default", "random"):  # default is random. this is different from base class!
+      if self.seq_ordering == "default":  # i.e. in order
+        dataset_idx = 0
+        while dataset_idx < len(self.datasets):
+          if self.datasets[self.dataset_idx2key_map[dataset_idx]].is_less_than_num_seqs(self.used_num_seqs_per_subset[dataset_idx]):
+            break
+          dataset_idx += 1
+        else:
+          return False # No dataset has remaining data
+
+      elif self.seq_ordering == "reversed":
+        dataset_idx = len(self.datasets) - 1
+        while dataset_idx >= 0:
+          if self.datasets[self.dataset_idx2key_map[dataset_idx]].is_less_than_num_seqs(self.used_num_seqs_per_subset[dataset_idx]):
+            break
+          dataset_idx -= 1
+        else:
+          return False # No dataset has remaining data
+
+      elif self.seq_ordering == "random_dataset":
         while True:
           # Build Probabillity table
           expected_remaining_seqs = [estimated - used for estimated, used in zip(self.estimated_num_seq_per_subset, self.used_num_seqs_per_subset)]
@@ -594,61 +729,35 @@ class CombinedDataset(CachedDataset2):
           else: # We sample from all sets which should contain more data
             prob_table = [remaining / total_remaining for remaining in expected_remaining_seqs]
             dataset_idx = numpy.random.choice(len(self.datasets),p=prob_table)
-            if self.datasets[self.dataset_idxs[dataset_idx]].is_less_than_num_seqs(self.used_num_seqs_per_subset[dataset_idx]):
+            if self.datasets[self.dataset_idx2key_map[dataset_idx]].is_less_than_num_seqs(self.used_num_seqs_per_subset[dataset_idx]):
               break # Found good Data
             else:
               self.estimated_num_seq_per_subset[dataset_idx] = self.used_num_seqs_per_subset[dataset_idx]
 
-      elif self.seq_ordering == "in-order":
-        dataset_idx = 0
-        while dataset_idx < len(self.datasets):
-          if self.datasets[self.dataset_idxs[dataset_idx]].is_less_than_num_seqs(self.used_num_seqs_per_subset[dataset_idx]):
-            break
-          dataset_idx += 1
-        else:
-          return False # No dataset has remaining data
-
-      elif self.seq_ordering == "reversed":
-        dataset_idx = len(self.datasets) -1
-        while dataset_idx >= 0:
-          if self.datasets[self.dataset_idxs[dataset_idx]].is_less_than_num_seqs(self.used_num_seqs_per_subset[dataset_idx]):
-            break
-          dataset_idx -= 1
-        else:
-          return False # No dataset has remaining data
-
       else:
-        raise Exception("seq_ordering %s not supported" % self.seq_ordering)
+        raise Exception("The sorting method '{}' is not implemented for the case that number of sequences"
+                        "is not known in advance.".format(self.seq_ordering))
 
       # We now have a valid dataset index to take the next segment from
-      self.dataset_seq_idxs.append((dataset_idx,self.used_num_seqs_per_subset[dataset_idx]))
+      self.dataset_sorted_seq_idx_list.append((dataset_idx, self.used_num_seqs_per_subset[dataset_idx]))
       self.used_num_seqs_per_subset[dataset_idx] += 1
     return True
 
   def _load_seqs(self, start, end):
     # If the segment order is not yet known, fix the next few segments
-    if not self.know_num_seqs_beforehand and end > len(self.dataset_seq_idxs):
-      self._expand_dataset_sec_idxs(end-len(self.dataset_seq_idxs))
+    if not self.know_num_seqs_beforehand and end > len(self.dataset_sorted_seq_idx_list):
+      self._expand_dataset_sec_idxs(end - len(self.dataset_sorted_seq_idx_list))
 
-    requested_seqs = self.dataset_seq_idxs[start:end]
+    requested_seqs = self.dataset_sorted_seq_idx_list[start:end]
 
-    for i in range(len(self.datasets)):
-      dataset = self.datasets[self.dataset_idxs[i]]
-      sub_requested_seqs = [s[1] for s in requested_seqs if s[0]==i]
+    for dataset_idx in range(len(self.datasets)):
+      dataset = self.datasets[self.dataset_idx2key_map[dataset_idx]]
+      sub_requested_seqs = [s[1] for s in requested_seqs if s[0] == dataset_idx]
       if sub_requested_seqs == []:
         continue
       sub_start, sub_end = min(sub_requested_seqs), max(sub_requested_seqs)
-      dataset.load_seqs(sub_start, sub_end+1)
+      dataset.load_seqs(sub_start, sub_end + 1)
     super(CombinedDataset, self)._load_seqs(start=start, end=end)
-
-  def _check_dataset_seq(self, dataset, seq_idx): # TODO this check makes no sense here
-    """
-    :type dataset: Dataset
-    :type seq_idx: int
-    """
-    dataset_seq_tag = dataset.get_tag(seq_idx)
-    self_seq_tag = self.get_tag(seq_idx)
-    assert dataset_seq_tag == self_seq_tag
 
   def _get_data(self, dataset_key, dataset_seq_idx, data_key):
     """
@@ -662,7 +771,7 @@ class CombinedDataset(CachedDataset2):
     if dataset_data_key is not None:
       return dataset.get_data(dataset_seq_idx, dataset_data_key)
     else:
-      return numpy.array([])
+      return numpy.array([], self.data_dtypes[data_key])
 
   def _collect_single_seq(self, seq_idx):
     """
@@ -671,8 +780,8 @@ class CombinedDataset(CachedDataset2):
     """
     if not self.is_less_than_num_seqs(seq_idx):
       return None
-    dataset_idx, dataset_seq_idx = self.dataset_seq_idxs[seq_idx]
-    dataset_key = self.dataset_idxs[dataset_idx]
+    dataset_idx, dataset_seq_idx = self.dataset_sorted_seq_idx_list[seq_idx]
+    dataset_key = self.dataset_idx2key_map[dataset_idx]
     dataset = self.datasets[dataset_key]
 
     seq_tag = dataset.get_tag(dataset_seq_idx)
@@ -682,12 +791,12 @@ class CombinedDataset(CachedDataset2):
 
   def is_less_than_num_seqs(self, n):
     if self.know_num_seqs_beforehand:
-      return n<self._num_seqs
+      return n < self._num_seqs
     else:
-      if n<len(self.dataset_seq_idxs):
+      if n < len(self.dataset_sorted_seq_idx_list):
         return True
       else:
-        return self._expand_dataset_sec_idxs(n-len(self.dataset_seq_idxs)+1)
+        return self._expand_dataset_sec_idxs(n - len(self.dataset_sorted_seq_idx_list) + 1)
 
   def get_target_list(self):
     return self.target_list
