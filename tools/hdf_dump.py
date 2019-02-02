@@ -44,11 +44,24 @@ def hdf_dump_from_dataset(dataset, hdf_dataset, parser_args):
   if "orth" in data_keys:  # special workaround for now, not handled
     data_keys.remove("orth")
   data_target_keys = [key for key in dataset.get_target_list() if key in data_keys]
-  # Currently hardcoded, but we can make that more dynamic later...
-  default_data_input_key = "data"
-  default_data_target_key = "classes"
-  assert default_data_input_key in data_keys and default_data_input_key not in data_target_keys
-  assert default_data_target_key in data_target_keys
+  data_input_keys = [key for key in data_keys if key not in data_target_keys]
+  assert len(data_input_keys) > 0 and len(data_target_keys) > 0
+  if len(data_input_keys) > 1:
+    if "data" in data_input_keys:
+      default_data_input_key = "data"
+    else:
+      raise Exception("not sure which input data key to use from %r" % (data_input_keys,))
+  else:
+    default_data_input_key = data_input_keys[0]
+  print("Using input data key:", default_data_input_key)
+  if len(data_target_keys) > 1:
+    if "classes" in data_target_keys:
+      default_data_target_key = "classes"
+    else:
+      raise Exception("not sure which target data key to use from %r" % (data_target_keys,))
+  else:
+    default_data_target_key = data_target_keys[0]
+  print("Using target data key:", default_data_target_key)
 
   # We need to do one run through the dataset to collect some stats like total len.
   print("Collect stats, iterate through all data...", file=log.v3)
@@ -192,12 +205,12 @@ def init(config_filename, cmd_line_opts, dataset_config_str):
     rnn.initData()
     rnn.printTaskProperties()
     assert isinstance(rnn.train_data, Dataset)
-    return rnn.train_data
+    dataset = rnn.train_data
   else:
     assert dataset_config_str
     dataset = init_dataset(dataset_config_str)
-    print("Source dataset:", dataset.len_info(), file=log.v3)
-    return dataset
+  print("Source dataset:", dataset.len_info(), file=log.v3)
+  return dataset
 
 
 def _is_crnn_config(filename):
@@ -231,6 +244,7 @@ def main(argv):
   else:
     dataset_config_str = args.config_file_or_dataset
   dataset = init(config_filename=crnn_config, cmd_line_opts=[], dataset_config_str=dataset_config_str)
+  print
   hdf_dataset = hdf_dataset_init(args.hdf_filename)
   hdf_dump_from_dataset(dataset, hdf_dataset, args)
   hdf_close(hdf_dataset)

@@ -165,8 +165,14 @@ class LmDataset(CachedDataset2):
     self._estimated_num_seqs = len(self.orths) // self.partition_epoch
     print("  done, loaded %i sequences" % len(self.orths), file=log.v4)
 
+  def get_data_keys(self):
+    return sorted(self.num_outputs.keys())
+
   def get_target_list(self):
-    return sorted([k for k in self.num_outputs.keys() if k != "data"])
+    # Unfortunately, the logic is swapped around for this dataset.
+    # "data" is the original data, which is usually the target,
+    # and you would use "delayed" as inputs.
+    return ["data"]
 
   def get_data_dtype(self, key):
     return self.dtype
