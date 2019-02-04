@@ -1846,8 +1846,9 @@ class Engine(object):
         print("Dataset have_corpus_seq_idx == False, i.e. it will not be sorted for optimal performance.", file=log.v3)
         dataset.seq_ordering = "default"  # enforce order as-is, so that the order in the written file corresponds
 
-    max_seq_length=self.config.typed_value('max_seq_length', None) or self.config.float('max_seq_length', 0)
-    assert not max_seq_length, "Set max_seq_length = 0 for search (i.e. no maximal length). We want to keep all source sentences."
+    max_seq_length = self.config.typed_value('max_seq_length', None) or self.config.float('max_seq_length', 0)
+    assert not max_seq_length, (
+      "Set max_seq_length = 0 for search (i.e. no maximal length). We want to keep all source sentences.")
 
     dataset.init_seq_order(epoch=self.epoch)
     batches = dataset.generate_batches(
@@ -1891,7 +1892,9 @@ class Engine(object):
       assert not os.path.exists(output_file)
       print("Will write outputs to: %s" % output_file, file=log.v2)
       output_file = open(output_file, "w")
-      out_cache = {}  # corpus-seq-idx -> str|list[(float,str)]|dict[str -> str|list[(float,str)]] depending on output_is_dict and whether output is after decision
+      # corpus-seq-idx -> str|list[(float,str)]|dict[str -> str|list[(float,str)]],
+      # depending on output_is_dict and whether output is after decision
+      out_cache = {}
     if not log.verbose[4]:
       print("Set log_verbosity to level 4 or higher to see seq info on stdout.", file=log.v2)
 
@@ -1907,84 +1910,95 @@ class Engine(object):
       """
 
       outputs, beam_scores, targets = [], [], []
-      for t in range(num_targets):
-        outputs.append(kwargs["output_" + output_layer_names[t]])
-        beam_scores.append(kwargs["beam_scores_" + output_layer_names[t]])
-        targets.append(kwargs["target_" + target_keys[t]])
+      for target_idx in range(num_targets):
+        outputs.append(kwargs["output_" + output_layer_names[target_idx]])
+        beam_scores.append(kwargs["beam_scores_" + output_layer_names[target_idx]])
+        targets.append(kwargs["target_" + target_keys[target_idx]])
 
       n_batch = len(seq_idx)  # without beam
       assert n_batch == len(seq_tag)
 
-      for t in range(num_targets):
-        if beam_scores[t] is not None:
-          assert beam_scores[t].shape == (n_batch, out_beam_sizes[t])
+      for target_idx in range(num_targets):
+        if beam_scores[target_idx] is not None:
+          assert beam_scores[target_idx].shape == (n_batch, out_beam_sizes[target_idx])
 
-        assert n_batch * (out_beam_sizes[t] or 1) == len(outputs[t])
-        if targets[t] is not None:
-          assert n_batch == len(targets[t])
+        assert n_batch * (out_beam_sizes[target_idx] or 1) == len(outputs[target_idx])
+        if targets[target_idx] is not None:
+          assert n_batch == len(targets[target_idx])
 
-        if output_layers[t].output.dim == 256 and output_layers[t].output.sparse:
+        if output_layers[target_idx].output.dim == 256 and output_layers[target_idx].output.sparse:
           # Interpret output as bytes/utf8-string.
-          outputs[t] = bytearray(outputs[t]).decode("utf8")
+          outputs[target_idx] = bytearray(outputs[target_idx]).decode("utf8")
 
-      for i in range(len(seq_idx)):
+      for batch_idx in range(len(seq_idx)):
+        corpus_seq_idx = None
         if out_cache is not None:
-          corpus_seq_idx = dataset.get_corpus_seq_idx(seq_idx[i])
+          corpus_seq_idx = dataset.get_corpus_seq_idx(seq_idx[batch_idx])
           assert corpus_seq_idx not in out_cache
-          seq_idx_to_tag[corpus_seq_idx] = seq_tag[i]
+          seq_idx_to_tag[corpus_seq_idx] = seq_tag[batch_idx]
           if output_is_dict:
             out_cache[corpus_seq_idx] = {}
 
-        for t in range(num_targets):
-          if out_beam_sizes[t] is None:
-            print("seq_idx: %i, seq_tag: %r, output %r: %r" % (seq_idx[i], seq_tag[i], target_keys[t], outputs[t][i]), file=log.v4)
-            out_idx = i
+        for target_idx in range(num_targets):
+          if out_beam_sizes[target_idx] is None:
+            print("seq_idx: %i, seq_tag: %r, output %r: %r" % (
+              seq_idx[batch_idx], seq_tag[batch_idx], target_keys[target_idx], outputs[target_idx][batch_idx]),
+                  file=log.v4)
+            out_idx = batch_idx
           else:
             print("seq_idx: %i, seq_tag: %r, outputs %r: %r" % (
-              seq_idx[i], seq_tag[i], output_layer_names[t], outputs[t][i * out_beam_sizes[t]:(i + 1)*out_beam_sizes[t]]), file=log.v4)
-            out_idx = i * out_beam_sizes[t]
-          if target_keys[t] and dataset.can_serialize_data(target_keys[t]):
-            print("  ref:", dataset.serialize_data(key=target_keys[t], data=targets[t][i]), file=log.v4)
-            if out_beam_sizes[t] is None:
-              print("  hyp:", dataset.serialize_data(key=target_keys[t], data=outputs[t][out_idx]), file=log.v4)
+              seq_idx[batch_idx], seq_tag[batch_idx], output_layer_names[target_idx],
+              outputs[target_idx][batch_idx * out_beam_sizes[target_idx]:(batch_idx + 1)*out_beam_sizes[target_idx]]),
+                  file=log.v4)
+            out_idx = batch_idx * out_beam_sizes[target_idx]
+          if target_keys[target_idx] and dataset.can_serialize_data(target_keys[target_idx]):
+            print("  ref:", dataset.serialize_data(key=target_keys[target_idx], data=targets[target_idx][batch_idx]),
+                  file=log.v4)
+            if out_beam_sizes[target_idx] is None:
+              print("  hyp:", dataset.serialize_data(key=target_keys[target_idx], data=outputs[target_idx][out_idx]),
+                    file=log.v4)
             else:
-              assert beam_scores[t] is not None
-              for b in range(out_beam_sizes[t]):
+              assert beam_scores[target_idx] is not None
+              for beam_idx in range(out_beam_sizes[target_idx]):
                 print(
-                  "  hyp %i, score %f:" % (b, beam_scores[t][i][b]),
-                  dataset.serialize_data(key=target_keys[t], data=outputs[t][out_idx + b]),
+                  "  hyp %i, score %f:" % (beam_idx, beam_scores[target_idx][batch_idx][beam_idx]),
+                  dataset.serialize_data(key=target_keys[target_idx], data=outputs[target_idx][out_idx + beam_idx]),
                   file=log.v4)
 
             if out_cache is not None:
-              if out_beam_sizes[t] is None:
-                  out_data = dataset.serialize_data(key=target_keys[t], data=outputs[t][out_idx])
+              if out_beam_sizes[target_idx] is None:
+                  out_data = dataset.serialize_data(key=target_keys[target_idx], data=outputs[target_idx][out_idx])
               else:
-                assert beam_scores[t] is not None
+                assert beam_scores[target_idx] is not None
                 out_data = [
-                    (beam_scores[t][i][b], dataset.serialize_data(key=target_keys[t], data=outputs[t][out_idx + b]))
-                    for b in range(out_beam_sizes[t])]
+                    (beam_scores[target_idx][batch_idx][beam_idx],
+                     dataset.serialize_data(key=target_keys[target_idx], data=outputs[target_idx][out_idx + beam_idx]))
+                    for beam_idx in range(out_beam_sizes[target_idx])]
 
               if output_is_dict:
-                assert output_layer_names[t] not in out_cache[corpus_seq_idx]
-                out_cache[corpus_seq_idx][output_layer_names[t]] = out_data
+                assert output_layer_names[target_idx] not in out_cache[corpus_seq_idx]
+                out_cache[corpus_seq_idx][output_layer_names[target_idx]] = out_data
               else:
                 assert corpus_seq_idx not in out_cache
                 out_cache[corpus_seq_idx] = out_data
 
     train = self._maybe_prepare_train_in_eval(targets_via_search=True)
 
-    extra_fetches={"seq_idx": self.network.get_extern_data("seq_idx", mark_data_key_as_used=True),
-                   "seq_tag": self.network.get_extern_data("seq_tag", mark_data_key_as_used=True)}
+    extra_fetches = {
+      "seq_idx": self.network.get_extern_data("seq_idx", mark_data_key_as_used=True),
+      "seq_tag": self.network.get_extern_data("seq_tag", mark_data_key_as_used=True)}
 
-    for t in range(num_targets):
-      extra_fetches["output_" + output_layer_names[t]] = output_layers[t]
-      extra_fetches["beam_scores_" + output_layer_names[t]] = output_layer_beam_scores[t]
-      # We use target_keys[t] and not output_layer_names[t] for the key to avoid fetching the same target multiple times.
-      extra_fetches["target_" + target_keys[t]] = self.network.get_extern_data(target_keys[t], mark_data_key_as_used=True)
+    for target_idx in range(num_targets):
+      extra_fetches["output_" + output_layer_names[target_idx]] = output_layers[target_idx]
+      extra_fetches["beam_scores_" + output_layer_names[target_idx]] = output_layer_beam_scores[target_idx]
+      # We use target_keys[target_idx] and not output_layer_names[target_idx]
+      # for the key to avoid fetching the same target multiple times.
+      extra_fetches["target_" + target_keys[target_idx]] = self.network.get_extern_data(
+        target_keys[target_idx], mark_data_key_as_used=True)
 
     runner = Runner(
       engine=self, dataset=dataset, batches=batches, train=train, eval=do_eval,
-      extra_fetches = extra_fetches,
+      extra_fetches=extra_fetches,
       extra_fetches_callback=extra_fetches_callback)
     runner.run(report_prefix=self.get_epoch_str() + " search")
     if not runner.finalized:
