@@ -458,7 +458,8 @@ class Dataset(object):
   def get_corpus_seq_idx(self, seq_idx):
     """
     :param int seq_idx: sorted sequence index from the current epoch, depending on seq_ordering
-    :return: the sequence index as-is in the original corpus. only defined if self.have_corpus_seq_idx()
+    :return: the sequence index as-is in the original corpus (as if you would have sorting="default").
+      only defined if self.have_corpus_seq_idx()
     :rtype: int
     """
     if self.seq_ordering == "default":
