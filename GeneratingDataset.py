@@ -746,6 +746,21 @@ class ExtractAudioFeatures:
     assert value.shape == (self.get_feature_dimension(),)
     return value.astype("float32")
 
+  def get_audio_features_from_raw_bytes(self, raw_bytes):
+    """
+    :param io.BytesIO raw_bytes:
+    """
+    # Don't use librosa.load which internally uses audioread which would use Gstreamer as a backend,
+    # which has multiple issues:
+    # https://github.com/beetbox/audioread/issues/62
+    # https://github.com/beetbox/audioread/issues/63
+    # Instead, use PySoundFile, which is also faster. See here for discussions:
+    # https://github.com/beetbox/audioread/issues/64
+    # https://github.com/librosa/librosa/issues/681
+    import soundfile  # pip install pysoundfile
+    audio, sample_rate = soundfile.read(raw_bytes)
+    return self.get_audio_features(audio=audio, sample_rate=sample_rate)
+
   def get_audio_features(self, audio, sample_rate):
     """
     :param numpy.ndarray audio: raw audio samples, shape (audio_len,)
@@ -2072,17 +2087,8 @@ class LibriSpeechCorpus(CachedDataset2):
     :param int seq_idx:
     :rtype: DatasetSeq
     """
-    # Don't use librosa.load which internally uses audioread which would use Gstreamer as a backend,
-    # which has multiple issues:
-    # https://github.com/beetbox/audioread/issues/62
-    # https://github.com/beetbox/audioread/issues/63
-    # Instead, use PySoundFile, which is also faster. See here for discussions:
-    # https://github.com/beetbox/audioread/issues/64
-    # https://github.com/librosa/librosa/issues/681
-    import soundfile  # pip install pysoundfile
     with self._open_audio_file(seq_idx) as audio_file:
-      audio, sample_rate = soundfile.read(audio_file)
-    features = self.feature_extractor.get_audio_features(audio=audio, sample_rate=sample_rate)
+      features = self.feature_extractor.get_audio_features_from_raw_bytes(audio_file)
     bpe, txt = self._get_transcription(seq_idx)
     targets = numpy.array(bpe, dtype="int32")
     raw = numpy.array(txt, dtype="object")
