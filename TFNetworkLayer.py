@@ -3226,6 +3226,7 @@ class ConvLayer(_ConcatInputLayer):
     padding = padding.upper()
     if input_expand_dims == 0 and not input_add_feature_dim and not input_split_feature_dim:
       # Maybe we have a chance to correctly define the output shapes.
+      assert data.time_dim_axis is not None, "time_dim_axis was not specified, consider setting dim options of ConvLayer"
       index_shift = data.time_dim_axis_excluding_batch
       for i in range(len(filter_size)):
         if data.shape[i + index_shift] is not None:
@@ -6599,9 +6600,9 @@ class TripletLoss(Loss):
   """
   Triplet loss: loss = max(margin + d(x_a, x_s) - d(x_a, x_d), 0.0)
   Triplet loss is used for metric learning in a siamese/triplet network.
-  It should be used as a part of CopyLayer with 3 inputs corresponding to 
+  It should be used as a part of CopyLayer with 3 inputs corresponding to
     x_a, x_s and x_d in a loss.
-  Here we assume that x_a are anchor samples, x_s are samples where 
+  Here we assume that x_a are anchor samples, x_s are samples where
     at each position i in a minibatch x_ai and x_si belong to the same class,
     while pairs x_ai and x_di belong to different classes.
   In this implementation the number of training examples is increased
@@ -6654,7 +6655,7 @@ class TripletLoss(Loss):
     else:
       with tf.name_scope("single_view_loss"):
         out = self.output_flat
-        assert self.output.dim % 3 == 0        
+        assert self.output.dim % 3 == 0
         sources = tf.split(out, num_or_size_splits=3, axis=1)
         targets = self.target_flat
         aembeds_anchor = sources[0]
@@ -6664,7 +6665,7 @@ class TripletLoss(Loss):
         anchor_targets = targets[:, 0]
         pair_targets = targets[:, 1]
         diff_targets = targets[:, 2]
-        labels = tf.concat(values=[anchor_targets, pair_targets, diff_targets], axis=0) 
+        labels = tf.concat(values=[anchor_targets, pair_targets, diff_targets], axis=0)
         loss_out = self._triplet_loss(embeds, labels)
 
     return loss_out
