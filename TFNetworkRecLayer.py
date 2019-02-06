@@ -9,7 +9,7 @@ import tensorflow as tf
 import typing
 from tensorflow.python.ops.nn import rnn_cell
 from TFNetworkLayer import LayerBase, _ConcatInputLayer, SearchChoices, get_concat_sources_data_template, Loss
-from TFUtil import Data, reuse_name_scope, get_random_seed
+from TFUtil import Data, reuse_name_scope, get_random_seed, select_src_beams
 from Util import NotSpecified
 from Log import log
 
@@ -3933,7 +3933,8 @@ class ChoiceLayer(LayerBase):
             scores_comb[:, gold_beam_in_idx], indices=nd_indices(gold_targets))  # (batch,)
           gold_scores_bc = tf.expand_dims(gold_scores, axis=1)  # (batch,1)
           scores = tf.concat([scores[:, :beam_size - 1], gold_scores_bc], axis=1)  # (batch,beam)
-        self.search_choices.set_src_beams(labels // scores_in_dim)  # (batch, beam) -> beam_in idx
+        src_beams = labels // scores_in_dim
+        self.search_choices.set_src_beams(src_beams)  # (batch, beam) -> beam_in idx
         labels = labels % scores_in_dim  # (batch, beam) -> dim idx
         labels = tf.reshape(labels, [net_batch_dim * beam_size])  # (batch * beam)
         labels = tf.cast(labels, self.output.dtype)
@@ -3942,7 +3943,7 @@ class ChoiceLayer(LayerBase):
           # 'labels' in this case do not refer to a target vocabulary, but just represent ids to the labels
           # that survived pruning for each of the sources ('pruned_labels'). So as a last step, we get the final
           # target labels by indexing pruned_labels with 'labels'.
-          labels = self._get_combined_labels(pruned_labels, source_beam_sizes, combined_ids=labels)
+          labels = self._get_combined_labels(labels, src_beams, pruned_labels, source_beam_sizes)
         else:
           labels = [labels]
 
@@ -4132,28 +4133,38 @@ class ChoiceLayer(LayerBase):
     return combined_pruned_scores_flat, combined_scores_dim, pruned_labels
 
   # noinspection PyMethodMayBeStatic
-  def _get_combined_labels(self, pruned_labels, beam_sizes, combined_ids):
+  def _get_combined_labels(self, combined_ids, src_beams, pruned_labels, beam_sizes):
     """
     Gets output labels by converting 'combined_ids' (corresponding to the flattend shape created in
     self._prune_and_combine_sources()) back to separate ids and then using those as indices to the labels
     that survived pruning.
 
-    :param list[tf.Tensor] pruned_labels: labels before pruning, see self._prune_and_combine_sources()
-    :param list[int] beam_sizes: beam sizes used for pruning of the individual sources
     :param tf.Tensor combined_ids: indices to the flattened scores, see self._prune_and_combine_sources()
+    :param tf.Tensor src_beams: the indices of the incoming beam for each outgoing label
+    :param list[tf.Tensor] pruned_labels: labels after pruning of incoming beam, see self._prune_and_combine_sources()
+    :param list[int] beam_sizes: beam sizes used for pruning of the individual sources
     :return: final labels for all sources
     :rtype: list[tf.Tensor]
     """
     assert len(pruned_labels) == 2, "not yet implemented otherwise..."
-    # We can recover the ids for the unflattened shape by using integer division and modulo operations.
-    # (similar to numpy.unravel_index())
+
     with tf.name_scope("get_combined_labels"):
-      ids_0 = tf.floordiv(combined_ids, beam_sizes[1])
-      ids_1 = tf.floormod(combined_ids, beam_sizes[1])
+      # For each outgoing label we first have to get the labels that survived source pruning from the beam index
+      # the outgoing label was generated from. So choose 'pruned_labels_' according to 'src_beams'.
+      pruned_labels_src_beam_selected = []
+      for index, pruned_labels_ in enumerate(pruned_labels):
+        pruned_labels_src_beam_selected.append(select_src_beams(pruned_labels_, src_beams))
+
+      # We can recover the ids for the unflattened shape by using integer division and modulo operations.
+      # (similar to numpy.unravel_index())
+      # TODO: generalize to more than two sources
+      ids_0 = combined_ids // beam_sizes[1]
+      ids_1 = combined_ids % beam_sizes[1]
 
       # Now get the final target labels by indexing the labels.
-      labels_0 = tf.squeeze(tf.batch_gather(pruned_labels[0], tf.expand_dims(ids_0, axis=-1)), axis=-1)
-      labels_1 = tf.squeeze(tf.batch_gather(pruned_labels[1], tf.expand_dims(ids_1, axis=-1)), axis=-1)
+      labels_0 = tf.squeeze(tf.batch_gather(pruned_labels_src_beam_selected[0], tf.expand_dims(ids_0, axis=-1)), axis=-1)
+      labels_1 = tf.squeeze(tf.batch_gather(pruned_labels_src_beam_selected[1], tf.expand_dims(ids_1, axis=-1)), axis=-1)
+
       return [labels_0, labels_1]
 
   @classmethod
@@ -4226,7 +4237,7 @@ class ChoiceLayer(LayerBase):
   def get_sub_layer(self, layer_name):
     """
     Used to get outputs in case of multiple targets. For all targets we create a sub-layer that can be referred to
-    by "self.name + '/out_' + index" (e.g. output/out_0). These sublayers can then be used as input to other layers,
+    as "self.name + '/out_' + index" (e.g. output/out_0). These sub-layers can then be used as input to other layers,
     e.g. "output_0": {"class": "copy", "from": ["output/out_0"].
 
     :param str layer_name: name of the sub_layer (e.g. 'out_0')
