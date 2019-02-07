@@ -6303,10 +6303,12 @@ class _DeviceAttrMod:
 
 def get_device_attr(dev):
   """
-  :param str dev: eg. "/device:GPU:0", or any argument tf.device
+  :param str dev: eg. "/device:GPU:0", or any argument for :func:`tf.device`
   :return: scalar string, eg. b'device: 2, name: GeForce GTX 1080 Ti, pci bus id: 0000:82:00.0, compute capability: 6.1'
   :rtype: tf.Tensor
   """
+  if ":XLA_" in dev:  # e.g. '/job:localhost/replica:0/task:0/device:XLA_GPU:0'
+    dev = dev.replace(":XLA_", ":")
   with tf.device(dev):
     return _DeviceAttrMod.get_device_attr()
 
