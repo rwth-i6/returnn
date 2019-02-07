@@ -691,14 +691,13 @@ class _NltkCorpusReaderDataset(CachedDataset2):
 
 class ExtractAudioFeatures:
   """
-  Currently uses librosa to extract MFCC features.
+  Currently uses librosa to extract MFCC/log-mel features.
   (Alternatives: python_speech_features, talkbox.features.mfcc, librosa)
-  We could also add support e.g. to directly extract log-filterbanks or so.
   """
 
   def __init__(self,
                window_len=0.025, step_len=0.010,
-               num_feature_filters=40, with_delta=False, norm_mean=None, norm_std_dev=None,
+               num_feature_filters=None, with_delta=False, norm_mean=None, norm_std_dev=None,
                features="mfcc", random_permute=None, random_state=None):
     """
     :param float window_len: in seconds
@@ -707,7 +706,7 @@ class ExtractAudioFeatures:
     :param bool|int with_delta:
     :param numpy.ndarray|str|None norm_mean: if str, will interpret as filename
     :param numpy.ndarray|str|None norm_std_dev: if str, will interpret as filename
-    :param str features: "mfcc", "log_mel_filterbank", "log_log_mel_filterbank"
+    :param str features: "mfcc", "log_mel_filterbank", "log_log_mel_filterbank", "raw"
     :param CollectionReadCheckCovered|dict[str]|bool|None random_permute:
     :param numpy.random.RandomState|None random_state:
     :return: (audio_len // int(step_len * sample_rate), (with_delta + 1) * num_feature_filters), float32
@@ -715,6 +714,11 @@ class ExtractAudioFeatures:
     """
     self.window_len = window_len
     self.step_len = step_len
+    if num_feature_filters is None:
+      if features == "raw":
+        num_feature_filters = 1
+      else:
+        num_feature_filters = 40
     self.num_feature_filters = num_feature_filters
     if isinstance(with_delta, bool):
       with_delta = 1 if with_delta else 0
@@ -767,12 +771,6 @@ class ExtractAudioFeatures:
     :param int sample_rate: e.g. 22050
     :rtype: numpy.ndarray
     """
-    kwargs = {
-      "sample_rate": sample_rate,
-      "window_len": self.window_len,
-      "step_len": self.step_len,
-      "num_feature_filters": self.num_feature_filters,
-    }
     peak = numpy.max(numpy.abs(audio))
     audio /= peak
 
@@ -782,16 +780,28 @@ class ExtractAudioFeatures:
         sample_rate=sample_rate,
         opts=self.random_permute_opts,
         random_state=self.random_state)
-    kwargs["audio"] = audio
 
-    if self.features == "mfcc":
-      feature_data = _get_audio_features_mfcc(**kwargs)
-    elif self.features == "log_mel_filterbank":
-      feature_data = _get_audio_log_mel_filterbank(**kwargs)
-    elif self.features == "log_log_mel_filterbank":
-      feature_data = _get_audio_log_log_mel_filterbank(**kwargs)
+    if self.features == "raw":
+      assert self.num_feature_filters == 1
+      feature_data = audio[:, None].astype("float32")  # add dummy dimension
+
     else:
-      assert False, "non-supported feature type %s" % self.features
+      kwargs = {
+        "sample_rate": sample_rate,
+        "window_len": self.window_len,
+        "step_len": self.step_len,
+        "num_feature_filters": self.num_feature_filters,
+        "audio": audio}
+
+      if self.features == "mfcc":
+        feature_data = _get_audio_features_mfcc(**kwargs)
+      elif self.features == "log_mel_filterbank":
+        feature_data = _get_audio_log_mel_filterbank(**kwargs)
+      elif self.features == "log_log_mel_filterbank":
+        feature_data = _get_audio_log_log_mel_filterbank(**kwargs)
+      else:
+        raise Exception("non-supported feature type %r" % (self.features,))
+
     assert feature_data.ndim == 2
     assert feature_data.shape[1] == self.num_feature_filters
 
