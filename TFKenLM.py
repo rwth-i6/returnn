@@ -367,6 +367,8 @@ def get_tf_mod(verbose=False):
     for word in ["kConverter"]:
       f_code = f_code.replace(word, "%s_%s" % (fn_short, word))
     src_code += "\n// ------------ %s : BEGIN { ------------\n" % os.path.basename(fn)
+    # https://gcc.gnu.org/onlinedocs/cpp/Line-Control.html#Line-Control
+    src_code += "#line 1 \"%s\"\n" % os.path.basename(fn)
     src_code += f_code
     src_code += "\n// ------------ %s : END } --------------\n\n" % os.path.basename(fn)
   src_code += "\n\n// ------------ our code now: ------------\n\n"
