@@ -1294,8 +1294,13 @@ class _SubnetworkRecCell(object):
 
       common_data_len = None  # used to check whether all extern data have same length
       used_keys = self.net.used_data_keys.copy()
+
       if rec_layer.target:
         used_keys.add(rec_layer.target)  # we always need the target of the recurrent layer
+      for layer_desc in self.net_dict.values():
+        if 'target' in layer_desc:
+          used_keys.add(layer_desc['target'])
+
       for key in sorted(used_keys):
         # TODO: Better check for train_flag.
         # Maybe more generic via sampling options later.

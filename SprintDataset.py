@@ -129,6 +129,7 @@ class SprintDatasetBase(Dataset):
     if self.orth_vocab:
       self.num_outputs["orth_classes"] = (self.orth_vocab.num_labels, 1)
     self.num_outputs["orth"] = (256, 1)
+    self.num_outputs['sequence_end'] = (1,2)
     self._base_init()
     # At this point, we are ready for data. In case we don't use the Sprint PythonSegmentOrdering
     # (SprintInterface.getSegmentList()), we must call this at least once.
@@ -330,6 +331,11 @@ class SprintDatasetBase(Dataset):
       assert isinstance(orth, (str, unicode))
       assert "orth_classes" not in targets
       targets["orth_classes"] = numpy.array(self.orth_vocab.get_seq(orth), dtype="int32")
+
+    #build sequence end array
+    sequence_end = numpy.zeros((T,1), dtype="float32")
+    sequence_end[-1][0] = 1
+    targets["sequence_end"] = sequence_end
 
     # Maybe convert some targets.
     if self.target_maps:
