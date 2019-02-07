@@ -706,7 +706,7 @@ class ExtractAudioFeatures:
     :param bool|int with_delta:
     :param numpy.ndarray|str|None norm_mean: if str, will interpret as filename
     :param numpy.ndarray|str|None norm_std_dev: if str, will interpret as filename
-    :param str features: "mfcc", "log_mel_filterbank", "log_log_mel_filterbank", "raw"
+    :param str features: "mfcc", "log_mel_filterbank", "log_log_mel_filterbank", "raw", "raw_ogg"
     :param CollectionReadCheckCovered|dict[str]|bool|None random_permute:
     :param numpy.random.RandomState|None random_state:
     :return: (audio_len // int(step_len * sample_rate), (with_delta + 1) * num_feature_filters), float32
@@ -717,8 +717,10 @@ class ExtractAudioFeatures:
     if num_feature_filters is None:
       if features == "raw":
         num_feature_filters = 1
+      elif features == "raw_ogg":
+        raise Exception("you should explicitly specify num_feature_filters (dimension) for raw_ogg")
       else:
-        num_feature_filters = 40
+        num_feature_filters = 40  # was the old default
     self.num_feature_filters = num_feature_filters
     if isinstance(with_delta, bool):
       with_delta = 1 if with_delta else 0
@@ -753,7 +755,20 @@ class ExtractAudioFeatures:
   def get_audio_features_from_raw_bytes(self, raw_bytes):
     """
     :param io.BytesIO raw_bytes:
+    :return: shape (time,feature_dim)
+    :rtype: numpy.ndarray
     """
+    if self.features == "raw_ogg":
+      assert self.with_delta == 0 and self.norm_mean is None and self.norm_std_dev is None
+      # We expect that raw_bytes comes from a Ogg file.
+      try:
+        from extern.ParseOggVorbis.returnn_import import ParseOggVorbisLib
+      except ImportError:
+        print("Maybe you did not clone the submodule extern/ParseOggVorbis?")
+        raise
+      return ParseOggVorbisLib.get_instance().get_floor_ys_encoded(
+        raw_bytes=raw_bytes.getvalue(), output_dim=self.num_feature_filters)
+
     # Don't use librosa.load which internally uses audioread which would use Gstreamer as a backend,
     # which has multiple issues:
     # https://github.com/beetbox/audioread/issues/62
