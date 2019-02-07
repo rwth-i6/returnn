@@ -3,6 +3,8 @@ from torch.autograd import grad
 from PTUpdater import Updater
 from PTNetwork import LayerNetwork
 
+floatX = 'float32'
+
 class Device(object):
   def __init__(self, device, config, blocking=False, num_batches=1, update_specs=None):
     """
@@ -101,7 +103,7 @@ class Device(object):
     if not update_specs: update_specs = {}
     update_specs.setdefault('update_rule', 'global')
     update_specs.setdefault('update_params', {})
-    update_specs.setdefault('block_size', 0) #self.num_batches)
+    update_specs.setdefault('block_size', 0)
     update_specs.setdefault('layers', [])
     self.update_specs = update_specs
     self.block_size = update_specs['block_size']
@@ -121,14 +123,14 @@ class Device(object):
       self.testnet = PTLayerNetwork.from_json_and_config(json_content, config, **testnet_kwargs)
     elif config.bool('initialize_from_model', False) and config.has('load'):
       model = h5py.File(config.value('load', ''), "r")
-      self.trainnet = LayerNetwork.from_hdf_model_topology(model, train_flag=True, eval_flag=False,
-                                                           **LayerNetwork.init_args_from_config(config))
-      self.testnet = LayerNetwork.from_hdf_model_topology(model, **dict_joined(testnet_kwargs,
-                                                          LayerNetwork.init_args_from_config(config)))
+      self.trainnet = PTLayerNetwork.from_hdf_model_topology(model, train_flag=True, eval_flag=False,
+                                                            **PTLayerNetwork.init_args_from_config(config))
+      self.testnet = PTLayerNetwork.from_hdf_model_topology(model, **dict_joined(testnet_kwargs,
+                                                            PTLayerNetwork.init_args_from_config(config)))
       model.close()
     else:
-      self.trainnet = LayerNetwork.from_config_topology(config, train_flag=True, eval_flag=False)
-      self.testnet = LayerNetwork.from_config_topology(config, **testnet_kwargs)
+      self.trainnet = PTLayerNetwork.from_config_topology(config, train_flag=True, eval_flag=False)
+      self.testnet = PTLayerNetwork.from_config_topology(config, **testnet_kwargs)
     if train_param_args is not None:
       self.trainnet.declare_train_params(**train_param_args)
     if self.testnet_share_params:
@@ -143,29 +145,21 @@ class Device(object):
     self.used_data_keys = self.trainnet.get_used_data_keys()
     print("Device train-network: Used data keys:", self.used_data_keys, file=log.v4)
     assert "data" in self.used_data_keys
-    self.y = {k: theano.shared(numpy.zeros((1,) * self.trainnet.y[k].ndim, dtype=self.trainnet.y[k].dtype),
-                               borrow=True, name='y_%s' % k)
-              for k in self.used_data_keys}
-    self.j = {k: theano.shared(numpy.zeros((1, 1), dtype='int8'), borrow=True, name='j_%s' % k)
-              for k in self.used_data_keys}
-    if self.trainnet.loss in ('ctc','ce_ctc', 'hmm'):
-      self.cp = theano.shared(numpy.zeros((1, 1), dtype = theano.config.floatX), borrow=True, name='cp')
-      self.c = T.cast(self.cp, 'int32')
-    if self.network_task in ['train', 'theano_graph']:
+    # TODO
+    #self.y = {k: theano.shared(numpy.zeros((1,) * self.trainnet.y[k].ndim, dtype=self.trainnet.y[k].dtype),
+    #                           borrow=True, name='y_%s' % k)
+    #          for k in self.used_data_keys}
+    #self.j = {k: theano.shared(numpy.zeros((1, 1), dtype='int8'), borrow=True, name='j_%s' % k)
+    #          for k in self.used_data_keys}
+    if self.network_task == 'train':
       gparams = []
       exclude = []
       self.gradients = {}; ":type: dict[theano.SharedVariable,theano.Variable]"
-      if config.bool('debug_gradient_norm', False):
-        # The gradient norm is useful as a check whether we are going to destroy our model (if this is inf/nan).
-        # See self.fast_check_model_is_broken_from_result().
-        self.gradient_norm = 0
-      else:
-        self.gradient_norm = None
       for pi, param in enumerate(self.trainnet.train_params_vars):
         if log.verbose[4]: progress_bar(float(pi) / len(self.trainnet.train_params_vars), "calculating gradients ...")
         if hasattr(param,'custom_update'):
           gparam = param.custom_update
-        elif update_specs['layers'] and param.layer.name not in update_specs['layers']: #param.name == "encoder_data" or param.name == "W_cls_output_output" or param.name == "W_rec_output":
+        elif update_specs['layers'] and param.layer.name not in update_specs['layers']:
           gparam = 0
         else:
           if param.layer.attrs.get('cost',''):
@@ -181,7 +175,6 @@ class Device(object):
           print("exclude:", self.name, param.name, file=log.v4)
           gparams.append(T.constant(0))
           continue
-        #update_specs['layers'].append(param.layer.name)
         self.gradients[param] = gparam
         gparams.append(gparam)
     else:
@@ -190,28 +183,11 @@ class Device(object):
 
     # initialize functions
     self.updater = None
-    #update_specs['layers'] = list(set(update_specs['layers']))
     self.update_specs = update_specs
-
-    self.streams = []
-    output_streams = {'train' : [],'eval' : []}
-    if config.has('stream'): #TODO
-      from NetworkStream import NetworkStream
-      for stream in config.value('stream', '').split():  # usage: layer_name.member_var:port
-        stream, port = stream.split(':')
-        layer, member = stream.split('.')
-        self.streams.append(NetworkStream(stream, int(port)))
-        for key in ['train', 'eval']:
-          net = self.trainnet if key == 'train' else self.testnet
-          ctx  = net.hidden[layer] if layer in net.hidden else net.output[layer]
-          if hasattr(ctx,member):
-            output_streams[key].append(getattr(ctx,member))
-          elif member in ctx.attrs:
-            output_streams[key].append(ctx.attrs[member])
 
     self.forwarder = None
     self.use_inputs = False
-    if self.network_task in ['train']:
+    if self.network_task  == 'train':
         train_givens = self.make_givens(self.trainnet)
         test_givens = self.make_givens(self.testnet)
 
@@ -227,268 +203,47 @@ class Device(object):
         self.train_outputs_format = ["weights"]
 
       self.train_outputs_format += ["cost:" + out for out in sorted(self.trainnet.costs.keys())]
-      # The function output lists must be consistent with TrainTaskThread.evaluate()
-      outputs += output_streams['train'] + [self.trainnet.costs[out] for out in sorted(self.trainnet.costs.keys())]
-
       self.updater.initVars(self.trainnet, self.gradients)
-      self.trainer = self.trainnet.theano.function(inputs=[self.block_start, self.block_end],
-                                     outputs=outputs,
-                                     givens=train_givens,
-                                     updates=self.updater.getUpdateList(),
-                                     on_unused_input=config.value('theano_on_unused_input', 'ignore'),
-                                     no_default_updates=exclude,
-                                     name="train_and_updater")
+
+      # TODO
+      #self.trainer = self.trainnet.theano.function(inputs=[self.block_start, self.block_end],
+      #                               outputs=outputs,
+      #                               givens=train_givens,
+      #                               updates=self.updater.getUpdateList(),
+      #                               on_unused_input=config.value('theano_on_unused_input', 'ignore'),
+      #                               no_default_updates=exclude,
+      #                               name="train_and_updater")
 
       self.test_outputs_format = ["cost:" + out for out in sorted(self.testnet.costs.keys())]
       self.test_outputs_format += ["error:" + out for out in sorted(self.testnet.errors.keys())]
       test_outputs = output_streams['eval'] + [self.testnet.costs[out] for out in sorted(self.testnet.costs.keys())]
       test_outputs += [self.testnet.errors[out] for out in sorted(self.testnet.errors.keys())]
-      self.tester = theano.function(inputs=[self.block_start, self.block_end],
-                                    outputs=test_outputs,
-                                    givens=test_givens,
-                                    on_unused_input=config.value('theano_on_unused_input', 'ignore'),
-                                    no_default_updates=True,
-                                    name="tester")
-
-    elif self.network_task == "eval":
-      test_givens = self.make_givens(self.testnet)
-      self.test_outputs_format = ["cost:" + out for out in sorted(self.testnet.costs.keys())]
-      self.test_outputs_format += ["error:" + out for out in sorted(self.testnet.errors.keys())]
-      test_outputs = output_streams['eval'] + [self.testnet.costs[out] for out in sorted(self.testnet.costs.keys())]
-      test_outputs += [self.testnet.errors[out] for out in sorted(self.testnet.errors.keys())]
-      self.tester = theano.function(inputs=[self.block_start, self.block_end],
-                                    outputs=test_outputs,
-                                    givens=test_givens,
-                                    on_unused_input=config.value('theano_on_unused_input', 'ignore'),
-                                    no_default_updates=True,
-                                    name="tester")
-
-    elif self.network_task in ['forward', 'daemon', 'compute_priors']:
+      # TODO
+      #self.tester = theano.function(inputs=[self.block_start, self.block_end],
+      #                              outputs=test_outputs,
+      #                              givens=test_givens,
+      #                              on_unused_input=config.value('theano_on_unused_input', 'ignore'),
+      #                              no_default_updates=True,
+      #                              name="tester")
+    elif self.network_task == 'forward':
       output_layer_name = config.value("extract_output_layer_name", "output")
       extractions = config.list('extract', ['log-posteriors'])
-      source = output_streams['eval']
       givens = self.make_input_givens(self.testnet)
       for extract in extractions:
         param = None
         if ':' in extract:
           param = extract.split(':')[1]
           extract = extract.split(':')[0]
-        if extract == "classification":
-          source.append(T.argmax(self.testnet.get_layer(output_layer_name).p_y_given_x, axis=-1).dimshuffle(0, 1, 'x'))
         elif extract == "log-posteriors":
-          if not param:
-            param = output_layer_name
-          layer = self.testnet.get_layer(param)
-          p_y_given_x = getattr(layer, "p_y_given_x", layer.output)
-          index = self.testnet.get_layer(param).output_index()
-          if "conv_1d" in [self.testnet.hidden[s].layer_class for s in self.testnet.hidden.keys()]:
-            index = self.testnet.get_layer(param).sources[0].index
-          if p_y_given_x.ndim == 2:
-            p_y_given_x = p_y_given_x.reshape((index.shape[0], index.shape[1], p_y_given_x.shape[1]))
-          assert p_y_given_x.ndim == 3
-          source.append(T.switch(T.cast(index, "float32").dimshuffle(0, 1, 'x'), T.log(p_y_given_x), numpy.float32(0)))
-        elif extract == "log-posteriors-sum":
-          if not param:
-            param = output_layer_name
-          p_y_given_x = self.testnet.get_layer(param).p_y_given_x
-          index = self.testnet.get_layer(param).output_index()
-          if p_y_given_x.ndim == 2:
-            p_y_given_x = p_y_given_x.reshape((index.shape[0], index.shape[1], p_y_given_x.shape[1]))
-          assert p_y_given_x.ndim == 3
-          source.append(
-            T.sum(T.switch(T.cast(index, "float32").dimshuffle(0, 1, 'x'), T.log(p_y_given_x), numpy.float32(0)), axis=(0, 1)))
-        elif extract == "emissions":
-          if not param:
-            param = output_layer_name
-          layer = self.testnet.get_layer(param)
-          p_y_given_x = layer.p_y_given_x
-          priors = layer.priors if 'compute_priors' in layer.attrs else 1.
-          prior_scale = config.float('prior_scale', layer.attrs.get('prior_scale', 1.0))
-          posterior_scale = config.float('posterior_scale', layer.attrs.get('am_scale', 1.0))
-          index = self.testnet.get_layer(param).output_index()
-          if p_y_given_x.ndim == 2:
-            p_y_given_x = p_y_given_x.reshape((index.shape[0], index.shape[1], p_y_given_x.shape[1]))
-          assert p_y_given_x.ndim == 3
-          source.append(T.switch(T.cast(index, "float32").dimshuffle(0, 1, 'x'),
-                                 posterior_scale * T.log(p_y_given_x) - prior_scale * T.log(priors), numpy.float32(0)))
-        elif extract == "log-posteriors-hacked":
-          #just ignore the index, is only safe with max_seqs 1
-          #but makes the index handling with mdlstm work for now
-          source.append(T.log(self.testnet.output[output_layer_name].p_y_given_x))
-        elif extract == "ctc":
-          pl = self.testnet.output[output_layer_name].p_y_given_x[:, :, 0::2]
-          pb = T.sum(self.testnet.output[param].p_y_given_x[:, :, 1::2], axis=2).dimshuffle(0, 1, 'x')
-          pcx = T.concatenate([pl, pb], axis=2)
-          #just ignore the index, is only safe with max_seqs 1
-          #but makes the index handling with mdlstm work for now
-          source.append(T.log(pcx))
-        elif extract == "posteriors":
-          if not param:
-            param = output_layer_name
-          layer = self.testnet.get_layer(param)
-          p_y_given_x = getattr(layer, "p_y_given_x", layer.output)
-          index = layer.output_index()
-          if p_y_given_x.ndim == 2:
-            p_y_given_x = p_y_given_x.reshape((index.shape[0], index.shape[1], p_y_given_x.shape[1]))
-          assert p_y_given_x.ndim == 3
-          source.append(
-            T.switch(T.cast(index, "float32").dimshuffle(0, 1, 'x'), p_y_given_x, numpy.float32(0)))
-        elif extract == "win_post":
-          layer = self.testnet.get_layer(output_layer_name)
-          p_y_given_x = getattr(layer, "p_y_given_x", layer.output)
-          from NetworkHiddenLayer import SegmentFinalStateLayer
-          if isinstance(layer.sources[0],SegmentFinalStateLayer):
-            w = layer.sources[0].base[0].attrs['win']
-            t = layer.sources[0].base[0].timesteps
-            b = layer.sources[0].base[0].batches
-            fullind = layer.sources[0].fullind.T
-            p_y_given_x = p_y_given_x.reshape((p_y_given_x.shape[0]*p_y_given_x.shape[1],p_y_given_x.shape[2]))
-          else:
-            w = layer.copy_output.attrs['win']
-            t = layer.copy_output.timesteps
-            b = layer.copy_output.batches
-            from TheanoUtil import window_batch_timewise
-            fullind = window_batch_timewise(t,b,w,layer.copy_output.fullind)
-            fullind = fullind.T
-            p_y_given_x = p_y_given_x.reshape((p_y_given_x.shape[0]*p_y_given_x.shape[1],p_y_given_x.shape[2]))[fullind.flatten()]
-          zer = T.zeros((p_y_given_x.shape[1],1))
-          fullind1 = fullind.repeat(p_y_given_x.shape[1]).reshape((fullind.flatten().shape[0],p_y_given_x.shape[1]))
-          p_y_given_x1 = T.switch(fullind1>=0, p_y_given_x, 0)
-          p_y_given_x1 = p_y_given_x1.reshape((t*b,w*p_y_given_x1.shape[1]))
-          p_y_given_x1 = p_y_given_x1.reshape((b,t,p_y_given_x1.shape[1])).dimshuffle(1,0,2)
-          assert p_y_given_x1.ndim == 3
-          source.append(T.log(p_y_given_x1))
-        elif extract == "win_post_full":
-          layer = self.testnet.get_layer(output_layer_name)
-          p_y_given_x = layer.z
-          w = layer.sources[0].base[0].attrs['win']
-          t = layer.sources[0].base[0].timesteps
-          b = layer.sources[0].base[0].batches
-          fullind = layer.sources[0].fullind.T#.flatten()
-          p_y_given_x = p_y_given_x.reshape((p_y_given_x.shape[0]*p_y_given_x.shape[1],p_y_given_x.shape[2]))
-          zer = T.zeros((p_y_given_x.shape[1],1))
-          fullind1 = fullind.repeat(p_y_given_x.shape[1]).reshape((fullind.flatten().shape[0],p_y_given_x.shape[1]))
-          min_p = T.min(p_y_given_x,axis=-1).repeat(p_y_given_x.shape[1]).reshape((p_y_given_x.shape[0],p_y_given_x.shape[1]))
-          p_y_given_x1 = T.switch(fullind1>=0, p_y_given_x, min_p)
-          p_y_given_x1 = p_y_given_x1.reshape((t*b,w*p_y_given_x1.shape[1]))
-          py_win = T.nnet.softmax(p_y_given_x1)
-          py_win = py_win.reshape((b,t,py_win.shape[1])).dimshuffle(1,0,2)
-          assert py_win.ndim == 3
-          source.append(py_win)
-        elif extract == "posteriors-sum":
-          layer = self.testnet.get_layer(output_layer_name)
-          p_y_given_x = layer.p_y_given_x
-          index = layer.output_index()
-          if p_y_given_x.ndim == 2:
-            p_y_given_x = p_y_given_x.reshape((index.shape[0], index.shape[1], p_y_given_x.shape[1]))
-          assert p_y_given_x.ndim == 3
-          source.append(
-            T.sum(T.switch(T.cast(index, "float32").dimshuffle(0, 1, 'x'), p_y_given_x, numpy.float32(0)), axis=(0, 1)))
-        elif extract == "filters":
-          # for more than one layer
-          for hidden in sorted(self.testnet.hidden.keys(), key=sort_strint):
-            if self.testnet.hidden[hidden].layer_class == "conv":
-              source.append(self.testnet.hidden[hidden].output)
-            else:
-              print((str(self.testnet.hidden[hidden])))
-          # for single layer only
-          #if self.testnet.hidden["c1"].layer_class == "conv":
-          #  source.append(self.testnet.hidden["c1"].output)
-        elif extract == "ctc-sil":
-          feat = self.testnet.get_layer('output').p_y_given_x
-          feat = feat[:,:-1] #remove blank
-          feat = feat / feat.sum(axis=1)[:,numpy.newaxis] #renormalize
-          feat = T.log(feat)
-          source.append(feat)
-        elif extract == "ce-errsig":
-          feat = T.grad(self.testnet.costs, self.testnet.get_layer(output_layer_name).z) #TODO
-          source.append(feat)
-          givens = self.make_givens(self.testnet)
-        elif "log-norm-hidden_" in extract:
-          idx = int(extract.split('_')[1])
-          source.append(T.log(T.nnet.softmax(T.reshape(self.testnet.hidden[idx].output[target], (self.testnet.hidden[idx].output[target].shape[0] * self.testnet.hidden[idx].output[target].shape[1], self.testnet.hidden[idx].output[target].shape[2])))))
-        elif "gates_" in extract:
-          idx = int(extract.split('_')[1])
-          if idx > 0:
-            hidden = self.testnet.hidden[idx - 1]
-          else:
-            hidden = self.testnet.reverse_hidden[-idx - 1]
-          source.append(T.reshape(hidden.input_gate, (hidden.input_gate.shape[0] * hidden.input_gate.shape[1], hidden.input_gate.shape[2])))
-          source.append(T.reshape(hidden.forget_gate, (hidden.forget_gate.shape[0] * hidden.forget_gate.shape[1], hidden.forget_gate.shape[2])))
-          source.append(T.reshape(hidden.output_gate, (hidden.output_gate.shape[0] * hidden.output_gate.shape[1], hidden.output_gate.shape[2])))
-        elif "hidden_" in extract:
-          idx = int(extract.split('_')[1])
-          if idx > 0:
-            hidden = self.testnet.hidden[idx - 1]
-          else:
-            hidden = self.testnet.reverse_hidden[-idx - 1]
-          source.append(T.reshape(hidden.output[target], (hidden.output[target].shape[0] * hidden.output[target].shape[1], hidden.output[target].shape[2])))
-        elif extract in self.testnet.hidden.keys():
-          if param is None:
-            param = 'output'
-          hidden = self.testnet.hidden[extract]
-          if hidden.layer_class == 'mdlstm':
-            source.append(T.sum(hidden.output,axis=0))
-          else:
-            signal = getattr(hidden, param)
-            if signal.ndim == 2:
-              signal = signal.dimshuffle('x',0,1)
-            sidx = hidden.index.dimshuffle('x',0)
-            source.append(signal * sidx.dimshuffle(0,1,'x').repeat(signal.shape[2],axis=2))
-        elif extract in self.testnet.output:
-          if param is None:
-            param = 'output'
-          hidden = self.testnet.output[extract]
-          signal = getattr(hidden, param)
-          if param == 'attention' and extract == 'aln':
-            n = signal.shape[0]
-            b = signal.shape[1]
-            t = signal.shape[2]
-            signal = signal.dimshuffle(1,0,2).reshape((signal.shape[0],signal.shape[1]*signal.shape[2])).argmax(axis=-1).reshape((n,b))
-            signal = signal.dimshuffle(0,1,'x')
-          assert signal.ndim == 3, "extraction variable has to be of shape (time,batch,dimension)"
-          source.append(signal)
-        elif extract == 'input':
-          source.append(self.testnet.x.reshape((self.testnet.i.shape[0], self.testnet.i.shape[1], self.testnet.x.shape[2])) * T.cast(self.testnet.i.dimshuffle(0,1,'x').repeat(self.testnet.x.shape[2],axis=2),'float32'))
+          pass #TODO
         else:
           assert False, "invalid extraction: " + extract
-      if config.has('load_graph') or config.has('save_graph'):
-        self.use_inputs = True
-        if config.has('load_graph') and os.path.exists(config.value('load_graph', '')):
-          import dill
-          graphfile = config.value('load_graph', '')
-          print("Loading pre-compiled graph from '%s'" % graphfile, file=log.v4)
-          self.extractor = dill.load(open(graphfile, 'rb'))
-        else:
-          inp = [self.testnet.y[k] for k in self.used_data_keys]
-          inp += [self.testnet.j[k] for k in self.used_data_keys]
-          self.extractor = theano.function(inputs=inp,
-                                           outputs=source if len(source) == 1 else [T.concatenate(source, axis=-1)],
-                                           givens=[],
-                                           on_unused_input=config.value('theano_on_unused_input', 'ignore'),
-                                           name="extractor")
-      else:
-        self.extractor = theano.function(inputs = [],
-                                         outputs = source if len(source) == 1 else [T.concatenate(source, axis=-1)],
-                                         givens = givens,
-                                         on_unused_input=config.value('theano_on_unused_input', 'ignore'),
-                                         name = "extractor")
-      self.save_graph = config.has('save_graph')
 
-    elif self.network_task == 'classify':
-      self.classifier = theano.function(inputs = [],
-                                        outputs = [T.argmax(self.testnet.get_layer('output').p_y_given_x, axis = 1)],
-                                        givens = self.make_input_givens(self.testnet),
-                                        name = "classifier")
-
-    elif self.network_task == 'analyze':
-      self.analyzer = theano.function(inputs = [],
-                                      outputs = [self.testnet.get_layer('output').p_y_given_x],
-                                              #+ [self.testnet.jacobian],
-                                              #+ [hidden.output for hidden in self.network.hidden]
-                                              #+ [hidden.output for hidden in self.network.reverse_hidden],
-                                      givens = self.make_input_givens(self.testnet),
-                                      name = "analyzer")
+      # TODO
+      # self.extractor = theano.function(inputs = [],
+      #                                  outputs = source if len(source) == 1 else [T.concatenate(source, axis=-1)],
+      #                                  givens = givens,
+      #                                  name = "extractor")
 
   def compute_run(self, task):
     compute_start_time = time.time()
@@ -623,27 +378,6 @@ class Device(object):
     except Exception as e:
       print("Exception when writing model broken info dump. %s" % e, file=log.v3)
 
-  def _checkGpuFuncs(self, device, device_id):
-    if device[0:3] != 'gpu': return
-    # Check if we use the GPU.
-    # http://deeplearning.net/software/theano/tutorial/modes.html
-    theano_func = self.get_compute_func(self.network_task)
-    if not any([x.op.__class__.__name__ in ['GpuGemm', 'GpuGemv', 'GpuDot22', 'GpuElemwise']
-                for x in theano_func.maker.fgraph.toposort()]):
-      print(device + ":", "It seems as if we don't use the GPU although we requested it.", file=log.v1)
-      import theano.printing
-      theano.printing.debugprint(theano_func.maker.fgraph.outputs[0])
-    else:
-      print(device + ":", "Our Theano trainer functions looks like it will run on the GPU.", file=log.v5)
-
-    try:
-      import theano.sandbox.cuda
-      theano_cuda = theano.sandbox.cuda.cuda_ndarray.cuda_ndarray
-      devProps = theano_cuda.device_properties(device_id)
-      print(device + ":", "CUDA version %i" % devProps["driverVersion"], file=log.v5)
-    except Exception as exc:
-      print(device + ":", "Exception while getting CUDA information. %s" % exc, file=log.v3)
-
   def process(self, asyncTask):
     """
     :type asyncTask: AsyncTask
@@ -684,34 +418,9 @@ class Device(object):
     :type asyncTask: AsyncTask
     """
     # The connection (duplex pipe) is managed by AsyncTask.
-    output_queue = input_queue = asyncTask.conn
-    if device[0:3] == 'gpu':
-      import theano.sandbox.cuda
-      if device == 'gpuX': device = 'gpu'
-      device = device.replace('gpu', 'cuda')
-      #print "Use CUDA in device proc %s" % device
-      assert theano.sandbox.cuda.cuda_available, "Theano CUDA support not available. Check that nvcc is in $PATH."
-      if not theano.sandbox.cuda.cuda_enabled: # already enabled when $THEANO_FLAGS=device=gpu
-        theano.sandbox.cuda.use(device=device, force=True)
-        #theano.sandbox.cuda.use(device, force = True, default_to_move_computation_to_gpu=True, move_shared_float32_to_gpu=True, enable_cuda=True)
-      try:
-        import cuda_ndarray.cuda_ndarray as theano_cuda_ndarray
-      except ImportError as exc:
-        raise Exception("Theano CUDA support seems broken: %s" % exc)
-      device_id = theano_cuda_ndarray.active_device_number()
-      device_name = theano_cuda_ndarray.active_device_name()
-      #For some reason, the Titan X is just displayed as "Graphics Device", so we just replace it here
-      if device_name == "Graphics Device":
-        device_name = "Geforce GTX TITAN X"
-      device = "gpu%i" % device_id
-    else:
-      try:
-        device_id = int(device[3:])
-      except ValueError:
-        device_id = 0
-      device_name = 'cpu%i' % device_id
-    output_queue.send(device_id)
-    output_queue.send(device_name)
+    # TODO: pytorhc initialization of given device for this process
+    output_queue.send(device_id) # TODO
+    output_queue.send(device_name) # TODO
 
     custom_dev_init_code = config.value('custom_dev_init_code', None, list_join_str="\n")
     if custom_dev_init_code:
@@ -786,7 +495,7 @@ class Device(object):
           assert len(params) == len(our_params_testnet)
         for i in range(params_len):
           param_str = params[i]
-          param = numpy.fromstring(param_str, dtype='float32')
+          param = numpy.fromstring(param_str, dtype=floatX)
           our_p_train = our_params_trainnet[i]
           our_param_shape = our_p_train.get_value(borrow=True, return_internal_type=True).shape
           assert numpy.prod(our_param_shape) == numpy.prod(param.shape)
@@ -811,7 +520,7 @@ class Device(object):
       elif cmd == "sync-net-train-params":
         network_params = []
         for p in self.trainnet.get_all_params_vars():
-          network_params.append(numpy.asarray(p.get_value(), dtype='float32').tostring())
+          network_params.append(numpy.asarray(p.get_value(), dtype=floatX).tostring())
       elif cmd == "task":  # via self.run()
         task = input_queue.recv()
         try:
@@ -856,7 +565,7 @@ class Device(object):
       res = []
       assert len(vars) == len(raw)
       for p,q in zip(vars, raw):
-        res.append(numpy.fromstring(q, dtype='float32').reshape(p.get_value().shape))
+        res.append(numpy.fromstring(q, dtype=floatX).reshape(p.get_value().shape))
       return res
 
   def set_net_encoded_params(self, network_params):
@@ -868,7 +577,7 @@ class Device(object):
     self.input_queue.send("set-net-params")
     self.input_queue.send(len(network_params))
     for p in network_params:
-      self.input_queue.send_bytes(p.astype('float32').tostring())
+      self.input_queue.send_bytes(p.astype(floatX).tostring())
     self.input_queue.send("end-set-net-params")
 
   def set_net_params(self, network):
@@ -886,28 +595,7 @@ class Device(object):
         numpy.asarray(p.get_value()) for p in network.get_all_params_vars()])
 
   def is_device_proc(self):
-    if self.blocking:
-      return True
-    if self.main_pid == os.getpid():
-      return False  # We are on the host.
-    return True  # We are the child proc.
-
-  def _generic_exec(self, func_name, args, kwargs):
-    assert self.is_device_proc()
-    func = attr_chain(self, func_name)
-    ret = func(*args, **kwargs)
-    return ret
-
-  def _generic_exec_on_dev(self, func_name, *args, **kwargs):
-    assert not self.wait_for_result_call
-    if self.is_device_proc():
-      return self._generic_exec(func_name, args, kwargs)
-    self.input_queue.send("generic-exec")
-    self.input_queue.send((func_name, args, kwargs))
-    r = self.output_queue.recv()
-    assert r == "generic-exec-result"
-    r = self.output_queue.recv()
-    return r
+    return self.main_pid != os.getpid()
 
   def get_task_network(self):
     """
@@ -937,10 +625,7 @@ class Device(object):
     """
     assert self.main_pid == os.getpid()
     assert all([s > 0 for s in shapes["data"]])
-    # For output_shape, we allow zeros, because e.g. in forwarding, we don't know them and will not use it.
-    import theano
-    self.targets = {k: numpy.full(shapes[k], -1, dtype=theano.config.floatX) for k in self.used_data_keys}
-    self.ctc_targets = numpy.zeros((shapes.get('classes', [0,0])[1], max_ctc_length), dtype=theano.config.floatX)
+    self.targets = {k: numpy.full(shapes[k], -1, dtype=floatX) for k in self.used_data_keys}
     self.output_index = {k: numpy.zeros(shapes[k][0:2], dtype='int8') for k in self.used_data_keys}
     self.tags = [None] * shapes["data"][1]  # type: list[str]  # seq-name for each batch slice
 
@@ -952,8 +637,6 @@ class Device(object):
         self.y[target].set_value(self.targets[target].astype(self.y[target].dtype), borrow = True)
       for k in self.used_data_keys:
         self.j[k].set_value(self.output_index[k], borrow = True)
-      if self.trainnet.loss in ('ctc','ce_ctc', 'hmm'):
-        self.cp.set_value(self.ctc_targets)
       self.update_total_time += time.time() - update_start_time
     else:
       assert self.main_pid == os.getpid()
@@ -1101,9 +784,6 @@ class Device(object):
       self.input_queue.send(task)
 
   def clear_memory(self, network):
-    #self.data = numpy.zeros((1, 1, 1), dtype = theano.config.floatX)
-    #self.targets = numpy.zeros((1, 1), dtype = theano.config.floatX)
-    #self.index = numpy.zeros((1, 1), dtype = theano.config.floatX)
     self.update_data()
 
   @staticmethod
@@ -1195,57 +875,3 @@ class Device(object):
     self.proc.join(timeout=10)
     self.proc.terminate()
     self.proc = None
-
-  # device properties
-  def get_device_shaders(self):
-    return self.attributes[0]
-
-  def get_device_clock(self):
-    return self.attributes[1]
-
-  def get_device_memory(self):
-    return self.attributes[2]
-
-  def update_memory(self):
-    self.memory = self.attributes[2] - 512 * 1024 * 1024
-    if self.name[0:3] != 'cpu':
-      self.memory = int(cmd("nvidia-smi -i "+ str(self.id) + " -q | grep -A 3 \"Memory Usage\" | tail -n 1 | cut -d ':' -f 2 | cut -d ' ' -f 2")[0])
-    return self.memory
-
-  def get_memory_info(self):
-    try:
-      import pynvml
-    except ImportError as exc:
-      return None
-    return None
-    #hmap = [2, 3, 1, 0]
-    #handle = pynvml.nvmlDeviceGetHandleByIndex(hmap[self.id])
-    #return pynvml.nvmlDeviceGetMemoryInfo(handle)
-
-  def make_givens(self, network):
-    """
-    :type network: LayerNetwork
-    """
-    # self.i == self.j["data"], self.x == self.y["data"]
-    i = self.block_start
-    j = self.block_end
-    gs  = [(network.y[k], self.y[k][:,i:j]) for k in self.used_data_keys]
-    gs += [(network.j[k], self.j[k][:,i:j]) for k in self.used_data_keys]
-    gs += [(network.epoch, self.epoch_var)]
-    gs += [(network.tags,  self.tags_var)]
-    return gs
-
-  def make_input_givens(self, network):
-    gs  = [(network.y[k], self.y[k]) for k in self.used_data_keys]
-    gs += [(network.j[k], self.j[k]) for k in self.used_data_keys]
-    gs += [(network.tags, self.tags_var)]
-    return gs
-
-  def make_sprint_givens(self, network):
-    return self.make_input_givens(network)
-
-  def make_ctc_givens(self, network):
-    return self.make_input_givens(network) + [(network.c, self.c)]
-
-  def make_ce_ctc_givens(self, network):
-    return self.make_givens(network) + [(network.c, self.c)]

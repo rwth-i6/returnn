@@ -799,3 +799,9 @@ class Layer(Container):
     :rtype: theano.Variable
     """
     return None
+
+class OutputLayer(Layer):
+  layer_class = "softmax"
+
+  def __init__(self, loss, y):
+    pass
