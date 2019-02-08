@@ -862,67 +862,6 @@ class Updater:
         if not u: continue
         upd[p] = T.clip(u, -self.update_clip, self.update_clip)
 
-    if self.multi_batch_update > 1:
-      do_update_now = T.eq(self.counter % self.multi_batch_update, self.multi_batch_update - 1)
-      self.multi_batch_num_output_frames = self.var(0, name="multi_batch_num_output_frames", dtype="int64")
-      multi_batch_num_output_frames = self.multi_batch_num_output_frames + batch_num_output_frames
-      updates.append((self.multi_batch_num_output_frames, T.switch(do_update_now, 0, multi_batch_num_output_frames)))
-
-      for param in grads.keys():
-        multi_batch_update_param = self.var(param, name="%s_multi_batch_update" % param.name, zero=True)
-        new_multi_batch_update_param = multi_batch_update_param + upd[param]
-        updates.append((
-          multi_batch_update_param,
-          theano.ifelse.ifelse(
-            do_update_now,
-            T.zeros_like(param),
-            new_multi_batch_update_param
-          )
-        ))
-        upd[param] = theano.ifelse.ifelse(
-          do_update_now,
-          new_multi_batch_update_param / numpy.float32(self.multi_batch_update),
-          T.zeros_like(param)
-        )
-
-    # Simulate multi GPU training. This might help for regularization.
-    if self.update_multiple_models:
-      if not self.update_multiple_models_average_step:
-        self.update_multiple_models_average_step = self.update_multiple_models
-      cur_model = self.counter % self.update_multiple_models
-      average_step_i = self.update_multiple_models_average_step_i % self.update_multiple_models_average_step
-
-      for param in grads.keys():
-        models = [param]
-        for i in range(self.update_multiple_models - 1):
-          # Note that when we call this function, where they are just randomly initialized,
-          # so it's important that reset() updates the var properly later.
-          models += [self.var(param, name="%s_model_%i" % (param.name, i))]
-
-        models_new = []
-        if self.update_multiple_models_param_is_cur_model:
-          # Current model is always the first one.
-          models_new += [models[0] + upd[param]]
-          models_new += models[1:]
-        else:
-          for i, model_param in enumerate(models):
-            is_not_cur_model = T.neq(cur_model, i)
-            models_new += [theano.ifelse.ifelse(is_not_cur_model, model_param, model_param + upd[param])]
-
-        if self.update_multiple_models_averaging:
-          is_not_cur_average_step = T.neq(self.counter % self.update_multiple_models_average_step, average_step_i)
-          average_new_model = reduce(T.add, models_new[1:], models_new[0]) / numpy.float32(self.update_multiple_models)
-          for i in range(len(models)):
-            models_new[i] = theano.ifelse.ifelse(is_not_cur_average_step, models_new[i], average_new_model)
-
-        if self.update_multiple_models_param_is_cur_model:
-          # Rotate, so that the next model becomes the first one.
-          models_new = models_new[1:] + models_new[:-1]
-
-        updates.extend(zip(models, models_new))
-
-      upd.clear()
-
     #if upd:
       #updates.append((param, self.norm_constraint(param + upd, 1.0)))
       #updates.append((param, param + upd))

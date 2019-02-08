@@ -8,35 +8,13 @@ import json
 import h5py
 
 from NetworkDescription import LayerNetworkDescription
-from NetworkBaseLayer import Layer, SourceLayer
-from NetworkLayer import get_layer_class
-from NetworkLstmLayer import *
-from NetworkOutputLayer import OutputLayer, FramewiseOutputLayer, SequenceOutputLayer, DecoderOutputLayer, UnsupervisedOutputLayer
+from PTLayers import OutputLayer
 from Util import dict_joined, as_str
 from Log import log
 
 
 class LayerNetwork(object):
-  def __init__(self, n_in=None, n_out=None,
-               base_network=None, data_map=None, data_map_i=None,
-               shared_params_network=None,
-               mask=None, sparse_input=False, target='classes', train_flag=False, eval_flag=False):
-    """
-    :param int n_in: input dim of the network
-    :param dict[str,(int,int)] n_out: output dim of the network.
-      first int is num classes, second int is 1 if it is sparse, i.e. we will get the indices.
-    :param dict[str,theano.Variable] data_map: if specified, this will be used for x/y (and it expects data_map_i)
-    :param dict[str,theano.Variable] data_map_i: if specified, this will be used for i/j
-    :param LayerNetwork|None base_network: optional base network where we will derive x/y/i/j/n_in/n_out from.
-      data_map will have precedence over base_network.
-    :param LayerNetwork|()->LayerNetwork|None shared_params_network: optional network where we will share params with.
-      we will error if there is a param which cannot be shared.
-    :param str mask: e.g. "unity" or None ("dropout")
-    :param bool sparse_input: for SourceLayer
-    :param str target: default target
-    :param bool train_flag: marks that we are used for training
-    :param bool eval_flag: marks that we are used for evaluation
-    """
+  def __init__(self, n_in=None, n_out=None, train_flag=False, eval_flag=False):
     if n_out is None:
       assert base_network is not None
       n_out = base_network.n_out
@@ -52,32 +30,8 @@ class LayerNetwork(object):
     else:
       assert 1 <= n_out["data"][1] <= 2  # maybe obsolete check...
       data_dim = n_out["data"][1] + 1  # one more because of batch-dim
-    if data_map is not None:
-      assert data_map_i is not None
-      self.y = data_map
-      self.x = data_map["data"]
-      self.j = data_map_i
-      self.i = data_map_i["data"]
-    elif base_network is not None:
-      self.x = base_network.x
-      self.y = base_network.y
-      self.i = base_network.i
-      self.j = base_network.j
-    else:
-      dtype = "float32" if data_dim >= 3 else "int32"
-      self.x = T.TensorType(dtype, ((False,) * data_dim))('x')
-      self.y = {"data": self.x}
-      self.i = T.bmatrix('i'); """ :type: theano.Variable """
-      self.j = {"data": self.i}
-    if base_network is not None:
-      self.epoch = base_network.epoch
-      self.tags  = base_network.tags
-    else:
-      self.epoch = T.constant(0, name="epoch", dtype="int32")
-      self.tags  = T.bmatrix('tags')
     self.constraints = {}
     self.total_constraints = T.constant(0)
-    Layer.initialize_rng()
     self.n_in = n_in
     self.n_out = n_out
     self.hidden = {}; """ :type: dict[str,ForwardLayer|RecurrentLayer] """
@@ -113,11 +67,6 @@ class LayerNetwork(object):
     :rtype: LayerNetwork
     """
     json_content = cls.json_from_config(config, mask=mask)
-    from Pretrain import find_pretrain_wrap_values, pretrainFromConfig
-    if find_pretrain_wrap_values(json_content):
-      pretrain = pretrainFromConfig(config=config)
-      assert pretrain, "found Pretrain WrapEpochValue but no pretrain configured"
-      json_content = pretrain.get_final_network_json()
     return cls.from_json_and_config(json_content, config, mask=mask, **kwargs)
 
   @classmethod
@@ -207,86 +156,6 @@ class LayerNetwork(object):
     network.recurrent = network.recurrent or config.bool('recurrent', False)
     return network
 
-  def get_layer_param(self, layer_name, param_name, param):
-    """
-    Used by Container.add_param() to maybe substitute a parameter instead of creating a new shared var.
-    :param str layer_name: the layer name where this param will be added
-    :param str param_name: the name of the param
-    :param theano.SharedVariable param: the already created shared var
-    :rtype None | theano.Variable
-    If we return None, Container.add_param() will continue as usual.
-    """
-    if self.shared_params_network:
-      network = self.shared_params_network
-      if callable(network):
-        network = network()
-      base_substitute = network.get_layer_param(layer_name=layer_name, param_name=param_name, param=param)
-      if base_substitute: return base_substitute
-      base_layer = network.get_layer(layer_name)
-      assert base_layer, "%s not found in shared_params_network" % layer_name
-      return base_layer.params.get(param_name, None)
-    return None
-
-  @classmethod
-  def from_base_network(cls, base_network, json_content=None, share_params=False, base_as_calc_step=False, **kwargs):
-    """
-    :param LayerNetwork base_network: base network to derive from
-    :param dict[str]|None json_content: JSON content for subnetwork. if None, will use from base network
-    :param bool share_params: will use the same params as the base network
-    :param bool base_as_calc_step: base is calc step 0. see below
-    :param dict[str] kwargs: kwargs for __init__
-    :rtype: LayerNetwork
-    """
-    if "n_out" in kwargs and "n_in" not in kwargs:
-      kwargs["n_in"] = None
-    network = cls(
-      base_network=base_network,
-      shared_params_network=base_network if share_params else None,
-      **dict_joined(base_network.init_args(), kwargs))
-    if base_as_calc_step:
-      network.calc_step_base = base_network  # used by CalcStepLayer. see also get_calc_step()
-    if json_content is None:
-      json_content = base_network.to_json_content()
-    cls.from_json(json_content, network=network)
-    if share_params:
-      trainable_params = network.get_all_params_vars()
-      assert len(trainable_params) == 0
-    return network
-
-  def get_calc_step(self, i):
-    """
-    :param int i: calc step, 0 to n
-    :rtype: LayerNetwork
-    Used by CalcStepLayer. Will automatically create the requested calc step.
-    Calc step 0 is the base network (calc_step_base).
-    """
-    if self.calc_step_base:
-      return self.calc_step_base.get_calc_step(i)  # go up to the main network
-    if i == 0: return self
-    if i <= len(self.calc_steps):
-      return self.calc_steps[i - 1]
-    print("creating calc steps up to %i" % i, file=log.v4)
-    while i > len(self.calc_steps):
-      base_network = self
-      if self.calc_steps: base_network = self.calc_steps[-1]
-      subnetwork = self.from_base_network(
-        base_network=base_network, share_params=True, base_as_calc_step=True)
-      self.calc_steps += [subnetwork]
-    return self.calc_steps[i - 1]
-
-  def new_subnetwork(self, json_content, n_out, data_map, data_map_i):
-    """
-    :param dict[str,dict] json_content: subnetwork specification
-    :param dict[str,list[int,int]] n_out: n_out info for subnetwork
-    :param dict[str,theano.Variable] data_map: data
-    :param dict[str,theano.Variable] data_map_i: indices for data
-    :rtype: LayerNetwork
-    The data input for the subnetwork is not derived from ourselves but specified
-    explicitly through n_out & data_map.
-    """
-    return self.from_base_network(self, json_content=json_content,
-                                  n_out=n_out, data_map=data_map, data_map_i=data_map_i)
-
   @classmethod
   def from_json(cls, json_content, n_in=None, n_out=None, network=None, **kwargs):
     """
@@ -307,8 +176,6 @@ class LayerNetwork(object):
     templates = {}
     assert isinstance(json_content, dict)
     network.y['data'].n_out = network.n_out['data'][0]
-    if hasattr(LstmLayer, 'sharpgates'):
-      del LstmLayer.sharpgates
     def traverse(content, layer_name, target, output_index, inherit=False):
       if layer_name in network.hidden:
         return network.hidden[layer_name].index
@@ -481,33 +348,6 @@ class LayerNetwork(object):
   def use_target(self, target, dtype):
     if target in self.y: return
     if target == "null": return
-    if target == 'sizes' and not 'sizes' in self.n_out: #TODO(voigtlaender): fix data please
-      self.n_out['sizes'] = [2,1]
-    if self.base_network:
-      self.base_network.use_target(target=target, dtype=dtype)
-      if not self.y is self.base_network.y:
-        self.y[target] = self.base_network.y[target]
-      if not self.j is self.base_network.j:
-        self.j[target] = self.base_network.j[target]
-      if target not in self.n_out:
-        self.n_out[target] = self.base_network.n_out[target]
-      return
-    if target.endswith("[sparse:coo]"):
-      tprefix = target[:target.index("[")]
-      ndim = self.n_out[target][1]  # expected (without batch), e.g. 2 if like (time,feature)
-      # For each coordinate axe. Also with batch-dim.
-      for i in range(ndim):
-        self.y["%s[sparse:coo:%i:%i]" % (tprefix, ndim, i)] = T.TensorType("int32", (False,) * 2)('y_%s[sparse:coo:%i:%i]' % (tprefix, ndim, i))
-      # And the data itself. Also with batch-dim.
-      self.y["%s[sparse:coo:%i:%i]" % (tprefix, ndim, ndim)] = \
-        T.TensorType(dtype, (False,) * 2)("y_%s[%i]" % (tprefix, ndim))
-      # self.j will be used to get the list of keys we need to get from the dataset.
-      for i in range(ndim + 1):
-        self.j.setdefault("%s[sparse:coo:%i:%i]" % (tprefix, ndim, i), T.bmatrix('j_%s[sparse:coo:%i:%i]' % (tprefix, ndim, i)))
-      # self.y[target] will be given to the OutputLayer.
-      self.y[target] = tuple(self.y["%s[sparse:coo:%i:%i]" % (tprefix, ndim, i)] for i in range(ndim + 1))
-      self.j[target] = self.j["data"]  # Not sure if this is the best we can do...
-      return
     assert target in self.n_out
     ndim = self.n_out[target][1] + 1  # one more because of batch-dim
     self.y[target] = T.TensorType(dtype, (False,) * ndim)('y_%s' % target)
@@ -567,12 +407,6 @@ class LayerNetwork(object):
       self.total_cost += self.costs[layer.name] * layer.cost_scale()
     if cost[1]:
       self.known_grads.update(cost[1])
-    if len(cost) > 2:
-      if self.ctc_priors:
-        print("multiple ctc_priors, second one from layer %s" % layer.name, file=log.v3)
-      else:
-        self.ctc_priors = cost[2]
-      assert self.ctc_priors is not None
 
   def make_classifier(self, name='output', target='classes', **kwargs):
     """
@@ -581,18 +415,7 @@ class LayerNetwork(object):
     """
     if not "loss" in kwargs: kwargs["loss"] = "ce"
     self.loss = kwargs["loss"]
-    if self.loss in ('ctc', 'ce_ctc', 'hmm', 'ctc2', 'sprint', 'viterbi', 'fast_bw', 'seg_fast_bw', 'lf_mmi', 'ctc_warp', 'inv', "ctc_rasr"):
-      layer_class = SequenceOutputLayer
-      # We must keep sequences as they are. Setting us as recurrent
-      # will tell other code to leave seqs as they are (e.g. the dataset batch building).
-      self.recurrent = True
-    elif self.loss == 'decode':
-      layer_class = DecoderOutputLayer
-    elif self.loss == 'unsupervised':
-      layer_class = UnsupervisedOutputLayer
-    else:
-      layer_class = FramewiseOutputLayer
-
+    layer_class = FramewiseOutputLayer
     dtype = kwargs.pop('dtype', 'int32')
     if target != "null" and target not in self.y:
       self.use_target(target, dtype=dtype)
@@ -600,10 +423,6 @@ class LayerNetwork(object):
       targets = self.y[target]
     else:
       targets = None
-    if self.loss == "ctc" and not '__final' in self.n_out:
-      self.n_out[target][0] += 1
-    elif self.loss == "hmm":
-      self.n_out[target][0] = 2 * self.n_out[target][0] - 1  # silence has only 1 state
     if 'n_symbols' in kwargs:
       kwargs.setdefault('n_out', kwargs.pop('n_symbols'))
     elif target != "null":
@@ -683,20 +502,6 @@ class LayerNetwork(object):
     for h in self.hidden:
       self.hidden[h].set_params_by_dict(params[h])
 
-  def get_params_shared_flat_dict(self):
-    """
-    :rtype: dict[str,theano.shared]
-    This will collect all vars of all layers in one dict.
-    We extend the param name with our custom scheme.
-    """
-    params = {}
-    for l_name, layer in list(self.output.items()) + list(self.hidden.items()):
-      for p_name, param in layer.params.items():
-        p_name = "%s.%s" % (l_name, p_name)
-        assert p_name not in params
-        params[p_name] = param
-    return params
-
   def save_hdf(self, model, epoch):
     """
     :type model: h5py.File
@@ -745,28 +550,6 @@ class LayerNetwork(object):
     for name in self.output:
       self.output[name].load(model)
     return self.epoch_from_hdf_model(model)
-
-  @classmethod
-  def epoch_from_hdf_model(cls, model):
-    """
-    :type model: h5py.File
-    :returns last epoch the model was trained on
-    :rtype: int
-    """
-    epoch = model.attrs['epoch']
-    return epoch
-
-  @classmethod
-  def epoch_from_hdf_model_filename(cls, model_filename):
-    """
-    :type model_filename: str
-    :returns last epoch the model was trained on
-    :rtype: int
-    """
-    model = h5py.File(model_filename, "r")
-    epoch = cls.epoch_from_hdf_model(model)
-    model.close()
-    return epoch
 
   def print_network_info(self, name="Network"):
     print("%s layer topology:" % name, file=log.v2)
