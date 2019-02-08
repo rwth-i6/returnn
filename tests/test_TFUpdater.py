@@ -16,12 +16,18 @@ from nose.tools import assert_equal, assert_is_instance, assert_is, assert_in
 from numpy.testing.utils import assert_almost_equal
 import unittest
 import numpy.testing
+import contextlib
 import better_exchook
 
 better_exchook.replace_traceback_format_tb()
 log.initialize(verbosity=[5])
 
-session = tf.InteractiveSession()
+
+@contextlib.contextmanager
+def make_scope():
+  with tf.Graph().as_default() as graph:
+    with tf.Session(graph=graph) as session:
+      yield session
 
 
 class DummyLoss(Loss):
@@ -57,102 +63,102 @@ class DummyLayer(LayerBase):
 
 
 def test_Updater_GradientDescent():
-  from TFNetwork import TFNetwork, ExternData
-  from Config import Config
+  with make_scope() as session:
+    from TFNetwork import TFNetwork, ExternData
+    from Config import Config
 
-  config = Config()
-  network = TFNetwork(extern_data=ExternData(), train_flag=True)
-  network.add_layer(name="output", layer_class=DummyLayer, initial_value=5.0, loss_value_factor=3.0)
-  network.initialize_params(session=session)
+    config = Config()
+    network = TFNetwork(extern_data=ExternData(), train_flag=True)
+    network.add_layer(name="output", layer_class=DummyLayer, initial_value=5.0, loss_value_factor=3.0)
+    network.initialize_params(session=session)
 
-  updater = Updater(config=config, network=network)
-  updater.set_learning_rate(1.0, session=session)
-  updater.set_trainable_vars(network.get_trainable_params())
-  updater.init_optimizer_vars(session=session)
-  session.run(updater.get_optim_op())
-  # One gradient descent step from 3.0 * x: gradient is 3, thus 5 - 3 = 2.
-  assert_almost_equal(session.run(network.get_default_output_layer().output.placeholder), 2.0)
+    updater = Updater(config=config, network=network)
+    updater.set_learning_rate(1.0, session=session)
+    updater.set_trainable_vars(network.get_trainable_params())
+    updater.init_optimizer_vars(session=session)
+    session.run(updater.get_optim_op())
+    # One gradient descent step from 3.0 * x: gradient is 3, thus 5 - 3 = 2.
+    assert_almost_equal(session.run(network.get_default_output_layer().output.placeholder), 2.0)
 
 
 def test_Updater_CustomUpdate():
-  from TFNetwork import TFNetwork, ExternData
-  from Config import Config
-  from TFUtil import CustomUpdate
+  with make_scope() as session:
+    from TFNetwork import TFNetwork, ExternData
+    from Config import Config
+    from TFUtil import CustomUpdate
 
-  config = Config()
-  network = TFNetwork(extern_data=ExternData(), train_flag=True)
-  layer = network.add_layer(name="output", layer_class=DummyLayer, initial_value=4.0)
-  assert isinstance(layer, DummyLayer)
-  network.initialize_params(session=session)
+    config = Config()
+    network = TFNetwork(extern_data=ExternData(), train_flag=True)
+    layer = network.add_layer(name="output", layer_class=DummyLayer, initial_value=4.0)
+    assert isinstance(layer, DummyLayer)
+    network.initialize_params(session=session)
 
-  class CustomUpdateAdd13(CustomUpdate):
-    def update_var(self, var):
-      return tf.assign_add(var, 13.0)
-  CustomUpdateAdd13().set_on_var(layer.x)
+    class CustomUpdateAdd13(CustomUpdate):
+      def update_var(self, var):
+        return tf.assign_add(var, 13.0)
+    CustomUpdateAdd13().set_on_var(layer.x)
 
-  updater = Updater(config=config, network=network)
-  updater.set_learning_rate(1000.0, session=session)  # should be ignored
-  updater.set_trainable_vars(network.get_trainable_params())
-  updater.init_optimizer_vars(session=session)
-  session.run(updater.get_optim_op())
-  # Should have applied CustomUpdateAdd13.
-  assert_almost_equal(session.run(network.get_default_output_layer().output.placeholder), 17.0)
+    updater = Updater(config=config, network=network)
+    updater.set_learning_rate(1000.0, session=session)  # should be ignored
+    updater.set_trainable_vars(network.get_trainable_params())
+    updater.init_optimizer_vars(session=session)
+    session.run(updater.get_optim_op())
+    # Should have applied CustomUpdateAdd13.
+    assert_almost_equal(session.run(network.get_default_output_layer().output.placeholder), 17.0)
 
 
 def test_add_check_numerics_ops():
-  with tf.Graph().as_default():
-    with tf.Session().as_default() as session:
-      x = tf.constant(3.0, name="x")
-      y = tf.log(x * 3, name="y")
-      assert isinstance(y, tf.Tensor)
-      assert_almost_equal(session.run(y), numpy.log(9.))
-      check = add_check_numerics_ops([y])
-      session.run(check)
-      z1 = tf.log(x - 3, name="z1")
-      assert_equal(str(session.run(z1)), "-inf")
-      z2 = tf.log(x - 4, name="z2")
-      assert_equal(str(session.run(z2)), "nan")
-      check1 = add_check_numerics_ops([z1])
-      try:
-        session.run(check1)
-      except tf.errors.InvalidArgumentError as exc:
-        print("Expected exception: %r" % exc)
-      else:
-        assert False, "should have raised an exception"
-      check2 = add_check_numerics_ops([z2])
-      try:
-        session.run(check2)
-      except tf.errors.InvalidArgumentError as exc:
-        print("Expected exception: %r" % exc)
-      else:
-        assert False, "should have raised an exception"
+  with make_scope() as session:
+    x = tf.constant(3.0, name="x")
+    y = tf.log(x * 3, name="y")
+    assert isinstance(y, tf.Tensor)
+    assert_almost_equal(session.run(y), numpy.log(9.))
+    check = add_check_numerics_ops([y])
+    session.run(check)
+    z1 = tf.log(x - 3, name="z1")
+    assert_equal(str(session.run(z1)), "-inf")
+    z2 = tf.log(x - 4, name="z2")
+    assert_equal(str(session.run(z2)), "nan")
+    check1 = add_check_numerics_ops([z1])
+    try:
+      session.run(check1)
+    except tf.errors.InvalidArgumentError as exc:
+      print("Expected exception: %r" % exc)
+    else:
+      assert False, "should have raised an exception"
+    check2 = add_check_numerics_ops([z2])
+    try:
+      session.run(check2)
+    except tf.errors.InvalidArgumentError as exc:
+      print("Expected exception: %r" % exc)
+    else:
+      assert False, "should have raised an exception"
 
 
 def test_grad_add_check_numerics_ops():
   # Also see test_where_nan().
-  with tf.Graph().as_default():
-    with tf.Session().as_default() as session:
-      x = tf.Variable(initial_value=0.0, name="x")
-      session.run(x.initializer)
-      y = 1. / x
-      grad_x = tf.gradients(y, x)[0]
-      print("grad_x:", grad_x.eval())
-      assert_equal(str(float("-inf")), "-inf")
-      assert_equal(str(grad_x.eval()), "-inf")
+  with make_scope() as session:
+    x = tf.Variable(initial_value=0.0, name="x")
+    session.run(x.initializer)
+    y = 1. / x
+    grad_x = tf.gradients(y, x)[0]
+    print("grad_x:", grad_x.eval())
+    assert_equal(str(float("-inf")), "-inf")
+    assert_equal(str(grad_x.eval()), "-inf")
 
-      session.run(x.assign(1.0))
-      opt = tf.train.GradientDescentOptimizer(learning_rate=1.0)
-      train_op = opt.minimize(y, var_list=[x])
-      check = add_check_numerics_ops([train_op])
-      session.run(check)
+    session.run(x.assign(1.0))
+    opt = tf.train.GradientDescentOptimizer(learning_rate=1.0)
+    train_op = opt.minimize(y, var_list=[x])
+    check = add_check_numerics_ops([train_op])
+    session.run(check)
 
-      session.run(x.assign(0.0))
-      try:
-        session.run(check)  # should fail now
-      except tf.errors.InvalidArgumentError as exc:
-        print("Expected exception: %r" % exc)
-      else:
-        assert False, "should have raised an exception"
+    session.run(x.assign(0.0))
+    try:
+      session.run(check)  # should fail now
+    except tf.errors.InvalidArgumentError as exc:
+      print("Expected exception: %r" % exc)
+    else:
+      assert False, "should have raised an exception"
 
 
 def test_Updater_add_check_numerics_ops():
@@ -163,28 +169,159 @@ def test_Updater_add_check_numerics_ops():
   from TFNetwork import TFNetwork, ExternData
   from Config import Config
 
-  config = Config()
-  config.set("debug_add_check_numerics_ops", True)
-  network = TFNetwork(extern_data=ExternData(), train_flag=True)
-  network.add_layer(name="output", layer_class=_Layer, initial_value=1.0)
-  network.initialize_params(session=session)
+  with make_scope() as session:
+    config = Config()
+    config.set("debug_add_check_numerics_ops", True)
+    network = TFNetwork(extern_data=ExternData(), train_flag=True)
+    network.add_layer(name="output", layer_class=_Layer, initial_value=1.0)
+    network.initialize_params(session=session)
 
-  updater = Updater(config=config, network=network)
-  updater.set_learning_rate(1.0, session=session)
-  updater.set_trainable_vars(network.get_trainable_params())
-  updater.init_optimizer_vars(session=session)
-  # Should succeed.
-  session.run(updater.get_optim_op())
-  # One gradient descent step from ln(x), x = 1.0: gradient is 1.0 / x, thus x - 1.0 = 0.0.
-  assert_almost_equal(session.run(network.get_default_output_layer().output.placeholder), 0.0)
-
-  try:
-    # Now, should fail.
+    updater = Updater(config=config, network=network)
+    updater.set_learning_rate(1.0, session=session)
+    updater.set_trainable_vars(network.get_trainable_params())
+    updater.init_optimizer_vars(session=session)
+    # Should succeed.
     session.run(updater.get_optim_op())
-  except tf.errors.InvalidArgumentError as exc:
-    print("Expected exception: %r" % exc)
-  else:
-    assert False, "should have raised an exception"
+    # One gradient descent step from ln(x), x = 1.0: gradient is 1.0 / x, thus x - 1.0 = 0.0.
+    assert_almost_equal(session.run(network.get_default_output_layer().output.placeholder), 0.0)
+
+    try:
+      # Now, should fail.
+      session.run(updater.get_optim_op())
+    except tf.errors.InvalidArgumentError as exc:
+      print("Expected exception: %r" % exc)
+    else:
+      assert False, "should have raised an exception"
+
+
+def test_Updater_simple_batch():
+  with make_scope() as session:
+    from TFNetwork import TFNetwork, ExternData
+    from Config import Config
+    from GeneratingDataset import Task12AXDataset
+    dataset = Task12AXDataset()
+    dataset.init_seq_order(epoch=1)
+    extern_data = ExternData()
+    extern_data.init_from_dataset(dataset)
+
+    config = Config()
+    network = TFNetwork(extern_data=extern_data, train_flag=True)
+    network.construct_from_dict({
+      "layer1": {"class": "linear", "activation": "tanh", "n_out": 13},
+      "layer2": {"class": "linear", "activation": "tanh", "n_out": 13, "from": ["layer1"]},
+      "output": {"class": "softmax", "loss": "ce", "target": "classes", "from": ["layer2"]}
+    })
+    network.initialize_params(session=session)
+
+    updater = Updater(config=config, network=network)
+    updater.set_learning_rate(1.0, session=session)
+    updater.set_trainable_vars(network.get_trainable_params())
+    updater.init_optimizer_vars(session=session)
+
+    from TFDataPipeline import FeedDictDataProvider
+    batches = dataset.generate_batches(
+      recurrent_net=network.recurrent,
+      batch_size=100,
+      max_seqs=10,
+      max_seq_length=sys.maxsize,
+      used_data_keys=network.used_data_keys)
+    data_provider = FeedDictDataProvider(
+      tf_session=session, extern_data=extern_data,
+      data_keys=network.used_data_keys,
+      dataset=dataset, batches=batches)
+    feed_dict, _ = data_provider.get_feed_dict(single_threaded=True)
+    session.run(updater.get_optim_op(), feed_dict=feed_dict)
+
+
+def test_Updater_multiple_optimizers():
+  with make_scope() as session:
+    from TFNetwork import TFNetwork, ExternData
+    from Config import Config
+    from GeneratingDataset import Task12AXDataset
+    dataset = Task12AXDataset()
+    dataset.init_seq_order(epoch=1)
+    extern_data = ExternData()
+    extern_data.init_from_dataset(dataset)
+
+    config = Config()
+    network = TFNetwork(extern_data=extern_data, train_flag=True)
+    network.construct_from_dict({
+      "layer1": {"class": "linear", "activation": "tanh", "n_out": 13,
+                 "updater_opts": {"optimizer": {"class": "Adam"}}},
+      "layer2": {"class": "linear", "activation": "tanh", "n_out": 13, "from": ["layer1"],
+                 "updater_opts": {"optimizer": {"class": "Adagrad"}}},
+      "output": {"class": "softmax", "loss": "ce", "target": "classes", "from": ["layer2"]}
+    })
+    network.initialize_params(session=session)
+
+    updater = Updater(config=config, network=network)
+    updater.set_learning_rate(1.0, session=session)
+    updater.set_trainable_vars(network.get_trainable_params())
+    updater.init_optimizer_vars(session=session)
+
+    optim_op = updater.get_optim_op()
+    assert isinstance(updater.optimizer, WrapOptimizer)
+    assert len(updater.optimizer.optimizers) == 3
+
+    from TFDataPipeline import FeedDictDataProvider
+    batches = dataset.generate_batches(
+      recurrent_net=network.recurrent,
+      batch_size=100,
+      max_seqs=10,
+      max_seq_length=sys.maxsize,
+      used_data_keys=network.used_data_keys)
+    data_provider = FeedDictDataProvider(
+      tf_session=session, extern_data=extern_data,
+      data_keys=network.used_data_keys,
+      dataset=dataset, batches=batches)
+    feed_dict, _ = data_provider.get_feed_dict(single_threaded=True)
+    session.run(optim_op, feed_dict=feed_dict)
+
+
+def test_Updater_multiple_optimizers_and_opts():
+  with make_scope() as session:
+    from TFNetwork import TFNetwork, ExternData
+    from Config import Config
+    from GeneratingDataset import Task12AXDataset
+    dataset = Task12AXDataset()
+    dataset.init_seq_order(epoch=1)
+    extern_data = ExternData()
+    extern_data.init_from_dataset(dataset)
+
+    config = Config()
+    network = TFNetwork(extern_data=extern_data, train_flag=True)
+    network.construct_from_dict({
+      "layer1": {"class": "linear", "activation": "tanh", "n_out": 13,
+                 "updater_opts": {"optimizer": {"class": "Adam"}, "accum_grad_multiple_step": 2}},
+      "layer2": {"class": "linear", "activation": "tanh", "n_out": 13, "from": ["layer1"],
+                 "updater_opts": {
+                   "optimizer": {"class": "Adagrad", "learning_rate_multiplier": 3}, "gradient_noise": 0.1}},
+      "output": {"class": "softmax", "loss": "ce", "target": "classes", "from": ["layer2"]}
+    })
+    network.initialize_params(session=session)
+
+    updater = Updater(config=config, network=network)
+    updater.set_learning_rate(1.0, session=session)
+    updater.set_trainable_vars(network.get_trainable_params())
+    updater.init_optimizer_vars(session=session)
+
+    optim_op = updater.get_optim_op()
+    assert isinstance(updater.optimizer, WrapOptimizer)
+    assert len(updater.optimizer.optimizers) == 3
+
+    from TFDataPipeline import FeedDictDataProvider
+    batches = dataset.generate_batches(
+      recurrent_net=network.recurrent,
+      batch_size=100,
+      max_seqs=10,
+      max_seq_length=sys.maxsize,
+      used_data_keys=network.used_data_keys)
+    data_provider = FeedDictDataProvider(
+      tf_session=session, extern_data=extern_data,
+      data_keys=network.used_data_keys,
+      dataset=dataset, batches=batches)
+    feed_dict, _ = data_provider.get_feed_dict(single_threaded=True)
+    session.run(optim_op, feed_dict=feed_dict)
 
 
 if __name__ == "__main__":

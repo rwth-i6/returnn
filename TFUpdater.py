@@ -99,7 +99,7 @@ class Updater(object):
     else:
       self.loss = network.get_objective()
       self.constraints = None
-    self.optimizer = None  # type: Optimizer
+    self.optimizer = None  # type: WrapOptimizer
     self.optim_op = None  # type: tf.Operation
     self.optim_meta_losses = None  # type: dict[str,tf.Tensor]
     self.optimizer_vars = []  # type: list[tf.Variable]
@@ -152,165 +152,6 @@ class Updater(object):
       lr *= hvd.size()
     return lr
 
-  def create_optimizer(self):
-    lr = self.get_current_step_learning_rate()
-    epsilon = self.config.float("optimizer_epsilon", 1e-16)
-    use_locking = self.use_locking
-    momentum = self.config.float("momentum", 0.0)
-    optim_config = self.config.typed_value("optimizer")
-    if optim_config:
-      if isinstance(optim_config, str):
-        optim_config = {"class": optim_config}
-      assert isinstance(optim_config, dict)
-      optim_config = optim_config.copy()
-      optim_class_name = optim_config.pop("class")
-      optim_class = get_optimizer_class(optim_class_name)
-      from Util import collect_class_init_kwargs
-      optim_class_kwargs = collect_class_init_kwargs(optim_class)
-      if "epsilon" in optim_class_kwargs:
-        optim_config.setdefault("epsilon", epsilon)
-      if "momentum" in optim_class_kwargs and momentum:
-        optim_config.setdefault("momentum", momentum)
-      if "use_locking" in optim_class_kwargs and use_locking:
-        optim_config.setdefault("use_locking", use_locking)
-      assert "learning_rate" not in optim_config, "learning_rate will be set implicitly"
-      optim_config["learning_rate"] = lr
-      print("Create optimizer %s with options %r." % (optim_class, optim_config), file=log.v2)
-      optimizer = optim_class(**optim_config)
-      assert isinstance(optimizer, tf.train.Optimizer)
-    elif self.config.bool("adam", False):
-      assert not momentum
-      print("Create Adam optimizer.", file=log.v2)
-      # Default TF values: learning_rate=0.001, beta1=0.9, beta2=0.999, epsilon=1e-8.
-      # Default Keras values: lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-8.
-      # Our Theano default values: beta1=0.9, beta2=0.999, epsilon=1e-16
-      # https://github.com/openai/improved-gan/blob/master/imagenet/train_imagenet.py: beta1=0.5
-      optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=epsilon, use_locking=use_locking)
-    elif self.config.bool("nadam", False):
-      assert_min_tf_version((1, 2, 0), "NadamOptimizer introduced in TF 1.2.0")
-      assert not momentum
-      print("Create NAdam optimizer.", file=log.v2)
-      # TF default values: like Adam: beta1=0.9, beta2=0.999, epsilon=1e-8
-      # Our Theano default values: decay=0.004, beta1=0.9, beta2=0.999, epsilon=1e-8
-      from tensorflow.contrib.opt import NadamOptimizer
-      optimizer = NadamOptimizer(learning_rate=lr, epsilon=epsilon, use_locking=use_locking)
-    elif self.config.bool("adadelta", False):
-      assert not momentum
-      print("Create Adadelta optimizer.", file=log.v2)
-      optimizer = tf.train.AdadeltaOptimizer(learning_rate=lr, epsilon=epsilon, use_locking=use_locking)
-    elif self.config.bool("adagrad", False):
-      assert not momentum
-      print("Create Adagrad optimizer.", file=log.v2)
-      optimizer = tf.train.AdagradOptimizer(learning_rate=lr, use_locking=use_locking)
-    elif self.config.is_of_type("rmsprop", float):
-      print("Create RMSProp optimizer. With Decay %f" % (self.config.float("rmsprop", 0.9)), file=log.v2)
-      optimizer = tf.train.RMSPropOptimizer(decay=self.config.float("rmsprop", 0.9), learning_rate=lr, momentum=momentum, epsilon=epsilon, use_locking=use_locking)
-    elif self.config.bool("rmsprop", False):
-      print("Create RMSProp optimizer.", file=log.v2)
-      optimizer = tf.train.RMSPropOptimizer(learning_rate=lr, momentum=momentum, epsilon=epsilon, use_locking=use_locking)
-    elif momentum:
-      print("Create Momentum optimizer.", file=log.v2)
-      optimizer = tf.train.MomentumOptimizer(learning_rate=lr, momentum=momentum, use_locking=use_locking)
-    else:
-      print("Create SGD optimizer.", file=log.v2)
-      optimizer = tf.train.GradientDescentOptimizer(learning_rate=lr, use_locking=use_locking)
-    self.optimizer = optimizer
-    self.reset_optim_op()
-
-  def _get_apply_grads_op(self, loss, trainable_vars_for_gradients):
-    """
-    :param tf.Tensor loss:
-    :param list[tf.Variable] trainable_vars_for_gradients:
-    :return: op with all variable updates combined, using the optimizer
-    :rtype: tf.Operation
-    """
-    if not trainable_vars_for_gradients:
-      return tf.no_op(name="no_grad_vars_no_op")
-    # AccumulateN might not be deterministic but should be faster and should require less memory.
-    # We might want to make this configurable.
-    if self.config.is_true("deterministic_train"):
-      aggregation_method = tf.AggregationMethod.ADD_N
-    else:
-      aggregation_method = tf.AggregationMethod.EXPERIMENTAL_ACCUMULATE_N
-    accum_grad_multiple_num_steps = self.config.int("accum_grad_multiple_step", 0)
-    grad_noise = self.config.float("gradient_noise", 0.0)
-    grad_clip = self.config.float("gradient_clip", 0.0)
-    grad_clip_norm = self.config.float("gradient_clip_norm", 0.0)
-    grad_clip_avg_norm = self.config.float("gradient_clip_avg_norm", 0.0)
-    grad_clip_global_norm = self.config.float("gradient_clip_global_norm", 0.0)
-    # E.g. https://github.com/openai/baselines/blob/master/baselines/deepq/simple.py: grad_norm_clipping=10 -> tf.clip_by_norm
-
-    # Extended self.optimizer.minimize() to optionally modify gradients.
-    grads_and_vars = self.optimizer.compute_gradients(
-      loss, var_list=trainable_vars_for_gradients,
-      aggregation_method=aggregation_method)
-    if self.config.is_true("use_horovod") and self.config.value("horovod_reduce_type", "") == "grad":
-      import horovod.tensorflow as hvd
-      grads_and_vars = [
-        (hvd.allreduce(grad, average=self.config.is_true("horovod_avg_grad")) if grad is not None else None, var)
-        for (grad, var) in grads_and_vars]
-    var_grads = {var: grad for (grad, var) in grads_and_vars if grad is not None}
-    if not var_grads:
-      raise Exception("no single variable to train")
-    if self.config.float("maximize_grad_norm", 0):
-      f = self.config.float("maximize_grad_norm", 0)
-      grad_norm = tf.add_n([tf.nn.l2_loss(g) for g in var_grads.values()], name="grad_norm_half") * 2.0
-      loss_ext = grad_norm * (-f)
-      grads_and_vars_ext = self.optimizer.compute_gradients(
-        loss_ext, var_list=list(var_grads.keys()),
-        aggregation_method=aggregation_method)
-      var_grads_ext = {var: grad for (grad, var) in grads_and_vars_ext if grad is not None}
-      grads_and_vars = [(grad + var_grads_ext.get(var, 0.0), var) for (grad, var) in grads_and_vars]
-    if accum_grad_multiple_num_steps >= 1:
-      grads_and_vars = [
-        (accum_grad_multiple_step(
-          grad, var, train_step=self.network.global_train_step, num_accum_steps=accum_grad_multiple_num_steps),
-         var) for (grad, var) in grads_and_vars]
-    if self.config.bool("debug_grad_summaries", False):
-      from TFUtil import variable_summaries, get_base_name, reuse_name_scope_of_tensor
-      for grad, var in grads_and_vars:
-        with reuse_name_scope_of_tensor(grad, prefix="grads/"):
-          variable_summaries(grad, name="grad_of_%s" % get_base_name(var))
-        with reuse_name_scope_of_tensor(var, prefix="vars/"):
-          variable_summaries(var, name=get_base_name(var))
-    # Also see tf.contrib.layers.optimizers.optimize_loss() for reference.
-    if self.config.bool("gradient_nan_inf_filter", False):
-      from TFUtil import nan_to_num
-      grads_and_vars = [(nan_to_num(grad, nan_num=0.0, inf_num=0.0), var) for (grad, var) in grads_and_vars]
-    if grad_noise:
-      assert grad_noise > 0
-      from TFUtil import add_scaled_noise_to_gradients
-      with tf.name_scope("grad_noise"):
-        grads_and_vars = add_scaled_noise_to_gradients(grads_and_vars, grad_noise)
-    if grad_clip:
-      assert grad_clip > 0
-      with tf.name_scope("grad_clip"):
-        grads_and_vars = [(tf.clip_by_value(grad, -grad_clip, grad_clip), var) for grad, var in grads_and_vars]
-    if grad_clip_norm:
-      assert grad_clip_norm > 0
-      with tf.name_scope("grad_clip_norm"):
-        grads_and_vars = [(tf.clip_by_norm(grad, grad_clip_norm), var) for grad, var in grads_and_vars]
-    if grad_clip_avg_norm:
-      assert grad_clip_avg_norm > 0
-      with tf.name_scope("grad_clip_avg_norm"):
-        grads_and_vars = [(tf.clip_by_average_norm(grad, grad_clip_avg_norm), var) for grad, var in grads_and_vars]
-    if grad_clip_global_norm:
-      assert grad_clip_global_norm > 0
-      with tf.name_scope("grad_clip_global_norm"):
-        grads_clipped, _ = tf.clip_by_global_norm([grad for (grad, _) in grads_and_vars], grad_clip_global_norm)
-        grads_and_vars = zip(grads_clipped, [var for (_, var) in grads_and_vars])
-    if accum_grad_multiple_num_steps >= 1:
-      apply_grads = tf.cond(
-        tf.equal(
-          tf.mod(self.network.global_train_step, accum_grad_multiple_num_steps),
-          accum_grad_multiple_num_steps - 1),
-        true_fn=lambda: self.optimizer.apply_gradients(grads_and_vars),
-        false_fn=lambda: tf.no_op(),
-        name="apply_grads/accum_grad_multiple_step")
-    else:
-      apply_grads = self.optimizer.apply_gradients(grads_and_vars)
-    return apply_grads
-
   def create_optim_op(self):
     assert self.loss is not None
     assert self.trainable_vars, "no variables to update/optimize"
@@ -321,9 +162,6 @@ class Updater(object):
     # and we want to keep track about them.
     all_prev_existing_vars = tf.global_variables()  # type: list[tf.Variable]
 
-    if not self.optimizer:
-      self.create_optimizer()
-
     trainable_vars_for_gradients = list(self.trainable_vars)
     trainable_vars_custom_update = []  # type: list[tf.Variable]
     for v in self.trainable_vars:
@@ -331,15 +169,23 @@ class Updater(object):
         trainable_vars_custom_update.append(v)
         trainable_vars_for_gradients.remove(v)
 
+    if not self.optimizer:
+      self.optimizer = WrapOptimizer(
+        config=self.config,
+        learning_rate=self.get_current_step_learning_rate(),
+        global_train_step=self.network.global_train_step,
+        use_locking=self.use_locking)
+      self.optimizer.create_all_needed_optimizers(trainable_vars_for_gradients)
+
     with tf.variable_scope("optimize"):
       synthetic_gradient_scope = SyntheticGradient.enter_gradient_scope()
-      apply_grads = self._get_apply_grads_op(self.loss, trainable_vars_for_gradients)
+      apply_grads = self.optimizer.get_apply_grads_op(self.loss, trainable_vars_for_gradients)
       synthetic_gradient_scope.exit()
       self.optim_meta_losses = synthetic_gradient_scope.as_fetch_dict()
       if synthetic_gradient_scope.losses:
         with tf.name_scope("meta_loss"):
           meta_loss = tf.add_n(synthetic_gradient_scope.losses)
-          meta_apply_grads = self._get_apply_grads_op(meta_loss, trainable_vars_for_gradients)
+          meta_apply_grads = self.optimizer.get_apply_grads_op(meta_loss, trainable_vars_for_gradients)
         apply_grads = tf.group(apply_grads, meta_apply_grads)
       incr_step_op = tf.assign_add(self.network.global_train_step, 1, name="global_train_step_increment")
       self.optim_op = tf.group(apply_grads, incr_step_op, name="optim_and_step_incr")
@@ -390,17 +236,19 @@ class Updater(object):
           extra_updates_op_list.append(op)
         self.optim_op = tf.group(self.optim_op, *extra_updates_op_list)
 
-    print("Initialize optimizer with slots %s." % self.optimizer.get_slot_names(), file=log.v3)
+    slot_names_per_optimizer = self.optimizer.get_slot_names_per_optimizer()
+    print("Initialize optimizer with slots %s." % slot_names_per_optimizer, file=log.v3)
     slot_vars = []
-    for slot_name in self.optimizer.get_slot_names():
-      for v in trainable_vars_for_gradients:
-        slot_var = self.optimizer.get_slot(var=v, name=slot_name)
-        if slot_var is None:
-          print("Warning: No slot_var found for variable %r, slot_name %r. Maybe no gradient for this var?" % (
-            v, slot_name), file=log.v3)
-        else:
-          assert isinstance(slot_var, tf.Variable)
-          slot_vars.append(slot_var)
+    for opt_key, slot_names in slot_names_per_optimizer.items():
+      for slot_name in slot_names:
+        for v in self.optimizer.filter_var_list_per_optimizer_key(trainable_vars_for_gradients, opt_key=opt_key):
+          slot_var = self.optimizer.get_slot(var=v, name=slot_name)
+          if slot_var is None:
+            print("Warning: No slot_var found for variable %r, slot_name %r. Maybe no gradient for this var?" % (
+              v, slot_name), file=log.v3)
+          else:
+            assert isinstance(slot_var, tf.Variable)
+            slot_vars.append(slot_var)
     self.optimizer_vars = slot_vars
 
     # Check if there were any other variables added.
@@ -480,6 +328,419 @@ def accum_grad_multiple_step(grad, var, train_step, num_accum_steps):
       tf.less_equal(tf.mod(train_step, num_accum_steps), 0),
       lambda: tf.assign(v, grad),
       lambda: tf.assign_add(v, grad))
+
+
+class WrapOptimizer:
+  """
+  Wraps a tf.train.Optimizer (or multiple).
+  This is wrapped for a simpler interface, and also to allow for multiple optimizers.
+  This class is not derived from tf.train.Optimizer itself, to keep it simple.
+  """
+
+  def __init__(self, config, learning_rate, global_train_step, use_locking):
+    """
+    :param Config.Config config:
+    :param tf.Tensor learning_rate:
+    :param tf.Tensor global_train_step:
+    :param bool use_locking:
+    """
+    self.config = config
+    self.learning_rate = learning_rate
+    self.global_train_step = global_train_step
+    self.use_locking = use_locking
+    from collections import OrderedDict
+    self.optimizers = OrderedDict()  # optimizer_opts|None -> tf.train.Optimizer
+
+  def get_default_optimizer(self):
+    """
+    :rtype: tf.train.Optimizer
+    """
+    return self.get_default_optimizer_item(auto_create_new=False)[1]
+
+  def get_default_optimizer_item(self, auto_create_new):
+    """
+    :param bool auto_create_new:
+    :return: key, optimizer
+    :rtype: (object, tf.train.Optimizer)
+    """
+    return self._get_optimizer_item_for_opts(None, auto_create_new=auto_create_new)
+
+  def create_all_needed_optimizers(self, train_vars):
+    """
+    :param list[tf.Variable] train_vars:
+    """
+    for var in train_vars:
+      self._get_optimizer_item_for_variable(var, auto_create_new=True)
+
+  def _get_optimizer_item_for_variable(self, var, auto_create_new=False):
+    """
+    :param tf.Variable var:
+    :param bool auto_create_new:
+    :return: key, optimizer
+    :rtype: (object, tf.train.Optimizer)
+    """
+    updater_opts = getattr(var, "RETURNN_updater_opts", None)
+    if not updater_opts:
+      return self.get_default_optimizer_item(auto_create_new=auto_create_new)
+    from Util import CollectionReadCheckCovered
+    assert isinstance(updater_opts, CollectionReadCheckCovered)
+    optimizer_opts = updater_opts.get("optimizer", None)
+    if not optimizer_opts:
+      return self.get_default_optimizer_item(auto_create_new=auto_create_new)
+    return self._get_optimizer_item_for_opts(optimizer_opts, auto_create_new=auto_create_new)
+
+  def _get_optimizer_item_for_opts(self, optimizer_opts, auto_create_new):
+    """
+    :param dict[str]|str|None optimizer_opts:
+    :param bool auto_create_new:
+    :return: key, optimizer
+    :rtype: (object, tf.train.Optimizer)
+    """
+    from Util import make_hashable
+    key = make_hashable(optimizer_opts)
+    if key in self.optimizers:
+      return key, self.optimizers[key]
+    assert auto_create_new, "no optimizer found for opts %r" % (optimizer_opts,)
+    optimizer = self._create_optimizer(optimizer_opts)
+    self.optimizers[key] = optimizer
+    return key, optimizer
+
+  def _create_optimizer(self, optimizer_opts):
+    """
+    :param dict[str]|str|None optimizer_opts: if dict, contains "class": opt_name. if str, then opt_name.
+    :rtype: tf.train.Optimizer
+    """
+    if optimizer_opts is None:
+      return self._create_default_optimizer()
+    lr = self.learning_rate
+    epsilon = self.config.float("optimizer_epsilon", 1e-16)
+    use_locking = self.use_locking
+    momentum = self.config.float("momentum", 0.0)
+    if isinstance(optimizer_opts, str):
+      optimizer_opts = {"class": optimizer_opts}
+    assert isinstance(optimizer_opts, dict)
+    optimizer_opts = optimizer_opts.copy()
+    optim_class_name = optimizer_opts.pop("class")
+    optim_class = get_optimizer_class(optim_class_name)
+    from Util import collect_class_init_kwargs
+    optim_class_kwargs = collect_class_init_kwargs(optim_class)
+    if "epsilon" in optim_class_kwargs:
+      optimizer_opts.setdefault("epsilon", epsilon)
+    if "momentum" in optim_class_kwargs and momentum:
+      optimizer_opts.setdefault("momentum", momentum)
+    if "use_locking" in optim_class_kwargs and use_locking:
+      optimizer_opts.setdefault("use_locking", use_locking)
+    assert "learning_rate" not in optimizer_opts, "learning_rate will be set implicitly"
+    if "learning_rate_multiplier" in optimizer_opts:
+      lr *= optimizer_opts.pop("learning_rate_multiplier")
+    optimizer_opts["learning_rate"] = lr
+    print("Create optimizer %s with options %r." % (optim_class, optimizer_opts), file=log.v2)
+    optimizer = optim_class(**optimizer_opts)
+    assert isinstance(optimizer, tf.train.Optimizer)
+    return optimizer
+
+  def _create_default_optimizer(self):
+    """
+    :rtype: tf.train.Optimizer
+    """
+    lr = self.learning_rate
+    epsilon = self.config.float("optimizer_epsilon", 1e-16)
+    use_locking = self.use_locking
+    momentum = self.config.float("momentum", 0.0)
+    optim_config = self.config.typed_value("optimizer")
+    if optim_config:
+      assert isinstance(optim_config, (dict, str))
+      optimizer = self._create_optimizer(optim_config)
+    elif self.config.bool("adam", False):
+      assert not momentum
+      print("Create Adam optimizer.", file=log.v2)
+      # Default TF values: learning_rate=0.001, beta1=0.9, beta2=0.999, epsilon=1e-8.
+      # Default Keras values: lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-8.
+      # Our Theano default values: beta1=0.9, beta2=0.999, epsilon=1e-16
+      # https://github.com/openai/improved-gan/blob/master/imagenet/train_imagenet.py: beta1=0.5
+      optimizer = tf.train.AdamOptimizer(learning_rate=lr, epsilon=epsilon, use_locking=use_locking)
+    elif self.config.bool("nadam", False):
+      assert_min_tf_version((1, 2, 0), "NadamOptimizer introduced in TF 1.2.0")
+      assert not momentum
+      print("Create NAdam optimizer.", file=log.v2)
+      # TF default values: like Adam: beta1=0.9, beta2=0.999, epsilon=1e-8
+      # Our Theano default values: decay=0.004, beta1=0.9, beta2=0.999, epsilon=1e-8
+      from tensorflow.contrib.opt import NadamOptimizer
+      optimizer = NadamOptimizer(learning_rate=lr, epsilon=epsilon, use_locking=use_locking)
+    elif self.config.bool("adadelta", False):
+      assert not momentum
+      print("Create Adadelta optimizer.", file=log.v2)
+      optimizer = tf.train.AdadeltaOptimizer(learning_rate=lr, epsilon=epsilon, use_locking=use_locking)
+    elif self.config.bool("adagrad", False):
+      assert not momentum
+      print("Create Adagrad optimizer.", file=log.v2)
+      optimizer = tf.train.AdagradOptimizer(learning_rate=lr, use_locking=use_locking)
+    elif self.config.is_of_type("rmsprop", float):
+      print("Create RMSProp optimizer. With Decay %f" % (self.config.float("rmsprop", 0.9)), file=log.v2)
+      optimizer = tf.train.RMSPropOptimizer(decay=self.config.float("rmsprop", 0.9), learning_rate=lr, momentum=momentum, epsilon=epsilon, use_locking=use_locking)
+    elif self.config.bool("rmsprop", False):
+      print("Create RMSProp optimizer.", file=log.v2)
+      optimizer = tf.train.RMSPropOptimizer(learning_rate=lr, momentum=momentum, epsilon=epsilon, use_locking=use_locking)
+    elif momentum:
+      print("Create Momentum optimizer.", file=log.v2)
+      optimizer = tf.train.MomentumOptimizer(learning_rate=lr, momentum=momentum, use_locking=use_locking)
+    else:
+      print("Create SGD optimizer.", file=log.v2)
+      optimizer = tf.train.GradientDescentOptimizer(learning_rate=lr, use_locking=use_locking)
+    return optimizer
+
+  def _partition_var_list(self, var_list):
+    """
+    :param list[tf.Variable] var_list:
+    :return: ordered dict: opt key -> list of vars
+    :rtype: dict[object,list[tf.Variable]]
+    """
+    from collections import OrderedDict
+    res = OrderedDict()
+    for var in var_list:
+      key, _ = self._get_optimizer_item_for_variable(var)
+      res.setdefault(key, []).append(var)
+    return res
+
+  def _compute_gradients(self, loss, var_list):
+    """
+    :param tf.Tensor loss:
+    :param list[tf.Variable] var_list:
+    :return: list of (gradient, variable) pairs
+    :rtype: list[(tf.Tensor,tf.Variable)]
+    """
+    # AccumulateN might not be deterministic but should be faster and should require less memory.
+    # We might want to make this configurable.
+    if self.config.is_true("deterministic_train"):
+      aggregation_method = tf.AggregationMethod.ADD_N
+    else:
+      aggregation_method = tf.AggregationMethod.EXPERIMENTAL_ACCUMULATE_N
+    res = []
+    vars_per_optimizer = self._partition_var_list(var_list)
+    for key, sub_var_list in vars_per_optimizer.items():
+      optimizer = self.optimizers[key]
+      assert isinstance(optimizer, tf.train.Optimizer)
+      res.extend(optimizer.compute_gradients(loss=loss, var_list=sub_var_list, aggregation_method=aggregation_method))
+    return res
+
+  def _apply_gradients(self, grads_and_vars, opt_key, accum_grad_multiple_num_steps=0):
+    """
+    :param list[(tf.Tensor,tf.Variable) grads_and_vars:
+    :param object opt_key:
+    :param int accum_grad_multiple_num_steps:
+    :rtype: tf.Operation
+    """
+    optimizer = self.optimizers[opt_key]
+    assert isinstance(optimizer, tf.train.Optimizer)
+    if accum_grad_multiple_num_steps >= 1:
+      return tf.cond(
+        tf.equal(
+          tf.mod(self.global_train_step, accum_grad_multiple_num_steps),
+          accum_grad_multiple_num_steps - 1),
+        true_fn=lambda: optimizer.apply_gradients(grads_and_vars),
+        false_fn=lambda: tf.no_op(),
+        name="apply_grads/accum_grad_multiple_step")
+    return optimizer.apply_gradients(grads_and_vars)
+
+  def get_slot_names_per_optimizer(self):
+    """
+    :return: ordered dict: opt key -> slot names
+    :rtype: dict[object, list[str]]
+    """
+    from collections import OrderedDict
+    res = OrderedDict()
+    for key, optimizer in self.optimizers.items():
+      assert isinstance(optimizer, tf.train.Optimizer)
+      res[key] = optimizer.get_slot_names()
+    return res
+
+  def filter_var_list_per_optimizer_key(self, var_list, opt_key):
+    """
+    :param list[tf.Variable] var_list:
+    :param object opt_key: should be in self.optimizer
+    :rtype: list[tf.Variable]
+    """
+    res = []
+    for var in var_list:
+      key, _ = self._get_optimizer_item_for_variable(var)
+      if key == opt_key:
+        res.append(var)
+    return res
+
+  def get_slot(self, var, name):
+    """
+    :param tf.Variable var:
+    :param str name:
+    :rtype: tf.Variable|None
+    """
+    _, opt = self._get_optimizer_item_for_variable(var)
+    return opt.get_slot(var, name)
+
+  class _GetGlobalInfo:
+    def __init__(self, optimizer, all_vars, all_grads):
+      """
+      :param WrapOptimizer optimizer:
+      :param list[tf.Variable] all_vars:
+      :param list[tf.Tensor] all_grads: not necessarily the same length as all_vars
+      """
+      self.optimizer = optimizer
+      self.all_vars = all_vars
+      self.all_grads = all_grads
+      self._global_grad_norm = None
+      self._maximize_grad_norm_var_grads = None
+
+    def get_global_grad_norm(self):
+      """
+      :rtype: tf.Tensor
+      """
+      if self._global_grad_norm is None:
+        self._global_grad_norm = tf.global_norm(self.all_grads, name="global_grad_norm")
+      return self._global_grad_norm
+
+    def get_maximize_grad_norm_var_grads(self, factor):
+      """
+      :param tf.Tensor|float factor:
+      :return: dict: var -> grad
+      :rtype: dict[tf.Variable,tf.Tensor]
+      """
+      if self._maximize_grad_norm_var_grads is None:
+        loss_ext = self.get_global_grad_norm() * (-factor)
+        grads_and_vars_ext = self.optimizer._compute_gradients(loss_ext, var_list=self.all_vars)
+        self._maximize_grad_norm_var_grads = {var: grad for (grad, var) in grads_and_vars_ext if grad is not None}
+      return self._maximize_grad_norm_var_grads
+
+    def get_maximize_grad_norm_grad(self, factor, var):
+      """
+      :param float|tf.Tensor factor:
+      :param tf.Variable var:
+      :rtype: tf.Tensor|None
+      """
+      return self.get_maximize_grad_norm_var_grads(factor).get(var, None)
+
+    def clip_by_global_norm(self, grad, clip_norm):
+      """
+      Wraps tf.clip_by_global_norm.
+
+      :param tf.Tensor grad:
+      :param tf.Tensor|float clip_norm:
+      :rtype: tf.Tensor
+      """
+      (grad,), _ = tf.clip_by_global_norm([grad], clip_norm=clip_norm, use_norm=self.get_global_grad_norm())
+      return grad
+
+  def _post_process_grad(self, grad, var, global_info):
+    """
+    :param tf.Tensor grad:
+    :param tf.Variable var:
+    :param WrapOptimizer._GetGlobalInfo global_info:
+    :return: new grad, apply grad opts
+    :rtype: tf.Tensor, dict[str]
+    """
+    from Util import CollectionReadCheckCovered
+    updater_opts = getattr(var, "RETURNN_updater_opts", None)
+    if updater_opts is None:
+      updater_opts = CollectionReadCheckCovered({})
+    assert isinstance(updater_opts, CollectionReadCheckCovered)
+
+    accum_grad_multiple_num_steps = updater_opts.get(
+      "accum_grad_multiple_step", self.config.int("accum_grad_multiple_step", 0))
+    grad_noise = updater_opts.get("gradient_noise", self.config.float("gradient_noise", 0.0))
+    grad_clip = updater_opts.get("gradient_clip", self.config.float("gradient_clip", 0.0))
+    grad_clip_norm = updater_opts.get("gradient_clip_norm", self.config.float("gradient_clip_norm", 0.0))
+    grad_clip_avg_norm = updater_opts.get("gradient_clip_avg_norm", self.config.float("gradient_clip_avg_norm", 0.0))
+    grad_clip_global_norm = updater_opts.get(
+      "gradient_clip_global_norm", self.config.float("gradient_clip_global_norm", 0.0))
+    # E.g. https://github.com/openai/baselines/blob/master/baselines/deepq/simple.py:
+    #   grad_norm_clipping=10 -> tf.clip_by_norm
+    maximize_grad_norm = updater_opts.get("maximize_grad_norm", self.config.float("maximize_grad_norm", 0))
+
+    if maximize_grad_norm:
+      grad_ext = global_info.get_maximize_grad_norm_grad(maximize_grad_norm, var)
+      if grad_ext is not None:
+        grad += grad_ext
+
+    if accum_grad_multiple_num_steps >= 1:
+      grad = accum_grad_multiple_step(
+        grad, var, train_step=self.global_train_step, num_accum_steps=accum_grad_multiple_num_steps)
+
+    if updater_opts.get("debug_grad_summaries", self.config.bool("debug_grad_summaries", False)):
+      from TFUtil import variable_summaries, get_base_name, reuse_name_scope_of_tensor
+      with reuse_name_scope_of_tensor(grad, prefix="grads/"):
+        variable_summaries(grad, name="grad_of_%s" % get_base_name(var))
+      with reuse_name_scope_of_tensor(var, prefix="vars/"):
+        variable_summaries(var, name=get_base_name(var))
+
+    # Also see tf.contrib.layers.optimizers.optimize_loss() for reference.
+    if updater_opts.get("gradient_nan_inf_filter", self.config.bool("gradient_nan_inf_filter", False)):
+      from TFUtil import nan_to_num
+      grad = nan_to_num(grad, nan_num=0.0, inf_num=0.0)
+    if grad_noise:
+      assert grad_noise > 0
+      from TFUtil import add_scaled_noise_to_gradients
+      with tf.name_scope("grad_noise"):
+        (grad, var), = add_scaled_noise_to_gradients([(grad, var)], grad_noise)
+    if grad_clip:
+      assert grad_clip > 0
+      with tf.name_scope("grad_clip"):
+        grad = tf.clip_by_value(grad, -grad_clip, grad_clip)
+    if grad_clip_norm:
+      assert grad_clip_norm > 0
+      with tf.name_scope("grad_clip_norm"):
+        grad = tf.clip_by_norm(grad, grad_clip_norm)
+    if grad_clip_avg_norm:
+      assert grad_clip_avg_norm > 0
+      with tf.name_scope("grad_clip_avg_norm"):
+        grad = tf.clip_by_average_norm(grad, grad_clip_avg_norm)
+    if grad_clip_global_norm:
+      assert grad_clip_global_norm > 0
+      with tf.name_scope("grad_clip_global_norm"):
+        grad = global_info.clip_by_global_norm(grad, clip_norm=grad_clip_global_norm)
+
+    updater_opts.assert_all_read()
+
+    opt_key, _ = self._get_optimizer_item_for_variable(var)
+    apply_grad_opts = {
+      "opt_key": opt_key, "accum_grad_multiple_num_steps": accum_grad_multiple_num_steps}
+    return grad, apply_grad_opts
+
+  def get_apply_grads_op(self, loss, var_list):
+    """
+    :param tf.Tensor loss:
+    :param list[tf.Variable] var_list:
+    :return: op with all variable updates combined, using the optimizer
+    :rtype: tf.Operation
+    """
+    # The following code is basically extended self.optimizer.minimize(), to optionally modify gradients.
+    from Util import make_hashable
+    if not var_list:
+      return tf.no_op(name="no_grad_vars_no_op")
+
+    grads_and_vars = self._compute_gradients(loss, var_list=var_list)
+    if self.config.is_true("use_horovod") and self.config.value("horovod_reduce_type", "") == "grad":
+      import horovod.tensorflow as hvd
+      grads_and_vars = [
+        (hvd.allreduce(grad, average=self.config.is_true("horovod_avg_grad")) if grad is not None else None, var)
+        for (grad, var) in grads_and_vars]
+
+    var_grads = {var: grad for (grad, var) in grads_and_vars if grad is not None}
+    if not var_grads:
+      raise Exception("no single variable to train")
+    global_info = self._GetGlobalInfo(optimizer=self, all_vars=var_list, all_grads=list(var_grads.values()))
+    grads_per_apply_grad_opts = {}  # dict apply_grad_opts -> list of (grad, var)
+    for grad, var in grads_and_vars:
+      assert var in var_list
+      if grad is None:
+        continue
+      new_grad, apply_grad_opts = self._post_process_grad(grad=grad, var=var, global_info=global_info)
+      grads_per_apply_grad_opts.setdefault(make_hashable(apply_grad_opts), []).append((new_grad, var))
+
+    all_apply_grads = []
+    assert grads_per_apply_grad_opts
+    for apply_grad_opts, grads_and_vars_per_opts in grads_per_apply_grad_opts.items():
+      all_apply_grads.append(self._apply_gradients(grads_and_vars_per_opts, **apply_grad_opts))
+    if len(all_apply_grads) == 1:
+      return all_apply_grads[0]
+    return tf.group(*all_apply_grads)
 
 
 class _BaseCustomOptimizer(Optimizer):
