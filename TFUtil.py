@@ -1739,7 +1739,7 @@ def get_name_scope_of_tensor(x):
 
 def get_base_name(x):
   """
-  :param tf.Tensor x: has name e.g. "layer0/rec/W:0"
+  :param tf.Tensor|tf.Variable x: has name e.g. "layer0/rec/W:0"
   :return: return the base name, e.g. "W", without the output index
   """
   parts = str(x.name).split("/")
@@ -1749,7 +1749,7 @@ def get_base_name(x):
 @contextlib.contextmanager
 def reuse_name_scope_of_tensor(x, prefix="", postfix=""):
   """
-  :param tf.Tensor x: has name e.g. "layer0/rec/W:0"
+  :param tf.Tensor|tf.Variable x: has name e.g. "layer0/rec/W:0"
   :param str prefix:
   :param str postfix:
   :return: reuse the name scope of x, e.g. "layer0/rec", yields scope
@@ -3852,7 +3852,7 @@ def spatial_smoothing_energy(x, dim, use_circular_conv=True):
   :rtype: tf.Tensor
   :return: energy of shape (...)
 
-  Via Achieving Human Parity in Conversational Speech Recognition, Microsoft, 2017.
+  Via: Achieving Human Parity in Conversational Speech Recognition, Microsoft, 2017 (https://arxiv.org/abs/1610.05256).
   Interpret the last dimension as 2D (w, h) and apply some high-pass filter on it.
   """
   import math

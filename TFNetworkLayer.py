@@ -4,7 +4,7 @@ from __future__ import print_function
 import tensorflow as tf
 import contextlib
 import TFUtil
-from Util import unicode, NotSpecified
+from Util import unicode, NotSpecified, CollectionReadCheckCovered
 from TFUtil import Data, OutputWithActivation, CustomUpdate, dimshuffle, swapaxes
 from Log import log
 
@@ -49,11 +49,12 @@ class LayerBase(object):
                target=None, loss=None, size_target=None,
                reuse_params=None,
                param_device=None,
-               L2=None, darc1=None,
                is_output_layer=None, only_on_eval=False, only_on_search=False,
                copy_output_loss_from_source_idx=None,
                batch_norm=False,
+               L2=None, darc1=None,
                spatial_smoothing=0.0,
+               updater_opts=None,
                initial_output=None,
                rec_previous_layer=None,
                collocate_with=None,
@@ -84,6 +85,8 @@ class LayerBase(object):
       see https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/util/device_name_utils.h
     :param float|None L2: for constraints
     :param float|None darc1: for constraints. see Generalization in Deep Learning, https://arxiv.org/abs/1710.05468
+    :param float|None spatial_smoothing: see :func:`TFUtil.spatial_smoothing_energy`
+    :param dict[str]|None updater_opts: accepts similar opts as TFUpdater, e.g. "optimizer", "learning_rate", ...
     :param bool|None is_output_layer:
     :param bool only_on_eval: if True, this layer will only be calculated in eval
     :param bool only_on_search: if True, this layer will only be calculated when search is done
@@ -136,11 +139,12 @@ class LayerBase(object):
     self.param_device = param_device
     self.L2 = L2
     self.darc1 = darc1
+    self.spatial_smoothing = spatial_smoothing
+    self.updater_opts = CollectionReadCheckCovered(updater_opts or {})
     self._is_output_layer = is_output_layer
     self.only_on_eval = only_on_eval
     self.only_on_search = only_on_search
     self.use_batch_norm = batch_norm
-    self.spatial_smoothing = spatial_smoothing
     self.trainable = trainable
     self.custom_param_importer = custom_param_importer
     self.register_as_extern_data = register_as_extern_data
@@ -630,6 +634,10 @@ class LayerBase(object):
       assert self.params[param_name] is param
     if not saveable:
       self.saveable_param_replace[param] = None
+    if getattr(param, "RETURNN_layer", None) is None:
+      param.RETURNN_layer = self
+    if getattr(param, "RETURNN_updater_opts", None) is None and self.updater_opts.truth_value:
+      param.RETURNN_updater_opts = self.updater_opts
     return param
 
   def set_param_values_by_dict(self, values_dict, session, ignore_wrong_shape=False, copy_param_mode=None):

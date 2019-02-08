@@ -768,7 +768,7 @@ def test_RecLayer_NativeLstm_Nan():
     updater.set_learning_rate(0.1, session=session)
     updater.init_optimizer_vars(session=session)
     optim_op = updater.get_optim_op()
-    assert isinstance(updater.optimizer, tf.train.AdamOptimizer)
+    assert isinstance(updater.optimizer.get_default_optimizer(), tf.train.AdamOptimizer)
     adam_weights_m_t = updater.optimizer.get_slot(var=weights_t, name="m")
     adam_weights_v_t = updater.optimizer.get_slot(var=weights_t, name="v")
     assert isinstance(adam_weights_m_t, tf.Variable)

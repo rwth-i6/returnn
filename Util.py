@@ -1595,6 +1595,9 @@ class CollectionReadCheckCovered:
     self.truth_value = truth_value
     self.got_items = set()
 
+  def __repr__(self):
+    return "%s(%r, truth_value=%r)" % (self.__class__.__name__, self.collection, self.truth_value)
+
   @classmethod
   def from_bool_or_dict(cls, value):
     """
