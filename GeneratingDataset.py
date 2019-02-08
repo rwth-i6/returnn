@@ -698,7 +698,7 @@ class ExtractAudioFeatures:
   def __init__(self,
                window_len=0.025, step_len=0.010,
                num_feature_filters=None, with_delta=False, norm_mean=None, norm_std_dev=None,
-               features="mfcc", random_permute=None, random_state=None):
+               features="mfcc", random_permute=None, random_state=None, raw_ogg_opts=None):
     """
     :param float window_len: in seconds
     :param float step_len: in seconds
@@ -709,6 +709,7 @@ class ExtractAudioFeatures:
     :param str features: "mfcc", "log_mel_filterbank", "log_log_mel_filterbank", "raw", "raw_ogg"
     :param CollectionReadCheckCovered|dict[str]|bool|None random_permute:
     :param numpy.random.RandomState|None random_state:
+    :param dict[str]|None raw_ogg_opts:
     :return: (audio_len // int(step_len * sample_rate), (with_delta + 1) * num_feature_filters), float32
     :rtype: numpy.ndarray
     """
@@ -737,6 +738,7 @@ class ExtractAudioFeatures:
     self.random_permute_opts = random_permute
     self.random_state = random_state
     self.features = features
+    self.raw_ogg_opts = raw_ogg_opts
 
   def _load_feature_vec(self, value):
     """
@@ -766,8 +768,8 @@ class ExtractAudioFeatures:
       except ImportError:
         print("Maybe you did not clone the submodule extern/ParseOggVorbis?")
         raise
-      return ParseOggVorbisLib.get_instance().get_floor_ys_encoded(
-        raw_bytes=raw_bytes.getvalue(), output_dim=self.num_feature_filters)
+      return ParseOggVorbisLib.get_instance().get_features_from_raw_bytes(
+        raw_bytes=raw_bytes.getvalue(), output_dim=self.num_feature_filters, **(self.raw_ogg_opts or {}))
 
     # Don't use librosa.load which internally uses audioread which would use Gstreamer as a backend,
     # which has multiple issues:
