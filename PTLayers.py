@@ -1,5 +1,9 @@
-
 from __future__ import print_function
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
 
 from math import sqrt
 import numpy
@@ -804,4 +808,13 @@ class OutputLayer(Layer):
   layer_class = "softmax"
 
   def __init__(self, loss, y):
-    pass
+    super(OutputLayer, self).__init__(**kwargs)
+    self.W_in = nn.Parameter(torch.ones(self.sources[0].attrs['n_out'],self.attrs['n_out']))
+    self.b = nn.Parameter(torch.zeros(self.attrs['n_out']))
+    self.softmax = nn.Softmax()(x_in.mm(self.W_in) + self.b)
+
+  def forward(self, x_in):
+    z = x_in.mm(self.W_in) + self.b
+    self.p_y_given_x = self.softmax(z)
+    scores = torch.index_select(self.p_y_given_x.view(-1), self.index.nonzero().long().view(-1))
+    return -torch.log(scores).sum()
