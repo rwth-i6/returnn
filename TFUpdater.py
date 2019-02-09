@@ -7,7 +7,7 @@ from tensorflow.python.ops import resource_variable_ops
 
 from Log import log
 from TFNetwork import TFNetwork
-from TFUtil import tf_version_tuple, assert_min_tf_version, CustomUpdate, add_check_numerics_ops
+from TFUtil import tf_version_tuple, assert_min_tf_version, CustomUpdate, add_check_numerics_ops, check_contains_only_det_ops
 
 _OptimizerClassesDict = {}  # type: dict[str,()->Optimizer]
 
@@ -104,6 +104,11 @@ class Updater(object):
     self.optim_meta_losses = None  # type: dict[str,tf.Tensor]
     self.optimizer_vars = []  # type: list[tf.Variable]
     self.optimizer_init_vars_op = None  # type: tf.Operation
+
+    # After graph was build: look if it only uses deterministic ops
+    if self.config.is_true('deterministic_train'):
+      if not check_contains_only_det_ops():
+        print("WARNING: Some op used is not deterministic!")
 
   def reset_optim_op(self):
     """

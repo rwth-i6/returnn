@@ -6667,3 +6667,32 @@ def get_positional_encoding(num_channels, length=None, position=None, min_timesc
   signal = tf.concat([tf.sin(scaled_time), tf.cos(scaled_time)], axis=1)
   signal = tf.pad(signal, [[0, 0], [0, num_channels % 2]])  # (length, channels)
   return signal
+
+def check_contains_only_det_ops(print_trace=False):
+  """
+  :param bool print_trace: prints a trace of which ops are checked
+  :return:  are all ops used on the available devices deterministic?
+  """
+  # List of non deterministic (NDT) ops (depending on version and device)
+  non_deterministic_ops = {
+    "Mean": ["1.5.0", ["GPU"]]
+    # "Reshape": ["1.13.0", ["CPU", "GPU"]]  # Not NDT just here for test purposes
+  }
+
+  # Getting all available device types
+  device_types = [type.device_type for type in get_tf_list_local_devices()]
+
+  # Getting all used ops by name and filtering duplicates
+  ops_set = {op.type for op in tf.get_default_graph().get_operations()}
+
+  deterministic = True
+  for op in ops_set:
+    if print_trace: print("Testing: {}".format(op))
+    if op in non_deterministic_ops:
+      # Converting Version to tuple
+      pre_version = tuple([int(x) for x in non_deterministic_ops[op][0].split('.') if x.isdigit()])
+      # Do version check | and see if device for which that op is NDT is used
+      if (pre_version >= tf_version_tuple()) and (not set(non_deterministic_ops[op][1]).isdisjoint(device_types)):
+        print("WARING: using {}-op, that is non deterministic in tf.__version__ = {}".format(op, tf.__version__))
+        if deterministic: deterministic = False
+  return deterministic
