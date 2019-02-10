@@ -477,10 +477,13 @@ class WrapOptimizer:
       optimizer = tf.train.AdagradOptimizer(learning_rate=lr, use_locking=use_locking)
     elif self.config.is_of_type("rmsprop", float):
       print("Create RMSProp optimizer. With Decay %f" % (self.config.float("rmsprop", 0.9)), file=log.v2)
-      optimizer = tf.train.RMSPropOptimizer(decay=self.config.float("rmsprop", 0.9), learning_rate=lr, momentum=momentum, epsilon=epsilon, use_locking=use_locking)
+      optimizer = tf.train.RMSPropOptimizer(
+        decay=self.config.float("rmsprop", 0.9), learning_rate=lr, momentum=momentum, epsilon=epsilon,
+        use_locking=use_locking)
     elif self.config.bool("rmsprop", False):
       print("Create RMSProp optimizer.", file=log.v2)
-      optimizer = tf.train.RMSPropOptimizer(learning_rate=lr, momentum=momentum, epsilon=epsilon, use_locking=use_locking)
+      optimizer = tf.train.RMSPropOptimizer(
+        learning_rate=lr, momentum=momentum, epsilon=epsilon, use_locking=use_locking)
     elif momentum:
       print("Create Momentum optimizer.", file=log.v2)
       optimizer = tf.train.MomentumOptimizer(learning_rate=lr, momentum=momentum, use_locking=use_locking)
@@ -488,19 +491,6 @@ class WrapOptimizer:
       print("Create SGD optimizer.", file=log.v2)
       optimizer = tf.train.GradientDescentOptimizer(learning_rate=lr, use_locking=use_locking)
     return optimizer
-
-  def _partition_var_list(self, var_list):
-    """
-    :param list[tf.Variable] var_list:
-    :return: ordered dict: opt key -> list of vars
-    :rtype: dict[object,list[tf.Variable]]
-    """
-    from collections import OrderedDict
-    res = OrderedDict()
-    for var in var_list:
-      key, _ = self._get_optimizer_item_for_variable(var)
-      res.setdefault(key, []).append(var)
-    return res
 
   def _compute_gradients(self, loss, var_list):
     """
@@ -515,13 +505,13 @@ class WrapOptimizer:
       aggregation_method = tf.AggregationMethod.ADD_N
     else:
       aggregation_method = tf.AggregationMethod.EXPERIMENTAL_ACCUMULATE_N
-    res = []
-    vars_per_optimizer = self._partition_var_list(var_list)
-    for key, sub_var_list in vars_per_optimizer.items():
-      optimizer = self.optimizers[key]
-      assert isinstance(optimizer, tf.train.Optimizer)
-      res.extend(optimizer.compute_gradients(loss=loss, var_list=sub_var_list, aggregation_method=aggregation_method))
-    return res
+    # Note: Do not call compute_gradients for each optimizer, because that would result in multiple independent
+    # backprops, and would be much slower and require more memory. Also, it should not be needed.
+    # So instead, just call from the default optimizer. This should almost always be correct,
+    # as this is not much more than a wrapper around tf.gradients.
+    # (Some special optimizers would add special losses though.)
+    default_opt = self.get_default_optimizer()
+    return default_opt.compute_gradients(loss=loss, var_list=var_list, aggregation_method=aggregation_method)
 
   def _apply_gradients(self, grads_and_vars, opt_key, accum_grad_multiple_num_steps=0):
     """
