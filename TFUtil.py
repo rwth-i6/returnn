@@ -6668,31 +6668,24 @@ def get_positional_encoding(num_channels, length=None, position=None, min_timesc
   signal = tf.pad(signal, [[0, 0], [0, num_channels % 2]])  # (length, channels)
   return signal
 
-def check_contains_only_det_ops(print_trace=False):
+
+def get_non_deterministic_ops_from_graph():
   """
-  :param bool print_trace: prints a trace of which ops are checked
-  :return:  are all ops used on the available devices deterministic?
+  Lists all non deterministic ops used in the default graph
+  If a non deterministic op is used multiple times each instance will be listed
+
+  currently doesn't check if user specified a specific computation device
+  list of non deterministic ops is not jet complete
+
+  :return: list of all non deterministic ops names (depending on device and tf version) used in current graph
+  :rtype: list[tf.Operation]
   """
-  # List of non deterministic (NDT) ops (depending on version and device)
-  non_deterministic_ops = {
-    "Mean": ["1.5.0", ["GPU"]]
-    # "Reshape": ["1.13.0", ["CPU", "GPU"]]  # Not NDT just here for test purposes
-  }
+  device_types = {device.device_type for device in get_tf_list_local_devices()}
+  non_det_ops = []
+  tf_version = tf_version_tuple()
+  for op in tf.get_default_graph().get_operations():
+    if op.type == "Mean" and tf_version <= (1, 5, 0) and "GPU" in device_types:
+      non_det_ops.append(op)
+    # elif ... more non det ops to be added
 
-  # Getting all available device types
-  device_types = [type.device_type for type in get_tf_list_local_devices()]
-
-  # Getting all used ops by name and filtering duplicates
-  ops_set = {op.type for op in tf.get_default_graph().get_operations()}
-
-  deterministic = True
-  for op in ops_set:
-    if print_trace: print("Testing: {}".format(op))
-    if op in non_deterministic_ops:
-      # Converting Version to tuple
-      pre_version = tuple([int(x) for x in non_deterministic_ops[op][0].split('.') if x.isdigit()])
-      # Do version check | and see if device for which that op is NDT is used
-      if (pre_version >= tf_version_tuple()) and (not set(non_deterministic_ops[op][1]).isdisjoint(device_types)):
-        print("WARING: using {}-op, that is non deterministic in tf.__version__ = {}".format(op, tf.__version__))
-        if deterministic: deterministic = False
-  return deterministic
+  return non_det_ops
