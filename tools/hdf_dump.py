@@ -63,6 +63,12 @@ def hdf_dump_from_dataset(dataset, hdf_dataset, parser_args):
     default_data_target_key = data_target_keys[0]
   print("Using target data key:", default_data_target_key)
 
+  if default_data_target_key == "data":
+    valid_hdf_target_key = "classes"  # Replace "data" which is reserved for input key in HDFDataset.
+    assert valid_hdf_target_key not in data_target_keys
+  else:
+    valid_hdf_target_key = default_data_target_key
+
   # We need to do one run through the dataset to collect some stats like total len.
   print("Collect stats, iterate through all data...", file=log.v3)
   seq_idx = parser_args.start_seq
@@ -130,11 +136,14 @@ def hdf_dump_from_dataset(dataset, hdf_dataset, parser_args):
     if data_key == default_data_input_key:
       hdf_dataset.create_dataset(
         'inputs', shape=shapes[data_key], dtype=dataset.get_data_dtype(data_key))
+    elif data_key == default_data_target_key:
+      hdf_dataset['targets/data'].create_dataset(
+        valid_hdf_target_key, shape=shapes[data_key], dtype=dataset.get_data_dtype(data_key))
+      hdf_dataset['targets/size'].attrs[valid_hdf_target_key] = dataset.num_outputs[data_key]
     else:
       hdf_dataset['targets/data'].create_dataset(
         data_key, shape=shapes[data_key], dtype=dataset.get_data_dtype(data_key))
       hdf_dataset['targets/size'].attrs[data_key] = dataset.num_outputs[data_key]
-
     if data_key in dataset.labels:
       labels = dataset.labels[data_key]
       if PY3:
@@ -145,8 +154,14 @@ def hdf_dump_from_dataset(dataset, hdf_dataset, parser_args):
     print("Labels for %s:" % data_key, labels[:3], "...", file=log.v5)
     max_label_len = max(map(len, labels))
     if data_key != default_data_input_key:
-      hdf_dataset['targets/labels'].create_dataset(data_key, (len(labels),), dtype="S%i" % (max_label_len + 1))
-      for i, label in enumerate(labels):
+      if data_key == default_data_target_key:
+        hdf_dataset['targets/labels'].create_dataset(valid_hdf_target_key,
+                                                     (len(labels),), dtype="S%i" % (max_label_len + 1))
+        for i, label in enumerate(labels):
+          hdf_dataset['targets/labels'][valid_hdf_target_key][i] =\
+            numpy.array(label, dtype="S%i" % (max_label_len + 1))
+      else:
+        hdf_dataset['targets/labels'].create_dataset(data_key, (len(labels),), dtype="S%i" % (max_label_len + 1))
         hdf_dataset['targets/labels'][data_key][i] = numpy.array(label, dtype="S%i" % (max_label_len + 1))
 
   # Again iterate through dataset, and set the data
@@ -161,6 +176,8 @@ def hdf_dump_from_dataset(dataset, hdf_dataset, parser_args):
     for data_key in data_keys:
       if data_key == default_data_input_key:
         hdf_data = hdf_dataset['inputs']
+      elif data_key == default_data_target_key:
+        hdf_data = hdf_dataset['targets/data'][valid_hdf_target_key]
       else:
         hdf_data = hdf_dataset['targets/data'][data_key]
       data = dataset.get_data(seq_idx, data_key)
@@ -244,7 +261,6 @@ def main(argv):
   else:
     dataset_config_str = args.config_file_or_dataset
   dataset = init(config_filename=crnn_config, cmd_line_opts=[], dataset_config_str=dataset_config_str)
-  print
   hdf_dataset = hdf_dataset_init(args.hdf_filename)
   hdf_dump_from_dataset(dataset, hdf_dataset, args)
   hdf_close(hdf_dataset)
