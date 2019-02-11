@@ -420,7 +420,7 @@ class RecLayer(_ConcatInputLayer):
             loss = subnet.accumulated_losses[loss.name]
             assert isinstance(loss, LossHolder)
             assert loss.get_layer()
-          loss = loss.copy_new_base(network=network, name="%s/%s" % (name, loss.name))
+          loss = loss.copy_new_base(network=network, name="%s/%s" % (name, loss.name), reduce_func=reduce_func)
           losses.append(loss)
     return losses
 

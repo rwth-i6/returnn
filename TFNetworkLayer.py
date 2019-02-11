@@ -5425,7 +5425,7 @@ class Loss(object):
       # We expect to get (batch*time) or (time*batch) in the first dimension of the loss and the output.
       loss = self._reduce_to_batch_time_with_mask(loss, normalize=normalize)  # (batch*time,) or (time*batch,)
       loss.set_shape((None,))
-      loss = tf.reshape(loss, tf.shape(self.output.get_sequence_mask()))  # (batch,time) or (time,batch)
+      loss = tf.reshape(loss, tf.shape(self.output.placeholder)[:2])  # (batch,time) or (time,batch)
       loss = tf.reduce_sum(loss, axis=self.output.time_dim_axis)  # (batch,)
       if normalize:
         loss /= tf.to_float(self.output.get_sequence_lengths())
