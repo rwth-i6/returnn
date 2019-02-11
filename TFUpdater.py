@@ -269,7 +269,7 @@ class Updater(object):
     with tf.name_scope("optimizer_init_vars"):
       self.optimizer_init_vars_op = tf.variables_initializer(self.optimizer_vars, name="init_optim_slot_vars")
 
-    if self.config.bool("debug_grad_summaries", False):
+    if self.config.bool_or_other("debug_grad_summaries", False):
       from TFUtil import variable_summaries, get_base_name, reuse_name_scope_of_tensor
       for key in self.network.used_data_keys:
         data = self.network.extern_data.data[key]
@@ -567,24 +567,47 @@ class WrapOptimizer:
     return opt.get_slot(var, name)
 
   class _GetGlobalInfo:
-    def __init__(self, optimizer, all_vars, all_grads):
+    def __init__(self, optimizer, all_vars, var_grads):
       """
       :param WrapOptimizer optimizer:
       :param list[tf.Variable] all_vars:
-      :param list[tf.Tensor] all_grads: not necessarily the same length as all_vars
+      :param dict[tf.Variable,tf.Tensor] var_grads:
       """
       self.optimizer = optimizer
       self.all_vars = all_vars
-      self.all_grads = all_grads
+      self.var_grads = var_grads
+      self.all_grads = list(var_grads.values())  # not necessarily the same length as all_vars
       self._global_grad_norm = None
       self._maximize_grad_norm_var_grads = None
+      self._l2loss_cache = {}
+
+    def get_l2loss(self, x):
+      """
+      :param tf.Tensor|tf.IndexedSlices x:
+      :return: tf.nn.l2_loss(x) (which is l2norm(x)**2 / 2, or sum(x**2) / 2)
+      :rtype: tf.Tensor
+      """
+      if x not in self._l2loss_cache:
+        with tf.colocate_with(x):
+          values = x
+          if isinstance(values, tf.IndexedSlices):
+            values = values.values
+          self._l2loss_cache[x] = tf.nn.l2_loss(values)
+      return self._l2loss_cache[x]
 
     def get_global_grad_norm(self):
       """
       :rtype: tf.Tensor
       """
       if self._global_grad_norm is None:
-        self._global_grad_norm = tf.global_norm(self.all_grads, name="global_grad_norm")
+        # We want tf.global_norm(self.all_grads), which is sqrt(sum([l2norm(t)**2 for t in all_grads])),
+        # but we use self.get_l2loss which caches the calculation of l2norm.
+        # Thus this is tf.global_norm somewhat reproduced:
+        with tf.name_scope("global_norm"):
+          half_squared_norms = [self.get_l2loss(grad) for grad in self.all_grads]
+          half_squared_norm = tf.reduce_sum(tf.stack(half_squared_norms))
+          norm = tf.sqrt(half_squared_norm * tf.constant(2.0, dtype=half_squared_norm.dtype), name="global_norm")
+          self._global_grad_norm = norm
       return self._global_grad_norm
 
     def get_maximize_grad_norm_var_grads(self, factor):
@@ -653,7 +676,7 @@ class WrapOptimizer:
       grad = accum_grad_multiple_step(
         grad, var, train_step=self.global_train_step, num_accum_steps=accum_grad_multiple_num_steps)
 
-    if updater_opts.get("debug_grad_summaries", self.config.bool("debug_grad_summaries", False)):
+    if updater_opts.get("debug_grad_summaries", self.config.bool_or_other("debug_grad_summaries", False)):
       from TFUtil import variable_summaries, get_base_name, reuse_name_scope_of_tensor
       with reuse_name_scope_of_tensor(grad, prefix="grads/"):
         variable_summaries(grad, name="grad_of_%s" % get_base_name(var))
@@ -715,7 +738,9 @@ class WrapOptimizer:
     var_grads = {var: grad for (grad, var) in grads_and_vars if grad is not None}
     if not var_grads:
       raise Exception("no single variable to train")
-    global_info = self._GetGlobalInfo(optimizer=self, all_vars=var_list, all_grads=list(var_grads.values()))
+    global_info = self._GetGlobalInfo(optimizer=self, all_vars=var_list, var_grads=var_grads)
+    if self.config.bool_or_other("debug_grad_summaries", False):
+      tf.summary.scalar("global_grad_norm", global_info.get_global_grad_norm())
     grads_per_apply_grad_opts = {}  # dict apply_grad_opts -> list of (grad, var)
     for grad, var in grads_and_vars:
       assert var in var_list

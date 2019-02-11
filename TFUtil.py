@@ -1598,6 +1598,7 @@ def variable_scalar_summaries_dict(x, name=None):
     '%s_mean' % name: mean,
     '%s_stddev' % name: stddev,
     '%s_rms' % name: tf.sqrt(tf.reduce_mean(tf.square(x))),
+    '%s_l2' % name: tf.sqrt(tf.nn.l2_loss(x) * 0.5),
     '%s_max' % name: tf.reduce_max(x),
     '%s_min' % name: tf.reduce_min(x)}
 
