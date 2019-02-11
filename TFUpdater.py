@@ -578,9 +578,10 @@ class WrapOptimizer:
       self.var_grads = var_grads
       self.all_grads = list(var_grads.values())  # not necessarily the same length as all_vars
       self.vars_by_tag = self._build_vars_by_tag_dict()  # tag name -> set of vars
-      self._global_grad_norm = None
-      self._maximize_grad_norm_var_grads = None
       self._l2loss_cache = {}
+      self._global_grad_norm = None
+      self._global_grad_norm_per_tag = {}
+      self._maximize_grad_norm_var_grads = None
 
     def _build_vars_by_tag_dict(self):
       """
@@ -633,6 +634,20 @@ class WrapOptimizer:
         self._global_grad_norm = self._global_norm(self.all_grads)
       return self._global_grad_norm
 
+    def get_global_grad_norm_per_tag(self, tag):
+      """
+      :param str tag:
+      :rtype: tf.Tensor
+      """
+      if tag not in self._global_grad_norm_per_tag:
+        from TFUtil import get_valid_scope_name_from_str
+        with tf.name_scope("global_norm_for_tag_%s" % get_valid_scope_name_from_str(tag)):
+          norm = self._global_norm({self.var_grads[var] for var in self.vars_by_tag[tag]})
+        if self.optimizer.config.bool_or_other("debug_grad_summaries", False):
+          tf.summary.scalar("global_norm_for_tag_%s" % get_valid_scope_name_from_str(tag), norm)
+        self._global_grad_norm_per_tag[tag] = norm
+      return self._global_grad_norm_per_tag[tag]
+
     def get_maximize_grad_norm_var_grads(self, factor):
       """
       :param tf.Tensor|float factor:
@@ -665,11 +680,7 @@ class WrapOptimizer:
       if not global_norm_tag:
         norm = self.get_global_grad_norm()
       else:
-        from TFUtil import get_valid_scope_name_from_str
-        with tf.name_scope("global_norm_for_tag_%s" % get_valid_scope_name_from_str(global_norm_tag)):
-          norm = self._global_norm({self.var_grads[var] for var in self.vars_by_tag[global_norm_tag]})
-        if self.optimizer.config.bool_or_other("debug_grad_summaries", False):
-          tf.summary.scalar("global_norm_for_tag_%s" % get_valid_scope_name_from_str(global_norm_tag), norm)
+        norm = self.get_global_grad_norm_per_tag(global_norm_tag)
       (grad,), _ = tf.clip_by_global_norm([grad], clip_norm=clip_norm, use_norm=norm)
       return grad
 
