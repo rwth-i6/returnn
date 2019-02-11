@@ -577,9 +577,23 @@ class WrapOptimizer:
       self.all_vars = all_vars
       self.var_grads = var_grads
       self.all_grads = list(var_grads.values())  # not necessarily the same length as all_vars
+      self.vars_by_tag = self._build_vars_by_tag_dict()  # tag name -> set of vars
       self._global_grad_norm = None
       self._maximize_grad_norm_var_grads = None
       self._l2loss_cache = {}
+
+    def _build_vars_by_tag_dict(self):
+      """
+      :return: tag name -> set of vars
+      :rtype: dict[str,set[tf.Variable]]
+      """
+      res = {}
+      for var in self.all_vars:
+        opts = self.optimizer._get_updater_opts_from_var(var)
+        var_tags = opts.get("tags", [])
+        for tag in var_tags:
+          res.setdefault(tag, set()).add(var)
+      return res
 
     def get_l2loss(self, x):
       """
@@ -595,19 +609,28 @@ class WrapOptimizer:
           self._l2loss_cache[x] = tf.nn.l2_loss(values)
       return self._l2loss_cache[x]
 
+    def _global_norm(self, grads):
+      """
+      :param list[tf.Tensor]|set[tf.Tensor] grads:
+      :rtype: tf.Tensor
+      """
+      if not isinstance(grads, (list, tuple)):
+        grads = sorted(grads, key=lambda v: v.name)  # make some deterministic order
+      # We want tf.global_norm(values), which is sqrt(sum([l2norm(t)**2 for t in values])),
+      # but we use self.get_l2loss which caches the calculation of l2norm.
+      # Thus this is tf.global_norm somewhat reproduced:
+      with tf.name_scope("global_norm"):
+        half_squared_norms = [self.get_l2loss(grad) for grad in grads if grad is not None]
+        half_squared_norm = tf.reduce_sum(tf.stack(half_squared_norms))
+        norm = tf.sqrt(half_squared_norm * tf.constant(2.0, dtype=half_squared_norm.dtype), name="global_norm")
+      return norm
+
     def get_global_grad_norm(self):
       """
       :rtype: tf.Tensor
       """
       if self._global_grad_norm is None:
-        # We want tf.global_norm(self.all_grads), which is sqrt(sum([l2norm(t)**2 for t in all_grads])),
-        # but we use self.get_l2loss which caches the calculation of l2norm.
-        # Thus this is tf.global_norm somewhat reproduced:
-        with tf.name_scope("global_norm"):
-          half_squared_norms = [self.get_l2loss(grad) for grad in self.all_grads]
-          half_squared_norm = tf.reduce_sum(tf.stack(half_squared_norms))
-          norm = tf.sqrt(half_squared_norm * tf.constant(2.0, dtype=half_squared_norm.dtype), name="global_norm")
-          self._global_grad_norm = norm
+        self._global_grad_norm = self._global_norm(self.all_grads)
       return self._global_grad_norm
 
     def get_maximize_grad_norm_var_grads(self, factor):
@@ -630,16 +653,34 @@ class WrapOptimizer:
       """
       return self.get_maximize_grad_norm_var_grads(factor).get(var, None)
 
-    def clip_by_global_norm(self, grad, clip_norm):
+    def clip_by_global_norm(self, grad, clip_norm, global_norm_tag=None):
       """
       Wraps tf.clip_by_global_norm.
 
       :param tf.Tensor grad:
       :param tf.Tensor|float clip_norm:
+      :param str|None global_norm_tag:
       :rtype: tf.Tensor
       """
-      (grad,), _ = tf.clip_by_global_norm([grad], clip_norm=clip_norm, use_norm=self.get_global_grad_norm())
+      if not global_norm_tag:
+        norm = self.get_global_grad_norm()
+      else:
+        norm = self._global_norm({self.var_grads[var] for var in self.vars_by_tag[global_norm_tag]})
+      (grad,), _ = tf.clip_by_global_norm([grad], clip_norm=clip_norm, use_norm=norm)
       return grad
+
+  @classmethod
+  def _get_updater_opts_from_var(cls, var):
+    """
+    :param tf.Variable var:
+    :rtype: Util.CollectionReadCheckCovered
+    """
+    from Util import CollectionReadCheckCovered
+    updater_opts = getattr(var, "RETURNN_updater_opts", None)
+    if updater_opts is None:
+      updater_opts = CollectionReadCheckCovered({})
+    assert isinstance(updater_opts, CollectionReadCheckCovered)
+    return updater_opts
 
   def _post_process_grad(self, grad, var, global_info):
     """
@@ -649,22 +690,20 @@ class WrapOptimizer:
     :return: new grad, apply grad opts
     :rtype: tf.Tensor, dict[str]
     """
-    from Util import CollectionReadCheckCovered
-    updater_opts = getattr(var, "RETURNN_updater_opts", None)
-    if updater_opts is None:
-      updater_opts = CollectionReadCheckCovered({})
-    assert isinstance(updater_opts, CollectionReadCheckCovered)
+    updater_opts = self._get_updater_opts_from_var(var)
 
     accum_grad_multiple_num_steps = updater_opts.get(
       "accum_grad_multiple_step", self.config.int("accum_grad_multiple_step", 0))
     grad_noise = updater_opts.get("gradient_noise", self.config.float("gradient_noise", 0.0))
     grad_clip = updater_opts.get("gradient_clip", self.config.float("gradient_clip", 0.0))
+    # E.g. https://github.com/openai/baselines/blob/master/baselines/deepq/simple.py:
+    #   grad_norm_clipping=10 -> tf.clip_by_norm
     grad_clip_norm = updater_opts.get("gradient_clip_norm", self.config.float("gradient_clip_norm", 0.0))
     grad_clip_avg_norm = updater_opts.get("gradient_clip_avg_norm", self.config.float("gradient_clip_avg_norm", 0.0))
     grad_clip_global_norm = updater_opts.get(
       "gradient_clip_global_norm", self.config.float("gradient_clip_global_norm", 0.0))
-    # E.g. https://github.com/openai/baselines/blob/master/baselines/deepq/simple.py:
-    #   grad_norm_clipping=10 -> tf.clip_by_norm
+    grad_clip_global_norm_tag = updater_opts.get(
+      "gradient_clip_global_norm_tag", self.config.value("gradient_clip_global_norm_tag", None))
     maximize_grad_norm = updater_opts.get("maximize_grad_norm", self.config.float("maximize_grad_norm", 0))
 
     if maximize_grad_norm:
@@ -707,7 +746,8 @@ class WrapOptimizer:
     if grad_clip_global_norm:
       assert grad_clip_global_norm > 0
       with tf.name_scope("grad_clip_global_norm"):
-        grad = global_info.clip_by_global_norm(grad, clip_norm=grad_clip_global_norm)
+        grad = global_info.clip_by_global_norm(
+          grad, clip_norm=grad_clip_global_norm, global_norm_tag=grad_clip_global_norm_tag)
 
     updater_opts.assert_all_read()
 
