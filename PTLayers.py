@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from PTDevice import floatX
 
 from math import sqrt
 import numpy
@@ -12,7 +13,7 @@ from Util import as_str
 import json
 
 
-class Container(object):
+class Container(nn.Module):
   rng_seed = 1234
   layer_class = None
 
@@ -32,8 +33,8 @@ class Container(object):
     :param str forward_weights_init: see self.create_forward_weights()
     :param str bias_init: see self.create_bias()
     """
-    self.params = {}; """ :type: dict[str,theano.compile.sharedvalue.SharedVariable] """
-    self.attrs = {}; """ :type: dict[str,str|float|int|bool|dict] """
+    self.params = {}
+    self.attrs = {}
     self.device = None
     if layer_class:
       self.layer_class = as_str(layer_class.encode("utf8"))
@@ -183,11 +184,6 @@ class Container(object):
     """
     self.attrs[name] = value
 
-  def shared(self, value, name, borrow=True):
-    if self.device is None:
-      return theano.shared(value=value, borrow=borrow, name=name)
-    return theano.shared(value=value, borrow=borrow, name=name, target=self.device)
-
   def create_bias(self, n, prefix='b', name="", init_eval_str=None):
     """
     :param int n: output dimension
@@ -223,12 +219,12 @@ class Container(object):
       "name": name,
       "sqrt": numpy.sqrt,
       "log": numpy.log,
-      "zeros": (lambda: numpy.zeros(size, dtype=theano.config.floatX)),
+      "zeros": (lambda: numpy.zeros(size, dtype=floatX)),
       "random_normal": random_normal,
       "random_uniform": random_uniform
     }
     values = eval(init_eval_str, eval_locals)
-    values = numpy.asarray(values, dtype=theano.config.floatX)
+    values = numpy.asarray(values, dtype=floatX)
     assert values.shape == (n,)
     return self.shared(values, name)
 
@@ -239,9 +235,9 @@ class Container(object):
     else:
       scale = numpy.sqrt(scale / 12.)
     if self.depth > 1:
-      values = numpy.asarray(self.rng.normal(loc=0.0, scale=1.0 / scale, size=(n, self.depth, m)), dtype=theano.config.floatX)
+      values = numpy.asarray(self.rng.normal(loc=0.0, scale=1.0 / scale, size=(n, self.depth, m)), dtype=floatX)
     else:
-      values = numpy.asarray(self.rng.normal(loc=0.0, scale=1.0 / scale, size=(n, m)), dtype=theano.config.floatX)
+      values = numpy.asarray(self.rng.normal(loc=0.0, scale=1.0 / scale, size=(n, m)), dtype=floatX)
     return self.shared(values, name)
 
   def create_random_uniform_weights(self, n, m, p=None, p_add=None, l=None, name=None, depth=None):
@@ -252,9 +248,9 @@ class Container(object):
     if p_add: p += p_add
     if not l: l = sqrt(6.) / sqrt(p)  # 1 / sqrt(p)
     if depth > 1:
-      values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n, depth, m)), dtype=theano.config.floatX)
+      values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n, depth, m)), dtype=floatX)
     else:
-      values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n, m)), dtype=theano.config.floatX)
+      values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n, m)), dtype=floatX)
     return self.shared(values, name)
 
   def create_random_uniform_weights1(self, n, m, p=None, l=None, name=None):
@@ -262,7 +258,7 @@ class Container(object):
     assert not (p and l)
     if not p: p = n + m
     if not l: l = sqrt(6.) / sqrt(p)  # 1 / sqrt(p)
-    values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n, m)), dtype=theano.config.floatX)
+    values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=(n, m)), dtype=floatX)
     return self.shared(values, name)
 
   def create_random_uniform_weights2(self, n, m=None, name=None):
@@ -270,7 +266,7 @@ class Container(object):
     l = sqrt(1. / n)
     shape = [n]
     if m: shape += [m]
-    values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=shape), dtype=theano.config.floatX)
+    values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=shape), dtype=floatX)
     return self.shared(values, name)
 
   def create_random_unitary_weights(self, n, m, name=None):
@@ -281,7 +277,7 @@ class Container(object):
     else:
       x = v
     assert x.shape == (n, m)
-    x = x.astype(theano.config.floatX)
+    x = x.astype(floatX)
     return self.shared(x, name)
 
   def create_random_unitary_tiled_weights(self, n, m, name=None):
@@ -302,7 +298,7 @@ class Container(object):
     assert x.shape == (n, m)
     if transpose:
       x = x.T
-    x = x.astype(theano.config.floatX)
+    x = x.astype(floatX)
     return self.shared(x, name)
 
   def _create_eval_weights(self, n, m, name, default_name_prefix, init_eval_str):
@@ -330,7 +326,7 @@ class Container(object):
       "m": m,
       "name": name,
       "sqrt": numpy.sqrt,
-      "eye": (lambda N=n, M=m: numpy.eye(N, M, dtype=theano.config.floatX)),
+      "eye": (lambda N=n, M=m: numpy.eye(N, M, dtype=floatX)),
       "random_normal": (
       lambda scale=None, **kwargs: self.create_random_normal_weights(n, m, scale=scale, name=name, **kwargs)),
       "random_uniform": (
@@ -340,9 +336,8 @@ class Container(object):
     }
     v = eval(init_eval_str, eval_locals)
     if isinstance(v, numpy.ndarray):
-      v = numpy.asarray(v, dtype=theano.config.floatX)
+      v = numpy.asarray(v, dtype=floatX)
       v = self.shared(v, name)
-    assert isinstance(v, theano.compile.SharedVariable)
     assert v.ndim == 2
     vshape = v.get_value(borrow=True, return_internal_type=True).shape
     assert vshape == (n, m)
@@ -449,14 +444,10 @@ class SourceLayer(Container):
 class Layer(Container):
   recurrent = False
 
-  def __init__(self, sources, n_out, index, y_in=None, target=None, target_index=None,
-               sparse=False, cost_scale=1.0, input_scale=1.0,
-               L1=0.0, L2=0.0, L2_eye=None, varreg=0.0,
-               output_L2_reg=0.0, output_entropy_reg=0.0, output_entropy_exp_reg=0.0,
-               with_bias=True,
-               mask="unity", dropout=0.0, batch_drop=False, batch_norm=False, bn_use_sample=False, layer_drop=0.0, residual=False,
-               carry=False,
-               sparse_filtering=False, gradient_scale=1.0, trainable=True, device=None,
+  def __init__(self, sources, n_out, index, y_in=None, target=None,
+               cost_scale=1.0,
+               dropout=0.0,
+               trainable=True,
                dtype='float32',
                **kwargs):
     """
@@ -486,7 +477,6 @@ class Layer(Container):
     if gradient_scale != 1.0:
       self.set_attr('gradient_scale', gradient_scale)
     self.set_attr('layer_drop', layer_drop)
-    assert not carry, "not supported anymore"
     self.set_attr('residual', residual)
     self.set_attr('n_out', n_out)
     self.set_attr('L1', L1)
@@ -496,13 +486,6 @@ class Layer(Container):
     self.device = device # if device else str(theano.config.device)
     for s in self.sources:
       s.transfer_output(self.device)
-    self.set_attr('varreg', varreg)
-    if output_L2_reg:
-      self.set_attr('output_L2_reg', output_L2_reg)
-    if output_entropy_reg:
-      self.set_attr('output_entropy_reg', output_entropy_reg)
-    if output_entropy_exp_reg:
-      self.set_attr('output_entropy_exp_reg', output_entropy_exp_reg)
     self.set_attr('batch_norm', batch_norm)
     self.set_attr('input_scale', input_scale)
     if y_in is not None:
@@ -527,34 +510,6 @@ class Layer(Container):
     else:
       self.set_attr('with_bias', False)
       self.b = numpy.float32(0)
-    self.mass = T.constant(1., name = "mass_%s" % self.name, dtype='float32')
-    self.masks = [None] * len(self.sources)
-    assert mask in ['dropout', 'unity', 'none'], "invalid mask: %s" % mask
-    if mask == "dropout" or (mask == 'none' and dropout > 0):
-      assert 0.0 < dropout < 1.0
-      # If we apply this mass during training then we don't need any mask or mass for testing.
-      # The expected weight should be 1 in
-      #   E[x] = mass * (1-dropout)
-      # so mass has to be 1 / (1 - dropout).
-      self.mass = T.constant(1.0 / (1.0 - dropout), dtype='float32')
-      from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
-      srng = RandomStreams(self.rng.randint(1234) + 1)
-      if self.depth > 1:
-        self.masks = [T.cast(srng.binomial(n=1, p=1 - dropout, size=(s.attrs['n_out'],self.depth)), theano.config.floatX) for s in self.sources]
-      else:
-        if batch_drop:
-          self.masks = [T.cast(srng.binomial(n=1, p=1 - dropout, size=s.output.shape), theano.config.floatX) for s in self.sources]
-        else:
-          self.masks = [T.cast(srng.binomial(n=1, p=1 - dropout, size=(s.attrs['n_out'],)), theano.config.floatX) for s in self.sources]
-      #this actually looked like dropconnect applied to the recurrent part, but I want to try dropout for the inputs
-      #self.mask = T.cast(srng.binomial(n=1, p=1-dropout, size=(self.attrs['n_out'], self.attrs['n_out'])), theano.config.floatX)
-
-  def concat_units(self, other, axis = 1):
-    assert other.layer_class == self.layer_class, "unable to concatenate %s (%s) to %s (%s)" % (other.name, other.layer_class, self.name, self.layer_class)
-    for p in other.params.keys():
-      if p != 'b':
-        self.params[p].set_value(numpy.concatenate((self.params[p].get_value(), other.params[p].get_value()), axis = min(len(self.params[p].get_value().shape) - 1, axis)))
-    if axis == 1: self.set_attr('n_out', self.attrs['n_out'] + other.arrs['n_out'])
 
   def output_index(self):
     from theano.ifelse import ifelse
@@ -576,209 +531,6 @@ class Layer(Container):
         if s is not None:
           return s
     return None
-
-  def add_param(self, param, name="", constraints=True,
-                custom_update=None, custom_update_normalized=False, custom_update_exp_average=0,
-                custom_update_condition=None, custom_update_accumulate_batches=None):
-    """
-    :type param: theano.SharedVariable
-    :type name: str
-    :rtype: theano.SharedVariable
-    """
-    param = super(Layer, self).add_param(param, name)
-    if custom_update:
-      # Handled in Device and Updater.
-      param.custom_update = custom_update
-      param.custom_update_normalized = custom_update_normalized
-      param.custom_update_exp_average = custom_update_exp_average
-      param.custom_update_condition = custom_update_condition
-      param.custom_update_accumulate_batches = custom_update_accumulate_batches
-    if constraints:
-      if 'L1' in self.attrs and self.attrs['L1'] > 0:
-        self.constraints += T.constant(self.attrs['L1'], name="L1", dtype='floatX') * abs(param).sum()
-      if 'L2' in self.attrs and self.attrs['L2'] > 0:
-        self.constraints += T.constant(self.attrs['L2'], name="L2", dtype='floatX') * (param**2).sum()
-      if self.attrs.get('L2_eye', 0) > 0:
-        L2_eye = T.constant(self.attrs['L2_eye'], name="L2_eye", dtype='floatX')
-        if param.ndim == 2:
-          eye = tiled_eye(param.shape[0], param.shape[1], dtype=param.dtype)
-          self.constraints += L2_eye * ((param - eye)**2).sum()
-        else:  # standard L2
-          self.constraints += L2_eye * (param**2).sum()
-      if 'varreg' in self.attrs and self.attrs['varreg'] > 0:
-        self.constraints += self.attrs['varreg'] * (1.0 * T.sqrt(T.var(param)) - 1.0 / numpy.sum(param.get_value().shape))**2
-    return param
-
-  def get_branching(self):
-    return sum([W.get_value().shape[0] for W in self.W_in]) + 1
-
-  def get_energy(self):
-    energy =  self.b / self.attrs['n_out']
-    for W in self.W_in:
-      energy += T.sum(W, axis = 0)
-    return energy
-
-  def make_constraints(self):
-    c = self.constraints
-    f32_index = T.cast(self.index, "float32")
-    if self.attrs.get('output_L2_reg', 0.0):
-      # Note: For the output layer, it might even make sense to use a negative factor. http://www.danielpovey.com/files/2016_interspeech_mmi.pdf
-      assert self.output.ndim == 3
-      l2 = f32_index * T.sum(T.sqr(self.output), axis=2)
-      c += numpy.float32(self.attrs.get('output_L2_reg', 0.0)) * T.sum(l2)
-    if self.attrs.get('output_entropy_reg', 0.0):
-      assert self.output.ndim == 3
-      epsilon = numpy.float32(1e-10)
-      entropy = f32_index * (-T.sum(self.output * T.log(self.output + epsilon), axis=2))
-      c += numpy.float32(self.attrs.get('output_entropy_reg', 0.0)) * T.sum(entropy)
-    if self.attrs.get('output_entropy_exp_reg', 0.0):
-      assert self.output.ndim == 3
-      entropy = f32_index * (-T.sum(T.exp(self.output) * self.output, axis=2))
-      c += numpy.float32(self.attrs.get('output_entropy_exp_reg', 0.0)) * T.sum(entropy)
-    return c
-
-  def make_consensus(self, networks, axis=2):
-    cns = self.attrs['consensus']
-    if cns == 'max':
-      return T.max(networks, axis=axis)
-    elif cns == 'min':
-      return T.min(networks, axis=axis)
-    elif cns == 'mean':
-      return T.mean(networks, axis=axis)
-    elif cns == 'flat':
-      if self.depth == 1:
-        return networks
-      if axis == 2:
-        return networks.flatten(ndim=3)
-        #return T.reshape(networks, (networks.shape[0], networks.shape[1], T.prod(networks.shape[2:]) ))
-      else:
-        return networks.flatten(ndim=2) # T.reshape(networks, (networks.shape[0], T.prod(networks.shape[1:]) ))
-    elif cns == 'sum':
-      return T.sum(networks, axis=axis, acc_dtype=theano.config.floatX)
-    elif cns == 'prod':
-      return T.prod(networks, axis=axis)
-    elif cns == 'var':
-      return T.var(networks, axis=axis)
-    elif cns == 'project':
-      p = self.add_param(self.create_random_uniform_weights(self.attrs['n_out'], 1, self.attrs['n_out'] + self.depth + 1))
-      return T.tensordot(p, networks, [[1], [axis]])
-    elif cns == 'random':
-      idx = self.rng.random_integers(size=(1,), low=0, high=self.depth)
-      if axis == 0: return networks[idx]
-      if axis == 1: return networks[:,idx]
-      if axis == 2: return networks[:,:,idx]
-      if axis == 3: return networks[:,:,:,idx]
-      assert False, "axis too large"
-    else:
-      assert False, "consensus method unknown: " + cns
-
-  def batch_norm(self, h, dim, use_shift=True, use_std=True, use_sample=0.0, force_sample=False, index=None,
-                 sample_mean=None, gamma=None, beta=None, depth_norm=False):
-    x = h
-    if h.ndim == 3:
-      if index is None: index = self.index
-      x = h.reshape((h.shape[0]*h.shape[1],h.shape[2]))[(index.flatten()>0).nonzero()]
-    elif h.ndim == 4: # index is sizes here
-      assert index is not None
-      x = h.reshape((h.shape[0] * h.shape[1] * h.shape[2], h.shape[3]))
-      #x = x[(T.gt(x,numpy.float32(0))>0).nonzero()]
-    mean = T.mean(x,axis=0)
-    std = T.sqrt(T.mean((x - mean)**2,axis=0))
-    if sample_mean is None:
-      sample_mean = self.add_param(theano.shared(numpy.zeros((dim,), 'float32'), '%s_%s_mean' % (self.name,h.name)),
-                                   custom_update=mean,
-                                   custom_update_normalized=True)
-    self.sample_mean = sample_mean
-    sample_std = T.sqrt(T.mean((x - sample_mean)**2,axis=0))
-    if not self.train_flag and not force_sample:
-      use_sample = 1.0
-    mean = T.constant(1.-use_sample,'float32') * mean + T.constant(use_sample,'float32') * sample_mean
-    std = T.constant(1.-use_sample,'float32') * std + T.constant(use_sample,'float32') * sample_std
-    if h.ndim == 3:
-      mean = mean.dimshuffle('x','x',0).repeat(h.shape[0],axis=0).repeat(h.shape[1],axis=1)
-      std = std.dimshuffle('x', 'x', 0).repeat(h.shape[0],axis=0).repeat(h.shape[1],axis=1)
-    elif h.ndim == 4:
-      mean = mean.dimshuffle('x', 'x', 'x', 0).repeat(h.shape[0], axis=0).repeat(h.shape[1], axis=1).repeat(h.shape[2], axis=2)
-      std = std.dimshuffle('x', 'x', 'x', 0).repeat(h.shape[0], axis=0).repeat(h.shape[1], axis=1).repeat(h.shape[2], axis=2)
-    else:
-      mean = mean.dimshuffle('x', 0).repeat(h.shape[0], axis=0)
-      std = std.dimshuffle('x', 0).repeat(h.shape[0], axis=0)
-    bn = (h - mean) / (std + numpy.float32(1e-10))
-    if use_std:
-      if gamma is None:
-        gamma = self.add_param(self.shared(numpy.zeros((dim,), 'float32') + numpy.float32(0.1), "%s_%s_gamma" % (self.name,h.name)))
-      self.gamma = gamma
-      if h.ndim == 3:
-        bn *= gamma.dimshuffle('x','x',0).repeat(h.shape[0],axis=0).repeat(h.shape[1],axis=1)
-      elif h.ndim == 4:
-        bn *= gamma.dimshuffle('x', 'x', 'x', 0).repeat(h.shape[0], axis=0).repeat(h.shape[1], axis=1).repeat(h.shape[2], axis=2)
-      else:
-        bn *= gamma.dimshuffle('x', 0).repeat(h.shape[0], axis=0)
-    if use_shift:
-      if beta is None:
-        beta = self.add_param(self.shared(numpy.zeros((dim,), 'float32'), "%s_%s_beta" % (self.name,h.name)))
-      self.beta = beta
-      bn += beta
-    if depth_norm:
-      bn = bn / (T.sqrt(2)**self.D)
-    return bn
-
-  def make_output(self, output, collapse = True, sample_mean=None, gamma=None):
-    self.output = output
-    if collapse and self.depth > 1:
-      self.output = self.make_consensus(self.output)
-      if self.attrs['consensus'] == 'flat':
-        self.attrs['n_out'] *= self.depth
-    if self.attrs['batch_norm']:
-      self.output = self.batch_norm(self.output, self.attrs['n_out'], sample_mean=sample_mean, gamma=gamma, use_sample=self.attrs['bn_use_sample'])
-    if self.attrs['residual']:
-      from NetworkHiddenLayer import concat_sources
-      z, n_in = concat_sources(self.sources, unsparse=True, expect_source=False)
-      assert n_in == self.attrs['n_out']
-      self.output += z
-    if self.attrs['layer_drop'] > 0.0:
-      # Stochastic Depth, http://arxiv.org/abs/1603.09382
-      from NetworkHiddenLayer import concat_sources
-      z, n_in = concat_sources(self.sources, unsparse=True, expect_source=False)
-      n_out = self.attrs['n_out']
-      if n_in != n_out:
-        print("Layer drop with additional projection %i -> %i" % (n_in, n_out), file=log.v4)
-        if n_in > 0:
-          self.W_drop = self.add_param(self.create_forward_weights(n_in, n_out, name="W_drop_%s" % self.name))
-          z = T.dot(z, self.W_drop)
-        else:
-          z = 0
-      if self.train_flag:
-        from theano.sandbox.rng_mrg import MRG_RandomStreams as RandomStreams
-        rng = RandomStreams(self.rng.randint(1234) + 1)
-        import theano.ifelse
-        drop = rng.binomial(n=1, p=self.attrs['layer_drop'], size=(1,), dtype='int8')[0]
-        # drop = theano.printing.Print("drop")(drop)
-        self.output = theano.ifelse.ifelse(drop, z, self.output)
-      else:
-        drop = self.attrs['layer_drop']
-        self.output = numpy.float32(drop) * z + numpy.float32(1.0 - drop) * self.output
-    if self.attrs['sparse']:
-      self.output = T.argmax(self.output, axis=-1, keepdims=True)
-    if self.attrs['sparse_filtering']:
-      # https://dlacombejr.github.io/programming/2015/09/13/sparse-filtering-implemenation-in-theano.html
-      fs = T.sqrt(self.output ** 2 + 1e-8)    # numerical stability
-      l2fs = T.sqrt(T.sum(fs ** 2, axis=1))   # l2 norm of row
-      nfs = fs / l2fs.dimshuffle(0, 'x')      # normalize rows
-      l2fn = T.sqrt(T.sum(nfs ** 2, axis=0))  # l2 norm of column
-      self.output = nfs / l2fn.dimshuffle('x', 0)   # normalize columns
-    self.output.name = "%s.output" % self.name
-    self._output = output
-
-  def transfer_output(self, device):
-    if device is None:
-      device = str(theano.config.device)
-      if self.device is None:
-        return self.output
-    if device != self.device:
-      self.output = self._output.transfer(device) # requires Theano 0.8
-    else:
-      self.output = self._output
 
   def to_json(self):
     attrs = super(Layer, self).to_json()
@@ -826,36 +578,20 @@ class SourceLayer(Container):
       x_out = network.x
     assert not sources, 'specify `"from": "null"` in json'  # or just ignore?
     assert dropout == 0
-    if getattr(x_out.tag, "test_value", None) is None:
-      if not sparse:
-        x_out.tag.test_value = numpy.random.rand(3,2,n_out).astype('float32')
-    if index and getattr(index.tag, "test_value", None) is None:
-      index.tag.test_value = numpy.ones((3,2), dtype='int8')
     if not delay:
       self.output = x_out
     else:
       self.output = T.inc_subtensor(T.zeros_like(x_out)[delay:], x_out[:-delay])
     self.set_attr('n_out', n_out)
-    self.set_attr('sparse', sparse)
     self.set_attr('delay', delay)
     self.index = index
-    self.device = 'cpu'
     self.eval_flag = eval_flag
-
-  def make_constraints(self):
-    return 0
 
   def cost(self):
     return None, None
 
   def errors(self):
-    """
-    :rtype: theano.Variable
-    """
     return None
-
-  def transfer_output(self, device):
-    pass
 
 class OutputLayer(Layer):
   layer_class = "softmax"
