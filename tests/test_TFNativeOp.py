@@ -3,15 +3,32 @@
 
 from __future__ import print_function
 
-import logging
-logging.getLogger('tensorflow').disabled = True
-import tensorflow as tf
 import os
 import sys
 print("__file__:", __file__)
 base_path = os.path.realpath(os.path.dirname(os.path.abspath(__file__)) + "/..")
 print("base path:", base_path)
 sys.path.insert(0, base_path)
+
+# Do this here such that we always see this log in Travis.
+orig_stdout = sys.stdout
+try:
+  sys.stdout = sys.__stdout__  # Nosetests has overwritten sys.stdout
+
+  # Do this very early, before we import numpy/TF, such that it can have an effect.
+  for env_var in ["OPENBLAS_NUM_THREADS", "GOTO_NUM_THREADS", "OMP_NUM_THREADS"]:
+    print("Env %s = %s" % (env_var, os.environ.get(env_var, None)))
+    # Overwrite with 1. This should make the test probably more deterministic. Not sure...
+    os.environ[env_var] = "1"
+
+finally:
+  sys.stdout = orig_stdout
+
+
+import logging
+logging.getLogger('tensorflow').disabled = True
+import tensorflow as tf
+
 from TFNativeOp import *
 from TFUtil import is_gpu_available, get_available_gpu_min_compute_capability, CudaEnv
 import Util
