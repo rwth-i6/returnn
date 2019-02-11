@@ -1624,6 +1624,21 @@ def variable_summaries(var, name=None, with_histogram=False):
       tf.summary.histogram('%s_histogram' % name, var)
 
 
+def get_valid_scope_name_from_str(s):
+  """
+  :param str s: some name
+  :return: valid scope name, might be just s. see tf._VALID_SCOPE_NAME_REGEX and tf._VALID_OP_NAME_REGEX
+  :rtype: str
+  """
+  # For the root name scope, it's even more restrictive, and we must also cover this case.
+  # NOTE: Be careful changing this logic. Try to never change the behavior for existing cases,
+  # because this name is used e.g. for layers, and you might introduce incompatibility by changes here.
+  s = s.replace(":", "__")
+  if s[:1] in "_-\\/":  # invalid first chars
+    s = (".%i." % ord(s[0])) + s[1:]
+  return s
+
+
 def get_current_var_scope_name():
   """
   :return: current absolute variable scope name, via tf.variable_scope

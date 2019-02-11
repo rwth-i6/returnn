@@ -292,11 +292,8 @@ class LayerBase(object):
     :return: valid scope name, might be just name. see tf._VALID_SCOPE_NAME_REGEX and tf._VALID_OP_NAME_REGEX
     :rtype: str
     """
-    # For the root name scope, it's even more restrictive, and we must also cover this case.
-    name = name.replace(":", "__")
-    if name[:1] in "_-\\/":  # invalid first chars
-      name = (".%i." % ord(name[0])) + name[1:]
-    return name
+    from TFUtil import get_valid_scope_name_from_str
+    return get_valid_scope_name_from_str(name)
 
   @classmethod
   def cls_layer_scope(cls, name):

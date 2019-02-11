@@ -665,7 +665,11 @@ class WrapOptimizer:
       if not global_norm_tag:
         norm = self.get_global_grad_norm()
       else:
-        norm = self._global_norm({self.var_grads[var] for var in self.vars_by_tag[global_norm_tag]})
+        from TFUtil import get_valid_scope_name_from_str
+        with tf.name_scope("global_norm_for_tag_%s" % get_valid_scope_name_from_str(global_norm_tag)):
+          norm = self._global_norm({self.var_grads[var] for var in self.vars_by_tag[global_norm_tag]})
+        if self.optimizer.config.bool_or_other("debug_grad_summaries", False):
+          tf.summary.scalar("global_norm_for_tag_%s" % get_valid_scope_name_from_str(global_norm_tag), norm)
       (grad,), _ = tf.clip_by_global_norm([grad], clip_norm=clip_norm, use_norm=norm)
       return grad
 
