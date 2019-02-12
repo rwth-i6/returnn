@@ -21,7 +21,8 @@ Features include:
 
 [Please read the documentation for more information](http://returnn.readthedocs.io/).
 [Here is the video recording of a RETURNN overview talk](https://www-i6.informatik.rwth-aachen.de/web/Software/returnn/downloads/workshop-2019-01-29/01.recording.cut.mp4)
-([slides](https://www-i6.informatik.rwth-aachen.de/web/Software/returnn/downloads/workshop-2019-01-29/01.returnn-overview.session1.handout.v1.pdf)).
+([slides](https://www-i6.informatik.rwth-aachen.de/web/Software/returnn/downloads/workshop-2019-01-29/01.returnn-overview.session1.handout.v1.pdf);
+hosted by eBay).
 
 There are some example demos in `/demos`
 which work on artifically generated data,
