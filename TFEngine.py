@@ -1493,7 +1493,7 @@ class Engine(object):
           assert all([all([c not in "\n;" for c in v]) for v in value_list])
           return ';'.join(value_list)
 
-        results_per_seq_sorted = [create_output_string(seq_idx_to_tag[seq_idx]) for seq_idx in range(len(results_per_seq))]
+        results_per_seq = [create_output_string(seq_idx_to_tag[seq_idx]) for seq_idx in range(len(results_per_seq))]
 
         for res in results_per_seq:
           f.write(str(res) + '\n')
