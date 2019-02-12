@@ -1,4 +1,5 @@
 
+# -*- coding: utf-8 -*-
 # Copyright (c) 2016, Albert Zeyer, www.az2000.de
 # All rights reserved.
 # file created 2011-04-15
@@ -55,6 +56,7 @@ import os.path
 import threading
 import keyword
 import inspect
+import contextlib
 try:
     from traceback import StackSummary, FrameSummary
 except ImportError:
@@ -63,7 +65,7 @@ except ImportError:
     StackSummary = FrameSummary = _Dummy
 
 # noinspection PySetFunctionToLiteral,SpellCheckingInspection
-pykeywords = set(keyword.kwlist) | set(["None", "True", "False"])
+py_keywords = set(keyword.kwlist) | set(["None", "True", "False"])
 
 _cur_pwd = os.getcwd()
 _threading_main_thread = threading.main_thread() if hasattr(threading, "main_thread") else None
@@ -83,57 +85,74 @@ except NameError:  # Python3
 
 def parse_py_statement(line):
     state = 0
-    curtoken = ""
+    cur_token = ""
     spaces = " \t\n"
     ops = ".,;:+-*/%&!=|(){}[]^<>"
     i = 0
-    def _escape_char(c):
-        if c == "n": return "\n"
-        elif c == "t": return "\t"
-        else: return c
+
+    def _escape_char(_c):
+        if _c == "n":
+            return "\n"
+        elif _c == "t":
+            return "\t"
+        else:
+            return _c
+
     while i < len(line):
         c = line[i]
         i += 1
         if state == 0:
-            if c in spaces: pass
-            elif c in ops: yield ("op", c)
-            elif c == "#": state = 6
-            elif c == "\"": state = 1
-            elif c == "'": state = 2
-            else:
-                curtoken = c
-                state = 3
-        elif state == 1: # string via "
-            if c == "\\": state = 4
+            if c in spaces:
+                pass
+            elif c in ops:
+                yield ("op", c)
+            elif c == "#":
+                state = 6
             elif c == "\"":
-                yield ("str", curtoken)
-                curtoken = ""
-                state = 0
-            else: curtoken += c
-        elif state == 2: # string via '
-            if c == "\\": state = 5
+                state = 1
             elif c == "'":
-                yield ("str", curtoken)
-                curtoken = ""
+                state = 2
+            else:
+                cur_token = c
+                state = 3
+        elif state == 1:  # string via "
+            if c == "\\":
+                state = 4
+            elif c == "\"":
+                yield ("str", cur_token)
+                cur_token = ""
                 state = 0
-            else: curtoken += c
-        elif state == 3: # identifier
+            else:
+                cur_token += c
+        elif state == 2:  # string via '
+            if c == "\\":
+                state = 5
+            elif c == "'":
+                yield ("str", cur_token)
+                cur_token = ""
+                state = 0
+            else:
+                cur_token += c
+        elif state == 3:  # identifier
             if c in spaces + ops + "#\"'":
-                yield ("id", curtoken)
-                curtoken = ""
+                yield ("id", cur_token)
+                cur_token = ""
                 state = 0
                 i -= 1
-            else: curtoken += c
-        elif state == 4: # escape in "
-            curtoken += _escape_char(c)
+            else:
+                cur_token += c
+        elif state == 4:  # escape in "
+            cur_token += _escape_char(c)
             state = 1
-        elif state == 5: # escape in '
-            curtoken += _escape_char(c)
+        elif state == 5:  # escape in '
+            cur_token += _escape_char(c)
             state = 2
-        elif state == 6: # comment
-            curtoken += c
-    if state == 3: yield ("id", curtoken)
-    elif state == 6: yield ("comment", curtoken)
+        elif state == 6:  # comment
+            cur_token += c
+    if state == 3:
+        yield ("id", cur_token)
+    elif state == 6:
+        yield ("comment", cur_token)
 
 
 def parse_py_statements(source_code):
@@ -143,19 +162,23 @@ def parse_py_statements(source_code):
 
 
 def grep_full_py_identifiers(tokens):
-    global pykeywords
+    global py_keywords
     tokens = list(tokens)
     i = 0
     while i < len(tokens):
-        tokentype, token = tokens[i]
+        token_type, token = tokens[i]
         i += 1
-        if tokentype != "id": continue
+        if token_type != "id":
+            continue
         while i+1 < len(tokens) and tokens[i] == ("op", ".") and tokens[i+1][0] == "id":
             token += "." + tokens[i+1][1]
             i += 2
-        if token == "": continue
-        if token in pykeywords: continue
-        if token[0] in ".0123456789": continue
+        if token == "":
+            continue
+        if token in py_keywords:
+            continue
+        if token[0] in ".0123456789":
+            continue
         yield token
 
 
@@ -165,8 +188,10 @@ def set_linecache(filename, source):
 
 
 def simple_debug_shell(globals, locals):
-    try: import readline
-    except ImportError: pass # ignore
+    try:
+        import readline
+    except ImportError:
+        pass  # ignore
     COMPILE_STRING_FN = "<simple_debug_shell input>"
     while True:
         try:
@@ -174,13 +199,15 @@ def simple_debug_shell(globals, locals):
         except (KeyboardInterrupt, EOFError):
             print("breaked debug shell: " + sys.exc_info()[0].__name__)
             break
-        if s.strip() == "": continue
+        if s.strip() == "":
+            continue
         try:
             c = compile(s, COMPILE_STRING_FN, "single")
         except Exception as e:
             print("%s : %s in %r" % (e.__class__.__name__, str(e), s))
         else:
             set_linecache(COMPILE_STRING_FN, s)
+            # noinspection PyBroadException
             try:
                 ret = eval(c, globals, locals)
             except (KeyboardInterrupt, SystemExit):
@@ -190,8 +217,10 @@ def simple_debug_shell(globals, locals):
                 print("Error executing %r" % s)
                 better_exchook(*sys.exc_info(), autodebugshell=False)
             else:
+                # noinspection PyBroadException
                 try:
-                    if ret is not None: print(ret)
+                    if ret is not None:
+                        print(ret)
                 except Exception:
                     print("Error printing return value of %r" % s)
                     better_exchook(*sys.exc_info(), autodebugshell=False)
@@ -254,56 +283,25 @@ def output_limit():
     return 300
 
 
-def pp_extra_info(obj, depthlimit = 3):
-    s = []
-    if hasattr(obj, "__len__"):
-        try:
-            if type(obj) in (str,unicode,list,tuple,dict) and len(obj) <= 5:
-                pass # don't print len in this case
-            else:
-                s += ["len = " + str(obj.__len__())]
-        except Exception: pass
-    if depthlimit > 0 and hasattr(obj, "__getitem__"):
-        try:
-            if type(obj) in (str,unicode):
-                pass # doesn't make sense to get subitems here
-            else:
-                subobj = obj.__getitem__(0)
-                extra_info = pp_extra_info(subobj, depthlimit - 1)
-                if extra_info != "":
-                    s += ["_[0]: {" + extra_info + "}"]
-        except Exception: pass
-    return ", ".join(s)
-
-
-def pretty_print(obj):
-    s = repr(obj)
-    limit = output_limit()
-    if len(s) > limit:
-        s = s[:limit - 3] + "..."
-    extra_info = pp_extra_info(obj)
-    if extra_info != "": s += ", " + extra_info
-    return s
-
-
 def fallback_findfile(filename):
     mods = [m for m in sys.modules.values() if m and hasattr(m, "__file__") and filename in m.__file__]
     if len(mods) == 0:
         return None
-    altfn = mods[0].__file__
-    if altfn[-4:-1] == ".py": altfn = altfn[:-1] # *.pyc or whatever
-    if not os.path.exists(altfn) and altfn.startswith("./"):
+    alt_fn = mods[0].__file__
+    if alt_fn[-4:-1] == ".py":
+        alt_fn = alt_fn[:-1] # *.pyc or whatever
+    if not os.path.exists(alt_fn) and alt_fn.startswith("./"):
         # Maybe current dir changed.
-        altfn2 = _cur_pwd + altfn[1:]
-        if os.path.exists(altfn2):
-            return altfn2
+        alt_fn2 = _cur_pwd + alt_fn[1:]
+        if os.path.exists(alt_fn2):
+            return alt_fn2
         # Try dirs of some other mods.
         for m in ["__main__", "better_exchook"]:
             if hasattr(sys.modules.get(m), "__file__"):
-                altfn2 = os.path.dirname(sys.modules[m].__file__) + altfn[1:]
-                if os.path.exists(altfn2):
-                    return altfn2
-    return altfn
+                alt_fn2 = os.path.dirname(sys.modules[m].__file__) + alt_fn[1:]
+                if os.path.exists(alt_fn2):
+                    return alt_fn2
+    return alt_fn
 
 
 def is_source_code_missing_open_brackets(source_code):
@@ -334,7 +332,8 @@ def get_source_code(filename, lineno, module_globals):
     # In case of a multi-line statement, lineno is usually the last line.
     # We are checking for missing open brackets and add earlier code lines.
     while is_source_code_missing_open_brackets(source_code):
-        if lineno <= 0: break
+        if lineno <= 0:
+            break
         lineno -= 1
         source_code = "".join([linecache.getline(filename, lineno, module_globals), source_code])
     return source_code
@@ -353,7 +352,8 @@ def str_visible_len(s):
 
 
 def add_indent_lines(prefix, s):
-    if not s: return prefix
+    if not s:
+        return prefix
     prefix_len = str_visible_len(prefix)
     lines = s.splitlines(True)
     return "".join([prefix + lines[0]] + [" " * prefix_len + l for l in lines[1:]])
@@ -364,9 +364,11 @@ def get_indent_prefix(s):
 
 
 def get_same_indent_prefix(lines):
-    if not lines: return ""
+    if not lines:
+        return ""
     prefix = get_indent_prefix(lines[0])
-    if not prefix: return ""
+    if not prefix:
+        return ""
     if all([l.startswith(prefix) for l in lines]):
         return prefix
     return None
@@ -416,6 +418,31 @@ class Color:
     def get_global_color_enabled(cls):
         return to_bool(os.environ.get("CLICOLOR", ""), fallback=True)
 
+    @classmethod
+    def is_dark_terminal_background(cls):
+        """
+        :return: Whether we have a dark Terminal background color, or None if unknown.
+            We currently just check the env var COLORFGBG,
+            which some terminals define like "<foreground-color>:<background-color>",
+            and if <background-color> in {0,1,2,3,4,5,6,8}, then we have some dark background.
+            There are many other complex heuristics we could do here, which work in some cases but not in others.
+            See e.g. `here <https://stackoverflow.com/questions/2507337/terminals-background-color>`__.
+            But instead of adding more heuristics, we think that explicitly setting COLORFGBG would be the best thing,
+            in case it's not like you want it.
+        :rtype: bool|None
+        """
+        if os.environ.get("COLORFGBG", None):
+            parts = os.environ["COLORFGBG"].split(";")
+            try:
+                last_number = int(parts[-1])
+                if 0 <= last_number <= 6 or last_number == 8:
+                    return True
+                else:
+                    return False
+            except ValueError:  # not an integer?
+                pass
+        return None  # unknown (and bool(None) == False, i.e. expect light by default)
+
     def __init__(self, enable=None):
         """
         :param bool|None enable:
@@ -423,11 +450,20 @@ class Color:
         if enable is None:
             enable = self.get_global_color_enabled()
         self.enable = enable
+        self._dark_terminal_background = self.is_dark_terminal_background()
+        # Set color palettes (will be used sometimes as bold, sometimes as normal).
+        # 5 colors, for: code/general, error-msg, string, comment, line-nr.
+        # Try to set them in a way such that if we guessed the terminal background color wrongly,
+        # it is still not too bad (although people might disagree here...).
+        if self._dark_terminal_background:
+            self.fg_colors = ["yellow", "red", "cyan", "white", "magenta"]
+        else:
+            self.fg_colors = ["blue", "red", "cyan", "white", "magenta"]
 
     def color(self, s, color=None, bold=False):
         """
         :param str s:
-        :param str|None color: e.g. "blue"
+        :param str|None color: sth in self.ColorIdxTable
         :param bool bold:
         :return: s optionally wrapped with ansi escape codes
         :rtype: str
@@ -443,6 +479,12 @@ class Color:
             return s
         start = "\x1b[%sm" % ";".join(map(str, code_seq))
         end = "\x1b[0m"
+        while s[:1] == " ":  # move prefix spaces outside
+            start = " " + start
+            s = s[1:]
+        while s[-1:] == " ":  # move postfix spaces outside
+            end += " "
+            s = s[:-1]
         return start + s + end
 
     def __call__(self, *args, **kwargs):
@@ -455,34 +497,48 @@ class Color:
         spaces = " \t\n"
         ops = ".,;:+-*/%&!=|(){}[]^<>"
         i = 0
-        curtoken = ""
+        cur_token = ""
         color_args = {0: {}, len(s): {}}  # type: dict[int,dict[str]] # i -> color kwargs
+
         def finish_identifier():
-            if curtoken in pykeywords:
-                color_args[max([k for k in color_args.keys() if k < i])] = {"color": "blue"}
+            if cur_token in py_keywords:
+                color_args[max([k for k in color_args.keys() if k < i])] = {"color": self.fg_colors[0]}
         while i < len(s):
             c = s[i]
             i += 1
             if c == "\n":
-                if state == 3: finish_identifier()
-                color_args[i] = {}; state = 0
+                if state == 3:
+                    finish_identifier()
+                color_args[i] = {}
+                state = 0
             elif state == 0:
-                if c in spaces: pass
-                elif c in ops: color_args[i - 1] = {"color": "blue"}; color_args[i] = {}
-                elif c == "#": color_args[i - 1] = {"color": "white"}; state = 6
-                elif c == '"': color_args[i - 1] = {"color": "cyan"}; state = 1
-                elif c == "'": color_args[i - 1] = {"color": "cyan"}; state = 2
+                if c in spaces:
+                    pass
+                elif c in ops:
+                    color_args[i - 1] = {"color": self.fg_colors[0]}
+                    color_args[i] = {}
+                elif c == "#":
+                    color_args[i - 1] = {"color": self.fg_colors[3]}
+                    state = 6
+                elif c == '"':
+                    color_args[i - 1] = {"color": self.fg_colors[2]}
+                    state = 1
+                elif c == "'":
+                    color_args[i - 1] = {"color": self.fg_colors[2]}
+                    state = 2
                 else:
-                    curtoken = c
+                    cur_token = c
                     color_args[i - 1] = {}
                     state = 3
             elif state == 1:  # string via "
-                if c == "\\": state = 4
+                if c == "\\":
+                    state = 4
                 elif c == "\"":
                     color_args[i] = {}
                     state = 0
             elif state == 2:  # string via '
-                if c == "\\": state = 5
+                if c == "\\":
+                    state = 5
                 elif c == "'":
                     color_args[i] = {}
                     state = 0
@@ -493,14 +549,15 @@ class Color:
                     state = 0
                     i -= 1
                 else:
-                    curtoken += c
+                    cur_token += c
             elif state == 4:  # escape in "
                 state = 1
             elif state == 5:  # escape in '
                 state = 2
             elif state == 6:  # comment
                 pass
-        if state == 3: finish_identifier()
+        if state == 3:
+            finish_identifier()
         out = ""
         i = 0
         while i < len(s):
@@ -508,6 +565,124 @@ class Color:
             out += self.color(s[i:j], **color_args[i])
             i = j
         return out
+
+
+class DomTerm:
+    """
+    DomTerm (https://github.com/PerBothner/DomTerm/) is a terminal emulator
+    with many extended escape codes, such as folding text away, or even generic HTML.
+    We can make use of some of these features (currently just folding text).
+    """
+
+    _is_domterm = None
+
+    @classmethod
+    def is_domterm(cls):
+        """
+        :return: whether we are inside DomTerm
+        :rtype: bool
+        """
+        import os
+        if cls._is_domterm is not None:
+            return cls._is_domterm
+        if not os.environ.get("DOMTERM"):
+            cls._is_domterm = False
+            return False
+        cls._is_domterm = True
+        return True
+
+    @contextlib.contextmanager
+    def logical_block(self, file=sys.stdout):
+        file.write("\033]110\007")
+        yield
+        file.write("\033]111\007")
+
+    @contextlib.contextmanager
+    def hide_button_span(self, mode, file=sys.stdout):
+        """
+        :param int mode: 1 or 2
+        :param file:
+        """
+        file.write("\033[83;%iu" % mode)
+        yield
+        file.write("\033[83;0u")
+
+    def indentation(self, file=sys.stdout):
+        file.write("\033]114;\"│\"\007")
+
+    def hide_button(self, file=sys.stdout):
+        file.write("\033[16u▶▼\033[17u")
+
+    @contextlib.contextmanager
+    def _temp_replace_attrib(self, obj, attr, new_value):
+        old_value = getattr(obj, attr)
+        setattr(obj, attr, new_value)
+        yield old_value
+        setattr(obj, attr, old_value)
+
+    @contextlib.contextmanager
+    def fold_text_stream(self, prefix, postfix="", hidden_stream=None, **kwargs):
+        """
+        :param str prefix: always visible
+        :param str postfix: always visible, right after.
+        :param io.Base hidden_stream: sys.stdout by default.
+            If this is sys.stdout, it will replace that stream,
+            and collect the data during the context (in the `with` block).
+        :param io.IOBase file: sys.stdout by default.
+        """
+        import io
+        if hidden_stream is None:
+            hidden_stream = sys.stdout
+        assert isinstance(hidden_stream, io.IOBase)
+        assert hidden_stream is sys.stdout, "currently not supported otherwise"
+        hidden_buf = io.StringIO()
+        with self._temp_replace_attrib(sys, "stdout", hidden_buf):
+            yield
+        self.fold_text(prefix=prefix, postfix=postfix, hidden=hidden_buf.getvalue(), **kwargs)
+
+    def fold_text(self, prefix, hidden, postfix="", file=None, align=0):
+        """
+        :param str prefix: always visible
+        :param str hidden: hidden
+            If this is sys.stdout, it will replace that stream,
+            and collect the data during the context (in the `with` block).
+        :param str postfix: always visible, right after. "" by default.
+        :param io.IOBase file: sys.stdout by default.
+        :param int align: remove this number of initial chars from hidden
+        """
+        if file is None:
+            file = sys.stdout
+        # Extra logic: Multi-line hidden. Add initial "\n" if not there.
+        if "\n" in hidden:
+            if hidden[:1] != "\n":
+                hidden = "\n" + hidden
+        # Extra logic: A final "\n" of hidden, make it always visible such that it looks nicer.
+        if hidden[-1:] == "\n":
+            hidden = hidden[:-1]
+            postfix += "\n"
+        if self.is_domterm():
+            with self.logical_block(file=file):
+                self.indentation(file=file)
+                self.hide_button(file=file)
+                file.write(prefix)
+                if prefix.endswith("\x1b[0m"):
+                    file.write(" ")  # bug in DomTerm?
+                with self.hide_button_span(2, file=file):
+                    hidden_ls = hidden.split("\n")
+                    hidden_ls = [s[align:] for s in hidden_ls]
+                    hidden = "\033]118\007".join(hidden_ls)
+                    file.write(hidden)
+        else:
+            file.write(prefix)
+            file.write(hidden.replace("\n", "\n "))
+        file.write(postfix)
+        file.flush()
+
+    def fold_text_string(self, prefix, hidden, **kwargs):
+        import io
+        output_buf = io.StringIO()
+        self.fold_text(prefix=prefix, hidden=hidden, file=output_buf, **kwargs)
+        return output_buf.getvalue()
 
 
 def is_at_exit():
@@ -527,6 +702,96 @@ def is_at_exit():
     return False
 
 
+class _Output:
+    def __init__(self, color):
+        """
+        :param Color color:
+        """
+        self.color = color
+        self.lines = []
+        self.dom_term = DomTerm() if DomTerm.is_domterm() else None
+
+    def __call__(self, s1, s2=None, **kwargs):
+        """
+        Adds to self.lines.
+        This strange function signature is for historical reasons.
+
+        :param str s1:
+        :param str|None s2:
+        :param kwargs: passed to self.color
+        """
+        if kwargs:
+            s1 = self.color(s1, **kwargs)
+        if s2 is not None:
+            s1 = add_indent_lines(s1, s2)
+        self.lines.append(s1 + "\n")
+
+    @contextlib.contextmanager
+    def fold_text_ctx(self, line):
+        """
+        Folds text, via :class:`DomTerm`, if available.
+        Notes that this temporarily overwrites self.lines.
+
+        :param str line: always visible
+        """
+        if not self.dom_term:
+            self.__call__(line)
+            yield
+            return
+        self.lines, old_lines = [], self.lines  # overwrite self.lines
+        yield  # collect output (in new self.lines)
+        self.lines, new_lines = old_lines, self.lines  # recover self.lines
+        hidden_text = "".join(new_lines)
+        import io
+        output_buf = io.StringIO()
+        prefix = ""
+        while line[:1] == " ":
+            prefix += " "
+            line = line[1:]
+        self.dom_term.fold_text(line, hidden=hidden_text, file=output_buf, align=len(prefix))
+        output_text = prefix[1:] + output_buf.getvalue()
+        self.lines.append(output_text)
+
+    def _pp_extra_info(self, obj, depthlimit=3):
+        s = []
+        if hasattr(obj, "__len__"):
+            try:
+                if type(obj) in (str,unicode,list,tuple,dict) and len(obj) <= 5:
+                    pass # don't print len in this case
+                else:
+                    s += ["len = " + str(obj.__len__())]
+            except Exception: pass
+        if depthlimit > 0 and hasattr(obj, "__getitem__"):
+            try:
+                if type(obj) in (str,unicode):
+                    pass # doesn't make sense to get subitems here
+                else:
+                    subobj = obj.__getitem__(0)
+                    extra_info = self._pp_extra_info(subobj, depthlimit - 1)
+                    if extra_info != "":
+                        s += ["_[0]: {" + extra_info + "}"]
+            except Exception: pass
+        return ", ".join(s)
+
+    def pretty_print(self, obj):
+        s = repr(obj)
+        limit = output_limit()
+        if len(s) > limit:
+            if self.dom_term:
+                s = self.color.py_syntax_highlight(s)
+                s = self.dom_term.fold_text_string("", s)
+            else:
+                s = s[:limit - 3]  # cut before syntax highlighting, to avoid missing color endings
+                s = self.color.py_syntax_highlight(s)
+                s += "..."
+        else:
+            s = self.color.py_syntax_highlight(s)
+        extra_info = self._pp_extra_info(obj)
+        if extra_info != "":
+            s += ", " + self.color.py_syntax_highlight(extra_info)
+        return s
+
+
 def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=False, with_color=None, with_vars=None):
     """
     :param types.TracebackType|types.FrameType|StackSummary tb: traceback. if None, will use sys._getframe
@@ -540,36 +805,32 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
     :rtype: list[str]
     """
     color = Color(enable=with_color)
-    out = []
-    def output(s1, s2=None, **kwargs):
-        if kwargs:
-            s1 = color(s1, **kwargs)
-        if s2 is not None:
-            s1 = add_indent_lines(s1, s2)
-        out.append(s1 + "\n")
+    output = _Output(color=color)
+
     def format_filename(s):
         base = os.path.basename(s)
         return (
-            color('"' + s[:-len(base)], "cyan") +
-            color(base, "cyan", bold=True) +
-            color('"', "cyan"))
-    def format_py_obj(obj):
-        return color.py_syntax_highlight(pretty_print(obj))
+            color('"' + s[:-len(base)], color.fg_colors[2]) +
+            color(base, color.fg_colors[2], bold=True) +
+            color('"', color.fg_colors[2]))
+    format_py_obj = output.pretty_print
     if tb is None:
+        # noinspection PyBroadException
         try:
             tb = get_current_frame()
             assert tb
         except Exception:
-            output(color("format_tb: tb is None and sys._getframe() failed", "red", bold=True))
-            return out
-    def isstacksummary(_tb):
+            output(color("format_tb: tb is None and sys._getframe() failed", color.fg_colors[1], bold=True))
+            return output.lines
+
+    def is_stack_summary(_tb):
         return isinstance(_tb, StackSummary)
     isframe = inspect.isframe
     if withTitle:
-        if isframe(tb) or isstacksummary(tb):
-            output(color('Traceback (most recent call first):', "blue"))
+        if isframe(tb) or is_stack_summary(tb):
+            output(color('Traceback (most recent call first):', color.fg_colors[0]))
         else:  # expect traceback-object (or compatible)
-            output(color('Traceback (most recent call last):', "blue"))
+            output(color('Traceback (most recent call last):', color.fg_colors[0]))
     if with_vars is None and is_at_exit():
         # Better to not show __repr__ of some vars, as this might lead to crashes
         # when native extensions are involved.
@@ -595,8 +856,10 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
                 limit = sys.tracebacklimit
         n = 0
         _tb = tb
+
         class NotFound(Exception):
             pass
+
         def _resolve_identifier(namespace, id):
             if id[0] not in namespace:
                 raise NotFound()
@@ -604,71 +867,92 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
             for part in id[1:]:
                 obj = getattr(obj, part)
             return obj
+
         def _try_set(old, prefix, func):
-            if old is not None: return old
-            try: return add_indent_lines(prefix, func())
-            except NotFound: return old
+            if old is not None:
+                return old
+            try:
+                return add_indent_lines(prefix, func())
+            except NotFound:
+                return old
             except Exception as e:
                 return prefix + "!" + e.__class__.__name__ + ": " + str(e)
+
         while _tb is not None and (limit is None or n < limit):
             if isframe(_tb):
                 f = _tb
-            elif isstacksummary(_tb):
+            elif is_stack_summary(_tb):
                 if isinstance(_tb[0], ExtendedFrameSummary):
                     f = _tb[0].tb_frame
                 else:
                     f = DummyFrame.from_frame_summary(_tb[0])
             else:
                 f = _tb.tb_frame
-            if allLocals is not None: allLocals.update(f.f_locals)
-            if allGlobals is not None: allGlobals.update(f.f_globals)
-            if hasattr(_tb, "tb_lineno"): lineno = _tb.tb_lineno
-            elif isstacksummary(_tb): lineno = _tb[0].lineno
-            else: lineno = f.f_lineno
+            if allLocals is not None:
+                allLocals.update(f.f_locals)
+            if allGlobals is not None:
+                allGlobals.update(f.f_globals)
+            if hasattr(_tb, "tb_lineno"):
+                lineno = _tb.tb_lineno
+            elif is_stack_summary(_tb):
+                lineno = _tb[0].lineno
+            else:
+                lineno = f.f_lineno
             co = f.f_code
             filename = co.co_filename
             name = co.co_name
-            output("".join([
+            file_descr = "".join([
                 '  ',
-                color("File ", "blue", bold=True), format_filename(filename), ", ",
-                color("line ", "blue"), color("%d" % lineno, "magenta"), ", ",
-                color("in ", "blue"), name]))
-            if not os.path.isfile(filename):
-                altfn = fallback_findfile(filename)
-                if altfn:
-                    output(color("    -- couldn't find file, trying this instead: ", "blue") +
-                           format_filename(altfn))
-                    filename = altfn
-            source_code = get_source_code(filename, lineno, f.f_globals)
-            if source_code:
-                source_code = remove_indent_lines(replace_tab_indents(source_code)).rstrip()
-                output("    line: ", color.py_syntax_highlight(source_code), color="blue")
-                if not with_vars:
-                    pass
-                elif isinstance(f, DummyFrame) and not f.have_vars_available:
-                    pass
+                color("File ", color.fg_colors[0], bold=True), format_filename(filename), ", ",
+                color("line ", color.fg_colors[0]), color("%d" % lineno, color.fg_colors[4]), ", ",
+                color("in ", color.fg_colors[0]), name])
+            with output.fold_text_ctx(file_descr):
+                if not os.path.isfile(filename):
+                    alt_fn = fallback_findfile(filename)
+                    if alt_fn:
+                        output(
+                            color("    -- couldn't find file, trying this instead: ", color.fg_colors[0]) +
+                            format_filename(alt_fn))
+                        filename = alt_fn
+                source_code = get_source_code(filename, lineno, f.f_globals)
+                if source_code:
+                    source_code = remove_indent_lines(replace_tab_indents(source_code)).rstrip()
+                    output("    line: ", color.py_syntax_highlight(source_code), color=color.fg_colors[0])
+                    if not with_vars:
+                        pass
+                    elif isinstance(f, DummyFrame) and not f.have_vars_available:
+                        pass
+                    else:
+                        with output.fold_text_ctx(color('    locals:', color.fg_colors[0])):
+                            already_printed_locals = set()
+                            for token_str in grep_full_py_identifiers(parse_py_statement(source_code)):
+                                splitted_token = tuple(token_str.split("."))
+                                for token in [splitted_token[0:i] for i in range(1, len(splitted_token) + 1)]:
+                                    if token in already_printed_locals:
+                                        continue
+                                    token_value = None
+                                    token_value = _try_set(
+                                        token_value, color("<local> ", color.fg_colors[0]),
+                                        lambda: format_py_obj(_resolve_identifier(f.f_locals, token)))
+                                    token_value = _try_set(
+                                        token_value, color("<global> ", color.fg_colors[0]),
+                                        lambda: format_py_obj(_resolve_identifier(f.f_globals, token)))
+                                    token_value = _try_set(
+                                        token_value, color("<builtin> ", color.fg_colors[0]),
+                                        lambda: format_py_obj(_resolve_identifier(f.f_builtins, token)))
+                                    token_value = token_value or color("<not found>", color.fg_colors[0])
+                                    prefix = (
+                                        '      %s ' % color(".", color.fg_colors[0], bold=True).join(token) +
+                                        color("= ", color.fg_colors[0], bold=True))
+                                    output(prefix, token_value)
+                                    already_printed_locals.add(token)
+                            if len(already_printed_locals) == 0:
+                                output(color("       no locals", color.fg_colors[0]))
                 else:
-                    output(color('    locals:', "blue"))
-                    alreadyPrintedLocals = set()
-                    for tokenstr in grep_full_py_identifiers(parse_py_statement(source_code)):
-                        splittedtoken = tuple(tokenstr.split("."))
-                        for token in [splittedtoken[0:i] for i in range(1, len(splittedtoken) + 1)]:
-                            if token in alreadyPrintedLocals: continue
-                            tokenvalue = None
-                            tokenvalue = _try_set(tokenvalue, color("<local> ", "blue"), lambda: format_py_obj(_resolve_identifier(f.f_locals, token)))
-                            tokenvalue = _try_set(tokenvalue, color("<global> ", "blue"), lambda: format_py_obj(_resolve_identifier(f.f_globals, token)))
-                            tokenvalue = _try_set(tokenvalue, color("<builtin> ", "blue"), lambda: format_py_obj(_resolve_identifier(f.f_builtins, token)))
-                            tokenvalue = tokenvalue or color("<not found>", "blue")
-                            prefix = '      %s ' % color(".", "blue", bold=True).join(token) + color("= ", "blue", bold=True)
-                            output(prefix, tokenvalue)
-                            alreadyPrintedLocals.add(token)
-                    if len(alreadyPrintedLocals) == 0:
-                        output(color("       no locals", "blue"))
-            else:
-                output(color('    -- code not available --', "blue"))
+                    output(color('    -- code not available --', color.fg_colors[0]))
             if isframe(_tb):
                 _tb = _tb.f_back
-            elif isstacksummary(_tb):
+            elif is_stack_summary(_tb):
                 _tb = StackSummary.from_list(_tb[1:])
                 if not _tb:
                     _tb = None
@@ -677,12 +961,12 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
             n += 1
 
     except Exception as e:
-        output(color("ERROR: cannot get more detailed exception info because:", "red", bold=True))
+        output(color("ERROR: cannot get more detailed exception info because:", color.fg_colors[1], bold=True))
         import traceback
         for l in traceback.format_exc().split("\n"):
             output("   " + l)
 
-    return out
+    return output.lines
 
 
 def print_tb(tb, file=None, **kwargs):
@@ -707,39 +991,49 @@ def better_exchook(etype, value, tb, debugshell=False, autodebugshell=True, file
     """
     if file is None:
         file = sys.stderr
-    def output(ln): file.write(ln + "\n")
+
+    def output(ln):
+        file.write(ln + "\n")
+
     color = Color(enable=with_color)
-    output(color("EXCEPTION", "red", bold=True))
-    allLocals,allGlobals = {},{}
+    output(color("EXCEPTION", color.fg_colors[1], bold=True))
+    all_locals, all_globals = {}, {}
     if tb is not None:
-        print_tb(tb, allLocals=allLocals, allGlobals=allGlobals, file=file, withTitle=True, with_color=color.enable)
+        print_tb(tb, allLocals=all_locals, allGlobals=all_globals, file=file, withTitle=True, with_color=color.enable)
     else:
-        output(color("better_exchook: traceback unknown", "red"))
+        output(color("better_exchook: traceback unknown", color.fg_colors[1]))
 
     import types
+
     def _some_str(value):
-        try: return str(value)
-        except Exception: return '<unprintable %s object>' % type(value).__name__
+        try:
+            return str(value)
+        except Exception:
+            return '<unprintable %s object>' % type(value).__name__
+
     def _format_final_exc_line(etype, value):
-        valuestr = _some_str(value)
-        if value is None or not valuestr:
-            line = color("%s" % etype, "red")
+        value_str = _some_str(value)
+        if value is None or not value_str:
+            line = color("%s" % etype, color.fg_colors[1])
         else:
-            line = color("%s" % etype, "red") + ": %s" % (valuestr,)
+            line = color("%s" % etype, color.fg_colors[1]) + ": %s" % (value_str,)
         return line
+
     if (isinstance(etype, BaseException) or
-        (hasattr(types, "InstanceType") and isinstance(etype, types.InstanceType)) or
-        etype is None or type(etype) is str):
+            (hasattr(types, "InstanceType") and isinstance(etype, types.InstanceType)) or
+            etype is None or type(etype) is str):
         output(_format_final_exc_line(etype, value))
     else:
         output(_format_final_exc_line(etype.__name__, value))
 
     if autodebugshell:
-        try: debugshell = int(os.environ["DEBUG"]) != 0
-        except Exception: pass
+        try:
+            debugshell = int(os.environ["DEBUG"]) != 0
+        except Exception:
+            pass
     if debugshell:
         output("---------- DEBUG SHELL -----------")
-        debug_shell(user_ns=allLocals, user_global_ns=allGlobals, traceback=tb)
+        debug_shell(user_ns=all_locals, user_global_ns=all_globals, traceback=tb)
     file.flush()
 
 
@@ -760,11 +1054,13 @@ def dump_all_thread_tracebacks(exclude_thread_ids=None, file=None):
         print("", file=file)
         threads = {t.ident: t for t in threading.enumerate()}
         for tid, stack in sys._current_frames().items():
-            if tid in exclude_thread_ids: continue
+            if tid in exclude_thread_ids:
+                continue
             # This is a bug in earlier Python versions.
             # http://bugs.python.org/issue17094
             # Note that this leaves out all threads not created via the threading module.
-            if tid not in threads: continue
+            if tid not in threads:
+                continue
             tags = []
             thread = threads.get(tid)
             if thread:
@@ -1028,6 +1324,19 @@ if __name__ == "__main__":
                     "     line repr>")
         obj = Obj()
         assert not obj
+    except Exception:
+        better_exchook(*sys.exc_info())
+
+    def f1(a):
+        f2(a + 1, 2)
+    def f2(a, b):
+        f3(a + b)
+    def f3(a):
+        b = ("abc" * 100) + "-interesting"  # some long demo str
+        a(b)  # error, not callable
+
+    try:
+        f1(13)
     except Exception:
         better_exchook(*sys.exc_info())
 
