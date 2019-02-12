@@ -1368,7 +1368,8 @@ class Engine(object):
         "Only %r are allowed in function eval_model as output_per_seq_format, but got: %r " % (allowed_outputs, output_per_seq_format))
 
       # always fetch seq_tag to map loss values to the corresponding line
-      extra_fetches = {"seq_tags": self.network.get_seq_tags()}
+      extra_fetches = {"seq_idx": self.network.get_extern_data("seq_idx", mark_data_key_as_used=True),
+                       "seq_tags": self.network.get_seq_tags(mark_data_key_as_used=True)}
 
       from TFUtil import identity
       losses_dict, _, _ = self.network.get_losses_initialized(reduce_func=identity, with_total=False)
@@ -1394,14 +1395,20 @@ class Engine(object):
       if "pos_error" in output_per_seq_format:
         extra_fetches["pos_error"] = loss_holder.get_normalized_error_value_per_seq(per_pos=True)
 
+    seq_idx_to_tag = {}  # we need this in order to write the results in the correct order later
     results_per_seq = {}  # seq_tag -> dict[str,float]. Results of fetches will be written in this dict
 
     # function to save the return values of each callback to the dict `results_per_seq`
-    def extra_fetches_callback(seq_tags, **extra_fetches_out):
+    def extra_fetches_callback(seq_idx, seq_tags, **extra_fetches_out):
       """
+      :param list[str] seq_idx:
       :param list[str] seq_tags:
       :param dict[str,numpy.ndarray] extra_fetches_out: see extra_fetches
       """
+
+      for batch_idx in range(len(seq_idx)):
+        corpus_seq_idx = dataset.get_corpus_seq_idx(seq_idx[batch_idx])
+        seq_idx_to_tag[corpus_seq_idx] = seq_tags[batch_idx]
 
       for name, value in extra_fetches_out.items():
         assert name in allowed_outputs
@@ -1486,9 +1493,7 @@ class Engine(object):
           assert all([all([c not in "\n;" for c in v]) for v in value_list])
           return ';'.join(value_list)
 
-        corpus_seq_idx_to_idx = {dataset.get_corpus_seq_idx(idx): idx for idx in range(len(results_per_seq))}
-        results_per_seq_sorted = [dataset.get_tag(corpus_seq_idx_to_idx[corp_idx]) for corp_idx in range(len(results_per_seq))]
-        results_per_seq = [create_output_string(seq_tag) for seq_tag in results_per_seq_sorted]
+        results_per_seq_sorted = [create_output_string(seq_idx_to_tag[seq_idx]) for seq_idx in range(len(results_per_seq))]
 
         for res in results_per_seq:
           f.write(str(res) + '\n')
