@@ -2474,6 +2474,47 @@ def test_rec_layer_search_select_src_reuse_layer():
     assert_equal(loop_net.layers["output_prob"].get_search_choices(), prev_out_choice)
 
 
+def test_onlineblstm():
+  network = {}
+  lstm_dim = 13
+  lstm_window = 5
+
+  def add_lstm(i, direction, src):
+    name = "lstm%i_%s" % (i, {1: "fw", -1: "bw"}[direction])
+    if direction > 0:
+      network[name] = {"class": "rec", "unit": "lstmp", "n_out": lstm_dim, "dropout": 0.1, "L2": 0.01, "direction": 1,
+                       "from": src}
+      return name
+    network["%s_win" % name] = {"class": "window", "window_size": lstm_window, "window_right": lstm_window - 1,
+                                "from": src}  # (B,T,W,D)
+    network["%s_mdims" % name] = {"class": "merge_dims", "axes": "BT", "from": ["%s_win" % name]}  # (B*T,W,D)
+    network["%s_rdims" % name] = {"class": "reinterpret_data", "enforce_batch_major": True, "set_axes": {"T": 1},
+                                  "from": ["%s_mdims" % name]}  # (B*T,W,D)
+    network["%s_rec" % name] = {
+      "class": "rec", "unit": "lstmp", "n_out": lstm_dim, "dropout": 0.1, "L2": 0.01, "direction": -1,
+      "from": ["%s_rdims" % name]}  # (B*T,W,D')
+    network["%s_cur" % name] = {"class": "slice", "axis": "T", "slice_end": 1, "from": ["%s_rec" % name]}  # (B*T,1,D')
+    network["%s_cursq" % name] = {"class": "squeeze", "axis": "T", "from": ["%s_cur" % name]}  # (B*T,D')
+    network["%s_res" % name] = {"class": "split_batch_time", "base": src[0], "from": ["%s_cursq" % name]}  # (B,T,D')
+    return "%s_res" % name
+
+  num_layers = 6
+  src = ["data"]
+  for i in range(num_layers):
+    fwd = add_lstm(i, 1, src)
+    bwd = add_lstm(i, -1, src)
+    src = [fwd, bwd]
+  # Focal Loss, https://arxiv.org/abs/1708.02002
+  network["output"] = {"class": "softmax", "loss": "ce", "loss_opts": {"focal_loss_factor": 2.0}, "from": src}
+  config = Config({
+    "num_inputs": 3,
+    "num_outputs": 7
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config, train_flag=True)
+    net.construct_from_dict(network)
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()
