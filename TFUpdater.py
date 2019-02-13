@@ -427,8 +427,12 @@ class WrapOptimizer:
       optimizer_opts = {"class": optimizer_opts}
     assert isinstance(optimizer_opts, dict)
     optimizer_opts = optimizer_opts.copy()
-    optim_class_name = optimizer_opts.pop("class")
-    optim_class = get_optimizer_class(optim_class_name)
+    if "class" in optimizer_opts:
+      optim_class_name = optimizer_opts.pop("class")
+      optim_class = get_optimizer_class(optim_class_name)
+    else:
+      _, default_opt = self._get_optimizer_item_for_opts(None, auto_create_new=True)
+      optim_class = default_opt.__class__
     from Util import collect_class_init_kwargs
     optim_class_kwargs = collect_class_init_kwargs(optim_class)
     if "epsilon" in optim_class_kwargs:
@@ -457,6 +461,7 @@ class WrapOptimizer:
     optim_config = self.config.typed_value("optimizer")
     if optim_config:
       assert isinstance(optim_config, (dict, str))
+      assert "class" in optim_config
       optimizer = self._create_optimizer(optim_config)
     elif self.config.bool("adam", False):
       assert not momentum
