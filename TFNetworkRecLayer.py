@@ -207,7 +207,7 @@ class RecLayer(_ConcatInputLayer):
       if not p.name.startswith(scope_name_prefix):
         continue
       assert p.name.startswith(scope_name_prefix) and p.name.endswith(":0")
-      self.params[p.name[len(scope_name_prefix):-2]] = p
+      self.add_param(p)
 
   def get_dep_layers(self):
     l = super(RecLayer, self).get_dep_layers()
