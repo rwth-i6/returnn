@@ -1650,7 +1650,7 @@ def test_RnnCellLayer_with_time():
   from GeneratingDataset import DummyDataset
   from TFNetworkLayer import InternalLayer, SourceLayer, ReduceLayer
   train_data = DummyDataset(input_dim=2, output_dim=3, num_seqs=10, seq_len=5)
-  with tf.variable_scope("test_RnnCellLayer_with_time"):
+  with make_scope() as session:
     extern_data = ExternData()
     extern_data.init_from_dataset(train_data)
     net = TFNetwork(extern_data=extern_data)
