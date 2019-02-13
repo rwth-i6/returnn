@@ -633,10 +633,14 @@ class WrapOptimizer:
         norm = tf.sqrt(half_squared_norm * tf.constant(2.0, dtype=half_squared_norm.dtype), name="global_norm")
       return norm
 
-    def get_global_grad_norm(self):
+    def get_global_grad_norm(self, tag=None):
       """
+      :param str|None tag:
+      :return: sqrt(sum(t**2 for t in all_grads))
       :rtype: tf.Tensor
       """
+      if tag:
+        return self.get_global_grad_norm_per_tag(tag=tag)
       if self._global_grad_norm is None:
         self._global_grad_norm = self._global_norm(self.all_grads)
       return self._global_grad_norm
@@ -644,6 +648,7 @@ class WrapOptimizer:
     def get_global_grad_norm_per_tag(self, tag):
       """
       :param str tag:
+      :return: sqrt(sum(t**2 for t in grads_of_vars_of_this_tag))
       :rtype: tf.Tensor
       """
       if tag not in self._global_grad_norm_per_tag:
@@ -684,12 +689,22 @@ class WrapOptimizer:
       :param str|None global_norm_tag:
       :rtype: tf.Tensor
       """
-      if not global_norm_tag:
-        norm = self.get_global_grad_norm()
-      else:
-        norm = self.get_global_grad_norm_per_tag(global_norm_tag)
+      norm = self.get_global_grad_norm(tag=global_norm_tag)
       (grad,), _ = tf.clip_by_global_norm([grad], clip_norm=clip_norm, use_norm=norm)
       return grad
+
+    def set_zero_on_high_global_norm(self, grad, grad_norm_threshold, global_norm_tag=None):
+      """
+      :param tf.Tensor grad:
+      :param float grad_norm_threshold:
+      :param str|None global_norm_tag:
+      :rtype: tf.Tensor
+      """
+      norm = self.get_global_grad_norm(tag=global_norm_tag)
+      # Also check nan/inf. Treat them as if we would have been over grad_norm_threshold.
+      zero_cond = tf.logical_or(tf.is_nan(norm), tf.is_inf(norm))
+      zero_cond = tf.logical_or(zero_cond, tf.greater(norm, grad_norm_threshold))
+      return tf.where(zero_cond, tf.zeros_like(grad), grad)
 
   @classmethod
   def _get_updater_opts_from_var(cls, var):
@@ -724,8 +739,12 @@ class WrapOptimizer:
     grad_clip_avg_norm = updater_opts.get("gradient_clip_avg_norm", self.config.float("gradient_clip_avg_norm", 0.0))
     grad_clip_global_norm = updater_opts.get(
       "gradient_clip_global_norm", self.config.float("gradient_clip_global_norm", 0.0))
+    global_norm_tag = updater_opts.get(
+      "global_norm_tag", self.config.value("global_norm_tag", None))
     grad_clip_global_norm_tag = updater_opts.get(
-      "gradient_clip_global_norm_tag", self.config.value("gradient_clip_global_norm_tag", None))
+      "gradient_clip_global_norm_tag", self.config.value("gradient_clip_global_norm_tag", global_norm_tag))
+    grad_norm_to_clip_to_zero = updater_opts.get(
+      "grad_norm_to_clip_to_zero", self.config.float("grad_norm_to_clip_to_zero", 0.0))
     maximize_grad_norm = updater_opts.get("maximize_grad_norm", self.config.float("maximize_grad_norm", 0))
 
     if maximize_grad_norm:
@@ -745,9 +764,6 @@ class WrapOptimizer:
         variable_summaries(var, name=get_base_name(var))
 
     # Also see tf.contrib.layers.optimizers.optimize_loss() for reference.
-    if updater_opts.get("gradient_nan_inf_filter", self.config.bool("gradient_nan_inf_filter", False)):
-      from TFUtil import nan_to_num
-      grad = nan_to_num(grad, nan_num=0.0, inf_num=0.0)
     if grad_noise:
       assert grad_noise > 0
       from TFUtil import add_scaled_noise_to_gradients
@@ -770,6 +786,13 @@ class WrapOptimizer:
       with tf.name_scope("grad_clip_global_norm"):
         grad = global_info.clip_by_global_norm(
           grad, clip_norm=grad_clip_global_norm, global_norm_tag=grad_clip_global_norm_tag)
+    if updater_opts.get("gradient_nan_inf_filter", self.config.bool("gradient_nan_inf_filter", False)):
+      from TFUtil import nan_to_num
+      grad = nan_to_num(grad, nan_num=0.0, inf_num=0.0)
+    if grad_norm_to_clip_to_zero:
+      with tf.name_scope("grad_norm_to_clip_to_zero"):
+        grad = global_info.set_zero_on_high_global_norm(
+          grad, grad_norm_threshold=grad_norm_to_clip_to_zero, global_norm_tag=global_norm_tag)
 
     updater_opts.assert_all_read()
 
