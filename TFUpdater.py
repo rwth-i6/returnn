@@ -244,9 +244,9 @@ class Updater(object):
         self.optim_op = tf.group(self.optim_op, *extra_updates_op_list)
 
     slot_names_per_optimizer = self.optimizer.get_slot_names_per_optimizer()
-    print("Initialize optimizer with slots %s." % slot_names_per_optimizer, file=log.v3)
     slot_vars = []
     for opt_key, slot_names in slot_names_per_optimizer.items():
+      print("Initialize optimizer (%s) with slots %s." % (opt_key or "default", slot_names), file=log.v3)
       for slot_name in slot_names:
         for v in self.optimizer.filter_var_list_per_optimizer_key(trainable_vars_for_gradients, opt_key=opt_key):
           slot_var = self.optimizer.get_slot(var=v, name=slot_name)
