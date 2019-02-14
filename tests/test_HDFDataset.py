@@ -183,6 +183,55 @@ def test_hdf_simple_iter():
   dummy_iter_dataset(dataset)
 
 
+def test_rnn_getCacheByteSizes_zero():
+  from Config import Config
+  config = Config({"cache_size": "0"})
+  import rnn
+  rnn.config = config
+  sizes = rnn.getCacheByteSizes()
+  assert len(sizes) == 3
+  assert all([s == 0 for s in sizes])
+
+
+def test_rnn_initData():
+  hdf_fn = generate_hdf_from_dummy()
+  from Config import Config
+  config = Config({"cache_size": "0", "train": hdf_fn, "dev": hdf_fn})
+  import rnn
+  rnn.config = config
+  rnn.initData()
+  train, dev = rnn.train_data, rnn.dev_data
+  assert train and dev
+  assert isinstance(train, HDFDataset)
+  assert isinstance(dev, HDFDataset)
+  assert train.cache_byte_size_total_limit == dev.cache_byte_size_total_limit == 0
+  assert train.cache_byte_size_limit_at_start == dev.cache_byte_size_limit_at_start == 0
+
+
+def test_hdf_no_cache_iter():
+  hdf_fn = generate_hdf_from_dummy()
+  dataset = HDFDataset(files=[hdf_fn])
+  dataset.initialize()
+  assert dataset.cache_byte_size_limit_at_start == 0
+  assert dataset.cache_byte_size_total_limit == 0
+
+  class DummyCallback:
+    def __init__(self):
+      self.was_called = False
+
+    def __call__(self, *args, **kwargs):
+      print("DummyCallback called!")
+      self.was_called = True
+
+  assert hasattr(dataset, "_preload_seqs")
+  dataset._preload_seqs = DummyCallback()
+
+  dummy_iter_dataset(dataset)
+  import time
+  time.sleep(1)  # maybe threads are running in background...
+  assert not dataset._preload_seqs.was_called
+
+
 def test_siamese_triplet_sampling():
   datasets_path = generate_dummy_hdf(3)
   dataset = SiameseHDFDataset(input_stream_name="features", seq_label_stream="classes", files=datasets_path)
