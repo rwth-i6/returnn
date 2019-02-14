@@ -28,7 +28,6 @@ sys.path.append(returnn_dir)
 
 # Returnn imports
 import rnn
-from Log import log
 from TFEngine import Runner
 from Dataset import init_dataset
 from Util import NumbersDict, Stats, deep_update_dict_values
@@ -124,7 +123,7 @@ def main(argv):
                          help="e.g. 'train', 'config:train', or sth like 'config:get_dataset('dev')'")
   argparser.add_argument('--do_search', default=False, action='store_true')
   argparser.add_argument('--beam_size', default=12, type=int)
-  argparser.add_argument('--dump_dir', required=True)
+  argparser.add_argument('--dump_dir')
   argparser.add_argument("--device", default="gpu")
   argparser.add_argument("--layers", default=["att_weights"], action="append",
                          help="Layer of subnet to grab")
@@ -134,7 +133,7 @@ def main(argv):
   argparser.add_argument("--seq_list", default=[], action="append", help="predefined list of seqs")
   argparser.add_argument("--min_seq_len", default="0", help="can also be dict")
   argparser.add_argument("--num_seqs", default=-1, type=int, help="stop after this many seqs")
-  argparser.add_argument("--output_format", default="npy", help="npy or png")
+  argparser.add_argument("--output_format", default="npy", help="npy, png or hdf")
   argparser.add_argument("--dropout", default=None, type=float, help="if set, overwrites all dropout values")
   argparser.add_argument("--train_flag", action="store_true")
   args = argparser.parse_args(argv[1:])
@@ -159,12 +158,17 @@ def main(argv):
     raise NotImplementedError
   min_seq_length = NumbersDict(eval(args.min_seq_len))
 
-  if not os.path.exists(args.dump_dir):
-    os.makedirs(args.dump_dir)
-  assert args.output_format in ["npy", "png"]
+  assert args.output_format in ["npy", "png", "hdf"]
+  if args.output_format in ["npy", "png"]:
+    assert args.dump_dir
+    if not os.path.exists(args.dump_dir):
+      os.makedirs(args.dump_dir)
+  plt = ticker = None
   if args.output_format == "png":
     import matplotlib.pyplot as plt  # need to import early? https://stackoverflow.com/a/45582103/133374
     import matplotlib.ticker as ticker
+  if args.output_format == "hdf":
+    raise NotImplementedError  # TODO...
   dataset_str = args.data
   if dataset_str in ["train", "dev", "eval"]:
     dataset_str = "config:%s" % dataset_str
@@ -252,11 +256,13 @@ def main(argv):
           plt.title(title)
           plt.savefig(fname)
           plt.close()
+    elif args.output_format == "hdf":
+      raise NotImplementedError  # TODO...
     else:
       raise NotImplementedError("output format %r" % args.output_format)
 
   runner = Runner(engine=rnn.engine, dataset=dataset, batches=dataset_batch,
-                  train=False, train_flag=args.dropout is not None or args.train_flag,
+                  train=False, train_flag=bool(args.dropout) or args.train_flag,
                   extra_fetches=extra_fetches,
                   extra_fetches_callback=fetch_callback)
   runner.run(report_prefix="att-weights epoch %i" % rnn.engine.epoch)
