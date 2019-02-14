@@ -6,7 +6,7 @@ sys.path.insert(0, "%s/.." % my_dir)
 sys.path.insert(0, "%s/../tools" % my_dir)  # for hdf_dump
 
 from Dataset import Dataset
-from HDFDataset import HDFDataset, SiameseHDFDataset
+from HDFDataset import *
 from nose.tools import assert_equal
 from nose.tools import assert_not_equal
 from nose.tools import assert_raises
@@ -126,11 +126,6 @@ def generate_hdf_from_other(opts):
   cache_key = make_hashable(opts)
   if cache_key in _hdf_cache:
     return _hdf_cache[cache_key]
-  options = {
-    "epoch": 1,
-    "start_seq": 0,
-    "end_seq": float("inf")
-  }
   import tempfile
   f = tempfile.NamedTemporaryFile(suffix=".hdf", delete=False)
   f.close()
@@ -139,11 +134,9 @@ def generate_hdf_from_other(opts):
   atexit.register(lambda: os.remove(fn))
   from Dataset import init_dataset
   dataset = init_dataset(opts)
-  import hdf_dump
-  from Util import DictAsObj
-  hdf_dataset = hdf_dump.hdf_dataset_init(fn)
-  hdf_dump.hdf_dump_from_dataset(dataset, hdf_dataset, DictAsObj(options))
-  hdf_dump.hdf_close(hdf_dataset)
+  hdf_dataset = HDFDatasetWriter(fn)
+  hdf_dataset.dump_from_dataset(dataset)
+  hdf_dataset.close()
   _hdf_cache[cache_key] = fn
   return fn
 
