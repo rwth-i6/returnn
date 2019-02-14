@@ -1,7 +1,11 @@
 
+import os
 import sys
-sys.path += ["."]  # Python 3 hack
+my_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, "%s/.." % my_dir)
+sys.path.insert(0, "%s/../tools" % my_dir)  # for hdf_dump
 
+from Dataset import Dataset
 from HDFDataset import HDFDataset, SiameseHDFDataset
 from nose.tools import assert_equal
 from nose.tools import assert_not_equal
@@ -16,6 +20,9 @@ import better_exchook
 better_exchook.install()
 better_exchook.replace_traceback_format_tb()
 Util.initThreadJoinHack()
+
+from Log import log
+log.initialize(verbosity=[5])
 
 
 class TestHDFDataset(object):
@@ -63,6 +70,7 @@ class TestHDFDataset(object):
     # TODO: auto-generate file, then use here
     #toy_dataset.add_file("/u/kulikov/develop/crnn/tests/toy_set.hdf")
 
+
 def generate_dummy_hdf(num_datasets=1):
   for idx in range(1, num_datasets + 1):
     dataset = h5py.File('./dummy.%i.hdf5' % idx, 'w')
@@ -102,6 +110,77 @@ def generate_dummy_hdf(num_datasets=1):
 
     dataset.close()
   return ['./dummy.%i.hdf5' % idx for idx in range(1, num_datasets + 1)]
+
+
+_hdf_cache = {}  # opts -> hdf fn
+
+
+def generate_hdf_from_other(opts):
+  """
+  :param dict[str] opts:
+  :return: hdf filename
+  :rtype: str
+  """
+  # See test_hdf_dump.py and tools/hdf_dump.py.
+  from Util import make_hashable
+  cache_key = make_hashable(opts)
+  if cache_key in _hdf_cache:
+    return _hdf_cache[cache_key]
+  options = {
+    "epoch": 1,
+    "start_seq": 0,
+    "end_seq": float("inf")
+  }
+  import tempfile
+  f = tempfile.NamedTemporaryFile(suffix=".hdf", delete=False)
+  f.close()
+  fn = f.name
+  import atexit
+  atexit.register(lambda: os.remove(fn))
+  from Dataset import init_dataset
+  dataset = init_dataset(opts)
+  import hdf_dump
+  from Util import DictAsObj
+  hdf_dataset = hdf_dump.hdf_dataset_init(fn)
+  hdf_dump.hdf_dump_from_dataset(dataset, hdf_dataset, DictAsObj(options))
+  hdf_dump.hdf_close(hdf_dataset)
+  _hdf_cache[cache_key] = fn
+  return fn
+
+
+def generate_hdf_from_dummy():
+  """
+  :return: hdf filename
+  :rtype: str
+  """
+  return generate_hdf_from_other(
+    {"class": "DummyDataset", "input_dim": 13, "output_dim": 7, "num_seqs": 23, "seq_len": 17})
+
+
+def test_hdf_dump():
+  generate_hdf_from_dummy()
+
+
+def dummy_iter_dataset(dataset):
+  """
+  :param Dataset dataset:
+  """
+  dataset.init_seq_order(epoch=1)
+  data_keys = dataset.get_data_keys()
+  seq_idx = 0
+  while dataset.is_less_than_num_seqs(seq_idx):
+    dataset.load_seqs(seq_idx, seq_idx + 1)
+    for key in data_keys:
+      dataset.get_data(seq_idx=seq_idx, key=key)
+    seq_idx += 1
+  print("Iterated through %r, num seqs %i" % (dataset, seq_idx))
+
+
+def test_hdf_simple_iter():
+  hdf_fn = generate_hdf_from_dummy()
+  dataset = HDFDataset(files=[hdf_fn])
+  dataset.initialize()
+  dummy_iter_dataset(dataset)
 
 
 def test_siamese_triplet_sampling():
