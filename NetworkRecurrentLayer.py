@@ -521,6 +521,7 @@ class RecurrentUnitLayer(Layer):
                attention_offset=0.95,
                attention_method="epoch",
                attention_scale=10,
+               context=-1,
                base = None,
                aligner = None,
                lm = False,
@@ -850,10 +851,34 @@ class RecurrentUnitLayer(Layer):
 
       index_f = T.cast(index, theano.config.floatX)
       unit.set_parent(self)
+
+      if context > 0:
+        from TheanoUtil import context_batched
+        n_batch = sequences.shape[1]
+        sequences = context_batched(sequences[::-direction], window=context)[::-direction] # TB(CD)
+        sequences = sequences.reshape((1, sequences.shape[0] * sequences.shape[1], sequences.shape[2])) # 1(TB)(CD)
+        sequences = sequences.reshape((1, sequences.shape[1], context, sequences.shape[2]//context)) # 1(TB)CD
+        sequences = sequences.dimshuffle(0,2,1,3).reshape((context, sequences.shape[1], sequences.shape[3])) # C(TB)D
+
+        index_f = index.reshape((1, index_f.shape[0] * index_f.shape[1])).repeat(context,axis=0) # C(TB)
+        outputs_info = [ T.alloc(numpy.cast[theano.config.floatX](0), index_f.shape[1], unit.n_units) for a in range(unit.n_act) ]
+
+
       if segment_input:
         outputs = unit.scan_seg(x=sources,
+                                z=sequences[s::self.attrs['sampling']],
+                                att = inv_att,
+                                non_sequences=non_sequences,
+                                i=index_f,
+                                outputs_info=outputs_info,
+                                W_re=self.W_re,
+                                W_in=self.W_in,
+                                b=self.b,
+                                go_backwards=direction == -1,
+                                truncate_gradient=self.attrs['truncation'])
+      else:
+        outputs = unit.scan(x=sources,
                             z=sequences[s::self.attrs['sampling']],
-                            att = inv_att,
                             non_sequences=non_sequences,
                             i=index_f,
                             outputs_info=outputs_info,
@@ -862,22 +887,17 @@ class RecurrentUnitLayer(Layer):
                             b=self.b,
                             go_backwards=direction == -1,
                             truncate_gradient=self.attrs['truncation'])
-      else:
-        outputs = unit.scan(x=sources,
-                          z=sequences[s::self.attrs['sampling']],
-                          non_sequences=non_sequences,
-                          i=index_f,
-                          outputs_info=outputs_info,
-                          W_re=self.W_re,
-                          W_in=self.W_in,
-                          b=self.b,
-                          go_backwards=direction == -1,
-                          truncate_gradient=self.attrs['truncation'])
 
       if not isinstance(outputs, list):
         outputs = [outputs]
       if outputs:
         outputs[0].name = "%s.act[0]" % self.name
+        from TheanoUtil import context_batched
+        if context > 0:
+          for i in range(len(outputs)):
+            outputs[i] = outputs[i][-1:]
+            outputs[i] = outputs[i].reshape((outputs[i].shape[0] * outputs[i].shape[1],outputs[i].shape[2]))
+            outputs[i] = outputs[i].reshape((outputs[i].shape[0]//n_batch,n_batch,outputs[i].shape[1]))
 
       if unit.recurrent_transform:
         unit.recurrent_transform_state_var_seqs = outputs[-len(unit.recurrent_transform.state_vars):]
