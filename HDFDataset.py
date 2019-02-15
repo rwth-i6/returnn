@@ -788,7 +788,7 @@ class SimpleHDFWriter:
     if not isinstance(seq_len, dict):
       seq_len = {0: seq_len}
     assert isinstance(seq_len, dict)
-    assert all([isinstance(key, int) and isinstance(value, list) for (key, value) in seq_len.items()])
+    assert all([isinstance(key, int) and isinstance(value, (list, numpy.ndarray)) for (key, value) in seq_len.items()])
     ndim_with_seq_len = self.ndim - (1 if self.dim else 0)
     assert all([0 <= key < ndim_with_seq_len for key in seq_len.keys()])
     assert len(seq_len) == ndim_with_seq_len
