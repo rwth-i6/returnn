@@ -173,6 +173,8 @@ class Dataset(object):
     For multiple target seqs, it is expected that they all have the same len.
     We support different input/target len for seq2seq/ctc and other models.
     Note: This is deprecated, better use get_seq_length().
+    Attention: Either this method or get_seq_length() needs to be redefined
+    in any subclass of Dataset!
     """
     l = self.get_seq_length(sorted_seq_idx)
     targets = self.get_target_list()
@@ -183,7 +185,11 @@ class Dataset(object):
 
   def get_seq_length(self, seq_idx):
     """
+    :type seq_idx: int
     :rtype: NumbersDict
+    :returns the len of the input features and the len of the target sequence.
+    Attention: Either this method or get_seq_length_2d() needs to be redefined
+    in any subclass of Dataset!
     """
     input_len, output_len = self.get_seq_length_2d(seq_idx)
     d = {"data": input_len}
