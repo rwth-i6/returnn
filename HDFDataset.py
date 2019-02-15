@@ -722,24 +722,31 @@ class SiameseHDFDataset(CachedDataset2):
 
 
 class SimpleHDFWriter:
-  def __init__(self, filename, dim, labels):
+  def __init__(self, filename, dim, labels=None, ndim=None):
     """
     :param str filename:
-    :param int dim:
+    :param int|None dim:
+    :param int ndim: counted without batch
     :param list[str]|None labels:
     """
+    if ndim is None:
+      if dim is None:
+        ndim = 1
+      else:
+        ndim = 2
     from Util import hdf5_strings
     self.dim = dim
+    self.ndim = ndim
     self.labels = labels
     if labels:
       assert len(labels) == dim
     self._file = h5py.File(filename, "w")
 
-    self._file.attrs['numTimesteps'] = 0
-    self._file.attrs['inputPattSize'] = dim
-    self._file.attrs['numDims'] = 1
-    self._file.attrs['numLabels'] = dim
-    self._file.attrs['numSeqs'] = 0
+    self._file.attrs['numTimesteps'] = 0  # we will increment this on-the-fly
+    self._file.attrs['inputPattSize'] = dim or 1
+    self._file.attrs['numDims'] = 1  # ignored?
+    self._file.attrs['numLabels'] = dim or 1
+    self._file.attrs['numSeqs'] = 0  # we will increment this on-the-fly
     if labels:
       hdf5_strings(self._file, 'labels', labels)
     else:
@@ -755,10 +762,9 @@ class SimpleHDFWriter:
     Resizes if necessary.
 
     :param str name:
-    :param numpy.ndarray raw_data: shape=(time,data)
-    :param str seq_tag:
+    :param numpy.ndarray raw_data: shape=(time,data) or shape=(time,)
     """
-    assert len(raw_data.shape) == 2
+    assert raw_data.ndim >= 1
     if name not in self._datasets:
       self._datasets[name] = self._file.create_dataset(
         name, raw_data.shape, raw_data.dtype, maxshape=tuple(None for _ in raw_data.shape))
@@ -766,30 +772,45 @@ class SimpleHDFWriter:
       old_shape = self._datasets[name].shape
       self._datasets[name].resize((old_shape[0] + raw_data.shape[0],) + old_shape[1:])
     # append raw data to dataset
-    self._datasets[name][self._file.attrs['numTimesteps']:, 0:] = raw_data
+    self._datasets[name][self._file.attrs['numTimesteps']:] = raw_data
     self._file.attrs['numTimesteps'] += raw_data.shape[0]
     self._file.attrs['numSeqs'] += 1
 
   def insert_batch(self, inputs, seq_len, seq_tag):
     """
-    :param numpy.ndarray inputs: shape=(n_batch,time,data)
-    :param list[int] seq_len: sequence lengths
+    :param numpy.ndarray inputs: shape=(n_batch,time,data) (or (n_batch,time), or (n_batch,time1,time2), ...)
+    :param list[int]|dict[int,list[int]] seq_len: sequence lengths (per axis)
     :param list[str] seq_tag: sequence tags of length n_batch
     """
-    n_batch = len(seq_len)
-    assert n_batch == len(seq_tag)
-    assert inputs.ndim == 3
+    n_batch = len(seq_tag)
     assert n_batch == inputs.shape[0]
-    assert max(seq_len) == inputs.shape[1]
-    assert self.dim == inputs.shape[2]
+    assert inputs.ndim == self.ndim + 1  # one more for the batch-dim
+    if not isinstance(seq_len, dict):
+      seq_len = {0: seq_len}
+    assert isinstance(seq_len, dict)
+    assert all([isinstance(key, int) and isinstance(value, list) for (key, value) in seq_len.items()])
+    ndim_with_seq_len = self.ndim - (1 if self.dim else 0)
+    assert all([0 <= key < ndim_with_seq_len for key in seq_len.keys()])
+    assert len(seq_len) == ndim_with_seq_len
+    assert all([n_batch == len(value) for (key, value) in seq_len.items()])
+    assert all([max(value) == inputs.shape[key + 1] for (key, value) in seq_len.items()])
+    if self.dim:
+      assert self.dim == inputs.shape[-1]
 
     seqlen_offset = self._seq_lengths.shape[0]
     self._seq_lengths.resize(seqlen_offset + n_batch, axis=0)
 
     for i in range(n_batch):
       self._tags.append(seq_tag[i])
-      self._seq_lengths[seqlen_offset + i] = seq_len[i]
-      self._insert_h5_inputs('inputs', inputs[i][:seq_len[i]])
+      flat_seq_len = numpy.prod([seq_len[axis][i] for axis in range(ndim_with_seq_len)])
+      flat_shape = [flat_seq_len]
+      if self.dim:
+        flat_shape.append(self.dim)
+      self._seq_lengths[seqlen_offset + i] = flat_seq_len
+      data = inputs[i]
+      data = data[tuple([slice(None, seq_len[axis][i]) for axis in range(ndim_with_seq_len)])]
+      data = numpy.reshape(data, flat_shape)
+      self._insert_h5_inputs('inputs', data)
 
   def close(self):
     max_tag_len = max([len(d) for d in self._tags])
