@@ -253,12 +253,15 @@ def test_SimpleHDFWriter_small():
   for i, seq_len in enumerate(seq_lens):
     assert reader.seq_lens[i]["data"] == seq_len
 
-  print("raw content (gzipped):")
-  import gzip
-  print(repr(gzip.compress(open(fn, "rb").read())))
+  if sys.version_info[0] >= 3:  # gzip.compress is >=PY3
+    print("raw content (gzipped):")
+    import gzip
+    print(repr(gzip.compress(open(fn, "rb").read())))
 
 
 def test_read_simple_hdf():
+  if sys.version_info[0] <= 2:  # gzip.decompress is >=PY3
+    raise unittest.SkipTest
   # n_dim, seq_lens, raw_gzipped is via test_SimpleHDFWriter_small
   n_dim = 3
   seq_lens = [2, 3]
