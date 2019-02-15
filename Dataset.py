@@ -579,6 +579,13 @@ class Dataset(object):
     :returns get_data(*, key).shape[1:], i.e. num-frames excluded
     :rtype: list[int]
     """
+    if key in self.num_outputs:
+      if self.num_outputs[key][1] <= 1:
+        return []
+      res_shape = [None] * (self.num_outputs[key][1] - 1)
+      if not self.is_data_sparse(key):
+        res_shape[-1] = self.get_data_dim(key)
+      return res_shape
     if self.is_data_sparse(key):
       return []
     return [self.get_data_dim(key)]
