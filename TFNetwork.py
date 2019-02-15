@@ -387,6 +387,7 @@ class TFNetwork(object):
       def get_layer(src_name):
         return self.construct_layer(net_dict=net_dict, name=src_name)  # set get_layer to wrap construct_layer
     if name not in net_dict:
+      layer_desc = None
       if name == "data":
         layer_desc = {"class": "source", "from": []}
       elif name.startswith("data:"):
@@ -394,12 +395,11 @@ class TFNetwork(object):
       elif '/' in name:
         # it may be a hierarchical path to a sub-layer, which should have been found by get_layer()
         # but maybe it's not constructed yet, so try constructing the root layer
-        get_layer(name.split('/')[0])
-        assert name.split('/')[0] in self.layers, ("Root %r layer was not constructed! "
-                                                   "Unable to get layer %r." % (name.split('/')[0], name))
-        # constructing the root layer should have constructed all its children
-        return self.get_layer(name)  # ...so try again now
-      else:
+        root_layer = get_layer(name.split('/')[0])
+        sub_layer = root_layer.get_sub_layer('/'.join(name.split('/')[1:]))  # get the sub-layer from the root-layer
+        if sub_layer:
+          return sub_layer
+      if not layer_desc:
         raise LayerNotFound("layer %r not found in %r" % (name, self))
     else:
       layer_desc = net_dict[name]
@@ -1411,31 +1411,45 @@ class LossHolder:
     self._prepare()
     return self._norm_factor
 
-  def _normalized_loss_value_per_seq(self, value):
+  def _normalized_value_per_seq(self, value, per_pos=False):
     """
-    :param tf.Tensor|None loss:
-    :return: (batch,) or None if loss is None
+    :param tf.Tensor|None value: (batch*time,) or (time*batch,)
+    :param bool per_pos: one value per time position
+    :return: if per_pos return (batch,time) else (batch,) or None if loss is None
     :rtype: tf.Tensor|None
     """
     if value is None:
       return None
-    return self.loss.reduce_to_batch(value, normalize=True)
 
-  def get_normalized_loss_value_per_seq(self):
+    if per_pos:
+      value = tf.reshape(value, tf.shape(self.loss.output.placeholder)[:2])  # (batch,time) or (time,batch)
+
+      # We want output of the form (B,T)
+      if self.loss.output.time_dim_axis == 0:
+        from TFUtil import swapaxes
+        value = swapaxes(value, 0, 1)  # resulting in (B,T,...)
+
+      return value
+    else:
+      return self.loss.reduce_to_batch(value, normalize=True)
+
+  def get_normalized_loss_value_per_seq(self, per_pos=False):
     """
-    :return: (batch,) or None if loss is None
+    :param bool per_pos: one value per time position
+    :return: if per_pos return (batch,time) else (batch,) or None if loss is None
     :rtype: tf.Tensor|None
     """
     self._prepare()
-    return self._normalized_loss_value_per_seq(self._loss_value)
+    return self._normalized_value_per_seq(self._loss_value, per_pos=per_pos)
 
-  def get_normalized_error_value_per_seq(self):
+  def get_normalized_error_value_per_seq(self, per_pos=False):
     """
-    :return: (batch,) or None if error is None
+    :param bool per_pos: one value per time position
+    :return: if per_pos return (batch,time) else (batch,) or None if error is None
     :rtype: tf.Tensor|None
     """
     self._prepare()
-    return self._normalized_loss_value_per_seq(self._error_value)
+    return self._normalized_value_per_seq(self._error_value, per_pos=per_pos)
 
   def _tf_summary(self):
     """
@@ -1447,11 +1461,13 @@ class LossHolder:
       return  # skip summaries. the root net should also do this
     name = self.get_tf_name()
     if self._loss_value is not None:
-      tf.summary.scalar("loss_%s" % name, self._loss_value * self._norm_factor)
+      # a loss value is typically a scalar but there are cases of sequence or position wise loss values (e.g. if
+      #   the eval_output_file_per_seq option is used)
+      tf.summary.tensor_summary("loss_%s" % name, self._loss_value * self._norm_factor)
       if self._network.get_config().bool("calculate_exp_loss", False):
-        tf.summary.scalar("exp_loss_%s" % name, tf.exp(self._loss_value * self._norm_factor))
+        tf.summary.tensor_summary("exp_loss_%s" % name, tf.exp(self._loss_value * self._norm_factor))
     if self._error_value is not None:
-      tf.summary.scalar("error_%s" % name, self._error_value * self._norm_factor)
+      tf.summary.tensor_summary("error_%s" % name, self._error_value * self._norm_factor)
 
   def _prepare(self):
     """

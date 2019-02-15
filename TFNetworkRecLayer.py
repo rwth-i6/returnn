@@ -207,7 +207,7 @@ class RecLayer(_ConcatInputLayer):
       if not p.name.startswith(scope_name_prefix):
         continue
       assert p.name.startswith(scope_name_prefix) and p.name.endswith(":0")
-      self.params[p.name[len(scope_name_prefix):-2]] = p
+      self.add_param(p)
 
   def get_dep_layers(self):
     l = super(RecLayer, self).get_dep_layers()
@@ -420,7 +420,7 @@ class RecLayer(_ConcatInputLayer):
             loss = subnet.accumulated_losses[loss.name]
             assert isinstance(loss, LossHolder)
             assert loss.get_layer()
-          loss = loss.copy_new_base(network=network, name="%s/%s" % (name, loss.name))
+          loss = loss.copy_new_base(network=network, name="%s/%s" % (name, loss.name), reduce_func=reduce_func)
           losses.append(loss)
     return losses
 
@@ -728,8 +728,8 @@ class RecLayer(_ConcatInputLayer):
 
   def get_sub_layer(self, layer_name):
     """
-    :param str layer_name:  The sub_layer addressed by '/' separated path.
-    :return: The sub_layer addressed in layer_name or None if no sub_layer exists
+    :param str layer_name: name of the sub_layer (right part of '/' separated path)
+    :return: the sub_layer addressed in layer_name or None if no sub_layer exists
     :rtype: LayerBase|None
     """
     if isinstance(self.cell, _SubnetworkRecCell):
@@ -862,6 +862,16 @@ class _SubnetworkRecCell(object):
           if construct_ctx.layers:
             construct_ctx.layers[-1].dependencies.add(layer)
           return layer
+        if '/' in name:
+          # this is probably a path to a sub-layer
+          root_name = name.split('/')[0]
+          root_layer = lself.__call__(root_name)  # get the root-layer (first part of the path)
+          sub_layer = root_layer.get_sub_layer('/'.join(name.split('/')[1:]))  # get the sub-layer from the root-layer
+          if sub_layer:  # get_sub_layer returns None by default (if sub-layer not found)
+            # add to templates so we will collect output in self.get_output if this is an output layer
+            self.layer_data_templates[name] = sub_layer
+            sub_layer.dependencies.add(root_layer)
+            return sub_layer
         # Need to create layer instance here now to not run into recursive loops.
         # We will extend it later in add_templated_layer().
         if name in self.layer_data_templates:  # might exist already
@@ -1071,12 +1081,13 @@ class _SubnetworkRecCell(object):
       if layer_name in self.input_layers_moved_out + self.output_layers_moved_out:
         continue
       get_layer(layer_name)
-      assert layer_name in self.net.layers
+      if '/' not in layer_name:  # sub-layers are not in self.net
+        assert layer_name in self.net.layers
 
   def get_layer_from_outside(self, layer_name):
     """
-    :param str layer_name: The sub_layer addressed by '/' separated path.
-    :return: The sub_layer addressed in layer_name or None if no sub_layer exists
+    :param str layer_name: name of the sub_layer (addressed by '/' separated path)
+    :return: the sub_layer addressed in layer_name or None if no sub_layer exists
     :rtype: LayerBase|None
     """
     if self.output_layers_net and layer_name in self.output_layers_net.layers:
@@ -1342,7 +1353,7 @@ class _SubnetworkRecCell(object):
           name=name,
           dtype=self.layer_data_templates[layer_name].output.dtype,
           element_shape=self.layer_data_templates[layer_name].output.batch_shape,
-          get=lambda: self.net.layers[layer_name].output.placeholder))
+          get=lambda: self.net.get_layer(layer_name).output.placeholder))
 
       for name, template in self.layer_data_templates.items():
         if template.is_output_layer():
@@ -1505,7 +1516,7 @@ class _SubnetworkRecCell(object):
             # Create only Tensor arrays for those which we use inside the loop.
             if not self._input_layer_used_inside_loop(layer_name):
               continue
-            layer = self.input_layers_net.layers[layer_name]
+            layer = self.input_layers_net.get_layer(layer_name)
             assert isinstance(layer, LayerBase)
             # Only unroll if that is the same time dim.
             if not rec_layer.output.is_same_time_dim(layer.output):
@@ -2016,7 +2027,8 @@ class _SubnetworkRecCell(object):
       print("  %s: (#: %i)" % (s, len(l)), file=log_stream)
       for layer_name in l:
         print("    %s" % layer_name, file=log_stream)
-        remaining_layers.remove(layer_name)
+        if '/' not in layer_name:  # sub-layers are not in the net_dict
+          remaining_layers.remove(layer_name)
       if not l:
         print("    None", file=log_stream)
 
@@ -2181,7 +2193,7 @@ class _SubnetworkRecCell(object):
       if name.startswith("base:"):
         return self.parent_net.get_layer(name[len("base:"):])
       if name in self.input_layers_moved_out:
-        return self.input_layers_net.layers[name]
+        return self.input_layers_net.get_layer(name)
       if name in self.output_layers_moved_out or name.startswith("data:"):
         return self.output_layers_net.construct_layer(self.net_dict, name=name, get_layer=get_layer)
       # It means that the layer is inside the loop.
@@ -2259,6 +2271,29 @@ class _TemplateLayer(LayerBase):
     if self._has_search_choices():
       self.search_choices = SearchChoices(owner=self, beam_size=self._get_search_choices_beam_size())
     self.collocate_with = kwargs.get("collocate_with", None) or []
+
+  def get_sub_layer(self, layer_name):
+    """
+    Creates a sub-layer template using self.layer_class_type.get_sub_layer_out_data_from_opts().
+
+    :param str layer_name: name of the sub_layer (right part of '/' separated path)
+    :return: template for the sub-layer
+    :rtype: _TemplateLayer
+    """
+    full_layer_name = self.name + '/' + layer_name
+
+    # In general, we don't know which information is needed to create the sub-layer template, so provide full kwargs
+    # from the parent layer.
+    res = self.layer_class_type.get_sub_layer_out_data_from_opts(layer_name, self.kwargs)
+    assert res, "Could not get out data for sub-layer template {}.".format(full_layer_name)
+    output, network, sub_layer_class = res
+
+    sub_layer_template = _TemplateLayer(self.network, full_layer_name)
+    is_output_layer = self.is_output_layer()  # make sub-layers output layers too
+    collocate_with = [self]  # we cannot move a sub-layer out of the loop, if parent is inside
+    sub_layer_template.init(output, sub_layer_class, is_output_layer=is_output_layer, collocate_with=collocate_with,
+                            name=full_layer_name, network=network)
+    return sub_layer_template
 
   def copy_as_prev_time_frame(self, prev_output=None, rec_vars_prev_outputs=None):
     """
@@ -2492,7 +2527,8 @@ class RnnCellLayer(_ConcatInputLayer):
       self.rec_vars_outputs["state"] = state
       params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=re.escape(scope_name_prefix))
       assert params
-      self.params.update({p.name[len(scope_name_prefix):-2]: p for p in params})
+      for p in params:
+        self.add_param(p)
 
   @classmethod
   def _get_cell(cls, n_out, unit, unit_opts=None):
@@ -2908,34 +2944,41 @@ class ChoiceLayer(LayerBase):
   _debug_out = None  # type: None|list
 
   def __init__(self, beam_size, input_type="prob", explicit_search_source=None, length_normalization=True,
-               scheduled_sampling=False,
-               cheating=False,
-               **kwargs):
+               source_beam_sizes=None, scheduled_sampling=False, cheating=False, **kwargs):
     """
     :param int beam_size: the outgoing beam size. i.e. our output will be (batch * beam_size, ...)
     :param str input_type: "prob" or "log_prob", whether the input is in probability space, log-space, etc.
-      or "regression", if it is a prediction of the data as-is.
+      or "regression", if it is a prediction of the data as-is. If there are several inputs, same format
+      for all is assumed.
     :param LayerBase|None explicit_search_source: will mark it as an additional dependency
-    :param dict|None scheduled_sampling:
     :param bool length_normalization: evaluates score_t/len in search
+    :param list[int]|None source_beam_sizes: If there are several sources, they are pruned with these beam sizes
+       before combination. If None, 'beam_size' is used for all sources. Has to have same length as number of sources.
+    :param dict|None scheduled_sampling:
     :param bool cheating: if True, will always add the true target in the beam
     """
     super(ChoiceLayer, self).__init__(**kwargs)
     from Util import CollectionReadCheckCovered
+    self.input_type = input_type
     self.explicit_search_source = explicit_search_source
     self.scheduled_sampling = CollectionReadCheckCovered.from_bool_or_dict(scheduled_sampling)
     # We assume log-softmax here, inside the rec layer.
     assert self.target
+
     if self.network.search_flag:
-      assert len(self.sources) == 1
-      assert not self.sources[0].output.sparse
+      if isinstance(self.target, list):
+        assert len(self.target) == len(self.sources), "Provide a target for each of the sources."
+      for source in self.sources:
+        assert not source.output.sparse
       assert self.sources[0].output.dim == self.output.dim
       assert self.sources[0].output.shape == (self.output.dim,)
+
       # We are doing the search.
       self.search_choices = SearchChoices(
         owner=self,
         beam_size=beam_size)
       if input_type == "regression":
+        assert len(self.sources) == 1
         # It's not a probability distribution, so there is no search here.
         net_batch_dim = self.network.get_data_batch_dim()
         assert self.search_choices.beam_size == 1
@@ -2944,7 +2987,25 @@ class ChoiceLayer(LayerBase):
         self.search_choices.src_beams = tf.zeros((net_batch_dim, 1), dtype=tf.int32)
         self.search_choices.set_beam_scores(self.search_choices.src_layer.search_choices.beam_scores)
       else:
+        assert len(self.sources) <= 2, "Combining more than two sources not implemented yet."
         net_batch_dim = self.network.get_data_batch_dim()
+        if len(self.sources) > 1:
+          # If no separate beam sizes for the sources are given, use the final beam size also for pruning
+          # the incoming sources. Note, that it makes no sense to set it higher than that, as the best
+          # k=beam_size scores are always included if all source_beam_sizes >= beam_size.
+          if not source_beam_sizes:
+            source_beam_sizes = [beam_size] * len(self.sources)
+          assert len(source_beam_sizes) == len(self.sources), "Provide exactly one beam size per source."
+
+          # Combine the incoming scores by adding them up for all possible combinations of target labels. To reduce
+          # the number of combinations, we separately apply beam pruning to the sources beforehand.
+          scores_in, scores_in_dim, pruned_labels = \
+              self._prune_and_combine_sources(self.sources, source_beam_sizes, net_batch_dim * beam_size)
+          # scores_in has size (batch * beam_size, source_beam_sizes[0] * source_beam_sizes[1])
+        else:
+          scores_in = self._get_scores(self.sources[0])  # (batch * beam_size, dim)
+          scores_in_dim = self.sources[0].output.dim
+
         assert self.search_choices.src_layer, (
           self.network.debug_search_choices(base_search_choice=self),
           "Not implemented yet. In rec-layer, we would always have our prev-frame as one previous search choice. "
@@ -2952,7 +3013,7 @@ class ChoiceLayer(LayerBase):
         scores_base = self.search_choices.src_layer.search_choices.beam_scores  # (batch, beam_in)
         assert scores_base.get_shape().ndims == 2, "%r invalid" % self.search_choices.src_layer.search_choices
         base_beam_in = tf.shape(scores_base)[1]  # 1 in first frame, then beam_in (beam_size)
-        scores_beam_in = tf.shape(self.sources[0].output.placeholder)[0] // net_batch_dim
+        scores_beam_in = tf.shape(scores_in)[0] // net_batch_dim
         beam_size = self.sources[0].output.beam_size
         # About incoming beam size:
         #   base_beam_in  - 1 in first frame, then beam_in
@@ -2979,20 +3040,7 @@ class ChoiceLayer(LayerBase):
               tf.ones(tf.shape(end_flags)) * (tf.to_float(t + 1) / tf.to_float(t)),
               tf.ones(tf.shape(end_flags)))
         scores_base = tf.expand_dims(scores_base, axis=-1)  # (batch, beam_in, dim)
-        scores_in = self.sources[0].output.placeholder  # (batch * beam_in, dim)
-        # We present the scores in +log space, and we will add them up along the path.
-        if input_type == "prob":
-          if self.sources[0].output_before_activation:
-            scores_in = self.sources[0].output_before_activation.get_log_output()
-          else:
-            from TFUtil import safe_log
-            scores_in = safe_log(scores_in)
-        elif input_type == "log_prob":
-          pass
-        else:
-          raise Exception("%r: invalid input type %r" % (self, input_type))
         from TFUtil import filter_ended_scores
-        scores_in_dim = self.sources[0].output.dim
         if self.network.have_rec_step_info():
           scores_in = filter_ended_scores(
             scores_in, end_flags=self.network.get_rec_step_info().get_end_flag(),
@@ -3019,6 +3067,7 @@ class ChoiceLayer(LayerBase):
         # We get scores/labels of shape (batch, beam) with indices in [0..beam_in*dim-1].
         scores, labels = tf.nn.top_k(scores_comb_flat, k=beam_size)
         if cheating:
+          assert len(self.sources) == 1, "Cheating not yet implemented for multiple sources."
           # It assumes that sorted=True in top_k, and the last entries in scores/labels are the worst.
           # We replace them by the true labels.
           gold_targets = self._static_get_target_value(
@@ -3039,11 +3088,20 @@ class ChoiceLayer(LayerBase):
         labels = labels % scores_in_dim  # (batch, beam) -> dim idx
         labels = tf.reshape(labels, [net_batch_dim * beam_size])  # (batch * beam)
         labels = tf.cast(labels, self.output.dtype)
+
+        if len(self.sources) > 1:
+          # 'labels' in this case do not refer to a target vocabulary, but just represent ids to the labels
+          # that survived pruning for each of the sources ('pruned_labels'). So as a last step, we get the final
+          # target labels by indexing pruned_labels with 'labels'.
+          labels = self._get_combined_labels(pruned_labels, source_beam_sizes, combined_ids=labels)
+        else:
+          labels = [labels]
+
         self.search_choices.set_beam_scores(scores)  # (batch, beam) -> log score
         if self._debug_out is not None:
           from TFUtil import identity_with_debug_log
-          labels = identity_with_debug_log(
-            out=self._debug_out, x=labels, args={
+          labels[0] = identity_with_debug_log(
+            out=self._debug_out, x=labels[0], args={
               "step": self.network.get_rec_step_index() if self.network.have_rec_step_info() else tf.constant(-1),
               "base_beam_in": base_beam_in,
               "scores_in_orig": self.sources[0].output.placeholder,
@@ -3052,18 +3110,27 @@ class ChoiceLayer(LayerBase):
               "scores_base": scores_base,
               "scores_combined": scores_comb,
               "src_beam_idxs": self.search_choices.src_beams,
-              "labels": tf.reshape(labels, [net_batch_dim, beam_size]),
+              "labels": tf.reshape(labels[0], [net_batch_dim, beam_size]),
               "scores": scores})
-        self.output = Data(
-          name="%s_choice_output" % self.name,
-          batch_dim_axis=0,
-          shape=self.output.shape,
-          sparse=True,
-          dim=self.output.dim,
-          dtype=self.output.dtype,
-          placeholder=labels,
-          available_for_inference=True,
-          beam_size=beam_size)
+
+        # Put labels for all targets in a list.
+        # They can be accessed by using the sublayers created in self.get_sub_layer().
+        self.output_list = []
+        for index, labels_ in enumerate(labels):
+          self.output_list.append(Data(
+            name="%s_choice_output" % self.name,
+            batch_dim_axis=0,
+            shape=self.output.shape,
+            sparse=True,
+            dim=self.sources[index].output.dim,
+            dtype=self.output.dtype,
+            placeholder=labels_,
+            available_for_inference=True,
+            beam_size=beam_size))
+
+        # We use the labels of the first target as "normal" output.
+        self.output = self.output_list[0]
+
     elif self.scheduled_sampling.truth_value:
       # Original paper: https://arxiv.org/abs/1506.03099
       # Currently, here: no scheduling, just always sample...
@@ -3106,10 +3173,102 @@ class ChoiceLayer(LayerBase):
       assert len(self.sources) == 0  # will be filtered out in transform_config_dict
       # Note: If you want to do forwarding, without having the reference,
       # that wont work. You must do search in that case.
-      self.output = self._static_get_target_value(
-        target=self.target, network=self.network,
-        mark_data_key_as_used=True).copy()
-      self.output.available_for_inference = True  # in inference, we should do search
+      targets = self.target
+      if isinstance(targets, str):
+        targets = [targets]
+      # Put all targets in a list.
+      # They can be accessed by using the sublayers created in self.get_sub_layer().
+      self.output_list = []
+      for target in targets:
+        target_out_data = self._static_get_target_value(
+            target=target, network=self.network, mark_data_key_as_used=True).copy()
+        target_out_data.available_for_inference = True  # in inference, we should do search
+        self.output_list.append(target_out_data)
+
+      # We use the labels of the first target as "normal" output.
+      self.output = self.output_list[0]
+
+  def _get_scores(self, source):
+    scores_in = source.output.placeholder
+    # We present the scores in +log space, and we will add them up along the path.
+    if self.input_type == "prob":
+      if source.output_before_activation:
+        return source.output_before_activation.get_log_output()
+      else:
+        from TFUtil import safe_log
+        return safe_log(scores_in)
+    elif self.input_type == "log_prob":
+      return scores_in
+    else:
+      raise Exception("%r: invalid input type %r" % (self, self.input_type))
+
+  def _prune_and_combine_sources(self, sources, beam_sizes, batch_dim):
+    """
+    Applies beam bruning to the sources and then calculates all possible sums of scores.
+    Returns the scores, the (static) number of targets after pruning and a list of
+    labels corresponding to the top scores.
+
+    :param list[LayerBase] sources: input layers providing the scores
+    :param list[int] beam_sizes: beam sizes used for pruning of the individual sources
+    :param tf.Tensor|int batch_dim: dim of batch axis (batch size * incoming beam)
+    :return: combined scores, dim of combined scores, labels that survived pruning
+    :rtype: (tf.Tensor, int, list[tf.Tensor])
+    """
+
+    # Calculate the product of beam_sizes. This will be the length (i.e. 'dim') of combined_pruned_scores.
+    combined_scores_dim = 1
+
+    pruned_scores = []
+    pruned_labels = []
+
+    with tf.name_scope("combine_sources"):
+      # prune incoming sources separately
+      for source, beam_size in zip(sources, beam_sizes):
+        scores_in = self._get_scores(source)
+
+        scores, labels = tf.nn.top_k(scores_in, k=beam_size)
+        pruned_scores.append(scores)
+        pruned_labels.append(labels)
+
+        combined_scores_dim *= beam_size
+
+      # all possible combinations of scores from source 0 and 1 via broadcasting
+      # TODO: generalize to more than two sources
+      scores_0 = tf.expand_dims(pruned_scores[0], -1)  # (batch, beam_sizes[0], 1)
+      scores_1 = tf.expand_dims(pruned_scores[1], -2)  # (batch, 1, beam_sizes[1])
+      combined_pruned_scores = scores_0 + scores_1  # (batch, beam_sizes[0], beam_sizes[1])
+
+      # We flatten over the beam dims of the sources, but not yet over the batch dim. This matches
+      # the shape of the input scores in case of a single source.
+      combined_pruned_scores_flat = tf.reshape(combined_pruned_scores, [batch_dim, combined_scores_dim])
+
+    return combined_pruned_scores_flat, combined_scores_dim, pruned_labels
+
+  def _get_combined_labels(self, pruned_labels, beam_sizes, combined_ids):
+    """
+    Gets output labels by converting 'combined_ids' (corresponding to the flattend shape created in
+    self._prune_and_combine_sources()) back to separate ids and then using those as indices to the labels
+    that survived pruning.
+
+    :param list[tf.Tensor] pruned_labels: labels before pruning, see self._prune_and_combine_sources()
+    :param list[int] beam_sizes: beam sizes used for pruning of the individual sources
+    :param tf.Tensor combined_ids: indices to the flattened scores, see self._prune_and_combine_sources()
+    :return: final labels for all sources
+    :rtype: list[tf.Tensor]
+    """
+    # TODO: generalize to more than two sources
+
+    # We can recover the ids for the unflattened shape by using integer division and modulo operations.
+    # (similar to numpy.unravel_index())
+    with tf.name_scope("get_combined_labels"):
+      ids_0 = tf.floordiv(combined_ids, beam_sizes[1])
+      ids_1 = tf.floormod(combined_ids, beam_sizes[1])
+
+      # Now get the final target labels by indexing the labels.
+      labels_0 = tf.squeeze(tf.batch_gather(pruned_labels[0], tf.expand_dims(ids_0, axis=-1)), axis=-1)
+      labels_1 = tf.squeeze(tf.batch_gather(pruned_labels[1], tf.expand_dims(ids_1, axis=-1)), axis=-1)
+
+      return [labels_0, labels_1]
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
@@ -3118,24 +3277,68 @@ class ChoiceLayer(LayerBase):
     :param TFNetwork.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     """
-    if not network.search_flag and not d.get("scheduled_sampling"):
-      # In the dependency graph, we don't want it.
-      # This can enable some optimizations in the RecLayer.
-      # We do it here because we should know about the deps early in the template creation in RecLayer.
-      d["from"] = []
+    if isinstance(d["target"], str):
+      d["target"] = [d["target"]]
+    if not network.search_flag:
+      network.used_data_keys.update(d["target"])
+      if not d.get("scheduled_sampling"):
+        # In the dependency graph, we don't want it.
+        # This can enable some optimizations in the RecLayer.
+        # We do it here because we should know about the deps early in the template creation in RecLayer.
+        d["from"] = []
     if d.get("explicit_search_source"):
       d["explicit_search_source"] = get_layer(d["explicit_search_source"]) if network.search_flag else None
     super(ChoiceLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
 
   @classmethod
   def get_out_data_from_opts(cls, target, network, beam_size, **kwargs):
-    out = cls._static_get_target_value(
-      target=target, network=network,
-      mark_data_key_as_used=False).copy()
-    out.available_for_inference = True  # in inference, we would do search
+    first_target = target[0] if isinstance(target, list) else target
+    out_data = cls._static_get_target_value(target=first_target, network=network, mark_data_key_as_used=False).copy()
+
+    out_data.available_for_inference = True  # in inference, we would do search
     if network.search_flag:
-      out.beam_size = beam_size
-    return out
+      out_data.beam_size = beam_size
+
+    return out_data
+
+  def get_sub_layer(self, layer_name):
+    """
+    Used to get outputs in case of multiple targets. For all targets we create a sub-layer that can be referred to
+    by "self.name + '/out_' + index" (e.g. output/out_0). These sublayers can then be used as input to other layers,
+    e.g. "output_0": {"class": "copy", "from": ["output/out_0"].
+
+    :param str layer_name: name of the sub_layer (e.g. 'out_0')
+    :return: internal layer that outputs labels for the target corresponding to layer_name
+    :rtype: InternalLayer
+    """
+    assert layer_name.startswith("out_")
+    index = int(layer_name[len("out_"):])
+    full_layer_name = self.name + '/' + layer_name
+
+    from TFNetworkLayer import InternalLayer
+    sub_layer = InternalLayer(name=full_layer_name, network=self.network, output=self.output_list[index], sources=[self])
+    return sub_layer
+
+  @classmethod
+  def get_sub_layer_out_data_from_opts(cls, layer_name, parent_layer_kwargs):
+    """
+    :param str layer_name: name of the sub_layer (e.g. 'out_0'), see self.get_sub_layer()
+    :param dict[str] parent_layer_kwargs: kwargs for the parent layer, here we only need 'network' and 'beam_size'
+    :return: Data template, network and the class type of the sub-layer
+    :rtype: (Data, TFNetwork, type)|None
+    """
+    assert layer_name.startswith("out_")
+    index = int(layer_name[len("out_"):])
+
+    targets = parent_layer_kwargs["target"]
+    assert isinstance(targets, list), "Sub-layers for ChoiceLayer should only exist in case of multiple targets."
+
+    # The sub-layer with index n will output the n-th target. The out_data is taken directly
+    # from the target as it is done in self.get_out_data_from_opts().
+    sub_layer_out_data = cls.get_out_data_from_opts(target=targets[index], network=parent_layer_kwargs["network"],
+                                                    beam_size=parent_layer_kwargs["beam_size"])
+    from TFNetworkLayer import InternalLayer
+    return sub_layer_out_data, parent_layer_kwargs["network"], InternalLayer
 
   # noinspection PyMethodOverriding
   @classmethod

@@ -18,10 +18,10 @@ class CachedDataset(Dataset):
     """
     super(CachedDataset, self).__init__(**kwargs)
     self.cache_byte_size_total_limit = cache_byte_size
-    if cache_byte_size < 0:
-      self.cache_byte_size_limit_at_start = 1
+    if cache_byte_size <= 0:
+      self.cache_byte_size_limit_at_start = 0
     else:
-     self.cache_byte_size_limit_at_start = max(int(cache_byte_size * 2 / 3),1)
+     self.cache_byte_size_limit_at_start = max(cache_byte_size * 2 // 3, 1)
      self.cache_byte_size_total_limit = max(cache_byte_size - self.cache_byte_size_limit_at_start, 1)
     self.num_seqs_cached_at_start = 0
     self.cached_bytes_at_start = 0

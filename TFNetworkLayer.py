@@ -4,7 +4,7 @@ from __future__ import print_function
 import tensorflow as tf
 import contextlib
 import TFUtil
-from Util import unicode, NotSpecified
+from Util import unicode, NotSpecified, CollectionReadCheckCovered
 from TFUtil import Data, OutputWithActivation, CustomUpdate, dimshuffle, swapaxes
 from Log import log
 
@@ -49,11 +49,12 @@ class LayerBase(object):
                target=None, loss=None, size_target=None,
                reuse_params=None,
                param_device=None,
-               L2=None, darc1=None,
                is_output_layer=None, only_on_eval=False, only_on_search=False,
                copy_output_loss_from_source_idx=None,
                batch_norm=False,
+               L2=None, darc1=None,
                spatial_smoothing=0.0,
+               updater_opts=None,
                initial_output=None,
                rec_previous_layer=None,
                collocate_with=None,
@@ -84,6 +85,8 @@ class LayerBase(object):
       see https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/util/device_name_utils.h
     :param float|None L2: for constraints
     :param float|None darc1: for constraints. see Generalization in Deep Learning, https://arxiv.org/abs/1710.05468
+    :param float|None spatial_smoothing: see :func:`TFUtil.spatial_smoothing_energy`
+    :param dict[str]|None updater_opts: accepts similar opts as TFUpdater, e.g. "optimizer", "learning_rate", ...
     :param bool|None is_output_layer:
     :param bool only_on_eval: if True, this layer will only be calculated in eval
     :param bool only_on_search: if True, this layer will only be calculated when search is done
@@ -136,11 +139,12 @@ class LayerBase(object):
     self.param_device = param_device
     self.L2 = L2
     self.darc1 = darc1
+    self.spatial_smoothing = spatial_smoothing
+    self.updater_opts = CollectionReadCheckCovered(updater_opts or {})
     self._is_output_layer = is_output_layer
     self.only_on_eval = only_on_eval
     self.only_on_search = only_on_search
     self.use_batch_norm = batch_norm
-    self.spatial_smoothing = spatial_smoothing
     self.trainable = trainable
     self.custom_param_importer = custom_param_importer
     self.register_as_extern_data = register_as_extern_data
@@ -288,11 +292,8 @@ class LayerBase(object):
     :return: valid scope name, might be just name. see tf._VALID_SCOPE_NAME_REGEX and tf._VALID_OP_NAME_REGEX
     :rtype: str
     """
-    # For the root name scope, it's even more restrictive, and we must also cover this case.
-    name = name.replace(":", "__")
-    if name[:1] in "_-\\/":  # invalid first chars
-      name = (".%i." % ord(name[0])) + name[1:]
-    return name
+    from TFUtil import get_valid_scope_name_from_str
+    return get_valid_scope_name_from_str(name)
 
   @classmethod
   def cls_layer_scope(cls, name):
@@ -370,16 +371,23 @@ class LayerBase(object):
       d["reuse_params"] = ReuseParams.from_config_dict(d["reuse_params"], network=network, get_layer=get_layer)
     if d.get("loss", None) and "target" not in d:
       d["target"] = network.extern_data.default_target
+    targets = None
     if d.get("target"):
+      targets = d["target"]
+      # we might have multiple targets, e.g. in choice layer, so convert to list
+      if isinstance(targets, str):
+          targets = [targets]
       if network.eval_flag:
-        # Not resolving this in the dict, but call get_layer to make it available.
-        assert isinstance(d["target"], str)
-        if d["target"].startswith("layer:"):
-          get_layer(d["target"][len("layer:"):])
-    if "n_out" not in d and d.get("target", None) and network.eval_flag:
+        for target in targets:
+          assert isinstance(target, str)
+          # Not resolving this in the dict, but call get_layer to make it available.
+          if target.startswith("layer:"):
+            get_layer(target[len("layer:"):])
+    if "n_out" not in d and targets and network.eval_flag:
       # Must be done here now because loss might be set to None later.
+      target = targets[0]  # guess using first target
       d["n_out"] = cls._guess_n_out_from_target_and_opt_loss(
-        network=network, target=d["target"], loss_class_name=d.get("loss", None), get_layer=get_layer)
+        network=network, target=target, loss_class_name=d.get("loss", None), get_layer=get_layer)
     if d.pop("loss_only_on_non_search", None) and network.search_flag:
       d.pop("loss", None)
       d.pop("loss_scale", None)
@@ -483,9 +491,24 @@ class LayerBase(object):
   def get_sub_layer(self, layer_name):
     """
     The default behavior for any layer is to return None.
-    :param str layer_name:  The sub_layer addressed by '/' separated path.
-    :return: The sub_layer addressed in layer_name or None if no sub_layer exists
+
+    :param str layer_name: name of the sub_layer (right part of '/' separated path)
+    :return: the sub_layer addressed in layer_name or None if no sub_layer exists
     :rtype: LayerBase|None
+    """
+    return None
+
+  @classmethod
+  def get_sub_layer_out_data_from_opts(cls, layer_name, parent_layer_kwargs):
+    """
+    Called by _TemplateLayer.get_sub_layer(). Gets a Data template for the sub-layer with name 'layer_name'.
+    Also returns the network the sub-layer is in and the class type of the sub-layer. There is no good default
+    behaviour here, as this heavily depends on how the current layer uses sub-layers.
+
+    :param str layer_name: name of the sub_layer (right part of '/' separated path)
+    :param dict[str] parent_layer_kwargs: kwargs for the parent layer (as kwargs in cls.get_out_data_from_opts())
+    :return: Data template, network and the class type of the sub-layer
+    :rtype: (Data, TFNetwork, type)|None
     """
     return None
 
@@ -608,6 +631,10 @@ class LayerBase(object):
       assert self.params[param_name] is param
     if not saveable:
       self.saveable_param_replace[param] = None
+    if getattr(param, "RETURNN_layer", None) is None:
+      param.RETURNN_layer = self
+    if getattr(param, "RETURNN_updater_opts", None) is None and self.updater_opts.truth_value:
+      param.RETURNN_updater_opts = self.updater_opts
     return param
 
   def set_param_values_by_dict(self, values_dict, session, ignore_wrong_shape=False, copy_param_mode=None):
@@ -1968,7 +1995,7 @@ class LinearLayer(_ConcatInputLayer):
   layer_class = "linear"
 
   def __init__(self, activation, with_bias=True, grad_filter=None, forward_weights_init="glorot_uniform",
-               bias_init=0.0, use_transposed_weight=False, **kwargs):
+               bias_init=0.0, use_transposed_weights=False, **kwargs):
     """
     :param str|None activation: e.g. "relu", or None
     :param bool with_bias:
@@ -1976,14 +2003,14 @@ class LinearLayer(_ConcatInputLayer):
     :param str forward_weights_init: see :func:`TFUtil.get_initializer`
     :param str recurrent_weights_init: see :func:`TFUtil.get_initializer`
     :param str|float bias_init: see :func:`TFUtil.get_initializer`
-    :param bool use_transposed_weight: If True, define the weight matrix with transposed dimensions (n_out, n_in).
+    :param bool use_transposed_weights: If True, define the weight matrix with transposed dimensions (n_out, n_in).
     """
     super(LinearLayer, self).__init__(**kwargs)
     from TFUtil import get_initializer
 
     self.activation = activation
     self.with_bias = with_bias
-    self.use_transposed_weight = use_transposed_weight
+    self.use_transposed_weights = use_transposed_weights
 
     input_data = self.input_data
     n_in = input_data.dim
@@ -1997,15 +2024,15 @@ class LinearLayer(_ConcatInputLayer):
       #  Or use VarianceScaling(scale=6.0, mode="fan_avg", distribution="normal") to get the same as in Theano.
       fwd_weights_initializer = get_initializer(
         forward_weights_init, seed=self.network.random.randint(2 ** 31), eval_local_ns={"layer": self})
-      if self.use_transposed_weight:
-        weight_shape = (n_out, n_in)
+      if self.use_transposed_weights:
+        weights_shape = (n_out, n_in)
       else:
-        weight_shape = (n_in, n_out)
+        weights_shape = (n_in, n_out)
 
       W = self.add_param(tf.get_variable(
-        name="W", shape=weight_shape, dtype=tf.float32, initializer=fwd_weights_initializer))
+        name="W", shape=weights_shape, dtype=tf.float32, initializer=fwd_weights_initializer))
 
-      if self.use_transposed_weight:
+      if self.use_transposed_weights:
         W = tf.transpose(W)
 
       if self.with_bias:
@@ -2701,6 +2728,9 @@ class MergeDimsLayer(_ConcatInputLayer):
       input_data=input_data, merge_axes=axes, old_axis=input_data.batch_dim_axis)
     data.time_dim_axis = cls._old_axis_to_new_axis(
       input_data=input_data, merge_axes=axes, old_axis=input_data.time_dim_axis)
+    if data.time_dim_axis == data.batch_dim_axis:  # special case: batch and time got merged
+      # Fallback to some sensible default.
+      data.time_dim_axis = data.get_spatial_batch_axes()[0] if data.get_spatial_batch_axes() else None
     data.feature_dim_axis = new_feature_dim_axis
     return data
 
@@ -3204,6 +3234,7 @@ class ConvLayer(_ConcatInputLayer):
     padding = padding.upper()
     if input_expand_dims == 0 and not input_add_feature_dim and not input_split_feature_dim:
       # Maybe we have a chance to correctly define the output shapes.
+      assert data.time_dim_axis is not None, "time_dim_axis was not specified, consider setting dim options of ConvLayer"
       index_shift = data.time_dim_axis_excluding_batch
       for i in range(len(filter_size)):
         if data.shape[i + index_shift] is not None:
@@ -5397,7 +5428,7 @@ class Loss(object):
       # We expect to get (batch*time) or (time*batch) in the first dimension of the loss and the output.
       loss = self._reduce_to_batch_time_with_mask(loss, normalize=normalize)  # (batch*time,) or (time*batch,)
       loss.set_shape((None,))
-      loss = tf.reshape(loss, tf.shape(self.output.get_sequence_mask()))  # (batch,time) or (time,batch)
+      loss = tf.reshape(loss, tf.shape(self.output.placeholder)[:2])  # (batch,time) or (time,batch)
       loss = tf.reduce_sum(loss, axis=self.output.time_dim_axis)  # (batch,)
       if normalize:
         loss /= tf.to_float(self.output.get_sequence_lengths())
@@ -5445,7 +5476,7 @@ class Loss(object):
     :param tf.Tensor x: (B,T,...) or (T,B,...)
     :param tf.Tensor seq_lens: (B,)
     :param bool time_major:
-    :return: (B*T|B',...)
+    :return: (B*T|T*B|B',...)
     :rtype: tf.Tensor
     """
     if self.use_flatten_frames:
@@ -5453,9 +5484,10 @@ class Loss(object):
       return flatten_with_seq_len_mask(x, seq_lens, time_major=time_major)
     x_shape = tf.shape(x)
     x_shape = [x_shape[i] for i in range(x.get_shape().ndims)]
-    if time_major:
+    if time_major != self.output.is_time_major:
+      # We expect at various places (eg. reduce_to_batch) that the loss is the same as self.output.
       from TFUtil import swapaxes
-      x = swapaxes(x, 0, 1)  # (B,T,...)
+      x = swapaxes(x, 0, 1)  # (B,T,...) or (T,B,...)
     return tf.reshape(x, [x_shape[0] * x_shape[1]] + x_shape[2:], name="merge_batch_time")
 
   def init(self, output, output_with_activation=None, target=None, layer=None):
@@ -6570,6 +6602,124 @@ class SamplingBasedLoss(Loss):
         return self.reduce_func(full_softmax_fn())
       else:
         return self.reduce_func(sampled_loss_fn())
+
+
+class TripletLoss(Loss):
+  """
+  Triplet loss: loss = max(margin + d(x_a, x_s) - d(x_a, x_d), 0.0)
+  Triplet loss is used for metric learning in a siamese/triplet network.
+  It should be used as a part of CopyLayer with 3 inputs corresponding to
+    x_a, x_s and x_d in a loss.
+  Here we assume that x_a are anchor samples, x_s are samples where
+    at each position i in a minibatch x_ai and x_si belong to the same class,
+    while pairs x_ai and x_di belong to different classes.
+  In this implementation the number of training examples is increased
+  by extracting all possible same/different pairs within a minibatch.
+  """
+  class_name = "triplet_loss"
+
+  def __init__(self, margin, multi_view_training=False, **kwargs):
+    super(TripletLoss, self).__init__(**kwargs)
+    """
+    :param float margin: how much the distance between instances of the same class 
+      should be smaller then distances between instances of different classes.
+    :param bool multi_view_training: True if we have a pair of inputs (x_a, x_s, x_d) 
+      extracted from two different data representations (i.e. acoustic and orthographic)
+    """
+    self.margin = margin
+    self.multi_view = multi_view_training
+
+  def init(self, output, output_with_activation=None, target=None, **kwargs):
+    """
+    :param Data output: generated output
+    :param OutputWithActivation|None output_with_activation:
+    :param Data target: reference target from dataset
+    """
+    super(TripletLoss, self).init(output=output, output_with_activation=output_with_activation, target=target, **kwargs)
+    batch_size = tf.cast(tf.shape(self.output.placeholder)[self.output.batch_dim_axis], tf.float32)
+    scale_factor = 2.0 if self.multi_view else 1.0
+    self.loss_norm_factor = 1.0 / (scale_factor * 9.0 * batch_size)
+
+  def get_value(self):
+    if self.multi_view:
+      with tf.name_scope("multi_view_loss"):
+        out = self.output_flat
+        assert self.output.dim % 6 == 0
+        sources = tf.split(out, num_or_size_splits=6, axis=1)
+        targets = self.target_flat
+        aembeds_anchor = sources[0]
+        aembeds_pair = sources[1]
+        aembeds_diff = sources[2]
+        cembeds_anchor = sources[3]
+        cembeds_pair = sources[4]
+        cembeds_diff = sources[5]
+        embeds_1 = tf.concat(values=[aembeds_anchor, cembeds_pair, cembeds_diff], axis=0)
+        embeds_2 = tf.concat(values=[aembeds_pair, cembeds_pair, aembeds_diff], axis=0)
+        ahchor_targets = targets[:, 0]
+        pair_targets = targets[:, 1]
+        diff_targets = targets[:, 2]
+        labels = tf.concat(values=[anchor_targets, pair_targets, diff_targets], axis=0)
+        loss_out = self._triplet_loss(embeds_1, labels) + self._triplet_loss(embeds_2, labels)
+    else:
+      with tf.name_scope("single_view_loss"):
+        out = self.output_flat
+        assert self.output.dim % 3 == 0
+        sources = tf.split(out, num_or_size_splits=3, axis=1)
+        targets = self.target_flat
+        aembeds_anchor = sources[0]
+        aembeds_pair = sources[1]
+        aembeds_diff = sources[2]
+        embeds = tf.concat(values=[aembeds_anchor, aembeds_pair, aembeds_diff], axis=0)
+        anchor_targets = targets[:, 0]
+        pair_targets = targets[:, 1]
+        diff_targets = targets[:, 2]
+        labels = tf.concat(values=[anchor_targets, pair_targets, diff_targets], axis=0)
+        loss_out = self._triplet_loss(embeds, labels)
+
+    return loss_out
+
+  def _triplet_loss(self, embeds, labels):
+    """
+    param tf.Tensor embeds: shape (3*B,F); all embeddings concatenated in batch dim; float32;
+    param tf.Tensor labels: shape (3*B,); all output labels concatenated in batch dim; int32
+    """
+    emb_norm = tf.nn.l2_normalize(embeds, axis=1, epsilon=1e-15)
+    sim = tf.matmul(emb_norm, emb_norm, transpose_b=True)
+    dist = 1.0 - sim
+    labels = tf.expand_dims(labels, 0)
+    labels = tf.cast(labels, tf.int32)
+    prod = tf.matmul(tf.transpose(labels), labels)
+    squer = tf.square(labels)
+    same_mask = tf.equal(squer, prod)
+    same_indices = tf.where(same_mask)
+    diff_mask = tf.logical_not(same_mask)
+    diff_indices = tf.where(diff_mask)
+
+    with tf.name_scope("same_loss"):
+      same_distances = tf.gather_nd(dist, same_indices)
+      same_loss = 0.5 * tf.reduce_sum(same_distances, 0)
+
+    with tf.name_scope("diff_loss"):
+      diff_distances = tf.gather_nd(dist, diff_indices)
+      # if the distance between embeddings is large than margin => assign zero
+      diff_max = tf.maximum(self.margin - diff_distances, 0.0)
+      diff_loss = 0.5 * tf.reduce_sum(diff_max, 0)
+
+    return same_loss + diff_loss
+
+  def _check_init(self):
+    """
+    Does some checks on self.target and self.output, e.g. if the dense shapes matches.
+    """
+    assert self.target.sparse
+    assert self.output.dim % (6 if self.multi_view else 3) == 0
+
+  def get_error(self):
+    """
+    Error is not defined for triplet_loss
+    :return: None
+    """
+    return None
 
 
 _LossClassDict = {}  # type: dict[str,type(Loss)]

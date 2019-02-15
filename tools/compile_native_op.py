@@ -66,6 +66,8 @@ def main(argv):
   argparser = argparse.ArgumentParser(description='Compile some op')
   argparser.add_argument('--config', help="filename to config-file")
   argparser.add_argument('--native_op', help="op name. e.g. 'LstmGenericBase'")
+  argparser.add_argument('--blas_lib', default=None,
+                         help="specify which blas lib to use (path to .so or file name to search for)")
   argparser.add_argument('--search_for_numpy_blas', dest='search_for_numpy_blas', action='store_true',
                          help="search for blas inside numpys .libs folder")
   argparser.add_argument('--no_search_for_numpy_blas', dest='search_for_numpy_blas', action='store_false',
@@ -80,7 +82,7 @@ def main(argv):
   if args.native_op:
     print("Loading native op %r" % args.native_op)
     make_op(getattr(NativeOp, args.native_op), compiler_opts={"verbose": True},
-            search_for_numpy_blas=args.search_for_numpy_blas)
+            search_for_numpy_blas=args.search_for_numpy_blas, blas_lib=args.blas_lib)
 
   libs = []
   if OpMaker.with_cuda and OpMaker.tf_blas_gemm_workaround:

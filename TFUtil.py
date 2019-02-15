@@ -1598,6 +1598,7 @@ def variable_scalar_summaries_dict(x, name=None):
     '%s_mean' % name: mean,
     '%s_stddev' % name: stddev,
     '%s_rms' % name: tf.sqrt(tf.reduce_mean(tf.square(x))),
+    '%s_l2' % name: tf.sqrt(tf.nn.l2_loss(x) * 0.5),
     '%s_max' % name: tf.reduce_max(x),
     '%s_min' % name: tf.reduce_min(x)}
 
@@ -1621,6 +1622,21 @@ def variable_summaries(var, name=None, with_histogram=False):
       tf.summary.scalar(k, v)
     if with_histogram:
       tf.summary.histogram('%s_histogram' % name, var)
+
+
+def get_valid_scope_name_from_str(s):
+  """
+  :param str s: some name
+  :return: valid scope name, might be just s. see tf._VALID_SCOPE_NAME_REGEX and tf._VALID_OP_NAME_REGEX
+  :rtype: str
+  """
+  # For the root name scope, it's even more restrictive, and we must also cover this case.
+  # NOTE: Be careful changing this logic. Try to never change the behavior for existing cases,
+  # because this name is used e.g. for layers, and you might introduce incompatibility by changes here.
+  s = s.replace(":", "__")
+  if s[:1] in "_-\\/":  # invalid first chars
+    s = (".%i." % ord(s[0])) + s[1:]
+  return s
 
 
 def get_current_var_scope_name():
@@ -1739,7 +1755,7 @@ def get_name_scope_of_tensor(x):
 
 def get_base_name(x):
   """
-  :param tf.Tensor x: has name e.g. "layer0/rec/W:0"
+  :param tf.Tensor|tf.Variable x: has name e.g. "layer0/rec/W:0"
   :return: return the base name, e.g. "W", without the output index
   """
   parts = str(x.name).split("/")
@@ -1749,7 +1765,7 @@ def get_base_name(x):
 @contextlib.contextmanager
 def reuse_name_scope_of_tensor(x, prefix="", postfix=""):
   """
-  :param tf.Tensor x: has name e.g. "layer0/rec/W:0"
+  :param tf.Tensor|tf.Variable x: has name e.g. "layer0/rec/W:0"
   :param str prefix:
   :param str postfix:
   :return: reuse the name scope of x, e.g. "layer0/rec", yields scope
@@ -3852,7 +3868,7 @@ def spatial_smoothing_energy(x, dim, use_circular_conv=True):
   :rtype: tf.Tensor
   :return: energy of shape (...)
 
-  Via Achieving Human Parity in Conversational Speech Recognition, Microsoft, 2017.
+  Via: Achieving Human Parity in Conversational Speech Recognition, Microsoft, 2017 (https://arxiv.org/abs/1610.05256).
   Interpret the last dimension as 2D (w, h) and apply some high-pass filter on it.
   """
   import math
@@ -6303,10 +6319,12 @@ class _DeviceAttrMod:
 
 def get_device_attr(dev):
   """
-  :param str dev: eg. "/device:GPU:0", or any argument tf.device
+  :param str dev: eg. "/device:GPU:0", or any argument for :func:`tf.device`
   :return: scalar string, eg. b'device: 2, name: GeForce GTX 1080 Ti, pci bus id: 0000:82:00.0, compute capability: 6.1'
   :rtype: tf.Tensor
   """
+  if ":XLA_" in dev:  # e.g. '/job:localhost/replica:0/task:0/device:XLA_GPU:0'
+    dev = dev.replace(":XLA_", ":")
   with tf.device(dev):
     return _DeviceAttrMod.get_device_attr()
 
@@ -6665,3 +6683,25 @@ def get_positional_encoding(num_channels, length=None, position=None, min_timesc
   signal = tf.concat([tf.sin(scaled_time), tf.cos(scaled_time)], axis=1)
   signal = tf.pad(signal, [[0, 0], [0, num_channels % 2]])  # (length, channels)
   return signal
+
+
+def get_non_deterministic_ops_from_graph():
+  """
+  Lists all non deterministic ops used in the default graph
+  If a non deterministic op is used multiple times each instance will be listed
+
+  currently doesn't check if user specified a specific computation device
+  list of non deterministic ops is not jet complete
+
+  :return: list of all non deterministic ops names (depending on device and tf version) used in current graph
+  :rtype: list[tf.Operation]
+  """
+  device_types = {device.device_type for device in get_tf_list_local_devices()}
+  non_det_ops = []
+  tf_version = tf_version_tuple()
+  for op in tf.get_default_graph().get_operations():
+    if op.type == "Mean" and tf_version <= (1, 5, 0) and "GPU" in device_types:
+      non_det_ops.append(op)
+    # elif ... more non det ops to be added
+
+  return non_det_ops

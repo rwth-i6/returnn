@@ -414,14 +414,22 @@ def executeMainTask():
     engine.init_train_from_config(config, train_data, dev_data, eval_data)
     engine.train()
   elif task == "eval":
+    epoch = config.int("epoch", -1)
+    load_epoch = config.int("load_epoch", -1)
+    if epoch >= 0:
+      assert (load_epoch < 0) or (load_epoch == epoch), "epoch and load_epoch have to match"
+      engine.epoch = epoch
+      config.set('load_epoch', engine.epoch)
+    else:
+      assert load_epoch, "specify epoch or load_epoch"
+      engine.epoch = load_epoch
     engine.init_train_from_config(config, train_data, dev_data, eval_data)
-    engine.epoch = config.int("epoch", None)
-    assert engine.epoch, "set epoch in config"
-    config.set('load_epoch', engine.epoch)
     print("Evaluate epoch", engine.epoch, file=log.v4)
     engine.eval_model(
-      output_file=config.value("eval_output_file", ""),
-      output_per_seq_file=config.value("eval_output_file_per_seq", ""))
+      output_file=config.value("eval_output_file", None),
+      output_per_seq_file=config.value("eval_output_file_per_seq", None),
+      loss_name=config.value("loss_name", None),
+      output_per_seq_format=config.list("output_per_seq_format", ["score"]))
   elif task in ['forward', 'hpx']:
     assert eval_data is not None, 'no eval data provided'
     combine_labels = config.value('combine_labels', '')

@@ -6,3 +6,7 @@
 	path = extern/kenlm
 	url = https://github.com/kpu/kenlm.git
 	branch = master
+[submodule "extern/ParseOggVorbis"]
+	path = extern/ParseOggVorbis
+	url = https://github.com/albertz/ParseOggVorbis.git
+	branch = master

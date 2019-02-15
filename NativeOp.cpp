@@ -93,10 +93,12 @@ Ndarray* Ndarray_Copy(const Ndarray* self) {
 
 #include "tensorflow/core/public/version.h"
 
-#if (TF_MAJOR_VERSION == 1 && TF_MINOR_VERSION >= 5) || (TF_MAJOR_VERSION > 1)
+#if (TF_MAJOR_VERSION == 1 && TF_MINOR_VERSION >= 6) || (TF_MAJOR_VERSION > 1)
 #define TF_issue_6602_workaround 0
+#define TWOD_LSTM_SUPPORT 1
 #else
 #define TF_issue_6602_workaround 1
+#define TWOD_LSTM_SUPPORT 0
 #endif
 
 #if TF_issue_6602_workaround
@@ -208,6 +210,7 @@ static void tf_cuda_sgemm_batched(
     T beta = *beta_;
 // https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/rnn/kernels/blas_gemm.cc
 #if GOOGLE_CUDA
+#if TWOD_LSTM_SUPPORT
     typedef perftools::gputools::DeviceMemory<float> DeviceMemoryType;
     std::vector<DeviceMemoryType> a_device_memory;
     std::vector<DeviceMemoryType> b_device_memory;
@@ -258,6 +261,9 @@ static void tf_cuda_sgemm_batched(
                 .ok();
         OP_REQUIRES(context, blas_launch_status, errors::Aborted("BlockHostUntilDone failed!"));
     }
+#else  // TWOD_LSTM_SUPPORT
+    context->SetStatus(errors::InvalidArgument("For 2D-LSTMs, TensorFlow 1.6 or later is required"));
+#endif
 #else  // GOOGLE_CUDA
     context->SetStatus(errors::InvalidArgument("CuBlasGemm needs CUDA."));
 #endif  // GOOGLE_CUDA

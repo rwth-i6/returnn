@@ -691,15 +691,14 @@ class _NltkCorpusReaderDataset(CachedDataset2):
 
 class ExtractAudioFeatures:
   """
-  Currently uses librosa to extract MFCC features.
+  Currently uses librosa to extract MFCC/log-mel features.
   (Alternatives: python_speech_features, talkbox.features.mfcc, librosa)
-  We could also add support e.g. to directly extract log-filterbanks or so.
   """
 
   def __init__(self,
                window_len=0.025, step_len=0.010,
-               num_feature_filters=40, with_delta=False, norm_mean=None, norm_std_dev=None,
-               features="mfcc", random_permute=None, random_state=None):
+               num_feature_filters=None, with_delta=False, norm_mean=None, norm_std_dev=None,
+               features="mfcc", random_permute=None, random_state=None, raw_ogg_opts=None):
     """
     :param float window_len: in seconds
     :param float step_len: in seconds
@@ -707,14 +706,22 @@ class ExtractAudioFeatures:
     :param bool|int with_delta:
     :param numpy.ndarray|str|None norm_mean: if str, will interpret as filename
     :param numpy.ndarray|str|None norm_std_dev: if str, will interpret as filename
-    :param str features: "mfcc", "log_mel_filterbank", "log_log_mel_filterbank"
+    :param str features: "mfcc", "log_mel_filterbank", "log_log_mel_filterbank", "raw", "raw_ogg"
     :param CollectionReadCheckCovered|dict[str]|bool|None random_permute:
     :param numpy.random.RandomState|None random_state:
+    :param dict[str]|None raw_ogg_opts:
     :return: (audio_len // int(step_len * sample_rate), (with_delta + 1) * num_feature_filters), float32
     :rtype: numpy.ndarray
     """
     self.window_len = window_len
     self.step_len = step_len
+    if num_feature_filters is None:
+      if features == "raw":
+        num_feature_filters = 1
+      elif features == "raw_ogg":
+        raise Exception("you should explicitly specify num_feature_filters (dimension) for raw_ogg")
+      else:
+        num_feature_filters = 40  # was the old default
     self.num_feature_filters = num_feature_filters
     if isinstance(with_delta, bool):
       with_delta = 1 if with_delta else 0
@@ -731,6 +738,7 @@ class ExtractAudioFeatures:
     self.random_permute_opts = random_permute
     self.random_state = random_state
     self.features = features
+    self.raw_ogg_opts = raw_ogg_opts
 
   def _load_feature_vec(self, value):
     """
@@ -746,18 +754,40 @@ class ExtractAudioFeatures:
     assert value.shape == (self.get_feature_dimension(),)
     return value.astype("float32")
 
+  def get_audio_features_from_raw_bytes(self, raw_bytes):
+    """
+    :param io.BytesIO raw_bytes:
+    :return: shape (time,feature_dim)
+    :rtype: numpy.ndarray
+    """
+    if self.features == "raw_ogg":
+      assert self.with_delta == 0 and self.norm_mean is None and self.norm_std_dev is None
+      # We expect that raw_bytes comes from a Ogg file.
+      try:
+        from extern.ParseOggVorbis.returnn_import import ParseOggVorbisLib
+      except ImportError:
+        print("Maybe you did not clone the submodule extern/ParseOggVorbis?")
+        raise
+      return ParseOggVorbisLib.get_instance().get_features_from_raw_bytes(
+        raw_bytes=raw_bytes.getvalue(), output_dim=self.num_feature_filters, **(self.raw_ogg_opts or {}))
+
+    # Don't use librosa.load which internally uses audioread which would use Gstreamer as a backend,
+    # which has multiple issues:
+    # https://github.com/beetbox/audioread/issues/62
+    # https://github.com/beetbox/audioread/issues/63
+    # Instead, use PySoundFile, which is also faster. See here for discussions:
+    # https://github.com/beetbox/audioread/issues/64
+    # https://github.com/librosa/librosa/issues/681
+    import soundfile  # pip install pysoundfile
+    audio, sample_rate = soundfile.read(raw_bytes)
+    return self.get_audio_features(audio=audio, sample_rate=sample_rate)
+
   def get_audio_features(self, audio, sample_rate):
     """
     :param numpy.ndarray audio: raw audio samples, shape (audio_len,)
     :param int sample_rate: e.g. 22050
     :rtype: numpy.ndarray
     """
-    kwargs = {
-      "sample_rate": sample_rate,
-      "window_len": self.window_len,
-      "step_len": self.step_len,
-      "num_feature_filters": self.num_feature_filters,
-    }
     peak = numpy.max(numpy.abs(audio))
     audio /= peak
 
@@ -767,16 +797,28 @@ class ExtractAudioFeatures:
         sample_rate=sample_rate,
         opts=self.random_permute_opts,
         random_state=self.random_state)
-    kwargs["audio"] = audio
 
-    if self.features == "mfcc":
-      feature_data = _get_audio_features_mfcc(**kwargs)
-    elif self.features == "log_mel_filterbank":
-      feature_data = _get_audio_log_mel_filterbank(**kwargs)
-    elif self.features == "log_log_mel_filterbank":
-      feature_data = _get_audio_log_log_mel_filterbank(**kwargs)
+    if self.features == "raw":
+      assert self.num_feature_filters == 1
+      feature_data = audio[:, None].astype("float32")  # add dummy dimension
+
     else:
-      assert False, "non-supported feature type %s" % self.features
+      kwargs = {
+        "sample_rate": sample_rate,
+        "window_len": self.window_len,
+        "step_len": self.step_len,
+        "num_feature_filters": self.num_feature_filters,
+        "audio": audio}
+
+      if self.features == "mfcc":
+        feature_data = _get_audio_features_mfcc(**kwargs)
+      elif self.features == "log_mel_filterbank":
+        feature_data = _get_audio_log_mel_filterbank(**kwargs)
+      elif self.features == "log_log_mel_filterbank":
+        feature_data = _get_audio_log_log_mel_filterbank(**kwargs)
+      else:
+        raise Exception("non-supported feature type %r" % (self.features,))
+
     assert feature_data.ndim == 2
     assert feature_data.shape[1] == self.num_feature_filters
 
@@ -2072,17 +2114,8 @@ class LibriSpeechCorpus(CachedDataset2):
     :param int seq_idx:
     :rtype: DatasetSeq
     """
-    # Don't use librosa.load which internally uses audioread which would use Gstreamer as a backend,
-    # which has multiple issues:
-    # https://github.com/beetbox/audioread/issues/62
-    # https://github.com/beetbox/audioread/issues/63
-    # Instead, use PySoundFile, which is also faster. See here for discussions:
-    # https://github.com/beetbox/audioread/issues/64
-    # https://github.com/librosa/librosa/issues/681
-    import soundfile  # pip install pysoundfile
     with self._open_audio_file(seq_idx) as audio_file:
-      audio, sample_rate = soundfile.read(audio_file)
-    features = self.feature_extractor.get_audio_features(audio=audio, sample_rate=sample_rate)
+      features = self.feature_extractor.get_audio_features_from_raw_bytes(audio_file)
     bpe, txt = self._get_transcription(seq_idx)
     targets = numpy.array(bpe, dtype="int32")
     raw = numpy.array(txt, dtype="object")
