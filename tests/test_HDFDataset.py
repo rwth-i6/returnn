@@ -112,6 +112,21 @@ def generate_dummy_hdf(num_datasets=1):
   return ['./dummy.%i.hdf5' % idx for idx in range(1, num_datasets + 1)]
 
 
+def _get_tmp_file(suffix):
+  """
+  :param str suffix:
+  :return: filename
+  :rtype: str
+  """
+  import tempfile
+  f = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+  f.close()
+  fn = f.name
+  import atexit
+  atexit.register(lambda: os.remove(fn))
+  return fn
+
+
 _hdf_cache = {}  # opts -> hdf fn
 
 
@@ -126,12 +141,7 @@ def generate_hdf_from_other(opts):
   cache_key = make_hashable(opts)
   if cache_key in _hdf_cache:
     return _hdf_cache[cache_key]
-  import tempfile
-  f = tempfile.NamedTemporaryFile(suffix=".hdf", delete=False)
-  f.close()
-  fn = f.name
-  import atexit
-  atexit.register(lambda: os.remove(fn))
+  fn = _get_tmp_file(suffix=".hdf")
   from Dataset import init_dataset
   dataset = init_dataset(opts)
   hdf_dataset = HDFDatasetWriter(fn)
@@ -152,6 +162,73 @@ def generate_hdf_from_dummy():
 
 def test_hdf_dump():
   generate_hdf_from_dummy()
+
+
+class _DatasetCollectData:
+  def __init__(self, dataset):
+    """
+    :param Dataset dataset:
+    """
+    self.dataset = dataset
+    self.data_keys = None
+    self.data_shape = {}  # key -> shape
+    self.data_sparse = {}  # key -> bool
+    self.data_dtype = {}  # key -> str
+    self.data = {}  # key -> list
+    self.seq_lens = []  # type: list[Util.NumbersDict]
+    self.seq_tags = []
+    self.num_seqs = None
+
+  def read_all(self):
+    dataset = self.dataset
+    dataset.init_seq_order(epoch=1)
+    data_keys = dataset.get_data_keys()
+    self.data_keys = data_keys
+    self.data_shape = {key: dataset.get_data_shape(key) for key in data_keys}
+    self.data_sparse = {key: dataset.is_data_sparse(key) for key in data_keys}
+    self.data_dtype = {key: dataset.get_data_dtype(key) for key in data_keys}
+    seq_idx = 0
+    while dataset.is_less_than_num_seqs(seq_idx):
+      dataset.load_seqs(seq_idx, seq_idx + 1)
+      for key in data_keys:
+        data = dataset.get_data(seq_idx=seq_idx, key=key)
+        self.data.setdefault(key, []).append(data)
+      seq_len = dataset.get_seq_length(seq_idx=seq_idx)
+      self.seq_lens.append(seq_len)
+      seq_tag = dataset.get_tag(seq_idx)
+      self.seq_tags.append(seq_tag)
+      seq_idx += 1
+    print("Iterated through %r, num seqs %i" % (dataset, seq_idx))
+    self.num_seqs = seq_idx
+
+
+def test_SimpleHDFWriter():
+  fn = _get_tmp_file(suffix=".hdf")
+  n_dim = 13
+  writer = SimpleHDFWriter(filename=fn, dim=n_dim, labels=None)
+  seq_lens1 = [11, 7, 5]
+  writer.insert_batch(
+    inputs=numpy.random.normal(size=(len(seq_lens1), max(seq_lens1), n_dim)).astype("float32"),
+    seq_len=seq_lens1,
+    seq_tag=["seq-%i" % i for i in range(len(seq_lens1))])
+  seq_lens2 = [10, 13, 3, 2]
+  writer.insert_batch(
+    inputs=numpy.random.normal(size=(len(seq_lens2), max(seq_lens2), n_dim)).astype("float32"),
+    seq_len=seq_lens2,
+    seq_tag=["seq-%i" % (i + len(seq_lens1)) for i in range(len(seq_lens2))])
+  writer.close()
+  seq_lens = seq_lens1 + seq_lens2
+
+  dataset = HDFDataset(files=[fn])
+  reader = _DatasetCollectData(dataset=dataset)
+  reader.read_all()
+  assert "data" in reader.data_keys  # "classes" might be in there as well, although not really correct/existing
+  assert reader.data_sparse["data"] is False
+  assert list(reader.data_shape["data"]) == [n_dim]
+  assert reader.data_dtype["data"] == "float32"
+  assert len(seq_lens) == reader.num_seqs
+  for i, seq_len in enumerate(seq_lens):
+    assert reader.seq_lens[i]["data"] == seq_len
 
 
 def dummy_iter_dataset(dataset):
