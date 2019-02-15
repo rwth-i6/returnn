@@ -1746,8 +1746,7 @@ class Engine(object):
     :param str combine_labels: ignored at the moment
     :param int batch_size:
     """
-    import h5py
-    from Util import hdf5_strings
+    from HDFDataset import SimpleHDFWriter
 
     output_layer = self._get_output_layer()
     target = self.network.get_default_target()
@@ -1755,39 +1754,7 @@ class Engine(object):
     assert output_file
     assert not os.path.exists(output_file)
     print("Forwarding to HDF file: %s" % output_file, file=log.v2)
-    cache = h5py.File(output_file, "w")
-    cache.attrs['numTimesteps'] = 0
-    cache.attrs['inputPattSize'] = output_layer.output.dim
-    cache.attrs['numDims'] = 1
-    cache.attrs['numLabels'] = output_layer.output.dim
-    cache.attrs['numSeqs'] = 0
-    if target in data.labels:
-      hdf5_strings(cache, 'labels', data.labels[target])
-    else:
-      cache.create_dataset('labels', (0,), dtype="S5")
-
-    datasets = {}  # type: dict[str,h5py.Dataset]
-    tags = []  # type: list[str]
-    seq_lengths = cache.create_dataset("seqLengths", (0,2), dtype='i', maxshape=(None,2))
-
-    def insert_h5_inputs(name, raw_data):
-      """
-      Inserts a record into the hdf5-file.
-      Resizes if necessary.
-
-      :param str name:
-      :param numpy.ndarray raw_data: shape=(time,data)
-      """
-      assert len(raw_data.shape) == 2
-      if name not in datasets:
-        datasets[name] = cache.create_dataset(name, raw_data.shape, raw_data.dtype, maxshape=tuple(None for _ in raw_data.shape))
-      else:
-        old_shape = datasets[name].shape
-        datasets[name].resize((old_shape[0] + raw_data.shape[0],) + old_shape[1:])
-      # append raw data to dataset
-      datasets[name][cache.attrs['numTimesteps']:, 0:] = raw_data
-      cache.attrs['numTimesteps'] += raw_data.shape[0]
-      cache.attrs['numSeqs'] += 1
+    writer = SimpleHDFWriter(filename=output_file, dim=output_layer.output.dim, labels=data.labels.get(target, None))
 
     def extra_fetches_cb(inputs, seq_len, seq_tag):
       """
@@ -1800,13 +1767,7 @@ class Engine(object):
       n_batch = len(seq_len)
       assert n_batch == len(seq_tag)
       assert n_batch == inputs.shape[0]
-
-      seqlen_offset = seq_lengths.shape[0]
-      seq_lengths.resize(seqlen_offset + n_batch, axis=0)
-      for i in range(n_batch):
-        tags.append(seq_tag[i])
-        seq_lengths[seqlen_offset + i] = seq_len[i]
-        insert_h5_inputs('inputs', inputs[i][:seq_len[i]])
+      writer.insert_batch(inputs=inputs, seq_len=seq_len, seq_tag=seq_tag)
 
     batches = data.generate_batches(
       recurrent_net=self.network.recurrent,
@@ -1827,11 +1788,7 @@ class Engine(object):
       print("Error happened. Exit now.")
       sys.exit(1)
 
-    max_tag_len = max([len(d) for d in tags])
-    cache.create_dataset('seqTags', shape=(len(tags),), dtype="S%i" % (max_tag_len + 1))
-    for i, tag in enumerate(tags):
-      cache['seqTags'][i] = numpy.array(tag, dtype="S%i" % (max_tag_len + 1))
-    cache.close()
+    writer.close()
 
   def analyze(self, data, statistics):
     """

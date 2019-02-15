@@ -721,6 +721,84 @@ class SiameseHDFDataset(CachedDataset2):
     return 1  # unknown
 
 
+class SimpleHDFWriter:
+  def __init__(self, filename, dim, labels):
+    """
+    :param str filename:
+    :param int dim:
+    :param list[str]|None labels:
+    """
+    from Util import hdf5_strings
+    self.dim = dim
+    self.labels = labels
+    if labels:
+      assert len(labels) == dim
+    self._file = h5py.File(filename, "w")
+
+    self._file.attrs['numTimesteps'] = 0
+    self._file.attrs['inputPattSize'] = dim
+    self._file.attrs['numDims'] = 1
+    self._file.attrs['numLabels'] = dim
+    self._file.attrs['numSeqs'] = 0
+    if labels:
+      hdf5_strings(self._file, 'labels', labels)
+    else:
+      self._file.create_dataset('labels', (0,), dtype="S5")
+
+    self._datasets = {}  # type: dict[str, h5py.Dataset]
+    self._tags = []  # type: list[str]
+    self._seq_lengths = self._file.create_dataset("seqLengths", (0, 2), dtype='i', maxshape=(None, 2))
+
+  def _insert_h5_inputs(self, name, raw_data):
+    """
+    Inserts a record into the hdf5-file.
+    Resizes if necessary.
+
+    :param str name:
+    :param numpy.ndarray raw_data: shape=(time,data)
+    :param str seq_tag:
+    """
+    assert len(raw_data.shape) == 2
+    if name not in self._datasets:
+      self._datasets[name] = self._file.create_dataset(
+        name, raw_data.shape, raw_data.dtype, maxshape=tuple(None for _ in raw_data.shape))
+    else:
+      old_shape = self._datasets[name].shape
+      self._datasets[name].resize((old_shape[0] + raw_data.shape[0],) + old_shape[1:])
+    # append raw data to dataset
+    self._datasets[name][self._file.attrs['numTimesteps']:, 0:] = raw_data
+    self._file.attrs['numTimesteps'] += raw_data.shape[0]
+    self._file.attrs['numSeqs'] += 1
+
+  def insert_batch(self, inputs, seq_len, seq_tag):
+    """
+    :param numpy.ndarray inputs: shape=(n_batch,time,data)
+    :param list[int] seq_len: sequence lengths
+    :param list[str] seq_tag: sequence tags of length n_batch
+    """
+    n_batch = len(seq_len)
+    assert n_batch == len(seq_tag)
+    assert inputs.ndim == 3
+    assert n_batch == inputs.shape[0]
+    assert max(seq_len) == inputs.shape[1]
+    assert self.dim == inputs.shape[2]
+
+    seqlen_offset = self._seq_lengths.shape[0]
+    self._seq_lengths.resize(seqlen_offset + n_batch, axis=0)
+
+    for i in range(n_batch):
+      self._tags.append(seq_tag[i])
+      self._seq_lengths[seqlen_offset + i] = seq_len[i]
+      self._insert_h5_inputs('inputs', inputs[i][:seq_len[i]])
+
+  def close(self):
+    max_tag_len = max([len(d) for d in self._tags])
+    self._file.create_dataset('seqTags', shape=(len(self._tags),), dtype="S%i" % (max_tag_len + 1))
+    for i, tag in enumerate(self._tags):
+      self._file['seqTags'][i] = numpy.array(tag, dtype="S%i" % (max_tag_len + 1))
+    self._file.close()
+
+
 class HDFDatasetWriter:
   def __init__(self, filename):
     """
