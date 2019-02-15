@@ -122,7 +122,7 @@ class HDFDataset(CachedDataset):
           assert fin['targets/size'].attrs[k].shape == (2,)
           num_outputs[k] = tuple(fin['targets/size'].attrs[k])
     else:
-      num_outputs = {'classes': fin.attrs[attr_numLabels]}
+      num_outputs = {'classes': [fin.attrs[attr_numLabels], 1]}
     num_outputs["data"] = num_inputs
     if not self.num_outputs:
       self.num_outputs = num_outputs
