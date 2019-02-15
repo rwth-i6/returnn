@@ -231,6 +231,113 @@ def test_SimpleHDFWriter():
     assert reader.seq_lens[i]["data"] == seq_len
 
 
+def test_SimpleHDFWriter_small():
+  fn = _get_tmp_file(suffix=".hdf")
+  n_dim = 3
+  writer = SimpleHDFWriter(filename=fn, dim=n_dim, labels=None)
+  seq_lens = [2, 3]
+  writer.insert_batch(
+    inputs=numpy.random.normal(size=(len(seq_lens), max(seq_lens), n_dim)).astype("float32"),
+    seq_len=seq_lens,
+    seq_tag=["seq-%i" % i for i in range(len(seq_lens))])
+  writer.close()
+
+  dataset = HDFDataset(files=[fn])
+  reader = _DatasetCollectData(dataset=dataset)
+  reader.read_all()
+  assert "data" in reader.data_keys  # "classes" might be in there as well, although not really correct/existing
+  assert reader.data_sparse["data"] is False
+  assert list(reader.data_shape["data"]) == [n_dim]
+  assert reader.data_dtype["data"] == "float32"
+  assert len(seq_lens) == reader.num_seqs
+  for i, seq_len in enumerate(seq_lens):
+    assert reader.seq_lens[i]["data"] == seq_len
+
+  print("raw content (gzipped):")
+  import gzip
+  print(repr(gzip.compress(open(fn, "rb").read())))
+
+
+def test_read_simple_hdf():
+  # n_dim, seq_lens, raw_gzipped is via test_SimpleHDFWriter_small
+  n_dim = 3
+  seq_lens = [2, 3]
+  raw_gzipped = (
+    b'\x1f\x8b\x08\x00\x80\xc8f\\\x02\xff\xed\x9a=l\xd3@\x14\xc7\xefl\'XQ\x8a\xd2vhTT\xf0\x84X\x90\xc2V1\xb8TJ\xa0C'
+    b'\x81\x8a\x04\xa9\x03BM\x85i"5Q\x82]$`h%\x18@\xea\xc6\x02\x1b\x03\x03\x1f\x0b\x0b\x1bm\x10S\xa7NLL\xb01\x96\x1d'
+    b'\xa9\xd8\xbewI}\x8d\x9d\xb1i\xf9\xff\x86\\\xee\xf2\x9e\xef\xc3\xff\xbb{'
+    b'\xf6\xe5\xc5\\\xf1\xeaHf2\xc3\x02L\x93\x19,'
+    b'\xc7\x0e\xb2O|\xb7\xa3y\xf9\xfb\x12\xa5\x9c\xd2\xe7\x94\xbe\xd3d\xb9\x19\xfe\x96\xa7\xf2\x1c]\xdf\xd2E\xbeF\x8e'
+    b'\x95[\xa5R`\xbd\xaf \xeby\x95\x12\xe9\x05\x06\xfeG\xe6J\xb3\x0bA\xbaH\xf9\x02\xa5;Z\xd4n\xb5\xba\xec\xac\xba'
+    b'\x8c\xb9N{\xdei\xaex5W\x94\xd7\x9b\xad5O\x94W\xaa+nW\xaf\x83\xf44JzUu\x9de\xd3\xfe\\\t\x14{'
+    b'\xda\xffn\x8a\xeb/T=\xaf\\\x7f\xec\x04:7\xfd\xe9\x14Z^\x89\xcc\x0f\x92\xbd\xefS '
+    b'\x7f3\xf4o\xae5\x8a\xf5\x86\x1b\xeb\xc7\x99ZoF\xfa\xcdS\x97\xc5\xfc\x1aX\xaf\xf4\x1f\x91\xfe\x95z\xc3q=\xa7\xe5'
+    b'&\xf9\xa7\xe2\xdb]v\xda\xf1\xed\xee\xdd\x9e|\xe28s\x96\x16>\\\xe6\x85=\xe7\xbc\xaf\xbdN\xeb\xca8\x17mKQ^\xd3'
+    b'\xb4\xd0\xc1$\x7f\x9d\xab+\x89`\x8cZ\x1b\x18o\xec\xdc\xbf\xd3\xbb\xc3\xc3A\xf9\xc6\xcd"\xf7G\xda\x92:\x1dK\xb67'
+    b'\xe5\xfak$\xdb\xc9\xd5\xfdg:\xd9N\xce\x8b\xd6\xd4\xf1^7\x0e\xebJ\xf4\x8c\x0b\x99t\xf5\xa9)\xfb\x9d\xd6\xd5Y.t\r'
+    b'\xf4-\x86\xd6\xa2\xf9@z\xd3YTo\x9a\xbew\x8a|\rqY\xa3\xbf\xdeZG2\x1e\xc1>\xcb\xfb\xed\xb3V\xb2\xdf\xe6Y\xa5\xc0'
+    b'\x88\x8e\x9b\x81-\n\x00\x00\x00\x00\xe0D1('
+    b'\x8eN)\xcf\x99j|\xa9\xfb\xf1q`9j\x9d\xeb\xc6\xd1\x13&\x9bX\xef>_\xc6\xc6\xd3\xd3\xe3\xbdPS\x8f\x8f\xa7kG\x10G'
+    b'\xeb\x87\xfa\x99\x1f\xe0\xb7iG\x9f\x86\xb5\x18\xbb\xb7\x8a]\\|\xfd\xc5\x8e\xe6\xd3\xca}@\\\x0e\x00\x00\x00'
+    b'\x000lqt\xf4\x9cC}\x1f}\xf0\x9c#\xcd\x92\xce96\xe8\rm6R\xdf\xb0\x9fs\xb8N\xfbb!\xfc\xbc\x14\xf6Y\x06\xf9:\xa4'
+    b'\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x1cK>\xde>\xdf\xb9\xf6\xc3\xec\xfc'
+    b'}\xf0\xc7\xbe7\xf5m\xe6\xf2\xe7\xa7\xf6^\xee\xc9\xd6\xefG\xb3\x9d\x87\xcf\x9c\xed_\x1f&\xbf\xbe\xd4\xcet\xae'
+    b'\xaf\xbf\x99\xc9~\xda\xdd\xaa/\xbf\xb7\xef.\xeen\xbf^2"\xff\x82\xfd\x07\xf7a\x8c\xa2\xd4>\x00\x00')
+  import gzip
+  fn = _get_tmp_file(suffix=".hdf")
+  with open(fn, "wb") as f:
+    f.write(gzip.decompress(raw_gzipped))
+
+  dataset = HDFDataset(files=[fn])
+  reader = _DatasetCollectData(dataset=dataset)
+  reader.read_all()
+  assert "data" in reader.data_keys  # "classes" might be in there as well, although not really correct/existing
+  assert reader.data_sparse["data"] is False
+  assert list(reader.data_shape["data"]) == [n_dim]
+  assert reader.data_dtype["data"] == "float32"
+  assert len(seq_lens) == reader.num_seqs
+  for i, seq_len in enumerate(seq_lens):
+    assert reader.seq_lens[i]["data"] == seq_len
+
+
+def test_SimpleHDFWriter_ndim1_var_len():
+  # E.g. attention weights, shape (dec-time,enc-time) per seq.
+  fn = _get_tmp_file(suffix=".hdf")
+  writer = SimpleHDFWriter(filename=fn, dim=None, ndim=2, labels=None)
+  dec_seq_lens1 = [11, 7, 5]
+  enc_seq_lens1 = [13, 6, 8]
+  batch1_data = numpy.random.normal(size=(len(dec_seq_lens1), max(dec_seq_lens1), max(enc_seq_lens1))).astype("float32")
+  writer.insert_batch(
+    inputs=batch1_data,
+    seq_len={0: dec_seq_lens1, 1: enc_seq_lens1},
+    seq_tag=["seq-%i" % i for i in range(len(dec_seq_lens1))])
+  dec_seq_lens2 = [10, 13, 3, 2]
+  enc_seq_lens2 = [11, 13, 5, 4]
+  batch2_data = numpy.random.normal(size=(len(dec_seq_lens2), max(dec_seq_lens2), max(enc_seq_lens2))).astype("float32")
+  writer.insert_batch(
+    inputs=batch2_data,
+    seq_len={0: dec_seq_lens2, 1: enc_seq_lens2},
+    seq_tag=["seq-%i" % (i + len(dec_seq_lens1)) for i in range(len(dec_seq_lens2))])
+  writer.close()
+  dec_seq_lens = dec_seq_lens1 + dec_seq_lens2
+  enc_seq_lens = enc_seq_lens1 + enc_seq_lens2
+
+  # TODO we also need to store the individual seq lens, to be able to recover...
+
+  dataset = HDFDataset(files=[fn])
+  reader = _DatasetCollectData(dataset=dataset)
+  reader.read_all()
+  assert "data" in reader.data_keys  # "classes" might be in there as well, although not really correct/existing
+  assert reader.data_sparse["data"] is False
+  assert list(reader.data_shape["data"]) == []
+  assert reader.data_dtype["data"] == "float32"
+  assert len(dec_seq_lens) == len(enc_seq_lens) == reader.num_seqs
+  for i, (dec_seq_len, enc_seq_len) in enumerate(zip(dec_seq_lens, enc_seq_lens)):
+    assert reader.seq_lens[i]["data"] == dec_seq_len * enc_seq_len
+
+  # TODO we also should check the individual seq lens...
+
+
 def dummy_iter_dataset(dataset):
   """
   :param Dataset dataset:
