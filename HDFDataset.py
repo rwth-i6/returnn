@@ -216,10 +216,9 @@ class HDFDataset(CachedDataset):
     return self._get_tag_by_real_idx(ids)
 
   def is_data_sparse(self, key):
-    if key in self.num_outputs:
-      return self.num_outputs[key][1] == 1
     if self.get_data_dtype(key).startswith("int"):
-      return True
+      if key in self.num_outputs:
+        return self.num_outputs[key][1] <= 1
     return False
 
   def get_data_dtype(self, key):
