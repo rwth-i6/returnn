@@ -776,12 +776,13 @@ class SimpleHDFWriter:
     self._file.attrs['numTimesteps'] += raw_data.shape[0]
     self._file.attrs['numSeqs'] += 1
 
-  def _insert_h5_other(self, data_key, raw_data, dtype=None, add_time_dim=False):
+  def _insert_h5_other(self, data_key, raw_data, dtype=None, add_time_dim=False, dim=None):
     """
     :param str data_key:
     :param numpy.ndarray|int|float|list[int] raw_data: shape=(time,data) or shape=(time,) or shape=()...
     :param str dtype:
     :param bool add_time_dim:
+    :param int|None dim:
     """
     if isinstance(raw_data, (int, float, list)):
       raw_data = numpy.array(raw_data)
@@ -791,6 +792,11 @@ class SimpleHDFWriter:
     assert raw_data.ndim > 0 and raw_data.shape[0] > 0
     if dtype:
       raw_data = raw_data.astype(dtype)
+    if dim is None:
+      if raw_data.ndim > 1:
+        dim = raw_data.shape[-1]
+      else:
+        dim = 1  # dummy
     assert data_key != "inputs"
     name = data_key
     # Keep consistent with _insert_h5_inputs.
@@ -804,17 +810,17 @@ class SimpleHDFWriter:
       Util.hdf5_strings(self._file, "targets/labels/%s" % data_key, ["dummy-label"])
       self._datasets[name] = self._file['targets/data'].create_dataset(
         data_key, raw_data.shape, raw_data.dtype, maxshape=tuple(None for _ in raw_data.shape))
-      self._file['targets/size'].attrs[data_key] = [1, raw_data.ndim]  # (dim, ndim)
+      self._file['targets/size'].attrs[data_key] = [dim, raw_data.ndim]  # (dim, ndim)
     else:
       old_shape = self._datasets[name].shape
       self._datasets[name].resize((old_shape[0] + raw_data.shape[0],) + old_shape[1:])
 
     assert self._file.attrs['numSeqs'] > 0 and self._seq_lengths.shape[0] > 0  # assume _insert_h5_inputs called before
 
-    if self._seq_lengths[-1][1]:
-      assert self._seq_lengths[-1][1] == raw_data.shape[0]
+    if self._seq_lengths[self._file.attrs['numSeqs'] - 1, 1]:
+      assert self._seq_lengths[self._file.attrs['numSeqs'] - 1, 1] == raw_data.shape[0]
     else:
-      self._seq_lengths[-1][1] = raw_data.shape[0]
+      self._seq_lengths[self._file.attrs['numSeqs'] - 1, 1] = raw_data.shape[0]
       self._other_num_time_steps += raw_data.shape[0]
 
     offset = self._other_num_time_steps - raw_data.shape[0]
@@ -858,7 +864,8 @@ class SimpleHDFWriter:
       data = numpy.reshape(data, flat_shape)
       self._insert_h5_inputs(data)
       if len(seq_len) > 1:
-        self._insert_h5_other("partial_seq_len", [seq_len[axis][i] for axis in range(ndim_with_seq_len)], add_time_dim=True, dtype="int32")
+        self._insert_h5_other(
+          "partial_seq_len", [seq_len[axis][i] for axis in range(ndim_with_seq_len)], add_time_dim=True, dtype="int32")
 
   def close(self):
     max_tag_len = max([len(d) for d in self._tags])
