@@ -739,7 +739,8 @@ class SimpleHDFWriter:
       assert len(labels) == dim
     self._file = h5py.File(filename, "w")
 
-    self._file.attrs['numTimesteps'] = [0, 0]  # we will increment this on-the-fly
+    self._file.attrs['numTimesteps'] = 0  # we will increment this on-the-fly
+    self._other_num_time_steps = 0
     self._file.attrs['inputPattSize'] = dim or 1
     self._file.attrs['numDims'] = 1  # ignored?
     self._file.attrs['numLabels'] = dim or 1
@@ -769,10 +770,8 @@ class SimpleHDFWriter:
       old_shape = self._datasets[name].shape
       self._datasets[name].resize((old_shape[0] + raw_data.shape[0],) + old_shape[1:])
     # append raw data to dataset
-    num_timesteps = self._file.attrs['numTimesteps']
-    self._datasets[name][num_timesteps[0]:] = raw_data
-    num_timesteps[0] += raw_data.shape[0]
-    self._file.attrs['numTimesteps'] = num_timesteps
+    self._datasets[name][self._file.attrs['numTimesteps']:] = raw_data
+    self._file.attrs['numTimesteps'] += raw_data.shape[0]
     self._file.attrs['numSeqs'] += 1
 
   def _insert_h5_other(self, data_key, raw_data, dtype=None, add_time_dim=False):
@@ -814,9 +813,9 @@ class SimpleHDFWriter:
       assert self._seq_lengths[-1][1] == raw_data.shape[0]
     else:
       self._seq_lengths[-1][1] = raw_data.shape[0]
-      self._file.attrs['numTimesteps'][1] += raw_data.shape[0]
+      self._other_num_time_steps += raw_data.shape[0]
 
-    offset = self._file.attrs['numTimesteps'][1] - raw_data.shape[0]
+    offset = self._other_num_time_steps - raw_data.shape[0]
     hdf_data = self._datasets[name]
     hdf_data[offset:] = raw_data
 
