@@ -853,6 +853,9 @@ class SimpleHDFWriter:
 
     for i in range(n_batch):
       self._tags.append(seq_tag[i])
+      # Note: Currently, our HDFDataset does not support to have multiple axes with dynamic length.
+      # Thus, we flatten all together, and calculate the flattened seq len.
+      # (Ignore this if there is only a single time dimension.)
       flat_seq_len = numpy.prod([seq_len[axis][i] for axis in range(ndim_with_seq_len)])
       assert flat_seq_len > 0
       flat_shape = [flat_seq_len]
@@ -864,8 +867,12 @@ class SimpleHDFWriter:
       data = numpy.reshape(data, flat_shape)
       self._insert_h5_inputs(data)
       if len(seq_len) > 1:
+        # Note: Because we have flattened multiple axes with dynamic len into a single one,
+        # we want to store the individual axes lengths. We store those in a separate data entry "sizes".
+        # Note: We could add a dummy time-dim for this "sizes", and then have a feature-dim = number of axes.
+        # However, we keep it consistent to how we handled it in our 2D MDLSTM experiments.
         self._insert_h5_other(
-          "partial_seq_len", [seq_len[axis][i] for axis in range(ndim_with_seq_len)], add_time_dim=True, dtype="int32")
+          "sizes", [seq_len[axis][i] for axis in range(ndim_with_seq_len)], add_time_dim=False, dtype="int32")
 
   def close(self):
     max_tag_len = max([len(d) for d in self._tags])

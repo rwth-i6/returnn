@@ -332,16 +332,16 @@ def test_SimpleHDFWriter_ndim1_var_len():
   assert reader.data_sparse["data"] is False
   assert list(reader.data_shape["data"]) == []
   assert reader.data_dtype["data"] == "float32"
-  assert "partial_seq_len" in reader.data_keys
-  assert reader.data_sparse["partial_seq_len"] is False  # does not really matter...
-  assert reader.data_dtype["partial_seq_len"] == "int32"
-  assert list(reader.data_shape["partial_seq_len"]) == [2]
+  assert "sizes" in reader.data_keys
+  # sizes sparsity does not really matter...
+  assert reader.data_dtype["sizes"] == "int32"
+  assert list(reader.data_shape["sizes"]) == []
   assert len(dec_seq_lens) == len(enc_seq_lens) == reader.num_seqs
   for i, (dec_seq_len, enc_seq_len) in enumerate(zip(dec_seq_lens, enc_seq_lens)):
     assert reader.seq_lens[i]["data"] == dec_seq_len * enc_seq_len
-    assert reader.seq_lens[i]["partial_seq_len"] == 1
-    assert reader.data["partial_seq_len"][i].tolist() == [[dec_seq_len, enc_seq_len]], "got %r" % (
-      reader.data["partial_seq_len"][i],)
+    assert reader.seq_lens[i]["sizes"] == 2
+    assert reader.data["sizes"][i].tolist() == [dec_seq_len, enc_seq_len], "got %r" % (
+      reader.data["sizes"][i],)
 
 
 def dummy_iter_dataset(dataset):
