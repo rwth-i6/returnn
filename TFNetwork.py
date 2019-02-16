@@ -59,6 +59,8 @@ class ExternData(object):
     shape = [None] + list(dataset.get_data_shape(key))
     sparse = dataset.is_data_sparse(key)
     dtype = dataset.get_data_dtype(key)
+    if not sparse and shape[-1] is None:
+      dim = None  # overwrite. some datasets just would return some dummy int value
     return dict(
       batch_dim_axis=0, time_dim_axis=1,
       shape=shape, dim=dim, sparse=sparse, dtype=dtype,
@@ -106,7 +108,8 @@ class ExternData(object):
       data_dtype = dataset.get_data_dtype(key)
       assert data.dtype == data_dtype, "key %r dtype mismatch. %s" % (key, base_err_msg)
       data_dim = dataset.get_data_dim(key)
-      assert data.dim == data_dim, "key %r dim mismatch. %s" % (key, base_err_msg)
+      # some datasets just would return some dummy int value, but ignore if data.dim is None
+      assert data.dim == data_dim or data.dim is None, "key %r dim mismatch. %s" % (key, base_err_msg)
       data_shape = tuple(dataset.get_data_shape(key))
       assert data.shape[1:] == data_shape, "key %r shape mismatch. %s" % (key, base_err_msg)
 

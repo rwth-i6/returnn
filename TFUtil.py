@@ -6178,6 +6178,53 @@ def batch_gather(x, indices, keep_dims=False):
     return y
 
 
+def unflatten_nd(x, nd_sizes, num_axes=None):
+  """
+  E.g. assume that for each x[b], we have an image flattened, i.e. of size width*height.
+  Then nd_sizes[b] == (width, height) would provide the individual sizes.
+  We return y such that y[b][i][j] == x[b][i * nd_sizes[b][0] + j].
+  This is implemented for any number of axes.
+  Kind of like the reverse of a ND version of flatten_with_seq_len_mask.
+
+  :param tf.Tensor x: (B, T, <Ds>)
+  :param tf.Tensor nd_sizes: (B, N = num_axes)
+  :param int num_axes:
+  :return: (B, T_1, ..., T_N, <Ds>), T_i == max(nd_sizes[:, i])
+  :rtype: tf.Tensor
+  """
+  if num_axes is None:
+    assert nd_sizes.shape.dims[-1].value
+    num_axes = nd_sizes.shape.dims[-1].value
+  assert num_axes >= 1
+  nd_sizes.set_shape([None, num_axes])
+
+  # indices for tf.gather_nd should be of shape (B, T_1, ..., T_N, 2).
+  # Also see nd_indices.
+  # Write in Python. Maybe convert to TF later...
+  def py_get_indices(py_nd_sizes):
+    """
+    :param numpy.ndarray py_nd_sizes: (B, N)
+    :return: (B, T_1, ..., T_N, 2)
+    """
+    import numpy
+    assert py_nd_sizes.ndim == 2
+    n_batch = py_nd_sizes.shape[0]
+    num_axes_res = py_nd_sizes.shape[1]
+    res = numpy.zeros([n_batch] + [numpy.max(py_nd_sizes[:, i]) for i in range(num_axes_res)] + [2], dtype="int32")
+    for b in range(n_batch):
+      idxs = numpy.arange(int(numpy.prod(py_nd_sizes[b])), dtype="int32")  # (t1*...*tN)
+      idxs = idxs.reshape(py_nd_sizes[b])  # (t1,...,tN)
+      res[b, ..., 0] = b
+      res[tuple([b] + [slice(None, t) for t in py_nd_sizes[b]] + [1])] = idxs
+    return res
+
+  indices = tf.py_func(py_get_indices, [nd_sizes], tf.int32, stateful=False)
+  indices.set_shape([None] + ([None] * num_axes) + [2])
+  y = tf.gather_nd(x, indices)
+  y.set_shape(indices.shape.as_list()[:-1] + x.shape.as_list()[2:])
+  return y
+
+
 def kernels_registered_for_op(op_name):
   """
   This just wraps the TF C++ function tensorflow::KernelsRegisteredForOp().

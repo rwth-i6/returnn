@@ -2872,6 +2872,63 @@ class SplitBatchTimeLayer(_ConcatInputLayer):
     return data
 
 
+class UnflattenNdLayer(_ConcatInputLayer):
+  """
+  Example:
+
+    Assumes that the input is of shape (B,T,<Ds>) which represents flattened images,
+    where each image is of size width * height.
+    We additionally provide these image sizes (shape (B,2)), i.e. (width,height) tuples.
+    We return the unflattened images of shape (B,W,H,<Ds>), where W/H are the max width/height.
+
+  This basically wraps :func:`TFUtil.unflatten_nd`.
+  """
+  layer_class = "unflatten_nd"
+  recurrent = True
+
+  def __init__(self, sizes, num_axes, **kwargs):
+    """
+    :param LayerBase sizes:
+    :param int num_axes:
+    """
+    super(UnflattenNdLayer, self).__init__(**kwargs)
+    input_data = self.input_data.copy_as_batch_major()
+    sizes_data = sizes.output.copy_as_batch_major()
+    assert sizes_data.batch_ndim == 2
+    assert sizes_data.batch_shape[1] in (None, num_axes)  # also allow None...
+    self.output.placeholder = TFUtil.unflatten_nd(input_data.placeholder, sizes_data.placeholder, num_axes=num_axes)
+    self.output.size_placeholder = {i: sizes_data.placeholder[:, i] for i in range(num_axes)}
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    super(UnflattenNdLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    if "sizes" in d:  # check whether we need the param is later
+      d["sizes"] = get_layer(d["sizes"])
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, num_axes, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :param int num_axes:
+    :rtype: Data
+    """
+    input_data = get_concat_sources_data_template(sources).copy_as_batch_major()
+    assert input_data.batch_ndim >= 2 and input_data.is_time_axis_dynamic()
+    feature_dim_axis_or_unspecified = input_data.feature_dim_axis_or_unspecified
+    if feature_dim_axis_or_unspecified is not NotSpecified:
+      feature_dim_axis_or_unspecified -= input_data.batch_ndim
+      assert feature_dim_axis_or_unspecified < 0
+    res = Data(
+      name="%s_output" % name,
+      shape=((None,) * num_axes) + input_data.shape[1:],
+      batch_dim_axis=0,
+      time_dim_axis=1,
+      feature_dim_axis=feature_dim_axis_or_unspecified,
+      dtype=input_data.dtype)
+    return res
+
+
 class ExpandDimsLayer(_ConcatInputLayer):
   """
   Adds some axis.

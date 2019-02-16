@@ -48,6 +48,21 @@ def make_scope():
       yield session
 
 
+def _get_tmp_file(suffix):
+  """
+  :param str suffix:
+  :return: filename
+  :rtype: str
+  """
+  import tempfile
+  f = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+  f.close()
+  fn = f.name
+  import atexit
+  atexit.register(lambda: os.remove(fn))
+  return fn
+
+
 session = tf.InteractiveSession()
 
 
@@ -1770,6 +1785,90 @@ def test_preload_from_files_ignore_missing():
     assert_equal(set(main.params.keys()), {"W", "b"})
 
   engine.finalize()
+
+
+def test_unflatten_2d():
+  # See also test_SimpleHDFWriter_ndim1_var_len.
+  # And unflatten_nd, and UnflattenNdLayer.
+  from HDFDataset import HDFDataset, SimpleHDFWriter
+  from Dataset import set_config_num_inputs_outputs_from_dataset
+  # E.g. attention weights, shape (dec-time,enc-time) per seq.
+  fn = _get_tmp_file(suffix=".hdf")
+  writer = SimpleHDFWriter(filename=fn, dim=None, ndim=2, labels=None)
+  dec_seq_lens = [11, 7, 5]
+  enc_seq_lens = [13, 6, 8]
+  batch1_data = numpy.random.normal(
+    size=(len(dec_seq_lens), max(dec_seq_lens), max(enc_seq_lens))).astype("float32")
+  writer.insert_batch(
+    inputs=batch1_data,
+    seq_len={0: dec_seq_lens, 1: enc_seq_lens},
+    seq_tag=["seq-%i" % i for i in range(len(dec_seq_lens))])
+  writer.close()
+
+  dataset = HDFDataset(files=[fn])
+  dataset.initialize()
+
+  # Check first entry. (test_SimpleHDFWriter_ndim1_var_len does a full test.)
+  dataset.init_seq_order(epoch=1)
+  dataset.load_seqs(0, 2)  # does not matter
+  data1 = dataset.get_data(0, "data")
+  assert data1.shape == (dec_seq_lens[0] * enc_seq_lens[0],)
+  data1_len = dataset.get_seq_length(0)
+  assert data1_len["data"] == dec_seq_lens[0] * enc_seq_lens[0]
+  assert data1_len["sizes"] == 2
+
+  dataset.init_seq_order(epoch=2)
+  engine = Engine(config=Config({
+    "network": {
+      "output": {"class": "unflatten_nd", "from": "data", "sizes": "data:sizes", "num_axes": 2}
+    },
+    "debug_print_layer_output_template": True
+  }))
+  set_config_num_inputs_outputs_from_dataset(config=engine.config, dataset=dataset)
+  print("extern data:", engine.config.typed_value("extern_data"))
+
+  engine.init_train_from_config()
+  output_layer = engine.network.get_default_output_layer()
+  assert output_layer.output.is_batch_major
+  assert set(output_layer.output.size_placeholder.keys()) == {0, 1}
+
+  def extra_fetches_cb(output, seq_len_1, seq_len_2, seq_tag, seq_idx):
+    """
+    :param numpy.ndarray output: shape=(n_batch,t1,t2)
+    :param list[int] seq_len_1:
+    :param list[int] seq_len_2:
+    :param list[str] seq_tag: sequence tags of length n_batch
+    :param list[int] seq_idx: of length n_batch
+    """
+    n_batch = len(seq_tag)
+    assert n_batch == len(seq_idx) == len(seq_len_1) == len(seq_len_2) == output.shape[0]
+    print("Got batch (N: %i), seq len 1: %r, seq len 2: %r, tags: %r, seq idx %r, out shape %r." % (
+      n_batch, seq_len_1, seq_len_2, seq_tag, seq_idx, output.shape))
+    for b in range(n_batch):
+      assert dec_seq_lens[seq_idx[b]] == seq_len_1[b]
+      assert enc_seq_lens[seq_idx[b]] == seq_len_2[b]
+      numpy.testing.assert_almost_equal(
+        batch1_data[seq_idx[b], :seq_len_1[b], :seq_len_2[b]], output[b, :seq_len_1[b], :seq_len_2[b]])
+
+  batches = dataset.generate_batches(
+    recurrent_net=engine.network.recurrent,
+    batch_size=200,
+    max_seqs=100,
+    used_data_keys=engine.network.used_data_keys)
+  forwarder = Runner(
+    engine=engine, dataset=dataset, batches=batches,
+    train=False, eval=False,
+    extra_fetches={
+      'output': output_layer.output.placeholder,
+      "seq_len_1": output_layer.output.size_placeholder[0],
+      "seq_len_2": output_layer.output.size_placeholder[1],
+      "seq_tag": engine.network.get_seq_tags(),
+      "seq_idx": engine.network.get_extern_data("seq_idx", mark_data_key_as_used=True)
+    },
+    extra_fetches_callback=extra_fetches_cb)
+  forwarder.run(report_prefix="test_unflatten_2d")
+  if not forwarder.finalized:
+    raise Exception("Error happened. Exit now.")
 
 
 if __name__ == "__main__":
