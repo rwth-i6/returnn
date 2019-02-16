@@ -164,7 +164,7 @@ def test_hdf_dump():
   generate_hdf_from_dummy()
 
 
-class _DatasetCollectData:
+class _DatasetReader:
   def __init__(self, dataset):
     """
     :param Dataset dataset:
@@ -220,7 +220,7 @@ def test_SimpleHDFWriter():
   seq_lens = seq_lens1 + seq_lens2
 
   dataset = HDFDataset(files=[fn])
-  reader = _DatasetCollectData(dataset=dataset)
+  reader = _DatasetReader(dataset=dataset)
   reader.read_all()
   assert "data" in reader.data_keys  # "classes" might be in there as well, although not really correct/existing
   assert reader.data_sparse["data"] is False
@@ -243,7 +243,7 @@ def test_SimpleHDFWriter_small():
   writer.close()
 
   dataset = HDFDataset(files=[fn])
-  reader = _DatasetCollectData(dataset=dataset)
+  reader = _DatasetReader(dataset=dataset)
   reader.read_all()
   assert "data" in reader.data_keys  # "classes" might be in there as well, although not really correct/existing
   assert reader.data_sparse["data"] is False
@@ -292,7 +292,7 @@ def test_read_simple_hdf():
     f.write(gzip.decompress(raw_gzipped))
 
   dataset = HDFDataset(files=[fn])
-  reader = _DatasetCollectData(dataset=dataset)
+  reader = _DatasetReader(dataset=dataset)
   reader.read_all()
   assert "data" in reader.data_keys  # "classes" might be in there as well, although not really correct/existing
   assert reader.data_sparse["data"] is False
@@ -325,20 +325,23 @@ def test_SimpleHDFWriter_ndim1_var_len():
   dec_seq_lens = dec_seq_lens1 + dec_seq_lens2
   enc_seq_lens = enc_seq_lens1 + enc_seq_lens2
 
-  # TODO we also need to store the individual seq lens, to be able to recover...
-
   dataset = HDFDataset(files=[fn])
-  reader = _DatasetCollectData(dataset=dataset)
+  reader = _DatasetReader(dataset=dataset)
   reader.read_all()
   assert "data" in reader.data_keys  # "classes" might be in there as well, although not really correct/existing
   assert reader.data_sparse["data"] is False
   assert list(reader.data_shape["data"]) == []
   assert reader.data_dtype["data"] == "float32"
+  assert "partial_seq_len" in reader.data_keys
+  assert reader.data_sparse["partial_seq_len"] is False  # does not really matter...
+  assert reader.data_dtype["partial_seq_len"] == "int32"
+  assert list(reader.data_shape["partial_seq_len"]) == [2]
   assert len(dec_seq_lens) == len(enc_seq_lens) == reader.num_seqs
   for i, (dec_seq_len, enc_seq_len) in enumerate(zip(dec_seq_lens, enc_seq_lens)):
     assert reader.seq_lens[i]["data"] == dec_seq_len * enc_seq_len
-
-  # TODO we also should check the individual seq lens...
+    assert reader.seq_lens[i]["partial_seq_len"] == 1
+    assert reader.data["partial_seq_len"][i].tolist() == [[dec_seq_len, enc_seq_len]], "got %r" % (
+      reader.data["partial_seq_len"][i],)
 
 
 def dummy_iter_dataset(dataset):
