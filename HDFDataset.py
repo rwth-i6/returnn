@@ -117,12 +117,12 @@ class HDFDataset(CachedDataset):
       num_outputs = {}
       for k in fin['targets/size'].attrs:
         if numpy.isscalar(fin['targets/size'].attrs[k]):
-          num_outputs[k] = (fin['targets/size'].attrs[k], len(fin['targets/data'][k].shape))
+          num_outputs[k] = (int(fin['targets/size'].attrs[k]), len(fin['targets/data'][k].shape))
         else:  # hdf_dump will give directly as tuple
           assert fin['targets/size'].attrs[k].shape == (2,)
-          num_outputs[k] = tuple(fin['targets/size'].attrs[k])
+          num_outputs[k] = tuple([int(v) for v in fin['targets/size'].attrs[k]])
     else:
-      num_outputs = {'classes': [fin.attrs[attr_numLabels], 1]}
+      num_outputs = {'classes': [int(fin.attrs[attr_numLabels]), 1]}
     num_outputs["data"] = num_inputs
     if not self.num_outputs:
       self.num_outputs = num_outputs
@@ -145,7 +145,7 @@ class HDFDataset(CachedDataset):
         self.data_dtype[name] = str(fin['targets/data'][name].dtype) if tdim > 1 else 'int32'
         self.targets[name] = None
     else:
-      self.targets = { 'classes' : numpy.zeros((self._num_timesteps,), dtype=theano.config.floatX)  }
+      self.targets = {'classes': numpy.zeros((self._num_timesteps,), dtype="int32")}
       self.data_dtype['classes'] = 'int32'
     self.data_dtype["data"] = str(fin['inputs'].dtype)
     assert len(self.target_keys) == len(self._seq_lengths[0]) - 1
@@ -182,12 +182,13 @@ class HDFDataset(CachedDataset):
         print("loading file %d/%d" % (i+1, len(self.files)), self.files[i], file=log.v4)
       fin = h5py.File(self.files[i], 'r')
       inputs = fin['inputs']
+      targets = None
       if 'targets' in fin:
-        targets = {k:fin['targets/data/' + k] for k in fin['targets/data']}
+        targets = {k: fin['targets/data/' + k] for k in fin['targets/data']}
       if self.seq_ordering == 'default' or True:
         inputs = inputs[...]
         if 'targets' in fin:
-          targets = {k:targets[k][...] for k in targets}
+          targets = {k: targets[k][...] for k in targets}
       for idc, ids in file_info[i]:
         s = ids - self.file_start[i]
         p = self.file_seq_start[i][s]
@@ -195,7 +196,8 @@ class HDFDataset(CachedDataset):
         if 'targets' in fin:
           for k in fin['targets/data']:
             if self.targets[k] is None:
-              self.targets[k] = numpy.zeros((self._num_codesteps[self.target_keys.index(k)],) + targets[k].shape[1:], dtype=self.data_dtype[k]) - 1
+              self.targets[k] = numpy.zeros(
+                (self._num_codesteps[self.target_keys.index(k)],) + targets[k].shape[1:], dtype=self.data_dtype[k]) - 1
             ldx = self.target_keys.index(k) + 1
             self.targets[k][self.get_seq_start(idc)[ldx]:self.get_seq_start(idc)[ldx] + l[ldx]] = targets[k][p[ldx] : p[ldx] + l[ldx]]
         self._set_alloc_intervals_data(idc, data=inputs[p[0] : p[0] + l[0]])
