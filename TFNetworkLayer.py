@@ -6577,8 +6577,8 @@ class SamplingBasedLoss(Loss):
     """
     super(SamplingBasedLoss, self).__init__(**kwargs)
     assert num_sampled >= 1
-    assert sampler in ["uniform", "log_uniform", "learned_unigram"],\
-      "Sampler must be one of 'uniform', 'log_uniform', or 'learned_unigram'."
+    assert sampler in ["uniform", "log_uniform", "learned_unigram"], (
+      "Sampler must be one of 'uniform', 'log_uniform', or 'learned_unigram'.")
     self.num_sampled = num_sampled
     self.sampler = sampler
     self.use_full_softmax = use_full_softmax
@@ -6586,18 +6586,20 @@ class SamplingBasedLoss(Loss):
 
   def get_value(self):
     assert self.target.sparse
-    assert isinstance(self.layer, SoftmaxLayer) or isinstance(self.layer, LinearLayer)
+    assert isinstance(self.layer, LinearLayer)
     with tf.name_scope("loss_with_sampling"):
       # Compute sampling based loss.
       def sampled_loss_fn():
         # Prepare shapes for 'tf.nn.sampled_softmax_loss' and 'tf.nn.nce_loss'.
-        labels = self.target.placeholder  # [B, T].
-        labels = tf.transpose(labels)  # [T, B].
-        labels = tf.reshape(labels, [-1, 1])  # [T * B, 1].
+        labels = self.target_flat  # (B*T|T*B|sum seq len=B',)
+        labels = tf.reshape(labels, [-1, 1])  # (B', 1).
 
-        inputs = self.layer.input_data.placeholder  # [T, B, D].
-        inputs_shape = tf.shape(inputs)
-        inputs = tf.reshape(inputs, [inputs_shape[0] * inputs_shape[1], -1])  # [T * B, D].
+        input_data = self.layer.input_data
+        assert isinstance(input_data, Data)
+        inputs = self._flatten_or_merge(
+          input_data.placeholder,
+          seq_lens=input_data.get_sequence_lengths(),
+          time_major=input_data.is_time_major)  # (B',D)
 
         from tensorflow.python.framework import dtypes
         from tensorflow.python.ops import math_ops
@@ -6606,9 +6608,9 @@ class SamplingBasedLoss(Loss):
 
         from tensorflow.python.ops import candidate_sampling_ops
         # Dictionary of available samplers in TensorFlow.
-        sampler_dict = { "log_uniform": candidate_sampling_ops.log_uniform_candidate_sampler,
-                         "uniform": candidate_sampling_ops.uniform_candidate_sampler,
-                         "learned_unigram": candidate_sampling_ops.learned_unigram_candidate_sampler}
+        sampler_dict = {"log_uniform": candidate_sampling_ops.log_uniform_candidate_sampler,
+                        "uniform": candidate_sampling_ops.uniform_candidate_sampler,
+                        "learned_unigram": candidate_sampling_ops.learned_unigram_candidate_sampler}
         sampler = sampler_dict[self.sampler]
         # 'sampled_values' is a tuple of (sampled_candidates, true_expected_count, sampled_expected_count).
         # See https://www.tensorflow.org/api_docs/python/tf/random/log_uniform_candidate_sampler.
@@ -6623,22 +6625,17 @@ class SamplingBasedLoss(Loss):
           loss_fn = tf.nn.sampled_softmax_loss
 
         assert self.layer.params["W"].shape[0] == self.target.dim, "Expect weight matrix of shape [num_classes, dim]"
-        out = loss_fn(weights=self.layer.params["W"],  # [num_classes, D].
-                      biases=self.layer.params["b"],  # [num_classes].
-                      labels=labels,  # [T * B, 1].
-                      inputs=inputs,  # [T * B, D].
+        out = loss_fn(weights=self.layer.params["W"],  # (num_classes, D).
+                      biases=self.layer.params["b"],  # (num_classes).
+                      labels=labels,  # (B', 1).
+                      inputs=inputs,  # (B', D).
                       num_sampled=self.num_sampled,
                       num_classes=self.target.dim,
                       num_true=1,
                       sampled_values=sampled_values,
                       remove_accidental_hits=True,
                       partition_strategy="div",
-                      name="sampling_based_loss")
-
-        mask = self.target.get_sequence_mask()  # [B, T].
-        mask = tf.transpose(mask)  # [T, B].
-        mask = tf.reshape(mask, [-1])  # [T * B]
-        out = tf.where(mask, out, tf.zeros(tf.shape(out)))
+                      name="sampling_based_loss")  # (B')
         return out
 
       # Compute full softmax.
