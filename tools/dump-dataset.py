@@ -14,8 +14,7 @@ import rnn
 from Log import log
 import argparse
 import numpy
-from better_exchook import pretty_print
-from Util import Stats, hms
+from Util import Stats, hms, pretty_print
 import Util
 
 

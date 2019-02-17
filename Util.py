@@ -432,6 +432,56 @@ def human_bytes_size(n, factor=1024, frac=0.8, prec=1):
   return human_size(n, factor=factor, frac=frac, prec=prec) + "B"
 
 
+def _pp_extra_info(obj, depth_limit=3):
+  """
+  :param object obj:
+  :param int depth_limit:
+  :return: extra info (if available: len, some items, ...)
+  :rtype: str
+  """
+  s = []
+  if hasattr(obj, "__len__"):
+    # noinspection PyBroadException
+    try:
+      # noinspection PyTypeChecker
+      if type(obj) in (str, unicode, list, tuple, dict) and len(obj) <= 5:
+        pass  # don't print len in this case
+      else:
+        s += ["len = %i" % obj.__len__()]
+    except Exception:
+      pass
+  if depth_limit > 0 and hasattr(obj, "__getitem__"):
+    # noinspection PyBroadException
+    try:
+      if type(obj) in (str, unicode):
+        pass  # doesn't make sense to get sub items here
+      else:
+        sub_obj = obj.__getitem__(0)
+        extra_info = _pp_extra_info(sub_obj, depth_limit - 1)
+        if extra_info != "":
+          s += ["_[0]: {%s}" % extra_info]
+    except Exception:
+      pass
+  return ", ".join(s)
+
+
+def pretty_print(obj):
+  """
+  :param object obj:
+  :return: repr(obj), or some shorted version of that, maybe with extra info
+  :rtype: str
+  """
+  s = repr(obj)
+  limit = 300
+  if len(s) > limit:
+    s = s[:limit - 3]
+    s += "..."
+  extra_info = _pp_extra_info(obj)
+  if extra_info != "":
+    s += ", " + extra_info
+  return s
+
+
 def progress_bar(complete=1.0, prefix="", suffix="", file=sys.stdout):
   import sys
   terminal_width, _ = terminal_size(file=file)
