@@ -2901,6 +2901,14 @@ class GetRecAccumulatedOutputLayer(LayerBase):
   If some layer is explicitly marked as an additional output layer (via 'is_output_layer': True),
   you can get that subnet layer output via this accessor.
   Retrieves the accumulated output.
+  Note that this functionality is obsolete now. You can simply access such an sub layer
+  via the generic sub layer access mechanism. I.e. instead of::
+
+    "sub_layer": {"class": "get_rec_accumulated", "from": "rec_layer", "sub_layer": "hidden"}
+
+  You can do::
+
+    "sub_layer": {"class": "copy", "from": "rec_layer/hidden"}
   """
   layer_class = "get_rec_accumulated"
 
