@@ -6556,7 +6556,7 @@ class SamplingBasedLoss(Loss):
   https://www.tensorflow.org/api_docs/python/tf/nn/sampled_softmax_loss.
   https://www.tensorflow.org/api_docs/python/tf/nn/nce_loss.
 
-  Must be used in an output linear layer with a weight matrix of shape [num_classes, dim].
+  Must be used in an output linear layer with a weight matrix of shape (num_classes, dim).
   When using 'log_uniform' sampler (default), optimal performance is typically achieved with the vocabulary list sorted
   in decreasing order of frequency (https://www.tensorflow.org/api_docs/python/tf/random/log_uniform_candidate_sampler).
   """
@@ -6564,6 +6564,7 @@ class SamplingBasedLoss(Loss):
 
   def __init__(self,
                num_sampled=128,
+               num_splits=1,
                sampler="log_uniform",
                nce_loss=False,
                use_full_softmax=False,
@@ -6571,6 +6572,7 @@ class SamplingBasedLoss(Loss):
     """
     :param int num_sampled: Number of classes to be sampled. For sampled softmax, this is the number of classes to be
       used to estimate the sampled softmax. For noise contrastive estimation, this is the number of noise samples.
+    :param int num_splits: Number of different samples (each with 'num_sampled' classes) to be used per batch.
     :param str sampler: Specify sampling distribution ("uniform", "log_uniform", or "learned_unigram").
     :param bool nce_loss: If True, use noise contrastive estimation loss. Else (default), use the sampled softmax.
     :param bool use_full_softmax: If True, compute the full softmax instead of sampling (can be used for evaluation).
@@ -6580,6 +6582,7 @@ class SamplingBasedLoss(Loss):
     assert sampler in ["uniform", "log_uniform", "learned_unigram"], (
       "Sampler must be one of 'uniform', 'log_uniform', or 'learned_unigram'.")
     self.num_sampled = num_sampled
+    self.num_splits = num_splits
     self.sampler = sampler
     self.use_full_softmax = use_full_softmax
     self.nce_loss = nce_loss
@@ -6592,14 +6595,15 @@ class SamplingBasedLoss(Loss):
       def sampled_loss_fn():
         # Prepare shapes for 'tf.nn.sampled_softmax_loss' and 'tf.nn.nce_loss'.
         labels = self.target_flat  # (B*T|T*B|sum seq len=B',)
-        labels = tf.reshape(labels, [-1, 1])  # (B', 1).
+        batch_num = tf.shape(labels)[0]  # B'.
+        labels = tf.reshape(labels, [-1, 1])  # (B',1).
 
         input_data = self.layer.input_data
         assert isinstance(input_data, Data)
         inputs = self._flatten_or_merge(
           input_data.placeholder,
           seq_lens=input_data.get_sequence_lengths(),
-          time_major=input_data.is_time_major)  # (B',D)
+          time_major=input_data.is_time_major)  # (B',D).
 
         from tensorflow.python.framework import dtypes
         from tensorflow.python.ops import math_ops
@@ -6612,31 +6616,50 @@ class SamplingBasedLoss(Loss):
                         "uniform": candidate_sampling_ops.uniform_candidate_sampler,
                         "learned_unigram": candidate_sampling_ops.learned_unigram_candidate_sampler}
         sampler = sampler_dict[self.sampler]
-        # 'sampled_values' is a tuple of (sampled_candidates, true_expected_count, sampled_expected_count).
-        # See https://www.tensorflow.org/api_docs/python/tf/random/log_uniform_candidate_sampler.
-        sampled_values = sampler(true_classes=labels,
-                                 num_true=1,
-                                 num_sampled=self.num_sampled,
-                                 unique=True,  # Sampling without replacement.
-                                 range_max=self.target.dim)
-        if self.nce_loss:
-          loss_fn = tf.nn.nce_loss
-        else:
-          loss_fn = tf.nn.sampled_softmax_loss
 
-        assert self.layer.params["W"].shape[0] == self.target.dim, "Expect weight matrix of shape [num_classes, dim]"
-        out = loss_fn(weights=self.layer.params["W"],  # (num_classes, D).
-                      biases=self.layer.params["b"],  # (num_classes).
-                      labels=labels,  # (B', 1).
-                      inputs=inputs,  # (B', D).
-                      num_sampled=self.num_sampled,
-                      num_classes=self.target.dim,
-                      num_true=1,
-                      sampled_values=sampled_values,
-                      remove_accidental_hits=True,
-                      partition_strategy="div",
-                      name="sampling_based_loss")  # (B')
-        return out
+        splits = []
+        batch_part = batch_num // self.num_splits  # B'' = B' // num_splits.
+        for split_nr in range(self.num_splits):
+          if self.num_splits > 1:
+            start_frame = split_nr * batch_part
+            if split_nr == self.num_splits - 1:
+              end_frame = batch_num
+            else:
+              end_frame = (split_nr + 1) * batch_part
+            labels_ = labels[start_frame:end_frame]  # (B'',1).
+            inputs_ = inputs[start_frame:end_frame]  # (B'',D).
+          else:
+            labels_ = labels
+            inputs_ = inputs
+
+          # 'sampled_values' is a tuple of (sampled_candidates, true_expected_count, sampled_expected_count).
+          # See https://www.tensorflow.org/api_docs/python/tf/random/log_uniform_candidate_sampler.
+          sampled_values = sampler(true_classes=labels_,
+                                   num_true=1,
+                                   num_sampled=self.num_sampled,
+                                   unique=True,  # Sampling without replacement.
+                                   range_max=self.target.dim)
+          if self.nce_loss:
+            loss_fn = tf.nn.nce_loss
+          else:
+            loss_fn = tf.nn.sampled_softmax_loss
+
+          assert self.layer.params["W"].shape[0] == self.target.dim, "Expect weight matrix of shape [num_classes, dim]"
+          out = loss_fn(weights=self.layer.params["W"],  # (num_classes,D).
+                        biases=self.layer.params["b"],  # (num_classes).
+                        labels=labels_,  # (B'',1).
+                        inputs=inputs_,  # (B'',D).
+                        num_sampled=self.num_sampled,
+                        num_classes=self.target.dim,
+                        num_true=1,
+                        sampled_values=sampled_values,
+                        remove_accidental_hits=True,
+                        partition_strategy="div",
+                        name="sampling_based_loss")  # (B'').
+          splits.append(out)
+        if len(splits) == 1:
+          return splits[0]
+        return tf.concat(splits, axis=0)  # (B').
 
       # Compute full softmax.
       def full_softmax_fn():
