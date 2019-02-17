@@ -167,7 +167,7 @@ def main(argv):
     assert len(layers) == 1
     sub_layer = rnn.engine.network.get_layer("%s/%s" % (args.rec_layer, layers[0]))
     from HDFDataset import SimpleHDFWriter
-    hdf_writer = SimpleHDFWriter(filename=args.output_file, dim=None, ndim=sub_layer.output.ndim)
+    hdf_writer = SimpleHDFWriter(filename=args.output_file, dim=sub_layer.output.dim, ndim=sub_layer.output.ndim)
   dataset_str = args.data
   if dataset_str in ["train", "dev", "eval"]:
     dataset_str = "config:%s" % dataset_str
