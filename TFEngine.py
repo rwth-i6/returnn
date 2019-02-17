@@ -1737,7 +1737,7 @@ class Engine(object):
     assert output_value.shape[1] == 1  # batch-dim
     return output_value[:, 0]  # remove batch-dim
 
-  def forward_to_hdf(self, data, output_file, combine_labels='', batch_size=0):
+  def forward_to_hdf(self, data, output_file, combine_labels='', batch_size=0, output_layer=None):
     """
     Is aiming at recreating the same interface and output as :func:`Engine.forward_to_hdf`.
     See also :func:`EngineTask.HDFForwardTaskThread` and :func:`hdf_dump_from_dataset` in the hdf_dump.py tool.
@@ -1746,30 +1746,48 @@ class Engine(object):
     :param str output_file:
     :param str combine_labels: ignored at the moment
     :param int batch_size:
+    :param LayerBase output_layer:
     """
     from HDFDataset import SimpleHDFWriter
 
-    output_layer = self._get_output_layer()
+    if not output_layer:
+      output_layer = self._get_output_layer()
+    output = output_layer.output.copy_as_batch_major()
+    # Note: We kind of assume that the target, and its class labels, matches this output layer.
+    # Of course this is not true in general.
+    # Instead of introducing some more involved logic here, we just check whether the dim matches.
     target = self.network.get_default_target()
+    labels = data.labels.get(target, None)
+    del target
+    if labels:
+      if len(labels) != output.dim:
+        labels = None
 
     assert output_file
     assert not os.path.exists(output_file)
     print("Forwarding to HDF file: %s" % output_file, file=log.v2)
-    writer = SimpleHDFWriter(filename=output_file, dim=output_layer.output.dim, labels=data.labels.get(target, None))
+    writer = SimpleHDFWriter(filename=output_file, dim=output.dim, ndim=output.ndim, labels=labels)
 
-    def extra_fetches_cb(inputs, seq_len, seq_tag):
+    def extra_fetches_cb(inputs, seq_tag, **kwargs):
       """
       Insert each batch into the output_file (hdf).
 
-      :param numpy.ndarray inputs: shape=(n_batch,time,data)
-      :param list[int] seq_len: sequence lengths
+      :param numpy.ndarray inputs: shape=(n_batch,time,data) (or whatever the output layer is...)
       :param list[str] seq_tag: sequence tags of length n_batch
+      :param kwargs: e.g. seq_len_i (list[int])
       """
-      n_batch = len(seq_len)
-      assert n_batch == len(seq_tag)
+      n_batch = len(seq_tag)
       assert n_batch == inputs.shape[0]
+      seq_len = {i: kwargs["seq_len_%i" % i] for i in output.size_placeholder.keys()}
+      assert all([len(v) == n_batch for v in seq_len.values()])
       writer.insert_batch(inputs=inputs, seq_len=seq_len, seq_tag=seq_tag)
 
+    extra_fetches = {
+      'inputs': output.placeholder,
+      "seq_tag": self.network.get_seq_tags(),
+    }
+    for i, seq_len in output.size_placeholder.items():
+      extra_fetches["seq_len_%i" % i] = seq_len
     batches = data.generate_batches(
       recurrent_net=self.network.recurrent,
       batch_size=batch_size,
@@ -1778,11 +1796,7 @@ class Engine(object):
     forwarder = Runner(
       engine=self, dataset=data, batches=batches,
       train=False, eval=False,
-      extra_fetches={
-        'inputs': output_layer.output.get_placeholder_as_batch_major(),
-        "seq_len": output_layer.output.get_sequence_lengths(),
-        "seq_tag": self.network.get_seq_tags(),
-      },
+      extra_fetches=extra_fetches,
       extra_fetches_callback=extra_fetches_cb)
     forwarder.run(report_prefix=self.get_epoch_str() + " forward")
     if not forwarder.finalized:
