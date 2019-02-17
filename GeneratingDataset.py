@@ -507,6 +507,67 @@ class TaskVariableAssignmentDataset(GeneratingDataset):
     return DatasetSeq(seq_idx=seq_idx, features=features, targets=targets)
 
 
+class TaskNumberBaseConvertDataset(GeneratingDataset):
+  """
+  Task: E.g: Get some number in octal and convert it to binary (e.g. "10101001").
+  Or basically convert some number from some base into another base.
+  """
+
+  def __init__(self, input_base=8, output_base=2, min_input_seq_len=1, max_input_seq_len=8, **kwargs):
+    """
+    :param int input_base:
+    :param int output_base:
+    :param int min_input_seq_len:
+    :param int max_input_seq_len:
+    """
+    super(TaskNumberBaseConvertDataset, self).__init__(
+      input_dim=input_base,
+      output_dim={"data": (input_base, 1), "classes": (output_base, 1)},
+      **kwargs)
+    chars = "0123456789abcdefghijklmnopqrstuvwxyz"
+    assert 2 <= input_base <= len(chars) and 2 <= output_base <= len(chars)
+    self.input_base = input_base
+    self.output_base = output_base
+    self._input_classes = chars[:input_base]
+    self._output_classes = chars[:output_base]
+    self.labels = {"data": self._input_classes, "classes": self._output_classes}
+    assert 0 < min_input_seq_len <= max_input_seq_len
+    self.min_input_seq_len = min_input_seq_len
+    self.max_input_seq_len = max_input_seq_len
+
+  def get_random_input_seq_len(self):
+    return self.random.randint(self.min_input_seq_len, self.max_input_seq_len + 1)
+
+  def generate_input_seq(self):
+    """
+    :rtype: list[int]
+    """
+    seq_len = self.get_random_input_seq_len()
+    seq = [self.random.randint(0, len(self._input_classes)) for i in range(seq_len)]
+    return seq
+
+  def make_output_seq(self, input_seq):
+    """
+    :param list[int] input_seq:
+    :rtype: list[int]
+    """
+    number = 0
+    for i, d in enumerate(reversed(input_seq)):
+      number += d * (self.input_base ** i)
+    output_seq = []
+    while number:
+      output_seq.insert(0, number % self.output_base)
+      number //= self.output_base
+    return output_seq
+
+  def generate_seq(self, seq_idx):
+    input_seq = self.generate_input_seq()
+    output_seq = self.make_output_seq(input_seq)
+    features = numpy.array(input_seq)
+    targets = numpy.array(output_seq)
+    return DatasetSeq(seq_idx=seq_idx, features=features, targets=targets)
+
+
 class DummyDataset(GeneratingDataset):
 
   def __init__(self, input_dim, output_dim, num_seqs, seq_len=2,
