@@ -128,6 +128,8 @@ def main(argv):
   argparser.add_argument("--output_format", default="npy", help="npy, png or hdf")
   argparser.add_argument("--dropout", default=None, type=float, help="if set, overwrites all dropout values")
   argparser.add_argument("--train_flag", action="store_true")
+  argparser.add_argument("--reset_partition_epoch", type=int, default=1)
+  argparser.add_argument("--reset_seq_ordering", default="sorted_reverse")
   args = argparser.parse_args(argv[1:])
 
   layers = args.layers
@@ -170,6 +172,14 @@ def main(argv):
   if dataset_str in ["train", "dev", "eval"]:
     dataset_str = "config:%s" % dataset_str
   dataset = init_dataset(dataset_str)
+  if args.num_seqs < 0:  # dump all seqs?
+    if args.reset_partition_epoch and dataset.partition_epoch != args.reset_partition_epoch:
+      print("WARNING: You configured partition epoch %i, and we are resetting that to %i." % (
+        dataset.partition_epoch, args.reset_partition_epoch))
+      dataset.partition_epoch = args.reset_partition_epoch
+    if args.reset_seq_ordering and dataset.seq_ordering != args.reset_seq_ordering:
+      print("NOTE: We will use %r seq ordering." % (args.reset_seq_ordering,))
+      dataset.seq_ordering = args.reset_seq_ordering
   init_net(args, layers)
 
   network = rnn.engine.network
