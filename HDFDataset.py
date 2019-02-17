@@ -830,7 +830,7 @@ class SimpleHDFWriter:
   def insert_batch(self, inputs, seq_len, seq_tag):
     """
     :param numpy.ndarray inputs: shape=(n_batch,time,data) (or (n_batch,time), or (n_batch,time1,time2), ...)
-    :param list[int]|dict[int,list[int]] seq_len: sequence lengths (per axis)
+    :param list[int]|dict[int,list[int]|numpy.ndarray] seq_len: sequence lengths (per axis)
     :param list[str] seq_tag: sequence tags of length n_batch
     """
     n_batch = len(seq_tag)
