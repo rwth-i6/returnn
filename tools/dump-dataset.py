@@ -151,12 +151,16 @@ def init(config_str):
   """
   rnn.initBetterExchook()
   rnn.initThreadJoinHack()
+  datasetDict = None
+  configFilename = None
   if config_str.strip().startswith("{"):
     print("Using dataset %s." % config_str)
     datasetDict = eval(config_str.strip())
-    configFilename = None
+  elif config_str.endswith(".hdf"):
+    datasetDict = {"class": "HDFDataset", "files": [config_str]}
+    print("Using dataset %r." % datasetDict)
+    assert os.path.exists(config_str)
   else:
-    datasetDict = None
     configFilename = config_str
     print("Using config file %r." % configFilename)
     assert os.path.exists(configFilename)
