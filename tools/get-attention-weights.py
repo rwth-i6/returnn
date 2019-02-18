@@ -305,6 +305,8 @@ def main(argv):
     print("Some error occured, not finalized.")
     sys.exit(1)
 
+  if hdf_writer:
+    hdf_writer.close()
   rnn.finalize()
 
 
