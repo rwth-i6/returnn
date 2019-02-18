@@ -26,6 +26,9 @@ log.initialize(verbosity=[5])
 
 @contextlib.contextmanager
 def make_scope():
+  """
+  :rtype: tf.Session
+  """
   with tf.Graph().as_default() as graph:
     with tf.Session(graph=graph) as session:
       yield session
@@ -369,6 +372,7 @@ def _check_MergeDimsLayer(session, in_data_opts, in_static_shape, opts, out_data
   :param dict[str] opts: for MergeDimsLayer
   :param tuple[int|None] out_data_shape:
   :param tuple[int] out_static_shape:
+  :rtype: MergeDimsLayer
   """
   net = TFNetwork(extern_data=ExternData())
   rnd = numpy.random.RandomState(42)
@@ -387,6 +391,7 @@ def _check_MergeDimsLayer(session, in_data_opts, in_static_shape, opts, out_data
   assert_equal(layer.output.shape, out_data_shape)
   out_np = session.run(layer.output.placeholder)
   assert_equal(out_np.shape, out_static_shape)
+  return layer
 
 
 def test_MergeDimsLayer_basic():
@@ -402,6 +407,57 @@ def test_MergeDimsLayer_batch_time_ext():
     n_time = 13
     _check_MergeDimsLayer(
       session, {"shape": (None, 5, 3)}, (n_batch, n_time, 5, 3), {"axes": "BT"}, (5, 3), (n_batch * n_time, 5, 3))
+
+
+def test_MergeDimsLayer_batch_time_time_major():
+  with make_scope() as session:
+    n_batch = 11
+    n_time = 13
+    layer = _check_MergeDimsLayer(
+      session,
+      {"shape": (None, 5), "time_dim_axis": 0, "batch_dim_axis": 1}, (n_time, n_batch, 5),
+      {"axes": "BT"}, (5,), (n_time * n_batch, 5))
+    assert layer.output.batch_dim_axis == 0
+    assert layer.output.time_dim_axis is None
+
+
+def test_MergeDimsLayer_batch_time_time_major_ext():
+  with make_scope() as session:
+    n_batch = 11
+    n_time = 13
+    layer = _check_MergeDimsLayer(
+      session,
+      {"shape": (None, 5, 3), "time_dim_axis": 0, "batch_dim_axis": 1}, (n_time, n_batch, 5, 3),
+      {"axes": "BT"}, (5, 3), (n_time * n_batch, 5, 3))
+    assert layer.output.batch_dim_axis == 0
+    assert layer.output.time_dim_axis == 1  # Note: This is currently the behavior, but maybe we change that.
+
+
+def test_MergeDimsLayer_SplitBatchTimeLayer_time_major():
+  n_batch = 3
+  n_time = 4
+  n_input_dim = 5
+  # Time major
+  input_data = numpy.arange(n_time * n_batch * n_input_dim).reshape((n_time, n_batch, n_input_dim)).astype("float32")
+  with make_scope() as session:
+    net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
+    input_layer = net.add_layer(
+      "input", InternalLayer,
+      output=Data(
+        name="input", shape=(None, n_input_dim), time_dim_axis=0, batch_dim_axis=1,
+        placeholder=tf.constant(input_data), size_placeholder={0: tf.constant([n_time] * n_batch)}))
+    assert input_layer.output.is_time_major
+    net.construct_from_dict({
+      "merge_dims": {"class": "merge_dims", "from": "input", "axes": "BT"},
+      "split_dims": {"class": "split_batch_time", "from": "merge_dims", "base": "input"},
+      "output": {"class": "copy", "from": "split_dims"}
+    })
+    output = net.get_default_output_layer().output
+    # Depending on implementation, output could be batch-major or time-major.
+    output = output.copy_as_time_major()  # such that we can compare easily to input_data
+    assert output.is_time_major and output.shape == (None, n_input_dim)
+    output_data = session.run(output.placeholder)
+    numpy.testing.assert_almost_equal(input_data, output_data)
 
 
 def test_ConvLayer_get_valid_out_dim():

@@ -2610,6 +2610,11 @@ class MergeDimsLayer(_ConcatInputLayer):
       axes = sorted(axes)
       # Transpose so that all axes are behind each other.
       perm = [i for i in range(self.input_data.batch_ndim) if i not in axes]
+      # If batch axis included, move to front.
+      # This is such that we can deterministically undo this later, e.g. in SplitBatchTimeLayer.
+      if self.input_data.batch_dim_axis in axes:
+        axes.remove(self.input_data.batch_dim_axis)
+        axes.insert(0, self.input_data.batch_dim_axis)
       for i, a in enumerate(axes):
         perm.insert(merge_target_axis + i, a)
       x = tf.transpose(x, perm)
@@ -2636,15 +2641,11 @@ class MergeDimsLayer(_ConcatInputLayer):
     :param list[int] merge_axes:
     :rtype: int
     """
-    if input_data.batch_dim_axis not in merge_axes:
-      if input_data.feature_dim_axis in merge_axes:
-        # We want it to become the new feature dim axis.
-        return input_data.feature_dim_axis - len(merge_axes) + 1
-      else:
-        return merge_axes[0]
+    if input_data.feature_dim_axis in merge_axes:
+      # We want it to become the new feature dim axis.
+      return input_data.feature_dim_axis - len(merge_axes) + 1
     else:
-      # In case we also merge the batch-dim-axis, we will merge everything into
-      return input_data.batch_dim_axis
+      return min(merge_axes)
 
   @classmethod
   def _old_axis_to_new_axis(cls, input_data, merge_axes, old_axis):
@@ -2679,9 +2680,9 @@ class MergeDimsLayer(_ConcatInputLayer):
     for i, v in sorted(self.input_data.size_placeholder.items()):
       axis = self.input_data.get_batch_axis(i)
       axis = self._old_axis_to_new_axis(input_data=self.input_data, merge_axes=merge_axes, old_axis=axis)
-      if axis == self.input_data.batch_dim_axis:
+      if axis == self.output.batch_dim_axis:
         continue
-      j = self.input_data.get_batch_axis_excluding_batch(axis)
+      j = self.output.get_batch_axis_excluding_batch(axis)
       if j in d:
         d[j] *= v
       else:
@@ -2720,16 +2721,17 @@ class MergeDimsLayer(_ConcatInputLayer):
     else:
       new_feature_dim_axis = cls._old_axis_to_new_axis(
         input_data=input_data, merge_axes=axes, old_axis=input_data.feature_dim_axis)
+    data.batch_dim_axis = cls._old_axis_to_new_axis(
+      input_data=input_data, merge_axes=axes, old_axis=input_data.batch_dim_axis)
     new_shape = [d for (i, d) in enumerate(data.batch_shape) if i not in axes]
     new_shape.insert(merge_target_axis, res_dim)
     new_shape.pop(data.batch_dim_axis)
     data.shape = tuple(new_shape)
-    data.batch_dim_axis = cls._old_axis_to_new_axis(
-      input_data=input_data, merge_axes=axes, old_axis=input_data.batch_dim_axis)
     data.time_dim_axis = cls._old_axis_to_new_axis(
       input_data=input_data, merge_axes=axes, old_axis=input_data.time_dim_axis)
     if data.time_dim_axis == data.batch_dim_axis:  # special case: batch and time got merged
       # Fallback to some sensible default.
+      # Note: Not sure if this is good. Maybe we change that... You can always use ReinterpretDataLayer to be explicit.
       data.time_dim_axis = data.get_spatial_batch_axes()[0] if data.get_spatial_batch_axes() else None
     data.feature_dim_axis = new_feature_dim_axis
     return data
