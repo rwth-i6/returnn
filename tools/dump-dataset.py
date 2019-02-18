@@ -117,7 +117,7 @@ def dump_dataset(dataset, options):
         numpy.savetxt("%s%i.targets.%s%s" % (options.dump_prefix, seq_idx, target, options.dump_postfix), targets, fmt='%i')
       elif options.type == "stdout":
         extra = ""
-        if target in dataset.labels:
+        if target in dataset.labels and len(dataset.labels[target]) > 1:
           labels = dataset.labels[target]
           if len(labels) < 1000 and all([len(l) == 1 for l in labels]):
             join_str = ""
