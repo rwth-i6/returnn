@@ -66,17 +66,17 @@ def inject_retrieval_code(net_dict, rec_layer_name, layers, dropout):
   return new_layers_descr
 
 
-def init_returnn(config_fn, cmd_line_opts, args):
+def init_returnn(config_fn, args):
   """
   :param str config_fn:
-  :param list[str] cmd_line_opts:
   :param args: arg_parse object
   """
   rnn.initBetterExchook()
   config_updates = {
     "log": [],
     "task": "eval",
-    "need_data": False}
+    "need_data": False,  # we will load it explicitly
+    "device": args.device if args.device else None}
   if args.epoch:
     config_updates["load_epoch"] = args.epoch
   if args.do_search:
@@ -88,7 +88,7 @@ def init_returnn(config_fn, cmd_line_opts, args):
       })
 
   rnn.init(
-    configFilename=config_fn, commandLineOptions=cmd_line_opts,
+    configFilename=config_fn,
     config_updates=config_updates, extra_greeting="RETURNN get-attention-weights starting up.")
   global config
   config = rnn.config
@@ -109,14 +109,14 @@ def init_net(args, layers):
 def main(argv):
   argparser = argparse.ArgumentParser(description=__doc__)
   argparser.add_argument("config_file", type=str, help="RETURNN config, or model-dir")
-  argparser.add_argument("--epoch", required=False, type=int)
+  argparser.add_argument("--epoch", type=int)
   argparser.add_argument('--data', default="train",
                          help="e.g. 'train', 'config:train', or sth like 'config:get_dataset('dev')'")
   argparser.add_argument('--do_search', default=False, action='store_true')
   argparser.add_argument('--beam_size', default=12, type=int)
   argparser.add_argument('--dump_dir', help="for npy or png")
   argparser.add_argument("--output_file", help="hdf")
-  argparser.add_argument("--device", default="gpu")
+  argparser.add_argument("--device", help="gpu or cpu (default: automatic)")
   argparser.add_argument("--layers", default=["att_weights"], action="append",
                          help="Layer of subnet to grab")
   argparser.add_argument("--rec_layer", default="output", help="Subnet layer to grab from; decoder")
@@ -130,13 +130,16 @@ def main(argv):
   argparser.add_argument("--train_flag", action="store_true")
   argparser.add_argument("--reset_partition_epoch", type=int, default=1)
   argparser.add_argument("--reset_seq_ordering", default="sorted_reverse")
+  argparser.add_argument("--reset_epoch_wise_filter", default=None)
   args = argparser.parse_args(argv[1:])
 
   layers = args.layers
   assert isinstance(layers, list)
   config_fn = args.config_file
+  explicit_model_dir = None
   if os.path.isdir(config_fn):
     # Assume we gave a model dir.
+    explicit_model_dir = config_fn
     train_log_dir_config_pattern = "%s/train-*/*.config" % config_fn
     train_log_dir_configs = sorted(glob(train_log_dir_config_pattern))
     assert train_log_dir_configs
@@ -146,7 +149,10 @@ def main(argv):
     assert os.path.isfile(config_fn)
   model_name = ".".join(config_fn.split("/")[-1].split(".")[:-1])
 
-  init_returnn(config_fn=config_fn, cmd_line_opts=["--device", args.device], args=args)
+  init_returnn(config_fn=config_fn, args=args)
+  if explicit_model_dir:
+    config.set("model", "%s/%s" % (explicit_model_dir, os.path.basename(config.value('model', ''))))
+  print("Model file prefix:", config.value('model', ''))
 
   if args.do_search:
     raise NotImplementedError
@@ -161,28 +167,35 @@ def main(argv):
   if args.output_format == "png":
     import matplotlib.pyplot as plt  # need to import early? https://stackoverflow.com/a/45582103/133374
     import matplotlib.ticker as ticker
+
+  dataset_str = args.data
+  if dataset_str in ["train", "dev", "eval"]:
+    dataset_str = "config:%s" % dataset_str
+  extra_dataset_kwargs = {}
+  if args.reset_partition_epoch:
+    print("NOTE: We are resetting partition epoch to %i." % (args.reset_partition_epoch,))
+    extra_dataset_kwargs["partition_epoch"] = args.reset_partition_epoch
+  if args.reset_seq_ordering:
+    print("NOTE: We will use %r seq ordering." % (args.reset_seq_ordering,))
+    extra_dataset_kwargs["seq_ordering"] = args.reset_seq_ordering
+  if args.reset_epoch_wise_filter:
+    extra_dataset_kwargs["epoch_wise_filter"] = eval(args.reset_epoch_wise_filter)
+  dataset = init_dataset(dataset_str, extra_kwargs=extra_dataset_kwargs)
+  if hasattr(dataset, "epoch_wise_filter") and args.reset_epoch_wise_filter is None:
+    if dataset.epoch_wise_filter:
+      print("NOTE: Resetting epoch_wise_filter to None.")
+      dataset.epoch_wise_filter = None
+
+  init_net(args, layers)
+  network = rnn.engine.network
+
   hdf_writer = None
   if args.output_format == "hdf":
     assert args.output_file
     assert len(layers) == 1
-    sub_layer = rnn.engine.network.get_layer("%s/%s" % (args.rec_layer, layers[0]))
+    sub_layer = network.get_layer("%s/%s" % (args.rec_layer, layers[0]))
     from HDFDataset import SimpleHDFWriter
     hdf_writer = SimpleHDFWriter(filename=args.output_file, dim=sub_layer.output.dim, ndim=sub_layer.output.ndim)
-  dataset_str = args.data
-  if dataset_str in ["train", "dev", "eval"]:
-    dataset_str = "config:%s" % dataset_str
-  dataset = init_dataset(dataset_str)
-  if args.num_seqs < 0:  # dump all seqs?
-    if args.reset_partition_epoch and dataset.partition_epoch != args.reset_partition_epoch:
-      print("WARNING: You configured partition epoch %i, and we are resetting that to %i." % (
-        dataset.partition_epoch, args.reset_partition_epoch))
-      dataset.partition_epoch = args.reset_partition_epoch
-    if args.reset_seq_ordering and dataset.seq_ordering != args.reset_seq_ordering:
-      print("NOTE: We will use %r seq ordering." % (args.reset_seq_ordering,))
-      dataset.seq_ordering = args.reset_seq_ordering
-  init_net(args, layers)
-
-  network = rnn.engine.network
 
   extra_fetches = {
     "output": network.layers[args.rec_layer].output.get_placeholder_as_batch_major(),
