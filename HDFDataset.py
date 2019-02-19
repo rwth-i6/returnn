@@ -141,8 +141,7 @@ class HDFDataset(CachedDataset):
       self.num_running_chars = numpy.sum(self.ctc_targets != -1)
     if 'targets' in fin:
       for name in fin['targets/data']:
-        tdim = 1 if len(fin['targets/data'][name].shape) == 1 else fin['targets/data'][name].shape[1]
-        self.data_dtype[str(name)] = str(fin['targets/data'][name].dtype) if tdim > 1 else 'int32'
+        self.data_dtype[str(name)] = str(fin['targets/data'][name].dtype)
         self.targets[str(name)] = None
     else:
       self.targets = {'classes': numpy.zeros((self._num_timesteps,), dtype="int32")}
