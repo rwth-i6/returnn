@@ -992,7 +992,7 @@ def init_dataset_via_str(config_str, config=None, cache_byte_size=None, **kwargs
     if not config:
       config = get_global_config()
     data = eval(config_str[len("config:"):], config.typed_dict, config.typed_dict)
-    return init_dataset(data)
+    return init_dataset(data, extra_kwargs=kwargs)
   elif ":" in config_str:
     kwargs.update(eval("dict(%s)" % config_str[config_str.find(":") + 1:]))
     class_name = config_str[:config_str.find(":")]

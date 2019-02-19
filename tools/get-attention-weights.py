@@ -185,6 +185,10 @@ def main(argv):
     if dataset.epoch_wise_filter:
       print("NOTE: Resetting epoch_wise_filter to None.")
       dataset.epoch_wise_filter = None
+  if args.reset_partition_epoch:
+    assert dataset.partition_epoch == args.reset_partition_epoch
+  if args.reset_seq_ordering:
+    assert dataset.seq_ordering == args.reset_seq_ordering
 
   init_net(args, layers)
   network = rnn.engine.network
