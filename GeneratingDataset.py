@@ -665,7 +665,9 @@ class StaticDataset(GeneratingDataset):
       for key in target_list:
         assert key in self.data_keys
     else:
-      target_list = self.data_keys
+      target_list = list(self.data_keys)
+      if "data" in target_list:
+        target_list.remove("data")
     self.target_list = target_list
 
     if output_dim is None:
