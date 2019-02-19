@@ -1869,15 +1869,6 @@ def test_get_op_attrib_keys__is_variable_initialized():
     print("attrib keys:", get_op_attrib_keys(check.op))
 
 
-def test_get_op_attrib_keys__string_strip():
-  x = tf.string_strip("  foo  ")
-  print("x:", x)
-  assert isinstance(x, tf.Tensor)
-  print("op:", x.op)
-  assert_equal(x.op.type, "StringStrip")
-  print("attrib keys:", get_op_attrib_keys(x.op))
-
-
 def test_print_graph_output():
   x = tf.matmul(a=tf.zeros((3, 4, 5)), b=tf.zeros((3, 5, 7)))
   x.set_shape((3, 4, 7))
