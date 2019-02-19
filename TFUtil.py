@@ -358,19 +358,8 @@ class Data(object):
     :return: copy of myself with time_dim_axis == 0
     :rtype: Data
     """
-    assert self.batch_dim_axis is not None
     assert self.time_dim_axis is not None
-    data = self.copy()
-    if data.time_dim_axis != 0:
-      if data.placeholder is not None:
-        with reuse_name_scope_of_tensor(data.placeholder):
-          with tf.name_scope("%s_as_time_major" % (data.name,)):
-            data.placeholder = swapaxes(data.placeholder, 0, data.time_dim_axis)
-      if data.batch_dim_axis <= data.time_dim_axis:
-        data.batch_dim_axis += 1
-      data.time_dim_axis = 0
-    data.sanity_check()
-    return data
+    return self.copy_with_time_dim_axis(0)
 
   def copy_with_batch_dim_axis(self, batch_dim_axis):
     """
@@ -379,20 +368,7 @@ class Data(object):
     :rtype: Data
     """
     assert self.batch_dim_axis is not None
-    if batch_dim_axis < 0:
-      batch_dim_axis += self.batch_ndim
-      assert batch_dim_axis >= 0
-    data = self.copy()
-    if data.batch_dim_axis != batch_dim_axis:
-      if data.placeholder is not None:
-        with tf.name_scope("%s_with_batch_axis_%i" % (data.name, batch_dim_axis)):
-          data.placeholder = move_axis(data.placeholder, new_axis=batch_dim_axis, old_axis=data.batch_dim_axis)
-      other_special_axes = data.get_special_axes_dict(counted_with_batch_dim=False, only_available=True)
-      data.batch_dim_axis = batch_dim_axis
-      for k, a in other_special_axes.items():
-        setattr(data, k, data.get_batch_axis(a))
-    data.sanity_check()
-    return data
+    return self.copy_move_axis(self.batch_dim_axis, batch_dim_axis)
 
   def copy_with_time_dim_axis(self, time_dim_axis):
     """
@@ -400,31 +376,65 @@ class Data(object):
     :return: copy of myself with specific time_dim_axis
     :rtype: Data
     """
-    assert self.batch_dim_axis is not None
-    if time_dim_axis < 0:
-      time_dim_axis += self.batch_ndim
-      assert time_dim_axis >= 0
+    assert self.time_dim_axis is not None
+    return self.copy_move_axis(self.time_dim_axis, time_dim_axis)
+
+  def copy_move_axis(self, old_axis, new_axis):
+    """
+    :param int old_axis: counted with batch-dim
+    :param int new_axis: counted with batch-dim
+    :return: copy of myself with moved axis (see :func:`move_axis`)
+    :rtype: Data
+    """
+    if old_axis < 0:
+      old_axis += self.batch_ndim
+      assert old_axis >= 0
+    assert 0 <= old_axis < self.batch_ndim
+    if new_axis < 0:
+      new_axis += self.batch_ndim
+      assert new_axis >= 0
+    assert 0 <= new_axis < self.batch_ndim
+    if old_axis == new_axis:
+      return self.copy()
+
+    def translate_axis(axis):
+      """
+      :param int|None axis:
+      :return: axis after move_axis
+      :rtype: int|None
+      """
+      if axis is None:
+        return None
+      if old_axis == new_axis:
+        return axis
+      if axis < min(old_axis, new_axis) or axis > max(old_axis, new_axis):
+        return axis
+      if axis == old_axis:
+        return new_axis
+      if old_axis < new_axis:
+        assert old_axis < axis <= new_axis
+        return axis - 1
+      assert new_axis <= axis < old_axis
+      return axis + 1
+
     data = self.copy()
-    if data.time_dim_axis != time_dim_axis:
-      data.time_dim_axis = time_dim_axis
-      assert time_dim_axis <= data.batch_ndim_dense - 2
-      new_axes = list(range(data.batch_ndim))
-      new_axes[self.time_dim_axis], new_axes[data.time_dim_axis] = \
-        new_axes[data.time_dim_axis], new_axes[self.time_dim_axis]  # swap
-      if data.placeholder is not None:
-        with tf.name_scope("%s_with_time_axis_%i" % (data.name, time_dim_axis)):
-          data.placeholder = tf.transpose(data.placeholder, new_axes)
-      batch_shape = [data.batch_shape[i] for i in new_axes]
-      data.batch_dim_axis = new_axes[self.batch_dim_axis]
-      data.shape = tuple([d for (i, d) in enumerate(batch_shape) if i != data.batch_dim_axis])
-      if data.size_placeholder is not None:
-        data.size_placeholder = {}
-        for axis_wo_b, size in sorted(self.size_placeholder.items()):
-          axis_wb = self.get_batch_axis(axis_wo_b)
-          axis_wb = new_axes[axis_wb]
-          axis_wo_b = data.get_batch_axis_excluding_batch(axis_wb)
-          assert axis_wo_b is not None
-          data.size_placeholder[axis_wo_b] = size
+    if data.placeholder is not None:
+      data.placeholder = move_axis(data.placeholder, old_axis, new_axis)
+    data.batch_dim_axis = translate_axis(data.batch_dim_axis)
+    new_feature_dim_axis = translate_axis(data.feature_dim_axis)
+    if new_feature_dim_axis != data.feature_dim_axis:
+      # Only assign in this case. Otherwise, e.g. if it is NotSpecified, leave it like that.
+      data.feature_dim_axis = new_feature_dim_axis
+    data.time_dim_axis = translate_axis(data.time_dim_axis)
+    if data.size_placeholder:
+      data.size_placeholder = {
+        data.get_batch_axis_excluding_batch(translate_axis(self.get_batch_axis(i))): size
+        for (i, size) in data.size_placeholder.items()}
+      assert None not in data.size_placeholder
+    new_shape = [None] * data.ndim
+    for i, dim in enumerate(self.shape):
+      new_shape[data.get_batch_axis_excluding_batch(translate_axis(self.get_batch_axis(i)))] = dim
+    data.shape = tuple(new_shape)
     data.sanity_check()
     return data
 
@@ -438,7 +448,9 @@ class Data(object):
       return self.copy_with_time_dim_axis(1)
     if self.time_dim_axis == 0:
       return self.copy_with_batch_dim_axis(1)
-    raise ValueError("cannot convert %r to BT|TB major" % self)
+    if self.batch_dim_axis > self.time_dim_axis:
+      return self.copy_as_time_major().copy_as_bt_or_tb_major()
+    return self.copy_as_batch_major().copy_as_bt_or_tb_major()
 
   def copy_with_feature_dim_axis(self, feature_dim_axis):
     """
@@ -447,43 +459,7 @@ class Data(object):
     :rtype: Data
     """
     assert self.feature_dim_axis is not None
-    if feature_dim_axis < 0:
-      feature_dim_axis += self.batch_ndim
-    assert 0 <= feature_dim_axis < self.batch_ndim
-    data = self.copy()
-    if data.feature_dim_axis == feature_dim_axis:
-      return data
-    if data.placeholder is not None:
-      data.placeholder = move_axis(
-        data.placeholder, new_axis=feature_dim_axis, old_axis=data.feature_dim_axis)
-    new_shape = list(data.shape)
-    new_shape.pop(data.get_batch_axis_excluding_batch(self.feature_dim_axis))
-    new_shape.insert(data.get_batch_axis_excluding_batch(feature_dim_axis), data.dim)
-    data.shape = tuple(new_shape)
-    other_special_axes = data.get_special_axes_dict(
-      counted_with_batch_dim=True, only_available=True, include_batch_dim_axis=True)
-    other_special_axes.pop("feature_dim_axis", None)
-    old_feature_axis = data.feature_dim_axis
-    data.feature_dim_axis = feature_dim_axis
-    for k, a in other_special_axes.items():
-      if old_feature_axis < a <= feature_dim_axis:
-        a -= 1
-      elif feature_dim_axis <= a < old_feature_axis:
-        a += 1
-      setattr(data, k, a)
-    axis_old_wo_batch = self.get_batch_axis_excluding_batch(self.feature_dim_axis)
-    axis_new_wo_batch = data.get_batch_axis_excluding_batch(feature_dim_axis)
-    if self.size_placeholder:
-      new_size_placeholder = {}
-      for i, s in self.size_placeholder.items():
-        if axis_old_wo_batch < i <= axis_new_wo_batch:
-          i -= 1
-        elif axis_new_wo_batch <= i < axis_old_wo_batch:
-          i += 1
-        new_size_placeholder[i] = s
-      data.size_placeholder = new_size_placeholder
-    data.sanity_check()
-    return data
+    return self.copy_move_axis(self.feature_dim_axis, feature_dim_axis)
 
   def copy_as_batch_feature_major(self):
     """
