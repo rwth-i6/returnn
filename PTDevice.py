@@ -89,7 +89,6 @@ class Device(object):
   def detect_nan(self, i, node, fn):
     for output in fn.outputs:
       if numpy.isnan(output[0]).any():
-        #theano.printing.debugprint(node)
         print(('Inputs : %s' % [input[0] for input in fn.inputs]))
         print(('Outputs: %s' % [output[0] for output in fn.outputs]))
         assert False, '*** NaN detected ***'
@@ -154,7 +153,7 @@ class Device(object):
     if self.network_task == 'train':
       gparams = []
       exclude = []
-      self.gradients = {}; ":type: dict[theano.SharedVariable,theano.Variable]"
+      self.gradients = {}
       for pi, param in enumerate(self.trainnet.train_params_vars):
         if log.verbose[4]: progress_bar(float(pi) / len(self.trainnet.train_params_vars), "calculating gradients ...")
         if hasattr(param,'custom_update'):
@@ -188,8 +187,8 @@ class Device(object):
     self.forwarder = None
     self.use_inputs = False
     if self.network_task  == 'train':
-        train_givens = self.make_givens(self.trainnet)
-        test_givens = self.make_givens(self.testnet)
+      train_givens = self.make_givens(self.trainnet)
+      test_givens = self.make_givens(self.testnet)
 
       if self.update_specs['update_rule'] == 'global':
         self.updater = Updater.initFromConfig(self.config)
@@ -267,23 +266,7 @@ class Device(object):
           for j in range(len(block_output)):
             output[j] += block_output[j]
     elif task == "extract" or task == "forward":
-      if self.use_inputs:
-        inp = [self.y[k].get_value() for k in self.used_data_keys]
-        inp += [self.j[k].get_value() for k in self.used_data_keys]
-        output = self.extractor(*inp)
-      else:
-        output = self.extractor()
-      if self.save_graph:
-        import dill
-        sys.setrecursionlimit(50000)
-        graphfile = self.config.value('save_graph','')
-        print("Loading pre-compiled graph from '%s'" % graphfile, file=log.v4)
-        dill.dump(self.extractor, open(graphfile, 'wb'))
-        self.save_graph = False
-    elif task == 'classify':
-      output = self.classifier()
-    elif task == "analyze":
-      output = self.analyzer()
+      output = self.extractor()
     else:
       assert False, "invalid command: " + task
     compute_end_time = time.time()
@@ -310,73 +293,12 @@ class Device(object):
         if fmt.startswith('cost:'):
           self.total_cost += out
 
-    # In train, first output is the score.
-    # If this is inf/nan, our model is probably broken.
-    model_broken_short_info = self.fast_check_model_is_broken_from_result(output, outputs_format)
-    if model_broken_short_info:
-      print("Model looks broken:", model_broken_short_info, file=log.v3)
-      if self.config.bool("dump_model_broken_info", False):
-        self.dump_model_broken_info(model_broken_short_info)
-      if self.config.bool("debug_shell_model_broken", False):
-        print("debug_shell_model_broken", file=log.v1)
-        Debug.debug_shell(user_ns=locals(), user_global_ns=globals())
-    # Pass on, let the Engine decide what to do (or also just fail).
-
     return output, outputs_format
 
   def get_compute_func(self, task):
     if task == "train":
       return self.trainer
     raise NotImplementedError("for task: %r" % task)
-
-  def fast_check_model_is_broken_from_result(self, output, outputs_format):
-    if not outputs_format:  # In train, we should always have this.
-      return
-    output_dict = self.make_result_dict(output, outputs_format)
-    # Check only params which are small, i.e. not the whole gparams.
-    RelevantAttribs = ["cost", "gradient_norm"]
-    def is_relevant_attrib(k):
-      for rk in RelevantAttribs:
-        if k == rk or k.startswith(rk + ":"):
-          return True
-      return False
-    values = {k: numpy.asarray(v)
-              for k, v in output_dict.items() if is_relevant_attrib(k)}
-    for attrib, value in values.items():
-      if not numpy.isfinite(value).all():
-        return ", ".join(["%s = %s" % (k, v) for (k, v) in values.items()])
-    return
-
-  def dump_model_broken_info(self, info):
-    try:
-      dump_file_name = "model_broken_dump.pickle.log"
-      if os.path.exists(dump_file_name):
-        i = 1
-        while os.path.exists("%s.%i" % (dump_file_name, i)):
-          i += 1
-        dump_file_name = "%s.%i" % (dump_file_name, i)
-      f = open(dump_file_name, "w")
-      print("Dumping model broken info to file %r." % dump_file_name, file=log.v1)
-    except Exception as e:
-      print("Exception while opening model broken dump file. %s" % e, file=log.v3)
-      return
-    collected_info = {"info_str": str(info)}
-    try:
-      collected_info["dev_data"] = numpy.asarray(self.y["data"].get_value())
-      collected_info["dev_targets"] = numpy.asarray(self.y["classes"].get_value()) #TODO fix for multiple targets with other labels
-      collected_info["dev_index"] = numpy.asarray(self.j["data"].get_value())
-    except Exception as e:
-      print("Exception when getting device data. %s" % e, file=log.v3)
-    try:
-      train_params = [numpy.asarray(v.get_value()) for v in self.trainnet.train_params_vars]
-      collected_info["train_params"] = train_params
-    except Exception as e:
-      print("Exception when getting train params. %s" % e, file=log.v3)
-    try:
-      pickle.dump(collected_info, f)
-      f.close()
-    except Exception as e:
-      print("Exception when writing model broken info dump. %s" % e, file=log.v3)
 
   def process(self, asyncTask):
     """
@@ -769,14 +691,11 @@ class Device(object):
     self.update_data()
     assert not self.wait_for_result_call
     self.wait_for_result_call = True
-    if self.blocking:
-      self.output, self.outputs_format = self.compute_run(task)
-    else:
-      assert self.main_pid == os.getpid()
-      self.output = None
-      self.outputs_format = None
-      self.input_queue.send("task")
-      self.input_queue.send(task)
+
+    self.output = None
+    self.outputs_format = None
+    self.input_queue.send("task")
+    self.input_queue.send(task)
 
   def clear_memory(self, network):
     self.update_data()
@@ -841,23 +760,19 @@ class Device(object):
   def forward(self, use_trainnet=False):
     assert self.is_device_proc()
     network = self.trainnet if use_trainnet else self.testnet
-    import theano
     if not self.forwarder:
       print("Device: Create forwarder, use trainnet:", use_trainnet, ", testnet_share_params:", self.testnet_share_params, file=log.v3)
-      self.forwarder = theano.function(
-        inputs=[],
-        outputs=[layer.output for name, layer in sorted(network.output.items())],
-        givens=self.make_input_givens(network),
-        on_unused_input='warn',
-        name="forwarder")
-    from TheanoUtil import make_var_tuple
-    outputs = make_var_tuple(self.forwarder())
+      # # TODO
+      #self.forwarder = theano.function(
+      #  inputs=[],
+      #  outputs=[layer.output for name, layer in sorted(network.output.items())],
+      #  givens=self.make_input_givens(network),
+      #  on_unused_input='warn',
+      #  name="forwarder")
     assert len(outputs) == len(network.output)
     return {name: outputs[i] for i, (name, layer) in enumerate(sorted(network.output.items()))}
 
   def terminate(self):
-    if self.blocking:
-      return
     if not self.proc:
       return
     if not self.proc.is_alive():
