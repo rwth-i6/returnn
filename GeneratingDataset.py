@@ -700,6 +700,9 @@ class StaticDataset(GeneratingDataset):
   def get_target_list(self):
     return self.target_list
 
+  def get_data_dtype(self, key):
+    return self.data[0][key].dtype
+
 
 class CopyTaskDataset(GeneratingDataset):
 
