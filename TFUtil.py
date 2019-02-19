@@ -4811,6 +4811,74 @@ def smoothing_cross_entropy(logits,
     return xentropy - normalizing  # shape(labels)
 
 
+def softmax_cross_entropy_over_size(logits, labels):
+  """
+  The last spatial axis with dyn size info will be used and interpret as the class probabilities
+  over the size.
+  We will mask logits outside of the size.
+  We expect that the labels have the corresponding invalid frames already set to 0.0.
+  This can be used to measure the cross entropy between two soft alignments / attention weights.
+
+  :param Data logits: in log space, unscaled. shape (...,T,...).
+    Shape can be eg. (B,dec-T,enc-T,H...), or (dec-T,enc-T,B,H...), etc.
+    If it has multiple axes with dynamic size, we use the last one (enc-T in the example).
+  :param Data labels: in prob space. shape compatible to `logits` (but axes can be ordered differently).
+    Shape can be e.g. (B,dec-T,enc-T,H...) etc.
+    If is has multiple spatial axes, we expect them to be in the same order as of `logits`
+  :return: shape as logits, but the T axis removed.
+  :rtype: tf.Tensor
+  """
+  assert len(logits.size_placeholder) == len(labels.size_placeholder) >= 1  # expect same number, and at least 1
+  assert logits.batch_ndim == labels.batch_ndim
+  # Move the enc-time axis to the end if not there (required for softmax_cross_entropy_with_logits).
+  logits_enc_time_axis = logits.get_batch_axis(max(logits.size_placeholder.keys()))
+  logits = logits.copy_move_axis(logits_enc_time_axis, -1)
+  logits_enc_time_axis = logits.get_batch_axis(max(logits.size_placeholder.keys()))
+  assert logits_enc_time_axis == logits.batch_ndim - 1
+  logits_t = logits.placeholder
+  labels_t = labels.placeholder
+  # Assume that it is faster to transpose labels, as they are probably static.
+  # Transpose such that it is compatible to logits.
+  labels_perm = []
+  labels_spatial_dims = labels.get_spatial_batch_axes()
+  logits_spatial_dims = logits.get_spatial_batch_axes()
+  assert len(labels_spatial_dims) == len(logits_spatial_dims)
+  for i in range(logits.batch_ndim):
+    if i == logits.batch_dim_axis:
+      labels_perm.append(labels.batch_dim_axis)
+    elif i in logits_spatial_dims:
+      labels_perm.append(labels_spatial_dims[logits_spatial_dims.index(i)])
+    elif i == logits.feature_dim_axis:
+      assert logits.batch_shape[logits.feature_dim_axis] == labels.batch_shape[labels.feature_dim_axis]
+      labels_perm.append(labels.feature_dim_axis)
+    else:
+      raise Exception("not matching %r vs %r, axis %i" % (logits, labels, i))
+  labels_t = tf.transpose(labels_t, labels_perm)  # should be same shape as logits
+  labels_shape = tf.shape(labels_t)
+  n_batch = labels_shape[logits.batch_dim_axis]
+  enc_time_dim = labels_shape[-1]
+  # See SoftmaxOverSpatialLayer.
+  mask = sequence_mask(logits.size_placeholder[logits.get_batch_axis_excluding_batch(logits_enc_time_axis)])  # (B,encT)
+  mask_expand_dims_shape = []
+  for i in range(logits.batch_ndim):
+    if i == logits.batch_dim_axis:
+      mask_expand_dims_shape.append(n_batch)
+    elif i == logits_enc_time_axis:
+      mask_expand_dims_shape.append(enc_time_dim)
+    else:
+      mask_expand_dims_shape.append(1)
+  assert (any([dim is n_batch for dim in mask_expand_dims_shape]) and
+          any([dim is enc_time_dim for dim in mask_expand_dims_shape]))
+  mask = tf.reshape(mask, mask_expand_dims_shape)  # (...,B,...,enc-T), just like logits/labels
+  mask = tf.logical_and(mask, tf.ones_like(labels_t, dtype=tf.bool))  # unbroadcast, needed for tf.where
+  logits_t = tf.where(mask, logits_t, float("-inf") * tf.ones_like(logits_t))
+  logits_t = tf.reshape(logits_t, [-1, enc_time_dim])  # (B',enc-T)
+  labels_t = tf.reshape(labels_t, [-1, enc_time_dim])  # (B',enc-T)
+  out = tf.nn.softmax_cross_entropy_with_logits(logits=logits_t, labels=labels_t)  # (B')
+  out = tf.reshape(out, labels_shape[:-1])  # (B,dec-T,H...)
+  return out
+
+
 def _py_bleu_score(hypothesis, truth, hyp_seq_lens, truth_seq_lens):
   """
   :param numpy.ndarray hypothesis:
