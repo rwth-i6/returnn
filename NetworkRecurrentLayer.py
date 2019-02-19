@@ -521,6 +521,7 @@ class RecurrentUnitLayer(Layer):
                attention_offset=0.95,
                attention_method="epoch",
                attention_scale=10,
+               context=-1,
                base = None,
                aligner = None,
                lm = False,
@@ -818,6 +819,33 @@ class RecurrentUnitLayer(Layer):
     # scan over sequence
     for s in range(self.attrs['sampling']):
       index = self.index[s::self.attrs['sampling']]
+
+      if context > 0:
+        from TheanoUtil import context_batched
+        n_batches = z.shape[1]
+        time, batch, dim = z.shape[0], z.shape[1], z.shape[2]
+        #z = context_batched(z[::direction or 1], window=context)[::direction or 1] # TB(CD)
+
+        from theano.ifelse import ifelse
+        def context_window(idx, x_in, i_in):
+          x_out = x_in[idx:idx + context]
+          x_out = x_out.dimshuffle('x',1,0,2).reshape((1, batch, dim * context))
+          i_out = i_in[idx:idx+1].repeat(context, axis=0)
+          i_out = ifelse(T.lt(idx,context),T.set_subtensor(i_out[:context - idx],numpy.int8(0)),i_out).reshape((1, batch * context))
+          return x_out, i_out
+
+        z = z[::direction or 1]
+        i = index[::direction or 1]
+        out, _ = theano.map(context_window, sequences = [T.arange(z.shape[0])], non_sequences = [T.concatenate([T.zeros((context - 1,z.shape[1],z.shape[2]),dtype='float32'),z],axis=0), i])
+        z = out[0][::direction or 1]
+        i = out[1][::direction or 1] # T(BC)
+        direction = 1
+        z = z.reshape((time * batch, context * dim)) # (TB)(CD)
+        z = z.reshape((time * batch, context, dim)).dimshuffle(1,0,2) # C(TB)D
+        i = i.reshape((time, context, batch)).dimshuffle(1,0,2).reshape((context, time * batch))
+        index = i
+        num_batches = time * batch
+
       sequences = z
       sources = self.sources
       if encoder:
@@ -850,10 +878,22 @@ class RecurrentUnitLayer(Layer):
 
       index_f = T.cast(index, theano.config.floatX)
       unit.set_parent(self)
+
       if segment_input:
         outputs = unit.scan_seg(x=sources,
+                                z=sequences[s::self.attrs['sampling']],
+                                att = inv_att,
+                                non_sequences=non_sequences,
+                                i=index_f,
+                                outputs_info=outputs_info,
+                                W_re=self.W_re,
+                                W_in=self.W_in,
+                                b=self.b,
+                                go_backwards=direction == -1,
+                                truncate_gradient=self.attrs['truncation'])
+      else:
+        outputs = unit.scan(x=sources,
                             z=sequences[s::self.attrs['sampling']],
-                            att = inv_att,
                             non_sequences=non_sequences,
                             i=index_f,
                             outputs_info=outputs_info,
@@ -862,22 +902,14 @@ class RecurrentUnitLayer(Layer):
                             b=self.b,
                             go_backwards=direction == -1,
                             truncate_gradient=self.attrs['truncation'])
-      else:
-        outputs = unit.scan(x=sources,
-                          z=sequences[s::self.attrs['sampling']],
-                          non_sequences=non_sequences,
-                          i=index_f,
-                          outputs_info=outputs_info,
-                          W_re=self.W_re,
-                          W_in=self.W_in,
-                          b=self.b,
-                          go_backwards=direction == -1,
-                          truncate_gradient=self.attrs['truncation'])
 
       if not isinstance(outputs, list):
         outputs = [outputs]
       if outputs:
         outputs[0].name = "%s.act[0]" % self.name
+        if context > 0:
+          for i in range(len(outputs)):
+            outputs[i] = outputs[i][-1].reshape((outputs[i].shape[1]//n_batches,n_batches,outputs[i].shape[2]))
 
       if unit.recurrent_transform:
         unit.recurrent_transform_state_var_seqs = outputs[-len(unit.recurrent_transform.state_vars):]
