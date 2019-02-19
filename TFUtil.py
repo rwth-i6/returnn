@@ -358,19 +358,8 @@ class Data(object):
     :return: copy of myself with time_dim_axis == 0
     :rtype: Data
     """
-    assert self.batch_dim_axis is not None
     assert self.time_dim_axis is not None
-    data = self.copy()
-    if data.time_dim_axis != 0:
-      if data.placeholder is not None:
-        with reuse_name_scope_of_tensor(data.placeholder):
-          with tf.name_scope("%s_as_time_major" % (data.name,)):
-            data.placeholder = swapaxes(data.placeholder, 0, data.time_dim_axis)
-      if data.batch_dim_axis <= data.time_dim_axis:
-        data.batch_dim_axis += 1
-      data.time_dim_axis = 0
-    data.sanity_check()
-    return data
+    return self.copy_with_time_dim_axis(0)
 
   def copy_with_batch_dim_axis(self, batch_dim_axis):
     """
@@ -379,20 +368,7 @@ class Data(object):
     :rtype: Data
     """
     assert self.batch_dim_axis is not None
-    if batch_dim_axis < 0:
-      batch_dim_axis += self.batch_ndim
-      assert batch_dim_axis >= 0
-    data = self.copy()
-    if data.batch_dim_axis != batch_dim_axis:
-      if data.placeholder is not None:
-        with tf.name_scope("%s_with_batch_axis_%i" % (data.name, batch_dim_axis)):
-          data.placeholder = move_axis(data.placeholder, new_axis=batch_dim_axis, old_axis=data.batch_dim_axis)
-      other_special_axes = data.get_special_axes_dict(counted_with_batch_dim=False, only_available=True)
-      data.batch_dim_axis = batch_dim_axis
-      for k, a in other_special_axes.items():
-        setattr(data, k, data.get_batch_axis(a))
-    data.sanity_check()
-    return data
+    return self.copy_move_axis(self.batch_dim_axis, batch_dim_axis)
 
   def copy_with_time_dim_axis(self, time_dim_axis):
     """
@@ -400,31 +376,65 @@ class Data(object):
     :return: copy of myself with specific time_dim_axis
     :rtype: Data
     """
-    assert self.batch_dim_axis is not None
-    if time_dim_axis < 0:
-      time_dim_axis += self.batch_ndim
-      assert time_dim_axis >= 0
+    assert self.time_dim_axis is not None
+    return self.copy_move_axis(self.time_dim_axis, time_dim_axis)
+
+  def copy_move_axis(self, old_axis, new_axis):
+    """
+    :param int old_axis: counted with batch-dim
+    :param int new_axis: counted with batch-dim
+    :return: copy of myself with moved axis (see :func:`move_axis`)
+    :rtype: Data
+    """
+    if old_axis < 0:
+      old_axis += self.batch_ndim
+      assert old_axis >= 0
+    assert 0 <= old_axis < self.batch_ndim
+    if new_axis < 0:
+      new_axis += self.batch_ndim
+      assert new_axis >= 0
+    assert 0 <= new_axis < self.batch_ndim
+    if old_axis == new_axis:
+      return self.copy()
+
+    def translate_axis(axis):
+      """
+      :param int|None axis:
+      :return: axis after move_axis
+      :rtype: int|None
+      """
+      if axis is None:
+        return None
+      if old_axis == new_axis:
+        return axis
+      if axis < min(old_axis, new_axis) or axis > max(old_axis, new_axis):
+        return axis
+      if axis == old_axis:
+        return new_axis
+      if old_axis < new_axis:
+        assert old_axis < axis <= new_axis
+        return axis - 1
+      assert new_axis <= axis < old_axis
+      return axis + 1
+
     data = self.copy()
-    if data.time_dim_axis != time_dim_axis:
-      data.time_dim_axis = time_dim_axis
-      assert time_dim_axis <= data.batch_ndim_dense - 2
-      new_axes = list(range(data.batch_ndim))
-      new_axes[self.time_dim_axis], new_axes[data.time_dim_axis] = \
-        new_axes[data.time_dim_axis], new_axes[self.time_dim_axis]  # swap
-      if data.placeholder is not None:
-        with tf.name_scope("%s_with_time_axis_%i" % (data.name, time_dim_axis)):
-          data.placeholder = tf.transpose(data.placeholder, new_axes)
-      batch_shape = [data.batch_shape[i] for i in new_axes]
-      data.batch_dim_axis = new_axes[self.batch_dim_axis]
-      data.shape = tuple([d for (i, d) in enumerate(batch_shape) if i != data.batch_dim_axis])
-      if data.size_placeholder is not None:
-        data.size_placeholder = {}
-        for axis_wo_b, size in sorted(self.size_placeholder.items()):
-          axis_wb = self.get_batch_axis(axis_wo_b)
-          axis_wb = new_axes[axis_wb]
-          axis_wo_b = data.get_batch_axis_excluding_batch(axis_wb)
-          assert axis_wo_b is not None
-          data.size_placeholder[axis_wo_b] = size
+    if data.placeholder is not None:
+      data.placeholder = move_axis(data.placeholder, old_axis, new_axis)
+    data.batch_dim_axis = translate_axis(data.batch_dim_axis)
+    new_feature_dim_axis = translate_axis(data.feature_dim_axis)
+    if new_feature_dim_axis != data.feature_dim_axis:
+      # Only assign in this case. Otherwise, e.g. if it is NotSpecified, leave it like that.
+      data.feature_dim_axis = new_feature_dim_axis
+    data.time_dim_axis = translate_axis(data.time_dim_axis)
+    if data.size_placeholder:
+      data.size_placeholder = {
+        data.get_batch_axis_excluding_batch(translate_axis(self.get_batch_axis(i))): size
+        for (i, size) in data.size_placeholder.items()}
+      assert None not in data.size_placeholder
+    new_shape = [None] * data.ndim
+    for i, dim in enumerate(self.shape):
+      new_shape[data.get_batch_axis_excluding_batch(translate_axis(self.get_batch_axis(i)))] = dim
+    data.shape = tuple(new_shape)
     data.sanity_check()
     return data
 
@@ -438,7 +448,9 @@ class Data(object):
       return self.copy_with_time_dim_axis(1)
     if self.time_dim_axis == 0:
       return self.copy_with_batch_dim_axis(1)
-    raise ValueError("cannot convert %r to BT|TB major" % self)
+    if self.batch_dim_axis > self.time_dim_axis:
+      return self.copy_as_time_major().copy_as_bt_or_tb_major()
+    return self.copy_as_batch_major().copy_as_bt_or_tb_major()
 
   def copy_with_feature_dim_axis(self, feature_dim_axis):
     """
@@ -447,43 +459,7 @@ class Data(object):
     :rtype: Data
     """
     assert self.feature_dim_axis is not None
-    if feature_dim_axis < 0:
-      feature_dim_axis += self.batch_ndim
-    assert 0 <= feature_dim_axis < self.batch_ndim
-    data = self.copy()
-    if data.feature_dim_axis == feature_dim_axis:
-      return data
-    if data.placeholder is not None:
-      data.placeholder = move_axis(
-        data.placeholder, new_axis=feature_dim_axis, old_axis=data.feature_dim_axis)
-    new_shape = list(data.shape)
-    new_shape.pop(data.get_batch_axis_excluding_batch(self.feature_dim_axis))
-    new_shape.insert(data.get_batch_axis_excluding_batch(feature_dim_axis), data.dim)
-    data.shape = tuple(new_shape)
-    other_special_axes = data.get_special_axes_dict(
-      counted_with_batch_dim=True, only_available=True, include_batch_dim_axis=True)
-    other_special_axes.pop("feature_dim_axis", None)
-    old_feature_axis = data.feature_dim_axis
-    data.feature_dim_axis = feature_dim_axis
-    for k, a in other_special_axes.items():
-      if old_feature_axis < a <= feature_dim_axis:
-        a -= 1
-      elif feature_dim_axis <= a < old_feature_axis:
-        a += 1
-      setattr(data, k, a)
-    axis_old_wo_batch = self.get_batch_axis_excluding_batch(self.feature_dim_axis)
-    axis_new_wo_batch = data.get_batch_axis_excluding_batch(feature_dim_axis)
-    if self.size_placeholder:
-      new_size_placeholder = {}
-      for i, s in self.size_placeholder.items():
-        if axis_old_wo_batch < i <= axis_new_wo_batch:
-          i -= 1
-        elif axis_new_wo_batch <= i < axis_old_wo_batch:
-          i += 1
-        new_size_placeholder[i] = s
-      data.size_placeholder = new_size_placeholder
-    data.sanity_check()
-    return data
+    return self.copy_move_axis(self.feature_dim_axis, feature_dim_axis)
 
   def copy_as_batch_feature_major(self):
     """
@@ -1598,6 +1574,7 @@ def variable_scalar_summaries_dict(x, name=None):
     '%s_mean' % name: mean,
     '%s_stddev' % name: stddev,
     '%s_rms' % name: tf.sqrt(tf.reduce_mean(tf.square(x))),
+    '%s_l2' % name: tf.sqrt(tf.nn.l2_loss(x) * 0.5),
     '%s_max' % name: tf.reduce_max(x),
     '%s_min' % name: tf.reduce_min(x)}
 
@@ -1621,6 +1598,21 @@ def variable_summaries(var, name=None, with_histogram=False):
       tf.summary.scalar(k, v)
     if with_histogram:
       tf.summary.histogram('%s_histogram' % name, var)
+
+
+def get_valid_scope_name_from_str(s):
+  """
+  :param str s: some name
+  :return: valid scope name, might be just s. see tf._VALID_SCOPE_NAME_REGEX and tf._VALID_OP_NAME_REGEX
+  :rtype: str
+  """
+  # For the root name scope, it's even more restrictive, and we must also cover this case.
+  # NOTE: Be careful changing this logic. Try to never change the behavior for existing cases,
+  # because this name is used e.g. for layers, and you might introduce incompatibility by changes here.
+  s = s.replace(":", "__")
+  if s[:1] in "_-\\/":  # invalid first chars
+    s = (".%i." % ord(s[0])) + s[1:]
+  return s
 
 
 def get_current_var_scope_name():
@@ -1739,7 +1731,7 @@ def get_name_scope_of_tensor(x):
 
 def get_base_name(x):
   """
-  :param tf.Tensor x: has name e.g. "layer0/rec/W:0"
+  :param tf.Tensor|tf.Variable x: has name e.g. "layer0/rec/W:0"
   :return: return the base name, e.g. "W", without the output index
   """
   parts = str(x.name).split("/")
@@ -1749,7 +1741,7 @@ def get_base_name(x):
 @contextlib.contextmanager
 def reuse_name_scope_of_tensor(x, prefix="", postfix=""):
   """
-  :param tf.Tensor x: has name e.g. "layer0/rec/W:0"
+  :param tf.Tensor|tf.Variable x: has name e.g. "layer0/rec/W:0"
   :param str prefix:
   :param str postfix:
   :return: reuse the name scope of x, e.g. "layer0/rec", yields scope
@@ -3852,7 +3844,7 @@ def spatial_smoothing_energy(x, dim, use_circular_conv=True):
   :rtype: tf.Tensor
   :return: energy of shape (...)
 
-  Via Achieving Human Parity in Conversational Speech Recognition, Microsoft, 2017.
+  Via: Achieving Human Parity in Conversational Speech Recognition, Microsoft, 2017 (https://arxiv.org/abs/1610.05256).
   Interpret the last dimension as 2D (w, h) and apply some high-pass filter on it.
   """
   import math
@@ -4817,6 +4809,74 @@ def smoothing_cross_entropy(logits,
     xentropy = tf.nn.softmax_cross_entropy_with_logits(
       logits=logits, labels=soft_targets)  # shape(labels)
     return xentropy - normalizing  # shape(labels)
+
+
+def softmax_cross_entropy_over_size(logits, labels):
+  """
+  The last spatial axis with dyn size info will be used and interpret as the class probabilities
+  over the size.
+  We will mask logits outside of the size.
+  We expect that the labels have the corresponding invalid frames already set to 0.0.
+  This can be used to measure the cross entropy between two soft alignments / attention weights.
+
+  :param Data logits: in log space, unscaled. shape (...,T,...).
+    Shape can be eg. (B,dec-T,enc-T,H...), or (dec-T,enc-T,B,H...), etc.
+    If it has multiple axes with dynamic size, we use the last one (enc-T in the example).
+  :param Data labels: in prob space. shape compatible to `logits` (but axes can be ordered differently).
+    Shape can be e.g. (B,dec-T,enc-T,H...) etc.
+    If is has multiple spatial axes, we expect them to be in the same order as of `logits`
+  :return: shape as logits, but the T axis removed.
+  :rtype: tf.Tensor
+  """
+  assert len(logits.size_placeholder) == len(labels.size_placeholder) >= 1  # expect same number, and at least 1
+  assert logits.batch_ndim == labels.batch_ndim
+  # Move the enc-time axis to the end if not there (required for softmax_cross_entropy_with_logits).
+  logits_enc_time_axis = logits.get_batch_axis(max(logits.size_placeholder.keys()))
+  logits = logits.copy_move_axis(logits_enc_time_axis, -1)
+  logits_enc_time_axis = logits.get_batch_axis(max(logits.size_placeholder.keys()))
+  assert logits_enc_time_axis == logits.batch_ndim - 1
+  logits_t = logits.placeholder
+  labels_t = labels.placeholder
+  # Assume that it is faster to transpose labels, as they are probably static.
+  # Transpose such that it is compatible to logits.
+  labels_perm = []
+  labels_spatial_dims = labels.get_spatial_batch_axes()
+  logits_spatial_dims = logits.get_spatial_batch_axes()
+  assert len(labels_spatial_dims) == len(logits_spatial_dims)
+  for i in range(logits.batch_ndim):
+    if i == logits.batch_dim_axis:
+      labels_perm.append(labels.batch_dim_axis)
+    elif i in logits_spatial_dims:
+      labels_perm.append(labels_spatial_dims[logits_spatial_dims.index(i)])
+    elif i == logits.feature_dim_axis:
+      assert logits.batch_shape[logits.feature_dim_axis] == labels.batch_shape[labels.feature_dim_axis]
+      labels_perm.append(labels.feature_dim_axis)
+    else:
+      raise Exception("not matching %r vs %r, axis %i" % (logits, labels, i))
+  labels_t = tf.transpose(labels_t, labels_perm)  # should be same shape as logits
+  labels_shape = tf.shape(labels_t)
+  n_batch = labels_shape[logits.batch_dim_axis]
+  enc_time_dim = labels_shape[-1]
+  # See SoftmaxOverSpatialLayer.
+  mask = sequence_mask(logits.size_placeholder[logits.get_batch_axis_excluding_batch(logits_enc_time_axis)])  # (B,encT)
+  mask_expand_dims_shape = []
+  for i in range(logits.batch_ndim):
+    if i == logits.batch_dim_axis:
+      mask_expand_dims_shape.append(n_batch)
+    elif i == logits_enc_time_axis:
+      mask_expand_dims_shape.append(enc_time_dim)
+    else:
+      mask_expand_dims_shape.append(1)
+  assert (any([dim is n_batch for dim in mask_expand_dims_shape]) and
+          any([dim is enc_time_dim for dim in mask_expand_dims_shape]))
+  mask = tf.reshape(mask, mask_expand_dims_shape)  # (...,B,...,enc-T), just like logits/labels
+  mask = tf.logical_and(mask, tf.ones_like(labels_t, dtype=tf.bool))  # unbroadcast, needed for tf.where
+  logits_t = tf.where(mask, logits_t, float("-inf") * tf.ones_like(logits_t))
+  logits_t = tf.reshape(logits_t, [-1, enc_time_dim])  # (B',enc-T)
+  labels_t = tf.reshape(labels_t, [-1, enc_time_dim])  # (B',enc-T)
+  out = tf.nn.softmax_cross_entropy_with_logits(logits=logits_t, labels=labels_t)  # (B')
+  out = tf.reshape(out, labels_shape[:-1])  # (B,dec-T,H...)
+  return out
 
 
 def _py_bleu_score(hypothesis, truth, hyp_seq_lens, truth_seq_lens):
@@ -6162,6 +6222,53 @@ def batch_gather(x, indices, keep_dims=False):
     return y
 
 
+def unflatten_nd(x, nd_sizes, num_axes=None):
+  """
+  E.g. assume that for each x[b], we have an image flattened, i.e. of size width*height.
+  Then nd_sizes[b] == (width, height) would provide the individual sizes.
+  We return y such that y[b][i][j] == x[b][i * nd_sizes[b][0] + j].
+  This is implemented for any number of axes.
+  Kind of like the reverse of a ND version of flatten_with_seq_len_mask.
+
+  :param tf.Tensor x: (B, T, <Ds>)
+  :param tf.Tensor nd_sizes: (B, N = num_axes)
+  :param int num_axes:
+  :return: (B, T_1, ..., T_N, <Ds>), T_i == max(nd_sizes[:, i])
+  :rtype: tf.Tensor
+  """
+  if num_axes is None:
+    assert nd_sizes.shape.dims[-1].value
+    num_axes = nd_sizes.shape.dims[-1].value
+  assert num_axes >= 1
+  nd_sizes.set_shape([None, num_axes])
+
+  # indices for tf.gather_nd should be of shape (B, T_1, ..., T_N, 2).
+  # Also see nd_indices.
+  # Write in Python. Maybe convert to TF later...
+  def py_get_indices(py_nd_sizes):
+    """
+    :param numpy.ndarray py_nd_sizes: (B, N)
+    :return: (B, T_1, ..., T_N, 2)
+    """
+    import numpy
+    assert py_nd_sizes.ndim == 2
+    n_batch = py_nd_sizes.shape[0]
+    num_axes_res = py_nd_sizes.shape[1]
+    res = numpy.zeros([n_batch] + [numpy.max(py_nd_sizes[:, i]) for i in range(num_axes_res)] + [2], dtype="int32")
+    for b in range(n_batch):
+      idxs = numpy.arange(int(numpy.prod(py_nd_sizes[b])), dtype="int32")  # (t1*...*tN)
+      idxs = idxs.reshape(py_nd_sizes[b])  # (t1,...,tN)
+      res[b, ..., 0] = b
+      res[tuple([b] + [slice(None, t) for t in py_nd_sizes[b]] + [1])] = idxs
+    return res
+
+  indices = tf.py_func(py_get_indices, [nd_sizes], tf.int32, stateful=False)
+  indices.set_shape([None] + ([None] * num_axes) + [2])
+  y = tf.gather_nd(x, indices)
+  y.set_shape(indices.shape.as_list()[:-1] + x.shape.as_list()[2:])
+  return y
+
+
 def kernels_registered_for_op(op_name):
   """
   This just wraps the TF C++ function tensorflow::KernelsRegisteredForOp().
@@ -6303,10 +6410,12 @@ class _DeviceAttrMod:
 
 def get_device_attr(dev):
   """
-  :param str dev: eg. "/device:GPU:0", or any argument tf.device
+  :param str dev: eg. "/device:GPU:0", or any argument for :func:`tf.device`
   :return: scalar string, eg. b'device: 2, name: GeForce GTX 1080 Ti, pci bus id: 0000:82:00.0, compute capability: 6.1'
   :rtype: tf.Tensor
   """
+  if ":XLA_" in dev:  # e.g. '/job:localhost/replica:0/task:0/device:XLA_GPU:0'
+    dev = dev.replace(":XLA_", ":")
   with tf.device(dev):
     return _DeviceAttrMod.get_device_attr()
 
@@ -6665,3 +6774,25 @@ def get_positional_encoding(num_channels, length=None, position=None, min_timesc
   signal = tf.concat([tf.sin(scaled_time), tf.cos(scaled_time)], axis=1)
   signal = tf.pad(signal, [[0, 0], [0, num_channels % 2]])  # (length, channels)
   return signal
+
+
+def get_non_deterministic_ops_from_graph():
+  """
+  Lists all non deterministic ops used in the default graph
+  If a non deterministic op is used multiple times each instance will be listed
+
+  currently doesn't check if user specified a specific computation device
+  list of non deterministic ops is not jet complete
+
+  :return: list of all non deterministic ops names (depending on device and tf version) used in current graph
+  :rtype: list[tf.Operation]
+  """
+  device_types = {device.device_type for device in get_tf_list_local_devices()}
+  non_det_ops = []
+  tf_version = tf_version_tuple()
+  for op in tf.get_default_graph().get_operations():
+    if op.type == "Mean" and tf_version <= (1, 5, 0) and "GPU" in device_types:
+      non_det_ops.append(op)
+    # elif ... more non det ops to be added
+
+  return non_det_ops

@@ -8,3 +8,6 @@ ipython-kernel-*.json
 *~
 *.so
 /.vscode
+
+# QtCreator/cmake creates this:
+/extern/build-*

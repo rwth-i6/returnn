@@ -207,7 +207,7 @@ class RecLayer(_ConcatInputLayer):
       if not p.name.startswith(scope_name_prefix):
         continue
       assert p.name.startswith(scope_name_prefix) and p.name.endswith(":0")
-      self.params[p.name[len(scope_name_prefix):-2]] = p
+      self.add_param(p)
 
   def get_dep_layers(self):
     l = super(RecLayer, self).get_dep_layers()
@@ -420,7 +420,7 @@ class RecLayer(_ConcatInputLayer):
             loss = subnet.accumulated_losses[loss.name]
             assert isinstance(loss, LossHolder)
             assert loss.get_layer()
-          loss = loss.copy_new_base(network=network, name="%s/%s" % (name, loss.name))
+          loss = loss.copy_new_base(network=network, name="%s/%s" % (name, loss.name), reduce_func=reduce_func)
           losses.append(loss)
     return losses
 
@@ -2119,7 +2119,7 @@ class _SubnetworkRecCell(object):
       return
 
     max_len = tf.reduce_max(seq_len) if seq_len is not None else None
-    from TFUtil import tensor_array_stack
+    from TFUtil import tensor_array_stack, has_control_flow_context
     from TFNetwork import TFNetwork, ExternData
     from TFNetworkLayer import InternalLayer
     self.output_layers_net = TFNetwork(
@@ -2148,11 +2148,16 @@ class _SubnetworkRecCell(object):
       if name in loop_acc_layers:
         return loop_acc_layers[name]
       with tf.name_scope(self.layer_data_templates[name].layer_class_type.cls_get_tf_scope_name(name)):
+        inner_layer = self.net.layers[name]
         output = self.layer_data_templates[name].output.copy_template_adding_time_dim(time_dim_axis=0)
         # We should have accumulated it.
         output.placeholder = tensor_array_stack(
           loop_accumulated["output_%s" % name], stop=max_len)  # e.g. (time,batch,dim)
         output.size_placeholder = {0: seq_len}
+        if inner_layer.output.size_placeholder:
+          for i, size in inner_layer.output.size_placeholder.items():
+            if not has_control_flow_context(size):  # copy if this size comes from outside the loop
+              output.size_placeholder[i + 1] = size
         assert isinstance(self.output_layers_net, TFNetwork)
         layer = self.output_layers_net.add_layer(name=name, output=output, layer_class=InternalLayer)
         loop_acc_layers[name] = layer
@@ -2527,7 +2532,8 @@ class RnnCellLayer(_ConcatInputLayer):
       self.rec_vars_outputs["state"] = state
       params = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope=re.escape(scope_name_prefix))
       assert params
-      self.params.update({p.name[len(scope_name_prefix):-2]: p for p in params})
+      for p in params:
+        self.add_param(p)
 
   @classmethod
   def _get_cell(cls, n_out, unit, unit_opts=None):
@@ -2895,6 +2901,14 @@ class GetRecAccumulatedOutputLayer(LayerBase):
   If some layer is explicitly marked as an additional output layer (via 'is_output_layer': True),
   you can get that subnet layer output via this accessor.
   Retrieves the accumulated output.
+  Note that this functionality is obsolete now. You can simply access such an sub layer
+  via the generic sub layer access mechanism. I.e. instead of::
+
+    "sub_layer": {"class": "get_rec_accumulated", "from": "rec_layer", "sub_layer": "hidden"}
+
+  You can do::
+
+    "sub_layer": {"class": "copy", "from": "rec_layer/hidden"}
   """
   layer_class = "get_rec_accumulated"
 

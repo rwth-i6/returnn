@@ -59,6 +59,8 @@ class ExternData(object):
     shape = [None] + list(dataset.get_data_shape(key))
     sparse = dataset.is_data_sparse(key)
     dtype = dataset.get_data_dtype(key)
+    if not sparse and shape[-1] is None:
+      dim = None  # overwrite. some datasets just would return some dummy int value
     return dict(
       batch_dim_axis=0, time_dim_axis=1,
       shape=shape, dim=dim, sparse=sparse, dtype=dtype,
@@ -106,7 +108,8 @@ class ExternData(object):
       data_dtype = dataset.get_data_dtype(key)
       assert data.dtype == data_dtype, "key %r dtype mismatch. %s" % (key, base_err_msg)
       data_dim = dataset.get_data_dim(key)
-      assert data.dim == data_dim, "key %r dim mismatch. %s" % (key, base_err_msg)
+      # some datasets just would return some dummy int value, but ignore if data.dim is None
+      assert data.dim == data_dim or data.dim is None, "key %r dim mismatch. %s" % (key, base_err_msg)
       data_shape = tuple(dataset.get_data_shape(key))
       assert data.shape[1:] == data_shape, "key %r shape mismatch. %s" % (key, base_err_msg)
 
@@ -1411,31 +1414,45 @@ class LossHolder:
     self._prepare()
     return self._norm_factor
 
-  def _normalized_loss_value_per_seq(self, value):
+  def _normalized_value_per_seq(self, value, per_pos=False):
     """
-    :param tf.Tensor|None loss:
-    :return: (batch,) or None if loss is None
+    :param tf.Tensor|None value: (batch*time,) or (time*batch,)
+    :param bool per_pos: one value per time position
+    :return: if per_pos return (batch,time) else (batch,) or None if loss is None
     :rtype: tf.Tensor|None
     """
     if value is None:
       return None
-    return self.loss.reduce_to_batch(value, normalize=True)
 
-  def get_normalized_loss_value_per_seq(self):
+    if per_pos:
+      value = tf.reshape(value, tf.shape(self.loss.output.placeholder)[:2])  # (batch,time) or (time,batch)
+
+      # We want output of the form (B,T)
+      if self.loss.output.time_dim_axis == 0:
+        from TFUtil import swapaxes
+        value = swapaxes(value, 0, 1)  # resulting in (B,T,...)
+
+      return value
+    else:
+      return self.loss.reduce_to_batch(value, normalize=True)
+
+  def get_normalized_loss_value_per_seq(self, per_pos=False):
     """
-    :return: (batch,) or None if loss is None
+    :param bool per_pos: one value per time position
+    :return: if per_pos return (batch,time) else (batch,) or None if loss is None
     :rtype: tf.Tensor|None
     """
     self._prepare()
-    return self._normalized_loss_value_per_seq(self._loss_value)
+    return self._normalized_value_per_seq(self._loss_value, per_pos=per_pos)
 
-  def get_normalized_error_value_per_seq(self):
+  def get_normalized_error_value_per_seq(self, per_pos=False):
     """
-    :return: (batch,) or None if error is None
+    :param bool per_pos: one value per time position
+    :return: if per_pos return (batch,time) else (batch,) or None if error is None
     :rtype: tf.Tensor|None
     """
     self._prepare()
-    return self._normalized_loss_value_per_seq(self._error_value)
+    return self._normalized_value_per_seq(self._error_value, per_pos=per_pos)
 
   def _tf_summary(self):
     """
@@ -1447,11 +1464,13 @@ class LossHolder:
       return  # skip summaries. the root net should also do this
     name = self.get_tf_name()
     if self._loss_value is not None:
-      tf.summary.scalar("loss_%s" % name, self._loss_value * self._norm_factor)
+      # a loss value is typically a scalar but there are cases of sequence or position wise loss values (e.g. if
+      #   the eval_output_file_per_seq option is used)
+      tf.summary.tensor_summary("loss_%s" % name, self._loss_value * self._norm_factor)
       if self._network.get_config().bool("calculate_exp_loss", False):
-        tf.summary.scalar("exp_loss_%s" % name, tf.exp(self._loss_value * self._norm_factor))
+        tf.summary.tensor_summary("exp_loss_%s" % name, tf.exp(self._loss_value * self._norm_factor))
     if self._error_value is not None:
-      tf.summary.scalar("error_%s" % name, self._error_value * self._norm_factor)
+      tf.summary.tensor_summary("error_%s" % name, self._error_value * self._norm_factor)
 
   def _prepare(self):
     """

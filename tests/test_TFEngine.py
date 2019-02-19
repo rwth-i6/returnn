@@ -48,6 +48,21 @@ def make_scope():
       yield session
 
 
+def _get_tmp_file(suffix):
+  """
+  :param str suffix:
+  :return: filename
+  :rtype: str
+  """
+  import tempfile
+  f = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+  f.close()
+  fn = f.name
+  import atexit
+  atexit.register(lambda: os.remove(fn))
+  return fn
+
+
 session = tf.InteractiveSession()
 
 
@@ -1770,6 +1785,235 @@ def test_preload_from_files_ignore_missing():
     assert_equal(set(main.params.keys()), {"W", "b"})
 
   engine.finalize()
+
+
+def test_unflatten_2d():
+  # See also test_SimpleHDFWriter_ndim1_var_len.
+  # And unflatten_nd, and UnflattenNdLayer.
+  from HDFDataset import HDFDataset, SimpleHDFWriter
+  from Dataset import set_config_num_inputs_outputs_from_dataset
+  # E.g. attention weights, shape (dec-time,enc-time) per seq.
+  fn = _get_tmp_file(suffix=".hdf")
+  writer = SimpleHDFWriter(filename=fn, dim=None, ndim=2, labels=None)
+  dec_seq_lens = [11, 7, 5]
+  enc_seq_lens = [13, 6, 8]
+  batch1_data = numpy.random.normal(
+    size=(len(dec_seq_lens), max(dec_seq_lens), max(enc_seq_lens))).astype("float32")
+  writer.insert_batch(
+    inputs=batch1_data,
+    seq_len={0: dec_seq_lens, 1: enc_seq_lens},
+    seq_tag=["seq-%i" % i for i in range(len(dec_seq_lens))])
+  writer.close()
+
+  dataset = HDFDataset(files=[fn])
+  dataset.initialize()
+
+  # Check first entry. (test_SimpleHDFWriter_ndim1_var_len does a full test.)
+  dataset.init_seq_order(epoch=1)
+  dataset.load_seqs(0, 2)  # does not matter
+  data1 = dataset.get_data(0, "data")
+  assert data1.shape == (dec_seq_lens[0] * enc_seq_lens[0],)
+  data1_len = dataset.get_seq_length(0)
+  assert data1_len["data"] == dec_seq_lens[0] * enc_seq_lens[0]
+  assert data1_len["sizes"] == 2
+
+  dataset.init_seq_order(epoch=2)
+  engine = Engine(config=Config({
+    "network": {
+      "output": {"class": "unflatten_nd", "from": "data", "sizes": "data:sizes", "num_axes": 2}
+    },
+    "debug_print_layer_output_template": True
+  }))
+  set_config_num_inputs_outputs_from_dataset(config=engine.config, dataset=dataset)
+  print("extern data:", engine.config.typed_value("extern_data"))
+
+  engine.init_train_from_config()
+  output_layer = engine.network.get_default_output_layer()
+  assert output_layer.output.is_batch_major
+  assert set(output_layer.output.size_placeholder.keys()) == {0, 1}
+
+  def extra_fetches_cb(output, seq_len_1, seq_len_2, seq_tag, seq_idx):
+    """
+    :param numpy.ndarray output: shape=(n_batch,t1,t2)
+    :param list[int] seq_len_1:
+    :param list[int] seq_len_2:
+    :param list[str] seq_tag: sequence tags of length n_batch
+    :param list[int] seq_idx: of length n_batch
+    """
+    n_batch = len(seq_tag)
+    assert n_batch == len(seq_idx) == len(seq_len_1) == len(seq_len_2) == output.shape[0]
+    print("Got batch (N: %i), seq len 1: %r, seq len 2: %r, tags: %r, seq idx %r, out shape %r." % (
+      n_batch, seq_len_1, seq_len_2, seq_tag, seq_idx, output.shape))
+    for b in range(n_batch):
+      assert dec_seq_lens[seq_idx[b]] == seq_len_1[b]
+      assert enc_seq_lens[seq_idx[b]] == seq_len_2[b]
+      numpy.testing.assert_almost_equal(
+        batch1_data[seq_idx[b], :seq_len_1[b], :seq_len_2[b]], output[b, :seq_len_1[b], :seq_len_2[b]])
+
+  batches = dataset.generate_batches(
+    recurrent_net=engine.network.recurrent,
+    batch_size=200,
+    max_seqs=100,
+    used_data_keys=engine.network.used_data_keys)
+  forwarder = Runner(
+    engine=engine, dataset=dataset, batches=batches,
+    train=False, eval=False,
+    extra_fetches={
+      'output': output_layer.output.placeholder,
+      "seq_len_1": output_layer.output.size_placeholder[0],
+      "seq_len_2": output_layer.output.size_placeholder[1],
+      "seq_tag": engine.network.get_seq_tags(),
+      "seq_idx": engine.network.get_extern_data("seq_idx", mark_data_key_as_used=True)
+    },
+    extra_fetches_callback=extra_fetches_cb)
+  forwarder.run(report_prefix="test_unflatten_2d")
+  if not forwarder.finalized:
+    raise Exception("Error happened. Exit now.")
+
+
+def test_attention_forward_hdf_then_unflatten_2d():
+  # See also test_SimpleHDFWriter_ndim1_var_len.
+  # And unflatten_nd, and UnflattenNdLayer.
+  from HDFDataset import HDFDataset
+  from Dataset import set_config_num_inputs_outputs_from_dataset
+  from GeneratingDataset import TaskNumberBaseConvertDataset
+  from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
+
+  # Simple version of e.g.:
+  # https://github.com/rwth-i6/returnn-experiments/blob/master/2018-attention/wmt2017ende/blocks-flstm.enc6l.decb.pretrain2.adam.lr1e_3.mseqs100.bs4000.ls01.tembi0.invfert.oeps1e_8.gradnoise0.seqsort1000.config
+  att_net_dict = {
+    "input_embed": {"class": "linear", "activation": None, "n_out": 10},
+
+    "lstm0_fw": {"class": "rec", "unit": "LSTMBlock", "n_out": 10, "direction": 1, "from": ["input_embed"]},
+    "lstm0_bw": {"class": "rec", "unit": "LSTMBlock", "n_out": 10, "direction": -1, "from": ["input_embed"]},
+
+    "lstm1_fw": {"class": "rec", "unit": "LSTMBlock", "n_out": 10, "direction": 1, "from": ["lstm0_fw", "lstm0_bw"]},
+    "lstm1_bw": {"class": "rec", "unit": "LSTMBlock", "n_out": 10, "direction": -1, "from": ["lstm0_fw", "lstm0_bw"]},
+
+    "encoder": {"class": "copy", "from": ["lstm1_fw", "lstm1_bw"]},
+    "enc_ctx": {"class": "linear", "activation": None, "with_bias": True, "from": ["encoder"], "n_out": 10},
+
+    "output": {"class": "rec", "from": [], "unit": {
+      'output': {'class': 'choice', 'target': 'classes', 'beam_size': 5, 'from': ["output_prob"],
+                 "initial_output": 0},
+      "end": {"class": "compare", "from": ["output"], "value": 0},
+      'target_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'], "n_out": 10,
+                       "initial_output": 0},
+      "s_state": {"class": "get_last_hidden_state", "from": ["s"], "n_out": 20},
+      "s_transformed": {"class": "linear", "activation": None, "with_bias": False, "from": ["s_state"], "n_out": 10},
+      "energy_in": {"class": "combine", "kind": "add", "from": ["base:enc_ctx", "s_transformed"], "n_out": 10},
+      "energy_tanh": {"class": "activation", "activation": "tanh", "from": ["energy_in"]},
+      # (B, enc-T, 1)
+      "energy": {"class": "linear", "activation": None, "with_bias": False, "from": ["energy_tanh"], "n_out": 1},
+      "att_weights": {"class": "softmax_over_spatial", "from": ["energy"], "is_output_layer": True},  # (B, enc-T, 1)
+      "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder"},
+      "s": {"class": "rnn_cell", "unit": "LSTMBlock", "from": ["prev:target_embed", "prev:att"], "n_out": 10},
+      "readout_in": {"class": "linear", "from": ["s", "prev:target_embed", "att"], "activation": None, "n_out": 10},
+      "readout": {"class": "reduce_out", "mode": "max", "num_pieces": 2, "from": ["readout_in"]},
+      "output_prob": {"class": "softmax", "from": ["readout"], "target": "classes", "loss": "ce"}
+    }, "target": "classes"}
+  }
+  config = Config({
+    "allow_random_model_init": True,
+    "network": att_net_dict,
+    "debug_print_layer_output_template": True,
+    "batch_size": 50,
+    "max_seqs": 4
+  })
+  task_dataset = TaskNumberBaseConvertDataset(num_seqs=17)
+  task_dataset.initialize()
+  task_dataset.init_seq_order(epoch=1)
+  set_config_num_inputs_outputs_from_dataset(config=config, dataset=task_dataset)
+  print("task extern data:", config.typed_value("extern_data"))
+
+  att_engine = Engine(config=config)
+  att_engine.use_dynamic_train_flag = True  # we need targets for the seq len
+  att_engine.init_network_from_config(config)
+  att_output_layer = att_engine.network.get_layer("output/att_weights")
+  print("att weights layer:", att_output_layer, att_output_layer.output.size_placeholder)
+  att_rec_layer = att_engine.network.layers["output"]
+  assert isinstance(att_rec_layer, RecLayer)
+  assert isinstance(att_rec_layer.cell, _SubnetworkRecCell)
+  inner_att_output_layer = att_rec_layer.cell.net.layers["att_weights"]
+  print("inner att weights layer:", inner_att_output_layer, inner_att_output_layer.output.size_placeholder)
+
+  assert att_output_layer.output.shape == (None, None, 1)  # dec-time, enc-time. the 1 is just an artifact of the construct
+  assert len(att_output_layer.output.size_placeholder) == 2  # encoder and decoder time
+  hdf_fn = _get_tmp_file(suffix=".hdf")
+  os.remove(hdf_fn)  # forward_to_hdf expects that the file does not exist
+  att_engine.forward_to_hdf(output_file=hdf_fn, data=task_dataset, output_layer=att_output_layer)
+
+  hdf_dataset = HDFDataset(files=[hdf_fn])
+  hdf_dataset.initialize()
+
+  # Check first entry. (test_SimpleHDFWriter_ndim1_var_len does a full test.)
+  task_dataset.init_seq_order(epoch=1)
+  hdf_dataset.init_seq_order(epoch=1)
+  task_dataset.load_seqs(0, 2)  # does not matter
+  hdf_dataset.load_seqs(0, 2)  # does not matter
+  data1 = hdf_dataset.get_data(0, "data")
+  task_seq_lens = task_dataset.get_seq_length(0)
+  assert data1.shape == (task_seq_lens["classes"] * task_seq_lens["data"], 1)  # see att_output_layer above
+  data1_len = hdf_dataset.get_seq_length(0)
+  assert data1_len["data"] == task_seq_lens["classes"] * task_seq_lens["data"]
+  assert data1_len["sizes"] == 2
+  sizes1 = hdf_dataset.get_data(0, "sizes")
+  assert sizes1.shape == (2,)
+  assert sizes1.tolist() == [task_seq_lens["classes"], task_seq_lens["data"]]
+
+  task_dataset.init_seq_order(epoch=1)
+  hdf_dataset.init_seq_order(epoch=2)
+  unflatten_engine = Engine(config=Config({
+    "network": {
+      "output": {"class": "unflatten_nd", "from": "data", "sizes": "data:sizes", "num_axes": 2}
+    },
+    "debug_print_layer_output_template": True
+  }))
+  set_config_num_inputs_outputs_from_dataset(config=unflatten_engine.config, dataset=hdf_dataset)
+  print("hdf extern data:", unflatten_engine.config.typed_value("extern_data"))
+
+  unflatten_engine.init_train_from_config()
+  unflatten_output_layer = unflatten_engine.network.get_default_output_layer()
+  assert unflatten_output_layer.output.is_batch_major
+  assert set(unflatten_output_layer.output.size_placeholder.keys()) == {0, 1}
+
+  def extra_fetches_cb(output, seq_len_1, seq_len_2, seq_tag, seq_idx):
+    """
+    :param numpy.ndarray output: shape=(n_batch,t1,t2)
+    :param list[int] seq_len_1:
+    :param list[int] seq_len_2:
+    :param list[str] seq_tag: sequence tags of length n_batch
+    :param list[int] seq_idx: of length n_batch
+    """
+    n_batch = len(seq_tag)
+    assert n_batch == len(seq_idx) == len(seq_len_1) == len(seq_len_2) == output.shape[0]
+    print("Got batch (N: %i), seq len 1: %r, seq len 2: %r, tags: %r, seq idx %r, out shape %r." % (
+      n_batch, seq_len_1, seq_len_2, seq_tag, seq_idx, output.shape))
+    task_dataset.load_seqs(min(seq_idx), max(seq_idx) + 1)
+    for b in range(n_batch):
+      task_seq_lens = task_dataset.get_seq_length(seq_idx[b])
+      assert task_seq_lens["classes"] == seq_len_1[b]
+      assert task_seq_lens["data"] == seq_len_2[b]
+
+  batches = hdf_dataset.generate_batches(
+    recurrent_net=unflatten_engine.network.recurrent,
+    batch_size=200,
+    max_seqs=100,
+    used_data_keys=unflatten_engine.network.used_data_keys)
+  forwarder = Runner(
+    engine=unflatten_engine, dataset=hdf_dataset, batches=batches,
+    train=False, eval=False,
+    extra_fetches={
+      'output': unflatten_output_layer.output.placeholder,
+      "seq_len_1": unflatten_output_layer.output.size_placeholder[0],
+      "seq_len_2": unflatten_output_layer.output.size_placeholder[1],
+      "seq_tag": unflatten_engine.network.get_seq_tags(),
+      "seq_idx": unflatten_engine.network.get_extern_data("seq_idx", mark_data_key_as_used=True)
+    },
+    extra_fetches_callback=extra_fetches_cb)
+  forwarder.run(report_prefix="test_attention_forward_hdf_then_unflatten_2d")
+  if not forwarder.finalized:
+    raise Exception("Error happened. Exit now.")
 
 
 if __name__ == "__main__":

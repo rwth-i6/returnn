@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 
 """
-Dumps attention weights to Numpy npy files.
+Dumps attention weights.
 
+E.g. to Numpy npy files.
 To load them::
 
     d = np.load("....npy").item()
@@ -11,6 +12,10 @@ To load them::
     import matplotlib.pyplot as plt
     plt.matshow(att_weights)
     plt.show()
+
+Or directly as png images.
+
+Or into HDF. In this case, this tool is very similar to `rnn.py --task=forward`.
 
 """
 
@@ -28,7 +33,6 @@ sys.path.append(returnn_dir)
 
 # Returnn imports
 import rnn
-from Log import log
 from TFEngine import Runner
 from Dataset import init_dataset
 from Util import NumbersDict, Stats, deep_update_dict_values
@@ -53,20 +57,6 @@ def inject_retrieval_code(net_dict, rec_layer_name, layers, dropout):
 
   new_layers_descr = net_dict.copy()  # actually better would be deepcopy...
   for sub_layer in layers:
-    rec_ret_layer = "rec_%s" % sub_layer
-    if rec_ret_layer in net_dict:
-      continue
-    # (enc-D, B, enc-E, 1)
-    descr = {
-      rec_ret_layer: {
-        "class": "get_rec_accumulated",
-        "from": rec_layer_name,
-        "sub_layer": sub_layer,
-        "is_output_layer": True
-      }}
-    print("injecting", descr)
-    new_layers_descr.update(descr)
-
     # assert that sub_layer inside subnet is a output-layer
     new_layers_descr[rec_layer_name]['unit'][sub_layer]["is_output_layer"] = True
 
@@ -76,17 +66,17 @@ def inject_retrieval_code(net_dict, rec_layer_name, layers, dropout):
   return new_layers_descr
 
 
-def init_returnn(config_fn, cmd_line_opts, args):
+def init_returnn(config_fn, args):
   """
   :param str config_fn:
-  :param list[str] cmd_line_opts:
   :param args: arg_parse object
   """
   rnn.initBetterExchook()
   config_updates = {
     "log": [],
     "task": "eval",
-    "need_data": False}
+    "need_data": False,  # we will load it explicitly
+    "device": args.device if args.device else None}
   if args.epoch:
     config_updates["load_epoch"] = args.epoch
   if args.do_search:
@@ -98,7 +88,7 @@ def init_returnn(config_fn, cmd_line_opts, args):
       })
 
   rnn.init(
-    configFilename=config_fn, commandLineOptions=cmd_line_opts,
+    configFilename=config_fn,
     config_updates=config_updates, extra_greeting="RETURNN get-attention-weights starting up.")
   global config
   config = rnn.config
@@ -119,13 +109,14 @@ def init_net(args, layers):
 def main(argv):
   argparser = argparse.ArgumentParser(description=__doc__)
   argparser.add_argument("config_file", type=str, help="RETURNN config, or model-dir")
-  argparser.add_argument("--epoch", required=False, type=int)
+  argparser.add_argument("--epoch", type=int)
   argparser.add_argument('--data', default="train",
                          help="e.g. 'train', 'config:train', or sth like 'config:get_dataset('dev')'")
   argparser.add_argument('--do_search', default=False, action='store_true')
   argparser.add_argument('--beam_size', default=12, type=int)
-  argparser.add_argument('--dump_dir', required=True)
-  argparser.add_argument("--device", default="gpu")
+  argparser.add_argument('--dump_dir', help="for npy or png")
+  argparser.add_argument("--output_file", help="hdf")
+  argparser.add_argument("--device", help="gpu or cpu (default: automatic)")
   argparser.add_argument("--layers", default=["att_weights"], action="append",
                          help="Layer of subnet to grab")
   argparser.add_argument("--rec_layer", default="output", help="Subnet layer to grab from; decoder")
@@ -134,16 +125,21 @@ def main(argv):
   argparser.add_argument("--seq_list", default=[], action="append", help="predefined list of seqs")
   argparser.add_argument("--min_seq_len", default="0", help="can also be dict")
   argparser.add_argument("--num_seqs", default=-1, type=int, help="stop after this many seqs")
-  argparser.add_argument("--output_format", default="npy", help="npy or png")
+  argparser.add_argument("--output_format", default="npy", help="npy, png or hdf")
   argparser.add_argument("--dropout", default=None, type=float, help="if set, overwrites all dropout values")
   argparser.add_argument("--train_flag", action="store_true")
+  argparser.add_argument("--reset_partition_epoch", type=int, default=1)
+  argparser.add_argument("--reset_seq_ordering", default="sorted_reverse")
+  argparser.add_argument("--reset_epoch_wise_filter", default=None)
   args = argparser.parse_args(argv[1:])
 
   layers = args.layers
   assert isinstance(layers, list)
   config_fn = args.config_file
+  explicit_model_dir = None
   if os.path.isdir(config_fn):
     # Assume we gave a model dir.
+    explicit_model_dir = config_fn
     train_log_dir_config_pattern = "%s/train-*/*.config" % config_fn
     train_log_dir_configs = sorted(glob(train_log_dir_config_pattern))
     assert train_log_dir_configs
@@ -153,30 +149,55 @@ def main(argv):
     assert os.path.isfile(config_fn)
   model_name = ".".join(config_fn.split("/")[-1].split(".")[:-1])
 
-  init_returnn(config_fn=config_fn, cmd_line_opts=["--device", args.device], args=args)
+  init_returnn(config_fn=config_fn, args=args)
+  if explicit_model_dir:
+    config.set("model", "%s/%s" % (explicit_model_dir, os.path.basename(config.value('model', ''))))
+  print("Model file prefix:", config.value('model', ''))
 
   if args.do_search:
     raise NotImplementedError
   min_seq_length = NumbersDict(eval(args.min_seq_len))
 
-  if not os.path.exists(args.dump_dir):
-    os.makedirs(args.dump_dir)
-  assert args.output_format in ["npy", "png"]
+  assert args.output_format in ["npy", "png", "hdf"]
+  if args.output_format in ["npy", "png"]:
+    assert args.dump_dir
+    if not os.path.exists(args.dump_dir):
+      os.makedirs(args.dump_dir)
+  plt = ticker = None
   if args.output_format == "png":
     import matplotlib.pyplot as plt  # need to import early? https://stackoverflow.com/a/45582103/133374
     import matplotlib.ticker as ticker
+
   dataset_str = args.data
   if dataset_str in ["train", "dev", "eval"]:
     dataset_str = "config:%s" % dataset_str
-  dataset = init_dataset(dataset_str)
-  init_net(args, layers)
+  extra_dataset_kwargs = {}
+  if args.reset_partition_epoch:
+    print("NOTE: We are resetting partition epoch to %i." % (args.reset_partition_epoch,))
+    extra_dataset_kwargs["partition_epoch"] = args.reset_partition_epoch
+  if args.reset_seq_ordering:
+    print("NOTE: We will use %r seq ordering." % (args.reset_seq_ordering,))
+    extra_dataset_kwargs["seq_ordering"] = args.reset_seq_ordering
+  if args.reset_epoch_wise_filter:
+    extra_dataset_kwargs["epoch_wise_filter"] = eval(args.reset_epoch_wise_filter)
+  dataset = init_dataset(dataset_str, extra_kwargs=extra_dataset_kwargs)
+  if hasattr(dataset, "epoch_wise_filter") and args.reset_epoch_wise_filter is None:
+    if dataset.epoch_wise_filter:
+      print("NOTE: Resetting epoch_wise_filter to None.")
+      dataset.epoch_wise_filter = None
 
+  init_net(args, layers)
   network = rnn.engine.network
 
-  extra_fetches = {}
-  for rec_ret_layer in ["rec_%s" % l for l in layers]:
-    extra_fetches[rec_ret_layer] = rnn.engine.network.layers[rec_ret_layer].output.get_placeholder_as_batch_major()
-  extra_fetches.update({
+  hdf_writer = None
+  if args.output_format == "hdf":
+    assert args.output_file
+    assert len(layers) == 1
+    sub_layer = network.get_layer("%s/%s" % (args.rec_layer, layers[0]))
+    from HDFDataset import SimpleHDFWriter
+    hdf_writer = SimpleHDFWriter(filename=args.output_file, dim=sub_layer.output.dim, ndim=sub_layer.output.ndim)
+
+  extra_fetches = {
     "output": network.layers[args.rec_layer].output.get_placeholder_as_batch_major(),
     "output_len": network.layers[args.rec_layer].output.get_sequence_lengths(),  # decoder length
     "encoder_len": network.layers[args.enc_layer].output.get_sequence_lengths(),  # encoder length
@@ -184,7 +205,10 @@ def main(argv):
     "seq_tag": network.get_extern_data("seq_tag"),
     "target_data": network.get_extern_data(network.extern_data.default_input),
     "target_classes": network.get_extern_data(network.extern_data.default_target),
-  })
+  }
+  for l in layers:
+    sub_layer = rnn.engine.network.get_layer("%s/%s" % (args.rec_layer, l))
+    extra_fetches["rec_%s" % l] = sub_layer.output.get_placeholder_as_batch_major()
   dataset.init_seq_order(epoch=1, seq_list=args.seq_list or None)  # use always epoch 1, such that we have same seqs
   dataset_batch = dataset.generate_batches(
     recurrent_net=network.recurrent,
@@ -199,13 +223,24 @@ def main(argv):
 
   # (**dict[str,numpy.ndarray|str|list[numpy.ndarray|str])->None
   def fetch_callback(seq_idx, seq_tag, target_data, target_classes, output, output_len, encoder_len, **kwargs):
-    for i in range(len(seq_idx)):
+    """
+    :param list[int] seq_idx: len is n_batch
+    :param list[str] seq_tag: len is n_batch
+    :param numpy.ndarray target_data: extern data default input (e.g. "data"), shape e.g. (B,enc-T,...)
+    :param numpy.ndarray target_classes: extern data default target (e.g. "classes"), shape e.g. (B,dec-T,...)
+    :param numpy.ndarray output: rec layer output, shape e.g. (B,dec-T,...)
+    :param numpy.ndarray output_len: rec layer seq len, i.e. decoder length, shape (B,)
+    :param numpy.ndarray encoder_len: encoder seq len, shape (B,)
+    :param kwargs: contains "rec_%s" % l for l in layers, the sub layers (e.g att weights) we are interested in
+    """
+    n_batch = len(seq_idx)
+    for i in range(n_batch):
       for l in layers:
         att_weights = kwargs["rec_%s" % l][i]
         stats[l].collect(att_weights.flatten())
     if args.output_format == "npy":
       data = {}
-      for i in range(len(seq_idx)):
+      for i in range(n_batch):
         data[i] = {
           'tag': seq_tag[i],
           'data': target_data[i],
@@ -223,7 +258,7 @@ def main(argv):
         fname = args.dump_dir + '/%s_ep%03d_data_%i_%i.npy' % (model_name, rnn.engine.epoch, seq_idx[0], seq_idx[-1])
         np.save(fname, data)
     elif args.output_format == "png":
-      for i in range(len(seq_idx)):
+      for i in range(n_batch):
         for l in layers:
           extra_postfix = ""
           if args.dropout is not None:
@@ -252,11 +287,15 @@ def main(argv):
           plt.title(title)
           plt.savefig(fname)
           plt.close()
+    elif args.output_format == "hdf":
+      assert len(layers) == 1
+      att_weights = kwargs["rec_%s" % layers[0]]
+      hdf_writer.insert_batch(inputs=att_weights, seq_len={0: output_len, 1: encoder_len}, seq_tag=seq_tag)
     else:
-      raise NotImplementedError("output format %r" % args.output_format)
+      raise Exception("output format %r" % args.output_format)
 
   runner = Runner(engine=rnn.engine, dataset=dataset, batches=dataset_batch,
-                  train=False, train_flag=args.dropout is not None or args.train_flag,
+                  train=False, train_flag=bool(args.dropout) or args.train_flag,
                   extra_fetches=extra_fetches,
                   extra_fetches_callback=fetch_callback)
   runner.run(report_prefix="att-weights epoch %i" % rnn.engine.epoch)
@@ -266,6 +305,8 @@ def main(argv):
     print("Some error occured, not finalized.")
     sys.exit(1)
 
+  if hdf_writer:
+    hdf_writer.close()
   rnn.finalize()
 
 

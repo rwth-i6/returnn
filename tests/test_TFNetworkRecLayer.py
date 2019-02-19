@@ -768,7 +768,7 @@ def test_RecLayer_NativeLstm_Nan():
     updater.set_learning_rate(0.1, session=session)
     updater.init_optimizer_vars(session=session)
     optim_op = updater.get_optim_op()
-    assert isinstance(updater.optimizer, tf.train.AdamOptimizer)
+    assert isinstance(updater.optimizer.get_default_optimizer(), tf.train.AdamOptimizer)
     adam_weights_m_t = updater.optimizer.get_slot(var=weights_t, name="m")
     adam_weights_v_t = updater.optimizer.get_slot(var=weights_t, name="v")
     assert isinstance(adam_weights_m_t, tf.Variable)
@@ -1650,7 +1650,7 @@ def test_RnnCellLayer_with_time():
   from GeneratingDataset import DummyDataset
   from TFNetworkLayer import InternalLayer, SourceLayer, ReduceLayer
   train_data = DummyDataset(input_dim=2, output_dim=3, num_seqs=10, seq_len=5)
-  with tf.variable_scope("test_RnnCellLayer_with_time"):
+  with make_scope() as session:
     extern_data = ExternData()
     extern_data.init_from_dataset(train_data)
     net = TFNetwork(extern_data=extern_data)
@@ -2472,6 +2472,47 @@ def test_rec_layer_search_select_src_reuse_layer():
     assert_equal(loop_net.layers["att_weights"].get_search_choices(), prev_out_choice)
     assert_equal(loop_net.layers["att"].get_search_choices(), prev_out_choice)
     assert_equal(loop_net.layers["output_prob"].get_search_choices(), prev_out_choice)
+
+
+def test_onlineblstm():
+  network = {}
+  lstm_dim = 13
+  lstm_window = 5
+
+  def add_lstm(i, direction, src):
+    name = "lstm%i_%s" % (i, {1: "fw", -1: "bw"}[direction])
+    if direction > 0:
+      network[name] = {"class": "rec", "unit": "lstmp", "n_out": lstm_dim, "dropout": 0.1, "L2": 0.01, "direction": 1,
+                       "from": src}
+      return name
+    network["%s_win" % name] = {"class": "window", "window_size": lstm_window, "window_right": lstm_window - 1,
+                                "from": src}  # (B,T,W,D)
+    network["%s_mdims" % name] = {"class": "merge_dims", "axes": "BT", "from": ["%s_win" % name]}  # (B*T,W,D)
+    network["%s_rdims" % name] = {"class": "reinterpret_data", "enforce_batch_major": True, "set_axes": {"T": 1},
+                                  "from": ["%s_mdims" % name]}  # (B*T,W,D)
+    network["%s_rec" % name] = {
+      "class": "rec", "unit": "lstmp", "n_out": lstm_dim, "dropout": 0.1, "L2": 0.01, "direction": -1,
+      "from": ["%s_rdims" % name]}  # (B*T,W,D')
+    network["%s_cur" % name] = {"class": "slice", "axis": "T", "slice_end": 1, "from": ["%s_rec" % name]}  # (B*T,1,D')
+    network["%s_cursq" % name] = {"class": "squeeze", "axis": "T", "from": ["%s_cur" % name]}  # (B*T,D')
+    network["%s_res" % name] = {"class": "split_batch_time", "base": src[0], "from": ["%s_cursq" % name]}  # (B,T,D')
+    return "%s_res" % name
+
+  num_layers = 6
+  src = ["data"]
+  for i in range(num_layers):
+    fwd = add_lstm(i, 1, src)
+    bwd = add_lstm(i, -1, src)
+    src = [fwd, bwd]
+  # Focal Loss, https://arxiv.org/abs/1708.02002
+  network["output"] = {"class": "softmax", "loss": "ce", "loss_opts": {"focal_loss_factor": 2.0}, "from": src}
+  config = Config({
+    "num_inputs": 3,
+    "num_outputs": 7
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config, train_flag=True)
+    net.construct_from_dict(network)
 
 
 if __name__ == "__main__":

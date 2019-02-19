@@ -173,6 +173,8 @@ class Dataset(object):
     For multiple target seqs, it is expected that they all have the same len.
     We support different input/target len for seq2seq/ctc and other models.
     Note: This is deprecated, better use get_seq_length().
+    Attention: Either this method or get_seq_length() needs to be redefined
+    in any subclass of Dataset! However, in new code, just override get_seq_length().
     """
     l = self.get_seq_length(sorted_seq_idx)
     targets = self.get_target_list()
@@ -183,8 +185,11 @@ class Dataset(object):
 
   def get_seq_length(self, seq_idx):
     """
+    :param int seq_idx:
     :rtype: NumbersDict
+    :returns the len of the input features and the len of the target sequence.
     """
+    assert self.__class__.get_seq_length_2d is not Dataset.get_seq_length_2d, "Override get_seq_length."
     input_len, output_len = self.get_seq_length_2d(seq_idx)
     d = {"data": input_len}
     d.update({k: output_len for k in self.get_target_list()})
@@ -458,7 +463,8 @@ class Dataset(object):
   def get_corpus_seq_idx(self, seq_idx):
     """
     :param int seq_idx: sorted sequence index from the current epoch, depending on seq_ordering
-    :return: the sequence index as-is in the original corpus. only defined if self.have_corpus_seq_idx()
+    :return: the sequence index as-is in the original corpus (as if you would have sorting="default").
+      only defined if self.have_corpus_seq_idx()
     :rtype: int
     """
     if self.seq_ordering == "default":
@@ -562,8 +568,9 @@ class Dataset(object):
     :return: whether the data is sparse
     :rtype: bool
     """
+    # Note: We cannot call get_data_dtype, as we would maybe result in infinite recursion.
     if key in self.num_outputs:
-      return self.num_outputs[key][1] == 1
+      return self.num_outputs[key][1] <= 1
     if key == "data":
       return False
     return True
@@ -573,6 +580,13 @@ class Dataset(object):
     :returns get_data(*, key).shape[1:], i.e. num-frames excluded
     :rtype: list[int]
     """
+    if key in self.num_outputs:
+      if self.num_outputs[key][1] <= 1:
+        return []
+      res_shape = [None] * (self.num_outputs[key][1] - 1)
+      if not self.is_data_sparse(key):
+        res_shape[-1] = self.get_data_dim(key)
+      return res_shape
     if self.is_data_sparse(key):
       return []
     return [self.get_data_dim(key)]
@@ -1079,14 +1093,14 @@ def set_config_num_inputs_outputs_from_dataset(config, dataset):
   :param Config.Config config:
   :param Dataset dataset:
   """
-  config.set("num_inputs", dataset.num_inputs)
   from Util import BackendEngine
   if BackendEngine.is_tensorflow_selected():
     # TF supports more fine-grained specification,
     # however the dataset does not store that in num_outputs.
     from TFNetwork import ExternData
-    config.set("num_outputs", {
+    config.set("extern_data", {
       key: ExternData.data_kwargs_from_dataset_key(dataset=dataset, key=key)
       for key in dataset.get_data_keys()})
   else:
+    config.set("num_inputs", dataset.num_inputs)
     config.set("num_outputs", dataset.num_outputs)

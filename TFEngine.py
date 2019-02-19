@@ -859,7 +859,8 @@ class Engine(object):
     """
     if not config:
       config = self.config
-    if not config.has("num_inputs") and not config.has("num_outputs") and (train_data or dev_data or eval_data):
+    if not config.has("num_inputs") and not config.has("num_outputs") and not config.has("extern_data") and (
+          train_data or dev_data or eval_data):
       from Dataset import set_config_num_inputs_outputs_from_dataset
       set_config_num_inputs_outputs_from_dataset(config=config, dataset=train_data or dev_data or eval_data)
     self.use_dynamic_train_flag = True
@@ -1344,54 +1345,107 @@ class Engine(object):
         return False
     return True
 
-  def eval_model(self, output_file=None, output_per_seq_file=None):
+  def eval_model(self, output_file=None, output_per_seq_file=None, loss_name=None, output_per_seq_format=("seq_len", "score", "pos_score")):
     """
     Eval the current model on the eval datasets (dev + eval, whatever is set).
     See also :func:`self.search` for performing beam search.
 
     :param str|None output_file: if given, will save the results to this file (total err/score for each dataset)
     :param str|None output_per_seq_file: if given, will save the err/score for each sequence
+    :param str|None loss_name: specifies the loss which will be written to output_file
+    :param list[str]|tuple[str]|None output_per_seq_format:
+      which properies of `loss_name` should be written to `output_per_seq_file`.
+      allowed_outputs = {"seq_tags", "seq_len", "score", "error", "pos_score", "pos_error"}
+
     :return: nothing
     """
     extra_fetches = None
-    results_per_seq = {}  # seq_tag -> dict[str,float]
+
     if output_per_seq_file:
-      extra_fetches = {}
+      allowed_outputs = {"seq_tags", "seq_len", "score", "error", "pos_score", "pos_error"}
+
+      assert isinstance(output_per_seq_format, (tuple, list))
+      assert set(output_per_seq_format) - allowed_outputs == set(), (
+        "Only %r are allowed in function eval_model as output_per_seq_format, but got: %r " % (allowed_outputs, output_per_seq_format))
+
+      # always fetch seq_tag to map loss values to the corresponding line
+      extra_fetches = {"seq_idx": self.network.get_extern_data("seq_idx", mark_data_key_as_used=True),
+                       "seq_tags": self.network.get_seq_tags(mark_data_key_as_used=True)}
+
       from TFUtil import identity
       losses_dict, _, _ = self.network.get_losses_initialized(reduce_func=identity, with_total=False)
-      for loss_name, loss_holder in losses_dict.items():
-        loss_holder.loss.layer = None  # enforce reinit
-        loss_holder.loss.use_flatten_frames = False  # we need that such that we get (B*T,...) unreduced values
-        loss_value = loss_holder.get_normalized_loss_value_per_seq()
-        error_value = loss_holder.get_normalized_error_value_per_seq()
-        if loss_value is not None:
-          extra_fetches["loss:score:%s" % loss_name] = loss_value
-        if error_value is not None:
-          extra_fetches["loss:error:%s" % loss_name] = error_value
-        if loss_holder.loss.output.have_time_axis():
-          seq_lens = loss_holder.loss.output.get_sequence_lengths()
-          extra_fetches["loss:seq_lens:%s" % loss_name] = seq_lens
-        extra_fetches["seq_tags"] = self.network.get_seq_tags()
-      assert extra_fetches
+      assert loss_name in losses_dict, (
+        "Unknown loss defined. Got %r. Possible losses are %r" % (loss_name, losses_dict.keys()))
 
-    def extra_fetches_callback(seq_tags, **extra_fetches_out):
+      loss_holder = losses_dict[loss_name]
+      # enforce reinit, otherwise the new value of 'loss_holder.loss.use_flatten_frames' will be ignored
+      loss_holder.loss.layer = None
+      loss_holder.loss.use_flatten_frames = False  # we need that such that we get (B*T,...) unreduced values
+
+      # we need sequence lengths for positional fetches
+      has_positional_fetch = ("pos_score" in output_per_seq_format) or ("pos_error" in output_per_seq_format)
+
+      if "seq_len" in output_per_seq_format or has_positional_fetch:
+        extra_fetches["seq_len"] = loss_holder.loss.output.get_sequence_lengths()
+      if "score" in output_per_seq_format:
+        extra_fetches["score"] = loss_holder.get_normalized_loss_value_per_seq()
+      if "error" in output_per_seq_format:
+        extra_fetches["error"] = loss_holder.get_normalized_error_value_per_seq()
+      if "pos_score" in output_per_seq_format:
+        extra_fetches["pos_score"] = loss_holder.get_normalized_loss_value_per_seq(per_pos=True)
+      if "pos_error" in output_per_seq_format:
+        extra_fetches["pos_error"] = loss_holder.get_normalized_error_value_per_seq(per_pos=True)
+
+    seq_idx_to_tag = {}  # we need this in order to write the results in the correct order later
+    results_per_seq = {}  # seq_tag -> dict[str,float]. Results of fetches will be written in this dict
+
+    # function to save the return values of each callback to the dict `results_per_seq`
+    def extra_fetches_callback(seq_idx, seq_tags, **extra_fetches_out):
       """
+      :param list[str] seq_idx:
       :param list[str] seq_tags:
       :param dict[str,numpy.ndarray] extra_fetches_out: see extra_fetches
       """
+
+      for batch_idx in range(len(seq_idx)):
+        corpus_seq_idx = dataset.get_corpus_seq_idx(seq_idx[batch_idx])
+        seq_idx_to_tag[corpus_seq_idx] = seq_tags[batch_idx]
+
       for name, value in extra_fetches_out.items():
-        assert name.startswith("loss:")
-        name = name[len("loss:"):]
+        assert name in allowed_outputs
         assert isinstance(value, numpy.ndarray)
-        assert value.shape == (len(seq_tags),)
-        for i, seq_tag in enumerate(seq_tags):
-          results_per_seq.setdefault(seq_tag, {})[name] = value[i]
+
+        # in case of positional values, we have to handle a 2-dim ndarray
+        if name[:4] == "pos_":
+          assert 'seq_len' in extra_fetches_out
+          seq_lens = extra_fetches_out['seq_len']
+          shorted_scores = [ps[:l] for ps,l in zip(value, seq_lens)]
+          for i, seq_tag in enumerate(seq_tags):
+            results_per_seq.setdefault(seq_tag, {'seq_tags': seq_tag})[name] = shorted_scores[i]
+        else:
+          for i, seq_tag in enumerate(seq_tags):
+            results_per_seq.setdefault(seq_tag, {'seq_tags': seq_tag})[name] = value[i]
+
 
     # It's constructed lazily and it will set used_data_keys, so make sure that we have it now.
     self.network.maybe_construct_objective()
     results = {}
     eval_dump_str = []
     train = self._maybe_prepare_train_in_eval()
+
+    if output_per_seq_file:
+      assert len(self.get_eval_datasets()) == 1, (
+        "output per sequence is only supported for one dataset (dev or eval), provided datasets are %r" % list(self.get_eval_datasets().keys()))
+      # try to sort dataset to minimize zero-padding
+      dataset = list(self.get_eval_datasets().values())[0]
+      if dataset.have_corpus_seq_idx():
+        # We can sort it. Sort it in reverse to make sure that we have enough memory right at the beginning.
+        print("Dataset have_corpus_seq_idx == True, i.e. it will be sorted for optimal performance.", file=log.v3)
+        dataset.seq_ordering = "sorted_reverse"
+      else:
+        print("Dataset have_corpus_seq_idx == False, i.e. it will not be sorted for optimal performance.", file=log.v3)
+        dataset.seq_ordering = "default"  # enforce order as-is, so that the order in the written file corresponds
+      dataset.init_seq_order(epoch=self.epoch)
 
     for dataset_name, dataset in self.get_eval_datasets().items():
       if dataset_name not in self.dataset_batches or not dataset.batch_set_generator_cache_whole_epoch():
@@ -1427,8 +1481,23 @@ class Engine(object):
     if output_per_seq_file:
       print('Write eval results per seq to %r' % output_per_seq_file, file=log.v3)
       from Util import betterRepr
+
+      # write fetches to file
       with open(output_per_seq_file, 'w') as f:
-        f.write(betterRepr(results_per_seq) + '\n')
+        def create_output_string(seq_tag):
+          """
+          Creates a colon (;) separated output string in the order given by `requested_outputs`
+          :param str seq_tag:
+          """
+          value_list = [results_per_seq[seq_tag][req_out] for req_out in output_per_seq_format]
+          value_list = [' '.join(map(str, v)) if isinstance(v, numpy.ndarray) else str(v) for v in value_list]
+          assert all([all([c not in "\n;" for c in v]) for v in value_list])
+          return ';'.join(value_list)
+
+        results_per_seq = [create_output_string(seq_idx_to_tag[seq_idx]) for seq_idx in range(len(results_per_seq))]
+
+        for res in results_per_seq:
+          f.write(str(res) + '\n')
 
   def check_last_epoch(self):
     if self.start_epoch == 1:
@@ -1668,7 +1737,7 @@ class Engine(object):
     assert output_value.shape[1] == 1  # batch-dim
     return output_value[:, 0]  # remove batch-dim
 
-  def forward_to_hdf(self, data, output_file, combine_labels='', batch_size=0):
+  def forward_to_hdf(self, data, output_file, combine_labels='', batch_size=0, output_layer=None):
     """
     Is aiming at recreating the same interface and output as :func:`Engine.forward_to_hdf`.
     See also :func:`EngineTask.HDFForwardTaskThread` and :func:`hdf_dump_from_dataset` in the hdf_dump.py tool.
@@ -1677,69 +1746,48 @@ class Engine(object):
     :param str output_file:
     :param str combine_labels: ignored at the moment
     :param int batch_size:
+    :param LayerBase output_layer:
     """
-    import h5py
-    from Util import hdf5_strings
+    from HDFDataset import SimpleHDFWriter
 
-    output_layer = self._get_output_layer()
+    if not output_layer:
+      output_layer = self._get_output_layer()
+    output = output_layer.output.copy_as_batch_major()
+    # Note: We kind of assume that the target, and its class labels, matches this output layer.
+    # Of course this is not true in general.
+    # Instead of introducing some more involved logic here, we just check whether the dim matches.
     target = self.network.get_default_target()
+    labels = data.labels.get(target, None)
+    del target
+    if labels:
+      if len(labels) != output.dim:
+        labels = None
 
     assert output_file
     assert not os.path.exists(output_file)
     print("Forwarding to HDF file: %s" % output_file, file=log.v2)
-    cache = h5py.File(output_file, "w")
-    cache.attrs['numTimesteps'] = 0
-    cache.attrs['inputPattSize'] = output_layer.output.dim
-    cache.attrs['numDims'] = 1
-    cache.attrs['numLabels'] = output_layer.output.dim
-    cache.attrs['numSeqs'] = 0
-    if target in data.labels:
-      hdf5_strings(cache, 'labels', data.labels[target])
-    else:
-      cache.create_dataset('labels', (0,), dtype="S5")
+    writer = SimpleHDFWriter(filename=output_file, dim=output.dim, ndim=output.ndim, labels=labels)
 
-    datasets = {}  # type: dict[str,h5py.Dataset]
-    tags = []  # type: list[str]
-    seq_lengths = cache.create_dataset("seqLengths", (0,2), dtype='i', maxshape=(None,2))
-
-    def insert_h5_inputs(name, raw_data):
-      """
-      Inserts a record into the hdf5-file.
-      Resizes if necessary.
-
-      :param str name:
-      :param numpy.ndarray raw_data: shape=(time,data)
-      """
-      assert len(raw_data.shape) == 2
-      if name not in datasets:
-        datasets[name] = cache.create_dataset(name, raw_data.shape, raw_data.dtype, maxshape=tuple(None for _ in raw_data.shape))
-      else:
-        old_shape = datasets[name].shape
-        datasets[name].resize((old_shape[0] + raw_data.shape[0],) + old_shape[1:])
-      # append raw data to dataset
-      datasets[name][cache.attrs['numTimesteps']:, 0:] = raw_data
-      cache.attrs['numTimesteps'] += raw_data.shape[0]
-      cache.attrs['numSeqs'] += 1
-
-    def extra_fetches_cb(inputs, seq_len, seq_tag):
+    def extra_fetches_cb(inputs, seq_tag, **kwargs):
       """
       Insert each batch into the output_file (hdf).
 
-      :param numpy.ndarray inputs: shape=(n_batch,time,data)
-      :param list[int] seq_len: sequence lengths
+      :param numpy.ndarray inputs: shape=(n_batch,time,data) (or whatever the output layer is...)
       :param list[str] seq_tag: sequence tags of length n_batch
+      :param kwargs: e.g. seq_len_i (list[int])
       """
-      n_batch = len(seq_len)
-      assert n_batch == len(seq_tag)
+      n_batch = len(seq_tag)
       assert n_batch == inputs.shape[0]
+      seq_len = {i: kwargs["seq_len_%i" % i] for i in output.size_placeholder.keys()}
+      assert all([len(v) == n_batch for v in seq_len.values()])
+      writer.insert_batch(inputs=inputs, seq_len=seq_len, seq_tag=seq_tag)
 
-      seqlen_offset = seq_lengths.shape[0]
-      seq_lengths.resize(seqlen_offset + n_batch, axis=0)
-      for i in range(n_batch):
-        tags.append(seq_tag[i])
-        seq_lengths[seqlen_offset + i] = seq_len[i]
-        insert_h5_inputs('inputs', inputs[i][:seq_len[i]])
-
+    extra_fetches = {
+      'inputs': output.placeholder,
+      "seq_tag": self.network.get_seq_tags(),
+    }
+    for i, seq_len in output.size_placeholder.items():
+      extra_fetches["seq_len_%i" % i] = seq_len
     batches = data.generate_batches(
       recurrent_net=self.network.recurrent,
       batch_size=batch_size,
@@ -1748,22 +1796,14 @@ class Engine(object):
     forwarder = Runner(
       engine=self, dataset=data, batches=batches,
       train=False, eval=False,
-      extra_fetches={
-        'inputs': output_layer.output.get_placeholder_as_batch_major(),
-        "seq_len": output_layer.output.get_sequence_lengths(),
-        "seq_tag": self.network.get_seq_tags(),
-      },
+      extra_fetches=extra_fetches,
       extra_fetches_callback=extra_fetches_cb)
     forwarder.run(report_prefix=self.get_epoch_str() + " forward")
     if not forwarder.finalized:
       print("Error happened. Exit now.")
       sys.exit(1)
 
-    max_tag_len = max([len(d) for d in tags])
-    cache.create_dataset('seqTags', shape=(len(tags),), dtype="S%i" % (max_tag_len + 1))
-    for i, tag in enumerate(tags):
-      cache['seqTags'][i] = numpy.array(tag, dtype="S%i" % (max_tag_len + 1))
-    cache.close()
+    writer.close()
 
   def analyze(self, data, statistics):
     """
@@ -1846,8 +1886,9 @@ class Engine(object):
         print("Dataset have_corpus_seq_idx == False, i.e. it will not be sorted for optimal performance.", file=log.v3)
         dataset.seq_ordering = "default"  # enforce order as-is, so that the order in the written file corresponds
 
-    max_seq_length=self.config.typed_value('max_seq_length', None) or self.config.float('max_seq_length', 0)
-    assert not max_seq_length, "Set max_seq_length = 0 for search (i.e. no maximal length). We want to keep all source sentences."
+    max_seq_length = self.config.typed_value('max_seq_length', None) or self.config.float('max_seq_length', 0)
+    assert not max_seq_length, (
+      "Set max_seq_length = 0 for search (i.e. no maximal length). We want to keep all source sentences.")
 
     dataset.init_seq_order(epoch=self.epoch)
     batches = dataset.generate_batches(
@@ -1891,7 +1932,9 @@ class Engine(object):
       assert not os.path.exists(output_file)
       print("Will write outputs to: %s" % output_file, file=log.v2)
       output_file = open(output_file, "w")
-      out_cache = {}  # corpus-seq-idx -> str|list[(float,str)]|dict[str -> str|list[(float,str)]] depending on output_is_dict and whether output is after decision
+      # corpus-seq-idx -> str|list[(float,str)]|dict[str -> str|list[(float,str)]],
+      # depending on output_is_dict and whether output is after decision
+      out_cache = {}
     if not log.verbose[4]:
       print("Set log_verbosity to level 4 or higher to see seq info on stdout.", file=log.v2)
 
@@ -1907,84 +1950,95 @@ class Engine(object):
       """
 
       outputs, beam_scores, targets = [], [], []
-      for t in range(num_targets):
-        outputs.append(kwargs["output_" + output_layer_names[t]])
-        beam_scores.append(kwargs["beam_scores_" + output_layer_names[t]])
-        targets.append(kwargs["target_" + target_keys[t]])
+      for target_idx in range(num_targets):
+        outputs.append(kwargs["output_" + output_layer_names[target_idx]])
+        beam_scores.append(kwargs["beam_scores_" + output_layer_names[target_idx]])
+        targets.append(kwargs["target_" + target_keys[target_idx]])
 
       n_batch = len(seq_idx)  # without beam
       assert n_batch == len(seq_tag)
 
-      for t in range(num_targets):
-        if beam_scores[t] is not None:
-          assert beam_scores[t].shape == (n_batch, out_beam_sizes[t])
+      for target_idx in range(num_targets):
+        if beam_scores[target_idx] is not None:
+          assert beam_scores[target_idx].shape == (n_batch, out_beam_sizes[target_idx])
 
-        assert n_batch * (out_beam_sizes[t] or 1) == len(outputs[t])
-        if targets[t] is not None:
-          assert n_batch == len(targets[t])
+        assert n_batch * (out_beam_sizes[target_idx] or 1) == len(outputs[target_idx])
+        if targets[target_idx] is not None:
+          assert n_batch == len(targets[target_idx])
 
-        if output_layers[t].output.dim == 256 and output_layers[t].output.sparse:
+        if output_layers[target_idx].output.dim == 256 and output_layers[target_idx].output.sparse:
           # Interpret output as bytes/utf8-string.
-          outputs[t] = bytearray(outputs[t]).decode("utf8")
+          outputs[target_idx] = bytearray(outputs[target_idx]).decode("utf8")
 
-      for i in range(len(seq_idx)):
+      for batch_idx in range(len(seq_idx)):
+        corpus_seq_idx = None
         if out_cache is not None:
-          corpus_seq_idx = dataset.get_corpus_seq_idx(seq_idx[i])
+          corpus_seq_idx = dataset.get_corpus_seq_idx(seq_idx[batch_idx])
           assert corpus_seq_idx not in out_cache
-          seq_idx_to_tag[corpus_seq_idx] = seq_tag[i]
+          seq_idx_to_tag[corpus_seq_idx] = seq_tag[batch_idx]
           if output_is_dict:
             out_cache[corpus_seq_idx] = {}
 
-        for t in range(num_targets):
-          if out_beam_sizes[t] is None:
-            print("seq_idx: %i, seq_tag: %r, output %r: %r" % (seq_idx[i], seq_tag[i], target_keys[t], outputs[t][i]), file=log.v4)
-            out_idx = i
+        for target_idx in range(num_targets):
+          if out_beam_sizes[target_idx] is None:
+            print("seq_idx: %i, seq_tag: %r, output %r: %r" % (
+              seq_idx[batch_idx], seq_tag[batch_idx], target_keys[target_idx], outputs[target_idx][batch_idx]),
+                  file=log.v4)
+            out_idx = batch_idx
           else:
             print("seq_idx: %i, seq_tag: %r, outputs %r: %r" % (
-              seq_idx[i], seq_tag[i], output_layer_names[t], outputs[t][i * out_beam_sizes[t]:(i + 1)*out_beam_sizes[t]]), file=log.v4)
-            out_idx = i * out_beam_sizes[t]
-          if target_keys[t] and dataset.can_serialize_data(target_keys[t]):
-            print("  ref:", dataset.serialize_data(key=target_keys[t], data=targets[t][i]), file=log.v4)
-            if out_beam_sizes[t] is None:
-              print("  hyp:", dataset.serialize_data(key=target_keys[t], data=outputs[t][out_idx]), file=log.v4)
+              seq_idx[batch_idx], seq_tag[batch_idx], output_layer_names[target_idx],
+              outputs[target_idx][batch_idx * out_beam_sizes[target_idx]:(batch_idx + 1)*out_beam_sizes[target_idx]]),
+                  file=log.v4)
+            out_idx = batch_idx * out_beam_sizes[target_idx]
+          if target_keys[target_idx] and dataset.can_serialize_data(target_keys[target_idx]):
+            print("  ref:", dataset.serialize_data(key=target_keys[target_idx], data=targets[target_idx][batch_idx]),
+                  file=log.v4)
+            if out_beam_sizes[target_idx] is None:
+              print("  hyp:", dataset.serialize_data(key=target_keys[target_idx], data=outputs[target_idx][out_idx]),
+                    file=log.v4)
             else:
-              assert beam_scores[t] is not None
-              for b in range(out_beam_sizes[t]):
+              assert beam_scores[target_idx] is not None
+              for beam_idx in range(out_beam_sizes[target_idx]):
                 print(
-                  "  hyp %i, score %f:" % (b, beam_scores[t][i][b]),
-                  dataset.serialize_data(key=target_keys[t], data=outputs[t][out_idx + b]),
+                  "  hyp %i, score %f:" % (beam_idx, beam_scores[target_idx][batch_idx][beam_idx]),
+                  dataset.serialize_data(key=target_keys[target_idx], data=outputs[target_idx][out_idx + beam_idx]),
                   file=log.v4)
 
             if out_cache is not None:
-              if out_beam_sizes[t] is None:
-                  out_data = dataset.serialize_data(key=target_keys[t], data=outputs[t][out_idx])
+              if out_beam_sizes[target_idx] is None:
+                  out_data = dataset.serialize_data(key=target_keys[target_idx], data=outputs[target_idx][out_idx])
               else:
-                assert beam_scores[t] is not None
+                assert beam_scores[target_idx] is not None
                 out_data = [
-                    (beam_scores[t][i][b], dataset.serialize_data(key=target_keys[t], data=outputs[t][out_idx + b]))
-                    for b in range(out_beam_sizes[t])]
+                    (beam_scores[target_idx][batch_idx][beam_idx],
+                     dataset.serialize_data(key=target_keys[target_idx], data=outputs[target_idx][out_idx + beam_idx]))
+                    for beam_idx in range(out_beam_sizes[target_idx])]
 
               if output_is_dict:
-                assert output_layer_names[t] not in out_cache[corpus_seq_idx]
-                out_cache[corpus_seq_idx][output_layer_names[t]] = out_data
+                assert output_layer_names[target_idx] not in out_cache[corpus_seq_idx]
+                out_cache[corpus_seq_idx][output_layer_names[target_idx]] = out_data
               else:
                 assert corpus_seq_idx not in out_cache
                 out_cache[corpus_seq_idx] = out_data
 
     train = self._maybe_prepare_train_in_eval(targets_via_search=True)
 
-    extra_fetches={"seq_idx": self.network.get_extern_data("seq_idx", mark_data_key_as_used=True),
-                   "seq_tag": self.network.get_extern_data("seq_tag", mark_data_key_as_used=True)}
+    extra_fetches = {
+      "seq_idx": self.network.get_extern_data("seq_idx", mark_data_key_as_used=True),
+      "seq_tag": self.network.get_extern_data("seq_tag", mark_data_key_as_used=True)}
 
-    for t in range(num_targets):
-      extra_fetches["output_" + output_layer_names[t]] = output_layers[t]
-      extra_fetches["beam_scores_" + output_layer_names[t]] = output_layer_beam_scores[t]
-      # We use target_keys[t] and not output_layer_names[t] for the key to avoid fetching the same target multiple times.
-      extra_fetches["target_" + target_keys[t]] = self.network.get_extern_data(target_keys[t], mark_data_key_as_used=True)
+    for target_idx in range(num_targets):
+      extra_fetches["output_" + output_layer_names[target_idx]] = output_layers[target_idx]
+      extra_fetches["beam_scores_" + output_layer_names[target_idx]] = output_layer_beam_scores[target_idx]
+      # We use target_keys[target_idx] and not output_layer_names[target_idx]
+      # for the key to avoid fetching the same target multiple times.
+      extra_fetches["target_" + target_keys[target_idx]] = self.network.get_extern_data(
+        target_keys[target_idx], mark_data_key_as_used=True)
 
     runner = Runner(
       engine=self, dataset=dataset, batches=batches, train=train, eval=do_eval,
-      extra_fetches = extra_fetches,
+      extra_fetches=extra_fetches,
       extra_fetches_callback=extra_fetches_callback)
     runner.run(report_prefix=self.get_epoch_str() + " search")
     if not runner.finalized:

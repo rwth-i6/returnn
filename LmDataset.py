@@ -159,6 +159,7 @@ class LmDataset(CachedDataset2):
     self.delayed_seq_data_start_symbol = delayed_seq_data_start_symbol
     if add_delayed_seq_data:
       self.num_outputs["delayed"] = self.num_outputs["data"]
+      self.labels["delayed"] = self.labels["data"]
 
     self.orths = read_corpus(corpus_file)
     # It's only estimated because we might filter some out or so.
