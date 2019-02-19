@@ -114,7 +114,12 @@ class MetaDataset(CachedDataset2):
       key: init_dataset(datasets[key], extra_kwargs={"name": "%s_%s" % (self.name, key)})
       for key in self.dataset_keys}
 
-    self.seq_list_original = self._load_seq_list(seq_list_file) # type: dict[str,list[str]]  # dataset key -> seq list
+    self.seq_list_original = self._load_seq_list(seq_list_file)
+    self.num_total_seqs = len(self.seq_list_original[self.default_dataset_key])
+    for key in self.dataset_keys:
+      assert len(self.seq_list_original[key]) == self.num_total_seqs
+
+    self.tag_idx = {tag: idx for (idx, tag) in enumerate(self.seq_list_original[self.default_dataset_key])}
 
     if seq_lens_file:
       seq_lens = load_json(filename=seq_lens_file)
@@ -149,6 +154,11 @@ class MetaDataset(CachedDataset2):
     self.data_dtypes = {data_key: _select_dtype(data_key, self.data_dims, data_dtypes) for data_key in self.data_keys}
 
   def _load_seq_list(self, seq_list_file=None):
+    """
+    :param str seq_list_file:
+    :return: dict: dataset key -> seq list
+    :rtype: dict[str,list[str]]
+    """
     if seq_list_file:
       if seq_list_file.endswith(".pkl"):
         import pickle
@@ -160,26 +170,32 @@ class MetaDataset(CachedDataset2):
       # other datasets. This can only work if all datasets have the same tag format and the sequences in the other
       # datasets are a subset of those in the default dataset.
       default_dataset = self.datasets[self.default_dataset_key]
-      print("Reading sequence list for MetaDataset '{}' from sub-dataset '{}'".format(
-        self.name, default_dataset.name), file=log.v3)
+      print("Reading sequence list for MetaDataset %r from sub-dataset %r" % (self.name, default_dataset.name),
+            file=log.v3)
       seq_list = [default_dataset.get_tag(seq_idx) for seq_idx in range(default_dataset.num_seqs)]
       # Catch index out of bounds errors. Whether the tags are actually valid will be checked in _check_dataset_seq().
       for key in self.dataset_keys:
         assert self.datasets[key].partition_epoch == 1, (
-          "Turn off partition_epoch for sub-dataset '{}' so we can access all sequences!".format(key))
-        assert self.datasets[key].num_seqs >= len(seq_list), (
-            "Dataset '{}' has less sequences than in sequence list read from '{}', this cannot work out!".format(
-              key, self.default_dataset_key))
+          "Turn off partition_epoch for sub-dataset %r so we can access all sequences!" % key)
+        if key != self.default_dataset_key and self.datasets[key].num_seqs < len(seq_list):
+          print("Dataset %r has less sequences (%i) than in sequence list (%i) read from %r, this cannot work out!" % (
+            key, self.datasets[key].num_seqs, len(seq_list), self.default_dataset_key), file=log.v1)
+          other_tags = [self.datasets[key].get_tag(seq_idx) for seq_idx in range(self.datasets[key].num_seqs)]
+          for tag in seq_list:
+            if tag not in other_tags:
+              print(
+                "Seq tag %r in dataset %r but not in dataset %r." % (tag, self.default_dataset_key, key), file=log.v1)
+              break  # only print one
+          for tag in other_tags:
+            if tag not in seq_list:
+              print(
+                "Seq tag %r in dataset %r but not in dataset %r." % (tag, key, self.default_dataset_key), file=log.v1)
+              break  # only print one
+          raise Exception("Dataset %r is missing seqs." % key)
 
     assert isinstance(seq_list, (list, dict))
     if isinstance(seq_list, list):
       seq_list = {key: seq_list for key in self.dataset_keys}
-
-    self.total_seqs = len(seq_list[self.default_dataset_key])
-    for key in self.dataset_keys:
-      assert len(seq_list[key]) == self.total_seqs
-
-    self.tag_idx = {tag: idx for (idx, tag) in enumerate(seq_list[self.default_dataset_key])}
 
     return seq_list
 
@@ -209,7 +225,7 @@ class MetaDataset(CachedDataset2):
       else:
         self.orig_seq_order_is_initialized = False
         get_seq_len = self._get_dataset_seq_length
-      seq_index = self.get_seq_order_for_epoch(epoch, self.total_seqs, get_seq_len)
+      seq_index = self.get_seq_order_for_epoch(epoch, self.num_total_seqs, get_seq_len)
     self._num_seqs = len(seq_index)
     self.seq_list_ordered = {key: [ls[s] for s in seq_index] for (key, ls) in self.seq_list_original.items()}
 
