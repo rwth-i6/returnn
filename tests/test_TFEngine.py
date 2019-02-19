@@ -160,8 +160,8 @@ def test_engine_train_uneven_batches():
   def get_data(num_seqs):
     return [
       {
-        "data": rnd.uniform(-1., 1., (seq_len, n_data_dim)),
-        "classes": rnd.choice(range(n_classes_dim), (seq_len,))
+        "data": rnd.uniform(-1., 1., (seq_len, n_data_dim)).astype("float32"),
+        "classes": rnd.choice(range(n_classes_dim), (seq_len,)).astype("int32")
       }
       for seq_len in [rnd.choice(list(range(1, 50)) + list(range(1, 20))) for _ in range(num_seqs)]]
 
