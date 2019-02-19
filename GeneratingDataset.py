@@ -679,6 +679,8 @@ class StaticDataset(GeneratingDataset):
     for key, value in first_data.items():
       if key not in output_dim:
         output_dim[key] = [value.shape[-1] if value.ndim >= 2 else 0, len(value.shape)]
+    if input_dim is None and "data" in self.data_keys:
+      input_dim = output_dim["data"][0]
     for key in self.data_keys:
       first_data_output = first_data[key]
       assert len(first_data_output.shape) <= 2  # (time[,dim])
