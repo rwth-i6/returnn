@@ -4441,13 +4441,14 @@ class CombineLayer(LayerBase):
     """
     used_sources = set()  # type: set[int]
 
-    def source(i, auto_convert=True, enforce_batch_major=False):
+    def source(i, auto_convert=True, enforce_batch_major=False, as_data=False):
       """
       :param int i: layer index
       :param bool auto_convert:
       :param bool enforce_batch_major: if True, return as batch-major
+      :param bool as_data: if True, return the Data object
       :return: output placeholder from source i, compatible to source 0
-      :rtype: tf.Tensor
+      :rtype: tf.Tensor|Data
       """
       assert 0 <= i < len(sources)
       used_sources.add(i)
@@ -4457,7 +4458,10 @@ class CombineLayer(LayerBase):
           output = output.copy_compatible_to(sources[0].output)
         if enforce_batch_major:
           output = output.copy_as_batch_major()
+        if as_data:
+          return output
         return output.placeholder
+      assert not as_data
       return sources[i]
 
     vs = vars(TFUtil).copy()
