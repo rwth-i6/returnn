@@ -414,7 +414,7 @@ class ClusteringDataset(CachedDataset2):
       batch.add_sequence_as_slice(seq_idx=seq_idx, seq_start_frame=t_start, length=length)
       last_seq_idx = seq_idx
 
-    if batch.get_all_slices_num_frames() > 0:
+    if batch.get_all_slices_num_frames().max_value() > 0:
       yield batch
 
 

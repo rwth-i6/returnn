@@ -707,7 +707,7 @@ class Dataset(object):
     while self.is_less_than_num_seqs(s):
       length = self.get_seq_length(s)
       if chunk_size == 0:
-        yield (s, length.constant_like(0), length)
+        yield (s, NumbersDict.constant_like(0, numbers_dict=length), length)
       else:
         default_key = "data"
         if used_data_keys is not None:
@@ -718,7 +718,7 @@ class Dataset(object):
             assert chunk_step.max_value() > 0
             default_key = [key for key in sorted(used_data_keys) if chunk_step[key] > 0][0]
         assert chunk_step[default_key] > 0
-        t = length.constant_like(0)
+        t = NumbersDict.constant_like(0, numbers_dict=length)
         # There are usually the 'data' (input) and 'classes' (targets) data-keys in `length` but there can be others.
         # We expect them all of the same length so that we can do chunking.
         # In case that some length is 0 or 1,
@@ -777,7 +777,7 @@ class Dataset(object):
     :rtype: (NumbersDict,NumbersDict)
     """
     end = self.get_seq_length(seq_idx)
-    start = end.constant_like(0)
+    start = NumbersDict.constant_like(0, numbers_dict=end)
     ctx_lr = self._get_context_window_left_right()
     if ctx_lr:
       start -= ctx_lr[0]
@@ -863,11 +863,12 @@ class Dataset(object):
       else:  # Not recurrent.
         while t_start.max_value() < t_end.max_value():
           length = t_end - t_start
-          num_frames = NumbersDict.min([length, batch_size - batch.get_all_slices_num_frames()])
+          num_frames = NumbersDict.min(
+            [length, batch_size.copy_like(length) - batch.get_all_slices_num_frames().copy_like(length)])
           assert num_frames.max_value() > 0
           batch.add_frames(seq_idx=seq_idx, seq_start_frame=t_start, length=num_frames)
-          if (NumbersDict(batch.get_all_slices_num_frames()).any_compare(batch_size, (lambda a, b: a >= b)) or
-              batch.get_num_seqs() > max_seqs):
+          if (batch.get_all_slices_num_frames().any_compare(batch_size, (lambda a, b: a >= b))
+                  or batch.get_num_seqs() > max_seqs):
             yield batch
             batch = Batch()
           t_start += num_frames
@@ -875,9 +876,7 @@ class Dataset(object):
         last_seq_idx = seq_idx
         total_num_seqs += 1
 
-
-
-    if batch.get_all_slices_num_frames() > 0:
+    if batch.get_all_slices_num_frames().max_value() > 0:
       yield batch
 
   def batch_set_generator_cache_whole_epoch(self):

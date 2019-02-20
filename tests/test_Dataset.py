@@ -147,7 +147,7 @@ def test_batches_non_recurrent_1():
   dataset = DummyDataset(input_dim=2, output_dim=3, num_seqs=2, seq_len=11)
   dataset.init_seq_order(1)
   batch_gen = dataset.generate_batches(recurrent_net=False, max_seqs=2, batch_size=5)
-  all_batches = []; " :type: list[Batch] "
+  all_batches = []  # type: list[Batch]
   while batch_gen.has_more():
     batch, = batch_gen.peek_next_n(1)
     assert_is_instance(batch, Batch)

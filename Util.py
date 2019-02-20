@@ -1144,10 +1144,32 @@ class NumbersDict:
   def copy(self):
     return NumbersDict(self)
 
-  def constant_like(self, number):
+  @classmethod
+  def constant_like(cls, const_number, numbers_dict):
+    """
+    :param int|float|object const_number:
+    :param NumbersDict numbers_dict:
+    :return: NumbersDict with same keys as numbers_dict
+    :rtype: NumbersDict
+    """
     return NumbersDict(
-      broadcast_value=number if (self.value is not None) else None,
-      numbers_dict={k: number for k in self.dict.keys()})
+      broadcast_value=const_number if (numbers_dict.value is not None) else None,
+      numbers_dict={k: const_number for k in numbers_dict.dict.keys()})
+
+  def copy_like(self, numbers_dict):
+    """
+    :param NumbersDict numbers_dict:
+    :return: copy of self with same keys as numbers_dict as far as we have them
+    :rtype: NumbersDict
+    """
+    if self.value is not None:
+      return NumbersDict(
+        broadcast_value=self.value if (numbers_dict.value is not None) else None,
+        numbers_dict={k: self[k] for k in numbers_dict.dict.keys()})
+    else:
+      return NumbersDict(
+        broadcast_value=None,
+        numbers_dict={k: self[k] for k in numbers_dict.dict.keys() if k in self.dict})
 
   @property
   def keys_set(self):
@@ -1230,11 +1252,11 @@ class NumbersDict:
     """
     if not isinstance(self, NumbersDict):
       if isinstance(other, NumbersDict):
-        self = other.constant_like(self)
+        self = NumbersDict.constant_like(self, numbers_dict=other)
       else:
         self = NumbersDict(self)
     if not isinstance(other, NumbersDict):
-      other = self.constant_like(other)
+      other = NumbersDict.constant_like(other, numbers_dict=self)
     if result is None:
       result = NumbersDict()
     assert isinstance(result, NumbersDict)
