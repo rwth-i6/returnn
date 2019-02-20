@@ -175,8 +175,9 @@ class MetaDataset(CachedDataset2):
       seq_list = [default_dataset.get_tag(seq_idx) for seq_idx in range(default_dataset.num_seqs)]
       # Catch index out of bounds errors. Whether the tags are actually valid will be checked in _check_dataset_seq().
       for key in self.dataset_keys:
-        assert self.datasets[key].partition_epoch == 1, (
-          "Turn off partition_epoch for sub-dataset %r so we can access all sequences!" % key)
+        if key != self.default_dataset_key:  # for default dataset, we can allow these
+          assert self.datasets[key].partition_epoch == 1, (
+            "Turn off partition_epoch for sub-dataset %r so we can access all sequences!" % key)
         if key != self.default_dataset_key and self.datasets[key].num_seqs < len(seq_list):
           print("Dataset %r has less sequences (%i) than in sequence list (%i) read from %r, this cannot work out!" % (
             key, self.datasets[key].num_seqs, len(seq_list), self.default_dataset_key), file=log.v1)
