@@ -477,6 +477,18 @@ class Dataset(object):
     finally:
       self.partition_epoch = old_partition_epoch
 
+  def get_total_num_seqs(self):
+    """
+    :return: total number of seqs, without partition epoch.
+      Should be the same as len(self.get_all_tags()).
+      Note that this is not possible with all datasets.
+    :rtype: int
+    """
+    if self.partition_epoch == 1:
+      # Note: self.num_seqs might not always be set, or even be correct...
+      return self.num_seqs
+    raise NotImplementedError("%s: get_total_num_seqs with partition epoch %i" % (self, self.partition_epoch))
+
   def have_corpus_seq_idx(self):
     """
     :rtype: bool

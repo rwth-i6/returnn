@@ -216,6 +216,9 @@ class HDFDataset(CachedDataset):
   def get_all_tags(self):
     return list(map(self._decode, self._tags))
 
+  def get_total_num_seqs(self):
+    return len(self._tags)
+
   def is_data_sparse(self, key):
     if self.get_data_dtype(key).startswith("int"):
       if key in self.num_outputs:
