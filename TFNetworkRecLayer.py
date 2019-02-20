@@ -772,13 +772,13 @@ class _SubnetworkRecCell(object):
     if source_data:
       self.net.extern_data.data["source"] = \
         source_data.copy_template_excluding_time_dim()
-    for key in parent_net.extern_data.data.keys():
+    for key, data in parent_net.extern_data.data.items():
       if key in self.net.extern_data.data:
         continue  # Don't overwrite existing, e.g. "source".
       # These are just templates. You can use them as possible targets for dimension information,
       # but not as actual sources or targets.
-      self.net.extern_data.data[key] = \
-        parent_net.extern_data.data[key].copy_template_excluding_time_dim()
+      # Note: We maybe should check data.is_same_time_dim()...
+      self.net.extern_data.data[key] = data.copy_template_excluding_time_dim()
     if parent_net.search_flag and parent_rec_layer and parent_rec_layer.output.beam_size:
       for key, data in list(self.net.extern_data.data.items()):
         self.net.extern_data.data[key] = data.copy_extend_with_beam(
