@@ -206,21 +206,22 @@ class LayerBase(object):
     :return: Data template (placeholder not set)
     :rtype: Data
     """
-    if n_out is None and target:
-      n_out = cls._static_get_target_value(target=target, network=network, mark_data_key_as_used=False).dim
     if out_type is None:
-      assert n_out
-      out_type = {"dim": n_out}
-    out_type = out_type.copy()
+      out_type = {}
+    else:
+      out_type = out_type.copy()
     out_type.setdefault("name", "%s_output" % name)
+    if "dim" not in out_type and n_out is not None:
+      out_type["dim"] = n_out
+    if "dim" not in out_type and target:
+      out_type["dim"] = cls._static_get_target_value(target=target, network=network, mark_data_key_as_used=False).dim
+    if n_out is not None:
+      assert out_type["dim"] == n_out
     sources_data = None
     if sources and sources[0]:
       sources_data = sources[0].output.copy_template()
     if sources_data and not sources_data.sparse and not out_type.get("sparse", False):
       out_type.setdefault("dtype", sources_data.dtype)
-    if n_out is not None:
-      out_type.setdefault("dim", n_out)
-      assert out_type["dim"] == n_out
     # You are supposed to set self.output.{batch_dim_axis,time_dim_axis} explicitly,
     # as well as check the inputs if they are as you would suggest.
     # However, a good default is often to use the same as the input.
@@ -370,13 +371,15 @@ class LayerBase(object):
     if "reuse_params" in d:
       d["reuse_params"] = ReuseParams.from_config_dict(d["reuse_params"], network=network, get_layer=get_layer)
     if d.get("loss", None) and "target" not in d:
-      d["target"] = network.extern_data.default_target
+      target = get_loss_class(d["loss"]).get_default_target(network.extern_data)
+      if target:
+        d["target"] = target
     targets = None
-    if d.get("target"):
+    if d.get("target", None):
       targets = d["target"]
       # we might have multiple targets, e.g. in choice layer, so convert to list
       if isinstance(targets, str):
-          targets = [targets]
+        targets = [targets]
       if network.eval_flag:
         for target in targets:
           assert isinstance(target, str)
@@ -417,7 +420,8 @@ class LayerBase(object):
     :return: n_out value
     :rtype: int
     """
-    n_out = cls._static_get_target_value(target=target, network=network, mark_data_key_as_used=False, get_layer=get_layer).dim
+    n_out = cls._static_get_target_value(
+      target=target, network=network, mark_data_key_as_used=False, get_layer=get_layer).dim
     if loss_class_name:
       n_out = get_loss_class(loss_class_name).get_auto_output_layer_dim(n_out)
     return n_out
@@ -5672,6 +5676,15 @@ class Loss(object):
     """
     return target_dim
 
+  @classmethod
+  def get_default_target(cls, extern_data):
+    """
+    :param TFNetwork.ExternData extern_data:
+    :return: default target name, or None if this loss does not have a target
+    :rtype: str|None
+    """
+    return extern_data.default_target
+
 
 class CrossEntropyLoss(Loss):
   """
@@ -6554,6 +6567,11 @@ class AsIsLoss(Loss):
 
   def get_error(self):
     return None  # not defined
+
+  @classmethod
+  def get_default_target(cls, extern_data):
+    # We do not need any target.
+    return None
 
 
 class SamplingBasedLoss(Loss):
