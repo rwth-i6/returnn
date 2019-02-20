@@ -182,7 +182,7 @@ class HDFDataset(CachedDataset):
       if len(file_info[i]) == 0:
         continue
       if start == 0 or self.cache_byte_size_total_limit > 0:  # suppress with disabled cache
-        print("loading file %d/%d" % (i+1, len(self.files)), self.files[i], file=log.v4)
+        print("loading file %d/%d (seq range %i-%i)" % (i+1, len(self.files), start, end), self.files[i], file=log.v4)
       fin = h5py.File(self.files[i], 'r')
       inputs = fin['inputs']
       targets = None

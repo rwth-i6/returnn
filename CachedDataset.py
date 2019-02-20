@@ -253,10 +253,12 @@ class CachedDataset(Dataset):
       if alloc_start <= ids < alloc_end:
         return i
       elif alloc_start <= ids and ids >= alloc_end:
-        if s == i: return -1
+        if s == i:
+          return -1
         s = i
       elif alloc_start > ids:
-        if e == i: return -1
+        if e == i:
+          return -1
         e = i
       else:
         assert False
@@ -269,6 +271,8 @@ class CachedDataset(Dataset):
     :param (int,int) value: (start,end) like in load_seqs(), sorted seq idx
     :rtype: int
     """
+    if value[0] == value[1]:
+      return 0
     ci = self.alloc_intervals[pos][1]
     ni = self.alloc_intervals[pos + 1][0]
     xc = self.alloc_intervals[pos][2]
@@ -340,8 +344,10 @@ class CachedDataset(Dataset):
     :rtype: list[int]
     :return selection list, modified sorted seq idx in self.alloc_intervals
     """
-    if end is None: end = start + 1
-    if start == end: return
+    if end is None:
+      end = start + 1
+    if start == end:
+      return
     assert start < end
     i = 0
     selection = []; """ :type: list[int] """
@@ -349,6 +355,7 @@ class CachedDataset(Dataset):
     while i < len(self.alloc_intervals) - invert:
       ni = self.alloc_intervals[i + invert][1 - invert]  # insert mode: start idx of next alloc
       ci = self.alloc_intervals[i][invert]               # insert mode: end idx of cur alloc
+      assert ci <= ni
       flag = ((ci <= start < ni), (ci < end <= ni), (ci < start and ni <= start) or (ci >= end and ni > end))
       if not flag[0] and not flag[1]:
         if not flag[2]:
