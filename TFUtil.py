@@ -212,7 +212,7 @@ class Data(object):
         time_dim_axis = None
       else:
         taken_axes = {self.batch_dim_axis}
-        if self.feature_dim_axis is not None:
+        if self.feature_dim_axis is not None and self.batch_shape[self.feature_dim_axis] is not None:
           taken_axes.add(self.feature_dim_axis)
         available_axes = [i for i in range(self.batch_ndim) if i not in taken_axes]
         if available_axes:
