@@ -546,6 +546,22 @@ def test_hdf_target_float_dense():
   assert hdf_data_data.dtype == orig_data_dtype and hdf_data_classes.dtype == orig_classes_dtype
 
 
+def test_HDFDataset_no_cache_efficiency():
+  hdf_fn = generate_hdf_from_other({"class": "Task12AXDataset", "num_seqs": 23})
+  hdf_dataset = HDFDataset(files=[hdf_fn], cache_byte_size=0)
+  hdf_dataset.initialize()
+  hdf_dataset.init_seq_order(epoch=1)
+  hdf_dataset.load_seqs(0, 1)
+  hdf_dataset.load_seqs(0, 2)
+  hdf_dataset.load_seqs(0, 5)
+  hdf_dataset.load_seqs(1, 2)
+  hdf_dataset.load_seqs(1, 3)
+  hdf_dataset.load_seqs(1, 7)
+  hdf_dataset.load_seqs(3, 7)
+  hdf_dataset.load_seqs(4, 10)
+  # TODO... check alloc intervals etc
+
+
 def test_siamese_triplet_sampling():
   datasets_path = generate_dummy_hdf(3)
   dataset = SiameseHDFDataset(input_stream_name="features", seq_label_stream="classes", files=datasets_path)
