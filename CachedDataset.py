@@ -141,7 +141,7 @@ class CachedDataset(Dataset):
     self.cached_bytes_at_start = cached_bytes
     if num_cached > 0:
       self.preload_end = num_cached
-      threading.Thread(target=self._preload_seqs,args=(0,num_cached)).start()
+      threading.Thread(target=self._preload_seqs, args=(0, num_cached), daemon=True).start()
 
   def load_seqs(self, start, end):
     """
