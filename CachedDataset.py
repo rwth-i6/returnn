@@ -129,12 +129,13 @@ class CachedDataset(Dataset):
 
     num_cached = 0
     cached_bytes = 0
-    for i in range(self.num_seqs):
-      if i == num_cached:
-        nbytes = self.get_seq_length_2d(i)[0] * self.nbytes
-        if self.cache_byte_size_limit_at_start >= cached_bytes + nbytes:
-          num_cached = i + 1
-          cached_bytes += nbytes
+    if self.cache_byte_size_limit_at_start > 0:
+      for i in range(self.num_seqs):
+        if i == num_cached:
+          nbytes = self.get_seq_length_2d(i)[0] * self.nbytes
+          if self.cache_byte_size_limit_at_start >= cached_bytes + nbytes:
+            num_cached = i + 1
+            cached_bytes += nbytes
 
     self.num_seqs_cached_at_start = num_cached
     self.cached_bytes_at_start = cached_bytes
