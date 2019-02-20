@@ -164,7 +164,7 @@ def init(config_str):
     configFilename = config_str
     print("Using config file %r." % configFilename)
     assert os.path.exists(configFilename)
-  rnn.initConfig(configFilename=configFilename, commandLineOptions=[])
+  rnn.initConfig(configFilename=configFilename, default_config={"cache_size": "0"})
   global config
   config = rnn.config
   config.set("log", None)
