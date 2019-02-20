@@ -1118,6 +1118,51 @@ def test_ReuseParams_rec():
     numpy.testing.assert_array_equal(fwd_out, fwd_out_copy)
 
 
+def test_LossAsIs_custom_dim():
+  config = Config()
+  config.update({
+    "extern_data": {
+      "data": (40, 2),
+      "classes": (10025, 1),
+      "att_weights": {"shape": (None, None, 1)},
+      "att_weights_sizes": {"shape": (None,), "dtype": "int32"}
+    },
+    "debug_print_layer_output_template": True,
+  })
+  print("Creating network...")
+  network = TFNetwork(config=config, train_flag=True)
+  net_dict = {
+    "att_distill_loss": {
+      "class": "eval", "from": ["energy", "att_weights"],
+      "out_type": (lambda sources, **kwargs: sources[0].output.copy_template_excluding_spatial_dim(-1)),
+      "eval": "softmax_cross_entropy_over_size(" +
+              "logits=source(0, as_data=True, auto_convert=False)," +
+              "labels=source(1, as_data=True, auto_convert=False))",
+      "loss": "as_is"},
+  }
+  n_batch = 5
+  n_enc_time = 11
+  n_dec_time = 7
+  with tf.Session() as session:
+    enc_time = tf.constant([n_enc_time] * n_batch)
+    dec_time = tf.constant([n_dec_time] * n_batch)
+    network.add_layer(name="energy", layer_class=InternalLayer, output=Data(
+      name="energy",
+      shape=(None, None, 1), dim=1, batch_dim_axis=2,
+      size_placeholder={0: dec_time, 1: enc_time},
+      placeholder=tf.constant(numpy.random.normal(size=(n_dec_time, n_enc_time, n_batch, 1)).astype("float32"))))
+    network.add_layer(name="att_weights", layer_class=InternalLayer, output=Data(
+      name="att_weights",
+      shape=(None, None, 1), dim=1, batch_dim_axis=0,
+      size_placeholder={0: dec_time, 1: enc_time},
+      placeholder=tf.expand_dims(
+        tf.nn.softmax(
+          tf.constant(numpy.random.normal(size=(n_batch, n_dec_time, n_enc_time)).astype("float32"))), -1)))
+    network.construct_from_dict(net_dict)
+    loss = session.run(network.get_total_loss())
+    assert loss
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()

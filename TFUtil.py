@@ -706,6 +706,45 @@ class Data(object):
       kwargs["name"] = name
     return Data(**kwargs)
 
+  def copy_template_excluding_spatial_dim(self, spatial_axis_num, name=None):
+    """
+    :param int spatial_axis_num: index in self.get_spatial_batch_axes()
+    :param str|None name: if set, this will be the new name
+    :return: copy of myself excluding the time-dimension without placeholder
+    :rtype: Data
+    """
+    spatial_axes = self.get_spatial_batch_axes()
+    if spatial_axis_num < 0:
+      spatial_axis_num += len(spatial_axes)
+      assert spatial_axis_num >= 0
+    assert 0 <= spatial_axis_num < len(spatial_axes)
+    axis_to_exclude = spatial_axes[spatial_axis_num]
+    axis_to_exclude_wo_b = self.get_batch_axis_excluding_batch(axis_to_exclude)
+    size_placeholder = None
+    if self.size_placeholder is not None:
+      size_placeholder = {}
+      for i, size in self.size_placeholder.items():
+        if i == axis_to_exclude_wo_b:
+          continue
+        if i > axis_to_exclude_wo_b:
+          i -= 1
+        size_placeholder[i] = size
+    new_shape = list(self.shape)
+    del new_shape[axis_to_exclude_wo_b]
+    kwargs = self.get_kwargs()
+    other_special_axes = self.get_special_axes_dict(
+      counted_with_batch_dim=True, only_available=True, include_batch_dim_axis=True)
+    for special_axis_name, special_axis in other_special_axes.items():
+      if special_axis == axis_to_exclude:
+        kwargs.pop(special_axis_name, None)
+        continue
+      kwargs[special_axis_name] = special_axis if (special_axis < axis_to_exclude) else (special_axis - 1)
+    kwargs["shape"] = new_shape
+    kwargs["size_placeholder"] = size_placeholder
+    if name:
+      kwargs["name"] = name
+    return Data(**kwargs)
+
   def copy_template_excluding_time_dim(self, name=None):
     """
     :param str|None name: if set, this will be the new name

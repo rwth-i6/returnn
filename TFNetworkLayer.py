@@ -111,7 +111,7 @@ class LayerBase(object):
       self.output = output
       if n_out:
         assert self.output.dim == n_out
-      if out_type:
+      if isinstance(out_type, dict):
         if "shape" in out_type:
           assert self.output.shape == out_type["shape"]
         if "dim" in out_type:
@@ -196,7 +196,7 @@ class LayerBase(object):
 
     :param TFNetwork.TFNetwork network:
     :param str name:
-    :param dict[str]|None out_type:
+    :param dict[str]|None|(()->Data) out_type:
     :param int|None n_out:
     :param str|None target:
     :param str|None size_target:
@@ -206,6 +206,10 @@ class LayerBase(object):
     :return: Data template (placeholder not set)
     :rtype: Data
     """
+    if callable(out_type):
+      return out_type(
+        network=network, name=name, n_out=n_out, target=target, size_target=size_target, sources=sources, loss=loss,
+        **kwargs)
     if out_type is None:
       out_type = {}
     else:

@@ -253,6 +253,12 @@ def test_Data_int32_no_dim_kwargs_init():
   assert data.have_time_axis() and data.shape == (None,)
 
 
+def test_Data_copy_template_excluding_spatial_dim():
+  att_weights = Data(name="att_weights", shape=(None, None, 1), batch_dim_axis=2)
+  rem_enc_time = att_weights.copy_template_excluding_spatial_dim(-1)
+  assert rem_enc_time.shape == (None, 1) and rem_enc_time.batch_dim_axis == 1
+
+
 def test_ExternData_via_config():
   # Like ExternData.init_from_config.
   from Config import Config
