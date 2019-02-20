@@ -1146,14 +1146,16 @@ class Data(object):
 
   def is_same_time_dim(self, other):
     """
+    Checks whether we have a matching/compatible time dim.
+
     :param Data other:
     :rtype: bool
     """
     assert self.have_time_axis()
     if not other.have_time_axis():
       return False
-    tag_self = self.get_batch_dim_tag(self.time_dim_axis)
-    tag_other = other.get_batch_dim_tag(other.time_dim_axis)
+    tag_self = self.get_dim_tag(self.time_dim_axis)
+    tag_other = other.get_dim_tag(other.time_dim_axis)
     return tag_self == tag_other
 
   def get_sequence_lengths(self):
@@ -1333,7 +1335,7 @@ class Data(object):
       return "%s/%s" % (scope_name, self.name)
     return self.name
 
-  def get_batch_dim_tag(self, axis):
+  def get_dim_tag(self, axis):
     """
     :param int axis: counted with batch-dim
     :rtype: DimensionTag
