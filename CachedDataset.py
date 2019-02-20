@@ -30,7 +30,7 @@ class CachedDataset(Dataset):
     self.preload_end = 0
     self.max_ctc_length = 0
     self.ctc_targets = None
-    self.alloc_intervals = None
+    self.alloc_intervals = None  # type: list
     self._seq_start = []  # [numpy.array([0,0])]  # uses sorted seq idx, see set_batching()
     self._seq_index = []; """ :type: list[int] """  # Via init_seq_order(). seq_index idx -> hdf seq idx
     self._index_map = range(len(self._seq_index))  # sorted seq idx -> seq_index idx
@@ -164,6 +164,10 @@ class CachedDataset(Dataset):
       self._load_seqs_with_cache(start, end)
       return self.is_cached(start, end, blocking=True)
 
+    # Cleanup old self.alloc_intervals.
+    # self.alloc_intervals[0] is usually the dummy seq range 0-0.
+    while len(self.alloc_intervals) >= 2 and self.alloc_intervals[1][1] <= start:
+      self.alloc_intervals.pop(1)
     super(CachedDataset, self).load_seqs(start, end)
 
   def _load_seqs(self, start, end):
