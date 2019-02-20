@@ -802,15 +802,16 @@ class Dataset(object):
     """
     :param bool recurrent_net: If True, the batch might have a batch seq dimension > 1.
       Otherwise, the batch seq dimension is always 1 and multiple seqs will be concatenated.
-    :param int batch_size: Max number of frames in one batch.
+    :param int|dict[str,int]|NumbersDict batch_size: Max number of frames in one batch.
     :param int max_seqs: Max number of seqs per batch.
     :param int max_total_num_seqs:
     :param int|dict[str,int]|NumbersDict max_seq_length:
     :param set(str)|None used_data_keys:
     """
-    if batch_size == 0:
+    if not batch_size:
       batch_size = sys.maxsize
-    assert batch_size > 0
+    batch_size = NumbersDict(batch_size)
+    assert not batch_size.any_compare(NumbersDict(0), (lambda a, b: a <= b))
     if max_seqs == -1:
       max_seqs = float('inf')
     if not max_seq_length:
@@ -850,12 +851,12 @@ class Dataset(object):
           continue
         if length.any_compare(min_seq_length, (lambda a, b: a < b)):
           continue
-        if length.max_value() > batch_size:
-          print("warning: sequence length (%i) larger than limit (%i)" % (length.max_value(), batch_size), file=log.v4)
+        if length.any_compare(batch_size, (lambda a, b: a > b)):
+          print("warning: sequence length (%r) larger than limit (%r)" % (length, batch_size), file=log.v4)
         if self.rnd_seq_drop.random() < seq_drop:
           continue
         dt, ds = batch.try_sequence_as_slice(length)
-        if ds > 1 and ((dt * ds).max_value() > batch_size or ds > max_seqs):
+        if ds > 1 and ((dt * ds).any_compare(batch_size, (lambda a, b: a > b)) or ds > max_seqs):
           yield batch
           batch = Batch()
         batch.add_sequence_as_slice(seq_idx=seq_idx, seq_start_frame=t_start, length=length)
@@ -865,7 +866,8 @@ class Dataset(object):
           num_frames = NumbersDict.min([length, batch_size - batch.get_all_slices_num_frames()])
           assert num_frames.max_value() > 0
           batch.add_frames(seq_idx=seq_idx, seq_start_frame=t_start, length=num_frames)
-          if batch.get_all_slices_num_frames() >= batch_size or batch.get_num_seqs() > max_seqs:
+          if (NumbersDict(batch.get_all_slices_num_frames()).any_compare(batch_size, (lambda a, b: a >= b)) or
+              batch.get_num_seqs() > max_seqs):
             yield batch
             batch = Batch()
           t_start += num_frames

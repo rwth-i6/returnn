@@ -868,7 +868,7 @@ class Engine(object):
     self.dev_data = dev_data
     self.eval_data = eval_data
     self.start_epoch, self.start_batch = self.get_train_start_epoch_batch(config)
-    self.batch_size = config.int('batch_size', 1)
+    self.batch_size = config.typed_value('batch_size', 1)
     self.shuffle_batches = config.bool('shuffle_batches', False)
     self.update_batch_size = config.int('update_batch_size', 0)
     self.save_model_epoch_interval = config.int('save_interval', 1)
@@ -1144,7 +1144,7 @@ class Engine(object):
 
   def train(self):
     print("start training at epoch %i and step %i" % (self.start_epoch, self.start_batch), file=log.v3)
-    print("using batch size: %i, max seqs: %i" % (self.batch_size, self.max_seqs), file=log.v4)
+    print("using batch size: %r, max seqs: %i" % (self.batch_size, self.max_seqs), file=log.v4)
     print("learning rate control:", self.learning_rate_control, file=log.v4)
     print("pretrain:", self.pretrain, file=log.v4)
     self.dataset_batches.clear()
