@@ -281,10 +281,10 @@ class Dataset(object):
       # where num == max_seqs, batch_size = inf, max_seq_len = inf, chunking = None.
       _, num = self.seq_ordering.split(":")
       num = int(num)
-      parts = []
-      for i in range(num):
-        parts.append(numpy.arange(num_seqs // num, dtype="int64") * num + i)
-      seq_index = list(numpy.concatenate(parts, axis=0))
+      seq_index = numpy.arange(num_seqs // num, dtype="int64").repeat(num)
+      for i in range(1, num):
+        seq_index[i::num] += i * (num_seqs // num)
+      seq_index = list(seq_index)
     elif self.seq_ordering == 'reverse':
       seq_index = list(reversed(seq_index))
     elif self.seq_ordering == 'sorted':
