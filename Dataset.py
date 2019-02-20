@@ -276,6 +276,15 @@ class Dataset(object):
     seq_index = list(range(num_seqs)); """ :type: list[int]. the real seq idx after sorting """
     if self.seq_ordering == 'default':
       pass  # Keep order as-is.
+    elif self.seq_ordering.startswith("default_every_n:"):
+      # This order is useful if you have "initial_state": "keep_over_epoch",
+      # where num == max_seqs, batch_size = inf, max_seq_len = inf, chunking = None.
+      _, num = self.seq_ordering.split(":")
+      num = int(num)
+      parts = []
+      for i in range(num):
+        parts.append(numpy.arange(num_seqs // num, dtype="int64") * num + i)
+      seq_index = list(numpy.concatenate(parts, axis=0))
     elif self.seq_ordering == 'reverse':
       seq_index = list(reversed(seq_index))
     elif self.seq_ordering == 'sorted':
