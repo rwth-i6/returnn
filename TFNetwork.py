@@ -104,7 +104,8 @@ class ExternData(object):
         continue
       data = self.data[key]
       data_sparse = dataset.is_data_sparse(key)
-      assert data.sparse == data_sparse, "key %r sparse mismatch. %s" % (key, base_err_msg)
+      # If data.dim is None, it's ok to ignore.
+      assert data.sparse == data_sparse or data.dim is None, "key %r sparse mismatch. %s" % (key, base_err_msg)
       data_dtype = dataset.get_data_dtype(key)
       assert data.dtype == data_dtype, "key %r dtype mismatch. %s" % (key, base_err_msg)
       data_dim = dataset.get_data_dim(key)
