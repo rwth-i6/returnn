@@ -1609,13 +1609,17 @@ def variable_scalar_summaries_dict(x, name=None):
     return {}
   if not name:
     name = get_base_name(x)
-  mean = tf.reduce_mean(x)
-  stddev = tf.sqrt(tf.reduce_mean(tf.square(x - mean)))
+  if x.dtype.is_integer:
+    x_float = tf.to_float(x)
+  else:
+    x_float = x
+  mean = tf.reduce_mean(x_float)
+  stddev = tf.sqrt(tf.reduce_mean(tf.square(x_float - mean)))
   return {
     '%s_mean' % name: mean,
     '%s_stddev' % name: stddev,
-    '%s_rms' % name: tf.sqrt(tf.reduce_mean(tf.square(x))),
-    '%s_l2' % name: tf.sqrt(tf.nn.l2_loss(x) * 0.5),
+    '%s_rms' % name: tf.sqrt(tf.reduce_mean(tf.square(x_float))),
+    '%s_l2' % name: tf.sqrt(tf.nn.l2_loss(x_float) * 0.5),
     '%s_max' % name: tf.reduce_max(x),
     '%s_min' % name: tf.reduce_min(x)}
 
