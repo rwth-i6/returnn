@@ -184,10 +184,6 @@ class HDFDataset(CachedDataset):
       targets = None
       if 'targets' in fin:
         targets = {k: fin['targets/data/' + k] for k in fin['targets/data']}
-      if self.seq_ordering == 'default' or True:
-        inputs = inputs[...]
-        if 'targets' in fin:
-          targets = {k: targets[k][...] for k in targets}
       for idc, ids in file_info[i]:
         s = ids - self.file_start[i]
         p = self.file_seq_start[i][s]
