@@ -81,6 +81,7 @@ class MetaDataset(CachedDataset2):
                datasets,
                data_map,
                seq_list_file=None,
+               seq_order_control_dataset=None,
                seq_lens_file=None,
                data_dims=None,
                data_dtypes=None,
@@ -89,10 +90,12 @@ class MetaDataset(CachedDataset2):
     :param dict[str,dict[str]] datasets: dataset-key -> dataset-kwargs. including keyword 'class' and maybe 'files'
     :param dict[str,(str,str)] data_map: self-data-key -> (dataset-key, dataset-data-key).
       Should contain 'data' as key. Also defines the target-list, which is all except 'data'.
-    :param str seq_list_file: filename. pickle. dict[str,list[str]], dataset-key -> list of sequence tags. Can be None
-      if tag format is the same for all datasets. Then sequence list will be default sequence order of default dataset.
-      The default dataset is ``data_map["data"][0]``.
-    :param str seq_lens_file: filename. json. dict[str,dict[str,int]], seq-tag -> data-key -> len.
+    :param str|None seq_list_file: filename. pickle. dict[str,list[str]], dataset-key -> list of sequence tags.
+      Can be None if tag format is the same for all datasets.
+        Then the sequence list will be default sequence order of default dataset (``data_map["data"][0]``),
+        or seq_order_control_dataset.
+    :param str|None seq_order_control_dataset: if set, this dataset will define the order for each epoch.
+    :param str|None seq_lens_file: filename. json. dict[str,dict[str,int]], seq-tag -> data-key -> len.
       Use if getting sequence length from loading data is too costly.
     :param dict[str,(int,int)] data_dims: self-data-key -> data-dimension, len(shape) (1 ==> sparse repr).
        Deprecated/Only to double check. Read from data if not specified.
@@ -107,7 +110,8 @@ class MetaDataset(CachedDataset2):
     self.data_keys = set(self.data_map.keys()); ":type: set[str]"
     assert "data" in self.data_keys
     self.target_list = sorted(self.data_keys - {"data"})
-    self.default_dataset_key = self.data_map["data"][0]
+    self.default_dataset_key = seq_order_control_dataset or self.data_map["data"][0]
+    self.seq_order_control_dataset = seq_order_control_dataset
 
     # This will only initialize datasets needed for features occuring in data_map
     self.datasets = {
@@ -216,8 +220,14 @@ class MetaDataset(CachedDataset2):
       self._num_seqs = len(self.seq_list_ordered[self.default_dataset_key])
       return False
 
+    seq_order_dataset = None
     if seq_list:
       seq_index = [self.tag_idx[tag] for tag in seq_list]
+    elif self.seq_order_control_dataset:
+      seq_order_dataset = self.datasets[self.seq_order_control_dataset]
+      assert isinstance(seq_order_dataset, Dataset)
+      seq_order_dataset.init_seq_order(epoch=epoch)
+      seq_index = seq_order_dataset.get_current_seq_order()
     else:
       if self._seq_lens:
         get_seq_len = lambda s: self._seq_lens[self.seq_list_original[self.default_dataset_key][s]]["data"]
@@ -229,6 +239,9 @@ class MetaDataset(CachedDataset2):
     self.seq_list_ordered = {key: [ls[s] for s in seq_index] for (key, ls) in self.seq_list_original.items()}
 
     for dataset_key, dataset in self.datasets.items():
+      assert isinstance(dataset, Dataset)
+      if dataset is seq_order_dataset:
+        continue
       dataset.init_seq_order(epoch=epoch, seq_list=self.seq_list_ordered[dataset_key])
     return True
 

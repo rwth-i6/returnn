@@ -2113,6 +2113,9 @@ class LibriSpeechCorpus(CachedDataset2):
         print("%s, epoch %i. No filter for this epoch." % (self, epoch), file=log.v4)
     return True
 
+  def get_current_seq_order(self):
+    return self._seq_order
+
   def _get_ref_seq_idx(self, seq_idx):
     """
     :param int seq_idx:

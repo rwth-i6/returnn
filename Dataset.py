@@ -370,6 +370,15 @@ class Dataset(object):
     self.rnd_seq_drop = Random(epoch or 1)
     return False
 
+  def get_current_seq_order(self):
+    """
+    :return: many datasets use self.get_seq_order_for_epoch. this function would return the current seq order
+      for the current epoch, after self.init_seq_order was called.
+      Not all datasets implement this.
+    :rtype: list[int]
+    """
+    raise NotImplementedError
+
   def _base_init(self):
     self.nbytes = 0
     self.zpad = None
