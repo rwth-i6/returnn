@@ -462,6 +462,21 @@ class Dataset(object):
     """
     return "seq-%i" % sorted_seq_idx
 
+  def get_all_tags(self):
+    """
+    :return: list of all seq tags, of the whole dataset, without partition epoch.
+      Note that this is not possible with all datasets.
+    :rtype: list[str]
+    """
+    old_partition_epoch = self.partition_epoch
+    try:
+      all_tags = [None] * self.num_seqs
+      for seq_idx in range(self.num_seqs):
+        all_tags[seq_idx] = self.get_tag(seq_idx)
+      return all_tags
+    finally:
+      self.partition_epoch = old_partition_epoch
+
   def have_corpus_seq_idx(self):
     """
     :rtype: bool

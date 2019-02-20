@@ -2143,6 +2143,9 @@ class LibriSpeechCorpus(CachedDataset2):
     """
     return self._get_tag(self._get_ref_seq_idx(seq_idx))
 
+  def get_all_tags(self):
+    return [self._get_tag(i) for i in range(len(self._reference_seq_order))]
+
   def _get_transcription(self, seq_idx):
     """
     :param int seq_idx:

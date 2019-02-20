@@ -42,6 +42,10 @@ class HDFDataset(CachedDataset):
 
   @staticmethod
   def _decode(s):
+    """
+    :param str|bytes s:
+    :rtype: str
+    """
     if not isinstance(s, str):
       s = s.decode("utf-8")
     s = s.split('\0')[0]
@@ -208,6 +212,9 @@ class HDFDataset(CachedDataset):
   def get_tag(self, sorted_seq_idx):
     ids = self._seq_index[self._index_map[sorted_seq_idx]]
     return self._get_tag_by_real_idx(ids)
+
+  def get_all_tags(self):
+    return list(map(self._decode, self._tags))
 
   def is_data_sparse(self, key):
     if self.get_data_dtype(key).startswith("int"):

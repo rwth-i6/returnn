@@ -170,9 +170,10 @@ class MetaDataset(CachedDataset2):
       # other datasets. This can only work if all datasets have the same tag format and the sequences in the other
       # datasets are a subset of those in the default dataset.
       default_dataset = self.datasets[self.default_dataset_key]
+      assert isinstance(default_dataset, Dataset)
       print("Reading sequence list for MetaDataset %r from sub-dataset %r" % (self.name, default_dataset.name),
             file=log.v3)
-      seq_list = [default_dataset.get_tag(seq_idx) for seq_idx in range(default_dataset.num_seqs)]
+      seq_list = default_dataset.get_all_tags()
       # Catch index out of bounds errors. Whether the tags are actually valid will be checked in _check_dataset_seq().
       for key in self.dataset_keys:
         if key != self.default_dataset_key:  # for default dataset, we can allow these
