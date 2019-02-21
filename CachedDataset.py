@@ -19,7 +19,7 @@ class CachedDataset(Dataset):
     """
     super(CachedDataset, self).__init__(**kwargs)
     self.cache_byte_size_total_limit = cache_byte_size
-    if cache_byte_size <= 0:
+    if cache_byte_size < 0:
       self.cache_byte_size_limit_at_start = 0
     else:
      self.cache_byte_size_limit_at_start = max(cache_byte_size * 2 // 3, 1)
