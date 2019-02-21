@@ -7,8 +7,10 @@ from Config import Config
 from Engine import Engine
 from Device import Device
 from Log import log
+import TheanoUtil
 
 log.initialize()
+TheanoUtil.monkey_patches()
 
 
 def test_Device_blocking_init():

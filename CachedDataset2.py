@@ -1,7 +1,13 @@
 
 
 from Dataset import Dataset, DatasetSeq
-import math
+from threading import Thread, Condition, RLock
+try:
+  # noinspection PyCompatibility
+  from _thread import interrupt_main
+except ImportError:
+  # noinspection PyUnresolvedReferences,PyCompatibility
+  from thread import interrupt_main
 
 
 class CachedDataset2(Dataset):
@@ -151,6 +157,9 @@ class CachedDataset2(Dataset):
     return self._get_seq(sorted_seq_idx).ctc_targets
 
   def get_tag(self, sorted_seq_idx):
+    # get_tag() can be called before the seq is loaded via load_seqs().
+    # Thus, we just call load_seqs() ourselves here.
+    self.load_seqs(self.expected_load_seq_start, sorted_seq_idx + 1)
     return self._get_seq(sorted_seq_idx).seq_tag
 
   def get_data_keys(self):
@@ -197,3 +206,77 @@ class CachedDataset2(Dataset):
   def get_data_dtype(self, key):
     self._load_something()
     return self.added_data[0].get_data(key).dtype
+
+
+class SingleStreamPipeDataset(CachedDataset2):
+  """
+  Producer: Gets data from somewhere / an external source, running in some thread.
+  Consumer: The thread / code which calls load_seqs and get_data here.
+  """
+
+  def __init__(self, dim, ndim, sparse=False, dtype="float32"):
+    """
+    :param int dim:
+    :param int ndim:
+    :param bool sparse:
+    :param str dtype:
+    """
+    super(SingleStreamPipeDataset, self).__init__()
+    self.num_inputs = dim
+    self.num_outputs = {"data": [dim, ndim]}
+    self.sparse = sparse
+    self.dtype = dtype
+    self.condition = Condition()
+    self.producer_seq_idx = 0
+    self.producer_data = []
+    self.producer_finished = False
+
+  def is_data_sparse(self, key):
+    return self.sparse
+
+  def get_data_dtype(self, key):
+    return self.dtype
+
+  def init_seq_order(self, epoch=None, seq_list=None):
+    assert not seq_list
+    super(SingleStreamPipeDataset, self).init_seq_order(epoch=epoch)
+    with self.condition:
+      self.producer_seq_idx = 0
+      self.producer_data.clear()
+      self.producer_finished = False
+    return True
+
+  def producer_add_data(self, data, seq_tag=None):
+    """
+    :param numpy.ndarray data:
+    :param str|None seq_tag:
+    """
+    with self.condition:
+      if seq_tag is None:
+        seq_tag = "seq-%i" % self.producer_seq_idx
+      seq = DatasetSeq(features=data, seq_idx=self.producer_seq_idx, seq_tag=seq_tag)
+      self.producer_seq_idx += 1
+      self.producer_data.append(seq)
+      self.condition.notify()
+
+  def producer_set_finished(self):
+    with self.condition:
+      self.producer_finished = True
+      self.condition.notify()
+
+  def _collect_single_seq(self, seq_idx):
+    """
+    :type seq_idx: int
+    :rtype: DatasetSeq | None
+    :returns DatasetSeq or None if seq_idx >= num_seqs.
+    """
+    with self.condition:
+      while True:
+        if self.producer_data:
+          seq = self.producer_data.pop(0)
+          assert isinstance(seq, DatasetSeq)
+          assert seq.seq_idx == seq_idx
+          return seq
+        if self.producer_finished:
+          return None
+        self.condition.wait()

@@ -243,6 +243,46 @@ def test_Data_copy_compatible_to_time_major():
   assert d2a.feature_dim_axis == d1.feature_dim_axis
 
 
+def test_Data_sparse_int32_with_dim_kwargs_init():
+  data = Data(name="classes_with_dim", shape=(None,), dim=10, sparse=True, dtype="int32")
+  assert data.sparse and data.have_time_axis() and data.shape == (None,) and data.dim == 10
+
+
+def test_Data_int32_no_dim_kwargs_init():
+  data = Data(name="classes_with_no_dim", shape=(None,), dtype="int32")
+  assert data.have_time_axis() and data.shape == (None,)
+
+
+def test_Data_copy_template_excluding_spatial_dim():
+  att_weights = Data(name="att_weights", shape=(None, None, 1), batch_dim_axis=2)
+  rem_enc_time = att_weights.copy_template_excluding_spatial_dim(-1)
+  assert rem_enc_time.shape == (None, 1) and rem_enc_time.batch_dim_axis == 1
+
+
+def test_ExternData_via_config():
+  # Like ExternData.init_from_config.
+  from Config import Config
+  config = Config({
+    "extern_data": {
+      "data": (40, 2),
+      "classes": (10025, 1),
+      "att_weights": {"shape": (None, None, 1)},
+      "att_weights_sizes": {"shape": (None,), "dtype": "int32"}
+    }})
+  from NetworkDescription import LayerNetworkDescription
+  data_dims = LayerNetworkDescription.tf_extern_data_types_from_config(config)
+  data = {}
+  for key, init_args in data_dims.items():
+    data[key] = Data(name=key, auto_create_placeholders=True, **init_args)
+  pprint(data)
+  data_data = data["data"]
+  assert isinstance(data_data, Data)
+  assert data_data.have_time_axis() and not data_data.sparse and data_data.shape == (None, 40)
+  att_weights_sizes = data["att_weights_sizes"]
+  assert isinstance(att_weights_sizes, Data)
+  assert att_weights_sizes.have_time_axis()
+
+
 def test_4D_Data_get_placeholder_flattened():
   import numpy as np
   size_placeholder = tf.constant(np.full((7,), 9), dtype=tf.int32)
@@ -1867,15 +1907,6 @@ def test_get_op_attrib_keys__is_variable_initialized():
     print("op:", check.op)
     assert_equal(check.op.type, "IsVariableInitialized")
     print("attrib keys:", get_op_attrib_keys(check.op))
-
-
-def test_get_op_attrib_keys__string_strip():
-  x = tf.string_strip("  foo  ")
-  print("x:", x)
-  assert isinstance(x, tf.Tensor)
-  print("op:", x.op)
-  assert_equal(x.op.type, "StringStrip")
-  print("attrib keys:", get_op_attrib_keys(x.op))
 
 
 def test_print_graph_output():

@@ -26,6 +26,9 @@ log.initialize(verbosity=[5])
 
 @contextlib.contextmanager
 def make_scope():
+  """
+  :rtype: tf.Session
+  """
   with tf.Graph().as_default() as graph:
     with tf.Session(graph=graph) as session:
       yield session
@@ -361,36 +364,100 @@ def test_SplitDimsLayer_resolve_dims():
   assert_equal(SplitDimsLayer._resolve_dims(old_dim=2 * 3 * 5, new_dims=(2, 3, -1, 1)), (2, 3, 5, 1))
 
 
-def test_MergeDimsLayer():
+def _check_MergeDimsLayer(session, in_data_opts, in_static_shape, opts, out_data_shape, out_static_shape):
+  """
+  :param tf.Session session:
+  :param dict[str] in_data_opts:
+  :param tuple[int] in_static_shape:
+  :param dict[str] opts: for MergeDimsLayer
+  :param tuple[int|None] out_data_shape:
+  :param tuple[int] out_static_shape:
+  :rtype: MergeDimsLayer
+  """
+  net = TFNetwork(extern_data=ExternData())
+  rnd = numpy.random.RandomState(42)
+  src = InternalLayer(name="src", network=net, out_type=in_data_opts)
+  print("input:", src.output)
+  src.output.placeholder = tf.constant(rnd.normal(size=in_static_shape).astype("float32"), dtype=tf.float32)
+  src.output.size_placeholder = {}  # not sure if enough...
+  opts = opts.copy()
+  print("opts:", opts)
+  opts.update({"network": net, "name": "merge_dims_test", "sources": [src]})
+  out_data = MergeDimsLayer.get_out_data_from_opts(**opts)
+  print("output:", out_data)
+  out_data.sanity_check(ignore_placeholder=True)  # placeholder might be overwritten later
+  assert_equal(out_data.shape, out_data_shape)
+  layer = MergeDimsLayer(output=out_data, **opts)
+  assert_equal(layer.output.shape, out_data_shape)
+  out_np = session.run(layer.output.placeholder)
+  assert_equal(out_np.shape, out_static_shape)
+  return layer
+
+
+def test_MergeDimsLayer_basic():
   with make_scope() as session:
-    net = TFNetwork(extern_data=ExternData())
-    rnd = numpy.random.RandomState(42)
+    _check_MergeDimsLayer(session, {"shape": (4, 7), "time_dim_axis": None}, (2, 4, 7), {"axes": "except_batch"}, (4 * 7,), (2, 4 * 7))
+    _check_MergeDimsLayer(session, {"shape": (4, None, 7), "time_dim_axis": None}, (2, 4, 3, 7), {"axes": "static"}, (None, 4 * 7), (2, 3, 4 * 7))
+    _check_MergeDimsLayer(session, {"shape": (4, None, 7), "time_dim_axis": 2}, (2, 4, 3, 7), {"axes": "static"}, (None, 4 * 7), (2, 3, 4 * 7))
 
-    def check(in_data_opts, in_static_shape, opts, out_data_shape, out_static_shape):
-      """
-      :param dict[str] in_data_opts:
-      :param tuple[int] in_static_shape:
-      :param dict[str] opts:
-      :param tuple[int|None] out_data_shape:
-      :param tuple[int] out_static_shape:
-      """
-      src = InternalLayer(name="src", network=net, out_type=in_data_opts)
-      print("input:", src.output)
-      src.output.placeholder = tf.constant(rnd.normal(size=in_static_shape).astype("float32"), dtype=tf.float32)
-      src.output.size_placeholder = {}  # not sure if enough...
-      opts = opts.copy()
-      opts.update({"network": net, "name": "merge_dims_test", "sources": [src]})
-      out_data = MergeDimsLayer.get_out_data_from_opts(**opts)
-      print("output:", out_data)
-      assert_equal(out_data.shape, out_data_shape)
-      layer = MergeDimsLayer(output=out_data, **opts)
-      assert_equal(layer.output.shape, out_data_shape)
-      out_np = session.run(layer.output.placeholder)
-      assert_equal(out_np.shape, out_static_shape)
 
-    check({"shape": (4, 7), "time_dim_axis": None}, (2, 4, 7), {"axes": "except_batch"}, (4 * 7,), (2, 4 * 7))
-    check({"shape": (4, None, 7), "time_dim_axis": None}, (2, 4, 3, 7), {"axes": "static"}, (None, 4 * 7), (2, 3, 4 * 7))
-    check({"shape": (4, None, 7), "time_dim_axis": 2}, (2, 4, 3, 7), {"axes": "static"}, (None, 4 * 7), (2, 3, 4 * 7))
+def test_MergeDimsLayer_batch_time_ext():
+  with make_scope() as session:
+    n_batch = 11
+    n_time = 13
+    _check_MergeDimsLayer(
+      session, {"shape": (None, 5, 3)}, (n_batch, n_time, 5, 3), {"axes": "BT"}, (5, 3), (n_batch * n_time, 5, 3))
+
+
+def test_MergeDimsLayer_batch_time_time_major():
+  with make_scope() as session:
+    n_batch = 11
+    n_time = 13
+    layer = _check_MergeDimsLayer(
+      session,
+      {"shape": (None, 5), "time_dim_axis": 0, "batch_dim_axis": 1}, (n_time, n_batch, 5),
+      {"axes": "BT"}, (5,), (n_time * n_batch, 5))
+    assert layer.output.batch_dim_axis == 0
+    assert layer.output.time_dim_axis is None
+
+
+def test_MergeDimsLayer_batch_time_time_major_ext():
+  with make_scope() as session:
+    n_batch = 11
+    n_time = 13
+    layer = _check_MergeDimsLayer(
+      session,
+      {"shape": (None, 5, 3), "time_dim_axis": 0, "batch_dim_axis": 1}, (n_time, n_batch, 5, 3),
+      {"axes": "BT"}, (5, 3), (n_time * n_batch, 5, 3))
+    assert layer.output.batch_dim_axis == 0
+    assert layer.output.time_dim_axis == 1  # Note: This is currently the behavior, but maybe we change that.
+
+
+def test_MergeDimsLayer_SplitBatchTimeLayer_time_major():
+  n_batch = 3
+  n_time = 4
+  n_input_dim = 5
+  # Time major
+  input_data = numpy.arange(n_time * n_batch * n_input_dim).reshape((n_time, n_batch, n_input_dim)).astype("float32")
+  with make_scope() as session:
+    net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
+    input_layer = net.add_layer(
+      "input", InternalLayer,
+      output=Data(
+        name="input", shape=(None, n_input_dim), time_dim_axis=0, batch_dim_axis=1,
+        placeholder=tf.constant(input_data), size_placeholder={0: tf.constant([n_time] * n_batch)}))
+    assert input_layer.output.is_time_major
+    net.construct_from_dict({
+      "merge_dims": {"class": "merge_dims", "from": "input", "axes": "BT"},
+      "split_dims": {"class": "split_batch_time", "from": "merge_dims", "base": "input"},
+      "output": {"class": "copy", "from": "split_dims"}
+    })
+    output = net.get_default_output_layer().output
+    # Depending on implementation, output could be batch-major or time-major.
+    output = output.copy_as_time_major()  # such that we can compare easily to input_data
+    assert output.is_time_major and output.shape == (None, n_input_dim)
+    output_data = session.run(output.placeholder)
+    numpy.testing.assert_almost_equal(input_data, output_data)
 
 
 def test_ConvLayer_get_valid_out_dim():
@@ -1049,6 +1116,51 @@ def test_ReuseParams_rec():
     feed = make_feed_dict(10)
     fwd_out, fwd_out_copy = session.run([network.layers["rec_fwd"].output.placeholder, network.layers["rec_fwd_copy"].output.placeholder], feed_dict=feed)
     numpy.testing.assert_array_equal(fwd_out, fwd_out_copy)
+
+
+def test_LossAsIs_custom_dim():
+  config = Config()
+  config.update({
+    "extern_data": {
+      "data": (40, 2),
+      "classes": (10025, 1),
+      "att_weights": {"shape": (None, None, 1)},
+      "att_weights_sizes": {"shape": (None,), "dtype": "int32"}
+    },
+    "debug_print_layer_output_template": True,
+  })
+  print("Creating network...")
+  network = TFNetwork(config=config, train_flag=True)
+  net_dict = {
+    "att_distill_loss": {
+      "class": "eval", "from": ["energy", "att_weights"],
+      "out_type": (lambda sources, **kwargs: sources[0].output.copy_template_excluding_spatial_dim(-1)),
+      "eval": "softmax_cross_entropy_over_size(" +
+              "logits=source(0, as_data=True, auto_convert=False)," +
+              "labels=source(1, as_data=True, auto_convert=False))",
+      "loss": "as_is"},
+  }
+  n_batch = 5
+  n_enc_time = 11
+  n_dec_time = 7
+  with tf.Session() as session:
+    enc_time = tf.constant([n_enc_time] * n_batch)
+    dec_time = tf.constant([n_dec_time] * n_batch)
+    network.add_layer(name="energy", layer_class=InternalLayer, output=Data(
+      name="energy",
+      shape=(None, None, 1), dim=1, batch_dim_axis=2,
+      size_placeholder={0: dec_time, 1: enc_time},
+      placeholder=tf.constant(numpy.random.normal(size=(n_dec_time, n_enc_time, n_batch, 1)).astype("float32"))))
+    network.add_layer(name="att_weights", layer_class=InternalLayer, output=Data(
+      name="att_weights",
+      shape=(None, None, 1), dim=1, batch_dim_axis=0,
+      size_placeholder={0: dec_time, 1: enc_time},
+      placeholder=tf.expand_dims(
+        tf.nn.softmax(
+          tf.constant(numpy.random.normal(size=(n_batch, n_dec_time, n_enc_time)).astype("float32"))), -1)))
+    network.construct_from_dict(net_dict)
+    loss = session.run(network.get_total_loss())
+    assert loss
 
 
 if __name__ == "__main__":

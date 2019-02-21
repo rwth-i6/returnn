@@ -14,8 +14,7 @@ import rnn
 from Log import log
 import argparse
 import numpy
-from better_exchook import pretty_print
-from Util import Stats, hms
+from Util import Stats, hms, pretty_print
 import Util
 
 
@@ -118,7 +117,7 @@ def dump_dataset(dataset, options):
         numpy.savetxt("%s%i.targets.%s%s" % (options.dump_prefix, seq_idx, target, options.dump_postfix), targets, fmt='%i')
       elif options.type == "stdout":
         extra = ""
-        if target in dataset.labels:
+        if target in dataset.labels and len(dataset.labels[target]) > 1:
           labels = dataset.labels[target]
           if len(labels) < 1000 and all([len(l) == 1 for l in labels]):
             join_str = ""
@@ -152,16 +151,20 @@ def init(config_str):
   """
   rnn.initBetterExchook()
   rnn.initThreadJoinHack()
+  datasetDict = None
+  configFilename = None
   if config_str.strip().startswith("{"):
     print("Using dataset %s." % config_str)
     datasetDict = eval(config_str.strip())
-    configFilename = None
+  elif config_str.endswith(".hdf"):
+    datasetDict = {"class": "HDFDataset", "files": [config_str]}
+    print("Using dataset %r." % datasetDict)
+    assert os.path.exists(config_str)
   else:
-    datasetDict = None
     configFilename = config_str
     print("Using config file %r." % configFilename)
     assert os.path.exists(configFilename)
-  rnn.initConfig(configFilename=configFilename, commandLineOptions=[])
+  rnn.initConfig(configFilename=configFilename, default_config={"cache_size": "0"})
   global config
   config = rnn.config
   config.set("log", None)

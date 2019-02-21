@@ -586,7 +586,7 @@ class Layer(Container):
       # Or shape[0]==1 with index[0]==0. See Dataset.shapes_for_batches().
       # Use source index in that case.
       have_zero = T.le(index.shape[0], 1) * T.eq(T.sum(index[0]), 0)
-      index = ifelse(have_zero, self.sources[0].index, index)
+      index = ifelse(have_zero, T.cast(self.sources[0].index,'int8'), T.cast(index,'int8'))
     return index
 
   def find_data_layer(self):

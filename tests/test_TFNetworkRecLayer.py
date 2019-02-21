@@ -9,7 +9,7 @@ import tensorflow as tf
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + "/..")
-from nose.tools import assert_equal, assert_is_instance
+from nose.tools import assert_equal, assert_not_equal, assert_is_instance
 from numpy.testing.utils import assert_almost_equal, assert_allclose
 import unittest
 import numpy.testing
@@ -768,7 +768,7 @@ def test_RecLayer_NativeLstm_Nan():
     updater.set_learning_rate(0.1, session=session)
     updater.init_optimizer_vars(session=session)
     optim_op = updater.get_optim_op()
-    assert isinstance(updater.optimizer, tf.train.AdamOptimizer)
+    assert isinstance(updater.optimizer.get_default_optimizer(), tf.train.AdamOptimizer)
     adam_weights_m_t = updater.optimizer.get_slot(var=weights_t, name="m")
     adam_weights_v_t = updater.optimizer.get_slot(var=weights_t, name="v")
     assert isinstance(adam_weights_m_t, tf.Variable)
@@ -1430,6 +1430,113 @@ def test_rec_layer_move_out_of_loop():
   train(train_not_optim_net)
 
 
+def test_rec_layer_move_out_of_loop_keep_constraints():
+  from TFNetworkRecLayer import _SubnetworkRecCell
+  from TFUtil import get_global_train_flag_placeholder
+  n_src_dim = 5
+  n_tgt_dim = 7
+  beam_size = 12
+  config = Config()
+  config.update({"debug_print_layer_output_template": True})
+
+  def get_net_dict(l2_target_embed=0.0, l2_readout_in=0.0):
+    return {
+      "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6},
+
+      "lstm0_fw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": 1, "from": ["source_embed"]},
+      "lstm0_bw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": -1, "from": ["source_embed"]},
+
+      "lstm1_fw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": 1, "from": ["lstm0_fw", "lstm0_bw"]},
+      "lstm1_bw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": -1, "from": ["lstm0_fw", "lstm0_bw"]},
+
+      "encoder": {"class": "copy", "from": ["lstm1_fw", "lstm1_bw"]},
+      "enc_ctx": {"class": "linear", "activation": None, "with_bias": True, "from": ["encoder"], "n_out": 10},
+      "fertility": {"class": "linear", "activation": "sigmoid", "with_bias": False, "from": ["encoder"], "n_out": 1},
+
+      "output": {"class": "rec", "from": [], "unit": {
+        'output': {'class': 'choice', 'target': 'classes', 'beam_size': beam_size, 'from': ["output_prob"],
+                   "initial_output": 0},
+        "end": {"class": "compare", "from": ["output"], "value": 0},
+        'target_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'], "n_out": 6,
+                         "initial_output": "apply(0)", "L2": l2_target_embed},
+        "weight_feedback": {"class": "linear", "activation": None, "with_bias": False, "from": ["prev:accum_att_weights"],
+                            "n_out": 10},
+        "prev_s_state": {"class": "get_last_hidden_state", "from": ["prev:s"], "n_out": 20},
+        "prev_s_transformed": {"class": "linear", "activation": None, "with_bias": False, "from": ["prev_s_state"],
+                               "n_out": 10},
+        "energy_in": {"class": "combine", "kind": "add",
+                      "from": ["base:enc_ctx", "weight_feedback", "prev_s_transformed"], "n_out": 10},
+        "energy_tanh": {"class": "activation", "activation": "tanh", "from": ["energy_in"]},
+        "energy": {"class": "linear", "activation": None, "with_bias": False, "from": ["energy_tanh"], "n_out": 1},
+        "att_weights": {"class": "softmax_over_spatial", "from": ["energy"]},  # (B, enc-T, 1)
+        "accum_att_weights": {"class": "eval", "from": ["prev:accum_att_weights", "att_weights", "base:fertility"],
+                              "eval": "source(0) + source(1) / (2.0 * source(2))",
+                              "out_type": {"dim": 1, "shape": (None, 1)}},
+        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder"},
+        "s": {"class": "rnn_cell", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+              "initial_state": "var", "from": ["target_embed", "att"], "n_out": 10},
+        "readout_in": {"class": "linear", "from": ["prev:s", "prev:target_embed", "att"], "activation": None,
+                       "n_out": 10, "L2": l2_readout_in},
+        "readout": {"class": "reduce_out", "mode": "max", "num_pieces": 2, "from": ["readout_in"]},
+        "output_prob": {"class": "softmax", "from": ["readout"], "target": "classes", "loss": "ce"}
+      }, "target": "classes", "max_seq_len": 20},
+
+      "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance", "target": "classes"}
+    }
+
+  print("Constructing train network without constraints")
+  tf.reset_default_graph()
+  extern_data = ExternData({
+    "data": {"dim": n_src_dim, "sparse": True},
+    "classes": {"dim": n_tgt_dim, "sparse": True, "available_for_inference": False}})
+  train_net = TFNetwork(
+    extern_data=extern_data, search_flag=False, train_flag=get_global_train_flag_placeholder(), config=config)
+  assert train_net.eval_flag is True
+  train_net.construct_from_dict(get_net_dict(l2_target_embed=0.0, l2_readout_in=0.0))
+  train_out_layer = train_net.layers["output"]
+  assert isinstance(train_out_layer, RecLayer)
+  assert isinstance(train_out_layer.cell, _SubnetworkRecCell)
+  assert_equal(set(train_out_layer.cell.input_layers_moved_out), {"output", "target_embed"})
+  assert_equal(set(train_out_layer.cell.output_layers_moved_out), {"output_prob", "readout_in", "readout"})
+  assert_equal(train_net.get_total_constraints(), 0)
+
+  print("Constructing train network with L2 norm on moved out input layer")
+  tf.reset_default_graph()
+  extern_data = ExternData({
+    "data": {"dim": n_src_dim, "sparse": True},
+    "classes": {"dim": n_tgt_dim, "sparse": True, "available_for_inference": False}})
+  train_net = TFNetwork(
+    extern_data=extern_data, search_flag=False, train_flag=get_global_train_flag_placeholder(), config=config)
+  assert train_net.eval_flag is True
+  train_net.construct_from_dict(get_net_dict(l2_target_embed=0.01, l2_readout_in=0.0))
+  train_out_layer = train_net.layers["output"]
+  assert isinstance(train_out_layer, RecLayer)
+  assert isinstance(train_out_layer.cell, _SubnetworkRecCell)
+  assert_equal(set(train_out_layer.cell.input_layers_moved_out), {"output", "target_embed"})
+  assert_equal(set(train_out_layer.cell.output_layers_moved_out), {"output_prob", "readout_in", "readout"})
+  assert_not_equal(train_net.get_total_constraints(), 0)
+
+  print("Constructing train network with L2 norm on moved out output layer")
+  tf.reset_default_graph()
+  extern_data = ExternData({
+    "data": {"dim": n_src_dim, "sparse": True},
+    "classes": {"dim": n_tgt_dim, "sparse": True, "available_for_inference": False}})
+  train_net = TFNetwork(
+    extern_data=extern_data, search_flag=False, train_flag=get_global_train_flag_placeholder(), config=config)
+  assert train_net.eval_flag is True
+  train_net.construct_from_dict(get_net_dict(l2_target_embed=0.0, l2_readout_in=0.01))
+  train_out_layer = train_net.layers["output"]
+  assert isinstance(train_out_layer, RecLayer)
+  assert isinstance(train_out_layer.cell, _SubnetworkRecCell)
+  assert_equal(set(train_out_layer.cell.input_layers_moved_out), {"output", "target_embed"})
+  assert_equal(set(train_out_layer.cell.output_layers_moved_out), {"output_prob", "readout_in", "readout"})
+  assert_not_equal(train_net.get_total_constraints(), 0)
+
+
 def test_rec_layer_search_select_src():
   from TFNetworkRecLayer import _SubnetworkRecCell
   n_src_dim = 5
@@ -1543,7 +1650,7 @@ def test_RnnCellLayer_with_time():
   from GeneratingDataset import DummyDataset
   from TFNetworkLayer import InternalLayer, SourceLayer, ReduceLayer
   train_data = DummyDataset(input_dim=2, output_dim=3, num_seqs=10, seq_len=5)
-  with tf.variable_scope("test_RnnCellLayer_with_time"):
+  with make_scope() as session:
     extern_data = ExternData()
     extern_data.init_from_dataset(train_data)
     net = TFNetwork(extern_data=extern_data)
@@ -2365,6 +2472,47 @@ def test_rec_layer_search_select_src_reuse_layer():
     assert_equal(loop_net.layers["att_weights"].get_search_choices(), prev_out_choice)
     assert_equal(loop_net.layers["att"].get_search_choices(), prev_out_choice)
     assert_equal(loop_net.layers["output_prob"].get_search_choices(), prev_out_choice)
+
+
+def test_onlineblstm():
+  network = {}
+  lstm_dim = 13
+  lstm_window = 5
+
+  def add_lstm(i, direction, src):
+    name = "lstm%i_%s" % (i, {1: "fw", -1: "bw"}[direction])
+    if direction > 0:
+      network[name] = {"class": "rec", "unit": "lstmp", "n_out": lstm_dim, "dropout": 0.1, "L2": 0.01, "direction": 1,
+                       "from": src}
+      return name
+    network["%s_win" % name] = {"class": "window", "window_size": lstm_window, "window_right": lstm_window - 1,
+                                "from": src}  # (B,T,W,D)
+    network["%s_mdims" % name] = {"class": "merge_dims", "axes": "BT", "from": ["%s_win" % name]}  # (B*T,W,D)
+    network["%s_rdims" % name] = {"class": "reinterpret_data", "enforce_batch_major": True, "set_axes": {"T": 1},
+                                  "from": ["%s_mdims" % name]}  # (B*T,W,D)
+    network["%s_rec" % name] = {
+      "class": "rec", "unit": "lstmp", "n_out": lstm_dim, "dropout": 0.1, "L2": 0.01, "direction": -1,
+      "from": ["%s_rdims" % name]}  # (B*T,W,D')
+    network["%s_cur" % name] = {"class": "slice", "axis": "T", "slice_end": 1, "from": ["%s_rec" % name]}  # (B*T,1,D')
+    network["%s_cursq" % name] = {"class": "squeeze", "axis": "T", "from": ["%s_cur" % name]}  # (B*T,D')
+    network["%s_res" % name] = {"class": "split_batch_time", "base": src[0], "from": ["%s_cursq" % name]}  # (B,T,D')
+    return "%s_res" % name
+
+  num_layers = 6
+  src = ["data"]
+  for i in range(num_layers):
+    fwd = add_lstm(i, 1, src)
+    bwd = add_lstm(i, -1, src)
+    src = [fwd, bwd]
+  # Focal Loss, https://arxiv.org/abs/1708.02002
+  network["output"] = {"class": "softmax", "loss": "ce", "loss_opts": {"focal_loss_factor": 2.0}, "from": src}
+  config = Config({
+    "num_inputs": 3,
+    "num_outputs": 7
+  })
+  with make_scope() as session:
+    net = TFNetwork(config=config, train_flag=True)
+    net.construct_from_dict(network)
 
 
 if __name__ == "__main__":

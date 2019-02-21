@@ -43,10 +43,11 @@ quit = False
 server = None; """:type: Server"""
 
 
-def initConfig(configFilename=None, commandLineOptions=(), extra_updates=None):
+def initConfig(configFilename=None, commandLineOptions=(), default_config=None, extra_updates=None):
   """
   :param str|None configFilename:
   :param list[str]|tuple[str] commandLineOptions: e.g. ``sys.argv[1:]``
+  :param dict[str]|None default_config:
   :param dict[str]|None extra_updates:
 
   Initializes the global config.
@@ -87,6 +88,8 @@ def initConfig(configFilename=None, commandLineOptions=(), extra_updates=None):
       i += 1
     commandLineOptions = commandLineOptions[i:]
 
+  if default_config:
+    config.update(default_config)
   if extra_updates:
     config.update(extra_updates)
   if commandLineOptions:
@@ -224,6 +227,8 @@ def initData():
     chunking = config.value("batch_size", "0")
   elif config.value('chunking', "0") == "1": # MLP mode
     chunking = "1"
+  elif config.bool('chunk_eval', False):
+    chunking = config.value('chunking', "0")
   global train_data, dev_data, eval_data
   dev_data, extra_cache_bytes_dev = load_data(
     config, cache_byte_sizes[1], 'dev', chunking=chunking, seq_ordering="sorted", shuffle_frames_of_nseqs=0)
@@ -298,6 +303,8 @@ def initBackendEngine():
   BackendEngine.select_engine(config=config)
   if BackendEngine.is_theano_selected():
     print("Theano:", describe_theano_version(), file=log.v3)
+    import TheanoUtil
+    TheanoUtil.monkey_patches()
   elif BackendEngine.is_tensorflow_selected():
     print("TensorFlow:", describe_tensorflow_version(), file=log.v3)
     if get_tensorflow_version_tuple()[0] == 0:
@@ -307,6 +314,7 @@ def initBackendEngine():
         os.environ.get("TF_DEVICE"), config.opt_typed_value("device")), file=log.v4)
       config.set("device", os.environ.get("TF_DEVICE"))
     if config.is_true("use_horovod"):
+      import socket
       import horovod.tensorflow as hvd
       from TFUtil import init_horovod
       init_horovod()  # make sure it is initialized
@@ -315,7 +323,8 @@ def initBackendEngine():
         gpu_opts = config.typed_dict.setdefault("tf_session_opts", {}).setdefault("gpu_options", {})
         assert "visible_device_list" not in gpu_opts
         gpu_opts["visible_device_list"] = str(hvd.local_rank())
-        print("Horovod: Using GPU %s." % gpu_opts["visible_device_list"], file=log.v3)
+        print("Horovod: Hostname %s, pid %i, using GPU %s." % (
+          socket.gethostname(), os.getpid(), gpu_opts["visible_device_list"]), file=log.v3)
       else:
         if hvd.rank() == 0:  # Don't spam in all ranks.
           print("Horovod: Not using GPU.", file=log.v3)
@@ -410,14 +419,22 @@ def executeMainTask():
     engine.init_train_from_config(config, train_data, dev_data, eval_data)
     engine.train()
   elif task == "eval":
+    epoch = config.int("epoch", -1)
+    load_epoch = config.int("load_epoch", -1)
+    if epoch >= 0:
+      assert (load_epoch < 0) or (load_epoch == epoch), "epoch and load_epoch have to match"
+      engine.epoch = epoch
+      config.set('load_epoch', engine.epoch)
+    else:
+      assert load_epoch, "specify epoch or load_epoch"
+      engine.epoch = load_epoch
     engine.init_train_from_config(config, train_data, dev_data, eval_data)
-    engine.epoch = config.int("epoch", None)
-    assert engine.epoch, "set epoch in config"
-    config.set('load_epoch', engine.epoch)
     print("Evaluate epoch", engine.epoch, file=log.v4)
     engine.eval_model(
-      output_file=config.value("eval_output_file", ""),
-      output_per_seq_file=config.value("eval_output_file_per_seq", ""))
+      output_file=config.value("eval_output_file", None),
+      output_per_seq_file=config.value("eval_output_file_per_seq", None),
+      loss_name=config.value("loss_name", None),
+      output_per_seq_format=config.list("output_per_seq_format", ["score"]))
   elif task in ['forward', 'hpx']:
     assert eval_data is not None, 'no eval data provided'
     combine_labels = config.value('combine_labels', '')
@@ -440,7 +457,7 @@ def executeMainTask():
     engine.search(
       data,
       do_eval=config.bool("search_do_eval", True),
-      output_layer_name=config.value("search_output_layer", "output"),
+      output_layer_names=config.typed_value("search_output_layer", "output"),
       output_file=config.value("search_output_file", ""),
       output_file_format=config.value("search_output_file_format", "txt"))
   elif task == 'compute_priors':
@@ -511,6 +528,9 @@ def executeMainTask():
   elif task == "nop_init_net_train":
     print("Task: No-operation, despite initializing the network (for training)", file=log.v1)
     engine.init_train_from_config(config, train_data, dev_data, eval_data)
+  elif task == "initialize_model":
+    engine.init_train_from_config(config, train_data, dev_data, eval_data)
+    engine.save_model(config.value('model','dummy'))
   else:
     assert False, "unknown task: %s" % task
 

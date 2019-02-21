@@ -56,7 +56,7 @@ class Batch:
     self.seqs = []  # type: list[BatchSeqCopyPart]
 
   def __repr__(self):
-    return "<Batch start_seq:%r, #seqs:%i>" % (self.start_seq, len(self.seqs))
+    return "<Batch start_seq:%r, len(seqs):%i>" % (self.start_seq, len(self.seqs))
 
   def try_sequence_as_slice(self, length):
     """
@@ -117,9 +117,9 @@ class Batch:
     Note that this is only an upper limit in case of data_shape[1] > 1
     because data_shape[0] is the max frame len of all seqs.
     :return: related to the data-key with max length
-    :rtype: int
+    :rtype: NumbersDict
     """
-    return self.max_num_frames_per_slice.max_value() * self.num_slices
+    return self.max_num_frames_per_slice * self.num_slices
 
   def get_total_num_frames(self):
     return sum([s.frame_length for s in self.seqs])

@@ -507,6 +507,67 @@ class TaskVariableAssignmentDataset(GeneratingDataset):
     return DatasetSeq(seq_idx=seq_idx, features=features, targets=targets)
 
 
+class TaskNumberBaseConvertDataset(GeneratingDataset):
+  """
+  Task: E.g: Get some number in octal and convert it to binary (e.g. "10101001").
+  Or basically convert some number from some base into another base.
+  """
+
+  def __init__(self, input_base=8, output_base=2, min_input_seq_len=1, max_input_seq_len=8, **kwargs):
+    """
+    :param int input_base:
+    :param int output_base:
+    :param int min_input_seq_len:
+    :param int max_input_seq_len:
+    """
+    super(TaskNumberBaseConvertDataset, self).__init__(
+      input_dim=input_base,
+      output_dim={"data": (input_base, 1), "classes": (output_base, 1)},
+      **kwargs)
+    chars = "0123456789abcdefghijklmnopqrstuvwxyz"
+    assert 2 <= input_base <= len(chars) and 2 <= output_base <= len(chars)
+    self.input_base = input_base
+    self.output_base = output_base
+    self._input_classes = chars[:input_base]
+    self._output_classes = chars[:output_base]
+    self.labels = {"data": self._input_classes, "classes": self._output_classes}
+    assert 0 < min_input_seq_len <= max_input_seq_len
+    self.min_input_seq_len = min_input_seq_len
+    self.max_input_seq_len = max_input_seq_len
+
+  def get_random_input_seq_len(self):
+    return self.random.randint(self.min_input_seq_len, self.max_input_seq_len + 1)
+
+  def generate_input_seq(self):
+    """
+    :rtype: list[int]
+    """
+    seq_len = self.get_random_input_seq_len()
+    seq = [self.random.randint(0, len(self._input_classes)) for i in range(seq_len)]
+    return seq
+
+  def make_output_seq(self, input_seq):
+    """
+    :param list[int] input_seq:
+    :rtype: list[int]
+    """
+    number = 0
+    for i, d in enumerate(reversed(input_seq)):
+      number += d * (self.input_base ** i)
+    output_seq = []
+    while number:
+      output_seq.insert(0, number % self.output_base)
+      number //= self.output_base
+    return output_seq
+
+  def generate_seq(self, seq_idx):
+    input_seq = self.generate_input_seq()
+    output_seq = self.make_output_seq(input_seq)
+    features = numpy.array(input_seq)
+    targets = numpy.array(output_seq)
+    return DatasetSeq(seq_idx=seq_idx, features=features, targets=targets)
+
+
 class DummyDataset(GeneratingDataset):
 
   def __init__(self, input_dim, output_dim, num_seqs, seq_len=2,
@@ -604,7 +665,9 @@ class StaticDataset(GeneratingDataset):
       for key in target_list:
         assert key in self.data_keys
     else:
-      target_list = self.data_keys
+      target_list = list(self.data_keys)
+      if "data" in target_list:
+        target_list.remove("data")
     self.target_list = target_list
 
     if output_dim is None:
@@ -616,6 +679,8 @@ class StaticDataset(GeneratingDataset):
     for key, value in first_data.items():
       if key not in output_dim:
         output_dim[key] = [value.shape[-1] if value.ndim >= 2 else 0, len(value.shape)]
+    if input_dim is None and "data" in self.data_keys:
+      input_dim = output_dim["data"][0]
     for key in self.data_keys:
       first_data_output = first_data[key]
       assert len(first_data_output.shape) <= 2  # (time[,dim])
@@ -636,6 +701,9 @@ class StaticDataset(GeneratingDataset):
 
   def get_target_list(self):
     return self.target_list
+
+  def get_data_dtype(self, key):
+    return self.data[0][key].dtype
 
 
 class CopyTaskDataset(GeneratingDataset):
@@ -691,15 +759,14 @@ class _NltkCorpusReaderDataset(CachedDataset2):
 
 class ExtractAudioFeatures:
   """
-  Currently uses librosa to extract MFCC features.
+  Currently uses librosa to extract MFCC/log-mel features.
   (Alternatives: python_speech_features, talkbox.features.mfcc, librosa)
-  We could also add support e.g. to directly extract log-filterbanks or so.
   """
 
   def __init__(self,
                window_len=0.025, step_len=0.010,
-               num_feature_filters=40, with_delta=False, norm_mean=None, norm_std_dev=None,
-               features="mfcc", random_permute=None, random_state=None):
+               num_feature_filters=None, with_delta=False, norm_mean=None, norm_std_dev=None,
+               features="mfcc", random_permute=None, random_state=None, raw_ogg_opts=None):
     """
     :param float window_len: in seconds
     :param float step_len: in seconds
@@ -707,14 +774,22 @@ class ExtractAudioFeatures:
     :param bool|int with_delta:
     :param numpy.ndarray|str|None norm_mean: if str, will interpret as filename
     :param numpy.ndarray|str|None norm_std_dev: if str, will interpret as filename
-    :param str features: "mfcc", "log_mel_filterbank", "log_log_mel_filterbank"
+    :param str features: "mfcc", "log_mel_filterbank", "log_log_mel_filterbank", "raw", "raw_ogg"
     :param CollectionReadCheckCovered|dict[str]|bool|None random_permute:
     :param numpy.random.RandomState|None random_state:
+    :param dict[str]|None raw_ogg_opts:
     :return: (audio_len // int(step_len * sample_rate), (with_delta + 1) * num_feature_filters), float32
     :rtype: numpy.ndarray
     """
     self.window_len = window_len
     self.step_len = step_len
+    if num_feature_filters is None:
+      if features == "raw":
+        num_feature_filters = 1
+      elif features == "raw_ogg":
+        raise Exception("you should explicitly specify num_feature_filters (dimension) for raw_ogg")
+      else:
+        num_feature_filters = 40  # was the old default
     self.num_feature_filters = num_feature_filters
     if isinstance(with_delta, bool):
       with_delta = 1 if with_delta else 0
@@ -731,6 +806,7 @@ class ExtractAudioFeatures:
     self.random_permute_opts = random_permute
     self.random_state = random_state
     self.features = features
+    self.raw_ogg_opts = raw_ogg_opts
 
   def _load_feature_vec(self, value):
     """
@@ -746,18 +822,40 @@ class ExtractAudioFeatures:
     assert value.shape == (self.get_feature_dimension(),)
     return value.astype("float32")
 
+  def get_audio_features_from_raw_bytes(self, raw_bytes):
+    """
+    :param io.BytesIO raw_bytes:
+    :return: shape (time,feature_dim)
+    :rtype: numpy.ndarray
+    """
+    if self.features == "raw_ogg":
+      assert self.with_delta == 0 and self.norm_mean is None and self.norm_std_dev is None
+      # We expect that raw_bytes comes from a Ogg file.
+      try:
+        from extern.ParseOggVorbis.returnn_import import ParseOggVorbisLib
+      except ImportError:
+        print("Maybe you did not clone the submodule extern/ParseOggVorbis?")
+        raise
+      return ParseOggVorbisLib.get_instance().get_features_from_raw_bytes(
+        raw_bytes=raw_bytes.getvalue(), output_dim=self.num_feature_filters, **(self.raw_ogg_opts or {}))
+
+    # Don't use librosa.load which internally uses audioread which would use Gstreamer as a backend,
+    # which has multiple issues:
+    # https://github.com/beetbox/audioread/issues/62
+    # https://github.com/beetbox/audioread/issues/63
+    # Instead, use PySoundFile, which is also faster. See here for discussions:
+    # https://github.com/beetbox/audioread/issues/64
+    # https://github.com/librosa/librosa/issues/681
+    import soundfile  # pip install pysoundfile
+    audio, sample_rate = soundfile.read(raw_bytes)
+    return self.get_audio_features(audio=audio, sample_rate=sample_rate)
+
   def get_audio_features(self, audio, sample_rate):
     """
     :param numpy.ndarray audio: raw audio samples, shape (audio_len,)
     :param int sample_rate: e.g. 22050
     :rtype: numpy.ndarray
     """
-    kwargs = {
-      "sample_rate": sample_rate,
-      "window_len": self.window_len,
-      "step_len": self.step_len,
-      "num_feature_filters": self.num_feature_filters,
-    }
     peak = numpy.max(numpy.abs(audio))
     audio /= peak
 
@@ -767,16 +865,28 @@ class ExtractAudioFeatures:
         sample_rate=sample_rate,
         opts=self.random_permute_opts,
         random_state=self.random_state)
-    kwargs["audio"] = audio
 
-    if self.features == "mfcc":
-      feature_data = _get_audio_features_mfcc(**kwargs)
-    elif self.features == "log_mel_filterbank":
-      feature_data = _get_audio_log_mel_filterbank(**kwargs)
-    elif self.features == "log_log_mel_filterbank":
-      feature_data = _get_audio_log_log_mel_filterbank(**kwargs)
+    if self.features == "raw":
+      assert self.num_feature_filters == 1
+      feature_data = audio[:, None].astype("float32")  # add dummy dimension
+
     else:
-      assert False, "non-supported feature type %s" % self.features
+      kwargs = {
+        "sample_rate": sample_rate,
+        "window_len": self.window_len,
+        "step_len": self.step_len,
+        "num_feature_filters": self.num_feature_filters,
+        "audio": audio}
+
+      if self.features == "mfcc":
+        feature_data = _get_audio_features_mfcc(**kwargs)
+      elif self.features == "log_mel_filterbank":
+        feature_data = _get_audio_log_mel_filterbank(**kwargs)
+      elif self.features == "log_log_mel_filterbank":
+        feature_data = _get_audio_log_log_mel_filterbank(**kwargs)
+      else:
+        raise Exception("non-supported feature type %r" % (self.features,))
+
     assert feature_data.ndim == 2
     assert feature_data.shape[1] == self.num_feature_filters
 
@@ -2003,6 +2113,9 @@ class LibriSpeechCorpus(CachedDataset2):
         print("%s, epoch %i. No filter for this epoch." % (self, epoch), file=log.v4)
     return True
 
+  def get_current_seq_order(self):
+    return self._seq_order
+
   def _get_ref_seq_idx(self, seq_idx):
     """
     :param int seq_idx:
@@ -2032,6 +2145,12 @@ class LibriSpeechCorpus(CachedDataset2):
     :rtype: str
     """
     return self._get_tag(self._get_ref_seq_idx(seq_idx))
+
+  def get_all_tags(self):
+    return [self._get_tag(i) for i in range(len(self._reference_seq_order))]
+
+  def get_total_num_seqs(self):
+    return len(self._reference_seq_order)
 
   def _get_transcription(self, seq_idx):
     """
@@ -2072,17 +2191,8 @@ class LibriSpeechCorpus(CachedDataset2):
     :param int seq_idx:
     :rtype: DatasetSeq
     """
-    # Don't use librosa.load which internally uses audioread which would use Gstreamer as a backend,
-    # which has multiple issues:
-    # https://github.com/beetbox/audioread/issues/62
-    # https://github.com/beetbox/audioread/issues/63
-    # Instead, use PySoundFile, which is also faster. See here for discussions:
-    # https://github.com/beetbox/audioread/issues/64
-    # https://github.com/librosa/librosa/issues/681
-    import soundfile  # pip install pysoundfile
     with self._open_audio_file(seq_idx) as audio_file:
-      audio, sample_rate = soundfile.read(audio_file)
-    features = self.feature_extractor.get_audio_features(audio=audio, sample_rate=sample_rate)
+      features = self.feature_extractor.get_audio_features_from_raw_bytes(audio_file)
     bpe, txt = self._get_transcription(seq_idx)
     targets = numpy.array(bpe, dtype="int32")
     raw = numpy.array(txt, dtype="object")

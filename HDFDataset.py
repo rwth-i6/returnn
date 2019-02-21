@@ -42,6 +42,10 @@ class HDFDataset(CachedDataset):
 
   @staticmethod
   def _decode(s):
+    """
+    :param str|bytes s:
+    :rtype: str
+    """
     if not isinstance(s, str):
       s = s.decode("utf-8")
     s = s.split('\0')[0]
@@ -117,12 +121,12 @@ class HDFDataset(CachedDataset):
       num_outputs = {}
       for k in fin['targets/size'].attrs:
         if numpy.isscalar(fin['targets/size'].attrs[k]):
-          num_outputs[k] = (fin['targets/size'].attrs[k], len(fin['targets/data'][k].shape))
+          num_outputs[k] = (int(fin['targets/size'].attrs[k]), len(fin['targets/data'][k].shape))
         else:  # hdf_dump will give directly as tuple
           assert fin['targets/size'].attrs[k].shape == (2,)
-          num_outputs[k] = tuple(fin['targets/size'].attrs[k])
+          num_outputs[k] = tuple([int(v) for v in fin['targets/size'].attrs[k]])
     else:
-      num_outputs = {'classes': fin.attrs[attr_numLabels]}
+      num_outputs = {'classes': [int(fin.attrs[attr_numLabels]), 1]}
     num_outputs["data"] = num_inputs
     if not self.num_outputs:
       self.num_outputs = num_outputs
@@ -141,11 +145,10 @@ class HDFDataset(CachedDataset):
       self.num_running_chars = numpy.sum(self.ctc_targets != -1)
     if 'targets' in fin:
       for name in fin['targets/data']:
-        tdim = 1 if len(fin['targets/data'][name].shape) == 1 else fin['targets/data'][name].shape[1]
-        self.data_dtype[name] = str(fin['targets/data'][name].dtype) if tdim > 1 else 'int32'
-        self.targets[name] = None
+        self.data_dtype[str(name)] = str(fin['targets/data'][name].dtype)
+        self.targets[str(name)] = None
     else:
-      self.targets = { 'classes' : numpy.zeros((self._num_timesteps,), dtype=theano.config.floatX)  }
+      self.targets = {'classes': numpy.zeros((self._num_timesteps,), dtype="int32")}
       self.data_dtype['classes'] = 'int32'
     self.data_dtype["data"] = str(fin['inputs'].dtype)
     assert len(self.target_keys) == len(self._seq_lengths[0]) - 1
@@ -178,15 +181,13 @@ class HDFDataset(CachedDataset):
     for i in range(len(self.files)):
       if len(file_info[i]) == 0:
         continue
-      print("loading file %d/%d" % (i+1, len(self.files)), self.files[i], file=log.v4)
+      if start == 0 or self.cache_byte_size_total_limit > 0:  # suppress with disabled cache
+        print("loading file %d/%d (seq range %i-%i)" % (i+1, len(self.files), start, end), self.files[i], file=log.v4)
       fin = h5py.File(self.files[i], 'r')
       inputs = fin['inputs']
+      targets = None
       if 'targets' in fin:
-        targets = {k:fin['targets/data/' + k] for k in fin['targets/data']}
-      if self.seq_ordering == 'default' or True:
-        inputs = inputs[...]
-        if 'targets' in fin:
-          targets = {k:targets[k][...] for k in targets}
+        targets = {k: fin['targets/data/' + k] for k in fin['targets/data']}
       for idc, ids in file_info[i]:
         s = ids - self.file_start[i]
         p = self.file_seq_start[i][s]
@@ -194,10 +195,8 @@ class HDFDataset(CachedDataset):
         if 'targets' in fin:
           for k in fin['targets/data']:
             if self.targets[k] is None:
-              if self.data_dtype[k] == 'int32':
-                self.targets[k] = numpy.zeros((self._num_codesteps[self.target_keys.index(k)],), dtype=theano.config.floatX) - 1
-              else:
-                self.targets[k] = numpy.zeros((self._num_codesteps[self.target_keys.index(k)],tdim), dtype=theano.config.floatX) - 1
+              self.targets[k] = numpy.zeros(
+                (self._num_codesteps[self.target_keys.index(k)],) + targets[k].shape[1:], dtype=self.data_dtype[k]) - 1
             ldx = self.target_keys.index(k) + 1
             self.targets[k][self.get_seq_start(idc)[ldx]:self.get_seq_start(idc)[ldx] + l[ldx]] = targets[k][p[ldx] : p[ldx] + l[ldx]]
         self._set_alloc_intervals_data(idc, data=inputs[p[0] : p[0] + l[0]])
@@ -214,11 +213,16 @@ class HDFDataset(CachedDataset):
     ids = self._seq_index[self._index_map[sorted_seq_idx]]
     return self._get_tag_by_real_idx(ids)
 
+  def get_all_tags(self):
+    return list(map(self._decode, self._tags))
+
+  def get_total_num_seqs(self):
+    return len(self._tags)
+
   def is_data_sparse(self, key):
-    if key in self.num_outputs:
-      return self.num_outputs[key][1] == 1
     if self.get_data_dtype(key).startswith("int"):
-      return True
+      if key in self.num_outputs:
+        return self.num_outputs[key][1] <= 1
     return False
 
   def get_data_dtype(self, key):
@@ -674,6 +678,7 @@ class SiameseHDFDataset(CachedDataset2):
       for name, parsers in self.all_parsers.items():
         targets['%s_%d' % (name, id)] = parsers[sample_seq_file_index].get_data(norm_sample_seq_name)
 
+    targets['%s_all' % self.targets_stream] = numpy.concatenate((targets['%s_0' % self.targets_stream], targets['%s_1'% self.targets_stream], targets['%s_2' % self.targets_stream]), axis=0)
     features = targets['%s_%d' % (self.input_stream_name, 0)]
     return DatasetSeq(seq_idx=seq_idx,
                       seq_tag=seq_name,
@@ -719,3 +724,339 @@ class SiameseHDFDataset(CachedDataset2):
       return self.num_outputs[k][0]
     return 1  # unknown
 
+
+class SimpleHDFWriter:
+  def __init__(self, filename, dim, labels=None, ndim=None):
+    """
+    :param str filename:
+    :param int|None dim:
+    :param int ndim: counted without batch
+    :param list[str]|None labels:
+    """
+    if ndim is None:
+      if dim is None:
+        ndim = 1
+      else:
+        ndim = 2
+    from Util import hdf5_strings
+    self.dim = dim
+    self.ndim = ndim
+    self.labels = labels
+    if labels:
+      assert len(labels) == dim
+    self._file = h5py.File(filename, "w")
+
+    self._file.attrs['numTimesteps'] = 0  # we will increment this on-the-fly
+    self._other_num_time_steps = 0
+    self._file.attrs['inputPattSize'] = dim or 1
+    self._file.attrs['numDims'] = 1  # ignored?
+    self._file.attrs['numLabels'] = dim or 1
+    self._file.attrs['numSeqs'] = 0  # we will increment this on-the-fly
+    if labels:
+      hdf5_strings(self._file, 'labels', labels)
+    else:
+      self._file.create_dataset('labels', (0,), dtype="S5")
+
+    self._datasets = {}  # type: dict[str, h5py.Dataset]
+    self._tags = []  # type: list[str]
+    self._seq_lengths = self._file.create_dataset("seqLengths", (0, 2), dtype='i', maxshape=(None, 2))
+
+  def _insert_h5_inputs(self, raw_data):
+    """
+    Inserts a record into the hdf5-file.
+    Resizes if necessary.
+
+    :param numpy.ndarray raw_data: shape=(time,data) or shape=(time,)
+    """
+    assert raw_data.ndim >= 1
+    name = "inputs"
+    if name not in self._datasets:
+      self._datasets[name] = self._file.create_dataset(
+        name, raw_data.shape, raw_data.dtype, maxshape=tuple(None for _ in raw_data.shape))
+    else:
+      old_shape = self._datasets[name].shape
+      self._datasets[name].resize((old_shape[0] + raw_data.shape[0],) + old_shape[1:])
+    # append raw data to dataset
+    self._datasets[name][self._file.attrs['numTimesteps']:] = raw_data
+    self._file.attrs['numTimesteps'] += raw_data.shape[0]
+    self._file.attrs['numSeqs'] += 1
+
+  def _insert_h5_other(self, data_key, raw_data, dtype=None, add_time_dim=False, dim=None):
+    """
+    :param str data_key:
+    :param numpy.ndarray|int|float|list[int] raw_data: shape=(time,data) or shape=(time,) or shape=()...
+    :param str dtype:
+    :param bool add_time_dim:
+    :param int|None dim:
+    """
+    if isinstance(raw_data, (int, float, list)):
+      raw_data = numpy.array(raw_data)
+    assert isinstance(raw_data, numpy.ndarray)
+    if add_time_dim:
+      raw_data = raw_data[None, :]
+    assert raw_data.ndim > 0 and raw_data.shape[0] > 0
+    if dtype:
+      raw_data = raw_data.astype(dtype)
+    if dim is None:
+      if raw_data.ndim > 1:
+        dim = raw_data.shape[-1]
+      else:
+        dim = 1  # dummy
+    assert data_key != "inputs"
+    name = data_key
+    # Keep consistent with _insert_h5_inputs.
+    if name not in self._datasets:
+      if 'targets/data' not in self._file:
+        self._file.create_group('targets/data')
+      if 'targets/size' not in self._file:
+        self._file.create_group('targets/size')
+      if "targets/labels" not in self._file:
+        self._file.create_group("targets/labels")
+      Util.hdf5_strings(self._file, "targets/labels/%s" % data_key, ["dummy-label"])
+      self._datasets[name] = self._file['targets/data'].create_dataset(
+        data_key, raw_data.shape, raw_data.dtype, maxshape=tuple(None for _ in raw_data.shape))
+      self._file['targets/size'].attrs[data_key] = [dim, raw_data.ndim]  # (dim, ndim)
+    else:
+      old_shape = self._datasets[name].shape
+      self._datasets[name].resize((old_shape[0] + raw_data.shape[0],) + old_shape[1:])
+
+    assert self._file.attrs['numSeqs'] > 0 and self._seq_lengths.shape[0] > 0  # assume _insert_h5_inputs called before
+
+    if self._seq_lengths[self._file.attrs['numSeqs'] - 1, 1]:
+      assert self._seq_lengths[self._file.attrs['numSeqs'] - 1, 1] == raw_data.shape[0]
+    else:
+      self._seq_lengths[self._file.attrs['numSeqs'] - 1, 1] = raw_data.shape[0]
+      self._other_num_time_steps += raw_data.shape[0]
+
+    offset = self._other_num_time_steps - raw_data.shape[0]
+    hdf_data = self._datasets[name]
+    hdf_data[offset:] = raw_data
+
+  def insert_batch(self, inputs, seq_len, seq_tag):
+    """
+    :param numpy.ndarray inputs: shape=(n_batch,time,data) (or (n_batch,time), or (n_batch,time1,time2), ...)
+    :param list[int]|dict[int,list[int]|numpy.ndarray] seq_len: sequence lengths (per axis)
+    :param list[str] seq_tag: sequence tags of length n_batch
+    """
+    n_batch = len(seq_tag)
+    assert n_batch == inputs.shape[0]
+    assert inputs.ndim == self.ndim + 1  # one more for the batch-dim
+    if not isinstance(seq_len, dict):
+      seq_len = {0: seq_len}
+    assert isinstance(seq_len, dict)
+    assert all([isinstance(key, int) and isinstance(value, (list, numpy.ndarray)) for (key, value) in seq_len.items()])
+    ndim_with_seq_len = self.ndim - (1 if self.dim else 0)
+    assert all([0 <= key < ndim_with_seq_len for key in seq_len.keys()])
+    assert len(seq_len) == ndim_with_seq_len
+    assert all([n_batch == len(value) for (key, value) in seq_len.items()])
+    assert all([max(value) == inputs.shape[key + 1] for (key, value) in seq_len.items()])
+    if self.dim:
+      assert self.dim == inputs.shape[-1]
+
+    seqlen_offset = self._seq_lengths.shape[0]
+    self._seq_lengths.resize(seqlen_offset + n_batch, axis=0)
+
+    for i in range(n_batch):
+      self._tags.append(seq_tag[i])
+      # Note: Currently, our HDFDataset does not support to have multiple axes with dynamic length.
+      # Thus, we flatten all together, and calculate the flattened seq len.
+      # (Ignore this if there is only a single time dimension.)
+      flat_seq_len = numpy.prod([seq_len[axis][i] for axis in range(ndim_with_seq_len)])
+      assert flat_seq_len > 0
+      flat_shape = [flat_seq_len]
+      if self.dim:
+        flat_shape.append(self.dim)
+      self._seq_lengths[seqlen_offset + i, 0] = flat_seq_len
+      data = inputs[i]
+      data = data[tuple([slice(None, seq_len[axis][i]) for axis in range(ndim_with_seq_len)])]
+      data = numpy.reshape(data, flat_shape)
+      self._insert_h5_inputs(data)
+      if len(seq_len) > 1:
+        # Note: Because we have flattened multiple axes with dynamic len into a single one,
+        # we want to store the individual axes lengths. We store those in a separate data entry "sizes".
+        # Note: We could add a dummy time-dim for this "sizes", and then have a feature-dim = number of axes.
+        # However, we keep it consistent to how we handled it in our 2D MDLSTM experiments.
+        self._insert_h5_other(
+          "sizes", [seq_len[axis][i] for axis in range(ndim_with_seq_len)], add_time_dim=False, dtype="int32")
+
+  def close(self):
+    max_tag_len = max([len(d) for d in self._tags])
+    self._file.create_dataset('seqTags', shape=(len(self._tags),), dtype="S%i" % (max_tag_len + 1))
+    for i, tag in enumerate(self._tags):
+      self._file['seqTags'][i] = numpy.array(tag, dtype="S%i" % (max_tag_len + 1))
+    self._file.close()
+
+
+class HDFDatasetWriter:
+  def __init__(self, filename):
+    """
+    :param str filename: for the HDF to write
+    """
+    print("Creating HDF dataset file %s" % filename, file=log.v3)
+    self.filename = filename
+    self.file = h5py.File(filename, "w")
+
+  def close(self):
+    self.file.close()
+
+  def dump_from_dataset(self, dataset, epoch=1, start_seq=0, end_seq=float("inf"), use_progress_bar=True):
+    """
+    :param Dataset dataset: could be any dataset implemented as child of Dataset
+    :param int epoch: for dataset
+    :param int start_seq:
+    :param int|float end_seq:
+    :param bool use_progress_bar:
+    """
+    from Util import NumbersDict, human_size, progress_bar_with_time, try_run, PY3
+    hdf_dataset = self.file
+
+    print("Work on epoch: %i" % epoch, file=log.v3)
+    dataset.init_seq_order(epoch)
+
+    data_keys = sorted(dataset.get_data_keys())
+    print("Data keys:", data_keys, file=log.v3)
+    if "orth" in data_keys:  # special workaround for now, not handled
+      data_keys.remove("orth")
+    data_target_keys = [key for key in dataset.get_target_list() if key in data_keys]
+    data_input_keys = [key for key in data_keys if key not in data_target_keys]
+    assert len(data_input_keys) > 0 and len(data_target_keys) > 0
+    if len(data_input_keys) > 1:
+      if "data" in data_input_keys:
+        default_data_input_key = "data"
+      else:
+        raise Exception("not sure which input data key to use from %r" % (data_input_keys,))
+    else:
+      default_data_input_key = data_input_keys[0]
+    print("Using input data key:", default_data_input_key)
+    if len(data_target_keys) > 1:
+      if "classes" in data_target_keys:
+        default_data_target_key = "classes"
+      else:
+        raise Exception("not sure which target data key to use from %r" % (data_target_keys,))
+    else:
+      default_data_target_key = data_target_keys[0]
+    print("Using target data key:", default_data_target_key)
+
+    hdf_data_key_map = {key: key for key in data_keys if key != default_data_input_key}
+    if "data" in hdf_data_key_map:
+      hdf_data_key_map["data"] = "classes"  # Replace "data" which is reserved for input key in HDFDataset.
+      assert "classes" not in hdf_data_key_map
+
+    # We need to do one run through the dataset to collect some stats like total len.
+    print("Collect stats, iterate through all data...", file=log.v3)
+    seq_idx = start_seq
+    seq_idxs = []
+    seq_tags = []
+    seq_lens = []
+    total_seq_len = NumbersDict(0)
+    max_tag_len = 0
+    dataset_num_seqs = try_run(lambda: dataset.num_seqs, default=None)  # can be unknown
+    if end_seq != float("inf"):
+      if dataset_num_seqs is not None:
+        dataset_num_seqs = min(dataset_num_seqs, end_seq)
+      else:
+        dataset_num_seqs = end_seq
+    if dataset_num_seqs is not None:
+      dataset_num_seqs -= start_seq
+      assert dataset_num_seqs > 0
+    while dataset.is_less_than_num_seqs(seq_idx) and seq_idx <= end_seq:
+      seq_idxs += [seq_idx]
+      dataset.load_seqs(seq_idx, seq_idx + 1)
+      seq_len = dataset.get_seq_length(seq_idx)
+      seq_lens += [seq_len]
+      tag = dataset.get_tag(seq_idx)
+      seq_tags += [tag]
+      max_tag_len = max(len(tag), max_tag_len)
+      total_seq_len += seq_len
+      if use_progress_bar and dataset_num_seqs is not None:
+        progress_bar_with_time(float(seq_idx - start_seq) / dataset_num_seqs)
+      seq_idx += 1
+    num_seqs = len(seq_idxs)
+
+    assert num_seqs > 0
+    shapes = {}
+    for data_key in data_keys:
+      assert data_key in total_seq_len.dict
+      shape = [total_seq_len[data_key]]
+      shape += dataset.get_data_shape(data_key)
+      print("Total len of %r is %s, shape %r, dtype %s" % (
+        data_key, human_size(shape[0]), shape, dataset.get_data_dtype(data_key)), file=log.v3)
+      shapes[data_key] = shape
+
+    print("Set seq tags...", file=log.v3)
+    hdf_dataset.create_dataset('seqTags', shape=(num_seqs,), dtype="S%i" % (max_tag_len + 1))
+    for i, tag in enumerate(seq_tags):
+      hdf_dataset['seqTags'][i] = numpy.array(tag, dtype="S%i" % (max_tag_len + 1))
+      if use_progress_bar:
+        progress_bar_with_time(float(i) / num_seqs)
+
+    print("Set seq len info...", file=log.v3)
+    hdf_dataset.create_dataset(attr_seqLengths, shape=(num_seqs, 2), dtype="int32")
+    for i, seq_len in enumerate(seq_lens):
+      data_len = seq_len[default_data_input_key]
+      targets_len = seq_len[default_data_target_key]
+      for data_key in data_target_keys:
+        assert seq_len[data_key] == targets_len, "different lengths in multi-target not supported"
+      if targets_len is None:
+        targets_len = data_len
+      hdf_dataset[attr_seqLengths][i] = [data_len, targets_len]
+      if use_progress_bar:
+        progress_bar_with_time(float(i) / num_seqs)
+
+    print("Create arrays in HDF...", file=log.v3)
+    hdf_dataset.create_group('targets/data')
+    hdf_dataset.create_group('targets/size')
+    hdf_dataset.create_group('targets/labels')
+    for data_key in data_keys:
+      if data_key == default_data_input_key:
+        hdf_dataset.create_dataset(
+          'inputs', shape=shapes[data_key], dtype=dataset.get_data_dtype(data_key))
+      else:
+        hdf_dataset['targets/data'].create_dataset(
+          hdf_data_key_map[data_key], shape=shapes[data_key], dtype=dataset.get_data_dtype(data_key))
+        hdf_dataset['targets/size'].attrs[hdf_data_key_map[data_key]] = dataset.num_outputs[data_key]
+      if data_key in dataset.labels:
+        labels = dataset.labels[data_key]
+        if PY3:
+          labels = [label.encode("utf8") for label in labels]
+        assert len(labels) == dataset.num_outputs[data_key][0]
+      else:
+        labels = ["%s-class-%i" % (data_key, i) for i in range(dataset.get_data_dim(data_key))]
+      print("Labels for %s:" % data_key, labels[:3], "...", file=log.v5)
+      max_label_len = max(map(len, labels))
+      if data_key != default_data_input_key:
+        hdf_dataset['targets/labels'].create_dataset(hdf_data_key_map[data_key],
+                                                     (len(labels),), dtype="S%i" % (max_label_len + 1))
+        for i, label in enumerate(labels):
+          hdf_dataset['targets/labels'][hdf_data_key_map[data_key]][i] = numpy.array(
+            label, dtype="S%i" % (max_label_len + 1))
+
+    # Again iterate through dataset, and set the data
+    print("Write data...", file=log.v3)
+    dataset.init_seq_order(epoch)
+    offsets = NumbersDict(0)
+    for seq_idx, tag in zip(seq_idxs, seq_tags):
+      dataset.load_seqs(seq_idx, seq_idx + 1)
+      tag_ = dataset.get_tag(seq_idx)
+      assert tag == tag_  # Just a check for sanity. We expect the same order.
+      seq_len = dataset.get_seq_length(seq_idx)
+      for data_key in data_keys:
+        if data_key == default_data_input_key:
+          hdf_data = hdf_dataset['inputs']
+        else:
+          hdf_data = hdf_dataset['targets/data'][hdf_data_key_map[data_key]]
+        data = dataset.get_data(seq_idx, data_key)
+        hdf_data[offsets[data_key]:offsets[data_key] + seq_len[data_key]] = data
+
+      if use_progress_bar:
+        progress_bar_with_time(float(offsets[default_data_input_key]) / total_seq_len[default_data_input_key])
+
+      offsets += seq_len
+
+    assert offsets == total_seq_len  # Sanity check.
+
+    # Set some old-format attribs. Not needed for newer CRNN versions.
+    hdf_dataset.attrs[attr_inputPattSize] = dataset.num_inputs
+    hdf_dataset.attrs[attr_numLabels] = dataset.num_outputs.get(default_data_target_key, (0, 0))[0]
+
+    print("All done.", file=log.v3)

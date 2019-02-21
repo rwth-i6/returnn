@@ -12,6 +12,7 @@ from Device import Device
 from Log import log
 from GeneratingDataset import StaticDataset, DummyDataset
 from EngineUtil import assign_dev_data_single_seq
+import TheanoUtil
 import numpy
 from pprint import pprint
 import theano
@@ -21,7 +22,7 @@ better_exchook.replace_traceback_format_tb()
 
 
 log.initialize()
-
+TheanoUtil.monkey_patches()
 
 
 def get_num_params(p_list):

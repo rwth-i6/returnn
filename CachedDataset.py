@@ -18,10 +18,10 @@ class CachedDataset(Dataset):
     """
     super(CachedDataset, self).__init__(**kwargs)
     self.cache_byte_size_total_limit = cache_byte_size
-    if cache_byte_size < 0:
-      self.cache_byte_size_limit_at_start = 1
+    if cache_byte_size <= 0:
+      self.cache_byte_size_limit_at_start = 0
     else:
-     self.cache_byte_size_limit_at_start = max(int(cache_byte_size * 2 / 3),1)
+     self.cache_byte_size_limit_at_start = max(cache_byte_size * 2 // 3, 1)
      self.cache_byte_size_total_limit = max(cache_byte_size - self.cache_byte_size_limit_at_start, 1)
     self.num_seqs_cached_at_start = 0
     self.cached_bytes_at_start = 0
@@ -30,7 +30,7 @@ class CachedDataset(Dataset):
     self.preload_end = 0
     self.max_ctc_length = 0
     self.ctc_targets = None
-    self.alloc_intervals = None
+    self.alloc_intervals = None  # type: list
     self._seq_start = []  # [numpy.array([0,0])]  # uses sorted seq idx, see set_batching()
     self._seq_index = []; """ :type: list[int] """  # Via init_seq_order(). seq_index idx -> hdf seq idx
     self._index_map = range(len(self._seq_index))  # sorted seq idx -> seq_index idx
@@ -129,18 +129,19 @@ class CachedDataset(Dataset):
 
     num_cached = 0
     cached_bytes = 0
-    for i in range(self.num_seqs):
-      if i == num_cached:
-        nbytes = self.get_seq_length_2d(i)[0] * self.nbytes
-        if self.cache_byte_size_limit_at_start >= cached_bytes + nbytes:
-          num_cached = i + 1
-          cached_bytes += nbytes
+    if self.cache_byte_size_limit_at_start > 0:
+      for i in range(self.num_seqs):
+        if i == num_cached:
+          nbytes = self.get_seq_length_2d(i)[0] * self.nbytes
+          if self.cache_byte_size_limit_at_start >= cached_bytes + nbytes:
+            num_cached = i + 1
+            cached_bytes += nbytes
 
     self.num_seqs_cached_at_start = num_cached
     self.cached_bytes_at_start = cached_bytes
     if num_cached > 0:
       self.preload_end = num_cached
-      threading.Thread(target=self._preload_seqs,args=(0,num_cached)).start()
+      threading.Thread(target=self._preload_seqs, args=(0, num_cached), daemon=True).start()
 
   def load_seqs(self, start, end):
     """
@@ -163,6 +164,10 @@ class CachedDataset(Dataset):
       self._load_seqs_with_cache(start, end)
       return self.is_cached(start, end, blocking=True)
 
+    # Cleanup old self.alloc_intervals.
+    # self.alloc_intervals[0] is usually the dummy seq range 0-0.
+    while len(self.alloc_intervals) >= 2 and self.alloc_intervals[1][1] <= start:
+      self.alloc_intervals.pop(1)
     super(CachedDataset, self).load_seqs(start, end)
 
   def _load_seqs(self, start, end):
@@ -252,10 +257,12 @@ class CachedDataset(Dataset):
       if alloc_start <= ids < alloc_end:
         return i
       elif alloc_start <= ids and ids >= alloc_end:
-        if s == i: return -1
+        if s == i:
+          return -1
         s = i
       elif alloc_start > ids:
-        if e == i: return -1
+        if e == i:
+          return -1
         e = i
       else:
         assert False
@@ -268,6 +275,8 @@ class CachedDataset(Dataset):
     :param (int,int) value: (start,end) like in load_seqs(), sorted seq idx
     :rtype: int
     """
+    if value[0] == value[1]:
+      return 0
     ci = self.alloc_intervals[pos][1]
     ni = self.alloc_intervals[pos + 1][0]
     xc = self.alloc_intervals[pos][2]
@@ -339,8 +348,10 @@ class CachedDataset(Dataset):
     :rtype: list[int]
     :return selection list, modified sorted seq idx in self.alloc_intervals
     """
-    if end is None: end = start + 1
-    if start == end: return
+    if end is None:
+      end = start + 1
+    if start == end:
+      return
     assert start < end
     i = 0
     selection = []; """ :type: list[int] """
@@ -348,6 +359,7 @@ class CachedDataset(Dataset):
     while i < len(self.alloc_intervals) - invert:
       ni = self.alloc_intervals[i + invert][1 - invert]  # insert mode: start idx of next alloc
       ci = self.alloc_intervals[i][invert]               # insert mode: end idx of cur alloc
+      assert ci <= ni
       flag = ((ci <= start < ni), (ci < end <= ni), (ci < start and ni <= start) or (ci >= end and ni > end))
       if not flag[0] and not flag[1]:
         if not flag[2]:

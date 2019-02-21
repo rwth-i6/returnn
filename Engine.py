@@ -207,7 +207,7 @@ class Engine:
     self.start_epoch, self.start_batch = self.get_train_start_epoch_batch(config)
     self.batch_size = config.int('batch_size', 1)
     self.shuffle_batches = config.bool('shuffle_batches', False)
-    self.update_batch_size = config.int('update_batch_size', 0)
+    self.update_batch_size = config.float('update_batch_size', 0)
     self.batch_size_eval = config.int('batch_size_eval', self.update_batch_size)
     self.model_filename = config.value('model', None)
     self.save_model_epoch_interval = config.int('save_interval', 1)
@@ -556,7 +556,7 @@ class Engine:
         self.learning_rate_control.save()
     print(" ".join(eval_dump_str).strip(), file=log.v1)
 
-  def save_model(self, filename, epoch):
+  def save_model(self, filename, epoch=0):
     """
     :param str filename: full filename for model
     :param int epoch: save epoch idx

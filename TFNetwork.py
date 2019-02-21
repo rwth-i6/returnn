@@ -59,6 +59,8 @@ class ExternData(object):
     shape = [None] + list(dataset.get_data_shape(key))
     sparse = dataset.is_data_sparse(key)
     dtype = dataset.get_data_dtype(key)
+    if not sparse and shape[-1] is None:
+      dim = None  # overwrite. some datasets just would return some dummy int value
     return dict(
       batch_dim_axis=0, time_dim_axis=1,
       shape=shape, dim=dim, sparse=sparse, dtype=dtype,
@@ -102,11 +104,13 @@ class ExternData(object):
         continue
       data = self.data[key]
       data_sparse = dataset.is_data_sparse(key)
-      assert data.sparse == data_sparse, "key %r sparse mismatch. %s" % (key, base_err_msg)
+      # If data.dim is None, it's ok to ignore.
+      assert data.sparse == data_sparse or data.dim is None, "key %r sparse mismatch. %s" % (key, base_err_msg)
       data_dtype = dataset.get_data_dtype(key)
       assert data.dtype == data_dtype, "key %r dtype mismatch. %s" % (key, base_err_msg)
       data_dim = dataset.get_data_dim(key)
-      assert data.dim == data_dim, "key %r dim mismatch. %s" % (key, base_err_msg)
+      # some datasets just would return some dummy int value, but ignore if data.dim is None
+      assert data.dim == data_dim or data.dim is None, "key %r dim mismatch. %s" % (key, base_err_msg)
       data_shape = tuple(dataset.get_data_shape(key))
       assert data.shape[1:] == data_shape, "key %r shape mismatch. %s" % (key, base_err_msg)
 
@@ -383,18 +387,26 @@ class TFNetwork(object):
     if name in self._constructing_layers:
       raise NetworkConstructionDependencyLoopException(
         layer_name=name, constructing_layers=self._constructing_layers, net_dict=net_dict, network=self)
+    if not get_layer:
+      def get_layer(src_name):
+        return self.construct_layer(net_dict=net_dict, name=src_name)  # set get_layer to wrap construct_layer
     if name not in net_dict:
+      layer_desc = None
       if name == "data":
         layer_desc = {"class": "source", "from": []}
       elif name.startswith("data:"):
         layer_desc = {"class": "source", "data_key": name[len("data:"):], "from": []}
-      else:
+      elif '/' in name:
+        # it may be a hierarchical path to a sub-layer, which should have been found by get_layer()
+        # but maybe it's not constructed yet, so try constructing the root layer
+        root_layer = get_layer(name.split('/')[0])
+        sub_layer = root_layer.get_sub_layer('/'.join(name.split('/')[1:]))  # get the sub-layer from the root-layer
+        if sub_layer:
+          return sub_layer
+      if not layer_desc:
         raise LayerNotFound("layer %r not found in %r" % (name, self))
     else:
       layer_desc = net_dict[name]
-    if not get_layer:
-      def get_layer(src_name):
-        return self.construct_layer(net_dict=net_dict, name=src_name)  # set get_layer to wrap construct_layer
     if not add_layer:
       add_layer = self.add_layer
     self.layers_desc[name] = layer_desc
@@ -458,6 +470,8 @@ class TFNetwork(object):
         layer.output.sanity_check()
       except TypeError:
         help_on_type_error_wrong_args(cls=layer_class, kwargs=list(layer_desc.keys()))
+        print("TypeError creating layer %s/%r of class %s with opts:" % (self.name, name, layer_class.__name__))
+        pprint(layer_desc)
         raise
       except Exception:
         print("Exception creating layer %s/%r of class %s with opts:" % (self.name, name, layer_class.__name__))
@@ -696,6 +710,12 @@ class TFNetwork(object):
       if not self.parent_net:
         raise LayerNotFound("cannot get layer %r, no parent net for %r" % (layer_name, self))
       return self.parent_net.get_layer(layer_name[len("base:"):])
+    if '/' in layer_name:
+      # this is probably a path to a sub-layer
+      root_layer = self.get_layer(layer_name.split('/')[0])  # get the root-layer (first part of the path)
+      sub_layer = root_layer.get_sub_layer('/'.join(layer_name.split('/')[1:]))  # get the sub-layer from the root-layer
+      if sub_layer:  # get_sub_layer returns None by default (if sub-layer not found)
+        return sub_layer
     if layer_name not in self.layers:
       raise LayerNotFound("layer %r not found in %r" % (layer_name, self))
     return self.layers[layer_name]
@@ -1146,7 +1166,8 @@ class TFNetwork(object):
     """
     from TFNetworkRecLayer import RecStepInfoLayer, _SubnetworkRecCell
     rec_layer = self.get_rec_parent_layer()
-    if not rec_layer:
+    # the second condition is true if all layers have been optimized out of the rec layer
+    if not rec_layer or len(rec_layer.cell.layers_in_loop) == 0:
       assert not must_exist, "%s: We expect to be the subnet of a RecLayer, but we are not." % self
       return None
     assert isinstance(rec_layer.cell, _SubnetworkRecCell)
@@ -1394,31 +1415,45 @@ class LossHolder:
     self._prepare()
     return self._norm_factor
 
-  def _normalized_loss_value_per_seq(self, value):
+  def _normalized_value_per_seq(self, value, per_pos=False):
     """
-    :param tf.Tensor|None loss:
-    :return: (batch,) or None if loss is None
+    :param tf.Tensor|None value: (batch*time,) or (time*batch,)
+    :param bool per_pos: one value per time position
+    :return: if per_pos return (batch,time) else (batch,) or None if loss is None
     :rtype: tf.Tensor|None
     """
     if value is None:
       return None
-    return self.loss.reduce_to_batch(value, normalize=True)
 
-  def get_normalized_loss_value_per_seq(self):
+    if per_pos:
+      value = tf.reshape(value, tf.shape(self.loss.output.placeholder)[:2])  # (batch,time) or (time,batch)
+
+      # We want output of the form (B,T)
+      if self.loss.output.time_dim_axis == 0:
+        from TFUtil import swapaxes
+        value = swapaxes(value, 0, 1)  # resulting in (B,T,...)
+
+      return value
+    else:
+      return self.loss.reduce_to_batch(value, normalize=True)
+
+  def get_normalized_loss_value_per_seq(self, per_pos=False):
     """
-    :return: (batch,) or None if loss is None
+    :param bool per_pos: one value per time position
+    :return: if per_pos return (batch,time) else (batch,) or None if loss is None
     :rtype: tf.Tensor|None
     """
     self._prepare()
-    return self._normalized_loss_value_per_seq(self._loss_value)
+    return self._normalized_value_per_seq(self._loss_value, per_pos=per_pos)
 
-  def get_normalized_error_value_per_seq(self):
+  def get_normalized_error_value_per_seq(self, per_pos=False):
     """
-    :return: (batch,) or None if error is None
+    :param bool per_pos: one value per time position
+    :return: if per_pos return (batch,time) else (batch,) or None if error is None
     :rtype: tf.Tensor|None
     """
     self._prepare()
-    return self._normalized_loss_value_per_seq(self._error_value)
+    return self._normalized_value_per_seq(self._error_value, per_pos=per_pos)
 
   def _tf_summary(self):
     """
@@ -1430,11 +1465,13 @@ class LossHolder:
       return  # skip summaries. the root net should also do this
     name = self.get_tf_name()
     if self._loss_value is not None:
-      tf.summary.scalar("loss_%s" % name, self._loss_value * self._norm_factor)
+      # a loss value is typically a scalar but there are cases of sequence or position wise loss values (e.g. if
+      #   the eval_output_file_per_seq option is used)
+      tf.summary.tensor_summary("loss_%s" % name, self._loss_value * self._norm_factor)
       if self._network.get_config().bool("calculate_exp_loss", False):
-        tf.summary.scalar("exp_loss_%s" % name, tf.exp(self._loss_value * self._norm_factor))
+        tf.summary.tensor_summary("exp_loss_%s" % name, tf.exp(self._loss_value * self._norm_factor))
     if self._error_value is not None:
-      tf.summary.scalar("error_%s" % name, self._error_value * self._norm_factor)
+      tf.summary.tensor_summary("error_%s" % name, self._error_value * self._norm_factor)
 
   def _prepare(self):
     """

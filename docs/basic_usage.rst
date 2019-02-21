@@ -11,7 +11,7 @@ Now ``rnn.py`` is the main entry point. Usage::
     ./rnn.py <config-file> [other-params]
 
 where ``config-file`` is a config file for RETURNN.
-See `here for an example <https://github.com/rwth-i6/returnn/blob/master/demos/demo-vanilla-lstmp.12ax.config>`_,
+See `here for an example <https://github.com/rwth-i6/returnn/blob/master/demos/demo-tf-native-lstm2.12ax.config>`_,
 and `many more examples from the demos <https://github.com/rwth-i6/returnn/blob/master/demos/>`_.
 We support multiple config syntax, such as simple line-based ``key value``,
 JSON based which is determined by a "``{``" at the beginning of the file

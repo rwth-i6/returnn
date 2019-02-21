@@ -9,6 +9,7 @@ from EngineBatch import Batch
 from Log import log
 from Config import Config
 import Util
+import TheanoUtil
 from GeneratingDataset import GeneratingDataset
 from Dataset import DatasetSeq
 from SprintDataset import ExternSprintDataset
@@ -20,6 +21,7 @@ import better_exchook
 better_exchook.install()
 better_exchook.replace_traceback_format_tb()
 Util.initThreadJoinHack()
+TheanoUtil.monkey_patches()
 
 
 dummyconfig_dict = {

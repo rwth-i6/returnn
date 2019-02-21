@@ -432,6 +432,56 @@ def human_bytes_size(n, factor=1024, frac=0.8, prec=1):
   return human_size(n, factor=factor, frac=frac, prec=prec) + "B"
 
 
+def _pp_extra_info(obj, depth_limit=3):
+  """
+  :param object obj:
+  :param int depth_limit:
+  :return: extra info (if available: len, some items, ...)
+  :rtype: str
+  """
+  s = []
+  if hasattr(obj, "__len__"):
+    # noinspection PyBroadException
+    try:
+      # noinspection PyTypeChecker
+      if type(obj) in (str, unicode, list, tuple, dict) and len(obj) <= 5:
+        pass  # don't print len in this case
+      else:
+        s += ["len = %i" % obj.__len__()]
+    except Exception:
+      pass
+  if depth_limit > 0 and hasattr(obj, "__getitem__"):
+    # noinspection PyBroadException
+    try:
+      if type(obj) in (str, unicode):
+        pass  # doesn't make sense to get sub items here
+      else:
+        sub_obj = obj.__getitem__(0)
+        extra_info = _pp_extra_info(sub_obj, depth_limit - 1)
+        if extra_info != "":
+          s += ["_[0]: {%s}" % extra_info]
+    except Exception:
+      pass
+  return ", ".join(s)
+
+
+def pretty_print(obj):
+  """
+  :param object obj:
+  :return: repr(obj), or some shorted version of that, maybe with extra info
+  :rtype: str
+  """
+  s = repr(obj)
+  limit = 300
+  if len(s) > limit:
+    s = s[:limit - 3]
+    s += "..."
+  extra_info = _pp_extra_info(obj)
+  if extra_info != "":
+    s += ", " + extra_info
+  return s
+
+
 def progress_bar(complete=1.0, prefix="", suffix="", file=sys.stdout):
   import sys
   terminal_width, _ = terminal_size(file=file)
@@ -1094,10 +1144,32 @@ class NumbersDict:
   def copy(self):
     return NumbersDict(self)
 
-  def constant_like(self, number):
+  @classmethod
+  def constant_like(cls, const_number, numbers_dict):
+    """
+    :param int|float|object const_number:
+    :param NumbersDict numbers_dict:
+    :return: NumbersDict with same keys as numbers_dict
+    :rtype: NumbersDict
+    """
     return NumbersDict(
-      broadcast_value=number if (self.value is not None) else None,
-      numbers_dict={k: number for k in self.dict.keys()})
+      broadcast_value=const_number if (numbers_dict.value is not None) else None,
+      numbers_dict={k: const_number for k in numbers_dict.dict.keys()})
+
+  def copy_like(self, numbers_dict):
+    """
+    :param NumbersDict numbers_dict:
+    :return: copy of self with same keys as numbers_dict as far as we have them
+    :rtype: NumbersDict
+    """
+    if self.value is not None:
+      return NumbersDict(
+        broadcast_value=self.value if (numbers_dict.value is not None) else None,
+        numbers_dict={k: self[k] for k in numbers_dict.dict.keys()})
+    else:
+      return NumbersDict(
+        broadcast_value=None,
+        numbers_dict={k: self[k] for k in numbers_dict.dict.keys() if k in self.dict})
 
   @property
   def keys_set(self):
@@ -1180,11 +1252,11 @@ class NumbersDict:
     """
     if not isinstance(self, NumbersDict):
       if isinstance(other, NumbersDict):
-        self = other.constant_like(self)
+        self = NumbersDict.constant_like(self, numbers_dict=other)
       else:
         self = NumbersDict(self)
     if not isinstance(other, NumbersDict):
-      other = self.constant_like(other)
+      other = NumbersDict.constant_like(other, numbers_dict=self)
     if result is None:
       result = NumbersDict()
     assert isinstance(result, NumbersDict)
@@ -1594,6 +1666,9 @@ class CollectionReadCheckCovered:
       truth_value = bool(self.collection)
     self.truth_value = truth_value
     self.got_items = set()
+
+  def __repr__(self):
+    return "%s(%r, truth_value=%r)" % (self.__class__.__name__, self.collection, self.truth_value)
 
   @classmethod
   def from_bool_or_dict(cls, value):

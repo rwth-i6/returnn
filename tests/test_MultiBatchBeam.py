@@ -11,10 +11,14 @@ import theano.scan_module.scan_op
 from nose.tools import assert_equal, assert_is, assert_is_instance
 import MultiBatchBeam
 from MultiBatchBeam import *
+import TheanoUtil
 import theano.printing
 from pprint import pprint
 import better_exchook
 better_exchook.replace_traceback_format_tb()
+
+
+TheanoUtil.monkey_patches()
 
 
 naive_multi_batch_beam = MultiBatchBeam._naive_multi_batch_beam

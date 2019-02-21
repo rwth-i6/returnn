@@ -6,6 +6,7 @@ from __future__ import print_function
 import sys
 sys.path += ["."]  # Python 3 hack
 
+import unittest
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_in, assert_true, assert_false
 from GeneratingDataset import GeneratingDataset, DummyDataset, DummyDatasetMultipleSequenceLength
 from EngineBatch import Batch
@@ -146,7 +147,7 @@ def test_batches_non_recurrent_1():
   dataset = DummyDataset(input_dim=2, output_dim=3, num_seqs=2, seq_len=11)
   dataset.init_seq_order(1)
   batch_gen = dataset.generate_batches(recurrent_net=False, max_seqs=2, batch_size=5)
-  all_batches = []; " :type: list[Batch] "
+  all_batches = []  # type: list[Batch]
   while batch_gen.has_more():
     batch, = batch_gen.peek_next_n(1)
     assert_is_instance(batch, Batch)
@@ -323,3 +324,26 @@ def test_task12ax_window():
   assert_equal(list(data2a[1, 1]), list(data1[1]))
   assert_equal(list(data2a[1, 2]), list(data1[2]))
   assert_equal(list(data2a[-1, 2]), [0] * input_dim)  # zero-padded right
+
+
+if __name__ == "__main__":
+  better_exchook.install()
+  if len(sys.argv) <= 1:
+    for k, v in sorted(globals().items()):
+      if k.startswith("test_"):
+        print("-" * 40)
+        print("Executing: %s" % k)
+        try:
+          v()
+        except unittest.SkipTest as exc:
+          print("SkipTest:", exc)
+        print("-" * 40)
+    print("Finished all tests.")
+  else:
+    assert len(sys.argv) >= 2
+    for arg in sys.argv[1:]:
+      print("Executing: %s" % arg)
+      if arg in globals():
+        globals()[arg]()  # assume function and execute
+      else:
+        eval(arg)  # assume Python code and execute
