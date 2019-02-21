@@ -366,6 +366,13 @@ def test_hdf_simple_iter():
   dummy_iter_dataset(dataset)
 
 
+def test_hdf_simple_iter_cached():
+  hdf_fn = generate_hdf_from_dummy()
+  dataset = HDFDataset(files=[hdf_fn], cache_byte_size=100)
+  dataset.initialize()
+  dummy_iter_dataset(dataset)
+
+
 def test_rnn_getCacheByteSizes_zero():
   from Config import Config
   config = Config({"cache_size": "0"})
