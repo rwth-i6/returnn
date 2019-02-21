@@ -429,8 +429,9 @@ class RepetitionLayer(_NoOpLayer):
     inp, n_out = _concat_sources(self.sources, masks=self.masks, mass=self.mass)
     self.set_attr('n_out', n_out)
     time, batch, dim = inp.shape[0], inp.shape[1], inp.shape[2]
-    self.index = self.index.flatten().dimshuffle('x',0).repeat(factor,axis=0).reshape((time*factor,batch))
-    self.output = inp.reshape((time*batch,dim)).dimshuffle('x',0,1).repeat(factor,axis=0).reshape((time*factor,batch,dim))
+
+    self.index = self.index.dimshuffle(0,'x',1).repeat(factor,axis=1).reshape((time * factor, batch))
+    self.output = inp.dimshuffle(0,'x',1,2).repeat(factor,axis=1).reshape((time * factor,batch,dim))
 
 
 class FrameConcatZeroLayer(_NoOpLayer): # TODO: This is not correct for max_seqs > 1
