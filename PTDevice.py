@@ -20,15 +20,10 @@ class Device(object):
     self.output = None; " :type: list[numpy.ndarray] "
     self.outputs_format = None; " :type: list[str] "  # via self.result()
     self.train_outputs_format = None; " :type: list[str] "  # set via self.initialize()
-    self.run_called_count = 0
-    self.result_called_count = 0
-    self.wait_for_result_call = False
     self.compute_total_time = 0
-    self.update_total_time = 0
-    self.num_frames = NumbersDict(0)
+    #self.num_frames = NumbersDict(0)
     self.num_updates = 0
     self.epoch = None
-    self.use_inputs = False
     if not update_specs: update_specs = {}
     update_specs.setdefault('update_rule', 'global')
     update_specs.setdefault('update_params', {})
@@ -110,35 +105,20 @@ class Device(object):
     target = config.value('target', 'classes')
     assert os.getpid() != self.main_pid # this won't work on Windows
     import h5py
-    self.seq_train_parallel_control = None  # type: SeqTrainParallelControlDevHost. will be set via SprintErrorSignals
     self.network_task = config.value('task', 'train')
-    eval_flag = self.network_task in ['eval', 'forward', 'daemon']
-    testnet_kwargs = dict(mask="unity", train_flag=False, eval_flag=eval_flag)
-    self.testnet_share_params = config.bool("testnet_share_params", False)
-    if self.testnet_share_params:
-      testnet_kwargs["shared_params_network"] = lambda: self.trainnet
+    eval_flag = self.network_task in ['eval', 'forward']
     if json_content is not None:
-      self.trainnet = PTLayerNetwork.from_json_and_config(json_content, config, train_flag=True, eval_flag=False)
-      self.testnet = PTLayerNetwork.from_json_and_config(json_content, config, **testnet_kwargs)
+      self.network = PTLayerNetwork.from_json_and_config(json_content, config)
     elif config.bool('initialize_from_model', False) and config.has('load'):
       model = h5py.File(config.value('load', ''), "r")
-      self.trainnet = PTLayerNetwork.from_hdf_model_topology(model, train_flag=True, eval_flag=False,
-                                                            **PTLayerNetwork.init_args_from_config(config))
-      self.testnet = PTLayerNetwork.from_hdf_model_topology(model, **dict_joined(testnet_kwargs,
-                                                            PTLayerNetwork.init_args_from_config(config)))
+      self.network = PTLayerNetwork.from_hdf_model_topology(model, **PTLayerNetwork.init_args_from_config(config))
       model.close()
     else:
-      self.trainnet = PTLayerNetwork.from_config_topology(config, train_flag=True, eval_flag=False)
-      self.testnet = PTLayerNetwork.from_config_topology(config, **testnet_kwargs)
-    if train_param_args is not None:
-      self.trainnet.declare_train_params(**train_param_args)
-    if self.testnet_share_params:
-      testnet_all_params = self.testnet.get_all_params_vars()
-      assert len(testnet_all_params) == 0
+      self.network = PTLayerNetwork.from_config_topology(config)
     if config.has('load'):
       model = h5py.File(config.value('load', ''), "r")
       if 'update_step'in model.attrs:
-        self.trainnet.update_step = model.attrs['update_step']
+        self.network.update_step = model.attrs['update_step']
       model.close()
     # initialize batch
     self.used_data_keys = self.trainnet.get_used_data_keys()
@@ -150,38 +130,10 @@ class Device(object):
     #          for k in self.used_data_keys}
     #self.j = {k: theano.shared(numpy.zeros((1, 1), dtype='int8'), borrow=True, name='j_%s' % k)
     #          for k in self.used_data_keys}
-    if self.network_task == 'train':
-      gparams = []
-      exclude = []
-      self.gradients = {}
-      for pi, param in enumerate(self.trainnet.train_params_vars):
-        if log.verbose[4]: progress_bar(float(pi) / len(self.trainnet.train_params_vars), "calculating gradients ...")
-        if hasattr(param,'custom_update'):
-          gparam = param.custom_update
-        elif update_specs['layers'] and param.layer.name not in update_specs['layers']:
-          gparam = 0
-        else:
-          if param.layer.attrs.get('cost',''):
-            keys = param.layer.attrs['cost']
-            if isinstance(keys, list):
-              gparam = sum(grad(self.trainnet.cost[k],param))
-            else:
-              gparam = grad(self.trainnet.costs[param.layer.attrs['cost']], param)
-          else:
-            gparam = grad(self.trainnet.get_objective(), param)
-        if gparam == 0:
-          exclude.append(param)
-          print("exclude:", self.name, param.name, file=log.v4)
-          gparams.append(T.constant(0))
-          continue
-        self.gradients[param] = gparam
-        gparams.append(gparam)
-    else:
-      self.gradients = None
     if log.verbose[4]: progress_bar()
 
     # initialize functions
-    self.updater = None
+    #self.updater = None
     self.update_specs = update_specs
 
     self.forwarder = None
@@ -565,8 +517,6 @@ class Device(object):
       for k in target_keys:
         self.input_queue.send(self.output_index[k])
       self.input_queue.send(self.tags)
-      if self.config.value('loss','') in ('ctc', 'hmm'):
-        self.input_queue.send(self.ctc_targets)
 
   def set_learning_rate(self, learning_rate):
     """
@@ -616,50 +566,6 @@ class Device(object):
     update_frac = self.update_total_time / total_time
     print("Device %s proc epoch time stats: total %s, %.02f%% computing, %.02f%% updating data" % \
                      (self.name, hms(total_time), compute_frac * 100, update_frac * 100), file=log.v4)
-
-  def need_reinit(self, json_content, train_param_args=None):
-    if self.config.bool('reinit', True) == False:
-      return False
-    assert self.trainnet
-    if isinstance(json_content, str):
-      import json
-      json_content = json.loads(json_content)
-    if self.trainnet.to_json_content() != json_content:
-      print("Device: reinit because network description differs. Diff:", \
-                       dict_diff_str(self.trainnet.to_json_content(), json_content), file=log.v3)
-      return True
-    if train_param_args is None:
-      train_param_args = self.trainnet.get_train_param_args_default()
-    if self.trainnet.train_param_args != train_param_args:
-      print("Device: reinit because network train params differ", file=log.v3)
-      return True
-    return False
-
-  def reinit(self, json_content, train_param_args=None):
-    """
-    :type json_content: dict[str] | str
-    :type train_param_args: dict
-    :returns len of train_params
-    :rtype: int
-    Reinits for a new network topology. This can take a while
-    because the gradients have to be recomputed.
-    """
-    assert self.main_pid == os.getpid(), "Call this from the main proc."
-    if self.blocking:
-      if self.need_reinit(json_content=json_content, train_param_args=train_param_args):
-        self.initialize(self.config, update_specs=self.update_specs,
-                        json_content=json_content,
-                        train_param_args=train_param_args)
-      return len(self.trainnet.train_params_vars)
-    else:
-      self.input_queue.send("reinit")
-      self.input_queue.send(json_content)
-      self.input_queue.send(train_param_args)
-      r = self.output_queue.recv()
-      assert r == "reinit-ready"
-      r = self.output_queue.recv()
-      self.sync_used_targets()
-      return r
 
   def prepare(self, network, updater=None, train_param_args=None, epoch=None):
     """
