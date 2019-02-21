@@ -5266,7 +5266,9 @@ class FramewiseStatisticsLayer(LayerBase):
 
 
 class PrintLayer(LayerBase):
-  """Prints the sources to console/log"""
+  """
+  Prints the sources to console/log, via :func:`tf.Print`.
+  """
   layer_class = "print"
 
   def __init__(self, **kwargs):
@@ -5278,19 +5280,14 @@ class PrintLayer(LayerBase):
       self.output.size_placeholder = source.output.size_placeholder.copy()
 
   @classmethod
-  def transform_config_dict(cls, d, network, get_layer):
+  def get_out_data_from_opts(cls, name, sources, **kwargs):
     """
-    :param dict[str] d: will modify inplace, the loss_opts
-    :param TFNetwork.TFNetwork network:
-    :param ((str) -> LayerBase) get_layer: function to get or construct another layer
+    :param str name:
+    :param list[LayerBase] sources:
+    :rtype: Data
     """
-    d["sources"] = [get_layer(d.pop("from"))]
-
-  @classmethod
-  def get_out_data_from_opts(cls, **kwargs):
-    assert "n_out" not in kwargs, "Don't set n_out explicity in this layer"
-    kwargs["n_out"] = kwargs["sources"][0].output.dim
-    return super(PrintLayer, cls).get_out_data_from_opts(**kwargs)
+    assert len(sources) == 1, "PrintLayer %r: expects exactly one source, but got: %r" % (name, sources)
+    return sources[0].output.copy("%s_output" % name)
 
 
 class ImageSummaryLayer(LayerBase):
