@@ -5290,6 +5290,66 @@ class PrintLayer(LayerBase):
     return sources[0].output.copy("%s_output" % name)
 
 
+class HDFDumpLayer(LayerBase):
+  """
+  Dumps into HDF file, compatible to :class:`HDFDataset`.
+  """
+  layer_class = "hdf_dump"
+
+  def __init__(self, filename, **kwargs):
+    """
+    :param str filename:
+    """
+    super(HDFDumpLayer, self).__init__(**kwargs)
+    self.output = self.sources[0].output.copy("%s_output" % self.name)
+    data = self.output.copy_as_batch_major()  # need batch-major for SimpleHDFWriter
+
+    from HDFDataset import SimpleHDFWriter
+    import atexit
+    self.filename = filename
+    self.num_seqs_written = 0
+    self.hdf_writer = SimpleHDFWriter(filename=filename, dim=data.dim, ndim=data.ndim)
+    atexit.register(self._at_exit)
+
+    def py_write(data_np, tags, *sizes):
+      """
+      :param numpy.ndarray data_np: (B,...), this is data.placeholder
+      :param list[str] tags:
+      :param sizes:
+      :return: unused
+      """
+      assert len(sizes) == len(data.size_placeholder)
+      assert len(tags) == data_np.shape[0]
+      self.num_seqs_written += data_np.shape[0]
+      self.hdf_writer.insert_batch(
+        inputs=data_np,
+        seq_tag=tags,
+        seq_len={i: size for (i, size) in zip(sorted(data.size_placeholder.keys()), sizes)})
+      return 0
+
+    tf_write = tf.py_func(
+      py_write,
+      [data.placeholder, self.network.get_seq_tags()] + [size for (i, size) in sorted(data.size_placeholder.items())],
+      tf.int64,
+      stateful=True)
+
+    self.network.register_post_control_dependencies([tf_write])
+
+  def _at_exit(self):
+    print("HDFDumpLayer, wrote %i seqs to file %r." % (self.num_seqs_written, self.filename))
+    self.hdf_writer.close()
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :rtype: Data
+    """
+    assert len(sources) == 1, "PrintLayer %r: expects exactly one source, but got: %r" % (name, sources)
+    return sources[0].output.copy("%s_output" % name)
+
+
 class ImageSummaryLayer(LayerBase):
   """Creates image summaries which can be viewed in TensorBoard.
   This layer expects the source to be in (T-decoder, T-encoder, B, 1).
