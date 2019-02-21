@@ -19,10 +19,10 @@ class CachedDataset(Dataset):
     """
     super(CachedDataset, self).__init__(**kwargs)
     self.cache_byte_size_total_limit = cache_byte_size
-    if cache_byte_size < 0:
-      self.cache_byte_size_limit_at_start = 0
-    elif cache_byte_size == 0:
+    if cache_byte_size == -1:
       self.cache_byte_size_limit_at_start = 1024 ** 4
+    elif cache_byte_size == 0:
+      self.cache_byte_size_limit_at_start = 0
     else:
      self.cache_byte_size_limit_at_start = max(cache_byte_size * 2 // 3, 1)
      self.cache_byte_size_total_limit = max(cache_byte_size - self.cache_byte_size_limit_at_start, 1)
@@ -175,7 +175,7 @@ class CachedDataset(Dataset):
     if self.is_cached(start, end, blocking=True):
       return
 
-    if self.cache_byte_size_total_limit > 0:  # If the cache is enabled.
+    if self.cache_byte_size_limit_at_start > 0:  # If the cache is enabled.
       self._load_seqs_with_cache(start, end)
       return self.is_cached(start, end, blocking=True)
 
