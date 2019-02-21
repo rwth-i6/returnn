@@ -21,6 +21,8 @@ class CachedDataset(Dataset):
     self.cache_byte_size_total_limit = cache_byte_size
     if cache_byte_size < 0:
       self.cache_byte_size_limit_at_start = 0
+    elif cache_byte_size == 0:
+      self.cache_byte_size_limit_at_start = 1024 ** 4
     else:
      self.cache_byte_size_limit_at_start = max(cache_byte_size * 2 // 3, 1)
      self.cache_byte_size_total_limit = max(cache_byte_size - self.cache_byte_size_limit_at_start, 1)
