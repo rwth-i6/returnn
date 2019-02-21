@@ -1,6 +1,7 @@
 
 from __future__ import print_function
 import gc
+import sys
 import time
 import numpy
 import functools
@@ -141,7 +142,10 @@ class CachedDataset(Dataset):
     self.cached_bytes_at_start = cached_bytes
     if num_cached > 0:
       self.preload_end = num_cached
-      threading.Thread(target=self._preload_seqs, args=(0, num_cached), daemon=True).start()
+      if sys.version_info >= (3, 0):
+        threading.Thread(target=self._preload_seqs, args=(0, num_cached), daemon=True).start()
+      else:
+        threading.Thread(target=self._preload_seqs, args=(0, num_cached)).start()
 
   def load_seqs(self, start, end):
     """
