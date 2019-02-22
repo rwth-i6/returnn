@@ -5293,13 +5293,16 @@ class PrintLayer(LayerBase):
 class HDFDumpLayer(LayerBase):
   """
   Dumps into HDF file, compatible to :class:`HDFDataset`.
+
+  Common usage would be to add this to your network with "is_output_layer": True,
+  such that you don't need to make other layers depend on it.
   """
   layer_class = "hdf_dump"
 
   def __init__(self, filename, dump_whole_batches=False, **kwargs):
     """
     :param str filename:
-    :param bool dump_whole_batches:
+    :param bool dump_whole_batches: dumps the whole batch as a single sequence into the HDF
     """
     super(HDFDumpLayer, self).__init__(**kwargs)
     self.output = self.sources[0].output.copy("%s_output" % self.name)
