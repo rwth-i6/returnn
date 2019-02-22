@@ -3590,6 +3590,8 @@ class ReduceLayer(_ConcatInputLayer):
     axes = cls.get_axes(axis=axes, input_data=x)
     y_shape = list(x.batch_shape)
     out_batch_dim_axis = x.batch_dim_axis
+    out_feature_dim_axis = x.feature_dim_axis_or_unspecified
+    out_time_dim_axis = x.time_dim_axis
     if keep_dims:
       for i in axes:
         y_shape[i] = 1
@@ -3597,14 +3599,25 @@ class ReduceLayer(_ConcatInputLayer):
     else:
       if out_batch_dim_axis in axes:
         out_batch_dim_axis = None
+      if out_time_dim_axis in axes:
+        out_time_dim_axis = None
+      if out_feature_dim_axis in axes:
+        out_feature_dim_axis = None
       for i in reversed(sorted(set(axes + [x.batch_dim_axis] if x.batch_dim_axis is not None else []))):
         del y_shape[i]
+      for i in reversed(sorted(set(axes))):
         if out_batch_dim_axis and i < out_batch_dim_axis:
           out_batch_dim_axis -= 1
+        if out_time_dim_axis and i < out_time_dim_axis:
+          out_time_dim_axis -= 1
+        if out_feature_dim_axis and out_feature_dim_axis is not NotSpecified and i < out_feature_dim_axis:
+          out_feature_dim_axis -= 1
     return Data(
       name="%s_output" % name,
       shape=y_shape,
       batch_dim_axis=out_batch_dim_axis,
+      time_dim_axis=out_time_dim_axis,
+      feature_dim_axis=out_feature_dim_axis,
       dtype=x.dtype,
       sparse=False,
       beam_size=x.beam_size)
