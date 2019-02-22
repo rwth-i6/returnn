@@ -2443,6 +2443,18 @@ def get_activation_function(s):
   raise Exception("invalid activation function: %r" % s)
 
 
+def gelu(x):
+  """
+  Gaussian Error Linear Units (GELUs) (https://arxiv.org/abs/1606.08415).
+  Alternative to relu.
+
+  :param tf.Tensor x:
+  :rtype: tf.Tensor
+  """
+  import numpy
+  return 0.5 * x * (1 + tf.tanh(numpy.sqrt(2 / numpy.pi) * (x + 0.044715 * tf.pow(x, 3))))
+
+
 def random_uniform_abs_initializer(limit, **kwargs):
   return tf.random_uniform_initializer(minval=-limit, maxval=limit, **kwargs)
 
