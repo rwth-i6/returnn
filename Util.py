@@ -465,14 +465,27 @@ def _pp_extra_info(obj, depth_limit=3):
   return ", ".join(s)
 
 
-def pretty_print(obj):
+_pretty_print_limit = 300
+
+
+def set_pretty_print_default_limit(limit):
+  """
+  :param int|float limit: use float("inf") to disable
+  """
+  global _pretty_print_limit
+  _pretty_print_limit = limit
+
+
+def pretty_print(obj, limit=None):
   """
   :param object obj:
+  :param int|float limit: use float("inf") to disable. None will use the default, via set_pretty_print_default_limit
   :return: repr(obj), or some shorted version of that, maybe with extra info
   :rtype: str
   """
   s = repr(obj)
-  limit = 300
+  if limit is None:
+    limit = _pretty_print_limit
   if len(s) > limit:
     s = s[:limit - 3]
     s += "..."

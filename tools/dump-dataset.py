@@ -69,6 +69,10 @@ def dump_dataset(dataset, options):
     print("Dump files: %r*%r" % (options.dump_prefix, options.dump_postfix), file=log.v3)
   elif options.type == "stdout":
     print("Dump to stdout", file=log.v3)
+    if options.stdout_limit is not None:
+      Util.set_pretty_print_default_limit(options.stdout_limit)
+      numpy.set_printoptions(
+        threshold=sys.maxsize if options.stdout_limit == float("inf") else int(options.stdout_limit))
   elif options.type == "print_shape":
     print("Dump shape to stdout", file=log.v3)
   elif options.type == "plot":
@@ -188,6 +192,7 @@ def main(argv):
   argparser.add_argument('--endseq', type=int, default=10, help='end seq idx (inclusive) or -1 (default: 10)')
   argparser.add_argument('--get_num_seqs', action="store_true")
   argparser.add_argument('--type', default='stdout', help="'numpy', 'stdout', 'plot', 'null' (default 'stdout')")
+  argparser.add_argument("--stdout_limit", type=float, default=None, help="e.g. inf to disable")
   argparser.add_argument('--dump_prefix', default='/tmp/crnn.dump-dataset.')
   argparser.add_argument('--dump_postfix', default='.txt.gz')
   argparser.add_argument("--key", default="data", help="data-key, e.g. 'data' or 'classes'. (default: 'data')")
