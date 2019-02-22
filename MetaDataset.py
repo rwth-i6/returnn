@@ -157,6 +157,18 @@ class MetaDataset(CachedDataset2):
 
     self.data_dtypes = {data_key: _select_dtype(data_key, self.data_dims, data_dtypes) for data_key in self.data_keys}
 
+  def _is_same_seq_name_for_each_dataset(self):
+    """
+    This should be fast.
+
+    :rtype: bool
+    """
+    main_list = self.seq_list_original[self.default_dataset_key]
+    for key, other_list in self.seq_list_original.items():
+      if main_list is not other_list:
+        return False
+    return True
+
   def _load_seq_list(self, seq_list_file=None):
     """
     :param str seq_list_file:
@@ -254,12 +266,11 @@ class MetaDataset(CachedDataset2):
 
   def _check_dataset_seq(self, dataset_key, seq_idx):
     """
-    :type dataset: Dataset
-    :type seq_idx: int
+    :param str dataset_key:
+    :param int seq_idx:
     """
     dataset_seq_tag = self.datasets[dataset_key].get_tag(seq_idx)
-    self_seq_tag = self.get_partial_tag(dataset_key, seq_idx)
-
+    self_seq_tag = self.seq_list_ordered[dataset_key][seq_idx]
     assert dataset_seq_tag == self_seq_tag
 
   def _get_data(self, seq_idx, data_key):
@@ -287,12 +298,8 @@ class MetaDataset(CachedDataset2):
       return self._seq_lens[self.seq_list_ordered[self.default_dataset_key][sorted_seq_idx]]
     return super(MetaDataset, self).get_seq_length(sorted_seq_idx)
 
-  def get_partial_tag(self, dataset_key, sorted_seq_idx):
-    return self.seq_list_ordered[dataset_key][sorted_seq_idx]
-
   def get_tag(self, sorted_seq_idx):
-    partial_tags = [ self.seq_list_ordered[dataset_key][sorted_seq_idx] for dataset_key in self.dataset_keys ]
-    return "<->".join(t for t in partial_tags)
+    return self.seq_list_ordered[self.default_dataset_key][sorted_seq_idx]
 
   def get_target_list(self):
     return self.target_list
