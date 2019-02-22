@@ -5296,9 +5296,10 @@ class HDFDumpLayer(LayerBase):
   """
   layer_class = "hdf_dump"
 
-  def __init__(self, filename, **kwargs):
+  def __init__(self, filename, dump_whole_batches=False, **kwargs):
     """
     :param str filename:
+    :param bool dump_whole_batches:
     """
     super(HDFDumpLayer, self).__init__(**kwargs)
     self.output = self.sources[0].output.copy("%s_output" % self.name)
@@ -5306,26 +5307,51 @@ class HDFDumpLayer(LayerBase):
 
     from HDFDataset import SimpleHDFWriter
     import atexit
+    import numpy
+    import sys
     self.filename = filename
+    self.dump_whole_batches = dump_whole_batches
     self.num_seqs_written = 0
-    self.hdf_writer = SimpleHDFWriter(filename=filename, dim=data.dim, ndim=data.ndim)
+    ndim = data.ndim
+    if dump_whole_batches:
+      ndim = data.ndim - len(data.size_placeholder) + 1
+    self.hdf_writer = SimpleHDFWriter(filename=filename, dim=data.dim, ndim=ndim)
     atexit.register(self._at_exit)
 
     def py_write(data_np, tags, *sizes):
       """
       :param numpy.ndarray data_np: (B,...), this is data.placeholder
-      :param list[str] tags:
+      :param list[bytes] tags:
       :param sizes:
       :return: unused
       """
-      assert len(sizes) == len(data.size_placeholder)
-      assert len(tags) == data_np.shape[0]
-      self.num_seqs_written += data_np.shape[0]
-      self.hdf_writer.insert_batch(
-        inputs=data_np,
-        seq_tag=tags,
-        seq_len={i: size for (i, size) in zip(sorted(data.size_placeholder.keys()), sizes)})
-      return 0
+      # noinspection PyBroadException
+      try:
+        n_batch = data_np.shape[0]
+        assert len(sizes) == len(data.size_placeholder)
+        seq_lens = {i: size for (i, size) in zip(sorted(data.size_placeholder.keys()), sizes)}
+        extra = {}
+        if self.dump_whole_batches:
+          # The batch dim itself becomes another axis to dump.
+          # We also want to store the individual seq lens.
+          batch_seq_sizes = numpy.zeros((1, n_batch, len(seq_lens)), dtype="int32")
+          for i, (axis, size) in enumerate(sorted(seq_lens.items())):
+            batch_seq_sizes[0, :, i] = seq_lens[axis]
+          extra["seq_sizes"] = batch_seq_sizes
+          assert sorted(seq_lens.keys()) == list(range(len(seq_lens)))
+          flat_len = numpy.prod(data_np.shape[:len(seq_lens) + 1])
+          data_np = data_np.reshape((1, flat_len) + data_np.shape[len(seq_lens) + 1:])
+          seq_lens = {0: numpy.array([flat_len], dtype="int32")}
+          tags = [b"<->".join(tags)]
+          n_batch = 1
+        assert n_batch == data_np.shape[0] == len(tags)
+        self.num_seqs_written += n_batch
+        self.hdf_writer.insert_batch(inputs=data_np, seq_tag=tags, seq_len=seq_lens, extra=extra)
+        return 0
+      # TF does not print the stacktrace, so we do it instead.
+      except Exception:
+        sys.excepthook(*sys.exc_info())
+        raise
 
     tf_write = tf.py_func(
       py_write,

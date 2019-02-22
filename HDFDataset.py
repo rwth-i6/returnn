@@ -873,11 +873,12 @@ class SimpleHDFWriter:
     hdf_data = self._datasets[name]
     hdf_data[offset:] = raw_data
 
-  def insert_batch(self, inputs, seq_len, seq_tag):
+  def insert_batch(self, inputs, seq_len, seq_tag, extra=None):
     """
     :param numpy.ndarray inputs: shape=(n_batch,time,data) (or (n_batch,time), or (n_batch,time1,time2), ...)
     :param list[int]|dict[int,list[int]|numpy.ndarray] seq_len: sequence lengths (per axis, excluding batch axis)
-    :param list[str] seq_tag: sequence tags of length n_batch
+    :param list[str|bytes] seq_tag: sequence tags of length n_batch
+    :param dict[str,numpy.ndarray]|None extra:
     """
     n_batch = len(seq_tag)
     assert n_batch == inputs.shape[0]
@@ -893,6 +894,8 @@ class SimpleHDFWriter:
     assert all([max(value) == inputs.shape[key + 1] for (key, value) in seq_len.items()])
     if self.dim:
       assert self.dim == inputs.shape[-1]
+    if extra:
+      assert all([n_batch == value.shape[0] for value in extra.values()])
 
     seqlen_offset = self._seq_lengths.shape[0]
     self._seq_lengths.resize(seqlen_offset + n_batch, axis=0)
@@ -919,6 +922,10 @@ class SimpleHDFWriter:
         # However, we keep it consistent to how we handled it in our 2D MDLSTM experiments.
         self._insert_h5_other(
           "sizes", [seq_len[axis][i] for axis in range(ndim_with_seq_len)], add_time_dim=False, dtype="int32")
+      if extra:
+        assert len(seq_len) == 1  # otherwise you likely will get trouble with seq len mismatch
+        for key, value in extra.items():
+          self._insert_h5_other(key, value[i])
 
   def close(self):
     max_tag_len = max([len(d) for d in self._tags]) if self._tags else 0
