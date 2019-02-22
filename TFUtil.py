@@ -4922,9 +4922,10 @@ def softmax_cross_entropy_over_size(logits, labels):
   log_probs_t = tf.nn.log_softmax(logits_t, dim=logits_enc_time_axis)
   log_probs_t = tf.where(mask, log_probs_t, tf.zeros_like(logits_t))  # filter out the infs
   out = labels_t * log_probs_t
-  out = -tf.reduce_sum(out, axis=logits_enc_time_axis)
+  out = -tf.reduce_sum(out, axis=logits_enc_time_axis, keep_dims=True)
   probs_t = tf.nn.softmax(logits_t, dim=logits_enc_time_axis)
   out = custom_gradient.generic_loss_and_error_signal(loss=out, x=logits_t, grad_x=probs_t - labels_t)
+  out = tf.squeeze(out, axis=logits_enc_time_axis)
   return out
 
 
