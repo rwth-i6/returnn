@@ -2140,6 +2140,225 @@ def test_same_context_loop():
   print("magic (totally arbitrary) res:", session.run(x))
 
 
+def test_softmax_cross_entropy_over_size_batch1():
+  energy_np = numpy.array([
+    [0.00060279], [0.00106305], [0.00139351], [0.0016565], [0.00179641], [0.00188511], [0.00197855],
+    [0.00212687], [0.00229054], [0.00253187], [0.0028633], [0.00317292], [0.00333956], [0.00321618],
+    [0.00301804], [0.00286921], [0.00269102], [0.00233986], [0.00198704], [0.00179809], [0.00180432],
+    [0.00180019], [0.00168032], [0.00148445], [-0.00021808], [0.00024213], [0.00057256], [0.00083552],
+    [0.00097541], [0.00106409], [0.00115748], [0.00130573], [0.00146933], [0.00171059], [0.00204194],
+    [0.0023515], [0.00251812], [0.00239481], [0.00219674], [0.00204793], [0.00186977], [0.00151865],
+    [0.00116586], [0.00097693], [0.00098313], [0.000979], [0.00085914], [0.00066328]], dtype="float32")
+  energy_sizes = [2, 24]
+  ref_att_weights_np = numpy.array([
+    [8.85698071e-04], [3.03550856e-03], [4.28047322e-04], [2.12707062e-04], [1.69979918e-04], [1.69104227e-04],
+    [1.76708025e-04], [2.30993493e-04], [1.30674185e-03], [1.69335492e-02], [5.89773171e-02], [1.02726415e-01],
+    [1.38920724e-01], [3.36773008e-01], [3.02626193e-01], [3.60515639e-02], [1.24421655e-04], [1.09412758e-06],
+    [7.09717142e-07], [7.12369911e-07], [1.48852378e-05], [1.92153064e-04], [1.94299287e-06], [3.98656666e-05],
+    [1.83324970e-03], [9.68748587e-04], [7.93990912e-05], [3.37559104e-05], [2.54511542e-05], [2.01851981e-05],
+    [1.46051125e-05], [8.32758542e-06], [1.90258543e-05], [1.61443924e-04], [7.95573505e-05], [6.75756164e-05],
+    [1.12831636e-04], [4.37621129e-05], [5.69019585e-06], [5.78170584e-04], [2.09521659e-05], [1.89785933e-05],
+    [1.07380874e-04], [1.02525763e-03], [4.51886881e-04], [1.37639674e-03], [9.68037128e-01], [2.49103159e-02]],
+    dtype="float32")
+  n_batch = 1
+  n_extra_dim = 1  # number of att heads
+  assert energy_np.shape == ref_att_weights_np.shape == (numpy.prod(energy_sizes), n_extra_dim)
+  sizes_tf = {
+    i: tf.constant(numpy.array(energy_sizes[i], dtype="int32").reshape((n_batch,))) for i in range(len(energy_sizes))}
+  energy_tf = tf.constant(energy_np.reshape([n_batch] + energy_sizes + [n_extra_dim]))
+  ref_att_weights_tf = tf.constant(ref_att_weights_np.reshape([n_batch] + energy_sizes + [n_extra_dim]))
+  energy_data = Data(
+    name="energy", shape=(None, None, n_extra_dim), batch_dim_axis=0,
+    placeholder=energy_tf, size_placeholder=sizes_tf)
+  ref_att_weights_data = Data(
+    name="ref_att_weights", shape=(None, None, n_extra_dim), batch_dim_axis=0,
+    placeholder=ref_att_weights_tf, size_placeholder=sizes_tf)
+  res_tf = softmax_cross_entropy_over_size(logits=energy_data, labels=ref_att_weights_data)
+  res_tf.set_shape((n_batch, energy_sizes[0], n_extra_dim))
+  res_np = session.run(res_tf)
+  print("res:", res_np)
+  assert numpy.alltrue(numpy.isfinite(res_np))
+
+
+def test_softmax_cross_entropy_over_size_n_batch():
+  energy_np = numpy.array([
+    [0.00060279], [0.00106305], [0.00139351], [0.0016565], [0.00179641], [0.00188511], [0.00197855],
+    [0.00212687], [0.00229054], [0.00253187], [0.0028633], [0.00317292], [0.00333956], [0.00321618],
+    [0.00301804], [0.00286921], [0.00269102], [0.00233986], [0.00198704], [0.00179809], [0.00180432],
+    [0.00180019], [0.00168032], [0.00148445], [-0.00021808], [0.00024213], [0.00057256], [0.00083552],
+    [0.00097541], [0.00106409], [0.00115748], [0.00130573], [0.00146933], [0.00171059], [0.00204194],
+    [0.0023515], [0.00251812], [0.00239481], [0.00219674], [0.00204793], [0.00186977], [0.00151865],
+    [0.00116586], [0.00097693], [0.00098313], [0.000979], [0.00085914], [0.00066328]], dtype="float32")
+  energy_sizes = [2, 24]
+  ref_att_weights_np = numpy.array([
+    [8.85698071e-04], [3.03550856e-03], [4.28047322e-04], [2.12707062e-04], [1.69979918e-04], [1.69104227e-04],
+    [1.76708025e-04], [2.30993493e-04], [1.30674185e-03], [1.69335492e-02], [5.89773171e-02], [1.02726415e-01],
+    [1.38920724e-01], [3.36773008e-01], [3.02626193e-01], [3.60515639e-02], [1.24421655e-04], [1.09412758e-06],
+    [7.09717142e-07], [7.12369911e-07], [1.48852378e-05], [1.92153064e-04], [1.94299287e-06], [3.98656666e-05],
+    [1.83324970e-03], [9.68748587e-04], [7.93990912e-05], [3.37559104e-05], [2.54511542e-05], [2.01851981e-05],
+    [1.46051125e-05], [8.32758542e-06], [1.90258543e-05], [1.61443924e-04], [7.95573505e-05], [6.75756164e-05],
+    [1.12831636e-04], [4.37621129e-05], [5.69019585e-06], [5.78170584e-04], [2.09521659e-05], [1.89785933e-05],
+    [1.07380874e-04], [1.02525763e-03], [4.51886881e-04], [1.37639674e-03], [9.68037128e-01], [2.49103159e-02]],
+    dtype="float32")
+  n_extra_dim = 1  # number of att heads
+  assert energy_np.shape == ref_att_weights_np.shape == (numpy.prod(energy_sizes), n_extra_dim)
+  n_batch = 5
+  energy_np = energy_np.reshape([1] + energy_sizes + [n_extra_dim]).repeat(n_batch, axis=0)
+  ref_att_weights_np = ref_att_weights_np.reshape([1] + energy_sizes + [n_extra_dim]).repeat(n_batch, axis=0)
+  sizes_tf = {
+    i: tf.constant([energy_sizes[i]] * n_batch, dtype="int32") for i in range(len(energy_sizes))}
+  energy_tf = tf.constant(energy_np)
+  ref_att_weights_tf = tf.constant(ref_att_weights_np)
+  energy_data = Data(
+    name="energy", shape=(None, None, n_extra_dim), batch_dim_axis=0,
+    placeholder=energy_tf, size_placeholder=sizes_tf)
+  ref_att_weights_data = Data(
+    name="ref_att_weights", shape=(None, None, n_extra_dim), batch_dim_axis=0,
+    placeholder=ref_att_weights_tf, size_placeholder=sizes_tf)
+  res_tf = softmax_cross_entropy_over_size(logits=energy_data, labels=ref_att_weights_data)
+  res_tf.set_shape((n_batch, energy_sizes[0], n_extra_dim))
+  res_np = session.run(res_tf)
+  print("res:", res_np)
+  assert numpy.alltrue(numpy.isfinite(res_np))
+
+
+def test_softmax_cross_entropy_over_size_n_batch_real():
+  if sys.version_info[0] <= 2:  # gzip.decompress is >=PY3
+    raise unittest.SkipTest
+  import gzip
+  import base64
+  # Via HDFDumpLayer of "output/energy", and dump_whole_batches=True.
+  # ./returnn/tools/dump-dataset.py data-train/att-kl/energy.hdf --stdout_limit inf --stdout_as_bytes --endseq 0
+  energy_np = numpy.frombuffer(gzip.decompress(base64.decodebytes(
+    b'H4sIAK3yb1wC/33SeVSU5xUG8GEyLKIwIChrgOhAIwZEsfh994IiGQwFgqgDoS6AiCBbBKpxsNYE'
+    b'WWSRfdMwEQRDAJXFAeR7X1JIDShbwqIISJESIQlERFEMICaenNNzUlv7nPP77/5xz3Oe9HtGEGWT'
+    b'BJum6qA7vQ9EDT9Boew5MLMC3OcuxCeGBjg6bY56Q/ZYZuKJ+Z1+mNG4B0UFLviwcjPW+WzA/CJD'
+    b'zGYEGMyOQmPVLVA63Q3NiTegZLIWeK9ko9SXc606yioPrIRDhp4wzUTDed0M0Ao8D6v05MCragM3'
+    b'jwmQai9FvpcJVgkssOiZKab2r0B2QgXHN86BRkMneP8ogzL/MLiycydYvXCB3W8wsNCiDV0KRuT3'
+    b'Mu82k3W6yUSlxZY4LFngHvsWcbx2R86kua7enslm3vGNYSue8uBQnhf0dOWCfE0V5GsWAdMXDWmz'
+    b'22EXZwR12Wns3uvf1O9M6uAefaBAPrqiTOJLDUjH/c2kZvvQfxgo/hJKl2lg7UoHvP6nMCxXSMD4'
+    b'q7mYda0IB0KvYMYXtahjx6HNz3Js4RfhNkkcHh+RYPc1G2xIscDlhtY4ZmqD2bNWuHaLId6aWvyv'
+    b'Dn+f2Qp9zBl3wZAHf8P7qdlYNvE5Nn9ag5KCJnSQtGN/ai8eE93BDSPduDjZiFpbivH9vQl4Jz0S'
+    b'kwKC8KuZD7HieQRu7wzFdTpeuKcb8OB7Z+F1yrWTufupL9jp8mIwVZqHrHpjdNWxw1BjDyxJCMas'
+    b'xeOYoh2NPReO4Q90Fzoe1Mfd4lY4O3sGBh2OQi4XBzWtyTAcHA1RfCv4pD2EDXArIK+TlNHACgoZ'
+    b'yOzPgdRng2Btr4XWnzFoAR74h6wAVLMPwQ56EIMTX/5+wxad/DXxwvF2mOJHgp+ujB2y+JCTfa5F'
+    b'NlcaEC/XJs5m3+36/9dntFEGCfj+PRJZV8YtBnmwmftdAcaqIEF/AhL9lTBMYylmJitiV/U08Ndx'
+    b'sHdADCbWVxlJsToJdjpHUoXDJHCZIuWrK9NQr2kyKuskhtUFr6U46ETnxRuoScwKeubhGHGK+JS0'
+    b'xRoT99SNnEbOV4y7dC1btbWEaVLncaVKQtKx9Ty5Gf+UFC6spmVPXOmox2G66/Ip2nI5hjpKpdTH'
+    b'IJDmD255LYF3EPvOsJzt6LnDVqyfZkcfz7BY/x27+61/sn3hS8Dh0Q6oHi2Fk72jcOqCIjpsUMCF'
+    b'jDYQTSRCfOEm0DSdY/u+bmHl286xbd0se15wihEP1zAOp7JZ7qIiJCmZQHyoAFwcL7Djd99lW814'
+    b'qKamgv3Jy7AlT4jPhRpIVNSx6o9qqPRAC9uXmuGdF46476kfRq49hkdoJAb1eOKTkzYoijRGWcXL'
+    b'ez9VvC4XYO/OeeDZTkJ/yBRUGguw5ufluCNDD8WXlqOIU0Rz2QIkThPCrL5ELE2LyEo1GYkwzCcV'
+    b'5gVkqquQZB/IIk47vMm03pec7vpy5plVB1t0uZTl+Q/Wp581JHfbpcTpwTnCiyshJ/5VTaQzTcRe'
+    b'uYvA7Q4yzpMTuVsO2fpmAkn/IYe4dlSSnqJGMvcwF7y166Ct5VsYnRmDsKYFaFlQRZMYHXR/aoz8'
+    b'J0ZY+WcD7HPTw4rkJegubQe3YYAjUWs4+1vbyHBwCrlrKyN2B4pJiXkx2fJy82pj58jIVBT5X/vs'
+    b'/36SGU26xkrMhbA3FuEXg0DIvJ4Cf+kqARv5NaiorIWOqAoI8iuHhKEksIpRghreJU7s+RlxS54k'
+    b'oV+r0jcsllNx0wr6wcWXm6vTot58TTp+hk+DOyXkVTMvbLibjrEMb+g0O5M2wvoOG8An29zB1TIa'
+    b'QoSZMK+aDv29CdBAYiEz2BksZ0JZ/XoTMvfjP0jWGRXamvgmnX8kok5xb9O2oLdp+Akz+vebq2mJ'
+    b'ZAUNOOpPXpWvbM0Jj8VwXieOcP73tDn7WYtN4lof9sgXD9hszhZWmyVAhBaB8Ns/QZCZEJ0j9bH/'
+    b'sBAPLf0WVHycoTAwddOwqgohkxvJlIsCqZqT1H/n08deZS0h/IAeyHzy2LKUaubffYrWxdFvOk/T'
+    b'RfY05dnFUquTJ+ma9RFUXbqf2v2yncYZIBWZraKNLSpUSX+EDMa2kv2J90j3ZR06kedKXTROUtO8'
+    b'dGppnUvljWn0ra3RNMXfn35cvIs+7veizeJQmlQcRdMEkb+Z3uNJXc7uobbhuynzkYSWHHemapZ2'
+    b'NOmoBY1YNKB1+srU5f0hcjWjjCwThxNfo3eJptlhMuV9g+Tm6dLNas40YU0Ytd8vpYZ/DaG9H7tR'
+    b'B38rWnrRmK4aFFG+I0PNih2pyYDVb34Fpl0tleAHAAA='
+    )), dtype='float32').reshape((504, 1))
+  # ./returnn/tools/dump-dataset.py .../ref_att_weights.hdf --stdout_limit inf --stdout_as_bytes --endseq 0
+  ref_att_weights_np = numpy.frombuffer(gzip.decompress(base64.decodebytes(
+    b'H4sIAG/zb1wC/73Qe1SMeRzH8VZrmEpSKUmxOhuRMjXP8/t9f7/neWYT2dCN3CW1RKEoU0MuaVal'
+    b'TVKnXeNaI9lKKSnlkpVLRbJKTg0yOOySbnJbuez2h3P2OPjTH69/P+9zPhKHZSSww40mLteCtZ4/'
+    b'HOCcINVHAsVTAJrYcOhxyyOkLJFzTl3Nk8B6nnMxFJQrDwv1XbuEulwT3jGqD3Q2pzKLlQJTCDJm'
+    b'z8m16Oh6d/Bb3IcNY0ZhyX/7/3fIvZPs695AjJTZeGT6ANy5qREFzshB0f3lqKRUH5Wq9iM3dzvo'
+    b'15SNA49vw6KMJ5jdhnBwewXrn2JOwiqPICzdj/Ikd3FnQByhrU+AXXaM/HgtSlZmVMt93PvaShoM'
+    b'Se7qcML7m4HCsRk7D87CjiOz8bAFybg16BK+WXmIts0VCTMeuQpcj0J409UsZJzPIs+NRiDbOAW7'
+    b'JGcD+8OMG6gr1hhQnhXij/ni3s3PKRPr0jmzY4npXVN8Ex1B72pXoKfVwWjPQ4KMJhigoq4OrNFR'
+    b'gXZGLLTPiSde6jVYv+QGja2PJBbzvSmt8iAdWyPhZb6S+KWGy3bqDOS/1PvansUryf4OSzq74A/w'
+    b'PeEC7UcNgIm0A9sKHfgTm4A2Po1rrQRh9hVD2c6YcMH0lpoojrx0rtbZ7lwl3uz09x2FdJqjAasd'
+    b'5QVo/EFmd9U5tnfzc8QF/30iMSATuMmIv1jHVizeziaHxLEeZt8xoltDpG5RBFXUavHCyJ2s3blV'
+    b'KB9i0IrccGnx6YdMgPoJ+7xcTDJTxsBG+RUSOUkuMwkx5r/U+9o2txcSJ6Pd9PzEqaQj+VsywfMJ'
+    b'rJSLCdennChfNdKlmWq+QrtdyJPXCHvEwwXDvi7885I7nOM6e5y5Si31dl0gLdbPZm6PT2Jq5m1k'
+    b'F/uaMzFB4KT6ZaDT3pt5Es/kECfSqIv/UjU4xYvKmZSadZxNwgm6ticONsSMhhvMAAg7awnWEUq4'
+    b'Pf4gcLMcoOJBOboaqIOaZl2DlX7Poe4BS/kj1Zx98BrByjZdcLC148dW9RXE1jbC1PepPJt9g5b7'
+    b'1ZISfjMUSRfCqHIzepExoHvc/Ki/YScnjnDh3p0wJdY5J8Fbo4Lu9TmwKOEdXBpTCD7Xq7F77FJE'
+    b'rxSwWY7X4MUFFtqaPcm0CxroH13F2g/imfL6VgjJdQVPF4zvJQiQnD+Q/CbaQWbuAhKRn0be6mmo'
+    b'fuZS2ab31ryoIIyUK9zpaDmQKf2vw87S3+He3FDIeWwNPx2PpV5OW4UlxvsF77sBQrOOq9B8Wgs/'
+    b'6wUyl05ZsFu2qFiTyWekipbXzhpPrdSYfc2mtBVgsxYlk/DSB/Vuf+x2vAe/1uIUPzhMyr2/k0FT'
+    b'WuRU98x8mhHnS80ri6l7LaE2ZkfJ7mArKqlcTg/EZPJhxinCq0MThVtvB/D1tuOEgKZC7uzCKXSL'
+    b'xwO6zD6R03usptpxDfRTPQt+ECe230qzBhmD+pkaN7okY8MVb1CDpS17PFQXKR3uIY1ePDYNvwwb'
+    b'jcpgq2t/bOcvZ3pqpyNlrYjUZafCGsU6yqwPgmn5pmRwURtpLYqQ7brfzH2ql/tqGa1KiuaMyvrR'
+    b'sVoVqY6RkwPdm8jUy/uI7Gk0rV6EhBPVNcLbx+ZCtvkGYWFfHRLY5gZWoZfBrWUHDPvGE1bXOiDD'
+    b'ufPwpAnZ6NcsK+Rol8CU+uaji0O74WLGaBaFTse9nV4OBts45GPKtdYkQxJxhvQkS3izYhyYWIRC'
+    b'4iIR6VprQtJ7LLB0hIhGlqwkh69oeNc5GUK3JEdwUDfwhz2S+PhjiVzUXg/u+wUCiZsuI+461tB4'
+    b'K4IUFnTS9qIAGLO0hX7oeT2M4JKCztKZ9YMg4aoKi4qC8H3TYBxdmIDbJBOxJq2E/SfKixk+dDRK'
+    b'a9/LOtY1srq3B0rrEpucQ/Y+YidbalBeTTvabjAPol/4oZSRDchmaAioFDZ0zJB79OmkMJlVuz7/'
+    b'ofcvjNYYm+AHAAA='
+    )), dtype='float32').reshape((504, 1))
+  seq_sizes_np = numpy.frombuffer(gzip.decompress(base64.decodebytes(
+    b'H4sIAK3yb1wC/2NiYGCQAGImIBZFopmBWAZKi0NpKSAGAN0FJ6owAAAA')), dtype='int32').reshape((6, 2))
+  assert isinstance(seq_sizes_np, numpy.ndarray)
+  max_seq_sizes_np = numpy.max(seq_sizes_np, axis=0)
+  assert max_seq_sizes_np.shape == (seq_sizes_np.shape[1],)
+  print("seq_sizes_np:")
+  print(seq_sizes_np)
+  n_batch = seq_sizes_np.shape[0]  # 6
+  print("total n_batch:", n_batch)
+  n_extra_dim = energy_np.shape[-1]
+  energy_np = energy_np.reshape([n_batch] + list(max_seq_sizes_np) + [n_extra_dim])
+  ref_att_weights_np = ref_att_weights_np.reshape([n_batch] + list(max_seq_sizes_np) + [n_extra_dim])
+  for new_n_batch in range(1, n_batch + 1):
+    for n_batch_start in range(0, n_batch - new_n_batch + 1):
+      # Cut n_batch.
+      n_batch_end = n_batch_start + new_n_batch
+      print("Try with n_batch %i (from %i to %i)." % (new_n_batch, n_batch_start, n_batch_end))
+      _seq_sizes_np = seq_sizes_np[n_batch_start:n_batch_end]
+      _max_seq_sizes_np = numpy.max(_seq_sizes_np, axis=0)
+      _energy_np = energy_np[n_batch_start:n_batch_end, :_max_seq_sizes_np[0], :_max_seq_sizes_np[1]]
+      _ref_att_weights_np = ref_att_weights_np[n_batch_start:n_batch_end, :_max_seq_sizes_np[0], :_max_seq_sizes_np[1]]
+      seq_sizes_tf = {i: tf.constant(_seq_sizes_np[:, i]) for i in range(_seq_sizes_np.shape[1])}
+      energy_tf = tf.constant(_energy_np)
+      ref_att_weights_tf = tf.constant(_ref_att_weights_np)
+      energy_data = Data(
+        name="energy", shape=(None, None, n_extra_dim), batch_dim_axis=0,
+        placeholder=energy_tf, size_placeholder=seq_sizes_tf)
+      ref_att_weights_data = Data(
+        name="ref_att_weights", shape=(None, None, n_extra_dim), batch_dim_axis=0,
+        placeholder=ref_att_weights_tf, size_placeholder=seq_sizes_tf)
+      res_tf = softmax_cross_entropy_over_size(logits=energy_data, labels=ref_att_weights_data)
+      res_tf.set_shape((new_n_batch, _max_seq_sizes_np[0], n_extra_dim))
+      res_np = session.run(res_tf)
+      print("res:", res_np)
+      assert numpy.alltrue(numpy.isfinite(res_np))
+
+
+def test_softmax_cross_entropy_over_size_small_batch_2():
+  import Util
+  rnd = numpy.random.RandomState(42)
+  n_batch = 2
+  n_extra_dim = 1
+  dec_seq_lens = [2, 2]
+  enc_seq_lens = [4, 3]
+  energy_np = rnd.normal(size=(n_batch, max(dec_seq_lens), max(enc_seq_lens), n_extra_dim)).astype("float32")
+  ref_att_weights_np = rnd.normal(size=(n_batch, max(dec_seq_lens), max(enc_seq_lens), n_extra_dim)).astype("float32")
+  for i in range(n_batch):
+    ref_att_weights_np[i, :dec_seq_lens[i], :enc_seq_lens[i]] = Util.softmax(
+      ref_att_weights_np[i, :dec_seq_lens[i], :enc_seq_lens[i]], axis=1)
+    ref_att_weights_np[i, dec_seq_lens[i]:] = 0
+    ref_att_weights_np[i, :dec_seq_lens[i], enc_seq_lens[i]:] = 0
+  sizes_tf = {0: tf.constant(dec_seq_lens), 1: tf.constant(enc_seq_lens)}
+  energy_tf = tf.constant(energy_np)
+  ref_att_weights_tf = tf.constant(ref_att_weights_np)
+  energy_data = Data(
+    name="energy", shape=(None, None, n_extra_dim), batch_dim_axis=0,
+    placeholder=energy_tf, size_placeholder=sizes_tf)
+  ref_att_weights_data = Data(
+    name="ref_att_weights", shape=(None, None, n_extra_dim), batch_dim_axis=0,
+    placeholder=ref_att_weights_tf, size_placeholder=sizes_tf)
+  res_tf = softmax_cross_entropy_over_size(logits=energy_data, labels=ref_att_weights_data)
+  res_tf.set_shape((n_batch, max(dec_seq_lens), n_extra_dim))
+  res_np = session.run(res_tf)
+  print("res:", res_np)
+  assert numpy.alltrue(numpy.isfinite(res_np))
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()
