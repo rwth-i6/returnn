@@ -2359,6 +2359,51 @@ def test_softmax_cross_entropy_over_size_small_batch_2():
   assert numpy.alltrue(numpy.isfinite(res_np))
 
 
+def test_softmax_cross_entropy_over_size_gradient():
+  n_batch = 2
+  n_dec_time = n_enc_time = 10
+  n_extra_dim = 1
+  tf.set_random_seed(42)
+  energy_tf = tf.get_variable(
+    "test_softmax_cross_entropy_over_size_gradient_var",
+    shape=(n_batch, n_dec_time, n_enc_time, n_extra_dim),
+    initializer=tf.random_normal_initializer(seed=23))
+  ref_att_weights_tf = tf.reshape(
+    tf.one_hot(tf.range(n_dec_time, dtype=tf.int32), n_enc_time, dtype=tf.float32),
+    (1, n_dec_time, n_enc_time, n_extra_dim))
+  ref_att_weights_tf = tf.tile(ref_att_weights_tf, [n_batch, 1, 1, 1])
+  ref_att_weights_tf.set_shape((n_batch, n_dec_time, n_enc_time, n_extra_dim))
+  sizes = {0: [n_dec_time, n_dec_time - 1], 1: [n_enc_time, n_enc_time - 1]}
+  sizes_tf = {i: tf.constant(size) for (i, size) in sizes.items()}
+  energy_data = Data(
+    name="energy", shape=(None, None, n_extra_dim), batch_dim_axis=0,
+    placeholder=energy_tf, size_placeholder=sizes_tf)
+  ref_att_weights_data = Data(
+    name="ref_att_weights", shape=(None, None, n_extra_dim), batch_dim_axis=0,
+    placeholder=ref_att_weights_tf, size_placeholder=sizes_tf)
+  for stable_gradient in [False, True]:
+    res_tf = softmax_cross_entropy_over_size(
+      logits=energy_data, labels=ref_att_weights_data, stable_gradient=stable_gradient)
+    res_tf.set_shape((n_batch, n_dec_time, n_extra_dim))
+    res_flat_tf = flatten_with_seq_len_mask(res_tf, sizes_tf[0], batch_dim_axis=0, time_dim_axis=1)
+    res_flat_tf.set_shape((sum(sizes[0]), n_extra_dim))
+    loss_tf = tf.reduce_mean(res_tf)
+    optimizer = tf.train.GradientDescentOptimizer(learning_rate=1e2)
+    optim_op = optimizer.minimize(loss=loss_tf, var_list=[energy_tf])
+    session.run(energy_tf.initializer)  # Note: the second time this is called, it will get a different init
+    last_loss = float("inf")
+    for i in range(10):
+      loss, _ = session.run([loss_tf, optim_op])
+      print("step %i, loss %f" % (i, loss))
+      if numpy.isnan(loss):
+        print("WARNING: got nan")
+        print("lr:", session.run(optimizer._learning_rate_tensor))
+        print("var:", session.run(energy_tf))
+        raise Exception("got nan")
+      assert loss < last_loss or 0.0 == loss == last_loss  # this must always improve
+      last_loss = loss
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()

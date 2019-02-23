@@ -4868,7 +4868,7 @@ def smoothing_cross_entropy(logits,
     return xentropy - normalizing  # shape(labels)
 
 
-def softmax_cross_entropy_over_size(logits, labels):
+def softmax_cross_entropy_over_size(logits, labels, stable_gradient=True):
   """
   The last spatial axis with dyn size info will be used and interpret as the class probabilities
   over the size.
@@ -4882,6 +4882,7 @@ def softmax_cross_entropy_over_size(logits, labels):
   :param Data labels: in prob space. shape compatible to `logits` (but axes can be ordered differently).
     Shape can be e.g. (B,dec-T,enc-T,H...) etc.
     If is has multiple spatial axes, we expect them to be in the same order as of `logits`
+  :param bool stable_gradient: whether to use an explicit gradient
   :return: shape as logits, but the T axis removed.
   :rtype: tf.Tensor
   """
@@ -4935,8 +4936,9 @@ def softmax_cross_entropy_over_size(logits, labels):
   log_probs_t = tf.where(mask, log_probs_t, tf.zeros_like(logits_t))  # filter out the infs
   out = labels_t * log_probs_t
   out = -tf.reduce_sum(out, axis=logits_enc_time_axis, keep_dims=True)
-  probs_t = tf.nn.softmax(logits_t, dim=logits_enc_time_axis)
-  out = custom_gradient.generic_loss_and_error_signal(loss=out, x=logits_t, grad_x=probs_t - labels_t)
+  if stable_gradient:
+    probs_t = tf.nn.softmax(logits_t, dim=logits_enc_time_axis)
+    out = custom_gradient.generic_loss_and_error_signal(loss=out, x=logits_t, grad_x=probs_t - labels_t)
   out = tf.squeeze(out, axis=logits_enc_time_axis)
   return out
 
