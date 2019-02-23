@@ -109,7 +109,7 @@ class LearningRateControl(object):
     if self.minNumEpochsPerNewLearningRate > 1:
       lastLrs = [self.epochData[e].learningRate
                  for e in self._lastEpochsForEpoch(epoch, numEpochs=self.minNumEpochsPerNewLearningRate)]
-      if len(set(lastLrs)) >= 2 or epoch < self.minNumEpochsPerNewLearningRate:
+      if len(set(lastLrs)) >= 2 or 0 < len(lastLrs) < self.minNumEpochsPerNewLearningRate:
         return lastLrs[-1]
     learningRate = self.calcLearningRateForEpoch(epoch)
     if learningRate < self.minLearningRate:
