@@ -2515,6 +2515,25 @@ def test_onlineblstm():
     net.construct_from_dict(network)
 
 
+def test_GenericAttentionLayer_basic():
+  from TFNetworkLayer import InternalLayer
+  net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
+  # This is a common situation when the GenericAttentionLayer is inside a recurrent loop,
+  # and it gets the encoder values from outside ("base:enc_value" or so),
+  # and the attention weights from inside the loop, and they have the same time dim axis as the encoder values.
+  kwargs = dict(
+    name="att", network=net,
+    weights=InternalLayer(
+      name="att_weights", network=net,
+      output=Data(name='att_weights_output', shape=(None, 1), batch_dim_axis=1, auto_create_placeholders=True)),
+    base=InternalLayer(
+      name="enc_value", network=net,
+      output=Data(name='enc_value_output', shape=(None, 1, 2048), batch_dim_axis=1, auto_create_placeholders=True)))
+  kwargs["output"] = GenericAttentionLayer.get_out_data_from_opts(**kwargs)
+  layer = GenericAttentionLayer(**kwargs)
+  assert layer.output.shape == (1, 2048) and not layer.output.have_time_axis()
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()
