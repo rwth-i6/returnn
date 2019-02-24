@@ -1941,9 +1941,9 @@ class SliceLayer(_ConcatInputLayer):
       out_type["shape"] = list(out_type["shape"])
       if out_type["shape"][axis_wo_batch] is not None:
         out_type["shape"][axis_wo_batch] = len(range(out_type["shape"][axis_wo_batch])[dim_slice])
-      if axis_wo_batch == len(out_type["shape"]) - 1 and not out_type["sparse"]:
-        assert out_type["shape"][axis_wo_batch]
-        out_type["dim"] = out_type["shape"][axis_wo_batch]
+    if not out_type["sparse"]:
+      # Let Data() automatically infer "dim".
+      out_type["dim"] = NotSpecified
     return Data(**out_type)
 
 
