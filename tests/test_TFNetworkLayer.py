@@ -644,6 +644,52 @@ def test_SliceLayer_output_placeholder():
     assert_equal(seq_lens.tolist(), [2, 1, 1])
 
 
+def test_SliceLayer_NCHW():
+  with make_scope() as session:
+    import numpy as np
+    net = TFNetwork(extern_data=ExternData())
+    with tf.variable_scope("src_nchw"):
+      src_nchw = InternalLayer(name="src_nchw", network=net, out_type={"dim": 16,
+                                                                       "shape": (16, None, 16),
+                                                                       "batch_dim_axis": 0,
+                                                                       "time_dim_axis": 2,
+                                                                       "feature_dim_axis": 1,
+                                                                       "sparse": False
+                                                                       })
+      src_nchw.output.placeholder = tf.placeholder(shape=(None, 16, None, 16), dtype=tf.float32)
+      src_nchw.output.size_placeholder = {1: tf.placeholder(shape=(None,), dtype=tf.int32)}
+    with tf.variable_scope("src_nchw_feature_unspecified"):
+      src_nchw_no_f = InternalLayer(name="src_nchw_feature_unspecified", network=net, out_type={"dim": 16,
+                                                                                                "shape": (16, None, 16),
+                                                                                                "batch_dim_axis": 0,
+                                                                                                "time_dim_axis": 2,
+                                                                                                "feature_dim_axis": NotSpecified,
+                                                                                                "sparse": False
+                                                                                                })
+      src_nchw_no_f.output.placeholder = tf.placeholder(shape=(None, 16, None, 16), dtype=tf.float32)
+      src_nchw_no_f.output.size_placeholder = {1: tf.placeholder(shape=(None,), dtype=tf.int32)}
+    with tf.variable_scope("slice1"):
+      slice1 = SliceLayer(
+        name="slice1", network=net, axis="f", slice_step=2, sources=[src_nchw],
+        output=SliceLayer.get_out_data_from_opts(name="slice1", axis="f", slice_step=2,
+                                                 sources=[src_nchw]))
+    with tf.variable_scope("slice2"):
+      slice2 = SliceLayer(
+        name="slice2", network=net, axis="f", slice_step=2, sources=[src_nchw_no_f],
+        output=SliceLayer.get_out_data_from_opts(name="slice2", axis="f", slice_step=2,
+                                                 sources=[src_nchw_no_f]))
+    out1, out2 = session.run([slice1.output.placeholder, slice2.output.placeholder],
+                             feed_dict={src_nchw.output.placeholder: np.random.rand(10, 16, 11, 16),
+                                        src_nchw.output.size_placeholder[1]: np.full(shape=(10,), fill_value=11),
+                                        src_nchw_no_f.output.placeholder: np.random.rand(10, 16, 11, 16),
+                                        src_nchw_no_f.output.size_placeholder[1]: np.full(shape=(10,), fill_value=11)
+                                        })
+    assert out1.shape == (10, 8, 11, 16)
+    assert slice1.output.dim == 8 and slice1.output.feature_dim_axis == 1
+    assert out2.shape == (10, 16, 11, 8)
+    assert slice2.output.dim == 8 and slice2.output.feature_dim_axis == 3
+
+
 def test_WindowLayer_output_placeholder():
   with make_scope() as session:
     net = TFNetwork(extern_data=ExternData())
