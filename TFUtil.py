@@ -696,6 +696,45 @@ class Data(object):
       data.beam_size = beam_size * (data.beam_size or 1)
       return data
 
+  def copy_squeeze_axes(self, axes):
+    """
+    :param list[int] axes: counted with batch dim
+    :return: copy of myself, with squeezed axes
+    :rtype: Data
+    """
+    assert isinstance(axes, (list, tuple))
+    assert all([self.batch_shape[axis] == 1 for axis in axes])
+    if not axes:
+      return self.copy()
+    data = self.copy()
+    if data.placeholder is not None:
+      data.placeholder = tf.squeeze(
+        data.placeholder, axes,
+        name="%s_squeeze_axes" % get_valid_scope_name_from_str(data.name))
+    assert data.batch_dim_axis not in axes
+    data.shape = tuple([data.shape[i] for i in range(data.ndim) if data.get_batch_axis(i) not in axes])
+    if self.time_dim_axis is not None:
+      if self.time_dim_axis in axes:
+        data.time_dim_axis = None
+      else:
+        data.time_dim_axis = self.time_dim_axis - len([axis for axis in axes if axis < self.time_dim_axis])
+    if self.feature_dim_axis is not None and self.feature_dim_axis_or_unspecified is not NotSpecified:
+      if self.feature_dim_axis in axes:
+        data.feature_dim_axis = None
+      else:
+        data.feature_dim_axis = self.feature_dim_axis - len([axis for axis in axes if axis < self.feature_dim_axis])
+    if data.feature_dim_axis != self.feature_dim_axis:
+      if data.feature_dim_axis is not None:
+        data.dim = data.batch_shape[data.feature_dim_axis]
+      else:
+        data.dim = None
+    if self.size_placeholder:
+      data.size_placeholder = {
+        i - len([axis for axis in axes if self.get_batch_axis_excluding_batch(axis) < i]): size
+        for (i, size) in self.size_placeholder.items()}
+    data.sanity_check()
+    return data
+
   def copy_template(self, name=None):
     """
     :return: copy of myself, using self.get_kwargs(), without placeholder

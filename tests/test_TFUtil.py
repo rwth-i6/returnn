@@ -266,6 +266,22 @@ def test_Data_copy_template_excluding_spatial_dim():
   assert rem_enc_time.shape == (None, 1) and rem_enc_time.batch_dim_axis == 1
 
 
+def test_Data_copy_squeeze_axes():
+  weights = Data(name='att_weights_output', shape=(1, None), time_dim_axis=2, auto_create_placeholders=True)
+  squeezed = weights.copy_squeeze_axes([1])
+  print("orig:", weights, "squeezed:", squeezed)
+  assert squeezed.shape == (None,) and squeezed.time_dim_axis == 1
+  assert weights.size_placeholder[1] is squeezed.size_placeholder[0]
+
+
+def test_Data_copy_squeeze_axes_feature_axis():
+  weights = Data(name='att_weights_output', shape=(None, 1), auto_create_placeholders=True)
+  squeezed = weights.copy_squeeze_axes([2])
+  print("orig:", weights, "squeezed:", squeezed)
+  assert squeezed.shape == (None,) and squeezed.time_dim_axis == 1
+  assert weights.size_placeholder[0] is squeezed.size_placeholder[0]
+
+
 def test_ExternData_via_config():
   # Like ExternData.init_from_config.
   from Config import Config
