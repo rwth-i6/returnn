@@ -139,22 +139,15 @@ class Device(object):
     self.forwarder = None
     self.use_inputs = False
     if self.network_task  == 'train':
-      train_givens = self.make_givens(self.trainnet)
-      test_givens = self.make_givens(self.testnet)
-
-      if self.update_specs['update_rule'] == 'global':
-        self.updater = Updater.initFromConfig(self.config)
-      elif self.update_specs['update_rule'] != 'none':
-        self.updater = Updater.initRule(self.update_specs['update_rule'], **self.update_specs['update_params'])
+      #if self.update_specs['update_rule'] == 'global':
+      #  self.updater = Updater.initFromConfig(self.config)
+      #elif self.update_specs['update_rule'] != 'none':
+      #  self.updater = Updater.initRule(self.update_specs['update_rule'], **self.update_specs['update_params'])
 
       outputs = []
-      self.train_outputs_format = []
-      if config.float('batch_pruning', 0):
-        outputs = [self.trainnet.output["output"].seq_weight]
-        self.train_outputs_format = ["weights"]
-
-      self.train_outputs_format += ["cost:" + out for out in sorted(self.trainnet.costs.keys())]
-      self.updater.initVars(self.trainnet, self.gradients)
+      #self.train_outputs_format = ["cost:" + out for out in sorted(self.trainnet.costs.keys())]
+      self.train_outputs_format = ["cost:classes"]
+      #self.updater.initVars(self.trainnet, self.gradients)
 
       # TODO
       #self.trainer = self.trainnet.theano.function(inputs=[self.block_start, self.block_end],
@@ -165,10 +158,8 @@ class Device(object):
       #                               no_default_updates=exclude,
       #                               name="train_and_updater")
 
-      self.test_outputs_format = ["cost:" + out for out in sorted(self.testnet.costs.keys())]
-      self.test_outputs_format += ["error:" + out for out in sorted(self.testnet.errors.keys())]
-      test_outputs = output_streams['eval'] + [self.testnet.costs[out] for out in sorted(self.testnet.costs.keys())]
-      test_outputs += [self.testnet.errors[out] for out in sorted(self.testnet.errors.keys())]
+      self.test_outputs_format = ["cost:classes","error:classes"]
+      test_outputs = [self.testnet.errors[out] for out in sorted(self.testnet.errors.keys())]
       # TODO
       #self.tester = theano.function(inputs=[self.block_start, self.block_end],
       #                              outputs=test_outputs,
@@ -198,7 +189,6 @@ class Device(object):
 
   def compute_run(self, task):
     compute_start_time = time.time()
-    self.compute_start_time = compute_start_time
     batch_dim = self.y["data"].get_value(borrow=True, return_internal_type=True).shape[1]
     block_size = self.block_size if self.block_size else batch_dim
     if self.config.bool("debug_shell_first_compute", False):
@@ -232,13 +222,6 @@ class Device(object):
       outputs_format = self.train_outputs_format
     elif task == "eval":
       outputs_format = self.test_outputs_format
-
-    # stream handling
-    if(self.streams):
-      stream_outputs = output[:len(self.streams)]
-      output = output[len(self.streams):]
-      for stream, out in zip(self.streams, stream_outputs):
-        stream.update(task, out, self.tags)
 
     if outputs_format:
       for fmt, out in zip(outputs_format, output):

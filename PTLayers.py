@@ -41,9 +41,6 @@ class Container(nn.Module):
     self.name = as_str(name.encode("utf8"))
     self.train_flag = train_flag
     self.eval_flag = eval_flag
-    self.depth = depth
-    if depth != 1:
-      self.set_attr('depth', depth)
     if consensus != "flat":
       self.set_attr('consensus', consensus)
     self.network = network
@@ -269,38 +266,6 @@ class Container(nn.Module):
     values = numpy.asarray(self.rng.uniform(low=-l, high=l, size=shape), dtype=floatX)
     return self.shared(values, name)
 
-  def create_random_unitary_weights(self, n, m, name=None):
-    x = self.rng.randn(n, m)
-    u, s, v = numpy.linalg.svd(x, full_matrices=0)
-    if u.shape == (n, m):
-      x = u
-    else:
-      x = v
-    assert x.shape == (n, m)
-    x = x.astype(floatX)
-    return self.shared(x, name)
-
-  def create_random_unitary_tiled_weights(self, n, m, name=None):
-    if n > m:
-      transpose = True
-      n, m = m, n  # n < m
-    else:  # n <= m
-      transpose = False
-    fac = ((m - 1) // n) + 1
-    def make_tile():
-      x = self.rng.randn(n, n)
-      u, s, v = numpy.linalg.svd(x)
-      assert u.shape == (n, n)
-      return u
-    x = numpy.concatenate([make_tile() for i in range(fac)], axis=1)
-    assert x.shape == (n, fac * n)
-    x = x[:, :m]
-    assert x.shape == (n, m)
-    if transpose:
-      x = x.T
-    x = x.astype(floatX)
-    return self.shared(x, name)
-
   def _create_eval_weights(self, n, m, name, default_name_prefix, init_eval_str):
     """
     :param int n: input dimension
@@ -404,140 +369,34 @@ class Container(nn.Module):
     return attrs
 
 
-class SourceLayer(Container):
-  layer_class = "source"
-  recurrent = False
-
-  def __init__(self, n_out, x_out=None, delay=0, sparse=False, name="", network=None, eval_flag=False,
-               data_key=None,  # if we don't want to use "data" but something else. via y_in
-               # These will be given if we initialize via JSON.
-               sources=None, dropout=0, train_flag=None, mask=None, index=None, y_in=None, dtype=None):
-    super(SourceLayer, self).__init__(layer_class=self.layer_class, name=name)
-    inputs = 'inputs'
-    self.output = network.y[inputs]
-    n_out = network.n_out[inputs][0]
-    index = network.j[inputs]
-
-    self.set_attr('n_out', n_out)
-    self.set_attr('sparse', sparse)
-    self.set_attr('delay', delay)
-    self.index = index
-    self.device = 'cpu'
-    self.eval_flag = eval_flag
-
-  def make_constraints(self):
-    return 0
-
-  def cost(self):
-    return None, None
-
-  def errors(self):
-    """
-    :rtype: theano.Variable
-    """
-    return None
-
-  def transfer_output(self, device):
-    pass
-
-
 class Layer(Container):
   recurrent = False
 
-  def __init__(self, sources, n_out, index, y_in=None, target=None,
-               cost_scale=1.0,
-               dropout=0.0,
-               trainable=True,
-               dtype='float32',
-               **kwargs):
+  def __init__(self, n_out, dependencies, sources, **kwargs):
     """
     :param list[NetworkBaseLayer.Layer] sources: list of source layers
     :param int n_out: output dim of W_in and dim of bias
-    :param float L1: l1-param-norm regularization
-    :param float L2: l2-param-norm regularization
-    :param str mask: "unity" or "dropout"
-    :type dropout: float
     """
     super(Layer, self).__init__(**kwargs)
-    self.index = index
-    self.sources = sources; ":type: list[Layer]"
-    self.num_sources = len(sources)
-    self.D = max([s.D for s in sources if isinstance(s,Layer)] + [0])
-    if mask is None: mask = 'none'
-    self.set_attr('mask', mask)
-    self.set_attr('dropout', dropout)
-    self.set_attr('sparse', sparse)
-    self.set_attr('bn_use_sample', bn_use_sample)
-    self.set_attr('sparse_filtering', sparse_filtering)
-    if not trainable:
-      self.set_attr('trainable', trainable)  # only store if not default
-      self.gradient_scale = 0.0  # just to be sure
+    self.output = None
+    self.dependencies = { dep : None for dep in dependencies }
+    self.sources = sources
+
+  def process(x, i):
+    if self.output is not None:
+      return self.output, self.index
+    for k in self.deps.keys():
+      self.deps[k] = k.process(x, i)
+    if not self.sources:
+      index_in = i
     else:
-      self.gradient_scale = gradient_scale
-    if gradient_scale != 1.0:
-      self.set_attr('gradient_scale', gradient_scale)
-    self.set_attr('layer_drop', layer_drop)
-    self.set_attr('residual', residual)
-    self.set_attr('n_out', n_out)
-    self.set_attr('L1', L1)
-    self.set_attr('L2', L2)
-    if L2_eye:
-      self.set_attr('L2_eye', L2_eye)
-    self.device = device # if device else str(theano.config.device)
-    for s in self.sources:
-      s.transfer_output(self.device)
-    self.set_attr('batch_norm', batch_norm)
-    self.set_attr('input_scale', input_scale)
-    if y_in is not None:
-      self.y_in = {}
-      for k in y_in:
-        if not isinstance(y_in[k], T.Variable): continue
-        self.y_in[k] = time_batch_make_flat(y_in[k])  # TODO: better not flatten here...
-        self.y_in[k].n_out = getattr(y_in[k], "n_out", None)
-    else:
-      self.y_in = None
-    self.constraints = T.constant(0)
-    if target:
-      self.set_attr('target', target)
-    if target_index:
-      self.set_attr('target_index', target_index)
-      assert target_index in self.network.j
-      self.index = index = self.network.j[target_index]
-    if cost_scale != 1:
-      self.set_attr("cost_scale", cost_scale)
-    if with_bias:
-      self.b = self.add_param(self.create_bias(n_out), 'b_%s'%self.name)
-    else:
-      self.set_attr('with_bias', False)
-      self.b = numpy.float32(0)
+      for i in range(len(self.sources)):
+        self.sources[i], index_in = self.sources[i].process(x, i)
+    x = torch.cat(self.sources, dim=2)
+    self.output, self.index_out = self.forward(x, index_in)
+    return self.output, self.index_out
 
-  def output_index(self):
-    from theano.ifelse import ifelse
-    index = self.index
-    if self.sources:
-      # In some cases, e.g. forwarding, the target index (for "classes") might have shape[0]==0.
-      # Or shape[0]==1 with index[0]==0. See Dataset.shapes_for_batches().
-      # Use source index in that case.
-      have_zero = T.le(index.shape[0], 1) * T.eq(T.sum(index[0]), 0)
-      index = ifelse(have_zero, self.sources[0].index, index)
-    return index
-
-  def find_data_layer(self):
-    for l in self.sources:
-      if isinstance(l, SourceLayer):
-        return l
-      if isinstance(l, Layer):
-        s = l.find_data_layer()
-        if s is not None:
-          return s
-    return None
-
-  def to_json(self):
-    attrs = super(Layer, self).to_json()
-    attrs['class'] = self.layer_class
-    return attrs
-
-  def cost(self):
+  def cost(self, y):
     """
     :rtype: (theano.Variable | None, dict[theano.Variable,theano.Variable] | None)
     :returns: cost, known_grads
@@ -548,62 +407,26 @@ class Layer(Container):
     """
     :rtype: theano.Variable
     """
-    return T.constant(self.attrs.get("cost_scale", 1.0), dtype="float32")
+    return self.attrs.get("cost_scale", 1.0)
 
-  def errors(self):
+  def errors(self, y):
     """
     :rtype: theano.Variable
     """
     return None
 
-class SourceLayer(Container):
-  layer_class = "source"
-  recurrent = False
-
-  def __init__(self, n_out, x_out=None, delay=0, sparse=False, name="", network=None, eval_flag=False,
-               data_key=None,  # if we don't want to use "data" but something else. via y_in
-               # These will be given if we initialize via JSON.
-               sources=None, dropout=0, train_flag=None, mask=None, index=None, y_in=None, dtype=None):
-    super(SourceLayer, self).__init__(layer_class=self.layer_class, name=name)
-    if data_key is not None:
-      assert x_out is None
-      assert network
-      assert dtype
-      network.use_target(target=data_key, dtype=dtype)
-      x_out = network.y[data_key]
-      n_out = network.n_out[data_key][0]
-      index = network.j[data_key]
-    if x_out is None:
-      assert network is not None
-      x_out = network.x
-    assert not sources, 'specify `"from": "null"` in json'  # or just ignore?
-    assert dropout == 0
-    if not delay:
-      self.output = x_out
-    else:
-      self.output = T.inc_subtensor(T.zeros_like(x_out)[delay:], x_out[:-delay])
-    self.set_attr('n_out', n_out)
-    self.set_attr('delay', delay)
-    self.index = index
-    self.eval_flag = eval_flag
-
-  def cost(self):
-    return None, None
-
-  def errors(self):
-    return None
-
 class OutputLayer(Layer):
   layer_class = "softmax"
 
-  def __init__(self, loss, y):
+  def __init__(self, n_out, loss, **kwargs):
     super(OutputLayer, self).__init__(**kwargs)
+    self.attrs['n_out'] = n_out
     self.W_in = nn.Parameter(torch.ones(self.sources[0].attrs['n_out'],self.attrs['n_out']))
     self.b = nn.Parameter(torch.zeros(self.attrs['n_out']))
     self.softmax = nn.Softmax()(x_in.mm(self.W_in) + self.b)
 
-  def forward(self, x_in):
+  def forward(self, x, i):
     z = x_in.mm(self.W_in) + self.b
-    self.p_y_given_x = self.softmax(z)
-    scores = torch.index_select(self.p_y_given_x.view(-1), self.index.nonzero().long().view(-1))
+    self.p_y_given_x = self.softmax(z) # TBC
+    scores = torch.index_select(self.p_y_given_x.view(-1,self.p_y_given_x.shape[2]), i.view(-1).nonzero().long())
     return -torch.log(scores[self.y_in.view(-1)]).sum()
