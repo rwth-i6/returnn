@@ -3104,6 +3104,36 @@ def test_GenericAttentionLayer_weights_heads_auto_squeeze_time_end():
   assert layer.output.shape == (num_heads, 2048) and not layer.output.have_time_axis()
 
 
+def test_GenericAttentionLayer_extra_spatial():
+  from TFNetworkLayer import InternalLayer
+  net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
+  # This is the situation when the GenericAttentionLayer is outside the recurrent loop,
+  # and it gets some encoder values (with different time axis),
+  # and the attention weights, which has two spatial axis, one of the decoder, and one of the encoder.
+  dec_time = DimensionTag(kind=DimensionTag.Types.Spatial, description="dec time")
+  enc_time = DimensionTag(kind=DimensionTag.Types.Spatial, description="enc time")
+  kwargs = dict(
+    name="att", network=net,
+    weights=InternalLayer(
+      name="att_weights", network=net,
+      output=Data(
+        name='att_weights_output', shape=(None, None, 1), auto_create_placeholders=True,
+        same_dim_tags_as={"dyn:0": dec_time, "dyn:1": enc_time})),
+    base=InternalLayer(
+      name="enc_value", network=net,
+      output=Data(
+        name='enc_value_output', shape=(None, 1, 2048), batch_dim_axis=1, auto_create_placeholders=True,
+        same_dim_tags_as={"t": enc_time})))
+  print("GenericAttentionLayer kwargs:")
+  pprint(kwargs)
+  kwargs["output"] = GenericAttentionLayer.get_out_data_from_opts(**kwargs)
+  layer = GenericAttentionLayer(**kwargs)
+  layer.output.sanity_check()
+  assert layer.output.shape == (1, None, 2048) and layer.output.have_time_axis()
+  assert len(layer.output.size_placeholder) == 1
+  assert list(layer.output.size_placeholder.values())[0] is layer.weights.output.size_placeholder[0]
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()
