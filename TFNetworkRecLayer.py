@@ -3543,7 +3543,6 @@ class AttentionBaseLayer(_ConcatInputLayer):
     :rtype: Data
     """
     out = base.output.copy_template_excluding_time_dim().copy(name="%s_output" % name)
-    assert out.time_dim_axis is None
     assert out.batch_dim_axis == 0
     if n_out:
       assert out.dim == n_out, (
@@ -3574,6 +3573,14 @@ class GenericAttentionLayer(AttentionBaseLayer):
   """
   The weighting for the base is specified explicitly here.
   This can e.g. be used together with :class:`SoftmaxOverSpatialLayer`.
+  Note that we do not do any masking here. E.g. :class:`SoftmaxOverSpatialLayer` does that.
+
+  Note that :class:`DotLayer` is similar, just using a different terminology.
+  Reduce axis: weights: time-axis; base: time-axis.
+    Note that if the last layer was :class:`SoftmaxOverSpatialLayer`, we should use the same time-axis.
+    Also we should do a check whether these time axes really match.
+  Common axes (should match): batch-axis, all from base excluding base feature axis and excluding time axis.
+  Keep axes: base: feature axis; weights: all remaining, e.g. extra time.
   """
   layer_class = "generic_attention"
 
@@ -3584,47 +3591,47 @@ class GenericAttentionLayer(AttentionBaseLayer):
     :param bool auto_squeeze: auto-squeeze any weight-axes with dim=1 away
     """
     super(GenericAttentionLayer, self).__init__(**kwargs)
-    assert not self.sources, "only base and weights are needed"
     self.weights = weights
-    weights_data = self.weights.output.copy_as_batch_major()
-    self.base_weights = weights_data.copy_with_time_dim_axis(1)  # (B,T,...)
-    # We will always have batch-major mode and just write T for enc-time, i.e. (B,T,...).
-    weights_t = weights_data.placeholder  # (B,...,T,...)
-    # Move time-dim to end in weights.
-    new_axes = list(range(weights_data.batch_ndim))
-    new_axes.remove(weights_data.time_dim_axis)
-    new_axes.append(weights_data.time_dim_axis)
-    weights_t = tf.transpose(weights_t, perm=new_axes)  # (B,...,T)
-    shape = tf.shape(weights_t)
-    shape = [weights_data.batch_shape[new_axes[i]] or shape[i] for i in range(len(new_axes))]
-    time_dim = shape[-1]
-    # rem_dims_start_axis will specify which prefix axes we will share,
-    # and thus also in the output we will have shape[:rem_dims_start_axis].
-    # Example: weights (B,1,T), base (B,T,V) -> rem_dims_start_axis=1, rem_dims=[]
-    # Example: weights (B,H,1,T), base (B,T,H,V) -> rem_dims_start_axis=2, rem_dims=[] (auto_squeeze)
-    # Example: weights (B,H,T), base (B,T,H,V) -> rem_dims_start_axis=2, rem_dims=[]
-    if weights_data.batch_ndim < self.base.output.batch_ndim:  # weights_t of shape (B,T)
-      from TFUtil import expand_multiple_dims
-      weights_t = expand_multiple_dims(
-        weights_t, [-2] * (self.base.output.batch_ndim - weights_data.batch_ndim))  # (B,...,1,T)
-      rem_dims_start_axis = self.base.output.batch_ndim - 2  # count without T,V
-      rem_dims = []
-    else:
-      rem_dims_start_axis = self.base.output.batch_ndim - 2  # count without T,V
-      rem_dims = shape[rem_dims_start_axis:-1]
-      weights_t = tf.reshape(
-        weights_t, shape[:rem_dims_start_axis] + [tf.reduce_prod(rem_dims) if rem_dims else 1, time_dim])  # (B,?,T)
-    if auto_squeeze:
-      rem_dims = [d for d in rem_dims if d != 1]
-    base = self.base.output.copy_as_batch_major().copy_with_time_dim_axis(-2)  # (B,...,T,n_out)
-    base_t = base.placeholder
-    # According to https://github.com/tensorflow/tensorflow/issues/10765, reduce_sum might be faster.
-    # However, it would also require more memory.
-    # I did not do the comparison.
-    out = tf.matmul(weights_t, base_t)  # (B,?,n_out)
-    out = tf.reshape(out, shape[:rem_dims_start_axis] + rem_dims + [self.output.dim])  # (batch, ..., n_out)
-    self.output.placeholder = out
-    self.output.size_placeholder = {}
+    assert not self.sources, "only base and weights are needed"
+
+    from TFNetworkLayer import DotLayer, InternalLayer
+    if not weights.output.is_batch_major:
+      weights = InternalLayer(
+        network=weights.network, name="%s_batch_major" % weights.name,
+        output=weights.output.copy_as_batch_major())
+    weights_remaining_axes, weights_squeeze_axes, _ = self._weights_remaining_axes(
+      base=self.base.output, weights=weights.output, auto_squeeze=auto_squeeze,
+      exception_prefix=repr(self))
+    if weights_squeeze_axes:
+      weights = InternalLayer(
+        network=weights.network, name="%s_squeezed" % weights.name,
+        output=weights.output.copy_squeeze_axes(weights_squeeze_axes))
+      weights_remaining_axes, weights_squeeze_axes, _ = self._weights_remaining_axes(
+        base=self.base.output, weights=weights.output, auto_squeeze=auto_squeeze,
+        exception_prefix="%r after squeeze" % self)
+      assert not weights_squeeze_axes
+    weights_axis_to_reduce = self._weights_time_axis_to_reduce(weights=weights.output, base=self.base.output)
+
+    weights_data = weights.output.copy_as_batch_major()
+    weights_data = weights_data.copy_move_axis(
+      self._weights_time_axis_to_reduce(weights=weights_data, base=self.base.output), 1)  # (B,T,...)
+    self.base_weights = weights_data.placeholder
+    del weights_data
+
+    # Do not duplicate the same/similar code as DotLayer, i.e. just use it here.
+    # We have weights on the left-side and base on the right side of the matmul,
+    # because we want to end up with the base feature as the right-most outer axis,
+    # and the axis to be reduced is the right-most time dim of weights,
+    # which likely is already the overall right-most axis because of SoftmaxOverSpatialLayer,
+    # i.e. exactly as we need it.
+    self.dot_layer = DotLayer(
+      name="%s_dot" % self.name,
+      network=self.network,
+      output=self.output,
+      sources=[weights, self.base],
+      red1=weights_axis_to_reduce, red2="T",
+      var1=weights_remaining_axes, var2="F")
+    self.output = self.dot_layer.output
 
   def get_dep_layers(self):
     return super(GenericAttentionLayer, self).get_dep_layers() + [self.weights]
@@ -3636,29 +3643,115 @@ class GenericAttentionLayer(AttentionBaseLayer):
     d["weights"] = get_layer(d["weights"])
 
   @classmethod
-  def get_out_data_from_opts(cls, base, weights, auto_squeeze=True, **kwargs):
+  def _weights_time_axis_to_reduce(cls, weights, base):
+    """
+    :param Data weights:
+    :param Data base:
+    :return: axis
+    :rtype: int
+    """
+    # Note: This is tricky. The old behavior was to just use time_dim_axis.
+    # In some cases, it might make sense to use the last dynamic axis.
+    # If we had SoftmaxOverSpatialLayer before, we should make sure to use that same axis.
+    # SoftmaxOverSpatialLayer by default uses time_dim_axis.
+    # We also should maybe check that this matches the base time dim axis.
+    dyn_axes = weights.get_dynamic_axes()
+    assert dyn_axes, "no dynamic axes in %r" % weights
+    # Simple case: Only one dynamic axis.
+    # Do not do any further checks in this case. The runtime will crash if non-matching and this is simple to identify.
+    if len(dyn_axes) == 1:
+      assert dyn_axes == [weights.time_dim_axis]
+      return weights.time_dim_axis
+    # Other case: Template construction, so we might not have access to the dim tag info.
+    # (Yet, at least. This might change when we improve the dim tag handling.)
+    if not weights.size_placeholder:
+      # At template construction, it should not matter anyway.
+      assert weights.time_dim_axis in dyn_axes
+      return weights.time_dim_axis
+    # New behavior: Require that we have a matching time dim, and use that one.
+    base_time_tag = base.get_dim_tag(base.time_dim_axis)
+    for axis in dyn_axes:
+      dim_tag = weights.get_dim_tag(axis)
+      if dim_tag.is_equal(base_time_tag):
+        return axis
+    from pprint import pformat
+    raise Exception(
+      ("no matching time axis found in weights %r with dim tags\n%s;\n"
+       "base %r with time dim tag\n %r") % (
+        weights, pformat(weights.get_batch_shape_dim_tags()), base, base_time_tag))
+
+  @classmethod
+  def _weights_remaining_axes(cls, base, weights, auto_squeeze, exception_prefix):
+    """
+    :param Data base:
+    :param Data weights:
+    :param bool auto_squeeze: auto-squeeze any weight-axes with dim=1 away
+    :param str exception_prefix:
+    :return:
+      list of remaining axes from weights (which we keep in the output),
+      list of weight squeeze axes,
+      list of common pairs (weights axis, base axis)
+    :rtype: (list[int], list[int], list[(int,int)])
+    """
+    base_rem_axes = base.get_axes(exclude_batch=True, exclude_time=True)
+    base_rem_axes.remove(base.feature_dim_axis)
+    weights_rem_axes = weights.get_axes(exclude_batch=True)
+    weights_axis_to_reduce = cls._weights_time_axis_to_reduce(weights=weights, base=base)
+    assert weights.batch_shape[weights_axis_to_reduce] == base.batch_shape[base.time_dim_axis]
+    weights_rem_axes.remove(weights_axis_to_reduce)
+    weights_squeeze_axes = []
+    common_axes = [(weights.batch_dim_axis, base.batch_dim_axis)]
+    for weights_rem_axis in list(reversed(weights_rem_axes)):
+      if base_rem_axes:
+        if weights.batch_shape[weights_rem_axis] == base.batch_shape[base_rem_axes[-1]]:
+          common_axes.append((weights_rem_axis, base_rem_axes[-1]))
+          base_rem_axes.pop(-1)
+          weights_rem_axes.remove(weights_rem_axis)
+          continue
+      if auto_squeeze:
+        if weights.batch_shape[weights_rem_axis] == 1:
+          weights_rem_axes.remove(weights_rem_axis)
+          weights_squeeze_axes.append(weights_rem_axis)
+          continue
+    assert not base_rem_axes, (
+      ("%s: We assume that from the base (%r), we reduce the time axis, keep the feature axis,"
+       " and have all others matching with the weights (%r)."
+       " However, we have these remaining base axes which do not match: %r."
+       " We have these remaining weights axes: %r.") % (
+        exception_prefix, base, weights, base_rem_axes, weights_rem_axes))
+    return weights_rem_axes, weights_squeeze_axes, common_axes
+
+  @classmethod
+  def get_out_data_from_opts(cls, base, weights, auto_squeeze=True, sources=(), **kwargs):
     """
     :param LayerBase base:
     :param LayerBase weights:
     :param bool auto_squeeze:
+    :param list[LayerBase] sources: ignored, should be empty (checked in __init__)
     :rtype: Data
     """
-    out = super(GenericAttentionLayer, cls).get_out_data_from_opts(base=base, **kwargs)
-    base_rem_axes = base.output.get_axes(exclude_batch=True, exclude_time=True)
-    base_rem_axes.remove(base.output.feature_dim_axis)
-    weights_rem_axes = weights.output.get_axes(exclude_batch=True, exclude_time=True)
-    # All the first axes in weights should match with base_rem_axes, just like the batch-dim.
-    weights_rem_axes = weights_rem_axes[len(base_rem_axes):]
-    if auto_squeeze:
-      weights_rem_axes = [a for a in weights_rem_axes if weights.output.batch_shape[a] != 1]
-    out.shape = (
-      out.shape[:min(len(base_rem_axes), len(out.shape) - 1)] +
-      tuple([weights.output.batch_shape[a] for a in weights_rem_axes]) + out.shape[-1:])
-    # Automatically select new time-dim-axis if there seems to be one, otherwise None.
-    if None in out.shape:
-      assert out.batch_dim_axis == 0
-      out.time_dim_axis = out.batch_shape.index(None, 1)
-    return out
+    from TFNetworkLayer import DotLayer, InternalLayer
+    if not weights.output.is_batch_major:
+      weights = InternalLayer(
+        network=weights.network, name="%s_batch_major" % weights.name,
+        output=weights.output.copy_template().copy_as_batch_major())
+    weights_remaining_axes, weights_squeeze_axes, _ = cls._weights_remaining_axes(
+      base=base.output, weights=weights.output, auto_squeeze=auto_squeeze,
+      exception_prefix="%s %r" % (cls.__name__, kwargs["name"]))
+    if weights_squeeze_axes:
+      weights = InternalLayer(
+        network=weights.network, name="%s_squeezed" % weights.name,
+        output=weights.output.copy_template().copy_squeeze_axes(weights_squeeze_axes))
+      weights_remaining_axes, weights_squeeze_axes, _ = cls._weights_remaining_axes(
+        base=base.output, weights=weights.output, auto_squeeze=auto_squeeze,
+        exception_prefix="%s %r after squeeze" % (cls.__name__, kwargs["name"]))
+      assert not weights_squeeze_axes
+    weights_axis_to_reduce = cls._weights_time_axis_to_reduce(weights=weights.output, base=base.output)
+    return DotLayer.get_out_data_from_opts(
+      sources=[weights, base],
+      red1=weights_axis_to_reduce, red2="T",
+      var1=weights_remaining_axes, var2="F",
+      **kwargs)
 
 
 class DotAttentionLayer(GlobalAttentionContextBaseLayer):
