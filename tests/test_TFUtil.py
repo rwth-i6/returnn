@@ -138,6 +138,12 @@ def test_Data_copy_template_adding_time_dim_no_feature():
   # assert d2.feature_dim_axis is None  # not sure what we would want here...
 
 
+def test_Data_get_axes_from_description_except_time_ext():
+  data = Data(name='merge_dims_test_output', shape=(3, None, 5), time_dim_axis=2)
+  axes = data.get_axes_from_description("except_time")
+  assert axes == [1, 3], "data %r 'except_time' axes %r unexpected" % (data, axes)
+
+
 def test_Data_copy_template_excluding_time_dim_two_time_dims():
   data = Data(name='ref_att_weights_output', shape=(None, None, 1), auto_create_placeholders=True)
   assert set(data.size_placeholder.keys()) == {0, 1}
