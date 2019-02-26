@@ -433,6 +433,17 @@ def test_MergeDimsLayer_batch_time_time_major_ext():
     assert layer.output.time_dim_axis == 1  # Note: This is currently the behavior, but maybe we change that.
 
 
+def test_MergeDimsLayer_except_time_ext():
+  with make_scope() as session:
+    n_batch = 11
+    n_time = 13
+    layer = _check_MergeDimsLayer(
+      session,
+      {"shape": (3, None, 5), "time_dim_axis": 2}, (n_batch, 3, n_time, 5),
+      {"axes": "except_time"}, (None, 15), (n_batch, n_time, 15))
+    assert layer.output.batch_dim_axis == 0 and layer.output.time_dim_axis == 1
+
+
 def test_MergeDimsLayer_SplitBatchTimeLayer_time_major():
   n_batch = 3
   n_time = 4
