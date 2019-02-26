@@ -144,6 +144,13 @@ def test_Data_get_axes_from_description_except_time_ext():
   assert axes == [1, 3], "data %r 'except_time' axes %r unexpected" % (data, axes)
 
 
+def test_Data_get_axes_from_description_except_time_no_time():
+  data = Data(name='merge_dims_test_output', shape=(3, 5))
+  assert data.time_dim_axis is None
+  axes = data.get_axes_from_description("except_time")
+  assert axes == [1, 2], "data %r 'except_time' axes %r unexpected" % (data, axes)
+
+
 def test_Data_copy_template_excluding_time_dim_two_time_dims():
   data = Data(name='ref_att_weights_output', shape=(None, None, 1), auto_create_placeholders=True)
   assert set(data.size_placeholder.keys()) == {0, 1}

@@ -1136,8 +1136,8 @@ class Data(object):
       elif axes == "except_time":  # also except batch
         axes = list(range(self.batch_ndim))
         axes.remove(self.batch_dim_axis)
-        assert self.time_dim_axis is not None
-        axes.remove(self.time_dim_axis)
+        if self.time_dim_axis is not None:
+          axes.remove(self.time_dim_axis)
       elif axes == "except_batch":
         axes = list(range(self.batch_ndim))
         axes.remove(self.batch_dim_axis)
