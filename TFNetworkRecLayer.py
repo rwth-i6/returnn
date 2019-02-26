@@ -869,8 +869,9 @@ class _SubnetworkRecCell(object):
           sub_layer = root_layer.get_sub_layer('/'.join(name.split('/')[1:]))  # get the sub-layer from the root-layer
           if sub_layer:  # get_sub_layer returns None by default (if sub-layer not found)
             # add to templates so we will collect output in self.get_output if this is an output layer
-            self.layer_data_templates[name] = sub_layer
-            sub_layer.dependencies.add(root_layer)
+            if isinstance(sub_layer, _TemplateLayer):
+              self.layer_data_templates[name] = sub_layer
+              sub_layer.dependencies.add(root_layer)
             return sub_layer
         # Need to create layer instance here now to not run into recursive loops.
         # We will extend it later in add_templated_layer().
