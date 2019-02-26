@@ -1334,6 +1334,14 @@ class Data(object):
         self, self.time_dim_axis, self.size_placeholder))
     return False
 
+  def get_dynamic_axes(self):
+    """
+    :return: list of axes, counted with batch-dim axis (but we exclude the batch dim axis itself)
+    :rtype: list[int]
+    """
+    return [axis for axis, dim in enumerate(self.batch_shape)
+            if axis != self.batch_dim_axis and dim is None]
+
   def is_same_time_dim(self, other):
     """
     Checks whether we have a matching/compatible time dim.

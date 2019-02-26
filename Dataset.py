@@ -1125,7 +1125,7 @@ def shapes_for_batches(batches, data_keys, dataset=None, extern_data=None, enfor
       data_shape[extern_data.data[k].batch_dim_axis] = shape[1]
       if extern_data.data[k].have_time_axis():
         data_shape[extern_data.data[k].time_dim_axis] = shape[0][k]
-      assert all([n is not None for n in data_shape])
+      assert all([n is not None for n in data_shape]), "data %r" % extern_data.data[k]
       d[k] = data_shape
   else:  # shape via dataset
     d = {k: [shape[0][k], shape[1]] for k in all_data_keys}
