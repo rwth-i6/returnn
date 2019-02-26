@@ -12,7 +12,7 @@ from EngineTask import TrainTaskThread, EvalTaskThread, HDFForwardTaskThread, Cl
 import SprintCache
 from Log import log
 from Updater import Updater
-import Device
+import PTDevice
 from LearningRateControl import loadLearningRateControlFromConfig
 from Pretrain import pretrainFromConfig
 import EngineUtil

@@ -5,6 +5,26 @@ from PTNetwork import LayerNetwork
 
 floatX = 'float32'
 
+class DummyModel(nn.Module):
+  def __init__(self):
+    super(DummyModel, self).__init__()
+    self.lstm = nn.LSTM(24, 32, 1) # IAM
+    self.output = nn.Linear(32, tr.dataset.n_out)
+
+  def forward(self, x, i):
+    x = x.permute(1,0,2)
+    self.lstm.flatten_parameters()
+    x, _ = self.lstm(x)
+    x = self.output(x)
+    return F.softmax(x, dim=1)
+
+def exec(x, y, i, j):
+  model = DummyModel()
+  pcx = model(x,i)
+  loss_function = nn.NLLLoss()
+  return loss_function(pcx, y.permute(1,0).contiguous().view(-1))
+
+
 class Device(object):
   def __init__(self, device, config, blocking=False, num_batches=1, update_specs=None):
     """
@@ -108,13 +128,13 @@ class Device(object):
     self.network_task = config.value('task', 'train')
     eval_flag = self.network_task in ['eval', 'forward']
     if json_content is not None:
-      self.network = PTLayerNetwork.from_json_and_config(json_content, config)
+      self.network = DummyModel() #PTLayerNetwork.from_json_and_config(json_content, config) # TODO
     elif config.bool('initialize_from_model', False) and config.has('load'):
       model = h5py.File(config.value('load', ''), "r")
-      self.network = PTLayerNetwork.from_hdf_model_topology(model, **PTLayerNetwork.init_args_from_config(config))
+      self.network = DummyModel() #PTLayerNetwork.from_hdf_model_topology(model, **PTLayerNetwork.init_args_from_config(config))
       model.close()
     else:
-      self.network = PTLayerNetwork.from_config_topology(config)
+      self.network = DummyModel() #PTLayerNetwork.from_config_topology(config)
     if config.has('load'):
       model = h5py.File(config.value('load', ''), "r")
       if 'update_step'in model.attrs:
@@ -159,7 +179,7 @@ class Device(object):
       #                               name="train_and_updater")
 
       self.test_outputs_format = ["cost:classes","error:classes"]
-      test_outputs = [self.testnet.errors[out] for out in sorted(self.testnet.errors.keys())]
+      #test_outputs = [self.testnet.errors[out] for out in sorted(self.testnet.errors.keys())]
       # TODO
       #self.tester = theano.function(inputs=[self.block_start, self.block_end],
       #                              outputs=test_outputs,
@@ -194,21 +214,8 @@ class Device(object):
     if self.config.bool("debug_shell_first_compute", False):
       print("debug_shell_first_compute", file=log.v1)
       Debug.debug_shell(user_ns=locals(), user_global_ns=globals())
-    if task == "train" or task == "theano_graph" or task == "eval":
-      func = self.tester if task == "eval" else self.trainer
-      output = []
-      batch_end = 0
-      while batch_end < batch_dim:
-        batch_start = batch_end
-        batch_end = min(batch_start + block_size, batch_dim)
-        block_output = func(batch_start, batch_end)
-        if not output:
-          output = block_output
-        else:
-          for j in range(len(block_output)):
-            output[j] += block_output[j]
-    elif task == "extract" or task == "forward":
-      output = self.extractor()
+    if task == "train":
+      output = [exec(self.y['data'],self.y['classes'],self.j['data'],self.j['classes'])]
     else:
       assert False, "invalid command: " + task
     compute_end_time = time.time()
@@ -285,7 +292,7 @@ class Device(object):
 
     self.initialize(config, update_specs=update_specs)
     #self._checkGpuFuncs(device, device_id)
-    output_queue.send(len(self.trainnet.train_params_vars))
+    #output_queue.send(len(self.trainnet.train_params_vars))
     print("Device %s proc, pid %i is ready for commands." % (device, os.getpid()), file=log.v4)
     network_params = []
     while True:
@@ -407,23 +414,20 @@ class Device(object):
       self.input_queue.send("sync-net-train-params")
 
   def get_net_train_params(self, network):
-    if self.blocking:
-      return [v.get_value(borrow=True, return_internal_type=True) for v in self.trainnet.get_all_params_vars()]
-    else:
-      assert self.main_pid == os.getpid()
-      self.input_queue.send("get-net-train-params")
-      r = self.output_queue.recv()
-      assert r == "net-train-params"
-      param_count = self.output_queue.recv()
-      assert param_count == len(network.get_all_params_vars())
-      raw = [self.output_queue.recv_bytes() for i in range(param_count)]
-      assert self.output_queue.recv() == "end-get-net-train-params"
-      vars = network.get_all_params_vars()
-      res = []
-      assert len(vars) == len(raw)
-      for p,q in zip(vars, raw):
-        res.append(numpy.fromstring(q, dtype=floatX).reshape(p.get_value().shape))
-      return res
+    assert self.main_pid == os.getpid()
+    self.input_queue.send("get-net-train-params")
+    r = self.output_queue.recv()
+    assert r == "net-train-params"
+    param_count = self.output_queue.recv()
+    assert param_count == len(network.get_all_params_vars())
+    raw = [self.output_queue.recv_bytes() for i in range(param_count)]
+    assert self.output_queue.recv() == "end-get-net-train-params"
+    vars = network.get_all_params_vars()
+    res = []
+    assert len(vars) == len(raw)
+    for p,q in zip(vars, raw):
+      res.append(numpy.fromstring(q, dtype=floatX).reshape(p.get_value().shape))
+    return res
 
   def set_net_encoded_params(self, network_params):
     """
@@ -482,55 +486,33 @@ class Device(object):
     self.tags = [None] * shapes["data"][1]  # type: list[str]  # seq-name for each batch slice
 
   def update_data(self):
-    # self.data is set in Engine.allocate_devices()
-    if self.blocking:
-      update_start_time = time.time()
-      for target in self.used_data_keys:
-        self.y[target].set_value(self.targets[target].astype(self.y[target].dtype), borrow = True)
-      for k in self.used_data_keys:
-        self.j[k].set_value(self.output_index[k], borrow = True)
-      self.update_total_time += time.time() - update_start_time
-    else:
-      assert self.main_pid == os.getpid()
-      self.input_queue.send("update-data")
-      target_keys = list(sorted(self.used_data_keys))
-      self.input_queue.send(target_keys)
-      for target in target_keys:
-        self.input_queue.send(self.targets[target])
-      for k in target_keys:
-        self.input_queue.send(self.output_index[k])
-      self.input_queue.send(self.tags)
+    assert self.main_pid == os.getpid()
+    self.input_queue.send("update-data")
+    target_keys = list(sorted(self.used_data_keys))
+    self.input_queue.send(target_keys)
+    for target in target_keys:
+      self.input_queue.send(self.targets[target])
+    for k in target_keys:
+      self.input_queue.send(self.output_index[k])
+    self.input_queue.send(self.tags)
 
   def set_learning_rate(self, learning_rate):
     """
     :type learning_rate: float
     """
-    if self.blocking:
-      if self.updater:
-        self.updater.setLearningRate(learning_rate)
-    else:
-      assert self.main_pid == os.getpid()
-      self.input_queue.send("set-learning-rate")
-      self.input_queue.send(learning_rate)
+    assert self.main_pid == os.getpid()
+    self.input_queue.send("set-learning-rate")
+    self.input_queue.send(learning_rate)
 
   def get_num_updates(self):
-    if self.blocking:
-      if self.updater:
-        return self.updater.i.get_value()
-      else:
-        return 0
-    else:
-      assert self.main_pid == os.getpid()
-      self.input_queue.send("get-num-updates")
-      return int(self.output_queue.recv())
+    assert self.main_pid == os.getpid()
+    self.input_queue.send("get-num-updates")
+    return int(self.output_queue.recv())
 
   def get_total_cost(self):
-    if self.blocking:
-      return self.total_cost
-    else:
-      assert self.main_pid == os.getpid()
-      self.input_queue.send("get-total-cost")
-      return float(self.output_queue.recv())
+    assert self.main_pid == os.getpid()
+    self.input_queue.send("get-total-cost")
+    return float(self.output_queue.recv())
 
   def start_epoch_stats(self):
     if not self.is_device_proc():
@@ -563,13 +545,8 @@ class Device(object):
     self.reinit(json_content=network.to_json_content(), train_param_args=train_param_args)
     self.set_net_params(network)
     self.epoch = epoch
-    if self.blocking:
-      self.epoch_var.set_value(epoch)
-      if self.updater:
-        self.updater.reset()
-    else:
-      self.input_queue.send('reset')
-      self.input_queue.send(epoch)
+    self.input_queue.send('reset')
+    self.input_queue.send(epoch)
 
   def run(self, task):
     """
@@ -607,44 +584,39 @@ class Device(object):
     """
     assert self.wait_for_result_call
     self.result_called_count += 1
-    if self.blocking:
-      assert self.result_called_count == self.run_called_count
-      self.wait_for_result_call = False
-      return self.output, self.outputs_format
-    else:
-      assert self.main_pid == os.getpid()
-      assert self.result_called_count <= self.run_called_count
-      if not self.proc.is_alive():
-        print("Dev %s proc not alive anymore" % self.name, file=log.v4)
-        return None, None
-      # 60 minutes execution timeout by default
-      timeout = self.config.float("device_timeout", 60 * 60)
-      while timeout > 0:
-        try:
-          if self.output_queue.poll(1):
-            r = self.output_queue.recv()
-            if r == "error":
-              print("Dev %s proc reported error" % self.name, file=log.v5)
-              self.wait_for_result_call = False
-              return None, None
-            assert r == "task-result"
-            output = self.output_queue.recv()
-            outputs_format = self.output_queue.recv()
-            assert output is not None
-            self.wait_for_result_call = False
-            return output, outputs_format
-        except ProcConnectionDied as e:
-          # The process is dying or died.
-          print("Dev %s proc died: %s" % (self.name, e), file=log.v4)
-          self.wait_for_result_call = False
-          return None, None
-        timeout -= 1
-      print("Timeout (device_timeout = %s) expired for device %s" % (self.config.float("device_timeout", 60 * 60), self.name), file=log.v3)
-      try:
-        os.kill(self.proc.proc.pid, signal.SIGUSR1)
-      except Exception as e:
-        print("os.kill SIGUSR1 exception: %s" % e, file=log.v3)
+    assert self.main_pid == os.getpid()
+    assert self.result_called_count <= self.run_called_count
+    if not self.proc.is_alive():
+      print("Dev %s proc not alive anymore" % self.name, file=log.v4)
       return None, None
+    # 60 minutes execution timeout by default
+    timeout = self.config.float("device_timeout", 60 * 60)
+    while timeout > 0:
+      try:
+        if self.output_queue.poll(1):
+          r = self.output_queue.recv()
+          if r == "error":
+            print("Dev %s proc reported error" % self.name, file=log.v5)
+            self.wait_for_result_call = False
+            return None, None
+          assert r == "task-result"
+          output = self.output_queue.recv()
+          outputs_format = self.output_queue.recv()
+          assert output is not None
+          self.wait_for_result_call = False
+          return output, outputs_format
+      except ProcConnectionDied as e:
+        # The process is dying or died.
+        print("Dev %s proc died: %s" % (self.name, e), file=log.v4)
+        self.wait_for_result_call = False
+        return None, None
+      timeout -= 1
+    print("Timeout (device_timeout = %s) expired for device %s" % (self.config.float("device_timeout", 60 * 60), self.name), file=log.v3)
+    try:
+      os.kill(self.proc.proc.pid, signal.SIGUSR1)
+    except Exception as e:
+      print("os.kill SIGUSR1 exception: %s" % e, file=log.v3)
+    return None, None
 
   def forward(self, use_trainnet=False):
     assert self.is_device_proc()

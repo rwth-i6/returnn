@@ -24,9 +24,9 @@ import sys
 import time
 import numpy
 from Log import log
-from Device import Device, TheanoFlags, getDevicesInitArgs
+from PTDevice import Device, TheanoFlags, getDevicesInitArgs
 from Config import Config
-from Engine import Engine
+from PTEngine import Engine
 from Dataset import Dataset, init_dataset, init_dataset_via_str
 from HDFDataset import HDFDataset
 from Debug import initIPythonKernel, initBetterExchook, initFaulthandler, initCudaNotInMainProcCheck
