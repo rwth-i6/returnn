@@ -1087,7 +1087,7 @@ def convert_data_dims(data_dims, leave_dict_as_is=False):
     assert len(v) == 2
     assert isinstance(v[0], int)
     assert isinstance(v[1], int)
-    assert 1 <= v[1] <= 2
+    assert 1 <= v[1]
   return data_dims
 
 
