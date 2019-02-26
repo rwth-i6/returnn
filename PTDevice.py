@@ -1,15 +1,41 @@
+from __future__ import print_function
+
+from TaskSystem import AsyncTask, ProcConnectionDied
+from PTUpdater import Updater
+from Util import cmd, progress_bar, dict_diff_str, hms, start_daemon_thread, interrupt_main, CalledProcessError, NumbersDict, custom_exec, dict_joined, attr_chain
+from Log import log
+from PTNetwork import LayerNetwork
+from collections import OrderedDict
+import numpy
+import sys
+import os
+import signal
+import time
+import pickle
+try:
+  from thread import start_new_thread
+except ImportError:
+  # noinspection PyUnresolvedReferences
+  from _thread import start_new_thread
+import Debug
+import re
+
+import os
+import sys
 import torch
 from torch.autograd import grad
-from PTUpdater import Updater
-from PTNetwork import LayerNetwork
 
+import torch
+import torch.nn as nn
+
+TheanoFlags = {key: value for (key, value) in [s.split("=", 1) for s in os.environ.get("THEANO_FLAGS", "").split(",") if s]}
 floatX = 'float32'
 
 class DummyModel(nn.Module):
   def __init__(self):
     super(DummyModel, self).__init__()
-    self.lstm = nn.LSTM(24, 32, 1) # IAM
-    self.output = nn.Linear(32, tr.dataset.n_out)
+    self.lstm = nn.LSTM(50, 32, 1)
+    self.output = nn.Linear(32, 4501)
 
   def forward(self, x, i):
     x = x.permute(1,0,2)
@@ -24,6 +50,110 @@ def exec(x, y, i, j):
   loss_function = nn.NLLLoss()
   return loss_function(pcx, y.permute(1,0).contiguous().view(-1))
 
+def _get_num_devices():
+  if os.name == 'nt':
+    return 1, 1  # TODO
+  elif sys.platform == 'darwin':
+    return (
+      int(cmd("sysctl -a | grep machdep.cpu.core_count | awk '{print $2}'")[0]),
+      len(cmd("system_profiler SPDisplaysDataType | grep 'Chipset Model: NVIDIA' | cat")))
+  else:
+    num_cpus = len(cmd('cat /proc/cpuinfo | grep processor')) or 1
+    num_gpus = 0
+    try:
+      num_gpus = len(cmd('nvidia-smi -L'))
+    except CalledProcessError:
+      pass
+    return num_cpus, num_gpus
+
+
+_num_devices = None
+
+
+def get_num_devices():
+  """
+  :return: (cpu count, gpu count)
+  :rtype: (int, int)
+  """
+  global _num_devices
+  if _num_devices is not None:
+    return _num_devices
+  _num_devices = _get_num_devices()
+  return _num_devices
+
+def getDevicesInitArgs(config):
+  """
+  :type config: Config.Config
+  :rtype: list[dict[str]]
+  """
+  multiproc = config.bool('multiprocessing', True)
+  if config.value('task', 'train') == "theano_graph":
+    # Should have been reset earlier. See init() which handles this case.
+    assert not multiproc, "set multiprocessing = False to use theano_graph"
+  device_info = config.list('device', ['cpu0'])
+  if len(device_info) == 1 and device_info[0] == 'json':
+    try:
+      import json
+      specs = json.loads(open(config.value('initialize_from_json', '')).read().replace('(','\"').replace(')','\"'))['worker']
+    except Exception:
+      raise Exception('Unable to parse worker information from json content')
+    devices = [ { 'device' : specs[key]['device'], 'config' : config, 'blocking' : False, 'num_batches' : specs[key].pop('num_batches', 1), "update_specs" : specs[key].pop('update_specs', {}) } for key in specs ]
+  else:
+    device_tags = {}
+    ngpux = 0
+    ncpus, ngpus = get_num_devices()
+    if "all" in device_info:
+      device_tags = { tag: [1,True] for tag in [ "cpu" + str(i) for i in range(ncpus)] + [ "gpu" + str(i) for i in range(ngpus)] }
+    else:
+      for info in device_info:
+        device_update = True
+        num_batches = 1
+        if info[0] == '_':
+          device_update = False
+          info = info[1:]
+        if ':' in info:
+          num_batches = int(info.split(':')[1])
+          info = info.split(':')[0]
+        if len(info) == 3: info += "X"
+        assert len(info) > 3, "invalid device: " + str(info) #str(info[:-1])
+        utype = info[0:3]
+        uid = info[3:]
+        if uid == '*': uid = "[0-9]*"
+        if uid == 'X':
+          ngpux += 1
+          device_tags[info] = [num_batches, True]
+        else:
+          if utype == 'cpu':
+            np = ncpus
+          elif utype == 'gpu':
+            np = ngpus
+          else:
+            np = 0
+          match = False
+          for p in range(np):
+            if re.match(uid, str(p)):
+              device_tags[utype + str(p)] = [num_batches, device_update]
+              match = True
+          assert match, "invalid device specified: " + info
+    tags = sorted(device_tags.keys())
+    if multiproc:
+      assert len(tags) > 0
+      if len(tags) == 1 and tags[0][-1] == 'X':
+        newtag = tags[0][:-1] + 'Z'
+        device_tags[newtag] = device_tags[tags[0]]
+        tags[0] = newtag
+      devices = [ {"device": tag, "config": config, "num_batches": device_tags[tag][0], "update_specs" : {'update_rule' : 'global' if device_tags[tag][1] else 'none'}} for tag in tags ]
+      if len(devices) == 1 and ngpux > 1:
+        devices = devices * ngpux
+      import TaskSystem
+      if TaskSystem.isMainProcess:  # On a child process, we can have the gpu device.
+        assert not TheanoFlags.get("device", "").startswith("gpu"), \
+            "The main proc is not supposed to use the GPU in multiprocessing mode. Do not set device=gpu in THEANO_FLAGS."
+    else:
+      devices = [ {"device": tags[0], "config": config, "blocking": True} ]
+    #if config.value("on_size_limit", "ignore") == "cpu" and devices[-1]["device"] != "cpu127":
+    #  devices.append({"device": "cpu127", "config": config})
+  return devices
 
 class Device(object):
   def __init__(self, device, config, blocking=False, num_batches=1, update_specs=None):
@@ -77,7 +207,8 @@ class Device(object):
     if self.name[0:3] == "cpu":
       dev = torch.device("cpu")
     else:
-      dev = torch.device("cuda:%d" % int(device[3:]))
+      dev = torch.device("cuda:%d" % int(device_tag[3:]))
+    env_update = {} # TODO
     self.proc = AsyncTask(
       func=self.process,
       name="Device %s proc" % self.name,
@@ -141,7 +272,7 @@ class Device(object):
         self.network.update_step = model.attrs['update_step']
       model.close()
     # initialize batch
-    self.used_data_keys = self.trainnet.get_used_data_keys()
+    self.used_data_keys = ['data', 'classes']  # TODO #self.trainnet.get_used_data_keys()
     print("Device train-network: Used data keys:", self.used_data_keys, file=log.v4)
     assert "data" in self.used_data_keys
     # TODO
@@ -282,7 +413,9 @@ class Device(object):
     :type asyncTask: AsyncTask
     """
     # The connection (duplex pipe) is managed by AsyncTask.
-    # TODO: pytorhc initialization of given device for this process
+    output_queue = input_queue = asyncTask.conn
+    device_id = device.split(':')[-1]
+    device_name = "generic device"
     output_queue.send(device_id) # TODO
     output_queue.send(device_name) # TODO
 

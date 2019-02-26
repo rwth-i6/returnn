@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from PTDevice import floatX
+floatX = 'float32'
 
 from math import sqrt
 import numpy

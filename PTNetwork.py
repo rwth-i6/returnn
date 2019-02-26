@@ -1,7 +1,5 @@
 #! /usr/bin/python3
 
-backend = 'pytorch'
-
 from __future__ import print_function
 
 import torch
