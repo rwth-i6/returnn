@@ -1132,7 +1132,7 @@ class _SubnetworkRecCell(object):
   def _get_init_extra_outputs(self, name):
     """
     :param str name: layer name
-    :rtype: tf.Tensor|tuple[tf.Tensor]
+    :rtype: dict[str,tf.Tensor]
     """
     template_layer = self.layer_data_templates[name]
     cl = template_layer.layer_class_type
