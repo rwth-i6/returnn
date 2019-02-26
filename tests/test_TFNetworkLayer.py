@@ -209,6 +209,60 @@ def test_combine_layer_net_construct():
     network.construct_from_dict(net_dict)
 
 
+def test_CombineLayer_two_time_dims():
+  with make_scope() as session:
+    n_dim = 5
+    n_batch = 3
+    n_time1 = 7
+    n_time2 = 11
+    rnd = numpy.random.RandomState(42)
+    net_dict = {
+      "output": {
+        "class": "combine", "kind": "add",
+        "from": ["data:in0", "data:in1", "data:in2"]}
+    }
+    config = Config({"debug_print_layer_output_template": True})
+    extern_data = ExternData()
+    in0 = Data(
+      name="in0", shape=(None, None, n_dim), batch_dim_axis=1, auto_create_placeholders=True)
+    in1 = Data(
+      # same time as first in in0
+      name="in1", shape=(None, n_dim), auto_create_placeholders=True)
+    in2 = Data(
+      # same time as in second in in0
+      name="in2", shape=(None, n_dim), batch_dim_axis=1, auto_create_placeholders=True)
+    extern_data.register_data(in0)
+    extern_data.register_data(in1)
+    extern_data.register_data(in2)
+    in1.get_size_dim_tag(0).declare_same_as(in0.get_size_dim_tag(0))
+    in2.get_size_dim_tag(0).declare_same_as(in0.get_size_dim_tag(1))
+    print("ExternData all dimension tags (allow_same_feature_dim=True):")
+    pprint(extern_data.get_all_dimension_tags(allow_same_feature_dim=True))
+    network = TFNetwork(config=config, extern_data=extern_data, train_flag=True)
+    network.construct_from_dict(net_dict)
+    output = network.get_default_output_layer().output
+    assert output.shape == (None, None, n_dim) and set(output.size_placeholder.keys()) == {0, 1}
+    assert output.batch_dim_axis == 1 and output.time_dim_axis == 0
+    time1_np = numpy.array([n_time1, n_time1 - 3, n_time1 - 2])
+    assert min(time1_np) > 0 and max(time1_np) == n_time1 and len(time1_np) == n_batch
+    time2_np = numpy.array([n_time2, n_time2 - 2, n_time2 - 5])
+    assert min(time2_np) > 0 and max(time2_np) == n_time2 and len(time2_np) == n_batch
+    in0_np = rnd.normal(size=(n_time1, n_batch, n_time2, n_dim)).astype("float32")
+    in1_np = rnd.normal(size=(n_batch, n_time1, n_dim)).astype("float32")
+    in2_np = rnd.normal(size=(n_time2, n_batch, n_dim)).astype("float32")
+    out_np, out_sizes_np = session.run(
+      fetches=(output.placeholder, output.size_placeholder),
+      feed_dict={
+        in0.placeholder: in0_np, in0.size_placeholder[0]: time1_np, in0.size_placeholder[1]: time2_np,
+        in1.placeholder: in1_np, in1.size_placeholder[0]: time1_np,
+        in2.placeholder: in2_np, in2.size_placeholder[0]: time2_np})
+    assert isinstance(out_np, numpy.ndarray)
+    assert isinstance(out_sizes_np, dict) and set(out_sizes_np.keys()) == {0, 1}
+    out_time0_np, out_time1_np = out_sizes_np[0], out_sizes_np[1]
+    assert isinstance(out_time0_np, numpy.ndarray) and isinstance(out_time1_np, numpy.ndarray)
+    assert out_np.shape == (n_time1, n_batch, n_time2, n_dim)
+
+
 def test_dropout_layer_net_construct():
   with make_scope() as session:
     net_dict = {

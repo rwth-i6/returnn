@@ -6,8 +6,8 @@ import sys
 import numpy
 import contextlib
 from Log import log
-from TFNetworkLayer import Data, LayerBase, get_layer_class
-from TFUtil import reuse_name_scope, VariableAssigner
+from TFNetworkLayer import LayerBase, get_layer_class
+from TFUtil import Data, DimensionTag, reuse_name_scope, VariableAssigner
 
 
 class ExternData(object):
@@ -174,6 +174,16 @@ class ExternData(object):
       keys.remove(self.default_input)
       keys.insert(0, self.default_input)
     return [(key, self.data[key]) for key in keys]
+
+  def get_all_dimension_tags(self, allow_same_feature_dim=False):
+    """
+    :param bool allow_same_feature_dim:
+    :rtype: list[DimensionTag]
+    """
+    tags, _ = DimensionTag.get_all_dimension_tags(
+      [data for _, data in self.get_sorted_data_items()],
+      allow_same_feature_dim=allow_same_feature_dim)
+    return tags
 
 
 class TFNetwork(object):
