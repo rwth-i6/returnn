@@ -800,7 +800,7 @@ class Data(object):
     other_special_axes.pop("time_dim_axis", None)
     for axis_name, axis in other_special_axes.items():
       kwargs[axis_name] = axis if (axis < self.time_dim_axis) else (axis - 1)
-    kwargs["time_dim_axis"] = None
+    del kwargs["time_dim_axis"]  # maybe automatically select another one
     kwargs["shape"] = new_shape
     if name:
       kwargs["name"] = name

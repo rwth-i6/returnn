@@ -132,6 +132,13 @@ def test_Data_copy_template_adding_time_dim_no_feature():
   # assert d2.feature_dim_axis is None  # not sure what we would want here...
 
 
+def test_Data_copy_template_excluding_time_dim_two_time_dims():
+  data = Data(name='ref_att_weights_output', shape=(None, None, 1), auto_create_placeholders=True)
+  assert set(data.size_placeholder.keys()) == {0, 1}
+  data_wo_time = data.copy_template_excluding_time_dim()
+  assert data_wo_time.shape == (None, 1) and data_wo_time.have_time_axis()
+
+
 def test_Data_time_no_feature():
   d1 = Data(name="d1", shape=(None,), batch_dim_axis=0, time_dim_axis=1, dim=None)
   assert d1.time_dim_axis == 1
