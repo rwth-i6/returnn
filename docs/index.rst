@@ -57,6 +57,7 @@ User guide
     basic_usage
     tech_overview
     tf_lstm_benchmark
+    multi_gpu
     deterministic_training
     layer_reference/index.rst
 
