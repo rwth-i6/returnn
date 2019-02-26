@@ -278,15 +278,17 @@ class LayerBase(object):
     # However, in many cases, this will just be {0: time-lengths} and the same as from the input.
     # We check for this case and preset it by that if possible.
     # If you want to have it different in your layer, just overwrite it.
-    if sources and sources[0].output.matches_var_dim_pattern(output):
-      output.size_placeholder = sources[0].output.size_placeholder.copy()
-    elif target or size_target:
-      if network.train_flag is not False:
-        # TODO: In training, this is ok. Maybe as well as for eval but not clear.
-        # In forward, mark_data_key_as_used=False should be used and anyway that target value is not available.
-        output.size_placeholder = cls._static_get_target_value(
-          target=target or size_target, network=network,
-          mark_data_key_as_used=network.train_flag is not False).size_placeholder.copy()
+    common_source = Data.get_common_data([s.output for s in sources])
+    if not output.size_placeholder:
+      if sources and common_source.matches_var_dim_pattern(output):
+        output.size_placeholder = common_source.size_placeholder.copy()
+      elif target or size_target:
+        if network.train_flag is not False:
+          # TODO: In training, this is ok. Maybe as well as for eval but not clear.
+          # In forward, mark_data_key_as_used=False should be used and anyway that target value is not available.
+          output.size_placeholder = cls._static_get_target_value(
+            target=target or size_target, network=network,
+            mark_data_key_as_used=network.train_flag is not False).size_placeholder.copy()
     if any([(src and not src.output.available_for_inference) for src in sources]):
       output.available_for_inference = False
 
@@ -1528,16 +1530,18 @@ def concat_sources(src_layers):
   if cache_key in network.concat_sources_dropout_cache:
     return network.concat_sources_dropout_cache[cache_key].copy()
   data = get_concat_sources_data_template(src_layers)
+  common_source = Data.get_common_data([s.output for s in src_layers])
+  # Currently we assume that get_concat_sources_data_template will match Data.get_common_data (besides the dim).
+  data.size_placeholder = common_source.size_placeholder.copy()  # to get right dimension tags
   layers_data = []
   with _name_scope_for_concat_src_layers(src_layers, "concat_sources"):
     data_dyn_shape = list(data.batch_shape)
     if any([d is None for d in data_dyn_shape]):
-      # Currently we assume that get_concat_sources_data_template will match the first layer,
-      # and thus the first layer output shape should be correct.
-      assert src_layers[0].output.batch_ndim == data.batch_ndim
+      # Currently we assume that get_concat_sources_data_template will match Data.get_common_data (besides the dim).
+      assert common_source.batch_ndim == data.batch_ndim
       for axis in range(data.batch_ndim):
         if data_dyn_shape[axis] is None:
-          data_dyn_shape[axis] = tf.shape(src_layers[0].output.placeholder)[axis]
+          data_dyn_shape[axis] = tf.shape(common_source.placeholder)[axis]
     for layer in src_layers:
       assert not layer.output.sparse, "sparse concat not supported"
       assert layer.output.dtype == data.dtype, "incompatible dtype with layer %r" % layer
@@ -1546,7 +1550,6 @@ def concat_sources(src_layers):
     data.placeholder = tf.concat(
       axis=data.feature_dim_axis,
       values=[l.placeholder for l in layers_data])
-  data.size_placeholder = src_layers[0].output.size_placeholder.copy()
   network.concat_sources_dropout_cache[cache_key] = data.copy()
   return data
 
@@ -1555,7 +1558,7 @@ def get_concat_sources_data_template(src_layers, name=None):
   """
   This just creates a template :class:`Data` instance,
   without creating any real TF tensors.
-  :func:`conact_sources` (and related) are the equivalent functions
+  :func:`concat_sources` (and related) are the equivalent functions
   which would create a :class:`Data` together with the tensor.
 
   :param list[LayerBase] src_layers:
@@ -1568,6 +1571,7 @@ def get_concat_sources_data_template(src_layers, name=None):
     return src_layers[0].output.copy(name=name)
   dim = 0
   beam_size = None
+  common_source = Data.get_common_data([s.output for s in src_layers])
   for layer in src_layers:
     # Note: We do not perform much compatibility checks at this point,
     # as this is for a template only anyway.
@@ -1576,16 +1580,16 @@ def get_concat_sources_data_template(src_layers, name=None):
     assert layer.output.dim is not None
     dim += layer.output.dim
     beam_size = beam_size or layer.output.beam_size
-  data = Data(
+  shape = list(common_source.shape)
+  shape[common_source.get_batch_axis_excluding_batch(common_source.feature_dim_axis)] = dim
+  kwargs = common_source.get_kwargs()
+  kwargs.update(dict(
     name=name or ("concat_" + "_".join([l.name for l in src_layers])),
-    shape=src_layers[0].output.shape[:-1] + (dim,),
+    shape=shape,
     dim=dim,
     sparse=False,
-    batch_dim_axis=src_layers[0].output.batch_dim_axis,
-    time_dim_axis=src_layers[0].output.time_dim_axis,
-    feature_dim_axis=src_layers[0].output.feature_dim_axis_or_unspecified,
-    dtype=src_layers[0].output.dtype,
-    beam_size=beam_size)
+    beam_size=beam_size))
+  data = Data(**kwargs)
   return data
 
 
@@ -4367,8 +4371,8 @@ class CombineLayer(LayerBase):
     """
     assert sources
     super(CombineLayer, self).__init__(sources=sources, **kwargs)
-    assert kind in ["average", "add", "sub", "mul", "eval"], \
-        "Invalid `kind` %r for this layer." % kind
+    assert kind in ["average", "add", "sub", "mul", "eval"], (
+      "%s: Invalid `kind` %r for this layer." % (self, kind))
     op = self._get_op(kind=kind, eval_str=eval, eval_locals=eval_locals)
     x = op(sources)
     if eval_for_output_loss:
@@ -4394,10 +4398,20 @@ class CombineLayer(LayerBase):
 
   @classmethod
   def get_out_data_from_opts(cls, n_out=None, out_type=None, sources=(), **kwargs):
-    if not n_out and not out_type:
-      out_type = sources[0].output.get_kwargs()
-      out_type["name"] = "%s_output" % kwargs["name"]
-    return super(CombineLayer, cls).get_out_data_from_opts(n_out=n_out, out_type=out_type, sources=sources, **kwargs)
+    out_type_ = {}
+    if sources:
+      out_type_.update(Data.get_common_data([s.output for s in sources]).get_kwargs())
+    if n_out:
+      out_type_["dim"] = n_out
+    out_type_.setdefault("name", "%s_output" % kwargs["name"])
+    if out_type:
+      if isinstance(out_type, dict):
+        out_type_.update(out_type)
+      elif callable(out_type):
+        out_type_ = out_type  # just overwrite
+      else:
+        raise TypeError("unexpected type of out_type %r" % (out_type,))
+    return super(CombineLayer, cls).get_out_data_from_opts(n_out=n_out, out_type=out_type_, sources=sources, **kwargs)
 
   def _check_same_dense_dim(self, sources):
     """
@@ -4406,8 +4420,8 @@ class CombineLayer(LayerBase):
     assert not self.output.sparse
     for source in sources:
       assert not source.output.sparse
-      assert source.output.dim == self.output.dim \
-              or source.output.dim == 1 # Constant layer broadcasting
+      assert (source.output.dim == self.output.dim
+              or source.output.dim == 1)  # constant layer broadcasting
 
   # Requires the same input shape and yield the same output shape.
   def _op_dense_fn(self, sources, fn):
@@ -4417,9 +4431,10 @@ class CombineLayer(LayerBase):
     :rtype: tf.Tensor
     """
     self._check_same_dense_dim(sources)
-    x = sources[0].output.placeholder
+    common_data = Data.get_common_data([s.output for s in sources])
+    x = sources[0].output.copy_compatible_to(common_data).placeholder
     for source in sources[1:]:
-      x2 = source.output.copy_compatible_to(sources[0].output).placeholder
+      x2 = source.output.copy_compatible_to(common_data).placeholder
       x = fn(x, x2)
     return x
 
@@ -4461,6 +4476,7 @@ class CombineLayer(LayerBase):
     :rtype: tf.Tensor
     """
     used_sources = set()  # type: set[int]
+    common_data = Data.get_common_data([s.output for s in sources])
 
     def source(i, auto_convert=True, enforce_batch_major=False, as_data=False):
       """
@@ -4475,8 +4491,8 @@ class CombineLayer(LayerBase):
       used_sources.add(i)
       if isinstance(sources[i], LayerBase):
         output = sources[i].output
-        if auto_convert and i != 0:
-          output = output.copy_compatible_to(sources[0].output)
+        if auto_convert:
+          output = output.copy_compatible_to(common_data)
         if enforce_batch_major:
           output = output.copy_as_batch_major()
         if as_data:
@@ -4497,6 +4513,7 @@ class CombineLayer(LayerBase):
     op = getattr(self, "_op_kind_%s" % kind)
     if eval_str:
       assert kind == "eval"
+
       def wrap_eval_op(sources):
         return self._op_kind_eval(sources, eval_str=eval_str, eval_locals=eval_locals)
       op = wrap_eval_op

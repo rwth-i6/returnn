@@ -1554,6 +1554,25 @@ class Data(object):
     axis_wo_batch = sorted(self.size_placeholder.keys())[number]
     return self.get_dim_tag(self.get_batch_axis(axis_wo_batch))
 
+  @classmethod
+  def get_common_data(cls, sources):
+    """
+    :param list[Data] sources:
+    :return: some generic data where the sources should be compatible to (with copy_compatible_to)
+    :rtype: Data|None
+    """
+    if not sources:
+      return None
+    # Simple for now: Use first with biggest batch_ndim.
+    # Was even simpler before: Use first.
+    # Later, we could auto-expand all.
+    # However, note that this should also work at template construction time,
+    # where we do not have access to the size_placeholder,
+    # and thus the dimension tags are not reliable (in the current implementation).
+    assert sources
+    max_ndim = max([s.batch_ndim for s in sources])
+    return [s for s in sources if s.batch_ndim == max_ndim][0]
+
 
 _horovod_is_initialized = False
 
