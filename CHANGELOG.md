@@ -6,6 +6,14 @@ or any changes which could potentially break or change the behavior of existing 
 This is intentionally kept short. For a full change log, just see the Git log.
 
 
+## 2019-02-21: `HDFDataset` huge speedup for `cache_size=0`
+
+If your whole dataset does not fit into memory
+(or you don't want to consume so much memory),
+for TensorFlow,
+you should always use `cache_size = 0` (or `"0"`) in the config.
+This case got a huge speedup.
+
 ## 2019-02-18: `MergeDimsLayer`, `SplitBatchTimeLayer`
 
 If you used `MergeDimsLayer` with `"axes": "BT"` **on some time-major input**,
