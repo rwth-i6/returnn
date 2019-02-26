@@ -690,6 +690,36 @@ class MixtureSet:
     return self.nMixtures
 
 
+class WordBoundaries:
+  # read routines
+  def read_u16(self):
+    return int(unpack("H", self.f.read(2))[0])
+
+  def read_u32(self):
+    return int(unpack("i", self.f.read(4))[0])
+
+  def read_str(self, l, enc='ascii'):
+    a = array.array('b')
+    a.fromfile(self.f, l)
+    return a.tostring().decode(enc)
+
+  def __init__(self, filename):
+    self.header = "LATWRDBN"
+    self.f = open(filename, 'rb')
+    header = self.read_str(8)
+    assert header == self.header
+    self.version = self.read_u32()
+    self.size = self.read_u32()
+    print("version=%d size=%d" % (self.version, self.size))
+    self.boundaries = []
+    for i in range(self.size):
+      time = self.read_u32()
+      final = self.read_u16()
+      initial = self.read_u16()
+      bnd = (time, initial, final)
+      self.boundaries.append(bnd)
+      print(bnd)
+
 ###############################################################################
 
 def main():
