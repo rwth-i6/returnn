@@ -211,9 +211,13 @@ class Data(object):
       if self.batch_dim_axis is None:
         time_dim_axis = None
       else:
+        # Do not select the batch dim axis, or any axis with None dim.
+        # Note that we currently allow to select the same as the feature dim axis,
+        # in case the feature dim is None.
         taken_axes = {self.batch_dim_axis}
-        if self.feature_dim_axis is not None and self.batch_shape[self.feature_dim_axis] is not None:
-          taken_axes.add(self.feature_dim_axis)
+        for axis, _dim in enumerate(self.batch_shape):
+          if _dim is not None:
+            taken_axes.add(axis)
         available_axes = [i for i in range(self.batch_ndim) if i not in taken_axes]
         if available_axes:
           time_dim_axis = available_axes[0]

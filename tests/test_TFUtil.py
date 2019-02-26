@@ -55,6 +55,12 @@ def test_Data_dim():
   assert_equal(data.sparse, False)
 
 
+def test_Data_default_time_no_time():
+  # This is new behavior.
+  data = Data(name='merge_dims_test_output', shape=(3, 5))
+  assert data.time_dim_axis is None and data.feature_dim_axis == 2
+
+
 def test_Data_copy_time_major():
   data = Data(name="my_data", dim=13)
   assert_equal(data.batch_dim_axis, 0)
