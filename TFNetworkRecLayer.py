@@ -797,6 +797,9 @@ class _SubnetworkRecCell(object):
     self.get_final_rec_vars = None
     self.accumulated_losses = {}  # type: dict[str,TFNetwork.LossHolder]
 
+  def __repr__(self):
+    return "<%s of %r>" % (self.__class__.__name__, self.parent_rec_layer)
+
   def _construct_template(self):
     """
     Without creating any computation graph, create TemplateLayer instances.
@@ -819,6 +822,7 @@ class _SubnetworkRecCell(object):
       layer_desc = layer_desc.copy()
       layer_desc["name"] = name
       layer_desc["network"] = self.net
+      layer.kwargs = layer_desc  # set it now already for better debugging
       output = layer_class.get_out_data_from_opts(**layer_desc)
       layer.init(layer_class=layer_class, output=output, **layer_desc)
       return layer
@@ -951,7 +955,13 @@ class _SubnetworkRecCell(object):
       print("%r: exception constructing template network (for deps and data shapes)" % self)
       from pprint import pprint
       print("Most recent construction stack:")
-      pprint(construct_ctx.most_recent)
+      if construct_ctx.most_recent:
+        for layer in construct_ctx.most_recent:
+          assert isinstance(layer, _TemplateLayer)
+          print("%r, kwargs:" % (layer,))
+          pprint(layer.kwargs)
+      else:
+        print(construct_ctx.most_recent)
       print("Template network so far:")
       pprint(self.layer_data_templates)
       raise
