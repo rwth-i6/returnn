@@ -882,7 +882,8 @@ class LayerBase(object):
                  use_shift=True, use_std=True, use_sample=0.0, force_sample=False,
                  momentum=0.99, epsilon=1e-3,
                  sample_mean=None, sample_variance=None,
-                 gamma=None, beta=None):
+                 gamma=None, beta=None,
+                 masked_time=True):
     """
     :param Data data:
     :param bool use_shift:
@@ -895,6 +896,7 @@ class LayerBase(object):
     :param tf.Tensor sample_variance:
     :param tf.Tensor gamma:
     :param tf.Tensor beta:
+    :param bool masked_time: flatten and mask input tensor
     :rtype: tf.Tensor
 
     http://arxiv.org/abs/1502.03167
@@ -904,8 +906,12 @@ class LayerBase(object):
       https://github.com/deepmind/sonnet/blob/master/sonnet/python/modules/batch_norm.py
     """
     with tf.variable_scope("batch_norm"):
-      x = data.get_placeholder_flattened(keep_dims=True)  # shape (time',...)
-      mean, variance = tf.nn.moments(x, axes=[0], keep_dims=True)
+      if masked_time:
+        x = data.get_placeholder_flattened(keep_dims=True)
+        mean, variance = tf.nn.moments(x, axes=[0], keep_dims=True)
+      else:
+        x = data.placeholder
+        mean, variance = tf.nn.moments(x, axes=data.get_axes(exclude_feature=True), keep_dims=True)
       if sample_mean is None:
         with self.var_creation_scope():
           sample_mean = self.add_param(tf.Variable(
