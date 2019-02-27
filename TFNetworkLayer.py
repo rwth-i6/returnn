@@ -5695,6 +5695,13 @@ class Loss(object):
             target = target.copy_extend_with_beam(output.beam_size)
         else:
           assert not target.beam_size
+      if output.feature_dim_axis is not None and output.feature_dim_axis != output.batch_ndim - 1:
+        if output_with_activation:
+          from TFUtil import move_axis
+          output_with_activation = OutputWithActivation(x=move_axis(output_with_activation.x,
+                                                                    output.feature_dim_axis, -1),
+                                                        act_func=output_with_activation.act_func)
+        output = output.copy_with_feature_dim_axis(-1)
       self.output = output
       self.output_with_activation = output_with_activation
       self.target = target
