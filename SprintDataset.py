@@ -293,7 +293,6 @@ class SprintDatasetBase(Dataset):
     :returns the sorted seq index
     :rtype: int
     """
-
     # is in format (feature,time)
     assert self.num_inputs == features.shape[0]
     T = features.shape[1]
