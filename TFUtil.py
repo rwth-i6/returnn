@@ -8,7 +8,9 @@ import contextlib
 import os
 import sys
 import threading
-from Util import NotSpecified, NativeCodeCompiler
+from Util import NotSpecified, NativeCodeCompiler, PY3
+if PY3:
+  import typing
 
 
 class CollectionKeys:
