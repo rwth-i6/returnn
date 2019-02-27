@@ -1257,10 +1257,11 @@ class Data(object):
       x.set_shape([None] * self.batch_ndim)
     return x
 
-  def get_axes(self, exclude_time=False, exclude_batch=False):
+  def get_axes(self, exclude_time=False, exclude_batch=False, exclude_feature=False):
     """
     :param bool exclude_time: will filter out the time-axis
     :param bool exclude_batch: will filter out the batch-axis
+    :param bool exclude_feature: will filter out the feature-axis
     :return: list of axes, like `range(len(self.shape))`, calculated with batch dim.
     :rtype: list[int]
     """
@@ -1269,6 +1270,8 @@ class Data(object):
       axes.pop(axes.index(self.time_dim_axis))
     if exclude_batch and self.batch_dim_axis is not None:
       axes.pop(axes.index(self.batch_dim_axis))
+    if exclude_feature and self.feature_dim_axis is not None:
+      axes.pop(axes.index(self.feature_dim_axis))
     return axes
 
   def get_axes_from_description(self, axes, allow_int=True):
