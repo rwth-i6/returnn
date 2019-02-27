@@ -3319,6 +3319,55 @@ def batched_uniq(x, seq_lens):
   return z, new_seq_lens
 
 
+def concat_with_opt_broadcast(values, allow_broadcast, axis, name="concat_with_opt_broadcast"):
+  """
+  :param list[tf.Tensor] values: all with same ndim
+  :param list[bool] allow_broadcast: same len as `values`
+  :param int axis:
+  :param str name:
+  :return: basically tf.concat(values, axis), but we can allow broadcasting for some values
+  :rtype: tf.Tensor
+  """
+  assert 0 < len(values) == len(allow_broadcast)
+  if all([not a for a in allow_broadcast]):
+    return tf.concat(values, axis=axis)
+  ndim = values[0].shape.ndims
+  assert ndim, "unknown ndim or scalar: %r" % (values,)
+  for value in values:
+    assert value.shape.ndims == ndim, "ndim does not match in values %r" % (values,)
+  if axis < 0:
+    axis += ndim
+  assert 0 <= axis < ndim
+  with tf.name_scope(name):
+    common_shape = [None] * ndim  # type: typing.List[typing.Union[tf.Tensor,int,None]]
+    for _axis in range(ndim):
+      if _axis == axis:
+        continue  # does not matter
+      for value in values:
+        static_dim = value.shape.dims[_axis].value
+        if common_shape[_axis] in (None, 1):
+          common_shape[_axis] = get_shape_dim(value, _axis)
+        if static_dim is not None:
+          if isinstance(common_shape[_axis], tf.Tensor):
+            common_shape[_axis] = static_dim
+          else:
+            assert common_shape[_axis] == static_dim, "non matching dim %r vs %r in axis %i, value %r of values %r" % (
+              common_shape[_axis], static_dim, _axis, value, values)
+    # Now check all, or maybe unbroadcast.
+    for i in range(len(values)):
+      value = values[i]
+      static_shape = value.shape.as_list()
+      tile_multiples = [common_shape[_axis] if static_shape[_axis] == 1 else 1 for _axis in range(ndim)]
+      tile_multiples[axis] = 1
+      if not all([isinstance(m, int) and m == 1 for m in tile_multiples]):
+        assert allow_broadcast[i], "need to broadcast value %r in values %r with tile multiples %r" % (
+          value, values, tile_multiples)
+        value = tf.tile(value, tile_multiples)
+        values[i] = value
+    # Now do the concat.
+    return tf.concat(values, axis=axis, name=name)
+
+
 def matrix_triangular(shape, dtype=tf.float32, lower=False, upper=False):
   """
   :param tuple[int|tf.Tensor]|tf.Tensor shape:
