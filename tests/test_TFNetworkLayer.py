@@ -970,6 +970,47 @@ def test_ReduceLayer_NCHW():
     assert reduce2.output.batch_dim_axis is None
 
 
+def test_Loss_NCHW():
+  with make_scope() as session:
+    import numpy as np
+    net = TFNetwork(extern_data=ExternData())
+    with tf.variable_scope("src_nchw"):
+      src_nchw = InternalLayer(name="src_nchw", network=net, out_type={"dim": 16,
+                                                                       "shape": (16, None),
+                                                                       "batch_dim_axis": 0,
+                                                                       "time_dim_axis": 2,
+                                                                       "feature_dim_axis": 1,
+                                                                       "sparse": False
+                                                                       })
+      src_nchw.output.placeholder = tf.placeholder(shape=(None, 16, None), dtype=tf.float32)
+      src_nchw.output.size_placeholder = {1: tf.placeholder(shape=(None,), dtype=tf.int32)}
+
+    with tf.variable_scope("activation"):
+      activation = ActivationLayer(name="activation", activation="softmax", network=net, sources=[src_nchw])
+
+    target_placeholder = tf.placeholder(shape=(None, None, 16), dtype=tf.float32)
+    target_size_placeholder = tf.placeholder(shape=(None,), dtype=tf.int32)
+    target_data = Data(name="target", shape=(None, 16), placeholder=target_placeholder,
+                       size_placeholder={0: target_size_placeholder},
+                       time_dim_axis=1, feature_dim_axis=2)
+
+    with tf.variable_scope("loss"):
+      loss = CrossEntropyLoss(base_network=net)
+      loss.init(output=activation.output, output_with_activation=activation.output_before_activation,
+                target=target_data, layer=activation)
+
+    random_input = np.random.rand(10, 16, 32)
+    loss_out, out_flat = session.run([loss.get_value(), loss.output_before_softmax_flat],
+                                     feed_dict={src_nchw.output.placeholder: random_input,
+                                                src_nchw.output.size_placeholder[1]: np.full(shape=(10,), fill_value=32),
+                                                target_placeholder: np.random.rand(10, 32, 16),
+                                                target_size_placeholder: np.full(shape=(10,), fill_value=32)
+                                                })
+    print(loss_out)
+    assert loss.output.feature_dim_axis == 2
+    assert out_flat.shape == (320, 16)
+
+
 def test_ResizeLayer_fill_value():
   with make_scope() as session:
     net = TFNetwork(extern_data=ExternData())
