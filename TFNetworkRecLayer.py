@@ -2060,6 +2060,7 @@ class _SubnetworkRecCell(object):
 
     from TFNetwork import TFNetwork, ExternData
     from TFNetworkLayer import InternalLayer
+    from TFUtil import concat_with_opt_broadcast
     self.input_layers_net = TFNetwork(
       name="%s/%s:rec-subnet-input" % (self.parent_net.name, self.parent_rec_layer.name if self.parent_rec_layer else "?"),
       extern_data=ExternData(),
@@ -2086,7 +2087,8 @@ class _SubnetworkRecCell(object):
         initial = self._get_init_output(name)
         initial_wt = tf.expand_dims(initial, axis=0)  # add time axis
         x = output.placeholder
-        output.placeholder = tf.concat([initial_wt, x], axis=0, name="concat_in_time")
+        output.placeholder = concat_with_opt_broadcast(
+          [initial_wt, x], allow_broadcast=[True, False], axis=0, name="concat_in_time")
         output.placeholder = output.placeholder[:-1]  # remove last frame
         # Note: This seq_len might make sense to use here:
         # output.size_placeholder[0] = tf.minimum(output.size_placeholder[0] + 1, tf.shape(x)[0])
@@ -2130,7 +2132,7 @@ class _SubnetworkRecCell(object):
       return
 
     max_len = tf.reduce_max(seq_len) if seq_len is not None else None
-    from TFUtil import tensor_array_stack, has_control_flow_context
+    from TFUtil import tensor_array_stack, has_control_flow_context, concat_with_opt_broadcast
     from TFNetwork import TFNetwork, ExternData
     from TFNetworkLayer import InternalLayer
     self.output_layers_net = TFNetwork(
@@ -2187,7 +2189,8 @@ class _SubnetworkRecCell(object):
         initial = self._get_init_output(name)
         initial_wt = tf.expand_dims(initial, axis=0)  # add time axis
         x = output.placeholder
-        output.placeholder = tf.concat([initial_wt, x], axis=0, name="concat_in_time")
+        output.placeholder = concat_with_opt_broadcast(
+          [initial_wt, x], allow_broadcast=[True, False], axis=0, name="concat_in_time")
         output.placeholder = output.placeholder[:-1]  # remove last frame
         # Note: This seq_len might make sense to use here:
         # output.size_placeholder[0] = tf.minimum(output.size_placeholder[0] + 1, tf.shape(x)[0])

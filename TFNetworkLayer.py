@@ -997,8 +997,10 @@ class LayerBase(object):
     if v is None:
       v = "zeros"
     bc_shape = [(d if (d is not None) else 1) for d in data.batch_shape]
-    # Some other code might not support automatic broadcasting in the batch-axis. (Example: concat_in_time)
-    # Thus we will automatically
+    # Some other code might not support automatic broadcasting in the batch-axis. (Earlier example: concat_in_time)
+    # Thus we will automatically unbroadcast here (at least the batch axis).
+    # Note that there still might be other axes which we do not unbroadcast here.
+    # Thus, concat_in_time was fixed now, and maybe we actually do not need this anymore.
     shape = list(bc_shape)
     shape[data.batch_dim_axis] = batch_dim
     if isinstance(v, (float, int)):
