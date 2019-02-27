@@ -11,3 +11,6 @@ ipython-kernel-*.json
 
 # QtCreator/cmake creates this:
 /extern/build-*
+
+# When we run tests here, these can be created.
+/events.out.tfevents.*
