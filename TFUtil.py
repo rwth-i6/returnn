@@ -2953,6 +2953,8 @@ def swapaxes(x, axis1, axis2):
                 for i in range(ndim)]
       else:
         perm = list(range(ndim))
+        axis1 = axis1 % len(perm)
+        axis2 = axis2 % len(perm)
         perm[axis1] = axis2
         perm[axis2] = axis1
     else:
