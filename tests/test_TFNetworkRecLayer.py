@@ -1950,6 +1950,274 @@ def test_reclayer_optimize_out_dot():
     rtol=1e-3)
 
 
+class TransformerNetwork:
+
+  def __init__(self):
+    self.encN = 3
+    self.decN = 3
+    self.FFDim = 13
+    self.EncKeyTotalDim = 7 * 4
+    self.AttNumHeads = 4
+    self.EncKeyPerHeadDim = self.EncKeyTotalDim // self.AttNumHeads
+    self.EncValueTotalDim = self.EncKeyTotalDim
+    self.EncValuePerHeadDim = self.EncValueTotalDim // self.AttNumHeads
+    self.embed_weight = self.EncValueTotalDim ** 0.5
+
+    self.embed_dropout = 0.0
+    self.postprocess_dropout = 0.0  # 0.1
+    self.act_dropout = 0.0  # 0.1
+    self.attention_dropout = 0.0  # 0.1
+    self.label_smoothing = 0.0  # 0.1
+
+    self.ff_init = "variance_scaling_initializer(mode='fan_in', distribution='uniform', scale=0.78)"
+
+  def add_trafo_enc_layer(self, d, inp, output):
+    """
+    :param dict[str,dict[str]] d:
+    :param str inp:
+    :param str output:
+    """
+    d[output + '_self_att_laynorm'] = {"class": "layer_norm", "from": [inp]}
+    d[output + '_self_att_att'] = {"class": "self_attention", "num_heads": self.AttNumHeads,
+                                   "total_key_dim": self.EncKeyTotalDim,
+                                   "n_out": self.EncValueTotalDim, "from": [output + '_self_att_laynorm'],
+                                   "attention_left_only": False, "attention_dropout": self.attention_dropout,
+                                   "forward_weights_init": self.ff_init}
+    d[output + '_self_att_lin'] = {"class": "linear", "activation": None, "with_bias": False,
+                                   "from": [output + '_self_att_att'], "n_out": self.EncValueTotalDim,
+                                   "forward_weights_init": self.ff_init}
+    d[output + '_self_att_drop'] = {"class": "dropout", "from": [output + '_self_att_lin'],
+                                    "dropout": self.postprocess_dropout}
+    d[output + '_self_att_out'] = {"class": "combine", "kind": "add", "from": [inp, output + '_self_att_drop'],
+                                   "n_out": self.EncValueTotalDim}
+    #####
+    d[output + '_ff_laynorm'] = {"class": "layer_norm", "from": [output + '_self_att_out']}
+    d[output + '_ff_conv1'] = {"class": "linear", "activation": "relu", "with_bias": True,
+                               "from": [output + '_ff_laynorm'],
+                               "n_out": self.FFDim, "forward_weights_init": self.ff_init}
+    d[output + '_ff_conv2'] = {"class": "linear", "activation": None, "with_bias": True,
+                               "from": [output + '_ff_conv1'], "dropout": self.act_dropout,
+                               "n_out": self.EncValueTotalDim, "forward_weights_init": self.ff_init}
+    d[output + '_ff_drop'] = {"class": "dropout", "from": [output + '_ff_conv2'], "dropout": self.postprocess_dropout}
+    d[output + '_ff_out'] = {"class": "combine", "kind": "add",
+                             "from": [output + '_self_att_out', output + '_ff_drop'],
+                             "n_out": self.EncValueTotalDim}
+    d[output] = {"class": "copy", "from": [output + '_ff_out']}
+
+  def add_trafo_dec_layer(self, db, d, inp, output):
+    """
+    :param dict[str,dict[str]] db:
+    :param dict[str,dict[str]] d:
+    :param str inp:
+    :param str output:
+    """
+    pre_inp = [inp]
+    d[output + '_self_att_laynorm'] = {"class": "layer_norm", "from": pre_inp}
+    d[output + '_self_att_att'] = {
+      "class": "self_attention",
+      "num_heads": self.AttNumHeads,
+      "total_key_dim": self.EncKeyTotalDim,
+      "n_out": self.EncValueTotalDim,
+      "from": [output + '_self_att_laynorm'],
+      "attention_left_only": True,
+      "attention_dropout": self.attention_dropout,
+      "forward_weights_init": self.ff_init}
+    d[output + '_self_att_lin'] = {"class": "linear", "activation": None, "with_bias": False,
+                                   "from": [output + '_self_att_att'], "n_out": self.EncValueTotalDim,
+                                   "forward_weights_init": self.ff_init}
+    d[output + '_self_att_drop'] = {"class": "dropout", "from": [output + '_self_att_lin'],
+                                    "dropout": self.postprocess_dropout}
+    d[output + '_self_att_out'] = {"class": "combine", "kind": "add", "from": [inp, output + '_self_att_drop'],
+                                   "n_out": self.EncValueTotalDim}
+    #####
+    d[output + '_att_laynorm'] = {"class": "layer_norm", "from": [output + '_self_att_out']}
+    d[output + '_att_query0'] = {"class": "linear", "activation": None, "with_bias": False,
+                                 "from": [output + '_att_laynorm'],
+                                 "n_out": self.EncValueTotalDim, "forward_weights_init": self.ff_init}
+    d[output + '_att_query'] = {"class": "split_dims", "axis": "F", "dims": (self.AttNumHeads, self.EncKeyPerHeadDim),
+                                "from": [output + '_att_query0']}  # (B, H, D/H)
+    db[output + '_att_key0'] = {"class": "linear", "activation": None, "with_bias": False, "from": ["encoder"],
+                                "n_out": self.EncKeyTotalDim, "forward_weights_init": self.ff_init}  # (B, enc-T, D)
+    db[output + '_att_value0'] = {"class": "linear", "activation": None, "with_bias": False, "from": ["encoder"],
+                                  "n_out": self.EncValueTotalDim, "forward_weights_init": self.ff_init}
+    db[output + '_att_key'] = {"class": "split_dims", "axis": "F", "dims": (self.AttNumHeads, self.EncKeyPerHeadDim),
+                               "from": [output + '_att_key0']}  # (B, enc-T, H, D/H)
+    db[output + '_att_value'] = {"class": "split_dims", "axis": "F",
+                                 "dims": (self.AttNumHeads, self.EncValuePerHeadDim),
+                                 "from": [output + '_att_value0']}  # (B, enc-T, H, D'/H)
+    d[output + '_att_energy'] = {"class": "dot", "red1": -1, "red2": -1, "var1": "T", "var2": "T?",
+                                 "from": ['base:' + output + '_att_key', output + '_att_query']}  # (B, H, enc-T, 1)
+    d[output + '_att_weights'] = {"class": "softmax_over_spatial", "from": [output + '_att_energy'],
+                                  "energy_factor": self.EncKeyPerHeadDim ** -0.5}  # (B, enc-T, H, 1)
+
+    d[output + '_att_weights_drop'] = {"class": "dropout", "dropout_noise_shape": {"*": None},
+                                       "from": [output + '_att_weights'], "dropout": self.attention_dropout}
+
+    d[output + '_att0'] = {"class": "generic_attention", "weights": output + '_att_weights_drop',
+                           "base": 'base:' + output + '_att_value'}  # (B, H, V)
+    d[output + '_att_att'] = {"class": "merge_dims", "axes": "static",
+                              "from": [output + '_att0']}  # (B, H*V) except_batch
+    d[output + '_att_lin'] = {"class": "linear", "activation": None, "with_bias": False,
+                              "from": [output + '_att_att'],
+                              "n_out": self.EncValueTotalDim, "forward_weights_init": self.ff_init}
+    d[output + '_att_drop'] = {"class": "dropout", "from": [output + '_att_lin'], "dropout": self.postprocess_dropout}
+    d[output + '_att_out'] = {"class": "combine", "kind": "add",
+                              "from": [output + '_self_att_out', output + '_att_drop'],
+                              "n_out": self.EncValueTotalDim}
+    #####
+    d[output + '_ff_laynorm'] = {"class": "layer_norm", "from": [output + '_att_out']}
+    d[output + '_ff_conv1'] = {"class": "linear", "activation": "relu", "with_bias": True,
+                               "from": [output + '_ff_laynorm'],
+                               "n_out": self.FFDim, "forward_weights_init": self.ff_init}
+    d[output + '_ff_conv2'] = {"class": "linear", "activation": None, "with_bias": True,
+                               "from": [output + '_ff_conv1'], "dropout": self.act_dropout,
+                               "n_out": self.EncValueTotalDim, "forward_weights_init": self.ff_init}
+    d[output + '_ff_drop'] = {"class": "dropout", "from": [output + '_ff_conv2'], "dropout": self.postprocess_dropout}
+    d[output + '_ff_out'] = {"class": "combine", "kind": "add", "from": [output + '_att_out', output + '_ff_drop'],
+                             "n_out": self.EncValueTotalDim}
+    d[output] = {"class": "copy", "from": [output + '_ff_out']}
+
+  def build(self):
+    network = {
+      "source_embed_raw": {"class": "linear", "activation": None, "with_bias": False, "n_out": self.EncValueTotalDim,
+                           "forward_weights_init": self.ff_init},
+      "source_embed_weighted": {"class": "eval", "from": ["source_embed_raw"],
+                                "eval": "source(0) * %f" % self.embed_weight},
+      "source_embed_with_pos": {"class": "positional_encoding", "add_to_input": True,
+                                "from": ["source_embed_weighted"]},
+      "source_embed": {"class": "dropout", "from": ["source_embed_with_pos"], "dropout": self.embed_dropout},
+
+      # encoder stack is added by separate function
+      "encoder": {"class": "layer_norm", "from": ["enc_%02d" % self.encN]},
+
+      "output": {"class": "rec", "from": [], "unit": {
+        'output': {'class': 'choice', 'target': 'classes', 'beam_size': 12, 'from': ["output_prob"],
+                   "initial_output": 0},  # this is a vocab_id, make this flexible
+        "end": {"class": "compare", "from": ["output"], "value": 0},
+        'target_embed_raw': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['prev:output'],
+                             "n_out": self.EncValueTotalDim, "forward_weights_init": self.ff_init},
+        # there seems to be no <s> in t2t, they seem to use just the zero vector
+        "target_embed_weighted": {"class": "eval", "from": ["target_embed_raw"],
+                                  "eval": "source(0) * %f" % self.embed_weight},
+        "target_embed_with_pos": {"class": "positional_encoding", "add_to_input": True,
+                                  "from": ["target_embed_weighted"]},
+        "target_embed": {"class": "dropout", "from": ["target_embed_with_pos"], "dropout": self.embed_dropout},
+
+        # decoder stack is added by separate function
+        "decoder": {"class": "layer_norm", "from": ["dec_%02d" % self.decN]},
+
+        "output_prob": {
+          "class": "softmax", "from": ["decoder"], "dropout": 0.0,
+          "target": "classes", "loss": "ce", "loss_opts": {"label_smoothing": self.label_smoothing},
+          "with_bias": False, "forward_weights_init": self.ff_init,
+          "is_output_layer": True
+        }
+
+      }, "target": "classes", "max_seq_len": "max_len_from('base:encoder') * 3"},
+
+      "decision": {
+        "class": "decide", "from": ["output"], "loss": "edit_distance", "target": "classes",
+        "loss_opts": {
+          # "debug_print": True
+        }
+      }
+
+    }
+
+    self.add_trafo_enc_layer(network, "source_embed", "enc_01")
+    for n in range(1, self.encN):
+      self.add_trafo_enc_layer(network, "enc_%02d" % n, "enc_%02d" % (n + 1))
+
+    self.add_trafo_dec_layer(network, network["output"]["unit"], "target_embed", "dec_01")
+    for n in range(1, self.decN):
+      self.add_trafo_dec_layer(network, network["output"]["unit"], "dec_%02d" % n, "dec_%02d" % (n + 1))
+
+    return network
+
+
+def test_reclayer_optimize_out_transformer():
+  from TFNetworkRecLayer import _SubnetworkRecCell
+  n_src_dim = 5
+  n_tgt_dim = 7
+
+  def get_config(optimize_out):
+    """
+    :param bool optimize_out:
+    :rtype: Config
+    """
+    return Config({
+      "debug_print_layer_output_template": True,
+      "extern_data": {
+        "data": {"dim": n_src_dim, "sparse": True},
+        "classes": {"dim": n_tgt_dim, "sparse": True, "available_for_inference": False}},
+      "network": TransformerNetwork().build(),
+      "optimize_move_layers_out": optimize_out
+    })
+
+  def get_feed_dict(extern_data):
+    """
+    :param ExternData extern_data:
+    :rtype: dict[tf.Tensor,numpy.ndarray]
+    """
+    rnd = numpy.random.RandomState(42)
+    n_batch = 3
+    n_dec_times = numpy.array([11, 8, 9], dtype=Data.size_dtype)
+    n_dec_time = max(n_dec_times)
+    n_enc_times = numpy.array([7, 13, 5], dtype=Data.size_dtype)
+    n_enc_time = max(n_enc_times)
+    data_np = rnd.randint(0, n_src_dim, size=(n_batch, n_enc_time), dtype=extern_data.data["data"].dtype)
+    classes_np = rnd.randint(0, n_tgt_dim, size=(n_batch, n_dec_time), dtype=extern_data.data["classes"].dtype)
+    return {
+      extern_data.data["data"].placeholder: data_np,
+      extern_data.data["data"].size_placeholder[0]: n_enc_times,
+      extern_data.data["classes"].placeholder: classes_np,
+      extern_data.data["classes"].size_placeholder[0]: n_dec_times}
+
+  def get_params():
+    print("create initial net, get params...")
+    config = get_config(optimize_out=True)
+    with make_scope() as session:
+      net = TFNetwork(train_flag=True, config=config)
+      net.construct_from_dict(config.typed_value("network"))
+      net.initialize_params(session=session)
+      params = net.get_params_serialized(session=session)
+      return params
+
+  net_params = get_params()
+
+  def get_out(optimize_out):
+    """
+    :param bool optimize_out:
+    :rtype: numpy.ndarray
+    """
+    print("optimize out:", optimize_out)
+    config = get_config(optimize_out=optimize_out)
+
+    with make_scope() as session:
+      net = TFNetwork(train_flag=True, config=config)
+      net.construct_from_dict(config.typed_value("network"))
+      net.initialize_params(session=session)
+      net.set_params_by_serialized(net_params, session=session)
+      rec_layer = net.get_layer("output")
+      assert isinstance(rec_layer, RecLayer)
+      cell = rec_layer.cell
+      assert isinstance(cell, _SubnetworkRecCell)
+      assert_equal(cell.input_layers_moved_out, [])
+      if optimize_out:
+        assert_equal(cell.layers_in_loop, [])  # all moved out
+      out = net.get_layer("output/output_prob").output.copy_as_batch_major()
+      assert out.batch_ndim == 3 and out.shape == (None, n_tgt_dim)
+      out_np = session.run(out.placeholder, feed_dict=get_feed_dict(extern_data=net.extern_data))
+      return out_np
+
+  out_opt_np = get_out(optimize_out=True)
+  out_nopt_np = get_out(optimize_out=False)
+  print("output:")
+  print(out_opt_np)
+  numpy.testing.assert_almost_equal(out_opt_np, out_nopt_np)
+  print("Both are equal!")
+
+
 def test_reclayer_move_out_input_train_and_search():
   from TFNetworkRecLayer import _SubnetworkRecCell
   n_src_dim = 5
