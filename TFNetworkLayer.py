@@ -3899,10 +3899,10 @@ class DotLayer(LayerBase):
 
   def __init__(self, red1=-1, red2=-2, var1=-2, var2=-1, add_var2_if_empty=True, debug=False, **kwargs):
     """
-    :param str|int|tuple[str|int] red1: reduce axes of first source
-    :param str|int|tuple[str|int] red2: reduce axes of second source
-    :param str|int|tuple[str|int]|None var1: var axes of first source
-    :param str|int|tuple[str|int]|None var2: var axes of second source
+    :param str|int|tuple[str|int]|list[str|int] red1: reduce axes of first source
+    :param str|int|tuple[str|int]|list[str|int] red2: reduce axes of second source
+    :param str|int|tuple[str|int]|list[str|int]|None var1: var axes of first source
+    :param str|int|tuple[str|int]|list[str|int]|None var2: var axes of second source
     :param bool add_var2_if_empty: if var2=None, add dim=1 at the end
     :param bool debug: will print debug shapes, etc.
     """
@@ -4022,10 +4022,10 @@ class DotLayer(LayerBase):
     """
     :param str name:
     :param list[LayerBase] sources:
-    :param str|int|tuple[str|int] red1: reduce axes of first source
-    :param str|int|tuple[str|int] red2: reduce axes of second source
-    :param str|int|tuple[str|int]|None var1: var axes of first source
-    :param str|int|tuple[str|int]|None var2: var axes of second source
+    :param str|int|tuple[str|int]|list[str|int] red1: reduce axes of first source
+    :param str|int|tuple[str|int]|list[str|int] red2: reduce axes of second source
+    :param str|int|tuple[str|int]|list[str|int]|None var1: var axes of first source
+    :param str|int|tuple[str|int]|list[str|int]|None var2: var axes of second source
     :param bool add_var2_if_empty:
     :rtype: Data
     """
