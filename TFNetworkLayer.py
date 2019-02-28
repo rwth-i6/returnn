@@ -3686,11 +3686,12 @@ class SqueezeLayer(_ConcatInputLayer):
   """
   layer_class = "squeeze"
 
-  def __init__(self, axis, enforce_batch_dim_axis=0, **kwargs):
+  def __init__(self, axis, enforce_batch_dim_axis=0, allow_no_op=False, **kwargs):
     """
     :param int|list[int]|str axis: one axis or multiple axis to squeeze.
       this is counted with batch-dim, which by default is axis 0 (see enforce_batch_dim_axis).
       it also accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature"
+    :param bool allow_no_op:
     """
     super(SqueezeLayer, self).__init__(**kwargs)
     input_data = self.input_data
@@ -3715,22 +3716,25 @@ class SqueezeLayer(_ConcatInputLayer):
     """
     if axis == "auto":
       return [i for (i, dim) in enumerate(input_data.batch_shape) if dim == 1]
-    axes = ReduceLayer.get_axes(axis, input_data=input_data)
-    return axes
+    return input_data.get_axes_from_description(axis)
 
   @classmethod
-  def get_out_data_from_opts(cls, axis, enforce_batch_dim_axis=0, sources=(), **kwargs):
+  def get_out_data_from_opts(cls, axis, enforce_batch_dim_axis=0, allow_no_op=False, sources=(), **kwargs):
     """
     :param axis:
     :param int|None enforce_batch_dim_axis:
+    :param bool allow_no_op:
     :param list[LayerBase] sources:
     :rtype: Data
     """
+    input_data = get_concat_sources_data_template(sources)
+    if enforce_batch_dim_axis is not None:
+      input_data = input_data.copy_with_batch_dim_axis(enforce_batch_dim_axis)
     if axis == "auto":
-      input_data = get_concat_sources_data_template(sources)
-      if enforce_batch_dim_axis is not None:
-        input_data = input_data.copy_with_batch_dim_axis(enforce_batch_dim_axis)
       axis = cls._get_axes(axis, input_data=input_data)
+    if allow_no_op:
+      if not cls._get_axes(axis, input_data=input_data):
+        return input_data.copy("%s_output" % kwargs["name"])
     return ReduceLayer.get_out_data_from_opts(
       axis=axis, keep_dims=False, enforce_batch_dim_axis=enforce_batch_dim_axis, sources=sources, **kwargs)
 
