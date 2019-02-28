@@ -1769,6 +1769,13 @@ def test_check_base_op_type_and_replace_sigmoid():
     assert_almost_equal(vy1, vy2)
 
 
+def test_move_axis_auto_optimize_multiple():
+  x0 = tf.constant(numpy.random.normal(size=(3, 4, 2, 5)).astype("float32"))
+  x1 = move_axis(x0, 2, 0)
+  x2 = move_axis(x1, 1, 3)
+  pass  # TODO check that there is only a single transpose....
+
+
 def test_string_merge():
   strings = [
     ["sub@@", "word", "test"],
