@@ -1267,7 +1267,14 @@ class Data(object):
       elif axes == "*":
         axes = list(range(self.batch_ndim))
       elif axes == "static":
-        axes = [i for i in range(self.batch_ndim) if self.batch_shape[i] is not None]
+        axes = self.get_static_axes()
+      elif re.match("(static):-?\\d+$", axes):
+        s = int(axes.split(":")[1])
+        static_axes = self.get_static_axes()
+        if s < 0:
+          s += len(static_axes)
+        assert 0 <= s < len(static_axes), "%s get_axes_from_description: %r invalid" % (self, axes)
+        axes = static_axes[s]
       elif axes in ["f", "feature", "non_spatial"]:
         axes = self.get_feature_batch_axes()
       elif all([a in "btf" for a in axes]):
@@ -1356,6 +1363,14 @@ class Data(object):
     """
     return [axis for axis, dim in enumerate(self.batch_shape)
             if axis != self.batch_dim_axis and dim is None]
+
+  def get_static_axes(self):
+    """
+    :return: list of axes, counted with batch-dim axis (but we exclude the batch dim axis itself)
+    :rtype: list[int]
+    """
+    return [axis for axis, dim in enumerate(self.batch_shape)
+            if axis != self.batch_dim_axis and dim is not None]
 
   def is_same_time_dim(self, other):
     """
