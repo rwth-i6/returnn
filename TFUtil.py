@@ -1238,6 +1238,15 @@ class Data(object):
           s += len(spatial_axes)
         assert s < len(spatial_axes), "%s get_axes_from_description: %r invalid" % (self, axes)
         axes = spatial_axes[s]
+      elif axes in ["dyn", "dynamic"]:
+        axes = self.get_dynamic_axes()
+      elif re.match("(d|dyn|dynamic):-?\\d+$", axes):
+        s = int(axes.split(":")[1])
+        dyn_axes = self.get_dynamic_axes()
+        if s < 0:
+          s += len(dyn_axes)
+        assert 0 <= s < len(dyn_axes), "%s get_axes_from_description: %r invalid" % (self, axes)
+        axes = dyn_axes[s]
       elif axes == "spatial_except_time":
         axes = self.get_spatial_batch_axes()
         assert self.time_dim_axis is not None
