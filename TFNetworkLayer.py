@@ -3684,7 +3684,7 @@ class SqueezeLayer(_ConcatInputLayer):
   """
   layer_class = "squeeze"
 
-  def __init__(self, axis, enforce_batch_dim_axis=0, allow_no_op=False, **kwargs):
+  def __init__(self, axis, enforce_batch_dim_axis=None, allow_no_op=False, **kwargs):
     """
     :param int|list[int]|str axis: one axis or multiple axis to squeeze.
       this is counted with batch-dim, which by default is axis 0 (see enforce_batch_dim_axis).
@@ -3717,7 +3717,7 @@ class SqueezeLayer(_ConcatInputLayer):
     return input_data.get_axes_from_description(axis)
 
   @classmethod
-  def get_out_data_from_opts(cls, axis, enforce_batch_dim_axis=0, allow_no_op=False, sources=(), **kwargs):
+  def get_out_data_from_opts(cls, axis, enforce_batch_dim_axis=None, allow_no_op=False, sources=(), **kwargs):
     """
     :param axis:
     :param int|None enforce_batch_dim_axis:
