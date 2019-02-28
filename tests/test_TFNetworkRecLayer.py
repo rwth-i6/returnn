@@ -1950,6 +1950,43 @@ def test_reclayer_optimize_out_dot():
     rtol=1e-3)
 
 
+def test_reclayer_optimize_out_softmax_over_spatial():
+  # Used for multi-head dot-attention.
+  AttNumHeads = 4
+  EncKeyPerHeadDim = 5
+  EncValuePerHeadDim = 7
+  EncKeyTotalDim = AttNumHeads * EncKeyPerHeadDim
+  EncValueTotalDim = AttNumHeads * EncValuePerHeadDim
+  check_reclayer_optimize_out(
+    {"class": "linear", "activation": None, "from": ["squeeze"]},
+    other_subnet_layers={
+      "s": {"class": "linear", "activation": None, "with_bias": False, "from": ["data:source"],
+            "n_out": EncKeyTotalDim},  # (B, D)  -- Q (query). D should be same as enc_ctx
+      "att_query": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncKeyPerHeadDim),
+                    "from": ["s"]},  # (B, H, D/H)
+      "energy": {"class": "dot", "red1": -1, "red2": -1, "var1": "T", "var2": "T?",  # Note the "T?".
+                 "from": ["base:enc_ctx", "att_query"]},
+      # energy inside the loop will be (B, H, enc-T, 1).
+      # energy outside the loop will be (B, H, enc-T, dec-T). I.e. enc-T is still the first time axis.
+      "att_weights": {"class": "softmax_over_spatial", "from": ["energy"]},  # (B, H, enc-T, 1)
+      "slice": {"class": "slice", "from": "att_weights", "axis": "t", "slice_end": 1},  # (B, H, 1, 1)
+      "squeeze0": {"class": "squeeze", "from": "slice", "axis": "t"},  # (B, H, 1)
+      "squeeze": {"class": "squeeze", "from": "squeeze0", "axis": "auto", "allow_no_op": True},  # (B, H)
+      },
+    shared_base_net={
+      "encoder": {"class": "copy", "from": ["data"]},
+      "enc_ctx0": {"class": "linear", "activation": None, "with_bias": False, "from": ["encoder"],
+                   "n_out": EncKeyTotalDim},  # (B, enc-T, D)
+      "enc_ctx": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncKeyPerHeadDim),
+                  "from": ["enc_ctx0"], "is_output_layer": True},  # (B, enc-T, H, D/H)
+      "enc_value0": {"class": "linear", "activation": None, "with_bias": False, "from": ["encoder"],
+                     "n_out": EncValueTotalDim},
+      "enc_value": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncValuePerHeadDim),
+                    "from": ["enc_value0"], "is_output_layer": True},  # (B, enc-T, H, D/H)
+    },
+    rtol=1e-3)
+
+
 class TransformerNetwork:
 
   def __init__(self):
