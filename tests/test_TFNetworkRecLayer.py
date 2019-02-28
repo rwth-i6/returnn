@@ -2531,6 +2531,7 @@ def test_GenericAttentionLayer_basic():
       output=Data(name='enc_value_output', shape=(None, 1, 2048), batch_dim_axis=1, auto_create_placeholders=True)))
   kwargs["output"] = GenericAttentionLayer.get_out_data_from_opts(**kwargs)
   layer = GenericAttentionLayer(**kwargs)
+  layer.output.sanity_check()
   assert layer.output.shape == (1, 2048) and not layer.output.have_time_axis()
 
 
