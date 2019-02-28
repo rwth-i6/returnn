@@ -1914,23 +1914,21 @@ class SliceLayer(_ConcatInputLayer):
     slices = [slice(None, None)] * axis + [dim_slice]
     axis_wo_batch = self.input_data.get_batch_axis_excluding_batch(axis)
     self.output.size_placeholder = self.input_data.size_placeholder.copy()
-    if axis == self.input_data.time_dim_axis and self.input_data.time_dim_axis_excluding_batch in self.output.size_placeholder:
+    if axis_wo_batch in self.output.size_placeholder:
       if slice_start:
         assert slice_start > 0
-        self.output.size_placeholder[self.input_data.time_dim_axis_excluding_batch] = \
-          tf.maximum(0, self.output.size_placeholder[self.input_data.time_dim_axis_excluding_batch] - slice_start)
+        self.output.size_placeholder[axis_wo_batch] = \
+          tf.maximum(0, self.output.size_placeholder[axis_wo_batch] - slice_start)
       if slice_end is not None:
         if slice_end < 0:
-          slice_end = tf.shape(self.input_data.placeholder)[self.input_data.time_dim_axis] + slice_end
-        self.output.size_placeholder[self.input_data.time_dim_axis_excluding_batch] = \
+          slice_end = tf.shape(self.input_data.placeholder)[axis] + slice_end
+        self.output.size_placeholder[axis_wo_batch] = \
           tf.minimum(
-            tf.shape(self.input_data.placeholder)[self.input_data.time_dim_axis] - slice_end,
-            self.output.size_placeholder[self.input_data.time_dim_axis_excluding_batch])
+            tf.shape(self.input_data.placeholder)[axis] - slice_end,
+            self.output.size_placeholder[axis_wo_batch])
       if slice_step:
-        self.output.size_placeholder[self.input_data.time_dim_axis_excluding_batch] = \
-          tf.ceil(tf.divide(self.output.size_placeholder[self.input_data.time_dim_axis_excluding_batch], slice_step))
-    elif axis_wo_batch is not None:
-      assert axis_wo_batch not in self.output.size_placeholder
+        self.output.size_placeholder[axis_wo_batch] = \
+          tf.ceil(tf.divide(self.output.size_placeholder[axis_wo_batch], slice_step))
     self.output.placeholder = self.input_data.placeholder[slices]
 
   @classmethod
