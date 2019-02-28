@@ -3701,6 +3701,10 @@ class SqueezeLayer(_ConcatInputLayer):
     for i in reversed(sorted(axes)):
       x = tf.squeeze(x, axis=i)
     self.output.placeholder = x
+    self.output.size_placeholder = {
+      i - len([j for j in axes if j < input_data.get_batch_axis(i)]): size
+      for (i, size) in input_data.size_placeholder.items()
+      if input_data.get_batch_axis(i) not in axes}
 
   @classmethod
   def get_out_data_from_opts(cls, enforce_batch_dim_axis=0, **kwargs):
