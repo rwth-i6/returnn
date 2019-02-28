@@ -2552,6 +2552,7 @@ def test_GenericAttentionLayer_weights_auto_squeeze_time_end():
   pprint(kwargs)
   kwargs["output"] = GenericAttentionLayer.get_out_data_from_opts(**kwargs)
   layer = GenericAttentionLayer(**kwargs)
+  layer.output.sanity_check()
   assert layer.output.shape == (2048,) and not layer.output.have_time_axis()
 
 
