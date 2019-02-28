@@ -55,13 +55,13 @@ def have_min_tf_version(version):
 class DimensionTag(object):
   """
   This identifies one axis/dimension, like a time-dimension, etc.
-  This can be used by :class:`Data`.
+  This can be used by :class:`Data`. See :func:`Data.get_dim_tag`.
   It is not to specify the specific axis in a specific Data/tensor,
   but to specify the content and dimension.
   I.e. if we have the same DimensionTag for two Data instances,
   the dimensions should match. I.e.:
 
-      data1.get_batch_dim_tag(i) == data2.get_batch_dim_tag(j)
+      data1.get_dim_tag(i) == data2.get_dim_tag(j)
         =>  tf.shape(data1.placeholder)[i] == tf.shape(data2.placeholder)[j]
   """
 
