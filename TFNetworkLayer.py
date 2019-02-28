@@ -4414,7 +4414,7 @@ class CombineLayer(LayerBase):
       out_type_.update(Data.get_common_data([s.output for s in sources]).get_kwargs())
     if n_out:
       out_type_["dim"] = n_out
-    out_type_.setdefault("name", "%s_output" % kwargs["name"])
+    out_type_["name"] = "%s_output" % kwargs["name"]
     if out_type:
       if isinstance(out_type, dict):
         out_type_.update(out_type)
