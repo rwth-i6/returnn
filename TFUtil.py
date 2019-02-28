@@ -1570,6 +1570,13 @@ class Data(object):
     axis_wo_batch = sorted(self.size_placeholder.keys())[number]
     return self.get_dim_tag(self.get_batch_axis(axis_wo_batch))
 
+  def get_batch_shape_dim_tags(self):
+    """
+    :return: list of dimension tags, for each axis (counted with batch dim, i.e. len is batch_ndim)
+    :rtype: tuple[DimensionTag]
+    """
+    return tuple([self.get_dim_tag(i) for i in range(self.batch_ndim)])
+
   @classmethod
   def get_common_data(cls, sources):
     """
