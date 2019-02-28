@@ -535,12 +535,12 @@ class Data(object):
     data = self.copy()
     if data.placeholder is not None:
       data.placeholder = move_axis(data.placeholder, old_axis, new_axis)
-    data.batch_dim_axis = translate_axis(data.batch_dim_axis)
-    new_feature_dim_axis = translate_axis(data.feature_dim_axis)
+    data.batch_dim_axis = translate_axis(self.batch_dim_axis)
+    new_feature_dim_axis = translate_axis(self.feature_dim_axis)
     if new_feature_dim_axis != data.feature_dim_axis:
       # Only assign in this case. Otherwise, e.g. if it is NotSpecified, leave it like that.
       data.feature_dim_axis = new_feature_dim_axis
-    data.time_dim_axis = translate_axis(data.time_dim_axis)
+    data.time_dim_axis = translate_axis(self.time_dim_axis)
     if data.size_placeholder:
       data.size_placeholder = {
         data.get_batch_axis_excluding_batch(translate_axis(self.get_batch_axis(i))): size

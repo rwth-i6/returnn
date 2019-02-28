@@ -87,6 +87,16 @@ def test_Data_copy_batch_major():
   assert_equal(data2.batch_ndim, 3)
 
 
+def test_Data_copy_as_batch_major_no_extra_feat():
+  data = Data(name='att_weights_output', shape=(None,), batch_dim_axis=1)
+  print("data", data, "feat axis:", data.feature_dim_axis_or_unspecified, data.feature_dim_axis)
+  assert_equal(data.time_dim_axis, 0)
+  data2 = data.copy_as_batch_major()
+  assert_equal(data2.batch_dim_axis, 0)
+  assert_equal(data2.time_dim_axis, 1)
+  # No check for feature_dim_axis, as this behavior does not matter here.
+
+
 def test_Data_spatial_batch_axes():
   d1 = Data(name='ff_out_prior_output', shape=(1, 9001), dtype='float32', batch_dim_axis=None)
   d2 = Data(name='ff_out_output', shape=(None, 9001), dtype='float32')
