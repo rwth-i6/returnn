@@ -3696,7 +3696,7 @@ class SqueezeLayer(_ConcatInputLayer):
     input_data = self.input_data
     if enforce_batch_dim_axis is not None and input_data.batch_dim_axis != enforce_batch_dim_axis:
       input_data = input_data.copy_with_batch_dim_axis(enforce_batch_dim_axis)
-    axes = ReduceLayer.get_axes(axis, input_data=input_data)
+    axes = self._get_axes(axis, input_data=input_data)
     x = input_data.placeholder
     for i in reversed(sorted(axes)):
       x = tf.squeeze(x, axis=i)
@@ -3707,8 +3707,32 @@ class SqueezeLayer(_ConcatInputLayer):
       if input_data.get_batch_axis(i) not in axes}
 
   @classmethod
-  def get_out_data_from_opts(cls, enforce_batch_dim_axis=0, **kwargs):
-    return ReduceLayer.get_out_data_from_opts(keep_dims=False, enforce_batch_dim_axis=enforce_batch_dim_axis, **kwargs)
+  def _get_axes(cls, axis, input_data):
+    """
+    :param int|list[int]|str axis: one axis or multiple axis to squeeze.
+    :param Data input_data:
+    :rtype: list[int]
+    """
+    if axis == "auto":
+      return [i for (i, dim) in enumerate(input_data.batch_shape) if dim == 1]
+    axes = ReduceLayer.get_axes(axis, input_data=input_data)
+    return axes
+
+  @classmethod
+  def get_out_data_from_opts(cls, axis, enforce_batch_dim_axis=0, sources=(), **kwargs):
+    """
+    :param axis:
+    :param int|None enforce_batch_dim_axis:
+    :param list[LayerBase] sources:
+    :rtype: Data
+    """
+    if axis == "auto":
+      input_data = get_concat_sources_data_template(sources)
+      if enforce_batch_dim_axis is not None:
+        input_data = input_data.copy_with_batch_dim_axis(enforce_batch_dim_axis)
+      axis = cls._get_axes(axis, input_data=input_data)
+    return ReduceLayer.get_out_data_from_opts(
+      axis=axis, keep_dims=False, enforce_batch_dim_axis=enforce_batch_dim_axis, sources=sources, **kwargs)
 
 
 class WeightedSumLayer(_ConcatInputLayer):
