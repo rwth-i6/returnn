@@ -2902,10 +2902,11 @@ class UnflattenNdLayer(_ConcatInputLayer):
   layer_class = "unflatten_nd"
   recurrent = True
 
-  def __init__(self, sizes, num_axes, **kwargs):
+  def __init__(self, sizes, num_axes, declare_same_sizes_as=None, **kwargs):
     """
     :param LayerBase sizes:
     :param int num_axes:
+    :param dict[int,LayerBase] declare_same_sizes_as:
     """
     super(UnflattenNdLayer, self).__init__(**kwargs)
     input_data = self.input_data.copy_as_batch_major()
@@ -2914,12 +2915,20 @@ class UnflattenNdLayer(_ConcatInputLayer):
     assert sizes_data.batch_shape[1] in (None, num_axes)  # also allow None...
     self.output.placeholder = TFUtil.unflatten_nd(input_data.placeholder, sizes_data.placeholder, num_axes=num_axes)
     self.output.size_placeholder = {i: sizes_data.placeholder[:, i] for i in range(num_axes)}
+    if declare_same_sizes_as:
+      for i, other in declare_same_sizes_as.items():
+        assert 0 <= i < num_axes
+        other_dim_tag = other.output.get_size_dim_tag(0)
+        other_dim_tag.set_tag_on_size_tensor(self.output.size_placeholder[i])
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
     super(UnflattenNdLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
     if "sizes" in d:  # check whether we need the param is later
       d["sizes"] = get_layer(d["sizes"])
+    if d.get("declare_same_sizes_as", None):
+      assert isinstance(d["declare_same_sizes_as"], dict)
+      d["declare_same_sizes_as"] = {i: get_layer(name) for (i, name) in d["declare_same_sizes_as"].items()}
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources, num_axes, **kwargs):
