@@ -411,6 +411,12 @@ class Data(object):
     return {key: getattr(self, key) for key in keys}
 
   def get_description(self, with_name=True, with_placeholder=False):
+    """
+    :param bool with_name:
+    :param bool with_placeholder:
+    :return: description of self. also used for __repr__
+    :rtype: str
+    """
     keys = ["shape"]
     if self.sparse:
       keys.append("dtype")
