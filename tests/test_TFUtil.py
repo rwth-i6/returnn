@@ -559,6 +559,11 @@ def test_Data_copy_add_spatial_dim_no_batch_explicit_feature():
   assert d2.batch_shape == (1, 3) and d2.dim == 3
 
 
+def test_Data_copy_add_spatial_dim_becomes_new_feature():
+  d1 = Data(name='att_weights_avg_output', shape=(None,), batch_dim_axis=None, time_dim_axis=None)
+  d2 = d1.copy_add_spatial_dim(0)
+
+
 def test_get_initializer_zero():
   shape = (2, 3)
   initializer = get_initializer(0.0)
