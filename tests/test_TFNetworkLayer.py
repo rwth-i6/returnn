@@ -116,6 +116,36 @@ def test_concat_sources_missing_dim():
     session.run(out.output.placeholder)
 
 
+def test_LinearLayer_batch_feature_major():
+  with make_scope() as session:
+    network = TFNetwork(config=Config(), extern_data=ExternData(), train_flag=True)
+    n_in = 3
+    n_out = 7
+    source = InternalLayer(
+      name="source", network=network, output=Data(
+        name="source", shape=(n_in, None), time_dim_axis=2, auto_create_placeholders=True))
+    assert source.output.feature_dim_axis == 1
+    assert source.output.is_batch_feature_major
+    out_template = LinearLayer.get_out_data_from_opts(
+      name="lin", network=network, n_out=n_out, activation=None, sources=[source])
+    out_template.sanity_check()
+    assert out_template.shape == (n_out, None) and (out_template.feature_dim_axis, out_template.time_dim_axis) == (1, 2)
+    assert out_template.is_batch_feature_major
+    with tf.variable_scope("lin"):
+      layer = LinearLayer(
+        name="lin", network=network, n_out=n_out, activation=None, sources=[source], output=out_template)
+    layer.output.sanity_check()
+    n_batch = 5
+    n_times = [13, 13, 11, 7, 5]
+    assert len(n_times) == n_batch
+    n_time = max(n_times)
+    feed_dict = {
+      source.output.placeholder: numpy.random.normal(size=(n_batch, n_in, n_time)).astype("float32"),
+      source.output.size_placeholder[1]: numpy.array(n_times, dtype="int32")}
+    session.run(tf.global_variables_initializer())
+    session.run(layer.output.placeholder, feed_dict=feed_dict)
+
+
 def test_batch_norm_vars():
   with make_scope() as session:
     n_in, n_out = 2, 3
