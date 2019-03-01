@@ -610,7 +610,7 @@ class Data(object):
     :rtype: Data
     """
     assert self.batch_dim_axis is None
-    if not self.sparse:
+    if self.feature_dim_axis is not None:
       assert batch_dim_axis <= self.feature_dim_axis, "does not work yet otherwise, feature-dim-axis must be last"
     data = self.copy()
     if data.placeholder is not None:
