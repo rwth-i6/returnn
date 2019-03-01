@@ -844,12 +844,13 @@ class Data(object):
         data.time_dim_axis = None
       else:
         data.time_dim_axis = self.time_dim_axis - len([axis for axis in axes if axis < self.time_dim_axis])
-    if self.feature_dim_axis is not None and self.feature_dim_axis_or_unspecified is not NotSpecified:
-      if self.feature_dim_axis in axes:
-        data.feature_dim_axis = None
-      else:
-        data.feature_dim_axis = self.feature_dim_axis - len([axis for axis in axes if axis < self.feature_dim_axis])
-    if data.feature_dim_axis != self.feature_dim_axis:
+    if not self.sparse:
+      if self.feature_dim_axis is not None and self.feature_dim_axis_or_unspecified is not NotSpecified:
+        if self.feature_dim_axis in axes:
+          data.feature_dim_axis = None
+        else:
+          data.feature_dim_axis = self.feature_dim_axis - len([axis for axis in axes if axis < self.feature_dim_axis])
+      # Always reset dim. We might have a different feature axis now (if it was and is unspecified, i.e. automatic).
       if data.feature_dim_axis is not None:
         data.dim = data.batch_shape[data.feature_dim_axis]
       else:
