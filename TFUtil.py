@@ -4320,6 +4320,30 @@ def nan_to_num(x, nan_num=0, inf_num=1e30):
     return x
 
 
+def where_bc(condition, x, y, name="where_bc"):
+  """
+  This is basically :func:`tf.where` but with additional broadcasting support.
+  We explicitly require that the ndims match (or x, y can also be scalars).
+  See also :func:`get_common_shape` and :func:`unbroadcast_to_common_shape`.
+
+  https://github.com/tensorflow/tensorflow/issues/3945
+  https://github.com/tensorflow/tensorflow/issues/9284
+
+  :param tf.Tensor condition:
+  :param tf.Tensor|float|int x:
+  :param tf.Tensor|float|int y:
+  :param str name:
+  :return: basically tf.where(condition, x, y)
+  :rtype: tf.Tensor
+  """
+  with tf.name_scope(name):
+    common_shape = get_common_shape([condition, x, y])
+    condition = unbroadcast_to_common_shape(condition, common_shape=common_shape)
+    x = unbroadcast_to_common_shape(x, common_shape=common_shape)
+    y = unbroadcast_to_common_shape(y, common_shape=common_shape)
+    return tf.where(condition, x, y)
+
+
 def identity_op_nested(x, name="identity"):
   """
   :param tf.Tensor|list[tf.Tensor]|dict[str,tf.Tensor] x:
