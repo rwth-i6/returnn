@@ -571,6 +571,14 @@ def test_Data_copy_add_spatial_dim_becomes_new_feature():
   d2 = d1.copy_add_spatial_dim(0)
 
 
+def test_Data_copy_add_spatial_dim_most_right():
+  d1 = Data(name='att_weights_avg_output', shape=(1,))
+  print(d1, "spatial axes:", d1.get_spatial_batch_axes())
+  d2 = d1.copy_add_spatial_dim(1)
+  print(d2, "spatial axes:", d2.get_spatial_batch_axes())
+  assert_equal(d2.get_spatial_batch_axes(), [1])
+
+
 def test_get_initializer_zero():
   shape = (2, 3)
   initializer = get_initializer(0.0)
