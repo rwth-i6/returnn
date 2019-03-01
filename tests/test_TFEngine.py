@@ -1437,7 +1437,7 @@ def test_rec_subnet_eval_init_out_apply0():
                  "from": ["base:enc_ctx", "att_query"], "debug": True},  # (B, enc-T, H, 1)
 
       "att_weights": {"class": "softmax_over_spatial", "from": ["energy"], "energy_factor": EncKeyPerHeadDim ** -0.5},
-      "att_weights_avg": {"class": "reduce", "axes": -2, "mode": "avg", "from": ["att_weights"]},  # (B, enc-T, 1)
+      "att_weights_avg": {"class": "reduce", "axes": "static:0", "mode": "avg", "from": ["att_weights"]},  # (B, enc-T, 1)
       "accum_att_weights": {"class": "eval",
                             "from": ["prev:accum_att_weights", "att_weights_avg", "base:inv_fertility"],
                             "eval": "source(0) + source(1) * source(2) * 0.5",
