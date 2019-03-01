@@ -2060,7 +2060,7 @@ class LinearLayer(_ConcatInputLayer):
         b = None
 
     with tf.name_scope("linear"):
-      from TFUtil import dot, to_int32_64
+      from TFUtil import dot, to_int32_64, is_gpu_available, move_axis
       x = input_data.placeholder
       ndim = x.get_shape().ndims
 
@@ -2070,8 +2070,8 @@ class LinearLayer(_ConcatInputLayer):
         ndim += 1
       elif self.input_data.feature_dim_axis == self.input_data.batch_ndim - 1:
         x = dot(x, W)
-      elif self.input_data.is_batch_feature_major:
-        # Use conv instead, it has optimized code for batch-feature major.
+      elif self.input_data.is_batch_feature_major and is_gpu_available():  # CuDNN has a fast version for this
+        # Use conv instead, it has optimized code for batch-feature major (only CuDNN).
         x_shape = None
         if self.input_data.batch_ndim > 3:
           x_shape = tf.shape(x)
@@ -2084,7 +2084,10 @@ class LinearLayer(_ConcatInputLayer):
         if self.input_data.batch_ndim > 3:
           x = tf.reshape(x, x_shape[:1] + [n_out] + x_shape[2:])  # (B,n_out,...)
       else:
-        raise Exception("%s: does not support input format %r" % (self, self.input_data))
+        print("%s: Warning: inefficient implementation for input %r." % (self, self.input_data), file=log.v2)
+        x = move_axis(x, self.input_data.feature_dim_axis, -1)
+        x = dot(x, W)
+        x = move_axis(x, -1, self.input_data.feature_dim_axis)
       assert x.get_shape().ndims == ndim
 
       if self.with_bias:
