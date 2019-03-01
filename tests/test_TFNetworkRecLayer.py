@@ -2833,7 +2833,7 @@ def test_GenericAttentionLayer_weights_auto_squeeze_time_end():
     weights=InternalLayer(
       name="att_weights", network=net,
       output=Data(
-        name='att_weights_output', shape=(1, None), dim=None, time_dim_axis=2, auto_create_placeholders=True)),
+        name='att_weights_output', shape=(1, None), time_dim_axis=2, auto_create_placeholders=True)),
     base=InternalLayer(
       name="enc_value", network=net,
       output=Data(name='enc_value_output', shape=(None, 2048), auto_create_placeholders=True)))
