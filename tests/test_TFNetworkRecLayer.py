@@ -2147,6 +2147,7 @@ def test_reclayer_optimize_out_transformer():
     """
     return Config({
       "debug_print_layer_output_template": True,
+      "debug_print_layer_output_shape": True,  # only for debugging
       "extern_data": {
         "data": {"dim": n_src_dim, "sparse": True},
         "classes": {"dim": n_tgt_dim, "sparse": True, "available_for_inference": False}},
