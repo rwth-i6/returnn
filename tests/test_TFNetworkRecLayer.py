@@ -1714,6 +1714,33 @@ def test_rec_layer_move_out_of_loop_ref_att_generic_att():
     train(train_net, session)
 
 
+def test_same_spatial_dim_after_rec_layers():
+  with make_scope() as session:
+    config = Config({"debug_print_layer_output_template": True})
+    extern_data = ExternData({
+      "data": {"dim": 13, "sparse": True},
+      "classes": {"dim": 17, "sparse": True, "available_for_inference": False}})
+    net = TFNetwork(extern_data=extern_data, train_flag=True, config=config)
+    net.construct_from_dict({
+      "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6},
+      "lstm0_fw": {"class": "rec", "unit": "standardlstm", "n_out": 10, "direction": 1, "from": ["source_embed"]},
+      "lstm0_bw": {"class": "rec", "unit": "standardlstm", "n_out": 10, "direction": -1, "from": ["source_embed"]},
+      "lstm1_fw": {"class": "rec", "unit": "standardlstm", "n_out": 10, "direction": 1, "from": ["lstm0_fw", "lstm0_bw"]},
+      "lstm1_bw": {"class": "rec", "unit": "standardlstm", "n_out": 10, "direction": -1, "from": ["lstm0_fw", "lstm0_bw"]},
+      "encoder": {"class": "copy", "from": ["lstm1_fw", "lstm1_bw"]},
+      "enc_value": {"class": "split_dims", "axis": "F", "dims": (4, 5), "from": ["encoder"]},
+      "output": {"class": "copy", "from": ["enc_value"]},
+    })
+    size = extern_data.data["data"].get_size_dim_tag(0)
+    print("data size:", size)
+    for name in ["source_embed", "lstm0_fw", "lstm1_fw", "encoder", "enc_value", "output"]:
+      layer = net.layers[name]
+      layer_size = layer.output.get_size_dim_tag(0)
+      print("layer:", layer, "size:", layer_size)
+      assert size == layer_size, "no match for layer %r" % layer
+    print("All good.")
+
+
 def test_rec_layer_search_select_src():
   from TFNetworkRecLayer import _SubnetworkRecCell
   n_src_dim = 5
