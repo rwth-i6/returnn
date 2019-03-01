@@ -180,7 +180,7 @@ def test_Data_unknown_feature_no_time():
 
 
 def test_Data_time_end():
-  data = Data(name='att_weights_output', shape=(1, None), dim=None, time_dim_axis=2)
+  data = Data(name='att_weights_output', shape=(1, None), time_dim_axis=2)
   print("data:", data, "feature axis:", data.feature_dim_axis)
   assert data.shape == (1, None) and data.batch_dim_axis == 0 and data.time_dim_axis == 2
   # No test for feature axis, as it does not really matter.
