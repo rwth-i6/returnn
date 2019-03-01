@@ -3396,10 +3396,10 @@ def get_common_shape(values, ignore_axes=()):
   :rtype: list[tf.Tensor|int|None]
   """
   assert len(values) > 0
-  ndim = values[0].shape.ndims
-  assert ndim, "unknown ndim or scalar: %r" % (values,)
+  assert all([value.shape.ndims is not None for value in values]), "some unknown ndim"
+  ndim = max([value.shape.ndims for value in values])
   for value in values:
-    assert value.shape.ndims == ndim, "ndim does not match in values %r" % (values,)
+    assert value.shape.ndims == 0 or value.shape.ndims == ndim, "ndim does not match in values %r" % (values,)
   for axis in ignore_axes:
     assert 0 <= axis < ndim
   with tf.name_scope("common_shape"):
@@ -3408,13 +3408,20 @@ def get_common_shape(values, ignore_axes=()):
       if axis in ignore_axes:
         continue  # does not matter
       for value in values:
-        static_dim = value.shape.dims[axis].value
+        if value.shape.ndims == 0:
+          static_dim = 1
+        else:
+          static_dim = value.shape.dims[axis].value  # type: typing.Optional[int]
         if common_shape[axis] in (None, 1):
-          common_shape[axis] = get_shape_dim(value, axis)
-        if static_dim is not None:
-          if isinstance(common_shape[axis], tf.Tensor):
+          if static_dim is not None:
             common_shape[axis] = static_dim
           else:
+            common_shape[axis] = get_shape_dim(value, axis)
+        if static_dim not in (None, 1):
+          if isinstance(common_shape[axis], tf.Tensor):
+            common_shape[axis] = static_dim
+          else:  # common_shape is int
+            assert isinstance(common_shape[axis], int)
             assert common_shape[axis] == static_dim, "non matching dim %r vs %r in axis %i, value %r of values %r" % (
               common_shape[axis], static_dim, axis, value, values)
     return common_shape
