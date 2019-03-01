@@ -2183,15 +2183,14 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
     :param bool use_time_mask: if True, assumes dyn seq len, and use it for masking.
       By default, if dyn seq len exists, it uses it.
     """
-    from TFUtil import move_axis, where_bc
+    from TFUtil import where_bc
     super(SoftmaxOverSpatialLayer, self).__init__(**kwargs)
     energy_data = self.input_data
     assert energy_data.dtype.startswith("float")
-    if axis is None:
-      assert energy_data.have_time_axis(), "%s: requires that the input has a time dim" % self
-      axis = energy_data.time_dim_axis
-    else:
-      axis = energy_data.get_axis_from_description(axis, allow_int=False)
+    axis = self._get_axis_to_reduce(input_data=energy_data, axis=axis, exception_prefix=self)
+    # tf.nn.softmax operates on the last axis.
+    energy_data = energy_data.copy_move_axis(axis, -1)
+    axis = energy_data.batch_ndim - 1
     energy = energy_data.placeholder
     energy_shape = tf.shape(energy, name="energy_shape")
     energy_shape = [energy_shape[i] for i in range(energy_data.batch_ndim)]
@@ -2228,16 +2227,28 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
       energy = where_bc(energy_mask, energy, float("-inf"), name="energy_masked")
     if energy_factor:
       energy = tf.multiply(energy, energy_factor, name="energy_scaled")
-    # tf.nn.softmax operates on the last axis.
-    energy = move_axis(energy, old_axis=axis, new_axis=-1, name="tr_time_last")  # (...,T)
     weights = tf.nn.softmax(energy)  # (...,T)
-    # TODO make this move back optional
-    weights = move_axis(weights, old_axis=-1, new_axis=axis, name="tr_time_recover")  # e.g. (B,T,dim)
     self.output.placeholder = weights
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, **kwargs):
-    return get_concat_sources_data_template(sources, name="%s_output" % name)
+  def _get_axis_to_reduce(cls, input_data, axis, exception_prefix):
+    """
+    :param str|None axis:
+    :param str|object exception_prefix:
+    :rtype: int
+    """
+    if axis is None:
+      assert input_data.have_time_axis(), "%s: requires that the input has a time dim" % exception_prefix
+      axis = input_data.time_dim_axis
+    else:
+      axis = input_data.get_axis_from_description(axis, allow_int=False)
+    return axis
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, axis=None, **kwargs):
+    out = get_concat_sources_data_template(sources, name="%s_output" % name)
+    axis = cls._get_axis_to_reduce(out, axis=axis, exception_prefix="%s %r" % (cls.__name__, name))
+    return out.copy_move_axis(axis, -1)
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
