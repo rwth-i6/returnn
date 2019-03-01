@@ -3433,15 +3433,24 @@ def get_common_shape(values, ignore_axes=()):
 
 def unbroadcast_to_common_shape(value, common_shape, ignore_axes=(), allow_only_noop=False):
   """
-  :param tf.Tensor value:
+  :param tf.Tensor|T value:
   :param list[tf.Tensor|int|None] common_shape: see :func:`get_common_shape`
   :param list[int]|tuple[int] ignore_axes:
-  :param bool allow_only_noop:
-  :return:
-  :rtype: tf.Tensor
+  :param bool allow_only_noop: if False, and the unbroadcast is not a no-op, will raise an exception
+  :return: (maybe) unbroadcasted value
+  :rtype: tf.Tensor|T
   """
+  if not isinstance(value, tf.Tensor):
+    if isinstance(value, (float, int)) and not common_shape:
+      return value
+    value = tf.convert_to_tensor(value)
   ndim = value.shape.ndims
   assert ndim is not None, "value has unknown ndim: %r" % value
+  if ndim == 0:
+    if not common_shape:
+      return value
+    value = expand_multiple_dims(value, axes=list(range(len(common_shape))))
+    ndim = len(common_shape)
   static_shape = value.shape.as_list()
   tile_multiples = [common_shape[_axis] if static_shape[_axis] == 1 else 1 for _axis in range(ndim)]
   for axis in ignore_axes:
