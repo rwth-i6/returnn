@@ -1373,6 +1373,7 @@ class Data(object):
     :return: dynamic, i.e. we have it in size_placeholder.
       Note that this does not perfectly match with :func:`get_dynamic_axes`, but more with :func:`is_time_axis_dynamic`,
       although probably in most (all?) cases it should match.
+      If True, you can get the size via :func:`get_dynamic_size`.
     :rtype: bool
     """
     if axis == self.batch_dim_axis:
@@ -1382,6 +1383,15 @@ class Data(object):
       return True  # not quite the same as get_dynamic_axes
     assert isinstance(self.batch_shape[axis], int)
     return False
+
+  def get_dynamic_size(self, axis):
+    """
+    :param int axis: counted with batch-dim axis. :func:`is_axis_dynamic` should be True
+    :return: shape (B,)
+    :rtype: tf.Tensor
+    """
+    axis_wo_batch = self.get_batch_axis_excluding_batch(axis)
+    return self.size_placeholder[axis_wo_batch]
 
   def get_dynamic_axes(self):
     """
@@ -1415,7 +1425,7 @@ class Data(object):
 
   def get_sequence_lengths(self):
     """
-    :return: seq lens tensor of shape (batch,) of dtype int32
+    :return: seq lens tensor of shape (batch,) of dtype int32. also see :func:`get_dynamic_size`
     :rtype: tf.Tensor
     """
     assert self.time_dim_axis is not None
@@ -1441,15 +1451,29 @@ class Data(object):
       assert self.time_dim_axis == 1
       return sequence_mask(self.get_sequence_lengths())
 
-  def get_sequence_mask_broadcast(self):
+  def get_sequence_mask_broadcast(self, axis=None):
     """
+    :param int|None axis:
     :return: seq mask of shape ((batch,time) or (time,batch)) + (1,)s for remaining dims
+      if BT or TB major, and axis is T or None.
+      In general compatible to placeholder, i.e. same ndim, with broadcast dims.
+      We assert here that the axis is dynamic (:func:`is_axis_dynamic`), i.e. we have the size.
     :rtype: tf.Tensor
     """
-    seq_mask = self.get_sequence_mask()
-    assert seq_mask.get_shape().ndims == 2  # batch and time
-    seq_mask = expand_multiple_dims(
-      seq_mask, [i for i in range(self.batch_ndim) if i not in (self.batch_dim_axis, self.time_dim_axis)])
+    if axis is None:
+      assert self.time_dim_axis is not None
+      axis = self.time_dim_axis
+    assert axis != self.batch_dim_axis
+    size = self.get_dynamic_size(axis)
+    if axis >= self.batch_dim_axis:
+      seq_mask = sequence_mask(size)  # (B,T)
+    else:  # axis < batch_dim_axis
+      seq_mask = sequence_mask_time_major(size)  # (T,B)
+    shape = [1] * self.batch_ndim  # type: typing.List[typing.Union[int,tf.Tensor]]
+    placeholder_shape = tf.shape(self.placeholder)
+    shape[self.batch_dim_axis] = placeholder_shape[self.batch_dim_axis]
+    shape[axis] = placeholder_shape[axis]
+    seq_mask = tf.reshape(seq_mask, shape)
     assert seq_mask.get_shape().ndims == self.batch_ndim
     return seq_mask
 
