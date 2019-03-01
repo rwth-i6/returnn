@@ -3388,18 +3388,25 @@ def batched_uniq(x, seq_lens):
 def get_common_shape(values, ignore_axes=()):
   """
   Related: :func:`tf.broadcast_dynamic_shape`.
+  Also see :func:`unbroadcast_to_common_shape`.
 
-  :param list[tf.Tensor] values:
+  :param list[tf.Tensor|float|int] values:
   :param list[int]|tuple[int] ignore_axes: these axes will be ignored
   :return: common shape of all values. broadcasts dims with 1. will use static dims when possible.
     Dim of axes which are in `ignore_axes` will be None.
   :rtype: list[tf.Tensor|int|None]
   """
   assert len(values) > 0
+  assert all([isinstance(value, (tf.Tensor, float, int)) for value in values])
+  # Filter out scalars.
+  values = [value for value in values if isinstance(value, tf.Tensor)]
   assert all([value.shape.ndims is not None for value in values]), "some unknown ndim"
+  values = [value for value in values if value.shape.ndims > 0]
+  if not values:  # all were scalars?
+    return []
   ndim = max([value.shape.ndims for value in values])
   for value in values:
-    assert value.shape.ndims == 0 or value.shape.ndims == ndim, "ndim does not match in values %r" % (values,)
+    assert value.shape.ndims == ndim, "ndim does not match in values %r" % (values,)
   for axis in ignore_axes:
     assert 0 <= axis < ndim
   with tf.name_scope("common_shape"):
@@ -3408,10 +3415,7 @@ def get_common_shape(values, ignore_axes=()):
       if axis in ignore_axes:
         continue  # does not matter
       for value in values:
-        if value.shape.ndims == 0:
-          static_dim = 1
-        else:
-          static_dim = value.shape.dims[axis].value  # type: typing.Optional[int]
+        static_dim = value.shape.dims[axis].value  # type: typing.Optional[int]
         if common_shape[axis] in (None, 1):
           if static_dim is not None:
             common_shape[axis] = static_dim
