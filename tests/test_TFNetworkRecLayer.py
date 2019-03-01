@@ -1741,6 +1741,49 @@ def test_same_spatial_dim_after_rec_layers():
     print("All good.")
 
 
+def test_same_spatial_dim_after_rec_layers_with_pool():
+  with make_scope() as session:
+    config = Config({"debug_print_layer_output_template": True})
+    extern_data = ExternData({
+      "data": {"dim": 13, "sparse": True},
+      "classes": {"dim": 17, "sparse": True, "available_for_inference": False},
+      "att_weights": {"shape": (None, 1), "available_for_inference": False},
+      "att_weights_sizes": {"shape": (None,), "dtype": "int32", "available_for_inference": False}})
+    net = TFNetwork(extern_data=extern_data, train_flag=True, config=config)
+    net.construct_from_dict({
+      "ref_att_weights": {
+        "class": "unflatten_nd",
+        "from": "data:att_weights", "sizes": "data:att_weights_sizes", "num_axes": 2,
+        "declare_same_sizes_as": {0: "data:classes", 1: "encoder"},
+        "is_output_layer": True},
+      "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6},
+      "lstm0_fw": {"class": "rec", "unit": "standardlstm", "n_out": 10, "direction": 1, "from": ["source_embed"]},
+      "lstm0_bw": {"class": "rec", "unit": "standardlstm", "n_out": 10, "direction": -1, "from": ["source_embed"]},
+      "lstm0_pool": {"class": "pool", "mode": "max", "padding": "same", "pool_size": (2,), "from": ["lstm0_fw", "lstm0_bw"]},
+      "lstm1_fw": {"class": "rec", "unit": "standardlstm", "n_out": 10, "direction": 1, "from": ["lstm0_pool"]},
+      "lstm1_bw": {"class": "rec", "unit": "standardlstm", "n_out": 10, "direction": -1, "from": ["lstm0_pool"]},
+      "encoder": {"class": "copy", "from": ["lstm1_fw", "lstm1_bw"]},
+      "enc_value": {"class": "split_dims", "axis": "F", "dims": (4, 5), "from": ["encoder"]},
+      "output": {"class": "copy", "from": ["enc_value"]},
+    })
+    size_enc0 = extern_data.data["data"].get_size_dim_tag(0)
+    print("data size:", size_enc0)
+    size_enc1 = net.layers["encoder"].output.get_size_dim_tag(0)
+    print("encoder size:", size_enc1)
+    assert size_enc0 != size_enc1
+    for name in ["source_embed", "lstm0_fw"]:
+      layer = net.layers[name]
+      layer_size = layer.output.get_size_dim_tag(0)
+      print("layer:", layer, "size:", layer_size)
+      assert size_enc0 == layer_size != size_enc1, "no match for layer %r" % layer
+    for name in ["lstm0_pool", "lstm1_fw", "encoder", "enc_value", "output", "ref_att_weights"]:
+      layer = net.layers[name]
+      layer_size = layer.output.get_size_dim_tag(-1)
+      print("layer:", layer, "size:", layer_size)
+      assert size_enc0 != layer_size == size_enc1, "no match for layer %r" % layer
+    print("All good.")
+
+
 def test_rec_layer_search_select_src():
   from TFNetworkRecLayer import _SubnetworkRecCell
   n_src_dim = 5
