@@ -412,6 +412,13 @@ def test_Data_copy_compatible_to_src_no_batch():
   assert d3.batch_shape == (None, 1, 1)
 
 
+def test_Data_copy_compatible_to_add_batch_dim():
+  common_data = Data(name='accum_att_weights_output', shape=(None, 1))
+  d1 = Data(name='att_weights_avg_output', shape=(1,), batch_dim_axis=None)
+  d2 = d1.copy_compatible_to(common_data)
+  assert d2.batch_dim_axis is not None and d2.batch_shape == (None, 1, 1)
+
+
 def test_Data_feature_dim_axis_btd():
   d1 = Data(name="d1", shape=(None, 11), feature_dim_axis=-1)
   d2 = Data(name="d2", shape=(None, 11), feature_dim_axis=2)
