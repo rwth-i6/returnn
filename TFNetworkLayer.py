@@ -2172,8 +2172,9 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
   """
   layer_class = "softmax_over_spatial"
 
-  def __init__(self, energy_factor=None, window_start=None, window_size=None, use_time_mask=None, **kwargs):
+  def __init__(self, axis=None, energy_factor=None, window_start=None, window_size=None, use_time_mask=None, **kwargs):
     """
+    :param str|None axis: which axis to do the softmax over
     :param float|None energy_factor: the energy will be scaled by this factor.
       This is like a temperature for the softmax.
       In Attention-is-all-you-need, this is set to 1/sqrt(base_ctx.dim).
@@ -2182,61 +2183,61 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
     :param bool use_time_mask: if True, assumes dyn seq len, and use it for masking.
       By default, if dyn seq len exists, it uses it.
     """
-    from TFUtil import move_axis
-    import numpy
+    from TFUtil import move_axis, where_bc
     super(SoftmaxOverSpatialLayer, self).__init__(**kwargs)
-    energy_data = self.input_data.copy_as_bt_or_tb_major()  # e.g. (B,T,dim)
+    energy_data = self.input_data
     assert energy_data.dtype.startswith("float")
+    if axis is None:
+      assert energy_data.have_time_axis(), "%s: requires that the input has a time dim" % self
+      axis = energy_data.time_dim_axis
+    else:
+      axis = energy_data.get_axis_from_description(axis, allow_int=False)
     energy = energy_data.placeholder
     energy_shape = tf.shape(energy, name="energy_shape")
     energy_shape = [energy_shape[i] for i in range(energy_data.batch_ndim)]
     assert energy_data.have_time_axis()
     # if the time-axis is static, we can skip the masking
     if use_time_mask is None:
-      use_time_mask = energy_data.is_time_axis_dynamic()
+      use_time_mask = energy_data.is_axis_dynamic(axis)
     if use_time_mask:
-      assert energy_data.is_time_axis_dynamic(), "%s: use_time_mask True, dyn time axis expected" % self
-      energy_mask = energy_data.get_sequence_mask()
+      assert energy_data.is_axis_dynamic(axis), "%s: use_time_mask True, dyn time axis expected" % self
+      energy_mask = energy_data.get_sequence_mask_broadcast(axis=axis)
       if window_start is not None:
         assert window_size is not None, "set window_size explicitly"
         from TFUtil import nd_indices, expand_dims_unbroadcast
         # handle edge cases correctly:
         # 1. if the energy time-dim is less than `window_size`, we adjust the window size.
         # 2. for each seq, we adjust the window so that no elements after the seq-len are indexed.
-        window_len = tf.minimum(window_size, energy_shape[energy_data.time_dim_axis])  # case 1.
+        window_len = tf.minimum(window_size, energy_shape[axis])  # case 1.
         window_start = tf.squeeze(window_start.output.placeholder, axis=window_start.output.feature_dim_axis)  # (B,)
         window_start = tf.to_int32(window_start)
-        window_start = tf.where(tf.greater(window_start+window_len, energy_shape[energy_data.time_dim_axis]),
-            tf.ones_like(window_start) * (energy_shape[energy_data.time_dim_axis] - window_len),
-            window_start)  # case 2.
+        window_start = tf.where(
+          tf.greater(window_start + window_len, energy_shape[axis]),
+          tf.ones_like(window_start) * (energy_shape[axis] - window_len),
+          window_start)  # case 2.
         n_batch = energy_shape[energy_data.batch_dim_axis]
         indices = expand_dims_unbroadcast(tf.range(window_len), energy_data.batch_dim_axis, n_batch)
         # time-major: (W,B) + (1,B), batch-major: (B, W) + (1,B)
-        indices += tf.expand_dims(tf.to_int32(window_start), axis=energy_data.time_dim_axis)
+        indices += tf.expand_dims(tf.to_int32(window_start), axis=axis)
         idxs = nd_indices(indices)
         mask_shape = energy_shape[:2]  # (T, B)
-        mask_shape[energy_data.time_dim_axis] = window_len
+        mask_shape[axis] = window_len
         energy_mask_window = tf.scatter_nd(idxs, tf.ones(shape=mask_shape), energy_shape[:2])
         energy_mask_window = tf.cast(energy_mask_window, tf.bool)
         energy_mask = tf.logical_and(energy_mask, energy_mask_window)
-      energy_mask_flat = tf.reshape(energy_mask, [numpy.prod(energy_shape[:2])], name="energy_mask_flat")
-      energy_flat = tf.reshape(energy, [numpy.prod(energy_shape[:2])] + energy_shape[2:], name="energy_flat")
-      energy_flat = tf.where(energy_mask_flat, energy_flat, float("-inf") * tf.ones_like(energy_flat), "energy_masked")
-      energy = tf.reshape(energy_flat, energy_shape, name="energy_unflat")
+      energy = where_bc(energy_mask, energy, float("-inf"), name="energy_masked")
     if energy_factor:
       energy = tf.multiply(energy, energy_factor, name="energy_scaled")
-    energy = move_axis(energy, old_axis=energy_data.time_dim_axis, new_axis=-1, name="tr_time_last")  # (...,T)
+    # tf.nn.softmax operates on the last axis.
+    energy = move_axis(energy, old_axis=axis, new_axis=-1, name="tr_time_last")  # (...,T)
     weights = tf.nn.softmax(energy)  # (...,T)
     # TODO make this move back optional
-    weights = move_axis(weights, old_axis=-1, new_axis=energy_data.time_dim_axis, name="tr_time_recover")  # e.g. (B,T,dim)
+    weights = move_axis(weights, old_axis=-1, new_axis=axis, name="tr_time_recover")  # e.g. (B,T,dim)
     self.output.placeholder = weights
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources, **kwargs):
-    output = get_concat_sources_data_template(sources, name="%s_output" % name)
-    assert output.have_time_axis(), "%s %r: we expect that the source (%r) has a time dim" % (
-      cls.__name__, name, sources)
-    return output.copy_as_bt_or_tb_major()
+    return get_concat_sources_data_template(sources, name="%s_output" % name)
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
@@ -6706,10 +6707,11 @@ class ViaLayerLoss(Loss):
       else:
         assert self.align_layer
         error_signal = self.output.placeholder - self.align_layer.output.copy_compatible_to(self.output).placeholder
-      seq_mask_bc = self.output.get_sequence_mask_broadcast()
-      error_signal = tf.where(
-        tf.logical_and(seq_mask_bc, tf.ones_like(error_signal, dtype=tf.bool)),
-        error_signal, tf.zeros_like(error_signal))
+      if self.output.is_time_axis_dynamic():
+        seq_mask_bc = self.output.get_sequence_mask_broadcast()
+        error_signal = tf.where(
+          tf.logical_and(seq_mask_bc, tf.ones_like(error_signal, dtype=tf.bool)),
+          error_signal, tf.zeros_like(error_signal))
       if self.loss_wrt_to_act_in:
         assert self.output_with_activation, "activation unknown, via %r" % self.output
         if isinstance(self.loss_wrt_to_act_in, (str, unicode)):
