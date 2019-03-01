@@ -579,6 +579,12 @@ def test_Data_copy_add_spatial_dim_most_right():
   assert_equal(d2.get_spatial_batch_axes(), [1])
 
 
+def test_Data_copy_move_axis_time_to_end():
+  d1 = Data(name="att_weights", shape=(None, None, 4))
+  d2 = d1.copy_move_axis(d1.time_dim_axis, -1)
+  assert d2.shape == (None, 4, None) and d2.feature_dim_axis == 2 and d2.time_dim_axis == 3
+
+
 def test_get_initializer_zero():
   shape = (2, 3)
   initializer = get_initializer(0.0)
