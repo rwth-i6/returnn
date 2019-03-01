@@ -1357,6 +1357,22 @@ class Data(object):
         self, self.time_dim_axis, self.size_placeholder))
     return False
 
+  def is_axis_dynamic(self, axis):
+    """
+    :param int axis: counted with batch-dim axis
+    :return: dynamic, i.e. we have it in size_placeholder.
+      Note that this does not perfectly match with :func:`get_dynamic_axes`, but more with :func:`is_time_axis_dynamic`,
+      although probably in most (all?) cases it should match.
+    :rtype: bool
+    """
+    if axis == self.batch_dim_axis:
+      return False
+    axis_wo_batch = self.get_batch_axis_excluding_batch(axis)
+    if axis_wo_batch in self.size_placeholder:
+      return True  # not quite the same as get_dynamic_axes
+    assert isinstance(self.batch_shape[axis], int)
+    return False
+
   def get_dynamic_axes(self):
     """
     :return: list of axes, counted with batch-dim axis (but we exclude the batch dim axis itself)
