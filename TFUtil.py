@@ -3385,6 +3385,68 @@ def batched_uniq(x, seq_lens):
   return z, new_seq_lens
 
 
+def get_common_shape(values, ignore_axes=()):
+  """
+  Related: :func:`tf.broadcast_dynamic_shape`.
+
+  :param list[tf.Tensor] values:
+  :param list[int]|tuple[int] ignore_axes: these axes will be ignored
+  :return: common shape of all values. broadcasts dims with 1. will use static dims when possible.
+    Dim of axes which are in `ignore_axes` will be None.
+  :rtype: list[tf.Tensor|int|None]
+  """
+  assert len(values) > 0
+  ndim = values[0].shape.ndims
+  assert ndim, "unknown ndim or scalar: %r" % (values,)
+  for value in values:
+    assert value.shape.ndims == ndim, "ndim does not match in values %r" % (values,)
+  for axis in ignore_axes:
+    assert 0 <= axis < ndim
+  with tf.name_scope("common_shape"):
+    common_shape = [None] * ndim  # type: typing.List[typing.Union[tf.Tensor,int,None]]
+    for axis in range(ndim):
+      if axis in ignore_axes:
+        continue  # does not matter
+      for value in values:
+        static_dim = value.shape.dims[axis].value
+        if common_shape[axis] in (None, 1):
+          common_shape[axis] = get_shape_dim(value, axis)
+        if static_dim is not None:
+          if isinstance(common_shape[axis], tf.Tensor):
+            common_shape[axis] = static_dim
+          else:
+            assert common_shape[axis] == static_dim, "non matching dim %r vs %r in axis %i, value %r of values %r" % (
+              common_shape[axis], static_dim, axis, value, values)
+    return common_shape
+
+
+def unbroadcast_to_common_shape(value, common_shape, ignore_axes=(), allow_only_noop=False):
+  """
+  :param tf.Tensor value:
+  :param list[tf.Tensor|int|None] common_shape: see :func:`get_common_shape`
+  :param list[int]|tuple[int] ignore_axes:
+  :param bool allow_only_noop:
+  :return:
+  :rtype: tf.Tensor
+  """
+  ndim = value.shape.ndims
+  assert ndim is not None, "value has unknown ndim: %r" % value
+  static_shape = value.shape.as_list()
+  tile_multiples = [common_shape[_axis] if static_shape[_axis] == 1 else 1 for _axis in range(ndim)]
+  for axis in ignore_axes:
+    assert 0 <= axis < ndim
+    tile_multiples[axis] = 1
+  assert all([m is not None for m in tile_multiples]), (
+    "ignore_axes %r probably missing some axis for common shape %r" % (ignore_axes, common_shape))
+  if all([isinstance(m, int) and m == 1 for m in tile_multiples]):
+    # We have a no-op.
+    return value
+  assert not allow_only_noop, "need to broadcast value %r to common shape %r with tile multiples %r" % (
+    value, common_shape, tile_multiples)
+  value = tf.tile(value, tile_multiples, name="unbroadcast_to_common_shape")
+  return value
+
+
 def concat_with_opt_broadcast(values, allow_broadcast, axis, name="concat_with_opt_broadcast"):
   """
   :param list[tf.Tensor] values: all with same ndim
@@ -3405,31 +3467,11 @@ def concat_with_opt_broadcast(values, allow_broadcast, axis, name="concat_with_o
     axis += ndim
   assert 0 <= axis < ndim
   with tf.name_scope(name):
-    common_shape = [None] * ndim  # type: typing.List[typing.Union[tf.Tensor,int,None]]
-    for _axis in range(ndim):
-      if _axis == axis:
-        continue  # does not matter
-      for value in values:
-        static_dim = value.shape.dims[_axis].value
-        if common_shape[_axis] in (None, 1):
-          common_shape[_axis] = get_shape_dim(value, _axis)
-        if static_dim is not None:
-          if isinstance(common_shape[_axis], tf.Tensor):
-            common_shape[_axis] = static_dim
-          else:
-            assert common_shape[_axis] == static_dim, "non matching dim %r vs %r in axis %i, value %r of values %r" % (
-              common_shape[_axis], static_dim, _axis, value, values)
+    common_shape = get_common_shape(values, ignore_axes=[axis])
     # Now check all, or maybe unbroadcast.
     for i in range(len(values)):
-      value = values[i]
-      static_shape = value.shape.as_list()
-      tile_multiples = [common_shape[_axis] if static_shape[_axis] == 1 else 1 for _axis in range(ndim)]
-      tile_multiples[axis] = 1
-      if not all([isinstance(m, int) and m == 1 for m in tile_multiples]):
-        assert allow_broadcast[i], "need to broadcast value %r in values %r with tile multiples %r" % (
-          value, values, tile_multiples)
-        value = tf.tile(value, tile_multiples)
-        values[i] = value
+      values[i] = unbroadcast_to_common_shape(
+        values[i], common_shape=common_shape, ignore_axes=[axis], allow_only_noop=not allow_broadcast[i])
     # Now do the concat.
     return tf.concat(values, axis=axis, name=name)
 
