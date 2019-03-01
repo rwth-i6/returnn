@@ -4094,6 +4094,10 @@ class DotLayer(LayerBase):
     if time_dim_axis is None and b_out.time_dim_axis is not None:
       time_dim_axis = cls._axis2_to_output(
         b_out.time_dim_axis, b_rem_axes=b_rem_axes, a_var_axes=a_var_axes, b_var_axes=b_var_axes)
+    if time_dim_axis is None and (a_out.time_dim_axis is not None or b_out.time_dim_axis is not None):
+      # We had some time dim axis before and reduced it now.
+      # But maybe there are others, so let's automatically figure out.
+      time_dim_axis = NotSpecified
     if not b_var_dims and add_var2_if_empty:
       b_var_dims.append(1)
     return Data(
