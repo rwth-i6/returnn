@@ -3369,7 +3369,7 @@ class PoolLayer(_ConcatInputLayer):
     """
     assert "n_out" not in kwargs
     assert "out_type" not in kwargs
-    from TFUtil import check_input_dim
+    from TFUtil import check_input_dim, DimensionTag
     mode = mode.upper()
     assert mode in ["MAX", "AVG"]
     padding = padding.upper()
@@ -3415,6 +3415,10 @@ class PoolLayer(_ConcatInputLayer):
         in_dim=self.output.size_placeholder[i],
         filter_size=pool_size[i - index_shift], stride=strides[i - index_shift],
         dilation_rate=dilation_rate[i - index_shift], padding=padding)
+      tag = DimensionTag(
+        description="spatial:%i:%s" % (i, self.get_base_absolute_name_scope_prefix()[:-1]),
+        kind=DimensionTag.Types.Spatial)
+      tag.set_tag_on_size_tensor(self.output.size_placeholder[i])
 
   @classmethod
   def get_out_data_from_opts(cls, name, pool_size, strides=None, dilation_rate=1, sources=(), padding="VALID",
