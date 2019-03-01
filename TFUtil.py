@@ -1213,17 +1213,26 @@ class Data(object):
       axes.pop(axes.index(self.batch_dim_axis))
     return axes
 
-  def get_axes_from_description(self, axes):
+  def get_axes_from_description(self, axes, allow_int=True):
     """
     :param int|list[int]|str|list[str]|None axes: one axis or multiple axis, or none.
       This is counted with batch-dim, which by default is axis 0 (see enforce_batch_dim_axis).
       It also accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature",
       and more (see the code).
+    :param bool allow_int: whether to allow an int directly. in almost all cases, it is better to use a symbolic name
+      to specify an axis, as different layers could reorder them, and maybe also change their behavior in the future.
     :return: list of axes, counted with batch-dim
     :rtype: list[int]
     """
     if axes is None or axes == "":
       return []
+    if not allow_int:
+      assert not isinstance(axes, int)
+    assert isinstance(axes, (str, int, list, tuple))
+    if isinstance(axes, (list, tuple)):
+      assert all([a is None or isinstance(a, (str, int)) for a in axes])
+      if not allow_int:
+        assert all([not isinstance(a, int) for a in axes])
     if isinstance(axes, str):
       import re
       axes = axes.lower()
