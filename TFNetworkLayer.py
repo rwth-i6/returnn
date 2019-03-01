@@ -3619,15 +3619,15 @@ class ReduceLayer(_ConcatInputLayer):
       if out_batch_dim_axis in axes:
         out_batch_dim_axis = None
       if out_time_dim_axis in axes:
-        out_time_dim_axis = None
+        out_time_dim_axis = NotSpecified
       if out_feature_dim_axis in axes:
-        out_feature_dim_axis = None
+        out_feature_dim_axis = NotSpecified
       for i in reversed(sorted(set(axes + [x.batch_dim_axis] if x.batch_dim_axis is not None else []))):
         del y_shape[i]
       for i in reversed(sorted(set(axes))):
         if out_batch_dim_axis and i < out_batch_dim_axis:
           out_batch_dim_axis -= 1
-        if out_time_dim_axis and i < out_time_dim_axis:
+        if out_time_dim_axis and out_time_dim_axis is not NotSpecified and i < out_time_dim_axis:
           out_time_dim_axis -= 1
         if out_feature_dim_axis and out_feature_dim_axis is not NotSpecified and i < out_feature_dim_axis:
           out_feature_dim_axis -= 1
