@@ -2215,7 +2215,7 @@ def test_reclayer_optimize_out_transformer():
   out_nopt_np = get_out(optimize_out=False)
   print("output:")
   print(out_opt_np)
-  numpy.testing.assert_almost_equal(out_opt_np, out_nopt_np)
+  numpy.testing.assert_almost_equal(out_opt_np, out_nopt_np, decimal=5)
   print("Both are equal!")
 
 
