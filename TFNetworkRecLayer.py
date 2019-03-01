@@ -2086,9 +2086,8 @@ class _SubnetworkRecCell(object):
         output = cur_layer.output.copy_as_time_major()
         initial = self._get_init_output(name)
         initial_wt = tf.expand_dims(initial, axis=0)  # add time axis
-        x = output.placeholder
         output.placeholder = concat_with_opt_broadcast(
-          [initial_wt, x], allow_broadcast=[True, False], axis=0, name="concat_in_time")
+          [initial_wt, output.placeholder], allow_broadcast=[True, False], axis=0, name="concat_in_time")
         output.placeholder = output.placeholder[:-1]  # remove last frame
         # Note: This seq_len might make sense to use here:
         # output.size_placeholder[0] = tf.minimum(output.size_placeholder[0] + 1, tf.shape(x)[0])
@@ -2188,9 +2187,8 @@ class _SubnetworkRecCell(object):
         output = cur_layer.output.copy_as_time_major()
         initial = self._get_init_output(name)
         initial_wt = tf.expand_dims(initial, axis=0)  # add time axis
-        x = output.placeholder
         output.placeholder = concat_with_opt_broadcast(
-          [initial_wt, x], allow_broadcast=[True, False], axis=0, name="concat_in_time")
+          [initial_wt, output.placeholder], allow_broadcast=[True, False], axis=0, name="concat_in_time")
         output.placeholder = output.placeholder[:-1]  # remove last frame
         # Note: This seq_len might make sense to use here:
         # output.size_placeholder[0] = tf.minimum(output.size_placeholder[0] + 1, tf.shape(x)[0])
