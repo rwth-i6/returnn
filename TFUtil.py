@@ -1308,14 +1308,15 @@ class Data(object):
         res.append(i)
     return res
 
-  def get_axis_from_description(self, axis):
+  def get_axis_from_description(self, axis, allow_int=True):
     """
     :param int|str axis:
+    :param bool allow_int:
     :return: axis, counted with batch-dim
     :rtype: int
     """
-    axes = self.get_axes_from_description(axis)
-    assert len(axes) == 1, "%r is not a unique axis but %r" % (axis, axes)
+    axes = self.get_axes_from_description(axis, allow_int=allow_int)
+    assert len(axes) == 1, "%r: %r is not a unique axis but %r" % (self, axis, axes)
     return axes[0]
 
   def get_batch_axis_excluding_batch(self, axis):
