@@ -731,6 +731,8 @@ class Data(object):
     if data.batch_dim_axis is not None and v.batch_dim_axis is None:
       v = v.copy_add_batch_dim(0)  # later we might move the axis
     # Add feature dim, if needed.
+    if data.feature_dim_axis_or_unspecified is NotSpecified:
+      v.feature_dim_axis = NotSpecified
     if data.feature_dim_axis is not None and v.feature_dim_axis is None:
       v = v.copy_add_feature_dim()
     # Add spatial dims, in case we miss any.
