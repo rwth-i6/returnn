@@ -1360,6 +1360,9 @@ class Data(object):
     :rtype: bool
     """
     assert self.time_dim_axis is not None
+    if self.placeholder is None and self.size_placeholder is None:
+      # Run at template construction time.
+      return self.batch_shape[self.time_dim_axis_excluding_batch] is None
     if self.time_dim_axis_excluding_batch in self.size_placeholder:
       return True
     assert isinstance(self.shape[self.time_dim_axis_excluding_batch], int), (
@@ -1378,6 +1381,9 @@ class Data(object):
     """
     if axis == self.batch_dim_axis:
       return False
+    if self.placeholder is None and self.size_placeholder is None:
+      # Run at template construction time.
+      return self.batch_shape[axis] is None
     axis_wo_batch = self.get_batch_axis_excluding_batch(axis)
     if axis_wo_batch in self.size_placeholder:
       return True  # not quite the same as get_dynamic_axes
