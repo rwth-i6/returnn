@@ -1096,7 +1096,13 @@ class Data(object):
     if not self.shape:
       return None
     # Allow same as time-dim-axis...
-    return [i for i in range(self.batch_ndim) if i != self.batch_dim_axis][-1]
+    axes = [i for i in range(self.batch_ndim) if i != self.batch_dim_axis]
+    assert axes
+    static_axes = [i for i in axes if self.batch_shape[i] is not None]
+    # Prefer last static, if available.
+    if static_axes:
+      return static_axes[-1]
+    return axes[-1]
 
   @property
   def feature_dim_axis(self):
