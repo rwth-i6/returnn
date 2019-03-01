@@ -3471,14 +3471,15 @@ class ReduceLayer(_ConcatInputLayer):
     """
     :param str mode: "sum" or "max", "argmin", "min", "argmin", or "mean"
     :param int|list[int]|str axes: One axis or multiple axis to reduce.
-      This is counted with batch-dim, which by default is axis 0 (see enforce_batch_dim_axis).
-      It also accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature",
-      which should be preferred.
+      It accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature",
+      and it is strongly recommended to use some of these symbolic names.
       See :func:`Data.get_axes_from_description`.
     :param int|list[int]|str axis: for compatibility, can be used instead of ``axes``
     :param bool keep_dims: if dimensions should be kept (will be 1)
     :param int enforce_batch_dim_axis: will swap the batch-dim-axis of the input with the given axis.
       e.g. 0: will convert the input into batch-major format if not already like that.
+      Note that this is still not enough in some cases, e.g. when the other axes are also not as expected.
+      The strong recommendation is to use a symbolic axis description.
     :param bool use_time_mask: if we reduce over the time-dim axis, use the seq len info.
       By default, in that case, it will be True.
     """
