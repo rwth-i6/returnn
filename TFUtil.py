@@ -237,6 +237,7 @@ class Data(object):
                available_for_inference=True,
                auto_create_placeholders=False,
                vocab=None,
+               same_dim_tags_as=None,
                beam_size=None):
     """
     :param str name:
@@ -257,6 +258,7 @@ class Data(object):
       The size is always a tensor of shape (batch,), i.e. the size can be different for each sequence in a batch.
     :param bool available_for_inference: e.g. the extern data "classes" is usually not available for inference
     :param str|dict[str]|GeneratingDataset.Vocabulary|None vocab:
+    :param dict[int|str,DimensionTag]|None same_dim_tags_as: will mark our dimension tags to be the same
     :param int|None beam_size: the batch-dim could be extended by a beam-size,
       such that it represents the merged dims [batch, beam_size].
     """
@@ -363,6 +365,11 @@ class Data(object):
       assert self.sparse, "%s should represent indices of %s" % (self, vocab)
       assert self.dim == vocab.num_labels, "%s dims do not match with vocab %s" % (self, vocab)
     self.vocab = vocab
+    if same_dim_tags_as:
+      # Note that this currently does not work as intended at template construction time...
+      for _axis, _dim_tag in sorted(same_dim_tags_as.items()):
+        _axis = self.get_axis_from_description(_axis)
+        self.get_dim_tag(_axis).declare_same_as(_dim_tag)
     self.sanity_check()
 
   def sanity_check(self, ignore_placeholder=False):
