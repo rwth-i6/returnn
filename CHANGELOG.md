@@ -6,6 +6,41 @@ or any changes which could potentially break or change the behavior of existing 
 This is intentionally kept short. For a full change log, just see the Git log.
 
 
+## 2019-03-01: `GenericAttentionLayer` reimplemented
+
+Based on `DotLayer` now.
+Is more generic if the attention weights
+have multiple time axes (e.g. in Transformer training).
+Does checks whether the base time axis
+and weights time axis match,
+and should automatically select the right one from weights
+if there are multiple
+(before: it always used the first weights time axis).
+The output format (order of axes) might be
+different than it was before in some cases.
+
+## 2019-03-01: `Data` some slight behavior changes
+
+E.g. the default feature dim axis (if unspecified)
+is the last non-dynamic axis.
+Also in some cases the time axis will be
+automatically re-selected if the original one
+was removed and there are multiple dynamic axes.
+`DimensionTag` support was extended.
+When copying compatible to some other data
+with multiple dynamic axes, it will more correctly
+match the dynamic axes via the dimension tags
+(see test cases for examples).
+
+## 2019-03-01: `SqueezeLayer`, `enforce_batch_dim_axis` by default `None`
+
+I.e. the output format (order of axes) might be
+different than it was before in some cases.
+
+## 2019-02-27: `CombineLayer` / `EvalLayer` / any which concatenate multiple sources, extended automatic broadcasting
+
+See e.g. `concat_sources`.
+
 ## 2019-02-21: `HDFDataset` huge speedup for `cache_size=0`
 
 If your whole dataset does not fit into memory
