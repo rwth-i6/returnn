@@ -2227,6 +2227,7 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
       energy = tf.multiply(energy, energy_factor, name="energy_scaled")
     energy = move_axis(energy, old_axis=energy_data.time_dim_axis, new_axis=-1, name="tr_time_last")  # (...,T)
     weights = tf.nn.softmax(energy)  # (...,T)
+    # TODO make this move back optional
     weights = move_axis(weights, old_axis=-1, new_axis=energy_data.time_dim_axis, name="tr_time_recover")  # e.g. (B,T,dim)
     self.output.placeholder = weights
 
