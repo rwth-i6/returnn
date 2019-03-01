@@ -728,6 +728,8 @@ class Data(object):
     assert self.dtype == data.dtype
     _, dim_tags = DimensionTag.get_all_dimension_tags([self, data], allow_same_feature_dim=True)
     v = self.copy()
+    if data.batch_dim_axis is not None and v.batch_dim_axis is None:
+      v = v.copy_add_batch_dim(0)  # later we might move the axis
     # Add feature dim, if needed.
     if data.feature_dim_axis is not None and v.feature_dim_axis is None:
       v = v.copy_add_feature_dim()
