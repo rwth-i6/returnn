@@ -1183,7 +1183,6 @@ def test_ReduceLayer_NCHW():
                                         src_nchw.output.size_placeholder[1]: np.full(shape=(10,), fill_value=11)})
     assert_equal(out1.shape, (10, 11, 16))
     assert_equal(out2.shape, (16, 11, 16))
-    assert reduce1.output.feature_dim_axis is None and reduce1.output.dim is None
     assert reduce1.output.time_dim_axis == 1
     assert reduce2.output.feature_dim_axis == 0 and reduce2.output.dim == 16
     assert reduce2.output.batch_dim_axis is None
