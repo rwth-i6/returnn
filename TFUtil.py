@@ -4308,15 +4308,9 @@ def nan_to_num(x, nan_num=0, inf_num=1e30):
   with tf.name_scope("nan_to_num"):
     nan_num = tf.convert_to_tensor(nan_num, dtype=x.dtype)
     inf_num = tf.convert_to_tensor(inf_num, dtype=x.dtype)
-    # Note that tf.where() does not support broadcasting at the moment,
-    # so we need the same shape. The following will do that.
-    # This should be removed once tf.where() supports broadcasting.
-    # https://github.com/tensorflow/tensorflow/issues/3945
-    nan_num = tf.ones_like(x) * nan_num
-    inf_num = tf.ones_like(x) * inf_num
-    x = tf.where(tf.is_nan(x), nan_num, x)
-    x = tf.where(tf.logical_and(tf.is_inf(x), tf.greater(x, 0)), inf_num, x)
-    x = tf.where(tf.logical_and(tf.is_inf(x), tf.less(x, 0)), -inf_num, x)
+    x = where_bc(tf.is_nan(x), nan_num, x)
+    x = where_bc(tf.logical_and(tf.is_inf(x), tf.greater(x, 0)), inf_num, x)
+    x = where_bc(tf.logical_and(tf.is_inf(x), tf.less(x, 0)), -inf_num, x)
     return x
 
 
