@@ -648,6 +648,9 @@ class Data(object):
       counted_with_batch_dim=True, only_available=True, include_batch_dim_axis=True)
     for k, a in other_special_axes.items():
       setattr(data, k, a if (a < spatial_dim_axis) else (a + 1))
+    if data.feature_dim_axis is not None:
+      # feature dim axis might have changed if unspecified, so just update dim
+      data.dim = data.batch_shape[data.feature_dim_axis]
     data.sanity_check()
     return data
 
