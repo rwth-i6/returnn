@@ -247,7 +247,10 @@ class LayerBase(object):
       else:  # not sparse
         feature_dim_axis = out_type.get("feature_dim_axis", NotSpecified)
         if feature_dim_axis is NotSpecified:
-          feature_dim_axis = -1
+          if sources_data.feature_dim_axis is not None:
+            feature_dim_axis = sources_data.feature_dim_axis
+          else:
+            feature_dim_axis = -1
         default_shape = list(sources_data.shape_dense)
         default_shape.insert(sources_data.batch_dim_axis, None)
         default_shape[feature_dim_axis] = out_type["dim"]
