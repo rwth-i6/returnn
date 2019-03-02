@@ -3670,10 +3670,19 @@ class GenericAttentionLayer(AttentionBaseLayer):
       return weights.time_dim_axis
     # New behavior: Require that we have a matching time dim, and use that one.
     base_time_tag = base.get_dim_tag(base.time_dim_axis)
-    for axis in dyn_axes:
-      dim_tag = weights.get_dim_tag(axis)
-      if dim_tag.is_equal(base_time_tag):
-        return axis
+    matched_dyn_axes = [axis for axis in dyn_axes if weights.get_dim_tag(axis).is_equal(base_time_tag)]
+    if len(matched_dyn_axes) > 1:
+      # Ok, this case is again tricky
+      # (but also kind of artificial, as you usually do not have this case;
+      # it happens only in some of the test cases).
+      # If there was SoftmaxOverSpatialLayer before, it would have used the time_dim_axis,
+      # so if we have that one, use it.
+      if weights.time_dim_axis in matched_dyn_axes:
+        return weights.time_dim_axis
+      # Just take the last. Not sure what else to do.
+      return matched_dyn_axes[-1]
+    if len(matched_dyn_axes) == 1:
+      return matched_dyn_axes[0]
     from pprint import pformat
     raise Exception(
       ("no matching time axis found in weights %r with dim tags\n%s;\n"
