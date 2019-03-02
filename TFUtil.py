@@ -742,17 +742,33 @@ class Data(object):
           continue  # This one seems to exist already, add the next one.
         axis_wo_batch = data.get_batch_axis_excluding_batch(axis)
         v = v.copy_add_spatial_dim(v.get_batch_axis(axis_wo_batch))
-    assert data.get_spatial_axes() == v.get_spatial_axes()
-    if v.batch_dim_axis != data.batch_dim_axis:
-      assert data.batch_dim_axis is not None
-      if v.batch_dim_axis is not None:
-        v = v.copy_with_batch_dim_axis(data.batch_dim_axis)
-      else:
-        # Note that it might be important here that we added any missing spatial dims before.
-        v = v.copy_add_batch_dim(data.batch_dim_axis)
-    assert v.batch_dim_axis == data.batch_dim_axis
-    assert v.feature_dim_axis == data.feature_dim_axis
+    # Now we assume that we have all missing axes added,
+    # but they might still be in a wrong order.
+    assert len(data.get_spatial_batch_axes()) == len(v.get_spatial_batch_axes())
     assert v.batch_ndim == data.batch_ndim
+    # Now maybe move batch/feature axis.
+    # We might do multiple iterations here, depending on which axis comes first.
+    # This is a bit ugly, but the code is simpler.
+    num_iterations = 0
+    while True:
+      num_iterations += 1
+      assert num_iterations <= 4
+      if v.batch_dim_axis != data.batch_dim_axis:
+        assert data.batch_dim_axis is not None and v.batch_dim_axis is not None
+        v = v.copy_with_batch_dim_axis(data.batch_dim_axis)
+        assert v.batch_dim_axis == data.batch_dim_axis
+        continue
+      if v.feature_dim_axis != data.feature_dim_axis:
+        assert data.feature_dim_axis is not None and v.feature_dim_axis is not None
+        v = v.copy_with_feature_dim_axis(data.feature_dim_axis)
+        assert v.feature_dim_axis == data.feature_dim_axis
+        if data.feature_dim_axis_or_unspecified is NotSpecified:
+          v.feature_dim_axis = NotSpecified
+          assert v.feature_dim_axis == data.feature_dim_axis
+        continue
+      # Now we have both equal.
+      break
+    assert data.get_spatial_batch_axes() == v.get_spatial_batch_axes()
     if unbroadcast and any([d1 != 1 and d2 == 1 for (d1, d2) in zip(data.batch_shape, v.batch_shape)]):
       v.size_placeholder.update(data.size_placeholder or {})
       if v.placeholder is not None:
