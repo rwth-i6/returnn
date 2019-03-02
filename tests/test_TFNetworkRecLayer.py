@@ -2310,6 +2310,8 @@ def test_reclayer_optimize_out_dot():
       # Here is the main test, the dot-layer:
       "energy": {"class": "dot", "red1": -1, "red2": -1, "var1": "T", "var2": "T?",  # Note the "T?".
                  "from": ["base:enc_ctx", "att_query"]},
+      # energy inside the loop will be (B, H, enc-T, 1).
+      # energy outside the loop will be (B, H, enc-T, dec-T). I.e. enc-T is still the first time axis.
       "att_weights": {"class": "softmax_over_spatial", "from": ["energy"]},  # (B, enc-T, H, 1)
       "att0": {"class": "generic_attention", "weights": "att_weights", "base": "base:enc_value"},  # (B, H, V)
       "att": {"class": "merge_dims", "axes": "static", "from": ["att0"]},  # (B, H*V); Use "static" here.
