@@ -430,6 +430,17 @@ def test_Data_copy_compatible_to_time_axis_at_end():
   assert data2.dim == common_data.dim == 1
 
 
+def test_Data_copy_compatible_to_batch_axis1_time_axis_at_end():
+  data = Data(name='att_weights_output', shape=(1, None), time_dim_axis=2, feature_dim_axis=1, beam_size=12)
+  common_data = Data(name='accum_att_weights_output', shape=(None, 1), batch_dim_axis=1)
+  data2 = data.copy_compatible_to(common_data)
+  assert data2.time_dim_axis == common_data.time_dim_axis == 0
+  assert data2.batch_dim_axis == common_data.batch_dim_axis == 1
+  assert data2.feature_dim_axis == common_data.feature_dim_axis == 2
+  assert data2.shape == common_data.shape == (None, 1)
+  assert data2.dim == common_data.dim == 1
+
+
 def test_Data_feature_dim_axis_btd():
   d1 = Data(name="d1", shape=(None, 11), feature_dim_axis=-1)
   d2 = Data(name="d2", shape=(None, 11), feature_dim_axis=2)
