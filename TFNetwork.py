@@ -463,6 +463,7 @@ class TFNetwork(object):
     """
     from pprint import pprint
     from Util import help_on_type_error_wrong_args
+    from TFUtil import py_print
     layer_desc = self._create_layer_layer_desc(name=name, layer_desc=layer_desc)
     debug_print_layer_output_template = self.get_config().bool("debug_print_layer_output_template", False)
     debug_print_layer_output_shape = self.get_config().bool("debug_print_layer_output_shape", False)
@@ -488,7 +489,7 @@ class TFNetwork(object):
         pprint(layer_desc)
         raise
       if debug_print_layer_output_shape:
-        layer.output.placeholder = tf.Print(
+        layer.output.placeholder = py_print(
           layer.output.placeholder,
           [layer_class.cls_get_tf_scope_name(name), "shape:", str(layer.output), tf.shape(layer.output.placeholder)],
           summarize=10, name="debug_print_layer_output_shape")
