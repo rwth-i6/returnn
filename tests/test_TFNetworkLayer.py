@@ -239,6 +239,37 @@ def test_combine_layer_net_construct():
     network.construct_from_dict(net_dict)
 
 
+def test_CombineLayer_different_batch_axis():
+  # ["base:enc_ctx", "weight_feedback", "s_transformed"]
+  # base:enc_ctx: Data(name='enc_ctx_output', shape=(None, 14), batch_dim_axis=1)
+  # weight_feedback: Data(name='weight_feedback_output', shape=(None, 14), batch_dim_axis=1)
+  # s_transformed: Data(name='s_transformed_output', shape=(14,), time_dim_axis=None)
+  # out: Data(name='energy_in_output', shape=(None, 14), beam_size=3)
+  with make_scope() as session:
+    config = Config({"debug_print_layer_output_template": True})
+    net = TFNetwork(config=config, extern_data=ExternData(), train_flag=True)
+    n_dim = 7
+    l1 = net.add_layer(
+      name="enc_ctx", layer_class=InternalLayer,
+      output=Data(name='enc_ctx_output', shape=(None, n_dim), auto_create_placeholders=True))
+    l2 = net.add_layer(
+      name="weight_feedback", layer_class=InternalLayer,
+      output=Data(name='weight_feedback_output', shape=(None, n_dim), batch_dim_axis=1, auto_create_placeholders=True))
+    l3 = net.add_layer(
+      name="s_transformed", layer_class=InternalLayer,
+      output=Data(name='s_transformed_output', shape=(n_dim,), time_dim_axis=None, auto_create_placeholders=True))
+    out = net.add_layer(name="energy_in", layer_class=CombineLayer, kind="add", sources=[l1, l2, l3])
+    print("out:", out)
+    n_batch = 3
+    n_time = 5
+    session.run(out.output.placeholder, {
+      l1.output.placeholder: numpy.random.normal(size=(n_batch, n_time, n_dim)).astype("float32"),
+      l1.output.size_placeholder[0]: numpy.array([n_time] * 3),
+      l2.output.placeholder: numpy.random.normal(size=(n_time, n_batch, n_dim)).astype("float32"),
+      l2.output.size_placeholder[0]: numpy.array([n_time] * 3),
+      l3.output.placeholder: numpy.random.normal(size=(n_batch, n_dim))})
+
+
 def test_CombineLayer_two_time_dims():
   with make_scope() as session:
     n_dim = 5
