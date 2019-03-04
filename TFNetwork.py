@@ -489,7 +489,8 @@ class TFNetwork(object):
         raise
       if debug_print_layer_output_shape:
         layer.output.placeholder = tf.Print(
-          layer.output.placeholder, [layer_class.cls_get_tf_scope_name(name), "shape:", tf.shape(layer.output.placeholder)],
+          layer.output.placeholder,
+          [layer_class.cls_get_tf_scope_name(name), "shape:", str(layer.output), tf.shape(layer.output.placeholder)],
           summarize=10, name="debug_print_layer_output_shape")
       if debug_add_check_numerics_on_output and layer.output.dtype.startswith("float") and not layer.allow_inf_in_output:
         print("debug_add_check_numerics_on_output: add for layer %r: %r" % (name, layer.output.placeholder))
