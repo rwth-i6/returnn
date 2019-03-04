@@ -595,6 +595,25 @@ class Data(object):
     data = data.copy_with_feature_dim_axis(1)
     return data
 
+  def copy_as_batch_spatial_major(self):
+    """
+    :return: copy with batch_dim_axis == 0, then all dynamic axes, then any other spatial axes, last feature axis
+    :rtype: Data
+    """
+    data = self.copy_as_batch_major()
+    if data.feature_dim_axis is not None:
+      data = data.copy_with_feature_last()
+    if data.size_placeholder:
+      for i, (j, size) in enumerate(sorted(data.size_placeholder.items())):
+        data = data.copy_move_axis(data.get_batch_axis(j), i + 1)
+    if data.feature_dim_axis is not None:
+      assert data.feature_dim_axis == data.batch_ndim - 1
+      # Maybe reset feature_dim_axis to unspecified.
+      if data.feature_dim_axis_or_unspecified is not NotSpecified:
+        if data._default_feature_dim_axis() == data.feature_dim_axis:
+          data.feature_dim_axis = NotSpecified
+    return data
+
   def copy_with_feature_last(self):
     """
     :return: copy of self with feature_dim_axis being the very last axis
