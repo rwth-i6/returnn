@@ -1752,7 +1752,7 @@ class Engine(object):
 
     if not output_layer:
       output_layer = self._get_output_layer()
-    output = output_layer.output.copy_as_batch_major()
+    output = output_layer.output.copy_as_batch_spatial_major()
     # Note: We kind of assume that the target, and its class labels, matches this output layer.
     # Of course this is not true in general.
     # Instead of introducing some more involved logic here, we just check whether the dim matches.
@@ -1766,6 +1766,7 @@ class Engine(object):
     assert output_file
     assert not os.path.exists(output_file)
     print("Forwarding to HDF file: %s" % output_file, file=log.v2)
+    print("Forward output:", output, file=log.v3)
     writer = SimpleHDFWriter(filename=output_file, dim=output.dim, ndim=output.ndim, labels=labels)
 
     def extra_fetches_cb(inputs, seq_tag, **kwargs):
