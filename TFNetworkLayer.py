@@ -5355,15 +5355,16 @@ class FramewiseStatisticsLayer(LayerBase):
 
 class PrintLayer(LayerBase):
   """
-  Prints the sources to console/log, via :func:`tf.Print`.
+  Prints the sources to console/log, via :func:`TFUtil.py_print`.
   """
   layer_class = "print"
 
   def __init__(self, **kwargs):
     super(PrintLayer, self).__init__(**kwargs)
+    from TFUtil import py_print
     with tf.name_scope("print_layer"):
       source = self.sources[0]
-      output = tf.Print(source.output.placeholder, [source.output.placeholder], kwargs["name"], summarize=99)
+      output = py_print(source.output.placeholder, [source.output.placeholder], kwargs["name"], summarize=99)
       self.output.placeholder = output
       self.output.size_placeholder = source.output.size_placeholder.copy()
 
