@@ -7237,13 +7237,14 @@ def string_words_calc_wer(hyps, refs):
   return wer, get_sparse_tensor_length(refs_sparse)
 
 
-def py_print(pass_through_value, print_args, summarize=None, first_n=None, name="py_print"):
+def py_print(pass_through_value, print_args, message=None, summarize=None, first_n=None, name="py_print"):
   """
   Like :func:`tf.Print`, but prints to Python stdout.
   Also see :func:`tf.print`, which however also does not print to Python stdout.
 
-  :param tf.Tensor pass_through_value: will return tf.identity of this, but with side effect of printing
+  :param tf.Tensor|int|float pass_through_value: will return tf.identity of this, but with side effect of printing
   :param list[str|tf.Tensor] print_args:
+  :param str|None message: A string, prefix of the error message.
   :param int summarize: Only print this many entries of each tensor. If None, then a
     maximum of 3 elements are printed per input tensor.
   :param int first_n: Only log `first_n` number of times. Negative numbers log always; this is the default.
@@ -7265,6 +7266,8 @@ def py_print(pass_through_value, print_args, summarize=None, first_n=None, name=
     if first_n > 0 and first_n > Counter.count:
       return False
     s = ""
+    if message:
+      s += message
     for arg in _print_args:
       # Try to keep somewhat consistent with the tf.Print output.
       if isinstance(arg, bytes):
