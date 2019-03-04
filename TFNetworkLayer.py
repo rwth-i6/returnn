@@ -5916,15 +5916,15 @@ class CrossEntropyLoss(Loss):
     return out
 
   def get_value(self):
-    from TFUtil import to_int32_64, smoothing_cross_entropy, safe_log
+    from TFUtil import to_int32_64, smoothing_cross_entropy, safe_log, py_print
     with tf.name_scope("loss_ce"):
       assert self.target.ndim_dense == self.output.ndim_dense
       if self.target.sparse:
         if self.use_fused and self.output_before_softmax_flat is not None:
           target_flat = self.target_flat
           if self.debug_dump:
-            target_flat = tf.Print(target_flat, [target_flat], summarize=10000, message='target word IDs ')
-            target_flat = tf.Print(target_flat, [tf.shape(target_flat)], message='sequence length ')
+            target_flat = py_print(target_flat, [target_flat], summarize=10000, message='target word IDs ')
+            target_flat = py_print(target_flat, [tf.shape(target_flat)], message='sequence length ')
           if self.label_smoothing:
             out = smoothing_cross_entropy(
               logits=self.output_before_softmax_flat, labels=to_int32_64(target_flat), vocab_size=self.target.dim,
@@ -5934,7 +5934,7 @@ class CrossEntropyLoss(Loss):
             out = tf.nn.sparse_softmax_cross_entropy_with_logits(
               logits=self.output_before_softmax_flat, labels=to_int32_64(target_flat))  # shape(labels)
           if self.debug_dump:
-            out = tf.Print(out, [tf.exp(tf.negative(out))], summarize=10000, message='target prob ')
+            out = py_print(out, [tf.exp(tf.negative(out))], summarize=10000, message='target prob ')
         else:
           assert not self.label_smoothing, "not implemented"
           print("Warning: using numerical unstable sparse Cross-Entropy loss calculation", file=log.v3)
@@ -6298,7 +6298,8 @@ class EditDistanceLoss(Loss):
     labels = self._get_target_sparse_labels()
     error = tf.edit_distance(hypothesis=output, truth=labels, normalize=False)
     if self._debug_print:
-      error = tf.Print(error, self._debug_print_out(), summarize=10)
+      from TFUtil import py_print
+      error = py_print(error, self._debug_print_out(), summarize=10)
     return self.reduce_func(error)
 
   def get_value(self):

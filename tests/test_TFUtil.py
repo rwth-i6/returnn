@@ -2090,11 +2090,11 @@ def test_get_var_update_ops__get_variable_value_copy_before_update_ops():
       # This should be the value after the update, and the grad is -2, lr 1, thus should be 2.
       v_read_val = tf.identity(v.read_value())
       res = [
-        tf.Print(0, ["loss:", loss]), tf.Assert(tf.equal(loss, 1.0), ["loss ", loss, " == 1"]),
-        tf.Print(0, ["v:", v]),
-        tf.Print(0, ["v.value:", v_val]),
+        py_print(0, ["loss:", loss]), tf.Assert(tf.equal(loss, 1.0), ["loss ", loss, " == 1"]),
+        py_print(0, ["v:", v]),
+        py_print(0, ["v.value:", v_val]),
         tf.Assert(tf.equal(v_val, 0.0), ["v.value ", v_val, " == 0"]),  # last snapshot
-        tf.Print(0, ["v.read_value:", v_read_val]),
+        py_print(0, ["v.read_value:", v_read_val]),
         tf.Assert(tf.equal(v_read_val, 2.0), ["v.read_value ", v_read_val, " == 2"])  # after update
       ]
     session.run(v.initializer)

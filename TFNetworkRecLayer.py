@@ -4288,7 +4288,8 @@ class KenLmStateLayer(_ConcatInputLayer):
       new_rel_scores = new_abs_scores - prev_scores
     if debug:
       # Print some info. Only for the first 3 steps because it will spam a lot.
-      new_rel_scores = tf.cond(tf.less_equal(prev_step, 2), lambda: tf.Print(new_rel_scores, [
+      from TFUtil import py_print
+      new_rel_scores = tf.cond(tf.less_equal(prev_step, 2), lambda: py_print(new_rel_scores, [
         str(self), "; step: ", prev_step,
         "; input shape: ", tf.shape(self.input_data.placeholder), str(self.input_data),
         "; input: ", self.input_data.placeholder,
