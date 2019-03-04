@@ -7237,6 +7237,52 @@ def string_words_calc_wer(hyps, refs):
   return wer, get_sparse_tensor_length(refs_sparse)
 
 
+def py_print(pass_through_value, print_args, summarize=None, first_n=None, name="py_print"):
+  """
+  Like :func:`tf.Print`, but prints to Python stdout.
+  Also see :func:`tf.print`, which however also does not print to Python stdout.
+
+  :param tf.Tensor pass_through_value: will return tf.identity of this, but with side effect of printing
+  :param list[str|tf.Tensor] print_args:
+  :param int summarize: Only print this many entries of each tensor. If None, then a
+    maximum of 3 elements are printed per input tensor.
+  :param int first_n: Only log `first_n` number of times. Negative numbers log always; this is the default.
+  :param str name:
+  :return: tf.identity(pass_through_value) with side effect of printing
+  :rtype: tf.Tensor
+  """
+  import numpy
+  if summarize is None:
+    summarize = 3
+  if first_n is None:
+    first_n = -1
+
+  class Counter:
+    count = 0
+
+  def _py_print(*_print_args):
+    Counter.count += 1
+    if first_n > 0 and first_n > Counter.count:
+      return False
+    s = ""
+    for arg in _print_args:
+      # Try to keep somewhat consistent with the tf.Print output.
+      if isinstance(arg, bytes):
+        arg_s = "[%s]" % arg.decode("utf8")
+      elif isinstance(arg, numpy.ndarray):
+        arg_s = numpy.array2string(arg, edgeitems=summarize)
+      else:
+        arg_s = "[%r]" % arg
+      s += arg_s
+    print(s)
+    return True
+
+  with tf.name_scope(name):
+    print_op = tf.py_func(_py_print, print_args, tf.bool, name=name)
+    with tf.control_dependencies([print_op]):
+      return tf.identity(pass_through_value)
+
+
 def get_positional_encoding(num_channels, length=None, position=None, min_timescale=1.0, max_timescale=1.0e4):
   """
   Gets a bunch of sinusoids of different frequencies.
