@@ -1937,7 +1937,8 @@ def test_attention_forward_hdf_then_unflatten_2d():
   inner_att_output_layer = att_rec_layer.cell.net.layers["att_weights"]
   print("inner att weights layer:", inner_att_output_layer, inner_att_output_layer.output.size_placeholder)
 
-  assert att_output_layer.output.shape == (None, None, 1)  # dec-time, enc-time. the 1 is just an artifact of the construct
+  # dec-time, enc-time. the 1 is just an artifact of the construct
+  assert att_output_layer.output.copy_as_batch_spatial_major().shape == (None, None, 1)
   assert len(att_output_layer.output.size_placeholder) == 2  # encoder and decoder time
   hdf_fn = _get_tmp_file(suffix=".hdf")
   os.remove(hdf_fn)  # forward_to_hdf expects that the file does not exist
