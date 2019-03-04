@@ -1623,7 +1623,9 @@ class _SubnetworkRecCell(object):
           transformed_cache[layer] = transformed_layer
           return transformed_layer
         outputs_flat = [
-          maybe_transform(self.net.layers[k]).output.placeholder for k in sorted(self._initial_outputs)]
+          maybe_transform(self.net.layers[k]).output.copy_compatible_to(
+            self.layer_data_templates[k].output).placeholder
+          for k in sorted(self._initial_outputs)]
         extra_flat = [
           sorted_values_from_dict(maybe_transform(self.net.layers[k]).rec_vars_outputs)
           for k in sorted(self._initial_extra_outputs)]
