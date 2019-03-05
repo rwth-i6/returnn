@@ -75,6 +75,8 @@ def dump_dataset(dataset, options):
         threshold=sys.maxsize if options.stdout_limit == float("inf") else int(options.stdout_limit))
     if options.stdout_as_bytes:
       Util.set_pretty_print_as_bytes(options.stdout_as_bytes)
+  elif options.type == "print_tag":
+    print("Dump seq tag to stdout", file=log.v3)
   elif options.type == "print_shape":
     print("Dump shape to stdout", file=log.v3)
   elif options.type == "plot":
@@ -107,32 +109,35 @@ def dump_dataset(dataset, options):
       total_time_estimated = start_elapsed / complete_frac
       remaining_estimated = total_time_estimated - start_elapsed
       progress += " (%s)" % hms(remaining_estimated)
-    data = dataset.get_data(seq_idx, options.key)
-    if options.type == "numpy":
-      numpy.savetxt("%s%i.data%s" % (options.dump_prefix, seq_idx, options.dump_postfix), data)
-    elif options.type == "stdout":
+    if options.type == "print_tag":
       print("seq %s tag:" % progress, dataset.get_tag(seq_idx))
-      print("seq %s data:" % progress, pretty_print(data))
-    elif options.type == "print_shape":
-      print("seq %s data shape:" % progress, data.shape)
-    elif options.type == "plot":
-      plot(data)
-    for target in dataset.get_target_list():
-      targets = dataset.get_targets(target, seq_idx)
+    else:
+      data = dataset.get_data(seq_idx, options.key)
       if options.type == "numpy":
-        numpy.savetxt("%s%i.targets.%s%s" % (options.dump_prefix, seq_idx, target, options.dump_postfix), targets, fmt='%i')
+        numpy.savetxt("%s%i.data%s" % (options.dump_prefix, seq_idx, options.dump_postfix), data)
       elif options.type == "stdout":
-        extra = ""
-        if target in dataset.labels and len(dataset.labels[target]) > 1:
-          labels = dataset.labels[target]
-          if len(labels) < 1000 and all([len(l) == 1 for l in labels]):
-            join_str = ""
-          else:
-            join_str = " "
-          extra += " (%r)" % join_str.join(map(dataset.labels[target].__getitem__, targets))
-        print("seq %i target %r: %s%s" % (seq_idx, target, pretty_print(targets), extra))
+        print("seq %s tag:" % progress, dataset.get_tag(seq_idx))
+        print("seq %s data:" % progress, pretty_print(data))
       elif options.type == "print_shape":
-        print("seq %i target %r shape:" % (seq_idx, target), targets.shape)
+        print("seq %s data shape:" % progress, data.shape)
+      elif options.type == "plot":
+        plot(data)
+      for target in dataset.get_target_list():
+        targets = dataset.get_targets(target, seq_idx)
+        if options.type == "numpy":
+          numpy.savetxt("%s%i.targets.%s%s" % (options.dump_prefix, seq_idx, target, options.dump_postfix), targets, fmt='%i')
+        elif options.type == "stdout":
+          extra = ""
+          if target in dataset.labels and len(dataset.labels[target]) > 1:
+            labels = dataset.labels[target]
+            if len(labels) < 1000 and all([len(l) == 1 for l in labels]):
+              join_str = ""
+            else:
+              join_str = " "
+            extra += " (%r)" % join_str.join(map(dataset.labels[target].__getitem__, targets))
+          print("seq %i target %r: %s%s" % (seq_idx, target, pretty_print(targets), extra))
+        elif options.type == "print_shape":
+          print("seq %i target %r shape:" % (seq_idx, target), targets.shape)
     seq_len = dataset.get_seq_length(seq_idx)
     for key in dataset.get_data_keys():
       seq_len_stats[key].collect([seq_len[key]])
