@@ -110,7 +110,7 @@ def dump_dataset(dataset, options):
       remaining_estimated = total_time_estimated - start_elapsed
       progress += " (%s)" % hms(remaining_estimated)
     if options.type == "print_tag":
-      print("seq %s tag:" % progress, dataset.get_tag(seq_idx))
+      print("seq %s tag:" % (progress if log.verbose[2] else progress_prefix), dataset.get_tag(seq_idx))
     else:
       data = dataset.get_data(seq_idx, options.key)
       if options.type == "numpy":
@@ -149,16 +149,17 @@ def dump_dataset(dataset, options):
     seq_idx += 1
 
   print("Done. Total time %s. More seqs which we did not dumped: %s" % (
-    hms(time.time() - start_time), dataset.is_less_than_num_seqs(seq_idx)), file=log.v1)
+    hms(time.time() - start_time), dataset.is_less_than_num_seqs(seq_idx)), file=log.v2)
   for key in dataset.get_data_keys():
     seq_len_stats[key].dump(stream_prefix="Seq-length %r " % key, stream=log.v2)
   if stats:
-    stats.dump(output_file_prefix=options.dump_stats, stream_prefix="Data %r " % options.key, stream=log.v2)
+    stats.dump(output_file_prefix=options.dump_stats, stream_prefix="Data %r " % options.key, stream=log.v1)
 
 
-def init(config_str):
+def init(config_str, verbosity):
   """
   :param str config_str: either filename to config-file, or dict for dataset
+  :param int verbosity:
   """
   rnn.initBetterExchook()
   rnn.initThreadJoinHack()
@@ -179,11 +180,11 @@ def init(config_str):
   global config
   config = rnn.config
   config.set("log", None)
-  config.set("log_verbosity", 4)
+  config.set("log_verbosity", verbosity)
   if datasetDict:
     config.set("train", datasetDict)
   rnn.initLog()
-  print("Returnn dump-dataset starting up.", file=log.v1)
+  print("Returnn dump-dataset starting up.", file=log.v2)
   rnn.returnnGreeting()
   rnn.initFaulthandler()
   rnn.initConfigJsonNetwork()
@@ -191,7 +192,7 @@ def init(config_str):
   rnn.printTaskProperties()
 
 
-def main(argv):
+def main():
   argparser = argparse.ArgumentParser(description='Dump something from dataset.')
   argparser.add_argument('crnn_config', help="either filename to config-file, or dict for dataset")
   argparser.add_argument('--epoch', type=int, default=1)
@@ -201,13 +202,14 @@ def main(argv):
   argparser.add_argument('--type', default='stdout', help="'numpy', 'stdout', 'plot', 'null' (default 'stdout')")
   argparser.add_argument("--stdout_limit", type=float, default=None, help="e.g. inf to disable")
   argparser.add_argument("--stdout_as_bytes", action="store_true")
+  argparser.add_argument("--verbosity", type=int, default=4, help="overwrites log_verbosity (default: 4)")
   argparser.add_argument('--dump_prefix', default='/tmp/crnn.dump-dataset.')
   argparser.add_argument('--dump_postfix', default='.txt.gz')
   argparser.add_argument("--key", default="data", help="data-key, e.g. 'data' or 'classes'. (default: 'data')")
   argparser.add_argument('--stats', action="store_true", help="calculate mean/stddev stats")
   argparser.add_argument('--dump_stats', help="file-prefix to dump stats to")
-  args = argparser.parse_args(argv[1:])
-  init(config_str=args.crnn_config)
+  args = argparser.parse_args()
+  init(config_str=args.crnn_config, verbosity=args.verbosity)
   try:
     dump_dataset(rnn.train_data, args)
   except KeyboardInterrupt:
@@ -218,4 +220,4 @@ def main(argv):
 
 
 if __name__ == '__main__':
-  main(sys.argv)
+  main()
