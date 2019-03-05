@@ -2656,7 +2656,7 @@ class RnnCellLayer(_ConcatInputLayer):
     return self._hidden_state
 
   @classmethod
-  def get_state_by_key(cls, state, key):
+  def get_state_by_key(cls, state, key, shape=None):
     """
     :param tf.Tensor|tuple[tf.Tensor]|namedtuple state:
     :param int|str|None key:
@@ -2683,7 +2683,10 @@ class RnnCellLayer(_ConcatInputLayer):
       assert key is None, "state %r is a tensor, thus key %r must be None" % (state, key)
       x = state
     assert isinstance(x, tf.Tensor)
-    x.set_shape(tf.TensorShape([None, None]))  # (batch,dim)
+    if shape is None:
+      x.set_shape(tf.TensorShape([None, None]))  # Assume (batch,dim).
+    else:
+      x.set_shape(tf.TensorShape([None] * len(shape)))
     return x
 
   def get_last_hidden_state(self, key):
@@ -2712,87 +2715,21 @@ class RnnCellLayer(_ConcatInputLayer):
     :param RecLayer|LayerBase|None rec_layer: for the scope
     :rtype: tf.Tensor|tuple[tf.Tensor]|namedtuple
     """
-    from Util import dummy_noop_ctx
     with tf.name_scope("rec_initial_state"):
       init_value = initial_state
       dim = cls.get_hidden_state_size(n_out=n_out, unit=unit, unit_opts=unit_opts, **kwargs)
-
-      def make(d, v, key):
-        """
-        :param int d: dim
-        :param LayerBase|int|float|str|None v: value
-        :param str|int|None key:
-        :return: tensor/variable for the state
-        :rtype: tf.Tensor
-        """
-        assert isinstance(d, int)
-        assert isinstance(v, (LayerBase, int, float, str, type(None)))
-        assert isinstance(key, (str, int, type(None)))
-        key_name = str(key if key is not None else "var")
-        shape = [batch_dim, d]
-        if isinstance(v, LayerBase):
-          h = v.get_last_hidden_state(key="*")
-          if h is not None:
-            h.set_shape(tf.TensorShape((None, d)))
-            return h
-          assert v.output.batch_dim_axis == 0
-          assert v.output.time_dim_axis is None
-          assert v.output.shape == (d,)
-          return v.output.placeholder
-        elif v == "zeros" or not v:
-          return tf.zeros(shape)
-        elif v == "ones" or v == 1:
-          return tf.ones(shape)
-        elif v == "var":
-          with rec_layer.var_creation_scope() if rec_layer else dummy_noop_ctx():
-            var = tf.get_variable("initial_%s" % key_name, shape=(d,), initializer=tf.zeros_initializer())
-          from TFUtil import expand_dims_unbroadcast
-          var = expand_dims_unbroadcast(var, axis=0, dim=batch_dim)  # (batch,dim)
-          return var
-        elif v == "keep_over_epoch" or v == "keep_over_epoch_no_init":  # the latter should only be used to build a graph for use outside returnn
-          from TFUtil import CollectionKeys
-          assert rec_layer is not None
-          with rec_layer.var_creation_scope():
-            var = tf.get_variable(
-              'keep_state_%s' % key_name,
-              validate_shape=False, initializer=tf.zeros(()),  # dummy state, will not be used like this
-              trainable=False, collections=[tf.GraphKeys.GLOBAL_VARIABLES, CollectionKeys.STATE_VARS])
-          assert isinstance(var, tf.Variable)
-          var.set_shape((None, d))
-          rec_layer.saveable_param_replace[var] = None  # Do not save this variable.
-
-          def update_var():
-            if isinstance(rec_layer, RecLayer) and isinstance(rec_layer.cell, _SubnetworkRecCell):
-              final_rec_vars = rec_layer.cell.get_final_rec_vars(name)
-              last_state = cls.get_state_by_key(final_rec_vars['state'], key=key)
-            else:
-              last_state = rec_layer.get_last_hidden_state(key=key)
-            last_state.set_shape((None, d))
-            rec_layer.network.register_post_control_dependencies([
-              tf.assert_equal(tf.shape(last_state), shape),
-              tf.assign(var, last_state, validate_shape=False)])
-          rec_layer.post_init_hooks.append(update_var)
-          if v == "keep_over_epoch_no_init":
-            return var.value()
-          else:
-            step = rec_layer.network.get_epoch_step()
-            # Note: If you get somewhere an error like `In[0] is not a matrix` or so,
-            # likely `update_var` was not correctly called or handled.
-            s = tf.cond(tf.equal(step, 0), lambda: tf.zeros(shape), lambda: var.value())
-            s.set_shape((None, d))
-            return s
-        else:
-          raise Exception("invalid initial state type %r for sub-layer %r, key %r" % (v, name, key))
 
       def make_list(keys):
         assert isinstance(keys, (tuple, list))
         assert len(keys) == len(dim)
         if isinstance(init_value, (list, tuple)):
           assert len(init_value) == len(dim)
-          return [make(d, v_, k) for (d, v_, k) in zip(dim, init_value, keys)]
+          return [cls.get_rec_initial_state_inner(initial_shape=(batch_dim, d), initial_state=v_, key=k, name=name,
+                                                  rec_layer=rec_layer) for (d, v_, k) in zip(dim, init_value, keys)]
         # Do not broadcast LayerBase automatically in this case.
         assert isinstance(init_value, (int, float, str, type(None)))
-        return [make(d, init_value, k) for d, k in zip(dim, keys)]
+        return [cls.get_rec_initial_state_inner(initial_shape=(batch_dim, d), initial_state=init_value, key=k,
+                                                name=name, rec_layer=rec_layer) for d, k in zip(dim, keys)]
 
       # Make it the same type because nest.assert_same_structure() will complain otherwise.
       from Util import is_namedtuple
@@ -2805,7 +2742,8 @@ class RnnCellLayer(_ConcatInputLayer):
         if isinstance(init_value, dict):
           assert set(init_value.keys()) == set(keys), "You must specify all keys for the state dimensions %r." % dim
           assert len(init_value) == len(dim)
-          s = {k: make(d, init_value[k], key=k) for (k, d) in zip(keys, dim)}
+          s = {k: cls.get_rec_initial_state_inner(initial_shape=(batch_dim, d), initial_state=init_value[k], key=k,
+                                                  name=name, rec_layer=rec_layer) for (k, d) in zip(keys, dim)}
         else:
           s = make_list(keys=keys)
           assert len(s) == len(keys)
@@ -2816,9 +2754,87 @@ class RnnCellLayer(_ConcatInputLayer):
         assert len(s) == len(dim)
         return type(dim)(s)
       elif isinstance(dim, int):
-        return make(dim, init_value, key=None)
+        return cls.get_rec_initial_state_inner(initial_shape=(batch_dim, dim), initial_state=init_value, key=None,
+                                               name=name, rec_layer=rec_layer)
       else:
         raise Exception("Did not expect hidden_state_size %r." % dim)
+
+  @classmethod
+  def get_rec_initial_state_inner(cls, initial_shape, name, state_key='state', key=None, initial_state=None,
+                                  shape_invariant=None, rec_layer=None):
+    """
+    Generate initial hidden state. Primarily used as a inner function for RnnCellLayer.get_rec_initial_state.
+
+    :param tuple initial_shape: shape of the initial state.
+    :param str name: layer name.
+    :param str state_key: key to be used to get the state from final_rec_vars.
+    :param str key: key/attribute of the state if state is a dictionary/namedtuple (like 'c' and 'h' for LSTM states).
+    :param LayerBase|str|int|float|None|list|tuple|namedtuple initial_state: see code
+    :param tuple shape_invariant: If provided, directly used. Otherwise, guessed from initial_shape (see code below).
+    :param RecLayer|LayerBase|None rec_layer: For the scope.
+    :rtype: tf.Tensor
+    """
+    key_name = str(key if key is not None else "var")
+    from Util import dummy_noop_ctx
+    if shape_invariant is None:
+      shape_invariant = tuple([d if isinstance(d, int) and d != 0 else None for d in initial_shape])
+    if isinstance(initial_state, LayerBase):
+      h = initial_state.get_last_hidden_state(key="*")
+      if h is not None:
+        h.set_shape(shape_invariant)
+        return h
+      assert initial_state.output.batch_dim_axis == 0
+      assert initial_state.output.time_dim_axis is None
+      assert initial_state.output.shape == initial_shape[1:]
+      return initial_state.output.placeholder
+    elif initial_state == "zeros" or not initial_state:
+      return tf.zeros(initial_shape)
+    elif initial_state == "ones" or initial_state == 1:
+      return tf.ones(initial_shape)
+    elif initial_state == "var":  # Initial state is a trainable variable.
+      # Assume the first dimension to be batch_dim.
+      assert shape_invariant[0] is None and all([d is not None for d in shape_invariant[1:]])
+      with rec_layer.var_creation_scope() if rec_layer else dummy_noop_ctx():
+        var = tf.get_variable("initial_%s" % key_name, shape=initial_shape[1:], initializer=tf.zeros_initializer())
+      from TFUtil import expand_dims_unbroadcast
+      var = expand_dims_unbroadcast(var, axis=0, dim=initial_shape[0])  # (batch,dim)
+      return var
+    elif initial_state == "keep_over_epoch" or initial_state == "keep_over_epoch_no_init":
+      # "keep_over_epoch_no_init" should only be used to build a graph for use outside returnn.
+      from TFUtil import CollectionKeys
+      assert rec_layer is not None
+      with rec_layer.var_creation_scope():
+        var = tf.get_variable(
+          'keep_state_%s' % key_name,
+          validate_shape=False, initializer=tf.zeros(()),  # Dummy state, will not be used like this.
+          trainable=False, collections=[tf.GraphKeys.GLOBAL_VARIABLES, CollectionKeys.STATE_VARS])
+      assert isinstance(var, tf.Variable)
+      var.set_shape(shape_invariant)
+      rec_layer.saveable_param_replace[var] = None  # Do not save this variable.
+
+      def update_var():
+        if isinstance(rec_layer, RecLayer) and isinstance(rec_layer.cell, _SubnetworkRecCell):
+          final_rec_vars = rec_layer.cell.get_final_rec_vars(name)
+          last_state = cls.get_state_by_key(final_rec_vars[state_key], key=key, shape=initial_shape)
+        else:
+          last_state = rec_layer.get_last_hidden_state(key=key)
+        last_state.set_shape(shape_invariant)
+        rec_layer.network.register_post_control_dependencies([
+          tf.assert_equal(tf.shape(last_state), initial_shape),
+          tf.assign(var, last_state, validate_shape=False)])
+
+      rec_layer.post_init_hooks.append(update_var)
+      if initial_state == "keep_over_epoch_no_init":
+        return var.value()
+      else:
+        step = rec_layer.network.get_epoch_step()
+        # Note: If you get somewhere an error like `In[0] is not a matrix` or so,
+        # likely `update_var` was not correctly called or handled.
+        s = tf.cond(tf.equal(step, 0), lambda: tf.zeros(initial_shape), lambda: var.value())
+        s.set_shape(shape_invariant)
+        return s
+    else:
+      raise Exception("invalid initial state type %r for sub-layer %r, key %r" % (initial_state, name, key))
 
   @classmethod
   def get_rec_initial_extra_outputs(cls, **kwargs):
