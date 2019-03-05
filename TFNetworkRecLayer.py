@@ -2660,6 +2660,7 @@ class RnnCellLayer(_ConcatInputLayer):
     """
     :param tf.Tensor|tuple[tf.Tensor]|namedtuple state:
     :param int|str|None key:
+    :param tuple[int|None] shape: Shape of the state.
     :rtype: tf.Tensor
     """
     from tensorflow.python.util import nest
@@ -4010,14 +4011,14 @@ class SelfAttentionLayer(_ConcatInputLayer):
   recurrent = True
 
   def __init__(self, num_heads, total_key_dim, forward_weights_init="glorot_uniform", attention_dropout=0.0,
-               attention_left_only=False,
-               **kwargs):
+               attention_left_only=False, initial_state=None, **kwargs):
     """
     :param int num_heads:
     :param int total_key_dim:
     :param str forward_weights_init: see :func:`TFUtil.get_initializer`
     :param float attention_dropout:
     :param bool attention_left_only: will mask out the future. see Attention is all you need.
+    :param str|float|int|None initial_state: see RnnCellLayer.get_rec_initial_state_inner().
     """
     super(SelfAttentionLayer, self).__init__(**kwargs)
     assert self._rec_previous_layer or self.input_data.time_dim_axis is not None, (
@@ -4130,16 +4131,20 @@ class SelfAttentionLayer(_ConcatInputLayer):
     return out
 
   @classmethod
-  def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, num_heads, total_key_dim, n_out, sources=(), **kwargs):
+  def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, num_heads, total_key_dim, n_out, name,
+                                    initial_state=None, sources=(), **kwargs):
     data = get_concat_sources_data_template(sources)
     data = data.copy_as_batch_major()
     if data.time_dim_axis is None:
+      kv_dim = total_key_dim + n_out
       # Assume inside RecLayer.
       # Before, we used a tf.TensorArray.
       # However, that has higher memory consumptions than just using a tensor and concatenating to it.
-      total_value_dim = n_out
       # (batch,heads,time,kv-dim//heads)
-      kv_left = tf.zeros((batch_dim, num_heads, 0, (total_key_dim + total_value_dim) // num_heads))
+      kv_left = RnnCellLayer.get_rec_initial_state_inner(rec_layer=rec_layer, state_key="kv_left",
+                                                         name=name, initial_state=initial_state,
+                                                         initial_shape=(batch_dim, num_heads, 0, kv_dim // num_heads),
+                                                         shape_invariant=(None, num_heads, None, kv_dim // num_heads))
       return {"kv_left": kv_left}
     return {}
 
