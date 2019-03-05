@@ -24,6 +24,38 @@ class EpochWiseFilter:
     self.epochs_opts = epochs_opts
     self.debug_msg_prefix = debug_msg_prefix
 
+  @classmethod
+  def filter_epoch(cls, opts, seq_order, get_seq_len, debug_msg_prefix):
+    """
+    :param dict[str]|Util.CollectionReadCheckCovered opts:
+    :param list[int] seq_order: list of seq idxs
+    :param ((int)->int) get_seq_len: seq idx -> len
+    :param str debug_msg_prefix:
+    :return: new seq_order
+    :rtype: list[int]
+    """
+    import Util
+    if not isinstance(opts, Util.CollectionReadCheckCovered):
+      opts = Util.CollectionReadCheckCovered(opts)
+    if opts.get("max_mean_len"):
+      max_mean_len = opts.get("max_mean_len")
+      lens_and_seqs = numpy.array(sorted([(get_seq_len(idx), idx) for idx in seq_order]))
+      best_num = Util.binary_search_any(
+        cmp=lambda num: numpy.mean(lens_and_seqs[:num, 0]) - max_mean_len, low=1, high=len(lens_and_seqs) + 1)
+      assert best_num is not None
+      selected_seq_idxs = set(lens_and_seqs[:best_num, 1])
+      # Select subset of seq_order. Keep order as-is.
+      seq_order = [seq_idx for seq_idx in seq_order if seq_idx in selected_seq_idxs]
+      print(
+        ("%sOld mean seq len is %f, new is %f, requested max is %f."
+         " Old num seqs is %i, new num seqs is %i.") %
+        (debug_msg_prefix,
+         float(numpy.mean(lens_and_seqs[:, 0])), float(numpy.mean(lens_and_seqs[:best_num, 0])),
+         max_mean_len, len(lens_and_seqs), best_num),
+        file=log.v4)
+    opts.assert_all_read()
+    return seq_order
+
   def filter(self, epoch, seq_order, get_seq_len):
     """
     :param int|None epoch:
@@ -32,7 +64,6 @@ class EpochWiseFilter:
     :return: new seq_order
     """
     epoch = epoch or 1
-    import Util
     old_num_seqs = len(seq_order)
     any_filter = False
     for (ep_start, ep_end), value in sorted(self.epochs_opts.items()):
@@ -44,24 +75,9 @@ class EpochWiseFilter:
       assert isinstance(value, dict)
       if ep_start <= epoch <= ep_end:
         any_filter = True
-        opts = Util.CollectionReadCheckCovered(value)
-        if opts.get("max_mean_len"):
-          max_mean_len = opts.get("max_mean_len")
-          lens_and_seqs = numpy.array(sorted([(get_seq_len(idx), idx) for idx in seq_order]))
-          best_num = Util.binary_search_any(
-            cmp=lambda num: numpy.mean(lens_and_seqs[:num, 0]) - max_mean_len, low=1, high=len(lens_and_seqs) + 1)
-          assert best_num is not None
-          selected_seq_idxs = set(lens_and_seqs[:best_num, 1])
-          # Select subset of seq_order. Keep order as-is.
-          seq_order = [seq_idx for seq_idx in seq_order if seq_idx in selected_seq_idxs]
-          print(
-            ("%s, epoch %i. Old mean seq len is %f, new is %f, requested max is %f."
-             " Old num seqs is %i, new num seqs is %i.") %
-            (self.debug_msg_prefix, epoch,
-             float(numpy.mean(lens_and_seqs[:, 0])), float(numpy.mean(lens_and_seqs[:best_num, 0])),
-             max_mean_len, len(lens_and_seqs), best_num),
-            file=log.v4)
-        opts.assert_all_read()
+        seq_order = self.filter_epoch(
+          opts=value, debug_msg_prefix="%s, epoch %i. " % (self.debug_msg_prefix, epoch),
+          seq_order=seq_order, get_seq_len=get_seq_len)
     if any_filter:
       print("%s, epoch %i. Old num seqs %i, new num seqs %i." % (
         self.debug_msg_prefix, epoch, old_num_seqs, len(seq_order)), file=log.v4)

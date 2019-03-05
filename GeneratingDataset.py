@@ -2057,6 +2057,7 @@ class LibriSpeechCorpus(CachedDataset2):
     if not epoch:
       epoch = 1
     self._audio_random.seed(self._fixed_random_seed or epoch or 1)
+    get_seq_len = lambda i: len(self.transs[self._reference_seq_order[i]])
     if seq_list is not None:
       seqs = [i for i in range(len(self._reference_seq_order)) if self._get_tag(i) in seq_list]
       seqs = {self._get_tag(i): i for i in seqs}
@@ -2067,10 +2068,11 @@ class LibriSpeechCorpus(CachedDataset2):
     else:
       num_seqs = len(self._reference_seq_order)
       self._seq_order = self.get_seq_order_for_epoch(
-        epoch=epoch, num_seqs=num_seqs, get_seq_len=lambda i: len(self.transs[self._reference_seq_order[i]]))
+        epoch=epoch, num_seqs=num_seqs, get_seq_len=get_seq_len)
       self._num_seqs = len(self._seq_order)
     if self.epoch_wise_filter:
       # Note: A more generic variant of this code is :class:`MetaDataset.EpochWiseFilter`.
+      from MetaDataset import EpochWiseFilter
       old_num_seqs = self._num_seqs
       any_filter = False
       for (ep_start, ep_end), value in sorted(self.epoch_wise_filter.items()):
@@ -2082,27 +2084,34 @@ class LibriSpeechCorpus(CachedDataset2):
         assert isinstance(value, dict)
         if ep_start <= epoch <= ep_end:
           any_filter = True
-          opts = CollectionReadCheckCovered(value)
+          opts = CollectionReadCheckCovered(value.copy())
           if opts.get("subdirs") is not None:
             subdirs = opts.get("subdirs", None)
             assert isinstance(subdirs, list)
             self._seq_order = [idx for idx in self._seq_order if self._reference_seq_order[idx][0] in subdirs]
             assert self._seq_order, "subdir filter %r invalid?" % (subdirs,)
-          if opts.get("max_mean_len"):
-            max_mean_len = opts.get("max_mean_len")
-            seqs = numpy.array(
-              sorted([(len(self.transs[self._reference_seq_order[idx]]), idx) for idx in self._seq_order]))
-            # Note: This is somewhat incorrect. But keep the behavior, such that old setups are reproducible.
-            num = Util.binary_search_any(
-              cmp=lambda num: numpy.mean(seqs[:num, 0]) > max_mean_len, low=1, high=len(seqs) + 1)
-            assert num is not None
-            self._seq_order = list(seqs[:num, 1])
-            print(
-              ("%s, epoch %i. Old mean seq len (transcription) is %f, new is %f, requested max is %f."
-               " Old num seqs is %i, new num seqs is %i.") %
-              (self, epoch, float(numpy.mean(seqs[:, 0])), float(numpy.mean(seqs[:num, 0])), max_mean_len,
-               len(seqs), num),
-              file=log.v4)
+          if opts.get("use_new_filter"):
+            if "subdirs" in opts.collection:
+              opts.collection.pop("subdirs")
+            self._seq_order = EpochWiseFilter.filter_epoch(
+              opts=opts, debug_msg_prefix="%s, epoch %i. " % (self, epoch),
+              get_seq_len=get_seq_len, seq_order=self._seq_order)
+          else:
+            if opts.get("max_mean_len"):
+              max_mean_len = opts.get("max_mean_len")
+              seqs = numpy.array(
+                sorted([(len(self.transs[self._reference_seq_order[idx]]), idx) for idx in self._seq_order]))
+              # Note: This is somewhat incorrect. But keep the behavior, such that old setups are reproducible.
+              num = Util.binary_search_any(
+                cmp=lambda num: numpy.mean(seqs[:num, 0]) > max_mean_len, low=1, high=len(seqs) + 1)
+              assert num is not None
+              self._seq_order = list(seqs[:num, 1])
+              print(
+                ("%s, epoch %i. Old mean seq len (transcription) is %f, new is %f, requested max is %f."
+                 " Old num seqs is %i, new num seqs is %i.") %
+                (self, epoch, float(numpy.mean(seqs[:, 0])), float(numpy.mean(seqs[:num, 0])), max_mean_len,
+                 len(seqs), num),
+                file=log.v4)
           opts.assert_all_read()
           self._num_seqs = len(self._seq_order)
       if any_filter:
