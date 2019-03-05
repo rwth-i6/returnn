@@ -614,6 +614,11 @@ class LayerBase(object):
     :return: param
     :rtype tf.Variable
     """
+    if not self.trainable:
+      trainable_collection_ref = param.graph.get_collection_ref(tf.GraphKeys.TRAINABLE_VARIABLES)
+      if param in trainable_collection_ref:
+        trainable_collection_ref.remove(param)
+
     if isinstance(param, tf.Tensor):
       # This can happen with a custom_getter in tf.get_variable(), e.g. via self.reuse_params.
       # In that case, don't treat it like a param, i.e. don't save a reference in self.params,
