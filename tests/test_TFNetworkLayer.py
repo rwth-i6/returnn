@@ -708,6 +708,25 @@ def test_ConvLayer_get_valid_out_dim():
   assert_equal(ConvLayer.calc_out_dim(in_dim=2, stride=1, filter_size=3, padding="valid"), 0)
 
 
+def test_untrainable_params():
+  with make_scope() as session:
+    config = Config()
+    n_in, n_out = 2, 3
+    config.update({
+      "num_outputs": n_out,
+      "num_inputs": n_in,
+      "network": {
+        "l1": {"class": "linear", "activation": None, "n_out": n_out},
+        "output": {"class": "linear", "activation": None, "from": ["l1"], "n_out": n_out, "trainable": False}
+      }
+    })
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    l1 = network.layers["l1"]
+    l2 = network.layers["output"]
+    assert_equal(set(network.get_trainable_params()), {l1.params["W"], l1.params["b"]})
+
+
 def test_reuse_params():
   with make_scope() as session:
     config = Config()

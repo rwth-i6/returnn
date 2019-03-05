@@ -3422,6 +3422,201 @@ def test_GenericAttentionLayer_extra_spatial_multi_head():
   assert list(layer.output.size_placeholder.values())[0] is layer.weights.output.size_placeholder[0]
 
 
+def test_untrainable_sublayers():
+  with make_scope() as session:
+    config = Config()
+    n_in, n_out = 2, 3
+    net_dict = {
+      "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6},
+
+      "lstm0_fw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": 1, "from": ["source_embed"]},
+      "lstm0_bw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": -1, "from": ["source_embed"]},
+
+      "lstm1_fw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": 1, "from": ["lstm0_fw", "lstm0_bw"]},
+      "lstm1_bw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": -1, "from": ["lstm0_fw", "lstm0_bw"]},
+
+      "encoder": {"class": "copy", "from": ["lstm1_fw", "lstm1_bw"]},
+      "enc_ctx": {"class": "linear", "activation": None, "with_bias": True, "from": ["encoder"], "n_out": 10},
+      "fertility": {"class": "linear", "activation": "sigmoid", "with_bias": False, "from": ["encoder"], "n_out": 1},
+      "output": {"class": "rec", "from": [], "unit": {
+        'output': {'class': 'choice', 'target': 'classes', 'beam_size': 12, 'from': ["output_prob"],
+                   "initial_output": 0},
+        "end": {"class": "compare", "from": ["output"], "value": 0},
+        'target_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'], "n_out": 6,
+                         "initial_output": "apply(0)", "trainable": False},
+        "weight_feedback": {"class": "linear", "activation": None, "with_bias": False, "from": ["prev:accum_att_weights"],
+                            "n_out": 10},
+        "prev_s_state": {"class": "get_last_hidden_state", "from": ["prev:s"], "n_out": 20},
+        "prev_s_transformed": {"class": "linear", "activation": None, "with_bias": False, "from": ["prev_s_state"],
+                               "n_out": 10, "trainable": False},
+        "energy_in": {"class": "combine", "kind": "add",
+                      "from": ["base:enc_ctx", "weight_feedback", "prev_s_transformed"], "n_out": 10},
+        "energy_tanh": {"class": "activation", "activation": "tanh", "from": ["energy_in"]},
+        "energy": {"class": "linear", "activation": None, "with_bias": False, "from": ["energy_tanh"], "n_out": 1},
+        "att_weights": {"class": "softmax_over_spatial", "from": ["energy"]},  # (B, enc-T, 1)
+        "accum_att_weights": {"class": "eval", "from": ["prev:accum_att_weights", "att_weights", "base:fertility"],
+                              "eval": "source(0) + source(1) / (2.0 * source(2))",
+                              "out_type": {"dim": 1, "shape": (None, 1)}},
+        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder"},
+        "s": {"class": "rnn_cell", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+              "initial_state": "var", "from": ["target_embed", "att"], "n_out": 10},
+        "readout_in": {"class": "linear", "from": ["prev:s", "prev:target_embed", "att"], "activation": None,
+                       "n_out": 10, "trainable": False},
+        "readout": {"class": "reduce_out", "mode": "max", "num_pieces": 2, "from": ["readout_in"]},
+        "output_prob": {"class": "softmax", "from": ["readout"], "target": "classes", "loss": "ce"}
+      }, "target": "classes", "max_seq_len": 20},
+
+      "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance", "target": "classes"}
+    }
+    config.update({"num_outputs": n_out,
+      "num_inputs": n_in,
+      "network": net_dict})
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    weight_input_layer_moved_out = network.layers["output"].params["target_embed/W"]
+    assert(weight_input_layer_moved_out not in set(network.get_trainable_params()))
+
+    weight_output_layer_moved_out = network.layers["output"].params["readout_in/W"]
+    assert(weight_output_layer_moved_out not in set(network.get_trainable_params()))
+
+    weight_internal = network.layers["output"].params["prev_s_transformed/W"]
+    assert(weight_internal not in set(network.get_trainable_params()))
+
+
+def test_untrainable_reclayer():
+  with make_scope() as session:
+    config = Config()
+    n_in, n_out = 2, 3
+    net_dict = {
+      "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6},
+
+      "lstm0_fw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": 1, "from": ["source_embed"]},
+      "lstm0_bw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": -1, "from": ["source_embed"]},
+
+      "lstm1_fw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": 1, "from": ["lstm0_fw", "lstm0_bw"]},
+      "lstm1_bw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": -1, "from": ["lstm0_fw", "lstm0_bw"]},
+
+      "encoder": {"class": "copy", "from": ["lstm1_fw", "lstm1_bw"]},
+      "enc_ctx": {"class": "linear", "activation": None, "with_bias": True, "from": ["encoder"], "n_out": 10},
+      "fertility": {"class": "linear", "activation": "sigmoid", "with_bias": False, "from": ["encoder"], "n_out": 1},
+      "output": {"class": "rec", "from": [], "trainable": False, "unit": {
+        'output': {'class': 'choice', 'target': 'classes', 'beam_size': 12, 'from': ["output_prob"],
+                   "initial_output": 0},
+        "end": {"class": "compare", "from": ["output"], "value": 0},
+        'target_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'], "n_out": 6,
+                         "initial_output": "apply(0)", "trainable": True},
+        "weight_feedback": {"class": "linear", "activation": None, "with_bias": False, "from": ["prev:accum_att_weights"],
+                            "n_out": 10},
+        "prev_s_state": {"class": "get_last_hidden_state", "from": ["prev:s"], "n_out": 20},
+        "prev_s_transformed": {"class": "linear", "activation": None, "with_bias": False, "from": ["prev_s_state"],
+                               "n_out": 10, "trainable": True},
+        "energy_in": {"class": "combine", "kind": "add",
+                      "from": ["base:enc_ctx", "weight_feedback", "prev_s_transformed"], "n_out": 10},
+        "energy_tanh": {"class": "activation", "activation": "tanh", "from": ["energy_in"]},
+        "energy": {"class": "linear", "activation": None, "with_bias": False, "from": ["energy_tanh"], "n_out": 1},
+        "att_weights": {"class": "softmax_over_spatial", "from": ["energy"]},  # (B, enc-T, 1)
+        "accum_att_weights": {"class": "eval", "from": ["prev:accum_att_weights", "att_weights", "base:fertility"],
+                              "eval": "source(0) + source(1) / (2.0 * source(2))",
+                              "out_type": {"dim": 1, "shape": (None, 1)}},
+        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder"},
+        "s": {"class": "rnn_cell", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+              "initial_state": "var", "from": ["target_embed", "att"], "n_out": 10},
+        "readout_in": {"class": "linear", "from": ["prev:s", "prev:target_embed", "att"], "activation": None,
+                       "n_out": 10, "trainable": True},
+        "readout": {"class": "reduce_out", "mode": "max", "num_pieces": 2, "from": ["readout_in"]},
+        "output_prob": {"class": "softmax", "from": ["readout"], "target": "classes", "loss": "ce"}
+      }, "target": "classes", "max_seq_len": 20},
+
+      "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance", "target": "classes"}
+    }
+    config.update({"num_outputs": n_out,
+      "num_inputs": n_in,
+      "network": net_dict})
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    weight_input_layer_moved_out = network.layers["output"].params["target_embed/W"]
+    assert(weight_input_layer_moved_out not in set(network.get_trainable_params()))
+
+    weight_output_layer_moved_out = network.layers["output"].params["readout_in/W"]
+    assert(weight_output_layer_moved_out not in set(network.get_trainable_params()))
+
+    weight_internal = network.layers["output"].params["prev_s_transformed/W"]
+    assert(weight_internal not in set(network.get_trainable_params()))
+
+
+def test_trainable_sublayers():
+  with make_scope() as session:
+    config = Config()
+    n_in, n_out = 2, 3
+    net_dict = {
+      "source_embed": {"class": "linear", "activation": None, "with_bias": False, "n_out": 6},
+
+      "lstm0_fw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": 1, "from": ["source_embed"]},
+      "lstm0_bw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": -1, "from": ["source_embed"]},
+
+      "lstm1_fw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": 1, "from": ["lstm0_fw", "lstm0_bw"]},
+      "lstm1_bw": {"class": "rec", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+                   "initial_state": "var", "n_out": 10, "direction": -1, "from": ["lstm0_fw", "lstm0_bw"]},
+
+      "encoder": {"class": "copy", "from": ["lstm1_fw", "lstm1_bw"]},
+      "enc_ctx": {"class": "linear", "activation": None, "with_bias": True, "from": ["encoder"], "n_out": 10},
+      "fertility": {"class": "linear", "activation": "sigmoid", "with_bias": False, "from": ["encoder"], "n_out": 1},
+      "output": {"class": "rec", "from": [], "unit": {
+        'output': {'class': 'choice', 'target': 'classes', 'beam_size': 12, 'from': ["output_prob"],
+                   "initial_output": 0},
+        "end": {"class": "compare", "from": ["output"], "value": 0},
+        'target_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'], "n_out": 6,
+                         "initial_output": "apply(0)"},
+        "weight_feedback": {"class": "linear", "activation": None, "with_bias": False, "from": ["prev:accum_att_weights"],
+                            "n_out": 10},
+        "prev_s_state": {"class": "get_last_hidden_state", "from": ["prev:s"], "n_out": 20},
+        "prev_s_transformed": {"class": "linear", "activation": None, "with_bias": False, "from": ["prev_s_state"],
+                               "n_out": 10},
+        "energy_in": {"class": "combine", "kind": "add",
+                      "from": ["base:enc_ctx", "weight_feedback", "prev_s_transformed"], "n_out": 10},
+        "energy_tanh": {"class": "activation", "activation": "tanh", "from": ["energy_in"]},
+        "energy": {"class": "linear", "activation": None, "with_bias": False, "from": ["energy_tanh"], "n_out": 1},
+        "att_weights": {"class": "softmax_over_spatial", "from": ["energy"]},  # (B, enc-T, 1)
+        "accum_att_weights": {"class": "eval", "from": ["prev:accum_att_weights", "att_weights", "base:fertility"],
+                              "eval": "source(0) + source(1) / (2.0 * source(2))",
+                              "out_type": {"dim": 1, "shape": (None, 1)}},
+        "att": {"class": "generic_attention", "weights": "att_weights", "base": "base:encoder"},
+        "s": {"class": "rnn_cell", "unit": "standardlstm", "unit_opts": {"use_peepholes": True, "forget_bias": 0.0},
+              "initial_state": "var", "from": ["target_embed", "att"], "n_out": 10},
+        "readout_in": {"class": "linear", "from": ["prev:s", "prev:target_embed", "att"], "activation": None,
+                       "n_out": 10},
+        "readout": {"class": "reduce_out", "mode": "max", "num_pieces": 2, "from": ["readout_in"]},
+        "output_prob": {"class": "softmax", "from": ["readout"], "target": "classes", "loss": "ce"}
+      }, "target": "classes", "max_seq_len": 20},
+
+      "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance", "target": "classes"}
+    }
+    config.update({"num_outputs": n_out,
+      "num_inputs": n_in,
+      "network": net_dict})
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    weight_input_layer_moved_out = network.layers["output"].params["target_embed/W"]
+    assert(weight_input_layer_moved_out in set(network.get_trainable_params()))
+
+    weight_output_layer_moved_out = network.layers["output"].params["readout_in/W"]
+    assert(weight_output_layer_moved_out in set(network.get_trainable_params()))
+
+    weight_internal = network.layers["output"].params["prev_s_transformed/W"]
+    assert(weight_internal in set(network.get_trainable_params()))
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()

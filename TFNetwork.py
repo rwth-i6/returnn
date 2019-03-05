@@ -798,8 +798,6 @@ class TFNetwork(object):
     for layer_name in sorted(self._selected_train_layers):
       layer = self.layers[layer_name]
       assert isinstance(layer, LayerBase)
-      if not layer.trainable:
-        continue
       for param_name, param in sorted(layer.params.items()):
         assert isinstance(param, tf.Variable)
         if param in trainable_vars_col:

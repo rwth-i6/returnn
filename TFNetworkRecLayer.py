@@ -209,6 +209,13 @@ class RecLayer(_ConcatInputLayer):
       assert p.name.startswith(scope_name_prefix) and p.name.endswith(":0")
       self.add_param(p)
 
+      # Sublayers do not know whether the RecLayer is trainable. If it is not, we need to mark all defined parameters
+      # as untrainable
+      if not self.trainable:
+        trainable_collection_ref = p.graph.get_collection_ref(tf.GraphKeys.TRAINABLE_VARIABLES)
+        if p in trainable_collection_ref:
+          trainable_collection_ref.remove(p)
+
   def get_dep_layers(self):
     l = super(RecLayer, self).get_dep_layers()
     l += self._initial_state_deps
