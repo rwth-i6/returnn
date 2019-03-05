@@ -536,6 +536,70 @@ def test_engine_rec_subnet_count():
   engine.finalize()
 
 
+def check_engine_end_layer(extra_rec_kwargs=None):
+  """
+  :param dict[str] extra_rec_kwargs:
+  """
+  from Util import dict_joined
+  from GeneratingDataset import DummyDataset
+  from TFNetworkRecLayer import RecLayer, _SubnetworkRecCell
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 7
+  dataset = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  dataset.init_seq_order(epoch=1)
+
+  config = Config()
+  config.update({
+    "model": "/tmp/model",
+    "batch_size": 5000,
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": {
+      "output": dict_joined({
+        "class": "rec", "from": [], "max_seq_len": 10, "target": "classes",
+        "unit": {
+          "output": {"class": "linear", "activation": "tanh", "n_out": n_classes_dim, "from": ["prev:output"]},
+          "prob": {"class": "linear", "activation": "sigmoid", "from": ["output"], "n_out": 1, "target": "classes"},
+          "end": {"class": "compare","kind": "less", "from": ["prob"], "value": 0.5}
+        }
+      }, extra_rec_kwargs or {}),
+    }
+  })
+  engine = Engine(config=config)
+  # Normally init_network can be used. We only do init_train here to randomly initialize the network.
+  engine.init_train_from_config(config=config, train_data=dataset, dev_data=None, eval_data=None)
+  print("network:")
+  pprint(engine.network.layers)
+  assert "output" in engine.network.layers
+
+  rec_layer = engine.network.layers["output"]
+  assert isinstance(rec_layer, RecLayer)
+  assert isinstance(rec_layer.cell, _SubnetworkRecCell)
+  if rec_layer._optimize_move_layers_out:
+    assert_equal(set(rec_layer.cell.input_layers_moved_out), set())
+    assert_equal(set(rec_layer.cell.output_layers_moved_out), set())
+    assert_equal(set(rec_layer.cell.layers_in_loop), {"output"})
+  else:
+    assert_equal(set(rec_layer.cell.layers_in_loop), {"prob", "end", "output"})
+
+  # Now reinit for search.
+  assert not engine.use_search_flag
+  engine.use_search_flag = True
+  engine.use_dynamic_train_flag = False
+  print("Reinit network with search flag.")
+  engine.init_network_from_config(config=config)
+
+  engine.search(dataset=dataset)
+  print("error keys:")
+  pprint(engine.network.losses_dict)
+  assert engine.network.total_objective is not None
+
+  engine.finalize()
+
+def test_engine_end_layer():
+  check_engine_end_layer()
+
 def check_engine_search(extra_rec_kwargs=None):
   """
   :param dict[str] extra_rec_kwargs:

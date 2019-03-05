@@ -1435,7 +1435,7 @@ class _SubnetworkRecCell(object):
         end_template = self.layer_data_templates["end"]
         needed_outputs.add("end")
         assert tf.as_dtype(end_template.output.dtype) is tf.bool
-        assert end_template.output.batch_shape == (None,)  # (batch*beam,)
+        assert end_template.output.batch_shape == (None,) or end_template.output.batch_shape == (None,1)  # (batch*beam,)
       else:
         assert have_known_seq_len, (
           "You need to have an 'end' layer in your rec subnet if the generated seq len is unknown.")
@@ -1617,16 +1617,21 @@ class _SubnetworkRecCell(object):
           if layer in transformed_cache:
             return transformed_cache[layer]
           assert not RecLayer.is_prev_step_layer(layer)  # this layer is from current frame
-          search_choices_layer = layer.get_search_choices().owner
-          if not RecLayer.is_prev_step_layer(search_choices_layer):
+
+          if layer.get_search_choices():
+            search_choices_layer = layer.get_search_choices().owner
+            if not RecLayer.is_prev_step_layer(search_choices_layer):
+              return layer
+            assert search_choices_layer.name.startswith("prev:")
+            cur_frame_search_choices_layer = self.net.layers[search_choices_layer.name[len("prev:"):]]
+            assert not RecLayer.is_prev_step_layer(cur_frame_search_choices_layer)
+            transformed_layer = cur_frame_search_choices_layer.search_choices.translate_to_this_search_beam(layer)
+            assert transformed_layer != layer
+            transformed_cache[layer] = transformed_layer
+            return transformed_layer
+          else:
             return layer
-          assert search_choices_layer.name.startswith("prev:")
-          cur_frame_search_choices_layer = self.net.layers[search_choices_layer.name[len("prev:"):]]
-          assert not RecLayer.is_prev_step_layer(cur_frame_search_choices_layer)
-          transformed_layer = cur_frame_search_choices_layer.search_choices.translate_to_this_search_beam(layer)
-          assert transformed_layer != layer
-          transformed_cache[layer] = transformed_layer
-          return transformed_layer
+
         outputs_flat = [
           maybe_transform(self.net.layers[k]).output.copy_compatible_to(
             self.layer_data_templates[k].output).placeholder
@@ -1639,17 +1644,29 @@ class _SubnetworkRecCell(object):
         if seq_len_info is not None:
           end_flag, dyn_seq_len = seq_len_info
           choices = self.net.layers["end"].get_search_choices()
-          assert choices, "no search choices in layer %r" % self.net.layers["end"]
-          with tf.name_scope("end_flag"):
-            end_flag = select_src_beams(end_flag, src_beams=choices.src_beams)
-            end_flag = tf.logical_or(end_flag, self.net.layers["end"].output.placeholder)  # (batch * beam,)
-          with tf.name_scope("dyn_seq_len"):
-            dyn_seq_len = select_src_beams(dyn_seq_len, src_beams=choices.src_beams)
-            dyn_seq_len += tf.where(
-              end_flag,
-              constant_with_shape(0, shape=tf.shape(end_flag)),
-              constant_with_shape(1, shape=tf.shape(end_flag)))  # (batch * beam,)
-            seq_len_info = (end_flag, dyn_seq_len)
+          if choices:
+            #assert choices, "no search choices in layer %r" % self.net.layers["end"]
+            with tf.name_scope("end_flag"):
+              end_flag = select_src_beams(end_flag, src_beams=choices.src_beams)
+              end_flag = tf.logical_or(end_flag, self.net.layers["end"].output.placeholder)  # (batch * beam,)
+            with tf.name_scope("dyn_seq_len"):
+              dyn_seq_len = select_src_beams(dyn_seq_len, src_beams=choices.src_beams)
+              dyn_seq_len += tf.where(
+                end_flag,
+                constant_with_shape(0, shape=tf.shape(end_flag)),
+                constant_with_shape(1, shape=tf.shape(end_flag)))  # (batch * beam,)
+              seq_len_info = (end_flag, dyn_seq_len)
+          else:
+            # use an end token without choice, assume shape (batch, 1)
+            with tf.name_scope("end_flag"):
+              end_flag = tf.logical_or(end_flag, tf.squeeze(self.net.layers["end"].output.placeholder, axis=-1))
+            with tf.name_scope("dyn_seq_len"):
+              dyn_seq_len += tf.where(
+                end_flag,
+                constant_with_shape(0, shape=tf.shape(end_flag)),
+                constant_with_shape(1, shape=tf.shape(end_flag)))  # (batch * beam,)
+              seq_len_info = (end_flag, dyn_seq_len)
+
         assert len(acc_tas) == len(outputs_to_accumulate)
         acc_tas = [
           acc_ta.write(i, out.get(), name="%s_acc_ta_write" % out.name)
