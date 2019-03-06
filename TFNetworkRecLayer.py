@@ -2827,9 +2827,11 @@ class RnnCellLayer(_ConcatInputLayer):
         else:
           last_state = rec_layer.get_last_hidden_state(key=key)
         last_state.set_shape(shape_invariant)
-        rec_layer.network.register_post_control_dependencies([
-          tf.assert_equal(tf.shape(last_state), initial_shape),
-          tf.assign(var, last_state, validate_shape=False)])
+        rec_layer.network.register_post_control_dependencies(
+          [tf.assert_equal(tf.rank(last_state), len(shape_invariant), name="check_last_state_rank")] +
+          [tf.assert_equal(tf.shape(last_state)[i], dim, name="check_last_state_dim_%i" % i)
+           for i, dim in enumerate(shape_invariant) if dim is not None] +
+          [tf.assign(var, last_state, validate_shape=False, name="assign_last_state")])
 
       rec_layer.post_init_hooks.append(update_var)
       if initial_state == "keep_over_epoch_no_init":
