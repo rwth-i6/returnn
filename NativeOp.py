@@ -4574,3 +4574,153 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
 
     self.c_fw_code = '\n'.join(extra_lines) + '\n' + self.c_fw_code
 
+
+class EditDistanceOp(NativeOpGenBase):
+  """
+  Similar to :func:`tf.edit_distance`.
+  Calculates the `edit distance / Levenshtein distance <https://en.wikipedia.org/wiki/Levenshtein_distance>`__.
+
+  inputs:
+    :param a: symbols. 2d (batch,time), int32
+    :param a_len: 1d (batch,), int32
+    :param b: symbols. 2d (batch,time), int32
+    :param b_len: 1d (batch,), int32
+  outputs:
+    :param output: 1d (batch,), int32, unnormalized edit distance
+  """
+  in_info = (
+    {"name": "a", "ndim": 2, "shape": (None, None), "dtype": "int32",
+     "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "a_len", "ndim": 1, "shape": (None,), "dtype": "int32",
+     "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "b", "ndim": 2, "shape": (None, None), "dtype": "int32",
+     "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "b_len", "ndim": 1, "shape": (None,), "dtype": "int32",
+     "need_contiguous": True, "gradient": "disconnected"},
+  )
+  out_info = (
+    {"name": "output", "ndim": 1, "shape": ((0, 0),), "dtype": "int32", "need_contiguous": True},
+  )
+
+  c_extra_support_code = {
+    "001_next_step": """
+      DEF_KERNEL
+      void next_step_kernel(
+            int n_batch, int n_a_max_len, int n_b_max_len,
+            int diag_idx,
+            const int32_t* a, const int32_t* b,
+            const int32_t* a_len, const int32_t* b_len,
+            const int32_t* last1_dist, const int32_t* last2_dist, int32_t* cur_dist,
+            int32_t* result) {
+        int idx = threadIdx.x + blockDim.x * blockIdx.x;
+        // We are going diagonal!
+        int num_entries;
+        if(diag_idx <= n_a_max_len) {
+          num_entries = diag_idx + 1;
+          if(num_entries > n_b_max_len + 1)
+            num_entries = n_b_max_len + 1;
+        } else {
+          num_entries = n_b_max_len + 1 - (diag_idx - n_a_max_len);
+        }
+        while(idx < n_batch * num_entries) {
+          int batch_idx = idx / num_entries;
+          int entry_idx = idx % num_entries;
+
+          int t_a, t_b;
+          if(diag_idx <= n_a_max_len) {
+            t_a = diag_idx - entry_idx;
+            t_b = entry_idx;
+          } else {
+            t_a = n_a_max_len - entry_idx;
+            t_b = diag_idx - n_a_max_len + entry_idx;
+          }
+
+          if(t_a == 0)
+            cur_dist[idx] = t_b;  // distance == how much to delete from b
+          else if(t_b == 0)
+            cur_dist[idx] = t_a;  // distance == how much to delete from a
+          else {
+            // last1 is with diag_idx - 2. Needed for substitution cost.
+            // last2 is with diag_idx - 1. Needed for insertion or deletion cost.
+            // last2 refers to the first, for deletion. last2_idx + 1 is for insertion.
+            int last1_idx, last2_idx;
+            if(diag_idx - 1 < n_a_max_len)
+              last1_idx = entry_idx - 1;
+            else if(diag_idx - 1 == n_a_max_len)
+              last1_idx = entry_idx;
+            else
+              last1_idx = entry_idx + 1;
+            if(diag_idx <= n_a_max_len)
+              last2_idx = entry_idx - 1;
+            else
+              last2_idx = entry_idx;
+
+            int del_cost, ins_cost, sub_cost;
+            del_cost = last2_dist[last2_idx] + 1;
+            ins_cost = last2_dist[last2_idx + 1] + 1;
+            sub_cost = last1_dist[last1_idx];
+            if(a[batch_idx * n_a_max_len + t_a] != b[batch_idx * n_b_max_len + t_b])
+              ++sub_cost;
+            int min_cost = del_cost;
+            if(min_cost > ins_cost) min_cost = ins_cost;
+            if(min_cost > sub_cost) min_cost = sub_cost;
+            cur_dist[idx] = min_cost;
+          }
+
+          if(t_a == a_len[batch_idx] && t_b == b_len[batch_idx])
+            result[batch_idx] = cur_dist[idx];
+
+          idx += gridDim.x * blockDim.x;
+        }
+      }
+    """
+  }
+
+  c_fw_code = """
+    assert(n_inputs == 4);
+    assert(n_outputs == 1);
+    Ndarray* a = inputs[0];
+    Ndarray* a_len = inputs[1];
+    Ndarray* b = inputs[2];
+    Ndarray* b_len = inputs[3];
+    Ndarray* out = *outputs[0];
+    assert_cmp(Ndarray_NDIM(a), ==, 2);
+    assert_cmp(Ndarray_NDIM(a_len), ==, 1);
+    assert_cmp(Ndarray_NDIM(b), ==, 2);
+    assert_cmp(Ndarray_NDIM(b_len), ==, 1);
+    assert_cmp(Ndarray_NDIM(out), ==, 1);
+    int n_batch = Ndarray_DIMS(out)[0];
+    assert_cmp(Ndarray_DIMS(a)[0], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(a_len)[0], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(b)[0], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(b_len)[0], ==, n_batch);
+    int n_a_max_len = Ndarray_DIMS(a)[1];
+    int n_b_max_len = Ndarray_DIMS(b)[1];
+
+    // Working buffer.
+    int max_num_entries = std::min(n_a_max_len + 1, n_b_max_len + 1);
+    int32_t* buffer = (int32_t*) device_malloc(3 * n_batch * max_num_entries * sizeof(int32_t));
+    int32_t* last1_dist = buffer;
+    int32_t* last2_dist = buffer + n_batch * max_num_entries;
+    int32_t* cur_dist = buffer + 2 * n_batch * max_num_entries;
+
+    int num_diag = n_a_max_len + n_b_max_len + 1;
+    for(int diag_idx = 0; diag_idx < num_diag; ++diag_idx) {
+      start_dev_kernel(next_step_kernel, (
+        n_batch, n_a_max_len, n_b_max_len,
+        diag_idx,
+        Ndarray_DEV_DATA_int32(a), Ndarray_DEV_DATA_int32(b),
+        Ndarray_DEV_DATA_int32(a_len), Ndarray_DEV_DATA_int32(b_len),
+        last1_dist, last2_dist, cur_dist,
+        Ndarray_DEV_DATA_int32(out)));
+      // Rotate. last1_dist not needed anymore.
+      int32_t* tmp = last1_dist;
+      last1_dist = last2_dist;
+      last2_dist = cur_dist;
+      cur_dist = tmp;
+    }
+
+    device_free(buffer);
+  """
+
+  c_bw_code = None

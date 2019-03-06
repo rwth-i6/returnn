@@ -1061,6 +1061,22 @@ def fast_baum_welch_staircase(am_scores, seq_lens, **opts):
     am_scores=am_scores, edges=edges, weights=weights, start_end_states=start_end_states, float_idx=float_idx)
 
 
+def edit_distance(a, a_len, b, b_len):
+  """
+  Wraps :class:`NativeOp.EditDistanceOp`.
+
+  :param tf.Tensor a: (batch,time1), int32
+  :param tf.Tensor a_len: (batch,), int32
+  :param tf.Tensor b: (batch,time2), int32
+  :param tf.Tensor b_len: (batch,), int32
+  :return: (batch,) tensor, int32, un-normalized edit distance
+  :rtype: tf.Tensor
+  """
+  maker = OpMaker(OpDescription.from_gen_base(NativeOp.EditDistanceOp))
+  op = maker.make_op()
+  return op(a, a_len, b, b_len)
+
+
 def _debug_dumped_fast_baum_welch(prefix, postfix=".dump"):
   """
   If you uncomment the debug_print statements in FastBaumWelchOp, as well as dump_to_file inside debug_print,
