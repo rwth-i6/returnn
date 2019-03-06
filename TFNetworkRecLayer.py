@@ -76,6 +76,7 @@ class RecLayer(_ConcatInputLayer):
                optimize_move_layers_out=None,
                cheating=False,
                unroll=False,
+               use_global_rec_step_offset=False,
                **kwargs):
     """
     :param str|dict[str,dict[str]] unit: the RNNCell/etc name, e.g. "nativelstm". see comment below.
@@ -92,6 +93,7 @@ class RecLayer(_ConcatInputLayer):
     :param bool|None optimize_move_layers_out: will automatically move layers out of the loop when possible
     :param bool cheating: make targets available, and determine length by them
     :param bool unroll: if possible, unroll the loop (implementation detail)
+    :param bool use_global_rec_step_offset:
     """
     super(RecLayer, self).__init__(**kwargs)
     import re
@@ -115,6 +117,7 @@ class RecLayer(_ConcatInputLayer):
     self._optimize_move_layers_out = optimize_move_layers_out
     self._cheating = cheating
     self._unroll = unroll
+    self._use_global_rec_step_offset = use_global_rec_step_offset
     # On the random initialization:
     # For many cells, e.g. NativeLSTM: there will be a single recurrent weight matrix, (output.dim, output.dim * 4),
     # and a single input weight matrix (input_data.dim, output.dim * 4), and a single bias (output.dim * 4,).
@@ -1579,8 +1582,14 @@ class _SubnetworkRecCell(object):
       """
       # The inner scope name is a bit screwed up and this is nicer anyway.
       with reuse_name_scope(rec_layer._rec_scope.name + "/while_loop_body", absolute=True):
+        step_info_i = i
+        if self.parent_rec_layer._use_global_rec_step_offset:
+          from TFUtil import global_tensor
+          step_info_i += global_tensor(
+            lambda: tf.placeholder(tf.int32, (), name="global_rec_step_offset"),
+            name="global_rec_step_offset")
         self.net.set_rec_step_info(
-          i, end_flag=seq_len_info[0] if seq_len_info else None, seq_lens=fixed_seq_len)
+          step_info_i, end_flag=seq_len_info[0] if seq_len_info else None, seq_lens=fixed_seq_len)
         # get next loop vars (net_vars)
         from TFUtil import identity_op_nested, select_src_beams
         from Util import sorted_values_from_dict, dict_zip
