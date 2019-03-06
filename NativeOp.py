@@ -4621,10 +4621,16 @@ class EditDistanceOp(NativeOpGenBase):
             num_entries = n_b_max_len + 1;
         } else {
           num_entries = n_b_max_len + 1 - (diag_idx - n_a_max_len);
+          if(num_entries > n_a_max_len + 1)
+            num_entries = n_a_max_len + 1;
         }
+        int max_num_entries = n_a_max_len + 1;
+        if(max_num_entries < n_b_max_len + 1)
+          max_num_entries = n_b_max_len + 1;
         while(idx < n_batch * num_entries) {
           int batch_idx = idx / num_entries;
           int entry_idx = idx % num_entries;
+          int dist_idx = batch_idx * max_num_entries + entry_idx;
 
           int t_a, t_b;
           if(diag_idx <= n_a_max_len) {
@@ -4636,39 +4642,41 @@ class EditDistanceOp(NativeOpGenBase):
           }
 
           if(t_a == 0)
-            cur_dist[idx] = t_b;  // distance == how much to delete from b
+            cur_dist[dist_idx] = t_b;  // distance == how much to delete from b
           else if(t_b == 0)
-            cur_dist[idx] = t_a;  // distance == how much to delete from a
+            cur_dist[dist_idx] = t_a;  // distance == how much to delete from a
           else {
             // last1 is with diag_idx - 2. Needed for substitution cost.
             // last2 is with diag_idx - 1. Needed for insertion or deletion cost.
             // last2 refers to the first, for deletion. last2_idx + 1 is for insertion.
             int last1_idx, last2_idx;
             if(diag_idx - 1 < n_a_max_len)
-              last1_idx = entry_idx - 1;
+              last1_idx = dist_idx - 1;
             else if(diag_idx - 1 == n_a_max_len)
-              last1_idx = entry_idx;
+              last1_idx = dist_idx;
             else
-              last1_idx = entry_idx + 1;
+              last1_idx = dist_idx + 1;
             if(diag_idx <= n_a_max_len)
-              last2_idx = entry_idx - 1;
+              last2_idx = dist_idx - 1;
             else
-              last2_idx = entry_idx;
+              last2_idx = dist_idx;
 
             int del_cost, ins_cost, sub_cost;
             del_cost = last2_dist[last2_idx] + 1;
             ins_cost = last2_dist[last2_idx + 1] + 1;
             sub_cost = last1_dist[last1_idx];
-            if(a[batch_idx * n_a_max_len + t_a] != b[batch_idx * n_b_max_len + t_b])
+            if(a[batch_idx * n_a_max_len + t_a - 1] != b[batch_idx * n_b_max_len + t_b - 1])
               ++sub_cost;
+            printf("t_a %i, t_b %i, del %i, ins %i, sub %i\\n", t_a, t_b, del_cost, ins_cost, sub_cost);
             int min_cost = del_cost;
             if(min_cost > ins_cost) min_cost = ins_cost;
             if(min_cost > sub_cost) min_cost = sub_cost;
-            cur_dist[idx] = min_cost;
+            cur_dist[dist_idx] = min_cost;
           }
+          printf("t_a %i, t_b %i, dist %i\\n", t_a, t_b, cur_dist[dist_idx]);
 
           if(t_a == a_len[batch_idx] && t_b == b_len[batch_idx])
-            result[batch_idx] = cur_dist[idx];
+            result[batch_idx] = cur_dist[dist_idx];
 
           idx += gridDim.x * blockDim.x;
         }
@@ -4696,6 +4704,7 @@ class EditDistanceOp(NativeOpGenBase):
     assert_cmp(Ndarray_DIMS(b_len)[0], ==, n_batch);
     int n_a_max_len = Ndarray_DIMS(a)[1];
     int n_b_max_len = Ndarray_DIMS(b)[1];
+    Ndarray_memset(Ndarray_DEV_DATA_int32(out), 255, n_batch * sizeof(int32_t));
 
     // Working buffer.
     int max_num_entries = std::min(n_a_max_len + 1, n_b_max_len + 1);

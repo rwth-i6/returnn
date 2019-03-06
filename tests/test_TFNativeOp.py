@@ -1214,10 +1214,10 @@ def test_fast_bw_uniform():
   print("Done.")
 
 
-@unittest.skip("broken yet. wip...")
+@unittest.skip("almost done...")
 def test_edit_distance():
   rnd = numpy.random.RandomState(42)
-  n_batch = 7
+  n_batch = 15
   n_a_max_len = 13
   n_b_max_len = 11
   num_classes = 10
@@ -1227,36 +1227,63 @@ def test_edit_distance():
   b_len_np = rnd.randint(1, n_b_max_len + 1, size=(n_batch,), dtype="int32")
   # Likely some high error. So make some explicit examples.
   expected_results = [None] * n_batch
+  i = 0
+  # One insertion/deletion.
+  a_np[i, :1] = [1]
+  a_len_np[i] = 1
+  b_len_np[i] = 0
+  expected_results[i] = 1
+  i += 1
+  # One deletion.
+  a_np[i, :2] = [1, 2]
+  b_np[i, :1] = [1]
+  a_len_np[i] = 2
+  b_len_np[i] = 1
+  expected_results[i] = 1
+  i += 1
+  # One substitution + deletion.
+  a_np[i, :2] = [1, 2]
+  b_np[i, :1] = [3]
+  a_len_np[i] = 2
+  b_len_np[i] = 1
+  expected_results[i] = 2
+  i += 1
   # One substitution error.
-  a_np[2, :4] = [1, 2, 3, 4]
-  b_np[2, :4] = [1, 2, 4, 4]
-  a_len_np[2] = 4
-  b_len_np[2] = 4
-  expected_results[2] = 1
+  a_np[i, :4] = [1, 2, 3, 4]
+  b_np[i, :4] = [1, 2, 4, 4]
+  a_len_np[i] = 4
+  b_len_np[i] = 4
+  expected_results[i] = 1
+  i += 1
   # One deletion error.
-  a_np[3, :6] = [1, 2, 3, 3, 4, 5]
-  b_np[3, :5] = [1, 2, 3, 4, 5]
-  a_len_np[3] = 6
-  b_len_np[3] = 5
-  expected_results[3] = 1
+  a_np[i, :6] = [1, 2, 3, 3, 4, 5]
+  b_np[i, :5] = [1, 2, 3, 4, 5]
+  a_len_np[i] = 6
+  b_len_np[i] = 5
+  expected_results[i] = 1
+  i += 1
   # One insertion error.
-  a_np[4, :6] = [1, 2, 3, 4, 5, 6]
-  b_np[4, :7] = [1, 2, 4, 4, 4, 5, 6]
-  a_len_np[4] = 6
-  b_len_np[4] = 7
-  expected_results[4] = 1
+  a_np[i, :6] = [1, 2, 3, 4, 5, 6]
+  b_np[i, :7] = [1, 2, 3, 4, 4, 5, 6]
+  a_len_np[i] = 6
+  b_len_np[i] = 7
+  expected_results[i] = 1
+  i += 1
   # Same.
-  a_np[5, :11] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 11]
-  b_np[5, :11] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 11]
-  a_len_np[5] = 11
-  b_len_np[5] = 11
-  expected_results[5] = 1
+  a_np[i, :11] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 11]
+  b_np[i, :11] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 11]
+  a_len_np[i] = 11
+  b_len_np[i] = 11
+  expected_results[i] = 0
+  i += 1
   # Both full length. Error should be 2.
-  a_np[6] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 0, 0, 0]
-  b_np[6] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 0]
-  a_len_np[6] = n_a_max_len
-  b_len_np[6] = n_b_max_len
-  expected_results[6] = 2
+  a_np[i] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 0, 0, 0]
+  b_np[i] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 0]
+  a_len_np[i] = n_a_max_len
+  b_len_np[i] = n_b_max_len
+  expected_results[i] = 2
+  i += 1
+  assert n_batch - i >= 5  # still some random left
   a = tf.constant(a_np)
   b = tf.constant(b_np)
   a_len = tf.constant(a_len_np)
@@ -1274,6 +1301,20 @@ def test_edit_distance():
     _b_sparse = sparse_labels(_b, _b_len)
     _tf_edit_dist = tf.edit_distance(_a_sparse, _b_sparse, normalize=False)
     _native_edit_dist = edit_distance(_a, _a_len, _b, _b_len)
+    tf_edit_dist_np, native_edit_dist_np = session.run((_tf_edit_dist, _native_edit_dist))
+    assert isinstance(tf_edit_dist_np, numpy.ndarray)
+    assert isinstance(native_edit_dist_np, numpy.ndarray)
+    print("TF edit dist:", tf_edit_dist_np)
+    print("Native edit dist:", native_edit_dist_np)
+    print("Expected edit dist:", expected_results[i])
+    assert tf_edit_dist_np.shape == native_edit_dist_np.shape == (1,)
+    if expected_results[i] is not None:
+      assert expected_results[i] == tf_edit_dist_np[0] == native_edit_dist_np[0]
+    else:
+      assert tf_edit_dist_np[0] == native_edit_dist_np[0]
+    print("swapped:")
+    _tf_edit_dist = tf.edit_distance(_b_sparse, _a_sparse, normalize=False)
+    _native_edit_dist = edit_distance(_b, _b_len, _a, _a_len)
     tf_edit_dist_np, native_edit_dist_np = session.run((_tf_edit_dist, _native_edit_dist))
     assert isinstance(tf_edit_dist_np, numpy.ndarray)
     assert isinstance(native_edit_dist_np, numpy.ndarray)
