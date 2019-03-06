@@ -1214,7 +1214,6 @@ def test_fast_bw_uniform():
   print("Done.")
 
 
-@unittest.skip("almost done...")
 def test_edit_distance():
   rnd = numpy.random.RandomState(42)
   n_batch = 15

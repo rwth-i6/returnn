@@ -4625,7 +4625,7 @@ class EditDistanceOp(NativeOpGenBase):
             num_entries = n_a_max_len + 1;
         }
         int max_num_entries = n_a_max_len + 1;
-        if(max_num_entries < n_b_max_len + 1)
+        if(max_num_entries > n_b_max_len + 1)
           max_num_entries = n_b_max_len + 1;
         while(idx < n_batch * num_entries) {
           int batch_idx = idx / num_entries;
@@ -4667,13 +4667,13 @@ class EditDistanceOp(NativeOpGenBase):
             sub_cost = last1_dist[last1_idx];
             if(a[batch_idx * n_a_max_len + t_a - 1] != b[batch_idx * n_b_max_len + t_b - 1])
               ++sub_cost;
-            printf("t_a %i, t_b %i, del %i, ins %i, sub %i\\n", t_a, t_b, del_cost, ins_cost, sub_cost);
+            //printf("t_a %i, t_b %i, del %i, ins %i, sub %i\\n", t_a, t_b, del_cost, ins_cost, sub_cost);
             int min_cost = del_cost;
             if(min_cost > ins_cost) min_cost = ins_cost;
             if(min_cost > sub_cost) min_cost = sub_cost;
             cur_dist[dist_idx] = min_cost;
           }
-          printf("t_a %i, t_b %i, dist %i\\n", t_a, t_b, cur_dist[dist_idx]);
+          //printf("t_a %i, t_b %i, dist %i\\n", t_a, t_b, cur_dist[dist_idx]);
 
           if(t_a == a_len[batch_idx] && t_b == b_len[batch_idx])
             result[batch_idx] = cur_dist[dist_idx];
