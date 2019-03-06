@@ -6083,6 +6083,7 @@ class CtcLoss(Loss):
       # "Not enough time for target transition sequence".
       # One less to allow for at least one blank somewhere.
       target_seq_lens = tf.minimum(target_seq_lens, tf.maximum(self.output_seq_lens - 1, 0))
+    assert self.target.is_batch_major
     labels = sparse_labels(self.target.placeholder, target_seq_lens,
                            collapse_repeated=self.target_collapse_repeated)
     self._target_sparse_labels = labels
