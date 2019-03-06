@@ -1077,6 +1077,22 @@ def edit_distance(a, a_len, b, b_len):
   return op(a, a_len, b, b_len)
 
 
+def optimal_completion_edit_distance(a, a_len, b, b_len):
+  """
+  Wraps :class:`NativeOp.OptimalCompletionEditDistanceOp`.
+
+  :param tf.Tensor a: (batch,time1), int32. prefix
+  :param tf.Tensor a_len: (batch,), int32
+  :param tf.Tensor b: (batch,time2), int32
+  :param tf.Tensor b_len: (batch,), int32
+  :return: (batch,) tensor, int32, un-normalized edit distance
+  :rtype: tf.Tensor
+  """
+  maker = OpMaker(OpDescription.from_gen_base(NativeOp.OptimalCompletionEditDistanceOp))
+  op = maker.make_op()
+  return op(a, a_len, b, b_len)
+
+
 def _debug_dumped_fast_baum_welch(prefix, postfix=".dump"):
   """
   If you uncomment the debug_print statements in FastBaumWelchOp, as well as dump_to_file inside debug_print,

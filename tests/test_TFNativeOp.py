@@ -1361,6 +1361,165 @@ def test_edit_distance():
       assert tf_edit_dist_np[i] == native_edit_dist_np[i]
 
 
+_wrap_tf_edit_distance_global_placeholders = None
+
+
+def _wrap_tf_edit_distance(a, b):
+  """
+  :param list[int] a:
+  :param list[int] b:
+  :rtype: int
+  """
+  global _wrap_tf_edit_distance_global_placeholders
+  if not _wrap_tf_edit_distance_global_placeholders:
+    with tf.name_scope("wrap_tf_edit_distance"):
+      a_tf = tf.placeholder(tf.int32, shape=(None,), name="a")
+      b_tf = tf.placeholder(tf.int32, shape=(None,), name="b")
+      _wrap_tf_edit_distance_global_placeholders = [a_tf, b_tf]
+      a_len_tf = tf.convert_to_tensor([tf.shape(a_tf)[0]])
+      b_len_tf = tf.convert_to_tensor([tf.shape(b_tf)[0]])
+      from TFUtil import sparse_labels
+      a_tf = tf.expand_dims(a_tf, axis=0)
+      b_tf = tf.expand_dims(b_tf, axis=0)
+      a_tf = sparse_labels(a_tf, a_len_tf)
+      b_tf = sparse_labels(b_tf, b_len_tf)
+      res_tf = tf.edit_distance(a_tf, b_tf, normalize=False)
+      res_tf = tf.squeeze(res_tf, axis=0)
+      _wrap_tf_edit_distance_global_placeholders.append(res_tf)
+  a_tf, b_tf, res_tf = _wrap_tf_edit_distance_global_placeholders
+  res = session.run(res_tf, feed_dict={a_tf: a, b_tf: b})
+  return int(res)
+
+
+def test_wrap_tf_edit_distance():
+  assert_equal(_wrap_tf_edit_distance([1], []), 1)
+  assert_equal(_wrap_tf_edit_distance([1, 2], [1]), 1)
+  assert_equal(_wrap_tf_edit_distance([2, 2], [1]), 2)
+  assert_equal(_wrap_tf_edit_distance([2, 1], [1]), 1)
+  assert_equal(_wrap_tf_edit_distance([2, 1], [1, 1]), 1)
+  assert_equal(_wrap_tf_edit_distance([2, 1], [1, 1, 1]), 2)
+  assert_equal(_wrap_tf_edit_distance([2, 1], [2, 1, 1]), 1)
+
+
+def _naive_optimal_completion_edit_distance(a, b):
+  """
+  :param list[int] a: prefix
+  :param list[int] b:
+  :rtype: int
+  """
+  distances = [_wrap_tf_edit_distance(a, b[:n]) for n in range(len(b) + 1)]
+  return min(distances)
+
+
+def test_optimal_completion_edit_distance():
+  rnd = numpy.random.RandomState(42)
+  n_batch = 15
+  n_a_max_len = 11
+  n_b_max_len = 13
+  num_classes = 10
+  a_np = rnd.randint(0, num_classes, size=(n_batch, n_a_max_len), dtype="int32")
+  b_np = rnd.randint(0, num_classes, size=(n_batch, n_b_max_len), dtype="int32")
+  a_len_np = rnd.randint(1, n_a_max_len + 1, size=(n_batch,), dtype="int32")
+  b_len_np = rnd.randint(1, n_b_max_len + 1, size=(n_batch,), dtype="int32")
+  # Likely some high error. So make some explicit examples.
+  expected_results = [None] * n_batch
+  i = 0
+  # One deletion.
+  a_np[i, :1] = [1]
+  a_len_np[i] = 1
+  b_len_np[i] = 0
+  expected_results[i] = 1
+  i += 1
+  # One optional insertion.
+  a_np[i, :1] = [1]
+  b_np[i, :2] = [1, 2]
+  a_len_np[i] = 1
+  b_len_np[i] = 2
+  expected_results[i] = 0
+  i += 1
+  # One substitution or deletion.
+  a_np[i, :1] = [1]
+  b_np[i, :2] = [3, 1]
+  a_len_np[i] = 1
+  b_len_np[i] = 2
+  expected_results[i] = 1
+  i += 1
+  # One substitution error.
+  a_np[i, :4] = [1, 2, 3, 4]
+  b_np[i, :4] = [1, 2, 4, 4]
+  a_len_np[i] = 4
+  b_len_np[i] = 4
+  expected_results[i] = 1
+  i += 1
+  # One insertion error.
+  a_np[i, :5] = [1, 2, 3, 4, 5]
+  b_np[i, :6] = [1, 2, 3, 3, 4, 5]
+  a_len_np[i] = 5
+  b_len_np[i] = 6
+  expected_results[i] = 1
+  i += 1
+  # Same.
+  a_np[i, :11] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 11]
+  b_np[i, :11] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 11]
+  a_len_np[i] = 11
+  b_len_np[i] = 11
+  expected_results[i] = 0
+  i += 1
+  # Both full length.
+  a_np[i] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 0]
+  b_np[i] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 0, 0, 0]
+  a_len_np[i] = n_a_max_len
+  b_len_np[i] = n_b_max_len
+  expected_results[i] = 0
+  i += 1
+  assert n_batch - i >= 5  # still some random left
+  a = tf.constant(a_np)
+  b = tf.constant(b_np)
+  a_len = tf.constant(a_len_np)
+  b_len = tf.constant(b_len_np)
+  for i in range(n_batch):
+    print("testing batch", i, "/", n_batch)
+    _a = a[i:i + 1, :a_len_np[i]]
+    _a_len = a_len[i:i + 1]
+    _b = b[i:i + 1, :b_len_np[i]]
+    _b_len = b_len[i:i + 1]
+    print("seq a:", a_np[i, :a_len_np[i]])
+    print("seq b:", b_np[i, :b_len_np[i]])
+    _native_edit_dist = optimal_completion_edit_distance(_a, _a_len, _b, _b_len)
+    native_edit_dist_np = session.run(_native_edit_dist)
+    tf_edit_dist_np = numpy.array([
+      _naive_optimal_completion_edit_distance(a_np[i, :a_len_np[i]], b_np[i, :b_len_np[i]])])
+    assert isinstance(tf_edit_dist_np, numpy.ndarray)
+    assert isinstance(native_edit_dist_np, numpy.ndarray)
+    print("TF edit dist:", tf_edit_dist_np)
+    print("Native edit dist:", native_edit_dist_np)
+    print("Expected edit dist:", expected_results[i])
+    assert tf_edit_dist_np.shape == native_edit_dist_np.shape == (1,)
+    if expected_results[i] is not None:
+      assert expected_results[i] == tf_edit_dist_np[0] == native_edit_dist_np[0]
+    else:
+      assert tf_edit_dist_np[0] == native_edit_dist_np[0]
+    print()
+  print("Now the whole batch.")
+  native_edit_dist = optimal_completion_edit_distance(a, a_len, b, b_len)
+  native_edit_dist_np = session.run(native_edit_dist)
+  tf_edit_dist_np = numpy.array([
+    _naive_optimal_completion_edit_distance(a_np[i, :a_len_np[i]], b_np[i, :b_len_np[i]])
+    for i in range(n_batch)])
+  assert isinstance(tf_edit_dist_np, numpy.ndarray)
+  assert isinstance(native_edit_dist_np, numpy.ndarray)
+  print("TF edit dist:", tf_edit_dist_np)
+  print("Native edit dist:", native_edit_dist_np)
+  print("Expected edit dist:", expected_results)
+  assert tf_edit_dist_np.shape == native_edit_dist_np.shape == (n_batch,)
+  for i in range(n_batch):
+    if expected_results[i] is not None:
+      assert expected_results[i] == tf_edit_dist_np[i] == native_edit_dist_np[i]
+    else:
+      assert tf_edit_dist_np[i] == native_edit_dist_np[i]
+  print()
+
+
 @unittest.skipIf(not is_gpu_available(), "no gpu on this system")
 @unittest.skipIf(is_gpu_available() and get_available_gpu_min_compute_capability() < 3.5, "too low compute capability")
 def test_init_blocksparse():
