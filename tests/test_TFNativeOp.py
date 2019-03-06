@@ -1520,6 +1520,98 @@ def test_optimal_completion_edit_distance():
   print()
 
 
+def test_optimal_completion_edit_distance_per_successor():
+  rnd = numpy.random.RandomState(42)
+  n_batch = 15
+  n_a_max_len = 11
+  n_b_max_len = 13
+  num_classes = 10
+  a_np = rnd.randint(0, num_classes, size=(n_batch, n_a_max_len), dtype="int32")
+  b_np = rnd.randint(0, num_classes, size=(n_batch, n_b_max_len), dtype="int32")
+  a_len_np = rnd.randint(1, n_a_max_len + 1, size=(n_batch,), dtype="int32")
+  b_len_np = rnd.randint(1, n_b_max_len + 1, size=(n_batch,), dtype="int32")
+  # Likely some high error. So make some explicit examples.
+  expected_results = [None] * n_batch
+  i = 0
+  # One deletion.
+  a_np[i, :1] = [1]
+  a_len_np[i] = 1
+  b_len_np[i] = 0
+  expected_results[i] = 1
+  i += 1
+  # One optional insertion.
+  a_np[i, :1] = [1]
+  b_np[i, :2] = [1, 2]
+  a_len_np[i] = 1
+  b_len_np[i] = 2
+  expected_results[i] = 0
+  i += 1
+  # One substitution or deletion.
+  a_np[i, :1] = [1]
+  b_np[i, :2] = [3, 1]
+  a_len_np[i] = 1
+  b_len_np[i] = 2
+  expected_results[i] = 1
+  i += 1
+  # One substitution error.
+  a_np[i, :4] = [1, 2, 3, 4]
+  b_np[i, :4] = [1, 2, 4, 4]
+  a_len_np[i] = 4
+  b_len_np[i] = 4
+  expected_results[i] = 1
+  i += 1
+  # One insertion error.
+  a_np[i, :5] = [1, 2, 3, 4, 5]
+  b_np[i, :6] = [1, 2, 3, 3, 4, 5]
+  a_len_np[i] = 5
+  b_len_np[i] = 6
+  expected_results[i] = 1
+  i += 1
+  # Same.
+  a_np[i, :11] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 1, 3]
+  b_np[i, :11] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 1, 3]
+  a_len_np[i] = 11
+  b_len_np[i] = 11
+  expected_results[i] = 0
+  i += 1
+  # Both full length.
+  a_np[i] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 0]
+  b_np[i] = [2, 2, 4, 4, 6, 6, 8, 8, 9, 10, 0, 0, 0]
+  a_len_np[i] = n_a_max_len
+  b_len_np[i] = n_b_max_len
+  expected_results[i] = 0
+  i += 1
+  assert n_batch - i >= 5  # still some random left
+  a = tf.constant(a_np)
+  b = tf.constant(b_np)
+  assert all(a_len_np > 0)
+  a_len = tf.constant(a_len_np)
+  b_len = tf.constant(b_len_np)
+  print("Now the whole batch.")
+  # a_len - 1 such that we can do the check below.
+  native_edit_dist = optimal_completion_edit_distance_per_successor(a, a_len - 1, b, b_len, num_classes)
+  native_edit_dist_np = session.run(native_edit_dist)
+  tf_edit_dist_np = numpy.array([
+    _naive_optimal_completion_edit_distance(a_np[i, :a_len_np[i]], b_np[i, :b_len_np[i]])
+    for i in range(n_batch)])
+  assert isinstance(tf_edit_dist_np, numpy.ndarray)
+  assert isinstance(native_edit_dist_np, numpy.ndarray)
+  print("TF edit dist:", tf_edit_dist_np)
+  print("Native edit dist:", native_edit_dist_np)
+  print("Expected edit dist:", expected_results)
+  assert tf_edit_dist_np.shape == (n_batch,)
+  assert native_edit_dist_np.shape == (n_batch, num_classes)
+  for i in range(n_batch):
+    a_last = a_np[i, a_len_np[i] - 1]
+    assert 0 <= a_last < num_classes
+    native_res = native_edit_dist_np[i, a_last]
+    if expected_results[i] is not None:
+      assert expected_results[i] == tf_edit_dist_np[i] == native_res
+    else:
+      assert tf_edit_dist_np[i] == native_res
+  print()
+
+
 @unittest.skipIf(not is_gpu_available(), "no gpu on this system")
 @unittest.skipIf(is_gpu_available() and get_available_gpu_min_compute_capability() < 3.5, "too low compute capability")
 def test_init_blocksparse():
