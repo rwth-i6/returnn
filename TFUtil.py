@@ -4657,10 +4657,11 @@ def global_tensor(f, name):
     return graph.get_tensor_by_name(abs_graph_name)
   except KeyError:  # does not exist yet
     pass
-  with tf.name_scope("global_tensor_%s" % name):  # relative to the current scope
-    v = f()
-  with tf.name_scope("globals/"):  # enter the absolute scope
-    v = tf.identity(v, name=name)
+  with tf.control_dependencies(None):  # reset any deps, e.g. being inside a while loop
+    with tf.name_scope("global_tensor_%s" % name):  # relative to the current scope
+      v = f()
+    with tf.name_scope("globals/"):  # enter the absolute scope
+      v = tf.identity(v, name=name)
   assert isinstance(v, tf.Tensor)
   assert v.name == abs_graph_name
   assert graph.get_tensor_by_name(abs_graph_name) is v
