@@ -4382,6 +4382,152 @@ class KenLmStateLayer(_ConcatInputLayer):
       "scores": tf.zeros(batch_shape, dtype=tf.float32)}
 
 
+class EditDistanceTableLayer(LayerBase):
+  """
+  Given a source and a target, calculates the edit distance table between them.
+  Source can be inside a recurrent loop.
+  It uses :func:`TFNativeOp.next_edit_distance_row`.
+
+  Usually, if you are inside a rec layer, and "output" is the :class:`ChoiceLayer`,
+  you would use "from": "output"
+  and "target": "layer:base:data:target" (make sure it has the time dimension).
+
+  See also :class:`OptimalCompletionsLayer`.
+  """
+  layer_class = "edit_distance_table"
+  recurrent = True
+
+  def __init__(self, **kwargs):
+    super(EditDistanceTableLayer, self).__init__(**kwargs)
+    assert len(self.sources) == 1, "%s: expects exactly a single source" % self
+    source_data = self.sources[0].output
+    assert source_data.dtype == "int32" and source_data.batch_ndim <= 2
+    assert self.target, "%s: 'target' must be set" % self
+    target_data = self._static_get_target_value(target=self.target, network=self.network)
+    assert target_data, "%s: target %r not found?" % (self, self.target)
+    assert target_data.dtype == "int32" and target_data.batch_ndim == 2 and target_data.have_time_axis()
+    target_data = target_data.copy_as_batch_major()
+    self._target_data = target_data
+    if source_data.have_time_axis():
+      raise NotImplementedError
+    assert source_data.batch_ndim == 1
+    # Assume we are inside a rec loop.
+    assert self.network.have_rec_step_info()
+    rec_step_info = self.network.get_rec_step_info()
+    self._last_row = self._rec_previous_layer.rec_vars_outputs["state"]
+    from TFNativeOp import next_edit_distance_row
+    self._next_row = next_edit_distance_row(
+      last_row=self._last_row, a=source_data.placeholder, a_n=rec_step_info.step, a_ended=rec_step_info.get_end_flag(),
+      b=target_data.placeholder, b_len=target_data.get_sequence_lengths())
+    self.rec_vars_outputs["state"] = self._next_row
+    self._reduce_out = None  # see get_sub_layer
+    self.output.placeholder = self._next_row
+    self.output.size_placeholder = {0: target_data.get_sequence_lengths() + 1}
+
+  @classmethod
+  def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, sources, name, target, network, **kwargs):
+    """
+    :param tf.Tensor batch_dim: for this layer, might be with beam
+    :param TFNetworkRecLayer.RecLayer rec_layer:
+    :param list[LayerBase] sources:
+    :param str name:
+    :param str target:
+    :param TFNetwork.TFNetwork network:
+    :rtype: dict[str,tf.Tensor]
+    """
+    assert len(sources) == 1, "%s %r: expects exactly a single source" % (cls.__name__, name)
+    source_data = sources[0].output
+    if source_data.time_dim_axis is not None:
+      return {}
+    # expects inside rec layer
+    from TFUtil import expand_dims_unbroadcast
+    assert target, "%s %r: 'target' must be set" % (cls.__name__, name)
+    target_data = cls._static_get_target_value(target=target, network=network)
+    assert target_data, "target %r not found?" % target
+    n_time = tf.shape(target_data.placeholder)[target_data.time_dim_axis]
+    return {"state": expand_dims_unbroadcast(tf.range(n_time + 1), axis=0, dim=batch_dim)}
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, target, network, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :param str target:
+    :param TFNetwork.TFNetwork network:
+    :rtype: Data
+    """
+    assert len(sources) == 1, "%s %r: expects exactly a single source" % (cls.__name__, name)
+    source_data = sources[0].output
+    assert source_data.dtype == "int32" and source_data.batch_ndim <= 2 and source_data.sparse
+    assert target, "%s %r: 'target' must be set" % (cls.__name__, name)
+    target_data = cls._static_get_target_value(target=target, network=network)
+    assert target_data, "target %r not found?" % target
+    assert target_data.dtype == "int32" and target_data.batch_ndim == 2 and target_data.have_time_axis()
+    assert target_data.sparse and source_data.dim == target_data.dim
+    if source_data.have_time_axis():
+      return Data(name="%s_output" % name, shape=(None, None), dtype="int32")
+    else:
+      return Data(name="%s_output" % name, shape=(None,), dtype="int32")
+
+
+class OptimalCompletionsLayer(LayerBase):
+  """
+  We expect to get the inputs from :class:`EditDistanceTableLayer`, esp from the prev frame, like this:
+  "opt_completions": {"class": "optimal_completions", "from": "prev:edit_dist_table"}.
+
+  You can also then define this further layer:
+  "opt_completion_soft_targets": {"class": "activation", "activation": "softmax", "from": "opt_completions"},
+  and use that as the :class:`CrossEntropyLoss` soft targets
+  for the input of the "output" :class:`ChoiceLayer`, e.g. "output_prob".
+  This makes most sense when you enable beam search (even, or esp, during training).
+  Note that you probably want to have this all before the last choice, where you still have more beams open.
+  """
+  layer_class = "optimal_completions"
+  recurrent = True
+
+  def __init__(self, **kwargs):
+    super(OptimalCompletionsLayer, self).__init__(**kwargs)
+    src_layer, = self.sources
+    assert isinstance(src_layer, LayerBase)
+    source_data = src_layer.output
+    assert source_data.shape == (None,) and source_data.is_batch_major
+    last_row = source_data.placeholder
+    assert self.target, "%s: 'target' must be set" % self
+    target_data = self._static_get_target_value(target=self.target, network=self.network)
+    assert target_data, "%s: target %r not found?" % (self, self.target)
+    assert target_data.dtype == "int32" and target_data.batch_ndim == 2 and target_data.have_time_axis()
+    from TFNativeOp import next_edit_distance_reduce
+    successors = tf.expand_dims(tf.range(target_data.dim), axis=0)
+    rec_step_info = self.network.get_rec_step_info()
+    reduce_out = next_edit_distance_reduce(
+      last_row=last_row, a=successors, a_n=rec_step_info.step, a_ended=rec_step_info.get_end_flag(),
+      b=target_data.placeholder, b_len=target_data.get_sequence_lengths())
+    reduce_out.set_shape((None, target_data.dim))
+    self.output.placeholder = reduce_out
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, target, network, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :param str target:
+    :param TFNetwork.TFNetwork network:
+    :rtype: Data
+    """
+    assert len(sources) == 1, "%s %r: expects exactly a single source" % (cls.__name__, name)
+    source_data = sources[0].output
+    assert source_data.dtype == "int32" and source_data.batch_ndim == 1 and source_data.sparse
+    assert target, "%s %r: 'target' must be set" % (cls.__name__, name)
+    target_data = cls._static_get_target_value(target=target, network=network)
+    assert target_data, "target %r not found?" % target
+    assert target_data.dtype == "int32" and target_data.batch_ndim == 2 and target_data.have_time_axis()
+    assert target_data.sparse and source_data.dim == target_data.dim
+    assert not source_data.have_time_axis(), "not implemented..."
+    return Data(
+      name="%s_output" % name,
+      shape=(target_data.dim,), dim=target_data.dim, dtype="int32", sparse=False, time_dim_axis=None)
+
+
 class BaseRNNCell(rnn_cell.RNNCell):
   """
   Extends :class:`rnn_cell.RNNCell` by having explicit static attributes describing some properties.
