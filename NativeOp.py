@@ -5027,7 +5027,7 @@ class OptimalCompletionEditDistancePerSuccessorOp(NativeOpGenBase):
           int batch_idx = idx / n_labels;
           int successor_idx = idx % n_labels;
           int successor = successors[successor_idx];
-          
+
           int t_a = a_len[batch_idx] + 1;
           int min_cost = t_a;
           for(int t_b = 0; t_b < b_len[batch_idx]; ++t_b) {
@@ -5040,7 +5040,7 @@ class OptimalCompletionEditDistancePerSuccessorOp(NativeOpGenBase):
           int last_del_cost = a_last_row[batch_idx * (n_b_max_len + 1) + b_len[batch_idx]] + 1;
           if(min_cost > last_del_cost) min_cost = last_del_cost;
           result[batch_idx * n_labels + successor_idx] = min_cost;
-          
+
           idx += gridDim.x * blockDim.x;
         }   
       }

@@ -1609,6 +1609,10 @@ def test_optimal_completion_edit_distance_per_successor():
       assert expected_results[i] == tf_edit_dist_np[i] == native_res
     else:
       assert tf_edit_dist_np[i] == native_res
+    for j in range(num_classes):
+      tf_res = _naive_optimal_completion_edit_distance(list(a_np[i, :a_len_np[i] - 1]) + [j], b_np[i, :b_len_np[i]])
+      native_res = native_edit_dist_np[i, j]
+      assert tf_res == native_res
   print()
 
 
