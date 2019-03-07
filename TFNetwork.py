@@ -348,7 +348,10 @@ class TFNetwork(object):
         continue
       if layer_desc.get("only_on_eval") and not self.eval_flag:
         continue
-      if name == "output" or "target" in layer_desc or "loss" in layer_desc or layer_desc.get("is_output_layer", False):
+      if (name == "output"
+              or layer_desc.get("target", None)
+              or layer_desc.get("loss", None)
+              or layer_desc.get("is_output_layer", False)):
         self.construct_layer(net_dict, name)
     assert not self._constructing_layers
 
