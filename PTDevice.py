@@ -42,18 +42,19 @@ class DummyModel(nn.Module):
     #self.lstm.flatten_parameters()
     #x, _ = self.lstm(x)
     #x = self.output(x)
-    return F.log_softmax(self.output(x), dim=1)
+    self.index = i
+    self.logpcx = F.log_softmax(self.output(x), dim=1)
+    return self.logpcx
 
-def exec(x, y, i, j):
-  y[y==-1] = 0
-  model = DummyModel()
-  x = torch.tensor(x, dtype=torch.float32).permute(1,0,2) # TODO
-  y = torch.tensor(y, dtype=torch.long).permute(1,0) # TODO
-  i = torch.tensor(i, dtype=torch.uint8).permute(1,0) # TODO
-  pcx = model(x,i)
-  loss_function = nn.NLLLoss()
-  loss = loss_function(pcx.contiguous().view(pcx.size(0) * pcx.size(1), pcx.size(2)), y.contiguous().view(-1))
-  return loss.detach() * pcx.size(0) * pcx.size(1)
+  def cost(self, y):
+    loss_function = nn.NLLLoss()
+    loss = loss_function(self.logpcx.contiguous().view(
+      self.logpcx.size(0) * self.logpcx.size(1), self.logpcx.size(2)), y.contiguous().view(-1))
+    return loss.detach() * self.index.float().sum()
+
+  def errors(self, y):
+    recog = torch.argmax(self.logpcx,dim=2).view(self.logpcx.size(0), self.logpcx.size(1))
+    return (recog != y).float().sum() * self.index.float().sum() / (self.logpcx.size(0) * self.logpcx.size(1))
 
 def _get_num_devices():
   if os.name == 'nt':
@@ -392,6 +393,14 @@ class Device(object):
       #                                  givens = givens,
       #                                  name = "extractor")
 
+  def exec(self, x, y, i, j):
+    y[y==-1] = 0
+    x = torch.tensor(x, dtype=torch.float32).permute(1,0,2) # TODO
+    y = torch.tensor(y, dtype=torch.long).permute(1,0) # TODO
+    i = torch.tensor(i, dtype=torch.uint8).permute(1,0) # TODO
+    self.network(x,i)
+    return [self.network.cost(y), self.network.errors(y)]
+
   def compute_run(self, task):
     compute_start_time = time.time()
     batch_dim = self.data["data"].shape[1]
@@ -400,9 +409,9 @@ class Device(object):
       print("debug_shell_first_compute", file=log.v1)
       Debug.debug_shell(user_ns=locals(), user_global_ns=globals())
     if task in [ "train", "eval" ]:
-      output = [exec(self.data['data'],self.data['classes'],self.index['data'],self.index['classes'])]
-      if task == 'eval': # TODO
-        output.append(0)
+      output = self.exec(self.data['data'],self.data['classes'],self.index['data'],self.index['classes'])
+      if task == 'train': # TODO
+        output = [output[0]]
     else:
       assert False, "invalid command: " + task
     compute_end_time = time.time()
@@ -471,7 +480,7 @@ class Device(object):
     # The connection (duplex pipe) is managed by AsyncTask.
     output_queue = input_queue = asyncTask.conn
     device_id = device.split(':')[-1]
-    device_name = "generic device"
+    device_name = "default"
     output_queue.send(device_id) # TODO
     output_queue.send(device_name) # TODO
 
