@@ -10,6 +10,9 @@ import h5py
 from PTLayers import OutputLayer
 from Log import log
 
+from Util import dict_joined, as_str
+from NetworkDescription import LayerNetworkDescription
+
 
 class LayerNetwork(nn.Module):
   def __init__(self, n_in=None, n_out=None):
@@ -33,8 +36,8 @@ class LayerNetwork(nn.Module):
     :param str mask: e.g. "unity" or None ("dropout"). "unity" is for testing.
     :rtype: LayerNetwork
     """
-    json_content = cls.json_from_config(config, mask=mask)
-    return cls.from_json_and_config(json_content, config, mask=mask, **kwargs)
+    json_content = cls.json_from_config(config)
+    return cls.from_json_and_config(json_content, config, **kwargs)
 
   @classmethod
   def json_from_config(cls, config, mask=None):
@@ -79,9 +82,7 @@ class LayerNetwork(nn.Module):
     """
     num_inputs, num_outputs = LayerNetworkDescription.num_inputs_outputs_from_config(config)
     return {
-      "n_in": num_inputs, "n_out": num_outputs,
-      "sparse_input": config.bool("sparse_input", False),
-      "target": config.value('target', 'classes')
+      "n_in": num_inputs, "n_out": num_outputs
     }
 
   def init_args(self):
@@ -117,7 +118,8 @@ class LayerNetwork(nn.Module):
     """
 
     network = cls(n_in=n_in, n_out=n_out, **kwargs)
-    network.add_layer(OutputLayer(n_out=n_out, loss = 'ce'))
+    network.add_layer(OutputLayer(n_out=n_out['classes'][0], loss = 'ce', name = 'output'))
+    network.loss = 'ce'
     return network
 
   def get_layer(self, layer_name):
@@ -152,7 +154,7 @@ class LayerNetwork(nn.Module):
     """
     grp = model.create_group('training')
     model.attrs['json'] = self.json_content
-    model.attrs['update_step'] = self.update_step
+    #model.attrs['update_step'] = self.update_step # TODO
     model.attrs['epoch'] = epoch
     model.attrs['output'] = 'output' #self.output.keys
     model.attrs['n_in'] = self.n_in
@@ -194,4 +196,7 @@ class LayerNetwork(nn.Module):
     if not self.output:
       print("  (no output layers)", file=log.v2)
     print("net params #:", self.num_params(), file=log.v2)
-    print("net trainable params:", self.train_params_vars, file=log.v2)
+    #print("net trainable params:", self.train_params_vars, file=log.v2)
+
+  def get_used_data_keys(self): # TODO
+    return ['data','classes']

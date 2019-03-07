@@ -372,15 +372,15 @@ class Container(nn.Module):
 class Layer(Container):
   recurrent = False
 
-  def __init__(self, n_out, dependencies, sources, **kwargs):
+  def __init__(self, dependencies=None, sources=None, **kwargs):
     """
     :param list[NetworkBaseLayer.Layer] sources: list of source layers
     :param int n_out: output dim of W_in and dim of bias
     """
     super(Layer, self).__init__(**kwargs)
     self.output = None
-    self.dependencies = { dep : None for dep in dependencies }
-    self.sources = sources
+    #self.dependencies = { dep : None for dep in dependencies }
+    #self.sources = sources
 
   def process(x, i):
     if self.output is not None:
@@ -421,9 +421,9 @@ class OutputLayer(Layer):
   def __init__(self, n_out, loss, **kwargs):
     super(OutputLayer, self).__init__(**kwargs)
     self.attrs['n_out'] = n_out
-    self.W_in = nn.Parameter(torch.ones(self.sources[0].attrs['n_out'],self.attrs['n_out']))
-    self.b = nn.Parameter(torch.zeros(self.attrs['n_out']))
-    self.softmax = nn.Softmax()(x_in.mm(self.W_in) + self.b)
+    #self.W_in = nn.Parameter(torch.ones(self.sources[0].attrs['n_out'],self.attrs['n_out']))
+    #self.b = nn.Parameter(torch.zeros(self.attrs['n_out']))
+    #self.softmax = nn.Softmax()(x_in.mm(self.W_in) + self.b)
 
   def forward(self, x, i):
     z = x_in.mm(self.W_in) + self.b

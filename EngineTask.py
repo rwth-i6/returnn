@@ -143,7 +143,6 @@ class TaskThread(threading.Thread):
       eval_info = {}
       for key, value in summed_results.items():
         if key.startswith("gparam:"): continue
-        if key == "ctc_priors": continue
         target = self._get_target_for_key(key)
         eval_info[key] = value / float(num_frames[target])
 
@@ -188,8 +187,7 @@ class TaskThread(threading.Thread):
       assert self.num_frames["data"] > 0
       # Note: self.num_frames could be greater than self.data.get_num_timesteps() in case of chunking.
       for key, value in self.results.items():
-        if key != "ctc_priors":
-          self.results[key] *= self.epoch_norm_factor_for_result(key)
+        self.results[key] *= self.epoch_norm_factor_for_result(key)
       self.score = dict([(key,value) for (key, value) in self.results.items() if key.startswith("cost:")])
       self.error = dict([(key,value) for (key, value) in self.results.items() if key.startswith("error:")])
       self.finalized = True
@@ -527,8 +525,6 @@ class TrainTaskThread(TaskThread):
     self.updater = updater
     self.learning_rate = learning_rate
     self.seq_train_parallel = seq_train_parallel
-    self.do_ctc_priors = network.ctc_priors is not None
-    self.ctc_priors = None
     super(TrainTaskThread, self).__init__("train", network, devices, data=data, batches=batches, **kwargs)
 
   def initialize(self):
@@ -536,9 +532,9 @@ class TrainTaskThread(TaskThread):
     self.score = 0
     for device in self.devices:
       device.set_learning_rate(self.learning_rate)
-    if not self.updater.isInitialized:
-      self.updater.initVars(self.network, None)
-      self.updater.setLearningRate(self.learning_rate)
+    #if not self.updater.isInitialized: # TODO
+    #  self.updater.initVars(self.network, None)
+    #  self.updater.setLearningRate(self.learning_rate)
     if self.seq_train_parallel:
       self.seq_train_parallel.train_start_epoch()
 
@@ -549,7 +545,7 @@ class TrainTaskThread(TaskThread):
   def get_device_prepare_args(self):
     kwargs = super(TrainTaskThread, self).get_device_prepare_args()
     kwargs["updater"] = self.updater
-    kwargs["train_param_args"] = self.network.train_param_args
+    #kwargs["train_param_args"] = self.network.train_param_args # TODO
     return kwargs
 
   def maybe_wait_for_batches(self, device, batches):
@@ -559,14 +555,6 @@ class TrainTaskThread(TaskThread):
     """
     if self.seq_train_parallel:
       self.seq_train_parallel.train_wait_for_seqs(device=device, batches=batches)
-
-  def save_ctc_priors(self, filename, epoch_str):
-    assert self.ctc_priors is not None
-    return # this should be done using compute_priors
-    with open(filename, 'a') as f:
-      print(epoch_str, file=f)
-      numpy.savetxt(f, self.ctc_priors, newline=" ")
-      print(file=f)
 
   class CopyManager():
     class CopyThread(threading.Thread):
@@ -609,6 +597,7 @@ class TrainTaskThread(TaskThread):
       return self._copy(False)
 
   def reduce(self, num_frames):
+    return # TODO
     for device in self.devices:
       device.sync_net_train_params()
     basenet = self.network.get_all_params_vars()
@@ -690,8 +679,6 @@ class TrainTaskThread(TaskThread):
 
   def finalize(self):
     super(TrainTaskThread, self).finalize()
-    if self.do_ctc_priors:
-      self.ctc_priors = self.results["ctc_priors"] / float(self.num_frames["data"])
     if self.seq_train_parallel:
       self.seq_train_parallel.train_finish_epoch()
 

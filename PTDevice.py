@@ -640,8 +640,9 @@ class Device(object):
     This updates *all* params, not just the train params.
     """
     assert self.main_pid == os.getpid()
-    self.set_net_encoded_params([
-      numpy.asarray(p.get_value()) for p in network.get_all_params_vars()])
+    # TODO
+    #self.set_net_encoded_params([
+    #  numpy.asarray(p.get_value()) for p in network.get_all_params_vars()])
 
   def is_device_proc(self):
     return self.main_pid != os.getpid()

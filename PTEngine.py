@@ -7,7 +7,7 @@ import os
 from collections import OrderedDict
 import h5py
 import json
-from Network import LayerNetwork
+from PTNetwork import LayerNetwork
 from EngineTask import TrainTaskThread, EvalTaskThread, HDFForwardTaskThread, ClassificationTaskThread, PriorEstimationTaskThread
 import SprintCache
 from Log import log
@@ -461,9 +461,9 @@ class Engine:
     else:
       self.learning_rate = self.learning_rate_control.getLearningRateForEpoch(self.epoch)
 
-    if not self.is_pretrain_epoch():
-      # Train the whole network.
-      self.network.declare_train_params()
+    #if not self.is_pretrain_epoch(): # TODO
+    #  # Train the whole network.
+    #  self.network.declare_train_params()
 
     if self.init_train_epoch_posthook:
       print("execute init_train_epoch_posthook:", self.init_train_epoch_posthook, file=log.v5)
