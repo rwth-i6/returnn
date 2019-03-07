@@ -322,6 +322,7 @@ static void tf_cuda_sgemm_batched(
 #if CUDA
 
 #define elem_atomic_add(x, v) atomicAdd(x, v)
+#define elem_atomic_min(x, v) atomicMin(x, v)
 
 #if TENSORFLOW
 // Ndarray and friends already declared above, they are same for CUDA and non-CUDA
@@ -435,6 +436,7 @@ static void _cudaHandleError(cublasStatus_t status, const char *file, int line) 
 #else   // not CUDA
 
 #define elem_atomic_add(x, v) (*x += v)  // ignore atomic for now...
+#define elem_atomic_min(x, v) (*x = (v < *x) ? v : *x)  // ignore atomic for now...
 
 #if !TENSORFLOW
 // Numpy, see: http://docs.scipy.org/doc/numpy/reference/c-api.array.html

@@ -4763,7 +4763,17 @@ class OptimalCompletionEditDistanceOp(NativeOpGenBase):
   )
 
   c_extra_support_code = {
-    "001_next_step": """
+    "001_init_result": """
+      DEF_KERNEL
+      void init_result_kernel(int n_batch, int32_t* result) {
+        int idx = threadIdx.x + blockDim.x * blockIdx.x;
+        while(idx < n_batch) {
+          result[idx] = 2147483647;  // biggest int32
+          idx += gridDim.x * blockDim.x;
+        }
+      }
+    """,
+    "002_next_step": """
       DEF_KERNEL
       void next_step_kernel(
             int n_batch, int n_a_max_len, int n_b_max_len,
@@ -4833,12 +4843,8 @@ class OptimalCompletionEditDistanceOp(NativeOpGenBase):
             cur_dist[dist_idx] = min_cost;
           }
 
-          if(t_a == a_len[batch_idx] && t_b <= b_len[batch_idx]) {
-            if(t_b == 0)
-              result[batch_idx] = cur_dist[dist_idx];
-            else if(result[batch_idx] > cur_dist[dist_idx])
-              result[batch_idx] = cur_dist[dist_idx];
-          }
+          if(t_a == a_len[batch_idx] && t_b <= b_len[batch_idx])
+            elem_atomic_min(&result[batch_idx], cur_dist[dist_idx]);
 
           idx += gridDim.x * blockDim.x;
         }
@@ -4866,7 +4872,7 @@ class OptimalCompletionEditDistanceOp(NativeOpGenBase):
     assert_cmp(Ndarray_DIMS(b_len)[0], ==, n_batch);
     int n_a_max_len = Ndarray_DIMS(a)[1];
     int n_b_max_len = Ndarray_DIMS(b)[1];
-    Ndarray_memset(Ndarray_DEV_DATA_int32(out), 255, n_batch * sizeof(int32_t));
+    start_dev_kernel(init_result_kernel, (n_batch, Ndarray_DEV_DATA_int32(out)));
 
     // Working buffer.
     int max_num_entries = std::min(n_a_max_len + 1, n_b_max_len + 1);
