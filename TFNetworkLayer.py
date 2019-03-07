@@ -483,11 +483,13 @@ class LayerBase(object):
     """
     Some code differs between an output layer and other layers.
     It is a bit arbitrary what we define as output layer.
+    This should be consistent with :func:`TFNetwork.construct_from_dict`.
+
     :rtype: bool
     """
     if self._is_output_layer is not None:
       return self._is_output_layer
-    if self.target:
+    if self.loss:
       return True
     if self.name == "output":
       return True
