@@ -4749,7 +4749,7 @@ def map_labels(x, label_map, name="map_labels"):
   :param dict[int,int|None] label_map: should be dense on input
   :param str name:
   :return: mapped values
-  :rtype: tf.Tensor
+  :rtype: tf.Tensor|tf.SparseTensor
   """
   if any([v is None for v in label_map.values()]):
     assert isinstance(x, tf.SparseTensor), "not supported otherwise currently"

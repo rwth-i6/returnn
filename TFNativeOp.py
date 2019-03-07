@@ -1102,7 +1102,7 @@ def optimal_completion_edit_distance_per_successor(a, a_len, b, b_len, successor
   :param tf.Tensor b: (batch,time2), int32
   :param tf.Tensor b_len: (batch,), int32
   :param tf.Tensor|int successors: (n_labels,), int32. scalar means tf.range(successors)
-  :return: (batch,) tensor, int32, un-normalized edit distance
+  :return: (batch,n_labels) tensor, int32, un-normalized edit distance
   :rtype: tf.Tensor
   """
   if isinstance(successors, int):
