@@ -1121,7 +1121,7 @@ def next_edit_distance_row(last_row, a, a_n, a_ended, b, b_len):
   Wraps :class:`NativeOp.NextEditDistanceRowOp`.
 
   :param tf.Tensor last_row: 2d (batch,b_time + 1), int32. last edit distances
-  :param tf.Tensor a: symbols. 2d (batch,), int32. current.
+  :param tf.Tensor a: symbols. 1d (batch,), int32. current.
   :param tf.Tensor a_n: scalar, int32. current position
   :param tf.Tensor a_ended: 1d (batch,), int32 (casted from bool, because int32 easier to handle)
   :param tf.Tensor b: symbols. 2d (batch,b_time), int32
@@ -1146,7 +1146,7 @@ def edit_distance_via_next_edit_distance_row(a, a_len, b, b_len, optimal_complet
   :param tf.Tensor b: (batch,time2), int32
   :param tf.Tensor b_len: (batch,), int32
   :param bool optimal_completion: calc optimal completion edit distance instead
-  :return: (batch,) tensor, int32, un-normalized edit distance
+  :return: (batch,n_labels) tensor, int32, un-normalized edit distance
   :rtype: tf.Tensor
   """
   from TFUtil import expand_dims_unbroadcast

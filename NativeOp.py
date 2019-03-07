@@ -4580,6 +4580,19 @@ class EditDistanceOp(NativeOpGenBase):
   Similar to :func:`tf.edit_distance`.
   Calculates the `edit distance / Levenshtein distance <https://en.wikipedia.org/wiki/Levenshtein_distance>`__.
 
+  The naive implementation either goes over ``a`` and then ``b``, thus results in O(|a|*|b|) time complexity.
+  To calculate a new entry in the table (over then length of ``a`` and ``b``),
+  it depends on the prev symbol in ``a`` (left) (deletion error),
+  the prev symbol in ``b`` (up) (insertion error),
+  and the left-up diagonal (substitution error, or no error).
+
+  To take advantage of the parallelism of the GPU, we follow a diagonal iteration scheme, such that
+  in every iteration, all entries on the diagonal can be computed in parallel, as they do not depend on each other.
+  After implementing this, we found that this algorithm is described here::
+
+    Using GPUs to Speed-Up Levenshtein Edit Distance Computation, Balhaf et al, 2016,
+    https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=7476090&tag=1
+
   inputs:
     :param a: symbols. 2d (batch,time), int32
     :param a_len: 1d (batch,), int32
@@ -4739,6 +4752,7 @@ class OptimalCompletionEditDistanceOp(NativeOpGenBase):
   """
   Given some prefix ``a``, what is the minimum possible edit distance to ``b`` with any possible suffix on ``a`` ?
   This is described in `Optimal Completion Distillation (OCD) <https://arxiv.org/abs/1810.01398>`__.
+  The implementation is derived from :class:`EditDistanceOp`.
 
   inputs:
     :param a: symbols. 2d (batch,time), int32. prefix.
@@ -4909,6 +4923,7 @@ class OptimalCompletionEditDistancePerSuccessorOp(NativeOpGenBase):
   what is the minimum possible edit distance to ``b`` with any possible suffix on ``a`` + successor,
   for successor in ``successors``.
   This is described in `Optimal Completion Distillation (OCD) <https://arxiv.org/abs/1810.01398>`__.
+  The implementation is derived from :class:`OptimalCompletionEditDistanceOp`.
 
   inputs:
     :param a: symbols. 2d (batch,time), int32. prefix.
@@ -5143,9 +5158,13 @@ class OptimalCompletionEditDistancePerSuccessorOp(NativeOpGenBase):
 
 class NextEditDistanceRowOp(NativeOpGenBase):
   """
+  This does a single step in calculating the edit distance table, going over the symbols in ``a``.
+  Note that when you have the full sequence ``a`` in advance, :class:`EditDistanceOp` should be faster.
+  However, this iterative op is useful when ``a`` is constructed step by step.
+
   inputs:
     :param last_row: 2d (batch,b_time + 1), int32. last edit distances
-    :param a: symbols. 2d (batch,), int32. current.
+    :param a: symbols. 1d (batch,), int32. current.
     :param a_n: scalar, int32. current position
     :param a_ended: 1d (batch,), int32 (casted from bool, because int32 easier to handle)
     :param b: symbols. 2d (batch,b_time), int32
