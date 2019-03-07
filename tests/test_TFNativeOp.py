@@ -1849,6 +1849,38 @@ def test_next_edit_distance_row_optimal_completion():
   print()
 
 
+def test_next_edit_distance_reduce_optimal_completion():
+  rnd = numpy.random.RandomState(42)
+  n_batch = 15
+  n_a_max_len = 7
+  n_b_max_len = 13
+  num_classes = 10
+  a_np = rnd.randint(0, num_classes, size=(n_batch, n_a_max_len), dtype="int32")
+  b_np = rnd.randint(0, num_classes, size=(n_batch, n_b_max_len), dtype="int32")
+  # Test only for full length seqs in a.
+  a_len_np = numpy.array([n_a_max_len] * n_batch, dtype="int32")
+  b_len_np = rnd.randint(1, n_b_max_len + 1, size=(n_batch,), dtype="int32")
+  a = tf.constant(a_np)
+  b = tf.constant(b_np)
+  assert all(a_len_np > 0)
+  a_len = tf.constant(a_len_np)
+  b_len = tf.constant(b_len_np)
+  print("Now the whole batch.")
+  # a_len - 1 such that we can do the check below.
+  native_edit_dist = optimal_completion_edit_distance_per_successor_via_next_edit_distance(
+    a, a_len, b, b_len, num_classes)
+  native_edit_dist_np = session.run(native_edit_dist)
+  assert isinstance(native_edit_dist_np, numpy.ndarray)
+  print("Native edit dist:", native_edit_dist_np)
+  assert native_edit_dist_np.shape == (n_batch, num_classes)
+  for i in range(n_batch):
+    for j in range(num_classes):
+      tf_res = _naive_optimal_completion_edit_distance(list(a_np[i, :a_len_np[i]]) + [j], b_np[i, :b_len_np[i]])
+      native_res = native_edit_dist_np[i, j]
+      assert tf_res == native_res
+  print()
+
+
 @unittest.skipIf(not is_gpu_available(), "no gpu on this system")
 @unittest.skipIf(is_gpu_available() and get_available_gpu_min_compute_capability() < 3.5, "too low compute capability")
 def test_init_blocksparse():
@@ -2001,7 +2033,6 @@ if __name__ == "__main__":
   finally:
     session.close()
     del session
-    tf.reset_default_graph()
     import threading
     if len(list(threading.enumerate())) > 1:
       print("Warning, more than one thread at exit:")

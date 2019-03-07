@@ -5276,3 +5276,139 @@ class NextEditDistanceRowOp(NativeOpGenBase):
   """
 
   c_bw_code = None
+
+
+class NextEditDistanceReduceOp(NativeOpGenBase):
+  """
+  Code derived from :class:`NextEditDistanceRowOp`.
+
+  inputs:
+    :param last_row: 2d (batch,b_time + 1), int32. last edit distances
+    :param a: symbols. 2d (batch|1,n_labels), int32. current.
+    :param a_n: scalar, int32. current position
+    :param a_ended: 1d (batch,), int32 (casted from bool, because int32 easier to handle)
+    :param b: symbols. 2d (batch,b_time), int32
+    :param b_len: 1d (batch,), int32
+    :param optimal_completion: scalar, int32 (casted from bool). True -> reduce_min over row; False -> last of row
+  outputs:
+    :param output: 2d (batch,n_labels), int32, next (unnormalized) (maybe optional) edit distance
+  """
+  in_info = (
+    {"name": "last_row", "ndim": 2, "shape": (None, None), "dtype": "int32",
+     "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "a", "ndim": 2, "shape": (None, None), "dtype": "int32",
+     "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "a_n", "ndim": 0, "shape": (), "dtype": "int32",
+     "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "a_ended", "ndim": 1, "shape": (None,), "dtype": "int32",
+     "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "b", "ndim": 2, "shape": (None, None), "dtype": "int32",
+     "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "b_len", "ndim": 1, "shape": (None,), "dtype": "int32",
+     "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "optimal_completion", "ndim": 0, "shape": (), "dtype": "int32",
+     "gradient": "disconnected", "host_memory": True},
+  )
+  out_info = (
+    {"name": "output", "ndim": 2, "shape": ((0, 0), (1, 1)), "dtype": "int32", "need_contiguous": True},
+  )
+
+  c_extra_support_code = {
+    "001_calc_result": """
+      DEF_KERNEL
+      void calc_result_kernel(
+            int n_batch, int n_b_max_len, int n_labels,
+            const int32_t* last_row,
+            const int32_t* a, const int32_t* a_n, const int32_t* a_ended,
+            const int32_t* b, const int32_t* b_len,
+            int32_t* result,
+            bool optimal_completion,
+            bool a_broadcast_batch
+      ) {
+        int idx = threadIdx.x + blockDim.x * blockIdx.x;
+        while(idx < n_batch * n_labels) {
+          int batch_idx = idx / n_labels;
+          int label_idx = idx % n_labels;
+          int a_label = a[(a_broadcast_batch ? 0 : batch_idx) * n_labels + label_idx];
+
+          int total_min_error;
+          int last_dist;
+          if(!a_ended[batch_idx]) {
+            last_dist = *a_n + 1;  // Initial deletion error.
+            total_min_error = last_dist;
+            for(int t_b = 1; t_b <= b_len[batch_idx]; ++t_b) {
+              int ins_error = last_row[batch_idx * (n_b_max_len + 1) + t_b] + 1;
+              int del_error = last_dist + 1;
+              int sub_error = last_row[batch_idx * (n_b_max_len + 1) + t_b - 1];
+              if(a_label != b[batch_idx * n_b_max_len + t_b - 1])
+                ++sub_error;
+              int min_error = ins_error;
+              if(min_error > del_error) min_error = del_error;
+              if(min_error > sub_error) min_error = sub_error;
+              last_dist = min_error;
+              if(total_min_error > last_dist) total_min_error = last_dist;
+            }
+          }
+          else {  // a ended
+            // Just copy over.
+            total_min_error = last_row[batch_idx * (n_b_max_len + 1)];
+            for(int t_b = 0; t_b <= b_len[batch_idx]; ++t_b) {
+              last_dist = last_row[batch_idx * (n_b_max_len + 1) + t_b];
+              if(total_min_error > last_dist) total_min_error = last_dist;
+            }
+          }
+
+          result[batch_idx * n_labels + label_idx] = optimal_completion ? total_min_error : last_dist;
+
+          idx += gridDim.x * blockDim.x;
+        }
+      }
+    """
+  }
+
+  c_fw_code = """
+    assert(n_inputs == 7);
+    assert(n_outputs == 1);
+    Ndarray* last_row = inputs[0];
+    Ndarray* a = inputs[1];
+    Ndarray* a_n = inputs[2];
+    Ndarray* a_ended = inputs[3];
+    Ndarray* b = inputs[4];
+    Ndarray* b_len = inputs[5];
+    bool optimal_completion = (bool) Ndarray_DEV_DATA_int32_scalar(inputs[6]);
+    Ndarray* out = *outputs[0];
+    assert_cmp(Ndarray_NDIM(last_row), ==, 2);
+    assert_cmp(Ndarray_NDIM(a), ==, 2);
+    assert_cmp(Ndarray_NDIM(a_n), ==, 0);
+    assert_cmp(Ndarray_NDIM(a_ended), ==, 1);
+    assert_cmp(Ndarray_NDIM(b), ==, 2);
+    assert_cmp(Ndarray_NDIM(b_len), ==, 1);
+    assert_cmp(Ndarray_NDIM(out), ==, 2);
+    int n_batch = Ndarray_DIMS(out)[0];
+    int n_labels = Ndarray_DIMS(out)[1];
+    int n_b_max_len = Ndarray_DIMS(b)[1];
+    assert_cmp(Ndarray_DIMS(out)[0], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(out)[1], ==, n_labels);
+    assert_cmp(Ndarray_DIMS(last_row)[0], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(last_row)[1], ==, n_b_max_len + 1);
+    bool a_broadcast_batch = Ndarray_DIMS(a)[0] == 1;
+    if(!a_broadcast_batch)
+      assert_cmp(Ndarray_DIMS(a)[0], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(a)[1], ==, n_labels);
+    assert_cmp(Ndarray_DIMS(a_ended)[0], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(b)[0], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(b)[1], ==, n_b_max_len);
+    assert_cmp(Ndarray_DIMS(b_len)[0], ==, n_batch);
+
+    start_dev_kernel(calc_result_kernel, (
+      n_batch, n_b_max_len, n_labels,
+      Ndarray_DEV_DATA_int32(last_row),
+      Ndarray_DEV_DATA_int32(a), Ndarray_DEV_DATA_int32(a_n), Ndarray_DEV_DATA_int32(a_ended),
+      Ndarray_DEV_DATA_int32(b), Ndarray_DEV_DATA_int32(b_len),
+      Ndarray_DEV_DATA_int32(out),
+      optimal_completion,
+      a_broadcast_batch
+    ));
+  """
+
+  c_bw_code = None
