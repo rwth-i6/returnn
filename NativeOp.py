@@ -5012,37 +5012,58 @@ class OptimalCompletionEditDistancePerSuccessorOp(NativeOpGenBase):
         }
       }
     """,
-    "002_expand": """
+    "002_init_result": """
       DEF_KERNEL
-      void expand_kernel(
+      void init_result_kernel(
             int n_batch, int n_b_max_len, int n_labels,
-            const int32_t* b,
             const int32_t* a_len, const int32_t* b_len,
             const int32_t* a_last_row,
-            const int32_t* successors,
             int32_t* result
       ) {
         int idx = threadIdx.x + blockDim.x * blockIdx.x;
         while(idx < n_batch * n_labels) {
           int batch_idx = idx / n_labels;
           int successor_idx = idx % n_labels;
-          int successor = successors[successor_idx];
 
+          // Initial insertion, last deletion.
           int t_a = a_len[batch_idx] + 1;
           int min_cost = t_a;
-          for(int t_b = 0; t_b < b_len[batch_idx]; ++t_b) {
-            // We can ignore insertion/deletion (except last deletion.)
-            int sub_cost = a_last_row[batch_idx * (n_b_max_len + 1) + t_b];
-            if(successor != b[batch_idx * n_b_max_len + t_b])
-              ++sub_cost;
-            if(min_cost > sub_cost) min_cost = sub_cost;
-          }
           int last_del_cost = a_last_row[batch_idx * (n_b_max_len + 1) + b_len[batch_idx]] + 1;
           if(min_cost > last_del_cost) min_cost = last_del_cost;
           result[batch_idx * n_labels + successor_idx] = min_cost;
 
           idx += gridDim.x * blockDim.x;
-        }   
+        }
+      }
+    """,
+    "003_expand": """
+      DEF_KERNEL
+      void expand_kernel(
+            int n_batch, int n_b_max_len, int n_labels,
+            const int32_t* b,
+            const int32_t* b_len,
+            const int32_t* a_last_row,
+            const int32_t* successors,
+            int32_t* result
+      ) {
+        int idx = threadIdx.x + blockDim.x * blockIdx.x;
+        while(idx < n_batch * n_labels * n_b_max_len) {
+          int batch_idx = idx / n_b_max_len / n_labels;
+          int successor_idx = (idx / n_b_max_len) % n_labels;
+          int t_b = idx % n_b_max_len;
+          int successor = successors[successor_idx];
+
+          if(t_b < b_len[batch_idx]) {
+            // We can ignore insertion/deletion
+            // (except initial insertion / last deletion, see init_result_kernel).
+            int sub_cost = a_last_row[batch_idx * (n_b_max_len + 1) + t_b];
+            if(successor != b[batch_idx * n_b_max_len + t_b])
+              ++sub_cost;
+            elem_atomic_min(&result[batch_idx * n_labels + successor_idx], sub_cost);
+          }
+
+          idx += gridDim.x * blockDim.x;
+        }
       }
     """
   }
@@ -5097,10 +5118,17 @@ class OptimalCompletionEditDistancePerSuccessorOp(NativeOpGenBase):
       cur_dist = tmp;
     }
 
+    start_dev_kernel(init_result_kernel, (
+      n_batch, n_b_max_len, n_labels,
+      Ndarray_DEV_DATA_int32(a_len), Ndarray_DEV_DATA_int32(b_len),
+      a_last_row,
+      Ndarray_DEV_DATA_int32(out)
+    ));
+
     start_dev_kernel(expand_kernel, (
       n_batch, n_b_max_len, n_labels,
       Ndarray_DEV_DATA_int32(b),
-      Ndarray_DEV_DATA_int32(a_len), Ndarray_DEV_DATA_int32(b_len),
+      Ndarray_DEV_DATA_int32(b_len),
       a_last_row,
       Ndarray_DEV_DATA_int32(successors),
       Ndarray_DEV_DATA_int32(out)
