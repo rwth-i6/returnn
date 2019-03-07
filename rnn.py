@@ -24,14 +24,15 @@ import sys
 import time
 import numpy
 from Log import log
-from PTDevice import Device, TheanoFlags, getDevicesInitArgs
+#from PTDevice import Device, TheanoFlags, getDevicesInitArgs
 from Config import Config
-from PTEngine import Engine
 from Dataset import Dataset, init_dataset, init_dataset_via_str
 from HDFDataset import HDFDataset
 from Debug import initIPythonKernel, initBetterExchook, initFaulthandler, initCudaNotInMainProcCheck
-from Util import initThreadJoinHack, describe_crnn_version, describe_theano_version, \
-  describe_tensorflow_version, BackendEngine, get_tensorflow_version_tuple
+from Util import initThreadJoinHack, BackendEngine, describe_crnn_version, \
+  describe_theano_version, \
+  describe_tensorflow_version, get_tensorflow_version_tuple, \
+  describe_pytorch_version
 
 
 config = None; """ :type: Config """
@@ -124,33 +125,45 @@ def initConfigJsonNetwork():
     config.network_topology_json = open(json_file).read()
 
 
-def initTheanoDevices():
+def initDevices():
   """
-  Only for Theano.
-
   :rtype: list[Device]
   """
-  if not BackendEngine.is_theano_selected():
-    return None
-  oldDeviceConfig = ",".join(config.list('device', ['default']))
-  if config.value("task", "train") == "nop":
-    return []
-  if "device" in TheanoFlags:
-    # This is important because Theano likely already has initialized that device.
-    config.set("device", TheanoFlags["device"])
-    print("Devices: Use %s via THEANO_FLAGS instead of %s." % \
-                     (TheanoFlags["device"], oldDeviceConfig), file=log.v4)
-  devArgs = getDevicesInitArgs(config)
-  assert len(devArgs) > 0
-  devices = [Device(**kwargs) for kwargs in devArgs]
-  for device in devices:
-    while not device.initialized:
-      time.sleep(0.25)
-  if devices[0].blocking:
-    print("Devices: Used in blocking / single proc mode.", file=log.v4)
+  if BackendEngine.is_theano_selected():
+    from Device import Device, TheanoFlags, getDevicesInitArgs
+    oldDeviceConfig = ",".join(config.list('device', ['default']))
+    if config.value("task", "train") == "nop":
+      return []
+    if "device" in TheanoFlags:
+      # This is important because Theano likely already has initialized that device.
+      config.set("device", TheanoFlags["device"])
+      print("Devices: Use %s via THEANO_FLAGS instead of %s." % \
+                       (TheanoFlags["device"], oldDeviceConfig), file=log.v4)
+    devArgs = getDevicesInitArgs(config)
+    assert len(devArgs) > 0
+    devices = [Device(**kwargs) for kwargs in devArgs]
+    for device in devices:
+      while not device.initialized:
+        time.sleep(0.25)
+    if devices[0].blocking:
+      print("Devices: Used in blocking / single proc mode.", file=log.v4)
+    else:
+      print("Devices: Used in multiprocessing mode.", file=log.v4)
+    return devices
+  elif BackendEngine.is_pytorch_selected():
+    from PTDevice import Device, getDevicesInitArgs
+    if config.value("task", "train") == "nop":
+      return []
+    devArgs = getDevicesInitArgs(config)
+    assert len(devArgs) > 0
+    devices = [Device(**kwargs) for kwargs in devArgs]
+    for device in devices:
+      while not device.initialized:
+        time.sleep(0.25)
+    print("Devices:", devArgs, file=log.v4)
+    return devices
   else:
-    print("Devices: Used in multiprocessing mode.", file=log.v4)
-  return devices
+    return None
 
 
 def getCacheByteSizes():
@@ -271,10 +284,14 @@ def initEngine(devices):
   """
   global engine
   if BackendEngine.is_theano_selected():
+    import Engine
     engine = Engine(devices)
   elif BackendEngine.is_tensorflow_selected():
     import TFEngine
     engine = TFEngine.Engine(config=config)
+  elif BackendEngine.is_pytorch_selected():
+    import PTEngine
+    engine = PTEngine.Engine(devices)
   else:
     raise NotImplementedError
 
@@ -339,6 +356,8 @@ def initBackendEngine():
     # Print available devices. Also make sure that get_tf_list_local_devices uses the correct TF session opts.
     print_available_devices(tf_session_opts=tf_session_opts, file=log.v2)
     debugRegisterBetterRepr()
+  elif BackendEngine.is_pytorch_selected():
+    print("PyTorch:", describe_pytorch_version(), file=log.v3)
   else:
     raise NotImplementedError
 
@@ -367,10 +386,10 @@ def init(configFilename=None, commandLineOptions=(), config_updates=None, extra_
       config.set("multiprocessing", False)
     if config.bool('multiprocessing', True):
       initCudaNotInMainProcCheck()
+  devices = initDevices()
   if config.bool('ipython', False):
     initIPythonKernel()
   initConfigJsonNetwork()
-  devices = initTheanoDevices()
   if needData():
     initData()
   printTaskProperties(devices)

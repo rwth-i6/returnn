@@ -27,28 +27,33 @@ from torch.autograd import grad
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
-TheanoFlags = {key: value for (key, value) in [s.split("=", 1) for s in os.environ.get("THEANO_FLAGS", "").split(",") if s]}
 floatX = 'float32'
 
 class DummyModel(nn.Module):
   def __init__(self):
     super(DummyModel, self).__init__()
-    self.lstm = nn.LSTM(50, 32, 1)
-    self.output = nn.Linear(32, 4501)
+    #self.lstm = nn.LSTM(50, 32, 1)
+    self.output = nn.Linear(50, 4501)
 
   def forward(self, x, i):
-    x = x.permute(1,0,2)
-    self.lstm.flatten_parameters()
-    x, _ = self.lstm(x)
-    x = self.output(x)
-    return F.softmax(x, dim=1)
+    #x = x.permute(1,0,2)
+    #self.lstm.flatten_parameters()
+    #x, _ = self.lstm(x)
+    #x = self.output(x)
+    return F.log_softmax(self.output(x), dim=1)
 
 def exec(x, y, i, j):
+  y[y==-1] = 0
   model = DummyModel()
+  x = torch.tensor(x, dtype=torch.float32).permute(1,0,2) # TODO
+  y = torch.tensor(y, dtype=torch.long).permute(1,0) # TODO
+  i = torch.tensor(i, dtype=torch.uint8).permute(1,0) # TODO
   pcx = model(x,i)
   loss_function = nn.NLLLoss()
-  return loss_function(pcx, y.permute(1,0).contiguous().view(-1))
+  loss = loss_function(pcx.contiguous().view(pcx.size(0) * pcx.size(1), pcx.size(2)), y.contiguous().view(-1))
+  return loss.detach() * pcx.size(0) * pcx.size(1)
 
 def _get_num_devices():
   if os.name == 'nt':
@@ -66,6 +71,50 @@ def _get_num_devices():
       pass
     return num_cpus, num_gpus
 
+def get_device_attributes():
+  # (shaders / CUDA cores, clock in MHz, memory in bytes)
+  # https://en.wikipedia.org/wiki/GeForce_10_series
+  # https://en.wikipedia.org/wiki/List_of_Nvidia_graphics_processing_units
+  attributes = {
+                 "default" : (1000, 1020, 2 * 1024 * 1024 * 1024),
+                 "GeForce GTX 580" : (512, 1714, 2 * 1024 * 1024 * 1024),
+                 "GeForce GT 630M" : (96, 672, 2 * 1024 * 1024 * 1024),
+                 "GeForce GT 650M" : (384, 900, 2 * 1024 * 1024 * 1024),
+                 "GeForce GT 750M" : (384, 967, 2 * 1024 * 1024 * 1024),
+                 "GeForce GTX 680" : (1536, 1020, 2 * 1024 * 1024 * 1024),
+                 "GeForce GTX 750 Ti" : (640, 1110, 2 * 1024 * 1024 * 1024),
+                 "GeForce GTX 760" : (2304, 980, 3 * 1024 * 1024 * 1024),
+                 "GeForce GTX 770" : (1536, 1150, 2 * 1024 * 1024 * 1024),
+                 "GeForce GTX 780" : (2304, 980, 3 * 1024 * 1024 * 1024),
+                 "GeForce GTX 790" : (2304, 980, 3 * 1024 * 1024 * 1024),
+                 "GeForce GTX 970" : (1664, 1178, 4 * 1024 * 1024 * 1024),
+                 "GeForce GTX 980" : (2048, 1126, 4 * 1024 * 1024 * 1024),
+                 "GeForce GTX 980 Ti" : (2048, 1126, 4 * 1024 * 1024 * 1024),
+                 "GeForce GTX 1080" : (3584, 1480, 11 * 1024 * 1024 * 1024),
+                 "GeForce GTX 1080 Ti" : (3584, 1480, 11 * 1024 * 1024 * 1024),
+                 "GeForce GTX TITAN" : (2688, 837, 6 * 1024 * 1024 * 1024),
+                 "Geforce GTX TITAN X" : (3584, 1417, 12 * 1024 * 1024 * 1024),
+                 "GeForce GT 540M" : (2688, 837, 2 * 1024 * 1024 * 1024),
+                 "Tesla K20c" : (2496, 706, 5 * 1024 * 1024 * 1024),
+                 }
+  cpu = 0
+  #for clock in cmd('cat /proc/cpuinfo | grep "model name" | cut -d \'@\' -f 2 | tr -d \' \' | sed -e s/GHz//'):
+  # Why is memory in bytes hard coded to 2GB for all cpus?
+  if os.name != 'nt':
+    if sys.platform == 'darwin':
+      mhz = int(float(cmd("system_profiler  SPHardwareDataType | "
+                          "grep 'Processor Speed' | awk '{print $3}'")[0].replace(',','.')) * 1024)
+      for i in range(get_num_devices()[0]):
+        attributes["cpu" + str(cpu)] = (1, mhz, 2 * 1024 * 1024 * 1024)
+        cpu += 1
+    else:
+      for clock in cmd('cat /proc/cpuinfo | grep "cpu MHz" | cut -d \':\' -f 2 | sed \'s/^\\ //\''):
+        attributes["cpu" + str(cpu)] = (1, int(float(clock)), 2 * 1024 * 1024 * 1024)
+        cpu += 1
+    attributes["cpu127"] = (1, 1, 32 * 1024 * 1024 * 1024) # what does this line do? Why add a cpu with 32GB?
+  if not cpu:
+    attributes["cpu0"] = (1, 1000, 2 * 1024 * 1024 * 1024)
+  return attributes
 
 _num_devices = None
 
@@ -145,10 +194,10 @@ def getDevicesInitArgs(config):
       devices = [ {"device": tag, "config": config, "num_batches": device_tags[tag][0], "update_specs" : {'update_rule' : 'global' if device_tags[tag][1] else 'none'}} for tag in tags ]
       if len(devices) == 1 and ngpux > 1:
         devices = devices * ngpux
-      import TaskSystem
-      if TaskSystem.isMainProcess:  # On a child process, we can have the gpu device.
-        assert not TheanoFlags.get("device", "").startswith("gpu"), \
-            "The main proc is not supposed to use the GPU in multiprocessing mode. Do not set device=gpu in THEANO_FLAGS."
+      #import TaskSystem
+      #if TaskSystem.isMainProcess:  # On a child process, we can have the gpu device.
+      #  assert not TheanoFlags.get("device", "").startswith("gpu"), \
+      #      "The main proc is not supposed to use the GPU in multiprocessing mode. Do not set device=gpu in THEANO_FLAGS."
     else:
       devices = [ {"device": tags[0], "config": config, "blocking": True} ]
     #if config.value("on_size_limit", "ignore") == "cpu" and devices[-1]["device"] != "cpu127":
@@ -170,6 +219,9 @@ class Device(object):
     self.output = None; " :type: list[numpy.ndarray] "
     self.outputs_format = None; " :type: list[str] "  # via self.result()
     self.train_outputs_format = None; " :type: list[str] "  # set via self.initialize()
+    self.run_called_count = 0
+    self.result_called_count = 0
+    self.wait_for_result_call = False
     self.compute_total_time = 0
     #self.num_frames = NumbersDict(0)
     self.num_updates = 0
@@ -273,10 +325,12 @@ class Device(object):
       model.close()
     # initialize batch
     self.used_data_keys = ['data', 'classes']  # TODO #self.trainnet.get_used_data_keys()
+    self.data = { k : numpy.zeros((1,), dtype='int32' if k == 'classes' else 'float32') for k in self.used_data_keys }
+    self.index = { k : numpy.zeros((1,), dtype='uint8') for k in self.used_data_keys }
     print("Device train-network: Used data keys:", self.used_data_keys, file=log.v4)
     assert "data" in self.used_data_keys
     # TODO
-    #self.y = {k: theano.shared(numpy.zeros((1,) * self.trainnet.y[k].ndim, dtype=self.trainnet.y[k].dtype),
+    #self.data = {k: theano.shared(numpy.zeros((1,) * self.trainnet.y[k].ndim, dtype=self.trainnet.y[k].dtype),
     #                           borrow=True, name='y_%s' % k)
     #          for k in self.used_data_keys}
     #self.j = {k: theano.shared(numpy.zeros((1, 1), dtype='int8'), borrow=True, name='j_%s' % k)
@@ -284,7 +338,7 @@ class Device(object):
     if log.verbose[4]: progress_bar()
 
     # initialize functions
-    #self.updater = None
+    self.updater = None
     self.update_specs = update_specs
 
     self.forwarder = None
@@ -340,13 +394,15 @@ class Device(object):
 
   def compute_run(self, task):
     compute_start_time = time.time()
-    batch_dim = self.y["data"].get_value(borrow=True, return_internal_type=True).shape[1]
+    batch_dim = self.data["data"].shape[1]
     block_size = self.block_size if self.block_size else batch_dim
     if self.config.bool("debug_shell_first_compute", False):
       print("debug_shell_first_compute", file=log.v1)
       Debug.debug_shell(user_ns=locals(), user_global_ns=globals())
-    if task == "train":
-      output = [exec(self.y['data'],self.y['classes'],self.j['data'],self.j['classes'])]
+    if task in [ "train", "eval" ]:
+      output = [exec(self.data['data'],self.data['classes'],self.index['data'],self.index['classes'])]
+      if task == 'eval': # TODO
+        output.append(0)
     else:
       assert False, "invalid command: " + task
     compute_end_time = time.time()
@@ -425,7 +481,7 @@ class Device(object):
 
     self.initialize(config, update_specs=update_specs)
     #self._checkGpuFuncs(device, device_id)
-    #output_queue.send(len(self.trainnet.train_params_vars))
+    output_queue.send(len(list(self.network.named_parameters())))
     print("Device %s proc, pid %i is ready for commands." % (device, os.getpid()), file=log.v4)
     network_params = []
     while True:
@@ -440,7 +496,7 @@ class Device(object):
         output_queue.send(res)
       elif cmd == "reset":  # via self.reset()
         self.epoch = input_queue.recv()
-        self.epoch_var.set_value(self.epoch)
+        #self.epoch_var.set_value(self.epoch)
         if self.updater:
           self.updater.reset()
       elif cmd == "reinit":  # via self.reinit()
@@ -456,14 +512,17 @@ class Device(object):
         target_keys = input_queue.recv()
         for k in target_keys:
           t[k] = input_queue.recv()
-        self.output_index = {}
         for k in target_keys:
-          self.output_index[k] = input_queue.recv()
+          self.index[k] = input_queue.recv()
         self.tags = input_queue.recv()
         update_start_time = time.time()
-        # self.x == self.y["data"], will be set also here.
+        # self.x == self.data["data"], will be set also here.
         for k in target_keys:
-          self.y[k].set_value(t[k].astype(self.y[k].dtype), borrow = True)
+          self.data[k] = t[k].astype(self.data[k].dtype)
+        continue # TODO
+
+        for k in target_keys:
+          self.data[k].set_value(t[k].astype(self.data[k].dtype), borrow = True)
         #self.c.set_value(c.astype('int32'), borrow = True)
         for k in target_keys:
           self.j[k].set_value(self.output_index[k].astype('int8'), borrow = True)
@@ -479,12 +538,13 @@ class Device(object):
           self.updater.setLearningRate(learning_rate)
       elif cmd == "set-net-params":  # via self.set_net_params()
         self.total_cost = 0
-        our_params_trainnet = self.trainnet.get_all_params_vars()
-        our_params_testnet = self.testnet.get_all_params_vars()
-        assert isinstance(our_params_trainnet, list)
+        #our_params_trainnet = self.trainnet.get_all_params_vars()
+        #our_params_testnet = self.testnet.get_all_params_vars()
+        #assert isinstance(our_params_trainnet, list)
         params_len = input_queue.recv()
         params = [input_queue.recv_bytes() for i in range(params_len)]
         assert input_queue.recv() == "end-set-net-params"
+        continue # TODO
         assert len(params) == len(our_params_trainnet)
         if self.testnet_share_params:
           assert len(our_params_testnet) == 0
@@ -516,8 +576,8 @@ class Device(object):
         output_queue.send("end-get-net-train-params")
       elif cmd == "sync-net-train-params":
         network_params = []
-        for p in self.trainnet.get_all_params_vars():
-          network_params.append(numpy.asarray(p.get_value(), dtype=floatX).tostring())
+        for p in self.network.named_parameters(): #self.trainnet.get_all_params_vars():
+          network_params.append(numpy.asarray(p[1].detach(), dtype=floatX).tostring())
       elif cmd == "task":  # via self.run()
         task = input_queue.recv()
         try:
@@ -615,8 +675,30 @@ class Device(object):
     assert self.main_pid == os.getpid()
     assert all([s > 0 for s in shapes["data"]])
     self.targets = {k: numpy.full(shapes[k], -1, dtype=floatX) for k in self.used_data_keys}
-    self.output_index = {k: numpy.zeros(shapes[k][0:2], dtype='int8') for k in self.used_data_keys}
+    self.output_index = {k: numpy.zeros(shapes[k][0:2], dtype='uint8') for k in self.used_data_keys}
     self.tags = [None] * shapes["data"][1]  # type: list[str]  # seq-name for each batch slice
+
+  def is_device_proc(self):
+    if self.main_pid == os.getpid():
+      return False  # We are on the host.
+    return True  # We are the child proc.
+
+  def _generic_exec(self, func_name, args, kwargs):
+    assert self.is_device_proc()
+    func = attr_chain(self, func_name)
+    ret = func(*args, **kwargs)
+    return ret
+
+  def _generic_exec_on_dev(self, func_name, *args, **kwargs):
+    assert not self.wait_for_result_call
+    if self.is_device_proc():
+      return self._generic_exec(func_name, args, kwargs)
+    self.input_queue.send("generic-exec")
+    self.input_queue.send((func_name, args, kwargs))
+    r = self.output_queue.recv()
+    assert r == "generic-exec-result"
+    r = self.output_queue.recv()
+    return r
 
   def update_data(self):
     assert self.main_pid == os.getpid()
@@ -675,7 +757,7 @@ class Device(object):
     """
     assert self.main_pid == os.getpid(), "Call this from the main proc."
     # Reinit if needed.
-    self.reinit(json_content=network.to_json_content(), train_param_args=train_param_args)
+    #self.reinit(json_content=network.to_json_content(), train_param_args=train_param_args)
     self.set_net_params(network)
     self.epoch = epoch
     self.input_queue.send('reset')
@@ -779,3 +861,13 @@ class Device(object):
     self.proc.join(timeout=10)
     self.proc.terminate()
     self.proc = None
+
+  # device properties
+  def get_device_shaders(self):
+    return self.attributes[0]
+
+  def get_device_clock(self):
+    return self.attributes[1]
+
+  def get_device_memory(self):
+    return self.attributes[2]

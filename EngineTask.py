@@ -340,6 +340,7 @@ class TaskThread(threading.Thread):
         :type devices: list[Device.Device]
         :rtype: str | None
         """
+        return None # TODO
         if not devices:
           return None
         mem_info = [device.get_memory_info() for device in devices]
@@ -470,7 +471,6 @@ class TaskThread(threading.Thread):
               break
           else:
             time.sleep(0.01)
-
 
         match = True
         while self.batches.has_more() and total_cost < self.eval_batch_size and match:

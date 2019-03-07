@@ -646,7 +646,7 @@ def initBase(configfile=None, targetMode=None, epoch=None, sprint_opts=None):
 
   global engine
   if not engine:
-    devices = rnn.initTheanoDevices()
+    devices = rnn.initDevices()
     rnn.printTaskProperties(devices)
     rnn.initEngine(devices)
     engine = rnn.engine
@@ -925,4 +925,3 @@ def demo():
 
 if __name__ == "__main__":
   Debug.debug_shell(user_ns=locals(), user_global_ns=globals())
-
