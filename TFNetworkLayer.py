@@ -5658,7 +5658,6 @@ class Loss(object):
     self.layer = None  # type: LayerBase|None
     # All are initialized in self.init().
     self.output = None  # type: Data
-    self.time_major = None  # type: bool|None
     self.output_with_activation = None  # type: OutputWithActivation
     self.output_seq_lens = None  # type: tf.Tensor
     self.target = None  # type: Data
