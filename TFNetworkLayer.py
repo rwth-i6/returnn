@@ -6345,8 +6345,14 @@ class EditDistanceLoss(Loss):
       return seq
     output = get_first_seq(self.output)
     target = get_first_seq(self.target)
-    from TFUtil import encode_raw
-    return ["output", tf.size(output), encode_raw(output), "target", tf.size(target), encode_raw(target)]
+    if self.output.dim == 255:
+      from TFUtil import encode_raw
+      output_ = encode_raw(output)
+      target_ = encode_raw(target)
+    else:
+      output_ = output
+      target_ = target
+    return ["output", tf.size(output), output_, "target", tf.size(target), target_]
 
   def get_error(self):
     output = self._get_output_sparse_labels()
