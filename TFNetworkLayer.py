@@ -246,21 +246,27 @@ class LayerBase(object):
               out_type.setdefault("feature_dim_axis", None)
       elif network.is_inside_rec_layer():
         out_type.setdefault("time_dim_axis", None)
-    if sources_data and "shape" not in out_type:
-      if out_type.get("sparse", False):
-        out_type.setdefault("shape", sources_data.shape_sparse)
-      else:  # not sparse
-        feature_dim_axis = out_type.get("feature_dim_axis", NotSpecified)
-        if feature_dim_axis is NotSpecified:
-          if sources_data.feature_dim_axis is not None:
-            feature_dim_axis = sources_data.feature_dim_axis
-          else:
-            feature_dim_axis = -1
-        default_shape = list(sources_data.shape_dense)
-        default_shape.insert(sources_data.batch_dim_axis, None)
-        default_shape[feature_dim_axis] = out_type["dim"]
-        default_shape.pop(out_type.get("batch_dim_axis"))
-        out_type.setdefault("shape", tuple(default_shape))
+    if "shape" not in out_type:
+      if sources_data:
+        if out_type.get("sparse", False):
+          out_type.setdefault("shape", sources_data.shape_sparse)
+        else:  # not sparse
+          feature_dim_axis = out_type.get("feature_dim_axis", NotSpecified)
+          if feature_dim_axis is NotSpecified:
+            if sources_data.feature_dim_axis is not None:
+              feature_dim_axis = sources_data.feature_dim_axis
+            else:
+              feature_dim_axis = -1
+          default_shape = list(sources_data.shape_dense)
+          default_shape.insert(sources_data.batch_dim_axis, None)
+          default_shape[feature_dim_axis] = out_type["dim"]
+          default_shape.pop(out_type.get("batch_dim_axis"))
+          out_type.setdefault("shape", tuple(default_shape))
+      elif network.is_inside_rec_layer():
+        if out_type.get("sparse", False):
+          out_type.setdefault("shape", ())
+        else:
+          out_type.setdefault("shape", (out_type.get("dim", None),))
     # Note: No special handling for feature_dim_axis here for now...
     beam_size = None
     for src in sources:

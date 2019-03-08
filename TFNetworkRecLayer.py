@@ -779,6 +779,7 @@ class _SubnetworkRecCell(object):
       train_flag=parent_net.train_flag,
       search_flag=parent_net.search_flag,
       parent_layer=parent_rec_layer,
+      is_inside_rec_layer=True,
       parent_net=parent_net)
     if source_data:
       self.net.extern_data.data["source"] = \
@@ -817,9 +818,7 @@ class _SubnetworkRecCell(object):
     Need it for shape/meta information as well as dependency graph in advance.
     It will init self.layer_data_templates and self.prev_layers_needed.
     """
-    import better_exchook
-    import sys
-    from Util import StringIO
+    from TFNetwork import NetworkConstructionDependencyLoopException
 
     def add_templated_layer(name, layer_class, **layer_desc):
       """
@@ -848,15 +847,18 @@ class _SubnetworkRecCell(object):
       most_recent = None
 
     class GetLayer:
-      def __init__(lself, safe=False, once=False, allow_uninitialized_template=False):
+      def __init__(lself, safe=False, once=False, allow_uninitialized_template=False, parent=None):
         lself.safe = safe
         lself.once = once
         lself.allow_uninitialized_template = allow_uninitialized_template
         lself.count = 0
+        lself.parent = parent
 
       def __repr__(lself):
-        return "<RecLayer construct template GetLayer>(safe %r, once %r, allow_uninitialized_template %r)" % (
-          lself.safe, lself.once, lself.allow_uninitialized_template)
+        return (
+          "<RecLayer construct template GetLayer>("
+          "safe %r, once %r, allow_uninitialized_template %r, count %r, parent %r)") % (
+            lself.safe, lself.once, lself.allow_uninitialized_template, lself.count, lself.parent)
 
       def __call__(lself, name):
         """
@@ -866,7 +868,7 @@ class _SubnetworkRecCell(object):
         :return: layer, or None
         :rtype: LayerBase|None
         """
-        lself.count += 1
+        _name = name
         if name.startswith("prev:"):
           name = name[len("prev:"):]
           self.prev_layers_needed.add(name)
@@ -902,12 +904,12 @@ class _SubnetworkRecCell(object):
           self.layer_data_templates[name] = layer
         if construct_ctx.layers:
           construct_ctx.layers[-1].dependencies.add(layer)
-        if lself.once and lself.count <= 1:
+        lself.count += 1
+        if lself.once and lself.count > 1:
           return None
         if lself.safe:
           return None
         construct_ctx.layers.append(layer)
-        exc_dump_info = StringIO()
         try:
           # First, see how far we can get without recursive layer construction.
           # We only want to get the data template for now.
@@ -917,36 +919,35 @@ class _SubnetworkRecCell(object):
           # Also, first try without allowing to access uninitialized templates,
           # as they might propagate wrong Data format info (they have a dummy Data format set).
           # Only as a last resort, allow this.
-          successful_get_layer = None
           for get_layer in [
-            get_templated_layer,
-            GetLayer(once=True, allow_uninitialized_template=False),
-            GetLayer(safe=True, allow_uninitialized_template=False),
-            GetLayer(once=True, allow_uninitialized_template=True),
-            GetLayer(safe=True, allow_uninitialized_template=True),
+            GetLayer(parent=_name),
+            GetLayer(once=True, allow_uninitialized_template=False, parent=_name),
+            GetLayer(safe=True, allow_uninitialized_template=False, parent=_name),
+            GetLayer(once=True, allow_uninitialized_template=True, parent=_name),
+            GetLayer(safe=True, allow_uninitialized_template=True, parent=_name),
           ]:
+            if name in self.net._constructing_layers:
+              continue  # they all will fail...
             try:
               self.net.construct_layer(
                 net_dict=self.net_dict, name=name, get_layer=get_layer, add_layer=add_templated_layer)
-              successful_get_layer = get_layer
               break  # we did it, so get out of the loop
+            except NetworkConstructionDependencyLoopException:
+              # go on with the next get_layer
+              pass
             except Exception:
               # Pretty generic exception handling but anything could happen.
-              print("Template construct exception with get_layer = %r" % get_layer, file=exc_dump_info)
-              better_exchook.better_exchook(*sys.exc_info(), file=exc_dump_info)
-              print("---", file=exc_dump_info)
+              # If your network construction behaves strange, you might want to look here what happens.
+              # However, we don't do any output by default, as this could be very spammy.
               # go on with the next get_layer
+              pass
           # Now, do again, but with full recursive layer construction, to determine the dependencies.
           construct_ctx.most_recent = list(construct_ctx.layers)
           try:
             self.net.construct_layer(
               net_dict=self.net_dict, name=name, get_layer=get_templated_layer, add_layer=add_templated_layer)
-          except Exception as exc:
-            print("Template construct exception, final fail.", file=exc_dump_info)
-            print("Successful get_layer:", successful_get_layer, file=exc_dump_info)
-            print("Final exception:", file=exc_dump_info)
-            better_exchook.better_exchook(*sys.exc_info(), file=exc_dump_info)
-            raise exc.__class__("Template construct exception, final fail.\n%s" % exc_dump_info.getvalue())
+          except Exception:
+            raise
         finally:
           assert construct_ctx.layers[-1] is layer, "invalid stack %r, expected top layer %r" % (
             construct_ctx.layers, layer)

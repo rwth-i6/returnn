@@ -190,6 +190,7 @@ class TFNetwork(object):
   def __init__(self, config=None, extern_data=None, rnd_seed=None,
                train_flag=False, eval_flag=False, search_flag=False,
                parent_layer=None, parent_net=None, extra_parent_net=None,
+               is_inside_rec_layer=None,
                name=None):
     """
     :param Config.Config config: only needed to init extern_data if not specified explicitly
@@ -201,6 +202,7 @@ class TFNetwork(object):
     :param TFNetworkLayer.LayerBase|None parent_layer:
     :param TFNetwork|None parent_net:
     :param TFNetwork|None extra_parent_net:
+    :param bool is_inside_rec_layer: at template construction, use this
     :param str name: only for debugging
     """
     if not name:
@@ -236,6 +238,7 @@ class TFNetwork(object):
     self.search_flag = search_flag
     self.parent_layer = parent_layer
     self.parent_net = parent_net
+    self._is_inside_rec_layer = is_inside_rec_layer
     self.extra_parent_net = extra_parent_net
     self.extra_net = None  # type: TFNetwork
     self._selected_train_layers = None
@@ -1172,6 +1175,8 @@ class TFNetwork(object):
     :return: whether we are inside a :class:`RecLayer`. see :func:`get_rec_parent_layer`
     :rtype: bool
     """
+    if self._is_inside_rec_layer is not None:
+      return self._is_inside_rec_layer
     return self.get_rec_parent_layer() is not None
 
   def get_rec_parent_layer(self):
