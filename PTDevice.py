@@ -28,29 +28,30 @@ from torch.autograd import grad
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.optim as optim
 
 floatX = 'float32'
 
 class DummyModel(nn.Module):
   def __init__(self):
     super(DummyModel, self).__init__()
-    #self.lstm = nn.LSTM(50, 32, 1)
-    self.output = nn.Linear(50, 4501)
+    self.lstm = nn.LSTM(50, 32, 1)
+    self.output = nn.Linear(32, 4501)
 
   def forward(self, x, i):
     #x = x.permute(1,0,2)
-    #self.lstm.flatten_parameters()
-    #x, _ = self.lstm(x)
-    #x = self.output(x)
+    self.lstm.flatten_parameters()
+    x, _ = self.lstm(x)
+    x = x.permute(1,0,2)
     self.index = i
-    self.logpcx = F.log_softmax(self.output(x), dim=1)
+    self.logpcx = F.log_softmax(self.output(x), dim=2)
     return self.logpcx
 
   def cost(self, y):
     loss_function = nn.NLLLoss()
     loss = loss_function(self.logpcx.contiguous().view(
       self.logpcx.size(0) * self.logpcx.size(1), self.logpcx.size(2)), y.contiguous().view(-1))
-    return loss.detach() * self.index.float().sum()
+    return loss * self.index.float().sum()
 
   def errors(self, y):
     recog = torch.argmax(self.logpcx,dim=2).view(self.logpcx.size(0), self.logpcx.size(1))
@@ -137,9 +138,6 @@ def getDevicesInitArgs(config):
   :rtype: list[dict[str]]
   """
   multiproc = config.bool('multiprocessing', True)
-  if config.value('task', 'train') == "theano_graph":
-    # Should have been reset earlier. See init() which handles this case.
-    assert not multiproc, "set multiprocessing = False to use theano_graph"
   device_info = config.list('device', ['cpu0'])
   if len(device_info) == 1 and device_info[0] == 'json':
     try:
@@ -186,23 +184,14 @@ def getDevicesInitArgs(config):
               match = True
           assert match, "invalid device specified: " + info
     tags = sorted(device_tags.keys())
-    if multiproc:
-      assert len(tags) > 0
-      if len(tags) == 1 and tags[0][-1] == 'X':
-        newtag = tags[0][:-1] + 'Z'
-        device_tags[newtag] = device_tags[tags[0]]
-        tags[0] = newtag
-      devices = [ {"device": tag, "config": config, "num_batches": device_tags[tag][0], "update_specs" : {'update_rule' : 'global' if device_tags[tag][1] else 'none'}} for tag in tags ]
-      if len(devices) == 1 and ngpux > 1:
-        devices = devices * ngpux
-      #import TaskSystem
-      #if TaskSystem.isMainProcess:  # On a child process, we can have the gpu device.
-      #  assert not TheanoFlags.get("device", "").startswith("gpu"), \
-      #      "The main proc is not supposed to use the GPU in multiprocessing mode. Do not set device=gpu in THEANO_FLAGS."
-    else:
-      devices = [ {"device": tags[0], "config": config, "blocking": True} ]
-    #if config.value("on_size_limit", "ignore") == "cpu" and devices[-1]["device"] != "cpu127":
-    #  devices.append({"device": "cpu127", "config": config})
+    assert len(tags) > 0
+    if len(tags) == 1 and tags[0][-1] == 'X':
+      newtag = tags[0][:-1] + 'Z'
+      device_tags[newtag] = device_tags[tags[0]]
+      tags[0] = newtag
+    devices = [ {"device": tag, "config": config, "num_batches": device_tags[tag][0], "update_specs" : {'update_rule' : 'global' if device_tags[tag][1] else 'none'}} for tag in tags ]
+    if len(devices) == 1 and ngpux > 1:
+      devices = devices * ngpux
   return devices
 
 class Device(object):
@@ -340,7 +329,8 @@ class Device(object):
     if log.verbose[4]: progress_bar()
 
     # initialize functions
-    self.updater = None
+    self.updater = None # TODO
+    self.updater = optim.Adam(self.network.parameters(), lr = 0.0005, weight_decay = 0.001)
     self.update_specs = update_specs
 
     self.forwarder = None
@@ -396,14 +386,14 @@ class Device(object):
 
   def exec(self, x, y, i, j):
     y[y==-1] = 0
-    x = torch.tensor(x, dtype=torch.float32).permute(1,0,2) # TODO
+    x = torch.tensor(x, dtype=torch.float32) # TODO
     y = torch.tensor(y, dtype=torch.long).permute(1,0) # TODO
     i = torch.tensor(i, dtype=torch.uint8).permute(1,0) # TODO
     x = x.to(self.device)
     y = y.to(self.device)
     i = i.to(self.device)
     self.network(x,i)
-    return [self.network.cost(y).cpu(), self.network.errors(y).cpu()]
+    return [self.network.cost(y), self.network.errors(y)]
 
   def compute_run(self, task):
     compute_start_time = time.time()
@@ -415,7 +405,11 @@ class Device(object):
     if task in [ "train", "eval" ]:
       output = self.exec(self.data['data'],self.data['classes'],self.index['data'],self.index['classes'])
       if task == 'train': # TODO
+        output[0].backward()
+        self.updater.step()
         output = [output[0]]
+      for i in range(len(output)):
+        output[i] = output[i].detach().cpu()
     else:
       assert False, "invalid command: " + task
     compute_end_time = time.time()
@@ -512,8 +506,8 @@ class Device(object):
       elif cmd == "reset":  # via self.reset()
         self.epoch = input_queue.recv()
         #self.epoch_var.set_value(self.epoch)
-        if self.updater:
-          self.updater.reset()
+        #if self.updater: # TODO
+          #self.updater.reset()
       elif cmd == "reinit":  # via self.reinit()
         json_content = input_queue.recv()
         train_param_args = input_queue.recv()
@@ -549,8 +543,8 @@ class Device(object):
         self.update_total_time += time.time() - update_start_time
       elif cmd == "set-learning-rate":  # via self.set_learning_rate()
         learning_rate = input_queue.recv()
-        if self.updater:
-          self.updater.setLearningRate(learning_rate)
+        #if self.updater: # TODO
+        #  self.updater.setLearningRate(learning_rate)
       elif cmd == "set-net-params":  # via self.set_net_params()
         self.total_cost = 0
         #our_params_trainnet = self.trainnet.get_all_params_vars()
@@ -577,7 +571,7 @@ class Device(object):
           if not self.testnet_share_params:
             our_params_testnet[i].set_value(converted)
       elif cmd == 'get-num-updates':
-        if self.updater:
+        if self.updater and False: # TODO
           output_queue.send(int(self.updater.i.get_value()))
         else:
           output_queue.send(0)
