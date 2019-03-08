@@ -377,6 +377,9 @@ class TFNetwork(object):
       # However, any dependencies might resolve to the main net.
       self.extra_net.construct_layer(net_dict=net_dict, name=layer_name, check_existing=False)
 
+    if self.extra_net.recurrent:
+      self.recurrent = True
+
   def construct_layer(self, net_dict, name, get_layer=None, add_layer=None, check_existing=True):
     """
     :param dict[str,dict[str]] net_dict:
