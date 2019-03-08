@@ -724,6 +724,9 @@ class TFNetwork(object):
       if not self.parent_net:
         raise LayerNotFound("cannot get layer %r, no parent net for %r" % (layer_name, self))
       return self.parent_net.get_layer(layer_name[len("base:"):])
+    if layer_name == "data" or layer_name.startswith("data:"):
+      # Not created yet. Try to create it now.
+      return self.construct_layer(name=layer_name, net_dict={}, check_existing=False)
     if '/' in layer_name:
       # this is probably a path to a sub-layer
       root_layer = self.get_layer(layer_name.split('/')[0])  # get the root-layer (first part of the path)
