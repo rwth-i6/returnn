@@ -19,6 +19,10 @@ try:
 except ImportError:
   import _thread as thread
 import threading
+try:
+  from StringIO import StringIO
+except ImportError:
+  from io import StringIO
 
 PY3 = sys.version_info[0] >= 3
 

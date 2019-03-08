@@ -817,6 +817,10 @@ class _SubnetworkRecCell(object):
     Need it for shape/meta information as well as dependency graph in advance.
     It will init self.layer_data_templates and self.prev_layers_needed.
     """
+    import better_exchook
+    import sys
+    from Util import StringIO
+
     def add_templated_layer(name, layer_class, **layer_desc):
       """
       This is used instead of self.net.add_layer because we don't want to add
@@ -903,6 +907,7 @@ class _SubnetworkRecCell(object):
         if lself.safe:
           return None
         construct_ctx.layers.append(layer)
+        exc_dump_info = StringIO()
         try:
           # First, see how far we can get without recursive layer construction.
           # We only want to get the data template for now.
@@ -912,6 +917,7 @@ class _SubnetworkRecCell(object):
           # Also, first try without allowing to access uninitialized templates,
           # as they might propagate wrong Data format info (they have a dummy Data format set).
           # Only as a last resort, allow this.
+          successful_get_layer = None
           for get_layer in [
             get_templated_layer,
             GetLayer(once=True, allow_uninitialized_template=False),
@@ -922,14 +928,25 @@ class _SubnetworkRecCell(object):
             try:
               self.net.construct_layer(
                 net_dict=self.net_dict, name=name, get_layer=get_layer, add_layer=add_templated_layer)
+              successful_get_layer = get_layer
               break  # we did it, so get out of the loop
             except Exception:
               # Pretty generic exception handling but anything could happen.
-              pass  # go on with the next get_layer
+              print("Template construct exception with get_layer = %r" % get_layer, file=exc_dump_info)
+              better_exchook.better_exchook(*sys.exc_info(), file=exc_dump_info)
+              print("---", file=exc_dump_info)
+              # go on with the next get_layer
           # Now, do again, but with full recursive layer construction, to determine the dependencies.
           construct_ctx.most_recent = list(construct_ctx.layers)
-          self.net.construct_layer(
-            net_dict=self.net_dict, name=name, get_layer=get_templated_layer, add_layer=add_templated_layer)
+          try:
+            self.net.construct_layer(
+              net_dict=self.net_dict, name=name, get_layer=get_templated_layer, add_layer=add_templated_layer)
+          except Exception:
+            print("Template construct exception, final fail.")
+            print("Successful get_layer:", successful_get_layer)
+            print("Previous exceptions:")
+            print(exc_dump_info.getvalue())
+            raise
         finally:
           assert construct_ctx.layers[-1] is layer, "invalid stack %r, expected top layer %r" % (
             construct_ctx.layers, layer)
