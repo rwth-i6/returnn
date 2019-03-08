@@ -81,6 +81,7 @@ class LayerNetwork(nn.Module):
     :returns the kwarg for cls.from_json()
     """
     num_inputs, num_outputs = LayerNetworkDescription.num_inputs_outputs_from_config(config)
+    print(">>>>>>>>>>>>>>>", num_outputs)
     return {
       "n_in": num_inputs, "n_out": num_outputs
     }
@@ -117,7 +118,10 @@ class LayerNetwork(nn.Module):
     :rtype: LayerNetwork
     """
 
+    # TODO
     network = cls(n_in=n_in, n_out=n_out, **kwargs)
+    network.y['data'].n_out = network.n_out['data'][0]
+
     network.add_layer(OutputLayer(n_out=n_out['classes'][0], loss = 'ce', name = 'output'))
     network.loss = 'ce'
     return network
