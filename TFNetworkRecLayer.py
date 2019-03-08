@@ -941,12 +941,12 @@ class _SubnetworkRecCell(object):
           try:
             self.net.construct_layer(
               net_dict=self.net_dict, name=name, get_layer=get_templated_layer, add_layer=add_templated_layer)
-          except Exception:
-            print("Template construct exception, final fail.")
-            print("Successful get_layer:", successful_get_layer)
-            print("Previous exceptions:")
-            print(exc_dump_info.getvalue())
-            raise
+          except Exception as exc:
+            print("Template construct exception, final fail.", file=exc_dump_info)
+            print("Successful get_layer:", successful_get_layer, file=exc_dump_info)
+            print("Final exception:", file=exc_dump_info)
+            better_exchook.better_exchook(*sys.exc_info(), file=exc_dump_info)
+            raise exc.__class__("Template construct exception, final fail.\n%s" % exc_dump_info.getvalue())
         finally:
           assert construct_ctx.layers[-1] is layer, "invalid stack %r, expected top layer %r" % (
             construct_ctx.layers, layer)
