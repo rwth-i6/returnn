@@ -737,13 +737,28 @@ class TFNetwork(object):
       raise LayerNotFound("layer %r not found in %r" % (layer_name, self))
     return self.layers[layer_name]
 
+  def _get_all_layers(self):
+    """
+    :return: all layers, including extra net
+    :rtype: list[LayerBase]
+    """
+    layers = []
+    for (_, layer) in sorted(self.layers.items()):
+      if layer not in layers:
+        layers.append(layer)
+    if self.extra_net:
+      for layer in self.extra_net._get_all_layers():
+        if layer not in layers:
+          layers.append(layer)
+    return layers
+
   def get_params_list(self):
     """
     :return: list of model variables, i.e. from all the layers, excluding auxiliary vars like global_step
     :rtype: list[tf.Variable]
     """
     l = []  # type: list[tf.Variable]
-    for layer_name, layer in sorted(self.layers.items()):
+    for layer in self._get_all_layers():
       assert isinstance(layer, LayerBase)
       for param_name, param in sorted(layer.params.items()):
         assert isinstance(param, tf.Variable)
@@ -758,7 +773,7 @@ class TFNetwork(object):
     :rtype: dict[str,tf.Variable|tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject]
     """
     d = {}
-    for layer_name, layer in sorted(self.layers.items()):
+    for layer in self._get_all_layers():
       assert isinstance(layer, LayerBase)
       d.update(layer.get_saveable_params_dict())
     return d
@@ -769,7 +784,7 @@ class TFNetwork(object):
     :rtype: list[tf.Variable|tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject]
     """
     l = []  # type: list[tf.Variable]
-    for layer_name, layer in sorted(self.layers.items()):
+    for layer in self._get_all_layers():
       assert isinstance(layer, LayerBase)
       for param_name, param in sorted(layer.get_saveable_params_dict().items()):
         if param in l:  # could happen with reuse_params
@@ -779,23 +794,12 @@ class TFNetwork(object):
     l += self.extra_vars_to_save
     return l
 
-  def get_params_nested_dict(self):
-    """
-    :return: dict: layer_name -> param_name -> variable
-    :rtype: dict[str,dict[str,tf.Variable]]
-    """
-    l = {}  # type: dict[str,dict[str,tf.Variable]]
-    for layer_name, layer in self.layers.items():
-      assert isinstance(layer, LayerBase)
-      l[layer_name] = layer.params
-    return l
-
   def get_trainable_params(self):
     """
     :return: list of variables
     :rtype: list[tf.Variable]
     """
-    if not self._selected_train_layers:
+    if self._selected_train_layers is None:
       self.declare_train_params()
     trainable_vars_col = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
     assert isinstance(trainable_vars_col, list)
@@ -808,6 +812,10 @@ class TFNetwork(object):
         if param in trainable_vars_col:
           l.append(param)
           trainable_vars_col.remove(param)
+    if self.extra_net:
+      for param in self.extra_net.get_trainable_params():
+        if param not in l:
+          l.append(param)
     return l
 
   def declare_train_params(self, hidden_layer_selection=None, with_output=None):
@@ -821,6 +829,8 @@ class TFNetwork(object):
       hidden_layer_selection += [name for (name, layer) in self.layers.items() if layer.is_output_layer()]
     hidden_layer_selection = set(hidden_layer_selection)
     self._selected_train_layers = sorted(hidden_layer_selection)
+    if self.extra_net:
+      self.extra_net.declare_train_params()  # select all, currently...
 
   def get_num_params(self):
     """
