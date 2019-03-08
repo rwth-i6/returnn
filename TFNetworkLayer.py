@@ -46,7 +46,7 @@ class LayerBase(object):
   allow_inf_in_output = False
 
   def __init__(self, name, network, output=None, n_out=None, out_type=None, sources=(),
-               target=None, loss=None, size_target=None,
+               target=None, _target_layers=None, loss=None, size_target=None,
                reuse_params=None,
                param_device=None,
                is_output_layer=None, only_on_eval=False, only_on_search=False,
@@ -74,6 +74,7 @@ class LayerBase(object):
     :param list[LayerBase] sources: via self.transform_config_dict()
     :param str|None target: if some loss is set, this is the target data-key, i.e. network.extern_data.get_data(target)
       alternatively, this also can be a layer name.
+    :param dict[str,LayerBase]|None _target_layers: if target.startswith("layer:"), then this is target -> layer
     :param str|None size_target: like target but this is only used to set our output size in case of training
     :param Loss|None loss: via :func:`transform_config_dict`.
       Every layer can have one loss (of type :class:`Loss`), or none loss.
@@ -104,6 +105,7 @@ class LayerBase(object):
     self._register_layer()
     self.kwargs = None  # type: dict[str] # set via self.post_init
     self.target = target
+    self._target_layers = _target_layers
     self.loss = loss
     if self.loss and self.loss.recurrent:
       self.recurrent = True
@@ -188,7 +190,8 @@ class LayerBase(object):
     return cls._base_get_out_data_from_opts(**kwargs)
 
   @classmethod
-  def _base_get_out_data_from_opts(cls, network, name, out_type=None, n_out=None, target=None, size_target=None,
+  def _base_get_out_data_from_opts(cls, network, name, out_type=None, n_out=None,
+                                   target=None, _target_layers=None, size_target=None,
                                    sources=(), loss=None,
                                    **kwargs):
     """
@@ -199,6 +202,7 @@ class LayerBase(object):
     :param dict[str]|None|(()->Data) out_type:
     :param int|None n_out:
     :param str|None target:
+    :param dict[str,LayerBase]|None _target_layers: if target.startswith("layer:"), then this is target -> layer
     :param str|None size_target:
     :param list[LayerBase] sources:
     :param Loss|None loss:
@@ -218,7 +222,8 @@ class LayerBase(object):
     if "dim" not in out_type and n_out is not None:
       out_type["dim"] = n_out
     if "dim" not in out_type and target:
-      out_type["dim"] = cls._static_get_target_value(target=target, network=network, mark_data_key_as_used=False).dim
+      out_type["dim"] = cls._static_get_target_value(
+        target=target, _target_layers=_target_layers, network=network, mark_data_key_as_used=False).dim
     if n_out is not None:
       assert out_type["dim"] == n_out
     sources_data = None
@@ -264,16 +269,18 @@ class LayerBase(object):
     out_type.setdefault("beam_size", beam_size)
     output = Data(**out_type)
     cls._post_init_output(
-      output=output, network=network, target=target, size_target=size_target, sources=sources, **kwargs)
+      output=output, network=network, target=target, size_target=size_target, _target_layers=_target_layers,
+      sources=sources, **kwargs)
     return output
 
   @classmethod
-  def _post_init_output(cls, output, network, target=None, size_target=None, sources=(), **kwargs):
+  def _post_init_output(cls, output, network, target=None, size_target=None, _target_layers=None, sources=(), **kwargs):
     """
     :param Data output:
     :param TFNetwork.TFNetwork network:
     :param str|None target:
     :param str|None size_target:
+    :param dict[str,LayerBase]|None _target_layers: if target.startswith("layer:"), then this is target -> layer
     :param list[LayerBase] sources:
     """
     # You are supposed to set self.output.placeholder to the value which you want to return by the layer.
@@ -290,7 +297,7 @@ class LayerBase(object):
           # TODO: In training, this is ok. Maybe as well as for eval but not clear.
           # In forward, mark_data_key_as_used=False should be used and anyway that target value is not available.
           output.size_placeholder = cls._static_get_target_value(
-            target=target or size_target, network=network,
+            target=target or size_target, _target_layers=_target_layers, network=network,
             mark_data_key_as_used=network.train_flag is not False).size_placeholder.copy()
     if any([(src and not src.output.available_for_inference) for src in sources]):
       output.available_for_inference = False
@@ -384,22 +391,29 @@ class LayerBase(object):
       if target:
         d["target"] = target
     targets = None
+    target_layers = {}
+    assert "_target_layers" not in d
     if d.get("target", None):
       targets = d["target"]
       # we might have multiple targets, e.g. in choice layer, so convert to list
       if isinstance(targets, str):
         targets = [targets]
       if network.eval_flag:
+        # _target_layers is a small workaround for further code which might not have access to the right get_layer.
+        d["_target_layers"] = target_layers
         for target in targets:
           assert isinstance(target, str)
-          # Not resolving this in the dict, but call get_layer to make it available.
+          # Not resolving this in the dict as target, but call get_layer to make it available.
           if target.startswith("layer:"):
-            get_layer(target[len("layer:"):])
+            target_layers[target] = get_layer(target[len("layer:"):])
     if "n_out" not in d and targets and network.eval_flag:
       # Must be done here now because loss might be set to None later.
       target = targets[0]  # guess using first target
-      d["n_out"] = cls._guess_n_out_from_target_and_opt_loss(
-        network=network, target=target, loss_class_name=d.get("loss", None), get_layer=get_layer)
+      if target in target_layers:
+        d["n_out"] = target_layers[target].output.dim
+      else:
+        d["n_out"] = cls._guess_n_out_from_target_and_opt_loss(
+          network=network, target=target, loss_class_name=d.get("loss", None), get_layer=get_layer)
     if d.pop("loss_only_on_non_search", None) and network.search_flag:
       d.pop("loss", None)
       d.pop("loss_scale", None)
@@ -737,9 +751,10 @@ class LayerBase(object):
     return d
 
   @staticmethod
-  def _static_get_target_value(target, network, mark_data_key_as_used=True, get_layer=None):
+  def _static_get_target_value(target, network, mark_data_key_as_used=True, _target_layers=None, get_layer=None):
     """
     :param str target:
+    :param dict[str,LayerBase]|None _target_layers: if target.startswith("layer:"), then this is target -> layer
     :param TFNetwork.TFNetwork network:
     :param bool mark_data_key_as_used: forwarded self.network.get_extern_data()
     :param None|((str) -> LayerBase) get_layer: function to get or construct another layer
@@ -747,6 +762,8 @@ class LayerBase(object):
     """
     if not target or target == "none":
       return None
+    if _target_layers and target in _target_layers:
+      return _target_layers[target].output
     if target.startswith("layer:"):
       if not get_layer:
         get_layer = network.get_layer
