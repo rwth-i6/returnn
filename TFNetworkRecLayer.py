@@ -4448,6 +4448,11 @@ class EditDistanceTableLayer(LayerBase):
     return {"state": expand_dims_unbroadcast(tf.range(n_time + 1), axis=0, dim=batch_dim)}
 
   @classmethod
+  def get_rec_initial_output(cls, **kwargs):
+    initial_extra = cls.get_rec_initial_extra_outputs(**kwargs)
+    return initial_extra["state"]
+
+  @classmethod
   def get_out_data_from_opts(cls, name, sources, target, network, **kwargs):
     """
     :param str name:
