@@ -777,7 +777,8 @@ class LayerBase(object):
     :rtype: Data | None
     """
     return self._static_get_target_value(
-      target=self.target, network=self.network, mark_data_key_as_used=mark_data_key_as_used)
+      target=self.target, _target_layers=self._target_layers,
+      network=self.network, mark_data_key_as_used=mark_data_key_as_used)
 
   def _cond_only_on_eval_opt(self, on_eval_func, default_value):
     """
