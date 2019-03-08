@@ -4404,7 +4404,8 @@ class EditDistanceTableLayer(LayerBase):
     source_data = self.sources[0].output
     assert source_data.dtype == "int32" and source_data.batch_ndim <= 2
     assert self.target, "%s: 'target' must be set" % self
-    target_data = self._static_get_target_value(target=self.target, network=self.network)
+    target_data = self._static_get_target_value(
+      target=self.target, _target_layers=self._target_layers, network=self.network)
     assert target_data, "%s: target %r not found?" % (self, self.target)
     assert target_data.dtype == "int32" and target_data.batch_ndim == 2 and target_data.have_time_axis()
     target_data = target_data.copy_as_batch_major()
@@ -4454,6 +4455,11 @@ class EditDistanceTableLayer(LayerBase):
     return initial_extra["state"]
 
   @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    d.setdefault("n_out", None)  # avoid the default NotSpecified behavior, because we use target differently
+    super(EditDistanceTableLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+
+  @classmethod
   def get_out_data_from_opts(cls, name, sources, target, network, **kwargs):
     """
     :param str name:
@@ -4471,9 +4477,9 @@ class EditDistanceTableLayer(LayerBase):
     assert target_data.dtype == "int32" and target_data.batch_ndim == 2 and target_data.have_time_axis()
     assert target_data.sparse and source_data.dim == target_data.dim
     if source_data.have_time_axis():
-      return Data(name="%s_output" % name, shape=(None, None), dtype="int32")
+      return Data(name="%s_output" % name, shape=(None, None), dtype="int32", beam_size=source_data.beam_size)
     else:
-      return Data(name="%s_output" % name, shape=(None,), dtype="int32")
+      return Data(name="%s_output" % name, shape=(None,), dtype="int32", beam_size=source_data.beam_size)
 
 
 class OptimalCompletionsLayer(LayerBase):
@@ -4482,7 +4488,9 @@ class OptimalCompletionsLayer(LayerBase):
   "opt_completions": {"class": "optimal_completions", "from": "prev:edit_dist_table"}.
 
   You can also then define this further layer:
-  "opt_completion_soft_targets": {"class": "activation", "activation": "softmax", "from": "opt_completions"},
+  "opt_completion_soft_targets": {
+    "class": "eval", "eval": "tf.nn.softmax(tf.cast(source(0), tf.float32))",
+    "from": "opt_completions", "out_type": {"dtype": "float32"}},
   and use that as the :class:`CrossEntropyLoss` soft targets
   for the input of the "output" :class:`ChoiceLayer`, e.g. "output_prob".
   This makes most sense when you enable beam search (even, or esp, during training).
@@ -4496,10 +4504,11 @@ class OptimalCompletionsLayer(LayerBase):
     src_layer, = self.sources
     assert isinstance(src_layer, LayerBase)
     source_data = src_layer.output
-    assert source_data.shape == (None,) and source_data.is_batch_major
+    assert source_data.batch_shape == (None, None) and source_data.is_batch_major
     last_row = source_data.placeholder
     assert self.target, "%s: 'target' must be set" % self
-    target_data = self._static_get_target_value(target=self.target, network=self.network)
+    target_data = self._static_get_target_value(
+      target=self.target, _target_layers=self._target_layers, network=self.network)
     assert target_data, "%s: target %r not found?" % (self, self.target)
     assert target_data.dtype == "int32" and target_data.batch_ndim == 2 and target_data.have_time_axis()
     from TFNativeOp import next_edit_distance_reduce
@@ -4522,16 +4531,16 @@ class OptimalCompletionsLayer(LayerBase):
     """
     assert len(sources) == 1, "%s %r: expects exactly a single source" % (cls.__name__, name)
     source_data = sources[0].output
-    assert source_data.dtype == "int32" and source_data.batch_ndim == 1 and source_data.sparse
+    assert source_data.dtype == "int32" and source_data.batch_ndim == 2
     assert target, "%s %r: 'target' must be set" % (cls.__name__, name)
     target_data = cls._static_get_target_value(target=target, network=network)
     assert target_data, "target %r not found?" % target
     assert target_data.dtype == "int32" and target_data.batch_ndim == 2 and target_data.have_time_axis()
-    assert target_data.sparse and source_data.dim == target_data.dim
-    assert not source_data.have_time_axis(), "not implemented..."
+    assert target_data.sparse
     return Data(
       name="%s_output" % name,
-      shape=(target_data.dim,), dim=target_data.dim, dtype="int32", sparse=False, time_dim_axis=None)
+      shape=(target_data.dim,), dim=target_data.dim, dtype="int32", sparse=False, time_dim_axis=None,
+      beam_size=source_data.beam_size)
 
 
 class BaseRNNCell(rnn_cell.RNNCell):
