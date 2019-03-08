@@ -319,6 +319,7 @@ class Device(object):
       model.close()
     else:
       self.network = DummyModel() #PTLayerNetwork.from_config_topology(config)
+    self.network.to(self.device)
     if config.has('load'):
       model = h5py.File(config.value('load', ''), "r")
       if 'update_step'in model.attrs:
@@ -398,8 +399,11 @@ class Device(object):
     x = torch.tensor(x, dtype=torch.float32).permute(1,0,2) # TODO
     y = torch.tensor(y, dtype=torch.long).permute(1,0) # TODO
     i = torch.tensor(i, dtype=torch.uint8).permute(1,0) # TODO
+    x = x.to(self.device)
+    y = y.to(self.device)
+    i = i.to(self.device)
     self.network(x,i)
-    return [self.network.cost(y), self.network.errors(y)]
+    return [self.network.cost(y).cpu(), self.network.errors(y).cpu()]
 
   def compute_run(self, task):
     compute_start_time = time.time()
@@ -483,6 +487,8 @@ class Device(object):
     device_name = "default"
     output_queue.send(device_id) # TODO
     output_queue.send(device_name) # TODO
+
+    self.device = torch.device(device_id.replace('gpu','cuda:'))
 
     custom_dev_init_code = config.value('custom_dev_init_code', None, list_join_str="\n")
     if custom_dev_init_code:
