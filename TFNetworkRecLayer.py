@@ -116,6 +116,8 @@ class RecLayer(_ConcatInputLayer):
     if optimize_move_layers_out is None:
       optimize_move_layers_out = self.network.get_config().bool("optimize_move_layers_out", True)
     self._optimize_move_layers_out = optimize_move_layers_out
+    if cheating:
+      print("%s: cheating enabled, i.e. we know the ground truth seq length" % self, file=log.v2)
     self._cheating = cheating
     self._unroll = unroll
     self._use_global_rec_step_offset = use_global_rec_step_offset
@@ -3064,6 +3066,8 @@ class ChoiceLayer(LayerBase):
     assert self.target and self.targets
 
     if self.network.search_flag:
+      if cheating:
+        print("%s: cheating enabled, i.e. we add the ground truth to the beam" % self, file=log.v2)
       assert len(self.targets) == len(self.sources), "Provide a target for each of the sources."
       for source in self.sources:
         assert not source.output.sparse
