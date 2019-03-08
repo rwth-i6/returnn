@@ -820,45 +820,56 @@ class _SubnetworkRecCell(object):
     """
     from TFNetwork import NetworkConstructionDependencyLoopException
 
-    def add_templated_layer(name, layer_class, **layer_desc):
-      """
-      This is used instead of self.net.add_layer because we don't want to add
-      the layers at this point, we just want to construct the template layers
-      and store inside self.layer_data_templates.
-
-      :param str name:
-      :param type[LayerBase]|LayerBase layer_class:
-      :param dict[str] layer_desc:
-      :rtype: LayerBase
-      """
-      # _TemplateLayer already created in get_templated_layer.
-      layer = self.layer_data_templates[name]
-      layer_desc = layer_desc.copy()
-      layer_desc["name"] = name
-      layer_desc["network"] = self.net
-      layer.kwargs = layer_desc  # set it now already for better debugging
-      output = layer_class.get_out_data_from_opts(**layer_desc)
-      layer.init(layer_class=layer_class, output=output, **layer_desc)
-      return layer
-
     class construct_ctx:
       # Stack of layers:
       layers = []  # type: list[_TemplateLayer]
       most_recent = None
+      partially_finished = []  # type: list[_TemplateLayer]
 
     class GetLayer:
-      def __init__(lself, safe=False, once=False, allow_uninitialized_template=False, parent=None):
+      def __init__(lself,
+                   safe=False, once=False, allow_uninitialized_template=False,
+                   iterative_testing=True, reconstruct=False,
+                   parent=None):
         lself.safe = safe
         lself.once = once
         lself.allow_uninitialized_template = allow_uninitialized_template
-        lself.count = 0
         lself.parent = parent
+        lself.iterative_testing = iterative_testing
+        lself.reconstruct = reconstruct
+        lself.count = 0
+        lself.returned_none_count = 0
 
       def __repr__(lself):
         return (
           "<RecLayer construct template GetLayer>("
           "safe %r, once %r, allow_uninitialized_template %r, count %r, parent %r)") % (
             lself.safe, lself.once, lself.allow_uninitialized_template, lself.count, lself.parent)
+
+      def add_templated_layer(lself, name, layer_class, **layer_desc):
+        """
+        This is used instead of self.net.add_layer because we don't want to add
+        the layers at this point, we just want to construct the template layers
+        and store inside self.layer_data_templates.
+
+        :param str name:
+        :param type[LayerBase]|LayerBase layer_class:
+        :param dict[str] layer_desc:
+        :rtype: LayerBase
+        """
+        # _TemplateLayer already created in get_templated_layer.
+        layer = self.layer_data_templates[name]
+        layer_desc = layer_desc.copy()
+        layer_desc["name"] = name
+        layer_desc["network"] = self.net
+        layer.kwargs = layer_desc  # set it now already for better debugging
+        if layer not in construct_ctx.partially_finished:
+          construct_ctx.partially_finished.append(layer)
+        output = layer_class.get_out_data_from_opts(**layer_desc)
+        layer.init(layer_class=layer_class, output=output, **layer_desc)
+        if lself.returned_none_count == 0:
+          construct_ctx.partially_finished.remove(layer)
+        return layer
 
       def __call__(lself, name):
         """
@@ -876,7 +887,9 @@ class _SubnetworkRecCell(object):
           layer = self.layer_data_templates[name]
           if construct_ctx.layers:
             construct_ctx.layers[-1].dependencies.add(layer)
-          if lself.allow_uninitialized_template or layer.is_initialized:
+          if lself.allow_uninitialized_template:
+            return layer
+          if not lself.reconstruct and layer.is_initialized:
             return layer
         if name.startswith("base:"):
           layer = self.parent_net.get_layer(name[len("base:"):])
@@ -906,12 +919,15 @@ class _SubnetworkRecCell(object):
           construct_ctx.layers[-1].dependencies.add(layer)
         lself.count += 1
         if lself.once and lself.count > 1:
+          lself.returned_none_count += 1
           return None
         if lself.safe:
+          lself.returned_none_count += 1
           return None
         construct_ctx.layers.append(layer)
         try:
-          # First, see how far we can get without recursive layer construction.
+          default_get_layer = GetLayer(parent=_name)
+          # See how far we can get without recursive layer construction.
           # We only want to get the data template for now.
           # If that fails in some way,
           # try another time but only allowing recursive layer construction for the first get_layer call.
@@ -919,18 +935,19 @@ class _SubnetworkRecCell(object):
           # Also, first try without allowing to access uninitialized templates,
           # as they might propagate wrong Data format info (they have a dummy Data format set).
           # Only as a last resort, allow this.
-          for get_layer in [
-            GetLayer(parent=_name),
-            GetLayer(once=True, allow_uninitialized_template=False, parent=_name),
-            GetLayer(safe=True, allow_uninitialized_template=False, parent=_name),
-            GetLayer(once=True, allow_uninitialized_template=True, parent=_name),
-            GetLayer(safe=True, allow_uninitialized_template=True, parent=_name),
-          ]:
-            if name in self.net._constructing_layers:
-              continue  # they all will fail...
+          get_layer_candidates = []
+          if lself.iterative_testing and name not in self.net._constructing_layers:
+            get_layer_candidates = [
+              default_get_layer,
+              GetLayer(once=True, allow_uninitialized_template=False, parent=_name),
+              GetLayer(safe=True, allow_uninitialized_template=False, parent=_name),
+              GetLayer(once=True, allow_uninitialized_template=True, parent=_name),
+              GetLayer(safe=True, allow_uninitialized_template=True, parent=_name)]
+          for get_layer in get_layer_candidates:
             try:
               self.net.construct_layer(
-                net_dict=self.net_dict, name=name, get_layer=get_layer, add_layer=add_templated_layer)
+                net_dict=self.net_dict, name=name,
+                get_layer=get_layer, add_layer=get_layer.add_templated_layer)
               break  # we did it, so get out of the loop
             except NetworkConstructionDependencyLoopException:
               # go on with the next get_layer
@@ -945,7 +962,8 @@ class _SubnetworkRecCell(object):
           construct_ctx.most_recent = list(construct_ctx.layers)
           try:
             self.net.construct_layer(
-              net_dict=self.net_dict, name=name, get_layer=get_templated_layer, add_layer=add_templated_layer)
+              net_dict=self.net_dict, name=name,
+              get_layer=default_get_layer, add_layer=default_get_layer.add_templated_layer)
           except Exception:
             raise
         finally:
@@ -973,12 +991,11 @@ class _SubnetworkRecCell(object):
         if layer.get("is_output_layer"):
           get_templated_layer(layer_name)
 
-      # Because of the logic to lazily init deps, we might have some layers still uninitialized.
-      while not all([layer.is_initialized for layer in self.layer_data_templates.values()]):
-        for layer_name, layer in sorted(self.layer_data_templates.items()):
-          assert isinstance(layer, _TemplateLayer)
-          if not layer.is_initialized:
-            get_templated_layer(layer_name)
+      # Because of the logic to lazily init deps, or some of the kwargs sources partially None,
+      # we might have some layers still uninitialized, or should reinit with correct sources.
+      direct_get_layer = GetLayer(iterative_testing=False, reconstruct=True)
+      while construct_ctx.partially_finished:
+        direct_get_layer(construct_ctx.partially_finished.pop(0).name)
 
     except Exception:
       print("%r: exception constructing template network (for deps and data shapes)" % self)
