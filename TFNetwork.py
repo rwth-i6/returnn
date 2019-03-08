@@ -538,6 +538,8 @@ class TFNetwork(object):
     :param bool mark_data_key_as_used:
     :rtype: Data
     """
+    if key in {"seq_idx", "seq_tag"} and self.parent_net:
+      return self.parent_net.get_extern_data(key, mark_data_key_as_used=mark_data_key_as_used)
     if mark_data_key_as_used:
       self.used_data_keys.add(key)
     if key == "seq_idx" and key not in self.extern_data.data:
