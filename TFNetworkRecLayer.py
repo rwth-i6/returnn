@@ -3096,12 +3096,13 @@ class ChoiceLayer(LayerBase):
 
           # Combine the incoming scores by adding them up for all possible combinations of target labels. To reduce
           # the number of combinations, we separately apply beam pruning to the sources beforehand.
-          scores_in, scores_in_dim, pruned_labels = \
-              self._prune_and_combine_sources(self.sources, source_beam_sizes, net_batch_dim * beam_size)
+          scores_in, scores_in_dim, pruned_labels = self._prune_and_combine_sources(
+            self.sources, source_beam_sizes, net_batch_dim * beam_size)
           # scores_in has size (batch * beam_size, source_beam_sizes[0] * source_beam_sizes[1])
         else:
           scores_in = self._get_scores(self.sources[0])  # (batch * beam_size, dim)
           scores_in_dim = self.sources[0].output.dim
+          pruned_labels = None
 
         assert self.search_choices.src_layer, (
           self.network.debug_search_choices(base_search_choice=self),
@@ -3262,6 +3263,7 @@ class ChoiceLayer(LayerBase):
         dtype=self.output.dtype,
         placeholder=samples,
         available_for_inference=True)
+
     else:  # no search, and no scheduled-sampling
       assert len(self.sources) == 0  # will be filtered out in transform_config_dict
       # Note: If you want to do forwarding, without having the reference,
