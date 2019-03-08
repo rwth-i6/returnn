@@ -288,9 +288,9 @@ class LayerBase(object):
     # However, in many cases, this will just be {0: time-lengths} and the same as from the input.
     # We check for this case and preset it by that if possible.
     # If you want to have it different in your layer, just overwrite it.
-    common_source = Data.get_common_data([s.output for s in sources])
+    common_source = Data.get_common_data([s.output for s in sources if s])
     if not output.size_placeholder:
-      if sources and common_source.matches_var_dim_pattern(output):
+      if common_source and common_source.matches_var_dim_pattern(output):
         output.size_placeholder = common_source.size_placeholder.copy()
       elif target or size_target:
         if network.train_flag is not False:
@@ -299,7 +299,7 @@ class LayerBase(object):
           output.size_placeholder = cls._static_get_target_value(
             target=target or size_target, _target_layers=_target_layers, network=network,
             mark_data_key_as_used=network.train_flag is not False).size_placeholder.copy()
-    if any([(src and not src.output.available_for_inference) for src in sources]):
+    if any([(src and not src.output.available_for_inference) for src in sources if src]):
       output.available_for_inference = False
 
   @classmethod
