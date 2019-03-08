@@ -532,7 +532,10 @@ class LayerBase(object):
       normally this is just self.sources but e.g. the attention layer in addition has a base, etc.
     :rtype: list[LayerBase]
     """
-    return list(self.sources) + list(self.collocate_with)
+    layers = list(self.sources) + list(self.collocate_with)
+    if self._target_layers:
+      layers += [layer for _, layer in self._target_layers.items()]
+    return layers
 
   def get_sub_layer(self, layer_name):
     """
