@@ -3061,11 +3061,10 @@ class ChoiceLayer(LayerBase):
     self.explicit_search_source = explicit_search_source
     self.scheduled_sampling = CollectionReadCheckCovered.from_bool_or_dict(scheduled_sampling)
     # We assume log-softmax here, inside the rec layer.
-    assert self.target
+    assert self.target and self.targets
 
     if self.network.search_flag:
-      if isinstance(self.target, list):
-        assert len(self.target) == len(self.sources), "Provide a target for each of the sources."
+      assert len(self.targets) == len(self.sources), "Provide a target for each of the sources."
       for source in self.sources:
         assert not source.output.sparse
       assert self.sources[0].output.dim == self.output.dim
@@ -3168,9 +3167,7 @@ class ChoiceLayer(LayerBase):
           assert len(self.sources) == 1, "Cheating not yet implemented for multiple sources."
           # It assumes that sorted=True in top_k, and the last entries in scores/labels are the worst.
           # We replace them by the true labels.
-          gold_targets = self._static_get_target_value(
-            target=self.target, network=self.network,
-            mark_data_key_as_used=True).get_placeholder_as_batch_major()  # (batch*beam,), int32
+          gold_targets = self._get_target_value().get_placeholder_as_batch_major()  # (batch*beam,), int32
           # gold_targets will get automatically expanded for the beam. Undo that.
           gold_targets = tf.reshape(gold_targets, [net_batch_dim, beam_size])[:, 0]
           gold_beam_in_idx = base_beam_in - 1  # also assume last index
@@ -3252,9 +3249,7 @@ class ChoiceLayer(LayerBase):
       samples = tf.multinomial(scores_in, num_samples=1, seed=get_random_seed())  # (batch, num_samples), int64
       samples = tf.to_int32(tf.reshape(samples, [-1]))  # (batch,), int32
       if self.scheduled_sampling.get("gold_mixin_prob"):
-        gold_targets = self._static_get_target_value(
-          target=self.target, network=self.network,
-          mark_data_key_as_used=True).get_placeholder_as_batch_major()  # (batch,), int32
+        gold_targets = self._get_target_value().get_placeholder_as_batch_major()  # (batch,), int32
         samples = tf.where(
           tf.less(tf.random_uniform(tf.shape(samples)), self.scheduled_sampling.get("gold_mixin_prob")),
           gold_targets, samples)
@@ -3271,15 +3266,12 @@ class ChoiceLayer(LayerBase):
       assert len(self.sources) == 0  # will be filtered out in transform_config_dict
       # Note: If you want to do forwarding, without having the reference,
       # that wont work. You must do search in that case.
-      targets = self.target
-      if isinstance(targets, str):
-        targets = [targets]
       # Put all targets in a list.
       # They can be accessed by using the sublayers created in self.get_sub_layer().
       self.output_list = []
-      for target in targets:
+      for target in self.targets:
         target_out_data = self._static_get_target_value(
-            target=target, network=self.network, mark_data_key_as_used=True).copy()
+          target=target, network=self.network, mark_data_key_as_used=True).copy()
         target_out_data.available_for_inference = True  # in inference, we should do search
         self.output_list.append(target_out_data)
 
@@ -4439,8 +4431,7 @@ class EditDistanceTableLayer(LayerBase):
     source_data = self.sources[0].output
     assert source_data.dtype == "int32" and source_data.batch_ndim <= 2
     assert self.target, "%s: 'target' must be set" % self
-    target_data = self._static_get_target_value(
-      target=self.target, _target_layers=self._target_layers, network=self.network)
+    target_data = self._get_target_value()
     assert target_data, "%s: target %r not found?" % (self, self.target)
     assert target_data.dtype == "int32" and target_data.batch_ndim == 2 and target_data.have_time_axis()
     target_data = target_data.copy_as_batch_major()
@@ -4542,8 +4533,7 @@ class OptimalCompletionsLayer(LayerBase):
     assert source_data.batch_shape == (None, None) and source_data.is_batch_major
     last_row = source_data.placeholder
     assert self.target, "%s: 'target' must be set" % self
-    target_data = self._static_get_target_value(
-      target=self.target, _target_layers=self._target_layers, network=self.network)
+    target_data = self._get_target_value()
     assert target_data, "%s: target %r not found?" % (self, self.target)
     assert target_data.dtype == "int32" and target_data.batch_ndim == 2 and target_data.have_time_axis()
     from TFNativeOp import next_edit_distance_reduce

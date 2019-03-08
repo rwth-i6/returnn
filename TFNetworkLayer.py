@@ -72,8 +72,8 @@ class LayerBase(object):
     :param NotSpecified|None|int n_out: output dim
     :param dict[str] out_type: kwargs for Data class. more explicit than n_out.
     :param list[LayerBase] sources: via self.transform_config_dict()
-    :param str|None target: if some loss is set, this is the target data-key, i.e. network.extern_data.get_data(target)
-      alternatively, this also can be a layer name.
+    :param str|list[str]|None target: if some loss is set, this is the target data-key,
+      i.e. network.extern_data.get_data(target). alternatively, this also can be a layer name.
     :param dict[str,LayerBase]|None _target_layers: if target.startswith("layer:"), then this is target -> layer
     :param str|None size_target: like target but this is only used to set our output size in case of training
     :param Loss|None loss: via :func:`transform_config_dict`.
@@ -104,7 +104,16 @@ class LayerBase(object):
     self.network = network
     self._register_layer()
     self.kwargs = None  # type: dict[str] # set via self.post_init
-    self.target = target
+    self.target = None
+    self.targets = None
+    if target:
+      if isinstance(target, list):
+        self.targets = target
+        self.target = target[0]
+      else:
+        assert isinstance(target, str)
+        self.targets = [target]
+        self.target = target
     self._target_layers = _target_layers
     self.loss = loss
     if self.loss and self.loss.recurrent:
@@ -201,7 +210,7 @@ class LayerBase(object):
     :param str name:
     :param dict[str]|None|(()->Data) out_type:
     :param int|None|NotSpecified n_out:
-    :param str|None target:
+    :param str|list[str]|None target:
     :param dict[str,LayerBase]|None _target_layers: if target.startswith("layer:"), then this is target -> layer
     :param str|None size_target:
     :param list[LayerBase] sources:
@@ -223,7 +232,8 @@ class LayerBase(object):
       out_type["dim"] = n_out
     if "dim" not in out_type and target:
       out_type["dim"] = cls._static_get_target_value(
-        target=target, _target_layers=_target_layers, network=network, mark_data_key_as_used=False).dim
+        target=target[0] if isinstance(target, list) else target, _target_layers=_target_layers,
+        network=network, mark_data_key_as_used=False).dim
     if n_out is not NotSpecified:
       assert out_type["dim"] == n_out
     sources_data = None
@@ -284,7 +294,7 @@ class LayerBase(object):
     """
     :param Data output:
     :param TFNetwork.TFNetwork network:
-    :param str|None target:
+    :param str|list[str]|None target:
     :param str|None size_target:
     :param dict[str,LayerBase]|None _target_layers: if target.startswith("layer:"), then this is target -> layer
     :param list[LayerBase] sources:
@@ -303,8 +313,9 @@ class LayerBase(object):
           # TODO: In training, this is ok. Maybe as well as for eval but not clear.
           # In forward, mark_data_key_as_used=False should be used and anyway that target value is not available.
           output.size_placeholder = cls._static_get_target_value(
-            target=target or size_target, _target_layers=_target_layers, network=network,
-            mark_data_key_as_used=network.train_flag is not False).size_placeholder.copy()
+            target=(target[0] if (target and isinstance(target, list)) else target) or size_target,
+            _target_layers=_target_layers,
+            network=network, mark_data_key_as_used=network.train_flag is not False).size_placeholder.copy()
     if any([(src and not src.output.available_for_inference) for src in sources if src]):
       output.available_for_inference = False
 
