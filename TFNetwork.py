@@ -394,7 +394,7 @@ class TFNetwork(object):
     """
     if name in self.layers:
       return self.layers[name]
-    if check_existing:
+    if check_existing and name != "data" and not name.startswith("data:"):
       try:
         return self.get_layer(name)
       except LayerNotFound:
