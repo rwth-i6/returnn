@@ -4,6 +4,7 @@ import tensorflow as tf
 from tensorflow.python.ops.nn import rnn_cell
 from TFNetworkLayer import LayerBase, _ConcatInputLayer, SearchChoices, get_concat_sources_data_template, Loss
 from TFUtil import Data, reuse_name_scope, get_random_seed
+from Util import NotSpecified
 from Log import log
 
 
@@ -236,7 +237,7 @@ class RecLayer(_ConcatInputLayer):
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     """
     if isinstance(d.get("unit"), dict):
-      d["n_out"] = d.get("n_out", None)  # disable automatic guessing
+      d["n_out"] = d.get("n_out", NotSpecified)  # disable automatic guessing
     super(RecLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)  # everything except "unit"
     if "initial_state" in d:
       d["initial_state"] = RnnCellLayer.transform_initial_state(
@@ -290,12 +291,12 @@ class RecLayer(_ConcatInputLayer):
   @classmethod
   def get_out_data_from_opts(cls, unit, sources=(), initial_state=None, **kwargs):
     from tensorflow.python.util import nest
-    n_out = kwargs.get("n_out", None)
+    n_out = kwargs.get("n_out", NotSpecified)
     out_type = kwargs.get("out_type", None)
     loss = kwargs.get("loss", None)
     deps = list(sources)  # type: list[LayerBase]
     deps += [l for l in nest.flatten(initial_state) if isinstance(l, LayerBase)]
-    if out_type or n_out or loss:
+    if out_type or n_out is not NotSpecified or loss:
       if out_type:
         assert out_type.get("time_dim_axis", 0) == 0
         assert out_type.get("batch_dim_axis", 1) == 1
@@ -3570,16 +3571,16 @@ class AttentionBaseLayer(_ConcatInputLayer):
     d["base"] = get_layer(d["base"])
 
   @classmethod
-  def get_out_data_from_opts(cls, name, base, n_out=None, **kwargs):
+  def get_out_data_from_opts(cls, name, base, n_out=NotSpecified, **kwargs):
     """
     :param str name:
-    :param int|None n_out:
+    :param int|None|NotSpecified n_out:
     :param LayerBase base:
     :rtype: Data
     """
     out = base.output.copy_template_excluding_time_dim().copy(name="%s_output" % name)
     assert out.batch_dim_axis == 0
-    if n_out:
+    if n_out is not NotSpecified:
       assert out.dim == n_out, (
         "The default attention selects some frame-weighted input of shape [batch, frame, dim=%i]," % out.dim +
         " thus resulting in [batch, dim=%i] but you specified n_out=%i." % (out.dim, n_out))

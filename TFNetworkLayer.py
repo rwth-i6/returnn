@@ -45,7 +45,7 @@ class LayerBase(object):
   recurrent = False  # if the order in the time-dimension is relevant
   allow_inf_in_output = False
 
-  def __init__(self, name, network, output=None, n_out=None, out_type=None, sources=(),
+  def __init__(self, name, network, output=None, n_out=NotSpecified, out_type=None, sources=(),
                target=None, _target_layers=None, loss=None, size_target=None,
                reuse_params=None,
                param_device=None,
@@ -69,7 +69,7 @@ class LayerBase(object):
     :param str name:
     :param TFNetwork.TFNetwork network:
     :param Data output:
-    :param None|int n_out: output dim
+    :param NotSpecified|None|int n_out: output dim
     :param dict[str] out_type: kwargs for Data class. more explicit than n_out.
     :param list[LayerBase] sources: via self.transform_config_dict()
     :param str|None target: if some loss is set, this is the target data-key, i.e. network.extern_data.get_data(target)
@@ -111,7 +111,7 @@ class LayerBase(object):
       self.recurrent = True
     if output:
       self.output = output
-      if n_out:
+      if n_out is not NotSpecified:
         assert self.output.dim == n_out
       if isinstance(out_type, dict):
         if "shape" in out_type:
@@ -190,7 +190,7 @@ class LayerBase(object):
     return cls._base_get_out_data_from_opts(**kwargs)
 
   @classmethod
-  def _base_get_out_data_from_opts(cls, network, name, out_type=None, n_out=None,
+  def _base_get_out_data_from_opts(cls, network, name, out_type=None, n_out=NotSpecified,
                                    target=None, _target_layers=None, size_target=None,
                                    sources=(), loss=None,
                                    **kwargs):
@@ -200,7 +200,7 @@ class LayerBase(object):
     :param TFNetwork.TFNetwork network:
     :param str name:
     :param dict[str]|None|(()->Data) out_type:
-    :param int|None n_out:
+    :param int|None|NotSpecified n_out:
     :param str|None target:
     :param dict[str,LayerBase]|None _target_layers: if target.startswith("layer:"), then this is target -> layer
     :param str|None size_target:
@@ -219,12 +219,12 @@ class LayerBase(object):
     else:
       out_type = out_type.copy()
     out_type.setdefault("name", "%s_output" % name)
-    if "dim" not in out_type and n_out is not None:
+    if "dim" not in out_type and n_out is not NotSpecified:
       out_type["dim"] = n_out
     if "dim" not in out_type and target:
       out_type["dim"] = cls._static_get_target_value(
         target=target, _target_layers=_target_layers, network=network, mark_data_key_as_used=False).dim
-    if n_out is not None:
+    if n_out is not NotSpecified:
       assert out_type["dim"] == n_out
     sources_data = None
     if sources and sources[0]:
@@ -1706,9 +1706,10 @@ class CopyLayer(_ConcatInputLayer):
         self.output_before_activation = self.sources[0].output_before_activation
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources=(), out_type=None, n_out=None, **kwargs):
-    if out_type or n_out:
-      return super(CopyLayer, cls).get_out_data_from_opts(name=name, out_type=out_type, n_out=n_out, sources=sources, **kwargs)
+  def get_out_data_from_opts(cls, name, sources=(), out_type=None, n_out=NotSpecified, **kwargs):
+    if out_type or n_out is not NotSpecified:
+      return super(CopyLayer, cls).get_out_data_from_opts(
+        name=name, out_type=out_type, n_out=n_out, sources=sources, **kwargs)
     return get_concat_sources_data_template(sources, name="%s_output" % name)
 
 
@@ -2430,12 +2431,12 @@ class GatingLayer(_ConcatInputLayer):
     self.output.size_placeholder = self.input_data.size_placeholder.copy()
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, n_out=None, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, n_out=NotSpecified, **kwargs):
     input_data = get_concat_sources_data_template(sources)
     assert not input_data.sparse
     assert input_data.dim % 2 == 0
     dim = input_data.dim // 2
-    if n_out:
+    if n_out is not NotSpecified:
       assert n_out == dim
     return Data(
       name="%s_output" % name,
@@ -2745,7 +2746,7 @@ class MergeDimsLayer(_ConcatInputLayer):
     return d
 
   @classmethod
-  def get_out_data_from_opts(cls, name, axes, sources=(), n_out=None, out_type=None, **kwargs):
+  def get_out_data_from_opts(cls, name, axes, sources=(), n_out=NotSpecified, out_type=None, **kwargs):
     assert not out_type, "currently ignored"
     input_data = get_concat_sources_data_template(sources)
     data = input_data.copy(name="%s_output" % name)
@@ -2758,11 +2759,11 @@ class MergeDimsLayer(_ConcatInputLayer):
     if all([data.batch_shape[i] is not None for i in axes]):
       res_dim = numpy.prod([data.batch_shape[i] for i in axes])
     if not data.sparse and data.feature_dim_axis in axes:  # will also merge the feature dim
-      if res_dim is not None and n_out is not None:
+      if res_dim is not None and n_out is not NotSpecified:
         assert res_dim == n_out
-      elif res_dim is not None and n_out is None:
+      elif res_dim is not None and n_out is NotSpecified:
         pass
-      elif res_dim is None and n_out is not None:
+      elif res_dim is None and n_out is not NotSpecified:
         res_dim = n_out
       data.dim = res_dim
     merge_target_axis = cls._get_target_axis(input_data=data, merge_axes=axes)
@@ -4490,11 +4491,11 @@ class CombineLayer(LayerBase):
     self.output.placeholder = x
 
   @classmethod
-  def get_out_data_from_opts(cls, n_out=None, out_type=None, sources=(), **kwargs):
+  def get_out_data_from_opts(cls, n_out=NotSpecified, out_type=None, sources=(), **kwargs):
     out_type_ = {}
     if sources:
       out_type_.update(Data.get_common_data([s.output for s in sources]).get_kwargs())
-    if n_out:
+    if n_out is not NotSpecified:
       out_type_["dim"] = n_out
     out_type_["name"] = "%s_output" % kwargs["name"]
     if out_type:
@@ -4661,8 +4662,8 @@ class CompareLayer(LayerBase):
     self.output.placeholder = r_last
 
   @classmethod
-  def get_out_data_from_opts(cls, n_out=None, out_type=None, sources=(), **kwargs):
-    if not n_out and not out_type:
+  def get_out_data_from_opts(cls, n_out=NotSpecified, out_type=None, sources=(), **kwargs):
+    if n_out is NotSpecified and not out_type:
       out_type = sources[0].output.get_kwargs()
       out_type["name"] = "%s_output" % kwargs["name"]
       if out_type.get("sparse", False):
@@ -4831,14 +4832,14 @@ class SubnetworkLayer(LayerBase):
         self.network.used_data_keys.add(key)
 
   @classmethod
-  def get_out_data_from_opts(cls, subnetwork, concat_sources=True, n_out=None, out_type=None, **kwargs):
+  def get_out_data_from_opts(cls, subnetwork, concat_sources=True, n_out=NotSpecified, out_type=None, **kwargs):
     """
     :param dict[str,dict[str]] subnetwork:
-    :param int|None n_out:
+    :param int|None|NotSpecified n_out:
     :param dict[str]|None out_type:
     :rtype: Data
     """
-    if n_out or out_type:
+    if n_out is not NotSpecified or out_type:
       return super(SubnetworkLayer, cls).get_out_data_from_opts(n_out=n_out, out_type=out_type, **kwargs)
     subnet = cls._construct_template_subnet(
       name=kwargs["name"], network=kwargs["network"],
@@ -4854,7 +4855,7 @@ class SubnetworkLayer(LayerBase):
     :param str name:
     :param TFNetwork.TFNetwork network: parent net
     :param dict[str,dict[str]] subnetwork:
-    :param int|None n_out:
+    :param int|None|NotSpecified n_out:
     :param dict[str]|None out_type:
     :rtype: TFNetwork.TFNetwork
     """
@@ -5274,10 +5275,10 @@ class AllophoneStateIdxParserLayer(LayerBase):
     self.output.size_placeholder = self.sources[0].output.size_placeholder.copy()
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, context_len=1, n_out=None, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, context_len=1, n_out=NotSpecified, **kwargs):
     assert len(sources) == 1, "%s: We expect exactly one source layer." % name
     dim = 3 + context_len * 2  # (center, left_1, right_1, ..., state, boundary)
-    if n_out is not None:
+    if n_out is not NotSpecified:
       assert dim == n_out
     return Data(
       name="%s_output" % name,
