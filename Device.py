@@ -895,7 +895,7 @@ class Device(object):
         import dill
         sys.setrecursionlimit(50000)
         graphfile = self.config.value('save_graph','')
-        print("Loading pre-compiled graph from '%s'" % graphfile, file=log.v4)
+        print("Saving pre-compiled graph to '%s'" % graphfile, file=log.v4)
         dill.dump(self.extractor, open(graphfile, 'wb'))
         self.save_graph = False
     elif task == 'classify':
