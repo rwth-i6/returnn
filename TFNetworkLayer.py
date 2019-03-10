@@ -534,7 +534,7 @@ class LayerBase(object):
     """
     layers = list(self.sources) + list(self.collocate_with)
     if self._target_layers:
-      layers += [layer for _, layer in self._target_layers.items()]
+      layers += [layer for _, layer in sorted(self._target_layers.items())]
     return layers
 
   def get_sub_layer(self, layer_name):
