@@ -3617,6 +3617,46 @@ def test_trainable_sublayers():
     assert(weight_internal in set(network.get_trainable_params()))
 
 
+def test_OptimalCompletionsLayer():
+  with make_scope() as session:
+    from TFNetworkLayer import InternalLayer
+    from TFUtil import expand_dims_unbroadcast
+    net = TFNetwork(
+      extern_data=ExternData({"target": {"dim": 20, "sparse": True}}),
+      config=Config({"debug_print_layer_output_template": True}))
+    target = net.extern_data.data["target"]
+    target_shape = tf.shape(target.placeholder)
+    n_batch = target_shape[0]
+    n_max_seq_len = target_shape[1]
+    # Fake that we are inside a rec layer.
+    net.set_rec_step_info(
+      i=tf.convert_to_tensor(0, name="i"),
+      end_flag=expand_dims_unbroadcast(tf.convert_to_tensor(False), 0, n_batch),
+      seq_lens=target.get_sequence_lengths())
+    kwargs = dict(
+      name="opt_completions", network=net, debug=True, target="target",
+      sources=[
+        InternalLayer(
+          name="last_row", network=net,
+          output=Data(
+            name="last_row", shape=(None,), dtype="int32",
+            placeholder=expand_dims_unbroadcast(tf.range(n_max_seq_len + 1), 0, n_batch)))]
+      )
+    print("OptimalCompletionsLayer kwargs:")
+    pprint(kwargs)
+    kwargs["output"] = OptimalCompletionsLayer.get_out_data_from_opts(**kwargs)
+    layer = OptimalCompletionsLayer(**kwargs)
+    layer.output.sanity_check()
+    out = session.run(
+      layer.output.placeholder, feed_dict={
+        target.placeholder: numpy.array([[3, 7, 8, 9, 13, 13, 0]]),
+        target.size_placeholder[0]: numpy.array([7])})
+    print(out)
+    assert isinstance(out, numpy.ndarray)
+    assert out.shape == (1, 20)
+    assert out[0, 3] == 0 and all(out[0, :3] == 1) and all(out[0, 4:] == 1)
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()

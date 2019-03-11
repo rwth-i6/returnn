@@ -4568,7 +4568,8 @@ class OptimalCompletionsLayer(LayerBase):
     rec_step_info = self.network.get_rec_step_info()
     reduce_out = next_edit_distance_reduce(
       last_row=last_row, a=successors, a_n=rec_step_info.step, a_ended=rec_step_info.get_end_flag(),
-      b=target_data.placeholder, b_len=target_data.get_sequence_lengths())
+      b=target_data.placeholder, b_len=target_data.get_sequence_lengths(),
+      optimal_completion=True)
     reduce_out.set_shape((None, target_data.dim))
     if debug:
       from TFUtil import py_print, vocab_idx_repr
