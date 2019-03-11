@@ -4743,6 +4743,20 @@ def encode_raw(x, axis=-1, seq_lens=None):
     return strings
 
 
+def get_shared_vocab(vocab_strings):
+  """
+  The vocab is shared across the current instance of the computation graph.
+  The tensor name might be different in different runs.
+
+  :param list[str] vocab_strings:
+  :return: shape (len(vocab_strings),), tf.string
+  :rtype: tf.Tensor
+  """
+  return global_tensor(
+    lambda: tf.convert_to_tensor(vocab_strings),
+    name="shared_vocab_%s" % hex(hash(tuple(vocab_strings))).replace("-", "_"))
+
+
 def map_labels(x, label_map, name="map_labels"):
   """
   :param tf.Tensor|tf.SparseTensor x: values of integer types
@@ -7137,12 +7151,28 @@ def vocab_idx_to_vocab_string(labels, vocab):
   """
   Just does a lookup on vocab.
 
-  :param tf.Tensor labels: (batch,max_len), int32, indices in vocab
+  :param tf.Tensor labels: (batch,max_len), or any, int32, indices in vocab
   :param tf.Tensor vocab: (vocab_size,), string
-  :return: (batch,max_len), string
+  :return: (batch,max_len), or any, like labels, string
   :rtype: tf.Tensor
   """
   return tf.gather(params=vocab, indices=labels, axis=0)
+
+
+def vocab_idx_repr(labels, data):
+  """
+  :param tf.Tensor labels: int32, indices in vocab
+  :param Data data: might have vocab
+  :return: string or int32, shape as labels, or maybe without last axis
+  :rtype:
+  """
+  if data.vocab:
+    vocab = get_shared_vocab(data.vocab.labels)
+    return vocab_idx_to_vocab_string(labels, vocab)
+  if data.dim == 255:
+    if labels.shape.ndims >= 2:  # currently encode_raw also joins the strings in last axis
+      return encode_raw(labels)
+  return labels
 
 
 def string_merge(strings, seq_lens, separator=" "):
