@@ -4431,7 +4431,10 @@ class EditDistanceTableLayer(LayerBase):
   layer_class = "edit_distance_table"
   recurrent = True
 
-  def __init__(self, **kwargs):
+  def __init__(self, debug=False, **kwargs):
+    """
+    :param bool debug:
+    """
     super(EditDistanceTableLayer, self).__init__(**kwargs)
     assert len(self.sources) == 1, "%s: expects exactly a single source" % self
     source_data = self.sources[0].output
@@ -4453,6 +4456,21 @@ class EditDistanceTableLayer(LayerBase):
     self._next_row = next_edit_distance_row(
       last_row=self._last_row, a=source_data.placeholder, a_n=rec_step_info.step, a_ended=rec_step_info.get_end_flag(),
       b=target_data.placeholder, b_len=target_data.get_sequence_lengths())
+    if debug:
+      from TFUtil import py_print, vocab_idx_repr
+      print_out = [str(self)]
+      choice = self.get_search_choices()
+      if choice:
+        print_out += [
+          "choice", choice.owner.name,
+          "src_beams", choice.src_beams if choice.src_beams is not None else "None"]
+      print_out += [
+        "a_n", rec_step_info.step, "a_ended", rec_step_info.get_end_flag(),
+        "a", vocab_idx_repr(source_data.placeholder, target_data),
+        "b", vocab_idx_repr(target_data.placeholder, target_data),
+        "b_len", target_data.get_sequence_lengths(),
+        "last_row", self._last_row, "next_row", self._next_row]
+      self._next_row = py_print(self._next_row, print_out)
     self.rec_vars_outputs["state"] = self._next_row
     self._reduce_out = None  # see get_sub_layer
     self.output.placeholder = self._next_row
@@ -4531,7 +4549,10 @@ class OptimalCompletionsLayer(LayerBase):
   layer_class = "optimal_completions"
   recurrent = True
 
-  def __init__(self, **kwargs):
+  def __init__(self, debug=False, **kwargs):
+    """
+    :param bool debug:
+    """
     super(OptimalCompletionsLayer, self).__init__(**kwargs)
     src_layer, = self.sources
     assert isinstance(src_layer, LayerBase)
@@ -4549,6 +4570,23 @@ class OptimalCompletionsLayer(LayerBase):
       last_row=last_row, a=successors, a_n=rec_step_info.step, a_ended=rec_step_info.get_end_flag(),
       b=target_data.placeholder, b_len=target_data.get_sequence_lengths())
     reduce_out.set_shape((None, target_data.dim))
+    if debug:
+      from TFUtil import py_print, vocab_idx_repr
+      print_out = [str(self)]
+      choice = self.get_search_choices()
+      if choice:
+        print_out += [
+          "choice", choice.owner.name,
+          "src_beams", choice.src_beams if choice.src_beams is not None else "None"]
+      top_values, top_indices = tf.nn.top_k(-reduce_out, k=5)  # (batch,K)
+      top_values = -top_values
+      print_out += [
+        "a_n", rec_step_info.step, "a_ended", rec_step_info.get_end_flag(),
+        "a best", vocab_idx_repr(top_indices, target_data), top_values,
+        "b", vocab_idx_repr(target_data.placeholder, target_data),
+        "b_len", target_data.get_sequence_lengths(),
+        "last_row", last_row]
+      reduce_out = py_print(reduce_out, print_out)
     self.output.placeholder = reduce_out
 
   @classmethod
