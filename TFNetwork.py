@@ -1200,6 +1200,9 @@ class TFNetwork(object):
     :rtype: TFNetworkRecLayer.RecStepInfoLayer|None
     """
     from TFNetworkRecLayer import RecStepInfoLayer, _SubnetworkRecCell
+    # Fast path first. This also enables some simple debugging.
+    if ":i" in self.layers and isinstance(self.layers[":i"], RecStepInfoLayer):
+      return self.layers[":i"]
     rec_layer = self.get_rec_parent_layer()
     # the second condition is true if all layers have been optimized out of the rec layer
     if not rec_layer or len(rec_layer.cell.layers_in_loop) == 0:
