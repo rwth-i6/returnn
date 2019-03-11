@@ -7133,12 +7133,12 @@ def add_control_input(op, control_input):
   op._recompute_node_def()
 
 
-def bpe_idx_to_bpe_string(labels, vocab):
+def vocab_idx_to_vocab_string(labels, vocab):
   """
   Just does a lookup on vocab.
 
   :param tf.Tensor labels: (batch,max_len), int32, indices in vocab
-  :param tf.Tensor vocab: (bpe_units,), string
+  :param tf.Tensor vocab: (vocab_size,), string
   :return: (batch,max_len), string
   :rtype: tf.Tensor
   """

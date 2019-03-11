@@ -1827,6 +1827,22 @@ def test_string_merge():
   assert_equal(res, ["sub@@ word test", "hel@@ lo wo@@ r@@ ld", "foo"])
 
 
+def test_vocab_string_merge():
+  vocab = tf.convert_to_tensor(["</s>", "sub@@", "word", "test", "hel@@", "lo", "wo@@", "r@@", "ld", "foo", "bar"])
+  labels = tf.convert_to_tensor([[1, 2, 3, 0, 0, 0], [4, 5, 6, 7, 8, 0], [9, 0, 0, 0, 0, 0]])
+  seq_lens = tf.convert_to_tensor([4, 6, 2])
+  strings = vocab_idx_to_vocab_string(labels, vocab=vocab)
+  tf_res = string_merge(strings, seq_lens=seq_lens)
+  res = session.run(tf_res)
+  print(res)
+  assert isinstance(res, numpy.ndarray)
+  res = res.tolist()
+  print(res)
+  res = [s.decode("utf8") for s in res]
+  print(res)
+  assert_equal(res, ["sub@@ word test </s>", "hel@@ lo wo@@ r@@ ld </s>", "foo </s>"])
+
+
 def test_string_replace():
   strings = ["sub@@ word test", "hel@@ lo wo@@ r@@ ld", "foo"]
   tf_strings = tf.placeholder(tf.string, [None])
