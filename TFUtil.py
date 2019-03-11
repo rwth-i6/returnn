@@ -416,6 +416,8 @@ class Data(object):
       keys += ["available_for_inference"]
     if self.beam_size is not None:
       keys += ["beam_size"]
+    if self.vocab:
+      keys += ["vocab"]
     return {key: getattr(self, key) for key in keys}
 
   def get_description(self, with_name=True, with_placeholder=False):
