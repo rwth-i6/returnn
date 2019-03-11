@@ -4492,11 +4492,12 @@ class EditDistanceTableLayer(LayerBase):
     super(EditDistanceTableLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, target, network, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, target, network, _target_layers=None, **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
     :param str target:
+    :param dict[str,LayerBase] _target_layers:
     :param TFNetwork.TFNetwork network:
     :rtype: Data
     """
@@ -4504,14 +4505,13 @@ class EditDistanceTableLayer(LayerBase):
     source_data = sources[0].output
     assert source_data.dtype == "int32" and source_data.batch_ndim <= 2 and source_data.sparse
     assert target, "%s %r: 'target' must be set" % (cls.__name__, name)
-    target_data = cls._static_get_target_value(target=target, network=network)
+    target_data = cls._static_get_target_value(target=target, _target_layers=_target_layers, network=network)
     assert target_data, "target %r not found?" % target
     assert target_data.dtype == "int32" and target_data.batch_ndim == 2 and target_data.have_time_axis()
     assert target_data.sparse and source_data.dim == target_data.dim
-    if source_data.have_time_axis():
-      return Data(name="%s_output" % name, shape=(None, None), dtype="int32", beam_size=source_data.beam_size)
-    else:
-      return Data(name="%s_output" % name, shape=(None,), dtype="int32", beam_size=source_data.beam_size)
+    return Data(
+      name="%s_output" % name, shape=(None, None) if source_data.have_time_axis() else (None,),
+      dtype="int32", beam_size=source_data.beam_size or target_data.beam_size)
 
 
 class OptimalCompletionsLayer(LayerBase):
@@ -4552,11 +4552,12 @@ class OptimalCompletionsLayer(LayerBase):
     self.output.placeholder = reduce_out
 
   @classmethod
-  def get_out_data_from_opts(cls, name, sources, target, network, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, target, network, _target_layers=None, **kwargs):
     """
     :param str name:
     :param list[LayerBase] sources:
     :param str target:
+    :param dict[str,LayerBase] _target_layers:
     :param TFNetwork.TFNetwork network:
     :rtype: Data
     """
@@ -4564,14 +4565,14 @@ class OptimalCompletionsLayer(LayerBase):
     source_data = sources[0].output
     assert source_data.dtype == "int32" and source_data.batch_ndim == 2
     assert target, "%s %r: 'target' must be set" % (cls.__name__, name)
-    target_data = cls._static_get_target_value(target=target, network=network)
+    target_data = cls._static_get_target_value(target=target, _target_layers=_target_layers, network=network)
     assert target_data, "target %r not found?" % target
     assert target_data.dtype == "int32" and target_data.batch_ndim == 2 and target_data.have_time_axis()
     assert target_data.sparse
     return Data(
       name="%s_output" % name,
       shape=(target_data.dim,), dim=target_data.dim, dtype="int32", sparse=False, time_dim_axis=None,
-      beam_size=source_data.beam_size)
+      beam_size=source_data.beam_size or target_data.beam_size)
 
 
 class BaseRNNCell(rnn_cell.RNNCell):
