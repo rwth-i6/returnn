@@ -4690,6 +4690,7 @@ class CompareLayer(LayerBase):
       if out_type.get("sparse", False):
         out_type["dim"] = 2  # True or False
       out_type["dtype"] = "bool"
+      out_type["vocab"] = None
     return super(CompareLayer, cls).get_out_data_from_opts(n_out=n_out, out_type=out_type, sources=sources, **kwargs)
 
 
