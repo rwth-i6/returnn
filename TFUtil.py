@@ -7315,6 +7315,7 @@ def py_print(pass_through_value, print_args, message=None, summarize=None, first
     Counter.count += 1
     if first_n > 0 and first_n > Counter.count:
       return False
+    next_item_add_new_line = False
     s = ""
     if message:
       s += message
@@ -7323,12 +7324,27 @@ def py_print(pass_through_value, print_args, message=None, summarize=None, first
       if isinstance(arg, bytes):
         arg_s = "[%s]" % arg.decode("utf8")
       elif isinstance(arg, numpy.ndarray):
-        arg_s = numpy.array2string(arg, edgeitems=summarize)
+        if arg.size == 0:
+          arg_s = "[]"
+        else:
+          arg_s = numpy.array2string(
+            arg, edgeitems=summarize, formatter={"int": str, "object": bytes.decode})
       else:
         arg_s = "[%r]" % arg
-      s += arg_s
-    print(s)
-    return True
+      if "\n" in arg_s:
+        next_item_add_new_line = True
+        s += "\n"
+        s += arg_s
+      else:
+        if next_item_add_new_line:
+          next_item_add_new_line = False
+          s += "\n"
+        s += arg_s
+    try:
+      print(s)
+      return True
+    except BrokenPipeError:  # be silent about those. probably only at exit
+      return False
 
   with tf.name_scope(name):
     print_op = tf.py_func(_py_print, print_args, tf.bool, name=name)
