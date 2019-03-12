@@ -7,27 +7,65 @@ import torch.nn as nn
 import json
 import h5py
 
-from PTLayers import OutputLayer
+from PTLayers import *
 from Log import log
 
 from Util import dict_joined, as_str
 from NetworkDescription import LayerNetworkDescription
 
 
-class LayerNetwork(nn.Module):
-  def __init__(self, n_in=None, n_out=None):
-    self.n_in = n_in
+class LayerNetwork():
+  def __init__(self, n_out=None):
+    super(LayerNetwork, self).__init__()
     self.n_out = n_out
     self.hidden = {}; """ :type: dict[str,ForwardLayer|RecurrentLayer] """
     self.recurrent = False  # any of the from_...() functions will set this
     self.output = {}; " :type: dict[str,FramewiseOutputLayer] "
     self.json_content = "{}"
-    self.costs = {}
-    self.errors = {}
+    self.data = {k: None for k in self.n_out}
+    self.index = {k: None for k in self.n_out}
+    #self.layers = nn.ModuleList([])
 
-  def forward(x, i):
+  def exec(self):
+    output = {}
     for k in self.output:
-      k.process(x,i)
+      output[k], _ = self.output[k].process()
+
+  def cost(self):
+    result = []
+    for k in self.output:
+      result.append(self.output[k].cost())
+      #result.append(self.output[k].errors(y))
+    return result
+
+  def errors(self):
+    result = []
+    for k in self.output:
+      #result.append(self.output[k].cost(y))
+      result.append(self.output[k].errors())
+    return result
+
+  def to(self, device):
+    for k in self.output:
+      self.output[k].to(device)
+    for k in self.hidden:
+      self.hidden[k].to(device)
+
+  def parameters(self):
+    params = []
+    for k in self.output:
+      params += self.output[k].parameters()
+    for k in self.hidden:
+      params += self.hidden[k].parameters()
+    return params
+
+  def named_parameters(self):
+    params = []
+    for k in self.output:
+      params += self.output[k].named_parameters()
+    for k in self.hidden:
+      params += self.hidden[k].named_parameters()
+    return params
 
   @classmethod
   def from_config_topology(cls, config, mask=None, **kwargs):
@@ -81,7 +119,6 @@ class LayerNetwork(nn.Module):
     :returns the kwarg for cls.from_json()
     """
     num_inputs, num_outputs = LayerNetworkDescription.num_inputs_outputs_from_config(config)
-    print(">>>>>>>>>>>>>>>", num_outputs)
     return {
       "n_in": num_inputs, "n_out": num_outputs
     }
@@ -117,12 +154,18 @@ class LayerNetwork(nn.Module):
     :param LayerNetwork | None network: optional already existing instance
     :rtype: LayerNetwork
     """
-
-    # TODO
-    network = cls(n_in=n_in, n_out=n_out, **kwargs)
-    network.y['data'].n_out = network.n_out['data'][0]
-
-    network.add_layer(OutputLayer(n_out=n_out['classes'][0], loss = 'ce', name = 'output'))
+    n_out = {k:n_out[k][0] for k in n_out}
+    n_out['data'] = n_in # TODO
+    network = cls(n_out=n_out, **kwargs)
+    #network.y['data'].n_out = network.n_out['data'][0]
+    network.n_out['data'] = n_in
+    kwargs = {'network':network}
+    input = DataLayer(source='data', **kwargs)
+    lstm = LSTMLayer(n_out = 32, name = 'lstm', sources=[input], **kwargs)
+    output = OutputLayer(loss = 'ce', name = 'output', target = 'classes', sources=[lstm], **kwargs)
+    network.add_layer(input)
+    network.add_layer(lstm)
+    network.add_layer(output)
     network.loss = 'ce'
     return network
 
@@ -146,6 +189,7 @@ class LayerNetwork(nn.Module):
       self.output[layer.name] = layer
     else:
       self.hidden[layer.name] = layer
+    #self.layers.append(layer)
     return layer
 
   def num_params(self):
@@ -161,13 +205,13 @@ class LayerNetwork(nn.Module):
     #model.attrs['update_step'] = self.update_step # TODO
     model.attrs['epoch'] = epoch
     model.attrs['output'] = 'output' #self.output.keys
-    model.attrs['n_in'] = self.n_in
+    model.attrs['n_in'] = self.n_out['data']
     out = model.create_group('n_out')
     for k in self.n_out:
-      out.attrs[k] = self.n_out[k][0]
-    out_dim = out.create_group("dim")
-    for k in self.n_out:
-      out_dim.attrs[k] = self.n_out[k][1]
+      out.attrs[k] = self.n_out[k]
+    #out_dim = out.create_group("dim")
+    #for k in self.n_out:
+    #  out_dim.attrs[k] = self.n_out[k][1]
     for h in self.hidden:
       self.hidden[h].save(model)
     for k in self.output:
@@ -190,7 +234,7 @@ class LayerNetwork(nn.Module):
 
   def print_network_info(self, name="Network"):
     print("%s layer topology:" % name, file=log.v2)
-    print("  input #:", self.n_in, file=log.v2)
+    print("  input #:", self.n_out['data'], file=log.v2)
     for layer_name, layer in sorted(self.hidden.items()):
       print("  hidden %s %r #: %i" % (layer.layer_class, layer_name, layer.attrs["n_out"]), file=log.v2)
     if not self.hidden:

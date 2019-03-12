@@ -33,6 +33,7 @@ class Container(nn.Module):
     :param str forward_weights_init: see self.create_forward_weights()
     :param str bias_init: see self.create_bias()
     """
+    super(Container, self).__init__()
     self.params = {}
     self.attrs = {}
     self.device = None
@@ -380,23 +381,22 @@ class Layer(Container):
     super(Layer, self).__init__(**kwargs)
     self.output = None
     #self.dependencies = { dep : None for dep in dependencies }
-    #self.sources = sources
+    self.sources = sources
 
-  def process(x, i):
-    if self.output is not None:
-      return self.output, self.index
-    for k in self.deps.keys():
-      self.deps[k] = k.process(x, i)
-    if not self.sources:
-      index_in = i
-    else:
-      for i in range(len(self.sources)):
-        self.sources[i], index_in = self.sources[i].process(x, i)
-    x = torch.cat(self.sources, dim=2)
-    self.output, self.index_out = self.forward(x, index_in)
+  def process(self):
+    #if self.output is not None:
+    #  return self.output, self.index_out
+    #for k in self.deps.keys():
+    #  self.deps[k] = k.process(x, i)
+    assert self.sources, "require sources for " + self.name + str(self.output)
+    sources = [None for i in range(len(self.sources))]
+    for i in range(len(self.sources)):
+      sources[i], self.index_in = self.sources[i].process()
+    x = torch.cat(sources, dim=2)
+    self.output, self.index_out = self.forward(x, self.index_in)
     return self.output, self.index_out
 
-  def cost(self, y):
+  def cost(self):
     """
     :rtype: (theano.Variable | None, dict[theano.Variable,theano.Variable] | None)
     :returns: cost, known_grads
@@ -409,18 +409,19 @@ class Layer(Container):
     """
     return self.attrs.get("cost_scale", 1.0)
 
-  def errors(self, y):
+  def errors(self):
     """
     :rtype: theano.Variable
     """
     return None
 
-class OutputLayer(Layer):
+class OutputLayer2(Layer):
   layer_class = "softmax"
 
-  def __init__(self, n_out, loss, **kwargs):
+  def __init__(self, loss, **kwargs):
     super(OutputLayer, self).__init__(**kwargs)
-    self.attrs['n_out'] = n_out
+    n_in = sum([x.attrs['n_out'] for x in self.sources])
+    self.attrs['n_out'] = self.network[target]
     #self.W_in = nn.Parameter(torch.ones(self.sources[0].attrs['n_out'],self.attrs['n_out']))
     #self.b = nn.Parameter(torch.zeros(self.attrs['n_out']))
     #self.softmax = nn.Softmax()(x_in.mm(self.W_in) + self.b)
@@ -430,3 +431,64 @@ class OutputLayer(Layer):
     self.p_y_given_x = self.softmax(z) # TBC
     scores = torch.index_select(self.p_y_given_x.view(-1,self.p_y_given_x.shape[2]), i.view(-1).nonzero().long())
     return -torch.log(scores[self.y_in.view(-1)]).sum()
+
+class DataLayer(Layer):
+  layer_class = "data"
+
+  def __init__(self, source, **kwargs):
+    super(DataLayer, self).__init__(name=source, **kwargs)
+    self.attrs['source'] = source
+    self.attrs['n_out'] = self.network.n_out[source]
+    #self.output = self.network.data[source]
+    #self.index_out = self.network.index[source]
+    #print(self.name,self.index_out)
+
+  def process(self):
+    return self.network.data[self.attrs['source']], self.network.index[self.attrs['source']]
+
+class LSTMLayer(Layer):
+  layer_class = "lstm"
+
+  def __init__(self, n_out, **kwargs):
+    super(LSTMLayer, self).__init__(**kwargs)
+    self.attrs['n_out'] = n_out
+    n_in = sum([x.attrs['n_out'] for x in self.sources])
+    self.module = nn.LSTM(int(n_in), int(n_out), 1)
+
+  def forward(self, x, i):
+    self.module.flatten_parameters()
+    x, _ = self.module(x)
+    return x, i
+
+class OutputLayer(Layer):
+  layer_class = "softmax"
+
+  def __init__(self, loss, target, **kwargs):
+    super(OutputLayer, self).__init__(**kwargs)
+    self.attrs['loss'] = loss
+    self.attrs['target'] = target
+    self.attrs['n_out'] = self.network.n_out[target]
+    n_in = sum([x.attrs['n_out'] for x in self.sources])
+    self.module = nn.Linear(n_in, self.attrs['n_out'])
+    self.loss = nn.NLLLoss()
+
+  def forward(self, x, i):
+    self.index_out = i
+    self.output = F.softmax(self.module(x), dim=2)
+    return self.output, self.index_out
+
+  def cost(self):
+    y = self.network.data[self.attrs['target']]
+    loss_function = nn.NLLLoss()
+    i = self.index_out.view(-1).nonzero().long().view(-1)
+    c = torch.log(torch.index_select(
+          self.output.view(-1,self.output.size(2)), 0, i))
+    y = torch.index_select(y.view(-1), 0, i)
+    return self.loss(c, y) * self.index_out.float().sum()
+
+  def errors(self):
+    y = self.network.data[self.attrs['target']]
+    i = self.index_out.view(-1).nonzero().long().view(-1)
+    y = torch.index_select(y.view(-1), 0, i)
+    c = torch.index_select(torch.argmax(self.output,dim=2).view(-1), 0, i)
+    return (y != c).float().sum() # * self.index.float().sum() / (self.logpcx.size(0) * self.logpcx.size(1))

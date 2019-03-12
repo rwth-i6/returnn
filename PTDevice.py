@@ -44,18 +44,23 @@ class DummyModel(nn.Module):
     x, _ = self.lstm(x)
     x = x.permute(1,0,2)
     self.index = i
-    self.logpcx = F.log_softmax(self.output(x), dim=2)
-    return self.logpcx
+    self.pcx = F.softmax(self.output(x), dim=2)
+    return self.pcx
 
   def cost(self, y):
     loss_function = nn.NLLLoss()
-    loss = loss_function(self.logpcx.contiguous().view(
-      self.logpcx.size(0) * self.logpcx.size(1), self.logpcx.size(2)), y.contiguous().view(-1))
+    i = self.index.view(-1).nonzero().long().view(-1)
+    c = torch.log(torch.index_select(
+          self.pcx.view(-1,self.pcx.shape[2]), 0, i))
+    y = torch.index_select(y.view(-1), 0, i)
+    loss = loss_function(c, y)
     return loss * self.index.float().sum()
 
   def errors(self, y):
-    recog = torch.argmax(self.logpcx,dim=2).view(self.logpcx.size(0), self.logpcx.size(1))
-    return (recog != y).float().sum() * self.index.float().sum() / (self.logpcx.size(0) * self.logpcx.size(1))
+    i = self.index.view(-1).nonzero().long().view(-1)
+    y = torch.index_select(y.view(-1), 0, i)
+    c = torch.index_select(torch.argmax(self.pcx,dim=2).view(-1), 0, i)
+    return (y != c).float().sum() # * self.index.float().sum() / (self.logpcx.size(0) * self.logpcx.size(1))
 
 def _get_num_devices():
   if os.name == 'nt':
@@ -301,13 +306,13 @@ class Device(object):
     self.network_task = config.value('task', 'train')
     eval_flag = self.network_task in ['eval', 'forward']
     if json_content is not None:
-      self.network = DummyModel() #PTLayerNetwork.from_json_and_config(json_content, config) # TODO
+      self.network = LayerNetwork.from_json_and_config(json_content, config) # TODO
     elif config.bool('initialize_from_model', False) and config.has('load'):
       model = h5py.File(config.value('load', ''), "r")
-      self.network = DummyModel() #PTLayerNetwork.from_hdf_model_topology(model, **PTLayerNetwork.init_args_from_config(config))
+      self.network = LayerNetwork.from_hdf_model_topology(model, **PTLayerNetwork.init_args_from_config(config))
       model.close()
     else:
-      self.network = DummyModel() #PTLayerNetwork.from_config_topology(config)
+      self.network = LayerNetwork.from_config_topology(config)
     self.network.to(self.device)
     if config.has('load'):
       model = h5py.File(config.value('load', ''), "r")
@@ -384,17 +389,6 @@ class Device(object):
       #                                  givens = givens,
       #                                  name = "extractor")
 
-  def exec(self, x, y, i, j):
-    y[y==-1] = 0
-    x = torch.tensor(x, dtype=torch.float32) # TODO
-    y = torch.tensor(y, dtype=torch.long).permute(1,0) # TODO
-    i = torch.tensor(i, dtype=torch.uint8).permute(1,0) # TODO
-    x = x.to(self.device)
-    y = y.to(self.device)
-    i = i.to(self.device)
-    self.network(x,i)
-    return [self.network.cost(y), self.network.errors(y)]
-
   def compute_run(self, task):
     compute_start_time = time.time()
     batch_dim = self.data["data"].shape[1]
@@ -403,7 +397,8 @@ class Device(object):
       print("debug_shell_first_compute", file=log.v1)
       Debug.debug_shell(user_ns=locals(), user_global_ns=globals())
     if task in [ "train", "eval" ]:
-      output = self.exec(self.data['data'],self.data['classes'],self.index['data'],self.index['classes'])
+      self.network.exec()
+      output = self.network.cost() + self.network.errors()
       if task == 'train': # TODO
         output[0].backward()
         self.updater.step()
@@ -523,11 +518,16 @@ class Device(object):
           t[k] = input_queue.recv()
         for k in target_keys:
           self.index[k] = input_queue.recv()
+          #self.index[k][self.index[k]==-1] = 0
         self.tags = input_queue.recv()
         update_start_time = time.time()
         # self.x == self.data["data"], will be set also here.
         for k in target_keys:
           self.data[k] = t[k].astype(self.data[k].dtype)
+        for k in target_keys:
+          dtype = torch.float if 'float' in str(self.data[k].dtype) else torch.long # TODO
+          self.network.data[k] = torch.tensor(self.data[k], dtype=dtype).to(self.device)
+          self.network.index[k] = torch.tensor(self.index[k], dtype=torch.uint8).to(self.device)
         continue # TODO
 
         for k in target_keys:
