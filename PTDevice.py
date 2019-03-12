@@ -335,7 +335,7 @@ class Device(object):
 
     # initialize functions
     self.updater = None # TODO
-    self.updater = optim.Adam(self.network.parameters(), lr = 0.0005, weight_decay = 0.001)
+    self.updater = optim.Adam(self.network.parameters(), lr = 0.0005)
     self.update_specs = update_specs
 
     self.forwarder = None
@@ -397,12 +397,24 @@ class Device(object):
       print("debug_shell_first_compute", file=log.v1)
       Debug.debug_shell(user_ns=locals(), user_global_ns=globals())
     if task in [ "train", "eval" ]:
-      self.network.exec()
-      output = self.network.cost() + self.network.errors()
+      if task == 'train':
+        self.network.zero_grad()
+        self.network.train()
+        self.network.exec()
+      elif task == 'eval':
+        self.network.eval()
+        with torch.no_grad():
+          self.network.exec()
+      else:
+        raise NotImplementedError
+      costs = self.network.cost()
       if task == 'train': # TODO
-        output[0].backward()
+        for i in range(len(costs)):
+          costs[i].backward()
         self.updater.step()
-        output = [output[0]]
+      for i in range(len(costs)):
+        costs[i] *= self.network.output['output'].index_out.float().sum().cpu()
+      output = costs + (self.network.errors() if task != 'train' else [])
       for i in range(len(output)):
         output[i] = output[i].detach().cpu()
     else:

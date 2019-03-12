@@ -26,6 +26,24 @@ class LayerNetwork():
     self.index = {k: None for k in self.n_out}
     #self.layers = nn.ModuleList([])
 
+  def zero_grad(self):
+    for k in self.hidden:
+      self.hidden[k].zero_grad()
+    for k in self.output:
+      self.output[k].zero_grad()
+
+  def train(self):
+    for k in self.hidden:
+      self.hidden[k].train()
+    for k in self.output:
+      self.output[k].train()
+
+  def eval(self):
+    for k in self.hidden:
+      self.hidden[k].eval()
+    for k in self.output:
+      self.output[k].eval()
+
   def exec(self):
     output = {}
     for k in self.output:
@@ -161,7 +179,7 @@ class LayerNetwork():
     network.n_out['data'] = n_in
     kwargs = {'network':network}
     input = DataLayer(source='data', **kwargs)
-    lstm = LSTMLayer(n_out = 32, name = 'lstm', sources=[input], **kwargs)
+    lstm = LSTMLayer(n_out = 512, name = 'lstm', sources=[input], **kwargs)
     output = OutputLayer(loss = 'ce', name = 'output', target = 'classes', sources=[lstm], **kwargs)
     network.add_layer(input)
     network.add_layer(lstm)
