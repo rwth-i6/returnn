@@ -496,7 +496,6 @@ class Device(object):
       custom_exec(custom_dev_init_code, "<custom dev init code string>", {}, dict_joined(globals(), locals()))
 
     self.initialize(config, update_specs=update_specs)
-    #self._checkGpuFuncs(device, device_id)
     output_queue.send(len(list(self.network.named_parameters())))
     print("Device %s proc, pid %i is ready for commands." % (device, os.getpid()), file=log.v4)
     network_params = []
@@ -537,9 +536,8 @@ class Device(object):
         for k in target_keys:
           self.data[k] = t[k].astype(self.data[k].dtype)
         for k in target_keys:
-          dtype = torch.float if 'float' in str(self.data[k].dtype) else torch.long # TODO
-          self.network.data[k] = torch.tensor(self.data[k], dtype=dtype).to(self.device)
-          self.network.index[k] = torch.tensor(self.index[k], dtype=torch.uint8).to(self.device)
+          self.network.index[k] = torch.from_numpy(self.index[k]).to(self.device)
+          self.network.data[k] = torch.from_numpy(self.data[k]).to(self.device)
         continue # TODO
 
         for k in target_keys:
@@ -563,7 +561,10 @@ class Device(object):
         #our_params_testnet = self.testnet.get_all_params_vars()
         #assert isinstance(our_params_trainnet, list)
         params_len = input_queue.recv()
-        params = [input_queue.recv_bytes() for i in range(params_len)]
+        #net_params = [ None for x in self.network.parameters()]
+        self.network.set_parameters([
+          torch.from_numpy(numpy.fromstring(input_queue.recv_bytes(), dtype='float32'))
+            for i in range(params_len)])
         assert input_queue.recv() == "end-set-net-params"
         continue # TODO
         assert len(params) == len(our_params_trainnet)
@@ -597,8 +598,8 @@ class Device(object):
         output_queue.send("end-get-net-train-params")
       elif cmd == "sync-net-train-params":
         network_params = []
-        for p in self.network.named_parameters(): #self.trainnet.get_all_params_vars():
-          network_params.append(numpy.asarray(p[1].detach(), dtype=floatX).tostring())
+        for p in self.network.parameters():
+          network_params.append(p.detach().cpu().numpy().tostring())
       elif cmd == "task":  # via self.run()
         task = input_queue.recv()
         try:
@@ -633,14 +634,14 @@ class Device(object):
     r = self.output_queue.recv()
     assert r == "net-train-params"
     param_count = self.output_queue.recv()
-    assert param_count == len(network.get_all_params_vars())
+    assert param_count == len(network.parameters())
     raw = [self.output_queue.recv_bytes() for i in range(param_count)]
     assert self.output_queue.recv() == "end-get-net-train-params"
-    vars = network.get_all_params_vars()
+    vars = network.parameters()
     res = []
     assert len(vars) == len(raw)
     for p,q in zip(vars, raw):
-      res.append(numpy.fromstring(q, dtype=floatX).reshape(p.get_value().shape))
+      res.append(numpy.fromstring(q, dtype=floatX).reshape(p.detach().numpy().shape))
     return res
 
   def set_net_encoded_params(self, network_params):
@@ -648,7 +649,6 @@ class Device(object):
     :type network_params: list[numpy.ndarray]
     This updates *all* params, not just the train params.
     """
-    assert not self.blocking
     self.input_queue.send("set-net-params")
     self.input_queue.send(len(network_params))
     for p in network_params:
@@ -661,9 +661,7 @@ class Device(object):
     This updates *all* params, not just the train params.
     """
     assert self.main_pid == os.getpid()
-    # TODO
-    #self.set_net_encoded_params([
-    #  numpy.asarray(p.get_value()) for p in network.get_all_params_vars()])
+    self.set_net_encoded_params([ p.detach().cpu().numpy() for p in network.parameters() ])
 
   def is_device_proc(self):
     return self.main_pid != os.getpid()

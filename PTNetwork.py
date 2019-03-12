@@ -85,6 +85,27 @@ class LayerNetwork():
       params += self.hidden[k].named_parameters()
     return params
 
+  def set_parameters(self, params):
+    i = 0
+    for k in self.output:
+      for p in self.output[k].parameters():
+        p.data.copy_(params[i].reshape(p.data.shape))
+        i += 1
+    for k in self.hidden:
+      for p in self.hidden[k].parameters():
+        p.data.copy_(params[i].reshape(p.data.shape))
+        i += 1
+    return
+    #net_params[i].cpu().detach().numpy().shape
+    for k in self.output:
+      for w in self.output[k].state_dict():
+        self.output[k].state_dict()[w].data.copy_(params[i].reshape(self.output[k].state_dict()[w].data.shape))
+        i += 1
+    for k in self.hidden:
+      for w in self.hidden[k].state_dict():
+        self.hidden[k].state_dict()[w].data.copy_(params[i].reshape(self.hidden[k].state_dict()[w].data.shape))
+        i += 1
+
   @classmethod
   def from_config_topology(cls, config, mask=None, **kwargs):
     """

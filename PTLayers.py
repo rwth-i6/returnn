@@ -484,7 +484,7 @@ class OutputLayer(Layer):
     c = torch.log(torch.index_select(
           self.output.view(-1,self.output.size(2)), 0, i))
     y = torch.index_select(y.view(-1), 0, i)
-    return self.loss(c, y)
+    return self.loss(c, y.long())
 
   def errors(self):
     y = self.network.data[self.attrs['target']]
@@ -492,4 +492,4 @@ class OutputLayer(Layer):
     y = torch.index_select(y.view(-1), 0, i)
     c = torch.index_select(torch.argmax(self.output,dim=2).view(-1), 0, i)
     #print(c.size(0),self.output.size(0)*self.output.size(1),y.size(0))
-    return (y != c).float().sum() # * self.index.float().sum() / (self.logpcx.size(0) * self.logpcx.size(1))
+    return (y.long() != c).float().sum() # * self.index.float().sum() / (self.logpcx.size(0) * self.logpcx.size(1))

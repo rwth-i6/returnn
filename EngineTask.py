@@ -7,6 +7,7 @@ import threading
 import time
 
 import numpy
+import torch
 
 from Device import Device
 from EngineUtil import assign_dev_data
@@ -597,11 +598,10 @@ class TrainTaskThread(TaskThread):
       return self._copy(False)
 
   def reduce(self, num_frames):
-    return # TODO
     for device in self.devices:
       device.sync_net_train_params()
-    basenet = self.network.get_all_params_vars()
-    consnet = [numpy.zeros(p.get_value().shape, dtype='float32') for p in basenet]
+    basenet = [ p.detach().numpy() for p in self.network.parameters() ]
+    consnet = [numpy.zeros(p.shape, dtype='float32') for p in basenet]
     hypnets = []
     nparams = len(basenet)
     encoded = []
@@ -615,67 +615,18 @@ class TrainTaskThread(TaskThread):
     else:
       # consensus via average
       for i in range(nparams):
-        num_updates = { dev.name : dev.get_total_cost() for net,dev in zip(hypnets,self.devices) if numpy.sum(abs(net[i] - basenet[i].get_value())) > numpy.float32(0) }
+        num_updates = { dev.name : dev.get_total_cost() for net,dev in zip(hypnets,self.devices) if numpy.sum(abs(net[i] - basenet[i])) > numpy.float32(0) }
         tot_updates = sum(num_updates.values()) / self.reduction_rate
         if tot_updates:
-          consnet[i] = basenet[i].get_value() + numpy.sum([ (net[i] - basenet[i].get_value()) * float(num_updates[dev.name]) / tot_updates for net,dev in zip(hypnets,self.devices) if dev.name in num_updates ], axis = 0)
+          consnet[i] = basenet[i] + numpy.sum([ (net[i] - basenet[i]) * float(num_updates[dev.name]) / tot_updates for net,dev in zip(hypnets,self.devices) if dev.name in num_updates ], axis = 0)
         else:
-          print("warning: no update available for parameter", basenet[i], file=log.v3)
-          consnet[i] = basenet[i].get_value()
+          print("warning: no update available for parameter", i, file=log.v3)
+          consnet[i] = basenet[i]
     self.network.update_step = max([ dev.get_num_updates() for dev in self.devices ])
-    for p, q in zip(self.network.get_all_params_vars(), consnet):
-      p_shape = p.get_value(borrow=True, return_internal_type=True).shape
-      assert p_shape == q.shape
-      p.set_value(q)
-      encoded.append(q)
+    self.network.set_parameters([ torch.from_numpy(p) for p in consnet ])
     if len(hypnets) > 1:
       for device in self.devices:
-        device.set_net_encoded_params(encoded)
-    return
-    try:
-      basenet = self.network.get_all_params_vars()
-      consnet = [numpy.zeros(p.get_value().shape, dtype='float32') for p in basenet]
-      hypnets = []
-      nparams = len(basenet)
-      encoded = []
-      #pipe = self.CopyManager(self.devices)
-      #hypnets = pipe.copy_from_device()
-      for device in self.devices:
-        hypnets.append([ p for p in device.get_net_train_params(self.network) ])
-        assert len(hypnets[-1]) == len(basenet)
-      if len(hypnets) == 0:
-        consnet = basenet
-      elif len(hypnets) == 1:
-        consnet = hypnets[0]
-      else:
-        # consensus via average
-        for i in range(nparams):
-          num_updates = { dev.name : dev.get_total_cost() for net,dev in zip(hypnets,self.devices) if numpy.sum(abs(net[i] - basenet[i].get_value())) > numpy.float32(0) }
-          tot_updates = sum(num_updates.values()) / self.reduction_rate
-          #num_updates = numpy.sum([ dev.num_updates for net,dev in zip(hypnets,self.devices) ])
-          #ndevs = len([ dev for dev in self.devices if abs(numpy.sum(net[i] - basenet[i].get_value())) > 0.0001 ])
-          #consnet[i] = basenet[i].get_value() + numpy.sum([(net[i] - basenet[i].get_value()) * (float(device.num_frames) / num_frames) for net,dev in zip(hypnets,self.devices) if basenet[i].layer.name in dev.update_specs['layers']], axis = 0)
-          if tot_updates:
-            consnet[i] = basenet[i].get_value() + numpy.sum([ (net[i] - basenet[i].get_value()) * grads[dev.name] * float(num_updates[dev.name]) / tot_updates for net,dev in zip(hypnets,self.devices) if dev.name in num_updates ], axis = 0)
-          else:
-            print("warning: no update available for parameter", basenet[i], file=log.v3)
-            consnet[i] = basenet[i].get_value()
-          #consnet[i] = basenet[i].get_value() + ndevs * numpy.sum([ (net[i] - basenet[i].get_value()) * (float(device.num_frames) / nframes) for net,dev in zip(hypnets,self.devices) ], axis = 0)
-      self.network.update_step = max([ dev.get_num_updates() for dev in self.devices ])
-      for p, q in zip(self.network.get_all_params_vars(), consnet):
-        p_shape = p.get_value(borrow=True, return_internal_type=True).shape
-        assert p_shape == q.shape
-        p.set_value(q)
-        encoded.append(q)
-      if len(hypnets) > 1:
-        for device in self.devices:
-          device.set_net_encoded_params(encoded)
-    except Exception as e:
-      print("network synchronization failed: ", e.message, file=log.v3)
-      if log.v4:
-        sys.excepthook(*sys.exc_info())
-
-    #pipe.copy_to_device(self.network)
+        device.set_net_encoded_params(consnet)
 
   def finalize(self):
     super(TrainTaskThread, self).finalize()
