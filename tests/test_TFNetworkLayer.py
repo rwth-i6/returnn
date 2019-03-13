@@ -1537,6 +1537,38 @@ def test_LossAsIs_custom_dim():
     assert loss
 
 
+def test_param_variational_noise():
+  from TFUtil import print_graph_output, find_ops_with_tensor_input
+  config = Config({
+    "debug_print_layer_output_template": True,
+    "param_variational_noise": 0.075,
+    "extern_data": {"data": {"dim": 7}}
+  })
+  with make_scope() as session:
+    network = TFNetwork(config=config, train_flag=True)
+    # Do subnetwork by intention, to test when we have multiple variable scopes.
+    network.construct_from_dict({
+      "output": {
+        "class": "subnetwork",
+        "subnetwork": {
+          "output": {"class": "linear", "n_out": 13, "activation": "tanh"}
+        }
+      }
+    })
+    out = network.get_default_output_layer().output.placeholder
+    print("output:")
+    print_graph_output(out)
+    params = network.get_params_list()
+    print("params:", params)
+    assert len(params) == 2  # weights and bias
+    for param in params:
+      print("param:", param)
+      ops = find_ops_with_tensor_input(param, fetches=out)
+      print("param graph:")
+      print_graph_output(ops)
+      assert len(ops) == 1 and "param_variational_noise" in ops[0].name
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()

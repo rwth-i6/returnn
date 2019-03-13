@@ -54,6 +54,7 @@ class LayerBase(object):
                batch_norm=False,
                L2=None, darc1=None,
                spatial_smoothing=0.0,
+               param_variational_noise=None,
                updater_opts=None,
                initial_output=None,
                rec_previous_layer=None,
@@ -87,6 +88,7 @@ class LayerBase(object):
     :param float|None L2: for constraints
     :param float|None darc1: for constraints. see Generalization in Deep Learning, https://arxiv.org/abs/1710.05468
     :param float|None spatial_smoothing: see :func:`TFUtil.spatial_smoothing_energy`
+    :param float|None param_variational_noise: adds variational noise to the params during training
     :param dict[str]|None updater_opts: accepts similar opts as TFUpdater, e.g. "optimizer", "learning_rate", ...
     :param bool|None is_output_layer:
     :param bool only_on_eval: if True, this layer will only be calculated in eval
@@ -151,6 +153,7 @@ class LayerBase(object):
     self.L2 = L2
     self.darc1 = darc1
     self.spatial_smoothing = spatial_smoothing
+    self.param_variational_noise = param_variational_noise
     self.updater_opts = CollectionReadCheckCovered(updater_opts or {})
     self._is_output_layer = is_output_layer
     self.only_on_eval = only_on_eval
@@ -617,15 +620,50 @@ class LayerBase(object):
     kwargs = kwargs.copy()
     kwargs.setdefault("reuse", getattr(tf, "AUTO_REUSE", None))
 
+    param_variational_noise = self.param_variational_noise
+    if param_variational_noise is None:
+      param_variational_noise = self.network.get_config().float("param_variational_noise", 0)
+    if self.network.train_flag is False:  # if True or tf.Tensor, it will use cond_on_train below
+      param_variational_noise = None
+    need_custom_getter = bool(param_variational_noise)  # and param.dtype.is_floating
+    kwargs_custom_getter = kwargs.get("custom_getter", None)
+
+    def layer_custom_getter(getter, **getter_kwargs):
+      """
+      See TF docs :func:`_VariableStore.get_variable`.
+
+      :param (...)->tf.Variable getter:
+      :rtype: tf.Variable|tf.Tensor
+      """
+      if kwargs_custom_getter:
+        param = kwargs_custom_getter(getter, **getter_kwargs)
+      else:
+        param = getter(**getter_kwargs)
+
+      # Only apply this if we get a variable. Otherwise, maybe variational noise was already applied
+      # (by some parent var scope), and we don't want to apply it twice.
+      if param_variational_noise and param.dtype.is_floating and isinstance(param, tf.Variable):
+        with tf.name_scope("param_variational_noise"):
+          fn_train = lambda: param + tf.random_normal(
+            tf.shape(param), dtype=param.dtype.base_dtype,
+            stddev=param_variational_noise,
+            seed=self.network.random.randint(2 ** 31))
+          fn_eval = lambda: param
+          param = self.network.cond_on_train(fn_train, fn_eval)
+
+      return param
+
     @contextlib.contextmanager
     def inner():
       with var_creation_scope() as dep:
         if self.reuse_params:
-          with reuse_name_scope(self.reuse_params.get_variable_scope(base_layer=self, **kwargs)) as scope:
-            yield scope
+          var_scope = self.reuse_params.get_variable_scope(base_layer=self)
         else:
-          with reuse_name_scope(tf.get_variable_scope(), **kwargs) as scope:
-            yield scope
+          var_scope = tf.get_variable_scope()
+        if need_custom_getter:
+          kwargs["custom_getter"] = layer_custom_getter
+        with reuse_name_scope(var_scope, **kwargs) as scope:
+          yield scope
 
     if self.param_device:
       device_name = self.param_device
@@ -650,17 +688,30 @@ class LayerBase(object):
     :return: param
     :rtype tf.Variable
     """
+    _param = param
+    if isinstance(param, tf.Tensor):
+      # This can happen with a custom_getter in tf.get_variable(), e.g. via self.reuse_params.
+      # Check if we can still find the original variable.
+      from tensorflow.contrib import graph_editor
+      import re
+      possible_params = tf.get_collection(
+        tf.GraphKeys.GLOBAL_VARIABLES, scope=re.escape(self.get_absolute_name_scope_prefix()))
+      if not possible_params:
+        # None found. Just return as-is.
+        return param
+      all_ops = graph_editor.get_backward_walk_ops([param.op], inclusive=False, control_inputs=False)
+      all_1st_tensors = [op.outputs[0] for op in all_ops if len(op.outputs) == 1]
+      possible_params = [p for p in possible_params if p._ref() in all_1st_tensors]
+      if not possible_params:
+        # Not found. Just return as-is.
+        return param
+      assert len(possible_params) == 1
+      param = possible_params[0]
+    assert isinstance(param, tf.Variable)
     if not self.trainable:
       trainable_collection_ref = param.graph.get_collection_ref(tf.GraphKeys.TRAINABLE_VARIABLES)
       if param in trainable_collection_ref:
         trainable_collection_ref.remove(param)
-
-    if isinstance(param, tf.Tensor):
-      # This can happen with a custom_getter in tf.get_variable(), e.g. via self.reuse_params.
-      # In that case, don't treat it like a param, i.e. don't save a reference in self.params,
-      # where we only want to store tf.Variable objects.
-      return param
-    assert isinstance(param, tf.Variable)
     if trainable is None:
       trainable = param in param.graph.get_collection_ref(tf.GraphKeys.TRAINABLE_VARIABLES)
     if saveable is None:
@@ -689,7 +740,11 @@ class LayerBase(object):
       param.RETURNN_layer = self
     if getattr(param, "RETURNN_updater_opts", None) is None and self.updater_opts.truth_value:
       param.RETURNN_updater_opts = self.updater_opts
-    return param
+    # Note that any further postprocessing on the parameter should not be done here,
+    # as we cannot guarantee that the result from this method is really used,
+    # e.g. when we use official TF code such as the official LSTM cell.
+    # The better way is to do it in self.var_creation_scope(), which also applies in those cases.
+    return _param
 
   def set_param_values_by_dict(self, values_dict, session, ignore_wrong_shape=False, copy_param_mode=None):
     """
