@@ -77,7 +77,8 @@ class SingleLayerLstm(nn.Module):
     self.Wr = nn.Parameter(torch.empty(shape_wr).uniform_(-stdv, stdv))
     self.bf = nn.Parameter(torch.empty(self.gate_size).uniform_(-2 * stdv, 2 * stdv))
   
-  def forward(self, X, i = None, device='cpu', h0=None, c0=None):
+  def forward(self, X, i = None, h0=None, c0=None):
+    device = self.Wf.device
     T, B = X.shape[0], X.shape[1]
     if h0 is None:
       h0 = torch.zeros((B, self.hidden_size), requires_grad=False, device=device)
