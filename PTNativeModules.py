@@ -24,8 +24,10 @@ torch.backends.cudnn.benchmark = False
 
 def load_lstm_ops():
   start = time.time()
-  ops = open("./PTNativeOps.cpp").read()
-  kns = open("./PTNativeKernels.cpp").read()
+  import os
+  root = os.path.dirname(os.path.abspath(__file__))
+  ops = open("{}/PTNativeOps.cpp".format(root)).read()
+  kns = open("{}/PTNativeKernels.cpp".format(root)).read()
   lstm = load_inline(name='t', cpp_sources=[ops], cuda_sources=[kns])
   print()
   print("Local LstmOperator compiled and loaded. Took {:.4f} seconds!".format(time.time() - start))
