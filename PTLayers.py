@@ -12,7 +12,6 @@ from Log import log
 from Util import as_str
 import json
 
-
 class Container(nn.Module):
   rng_seed = 1234
   layer_class = None
@@ -21,46 +20,17 @@ class Container(nn.Module):
   def initialize_rng(cls):
     cls.rng = numpy.random.RandomState(cls.rng_seed)
 
-  def __init__(self, layer_class=None, name="", network=None,
-               train_flag=False, eval_flag=False, depth=1, consensus="flat",
-               forward_weights_init=None, bias_init=None, weight_clip=0.0, cost=None,
-               recurrent_weights_init=None,
-               substitute_param_expr=None):
+  def __init__(self, name, network):
     """
     :param str layer_class: name of layer type, e.g. "hidden", "recurrent", "lstm" or so. see LayerClasses.
     :param str name: custom layer name, e.g. "hidden_2"
-    :param Network.LayerNetwork network: the network which we will be part of
-    :param str forward_weights_init: see self.create_forward_weights()
-    :param str bias_init: see self.create_bias()
+    :param PTNetwork.LayerNetwork network: the network which we will be part of
     """
     super(Container, self).__init__()
     self.params = {}
     self.attrs = {}
-    self.device = None
-    if layer_class:
-      self.layer_class = as_str(layer_class.encode("utf8"))
     self.name = as_str(name.encode("utf8"))
-    self.train_flag = train_flag
-    self.eval_flag = eval_flag
-    if consensus != "flat":
-      self.set_attr('consensus', consensus)
     self.network = network
-    if forward_weights_init:
-      self.set_attr("forward_weights_init", forward_weights_init)
-    self.forward_weights_init = forward_weights_init or "random_normal()"
-    if recurrent_weights_init:
-      self.set_attr("recurrent_weights_init", recurrent_weights_init)
-    self.recurrent_weights_init = recurrent_weights_init or "random_uniform()"
-    if bias_init:
-      self.set_attr("bias_init", bias_init)
-    self.bias_init = bias_init or "zeros()"
-    if substitute_param_expr:
-      self.set_attr("substitute_param_expr", substitute_param_expr)
-    self.substitute_param_expr = substitute_param_expr
-    if weight_clip:
-      self.set_attr('weight_clip', weight_clip)
-    if cost:
-      self.set_attr('cost', cost)
 
   def __repr__(self):
     return "<%s class:%s name:%s>" % (self.__class__, self.layer_class, self.name)
@@ -366,7 +336,7 @@ class Container(nn.Module):
 class Layer(Container):
   recurrent = False
 
-  def __init__(self, dependencies=None, sources=None, **kwargs):
+  def __init__(self, dependencies=None, sources=None, dropout=0.0, **kwargs):
     """
     :param list[NetworkBaseLayer.Layer] sources: list of source layers
     :param int n_out: output dim of W_in and dim of bias
@@ -414,23 +384,6 @@ class Layer(Container):
     """
     return None
 
-class OutputLayer2(Layer):
-  layer_class = "softmax"
-
-  def __init__(self, loss, **kwargs):
-    super(OutputLayer, self).__init__(**kwargs)
-    n_in = sum([x.attrs['n_out'] for x in self.sources])
-    self.attrs['n_out'] = self.network[target]
-    #self.W_in = nn.Parameter(torch.ones(self.sources[0].attrs['n_out'],self.attrs['n_out']))
-    #self.b = nn.Parameter(torch.zeros(self.attrs['n_out']))
-    #self.softmax = nn.Softmax()(x_in.mm(self.W_in) + self.b)
-
-  def forward(self, x, i):
-    z = x_in.mm(self.W_in) + self.b
-    self.p_y_given_x = self.softmax(z) # TBC
-    scores = torch.index_select(self.p_y_given_x.view(-1,self.p_y_given_x.shape[2]), i.view(-1).nonzero().long())
-    return -torch.log(scores[self.y_in.view(-1)]).sum()
-
 class DataLayer(Layer):
   layer_class = "data"
 
@@ -446,23 +399,31 @@ class DataLayer(Layer):
     return self.network.data[self.attrs['source']], self.network.index[self.attrs['source']]
 
 class LSTMLayer(Layer):
-  layer_class = "lstm"
+  layer_class = "rec"
+  recurrent = True
 
-  def __init__(self, n_out, **kwargs):
+  def __init__(self, n_out, direction=1, **kwargs):
     super(LSTMLayer, self).__init__(**kwargs)
     self.attrs['n_out'] = n_out
+    self.attrs['direction'] = direction
     n_in = sum([x.attrs['n_out'] for x in self.sources])
     self.module = nn.LSTM(int(n_in), int(n_out), 1)
 
   def forward(self, x, i):
     self.module.flatten_parameters()
+    if self.attrs['direction'] == -1: # ugh
+      idx = torch.LongTensor([i for i in range(x.size(0)-1, -1, -1)])
+      idx = idx.to(x.device)
+      x = x.index_select(0,idx)
     x, _ = self.module(x)
+    if self.attrs['direction'] == -1: # ugh
+      x = x.index_select(0,idx)
     return x, i
 
 class OutputLayer(Layer):
   layer_class = "softmax"
 
-  def __init__(self, loss, target, **kwargs):
+  def __init__(self, loss = 'ce', target = 'classes', **kwargs):
     super(OutputLayer, self).__init__(**kwargs)
     self.attrs['loss'] = loss
     self.attrs['target'] = target
