@@ -343,10 +343,6 @@ class Engine:
     print("using batch size: %i, max seqs: %i" % (self.batch_size, self.max_seqs), file=log.v4)
     print("learning rate control:", self.learning_rate_control, file=log.v4)
     print("pretrain:", self.pretrain, file=log.v4)
-    if self.network.loss == 'priori':
-      prior = self.train_data.calculate_priori()
-      self.network.output["output"].priori.set_value(prior)
-      self.network.output["output"].initialize()
 
     if self.network.recurrent:
       assert not self.train_data.shuffle_frames_of_nseqs, "Frames must not be shuffled in recurrent net."

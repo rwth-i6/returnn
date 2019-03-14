@@ -13,6 +13,46 @@ from Log import log
 from Util import dict_joined, as_str
 from NetworkDescription import LayerNetworkDescription
 
+LayerClasses = {}
+
+def _initLayerClasses():
+  global LayerClasses
+  from inspect import isclass
+  import PTLayers
+  mods = [PTLayers]
+  for mod in mods:
+    for _, clazz in vars(mod).items():
+      if not isclass(clazz): continue
+      layer_class = getattr(clazz, "layer_class", None)
+      if not layer_class: continue
+      LayerClasses[layer_class] = clazz
+
+_initLayerClasses()
+
+def get_layer_class(name, raise_exception=True):
+  """
+  :type name: str
+  :rtype: type(NetworkHiddenLayer.HiddenLayer)
+  """
+  if name in LayerClasses:
+    return LayerClasses[name]
+  if name.startswith("config."):
+    from Config import get_global_config
+    config = get_global_config()
+    cls = config.typed_value(name[len("config."):])
+    import inspect
+    if not inspect.isclass(cls):
+      if raise_exception:
+        raise Exception("get_layer_class: %s not found" % name)
+      else:
+        return None
+    if cls.layer_class is None:
+      # Will make Layer.save() (to HDF) work correctly.
+      cls.layer_class = name
+    return cls
+  if raise_exception:
+    raise Exception("get_layer_class: invalid layer type: %s" % name)
+  return None
 
 class LayerNetwork():
   def __init__(self, n_out=None):
@@ -184,17 +224,47 @@ class LayerNetwork():
     n_out = {k:n_out[k][0] for k in n_out}
     n_out['data'] = n_in # TODO
     network = cls(n_out=n_out, **kwargs)
-    #network.y['data'].n_out = network.n_out['data'][0]
     network.n_out['data'] = n_in
     kwargs = {'network':network}
-    input = DataLayer(source='data', **kwargs)
-    lstm = LSTMLayer(n_out = 512, name = 'lstm', sources=[input], **kwargs)
-    output = OutputLayer(loss = 'ce', name = 'output', target = 'classes', sources=[lstm], **kwargs)
-    network.add_layer(input)
-    network.add_layer(lstm)
-    network.add_layer(output)
-    network.loss = 'ce'
+    def traverse(content, layer_name):
+      if layer_name in network.hidden or layer_name in network.output:
+        return
+      sources = []
+      obj = content[layer_name].copy()
+      layer_class = obj.pop('class', None)
+      if not 'from' in obj and layer_class is not None:
+        sources = [DataLayer(source='data',network=network)]
+      elif 'from' in obj and obj['from']:
+        if not isinstance(obj['from'], list):
+          obj['from'] = [ obj['from'] ]
+        for prev in obj['from']:
+          if not prev in content.keys() and prev != "null":
+            sources.append(DataLayer(source=prev,network=network))
+          elif prev != "null":
+            traverse(content, prev)
+            sources.append(network.get_layer(prev))
+      obj.pop('from', None)
+      params = { 'sources': sources,
+                 'dropout' : 0.0,
+                 'name' : layer_name,
+                 'network': network }
+      params.update(obj)
+      layer_class = get_layer_class(layer_class)
+      network.recurrent = network.recurrent or layer_class.recurrent
+      network.add_layer(layer_class(**params))
+    for layer_name in json_content:
+      assert layer_name != "data", "this layer name is not allowed"
+      traverse(json_content, layer_name)
+    #network.loss = 'ce'
     return network
+    #input = DataLayer(source='data', **kwargs)
+    #lstm = LSTMLayer(n_out = 512, name = 'lstm', sources=[input], **kwargs)
+    #output = OutputLayer(loss = 'ce', name = 'output', target = 'classes', sources=[lstm], **kwargs)
+    #network.add_layer(input)
+    #network.add_layer(lstm)
+    #network.add_layer(output)
+    #network.loss = 'ce'
+    #return network
 
   def get_layer(self, layer_name):
     if layer_name in self.hidden:
