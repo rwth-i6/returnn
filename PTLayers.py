@@ -402,20 +402,34 @@ class LSTMLayer(Layer):
   layer_class = "rec"
   recurrent = True
 
-  def __init__(self, n_out, direction=1, **kwargs):
+  def __init__(self, n_out, unit='native', direction=1, **kwargs):
     super(LSTMLayer, self).__init__(**kwargs)
     self.attrs['n_out'] = n_out
     self.attrs['direction'] = direction
+    self.attrs['unit'] = unit
     n_in = sum([x.attrs['n_out'] for x in self.sources])
-    self.module = nn.LSTM(int(n_in), int(n_out), 1)
+    if unit == 'native':
+      from PTNativeModules import SingleLayerLstm
+      self.module = SingleLayerLstm(int(n_in), int(n_out))
+    else: # pytorch LSTM
+      self.module = nn.LSTM(int(n_in), int(n_out), 1)
+
+  def to(self, device):
+    super(Layer, self).to(device)
+    self.module.to(device)
+    self.module.device = device
 
   def forward(self, x, i):
-    self.module.flatten_parameters()
+    if self.attrs['unit'] != 'native':
+      self.module.flatten_parameters()
     if self.attrs['direction'] == -1: # ugh
       idx = torch.LongTensor([i for i in range(x.size(0)-1, -1, -1)])
       idx = idx.to(x.device)
       x = x.index_select(0,idx)
-    x, _ = self.module(x)
+    if self.attrs['unit'] == 'native':
+      x, _, _ = self.module(x, i=i.float())
+    else:
+      x, _ = self.module(x)
     if self.attrs['direction'] == -1: # ugh
       x = x.index_select(0,idx)
     return x, i
