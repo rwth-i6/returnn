@@ -4,8 +4,9 @@ backend = 'pytorch'
 
 def _initLayerClasses():
   global LayerClasses
+  from inspect import isclass
   if backend == 'pytorch':
-    import PTNetworkLayer
+    import PTLayers
     for _, clazz in vars(PTLayers).items():
       if not isclass(clazz): continue
       layer_class = getattr(clazz, "layer_class", None)

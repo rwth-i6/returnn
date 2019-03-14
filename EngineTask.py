@@ -7,6 +7,7 @@ import threading
 import time
 
 import numpy
+import torch
 
 from Device import Device
 from EngineUtil import assign_dev_data
@@ -143,7 +144,6 @@ class TaskThread(threading.Thread):
       eval_info = {}
       for key, value in summed_results.items():
         if key.startswith("gparam:"): continue
-        if key == "ctc_priors": continue
         target = self._get_target_for_key(key)
         eval_info[key] = value / float(num_frames[target])
 
@@ -188,8 +188,7 @@ class TaskThread(threading.Thread):
       assert self.num_frames["data"] > 0
       # Note: self.num_frames could be greater than self.data.get_num_timesteps() in case of chunking.
       for key, value in self.results.items():
-        if key != "ctc_priors":
-          self.results[key] *= self.epoch_norm_factor_for_result(key)
+        self.results[key] *= self.epoch_norm_factor_for_result(key)
       self.score = dict([(key,value) for (key, value) in self.results.items() if key.startswith("cost:")])
       self.error = dict([(key,value) for (key, value) in self.results.items() if key.startswith("error:")])
       self.finalized = True
@@ -340,6 +339,7 @@ class TaskThread(threading.Thread):
         :type devices: list[Device.Device]
         :rtype: str | None
         """
+        return None # TODO
         if not devices:
           return None
         mem_info = [device.get_memory_info() for device in devices]
@@ -471,7 +471,6 @@ class TaskThread(threading.Thread):
           else:
             time.sleep(0.01)
 
-
         match = True
         while self.batches.has_more() and total_cost < self.eval_batch_size and match:
           self.batch_idx = self.batches.get_current_batch_idx()
@@ -527,8 +526,6 @@ class TrainTaskThread(TaskThread):
     self.updater = updater
     self.learning_rate = learning_rate
     self.seq_train_parallel = seq_train_parallel
-    self.do_ctc_priors = network.ctc_priors is not None
-    self.ctc_priors = None
     super(TrainTaskThread, self).__init__("train", network, devices, data=data, batches=batches, **kwargs)
 
   def initialize(self):
@@ -536,9 +533,9 @@ class TrainTaskThread(TaskThread):
     self.score = 0
     for device in self.devices:
       device.set_learning_rate(self.learning_rate)
-    if not self.updater.isInitialized:
-      self.updater.initVars(self.network, None)
-      self.updater.setLearningRate(self.learning_rate)
+    #if not self.updater.isInitialized: # TODO
+    #  self.updater.initVars(self.network, None)
+    #  self.updater.setLearningRate(self.learning_rate)
     if self.seq_train_parallel:
       self.seq_train_parallel.train_start_epoch()
 
@@ -549,7 +546,7 @@ class TrainTaskThread(TaskThread):
   def get_device_prepare_args(self):
     kwargs = super(TrainTaskThread, self).get_device_prepare_args()
     kwargs["updater"] = self.updater
-    kwargs["train_param_args"] = self.network.train_param_args
+    #kwargs["train_param_args"] = self.network.train_param_args # TODO
     return kwargs
 
   def maybe_wait_for_batches(self, device, batches):
@@ -559,14 +556,6 @@ class TrainTaskThread(TaskThread):
     """
     if self.seq_train_parallel:
       self.seq_train_parallel.train_wait_for_seqs(device=device, batches=batches)
-
-  def save_ctc_priors(self, filename, epoch_str):
-    assert self.ctc_priors is not None
-    return # this should be done using compute_priors
-    with open(filename, 'a') as f:
-      print(epoch_str, file=f)
-      numpy.savetxt(f, self.ctc_priors, newline=" ")
-      print(file=f)
 
   class CopyManager():
     class CopyThread(threading.Thread):
@@ -611,8 +600,8 @@ class TrainTaskThread(TaskThread):
   def reduce(self, num_frames):
     for device in self.devices:
       device.sync_net_train_params()
-    basenet = self.network.get_all_params_vars()
-    consnet = [numpy.zeros(p.get_value().shape, dtype='float32') for p in basenet]
+    basenet = [ p.detach().numpy() for p in self.network.parameters() ]
+    consnet = [numpy.zeros(p.shape, dtype='float32') for p in basenet]
     hypnets = []
     nparams = len(basenet)
     encoded = []
@@ -626,72 +615,21 @@ class TrainTaskThread(TaskThread):
     else:
       # consensus via average
       for i in range(nparams):
-        num_updates = { dev.name : dev.get_total_cost() for net,dev in zip(hypnets,self.devices) if numpy.sum(abs(net[i] - basenet[i].get_value())) > numpy.float32(0) }
+        num_updates = { dev.name : dev.get_total_cost() for net,dev in zip(hypnets,self.devices) if numpy.sum(abs(net[i] - basenet[i])) > numpy.float32(0) }
         tot_updates = sum(num_updates.values()) / self.reduction_rate
         if tot_updates:
-          consnet[i] = basenet[i].get_value() + numpy.sum([ (net[i] - basenet[i].get_value()) * float(num_updates[dev.name]) / tot_updates for net,dev in zip(hypnets,self.devices) if dev.name in num_updates ], axis = 0)
+          consnet[i] = basenet[i] + numpy.sum([ (net[i] - basenet[i]) * float(num_updates[dev.name]) / tot_updates for net,dev in zip(hypnets,self.devices) if dev.name in num_updates ], axis = 0)
         else:
-          print("warning: no update available for parameter", basenet[i], file=log.v3)
-          consnet[i] = basenet[i].get_value()
+          print("warning: no update available for parameter", i, file=log.v3)
+          consnet[i] = basenet[i]
     self.network.update_step = max([ dev.get_num_updates() for dev in self.devices ])
-    for p, q in zip(self.network.get_all_params_vars(), consnet):
-      p_shape = p.get_value(borrow=True, return_internal_type=True).shape
-      assert p_shape == q.shape
-      p.set_value(q)
-      encoded.append(q)
+    self.network.set_parameters([ torch.from_numpy(p) for p in consnet ])
     if len(hypnets) > 1:
       for device in self.devices:
-        device.set_net_encoded_params(encoded)
-    return
-    try:
-      basenet = self.network.get_all_params_vars()
-      consnet = [numpy.zeros(p.get_value().shape, dtype='float32') for p in basenet]
-      hypnets = []
-      nparams = len(basenet)
-      encoded = []
-      #pipe = self.CopyManager(self.devices)
-      #hypnets = pipe.copy_from_device()
-      for device in self.devices:
-        hypnets.append([ p for p in device.get_net_train_params(self.network) ])
-        assert len(hypnets[-1]) == len(basenet)
-      if len(hypnets) == 0:
-        consnet = basenet
-      elif len(hypnets) == 1:
-        consnet = hypnets[0]
-      else:
-        # consensus via average
-        for i in range(nparams):
-          num_updates = { dev.name : dev.get_total_cost() for net,dev in zip(hypnets,self.devices) if numpy.sum(abs(net[i] - basenet[i].get_value())) > numpy.float32(0) }
-          tot_updates = sum(num_updates.values()) / self.reduction_rate
-          #num_updates = numpy.sum([ dev.num_updates for net,dev in zip(hypnets,self.devices) ])
-          #ndevs = len([ dev for dev in self.devices if abs(numpy.sum(net[i] - basenet[i].get_value())) > 0.0001 ])
-          #consnet[i] = basenet[i].get_value() + numpy.sum([(net[i] - basenet[i].get_value()) * (float(device.num_frames) / num_frames) for net,dev in zip(hypnets,self.devices) if basenet[i].layer.name in dev.update_specs['layers']], axis = 0)
-          if tot_updates:
-            consnet[i] = basenet[i].get_value() + numpy.sum([ (net[i] - basenet[i].get_value()) * grads[dev.name] * float(num_updates[dev.name]) / tot_updates for net,dev in zip(hypnets,self.devices) if dev.name in num_updates ], axis = 0)
-          else:
-            print("warning: no update available for parameter", basenet[i], file=log.v3)
-            consnet[i] = basenet[i].get_value()
-          #consnet[i] = basenet[i].get_value() + ndevs * numpy.sum([ (net[i] - basenet[i].get_value()) * (float(device.num_frames) / nframes) for net,dev in zip(hypnets,self.devices) ], axis = 0)
-      self.network.update_step = max([ dev.get_num_updates() for dev in self.devices ])
-      for p, q in zip(self.network.get_all_params_vars(), consnet):
-        p_shape = p.get_value(borrow=True, return_internal_type=True).shape
-        assert p_shape == q.shape
-        p.set_value(q)
-        encoded.append(q)
-      if len(hypnets) > 1:
-        for device in self.devices:
-          device.set_net_encoded_params(encoded)
-    except Exception as e:
-      print("network synchronization failed: ", e.message, file=log.v3)
-      if log.v4:
-        sys.excepthook(*sys.exc_info())
-
-    #pipe.copy_to_device(self.network)
+        device.set_net_encoded_params(consnet)
 
   def finalize(self):
     super(TrainTaskThread, self).finalize()
-    if self.do_ctc_priors:
-      self.ctc_priors = self.results["ctc_priors"] / float(self.num_frames["data"])
     if self.seq_train_parallel:
       self.seq_train_parallel.train_finish_epoch()
 
