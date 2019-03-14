@@ -71,9 +71,9 @@ class Container(nn.Module):
     """
     grp = head.create_group(self.name)
     grp.attrs['class'] = self.layer_class
-    for p in self.params.keys():
-      value = self.params[p].get_value()
-      dset = grp.create_dataset(p, value.shape, dtype='f')
+    for p in self.named_parameters():
+      value = p[1].detach().cpu().numpy()
+      dset = grp.create_dataset(p[0], value.shape, dtype='f')
       dset[...] = value
     for p, v in self.attrs.items():
       if isinstance(v, (dict, list, tuple)):
@@ -94,34 +94,27 @@ class Container(nn.Module):
       return
 
     grp_class = as_str(grp.attrs['class'])
-    if grp_class == "<unknown_softmax>": grp_class = "softmax"  # bug in some CRNN version. can be ignored.
     if grp_class != self.layer_class:
       from NetworkLayer import get_layer_class
       if not get_layer_class(grp_class, raise_exception=False) is get_layer_class(self.layer_class):
         print("warning: invalid layer class (expected " + self.layer_class + " got " + grp.attrs['class'] + ")", file=log.v3)
-    for p in self.params:
-      if p not in grp:
-        print("unable to load parameter %s in %s" % (p, self.name), file=log.v4)
+    parameters = {}
+    for p in self.named_parameters():
+      if p[0] not in grp:
+        print("unable to load parameter %s in %s" % (p[0], self.name), file=log.v4)
+      parameters[p[0]] = p[1]
     for p in grp:
-      if p in self.params:
-        if self.params[p].get_value(borrow=True, return_internal_type=True).shape == grp[p].shape:
+      if p in parameters:
+        if parameters[p].detach().cpu().numpy().shape == grp[p].shape:
           array = grp[p][...]
           assert not (numpy.isinf(array).any() or numpy.isnan(array).any())
-          self.params[p].set_value(array)
+          parameters[p].data.copy_(torch.from_numpy(array))
         else:
           print("warning: invalid layer parameter shape for parameter " + p + " of layer " + self.name + \
-            " (expected  " + str(self.params[p].get_value(borrow=True, return_internal_type=True).shape) + \
+            " (expected  " + str(parameters[p].detach().cpu().numpy().shape) + \
             " got " + str(grp[p].shape) + ")", file=log.v2)
-          #assert self.params[p].get_value(borrow=True, return_internal_type=True).shape == grp[p].shape, \
-          #  "invalid layer parameter shape for parameter " + p + " of layer " + self.name + \
-          #  " (expected  " + str(self.params[p].get_value(borrow=True, return_internal_type=True).shape) + \
-          #  " got " + str(grp[p].shape) + ")"
       else:
         print("unable to match parameter %s in %s" % (p, self.name), file=log.v4)
-    #for p in self.attrs.keys():
-    #  att = grp.attrs.get(p, None)
-    #  if att != None:
-    #    self.attrs[p] = att
 
   def num_params(self):
     return sum([numpy.prod(v.get_value(borrow=True, return_internal_type=True).shape[0:]) for v in self.params.values()])
@@ -380,14 +373,16 @@ class Layer(Container):
     """
     super(Layer, self).__init__(**kwargs)
     self.output = None
-    #self.dependencies = { dep : None for dep in dependencies }
+    self.deps = {}
+    if dependencies is not None:
+      self.deps = { dep : None for dep in dependencies }
     self.sources = sources
 
   def process(self):
-    #if self.output is not None:
-    #  return self.output, self.index_out
-    #for k in self.deps.keys():
-    #  self.deps[k] = k.process(x, i)
+    if self.output is not None:
+      return self.output, self.index_out
+    for k in self.deps.keys():
+      self.deps[k] = k.process(x, i)
     assert self.sources, "require sources for " + self.name + str(self.output)
     sources = [None for i in range(len(self.sources))]
     for i in range(len(self.sources)):
@@ -395,6 +390,10 @@ class Layer(Container):
     x = torch.cat(sources, dim=2)
     self.output, self.index_out = self.forward(x, self.index_in)
     return self.output, self.index_out
+
+  def zero_grad(self):
+    super(Layer, self).zero_grad()
+    self.output = None
 
   def cost(self):
     """

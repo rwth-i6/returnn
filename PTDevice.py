@@ -397,8 +397,8 @@ class Device(object):
       print("debug_shell_first_compute", file=log.v1)
       Debug.debug_shell(user_ns=locals(), user_global_ns=globals())
     if task in [ "train", "eval" ]:
+      self.network.zero_grad()
       if task == 'train':
-        self.network.zero_grad()
         self.network.train()
         self.network.exec()
       elif task == 'eval':
@@ -408,7 +408,7 @@ class Device(object):
       else:
         raise NotImplementedError
       costs = self.network.cost()
-      if task == 'train': # TODO
+      if task == 'train':
         for i in range(len(costs)):
           costs[i].backward()
         self.updater.step()
@@ -529,60 +529,29 @@ class Device(object):
           t[k] = input_queue.recv()
         for k in target_keys:
           self.index[k] = input_queue.recv()
-          #self.index[k][self.index[k]==-1] = 0
+          self.index[k][self.index[k]==-1] = 0
         self.tags = input_queue.recv()
+        self.tags = [[c for c in tag.encode('utf-8')] for tag in self.tags]
         update_start_time = time.time()
-        # self.x == self.data["data"], will be set also here.
         for k in target_keys:
           self.data[k] = t[k].astype(self.data[k].dtype)
         for k in target_keys:
           self.network.index[k] = torch.from_numpy(self.index[k]).to(self.device)
           self.network.data[k] = torch.from_numpy(self.data[k]).to(self.device)
-        continue # TODO
-
-        for k in target_keys:
-          self.data[k].set_value(t[k].astype(self.data[k].dtype), borrow = True)
-        #self.c.set_value(c.astype('int32'), borrow = True)
-        for k in target_keys:
-          self.j[k].set_value(self.output_index[k].astype('int8'), borrow = True)
-        try:
-          self.tags_var.set_value(numpy.array(self.tags).view(dtype='int8').reshape((len(self.tags), max(map(len, self.tags)))))
-        except:
-          tags = [s.encode('utf-8') for s in self.tags]
-          self.tags_var.set_value(numpy.array(tags).view(dtype='int8').reshape((len(tags), max(map(len, tags)))))
+          self.network.tags = torch.from_numpy(
+            numpy.array(self.tags).astype('uint8').reshape((len(self.tags), max(map(len, self.tags)))))
         self.update_total_time += time.time() - update_start_time
       elif cmd == "set-learning-rate":  # via self.set_learning_rate()
         learning_rate = input_queue.recv()
-        #if self.updater: # TODO
-        #  self.updater.setLearningRate(learning_rate)
+        if self.updater:
+          self.updater = optim.Adam(self.network.parameters(), lr = learning_rate)
       elif cmd == "set-net-params":  # via self.set_net_params()
         self.total_cost = 0
-        #our_params_trainnet = self.trainnet.get_all_params_vars()
-        #our_params_testnet = self.testnet.get_all_params_vars()
-        #assert isinstance(our_params_trainnet, list)
         params_len = input_queue.recv()
-        #net_params = [ None for x in self.network.parameters()]
         self.network.set_parameters([
           torch.from_numpy(numpy.fromstring(input_queue.recv_bytes(), dtype='float32'))
             for i in range(params_len)])
         assert input_queue.recv() == "end-set-net-params"
-        continue # TODO
-        assert len(params) == len(our_params_trainnet)
-        if self.testnet_share_params:
-          assert len(our_params_testnet) == 0
-        else:
-          assert len(params) == len(our_params_testnet)
-        for i in range(params_len):
-          param_str = params[i]
-          param = numpy.fromstring(param_str, dtype=floatX)
-          our_p_train = our_params_trainnet[i]
-          our_param_shape = our_p_train.get_value(borrow=True, return_internal_type=True).shape
-          assert numpy.prod(our_param_shape) == numpy.prod(param.shape)
-          #assert numpy.isfinite(param).all()
-          converted = param.reshape(our_param_shape)
-          our_p_train.set_value(converted)
-          if not self.testnet_share_params:
-            our_params_testnet[i].set_value(converted)
       elif cmd == 'get-num-updates':
         if self.updater and False: # TODO
           output_queue.send(int(self.updater.i.get_value()))

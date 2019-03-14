@@ -53,13 +53,11 @@ class LayerNetwork():
     result = []
     for k in self.output:
       result.append(self.output[k].cost())
-      #result.append(self.output[k].errors(y))
     return result
 
   def errors(self):
     result = []
     for k in self.output:
-      #result.append(self.output[k].cost(y))
       result.append(self.output[k].errors())
     return result
 
@@ -94,16 +92,6 @@ class LayerNetwork():
     for k in self.hidden:
       for p in self.hidden[k].parameters():
         p.data.copy_(params[i].reshape(p.data.shape))
-        i += 1
-    return
-    #net_params[i].cpu().detach().numpy().shape
-    for k in self.output:
-      for w in self.output[k].state_dict():
-        self.output[k].state_dict()[w].data.copy_(params[i].reshape(self.output[k].state_dict()[w].data.shape))
-        i += 1
-    for k in self.hidden:
-      for w in self.hidden[k].state_dict():
-        self.hidden[k].state_dict()[w].data.copy_(params[i].reshape(self.hidden[k].state_dict()[w].data.shape))
         i += 1
 
   @classmethod
@@ -270,6 +258,16 @@ class LayerNetwork():
     for name in self.output:
       self.output[name].load(model)
     return self.epoch_from_hdf_model(model)
+
+  @classmethod
+  def epoch_from_hdf_model(cls, model):
+    """
+    :type model: h5py.File
+    :returns last epoch the model was trained on
+    :rtype: int
+    """
+    epoch = model.attrs['epoch']
+    return epoch
 
   def print_network_info(self, name="Network"):
     print("%s layer topology:" % name, file=log.v2)
