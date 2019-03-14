@@ -37,25 +37,26 @@ device = torch.device("cuda:0") if torch.cuda.is_available() else "cpu"
 
 
 class LstmOpLowMem(autograd.Function):
+  device = 'cpu'
   
   @staticmethod
   def forward(ctx, *inputs):
     T, B, D1 = inputs[0].shape
     D2 = inputs[1].shape[0] - D1
-    Y = torch.zeros((T, B, D2), device=device)
-    C = torch.zeros((T, B, D2), device=device)
-    d = torch.zeros((B, D2), device=device)
+    Y = torch.zeros((T, B, D2), device=LstmOpLowMem.device)
+    C = torch.zeros((T, B, D2), device=LstmOpLowMem.device)
+    d = torch.zeros((B, D2), device=LstmOpLowMem.device)
     lstm.lstm_forward_op_low_mem(*inputs, 0, 1, Y, C, d)
     ctx.save_for_backward(*inputs, Y, C)
     return Y, C, d
   
   @staticmethod
   def backward(ctx, *grad_outputs):
-    DX = torch.zeros_like(ctx.saved_tensors[0], device=device)
-    DW = torch.zeros_like(ctx.saved_tensors[1], device=device)
-    Db = torch.zeros_like(ctx.saved_tensors[2], device=device)
-    Dh = torch.zeros_like(ctx.saved_tensors[3], device=device)
-    Dc = torch.zeros_like(ctx.saved_tensors[4], device=device)
+    DX = torch.zeros_like(ctx.saved_tensors[0], device=LstmOpLowMem.device)
+    DW = torch.zeros_like(ctx.saved_tensors[1], device=LstmOpLowMem.device)
+    Db = torch.zeros_like(ctx.saved_tensors[2], device=LstmOpLowMem.device)
+    Dh = torch.zeros_like(ctx.saved_tensors[3], device=LstmOpLowMem.device)
+    Dc = torch.zeros_like(ctx.saved_tensors[4], device=LstmOpLowMem.device)
     lstm.lstm_backward_op_low_mem(
       *ctx.saved_tensors[:6], 0, 1,
       *ctx.saved_tensors[6:],
@@ -97,34 +98,6 @@ class LstmOpLowmemVar(autograd.Function):
     return DX, DW, Db, Dh, Dc, None
 
 
-class LstmOp(autograd.Function):
-  
-  @staticmethod
-  def forward(ctx, *inputs):
-    T, B, D = inputs[0].shape[0], inputs[0].shape[1], inputs[0].shape[2] // 4
-    Y = torch.zeros((T, B, D), device=device)
-    C = torch.zeros((T, B, D), device=device)
-    H = torch.zeros((T, B, 4 * D), device=device)
-    d = torch.zeros((B, D), device=device)
-    lstm.lstm_forward_op(*inputs, 0, 1, Y, C, H, d)
-    ctx.save_for_backward(*inputs, Y, C, H)
-    return Y, C, d
-  
-  @staticmethod
-  def backward(ctx, *grad_outputs):
-    DX = torch.zeros_like(ctx.saved_tensors[0], device=device)
-    DW = torch.zeros_like(ctx.saved_tensors[1], device=device)
-    Dy0 = torch.zeros_like(ctx.saved_tensors[2], device=device)
-    Dc0 = torch.zeros_like(ctx.saved_tensors[3], device=device)
-    lstm.lstm_backward_op(
-      *ctx.saved_tensors[:5], 0, 1,
-      *ctx.saved_tensors[5:8],
-      grad_outputs[0], grad_outputs[2],
-      DX, DW, Dy0, Dc0
-    )
-    return DX, DW, Dy0, Dc0, None
-
-
 class LstmLowMem(nn.Module):
   
   def __init__(self, n_in, n_out):
@@ -139,7 +112,38 @@ class LstmLowMem(nn.Module):
     return LstmOpLowMem.apply(X, self.W, self.b, y0, c0, i)
 
 
+class LstmOp(autograd.Function):
+  device = 'cpu'
+  
+  @staticmethod
+  def forward(ctx, *inputs):
+    T, B, D = inputs[0].shape[0], inputs[0].shape[1], inputs[0].shape[2] // 4
+    Y = torch.zeros((T, B, D), device=LstmOp.device)
+    C = torch.zeros((T, B, D), device=LstmOp.device)
+    H = torch.zeros((T, B, 4 * D), device=LstmOp.device)
+    d = torch.zeros((B, D), device=LstmOp.device)
+    lstm.lstm_forward_op(*inputs, 0, 1, Y, C, H, d)
+    ctx.save_for_backward(*inputs, Y, C, H)
+    return Y, C, d
+  
+  @staticmethod
+  def backward(ctx, *grad_outputs):
+    DX = torch.zeros_like(ctx.saved_tensors[0], device=LstmOp.device)
+    DW = torch.zeros_like(ctx.saved_tensors[1], device=LstmOp.device)
+    Dy0 = torch.zeros_like(ctx.saved_tensors[2], device=LstmOp.device)
+    Dc0 = torch.zeros_like(ctx.saved_tensors[3], device=LstmOp.device)
+    lstm.lstm_backward_op(
+      *ctx.saved_tensors[:5], 0, 1,
+      *ctx.saved_tensors[5:8],
+      grad_outputs[0], grad_outputs[2],
+      DX, DW, Dy0, Dc0
+    )
+    return DX, DW, Dy0, Dc0, None
+
+
 class SingleLayerLstm(nn.Module):
+  
+  device = 'cpu'
   
   def __init__(self, n_input, n_hidden):
     super(SingleLayerLstm, self).__init__()
@@ -151,23 +155,27 @@ class SingleLayerLstm(nn.Module):
     shape_wr = (self.hidden_size, self.gate_size)
     self.Wf = nn.Parameter(torch.empty(shape_wf, device=device).uniform_(-stdv, stdv))
     self.Wr = nn.Parameter(torch.empty(shape_wr, device=device).uniform_(-stdv, stdv))
-    self.bf = nn.Parameter(torch.empty(self.gate_size, device=device).uniform_(-stdv, stdv))
+    self.bf = nn.Parameter(torch.empty(self.gate_size, device=device).uniform_(-2 * stdv, 2 * stdv))
   
   def forward(self, X, h0=None, c0=None, i=None):
     T, B = X.shape[0], X.shape[1]
     if h0 is None:
-      h0 = torch.zeros((B, self.hidden_size), requires_grad=False, device=device)
+      h0 = torch.zeros((B, self.hidden_size), requires_grad=False, device=self.device)
       c0 = h0
     if i is None:
-      i = torch.ones((T, B), requires_grad=False, device=device)
+      i = torch.ones((T, B), requires_grad=False, device=self.device)
     intern = torch.einsum("ijk,kl->ijl", (X, self.Wf)) + self.bf
+    LstmOp.device = self.device
     return LstmOp.apply(intern, self.Wr, h0, c0, i)
 
 
 class LstmNative(nn.Module):
   
+  device = 'cpu'
+  
   def __init__(self, n_input, n_hidden, n_layers=1):
     super(LstmNative, self).__init__()
+    SingleLayerLstm.device = self.device
     self.layers = nn.ModuleList([
       SingleLayerLstm(n_input, n_hidden) if i == 0 else SingleLayerLstm(n_hidden, n_hidden)
       for i in range(n_layers)
