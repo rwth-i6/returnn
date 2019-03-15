@@ -332,7 +332,6 @@ class Container(nn.Module):
         attrs['from'] = attrs['from'].split(',')
     return attrs
 
-
 class Layer(Container):
   recurrent = False
 
@@ -395,41 +394,79 @@ class DataLayer(Layer):
   def process(self):
     return self.network.data[self.attrs['source']], self.network.index[self.attrs['source']]
 
+class PoolLayer(Layer):
+  layer_class = "pool"
+  def __init__(self, factor, method="average", axis=0, padding=False, sample_target=False, **kwargs):
+    self.attrs['method'] = method
+    self.attrs['padding'] = padding
+    self.attrs['axis'] = axis
+    if method in ['average','avg']:
+      self.module = nn.AvgPool1d(factor, factor, factor // 2 if padding else 0)
+    elif method in ['max']:
+      self.module = nn.MaxPool1d(factor, factor, factor // 2 if padding else 0)
+    else:
+      raise NotImplementedError
+
+  def forward(self, x, i):
+    axis = self.attrs['axis']
+    axes = [0,1,2]
+    del axes[self.attrs['axis']]
+    axes.append(self.attrs['axis'])
+    x = x.permute(*axes)
+    i = i.permute(*axes)
+    x = self.module(x)
+    i = self.module(i)
+    if self.attrs['axis'] == 0:
+      axes = [2, 0, 1]
+    x = x.permute(*axes)
+    i = i.permute(*axes)
+    return x, i
+
+class DownsampleLayer(PoolLayer): # wrapper for backward compatibility
+  layer_class = "downsample"
+  def __init__(self, factor, method="average", axis=0, padding=False, sample_target=False, **kwargs):
+    super(PoolLayer, self).__init__(factor, method, axis, padding, sample_target, **kwargs)
+
 class LSTMLayer(Layer):
   layer_class = "rec"
   recurrent = True
 
-  def __init__(self, n_out, unit='native', direction=1, **kwargs):
+  def __init__(self, n_out, kernel='cudnn', direction=1, **kwargs):
     super(LSTMLayer, self).__init__(**kwargs)
     self.attrs['n_out'] = n_out
     self.attrs['direction'] = direction
-    self.attrs['unit'] = unit
+    self.attrs['kernel'] = kernel
     n_in = sum([x.attrs['n_out'] for x in self.sources])
     self.device = None
-    if unit == 'native':
+    if kernel == 'native':
       from PTNativeModules import SingleLayerLstm
       self.module = SingleLayerLstm(int(n_in), int(n_out))
-    else: # pytorch LSTM
+    elif kernel == 'cudnn':
       self.module = nn.LSTM(int(n_in), int(n_out), 1)
+    else:
+      raise NotImplementedError
 
   def to(self, device):
     super(Layer, self).to(device)
     self.module.to(device)
-    self.device = device
 
   def forward(self, x, i):
-    if self.attrs['unit'] != 'native':
-      self.module.flatten_parameters()
     if self.attrs['direction'] == -1: # ugh
       idx = torch.LongTensor([i for i in range(x.size(0)-1, -1, -1)]).to(x.device)
       x = x.index_select(0,idx)
       i = i.index_select(0,idx)
-    if self.attrs['unit'] == 'native':
+
+    if self.attrs['kernel'] == 'cudnn':
+      self.module.flatten_parameters()
+      x, _ = self.module(x)
+    elif self.attrs['kernel'] == 'native':
       x, _ = self.module(x, i)
     else:
-      x, _ = self.module(x)
+      raise NotImplementedError
+
     if self.attrs['direction'] == -1: # ugh
       x = x.index_select(0,idx)
+      i = i.index_select(0,idx)
     return x, i
 
 class OutputLayer(Layer):
@@ -463,5 +500,4 @@ class OutputLayer(Layer):
     i = self.index_out.view(-1).nonzero().long().view(-1)
     y = torch.index_select(y.view(-1), 0, i)
     c = torch.index_select(torch.argmax(self.output,dim=2).view(-1), 0, i)
-    #print(c.size(0),self.output.size(0)*self.output.size(1),y.size(0))
-    return (y.long() != c).float().sum() # * self.index.float().sum() / (self.logpcx.size(0) * self.logpcx.size(1))
+    return (y.long() != c).float().sum()
