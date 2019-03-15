@@ -53,14 +53,15 @@ void lstm_bwd_func_low_mem(
 void lstm_fwd_func(
     at::Tensor X, at::Tensor W, at::Tensor y0, at::Tensor c0, at::Tensor i,
     int start, int step,
-    at::Tensor Y, at::Tensor C, at::Tensor H, at::Tensor d
+    at::Tensor Y, at::Tensor C, at::Tensor H, at::Tensor d, at::Tensor y_prev
 );
 
 void lstm_bwd_func(
     at::Tensor X, at::Tensor W, at::Tensor y0, at::Tensor c0, at::Tensor i,
     int start, int step,
     at::Tensor Y, at::Tensor C, at::Tensor H,
-    at::Tensor DY, at::Tensor Dd, at::Tensor DX, at::Tensor DW, at::Tensor Dy0, at::Tensor Dc0
+    at::Tensor DY, at::Tensor Dd, at::Tensor DX, at::Tensor DW, at::Tensor Dy0, at::Tensor Dc0,
+    at::Tensor dx0
 );
 
 void lstm_fwd_op_low_mem_var(
@@ -139,14 +140,15 @@ void lstm_bwd_op_low_mem(
 void lstm_fwd_op(
     at::Tensor X, at::Tensor W, at::Tensor y0, at::Tensor c0, at::Tensor i,
     int start, int step,
-    at::Tensor Y, at::Tensor C, at::Tensor H, at::Tensor d
+    at::Tensor Y, at::Tensor C, at::Tensor H, at::Tensor d, at::Tensor y_prev
 )
 {
     CHECK_INPUT(X);       CHECK_INPUT(W);     CHECK_INPUT(y0);
     CHECK_INPUT(c0);      CHECK_INPUT(i);
     CHECK_INPUT(Y);       CHECK_INPUT(C);     CHECK_INPUT(H);
     CHECK_INPUT(d);
-    lstm_fwd_func(X, W, y0, c0, i, start, step, Y, C, H, d);
+    CHECK_INPUT(y_prev);
+    lstm_fwd_func(X, W, y0, c0, i, start, step, Y, C, H, d, y_prev);
 }
 
 void lstm_bwd_op(
@@ -154,7 +156,7 @@ void lstm_bwd_op(
     int start, int step,
     at::Tensor Y, at::Tensor C, at::Tensor H,
     at::Tensor DY, at::Tensor Dd,
-    at::Tensor DX, at::Tensor DW, at::Tensor Dy0, at::Tensor Dc0
+    at::Tensor DX, at::Tensor DW, at::Tensor Dy0, at::Tensor Dc0, at::Tensor dx0
 )
 {
     CHECK_INPUT(X);       CHECK_INPUT(W);     CHECK_INPUT(y0);
@@ -162,7 +164,8 @@ void lstm_bwd_op(
     CHECK_INPUT(Y);       CHECK_INPUT(C);     CHECK_INPUT(H);
     CHECK_INPUT(DY);      CHECK_INPUT(Dd);    CHECK_INPUT(DX);
     CHECK_INPUT(DW);      CHECK_INPUT(Dy0);   CHECK_INPUT(Dc0);
-    lstm_bwd_func(X, W, y0, c0, i, start, step, Y, C, H, DY, Dd, DX, DW, Dy0, Dc0);
+    CHECK_INPUT(dx0)
+    lstm_bwd_func(X, W, y0, c0, i, start, step, Y, C, H, DY, Dd, DX, DW, Dy0, Dc0, dx0);
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {

@@ -31,7 +31,6 @@ def load_lstm_ops():
   return lstm
 
 lstm = load_lstm_ops()
-# device = torch.device("cuda:0") if torch.cuda.is_available() else "cpu"
 
 class LstmOp(autograd.Function):
   
@@ -43,7 +42,8 @@ class LstmOp(autograd.Function):
     C = torch.zeros((T, B, D), device=ctx.device)
     H = torch.zeros((T, B, 4 * D), device=ctx.device)
     d = torch.zeros((B, D), device=ctx.device)
-    lstm.lstm_forward_op(*inputs[:5], 0, 1, Y, C, H, d)
+    y_prev = torch.zeros((B, D), device=ctx.device)
+    lstm.lstm_forward_op(*inputs[:5], 0, 1, Y, C, H, d, y_prev)
     ctx.save_for_backward(*inputs[:5], Y, C, H)
     return Y, C, d
   
@@ -53,12 +53,13 @@ class LstmOp(autograd.Function):
     DW = torch.zeros_like(ctx.saved_tensors[1], device=ctx.device)
     Dy0 = torch.zeros_like(ctx.saved_tensors[2], device=ctx.device)
     Dc0 = torch.zeros_like(ctx.saved_tensors[3], device=ctx.device)
+    dx0 = torch.zeros((DX.shape[1], DX.shape[2]), device=ctx.device)
     lstm.lstm_backward_op(
       *ctx.saved_tensors[:5],
       0, 1,
       *ctx.saved_tensors[5:],
       grad_outputs[0].contiguous(), grad_outputs[2].contiguous(),
-      DX, DW, Dy0, Dc0
+      DX, DW, Dy0, Dc0, dx0
     )
     return DX, DW, Dy0, Dc0, None, None
 

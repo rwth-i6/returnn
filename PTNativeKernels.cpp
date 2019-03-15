@@ -698,7 +698,7 @@ void lstm_bwd_func_low_mem_var(
 void lstm_fwd_func(
     at::Tensor X, at::Tensor W, at::Tensor y0, at::Tensor c0, at::Tensor i,
     int start, int step,
-    at::Tensor Y, at::Tensor C, at::Tensor H, at::Tensor d
+    at::Tensor Y, at::Tensor C, at::Tensor H, at::Tensor d, at::Tensor y_prev
 )
 {
     assert(X.dim() == 3);   assert(W.dim() == 2);
@@ -728,7 +728,7 @@ void lstm_fwd_func(
         // That is why we need to keep track of Y[t-1] explicitly.
         // float* y_prev = (float*) device_malloc(n_batch * n_cells * sizeof(float));
         // auto options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA, 0).requires_grad(false);
-        auto y_prev = torch::zeros_like(y0);
+        // auto y_prev = torch::zeros_like(y0);
         //std::cout << y_prev.data_ptr() << std::endl;
         // H = X
         CudaMemcpy(H.data_ptr(), X.data_ptr(), T * n_batch * n_cells * 4 * sizeof(float));
@@ -774,7 +774,8 @@ void lstm_bwd_func(
     at::Tensor X, at::Tensor W, at::Tensor y0, at::Tensor c0, at::Tensor i,
     int start, int step,
     at::Tensor Y, at::Tensor C, at::Tensor H,
-    at::Tensor DY, at::Tensor Dd, at::Tensor DX, at::Tensor DW, at::Tensor Dy0, at::Tensor Dc0
+    at::Tensor DY, at::Tensor Dd, at::Tensor DX, at::Tensor DW, at::Tensor Dy0, at::Tensor Dc0,
+    at::Tensor dx0
 )
 {
     assert(X.dim() == 3);        assert(W.dim() == 2);
@@ -821,7 +822,7 @@ void lstm_bwd_func(
         // float* dx0 = (float*) device_malloc(n_batch * n_cells * 4 * sizeof(float));
         // Ndarray_memset(dx0, 0, n_batch * n_cells * 4 * sizeof(float));
         // auto options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA, 0).requires_grad(false);
-        auto dx0 = torch::zeros_like(X[0]);
+        // auto dx0 = torch::zeros_like(X[0]);
         //std::cout << dx0.device() << " " << dx0.dim() << " " << dx0.size(1) << std::endl;
 
         int abs_step = std::abs(step);
