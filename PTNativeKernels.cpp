@@ -727,8 +727,8 @@ void lstm_fwd_func(
         // if we can have Y[t] = 0 where mask[t] = 0.
         // That is why we need to keep track of Y[t-1] explicitly.
         // float* y_prev = (float*) device_malloc(n_batch * n_cells * sizeof(float));
-        auto options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA, 0).requires_grad(false);
-        auto y_prev = torch::zeros({n_batch, n_cells}, options);
+        // auto options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA, 0).requires_grad(false);
+        auto y_prev = torch::zeros_like(y0);
         //std::cout << y_prev.data_ptr() << std::endl;
         // H = X
         CudaMemcpy(H.data_ptr(), X.data_ptr(), T * n_batch * n_cells * 4 * sizeof(float));
@@ -820,8 +820,9 @@ void lstm_bwd_func(
         // can be different from data_ptr(DX, start).
         // float* dx0 = (float*) device_malloc(n_batch * n_cells * 4 * sizeof(float));
         // Ndarray_memset(dx0, 0, n_batch * n_cells * 4 * sizeof(float));
-        auto options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA, 0).requires_grad(false);
-        auto dx0 = torch::zeros({n_batch, n_cells * 4}, options);
+        // auto options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA, 0).requires_grad(false);
+        auto dx0 = torch::zeros_like(X[0]);
+        //std::cout << dx0.device() << " " << dx0.dim() << " " << dx0.size(1) << std::endl;
 
         int abs_step = std::abs(step);
         int num_steps = (T - start + abs_step - 1) / abs_step;
