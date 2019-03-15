@@ -257,14 +257,6 @@ class LayerNetwork():
       traverse(json_content, layer_name)
     #network.loss = 'ce'
     return network
-    #input = DataLayer(source='data', **kwargs)
-    #lstm = LSTMLayer(n_out = 512, name = 'lstm', sources=[input], **kwargs)
-    #output = OutputLayer(loss = 'ce', name = 'output', target = 'classes', sources=[lstm], **kwargs)
-    #network.add_layer(input)
-    #network.add_layer(lstm)
-    #network.add_layer(output)
-    #network.loss = 'ce'
-    #return network
 
   def get_layer(self, layer_name):
     if layer_name in self.hidden:

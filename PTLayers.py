@@ -391,9 +391,6 @@ class DataLayer(Layer):
     super(DataLayer, self).__init__(name=source, **kwargs)
     self.attrs['source'] = source
     self.attrs['n_out'] = self.network.n_out[source]
-    #self.output = self.network.data[source]
-    #self.index_out = self.network.index[source]
-    #print(self.name,self.index_out)
 
   def process(self):
     return self.network.data[self.attrs['source']], self.network.index[self.attrs['source']]
@@ -408,6 +405,7 @@ class LSTMLayer(Layer):
     self.attrs['direction'] = direction
     self.attrs['unit'] = unit
     n_in = sum([x.attrs['n_out'] for x in self.sources])
+    self.device = None
     if unit == 'native':
       from PTNativeModules import SingleLayerLstm
       self.module = SingleLayerLstm(int(n_in), int(n_out))
@@ -417,17 +415,17 @@ class LSTMLayer(Layer):
   def to(self, device):
     super(Layer, self).to(device)
     self.module.to(device)
-    self.module.device = device
+    self.device = device
 
   def forward(self, x, i):
     if self.attrs['unit'] != 'native':
       self.module.flatten_parameters()
     if self.attrs['direction'] == -1: # ugh
-      idx = torch.LongTensor([i for i in range(x.size(0)-1, -1, -1)])
-      idx = idx.to(x.device)
+      idx = torch.LongTensor([i for i in range(x.size(0)-1, -1, -1)]).to(x.device)
       x = x.index_select(0,idx)
+      i = i.index_select(0,idx)
     if self.attrs['unit'] == 'native':
-      x, _, _ = self.module(x, i=i.float())
+      x, _ = self.module(x, i)
     else:
       x, _ = self.module(x)
     if self.attrs['direction'] == -1: # ugh
