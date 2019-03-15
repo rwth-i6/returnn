@@ -431,7 +431,7 @@ class LSTMLayer(Layer):
   layer_class = "rec"
   recurrent = True
 
-  def __init__(self, n_out, kernel='cudnn', direction=1, **kwargs):
+  def __init__(self, n_out, kernel='native', direction=1, **kwargs):
     super(LSTMLayer, self).__init__(**kwargs)
     self.attrs['n_out'] = n_out
     self.attrs['direction'] = direction
@@ -440,7 +440,7 @@ class LSTMLayer(Layer):
     self.device = None
     if kernel == 'native':
       from PTNativeModules import SingleLayerLstm
-      self.module = SingleLayerLstm(int(n_in), int(n_out))
+      self.module = SingleLayerLstm(int(n_in), int(n_out), direction)
     elif kernel == 'cudnn':
       self.module = nn.LSTM(int(n_in), int(n_out), 1)
     else:
@@ -451,7 +451,7 @@ class LSTMLayer(Layer):
     self.module.to(device)
 
   def forward(self, x, i):
-    if self.attrs['direction'] == -1: # ugh
+    if self.attrs['direction'] == -1 and self.attrs['kernel'] == 'cudnn': # ugh
       idx = torch.LongTensor([i for i in range(x.size(0)-1, -1, -1)]).to(x.device)
       x = x.index_select(0,idx)
       i = i.index_select(0,idx)
@@ -464,7 +464,7 @@ class LSTMLayer(Layer):
     else:
       raise NotImplementedError
 
-    if self.attrs['direction'] == -1: # ugh
+    if self.attrs['direction'] == -1 and self.attrs['kernel'] == 'cudnn': # ugh
       x = x.index_select(0,idx)
       i = i.index_select(0,idx)
     return x, i

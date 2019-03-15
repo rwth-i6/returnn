@@ -308,7 +308,7 @@ class Device(object):
     self.network_task = config.value('task', 'train')
     eval_flag = self.network_task in ['eval', 'forward']
     if json_content is not None:
-      self.network = LayerNetwork.from_json_and_config(json_content, config) # TODO
+      self.network = LayerNetwork.from_json_and_config(json_content, config)
     elif config.bool('initialize_from_model', False) and config.has('load'):
       model = h5py.File(config.value('load', ''), "r")
       self.network = LayerNetwork.from_hdf_model_topology(model, **PTLayerNetwork.init_args_from_config(config))
@@ -322,17 +322,11 @@ class Device(object):
         self.network.update_step = model.attrs['update_step']
       model.close()
     # initialize batch
-    self.used_data_keys = ['data', 'classes']  # TODO #self.trainnet.get_used_data_keys()
-    self.data = { k : numpy.zeros((1,), dtype='int32' if k == 'classes' else 'float32') for k in self.used_data_keys }
+    self.used_data_keys = self.network.get_used_data_keys()
+    self.data = { k : numpy.zeros((1,), dtype=self.network.dtype[k]) for k in self.used_data_keys }
     self.index = { k : numpy.zeros((1,), dtype='uint8') for k in self.used_data_keys }
     print("Device train-network: Used data keys:", self.used_data_keys, file=log.v4)
     assert "data" in self.used_data_keys
-    # TODO
-    #self.data = {k: theano.shared(numpy.zeros((1,) * self.trainnet.y[k].ndim, dtype=self.trainnet.y[k].dtype),
-    #                           borrow=True, name='y_%s' % k)
-    #          for k in self.used_data_keys}
-    #self.j = {k: theano.shared(numpy.zeros((1, 1), dtype='int8'), borrow=True, name='j_%s' % k)
-    #          for k in self.used_data_keys}
     if log.verbose[4]: progress_bar()
 
     # initialize functions
@@ -374,14 +368,13 @@ class Device(object):
     elif self.network_task == 'forward':
       output_layer_name = config.value("extract_output_layer_name", "output")
       extractions = config.list('extract', ['log-posteriors'])
-      givens = self.make_input_givens(self.testnet)
       for extract in extractions:
         param = None
         if ':' in extract:
           param = extract.split(':')[1]
           extract = extract.split(':')[0]
         elif extract == "log-posteriors":
-          pass #TODO
+          torch.log(self.network.output[output_layer_name].output)
         else:
           assert False, "invalid extraction: " + extract
 
