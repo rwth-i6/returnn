@@ -253,8 +253,10 @@ class Device(object):
     assert not self.blocking
     if self.name[0:3] == "cpu":
       dev = torch.device("cpu")
+      self.id = 0
     else:
       dev = torch.device("cuda:%d" % int(device_tag[3:]))
+      self.id = int(device_tag[3:])
     env_update = {} # TODO
     self.proc = AsyncTask(
       func=self.process,
@@ -390,51 +392,52 @@ class Device(object):
       #                                  name = "extractor")
 
   def compute_run(self, task):
-    compute_start_time = time.time()
-    batch_dim = self.data["data"].shape[1]
-    block_size = self.block_size if self.block_size else batch_dim
-    if self.config.bool("debug_shell_first_compute", False):
-      print("debug_shell_first_compute", file=log.v1)
-      Debug.debug_shell(user_ns=locals(), user_global_ns=globals())
-    if task in [ "train", "eval" ]:
-      self.network.zero_grad()
-      if task == 'train':
-        self.network.train()
-        self.network.exec()
-      elif task == 'eval':
-        self.network.eval()
-        with torch.no_grad():
+    with torch.cuda.device(self.id):
+      compute_start_time = time.time()
+      batch_dim = self.data["data"].shape[1]
+      block_size = self.block_size if self.block_size else batch_dim
+      if self.config.bool("debug_shell_first_compute", False):
+        print("debug_shell_first_compute", file=log.v1)
+        Debug.debug_shell(user_ns=locals(), user_global_ns=globals())
+      if task in [ "train", "eval" ]:
+        self.network.zero_grad()
+        if task == 'train':
+          self.network.train()
           self.network.exec()
-      else:
-        raise NotImplementedError
-      costs = self.network.cost()
-      if task == 'train':
+        elif task == 'eval':
+          self.network.eval()
+          with torch.no_grad():
+            self.network.exec()
+        else:
+          raise NotImplementedError
+        costs = self.network.cost()
+        if task == 'train':
+          for i in range(len(costs)):
+            costs[i].backward()
+          self.updater.step()
         for i in range(len(costs)):
-          costs[i].backward()
-        self.updater.step()
-      for i in range(len(costs)):
-        costs[i] *= self.network.output['output'].index_out.float().sum().cpu()
-      output = costs + (self.network.errors() if task != 'train' else [])
-      for i in range(len(output)):
-        output[i] = output[i].detach().cpu()
-    else:
-      assert False, "invalid command: " + task
-    compute_end_time = time.time()
-    if self.config.bool("debug_batch_compute_time", False):
-      print("batch compute time:", compute_end_time - compute_start_time, file=log.v1)
-    self.compute_total_time += compute_end_time - compute_start_time
-    # output is a list the outputs which we specified when creating the Theano function in self.initialize().
-    assert len(output) > 0  # In all cases, we have some output.
-    outputs_format = None
-    if task.startswith("train"):
-      outputs_format = self.train_outputs_format
-    elif task == "eval":
-      outputs_format = self.test_outputs_format
+          costs[i] *= self.network.output['output'].index_out.float().sum().cpu()
+        output = costs + (self.network.errors() if task != 'train' else [])
+        for i in range(len(output)):
+          output[i] = output[i].detach().cpu()
+      else:
+        assert False, "invalid command: " + task
+      compute_end_time = time.time()
+      if self.config.bool("debug_batch_compute_time", False):
+        print("batch compute time:", compute_end_time - compute_start_time, file=log.v1)
+      self.compute_total_time += compute_end_time - compute_start_time
+      # output is a list the outputs which we specified when creating the Theano function in self.initialize().
+      assert len(output) > 0  # In all cases, we have some output.
+      outputs_format = None
+      if task.startswith("train"):
+        outputs_format = self.train_outputs_format
+      elif task == "eval":
+        outputs_format = self.test_outputs_format
 
-    if outputs_format:
-      for fmt, out in zip(outputs_format, output):
-        if fmt.startswith('cost:'):
-          self.total_cost += out
+      if outputs_format:
+        for fmt, out in zip(outputs_format, output):
+          if fmt.startswith('cost:'):
+            self.total_cost += out
 
     return output, outputs_format
 
