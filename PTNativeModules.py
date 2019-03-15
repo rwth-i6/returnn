@@ -11,17 +11,6 @@ import torch.cuda
 from torch.utils.cpp_extension import load_inline
 import torch.backends.cudnn
 
-torch.manual_seed(1234)
-torch.cuda.manual_seed_all(1234)
-torch.cuda.manual_seed(1234)
-random.seed(1234)
-os.environ['PYTHONHASHSEED'] = str(1234)
-numpy.random.seed(1234)
-torch.backends.cudnn.enabled = True
-torch.backends.cudnn.deterministic = True
-torch.backends.cudnn.benchmark = False
-
-
 def load_lstm_ops():
   import os
   root = os.path.dirname(os.path.abspath(__file__))
@@ -33,7 +22,7 @@ def load_lstm_ops():
 lstm = load_lstm_ops()
 
 class LstmOp(autograd.Function):
-  
+
   @staticmethod
   def forward(ctx, *inputs):
     ctx.device = inputs[-1]
@@ -46,7 +35,7 @@ class LstmOp(autograd.Function):
     lstm.lstm_forward_op(*inputs[:5], 0, 1, Y, C, H, d, y_prev)
     ctx.save_for_backward(*inputs[:5], Y, C, H)
     return Y, C, d
-  
+
   @staticmethod
   def backward(ctx, *grad_outputs):
     DX = torch.zeros_like(ctx.saved_tensors[0], device=ctx.device)
@@ -65,19 +54,20 @@ class LstmOp(autograd.Function):
 
 
 class SingleLayerLstm(nn.Module):
-  
+
   def __init__(self, n_input, n_hidden):
     super(SingleLayerLstm, self).__init__()
     self.input_size = n_input
     self.hidden_size = n_hidden
     self.gate_size = self.hidden_size * 4
-    stdv = 1.0 / math.sqrt(self.hidden_size)  # the same initializer as PyTorch's RNN implementation
+    stdv_fw = math.sqrt(6) / math.sqrt(self.hidden_size + self.input_size)  # the same initializer as PyTorch's RNN implementation
+    stdv_re = math.sqrt(6) / math.sqrt(5 * self.hidden_size)  # the same initializer as PyTorch's RNN implementation
     shape_wf = (self.input_size, self.gate_size)
     shape_wr = (self.hidden_size, self.gate_size)
-    self.Wf = nn.Parameter(torch.empty(shape_wf).uniform_(-stdv, stdv))
-    self.Wr = nn.Parameter(torch.empty(shape_wr).uniform_(-stdv, stdv))
-    self.bf = nn.Parameter(torch.empty(self.gate_size).uniform_(-2 * stdv, 2 * stdv))
-  
+    self.Wf = nn.Parameter(torch.empty(shape_wf).uniform_(-stdv_fw, stdv_fw))
+    self.Wr = nn.Parameter(torch.empty(shape_wr).uniform_(-stdv_re, stdv_re))
+    self.bf = nn.Parameter(torch.zeros(self.gate_size))
+
   def forward(self, X, i = None, h0=None, c0=None):
     device = self.Wf.device
     T, B = X.shape[0], X.shape[1]
@@ -90,7 +80,3 @@ class SingleLayerLstm(nn.Module):
     intern = torch.einsum("ijk,kl->ijl", (X, self.Wf)) + self.bf
     Y, C, d = LstmOp.apply(intern, self.Wr, h0, c0, i, device)
     return Y, (C, d)
-
-
-
-
