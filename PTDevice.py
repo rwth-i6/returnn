@@ -366,23 +366,8 @@ class Device(object):
       #                              no_default_updates=True,
       #                              name="tester")
     elif self.network_task == 'forward':
-      output_layer_name = config.value("extract_output_layer_name", "output")
-      extractions = config.list('extract', ['log-posteriors'])
-      for extract in extractions:
-        param = None
-        if ':' in extract:
-          param = extract.split(':')[1]
-          extract = extract.split(':')[0]
-        elif extract == "log-posteriors":
-          torch.log(self.network.output[output_layer_name].output)
-        else:
-          assert False, "invalid extraction: " + extract
-
-      # TODO
-      # self.extractor = theano.function(inputs = [],
-      #                                  outputs = source if len(source) == 1 else [T.concatenate(source, axis=-1)],
-      #                                  givens = givens,
-      #                                  name = "extractor")
+      self.output_layer_name = config.value("extract_output_layer_name", "output")
+      self.extractions = config.list('extract', ['log-posteriors'])
 
   def compute_run(self, task):
     with torch.cuda.device(self.id):
@@ -413,8 +398,23 @@ class Device(object):
         output = costs + (self.network.errors() if task != 'train' else [])
         for i in range(len(output)):
           output[i] = output[i].detach().cpu()
+      elif task == 'extract':
+        self.network.eval()
+        with torch.no_grad():
+          self.network.exec()
+        output = []
+        outputs_format = None
+        for extract in self.extractions:
+          param = None
+          if ':' in extract:
+            param = extract.split(':')[1]
+            extract = extract.split(':')[0]
+          elif extract == "log-posteriors":
+            output.append(torch.log(self.network.output[self.output_layer_name].output).cpu().numpy())
+          else:
+            assert False, "invalid extraction: " + extract
       else:
-        assert False, "invalid command: " + task
+        assert False, "invalid task: " + task
       compute_end_time = time.time()
       if self.config.bool("debug_batch_compute_time", False):
         print("batch compute time:", compute_end_time - compute_start_time, file=log.v1)
@@ -484,8 +484,7 @@ class Device(object):
     device_name = "default"
     output_queue.send(device_id) # TODO
     output_queue.send(device_name) # TODO
-
-    self.device = torch.device(device_id.replace('gpu','cuda:'))
+    self.device = torch.device(device_id.replace('gpu','cuda:').replace('cpuZ','cpu'))
 
     custom_dev_init_code = config.value('custom_dev_init_code', None, list_join_str="\n")
     if custom_dev_init_code:
@@ -519,10 +518,9 @@ class Device(object):
         output_queue.send("reinit-ready")
         output_queue.send(len(self.trainnet.train_params_vars))
       elif cmd == "update-data":  # via self.update_data()
-        t = {}
         target_keys = input_queue.recv()
         for k in target_keys:
-          t[k] = input_queue.recv()
+          self.data[k] = input_queue.recv().astype(self.data[k].dtype)
         for k in target_keys:
           self.index[k] = input_queue.recv()
           self.index[k][self.index[k]==-1] = 0
@@ -530,12 +528,11 @@ class Device(object):
         self.tags = [[c for c in tag.encode('utf-8')] for tag in self.tags]
         update_start_time = time.time()
         for k in target_keys:
-          self.data[k] = t[k].astype(self.data[k].dtype)
-        for k in target_keys:
-          self.network.index[k] = torch.from_numpy(self.index[k]).to(self.device)
-          self.network.data[k] = torch.from_numpy(self.data[k]).to(self.device)
-          self.network.tags = torch.from_numpy(
-            numpy.array(self.tags).astype('uint8').reshape((len(self.tags), max(map(len, self.tags)))))
+          self.network.update_data(k, torch.from_numpy(self.data[k]).to(self.device),
+                                   torch.from_numpy(self.index[k]).to(self.device))
+        self.network.tags = torch.from_numpy(
+          numpy.array(self.tags).astype('uint8').reshape(
+            (len(self.tags), max(map(len, self.tags))))).to(self.device)
         self.update_total_time += time.time() - update_start_time
       elif cmd == "set-learning-rate":  # via self.set_learning_rate()
         learning_rate = input_queue.recv()
@@ -823,7 +820,7 @@ class Device(object):
     network = self.trainnet if use_trainnet else self.testnet
     if not self.forwarder:
       print("Device: Create forwarder, use trainnet:", use_trainnet, ", testnet_share_params:", self.testnet_share_params, file=log.v3)
-      # # TODO
+      # TODO
       #self.forwarder = theano.function(
       #  inputs=[],
       #  outputs=[layer.output for name, layer in sorted(network.output.items())],

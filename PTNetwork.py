@@ -357,3 +357,11 @@ class LayerNetwork():
 
   def get_used_data_keys(self):
     return self.data_keys
+
+  def update_data(self, target, data, index):
+    self.data[target] = data
+    self.index[target] = index
+    for name in self.hidden:
+      self.hidden[name].output = None
+    for name in self.output:
+      self.output[name].output = None
