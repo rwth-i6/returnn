@@ -64,6 +64,16 @@ void lstm_bwd_func(
     at::Tensor dx0
 );
 
+void lstm_fwd_func_base(
+    at::Tensor Z, at::Tensor Wr, at::Tensor c, at::Tensor i,
+    at::Tensor Y, at::Tensor d
+);
+
+void lstm_bwd_func_base(
+    at::Tensor Wr, at::Tensor c, at::Tensor i, at::Tensor Y,
+    at::Tensor Dd, at::Tensor DZ, at::Tensor DWr, at::Tensor Dc, at::Tensor tmpDc
+);
+
 void lstm_fwd_op_low_mem_var(
     at::Tensor X,
     at::Tensor W,
@@ -168,6 +178,25 @@ void lstm_bwd_op(
     lstm_bwd_func(X, W, y0, c0, i, start, step, Y, C, H, DY, Dd, DX, DW, Dy0, Dc0, dx0);
 }
 
+void lstm_fwd_op_base(
+    at::Tensor Z, at::Tensor Wr, at::Tensor c, at::Tensor i,
+    at::Tensor Y, at::Tensor d
+){
+    CHECK_INPUT(Z);       CHECK_INPUT(Wr);     CHECK_INPUT(c);
+    CHECK_INPUT(i);       CHECK_INPUT(Y);       CHECK_INPUT(d);
+    lstm_fwd_func_base(Z, Wr, c, i, Y, d);
+}
+
+void lstm_bwd_op_base(
+    at::Tensor Wr, at::Tensor c, at::Tensor i, at::Tensor Y,
+    at::Tensor Dd, at::Tensor DZ, at::Tensor DWr, at::Tensor Dc, at::Tensor tmpDc
+){
+    CHECK_INPUT(Wr);       CHECK_INPUT(c);     CHECK_INPUT(i);
+    CHECK_INPUT(Y);       CHECK_INPUT(Dd);       CHECK_INPUT(DZ);
+    CHECK_INPUT(DWr);       CHECK_INPUT(Dc);     CHECK_INPUT(tmpDc);
+    lstm_bwd_func_base(Wr, c, i, Y, Dd, DZ, DWr, Dc, tmpDc);
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("lstm_forward_op_low_mem", &lstm_fwd_op_low_mem, "LSTM forward low mem");
   m.def("lstm_backward_op_low_mem", &lstm_bwd_op_low_mem, "LSTM backward low mem");
@@ -175,4 +204,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("lstm_backward_op_low_mem_var", &lstm_bwd_op_low_mem_var, "LSTM backward low mem var");
   m.def("lstm_forward_op", &lstm_fwd_op, "LSTM forward");
   m.def("lstm_backward_op", &lstm_bwd_op, "LSTM backward");
+  m.def("lstm_forward_op_base", &lstm_fwd_op_base, "LSTM forward Base");
+  m.def("lstm_backward_op_base", &lstm_bwd_op_base, "LSTM backward Base");
 }

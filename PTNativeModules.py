@@ -1,24 +1,10 @@
 import math
-import time
-import random
-import os
-import numpy
 
 import torch
 import torch.autograd as autograd
 import torch.nn as nn
 import torch.cuda
 from torch.utils.cpp_extension import load_inline
-
-torch.manual_seed(1234)
-torch.cuda.manual_seed_all(1234)
-torch.cuda.manual_seed(1234)
-random.seed(1234)
-os.environ['PYTHONHASHSEED'] = str(1234)
-numpy.random.seed(1234)
-# torch.backends.cudnn.enabled = True
-torch.backends.cudnn.deterministic = True
-torch.backends.cudnn.benchmark = False
 
 
 def load_lstm_ops():
@@ -31,6 +17,45 @@ def load_lstm_ops():
 
 lstm = load_lstm_ops()
 
+
+class LstmOpBase(autograd.Function):
+  
+  @staticmethod
+  def forward(ctx, *inputs):
+    """
+    void lstm_fwd_op_base(
+    at::Tensor Z, at::Tensor Wr, at::Tensor c, at::Tensor i,
+    at::Tensor Y, at::Tensor d
+    );
+    inputs = X(Z), Wr(V_h), y0, c0, i, direction, device
+    """
+    ctx.device = inputs[-2]
+    ctx.direction = inputs[-1]
+    T, B, D = inputs[0].shape[0], inputs[0].shape[1], inputs[0].shape[2] // 4
+    Y = torch.zeros((T, B, D), device=ctx.device)
+    d = torch.zeros((B, D), device=ctx.device)
+    lstm.lstm_forward_op_base(inputs[0], inputs[1], inputs[3], inputs[4], Y, d)
+    ctx.save_for_backward(*inputs[:5], Y, d)
+    return Y, inputs[0], d
+  
+  @staticmethod
+  def backward(ctx, *grad_outputs):
+    """
+    void lstm_bwd_op_base(
+    at::Tensor Wr, at::Tensor c, at::Tensor i, at::Tensor Y,
+    at::Tensor Dd, at::Tensor DZ, at::Tensor DWr, at::Tensor Dc, at::Tensor tmpDc
+    );
+    """
+    DWr = torch.zeros_like(ctx.saved_tensors[1], device=ctx.device)
+    Dc = torch.zeros_like(ctx.saved_tensors[3], device=ctx.device)
+    lstm.lstm_backward_op_base(
+      ctx.saved_tensors[1], ctx.saved_tensors[3], ctx.saved_tensors[4],
+      ctx.saved_tensors[5],
+      grad_outputs[2], ctx.saved_tensors[0], DWr, Dc, grad_outputs[0]
+    )
+    return ctx.saved_tensors[0], DWr, None, Dc, None, None, None
+    
+    
 class LstmOp(autograd.Function):
   
   @staticmethod
@@ -72,14 +97,22 @@ class SingleLayerLstm(nn.Module):
     self.hidden_size = n_hidden
     self.gate_size = self.hidden_size * 4
     self.direction = direction
-    # stdv = 1.0 / math.sqrt(self.hidden_size)  # the same initializer as PyTorch's RNN implementation
+    
     shape_wf = (self.input_size, self.gate_size)
     shape_wr = (self.hidden_size, self.gate_size)
-    stdv_wf = math.sqrt(6.0 / (self.input_size + self.gate_size))
-    stdv_wr = math.sqrt(6.0 / (self.hidden_size + self.gate_size))
-    self.Wf = nn.Parameter(torch.empty(shape_wf).uniform_(-stdv_wf, stdv_wf))
-    self.Wr = nn.Parameter(torch.empty(shape_wr).uniform_(-stdv_wr, stdv_wr))
-    self.bf = nn.Parameter(torch.zeros(self.gate_size))
+
+    using_pytorch_init = True
+    if using_pytorch_init:
+      stdv = 1.0 / math.sqrt(self.hidden_size)  # the same initializer as PyTorch's RNN implementation
+      self.Wf = nn.Parameter(torch.empty(shape_wf).uniform_(-stdv, stdv))
+      self.Wr = nn.Parameter(torch.empty(shape_wr).uniform_(-stdv, stdv))
+      self.bf = nn.Parameter(torch.zeros(self.gate_size).uniform_(-2*stdv, 2*stdv))
+    else:
+      stdv_wf = math.sqrt(6.0 / (self.input_size + self.gate_size))
+      stdv_wr = math.sqrt(6.0 / (self.hidden_size + self.gate_size))
+      self.Wf = nn.Parameter(torch.empty(shape_wf).uniform_(-stdv_wf, stdv_wf))
+      self.Wr = nn.Parameter(torch.empty(shape_wr).uniform_(-stdv_wr, stdv_wr))
+      self.bf = nn.Parameter(torch.zeros(self.gate_size))
   
   def forward(self, X, i=None, h0=None, c0=None):
     device = self.Wf.device
@@ -91,11 +124,16 @@ class SingleLayerLstm(nn.Module):
     if i is None:
       i = torch.ones((T, B), requires_grad=False, device=device)
     i = i.float()
-    intern = torch.einsum("ijk,kl->ijl", X, self.Wf).add(self.bf)
-    intern.to(device)
-    Y, C, d = LstmOp.apply(intern, self.Wr, h0, c0, i, device, self.direction)
-    return Y, (C, d)
+    
+    if self.direction == -1:
+      idx = torch.arange(T - 1, -1, -1).to(X.device)
+      X = X.index_select(0, idx)
+      i = i.index_select(0, idx)
 
+    intern = torch.einsum("ijk,kl->ijl", X, self.Wf) + self.bf
+    
+    Y, C, d = LstmOpBase.apply(intern, self.Wr, h0, c0, i, device, self.direction)
+    return Y, (C, d)
 
 
 
