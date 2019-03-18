@@ -5,7 +5,7 @@ LayerClasses = {}
 def _initLayerClasses():
   global LayerClasses
   from inspect import isclass
-  if BackendEngine.is_pytorch_selected()::
+  if BackendEngine.is_pytorch_selected():
     import PTLayers
     for _, clazz in vars(PTLayers).items():
       if not isclass(clazz): continue
