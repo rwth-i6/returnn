@@ -444,7 +444,7 @@ class LSTMLayer(Layer):
   layer_class = "rec"
   recurrent = True
 
-  def __init__(self, n_out, kernel='cudnn', depth=1, direction=1, **kwargs):
+  def __init__(self, n_out, kernel='native', depth=1, direction=1, **kwargs):
     super(LSTMLayer, self).__init__(**kwargs)
     self.attrs['n_out'] = n_out + n_out * (direction == 0)
     self.attrs['direction'] = direction
