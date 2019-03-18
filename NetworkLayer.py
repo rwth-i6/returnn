@@ -1,11 +1,11 @@
+from Util import BackendEngine
 
 LayerClasses = {}
-backend = 'pytorch'
 
 def _initLayerClasses():
   global LayerClasses
   from inspect import isclass
-  if backend == 'pytorch':
+  if BackendEngine.is_pytorch_selected():
     import PTLayers
     for _, clazz in vars(PTLayers).items():
       if not isclass(clazz): continue

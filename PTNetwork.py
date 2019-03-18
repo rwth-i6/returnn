@@ -62,9 +62,9 @@ class LayerNetwork():
     self.recurrent = False  # any of the from_...() functions will set this
     self.output = {}; " :type: dict[str,FramewiseOutputLayer] "
     self.json_content = "{}"
+    self.dtype = {k: 'float32' for k in self.n_out}
     self.data = {k: None for k in self.n_out}
     self.index = {k: None for k in self.n_out}
-    #self.layers = nn.ModuleList([])
 
   def zero_grad(self):
     for k in self.hidden:
@@ -222,10 +222,13 @@ class LayerNetwork():
     :rtype: LayerNetwork
     """
     n_out = {k:n_out[k][0] for k in n_out}
-    n_out['data'] = n_in # TODO
+    n_out['data'] = n_in
     network = cls(n_out=n_out, **kwargs)
     network.n_out['data'] = n_in
+    network.dtype['data'] = 'float32' # TODO
+    network.dtype['classes'] = 'int32'
     kwargs = {'network':network}
+    network.data_keys = set([])
     def traverse(content, layer_name):
       if layer_name in network.hidden or layer_name in network.output:
         return
@@ -234,12 +237,14 @@ class LayerNetwork():
       layer_class = obj.pop('class', None)
       if not 'from' in obj and layer_class is not None:
         sources = [DataLayer(source='data',network=network)]
+        network.data_keys.add('data')
       elif 'from' in obj and obj['from']:
         if not isinstance(obj['from'], list):
           obj['from'] = [ obj['from'] ]
         for prev in obj['from']:
           if not prev in content.keys() and prev != "null":
             sources.append(DataLayer(source=prev,network=network))
+            network.data_keys.add(prev)
           elif prev != "null":
             traverse(content, prev)
             sources.append(network.get_layer(prev))
@@ -255,7 +260,12 @@ class LayerNetwork():
     for layer_name in json_content:
       assert layer_name != "data", "this layer name is not allowed"
       traverse(json_content, layer_name)
-    #network.loss = 'ce'
+    for k in network.hidden:
+      if 'target' in network.hidden[k].attrs:
+        network.data_keys.add(network.hidden[k].attrs['target'])
+    for k in network.output:
+      if 'target' in network.output[k].attrs:
+        network.data_keys.add(network.output[k].attrs['target'])
     return network
 
   def get_layer(self, layer_name):
@@ -345,5 +355,13 @@ class LayerNetwork():
     print("net params #:", self.num_params(), file=log.v2)
     #print("net trainable params:", self.train_params_vars, file=log.v2)
 
-  def get_used_data_keys(self): # TODO
-    return ['data','classes']
+  def get_used_data_keys(self):
+    return self.data_keys
+
+  def update_data(self, target, data, index):
+    self.data[target] = data
+    self.index[target] = index
+    for name in self.hidden:
+      self.hidden[name].output = None
+    for name in self.output:
+      self.output[name].output = None

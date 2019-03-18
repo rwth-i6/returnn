@@ -397,52 +397,65 @@ class DataLayer(Layer):
 class PoolLayer(Layer):
   layer_class = "pool"
   def __init__(self, factor, method="average", axis=0, padding=False, sample_target=False, **kwargs):
+    super(PoolLayer, self).__init__(**kwargs)
     self.attrs['method'] = method
+    self.attrs['factor'] = factor
     self.attrs['padding'] = padding
     self.attrs['axis'] = axis
-    if method in ['average','avg']:
-      self.module = nn.AvgPool1d(factor, factor, factor // 2 if padding else 0)
-    elif method in ['max']:
-      self.module = nn.MaxPool1d(factor, factor, factor // 2 if padding else 0)
-    else:
-      raise NotImplementedError
+    self.attrs['n_out'] = sum([x.attrs['n_out'] for x in self.sources])
+    self.avg = nn.AvgPool1d(factor, factor, factor // 2 if padding else 0)
+    self.max = nn.MaxPool1d(factor, factor, factor // 2 if padding else 0)
 
   def forward(self, x, i):
+    if self.attrs['factor'] == 1:
+      return x, i
+
     axis = self.attrs['axis']
     axes = [0,1,2]
     del axes[self.attrs['axis']]
     axes.append(self.attrs['axis'])
     x = x.permute(*axes)
-    i = i.permute(*axes)
-    x = self.module(x)
-    i = self.module(i)
+    if axis == 0:
+      i = i.permute(1,0)
+
+    if self.attrs['method'] in ['average','avg']:
+      x = self.avg(x)
+    elif self.attrs['method'] == 'max':
+      x = self.max(x)
+    else:
+      raise NotImplementedError
+    i = self.max(i.view(i.size(0),1,i.size(1)).float())
+
     if self.attrs['axis'] == 0:
       axes = [2, 0, 1]
     x = x.permute(*axes)
-    i = i.permute(*axes)
+    i = i.view(i.size(0),i.size(2)).byte()
+    if axis == 0:
+      i = i.permute(1,0)
+    i = i.contiguous()
     return x, i
 
 class DownsampleLayer(PoolLayer): # wrapper for backward compatibility
   layer_class = "downsample"
-  def __init__(self, factor, method="average", axis=0, padding=False, sample_target=False, **kwargs):
-    super(PoolLayer, self).__init__(factor, method, axis, padding, sample_target, **kwargs)
+  def __init__(self, **kwargs):
+    super(DownsampleLayer, self).__init__(**kwargs)
 
 class LSTMLayer(Layer):
   layer_class = "rec"
   recurrent = True
 
-  def __init__(self, n_out, kernel='cudnn', direction=1, **kwargs):
+  def __init__(self, n_out, kernel='cudnn', depth=1, direction=1, **kwargs):
     super(LSTMLayer, self).__init__(**kwargs)
-    self.attrs['n_out'] = n_out
+    self.attrs['n_out'] = n_out + n_out * (direction == 0)
     self.attrs['direction'] = direction
     self.attrs['kernel'] = kernel
     n_in = sum([x.attrs['n_out'] for x in self.sources])
     self.device = None
     if kernel == 'native':
       from PTNativeModules import SingleLayerLstm
-      self.module = SingleLayerLstm(int(n_in), int(n_out))
+      self.module = SingleLayerLstm(int(n_in), int(n_out), direction)
     elif kernel == 'cudnn':
-      self.module = nn.LSTM(int(n_in), int(n_out), 1)
+      self.module = nn.LSTM(int(n_in), int(n_out), depth, bidirectional=(direction==0))
     else:
       raise NotImplementedError
 
@@ -451,7 +464,7 @@ class LSTMLayer(Layer):
     self.module.to(device)
 
   def forward(self, x, i):
-    if self.attrs['direction'] == -1: # ugh
+    if self.attrs['direction'] and self.attrs['kernel'] == 'cudnn': # ugh
       idx = torch.LongTensor([i for i in range(x.size(0)-1, -1, -1)]).to(x.device)
       x = x.index_select(0,idx)
       i = i.index_select(0,idx)
@@ -464,7 +477,7 @@ class LSTMLayer(Layer):
     else:
       raise NotImplementedError
 
-    if self.attrs['direction'] == -1: # ugh
+    if self.attrs['direction'] and self.attrs['kernel'] == 'cudnn': # ugh
       x = x.index_select(0,idx)
       i = i.index_select(0,idx)
     return x, i
@@ -472,7 +485,7 @@ class LSTMLayer(Layer):
 class OutputLayer(Layer):
   layer_class = "softmax"
 
-  def __init__(self, loss = 'ce', target = 'classes', **kwargs):
+  def __init__(self, loss = 'ce', target = 'classes', compute_priors=False, **kwargs):
     super(OutputLayer, self).__init__(**kwargs)
     self.attrs['loss'] = loss
     self.attrs['target'] = target
