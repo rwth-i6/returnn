@@ -19,7 +19,7 @@ lstm = load_lstm_ops()
 
 
 class LstmOpBase(autograd.Function):
-  
+
   @staticmethod
   def forward(ctx, *inputs):
     """
@@ -37,7 +37,7 @@ class LstmOpBase(autograd.Function):
     lstm.lstm_forward_op_base(inputs[0], inputs[1], inputs[3], inputs[4], Y, d)
     ctx.save_for_backward(*inputs[:5], Y, d)
     return Y, inputs[0], d
-  
+
   @staticmethod
   def backward(ctx, *grad_outputs):
     """
@@ -51,13 +51,13 @@ class LstmOpBase(autograd.Function):
     lstm.lstm_backward_op_base(
       ctx.saved_tensors[1], ctx.saved_tensors[3], ctx.saved_tensors[4],
       ctx.saved_tensors[5],
-      grad_outputs[2], ctx.saved_tensors[0], DWr, Dc, grad_outputs[0]
+      grad_outputs[2].contiguous(), ctx.saved_tensors[0], DWr, Dc, grad_outputs[0].contiguous()
     )
     return ctx.saved_tensors[0], DWr, None, Dc, None, None, None
-    
-    
+
+
 class LstmOp(autograd.Function):
-  
+
   @staticmethod
   def forward(ctx, *inputs):
     ctx.device = inputs[-2]
@@ -71,7 +71,7 @@ class LstmOp(autograd.Function):
     lstm.lstm_forward_op(*inputs[:5], 0, ctx.direction, Y, C, H, d, y_prev)
     ctx.save_for_backward(*inputs[:5], Y, C, H)
     return Y, C, d
-  
+
   @staticmethod
   def backward(ctx, *grad_outputs):
     DX = torch.zeros_like(ctx.saved_tensors[0], device=ctx.device)
@@ -90,14 +90,14 @@ class LstmOp(autograd.Function):
 
 
 class SingleLayerLstm(nn.Module):
-  
+
   def __init__(self, n_input, n_hidden, direction=1):
     super(SingleLayerLstm, self).__init__()
     self.input_size = n_input
     self.hidden_size = n_hidden
     self.gate_size = self.hidden_size * 4
     self.direction = direction
-    
+
     shape_wf = (self.input_size, self.gate_size)
     shape_wr = (self.hidden_size, self.gate_size)
 
@@ -113,7 +113,7 @@ class SingleLayerLstm(nn.Module):
       self.Wf = nn.Parameter(torch.empty(shape_wf).uniform_(-stdv_wf, stdv_wf))
       self.Wr = nn.Parameter(torch.empty(shape_wr).uniform_(-stdv_wr, stdv_wr))
       self.bf = nn.Parameter(torch.zeros(self.gate_size))
-  
+
   def forward(self, X, i=None, h0=None, c0=None):
     device = self.Wf.device
     assert device == X.device
@@ -124,16 +124,16 @@ class SingleLayerLstm(nn.Module):
     if i is None:
       i = torch.ones((T, B), requires_grad=False, device=device)
     i = i.float()
-    
+
     if self.direction == -1:
       idx = torch.arange(T - 1, -1, -1).to(X.device)
       X = X.index_select(0, idx)
       i = i.index_select(0, idx)
 
     intern = torch.einsum("ijk,kl->ijl", X, self.Wf) + self.bf
-    
+
     Y, C, d = LstmOpBase.apply(intern, self.Wr, h0, c0, i, device, self.direction)
+
+    if self.direction == -1:
+      Y = Y.index_select(0, idx)
     return Y, (C, d)
-
-
-
