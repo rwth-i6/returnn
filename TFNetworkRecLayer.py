@@ -4085,7 +4085,8 @@ class SelfAttentionLayer(_ConcatInputLayer):
       n_in = self.input_data.dim
       mat_n_out = total_key_dim * 2 + total_value_dim  # Q, K, V
       mat = self.add_param(tf.get_variable(
-        name="QKV", shape=(n_in, mat_n_out), dtype=tf.float32, initializer=fwd_weights_initializer))
+        name="QKV", shape=(n_in, mat_n_out), dtype=tf.float32, initializer=fwd_weights_initializer),
+        axes_split_info=[[n_in], [total_key_dim, total_key_dim, total_value_dim]])
     x = self.input_data.placeholder
     if self.input_data.sparse:
       x = tf.nn.embedding_lookup(mat, to_int32_64(x))
