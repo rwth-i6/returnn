@@ -72,5 +72,6 @@ Layer Types
     custom.rst
     utility.rst
     loss.rst
+    softmax.rst
 
 

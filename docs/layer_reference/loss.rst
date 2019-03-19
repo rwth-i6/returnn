@@ -96,10 +96,10 @@ Via Layer Loss
 	:members:
 	:undoc-members:
 
-Sampled Softmax Loss
+Sampling-Based Loss
 --------------------
 
-.. autoclass:: TFNetworkLayer.SampledSoftmaxLoss
+.. autoclass:: TFNetworkLayer.SamplingBasedLoss
 	:members:
 	:undoc-members:
 

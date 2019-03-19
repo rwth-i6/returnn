@@ -39,4 +39,10 @@ Synthetic Gradient Layer
 	:members:
 	:undoc-members:
 
+HDFDumpLayer
+------------
+
+.. autoclass:: TFNetworkLayer.HDFDumpLayer
+	:members:
+	:undoc-members:
 

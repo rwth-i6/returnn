@@ -70,7 +70,7 @@ Slice Layer
 Slice n-dim Layer
 -----------------
 
-.. autoclass:: TFNetworkLayer.SlideNdLayer
+.. autoclass:: TFNetworkLayer.SliceNdLayer
 	:members:
 	:undoc-members:
 
