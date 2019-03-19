@@ -195,6 +195,9 @@ class MetaDataset(CachedDataset2):
       if seq_list_file.endswith(".pkl"):
         import pickle
         seq_list = pickle.load(open(seq_list_file, 'rb'))
+      elif seq_list_file.endswith(".gz"):
+        import gzip
+        seq_list = gzip.open(seq_list_file, "rt").read().splitlines()
       else:
         seq_list = open(seq_list_file).read().splitlines()
     else:
