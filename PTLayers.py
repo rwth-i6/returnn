@@ -448,6 +448,7 @@ class LSTMLayer(Layer):
     super(LSTMLayer, self).__init__(**kwargs)
     self.attrs['n_out'] = n_out + n_out * (direction == 0)
     self.attrs['direction'] = direction
+    self.attrs['depth'] = depth
     self.attrs['kernel'] = kernel
     n_in = sum([x.attrs['n_out'] for x in self.sources])
     self.device = None
@@ -464,7 +465,7 @@ class LSTMLayer(Layer):
     self.module.to(device)
 
   def forward(self, x, i):
-    if self.attrs['direction'] and self.attrs['kernel'] == 'cudnn': # ugh
+    if self.attrs['direction'] == -1 and self.attrs['kernel'] == 'cudnn': # ugh
       idx = torch.LongTensor([i for i in range(x.size(0)-1, -1, -1)]).to(x.device)
       x = x.index_select(0,idx)
       i = i.index_select(0,idx)
@@ -477,7 +478,7 @@ class LSTMLayer(Layer):
     else:
       raise NotImplementedError
 
-    if self.attrs['direction'] and self.attrs['kernel'] == 'cudnn': # ugh
+    if self.attrs['direction'] == -1 and self.attrs['kernel'] == 'cudnn': # ugh
       x = x.index_select(0,idx)
       i = i.index_select(0,idx)
     return x, i

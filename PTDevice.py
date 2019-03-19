@@ -506,6 +506,8 @@ class Device(object):
         output_queue.send(res)
       elif cmd == "reset":  # via self.reset()
         self.epoch = input_queue.recv()
+        with torch.cuda.device(self.id):
+          torch.cuda.empty_cache()
         #self.epoch_var.set_value(self.epoch)
         #if self.updater: # TODO
           #self.updater.reset()
