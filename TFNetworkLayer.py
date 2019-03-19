@@ -5526,7 +5526,8 @@ class HDFDumpLayer(LayerBase):
     ndim = data.ndim
     if dump_whole_batches:
       ndim = data.ndim - len(data.size_placeholder) + 1
-    self.hdf_writer = SimpleHDFWriter(filename=filename, dim=data.dim, ndim=ndim)
+    data_dim = None if data.sparse else data.dim
+    self.hdf_writer = SimpleHDFWriter(filename=filename, dim=data_dim, ndim=ndim)
     atexit.register(self._at_exit)
 
     def py_write(data_np, tags, *sizes):
