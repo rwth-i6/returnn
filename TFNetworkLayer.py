@@ -1074,6 +1074,11 @@ class LayerBase(object):
     :rtype: tf.Tensor | None
     :return: optional tensor with shape (batch, dim)
     """
+    if key in self.rec_vars_outputs:
+      return self.rec_vars_outputs[key]
+    if key is None and len(self.rec_vars_outputs) == 1:
+      return list(self.rec_vars_outputs.values())[0]
+    assert not self.rec_vars_outputs
     return None
 
   @classmethod
