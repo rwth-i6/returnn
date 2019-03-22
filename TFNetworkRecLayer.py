@@ -4154,14 +4154,16 @@ class SelfAttentionLayer(_ConcatInputLayer):
         self.rec_vars_outputs["kv_left"] = kv
       k, v = tf.split(kv, [total_key_dim // num_heads, total_value_dim // num_heads], axis=-1)
     # Dot-attention. Resulting last time dimension will be used to perform the softmax over, and will the be reduced.
-    energy = tf.matmul(q, k, transpose_b=True)  # (batch,heads,time,time)
+    energy = tf.matmul(q, k, transpose_b=True)  # (batch,heads,num_queries,num_keys), usually (batch,heads,time,time)
     if self.input_data.time_dim_axis is not None:
       if attention_left_only:
         # We also ignore the input data sequence length, because we expect that frames outside the seq length
         # are anyway ignored.
         from TFUtil import matrix_triangular
-        time = tf.shape(energy)[-1]
-        energy_mask = matrix_triangular((1, 1, time, time), dtype=tf.bool, lower=True)  # (1,1,time,time)
+        num_queries = tf.shape(energy)[2]
+        num_keys = tf.shape(energy)[-1]
+        # (1,1,num_queries,num_keys)
+        energy_mask = matrix_triangular((1, 1, num_queries, num_keys), dtype=tf.bool, lower=True)
       else:
         energy_mask = tf.sequence_mask(
           self.input_data.get_sequence_lengths(), maxlen=tf.shape(energy)[-1])  # (batch,time)
