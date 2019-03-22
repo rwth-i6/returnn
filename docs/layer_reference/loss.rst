@@ -96,6 +96,13 @@ Via Layer Loss
 	:members:
 	:undoc-members:
 
+As-Is Loss
+----------
+
+.. autoclass:: TFNetworkLayer.AsIsLoss
+    :members:
+    :undoc-members:
+
 Sampling-Based Loss
 --------------------
 
