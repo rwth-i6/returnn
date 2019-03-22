@@ -58,6 +58,29 @@ input prefixes are available, ``base`` and ``prev``. When trying to access layer
 ``base`` as to be used. Otherwise, only other layers inside the recurrent unit are recognised. ``prev`` can be used to access
 the layer output from the previous recurrent step (e.g. for target embedding feedback).
 
+Layer Initialization
+--------------------
+
+RETURNN offers multiple methods of initializing layers. This is usually done by setting the parameter
+``"forward_weights_init"`` in layers that have trainable parameters.
+The methods for initializations include, but are not limited to:
+
+  * providing a single value (will map to ``tf.initializers.constant``)
+  * providing the (lowercase) name of a given tensorflow `intializer <https://www.tensorflow.org/api_docs/python/tf/keras/initializers>`_,
+    which can be e.g.:
+
+    * ``"glorot_normal"``
+    * ``"glorot_uniform"``
+    * ``"orthogonal"``
+
+  * providing a dictionary for the initializer classes:
+
+    * Example: :code:`"forward_weights_init": {'class': 'VarianceScaling', 'scale': 0.5, 'mode': 'fan_out'}`
+
+The initialization is performed in :func:`TFUtil.get_initializer`.
+
+*Note:* the initalizers can be accessed both as e.g. ``"glorot_normal"`` or ``"glorot_normal_initializer"``.
+
 Layer Types
 -----------
 
