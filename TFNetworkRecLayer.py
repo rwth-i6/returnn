@@ -4087,6 +4087,21 @@ class SelfAttentionLayer(_ConcatInputLayer):
       mat = self.add_param(tf.get_variable(
         name="QKV", shape=(n_in, mat_n_out), dtype=tf.float32, initializer=fwd_weights_initializer),
         axes_split_info=[[n_in], [total_key_dim, total_key_dim, total_value_dim]])
+      if self._rec_previous_layer:
+        assert self.input_data.time_dim_axis is None
+        assert attention_left_only
+        # (batch,heads,time,kv-dim//heads)
+        prev_kv_left = self._rec_previous_layer.rec_vars_outputs["kv_left"]
+      else:
+        assert self.input_data.time_dim_axis is not None
+        batch_dim = self.input_data.get_batch_dim()
+        prev_kv_left = (
+          RnnCellLayer.get_rec_initial_state_inner(
+            initial_state=initial_state, name=self.name, rec_layer=self,
+            state_key="kv_left",
+            initial_shape=(batch_dim, num_heads, 0, (total_key_dim + total_value_dim) // num_heads),
+            shape_invariant=(None, num_heads, None, (total_key_dim + total_value_dim) // num_heads))
+          if initial_state is not None else None)
     x = self.input_data.placeholder
     if self.input_data.sparse:
       x = tf.nn.embedding_lookup(mat, to_int32_64(x))
@@ -4107,21 +4122,21 @@ class SelfAttentionLayer(_ConcatInputLayer):
     assert self.input_data.batch_dim_axis in (0, 1)
     # (batch,heads,time,qkv-dim//heads)
     x = tf.transpose(x, [self.input_data.batch_dim_axis, 2, 1 - self.input_data.batch_dim_axis, 3])
-    x.set_shape(tf.TensorShape([None, num_heads, None, mat_n_out // num_heads]))
+    x.set_shape((None, num_heads, None, mat_n_out // num_heads))
     q, k, v = tf.split(
       x, [total_key_dim // num_heads, total_key_dim // num_heads, total_value_dim // num_heads], axis=-1, name="qkv")
+    q.set_shape((None, num_heads, None, total_key_dim // num_heads))
+    k.set_shape((None, num_heads, None, total_key_dim // num_heads))
+    v.set_shape((None, num_heads, None, total_value_dim // num_heads))
     q *= (total_key_dim // num_heads) ** -0.5
-    if self.input_data.time_dim_axis is None:
-      assert attention_left_only
+    if prev_kv_left is not None:
       # Memory for kv.
-      kv_cur = tf.concat([k, v], axis=-1)  # (batch,heads,1,kv-dim//heads)
-      kv_cur.set_shape((None, num_heads, 1, (total_key_dim + total_value_dim) // num_heads))
-      # (batch,heads,time,kv-dim//heads)
-      kv_left = self._rec_previous_layer.rec_vars_outputs["kv_left"]
-      kv_left = tf.concat([kv_left, kv_cur], axis=2)
-      kv_left.set_shape((None, num_heads, None, (total_key_dim + total_value_dim) // num_heads))
-      self.rec_vars_outputs["kv_left"] = kv_left
-      k, v = tf.split(kv_left, [total_key_dim // num_heads, total_value_dim // num_heads], axis=-1)
+      kv = tf.concat([k, v], axis=-1)  # (batch,heads,1|time,kv-dim//heads)
+      kv.set_shape((None, num_heads, None, (total_key_dim + total_value_dim) // num_heads))
+      kv = tf.concat([prev_kv_left, kv], axis=2)
+      kv.set_shape((None, num_heads, None, (total_key_dim + total_value_dim) // num_heads))
+      self.rec_vars_outputs["kv_left"] = kv
+      k, v = tf.split(kv, [total_key_dim // num_heads, total_value_dim // num_heads], axis=-1)
     # Dot-attention. Resulting last time dimension will be used to perform the softmax over, and will the be reduced.
     energy = tf.matmul(q, k, transpose_b=True)  # (batch,heads,time,time)
     if self.input_data.time_dim_axis is not None:
@@ -4188,9 +4203,9 @@ class SelfAttentionLayer(_ConcatInputLayer):
                                     initial_state=None, sources=(), **kwargs):
     data = get_concat_sources_data_template(sources)
     data = data.copy_as_batch_major()
-    if data.time_dim_axis is None:
+    if data.time_dim_axis is None or initial_state is not None:
       kv_dim = total_key_dim + n_out
-      # Assume inside RecLayer.
+      # Assume inside RecLayer, or initial_state set explicitly.
       # Before, we used a tf.TensorArray.
       # However, that has higher memory consumptions than just using a tensor and concatenating to it.
       # (batch,heads,time,kv-dim//heads)
