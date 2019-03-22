@@ -165,11 +165,13 @@ class PythonControl:
     print("SprintExternInterface: PythonControl init_processing inputDim=%i, outputDim=%i, other:%r" % (input_dim, output_dim, kwargs))
     _init_global_sprintDataset(inputDim=input_dim, outputDim=output_dim, config=self.config)
 
-  def process_segment(self, name, orthography, features, alignment, soft_alignment, **kwargs):
+  def process_segment(self, name, orthography, features, alignment, soft_alignment, speaker_name=None, **kwargs):
     assert sprintDataset
     targets = {}
     if orthography is not None:
       targets["orth"] = orthography
+    if speaker_name is not None:
+      targets["speaker_name"] = speaker_name
     if alignment is not None:
       targets["classes"] = alignment
     elif soft_alignment is not None:
