@@ -1081,6 +1081,13 @@ class LayerBase(object):
     assert not self.rec_vars_outputs
     return None
 
+  def post_process_final_rec_vars_outputs(self, rec_vars_outputs):
+    """
+    :param dict[str,tf.Tensor] rec_vars_outputs:
+    :rtype: dict[str,tf.Tensor]
+    """
+    return rec_vars_outputs
+
   @classmethod
   def get_rec_initial_output(cls, batch_dim, name, output, rec_layer, initial_output=None, **kwargs):
     """

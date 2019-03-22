@@ -1245,10 +1245,11 @@ class _SubnetworkRecCell(object):
     init_extra_flat = [sorted_values_from_dict(v) for (k, v) in sorted(init_rec_extra_shapes.items())]
     return init_outputs_flat, init_extra_flat
 
-  def get_layer_rec_var_from_loop_vars(self, loop_vars, layer_name):
+  def get_layer_rec_var_from_loop_vars(self, loop_vars, layer_name, final_frame=False):
     """
     :param (list[tf.Tensor],list[tf.Tensor]) loop_vars: loop_vars like in self.get_next_loop_vars()
     :param str layer_name:
+    :param bool final_frame:
     :return: layer rec_vars_outputs
     :rtype: dict[str,tf.Tensor]
     """
@@ -1259,7 +1260,11 @@ class _SubnetworkRecCell(object):
     prev_extra = {
       k: dict_zip(sorted(self._initial_extra_outputs[k]), v)
       for (k, v) in zip(sorted(self._initial_extra_outputs), prev_extra_flat)}
-    return prev_extra[layer_name]
+    rec_vars_outputs = prev_extra[layer_name]
+    if final_frame:
+      if layer_name in self.net.layers:
+        rec_vars_outputs = self.net.layers[layer_name].post_process_final_rec_vars_outputs(rec_vars_outputs)
+    return rec_vars_outputs
 
   def get_parent_deps(self):
     """
@@ -1778,8 +1783,7 @@ class _SubnetworkRecCell(object):
         _, final_net_vars, final_acc_tas, (_, seq_len) = final_loop_vars
         max_seq_len = tf.reduce_max(seq_len, name="dyn_max_seq_len")
       self.get_final_rec_vars = lambda layer_name: self.get_layer_rec_var_from_loop_vars(
-        loop_vars=final_net_vars,
-        layer_name=layer_name)
+        loop_vars=final_net_vars, layer_name=layer_name, final_frame=True)
       assert isinstance(final_acc_tas, list)
       if len(outputs_to_accumulate) > 0:
         assert isinstance(final_acc_tas[0], tf.TensorArray)
@@ -4063,7 +4067,7 @@ class SelfAttentionLayer(_ConcatInputLayer):
   recurrent = True
 
   def __init__(self, num_heads, total_key_dim, forward_weights_init="glorot_uniform", attention_dropout=0.0,
-               attention_left_only=False, initial_state=None, **kwargs):
+               attention_left_only=False, initial_state=None, restrict_state_to_last_seq=False, **kwargs):
     """
     :param int num_heads:
     :param int total_key_dim:
@@ -4071,8 +4075,10 @@ class SelfAttentionLayer(_ConcatInputLayer):
     :param float attention_dropout:
     :param bool attention_left_only: will mask out the future. see Attention is all you need.
     :param str|float|int|None initial_state: see RnnCellLayer.get_rec_initial_state_inner().
+    :param bool restrict_state_to_last_seq: see code comment below
     """
     super(SelfAttentionLayer, self).__init__(**kwargs)
+    self._restrict_state_to_last_seq = restrict_state_to_last_seq
     assert self._rec_previous_layer or self.input_data.time_dim_axis is not None, (
       "%s: This layer is expected to be used inside a RecLayer, or to have input with time." % self)
     total_value_dim = self.output.dim
@@ -4133,9 +4139,19 @@ class SelfAttentionLayer(_ConcatInputLayer):
       # Memory for kv.
       kv = tf.concat([k, v], axis=-1)  # (batch,heads,1|time,kv-dim//heads)
       kv.set_shape((None, num_heads, None, (total_key_dim + total_value_dim) // num_heads))
+      self.rec_vars_outputs["kv_left"] = kv  # usually will be overwritten by the new kv below
       kv = tf.concat([prev_kv_left, kv], axis=2)
       kv.set_shape((None, num_heads, None, (total_key_dim + total_value_dim) // num_heads))
-      self.rec_vars_outputs["kv_left"] = kv
+      if restrict_state_to_last_seq:
+        # 'Last' means the current `kv` here, before the concat with `prev_kv_left`.
+        # I.e. we wont update `rec_vars_outputs` to the concatenated variant; it will exclude `prev_kv_left`.
+        # Note that this means a difference depending whether we are inside the loop or not.
+        # If we are inside the loop, we should update until the end of the seq, and then restrict to the last seq.
+        # This is handled in post_process_final_rec_vars_outputs.
+        # Otherwise just leave `rec_vars_outputs` as it is already.
+        pass
+      else:  # this is usually the case
+        self.rec_vars_outputs["kv_left"] = kv
       k, v = tf.split(kv, [total_key_dim // num_heads, total_value_dim // num_heads], axis=-1)
     # Dot-attention. Resulting last time dimension will be used to perform the softmax over, and will the be reduced.
     energy = tf.matmul(q, k, transpose_b=True)  # (batch,heads,time,time)
@@ -4225,6 +4241,15 @@ class SelfAttentionLayer(_ConcatInputLayer):
       total_value_dim = n_out
       return {"kv_left": tf.TensorShape((None, num_heads, None, (total_key_dim + total_value_dim) // num_heads))}
     return {}
+
+  def post_process_final_rec_vars_outputs(self, rec_vars_outputs):
+    """
+    :param dict[str,tf.Tensor] rec_vars_outputs:
+    :rtype: dict[str,tf.Tensor]
+    """
+    if self.input_data.time_dim_axis is None and self._restrict_state_to_last_seq:
+      raise NotImplementedError  # TODO ...
+    return rec_vars_outputs
 
 
 class PositionalEncodingLayer(_ConcatInputLayer):
