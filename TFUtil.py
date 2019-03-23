@@ -4496,17 +4496,35 @@ def stop_event_writer_thread(event_writer):
 
 def optional_add(*args):
   """
-  :param list[tf.Tensor|None]|tf.Tensor args:
-  :rtype: tf.Tensor|None
+  :param list[tf.Tensor|None]|int|float|tf.Tensor args:
+  :rtype: tf.Tensor|int|float|None
   :return: sums all non-None values, or returns None if there are none
   """
   y = None
   for v in args:
     if v is not None:
-      if y is None:
+      if y is None or (isinstance(y, (int, float)) and y == 0):
         y = v
-      else:
+      elif not (isinstance(v, (int, float)) and v == 0):
         y = y + v
+  return y
+
+
+def optional_mul(*args):
+  """
+  :param list[tf.Tensor|None]|int|float|tf.Tensor args:
+  :rtype: tf.Tensor|int|float|None
+  :return: sums all non-None values, or returns None if there are none
+  """
+  y = None
+  for v in args:
+    if v is not None:
+      if isinstance(v, (int, float)) and v == 0:
+        return v
+      if y is None or (isinstance(y, (int, float)) and y == 1):
+        y = v
+      elif not (isinstance(v, (int, float)) and v == 1):
+        y = y * v
   return y
 
 

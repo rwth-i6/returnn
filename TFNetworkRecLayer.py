@@ -3048,6 +3048,7 @@ class ChoiceLayer(LayerBase):
   _debug_out = None  # type: None|list
 
   def __init__(self, beam_size, input_type="prob", explicit_search_source=None, length_normalization=True,
+               prob_scale=1.0, base_beam_score_scale=1.0, random_sample_scale=0.0,
                source_beam_sizes=None, scheduled_sampling=False, cheating=False, **kwargs):
     """
     :param int beam_size: the outgoing beam size. i.e. our output will be (batch * beam_size, ...)
@@ -3056,6 +3057,9 @@ class ChoiceLayer(LayerBase):
       for all is assumed.
     :param LayerBase|None explicit_search_source: will mark it as an additional dependency
     :param bool length_normalization: evaluates score_t/len in search
+    :param float prob_scale: factor for prob (score in +log space from source)
+    :param float base_beam_score_scale: factor for beam base score (i.e. prev prob scores)
+    :param float random_sample_scale: if >0, will add Gumbel scores. you might want to set base_beam_score_scale=0
     :param list[int]|None source_beam_sizes: If there are several sources, they are pruned with these beam sizes
        before combination. If None, 'beam_size' is used for all sources. Has to have same length as number of sources.
     :param dict|None scheduled_sampling:
@@ -3063,6 +3067,7 @@ class ChoiceLayer(LayerBase):
     """
     super(ChoiceLayer, self).__init__(**kwargs)
     from Util import CollectionReadCheckCovered
+    from TFUtil import optional_add, optional_mul
     self.input_type = input_type
     self.explicit_search_source = explicit_search_source
     self.scheduled_sampling = CollectionReadCheckCovered.from_bool_or_dict(scheduled_sampling)
@@ -3166,7 +3171,15 @@ class ChoiceLayer(LayerBase):
           # See the comment above. It could be that scores_in has a wider beam
           # than what should be used here now.
           scores_in = scores_in[:, :base_beam_in]  # (batch, beam_in, dim)
-        scores_comb = scores_in + scores_base  # (batch, beam_in, dim)
+        scores_random_sample = None
+        if random_sample_scale:
+          # https://github.com/tensorflow/tensorflow/issues/9260
+          # https://timvieira.github.io/blog/post/2014/08/01/gumbel-max-trick-and-weighted-reservoir-sampling/
+          scores_random_sample = -tf.log(-tf.log(tf.random_uniform(tf.shape(scores_in), 0, 1)))
+        scores_comb = optional_add(
+          optional_mul(scores_in, prob_scale),
+          optional_mul(scores_base, base_beam_score_scale),
+          optional_mul(scores_random_sample, random_sample_scale))  # (batch, beam_in, dim)
         scores_comb_flat = tf.reshape(
           scores_comb, [net_batch_dim, base_beam_in * scores_in_dim])  # (batch, beam_in * dim)
         # `tf.nn.top_k` is the core function performing our search.
@@ -3289,6 +3302,11 @@ class ChoiceLayer(LayerBase):
       self.output = self.output_list[0]
 
   def _get_scores(self, source):
+    """
+    :param LayerBase source:
+    :return: scores in +log space
+    :rtype: tf.Tensor
+    """
     scores_in = source.output.placeholder
     # We present the scores in +log space, and we will add them up along the path.
     if self.input_type == "prob":
