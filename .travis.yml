@@ -79,16 +79,16 @@ env:
 
 matrix:
   include:
-  - env: RUN=tests/pylint.py
-  - env: RUN=tests/pycharm-inspect.py
+    - env: RUN=tests/pylint.py
+    - env: RUN=tests/pycharm-inspect.py
   allow_failures:
-  - env: RUN=tests/pylint.py
-  - env: RUN=tests/pycharm-inspect.py
+    - env: RUN=tests/pylint.py
+    - env: RUN=tests/pycharm-inspect.py
 
 # command to run tests
 script:
-  - [[ ! -z "$TEST" ]] && nosetests tests/test_$TEST.py
-  - [[ ! -z "$RUN" ]] && $RUN
+  - '[[ ! -z "$TEST" ]] && nosetests tests/test_$TEST.py'
+  - '[[ ! -z "$RUN" ]] && $RUN'
 
 # https://docs.travis-ci.com/user/notifications
 # no notifications
