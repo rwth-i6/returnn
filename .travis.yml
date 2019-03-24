@@ -2,9 +2,9 @@
 
 language: python
 python:
-  - "2.7"
-  - "3.5"
   - "3.6"
+  - "3.5"
+  - "2.7"
 
 # https://docs.travis-ci.com/user/reference/overview/
 # https://blog.travis-ci.com/2017-04-17-precise-EOL
@@ -19,9 +19,9 @@ install:
   - pip2 install -qq --user --upgrade pip setuptools wheel six | cat  # Python2<->Python3
   - pip2 install --user -r requirements.txt | cat  # need for Python2<->Python3 communication tests
   - pip install -qq --upgrade pip setuptools wheel
-  - pip install --upgrade numpy scipy  | cat  # TF usually needs the latest Numpy
-  - pip install -r requirements.txt  | cat
-  - pip install $TF_PACKAGE  | cat
+  - pip install --upgrade numpy scipy | cat  # TF usually needs the latest Numpy
+  - pip install -r requirements.txt | cat
+  - pip install $TF_PACKAGE | cat
   - pip install -qq nose
   - echo "[global]" >> ~/.theanorc
   - echo "device = cpu" >> ~/.theanorc
@@ -77,9 +77,18 @@ env:
     - TEST=TheanoUtil
     - TEST=Util
 
+matrix:
+  include:
+  - env: RUN=tests/pylint.py
+  - env: RUN=tests/pycharm-inspect.py
+  allow_failures:
+  - env: RUN=tests/pylint.py
+  - env: RUN=tests/pycharm-inspect.py
+
 # command to run tests
 script:
-  - nosetests tests/test_$TEST.py
+  - [[ ! -z "$TEST" ]] && nosetests tests/test_$TEST.py
+  - [[ ! -z "$RUN" ]] && $RUN
 
 # https://docs.travis-ci.com/user/notifications
 # no notifications
