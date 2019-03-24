@@ -4290,9 +4290,10 @@ class PositionalEncodingLayer(_ConcatInputLayer):
   layer_class = "positional_encoding"
   recurrent = True
 
-  def __init__(self, add_to_input=False, **kwargs):
+  def __init__(self, add_to_input=False, constant=-1, **kwargs):
     """
     :param bool add_to_input: will add the signal to the input
+    :param int constant: if positive, always output the corresponding positional encoding.
     """
     super(PositionalEncodingLayer, self).__init__(**kwargs)
     assert len(self.sources) == 1, "%s: expect a single source" % self
@@ -4302,9 +4303,16 @@ class PositionalEncodingLayer(_ConcatInputLayer):
     from TFUtil import get_positional_encoding
     if source.have_time_axis():
       length = tf.shape(source.placeholder)[source.time_dim_axis]
-      signal = get_positional_encoding(num_channels=self.output.dim, length=length)  # (len,n_out)
+      if constant > -1:
+        position = constant * tf.ones([length], tf.int32)
+        signal = get_positional_encoding(num_channels=self.output.dim, position=position)  # (len,n_out)
+      else:
+        signal = get_positional_encoding(num_channels=self.output.dim, length=length)  # (len,n_out)
     else:
-      position = tf.convert_to_tensor([self.network.get_rec_step_index()])
+      if constant > -1:
+        position = tf.convert_to_tensor([constant])
+      else:
+        position = tf.convert_to_tensor([self.network.get_rec_step_index()])
       signal = get_positional_encoding(num_channels=self.output.dim, position=position)  # (1,n_out)
       signal = tf.squeeze(signal, axis=0)  # (n_out,)
     if self.output.batch_dim_axis is not None:
