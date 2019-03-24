@@ -87,8 +87,8 @@ matrix:
 
 # command to run tests
 script:
-  - '[[ ! -z "$TEST" ]] && nosetests tests/test_$TEST.py || true'
-  - '[[ ! -z "$RUN" ]] && $RUN || true'
+  - 'if [[ ! -z "$TEST" ]]; then nosetests tests/test_$TEST.py; fi'
+  - 'if [[ ! -z "$RUN" ]]; then $RUN; fi'
 
 # https://docs.travis-ci.com/user/notifications
 # no notifications
