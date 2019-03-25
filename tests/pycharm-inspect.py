@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
 
+"""
+Will use the PyCharm code inspection.
+
+See here:
+  https://github.com/albertz/pycharm-inspect
+  https://stackoverflow.com/questions/55323910/pycharm-code-style-check-via-command-line
+"""
+
 import os
 import sys
 import subprocess
@@ -71,6 +79,11 @@ def run_inspect(pycharm_dir, src_dir):
   out_tmp_dir = tempfile.mkdtemp()
 
   print("travis_fold:start:script.inspect")
+  # Note: Will not run if PyCharm is already running.
+  # Maybe we can find some workaround for this?
+  # See here: https://stackoverflow.com/questions/55339010/run-pycharm-inspect-sh-even-if-pycharm-is-already-running
+  # And here: https://github.com/albertz/pycharm-inspect
+  # Also: https://stackoverflow.com/questions/55323910/pycharm-code-style-check-via-command-line
   cmd = [
     "%s/bin/inspect.sh" % pycharm_dir,
     src_dir,
