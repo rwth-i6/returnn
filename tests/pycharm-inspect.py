@@ -74,8 +74,8 @@ def run_inspect(pycharm_dir, src_dir):
   """
   :param str pycharm_dir:
   :param str src_dir:
-  :return: list of xml files
-  :rtype: list[str]
+  :return: dir of xml files
+  :rtype: str
   """
   out_tmp_dir = tempfile.mkdtemp()
 
@@ -95,17 +95,15 @@ def run_inspect(pycharm_dir, src_dir):
   subprocess.check_call(cmd, stderr=subprocess.STDOUT)
   print("travis_fold:end:script.inspect")
 
-  fs = list(glob(out_tmp_dir + "/*.xml"))
-  assert fs
-  return fs
+  return out_tmp_dir
 
 
 def report_inspect_xml(fn):
   """
   :param str fn:
+  :return: list of (filename, line, problem_severity, inspect_class, description)
+  :rtype: list[(str,int,str,str,str)]
   """
-  print("travis_fold:start:inspect.%s" % os.path.basename(fn))
-  print("File %s:" % fn)
   # Example PyPackageRequirementsInspection.xml:
   """
   <problems is_local_tool="true">
@@ -124,6 +122,7 @@ def report_inspect_xml(fn):
   root = et.parse(fn).getroot()
   assert isinstance(root, et.Element)
   assert root.tag == "problems"
+  result = []
   for problem in root.findall("./problem"):
     assert isinstance(problem, et.Element)
     assert problem.tag == "problem"
@@ -133,8 +132,50 @@ def report_inspect_xml(fn):
     line = int(problem.find("./line").text.strip())
     problem_severity = problem.find("./problem_class").attrib["severity"]
     description = problem.find("./description").text.strip()
+    result.append((filename, line, problem_severity, inspect_class, description))
+  return result
+
+
+def report_inspect_dir(path, inspect_class_whitelist=None, inspect_class_blacklist=None):
+  """
+  :param str path:
+  :param set[str]|None inspect_class_whitelist:
+  :param set[str]|None inspect_class_blacklist:
+  :return: count of reports
+  :rtype: int
+  """
+  if os.path.isfile(path):
+    assert path.endswith(".xml")
+    fs = [path]
+  else:
+    assert os.path.isdir(path)
+    fs = list(glob(path + "/*.xml"))
+    assert fs
+
+  inspections = []
+  for fn in fs:
+    inspections.extend(report_inspect_xml(fn))
+  inspections.sort()
+
+  count = 0
+  last_filename = None
+  for filename, line, problem_severity, inspect_class, description in inspections:
+    if filename != last_filename:
+      if last_filename:
+        print("travis_fold:end:inspect.%s" % last_filename)
+      print("travis_fold:start:inspect.%s" % filename)
+      last_filename = filename
+
+    if inspect_class_whitelist is not None and inspect_class not in inspect_class_whitelist:
+      continue
+    if inspect_class_blacklist is not None and inspect_class in inspect_class_blacklist:
+      continue
     print("%s:%i: %s %s: %s" % (filename, line, problem_severity, inspect_class, description))
-  print("travis_fold:end:inspect.%s" % os.path.basename(fn))
+    count += 1
+
+  if last_filename:
+    print("travis_fold:end:inspect.%s" % last_filename)
+  return count
 
 
 def main():
@@ -144,8 +185,15 @@ def main():
   arg_parser.add_argument("--files", nargs="*")
   args = arg_parser.parse_args()
 
+  inspect_class_blacklist = {
+    "PyInterpreterInspection",  # TODO how to select this in PyCharm.idea?
+    "SpellCheckingInspection"  # way too much for now... TODO this should be fixed later, probably in PyCharm.idea
+  }
+  inspect_kwargs = dict(inspect_class_blacklist=inspect_class_blacklist)
+
   if args.xml:
-    report_inspect_xml(args.xml)
+    if report_inspect_dir(args.xml, **inspect_kwargs) > 0:
+      sys.exit(1)
     return
 
   if args.pycharm:
@@ -154,14 +202,9 @@ def main():
   else:
     pycharm_dir = install_pycharm()
   src_dir = prepare_src_dir(files=args.files)
-  fs = run_inspect(pycharm_dir=pycharm_dir, src_dir=src_dir)
-  for fn in fs:
-    # noinspection PyBroadException
-    try:
-      report_inspect_xml(fn)
-    except Exception:
-      sys.excepthook(*sys.exc_info())
-      # Go on.
+  res_dir = run_inspect(pycharm_dir=pycharm_dir, src_dir=src_dir)
+  if report_inspect_dir(res_dir, **inspect_kwargs) > 0:
+    sys.exit(1)
 
 
 if __name__ == "__main__":
