@@ -1081,9 +1081,10 @@ class LayerBase(object):
     assert not self.rec_vars_outputs
     return None
 
-  def post_process_final_rec_vars_outputs(self, rec_vars_outputs):
+  def post_process_final_rec_vars_outputs(self, rec_vars_outputs, seq_len):
     """
     :param dict[str,tf.Tensor] rec_vars_outputs:
+    :param tf.Tensor seq_len: shape (batch,)
     :rtype: dict[str,tf.Tensor]
     """
     return rec_vars_outputs

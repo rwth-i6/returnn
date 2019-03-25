@@ -1245,11 +1245,12 @@ class _SubnetworkRecCell(object):
     init_extra_flat = [sorted_values_from_dict(v) for (k, v) in sorted(init_rec_extra_shapes.items())]
     return init_outputs_flat, init_extra_flat
 
-  def get_layer_rec_var_from_loop_vars(self, loop_vars, layer_name, final_frame=False):
+  def get_layer_rec_var_from_loop_vars(self, loop_vars, layer_name, final_frame=False, seq_len=None):
     """
     :param (list[tf.Tensor],list[tf.Tensor]) loop_vars: loop_vars like in self.get_next_loop_vars()
     :param str layer_name:
     :param bool final_frame:
+    :param tf.Tensor seq_len: if final frame, this is the seq len, shape (batch,)
     :return: layer rec_vars_outputs
     :rtype: dict[str,tf.Tensor]
     """
@@ -1263,7 +1264,8 @@ class _SubnetworkRecCell(object):
     rec_vars_outputs = prev_extra[layer_name]
     if final_frame:
       if layer_name in self.net.layers:
-        rec_vars_outputs = self.net.layers[layer_name].post_process_final_rec_vars_outputs(rec_vars_outputs)
+        rec_vars_outputs = self.net.layers[layer_name].post_process_final_rec_vars_outputs(
+          rec_vars_outputs, seq_len=seq_len)
     return rec_vars_outputs
 
   def get_parent_deps(self):
@@ -1783,7 +1785,7 @@ class _SubnetworkRecCell(object):
         _, final_net_vars, final_acc_tas, (_, seq_len) = final_loop_vars
         max_seq_len = tf.reduce_max(seq_len, name="dyn_max_seq_len")
       self.get_final_rec_vars = lambda layer_name: self.get_layer_rec_var_from_loop_vars(
-        loop_vars=final_net_vars, layer_name=layer_name, final_frame=True)
+        loop_vars=final_net_vars, layer_name=layer_name, final_frame=True, seq_len=seq_len)
       assert isinstance(final_acc_tas, list)
       if len(outputs_to_accumulate) > 0:
         assert isinstance(final_acc_tas[0], tf.TensorArray)
@@ -4167,7 +4169,8 @@ class SelfAttentionLayer(_ConcatInputLayer):
         # If we are inside the loop, we should update until the end of the seq, and then restrict to the last seq.
         # This is handled in post_process_final_rec_vars_outputs.
         # Otherwise just leave `rec_vars_outputs` as it is already.
-        pass
+        if self._rec_previous_layer:
+          self.rec_vars_outputs["kv_left"] = kv
       else:  # this is usually the case
         self.rec_vars_outputs["kv_left"] = kv
       k, v = tf.split(kv, [total_key_dim // num_heads, total_value_dim // num_heads], axis=-1)
@@ -4262,13 +4265,16 @@ class SelfAttentionLayer(_ConcatInputLayer):
       return {"kv_left": tf.TensorShape((None, num_heads, None, (total_key_dim + total_value_dim) // num_heads))}
     return {}
 
-  def post_process_final_rec_vars_outputs(self, rec_vars_outputs):
+  def post_process_final_rec_vars_outputs(self, rec_vars_outputs, seq_len):
     """
     :param dict[str,tf.Tensor] rec_vars_outputs:
+    :param tf.Tensor seq_len: shape (batch,)
     :rtype: dict[str,tf.Tensor]
     """
     if self.input_data.time_dim_axis is None and self._restrict_state_to_last_seq:
-      raise NotImplementedError  # TODO ...
+      # kv_left should be of shape (batch, heads, time, kv_dim_per_head).
+      # time will be >= max(seq_len); could be more if we use e.g. initial_state=keep_over_epoch.
+      rec_vars_outputs["kv_left"] = rec_vars_outputs["kv_left"][:, :, -tf.reduce_max(seq_len):]
     return rec_vars_outputs
 
 
