@@ -7,8 +7,8 @@ import tempfile
 from glob import glob
 
 my_dir = os.path.dirname(os.path.abspath(__file__))
-pycharm_dir = my_dir + "/pycharm"
 base_dir = os.path.dirname(my_dir)
+pycharm_dir = base_dir + "/extern_private/pycharm"
 sys.path.insert(0, base_dir)
 os.chdir(base_dir)
 
@@ -17,7 +17,7 @@ better_exchook.install()
 
 # travis_fold: https://github.com/travis-ci/travis-ci/issues/1065
 print("travis_fold:start:script.install")
-subprocess.check_call([my_dir + "/install_pycharm.sh"])
+subprocess.check_call([my_dir + "/install_pycharm.sh"], cwd=os.path.dirname(pycharm_dir))
 assert os.path.isdir(pycharm_dir)
 tmp_dir = tempfile.mkdtemp()
 print("travis_fold:end:script.install")

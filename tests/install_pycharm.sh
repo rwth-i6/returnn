@@ -9,4 +9,5 @@ wget -c "https://download.jetbrains.com/python/$fn"
 
 tar -xzvf $fn
 test -d $name
+rm $fn
 mv $name pycharm
