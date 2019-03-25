@@ -20,6 +20,15 @@ print("travis_fold:end:script.install")
 
 for fn in sorted(glob(base_dir + "/*.py")):
   print("travis_fold:start:pylint.%s" % os.path.basename(fn))
-  res = subprocess.Popen(["pylint", fn]).wait()
-  print("Return code:", res)
+  proc = subprocess.Popen(["pylint", fn], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+  stdout, _ = proc.communicate()
+  stdout = stdout.decode("utf8")
+  if "EXCEPTION" in stdout and "RecursionError" in stdout:
+    # https://github.com/PyCQA/pylint/issues/1452
+    # https://github.com/PyCQA/astroid/issues/437
+    # Don't print full stdout. It will spam too much.
+    print("PyLint issue #1452 triggered. https://github.com/PyCQA/pylint/issues/1452")
+  else:
+    print(stdout)
+  print("Return code:", proc.returncode)
   print("travis_fold:end:pylint.%s" % os.path.basename(fn))
