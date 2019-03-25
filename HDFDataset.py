@@ -344,16 +344,14 @@ class NextGenHDFDataset(CachedDataset2):
               'sparse'            : SparseStreamParser,
               'segment_alignment' : SegmentAlignmentStreamParser }
 
-  def __init__(self, input_stream_name, files=None, partition_epoch=1, **kwargs):
+  def __init__(self, input_stream_name, files=None, **kwargs):
     """
     :param str input_stream_name:
     :param None|list[str] files:
-    :param int partition_epoch:
     """
     super(NextGenHDFDataset, self).__init__(**kwargs)
 
     self.input_stream_name = input_stream_name
-    self.partition_epoch   = partition_epoch
 
     self.files           = []
     self.h5_files        = []
@@ -362,9 +360,6 @@ class NextGenHDFDataset(CachedDataset2):
     self.file_indices    = []
     self.seq_order       = []
     self.all_parsers     = collections.defaultdict(list)
-
-    self.partitions        = []
-    self.current_partition = 1
 
     if files:
       for fn in files:
@@ -404,13 +399,8 @@ class NextGenHDFDataset(CachedDataset2):
 
   def initialize(self):
     total_seqs               = len(self.all_seq_names)
-    seqs_per_epoch           = total_seqs // self.partition_epoch
-    self._num_seqs           = seqs_per_epoch
-    self._estimated_num_seqs = seqs_per_epoch
-
-    partition_sizes =   [seqs_per_epoch + 1] * (total_seqs % self.partition_epoch)\
-                      + [seqs_per_epoch]     * (self.partition_epoch - total_seqs % self.partition_epoch)
-    self.partitions = fun.reduce(lambda a, x: a + [a[-1] + x], partition_sizes, [0])  # cumulative sum
+    self._num_seqs           = total_seqs
+    self._estimated_num_seqs = total_seqs
 
     super(NextGenHDFDataset, self).initialize()
 
@@ -425,18 +415,15 @@ class NextGenHDFDataset(CachedDataset2):
       self.seq_order = [self.seq_name_to_idx[s] for s in seq_list]
     else:
       epoch = epoch or 1
-      self.current_partition = (epoch - 1) % self.partition_epoch
-      partition_size         = self.partitions[self.current_partition + 1] - self.partitions[self.current_partition]
-      self.seq_order         = self.get_seq_order_for_epoch(epoch, partition_size, self._get_seq_length)
+      self.seq_order = self.get_seq_order_for_epoch(epoch, len(self.all_seq_names), self._get_seq_length)
 
   def _get_seq_length(self, orig_seq_idx):
     """
     :type orig_seq_idx: int
     :rtype int
     """
-    partition_offset = self.partitions[self.current_partition]
-    parser = self.all_parsers[self.input_stream_name][self.file_indices[partition_offset + orig_seq_idx]]
-    return parser.get_seq_length(self._normalize_seq_name(self.all_seq_names[partition_offset + orig_seq_idx]))
+    parser = self.all_parsers[self.input_stream_name][self.file_indices[orig_seq_idx]]
+    return parser.get_seq_length(self._normalize_seq_name(self.all_seq_names[orig_seq_idx]))
 
   def _collect_single_seq(self, seq_idx):
     """
@@ -446,8 +433,7 @@ class NextGenHDFDataset(CachedDataset2):
     if seq_idx >= len(self.seq_order):
       return None
 
-    partition_offset = self.partitions[self.current_partition]
-    real_seq_index   = partition_offset + self.seq_order[seq_idx]
+    real_seq_index   = self.seq_order[seq_idx]
     file_index       = self.file_indices[real_seq_index]
     seq_name         = self.all_seq_names[real_seq_index]
     norm_seq_name    = self._normalize_seq_name(seq_name)
