@@ -3400,7 +3400,7 @@ class ConvLayer(_ConcatInputLayer):
       i: input_data.size_placeholder[i]
       for i in input_data.get_spatial_axes()
       if i in input_data.size_placeholder}
-    index_shift = self.output.time_dim_axis_excluding_batch
+    index_shift = self.output.get_spatial_axes()[0]
     for i in list(self.output.size_placeholder.keys()):
       self.output.size_placeholder[i] = self.calc_out_dim(
         in_dim=self.output.size_placeholder[i],
@@ -3452,8 +3452,7 @@ class ConvLayer(_ConcatInputLayer):
     padding = padding.upper()
     if input_expand_dims == 0 and not input_add_feature_dim and not input_split_feature_dim:
       # Maybe we have a chance to correctly define the output shapes.
-      assert data.time_dim_axis is not None, "time_dim_axis was not specified, consider setting dim options of ConvLayer"
-      index_shift = data.time_dim_axis_excluding_batch
+      index_shift = data.get_spatial_axes()[0]
       for i in range(len(filter_size)):
         if data.shape[i + index_shift] is not None:
           shape[i] = cls.calc_out_dim(
