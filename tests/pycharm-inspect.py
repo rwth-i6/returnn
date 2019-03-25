@@ -61,6 +61,7 @@ def prepare_src_dir(files=None):
     files = sorted(glob(base_dir + "/*.py"))
   src_tmp_dir = "%s/returnn" % tempfile.mkdtemp()
   os.mkdir(src_tmp_dir)
+  os.symlink("%s/PyCharm.idea" % my_dir, "%s/.idea" % src_tmp_dir)
   for fn in files:
     os.symlink(fn, "%s/%s" % (src_tmp_dir, os.path.basename(fn)))
   print("All source files:")
