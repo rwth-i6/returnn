@@ -69,7 +69,7 @@ class HDFDataset(CachedDataset):
       self.labels = {
         k: [self._decode(item) for item in fin["targets/labels"][k][...].tolist()]
         for k in fin['targets/labels']}
-    if not self.labels:
+    if not self.labels and 'labels' in fin:
       labels = [item.split('\0')[0] for item in fin["labels"][...].tolist()]; """ :type: list[str] """
       self.labels = {'classes': labels}
       assert len(self.labels['classes']) == len(labels), "expected " + str(len(self.labels['classes'])) + " got " + str(len(labels))
@@ -951,9 +951,13 @@ class HDFDatasetWriter:
     print("Data keys:", data_keys, file=log.v3)
     if "orth" in data_keys:  # special workaround for now, not handled
       data_keys.remove("orth")
-    data_target_keys = [key for key in dataset.get_target_list() if key in data_keys]
+
+    if len(data_keys) > 1:
+      data_target_keys = [key for key in dataset.get_target_list() if key in data_keys]
+    else:
+      data_target_keys = []
     data_input_keys = [key for key in data_keys if key not in data_target_keys]
-    assert len(data_input_keys) > 0 and len(data_target_keys) > 0
+
     if len(data_input_keys) > 1:
       if "data" in data_input_keys:
         default_data_input_key = "data"
@@ -962,14 +966,17 @@ class HDFDatasetWriter:
     else:
       default_data_input_key = data_input_keys[0]
     print("Using input data key:", default_data_input_key)
-    if len(data_target_keys) > 1:
-      if "classes" in data_target_keys:
-        default_data_target_key = "classes"
+    if len(data_target_keys) > 0:
+      if len(data_target_keys) > 1:
+        if "classes" in data_target_keys:
+          default_data_target_key = "classes"
+        else:
+          raise Exception("not sure which target data key to use from %r" % (data_target_keys,))
       else:
-        raise Exception("not sure which target data key to use from %r" % (data_target_keys,))
+        default_data_target_key = data_target_keys[0]
+      print("Using target data key:", default_data_target_key)
     else:
-      default_data_target_key = data_target_keys[0]
-    print("Using target data key:", default_data_target_key)
+      default_data_target_key = default_data_input_key
 
     hdf_data_key_map = {key: key for key in data_keys if key != default_data_input_key}
     if "data" in hdf_data_key_map:
@@ -1025,15 +1032,14 @@ class HDFDatasetWriter:
         progress_bar_with_time(float(i) / num_seqs)
 
     print("Set seq len info...", file=log.v3)
-    hdf_dataset.create_dataset(attr_seqLengths, shape=(num_seqs, 2), dtype="int32")
+    hdf_dataset.create_dataset(attr_seqLengths, shape=(num_seqs, 1 + len(data_target_keys)), dtype="int32")
     for i, seq_len in enumerate(seq_lens):
       data_len = seq_len[default_data_input_key]
-      targets_len = seq_len[default_data_target_key]
-      for data_key in data_target_keys:
-        assert seq_len[data_key] == targets_len, "different lengths in multi-target not supported"
-      if targets_len is None:
-        targets_len = data_len
-      hdf_dataset[attr_seqLengths][i] = [data_len, targets_len]
+      if len(data_target_keys) > 0:
+        targets_len = seq_len[default_data_target_key]
+        for data_key in data_target_keys:
+          assert seq_len[data_key] == targets_len, "different lengths in multi-target not supported"
+      hdf_dataset[attr_seqLengths][i] = [data_len] + [seq_len[k] for k in data_target_keys]
       if use_progress_bar:
         progress_bar_with_time(float(i) / num_seqs)
 
