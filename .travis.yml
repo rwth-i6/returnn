@@ -84,6 +84,7 @@ matrix:
   allow_failures:
     - env: RUN=tests/pylint.py
     - env: RUN=tests/pycharm-inspect.py
+  fast_finish: true
 
 # command to run tests
 script:
