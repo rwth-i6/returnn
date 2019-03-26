@@ -136,11 +136,12 @@ def report_inspect_xml(fn):
   return result
 
 
-def report_inspect_dir(path, inspect_class_whitelist=None, inspect_class_blacklist=None):
+def report_inspect_dir(path, inspect_class_whitelist=None, inspect_class_blacklist=None, ignore_count_for_files=()):
   """
   :param str path:
   :param set[str]|None inspect_class_whitelist:
   :param set[str]|None inspect_class_blacklist:
+  :param set[str]|tuple[str]|None ignore_count_for_files:
   :return: count of reports
   :rtype: int
   """
@@ -156,27 +157,38 @@ def report_inspect_dir(path, inspect_class_whitelist=None, inspect_class_blackli
   for fn in fs:
     inspections.extend(report_inspect_xml(fn))
   inspections.sort()
+  inspections.append((None, None, None, None, None))  # final marker
 
-  count = 0
+  total_count = 0
+  file_count = None
   last_filename = None
   for filename, line, problem_severity, inspect_class, description in inspections:
-    if filename != last_filename:
-      if last_filename:
-        print("travis_fold:end:inspect.%s" % last_filename)
-      print("travis_fold:start:inspect.%s" % filename)
-      print("File:", filename)
-      last_filename = filename
-
-    if inspect_class_whitelist is not None and inspect_class not in inspect_class_whitelist:
+    if inspect_class_whitelist is not None and inspect_class not in inspect_class_whitelist and inspect_class:
       continue
     if inspect_class_blacklist is not None and inspect_class in inspect_class_blacklist:
       continue
-    print("%s:%i: %s %s: %s" % (filename, line, problem_severity, inspect_class, description))
-    count += 1
 
-  if last_filename:
-    print("travis_fold:end:inspect.%s" % last_filename)
-  return count
+    if filename != last_filename:
+      if last_filename:
+        if file_count == 0:
+          print("The inspection reports for this file are currently ignored.")
+        else:
+          print("The inspection reports for this file are fatal!")
+        print("travis_fold:end:inspect.%s" % last_filename)
+      if filename:
+        print("travis_fold:start:inspect.%s" % filename)
+        print("File:", filename)
+        last_filename = filename
+        file_count = 0
+    if not filename:
+      continue
+
+    print("%s:%i: %s %s: %s" % (filename, line, problem_severity, inspect_class, description))
+    if filename not in ignore_count_for_files:
+      total_count += 1
+      file_count += 1
+
+  return total_count
 
 
 def main():
@@ -186,12 +198,101 @@ def main():
   arg_parser.add_argument("--files", nargs="*")
   args = arg_parser.parse_args()
 
-  inspect_class_blacklist = {
-    "PyInterpreterInspection",  # TODO how to select this in PyCharm.idea?
-    "SpellCheckingInspection",  # way too much for now... TODO this should be fixed later, probably in PyCharm.idea
-    "PyClassHasNoInitInspection",  # not relevant?
-  }
-  inspect_kwargs = dict(inspect_class_blacklist=inspect_class_blacklist)
+  inspect_kwargs = dict(
+    inspect_class_blacklist={
+      "PyInterpreterInspection",  # TODO how to select this in PyCharm.idea?
+      "SpellCheckingInspection",  # way too much for now... TODO this should be fixed later, probably in PyCharm.idea
+      "PyClassHasNoInitInspection",  # not relevant?
+    },
+    # Proceed like this: Fix all warnings for some file, then remove it from this list.
+    # I commented out the files which really should not have warnings (mostly the TF backend + shared files).
+    ignore_count_for_files={
+      'ActivationFunctions.py',
+      'BestPathDecoder.py',
+      'BundleFile.py',
+      'CTC.py',
+      # 'CachedDataset.py',
+      'CachedDataset2.py',
+      # 'Config.py',
+      'CustomLSTMFunctions.py',
+      # 'Dataset.py',
+      # 'Debug.py',
+      # 'DebugHelpers.py',
+      'Device.py',
+      'Engine.py',
+      # 'EngineBatch.py',
+      'EngineTask.py',
+      # 'EngineUtil.py',
+      'External.py',
+      # 'Fsa.py',
+      'FunctionLoader.py',
+      # 'GeneratingDataset.py',
+      'HDFDataset.py',
+      # 'HyperParamTuning.py',
+      'Inv.py',
+      # 'LearningRateControl.py',
+      # 'LmDataset.py',
+      # 'Log.py',
+      # 'MetaDataset.py',
+      # 'MultiBatchBeam.py',
+      # 'NativeOp.py',
+      'Network.py',
+      'NetworkBaseLayer.py',
+      'NetworkCNNLayer.py',
+      'NetworkCopyUtils.py',
+      'NetworkCtcLayer.py',
+      'NetworkDescription.py',
+      'NetworkHiddenLayer.py',
+      'NetworkLayer.py',
+      'NetworkLstmLayer.py',
+      'NetworkOutputLayer.py',
+      'NetworkRecurrentLayer.py',
+      'NetworkStream.py',
+      'NetworkTwoDLayer.py',
+      'NormalizationData.py',
+      # 'NumpyDumpDataset.py',
+      'OpBLSTM.py',
+      'OpInvAlign.py',
+      'OpLSTM.py',
+      'OpLSTMCell.py',
+      'OpLSTMCustom.py',
+      'OpLSTMRec.py',
+      'OpNumpyAlign.py',
+      # 'Pretrain.py',
+      # 'RawWavDataset.py',
+      'RecurrentTransform.py',
+      'Server.py',
+      # 'SprintCache.py',
+      # 'SprintControl.py',
+      # 'SprintDataset.py',
+      # 'SprintErrorSignals.py',
+      # 'SprintExternInterface.py',
+      # 'SprintInterface.py',
+      'StereoDataset.py',
+      # 'TFDataPipeline.py',
+      # 'TFEngine.py',
+      # 'TFKenLM.py',
+      # 'TFNativeOp.py',
+      # 'TFNetwork.py',
+      # 'TFNetworkLayer.py',
+      'TFNetworkNeuralTransducer.py',
+      # 'TFNetworkRecLayer.py',
+      'TFNetworkSegModLayer.py',
+      'TFNetworkSigProcLayer.py',
+      # 'TFUpdater.py',
+      # 'TFUtil.py',
+      'TaskSystem.py',
+      'TaskSystem_example.py',
+      'TheanoUtil.py',
+      'TorchWrapper.py',
+      'TwoStateBestPathDecoder.py',
+      'TwoStateHMMOp.py',
+      'Updater.py',
+      # 'Util.py',
+      # '__init__.py',
+      # 'better_exchook.py',
+      # 'rnn.py',
+    })
 
   if args.xml:
     if report_inspect_dir(args.xml, **inspect_kwargs) > 0:
