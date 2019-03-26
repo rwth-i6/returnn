@@ -102,6 +102,7 @@ class DimensionTag(object):
     """
     assert self.dimension is None
     if hasattr(x, "_is_size_of_dim_tag"):
+      # noinspection PyProtectedMember
       assert x._is_size_of_dim_tag in (None, self)
     if getattr(x, "_is_size_of_dim_tag", None) is None:
       setattr(x, "_is_size_of_dim_tag", self)
@@ -2020,6 +2021,7 @@ def get_current_name_scope():
   Note that this is a private member and might break at some point.
   Note also that this does not need to be the same as get_current_var_scope_name().
   """
+  # noinspection PyProtectedMember
   return tf.get_default_graph()._name_stack or ""
 
 
@@ -2085,8 +2087,10 @@ def reuse_name_scope(name, absolute=None, **kwargs):
       # remove "/" from the end of the var-scope.
       # This is a work-around to fix up the variable scope behavior for nested variable scopes.
       # Warning: This might break at some future point.
+      # noinspection PyProtectedMember
       assert scope.name is scope._name
       assert scope.name[-1:] == "/" or scope.name == ""
+      # noinspection PyProtectedMember
       scope._name = scope._name[:-1]
       assert name == scope.name, "%r" % current_name_scope
       yield scope
@@ -2731,7 +2735,7 @@ def _div(a, b):
 
 
 _bin_ops = {"+": _plus, "-": _minus, "*": _mul, "/": _div}
-_act_func_with_op_cache = {}  # type: dict[str,(tf.Tensor)->tf.Tensor]
+_act_func_with_op_cache = {}  # type: typing.Dict[str,typing.Callable[[tf.Tensor],tf.Tensor]]
 
 
 def _get_act_func_with_op(s):
