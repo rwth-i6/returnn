@@ -13,7 +13,7 @@ import argparse
 import rnn
 import json
 from Log import log
-from Pretrain import pretrainFromConfig
+from Pretrain import pretrain_from_config
 from Network import LayerNetwork
 
 
@@ -36,7 +36,7 @@ def main(argv):
   args = argparser.parse_args(argv[1:])
   init(configFilename=args.crnn_config_file, commandLineOptions=[])
 
-  pretrain = pretrainFromConfig(config)
+  pretrain = pretrain_from_config(config)
   if pretrain:
     network = pretrain.get_network_for_epoch(args.epoch)
   else:

@@ -560,8 +560,8 @@ def demo():
   rnn.initLog()
   rnn.initBackendEngine()
   check_lr = rnn.config.bool("check_learning_rates", False)
-  from Pretrain import pretrainFromConfig
-  pretrain = pretrainFromConfig(rnn.config)
+  from Pretrain import pretrain_from_config
+  pretrain = pretrain_from_config(rnn.config)
   first_non_pretrain_epoch = 1
   pretrain_learning_rate = None
   if pretrain:

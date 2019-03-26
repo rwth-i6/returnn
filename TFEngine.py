@@ -31,7 +31,7 @@ from Engine import Engine as TheanoEngine
 from LearningRateControl import loadLearningRateControlFromConfig, LearningRateControl
 from Log import log
 from Network import LayerNetwork
-from Pretrain import pretrainFromConfig
+from Pretrain import pretrain_from_config
 from TFNetwork import TFNetwork, ExternData, help_on_tf_exception
 from TFUpdater import Updater
 from Util import hms, NumbersDict, PY3, BackendEngine
@@ -904,7 +904,7 @@ class Engine(object):
       config = self.config
     self.model_filename = config.value('model', None)
     self.preload_from_files = config.typed_value('preload_from_files', {})
-    self.pretrain = pretrainFromConfig(config)
+    self.pretrain = pretrain_from_config(config)
     self.max_seqs = config.int('max_seqs', -1)
 
     epoch, model_epoch_filename = self.get_epoch_model(config)

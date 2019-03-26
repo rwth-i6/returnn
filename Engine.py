@@ -14,7 +14,7 @@ from Log import log
 from Updater import Updater
 import Device
 from LearningRateControl import loadLearningRateControlFromConfig
-from Pretrain import pretrainFromConfig
+from Pretrain import pretrain_from_config
 import EngineUtil
 from Util import hms, hdf5_dimension, BackendEngine, model_epoch_from_filename, get_model_filename_postfix
 import errno
@@ -242,7 +242,7 @@ class Engine:
     self.init_network_from_config(config)
 
   def init_network_from_config(self, config):
-    self.pretrain = pretrainFromConfig(config)
+    self.pretrain = pretrain_from_config(config)
     self.max_seqs = config.int('max_seqs', -1)
     self.max_seq_length_eval = config.int('max_seq_length_eval', 2e31)
     self.compression = config.bool('compression', False)
