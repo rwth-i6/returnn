@@ -36,6 +36,8 @@ from TFNetwork import TFNetwork, ExternData, help_on_tf_exception
 from TFUpdater import Updater
 from Util import hms, NumbersDict, PY3, BackendEngine
 from pprint import pprint
+if PY3:
+  import typing
 
 
 class CancelTrainingException(Exception):
@@ -43,6 +45,7 @@ class CancelTrainingException(Exception):
 
 
 class Runner(object):
+  # noinspection PyShadowingBuiltins
   def __init__(self, engine, dataset, batches, train, eval=True, train_flag=None,
                extra_fetches=None, extra_fetches_callback=None):
     """
@@ -58,10 +61,11 @@ class Runner(object):
       It might also be useful to add `network.get_extern_data("seq_idx")` and `network.get_extern_data("seq_tag")`.
     :param (**dict[str,numpy.ndarray|str|list[numpy.ndarray|str])->None extra_fetches_callback: called if extra_fetches
     """
-    from TFDataPipeline import FeedDictDataProvider, DataProviderBase
+    from TFDataPipeline import DataProviderBase
     engine.network.extern_data.check_matched_dataset(
       dataset=dataset, used_data_keys=engine.network.used_data_keys)
     self.engine = engine
+    # noinspection PyProtectedMember
     self.data_provider = self.engine._get_new_data_provider(dataset=dataset, batches=batches)
     assert isinstance(self.data_provider, DataProviderBase)
     if train_flag is None:
@@ -75,16 +79,16 @@ class Runner(object):
     self.cancel_flag = False
     self.run_exception = None
     self.num_steps = None
-    self.device_crash_batch = None  # type: int|None
+    self.device_crash_batch = None  # type: typing.Optional[int]
     self.start_time = None
     self.elapsed = None
     self._results_accumulated = NumbersDict()  # entries like "cost:output" or "loss"
     self._inv_norm_accumulated = NumbersDict()  # entries like "output"
     self.num_frames_accumulated = NumbersDict()  # for each data key (eg. "classes"), corresponding number of frames
-    self.results = {}  # type: dict[str,float]  # entries like "cost:output" or "loss"
-    self.score = {}  # type: dict[str,float]  # entries like "cost:output"
-    self.error = {}  # type: dict[str,float]  # entries like "error:output"
-    self.stats = {}  # type: dict[str,float|numpy.ndarray|Util.Stats]  # entries like "stats:..."
+    self.results = {}  # type: typing.Dict[str,float]  # entries like "cost:output" or "loss"
+    self.score = {}  # type: typing.Dict[str,float]  # entries like "cost:output"
+    self.error = {}  # type: typing.Dict[str,float]  # entries like "error:output"
+    self.stats = {}  # type: typing.Dict[str,typing.Union[float,numpy.ndarray,'Util.Stats']]  # entries like "stats:..."
     self.extra_fetches = extra_fetches
     if extra_fetches is not None:
       assert extra_fetches_callback
@@ -107,6 +111,7 @@ class Runner(object):
       if not self.engine.config.is_true("use_horovod"):
         return x
       from TFUtil import global_tensor
+      # noinspection PyUnresolvedReferences,PyPackageRequirements
       import horovod.tensorflow as hvd
       return global_tensor(
         lambda: hvd.allreduce(x, average=average),
@@ -283,6 +288,7 @@ class Runner(object):
       # We assume that this data-key has no time axis. Use the batch-dim instead.
       return self._get_batch_dim_from_fetches(fetches_results)
 
+  # noinspection PyMethodMayBeStatic
   def _normalize_loss(self, value, key, inv_loss_norm_factors):
     """
     :param T value:
@@ -422,6 +428,7 @@ class Runner(object):
     # Stopped before? Keep in sync -> Don't send anything anymore, other peers do not expect it.
     if self._horovod_stopped_runner:
       return True, False
+    # noinspection PyUnresolvedReferences,PyPackageRequirements
     import horovod.tensorflow as hvd
     from TFUtil import global_tensor
     have_more_data_placeholder = global_tensor(
@@ -447,8 +454,8 @@ class Runner(object):
       # This means we should stop. Other peers will not expect further signals.
       stop = True
       self._horovod_stopped_runner = True
-    error_occured = sum_have_error > 0
-    return stop, error_occured
+    error_occurred = sum_have_error > 0
+    return stop, error_occurred
 
   def _horovod_sync_params(self, local_step, is_final=False):
     """
@@ -471,8 +478,10 @@ class Runner(object):
     if not is_final and local_step % sync_step != sync_step - 1:
       return 0.0
     from TFUtil import global_tensor
+    # noinspection PyUnresolvedReferences,PyPackageRequirements
     import horovod.tensorflow as hvd
 
+    # noinspection PyShadowingNames
     def assign_avg_var(var):
       """
       :param tf.Variable var:
@@ -510,6 +519,7 @@ class Runner(object):
       if self.engine.use_search_flag:
         logdir += "-search"
       logdir += "-%s" % get_utc_start_time_filename_part()
+      # noinspection PyProtectedMember
       if self.engine._do_save():
         log_runtime_info_to_dir(logdir, config=self.engine.config)
       writer = tf.summary.FileWriter(logdir)
@@ -589,7 +599,7 @@ class Runner(object):
               fetches_dict,
               feed_dict=feed_dict,
               options=run_options,
-              run_metadata=run_metadata)  # type: dict[str,numpy.ndarray|str]
+              run_metadata=run_metadata)  # type: typing.Dict[str,typing.Union[numpy.ndarray,str]]
             elapsed_time_tf += time.time() - session_run_start_time
             writer.add_summary(fetches_results["summary"], step + step_offset)
             writer.add_run_metadata(run_metadata, 'step_{:04d}'.format(step + step_offset))
@@ -599,7 +609,8 @@ class Runner(object):
               f.write(tl.generate_chrome_trace_format(show_memory=True))
           else:
             session_run_start_time = time.time()
-            fetches_results = sess.run(fetches_dict, feed_dict=feed_dict)  # type: dict[str,numpy.ndarray|str]
+            fetches_results = sess.run(
+              fetches_dict, feed_dict=feed_dict)  # type: typing.Dict[str,typing.Union[numpy.ndarray,str]]
             elapsed_time_tf += time.time() - session_run_start_time
             if writer and "summary" in fetches_results:
               writer.add_summary(fetches_results["summary"], step + step_offset)
@@ -694,13 +705,15 @@ class Engine(object):
     self.learning_rate_control = None  # type: LearningRateControl
     self._checked_uninitialized_vars = False
     self._merge_all_summaries = None
-    self.dataset_batches = {}  # type: dict[str,BatchSetGenerator]
+    self.dataset_batches = {}  # type: typing.Dict[str,BatchSetGenerator]
     self.train_data = None  # type: Dataset
     self.start_epoch = None
     self.use_dynamic_train_flag = False
     self.use_search_flag = config.value("task", None) == "search"
     self.use_eval_flag = config.value("task", None) != "forward"
-    self._const_cache = {}  # type: dict[str,tf.Tensor]
+    self.learning_rate = 0.0  # set in init_train_epoch
+    self.epoch = 0
+    self._const_cache = {}  # type: typing.Dict[str,tf.Tensor]
 
   def finalize(self):
     self._close_tf_session()
@@ -850,6 +863,7 @@ class Engine(object):
     assert count_bytes > 0
     return count_bytes
 
+  # noinspection PyAttributeOutsideInit
   def init_train_from_config(self, config=None, train_data=None, dev_data=None, eval_data=None):
     """
     :param Config.Config|None config:
@@ -888,7 +902,7 @@ class Engine(object):
     self.max_seq_length = config.typed_value('max_seq_length', None) or config.float('max_seq_length', 0)
     self.inc_seq_length = config.float('inc_seq_length', 0)
     if not self.max_seq_length:
-      self.max_seq_length = sys.maxsize  # type: int|float|dict[str,int]|NumbersDict
+      self.max_seq_length = sys.maxsize  # type: typing.Union[int,float,typing.Dict[str,int]|NumbersDict]
     if isinstance(self.max_seq_length, dict):
       self.max_seq_length = NumbersDict(self.max_seq_length)
     assert isinstance(self.max_seq_length, (int, float, NumbersDict))
@@ -979,6 +993,7 @@ class Engine(object):
     :param dict[str,dict[str]] net_desc:
     :param int epoch:
     """
+    # noinspection PyShadowingNames
     def set_value(key, value):
       """
       :param str key:
@@ -1050,6 +1065,7 @@ class Engine(object):
     else:
       train_flag = False
     if False:  # TODO ...
+      # noinspection PyUnreachableCode
       extern_data = ExternData()
       extern_data.init_from_config(self.config)
       # TODO...
@@ -1062,6 +1078,7 @@ class Engine(object):
     self.network.initialize_params(session=self.tf_session)
     if self.config.is_true("use_horovod"):
       # Note: Might not be needed as it should be deterministic. But just to be sure...
+      # noinspection PyPackageRequirements,PyUnresolvedReferences
       import horovod.tensorflow as hvd
       # like hvd.broadcast_global_variables but selected vars only:
       bcast_op = tf.group(*[
@@ -1143,6 +1160,9 @@ class Engine(object):
       ignore_non_existing=self.is_pretrain_epoch())
 
   def train(self):
+    """
+    Does the whole training, i.e. the loop over all the epochs.
+    """
     print("start training at epoch %i and step %i" % (self.start_epoch, self.start_batch), file=log.v3)
     print("using batch size: %r, max seqs: %i" % (self.batch_size, self.max_seqs), file=log.v4)
     print("learning rate control:", self.learning_rate_control, file=log.v4)
@@ -1193,6 +1213,9 @@ class Engine(object):
     print("Finished training in epoch %i." % self.epoch, file=log.v3)
 
   def init_train_epoch(self):
+    """
+    Init for the current train epoch.
+    """
     if self.is_pretrain_epoch():
       # Note: For pretrain epochs, we ensure that the last pretrain epoch will have exactly the same
       # network as we use after pretraining.
@@ -1238,7 +1261,7 @@ class Engine(object):
       **opts)
     if last_best_epoch and last_best_epoch != self.epoch - 1:
       print("Last epoch %i (score: %f) is not the optimal model" %
-            (self.epoch - 1, self.learning_rate_control.getEpochErrorValue(self.epoch -1))
+            (self.epoch - 1, self.learning_rate_control.getEpochErrorValue(self.epoch - 1))
             + " but epoch %i has better score %f (%r), will use that model." %
             (last_best_epoch, self.learning_rate_control.getEpochErrorValue(last_best_epoch),
              self.learning_rate_control.getEpochErrorDict(last_best_epoch)),
@@ -1247,6 +1270,9 @@ class Engine(object):
       self.updater.init_optimizer_vars(session=self.tf_session)  # reset the optimizer vars
 
   def train_epoch(self):
+    """
+    Train a single epoch (self.epoch).
+    """
     print("start", self.get_epoch_str(), "with learning rate", self.learning_rate, "...", file=log.v4)
 
     if self.epoch == 1 and self.save_epoch1_initial_model:
@@ -1296,7 +1322,13 @@ class Engine(object):
     if self.config.bool_or_other("cleanup_old_models", None):
       self.cleanup_old_models()
 
+  # noinspection PyMethodMayBeStatic
   def format_score(self, score):
+    """
+    :param dict[str,float] score:
+    :return: score(s) as str
+    :rtype: str
+    """
     if not score:
       return "None"
     if len(score) == 1:
@@ -1340,12 +1372,14 @@ class Engine(object):
     :rtype: bool
     """
     if self.config.is_true("use_horovod"):
+      # noinspection PyPackageRequirements,PyUnresolvedReferences
       import horovod.tensorflow as hvd
       if hvd.rank() != 0:
         return False
     return True
 
-  def eval_model(self, output_file=None, output_per_seq_file=None, loss_name=None, output_per_seq_format=("seq_len", "score", "pos_score")):
+  def eval_model(self, output_file=None, output_per_seq_file=None, loss_name=None,
+                 output_per_seq_format=("seq_len", "score", "pos_score")):
     """
     Eval the current model on the eval datasets (dev + eval, whatever is set).
     See also :func:`self.search` for performing beam search.
@@ -1354,7 +1388,7 @@ class Engine(object):
     :param str|None output_per_seq_file: if given, will save the err/score for each sequence
     :param str|None loss_name: specifies the loss which will be written to output_file
     :param list[str]|tuple[str]|None output_per_seq_format:
-      which properies of `loss_name` should be written to `output_per_seq_file`.
+      which properties of `loss_name` should be written to `output_per_seq_file`.
       allowed_outputs = {"seq_tags", "seq_len", "score", "error", "pos_score", "pos_error"}
 
     :return: nothing
@@ -1500,8 +1534,13 @@ class Engine(object):
           f.write(str(res) + '\n')
 
   def check_last_epoch(self):
+    """
+    Checks if there are outstanding tasks (eval_model) for the last epoch,
+    and executes them.
+    """
     if self.start_epoch == 1:
       return
+    # noinspection PyAttributeOutsideInit
     self.epoch = self.start_epoch - 1
     if self.learning_rate_control.need_error_info:
       if self.dev_data:
@@ -1538,7 +1577,7 @@ class Engine(object):
          " thus not cleaning up any epochs yet.") % (
           len(epochs), keep_last_n, keep_best_n), file=log.v2)
       return
-    keep_epochs = set()  # type: set[int]
+    keep_epochs = set()  # type: typing.Set[int]
     default_keep_pattern = set()
     if epochs[-1] <= 10:
       keep_every = 4
@@ -1644,7 +1683,8 @@ class Engine(object):
       assert len(var_mask) == len(var_list)
       uninitialized_vars = [v for (v, mask) in zip(var_list, var_mask) if mask]
       if uninitialized_vars:
-        print("Note: There are still these uninitialized variables: %s" % [v.name for v in uninitialized_vars], file=log.v3)
+        print("Note: There are still these uninitialized variables: %s" % [v.name for v in uninitialized_vars],
+              file=log.v3)
         self.tf_session.run(tf.variables_initializer(uninitialized_vars))
       self._checked_uninitialized_vars = True
 
@@ -1656,6 +1696,7 @@ class Engine(object):
     """
     batch_slice = None
     if self.config.is_true("use_horovod"):
+      # noinspection PyPackageRequirements,PyUnresolvedReferences
       import horovod.tensorflow as hvd
       batch_slice = slice(hvd.rank(), None, hvd.size())
     from TFDataPipeline import FeedDictDataProvider
@@ -1680,7 +1721,8 @@ class Engine(object):
     batch = Batch()
     if seq_idx == -1:  # load all sequences in dataset
       for seq_idx_loop in range(dataset.num_seqs):
-        batch.add_sequence_as_slice(seq_idx=seq_idx_loop, seq_start_frame=0, length=dataset.get_seq_length(seq_idx_loop))
+        batch.add_sequence_as_slice(
+          seq_idx=seq_idx_loop, seq_start_frame=0, length=dataset.get_seq_length(seq_idx_loop))
     else:
       batch.init_with_one_full_sequence(seq_idx=seq_idx, dataset=dataset)
     batch_generator = iter([batch])
@@ -1716,7 +1758,8 @@ class Engine(object):
     if not output_layer_name:
       output_layer_name = self.config.value("forward_output_layer", self.network.get_default_output_layer_name())
       assert output_layer_name, "output layer not defined. set forward_output_layer in config"
-    assert output_layer_name in self.network.layers, "output layer %r not found, available layers: %s" % (output_layer_name, ','.join(self.network.layers.keys()))
+    assert output_layer_name in self.network.layers, "output layer %r not found, available layers: %s" % (
+      output_layer_name, ','.join(self.network.layers.keys()))
     return self.network.layers[output_layer_name]
 
   def forward_single(self, dataset, seq_idx, output_layer_name=None):
@@ -1737,6 +1780,7 @@ class Engine(object):
     assert output_value.shape[1] == 1  # batch-dim
     return output_value[:, 0]  # remove batch-dim
 
+  # noinspection PyUnusedLocal
   def forward_to_hdf(self, data, output_file, combine_labels='', batch_size=0, output_layer=None):
     """
     Is aiming at recreating the same interface and output as :func:`Engine.forward_to_hdf`.
@@ -1779,6 +1823,7 @@ class Engine(object):
       """
       n_batch = len(seq_tag)
       assert n_batch == inputs.shape[0]
+      # noinspection PyShadowingNames
       seq_len = {i: kwargs["seq_len_%i" % i] for i in output.size_placeholder.keys()}
       assert all([len(v) == n_batch for v in seq_len.values()])
       writer.insert_batch(inputs=inputs, seq_len=seq_len, seq_tag=seq_tag)
@@ -1806,6 +1851,7 @@ class Engine(object):
 
     writer.close()
 
+  # noinspection PyUnusedLocal
   def analyze(self, data, statistics):
     """
     :param Dataset.Dataset data:
@@ -1951,6 +1997,7 @@ class Engine(object):
       """
 
       outputs, beam_scores, targets = [], [], []
+      # noinspection PyShadowingNames
       for target_idx in range(num_targets):
         outputs.append(kwargs["output_" + output_layer_names[target_idx]])
         beam_scores.append(kwargs["beam_scores_" + output_layer_names[target_idx]])
@@ -1959,6 +2006,7 @@ class Engine(object):
       n_batch = len(seq_idx)  # without beam
       assert n_batch == len(seq_tag)
 
+      # noinspection PyShadowingNames
       for target_idx in range(num_targets):
         if beam_scores[target_idx] is not None:
           assert beam_scores[target_idx].shape == (n_batch, out_beam_sizes[target_idx])
@@ -1980,6 +2028,7 @@ class Engine(object):
           if output_is_dict:
             out_cache[corpus_seq_idx] = {}
 
+        # noinspection PyShadowingNames
         for target_idx in range(num_targets):
           if out_beam_sizes[target_idx] is None:
             print("seq_idx: %i, seq_tag: %r, output %r: %r" % (
@@ -2253,8 +2302,10 @@ class Engine(object):
     input_audio_feature_extractor = None
     output_data = self.network.extern_data.get_default_target_data()
     output_vocab = output_data.vocab
-    if isinstance(self.config.typed_dict.get("dev", None), dict) and self.config.typed_dict["dev"]["class"] == "LibriSpeechCorpus":
+    if (isinstance(self.config.typed_dict.get("dev", None), dict)
+            and self.config.typed_dict["dev"]["class"] == "LibriSpeechCorpus"):
       # A bit hacky. Assumes that this is a dataset description for e.g. LibriSpeechCorpus.
+      # noinspection PyPackageRequirements
       import soundfile  # pip install pysoundfile
       bpe_opts = self.config.typed_dict["dev"]["bpe"]
       audio_opts = self.config.typed_dict["dev"]["audio"]
@@ -2283,14 +2334,18 @@ class Engine(object):
       output_layer_beam_scores_t = output_layer.get_search_choices().beam_scores
 
     class Handler(BaseHTTPRequestHandler):
+      """
+      Handle POST requests.
+      """
+      # noinspection PyPep8Naming
       def do_POST(self):
         try:
-          self._do_POST()
+          self._do_post()
         except Exception:
           sys.excepthook(*sys.exc_info())
           raise
 
-      def _do_POST(self):
+      def _do_post(self):
         import cgi
         form = cgi.FieldStorage(
           fp=self.rfile,
@@ -2358,6 +2413,7 @@ class Engine(object):
 
     print("Simple search web server, listening on port %i." % port, file=log.v2)
     server_address = ('', port)
+    # noinspection PyAttributeOutsideInit
     self.httpd = HTTPServer(server_address, Handler)
     self.httpd.serve_forever()
 

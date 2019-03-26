@@ -71,7 +71,7 @@ class Batch:
     Adds one data-batch in an additional slice.
 
     :param int seq_idx:
-    :param NumbersDict seq_start_frame:
+    :param NumbersDict|int seq_start_frame:
     :param NumbersDict length: number of (time) frames
     """
     self.max_num_frames_per_slice, self.num_slices = self.try_sequence_as_slice(length)
