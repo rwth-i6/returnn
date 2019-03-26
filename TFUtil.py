@@ -276,7 +276,7 @@ class Data(object):
         dtype = "float32"
     self.dtype = dtype  # type: str
     assert batch_dim_axis is None or isinstance(batch_dim_axis, int)
-    self.batch_dim_axis = batch_dim_axis  # type: int|None  # None -> no batch dim axis
+    self.batch_dim_axis = batch_dim_axis  # type: typing.Optional[int]  # None -> no batch dim axis
     if shape is None:
       if time_dim_axis is NotSpecified:  # need to determine this now
         if self.batch_dim_axis is None:
@@ -304,7 +304,7 @@ class Data(object):
           else:
             shape = shape + (None,) * (feature_dim_axis_wo_batch - len(shape)) + (dim,)
             assert len(shape) == feature_dim_axis_wo_batch + 1
-    self.shape = tuple(shape)  # type: tuple[int|None]  # excluding batch-dim. see self.batch_shape
+    self.shape = tuple(shape)  # type: typing.Tuple[typing.Optional[int], ...]  # excl. batch-dim. see self.batch_shape
     if feature_dim_axis is not NotSpecified:
       if isinstance(feature_dim_axis, int):
         assert not self.sparse, "cannot have feature_dim_axis when sparse"
@@ -330,21 +330,21 @@ class Data(object):
           time_dim_axis = None
     if time_dim_axis is not None:
       assert 0 <= time_dim_axis < self.batch_ndim
-    self.time_dim_axis = time_dim_axis  # type: int|None  # counted with batch-dim
+    self.time_dim_axis = time_dim_axis  # type: typing.Optional[int]  # counted with batch-dim
     if dim is NotSpecified:
       assert not sparse, "need dim (num classes) if sparse"
       if self.feature_dim_axis is None:
         dim = None
       else:
         dim = self.batch_shape[self.feature_dim_axis]
-    self.dim = dim  # type: int|None
+    self.dim = dim  # type: typing.Optional[int]
     if placeholder is None and auto_create_placeholders:
       with tf.name_scope("extern_data/placeholders/%s/" % name):
         placeholder = tf.placeholder(**self.get_placeholder_kwargs(with_batch=True))
     self.placeholder = placeholder  # type: tf.Tensor  # this will hold the data value itself
     # The size_placeholder is for each variable length dimension in shape, i.e. excluding the batch-dim.
     if size_placeholder is None and auto_create_placeholders:
-      size_placeholder = {}  # type: dict[int,tf.Tensor]
+      size_placeholder = {}  # type: typing.Dict[int,tf.Tensor]
       with tf.name_scope("extern_data/placeholders/%s/" % name):
         for axis in self.get_axes_with_size():
           size_placeholder[axis] = tf.placeholder(**self.get_size_placeholder_kwargs(axis))
@@ -353,7 +353,7 @@ class Data(object):
           tag.set_tag_on_size_tensor(size_placeholder[axis])
     if not size_placeholder and (self.ndim_dense <= 1 or all([d is not None for d in shape])):
       size_placeholder = {}
-    self.size_placeholder = size_placeholder  # type: dict[int,tf.Tensor]  # axis w.o. batch -> size of shape (batch,)
+    self.size_placeholder = size_placeholder  # type: typing.Dict[int,tf.Tensor]  # axis w.o. batch -> size (batch,)
     self.available_for_inference = available_for_inference
     self.beam_size = beam_size
     if vocab is not None:
@@ -1742,6 +1742,7 @@ class Data(object):
 
 _horovod_is_initialized = False
 
+
 def init_horovod():
   """
   Initializes Horovod.
@@ -1751,6 +1752,7 @@ def init_horovod():
   if _horovod_is_initialized:
     return
   import socket
+  # noinspection PyUnresolvedReferences,PyPackageRequirements
   import horovod.tensorflow as hvd
   hvd.init()
   print(
@@ -2178,6 +2180,8 @@ class FlipGradientBuilder(object):
     grad_name = "FlipGradient%d" % self.num_calls
 
     from tensorflow.python.framework import ops
+
+    # noinspection PyUnusedLocal
     @ops.RegisterGradient(grad_name)
     def _flip_gradients(op, grad):
       return [tf.negative(grad) * l]
@@ -2189,6 +2193,7 @@ class FlipGradientBuilder(object):
     self.num_calls += 1
     return y
 
+
 flip_gradient = FlipGradientBuilder()
 
 
@@ -2199,6 +2204,7 @@ def lookup_grad_func_by_name(op_type):
   """
   from tensorflow.python.framework import ops
   # Also see ops.RegisterGradient and ops.get_gradient_function.
+  # noinspection PyProtectedMember
   return ops._gradient_registry.lookup(op_type)
 
 
@@ -2389,7 +2395,7 @@ def get_shape_dim(x, axis, name="shape_dim"):
 
 def get_shape(x):
   """
-  :param tf.Tensor x:
+  :param tf.Tensor|tf.Variable x:
   :return: list of scalars, which are either int if known statically, or otherwise expressions
   :rtype: list[int|tf.Tensor]
   """
@@ -2745,6 +2751,7 @@ def _get_act_func_with_op(s):
   """
   if s in _act_func_with_op_cache:
     return _act_func_with_op_cache[s]
+
   def _conv(v):
     v = v.strip()
     from Util import str_is_number
@@ -2756,13 +2763,16 @@ def _get_act_func_with_op(s):
       return lambda x: v
     else:
       return get_activation_function(v)
+
   a, b = None, None
   for k in "+-*/":
     if k in s:
       a, b = s.split(k, 2)
       a, b = _conv(a), _conv(b)
+
       def combined_op(x):
         return _bin_ops[k](a(x), b(x))
+
       _act_func_with_op_cache[s] = combined_op
       return combined_op
   assert False
@@ -2865,6 +2875,7 @@ class VarianceScalingNonZero(init_ops.VarianceScaling):
     scale_shape = shape
     if partition_info is not None:
       scale_shape = partition_info.full_shape
+    # noinspection PyProtectedMember
     fan_in, fan_out = init_ops._compute_fans(scale_shape)
     if self.mode == "fan_in":
       scale /= max(1., fan_in)
@@ -2905,7 +2916,9 @@ def load_txt_file_initializer(filename, dtype=tf.float32):
     return numpy.array(load_txt_vector(filename), dtype="float32")
 
   from tensorflow.python.ops import init_ops
+
   class LoadTxtFileInitializer(init_ops.Initializer):
+    # noinspection PyShadowingNames
     def __call__(self, shape, dtype=None, partition_info=None):
       v = tf.py_func(py_loader, [], dtype_)
       v.set_shape(shape)
@@ -2916,7 +2929,8 @@ def load_txt_file_initializer(filename, dtype=tf.float32):
 
 def get_initializer(s, seed=None, eval_local_ns=None, dtype=tf.float32):
   """
-  :param str|dict[str]|float s: e.g. "glorot_uniform" or "truncated_normal" or "orthogonal", or config dict with "class",
+  :param str|dict[str]|float s: e.g. "glorot_uniform" or "truncated_normal" or "orthogonal",
+    or config dict with "class",
     or string to be `eval`ed if it contains "(". constant if a float is given.
   :param int|tf.Tensor seed:
   :param dict[str]|None eval_local_ns:
@@ -2999,7 +3013,7 @@ def dropout(x, keep_prob, noise_shape=None, seed=None, name=None, cond_on_train=
   Like :func:`tf.nn.dropout` but avoid :func:`tf.div` if possible.
 
   :param tf.Tensor x:
-  :param float|tf.Tensor keep_prop:
+  :param float|tf.Tensor keep_prob:
   :param tf.Tensor|tuple[int|None] noise_shape: 1 will broadcast in that dimension, None will not broadcast
   :param int seed:
   :param str name:
@@ -3170,6 +3184,7 @@ def sequence_mask(lengths, **kwargs):
   :rtype: tf.Tensor
   """
   if hasattr(lengths, "_sequence_mask"):
+    # noinspection PyProtectedMember
     return lengths._sequence_mask
   with same_context(lengths), reuse_name_scope_of_tensor(lengths):
     mask = tf.sequence_mask(lengths, **kwargs)
@@ -3188,6 +3203,7 @@ def sequence_mask_time_major(lengths, **kwargs):
   :rtype: tf.Tensor
   """
   if hasattr(lengths, "_sequence_mask_time_major"):
+    # noinspection PyProtectedMember
     return lengths._sequence_mask_time_major
   mask = sequence_mask(lengths=lengths, **kwargs)  # shape (time,batch)
   with same_context(mask), reuse_name_scope_of_tensor(lengths), tf.name_scope("sequence_mask_time_major"):
@@ -3212,6 +3228,7 @@ def directed(x, direction):
   raise ValueError("invalid direction: %r" % direction)
 
 
+# noinspection PyShadowingBuiltins
 def reversed(x):
   """
   Just returns x[::-1].
@@ -3221,6 +3238,7 @@ def reversed(x):
   :rtype: tf.Tensor
   """
   if hasattr(x, "_reversed_dim0"):
+    # noinspection PyProtectedMember
     return x._reversed_dim0
   with reuse_name_scope_of_tensor(x), tf.name_scope("reversed"):
     y = x[::-1]
@@ -3868,7 +3886,7 @@ def make_var_tuple(v):
   :rtype: tuple[tf.Tensor]
   """
   if isinstance(v, (int, float, tf.Tensor, tf.Operation)):
-    return (v,)
+    return v,
   if isinstance(v, list):
     return tuple(v)
   assert isinstance(v, tuple)
@@ -4032,13 +4050,14 @@ class CustomGradient(object):
     loss_out.set_shape(loss.get_shape())
     return loss_out
 
+
 custom_gradient = CustomGradient()
 
 
 class SyntheticGradient(object):
   class Scope(object):
     def __init__(self):
-      self.losses = []  # type: list[tf.Tensor]
+      self.losses = []  # type: typing.List[tf.Tensor]
 
     def register_loss(self, loss):
       """
@@ -4056,7 +4075,7 @@ class SyntheticGradient(object):
       for loss in self.losses:
         # Admittedly the way to get the layer name has some assumptions which might break in the future.
         # However, this is anyway mostly used for debugging purpose, so fix it, or just remove it.
-        op_name_parts = loss.op.name.split("/")  # type: list[str]
+        op_name_parts = loss.op.name.split("/")  # type: typing.List[str]
         assert op_name_parts[-2] == "grad_prediction_loss"
         assert op_name_parts[-3].endswith("_grad")
         layer_name = op_name_parts[-4]
@@ -4313,6 +4332,7 @@ def circular_pad(x, paddings, axes=None):
   """
   :param tf.Tensor x: shape (..., height, width)
   :param int|((int,int), (int,int))|tf.Tensor paddings: how much to add ((top,bottom),(left,right))
+  :param None|tf.Tensor|(tf.Tensor|int,tf.Tensor|int) axes:
   :return: tensor with shape (..., top + height + bottom, left + width + right)
   :rtype: tf.Tensor
   """
@@ -4378,6 +4398,7 @@ def spatial_smoothing_energy(x, dim, use_circular_conv=True):
     if use_circular_conv:
       x = circular_pad(x, paddings=1, axes=(1, 2))  # [batch, h+2, w+2, in_channels=1]
     # filter shape: [filter_height, filter_width, in_channels=1, out_channels=1]
+    # noinspection PyShadowingBuiltins
     filter = tf.reshape(tf.constant(
       [[-0.125, -0.125, -0.125],
        [-0.125, 1.0, -0.125],
@@ -4452,6 +4473,7 @@ def identity_op_nested(x, name="identity"):
 def nd_indices(indices, batch_axis=0):
   """
   :param tf.Tensor indices: e.g. (batch, ...) -> index
+  :param int batch_axis:
   :return: extended indices with batch-idx which can be used for tf.gather_nd,
     i.e. in the example of shape (batch, ..., 2) where the 2-tuple represents (batch_idx, index).
   :rtype: tf.Tensor
@@ -4480,20 +4502,26 @@ def stop_event_writer_thread(event_writer):
 
   :param tensorflow.python.summary.writer.event_file_writer.EventFileWriter event_writer:
   """
+  # noinspection PyProtectedMember
   from tensorflow.python.summary.writer.event_file_writer import EventFileWriter, _EventLoggerThread
   assert isinstance(event_writer, EventFileWriter)
+  # noinspection PyProtectedMember
   if not event_writer._worker:  # maybe fixed already?
     return
 
   # This solution is very ugly and dependent on TF internal code.
   class DummyStopThread:
+    # noinspection PyPep8Naming
     @classmethod
     def WriteEvent(cls, *args, **kwargs):
       raise SystemExit  # stop the thread
 
+  # noinspection PyProtectedMember
   assert isinstance(event_writer._worker, _EventLoggerThread)
+  # noinspection PyProtectedMember
   worker = event_writer._worker
   worker._ev_writer = DummyStopThread
+  # noinspection PyProtectedMember
   worker._queue.put(None)
   worker.join()
 
@@ -4950,8 +4978,9 @@ def sequential_control_dependencies(l):
 
 def global_queue(name, queue_type, capacity, dtypes, shapes=None, names=None):
   """
-  :param (args)->tf.QueueBase queue_type: some function which creates a queue
   :param str name: global name
+  :param (args)->tf.QueueBase queue_type: some function which creates a queue
+  :param capacity:
   :param list[tf.DType|str] dtypes:
   :param list[tf.TensorShape|tuple[int|None]]|None shapes:
   :param list[str]|None names:
@@ -5012,6 +5041,7 @@ def true_once():
   return x
 
 
+# noinspection PyPep8Naming
 def raise_OutOfRangeError():
   """
   :return: an op which raises an OutOfRangeError
@@ -5071,6 +5101,7 @@ def broadcast_gradient_args(shape_x, shape_y):
   """
   from tensorflow.python.ops import gen_array_ops
   if hasattr(gen_array_ops, '_broadcast_gradient_args'):  # earlier TF
+    # noinspection PyProtectedMember
     return gen_array_ops._broadcast_gradient_args(shape_x, shape_y)
   # Since TF 1.8.0, this is public.
   return gen_array_ops.broadcast_gradient_args(shape_x, shape_y)
@@ -6457,6 +6488,7 @@ def add_check_numerics_ops(
         continue
       # Frames from within a while-loop are partly broken.
       # https://github.com/tensorflow/tensorflow/issues/2211
+      # noinspection PyProtectedMember
       if op._get_control_flow_context() != tf.get_default_graph()._get_control_flow_context():
         continue
       for output in op.outputs:
@@ -6504,6 +6536,7 @@ def _get_control_flow_ops(v):
     v = v.op
   assert isinstance(v, tf.Operation), "unexpected type %r" % type(v)
   # Control flow context will be set to the context of the loop or so, if there is one, otherwise None.
+  # noinspection PyProtectedMember
   if not v._control_flow_context:
     return
   yield v
@@ -7117,6 +7150,7 @@ def get_variable_grad_from_update_ops(var, update_ops):
   op = update_ops[0]
   op_inputs = get_op_inputs_by_name(op)
   if op.type == "ScatterSub":  # e.g. sparse grad with GradientDescentOptimizer
+    # noinspection PyProtectedMember
     assert op_inputs["ref"] == var._ref()
     indices = op_inputs["indices"]
     delta = op_inputs["updates"]
@@ -7126,6 +7160,7 @@ def get_variable_grad_from_update_ops(var, update_ops):
     return tf.IndexedSlices(values=grad, indices=indices, dense_shape=tf.convert_to_tensor(get_shape(var)))
   if op.type == "AssignSub":
     op_name_prefix = os.path.dirname(op.name) + "/"
+    # noinspection PyProtectedMember
     assert op_inputs["ref"] == var._ref()
     # Case for sparse update in Adam:
     # m_scaled_g_values = grad * (1 - beta1_t)
@@ -7143,6 +7178,7 @@ def get_variable_grad_from_update_ops(var, update_ops):
     assert "gradients" in grad.name or grad.op.type == "UnsortedSegmentSum"
     return tf.IndexedSlices(values=grad, indices=indices, dense_shape=tf.convert_to_tensor(get_shape(var)))
   assert "var" in op_inputs
+  # noinspection PyProtectedMember
   assert op_inputs["var"] == var._ref()
   if "grad" in op_inputs:  # e.g. ApplyAdam
     grad = op_inputs["grad"]
@@ -7167,10 +7203,13 @@ def add_control_input(op, control_input):
   assert isinstance(op, tf.Operation)
   assert isinstance(control_input, tf.Operation)
   if hasattr(op, "_add_control_input"):  # some later TF version
+    # noinspection PyProtectedMember
     op._add_control_input(control_input)
     return
   # Fallback. I think I have seen this in OpenAI code.
+  # noinspection PyProtectedMember
   op._control_inputs.append(control_input)
+  # noinspection PyProtectedMember
   op._recompute_node_def()
 
 
@@ -7265,7 +7304,6 @@ def string_replace(strings, old, new, count=-1):
 def bpe_merge(strings):
   """
   :param tf.Tensor strings: (batch,), string
-  :param tf.Tensor|str replace_str:
   :return: (batch,), string. strings after BPE merging
   :rtype: tf.Tensor
   """

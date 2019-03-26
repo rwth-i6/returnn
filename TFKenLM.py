@@ -335,6 +335,10 @@ _tf_mod = None
 
 
 def get_tf_mod(verbose=False):
+  """
+  :param bool verbose:
+  :return: module
+  """
   global _tf_mod
   if _tf_mod:
     return _tf_mod

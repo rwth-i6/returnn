@@ -1,4 +1,9 @@
 
+"""
+TF implementation of :mod:`NativeOp`.
+Wrappers for most relevant NativeOp ops.
+"""
+
 from __future__ import print_function
 
 import os
@@ -11,6 +16,10 @@ from Util import camel_case_to_snake_case
 
 
 class OpDescription(NativeOp.NativeOpBaseMixin):
+  """
+  Meta-info about an op, used by :class:`OpMaker`.
+  """
+
   @classmethod
   def from_gen_base(cls, gen_base):
     """
