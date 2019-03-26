@@ -164,6 +164,7 @@ def report_inspect_dir(path, inspect_class_whitelist=None, inspect_class_blackli
       if last_filename:
         print("travis_fold:end:inspect.%s" % last_filename)
       print("travis_fold:start:inspect.%s" % filename)
+      print("File:", filename)
       last_filename = filename
 
     if inspect_class_whitelist is not None and inspect_class not in inspect_class_whitelist:
@@ -187,7 +188,8 @@ def main():
 
   inspect_class_blacklist = {
     "PyInterpreterInspection",  # TODO how to select this in PyCharm.idea?
-    "SpellCheckingInspection"  # way too much for now... TODO this should be fixed later, probably in PyCharm.idea
+    "SpellCheckingInspection",  # way too much for now... TODO this should be fixed later, probably in PyCharm.idea
+    "PyClassHasNoInitInspection",  # not relevant?
   }
   inspect_kwargs = dict(inspect_class_blacklist=inspect_class_blacklist)
 
