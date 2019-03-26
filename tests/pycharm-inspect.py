@@ -190,6 +190,7 @@ def report_inspect_dir(path, inspect_class_whitelist=None, inspect_class_blackli
       total_count += 1
       file_count += 1
 
+  print("Total relevant inspection reports:", total_count)
   return total_count
 
 
@@ -226,7 +227,7 @@ def main():
       'EngineTask.py',
       # 'EngineUtil.py',
       'External.py',
-      # 'Fsa.py',
+      'Fsa.py',
       'FunctionLoader.py',
       # 'GeneratingDataset.py',
       'HDFDataset.py',
