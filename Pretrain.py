@@ -182,7 +182,7 @@ class Pretrain:
     old_net_jsons = self._step_net_jsons
     self._step_net_jsons = []
     for n_rep, net_json in zip(self.repetitions, old_net_jsons):
-      for i in range(n_rep):
+      for _ in range(n_rep):
         self._step_net_jsons.append(deepcopy(net_json))
 
   def _resolve_wrapped_values(self):
@@ -312,7 +312,7 @@ class Pretrain:
       if not added_something:
         break
     # First do a search of depth `num_steps` through the net.
-    for i in range(num_steps):
+    for _ in range(num_steps):
       descendants = self._find_layer_descendants(self._original_network_json, sources)
       sources = []
       for l in descendants:
