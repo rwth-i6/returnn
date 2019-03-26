@@ -1,4 +1,9 @@
 
+"""
+Lots of random utility functions for TensorFlow.
+Also provides :class:`Data`.
+"""
+
 from __future__ import print_function, division
 
 import tensorflow as tf
@@ -66,6 +71,9 @@ class DimensionTag(object):
   """
 
   class Types:
+    """
+    Defines possible values for ``kind``.
+    """
     Unspecified = None
     Batch = "batch"
     Spatial = "spatial"  # also time
@@ -394,6 +402,11 @@ class Data(object):
       self.placeholder.set_shape(self.batch_shape)
 
   def get_placeholder_kwargs(self, with_batch=True):
+    """
+    :param bool with_batch:
+    :return: kwargs for tf.placeholder
+    :rtype: dict[str]
+    """
     return dict(name=self.name, dtype=self.dtype, shape=self.batch_shape if with_batch else self.shape)
 
   def get_axes_with_size(self):
@@ -405,11 +418,21 @@ class Data(object):
     return [i for (i, dim) in enumerate(self.shape) if dim is None]
 
   def get_size_placeholder_kwargs(self, axis, with_batch=True):
+    """
+    :param int axis:
+    :param bool with_batch:
+    :return: kwargs for tf.placeholder
+    :rtype: dict[str]
+    """
     # For each batch a separate size.
     return dict(name="%s_dim%i_size" % (self.name, axis), dtype=self.size_dtype,
                 shape=(None,) if with_batch else ())
 
   def get_kwargs(self):
+    """
+    :return: relevant attrib items for copying
+    :rtype: dict[str]
+    """
     keys = ["name", "shape", "dtype", "sparse", "dim", "batch_dim_axis", "time_dim_axis"]
     if self._feature_dim_axis is not NotSpecified:
       keys += ["feature_dim_axis"]
@@ -1066,6 +1089,9 @@ class Data(object):
 
   @property
   def batch_shape_dense(self):
+    """
+    :rtype: tuple[int|None]
+    """
     if self.sparse:
       return self.batch_shape + (self.dim,)
     return self.batch_shape
@@ -1180,6 +1206,9 @@ class Data(object):
 
   @property
   def time_dim_axis_excluding_batch(self):
+    """
+    :rtype: int|None
+    """
     if self.time_dim_axis is None:
       return None
     return self.get_batch_axis_excluding_batch(self.time_dim_axis)
@@ -1195,20 +1224,34 @@ class Data(object):
         return tf.shape(self.placeholder)[self.time_dim_axis]
 
   def get_placeholder_as_time_major(self):
+    """
+    :rtype: tf.Tensor
+    """
     assert self.placeholder is not None
     return self.copy_as_time_major().placeholder
 
   def get_placeholder_as_batch_major(self):
+    """
+    :rtype: tf.Tensor
+    """
     assert self.placeholder is not None
     return self.copy_as_batch_major().placeholder
 
   def get_placeholder_with_specific_batch_dim_axis(self, batch_dim_axis):
+    """
+    :param int batch_dim_axis:
+    :rtype: tf.Tensor
+    """
     assert self.placeholder is not None
     if self.batch_dim_axis == batch_dim_axis:
       return self.placeholder
     return swapaxes(self.placeholder, batch_dim_axis, self.batch_dim_axis)
 
   def get_placeholder_time_flattened(self):
+    """
+    :return: via :func:`flatten_with_seq_len_mask`
+    :rtype: tf.Tensor
+    """
     assert self.placeholder is not None
     assert self.have_time_axis()
     # flatten_with_seq_len_mask only works if either time_dim_axis or batch_dim_axis is 0:
@@ -1408,12 +1451,21 @@ class Data(object):
     return axis
 
   def have_batch_axis(self):
+    """
+    :rtype: bool
+    """
     return self.batch_dim_axis is not None
 
   def have_time_axis(self):
+    """
+    :rtype: bool
+    """
     return self.time_dim_axis is not None
 
   def have_feature_axis(self):
+    """
+    :rtype: bool
+    """
     return self.feature_dim_axis is not None
 
   def is_time_axis_dynamic(self):
@@ -1762,6 +1814,10 @@ def init_horovod():
 
 
 class CustomUpdate(object):
+  """
+  Custom updates will be handled by :class:`TFUpdater`.
+  """
+
   def set_on_var(self, var):
     """
     :param tf.Variable var: variable to update. this will be recognized by :class:`TFUpdater.Updater`
@@ -1792,6 +1848,10 @@ class CustomUpdateExpAverage(CustomUpdate):
     self.alpha = alpha
 
   def update_var(self, var):
+    """
+    :param tf.Variable var:
+    :rtype: tf.Tensor
+    """
     return tf.assign_add(var, self.alpha * (self.average - var))  # ((alpha - 1) * old + alpha * new)
 
 
@@ -1897,6 +1957,12 @@ def copy_with_new_split_axes(old_axis_splits, new_axis_splits, old_values, new_v
 
 
 class OutputWithActivation(object):
+  """
+  Stores some tensor before and after some activation function,
+  and also the activation function itself.
+  (Maybe obsolete when you directly access the TF computation graph; but simpler.)
+  """
+
   def __init__(self, x, act_func=None):
     """
     :param tf.Tensor x:
@@ -1911,6 +1977,9 @@ class OutputWithActivation(object):
       self.y = x
 
   def is_softmax_act_func(self):
+    """
+    :rtype: bool
+    """
     return self.act_func is tf.nn.softmax
 
   def get_logits(self):
@@ -2241,6 +2310,7 @@ def identity_with_check_numerics(x, with_grad=True, name="identity_with_check_nu
     with tf.control_dependencies([tf.check_numerics(x, message="%s check_numerics for tensor %s" % (name, x.name))]):
       if with_grad:
         # An alternative to gradient_override_map would be :class:`CustomGradient` which is more generic.
+        # noinspection PyUnusedLocal
         def _identity_with_check_numerics_grad(op, grad):
           return identity_with_check_numerics(grad, with_grad=True, name="%s_grad" % name)
 
@@ -2505,6 +2575,12 @@ def setup_tf_thread_pools(num_threads=None, log_file=None, tf_session_opts=None)
 
 
 def check_initial_tf_thread_pool_init(tf_session_opts=None):
+  """
+  Makes sure that the TF thread pools are initialized with the requested settings.
+  You probably want to call this very early.
+
+  :param dict[str]|None tf_session_opts:
+  """
   if not _setup_tf_thread_pools_called_once:
     from Util import try_get_caller_name
     print("setup_tf_thread_pools() not yet called (via func %s), calling it now." %
@@ -2752,7 +2828,7 @@ def _get_act_func_with_op(s):
   if s in _act_func_with_op_cache:
     return _act_func_with_op_cache[s]
 
-  def _conv(v):
+  def _convert(v):
     v = v.strip()
     from Util import str_is_number
     if str_is_number(v):
@@ -2768,9 +2844,13 @@ def _get_act_func_with_op(s):
   for k in "+-*/":
     if k in s:
       a, b = s.split(k, 2)
-      a, b = _conv(a), _conv(b)
+      a, b = _convert(a), _convert(b)
 
       def combined_op(x):
+        """
+        :param tf.Tensor x:
+        :rtype: tf.Tensor
+        """
         return _bin_ops[k](a(x), b(x))
 
       _act_func_with_op_cache[s] = combined_op
@@ -2811,6 +2891,11 @@ def gelu(x):
 
 
 def random_uniform_abs_initializer(limit, **kwargs):
+  """
+  :param float|int|tf.Tensor limit:
+  :param kwargs: passed to tf.random_uniform_initializer
+  :rtype: tensorflow.python.ops.init_ops.Initializer
+  """
   return tf.random_uniform_initializer(minval=-limit, maxval=limit, **kwargs)
 
 
@@ -2821,7 +2906,7 @@ def xavier_initializer(uniform=True, seed=None, dtype=tf.float32):
   :param bool uniform: uniform or normal distribution
   :param int seed:
   :param tf.DType dtype:
-  :return: ((tuple[int]) -> tf.Tensor) | tf.Initializer
+  :return: ((tuple[int]) -> tf.Tensor) | tensorflow.python.ops.init_ops.Initializer
   """
   from tensorflow.python.ops import init_ops
   return init_ops.variance_scaling_initializer(
@@ -2910,6 +2995,9 @@ def load_txt_file_initializer(filename, dtype=tf.float32):
   dtype_ = dtype
 
   def py_loader():
+    """
+    :rtype: numpy.ndarray
+    """
     # Alternative: numpy.loadtxt.
     import numpy
     from Util import load_txt_vector
@@ -2918,6 +3006,9 @@ def load_txt_file_initializer(filename, dtype=tf.float32):
   from tensorflow.python.ops import init_ops
 
   class LoadTxtFileInitializer(init_ops.Initializer):
+    """
+    Load TXT file TF initializer class.
+    """
     # noinspection PyShadowingNames
     def __call__(self, shape, dtype=None, partition_info=None):
       v = tf.py_func(py_loader, [], dtype_)
@@ -2955,6 +3046,9 @@ def get_initializer(s, seed=None, eval_local_ns=None, dtype=tf.float32):
   from tensorflow.python.ops import init_ops
 
   def error():
+    """
+    Dump error info.
+    """
     print("Error for initializer %r." % s)
     print("Possible initializers:")
     from inspect import isclass
@@ -3623,6 +3717,11 @@ def matrix_triangular(shape, dtype=tf.float32, lower=False, upper=False):
 
 
 class VariableAssigner(object):
+  """
+  Object helper to assign some var.
+  (This is mostly obsolete now.)
+  """
+
   def __init__(self, var):
     """
     :param tf.Variable var:
@@ -3641,6 +3740,11 @@ class VariableAssigner(object):
 
 
 class CudaEnv(object):
+  """
+  Information about the Nvidia CUDA environment, and library.
+  Also path to ``nvcc``, the CUDA compiler.
+  """
+
   _instance = None
   verbose_find_cuda = False
 
@@ -3754,9 +3858,15 @@ class CudaEnv(object):
     return None
 
   def is_available(self):
+    """
+    :rtype: bool
+    """
     return bool(self.cuda_path)
 
   def get_compiler_opts(self):
+    """
+    :rtype: list[str]
+    """
     return [
       "-I", "%s/include" % self.cuda_path,
       "-L", "%s/%s" % (self.cuda_path, self._get_lib_dir_name()),
@@ -3764,6 +3874,10 @@ class CudaEnv(object):
       "-v"]
 
   def get_compiler_bin(self):
+    """
+    :return: path
+    :rtype: str
+    """
     assert self.cuda_path
     return "%s/bin/nvcc" % self.cuda_path
 
@@ -3846,6 +3960,9 @@ class OpCodeCompiler(NativeCodeCompiler):
     return super(OpCodeCompiler, self)._transform_compiler_opts(opts)
 
   def load_tf_module(self):
+    """
+    :return: module
+    """
     if self._tf_mod:
       return self._tf_mod
     self._maybe_compile()
@@ -4055,7 +4172,15 @@ custom_gradient = CustomGradient()
 
 
 class SyntheticGradient(object):
+  """
+  Implements synthetic gradients.
+  """
+
   class Scope(object):
+    """
+    Defines the scope for a synthetic gradient.
+    """
+
     def __init__(self):
       self.losses = []  # type: typing.List[tf.Tensor]
 
@@ -4066,10 +4191,16 @@ class SyntheticGradient(object):
       self.losses.append(loss)
 
     def exit(self):
+      """
+      Exit the scope.
+      """
       assert SyntheticGradient.scope_ctx.scope is self
       SyntheticGradient.scope_ctx.scope = None
 
     def as_fetch_dict(self):
+      """
+      :rtype: dict[str,tf.Tensor]
+      """
       from collections import OrderedDict
       d = OrderedDict()
       for loss in self.losses:
@@ -4083,7 +4214,10 @@ class SyntheticGradient(object):
       return d
 
   class ScopeCtxThreadLocal(threading.local):
-    scope = None  # type: None|SyntheticGradient.Scope
+    """
+    Thread local.
+    """
+    scope = None  # type: typing.Optional[SyntheticGradient.Scope]
 
   scope_ctx = ScopeCtxThreadLocal()
 
@@ -4854,6 +4988,7 @@ def remove_labels(x, labels):
   import numpy
 
   # Much simpler for now to use tf.py_func.
+  # noinspection PyShadowingNames
   def py_remove_labels(indices, values, dense_shape):
     assert isinstance(indices, numpy.ndarray), "indices %r" % indices
     assert isinstance(values, numpy.ndarray), "values %r" % indices
@@ -4910,7 +5045,7 @@ def pad_zeros_in_axis(x, before=0, after=0, axis=0):
   :return:
   """
   with tf.name_scope("pad_zeros_in_axis"):
-    paddings = [[0, 0] for i in range(x.get_shape().ndims)]
+    paddings = [[0, 0] for _ in range(x.get_shape().ndims)]
     paddings[axis] = [before, after]
     return tf.pad(x, paddings=paddings)
 
@@ -5061,6 +5196,7 @@ def enforce_copy(x):
   """
   :param tf.Tensor|tf.Variable x:
   :return: copy of input, i.e. enforces that this is not a ref
+  :rtype: tf.Tensor
   """
   with tf.name_scope("copy"):
     zero = x.dtype.as_numpy_dtype()
@@ -5071,7 +5207,7 @@ def view_as(x, dtype):
   """
   Does the numpy.view equivalent.
   Note that the current implementation is inefficient (uses tf.py_func) and CPU-only.
-  Also see `tf.tf.bitcast`.
+  Also see :func:`tf.bitcast`.
 
   :param tf.Tensor x:
   :param tf.DType dtype:
@@ -5079,7 +5215,12 @@ def view_as(x, dtype):
   """
   import numpy
 
+  # noinspection PyShadowingNames
   def py_wrap_numpy_view(x):
+    """
+    :param numpy.ndarray x:
+    :rtype: numpy.ndarray
+    """
     assert isinstance(x, numpy.ndarray)
     return x.view(dtype.as_numpy_dtype)
 
@@ -5576,6 +5717,7 @@ class Condition(object):
   """
   A pure TensorFlow implementation of a condition.
   """
+
   def __init__(self, lock=None, name="Condition"):
     self._name = name
     with tf.variable_scope(name):
@@ -5589,6 +5731,9 @@ class Condition(object):
       self._init_ops += [self._waiting_counter.initializer]
 
   def init(self):
+    """
+    :rtype: tf.Operation
+    """
     return tf.group(*self._init_ops)
 
   def wait(self):
@@ -5606,12 +5751,17 @@ class Condition(object):
         return tf.no_op()
 
   def wait_counter(self):
+    """
+    :rtype: tf.Tensor
+    """
     return enforce_copy(self._waiting_counter.read_value())
 
   def signal(self):
     """
     Must be called with the lock held.
     Emits one signal.
+
+    :rtype: tf.Tensor
     """
     with tf.name_scope("%s/signal" % self._name):
       def on_waiting_counter():
@@ -5629,6 +5779,10 @@ class Condition(object):
         # We must unlock because we could have to do multiple signals but the waiter-queue has only capacity 1,
         # i.e. we would (dead)lock otherwise.
         def body(i):
+          """
+          :param tf.Tensor i:
+          :rtype: tf.Tensor
+          """
           with tf.control_dependencies([i]):
             with tf.control_dependencies([self._waiter_queue.enqueue(False)]):
               return i + 1
@@ -5830,6 +5984,9 @@ class GlobalTensorArrayOpMaker:
     return mod
 
   def get_op(self):
+    """
+    :return: op
+    """
     mod = self._make_mod()
     from Util import camel_case_to_snake_case
     op = getattr(mod, camel_case_to_snake_case("GlobalTensorArray"))
@@ -6272,6 +6429,9 @@ class ExplicitRandomShuffleQueue(object):
       return tf.count_nonzero(self._is_written, dtype=tf.int32)
 
   def min_after_dequeue_read(self):
+    """
+    :rtype: tf.Tensor
+    """
     return enforce_copy(self._min_after_dequeue.read_value())
 
   def min_after_dequeue_assign(self, min_after_dequeue):
@@ -6333,10 +6493,18 @@ class ExplicitRandomShuffleQueue(object):
     Called with lock held.
     """
     def loop_cond(last):
+      """
+      :param tf.Tensor last:
+      :rtype: tf.Tensor
+      """
       with tf.control_dependencies([last]):
         return self._is_full()
 
     def body(last):
+      """
+      :param tf.Tensor last:
+      :rtype: tf.Tensor
+      """
       # This gets only executed if the queue is full. We still have the lock.
       with tf.control_dependencies([last]):
         with tf.control_dependencies([self._is_full_cond.wait()]):
@@ -6349,17 +6517,29 @@ class ExplicitRandomShuffleQueue(object):
     return tf.greater_equal(self.size(), self._min_after_dequeue, name="have_min_after_dequeue")
 
   def _maybe_signal_min_after_dequeue(self):
-    return tf.cond(self._have_min_after_dequeue(), lambda: self._min_after_dequeue_cond.signal(), lambda: tf.no_op(), name="maybe_signal_min_after_dequeue")
+    return tf.cond(
+      self._have_min_after_dequeue(),
+      lambda: self._min_after_dequeue_cond.signal(),
+      lambda: tf.no_op(),
+      name="maybe_signal_min_after_dequeue")
 
   def _loop_while_not_min_after_dequeue(self):
     """
     Called with lock held.
     """
     def loop_cond(last):
+      """
+      :param tf.Tensor last:
+      :rtype: tf.Tensor
+      """
       with tf.control_dependencies([last]):
         return tf.logical_not(self._have_min_after_dequeue())
 
     def body(last):
+      """
+      :param tf.Tensor last:
+      :rtype: tf.Tensor
+      """
       # This gets only executed if we not have min-after-dequeue. We still have the lock.
       with tf.control_dependencies([last]):
         with tf.control_dependencies([self._min_after_dequeue_cond.wait()]):
@@ -6370,6 +6550,9 @@ class ExplicitRandomShuffleQueue(object):
       cond=loop_cond, body=body, loop_vars=[0], parallel_iterations=1, back_prop=False)
 
   def dequeue(self):
+    """
+    :rtype: tf.Tensor
+    """
     with reuse_name_scope("%s/dequeue" % self._name):
       with tf.control_dependencies([self._lock.lock()]):
         with tf.control_dependencies([self._loop_while_not_min_after_dequeue()]):
@@ -6400,6 +6583,9 @@ def mem_usage_for_dev(dev_name):
   Currently only works for GPU devices.
   """
   def get():
+    """
+    :rtype:  tf.Tensor
+    """
     from tensorflow.contrib import memory_stats
     # It's not so clear what BytesInUse returns. https://stackoverflow.com/questions/47903039/
     # Thus we always use MaxBytesInUse for now, although this is also not so nice.
@@ -6429,7 +6615,12 @@ def identity_with_debug_log(x, args, out, name="DebugLogOp"):
   none_args = {k: None for (k, v) in args.items() if v is None}
   arg_keys = sorted([k for k in args.keys() if k not in none_args])
 
+  # noinspection PyShadowingNames
   def py_func(x, *arg_values):
+    """
+    :param numpy.ndarray x:
+    :rtype: numpy.ndarray
+    """
     out.append(dict_joined(dict(zip(arg_keys, arg_values)), none_args))
     return x
 
@@ -6905,10 +7096,19 @@ def kernels_registered_for_op(op_name):
   lib.kernels_registered_for_op.argtypes = (c_char_p, set_string_callback_type)
 
   class Res:
+    """
+    Closure.
+    """
     res = None
 
+    # noinspection PyUnusedLocal
     @classmethod
     def callback(cls, string, size):
+      """
+      :param str string:
+      :param int size:
+      :rtype: None
+      """
       cls.res = string
 
   cb = set_string_callback_type(Res.callback)
@@ -6962,6 +7162,10 @@ class _DeviceAttrMod:
 
   @classmethod
   def get_mod(cls, verbose=False):
+    """
+    :param bool verbose:
+    :return: module
+    """
     if cls._tf_mod:
       return cls._tf_mod
 
@@ -7276,6 +7480,7 @@ def string_replace(strings, old, new, count=-1):
   """
   import numpy
 
+  # noinspection PyShadowingNames
   def str_replace(strings, old, new, count):
     assert isinstance(strings, (numpy.ndarray, bytes)), "strings is %r" % (strings,)
     assert isinstance(old, bytes), "old is %r" % (new,)
@@ -7374,6 +7579,9 @@ def py_print(pass_through_value, print_args, message=None, summarize=None, first
     first_n = -1
 
   class Counter:
+    """
+    Closure.
+    """
     count = 0
 
   def _py_print(*_print_args):
