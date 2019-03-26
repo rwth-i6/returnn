@@ -1,4 +1,8 @@
 
+"""
+Defines the :class:`TFNetwork` and :class:`ExternData`.
+"""
+
 from __future__ import print_function
 
 import tensorflow as tf
@@ -8,6 +12,9 @@ import contextlib
 from Log import log
 from TFNetworkLayer import LayerBase, get_layer_class
 from TFUtil import Data, DimensionTag, reuse_name_scope, VariableAssigner
+from Util import PY3
+if PY3:
+  import typing
 
 
 class ExternData(object):
@@ -20,7 +27,7 @@ class ExternData(object):
     """
     :param None|dict[str,dict[str]] data: optional init kwargs for Data
     """
-    self.data = {}  # type: dict[str,Data]
+    self.data = {}  # type: typing.Dict[str,Data]
     self.default_input = default_input
     self.default_target = default_target
     if data:
@@ -221,7 +228,7 @@ class TFNetwork(object):
       extern_data.init_from_config(config)
     self.extern_data = extern_data
     self._config = config
-    self.used_data_keys = set()  # type: set[str]  # keys from extern_data
+    self.used_data_keys = set()  # type: typing.Set[str]  # keys from extern_data
     if rnd_seed is None:
       if parent_net:
         rnd_seed = parent_net.random.randint(2 ** 31)
@@ -242,10 +249,10 @@ class TFNetwork(object):
     self.extra_parent_net = extra_parent_net
     self.extra_net = None  # type: TFNetwork
     self._selected_train_layers = None
-    self._constructing_layers = []  # type: list[str]
-    self.layers_desc = {}  # type: dict[str,dict[str]]
-    self.layers = {}  # type: dict[str,LayerBase]
-    self.losses_dict = {}  # type: dict[str,LossHolder]
+    self._constructing_layers = []  # type: typing.List[str]
+    self.layers_desc = {}  # type: typing.Dict[str,typing.Dict[str]]
+    self.layers = {}  # type: typing.Dict[str,LayerBase]
+    self.losses_dict = {}  # type: typing.Dict[str,LossHolder]
     self.total_loss = None  # type: tf.Tensor
     self.total_constraints = None  # type: tf.Tensor
     self.total_objective = None  # type: tf.Tensor
@@ -256,10 +263,10 @@ class TFNetwork(object):
         name="global_step", initial_value=0, dtype="int64", collections=[tf.GraphKeys.GLOBAL_STEP], trainable=False)
     self.epoch_step = None
     self.saver = None  # type: tf.train.Saver
-    self.extra_vars_to_save = []  # type: list[tf.Variable]
+    self.extra_vars_to_save = []  # type: typing.List[tf.Variable]
     self.recurrent = False
-    self._assigner_cache = {}  # type: dict[tf.Variable,VariableAssigner]
-    self.concat_sources_dropout_cache = {}  # type: dict[(tuple[LayerBase],float,tuple[int|None]|None),Data]
+    self._assigner_cache = {}  # type: typing.Dict[tf.Variable,VariableAssigner]
+    self.concat_sources_dropout_cache = {}  # type: typing.Dict[(typing.Tuple[LayerBase,...],float,typing.Optional[typing.Tuple[typing.Optional[int],...]]),Data]  # nopep8
     self._batch_dim = None  # see get_batch_dim
 
   def __repr__(self):
@@ -314,7 +321,7 @@ class TFNetwork(object):
     """
     :param list[dict[str]] net_list: list of layer descriptions
     """
-    net_dict = {}  # type: dict[str,dict[str]]
+    net_dict = {}  # type: typing.Dict[str,typing.Dict[str]]
     for i, layer_desc in enumerate(net_list):
       layer_desc = layer_desc.copy()
       name = layer_desc.pop("name", None)
@@ -475,7 +482,8 @@ class TFNetwork(object):
     layer_desc = self._create_layer_layer_desc(name=name, layer_desc=layer_desc)
     debug_print_layer_output_template = self.get_config().bool("debug_print_layer_output_template", False)
     debug_print_layer_output_shape = self.get_config().bool("debug_print_layer_output_shape", False)
-    debug_add_check_numerics_on_output = self.get_config().bool("debug_add_check_numerics_on_output", False)  # also see debug_add_check_numerics_ops
+    debug_add_check_numerics_on_output = self.get_config().bool(
+      "debug_add_check_numerics_on_output", False)  # also see debug_add_check_numerics_ops
     with reuse_name_scope(layer_class.cls_get_tf_scope_name(name)), self.register_network_scope():
       try:
         if "output" not in layer_desc:
@@ -501,7 +509,8 @@ class TFNetwork(object):
           layer.output.placeholder,
           [layer_class.cls_get_tf_scope_name(name), "shape:", str(layer.output), tf.shape(layer.output.placeholder)],
           summarize=10, name="debug_print_layer_output_shape")
-      if debug_add_check_numerics_on_output and layer.output.dtype.startswith("float") and not layer.allow_inf_in_output:
+      if (debug_add_check_numerics_on_output
+              and layer.output.dtype.startswith("float") and not layer.allow_inf_in_output):
         print("debug_add_check_numerics_on_output: add for layer %r: %r" % (name, layer.output.placeholder))
         from TFUtil import identity_with_check_numerics
         layer.output.placeholder = identity_with_check_numerics(
@@ -546,9 +555,11 @@ class TFNetwork(object):
     if mark_data_key_as_used:
       self.used_data_keys.add(key)
     if key == "seq_idx" and key not in self.extern_data.data:
-      self.extern_data.data[key] = Data(name="seq_idx", shape=(), dtype="int32", sparse=False, auto_create_placeholders=True)
+      self.extern_data.data[key] = Data(
+        name="seq_idx", shape=(), dtype="int32", sparse=False, auto_create_placeholders=True)
     if key == "seq_tag" and key not in self.extern_data.data:
-      self.extern_data.data[key] = Data(name="seq_tag", shape=(), dtype="string", auto_create_placeholders=True)
+      self.extern_data.data[key] = Data(
+        name="seq_tag", shape=(), dtype="string", auto_create_placeholders=True)
     return self.extern_data.get_data(key)
 
   def get_seq_tags(self, mark_data_key_as_used=True):
@@ -765,15 +776,15 @@ class TFNetwork(object):
     :return: list of model variables, i.e. from all the layers, excluding auxiliary vars like global_step
     :rtype: list[tf.Variable]
     """
-    l = []  # type: list[tf.Variable]
+    ls = []  # type: typing.List[tf.Variable]
     for layer in self._get_all_layers():
       assert isinstance(layer, LayerBase)
       for param_name, param in sorted(layer.params.items()):
         assert isinstance(param, tf.Variable)
-        if param in l:  # could happen with reuse_params
+        if param in ls:  # could happen with reuse_params
           continue
-        l.append(param)
-    return l
+        ls.append(param)
+    return ls
 
   def get_saveable_param_replace_dict(self):
     """
@@ -791,16 +802,16 @@ class TFNetwork(object):
     :return: list of model variables or SaveableObject, to save/restore
     :rtype: list[tf.Variable|tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject]
     """
-    l = []  # type: list[tf.Variable]
+    ls = []  # type: typing.List[tf.Variable]
     for layer in self._get_all_layers():
       assert isinstance(layer, LayerBase)
       for param_name, param in sorted(layer.get_saveable_params_dict().items()):
-        if param in l:  # could happen with reuse_params
+        if param in ls:  # could happen with reuse_params
           continue
-        l.append(param)
-    l += self.get_auxiliary_params()
-    l += self.extra_vars_to_save
-    return l
+        ls.append(param)
+    ls += self.get_auxiliary_params()
+    ls += self.extra_vars_to_save
+    return ls
 
   def get_trainable_params(self):
     """
@@ -811,20 +822,20 @@ class TFNetwork(object):
       self.declare_train_params()
     trainable_vars_col = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
     assert isinstance(trainable_vars_col, list)
-    l = []  # type: list[tf.Variable]
+    ls = []  # type: typing.List[tf.Variable]
     for layer_name in sorted(self._selected_train_layers):
       layer = self.layers[layer_name]
       assert isinstance(layer, LayerBase)
       for param_name, param in sorted(layer.params.items()):
         assert isinstance(param, tf.Variable)
         if param in trainable_vars_col:
-          l.append(param)
+          ls.append(param)
           trainable_vars_col.remove(param)
     if self.extra_net:
       for param in self.extra_net.get_trainable_params():
-        if param not in l:
-          l.append(param)
-    return l
+        if param not in ls:
+          ls.append(param)
+    return ls
 
   def declare_train_params(self, hidden_layer_selection=None, with_output=None):
     if hidden_layer_selection is None:
@@ -893,11 +904,11 @@ class TFNetwork(object):
     :rtype: dict[str,dict[str,numpy.ndarray]]
     Note that this excludes auxiliary params.
     """
-    l = {}  # type: dict[str,dict[str,numpy.ndarray]]
+    layers = {}  # type: typing.Dict[str,typing.Dict[str,numpy.ndarray]]
     for layer_name, layer in self.layers.items():
       assert isinstance(layer, LayerBase)
-      l[layer_name] = layer.get_param_values_dict(session)
-    return l
+      layers[layer_name] = layer.get_param_values_dict(session)
+    return layers
 
   def set_param_values_by_dict(self, values_dict, ignore_non_existing=False, **kwargs):
     """
@@ -995,7 +1006,8 @@ class TFNetwork(object):
         self.saver.save(sess=session, save_path=filename)
         break
       except IOError as e:
-        import errno, time
+        import errno
+        import time
         if e.errno in [errno.EBUSY, errno.EDQUOT, errno.EIO, errno.ENOSPC]:
           print("Exception while saving:", e, file=log.v3)
           print("Trying again in %s secs." % try_again_wait_time, file=log.v3)
@@ -1095,7 +1107,7 @@ class TFNetwork(object):
     sources = [src for src in sources if src not in _visited]
     _visited.update(sources)
     layers = [self.get_search_choices(src=src, _visited=_visited) for src in sources]
-    layers = [layer for layer in layers if layer is not None]  # type: list[LayerBase]
+    layers = [layer for layer in layers if layer is not None]  # type: typing.List[LayerBase]
     if not layers:
       if self.parent_layer:
         return self.parent_layer.network.get_search_choices(sources=self.parent_layer.get_dep_layers())
@@ -1524,11 +1536,13 @@ class LossHolder:
     if self._loss_value is None and self._error_value is None:
       with reuse_name_scope("loss"):
         if self._only_on_eval:
+          # noinspection PyProtectedMember
           self._loss_value = self._layer._cond_only_on_eval_opt(self.loss.get_value, default_value=0.0)
         else:
           self._loss_value = self.loss.get_value()
       with reuse_name_scope("error"):
         if self._only_on_eval:
+          # noinspection PyProtectedMember
           self._error_value = self._layer._cond_only_on_eval_opt(self.loss.get_error, default_value=0.0)
         else:
           self._error_value = self.loss.get_error()
@@ -1613,6 +1627,7 @@ class LayerNotFound(Exception):
   """
 
 
+# noinspection PyUnusedLocal
 def help_on_tf_exception(exception, feed_dict, meta_step_info, extern_data, file=sys.stdout):
   """
   :param tf.errors.OpError|BaseException exception:
@@ -1751,6 +1766,7 @@ class CustomCheckpointLoader:
     def __repr__(self):
       return "<CustomParamImporter %r on layer %r>" % (self.layer.custom_param_importer, self.layer.name)
 
+    # noinspection PyUnusedLocal
     def assign_var(self, var, session):
       """
       :param tf.Variable var:
@@ -1857,8 +1873,9 @@ class CustomCheckpointLoader:
 
     print("Variables to restore which are not in checkpoint:", missing_var_names, file=log.v2)
 
-    var_name_map = {}  # type: dict[str,()->numpy.ndarray]  # current name -> value-loader
+    var_name_map = {}  # type: typing.Dict[str,typing.Callable[[],numpy.ndarray]]  # current name -> value-loader
 
+    # noinspection PyShadowingNames
     def make_load_renamed(old_name):
       def load_old():
         return reader.get_tensor(old_name)
@@ -1867,7 +1884,9 @@ class CustomCheckpointLoader:
 
     def make_load_weights_nativelstm_to_basic(new_name):
       assert new_name.endswith("/lstm_cell/kernel")
+      # noinspection PyShadowingNames
       old_name1 = new_name[:-len("/lstm_cell/kernel")] + "/W_re"
+      # noinspection PyShadowingNames
       old_name2 = new_name[:-len("/lstm_cell/kernel")] + "/W"
 
       def load_native_lstm_weights():
@@ -1875,18 +1894,19 @@ class CustomCheckpointLoader:
         # BasicLSTM: i, j, f, o; Input: [inputs, h]
         # LstmGenericBase/NativeLstm: j, i, f, o
         # NativeLstm2: j, i, f, o
-        W_re = reader.get_tensor(old_name1)  # (n_out,n_out*4)
-        W_ff = reader.get_tensor(old_name2)  # (n_in,n_out*4)
-        assert W_re.ndim == W_ff.ndim == 2 and W_re.shape[1] == W_ff.shape[1] and W_re.shape[1] // 4 == W_re.shape[0]
-        W = numpy.concatenate([W_ff, W_re], axis=0)  # (n_in+n_out,n_out*4)
-        W_j, W_i, W_f, W_o = numpy.split(W, 4, axis=1)
-        W = numpy.concatenate([W_i, W_j, W_f, W_o], axis=1)
-        return W
+        w_re = reader.get_tensor(old_name1)  # (n_out,n_out*4)
+        w_ff = reader.get_tensor(old_name2)  # (n_in,n_out*4)
+        assert w_re.ndim == w_ff.ndim == 2 and w_re.shape[1] == w_ff.shape[1] and w_re.shape[1] // 4 == w_re.shape[0]
+        w = numpy.concatenate([w_ff, w_re], axis=0)  # (n_in+n_out,n_out*4)
+        w_j, w_i, w_f, w_o = numpy.split(w, 4, axis=1)
+        w = numpy.concatenate([w_i, w_j, w_f, w_o], axis=1)
+        return w
 
       return load_native_lstm_weights
 
     def make_load_bias_nativelstm_to_basic(new_name):
       assert new_name.endswith("/lstm_cell/bias")
+      # noinspection PyShadowingNames
       old_name = new_name[:-len("/lstm_cell/bias")] + "/b"
 
       def load_native_lstm_bias():
@@ -1902,7 +1922,7 @@ class CustomCheckpointLoader:
 
       return load_native_lstm_bias
 
-    class make_load_cudnn_rnn:
+    class MakeLoadCudnnRnn:
       cudnn_postfix = "/cudnn/CudnnRNNParamsToCanonical:0"
 
       def __init__(self, prefix, target="lstm_block_wrapper/"):
@@ -1911,6 +1931,7 @@ class CustomCheckpointLoader:
         self.prefix = prefix
         self.data = None
 
+      # noinspection PyMethodParameters
       def _load(sself):
         from TFNetworkRecLayer import RecLayer
         sself.data = RecLayer.convert_cudnn_canonical_to_lstm_block(
@@ -1945,9 +1966,9 @@ class CustomCheckpointLoader:
           if v2 in missing_var_names:
             var_name_map[v2] = make_load_renamed(old_name=v)
             break
-      if v.endswith(make_load_cudnn_rnn.cudnn_postfix):
+      if v.endswith(MakeLoadCudnnRnn.cudnn_postfix):
         var_name_map.update(
-          make_load_cudnn_rnn(prefix=v[:-len(make_load_cudnn_rnn.cudnn_postfix) + 1]).get_lazy_dict())
+          MakeLoadCudnnRnn(prefix=v[:-len(MakeLoadCudnnRnn.cudnn_postfix) + 1]).get_lazy_dict())
 
     could_not_find_map_list = [v for v in missing_var_names if v not in var_name_map]
     if self.ignore_missing or not could_not_find_map_list:
@@ -2018,6 +2039,7 @@ class CustomCheckpointLoader:
     var_value_map = self.get_variable_value_map()
     read_vars = set()
 
+    # noinspection PyShadowingNames
     def make_var_post_init(var):
       """
       :param tf.Variable var:
