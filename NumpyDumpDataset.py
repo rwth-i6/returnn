@@ -1,11 +1,16 @@
 
 from Dataset import Dataset, DatasetSeq
-from Log import log
 import os
 import numpy
+from Util import PY3
+if PY3:
+  import typing
 
 
 class NumpyDumpDataset(Dataset):
+  """
+  For ``tools/dump-dataset.py --type=numpy``.
+  """
 
   file_format_data = "%i.data"
   file_format_targets = "%i.targets"
@@ -19,7 +24,7 @@ class NumpyDumpDataset(Dataset):
     self.start_seq = start_seq
     self._init_num_seqs(end_seq)
     self._seq_index = None
-    self.cached_seqs = []; " :type: list[DatasetSeq] "
+    self.cached_seqs = []  # type: typing.List[DatasetSeq]
     self.num_inputs = num_inputs
     self.num_outputs = num_outputs
     assert num_inputs and num_outputs
@@ -45,6 +50,9 @@ class NumpyDumpDataset(Dataset):
     self._num_seqs = end_seq - self.start_seq
 
   def _load_numpy_seq(self, seq_idx):
+    """
+    :param int seq_idx:
+    """
     real_idx = self._seq_index[seq_idx]
     features = numpy.loadtxt(self.file_format_data % real_idx)
     targets = numpy.loadtxt(self.file_format_targets % real_idx)
@@ -56,6 +64,11 @@ class NumpyDumpDataset(Dataset):
   # ------------ Dataset API --------------
 
   def init_seq_order(self, epoch=None, seq_list=None):
+    """
+    :param int|None epoch:
+    :param list[str]|None seq_list:
+    :rtype: bool
+    """
     super(NumpyDumpDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
     if seq_list: raise NotImplementedError
     if self.seq_ordering == "sorted":  # not supported atm
@@ -65,21 +78,43 @@ class NumpyDumpDataset(Dataset):
     return True
 
   def _load_seqs(self, start, end):
+    """
+    :param int start:
+    :param int end:
+    """
     self._cleanup_old_seq_cache(start)
     for i in range(start, end):
       if not self._have_cache_seq(i):
         self._load_numpy_seq(i)
 
   def get_input_data(self, seq_idx):
+    """
+    :param int seq_idx:
+    :rtype: numpy.ndarray
+    """
     return self._get_cache_seq(seq_idx).features
 
   def get_targets(self, target, seq_idx):
+    """
+    :param str target:
+    :param int seq_idx:
+    :rtype: numpy.ndarray
+    """
     return self._get_cache_seq(seq_idx).targets.get(target, None)
 
   def get_ctc_targets(self, seq_idx):
+    """
+    Not implemented.
+
+    :param int seq_idx:
+    """
     assert False, "No CTC targets."
 
   def get_seq_length(self, seq_idx):
+    """
+    :param int seq_idx:
+    :rtype: Util.NumbersDict
+    """
     # This is different from the other get_* functions.
     # load_seqs() might not have been called before.
     if not self._have_cache_seq(seq_idx):
@@ -88,9 +123,15 @@ class NumpyDumpDataset(Dataset):
 
   @property
   def num_seqs(self):
+    """
+    :rtype: int
+    """
     return self._num_seqs
 
   def len_info(self):
+    """
+    :rtype: str
+    """
     return "%s, %i seqs" % (self.__class__.__name__, self.num_seqs)
 
   # ------------ Seq cache management -----------
