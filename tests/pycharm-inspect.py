@@ -118,13 +118,13 @@ def report_inspect_xml(fn):
   </problems>
   """
   inspect_class = os.path.splitext(os.path.basename(fn))[0]  # e.g. "PyPackageRequirementsInspection"
-  import xml.etree.ElementTree as et
-  root = et.parse(fn).getroot()
-  assert isinstance(root, et.Element)
+  import xml.etree.ElementTree as ElementTree
+  root = ElementTree.parse(fn).getroot()
+  assert isinstance(root, ElementTree.Element)
   assert root.tag == "problems"
   result = []
   for problem in root.findall("./problem"):
-    assert isinstance(problem, et.Element)
+    assert isinstance(problem, ElementTree.Element)
     assert problem.tag == "problem"
     filename = problem.find("./file").text.strip()
     if filename.startswith("file://$PROJECT_DIR$/"):
