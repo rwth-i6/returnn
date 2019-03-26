@@ -1,4 +1,9 @@
 
+"""
+This module covers the optimizer (SGD, Adam, etc) logic,
+and model param update logic in general.
+"""
+
 from __future__ import print_function
 
 import tensorflow as tf
@@ -8,9 +13,11 @@ from tensorflow.python.ops import resource_variable_ops
 from Log import log
 from TFNetwork import TFNetwork
 from TFUtil import tf_version_tuple, assert_min_tf_version, CustomUpdate, add_check_numerics_ops, \
-  get_non_deterministic_ops_from_graph
+  get_non_deterministic_ops_from_graph, PY3
+if PY3:
+  import typing
 
-_OptimizerClassesDict = {}  # type: dict[str,()->Optimizer]
+_OptimizerClassesDict = {}  # type: typing.Dict[str,typing.Callable[[],Optimizer]]
 
 
 def get_optimizer_class(class_name):
@@ -89,7 +96,7 @@ class Updater(object):
     """
     self.config = config
     self.learning_rate_var = tf.Variable(name="learning_rate", initial_value=0.0, trainable=False, dtype="float32")
-    self.trainable_vars = []  # type: list[tf.Variable]
+    self.trainable_vars = []  # type: typing.List[tf.Variable]
     self.network = network
     self.use_locking = self.config.bool("optimizer_use_locking", False)
     self.initial_learning_rate = initial_learning_rate
@@ -102,8 +109,8 @@ class Updater(object):
       self.constraints = None
     self.optimizer = None  # type: WrapOptimizer
     self.optim_op = None  # type: tf.Operation
-    self.optim_meta_losses = None  # type: dict[str,tf.Tensor]
-    self.optimizer_vars = []  # type: list[tf.Variable]
+    self.optim_meta_losses = None  # type: typing.Dict[str,tf.Tensor]
+    self.optimizer_vars = []  # type: typing.List[tf.Variable]
     self.optimizer_init_vars_op = None  # type: tf.Operation
 
     # After graph was build: look if it only uses deterministic ops
@@ -155,11 +162,17 @@ class Updater(object):
         lr *= factor
         opts.assert_all_read()
     if self.config.is_true("use_horovod") and self.config.is_true("horovod_scale_lr"):
+      # noinspection PyPackageRequirements
       import horovod.tensorflow as hvd
       lr *= hvd.size()
     return lr
 
   def create_optim_op(self):
+    """
+    Creates the optimize TF op.
+
+    :return: nothing, will just set self.optim_op
+    """
     assert self.loss is not None
     assert self.trainable_vars, "no variables to update/optimize"
     from TFUtil import SyntheticGradient
@@ -167,10 +180,10 @@ class Updater(object):
     # Keep track of all current available vars.
     # The optimizer could add some, even some which are not so-called "slot-vars",
     # and we want to keep track about them.
-    all_prev_existing_vars = tf.global_variables()  # type: list[tf.Variable]
+    all_prev_existing_vars = tf.global_variables()  # type: typing.List[tf.Variable]
 
     trainable_vars_for_gradients = list(self.trainable_vars)
-    trainable_vars_custom_update = []  # type: list[tf.Variable]
+    trainable_vars_custom_update = []  # type: typing.List[tf.Variable]
     for v in self.trainable_vars:
       if hasattr(v, "returnn_custom_update"):
         trainable_vars_custom_update.append(v)
@@ -820,6 +833,7 @@ class WrapOptimizer:
 
     grads_and_vars = self._compute_gradients(loss, var_list=var_list)
     if self.config.is_true("use_horovod") and self.config.value("horovod_reduce_type", "") == "grad":
+      # noinspection PyPackageRequirements
       import horovod.tensorflow as hvd
       grads_and_vars = [
         (hvd.allreduce(grad, average=self.config.is_true("horovod_avg_grad")) if grad is not None else None, var)
@@ -924,6 +938,7 @@ class _BaseCustomOptimizer(Optimizer):
     else:
       return tf.assign_sub(ref, updates, use_locking=self._use_locking)
 
+  # noinspection PyMethodMayBeStatic
   def _gather(self, dense, indices=None):
     if indices is not None:
       return tf.gather(dense, indices=indices)
@@ -1068,11 +1083,7 @@ class GradVarianceScaledOptimizer(_BaseCustomOptimizer):
       v_t = self._assign_add(v, updates=v_scaled_new_values, indices=indices)
     v_gathered = self._gather(v_t, indices=indices)
 
-    # update = lr * grad * v / (variance + eps)
     factor = v_gathered / (variance + epsilon_t)
-    # with tf.get_default_graph().colocate_with(None, True):
-    #   with tf.control_dependencies([tf.Print(factor, [tf.reduce_min(factor), tf.reduce_max(factor), tf.reduce_mean(factor)])]):
-    #     factor = tf.identity(factor)
     update = lr * grad * tf.minimum(factor, 1.0)
     var_update = self._assign_sub(ref=var, updates=update, indices=indices)
     return tf.group(*[var_update, m_t])
@@ -1086,8 +1097,9 @@ class AMSGradOptimizer(tf.train.Optimizer):
   http://ruder.io/deep-learning-optimization-2017/index.html#fixingtheexponentialmovingaverage
   https://github.com/taki0112/AMSGrad-Tensorflow
   """
-  def __init__(self, learning_rate=0.001, decay=False, beta1=0.9, beta2=0.99,
-               epsilon=0.0, var_list=[]):
+
+  def __init__(self, learning_rate=0.001, decay=False, beta1=0.9, beta2=0.99, epsilon=0.0, var_list=()):
+    super(AMSGradOptimizer, self).__init__(name="AMSGradOptimizer", use_locking=False)
     self.learning_rate = learning_rate
     self.decay = decay
     self.beta1 = beta1
@@ -1105,7 +1117,12 @@ class AMSGradOptimizer(tf.train.Optimizer):
       self.v[var] = tf.Variable(tf.zeros(tf.shape(var.initial_value)), trainable=False)
       self.v_hat[var] = tf.Variable(tf.zeros(tf.shape(var.initial_value)), trainable=False)
 
+  # noinspection PyMethodOverriding
   def apply_gradients(self, gradient_variables):
+    """
+    :param list[(tf.Tensor,tf.Variable)] gradient_variables:
+    :rtype: tf.Operation
+    """
     with tf.control_dependencies([self.t.assign_add(1.0)]):
       learning_rate = self.learning_rate
       if self.decay:
@@ -1121,3 +1138,15 @@ class AMSGradOptimizer(tf.train.Optimizer):
         update_ops.append(var.assign_add(update))
 
       return tf.group(*update_ops)
+
+  def _apply_dense(self, grad, var):
+    raise NotImplementedError
+
+  def _resource_apply_dense(self, grad, handle):
+    raise NotImplementedError
+
+  def _resource_apply_sparse(self, grad, handle, indices):
+    raise NotImplementedError
+
+  def _apply_sparse(self, grad, var):
+    raise NotImplementedError
