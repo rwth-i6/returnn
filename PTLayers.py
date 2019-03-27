@@ -71,9 +71,11 @@ class Container(nn.Module):
         print("warning: invalid layer class (expected " + self.layer_class + " got " + grp.attrs['class'] + ")", file=log.v3)
     parameters = {}
     for p in self.named_parameters():
-      if p[0] not in grp:
-        print("unable to load parameter %s in %s" % (p[0], self.name), file=log.v4)
-      parameters[p[0]] = p[1]
+      p, q = p
+      p = p[7:] if p.startswith('module.') else p
+      if p not in grp:
+        print("unable to load parameter %s in %s" % (p, self.name), file=log.v2)
+      parameters[p] = q
     for p in grp:
       if p in parameters:
         if parameters[p].detach().cpu().numpy().shape == grp[p].shape:
@@ -464,7 +466,7 @@ class LSTMLayer(Layer):
   layer_class = "rec"
   recurrent = True
 
-  def __init__(self, n_out, kernel='cudnn', depth=1, direction=1, **kwargs):
+  def __init__(self, n_out, kernel='native', depth=1, direction=1, **kwargs):
     super(LSTMLayer, self).__init__(**kwargs)
     self.attrs['n_out'] = n_out + n_out * (direction == 0)
     self.attrs['direction'] = direction

@@ -29,7 +29,7 @@ def monkey_patch_numpy_get_ndarray_c_version():
   """
   import numpy.core.multiarray as ma
   if not hasattr(ma, "_get_ndarray_c_version"):  # later than 1.16.0
-    print("Monkey patch Numpy _get_ndarray_c_version.")
+    # print("Monkey patch Numpy _get_ndarray_c_version.")
     # Instead of patching Theano, we patch Numpy, which is simpler.
     import numpy.core._multiarray_umath as mau
     ma._get_ndarray_c_version = mau._get_ndarray_c_version
