@@ -74,6 +74,27 @@ def setup_pycharm_python_interpreter(pycharm_dir):
   print("travis_fold:start:script.setup_pycharm_python_interpreter")
   name = "Python 3 (.../bin/python3)"  # used in our PyCharm.idea. this should match.
   pycharm_version = get_version_str_from_pycharm(pycharm_dir)  # should match in install_pycharm.sh
+
+  # I just zipped the stubs from my current installation on Linux.
+  # Maybe we can also reuse these stubs for other PyCharm versions, or even other Python versions.
+  stub_base_name = "pycharm2018.3-python3.6-stubs"
+  stub_fn = os.path.expanduser("~/.PyCharm%s/system/python_stubs/%s.zip" % (pycharm_version, stub_base_name))
+  stub_dir = os.path.expanduser("~/.PyCharm%s/system/python_stubs/%s" % (pycharm_version, stub_base_name))
+  os.makedirs(os.path.dirname(stub_fn), exist_ok=True)
+  if os.path.exists(stub_dir):
+    print("Python stubs dir exists already:", stub_dir)
+  else:
+    if not os.path.exists(stub_fn):
+      subprocess.check_call([
+        "wget",
+        "https://www-i6.informatik.rwth-aachen.de/web/Software/returnn/%s.zip" % stub_base_name],
+        cwd=os.path.dirname(stub_fn))
+    assert os.path.exists(stub_fn)
+    subprocess.check_call(
+      ["unzip", "%s.zip" % stub_base_name, "-d", stub_base_name],
+      cwd=os.path.dirname(stub_fn))
+    assert os.path.isdir(stub_dir)
+
   jdk_table_fn = os.path.expanduser("~/.PyCharm%s/config/options/jdk.table.xml" % pycharm_version)
   print("Filename:", jdk_table_fn)
   os.makedirs(os.path.dirname(jdk_table_fn), exist_ok=True)
@@ -134,7 +155,19 @@ def setup_pycharm_python_interpreter(pycharm_dir):
   ElementTree.SubElement(jdk_entry, "homePath", value=sys.executable)
   paths_root = ElementTree.SubElement(jdk_entry, "roots")
   classes_paths = ElementTree.SubElement(ElementTree.SubElement(paths_root, "classPath"), "root", type="composite")
-  for path in sys.path:
+  relevant_paths = list(sys.path)
+  if os.getcwd() in relevant_paths:
+    relevant_paths.remove(os.getcwd())
+  relevant_paths.extend([
+    stub_dir,
+    "$APPLICATION_HOME_DIR$/helpers/python-skeletons",
+    "$APPLICATION_HOME_DIR$/helpers/typeshed/stdlib/3",
+    "$APPLICATION_HOME_DIR$/helpers/typeshed/stdlib/2and3",
+    "$APPLICATION_HOME_DIR$/helpers/typeshed/third_party/3",
+    "$APPLICATION_HOME_DIR$/helpers/typeshed/third_party/2and3"
+  ])
+  # Maybe also add Python stubs path? How to generate them?
+  for path in relevant_paths:
     ElementTree.SubElement(classes_paths, "root", url="file://%s" % path, type="simple")
   ElementTree.SubElement(ElementTree.SubElement(paths_root, "sourcePath"), "root", type="composite")
   ElementTree.SubElement(jdk_entry, "additional")
