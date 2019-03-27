@@ -455,9 +455,8 @@ class RepLayer(Layer):
     if self.attrs['factor'] == 1:
       return x, i
     assert self.attrs['axis'] == 0
-    x = x.view(x.size(0), 1, x.size(1), x.size(2)).repeat(self.attrs['factor'],1,1,1).reshape(x.size(0) * self.attrs['factor'], x.size(1), x.size(2))
+    x = x.view(x.size(0), 1, x.size(1), x.size(2)).repeat(1,self.attrs['factor'],1,1).reshape(x.size(0) * self.attrs['factor'], x.size(1), x.size(2))
     i = i.view(i.size(0), 1, i.size(1)).repeat(1, self.attrs['factor'], 1).reshape(i.size(0) * self.attrs['factor'], i.size(1)).byte()
-    #i = i.view(1, i.size(0), i.size(1)).repeat(self.attrs['factor'], 1, 1, 1).reshape(i.size(0) * self.attrs['factor'], i.size(1)).byte()
     return x, i
 
 
