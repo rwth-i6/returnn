@@ -3346,23 +3346,33 @@ class ChoiceLayer(LayerBase):
         scores_in = tf.log(scores_in)
       elif input_type == "log_prob":
         pass
+      elif input_type == "regression":
+        pass
       else:
         raise Exception("%r: invalid input type %r" % (self, input_type))
-      samples = tf.multinomial(scores_in, num_samples=1, seed=get_random_seed())  # (batch, num_samples), int64
-      samples = tf.to_int32(tf.reshape(samples, [-1]))  # (batch,), int32
-      if self.scheduled_sampling.get("gold_mixin_prob"):
-        gold_targets = self._get_target_value().get_placeholder_as_batch_major()  # (batch,), int32
-        samples = tf.where(
-          tf.less(tf.random_uniform(tf.shape(samples)), self.scheduled_sampling.get("gold_mixin_prob")),
-          gold_targets, samples)
+
+      if input_type == "regression":
+        feedback_output = scores_in
+      else:
+        # sample from scores
+        feedback_output = tf.multinomial(scores_in, num_samples=1, seed=get_random_seed())  # (batch, num_samples), int64
+        feedback_output = tf.to_int32(tf.reshape(feedback_output, [-1]))  # (batch,), int32
+
+      gold_mixing_prob = self.scheduled_sampling.get("gold_mixin_prob", False)
+      if gold_mixing_prob:
+        gold_targets = self._get_target_value().get_placeholder_as_batch_major()
+        # draw choices over batch dimension
+        choice = tf.less(tf.random_uniform(tf.shape(feedback_output)[:1]), gold_mixing_prob)
+        feedback_output = tf.where(choice, gold_targets, feedback_output)
+
       self.output = Data(
         name="%s_sampled_output" % self.name,
         batch_dim_axis=0,
         shape=self.output.shape,
-        sparse=True,
+        sparse=input_type != "regression",
         dim=self.output.dim,
         dtype=self.output.dtype,
-        placeholder=samples,
+        placeholder=feedback_output,
         available_for_inference=True)
 
     else:  # no search, and no scheduled-sampling
