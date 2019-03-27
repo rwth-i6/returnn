@@ -43,7 +43,8 @@ class Container(nn.Module):
     grp.attrs['class'] = self.layer_class
     for p in self.named_parameters():
       value = p[1].detach().cpu().numpy()
-      dset = grp.create_dataset(p[0], value.shape, dtype='f')
+      p = p[0][7:] if p[0].startswith('module.') else p[0]
+      dset = grp.create_dataset(p, value.shape, dtype='f')
       dset[...] = value
     for p, v in self.attrs.items():
       if isinstance(v, (dict, list, tuple)):
@@ -410,35 +411,55 @@ class PoolLayer(Layer):
     if self.attrs['factor'] == 1:
       return x, i
 
-    axis = self.attrs['axis']
-    axes = [0,1,2]
+    axes = [0, 1, 2]
     del axes[self.attrs['axis']]
     axes.append(self.attrs['axis'])
     x = x.permute(*axes)
-    if axis == 0:
-      i = i.permute(1,0)
+    if self.attrs['axis'] == 0:
+      i = i.permute(1, 0)
 
-    if self.attrs['method'] in ['average','avg']:
+    if self.attrs['method'] in ['average', 'avg']:
       x = self.avg(x)
     elif self.attrs['method'] == 'max':
       x = self.max(x)
     else:
       raise NotImplementedError
-    i = self.max(i.view(i.size(0),1,i.size(1)).float())
+    i = -self.max(-i.view(i.size(0), 1, i.size(1)).float())
 
     if self.attrs['axis'] == 0:
       axes = [2, 0, 1]
     x = x.permute(*axes)
-    i = i.view(i.size(0),i.size(2)).byte()
-    if axis == 0:
-      i = i.permute(1,0)
+    i = i.view(i.size(0), i.size(2)).byte()
+    if self.attrs['axis'] == 0:
+      i = i.permute(1, 0)
     i = i.contiguous()
     return x, i
 
-class DownsampleLayer(PoolLayer): # wrapper for backward compatibility
+
+class DownsampleLayer(PoolLayer): # wrapper for backward compatibilityW
   layer_class = "downsample"
   def __init__(self, **kwargs):
     super(DownsampleLayer, self).__init__(**kwargs)
+
+
+class RepLayer(Layer):
+  layer_class = "rep"
+
+  def __init__(self, factor, axis=0, **kwargs):
+    super(RepLayer, self).__init__(**kwargs)
+    self.attrs['factor'] = factor
+    self.attrs['axis'] = axis
+    self.attrs['n_out'] = sum([x.attrs['n_out'] for x in self.sources])
+
+  def forward(self, x, i):
+    if self.attrs['factor'] == 1:
+      return x, i
+    assert self.attrs['axis'] == 0
+    x = x.view(x.size(0), 1, x.size(1), x.size(2)).repeat(self.attrs['factor'],1,1,1).reshape(x.size(0) * self.attrs['factor'], x.size(1), x.size(2))
+    i = i.view(i.size(0), 1, i.size(1)).repeat(1, self.attrs['factor'], 1).reshape(i.size(0) * self.attrs['factor'], i.size(1)).byte()
+    #i = i.view(1, i.size(0), i.size(1)).repeat(self.attrs['factor'], 1, 1, 1).reshape(i.size(0) * self.attrs['factor'], i.size(1)).byte()
+    return x, i
+
 
 class LSTMLayer(Layer):
   layer_class = "rec"
@@ -483,6 +504,7 @@ class LSTMLayer(Layer):
       i = i.index_select(0,idx)
     return x, i
 
+
 class OutputLayer(Layer):
   layer_class = "softmax"
 
@@ -495,6 +517,10 @@ class OutputLayer(Layer):
     self.module = nn.Linear(n_in, self.attrs['n_out'])
     self.loss = nn.NLLLoss()
 
+  def named_parameters(self, **kwargs):
+    names = dict(super(OutputLayer, self).named_parameters(**kwargs))
+    return { 'W_in' : names['module.weight'], 'b' : names['module.bias'] }.items()
+
   def forward(self, x, i):
     self.index_out = i
     self.output = F.softmax(self.module(x), dim=2)
@@ -502,7 +528,6 @@ class OutputLayer(Layer):
 
   def cost(self):
     y = self.network.data[self.attrs['target']]
-    loss_function = nn.NLLLoss()
     i = self.index_out.view(-1).nonzero().long().view(-1)
     c = torch.log(torch.index_select(
           self.output.view(-1,self.output.size(2)), 0, i))

@@ -331,40 +331,18 @@ class Device(object):
 
     # initialize functions
     self.updater = None # TODO
-    self.updater = optim.Adam(self.network.parameters(), lr = 0.0005)
+    from PTOptimizer import Nadam
+    #self.updater = optim.Adam(self.network.parameters(), lr = 0.0005)
+    #self.updater = Nadam(self.network.parameters(), lr = 0.0005)
+    self.updater = Nadam(self.network.parameters(), lr = 0.0005)
     self.update_specs = update_specs
 
     self.forwarder = None
     self.use_inputs = False
     if self.network_task  == 'train':
-      #if self.update_specs['update_rule'] == 'global':
-      #  self.updater = Updater.initFromConfig(self.config)
-      #elif self.update_specs['update_rule'] != 'none':
-      #  self.updater = Updater.initRule(self.update_specs['update_rule'], **self.update_specs['update_params'])
-
       outputs = []
-      #self.train_outputs_format = ["cost:" + out for out in sorted(self.trainnet.costs.keys())]
       self.train_outputs_format = ["cost:classes"]
-      #self.updater.initVars(self.trainnet, self.gradients)
-
-      # TODO
-      #self.trainer = self.trainnet.theano.function(inputs=[self.block_start, self.block_end],
-      #                               outputs=outputs,
-      #                               givens=train_givens,
-      #                               updates=self.updater.getUpdateList(),
-      #                               on_unused_input=config.value('theano_on_unused_input', 'ignore'),
-      #                               no_default_updates=exclude,
-      #                               name="train_and_updater")
-
       self.test_outputs_format = ["cost:classes","error:classes"]
-      #test_outputs = [self.testnet.errors[out] for out in sorted(self.testnet.errors.keys())]
-      # TODO
-      #self.tester = theano.function(inputs=[self.block_start, self.block_end],
-      #                              outputs=test_outputs,
-      #                              givens=test_givens,
-      #                              on_unused_input=config.value('theano_on_unused_input', 'ignore'),
-      #                              no_default_updates=True,
-      #                              name="tester")
     elif self.network_task == 'forward':
       self.output_layer_name = config.value("extract_output_layer_name", "output")
       self.extractions = config.list('extract', ['log-posteriors'])
