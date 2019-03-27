@@ -47,6 +47,103 @@ def install_pycharm():
   return pycharm_dir
 
 
+def get_version_str_from_pycharm(pycharm_dir):
+  """
+  :param str pycharm_dir:
+  :return: e.g. "CE2018.3"
+  :rtype: str
+  """
+  import re
+  code = open("%s/bin/pycharm.sh" % pycharm_dir).read()
+  m = re.search("-Didea\\.paths\\.selector=PyCharm(\\S+) ", code)
+  return m.group(1)
+
+
+def setup_pycharm_python_interpreter(pycharm_dir):
+  """
+  Unfortunately, the headless PyCharm bin/inspect will use the global PyCharm settings,
+  and requires that we have a Python interpreter set up,
+  with the same name as we use in our `.idea` settings, which we will link in :func:`prepare_src_dir`.
+  See here: https://youtrack.jetbrains.com/issue/PY-34864
+
+  Our current way to work around this: We create (or extend) the file
+  ``~/.PyCharm<VERSION>/config/options/jdk.table.xml`` such that it has the right Python interpreter.
+
+  :param str pycharm_dir:
+  """
+  print("travis_fold:start:script.setup_pycharm_python_interpreter")
+  name = "Python 3 (.../bin/python3)"  # used in our PyCharm.idea. this should match.
+  pycharm_version = get_version_str_from_pycharm(pycharm_dir)  # should match in install_pycharm.sh
+  jdk_table_fn = os.path.expanduser("~/.PyCharm%s/config/options/jdk.table.xml" % pycharm_version)
+  print("Filename:", jdk_table_fn)
+  os.makedirs(os.path.dirname(jdk_table_fn), exist_ok=True)
+
+  import xml.etree.ElementTree as ElementTree
+  if os.path.exists(jdk_table_fn):
+    print("Loading existing jdk.table.xml.")
+    et = ElementTree.parse(jdk_table_fn)
+    root = et.getroot()
+    assert isinstance(root, ElementTree.Element)
+    jdk_collection = root.find("./component")
+    assert isinstance(jdk_collection, ElementTree.Element)
+    assert jdk_collection.tag == "component" and jdk_collection.attrib["name"] == "ProjectJdkTable"
+  else:
+    print("Creating new jdk.table.xml.")
+    root = ElementTree.Element("application")
+    et = ElementTree.ElementTree(root)
+    jdk_collection = ElementTree.SubElement(root, "component", name="ProjectJdkTable")
+    assert isinstance(jdk_collection, ElementTree.Element)
+
+  existing_jdk = jdk_collection.find("./jdk/name[@value='%s']/.." % name)
+  if existing_jdk:
+    print("Found existing Python interpreter %r. Remove and recreate." % name)
+    assert isinstance(existing_jdk, ElementTree.Element)
+    assert existing_jdk.find("./name").attrib["value"] == name
+    jdk_collection.remove(existing_jdk)
+
+  # Example content:
+  """
+  <application>
+  <component name="ProjectJdkTable">
+    <jdk version="2">
+      <name value="Python 2.7.3 (/usr/bin/python2.7)" />
+      <type value="Python SDK" />
+      <version value="Python 2.7.12" />
+      <homePath value="/usr/bin/python2.7" />
+      <roots>
+        <classPath>
+          <root type="composite">
+            <root url="file:///usr/bin" type="simple" />
+            ...
+          </root>
+        </classPath>
+        <sourcePath>
+          <root type="composite" />
+        </sourcePath>
+      </roots>
+      <additional />
+    </jdk>
+  </component>
+  </application>
+  """
+
+  jdk_entry = ElementTree.SubElement(jdk_collection, "jdk", version="2")
+  ElementTree.SubElement(jdk_entry, "name", value=name)
+  ElementTree.SubElement(jdk_entry, "type", value="Python SDK")
+  ElementTree.SubElement(jdk_entry, "version", value="Python %i.%i.%i" % sys.version_info[:3])
+  ElementTree.SubElement(jdk_entry, "homePath", value=sys.executable)
+  paths_root = ElementTree.SubElement(jdk_entry, "roots")
+  classes_paths = ElementTree.SubElement(ElementTree.SubElement(paths_root, "classPath"), "root", type="composite")
+  for path in sys.path:
+    ElementTree.SubElement(classes_paths, "root", url="file://%s" % path, type="simple")
+  ElementTree.SubElement(ElementTree.SubElement(paths_root, "sourcePath"), "root", type="composite")
+  ElementTree.SubElement(jdk_entry, "additional")
+
+  print("Save XML.")
+  et.write(jdk_table_fn, encoding="UTF-8")
+  print("travis_fold:end:script.setup_pycharm_python_interpreter")
+
+
 def prepare_src_dir(files=None):
   """
   New clean source dir, where we symlink only the relevant src files.
@@ -195,9 +292,13 @@ def report_inspect_dir(path, inspect_class_whitelist=None, inspect_class_blackli
 
 
 def main():
+  """
+  Main entry point for this script.
+  """
   arg_parser = argparse.ArgumentParser()
   arg_parser.add_argument("--xml")
   arg_parser.add_argument("--pycharm")
+  arg_parser.add_argument("--setup_pycharm_only", action="store_true")
   arg_parser.add_argument("--files", nargs="*")
   args = arg_parser.parse_args()
 
@@ -307,6 +408,11 @@ def main():
     check_pycharm_dir(pycharm_dir)
   else:
     pycharm_dir = install_pycharm()
+
+  setup_pycharm_python_interpreter(pycharm_dir=pycharm_dir)
+  if args.setup_pycharm_only:
+    return
+
   src_dir = prepare_src_dir(files=args.files)
   res_dir = run_inspect(pycharm_dir=pycharm_dir, src_dir=src_dir)
   if report_inspect_dir(res_dir, **inspect_kwargs) > 0:
