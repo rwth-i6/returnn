@@ -50,21 +50,21 @@ def hdf_close(hdf_dataset):
 def init(config_filename, cmd_line_opts, dataset_config_str):
   """
   :param str config_filename: global config for CRNN
-  :param list[str] cmd_line_opts: options for initConfig method
+  :param list[str] cmd_line_opts: options for init_config method
   :param str dataset_config_str: dataset via init_dataset_via_str()
   """
-  rnn.initBetterExchook()
-  rnn.initThreadJoinHack()
+  rnn.init_better_exchook()
+  rnn.init_thread_join_hack()
   if config_filename:
-    rnn.initConfig(config_filename, cmd_line_opts)
-    rnn.initLog()
+    rnn.init_config(config_filename, cmd_line_opts)
+    rnn.init_log()
   else:
     log.initialize(verbosity=[5])
   print("Returnn hdf_dump starting up.", file=log.v3)
-  rnn.initFaulthandler()
+  rnn.init_faulthandler()
   if config_filename:
-    rnn.initData()
-    rnn.printTaskProperties()
+    rnn.init_data()
+    rnn.print_task_properties()
     assert isinstance(rnn.train_data, Dataset)
     dataset = rnn.train_data
   else:

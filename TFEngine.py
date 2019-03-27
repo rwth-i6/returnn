@@ -41,10 +41,16 @@ if PY3:
 
 
 class CancelTrainingException(Exception):
-  pass
+  """
+  Training was cancelled.
+  """
 
 
 class Runner(object):
+  """
+  This encapsulates the logic around TF ``session.run``, i.e. iterating over the dataset.
+  """
+
   # noinspection PyShadowingBuiltins
   def __init__(self, engine, dataset, batches, train, eval=True, train_flag=None,
                extra_fetches=None, extra_fetches_callback=None):
@@ -731,7 +737,7 @@ class Engine(object):
     """
     :rtype: list[dict[str]]
     """
-    from Device import getDevicesInitArgs
+    from Device import get_devices_init_args
     if not self.config.value("device", None):
       # Better default: Use GPU if available.
       from TFUtil import is_gpu_available
@@ -740,7 +746,7 @@ class Engine(object):
         self.config.set("device", "gpu")
       else:
         print("Device not set explicitly, and no GPU found.", file=log.v2)
-    return getDevicesInitArgs(self.config)
+    return get_devices_init_args(self.config)
 
   def is_requesting_for_gpu(self):
     return any([d["device"].startswith("gpu") for d in self.devices_config])

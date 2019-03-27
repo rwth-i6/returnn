@@ -161,8 +161,8 @@ def init(config_str, verbosity):
   :param str config_str: either filename to config-file, or dict for dataset
   :param int verbosity:
   """
-  rnn.initBetterExchook()
-  rnn.initThreadJoinHack()
+  rnn.init_better_exchook()
+  rnn.init_thread_join_hack()
   datasetDict = None
   configFilename = None
   if config_str.strip().startswith("{"):
@@ -176,20 +176,20 @@ def init(config_str, verbosity):
     configFilename = config_str
     print("Using config file %r." % configFilename)
     assert os.path.exists(configFilename)
-  rnn.initConfig(configFilename=configFilename, default_config={"cache_size": "0"})
+  rnn.init_config(configFilename=configFilename, default_config={"cache_size": "0"})
   global config
   config = rnn.config
   config.set("log", None)
   config.set("log_verbosity", verbosity)
   if datasetDict:
     config.set("train", datasetDict)
-  rnn.initLog()
+  rnn.init_log()
   print("Returnn dump-dataset starting up.", file=log.v2)
-  rnn.returnnGreeting()
-  rnn.initFaulthandler()
-  rnn.initConfigJsonNetwork()
-  rnn.initData()
-  rnn.printTaskProperties()
+  rnn.returnn_greeting()
+  rnn.init_faulthandler()
+  rnn.init_config_json_network()
+  rnn.init_data()
+  rnn.print_task_properties()
 
 
 def main():

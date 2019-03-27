@@ -83,7 +83,7 @@ hidden_type = ["forward", "lstm"]
   assert_equal(config.typed_value("hidden_type"), ["forward", "lstm"])
 
 
-def test_rnn_initConfig_py_global_var():
+def test_rnn_init_config_py_global_var():
   import rnn
   import tempfile
   with tempfile.NamedTemporaryFile(mode="w", suffix=".config", prefix="test_rnn_initConfig") as cfgfile:
@@ -97,7 +97,7 @@ def test_func():
 
     """)
     cfgfile.flush()
-    rnn.initConfig(commandLineOptions=[cfgfile.name, "--task", "search"])
+    rnn.init_config(commandLineOptions=[cfgfile.name, "--task", "search"])
 
   assert isinstance(rnn.config, Config)
   pprint(rnn.config.dict)
@@ -118,7 +118,7 @@ def test_func():
   assert_equal(test_func(), "search")
 
 
-def test_rnn_initConfig_py_cmd_type():
+def test_rnn_init_config_py_cmd_type():
   import rnn
   import tempfile
   with tempfile.NamedTemporaryFile(mode="w", suffix=".config", prefix="test_rnn_initConfig") as cfgfile:
@@ -130,7 +130,7 @@ def test_func():
 
     """)
     cfgfile.flush()
-    rnn.initConfig(commandLineOptions=[cfgfile.name, "++max_seq_length", "0"])
+    rnn.init_config(commandLineOptions=[cfgfile.name, "++max_seq_length", "0"])
 
   assert isinstance(rnn.config, Config)
   assert rnn.config.has("max_seq_length")

@@ -18,14 +18,14 @@ from Network import LayerNetwork
 
 
 def init(configFilename, commandLineOptions):
-  rnn.initBetterExchook()
-  rnn.initConfig(configFilename, commandLineOptions)
+  rnn.init_better_exchook()
+  rnn.init_config(configFilename, commandLineOptions)
   global config
   config = rnn.config
   config.set("log", [])
-  rnn.initLog()
+  rnn.init_log()
   print("CRNN dump-dataset starting up.", file=log.v3)
-  rnn.initConfigJsonNetwork()
+  rnn.init_config_json_network()
 
 
 def main(argv):

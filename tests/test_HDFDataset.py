@@ -19,7 +19,7 @@ import unittest
 import better_exchook
 better_exchook.install()
 better_exchook.replace_traceback_format_tb()
-Util.initThreadJoinHack()
+Util.init_thread_join_hack()
 
 from Log import log
 log.initialize(verbosity=[5])
@@ -379,7 +379,7 @@ def test_rnn_getCacheByteSizes_zero():
   config = Config({"cache_size": "0"})
   import rnn
   rnn.config = config
-  sizes = rnn.getCacheByteSizes()
+  sizes = rnn.get_cache_byte_sizes()
   assert len(sizes) == 3
   assert all([s == 0 for s in sizes])
 
@@ -390,7 +390,7 @@ def test_rnn_initData():
   config = Config({"cache_size": "0", "train": hdf_fn, "dev": hdf_fn})
   import rnn
   rnn.config = config
-  rnn.initData()
+  rnn.init_data()
   train, dev = rnn.train_data, rnn.dev_data
   assert train and dev
   assert isinstance(train, HDFDataset)

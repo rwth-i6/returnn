@@ -27,24 +27,24 @@ def init(config_filename, log_verbosity):
   :param str config_filename: filename to config-file
   :param int log_verbosity:
   """
-  rnn.initBetterExchook()
-  rnn.initThreadJoinHack()
+  rnn.init_better_exchook()
+  rnn.init_thread_join_hack()
   if config_filename:
     print("Using config file %r." % config_filename)
     assert os.path.exists(config_filename)
-  rnn.initConfig(configFilename=config_filename, commandLineOptions=[])
+  rnn.init_config(configFilename=config_filename, commandLineOptions=[])
   global config
   config = rnn.config
   config.set("log", None)
   config.set("log_verbosity", log_verbosity)
   config.set("use_tensorflow", True)
-  rnn.initLog()
+  rnn.init_log()
   print("Returnn compile-native-op starting up.", file=log.v1)
-  rnn.returnnGreeting()
-  rnn.initBackendEngine()
+  rnn.returnn_greeting()
+  rnn.init_backend_engine()
   assert Util.BackendEngine.is_tensorflow_selected(), "this is only for TensorFlow"
-  rnn.initFaulthandler()
-  rnn.initConfigJsonNetwork()
+  rnn.init_faulthandler()
+  rnn.init_config_json_network()
   if 'network' in config.typed_dict:
     print("Loading network")
     from TFNetwork import TFNetwork

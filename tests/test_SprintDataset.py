@@ -20,7 +20,7 @@ import unittest
 import better_exchook
 better_exchook.install()
 better_exchook.replace_traceback_format_tb()
-Util.initThreadJoinHack()
+Util.init_thread_join_hack()
 TheanoUtil.monkey_patches()
 
 

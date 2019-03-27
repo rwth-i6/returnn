@@ -168,7 +168,7 @@ class Config:
       # E.g. this could have been loaded via a Python config file.
       # We want to keep the entry in self.typed_dict because there might be functions/lambdas inside
       # the config which require the global variable to be available.
-      # See :func:`test_rnn_initConfig_py_global_var`.
+      # See :func:`test_rnn_init_config_py_global_var`.
       value_type = type(self.typed_dict[key])
       if value_type == str:
         pass  # keep as-is

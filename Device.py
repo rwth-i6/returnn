@@ -157,7 +157,7 @@ def get_device_attributes():
 TheanoFlags = {key: value for (key, value) in [s.split("=", 1) for s in os.environ.get("THEANO_FLAGS", "").split(",") if s]}
 
 
-def getDevicesInitArgs(config):
+def get_devices_init_args(config):
   """
   :type config: Config.Config
   :rtype: list[dict[str]]
@@ -1030,13 +1030,13 @@ class Device(object):
       # We do some minimal initialization, modelled after rnn.init().
       # This is needed because we are a new independent process. See startProc().
       import rnn
-      rnn.initBetterExchook()
+      rnn.init_better_exchook()
       rnn.config = config
-      rnn.initLog()
+      rnn.init_log()
       print("Device %s proc starting up, pid %i" % (device, os.getpid()), file=log.v3)
       print("Device %s proc: THEANO_FLAGS = %r" % (device, os.environ.get("THEANO_FLAGS", None)), file=log.v4)
-      rnn.initFaulthandler()
-      rnn.initConfigJsonNetwork()
+      rnn.init_faulthandler()
+      rnn.init_config_json_network()
       import TheanoUtil
       TheanoUtil.monkey_patches()
       self.process_inner(device, config, self.update_specs, asyncTask)

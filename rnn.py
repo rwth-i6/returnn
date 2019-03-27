@@ -5,7 +5,7 @@ Main entry point
 ================
 
 This is the main entry point. You can execute this file.
-See :func:`rnn.initConfig` for some arguments, or just run ``./rnn.py --help``.
+See :func:`rnn.init_config` for some arguments, or just run ``./rnn.py --help``.
 See :ref:`tech_overview` for a technical overview.
 """
 
@@ -13,7 +13,7 @@ from __future__ import print_function
 
 __author__ = "Patrick Doetsch"
 __copyright__ = "Copyright 2014"
-__credits__ = ["Patrick Doetsch", "Paul Voigtlaender" ]
+__credits__ = ["Patrick Doetsch", "Paul Voigtlaender"]
 __license__ = "RWTHOCR"
 __maintainer__ = "Patrick Doetsch"
 __email__ = "doetsch@i6.informatik.rwth-aachen.de"
@@ -24,26 +24,29 @@ import sys
 import time
 import numpy
 from Log import log
-from Device import Device, TheanoFlags, getDevicesInitArgs
+from Device import Device, TheanoFlags, get_devices_init_args
 from Config import Config
 from Engine import Engine
 from Dataset import Dataset, init_dataset, init_dataset_via_str
 from HDFDataset import HDFDataset
-from Debug import initIPythonKernel, initBetterExchook, initFaulthandler, initCudaNotInMainProcCheck
-from Util import initThreadJoinHack, describe_crnn_version, describe_theano_version, \
-  describe_tensorflow_version, BackendEngine, get_tensorflow_version_tuple
+from Debug import init_ipython_kernel, init_better_exchook, init_faulthandler, init_cuda_not_in_main_proc_check
+from Util import init_thread_join_hack, describe_crnn_version, describe_theano_version, \
+  describe_tensorflow_version, BackendEngine, get_tensorflow_version_tuple, PY3
+if PY3:
+  import typing
 
 
-config = None; """ :type: Config """
-engine = None; """ :type: TFEngine.Engine | Engine """
-train_data = None; """ :type: Dataset """
-dev_data = None; """ :type: Dataset """
-eval_data = None; """ :type: Dataset """
+config = None  # type: Config
+engine = None  # type: typing.Union['TFEngine.Engine',Engine]
+train_data = None  # type: typing.Optional[Dataset]
+dev_data = None  # type: typing.Optional[Dataset]
+eval_data = None  # type: typing.Optional[Dataset]
+# noinspection PyShadowingBuiltins
 quit = False
-server = None; """:type: Server"""
+server = None
 
 
-def initConfig(configFilename=None, commandLineOptions=(), default_config=None, extra_updates=None):
+def init_config(configFilename=None, commandLineOptions=(), default_config=None, extra_updates=None):
   """
   :param str|None configFilename:
   :param list[str]|tuple[str] commandLineOptions: e.g. ``sys.argv[1:]``
@@ -111,15 +114,20 @@ def initConfig(configFilename=None, commandLineOptions=(), default_config=None, 
   if config.value('task', 'train') == 'server':
     config.set('num_inputs', 2)
     config.set('num_outputs', 1)
-    #config.set('network', [{'out': {'loss': 'ce', 'class': 'softmax', 'target': 'classes'}}])
 
 
-def initLog():
+def init_log():
+  """
+  Initializes the global :class:`Log`.
+  """
   log.init_by_config(config)
 
 
-def initConfigJsonNetwork():
-  # initialize postprocess config file
+def init_config_json_network():
+  """
+  Handles 'initialize_from_json' from the global config.
+  """
+  # initialize post process config file
   if config.has('initialize_from_json'):
     json_file = config.value('initialize_from_json', '')
     assert os.path.isfile(json_file), "json file not found: " + json_file
@@ -127,7 +135,7 @@ def initConfigJsonNetwork():
     config.network_topology_json = open(json_file).read()
 
 
-def initTheanoDevices():
+def init_theano_devices():
   """
   Only for Theano.
 
@@ -135,17 +143,16 @@ def initTheanoDevices():
   """
   if not BackendEngine.is_theano_selected():
     return None
-  oldDeviceConfig = ",".join(config.list('device', ['default']))
+  old_device_config = ",".join(config.list('device', ['default']))
   if config.value("task", "train") == "nop":
     return []
   if "device" in TheanoFlags:
     # This is important because Theano likely already has initialized that device.
     config.set("device", TheanoFlags["device"])
-    print("Devices: Use %s via THEANO_FLAGS instead of %s." % \
-                     (TheanoFlags["device"], oldDeviceConfig), file=log.v4)
-  devArgs = getDevicesInitArgs(config)
-  assert len(devArgs) > 0
-  devices = [Device(**kwargs) for kwargs in devArgs]
+    print("Devices: Use %s via THEANO_FLAGS instead of %s." % (TheanoFlags["device"], old_device_config), file=log.v4)
+  dev_args = get_devices_init_args(config)
+  assert len(dev_args) > 0
+  devices = [Device(**kwargs) for kwargs in dev_args]
   for device in devices:
     while not device.initialized:
       time.sleep(0.25)
@@ -156,7 +163,7 @@ def initTheanoDevices():
   return devices
 
 
-def getCacheByteSizes():
+def get_cache_byte_sizes():
   """
   :rtype: (int,int,int)
   :returns cache size in bytes for (train,dev,eval)
@@ -186,6 +193,7 @@ def getCacheByteSizes():
   return cache_sizes
 
 
+# noinspection PyShadowingNames
 def load_data(config, cache_byte_size, files_config_key, **kwargs):
   """
   :param Config config:
@@ -217,11 +225,11 @@ def load_data(config, cache_byte_size, files_config_key, **kwargs):
   return data, cache_leftover
 
 
-def initData():
+def init_data():
   """
   Initializes the globals train,dev,eval of type Dataset.
   """
-  cache_byte_sizes = getCacheByteSizes()
+  cache_byte_sizes = get_cache_byte_sizes()
   chunking = "0"
   if config.value("on_size_limit", "ignore") == "chunk":
     chunking = config.value("batch_size", "0")
@@ -241,9 +249,9 @@ def initData():
   train_data, extra_train = load_data(config, train_cache_bytes, 'train')
 
 
-def printTaskProperties(devices=None):
+def print_task_properties(devices=None):
   """
-  :type devices: list[Device]
+  :type devices: list[Device]|None
   """
 
   if train_data:
@@ -269,10 +277,11 @@ def printTaskProperties(devices=None):
       print("(update on device)" if device.update_specs['update_rule'] != 'none' else "(update on host)", file=log.v3)
 
 
-def initEngine(devices):
+def init_engine(devices):
   """
-  :type devices: list[Device]
   Initializes global engine.
+
+  :type devices: list[Device]|None
   """
   global engine
   if BackendEngine.is_theano_selected():
@@ -284,7 +293,13 @@ def initEngine(devices):
     raise NotImplementedError
 
 
-def returnnGreeting(configFilename=None, commandLineOptions=None):
+def returnn_greeting(configFilename=None, commandLineOptions=None):
+  """
+  Prints some RETURNN greeting to the log.
+
+  :param str|None configFilename:
+  :param list[str]|None commandLineOptions:
+  """
   print(
     "RETURNN starting up, version %s, date/time %s, pid %i, cwd %s, Python %s" % (
       describe_crnn_version(), time.strftime("%Y-%m-%d-%H-%M-%S (UTC%z)"), os.getpid(), os.getcwd(), sys.executable),
@@ -299,7 +314,10 @@ def returnnGreeting(configFilename=None, commandLineOptions=None):
   print("Hostname:", socket.gethostname(), file=log.v4)
 
 
-def initBackendEngine():
+def init_backend_engine():
+  """
+  Initializes ``engine``, which is either :class:`TFEngine.Engine` or Theano :class:`Engine.Engine`.
+  """
   BackendEngine.select_engine(config=config)
   if BackendEngine.is_theano_selected():
     print("Theano:", describe_theano_version(), file=log.v3)
@@ -352,42 +370,45 @@ def init(configFilename=None, commandLineOptions=(), config_updates=None, extra_
   """
   :param str|None configFilename:
   :param tuple[str]|list[str]|None commandLineOptions: e.g. sys.argv[1:]
-  :param dict[str]|None config_updates: see :func:`initConfig`
+  :param dict[str]|None config_updates: see :func:`init_config`
   :param str|None extra_greeting:
   """
-  initBetterExchook()
-  initThreadJoinHack()
-  initConfig(configFilename=configFilename, commandLineOptions=commandLineOptions, extra_updates=config_updates)
+  init_better_exchook()
+  init_thread_join_hack()
+  init_config(configFilename=configFilename, commandLineOptions=commandLineOptions, extra_updates=config_updates)
   if config.bool("patch_atfork", False):
     from Util import maybe_restart_returnn_with_atfork_patch
     maybe_restart_returnn_with_atfork_patch()
-  initLog()
+  init_log()
   if extra_greeting:
     print(extra_greeting, file=log.v1)
-  returnnGreeting(configFilename=configFilename, commandLineOptions=commandLineOptions)
-  initFaulthandler()
-  initBackendEngine()
+  returnn_greeting(configFilename=configFilename, commandLineOptions=commandLineOptions)
+  init_faulthandler()
+  init_backend_engine()
   if BackendEngine.is_theano_selected():
     if config.value('task', 'train') == "theano_graph":
       config.set("multiprocessing", False)
     if config.bool('multiprocessing', True):
-      initCudaNotInMainProcCheck()
+      init_cuda_not_in_main_proc_check()
   if config.bool('ipython', False):
-    initIPythonKernel()
-  initConfigJsonNetwork()
-  devices = initTheanoDevices()
-  if needData():
-    initData()
-  printTaskProperties(devices)
+    init_ipython_kernel()
+  init_config_json_network()
+  devices = init_theano_devices()
+  if need_data():
+    init_data()
+  print_task_properties(devices)
   if config.value('task', 'train') == 'server':
     import Server
     global server
     server = Server.Server(config)
   else:
-    initEngine(devices)
+    init_engine(devices)
 
 
 def finalize():
+  """
+  Cleanup at the end.
+  """
   print("Quitting", file=getattr(log, "v4", sys.stderr))
   global quit
   quit = True
@@ -401,7 +422,11 @@ def finalize():
       engine.finalize()
 
 
-def needData():
+def need_data():
+  """
+  :return: whether we need to init the data (call :func:`init_data`) for the current task (:func:`execute_main_task`)
+  :rtype: bool
+  """
   if config.has("need_data") and not config.bool("need_data", True):
     return False
   task = config.value('task', 'train')
@@ -410,7 +435,10 @@ def needData():
   return True
 
 
-def executeMainTask():
+def execute_main_task():
+  """
+  Executes the main task (via config ``task`` option).
+  """
   from Util import hms_fraction
   start_time = time.time()
   task = config.value('task', 'train')
@@ -537,6 +565,7 @@ def executeMainTask():
   print(("elapsed: %s" % hms_fraction(time.time() - start_time)), file=log.v3)
 
 
+# noinspection PyShadowingNames
 def analyze_data(config):
   """
   :param Config config:
@@ -592,11 +621,16 @@ def analyze_data(config):
 
 
 def main(argv):
+  """
+  Main entry point of RETURNN.
+
+  :param list[str] argv:
+  """
   return_code = 0
   try:
     assert len(argv) >= 2, "usage: %s <config>" % argv[0]
     init(commandLineOptions=argv[1:])
-    executeMainTask()
+    execute_main_task()
   except KeyboardInterrupt:
     return_code = 1
     print("KeyboardInterrupt", file=getattr(log, "v3", sys.stderr))

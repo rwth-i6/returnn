@@ -600,22 +600,22 @@ def initBase(configfile=None, targetMode=None, epoch=None, sprint_opts=None):
   if not config:
     # Some subset of what we do in rnn.init().
 
-    rnn.initBetterExchook()
-    rnn.initThreadJoinHack()
+    rnn.init_better_exchook()
+    rnn.init_thread_join_hack()
 
     if configfile is None:
       configfile = DefaultSprintCrnnConfig
     assert os.path.exists(configfile)
-    rnn.initConfig(configFilename=configfile)
+    rnn.init_config(configFilename=configfile)
     config = rnn.config
     if sprint_opts is not None:
       config.update(sprint_opts)
 
-    rnn.initLog()
-    rnn.returnnGreeting(configFilename=configfile)
-    rnn.initBackendEngine()
-    rnn.initFaulthandler(sigusr1_chain=True)
-    rnn.initConfigJsonNetwork()
+    rnn.init_log()
+    rnn.returnn_greeting(configFilename=configfile)
+    rnn.init_backend_engine()
+    rnn.init_faulthandler(sigusr1_chain=True)
+    rnn.init_config_json_network()
 
     if BackendEngine.is_tensorflow_selected():
       # Use TFEngine.Engine class instead of Engine.Engine.
@@ -646,9 +646,9 @@ def initBase(configfile=None, targetMode=None, epoch=None, sprint_opts=None):
 
   global engine
   if not engine:
-    devices = rnn.initTheanoDevices()
-    rnn.printTaskProperties(devices)
-    rnn.initEngine(devices)
+    devices = rnn.init_theano_devices()
+    rnn.print_task_properties(devices)
+    rnn.init_engine(devices)
     engine = rnn.engine
     assert isinstance(engine, Engine)
 

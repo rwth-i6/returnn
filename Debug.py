@@ -78,7 +78,7 @@ def setupWarnWithTraceback():
   warnings.showwarning = warn_with_traceback
 
 
-def initBetterExchook():
+def init_better_exchook():
   import better_exchook
   import pdb
 
@@ -185,7 +185,7 @@ def installLibSigSegfault():
     print("installLibSigSegfault exception: %s" % exc)
 
 
-def initFaulthandler(sigusr1_chain=False):
+def init_faulthandler(sigusr1_chain=False):
   """
   Maybe installs signal handlers, SIGUSR1 and SIGUSR2 and others.
   If no signals handlers are installed yet for SIGUSR1/2, we try to install our own Python handler.
@@ -222,7 +222,7 @@ def initFaulthandler(sigusr1_chain=False):
 
 
 @auto_exclude_all_new_threads
-def initIPythonKernel():
+def init_ipython_kernel():
   # You can remotely connect to this kernel. See the output on stdout.
   try:
     import IPython.kernel.zmq.ipkernel
@@ -304,7 +304,7 @@ def initIPythonKernel():
   thread.start()
 
 
-def initCudaNotInMainProcCheck():
+def init_cuda_not_in_main_proc_check():
   import TaskSystem
   import theano.sandbox.cuda as cuda
   if cuda.use.device_number is not None:

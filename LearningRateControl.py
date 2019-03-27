@@ -554,11 +554,11 @@ def demo():
   if len(sys.argv) <= 1:
     print("usage: python %s [config] [other options] [++check_learning_rates 1]" % __file__)
     print("example usage: python %s ++learning_rate_control newbob ++learning_rate_file newbob.data ++learning_rate 0.001" % __file__)
-  rnn.initConfig(commandLineOptions=sys.argv[1:])
+  rnn.init_config(commandLineOptions=sys.argv[1:])
   rnn.config._hack_value_reading_debug()
   rnn.config.update({"log": []})
-  rnn.initLog()
-  rnn.initBackendEngine()
+  rnn.init_log()
+  rnn.init_backend_engine()
   check_lr = rnn.config.bool("check_learning_rates", False)
   from Pretrain import pretrain_from_config
   pretrain = pretrain_from_config(rnn.config)

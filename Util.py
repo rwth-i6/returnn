@@ -724,7 +724,7 @@ def find_ranges(l):
 _thread_join_hack_installed = False
 
 
-def initThreadJoinHack():
+def init_thread_join_hack():
   global _thread_join_hack_installed
   if _thread_join_hack_installed:  # don't install twice
     return

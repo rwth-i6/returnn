@@ -71,7 +71,7 @@ def init_returnn(config_fn, args):
   :param str config_fn:
   :param args: arg_parse object
   """
-  rnn.initBetterExchook()
+  rnn.init_better_exchook()
   config_updates = {
     "log": [],
     "task": "eval",

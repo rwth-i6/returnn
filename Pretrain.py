@@ -553,12 +553,12 @@ def demo():
   if len(sys.argv) <= 1:
     print("usage: python %s [config] [other options]" % __file__)
     print("example usage: python %s ++pretrain default ++pretrain_construction_algo from_input" % __file__)
-  rnn.initConfig(commandLineOptions=sys.argv[1:])
+  rnn.init_config(commandLineOptions=sys.argv[1:])
   # noinspection PyProtectedMember
   rnn.config._hack_value_reading_debug()
   rnn.config.update({"log": []})
-  rnn.initLog()
-  rnn.initBackendEngine()
+  rnn.init_log()
+  rnn.init_backend_engine()
   if not rnn.config.value("pretrain", ""):
     print("config option 'pretrain' not set, will set it for this demo to 'default'")
     rnn.config.set("pretrain", "default")

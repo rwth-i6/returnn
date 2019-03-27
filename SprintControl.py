@@ -32,9 +32,9 @@ def print(*args, **kwargs):
 
 print("CRNN SprintControl[pid %i] Python module load" % os.getpid())
 
-rnn.initBetterExchook()
-Debug.initFaulthandler(sigusr1_chain=True)  # Sprint also handles SIGUSR1.
-rnn.initThreadJoinHack()
+rnn.init_better_exchook()
+Debug.init_faulthandler(sigusr1_chain=True)  # Sprint also handles SIGUSR1.
+rnn.init_thread_join_hack()
 
 # Start Sprint PythonControl interface. {
 
@@ -429,7 +429,7 @@ class PythonControl:
     print("CRNN SprintControl[pid %i] PythonControl run_threaded_control_loop" % (os.getpid(),))
     from threading import Thread
     def control_loop():
-      rnn.initBetterExchook()
+      rnn.init_better_exchook()
       self.run_control_loop(self.own_threaded_callback)
     t = Thread(target=control_loop, name="SprintControl.PythonControl.threaded_control_loop")
     t.daemon = True
