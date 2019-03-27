@@ -257,7 +257,7 @@ def report_inspect_dir(path, inspect_class_whitelist=None, inspect_class_blackli
   inspections.append((None, None, None, None, None))  # final marker
 
   color = better_exchook.Color()
-  total_count = 0
+  total_relevant_count = 0
   file_count = None
   last_filename = None
   for filename, line, problem_severity, inspect_class, description in inspections:
@@ -268,7 +268,7 @@ def report_inspect_dir(path, inspect_class_whitelist=None, inspect_class_blackli
 
     if filename != last_filename:
       if last_filename:
-        if file_count == 0:
+        if filename in ignore_count_for_files:
           print("The inspection reports for this file are currently ignored.")
         else:
           print(color.color("The inspection reports for this file are fatal!", color="red"))
@@ -277,18 +277,23 @@ def report_inspect_dir(path, inspect_class_whitelist=None, inspect_class_blackli
         print("travis_fold:start:inspect.%s" % filename)
         print(color.color(
           "File: %s" % filename, color="black" if filename in ignore_count_for_files else "red"))
-        last_filename = filename
-        file_count = 0
+      last_filename = filename
+      file_count = 0
     if not filename:
+      continue
+    if filename in ignore_count_for_files and file_count >= 10:
+      if file_count == 10:
+        print("... (further warnings skipped)")
+      file_count += 1
       continue
 
     print("%s:%i: %s %s: %s" % (filename, line, problem_severity, inspect_class, description))
     if filename not in ignore_count_for_files:
-      total_count += 1
-      file_count += 1
+      total_relevant_count += 1
+    file_count += 1
 
-  print("Total relevant inspection reports:", total_count)
-  return total_count
+  print("Total relevant inspection reports:", total_relevant_count)
+  return total_relevant_count
 
 
 def main():
