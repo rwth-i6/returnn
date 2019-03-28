@@ -98,13 +98,19 @@ def setup_pycharm_python_interpreter(pycharm_dir):
   print("travis_fold:start:script.setup_pycharm_python_interpreter")
   name = "Python 3 (.../bin/python3)"  # used in our PyCharm.idea. this should match.
   pycharm_version = get_version_str_from_pycharm(pycharm_dir)  # should match in install_pycharm.sh
+  if sys.platform == "darwin":
+    pycharm_config_dir = os.path.expanduser("~/Library/Preferences/PyCharm%s" % pycharm_version)
+    pycharm_system_dir = os.path.expanduser("~/Library/Caches/PyCharm%s" % pycharm_version)
+  else:  # assume Linux/Unix
+    pycharm_config_dir = os.path.expanduser("~/.PyCharm%s/config" % pycharm_version)
+    pycharm_system_dir = os.path.expanduser("~/.PyCharm%s/system" % pycharm_version)
 
   # I just zipped the stubs from my current installation on Linux.
   # Maybe we can also reuse these stubs for other PyCharm versions, or even other Python versions.
   if _use_stub_zip:
     stub_base_name = "pycharm2018.3-python3.6-stubs"
-    stub_fn = os.path.expanduser("~/.PyCharm%s/system/python_stubs/%s.zip" % (pycharm_version, stub_base_name))
-    stub_dir = os.path.expanduser("~/.PyCharm%s/system/python_stubs/%s" % (pycharm_version, stub_base_name))
+    stub_fn = "%s/python_stubs/%s.zip" % (pycharm_system_dir, stub_base_name)
+    stub_dir = "%s/python_stubs/%s" % (pycharm_system_dir, stub_base_name)
     os.makedirs(os.path.dirname(stub_fn), exist_ok=True)
     if os.path.exists(stub_dir):
       print("Python stubs dir exists already:", stub_dir)
@@ -120,13 +126,13 @@ def setup_pycharm_python_interpreter(pycharm_dir):
         cwd=os.path.dirname(stub_fn))
       assert os.path.isdir(stub_dir)
   else:
-    stub_dir = os.path.expanduser("~/.PyCharm%s/system/python_stubs/python%s-generated" % (
-      pycharm_version, "%i.%i.%i" % sys.version_info[:3]))
+    stub_dir = "%s/python_stubs/python%s-generated" % (
+      pycharm_system_dir, "%i.%i.%i" % sys.version_info[:3])
     print("Generate stub dir:", stub_dir)
     os.makedirs(stub_dir, exist_ok=True)
     create_stub_dir(pycharm_dir=pycharm_dir, stub_dir=stub_dir)
 
-  jdk_table_fn = os.path.expanduser("~/.PyCharm%s/config/options/jdk.table.xml" % pycharm_version)
+  jdk_table_fn = "%s/options/jdk.table.xml" % pycharm_config_dir
   print("Filename:", jdk_table_fn)
   os.makedirs(os.path.dirname(jdk_table_fn), exist_ok=True)
 
