@@ -59,6 +59,29 @@ def get_version_str_from_pycharm(pycharm_dir):
   return m.group(1)
 
 
+def create_stub_dir(pycharm_dir, stub_dir):
+  """
+  :param str pycharm_dir:
+  :param str stub_dir:
+  """
+  print("travis_fold:start:script.create_python_stubs")
+  print("Generating Python stubs via helpers/generator3.py...")
+  subprocess.check_call([sys.executable, "%s/helpers/generator3.py" % pycharm_dir, "-d", stub_dir, "-b"])
+  print("Collecting further native modules...")
+  for line in subprocess.check_output([
+        sys.executable, "%s/helpers/generator3.py" % pycharm_dir, "-L"]).decode("utf8").splitlines()[1:]:
+    # First line is version, so we skipped those.
+    # Then we get sth like "<module name> <other things>...".
+    assert isinstance(line, str)
+    mod_name = line.split()[0]
+    # Ignore errors here.
+    subprocess.call([sys.executable, "%s/helpers/generator3.py" % pycharm_dir, "-d", stub_dir, mod_name])
+  print("travis_fold:end:script.create_python_stubs")
+
+
+_use_stub_zip = False
+
+
 def setup_pycharm_python_interpreter(pycharm_dir):
   """
   Unfortunately, the headless PyCharm bin/inspect will use the global PyCharm settings,
@@ -77,23 +100,30 @@ def setup_pycharm_python_interpreter(pycharm_dir):
 
   # I just zipped the stubs from my current installation on Linux.
   # Maybe we can also reuse these stubs for other PyCharm versions, or even other Python versions.
-  stub_base_name = "pycharm2018.3-python3.6-stubs"
-  stub_fn = os.path.expanduser("~/.PyCharm%s/system/python_stubs/%s.zip" % (pycharm_version, stub_base_name))
-  stub_dir = os.path.expanduser("~/.PyCharm%s/system/python_stubs/%s" % (pycharm_version, stub_base_name))
-  os.makedirs(os.path.dirname(stub_fn), exist_ok=True)
-  if os.path.exists(stub_dir):
-    print("Python stubs dir exists already:", stub_dir)
-  else:
-    if not os.path.exists(stub_fn):
-      subprocess.check_call([
-        "wget",
-        "https://www-i6.informatik.rwth-aachen.de/web/Software/returnn/%s.zip" % stub_base_name],
+  if _use_stub_zip:
+    stub_base_name = "pycharm2018.3-python3.6-stubs"
+    stub_fn = os.path.expanduser("~/.PyCharm%s/system/python_stubs/%s.zip" % (pycharm_version, stub_base_name))
+    stub_dir = os.path.expanduser("~/.PyCharm%s/system/python_stubs/%s" % (pycharm_version, stub_base_name))
+    os.makedirs(os.path.dirname(stub_fn), exist_ok=True)
+    if os.path.exists(stub_dir):
+      print("Python stubs dir exists already:", stub_dir)
+    else:
+      if not os.path.exists(stub_fn):
+        subprocess.check_call([
+          "wget",
+          "https://www-i6.informatik.rwth-aachen.de/web/Software/returnn/%s.zip" % stub_base_name],
+          cwd=os.path.dirname(stub_fn))
+      assert os.path.exists(stub_fn)
+      subprocess.check_call(
+        ["unzip", "%s.zip" % stub_base_name, "-d", stub_base_name],
         cwd=os.path.dirname(stub_fn))
-    assert os.path.exists(stub_fn)
-    subprocess.check_call(
-      ["unzip", "%s.zip" % stub_base_name, "-d", stub_base_name],
-      cwd=os.path.dirname(stub_fn))
-    assert os.path.isdir(stub_dir)
+      assert os.path.isdir(stub_dir)
+  else:
+    stub_dir = os.path.expanduser("~/.PyCharm%s/system/python_stubs/python%s-generated" % (
+      pycharm_version, "%i.%i.%i" % sys.version_info[:3]))
+    print("Generate stub dir:", stub_dir)
+    os.makedirs(stub_dir, exist_ok=True)
+    create_stub_dir(pycharm_dir=pycharm_dir, stub_dir=stub_dir)
 
   jdk_table_fn = os.path.expanduser("~/.PyCharm%s/config/options/jdk.table.xml" % pycharm_version)
   print("Filename:", jdk_table_fn)
