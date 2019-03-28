@@ -24,9 +24,7 @@ import sys
 import time
 import numpy
 from Log import log
-from Device import Device, TheanoFlags, get_devices_init_args
 from Config import Config
-from Engine import Engine
 from Dataset import Dataset, init_dataset, init_dataset_via_str
 from HDFDataset import HDFDataset
 from Debug import init_ipython_kernel, init_better_exchook, init_faulthandler, init_cuda_not_in_main_proc_check
@@ -36,8 +34,8 @@ if PY3:
   import typing
 
 
-config = None  # type: Config
-engine = None  # type: typing.Union['TFEngine.Engine',Engine]
+config = None  # type: typing.Optional[Config]
+engine = None  # type: typing.Optional[typing.Union['TFEngine.Engine','Engine.Engine']]
 train_data = None  # type: typing.Optional[Dataset]
 dev_data = None  # type: typing.Optional[Dataset]
 eval_data = None  # type: typing.Optional[Dataset]
@@ -139,10 +137,11 @@ def init_theano_devices():
   """
   Only for Theano.
 
-  :rtype: list[Device]
+  :rtype: list[Device.Device]
   """
   if not BackendEngine.is_theano_selected():
     return None
+  from Device import TheanoFlags, get_devices_init_args, Device
   old_device_config = ",".join(config.list('device', ['default']))
   if config.value("task", "train") == "nop":
     return []
@@ -233,7 +232,7 @@ def init_data():
   chunking = "0"
   if config.value("on_size_limit", "ignore") == "chunk":
     chunking = config.value("batch_size", "0")
-  elif config.value('chunking', "0") == "1": # MLP mode
+  elif config.value('chunking', "0") == "1":  # MLP mode
     chunking = "1"
   elif config.bool('chunk_eval', False):
     chunking = config.value('chunking', "0")
@@ -251,7 +250,7 @@ def init_data():
 
 def print_task_properties(devices=None):
   """
-  :type devices: list[Device]|None
+  :type devices: list[Device.Device]|None
   """
 
   if train_data:
@@ -281,11 +280,12 @@ def init_engine(devices):
   """
   Initializes global engine.
 
-  :type devices: list[Device]|None
+  :type devices: list[Device.Device]|None
   """
   global engine
   if BackendEngine.is_theano_selected():
-    engine = Engine(devices)
+    import Engine
+    engine = Engine.Engine(devices)
   elif BackendEngine.is_tensorflow_selected():
     import TFEngine
     engine = TFEngine.Engine(config=config)
@@ -508,9 +508,10 @@ def execute_main_task():
       for inp in func.maker.inputs:
         assert isinstance(inp, theano.compile.io.In)
         if inp.update:
-          theano.printing.debugprint(inp.update, file=open("%s.unoptimized.var_%s_update.txt" % (prefix, inp.name), "w"))
+          theano.printing.debugprint(
+            inp.update, file=open("%s.unoptimized.var_%s_update.txt" % (prefix, inp.name), "w"))
       theano.printing.pydotprint(func, format='png', var_with_name_simple=True,
-                                 outfile = "%s.png" % prefix)
+                                 outfile="%s.png" % prefix)
   elif task == 'analyze':  # anything based on the network + Device
     statistics = config.list('statistics', None)
     engine.init_network_from_config(config)
@@ -559,7 +560,7 @@ def execute_main_task():
     engine.init_train_from_config(config, train_data, dev_data, eval_data)
   elif task == "initialize_model":
     engine.init_train_from_config(config, train_data, dev_data, eval_data)
-    engine.save_model(config.value('model','dummy'))
+    engine.save_model(config.value('model', 'dummy'))
   else:
     assert False, "unknown task: %s" % task
 
