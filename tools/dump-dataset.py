@@ -176,7 +176,7 @@ def init(config_str, verbosity):
     configFilename = config_str
     print("Using config file %r." % configFilename)
     assert os.path.exists(configFilename)
-  rnn.init_config(configFilename=configFilename, default_config={"cache_size": "0"})
+  rnn.init_config(config_filename=configFilename, default_config={"cache_size": "0"})
   global config
   config = rnn.config
   config.set("log", None)

@@ -202,7 +202,7 @@ def init(configFilename=None):
   rnn.init_better_exchook()
   rnn.init_thread_join_hack()
   if configFilename:
-    rnn.init_config(configFilename, commandLineOptions=[])
+    rnn.init_config(configFilename, command_line_options=[])
     rnn.init_log()
   else:
     log.initialize()

@@ -554,7 +554,8 @@ def demo():
   if len(sys.argv) <= 1:
     print("usage: python %s [config] [other options] [++check_learning_rates 1]" % __file__)
     print("example usage: python %s ++learning_rate_control newbob ++learning_rate_file newbob.data ++learning_rate 0.001" % __file__)
-  rnn.init_config(commandLineOptions=sys.argv[1:])
+  rnn.init_config(command_line_options=sys.argv[1:])
+  # noinspection PyProtectedMember
   rnn.config._hack_value_reading_debug()
   rnn.config.update({"log": []})
   rnn.init_log()

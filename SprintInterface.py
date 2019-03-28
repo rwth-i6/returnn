@@ -606,13 +606,13 @@ def initBase(configfile=None, targetMode=None, epoch=None, sprint_opts=None):
     if configfile is None:
       configfile = DefaultSprintCrnnConfig
     assert os.path.exists(configfile)
-    rnn.init_config(configFilename=configfile)
+    rnn.init_config(config_filename=configfile)
     config = rnn.config
     if sprint_opts is not None:
       config.update(sprint_opts)
 
     rnn.init_log()
-    rnn.returnn_greeting(configFilename=configfile)
+    rnn.returnn_greeting(config_filename=configfile)
     rnn.init_backend_engine()
     rnn.init_faulthandler(sigusr1_chain=True)
     rnn.init_config_json_network()

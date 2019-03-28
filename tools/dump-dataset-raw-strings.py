@@ -88,7 +88,7 @@ def init(config_filename, log_verbosity):
   if config_filename:
     print("Using config file %r." % config_filename)
     assert os.path.exists(config_filename)
-  rnn.init_config(configFilename=config_filename, commandLineOptions=[])
+  rnn.init_config(config_filename=config_filename, command_line_options=[])
   global config
   config = rnn.config
   config.set("task", "dump")

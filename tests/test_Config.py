@@ -97,7 +97,7 @@ def test_func():
 
     """)
     cfgfile.flush()
-    rnn.init_config(commandLineOptions=[cfgfile.name, "--task", "search"])
+    rnn.init_config(command_line_options=[cfgfile.name, "--task", "search"])
 
   assert isinstance(rnn.config, Config)
   pprint(rnn.config.dict)
@@ -130,7 +130,7 @@ def test_func():
 
     """)
     cfgfile.flush()
-    rnn.init_config(commandLineOptions=[cfgfile.name, "++max_seq_length", "0"])
+    rnn.init_config(command_line_options=[cfgfile.name, "++max_seq_length", "0"])
 
   assert isinstance(rnn.config, Config)
   assert rnn.config.has("max_seq_length")

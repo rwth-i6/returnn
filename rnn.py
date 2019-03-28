@@ -44,10 +44,10 @@ quit = False
 server = None
 
 
-def init_config(configFilename=None, commandLineOptions=(), default_config=None, extra_updates=None):
+def init_config(config_filename=None, command_line_options=(), default_config=None, extra_updates=None):
   """
-  :param str|None configFilename:
-  :param list[str]|tuple[str] commandLineOptions: e.g. ``sys.argv[1:]``
+  :param str|None config_filename:
+  :param list[str]|tuple[str] command_line_options: e.g. ``sys.argv[1:]``
   :param dict[str]|None default_config:
   :param dict[str]|None extra_updates:
 
@@ -79,30 +79,30 @@ def init_config(configFilename=None, commandLineOptions=(), default_config=None,
   config = Config()
 
   config_filenames_by_cmd_line = []
-  if commandLineOptions:
+  if command_line_options:
     # Assume that the first argument prefixed with "+" or "-" and all following is not a config file.
     i = 0
-    for arg in commandLineOptions:
+    for arg in command_line_options:
       if arg[:1] in "-+":
         break
       config_filenames_by_cmd_line.append(arg)
       i += 1
-    commandLineOptions = commandLineOptions[i:]
+    command_line_options = command_line_options[i:]
 
   if default_config:
     config.update(default_config)
   if extra_updates:
     config.update(extra_updates)
-  if commandLineOptions:
-    config.parse_cmd_args(commandLineOptions)
-  if configFilename:
-    config.load_file(configFilename)
+  if command_line_options:
+    config.parse_cmd_args(command_line_options)
+  if config_filename:
+    config.load_file(config_filename)
   for fn in config_filenames_by_cmd_line:
     config.load_file(fn)
   if extra_updates:
     config.update(extra_updates)
-  if commandLineOptions:
-    config.parse_cmd_args(commandLineOptions)
+  if command_line_options:
+    config.parse_cmd_args(command_line_options)
 
   # I really don't know where to put this otherwise:
   if config.bool("EnableAutoNumpySharedMemPickling", False):
@@ -293,23 +293,23 @@ def init_engine(devices):
     raise NotImplementedError
 
 
-def returnn_greeting(configFilename=None, commandLineOptions=None):
+def returnn_greeting(config_filename=None, command_line_options=None):
   """
   Prints some RETURNN greeting to the log.
 
-  :param str|None configFilename:
-  :param list[str]|None commandLineOptions:
+  :param str|None config_filename:
+  :param list[str]|None command_line_options:
   """
   print(
     "RETURNN starting up, version %s, date/time %s, pid %i, cwd %s, Python %s" % (
       describe_crnn_version(), time.strftime("%Y-%m-%d-%H-%M-%S (UTC%z)"), os.getpid(), os.getcwd(), sys.executable),
     file=log.v3)
-  if configFilename:
-    print("RETURNN config: %s" % configFilename, file=log.v4)
-    if os.path.islink(configFilename):
-      print("RETURNN config is symlink to: %s" % os.readlink(configFilename), file=log.v4)
-  if commandLineOptions is not None:
-    print("RETURNN command line options: %s" % (commandLineOptions,), file=log.v4)
+  if config_filename:
+    print("RETURNN config: %s" % config_filename, file=log.v4)
+    if os.path.islink(config_filename):
+      print("RETURNN config is symlink to: %s" % os.readlink(config_filename), file=log.v4)
+  if command_line_options is not None:
+    print("RETURNN command line options: %s" % (command_line_options,), file=log.v4)
   import socket
   print("Hostname:", socket.gethostname(), file=log.v4)
 
@@ -367,23 +367,23 @@ def init_backend_engine():
     raise NotImplementedError
 
 
-def init(configFilename=None, commandLineOptions=(), config_updates=None, extra_greeting=None):
+def init(config_filename=None, command_line_options=(), config_updates=None, extra_greeting=None):
   """
-  :param str|None configFilename:
-  :param tuple[str]|list[str]|None commandLineOptions: e.g. sys.argv[1:]
+  :param str|None config_filename:
+  :param tuple[str]|list[str]|None command_line_options: e.g. sys.argv[1:]
   :param dict[str]|None config_updates: see :func:`init_config`
   :param str|None extra_greeting:
   """
   init_better_exchook()
   init_thread_join_hack()
-  init_config(configFilename=configFilename, commandLineOptions=commandLineOptions, extra_updates=config_updates)
+  init_config(config_filename=config_filename, command_line_options=command_line_options, extra_updates=config_updates)
   if config.bool("patch_atfork", False):
     from Util import maybe_restart_returnn_with_atfork_patch
     maybe_restart_returnn_with_atfork_patch()
   init_log()
   if extra_greeting:
     print(extra_greeting, file=log.v1)
-  returnn_greeting(configFilename=configFilename, commandLineOptions=commandLineOptions)
+  returnn_greeting(config_filename=config_filename, command_line_options=command_line_options)
   init_faulthandler()
   init_backend_engine()
   if BackendEngine.is_theano_selected():
@@ -631,7 +631,7 @@ def main(argv):
   return_code = 0
   try:
     assert len(argv) >= 2, "usage: %s <config>" % argv[0]
-    init(commandLineOptions=argv[1:])
+    init(command_line_options=argv[1:])
     execute_main_task()
   except KeyboardInterrupt:
     return_code = 1

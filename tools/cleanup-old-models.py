@@ -28,7 +28,7 @@ def main():
       os.chdir(args.cwd)
     init(
       extra_greeting="Delete old models.",
-      configFilename=args.config or None,
+      config_filename=args.config or None,
       config_updates={
         "use_tensorflow": True,
         "need_data": False,

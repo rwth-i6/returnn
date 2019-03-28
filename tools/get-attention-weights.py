@@ -88,7 +88,7 @@ def init_returnn(config_fn, args):
       })
 
   rnn.init(
-    configFilename=config_fn,
+    config_filename=config_fn,
     config_updates=config_updates, extra_greeting="RETURNN get-attention-weights starting up.")
   global config
   config = rnn.config

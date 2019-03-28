@@ -553,7 +553,7 @@ def demo():
   if len(sys.argv) <= 1:
     print("usage: python %s [config] [other options]" % __file__)
     print("example usage: python %s ++pretrain default ++pretrain_construction_algo from_input" % __file__)
-  rnn.init_config(commandLineOptions=sys.argv[1:])
+  rnn.init_config(command_line_options=sys.argv[1:])
   # noinspection PyProtectedMember
   rnn.config._hack_value_reading_debug()
   rnn.config.update({"log": []})
