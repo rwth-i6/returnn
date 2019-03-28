@@ -333,6 +333,7 @@ def init_backend_engine():
       config.set("device", os.environ.get("TF_DEVICE"))
     if config.is_true("use_horovod"):
       import socket
+      # noinspection PyPackageRequirements,PyUnresolvedReferences
       import horovod.tensorflow as hvd
       from TFUtil import init_horovod
       init_horovod()  # make sure it is initialized

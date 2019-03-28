@@ -162,7 +162,7 @@ class Updater(object):
         lr *= factor
         opts.assert_all_read()
     if self.config.is_true("use_horovod") and self.config.is_true("horovod_scale_lr"):
-      # noinspection PyPackageRequirements
+      # noinspection PyPackageRequirements,PyUnresolvedReferences
       import horovod.tensorflow as hvd
       lr *= hvd.size()
     return lr
@@ -833,7 +833,7 @@ class WrapOptimizer:
 
     grads_and_vars = self._compute_gradients(loss, var_list=var_list)
     if self.config.is_true("use_horovod") and self.config.value("horovod_reduce_type", "") == "grad":
-      # noinspection PyPackageRequirements
+      # noinspection PyPackageRequirements,PyUnresolvedReferences
       import horovod.tensorflow as hvd
       grads_and_vars = [
         (hvd.allreduce(grad, average=self.config.is_true("horovod_avg_grad")) if grad is not None else None, var)

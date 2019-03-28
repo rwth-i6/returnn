@@ -1061,6 +1061,7 @@ class LayerBase(object):
     """
     If this is a recurrent layer, this would return the hidden state.
     This is used e.g. for the RnnCellLayer class.
+
     :rtype: tf.Tensor | list[tf.Tensor] | None
     :return: optional tensor(s) with shape (time, batch, dim)
     """
@@ -1070,6 +1071,7 @@ class LayerBase(object):
     """
     If this is a recurrent layer, this would return the last hidden state.
     Otherwise, we return None.
+
     :param int|str|None key: also the special key "*"
     :rtype: tf.Tensor | None
     :return: optional tensor with shape (batch, dim)
@@ -1685,7 +1687,7 @@ def get_concat_sources_data_template(src_layers, name=None):
   :func:`concat_sources` (and related) are the equivalent functions
   which would create a :class:`Data` together with the tensor.
 
-  :param list[LayerBase] src_layers:
+  :param list[LayerBase]|tuple[LayerBase] src_layers:
   :param str|None name: name of the Data
   :return: data with no placeholders set. it is always a copy or new instance, so safe to manipulate
   :rtype: Data
