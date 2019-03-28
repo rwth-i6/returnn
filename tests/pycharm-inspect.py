@@ -6,6 +6,7 @@ Will use the PyCharm code inspection.
 See here:
   https://github.com/albertz/pycharm-inspect
   https://stackoverflow.com/questions/55323910/pycharm-code-style-check-via-command-line
+  https://youtrack.jetbrains.com/issue/PY-34864
 """
 
 import os
@@ -296,11 +297,14 @@ def report_inspect_xml(fn):
   return result
 
 
-def report_inspect_dir(path, inspect_class_whitelist=None, inspect_class_blacklist=None, ignore_count_for_files=()):
+def report_inspect_dir(path,
+                       inspect_class_whitelist=None, inspect_class_blacklist=None, inspect_class_not_counted=None,
+                       ignore_count_for_files=()):
   """
   :param str path:
   :param set[str]|None inspect_class_whitelist:
   :param set[str]|None inspect_class_blacklist:
+  :param set[str]|None inspect_class_not_counted:
   :param set[str]|tuple[str]|None ignore_count_for_files:
   :return: count of reports
   :rtype: int
@@ -331,7 +335,7 @@ def report_inspect_dir(path, inspect_class_whitelist=None, inspect_class_blackli
 
     if filename != last_filename:
       if last_filename:
-        if filename in ignore_count_for_files:
+        if last_filename in ignore_count_for_files:
           print("The inspection reports for this file are currently ignored.")
         else:
           print(color.color("The inspection reports for this file are fatal!", color="red"))
@@ -350,9 +354,13 @@ def report_inspect_dir(path, inspect_class_whitelist=None, inspect_class_blackli
       file_count += 1
       continue
 
-    print("%s:%i: %s %s: %s" % (filename, line, problem_severity, inspect_class, description))
-    if filename not in ignore_count_for_files:
-      total_relevant_count += 1
+    msg = "%s:%i: %s %s: %s" % (filename, line, problem_severity, inspect_class, description)
+    if inspect_class_not_counted and inspect_class in inspect_class_not_counted:
+      print(color.color(msg, color="black"))
+    else:
+      print(msg)
+      if filename not in ignore_count_for_files:
+        total_relevant_count += 1
     file_count += 1
 
   print("Total relevant inspection reports:", total_relevant_count)
@@ -367,6 +375,7 @@ def main():
   arg_parser.add_argument("--xml")
   arg_parser.add_argument("--pycharm")
   arg_parser.add_argument("--setup_pycharm_only", action="store_true")
+  arg_parser.add_argument("--skip_setup_pycharm", action="store_true")
   arg_parser.add_argument("--files", nargs="*")
   args = arg_parser.parse_args()
 
@@ -375,6 +384,9 @@ def main():
       "PyInterpreterInspection",  # TODO how to select this in PyCharm.idea?
       "SpellCheckingInspection",  # way too much for now... TODO this should be fixed later, probably in PyCharm.idea
       "PyClassHasNoInitInspection",  # not relevant?
+    },
+    inspect_class_not_counted={
+      "PyTypeCheckerInspection",  # too much of these: https://youtrack.jetbrains.com/issue/PY-34893
     },
     # Proceed like this: Fix all warnings for some file, then remove it from this list.
     # I commented out the files which really should not have warnings (mostly the TF backend + shared files).
@@ -477,7 +489,8 @@ def main():
   else:
     pycharm_dir = install_pycharm()
 
-  setup_pycharm_python_interpreter(pycharm_dir=pycharm_dir)
+  if not args.skip_setup_pycharm:
+    setup_pycharm_python_interpreter(pycharm_dir=pycharm_dir)
   if args.setup_pycharm_only:
     return
 
