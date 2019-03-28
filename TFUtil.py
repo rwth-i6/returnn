@@ -3267,21 +3267,26 @@ def move_axis(x, old_axis, new_axis, name="move_axis"):
     return tf.transpose(x, perm)
 
 
-def sequence_mask(lengths, **kwargs):
+def sequence_mask(lengths, name=None, **kwargs):
   """
   Wraps around tf.sequence_mask().
   It will cache the value inside the passed object so that we don't recompute it multiple times.
 
   :param tf.Tensor lengths: shape (batch,)
+  :param str|None name:
   :param kwargs: passed on to tf.sequence_mask
   :return: tensor mask of shape (batch,maxlen/time). default dtype is bool unless you specify something else
   :rtype: tf.Tensor
   """
+  if kwargs:  # e.g. maxlen, dtype
+    # Do not cache in this case, as it might be different depending on kwargs.
+    return tf.sequence_mask(lengths, name=name, **kwargs)
+  # Cache value if there are no other kwargs.
   if hasattr(lengths, "_sequence_mask"):
     # noinspection PyProtectedMember
     return lengths._sequence_mask
   with same_context(lengths), reuse_name_scope_of_tensor(lengths):
-    mask = tf.sequence_mask(lengths, **kwargs)
+    mask = tf.sequence_mask(lengths, name=name)
   lengths._sequence_mask = mask
   return mask
 
