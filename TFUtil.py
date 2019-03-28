@@ -7579,7 +7579,7 @@ def py_print(pass_through_value, print_args, message=None, summarize=None, first
   if first_n is None:
     first_n = -1
   np_a2s_kwargs = dict(formatter={"int": str, "object": bytes.decode}, edgeitems=summarize)
-  if NumpyVersion(numpy.__version__) < NumpyVersion('1.11.3'):
+  if NumpyVersion(numpy.__version__) <= NumpyVersion('1.11.3'):
     # Seems some older Numpy versions don't support this.
     del np_a2s_kwargs["edgeitems"]
 
