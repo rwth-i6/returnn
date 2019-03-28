@@ -7573,10 +7573,15 @@ def py_print(pass_through_value, print_args, message=None, summarize=None, first
   :rtype: tf.Tensor
   """
   import numpy
+  from numpy.lib import NumpyVersion
   if summarize is None:
     summarize = 3
   if first_n is None:
     first_n = -1
+  np_a2s_kwargs = dict(formatter={"int": str, "object": bytes.decode}, edgeitems=summarize)
+  if NumpyVersion(numpy.__version__) < NumpyVersion('1.11.3'):
+    # Seems some older Numpy versions don't support this.
+    del np_a2s_kwargs["edgeitems"]
 
   class Counter:
     """
@@ -7600,8 +7605,7 @@ def py_print(pass_through_value, print_args, message=None, summarize=None, first
         if arg.size == 0:
           arg_s = "[]"
         else:
-          arg_s = numpy.array2string(
-            arg, edgeitems=summarize, formatter={"int": str, "object": bytes.decode})
+          arg_s = numpy.array2string(arg, **np_a2s_kwargs)
       else:
         arg_s = "[%r]" % arg
       if "\n" in arg_s:
