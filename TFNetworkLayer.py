@@ -1,12 +1,19 @@
 
+"""
+This module contains the layer base class :class:`LayerBase`,
+and many canonical basic layers.
+"""
+
 from __future__ import print_function
 
 import tensorflow as tf
 import contextlib
 import TFUtil
-from Util import unicode, NotSpecified, CollectionReadCheckCovered
+from Util import unicode, NotSpecified, CollectionReadCheckCovered, PY3
 from TFUtil import Data, OutputWithActivation, CustomUpdate, dimshuffle, swapaxes
 from Log import log
+if PY3:
+  import typing
 
 
 class LayerBase(object):
@@ -41,10 +48,12 @@ class LayerBase(object):
 
   """
 
-  layer_class = None  # type: str|None  # for get_layer_class()
+  layer_class = None  # type: typing.Optional[str]  # for get_layer_class()
   recurrent = False  # if the order in the time-dimension is relevant
   allow_inf_in_output = False
 
+  # For compatibility, we have some parameter names (e.g. "L2") which do not conform to PEP8.
+  # noinspection PyPep8Naming
   def __init__(self, name, network, output=None, n_out=NotSpecified, out_type=None, sources=(),
                target=None, _target_layers=None, loss=None, size_target=None,
                reuse_params=None,
@@ -100,12 +109,12 @@ class LayerBase(object):
     :param list[LayerBase]|None collocate_with: in the rec layer, collocate with the specified other layers
     :param bool trainable: whether the parameters of this layer will be trained
     :param str|callable|None custom_param_importer: used by :func:`set_param_values_by_dict`
-    :param str|None register_as_extern_data:
+    :param str|None register_as_extern_data: registers output in network.extern_data
     """
     self.name = name
     self.network = network
     self._register_layer()
-    self.kwargs = None  # type: dict[str] # set via self.post_init
+    self.kwargs = None  # type: typing.Optional[typing.Dict[str]] # set via self.post_init
     self.target = None
     self.targets = None
     if target:
@@ -134,18 +143,18 @@ class LayerBase(object):
         out_type=out_type, n_out=n_out,
         network=network, name=name, target=target, size_target=size_target,
         sources=sources, loss=loss)
-    self.output_before_activation = None  # type: None|OutputWithActivation
-    self.output_loss = None  # type: None|tf.Tensor
+    self.output_before_activation = None  # type: typing.Optional[OutputWithActivation]
+    self.output_loss = None  # type: typing.Optional[tf.Tensor]
     if copy_output_loss_from_source_idx is not None:
       self.output_loss = sources[copy_output_loss_from_source_idx].output_loss
-    self.rec_vars_outputs = {}  # type: dict[str,tf.Tensor]
-    self.search_choices = None  # type: SearchChoices
+    self.rec_vars_outputs = {}  # type: typing.Dict[str,tf.Tensor]
+    self.search_choices = None  # type: typing.Optional[SearchChoices]
     self._initial_output = initial_output
     self._rec_previous_layer = rec_previous_layer
     self.collocate_with = collocate_with or []
     self.post_init_hooks = []  # list of functions
     self.sources = sources
-    self.params = {}  # type: dict[str,tf.Variable]
+    self.params = {}  # type: typing.Dict[str,tf.Variable]
     self.saveable_param_replace = {}  # see get_saveable_params_dict()
     " :type: dict[tf.Variable,tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject|None] "
     self.reuse_params = reuse_params
@@ -163,7 +172,7 @@ class LayerBase(object):
     self.custom_param_importer = custom_param_importer
     self.register_as_extern_data = register_as_extern_data
     # Stats will be collected by the engine.
-    self.stats = {}  # type: dict[str,tf.Tensor]
+    self.stats = {}  # type: typing.Dict[str,tf.Tensor]
 
   def post_init(self, layer_desc):
     """
@@ -1167,7 +1176,7 @@ class LayerBase(object):
         src_output.sanity_check()
         zeroed_src = InternalLayer(name="%s_zeroed" % src.name, output=src_output, network=src.network)
         zeroed_sources.append(zeroed_src)
-      layer = cls(name=name, output=output.copy(), sources=tuple(zeroed_sources), **kwargs)
+      layer = cls(name=name, output=output.copy(), sources=list(zeroed_sources), **kwargs)
       out = layer.output.placeholder
       out.set_shape(data.batch_shape)
       return out
@@ -1839,9 +1848,15 @@ class WrappedInternalLayer(InternalLayer):
     self.params.update(base_layer.params)  # maybe ReuseParams wants to access it or so
 
   def get_base_absolute_name_scope_prefix(self):
+    """
+    :rtype: str
+    """
     return self.base_layer.get_base_absolute_name_scope_prefix()
 
   def get_absolute_name_scope_prefix(self):
+    """
+    :rtype: str
+    """
     return self.base_layer.get_absolute_name_scope_prefix()
 
 
@@ -1921,10 +1936,18 @@ class SelectSearchSourcesLayer(InternalLayer):
       self.rec_vars_outputs = {k: transform(v) for (k, v) in src.rec_vars_outputs.items()}  # assumes batch-major
 
   def get_dep_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
     return super(SelectSearchSourcesLayer, self).get_dep_layers() + [self.search_choices_layer]
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d:
+    :param TFNetwork.TFNetwork network:
+    :param get_layer:
+    """
     super(SelectSearchSourcesLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
     d["search_choices"] = get_layer(d["search_choices"])
 
@@ -2015,6 +2038,11 @@ class LayerNormLayer(_ConcatInputLayer):
 
   @classmethod
   def get_out_data_from_opts(cls, sources, name, **kwargs):
+    """
+    :param list[LayerBase] sources:
+    :param str name:
+    :rtype: Data
+    """
     return get_concat_sources_data_template(sources, name="%s_output" % name)
 
 
@@ -2042,18 +2070,18 @@ class SliceLayer(_ConcatInputLayer):
     if axis_wo_batch in self.output.size_placeholder:
       if slice_start:
         assert slice_start > 0
-        self.output.size_placeholder[axis_wo_batch] = \
-          tf.maximum(0, self.output.size_placeholder[axis_wo_batch] - slice_start)
+        self.output.size_placeholder[axis_wo_batch] = (
+          tf.maximum(0, self.output.size_placeholder[axis_wo_batch] - slice_start))
       if slice_end is not None:
         if slice_end < 0:
           slice_end = tf.shape(self.input_data.placeholder)[axis] + slice_end
-        self.output.size_placeholder[axis_wo_batch] = \
+        self.output.size_placeholder[axis_wo_batch] = (
           tf.minimum(
             tf.shape(self.input_data.placeholder)[axis] - slice_end,
-            self.output.size_placeholder[axis_wo_batch])
+            self.output.size_placeholder[axis_wo_batch]))
       if slice_step:
-        self.output.size_placeholder[axis_wo_batch] = \
-          tf.ceil(tf.divide(self.output.size_placeholder[axis_wo_batch], slice_step))
+        self.output.size_placeholder[axis_wo_batch] = (
+          tf.ceil(tf.divide(self.output.size_placeholder[axis_wo_batch], slice_step)))
     self.output.placeholder = self.input_data.placeholder[slices]
 
   @classmethod
@@ -2118,6 +2146,11 @@ class SliceNdLayer(_ConcatInputLayer):
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d:
+    :param TFNetwork.TFNetwork network:
+    :param get_layer:
+    """
     super(SliceNdLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
     d["start"] = get_layer(d["start"])
 
@@ -5735,18 +5768,18 @@ class Loss(object):
     """
     self.base_network = base_network
     self.use_flatten_frames = use_flatten_frames
-    self.layer = None  # type: LayerBase|None
+    self.layer = None  # type: typing.Optional[LayerBase]
     # All are initialized in self.init().
-    self.output = None  # type: Data
-    self.output_with_activation = None  # type: OutputWithActivation
-    self.output_seq_lens = None  # type: tf.Tensor
-    self.target = None  # type: Data
-    self.target_seq_lens = None  # type: tf.Tensor
-    self.output_flat = None  # type: tf.Tensor
-    self.output_before_softmax_flat = None  # type: tf.Tensor
-    self.target_flat = None  # type: tf.Tensor
+    self.output = None  # type: typing.Optional[Data]
+    self.output_with_activation = None  # type: typing.Optional[OutputWithActivation]
+    self.output_seq_lens = None  # type: typing.Optional[tf.Tensor]
+    self.target = None  # type: typing.Optional[Data]
+    self.target_seq_lens = None  # type: typing.Optional[tf.Tensor]
+    self.output_flat = None  # type: typing.Optional[tf.Tensor]
+    self.output_before_softmax_flat = None  # type: typing.Optional[tf.Tensor]
+    self.target_flat = None  # type: typing.Optional[tf.Tensor]
     # Maybe make configurable. For now, same as in our Theano behavior.
-    self.loss_norm_factor = None  # type: tf.Tensor
+    self.loss_norm_factor = None  # type: typing.Optional[tf.Tensor]
     self.use_normalized_loss = use_normalized_loss
     self.scale = scale
 
@@ -6049,6 +6082,9 @@ class CrossEntropyLoss(Loss):
     return out
 
   def get_value(self):
+    """
+    :rtype: tf.Tensor
+    """
     from TFUtil import to_int32_64, smoothing_cross_entropy, safe_log, py_print
     with tf.name_scope("loss_ce"):
       assert self.target.ndim_dense == self.output.ndim_dense
@@ -6097,6 +6133,9 @@ class BinaryCrossEntropyLoss(Loss):
   class_name = "bin_ce"
 
   def get_value(self):
+    """
+    :rtype: tf.Tensor
+    """
     assert not self.target.sparse, "sparse is not supported yet"
     assert self.target.dim == self.output.dim
     with tf.name_scope("loss_bin_ce"):
@@ -6105,12 +6144,23 @@ class BinaryCrossEntropyLoss(Loss):
 
 
 class GenericCELoss(Loss):
+  """
+  Some generalization of cross entropy.
+  """
   class_name = "generic_ce"
 
   def __init__(self, **kwargs):
     super(GenericCELoss, self).__init__(**kwargs)
 
+    # noinspection PyUnusedLocal
     def loss(z, y, grad_f, target):
+      """
+      :param tf.Tensor z:
+      :param tf.Tensor y:
+      :param grad_f:
+      :param tf.Tensor target:
+      :rtype: tf.Tensor
+      """
       nlog_scores = -tf.log(tf.clip_by_value(y, 1.e-20, 1.e20))  # (time,dim)
       # target is shape (time,) -> index.
       target_exp = tf.stack([tf.range(tf.shape(target)[0], dtype=tf.int32), target], axis=1)  # (time,2)
@@ -6137,6 +6187,9 @@ class GenericCELoss(Loss):
       [tf.float32, tf.float32, tf.float32, tf.int32], op=loss, grad_op=loss_grad)
 
   def get_value(self):
+    """
+    :rtype: tf.Tensor
+    """
     # Should be generic for any activation function.
     # (Except when the labels are not independent, such as for softmax.)
     # See Theano NetworkOutputLayer.FramewiseOutputLayer.cost() with "generic_ce" loss.
@@ -6187,6 +6240,9 @@ class CtcLoss(Loss):
     self.focal_loss_factor = focal_loss_factor
 
   def init(self, **kwargs):
+    """
+    See super.
+    """
     self._target_sparse_labels = None
     super(CtcLoss, self).init(**kwargs)
 
@@ -6230,6 +6286,7 @@ class CtcLoss(Loss):
     Also called the Baum-Welch-alignment.
     This is basically p_t(s|x_1^T,w_1^N), where s are the output labels (including blank),
     and w are the real target labels.
+
     :return: shape (time, batch, dim)
     :rtype: tf.Tensor
     """
@@ -6254,6 +6311,9 @@ class CtcLoss(Loss):
     return (1.0 - y) ** self.focal_loss_factor
 
   def get_value(self):
+    """
+    :rtype: tf.Tensor
+    """
     if not self.target.sparse:
       raise Exception("CTC target expected to be sparse (symbols)")
     with tf.name_scope("loss_ctc"):
@@ -6277,6 +6337,9 @@ class CtcLoss(Loss):
       return self.reduce_func(loss)
 
   def get_error(self):
+    """
+    :rtype: tf.Tensor
+    """
     if not self.target.sparse:
       raise Exception("CTC target expected to be sparse (symbols)")
     with tf.name_scope("loss_ctc_error"):
@@ -6297,6 +6360,9 @@ class CtcLoss(Loss):
 
   @classmethod
   def get_auto_output_layer_dim(cls, target_dim):
+    """
+    :rtype: int
+    """
     return target_dim + 1  # one added for blank
 
 
@@ -6429,6 +6495,9 @@ class EditDistanceLoss(Loss):
             "target", tf.size(target), vocab_idx_repr(target, self.output)]
 
   def get_error(self):
+    """
+    :rtype: tf.Tensor
+    """
     output = self._get_output_sparse_labels()
     labels = self._get_target_sparse_labels()
     error = tf.edit_distance(hypothesis=output, truth=labels, normalize=False)
@@ -6438,6 +6507,9 @@ class EditDistanceLoss(Loss):
     return self.reduce_func(error)
 
   def get_value(self):
+    """
+    :rtype: None
+    """
     return None
 
 
@@ -6467,6 +6539,9 @@ class BleuLoss(Loss):
     assert output.shape == target.shape
 
   def get_error(self):
+    """
+    :rtype: tf.Tensor
+    """
     from TFUtil import bleu_score
     score = bleu_score(
       hypothesis=self.output.get_placeholder_as_batch_major(), hyp_seq_lens=self.output.get_sequence_lengths(),
@@ -6475,6 +6550,9 @@ class BleuLoss(Loss):
     return -self.reduce_func(score)
 
   def get_value(self):
+    """
+    :rtype: None
+    """
     return None
 
 
@@ -6510,10 +6588,15 @@ class ExpectedLoss(Loss):
     self.divide_beam_size = divide_beam_size
     self.subtract_average_loss = subtract_average_loss
     self.loss_correction_grad_only = loss_correction_grad_only
-    self.search_choices = None  # type: SearchChoices
+    self.search_choices = None  # type: typing.Optional[SearchChoices]
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d:
+    :param TFNetwork.TFNetwork network:
+    :param get_layer:
+    """
     assert "loss" in d, "specify 'loss' in 'loss_opts' for the expected loss"
     assert isinstance(d["loss"], dict)
     opts = d["loss"].copy()
@@ -6527,6 +6610,9 @@ class ExpectedLoss(Loss):
     d["loss"] = loss
 
   def init(self, **kwargs):
+    """
+    Overwrites super. Get search choices.
+    """
     super(ExpectedLoss, self).init(**kwargs)
     self.losses.init(**kwargs)
     assert isinstance(self.layer, LayerBase)
@@ -6534,6 +6620,9 @@ class ExpectedLoss(Loss):
     assert isinstance(self.search_choices, SearchChoices), "no search choices from layer %r" % self.layer
 
   def get_value(self):
+    """
+    :rtype: tf.Tensor
+    """
     with tf.name_scope("expected_loss"):
       if self.loss_kind == "value":
         losses = self.losses.get_value()
@@ -6569,6 +6658,9 @@ class ExpectedLoss(Loss):
       return self.reduce_func(weighted_losses)
 
   def get_error(self):
+    """
+    :rtype: None
+    """
     return None
 
 
@@ -6608,14 +6700,25 @@ class DeepClusteringLoss(Loss):
     return None
 
   def get_value(self):
+    """
+    :rtype: tf.Tensor
+    """
     assert not self.target.sparse, "sparse is not supported yet"
     assert self.target.dim == self.output.dim
     with tf.name_scope("loss_deep_clustering"):
       # iterate through all chunks and compute affinity cost function for every chunk separately
 
+      # noinspection PyUnusedLocal,PyShadowingNames
       def iterate_sequences(s, start, c):
+        """
+        :param tf.Tensor s:
+        :param start:
+        :param c:
+        :rtype: tf.Tensor
+        """
         return tf.less(s, tf.shape(self.output_seq_lens)[0])
 
+      # noinspection PyShadowingNames
       def compute_cost(s, start, c):
         """
         :param tf.Tensor s: scalar, int32, seq idx
@@ -6679,6 +6782,9 @@ class L1Loss(Loss):
   class_name = "l1"
 
   def get_value(self):
+    """
+    :rtype: tf.Tensor
+    """
     assert not self.target.sparse, "sparse target values are not yet supported"
     with tf.name_scope("loss_l1"):
       return self.reduce_func(tf.abs(self.target_flat - self.output_flat))
@@ -6691,6 +6797,9 @@ class MeanSquaredError(Loss):
   class_name = "mse"
 
   def get_value(self):
+    """
+    :rtype: tf.Tensor
+    """
     assert not self.target.sparse, "sparse is not supported yet"
     with tf.name_scope("loss_mse"):
       if self.target_flat is not None:
@@ -6703,7 +6812,6 @@ class MeanSquaredError(Loss):
         out = tf.squared_difference(self.output, self.target)
         assert out.get_shape().ndims == 1
         out = self.reduce_func(out)
-
       return out
 
 
@@ -6724,6 +6832,9 @@ class ExternSprintLoss(Loss):
     custom_gradient.register_generic_loss_and_error_signal()
 
   def get_value(self):
+    """
+    :rtype: tf.Tensor
+    """
     with tf.name_scope("ExternSprintLoss"):
       seq_tags = self.base_network.get_seq_tags()
       assert self.output_with_activation.is_softmax_act_func()
@@ -6743,6 +6854,9 @@ class ExternSprintLoss(Loss):
       return loss
 
   def get_error(self):
+    """
+    :rtype: tf.Tensor|None
+    """
     if self.target is None:
       return None  # we don't have it
     # Use default frame-wise error to reference target.
@@ -6767,6 +6881,9 @@ class FastBaumWelchLoss(Loss):
     custom_gradient.register_generic_loss_and_error_signal()
 
   def get_value(self):
+    """
+    :rtype: tf.Tensor
+    """
     with tf.name_scope("FastBaumWelchLoss"):
       seq_tags = self.base_network.get_seq_tags()
       assert self.output_with_activation.is_softmax_act_func()
@@ -6790,6 +6907,9 @@ class FastBaumWelchLoss(Loss):
       return loss
 
   def get_error(self):
+    """
+    :rtype: tf.Tensor|None
+    """
     if self.target is None:
       return None  # we don't have it
     # Use default frame-wise error to reference target.
@@ -6841,6 +6961,9 @@ class ViaLayerLoss(Loss):
         d[key] = get_layer(d[key])
 
   def get_value(self):
+    """
+    :rtype: tf.Tensor
+    """
     with tf.name_scope("ViaLayerLoss"):
       if self.error_signal_layer:
         assert not self.align_layer
@@ -6869,6 +6992,9 @@ class ViaLayerLoss(Loss):
       return loss
 
   def get_error(self):
+    """
+    :rtype: tf.Tensor|None
+    """
     if self.target is None:
       return None  # we don't have it
     # Use default frame-wise error to reference target.
@@ -6885,14 +7011,24 @@ class AsIsLoss(Loss):
     super(AsIsLoss, self).__init__(**kwargs)
 
   def get_value(self):
+    """
+    :rtype: tf.Tensor
+    """
     assert self.output_flat is not None
     return self.reduce_func(self.output_flat)
 
   def get_error(self):
+    """
+    :rtype: None
+    """
     return None  # not defined
 
   @classmethod
   def get_default_target(cls, extern_data):
+    """
+    :param TFNetwork.ExternData extern_data:
+    :rtype: None
+    """
     # We do not need any target.
     return None
 
@@ -6935,6 +7071,9 @@ class SamplingBasedLoss(Loss):
     self.nce_loss = nce_loss
 
   def get_value(self):
+    """
+    :rtype: tf.Tensor
+    """
     assert self.target.sparse
     assert isinstance(self.layer, LinearLayer)
     with tf.name_scope("loss_with_sampling"):
@@ -7074,12 +7213,13 @@ class TripletLoss(Loss):
         aembeds_anchor = sources[0]
         aembeds_pair = sources[1]
         aembeds_diff = sources[2]
+        # noinspection PyUnusedLocal
         cembeds_anchor = sources[3]
         cembeds_pair = sources[4]
         cembeds_diff = sources[5]
         embeds_1 = tf.concat(values=[aembeds_anchor, cembeds_pair, cembeds_diff], axis=0)
         embeds_2 = tf.concat(values=[aembeds_pair, cembeds_pair, aembeds_diff], axis=0)
-        ahchor_targets = targets[:, 0]
+        anchor_targets = targets[:, 0]
         pair_targets = targets[:, 1]
         diff_targets = targets[:, 2]
         labels = tf.concat(values=[anchor_targets, pair_targets, diff_targets], axis=0)
@@ -7146,7 +7286,7 @@ class TripletLoss(Loss):
     return None
 
 
-_LossClassDict = {}  # type: dict[str,type(Loss)]
+_LossClassDict = {}  # type: typing.Dict[str,typing.Type[Loss]]
 
 
 def _init_loss_class_dict():
@@ -7179,7 +7319,8 @@ def get_loss_class(loss):
 
 
 _LayerClassDictInitialized = False
-_LayerClassDict = {}  # type: dict[str,type(LayerBase)]
+_LayerClassDict = {}  # type: typing.Dict[str,typing.Type[LayerBase]]
+
 
 def _init_layer_class_dict():
   global _LayerClassDictInitialized
@@ -7246,6 +7387,9 @@ def get_layer_class(name):
 
 
 def get_layer_class_name_list():
+  """
+  :rtype: list[str]
+  """
   if not _LayerClassDictInitialized:
     _init_layer_class_dict()
   return sorted(_LayerClassDict.keys())
