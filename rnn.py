@@ -39,8 +39,7 @@ engine = None  # type: typing.Optional[typing.Union['TFEngine.Engine','Engine.En
 train_data = None  # type: typing.Optional[Dataset]
 dev_data = None  # type: typing.Optional[Dataset]
 eval_data = None  # type: typing.Optional[Dataset]
-# noinspection PyShadowingBuiltins
-quit = False
+quit_returnn = False
 server = None
 
 
@@ -168,7 +167,7 @@ def get_cache_byte_sizes():
   :returns cache size in bytes for (train,dev,eval)
   """
   import Util
-  cache_sizes_user = config.list('cache_size', ["%iG" % Util.defaultCacheSizeInGBytes()])
+  cache_sizes_user = config.list('cache_size', ["%iG" % Util.default_cache_size_in_gbytes()])
   num_datasets = 1 + config.has('dev') + config.has('eval')
   cache_factor = 1.0
   if len(cache_sizes_user) == 1:
@@ -411,8 +410,8 @@ def finalize():
   Cleanup at the end.
   """
   print("Quitting", file=getattr(log, "v4", sys.stderr))
-  global quit
-  quit = True
+  global quit_returnn
+  quit_returnn = True
   sys.exited = True
   if BackendEngine.is_theano_selected():
     if engine:

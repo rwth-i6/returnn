@@ -63,7 +63,7 @@ session = tf.InteractiveSession()
 
 def sys_exec(*args, **kwargs):
   print("$ %s" % " ".join(args))
-  out = Util.sysexecOut(*args, **kwargs)
+  out = Util.sysexec_out(*args, **kwargs)
   print(out)
 
 
@@ -136,7 +136,7 @@ def dump_info():
   print("Numpy path: %r" % numpy_path)
   print("Numpy config:")
   numpy.show_config()
-  so_files = Util.sysexecOut("find %s | grep \"\.so\"" % numpy_path, shell=True)
+  so_files = Util.sysexec_out("find %s | grep \"\.so\"" % numpy_path, shell=True)
   print("Numpy so files:\n---\n%s\n---\n" % so_files)
   so_files = [f for f in so_files.splitlines() if f]
   for f in so_files:

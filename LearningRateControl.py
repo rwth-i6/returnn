@@ -2,7 +2,7 @@
 from __future__ import print_function
 
 import os
-from Util import betterRepr, simpleObjRepr, ObjAsDict, unicode
+from Util import better_repr, simple_obj_repr, ObjAsDict, unicode
 from Log import log
 import numpy
 
@@ -24,7 +24,7 @@ class LearningRateControl(object):
         error = {}
       self.error = error
 
-    __repr__ = simpleObjRepr
+    __repr__ = simple_obj_repr
 
   @classmethod
   def load_initial_kwargs_from_config(cls, config):
@@ -93,7 +93,7 @@ class LearningRateControl(object):
     else:
       print("Learning-rate-control: no file specified, not saving history (no proper restart possible)", file=log.v4)
 
-  __repr__ = simpleObjRepr
+  __repr__ = simple_obj_repr
 
   def __str__(self):
     return "%r, epoch data: %s, error key: %s" % \
@@ -306,7 +306,7 @@ class LearningRateControl(object):
     # Loosing that data is very bad because it basically means that we have to redo all the training.
     tmp_filename = self.filename + ".new_tmp"
     f = open(tmp_filename, "w")
-    f.write(betterRepr(self.epochData))
+    f.write(better_repr(self.epochData))
     f.write("\n")
     f.close()
     os.rename(tmp_filename, self.filename)

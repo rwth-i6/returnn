@@ -11,7 +11,7 @@ sys.path.append(returnn_dir)
 
 from argparse import ArgumentParser
 import pickle
-from Util import betterRepr
+from Util import better_repr
 
 
 def main():
@@ -20,7 +20,7 @@ def main():
  args = argparser.parse_args()
  try:
    o = pickle.load(open(args.file, "rb"))
-   print(betterRepr(o))
+   print(better_repr(o))
  except BrokenPipeError:
    print("BrokenPipeError", file=sys.stderr)
    sys.exit(1)

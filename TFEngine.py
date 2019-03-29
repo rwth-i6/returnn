@@ -1515,12 +1515,12 @@ class Engine(object):
     print(" ".join(eval_dump_str), file=log.v1)
     if output_file:
       print('Write eval results to %r' % output_file, file=log.v3)
-      from Util import betterRepr
+      from Util import better_repr
       with open(output_file, 'w') as f:
-        f.write(betterRepr(results) + '\n')
+        f.write(better_repr(results) + '\n')
     if output_per_seq_file:
       print('Write eval results per seq to %r' % output_per_seq_file, file=log.v3)
-      from Util import betterRepr
+      from Util import better_repr
 
       # write fetches to file
       with open(output_per_seq_file, 'w') as f:
@@ -2110,10 +2110,10 @@ class Engine(object):
         for i in range(len(out_cache)):
           output_file.write("%s\n" % out_cache[i])
       elif output_file_format == "py":
-        from Util import betterRepr
+        from Util import better_repr
         output_file.write("{\n")
         for i in range(len(out_cache)):
-          output_file.write("%r: %s,\n" % (seq_idx_to_tag[i], betterRepr(out_cache[i])))
+          output_file.write("%r: %s,\n" % (seq_idx_to_tag[i], better_repr(out_cache[i])))
         output_file.write("}\n")
       else:
         raise Exception("invalid output_file_format %r" % output_file_format)
