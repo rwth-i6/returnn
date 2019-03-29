@@ -35,11 +35,9 @@ import tornado.web
 from Log import log
 from GeneratingDataset import StaticDataset
 from Device import Device
-from Util import TheanoFlags, get_num_gpu_devices as get_num_devices
+from Util import TheanoFlags
 from Config import get_devices_init_args
 from EngineTask import ForwardTaskThread
-from Dataset import Dataset, init_dataset, init_dataset_via_str
-from HDFDataset import HDFDataset
 import Engine
 import Config
 

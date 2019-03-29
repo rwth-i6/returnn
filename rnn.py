@@ -140,7 +140,9 @@ def init_theano_devices():
   """
   if not BackendEngine.is_theano_selected():
     return None
-  from Device import TheanoFlags, get_devices_init_args, Device
+  from Util import TheanoFlags
+  from Config import get_devices_init_args
+  from Device import Device
   old_device_config = ",".join(config.list('device', ['default']))
   if config.value("task", "train") == "nop":
     return []

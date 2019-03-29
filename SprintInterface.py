@@ -537,7 +537,8 @@ def dumpFlags():
     print("CUDA via", theano_cuda.__file__)
     print("CUDA available:", theano_cuda.cuda_available)
 
-    print("THEANO_FLAGS:", rnn.TheanoFlags)
+    from Util import TheanoFlags
+    print("THEANO_FLAGS:", TheanoFlags)
 
 
 def setTargetMode(mode):
