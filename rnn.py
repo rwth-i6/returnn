@@ -28,7 +28,7 @@ from Config import Config
 from Dataset import Dataset, init_dataset, init_dataset_via_str
 from HDFDataset import HDFDataset
 from Debug import init_ipython_kernel, init_better_exchook, init_faulthandler, init_cuda_not_in_main_proc_check
-from Util import init_thread_join_hack, describe_crnn_version, describe_theano_version, \
+from Util import init_thread_join_hack, describe_returnn_version, describe_theano_version, \
   describe_tensorflow_version, BackendEngine, get_tensorflow_version_tuple, PY3
 if PY3:
   import typing
@@ -301,7 +301,7 @@ def returnn_greeting(config_filename=None, command_line_options=None):
   """
   print(
     "RETURNN starting up, version %s, date/time %s, pid %i, cwd %s, Python %s" % (
-      describe_crnn_version(), time.strftime("%Y-%m-%d-%H-%M-%S (UTC%z)"), os.getpid(), os.getcwd(), sys.executable),
+      describe_returnn_version(), time.strftime("%Y-%m-%d-%H-%M-%S (UTC%z)"), os.getpid(), os.getcwd(), sys.executable),
     file=log.v3)
   if config_filename:
     print("RETURNN config: %s" % config_filename, file=log.v4)

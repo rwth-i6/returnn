@@ -1,4 +1,8 @@
 
+"""
+Provides :class:`Config` and some related helpers.
+"""
+
 from __future__ import print_function
 
 __author__ = "Patrick Doetsch"
@@ -16,13 +20,20 @@ if PY3:
   import builtins
   unicode = str
   long = int
+  import typing
 else:
+  # noinspection PyUnresolvedReferences
   import __builtin__ as builtins
   unicode = builtins.unicode
   long = builtins.long
 
 
 class Config:
+  """
+  Reads in some config file, and provides access to the key/value items.
+  We support some simple text-line-based config, JSON, and Python format.
+  """
+
   def __init__(self, items=None):
     """
     :param dict[str]|None items: optional initial typed_dict
@@ -36,7 +47,8 @@ class Config:
 
   def load_file(self, f):
     """
-    Reads the configuration parameters from a file and adds them to the inner set of parameters
+    Reads the configuration parameters from a file and adds them to the inner set of parameters.
+
     :param string|io.TextIOBase|io.StringIO f:
     """
     if isinstance(f, str):
@@ -98,12 +110,15 @@ class Config:
     """
     from optparse import OptionParser
     parser = OptionParser()
-    parser.add_option("-a", "--activation", dest="activation",
-                      help="[STRING/LIST] Activation functions: logistic, tanh, softsign, relu, identity, zero, one, maxout.")
-    parser.add_option("-b", "--batch_size", dest="batch_size",
-                      help="[INTEGER/TUPLE] Maximal number of frames per batch (optional: shift of batching window).")
-    parser.add_option("-c", "--chunking", dest="chunking",
-                      help="[INTEGER/TUPLE] Maximal number of frames per sequence (optional: shift of chunking window).")
+    parser.add_option(
+      "-a", "--activation", dest="activation",
+      help="[STRING/LIST] Activation functions: logistic, tanh, softsign, relu, identity, zero, one, maxout.")
+    parser.add_option(
+      "-b", "--batch_size", dest="batch_size",
+      help="[INTEGER/TUPLE] Maximal number of frames per batch (optional: shift of batching window).")
+    parser.add_option(
+      "-c", "--chunking", dest="chunking",
+      help="[INTEGER/TUPLE] Maximal number of frames per sequence (optional: shift of chunking window).")
     parser.add_option("-d", "--description", dest="description", help="[STRING] Description of experiment.")
     parser.add_option("-e", "--epoch", dest="epoch", help="[INTEGER] Starting epoch.")
     parser.add_option("-E", "--eval", dest="eval", help="[STRING] eval file path")
@@ -113,7 +128,6 @@ class Config:
     parser.add_option("-i", "--save_interval", dest="save_interval",
                       help="[INTEGER] Number of epochs until a new model will be saved.")
     parser.add_option("-j", "--dropout", dest="dropout", help="[FLOAT] Dropout probability (0 to disable).")
-    # parser.add_option("-k", "--multiprocessing", dest = "multiprocessing", help = "[BOOLEAN] Enable multi threaded processing (required when using multiple devices).")
     parser.add_option("-k", "--output_file", dest="output_file",
                       help="[STRING] Path to target file for network output.")
     parser.add_option("-l", "--log", dest="log", help="[STRING] Log file path.")
@@ -130,10 +144,12 @@ class Config:
                       help="[FLOAT] Learning rate in gradient descent optimization.")
     parser.add_option("-s", "--hidden_sizes", dest="hidden_sizes",
                       help="[INTEGER/LIST] Number of units in hidden layers.")
-    parser.add_option("-t", "--truncate", dest="truncate",
-                      help="[INTEGER] Truncates sequence in BPTT routine after specified number of timesteps (-1 to disable).")
-    parser.add_option("-u", "--device", dest="device",
-                      help="[STRING/LIST] CPU and GPU devices that should be used (example: gpu0,cpu[1-6] or gpu,cpu*).")
+    parser.add_option(
+      "-t", "--truncate", dest="truncate",
+      help="[INTEGER] Truncates sequence in BPTT routine after specified number of timesteps (-1 to disable).")
+    parser.add_option(
+      "-u", "--device", dest="device",
+      help="[STRING/LIST] CPU and GPU devices that should be used (example: gpu0,cpu[1-6] or gpu,cpu*).")
     parser.add_option("-v", "--verbose", dest="log_verbosity", help="[INTEGER] Verbosity level from 0 - 5.")
     parser.add_option("-w", "--window", dest="window", help="[INTEGER] Width of sliding window over sequence.")
     parser.add_option("-x", "--task", dest="task", help="[train/forward/analyze] Task of the current program call.")
@@ -255,9 +271,14 @@ class Config:
 
   def _hack_value_reading_debug(self):
     orig_value_func = self.value
+
     def wrapped_value_func(*args, **kwargs):
+      """
+      Wrapped func.
+      """
       res = orig_value_func(*args, **kwargs)
-      print("Config.value(%s) -> %r" % (", ".join(list(map(repr, args)) + ["%s=%r" for (k, v) in kwargs.items()]), res))
+      print("Config.value(%s) -> %r" % (
+        ", ".join(list(map(repr, args)) + ["%s=%r" % (k, v) for (k, v) in kwargs.items()]), res))
       return res
     setattr(self, "value", wrapped_value_func)
 
@@ -266,25 +287,26 @@ class Config:
     :type key: str
     :type default: T
     :type index: int | None
+    :param str list_join_str:
     :rtype: str | T
     """
     if key in self.typed_dict:
-      l = self.typed_dict[key]
+      ls = self.typed_dict[key]
       if index is None:
-        if isinstance(l, (list, tuple)):
-          return list_join_str.join([str(v) for v in l])
-        elif l is None:
+        if isinstance(ls, (list, tuple)):
+          return list_join_str.join([str(v) for v in ls])
+        elif ls is None:
           return default
         else:
-          return str(l)
+          return str(ls)
       else:
-        return str(l[index])
+        return str(ls[index])
     if key in self.dict:
-      l = self.dict[key]
+      ls = self.dict[key]
       if index is None:
-        return list_join_str.join(l)
+        return list_join_str.join(ls)
       else:
-        return l[index]
+        return ls[index]
     return default
 
   def typed_value(self, key, default=None, index=None):
@@ -352,6 +374,13 @@ class Config:
     return to_bool(v)
 
   def bool_or_other(self, key, default, index=0):
+    """
+    :param str key:
+    :param T default:
+    :param int index:
+    :return: if we have typed value, just as-is. otherwise try to convert to bool. or default if not there.
+    :rtype: bool|T|object
+    """
     if key in self.typed_dict:
       return self.typed_value(key, default=default, index=index)
     if key not in self.dict:
@@ -396,7 +425,7 @@ class Config:
       value = self.typed_value(key, default=default)
       if value is None:
         return default
-      if not isinstance(value, (tuple,list)):
+      if not isinstance(value, (tuple, list)):
         value = [value]
       return list(value)
     if key not in self.dict:
@@ -415,7 +444,7 @@ class Config:
       value = self.typed_value(key, default=default)
       if value is None:
         return default
-      if not isinstance(value, (tuple,list)):
+      if not isinstance(value, (tuple, list)):
         value = [value]
       for x in value:
         assert isinstance(x, int)
@@ -434,21 +463,26 @@ class Config:
       value = self.typed_value(key, default=default)
       if value is None:
         return default
-      if not isinstance(value, (tuple,list)):
+      if not isinstance(value, (tuple, list)):
         value = [value]
       for x in value:
-        assert isinstance(x, (float,int))
+        assert isinstance(x, (float, int))
       return list(value)
     return [float(x) for x in self.list(key, default)]
 
   def int_pair(self, key, default=None):
+    """
+    :param str key:
+    :param (int,int)|None default:
+    :rtype: (int,int)
+    """
     if default is None:
       default = (0, 0)
     if not self.has(key):
       return default
     if key in self.typed_dict:
       value = self.typed_value(key, default=default)
-      if not isinstance(value, (tuple,list)):
+      if not isinstance(value, (tuple, list)):
         value = (value, value)
       assert len(value) == 2
       for x in value:
@@ -461,7 +495,7 @@ class Config:
       return int(value), int(value)
 
 
-_global_config = None  # type: Config
+_global_config = None  # type: typing.Optional[Config]
 
 
 def set_global_config(config):
@@ -505,3 +539,145 @@ def get_global_config(raise_exception=True, auto_create=False):
   if raise_exception:
     raise Exception("No global config found.")
   return None
+
+
+def network_json_from_config(config, mask=None):
+  """
+  :type config: Config
+  :param str mask: "unity", "none" or "dropout"
+  :rtype: dict[str]
+  """
+  from Log import log
+  json_content = None
+  if config.has("network") and config.is_typed("network"):
+    json_content = config.typed_value("network")
+    assert isinstance(json_content, dict)
+    assert json_content
+  elif config.network_topology_json:
+    start_var = config.network_topology_json.find('(config:', 0)  # e.g. ..., "n_out" : (config:var), ...
+    while start_var > 0:
+      end_var = config.network_topology_json.find(')', start_var)
+      assert end_var > 0, "invalid variable syntax at " + str(start_var)
+      var = config.network_topology_json[start_var+8:end_var]
+      assert config.has(var), "could not find variable " + var
+      config.network_topology_json = (
+        config.network_topology_json[:start_var] + config.value(var, "") + config.network_topology_json[end_var+1:])
+      print("substituting variable %s with %s" % (var, config.value(var, "")), file=log.v4)
+      start_var = config.network_topology_json.find('(config:', start_var+1)
+    try:
+      import json
+      json_content = json.loads(config.network_topology_json)
+    except ValueError as e:
+      print("----- BEGIN JSON CONTENT -----", file=log.v3)
+      print(config.network_topology_json, file=log.v3)
+      print("------ END JSON CONTENT ------", file=log.v3)
+      assert False, "invalid json content, %r" % e
+    assert isinstance(json_content, dict)
+    if 'network' in json_content:
+      json_content = json_content['network']
+    assert json_content
+  if not json_content:
+    if not mask:
+      if sum(config.float_list('dropout', [0])) > 0.0:
+        mask = "dropout"
+    from NetworkDescription import LayerNetworkDescription
+    description = LayerNetworkDescription.from_config(config)
+    json_content = description.to_json_content(mask=mask)
+  return json_content
+
+
+
+def get_devices_init_args(config):
+  """
+  :type config: Config.Config
+  :rtype: list[dict[str]]
+  """
+  import re
+  multiproc = config.bool('multiprocessing', True)
+  if config.value('task', 'train') == "theano_graph":
+    # Should have been reset earlier. See init() which handles this case.
+    assert not multiproc, "set multiprocessing = False to use theano_graph"
+  device_info = config.list('device', ['cpu0'])
+  if len(device_info) == 1 and device_info[0] == 'json':
+    try:
+      import json
+      specs = (
+        json.loads(
+          open(config.value('initialize_from_json', ''))
+          .read().replace('(', '\"').replace(')', '\"'))['worker'])
+    except Exception:
+      raise Exception('Unable to parse worker information from json content')
+    devices = [
+      {
+        'device': specs[key]['device'],
+        'config': config,
+        'blocking': False,
+        'num_batches': specs[key].pop('num_batches', 1),
+        "update_specs": specs[key].pop('update_specs', {})}
+      for key in specs]
+  else:
+    device_tags = {}
+    ngpux = 0
+    from Util import get_num_gpu_devices
+    ncpus, ngpus = get_num_gpu_devices()
+    if "all" in device_info:
+      device_tags = {
+        tag: [1, True] for tag in ["cpu" + str(i) for i in range(ncpus)] + ["gpu" + str(i) for i in range(ngpus)]}
+    else:
+      for info in device_info:
+        device_update = True
+        num_batches = 1
+        if info[0] == '_':
+          device_update = False
+          info = info[1:]
+        if ':' in info:
+          num_batches = int(info.split(':')[1])
+          info = info.split(':')[0]
+        if len(info) == 3:
+          info += "X"
+        assert len(info) > 3, "invalid device: " + str(info)
+        utype = info[0:3]
+        uid = info[3:]
+        if uid == '*':
+          uid = "[0-9]*"
+        if uid == 'X':
+          ngpux += 1
+          device_tags[info] = [num_batches, True]
+        else:
+          if utype == 'cpu':
+            np = ncpus
+          elif utype == 'gpu':
+            np = ngpus
+          else:
+            np = 0
+          match = False
+          for p in range(np):
+            if re.match(uid, str(p)):
+              device_tags[utype + str(p)] = [num_batches, device_update]
+              match = True
+          assert match, "invalid device specified: " + info
+    tags = sorted(device_tags.keys())
+    if multiproc:
+      assert len(tags) > 0
+      if len(tags) == 1 and tags[0][-1] == 'X':
+        newtag = tags[0][:-1] + 'Z'
+        device_tags[newtag] = device_tags[tags[0]]
+        tags[0] = newtag
+      devices = [
+        {
+          "device": tag,
+          "config": config,
+          "num_batches": device_tags[tag][0],
+          "update_specs": {'update_rule': 'global' if device_tags[tag][1] else 'none'}}
+        for tag in tags]
+      if len(devices) == 1 and ngpux > 1:
+        devices = devices * ngpux
+      import TaskSystem
+      if TaskSystem.isMainProcess:  # On a child process, we can have the gpu device.
+        from Util import TheanoFlags
+        assert not TheanoFlags.get("device", "").startswith("gpu"), (
+          "The main proc is not supposed to use the GPU in multiprocessing mode. "
+          "Do not set device=gpu in THEANO_FLAGS.")
+    else:
+      devices = [{"device": tags[0], "config": config, "blocking": True}]
+  return devices

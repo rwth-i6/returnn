@@ -1,11 +1,13 @@
 
+"""
+Provides :class:`HDFDataset`.
+"""
+
 from __future__ import print_function
 import collections
-import functools as fun
 import gc
 import h5py
 import numpy
-import theano
 from CachedDataset import CachedDataset
 from CachedDataset2 import CachedDataset2
 from Dataset import Dataset, DatasetSeq

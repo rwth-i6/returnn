@@ -230,10 +230,10 @@ def git_describe_head_version(gitdir="."):
   return "%s--git-%s%s" % (cdate, rev, "-dirty" if is_dirty else "")
 
 
-_crnn_version_info = None
+_returnn_version_info = None
 
 
-def describe_crnn_version():
+def describe_returnn_version():
   """
   :rtype: str
   :return: string like "20171017.163840--git-ab2a1da", via :func:`git_describeHeadVersion`
@@ -243,26 +243,27 @@ def describe_crnn_version():
   # Or to not trigger any pthread_atfork bugs,
   # e.g. from OpenBlas (https://github.com/tensorflow/tensorflow/issues/13802),
   # which also hopefully should not happen, but it might.
-  global _crnn_version_info
-  if _crnn_version_info:
-    return _crnn_version_info
+  global _returnn_version_info
+  if _returnn_version_info:
+    return _returnn_version_info
   mydir = os.path.dirname(__file__)
   try:
-    _crnn_version_info = git_describe_head_version(gitdir=mydir)
+    _returnn_version_info = git_describe_head_version(gitdir=mydir)
   except Exception as e:
-    _crnn_version_info = "unknown(git exception: %r)" % e
-  return _crnn_version_info
+    _returnn_version_info = "unknown(git exception: %r)" % e
+  return _returnn_version_info
 
 
 def describe_theano_version():
   """
   :rtype: str
   """
+  # noinspection PyUnresolvedReferences,PyPackageRequirements
   import theano
   try:
-    tdir = os.path.dirname(theano.__file__)
+    theano_dir = os.path.dirname(theano.__file__)
   except Exception as e:
-    tdir = "<unknown(exception: %r)>" % e
+    theano_dir = "<unknown(exception: %r)>" % e
   try:
     version = theano.__version__
     if len(version) > 20:
@@ -270,17 +271,17 @@ def describe_theano_version():
   except Exception as e:
     version = "<unknown(exception: %r)>" % e
   try:
-    if tdir.startswith("<"):
+    if theano_dir.startswith("<"):
       git_info = "<unknown-dir>"
-    elif os.path.exists(tdir + "/../.git"):
-      git_info = "git:" + git_describe_head_version(gitdir=tdir)
-    elif "/site-packages/" in tdir:
+    elif os.path.exists(theano_dir + "/../.git"):
+      git_info = "git:" + git_describe_head_version(gitdir=theano_dir)
+    elif "/site-packages/" in theano_dir:
       git_info = "<site-package>"
     else:
       git_info = "<not-under-git>"
   except Exception as e:
     git_info = "<unknown(git exception: %r)>" % e
-  return "%s (%s in %s)" % (version, git_info, tdir)
+  return "%s (%s in %s)" % (version, git_info, theano_dir)
 
 
 def describe_tensorflow_version():
@@ -2621,6 +2622,104 @@ def guess_requested_max_num_threads(log_file=None, fallback_num_cpus=True):
   return None
 
 
+TheanoFlags = {
+  key: value for (key, value) in [s.split("=", 1) for s in os.environ.get("THEANO_FLAGS", "").split(",") if s]}
+
+
+def _consider_check_for_gpu():
+  """
+  There are cases where nvidia-smi could hang.
+  (Any read of /proc/modules might hang in that case, maybe caused
+   by trying to `modprobe nvidia` to check if there is a Nvidia card.)
+  This sometimes happens in our SGE cluster on nodes without Nvidia cards.
+  Maybe it's also a Linux Kernel bug.
+  Anyway, just avoid any such check if we don't asked for a GPU.
+  """
+  if "device" in TheanoFlags:
+    dev = TheanoFlags["device"]
+    if dev.startswith("gpu") or dev.startswith("cuda"):
+      return True
+    # THEANO_FLAGS will overwrite this config option. See rnn.initDevices().
+    return False
+  try:
+    from Config import get_global_config
+    config = get_global_config()
+  except Exception:
+    config = None
+  if config:
+    for dev in config.list('device', []):
+      if dev.startswith("gpu") or dev.startswith("cuda"):
+        return True
+      if dev == "all":
+        return True
+  return False
+
+
+def get_gpu_names():
+  """
+  :rtype: list[str]
+  """
+  if not _consider_check_for_gpu():
+    return []
+  if os.name == 'nt':
+    return "GeForce GTX 770" #TODO
+  elif sys.platform == 'darwin':
+    # TODO parse via xml output
+    return cmd("system_profiler SPDisplaysDataType | "
+               "grep 'Chipset Model: NVIDIA' | "
+               "sed 's/.*Chipset Model: NVIDIA *//;s/ *$//'")
+  else:
+    try:
+      return cmd('nvidia-smi -L | cut -d \'(\' -f 1 | cut -d \' \' -f 3- | sed -e \'s/\\ $//\'')
+    except CalledProcessError:
+      return []
+
+
+def _get_num_gpu_devices():
+  """
+  :return: cpu,gpu
+  :rtype: (int,int)
+  """
+  if os.name == 'nt':
+    return 1, 1  # TODO
+  elif sys.platform == 'darwin':
+    return (
+      int(cmd("sysctl -a | grep machdep.cpu.core_count | awk '{print $2}'")[0]),
+      len(cmd("system_profiler SPDisplaysDataType | grep 'Chipset Model: NVIDIA' | cat")))
+  else:
+    num_cpus = len(cmd('cat /proc/cpuinfo | grep processor')) or 1
+    num_gpus = 0
+    if _consider_check_for_gpu():
+      try:
+        num_gpus = len(cmd('nvidia-smi -L'))
+      except CalledProcessError:
+        pass
+    return num_cpus, num_gpus
+
+
+_num_devices = None
+
+
+def get_num_gpu_devices():
+  """
+  :return: (cpu count, gpu count)
+  :rtype: (int, int)
+  """
+  global _num_devices
+  if _num_devices is not None:
+    return _num_devices
+  _num_devices = _get_num_gpu_devices()
+  return _num_devices
+
+
+def have_gpu():
+  """
+  :rtype: bool
+  """
+  cpus, gpus = get_num_gpu_devices()
+  return gpus > 0
+
+
 def try_and_ignore_exception(f):
   """
   Calls ``f``, and ignores any exception.
@@ -2711,7 +2810,7 @@ def log_runtime_info_to_dir(path, config):
       "Path: %s" % (os.getcwd(),),
       "Hostname: %s" % get_hostname(),
       "PID: %i" % os.getpid(),
-      "Returnn: %s" % (describe_crnn_version(),),
+      "Returnn: %s" % (describe_returnn_version(),),
       "TensorFlow: %s" % (describe_tensorflow_version(),),
       "Config files: %s" % (config.files,),
     ]

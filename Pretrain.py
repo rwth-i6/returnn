@@ -6,9 +6,6 @@ This is independent from the backend (TF or Theano, etc).
 
 from __future__ import print_function
 
-from Network import LayerNetwork
-from NetworkBaseLayer import Layer
-from NetworkCopyUtils import intelli_copy_layer, LayerDoNotMatchForCopy
 from Log import log
 from Util import unicode, long
 
@@ -461,6 +458,8 @@ class Pretrain:
     :param mask:
     :rtype: Network.LayerNetwork
     """
+    from Network import LayerNetwork
+    from NetworkBaseLayer import Layer
     json_content = self.get_network_json_for_epoch(epoch)
     Layer.rng_seed = epoch
     return LayerNetwork.from_json(json_content, mask=mask, **self.network_init_args)
@@ -478,6 +477,7 @@ class Pretrain:
 
     # network.output is the remaining output layer.
     if self.copy_output_layer:
+      from NetworkCopyUtils import intelli_copy_layer, LayerDoNotMatchForCopy
       for layer_name in new_network.output.keys():
         assert layer_name in old_network.output
         try:
@@ -516,13 +516,15 @@ def pretrain_from_config(config):
   :rtype: Pretrain | None
   """
   import Util
+  from Config import network_json_from_config
   pretrain_type = config.bool_or_other("pretrain", None)
   if pretrain_type == "default" or (isinstance(pretrain_type, dict) and pretrain_type) or pretrain_type is True:
     if Util.BackendEngine.is_theano_selected():
+      from Network import LayerNetwork
       network_init_args = LayerNetwork.init_args_from_config(config)
     else:
       network_init_args = None
-    original_network_json = LayerNetwork.json_from_config(config)
+    original_network_json = network_json_from_config(config)
     opts = config.get_of_type("pretrain", dict, {})
     if config.has("pretrain_copy_output_layer"):
       opts.setdefault("copy_output_layer", config.bool_or_other("pretrain_copy_output_layer", "ifpossible"))

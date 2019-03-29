@@ -8,21 +8,36 @@ Generic interface which automatically creates:
 
 import copy
 import os
-import sys
+from Util import make_hashable, escape_c_str, BackendEngine, PY3
 
 import numpy
-import theano
-import theano.sandbox.cuda
-import theano.tensor as T
-from theano.compile import optdb
-from theano import gof
-from theano.gof.opt import OpSub
+if BackendEngine.is_theano_selected():
+  # noinspection PyPackageRequirements
+  import theano
+  # noinspection PyPackageRequirements
+  import theano.sandbox.cuda
+  # noinspection PyPackageRequirements
+  import theano.tensor as T
+  # noinspection PyPackageRequirements,PyUnresolvedReferences
+  from theano.compile import optdb
+  # noinspection PyPackageRequirements,PyUnresolvedReferences
+  from theano import gof
+  # noinspection PyPackageRequirements,PyUnresolvedReferences
+  from theano.gof.opt import OpSub
+  from TheanoUtil import try_register_gpu_opt, make_var_tuple, softmax
 
-from Util import make_hashable, make_dll_name, escape_c_str
-from TheanoUtil import try_register_gpu_opt, make_var_tuple, softmax
+  NativeOpBase = theano.Op
+  GpuNativeOpBase = theano.sandbox.cuda.GpuOp
 
+else:  # no Theano
+  theano = None
 
-PY3 = sys.version_info[0] >= 3
+  class NativeOpBase:
+    """Dummy native op base."""
+
+  class GpuNativeOpBase:
+    """Dummy. Not used if not Theano."""
+
 
 if PY3:
   unicode = str
@@ -250,7 +265,7 @@ class NativeOpBaseMixin(object):
 
 
 
-class NativeOp(theano.Op, NativeOpBaseMixin):
+class NativeOp(NativeOpBase, NativeOpBaseMixin):
   """
   We wrap some C code which can define a forward pass
   and optionally a backward pass (for gradient calculation).
@@ -486,7 +501,7 @@ class NativeOp(theano.Op, NativeOpBaseMixin):
     }
 
 
-class GpuNativeOp(NativeOp, theano.sandbox.cuda.GpuOp):
+class GpuNativeOp(NativeOp, GpuNativeOpBase):
 
   @classmethod
   def as_tensor_var(cls, v):
@@ -520,49 +535,51 @@ class GpuNativeOp(NativeOp, theano.sandbox.cuda.GpuOp):
       "// end of c_support_code\n\n\n"])
 
 
-@gof.local_optimizer([NativeOp], inplace=True)
-def inplace_NativeOp(node):
-  if isinstance(node.op, NativeOp) and not node.op.destroy_map:
-    kwargs = {k: getattr(node.op, k) for k in node.op.__props__}
-    # TODO: We could try to make each input inplace individually.
-    # What we do now is just to try to make all inplace.
-    kwargs["in_info"] = [dict(info) for info in node.op.in_info]
-    any_inplace = False
-    for info in kwargs["in_info"]:
-      if info.get("want_inplace", -1) >= 0:
-        any_inplace = True
-        info["is_inplace"] = True
-    if not any_inplace:
-      return False
-    new_op = node.op.__class__(**kwargs)
-    from TheanoUtil import make_var_tuple
-    new_v = make_var_tuple(new_op(*node.inputs))
-    return new_v
-  return False
-
-try:
-  optdb.register('inplace_NativeOp',
-                 gof.TopoOptimizer(inplace_NativeOp
-                                   , failure_callback=gof.TopoOptimizer.warn_inplace
-                                   ),
-                 60, 'fast_run', 'inplace')
-except ValueError:  # can happen if it was already registered before, e.g. when we reload the module
-  pass
-
-
-@try_register_gpu_opt(NativeOp)
-def local_gpu_NativeOp(node):
-  if isinstance(node.op, NativeOp):
-    # see also: https://github.com/Theano/Theano/blob/master/theano/sandbox/cuda/opt.py
-    from theano.sandbox.cuda import host_from_gpu, gpu_from_host, as_cuda_ndarray_variable
-    args = node.inputs
-    if any([(x.owner and x.owner.op == host_from_gpu) for x in args]):
-      gpu_op = GpuNativeOp(**{key: getattr(node.op, key) for key in node.op.__props__})
-      args = [x.owner.inputs[0] if (x.owner and x.owner.op == host_from_gpu) else x
-              for x in args]
+if theano:
+  @gof.local_optimizer([NativeOp], inplace=True)
+  def inplace_NativeOp(node):
+    if isinstance(node.op, NativeOp) and not node.op.destroy_map:
+      kwargs = {k: getattr(node.op, k) for k in node.op.__props__}
+      # TODO: We could try to make each input inplace individually.
+      # What we do now is just to try to make all inplace.
+      kwargs["in_info"] = [dict(info) for info in node.op.in_info]
+      any_inplace = False
+      for info in kwargs["in_info"]:
+        if info.get("want_inplace", -1) >= 0:
+          any_inplace = True
+          info["is_inplace"] = True
+      if not any_inplace:
+        return False
+      new_op = node.op.__class__(**kwargs)
       from TheanoUtil import make_var_tuple
-      outputs = make_var_tuple(gpu_op(*args))
-      return [host_from_gpu(out) for out in outputs]
+      new_v = make_var_tuple(new_op(*node.inputs))
+      return new_v
+    return False
+
+
+  try:
+    optdb.register('inplace_NativeOp',
+                   gof.TopoOptimizer(inplace_NativeOp
+                                     , failure_callback=gof.TopoOptimizer.warn_inplace
+                                     ),
+                   60, 'fast_run', 'inplace')
+  except ValueError:  # can happen if it was already registered before, e.g. when we reload the module
+    pass
+
+
+  @try_register_gpu_opt(NativeOp)
+  def local_gpu_NativeOp(node):
+    if isinstance(node.op, NativeOp):
+      # see also: https://github.com/Theano/Theano/blob/master/theano/sandbox/cuda/opt.py
+      from theano.sandbox.cuda import host_from_gpu, gpu_from_host, as_cuda_ndarray_variable
+      args = node.inputs
+      if any([(x.owner and x.owner.op == host_from_gpu) for x in args]):
+        gpu_op = GpuNativeOp(**{key: getattr(node.op, key) for key in node.op.__props__})
+        args = [x.owner.inputs[0] if (x.owner and x.owner.op == host_from_gpu) else x
+                for x in args]
+        from TheanoUtil import make_var_tuple
+        outputs = make_var_tuple(gpu_op(*args))
+        return [host_from_gpu(out) for out in outputs]
 
 
 class NativeOpGenBase:

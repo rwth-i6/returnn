@@ -2,7 +2,6 @@
 
 from __future__ import print_function
 
-import json
 import h5py
 
 from NetworkDescription import LayerNetworkDescription
@@ -125,39 +124,8 @@ class LayerNetwork(object):
     :param str mask: "unity", "none" or "dropout"
     :rtype: dict[str]
     """
-    json_content = None
-    if config.has("network") and config.is_typed("network"):
-      json_content = config.typed_value("network")
-      assert isinstance(json_content, dict)
-      assert json_content
-    elif config.network_topology_json:
-      start_var = config.network_topology_json.find('(config:', 0) # e.g. ..., "n_out" : (config:var), ...
-      while start_var > 0:
-        end_var = config.network_topology_json.find(')', start_var)
-        assert end_var > 0, "invalid variable syntax at " + str(start_var)
-        var = config.network_topology_json[start_var+8:end_var]
-        assert config.has(var), "could not find variable " + var
-        config.network_topology_json = config.network_topology_json[:start_var] + config.value(var,"") + config.network_topology_json[end_var+1:]
-        print("substituting variable %s with %s" % (var,config.value(var,"")), file=log.v4)
-        start_var = config.network_topology_json.find('(config:', start_var+1)
-      try:
-        json_content = json.loads(config.network_topology_json)
-      except ValueError as e:
-        print("----- BEGIN JSON CONTENT -----", file=log.v3)
-        print(config.network_topology_json, file=log.v3)
-        print("------ END JSON CONTENT ------", file=log.v3)
-        assert False, "invalid json content, %r" % e
-      assert isinstance(json_content, dict)
-      if 'network' in json_content:
-        json_content = json_content['network']
-      assert json_content
-    if not json_content:
-      if not mask:
-        if sum(config.float_list('dropout', [0])) > 0.0:
-          mask = "dropout"
-      description = LayerNetworkDescription.from_config(config)
-      json_content = description.to_json_content(mask=mask)
-    return json_content
+    from Config import network_json_from_config
+    return network_json_from_config(config=config, mask=mask)
 
   @classmethod
   def from_description(cls, description, mask=None, **kwargs):

@@ -20,92 +20,7 @@ except ImportError:
   from _thread import start_new_thread
 import Debug
 import re
-
-
-def have_gpu():
-  cpus, gpus = get_num_devices()
-  return gpus > 0
-
-
-def _consider_check_for_gpu():
-  """
-  There are cases where nvidia-smi could hang.
-  (Any read of /proc/modules might hang in that case, maybe caused
-   by trying to `modprobe nvidia` to check if there is a Nvidia card.)
-  This sometimes happens in our SGE cluster on nodes without Nvidia cards.
-  Maybe it's also a Linux Kernel bug.
-  Anyway, just avoid any such check if we don't asked for a GPU.
-  """
-  theano_flags = {key: value for (key, value)
-                  in [s.split("=", 1) for s in os.environ.get("THEANO_FLAGS", "").split(",") if s]}
-  if "device" in theano_flags:
-    dev = theano_flags["device"]
-    if dev.startswith("gpu") or dev.startswith("cuda"):
-      return True
-    # THEANO_FLAGS will overwrite this config option. See rnn.initDevices().
-    return False
-  try:
-    from Config import get_global_config
-    config = get_global_config()
-  except Exception:
-    config = None
-  if config:
-    for dev in config.list('device', []):
-      if dev.startswith("gpu") or dev.startswith("cuda"):
-        return True
-      if dev == "all":
-        return True
-  return False
-
-
-def _get_num_devices():
-  if os.name == 'nt':
-    return 1, 1  # TODO
-  elif sys.platform == 'darwin':
-    return (
-      int(cmd("sysctl -a | grep machdep.cpu.core_count | awk '{print $2}'")[0]),
-      len(cmd("system_profiler SPDisplaysDataType | grep 'Chipset Model: NVIDIA' | cat")))
-  else:
-    num_cpus = len(cmd('cat /proc/cpuinfo | grep processor')) or 1
-    num_gpus = 0
-    if _consider_check_for_gpu():
-      try:
-        num_gpus = len(cmd('nvidia-smi -L'))
-      except CalledProcessError:
-        pass
-    return num_cpus, num_gpus
-
-
-_num_devices = None
-
-
-def get_num_devices():
-  """
-  :return: (cpu count, gpu count)
-  :rtype: (int, int)
-  """
-  global _num_devices
-  if _num_devices is not None:
-    return _num_devices
-  _num_devices = _get_num_devices()
-  return _num_devices
-
-
-def get_gpu_names():
-  if not _consider_check_for_gpu():
-    return []
-  if os.name == 'nt':
-    return "GeForce GTX 770" #TODO
-  elif sys.platform == 'darwin':
-    #TODO parse via xml output
-    return cmd("system_profiler SPDisplaysDataType | "
-               "grep 'Chipset Model: NVIDIA' | "
-               "sed 's/.*Chipset Model: NVIDIA *//;s/ *$//'")
-  else:
-    try:
-      return cmd('nvidia-smi -L | cut -d \'(\' -f 1 | cut -d \' \' -f 3- | sed -e \'s/\\ $//\'')
-    except CalledProcessError:
-      return []
+from Util import get_num_gpu_devices
 
 
 def get_device_attributes():
@@ -141,7 +56,7 @@ def get_device_attributes():
     if sys.platform == 'darwin':
       mhz = int(float(cmd("system_profiler  SPHardwareDataType | "
                           "grep 'Processor Speed' | awk '{print $3}'")[0].replace(',','.')) * 1024)
-      for i in range(get_num_devices()[0]):
+      for i in range(get_num_gpu_devices()[0]):
         attributes["cpu" + str(cpu)] = (1, mhz, 2 * 1024 * 1024 * 1024)
         cpu += 1
     else:
@@ -152,84 +67,6 @@ def get_device_attributes():
   if not cpu:
     attributes["cpu0"] = (1, 1000, 2 * 1024 * 1024 * 1024)
   return attributes
-
-
-TheanoFlags = {key: value for (key, value) in [s.split("=", 1) for s in os.environ.get("THEANO_FLAGS", "").split(",") if s]}
-
-
-def get_devices_init_args(config):
-  """
-  :type config: Config.Config
-  :rtype: list[dict[str]]
-  """
-  multiproc = config.bool('multiprocessing', True)
-  if config.value('task', 'train') == "theano_graph":
-    # Should have been reset earlier. See init() which handles this case.
-    assert not multiproc, "set multiprocessing = False to use theano_graph"
-  device_info = config.list('device', ['cpu0'])
-  if len(device_info) == 1 and device_info[0] == 'json':
-    try:
-      import json
-      specs = json.loads(open(config.value('initialize_from_json', '')).read().replace('(','\"').replace(')','\"'))['worker']
-    except Exception:
-      raise Exception('Unable to parse worker information from json content')
-    devices = [ { 'device' : specs[key]['device'], 'config' : config, 'blocking' : False, 'num_batches' : specs[key].pop('num_batches', 1), "update_specs" : specs[key].pop('update_specs', {}) } for key in specs ]
-  else:
-    device_tags = {}
-    ngpux = 0
-    ncpus, ngpus = get_num_devices()
-    if "all" in device_info:
-      device_tags = { tag: [1,True] for tag in [ "cpu" + str(i) for i in range(ncpus)] + [ "gpu" + str(i) for i in range(ngpus)] }
-    else:
-      for info in device_info:
-        device_update = True
-        num_batches = 1
-        if info[0] == '_':
-          device_update = False
-          info = info[1:]
-        if ':' in info:
-          num_batches = int(info.split(':')[1])
-          info = info.split(':')[0]
-        if len(info) == 3: info += "X"
-        assert len(info) > 3, "invalid device: " + str(info) #str(info[:-1])
-        utype = info[0:3]
-        uid = info[3:]
-        if uid == '*': uid = "[0-9]*"
-        if uid == 'X':
-          ngpux += 1
-          device_tags[info] = [num_batches, True]
-        else:
-          if utype == 'cpu':
-            np = ncpus
-          elif utype == 'gpu':
-            np = ngpus
-          else:
-            np = 0
-          match = False
-          for p in range(np):
-            if re.match(uid, str(p)):
-              device_tags[utype + str(p)] = [num_batches, device_update]
-              match = True
-          assert match, "invalid device specified: " + info
-    tags = sorted(device_tags.keys())
-    if multiproc:
-      assert len(tags) > 0
-      if len(tags) == 1 and tags[0][-1] == 'X':
-        newtag = tags[0][:-1] + 'Z'
-        device_tags[newtag] = device_tags[tags[0]]
-        tags[0] = newtag
-      devices = [ {"device": tag, "config": config, "num_batches": device_tags[tag][0], "update_specs" : {'update_rule' : 'global' if device_tags[tag][1] else 'none'}} for tag in tags ]
-      if len(devices) == 1 and ngpux > 1:
-        devices = devices * ngpux
-      import TaskSystem
-      if TaskSystem.isMainProcess:  # On a child process, we can have the gpu device.
-        assert not TheanoFlags.get("device", "").startswith("gpu"), \
-            "The main proc is not supposed to use the GPU in multiprocessing mode. Do not set device=gpu in THEANO_FLAGS."
-    else:
-      devices = [ {"device": tags[0], "config": config, "blocking": True} ]
-    #if config.value("on_size_limit", "ignore") == "cpu" and devices[-1]["device"] != "cpu127":
-    #  devices.append({"device": "cpu127", "config": config})
-  return devices
 
 
 def is_using_gpu():

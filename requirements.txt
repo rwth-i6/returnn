@@ -1,3 +1,2 @@
 numpy
 h5py
-theano==0.9

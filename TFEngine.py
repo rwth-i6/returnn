@@ -26,11 +26,10 @@ import numpy
 import tensorflow as tf
 from tensorflow.python.client import timeline
 
+from EngineBase import EngineBase
 from Dataset import Dataset, Batch, BatchSetGenerator
-from Engine import Engine as TheanoEngine
 from LearningRateControl import loadLearningRateControlFromConfig, LearningRateControl
 from Log import log
-from Network import LayerNetwork
 from Pretrain import pretrain_from_config
 from TFNetwork import TFNetwork, ExternData, help_on_tf_exception
 from TFUpdater import Updater
@@ -114,6 +113,13 @@ class Runner(object):
     # Thus everything which we access here should be cached.
 
     def reduce_sum(x, name, average=False):
+      """
+      :param tf.Tensor x:
+      :param str name:
+      :param bool average:
+      :return: sum(x) if horovod else x
+      :rtype: tf.Tensor
+      """
       if not self.engine.config.is_true("use_horovod"):
         return x
       from TFUtil import global_tensor
@@ -124,6 +130,12 @@ class Runner(object):
         name="fetch_reduce_sum__" + name.replace(":", "__").replace("/", "_"))
 
     def inv_reduce_sum(x, name):
+      """
+      :param tf.Tensor x:
+      :param str name:
+      :return: reciprocal(sum(reciprocal(x))) if horovod else x
+      :rtype: tf.Tensor
+      """
       if not self.engine.config.is_true("use_horovod"):
         return x
       from TFUtil import global_tensor
@@ -166,10 +178,15 @@ class Runner(object):
         d["stats:%s:%s" % (layer.name, k)] = v
     if self._should_train:
       assert self.engine.updater
+
       def callback_on_new():
+        """
+        Called when we have something new.
+        """
         # Force a new check.
         self.engine._checked_uninitialized_vars = False
         self.engine.updater.init_optimizer_vars(session=self.engine.tf_session)
+
       d["optim_op"] = self.engine.updater.get_optim_op(callback_on_new=callback_on_new)
       if self.engine.updater.optim_meta_losses:
         d.update(self.engine.updater.optim_meta_losses)
@@ -252,6 +269,7 @@ class Runner(object):
   def _finalize(self, num_steps):
     """
     Called at the end of an epoch.
+
     :param int num_steps: number of steps we did for this epoch
     """
     results = {key: self._normalize_loss(value, key, self._inv_norm_accumulated)
@@ -373,7 +391,7 @@ class Runner(object):
         from Util import human_bytes_size, Stats
         self.stats.setdefault(k, Stats(format_str=human_bytes_size))
         self.stats[k].collect([v])
-        eval_info[k] = human_bytes_size(v)
+        eval_info[k] = human_bytes_size(int(v))
 
     return eval_info
 
@@ -688,11 +706,16 @@ class Runner(object):
       self.elapsed = time.time() - self.start_time
 
 
-class Engine(object):
+class Engine(EngineBase):
+  """
+  TF backend engine.
+  """
+
   def __init__(self, config=None):
     """
     :param Config.Config|None config:
     """
+    super(Engine, self).__init__()
     if config is None:
       from Config import get_global_config
       config = get_global_config(auto_create=True)
@@ -705,23 +728,25 @@ class Engine(object):
     self.orig_config = {}  # see _maybe_update_config
     self.devices_config = self._get_devices_config()
     self._check_devices()
-    self.tf_session = None  # type: tf.Session
-    self.network = None  # type: TFNetwork
-    self.updater = None  # type: Updater
-    self.learning_rate_control = None  # type: LearningRateControl
+    self.tf_session = None  # type: typing.Optional[tf.Session]
+    self.network = None  # type: typing.Optional[TFNetwork]
+    self.updater = None  # type: typing.Optional[Updater]
+    self.learning_rate_control = None  # type: typing.Optional[LearningRateControl]
     self._checked_uninitialized_vars = False
     self._merge_all_summaries = None
     self.dataset_batches = {}  # type: typing.Dict[str,BatchSetGenerator]
-    self.train_data = None  # type: Dataset
-    self.start_epoch = None
+    self.train_data = None  # type: typing.Optional[Dataset]
+    self.start_epoch = None  # type: typing.Optional[int]
     self.use_dynamic_train_flag = False
     self.use_search_flag = config.value("task", None) == "search"
     self.use_eval_flag = config.value("task", None) != "forward"
     self.learning_rate = 0.0  # set in init_train_epoch
-    self.epoch = 0
     self._const_cache = {}  # type: typing.Dict[str,tf.Tensor]
 
   def finalize(self):
+    """
+    Finalizes the TF session, network, graph.
+    """
     self._close_tf_session()
     tf.reset_default_graph()
     self.network = None
@@ -729,6 +754,12 @@ class Engine(object):
     self._merge_all_summaries = None
 
   def get_const_tensor(self, key, value):
+    """
+    :param key:
+    :param value:
+    :return: tf.constant(value)
+    :rtype: tf.Tensor
+    """
     if key not in self._const_cache:
       self._const_cache[key] = tf.constant(value=value, name="const_%s" % key)
     return self._const_cache[key]
@@ -737,7 +768,7 @@ class Engine(object):
     """
     :rtype: list[dict[str]]
     """
-    from Device import get_devices_init_args
+    from Config import get_devices_init_args
     if not self.config.value("device", None):
       # Better default: Use GPU if available.
       from TFUtil import is_gpu_available
@@ -749,6 +780,9 @@ class Engine(object):
     return get_devices_init_args(self.config)
 
   def is_requesting_for_gpu(self):
+    """
+    :rtype: bool
+    """
     return any([d["device"].startswith("gpu") for d in self.devices_config])
 
   def _check_devices(self):
@@ -797,31 +831,15 @@ class Engine(object):
     self._merge_all_summaries = None
     self._const_cache.clear()
 
-  get_train_start_epoch_batch = TheanoEngine.get_train_start_epoch_batch
-  config_get_final_epoch = TheanoEngine.config_get_final_epoch
-  get_epoch_model = TheanoEngine.get_epoch_model
-  epoch_model_filename = TheanoEngine.epoch_model_filename
-
-  def get_epoch_model_filename(self, epoch=None):
-    if not epoch:
-      epoch = self.epoch
-    return self.epoch_model_filename(self.model_filename, epoch, self.is_pretrain_epoch(epoch=epoch))
-
-  def get_epoch_str(self):
-    return ("pretrain " if self.is_pretrain_epoch() else "") + "epoch %s" % self.epoch
-
-  def is_pretrain_epoch(self, epoch=None):
-    if not epoch:
-      epoch = self.epoch
-    return self.pretrain and epoch <= self.pretrain.get_train_num_epochs()
-
-  def is_first_epoch_after_pretrain(self):
-    return self.pretrain and self.epoch == self.pretrain.get_train_num_epochs() + 1
-
   def get_eval_datasets(self):
-    eval_datasets = {}; """ :type: dict[str,Dataset.Dataset] """
+    """
+    :return: dict of datasets used for eval (dev, eval)
+    :rtype: dict[str,Dataset]
+    """
+    eval_datasets = {}  # type: typing.Dict[str,Dataset]
     for name, dataset in [("dev", self.dev_data), ("eval", self.eval_data)]:
-      if not dataset: continue
+      if not dataset:
+        continue
       eval_datasets[name] = dataset
     return eval_datasets
 
@@ -950,7 +968,8 @@ class Engine(object):
       # In self.init_train_epoch(), we initialize a new model.
       net_dict = self.pretrain.get_network_json_for_epoch(self.epoch)
     else:
-      net_dict = LayerNetwork.json_from_config(config)
+      from Config import network_json_from_config
+      net_dict = network_json_from_config(config)
     if net_dict_post_proc:
       net_dict = net_dict_post_proc(net_dict)
 
@@ -1459,7 +1478,7 @@ class Engine(object):
         if name[:4] == "pos_":
           assert 'seq_len' in extra_fetches_out
           seq_lens = extra_fetches_out['seq_len']
-          shorted_scores = [ps[:l] for ps,l in zip(value, seq_lens)]
+          shorted_scores = [ps[:l] for ps, l in zip(value, seq_lens)]
           for i, seq_tag in enumerate(seq_tags):
             results_per_seq.setdefault(seq_tag, {'seq_tags': seq_tag})[name] = shorted_scores[i]
         else:
@@ -1565,7 +1584,7 @@ class Engine(object):
     from Util import CollectionReadCheckCovered, human_bytes_size, confirm
     from itertools import count
     opts = CollectionReadCheckCovered(self.config.get_of_type("cleanup_old_models", dict, {}))
-    existing_models = TheanoEngine.get_existing_models(config=self.config)
+    existing_models = self.get_existing_models(config=self.config)
     if hasattr(self, "learning_rate_control"):
       lr_control = self.learning_rate_control
     else:
@@ -2366,7 +2385,8 @@ class Engine(object):
           try:
             audio, sample_rate = soundfile.read(f)
           except Exception as exc:
-            print("Error reading audio (%s). Invalid format? Size %i, first few bytes %r." % (exc, f.getbuffer().nbytes, f.getbuffer().tobytes()[:20]), file=log.v2)
+            print("Error reading audio (%s). Invalid format? Size %i, first few bytes %r." % (
+              exc, f.getbuffer().nbytes, f.getbuffer().tobytes()[:20]), file=log.v2)
             raise
           audio_len = float(len(audio)) / sample_rate
           print("audio len %i (%.1f secs), sample rate %i" % (len(audio), audio_len, sample_rate), file=log.v4)

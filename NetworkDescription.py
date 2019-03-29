@@ -1,3 +1,8 @@
+
+"""
+Provides :class:`LayerNetworkDescription`.
+"""
+
 from __future__ import print_function
 
 from Util import simple_obj_repr, hdf5_dimension, hdf5_group, hdf5_shape
