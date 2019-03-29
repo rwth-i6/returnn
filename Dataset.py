@@ -1,4 +1,7 @@
-#! /usr/bin/python2.7
+
+"""
+This defines the base dataset class :class:`Dataset`.
+"""
 
 from __future__ import print_function
 
@@ -20,10 +23,15 @@ import functools
 
 from Log import log
 from EngineBatch import Batch, BatchSetGenerator
-from Util import try_run, NumbersDict, unicode
+from Util import try_run, NumbersDict, unicode, OptionalNotImplementedError, PY3
+if PY3:
+  import typing
 
 
 class Dataset(object):
+  """
+  Base class for any dataset. This defines the dataset API.
+  """
 
   @staticmethod
   def kwargs_update_from_config(config, kwargs):
@@ -32,10 +40,15 @@ class Dataset(object):
     :type kwargs: dict[str]
     """
     def set_or_remove(key, value):
+      """
+      :param str key:
+      :param value:
+      """
       if key in kwargs and kwargs[key] is None:
         del kwargs[key]
       if value is not None and key not in kwargs:
         kwargs[key] = value
+
     set_or_remove("window", config.int('window', 0) or None)
     set_or_remove("context_window", config.typed_value("context_window"))
     set_or_remove("chunking", config.opt_typed_value("chunking", None))
@@ -75,8 +88,9 @@ class Dataset(object):
     """
     self.name = name or ("dataset_id%s" % id(self))
     self.lock = RLock()  # Used when manipulating our data potentially from multiple threads.
+    self.rnd_seq_drop = None  # type: typing.Optional[Random]
     self.num_inputs = 0  # usually not used, but num_outputs instead, which is more generic
-    self.num_outputs = None; " :type: dict[str,(int,int)] "  # tuple is num-classes, len(shape).
+    self.num_outputs = None  # type: typing.Optional[typing.Dict[str,typing.Tuple[int,int]]]  # tuple is num-classes, len(shape).  # nopep8
     self.window = window
     self.seq_ordering = seq_ordering  # "default", "sorted" or "random". See self.get_seq_order_for_epoch().
     self.partition_epoch = partition_epoch or 1
@@ -90,7 +104,7 @@ class Dataset(object):
     self.nbytes = 0
     self.num_running_chars = 0  # CTC running chars.
     self._num_timesteps = 0
-    self._num_codesteps = None; " :type: int "  # Num output frames, could be different from input, seq2seq, ctc.
+    self._num_codesteps = None  # type: typing.Optional[int]  # Num output frames, could be different from input, seq2seq, ctc.  # nopep8
     self._num_seqs = 0
     self._estimated_num_seqs = estimated_num_seqs
     self.min_chunk_size = min_chunk_size
@@ -138,6 +152,7 @@ class Dataset(object):
     :type xr: numpy.ndarray
     :rtype: numpy.ndarray
     """
+    # noinspection PyProtectedMember
     from numpy.lib.stride_tricks import as_strided
     x = numpy.concatenate([self.zpad, xr, self.zpad])
     return as_strided(
@@ -146,6 +161,7 @@ class Dataset(object):
       strides=(x.strides[0], x.strides[1] * self.num_inputs) + x.strides
       ).reshape((xr.shape[0], self.num_inputs * self.window))
 
+  # noinspection PyMethodMayBeStatic
   def preprocess(self, seq):
     """
     :type seq: numpy.ndarray
@@ -176,12 +192,12 @@ class Dataset(object):
     Attention: Either this method or get_seq_length() needs to be redefined
     in any subclass of Dataset! However, in new code, just override get_seq_length().
     """
-    l = self.get_seq_length(sorted_seq_idx)
+    ls = self.get_seq_length(sorted_seq_idx)
     targets = self.get_target_list()
     if targets:
-      return numpy.array([l["data"], l[targets[0]]])
+      return numpy.array([ls["data"], ls[targets[0]]])
     else:
-      return numpy.array([l["data"], 0])
+      return numpy.array([ls["data"], 0])
 
   def get_seq_length(self, seq_idx):
     """
@@ -196,10 +212,16 @@ class Dataset(object):
     return NumbersDict(d)
 
   def get_num_timesteps(self):
+    """
+    :rtype: int
+    """
     assert self._num_timesteps > 0
     return self._num_timesteps
 
   def get_num_codesteps(self):
+    """
+    :rtype: int|list[int]
+    """
     if self._num_codesteps is None:
       return [self.get_num_timesteps()]
     return self._num_codesteps
@@ -207,12 +229,14 @@ class Dataset(object):
   def load_seqs(self, start, end):
     """
     Load data sequences, such that self.get_data() & friends can return the data.
+
     :param int start: start sorted seq idx, inclusive
     :param int end: end sorted seq idx, exclusive
     """
     assert start >= 0
     assert start <= end
-    if self.is_cached(start, end): return
+    if self.is_cached(start, end):
+      return
 
     if self.shuffle_frames_of_nseqs > 0:
       # We always load N seqs at once and shuffle all their frames.
@@ -242,7 +266,7 @@ class Dataset(object):
     return start, end
 
   def _shuffle_frames_in_seqs(self, start, end):
-    raise NotImplementedError
+    raise OptionalNotImplementedError
 
   def _load_seqs(self, start, end):
     """
@@ -377,7 +401,7 @@ class Dataset(object):
       Not all datasets implement this.
     :rtype: list[int]
     """
-    raise NotImplementedError
+    raise OptionalNotImplementedError
 
   def _base_init(self):
     self.nbytes = 0
@@ -407,7 +431,10 @@ class Dataset(object):
     self.init_seq_order()
 
   def get_times(self, sorted_seq_idx):
-    raise NotImplementedError
+    """
+    :param int sorted_seq_idx:
+    """
+    raise OptionalNotImplementedError
 
   def get_data(self, seq_idx, key):
     """
@@ -432,6 +459,7 @@ class Dataset(object):
 
   def get_targets(self, target, sorted_seq_idx):
     """
+    :param str target: data key
     :type sorted_seq_idx: int
     :rtype: numpy.ndarray
     :returns targets: format 1d (time) (int: idx of output-feature)
@@ -440,9 +468,23 @@ class Dataset(object):
     return self.get_data(sorted_seq_idx, target)
 
   def get_ctc_targets(self, sorted_seq_idx):
-    raise NotImplementedError
+    """
+    Warning: This is deprecated/obsolete.
+
+    :param int sorted_seq_idx:
+    :rtype: numpy.ndarray|None
+    """
+    return None
 
   def get_data_slice(self, seq_idx, key, start_frame, end_frame):
+    """
+    :param int seq_idx:
+    :param str key:
+    :param int start_frame:
+    :param int end_frame:
+    :return: x[start_frame:end_frame], with x = get_data(seq_idx, key)
+    :rtype: numpy.ndarray
+    """
     if "[sparse:" in key and (start_frame > 0 or end_frame < self.get_seq_length(seq_idx)[key]):
       return self._get_data_slice_sparse(seq_idx, key, start_frame, end_frame)
     data = self.get_data(seq_idx, key)
@@ -518,9 +560,17 @@ class Dataset(object):
     raise NotImplemented
 
   def has_ctc_targets(self):
+    """
+    :return: whether we have get_ctc_targets implemented
+    :rtype: bool
+    """
     return False
 
+  # noinspection PyMethodMayBeStatic
   def get_max_ctc_length(self):
+    """
+    :rtype: int
+    """
     return 0
 
   @classmethod
@@ -545,10 +595,13 @@ class Dataset(object):
     :return: Returns a fraction (float in [0,1], always > 0) of how far we have advanced
       for this seq in the dataset.
       This does not have to be exact. This is only for the user.
+    :rtype: float
     """
+    # noinspection PyBroadException
     try:
       num_seqs = self.num_seqs
     except Exception:  # num_seqs not always available
+      # noinspection PyBroadException
       try:
         num_seqs = self.estimated_num_seqs
       except Exception:  # also not always available
@@ -557,10 +610,18 @@ class Dataset(object):
 
   @property
   def num_seqs(self):
+    """
+    :rtype: int
+    """
     raise NotImplementedError
 
   @property
   def estimated_num_seqs(self):
+    """
+    :return: estimated num seqs. does not have to be exact
+    :rtype: int|None
+    """
+    # noinspection PyBroadException
     try:
       return self.num_seqs
     except Exception:  # might not be available
@@ -679,6 +740,10 @@ class Dataset(object):
     return " ".join(map(self.labels[key].__getitem__, data))
 
   def calculate_priori(self, target="classes"):
+    """
+    :param str target:
+    :rtype: numpy.ndarray
+    """
     priori = numpy.zeros((self.num_outputs[target][0],), dtype=numpy.float32)
     i = 0
     while self.is_less_than_num_seqs(i):
@@ -784,15 +849,23 @@ class Dataset(object):
       end += ctx_lr[1]
     return start, end
 
-  def sample(self,seq_idx):
+  def sample(self, seq_idx):
+    """
+    :param int seq_idx:
+    :rtype: bool
+    """
     if seq_idx in self.weights:
       weight = self.weights[seq_idx]
       return weight[0] >= weight[1]
     return True
 
-  def update_weights(self,seqs,weights):
-    for seq,weight in zip(seqs,weights):
-      self.weights[seq.seq_idx] = [weight,0]
+  def update_weights(self, seqs, weights):
+    """
+    :param list[EngineBatch.BatchSeqCopyPart] seqs:
+    :param list[float] weights:
+    """
+    for seq, weight in zip(seqs, weights):
+      self.weights[seq.seq_idx] = [weight, 0]
 
   def _generate_batches(self, recurrent_net,
                         batch_size, max_seqs=-1, max_seq_length=sys.maxsize,
@@ -834,7 +907,7 @@ class Dataset(object):
     ctx_lr = self._get_context_window_left_right()
     total_num_seqs = 0
     last_seq_idx = -1
-    avg_weight = sum([ v[0] for v in self.weights.values()]) / (len(self.weights.keys()) or 1)
+    avg_weight = sum([v[0] for v in self.weights.values()]) / (len(self.weights.keys()) or 1)
     for idx in self.weights:
       self.weights[idx][1] = random() * avg_weight * pruning
       self.weights[idx][0] *= (1. + pruning)
@@ -842,6 +915,8 @@ class Dataset(object):
           chunk_size=chunk_size, chunk_step=chunk_step, used_data_keys=used_data_keys):
       if not self.sample(seq_idx):
         continue
+      if total_num_seqs > max_total_num_seqs:
+        break
       if ctx_lr:
         t_start -= ctx_lr[0]
         t_end += ctx_lr[1]
@@ -908,13 +983,23 @@ class Dataset(object):
 
   @classmethod
   def index_shape_for_batches(cls, batches, data_key="data"):
-    shape = [0, 0]  # time,batch
+    """
+    :param list[EngineBatch.Batch] batches:
+    :param str data_key:
+    :return: shape as (time, batch)
+    :rtype: (int, int)
+    """
+    shape = [0, 0]  # time, batch
     for batch in batches:
       shape = [max(shape[0], batch.max_num_frames_per_slice[data_key]), shape[1] + batch.num_slices]
-    return shape
+    return tuple(shape)
 
 
 class DatasetSeq:
+  """
+  Encapsulates all data for one sequence.
+  """
+
   def __init__(self, seq_idx, features, targets=None, ctc_targets=None, seq_tag=None):
     """
     :param int seq_idx: sorted seq idx in the Dataset
@@ -952,9 +1037,16 @@ class DatasetSeq:
     return NumbersDict(d)
 
   def get_data(self, key):
+    """
+    :param str key:
+    :rtype: numpy.ndarray
+    """
     return self.features[key]
 
   def get_data_keys(self):
+    """
+    :rtype: set[str]
+    """
     return self.features.keys()
 
   def __repr__(self):
@@ -962,10 +1054,16 @@ class DatasetSeq:
 
 
 def get_dataset_class(name):
+  """
+  :param str name:
+  :rtype: type[Dataset]
+  """
   from importlib import import_module
   # Only those modules which make sense to be loaded by the user,
   # because this function is only used for such cases.
-  mod_names = ["HDFDataset", "SprintDataset", "GeneratingDataset", "NumpyDumpDataset", "MetaDataset", "LmDataset", "StereoDataset", "RawWavDataset"]
+  mod_names = [
+    "HDFDataset", "SprintDataset", "GeneratingDataset", "NumpyDumpDataset",
+    "MetaDataset", "LmDataset", "StereoDataset", "RawWavDataset"]
   for mod_name in mod_names:
     mod = import_module(mod_name)
     if name in vars(mod):
@@ -1028,9 +1126,9 @@ def init_dataset_via_str(config_str, config=None, cache_byte_size=None, **kwargs
   if config_str.startswith("sprint:"):
     kwargs["sprintConfigStr"] = config_str[len("sprint:"):]
     assert config, "need config for dataset in 'sprint:...' format. or use 'ExternSprintDataset:...' instead"
-    sprintTrainerExecPath = config.value("sprint_trainer_exec_path", None)
-    assert sprintTrainerExecPath, "specify sprint_trainer_exec_path in config"
-    kwargs["sprintTrainerExecPath"] = sprintTrainerExecPath
+    sprint_trainer_exec_path = config.value("sprint_trainer_exec_path", None)
+    assert sprint_trainer_exec_path, "specify sprint_trainer_exec_path in config"
+    kwargs["sprintTrainerExecPath"] = sprint_trainer_exec_path
     from SprintDataset import ExternSprintDataset
     cls = ExternSprintDataset
   elif config_str.startswith("config:"):

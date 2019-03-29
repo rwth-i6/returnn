@@ -1,6 +1,13 @@
 
+"""
+Defines :class:`BatchSeqCopyPart` and other batch related helpers.
+This is shared across different backends.
+"""
+
 import random
-from Util import NumbersDict
+from Util import NumbersDict, PY3
+if PY3:
+  import typing
 
 
 class BatchSeqCopyPart:
@@ -35,6 +42,9 @@ class BatchSeqCopyPart:
 
   @property
   def frame_length(self):
+    """
+    :rtype: NumbersDict
+    """
     return self.seq_end_frame - self.seq_start_frame
 
   def __repr__(self):
@@ -53,7 +63,7 @@ class Batch:
     self.num_slices = 0
     # original data_shape = [0, 0], format (time,batch/slice)
     #          data_shape = [max_num_frames_per_slice, num_slices]
-    self.seqs = []  # type: list[BatchSeqCopyPart]
+    self.seqs = []  # type: typing.List[BatchSeqCopyPart]
 
   def __repr__(self):
     return "<Batch start_seq:%r, len(seqs):%i>" % (self.start_seq, len(self.seqs))
@@ -116,27 +126,40 @@ class Batch:
     """
     Note that this is only an upper limit in case of data_shape[1] > 1
     because data_shape[0] is the max frame len of all seqs.
+
     :return: related to the data-key with max length
     :rtype: NumbersDict
     """
     return self.max_num_frames_per_slice * self.num_slices
 
   def get_total_num_frames(self):
+    """
+    :rtype: NumbersDict
+    """
     return sum([s.frame_length for s in self.seqs])
 
   @property
   def start_seq(self):
+    """
+    :rtype: int|None
+    """
     if not self.seqs:
       return None
     return min([s.seq_idx for s in self.seqs])
 
   @property
   def end_seq(self):
+    """
+    :rtype: int|None
+    """
     if not self.seqs:
       return None
     return max([s.seq_idx for s in self.seqs]) + 1
 
   def get_num_seqs(self):
+    """
+    :rtype: int
+    """
     if not self.seqs:
       return 0
     return self.end_seq - self.start_seq
@@ -154,14 +177,18 @@ class BatchSetGenerator:
   def __init__(self, dataset, generator, shuffle_batches=False, cache_whole_epoch=True):
     """
     :type dataset: Dataset.Dataset
-    :type generator: iter[Batch]
+    :type generator: typing.Generator[Batch]
+    :param bool shuffle_batches:
+    :param bool cache_whole_epoch:
     """
     self.dataset = dataset
     self.generator = generator
     self.shuffle_batches = shuffle_batches
     # In some cases, it might be faster to cache the list of batches.
     self.cache_whole_epoch = cache_whole_epoch
-    self.cache = []  # type: list[Batch]
+    self.cache = []  # type: typing.List[Batch]
+    self.buffer = []  # type: typing.List[Batch]
+    self.last_batch = None  # type: typing.Optional[Batch]
     self.reached_end = False
     random.seed(1234)
     self._reset()
@@ -172,7 +199,7 @@ class BatchSetGenerator:
       random.shuffle(self.buffer)
     self.cache_active = self.reached_end
     self.reached_end = False
-    self.last_batch = None  # type: Batch
+    self.last_batch = None  # type: typing.Optional[Batch]
     self.current_batch_idx = 0
 
   def reset(self):

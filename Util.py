@@ -63,6 +63,12 @@ class NotSpecified(object):
     return "<NotSpecified>"
 
 
+class OptionalNotImplementedError(NotImplementedError):
+  """
+  This can optionally be implemented, but it is not required by the API.
+  """
+
+
 def is_64bit_platform():
   """
   :return: True if we run on 64bit, False for 32bit
