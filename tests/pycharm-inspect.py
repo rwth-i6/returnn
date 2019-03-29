@@ -344,7 +344,7 @@ def report_inspect_dir(path,
     relevant_inspections_for_file.add(filename)
   for filename in all_files:
     if filename not in relevant_inspections_for_file:
-      inspect_class_not_counted.add(filename)
+      ignore_count_for_files.add(filename)
 
   color = better_exchook.Color()
   total_relevant_count = 0
