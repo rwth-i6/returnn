@@ -14,7 +14,7 @@ if PY3:
   import typing
 
 
-class EngineBase:
+class EngineBase(object):
   """
   Base class for a backend engine, such as :class:`TFEngine.Engine`.
   """
