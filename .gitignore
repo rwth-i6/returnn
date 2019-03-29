@@ -14,3 +14,6 @@ ipython-kernel-*.json
 
 # When we run tests here, these can be created.
 /events.out.tfevents.*
+
+# When we run tests/pycharm-inspect.py, this will be created.
+/tests/PyCharm.idea/workspace.xml
