@@ -24,7 +24,7 @@ from TFNetwork import *
 from TFNetworkRecLayer import *
 from TFUtil import is_gpu_available
 import TFUtil
-TFUtil.debugRegisterBetterRepr()
+TFUtil.debug_register_better_repr()
 
 import Debug
 Debug.installLibSigSegfault()

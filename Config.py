@@ -38,9 +38,9 @@ class Config:
     """
     :param dict[str]|None items: optional initial typed_dict
     """
-    self.dict = {}; """ :type: dict[str, list[str]] """
-    self.typed_dict = {}; """ :type: dict[str] """  # could be loaded via JSON or so
-    self.network_topology_json = None; """ :type: str | None """
+    self.dict = {}  # type: typing.Dict[str, typing.List[str]]
+    self.typed_dict = {}  # :type: typing.Dict[str]  # could be loaded via JSON or so
+    self.network_topology_json = None  # type: typing.Optional[str]
     self.files = []
     if items is not None:
       self.typed_dict.update(items)

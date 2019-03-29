@@ -19,7 +19,7 @@ from TFNetwork import *
 from TFNetworkLayer import *
 from Log import log
 import TFUtil
-TFUtil.debugRegisterBetterRepr()
+TFUtil.debug_register_better_repr()
 
 log.initialize(verbosity=[5])
 

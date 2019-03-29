@@ -356,14 +356,14 @@ def init_backend_engine():
         assert horovod_reduce_type in ["grad", "param"], "config option 'horovod_reduce_type' invalid"
       if hvd.rank() == 0:  # Don't spam in all ranks.
         print("Horovod: Reduce type:", horovod_reduce_type, file=log.v3)
-    from TFUtil import debugRegisterBetterRepr, setup_tf_thread_pools, print_available_devices
+    from TFUtil import debug_register_better_repr, setup_tf_thread_pools, print_available_devices
     tf_session_opts = config.typed_value("tf_session_opts", {})
     assert isinstance(tf_session_opts, dict)
     # This must be done after the Horovod logic, such that we only touch the devices we are supposed to touch.
     setup_tf_thread_pools(log_file=log.v3, tf_session_opts=tf_session_opts)
     # Print available devices. Also make sure that get_tf_list_local_devices uses the correct TF session opts.
     print_available_devices(tf_session_opts=tf_session_opts, file=log.v2)
-    debugRegisterBetterRepr()
+    debug_register_better_repr()
   else:
     raise NotImplementedError
 

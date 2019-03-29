@@ -13,7 +13,7 @@ sys.path += [os.path.dirname(os.path.abspath(__file__)) + "/.."]
 from TFEngine import *
 import Util
 import TFUtil
-TFUtil.debugRegisterBetterRepr()
+TFUtil.debug_register_better_repr()
 from Config import Config
 from nose.tools import assert_equal, assert_is_instance
 import unittest

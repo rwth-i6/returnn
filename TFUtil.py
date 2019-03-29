@@ -2245,7 +2245,7 @@ class FlipGradientBuilder(object):
   def __init__(self):
     self.num_calls = 0
 
-  def __call__(self, x, l=1.0):
+  def __call__(self, x, scale=1.0):
     grad_name = "FlipGradient%d" % self.num_calls
 
     from tensorflow.python.framework import ops
@@ -2253,7 +2253,7 @@ class FlipGradientBuilder(object):
     # noinspection PyUnusedLocal
     @ops.RegisterGradient(grad_name)
     def _flip_gradients(op, grad):
-      return [tf.negative(grad) * l]
+      return [tf.negative(grad) * scale]
 
     g = tf.get_default_graph()
     with g.gradient_override_map({"Identity": grad_name}):
@@ -2521,6 +2521,7 @@ def identity_with_ops(x, ops):
 
 _setup_tf_thread_pools_called_once = False
 
+
 def setup_tf_thread_pools(num_threads=None, log_file=None, tf_session_opts=None):
   """
   See here for documentation of intra_op_parallelism_threads and inter_op_parallelism_threads:
@@ -2569,7 +2570,8 @@ def setup_tf_thread_pools(num_threads=None, log_file=None, tf_session_opts=None)
     opts.setdefault("intra_op_parallelism_threads", num_threads)
     opts.setdefault("inter_op_parallelism_threads", num_threads)
   if log_file:
-    print("Setup TF inter and intra global thread pools, num_threads %r, session opts %r." % (num_threads, opts), file=log_file)
+    print("Setup TF inter and intra global thread pools, num_threads %r, session opts %r." % (num_threads, opts),
+          file=log_file)
   with tf.Session(config=tf.ConfigProto(**opts)) as session:
     session.close()
 
@@ -2599,7 +2601,7 @@ class _DeviceAttributes:
     self.name = dev.name  # type: str
     self.device_type = dev.device_type  # type: str
     self.memory_limit_bytes = dev.memory_limit_bytes  # type: int
-    self.physical_device_desc = None  # type: str
+    self.physical_device_desc = None  # type: typing.Optional[str]
 
   def set_physical_device_desc(self, session):
     """
@@ -2619,6 +2621,7 @@ class _DeviceAttributes:
 
 
 _list_local_devices = None
+
 
 def get_tf_list_local_devices(tf_session_opts=None):
   """
@@ -2866,7 +2869,7 @@ def get_activation_function(s):
   if not s or s in ["none", "identity"]:
     return identity
   if "(" in s:
-    return eval("lambda x: %s" %s, {"tf": tf})
+    return eval("lambda x: %s" % s, {"tf": tf})
   if any(k in s for k in _bin_ops):
     return _get_act_func_with_op(s)
   if hasattr(tf.nn, s):
@@ -3196,6 +3199,7 @@ def openai_layer_norm(x, gain, bias, axis, epsilon=1e-6):
       bias = tf.reshape(bias, [x.get_shape().dims[axis].value or -1], "bias_flat")
     from TFNativeOp import init_blocksparse
     init_blocksparse()
+    # noinspection PyUnresolvedReferences,PyPackageRequirements
     from blocksparse.norms import layer_norm
     return layer_norm(x, g=gain, b=bias, axis=axis, epsilon=epsilon)
 
@@ -3930,7 +3934,8 @@ class OpCodeCompiler(NativeCodeCompiler):
       # https://github.com/tensorflow/tensorflow/issues/13607
       ld_flags += ["-L%s" % tf.sysconfig.get_lib(), "-ltensorflow_framework"]
     use_cxx11_abi = hasattr(tf, 'CXX11_ABI_FLAG') and tf.CXX11_ABI_FLAG
-    super(OpCodeCompiler, self).__init__(include_paths=include_paths, ld_flags=ld_flags, use_cxx11_abi=use_cxx11_abi, **kwargs)
+    super(OpCodeCompiler, self).__init__(
+      include_paths=include_paths, ld_flags=ld_flags, use_cxx11_abi=use_cxx11_abi, **kwargs)
     self._tf_mod = None
 
   _relevant_info_keys = NativeCodeCompiler._relevant_info_keys + ("tf_version", "with_cuda", "cuda_path", "nvcc_opts")
@@ -3991,7 +3996,8 @@ class TFNativeUtilCompiler(NativeCodeCompiler):
       # https://github.com/tensorflow/tensorflow/issues/13607
       ld_flags += ["-L%s" % tf.sysconfig.get_lib(), "-ltensorflow_framework"]
     use_cxx11_abi = hasattr(tf, 'CXX11_ABI_FLAG') and tf.CXX11_ABI_FLAG
-    super(TFNativeUtilCompiler, self).__init__(include_paths=include_paths, ld_flags=ld_flags, use_cxx11_abi=use_cxx11_abi, **kwargs)
+    super(TFNativeUtilCompiler, self).__init__(
+      include_paths=include_paths, ld_flags=ld_flags, use_cxx11_abi=use_cxx11_abi, **kwargs)
 
   _relevant_info_keys = NativeCodeCompiler._relevant_info_keys + ("tf_version",)
 
@@ -4095,12 +4101,12 @@ class CustomGradient(object):
   def register(self, input_types, op, grad_op, name=None):
     """
     :param list[tf.DType]|tuple[tf.DType] input_types:
-    :param (tf.Tensor) -> tf.Tensor op:
+    :param ((tf.Tensor) -> tf.Tensor)|T op:
     :param (tf.Operation, tf.Tensor) -> tuple[tf.Tensor]|tf.Tensor grad_op: args are (op, out_grad)
       and it must return in_grad
     :param str name: optional func_name
     :return: op
-    :rtype: (tf.Tensor) -> tf.Tensor
+    :rtype: ((tf.Tensor) -> tf.Tensor)|T
     """
     graph = tf.get_default_graph()
     assert isinstance(graph, tf.Graph)
@@ -4244,6 +4250,9 @@ class SyntheticGradient(object):
 
   @classmethod
   def exit_gradient_scope(cls):
+    """
+    Exit gradient scope.
+    """
     cls.scope_ctx.scope.exit()
 
   @classmethod
@@ -4313,6 +4322,11 @@ def filter_grad(x, threshold, axis):
   :rtype: tf.Tensor
   """
   def grad_op(op, out_grad):
+    """
+    :param tf.Operation op:
+    :param tf.Tensor out_grad:
+    :rtype: tf.Tensor
+    """
     with tf.name_scope("filter_grad__grad_op"):
       assert isinstance(op, tf.Operation)
       assert isinstance(out_grad, tf.Tensor)
@@ -4330,7 +4344,7 @@ def filter_grad(x, threshold, axis):
     return y
 
 
-def debugRegisterBetterRepr():
+def debug_register_better_repr():
   """
   Some types don't have good __repr__ implementations by default (for the current TF version).
   For debugging, it can be helpful to give some more info.
@@ -4656,9 +4670,20 @@ def stop_event_writer_thread(event_writer):
 
   # This solution is very ugly and dependent on TF internal code.
   class DummyStopThread:
+    """
+    Stub for EventFileWriter.
+    """
+
     # noinspection PyPep8Naming
     @classmethod
     def WriteEvent(cls, *args, **kwargs):
+      """
+      Stub for EventFileWriter.WriteEvent.
+
+      :param args:
+      :param kwargs:
+      :return: nothing, raises SystemExit
+      """
       raise SystemExit  # stop the thread
 
   # noinspection PyProtectedMember
@@ -4797,12 +4822,11 @@ def windowed_nd(source, window_size, window_left=None, window_right=None,
     return final
 
 
-def slice_nd(x, start, size, seq_lens=None):
+def slice_nd(x, start, size):
   """
   :param tf.Tensor x: shape (B, T, ...)
   :param tf.Tensor start: shape (B,), int32
   :param int size:
-  :param tf.Tensor|None seq_lens: shape (B,), int32, <= T. if None, [T]*B is assumed.
   :return: [x[start_1:size], x[start_2:size], ..., x[start_B:size]], shape (B, size, ...)
     Like :func:`slice_pad_zeros`, the size in the first axis will always be ``size``,
     and we will pad with zeros.
@@ -4815,7 +4839,7 @@ def slice_nd(x, start, size, seq_lens=None):
     batch_idxs = expand_dims_unbroadcast(tf.range(n_batch), 1, size)  # (n_batch, size)
     batch_idxs = tf.reshape(batch_idxs, (-1,))  # (n_batch*size,)
 
-    window_pos = tf.expand_dims(start,1) + tf.range(size)  # (n_batch, size)
+    window_pos = tf.expand_dims(start, 1) + tf.range(size)  # (n_batch, size)
     window_pos = tf.reshape(window_pos, (-1,))  # (n_batch*size,)
 
     # build mask for zero-padding
@@ -5001,6 +5025,13 @@ def remove_labels(x, labels):
   # Much simpler for now to use tf.py_func.
   # noinspection PyShadowingNames
   def py_remove_labels(indices, values, dense_shape):
+    """
+    :param numpy.ndarray indices:
+    :param numpy.ndarray values:
+    :param numpy.ndarray dense_shape:
+    :return: (indices, values, dense_shape)
+    :rtype: (numpy.ndarray, numpy.ndarray, numpy.ndarray)
+    """
     assert isinstance(indices, numpy.ndarray), "indices %r" % indices
     assert isinstance(values, numpy.ndarray), "values %r" % indices
     assert isinstance(dense_shape, numpy.ndarray), "dense_shape %r" % indices
@@ -5125,7 +5156,7 @@ def sequential_control_dependencies(l):
 def global_queue(name, queue_type, capacity, dtypes, shapes=None, names=None):
   """
   :param str name: global name
-  :param (args)->tf.QueueBase queue_type: some function which creates a queue
+  :param (...)->tf.QueueBase queue_type: some function which creates a queue
   :param capacity:
   :param list[tf.DType|str] dtypes:
   :param list[tf.TensorShape|tuple[int|None]]|None shapes:
@@ -5698,6 +5729,7 @@ class Lock(object):
   A pure TensorFlow implementation of a mutex / lock.
   Probably obsolete now, as with TF 1.6.0, there is ``tf.contrib.framework.CriticalSection``.
   """
+
   def __init__(self, name="Lock"):
     self._name = name
     with tf.name_scope(self._name):
@@ -5706,11 +5738,16 @@ class Lock(object):
       self._queue_init = self._queue.put([tf.constant(True)])
 
   def init(self):
+    """
+    :rtype: tf.Operation
+    """
     return self._queue_init
 
   def lock(self):
     """
     On first call, just returns. Any further call will block, unless there is an unlock() call.
+
+    :rtype: tf.Tensor
     """
     with tf.name_scope("%s/lock" % self._name):
       v, = self._queue.get()
@@ -5719,6 +5756,8 @@ class Lock(object):
   def unlock(self):
     """
     Must be called after lock().
+
+    :rtype: tf.Operation
     """
     with tf.name_scope("%s/unlock" % self._name):
       return self._queue.put([tf.constant(True)])
@@ -5776,6 +5815,9 @@ class Condition(object):
     """
     with tf.name_scope("%s/signal" % self._name):
       def on_waiting_counter():
+        """
+        :rtype: tf.Operation
+        """
         return self._waiter_queue.enqueue(True)
       return tf.cond(tf.greater(self._waiting_counter.read_value(), 0), on_waiting_counter, lambda: tf.no_op())
 
@@ -7493,6 +7535,13 @@ def string_replace(strings, old, new, count=-1):
 
   # noinspection PyShadowingNames
   def str_replace(strings, old, new, count):
+    """
+    :param numpy.ndarray|bytes strings:
+    :param bytes old:
+    :param bytes new:
+    :param numpy.int32 count:
+    :rtype: numpy.ndarray|bytes
+    """
     assert isinstance(strings, (numpy.ndarray, bytes)), "strings is %r" % (strings,)
     assert isinstance(old, bytes), "old is %r" % (new,)
     assert isinstance(new, bytes), "new is %r" % (new,)
