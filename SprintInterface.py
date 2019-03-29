@@ -24,7 +24,7 @@ import theano.tensor as T
 
 from SprintDataset import SprintDatasetBase
 from Log import log
-from Device import get_gpu_names
+from Util import get_gpu_names
 import rnn
 _rnn_file = rnn.__file__
 _main_file = getattr(sys.modules["__main__"], "__file__", "")
