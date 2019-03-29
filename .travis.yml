@@ -21,6 +21,7 @@ install:
   - pip install --upgrade numpy scipy | cat  # TF usually needs the latest Numpy
   - pip install -r requirements.txt | cat
   - pip install $TF_PACKAGE | cat
+  - pip install theano==0.9 | cat
   - pip install -qq nose
   - echo "[global]" >> ~/.theanorc
   - echo "device = cpu" >> ~/.theanorc
