@@ -3280,6 +3280,11 @@ class ReinterpretDataLayer(_ConcatInputLayer):
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d:
+    :param TFNetwork.TFNetwork network:
+    :param get_layer:
+    """
     super(ReinterpretDataLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
     if d.get("size_base"):
       d["size_base"] = get_layer(d["size_base"])
@@ -3307,12 +3312,17 @@ class ReinterpretDataLayer(_ConcatInputLayer):
       out = out.copy_as_time_major()
 
     def map_axis_name(s):
+      """
+      :param str s:
+      :rtype: str
+      """
       if s.upper() == "B":
         return "batch_dim_axis"
       if s.upper() == "T":
         return "time_dim_axis"
       assert s in ["batch_dim_axis", "time_dim_axis"]
       return s
+
     if switch_axes:
       assert len(switch_axes) == 2
       axes_s = list(map(map_axis_name, switch_axes))

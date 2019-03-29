@@ -92,7 +92,7 @@ class DimensionTag(object):
     self.description = description
     self.dimension = dimension
     self.dyn_size = dyn_size
-    self.same_as = None  # type: DimensionTag
+    self.same_as = None  # type: typing.Optional[DimensionTag]
 
   def __repr__(self):
     attribs = ["kind"]
@@ -2109,7 +2109,7 @@ def reuse_name_scope(name, absolute=None, **kwargs):
   :return: yields the variable_scope
   """
   kwargs = kwargs.copy()
-  parent_var_scope = None  # type: tf.VariableScope
+  parent_var_scope = None  # type: typing.Optional[tf.VariableScope]
   if not absolute:
     parent_var_scope = tf.get_variable_scope()
   if isinstance(name, tf.VariableScope):
@@ -4077,22 +4077,27 @@ class CustomGradient(object):
   def Defun(self, *input_types, **kwargs):
     """
     :param (tf.Operation, tf.Tensor) -> tf.Tensor grad_op:
-    :param list[tf.DType] input_types:
+    :param tf.DType input_types:
     :param dict[str] kwargs: passed to self.register()
     :return: function decorator
     :rtype: ((tf.Tensor) -> tf.Tensor) -> ((tf.Tensor) -> tf.Tensor)
     """
 
     def decorator(op):
+      """
+      :param (tf.Tensor) -> tf.Tensor op:
+      :rtype: tf.Tensor
+      """
       return self.register(input_types=input_types, op=op, **kwargs)
 
     return decorator
 
   def register(self, input_types, op, grad_op, name=None):
     """
-    :param list[tf.DType] input_types:
+    :param list[tf.DType]|tuple[tf.DType] input_types:
     :param (tf.Tensor) -> tf.Tensor op:
-    :param (tf.Operation, tf.Tensor) -> tf.Tensor grad_op: args are (op, out_grad) and it must return in_grad
+    :param (tf.Operation, tf.Tensor) -> tuple[tf.Tensor]|tf.Tensor grad_op: args are (op, out_grad)
+      and it must return in_grad
     :param str name: optional func_name
     :return: op
     :rtype: (tf.Tensor) -> tf.Tensor
@@ -4118,6 +4123,7 @@ class CustomGradient(object):
     self.registered_ops[op] = op_with_new_grad
     return op_with_new_grad
 
+  # noinspection PyUnusedLocal
   @classmethod
   def _generic_loss_and_error_signal(cls, loss, x, grad_x):
     """
@@ -4154,7 +4160,7 @@ class CustomGradient(object):
   def generic_loss_and_error_signal(self, loss, x, grad_x):
     """
     Wrapper around self.register().
-    Expects that loss = loss(x), and grad_x = \partial loss / \partial x.
+    Expects that loss = loss(x), and grad_x = \\partial loss / \\partial x.
 
     :param tf.Tensor loss:
     :param tf.Tensor x:
