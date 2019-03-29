@@ -304,11 +304,10 @@ def report_inspect_xml(fn):
 
 
 def report_inspect_dir(path,
-                       inspect_class_whitelist=None, inspect_class_blacklist=None, inspect_class_not_counted=None,
+                       inspect_class_blacklist=None, inspect_class_not_counted=None,
                        ignore_count_for_files=()):
   """
   :param str path:
-  :param set[str]|None inspect_class_whitelist:
   :param set[str]|None inspect_class_blacklist:
   :param set[str]|None inspect_class_not_counted:
   :param set[str]|tuple[str]|None ignore_count_for_files:
@@ -329,14 +328,30 @@ def report_inspect_dir(path,
   inspections.sort()
   inspections.append((None, None, None, None, None))  # final marker
 
+  # copy
+  inspect_class_blacklist = set(inspect_class_blacklist or ())
+  inspect_class_not_counted = set(inspect_class_not_counted or ())
+
+  # maybe update inspect_class_not_counted
+  all_files = set()
+  relevant_inspections_for_file = set()
+  for filename, line, problem_severity, inspect_class, description in inspections:
+    all_files.add(filename)
+    if inspect_class in inspect_class_blacklist:
+      continue
+    if inspect_class in inspect_class_not_counted:
+      continue
+    relevant_inspections_for_file.add(filename)
+  for filename in all_files:
+    if filename not in relevant_inspections_for_file:
+      inspect_class_not_counted.add(filename)
+
   color = better_exchook.Color()
   total_relevant_count = 0
   file_count = None
   last_filename = None
   for filename, line, problem_severity, inspect_class, description in inspections:
-    if inspect_class_whitelist is not None and inspect_class not in inspect_class_whitelist and inspect_class:
-      continue
-    if inspect_class_blacklist is not None and inspect_class in inspect_class_blacklist:
+    if inspect_class in inspect_class_blacklist:
       continue
 
     if filename != last_filename:
