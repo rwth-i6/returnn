@@ -87,12 +87,12 @@ class BackendEngine:
   Theano = 0
   Default = Theano
   TensorFlow = 1
-  selectedEngine = None
+  selectedEngine = None  # type: typing.Optional[int]  # One of the possible engines.
 
   @classmethod
   def select_engine(cls, engine=None, config=None):
     """
-    :param int engine:
+    :param int engine: see the global class attribs for possible values
     :param Config.Config config:
     """
     assert cls.selectedEngine is None, "already set"
@@ -109,6 +109,9 @@ class BackendEngine:
 
   @classmethod
   def get_selected_engine(cls):
+    """
+    :rtype: int
+    """
     if cls.selectedEngine is not None:
       return cls.selectedEngine
     else:
@@ -116,10 +119,16 @@ class BackendEngine:
 
   @classmethod
   def is_theano_selected(cls):
+    """
+    :rtype: bool
+    """
     return cls.get_selected_engine() == cls.Theano
 
   @classmethod
   def is_tensorflow_selected(cls):
+    """
+    :rtype: bool
+    """
     return cls.get_selected_engine() == cls.TensorFlow
 
 
@@ -368,6 +377,11 @@ def eval_shell_str(s):
 
 
 def hdf5_dimension(filename, dimension):
+  """
+  :param str filename:
+  :param str dimension:
+  :rtype: numpy.ndarray|int
+  """
   fin = h5py.File(filename, "r")
   if '/' in dimension:
     res = fin['/'.join(dimension.split('/')[:-1])].attrs[dimension.split('/')[-1]]
@@ -378,6 +392,11 @@ def hdf5_dimension(filename, dimension):
 
 
 def hdf5_group(filename, dimension):
+  """
+  :param str filename:
+  :param str dimension:
+  :rtype: dict[str]
+  """
   fin = h5py.File(filename, "r")
   res = {k: fin[dimension].attrs[k] for k in fin[dimension].attrs}
   fin.close()
@@ -397,6 +416,12 @@ def hdf5_shape(filename, dimension):
 
 
 def hdf5_strings(handle, name, data):
+  """
+  :param h5py.File handle:
+  :param str name:
+  :param numpy.ndarray data:
+  """
+  # noinspection PyBroadException
   try:
     s = max([len(d) for d in data])
     dset = handle.create_dataset(name, (len(data),), dtype="S" + str(s))
@@ -474,10 +499,10 @@ def terminal_size(file=sys.stdout):
       import fcntl
       import termios
       import struct
-      cr = struct.unpack('hh', fcntl.ioctl(fd, termios.TIOCGWINSZ, '1234'))
+      cr_ = struct.unpack('hh', fcntl.ioctl(fd, termios.TIOCGWINSZ, '1234'))
     except Exception:
       return
-    return cr
+    return cr_
 
   cr = ioctl_gwinsz(file.fileno) or ioctl_gwinsz(0) or ioctl_gwinsz(1) or ioctl_gwinsz(2)
   if not cr:
@@ -738,6 +763,7 @@ def available_physical_memory_in_bytes():
   """
   :rtype: int
   """
+  # noinspection PyBroadException
   try:
     mem_bytes = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
   except Exception:
@@ -1359,7 +1385,7 @@ def parse_orthography(orthography, prefix=(), postfix=("[END]",),
   :param str remove_chars: those chars will just be removed at the beginning
   :param bool collapse_spaces: whether multiple spaces and tabs are collapsed into a single space
   :param bool final_strip: whether we strip left and right
-  :param **kwargs: passed on to parse_orthography_into_symbols()
+  :param kwargs: passed on to parse_orthography_into_symbols()
   :rtype: list[str]
   """
   for c in remove_chars:
@@ -1374,6 +1400,7 @@ def parse_orthography(orthography, prefix=(), postfix=("[END]",),
 def json_remove_comments(string, strip_space=True):
   """
   :type string: str
+  :param bool strip_space:
   :rtype: str
 
   via https://github.com/getify/JSON.minify/blob/master/minify_json.py,
@@ -1407,7 +1434,7 @@ def json_remove_comments(string, strip_space=True):
       # start of string or unescaped quote character to end string
       if not in_string or (escaped is None or len(escaped.group()) % 2 == 0):
         in_string = not in_string
-      index -= 1 # include " character in next catch
+      index -= 1  # include " character in next catch
     elif not (in_string or in_multi or in_single):
       if val == '/*':
         in_multi = True
@@ -1424,11 +1451,17 @@ def json_remove_comments(string, strip_space=True):
   return ''.join(new_str)
 
 
-def unicode_to_str_recursive(s):
+def _py2_unicode_to_str_recursive(s):
+  """
+  This is supposed to be run with Python 2.
+
+  :param str|unicode s:
+  :rtype: str
+  """
   if isinstance(s, dict):
-    return {unicode_to_str_recursive(key): unicode_to_str_recursive(value) for key, value in s.items()}
+    return {_py2_unicode_to_str_recursive(key): _py2_unicode_to_str_recursive(value) for key, value in s.items()}
   elif isinstance(s, list):
-    return [unicode_to_str_recursive(element) for element in s]
+    return [_py2_unicode_to_str_recursive(element) for element in s]
   elif isinstance(s, unicode):
     return s.encode('utf-8')
   else:
@@ -1436,6 +1469,11 @@ def unicode_to_str_recursive(s):
 
 
 def load_json(filename=None, content=None):
+  """
+  :param str|None filename:
+  :param str|None content:
+  :rtype: dict[str]
+  """
   if content:
     assert not filename
   else:
@@ -1447,7 +1485,7 @@ def load_json(filename=None, content=None):
   except ValueError as e:
     raise Exception("config looks like JSON but invalid json content, %r" % e)
   if not PY3:
-    json_content = unicode_to_str_recursive(json_content)
+    json_content = _py2_unicode_to_str_recursive(json_content)
   return json_content
 
 
@@ -1865,7 +1903,7 @@ def collect_class_init_kwargs(cls, only_with_default=False):
 
 def getargspec(func):
   """
-  :func:`inspect.getfullargspec` or `inspect.getargspec`
+  :func:`inspect.getfullargspec` or `inspect.getargspec` (Python 2)
 
   :param func:
   :return: FullArgSpec
@@ -1873,6 +1911,7 @@ def getargspec(func):
   if PY3:
     return inspect.getfullargspec(func)
   else:
+    # noinspection PyDeprecation
     return inspect.getargspec(func)
 
 
@@ -1910,6 +1949,13 @@ def help_on_type_error_wrong_args(cls, kwargs):
 
 
 def custom_exec(source, source_filename, user_ns, user_global_ns):
+  """
+  :param str source:
+  :param str source_filename:
+  :param dict[str] user_ns:
+  :param dict[str] user_global_ns:
+  :return: nothing
+  """
   if not source.endswith("\n"):
     source += "\n"
   co = compile(source, source_filename, "exec")
@@ -2041,6 +2087,7 @@ def deepcopy(x):
     p.dump(obj)
     return sio.getvalue()
 
+  # noinspection PyShadowingNames
   def pickle_loads(s):
     """
     :param bytes s:
@@ -2107,6 +2154,11 @@ class CollectionReadCheckCovered:
     return res
 
   def get(self, item, default=None):
+    """
+    :param str item:
+    :param T default:
+    :rtype: T|object|None
+    """
     try:
       return self[item]
     except KeyError:
@@ -2173,19 +2225,34 @@ def overwrite_os_exec(prefix_args):
   if not _original_execvpe:
     _original_execvpe = os._execvpe
 
+  # noinspection PyUnusedLocal
   def wrapped_execvpe(file, args, env=None):
+    """
+    :param file:
+    :param list[str]|tuple[str] args:
+    :param dict[str] env:
+    """
     new_args = prefix_args + [which(args[0])] + args[1:]
     sys.stderr.write("$ %s\n" % " ".join(new_args))
     sys.stderr.flush()
     _original_execvpe(file=prefix_args[0], args=new_args, env=env)
 
   def execv(path, args):
+    """
+    :param str path:
+    :param list[str]|tuple[str] args:
+    """
     if args[:len(prefix_args)] == prefix_args:
       _original_execv(path, args)
     else:
       wrapped_execvpe(path, args)
 
   def execve(path, args, env):
+    """
+    :param str path:
+    :param list[str]|tuple[str] args:
+    :param dict[str] env:
+    """
     if args[:len(prefix_args)] == prefix_args:
       _original_execve(path, args, env)
     else:
@@ -2483,17 +2550,17 @@ def parse_ld_conf_file(fn):
   """
   from glob import glob
   paths = []
-  for l in open(fn).read().splitlines():
-    l = l.strip()
-    if not l:
+  for line in open(fn).read().splitlines():
+    line = line.strip()
+    if not line:
       continue
-    if l.startswith("#"):
+    if line.startswith("#"):
       continue
-    if l.startswith("include "):
-      for sub_fn in glob(l[len("include "):]):
+    if line.startswith("include "):
+      for sub_fn in glob(line[len("include "):]):
         paths.extend(parse_ld_conf_file(sub_fn))
       continue
-    paths.append(l)
+    paths.append(line)
   return paths
 
 
@@ -2587,7 +2654,7 @@ def get_number_available_cpus():
   if hasattr(os, "sched_getaffinity"):  # Python >=3.4
     return len(os.sched_getaffinity(0))
   try:
-    # noinspection PyPackageRequirements
+    # noinspection PyPackageRequirements,PyUnresolvedReferences
     import psutil
     proc = psutil.Process()
     if hasattr(proc, "cpu_affinity"):
@@ -2640,6 +2707,8 @@ def _consider_check_for_gpu():
   This sometimes happens in our SGE cluster on nodes without Nvidia cards.
   Maybe it's also a Linux Kernel bug.
   Anyway, just avoid any such check if we don't asked for a GPU.
+
+  :rtype: bool
   """
   if "device" in TheanoFlags:
     dev = TheanoFlags["device"]
@@ -2647,6 +2716,7 @@ def _consider_check_for_gpu():
       return True
     # THEANO_FLAGS will overwrite this config option. See rnn.initDevices().
     return False
+  # noinspection PyBroadException
   try:
     from Config import get_global_config
     config = get_global_config()
@@ -2668,7 +2738,7 @@ def get_gpu_names():
   if not _consider_check_for_gpu():
     return []
   if os.name == 'nt':
-    return "GeForce GTX 770" #TODO
+    return "GeForce GTX 770"  # TODO
   elif sys.platform == 'darwin':
     # TODO parse via xml output
     return cmd("system_profiler SPDisplaysDataType | "
@@ -2749,7 +2819,9 @@ def try_get_caller_name(depth=1, fallback=None):
   :rtype: str|None
   :return: caller function name. this is just for debugging
   """
+  # noinspection PyBroadException
   try:
+    # noinspection PyProtectedMember
     frame = sys._getframe(depth + 1)  # one more to count ourselves
     return frame.f_code.co_name
   except Exception:
