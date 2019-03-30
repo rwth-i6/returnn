@@ -283,11 +283,11 @@ def debug_shell(user_ns, user_global_ns, traceback=None, execWrapper=None):
     if not ipshell and traceback and have_ipython:
         # noinspection PyBroadException
         try:
-            # noinspection PyPackageRequirements
+            # noinspection PyPackageRequirements,PyUnresolvedReferences
             from IPython.core.debugger import Pdb
-            # noinspection PyPackageRequirements
+            # noinspection PyPackageRequirements,PyUnresolvedReferences
             from IPython.terminal.debugger import TerminalPdb
-            # noinspection PyPackageRequirements
+            # noinspection PyPackageRequirements,PyUnresolvedReferences
             from IPython.terminal.ipapp import TerminalIPythonApp
             ipapp = TerminalIPythonApp.instance()
             ipapp.interact = False  # Avoid output (banner, prints)
@@ -309,9 +309,9 @@ def debug_shell(user_ns, user_global_ns, traceback=None, execWrapper=None):
     if not ipshell and have_ipython:
         # noinspection PyBroadException
         try:
-            # noinspection PyPackageRequirements
+            # noinspection PyPackageRequirements,PyUnresolvedReferences
             import IPython
-            # noinspection PyPackageRequirements
+            # noinspection PyPackageRequirements,PyUnresolvedReferences
             import IPython.terminal.embed
 
             class DummyMod(object):
