@@ -1,4 +1,8 @@
 
+"""
+Some datasets for artificially generated data.
+"""
+
 from __future__ import print_function
 
 from Dataset import Dataset, DatasetSeq, convert_data_dims
@@ -11,6 +15,9 @@ import sys
 
 
 class GeneratingDataset(Dataset):
+  """
+  Some base class for datasets with artificially generated data.
+  """
 
   _input_classes = None
   _output_classes = None

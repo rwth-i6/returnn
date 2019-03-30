@@ -1,5 +1,10 @@
 # -*- coding: utf8 -*-
 
+"""
+Provides :class:`LmDataset`, :class:`TranslationDataset`,
+and some related helpers.
+"""
+
 from __future__ import print_function
 
 import os
@@ -17,6 +22,10 @@ from random import Random
 
 
 class LmDataset(CachedDataset2):
+  """
+  Dataset useful for language modeling.
+  Reads simple txt files.
+  """
 
   def __init__(self,
                corpus_file,

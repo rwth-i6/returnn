@@ -1,4 +1,9 @@
 
+"""
+Provides the learning rate scheduling logic.
+The base class is :class:`LearningRateControl`.
+"""
+
 from __future__ import print_function
 
 import os
@@ -8,10 +13,21 @@ import numpy
 
 
 class LearningRateControl(object):
+  """
+  Base class for learning rate control / scheduling.
+  """
 
   need_error_info = True
 
   class EpochData:
+    """
+    Encapsulates all relevant information for one epoch,
+    needed to perform learning rate scheduling,
+    such as the individual scores (cv or train; cross-entropy or frame-error or whatever).
+    """
+
+    # Need to keep the non-PEP8 name for compatibility, because we store the repr of the object.
+    # noinspection PyPep8Naming
     def __init__(self, learningRate, error=None):
       """
       :type learningRate: float

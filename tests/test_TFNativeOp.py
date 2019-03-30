@@ -44,7 +44,7 @@ import better_exchook
 better_exchook.replace_traceback_format_tb()
 
 import Debug
-Debug.installLibSigSegfault()
+Debug.install_lib_sig_segfault()
 
 try:
   import faulthandler

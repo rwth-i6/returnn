@@ -27,7 +27,7 @@ from Log import log
 log.initialize(verbosity=[5])
 
 import Debug
-Debug.installLibSigSegfault()
+Debug.install_lib_sig_segfault()
 
 try:
   import faulthandler

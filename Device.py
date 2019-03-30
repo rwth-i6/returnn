@@ -1034,7 +1034,7 @@ class Device(object):
           sys.excepthook(*sys.exc_info())
           # If there are any other than the main thread.
           # Actually, that would be unexpected.
-          Debug.dumpAllThreadTracebacks()
+          Debug.dump_all_thread_tracebacks()
           return
         except MemoryError:
           output_queue.send("error")

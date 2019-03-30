@@ -586,7 +586,6 @@ def network_json_from_config(config, mask=None):
   return json_content
 
 
-
 def get_devices_init_args(config):
   """
   :type config: Config.Config

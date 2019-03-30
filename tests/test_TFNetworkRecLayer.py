@@ -27,7 +27,7 @@ import TFUtil
 TFUtil.debug_register_better_repr()
 
 import Debug
-Debug.installLibSigSegfault()
+Debug.install_lib_sig_segfault()
 
 try:
   import faulthandler

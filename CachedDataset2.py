@@ -1,13 +1,20 @@
 
+"""
+Provides :class:`CachedDataset2`.
+"""
 
 from Dataset import Dataset, DatasetSeq
-from threading import Thread, Condition, RLock
+from threading import Condition
 try:
   # noinspection PyCompatibility
   from _thread import interrupt_main
 except ImportError:
   # noinspection PyUnresolvedReferences,PyCompatibility
   from thread import interrupt_main
+import sys
+PY3 = sys.version_info[0] >= 3
+if PY3:
+  import typing
 
 
 class CachedDataset2(Dataset):
@@ -28,6 +35,10 @@ class CachedDataset2(Dataset):
     super(CachedDataset2, self).__init__(**kwargs)
     self._num_timesteps = None
     self.epoch = None
+    self.reached_final_seq = False
+    self.added_data = []  # type: typing.List[DatasetSeq]
+    self.expected_load_seq_start = 0
+    self._num_timesteps_accumulated = 0
 
   def init_seq_order(self, epoch=None, seq_list=None):
     """
@@ -44,13 +55,16 @@ class CachedDataset2(Dataset):
       epoch = 1
     self.expected_load_seq_start = 0
     self.reached_final_seq = False
-    self.added_data = []; " :type: list[DatasetSeq] "
+    self.added_data = []
     self._num_timesteps_accumulated = 0
     self._num_seqs = None
     self.epoch = epoch
     return True
 
   def _cleanup_old_seqs(self, seq_idx_end):
+    """
+    :param int seq_idx_end:
+    """
     i = 0
     while i < len(self.added_data):
       if self.added_data[i].seq_idx >= seq_idx_end:
@@ -59,18 +73,30 @@ class CachedDataset2(Dataset):
     del self.added_data[:i]
 
   def _get_seq(self, seq_idx):
+    """
+    :param int seq_idx:
+    :rtype: DatasetSeq|None
+    """
     for data in self.added_data:
       if data.seq_idx == seq_idx:
         return data
     return None
 
   def is_cached(self, start, end):
+    """
+    :param int start:
+    :param int end:
+    :rtype: bool
+    """
     # Always False, to force that we call self._load_seqs().
     # This is important for our buffer management.
     return False
 
   @property
   def num_seqs(self):
+    """
+    :rtype: int
+    """
     if self._num_seqs is not None:
       return self._num_seqs
     raise NotImplementedError
@@ -97,8 +123,13 @@ class CachedDataset2(Dataset):
     self.added_data += seqs
 
   def is_less_than_num_seqs(self, n):
+    """
+    :param int n:
+    :rtype: int
+    """
     if n < self.expected_load_seq_start:
       return True
+    # noinspection PyBroadException
     try:
       return super(CachedDataset2, self).is_less_than_num_seqs(n)
     except Exception:  # can fail, e.g. if self.num_seqs is not defined
@@ -122,6 +153,9 @@ class CachedDataset2(Dataset):
     raise NotImplementedError
 
   def get_num_timesteps(self):
+    """
+    :rtype: int
+    """
     if self._num_timesteps is not None:
       return self._num_timesteps
     else:
@@ -145,24 +179,49 @@ class CachedDataset2(Dataset):
     return self._get_seq(sorted_seq_idx).num_frames
 
   def get_data(self, seq_idx, key):
+    """
+    :param int seq_idx:
+    :param str key:
+    :rtype: numpy.ndarray
+    """
     return self._get_seq(seq_idx).features[key]
 
   def get_input_data(self, seq_idx):
+    """
+    :param int seq_idx:
+    :rtype: numpy.ndarray
+    """
     return self.get_data(seq_idx, "data")
 
   def get_targets(self, target, seq_idx):
+    """
+    :param str target:
+    :param int seq_idx:
+    :rtype: numpy.ndarray
+    """
     return self.get_data(seq_idx, target)
 
   def get_ctc_targets(self, sorted_seq_idx):
+    """
+    :param int sorted_seq_idx:
+    :rtype: numpy.ndarray|None
+    """
     return self._get_seq(sorted_seq_idx).ctc_targets
 
   def get_tag(self, sorted_seq_idx):
+    """
+    :param int sorted_seq_idx:
+    :rtype: str
+    """
     # get_tag() can be called before the seq is loaded via load_seqs().
     # Thus, we just call load_seqs() ourselves here.
     self.load_seqs(self.expected_load_seq_start, sorted_seq_idx + 1)
     return self._get_seq(sorted_seq_idx).seq_tag
 
   def get_data_keys(self):
+    """
+    :rtype: list[str]
+    """
     self._load_something()
     return sorted(self.added_data[0].get_data_keys())
 
@@ -204,6 +263,10 @@ class CachedDataset2(Dataset):
     return self.added_data[0].get_data(key).shape[1]
 
   def get_data_dtype(self, key):
+    """
+    :param str key:
+    :rtype: str
+    """
     self._load_something()
     return self.added_data[0].get_data(key).dtype
 
@@ -232,12 +295,25 @@ class SingleStreamPipeDataset(CachedDataset2):
     self.producer_finished = False
 
   def is_data_sparse(self, key):
+    """
+    :param str key:
+    :rtype: bool
+    """
     return self.sparse
 
   def get_data_dtype(self, key):
+    """
+    :param str key:
+    :rtype: str
+    """
     return self.dtype
 
   def init_seq_order(self, epoch=None, seq_list=None):
+    """
+    :param int epoch:
+    :param list[str]|None seq_list:
+    :rtype: bool
+    """
     assert not seq_list
     super(SingleStreamPipeDataset, self).init_seq_order(epoch=epoch)
     with self.condition:
@@ -260,6 +336,9 @@ class SingleStreamPipeDataset(CachedDataset2):
       self.condition.notify()
 
   def producer_set_finished(self):
+    """
+    Mark finished.
+    """
     with self.condition:
       self.producer_finished = True
       self.condition.notify()

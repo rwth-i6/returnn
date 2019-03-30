@@ -96,10 +96,10 @@ class Dataset(object):
     self.partition_epoch = partition_epoch or 1
     self.repeat_epoch = repeat_epoch or 1
     # There is probably no use case for combining the two, so avoid potential misconfiguration.
-    assert self.partition_epoch == 1 or self.repeat_epoch == 1, \
-        "Combining partition_epoch and repeat_epoch is prohibited."
+    assert self.partition_epoch == 1 or self.repeat_epoch == 1, (
+      "Combining partition_epoch and repeat_epoch is prohibited.")
     self.timestamps = None
-    self.labels = {}; """ :type: dict[str,list[str]] """
+    self.labels = {}  # type: typing.Dict[str,typing.List[str]]
     self.weights = {}
     self.nbytes = 0
     self.num_running_chars = 0  # CTC running chars.
@@ -297,7 +297,7 @@ class Dataset(object):
     if partition_epoch > 1:
       full_epoch = (epoch - 1) // partition_epoch + 1
     assert num_seqs > 0
-    seq_index = list(range(num_seqs)); """ :type: list[int]. the real seq idx after sorting """
+    seq_index = list(range(num_seqs))  # type: typing.List[int]  # the real seq idx after sorting
     if self.seq_ordering == 'default':
       pass  # Keep order as-is.
     elif self.seq_ordering.startswith("default_every_n:"):
@@ -800,7 +800,8 @@ class Dataset(object):
             raise Exception("Chunking with multiple data-keys of different length: %r" % length)
           else:
             nr_of_full_chunks_key = (length[key] - chunk_size[key]) // chunk_step[key] + 1
-            nr_of_full_chunks_default_key = (length[default_key] - chunk_size[default_key]) // chunk_step[default_key] + 1
+            nr_of_full_chunks_default_key = (
+              (length[default_key] - chunk_size[default_key]) // chunk_step[default_key] + 1)
             assert nr_of_full_chunks_key == nr_of_full_chunks_default_key
         while length[default_key] > t[default_key]:
           chunk_start = NumbersDict(t)
