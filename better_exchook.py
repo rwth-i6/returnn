@@ -64,6 +64,10 @@ except ImportError:
         pass
     StackSummary = FrameSummary = _Dummy
 
+PY3 = sys.version_info[0] >= 3
+if PY3:
+    import typing
+
 # noinspection PySetFunctionToLiteral,SpellCheckingInspection
 py_keywords = set(keyword.kwlist) | set(["None", "True", "False"])
 
@@ -84,6 +88,11 @@ except NameError:  # Python3
 
 
 def parse_py_statement(line):
+    """
+    :param str line:
+    :return: yields (type, value)
+    :rtype: typing.Iterator[typing.Tuple[str,str]]
+    """
     state = 0
     cur_token = ""
     spaces = " \t\n"
@@ -156,12 +165,21 @@ def parse_py_statement(line):
 
 
 def parse_py_statements(source_code):
+    """
+    :param str source_code:
+    :return: via :func:`parse_py_statement`
+    :rtype: typing.Iterator[typing.Tuple[str,str]]
+    """
     for line in source_code.splitlines():
         for t in parse_py_statement(line):
             yield t
 
 
 def grep_full_py_identifiers(tokens):
+    """
+    :param typing.Iterable[(str,str)] tokens:
+    :rtype: typing.Iterator[str]
+    """
     global py_keywords
     tokens = list(tokens)
     i = 0
@@ -183,16 +201,31 @@ def grep_full_py_identifiers(tokens):
 
 
 def set_linecache(filename, source):
+    """
+    The :mod:`linecache` module has some cache of the source code for the current source.
+    Sometimes it fails to find the source of some files.
+    We can explicitly set the source for some filename.
+
+    :param str filename:
+    :param str source:
+    :return: nothing
+    """
     import linecache
     linecache.cache[filename] = None, None, [line+'\n' for line in source.splitlines()], filename
 
 
+# noinspection PyShadowingBuiltins
 def simple_debug_shell(globals, locals):
+    """
+    :param dict[str] globals:
+    :param dict[str] locals:
+    :return: nothing
+    """
     try:
         import readline
     except ImportError:
         pass  # ignore
-    COMPILE_STRING_FN = "<simple_debug_shell input>"
+    compile_string_fn = "<simple_debug_shell input>"
     while True:
         try:
             s = raw_input("> ")
@@ -202,11 +235,11 @@ def simple_debug_shell(globals, locals):
         if s.strip() == "":
             continue
         try:
-            c = compile(s, COMPILE_STRING_FN, "single")
+            c = compile(s, compile_string_fn, "single")
         except Exception as e:
             print("%s : %s in %r" % (e.__class__.__name__, str(e), s))
         else:
-            set_linecache(COMPILE_STRING_FN, s)
+            set_linecache(compile_string_fn, s)
             # noinspection PyBroadException
             try:
                 ret = eval(c, globals, locals)
@@ -226,17 +259,35 @@ def simple_debug_shell(globals, locals):
                     better_exchook(*sys.exc_info(), autodebugshell=False)
 
 
+# keep non-PEP8 argument name for compatibility
+# noinspection PyPep8Naming
 def debug_shell(user_ns, user_global_ns, traceback=None, execWrapper=None):
+    """
+    Spawns some interactive shell. Tries to use IPython if available.
+    Falls back to :func:`pdb.post_mortem` or :func:`simple_debug_shell`.
+
+    :param dict[str] user_ns:
+    :param dict[str] user_global_ns:
+    :param traceback:
+    :param execWrapper:
+    :return: nothing
+    """
     ipshell = None
     try:
+        # noinspection PyPackageRequirements
         import IPython
         have_ipython = True
     except ImportError:
         have_ipython = False
+
     if not ipshell and traceback and have_ipython:
+        # noinspection PyBroadException
         try:
+            # noinspection PyPackageRequirements
             from IPython.core.debugger import Pdb
+            # noinspection PyPackageRequirements
             from IPython.terminal.debugger import TerminalPdb
+            # noinspection PyPackageRequirements
             from IPython.terminal.ipapp import TerminalIPythonApp
             ipapp = TerminalIPythonApp.instance()
             ipapp.interact = False  # Avoid output (banner, prints)
@@ -244,15 +295,27 @@ def debug_shell(user_ns, user_global_ns, traceback=None, execWrapper=None):
             def_colors = ipapp.shell.colors
             pdb_obj = TerminalPdb(def_colors)
             pdb_obj.botframe = None  # not sure. exception otherwise at quit
-            ipshell = lambda: pdb_obj.interaction(None, traceback=traceback)
+
+            def ipshell():
+                """
+                Run the IPython shell.
+                """
+                pdb_obj.interaction(None, traceback=traceback)
+
         except Exception:
             print("IPython Pdb exception:")
             better_exchook(*sys.exc_info(), autodebugshell=False)
+
     if not ipshell and have_ipython:
+        # noinspection PyBroadException
         try:
+            # noinspection PyPackageRequirements
             import IPython
+            # noinspection PyPackageRequirements
             import IPython.terminal.embed
-            class DummyMod(object): pass
+
+            class DummyMod(object):
+                """Dummy module"""
             module = DummyMod()
             module.__dict__ = user_global_ns
             module.__name__ = "_DummyMod"
@@ -280,16 +343,25 @@ def debug_shell(user_ns, user_global_ns, traceback=None, execWrapper=None):
 
 
 def output_limit():
+    """
+    :return: num chars
+    :rtype: int
+    """
     return 300
 
 
 def fallback_findfile(filename):
+    """
+    :param str filename:
+    :return: try to find the full filename, e.g. in modules, etc
+    :rtype: str|None
+    """
     mods = [m for m in sys.modules.values() if m and hasattr(m, "__file__") and filename in m.__file__]
     if len(mods) == 0:
         return None
     alt_fn = mods[0].__file__
     if alt_fn[-4:-1] == ".py":
-        alt_fn = alt_fn[:-1] # *.pyc or whatever
+        alt_fn = alt_fn[:-1]  # *.pyc or whatever
     if not os.path.exists(alt_fn) and alt_fn.startswith("./"):
         # Maybe current dir changed.
         alt_fn2 = _cur_pwd + alt_fn[1:]
@@ -305,6 +377,11 @@ def fallback_findfile(filename):
 
 
 def is_source_code_missing_open_brackets(source_code):
+    """
+    :param str source_code:
+    :return: whether this source code snippet (e.g. one line) is complete/even w.r.t. opening/closing brackets
+    :rtype: bool
+    """
     open_brackets = "[{("
     close_brackets = "]})"
     last_close_bracket = [-1]  # stack
@@ -312,7 +389,8 @@ def is_source_code_missing_open_brackets(source_code):
     # Go in reverse order through the tokens.
     # Thus, we first should see the closing brackets, and then the matching opening brackets.
     for t_type, t_content in reversed(list(parse_py_statements(source_code))):
-        if t_type != "op": continue  # we are from now on only interested in ops (including brackets)
+        if t_type != "op":
+            continue  # we are from now on only interested in ops (including brackets)
         if t_content in open_brackets:
             idx = open_brackets.index(t_content)
             if last_close_bracket[-1] == idx:  # ignore if we haven't seen the closing one
@@ -326,6 +404,13 @@ def is_source_code_missing_open_brackets(source_code):
 
 
 def get_source_code(filename, lineno, module_globals):
+    """
+    :param str filename:
+    :param int lineno:
+    :param dict[str] module_globals:
+    :return: source code of that line
+    :rtype: str
+    """
     import linecache
     linecache.checkcache(filename)
     source_code = linecache.getline(filename, lineno, module_globals)
@@ -352,6 +437,12 @@ def str_visible_len(s):
 
 
 def add_indent_lines(prefix, s):
+    """
+    :param str prefix:
+    :param str s:
+    :return: s with prefix indent added to all lines
+    :rtype: str
+    """
     if not s:
         return prefix
     prefix_len = str_visible_len(prefix)
@@ -360,10 +451,19 @@ def add_indent_lines(prefix, s):
 
 
 def get_indent_prefix(s):
+    """
+    :param str s:
+    :return: the indent spaces of s
+    :rtype: str
+    """
     return s[:len(s) - len(s.lstrip())]
 
 
 def get_same_indent_prefix(lines):
+    """
+    :param list[] lines:
+    :rtype: str|None
+    """
     if not lines:
         return ""
     prefix = get_indent_prefix(lines[0])
@@ -375,7 +475,13 @@ def get_same_indent_prefix(lines):
 
 
 def remove_indent_lines(s):
-    if not s: return ""
+    """
+    :param str s:
+    :return: remove as much indentation as possible
+    :rtype: str
+    """
+    if not s:
+        return ""
     lines = s.splitlines(True)
     prefix = get_same_indent_prefix(lines)
     if prefix is None:  # not in expected format. just lstrip all lines
@@ -384,11 +490,21 @@ def remove_indent_lines(s):
 
 
 def replace_tab_indent(s, replace="    "):
+    """
+    :param str s: string with tabs
+    :param str replace: e.g. 4 spaces
+    :rtype: str
+    """
     prefix = get_indent_prefix(s)
     return prefix.replace("\t", replace) + s[len(prefix):]
 
 
 def replace_tab_indents(s, replace="    "):
+    """
+    :param str s: multi-line string with tabs
+    :param str replace: e.g. 4 spaces
+    :rtype: str
+    """
     lines = s.splitlines(True)
     return "".join([replace_tab_indent(l, replace) for l in lines])
 
@@ -411,11 +527,18 @@ def to_bool(s, fallback=None):
 
 
 class Color:
+    """
+    Helper functions provided to perform terminal coloring.
+    """
+
     ColorIdxTable = {k: i for (i, k) in enumerate([
         "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"])}
 
     @classmethod
     def get_global_color_enabled(cls):
+        """
+        :rtype: bool
+        """
         return to_bool(os.environ.get("CLICOLOR", ""), fallback=True)
 
     @classmethod
@@ -491,6 +614,10 @@ class Color:
         return self.color(*args, **kwargs)
 
     def py_syntax_highlight(self, s):
+        """
+        :param str s:
+        :rtype: str
+        """
         if not self.enable:
             return s
         state = 0
@@ -498,11 +625,15 @@ class Color:
         ops = ".,;:+-*/%&!=|(){}[]^<>"
         i = 0
         cur_token = ""
-        color_args = {0: {}, len(s): {}}  # type: dict[int,dict[str]] # i -> color kwargs
+        color_args = {0: {}, len(s): {}}  # type: typing.Dict[int,typing.Dict[str]]  # pos in s -> color kwargs
 
         def finish_identifier():
+            """
+            Reset color to standard for current identifier.
+            """
             if cur_token in py_keywords:
                 color_args[max([k for k in color_args.keys() if k < i])] = {"color": self.fg_colors[0]}
+
         while i < len(s):
             c = s[i]
             i += 1
@@ -593,6 +724,9 @@ class DomTerm:
 
     @contextlib.contextmanager
     def logical_block(self, file=sys.stdout):
+        """
+        :param io.TextIOBase|io.StringIO file:
+        """
         file.write("\033]110\007")
         yield
         file.write("\033]111\007")
@@ -601,16 +735,24 @@ class DomTerm:
     def hide_button_span(self, mode, file=sys.stdout):
         """
         :param int mode: 1 or 2
-        :param file:
+        :param io.TextIOBase|io.StringIO file:
         """
         file.write("\033[83;%iu" % mode)
         yield
         file.write("\033[83;0u")
 
+    # noinspection PyMethodMayBeStatic
     def indentation(self, file=sys.stdout):
+        """
+        :param io.TextIOBase|io.StringIO file:
+        """
         file.write("\033]114;\"│\"\007")
 
+    # noinspection PyMethodMayBeStatic
     def hide_button(self, file=sys.stdout):
+        """
+        :param io.TextIOBase|io.StringIO file:
+        """
         file.write("\033[16u▶▼\033[17u")
 
     @contextlib.contextmanager
@@ -625,10 +767,9 @@ class DomTerm:
         """
         :param str prefix: always visible
         :param str postfix: always visible, right after.
-        :param io.Base hidden_stream: sys.stdout by default.
+        :param io.TextIOBase|io.StringIO hidden_stream: sys.stdout by default.
             If this is sys.stdout, it will replace that stream,
             and collect the data during the context (in the `with` block).
-        :param io.IOBase file: sys.stdout by default.
         """
         import io
         if hidden_stream is None:
@@ -647,7 +788,7 @@ class DomTerm:
             If this is sys.stdout, it will replace that stream,
             and collect the data during the context (in the `with` block).
         :param str postfix: always visible, right after. "" by default.
-        :param io.IOBase file: sys.stdout by default.
+        :param io.TextIOBase|io.StringIO file: sys.stdout by default.
         :param int align: remove this number of initial chars from hidden
         """
         if file is None:
@@ -679,6 +820,12 @@ class DomTerm:
         file.flush()
 
     def fold_text_string(self, prefix, hidden, **kwargs):
+        """
+        :param str prefix:
+        :param str hidden:
+        :param kwargs: passed to :func:`fold_text`
+        :rtype: str
+        """
         import io
         output_buf = io.StringIO()
         self.fold_text(prefix=prefix, hidden=hidden, file=output_buf, **kwargs)
@@ -753,27 +900,40 @@ class _Output:
         self.lines.append(output_text)
 
     def _pp_extra_info(self, obj, depthlimit=3):
+        """
+        :param object|typing.Sized obj:
+        :param int depthlimit:
+        :rtype: str
+        """
         s = []
         if hasattr(obj, "__len__"):
+            # noinspection PyBroadException
             try:
-                if type(obj) in (str,unicode,list,tuple,dict) and len(obj) <= 5:
-                    pass # don't print len in this case
+                if type(obj) in (str, unicode, list, tuple, dict) and len(obj) <= 5:
+                    pass  # don't print len in this case
                 else:
                     s += ["len = " + str(obj.__len__())]
-            except Exception: pass
+            except Exception:
+                pass
         if depthlimit > 0 and hasattr(obj, "__getitem__"):
+            # noinspection PyBroadException
             try:
-                if type(obj) in (str,unicode):
-                    pass # doesn't make sense to get subitems here
+                if type(obj) in (str, unicode):
+                    pass  # doesn't make sense to get subitems here
                 else:
                     subobj = obj.__getitem__(0)
                     extra_info = self._pp_extra_info(subobj, depthlimit - 1)
                     if extra_info != "":
                         s += ["_[0]: {" + extra_info + "}"]
-            except Exception: pass
+            except Exception:
+                pass
         return ", ".join(s)
 
     def pretty_print(self, obj):
+        """
+        :param object obj:
+        :rtype: str
+        """
         s = repr(obj)
         limit = output_limit()
         if len(s) > limit:
@@ -792,6 +952,8 @@ class _Output:
         return s
 
 
+# For compatibility, we keep non-PEP8 argument names.
+# noinspection PyPep8Naming
 def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=False, with_color=None, with_vars=None):
     """
     :param types.TracebackType|types.FrameType|StackSummary tb: traceback. if None, will use sys._getframe
@@ -808,11 +970,16 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
     output = _Output(color=color)
 
     def format_filename(s):
+        """
+        :param str s:
+        :rtype: str
+        """
         base = os.path.basename(s)
         return (
             color('"' + s[:-len(base)], color.fg_colors[2]) +
             color(base, color.fg_colors[2], bold=True) +
             color('"', color.fg_colors[2]))
+
     format_py_obj = output.pretty_print
     if tb is None:
         # noinspection PyBroadException
@@ -824,7 +991,12 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
             return output.lines
 
     def is_stack_summary(_tb):
+        """
+        :param StackSummary|object _tb:
+        :rtype: bool
+        """
         return isinstance(_tb, StackSummary)
+
     isframe = inspect.isframe
     if withTitle:
         if isframe(tb) or is_stack_summary(tb):
@@ -850,6 +1022,7 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
                 output("(Exclude vars because we are on a GC stack.)")
     if with_vars is None:
         with_vars = True
+    # noinspection PyBroadException
     try:
         if limit is None:
             if hasattr(sys, 'tracebacklimit'):
@@ -858,17 +1031,31 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
         _tb = tb
 
         class NotFound(Exception):
-            pass
+            """
+            Identifier not found.
+            """
 
-        def _resolve_identifier(namespace, id):
-            if id[0] not in namespace:
+        def _resolve_identifier(namespace, keys):
+            """
+            :param dict[str] namespace:
+            :param tuple[str] keys:
+            :return: namespace[name[0]][name[1]]...
+            """
+            if keys[0] not in namespace:
                 raise NotFound()
-            obj = namespace[id[0]]
-            for part in id[1:]:
+            obj = namespace[keys[0]]
+            for part in keys[1:]:
                 obj = getattr(obj, part)
             return obj
 
+        # noinspection PyShadowingNames
         def _try_set(old, prefix, func):
+            """
+            :param None|str old:
+            :param str prefix:
+            :param func:
+            :return: old
+            """
             if old is not None:
                 return old
             try:
@@ -924,7 +1111,7 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
                         pass
                     else:
                         with output.fold_text_ctx(color('    locals:', color.fg_colors[0])):
-                            already_printed_locals = set()
+                            already_printed_locals = set()  # type: typing.Set[typing.Tuple[str,...]]
                             for token_str in grep_full_py_identifiers(parse_py_statement(source_code)):
                                 splitted_token = tuple(token_str.split("."))
                                 for token in [splitted_token[0:i] for i in range(1, len(splitted_token) + 1)]:
@@ -960,7 +1147,7 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
                 _tb = _tb.tb_next
             n += 1
 
-    except Exception as e:
+    except Exception:
         output(color("ERROR: cannot get more detailed exception info because:", color.fg_colors[1], bold=True))
         import traceback
         for l in traceback.format_exc().split("\n"):
@@ -970,6 +1157,11 @@ def format_tb(tb=None, limit=None, allLocals=None, allGlobals=None, withTitle=Fa
 
 
 def print_tb(tb, file=None, **kwargs):
+    """
+    :param types.TracebackType|types.FrameType|StackSummary tb:
+    :param io.TextIOBase|io.StringIO|None file: stderr by default
+    :return: nothing, prints to ``file``
+    """
     if file is None:
         file = sys.stderr
     for l in format_tb(tb=tb, **kwargs):
@@ -986,13 +1178,18 @@ def better_exchook(etype, value, tb, debugshell=False, autodebugshell=True, file
     :param tb: traceback
     :param bool debugshell: spawn a debug shell at the context of the exception
     :param bool autodebugshell: if env DEBUG is an integer != 0, it will spawn a debug shell
-    :param file: the output stream where we will print the traceback and exception information
+    :param io.TextIOBase|io.StringIO file: output stream where we will print the traceback and exception information.
+        stderr by default.
     :param bool|None with_color: whether to use ANSI escape codes for colored output
     """
     if file is None:
         file = sys.stderr
 
     def output(ln):
+        """
+        :param str ln:
+        :return: nothing, prints to ``file``
+        """
         file.write(ln + "\n")
 
     color = Color(enable=with_color)
@@ -1005,12 +1202,19 @@ def better_exchook(etype, value, tb, debugshell=False, autodebugshell=True, file
 
     import types
 
+    # noinspection PyShadowingNames
     def _some_str(value):
+        """
+        :param object value:
+        :rtype: str
+        """
+        # noinspection PyBroadException
         try:
             return str(value)
         except Exception:
             return '<unprintable %s object>' % type(value).__name__
 
+    # noinspection PyShadowingNames
     def _format_final_exc_line(etype, value):
         value_str = _some_str(value)
         if value is None or not value_str:
@@ -1019,6 +1223,7 @@ def better_exchook(etype, value, tb, debugshell=False, autodebugshell=True, file
             line = color("%s" % etype, color.fg_colors[1]) + ": %s" % (value_str,)
         return line
 
+    # noinspection PyUnresolvedReferences
     if (isinstance(etype, BaseException) or
             (hasattr(types, "InstanceType") and isinstance(etype, types.InstanceType)) or
             etype is None or type(etype) is str):
@@ -1027,6 +1232,7 @@ def better_exchook(etype, value, tb, debugshell=False, autodebugshell=True, file
         output(_format_final_exc_line(etype.__name__, value))
 
     if autodebugshell:
+        # noinspection PyBroadException
         try:
             debugshell = int(os.environ["DEBUG"]) != 0
         except Exception:
@@ -1042,7 +1248,7 @@ def dump_all_thread_tracebacks(exclude_thread_ids=None, file=None):
     Prints the traceback of all threads.
 
     :param set[int]|list[int]|None exclude_thread_ids: threads to exclude
-    :param file: output stream
+    :param io.TextIOBase|io.StringIO file: output stream
     """
     if exclude_thread_ids is None:
         exclude_thread_ids = []
@@ -1053,6 +1259,7 @@ def dump_all_thread_tracebacks(exclude_thread_ids=None, file=None):
     if hasattr(sys, "_current_frames"):
         print("", file=file)
         threads = {t.ident: t for t in threading.enumerate()}
+        # noinspection PyProtectedMember
         for tid, stack in sys._current_frames().items():
             if tid in exclude_thread_ids:
                 continue
@@ -1067,6 +1274,7 @@ def dump_all_thread_tracebacks(exclude_thread_ids=None, file=None):
                 assert isinstance(thread, threading.Thread)
                 if thread is threading.currentThread():
                     tags += ["current"]
+                # noinspection PyProtectedMember,PyUnresolvedReferences
                 if isinstance(thread, threading._MainThread):
                     tags += ["main"]
                 tags += [str(thread)]
@@ -1088,6 +1296,7 @@ def get_current_frame():
     Uses sys._getframe if available, otherwise some trickery with sys.exc_info and a dummy exception.
     """
     if hasattr(sys, "_getframe"):
+        # noinspection PyProtectedMember
         return sys._getframe(1)
     try:
         raise ZeroDivisionError
@@ -1114,6 +1323,10 @@ def iter_traceback(tb=None, enforce_most_recent_call_first=False):
         tb = get_current_frame()
 
     def is_stack_summary(_tb):
+        """
+        :param StackSummary|object _tb:
+        :rtype: bool
+        """
         return isinstance(_tb, StackSummary)
 
     is_frame = inspect.isframe
@@ -1150,6 +1363,9 @@ def iter_traceback(tb=None, enforce_most_recent_call_first=False):
 
 
 class ExtendedFrameSummary(FrameSummary):
+    """
+    Extends :class:`FrameSummary` by ``self.tb_frame``.
+    """
     def __init__(self, frame, **kwargs):
         super(ExtendedFrameSummary, self).__init__(**kwargs)
         self.tb_frame = frame
@@ -1184,8 +1400,12 @@ class DummyFrame:
         self.have_vars_available = (f_locals is not None or f_globals is not None or f_builtins is not None)
 
 
+# noinspection PyPep8Naming,PyUnusedLocal
 def _StackSummary_extract(frame_gen, limit=None, lookup_lines=True, capture_locals=False):
-    """Create a StackSummary from a traceback or stack object.
+    """
+    Replacement for :func:`StackSummary.extract`.
+
+    Create a StackSummary from a traceback or stack object.
     Very simplified copy of the original StackSummary.extract().
     We want always to capture locals, that is why we overwrite it.
     Additionally, we also capture the frame.
@@ -1239,6 +1459,9 @@ def replace_traceback_format_tb():
 # Test/demo code starts here.
 
 def test_is_source_code_missing_open_brackets():
+    """
+    Test :func:`is_source_code_missing_open_brackets`.
+    """
     assert is_source_code_missing_open_brackets("a") is False
     assert is_source_code_missing_open_brackets("a)") is True
     assert is_source_code_missing_open_brackets("fn()") is False
@@ -1249,26 +1472,41 @@ def test_is_source_code_missing_open_brackets():
 
 
 def test_add_indent_lines():
+    """
+    Test :func:`add_indent_lines`.
+    """
     assert add_indent_lines("foo ", " bar") == "foo  bar"
     assert add_indent_lines("foo ", " bar\n baz") == "foo  bar\n     baz"
 
 
 def test_get_same_indent_prefix():
+    """
+    Test :func:`get_same_indent_prefix`.
+    """
     assert get_same_indent_prefix(["a", "b"]) == ""
     assert get_same_indent_prefix([" a"]) == " "
     assert get_same_indent_prefix([" a", "  b"]) == " "
 
 
 def test_remove_indent_lines():
+    """
+    Test :func:`remove_indent_lines`.
+    """
     assert remove_indent_lines(" a\n  b") == "a\n b"
     assert remove_indent_lines("  a\n b") == "a\nb"
     assert remove_indent_lines("\ta\n\t b") == "a\n b"
 
 
-if __name__ == "__main__":
+# noinspection PyMissingOrEmptyDocstring,PyBroadException
+def _main():
+    """
+    Some demo.
+    """
+
     if sys.argv[1:] == ["test"]:
         for k, v in sorted(globals().items()):
-            if not k.startswith("test_"): continue
+            if not k.startswith("test_"):
+                continue
             print("running: %s()" % k)
             v()
         print("ok.")
@@ -1293,7 +1531,9 @@ if __name__ == "__main__":
     # this code produces this output: https://gist.github.com/922622
 
     try:
-        x = {1:2, "a":"b"}
+        x = {1: 2, "a": "b"}
+
+        # noinspection PyMissingOrEmptyDocstring
         def f():
             y = "foo"
             # noinspection PyUnresolvedReferences,PyStatementEffect
@@ -1303,16 +1543,9 @@ if __name__ == "__main__":
         better_exchook(*sys.exc_info())
 
     try:
-        f = lambda x: None
-        # noinspection PyUnresolvedReferences,PyUnboundLocalVariable,PyArgumentList
-        f(x, y)
-    except Exception:
-        better_exchook(*sys.exc_info())
-
-    try:
         # noinspection PyArgumentList
-        (lambda x: None)(__name__,
-                         42)  # multiline
+        (lambda _x: None)(__name__,
+                          42)  # multiline
     except Exception:
         better_exchook(*sys.exc_info())
 
@@ -1327,10 +1560,15 @@ if __name__ == "__main__":
     except Exception:
         better_exchook(*sys.exc_info())
 
+    # noinspection PyMissingOrEmptyDocstring
     def f1(a):
         f2(a + 1, 2)
+
+    # noinspection PyMissingOrEmptyDocstring
     def f2(a, b):
         f3(a + b)
+
+    # noinspection PyMissingOrEmptyDocstring
     def f3(a):
         b = ("abc" * 100) + "-interesting"  # some long demo str
         a(b)  # error, not callable
@@ -1341,7 +1579,11 @@ if __name__ == "__main__":
         better_exchook(*sys.exc_info())
 
     # use this to overwrite the global exception handler
-    sys.excepthook = better_exchook
+    install()
     # and fail
     # noinspection PyUnresolvedReferences
     finalfail(sys)
+
+
+if __name__ == "__main__":
+    _main()
