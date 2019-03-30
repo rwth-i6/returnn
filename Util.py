@@ -1,4 +1,8 @@
 
+"""
+Various generic utilities, which are shared across different backend engines.
+"""
+
 from __future__ import print_function
 from __future__ import division
 
@@ -228,10 +232,10 @@ def git_commit_date(commit="HEAD", gitdir="."):
   """
   return (
     sysexec_out("git", "show", "-s", "--format=%ci", commit, cwd=gitdir)
-      .strip()[:-6]
-      .replace(":", "")
-      .replace("-", "")
-      .replace(" ", "."))
+    .strip()[:-6]
+    .replace(":", "")
+    .replace("-", "")
+    .replace(" ", "."))
 
 
 def git_describe_head_version(gitdir="."):
@@ -489,6 +493,7 @@ def terminal_size(file=sys.stdout):
     return -1, -1
   env = os.environ
 
+  # noinspection PyShadowingNames
   def ioctl_gwinsz(fd):
     """
     :param int fd: file descriptor
@@ -2187,12 +2192,13 @@ def which(program):
   :return: full path, e.g. "/usr/bin/python", or None
   :rtype: str|None
   """
-  def is_exe(fpath):
+  # noinspection PyShadowingNames
+  def is_exe(path):
     """
-    :param str fpath:
+    :param str path:
     :rtype: str
     """
-    return os.path.isfile(fpath) and os.access(fpath, os.X_OK)
+    return os.path.isfile(path) and os.access(path, os.X_OK)
 
   fpath, fname = os.path.split(program)
   if fpath:
@@ -2223,6 +2229,7 @@ def overwrite_os_exec(prefix_args):
   if not _original_execve:
     _original_execve = os.execve
   if not _original_execvpe:
+    # noinspection PyProtectedMember
     _original_execvpe = os._execvpe
 
   # noinspection PyUnusedLocal

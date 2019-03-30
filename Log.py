@@ -1,4 +1,8 @@
 
+"""
+Provides the main class for logging, :class:`Log`, and some helpers.
+"""
+
 from __future__ import print_function
 
 import logging
@@ -7,15 +11,23 @@ import sys
 try:
   import StringIO
 except ImportError:
+  # noinspection PyPep8Naming
   import io as StringIO
 import threading
 from threading import RLock
 import contextlib
 import string
-import time
+PY3 = sys.version_info[0] >= 3
+if PY3:
+  import typing
 
 
-class Stream():
+class Stream:
+  """
+  Simple stream wrapper, which provides :func:`write` and :func:`flush`.
+  """
+
+  # noinspection PyShadowingNames
   def __init__(self, log, lvl):
     """
     :type log: logging.Logger
@@ -27,6 +39,9 @@ class Stream():
     self.lock = RLock()
 
   def write(self, msg):
+    """
+    :param str msg:
+    """
     with self.lock:
       if msg == '\n':
         self.flush()
@@ -34,6 +49,9 @@ class Stream():
         self.buf.write(msg)
 
   def flush(self):
+    """
+    Flush, i.e. writes to the log.
+    """
     with self.lock:
       self.buf.flush()
       self.log.log(self.lvl, self.buf.getvalue())
@@ -44,26 +62,51 @@ class Stream():
 
 
 class Log:
+  """
+  The main logging class.
+  """
+
   def __init__(self):
     self.initialized = False
-    self.filename = None
+    self.filename = None  # type: typing.Optional[str]
+    self.v = None  # type: typing.Optional[typing.List[logging.Logger]]
+    self.verbose = None  # type: typing.Optional[typing.List[bool]]
+    self.error = None  # type: typing.Optional[Stream]
+    self.v0 = None  # type: typing.Optional[Stream]
+    self.v1 = None  # type: typing.Optional[Stream]
+    self.v2 = None  # type: typing.Optional[Stream]
+    self.v3 = None  # type: typing.Optional[Stream]
+    self.v4 = None  # type: typing.Optional[Stream]
+    self.v5 = None  # type: typing.Optional[Stream]
 
-  def initialize(self, logs = [], verbosity = [], formatter = []):
+  def initialize(self, logs=None, verbosity=None, formatter=None):
+    """
+    :param list[str] logs:
+    :param list[int] verbosity:
+    :param list[str] formatter: 'default', 'timed', 'raw' or 'verbose'
+    """
+    if formatter is None:
+      formatter = []
+    if verbosity is None:
+      verbosity = []
+    if logs is None:
+      logs = []
     self.initialized = True
-    fmt = { 'default' : logging.Formatter('%(message)s'),
-            'timed' : logging.Formatter('%(asctime)s %(message)s', datefmt = '%Y-%m-%d,%H:%M:%S.%MS'),
-            'raw' : logging.Formatter('%(message)s'),
-            'verbose': logging.Formatter('%(levelname)s - %(asctime)s %(message)s', datefmt = '%Y-%m-%d,%H:%M:%S.%MS')
-          }
-    self.v = [ logging.getLogger('v' + str(v)) for v in range(6) ]
+    fmt = {
+      'default': logging.Formatter('%(message)s'),
+      'timed': logging.Formatter('%(asctime)s %(message)s', datefmt='%Y-%m-%d,%H:%M:%S.%MS'),
+      'raw': logging.Formatter('%(message)s'),
+      'verbose': logging.Formatter('%(levelname)s - %(asctime)s %(message)s', datefmt='%Y-%m-%d,%H:%M:%S.%MS')
+    }
+    self.v = [logging.getLogger('v' + str(v)) for v in range(6)]
     for l in self.v:
       # Reset handler list, in case we have initialized some earlier (e.g. multiple log.initialize() calls).
       l.handlers = []
-    if not 'stdout' in logs:
+    if 'stdout' not in logs:
       logs.append('stdout')
     if len(formatter) == 1:
-        # if only one format provided, use it for all logs
-        formatter = [formatter[0]] * len(logs)
+      # if only one format provided, use it for all logs
+      formatter = [formatter[0]] * len(logs)
     for i in range(len(logs)):
       t = logs[i]
       v = 3
@@ -72,7 +115,7 @@ class Log:
       elif len(verbosity) == 1:
         v = verbosity[0]
       assert v <= 5, "invalid verbosity: " + str(v)
-      f = fmt['default'] if i >= len(formatter) or not fmt.has_key(formatter[i]) else fmt[formatter[i]]
+      f = fmt['default'] if i >= len(formatter) or formatter[i] not in fmt else fmt[formatter[i]]
       if t == 'stdout':
         handler = logging.StreamHandler(sys.stdout)
         handler.setLevel(logging.DEBUG)
@@ -93,9 +136,9 @@ class Log:
         assert False, "invalid log target %r" % t
       handler.setFormatter(f)
       for j in range(v + 1):
-        if not handler in self.v[j].handlers:
+        if handler not in self.v[j].handlers:
           self.v[j].addHandler(handler)
-    self.verbose = [ True ] * 6
+    self.verbose = [True] * 6
     null = logging.FileHandler(os.devnull)
     for i in range(len(self.v)):
       self.v[i].setLevel(logging.DEBUG)
@@ -154,10 +197,15 @@ class StreamThreadLocal(threading.local):
     self.buf = StringIO.StringIO()
 
   def write(self, msg):
+    """
+    :param str msg:
+    """
     self.buf.write(msg)
 
   def flush(self):
-    pass
+    """
+    Ignored.
+    """
 
 
 class StreamDummy:
@@ -166,10 +214,17 @@ class StreamDummy:
   """
 
   def write(self, msg):
+    """
+    Ignored.
+
+    :param str msg:
+    """
     pass
 
   def flush(self):
-    pass
+    """
+    Ignored.
+    """
 
 
 @contextlib.contextmanager

@@ -4699,7 +4699,7 @@ def optional_add(*args):
 
 def optional_mul(*args):
   """
-  :param list[tf.Tensor|None]|int|float|tf.Tensor args:
+  :param tf.Tensor|None|int|float args:
   :rtype: tf.Tensor|int|float|None
   :return: sums all non-None values, or returns None if there are none
   """
@@ -4717,7 +4717,7 @@ def optional_mul(*args):
 
 def opt_logical_and(*args):
   """
-  :param list[tf.Tensor|bool] args:
+  :param tf.Tensor|bool args:
   :return: basically logical_and(*args), but leaves out all constants
   :rtype: tf.Tensor|bool
   """

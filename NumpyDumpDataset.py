@@ -1,4 +1,8 @@
 
+"""
+Provides :class:`NumpyDumpDataset`.
+"""
+
 from Dataset import Dataset, DatasetSeq
 import os
 import numpy

@@ -194,6 +194,10 @@ class ExternData(object):
 
 
 class TFNetwork(object):
+  """
+  The main neural network, i.e. collection of interconnected layers, i.e. computation graph with trainable params.
+  """
+
   def __init__(self, config=None, extern_data=None, rnd_seed=None,
                train_flag=False, eval_flag=False, search_flag=False,
                parent_layer=None, parent_net=None, extra_parent_net=None,
