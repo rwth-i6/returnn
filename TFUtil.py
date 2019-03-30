@@ -4080,24 +4080,6 @@ class CustomGradient(object):
     self.registered_ops_graph = ref(NotSpecified)
     self.registered_ops = {}  # func -> decorated func
 
-  def Defun(self, *input_types, **kwargs):
-    """
-    :param (tf.Operation, tf.Tensor) -> tf.Tensor grad_op:
-    :param tf.DType input_types:
-    :param dict[str] kwargs: passed to self.register()
-    :return: function decorator
-    :rtype: ((tf.Tensor) -> tf.Tensor) -> ((tf.Tensor) -> tf.Tensor)
-    """
-
-    def decorator(op):
-      """
-      :param (tf.Tensor) -> tf.Tensor op:
-      :rtype: tf.Tensor
-      """
-      return self.register(input_types=input_types, op=op, **kwargs)
-
-    return decorator
-
   def register(self, input_types, op, grad_op, name=None):
     """
     :param list[tf.DType]|tuple[tf.DType] input_types:
@@ -4268,6 +4250,7 @@ class SyntheticGradient(object):
     finally:
       cls.exit_gradient_scope()
 
+  # noinspection PyUnusedLocal
   @classmethod
   def _synthetic_gradient_fwd(cls, x, synthetic_grad_x):
     """
@@ -4321,6 +4304,8 @@ def filter_grad(x, threshold, axis):
   :return: identity(x) with custom gradient
   :rtype: tf.Tensor
   """
+
+  # noinspection PyShadowingNames
   def grad_op(op, out_grad):
     """
     :param tf.Operation op:
@@ -5176,6 +5161,9 @@ def init_variable_if_needed(v):
   :rtype: tf.Operation
   """
   def make_init():
+    """
+    :rtype: tf.Operation
+    """
     # Cannot use tf.variables_initializer(), see here: https://stackoverflow.com/questions/44354964/
     with tf.control_dependencies([tf.assign(v, v.initial_value)]):
       return tf.no_op()
