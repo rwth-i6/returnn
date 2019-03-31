@@ -822,7 +822,7 @@ def simple_obj_repr(obj):
   """
   return obj.__class__.__name__ + "(%s)" % \
                                   ", ".join(["%s=%s" % (arg, better_repr(getattr(obj, arg)))
-                                             for arg in inspect.getargspec(obj.__init__).args[1:]])
+                                             for arg in getargspec(obj.__init__).args[1:]])
 
 
 class ObjAsDict(typing.Mapping[str, object]):

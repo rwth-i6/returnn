@@ -325,7 +325,8 @@ class LearningRateControl(object):
   def get_epoch_error_key_value(self, epoch):
     """
     :param int epoch:
-    :return:
+    :return: key, error
+    :rtype: (str, float)
     """
     error = self.get_epoch_error_dict(epoch)
     if not error:

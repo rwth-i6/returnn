@@ -247,6 +247,20 @@ def test_get_func_kwargs():
   assert_equal(list(getargspec(dummy_func).args), ["net", "var", "update_ops"])
 
 
+def test_simple_obj_repr():
+  class X:
+    def __init__(self, a, b=13):
+      self.a = a
+      self.b = b
+
+    __repr__ = simple_obj_repr
+
+  x = X(a=42)
+  x_repr = repr(x)
+
+  assert_equal(x_repr, "X(a=42, b=13)")
+
+
 if __name__ == "__main__":
   better_exchook.install()
   if len(sys.argv) <= 1:

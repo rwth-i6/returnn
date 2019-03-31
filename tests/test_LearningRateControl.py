@@ -5,12 +5,52 @@ sys.path += ["."]  # Python 3 hack
 from Config import Config
 from LearningRateControl import *
 from nose.tools import assert_equal
+import numpy
+import unittest
 
 import better_exchook
 better_exchook.replace_traceback_format_tb()
 
 from Log import log
 log.initialize()
+
+
+def test_load():
+  import tempfile
+  with tempfile.NamedTemporaryFile(mode="w") as f:
+    f.write("""{
+      1: EpochData(learningRate=0.0008, error={
+      'dev_error_ctc': 0.21992561489090365,
+      'dev_error_decision': 0.0,
+      'dev_error_output/output_prob': 0.1597158714185534,
+      'dev_score_ctc': 1.0742086989480388,
+      'dev_score_output/output_prob': 0.7316125233255415,
+      'train_error_ctc': 0.11740542462939381,
+      'train_error_decision': 0.0,
+      'train_error_output/output_prob': 0.10000902651529825,
+      'train_score_ctc': 0.42154947919396146,
+      'train_score_output/output_prob': 0.4958179737218142,
+      }),
+      2: EpochData(learningRate=0.0008, error={
+      'dev_error_ctc': 0.22486433815293946,
+      'dev_error_decision': 0.0,
+      'dev_error_output/output_prob': 0.16270349413262444,
+      'dev_score_ctc': 1.0732941136466485,
+      'dev_score_output/output_prob': 0.7378438060027533,
+      'train_error_ctc': 0.13954045252681482,
+      'train_error_decision': 0.0,
+      'train_error_output/output_prob': 0.106904268810835,
+      'train_score_ctc': 0.5132869609859635, 
+      'train_score_output/output_prob': 0.5098970897590558,
+      }),
+    }""")
+    f.flush()
+    control = LearningRateControl(defaultLearningRate=1.0, filename=f.name)
+    assert set(control.epochData.keys()) == {1, 2}
+    data = control.epochData[2]
+    numpy.testing.assert_allclose(data.learningRate, 0.0008)
+    assert "dev_error_output/output_prob" in data.error
+    numpy.testing.assert_allclose(data.error["dev_error_output/output_prob"], 0.16270349413262444)
 
 
 def test_init_error_old():
@@ -113,3 +153,26 @@ def test_newbob_multi_epoch():
     'train_score': 3.095824052426714,
   })
   assert_equal(lrc.get_learning_rate_for_epoch(2), lr)  # epoch 2 cannot be a different lr yet
+
+
+if __name__ == "__main__":
+  better_exchook.install()
+  if len(sys.argv) <= 1:
+    for k, v in sorted(globals().items()):
+      if k.startswith("test_"):
+        print("-" * 40)
+        print("Executing: %s" % k)
+        try:
+          v()
+        except unittest.SkipTest as exc:
+          print("SkipTest:", exc)
+        print("-" * 40)
+    print("Finished all tests.")
+  else:
+    assert len(sys.argv) >= 2
+    for arg in sys.argv[1:]:
+      print("Executing: %s" % arg)
+      if arg in globals():
+        globals()[arg]()  # assume function and execute
+      else:
+        eval(arg)  # assume Python code and execute
