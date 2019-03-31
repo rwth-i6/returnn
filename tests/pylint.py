@@ -35,7 +35,7 @@ def main():
   setup()
   from lint_common import ignore_count_for_files
   color = better_exchook.Color()
-  has_some_relevant_error = False
+  num_relevant_files_with_errors = 0
   for filename in sorted(glob(base_dir + "/*.py")):
     base_filename = os.path.basename(filename)
     print("travis_fold:start:pylint.%s" % base_filename)
@@ -44,7 +44,7 @@ def main():
     stdout = stdout.decode("utf8")
     file_has_errors = proc.returncode != 0
     print(color.color(
-      "File: %s" % filename,
+      "File: %s" % base_filename,
       color="black" if (base_filename in ignore_count_for_files or not file_has_errors) else "red"))
     if "EXCEPTION" in stdout and "RecursionError" in stdout:
       # https://github.com/PyCQA/pylint/issues/1452
@@ -62,9 +62,10 @@ def main():
         print("The inspection reports for this file are currently ignored.")
       else:
         print(color.color("The inspection reports for this file are fatal!", color="red"))
-        has_some_relevant_error = True
+        num_relevant_files_with_errors += 1
     print("travis_fold:end:pylint.%s" % base_filename)
-  if has_some_relevant_error:
+  if num_relevant_files_with_errors:
+    print("Num relevant files with errors:", num_relevant_files_with_errors)
     sys.exit(1)
 
 
