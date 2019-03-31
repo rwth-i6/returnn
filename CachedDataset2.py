@@ -167,7 +167,7 @@ class CachedDataset2(Dataset):
   def get_seq_length(self, sorted_seq_idx):
     """
     :type sorted_seq_idx: int
-    :rtype: int
+    :rtype: Util.NumbersDict
     """
     # get_seq_length() can be called before the seq is loaded via load_seqs().
     # Thus, we just call load_seqs() ourselves here.

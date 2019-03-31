@@ -2665,7 +2665,7 @@ def read_sge_num_procs(job_id=None):
 
 def get_number_available_cpus():
   """
-  :return: number of available GPUs, if we can figure it out
+  :return: number of available CPUs, if we can figure it out
   :rtype: int|None
   """
   if hasattr(os, "sched_getaffinity"):  # Python >=3.4

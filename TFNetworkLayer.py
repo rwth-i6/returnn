@@ -10,7 +10,7 @@ import tensorflow as tf
 import contextlib
 import typing
 import TFUtil
-from Util import unicode, NotSpecified, CollectionReadCheckCovered, PY3
+from Util import unicode, NotSpecified, CollectionReadCheckCovered
 from TFUtil import Data, OutputWithActivation, CustomUpdate, dimshuffle, swapaxes
 from Log import log
 
@@ -299,6 +299,7 @@ class LayerBase(object):
       sources=sources, **kwargs)
     return output
 
+  # noinspection PyUnusedLocal
   @classmethod
   def _post_init_output(cls, output, network, target=None, size_target=None, _target_layers=None, sources=(), **kwargs):
     """
@@ -504,6 +505,10 @@ class LayerBase(object):
 
   @property
   def tf_scope_name(self):
+    """
+    :rtype: str
+    :return: normally just self.name, but make it a valid TF scope name
+    """
     return self.cls_get_tf_scope_name(name=self.name)
 
   def get_base_absolute_name_scope_prefix(self):
@@ -662,6 +667,9 @@ class LayerBase(object):
 
     @contextlib.contextmanager
     def inner():
+      """
+      Var creation scope + variable scope.
+      """
       with var_creation_scope() as dep:
         if self.reuse_params:
           var_scope = self.reuse_params.get_variable_scope(base_layer=self)
@@ -873,10 +881,16 @@ class LayerBase(object):
       default_value = tf.constant(default_value, name="only_on_eval_dummy_zero")
 
     class OnEval:
+      """
+      Closure.
+      """
       have_output = True
 
       @classmethod
       def get_value(cls):
+        """
+        :rtype: tf.Tensor
+        """
         res = on_eval_func()
         if res is None:
           cls.have_output = False
@@ -2700,11 +2714,13 @@ class WindowLayer(_ConcatInputLayer):
     data = data.copy_add_spatial_dim(spatial_dim_axis=axis + 1, dim=window_size)  # add new axis right after
     return data
 
+  # noinspection PyMethodOverriding
   @classmethod
   def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, window_size, axis="T", sources=(), **kwargs):
     """
     :param tf.Tensor batch_dim:
     :param TFNetworkRecLayer.RecLayer|LayerBase rec_layer:
+    :param int window_size:
     :param str axis:
     :param list[LayerBase] sources:
     :rtype: dict[str,tf.Tensor]
@@ -3870,7 +3886,7 @@ class ReduceLayer(_ConcatInputLayer):
       # argmax and argmin don't support keep_dims argument
       # so we emulate it manually
       if keep_dims:
-        y = expand_multiple_dims(y, axis=axes, dim=1)
+        y = expand_multiple_dims(y, axes=axes)
     else:
       y = f(x_, axis=axes, keep_dims=keep_dims)
     y_dyn_sizes = x.size_placeholder.copy()
@@ -3922,7 +3938,7 @@ class ReduceLayer(_ConcatInputLayer):
     :param str|list[str]|None axes:
     :param str|None axis:
     :param bool keep_dims:
-    :param bool enforce_batch_dim_axis:
+    :param int|None enforce_batch_dim_axis:
     :rtype: Data
     """
     if axis is not None:
@@ -4002,6 +4018,12 @@ class ReduceOutLayer(_ConcatInputLayer):
 
   @classmethod
   def get_out_data_from_opts(cls, num_pieces, sources, name, **kwargs):
+    """
+    :param int num_pieces:
+    :param list[LayerBase] sources:
+    :param str name:
+    :rtype: Data
+    """
     out = get_concat_sources_data_template(sources, name="%s_output" % name)
     assert not out.sparse
     assert out.dim % num_pieces == 0
@@ -4017,11 +4039,13 @@ class SqueezeLayer(_ConcatInputLayer):
   """
   layer_class = "squeeze"
 
+  # noinspection PyUnusedLocal
   def __init__(self, axis, enforce_batch_dim_axis=None, allow_no_op=False, **kwargs):
     """
     :param int|list[int]|str axis: one axis or multiple axis to squeeze.
       this is counted with batch-dim, which by default is axis 0 (see enforce_batch_dim_axis).
       it also accepts the special tokens "B"|"batch", "spatial", "spatial_except_time", or "F"|"feature"
+    :param int|None enforce_batch_dim_axis:
     :param bool allow_no_op:
     """
     super(SqueezeLayer, self).__init__(**kwargs)
@@ -4167,6 +4191,15 @@ class WeightedSumLayer(_ConcatInputLayer):
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources, axes, padding=None, size=None, keep_dims=None, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :param str|list[str] axes:
+    :param str|None padding:
+    :param None|tuple[int] size:
+    :param bool|None keep_dims:
+    :rtype: Data
+    """
     data = get_concat_sources_data_template(sources, name="%s_output" % name)
     assert not data.sparse
     axes, padding, size, keep_dims = cls._resolve_opts(
@@ -4603,6 +4636,13 @@ class ResizeLayer(_ConcatInputLayer):
 
   @classmethod
   def get_out_data_from_opts(cls, factor, axis, sources, name, **kwargs):
+    """
+    :param int factor:
+    :param str axis:
+    :param list[LayerBase] sources:
+    :param str name:
+    :rtype: Data
+    """
     out = get_concat_sources_data_template(sources).copy_as_batch_major()
     out.name = "%s_output" % name
     axis = out.get_axis_from_description(axis)
@@ -4657,6 +4697,11 @@ class CombineDimsLayer(_ConcatInputLayer):
 
   @classmethod
   def get_out_data_from_opts(cls, axes, sources, **kwargs):
+    """
+    :param str|list[str] axes:
+    :param list[LayerBase] sources:
+    :rtype: Data
+    """
     out = get_concat_sources_data_template(sources)
     axes = out.get_axes_from_description(axes)
     assert len(axes) >= 2
@@ -4727,16 +4772,6 @@ class RemoveLayer(LayerBase):
     return out
 
 
-class FsaLayer(LayerBase):
-  layer_class = "fsa"
-
-  def __init__(self, **kwargs):
-    """
-    """
-    super(FsaLayer, self).__init__(**kwargs)
-    # TODO...
-
-
 class CombineLayer(LayerBase):
   """
   Applies some binary operation on all sources, such as addition.
@@ -4785,6 +4820,12 @@ class CombineLayer(LayerBase):
 
   @classmethod
   def get_out_data_from_opts(cls, n_out=NotSpecified, out_type=None, sources=(), **kwargs):
+    """
+    :param int|None|NotSpecified n_out:
+    :param dict[str]|None out_type:
+    :param list[LayerBase] sources:
+    :rtype: Data
+    """
     out_type_ = {}
     if sources:
       out_type_.update(Data.get_common_data([s.output for s in sources]).get_kwargs())
@@ -4862,7 +4903,7 @@ class CombineLayer(LayerBase):
     :param dict[str]|None eval_locals:
     :rtype: tf.Tensor
     """
-    used_sources = set()  # type: set[int]
+    used_sources = set()  # type: typing.Set[int]
     common_data = Data.get_common_data([s.output for s in sources])
 
     def source(i, auto_convert=True, enforce_batch_major=False, as_data=False):
@@ -4897,11 +4938,21 @@ class CombineLayer(LayerBase):
     return x
 
   def _get_op(self, kind, eval_str=None, eval_locals=None):
+    """
+    :param str kind:
+    :param str eval_str:
+    :param dict[str]|None eval_locals:
+    :rtype: (list[LayerBase]) -> tf.Tensor
+    """
     op = getattr(self, "_op_kind_%s" % kind)
     if eval_str:
       assert kind == "eval"
 
       def wrap_eval_op(sources):
+        """
+        :param list[LayerBase] sources:
+        :rtype: tf.Tensor
+        """
         return self._op_kind_eval(sources, eval_str=eval_str, eval_locals=eval_locals)
       op = wrap_eval_op
     return op
@@ -4956,6 +5007,12 @@ class CompareLayer(LayerBase):
 
   @classmethod
   def get_out_data_from_opts(cls, n_out=NotSpecified, out_type=None, sources=(), **kwargs):
+    """
+    :param int|None|NotSpecified n_out:
+    :param dict[str]|None out_type:
+    :param list[LayerBase] sources:
+    :rtype: Data
+    """
     if n_out is NotSpecified and not out_type:
       out_type = sources[0].output.get_kwargs()
       out_type["name"] = "%s_output" % kwargs["name"]
@@ -5008,9 +5065,17 @@ class SwitchLayer(LayerBase):
 
   @classmethod
   def get_out_data_from_opts(cls, true_from, name, **kwargs):
-      return true_from.output.copy(name="%s_output" % name)
+    """
+    :param LayerBase true_from:
+    :param str name:
+    :rtype: Data
+    """
+    return true_from.output.copy(name="%s_output" % name)
 
   def get_dep_layers(self):
+    """
+    :rtype: list[LayerBase]
+    """
     return [self.condition, self.true_from, self.false_from]
 
 
@@ -5035,12 +5100,15 @@ class SubnetworkLayer(LayerBase):
   layer_class = "subnetwork"
   recurrent = True  # we don't know. depends on the subnetwork.
 
+  # noinspection PyShadowingNames
   def __init__(self, subnetwork, concat_sources=True, load_on_init=None, dropout=0, dropout_noise_shape=None, **kwargs):
     """
     :param dict[str,dict] subnetwork: subnetwork as dict (JSON content). must have an "output" layer-
     :param bool concat_sources: if we concatenate all sources into one, like it is standard for most other layers
     :param str|None load_on_init: if provided, for parameter initialization,
       we will load the given model file.
+    :param float dropout: will be applied if train_flag is set
+    :param tuple|list|dict|None dropout_noise_shape:
     """
     super(SubnetworkLayer, self).__init__(**kwargs)
     from TFNetwork import TFNetwork
@@ -5093,22 +5161,23 @@ class SubnetworkLayer(LayerBase):
         filename=load_on_init, saveable_params=list(self.params.values()), params_prefix=self_prefix, network=net)
       loader.set_as_custom_init()
 
+  # noinspection PyShadowingNames
   @classmethod
   def _get_subnet_extern_data(cls, base_network, sources, concat_sources, dropout=0, dropout_noise_shape=None):
     """
     :param TFNetwork.TFNetwork base_network:
     :param list[LayerBase] sources:
     :param bool concat_sources:
-    :param float dropout:
-    :param dropout_noise_shape:
+    :param float dropout: will be applied if train_flag is set
+    :param tuple|list|dict|None dropout_noise_shape:
     :rtype: TFNetwork.ExternData
     """
     from TFNetwork import ExternData
     sub_extern_data = ExternData()
     if concat_sources:
-      sub_extern_data.data[sub_extern_data.default_input] = \
+      sub_extern_data.data[sub_extern_data.default_input] = (
         concat_sources_with_opt_dropout(
-          sources, dropout=dropout, dropout_noise_shape=dropout_noise_shape)
+          sources, dropout=dropout, dropout_noise_shape=dropout_noise_shape))
     else:
       assert not dropout, "not implemented without concat_sources"
       for source in sources:
@@ -5125,10 +5194,12 @@ class SubnetworkLayer(LayerBase):
       if self.subnetwork.extern_data.data[key] is self.network.extern_data.data.get(key, None):
         self.network.used_data_keys.add(key)
 
+  # noinspection PyShadowingNames
   @classmethod
   def get_out_data_from_opts(cls, subnetwork, concat_sources=True, n_out=NotSpecified, out_type=None, **kwargs):
     """
     :param dict[str,dict[str]] subnetwork:
+    :param bool concat_sources:
     :param int|None|NotSpecified n_out:
     :param dict[str]|None out_type:
     :rtype: Data
@@ -5141,6 +5212,7 @@ class SubnetworkLayer(LayerBase):
       concat_sources=concat_sources, sources=kwargs["sources"])
     return subnet.layers["output"].output
 
+  # noinspection PyShadowingNames
   @classmethod
   def _construct_template_subnet(cls, name, network, subnetwork, sources, concat_sources=True):
     """
@@ -5149,8 +5221,8 @@ class SubnetworkLayer(LayerBase):
     :param str name:
     :param TFNetwork.TFNetwork network: parent net
     :param dict[str,dict[str]] subnetwork:
-    :param int|None|NotSpecified n_out:
-    :param dict[str]|None out_type:
+    :param list[LayerBase] sources:
+    :param bool concat_sources:
     :rtype: TFNetwork.TFNetwork
     """
     assert "output" in subnetwork
@@ -5167,6 +5239,7 @@ class SubnetworkLayer(LayerBase):
       parent_net=network,
       rnd_seed=0)  # seed 0, will not be used, as we only construct the templates
 
+    # noinspection PyShadowingNames
     def add_templated_layer(name, layer_class, **layer_desc):
       """
       :param str name:
@@ -5174,28 +5247,29 @@ class SubnetworkLayer(LayerBase):
       :param dict[str] layer_desc:
       :rtype: LayerBase
       """
-      layer = _TemplateLayer(name=name, network=subnet)
-      subnet.layers[name] = layer
+      layer_ = _TemplateLayer(name=name, network=subnet)
+      subnet.layers[name] = layer_
       layer_desc = layer_desc.copy()
       layer_desc["name"] = name
       layer_desc["network"] = subnet
       output = layer_class.get_out_data_from_opts(**layer_desc)
-      layer.init(layer_class=layer_class, output=output, **layer_desc)
+      layer_.init(layer_class=layer_class, output=output, **layer_desc)
       if layer_class.recurrent:
         subnet.recurrent = True
-      return layer
+      return layer_
 
+    # noinspection PyShadowingNames
     def get_templated_layer(name):
       """
       :param str name:
       :rtype: _TemplateLayer|LayerBase
       """
       if name in subnet.layers:
-        layer = subnet.layers[name]
-        return layer
+        layer_ = subnet.layers[name]
+        return layer_
       if name.startswith("base:"):
-        layer = network.get_layer(name[len("base:"):])
-        return layer
+        layer_ = network.get_layer(name[len("base:"):])
+        return layer_
       return subnet.construct_layer(
         net_dict=subnetwork, name=name, get_layer=get_templated_layer, add_layer=add_templated_layer)
 
@@ -5220,6 +5294,9 @@ class SubnetworkLayer(LayerBase):
     return subnet
 
   def get_constraints_value(self):
+    """
+    :rtype: tf.Tensor|None
+    """
     v = self.subnetwork.get_total_constraints()
     if v is 0:
       return None
@@ -5265,11 +5342,16 @@ class SubnetworkLayer(LayerBase):
     return losses
 
   def get_last_hidden_state(self, key):
+    """
+    :param int|str|None key: also the special key "*"
+    :rtype: tf.Tensor|None
+    """
     h = self.subnetwork.get_default_output_layer().get_last_hidden_state(key=key)
     if h is not None:
       return h
     return super(SubnetworkLayer, self).get_last_hidden_state(key=key)
 
+  # noinspection PyMethodOverriding
   @classmethod
   def get_rec_initial_extra_outputs(cls, batch_dim, rec_layer, subnetwork, **kwargs):
     """
@@ -5580,7 +5662,7 @@ class AllophoneStateIdxParserLayer(LayerBase):
     :param int context_len: left/right context len
     """
     super(AllophoneStateIdxParserLayer, self).__init__(**kwargs)
-    result = [None] * self.output.dim
+    result = [None] * self.output.dim  # type: typing.List[typing.Optional[tf.Tensor]]
     code = self.sources[0].output.placeholder
     result[-1] = code % self.NumBoundaryClasses  # boundary
     code //= self.NumBoundaryClasses
@@ -5634,7 +5716,8 @@ class FramewiseStatisticsLayer(LayerBase):
     assert target.sparse
     assert source.output_before_activation.act_func is tf.nn.softmax
     output_seq_lens = output.size_placeholder[0]
-    output_before_softmax_flat = flatten_with_seq_len_mask(source.output_before_activation.x, output_seq_lens, time_major=output.is_time_major)
+    output_before_softmax_flat = flatten_with_seq_len_mask(
+      source.output_before_activation.x, output_seq_lens, time_major=output.is_time_major)
     target_seq_lens = target.size_placeholder[0]
     target_flat = flatten_with_seq_len_mask(target.placeholder, target_seq_lens, time_major=target.is_time_major)
     target_flat.set_shape(tf.TensorShape([tf.Dimension(None)]))
@@ -5661,8 +5744,10 @@ class FramewiseStatisticsLayer(LayerBase):
     seq_len_no_sil = tf.reduce_sum(tf.cast(mask_no_sil, tf.int32))
 
     with self.var_creation_scope():
-      accumulated_seq_len = tf.Variable(initial_value=0, dtype=tf.int64, trainable=False, name="accumulated_seq_len")
-      accumulated_seq_len_sil = tf.Variable(initial_value=0, dtype=tf.int64, trainable=False, name="accumulated_seq_len_sil")
+      accumulated_seq_len = tf.Variable(
+        initial_value=0, dtype=tf.int64, trainable=False, name="accumulated_seq_len")
+      accumulated_seq_len_sil = tf.Variable(
+        initial_value=0, dtype=tf.int64, trainable=False, name="accumulated_seq_len_sil")
     accumulated_seq_len = tf.assign_add(accumulated_seq_len, tf.cast(seq_len, tf.int64))
     accumulated_seq_len_sil = tf.assign_add(accumulated_seq_len_sil, tf.cast(seq_len_sil, tf.int64))
     accumulated_seq_len_no_sil = accumulated_seq_len - accumulated_seq_len_sil
@@ -5697,7 +5782,10 @@ class FramewiseStatisticsLayer(LayerBase):
         acc_shape = v.get_shape().as_list()[1:]
         assert all(acc_shape)
         with self.var_creation_scope():
-          acc_v = tf.Variable(initial_value=numpy.zeros(acc_shape, dtype=acc_dtype), dtype=acc_dtype, trainable=False, name="accumulated_%s" % k)
+          acc_v = tf.Variable(
+            name="accumulated_%s" % k,
+            initial_value=numpy.zeros(acc_shape, dtype=acc_dtype), dtype=acc_dtype,
+            trainable=False)
         acc_v = tf.assign_add(acc_v, tf.reduce_sum(tf.cast(v, acc_dtype), axis=0))
         self.stats["accumulated_%s" % k] = tf.cast(acc_v, tf.float64) / tf.cast(acc_seq_len, tf.float64)
 
@@ -5928,9 +6016,10 @@ class OfficialResNetLayer(_ConcatInputLayer):
 
     # Model assumes always NHWC input format.
     inputs_data = self.input_data.copy_as_batch_major()
-    assert inputs_data.batch_ndim == 4 and \
-           inputs_data.batch_dim_axis == 0 and \
-           inputs_data.feature_dim_axis == 3
+    assert (
+      inputs_data.batch_ndim == 4 and
+      inputs_data.batch_dim_axis == 0 and
+      inputs_data.feature_dim_axis == 3)
     output = self.model.__call__(inputs=inputs_data.placeholder, training=self.network.train_flag)
     # Output is logits with [<batch_size>, self.num_classes].
     self.output.placeholder = output

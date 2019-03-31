@@ -3,16 +3,20 @@ There are use cases in which we want to combine several datasets:
 
  * **Multimodality:** features from several datasets should be provided at the same time
 
-   * Examples: multi-source translation, speech translation with source CTC loss for stability (needs both source audio and transcription)
+   * Examples: multi-source translation, speech translation with source CTC loss
+     for stability (needs both source audio and transcription)
 
- * **Multi-Task Learning:** several datasets should be used alternatingly, such that at each time the dataset of the corresponding task is selected
+ * **Multi-Task Learning:** several datasets should be used alternatingly,
+   such that at each time the dataset of the corresponding task is selected
 
    * Examples: multi-task speech translation (either from audio or from text)
 
- * **Combination of Corpora:** the training data should be split into different datatsets. This allows creating a combined corpus dynamically
+ * **Combination of Corpora:** the training data should be split into different datatsets.
+   This allows creating a combined corpus dynamically
    and avoids manual concatenation/shuffling.
 
-   * Examples: multi-lingual translation systems (datasets can be reused from corresponding bilingual systems)
+   * Examples: multi-lingual translation systems
+     (datasets can be reused from corresponding bilingual systems)
 
 The dataset classes MetaDataset and CombinedDataset which perform these tasks are implemented in MetaDataset.py.
 """
@@ -26,9 +30,14 @@ from Log import log
 from random import Random
 import numpy
 import sys
+import typing
 
 
 class EpochWiseFilter:
+  """
+  Applies some filter to the sequences (e.g. by seq length) for some epoch.
+  """
+
   def __init__(self, epochs_opts, debug_msg_prefix="EpochWiseFilter"):
     """
     :param dict[(int,int|None),dict[str]] epochs_opts: (ep_start, ep_end) -> epoch opts
@@ -106,9 +115,11 @@ class MetaDataset(CachedDataset2):
   These features will all be available to the network at the same time.
 
   The datasets to be combined are given via the input parameter ``"datasets"``.
-  To define which training examples from the different datasets belong together, a ``"seq_list_file"`` in pickle format has to be created.
+  To define which training examples from the different datasets belong together,
+  a ``"seq_list_file"`` in pickle format has to be created.
   It contains a list of sequence tags for each dataset (see example below).
-  Note, that in general each dataset type has its own tag format, e.g. for the TranslationDataset it is ``line-<n>``, for the SprintDataset it is ``<corpusname>/<recording>/<segment id>``.
+  Note, that in general each dataset type has its own tag format, e.g. for the TranslationDataset it is ``line-<n>``,
+  for the SprintDataset it is ``<corpusname>/<recording>/<segment id>``.
   **Providing a sequence list can be omitted**, if the set of sequence tags is the same for all datasets.
   When using multiple ExternSprintDataset instances, the sprint segment file can be provided as sequence list.
   In this case the MetaDataset assumes that the sequences with equal tag correspond to each other.
@@ -131,7 +142,8 @@ class MetaDataset(CachedDataset2):
           'line-3']
       }
 
-  Python dict stored in pickle file. E.g. the sequence tagged with 'corpus/ted_1/3' in the 'sprint' dataset corresponds to the sequence tagged 'line-2'
+  Python dict stored in pickle file. E.g. the sequence tagged with 'corpus/ted_1/3' in the 'sprint' dataset
+  corresponds to the sequence tagged 'line-2'
   in the 'translation' dataset.
 
   **Example of MetaDataset config:**
@@ -148,7 +160,8 @@ class MetaDataset(CachedDataset2):
                "partition_epoch": 2,
       }
 
-  This combines a SprintDataset and a TranslationDataset. These are defined as ``"train_sprint"`` and ``"train_translation"`` separately.
+  This combines a SprintDataset and a TranslationDataset.
+  These are defined as ``"train_sprint"`` and ``"train_translation"`` separately.
   *Note that the current implementation expects one input feature to be called "data".*
   """
 
@@ -191,7 +204,7 @@ class MetaDataset(CachedDataset2):
     # This will only initialize datasets needed for features occuring in data_map
     self.datasets = {
       key: init_dataset(datasets[key], extra_kwargs={"name": "%s_%s" % (self.name, key)})
-      for key in self.dataset_keys}
+      for key in self.dataset_keys}  # type: typing.Dict[str,Dataset]
 
     self.seq_list_original = self._load_seq_list(seq_list_file)
     self.num_total_seqs = len(self.seq_list_original[self.default_dataset_key])
@@ -200,15 +213,14 @@ class MetaDataset(CachedDataset2):
 
     self.tag_idx = {tag: idx for (idx, tag) in enumerate(self.seq_list_original[self.default_dataset_key])}
 
+    self._seq_lens = None  # type: typing.Optional[typing.Dict[str,NumbersDict]]
+    self._num_timesteps = None  # type: typing.Optional[NumbersDict]
     if seq_lens_file:
       seq_lens = load_json(filename=seq_lens_file)
       assert isinstance(seq_lens, dict)
       # dict[str,NumbersDict], seq-tag -> data-key -> len
       self._seq_lens = {tag: NumbersDict(l) for (tag, l) in seq_lens.items()}
       self._num_timesteps = sum([self._seq_lens[s] for s in self.seq_list_original[self.default_dataset_key]])
-    else:
-      self._seq_lens = None
-      self._num_timesteps = None
 
     if data_dims:
       data_dims = convert_data_dims(data_dims)
@@ -231,6 +243,8 @@ class MetaDataset(CachedDataset2):
     self.num_outputs = self.data_dims
 
     self.data_dtypes = {data_key: _select_dtype(data_key, self.data_dims, data_dtypes) for data_key in self.data_keys}
+    self.orig_seq_order_is_initialized = False
+    self.seq_list_ordered = None  # type: typing.Optional[typing.Dict[str,typing.List[str]]]
 
   def _is_same_seq_name_for_each_dataset(self):
     """
@@ -303,6 +317,11 @@ class MetaDataset(CachedDataset2):
     return self.datasets[self.default_dataset_key].get_seq_length(seq_idx)["data"]
 
   def init_seq_order(self, epoch=None, seq_list=None):
+    """
+    :param int|None epoch:
+    :param list[str]|None seq_list:
+    :rtype: bool
+    """
     need_reinit = self.epoch is None or self.epoch != epoch or seq_list
     super(MetaDataset, self).init_seq_order(epoch=epoch, seq_list=seq_list)
 
@@ -320,7 +339,12 @@ class MetaDataset(CachedDataset2):
       seq_index = seq_order_dataset.get_current_seq_order()
     else:
       if self._seq_lens:
-        get_seq_len = lambda s: self._seq_lens[self.seq_list_original[self.default_dataset_key][s]]["data"]
+        def get_seq_len(s):
+          """
+          :param int s:
+          :rtype: int
+          """
+          return self._seq_lens[self.seq_list_original[self.default_dataset_key][s]]["data"]
       else:
         self.orig_seq_order_is_initialized = False
         get_seq_len = self._get_dataset_seq_length
@@ -372,21 +396,40 @@ class MetaDataset(CachedDataset2):
     return DatasetSeq(seq_idx=seq_idx, seq_tag=seq_tag, features=features, targets=targets)
 
   def get_seq_length(self, sorted_seq_idx):
+    """
+    :param int sorted_seq_idx:
+    :rtype: NumbersDict
+    """
     if self._seq_lens:
       return self._seq_lens[self.seq_list_ordered[self.default_dataset_key][sorted_seq_idx]]
     return super(MetaDataset, self).get_seq_length(sorted_seq_idx)
 
   def get_tag(self, sorted_seq_idx):
+    """
+    :param int sorted_seq_idx:
+    :rtype: str
+    """
     return self.seq_list_ordered[self.default_dataset_key][sorted_seq_idx]
 
   def get_target_list(self):
+    """
+    :rtype: list[str]
+    """
     return self.target_list
 
   def get_data_shape(self, data_key):
+    """
+    :param str data_key:
+    :rtype: list[int]
+    """
     dataset_key, dataset_data_key = self.data_map[data_key]
     return self.datasets[dataset_key].get_data_shape(dataset_data_key)
 
   def get_data_dtype(self, key):
+    """
+    :param str key:
+    :rtype: str
+    """
     dtype = self.data_dtypes[key]
     if self.added_data:
       assert super(MetaDataset, self).get_data_dtype(key) == dtype
@@ -401,6 +444,12 @@ class ClusteringDataset(CachedDataset2):
   """
 
   def __init__(self, dataset, cluster_map_file, n_clusters, single_cluster=False, **kwargs):
+    """
+    :param dict[str] dataset:
+    :param cluster_map_file:
+    :param int n_clusters:
+    :param single_cluster:
+    """
     super(CachedDataset2, self).__init__(**kwargs)
     self.dataset = init_dataset(dataset)
     self.n_clusters = n_clusters
@@ -409,7 +458,7 @@ class ClusteringDataset(CachedDataset2):
     self.cluster_idx_dtype = "int32"
     self.num_inputs = self.dataset.num_inputs
     self.num_outputs = self.dataset.num_outputs.copy()
-    self.num_outputs["cluster_idx"] = [n_clusters, 1]  # will be a single int32
+    self.num_outputs["cluster_idx"] = (n_clusters, 1)  # will be a single int32
     self.expected_load_seq_start = 0
 
   def _load_cluster_map(self, filename):
@@ -418,7 +467,7 @@ class ClusteringDataset(CachedDataset2):
     # It has lines like: <map-item key="CHiME3/dt05_bth/M03_22GC010M_BTH.CH5/1" value="0"/>
     import re
     pattern = re.compile('<map-item key="(.*)" value="(.*)"/>')
-    cluster_map = {}  # type: dict[str,int]  # seq-name -> cluster-idx
+    cluster_map = {}  # type: typing.Dict[str,int]  # seq-name -> cluster-idx
     for l in ls:
       if not l.startswith("<map-item"):
         continue
@@ -455,7 +504,6 @@ class ClusteringDataset(CachedDataset2):
 
   def _collect_single_seq(self, seq_idx):
     seq_name = self.get_tag(seq_idx)
-    #print >> log.v5, "ClusteringDataset: _collect_single_seq: seq_name", seq_name
     data = {key: self.dataset.get_data(seq_idx=seq_idx, key=key) for key in self.dataset.get_data_keys()}
     data["cluster_idx"] = numpy.array([self.cluster_map[seq_name]], dtype=self.cluster_idx_dtype)
     return DatasetSeq(seq_idx=seq_idx, features=data["data"], targets=data)
@@ -463,9 +511,11 @@ class ClusteringDataset(CachedDataset2):
   def _generate_batches(self, recurrent_net, batch_size, max_seqs=-1, seq_drop=0.0, max_seq_length=None, used_data_keys=None):
     import sys
     if max_seq_length is None: max_seq_length = sys.maxsize
-    if batch_size == 0: batch_size = sys.maxsize
+    if batch_size == 0:
+      batch_size = sys.maxsize
     assert batch_size > 0
-    if max_seqs == -1: max_seqs = float('inf')
+    if max_seqs == -1:
+      max_seqs = float('inf')
     assert max_seqs > 0
     assert seq_drop <= 1.0
     chunk_size = self.chunk_size
@@ -473,7 +523,8 @@ class ClusteringDataset(CachedDataset2):
     from EngineBatch import Batch
     batch = Batch()
     last_seq_idx = None
-    for seq_idx, t_start, t_end in self.iterate_seqs(chunk_size=chunk_size, chunk_step=chunk_step, used_data_keys=used_data_keys):
+    for seq_idx, t_start, t_end in self.iterate_seqs(
+          chunk_size=chunk_size, chunk_step=chunk_step, used_data_keys=used_data_keys):
       if self.single_cluster:
         if last_seq_idx is not None and last_seq_idx != seq_idx:
           last_seq_name = self.get_tag(last_seq_idx)
@@ -485,7 +536,7 @@ class ClusteringDataset(CachedDataset2):
       length = t_end - t_start
       if max_seq_length < 0 and length['classes'] > -max_seq_length:
         continue
-      elif max_seq_length > 0 and length.max_value() > max_seq_length:
+      elif 0 < max_seq_length < length.max_value():
         continue
       if length.max_value() > batch_size:
         print("warning: sequence length (%i) larger than limit (%i)" % (length.max_value(), batch_size), file=log.v4)
@@ -867,7 +918,7 @@ class CombinedDataset(CachedDataset2):
             for estimated, used in zip(self.estimated_num_seq_per_subset, self.used_num_seqs_per_subset)]
           total_remaining = float(sum(expected_remaining_seqs))
 
-          if total_remaining < 0.1: # We expect no more data, but try anyway
+          if total_remaining < 0.1:  # We expect no more data, but try anyway
             nonempty_datasets = []
             for j, k in enumerate(sorted(self.datasets.keys())):
               if self.datasets[k].is_less_than_num_seqs(self.used_num_seqs_per_subset[j]):
@@ -906,7 +957,7 @@ class CombinedDataset(CachedDataset2):
     for dataset_idx in range(len(self.datasets)):
       dataset = self.datasets[self.dataset_idx2key_map[dataset_idx]]
       sub_requested_seqs = [s[1] for s in requested_seqs if s[0] == dataset_idx]
-      if sub_requested_seqs == []:
+      if not sub_requested_seqs:
         continue
       sub_start, sub_end = min(sub_requested_seqs), max(sub_requested_seqs)
       dataset.load_seqs(sub_start, sub_end + 1)
@@ -998,8 +1049,8 @@ class ConcatSeqsDataset(CachedDataset2):
     self.seq_lens = eval(open(seq_len_file).read())
     assert isinstance(self.seq_lens, dict)
     self.full_seq_len_list = self._get_full_seq_lens_list()
-    self.cur_seq_list = None  # type: list[str]  # list of seq tags
-    self.cur_sub_seq_idxs = None  # type: list[list[int]]  # list of list of sub seq idxs
+    self.cur_seq_list = None  # type: typing.Optional[typing.List[str]]  # list of seq tags
+    self.cur_sub_seq_idxs = None  # type: typing.Optional[typing.List[typing.List[int]]]  # list of list of sub seq idxs
 
   def _get_full_seq_lens_list(self):
     """
@@ -1027,7 +1078,7 @@ class ConcatSeqsDataset(CachedDataset2):
     self.cur_seq_list = seq_list
     self._num_seqs = len(seq_list)
     sub_seq_list = []
-    sub_seq_idxs = []  # type: list[list[int]]  # list of list of seqs
+    sub_seq_idxs = []  # type: typing.List[typing.List[int]]  # list of list of seqs
     sub_seq_idx = 0
     for seq_tag in seq_list:
       sub_seq_tags = seq_tag.split(self.seq_tag_delim)
@@ -1258,8 +1309,10 @@ class ChunkShuffleDataset(CachedDataset2):
 
 
 def _simple_to_bool(v):
-  if v == 0: v = False
-  if v == 1: v = True
+  if v == 0:
+    v = False
+  if v == 1:
+    v = True
   assert isinstance(v, bool)
   return v
 
