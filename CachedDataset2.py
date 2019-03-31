@@ -12,8 +12,6 @@ try:
 except ImportError:
   # noinspection PyUnresolvedReferences,PyCompatibility
   from thread import interrupt_main
-import sys
-PY3 = sys.version_info[0] >= 3
 
 
 class CachedDataset2(Dataset):

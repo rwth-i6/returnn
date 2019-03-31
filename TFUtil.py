@@ -4412,11 +4412,11 @@ def cond(pred, fn1, fn2, name=None):
   And similar as tf.contrib.framework.smart_cond.
 
   :param tf.Tensor|bool pred:
-  :param ()->(tf.Tensor|list[tf.Tensor]) fn1:
-  :param ()->(tf.Tensor|list[tf.Tensor]) fn2:
+  :param ()->(tf.Tensor|list[tf.Tensor]|T) fn1:
+  :param ()->(tf.Tensor|list[tf.Tensor]|T) fn2:
   :param str name:
   :return: fn1() if pred else fn2()
-  :rtype: tf.Tensor|list[tf.Tensor]
+  :rtype: tf.Tensor|list[tf.Tensor]|T
   """
   if not callable(fn1):
     raise TypeError("fn1 must be callable.")

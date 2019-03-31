@@ -317,8 +317,9 @@ class LearningRateControl(object):
       return None
     key = self.get_error_key(epoch)
     assert key
-    assert key in error, ("%r not in %r. fix %r in config. set it to %r or so." %
-      (key, error, 'learning_rate_control_error_measure', 'dev_error'))
+    assert key in error, (
+      "%r not in %r. fix %r in config. set it to %r or so." % (
+        key, error, 'learning_rate_control_error_measure', 'dev_error'))
     return error[key]
 
   def get_epoch_error_key_value(self, epoch):

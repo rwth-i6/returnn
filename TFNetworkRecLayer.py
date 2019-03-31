@@ -229,11 +229,14 @@ class RecLayer(_ConcatInputLayer):
           trainable_collection_ref.remove(p)
 
   def get_dep_layers(self):
-    l = super(RecLayer, self).get_dep_layers()
-    l += self._initial_state_deps
+    """
+    :rtype: list[LayerBase]
+    """
+    ls = super(RecLayer, self).get_dep_layers()
+    ls += self._initial_state_deps
     if isinstance(self.cell, _SubnetworkRecCell):
-      l += self.cell.get_parent_deps()
-    return l
+      ls += self.cell.get_parent_deps()
+    return ls
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
@@ -252,6 +255,10 @@ class RecLayer(_ConcatInputLayer):
         d["initial_state"], network=network, get_layer=get_layer)
     if isinstance(d.get("unit"), dict):
       def sub_get_layer(name):
+        """
+        :param str name:
+        :rtype: LayerBase
+        """
         # Only used to resolve deps to base network.
         if name.startswith("base:"):
           return get_layer(name[len("base:"):])  # calls get_layer of parent network
@@ -478,7 +485,7 @@ class RecLayer(_ConcatInputLayer):
     """
     :param str|dict[str] unit:
     :param None|dict[str] unit_opts:
-    :rtype: _SubnetworkRecCell|tensorflow.contrib.rnn.RNNCell|tensorflow.contrib.rnn.FusedRNNCell|TFNativeOp.RecSeqCellOp
+    :rtype: _SubnetworkRecCell|tensorflow.contrib.rnn.RNNCell|tensorflow.contrib.rnn.FusedRNNCell|TFNativeOp.RecSeqCellOp  # nopep8
     """
     from TFUtil import is_gpu_available
     from tensorflow.contrib import rnn as rnn_contrib
@@ -631,7 +638,7 @@ class RecLayer(_ConcatInputLayer):
         axis=1),
        values[8 + i] +  # input bias
        values[8 + i + 4]  # recurrent bias
-      )
+       )
       for i in range(4)]
     # cuDNN weights are in ifco order, convert to icfo order.
     weights_and_biases[1:3] = reversed(weights_and_biases[1:3])
@@ -657,25 +664,28 @@ class RecLayer(_ConcatInputLayer):
     with tf.variable_scope("cudnn"):
       cell.build(x.get_shape())
       num_layers = 1
+      # noinspection PyProtectedMember
+      rnn_mode = cell._rnn_mode
       param_size = self._get_cudnn_param_size(
-        num_units=self.output.dim, input_size=self.input_data.dim, rnn_mode=cell._rnn_mode, num_layers=num_layers)
+        num_units=self.output.dim, input_size=self.input_data.dim, rnn_mode=rnn_mode, num_layers=num_layers)
       # Note: The raw params used during training for the cuDNN op is just a single variable
       # with all params concatenated together.
       # For the checkpoint save/restore, we will use Cudnn*Saveable, which also makes it easier in CPU mode
       # to import the params for another unit like LSTMBlockCell.
-      # Also see: https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/cudnn_rnn/python/kernel_tests/cudnn_rnn_ops_test.py
+      # Also see:
+      # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/cudnn_rnn/python/kernel_tests/cudnn_rnn_ops_test.py
       params = cell.kernel
       params.set_shape([param_size])
-      if cell._rnn_mode == cudnn_rnn_ops.CUDNN_LSTM:
+      if rnn_mode == cudnn_rnn_ops.CUDNN_LSTM:
         fn = cudnn_rnn_ops.CudnnLSTMSaveable
-      elif cell._rnn_mode == cudnn_rnn_ops.CUDNN_GRU:
+      elif rnn_mode == cudnn_rnn_ops.CUDNN_GRU:
         fn = cudnn_rnn_ops.CudnnGRUSaveable
-      elif cell._rnn_mode == cudnn_rnn_ops.CUDNN_RNN_TANH:
+      elif rnn_mode == cudnn_rnn_ops.CUDNN_RNN_TANH:
         fn = cudnn_rnn_ops.CudnnRNNTanhSaveable
-      elif cell._rnn_mode == cudnn_rnn_ops.CUDNN_RNN_RELU:
+      elif rnn_mode == cudnn_rnn_ops.CUDNN_RNN_RELU:
         fn = cudnn_rnn_ops.CudnnRNNReluSaveable
       else:
-        raise ValueError("rnn mode %r" % cell._rnn_mode)
+        raise ValueError("rnn mode %r" % rnn_mode)
       params_saveable = fn(
         params,
         num_layers=cell.num_layers,
@@ -752,6 +762,10 @@ class RecLayer(_ConcatInputLayer):
     return output
 
   def get_last_hidden_state(self, key):
+    """
+    :param str|int|None key:
+    :rtype: tf.Tensor
+    """
     assert self._last_hidden_state is not None, (
       "last-hidden-state not implemented/supported for this layer-type. try another unit. see the code.")
     return RnnCellLayer.get_state_by_key(self._last_hidden_state, key=key)
@@ -974,7 +988,8 @@ class _SubnetworkRecCell(object):
           # Also, first try without allowing to access uninitialized templates,
           # as they might propagate wrong Data format info (they have a dummy Data format set).
           # Only as a last resort, allow this.
-          get_layer_candidates = []
+          get_layer_candidates = []  # type: typing.List[GetLayer]
+          # noinspection PyProtectedMember
           if lself.iterative_testing and name not in self.net._constructing_layers:
             get_layer_candidates = [
               default_get_layer,
@@ -983,6 +998,7 @@ class _SubnetworkRecCell(object):
               GetLayer(once=True, allow_uninitialized_template=True, parent=_name),
               GetLayer(safe=True, allow_uninitialized_template=True, parent=_name)]
           for get_layer in get_layer_candidates:
+            # noinspection PyBroadException
             try:
               self.net.construct_layer(
                 net_dict=self.net_dict, name=name,
@@ -1529,6 +1545,7 @@ class _SubnetworkRecCell(object):
         assert have_known_seq_len, (
           "You need to have an 'end' layer in your rec subnet if the generated seq len is unknown.")
 
+      # noinspection PyProtectedMember
       if self.parent_rec_layer._optimize_move_layers_out:
         self._move_outside_loop(needed_outputs=needed_outputs)
       else:
@@ -1536,6 +1553,7 @@ class _SubnetworkRecCell(object):
 
       accumulated_loop_losses = {}  # name -> loss holder. only losses inside the loop
       if layer_names_with_losses:
+        # noinspection PyShadowingNames
         def make_get_loss_in_loop_frame(loss, layer_name, return_error=False, return_loss=False):
           """
           :param LossHolder loss:
@@ -1688,16 +1706,18 @@ class _SubnetworkRecCell(object):
           for (k, v) in zip(sorted(self._initial_extra_outputs), prev_extra_flat)}
         with tf.name_scope("prev_extra"):
           prev_extra = identity_op_nested(prev_extra)
-        data = {key: ta.read(i, name="{}_ta_read".format(key)) for key, ta in data_tensor_arrays.items()}
+        data_ = {
+          key: ta.read(i, name="{}_ta_read".format(key)) for key, ta in data_tensor_arrays.items()}
+        # noinspection PyProtectedMember
         with reuse_name_scope(self.parent_rec_layer._rec_scope):
           self._construct(
             prev_outputs=prev_outputs, prev_extra=prev_extra,
             i=i,
-            data=data,
+            data=data_,
             inputs_moved_out_tas=input_layers_moved_out_tas,
             needed_outputs=needed_outputs)
 
-        transformed_cache = {}  # layer -> layer
+        transformed_cache = {}  # type: typing.Dict[LayerBase,LayerBase]  # layer -> layer
 
         def maybe_transform(layer):
           """
@@ -2063,7 +2083,7 @@ class _SubnetworkRecCell(object):
         assert self.layer_data_templates[l.name] is l
         if l not in layers_in_loop:
           layers_in_loop.append(l)
-          visit(sorted(l.dependencies, key=lambda l: l.name))
+          visit(sorted(l.dependencies, key=lambda l_: l_.name))
     visit([self.layer_data_templates[name] for name in needed_outputs])
 
     self.input_layers_moved_out = []
@@ -2171,7 +2191,8 @@ class _SubnetworkRecCell(object):
     from TFNetworkLayer import InternalLayer
     from TFUtil import concat_with_opt_broadcast
     self.input_layers_net = TFNetwork(
-      name="%s/%s:rec-subnet-input" % (self.parent_net.name, self.parent_rec_layer.name if self.parent_rec_layer else "?"),
+      name="%s/%s:rec-subnet-input" % (
+        self.parent_net.name, self.parent_rec_layer.name if self.parent_rec_layer else "?"),
       extern_data=ExternData(),
       train_flag=self.parent_net.train_flag,
       search_flag=self.parent_net.search_flag,
@@ -2326,6 +2347,7 @@ class _SubnetworkRecCell(object):
       return get_loop_acc_layer(name)
 
     # Same scope as the main subnet, so that it stays compatible.
+    # noinspection PyProtectedMember
     with reuse_name_scope(self.parent_rec_layer._rec_scope):
       for layer_name in self.output_layers_moved_out:
         get_layer(layer_name)
@@ -2428,22 +2450,22 @@ class _TemplateLayer(LayerBase):
     :return: new _TemplateLayer
     :rtype: _TemplateLayer
     """
-    l = _TemplateLayer(network=self.network, name="prev:%s" % self.name)
-    l._template_base = self
-    l.dependencies = self.dependencies
-    l.init(layer_class=self.layer_class_type, template_type="prev", **self.kwargs)
+    layer = _TemplateLayer(network=self.network, name="prev:%s" % self.name)
+    layer._template_base = self
+    layer.dependencies = self.dependencies
+    layer.init(layer_class=self.layer_class_type, template_type="prev", **self.kwargs)
     if prev_output is not None:
-      l.output.placeholder = prev_output
-      l.output.placeholder.set_shape(tf.TensorShape(l.output.batch_shape))
-      assert l.output.placeholder.dtype is tf.as_dtype(l.output.dtype)
-      l.output.size_placeholder = {}  # must be set
+      layer.output.placeholder = prev_output
+      layer.output.placeholder.set_shape(tf.TensorShape(layer.output.batch_shape))
+      assert layer.output.placeholder.dtype is tf.as_dtype(layer.output.dtype)
+      layer.output.size_placeholder = {}  # must be set
     if rec_vars_prev_outputs is not None:
-      l.rec_vars_outputs = rec_vars_prev_outputs
+      layer.rec_vars_outputs = rec_vars_prev_outputs
     if self.search_choices:
-      l.search_choices = SearchChoices(owner=l, beam_size=self.search_choices.beam_size)
-      l.search_choices.set_beam_scores_from_own_rec()
-      l.output.beam_size = self.search_choices.beam_size
-    return l
+      layer.search_choices = SearchChoices(owner=layer, beam_size=self.search_choices.beam_size)
+      layer.search_choices.set_beam_scores_from_own_rec()
+      layer.output.beam_size = self.search_choices.beam_size
+    return layer
 
   def get_dep_layers(self):
     """
@@ -2719,7 +2741,7 @@ class RnnCellLayer(_ConcatInputLayer):
     beam_size = None
     for dep in sources:
       beam_size = beam_size or dep.output.beam_size
-    shape = (n_out,)
+    shape = (n_out,)  # type: typing.Tuple[typing.Union[int,None],...]
     batch_dim_axis = 0
     time_dim_axis = None
     if sources and sources[0].output.time_dim_axis is not None:

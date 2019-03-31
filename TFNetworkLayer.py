@@ -154,8 +154,7 @@ class LayerBase(object):
     self.post_init_hooks = []  # list of functions
     self.sources = sources
     self.params = {}  # type: typing.Dict[str,tf.Variable]
-    self.saveable_param_replace = {}  # see get_saveable_params_dict()
-    " :type: dict[tf.Variable,tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject|None] "
+    self.saveable_param_replace = {}  # type:  typing.Dict[tf.Variable,typing.Union[tf.SaveableObject,None]]  # see get_saveable_params_dict()  # nopep8
     self.reuse_params = reuse_params
     self.param_device = param_device
     self.L2 = L2
