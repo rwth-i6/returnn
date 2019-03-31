@@ -57,7 +57,10 @@ import threading
 import keyword
 import inspect
 import contextlib
-import typing
+try:
+    import typing
+except ImportError:
+    typing = None
 
 try:
     from traceback import StackSummary, FrameSummary
