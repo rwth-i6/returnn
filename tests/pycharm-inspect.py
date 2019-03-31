@@ -225,7 +225,7 @@ def prepare_src_dir(files=None):
   print("travis_fold:start:script.prepare")
   print("Prepare project source files...")
   if not files:
-    files = sorted(glob(base_dir + "/*.py"))
+    files = sorted(glob(base_dir + "/*.py")) + ["extern"]
   src_tmp_dir = "%s/returnn" % tempfile.mkdtemp()
   os.mkdir(src_tmp_dir)
   os.symlink("%s/PyCharm.idea" % my_dir, "%s/.idea" % src_tmp_dir)
