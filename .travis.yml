@@ -17,6 +17,7 @@ sudo: false  # should use the faster container based image
 install:
   - pip2 install -qq --user --upgrade pip setuptools wheel six | cat  # Python2<->Python3
   - pip2 install --user -r requirements.txt | cat  # need for Python2<->Python3 communication tests
+  - pip2 install --user typing | cat
   - pip install -qq --upgrade pip setuptools wheel
   - pip install --upgrade numpy scipy | cat  # TF usually needs the latest Numpy
   - pip install -r requirements.txt | cat
