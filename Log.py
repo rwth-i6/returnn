@@ -17,9 +17,9 @@ import threading
 from threading import RLock
 import contextlib
 import string
+import typing
+
 PY3 = sys.version_info[0] >= 3
-if PY3:
-  import typing
 
 
 class Stream:

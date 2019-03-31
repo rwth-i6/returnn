@@ -17,7 +17,7 @@ import SprintCache
 from Log import log
 from Updater import Updater
 import Device
-from LearningRateControl import loadLearningRateControlFromConfig
+from LearningRateControl import load_learning_rate_control_from_config
 from Pretrain import pretrain_from_config
 import EngineUtil
 from Util import hms, hdf5_dimension, BackendEngine, model_epoch_from_filename, get_model_filename_postfix
@@ -75,7 +75,7 @@ class Engine(EngineBase):
     self.model_filename = config.value('model', None)
     self.save_model_epoch_interval = config.int('save_interval', 1)
     self.save_epoch1_initial_model = config.bool('save_epoch1_initial_model', False)
-    self.learning_rate_control = loadLearningRateControlFromConfig(config)
+    self.learning_rate_control = load_learning_rate_control_from_config(config)
     self.learning_rate = self.learning_rate_control.defaultLearningRate
     self.initial_learning_rate = self.learning_rate
     self.pretrain_learning_rate = config.float('pretrain_learning_rate', self.learning_rate)
@@ -195,7 +195,7 @@ class Engine(EngineBase):
     self.epoch = self.start_epoch - 1
     if self.learning_rate_control.need_error_info:
       if self.dev_data:
-        if "dev_score" not in self.learning_rate_control.getEpochErrorDict(self.epoch):
+        if "dev_score" not in self.learning_rate_control.get_epoch_error_dict(self.epoch):
           # This can happen when we have a previous model but did not test it yet.
           print("Last epoch model not yet evaluated on dev. Doing that now.", file=log.v4)
           self.eval_model()
@@ -291,13 +291,13 @@ class Engine(EngineBase):
       self.network.declare_train_params(**self.pretrain.get_train_param_args_for_epoch(self.epoch))
       # Use constant learning rate.
       self.learning_rate = self.pretrain_learning_rate
-      self.learning_rate_control.setDefaultLearningRateForEpoch(self.epoch, self.learning_rate)
+      self.learning_rate_control.set_default_learning_rate_for_epoch(self.epoch, self.learning_rate)
     elif self.is_first_epoch_after_pretrain():
       # Use constant learning rate.
       self.learning_rate = self.initial_learning_rate
-      self.learning_rate_control.setDefaultLearningRateForEpoch(self.epoch, self.learning_rate)
+      self.learning_rate_control.set_default_learning_rate_for_epoch(self.epoch, self.learning_rate)
     else:
-      self.learning_rate = self.learning_rate_control.getLearningRateForEpoch(self.epoch)
+      self.learning_rate = self.learning_rate_control.get_learning_rate_for_epoch(self.epoch)
 
     if not self.is_pretrain_epoch():
       # Train the whole network.
@@ -352,7 +352,7 @@ class Engine(EngineBase):
 
     if self.model_filename and (self.epoch % self.save_model_epoch_interval == 0):
       self.save_model(self.get_epoch_model_filename(), self.epoch)
-    self.learning_rate_control.setEpochError(self.epoch, {"train_score": trainer.score})
+    self.learning_rate_control.set_epoch_error(self.epoch, {"train_score": trainer.score})
     self.learning_rate_control.save()
     if self.ctc_prior_file is not None:
       trainer.save_ctc_priors(self.ctc_prior_file, self.get_epoch_str())
@@ -390,7 +390,7 @@ class Engine(EngineBase):
       eval_dump_str += [" %s: score %s error %s" % (
                         dataset_name, self.format_score(tester.score), self.format_score(tester.error))]
       if dataset_name == "dev":
-        self.learning_rate_control.setEpochError(self.epoch, {"dev_score": tester.score, "dev_error": tester.error})
+        self.learning_rate_control.set_epoch_error(self.epoch, {"dev_score": tester.score, "dev_error": tester.error})
         self.learning_rate_control.save()
     print(" ".join(eval_dump_str).strip(), file=log.v1)
 

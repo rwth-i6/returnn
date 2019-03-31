@@ -15,6 +15,7 @@ from __future__ import print_function
 import os
 import sys
 import time
+import typing
 try:
   # noinspection PyCompatibility
   from Queue import Queue
@@ -28,15 +29,13 @@ from tensorflow.python.client import timeline
 
 from EngineBase import EngineBase
 from Dataset import Dataset, Batch, BatchSetGenerator
-from LearningRateControl import loadLearningRateControlFromConfig, LearningRateControl
+from LearningRateControl import load_learning_rate_control_from_config, LearningRateControl
 from Log import log
 from Pretrain import pretrain_from_config
-from TFNetwork import TFNetwork, ExternData, help_on_tf_exception
+from TFNetwork import TFNetwork, help_on_tf_exception
 from TFUpdater import Updater
 from Util import hms, NumbersDict, PY3, BackendEngine
 from pprint import pprint
-if PY3:
-  import typing
 
 
 class CancelTrainingException(Exception):
@@ -742,6 +741,8 @@ class Engine(EngineBase):
     self.use_eval_flag = config.value("task", None) != "forward"
     self.learning_rate = 0.0  # set in init_train_epoch
     self._const_cache = {}  # type: typing.Dict[str,tf.Tensor]
+    self.preload_from_files = None  # type: typing.Optional[typing.Dict[str,typing.Dict[str]]]
+    self.max_seqs = None  # type: typing.Optional[int]
 
   def finalize(self):
     """
@@ -911,7 +912,7 @@ class Engine(EngineBase):
     self.update_batch_size = config.int('update_batch_size', 0)
     self.save_model_epoch_interval = config.int('save_interval', 1)
     self.save_epoch1_initial_model = config.bool('save_epoch1_initial_model', False)
-    self.learning_rate_control = loadLearningRateControlFromConfig(config)
+    self.learning_rate_control = load_learning_rate_control_from_config(config)
     self.learning_rate = self.learning_rate_control.defaultLearningRate
     self.initial_learning_rate = self.learning_rate
     self.pretrain_learning_rate = config.float('pretrain_learning_rate', self.learning_rate)
@@ -1053,7 +1054,7 @@ class Engine(EngineBase):
         if not self.learning_rate_control:
           print("No lr control, ignore learning rate %r for epoch %i" % (value, epoch), file=log.v3)
           continue
-        old_lr = self.learning_rate_control.getLearningRateForEpoch(epoch)
+        old_lr = self.learning_rate_control.get_learning_rate_for_epoch(epoch)
         print("Overwrite learning rate for epoch %i: %r -> %r" % (epoch, old_lr, value), file=log.v3)
         assert self.config.is_true("use_learning_rate_control_always")
         self.learning_rate_control.epochData[epoch].learningRate = value
@@ -1089,11 +1090,10 @@ class Engine(EngineBase):
       train_flag = get_global_train_flag_placeholder()
     else:
       train_flag = False
-    if False:  # TODO ...
-      # noinspection PyUnreachableCode
-      extern_data = ExternData()
-      extern_data.init_from_config(self.config)
-      # TODO...
+    # if False:  # TODO ...
+    #   extern_data = ExternData()
+    #   extern_data.init_from_config(self.config)
+    #   TODO...
     self.network, self.updater = self.create_network(
       config=self.config,
       rnd_seed=net_random_seed,
@@ -1248,17 +1248,17 @@ class Engine(EngineBase):
       self.maybe_init_new_network(new_network_desc)
       self.network.declare_train_params(**self.pretrain.get_train_param_args_for_epoch(self.epoch))
     if self.config.is_true("use_learning_rate_control_always"):
-      self.learning_rate = self.learning_rate_control.getLearningRateForEpoch(self.epoch)
+      self.learning_rate = self.learning_rate_control.get_learning_rate_for_epoch(self.epoch)
     elif self.is_pretrain_epoch():
       # Use constant learning rate.
       self.learning_rate = self.pretrain_learning_rate
-      self.learning_rate_control.setDefaultLearningRateForEpoch(self.epoch, self.learning_rate)
+      self.learning_rate_control.set_default_learning_rate_for_epoch(self.epoch, self.learning_rate)
     elif self.is_first_epoch_after_pretrain():
       # Use constant learning rate.
       self.learning_rate = self.initial_learning_rate
-      self.learning_rate_control.setDefaultLearningRateForEpoch(self.epoch, self.learning_rate)
+      self.learning_rate_control.set_default_learning_rate_for_epoch(self.epoch, self.learning_rate)
     else:
-      self.learning_rate = self.learning_rate_control.getLearningRateForEpoch(self.epoch)
+      self.learning_rate = self.learning_rate_control.get_learning_rate_for_epoch(self.epoch)
 
     if not self.is_pretrain_epoch():
       # Train the whole network.
@@ -1276,20 +1276,20 @@ class Engine(EngineBase):
     opts = self.config.get_of_type("use_last_best_model", dict, default={}).copy()
     if self.epoch % opts.pop("modulo", 1) != 0:
       # Normally we would filter those out. One maybe sensible exception is if the last score was really bad.
-      if (self.learning_rate_control.getEpochErrorValue(self.epoch - 1) or 0) \
+      if (self.learning_rate_control.get_epoch_error_value(self.epoch - 1) or 0) \
            <= opts.get("filter_score", float("inf")):
         return
     # Check if the previous epoch model is the best and otherwise take the best last model params.
-    last_best_epoch = self.learning_rate_control.getLastBestEpoch(
+    last_best_epoch = self.learning_rate_control.get_last_best_epoch(
       last_epoch=self.epoch - 1,
       first_epoch=self.pretrain.get_train_num_epochs() if self.pretrain else 1,
       **opts)
     if last_best_epoch and last_best_epoch != self.epoch - 1:
       print("Last epoch %i (score: %f) is not the optimal model" %
-            (self.epoch - 1, self.learning_rate_control.getEpochErrorValue(self.epoch - 1))
+            (self.epoch - 1, self.learning_rate_control.get_epoch_error_value(self.epoch - 1))
             + " but epoch %i has better score %f (%r), will use that model." %
-            (last_best_epoch, self.learning_rate_control.getEpochErrorValue(last_best_epoch),
-             self.learning_rate_control.getEpochErrorDict(last_best_epoch)),
+            (last_best_epoch, self.learning_rate_control.get_epoch_error_value(last_best_epoch),
+             self.learning_rate_control.get_epoch_error_dict(last_best_epoch)),
             file=log.v2)
       self.load_model(epoch=last_best_epoch)
       self.updater.init_optimizer_vars(session=self.tf_session)  # reset the optimizer vars
@@ -1336,7 +1336,7 @@ class Engine(EngineBase):
 
     if self.model_filename and (self.epoch % self.save_model_epoch_interval == 0):
       self.save_model(self.get_epoch_model_filename())
-    self.learning_rate_control.setEpochError(self.epoch, {"train_score": trainer.score, "train_error": trainer.error})
+    self.learning_rate_control.set_epoch_error(self.epoch, {"train_score": trainer.score, "train_error": trainer.error})
     if self._do_save():
       self.learning_rate_control.save()
 
@@ -1494,7 +1494,8 @@ class Engine(EngineBase):
 
     if output_per_seq_file:
       assert len(self.get_eval_datasets()) == 1, (
-        "output per sequence is only supported for one dataset (dev or eval), provided datasets are %r" % list(self.get_eval_datasets().keys()))
+        ("output per sequence is only supported for one dataset (dev or eval),"
+         "provided datasets are %r") % list(self.get_eval_datasets().keys()))
       # try to sort dataset to minimize zero-padding
       dataset = list(self.get_eval_datasets().values())[0]
       if dataset.have_corpus_seq_idx():
@@ -1528,7 +1529,7 @@ class Engine(EngineBase):
                         dataset_name, self.format_score(tester.score), self.format_score(tester.error))]
       results[dataset_name] = {"score": tester.score, "error": tester.error}
       if dataset_name == "dev":
-        self.learning_rate_control.setEpochError(self.epoch, {"dev_score": tester.score, "dev_error": tester.error})
+        self.learning_rate_control.set_epoch_error(self.epoch, {"dev_score": tester.score, "dev_error": tester.error})
         if self._do_save():
           self.learning_rate_control.save()
     print(" ".join(eval_dump_str), file=log.v1)
@@ -1570,7 +1571,7 @@ class Engine(EngineBase):
     if self.learning_rate_control.need_error_info:
       if self.dev_data:
         if all([not k.startswith("dev_score")
-                for k in self.learning_rate_control.getEpochErrorDict(self.epoch).keys()]):
+                for k in self.learning_rate_control.get_epoch_error_dict(self.epoch).keys()]):
           # This can happen when we have a previous model but did not test it yet.
           print("Last epoch model not yet evaluated on dev. Doing that now.", file=log.v4)
           self.eval_model()
@@ -1588,7 +1589,7 @@ class Engine(EngineBase):
     if hasattr(self, "learning_rate_control"):
       lr_control = self.learning_rate_control
     else:
-      lr_control = loadLearningRateControlFromConfig(self.config)
+      lr_control = load_learning_rate_control_from_config(self.config)
     epochs = sorted(existing_models.keys())
     if not epochs:
       print("Cannot cleanup models, no models found.", file=log.v2)

@@ -8,12 +8,11 @@ from __future__ import print_function
 
 import tensorflow as tf
 import contextlib
+import typing
 import TFUtil
 from Util import unicode, NotSpecified, CollectionReadCheckCovered, PY3
 from TFUtil import Data, OutputWithActivation, CustomUpdate, dimshuffle, swapaxes
 from Log import log
-if PY3:
-  import typing
 
 
 class LayerBase(object):

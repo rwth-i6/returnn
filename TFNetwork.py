@@ -9,12 +9,11 @@ import tensorflow as tf
 import sys
 import numpy
 import contextlib
+import typing
 from Log import log
 from TFNetworkLayer import LayerBase, get_layer_class
 from TFUtil import Data, DimensionTag, reuse_name_scope, VariableAssigner
 from Util import PY3
-if PY3:
-  import typing
 
 
 class ExternData(object):

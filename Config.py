@@ -14,13 +14,14 @@ __maintainer__ = "Patrick Doetsch"
 __email__ = "doetsch@i6.informatik.rwth-aachen.de"
 
 import sys
+import typing
+
 PY3 = sys.version_info[0] >= 3
 
 if PY3:
   import builtins
   unicode = str
   long = int
-  import typing
 else:
   # noinspection PyUnresolvedReferences
   import __builtin__ as builtins

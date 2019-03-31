@@ -5,6 +5,7 @@ Provides :class:`CachedDataset2`.
 
 from Dataset import Dataset, DatasetSeq
 from threading import Condition
+import typing
 try:
   # noinspection PyCompatibility
   from _thread import interrupt_main
@@ -13,8 +14,6 @@ except ImportError:
   from thread import interrupt_main
 import sys
 PY3 = sys.version_info[0] >= 3
-if PY3:
-  import typing
 
 
 class CachedDataset2(Dataset):

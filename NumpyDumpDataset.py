@@ -6,9 +6,7 @@ Provides :class:`NumpyDumpDataset`.
 from Dataset import Dataset, DatasetSeq
 import os
 import numpy
-from Util import PY3
-if PY3:
-  import typing
+import typing
 
 
 class NumpyDumpDataset(Dataset):

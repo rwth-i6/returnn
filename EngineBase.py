@@ -7,11 +7,10 @@ from __future__ import print_function
 
 import os
 import sys
-from Util import BackendEngine, model_epoch_from_filename, get_model_filename_postfix, PY3
+import typing
+from Util import BackendEngine, model_epoch_from_filename, get_model_filename_postfix
 from Log import log
 from Pretrain import Pretrain
-if PY3:
-  import typing
 
 
 class EngineBase(object):

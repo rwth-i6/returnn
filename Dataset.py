@@ -20,12 +20,11 @@ import sys
 import os
 import numpy
 import functools
+import typing
 
 from Log import log
 from EngineBatch import Batch, BatchSetGenerator
-from Util import try_run, NumbersDict, unicode, OptionalNotImplementedError, PY3
-if PY3:
-  import typing
+from Util import try_run, NumbersDict, unicode, OptionalNotImplementedError
 
 
 class Dataset(object):
@@ -521,7 +520,7 @@ class Dataset(object):
     """
     old_partition_epoch = self.partition_epoch
     try:
-      all_tags = [None] * self.num_seqs
+      all_tags = [None] * self.num_seqs  # type: typing.List[typing.Union[None,str]]
       for seq_idx in range(self.num_seqs):
         all_tags[seq_idx] = self.get_tag(seq_idx)
       return all_tags
@@ -689,7 +688,7 @@ class Dataset(object):
     if key in self.num_outputs:
       if self.num_outputs[key][1] <= 1:
         return []
-      res_shape = [None] * (self.num_outputs[key][1] - 1)
+      res_shape = [None] * (self.num_outputs[key][1] - 1)  # type: typing.List[typing.Union[None,int]]
       if not self.is_data_sparse(key):
         res_shape[-1] = self.get_data_dim(key)
       return res_shape

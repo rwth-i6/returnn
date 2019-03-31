@@ -13,9 +13,8 @@ import contextlib
 import os
 import sys
 import threading
-from Util import NotSpecified, NativeCodeCompiler, PY3
-if PY3:
-  import typing
+import typing
+from Util import NotSpecified, NativeCodeCompiler
 
 
 class CollectionKeys:

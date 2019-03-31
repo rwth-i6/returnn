@@ -6,6 +6,7 @@ and model param update logic in general.
 
 from __future__ import print_function
 
+import typing
 import tensorflow as tf
 from tensorflow.python.training.optimizer import Optimizer
 from tensorflow.python.ops import resource_variable_ops
@@ -13,9 +14,7 @@ from tensorflow.python.ops import resource_variable_ops
 from Log import log
 from TFNetwork import TFNetwork
 from TFUtil import tf_version_tuple, assert_min_tf_version, CustomUpdate, add_check_numerics_ops, \
-  get_non_deterministic_ops_from_graph, PY3
-if PY3:
-  import typing
+  get_non_deterministic_ops_from_graph
 
 _OptimizerClassesDict = {}  # type: typing.Dict[str,typing.Callable[[],Optimizer]]
 

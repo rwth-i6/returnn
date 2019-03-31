@@ -9,15 +9,12 @@ my_dir = os.path.dirname(os.path.abspath(__file__))
 returnn_dir = os.path.dirname(my_dir)
 sys.path.append(returnn_dir)
 
-import h5py as h5
-import numpy
 from Log import log
 import rnn
 import argparse
 import HDFDataset
 from Dataset import Dataset, init_dataset
 from Config import Config
-from Util import NumbersDict, human_size, progress_bar_with_time, try_run, PY3
 
 
 def hdf_dataset_init(file_name):

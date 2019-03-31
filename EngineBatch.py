@@ -5,9 +5,8 @@ This is shared across different backends.
 """
 
 import random
-from Util import NumbersDict, PY3
-if PY3:
-  import typing
+import typing
+from Util import NumbersDict
 
 
 class BatchSeqCopyPart:

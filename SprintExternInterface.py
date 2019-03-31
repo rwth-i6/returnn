@@ -12,12 +12,13 @@ import sys
 import os
 import TaskSystem
 from TaskSystem import Pickler, Unpickler
-from Util import to_bool, unicode, PY3, BytesIO
+from Util import to_bool, unicode, BytesIO
 
 # Start Sprint PythonSegmentOrder interface. {
 # We use the PythonSegmentOrder just to get an estimate (upper limit) about the number of sequences.
 
 segmentOrderList = None; ":type: list[str] "
+
 
 def getSegmentList(corpusName, segmentList, **kwargs):
   """

@@ -23,15 +23,14 @@ import os
 import sys
 import time
 import numpy
+import typing
 from Log import log
 from Config import Config
 from Dataset import Dataset, init_dataset, init_dataset_via_str
 from HDFDataset import HDFDataset
 from Debug import init_ipython_kernel, init_better_exchook, init_faulthandler, init_cuda_not_in_main_proc_check
 from Util import init_thread_join_hack, describe_returnn_version, describe_theano_version, \
-  describe_tensorflow_version, BackendEngine, get_tensorflow_version_tuple, PY3
-if PY3:
-  import typing
+  describe_tensorflow_version, BackendEngine, get_tensorflow_version_tuple
 
 
 config = None  # type: typing.Optional[Config]

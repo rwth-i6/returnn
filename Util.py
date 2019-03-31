@@ -8,6 +8,7 @@ from __future__ import division
 
 import subprocess
 from subprocess import CalledProcessError
+
 import h5py
 from collections import deque
 import inspect
@@ -28,6 +29,7 @@ try:
   from StringIO import StringIO
 except ImportError:
   from io import StringIO
+import typing
 
 PY3 = sys.version_info[0] >= 3
 
@@ -38,7 +40,6 @@ if PY3:
   # noinspection PyShadowingBuiltins
   input = builtins.input
   from io import BytesIO
-  import typing
 else:
   # noinspection PyUnresolvedReferences
   import __builtin__ as builtins
@@ -824,7 +825,7 @@ def simple_obj_repr(obj):
                                              for arg in inspect.getargspec(obj.__init__).args[1:]])
 
 
-class ObjAsDict:
+class ObjAsDict(typing.Mapping[str, object]):
   """
   Wraps up any object as a dict, where the attributes becomes the keys.
   See also :class:`DictAsObj`.
@@ -840,6 +841,12 @@ class ObjAsDict:
       return getattr(self.__obj, item)
     except AttributeError as e:
       raise KeyError(e)
+
+  def __len__(self):
+    return len(vars(self.__obj))
+
+  def __iter__(self):
+    return iter(vars(self.__obj))
 
   def items(self):
     """
@@ -1289,8 +1296,10 @@ def inplace_increment(x, idx, y):
   global _have_inplace_increment, inplace_increment, _native_inplace_increment
   if _have_inplace_increment is None:
     native_inpl_incr = None
+    # noinspection PyPackageRequirements,PyUnresolvedReferences
     import theano
     if theano.config.cxx:
+      # noinspection PyPackageRequirements,PyUnresolvedReferences
       import theano.gof.cutils  # needed to import cutils_ext
       try:
         from cutils_ext.cutils_ext import inplace_increment as native_inpl_incr
@@ -3506,7 +3515,7 @@ def compute_bleu(reference_corpus,
     for ngram in translation_ngram_counts:
       possible_matches_by_order[len(ngram) - 1] += translation_ngram_counts[ngram]
 
-  precisions = [0] * max_order
+  precisions = [0.0] * max_order
   smooth = 1.0
   for i in range(0, max_order):
     if possible_matches_by_order[i] > 0:

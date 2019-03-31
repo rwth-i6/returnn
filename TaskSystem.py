@@ -8,13 +8,16 @@ from __future__ import print_function
 from threading import Lock, currentThread
 import sys
 PY3 = sys.version_info[0] >= 3
+
 import os
 import io
+
 if PY3:
   from io import BytesIO
 else:
-  # noinspection PyUnresolvedReferences
+  # noinspection PyUnresolvedReferences,PyCompatibility
   from StringIO import StringIO as BytesIO
+
 from contextlib import contextmanager
 import pickle
 import types
