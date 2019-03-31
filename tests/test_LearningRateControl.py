@@ -15,6 +15,35 @@ from Log import log
 log.initialize()
 
 
+def test_save_load():
+  import tempfile
+  with tempfile.NamedTemporaryFile(mode="w") as f:
+    filename = f.name
+  assert not os.path.exists(filename)
+  control = LearningRateControl(default_learning_rate=1.0, filename=filename)
+  assert 2 not in control.epoch_data
+  control.epoch_data[2] = LearningRateControl.EpochData(learningRate=0.0008, error={
+    'dev_error_ctc': 0.22486433815293946,
+    'dev_error_decision': 0.0,
+    'dev_error_output/output_prob': 0.16270349413262444,
+    'dev_score_ctc': 1.0732941136466485,
+    'dev_score_output/output_prob': 0.7378438060027533,
+    'train_error_ctc': 0.13954045252681482,
+    'train_error_decision': 0.0,
+    'train_error_output/output_prob': 0.106904268810835,
+    'train_score_ctc': 0.5132869609859635,
+    'train_score_output/output_prob': 0.5098970897590558,
+  })
+  control.save()
+  assert os.path.exists(filename)
+  control = LearningRateControl(default_learning_rate=1.0, filename=filename)
+  assert 2 in control.epoch_data
+  data = control.epoch_data[2]
+  numpy.testing.assert_allclose(data.learning_rate, 0.0008)
+  assert "dev_error_output/output_prob" in data.error
+  numpy.testing.assert_allclose(data.error["dev_error_output/output_prob"], 0.16270349413262444)
+
+
 def test_load():
   import tempfile
   with tempfile.NamedTemporaryFile(mode="w") as f:
@@ -45,10 +74,10 @@ def test_load():
       }),
     }""")
     f.flush()
-    control = LearningRateControl(defaultLearningRate=1.0, filename=f.name)
-    assert set(control.epochData.keys()) == {1, 2}
-    data = control.epochData[2]
-    numpy.testing.assert_allclose(data.learningRate, 0.0008)
+    control = LearningRateControl(default_learning_rate=1.0, filename=f.name)
+    assert set(control.epoch_data.keys()) == {1, 2}
+    data = control.epoch_data[2]
+    numpy.testing.assert_allclose(data.learning_rate, 0.0008)
     assert "dev_error_output/output_prob" in data.error
     numpy.testing.assert_allclose(data.error["dev_error_output/output_prob"], 0.16270349413262444)
 

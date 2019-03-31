@@ -913,7 +913,7 @@ class Engine(EngineBase):
     self.save_model_epoch_interval = config.int('save_interval', 1)
     self.save_epoch1_initial_model = config.bool('save_epoch1_initial_model', False)
     self.learning_rate_control = load_learning_rate_control_from_config(config)
-    self.learning_rate = self.learning_rate_control.defaultLearningRate
+    self.learning_rate = self.learning_rate_control.default_learning_rate
     self.initial_learning_rate = self.learning_rate
     self.pretrain_learning_rate = config.float('pretrain_learning_rate', self.learning_rate)
     self.final_epoch = self.config_get_final_epoch(config)  # Inclusive.
@@ -1057,7 +1057,7 @@ class Engine(EngineBase):
         old_lr = self.learning_rate_control.get_learning_rate_for_epoch(epoch)
         print("Overwrite learning rate for epoch %i: %r -> %r" % (epoch, old_lr, value), file=log.v3)
         assert self.config.is_true("use_learning_rate_control_always")
-        self.learning_rate_control.epochData[epoch].learningRate = value
+        self.learning_rate_control.epoch_data[epoch].learning_rate = value
         continue
 
       assert key in self.config.typed_dict, "config update key %r -> %r expected to be in orig. config" % (key, value)
@@ -1631,13 +1631,13 @@ class Engine(EngineBase):
     keep_epochs.update(epochs[-keep_last_n:])
     score_keys = set()  # e.g. "dev_error", "dev_score", etc.
     # Collect all possible score keys. Note that we could have different ones for different epochs.
-    for data in lr_control.epochData.values():
+    for data in lr_control.epoch_data.values():
       score_keys.update(data.error.keys())
     assert score_keys
     score_keys = sorted(score_keys)
     score_values = {key: [] for key in score_keys}
     for epoch in epochs:
-      epoch_scores = lr_control.epochData[epoch].error
+      epoch_scores = lr_control.epoch_data[epoch].error
       for key in epoch_scores.keys():
         score_values[key].append(epoch_scores[key])
     for key in list(score_keys):
@@ -1651,7 +1651,7 @@ class Engine(EngineBase):
     worst_score_values = {key: max(scores) for (key, scores) in score_values.items()}
     for key in score_keys:
       scores = sorted([
-        (lr_control.epochData[epoch].error.get(key, worst_score_values[key]), epoch) for epoch in epochs])
+        (lr_control.epoch_data[epoch].error.get(key, worst_score_values[key]), epoch) for epoch in epochs])
       scores = scores[:keep_best_n]
       keep_epochs.update([v[1] for v in scores])
     keep_epochs.intersection_update(epochs)

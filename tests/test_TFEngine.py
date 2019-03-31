@@ -1037,8 +1037,8 @@ def deterministic_train_check(layer_opts):
     engine.train()
 
     print("Run %i: Train results:" % run_idx)
-    pprint(engine.learning_rate_control.epochData)
-    score_results[run_idx] = {ep: d.error for (ep, d) in engine.learning_rate_control.epochData.items()}
+    pprint(engine.learning_rate_control.epoch_data)
+    score_results[run_idx] = {ep: d.error for (ep, d) in engine.learning_rate_control.epoch_data.items()}
 
     print("Run %i: Forward cv seq 0:" % run_idx)
     cv_data.init_seq_order(epoch=1)
@@ -1180,8 +1180,8 @@ def test_rec_subnet_auto_optimize():
     engine.train()
 
     print("Run %i: Train results:" % run_idx)
-    pprint(engine.learning_rate_control.epochData)
-    score_results[run_idx] = {ep: d.error for (ep, d) in engine.learning_rate_control.epochData.items()}
+    pprint(engine.learning_rate_control.epoch_data)
+    score_results[run_idx] = {ep: d.error for (ep, d) in engine.learning_rate_control.epoch_data.items()}
 
     print("Run %i: Forward cv seq 0:" % run_idx)
     cv_data.init_seq_order(epoch=1)

@@ -76,7 +76,7 @@ class Engine(EngineBase):
     self.save_model_epoch_interval = config.int('save_interval', 1)
     self.save_epoch1_initial_model = config.bool('save_epoch1_initial_model', False)
     self.learning_rate_control = load_learning_rate_control_from_config(config)
-    self.learning_rate = self.learning_rate_control.defaultLearningRate
+    self.learning_rate = self.learning_rate_control.default_learning_rate
     self.initial_learning_rate = self.learning_rate
     self.pretrain_learning_rate = config.float('pretrain_learning_rate', self.learning_rate)
     self.final_epoch = self.config_get_final_epoch(config)  # Inclusive.

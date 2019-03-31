@@ -957,6 +957,9 @@ class TFNetwork(object):
         self.layers[layer_name].set_param_values_by_dict(values_dict=layer_values_dict, **kwargs)
 
   def get_auxiliary_params(self):
+    """
+    :rtype: list[tf.Variable]
+    """
     return [self.global_train_step]
 
   def get_params_serialized(self, session):
@@ -1082,6 +1085,10 @@ class TFNetwork(object):
         raise
 
   def print_network_info(self, name="Network"):
+    """
+    :param str name:
+    :return: nothing, prints very brief net topology on log
+    """
     print("%s layer topology:" % name, file=log.v2)
     print("  extern data:", self.extern_data.get_data_description(), file=log.v2)
     print("  used data keys: %s" % list(sorted(self.used_data_keys)), file=log.v2)
@@ -1159,7 +1166,13 @@ class TFNetwork(object):
       print("    layer:", layer)
 
     class Visitor(set):
+      """
+      Wraps around `set`, to catch any `update` calls.
+      """
       def update(self, others):
+        """
+        :param set others:
+        """
         print("  visit: %r" % (others,))
         super(Visitor, self).update(others)
 
@@ -1235,6 +1248,9 @@ class TFNetwork(object):
     return None
 
   def have_rec_step_info(self):
+    """
+    :rtype: bool
+    """
     return self.get_rec_step_info(must_exist=False) is not None
 
   def get_rec_step_info(self, must_exist=True):
@@ -1306,6 +1322,9 @@ class TFNetwork(object):
 
   @staticmethod
   def get_post_control_dependencies():
+    """
+    :rtype: list[tf.Operation]
+    """
     return tf.get_collection(tf.GraphKeys.UPDATE_OPS)
 
   @classmethod
@@ -1333,6 +1352,9 @@ class TFNetwork(object):
 
   @contextlib.contextmanager
   def register_network_scope(self):
+    """
+    Registers a ref to this network inside the current TF computation graph.
+    """
     coll = self.get_network_stack()
     coll.append(self)
     try:
@@ -1768,6 +1790,10 @@ class CustomCheckpointLoader:
       ", ".join(["%s=%r" % (key, getattr(self, key, "<unset>")) for key in keys]))
 
   class CustomParamImporter:
+    """
+    Helper class for custom param loading.
+    """
+
     def __init__(self, layer, checkpoint_loader):
       """
       :param LayerBase layer:
@@ -1851,6 +1877,10 @@ class CustomCheckpointLoader:
     return v_name
 
   class VariableValue:
+    """
+    Helper to assign some variable.
+    """
+
     def __init__(self, value=None, custom_param_importer=None):
       """
       :param numpy.ndarray|None value:
@@ -1908,12 +1938,23 @@ class CustomCheckpointLoader:
 
     # noinspection PyShadowingNames
     def make_load_renamed(old_name):
+      """
+      :param str old_name:
+      :rtype: () -> numpy.ndarray
+      """
       def load_old():
+        """
+        :rtype: numpy.ndarray
+        """
         return reader.get_tensor(old_name)
 
       return load_old
 
     def make_load_weights_nativelstm_to_basic(new_name):
+      """
+      :param str new_name:
+      :rtype: ()->numpy.ndarray
+      """
       assert new_name.endswith("/lstm_cell/kernel")
       # noinspection PyShadowingNames
       old_name1 = new_name[:-len("/lstm_cell/kernel")] + "/W_re"
@@ -1921,6 +1962,9 @@ class CustomCheckpointLoader:
       old_name2 = new_name[:-len("/lstm_cell/kernel")] + "/W"
 
       def load_native_lstm_weights():
+        """
+        :rtype: numpy.ndarray
+        """
         # i = input_gate, j = new_input, f = forget_gate, o = output_gate
         # BasicLSTM: i, j, f, o; Input: [inputs, h]
         # LstmGenericBase/NativeLstm: j, i, f, o
@@ -1936,11 +1980,18 @@ class CustomCheckpointLoader:
       return load_native_lstm_weights
 
     def make_load_bias_nativelstm_to_basic(new_name):
+      """
+      :param str new_name:
+      :rtype: ()->numpy.ndarray
+      """
       assert new_name.endswith("/lstm_cell/bias")
       # noinspection PyShadowingNames
       old_name = new_name[:-len("/lstm_cell/bias")] + "/b"
 
       def load_native_lstm_bias():
+        """
+        :rtype: numpy.ndarray
+        """
         # i = input_gate, j = new_input, f = forget_gate, o = output_gate
         # BasicLSTM: i, j, f, o; Input: [inputs, h]
         # LstmGenericBase/NativeLstm: j, i, f, o
@@ -1954,13 +2005,17 @@ class CustomCheckpointLoader:
       return load_native_lstm_bias
 
     class MakeLoadCudnnRnn:
+      """
+      Helper to load the CuDNN params.
+      """
+
       cudnn_postfix = "/cudnn/CudnnRNNParamsToCanonical:0"
 
       def __init__(self, prefix, target="lstm_block_wrapper/"):
         self.target = target
         self.keys = [target + "bias", target + "kernel"]
         self.prefix = prefix
-        self.data = None
+        self.data = None  # type: typing.Optional[typing.Dict[str,numpy.ndarray]]
 
       # noinspection PyMethodParameters
       def _load(sself):
@@ -1969,7 +2024,14 @@ class CustomCheckpointLoader:
           reader=reader, prefix=sself.prefix, target=sself.target)
 
       def make_getter(self, key):
+        """
+        :param str key:
+        :rtype: ()->numpy.ndarray
+        """
         def get():
+          """
+          :rtype: numpy.ndarray
+          """
           if self.data is None:
             self._load()
           return self.data[key]
@@ -1977,6 +2039,9 @@ class CustomCheckpointLoader:
         return get
 
       def get_lazy_dict(self):
+        """
+        :rtype: dict[str,()->numpy.ndarray]
+        """
         return {self.prefix + k: self.make_getter(self.prefix + k) for k in self.keys}
 
     # Here we try to make matches of missing vars and vars which seem to be obsolete.
@@ -2067,6 +2132,9 @@ class CustomCheckpointLoader:
       value.assign_var(var=var, session=session)
 
   def set_as_custom_init(self):
+    """
+    Make sure that this loader is used during initialization.
+    """
     var_value_map = self.get_variable_value_map()
     read_vars = set()
 
