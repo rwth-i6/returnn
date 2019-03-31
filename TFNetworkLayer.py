@@ -154,7 +154,7 @@ class LayerBase(object):
     self.post_init_hooks = []  # list of functions
     self.sources = sources
     self.params = {}  # type: typing.Dict[str,tf.Variable]
-    self.saveable_param_replace = {}  # type:  typing.Dict[tf.Variable,typing.Union[tf.SaveableObject,None]]  # see get_saveable_params_dict()  # nopep8
+    self.saveable_param_replace = {}  # type:  typing.Dict[tf.Variable,typing.Union['tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject',None]]  # see get_saveable_params_dict()  # nopep8
     self.reuse_params = reuse_params
     self.param_device = param_device
     self.L2 = L2
@@ -4232,12 +4232,21 @@ class ElemwiseProdLayer(_ConcatInputLayer):
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :rtype: Data
+    """
     # Just the same as the input.
     return get_concat_sources_data_template(sources, name="%s_output" % name)
 
 
 class PrefixInTimeLayer(CopyLayer):
+  """
+  Adds some prefix in time dimension.
+  """
   layer_class = "prefix_in_time"
+  recurrent = True
 
   def __init__(self, prefix=0.0, repeat=1, **kwargs):
     """

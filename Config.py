@@ -25,8 +25,8 @@ if PY3:
 else:
   # noinspection PyUnresolvedReferences
   import __builtin__ as builtins
-  unicode = builtins.unicode
-  long = builtins.long
+  unicode = builtins.unicode  # type: typing.Type[str]
+  long = builtins.long  # type: typing.Type[int]
 
 
 class Config:

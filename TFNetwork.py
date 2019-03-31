@@ -13,7 +13,6 @@ import typing
 from Log import log
 from TFNetworkLayer import LayerBase, get_layer_class
 from TFUtil import Data, DimensionTag, reuse_name_scope, VariableAssigner
-from Util import PY3
 
 
 class ExternData(object):
@@ -135,18 +134,36 @@ class ExternData(object):
     self.data[data.name] = data
 
   def has_data(self, name):
+    """
+    :param str name:
+    :rtype: bool
+    """
     return name in self.data
 
   def get_data(self, name):
+    """
+    :param str name:
+    :rtype: Data
+    """
     return self.data[name]
 
   def get_default_input_data(self):
+    """
+    :rtype: Data
+    """
     return self.data[self.default_input]
 
   def get_default_target_data(self):
+    """
+    :rtype: Data
+    """
     return self.data[self.default_target]
 
   def get_data_description(self):
+    """
+    :return: str describing the data
+    :rtype: str
+    """
     return ", ".join(["%s: %s" % (name, self.data[name].get_description(with_name=False))
                       for name in self.data.keys()])
 
@@ -250,26 +267,26 @@ class TFNetwork(object):
     self.parent_net = parent_net
     self._is_inside_rec_layer = is_inside_rec_layer
     self.extra_parent_net = extra_parent_net
-    self.extra_net = None  # type: TFNetwork
+    self.extra_net = None  # type: typing.Optional[TFNetwork]
     self._selected_train_layers = None
     self._constructing_layers = []  # type: typing.List[str]
     self.layers_desc = {}  # type: typing.Dict[str,typing.Dict[str]]
     self.layers = {}  # type: typing.Dict[str,LayerBase]
     self.losses_dict = {}  # type: typing.Dict[str,LossHolder]
-    self.total_loss = None  # type: tf.Tensor
-    self.total_constraints = None  # type: tf.Tensor
-    self.total_objective = None  # type: tf.Tensor
+    self.total_loss = None  # type: typing.Optional[tf.Tensor]
+    self.total_constraints = None  # type: typing.Optional[tf.Tensor]
+    self.total_objective = None  # type: typing.Optional[tf.Tensor]
     if parent_net:
       self.global_train_step = parent_net.global_train_step
     else:
       self.global_train_step = tf.Variable(
         name="global_step", initial_value=0, dtype="int64", collections=[tf.GraphKeys.GLOBAL_STEP], trainable=False)
     self.epoch_step = None
-    self.saver = None  # type: tf.train.Saver
+    self.saver = None  # type: typing.Optional[tf.train.Saver]
     self.extra_vars_to_save = []  # type: typing.List[tf.Variable]
     self.recurrent = False
     self._assigner_cache = {}  # type: typing.Dict[tf.Variable,VariableAssigner]
-    self.concat_sources_dropout_cache = {}  # type: typing.Dict[(typing.Tuple[LayerBase,...],float,typing.Optional[typing.Tuple[typing.Optional[int],...]]),Data]  # nopep8
+    self.concat_sources_dropout_cache = {}  # type: typing.Dict[typing.Tuple[typing.Tuple[LayerBase,...],float,typing.Optional[typing.Tuple[typing.Optional[int],...]]],Data]  # nopep8
     self._batch_dim = None  # see get_batch_dim
 
   def __repr__(self):
@@ -417,6 +434,10 @@ class TFNetwork(object):
         layer_name=name, constructing_layers=self._constructing_layers, net_dict=net_dict, network=self)
     if not get_layer:
       def get_layer(src_name):
+        """
+        :param str src_name:
+        :rtype: LayerBase
+        """
         return self.construct_layer(net_dict=net_dict, name=src_name)  # set get_layer to wrap construct_layer
     if name not in net_dict:
       layer_desc = None
@@ -641,6 +662,9 @@ class TFNetwork(object):
       tf.summary.scalar("objective", self.total_objective)
 
   def maybe_construct_objective(self):
+    """
+    Construct self.total_object.
+    """
     if self.total_objective is None:
       self._construct_objective()
 
@@ -792,12 +816,12 @@ class TFNetwork(object):
   def get_saveable_param_replace_dict(self):
     """
     :return: params and saveable_param_replace resolved, union of all layers
-    :rtype: dict[str,tf.Variable|tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject]
+    :rtype: dict[tf.Variable,tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject]
     """
     d = {}
     for layer in self._get_all_layers():
       assert isinstance(layer, LayerBase)
-      d.update(layer.get_saveable_params_dict())
+      d.update(layer.saveable_param_replace)
     return d
 
   def get_saveable_params_list(self):
@@ -841,6 +865,10 @@ class TFNetwork(object):
     return ls
 
   def declare_train_params(self, hidden_layer_selection=None, with_output=None):
+    """
+    :param list[str]|None hidden_layer_selection:
+    :param bool|None with_output:
+    """
     if hidden_layer_selection is None:
       hidden_layer_selection = [name for (name, layer) in self.layers.items() if not layer.is_output_layer()]
     else:

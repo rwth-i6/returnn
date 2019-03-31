@@ -10,7 +10,7 @@ import typing
 from tensorflow.python.ops.nn import rnn_cell
 from TFNetworkLayer import LayerBase, _ConcatInputLayer, SearchChoices, get_concat_sources_data_template, Loss
 from TFUtil import Data, reuse_name_scope, get_random_seed
-from Util import NotSpecified, PY3
+from Util import NotSpecified
 from Log import log
 
 
@@ -485,7 +485,7 @@ class RecLayer(_ConcatInputLayer):
     """
     :param str|dict[str] unit:
     :param None|dict[str] unit_opts:
-    :rtype: _SubnetworkRecCell|tensorflow.contrib.rnn.RNNCell|tensorflow.contrib.rnn.FusedRNNCell|TFNativeOp.RecSeqCellOp  # nopep8
+    :rtype: _SubnetworkRecCell|tensorflow.contrib.rnn.RNNCell|tensorflow.contrib.rnn.FusedRNNCell|TFNativeOp.RecSeqCellOp
     """
     from TFUtil import is_gpu_available
     from tensorflow.contrib import rnn as rnn_contrib
@@ -825,8 +825,8 @@ class _SubnetworkRecCell(object):
       is_inside_rec_layer=True,
       parent_net=parent_net)
     if source_data:
-      self.net.extern_data.data["source"] = \
-        source_data.copy_template_excluding_time_dim()
+      self.net.extern_data.data["source"] = (
+        source_data.copy_template_excluding_time_dim())
     for key, data in parent_net.extern_data.data.items():
       if key in self.net.extern_data.data:
         continue  # Don't overwrite existing, e.g. "source".
@@ -846,8 +846,8 @@ class _SubnetworkRecCell(object):
     self.input_layers_moved_out = []  # type: typing.List[str]
     self.output_layers_moved_out = []  # type: typing.List[str]
     self.layers_in_loop = None   # type: typing.Optional[typing.List[str]]
-    self.input_layers_net = None  # type: TFNetwork
-    self.output_layers_net = None  # type: TFNetwork
+    self.input_layers_net = None  # type: typing.Optional[TFNetwork]
+    self.output_layers_net = None  # type: typing.Optional[TFNetwork]
     self.final_acc_tas_dict = None  # type: typing.Optional[typing.Dict[str, tf.TensorArray]]
     self.get_final_rec_vars = None
     self.accumulated_losses = {}  # type: typing.Dict[str,LossHolder]
@@ -1328,7 +1328,7 @@ class _SubnetworkRecCell(object):
     :return: list of dependencies to the parent network
     :rtype: list[LayerBase]
     """
-    l = []
+    ls = []
     layers = self.net.layers
     if not layers:  # happens only during initialization
       layers = self.layer_data_templates
@@ -1339,9 +1339,9 @@ class _SubnetworkRecCell(object):
         # e.g. if this is an attention layer like
         # {"class": "dot_attention", "base": "base:encoder", ...}.
         if dep.network is self.parent_net:
-          if dep not in l:
-            l += [dep]
-    return l
+          if dep not in ls:
+            ls += [dep]
+    return ls
 
   def get_output(self, rec_layer):
     """

@@ -43,8 +43,8 @@ if PY3:
 else:
   # noinspection PyUnresolvedReferences
   import __builtin__ as builtins
-  unicode = builtins.unicode
-  long = builtins.long
+  unicode = builtins.unicode  # type: typing.Type[str]
+  long = builtins.long  # type: typing.Type[int]
   # noinspection PyShadowingBuiltins
   input = builtins.raw_input
   try:
@@ -2075,6 +2075,7 @@ def as_str(s):
   if isinstance(s, str) or 'unicode' in str(type(s)):
     return s
   if isinstance(s, bytes) or isinstance(s, unicode):
+    # noinspection PyUnresolvedReferences
     return s.decode("utf8")
   assert False, "unknown type %s" % type(s)
 

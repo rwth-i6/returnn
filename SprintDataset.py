@@ -15,9 +15,9 @@ try:
 except ImportError:
   import _thread as thread
 from threading import Condition, currentThread, Thread
-import math
 import time
 import numpy
+import typing
 
 import TaskSystem
 from Dataset import Dataset, DatasetSeq
@@ -531,9 +531,9 @@ class ExternSprintDataset(SprintDatasetBase):
       assert self.partition_epoch == 1, "don't provide partitionEpoch and partition_epoch"
       self.partition_epoch = partitionEpoch
     self._num_seqs = None
-    self.child_pid = None  # type: int|None
+    self.child_pid = None  # type: typing.Optional[int]
     self.parent_pid = os.getpid()
-    self.reader_thread = None  # type: Thread
+    self.reader_thread = None  # type: typing.Optional[Thread]
     self.seq_list_file = None
     self.useMultipleEpochs()
     # There is no generic way to see whether Python is exiting.
@@ -587,6 +587,7 @@ class ExternSprintDataset(SprintDatasetBase):
       sys.stderr = sys.__stderr__
       import better_exchook
       better_exchook.install()
+      # noinspection PyBroadException
       try:
         sys.stdin.close()  # Force no tty stdin.
         self.pipe_c2p[0].close()
@@ -598,6 +599,7 @@ class ExternSprintDataset(SprintDatasetBase):
         sys.excepthook(*sys.exc_info())
       finally:
         print("%s child: exit" % self)
+        # noinspection PyProtectedMember
         os._exit(1)
         return  # Not reached.
 
@@ -957,7 +959,12 @@ class SprintCacheDataset(CachedDataset2):
     return True
 
   def get_dataset_seq_for_name(self, name, seq_idx=-1):
-    data = {key: d.read(name) for (key, d) in self.data.items()}  # type: dict[str,numpy.ndarray]
+    """
+    :param str name:
+    :param int seq_idx:
+    :rtype: DatasetSeq
+    """
+    data = {key: d.read(name) for (key, d) in self.data.items()}  # type: typing.Dict[str,numpy.ndarray]
     return DatasetSeq(seq_idx=seq_idx, seq_tag=name, features=data["data"], targets=data)
 
   def _collect_single_seq(self, seq_idx):
@@ -991,9 +998,12 @@ class SprintCacheDataset(CachedDataset2):
 
 
 def demo():
+  """
+  Demo.
+  """
   print("SprintDataset demo.")
   from argparse import ArgumentParser
-  from Util import hms, progress_bar_with_time
+  from Util import progress_bar_with_time
   from Log import log
   from Config import Config
   from Dataset import init_dataset
