@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 
+"""
+Runs pylint on the RETURNN source code.
+"""
+
 import os
 import sys
 import subprocess
@@ -10,25 +14,59 @@ base_dir = os.path.dirname(my_dir)
 sys.path.insert(0, base_dir)
 os.chdir(base_dir)
 
-import better_exchook
+import better_exchook  # noqa
 better_exchook.install()
 
-# travis_fold: https://github.com/travis-ci/travis-ci/issues/1065
-print("travis_fold:start:script.install")
-subprocess.check_call(["pip", "install", "pylint", "better_exchook"])
-print("travis_fold:end:script.install")
 
-for fn in sorted(glob(base_dir + "/*.py")):
-  print("travis_fold:start:pylint.%s" % os.path.basename(fn))
-  proc = subprocess.Popen(["pylint", fn], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-  stdout, _ = proc.communicate()
-  stdout = stdout.decode("utf8")
-  if "EXCEPTION" in stdout and "RecursionError" in stdout:
-    # https://github.com/PyCQA/pylint/issues/1452
-    # https://github.com/PyCQA/astroid/issues/437
-    # Don't print full stdout. It will spam too much.
-    print("PyLint issue #1452 triggered. https://github.com/PyCQA/pylint/issues/1452")
-  else:
-    print(stdout)
-  print("Return code:", proc.returncode)
-  print("travis_fold:end:pylint.%s" % os.path.basename(fn))
+def setup():
+  """
+  Some generic setup.
+  """
+  # travis_fold: https://github.com/travis-ci/travis-ci/issues/1065
+  print("travis_fold:start:script.install")
+  subprocess.check_call(["pip", "install", "pylint", "better_exchook"])
+  print("travis_fold:end:script.install")
+
+
+def main():
+  """
+  Main entry point.
+  """
+  setup()
+  from lint_common import ignore_count_for_files
+  color = better_exchook.Color()
+  has_some_relevant_error = False
+  for filename in sorted(glob(base_dir + "/*.py")):
+    base_filename = os.path.basename(filename)
+    print("travis_fold:start:pylint.%s" % base_filename)
+    proc = subprocess.Popen(["pylint", filename], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    stdout, _ = proc.communicate()
+    stdout = stdout.decode("utf8")
+    file_has_errors = proc.returncode != 0
+    print(color.color(
+      "File: %s" % filename,
+      color="black" if (base_filename in ignore_count_for_files or not file_has_errors) else "red"))
+    if "EXCEPTION" in stdout and "RecursionError" in stdout:
+      # https://github.com/PyCQA/pylint/issues/1452
+      # https://github.com/PyCQA/astroid/issues/437
+      # Don't print full stdout. It will spam too much.
+      print("PyLint issue #1452 triggered. https://github.com/PyCQA/pylint/issues/1452")
+    elif base_filename in ignore_count_for_files:
+      print(stdout[:1000])
+      print("... (ignored further output; file is not relevant)")
+    else:
+      print(stdout)
+    print("Return code:", proc.returncode)
+    if file_has_errors:
+      if base_filename in ignore_count_for_files:
+        print("The inspection reports for this file are currently ignored.")
+      else:
+        print(color.color("The inspection reports for this file are fatal!", color="red"))
+        has_some_relevant_error = True
+    print("travis_fold:end:pylint.%s" % base_filename)
+  if has_some_relevant_error:
+    sys.exit(1)
+
+
+if __name__ == "__main__":
+  main()
