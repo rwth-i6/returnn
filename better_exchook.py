@@ -57,16 +57,14 @@ import threading
 import keyword
 import inspect
 import contextlib
+import typing
+
 try:
     from traceback import StackSummary, FrameSummary
 except ImportError:
     class _Dummy:
         pass
     StackSummary = FrameSummary = _Dummy
-
-PY3 = sys.version_info[0] >= 3
-if PY3:
-    import typing
 
 # noinspection PySetFunctionToLiteral,SpellCheckingInspection
 py_keywords = set(keyword.kwlist) | set(["None", "True", "False"])
