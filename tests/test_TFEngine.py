@@ -5,15 +5,17 @@
 
 import logging
 logging.getLogger('tensorflow').disabled = True
+
 import tensorflow as tf
 import sys
 import os
+
 sys.path += ["."]  # Python 3 hack
 sys.path += [os.path.dirname(os.path.abspath(__file__)) + "/.."]
+
 from TFEngine import *
-import Util
 import TFUtil
-TFUtil.debug_register_better_repr()
+from TFNetwork import ExternData
 from Config import Config
 from nose.tools import assert_equal, assert_is_instance
 import unittest
@@ -22,11 +24,12 @@ import numpy.testing
 from pprint import pprint
 import contextlib
 import better_exchook
-better_exchook.replace_traceback_format_tb()
 from Log import log
-log.initialize(verbosity=[5])
-
 import Debug
+
+log.initialize(verbosity=[5])
+TFUtil.debug_register_better_repr()
+better_exchook.replace_traceback_format_tb()
 Debug.install_lib_sig_segfault()
 
 try:
