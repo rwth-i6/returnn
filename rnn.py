@@ -22,8 +22,8 @@ __email__ = "doetsch@i6.informatik.rwth-aachen.de"
 import os
 import sys
 import time
-import numpy
 import typing
+import numpy
 from Log import log
 from Config import Config
 from Dataset import Dataset, init_dataset, init_dataset_via_str
@@ -568,7 +568,7 @@ def execute_main_task():
 
 
 # noinspection PyShadowingNames
-def analyze_data(config):
+def analyze_data(config):  # pylint: disable=redefined-outer-name
   """
   :param Config config:
   """
