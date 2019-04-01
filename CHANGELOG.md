@@ -6,6 +6,15 @@ or any changes which could potentially break or change the behavior of existing 
 This is intentionally kept short. For a full change log, just see the Git log.
 
 
+## 2019-03-29: remove hard Theano dependency
+
+## 2019-03-24 and ongoing: automatic linter checks
+
+Currently pylint and PyCharm inspection checks automatically run in Travis.
+Both have some false positives, but so far the PyCharm inspections seems much more sane.
+A lot of code cleanup is being done now.
+This is not complete yet, and thus the failing tests are ignored.
+
 ## 2019-03-01: `GenericAttentionLayer` reimplemented
 
 Based on `DotLayer` now.
