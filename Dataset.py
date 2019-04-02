@@ -591,6 +591,7 @@ class Dataset(object):
 
   def get_complete_frac(self, seq_idx):
     """
+    :param int seq_idx:
     :return: Returns a fraction (float in [0,1], always > 0) of how far we have advanced
       for this seq in the dataset.
       This does not have to be exact. This is only for the user.

@@ -151,7 +151,7 @@ class PythonFeatureScorer(object):
     global InputDim, OutputDim
     InputDim = input_dim
     OutputDim = output_dim
-    sprintDataset.setDimensions(self.input_dim, self.output_dim)
+    sprintDataset.set_dimensions(self.input_dim, self.output_dim)
     sprintDataset.initialize()
 
     prepareForwarding()
@@ -328,7 +328,7 @@ def getSegmentList(corpusName, segmentList, **kwargs):
   # If we use both the PythonSegmentOrder and the PythonTrainer, this will be called first.
   # The PythonTrainer will be called lazily once it gets the first data.
   initBase(configfile=kwargs.get('config', None))
-  sprintDataset.useMultipleEpochs()
+  sprintDataset.use_multiple_epochs()
 
   finalEpoch = getFinalEpoch()
   startEpoch, startSegmentIdx = Engine.get_train_start_epoch_batch(config)
@@ -339,8 +339,8 @@ def getSegmentList(corpusName, segmentList, **kwargs):
   for curEpoch in range(startEpoch, finalEpoch + 1):
     if isTrainThreadStarted:
       # So that the CRNN train thread always has the SprintDatasetBase in a sane state before we reset it.
-      sprintDataset.waitForCrnnEpoch(curEpoch)
-    sprintDataset.initSprintEpoch(curEpoch)
+      sprintDataset.wait_for_returnn_epoch(curEpoch)
+    sprintDataset.init_sprint_epoch(curEpoch)
 
     index_list = sprintDataset.get_seq_order_for_epoch(curEpoch, len(segmentList))
     orderedSegmentList = [segmentList[i] for i in index_list]
@@ -355,14 +355,14 @@ def getSegmentList(corpusName, segmentList, **kwargs):
       yield orderedSegmentList[curSegmentIdx]
 
     print("Sprint finished epoch %i" % curEpoch)
-    sprintDataset.finishSprintEpoch()
+    sprintDataset.finish_sprint_epoch()
 
     if isTrainThreadStarted:
       assert sprintDataset.get_num_timesteps() > 0, \
         "We did not received any seqs. You are probably using a buffered feature extractor and the buffer is " + \
         "bigger than the total number of time frames in the corpus."
 
-  sprintDataset.finalizeSprint()
+  sprintDataset.finalize_sprint()
 
 # End Sprint PythonSegmentOrder interface. }
 # </editor-fold>
@@ -423,7 +423,7 @@ def init_python_trainer(inputDim, outputDim, config, targetMode, **kwargs):
     assert False, "unknown action: %r" % action
 
   initBase(targetMode=targetMode, configfile=configfile, epoch=epoch, sprint_opts=config)
-  sprintDataset.setDimensions(inputDim, outputDim)
+  sprintDataset.set_dimensions(inputDim, outputDim)
   sprintDataset.initialize()
 
   if Task == "train":
@@ -445,8 +445,8 @@ def exit():
   isExited = True
   if isTrainThreadStarted:
     engine.stop_train_after_epoch_request = True
-    sprintDataset.finishSprintEpoch()  # In case this was not called yet. (No PythonSegmentOrdering.)
-    sprintDataset.finalizeSprint()  # In case this was not called yet. (No PythonSegmentOrdering.)
+    sprintDataset.finish_sprint_epoch()  # In case this was not called yet. (No PythonSegmentOrdering.)
+    sprintDataset.finalize_sprint()  # In case this was not called yet. (No PythonSegmentOrdering.)
     trainThread.join()
   rnn.finalize()
   if startTime:
@@ -746,7 +746,7 @@ def train(segmentName, features, targets=None):
 
   if sprintDataset.sprintFinalized:
     return
-  sprintDataset.addNewData(features, targets, segmentName=segmentName)
+  sprintDataset.add_new_data(features, targets, segment_name=segmentName)
 
   # The CRNN train thread started via start() will do the actual training.
 
@@ -790,9 +790,9 @@ def features_to_dataset(features, segment_name):
 
   # Fill the data for the current segment.
   sprintDataset.shuffle_frames_of_nseqs = 0  # We must not shuffle.
-  sprintDataset.initSprintEpoch(None)  # Reset cache. We don't need old seqs anymore.
+  sprintDataset.init_sprint_epoch(None)  # Reset cache. We don't need old seqs anymore.
   sprintDataset.init_seq_order()
-  seq = sprintDataset.addNewData(features, segmentName=segment_name)
+  seq = sprintDataset.add_new_data(features, segment_name=segment_name)
   return sprintDataset, seq
 
 

@@ -143,8 +143,8 @@ def test_window():
     assert_equal(list(data2a[1, 2]), list(data1[2]))
     assert_equal(list(data2a[-1, 2]), [0] * input_dim)  # zero-padded right
   finally:
-    dataset1.exit_handler()
-    dataset2.exit_handler()
+    dataset1._exit_handler()
+    dataset2._exit_handler()
 
 
 def test_py2_client():
