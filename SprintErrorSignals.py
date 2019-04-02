@@ -149,6 +149,10 @@ class SprintSubprocessInstance:
 
   def _pipe_open(self):
     readend, writeend = os.pipe()
+    if hasattr(os, "set_inheritable"):
+      # https://www.python.org/dev/peps/pep-0446/
+      os.set_inheritable(readend, True)
+      os.set_inheritable(writeend, True)
     readend = os.fdopen(readend, "rb", 0)
     writeend = os.fdopen(writeend, "wb", 0)
     return readend, writeend
