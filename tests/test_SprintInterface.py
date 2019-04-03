@@ -98,7 +98,7 @@ def test_forward():
 
   features = numpy.array([[0.1, 0.2], [0.2, 0.3], [0.3, 0.4], [0.4, 0.5]])
   seq_len = features.shape[0]
-  posteriors = SprintAPI.forward("segment1", features.T).T
+  posteriors = SprintAPI._forward("segment1", features.T).T
   assert_equal(posteriors.shape, (seq_len, outputDim))
 
   SprintAPI.exit()
