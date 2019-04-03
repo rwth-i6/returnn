@@ -143,7 +143,7 @@ class SprintDatasetBase(Dataset):
     self.reached_final_seq = False
     self.reached_final_seq_seen_all = False
     self._num_timesteps = 0
-    self.added_data = []; " :type: list[DatasetSeq] "
+    self.added_data = []  # type: typing.List[DatasetSeq]
     self.ready_for_data = True
 
   def init_sprint_epoch(self, epoch):

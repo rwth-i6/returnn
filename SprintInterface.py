@@ -969,7 +969,7 @@ def make_criterion_class():
   # noinspection PyUnresolvedReferences,PyPackageRequirements,PyPep8Naming
   import theano.tensor as T
 
-
+  # noinspection PyAbstractClass
   class Criterion(theano.Op):
     """
     Criterion Theano Op.
