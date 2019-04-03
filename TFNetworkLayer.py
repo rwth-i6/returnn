@@ -1243,6 +1243,10 @@ class ReuseParams:
       return None
 
     def optional_get_layer(layer_name):
+      """
+      :param str layer_name:
+      :rtype: LayerBase|ReuseParams.LazyLayerResolver
+      """
       from TFNetwork import NetworkConstructionDependencyLoopException
       try:
         return get_layer(layer_name)
@@ -1250,6 +1254,7 @@ class ReuseParams:
         # This dependency loop is not seen as critical. We allow it to be done later.
         # So any template construction of this layer should work.
         return ReuseParams.LazyLayerResolver(layer_name=layer_name, network=network, get_layer=get_layer)
+
     if isinstance(opts, str):  # share the whole layer
       return ReuseParams(reuse_layer=optional_get_layer(opts))
     assert isinstance(opts, dict)
@@ -1284,6 +1289,7 @@ class ReuseParams:
     we create the reused-params-layer based on dummy inputs, such that the variables/parameters get created
     and can be used now. Then, later, we are going to recreate the reused-params-layer.
     """
+
     def __init__(self, layer_name, network, get_layer):
       """
       :param str layer_name:
@@ -1296,6 +1302,9 @@ class ReuseParams:
       self.var_scope = tf.get_variable_scope()
 
     def get_layer(self):
+      """
+      :rtype: LayerBase
+      """
       from TFNetwork import NetworkConstructionDependencyLoopException
       from TFUtil import reuse_name_scope
       with reuse_name_scope(self.var_scope):
@@ -1315,22 +1324,31 @@ class ReuseParams:
         file=log.v4)
 
       def opt_get_layer(layer_name):
+        """
+        :param str layer_name:
+        :rtype: LayerBase|None
+        """
         if layer_name in self.network.layers:
           return self.network.layers[layer_name]
         print("ReuseParams: non-existing layer %r, ignoring..." % layer_name, file=log.v4)
         return None
 
       def get_dummy_input_layer(layer_name):
+        """
+        :param str layer_name:
+        :rtype: LayerBase
+        """
         if layer_name in self.network.layers:
           return self.network.layers[layer_name]
         print("ReuseParams: creating dummy input %r" % layer_name, file=log.v4)
-        layer_desc = dep_loop_exception.net_dict[layer_name].copy()
-        class_name = layer_desc.pop("class")
-        layer_class = get_layer_class(class_name)
-        layer_desc = self.network._create_layer_layer_desc(name=layer_name, layer_desc=layer_desc)
-        layer_class.transform_config_dict(
-          layer_desc, network=self.network, get_layer=opt_get_layer)
-        output = layer_class.get_out_data_from_opts(**layer_desc).copy()
+        layer_desc_ = dep_loop_exception.net_dict[layer_name].copy()
+        class_name_ = layer_desc_.pop("class")
+        layer_class_ = get_layer_class(class_name_)
+        # noinspection PyProtectedMember
+        layer_desc_ = self.network._create_layer_layer_desc(name=layer_name, layer_desc=layer_desc_)
+        layer_class_.transform_config_dict(
+          layer_desc_, network=self.network, get_layer=opt_get_layer)
+        output = layer_class_.get_out_data_from_opts(**layer_desc_).copy()
         output.placeholder = tf.zeros(
           [d or 1 for d in output.batch_shape], dtype=output.dtype, name="%s_dummy" % output.name)
         output.sanity_check()
@@ -1340,8 +1358,10 @@ class ReuseParams:
       class_name = layer_desc.pop("class")
       layer_class = get_layer_class(class_name)
       layer_class.transform_config_dict(layer_desc, network=self.network, get_layer=get_dummy_input_layer)
+      # noinspection PyProtectedMember
       return self.network._create_layer(name=self.layer_name, layer_class=layer_class, **layer_desc)
 
+  # noinspection PyShadowingBuiltins
   def __init__(self, reuse_layer=None, map=None, custom=None, auto_create_missing=False):
     """
     :param LayerBase|ReuseParams.LazyLayerResolver|None reuse_layer:
@@ -1453,6 +1473,14 @@ class ReuseParams:
 
 
 class SearchChoices(object):
+  """
+  In beam search, after expanding the beam and then selecting the N best (beam) (see :class:`ChoiceLayer`),
+  when doing this multiple times, we need to keep reference where each beam came from,
+  and what the current score is, etc.
+  Also we could have multiple different such expansions & prunes via different :class:`ChoiceLayer`.
+  This is what we keep track here.
+  """
+
   def __init__(self, owner, src_beams=None, beam_size=None, is_decided=False):
     """
     :param LayerBase owner:
@@ -1462,10 +1490,10 @@ class SearchChoices(object):
     """
     self.owner = owner
     self._done_src_layer = False
-    self._src_layer = None  # type: LayerBase
+    self._src_layer = None  # type: typing.Optional[LayerBase]
     self.src_beams = src_beams  # (batch, beam)
     self.beam_size = beam_size
-    self.beam_scores = None  # type: tf.Tensor  # (batch, beam)
+    self.beam_scores = None  # type: typing.Optional[tf.Tensor]  # (batch, beam)
     self.is_decided = is_decided
 
   def __repr__(self):
@@ -1768,13 +1796,13 @@ def concat_sources_with_opt_dropout(src_layers, dropout=0, dropout_noise_shape=N
   assert 0.0 < dropout < 1.0
   with _name_scope_for_concat_src_layers(src_layers, "dropout_in_train"):
     import TFUtil
-    fn_train = lambda: TFUtil.dropout(
-      data.placeholder,
-      keep_prob=1 - dropout,
-      noise_shape=dropout_noise_shape,
-      seed=network.random.randint(2 ** 31))
-    fn_eval = lambda: data.placeholder
-    data.placeholder = network.cond_on_train(fn_train, fn_eval)
+    data.placeholder = network.cond_on_train(
+      fn_train=lambda: TFUtil.dropout(
+        data.placeholder,
+        keep_prob=1 - dropout,
+        noise_shape=dropout_noise_shape,
+        seed=network.random.randint(2 ** 31)),
+      fn_eval=lambda: data.placeholder)
   network.concat_sources_dropout_cache[cache_key] = data.copy()
   return data
 
@@ -2018,8 +2046,8 @@ class BatchNormLayer(CopyLayer):
     All remaining kwargs are used for self.batch_norm().
     """
     kwargs = kwargs.copy()
-    import inspect
-    batch_norm_kwargs = inspect.getargspec(self.batch_norm).args[1:]  # first is self, ignore
+    from Util import getargspec
+    batch_norm_kwargs = getargspec(self.batch_norm).args[1:]  # first is self, ignore
     batch_norm_opts = {key: kwargs.pop(key)
                        for key in batch_norm_kwargs
                        if key in kwargs}
@@ -2153,9 +2181,14 @@ class SliceNdLayer(_ConcatInputLayer):
     self.output.placeholder = slices
 
   @classmethod
-  def get_out_data_from_opts(
-        cls, name, sources=(),
-        start=None, size=None, **kwargs):
+  def get_out_data_from_opts(cls, name, sources=(), start=None, size=None, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :param LayerBase|None start:
+    :param int|None size:
+    :rtype: Data
+    """
     input_data = get_concat_sources_data_template(sources).copy_as_batch_major()
     in_shape = list(input_data.shape)
     shape = [size] + in_shape[1:]  # (B, size, ...) (w/o batch)
@@ -3398,6 +3431,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
   """
   layer_class = "reinterpret_data"
 
+  # noinspection PyUnusedLocal
   def __init__(self, switch_axes=None, size_base=None, set_axes=None,
                enforce_batch_major=False, enforce_time_major=False, increase_sparse_dim=None, **kwargs):
     """
@@ -3482,6 +3516,7 @@ class ConvLayer(_ConcatInputLayer):
   layer_class = "conv"
   recurrent = True  # we must not allow any shuffling in the time-dim or so
 
+  # noinspection PyUnusedLocal
   def __init__(self, n_out, filter_size, padding, strides=1, dilation_rate=1,
                input_expand_dims=0, input_add_feature_dim=False, input_split_feature_dim=None,
                auto_use_channel_first=False,
@@ -3613,6 +3648,7 @@ class ConvLayer(_ConcatInputLayer):
     else:
       raise Exception("invalid padding %r" % padding)
 
+  # noinspection PyUnusedLocal
   @classmethod
   def _get_out_type_from_opts(cls, n_out, filter_size, padding, strides=1, dilation_rate=1, sources=(),
                               input_expand_dims=0, input_add_feature_dim=False, input_split_feature_dim=None,
@@ -3673,6 +3709,7 @@ class PoolLayer(_ConcatInputLayer):
   layer_class = "pool"
   recurrent = True  # we should not shuffle in the time-dimension
 
+  # noinspection PyUnusedLocal
   def __init__(self, mode, pool_size, padding="VALID", dilation_rate=1, strides=None,
                use_channel_first=False,
                **kwargs):
@@ -4443,7 +4480,6 @@ class DotLayer(LayerBase):
     :param bool add_var2_if_empty:
     :rtype: Data
     """
-    import numpy
     assert len(sources) == 2, "dot-layer %r: needs exactly two sources" % (name,)
     # See __init__.
     a_out = sources[0].output.copy_as_batch_major()
@@ -4536,6 +4572,14 @@ class ShiftAxisLayer(_ConcatInputLayer):
 
   @classmethod
   def get_out_data_from_opts(cls, name, amount, axis, pad, sources=(), **kwargs):
+    """
+    :param str name:
+    :param int amount:
+    :param str axis:
+    :param bool pad:
+    :param list[LayerBase] sources:
+    :rtype: Data
+    """
     out = get_concat_sources_data_template(sources, name="%s_output" % name)
     assert isinstance(amount, int)
     axis = out.get_axis_from_description(axis)
@@ -4779,6 +4823,7 @@ class CombineLayer(LayerBase):
   """
   layer_class = "combine"
 
+  # noinspection PyShadowingBuiltins
   def __init__(self, kind, sources, activation=None, with_bias=False,
                eval=None, eval_locals=None, eval_for_output_loss=False,
                **kwargs):
@@ -5025,8 +5070,12 @@ class CompareLayer(LayerBase):
 
 class SwitchLayer(LayerBase):
   """
-  Wrapper around tf.where(). Uses three inputs: condition, true_from and false_from. The output of this layer contains elements of true_from
-  where condition is True, otherwise elements of false_from. condition has to be of dtype bool. true_from and false_from must have the same shape.
+  Wrapper around tf.where().
+  Uses three inputs: condition, true_from and false_from.
+  The output of this layer contains elements of true_from
+  where condition is True, otherwise elements of false_from.
+  condition has to be of dtype bool.
+  true_from and false_from must have the same shape.
   """
 
   layer_class = "switch"
@@ -5046,7 +5095,8 @@ class SwitchLayer(LayerBase):
     assert condition.output.dtype == "bool"
     assert true_from.output.shape == false_from.output.shape
 
-    self.output.placeholder = tf.where(condition=condition.output.placeholder, x=true_from.output.placeholder, y=false_from.output.placeholder)
+    self.output.placeholder = tf.where(
+      condition=condition.output.placeholder, x=true_from.output.placeholder, y=false_from.output.placeholder)
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
