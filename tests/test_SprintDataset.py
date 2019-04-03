@@ -3,13 +3,11 @@ import sys
 sys.path += ["."]  # Python 3 hack
 
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_in, assert_true, assert_false
-from Device import Device
 from EngineUtil import assign_dev_data, assign_dev_data_single_seq
 from EngineBatch import Batch
 from Log import log
 from Config import Config
 import Util
-import TheanoUtil
 from GeneratingDataset import GeneratingDataset
 from Dataset import DatasetSeq
 from SprintDataset import ExternSprintDataset
@@ -18,10 +16,21 @@ import os
 import sys
 import unittest
 import better_exchook
+
+try:
+  import theano
+except ImportError:
+  theano = None
+
 better_exchook.install()
 better_exchook.replace_traceback_format_tb()
 Util.init_thread_join_hack()
-TheanoUtil.monkey_patches()
+
+if theano:
+  from Device import Device
+  import TheanoUtil
+
+  TheanoUtil.monkey_patches()
 
 
 dummyconfig_dict = {
@@ -40,13 +49,17 @@ assert os.path.exists("rnn.py")
 sprintExecPath = "tests/DummySprintExec.py"
 
 
-class DummyDevice(Device):
+if theano:
+  class DummyDevice(Device):
 
-  def __init__(self, config=None, blocking=True):
-    if not config:
-      config = Config()
-      config.update(dummyconfig_dict)
-    super(DummyDevice, self).__init__(device="cpu", config=config, blocking=blocking)
+    def __init__(self, config=None, blocking=True):
+      if not config:
+        config = Config()
+        config.update(dummyconfig_dict)
+      super(DummyDevice, self).__init__(device="cpu", config=config, blocking=blocking)
+
+else:
+  DummyDevice = None
 
 
 def generate_batch(seq_idx, dataset):
@@ -91,11 +104,12 @@ def test_assign_dev_data():
   batch_generator = dataset.generate_batches(recurrent_net=recurrent, batch_size=5)
   batches = batch_generator.peek_next_n(2)
   assert_equal(len(batches), 2)
-  print("Create Device")
-  device = DummyDevice(config=config)
-  success, num_batches = assign_dev_data(device, dataset, batches)
-  assert_true(success)
-  assert_equal(num_batches, len(batches))
+  if theano:
+    print("Create Device")
+    device = DummyDevice(config=config)
+    success, num_batches = assign_dev_data(device, dataset, batches)
+    assert_true(success)
+    assert_equal(num_batches, len(batches))
 
 
 def test_window():
