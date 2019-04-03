@@ -135,7 +135,7 @@ def init_theano_devices():
   """
   Only for Theano.
 
-  :rtype: list[Device.Device]
+  :rtype: list[Device.Device]|None
   """
   if not BackendEngine.is_theano_selected():
     return None

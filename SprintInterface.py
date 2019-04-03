@@ -19,6 +19,7 @@ import typing
 import numpy
 
 from SprintDataset import SprintDatasetBase
+from EngineBase import EngineBase
 from Log import log
 from EngineUtil import assign_dev_data_single_seq
 import Debug
@@ -47,9 +48,10 @@ MaxSegmentLength = 1
 TargetMode = None  # type: typing.Optional[str]
 Task = "train"
 
+Engine = None  # type: typing.Optional[typing.Union[typing.Type["TFEngine.Engine"],typing.Type["Engine.Engine"]]]
 config = None  # type: typing.Optional[rnn.Config]
 sprintDataset = None  # type: typing.Optional[SprintDatasetBase]
-engine = None  # type: typing.Optional[typing.Union["TFEngine.Engine","Engine.Engine"]]
+engine = None  # type: Engine
 
 
 # <editor-fold desc="generic init">
@@ -706,11 +708,12 @@ def _init_base(configfile=None, target_mode=None, epoch=None, sprint_opts=None):
     rnn.init_faulthandler(sigusr1_chain=True)
     rnn.init_config_json_network()
 
+    global Engine
     if BackendEngine.is_tensorflow_selected():
       # Use TFEngine.Engine class instead of Engine.Engine.
-      import TFEngine
-      global Engine
-      Engine = TFEngine.Engine
+      from TFEngine import Engine
+    elif BackendEngine.is_theano_selected():
+      from Engine import Engine
 
     import atexit
     atexit.register(_at_exit_handler)
@@ -722,7 +725,7 @@ def _init_base(configfile=None, target_mode=None, epoch=None, sprint_opts=None):
 
   if target_mode and target_mode == "forward" and epoch:
     model_filename = config.value('model', '')
-    fns = [Engine.epoch_model_filename(model_filename, epoch, is_pretrain) for is_pretrain in [False, True]]
+    fns = [EngineBase.epoch_model_filename(model_filename, epoch, is_pretrain) for is_pretrain in [False, True]]
     fn_postfix = ""
     if BackendEngine.is_tensorflow_selected():
       fn_postfix += ".meta"
@@ -730,8 +733,8 @@ def _init_base(configfile=None, target_mode=None, epoch=None, sprint_opts=None):
     assert len(fns_existing) == 1, "%s not found" % fns
     model_epoch_filename = fns_existing[0]
     config.set('load', model_epoch_filename)
-    assert Engine.get_epoch_model(config)[1] == model_epoch_filename, (
-      "%r != %r" % (Engine.get_epoch_model(config), model_epoch_filename))
+    assert EngineBase.get_epoch_model(config)[1] == model_epoch_filename, (
+      "%r != %r" % (EngineBase.get_epoch_model(config), model_epoch_filename))
 
   global engine
   if not engine:

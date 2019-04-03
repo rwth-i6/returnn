@@ -117,13 +117,13 @@ def saveCrnnNetwork(epoch, layers):
   from NetworkHiddenLayer import ForwardLayer
   from NetworkOutputLayer import OutputLayer
   from Pretrain import pretrain_from_config
-  from Engine import Engine
+  from EngineBase import EngineBase
 
   pretrain = pretrain_from_config(config)
   is_pretrain_epoch = pretrain and epoch <= pretrain.get_train_num_epochs()
   modelFilename = config.value("model", None)
   assert modelFilename, "need 'model' in config"
-  filename = Engine.epoch_model_filename(modelFilename, epoch, is_pretrain_epoch)
+  filename = EngineBase.epoch_model_filename(modelFilename, epoch, is_pretrain_epoch)
   assert not os.path.exists(filename), "already exists"
   if is_pretrain_epoch:
     network = pretrain.get_network_for_epoch(epoch)
