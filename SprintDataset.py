@@ -981,7 +981,7 @@ class SprintCacheDataset(CachedDataset2):
       if allophone_labeling:
         from SprintCache import AllophoneLabeling
         self.allophone_labeling = AllophoneLabeling(**allophone_labeling)
-        self.sprint_cache.setAllophones(self.allophone_labeling.allophone_file)
+        self.sprint_cache.set_allophones(self.allophone_labeling.allophone_file)
       else:
         assert data_type != "align", "need allophone_labeling for 'align' type"
       self.content_keys = [fn for fn in self.sprint_cache.file_list() if not fn.endswith(".attribs")]

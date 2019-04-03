@@ -10,6 +10,7 @@ from __future__ import print_function
 
 import sys
 import os
+import typing
 import array
 from struct import pack, unpack
 import numpy
@@ -18,42 +19,81 @@ import mmap
 
 
 class FileInfo:
+  """
+  File info.
+  """
+
   def __init__(self, name, pos, size, compressed, index):
-    self.name       = name
-    self.pos        = pos
-    self.size       = size
+    """
+    :param str name:
+    :param int pos:
+    :param int size:
+    :param bool|int compressed:
+    :param int index:
+    """
+    self.name = name
+    self.pos = pos
+    self.size = size
     self.compressed = compressed
-    self.index      = index
+    self.index = index
 
   def __repr__(self):
     return "FileInfo(%s)" % " ".join(str(s) for s in self.__dict__.values())
 
 
 class FileArchive:
+  """
+  File archive.
+  """
 
   # read routines
   def read_u32(self):
+    """
+    :rtype: int
+    """
     return int(unpack("i", self.f.read(4))[0])
 
+  # noinspection PyPep8Naming
   def read_U32(self):
+    """
+    :rtype: int
+    """
     return int(unpack("I", self.f.read(4))[0])
 
   def read_u64(self):
+    """
+    :rtype: int
+    """
     return int(unpack("q", self.f.read(8))[0])
 
   def read_char(self):
+    """
+    :rtype: int
+    """
     return unpack("b", self.f.read(1))[0]
 
   def read_bytes(self, l):
+    """
+    :rtype: bytes
+    """
     return unpack('%ds' % l, self.f.read(l))[0]
 
   def read_str(self, l, enc='ascii'):
+    """
+    :rtype: str
+    """
     return self.read_bytes(l).decode(enc)
 
   def read_f32(self):
+    """
+    :rtype: float
+    """
     return float(unpack("f", self.f.read(4))[0])
 
   def read_f64(self):
+    """
+    :rtype: float
+    """
     return float(unpack("d", self.f.read(8))[0])
 
   def read_v(self, typ, size):
@@ -63,41 +103,70 @@ class FileArchive:
     :return: numpy array of shape (size,) of dtype depending on typ
     :rtype: numpy.ndarray
     """
-    if   typ == 'f':
-        b = 4
-        t = numpy.float32
+    if typ == 'f':
+      b = 4
+      t = numpy.float32
     elif typ == 'd':
-        b = 8
-        t = numpy.float64
+      b = 8
+      t = numpy.float64
     else:
-        raise NotImplementedError("typ: %r" % typ)
+      raise NotImplementedError("typ: %r" % typ)
     if isinstance(self.f, mmap.mmap):
-        res = numpy.frombuffer(self.f, t, size, self.f.tell())
-        self.f.seek(b * size, os.SEEK_CUR)
+      res = numpy.frombuffer(self.f, t, size, self.f.tell())
+      self.f.seek(b * size, os.SEEK_CUR)
     else:
-        res = numpy.fromfile(self.f, t, size, '')
+      res = numpy.fromfile(self.f, t, size, '')
     return res
 
   # write routines
   def write_str(self, s):
+    """
+    :param str s:
+    :rtype: int
+    """
     return self.f.write(pack("%ds" % len(s), s))
 
   def write_char(self, i):
+    """
+    :param int i:
+    :rtype: int
+    """
     return self.f.write(pack("b", i))
 
   def write_u32(self, i):
+    """
+    :param int i:
+    :rtype: int
+    """
     return self.f.write(pack("i", i))
 
+  # noinspection PyPep8Naming
   def write_U32(self, i):
+    """
+    :param int i:
+    :rtype: int
+    """
     return self.f.write(pack("I", i))
 
   def write_u64(self, i):
+    """
+    :param int i:
+    :rtype: int
+    """
     return self.f.write(pack("q", i))
 
   def write_f32(self, i):
+    """
+    :param float i:
+    :rtype: int
+    """
     return self.f.write(pack("f", i))
 
   def write_f64(self, i):
+    """
+    :param float i:
+    :rtype: int
+    """
     return self.f.write(pack("d", i))
 
   SprintCacheHeader = "SP_ARC1\0"
@@ -106,7 +175,7 @@ class FileArchive:
 
   def __init__(self, filename, must_exists=True):
 
-    self.ft = {}  # type: dict[str,FileInfo]
+    self.ft = {}  # type: typing.Dict[str,FileInfo]
     if os.path.exists(filename):
       self.allophones = []
       self.f = open(filename, 'rb')
@@ -115,9 +184,9 @@ class FileArchive:
 
       ft = bool(self.read_char())
       if ft:
-        self.readFileInfoTable()
+        self.read_file_info_table()
       else:
-        self.scanArchive()
+        self.scan_archive()
 
     else:
       assert not must_exists, "File does not exist: %r" % filename
@@ -134,27 +203,40 @@ class FileArchive:
     self.f.close()
 
   def file_list(self):
+    """
+    :rtype: list[str]
+    """
     return self.ft.keys()
 
   def finalize(self):
-    self.writeFileInfoTable()
+    """
+    Finalize.
+    """
+    self.write_file_info_table()
 
-  def readFileInfoTable(self):
+  def read_file_info_table(self):
+    """
+    Read file info table.
+    """
     self.f.seek(-8, 2)
     pos_count = self.read_u64()
     self.f.seek(pos_count)
     count = self.read_u32()
-    if not count > 0: return
+    if not count > 0:
+      return
     for i in range(count):
-      l    = self.read_u32()
-      name = self.read_str(l)
-      pos  = self.read_u64()
+      str_len = self.read_u32()
+      name = self.read_str(str_len)
+      pos = self.read_u64()
       size = self.read_u32()
       comp = self.read_u32()
       self.ft[name] = FileInfo(name, pos, size, comp, i)
       # TODO: read empty files
 
-  def writeFileInfoTable(self):
+  def write_file_info_table(self):
+    """
+    Write file info table.
+    """
     pos = self.f.tell()
     self.write_u32(len(self.ft))
 
@@ -168,29 +250,33 @@ class FileArchive:
     self.write_u64(0)
     self.write_u64(pos)
 
-  def scanArchive(self):
+  def scan_archive(self):
+    """
+    Scan archive.
+    """
     i = 0
     self.f.seek(0, 2)
     end = self.f.tell()
     self.f.seek(0)
     while self.f.tell() < end:
-      if self.read_U32() != self.start_recovery_tag: continue
+      if self.read_U32() != self.start_recovery_tag:
+        continue
 
       fn_len = self.read_u32()
       name = self.read_str(fn_len)
-      pos  = self.f.tell()
+      pos = self.f.tell()
       size = self.read_u32()
       comp = self.read_u32()
-      chk  = self.read_u32()
+      self.read_u32()  # chk
 
       self.f.seek(size, 1)
       self.ft[name] = FileInfo(name, pos, size, comp, i)
       i += 1
 
-      self.read_U32() # end tag
+      self.read_U32()  # end tag
 
-      #raise NotImplementedError("Need to scan archive if no "
-      #                          "file info table found.")
+      # raise NotImplementedError("Need to scan archive if no "
+      #                           "file info table found.")
 
   def _raw_read(self, size, typ):
     """
@@ -214,19 +300,19 @@ class FileArchive:
       # print(typ)
       assert typ == "vector-f32"
       count = self.read_U32()
-      data = [None] * count
-      time = [None] * count
+      data = [None] * count  # type: typing.List[typing.Optional[numpy.ndarray]]
+      time_ = [None] * count  # type: typing.List[typing.Optional[numpy.ndarray]]
       for i in range(count):
         size = self.read_U32()
         data[i] = self.read_v("f", size)  # size x f32
-        time[i] = self.read_v("d", 2)  # 2    x f64
-      return time, data
+        time_[i] = self.read_v("d", 2)  # 2    x f64
+      return time_, data
 
     elif typ in ["align", "align_raw"]:
       type_len = self.read_U32()
       typ = self.read_str(type_len)
       assert typ == "flow-alignment"
-      flag = self.read_u32()  # ?
+      self.read_u32()  # flag ?
       typ = self.read_str(8)
       if typ in ["ALIGNRLE", "AALPHRLE"]:
         # In case of AALPHRLE, after the alignment, we include the alphabet of the used labels.
@@ -243,7 +329,7 @@ class FileArchive:
               while n > 0:
                 mix, state = self.read_u32(), None
                 if typ != "align_raw":
-                  mix, state = self.getState(mix)
+                  mix, state = self.get_state(mix)
                 # print(mix, state)
                 # print(time, self.allophones[mix])
                 alignment.append((time, mix, state))
@@ -252,7 +338,7 @@ class FileArchive:
             elif n < 0:
               mix, state = self.read_u32(), None
               if typ != "align_raw":
-                mix, state = self.getState(mix)
+                mix, state = self.get_state(mix)
               while n < 0:
                 # print(mix, state)
                 # print(time, self.allophones[mix])
@@ -297,7 +383,7 @@ class FileArchive:
     self.f.seek(fi.pos)
     size = self.read_U32()
     comp = self.read_U32()
-    chk  = self.read_U32()
+    self.read_U32()  # chk
     if size == 0:
       return None
 
@@ -320,32 +406,41 @@ class FileArchive:
 
     return self._raw_read(size=fi.size, typ=typ)
 
-  def getState(self, mix):
+  def get_state(self, mix):
+    """
+    :param int mix:
+    :return: (mix, state)
+    :rtype: (int,int)
+    """
     # See src/Tools/Archiver/Archiver.cc:getStateInfo() from Sprint source code.
     assert self.allophones
     max_states = 6
-    #print("Was:", mix)
+    state = None
     for state in range(max_states):
       if mix >= len(self.allophones):
-        mix -= (1<<26)
+        mix -= (1 << 26)
       else:
         break
-    #print("Now:", mix)
     assert mix >= 0
     return mix, state
 
-  def setAllophones(self, f):
+  def set_allophones(self, f):
     """
-    :param str f: allophone filename. line-separated. will ignore lines starting with "#" 
+    :param str f: allophone filename. line-separated. will ignore lines starting with "#"
     """
     del self.allophones[:]
-    for l in open(f):
-      l = l.strip()
-      if l.startswith("#"):
+    for line in open(f):
+      line = line.strip()
+      if line.startswith("#"):
         continue
-      self.allophones.append(l)
+      self.allophones.append(line)
 
-  def addFeatureCache(self, filename, features, times):
+  def add_feature_cache(self, filename, features, times):
+    """
+    :param str filename:
+    :param features:
+    :param times:
+    """
     self.write_U32(self.start_recovery_tag)
     self.write_u32(len(filename))
     self.write_str(filename)
@@ -360,9 +455,7 @@ class FileArchive:
     assert len(features) == len(times)
     self.write_u32(len(features))
     for f, t in zip(features, times):
-      self.write_u32(len(f)) #f.shape[0])
-      #print filename,len(f),f,t[0],t[1]
-      #f.tofile(self.f,"f")
+      self.write_u32(len(f))
       for x in f.flat:
         self.write_f32(x)
       self.write_f64(t[0])
@@ -371,15 +464,24 @@ class FileArchive:
     self.ft[filename] = FileInfo(filename, pos, size, 0, len(self.ft))
     self.write_U32(self.end_recovery_tag)
 
-    self.addAttributes(filename, len(features[0]), times[-1][1])
+    self.add_attributes(filename, len(features[0]), times[-1][1])
 
-  def addAttributes(self, filename, dim, duration):
-    data = '<flow-attributes><flow-attribute name="datatype" value="vector-f32"/><flow-attribute name="sample-size" value="%d"/><flow-attribute name="total-duration" value="%.5f"/></flow-attributes>' % (dim, duration)
+  def add_attributes(self, filename, dim, duration):
+    """
+    :param str filename:
+    :param int dim:
+    :param float duration:
+    """
+    data = ('<flow-attributes>'
+            '<flow-attribute name="datatype" value="vector-f32"/>'
+            '<flow-attribute name="sample-size" value="%d"/>'
+            '<flow-attribute name="total-duration" value="%.5f"/>'
+            '</flow-attributes>') % (dim, duration)
     self.write_U32(self.start_recovery_tag)
     filename = "%s.attribs" % filename
     self.write_u32(len(filename))
     self.write_str(filename)
-    pos  = self.f.tell()
+    pos = self.f.tell()
     size = len(data)
     self.write_u32(size)
     self.write_u32(0)
@@ -389,21 +491,25 @@ class FileArchive:
     self.ft[filename] = FileInfo(filename, pos, size, 0, len(self.ft))
 
 
-class FileArchiveBundle():
+class FileArchiveBundle:
+  """
+  File archive bundle.
+  """
 
   def __init__(self, filename):
     """
-    :param str filename: .bundle file 
+    :param str filename: .bundle file
     """
     # filename -> FileArchive
-    self.archives = {}  # type: dict[str,FileArchive]
+    self.archives = {}  # type: typing.Dict[str,FileArchive]
     # archive content file -> FileArchive
-    self.files = {}  # type: dict[str,FileArchive]
+    self.files = {}  # type: typing.Dict[str,FileArchive]
     self._short_seg_names = {}
-    for l in open(filename).read().splitlines():
-      self.archives[l] = a = FileArchive(l, must_exists=True)
+    for line in open(filename).read().splitlines():
+      self.archives[line] = a = FileArchive(line, must_exists=True)
       for f in a.ft.keys():
         self.files[f] = a
+      # noinspection PyProtectedMember
       self._short_seg_names.update(a._short_seg_names)
 
   def file_list(self):
@@ -439,12 +545,12 @@ class FileArchiveBundle():
         filename = self._short_seg_names[filename]
     return self.files[filename].read(filename, typ)
 
-  def setAllophones(self, filename):
+  def set_allophones(self, filename):
     """
-    :param str filename: allophone filename 
+    :param str filename: allophone filename
     """
     for a in self.archives.values():
-      a.setAllophones(filename)
+      a.set_allophones(filename)
 
 
 def open_file_archive(archive_filename, must_exists=True):
@@ -461,24 +567,28 @@ def open_file_archive(archive_filename, must_exists=True):
 
 
 def is_sprint_cache_file(filename):
-    """
-    :param str filename: file to check. must exist
-    :return: True iff this is a sprint cache (which can be loaded with `open_file_archive()`)
-    :rtype: bool
-    """
-    assert os.path.exists(filename)
-    if not os.path.isfile(filename):
-        return False
-    if filename.endswith(".bundle"):
-        return True
-    with open(filename, 'rb') as f:
-        l = len(FileArchive.SprintCacheHeader)
-        bs = unpack('%ds' % l, f.read(l))[0]
-        header = bs.decode("ascii")
-        return header == FileArchive.SprintCacheHeader
+  """
+  :param str filename: file to check. must exist
+  :return: True iff this is a sprint cache (which can be loaded with `open_file_archive()`)
+  :rtype: bool
+  """
+  assert os.path.exists(filename)
+  if not os.path.isfile(filename):
+    return False
+  if filename.endswith(".bundle"):
+    return True
+  with open(filename, 'rb') as f:
+    header_len = len(FileArchive.SprintCacheHeader)
+    bs = unpack('%ds' % header_len, f.read(header_len))[0]
+    header = bs.decode("ascii")
+    return header == FileArchive.SprintCacheHeader
 
 
 class AllophoneLabeling(object):
+  """
+  Allophone labeling.
+  """
+
   def __init__(self, silence_phone, allophone_file, phoneme_file=None, state_tying_file=None, verbose_out=None):
     """
     :param str silence_phone: e.g. "si"
@@ -531,6 +641,10 @@ class AllophoneLabeling(object):
     return max([int(s.split(".")[-1]) for s in self.state_tying.keys()]) + 1
 
   def get_label_idx_by_allo_state_idx(self, allo_state_idx):
+    """
+    :param int allo_state_idx:
+    :rtype: int
+    """
     if self.state_tying_by_allo_state_idx:
       return self.state_tying_by_allo_state_idx[allo_state_idx]
     # See getState above().
@@ -539,13 +653,18 @@ class AllophoneLabeling(object):
     state_idx = 0
     for state_idx in range(max_states):
       if allo_idx >= len(self.allophones):
-        allo_idx -= (1<<26)
+        allo_idx -= (1 << 26)
       else:
         break
     assert allo_idx >= 0
     return self.get_label_idx(allo_idx, state_idx)
 
   def get_label_idx(self, allo_idx, state_idx):
+    """
+    :param int allo_idx:
+    :param int state_idx:
+    :rtype: int
+    """
     if self.state_tying_by_allo_state_idx:
       try:
         return self.state_tying_by_allo_state_idx[allo_idx + state_idx * (1 << 26)]
@@ -561,35 +680,71 @@ class AllophoneLabeling(object):
 ###############################################################################
 
 class MixtureSet:
+  """
+  Mixture set.
+  """
+
   # read routines
   def read_u32(self):
+    """
+    :rtype: int
+    """
     return int(unpack('i', self.f.read(4))[0])
 
+  # noinspection PyPep8Naming
   def read_U32(self):
+    """
+    :rtype: int
+    """
     return int(unpack('I', self.f.read(4))[0])
 
   def read_u64(self):
+    """
+    :rtype: int
+    """
     return int(unpack('q', self.f.read(8))[0])
 
   def read_char(self):
+    """
+    :rtype: int
+    """
     return unpack('b', self.f.read(1))[0]
 
   def read_str(self, l, enc='ascii'):
+    """
+    :param int l:
+    :param str enc:
+    :rtype: str
+    """
     a = array.array('b')
     a.fromfile(self.f, l)
     return a.tostring().decode(enc)
 
   def read_f32(self):
+    """
+    :rtype: float
+    """
     return float(unpack('f', self.f.read(4))[0])
 
   def read_f64(self):
+    """
+    :rtype: float
+    """
     return float(unpack('d', self.f.read(8))[0])
 
   def read_v(self, size, a):
+    """
+    :param int size:
+    :param array.array a:
+    :rtype: array.array
+    """
     a.fromfile(self.f, size)
     return a
 
   def __init__(self, filename):
+    """
+    :param str filename:
+    """
     self.header = 'MIXSET\0'
     self.f = open(filename, 'rb')
     header = self.read_str(8)
@@ -597,113 +752,145 @@ class MixtureSet:
     self.version = self.read_u32()
     self.dim = self.read_u32()
 
-    self.nMeans = self.read_u32()
-    self.means = numpy.zeros([self.nMeans, self.dim], dtype=numpy.float64)
-    self.meanWeights = numpy.zeros(self.nMeans, dtype=numpy.float64)
+    self.num_means = self.read_u32()
+    self.means = numpy.zeros([self.num_means, self.dim], dtype=numpy.float64)
+    self.mean_weights = numpy.zeros(self.num_means, dtype=numpy.float64)
 
-    for n in range(self.nMeans):
+    for n in range(self.num_means):
       size = self.read_u32()
       assert size == self.dim
       arr_f = array.array('d')
       arr_f.fromfile(self.f, self.dim)
       self.means[n, :] = numpy.array(arr_f)
-      self.meanWeights[n] = self.read_f64()
+      self.mean_weights[n] = self.read_f64()
 
-    self.nCovs = self.read_u32()
-    self.covs = numpy.zeros([self.nCovs, self.dim], dtype=numpy.float64)
-    self.covWeights = numpy.zeros(self.nCovs, dtype=numpy.float64)
+    self.num_covs = self.read_u32()
+    self.covs = numpy.zeros([self.num_covs, self.dim], dtype=numpy.float64)
+    self.cov_weights = numpy.zeros(self.num_covs, dtype=numpy.float64)
 
-    for n in range(self.nCovs):
+    for n in range(self.num_covs):
       size = self.read_u32()
       assert size == self.dim
       arr_f = array.array('d')
       arr_f.fromfile(self.f, self.dim)
       self.covs[n, :] = numpy.array(arr_f)
-      self.covWeights[n] = self.read_f64()
+      self.cov_weights[n] = self.read_f64()
 
-    self.nDensities = self.read_u32()
-    self.densities = numpy.zeros((self.nDensities, 2), dtype=numpy.int32)
-    for n in range(self.nDensities):
+    self.num_densities = self.read_u32()
+    self.densities = numpy.zeros((self.num_densities, 2), dtype=numpy.int32)
+    for n in range(self.num_densities):
       mean_idx = self.read_u32()
       cov_idx = self.read_u32()
       self.densities[n, 0] = mean_idx
       self.densities[n, 1] = cov_idx
 
-    self.nMixtures = self.read_u32()
-    self.mixtures = [None] * self.nMixtures
-    for n in range(self.nMixtures):
-      nDensities = self.read_u32()
+    self.num_mixtures = self.read_u32()
+    self.mixtures = [None] * self.num_mixtures  # type: typing.List[typing.Optional[typing.Tuple[typing.List[int],typing.List[float]]]]  # nopep8
+    for n in range(self.num_mixtures):
+      num_densities = self.read_u32()
       dns_idx = []
       dns_weight = []
-      for i in range(nDensities):
+      for i in range(num_densities):
         dns_idx.append(self.read_u32())
         dns_weight.append(self.read_f64())
       self.mixtures[n] = (dns_idx, dns_weight)
 
+  # TODO?
+  # noinspection PyUnresolvedReferences
   def write(self, filename):
+    """
+    :param str filename:
+    """
     self.f = open(filename, 'wb')
     self.write_str(self.header + 't')
     self.write_u32(self.version)
     self.write_u32(self.dim)
 
-    self.write_u32(self.nMeans)
+    self.write_u32(self.num_means)
 
-    for n in range(self.nMeans):
+    for n in range(self.num_means):
       self.write_u32(self.dim)
       arr_f = array.array('d')
       arr_f.fromlist(list(self.means[n, :]))
       arr_f.tofile(self.f)
-      self.write_f64(self.meanWeights[n])
+      self.write_f64(self.mean_weights[n])
 
-    self.write_u32(self.nCovs)
+    self.write_u32(self.num_covs)
 
-    for n in range(self.nCovs):
+    for n in range(self.num_covs):
       self.write_u32(self.dim)
       arr_f = array.array('d')
       arr_f.fromlist(list(self.covs[n, :]))
       arr_f.tofile(self.f)
-      self.write_f64(self.covWeights[n])
+      self.write_f64(self.cov_weights[n])
 
-    self.write_u32(self.nDensities)
-    for n in range(self.nDensities):
+    self.write_u32(self.num_densities)
+    for n in range(self.num_densities):
       self.write_u32(int(self.densities[n, 0]))
       self.write_u32(int(self.densities[n, 1]))
 
-    self.write_u32(self.nMixtures)
-    for n in range(self.nMixtures):
-      nDensities = len(self.mixtures[n][0])
-      self.write_u32(nDensities)
-      for i in range(nDensities):
+    self.write_u32(self.num_mixtures)
+    for n in range(self.num_mixtures):
+      num_densities = len(self.mixtures[n][0])
+      self.write_u32(num_densities)
+      for i in range(num_densities):
         self.write_u32(self.mixtures[n][0][i])
         self.write_f64(self.mixtures[n][1][i])
 
   def __del__(self):
     self.f.close()
 
-  def getMeanByIdx(self, idx):
-    return numpy.float32(self.means[idx, :] / self.meanWeights[idx])
+  def get_mean_by_idx(self, idx):
+    """
+    :param int idx:
+    :rtype: numpy.ndarray
+    """
+    return numpy.float32(self.means[idx, :] / self.mean_weights[idx])
 
-  def getCovByIdx(self, idx):
-    return numpy.float32(self.covs[idx, :] / self.covWeights[idx])
+  def get_cov_by_idx(self, idx):
+    """
+    :param int idx:
+    :rtype: numpy.ndarray
+    """
+    return numpy.float32(self.covs[idx, :] / self.cov_weights[idx])
 
-  def getNumberMixtures(self):
-    return self.nMixtures
+  def get_number_mixtures(self):
+    """
+    :rtype: int
+    """
+    return self.num_mixtures
 
 
 class WordBoundaries:
+  """
+  Word boundaries.
+  """
+
   # read routines
   def read_u16(self):
+    """
+    :rtype: int
+    """
     return int(unpack("H", self.f.read(2))[0])
 
   def read_u32(self):
+    """
+    :rtype: int
+    """
     return int(unpack("i", self.f.read(4))[0])
 
   def read_str(self, l, enc='ascii'):
+    """
+    :rtype: str
+    """
     a = array.array('b')
     a.fromfile(self.f, l)
     return a.tostring().decode(enc)
 
   def __init__(self, filename):
+    """
+    :param str filename:
+    """
     self.header = "LATWRDBN"
     self.f = open(filename, 'rb')
     header = self.read_str(8)
@@ -720,9 +907,13 @@ class WordBoundaries:
       self.boundaries.append(bnd)
       print(bnd)
 
+
 ###############################################################################
 
 def main():
+  """
+  Main entry for usage as a tool.
+  """
   from argparse import ArgumentParser
   arg_parser = ArgumentParser()
   arg_parser.add_argument("archive")
@@ -742,7 +933,7 @@ def main():
     assert args.file, "need to provide 'file' for --mode show. see --help"
     if args.type == "align":
       if args.allophone_file:
-        a.setAllophones(args.allophone_file)
+        a.set_allophones(args.allophone_file)
 
       f = a.read(args.file, "align")
       for row in f:
