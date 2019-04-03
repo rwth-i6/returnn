@@ -90,7 +90,6 @@ class BackendEngine:
   """
 
   Theano = 0
-  Default = Theano
   TensorFlow = 1
   selectedEngine = None  # type: typing.Optional[int]  # One of the possible engines.
 
@@ -105,12 +104,33 @@ class BackendEngine:
       if config is None:
         from Config import get_global_config
         config = get_global_config()
-      engine = cls.Default
+      engine = cls._get_default_engine()
       if config.bool("use_theano", False):
         engine = cls.Theano
       if config.bool("use_tensorflow", False):
         engine = cls.TensorFlow
     cls.selectedEngine = engine
+
+  @classmethod
+  def _get_default_engine(cls):
+    """
+    For backward compatibility, we still keep Theano the default.
+    However, we can do it slightly more clever.
+    If theano cannot be imported, allow for TF as the default.
+
+    :rtype: int
+    """
+    try:
+      import theano
+      return cls.Theano
+    except ImportError:
+      pass
+    try:
+      import tensorflow
+      return cls.TensorFlow
+    except ImportError:
+      pass
+    raise Exception("Neither Theano nor TF available.")
 
   @classmethod
   def get_selected_engine(cls):
@@ -120,7 +140,7 @@ class BackendEngine:
     if cls.selectedEngine is not None:
       return cls.selectedEngine
     else:
-      return cls.Default
+      return cls._get_default_engine()
 
   @classmethod
   def is_theano_selected(cls):

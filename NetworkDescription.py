@@ -277,8 +277,13 @@ class LayerNetworkDescription:
     :param bool reverse: reverse or not
     :rtype: dict[str]
     """
-    import inspect
-    from NetworkLayer import get_layer_class
+    import Util
+    if Util.BackendEngine.is_theano_selected():
+      from NetworkLayer import get_layer_class
+    elif Util.BackendEngine.is_tensorflow_selected():
+      from TFNetworkLayer import get_layer_class
+    else:
+      raise NotImplementedError
     params = dict(self.default_layer_info)
     params.update(info)
     params["from"] = sources
@@ -293,7 +298,7 @@ class LayerNetworkDescription:
         else:
           params['name'] += "_bw"
           params['reverse'] = True
-      if 'sharpgates' in inspect.getargspec(layer_class.__init__).args[1:]:
+      if 'sharpgates' in Util.getargspec(layer_class.__init__).args[1:]:
         params['sharpgates'] = self.sharpgates
     return params
 

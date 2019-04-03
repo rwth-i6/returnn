@@ -3,6 +3,8 @@
 from __future__ import print_function
 
 import h5py
+import theano
+from theano import tensor as T
 
 from NetworkDescription import LayerNetworkDescription
 from NetworkBaseLayer import Layer, SourceLayer
@@ -135,7 +137,8 @@ class LayerNetwork(object):
     :rtype: LayerNetwork
     """
     json_content = description.to_json_content(mask=mask)
-    network = cls.from_json(json_content, n_in=description.num_inputs, n_out=description.num_outputs, mask=mask, **kwargs)
+    network = cls.from_json(
+      json_content, n_in=description.num_inputs, n_out=description.num_outputs, mask=mask, **kwargs)
     return network
 
   @classmethod

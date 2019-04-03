@@ -1204,6 +1204,7 @@ class Engine(EngineBase):
     if isinstance(self.max_seq_length, (int, float)):
       self.max_seq_length += (self.start_epoch - 1) * self.inc_seq_length
 
+    assert isinstance(self.start_epoch, int)
     epoch = self.start_epoch  # Epochs start at 1.
     while epoch <= final_epoch:
       self.epoch = epoch  # type: int
@@ -1425,7 +1426,8 @@ class Engine(EngineBase):
 
       assert isinstance(output_per_seq_format, (tuple, list))
       assert set(output_per_seq_format) - allowed_outputs == set(), (
-        "Only %r are allowed in function eval_model as output_per_seq_format, but got: %r " % (allowed_outputs, output_per_seq_format))
+        "Only %r are allowed in function eval_model as output_per_seq_format, but got: %r " % (
+          allowed_outputs, output_per_seq_format))
 
       # always fetch seq_tag to map loss values to the corresponding line
       extra_fetches = {"seq_idx": self.network.get_extern_data("seq_idx", mark_data_key_as_used=True),
@@ -1461,7 +1463,7 @@ class Engine(EngineBase):
     # function to save the return values of each callback to the dict `results_per_seq`
     def extra_fetches_callback(seq_idx, seq_tags, **extra_fetches_out):
       """
-      :param list[str] seq_idx:
+      :param list[int] seq_idx:
       :param list[str] seq_tags:
       :param dict[str,numpy.ndarray] extra_fetches_out: see extra_fetches
       """
@@ -1484,7 +1486,6 @@ class Engine(EngineBase):
         else:
           for i, seq_tag in enumerate(seq_tags):
             results_per_seq.setdefault(seq_tag, {'seq_tags': seq_tag})[name] = value[i]
-
 
     # It's constructed lazily and it will set used_data_keys, so make sure that we have it now.
     self.network.maybe_construct_objective()
@@ -2331,7 +2332,7 @@ class Engine(EngineBase):
     if (isinstance(self.config.typed_dict.get("dev", None), dict)
             and self.config.typed_dict["dev"]["class"] == "LibriSpeechCorpus"):
       # A bit hacky. Assumes that this is a dataset description for e.g. LibriSpeechCorpus.
-      # noinspection PyPackageRequirements
+      # noinspection PyPackageRequirements,PyUnresolvedReferences
       import soundfile  # pip install pysoundfile
       bpe_opts = self.config.typed_dict["dev"]["bpe"]
       audio_opts = self.config.typed_dict["dev"]["audio"]
@@ -2365,6 +2366,9 @@ class Engine(EngineBase):
       """
       # noinspection PyPep8Naming
       def do_POST(self):
+        """
+        Handle POST request.
+        """
         try:
           self._do_post()
         except Exception:
@@ -2380,14 +2384,14 @@ class Engine(EngineBase):
         print("HTTP server, got POST.", file=log.v3)
         from io import BytesIO
         f = BytesIO(form["file"].file.read())
-        print("Input file size:", f.getbuffer().nbytes, "bytes", file=log.v4)
+        print("Input file size:", len(f.getbuffer().tobytes()), "bytes", file=log.v4)
         audio_len = None
         if input_audio_feature_extractor:
           try:
             audio, sample_rate = soundfile.read(f)
           except Exception as exc:
             print("Error reading audio (%s). Invalid format? Size %i, first few bytes %r." % (
-              exc, f.getbuffer().nbytes, f.getbuffer().tobytes()[:20]), file=log.v2)
+              exc, len(f.getbuffer().tobytes()), f.getbuffer().tobytes()[:20]), file=log.v2)
             raise
           audio_len = float(len(audio)) / sample_rate
           print("audio len %i (%.1f secs), sample rate %i" % (len(audio), audio_len, sample_rate), file=log.v4)

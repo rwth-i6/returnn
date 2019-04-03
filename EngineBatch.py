@@ -176,7 +176,7 @@ class BatchSetGenerator:
   def __init__(self, dataset, generator, shuffle_batches=False, cache_whole_epoch=True):
     """
     :type dataset: Dataset.Dataset
-    :type generator: typing.Generator[Batch]
+    :type generator: typing.Generator[Batch]|typing.Iterator[Batch]
     :param bool shuffle_batches:
     :param bool cache_whole_epoch:
     """

@@ -1183,6 +1183,7 @@ def convert_data_dims(data_dims, leave_dict_as_is=False):
     if isinstance(v, dict) and leave_dict_as_is:
       continue
     assert isinstance(v, (tuple, list))
+    data_dims[k] = tuple(v)
     assert len(v) == 2
     assert isinstance(v[0], int)
     assert isinstance(v[1], int)

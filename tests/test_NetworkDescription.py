@@ -3,19 +3,34 @@ import sys
 sys.path += ["."]  # Python 3 hack
 
 
+import unittest
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_true, assert_false
 from NetworkDescription import LayerNetworkDescription
 from Config import Config
-from Network import LayerNetwork
-from NetworkHiddenLayer import ForwardLayer
 from Util import dict_diff_str
-import TheanoUtil
 from pprint import pprint
 import better_exchook
 better_exchook.replace_traceback_format_tb()
 
+try:
+  # noinspection PyPackageRequirements
+  import theano
+except ImportError:
+  theano = None
 
-TheanoUtil.monkey_patches()
+
+if theano:
+  import TheanoUtil
+
+  TheanoUtil.monkey_patches()
+
+
+  from Network import LayerNetwork
+  from NetworkHiddenLayer import ForwardLayer
+
+else:
+  LayerNetwork = None
+  ForwardLayer = None
 
 
 def test_init():
@@ -41,7 +56,8 @@ def test_num_inputs_outputs_old():
   assert_is_instance(num_outputs, dict)
   assert_equal(len(num_outputs), 1)
   assert_in("classes", num_outputs)
-  assert_equal(num_outputs["classes"], [n_out, 1])
+  assert_equal(num_outputs["classes"], (n_out, 1))
+
 
 def test_num_inputs_outputs_special_dataset():
   config = Config()
@@ -52,8 +68,8 @@ def test_num_inputs_outputs_special_dataset():
   assert_equal(num_inputs, 80)
   assert_in("data", num_outputs)
   assert_in("classes", num_outputs)
-  assert_equal(num_outputs["classes"], [80, 1])
-  assert_equal(num_outputs["data"], [80, 1])
+  assert_equal(num_outputs["classes"], (80, 1))
+  assert_equal(num_outputs["data"], (80, 1))
 
 
 config1_dict = {
@@ -87,6 +103,7 @@ def test_config1_basic():
   assert_equal(desc.num_inputs, config1_dict["num_inputs"])
 
 
+@unittest.skipIf(not theano, "not theano")
 def test_network_config1_init():
   config = Config()
   config.update(config1_dict)
@@ -106,6 +123,7 @@ def test_network_config1_init():
   assert_in("output", json_content)
 
 
+@unittest.skipIf(not theano, "not theano")
 def test_NetworkDescription_to_json_config1():
   config = Config()
   config.update(config1_dict)
@@ -138,6 +156,7 @@ def test_NetworkDescription_to_json_config1():
     assert_equal(orig_json_content, new_network.to_json_content())
 
 
+@unittest.skipIf(not theano, "not theano")
 def test_config1_to_json_network_copy():
   config = Config()
   config.update(config1_dict)
@@ -153,6 +172,7 @@ def test_config1_to_json_network_copy():
     assert_equal(orig_json_content, new_network.to_json_content())
 
 
+@unittest.skipIf(not theano, "not theano")
 def test_config2_bidirect_lstm():
   config = Config()
   config.update(config2_dict)
@@ -171,3 +191,25 @@ def test_config2_bidirect_lstm():
   assert_equal(net_json["output"]["from"], ["hidden_2_fw", "hidden_2_bw"])
   assert_equal(len(net_json), 7)
 
+
+if __name__ == "__main__":
+  better_exchook.install()
+  if len(sys.argv) <= 1:
+    for k, v in sorted(globals().items()):
+      if k.startswith("test_"):
+        print("-" * 40)
+        print("Executing: %s" % k)
+        try:
+          v()
+        except unittest.SkipTest as exc:
+          print("SkipTest:", exc)
+        print("-" * 40)
+    print("Finished all tests.")
+  else:
+    assert len(sys.argv) >= 2
+    for arg in sys.argv[1:]:
+      print("Executing: %s" % arg)
+      if arg in globals():
+        globals()[arg]()  # assume function and execute
+      else:
+        eval(arg)  # assume Python code and execute
