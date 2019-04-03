@@ -2,6 +2,7 @@
 import sys
 sys.path += ["."]  # Python 3 hack
 
+import unittest
 from nose.tools import assert_equal, assert_is_instance, assert_in, assert_not_in, assert_true, assert_false
 from GeneratingDataset import *
 from Dataset import DatasetSeq
@@ -19,7 +20,7 @@ log.initialize(verbosity=[5])
 def test_init():
   dataset = DummyDataset(input_dim=2, output_dim=3, num_seqs=4)
   assert_equal(dataset.num_inputs, 2)
-  assert_equal(dataset.num_outputs, {"classes": [3, 1], "data": [2, 2]})
+  assert_equal(dataset.num_outputs, {"classes": (3, 1), "data": (2, 2)})
   assert_equal(dataset.num_seqs, 4)
 
 
@@ -78,3 +79,26 @@ def test_StaticDataset_custom_keys_with_dims():
   dataset.load_seqs(0, 1)
   assert_equal(list(dataset.get_data(0, "source")), [1, 2, 3])
   assert_equal(list(dataset.get_data(0, "target")), [3, 4, 5, 6, 7])
+
+
+if __name__ == "__main__":
+  better_exchook.install()
+  if len(sys.argv) <= 1:
+    for k, v in sorted(globals().items()):
+      if k.startswith("test_"):
+        print("-" * 40)
+        print("Executing: %s" % k)
+        try:
+          v()
+        except unittest.SkipTest as exc:
+          print("SkipTest:", exc)
+        print("-" * 40)
+    print("Finished all tests.")
+  else:
+    assert len(sys.argv) >= 2
+    for arg in sys.argv[1:]:
+      print("Executing: %s" % arg)
+      if arg in globals():
+        globals()[arg]()  # assume function and execute
+      else:
+        eval(arg)  # assume Python code and execute

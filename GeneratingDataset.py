@@ -579,18 +579,38 @@ class TaskNumberBaseConvertDataset(GeneratingDataset):
 
 
 class DummyDataset(GeneratingDataset):
+  """
+  Some dummy data, which does not have any meaning.
+  If you want to have artificial data with some meaning, look at other datasets here.
+  The input are some dense data, the outputs are sparse.
+  """
 
   def __init__(self, input_dim, output_dim, num_seqs, seq_len=2,
                input_max_value=10.0, input_shift=None, input_scale=None, **kwargs):
+    """
+    :param int input_dim:
+    :param int output_dim:
+    :param int|float num_seqs:
+    :param int seq_len:
+    :param float input_max_value:
+    :param float|None input_shift:
+    :param float|None input_scale:
+    """
     super(DummyDataset, self).__init__(input_dim=input_dim, output_dim=output_dim, num_seqs=num_seqs, **kwargs)
     self.seq_len = seq_len
     self.input_max_value = input_max_value
-    if input_shift is None: input_shift = -input_max_value / 2.0
+    if input_shift is None:
+      input_shift = -input_max_value / 2.0
     self.input_shift = input_shift
-    if input_scale is None: input_scale = 1.0 / self.input_max_value
+    if input_scale is None:
+      input_scale = 1.0 / self.input_max_value
     self.input_scale = input_scale
 
   def generate_seq(self, seq_idx):
+    """
+    :param int seq_idx:
+    :rtype: DatasetSeq
+    """
     seq_len = self.seq_len
     i1 = seq_idx
     i2 = i1 + seq_len * self.num_inputs

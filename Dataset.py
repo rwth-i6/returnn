@@ -1178,7 +1178,7 @@ def convert_data_dims(data_dims, leave_dict_as_is=False):
   data_dims = data_dims.copy()
   for k, v in list(data_dims.items()):
     if isinstance(v, int):
-      v = [v, 2 if k == "data" else 1]
+      v = (v, 2 if k == "data" else 1)
       data_dims[k] = v
     if isinstance(v, dict) and leave_dict_as_is:
       continue
