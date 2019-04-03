@@ -518,11 +518,13 @@ def get_global_config(raise_exception=True, auto_create=False):
   if _global_config:
     return _global_config
   import TaskSystem
-  import Device
-  if not TaskSystem.isMainProcess:
-    # We expect that we are a Device subprocess.
-    assert Device.asyncChildGlobalDevice is not None
-    return Device.asyncChildGlobalDevice.config
+  import Util
+  if Util.BackendEngine.is_theano_selected():
+    import Device
+    if not TaskSystem.isMainProcess:
+      # We expect that we are a Device subprocess.
+      assert Device.asyncChildGlobalDevice is not None
+      return Device.asyncChildGlobalDevice.config
   # We are the main process.
   import sys
   main_mod = sys.modules["__main__"]  # should be rnn.py
