@@ -42,6 +42,7 @@ ignore_count_for_files = {
   'OpLSTMCustom.py',
   'OpLSTMRec.py',
   'OpNumpyAlign.py',
+  'RawWavDataset.py',
   'RecurrentTransform.py',
   'Server.py',
   'StereoDataset.py',

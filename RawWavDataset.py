@@ -1,18 +1,28 @@
+
+"""
+Provide :class:`RawWavDataset`.
+"""
+
+from __future__ import print_function
+
 import h5py
 from CachedDataset2 import CachedDataset2
 from Dataset import DatasetSeq
 from Log import log
 import tempfile
-import scipy.io.wavfile
 import numpy as np
 import time
+
 
 class RawWavDataset(CachedDataset2):
   """
   This dataset returns the raw waveform information of wav files as sequence input data
-  It uses temporary hdf files to buffer the data, to avoid repeatadly rading the
+  It uses temporary hdf files to buffer the data, to avoid repeatedly reading the
   wav files.
   """
+
+  # Need to keep names as-is for compatibility.
+  # noinspection PyPep8Naming
   def __init__(self, listFile, frameLength, frameShift, num_outputs=None, **kwargs):
     """
     constructor
@@ -21,13 +31,13 @@ class RawWavDataset(CachedDataset2):
     :param listFile: path to the file containing a list of wav file pathes (on path per line)
                      each line needs to contain exactly one wav file which is considered a sequence
     :type frameLength: int
-    :param frameLenth: length of one frame in samples
+    :param frameLength: length of one frame in samples
     :type frameShift: int
     :param frameShift: shift length of frame in samples
     :type num_outputs: int
-    :param num_outputs: this needs to be set if the data set is used with  
+    :param num_outputs: this needs to be set if the data set is used with
                         only input data (e.g. for the extraction
-                        process). 
+                        process).
     """
     self._flag_buffering = False
     super(RawWavDataset, self).__init__(**kwargs)
@@ -37,15 +47,15 @@ class RawWavDataset(CachedDataset2):
     self._wavFiles = [l.strip() for l in self._wavFiles]
     self._frameLength = frameLength
     self._frameShift = frameShift
-    self._flag_pad = True #spcifies if signal is getting cut or zero padded for last frame
+    self._flag_pad = True  # specifies if signal is getting cut or zero padded for last frame
 
-    self._num_seqs = len(self._wavFiles) 
+    self._num_seqs = len(self._wavFiles)
     self._seq_index_list = None
 
-    self._hdfBufferHandler, self._hdfBufferPath = self._openHdfBuffer()
+    self._hdfBufferHandler, self._hdfBufferPath = self._open_hdf_buffer()
 
-    self.num_inputs = self._frameLength 
-    self.num_outputs = self._getNumOutputs(num_outputs)
+    self.num_inputs = self._frameLength
+    self.num_outputs = self._get_num_outputs(num_outputs)
 
   def _collect_single_seq(self, seq_idx):
     """
@@ -55,29 +65,29 @@ class RawWavDataset(CachedDataset2):
     :rtype: DatasetSeq | None
     :returns DatasetSeq or None if seq_idx >= num_seqs.
     """
-    wavFileId = self._seq_index_list[seq_idx]
-    if not self._isInBuffer(wavFileId):
-      self._loadWavFileIdIntoBuffer(wavFileId)
+    wav_file_id = self._seq_index_list[seq_idx]
+    if not self._isInBuffer(wav_file_id):
+      self._load_wav_file_id_into_buffer(wav_file_id)
 
-    return self._collect_single_seq_from_buffer(wavFileId, seq_idx)
+    return self._collect_single_seq_from_buffer(wav_file_id, seq_idx)
 
-  def _collect_single_seq_from_buffer(self, wavFileId, seq_idx):
+  def _collect_single_seq_from_buffer(self, wav_file_id, seq_idx):
     """
     returns the sequence specified by the index seq_idx
 
-    :type wavFileId: int
+    :type wav_file_id: int
     :type seq_idx: int
     :rtype: DatasetSeq | None
     :returns DatasetSeq or None if seq_idx >= num_seqs.
     """
-    inputFeatures = self._getInputFeatures(wavFileId)
-    outputFeatures = self._getOutputFeatures(wavFileId)
+    inputFeatures = self._get_input_features(wav_file_id)
+    outputFeatures = self._get_output_features(wav_file_id)
     inputFeatures = inputFeatures.astype(np.float32)
     if outputFeatures is not None:
       outputFeatures = targets.astype(np.float32)
     return DatasetSeq(seq_idx, inputFeatures, outputFeatures)
 
-  def _getNumOutputs(self, num_outputs):
+  def _get_num_outputs(self, num_outputs):
     """
     #TBD !!!
     """
@@ -86,7 +96,7 @@ class RawWavDataset(CachedDataset2):
     ret_num_outputs = {'classes': (num_outputs, 2)}
     return ret_num_outputs
 
-  def _getInputFeatures(self, wavFileId):
+  def _get_input_features(self, wavFileId):
     """
 
     :type wavFileId: int
@@ -95,7 +105,7 @@ class RawWavDataset(CachedDataset2):
     :return: the 2d array containing the time signal segment for each frame
     """
     if not self._isInBuffer(wavFileId):
-      self._loadWavFileIdIntoBuffer(wavFileId)
+      self._load_wav_file_id_into_buffer(wavFileId)
 
     timeSignal = self._hdfBufferHandler['timeSignal'][str(wavFileId)][...]
     frameLength = self._frameLength
@@ -106,27 +116,27 @@ class RawWavDataset(CachedDataset2):
       timeSignalPad = np.zeros((timeSignal.shape[0] + padLength, ))
       timeSignalPad[0:timeSignal.shape[0]] = timeSignal
     else:
-      nrOfFrames -= 1  
+      nrOfFrames -= 1
       sigLength = (nrOfFrames -1) * frameShift + frameLength
       timeSignalPad = np.zeros((sigLength, ))
       timeSignalPad[:] = timeSignal[0:sigLength]
-        
+
     inputFeatures = np.zeros((nrOfFrames, frameLength), dtype=np.float32)
     for i1 in range(nrOfFrames):
       inputFeatures[i1,:] = timeSignalPad[i1*frameShift:(i1*frameShift+frameLength)]
     return inputFeatures
 
-  def _getOutputFeatures(self, wavFileId):
+  def _get_output_features(self, wav_file_id):
     """
 
-    :type wavFileId: int
-    :param wavFileId: list index of wav file for which to return the output features
+    :type wav_file_id: int
+    :param wav_file_id: list index of wav file for which to return the output features
     :rtype: #TBD !!!
     :return: #TBD !!!
     """
-    if not self._isInBuffer(wavFileId):
-      self._loadWavFileIdIntoBuffer(wavFileId)
-    if not str(wavFileId) in self._hdfBufferHandler['outputs'].keys():
+    if not self._isInBuffer(wav_file_id):
+      self._load_wav_file_id_into_buffer(wav_file_id)
+    if not str(wav_file_id) in self._hdfBufferHandler['outputs'].keys():
       return None
     else:
       #TBD !!!
@@ -144,7 +154,7 @@ class RawWavDataset(CachedDataset2):
     else:
       return False
 
-  def _loadWavFileIdIntoBuffer(self, wavFileId):
+  def _load_wav_file_id_into_buffer(self, wavFileId):
     """
     loads the specified wav file into the hdf file buffer
 
@@ -156,25 +166,26 @@ class RawWavDataset(CachedDataset2):
     self._flag_buffering = True
     if self._isInBuffer(wavFileId):
         return False
-    wavFilePath = self._wavFiles[wavFileId] 
-    (r, x) = scipy.io.wavfile.read(wavFilePath)
+    wav_file_path = self._wavFiles[wavFileId]
+    import scipy.io.wavfile
+    (r, x) = scipy.io.wavfile.read(wav_file_path)
     self._hdfBufferHandler['timeSignal'].create_dataset(str(wavFileId), data=x.astype(np.float32))
     self._flag_buffering = False
     return True
 
-  def _openHdfBuffer(self):
+  def _open_hdf_buffer(self):
     """
     opens creates a local hdf file used as buffer to avoid reopening wav files
 
     :rtype: (h5py._hl.file.File, string)
     :return: (hdf buffer file handler, path to tmp file)
     """
-    fId, tmpHdfFilePath = tempfile.mkstemp(suffix=".hdf") 
-    fileHandler = h5py.File(tmpHdfFilePath, 'w')
-    fileHandler.create_group('timeSignal')
-    fileHandler.create_group('outputs')
+    f_id, tmp_hdf_file_path = tempfile.mkstemp(suffix=".hdf")
+    file_handler = h5py.File(tmp_hdf_file_path, 'w')
+    file_handler.create_group('timeSignal')
+    file_handler.create_group('outputs')
 
-    return fileHandler, tmpHdfFilePath 
+    return file_handler, tmp_hdf_file_path
 
   def get_data_dim(self, key):
     """This is copied from CachedDataset2 but the assertion is
@@ -218,7 +229,7 @@ class RawWavDataset(CachedDataset2):
     self._seq_index_list = seq_index
     if epoch is not None:
       # Give some hint to the user in case he is wondering why the cache is reloading.
-      print >> log.v4, "Reinitialize dataset seq order for epoch %i." % epoch
+      print("Reinitialize dataset seq order for epoch %i." % epoch, file=log.v4)
 
     return True
 
@@ -229,7 +240,7 @@ class RawWavDataset(CachedDataset2):
     :rtype: int
     """
     if self._num_seqs is None:
-      self._num_seqs = len(self._wavFiles) 
+      self._num_seqs = len(self._wavFiles)
     return self._num_seqs
 
 

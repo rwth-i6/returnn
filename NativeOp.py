@@ -12,11 +12,11 @@ from Util import make_hashable, escape_c_str, BackendEngine, PY3
 
 import numpy
 if BackendEngine.is_theano_selected():
-  # noinspection PyPackageRequirements
+  # noinspection PyPackageRequirements,PyUnresolvedReferences
   import theano
-  # noinspection PyPackageRequirements
+  # noinspection PyPackageRequirements,PyUnresolvedReferences
   import theano.sandbox.cuda
-  # noinspection PyPackageRequirements
+  # noinspection PyPackageRequirements,PyUnresolvedReferences
   import theano.tensor as T
   # noinspection PyPackageRequirements,PyUnresolvedReferences
   from theano.compile import optdb
@@ -330,6 +330,13 @@ class NativeOp(NativeOpBase, NativeOpBaseMixin):
     return v
 
   def grad(self, inputs, output_grads):
+    """
+    For Theano.
+
+    :param inputs:
+    :param output_grads:
+    :return:
+    """
     if self.custom_grad:
       return self.custom_grad(self, inputs, output_grads)
 
@@ -350,32 +357,37 @@ class NativeOp(NativeOpBase, NativeOpBaseMixin):
     kwargs_for_grad = self.kwargs_for_grad_op()
     grad_op = self.__class__(**kwargs_for_grad)
 
+    # noinspection PyCallingNonCallable
     grad_inputs = inputs + list(make_var_tuple(self(*inputs))) + output_grads
     grad_inputs = self._filter_grad_inputs(grad_inputs)
     assert len(grad_op.in_info) == len(grad_inputs)
+    # noinspection PyCallingNonCallable
     grad_outputs = make_var_tuple(grad_op(*grad_inputs))
     assert len(grad_op.out_info) == len(grad_outputs)
     if grad_op.num_dummy_outs > 0:
       grad_outputs = grad_outputs[:-grad_op.num_dummy_outs]  # remove any dummy outputs
 
-    def print_fn(op, x):
-      import numpy
-      first = x[(0,) * x.ndim]
-      stats = (first, x.shape, numpy.min(x), numpy.max(x), numpy.mean(x), numpy.std(x),
-               numpy.isinf(x).any(), numpy.isnan(x).any())
-      print(op.message, "first/shape/min/max/mean/std/any-inf/any-nan:", stats)
-    #input_grads = [theano.printing.Print("in grad %i" % i, global_fn=print_fn)(v)
-    #               for (i, v) in enumerate(input_grads)]
-
     return self.make_results_of_gradient(grad_outputs, disconnected_type=T.DisconnectedType())
 
   def connection_pattern(self, node):
+    """
+    For Theano.
+
+    :param node:
+    :return:
+    """
     assert len(node.inputs) == len(self.in_info)
     pattern = [[info.get("gradient", "") != "disconnected"] * len(self.out_info)
                for info in self.in_info]
     return pattern
 
   def make_node(self, *args):
+    """
+    For Theano.
+
+    :param args:
+    :return:
+    """
     assert len(args) == len(self.in_info)
     args = [self._convert_input_var(arg, info) for arg, info in zip(args, self.in_info)]
     outputs = [self.tensor_type(dtype=info.get("dtype", "float32"), ndim=info["ndim"])()
@@ -383,12 +395,27 @@ class NativeOp(NativeOpBase, NativeOpBaseMixin):
     return theano.Apply(self, args, outputs)
 
   def perform(self, node, inputs, output_storage):
+    """
+    For Theano.
+
+    :param node:
+    :param inputs:
+    :param output_storage:
+    :return:
+    """
     raise NotImplementedError("NativeOp: no pure Python implementation, only C implementation")
 
   def c_code_cache_version(self):
+    """
+    :type: tuple[int]
+    """
     return self.code_version
 
   def c_support_code(self):
+    """
+    :return: Theano C++ code
+    :rtype: str
+    """
     base_src = open(os.path.dirname(__file__) + "/NativeOp.cpp").read()
     return "\n\n".join([
       T.blas.blas_header_text(),
@@ -396,19 +423,47 @@ class NativeOp(NativeOpBase, NativeOpBaseMixin):
       base_src,
       self.c_extra_support_code])
 
+  # noinspection PyMethodMayBeStatic
   def c_libraries(self):
+    """
+    :return: Theano libs
+    :rtype: list[str]
+    """
     return T.blas.ldflags()
 
+  # noinspection PyMethodMayBeStatic
   def c_compile_args(self):
+    """
+    :return: Theano compile args
+    :rtype: list[str]
+    """
     return T.blas.ldflags(libs=False, flags=True)
 
+  # noinspection PyMethodMayBeStatic
   def c_lib_dirs(self):
+    """
+    :return: Theano lib dirs
+    :rtype: list[str]
+    """
     return T.blas.ldflags(libs=False, libs_dir=True)
 
+  # noinspection PyMethodMayBeStatic
   def c_header_dirs(self):
+    """
+    :return: Theano header dirs
+    :rtype: list[str]
+    """
     return T.blas.ldflags(libs=False, include_dir=True)
 
   def c_code(self, node, name, inputs, outputs, sub):
+    """
+    :param node:
+    :param name:
+    :param inputs:
+    :param outputs:
+    :param sub:
+    :return:
+    """
     assert len(inputs) == len(self.in_info)
     assert len(outputs) == len(self.out_info)
     return """
@@ -502,14 +557,19 @@ class NativeOp(NativeOpBase, NativeOpBaseMixin):
 
 
 class GpuNativeOp(NativeOp, GpuNativeOpBase):
+  """
+  Theano GPU native op.
+  """
 
   @classmethod
   def as_tensor_var(cls, v):
+    # noinspection PyUnresolvedReferences,PyPackageRequirements
     from theano.sandbox.cuda.basic_ops import as_cuda_ndarray_variable
     return as_cuda_ndarray_variable(v)
 
   @classmethod
   def tensor_type(cls, dtype, ndim):
+    # noinspection PyUnresolvedReferences,PyPackageRequirements
     from theano.sandbox.cuda import CudaNdarrayType
     if dtype != "float32":
       print("%s: WARNING: cannot handle type %r, will use float32 instead" % ("GpuNativeOp", dtype))
@@ -518,6 +578,7 @@ class GpuNativeOp(NativeOp, GpuNativeOpBase):
 
   @classmethod
   def contiguous(cls, v):
+    # noinspection PyUnresolvedReferences,PyPackageRequirements
     from theano.sandbox.cuda.basic_ops import gpu_contiguous
     assert isinstance(v, (theano.sandbox.cuda.CudaNdarrayVariable, theano.sandbox.cuda.CudaNdarrayConstant))
     if getattr(v, 'owner', None):
@@ -527,6 +588,9 @@ class GpuNativeOp(NativeOp, GpuNativeOpBase):
     return gpu_contiguous(v)
 
   def c_support_code(self):
+    """
+    :rtype: str
+    """
     src = open(os.path.dirname(__file__) + "/NativeOp.cpp").read()
     return "\n\n".join([
       "#define CUDA 1",
@@ -537,7 +601,7 @@ class GpuNativeOp(NativeOp, GpuNativeOpBase):
 
 if theano:
   @gof.local_optimizer([NativeOp], inplace=True)
-  def inplace_NativeOp(node):
+  def _inplace_native_op(node):
     if isinstance(node.op, NativeOp) and not node.op.destroy_map:
       kwargs = {k: getattr(node.op, k) for k in node.op.__props__}
       # TODO: We could try to make each input inplace individually.
@@ -552,6 +616,7 @@ if theano:
         return False
       new_op = node.op.__class__(**kwargs)
       from TheanoUtil import make_var_tuple
+      # noinspection PyCallingNonCallable
       new_v = make_var_tuple(new_op(*node.inputs))
       return new_v
     return False
@@ -559,7 +624,7 @@ if theano:
 
   try:
     optdb.register('inplace_NativeOp',
-                   gof.TopoOptimizer(inplace_NativeOp
+                   gof.TopoOptimizer(_inplace_native_op
                                      , failure_callback=gof.TopoOptimizer.warn_inplace
                                      ),
                    60, 'fast_run', 'inplace')
@@ -568,9 +633,10 @@ if theano:
 
 
   @try_register_gpu_opt(NativeOp)
-  def local_gpu_NativeOp(node):
+  def _local_gpu_native_op(node):
     if isinstance(node.op, NativeOp):
       # see also: https://github.com/Theano/Theano/blob/master/theano/sandbox/cuda/opt.py
+      # noinspection PyUnresolvedReferences,PyPackageRequirements
       from theano.sandbox.cuda import host_from_gpu, gpu_from_host, as_cuda_ndarray_variable
       args = node.inputs
       if any([(x.owner and x.owner.op == host_from_gpu) for x in args]):
@@ -578,6 +644,7 @@ if theano:
         args = [x.owner.inputs[0] if (x.owner and x.owner.op == host_from_gpu) else x
                 for x in args]
         from TheanoUtil import make_var_tuple
+        # noinspection PyCallingNonCallable
         outputs = make_var_tuple(gpu_op(*args))
         return [host_from_gpu(out) for out in outputs]
 
@@ -618,6 +685,7 @@ class NativeOpGenBase:
 
 
 class LstmGenericBase(NativeOpGenBase):
+  # noinspection PyUnresolvedReferences
   """
   inputs:
     :param Z: {input,output,forget} gate + cell state. 3d (time,batch,dim*4)
@@ -645,6 +713,7 @@ class LstmGenericBase(NativeOpGenBase):
      "bw_in_var": {"want_inplace": 0}},
     {"name": "d", "ndim": 2, "shape": ((2, 0), (2, 1)), "need_contiguous": True}
   )
+
   @classmethod
   def grad_input_map(cls, Z, V_h, c, i,  Y, H, d,  DY, DH, Dd):
     return (V_h, c, i,  Y, H,  DY, Dd)
@@ -849,6 +918,7 @@ class LstmGenericBase(NativeOpGenBase):
 
 
 class LstmLowMem(NativeOpGenBase):
+  # noinspection PyUnresolvedReferences
   """
   This is designed to require minimal memory during training.
   It only stores the outputs and the cell states,
@@ -1291,6 +1361,7 @@ class LstmLowMem(NativeOpGenBase):
 
 
 class NativeLstm2(NativeOpGenBase):
+  # noinspection PyUnresolvedReferences
   """
   Yet another LSTM kernel.
   This kernel is about 27% than NativeLstm,
@@ -1698,6 +1769,7 @@ class NativeLstm2(NativeOpGenBase):
 
 
 class TwoDLSTM(NativeOpGenBase):
+  # noinspection PyUnresolvedReferences
   """
   inputs:
     :param X: {input,output,forget,lambda} gate + cell state. 3d (timeT,timeS,batch,dim*5) // dim*5 or dim*1 ?
@@ -2410,7 +2482,8 @@ class TwoDLSTM(NativeOpGenBase):
     // Currently, the bias is not trained
     //Db = (1 ... 1) * delta
 
-    //copy left/right part to workmem2 and set to 0 (could be done more efficient, but profiling shows, it's not worth it)
+    //copy left/right part to workmem2 and set to 0
+    // (could be done more efficient, but profiling shows, it's not worth it)
     Ndarray_DIMS_Type H_dim = Ndarray_HOST_DIMS(H);
     const int block_size = H_dim[2] * H_dim[3];
     for(int y = 0; y < Y_dim[0]; ++y)
@@ -2595,7 +2668,8 @@ class Chunking(NativeOpGenBase):
     chunk_size = chunk_params[0]
     chunk_step = chunk_params[1]
     out, oindex = op(*inputs)
-    Dinput, _, factors = unchunk(Dout, index=oindex, chunk_size=chunk_size, chunk_step=chunk_step, n_time=n_time, n_batch=n_batch)
+    Dinput, _, factors = unchunk(
+      Dout, index=oindex, chunk_size=chunk_size, chunk_step=chunk_step, n_time=n_time, n_batch=n_batch)
     # We applied the factor in unchunk, but for this gradient, we actually don't want that, so undo it.
     Dinput /= factors.dimshuffle(0, 1, 'x')
 
@@ -3190,7 +3264,7 @@ def max_and_argmax_sparse(s0, s1, weight, mask, out_max, out_arg):
 class CrossEntropySoftmaxAndGradientZSparse(NativeOpGenBase):
   """
   y_target is given in sparse COOrdinate format.
-  We will calculate CE[t,b] = \sum_i y_target[t,b,i] * log(softmax(z[t,b])[i]),
+  We will calculate CE[t,b] = \\sum_i y_target[t,b,i] * log(softmax(z[t,b])[i]),
   for any timeframe t and batch b,
   and grad(CE[t,b], z[t,b]) = softmax(z[t,b]) - y_target[t,b].
   We also support an index-mask for z, i.e. for the possible [t,b].
@@ -3843,6 +3917,7 @@ class FastBaumWelchOp(NativeOpGenBase):
 
 
 class MultiEndFastBaumWelchOp(NativeOpGenBase):
+  # noinspection PyUnresolvedReferences
   """
   inputs:
     :param am_scores: scores in -log space. 3d (time,batch,dim)
@@ -4593,6 +4668,7 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
 
 
 class EditDistanceOp(NativeOpGenBase):
+  # noinspection PyUnresolvedReferences
   """
   Similar to :func:`tf.edit_distance`.
   Calculates the `edit distance / Levenshtein distance <https://en.wikipedia.org/wiki/Levenshtein_distance>`__.
@@ -4766,6 +4842,7 @@ class EditDistanceOp(NativeOpGenBase):
 
 
 class OptimalCompletionEditDistanceOp(NativeOpGenBase):
+  # noinspection PyUnresolvedReferences
   """
   Given some prefix ``a``, what is the minimum possible edit distance to ``b`` with any possible suffix on ``a`` ?
   This is described in `Optimal Completion Distillation (OCD) <https://arxiv.org/abs/1810.01398>`__.
@@ -4935,6 +5012,7 @@ class OptimalCompletionEditDistanceOp(NativeOpGenBase):
 
 
 class OptimalCompletionEditDistancePerSuccessorOp(NativeOpGenBase):
+  # noinspection PyUnresolvedReferences
   """
   Given some prefix ``a`` + successor,
   what is the minimum possible edit distance to ``b`` with any possible suffix on ``a`` + successor,
@@ -5174,6 +5252,7 @@ class OptimalCompletionEditDistancePerSuccessorOp(NativeOpGenBase):
 
 
 class NextEditDistanceRowOp(NativeOpGenBase):
+  # noinspection PyUnresolvedReferences
   """
   This does a single step in calculating the edit distance table, going over the symbols in ``a``.
   Note that when you have the full sequence ``a`` in advance, :class:`EditDistanceOp` should be faster.
@@ -5296,6 +5375,7 @@ class NextEditDistanceRowOp(NativeOpGenBase):
 
 
 class NextEditDistanceReduceOp(NativeOpGenBase):
+  # noinspection PyUnresolvedReferences
   """
   Code derived from :class:`NextEditDistanceRowOp`.
 

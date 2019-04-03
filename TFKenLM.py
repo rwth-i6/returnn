@@ -451,4 +451,3 @@ if __name__ == "__main__":
     output_scores = session.run(output_scores_tf, feed_dict={input_strings_tf: input_strings})
     print("input strings:", input_strings, "(sys.argv[1:])")
     print("output scores:", output_scores)
-
