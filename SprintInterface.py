@@ -9,8 +9,6 @@ Most of the other Sprint interfaces will be used automatically,
 e.g. via ExternSprintDataset, when it spawns its Sprint subprocess.
 """
 
-# We expect that Theano works in the current Python env.
-
 from __future__ import print_function
 
 import os
@@ -22,10 +20,9 @@ import numpy
 
 from SprintDataset import SprintDatasetBase
 from Log import log
-from Util import get_gpu_names
 from EngineUtil import assign_dev_data_single_seq
 import Debug
-from Util import interrupt_main, to_bool, BackendEngine
+from Util import get_gpu_names, interrupt_main, to_bool, BackendEngine
 import TaskSystem
 import rnn
 

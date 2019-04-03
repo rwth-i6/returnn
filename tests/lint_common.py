@@ -20,6 +20,7 @@ ignore_count_for_files = {
   'FunctionLoader.py',
   'HDFDataset.py',
   'Inv.py',
+  'MultiBatchBeam.py',
   'Network.py',
   'NetworkBaseLayer.py',
   'NetworkCNNLayer.py',

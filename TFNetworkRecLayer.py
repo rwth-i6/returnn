@@ -2265,7 +2265,8 @@ class _SubnetworkRecCell(object):
     from TFNetwork import TFNetwork, ExternData
     from TFNetworkLayer import InternalLayer
     self.output_layers_net = TFNetwork(
-      name="%s/%s:rec-subnet-output" % (self.parent_net.name, self.parent_rec_layer.name if self.parent_rec_layer else "?"),
+      name="%s/%s:rec-subnet-output" % (
+        self.parent_net.name, self.parent_rec_layer.name if self.parent_rec_layer else "?"),
       extern_data=ExternData(),
       train_flag=self.parent_net.train_flag,
       search_flag=self.parent_net.search_flag,

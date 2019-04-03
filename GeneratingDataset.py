@@ -12,6 +12,7 @@ from Log import log
 import numpy
 import re
 import sys
+import typing
 
 
 class GeneratingDataset(Dataset):
@@ -35,7 +36,7 @@ class GeneratingDataset(Dataset):
     self.num_inputs = input_dim
     output_dim = convert_data_dims(output_dim, leave_dict_as_is=False)
     if "data" not in output_dim and input_dim is not None:
-      output_dim["data"] = [input_dim * self.window, 2]  # not sparse
+      output_dim["data"] = (input_dim * self.window, 2)  # not sparse
     self.num_outputs = output_dim
     self.expected_load_seq_start = 0
     self._num_seqs = num_seqs
@@ -321,6 +322,9 @@ class TaskXmlModelingDataset(GeneratingDataset):
     self.limit_stack_depth = limit_stack_depth
 
   def generate_input_seq(self):
+    """
+    :rtype: list[int]
+    """
     # Because this is a prediction task, start with blank,
     # and the output seq should predict the next char after the blank.
     seq = " "
@@ -329,7 +333,7 @@ class TaskXmlModelingDataset(GeneratingDataset):
       if not xml_stack or (len(xml_stack) < self.limit_stack_depth and self.random.rand() > 0.6):
         tag_len = self.random.randint(1, 10)
         tag = "".join([self.random.choice(list(self._input_classes[4:]))
-                       for i in range(tag_len)])
+                       for _ in range(tag_len)])
         seq += "<%s>" % tag
         xml_stack += [tag]
       else:
@@ -344,7 +348,6 @@ class TaskXmlModelingDataset(GeneratingDataset):
     :type input_seq: list[int]
     :rtype: list[int]
     """
-    input_classes = cls._input_classes
     input_seq_str = "".join(cls._input_classes[i] for i in input_seq)
     xml_stack = []
     output_seq_str = ""
@@ -601,8 +604,10 @@ class DummyDataset(GeneratingDataset):
 
 class DummyDatasetMultipleSequenceLength(DummyDataset):
 
-  def __init__(self, input_dim, output_dim, num_seqs, seq_len={'data': 10, 'classes':20},
+  def __init__(self, input_dim, output_dim, num_seqs, seq_len=None,
                input_max_value=10.0, input_shift=None, input_scale=None, **kwargs):
+    if seq_len is None:
+      seq_len = {'data': 10, 'classes': 20}
     super(DummyDatasetMultipleSequenceLength, self).__init__(
       input_dim=input_dim,
       output_dim=output_dim,
@@ -611,8 +616,7 @@ class DummyDatasetMultipleSequenceLength(DummyDataset):
       input_max_value=input_max_value,
       input_shift=input_shift,
       input_scale=input_scale,
-      **kwargs
-    )
+      **kwargs)
 
   def generate_seq(self, seq_idx):
     seq_len_data = self.seq_len['data']
@@ -1305,6 +1309,7 @@ class TimitDataset(CachedDataset2):
         last_print_time = time.time()
       time.sleep(1)
 
+  # noinspection PyMethodMayBeStatic
   def _demo_audio_play(self, audio, sample_rate):
     """
     :param numpy.ndarray audio: shape (sample_len,)
@@ -1313,6 +1318,7 @@ class TimitDataset(CachedDataset2):
     assert audio.dtype == numpy.float32
     assert audio.ndim == 1
     try:
+      # noinspection PyPackageRequirements
       import pyaudio
     except ImportError:
       print("pip3 install --user pyaudio")
@@ -1399,6 +1405,7 @@ class NltkTimitDataset(TimitDataset):
     self._nltk_download_dir = nltk_download_dir
     super(NltkTimitDataset, self).__init__(timit_dir=None, **kwargs)
 
+  # noinspection PyPackageRequirements
   def _init_timit(self):
     """
     Sets self._seq_tags, _num_seqs, _seq_order, and _timit_dir.
@@ -1703,15 +1710,16 @@ class BytePairEncoding(Vocabulary):
 
   def recursive_split(self, segment, bpe_codes, vocab, separator, final=False):
     """Recursively split segment into smaller units (by reversing BPE merges)
-    until all units are either in-vocabulary, or cannot be split futher."""
+    until all units are either in-vocabulary, or cannot be split further."""
 
+    # noinspection PyBroadException
     try:
       if final:
         left, right = bpe_codes[segment + '</w>']
         right = right[:-4]
       else:
         left, right = bpe_codes[segment]
-    except Exception:
+    except Exception:  # TODO fix
       # sys.stderr.write('cannot split {0} further.\n'.format(segment))
       yield segment
       return
@@ -1837,8 +1845,8 @@ class BlissDataset(CachedDataset2):
     self._with_delta = with_delta
     self.num_inputs *= (1 + with_delta)
     self._bpe_file = open(bpe_file, "r")
-    self._seqs = []  # type: list[BlissDataset.SeqInfo]
-    self._vocab = {}  # type: dict[str,int]  # set in self._parse_vocab
+    self._seqs = []  # type: typing.List[BlissDataset.SeqInfo]
+    self._vocab = {}  # type: typing.Dict[str,int]  # set in self._parse_vocab
     self._parse_bliss_xml(filename=path)
     # TODO: loading audio like in TimitDataset, and in parallel
     self._bpe = BytePairEncoding(vocab_file=vocab_file, bpe_file=bpe_file)
@@ -1857,12 +1865,12 @@ class BlissDataset(CachedDataset2):
     """
     # Also see LmDataset._iter_bliss.
     import gzip
-    import xml.etree.ElementTree as etree
+    import xml.etree.ElementTree as ElementTree
     corpus_file = open(filename, 'rb')
     if filename.endswith(".gz"):
       corpus_file = gzip.GzipFile(fileobj=corpus_file)
     SeqInfo = self.SeqInfo
-    context = iter(etree.iterparse(corpus_file, events=('start', 'end')))
+    context = iter(ElementTree.iterparse(corpus_file, events=('start', 'end')))
     elem_tree = []
     name_tree = []
     cur_recording = None
@@ -2013,7 +2021,7 @@ class LibriSpeechCorpus(CachedDataset2):
     from glob import glob
     import os
     import zipfile
-    transs = {}  # type: dict[(str,int,int,int),str]  # (subdir, speaker-id, chapter-id, seq-id) -> transcription
+    transs = {}  # type: typing.Dict[typing.Tuple[str,int,int,int],str]  # (subdir, speaker-id, chapter-id, seq-id) -> transcription  # nopep8
     if self.use_zip:
       for name, zip_file in self._zip_files.items():
         assert isinstance(zip_file, zipfile.ZipFile)
