@@ -2777,10 +2777,10 @@ def dot(a, b, transpose_b=False):
     assert b_ndim is not None
     if b_ndim == 0:
       return tf.scalar_mul(b, a)
-    a = check_dim_equal(a, -1, b, 0)
+    a = check_dim_equal(a, -1, b, -1 if transpose_b else 0)
     if a_ndim == b_ndim == 1:
       return tf.reduce_sum(a * b)
-    d = get_shape_dim(b, -1) if transpose_b else get_shape_dim(b, 0)
+    d = get_shape_dim(b, -1 if transpose_b else 0)
     assert a_ndim >= 2 and b_ndim >= 2
     res_shape = None
     if a_ndim > 2 or b_ndim > 2:
