@@ -3612,13 +3612,11 @@ class ChoiceLayer(LayerBase):
     """
     if isinstance(d["target"], str):
       d["target"] = [d["target"]]
-    if not network.search_flag:
-      network.used_data_keys.update(d["target"])
-      if not d.get("scheduled_sampling"):
-        # In the dependency graph, we don't want it.
-        # This can enable some optimizations in the RecLayer.
-        # We do it here because we should know about the deps early in the template creation in RecLayer.
-        d["from"] = []
+    if not network.search_flag and not d.get("scheduled_sampling"):
+      # In the dependency graph, we don't want it.
+      # This can enable some optimizations in the RecLayer.
+      # We do it here because we should know about the deps early in the template creation in RecLayer.
+      d["from"] = []
     if d.get("explicit_search_source"):
       d["explicit_search_source"] = get_layer(d["explicit_search_source"]) if network.search_flag else None
     super(ChoiceLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
