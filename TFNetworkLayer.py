@@ -437,6 +437,13 @@ class LayerBase(object):
           # Not resolving this in the dict as target, but call get_layer to make it available.
           if target.startswith("layer:"):
             target_layers[target] = get_layer(target[len("layer:"):])
+          else:
+            # Note: This is a workaround for cases where we need to know about used data keys before the layer
+            # itself is constructed (e.g. in _SubnetworkRecCell.get_output).
+            # A nicer solution would be to not modify this here,
+            # but instead lazily handle it in TFNetwork.get_extern_data,
+            # such that we do not need to know in advance which data keys we need.
+            network.used_data_keys.add(target)
     if "n_out" not in d and targets and network.eval_flag:
       # Must be done here now because loss might be set to None later.
       target = targets[0]  # guess using first target
