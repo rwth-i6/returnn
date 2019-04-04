@@ -362,6 +362,7 @@ class RecLayer(_ConcatInputLayer):
     else:
       cudnn_rnn = None
 
+    # noinspection PyShadowingNames
     def maybe_add(key, v):
       """
       :param str key:
@@ -1227,6 +1228,7 @@ class _SubnetworkRecCell(object):
       # Special case for the 'end' layer.
       from TFUtil import constant_with_shape
       return constant_with_shape(False, shape=[batch_dim], name="initial_end")
+    # noinspection PyProtectedMember
     with reuse_name_scope(self.parent_rec_layer._rec_scope):
       with cl.cls_layer_scope(name):
         return cl.get_rec_initial_output(

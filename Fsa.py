@@ -1162,7 +1162,7 @@ def fast_bw_fsa_staircase(seq_lens, with_loop=False, max_skip=None, start_max_sk
   Builds up a staircase FSA, returns a FastBaumWelchBatchFsa.
   The emissions are indices [0, ..., seq_len - 1].
 
-  :param list[int] seq_lens:
+  :param list[int]|numpy.ndarray seq_lens:
   :param bool with_loop:
   :param int|list[int] max_skip: per batch if a list
   :param int|list[int] start_max_skip: per batch if a list

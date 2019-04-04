@@ -92,6 +92,9 @@ class OpMaker(object):
 
   @classmethod
   def cuda_blas_gemm_so_filename(cls):
+    """
+    :rtype: str
+    """
     from tensorflow.contrib.rnn.python.ops import lstm_ops
     lstm_ops_so = "%s/_lstm_ops.so" % os.path.dirname(lstm_ops.__file__)
     assert os.path.exists(lstm_ops_so)
@@ -119,14 +122,23 @@ class OpMaker(object):
 
   @property
   def op_name(self):
+    """
+    :rtype: str
+    """
     return self.name
 
   @property
   def cache_key(self):
+    """
+    :rtype: str
+    """
     return self.name
 
   @property
   def support_native_op_cpp_filename(self):
+    """
+    :rtype: str
+    """
     my_dir = os.path.abspath(os.path.dirname(__file__) or os.getcwd())
     my_dir = os.path.realpath(my_dir)  # Make canonical path-name.
     support_native_op_cpp_filename = "%s/NativeOp.cpp" % my_dir
@@ -146,6 +158,7 @@ class OpMaker(object):
     # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/kernels/debug_ops.h  CopyOp...
     # http://stackoverflow.com/questions/37565367/designing-an-accumulating-tensorflow-gpu-operator
     # We also include NativeOp.cpp.
+    # noinspection PyProtectedMember
     in_info, out_info, _ = NativeOp.NativeOp._resolve_want_inplace_dummy(
       in_info=self.description.in_info, out_info=self.description.out_info)
     out_is_ref = dict()  # output vars which are inplace, out_name -> in_idx
@@ -158,33 +171,55 @@ class OpMaker(object):
         out_name = out_info[out_idx]["name"]
         assert out_name not in out_is_ref
         out_is_ref[out_name] = in_idx
+
+    # noinspection PyShadowingNames
     def map_name(v, is_out=False):
+      """
+      :param dict[str] v:
+      :param bool is_out:
+      :rtype: str
+      """
       name = v["name"].lower()
       if is_out:
         # Maybe it clashes with some input name. TF doesn't allow the same name.
         if any([v["name"].lower() == name for v in in_info]):
           name = "out_%s" % name
       return name
+
+    # noinspection PyShadowingNames,PyUnusedLocal
     def map_type(v, is_out=False):
+      """
+      :param dict[str] v:
+      :param bool is_out:
+      :rtype: str
+      """
       t = v.get("dtype", "float32")
       return t
+
     code_register_op_io = ""
     for v in in_info:
       code_register_op_io += ".Input(\"%s: %s\")\n" % (map_name(v), map_type(v))
     for v in out_info:
       code_register_op_io += ".Output(\"%s: %s\")\n" % (map_name(v, is_out=True), map_type(v, is_out=True))
     code_set_out_shape = ""
+
     def make_dim_str(c):
+      """
+      :param (int,int)|int c:
+      :rtype: str
+      """
       if isinstance(c, tuple):
-        in_idx, in_dim = c
-        return "c->Dim(c->input(%i), %i)" % (in_idx, in_dim)
+        in_idx_, in_dim = c
+        return "c->Dim(c->input(%i), %i)" % (in_idx_, in_dim)
       elif isinstance(c, int):
         return str(c)
       else:
         raise Exception("type: %s" % type(c))
+
     for i, v in enumerate(in_info):
       code_set_out_shape += """
-      if(c->Rank(c->input(%(idx)i)) != tensorflow::shape_inference::InferenceContext::kUnknownRank && c->Rank(c->input(%(idx)i)) != %(rank)i)
+      if(c->Rank(c->input(%(idx)i)) != tensorflow::shape_inference::InferenceContext::kUnknownRank
+           && c->Rank(c->input(%(idx)i)) != %(rank)i)
         return errors::InvalidArgument(
           "wrong rank for input (%(idx)i) '%(name)s'. required %(rank)i but got ", c->Rank(c->input(%(idx)i)));
       """ % {"idx": i, "rank": v["ndim"], "name": v["name"]}
@@ -235,15 +270,16 @@ class OpMaker(object):
       out_idx = v.get("want_inplace", -1)
       if out_idx >= 0:  # is ref
         # mutable_input if it is a ref-type, i.e. a Variable.
-        #code_set_io += "Ndarray mutable_input_%i = context->mutable_input(%i, false);\n" % (in_idx, in_idx)
-        #code_set_io += "inputs[%i] = &mutable_input_%i;\n" % (in_idx, in_idx)
+        # code_set_io += "Ndarray mutable_input_%i = context->mutable_input(%i, false);\n" % (in_idx, in_idx)
+        # code_set_io += "inputs[%i] = &mutable_input_%i;\n" % (in_idx, in_idx)
         # Maybe we could use a TemporaryVariable or so but not sure if the gradient will flow through tf.assign().
         # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/ops/state_ops.cc
         # but a normal tensor is never mutable, thus create a copy of the input now.
         code_set_io += "Ndarray* output_%i = NULL;\n" % (out_idx,)
         cshape = "TensorShape({%s})" % ", ".join(["context->input(%i).dim_size(%i)" % (in_idx, in_dim)
                                                   for in_dim in range(len(v["shape"]))])
-        code_set_io += "OP_REQUIRES_OK(context, context->allocate_output(%i, %s, &output_%i));\n" % (out_idx, cshape, out_idx)
+        code_set_io += "OP_REQUIRES_OK(context, context->allocate_output(%i, %s, &output_%i));\n" % (
+          out_idx, cshape, out_idx)
         code_set_io += "inputs[%i] = output_%i;\n" % (in_idx, out_idx)
         # We always make a copy for now.
         # I'm not sure if inplace is an option for TF because we don't know if any other operation in the graph
@@ -265,7 +301,8 @@ class OpMaker(object):
         code_set_io += "outputs[%i] = &output_%i;\n" % (out_idx, out_idx)
         cshape = "TensorShape({%s})" % ", ".join(["inputs[%i]->dim_size(%i)" % (in_idx, in_dim)
                                                   for (in_idx, in_dim) in v["shape"]])
-        code_set_io += "OP_REQUIRES_OK(context, context->allocate_output(%i, %s, &output_%i));\n" % (out_idx, cshape, out_idx)
+        code_set_io += "OP_REQUIRES_OK(context, context->allocate_output(%i, %s, &output_%i));\n" % (
+          out_idx, cshape, out_idx)
         code_set_io += "Ndarray_set_zero(*outputs[%i]);\n" % out_idx
 
     code_user = self.description.c_fw_code % {"fail": "assert(false);"}
@@ -277,6 +314,7 @@ class OpMaker(object):
     for v in in_info:
       if v.get("host_memory", False):
         register_gpu_kernel_opts += """.HostMemory("%s")\n""" % map_name(v)
+    # noinspection PyProtectedMember
     format_args = {
       "op_name": self.op_name,
       "code_register_op_io": code_register_op_io,
@@ -480,6 +518,9 @@ class OpMaker(object):
     return mod
 
   def make_op(self):
+    """
+    :return: op
+    """
     with self.global_lock:
       if self.cache_key in self.op_cache:
         return self.op_cache[self.cache_key]
@@ -497,6 +538,7 @@ class OpMaker(object):
         grad_op = grad_op_maker.make_op()
 
         from tensorflow.python.framework import ops
+
         def grad_wrapper(fwd_op, *bwd_grads):
           """
           :param tf.Operation fwd_op: for fwd_op.inputs and fwd_op.outputs
@@ -507,6 +549,7 @@ class OpMaker(object):
           assert len(bwd_grads) == len(fwd_op.outputs)
 
           grad_inputs = list(fwd_op.inputs) + list(fwd_op.outputs) + list(bwd_grads)
+          # noinspection PyProtectedMember
           grad_inputs = self.description._filter_grad_inputs(grad_inputs)
           grad_outputs = TFUtil.make_var_tuple(grad_op(*grad_inputs))
           if grad_description.num_dummy_outs > 0:
@@ -553,7 +596,7 @@ def load_dump_file(filename):
     dtype_size = _read_uint64()
     assert dtype.itemsize == dtype_size, "dtype %r %r: %r != %r" % (dtype_name, dtype, dtype.itemsize, dtype_size)
     ndim = _read_uint64()
-    dims = [_read_uint64() for i in range(ndim)]
+    dims = [_read_uint64() for _ in range(ndim)]
     data = _read_bytes()
     assert len(data) == numpy.prod(dims) * dtype.itemsize
     # noinspection PyTypeChecker
@@ -584,6 +627,10 @@ def make_lstm_op(**kwargs):
 
 
 class RecSeqCellOp(object):
+  """
+  In TF terminology, this is a "fused" cell, i.e. the op loops over the time.
+  Similar is e.g. :class:`tf.contrib.rnnLSTMBlockFusedCell`.
+  """
   does_input_projection = False
   does_direction_handling = False
 
@@ -608,6 +655,9 @@ class RecSeqCellOp(object):
 
   @property
   def state_size(self):
+    """
+    :rtype: int|tuple[int]
+    """
     return self.n_hidden
 
   def __call__(self, inputs, index, initial_state=None, recurrent_weights_initializer=None):
@@ -623,6 +673,10 @@ class RecSeqCellOp(object):
 
 
 class NativeLstmCell(RecSeqCellOp):
+  """
+  Native LSTM.
+  """
+
   def __init__(self, **kwargs):
     super(NativeLstmCell, self).__init__(**kwargs)
     self.n_input_dim_parts = [self.n_hidden] * 4
@@ -630,17 +684,18 @@ class NativeLstmCell(RecSeqCellOp):
     self.op = make_lstm_op()
 
   @classmethod
-  def map_layer_inputs_to_op(cls, Z, V_h, i, initial_state=None):
+  def map_layer_inputs_to_op(cls, z, rec_weights, i, initial_state=None):
     """
     Just like NativeOp.LstmGenericBase.map_layer_inputs_to_op().
-    :param tf.Tensor Z: inputs: shape (time,batch,n_hidden*4)
-    :param tf.Tensor V_h: W_re: shape (n_hidden,n_hidden*4)
+
+    :param tf.Tensor z: Z: inputs: shape (time,batch,n_hidden*4)
+    :param tf.Tensor rec_weights: V_h / W_re: shape (n_hidden,n_hidden*4)
     :param tf.Tensor i: index: shape (time,batch)
     :param tf.Tensor|None initial_state: shape (batch,n_hidden)
     :rtype: (tf.Tensor,tf.Tensor,tf.Tensor,tf.Tensor)
     """
-    assert Z.get_shape().ndims == 3
-    assert V_h.get_shape().ndims == 2
+    assert z.get_shape().ndims == 3
+    assert rec_weights.get_shape().ndims == 2
     assert i.get_shape().ndims == 2
     if i.dtype != tf.float32:
       if not hasattr(i, "cast_float32"):
@@ -649,8 +704,8 @@ class NativeLstmCell(RecSeqCellOp):
           i_cast_float32 = tf.cast(i, dtype=tf.float32, name="index_cast_float32")
         i.cast_float32 = i_cast_float32
       i = i.cast_float32
-    n_batch = tf.shape(Z)[1]
-    n_out = tf.shape(V_h)[0]
+    n_batch = tf.shape(z)[1]
+    n_out = tf.shape(rec_weights)[0]
     if initial_state is not None:
       from tensorflow.python.ops.nn import rnn_cell
       if isinstance(initial_state, rnn_cell.LSTMStateTuple):
@@ -658,7 +713,7 @@ class NativeLstmCell(RecSeqCellOp):
       c = initial_state
     else:
       c = tf.zeros((n_batch, n_out), dtype=tf.float32)
-    return Z, V_h, c, i
+    return z, rec_weights, c, i
 
   def __call__(self, inputs, index, initial_state=None, recurrent_weights_initializer=None):
     """
@@ -669,15 +724,18 @@ class NativeLstmCell(RecSeqCellOp):
     :returns: shape (time,batch,n_hidden), shape (batch,n_hidden)
     :rtype: (tf.Tensor, tf.Tensor)
     """
-    W_re = tf.get_variable(
+    rec_weights = tf.get_variable(
       name="W_re", shape=(self.n_hidden, self.n_hidden * 4), initializer=recurrent_weights_initializer)
-    TFUtil.set_param_axes_split_info(W_re, [[self.n_hidden], [self.n_hidden] * 4])
+    TFUtil.set_param_axes_split_info(rec_weights, [[self.n_hidden], [self.n_hidden] * 4])
     out, _, final_state = self.op(
-      *self.map_layer_inputs_to_op(Z=inputs, V_h=W_re, i=index, initial_state=initial_state))
+      *self.map_layer_inputs_to_op(z=inputs, rec_weights=rec_weights, i=index, initial_state=initial_state))
     return out, final_state
 
 
 class NativeLstmLowMemCell(RecSeqCellOp):
+  """
+  Native LSTM, low mem variant.
+  """
   does_input_projection = True
   does_direction_handling = True
 
@@ -686,18 +744,18 @@ class NativeLstmLowMemCell(RecSeqCellOp):
     self.op = make_op(NativeOp.LstmLowMem)
     assert not self.input_is_sparse, "not supported"
 
-  def map_layer_inputs_to_op(self, X, W, b, i, initial_state=None):
+  def map_layer_inputs_to_op(self, x, weights, b, i, initial_state=None):
     """
     Just like NativeOp.LstmGenericBase.map_layer_inputs_to_op().
-    :param tf.Tensor X: inputs: shape (time,batch,n_input_dim)
-    :param tf.Tensor W: shape (n_input_dim+n_hidden,n_hidden*4)
+    :param tf.Tensor x: inputs: shape (time,batch,n_input_dim)
+    :param tf.Tensor weights: shape (n_input_dim+n_hidden,n_hidden*4)
     :param tf.Tensor b: shape (n_hidden*4,)
     :param tf.Tensor i: index: shape (time,batch)
     :param tf.Tensor|None initial_state: shape (batch,n_hidden)
     :rtype: tuple[tf.Tensor]
     """
-    X.set_shape(tf.TensorShape([None, None, self.n_input_dim]))
-    W.set_shape(tf.TensorShape([self.n_input_dim + self.n_hidden, self.n_hidden * 4]))
+    x.set_shape(tf.TensorShape([None, None, self.n_input_dim]))
+    weights.set_shape(tf.TensorShape([self.n_input_dim + self.n_hidden, self.n_hidden * 4]))
     i.set_shape(tf.TensorShape([None, None]))
     if i.dtype != tf.float32:
       if not hasattr(i, "cast_float32"):
@@ -706,7 +764,7 @@ class NativeLstmLowMemCell(RecSeqCellOp):
           i_cast_float32 = tf.cast(i, dtype=tf.float32, name="index_cast_float32")
         i.cast_float32 = i_cast_float32
       i = i.cast_float32
-    n_batch = tf.shape(X)[1]
+    n_batch = tf.shape(x)[1]
     if initial_state is not None:
       c0 = initial_state
     else:
@@ -715,7 +773,7 @@ class NativeLstmLowMemCell(RecSeqCellOp):
     y0 = tf.zeros((n_batch, self.n_hidden), dtype=tf.float32, name="initial_h")
     start = tf.constant(0, name="start")
     step = tf.constant(self.step or 1, name="step")
-    return X, W, b, y0, c0, i, start, step
+    return x, weights, b, y0, c0, i, start, step
 
   def __call__(self, inputs, index, initial_state=None, recurrent_weights_initializer=None):
     """
@@ -726,17 +784,21 @@ class NativeLstmLowMemCell(RecSeqCellOp):
     :returns: shape (time,batch,n_hidden), shape (batch,n_hidden)
     :rtype: (tf.Tensor, tf.Tensor)
     """
-    W = tf.get_variable(
+    weights = tf.get_variable(
       name="W", shape=(self.n_input_dim + self.n_hidden, self.n_hidden * 4), initializer=recurrent_weights_initializer)
     b = tf.get_variable(name="b", shape=(self.n_hidden * 4,), initializer=tf.zeros_initializer())
-    TFUtil.set_param_axes_split_info(W, [[self.n_input_dim, self.n_hidden], [self.n_hidden] * 4])
+    TFUtil.set_param_axes_split_info(weights, [[self.n_input_dim, self.n_hidden], [self.n_hidden] * 4])
     TFUtil.set_param_axes_split_info(b, [[self.n_hidden] * 4])
     out, _, final_state = self.op(
-      *self.map_layer_inputs_to_op(X=inputs, W=W, b=b, i=index, initial_state=initial_state))
+      *self.map_layer_inputs_to_op(x=inputs, weights=weights, b=b, i=index, initial_state=initial_state))
     return out, final_state
 
 
 class NativeLstm2(RecSeqCellOp):
+  """
+  Native LSTM 2.
+  See :class:`NativeOp.NativeLstm2`.
+  """
   does_input_projection = False
   does_direction_handling = True
 
@@ -765,15 +827,16 @@ class NativeLstm2(RecSeqCellOp):
     :rtype: (tf.Tensor, tf.Tensor)
     """
     from tensorflow.python.ops.nn import rnn_cell
-    W = tf.get_variable(
+    weights = tf.get_variable(
       name="W_re", shape=(self.n_hidden, self.n_hidden * 4), initializer=recurrent_weights_initializer)
-    TFUtil.set_param_axes_split_info(W, [[self.n_hidden], [self.n_hidden] * 4])
+    TFUtil.set_param_axes_split_info(weights, [[self.n_hidden], [self.n_hidden] * 4])
     if self.rec_weight_dropout:
       from TFUtil import dropout
-      W = dropout(W, keep_prob=1.0 - self.rec_weight_dropout, cond_on_train=True,
-                  seed=TFUtil.get_random_seed())
+      weights = dropout(
+        weights, keep_prob=1.0 - self.rec_weight_dropout, cond_on_train=True,
+        seed=TFUtil.get_random_seed())
     inputs.set_shape(tf.TensorShape([None, None, self.n_hidden * 4]))
-    W.set_shape(tf.TensorShape([self.n_hidden, self.n_hidden * 4]))
+    weights.set_shape(tf.TensorShape([self.n_hidden, self.n_hidden * 4]))
     index.set_shape(tf.TensorShape([None, None]))
     from TFUtil import to_float32
     index = to_float32(index)
@@ -789,7 +852,7 @@ class NativeLstm2(RecSeqCellOp):
       y0 = tf.zeros((n_batch, self.n_hidden), dtype=tf.float32, name="initial_h")
     start = tf.constant(0, name="start")
     step = tf.constant(self.step or 1, name="step")
-    out, _, _, final_cell_state = self.op(inputs, W, y0, c0, index, start, step)
+    out, _, _, final_cell_state = self.op(inputs, weights, y0, c0, index, start, step)
     if out.get_shape().as_list()[0] is None or out.get_shape().as_list()[0] > 0:
       final_output = out[-1]
     else:
@@ -798,7 +861,12 @@ class NativeLstm2(RecSeqCellOp):
 
 
 class TwoDNativeLstmCell(RecSeqCellOp):
+  """
+  Native 2D LSTM.
+  """
+
   does_input_projection = True
+
   def __init__(self, pooling, **kwargs):
     super(TwoDNativeLstmCell, self).__init__(**kwargs)
     self.pooling = pooling
@@ -878,7 +946,6 @@ class TwoDNativeLstmCell(RecSeqCellOp):
     :returns: shape (src_len, batch, n_hidden), shape(trg_len, src_len, batch, n_hidden), shape (trg_len, src_len, batch, n_hidden*5)
     :rtype: (tf.Tensor, tf.Tensor)
     """
-
     Vh_re = tf.get_variable(
       name="Vh_re", shape=(self.n_hidden, self.n_hidden * 5), initializer=recurrent_weights_initializer)
     Vv_re = tf.get_variable(
@@ -1039,14 +1106,18 @@ def tf_fast_bw_fsa_staircase(seq_lens, **opts):
   """
   from Fsa import fast_bw_fsa_staircase
 
-  def tf_fast_bw_fsa_staircase_wrapper(seq_lens):
-    fsa = fast_bw_fsa_staircase(seq_lens, **opts)
-    assert fsa.start_end_states.shape == (2, len(seq_lens)), "shape missmatch %r, n_batch %r, seq lens %r" % (
-      fsa.start_end_states.shape, len(seq_lens), seq_lens)
+  def py_fast_bw_fsa_staircase_wrapper(seq_lens_):
+    """
+    :param numpy.ndarray seq_lens_:
+    :rtype: (numpy.ndarray,numpy.ndarray,numpy.ndarray)
+    """
+    fsa = fast_bw_fsa_staircase(seq_lens_, **opts)
+    assert fsa.start_end_states.shape == (2, len(seq_lens_)), "shape mismatch %r, n_batch %r, seq lens %r" % (
+      fsa.start_end_states.shape, len(seq_lens_), seq_lens_)
     return fsa.edges.astype("int32"), fsa.weights.astype("float32"), fsa.start_end_states.astype("int32")
 
   edges, weights, start_end_states = tf.py_func(
-    tf_fast_bw_fsa_staircase_wrapper,
+    py_fast_bw_fsa_staircase_wrapper,
     [seq_lens],
     [tf.int32, tf.float32, tf.int32],
     stateful=False)
@@ -1167,10 +1238,21 @@ def edit_distance_via_next_edit_distance_row(a, a_len, b, b_len, optimal_complet
   with tf.name_scope("edit_distance_via_next_edit_distance_row"):
     initial_row = expand_dims_unbroadcast(tf.range(tf.shape(b)[1] + 1), axis=0, dim=tf.shape(b)[0])  # (B,time2+1)
 
+    # noinspection PyUnusedLocal
     def cond(i, last_row):
+      """
+      :param tf.Tensor i:
+      :param tf.Tensor last_row:
+      :rtype: tf.Tensor
+      """
       return tf.less(i, tf.shape(a)[1])
 
     def body(i, last_row):
+      """
+      :param tf.Tensor i:
+      :param tf.Tensor last_row:
+      :rtype: (tf.Tensor,tf.Tensor)
+      """
       a_ended = tf.greater_equal(i, a_len)  # (B,)
       a_cur = a[:, i]  # (B,). would be more efficient via tf.TensorArray, but this is for demo only anyway
       next_row = next_edit_distance_row(a=a_cur, a_n=i, a_ended=a_ended, b=b, b_len=b_len, last_row=last_row)
@@ -1266,6 +1348,10 @@ def _debug_dumped_fast_baum_welch(prefix, postfix=".dump"):
 
 
 def have_blocksparse_requirements():
+  """
+  :return: whether we can use the OpenAI blocksparse module
+  :rtype: bool
+  """
   import TFUtil
   if not TFUtil.is_gpu_available():
     return False
@@ -1276,6 +1362,9 @@ def have_blocksparse_requirements():
 
 
 def init_blocksparse(with_native_module=True):
+  """
+  :param bool with_native_module:
+  """
   import TFUtil
   if with_native_module:
     assert TFUtil.is_gpu_available(), "we currently need a GPU"
@@ -1294,6 +1383,9 @@ def init_blocksparse(with_native_module=True):
 
 
 def demo():
+  """
+  Simple demo for testing the compilation.
+  """
   print("TFNativeOp demo")
   TFUtil.CudaEnv.verbose_find_cuda = True
   print("CUDA path: %s" % TFUtil.CudaEnv.get_instance().cuda_path)

@@ -244,13 +244,14 @@ class NativeOpBaseMixin(object):
 
   def make_results_of_gradient(self, grad_op_outputs, disconnected_type=None):
     """
-    :param list[T] grad_op_outputs: this is already with dummy outputs removed
+    :param list[T]|tuple[T] grad_op_outputs: this is already with dummy outputs removed
     :param S disconnected_type:
     :return: gradient for each input of our op
     :rtype: list[T|S]
     """
     if disconnected_type is None:
-      disconnected_type = lambda: None
+      def disconnected_type():
+        """Dummy"""
     grad_op_outputs = list(grad_op_outputs)
     results = []
     for info in self.in_info:
