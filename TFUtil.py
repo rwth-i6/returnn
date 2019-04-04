@@ -2784,7 +2784,9 @@ def dot(a, b, transpose_b=False):
     assert a_ndim >= 2 and b_ndim >= 2
     res_shape = None
     if a_ndim > 2 or b_ndim > 2:
-      res_shape = [get_shape_dim(a, i) for i in range(0, a_ndim - 1)] + [get_shape_dim(b, i) for i in range(1, b_ndim)]
+      res_shape = (
+        [get_shape_dim(a, i) for i in range(0, a_ndim - 1)] +
+        [get_shape_dim(b, i + (0 if transpose_b else 1)) for i in range(0, b_ndim - 1)])
     if a_ndim > 2:
       a = tf.reshape(a, (-1, d))
     if b_ndim > 2:
