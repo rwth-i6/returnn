@@ -910,18 +910,18 @@ class _SubnetworkRecCell(object):
         :rtype: LayerBase
         """
         # _TemplateLayer already created in get_templated_layer.
-        layer = self.layer_data_templates[name]
+        layer_ = self.layer_data_templates[name]
         layer_desc = layer_desc.copy()
         layer_desc["name"] = name
         layer_desc["network"] = self.net
-        layer.kwargs = layer_desc  # set it now already for better debugging
-        if layer not in ConstructCtx.partially_finished:
-          ConstructCtx.partially_finished.append(layer)
+        layer_.kwargs = layer_desc  # set it now already for better debugging
+        if layer_ not in ConstructCtx.partially_finished:
+          ConstructCtx.partially_finished.append(layer_)
         output = layer_class.get_out_data_from_opts(**layer_desc)
-        layer.init(layer_class=layer_class, output=output, **layer_desc)
+        layer_.init(layer_class=layer_class, output=output, **layer_desc)
         if lself.returned_none_count == 0:
-          ConstructCtx.partially_finished.remove(layer)
-        return layer
+          ConstructCtx.partially_finished.remove(layer_)
+        return layer_
 
       # noinspection PyMethodParameters
       def __call__(lself, name):
@@ -1240,6 +1240,7 @@ class _SubnetworkRecCell(object):
     template_layer = self.layer_data_templates[name]
     cl = template_layer.layer_class_type
     assert issubclass(cl, LayerBase)
+    # noinspection PyProtectedMember
     with reuse_name_scope(self.parent_rec_layer._rec_scope):
       with cl.cls_layer_scope(name):
         batch_dim = template_layer.get_batch_dim()
@@ -1361,6 +1362,7 @@ class _SubnetworkRecCell(object):
       input_beam_size = None  # type: typing.Optional[int]
       if rec_layer.input_data:
         with tf.name_scope("source_tensor_array"):
+          # noinspection PyProtectedMember
           source, input_seq_len = rec_layer._get_input()  # source will be (time,batch,..,dim)
           source_shape = tf.shape(source, name="source_shape")
           source_ta = tf.TensorArray(
@@ -1409,8 +1411,9 @@ class _SubnetworkRecCell(object):
       for key in sorted(used_keys):
         # TODO: Better check for train_flag.
         # Maybe more generic via sampling options later.
+        # noinspection PyProtectedMember
         if key == rec_layer.target and (
-            rec_layer.network.train_flag is False or self.parent_net.search_flag) and not rec_layer._cheating:
+              rec_layer.network.train_flag is False or self.parent_net.search_flag) and not rec_layer._cheating:
           continue
         data = rec_layer.network.get_extern_data(key, mark_data_key_as_used=True)
         data_placeholder = data.get_placeholder_as_time_major()
@@ -1419,15 +1422,19 @@ class _SubnetworkRecCell(object):
           if common_data_len is None:
             # Check for first key if input length matches data length
             if input_seq_len is not None:
-              with tf.control_dependencies([tf.assert_equal(tf.reduce_max(input_seq_len), data_len,
-                  ["RecLayer %r with sources %r:" % (rec_layer.name, rec_layer.sources),
-                   " The length of the sources (", tf.reduce_max(input_seq_len),
-                   ") differ from the length of the target ", key, "(", data_len, ")."])]):
+              with tf.control_dependencies(
+                  [tf.assert_equal(
+                    tf.reduce_max(input_seq_len), data_len,
+                    ["RecLayer %r with sources %r:" % (rec_layer.name, rec_layer.sources),
+                     " The length of the sources (", tf.reduce_max(input_seq_len),
+                     ") differ from the length of the target ", key, "(", data_len, ")."])]):
                 data_len = tf.identity(data_len)
             common_data_len = data_len
           else:
             # Check from second key on if data length is equal for all external data
-            with tf.control_dependencies([tf.assert_equal(common_data_len, data_len,
+            with tf.control_dependencies([
+              tf.assert_equal(
+                common_data_len, data_len,
                 ["RecLayer %r:" % rec_layer.name, " The length of all targets (%s) " % ", ".join(used_keys),
                  " has to be the same. Found length ", data_len, " for %s, which does not match length " % key,
                  common_data_len, " of the other data."])]):
@@ -1466,12 +1473,16 @@ class _SubnetworkRecCell(object):
       needed_outputs = {"output"}  # names. these are needed somewhere
       extra_output_layers = set()  # names. will create accumulated output layer in any case for these
 
+      # noinspection PyShadowingNames
       def add_output_to_acc(layer_name):
-        name = "output_%s" % layer_name
-        if any([(out.name == name) for out in outputs_to_accumulate]):
+        """
+        :param str layer_name:
+        """
+        name_ = "output_%s" % layer_name
+        if any([(out.name == name_) for out in outputs_to_accumulate]):
           return
         outputs_to_accumulate.append(OutputToAccumulate(
-          name=name,
+          name=name_,
           dtype=self.layer_data_templates[layer_name].output.dtype,
           element_shape=self.layer_data_templates[layer_name].output.batch_shape,
           get=lambda: self.net.get_layer(layer_name).output.placeholder))
@@ -1515,11 +1526,21 @@ class _SubnetworkRecCell(object):
           assert isinstance(layer, _TemplateLayer)
           if layer.search_choices:
             collected_choices += [layer.name]
+
+            # noinspection PyShadowingNames
             def get_derived(name):
+              """
+              :param str name:
+              :rtype: ()->tf.Tensor|None
+              """
               def get_choice_source_batches():
+                """
+                :rtype: tf.Tensor|None
+                """
                 layer = self.net.layers[name]
                 return layer.search_choices.src_beams
               return get_choice_source_batches
+
             outputs_to_accumulate += [
               OutputToAccumulate(
                 name="choice_%s" % layer.name,
@@ -1566,6 +1587,9 @@ class _SubnetworkRecCell(object):
           assert isinstance(loss, LossHolder)
 
           def get_loop_loss():
+            """
+            :rtype: tf.Tensor
+            """
             layer = self.net.layers[layer_name]
             loss.init(layer)
             if return_loss:
@@ -1683,8 +1707,10 @@ class _SubnetworkRecCell(object):
         ValueType: if initializer and fn() output lengths do not match
       """
       # The inner scope name is a bit screwed up and this is nicer anyway.
+      # noinspection PyProtectedMember
       with reuse_name_scope(rec_layer._rec_scope.name + "/while_loop_body", absolute=True):
         step_info_i = i
+        # noinspection PyProtectedMember
         if self.parent_rec_layer._use_global_rec_step_offset:
           from TFUtil import global_tensor
           step_info_i += global_tensor(
@@ -1707,7 +1733,7 @@ class _SubnetworkRecCell(object):
         with tf.name_scope("prev_extra"):
           prev_extra = identity_op_nested(prev_extra)
         data_ = {
-          key: ta.read(i, name="{}_ta_read".format(key)) for key, ta in data_tensor_arrays.items()}
+          key_: ta.read(i, name="{}_ta_read".format(key_)) for key_, ta in data_tensor_arrays.items()}
         # noinspection PyProtectedMember
         with reuse_name_scope(self.parent_rec_layer._rec_scope):
           self._construct(
@@ -1847,8 +1873,8 @@ class _SubnetworkRecCell(object):
       else:
         _, final_net_vars, final_acc_tas, (_, seq_len) = final_loop_vars
         max_seq_len = tf.reduce_max(seq_len, name="dyn_max_seq_len")
-      self.get_final_rec_vars = lambda layer_name: self.get_layer_rec_var_from_loop_vars(
-        loop_vars=final_net_vars, layer_name=layer_name, final_frame=True, seq_len=seq_len)
+      self.get_final_rec_vars = lambda layer_name_: self.get_layer_rec_var_from_loop_vars(
+        loop_vars=final_net_vars, layer_name=layer_name_, final_frame=True, seq_len=seq_len)
       assert isinstance(final_acc_tas, list)
       if len(outputs_to_accumulate) > 0:
         assert isinstance(final_acc_tas[0], tf.TensorArray)
@@ -1949,6 +1975,7 @@ class _SubnetworkRecCell(object):
         :param tf.TensorArray new_acc_output_ta_:
         :return: (i, choice_beams, new_acc_output_ta)
         """
+        # noinspection PyProtectedMember
         with reuse_name_scope(rec_layer._rec_scope.name + "/while_loop_search_body", absolute=True):
           # We start at the output layer choice base, and search for its source, i.e. for the previous time frame.
           choice_base = output_choice_base
@@ -2086,10 +2113,14 @@ class _SubnetworkRecCell(object):
           visit(sorted(l.dependencies, key=lambda l_: l_.name))
     visit([self.layer_data_templates[name] for name in needed_outputs])
 
-    self.input_layers_moved_out = []
-    self.output_layers_moved_out = []
+    self.input_layers_moved_out = []  # type: typing.List[str]
+    self.output_layers_moved_out = []  # type: typing.List[str]
 
     def output_can_move_out(layer):
+      """
+      :param _TemplateLayer layer:
+      :rtype: bool
+      """
       assert isinstance(layer, _TemplateLayer)
       # Special case: end-layer, which is added if the seq-len is unknown, cannot be moved out.
       if layer.name == "end":
@@ -2106,17 +2137,27 @@ class _SubnetworkRecCell(object):
       return True
 
     def find_output_layer_to_move_out():
+      """
+      :rtype: _TemplateLayer|None
+      """
       for layer in layers_in_loop:
         if output_can_move_out(layer):
           return layer
       return None
 
     def output_move_out(layer):
+      """
+      :param _TemplateLayer layer:
+      """
       assert isinstance(layer, _TemplateLayer)
       layers_in_loop.remove(layer)
       self.output_layers_moved_out.append(layer.name)
 
     def input_can_move_out(layer):
+      """
+      :param _TemplateLayer layer:
+      :rtype: bool
+      """
       assert isinstance(layer, _TemplateLayer)
       if self.parent_net.search_flag:
         if issubclass(layer.layer_class_type, ChoiceLayer):
@@ -2129,12 +2170,18 @@ class _SubnetworkRecCell(object):
       return True
 
     def find_input_layer_to_move_out():
+      """
+      :rtype: _TemplateLayer|None
+      """
       for layer in layers_in_loop:
         if input_can_move_out(layer):
           return layer
       return None
 
     def input_move_out(layer):
+      """
+      :param _TemplateLayer layer:
+      """
       assert isinstance(layer, _TemplateLayer)
       layers_in_loop.remove(layer)
       self.input_layers_moved_out.append(layer.name)
@@ -2164,6 +2211,10 @@ class _SubnetworkRecCell(object):
     remaining_layers = set(self.net_dict.keys())
 
     def dump_info(s, l):
+      """
+      :param str s:
+      :param list[str] l:
+      """
       print("  %s: (#: %i)" % (s, len(l)), file=log_stream)
       for layer_name in l:
         print("    %s" % layer_name, file=log_stream)
@@ -2242,6 +2293,7 @@ class _SubnetworkRecCell(object):
       return self.input_layers_net.construct_layer(self.net_dict, name=name, get_layer=get_layer)
 
     # Same scope as the main subnet, so that it stays compatible.
+    # noinspection PyProtectedMember
     with reuse_name_scope(self.parent_rec_layer._rec_scope):
       for layer_name in self.input_layers_moved_out:
         get_layer(layer_name)
