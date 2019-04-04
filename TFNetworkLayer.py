@@ -2296,7 +2296,7 @@ class LinearLayer(_ConcatInputLayer):
         b = None
 
     with tf.name_scope("linear"):
-      from TFUtil import to_int32_64, is_gpu_available, move_axis
+      from TFUtil import dot, to_int32_64, is_gpu_available, move_axis
       x = input_data.placeholder
       ndim = x.get_shape().ndims
 
@@ -2305,7 +2305,7 @@ class LinearLayer(_ConcatInputLayer):
         x = tf.nn.embedding_lookup(weights, to_int32_64(x))
         ndim += 1
       elif self.input_data.feature_dim_axis == self.input_data.batch_ndim - 1:
-        x = tf.matmul(x, weights_, transpose_b=self.use_transposed_weights)
+        x = dot(x, weights_, transpose_b=self.use_transposed_weights)
       elif self.input_data.is_batch_feature_major and is_gpu_available():  # CuDNN has a fast version for this
         # Use conv instead, it has optimized code for batch-feature major (only CuDNN).
         x_shape = None
@@ -2322,7 +2322,7 @@ class LinearLayer(_ConcatInputLayer):
       else:
         print("%s: Warning: inefficient implementation for input %r." % (self, self.input_data), file=log.v2)
         x = move_axis(x, self.input_data.feature_dim_axis, -1)
-        x = tf.matmul(x, weights_, transpose_b=self.use_transposed_weights)
+        x = dot(x, weights_, transpose_b=self.use_transposed_weights)
         x = move_axis(x, -1, self.input_data.feature_dim_axis)
       assert x.get_shape().ndims == ndim
 

@@ -2760,10 +2760,11 @@ def get_available_gpu_min_compute_capability():
   return cap
 
 
-def dot(a, b):
+def dot(a, b, transpose_b=False):
   """
   :param tf.Tensor a: shape [...da...,d]
-  :param tf.Tensor b: shape [d,...db...]
+  :param tf.Tensor b: shape [d,...db...] (or [...db...,d] if transpose_b)
+  :param bool transpose_b:
   :return: tensor of shape [...da...,...db...]
   :rtype: tf.Tensor
   """
@@ -2779,7 +2780,7 @@ def dot(a, b):
     a = check_dim_equal(a, -1, b, 0)
     if a_ndim == b_ndim == 1:
       return tf.reduce_sum(a * b)
-    d = get_shape_dim(b, 0)
+    d = get_shape_dim(b, -1) if transpose_b else get_shape_dim(b, 0)
     assert a_ndim >= 2 and b_ndim >= 2
     res_shape = None
     if a_ndim > 2 or b_ndim > 2:
@@ -2787,8 +2788,8 @@ def dot(a, b):
     if a_ndim > 2:
       a = tf.reshape(a, (-1, d))
     if b_ndim > 2:
-      b = tf.reshape(b, (d, -1))
-    res = tf.matmul(a, b)
+      b = tf.reshape(b, (d, -1)) if transpose_b else tf.reshape(b, (d, -1))
+    res = tf.matmul(a, b, transpose_b=transpose_b)
     if a_ndim > 2 or b_ndim > 2:
       res = tf.reshape(res, res_shape)
     return res
