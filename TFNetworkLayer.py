@@ -353,6 +353,9 @@ class LayerBase(object):
     """
     @contextlib.contextmanager
     def layer_scope_ctx():
+      """
+      :return: context manager object
+      """
       from TFUtil import reuse_name_scope
       with reuse_name_scope(cls.cls_get_tf_scope_name(name)) as scope:
         yield scope
@@ -656,12 +659,12 @@ class LayerBase(object):
       # (by some parent var scope), and we don't want to apply it twice.
       if param_variational_noise and param.dtype.is_floating and isinstance(param, tf.Variable):
         with tf.name_scope("param_variational_noise"):
-          fn_train = lambda: param + tf.random_normal(
-            tf.shape(param), dtype=param.dtype.base_dtype,
-            stddev=param_variational_noise,
-            seed=self.network.random.randint(2 ** 31))
-          fn_eval = lambda: param
-          param = self.network.cond_on_train(fn_train, fn_eval)
+          param = self.network.cond_on_train(
+            fn_train=lambda: param + tf.random_normal(
+              tf.shape(param), dtype=param.dtype.base_dtype,
+              stddev=param_variational_noise,
+              seed=self.network.random.randint(2 ** 31)),
+            fn_eval=lambda: param)
 
       return param
 
@@ -670,15 +673,15 @@ class LayerBase(object):
       """
       Var creation scope + variable scope.
       """
-      with var_creation_scope() as dep:
+      with var_creation_scope():
         if self.reuse_params:
           var_scope = self.reuse_params.get_variable_scope(base_layer=self)
         else:
           var_scope = tf.get_variable_scope()
         if need_custom_getter:
           kwargs["custom_getter"] = layer_custom_getter
-        with reuse_name_scope(var_scope, **kwargs) as scope:
-          yield scope
+        with reuse_name_scope(var_scope, **kwargs) as scope_:
+          yield scope_
 
     if self.param_device:
       device_name = self.param_device
@@ -716,6 +719,7 @@ class LayerBase(object):
         return param
       all_ops = graph_editor.get_backward_walk_ops([param.op], inclusive=False, control_inputs=False)
       all_1st_tensors = [op.outputs[0] for op in all_ops if len(op.outputs) == 1]
+      # noinspection PyProtectedMember
       possible_params = [p for p in possible_params if p._ref() in all_1st_tensors]
       if not possible_params:
         # Not found. Just return as-is.
@@ -891,11 +895,11 @@ class LayerBase(object):
         """
         :rtype: tf.Tensor
         """
-        res = on_eval_func()
-        if res is None:
+        res_ = on_eval_func()
+        if res_ is None:
           cls.have_output = False
           return default_value  # Doesn't matter, will not be used anyway.
-        return res
+        return res_
 
     res = self.network.cond_on_train(lambda: default_value, OnEval.get_value)
     if not OnEval.have_output:
@@ -1423,8 +1427,8 @@ class ReuseParams:
     :param kwargs: passed to tf.variable_scope
     :rtype: tf.VariableScope
     """
-    def _variable_custom_getter(**kwargs):
-      return self.variable_custom_getter(base_layer=base_layer, **kwargs)
+    def _variable_custom_getter(**kwargs_):
+      return self.variable_custom_getter(base_layer=base_layer, **kwargs_)
     with tf.variable_scope(tf.get_variable_scope(), custom_getter=_variable_custom_getter, **kwargs) as scope:
       return scope
 
@@ -1498,6 +1502,11 @@ class SearchChoices(object):
 
   def __repr__(self):
     def short(v):
+      """
+      :param LayerBase|tf.Tensor|None v:
+      :return: short repr
+      :rtype: str
+      """
       if isinstance(v, LayerBase):
         return repr(v.name)
       if isinstance(v, tf.Tensor):
@@ -1525,6 +1534,9 @@ class SearchChoices(object):
     return self._src_layer
 
   def set_beam_scores_from_own_rec(self):
+    """
+    Assumes we have set self.owner, and uses those rec vars to set the beam scores.
+    """
     self.set_beam_scores_from_rec(self.owner.rec_vars_outputs)
 
   def set_beam_scores_from_rec(self, rev_vars_outputs):
@@ -1641,6 +1653,9 @@ class SearchChoices(object):
 
 
 class SourceLayer(LayerBase):
+  """
+  This gives access to some entry from network.extern_data (:class:`ExternData`).
+  """
   layer_class = "source"
 
   def __init__(self, network, data_key=None, sources=(), **kwargs):
@@ -1853,6 +1868,13 @@ class CopyLayer(_ConcatInputLayer):
 
   @classmethod
   def get_out_data_from_opts(cls, name, sources=(), out_type=None, n_out=NotSpecified, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :param dict[str]|None out_type:
+    :param int|None|NotSpecified n_out:
+    :rtype: Data
+    """
     if out_type or n_out is not NotSpecified:
       return super(CopyLayer, cls).get_out_data_from_opts(
         name=name, out_type=out_type, n_out=n_out, sources=sources, **kwargs)
@@ -1958,6 +1980,10 @@ class SelectSearchSourcesLayer(InternalLayer):
       assert src_search_choices not in search_choices_seq
 
       def transform(v):
+        """
+        :param tuple|list|tf.Tensor|tf.TensorArray|T v:
+        :rtype: T
+        """
         if isinstance(v, (tuple, list)):
           from Util import make_seq_of_type
           return make_seq_of_type(type(v), [transform(v_) for v_ in v])
@@ -4463,7 +4489,7 @@ class DotLayer(LayerBase):
   @staticmethod
   def _axis2_to_output(axis, b_rem_axes, a_var_axes, b_var_axes):
     # Output will be of shape a_rem_dims + [a_var_dim, b_var_dim].
-    out_axes = b_rem_axes + [None for i in a_var_axes] + b_var_axes
+    out_axes = b_rem_axes + [None for _ in a_var_axes] + b_var_axes
     if axis not in out_axes:
       return None
     return out_axes.index(axis)
@@ -5011,6 +5037,7 @@ class EvalLayer(CombineLayer):
   """
   layer_class = "eval"
 
+  # noinspection PyShadowingBuiltins
   def __init__(self, eval, **kwargs):
     """
     :param str eval: will eval this string. see :func:`_op_kind_eval`
@@ -6052,6 +6079,7 @@ class OfficialResNetLayer(_ConcatInputLayer):
       block_sizes = [5, 5, 5]
 
     import re
+    # noinspection PyUnresolvedReferences
     from extern.official_tf_resnet.resnet_model import Model
     super(OfficialResNetLayer, self).__init__(**kwargs)
 

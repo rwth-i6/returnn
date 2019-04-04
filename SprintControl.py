@@ -12,14 +12,17 @@ It also supports SprintNnPythonLayer.
 """
 
 from __future__ import print_function
-import rnn
-import Debug
+
 import os
 import numpy
+import typing
+from threading import Condition
+
+import rnn
 import TaskSystem
+import Debug
 from TaskSystem import Pickler, Unpickler, numpy_set_unused
 from Util import to_bool, long
-from threading import Condition
 
 InitTypes = set()
 Verbose = False  # disables all per-segment log messages
@@ -246,7 +249,7 @@ class SprintNnPythonLayer:
 
 class PythonControl:
   """
-  This will send data to CRNN over a pipe.
+  This will send data to RETURNN over a pipe.
   We expect that we are child process and the parent process has spawned us,
 
   An instance of this class is also the interface for multiple Sprint interfaces, i.e.:
@@ -256,7 +259,7 @@ class PythonControl:
   """
 
   Version = 1  # increase when some protocol changes
-  instance = None; ":type: PythonControl"
+  instance = None  # type: typing.Optional[PythonControl]
 
   @classmethod
   def create(cls, **kwargs):
