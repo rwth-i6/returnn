@@ -443,7 +443,7 @@ class PythonControl:
     with self.cond:
       self.control_thread__have_new_seg = True
       self.control_thread__have_new_error_signal = False
-      if isinstance(segment_name, bytes):
+      if isinstance(seg_name, bytes):
         self.seg_name = seg_name.decode('ascii')
       else:
         self.seg_name = seg_name
