@@ -1694,6 +1694,32 @@ def test_param_variational_noise():
       assert len(ops) == 1 and "param_variational_noise" in ops[0].name
 
 
+def test_split_info_input():
+  from TFUtil import print_graph_output, find_ops_with_tensor_input
+  config = Config({
+    "debug_print_layer_output_template": True,
+    "extern_data": {"data": {"dim": 7}}
+  })
+  net_dict = {
+    "a": {"class": "linear", "activation": "tanh", "n_out": 11},
+    "b": {"class": "linear", "activation": "tanh", "n_out": 13},
+    "concat": {"class": "copy", "from": ["a", "b"]},
+    "output": {"class": "linear", "activation": None, "with_bias": True, "from": ["concat"], "n_out": 17}
+  }
+  with make_scope() as session:
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(net_dict)
+    out_weights = network.get_default_output_layer().params["W"]
+    print("out_weights:", out_weights)
+    assert isinstance(out_weights, tf.Variable)
+    assert out_weights.get_shape().as_list() == [11 + 13, 17]
+    # TODO: multiple checks:
+    # the split info itself
+    # the param init handling...
+    # actually, for param init handling, input dim splits do not matter. they matter just for copying/growing-pretrain.
+    # for param init handling, output dim split do matter.
+
+
 if __name__ == "__main__":
   try:
     better_exchook.install()

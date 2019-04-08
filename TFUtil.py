@@ -1857,7 +1857,7 @@ class CustomUpdateExpAverage(CustomUpdate):
 def set_param_axes_split_info(param, axes_split_info):
   """
   :param tf.Variable|tf.Tensor param:
-  :param list[list[int]] axes_split_info: e.g. [[n],[n]*4] for LSTM matrices
+  :param list[list[int]|None] axes_split_info: e.g. [[n],[n]*4] for LSTM matrices
   """
   check_param_axes_split_info(param.get_shape().as_list(), axes_split_info)
   setattr(param, "returnn_axes_split_info", axes_split_info)
@@ -1865,12 +1865,13 @@ def set_param_axes_split_info(param, axes_split_info):
 
 def check_param_axes_split_info(param_shape, axes_split_info):
   """
-  :param list[int]|tuple[int] param_shape:
-  :param list[list[int]] axes_split_info: e.g. [[n],[n]*4] for LSTM matrices
+  :param list[int|None]|tuple[int|None] param_shape:
+  :param list[list[int]|None] axes_split_info: e.g. [[n],[n]*4] for LSTM matrices
   """
   assert len(axes_split_info) == len(param_shape)
   for i, parts in enumerate(axes_split_info):
-    assert param_shape[i] == sum(parts)
+    if parts is not None:
+      assert param_shape[i] == sum(parts)
 
 
 def get_param_axes_split_info(param):
@@ -1878,7 +1879,7 @@ def get_param_axes_split_info(param):
   See :func:`set_param_axes_split_info`.
 
   :param tf.Variable|tf.Tensor param:
-  :rtype: list[list[int]]|None
+  :rtype: list[list[int]|None]|None
   """
   return getattr(param, "returnn_axes_split_info", None)
 

@@ -1747,6 +1747,12 @@ def concat_sources(src_layers):
     data.placeholder = tf.concat(
       axis=data.feature_dim_axis,
       values=[l.placeholder for l in layers_data])
+    axes_split_info = [None] * data.batch_ndim  # type: typing.List[typing.Optional[typing.List[int]]]
+    axes_split_info[data.feature_dim_axis] = [l.dim for l in layers_data]
+    TFUtil.set_param_axes_split_info(data.placeholder, axes_split_info)
+    # Note: We will loose this info for any further op (e.g. dropout, activation, etc). Should be better...
+    # Maybe instead in Data class?
+    # Also note, even for tf.Variable, e.g. with weight noise, we might loose this?
   network.concat_sources_dropout_cache[cache_key] = data.copy()
   return data
 
