@@ -122,7 +122,10 @@ def getSegmentList(corpusName, segmentList, config, **kwargs):
   init(name="CRNN.PythonSegmentOrder", reference=corpusName, config=config)
   PythonControl.instance.check_control_loop_running()
   for segment_name in PythonControl.instance.segment_list_iterator():
-    yield segment_name
+    if isinstance(segment_name, bytes):
+      yield segment_name.decode('ascii')
+    else:
+      yield segment_name
 
 # End Sprint PythonSegmentOrder interface. }
 
@@ -440,7 +443,10 @@ class PythonControl:
     with self.cond:
       self.control_thread__have_new_seg = True
       self.control_thread__have_new_error_signal = False
-      self.seg_name = seg_name
+      if isinstance(segment_name, bytes):
+        self.seg_name = seg_name.decode('ascii')
+      else:
+        self.seg_name = seg_name
       self.seg_len = seg_len
       self.posteriors = posteriors
       self.error_signal = None
