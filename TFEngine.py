@@ -1405,7 +1405,7 @@ class Engine(EngineBase):
     return True
 
   def eval_model(self, output_file=None, output_per_seq_file=None, loss_name=None,
-                 output_per_seq_format=("seq_len", "score", "pos_score")):
+                 output_per_seq_format=None, output_per_seq_file_format="txt"):
     """
     Eval the current model on the eval datasets (dev + eval, whatever is set).
     See also :func:`self.search` for performing beam search.
@@ -1415,16 +1415,17 @@ class Engine(EngineBase):
     :param str|None loss_name: specifies the loss which will be written to output_file
     :param list[str]|tuple[str]|None output_per_seq_format:
       which properties of `loss_name` should be written to `output_per_seq_file`.
-      allowed_outputs = {"seq_tags", "seq_len", "score", "error", "pos_score", "pos_error"}
-
+      allowed_outputs = {"seq_tag", "seq_len", "score", "error", "pos_score", "pos_error"}.
+    :param str output_per_seq_file_format: "txt" or "py"
     :return: nothing
     """
     extra_fetches = None
 
     if output_per_seq_file:
-      allowed_outputs = {"seq_tags", "seq_len", "score", "error", "pos_score", "pos_error"}
+      assert output_per_seq_file_format in {"txt", "py"}
+      allowed_outputs = {"seq_tag", "seq_len", "score", "error", "pos_score", "pos_error"}
 
-      assert isinstance(output_per_seq_format, (tuple, list))
+      assert isinstance(output_per_seq_format, (tuple, list)), "provide output_per_seq_format"
       assert set(output_per_seq_format) - allowed_outputs == set(), (
         "Only %r are allowed in function eval_model as output_per_seq_format, but got: %r " % (
           allowed_outputs, output_per_seq_format))
@@ -1457,10 +1458,11 @@ class Engine(EngineBase):
       if "pos_error" in output_per_seq_format:
         extra_fetches["pos_error"] = loss_holder.get_normalized_error_value_per_seq(per_pos=True)
 
-    seq_idx_to_tag = {}  # we need this in order to write the results in the correct order later
-    results_per_seq = {}  # seq_tag -> dict[str,float]. Results of fetches will be written in this dict
+    seq_idx_to_tag = {}  # type: typing.Dict[int,str]  # we need this in order to write the results in the correct order later  # nopep8
+    results_per_seq = {}  # type: typing.Dict[str,typing.Dict[str,typing.Union[float,str,int]]]  # seq_tag -> dict. Results of fetches will be written in this dict  # nopep8
 
     # function to save the return values of each callback to the dict `results_per_seq`
+    # noinspection PyShadowingNames
     def extra_fetches_callback(seq_idx, seq_tags, **extra_fetches_out):
       """
       :param list[int] seq_idx:
@@ -1481,11 +1483,11 @@ class Engine(EngineBase):
           assert 'seq_len' in extra_fetches_out
           seq_lens = extra_fetches_out['seq_len']
           shorted_scores = [ps[:l] for ps, l in zip(value, seq_lens)]
-          for i, seq_tag in enumerate(seq_tags):
-            results_per_seq.setdefault(seq_tag, {'seq_tags': seq_tag})[name] = shorted_scores[i]
+          for i, seq_tag_ in enumerate(seq_tags):
+            results_per_seq.setdefault(seq_tag_, {'seq_tag': seq_tag_})[name] = shorted_scores[i]
         else:
-          for i, seq_tag in enumerate(seq_tags):
-            results_per_seq.setdefault(seq_tag, {'seq_tags': seq_tag})[name] = value[i]
+          for i, seq_tag_ in enumerate(seq_tags):
+            results_per_seq.setdefault(seq_tag_, {'seq_tag': seq_tag_})[name] = value[i]
 
     # It's constructed lazily and it will set used_data_keys, so make sure that we have it now.
     self.network.maybe_construct_objective()
@@ -1541,24 +1543,26 @@ class Engine(EngineBase):
         f.write(better_repr(results) + '\n')
     if output_per_seq_file:
       print('Write eval results per seq to %r' % output_per_seq_file, file=log.v3)
-      from Util import better_repr
-
-      # write fetches to file
       with open(output_per_seq_file, 'w') as f:
-        def create_output_string(seq_tag):
-          """
-          Creates a colon (;) separated output string in the order given by `requested_outputs`
-          :param str seq_tag:
-          """
-          value_list = [results_per_seq[seq_tag][req_out] for req_out in output_per_seq_format]
-          value_list = [' '.join(map(str, v)) if isinstance(v, numpy.ndarray) else str(v) for v in value_list]
-          assert all([all([c not in "\n;" for c in v]) for v in value_list])
-          return ';'.join(value_list)
-
-        results_per_seq = [create_output_string(seq_idx_to_tag[seq_idx]) for seq_idx in range(len(results_per_seq))]
-
-        for res in results_per_seq:
-          f.write(str(res) + '\n')
+        if output_per_seq_file_format == "txt":
+          for seq_idx in range(len(results_per_seq)):
+            seq_tag = seq_idx_to_tag[seq_idx]
+            value_list = [results_per_seq[seq_tag][req_out] for req_out in output_per_seq_format]
+            value_list = [' '.join(map(str, v)) if isinstance(v, numpy.ndarray) else str(v) for v in value_list]
+            assert all([all([c not in "\n;" for c in v]) for v in value_list])
+            res = ';'.join(value_list)
+            f.write(res + '\n')
+        elif output_per_seq_file_format == "py":
+          f.write("{\n")
+          for seq_idx in range(len(results_per_seq)):
+            seq_tag = seq_idx_to_tag[seq_idx]
+            f.write("%r: {" % seq_tag)
+            f.write(", ".join([
+              "%r: %r" % (req_out, results_per_seq[seq_tag][req_out]) for req_out in output_per_seq_format]))
+            f.write("},\n")
+          f.write("}\n")
+        else:
+          assert False, output_per_seq_file_format
 
   def check_last_epoch(self):
     """

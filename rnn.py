@@ -463,7 +463,8 @@ def execute_main_task():
       output_file=config.value("eval_output_file", None),
       output_per_seq_file=config.value("eval_output_file_per_seq", None),
       loss_name=config.value("loss_name", None),
-      output_per_seq_format=config.list("output_per_seq_format", ["score"]))
+      output_per_seq_format=config.list("output_per_seq_format", ["score"]),
+      output_per_seq_file_format=config.value("output_per_seq_file_format", "txt"))
   elif task in ['forward', 'hpx']:
     assert eval_data is not None, 'no eval data provided'
     combine_labels = config.value('combine_labels', '')
