@@ -106,11 +106,11 @@ class Updater(object):
     else:
       self.loss = network.get_objective()
       self.constraints = None
-    self.optimizer = None  # type: WrapOptimizer
-    self.optim_op = None  # type: tf.Operation
-    self.optim_meta_losses = None  # type: typing.Dict[str,tf.Tensor]
+    self.optimizer = None  # type: typing.Optional[WrapOptimizer]
+    self.optim_op = None  # type: typing.Optional[tf.Operation]
+    self.optim_meta_losses = None  # type: typing.Optional[typing.Dict[str,tf.Tensor]]
     self.optimizer_vars = []  # type: typing.List[tf.Variable]
-    self.optimizer_init_vars_op = None  # type: tf.Operation
+    self.optimizer_init_vars_op = None  # type: typing.Optional[tf.Operation]
 
     # After graph was build: look if it only uses deterministic ops
     if self.config.is_true('deterministic_train'):
@@ -123,7 +123,7 @@ class Updater(object):
     Call this if sth is changed which the optim_op depends on.
     See self.create_optim_op().
     """
-    self.optim_op = None  # type: tf.Operation
+    self.optim_op = None  # type: typing.Optional[tf.Operation]
 
   def set_trainable_vars(self, trainable_vars):
     """
@@ -406,6 +406,7 @@ class WrapOptimizer:
     optimizer_opts = updater_opts.get("optimizer", None)
     if not optimizer_opts:
       return self.get_default_optimizer_item(auto_create_new=auto_create_new)
+    assert isinstance(optimizer_opts, dict)
     return self._get_optimizer_item_for_opts(optimizer_opts, auto_create_new=auto_create_new)
 
   def _get_optimizer_item_for_opts(self, optimizer_opts, auto_create_new):
