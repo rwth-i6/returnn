@@ -1494,6 +1494,7 @@ class Engine(EngineBase):
     results = {}
     eval_dump_str = []
     train = self._maybe_prepare_train_in_eval()
+    train_flag = self.config.bool("eval_use_train_flag", None)
 
     if output_per_seq_file:
       assert len(self.get_eval_datasets()) == 1, (
@@ -1522,7 +1523,8 @@ class Engine(EngineBase):
         print("reusing previous dataset batch order for %r dataset" % dataset_name, file=log.v4)
         self.dataset_batches[dataset_name].reset()
       tester = Runner(
-        engine=self, dataset=dataset, batches=self.dataset_batches[dataset_name], train=train,
+        engine=self, dataset=dataset, batches=self.dataset_batches[dataset_name],
+        train=train, train_flag=train_flag,
         extra_fetches=extra_fetches, extra_fetches_callback=extra_fetches_callback)
       tester.run(report_prefix=self.get_epoch_str() + " %r eval" % dataset_name)
       if not tester.finalized:
