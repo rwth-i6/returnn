@@ -4185,6 +4185,8 @@ class SyntheticGradient(object):
   class Scope(object):
     """
     Defines the scope for a synthetic gradient.
+    Create this object via :func:`SyntheticGradient.enter_gradient_scope`.
+    Any meta-losses will be collected here via :func:`register_loss`.
     """
 
     def __init__(self):
@@ -4203,7 +4205,7 @@ class SyntheticGradient(object):
       assert SyntheticGradient.scope_ctx.scope is self
       SyntheticGradient.scope_ctx.scope = None
 
-    def as_fetch_dict(self):
+    def losses_as_fetch_dict(self):
       """
       :rtype: dict[str,tf.Tensor]
       """
@@ -4232,7 +4234,6 @@ class SyntheticGradient(object):
     """
     :rtype: SyntheticGradient.Scope
     """
-    # Currently not multi-threading safe.
     assert not cls.scope_ctx.scope
     cls.scope_ctx.scope = cls.Scope()
     return cls.scope_ctx.scope

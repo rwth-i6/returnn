@@ -200,7 +200,7 @@ class Updater(object):
       synthetic_gradient_scope = SyntheticGradient.enter_gradient_scope()
       apply_grads = self.optimizer.get_apply_grads_op(self.loss, trainable_vars_for_gradients)
       synthetic_gradient_scope.exit()
-      self.optim_meta_losses = synthetic_gradient_scope.as_fetch_dict()
+      self.optim_meta_losses = synthetic_gradient_scope.losses_as_fetch_dict()
       if synthetic_gradient_scope.losses:
         with tf.name_scope("meta_loss"):
           meta_loss = tf.add_n(synthetic_gradient_scope.losses)
