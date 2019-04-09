@@ -357,7 +357,8 @@ def _is_bliss(filename):
       corpus_file = gzip.GzipFile(fileobj=corpus_file)
     context = iter(ElementTree.iterparse(corpus_file, events=('start', 'end')))
     _, root = next(context)  # get root element
-    return True
+    assert isinstance(root, ElementTree.Element)
+    return root.tag == "corpus"
   except IOError:  # 'Not a gzipped file' or so
     pass
   except ElementTree.ParseError:  # 'syntax error' or so
