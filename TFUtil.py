@@ -4085,7 +4085,7 @@ class CustomGradient(object):
     from weakref import ref
     self.num_calls = 0
     self.registered_ops_graph = ref(NotSpecified)
-    self.registered_ops = {}  # func -> decorated func
+    self.registered_ops = {}  # (op,grad_op) -> decorated func
 
   def register(self, input_types, op, grad_op, name=None):
     """
@@ -4103,8 +4103,9 @@ class CustomGradient(object):
       self.registered_ops.clear()
       from weakref import ref
       self.registered_ops_graph = ref(graph)
-    if op in self.registered_ops:
-      return self.registered_ops[op]
+    cache_key = (op, grad_op)
+    if cache_key in self.registered_ops:
+      return self.registered_ops[cache_key]
     from tensorflow.python.framework import function
     op_with_new_grad = function.Defun(*input_types, python_grad_func=grad_op, func_name=name)(op)
     # We need to add one instance of the new op to the graph now because of:
@@ -4115,7 +4116,7 @@ class CustomGradient(object):
     call = op_with_new_grad(*[tf.placeholder(dtype) for dtype in input_types])
     assert isinstance(call, tf.Tensor)
     assert call.graph is graph
-    self.registered_ops[op] = op_with_new_grad
+    self.registered_ops[cache_key] = op_with_new_grad
     return op_with_new_grad
 
   # noinspection PyUnusedLocal
