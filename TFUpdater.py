@@ -206,8 +206,7 @@ class Updater(object):
           meta_loss = tf.add_n(meta_losses_scope.losses)
           meta_apply_grads = self.optimizer.get_apply_grads_op(meta_loss, trainable_vars_for_gradients)
         apply_grads = tf.group(apply_grads, meta_apply_grads)
-      incr_step_op = tf.assign_add(self.network.global_train_step, 1, name="global_train_step_increment")
-      self.optim_op = tf.group(apply_grads, incr_step_op, name="optim_and_step_incr")
+      self.optim_op = apply_grads
 
     if trainable_vars_custom_update:
       with tf.variable_scope("custom_update"):
@@ -300,6 +299,10 @@ class Updater(object):
     if self.config.bool("debug_add_check_numerics_ops", False):  # also see debug_add_check_numerics_on_output
       print("Adding checks for inf/nan.", file=log.v3)
       self.optim_op = tf.group(self.optim_op, add_check_numerics_ops([self.optim_op]))
+
+    # Do this at the very end.
+    incr_step_op = tf.assign_add(self.network.global_train_step, 1, name="global_train_step_increment")
+    self.optim_op = tf.group(self.optim_op, incr_step_op, name="optim_and_step_incr")
 
     if self.config.bool("debug_save_updater_vars", False):
       print("Save updater/optimizer vars:", file=log.v3)
