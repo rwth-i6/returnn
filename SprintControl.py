@@ -123,7 +123,7 @@ def getSegmentList(corpusName, segmentList, config, **kwargs):
   PythonControl.instance.check_control_loop_running()
   for segment_name in PythonControl.instance.segment_list_iterator():
     if isinstance(segment_name, bytes):
-      yield segment_name.decode('ascii')
+      yield segment_name.decode('utf-8')
     else:
       yield segment_name
 
@@ -444,7 +444,7 @@ class PythonControl:
       self.control_thread__have_new_seg = True
       self.control_thread__have_new_error_signal = False
       if isinstance(seg_name, bytes):
-        self.seg_name = seg_name.decode('ascii')
+        self.seg_name = seg_name.decode('utf-8')
       else:
         self.seg_name = seg_name
       self.seg_len = seg_len
