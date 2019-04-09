@@ -4217,13 +4217,7 @@ class MetaLosses(object):
       from collections import OrderedDict
       d = OrderedDict()
       for loss in self.losses:
-        # Admittedly the way to get the layer name has some assumptions which might break in the future.
-        # However, this is anyway mostly used for debugging purpose, so fix it, or just remove it.
-        op_name_parts = loss.op.name.split("/")  # type: typing.List[str]
-        assert op_name_parts[-2] == "grad_prediction_loss"
-        assert op_name_parts[-3].endswith("_grad")
-        layer_name = op_name_parts[-4]
-        d["cost:%s" % layer_name] = loss
+        d["cost:%s" % loss.op.name] = loss
       return d
 
   class ScopeCtxThreadLocal(threading.local):
