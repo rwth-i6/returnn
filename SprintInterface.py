@@ -697,7 +697,7 @@ def _init_base(configfile=None, target_mode=None, epoch=None, sprint_opts=None):
     if configfile is None:
       configfile = DefaultSprintCrnnConfig
     assert os.path.exists(configfile)
-    rnn.init_config(config_filename=configfile)
+    rnn.init_config(config_filename=configfile, extra_updates={"task": target_mode})
     config = rnn.config
     if sprint_opts is not None:
       config.update(sprint_opts)
