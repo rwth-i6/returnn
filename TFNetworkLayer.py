@@ -5709,8 +5709,8 @@ class SyntheticGradientLayer(_ConcatInputLayer):
     :param LayerBase gradient:
     """
     super(SyntheticGradientLayer, self).__init__(**kwargs)
-    from TFUtil import SyntheticGradient
-    self.output.placeholder = SyntheticGradient.synthetic_gradient(
+    from TFUtil import MetaLosses
+    self.output.placeholder = MetaLosses.synthetic_gradient(
       x=self.input_data.placeholder,
       synthetic_grad_x=gradient.output.copy_compatible_to(self.input_data).placeholder)
     self.output.size_placeholder = self.input_data.size_placeholder.copy()

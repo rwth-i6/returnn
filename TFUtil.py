@@ -4178,15 +4178,19 @@ class CustomGradient(object):
 custom_gradient = CustomGradient()
 
 
-class SyntheticGradient(object):
+class MetaLosses(object):
   """
-  Implements synthetic gradients.
+  This provides a way to use an alternative gradient,
+  or to use the original gradient (error signal) and do something with it.
+  You can then define an additional (meta) loss using this.
+
+  This implements synthetic gradients, see :func:`synthetic_gradient`.
   """
 
   class Scope(object):
     """
     Defines the scope for a synthetic gradient.
-    Create this object via :func:`SyntheticGradient.enter_gradient_scope`.
+    Create this object via :func:`MetaLosses.enter_gradient_scope`.
     Any meta-losses will be collected here via :func:`register_loss`.
     """
 
@@ -4203,8 +4207,8 @@ class SyntheticGradient(object):
       """
       Exit the scope.
       """
-      assert SyntheticGradient.scope_ctx.scope is self
-      SyntheticGradient.scope_ctx.scope = None
+      assert MetaLosses.scope_ctx.scope is self
+      MetaLosses.scope_ctx.scope = None
 
     def losses_as_fetch_dict(self):
       """
@@ -4226,14 +4230,14 @@ class SyntheticGradient(object):
     """
     Thread local.
     """
-    scope = None  # type: typing.Optional[SyntheticGradient.Scope]
+    scope = None  # type: typing.Optional[MetaLosses.Scope]
 
   scope_ctx = ScopeCtxThreadLocal()
 
   @classmethod
   def enter_gradient_scope(cls):
     """
-    :rtype: SyntheticGradient.Scope
+    :rtype: MetaLosses.Scope
     """
     assert not cls.scope_ctx.scope
     cls.scope_ctx.scope = cls.Scope()
@@ -4289,6 +4293,8 @@ class SyntheticGradient(object):
   @classmethod
   def synthetic_gradient(cls, x, synthetic_grad_x):
     """
+    Decoupled Neural Interfaces using Synthetic Gradients, https://arxiv.org/abs/1608.05343
+
     :param tf.Tensor x:
     :param tf.Tensor synthetic_grad_x:
     :return: x, where the gradient is overwritten by synthetic_grad_x, and when calculated,

@@ -174,7 +174,7 @@ class Updater(object):
     """
     assert self.loss is not None
     assert self.trainable_vars, "no variables to update/optimize"
-    from TFUtil import SyntheticGradient
+    from TFUtil import MetaLosses
 
     # Keep track of all current available vars.
     # The optimizer could add some, even some which are not so-called "slot-vars",
@@ -197,13 +197,13 @@ class Updater(object):
       self.optimizer.create_all_needed_optimizers(trainable_vars_for_gradients)
 
     with tf.variable_scope("optimize"):
-      synthetic_gradient_scope = SyntheticGradient.enter_gradient_scope()
+      meta_losses_scope = MetaLosses.enter_gradient_scope()
       apply_grads = self.optimizer.get_apply_grads_op(self.loss, trainable_vars_for_gradients)
-      synthetic_gradient_scope.exit()
-      self.optim_meta_losses = synthetic_gradient_scope.losses_as_fetch_dict()
-      if synthetic_gradient_scope.losses:
+      meta_losses_scope.exit()
+      self.optim_meta_losses = meta_losses_scope.losses_as_fetch_dict()
+      if meta_losses_scope.losses:
         with tf.name_scope("meta_loss"):
-          meta_loss = tf.add_n(synthetic_gradient_scope.losses)
+          meta_loss = tf.add_n(meta_losses_scope.losses)
           meta_apply_grads = self.optimizer.get_apply_grads_op(meta_loss, trainable_vars_for_gradients)
         apply_grads = tf.group(apply_grads, meta_apply_grads)
       incr_step_op = tf.assign_add(self.network.global_train_step, 1, name="global_train_step_increment")
