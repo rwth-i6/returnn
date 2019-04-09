@@ -4246,10 +4246,10 @@ class MetaLosses(object):
 
   # noinspection PyUnusedLocal
   @classmethod
-  def _synthetic_gradient_fwd(cls, x, synthetic_grad_x):
+  def _identity_ignore_second_fwd(cls, x, dummy):
     """
     :param tf.Tensor x:
-    :param tf.Tensor synthetic_grad_x:
+    :param tf.Tensor dummy:
     :return: x
     :rtype: tf.Tensor
     """
@@ -4284,7 +4284,7 @@ class MetaLosses(object):
     """
     op = custom_gradient.register(
       [tf.float32, tf.float32],
-      op=cls._synthetic_gradient_fwd,
+      op=cls._identity_ignore_second_fwd,
       grad_op=cls._synthetic_gradient_bwd,
       name="synthetic_gradient")
     y = op(x, synthetic_grad_x)
@@ -4304,21 +4304,22 @@ class MetaLosses(object):
         loss = grad_out ** 2.
         tf.summary.scalar("loss", loss)
       cls.scope_ctx.scope.register_loss(loss)
-    return grad_out
+    return grad_out, tf.constant(0.0)
 
   @classmethod
-  def tikhonov_regularized(cls, x):
+  def tikhonov_regularized(cls, x, dummy):
     """
     :param tf.Tensor x:
+    :param tf.Tensor|tf.Variable dummy: scalar. can be used to enforce getting a gradient
     :return: identity(x), where we add a Tikhonov regularization
     :rtype: tf.Tensor
     """
     op = custom_gradient.register(
-      [tf.float32],
-      op=identity,
+      [tf.float32, tf.float32],
+      op=cls._identity_ignore_second_fwd,
       grad_op=cls._tikhonov_gradient_bwd,
       name="tikhonov_regularized")
-    y = op(x)
+    y = op(x, dummy)
     y.set_shape(x.get_shape())
     return y
 

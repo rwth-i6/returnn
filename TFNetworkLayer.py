@@ -5743,8 +5743,10 @@ class TikhonovRegularizationLayer(CopyLayer):
 
   def __init__(self, **kwargs):
     super(TikhonovRegularizationLayer, self).__init__(**kwargs)
+    with self.var_creation_scope():
+      dummy_var = self.add_param(tf.get_variable(name="dummy", shape=(), dtype=tf.float32))
     from TFUtil import MetaLosses
-    self.output.placeholder = MetaLosses.tikhonov_regularized(x=self.input_data.placeholder)
+    self.output.placeholder = MetaLosses.tikhonov_regularized(x=self.input_data.placeholder, dummy=dummy_var)
     self.output.size_placeholder = self.input_data.size_placeholder.copy()
 
 
