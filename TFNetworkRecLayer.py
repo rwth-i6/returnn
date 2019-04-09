@@ -3925,7 +3925,7 @@ class ChoiceLayer(LayerBase):
         self.output_list = []
         for index, labels_ in enumerate(labels):
           self.output_list.append(Data(
-            name="%s_choice_output" % self.name,
+            name="%s_choice_output_%d" % (self.name, index),
             batch_dim_axis=0,
             shape=self.output.shape,
             sparse=True,
