@@ -32,6 +32,7 @@ def tf_version_tuple():
   :rtype: tuple[int]
   """
   import re
+  # noinspection PyUnresolvedReferences
   return tuple([int(s) for s in re.sub('-rc[0-9]|-dev[0-9]*', '', tf.__version__).split(".")])
 
 
@@ -3936,6 +3937,7 @@ class OpCodeCompiler(NativeCodeCompiler):
     if have_min_tf_version((1, 4)):
       # https://github.com/tensorflow/tensorflow/issues/13607
       ld_flags += ["-L%s" % tf.sysconfig.get_lib(), "-ltensorflow_framework"]
+    # noinspection PyUnresolvedReferences
     use_cxx11_abi = hasattr(tf, 'CXX11_ABI_FLAG') and tf.CXX11_ABI_FLAG
     super(OpCodeCompiler, self).__init__(
       include_paths=include_paths, ld_flags=ld_flags, use_cxx11_abi=use_cxx11_abi, **kwargs)
@@ -3998,6 +4000,7 @@ class TFNativeUtilCompiler(NativeCodeCompiler):
     if have_min_tf_version((1, 4)):
       # https://github.com/tensorflow/tensorflow/issues/13607
       ld_flags += ["-L%s" % tf.sysconfig.get_lib(), "-ltensorflow_framework"]
+    # noinspection PyUnresolvedReferences
     use_cxx11_abi = hasattr(tf, 'CXX11_ABI_FLAG') and tf.CXX11_ABI_FLAG
     super(TFNativeUtilCompiler, self).__init__(
       include_paths=include_paths, ld_flags=ld_flags, use_cxx11_abi=use_cxx11_abi, **kwargs)
@@ -4006,6 +4009,7 @@ class TFNativeUtilCompiler(NativeCodeCompiler):
 
   def _make_info_dict(self):
     d = super(TFNativeUtilCompiler, self)._make_info_dict()
+    # noinspection PyUnresolvedReferences
     d.update({"tf_version": tf.__version__})
     return d
 
@@ -5278,6 +5282,7 @@ def broadcast_gradient_args(shape_x, shape_y):
     # noinspection PyProtectedMember
     return gen_array_ops._broadcast_gradient_args(shape_x, shape_y)
   # Since TF 1.8.0, this is public.
+  # noinspection PyUnresolvedReferences
   return gen_array_ops.broadcast_gradient_args(shape_x, shape_y)
 
 
