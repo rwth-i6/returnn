@@ -4244,19 +4244,6 @@ class MetaLosses(object):
     """
     cls.scope_ctx.scope.exit()
 
-  @classmethod
-  @contextlib.contextmanager
-  def gradient_scope(cls):
-    """
-    When gradients will be calculated (e.g. via some optimizer.minimize()),
-    the synthetic gradient needs to collect the gradient prediction losses.
-    This is done via this global scope.
-    """
-    try:
-      yield cls.enter_gradient_scope()
-    finally:
-      cls.exit_gradient_scope()
-
   # noinspection PyUnusedLocal
   @classmethod
   def _synthetic_gradient_fwd(cls, x, synthetic_grad_x):
@@ -4301,6 +4288,37 @@ class MetaLosses(object):
       grad_op=cls._synthetic_gradient_bwd,
       name="synthetic_gradient")
     y = op(x, synthetic_grad_x)
+    y.set_shape(x.get_shape())
+    return y
+
+  @classmethod
+  def _tikhonov_gradient_bwd(cls, op, grad_out):
+    """
+    :param tf.Operation op:
+    :param tf.Tensor grad_out:
+    :return: grad for x
+    :rtype: (tf.Tensor,)
+    """
+    if cls.scope_ctx.scope:
+      with tf.name_scope("tikhonov_regularization_loss"):
+        loss = grad_out ** 2.
+        tf.summary.scalar("loss", loss)
+      cls.scope_ctx.scope.register_loss(loss)
+    return grad_out
+
+  @classmethod
+  def tikhonov_regularized(cls, x):
+    """
+    :param tf.Tensor x:
+    :return: identity(x), where we add a Tikhonov regularization
+    :rtype: tf.Tensor
+    """
+    op = custom_gradient.register(
+      [tf.float32],
+      op=identity,
+      grad_op=cls._tikhonov_gradient_bwd,
+      name="tikhonov_regularized")
+    y = op(x)
     y.set_shape(x.get_shape())
     return y
 

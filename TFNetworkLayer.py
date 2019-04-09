@@ -5735,6 +5735,19 @@ class SyntheticGradientLayer(_ConcatInputLayer):
     return get_concat_sources_data_template(sources, name="%s_output" % name)
 
 
+class TikhonovRegularizationLayer(CopyLayer):
+  """
+  Adds the Tikhonov regularization as a meta-loss (see :class:`TFUtil.MetaLosses`).
+  """
+  layer_class = "tikhonov_regularization"
+
+  def __init__(self, **kwargs):
+    super(TikhonovRegularizationLayer, self).__init__(**kwargs)
+    from TFUtil import MetaLosses
+    self.output.placeholder = MetaLosses.tikhonov_regularized(x=self.input_data.placeholder)
+    self.output.size_placeholder = self.input_data.size_placeholder.copy()
+
+
 class AllophoneStateIdxParserLayer(LayerBase):
   """
   This is very much Sprint/RASR specific.
