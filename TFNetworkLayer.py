@@ -5704,15 +5704,19 @@ class SyntheticGradientLayer(_ConcatInputLayer):
   """
   layer_class = "synthetic_gradient"
 
-  def __init__(self, gradient, **kwargs):
+  def __init__(self, gradient, meta_loss_scale=1.0, **kwargs):
     """
     :param LayerBase gradient:
+    :param float meta_loss_scale:
     """
     super(SyntheticGradientLayer, self).__init__(**kwargs)
     from TFUtil import MetaLosses
     self.output.placeholder = MetaLosses.synthetic_gradient(
       x=self.input_data.placeholder,
-      synthetic_grad_x=gradient.output.copy_compatible_to(self.input_data).placeholder)
+      synthetic_grad_x=gradient.output.copy_compatible_to(self.input_data).placeholder,
+      loss_name=self.get_absolute_name_scope_prefix() + "synthetic_grad",
+      loss_source=self,
+      loss_scale=meta_loss_scale)
     self.output.size_placeholder = self.input_data.size_placeholder.copy()
 
   @classmethod
@@ -5741,12 +5745,19 @@ class TikhonovRegularizationLayer(CopyLayer):
   """
   layer_class = "tikhonov_regularization"
 
-  def __init__(self, **kwargs):
+  def __init__(self, meta_loss_scale=1.0, **kwargs):
+    """
+    :param float meta_loss_scale:
+    """
     super(TikhonovRegularizationLayer, self).__init__(**kwargs)
     with self.var_creation_scope():
       dummy_var = self.add_param(tf.get_variable(name="dummy", shape=(), dtype=tf.float32))
     from TFUtil import MetaLosses
-    self.output.placeholder = MetaLosses.tikhonov_regularized(x=self.input_data.placeholder, dummy=dummy_var)
+    self.output.placeholder = MetaLosses.tikhonov_regularized(
+      x=self.input_data.placeholder, dummy=dummy_var,
+      loss_name=self.get_absolute_name_scope_prefix() + "tikhonov_reg",
+      loss_source=self,
+      loss_scale=meta_loss_scale)
     self.output.size_placeholder = self.input_data.size_placeholder.copy()
 
 

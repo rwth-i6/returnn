@@ -4187,6 +4187,23 @@ class MetaLosses(object):
   This implements synthetic gradients, see :func:`synthetic_gradient`.
   """
 
+  class LossInfo:
+    """
+    Covers loss and other info.
+    """
+
+    def __init__(self, value, scale, name, source):
+      """
+      :param tf.Tensor value:
+      :param float scale:
+      :param str name:
+      :param object source: e.g. layer
+      """
+      self.value = value
+      self.scale = scale
+      self.name = name
+      self.source = source
+
   class Scope(object):
     """
     Defines the scope for a synthetic gradient.
@@ -4195,11 +4212,11 @@ class MetaLosses(object):
     """
 
     def __init__(self):
-      self.losses = []  # type: typing.List[tf.Tensor]
+      self.losses = []  # type: typing.List[MetaLosses.LossInfo]
 
     def register_loss(self, loss):
       """
-      :param tf.Tensor loss:
+      :param MetaLosses.LossInfo loss:
       """
       self.losses.append(loss)
 
@@ -4217,8 +4234,14 @@ class MetaLosses(object):
       from collections import OrderedDict
       d = OrderedDict()
       for loss in self.losses:
-        d["cost:%s" % loss.op.name] = loss
+        d["cost:%s" % loss.name] = loss.value
       return d
+
+    def summed_loss_for_optimization(self):
+      """
+      :rtype: tf.Tensor
+      """
+      return tf.add_n([loss.value * loss.scale for loss in self.losses])
 
   class ScopeCtxThreadLocal(threading.local):
     """
@@ -4268,16 +4291,21 @@ class MetaLosses(object):
       with tf.name_scope("grad_prediction_loss"):
         grad_prediction_loss = tf.reduce_mean(tf.square(synthetic_grad_x - tf.stop_gradient(grad_out)))
         tf.summary.scalar("loss", grad_prediction_loss)
-      cls.scope_ctx.scope.register_loss(grad_prediction_loss)
+      # noinspection PyProtectedMember
+      loss_info = op._RETURNN_loss_info
+      cls.scope_ctx.scope.register_loss(MetaLosses.LossInfo(value=grad_prediction_loss, **loss_info))
     return synthetic_grad_x, None
 
   @classmethod
-  def synthetic_gradient(cls, x, synthetic_grad_x):
+  def synthetic_gradient(cls, x, synthetic_grad_x, loss_scale=1.0, loss_name=None, loss_source=None):
     """
     Decoupled Neural Interfaces using Synthetic Gradients, https://arxiv.org/abs/1608.05343
 
     :param tf.Tensor x:
     :param tf.Tensor synthetic_grad_x:
+    :param float loss_scale:
+    :param str|None loss_name:
+    :param object|None loss_source:
     :return: x, where the gradient is overwritten by synthetic_grad_x, and when calculated,
       the gradient prediction loss will be added to ``cls.scope``.
     :rtype: tf.Tensor
@@ -4288,6 +4316,7 @@ class MetaLosses(object):
       grad_op=cls._synthetic_gradient_bwd,
       name="synthetic_gradient")
     y = op(x, synthetic_grad_x)
+    y.op._RETURNN_loss_info = {"name": loss_name, "source": loss_source, "scale": loss_scale}
     y.set_shape(x.get_shape())
     return y
 
@@ -4304,14 +4333,19 @@ class MetaLosses(object):
       with tf.name_scope("tikhonov_regularization_loss"):
         loss = tf.nn.l2_loss(grad_out)
         tf.summary.scalar("loss", loss)
-      cls.scope_ctx.scope.register_loss(loss)
+      # noinspection PyProtectedMember
+      loss_info = op._RETURNN_loss_info
+      cls.scope_ctx.scope.register_loss(MetaLosses.LossInfo(value=loss, **loss_info))
     return grad_out, tf.constant(0.0)
 
   @classmethod
-  def tikhonov_regularized(cls, x, dummy):
+  def tikhonov_regularized(cls, x, dummy, loss_scale=1., loss_name=None, loss_source=None):
     """
     :param tf.Tensor x:
     :param tf.Tensor|tf.Variable dummy: scalar. can be used to enforce getting a gradient
+    :param float loss_scale:
+    :param str|None loss_name:
+    :param object|None loss_source:
     :return: identity(x), where we add a Tikhonov regularization
     :rtype: tf.Tensor
     """
@@ -4321,6 +4355,7 @@ class MetaLosses(object):
       grad_op=cls._tikhonov_gradient_bwd,
       name="tikhonov_regularized")
     y = op(x, dummy)
+    y.op._RETURNN_loss_info = {"name": loss_name, "source": loss_source, "scale": loss_scale}
     y.set_shape(x.get_shape())
     return y
 

@@ -1846,7 +1846,7 @@ def test_TikhonovRegularizationLayer():
       return args
 
     def make_network(num_layers):
-      net_dict["input"] = {"class": "tikhonov_regularization", "from": "data"}
+      net_dict["input"] = {"class": "tikhonov_regularization", "meta_loss_scale": 0.1, "from": "data"}
       sources = ["input"]
       for i in range(num_layers):
         net_dict["layer%i" % i] = layer(sources=sources)

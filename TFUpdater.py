@@ -203,7 +203,7 @@ class Updater(object):
       self.optim_meta_losses_dict = meta_losses_scope.losses_as_fetch_dict()
       if meta_losses_scope.losses:
         with tf.name_scope("meta_loss"):
-          meta_loss = tf.add_n(meta_losses_scope.losses)
+          meta_loss = meta_losses_scope.summed_loss_for_optimization()
           meta_apply_grads = self.optimizer.get_apply_grads_op(meta_loss, trainable_vars_for_gradients)
         apply_grads = tf.group(apply_grads, meta_apply_grads)
       self.optim_op = apply_grads
