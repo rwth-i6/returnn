@@ -1790,6 +1790,63 @@ def test_preload_from_files_ignore_missing():
   engine.finalize()
 
 
+def test_TikhonovRegularizationLayer():
+  """
+  Tests :class:`TikhonovRegularizationLayer`.
+  """
+  net_dict = {}
+  layer_n_out = 10
+  layer_common_args = {"class": "linear", "activation": "relu", "n_out": layer_n_out, "L2": 0.01}
+
+  def layer(sources, **kwargs):
+    args = kwargs.copy()
+    for k, v in layer_common_args.items():
+      args.setdefault(k, v)
+    args.setdefault("from", sources)
+    return args
+
+  def make_network(num_layers):
+    net_dict["input"] = {"class": "tikhonov_regularization", "meta_loss_scale": 0.1, "from": "data"}
+    sources = ["input"]
+    for i in range(num_layers):
+      net_dict["layer%i" % i] = layer(sources=sources)
+      sources = ["layer%i" % i]
+    net_dict["output"] = {"class": "softmax", "loss": "ce", "loss_opts": {"use_fused": False}, "from": sources}
+
+  make_network(num_layers=3)
+
+  from GeneratingDataset import DummyDataset
+  seq_len = 5
+  n_data_dim = 2
+  n_classes_dim = 3
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=10, seq_len=seq_len)
+  train_data.init_seq_order(epoch=1)
+  dev_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  dev_data.init_seq_order(epoch=1)
+
+  config = Config({
+    "model": "/tmp/model",
+    "batch_size": 100,
+    "max_seqs": 2,
+    "num_outputs": n_classes_dim,
+    "num_inputs": n_data_dim,
+    "network": net_dict,
+    "start_epoch": 1,
+    "num_epochs": 2,
+    "learning_rate": 0.01,
+    "adam": True,
+    "debug_print_layer_output_template": True,
+  })
+  engine = Engine(config=config)
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=dev_data, eval_data=None)
+  print("Extern data:")
+  pprint(engine.network.extern_data.data)
+  print("Used data keys:")
+  pprint(engine.network.used_data_keys)
+  engine.train()
+  engine.finalize()
+
+
 def test_unflatten_2d():
   # See also test_SimpleHDFWriter_ndim1_var_len.
   # And unflatten_nd, and UnflattenNdLayer.

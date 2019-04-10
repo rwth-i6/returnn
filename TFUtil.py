@@ -4192,15 +4192,17 @@ class MetaLosses(object):
     Covers loss and other info.
     """
 
-    def __init__(self, value, scale, name, source):
+    def __init__(self, value, scale, norm_factor, name, source):
       """
       :param tf.Tensor value:
       :param float scale:
+      :param tf.Tensor norm_factor:
       :param str name:
       :param object source: e.g. layer
       """
       self.value = value
       self.scale = scale
+      self.norm_factor = norm_factor
       self.name = name
       self.source = source
 
@@ -4234,7 +4236,9 @@ class MetaLosses(object):
       from collections import OrderedDict
       d = OrderedDict()
       for loss in self.losses:
+        # Note: This is somewhat specific to the way we use it in TFEngine.
         d["cost:%s" % loss.name] = loss.value
+        d["loss_norm_factor:%s" % loss.name] = loss.norm_factor
       return d
 
     def summed_loss_for_optimization(self):
@@ -4316,7 +4320,8 @@ class MetaLosses(object):
       grad_op=cls._synthetic_gradient_bwd,
       name="synthetic_gradient")
     y = op(x, synthetic_grad_x)
-    y.op._RETURNN_loss_info = {"name": loss_name, "source": loss_source, "scale": loss_scale}
+    y.op._RETURNN_loss_info = {
+      "name": loss_name, "source": loss_source, "scale": loss_scale, "norm_factor": tf.size(x)}
     y.set_shape(x.get_shape())
     return y
 
@@ -4355,7 +4360,8 @@ class MetaLosses(object):
       grad_op=cls._tikhonov_gradient_bwd,
       name="tikhonov_regularized")
     y = op(x, dummy)
-    y.op._RETURNN_loss_info = {"name": loss_name, "source": loss_source, "scale": loss_scale}
+    y.op._RETURNN_loss_info = {
+      "name": loss_name, "source": loss_source, "scale": loss_scale, "norm_factor": tf.size(x)}
     y.set_shape(x.get_shape())
     return y
 
