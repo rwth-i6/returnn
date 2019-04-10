@@ -16,7 +16,7 @@ import time
 import atexit
 import signal
 import typing
-from threading import RLock
+from threading import RLock, Thread
 import TaskSystem
 from TaskSystem import Pickler, Unpickler, numpy_set_unused
 from Util import eval_shell_str, make_hashable, BackendEngine
@@ -267,6 +267,38 @@ class SprintSubprocessInstance:
     self._exit_child()
     self._start_child()
 
+class ReaderThread(Thread):
+      def __init__(self, instance, instance_idx, batch_idxs, tags, seq_lengths, log_posteriors, batch_loss, batch_error_signal):
+        """
+        :param int instance_idx:
+        """
+        super(ReaderThread, self).__init__(
+          name="SprintErrorSignals reader thread for Sprint instance %i" % instance_idx)
+        self.deamon = True
+        self.instance_idx = instance_idx
+        self.instance = instance
+        self.batch_idxs = batch_idxs
+        self.tags = tags
+        self.seq_lengths = seq_lengths
+        self.log_posteriors = log_posteriors
+        self.batch_loss = batch_loss
+        self.batch_error_signal = batch_error_signal
+        self.exception = None
+        self.start()
+
+      def run(self):
+        try:
+          for b in self.batch_idxs:
+            self.instance.get_loss_and_error_signal__send(
+              seg_name=self.tags[b], seg_len=self.seq_lengths[b], log_posteriors=self.log_posteriors[:self.seq_lengths[b], b])
+            seg_name, loss, error_signal = self.instance.get_loss_and_error_signal__read()
+            assert seg_name == self.tags[b]
+            self.batch_loss[b] = loss
+            self.batch_error_signal[:self.seq_lengths[b], b] = error_signal
+            numpy_set_unused(error_signal)
+        except Exception as exc:
+          self.exception = exc
+
 
 class SprintInstancePool:
   """
@@ -344,29 +376,46 @@ class SprintInstancePool:
       assert Device.is_device_host_proc()
       tags = Device.get_current_seq_tags()
     assert len(tags) == n_batch
-
+    
     batch_loss = numpy.zeros((n_batch,), dtype="float32")
     batch_error_signal = numpy.zeros_like(log_posteriors, dtype="float32")
-    # Very simple parallelism. We must avoid any form of multi-threading
-    # because this can be problematic with Theano.
-    # See: https://groups.google.com/forum/#!msg/theano-users/Pu4YKlZKwm4/eNcAegzaNeYJ
-    # We also try to keep it simple here.
-    for bb in range(0, n_batch, self.max_num_instances):
-      for i in range(self.max_num_instances):
-        b = bb + i
-        if b >= n_batch: break
-        instance = self._get_instance(i)
-        instance.get_loss_and_error_signal__send(
-          seg_name=tags[b], seg_len=seq_lengths[b], log_posteriors=log_posteriors[:seq_lengths[b], b])
-      for i in range(self.max_num_instances):
-        b = bb + i
-        if b >= n_batch: break
-        instance = self._get_instance(i)
-        seg_name, loss, error_signal = instance.get_loss_and_error_signal__read()
-        assert seg_name == tags[b]
-        batch_loss[b] = loss
-        batch_error_signal[:seq_lengths[b], b] = error_signal
-        numpy_set_unused(error_signal)
+    
+    # greedy solution to the scheduling problem
+    sorted_length = sorted(enumerate(seq_lengths),key=lambda x:x[1],reverse=True)
+    jobs = [ [] for i in range(self.max_num_instances) ]
+    joblen = [0]*self.max_num_instances
+    for i,l in sorted_length:
+      j = min(enumerate(joblen),key=lambda x:x[1])[0]
+      jobs[j].append(i)
+      joblen[j]+=l
+
+    if not BackendEngine.is_theano_selected() and self.max_num_instances > 1:
+      threads = [ReaderThread(self._get_instance(i), i, jobs[i], tags, seq_lengths, log_posteriors, batch_loss, batch_error_signal) for i in range(self.max_num_instances)]
+      for i,thread in enumerate(threads):
+        thread.join()
+        if thread.exception:
+          raise thread.exception
+    else:
+      # Very simple parallelism. We must avoid any form of multi-threading
+      # because this can be problematic with Theano.
+      # See: https://groups.google.com/forum/#!msg/theano-users/Pu4YKlZKwm4/eNcAegzaNeYJ
+      # We also try to keep it simple here.
+      for bb in range(0, n_batch, self.max_num_instances):
+        for i in range(self.max_num_instances):
+          b = bb + i
+          if b >= n_batch: break
+          instance = self._get_instance(i)
+          instance.get_loss_and_error_signal__send(
+            seg_name=tags[b], seg_len=seq_lengths[b], log_posteriors=log_posteriors[:seq_lengths[b], b])
+        for i in range(self.max_num_instances):
+          b = bb + i
+          if b >= n_batch: break
+          instance = self._get_instance(i)
+          seg_name, loss, error_signal = instance.get_loss_and_error_signal__read()
+          assert seg_name == tags[b]
+          batch_loss[b] = loss
+          batch_error_signal[:seq_lengths[b], b] = error_signal
+          numpy_set_unused(error_signal)
     return batch_loss, batch_error_signal
 
   def get_automata_for_batch(self, tags):
