@@ -4291,6 +4291,7 @@ class MetaLosses(object):
     y.set_shape(x.get_shape())
     return y
 
+  # noinspection PyUnusedLocal
   @classmethod
   def _tikhonov_gradient_bwd(cls, op, grad_out):
     """
@@ -4301,7 +4302,7 @@ class MetaLosses(object):
     """
     if cls.scope_ctx.scope:
       with tf.name_scope("tikhonov_regularization_loss"):
-        loss = grad_out ** 2.
+        loss = tf.nn.l2_loss(grad_out)
         tf.summary.scalar("loss", loss)
       cls.scope_ctx.scope.register_loss(loss)
     return grad_out, tf.constant(0.0)
