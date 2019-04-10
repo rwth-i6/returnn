@@ -110,71 +110,11 @@ class Runner(object):
     """
     # Note that it is important that we do not recreate graph nodes for every call to this function.
     # Thus everything which we access here should be cached.
+    d = self.engine.network.get_fetches_dict(
+      config=self.engine.config,
+      should_train=self._should_train, should_eval=self._should_eval,
+      with_summary=True, with_size=True)
 
-    def reduce_sum(x, name, average=False):
-      """
-      :param tf.Tensor x:
-      :param str name:
-      :param bool average:
-      :return: sum(x) if horovod else x
-      :rtype: tf.Tensor
-      """
-      if not self.engine.config.is_true("use_horovod"):
-        return x
-      from TFUtil import global_tensor
-      # noinspection PyUnresolvedReferences,PyPackageRequirements
-      import horovod.tensorflow as hvd
-      return global_tensor(
-        lambda: hvd.allreduce(x, average=average),
-        name="fetch_reduce_sum__" + name.replace(":", "__").replace("/", "_"))
-
-    def inv_reduce_sum(x, name):
-      """
-      :param tf.Tensor x:
-      :param str name:
-      :return: reciprocal(sum(reciprocal(x))) if horovod else x
-      :rtype: tf.Tensor
-      """
-      if not self.engine.config.is_true("use_horovod"):
-        return x
-      from TFUtil import global_tensor
-      return global_tensor(
-        lambda: tf.reciprocal(reduce_sum(tf.reciprocal(x), name=name)),
-        name="fetch_inv_reduce_sum__" + name.replace(":", "__").replace("/", "_"))
-
-    d = {}
-    for key in self.data_provider.data_keys:
-      data = self.data_provider.extern_data.get_data(key)
-      for dim, v in data.size_placeholder.items():
-        d["size:%s:%i" % (key, dim)] = v
-    if self._should_train or self._should_eval:
-      # These values are cached internally and the graph nodes are created on the first call.
-      loss = self.engine.network.get_objective()
-      if loss is 0:
-        loss = self.engine.get_const_tensor(key="zero_loss", value=0.0)
-      else:  # non-constant-zero loss
-        assert self.engine.network.losses_dict
-      d["loss"] = reduce_sum(loss, name="loss", average=True)
-      for loss_name, loss in self.engine.network.losses_dict.items():
-        if loss.get_only_on_eval() and self._should_train:
-          continue
-        if loss.get_loss_value_for_fetch() is not None:
-          d["cost:%s" % loss_name] = reduce_sum(loss.get_loss_value_for_fetch(), name="cost:%s" % loss_name)
-        if loss.get_error_value() is not None:
-          d["error:%s" % loss_name] = reduce_sum(loss.get_error_value(), name="error:%s" % loss_name)
-        d["loss_norm_factor:%s" % loss_name] = inv_reduce_sum(
-          loss.get_norm_factor(), name="loss_norm_factor:%s" % loss_name)
-      for layer in self.engine.network.layers.values():
-        if layer.only_on_eval and self._should_train:
-          continue
-        # Maybe store additional size info of layer targets.
-        if layer.target and layer.target.startswith("layer:"):
-          target_data = layer.loss.target
-          for dim, v in target_data.size_placeholder.items():
-            d["size:%s:%i" % (layer.target, dim)] = v
-    for layer in self.engine.network.layers.values():
-      for k, v in layer.stats.items():
-        d["stats:%s:%s" % (layer.name, k)] = v
     if self._should_train:
       assert self.engine.updater
 
@@ -187,8 +127,9 @@ class Runner(object):
         self.engine.updater.init_optimizer_vars(session=self.engine.tf_session)
 
       d["optim_op"] = self.engine.updater.get_optim_op(callback_on_new=callback_on_new)
-      if self.engine.updater.optim_meta_losses:
-        d.update(self.engine.updater.optim_meta_losses)
+      if self.engine.updater.optim_meta_losses_dict:
+        d.update(self.engine.updater.optim_meta_losses_dict)
+
     if self.extra_fetches is not None:
       from TFNetworkLayer import LayerBase
       from TFUtil import Data
@@ -204,17 +145,7 @@ class Runner(object):
         d["extra:%s" % k] = v.placeholder  # see _maybe_handle_extra_fetches, it will transform to batch-major there
         for i, s in v.size_placeholder.items():
           d["extra:%s:size_%i" % (k, i)] = s
-    if self.engine.get_all_merged_summaries() is not None:
-      d["summary"] = self.engine.get_all_merged_summaries()
-    if self.engine.config.bool("tf_log_memory_usage", False):
-      from TFUtil import mem_usage_for_dev
-      for dev in self.engine.tf_session.list_devices():
-        if dev.device_type != "GPU":
-          # mem_usage_for_dev currently only works for GPU
-          continue
-        d["mem_usage:%s" % os.path.basename(dev.name.replace("/device:", "/"))] = mem_usage_for_dev(dev.name)
-    if self.engine.network.get_post_control_dependencies():
-      d["post_control_dependencies"] = self.engine.network.get_post_control_dependencies()
+
     return d
 
   def _print_process(self, report_prefix, step, step_duration, eval_info):
@@ -1683,17 +1614,6 @@ class Engine(EngineBase):
     for epoch in remove_epochs:
       count_bytes += self.delete_model(existing_models[epoch])
     print("Deleted %s." % human_bytes_size(count_bytes), file=log.v2)
-
-  def get_all_merged_summaries(self):
-    """
-    :return: merged summaries, serialized string
-    :rtype: tf.Tensor
-    """
-    # Note: This assumes that the summaries never change.
-    # Both both training and evaluation on the CV dataset, this is the case.
-    if self._merge_all_summaries is None:
-      self._merge_all_summaries = tf.summary.merge_all()
-    return self._merge_all_summaries
 
   def check_uninitialized_vars(self):
     """

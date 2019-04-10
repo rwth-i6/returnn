@@ -2738,7 +2738,7 @@ def get_available_gpu_devices():
   Note that a call to this will trigger the internal TF thread pool inits,
   so you should call :func:`setup_tf_thread_pools` first.
 
-  :rtype: list[tensorflow.core.framework.device_attributes_pb2.DeviceAttributes]
+  :rtype: list[tensorflow.core.framework.device_attributes_pb2.DeviceAttributes|_DeviceAttributes]
   """
   return [x for x in get_tf_list_local_devices() if x.device_type == 'GPU']
 

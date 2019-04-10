@@ -108,7 +108,7 @@ class Updater(object):
       self.constraints = None
     self.optimizer = None  # type: typing.Optional[WrapOptimizer]
     self.optim_op = None  # type: typing.Optional[tf.Operation]
-    self.optim_meta_losses = None  # type: typing.Optional[typing.Dict[str,tf.Tensor]]
+    self.optim_meta_losses_dict = None  # type: typing.Optional[typing.Dict[str,tf.Tensor]]
     self.optimizer_vars = []  # type: typing.List[tf.Variable]
     self.optimizer_init_vars_op = None  # type: typing.Optional[tf.Operation]
 
@@ -200,7 +200,7 @@ class Updater(object):
       meta_losses_scope = MetaLosses.enter_gradient_scope()
       apply_grads = self.optimizer.get_apply_grads_op(self.loss, trainable_vars_for_gradients)
       meta_losses_scope.exit()
-      self.optim_meta_losses = meta_losses_scope.losses_as_fetch_dict()
+      self.optim_meta_losses_dict = meta_losses_scope.losses_as_fetch_dict()
       if meta_losses_scope.losses:
         with tf.name_scope("meta_loss"):
           meta_loss = tf.add_n(meta_losses_scope.losses)
