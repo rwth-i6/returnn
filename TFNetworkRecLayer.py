@@ -991,7 +991,7 @@ class _SubnetworkRecCell(object):
           # Only as a last resort, allow this.
           get_layer_candidates = []  # type: typing.List[GetLayer]
           # noinspection PyProtectedMember
-          if lself.iterative_testing and name not in self.net._constructing_layers:
+          if lself.iterative_testing and name not in self.net._construction_stack.layers:
             get_layer_candidates = [
               default_get_layer,
               GetLayer(once=True, allow_uninitialized_template=False, parent=_name),

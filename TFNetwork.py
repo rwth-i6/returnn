@@ -209,6 +209,29 @@ class ExternData(object):
     return tags
 
 
+class _NetworkConstructionStack:
+  """
+  Used to keep the recursive construction state of :function:`TFNetwork.construct_layer`.
+  """
+
+  def __init__(self):
+    self.layers = []  # type: typing.List[str]
+    self.catch_delayed_exception_depth = 0
+
+  def append(self, layer_name):
+    """
+    :param str layer_name:
+    """
+    assert layer_name not in self.layers
+    self.layers.append(layer_name)
+
+  def remove(self, layer_name):
+    """
+    :param str layer_name:
+    """
+    self.layers.remove(layer_name)
+
+
 class TFNetwork(object):
   """
   The main neural network, i.e. collection of interconnected layers, i.e. computation graph with trainable params.
@@ -269,7 +292,7 @@ class TFNetwork(object):
     self.extra_parent_net = extra_parent_net
     self.extra_net = None  # type: typing.Optional[TFNetwork]
     self._selected_train_layers = None
-    self._constructing_layers = []  # type: typing.List[str]
+    self._construction_stack = _NetworkConstructionStack()
     self.layers_desc = {}  # type: typing.Dict[str,typing.Dict[str]]
     self.layers = {}  # type: typing.Dict[str,LayerBase]
     self.losses_dict = {}  # type: typing.Dict[str,LossHolder]
@@ -383,7 +406,7 @@ class TFNetwork(object):
               or layer_desc.get("loss", None)
               or layer_desc.get("is_output_layer", False)):
         self.construct_layer(net_dict, name)
-    assert not self._constructing_layers
+    assert not self._construction_stack.layers
 
   def construct_extra_net(self, net_dict, layer_list, search_flag=None):
     """
@@ -411,6 +434,17 @@ class TFNetwork(object):
     if self.extra_net.recurrent:
       self.recurrent = True
 
+  def _flat_construction_enabled(self):
+    """
+    :return: whether to use flat construction algorithm in :func:`construct_layer`.
+      Use this if you get stack overflow errors, such as:
+        ``Fatal Python error: Cannot recover from stack overflow``
+      or
+        ``RuntimeError: maximum recursion depth exceeded``.
+    :rtype: bool
+    """
+    return self.get_config().bool("flat_net_construction", False)
+
   def construct_layer(self, net_dict, name, get_layer=None, add_layer=None, check_existing=True):
     """
     :param dict[str,dict[str]] net_dict:
@@ -430,9 +464,13 @@ class TFNetwork(object):
         return self.get_layer(name)
       except LayerNotFound:
         pass  # ok, we will try to construct it then
-    if name in self._constructing_layers:
+    if name in self._construction_stack.layers:
       raise NetworkConstructionDependencyLoopException(
-        layer_name=name, constructing_layers=self._constructing_layers, net_dict=net_dict, network=self)
+        layer_name=name, constructing_layers=self._construction_stack.layers, net_dict=net_dict, network=self)
+    if self._flat_construction_enabled() and self._construction_stack.layers:
+      raise _DelayedConstructionException(
+        network=self, layer_name=name,
+        other_kwargs=dict(net_dict=net_dict, get_layer=get_layer, add_layer=add_layer, check_existing=check_existing))
     if not get_layer:
       def get_layer(src_name):
         """
@@ -463,12 +501,28 @@ class TFNetwork(object):
     layer_desc = layer_desc.copy()
     class_name = layer_desc.pop("class")
     layer_class = get_layer_class(class_name)
-    self._constructing_layers.append(name)
-    try:
-      # This call would also resolve dependencies, and e.g. recursively then create them (via get_layer calls).
-      layer_class.transform_config_dict(layer_desc, network=self, get_layer=get_layer)
-    finally:
-      self._constructing_layers.remove(name)
+    while True:  # normally just one iteration, but certain cases will try multiple times
+      self._construction_stack.catch_delayed_exception_depth += 1
+      delayed_exc = None
+      try:
+        self._construction_stack.append(name)
+        try:
+          # This call would also resolve dependencies, and e.g. recursively then create them (via get_layer calls).
+          layer_class.transform_config_dict(layer_desc, network=self, get_layer=get_layer)
+        finally:
+          self._construction_stack.remove(name)
+        break
+      except _DelayedConstructionException as _delayed_exc:
+        delayed_exc = _delayed_exc
+        if self._construction_stack.catch_delayed_exception_depth > 1:
+          raise  # reraise. let the first construct_layer handle it
+      finally:
+        self._construction_stack.catch_delayed_exception_depth -= 1
+      assert delayed_exc
+      assert not delayed_exc.network._construction_stack.layers
+      delayed_exc.delayed_construction()
+      # Now try again.
+      continue
     return add_layer(name=name, layer_class=layer_class, **layer_desc)
 
   def _create_layer_layer_desc(self, name, layer_desc):
@@ -1789,6 +1843,28 @@ class NetworkConstructionDependencyLoopException(Exception):
     self.network = network
     self.layer_name = layer_name
     self.net_dict = net_dict
+
+
+class _DelayedConstructionException(Exception):
+  """
+  When we want to do a flat construction.
+  """
+  def __init__(self, network, layer_name, other_kwargs):
+    """
+    :param TFNetwork network:
+    :param str layer_name:
+    :param dict[str] other_kwargs:
+    """
+    self.network = network
+    self.layer_name = layer_name
+    self.other_kwargs = other_kwargs
+
+  def delayed_construction(self):
+    """
+    Call :func:`TFNetwork.construct_layer` again now.
+    """
+    print("Delayed flat layer construction:", self.layer_name, file=log.v5)
+    self.network.construct_layer(name=self.layer_name, **self.other_kwargs)
 
 
 class LayerNotFound(Exception):
