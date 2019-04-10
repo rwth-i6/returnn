@@ -1,6 +1,15 @@
 
 """
 Common settings for linters, e.g. pycharm-inspect.py or pylint.py.
+
+Some resources:
+https://github.com/google/styleguide
+https://google.github.io/styleguide/pyguide.html
+https://chromium.googlesource.com/chromium/src/+/master/docs/code_reviews.md#OWNERS-files
+
+Our Python style:
+2 space indentation, 120 char line limit, otherwise mostly PEP8,
+and follow further common Python conventions (closely follow PyCharm warnings).
 """
 
 # Proceed like this: Fix all warnings for some file, then remove it from this list.
