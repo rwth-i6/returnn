@@ -1694,6 +1694,129 @@ def test_param_variational_noise():
       assert len(ops) == 1 and "param_variational_noise" in ops[0].name
 
 
+def test_LinearLayer_simple_train():
+  config = Config()
+  n_in, n_out = 7, 3
+  config.update({
+    "extern_data": {
+      "data": (n_in, 2),
+      "classes": (n_out, 1),
+    },
+    "debug_print_layer_output_template": True,
+  })
+  print("Creating network...")
+  with tf.Graph().as_default():
+    network = TFNetwork(config=config, train_flag=True)
+
+    net_dict = {}
+    layer_n_out = 10
+    layer_common_args = {"class": "linear", "activation": "relu", "n_out": layer_n_out, "L2": 0.01}
+
+    def layer(sources, **kwargs):
+      args = kwargs.copy()
+      for k, v in layer_common_args.items():
+        args.setdefault(k, v)
+      args.setdefault("from", sources)
+      return args
+
+    def make_network(num_layers):
+      sources = ["data"]
+      for i in range(num_layers):
+        net_dict["layer%i" % i] = layer(sources=sources)
+        sources = ["layer%i" % i]
+      net_dict["output"] = {"class": "softmax", "loss": "ce", "from": sources}
+
+    make_network(num_layers=3)
+    network.construct_from_dict(net_dict)
+    data_input = network.extern_data.get_default_input_data()
+    data_target = network.extern_data.get_default_target_data()
+    optimizer = tf.train.AdamOptimizer()
+    network.maybe_construct_objective()
+    update_op = optimizer.minimize(network.get_objective())
+    n_batch = 5
+    n_time = 11
+    rnd = numpy.random.RandomState(42)
+    with tf.Session() as session:
+      session.run(tf.global_variables_initializer())
+      for step in range(5):
+        info, _ = session.run(
+          (network.get_fetches_dict(), update_op),
+          feed_dict={
+            data_input.placeholder: rnd.normal(size=(n_batch, n_time, n_in)).astype("float32"),
+            data_input.size_placeholder[0]: numpy.array([n_time] * n_batch, dtype="int32"),
+            data_target.placeholder: rnd.randint(0, n_out, size=(n_batch, n_time), dtype="int32"),
+            data_target.size_placeholder[0]: numpy.array([n_time] * n_batch, dtype="int32"),
+          })
+        print("step:", step, "info:", info)
+
+
+def test_SyntheticGradientLayer():
+  """
+  Tests :class:`SyntheticGradientLayer`.
+  """
+  config = Config()
+  n_in, n_out = 7, 3
+  config.update({
+    "extern_data": {
+      "data": (n_in, 2),
+      "classes": (n_out, 1),
+    },
+    "debug_print_layer_output_template": True,
+  })
+  print("Creating network...")
+  with tf.Graph().as_default():
+    network = TFNetwork(config=config, train_flag=True)
+
+    net_dict = {}
+    layer_n_out = 10
+    layer_common_args = {"class": "linear", "activation": "relu", "n_out": layer_n_out, "L2": 0.01}
+
+    def layer(sources, **kwargs):
+      args = kwargs.copy()
+      for k, v in layer_common_args.items():
+        args.setdefault(k, v)
+      args.setdefault("from", sources)
+      return args
+
+    def make_network(num_layers):
+      sources = ["data"]
+      for i in range(num_layers):
+        net_dict["layer%i" % i] = layer(sources=sources)
+        sources = ["layer%i" % i]
+        net_dict["predict_grad%i" % i] = layer(sources=sources)
+        net_dict["syn_grad%i" % i] = {"class": "synthetic_gradient", "gradient": "predict_grad%i" % i, "from": sources}
+        sources = ["syn_grad%i" % i]
+      net_dict["output"] = {"class": "softmax", "loss": "ce", "from": sources}
+
+    make_network(num_layers=3)
+    network.construct_from_dict(net_dict)
+    data_input = network.extern_data.get_default_input_data()
+    data_target = network.extern_data.get_default_target_data()
+    from TFUpdater import Updater
+    updater = Updater(config=config, network=network, initial_learning_rate=0.001)
+    updater.set_trainable_vars(tf.trainable_variables())
+    update_op = updater.get_optim_op()
+    assert updater.optim_meta_losses_dict
+    fetches = network.get_fetches_dict()
+    fetches.update(updater.optim_meta_losses_dict)
+
+    n_batch = 5
+    n_time = 11
+    rnd = numpy.random.RandomState(42)
+    with tf.Session() as session:
+      session.run(tf.variables_initializer(tf.global_variables() + [network.global_train_step]))
+      for step in range(5):
+        info, _ = session.run(
+          (fetches, update_op),
+          feed_dict={
+            data_input.placeholder: rnd.normal(size=(n_batch, n_time, n_in)).astype("float32"),
+            data_input.size_placeholder[0]: numpy.array([n_time] * n_batch, dtype="int32"),
+            data_target.placeholder: rnd.randint(0, n_out, size=(n_batch, n_time), dtype="int32"),
+            data_target.size_placeholder[0]: numpy.array([n_time] * n_batch, dtype="int32"),
+          })
+        print("step:", step, "info:", info)
+
+
 def test_split_info_input():
   from TFUtil import print_graph_output, find_ops_with_tensor_input
   config = Config({
