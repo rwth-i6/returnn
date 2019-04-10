@@ -1,0 +1,13 @@
+# https://help.github.com/en/articles/about-code-owners
+# https://github.blog/2017-07-06-introducing-code-owners/
+# https://chromium.googlesource.com/chromium/src/+/master/docs/code_reviews.md#OWNERS-files
+
+*       @rwth-i6/returnn @albertz
+TF*     @albertz
+Theano* @albertz @doetsch
+
+better_exchook.py @albertz
+
+# Could be extended a lot more, but not sure if needed.
+# The global owners are also almost always the owners of more specific things.
+# Only add new entries when these differ from the global owners.
