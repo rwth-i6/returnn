@@ -3420,6 +3420,8 @@ def expand_dims_unbroadcast(x, axis, dim, name="expand_dims_unbroadcast"):
       new_ndim = x.get_shape().ndims
       assert new_ndim is not None, "not implemented otherwise yet"
       assert isinstance(axis, int), "not implemented otherwise yet"
+      if axis < 0:
+        axis = new_ndim + axis
       x = tf.tile(x, [dim if (axis == i) else 1 for i in range(new_ndim)])
     return x
 

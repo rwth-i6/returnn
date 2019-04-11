@@ -1424,6 +1424,19 @@ def test_expand_dims_unbroadcast_instead_of_tf_tile():
     assert_equal(list(r[:, beam]), [1, 2, 3])
 
 
+def test_expand_dims_unbroadcast_negative_axis():
+  batch_size = 3
+  n_time = 5
+  n_dim = 2
+  expand_dim = 6
+  v = tf.ones((batch_size, n_time, n_dim))  # (batch, time, dim)
+  v2 = expand_dims_unbroadcast(v, axis=-2, dim=expand_dim)  # (batch, time, 6, dim)
+  r = v2.eval()
+  print(r)
+  assert isinstance(r, numpy.ndarray)
+  assert_equal(r.shape, (batch_size, n_time, expand_dim, n_dim))  # (batch, time, dim)
+
+
 def test_where_nan():
   # via: https://stackoverflow.com/a/42497444/133374
   # @ops.RegisterGradient("Select")
