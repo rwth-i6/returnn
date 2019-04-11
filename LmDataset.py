@@ -51,7 +51,7 @@ class LmDataset(CachedDataset2):
     The vocabulary is given by self.orth_symbols and self.orth_symbols_map gives the corresponding
     mapping from symbol to integer index.
 
-    :param str|()->str corpus_file: Bliss XML or line-based txt. optionally can be gzip.
+    :param str|()->str|list[str]|()->list[str] corpus_file: Bliss XML or line-based txt. optionally can be gzip.
     :param dict|None phone_info: if you want to get phone seqs, dict with lexicon_file etc. see PhoneSeqGenerator
     :param str|()->str|None orth_symbols_file: list of orthography symbols, if you want to get orth symbol seqs
     :param str|()->str|None orth_symbols_map_file: list of orth symbols, each line: "symbol index"
@@ -171,7 +171,12 @@ class LmDataset(CachedDataset2):
       self.num_outputs["delayed"] = self.num_outputs["data"]
       self.labels["delayed"] = self.labels["data"]
 
-    self.orths = read_corpus(corpus_file)
+    if isinstance(corpus_file, list):  # If a list of files is provided, concatenate all.
+      self.orths = []
+      for file_name in corpus_file:
+        self.orths += read_corpus(file_name)
+    else:
+      self.orths = read_corpus(corpus_file)
     # It's only estimated because we might filter some out or so.
     self._estimated_num_seqs = len(self.orths) // self.partition_epoch
     print("  done, loaded %i sequences" % len(self.orths), file=log.v4)
