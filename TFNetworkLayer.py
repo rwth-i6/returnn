@@ -443,7 +443,9 @@ class LayerBase(object):
             # A nicer solution would be to not modify this here,
             # but instead lazily handle it in TFNetwork.get_extern_data,
             # such that we do not need to know in advance which data keys we need.
-            network.used_data_keys.add(target)
+            # Also, if we are inside a rec layer, and doing search, we also cannot do that.
+            if not network.is_inside_rec_layer() or not network.search_flag:
+              network.used_data_keys.add(target)
     if "n_out" not in d and targets and network.eval_flag:
       # Must be done here now because loss might be set to None later.
       target = targets[0]  # guess using first target
