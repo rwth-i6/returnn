@@ -538,13 +538,18 @@ class RecLayer(_ConcatInputLayer):
         x = cell.get_input_transformed(x)
     if isinstance(cell, rnn_cell.RNNCell):  # e.g. BasicLSTMCell
       if self._unroll:
-        assert self._max_seq_len is not None
-        # We must get x.shape[0] == self._max_seq_len, so pad it, or truncate.
+        assert self._max_seq_len is not None, "specify max_seq_len for unroll"
+        # We must get x.shape[0] == self._max_seq_len, so pad it.
         x_shape = x.get_shape().as_list()
         original_len = tf.shape(x)[0]
-        pad_len = tf.maximum(0, self._max_seq_len - original_len)
-        x = tf.pad(x, [(0, pad_len), (0, 0), (0, 0)])
-        x = x[:self._max_seq_len]
+        # With unrolling, normally we would require max_seq_len >= original_len.
+        # Earlier, we just truncated it in that case and filled with zero afterwards,
+        # which is bad, as this silently introduces wrong behavior for this case.
+        with tf.control_dependencies([
+              tf.assert_greater_equal(self._max_seq_len, original_len,
+                                      message="required for unroll: max_seq_len >= seq_len")]):
+          pad_len = tf.maximum(0, self._max_seq_len - original_len)  # max, in case we want to support truncate later
+          x = tf.pad(x, [(0, pad_len), (0, 0), (0, 0)])
         x.set_shape([self._max_seq_len] + x_shape[1:])
         x = tf.unstack(x, axis=0, num=self._max_seq_len)
         y, final_state = rnn.static_rnn(
@@ -553,8 +558,6 @@ class RecLayer(_ConcatInputLayer):
         y = tf.stack(y, axis=0)
         y.set_shape([self._max_seq_len, None, self.output.dim])  # (time,batch,ydim)
         # Now, recover the original len.
-        pad_len = tf.maximum(0, original_len - self._max_seq_len)
-        y = tf.pad(y, [(0, pad_len), (0, 0), (0, 0)])
         y = y[:original_len]
       else:
         # Will get (time,batch,ydim).
