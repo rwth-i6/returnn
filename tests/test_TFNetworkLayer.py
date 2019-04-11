@@ -1765,9 +1765,12 @@ def test_flat_net_construction():
   with tf.Graph().as_default():
     network = TFNetwork(config=config, train_flag=True)
 
-    net_dict = {}
-    layer_n_out = 10
-    layer_common_args = {"class": "linear", "activation": "relu", "n_out": layer_n_out, "L2": 0.01}
+    net_dict = {
+      "pre0": {"class": "linear", "activation": "tanh", "from": "data", "n_out": 10},
+      "pre1": {"class": "linear", "activation": "tanh", "from": "pre0", "n_out": 10},
+      "pre2": {"class": "linear", "activation": "tanh", "from": "pre1", "n_out": 10}
+    }
+    layer_common_args = {"class": "copy"}
 
     def layer(sources, **kwargs):
       args = kwargs.copy()
@@ -1777,13 +1780,13 @@ def test_flat_net_construction():
       return args
 
     def make_network(num_layers):
-      sources = ["data"]
+      sources = ["pre2"]
       for i in range(num_layers):
         net_dict["layer%i" % i] = layer(sources=sources)
         sources = ["layer%i" % i]
       net_dict["output"] = {"class": "softmax", "loss": "ce", "from": sources}
 
-    make_network(num_layers=3)
+    make_network(num_layers=5000)
     network.construct_from_dict(net_dict)
     data_input = network.extern_data.get_default_input_data()
     data_target = network.extern_data.get_default_target_data()

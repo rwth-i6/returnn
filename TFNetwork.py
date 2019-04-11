@@ -216,7 +216,7 @@ class _NetworkConstructionStack:
 
   def __init__(self):
     self.layers = []  # type: typing.List[str]
-    self.catch_delayed_exception_depth = 0
+    self.in_flat_construct_count = 0
 
   def append(self, layer_name):
     """
@@ -230,6 +230,25 @@ class _NetworkConstructionStack:
     :param str layer_name:
     """
     self.layers.remove(layer_name)
+
+  def flat_construct(self, initial):
+    """
+    :param _DelayedConstructionException initial:
+    """
+    self.in_flat_construct_count += 1
+    queue = [initial]  # type: typing.List[_DelayedConstructionException]
+    try:
+      while queue:
+        try:
+          res = queue[-1].delayed_construction()
+          if queue[-1] is initial:
+            return res
+          queue.pop(-1)
+        except _DelayedConstructionException as delayed_exc:
+          queue.append(delayed_exc)
+    finally:
+      self.in_flat_construct_count -= 1
+    assert False, "we should not get here"
 
 
 class TFNetwork(object):
@@ -467,10 +486,14 @@ class TFNetwork(object):
     if name in self._construction_stack.layers:
       raise NetworkConstructionDependencyLoopException(
         layer_name=name, constructing_layers=self._construction_stack.layers, net_dict=net_dict, network=self)
-    if self._flat_construction_enabled() and self._construction_stack.layers:
-      raise _DelayedConstructionException(
+    if self._flat_construction_enabled():
+      delayed_exc = _DelayedConstructionException(
         network=self, layer_name=name,
         other_kwargs=dict(net_dict=net_dict, get_layer=get_layer, add_layer=add_layer, check_existing=check_existing))
+      if not self._construction_stack.in_flat_construct_count:
+        return self._construction_stack.flat_construct(delayed_exc)
+      if self._construction_stack.layers:
+        raise delayed_exc
     if not get_layer:
       def get_layer(src_name):
         """
@@ -501,28 +524,12 @@ class TFNetwork(object):
     layer_desc = layer_desc.copy()
     class_name = layer_desc.pop("class")
     layer_class = get_layer_class(class_name)
-    while True:  # normally just one iteration, but certain cases will try multiple times
-      self._construction_stack.catch_delayed_exception_depth += 1
-      delayed_exc = None
-      try:
-        self._construction_stack.append(name)
-        try:
-          # This call would also resolve dependencies, and e.g. recursively then create them (via get_layer calls).
-          layer_class.transform_config_dict(layer_desc, network=self, get_layer=get_layer)
-        finally:
-          self._construction_stack.remove(name)
-        break
-      except _DelayedConstructionException as _delayed_exc:
-        delayed_exc = _delayed_exc
-        if self._construction_stack.catch_delayed_exception_depth > 1:
-          raise  # reraise. let the first construct_layer handle it
-      finally:
-        self._construction_stack.catch_delayed_exception_depth -= 1
-      assert delayed_exc
-      assert not delayed_exc.network._construction_stack.layers
-      delayed_exc.delayed_construction()
-      # Now try again.
-      continue
+    self._construction_stack.append(name)
+    try:
+      # This call would also resolve dependencies, and e.g. recursively then create them (via get_layer calls).
+      layer_class.transform_config_dict(layer_desc, network=self, get_layer=get_layer)
+    finally:
+      self._construction_stack.remove(name)
     return add_layer(name=name, layer_class=layer_class, **layer_desc)
 
   def _create_layer_layer_desc(self, name, layer_desc):
@@ -1859,12 +1866,17 @@ class _DelayedConstructionException(Exception):
     self.layer_name = layer_name
     self.other_kwargs = other_kwargs
 
+  def __repr__(self):
+    return "%s(layer_name=%r)" % (self.__class__.__name__, self.layer_name)
+
   def delayed_construction(self):
     """
     Call :func:`TFNetwork.construct_layer` again now.
+
+    :rtype: LayerBase
     """
     print("Delayed flat layer construction:", self.layer_name, file=log.v5)
-    self.network.construct_layer(name=self.layer_name, **self.other_kwargs)
+    return self.network.construct_layer(name=self.layer_name, **self.other_kwargs)
 
 
 class LayerNotFound(Exception):
