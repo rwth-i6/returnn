@@ -3005,7 +3005,10 @@ class MergeDimsLayer(_ConcatInputLayer):
     """
     if input_data.feature_dim_axis in merge_axes:
       # We want it to become the new feature dim axis.
-      return input_data.feature_dim_axis - len(merge_axes) + 1
+      # but we have to count only the dims prior to the feature-dim
+      new_feature_dim_axis = input_data.feature_dim_axis
+      new_feature_dim_axis -= sum([axis < input_data.feature_dim_axis for axis in merge_axes])
+      return new_feature_dim_axis
     else:
       return min(merge_axes)
 
