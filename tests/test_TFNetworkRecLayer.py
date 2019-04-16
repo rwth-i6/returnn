@@ -2746,6 +2746,81 @@ def test_reclayer_move_out_input_train_and_search():
     assert "encoder_int" in cell.input_layers_moved_out
 
 
+def test_move_out_independent_lstm():
+  EncKeyTotalDim = 10
+  EncValueTotalDim = 10
+  AttNumHeads = 1
+  EncValuePerHeadDim = EncValueTotalDim // AttNumHeads
+  target = "classes"
+  beam_size = 3
+  net_dict = {
+    "encoder": {"class": "rec", "unit": "nativelstm2", "from": ["data"], "n_out": EncValueTotalDim},  # dim: EncValueTotalDim
+    "enc_ctx": {"class": "linear", "activation": None, "with_bias": True, "from": ["encoder"], "n_out": EncKeyTotalDim},  # preprocessed_attended in Blocks
+    "inv_fertility": {"class": "linear", "activation": "sigmoid", "with_bias": False, "from": ["encoder"], "n_out": AttNumHeads},
+    "enc_value": {"class": "split_dims", "axis": "F", "dims": (AttNumHeads, EncValuePerHeadDim), "from": ["encoder"]},  # (B, enc-T, H, D'/H)
+
+    "output": {"class": "rec", "from": [], "unit": {
+        'output': {'class': 'choice', 'target': target, 'beam_size': beam_size, 'from': ["output_prob"], "initial_output": 0},
+        "end": {"class": "compare", "from": ["output"], "value": 0},
+        'target_embed': {'class': 'linear', 'activation': None, "with_bias": False, 'from': ['output'], "n_out": 13, "initial_output": 0},  # feedback_input
+        "s_transformed": {"class": "linear", "activation": None, "with_bias": False, "from": ["s"], "n_out": EncKeyTotalDim},
+        "energy_in": {"class": "combine", "kind": "add", "from": ["base:enc_ctx", "s_transformed"], "n_out": EncKeyTotalDim},
+        "energy_tanh": {"class": "activation", "activation": "tanh", "from": ["energy_in"]},
+        "energy": {"class": "linear", "activation": None, "with_bias": False, "from": ["energy_tanh"], "n_out": AttNumHeads},  # (B, enc-T, H)
+        "att_weights": {"class": "softmax_over_spatial", "from": ["energy"]},  # (B, enc-T, H)
+        "att0": {"class": "generic_attention", "weights": "att_weights", "base": "base:enc_value"},  # (B, H, V)
+        "att": {"class": "merge_dims", "axes": "static", "from": ["att0"]},  # (B, H*V)
+        "s": {"class": "rec", "unit": "nativelstm2", "from": ["prev:target_embed"], "n_out": 7},
+        "readout_in": {"class": "linear", "from": ["s", "prev:target_embed", "att"], "activation": None, "n_out": 10},
+        "readout": {"class": "reduce_out", "mode": "max", "num_pieces": 2, "from": ["readout_in"]},
+        "output_prob": {
+            "class": "softmax", "from": ["readout"], "dropout": 0.3,
+            "target": target, "loss": "ce", "loss_opts": {"label_smoothing": 0.1}}
+    }, "target": target, "max_seq_len": "max_len_from('base:encoder')"},
+    }
+  with make_scope() as session:
+    from GeneratingDataset import TaskNumberBaseConvertDataset
+    dataset = TaskNumberBaseConvertDataset()
+    extern_data = ExternData()
+    extern_data.init_from_dataset(dataset)
+    print("Construct...")
+    net = TFNetwork(
+      config=Config({
+        "debug_print_layer_output_template": True,
+        }),
+      extern_data=extern_data,
+      train_flag=True)
+    net.construct_from_dict(net_dict)
+    output_layer = net.get_default_output_layer()
+    print("output layer:", output_layer)
+    assert isinstance(output_layer, RecLayer)
+    cell = output_layer.cell
+    from TFNetworkRecLayer import _SubnetworkRecCell
+    assert isinstance(cell, _SubnetworkRecCell)
+    assert not cell.net.layers, "everything moved out"  # yay :)
+
+    print("Run...")
+    from TFDataPipeline import FeedDictDataProvider
+    dataset.init_seq_order(epoch=1)
+    batches = dataset.generate_batches(
+      recurrent_net=net.recurrent,
+      batch_size=1000,
+      max_seqs=10,
+      max_seq_length=sys.maxsize,
+      used_data_keys=net.used_data_keys)
+    data_provider = FeedDictDataProvider(
+      tf_session=session, extern_data=extern_data,
+      data_keys=net.used_data_keys,
+      dataset=dataset, batches=batches)
+    feed_dict, _ = data_provider.get_feed_dict(single_threaded=True)
+    print("batch dim:", session.run(net.extern_data.get_default_input_data().get_batch_dim(), feed_dict=feed_dict))
+    print("data seq lens:", session.run(
+      (net.extern_data.get_default_input_data().get_sequence_lengths(),
+       net.extern_data.get_default_target_data().get_sequence_lengths()), feed_dict=feed_dict))
+    net.initialize_params(session=session)
+    print("result:", session.run(net.get_fetches_dict(), feed_dict=feed_dict))
+
+
 def test_subnet_load_on_init_rec():
   import tempfile
   model_tmp_dir = tempfile.mkdtemp("tmp-checkpoint")
