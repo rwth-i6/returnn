@@ -848,6 +848,7 @@ class NativeLstm2(RecSeqCellOp):
       c0 = initial_state.c
       y0 = initial_state.h
     else:
+      assert isinstance(initial_state, tf.Tensor)
       c0 = initial_state
       y0 = tf.zeros((n_batch, self.n_hidden), dtype=tf.float32, name="initial_h")
     start = tf.constant(0, name="start")

@@ -4689,6 +4689,9 @@ def identity_op_nested(x, name="identity"):
   if isinstance(x, dict):
     return {k: identity_op_nested(x[k], name="%s_%s" % (name, k)) for k in x}
   if isinstance(x, (list, tuple)):
+    from Util import is_namedtuple
+    if is_namedtuple(type(x)):
+      return type(x)(*[identity_op_nested(x[i], name="%s_%i" % (name, i)) for i in range(len(x))])
     return [identity_op_nested(x[i], name="%s_%i" % (name, i)) for i in range(len(x))]
   if isinstance(x, tf.TensorArray):
     return x  # could be nicer, but good enough for now...

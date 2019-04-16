@@ -68,6 +68,9 @@ class RecLayer(_ConcatInputLayer):
   It assumes that those layers behave the same with time-dimension or without time-dimension and used per-step.
   Examples for such layers are :class:`LinearLayer`, :class:`RnnCellLayer`
   or :class:`SelfAttentionLayer` with option `attention_left_only`.
+
+  This layer can also be inside another RecLayer. In that case, it behaves similar as :class:`RnnCellLayer`.
+  (This support is somewhat incomplete yet. It should work for the native units such as NativeLstm.)
   """
 
   layer_class = "rec"
@@ -114,7 +117,7 @@ class RecLayer(_ConcatInputLayer):
     import TFNativeOp
     if direction is not None:
       assert direction in [-1, 1]
-    self._last_hidden_state = None
+    self._last_hidden_state = None  # type: typing.Optional[tf.Tensor]
     self._direction = direction
     self._initial_state_deps = [l for l in nest.flatten(initial_state) if isinstance(l, LayerBase)]
     self._input_projection = input_projection
@@ -173,12 +176,16 @@ class RecLayer(_ConcatInputLayer):
       self._rec_scope = scope
       scope_name_prefix = scope.name + "/"  # e.g. "layer1/rec/"
       with self.var_creation_scope():
-        if initial_state:
-          assert isinstance(unit, str), 'initial_state not supported currently for custom unit'
-        self._initial_state = RnnCellLayer.get_rec_initial_state(
-          initial_state=initial_state, n_out=self.output.dim, unit=unit, unit_opts=unit_opts,
-          batch_dim=self.network.get_data_batch_dim(), name=self.name,
-          rec_layer=self) if initial_state is not None else None
+        self._initial_state = None
+        if self._rec_previous_layer:  # inside another RecLayer
+          self._initial_state = self._rec_previous_layer.rec_vars_outputs["state"]
+        elif initial_state is not None:
+          if initial_state:
+            assert isinstance(unit, str), 'initial_state not supported currently for custom unit'
+          self._initial_state = RnnCellLayer.get_rec_initial_state(
+            initial_state=initial_state, n_out=self.output.dim, unit=unit, unit_opts=unit_opts,
+            batch_dim=self.network.get_data_batch_dim(), name=self.name,
+            rec_layer=self)
         self.cell = self._get_cell(unit, unit_opts=unit_opts)
         if isinstance(self.cell, (rnn_cell.RNNCell, rnn_contrib.FusedRNNCell, rnn_contrib.LSTMBlockWrapper)):
           y = self._get_output_cell(self.cell)
@@ -190,8 +197,8 @@ class RecLayer(_ConcatInputLayer):
           y = self._get_output_subnet_unit(self.cell)
         else:
           raise Exception("invalid type: %s" % type(self.cell))
-        self.output.time_dim_axis = 0
-        self.output.batch_dim_axis = 1
+        if self._rec_previous_layer:  # inside another RecLayer
+          self.rec_vars_outputs["state"] = self._last_hidden_state
         self.output.placeholder = y
         # Very generic way to collect all created params.
         # Note that for the TF RNN cells, there is no other way to do this.
@@ -312,6 +319,14 @@ class RecLayer(_ConcatInputLayer):
     :rtype: Data
     """
     from tensorflow.python.util import nest
+    source_data = get_concat_sources_data_template(sources) if sources else None
+    if source_data and not source_data.have_time_axis():
+      # We expect to be inside another RecLayer, and should do a single step (like RnnCellLayer).
+      out_time_dim_axis = None
+      out_batch_dim_axis = 0
+    else:
+      out_time_dim_axis = 0
+      out_batch_dim_axis = 1
     n_out = kwargs.get("n_out", NotSpecified)
     out_type = kwargs.get("out_type", None)
     loss = kwargs.get("loss", None)
@@ -319,13 +334,12 @@ class RecLayer(_ConcatInputLayer):
     deps += [l for l in nest.flatten(initial_state) if isinstance(l, LayerBase)]
     if out_type or n_out is not NotSpecified or loss:
       if out_type:
-        assert out_type.get("time_dim_axis", 0) == 0
-        assert out_type.get("batch_dim_axis", 1) == 1
+        assert out_type.get("time_dim_axis", out_time_dim_axis) == out_time_dim_axis
+        assert out_type.get("batch_dim_axis", out_batch_dim_axis) == out_batch_dim_axis
       out = super(RecLayer, cls).get_out_data_from_opts(sources=sources, **kwargs)
     else:
       out = None
     if isinstance(unit, dict):  # subnetwork
-      source_data = get_concat_sources_data_template(sources) if sources else None
       subnet = _SubnetworkRecCell(parent_net=kwargs["network"], net_dict=unit, source_data=source_data)
       sub_out = subnet.layer_data_templates["output"].output.copy_template_adding_time_dim(
         name="%s_output" % kwargs["name"], time_dim_axis=0)
@@ -335,8 +349,8 @@ class RecLayer(_ConcatInputLayer):
       out = sub_out
       deps += subnet.get_parent_deps()
     assert out
-    out.time_dim_axis = 0
-    out.batch_dim_axis = 1
+    out.time_dim_axis = out_time_dim_axis
+    out.batch_dim_axis = out_batch_dim_axis
     cls._post_init_output(output=out, sources=sources, **kwargs)
     for dep in deps:
       out.beam_size = out.beam_size or dep.output.beam_size
@@ -347,6 +361,26 @@ class RecLayer(_ConcatInputLayer):
     :rtype: str
     """
     return self.get_base_absolute_name_scope_prefix() + "rec/"  # all under "rec" sub-name-scope
+
+  @classmethod
+  def get_rec_initial_extra_outputs(cls, **kwargs):
+    """
+    :rtype: dict[str,tf.Tensor|tuple[tf.Tensor]]
+    """
+    sources = kwargs.get("sources")
+    source_data = get_concat_sources_data_template(sources) if sources else None
+    if source_data and not source_data.have_time_axis():
+      # We expect to be inside another RecLayer, and should do a single step (like RnnCellLayer).
+      return {"state": RnnCellLayer.get_rec_initial_state(**kwargs)}
+    return {}
+
+  @classmethod
+  def get_rec_initial_output(cls, **kwargs):
+    """
+    :rtype: tf.Tensor
+    """
+    # This is only called if we are inside another rec layer.
+    return RnnCellLayer.get_rec_initial_output(**kwargs)
 
   _rnn_cells_dict = {}
 
@@ -419,13 +453,20 @@ class RecLayer(_ConcatInputLayer):
     :rtype: (tf.Tensor, tf.Tensor)
     """
     assert self.input_data
-    x = self.input_data.placeholder  # (batch,time,dim) or (time,batch,dim)
-    if not self.input_data.is_time_major:
-      assert self.input_data.batch_dim_axis == 0
-      assert self.input_data.time_dim_axis == 1
-      x = self.input_data.get_placeholder_as_time_major()  # (time,batch,[dim])
-    seq_len = self.input_data.get_sequence_lengths()
-    return x, seq_len
+    if self.input_data.have_time_axis():
+      x = self.input_data.placeholder  # (batch,time,dim) or (time,batch,dim)
+      if not self.input_data.is_time_major:
+        assert self.input_data.batch_dim_axis == 0
+        assert self.input_data.time_dim_axis == 1
+        x = self.input_data.get_placeholder_as_time_major()  # (time,batch,[dim])
+      seq_len = self.input_data.get_sequence_lengths()
+      return x, seq_len
+    else:  # no time-dim-axis, expect to be inside another RecLayer
+      # Just add a dummy time dim, and seq_len == 1 everywhere.
+      x = self.input_data.placeholder
+      x = tf.expand_dims(x, 0)
+      seq_len = tf.ones([self.input_data.get_batch_dim()], dtype=self.input_data.size_dtype)
+      return x, seq_len
 
   @classmethod
   def get_losses(cls, name, network, output, loss=None, reduce_func=None, layer=None, **kwargs):
@@ -741,7 +782,10 @@ class RecLayer(_ConcatInputLayer):
       assert not cell.does_input_projection
       assert not self.input_data.sparse
       assert self.input_data.dim == cell.n_input_dim
-    index = sequence_mask_time_major(seq_len, maxlen=self.input_data.time_dimension())
+    if self.input_data.have_time_axis():
+      index = sequence_mask_time_major(seq_len, maxlen=self.input_data.time_dimension())
+    else:
+      index = tf.ones([1, self.input_data.get_batch_dim()], dtype=tf.bool)  # see _get_input
     if not cell.does_direction_handling:
       x = directed(x, self._direction)
       index = directed(index, self._direction)
@@ -752,6 +796,8 @@ class RecLayer(_ConcatInputLayer):
     self._last_hidden_state = final_state
     if not cell.does_direction_handling:
       y = directed(y, self._direction)
+    if not self.input_data.have_time_axis():  # see _get_input
+      y = y[0]
     return y
 
   def _get_output_subnet_unit(self, cell):
@@ -2693,6 +2739,8 @@ class RnnCellLayer(_ConcatInputLayer):
   This will operate a single step, i.e. there is no time dimension,
   i.e. we expect a (batch,n_in) input, and our output is (batch,n_out).
   This is expected to be used inside a RecLayer.
+  (But it can also handle the case to be optimized out of the rec loop,
+   i.e. outside a RecLayer, with a time dimension.)
   """
 
   layer_class = "rnn_cell"

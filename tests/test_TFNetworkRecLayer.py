@@ -2288,6 +2288,10 @@ def test_reclayer_optimize_out_rnncell():
   check_reclayer_optimize_out({"class": "rnn_cell", "unit": "BasicLSTM"})
 
 
+def test_reclayer_optimize_out_rec_nativelstm2():
+  check_reclayer_optimize_out({"class": "rec", "unit": "NativeLstm2"})
+
+
 def test_reclayer_optimize_out_selfatt_left():
   check_reclayer_optimize_out({
     "class": "self_attention", "attention_left_only": True, "num_heads": 2, "total_key_dim": 6, "n_out": 18})
