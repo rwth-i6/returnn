@@ -433,7 +433,7 @@ class Data(object):
     :return: relevant attrib items for copying
     :rtype: dict[str]
     """
-    keys = ["name", "shape", "dtype", "sparse", "dim", "batch_dim_axis", "time_dim_axis"]
+    keys = ["name", "shape", "dtype", "sparse", "dim", "batch_dim_axis", "time_dim_axis", "size_placeholder"]
     if self._feature_dim_axis is not NotSpecified:
       keys += ["feature_dim_axis"]
     if not self.available_for_inference:
