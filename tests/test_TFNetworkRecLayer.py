@@ -171,7 +171,7 @@ def test_rhn_nan():
         tgt_placeholder: random.uniform(-limit, limit, (1, seq_len, num_outputs)),
       }
 
-    from TFUtil import xavier_initializer, var_creation_scope
+    from TFUtil import xavier_initializer
     default_var_initializer = xavier_initializer(seed=13)
     with tf.variable_scope(tf.get_variable_scope(), initializer=default_var_initializer) as scope:
       assert loop_variant in loop_variants
@@ -3046,7 +3046,7 @@ def test_BlocksparseLSTM_load_params_from_native_lstm():
       seq_len_placeholder: [seq_len] * batch_dim
     }
 
-    from TFUtil import xavier_initializer, var_creation_scope
+    from TFUtil import xavier_initializer
     default_var_initializer = xavier_initializer(seed=13)
     with tf.variable_scope(tf.get_variable_scope(), initializer=default_var_initializer) as scope:
       net = TFNetwork(config=Config(), extern_data=ExternData(), train_flag=False)

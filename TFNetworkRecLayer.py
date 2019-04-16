@@ -5060,11 +5060,10 @@ class RHNCell(BaseRNNCell):
     :param int output_dim:
     :rtype: tf.Tensor
     """
-    from TFUtil import var_creation_scope, dot
+    from TFUtil import dot
     input_dim = x.get_shape().dims[-1].value
     assert input_dim is not None, "%r shape unknown" % (x,)
-    with var_creation_scope():
-      weights = tf.get_variable("W", shape=(input_dim, output_dim))
+    weights = tf.get_variable("W", shape=(input_dim, output_dim))
     x = dot(x, weights)
     return x
 
@@ -5075,9 +5074,9 @@ class RHNCell(BaseRNNCell):
     if self._dropout_mask is not None:
       return self._dropout_mask
 
-    from TFUtil import var_creation_scope, cond
+    from TFUtil import default_control_flow_ctx, cond
     # Create the dropout masks outside the loop:
-    with var_creation_scope():
+    with default_control_flow_ctx():
       def get_mask():
         """
         :rtype: tf.Tensor
@@ -5113,13 +5112,11 @@ class RHNCell(BaseRNNCell):
     :return: (time, batch, num_units * 2)
     :rtype: tf.Tensor
     """
-    from TFUtil import var_creation_scope
     x = self._linear(x, self._num_units * 2)
-    with var_creation_scope():
-      bias = tf.get_variable(
-        "b", shape=(self._num_units * 2,),
-        initializer=tf.constant_initializer(
-          [0.0] * self._num_units + [self.transform_bias] * self._num_units))
+    bias = tf.get_variable(
+      "b", shape=(self._num_units * 2,),
+      initializer=tf.constant_initializer(
+        [0.0] * self._num_units + [self.transform_bias] * self._num_units))
     x += bias
     return x
 
@@ -5496,7 +5493,6 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
     :rtype: tf.Tensor
     """
     assert name is not None
-    from TFUtil import var_creation_scope
     shape = inputs.get_shape()[-1:]
     gamma_init = tf.constant_initializer(self.norm_grain)
     beta_init = self.norm_shift
@@ -5504,10 +5500,9 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
       beta_init += self.forget_bias
     mean, variance = tf.nn.moments(inputs, axes=[-1], keep_dims=True)
     normalized_input = (inputs - mean) * tf.rsqrt(variance + self.variance_epsilon)
-    with var_creation_scope():
-      g = tf.get_variable("gamma_" + name, shape=shape, initializer=gamma_init)
-      s = tf.get_variable("beta_" + name, shape=shape,
-                          initializer=tf.constant_initializer(beta_init)) if with_beta else None
+    g = tf.get_variable("gamma_" + name, shape=shape, initializer=gamma_init)
+    s = tf.get_variable("beta_" + name, shape=shape,
+                        initializer=tf.constant_initializer(beta_init)) if with_beta else None
     y = normalized_input * g
     if with_beta:
       y += s
@@ -5524,19 +5519,17 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
     :rtype: tf.Tensor
     """
     assert name is not None
-    from TFUtil import var_creation_scope, dot
+    from TFUtil import dot
     input_dim = inputs.get_shape().dims[-1].value
     assert input_dim is not None, "%r shape unknown" % (inputs,)
-    with var_creation_scope():
-      weights = tf.get_variable("W_" + name, shape=(input_dim, out_dim))
+    weights = tf.get_variable("W_" + name, shape=(input_dim, out_dim))
     out = dot(inputs, weights)
     if apply_bias:
-      with var_creation_scope():
-        bias_init = [0.0] * out_dim
-        if add_forget_bias and self.forget_bias > 0:
-          assert 4 * self._num_units == out_dim
-          bias_init[2*self._num_units:3*self._num_units] = [self.forget_bias] * self._num_units
-        bias = tf.get_variable("bias_" + name, shape=[out_dim], initializer=tf.constant_initializer(bias_init))
+      bias_init = [0.0] * out_dim
+      if add_forget_bias and self.forget_bias > 0:
+        assert 4 * self._num_units == out_dim
+        bias_init[2*self._num_units:3*self._num_units] = [self.forget_bias] * self._num_units
+      bias = tf.get_variable("bias_" + name, shape=[out_dim], initializer=tf.constant_initializer(bias_init))
       out = tf.nn.bias_add(out, bias)
     return out
 
@@ -5546,9 +5539,9 @@ class LayerNormVariantsLSTMCell(BaseRNNCell):
     :return: scalar (1.0) or shape (batch_size, num_units)
     :rtype: tf.Tensor
     """
-    from TFUtil import var_creation_scope, cond
+    from TFUtil import default_control_flow_ctx, cond
     # Create the dropout masks outside the loop:
-    with var_creation_scope():
+    with default_control_flow_ctx():
       def get_mask():
         """
         :rtype: tf.Tensor

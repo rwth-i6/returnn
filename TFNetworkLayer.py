@@ -634,7 +634,7 @@ class LayerBase(object):
     :param kwargs: passed to variable_scope
     :return: yields the variable_scope
     """
-    from TFUtil import var_creation_scope, get_current_var_scope_name, reuse_name_scope
+    from TFUtil import get_current_var_scope_name, reuse_name_scope
     self_base_scope = self.get_base_absolute_name_scope_prefix()
     assert self_base_scope.endswith("/")
     cur_scope = get_current_var_scope_name()
@@ -682,15 +682,14 @@ class LayerBase(object):
       """
       Var creation scope + variable scope.
       """
-      with var_creation_scope():
-        if self.reuse_params:
-          var_scope = self.reuse_params.get_variable_scope(base_layer=self)
-        else:
-          var_scope = tf.get_variable_scope()
-        if need_custom_getter:
-          kwargs["custom_getter"] = layer_custom_getter
-        with reuse_name_scope(var_scope, **kwargs) as scope_:
-          yield scope_
+      if self.reuse_params:
+        var_scope = self.reuse_params.get_variable_scope(base_layer=self)
+      else:
+        var_scope = tf.get_variable_scope()
+      if need_custom_getter:
+        kwargs["custom_getter"] = layer_custom_getter
+      with reuse_name_scope(var_scope, **kwargs) as scope_:
+        yield scope_
 
     if self.param_device:
       device_name = self.param_device

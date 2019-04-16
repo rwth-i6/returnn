@@ -893,12 +893,16 @@ def test_loop_var_creation():
     # w = tf.Variable(tf.constant(1))
     # w = tf.Variable(tf.constant_initializer(value=1, dtype=tf.int32)(shape=()))
     # However, resetting the control dependencies will also reset the frame.
-    with var_creation_scope():
-      w = tf.Variable(tf.constant(1))
-    return [i + w]
+    with default_control_flow_ctx():
+      # Note: tf.Variable directly will have this problem, as tf.constant() is in the current ctx.
+      w1 = tf.Variable(name="w1", initial_value=tf.constant(1))
+    # However, tf.get_variable should not have this problem.
+    w2 = tf.get_variable("w2", shape=(), dtype=tf.int32, initializer=tf.constant_initializer(2, dtype=tf.int32))
+    return [i + w1 + w2]
 
   loop = tf.while_loop(lambda i: tf.less(i, 5), body, [i])
   session.run(tf.global_variables_initializer())
+  session.run(loop)
 
 
 def test_gather_nd_grad():
@@ -2257,7 +2261,7 @@ def test_same_context_loop():
     v1 = outer_loop_val + 1
     print("v1 control flow:", v1.op._control_flow_context)
     assert has_control_flow_context(v1)  # because +1 is done here in the loop
-    with same_context(outer_loop_val):
+    with same_control_flow_ctx(outer_loop_val):
       v2 = outer_loop_val + 2
     print("v2 control flow:", v2.op._control_flow_context)
     assert not has_control_flow_context(v2)  # should be done outside now, because `same_context` usage

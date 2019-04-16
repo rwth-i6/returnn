@@ -1552,7 +1552,7 @@ class Data(object):
     if self.is_time_axis_dynamic():
       return self.size_placeholder[self.time_dim_axis_excluding_batch]
     assert self.shape[self.time_dim_axis_excluding_batch] is not None
-    with same_context(self.placeholder), tf.name_scope("fixed_seq_len"):
+    with same_control_flow_ctx(self.placeholder), tf.name_scope("fixed_seq_len"):
       return expand_dims_unbroadcast(
         self.shape[self.time_dim_axis_excluding_batch], axis=0, dim=self.get_batch_dim())
 
@@ -2213,20 +2213,32 @@ def reuse_name_scope_of_tensor(x, prefix="", postfix=""):
 
 
 @contextlib.contextmanager
-def var_creation_scope():
+def default_control_flow_ctx():
   """
+  This was earlier called ``var_creation_scope``.
+
   If you create a variable inside of a while-loop, you might get the following error:
+
     InvalidArgumentError: The node 'while/w/Assign' has inputs from different frames.
     The input 'while/j' is in frame 'while/while/'. The input 'while/w' is in frame ''.
-  Also see tests/test_TFUtil.py:test_loop_var_creation().
+
+  This happens when you directly call ``tf.Variable``, because the initial_value might be a tensor
+  which depends on the current control flow context.
+  See tests/test_TFUtil.py:test_loop_var_creation() for an example.
+
   Related TF bugs:
+
     https://github.com/tensorflow/tensorflow/issues/3114
     https://github.com/tensorflow/tensorflow/issues/4478
     https://github.com/tensorflow/tensorflow/issues/8604
-  The solution is to reset the current frame.
-  Resetting all control dependencies has this effect.
-  See also :func:`same_context`
+
+  One solution is to reset the current control flow context.
+  See also :func:`same_control_flow_ctx`.
+
+  However, with respect to variables, you should instead use
+  ``tf.get_variable``, which does not have this problem.
   """
+  # Resetting all control dependencies has the effect of also resetting the current control flow context.
   with tf.control_dependencies(None) as dep:
     yield dep
 
@@ -3293,7 +3305,7 @@ def sequence_mask(lengths, name=None, **kwargs):
   if hasattr(lengths, "_sequence_mask"):
     # noinspection PyProtectedMember
     return lengths._sequence_mask
-  with same_context(lengths), reuse_name_scope_of_tensor(lengths):
+  with same_control_flow_ctx(lengths), reuse_name_scope_of_tensor(lengths):
     mask = tf.sequence_mask(lengths, name=name)
   lengths._sequence_mask = mask
   return mask
@@ -3313,7 +3325,7 @@ def sequence_mask_time_major(lengths, **kwargs):
     # noinspection PyProtectedMember
     return lengths._sequence_mask_time_major
   mask = sequence_mask(lengths=lengths, **kwargs)  # shape (time,batch)
-  with same_context(mask), reuse_name_scope_of_tensor(lengths), tf.name_scope("sequence_mask_time_major"):
+  with same_control_flow_ctx(mask), reuse_name_scope_of_tensor(lengths), tf.name_scope("sequence_mask_time_major"):
     mask = tf.transpose(mask, (1, 0))  # shape (batch,time)
   lengths._sequence_mask_time_major = mask
   return mask
@@ -6826,11 +6838,18 @@ def nested_get_shapes(x):
   raise TypeError("invalid type %r of %r" % (type(x), x))
 
 
-def _get_control_flow_ops(v):
+def _get_control_flows(v, yield_none):
+  """
+  :param tf.Tensor|tf.Operation|int|float|None|list[tf.Tensor|tf.Operation|int|float] v:
+  :param bool yield_none: the default context is None. specifies whether we should return that
+    (currently still skips non-tensors (int or so)).
+  :return: yields control flow contexts
+  :rtype: typing.Iterator[tensorflow.python.ops.control_flow_ops.ControlFlowContext|None]
+  """
   import numpy
   if isinstance(v, (list, tuple)):
     for elem in v:
-      for t in _get_control_flow_ops(elem):
+      for t in _get_control_flows(elem, yield_none=yield_none):
         yield t
     return
   if isinstance(v, (int, float, numpy.integer, type(None))):
@@ -6840,9 +6859,10 @@ def _get_control_flow_ops(v):
   assert isinstance(v, tf.Operation), "unexpected type %r" % type(v)
   # Control flow context will be set to the context of the loop or so, if there is one, otherwise None.
   # noinspection PyProtectedMember
-  if not v._control_flow_context:
+  ctx = v._control_flow_context
+  if not yield_none and not ctx:
     return
-  yield v
+  yield ctx
 
 
 def has_control_flow_context(x):
@@ -6851,31 +6871,46 @@ def has_control_flow_context(x):
   :return: whether `x` has a control flow, i.e. is e.g. inside a while loop
   :rtype: bool
   """
-  ops = list(_get_control_flow_ops(x))
+  ops = list(_get_control_flows(x, yield_none=False))
   return len(ops) > 0
 
 
 @contextlib.contextmanager
-def same_context(x):
+def same_control_flow_ctx(x):
   """
   Will use the same (flow) context as `x`.
   E.g. if `x` is a constant, it can be outside the loop,
   so we will yield a context which is not inside the loop.
-  See also :func:`var_creation_scope`.
+  (This function was earlier called ``same_context``.)
+
+  See also :func:`default_control_flow_ctx`.
 
   :param tf.Tensor|tf.Operation|int|float|None|list[tf.Tensor|tf.Operation|int|float] x:
   :return: yields context (via tf.control_dependencies)
   """
-  ops = list(_get_control_flow_ops(x))
-  if not ops:
-    # No TF tensor given, so we can consider the input as constant
-    # and can use a clean context (e.g. not within the current loop or so).
+  ctxs = set(_get_control_flows(x, yield_none=True))
+  if not ctxs:
+    # There is no tensor given in `x` (just int or so).
+    # Just stay in the current context.
+    yield None
+    return
+  assert len(ctxs) == 1, "found multiple context: %r" % ctxs
+  graph = tf.get_default_graph()
+  ctx = list(ctxs)[0]
+  # noinspection PyProtectedMember
+  cur_ctx = graph._get_control_flow_context()
+  if ctx == cur_ctx:
+    yield ctx
+    return
+  if not ctx:  # None context, i.e. the default context.
     with tf.control_dependencies(None) as dep:  # this will reset the context
       yield dep
     return
-  # There is currently no good way to get into the same context.
-  # Just keep using the current context.
-  yield None
+  # noinspection PyProtectedMember
+  graph._set_control_flow_context(ctx)
+  yield ctx
+  # noinspection PyProtectedMember
+  graph._set_control_flow_context(cur_ctx)
 
 
 def get_protobuf_fields(obj):
@@ -7072,11 +7107,11 @@ def filter_ended_scores(x, end_flags, batch_dim=None, dim=None, score_zero=0.0, 
       batch_dim = tf.shape(end_flags)[0]
     if dim is None:
       dim = tf.shape(x)[-1]
-    with same_context(dim):  # force calculation outside loop if possible
+    with same_control_flow_ctx(dim):  # force calculation outside loop if possible
       filter_score = tf.one_hot(
         0, dim, dtype=tf.float32, on_value=score_zero, off_value=score_rem)  # (dim,)
       filter_score.set_shape(tf.TensorShape([dim if isinstance(dim, int) else None]))
-    with same_context([dim, batch_dim]):  # force calculation outside loop if possible
+    with same_control_flow_ctx([dim, batch_dim]):  # force calculation outside loop if possible
       filter_score = expand_dims_unbroadcast(filter_score, axis=0, dim=batch_dim)  # (batch,dim)
       filter_score.set_shape(tf.TensorShape([
         batch_dim if isinstance(batch_dim, int) else None,
