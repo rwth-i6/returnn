@@ -3323,6 +3323,28 @@ def test_GenericAttentionLayer_weights_auto_squeeze_time_end():
   assert layer.output.shape == (2048,) and not layer.output.have_time_axis()
 
 
+def test_GenericAttentionLayer_weights_static_time_axis():
+  # Example: weights (B,1,W), base (B,W,V), where W: window_size (static)
+  window_size = 10
+  from TFNetworkLayer import InternalLayer
+  net = TFNetwork(extern_data=ExternData(), config=Config({"debug_print_layer_output_template": True}))
+  kwargs = dict(
+    name="att", network=net,
+    weights=InternalLayer(
+      name="att_weights", network=net,
+      output=Data(
+        name='att_weights_output', shape=(1, 10), time_dim_axis=2, auto_create_placeholders=True)),
+    base=InternalLayer(
+      name="enc_value", network=net,
+      output=Data(name='enc_value_output', shape=(10, 2048), time_dim_axis=1, auto_create_placeholders=True)))
+  print("GenericAttentionLayer kwargs:")
+  pprint(kwargs)
+  kwargs["output"] = GenericAttentionLayer.get_out_data_from_opts(**kwargs)
+  layer = GenericAttentionLayer(**kwargs)
+  layer.output.sanity_check()
+  assert layer.output.shape == (2048,) and not layer.output.have_time_axis()
+
+
 def test_GenericAttentionLayer_weights_heads_time_end():
   # Example: weights (B,H,T), base (B,T,H,V)
   from TFNetworkLayer import InternalLayer
