@@ -94,15 +94,27 @@ class DimensionTag(object):
     self.dyn_size = dyn_size
     self.same_as = None  # type: typing.Optional[DimensionTag]
 
-  def __repr__(self):
+  def _get_attribs(self, with_id):
+    """
+    :param bool with_id:
+    :rtype: list[str]
+    """
     attribs = ["kind"]
     for attr in ["description", "dimension"]:
       if getattr(self, attr) is not None:
         attribs.append(attr)
-    attribs.append("id")
+    if with_id:
+      attribs.append("id")
     if self.same_as:
       attribs.append("same_base_id")
-    return "DimensionTag(%s)" % ", ".join(["%s=%r" % (attr, getattr(self, attr)) for attr in attribs])
+    return attribs
+
+  def __repr__(self):
+    return "DimensionTag(%s)" % ", ".join([
+      "%s=%r" % (attr, getattr(self, attr)) for attr in self._get_attribs(with_id=True)])
+
+  def __hash__(self):
+    return hash(tuple([getattr(self, attr) for attr in self._get_attribs(with_id=False)]))
 
   def set_tag_on_size_tensor(self, x):
     """
@@ -136,6 +148,8 @@ class DimensionTag(object):
     if self_base is other_base:
       return True
     if self.dimension != other.dimension:
+      return False
+    if self.dyn_size is not other.dyn_size:
       return False
     if self.kind != other.kind:
       return False
@@ -1776,20 +1790,45 @@ class Data(object):
   def get_common_data(cls, sources):
     """
     :param list[Data] sources:
-    :return: some generic data where the sources should be compatible to (with copy_compatible_to)
+    :return: some generic data where the sources should be compatible to (with copy_compatible_to).
+      (But it is ok if the feature dims do not match.)
     :rtype: Data|None
     """
     if not sources:
       return None
-    # Simple for now: Use first with biggest batch_ndim.
-    # Was even simpler before: Use first.
-    # Later, we could auto-expand all.
-    # However, note that this should also work at template construction time,
+    if len(sources) == 1:
+      return sources[0]
+    # Our simple initial variant just returned the first source.
+    # The next variant returned that source with the biggest batch_ndim.
+    # Now we also check for further missing axes.
+    # Note that this should also work at template construction time,
     # where we do not have access to the size_placeholder,
     # and thus the dimension tags are not reliable (in the current implementation).
     assert sources
     max_ndim = max([s.batch_ndim for s in sources])
-    return [s for s in sources if s.batch_ndim == max_ndim][0]
+    common_source = [s for s in sources if s.batch_ndim == max_ndim][0]
+    common_dim_tags = {common_source.get_dim_tag(i) for i in range(common_source.batch_ndim)}
+    for source in [s for s in sources if s is not common_source]:
+      for i in range(source.batch_ndim):
+        dim_tag = source.get_dim_tag(i)
+        if dim_tag.kind == DimensionTag.Types.Spatial:
+          if not dim_tag in common_dim_tags:
+            common_source = common_source.copy_template()  # make sure not to create new TF tensors
+            if common_source.get_spatial_batch_axes():
+              spatial_dim_axis = max(common_source.get_spatial_batch_axes()) + 1  # after existing spatial
+            elif common_source.feature_dim_axis is not None:
+              spatial_dim_axis = common_source.feature_dim_axis  # add it before the feature dim
+            else:
+              spatial_dim_axis = common_source.batch_ndim  # add it at the end
+            common_source = common_source.copy_add_spatial_dim(spatial_dim_axis=spatial_dim_axis, dim=dim_tag.dimension)
+            spatial_axis_wo_b = common_source.get_batch_axis_excluding_batch(spatial_dim_axis)
+            if dim_tag.dyn_size is not None:
+              if common_source.size_placeholder is None:
+                common_source.size_placeholder = {}
+              assert spatial_axis_wo_b not in common_source.size_placeholder
+              common_source.size_placeholder[spatial_axis_wo_b] = dim_tag.dyn_size
+            common_dim_tags.add(dim_tag)
+    return common_source
 
 
 _horovod_is_initialized = False
