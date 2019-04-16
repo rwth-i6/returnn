@@ -94,15 +94,17 @@ class DimensionTag(object):
     self.dyn_size = dyn_size
     self.same_as = None  # type: typing.Optional[DimensionTag]
 
-  def _get_attribs(self, with_id):
+  def _get_attribs(self, with_id, with_description):
     """
     :param bool with_id:
+    :param bool with_description:
     :rtype: list[str]
     """
     attribs = ["kind"]
-    for attr in ["description", "dimension"]:
-      if getattr(self, attr) is not None:
-        attribs.append(attr)
+    if with_description and self.description is not None:
+      attribs.append("description")
+    if self.dimension is not None:
+      attribs.append("dimension")
     if with_id:
       attribs.append("id")
     if self.same_as:
@@ -111,10 +113,11 @@ class DimensionTag(object):
 
   def __repr__(self):
     return "DimensionTag(%s)" % ", ".join([
-      "%s=%r" % (attr, getattr(self, attr)) for attr in self._get_attribs(with_id=True)])
+      "%s=%r" % (attr, getattr(self, attr)) for attr in self._get_attribs(with_id=True, with_description=True)])
 
   def __hash__(self):
-    return hash(tuple([getattr(self, attr) for attr in self._get_attribs(with_id=False)]))
+    obj = self.get_same_base()
+    return hash(tuple([getattr(obj, attr) for attr in obj._get_attribs(with_id=False, with_description=False)]))
 
   def set_tag_on_size_tensor(self, x):
     """
@@ -163,7 +166,7 @@ class DimensionTag(object):
       if allow_same_feature_dim:
         return True
     if self.kind == other.kind == self.Types.Spatial:
-      if self.dimension is not None and allow_same_feature_dim:
+      if allow_same_feature_dim:
         return True
     if self.description == other.description:
       return True
@@ -1787,9 +1790,10 @@ class Data(object):
     return tuple([self.get_dim_tag(i) for i in range(self.batch_ndim)])
 
   @classmethod
-  def get_common_data(cls, sources):
+  def get_common_data(cls, sources, strict_same_spatial_dims=False):
     """
     :param list[Data] sources:
+    :param bool strict_same_spatial_dims:
     :return: some generic data where the sources should be compatible to (with copy_compatible_to).
       (But it is ok if the feature dims do not match.)
     :rtype: Data|None
@@ -1812,7 +1816,8 @@ class Data(object):
       for i in range(source.batch_ndim):
         dim_tag = source.get_dim_tag(i)
         if dim_tag.kind == DimensionTag.Types.Spatial:
-          if not dim_tag in common_dim_tags:
+          if not any([
+                dim_tag.is_equal(d, allow_same_feature_dim=not strict_same_spatial_dims) for d in common_dim_tags]):
             common_source = common_source.copy_template()  # make sure not to create new TF tensors
             if common_source.get_spatial_batch_axes():
               spatial_dim_axis = max(common_source.get_spatial_batch_axes()) + 1  # after existing spatial

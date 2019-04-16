@@ -40,6 +40,8 @@ def test_concat_sources():
     n_batch = 5
     n_time = 3
     size_placeholder = {0: tf.constant(n_time, dtype=tf.int32, shape=(n_batch,))}
+    from TFUtil import DimensionTag
+    DimensionTag(description="spatial", kind=DimensionTag.Types.Spatial).set_tag_on_size_tensor(size_placeholder[0])
     src1 = InternalLayer(
       name="src1", network=network,
       output=Data(

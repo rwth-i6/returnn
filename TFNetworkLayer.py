@@ -1728,11 +1728,11 @@ def concat_sources(src_layers):
   if cache_key in network.concat_sources_dropout_cache:
     return network.concat_sources_dropout_cache[cache_key].copy()
   data = get_concat_sources_data_template(src_layers)
-  common_source = Data.get_common_data([s.output for s in src_layers])
-  # Currently we assume that get_concat_sources_data_template will match Data.get_common_data (besides the dim).
-  data.size_placeholder = common_source.size_placeholder.copy()  # to get right dimension tags
-  layers_data = []
   with _name_scope_for_concat_src_layers(src_layers, "concat_sources"):
+    common_source = Data.get_common_data([s.output for s in src_layers])
+    # Currently we assume that get_concat_sources_data_template will match Data.get_common_data (besides the dim).
+    data.size_placeholder = common_source.size_placeholder.copy()  # to get right dimension tags
+    layers_data = []
     data_dyn_shape = list(data.batch_shape)
     if any([d is None for d in data_dyn_shape]):
       # Currently we assume that get_concat_sources_data_template will match Data.get_common_data (besides the dim).
@@ -4917,7 +4917,7 @@ class CombineLayer(LayerBase):
     """
     out_type_ = {}
     if sources:
-      out_type_.update(Data.get_common_data([s.output for s in sources]).get_kwargs())
+      out_type_.update(Data.get_common_data([s.output for s in sources], strict_same_spatial_dims=True).get_kwargs())
     if n_out is not NotSpecified:
       out_type_["dim"] = n_out
     out_type_["name"] = "%s_output" % kwargs["name"]
@@ -4948,7 +4948,7 @@ class CombineLayer(LayerBase):
     :rtype: tf.Tensor
     """
     self._check_same_dense_dim(sources)
-    common_data = Data.get_common_data([s.output for s in sources])
+    common_data = Data.get_common_data([s.output for s in sources], strict_same_spatial_dims=True)
     x = sources[0].output.copy_compatible_to(common_data).placeholder
     for source in sources[1:]:
       x2 = source.output.copy_compatible_to(common_data).placeholder
@@ -4993,7 +4993,7 @@ class CombineLayer(LayerBase):
     :rtype: tf.Tensor
     """
     used_sources = set()  # type: typing.Set[int]
-    common_data = Data.get_common_data([s.output for s in sources])
+    common_data = Data.get_common_data([s.output for s in sources], strict_same_spatial_dims=True)
 
     def source(i, auto_convert=True, enforce_batch_major=False, as_data=False):
       """
