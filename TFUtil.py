@@ -3527,12 +3527,14 @@ def dimshuffle(x, axes, name="dimshuffle"):
     return x
 
 
-def sparse_labels_with_seq_lens(x, seq_lens, dtype=tf.int32, collapse_repeated=False):
+def sparse_labels_with_seq_lens(x, seq_lens, dtype=tf.int32, collapse_repeated=False, post_filter_idx=None):
   """
   :param tf.Tensor x: shape (batch,time) -> index, some int type
   :param tf.Tensor|None seq_lens: shape (batch,) of int32|int64
   :param tf.DType|None dtype: if given, will cast the `x` values to this type. ctc_loss() wants int32
   :param bool collapse_repeated: like uniq() behavior
+  :param int|list[int]|set[int]|None post_filter_idx: if given, after an optional collapse_repeated,
+    will remove all those idx
   :return: SparseTensor, e.g. input for tf.nn.ctc_loss(), and seq_lens of shape (batch,)
   :rtype: (tf.SparseTensor, tf.Tensor)
   """
@@ -3553,12 +3555,22 @@ def sparse_labels_with_seq_lens(x, seq_lens, dtype=tf.int32, collapse_repeated=F
         diffs = tf.concat(
           1, [tf.ones_like(x[:, :1], dtype=tf.bool), tf.not_equal(x[:, 1:], x[:, :-1])])  # shape (batch,time)
         mask = tf.logical_and(diffs, mask)
+    if post_filter_idx is not None:
+      with tf.name_scope("post_filter_idx"):
+        if isinstance(post_filter_idx, int):
+          mask = tf.logical_and(mask, tf.not_equal(x, post_filter_idx))
+        elif isinstance(post_filter_idx, (list, tuple, set)):
+          for _idx in sorted(post_filter_idx):
+            assert isinstance(_idx, int)
+            mask = tf.logical_and(mask, tf.not_equal(x, _idx))
+        else:
+          raise TypeError("unexpected type post_filter_idx %r" % type(post_filter_idx))
     with tf.name_scope("flat_x"):
       flat_x = tf.boolean_mask(x, mask)  # (N, ...s...)
     with tf.name_scope("idxs"):
-      if collapse_repeated:
+      if collapse_repeated or post_filter_idx is not None:
         # Recalculate mask, so that we have them all behind each other.
-        seq_lens = tf.reduce_sum(tf.cast(mask, tf.int32), axis=1)
+        seq_lens = tf.reduce_sum(tf.cast(mask, tf.int32), axis=1)  # (batch,)
         max_time = tf.reduce_max(seq_lens)
         mask = sequence_mask(seq_lens)
       time_idxs = expand_dims_unbroadcast(tf.range(max_time), 0, batch_size)  # shape (batch,time)
@@ -3597,6 +3609,7 @@ def uniq(x):
   """
   :param tf.Tensor x: 1D shape (time,) -> index, some int type
   :return: like numpy.uniq. unlike tf.unique which will never repeat entries.
+
   Example: uniq([0, 0, 1, 1, 0, 0]) == [0, 1, 0], tf.unique([0, 0, 1, 1, 0, 0]) == [0, 1].
   For a batched variant, see batched_uniq, or sparse_labels() with option collapse_repeated.
   """
@@ -5086,68 +5099,17 @@ def remove_labels(x, labels):
   :param tf.SparseTensor x: sequences, i.e. the indices are interpret as (batch,time)
   :param set[int]|list[int] labels:
   :return: x where all provided labels are removed, and the indices are changed accordingly
+  :rtype: tf.SparseTensor
   """
   if not labels:
     return x
   x.indices.set_shape((tf.TensorShape((None, 2))))
   x.values.set_shape((tf.TensorShape((None,))))
   x.dense_shape.set_shape(tf.TensorShape((2,)))
-  import numpy
-
-  # Much simpler for now to use tf.py_func.
-  # noinspection PyShadowingNames
-  def py_remove_labels(indices, values, dense_shape):
-    """
-    :param numpy.ndarray indices:
-    :param numpy.ndarray values:
-    :param numpy.ndarray dense_shape:
-    :return: (indices, values, dense_shape)
-    :rtype: (numpy.ndarray, numpy.ndarray, numpy.ndarray)
-    """
-    assert isinstance(indices, numpy.ndarray), "indices %r" % indices
-    assert isinstance(values, numpy.ndarray), "values %r" % indices
-    assert isinstance(dense_shape, numpy.ndarray), "dense_shape %r" % indices
-    indices_dtype = indices.dtype
-    values_dtype = values.dtype
-    dense_shape_dtype = dense_shape.dtype
-    assert dense_shape.shape == (2,), "dense_shape %r shape" % dense_shape  # (batch, time)
-    assert len(indices) == len(values), "len mismatch. shapes %r vs %r" % (indices.shape, values.shape)
-    indices = list(indices)
-    values = list(values)
-    i = 0
-    while i < len(indices):
-      if values[i] not in labels:
-        i += 1
-        continue
-      batch, time = indices[i]
-      # Remove it.
-      indices = indices[:i] + indices[i + 1:]
-      values = values[:i] + values[i + 1:]
-      for j in range(len(indices)):
-        if indices[j][0] != batch:
-          continue
-        if indices[j][1] < time:
-          continue
-        indices[j][1] -= 1
-    indices = numpy.array(indices, dtype=indices_dtype)
-    values = numpy.array(values, dtype=values_dtype)
-    dense_shape = numpy.array(
-      [dense_shape[0], max([idx[1] + 1 for idx in indices] or [0])], dtype=dense_shape_dtype)
-    return indices, values, dense_shape
-
-  with tf.name_scope("remove_labels"):
-    indices, values, dense_shape = tf.py_func(
-      py_remove_labels,
-      [x.indices, x.values, x.dense_shape],
-      [x.indices.dtype, x.values.dtype, x.dense_shape.dtype],
-      name="py_remove_labels")
-    assert isinstance(indices, tf.Tensor)
-    assert isinstance(values, tf.Tensor)
-    assert isinstance(dense_shape, tf.Tensor)
-    indices.set_shape((tf.TensorShape((None, 2))))
-    values.set_shape((tf.TensorShape((None,))))
-    dense_shape.set_shape(tf.TensorShape((2,)))
-    return tf.SparseTensor(indices=indices, values=values, dense_shape=dense_shape)
+  x_ = tf.sparse_to_dense(sparse_indices=x.indices, sparse_values=x.values, output_shape=x.dense_shape)
+  seq_lens = get_sparse_tensor_length(x)
+  z, _ = sparse_labels_with_seq_lens(x_, seq_lens=seq_lens, post_filter_idx=labels)
+  return z
 
 
 def pad_zeros_in_axis(x, before=0, after=0, axis=0):
