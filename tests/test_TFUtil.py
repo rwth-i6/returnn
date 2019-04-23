@@ -1558,6 +1558,38 @@ def test_remove_labels():
   assert_equal(y_eval.dense_shape.tolist(), [3, 2])
 
 
+def test_ctc_greedy_decode():
+  logits = tf.constant([
+    [[1., 2., 3.], [2., 3., 1.], [2., 3., 1.], [3., 0., 0.]],
+    [[-1., 1., 0.], [0., 0., 1.], [0., 1., 0.], [2., 1., 1.]],
+    [[2., 3., 4.], [3., 2., 1.], [3., 2., 1.], [3., 3., 3.]]], name="logits")
+  seq_lens = tf.constant([4, 4, 2], name="seq_lens")
+  expected_labels = [[1, 0], [1, 1, 0], [0]]
+  y1 = ctc_greedy_decode(logits=logits, seq_lens=seq_lens, time_major=False)
+  (y2,), _ = tf.nn.ctc_greedy_decoder(inputs=tf.transpose(logits, [1, 0, 2]), sequence_length=seq_lens)
+  assert isinstance(y1, tf.SparseTensor)
+  assert isinstance(y2, tf.SparseTensor)
+  z = tf.sparse_to_dense(
+    sparse_indices=y1.indices, sparse_values=y1.values, output_shape=y1.dense_shape, default_value=-1)
+  z_eval = session.run(z)
+  assert isinstance(z_eval, numpy.ndarray)
+  assert z_eval.shape == (3, 3)
+  for i in range(3):
+    assert list(z_eval[i, :len(expected_labels[i])]) == expected_labels[i]
+    assert all([x == -1 for x in z_eval[i, len(expected_labels[i]):]])
+  y1_eval = session.run(y1)
+  y2_eval = session.run(y2)
+  assert isinstance(y1_eval, tf.SparseTensorValue)
+  assert isinstance(y1_eval.indices, numpy.ndarray)
+  assert isinstance(y1_eval.values, numpy.ndarray)
+  assert isinstance(y1_eval.dense_shape, numpy.ndarray)
+  print("y indices:", y1_eval.indices.tolist())
+  print("y values:", y1_eval.values.tolist())
+  assert_equal(y2_eval.indices.tolist(), y1_eval.indices.tolist())
+  assert_equal(y2_eval.values.tolist(), y1_eval.values.tolist())
+  assert_equal(y2_eval.dense_shape.tolist(), y1_eval.dense_shape.tolist())
+
+
 def test_supported_devices_for_op():
   op_name = "MatMul"
   devs = supported_devices_for_op(op_name)

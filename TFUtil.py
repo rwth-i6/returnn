@@ -3553,7 +3553,8 @@ def sparse_labels_with_seq_lens(x, seq_lens, dtype=tf.int32, collapse_repeated=F
     if collapse_repeated:
       with tf.name_scope("collapse_repeated"):
         diffs = tf.concat(
-          1, [tf.ones_like(x[:, :1], dtype=tf.bool), tf.not_equal(x[:, 1:], x[:, :-1])])  # shape (batch,time)
+          axis=1,
+          values=[tf.ones_like(x[:, :1], dtype=tf.bool), tf.not_equal(x[:, 1:], x[:, :-1])])  # shape (batch,time)
         mask = tf.logical_and(diffs, mask)
     if post_filter_idx is not None:
       with tf.name_scope("post_filter_idx"):
@@ -3630,6 +3631,29 @@ def batched_uniq(x, seq_lens):
   y, new_seq_lens = sparse_labels_with_seq_lens(x, seq_lens=seq_lens, collapse_repeated=True)
   z = tf.sparse_to_dense(sparse_indices=y.indices, sparse_values=y.values, output_shape=y.dense_shape)
   return z, new_seq_lens
+
+
+def ctc_greedy_decode(logits, seq_lens, time_major):
+  """
+  Similar to :func:`tf.nn.ctc_greedy_decoder`,
+  but simpler implementation, and should run on GPU.
+
+  :param tf.Tensor logits: (time,batch,dim) or (batch,time,dim)
+  :param tf.Tensor|None seq_lens: shape (batch,) of int32|int64
+  :param bool time_major:
+  :rtype: tf.SparseTensor
+  :return: in batch-major, [batch,max_time] (like :func:`tf.nn.ctc_greedy_decoder`)
+  """
+  assert logits.get_shape().ndims == 3 and logits.get_shape().dims[-1].value
+  dim = logits.get_shape().dims[-1].value
+  assert isinstance(dim, int) and dim >= 2
+  blank_idx = dim - 1
+  if time_major:
+    logits = tf.transpose(logits, [1, 0, 2])  # (batch,time,dim)
+  greedy_labels = tf.argmax(logits, -1)  # (batch,time)
+  y, _ = sparse_labels_with_seq_lens(
+    greedy_labels, seq_lens=seq_lens, collapse_repeated=True, post_filter_idx=blank_idx)
+  return y
 
 
 def get_common_shape(values, ignore_axes=()):
