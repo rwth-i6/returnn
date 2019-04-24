@@ -1187,7 +1187,6 @@ def _py_baum_welch(am_scores, float_idx, edges, weights, start_end_states):
     for t in range(n_time):
       if float_idx[t, sequence_idx] == 1:
         scores = defaultdict(list)  # type: typing.Dict[int,typing.List[float]]  # emission-idx -> list[score]
-        x = defaultdict(list)
         all_scores = []  # type: typing.List[float]
         for edge_idx in range(n_edges):
           from_idx, to_idx, emission_idx, sequence_idx_ = edges[:, edge_idx]
@@ -1204,7 +1203,6 @@ def _py_baum_welch(am_scores, float_idx, edges, weights, start_end_states):
             bwd_scores[t + 1][to_idx])
           scores[emission_idx].append(score)
           all_scores.append(score)
-          x[emission_idx].append((from_idx, to_idx, score))
         obs_scores[t, sequence_idx] = logsumexp(all_scores)
         for emission_idx, values in scores.items():
           fwdbwd[t, sequence_idx, emission_idx] = float(logsumexp(values)) - obs_scores[t, sequence_idx]
@@ -1289,7 +1287,9 @@ def test_FastBaumWelch():
   edges = tf.constant(fast_bw_fsa.edges, dtype=tf.int32)
   weights = tf.constant(fast_bw_fsa.weights, dtype=tf.float32)
   start_end_states = tf.constant(fast_bw_fsa.start_end_states, dtype=tf.int32)
-  am_scores = tf.constant(numpy.random.normal(size=(seq_len, n_batch, n_classes)), dtype=tf.float32)  # in -log space
+  am_scores_np = numpy.random.normal(size=(seq_len, n_batch, n_classes)).astype("float32")
+  am_scores = tf.constant(am_scores_np, dtype=tf.float32)  # in -log space
+  float_idx_np = numpy.ones((seq_len, n_batch), dtype="float32")
   float_idx = tf.ones((seq_len, n_batch), dtype=tf.float32)
   print("Construct call...")
   fwdbwd, obs_scores = fast_baum_welch(
@@ -1297,8 +1297,18 @@ def test_FastBaumWelch():
     edges=edges, weights=weights, start_end_states=start_end_states)
   print("Done.")
   print("Eval:")
-  _, score = session.run([fwdbwd, obs_scores])
+  fwdbwd_np, score = session.run([fwdbwd, obs_scores])
   print("score:", score)
+  print("Baum-Welch soft alignment:")
+  print(repr(fwdbwd_np))
+  fwdbwd_np2, score2 = _py_baum_welch(
+    am_scores=am_scores_np, float_idx=float_idx_np,
+    edges=fast_bw_fsa.edges, weights=fast_bw_fsa.weights, start_end_states=fast_bw_fsa.start_end_states)
+  print("ref score:", score2)
+  print("ref Baum-Welch soft alignment:")
+  print(repr(fwdbwd_np2))
+  numpy.testing.assert_allclose(score, score2, rtol=1e-5)
+  numpy.testing.assert_allclose(fwdbwd_np, fwdbwd_np2, rtol=1e-5)
 
 
 @unittest.skipIf(not is_gpu_available(), "no gpu on this system")
