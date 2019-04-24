@@ -1,15 +1,20 @@
-#!/usr/bin/env python2.7
+#!/usr/bin/env python3
+
+"""
+Utility functions to generate FSAs (or FSTs).
+"""
 
 from __future__ import print_function
 from __future__ import division
 
 import numpy
 import pickle
+import itertools
+import typing
 from copy import deepcopy
+from os.path import isfile
 from Log import log
 from LmDataset import Lexicon, StateTying
-from os.path import isfile
-import itertools
 
 
 class Edge:
@@ -75,6 +80,10 @@ class Edge:
                     str(self.weight)))
 
   def as_tuple(self):
+    """
+    :return: source state idx, target state idx, label, weight
+    :rtype: (int,int,int|str|None,float)
+    """
     return self.source_state_idx, self.target_state_idx, self.label, self.weight
 
   def __eq__(self, other):
@@ -160,6 +169,9 @@ class Graph:
     return prettygraph
 
   def is_empty(self):
+    """
+    :rtype: bool
+    """
     return True if self.num_states <= 0 and len(self.edges) <= 0 else False
 
   @staticmethod
@@ -730,14 +742,18 @@ class AllPossibleWordsFsa:
   def __init__(self, fsa):
     """
     takes a lexicon file and constructs a fsa over all words
+
     :param Graph fsa: the graph which holds the constructed fsa
     """
     self.fsa = fsa
     self.lexicon = None
 
   def run(self):
+    """
+    Run
+    """
     print("Starting All Possible Words FSA Creation")
-    for key, value in self.lexicon.lemmas.iteritems():  # for python 3: .items()
+    for key, value in self.lexicon.lemmas.items():
       edge = Edge(0, 0, key, 0)
       self.fsa.edges_word.append(edge)
     self.fsa.num_states_word = 1
@@ -751,10 +767,11 @@ class Ngram:
   def __init__(self, n):
     """
     constructs a fsa over a lexicon with n-grams
+
     :param int n: size of the gram (1, 2, 3)
     """
     self.n = n
-    self.lexicon = None  # type: Lexicon
+    self.lexicon = None  # type: typing.Optional[Lexicon]
     # lexicon consists of 3 entries: phoneme_list, phonemes and lemmas
     # phoneme_list: list of string phonemes in the lexicon
     # phonemes: dict of dict of str {phone: {index: , symbol: , variation:}}
@@ -795,19 +812,21 @@ class Ngram:
       self.num_states += 1
 
   def run(self):
+    """
+    Run
+    """
     print("Starting {}-gram FSA Creation".format(self.n))
 
     if not self.lemma_list:
       self._create_lemma_list()
 
-    node_expand = []
-    node_expand.append(0)
+    node_expand = [0]
     ngram_counter = 1
 
     while node_expand:
       cur_start = node_expand.pop()
       for idx, lemma in enumerate(self.lemma_list):
-        cur_end = self.num_states + 1 # cur_start + idx + 1
+        cur_end = self.num_states + 1  # cur_start + idx + 1
         edge = Edge(cur_start, cur_end, lemma, 0.)
         self.edges.append(edge)
         self.num_states += 1
@@ -835,7 +854,8 @@ def load_lexicon(lexicon_name='recog.150k.final.lex.gz', pickleflag=False):
   :rtype: Lexicon
   """
   log.initialize(verbosity=[5])
-  lexicon_dumpname = lexicon_name.rstrip('\.gz') + '.pickle'
+  import os
+  lexicon_dumpname = os.path.splitext(lexicon_name)[0] + '.pickle'
 
   if pickleflag:
     # loads from pickled lexicon file
@@ -997,11 +1017,12 @@ class FastBwFsaShared:
   """
   One FSA shared for all the seqs in one batch (i.e. across batch-dim).
   This is a simplistic class which provides the necessary functions to
+  add edges, and simple conversion to :class:`FastBaumWelchBatchFsa`.
   """
 
   def __init__(self):
     self.num_states = 1
-    self.edges = []  # type: list[Edge]
+    self.edges = []  # type: typing.List[Edge]
 
   def add_edge(self, source_state_idx, target_state_idx, emission_idx, weight=0.0):
     """
@@ -1162,6 +1183,9 @@ def fast_bw_fsa_staircase(seq_lens, with_loop=False, max_skip=None, start_max_sk
 
 
 def main():
+  """
+  Demo
+  """
   import time
   from argparse import ArgumentParser
 
