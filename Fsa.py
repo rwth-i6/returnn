@@ -4,9 +4,7 @@ from __future__ import print_function
 from __future__ import division
 
 import numpy
-import theano
 import pickle
-from theano import tensor as T
 from copy import deepcopy
 from Log import log
 from LmDataset import Lexicon, StateTying
@@ -972,76 +970,6 @@ class Store:
       graph.edge(*e[0], **e[1])
 
 
-class BuildSimpleFsaOp(theano.Op):
-  itypes = (T.imatrix,)
-  # the first and last output are actually uint32
-  otypes = (T.fmatrix, T.fvector, T.fmatrix)
-
-  def __init__(self, state_models=None):
-    if state_models is None:
-        state_models = {}
-
-    self.state_models = state_models
-
-  def perform(self, node, inputs, output_storage, params=None):
-    labels = inputs[0]
-
-    from_states      = []
-    to_states        = []
-    emission_idxs    = []
-    seq_idxs         = []
-    weights          = []
-    start_end_states = []
-
-    cur_state = 0
-    edges            = []
-    weights          = []
-    start_end_states = []
-    for b in range(labels.shape[1]):
-      seq_start_state = cur_state
-      for l in range(labels.shape[0]):
-        label = labels[l, b]
-        if label < 0:
-          continue
-        state_model = self.state_models.get(labels[l, b], ('default', 0, 0.0))
-        params = state_model[1:]
-        state_model = state_model[0]
-        if state_model == 'default':
-          # default state model where we transition to the next label
-          length_model, edge_weight = params
-          edges.append((cur_state, cur_state + 1, label, length_model, b))
-          weights.append(edge_weight)
-          cur_state += 1
-        elif state_model == 'loop':
-          # allow looping in the current state before proceeding to the next one
-          length_model, fwd_score, loop_score = params
-          edges.append((cur_state, cur_state,     label, length_model, b))
-          weights.append(loop_score)
-          edges.append((cur_state, cur_state + 1, label, length_model, b))
-          weights.append(fwd_score)
-          cur_state += 1
-        elif state_model == 'double':
-          # choose between emitting the label once or twice
-          lm_once, lm_twice_1, lm_twice_2, once_score, twice_score = params
-          edges.append((cur_state,     cur_state + 2, label, lm_once, b))
-          weights.append(once_score)
-          edges.append((cur_state    , cur_state + 1, label, lm_twice_1, b))
-          weights.append(0.5 * twice_score)
-          edges.append((cur_state + 1, cur_state + 2, label, lm_twice_2, b))
-          weights.append(0.5 * twice_score)
-          cur_state += 2
-
-      start_end_states.append([seq_start_state, cur_state])
-
-      cur_state += 1
-
-    edges = sorted(edges, key=lambda e: e[1] - e[0])
-
-    output_storage[0][0] = numpy.asarray(edges, dtype='uint32').T.copy().view(dtype='float32')
-    output_storage[1][0] = numpy.array(weights, dtype='float32')
-    output_storage[2][0] = numpy.asarray(start_end_states, dtype='uint32').T.copy().view(dtype='float32')
-
-
 class FastBaumWelchBatchFsa:
   """
   FSA(s) in representation format for :class:`FastBaumWelchOp`.
@@ -1231,100 +1159,6 @@ def fast_bw_fsa_staircase(seq_lens, with_loop=False, max_skip=None, start_max_sk
     edges=numpy.array(edges).transpose(),
     weights=numpy.array(weights),
     start_end_states=numpy.array(start_end_states).transpose())
-
-
-class LoadWfstOp(theano.Op):
-  """
-  Op: maps segment names (tags) to fsa automata (load from disk) that can be used to compute a BW-alignment
-  """
-
-  __props__ = ("filename",)
-
-  def __init__(self, filename):
-    super(LoadWfstOp, self).__init__()
-    from Util import make_hashable
-    self.filename = make_hashable(filename)
-    self.single_wfst = None  # type: dict
-
-  def make_node(self, tags):
-    # the edges/start_end_state output has to be a float matrix because that is the only dtype supported
-    # by CudaNdarray. We need unsigned ints. Thus we return a view on the unsigned int matrix
-    return theano.Apply(self, [tags], [T.fmatrix(), T.fvector(), T.fvector(), T.fmatrix(), T.fvector(), T.fmatrix()])
-
-  def perform(self, node, inputs, output_storage, params=None):
-    tags = inputs[0]
-    try:
-      _ = iter(tags)
-    except TypeError:
-      tags = [tags]
-
-    if self.single_wfst is None:
-      print("LoadWfstOp: Loading WFST from %r" % self.filename, file=log.v3)
-      import xml.etree.ElementTree as ET
-
-      tree = ET.parse(self.filename)
-      root = tree.getroot()
-      single_wfst = dict()
-      single_wfst['edges'] = []
-      single_wfst['weights'] = []
-      single_wfst['start_states'] = numpy.array([root.attrib['initial']],dtype=numpy.uint32)
-      single_wfst['end_states'] = []
-      single_wfst['end_state_weigths'] = []
-      self.single_wfst = dict()
-      self.single_wfst['num_states'] = len(root)
-
-      for state in root:
-        if state.tag != 'state':
-          continue # not interested in input-alphabet
-        state_id = numpy.uint32(state.attrib['id'])
-        if state[0].tag == 'final':
-            single_wfst['end_states'].append([numpy.uint32(0),state_id])
-            if state[1].tag == 'weight':
-              single_wfst['end_state_weigths'].append(numpy.float32(state[1].text))
-            else:
-              single_wfst['end_state_weigths'].append(numpy.float32(0.))
-        for arc in state:
-          if arc.tag != 'arc':
-            continue # alredy handeled 'final' and 'weight'
-          target = numpy.uint32(arc.attrib['target'])
-          emission_id = numpy.uint32(arc[0].text)
-          if len(arc) > 1 :
-            weight = numpy.float32(arc[1].text)
-          else:
-            weight = numpy.float32(0.)
-          single_wfst['edges'].append([state_id,target,emission_id,numpy.uint32(0)])
-          single_wfst['weights'].append(weight)
-      for key,val in single_wfst.items():
-        self.single_wfst[key] = numpy.array(val)
-
-    assert isinstance(self.single_wfst, dict)  # PyCharm confused otherwise
-
-    offset = 0
-    all_edges = []
-    all_weights = []
-    all_start_states = []
-    all_end_states = []
-    all_end_state_weigths = []
-    for tag in tags:
-      edges = numpy.transpose(numpy.copy(self.single_wfst['edges']))
-      edges[0:2,:] += offset
-      edges[3,:]    = tag
-      all_edges.append(edges)
-      all_weights.append(self.single_wfst['weights'])
-      all_start_states.append(self.single_wfst['start_states']+offset)
-      end_states = numpy.copy(self.single_wfst['end_states'])
-      end_states[:,1] += offset
-      end_states[:,0]    = tag
-      all_end_states.append(end_states)
-      all_end_state_weigths.append(self.single_wfst['end_state_weigths'])
-      offset += self.single_wfst['num_states']
-
-    output_storage[0][0] = numpy.hstack(all_edges).view(dtype='float32')
-    output_storage[1][0] = numpy.hstack(all_weights)
-    output_storage[2][0] = numpy.hstack(all_start_states).view(dtype='float32')
-    output_storage[3][0] = numpy.hstack(all_end_states).view(dtype='float32')
-    output_storage[4][0] = numpy.hstack(all_end_state_weigths)
-    output_storage[5][0] = numpy.empty((2, self.single_wfst['num_states']*len(tags)), dtype='float32')
 
 
 def main():
