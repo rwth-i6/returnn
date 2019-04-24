@@ -116,10 +116,15 @@ class BackendEngine:
     """
     For backward compatibility, we still keep Theano the default.
     However, we can do it slightly more clever.
-    If theano cannot be imported, allow for TF as the default.
+    If TensorFlow is already imported but Theano is not, allow TF as the default.
+    Also, if theano cannot be imported, allow for TF as the default.
 
     :rtype: int
     """
+    if "theano" in sys.modules:
+      return cls.Theano
+    if "tensorflow" in sys.modules:
+      return cls.TensorFlow
     try:
       import theano
       return cls.Theano
