@@ -5,6 +5,7 @@ from __future__ import print_function
 
 import os
 import sys
+import typing
 print("__file__:", __file__)
 base_path = os.path.realpath(os.path.dirname(os.path.abspath(__file__)) + "/..")
 print("base path:", base_path)
@@ -1119,6 +1120,158 @@ def test_tensorarray_grad_simple():
   print("dx:", vdx)
   assert_allclose(vx, vy)
   assert_allclose(vdy, vdx)
+
+
+def _py_baum_welch(am_scores, float_idx, edges, weights, start_end_states):
+  """
+  Pure Python Forward-backward (Baum Welch) algorithm.
+  The parameters are in the same format as our native fast_baum_welch op.
+
+  :param numpy.ndarray am_scores: (time, batch, dim), in -log space
+  :param numpy.ndarray float_idx: (time, batch) -> 0 or 1 (index mask, via seq lens)
+  :param numpy.ndarray edges: (4,num_edges), edges of the graph (from,to,emission_idx,sequence_idx)
+  :param numpy.ndarray weights: (num_edges,), weights of the edges
+  :param numpy.ndarray start_end_states: (2, batch), (start,end) state idx in FSA. there is only one single FSA.
+  :return: (fwdbwd, obs_scores), fwdbwd is (time, batch, dim), obs_scores is (time, batch), in -log space
+  :rtype: (numpy.ndarray, numpy.ndarray)
+  """
+  # We get it in -log space, but we calculate in +log space.
+  am_scores = -am_scores
+  weights = -weights
+  n_time, n_batch, dim = am_scores.shape
+  assert float_idx.shape == (n_time, n_batch)
+  assert edges.ndim == 2 and weights.ndim == 1
+  n_edges, = weights.shape
+  assert edges.shape == (4, n_edges)
+  assert start_end_states.shape == (2, n_batch)
+  from collections import defaultdict
+  from scipy.misc import logsumexp
+  zero_score = float("-inf")
+  fwdbwd = numpy.zeros((n_time, n_batch, dim), dtype=am_scores.dtype) + zero_score
+  obs_scores = numpy.zeros((n_time, n_batch), dtype=am_scores.dtype) + zero_score
+
+  def collect_scores(forward):
+    """
+    :param bool forward:
+    :rtype: list[dict[int,float]]
+    """
+    start_idx, end_idx = start_end_states[:, sequence_idx]
+    states = defaultdict(lambda: zero_score)  # type: typing.Dict[int,float]  # state-idx -> score.
+    states[start_idx if forward else end_idx] = 0.0
+    scores_over_t = [None] * (n_time + 1)  # type: typing.List[typing.Optional[typing.Dict[int,float]]]
+    scores_over_t[0 if forward else -1] = dict(states)
+    for t in (range(n_time) if forward else reversed(range(n_time))):
+      if float_idx[t, sequence_idx] == 1:
+        scores = defaultdict(list)  # type: typing.Dict[int,typing.List[float]]  # state-idx -> list[score]
+        for edge_idx in range(n_edges):
+          from_idx, to_idx, emission_idx, sequence_idx_ = edges[:, edge_idx]
+          if not forward:
+            from_idx, to_idx = to_idx, from_idx
+          if sequence_idx_ != sequence_idx:
+            continue
+          if from_idx not in states or states[from_idx] == zero_score:
+            continue
+          assert 0 <= emission_idx < dim
+          score = states[from_idx] + weights[edge_idx] + am_scores[t, sequence_idx, emission_idx]
+          scores[to_idx].append(score)
+        states.clear()
+        for state_idx in scores.keys():
+          states[state_idx] = float(logsumexp(scores[state_idx]))
+      scores_over_t[(t + 1) if forward else t] = dict(states)
+    return scores_over_t
+
+  def gamma():
+    """
+    :return: nothing, fill fwdbwd and obs_scores
+    """
+    for t in range(n_time):
+      if float_idx[t, sequence_idx] == 1:
+        scores = defaultdict(list)  # type: typing.Dict[int,typing.List[float]]  # emission-idx -> list[score]
+        x = defaultdict(list)
+        all_scores = []  # type: typing.List[float]
+        for edge_idx in range(n_edges):
+          from_idx, to_idx, emission_idx, sequence_idx_ = edges[:, edge_idx]
+          if sequence_idx_ != sequence_idx:
+            continue
+          assert 0 <= emission_idx < dim
+          if from_idx not in fwd_scores[t]:
+            continue
+          if to_idx not in bwd_scores[t + 1]:
+            continue
+          score = (
+            fwd_scores[t][from_idx] +
+            weights[edge_idx] + am_scores[t, sequence_idx, emission_idx] +
+            bwd_scores[t + 1][to_idx])
+          scores[emission_idx].append(score)
+          all_scores.append(score)
+          x[emission_idx].append((from_idx, to_idx, score))
+        obs_scores[t, sequence_idx] = logsumexp(all_scores)
+        for emission_idx, values in scores.items():
+          fwdbwd[t, sequence_idx, emission_idx] = float(logsumexp(values)) - obs_scores[t, sequence_idx]
+
+  for sequence_idx in range(n_batch):
+    fwd_scores = collect_scores(forward=True)
+    bwd_scores = collect_scores(forward=False)
+    gamma()
+
+  # -log space
+  return -fwdbwd, -obs_scores
+
+
+def test_py_baum_welch():
+  n_batch = 3
+  seq_len = 7
+  n_classes = 5
+  from Fsa import FastBwFsaShared
+  fsa = FastBwFsaShared()
+  for i in range(n_classes):
+    fsa.add_edge(i, i + 1, emission_idx=i)  # fwd
+    fsa.add_edge(i + 1, i + 1, emission_idx=i)  # loop
+  assert n_classes <= seq_len
+  fast_bw_fsa = fsa.get_fast_bw_fsa(n_batch=n_batch)
+  edges = fast_bw_fsa.edges
+  weights = fast_bw_fsa.weights
+  start_end_states = fast_bw_fsa.start_end_states
+  am_scores = numpy.ones((seq_len, n_batch, n_classes), dtype="float32") * numpy.float32(1.0 / n_classes)
+  am_scores = -numpy.log(am_scores)  # in -log space
+  float_idx = numpy.ones((seq_len, n_batch), dtype="float32")
+  print("Construct call...")
+  fwdbwd, obs_scores = _py_baum_welch(
+    am_scores=am_scores, float_idx=float_idx,
+    edges=edges, weights=weights, start_end_states=start_end_states)
+  print("Done.")
+  print("score:")
+  print(repr(obs_scores))
+  assert_equal(obs_scores.shape, (seq_len, n_batch))
+  bw = numpy.exp(-fwdbwd)
+  print("Baum-Welch soft alignment:")
+  print(repr(bw))
+  assert_equal(bw.shape, (seq_len, n_batch, n_classes))
+  from numpy import array, float32
+  if seq_len == n_classes:
+    print("Extra check identity...")
+    for i in range(n_batch):
+      assert_almost_equal(numpy.identity(n_classes), bw[:, i])
+  if seq_len == 7 and n_classes == 5:
+    print("Extra check ref_align (7,5)...")
+    assert_allclose(obs_scores, 8.55801582, rtol=1e-5)  # should be the same everywhere
+    ref_align = \
+      array([[[1., 0., 0., 0., 0.]],
+             [[0.33333316, 0.66666663, 0., 0., 0.]],
+             [[0.06666669, 0.53333354, 0.40000018, 0., 0.]],
+             [[0., 0.20000014, 0.60000014, 0.19999999, 0.]],
+             [[0., 0., 0.39999962, 0.53333312, 0.06666663]],
+             [[0., 0., 0., 0.66666633, 0.33333316]],
+             [[0., 0., 0., 0., 0.99999982]]], dtype=float32)
+    assert_equal(ref_align.shape, (seq_len, 1, n_classes))
+    ref_align = numpy.tile(ref_align, (1, n_batch, 1))
+    assert_equal(ref_align.shape, bw.shape)
+    # print("Reference alignment:")
+    # print(repr(ref_align))
+    print("mean square diff:", numpy.mean(numpy.square(ref_align - bw)))
+    print("max square diff:", numpy.max(numpy.square(ref_align - bw)))
+    assert_allclose(ref_align, bw, rtol=1e-5)
+  print("Done.")
 
 
 @unittest.skipIf(not is_gpu_available(), "no gpu on this system")
