@@ -3639,7 +3639,7 @@ def ctc_greedy_decode(logits, seq_lens, time_major):
   but simpler implementation, and should run on GPU.
 
   :param tf.Tensor logits: (time,batch,dim) or (batch,time,dim)
-  :param tf.Tensor|None seq_lens: shape (batch,) of int32|int64
+  :param tf.Tensor seq_lens: shape (batch,) of int32|int64
   :param bool time_major:
   :rtype: tf.SparseTensor
   :return: in batch-major, [batch,max_time] (like :func:`tf.nn.ctc_greedy_decoder`)

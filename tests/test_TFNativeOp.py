@@ -1377,6 +1377,84 @@ def test_fast_bw_uniform():
   print("Done.")
 
 
+def _log_softmax(x, axis=-1):
+  assert isinstance(x, numpy.ndarray)
+  xdev = x - x.max(axis=axis, keepdims=True)
+  lsm = xdev - numpy.log(numpy.sum(numpy.exp(xdev), axis=axis, keepdims=True))
+  return lsm
+
+
+def test_ctc_fsa():
+  """
+  This is used by :func:`ctc_loss`.
+  """
+  targets = numpy.array([
+    [1, 3, 4, 2, 1, 0],
+    [2, 6, 3, 4, 0, 0],
+    [0, 3, 2, 0, 0, 0]], dtype="int32")
+  target_seq_lens = numpy.array([6, 4, 3], dtype="int32")
+  n_classes = 8  # +1 because of blank
+
+  # Simpler...
+  targets = numpy.array([
+    [0, 1]], dtype="int32")
+  target_seq_lens = numpy.array([2], dtype="int32")
+  n_classes = 3  # +1 because of blank
+
+  # Simpler...
+  targets = numpy.array([
+    [0]], dtype="int32")
+  target_seq_lens = numpy.array([1], dtype="int32")
+  n_classes = 2  # +1 because of blank
+
+  blank_idx = n_classes - 1
+  n_batch, n_target_time = targets.shape
+  assert n_batch == len(target_seq_lens) and n_target_time == max(target_seq_lens)
+  import Fsa
+  fsa = Fsa.get_ctc_fsa_fast_bw(targets=targets, seq_lens=target_seq_lens, blank_idx=blank_idx)
+  assert fsa.start_end_states.shape == (2, len(target_seq_lens))
+  edges = fsa.edges.astype("int32")
+  weights = fsa.weights.astype("float32")
+  start_end_states = fsa.start_end_states.astype("int32")
+  n_time = n_target_time * 3
+  # am_scores are logits, unnormalized, i.e. the values before softmax.
+  # am_scores = numpy.random.normal(size=(n_time, n_batch, n_classes)).astype("float32")
+  am_scores = numpy.zeros((n_time, n_batch, n_classes), dtype="float32")
+  int_idx = numpy.zeros((n_time, n_batch), dtype="int32")
+  seq_lens = numpy.array([n_time, n_time - 4, n_time - 5], dtype="int32")[:n_batch]
+  for t in range(n_time):
+    int_idx[t] = t < seq_lens
+  float_idx = int_idx.astype("float32")
+  fwdbwd, obs_scores = _py_baum_welch(
+    am_scores=_log_softmax(am_scores), float_idx=float_idx,
+    edges=edges, weights=weights, start_end_states=start_end_states)
+  fwdbwd = numpy.exp(-fwdbwd)  # -log space -> prob space
+  print(fwdbwd)
+  print(obs_scores)
+
+  targets_tf = tf.constant(targets)
+  targets_seq_lens_tf = tf.constant(target_seq_lens)
+  from TFUtil import sparse_labels
+  targets_sparse_tf = sparse_labels(targets_tf, targets_seq_lens_tf)
+  am_scores_tf = tf.constant(am_scores)
+  seq_lens_tf = tf.constant(seq_lens)
+  # inputs are unnormalized. tf.nn.ctc_loss does softmax internally.
+  ref_ctc_loss_tf = tf.nn.ctc_loss(
+    labels=targets_sparse_tf,
+    inputs=am_scores_tf, sequence_length=seq_lens_tf, time_major=True)
+  # See grad definition of CTCLoss.
+  # The op will calculate the gradient w.r.t. the logits (log softmax).
+  # I.e. with y = softmax(z), this is \partial loss / \partial z = y - soft_align.
+  # Also see CtcLoss.get_soft_alignment.
+  ref_ctc_loss_grad_tf = ref_ctc_loss_tf.op.outputs[1]  # time major, i.e. (time, batch, dim)
+  y_tf = tf.nn.softmax(am_scores)  # (time, batch, dim)
+  soft_align_tf = y_tf - ref_ctc_loss_grad_tf
+  soft_align_tf.set_shape(tf.TensorShape((None, None, n_classes)))
+  ref_fwdbwd, ref_obs_score = session.run((soft_align_tf, ref_ctc_loss_tf))
+  print(ref_fwdbwd)
+  print(ref_obs_score)
+
+
 def test_edit_distance():
   rnd = numpy.random.RandomState(42)
   n_batch = 15

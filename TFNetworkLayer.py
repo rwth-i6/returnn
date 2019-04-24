@@ -6677,6 +6677,9 @@ class CtcLoss(Loss):
     super(CtcLoss, self).init(**kwargs)
 
   def _get_target_sparse_labels(self):
+    """
+    :rtype: tf.SparseTensor
+    """
     if self._target_sparse_labels is not None:
       return self._target_sparse_labels
     from TFUtil import sparse_labels
@@ -6750,6 +6753,7 @@ class CtcLoss(Loss):
       logits = self.get_output_logits()
       seq_lens = self.output_seq_lens
       labels = self._get_target_sparse_labels()
+      # logits can be unnormalized. It will do softmax internally.
       self._ctc_loss = tf.nn.ctc_loss(
         inputs=logits, labels=labels, sequence_length=seq_lens, time_major=self.output.is_time_major,
         **(self.ctc_opts or {}))

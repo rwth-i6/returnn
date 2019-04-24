@@ -1146,6 +1146,76 @@ def fast_baum_welch_staircase(am_scores, seq_lens, **opts):
     am_scores=am_scores, edges=edges, weights=weights, start_end_states=start_end_states, float_idx=float_idx)
 
 
+def tf_fast_bw_fsa_ctc(targets, seq_lens, blank_idx):
+  """
+  :param tf.Tensor targets: shape (batch,time)
+  :param tf.Tensor seq_lens: shape (batch,)
+  :param int blank_idx:
+  :return: edges, weights, start_end_states
+  :rtype: (tf.Tensor, tf.Tensor, tf.Tensor)
+  """
+  from Fsa import get_ctc_fsa_fast_bw
+
+  def py_fast_bw_fsa_ctc_wrapper(targets_, seq_lens_):
+    """
+    :param numpy.ndarray targets_:
+    :param numpy.ndarray seq_lens_:
+    :rtype: (numpy.ndarray,numpy.ndarray,numpy.ndarray)
+    """
+    fsa = get_ctc_fsa_fast_bw(targets=targets_, seq_lens=seq_lens_, blank_idx=blank_idx)
+    assert fsa.start_end_states.shape == (2, len(seq_lens_)), "shape mismatch %r, n_batch %r, seq lens %r" % (
+      fsa.start_end_states.shape, len(seq_lens_), seq_lens_)
+    return fsa.edges.astype("int32"), fsa.weights.astype("float32"), fsa.start_end_states.astype("int32")
+
+  edges, weights, start_end_states = tf.py_func(
+    py_fast_bw_fsa_ctc_wrapper,
+    [targets, seq_lens],
+    [tf.int32, tf.float32, tf.int32],
+    stateful=False)
+  # edges: (4, num_edges), edges of the graph (from,to,emission_idx,sequence_idx)
+  # weights: (num_edges,), weights of the edges
+  # start_end_states: (2, batch), (start,end) state idx in automaton.
+  edges.set_shape((4, None))
+  weights.set_shape((None,))
+  start_end_states.set_shape((2, None))
+  return edges, weights, start_end_states
+
+
+def ctc_loss(logits, logits_seq_lens, time_major, targets, targets_seq_lens):
+  """
+  Similar to :func:`tf.nn.ctc_loss`.
+  We use our :func:`fast_baum_welch`.
+  Also see :class:`FastBaumWelchLoss`.
+
+  :param tf.Tensor logits: (time,batch,dim) or (batch,time,dim). unnormalized (before softmax)
+  :param tf.Tensor logits_seq_lens: shape (batch,) of int32|int64
+  :param bool time_major:
+  :param tf.Tensor targets: batch-major, [batch,time]
+  :param tf.Tensor targets_seq_lens: (batch,)
+  :return: loss, shape (batch,)
+  :rtype: tf.Tensor
+  """
+  assert logits.get_shape().ndims == 3 and logits.get_shape().dims[-1].value
+  dim = logits.get_shape().dims[-1].value
+  if not time_major:
+    logits = tf.transpose(logits, [1, 0, 2])  # (time,batch,dim)
+  log_sm = tf.nn.log_softmax(logits)  # (time,batch,dim)
+  from TFUtil import sequence_mask_time_major
+  seq_mask = sequence_mask_time_major(logits_seq_lens)  # (time,batch)
+
+  edges, weights, start_end_states = tf_fast_bw_fsa_ctc(
+    targets=targets, seq_lens=targets_seq_lens, blank_idx=dim - 1)
+  fwdbwd, obs_scores = fast_baum_welch(
+    am_scores=-log_sm, float_idx=seq_mask,
+    edges=edges, weights=weights, start_end_states=start_end_states)
+  loss = obs_scores[0]  # (batch,)
+  bw = tf.exp(-fwdbwd)  # (time,batch,dim)
+  grad_x = (tf.exp(log_sm) - bw) * tf.expand_dims(seq_mask, 2)  # (time,batch,dim)
+  from TFUtil import custom_gradient
+  loss = custom_gradient.generic_loss_and_error_signal(loss=loss, x=logits, grad_x=grad_x)
+  return loss
+
+
 def edit_distance(a, a_len, b, b_len):
   """
   Wraps :class:`NativeOp.EditDistanceOp`.

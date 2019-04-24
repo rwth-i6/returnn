@@ -1106,6 +1106,48 @@ class FastBwFsaShared:
       start_end_states=self.get_start_end_states(n_batch))
 
 
+def get_ctc_fsa_fast_bw(targets, seq_lens, blank_idx):
+  """
+  :param numpy.ndarray targets: shape (batch,time)
+  :param numpy.ndarray seq_lens: shape (batch)
+  :param int blank_idx:
+  :rtype: FastBaumWelchBatchFsa
+  """
+  n_batch, n_time = targets.shape
+  assert seq_lens.shape == (n_batch,)
+  edges = []  # type: typing.List[typing.Tuple[int,int,int,int]]  # list of (from,to,emission_idx,sequence_idx)
+  start_end_states = []  # type: typing.List[typing.Tuple[int,int]]  # list of (start,end), same len as batch
+  state_idx = 0
+  for batch_idx in range(n_batch):
+    initial_state_idx = state_idx
+    edges.append((state_idx, state_idx, blank_idx, batch_idx))  # initial blank loop
+    assert seq_lens[batch_idx] <= n_time
+    for i in range(seq_lens[batch_idx]):
+      label_idx = targets[batch_idx, i]
+      is_final_label = i == seq_lens[batch_idx] - 1
+      next_label_idx = None if is_final_label else targets[batch_idx, i + 1]
+      edges.append((state_idx, state_idx + 1, label_idx, batch_idx))  # label
+      if is_final_label:
+        # Skip directly to final state.
+        edges.append((state_idx, state_idx + 2, label_idx, batch_idx))  # label
+      state_idx += 1
+      edges.append((state_idx, state_idx, label_idx, batch_idx))  # label loop
+      edges.append((state_idx, state_idx + 1, blank_idx, batch_idx))  # blank
+      if not is_final_label and label_idx != next_label_idx:
+        # Skip over blank is allowed in this case.
+        edges.append((state_idx, state_idx + 2, next_label_idx, batch_idx))  # next label
+      state_idx += 1
+      edges.append((state_idx, state_idx, blank_idx, batch_idx))  # blank loop
+    final_state_idx = state_idx
+    start_end_states.append((initial_state_idx, final_state_idx))
+    state_idx += 1
+  edges_np = numpy.array(edges).transpose()  # (4,n_edges)
+  start_end_states_np = numpy.array(start_end_states).transpose()  # (2,batch)
+  return FastBaumWelchBatchFsa(
+    edges=edges_np, weights=numpy.zeros((len(edges),), dtype="float32"),
+    start_end_states=start_end_states_np)
+
+
 def fast_bw_fsa_staircase(seq_lens, with_loop=False, max_skip=None, start_max_skip=None, end_max_skip=None):
   """
   Builds up a staircase FSA, returns a FastBaumWelchBatchFsa.
