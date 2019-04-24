@@ -1,3 +1,6 @@
+
+from __future__ import print_function
+
 import numpy
 import os
 from theano import tensor as T
@@ -15,6 +18,7 @@ from SprintErrorSignals import sprint_loss_and_error_signal, SprintAlignmentAuto
 from TheanoUtil import time_batch_make_flat, grad_discard_out_of_bound, DumpOp
 from Util import as_str
 from Log import log
+
 
 class OutputLayer(Layer):
   layer_class = "softmax"
@@ -203,7 +207,7 @@ class OutputLayer(Layer):
     self.attrs['loss'] = self.loss
     if softmax_smoothing != 1.0:
       self.attrs['softmax_smoothing'] = softmax_smoothing
-      print >> log.v4, "Logits before the softmax scaled with factor ", softmax_smoothing
+      print("Logits before the softmax scaled with factor ", softmax_smoothing, file=log.v4)
       self.z *= numpy.float32(softmax_smoothing)
     if self.loss == 'priori':
       self.priori = self.shared(value=numpy.ones((self.attrs['n_out'],), dtype=theano.config.floatX), borrow=True)
