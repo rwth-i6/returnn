@@ -4716,23 +4716,26 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
       {
         int idx = threadIdx.x + blockDim.x * blockIdx.x;
         // n_edges should be n_batch * (5 * (n_time - 1) + 10).
+        assert(n_edges % n_batch == 0);
         while(idx < n_edges) {
-          int batch_idx = idx / n_batch;
-          int rel_edge_idx = idx % n_batch;
+          int batch_idx = idx / (n_edges / n_batch);
+          int rel_edge_idx = idx % (n_edges / n_batch);
           int32_t seq_len = seq_lens[batch_idx];
-          // state_idx: 0 b, 1 l, 2 b, 3 l, ..., (T-1)*2 b, (T-1)*2+1 l, (T-1)*2+2 b, (T-1)*2+3 dummy, (T-1)*2+4 end
-          int32_t state_idx;
-          int32_t emission_idx = blank_idx;
-          int t; // pos in targets
-          int srel_edge_idx; // state relative edge
+          // state_idx: 0 b, 1 l, 2 b, 3 l, ..., (T-1)*2 b, T*2-1 l, T*2 b, T*2+1 dummy, T*2+2 end
+          // i.e. T*2+3 states per seq.
+          int state_idx_offset = (n_time * 2 + 3) * batch_idx;
+          int t = -1; // pos in targets
+          int srel_edge_idx = -1; // state relative edge
           // (seq_len * 2) - 1 is last label state idx. seq_len * 2 is last blank state idx. 
           int32_t dummy_state_idx = seq_len * 2 + 1;
           int32_t end_state_idx = seq_len * 2 + 2;
+          int32_t state_idx = dummy_state_idx;
           int32_t to_state_idx = dummy_state_idx;
           if(rel_edge_idx == 0) {
-            start_end_states[0 * n_batch + batch_idx] = idx; // start
-            start_end_states[1 * n_batch + batch_idx] = end_state_idx; // end   
+            start_end_states[0 * n_batch + batch_idx] = state_idx_offset; // start
+            start_end_states[1 * n_batch + batch_idx] = state_idx_offset + end_state_idx; // end   
           }
+          int32_t emission_idx = blank_idx;
           int32_t label_idx = -1, next_label_idx = -1;
           if(seq_len == 0) {
             t = -1;
@@ -4748,7 +4751,7 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
               to_state_idx = end_state_idx;
               srel_edge_idx = 1;
             }
-            else if(srel_edge_idx == 2) {
+            else {
               state_idx = dummy_state_idx;
               srel_edge_idx = -1;
             }
@@ -4859,8 +4862,11 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
               next_label_idx = targets[batch_idx * n_time + t + 1];
               state_idx = (seq_len - 2) * 2 + 1;
               srel_edge_idx = 3;
-              to_state_idx = end_state_idx;              
-              emission_idx = next_label_idx;
+              // skip over blank to next label / end state (if allowed <=> next label is different)
+              if(label_idx != next_label_idx) {
+                to_state_idx = end_state_idx;              
+                emission_idx = next_label_idx;
+              }
             }
             // 3 edges for prev last blank
             else if(rel_edge_idx <= 5 * (seq_len - 1) + 3) {
@@ -4884,6 +4890,7 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
             // 4 edges for last label
             else if(rel_edge_idx <= 5 * (seq_len - 1) + 7) {
               t = seq_len - 1;
+              label_idx = targets[batch_idx * n_time + t];
               state_idx = (seq_len - 1) * 2 + 1;
               srel_edge_idx = rel_edge_idx - (5 * (seq_len - 1) + 4);
               if(srel_edge_idx == 0) {
@@ -4921,10 +4928,10 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
             }
           }
           
-          edges[0 * n_batch + batch_idx] = state_idx; // from
-          edges[1 * n_batch + batch_idx] = to_state_idx; // to
-          edges[2 * n_batch + batch_idx] = emission_idx; // emission
-          edges[3 * n_batch + batch_idx] = batch_idx; // batch
+          edges[0 * n_edges + idx] = state_idx_offset + state_idx; // from
+          edges[1 * n_edges + idx] = state_idx_offset + to_state_idx; // to
+          edges[2 * n_edges + idx] = emission_idx; // emission
+          edges[3 * n_edges + idx] = batch_idx; // batch
           
           idx += gridDim.x * blockDim.x;
         }
@@ -4937,13 +4944,13 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
     assert(n_outputs == 2);
     Ndarray* targets = inputs[0];
     Ndarray* seq_lens = inputs[1];
-    int32_t blank_idx = Ndarray_DEV_DATA_int32_scalar(inputs[2]);
+    Ndarray* blank_idx_ref = inputs[2];
     Ndarray* weights = inputs[3];
     Ndarray* edges = *outputs[0];
     Ndarray* start_end_states = *outputs[1];
     assert_cmp(Ndarray_NDIM(targets), ==, 2);
     assert_cmp(Ndarray_NDIM(seq_lens), ==, 1);
-    assert_cmp(Ndarray_NDIM(blank_idx), ==, 0);
+    assert_cmp(Ndarray_NDIM(blank_idx_ref), ==, 0);
     assert_cmp(Ndarray_NDIM(weights), ==, 1);
     assert_cmp(Ndarray_NDIM(edges), ==, 2);
     assert_cmp(Ndarray_NDIM(start_end_states), ==, 2);
@@ -4953,8 +4960,15 @@ class GetCtcFsaFastBwOp(NativeOpGenBase):
     assert_cmp(Ndarray_DIMS(start_end_states)[1], ==, n_batch);
     int n_time = Ndarray_DIMS(targets)[1];
     int n_edges = Ndarray_DIMS(weights)[0];
+    assert_cmp(Ndarray_DIMS(start_end_states)[0], ==, 2);
+    assert_cmp(Ndarray_DIMS(edges)[0], ==, 4);
+    assert_cmp(Ndarray_DIMS(edges)[1], ==, n_edges);
+
+    assert_cmp(n_edges, ==, n_batch * (5 * (n_time - 1) + 10));
+
     Ndarray_memset(Ndarray_DEV_DATA_int32(edges), 255, 4 * n_edges * sizeof(int32_t));
     Ndarray_memset(Ndarray_DEV_DATA_int32(start_end_states), 255, 2 * n_batch * sizeof(int32_t));
+    int32_t blank_idx = Ndarray_DEV_DATA_int32_scalar(blank_idx_ref);
     
     start_dev_kernel(construct_kernel, (
       n_batch, n_time, n_edges,

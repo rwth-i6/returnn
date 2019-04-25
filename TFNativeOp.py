@@ -299,8 +299,9 @@ class OpMaker(object):
       else:  # no ref
         code_set_io += "Ndarray* output_%i = NULL;\n" % (out_idx,)
         code_set_io += "outputs[%i] = &output_%i;\n" % (out_idx, out_idx)
-        cshape = "TensorShape({%s})" % ", ".join(["inputs[%i]->dim_size(%i)" % (in_idx, in_dim)
-                                                  for (in_idx, in_dim) in v["shape"]])
+        cshape = "TensorShape({%s})" % ", ".join(
+          [str(dim) if isinstance(dim, int) else ("inputs[%i]->dim_size(%i)" % dim)  # also see make_dim_str
+           for dim in v["shape"]])
         code_set_io += "OP_REQUIRES_OK(context, context->allocate_output(%i, %s, &output_%i));\n" % (
           out_idx, cshape, out_idx)
         code_set_io += "Ndarray_set_zero(*outputs[%i]);\n" % out_idx

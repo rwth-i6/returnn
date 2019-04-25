@@ -1203,9 +1203,12 @@ def _py_baum_welch(am_scores, float_idx, edges, weights, start_end_states):
             bwd_scores[t + 1][to_idx])
           scores[emission_idx].append(score)
           all_scores.append(score)
-        obs_scores[t, sequence_idx] = logsumexp(all_scores)
+        obs_scores[t, sequence_idx] = logsumexp(all_scores) if all_scores else zero_score
         for emission_idx, values in scores.items():
-          fwdbwd[t, sequence_idx, emission_idx] = float(logsumexp(values)) - obs_scores[t, sequence_idx]
+          if not values:
+            fwdbwd[t, sequence_idx, emission_idx] = zero_score
+          else:
+            fwdbwd[t, sequence_idx, emission_idx] = float(logsumexp(values)) - obs_scores[t, sequence_idx]
 
   for sequence_idx in range(n_batch):
     fwd_scores = collect_scores(forward=True)
@@ -1469,7 +1472,11 @@ def check_ctc_fsa(targets, target_seq_lens, n_classes, with_native_fsa=False):
   am_scores = numpy.random.RandomState(42).normal(size=(n_time, n_batch, n_classes)).astype("float32")
   # am_scores = numpy.zeros((n_time, n_batch, n_classes), dtype="float32")
   int_idx = numpy.zeros((n_time, n_batch), dtype="int32")
-  seq_lens = numpy.array([n_time, n_time - 4, n_time - 5], dtype="int32")[:n_batch]
+  seq_lens = numpy.array([
+    n_time,
+    max(n_time - 4, (target_seq_lens[1] if (len(target_seq_lens) >= 2) else 0) + 1, 1),
+    max(n_time - 5, 1), max(n_time - 5, 1)],
+    dtype="int32")[:n_batch]
   for t in range(n_time):
     int_idx[t] = t < seq_lens
   float_idx = int_idx.astype("float32")
@@ -1481,6 +1488,11 @@ def check_ctc_fsa(targets, target_seq_lens, n_classes, with_native_fsa=False):
   edges = fsa.edges.astype("int32")
   weights = fsa.weights.astype("float32")
   start_end_states = fsa.start_end_states.astype("int32")
+  if with_native_fsa:
+    print("python edges:")
+    print(edges)
+    print("python start_end_states:")
+    print(start_end_states)
 
   fwdbwd, obs_scores = _py_baum_welch(
     am_scores=-_log_softmax(am_scores), float_idx=float_idx,
@@ -1498,6 +1510,13 @@ def check_ctc_fsa(targets, target_seq_lens, n_classes, with_native_fsa=False):
       targets=targets_tf, seq_lens=targets_seq_lens_tf, blank_idx=blank_idx)
     native_edges, native_weights, native_start_end_states = session.run(
       (native_edges_tf, native_weights_tf, native_start_end_states_tf))
+    # Note: The native FSA vs the Python FSA are not exactly identical
+    # (they just should be equivalent; although almost identical).
+    # We introduce a dummy state (last before end state), and some dummy edges.
+    print("native edges:")
+    print(native_edges)
+    print("native_start_end_states:")
+    print(native_start_end_states)
 
     native_fwdbwd, native_obs_scores = _py_baum_welch(
       am_scores=-_log_softmax(am_scores), float_idx=float_idx,
@@ -1509,7 +1528,7 @@ def check_ctc_fsa(targets, target_seq_lens, n_classes, with_native_fsa=False):
       for t in range(seq_lens[b]):
         numpy.testing.assert_almost_equal(fwdbwd[t, b], native_fwdbwd[t, b], decimal=5)
     for b in range(n_batch):
-      numpy.testing.assert_almost_equal(obs_scores[0, b], native_obs_scores[b], decimal=5)
+      numpy.testing.assert_almost_equal(obs_scores[b], native_obs_scores[b], decimal=5)
     fwdbwd = native_fwdbwd
     obs_scores = native_obs_scores
 
@@ -1576,7 +1595,6 @@ def test_ctc_fsa_batch1_len1():
   check_ctc_fsa(targets=targets, target_seq_lens=target_seq_lens, n_classes=n_classes)
 
 
-@unittest.skip("TODO...")
 def test_ctc_fsa_batch3_len6_c8_native():
   """
   This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
@@ -1590,7 +1608,67 @@ def test_ctc_fsa_batch3_len6_c8_native():
   check_ctc_fsa(targets=targets, target_seq_lens=target_seq_lens, n_classes=n_classes, with_native_fsa=True)
 
 
-@unittest.skip("TODO...")
+def test_ctc_fsa_batch4_len6_c8_native():
+  """
+  This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
+  """
+  targets = numpy.array([
+    [1, 2, 4, 4, 1, 0],
+    [2, 6, 3, 4, 0, 0],
+    [3, 3, 0, 0, 0, 0],
+    [5, 0, 0, 0, 0, 0]], dtype="int32")
+  target_seq_lens = numpy.array([6, 4, 2, 1], dtype="int32")
+  n_classes = 8  # +1 because of blank
+  check_ctc_fsa(targets=targets, target_seq_lens=target_seq_lens, n_classes=n_classes, with_native_fsa=True)
+
+
+def test_ctc_fsa_batch2_len2a():
+  """
+  This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
+  """
+  targets = numpy.array([
+    [0, 1],
+    [1, 0]], dtype="int32")
+  target_seq_lens = numpy.array([2, 1], dtype="int32")
+  n_classes = 3  # +1 because of blank
+  check_ctc_fsa(targets=targets, target_seq_lens=target_seq_lens, n_classes=n_classes, with_native_fsa=True)
+
+
+def test_ctc_fsa_batch2_len2():
+  """
+  This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
+  """
+  targets = numpy.array([
+    [0, 1],
+    [0, 0]], dtype="int32")
+  target_seq_lens = numpy.array([2, 2], dtype="int32")
+  n_classes = 3  # +1 because of blank
+  check_ctc_fsa(targets=targets, target_seq_lens=target_seq_lens, n_classes=n_classes, with_native_fsa=True)
+
+
+def test_ctc_fsa_batch2_len1():
+  """
+  This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
+  """
+  targets = numpy.array([
+    [0],
+    [1]], dtype="int32")
+  target_seq_lens = numpy.array([1, 1], dtype="int32")
+  n_classes = 3  # +1 because of blank
+  check_ctc_fsa(targets=targets, target_seq_lens=target_seq_lens, n_classes=n_classes, with_native_fsa=True)
+
+
+def test_ctc_fsa_batch1_len2rep_native():
+  """
+  This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
+  """
+  targets = numpy.array([
+    [0, 0]], dtype="int32")
+  target_seq_lens = numpy.array([2], dtype="int32")
+  n_classes = 2  # +1 because of blank
+  check_ctc_fsa(targets=targets, target_seq_lens=target_seq_lens, n_classes=n_classes, with_native_fsa=True)
+
+
 def test_ctc_fsa_batch1_len2_native():
   """
   This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
@@ -1602,7 +1680,6 @@ def test_ctc_fsa_batch1_len2_native():
   check_ctc_fsa(targets=targets, target_seq_lens=target_seq_lens, n_classes=n_classes, with_native_fsa=True)
 
 
-@unittest.skip("TODO...")
 def test_ctc_fsa_batch1_len1_native():
   """
   This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
@@ -1613,7 +1690,6 @@ def test_ctc_fsa_batch1_len1_native():
   n_classes = 2  # +1 because of blank
 
   check_ctc_fsa(targets=targets, target_seq_lens=target_seq_lens, n_classes=n_classes, with_native_fsa=True)
-
 
 
 def test_edit_distance():
