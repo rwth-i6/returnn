@@ -1173,7 +1173,7 @@ def fast_baum_welch_staircase(am_scores, seq_lens, **opts):
     am_scores=am_scores, edges=edges, weights=weights, start_end_states=start_end_states, float_idx=float_idx)
 
 
-def ctc_loss(logits, logits_seq_lens, time_major, targets, targets_seq_lens):
+def ctc_loss(logits, logits_seq_lens, logits_time_major, targets, targets_seq_lens):
   """
   Similar to :func:`tf.nn.ctc_loss`.
   We use our :func:`fast_baum_welch`.
@@ -1181,7 +1181,7 @@ def ctc_loss(logits, logits_seq_lens, time_major, targets, targets_seq_lens):
 
   :param tf.Tensor logits: (time,batch,dim) or (batch,time,dim). unnormalized (before softmax)
   :param tf.Tensor logits_seq_lens: shape (batch,) of int32|int64
-  :param bool time_major:
+  :param bool logits_time_major:
   :param tf.Tensor targets: batch-major, [batch,time]
   :param tf.Tensor targets_seq_lens: (batch,)
   :return: loss, shape (batch,)
@@ -1189,7 +1189,7 @@ def ctc_loss(logits, logits_seq_lens, time_major, targets, targets_seq_lens):
   """
   assert logits.get_shape().ndims == 3 and logits.get_shape().dims[-1].value
   dim = logits.get_shape().dims[-1].value
-  if not time_major:
+  if not logits_time_major:
     logits = tf.transpose(logits, [1, 0, 2])  # (time,batch,dim)
   log_sm = tf.nn.log_softmax(logits)  # (time,batch,dim)
   from TFUtil import sequence_mask_time_major

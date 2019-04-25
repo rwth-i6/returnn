@@ -6650,7 +6650,8 @@ class CtcLoss(Loss):
 
   def __init__(self, target_collapse_repeated=False, auto_clip_target_len=False, output_in_log_space=False,
                beam_width=100, ctc_opts=None,
-               focal_loss_factor=0.0, **kwargs):
+               focal_loss_factor=0.0,
+               use_native=False, **kwargs):
     """
     :param bool target_collapse_repeated: like preprocess_collapse_repeated option for CTC. used for sparse_labels().
     :param bool auto_clip_target_len: see self._get_target_sparse_labels().
@@ -6658,6 +6659,7 @@ class CtcLoss(Loss):
     :param int beam_width: used in eval
     :param dict[str]|None ctc_opts: other kwargs used for tf.nn.ctc_loss
     :param float focal_loss_factor: see https://arxiv.org/abs/1708.02002. 0 means disabled. generalized for CTC
+    :param bool use_native: use our native implementation
     """
     super(CtcLoss, self).__init__(**kwargs)
     self.target_collapse_repeated = target_collapse_repeated
@@ -6668,6 +6670,7 @@ class CtcLoss(Loss):
     self.beam_width = beam_width
     self.ctc_opts = ctc_opts
     self.focal_loss_factor = focal_loss_factor
+    self.use_native = use_native
 
   def init(self, **kwargs):
     """
@@ -6754,9 +6757,16 @@ class CtcLoss(Loss):
       seq_lens = self.output_seq_lens
       labels = self._get_target_sparse_labels()
       # logits can be unnormalized. It will do softmax internally.
-      self._ctc_loss = tf.nn.ctc_loss(
-        inputs=logits, labels=labels, sequence_length=seq_lens, time_major=self.output.is_time_major,
-        **(self.ctc_opts or {}))
+      if self.use_native:
+        assert not self.ctc_opts
+        import TFNativeOp
+        self._ctc_loss = TFNativeOp.ctc_loss(
+          logits=logits, logits_seq_lens=seq_lens, logits_time_major=self.output.is_time_major,
+          targets=self.target.get_placeholder_as_batch_major(), targets_seq_lens=self.target_seq_lens)
+      else:
+        self._ctc_loss = tf.nn.ctc_loss(
+          inputs=logits, labels=labels, sequence_length=seq_lens, time_major=self.output.is_time_major,
+          **(self.ctc_opts or {}))
       loss = self._ctc_loss  # shape (batch,)
       if self.focal_loss_factor:
         # We are going up to (time,batch,dim), and we later use reduce_sum,
@@ -6782,12 +6792,16 @@ class CtcLoss(Loss):
         logits = tf.transpose(logits, [1, 0, 2])  # (B,T,N) => (T,B,N)
       seq_lens = self.output_seq_lens
       if self.beam_width > 1:
+        assert not self.use_native, "use beam_width=1 with use_native"
         decoded = self.base_network.cond_on_train(
           lambda: tf.nn.ctc_greedy_decoder(inputs=logits, sequence_length=seq_lens)[0][0],
           lambda: tf.nn.ctc_beam_search_decoder(
             inputs=logits, sequence_length=seq_lens, beam_width=self.beam_width)[0][0])
       else:
-        decoded = tf.nn.ctc_greedy_decoder(inputs=logits, sequence_length=seq_lens)[0][0]
+        if self.use_native:
+          decoded = TFUtil.ctc_greedy_decode(logits=logits, seq_lens=seq_lens, time_major=True)
+        else:
+          decoded = tf.nn.ctc_greedy_decoder(inputs=logits, sequence_length=seq_lens)[0][0]
       labels = self._get_target_sparse_labels()
       error = tf.edit_distance(hypothesis=tf.cast(decoded, labels.dtype), truth=labels, normalize=False)
       return self.reduce_func(error)
