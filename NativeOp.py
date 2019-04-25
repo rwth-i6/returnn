@@ -4668,6 +4668,303 @@ class SegmentFastBaumWelchOp(NativeOpGenBase):
     self.c_fw_code = '\n'.join(extra_lines) + '\n' + self.c_fw_code
 
 
+class GetCtcFsaFastBwOp(NativeOpGenBase):
+  # noinspection PyUnresolvedReferences
+  """
+  This implements :func:`Fsa.get_ctc_fsa_fast_bw` as a native op.
+  This is for constructing a FSA with a CTC topology.
+  The output format is compatible to the FastBaumWelch native op.
+
+  inputs:
+    :param targets: shape (batch,time), int32
+    :param seq_lens: shape (batch), int32
+    :param blank_idx: scalar, int32
+    :param weights: shape (num_edges,), float32 (not used, except for target shape)
+  outputs:
+    :param edges: (4,num_edges), int32, edges of the graph (from,to,emission_idx,sequence_idx)
+    :param start_end_states: (2,batch), int32, (start,end) state idx in FSA
+
+  To construct `weights` (for FastBaumWelch), `weights` should be just `tf.zeros((num_edges,))`.
+  `num_edges` should be `n_batch * (5 * (n_time - 1) + 10)`
+    (see construction in kernel why that number).
+  """
+  in_info = (
+    {"name": "targets", "ndim": 2, "shape": (None, None), "dtype": "int32",
+     "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "seq_lens", "ndim": 1, "shape": (None,), "dtype": "int32",
+     "need_contiguous": True, "gradient": "disconnected"},
+    {"name": "blank_idx", "ndim": 0, "shape": (), "dtype": "int32",
+     "need_contiguous": True, "gradient": "disconnected", "host_memory": True},
+    {"name": "weights", "ndim": 1, "shape": (None,), "dtype": "float32",
+     "need_contiguous": True, "gradient": "disconnected"},
+  )
+  out_info = (
+    {"name": "edges", "ndim": 2, "shape": (4, (3, 0)), "dtype": "int32", "need_contiguous": True},
+    {"name": "start_end_states", "ndim": 2, "shape": (2, (1, 0)), "dtype": "int32", "need_contiguous": True},
+  )
+
+  c_extra_support_code = {
+    "01_kernel": """
+      DEF_KERNEL
+      void construct_kernel
+        (
+        int n_batch, int n_time, int n_edges,
+        const int32_t* targets, const int32_t* seq_lens,
+        int32_t blank_idx,
+        int32_t* edges, int32_t* start_end_states
+        )
+      {
+        int idx = threadIdx.x + blockDim.x * blockIdx.x;
+        // n_edges should be n_batch * (5 * (n_time - 1) + 10).
+        while(idx < n_edges) {
+          int batch_idx = idx / n_batch;
+          int rel_edge_idx = idx % n_batch;
+          int32_t seq_len = seq_lens[batch_idx];
+          // state_idx: 0 b, 1 l, 2 b, 3 l, ..., (T-1)*2 b, (T-1)*2+1 l, (T-1)*2+2 b, (T-1)*2+3 dummy, (T-1)*2+4 end
+          int32_t state_idx;
+          int32_t emission_idx = blank_idx;
+          int t; // pos in targets
+          int srel_edge_idx; // state relative edge
+          // (seq_len * 2) - 1 is last label state idx. seq_len * 2 is last blank state idx. 
+          int32_t dummy_state_idx = seq_len * 2 + 1;
+          int32_t end_state_idx = seq_len * 2 + 2;
+          int32_t to_state_idx = dummy_state_idx;
+          if(rel_edge_idx == 0) {
+            start_end_states[0 * n_batch + batch_idx] = idx; // start
+            start_end_states[1 * n_batch + batch_idx] = end_state_idx; // end   
+          }
+          int32_t label_idx = -1, next_label_idx = -1;
+          if(seq_len == 0) {
+            t = -1;
+            emission_idx = blank_idx;
+            // 1 single blank loop
+            if(rel_edge_idx == 0) {
+              state_idx = 0;
+              to_state_idx = 0;
+              srel_edge_idx = 0;
+            }
+            else if(rel_edge_idx == 1) {
+              state_idx = 0;
+              to_state_idx = end_state_idx;
+              srel_edge_idx = 1;
+            }
+            else if(srel_edge_idx == 2) {
+              state_idx = dummy_state_idx;
+              srel_edge_idx = -1;
+            }
+          }
+          else if(seq_len == 1) {
+            label_idx = targets[batch_idx * n_time + 0];
+            // 3 edges for first / prev last blank
+            if(rel_edge_idx < 3) {
+              t = 0;
+              state_idx = 0;
+              srel_edge_idx = rel_edge_idx;
+              if(srel_edge_idx == 0) {
+                to_state_idx = state_idx;
+                emission_idx = blank_idx;
+              }
+              else if(srel_edge_idx == 1) {
+                to_state_idx = state_idx + 1;
+                emission_idx = label_idx;
+              }
+              else if(srel_edge_idx == 2) {
+                to_state_idx = end_state_idx;
+                emission_idx = label_idx;
+              }
+            }
+            // 4 edges for first / last label
+            else if(rel_edge_idx < 7) {
+              t = 0;
+              state_idx = 1;
+              srel_edge_idx = rel_edge_idx - 3;
+              if(srel_edge_idx == 0) {
+                to_state_idx = state_idx;
+                emission_idx = label_idx;
+              }
+              else if(srel_edge_idx == 1) {
+                to_state_idx = state_idx + 1;
+                emission_idx = blank_idx;
+              }
+              else if(srel_edge_idx == 2) {
+                to_state_idx = end_state_idx;
+                emission_idx = label_idx;              
+              }
+              else if(srel_edge_idx == 3) {
+                to_state_idx = end_state_idx;
+                emission_idx = blank_idx;
+              }
+            }
+            // 2 edges for last blank
+            else if(rel_edge_idx < 9) {
+              t = -1;
+              emission_idx = blank_idx;
+              state_idx = 2;
+              srel_edge_idx = rel_edge_idx - 7;
+              if(srel_edge_idx == 0)
+                to_state_idx = state_idx;
+              else
+                to_state_idx = end_state_idx;
+            }
+            else {
+              t = -1;
+              state_idx = dummy_state_idx;
+              srel_edge_idx = -1;
+            }
+          }
+          else { // seq_len >= 2
+            // 2 edges for each blank, 3 for each label. up to prev last.
+            if(rel_edge_idx < 5 * (seq_len - 1)) {
+              t = rel_edge_idx / 5;
+              label_idx = targets[batch_idx * n_time + t];
+              next_label_idx = targets[batch_idx * n_time + t + 1];
+              state_idx = 2 * (rel_edge_idx / 5);
+              srel_edge_idx = rel_edge_idx % 5;
+              if(srel_edge_idx >= 2) {
+                srel_edge_idx -= 2;
+                state_idx += 1;
+              }
+              if(state_idx % 2 == 0) { // blank loop state
+                if(srel_edge_idx == 0) {
+                  to_state_idx = state_idx;
+                  emission_idx = blank_idx;
+                }
+                else if(srel_edge_idx == 1) {
+                  to_state_idx = state_idx + 1;
+                  emission_idx = label_idx;
+                }
+              }
+              else { // label loop state
+                if(srel_edge_idx == 0) {
+                  to_state_idx = state_idx;
+                  emission_idx = label_idx;
+                }
+                else if(srel_edge_idx == 1) {
+                  to_state_idx = state_idx + 1;
+                  emission_idx = blank_idx;
+                }
+                else if(srel_edge_idx == 2) {
+                  // skip over blank to next label (if allowed <=> next label is different)
+                  if(label_idx != next_label_idx) {
+                    to_state_idx = state_idx + 2;
+                    emission_idx = next_label_idx;
+                  }
+                }
+              }
+            }
+            // 1 more edge for prev last label
+            else if(rel_edge_idx == 5 * (seq_len - 1)) {
+              t = seq_len - 2;
+              label_idx = targets[batch_idx * n_time + t];
+              next_label_idx = targets[batch_idx * n_time + t + 1];
+              state_idx = (seq_len - 2) * 2 + 1;
+              srel_edge_idx = 3;
+              to_state_idx = end_state_idx;              
+              emission_idx = next_label_idx;
+            }
+            // 3 edges for prev last blank
+            else if(rel_edge_idx <= 5 * (seq_len - 1) + 3) {
+              t = seq_len - 1;
+              label_idx = targets[batch_idx * n_time + t];
+              state_idx = (seq_len - 1) * 2;
+              srel_edge_idx = rel_edge_idx - (5 * (seq_len - 1) + 1);
+              if(srel_edge_idx == 0) {
+                to_state_idx = state_idx;
+                emission_idx = blank_idx;
+              }
+              else if(srel_edge_idx == 1) {
+                to_state_idx = state_idx + 1;
+                emission_idx = label_idx;
+              }
+              else if(srel_edge_idx == 2) {
+                to_state_idx = end_state_idx;
+                emission_idx = label_idx;
+              }
+            }
+            // 4 edges for last label
+            else if(rel_edge_idx <= 5 * (seq_len - 1) + 7) {
+              t = seq_len - 1;
+              state_idx = (seq_len - 1) * 2 + 1;
+              srel_edge_idx = rel_edge_idx - (5 * (seq_len - 1) + 4);
+              if(srel_edge_idx == 0) {
+                to_state_idx = state_idx;
+                emission_idx = label_idx;
+              }
+              else if(srel_edge_idx == 1) {
+                to_state_idx = state_idx + 1;
+                emission_idx = blank_idx;
+              }
+              else if(srel_edge_idx == 2) {
+                to_state_idx = end_state_idx;
+                emission_idx = label_idx;              
+              }
+              else if(srel_edge_idx == 3) {
+                to_state_idx = end_state_idx;
+                emission_idx = blank_idx;
+              }
+            }
+            // 2 edges for last blank
+            else if(rel_edge_idx <= 5 * (seq_len - 1) + 9) {
+              t = -1;
+              emission_idx = blank_idx;
+              state_idx = (seq_len - 1) * 2 + 2;
+              srel_edge_idx = rel_edge_idx - (5 * (seq_len - 1) + 8);            
+              if(srel_edge_idx == 0)
+                to_state_idx = state_idx;
+              else
+                to_state_idx = end_state_idx;
+            }
+            else {
+              t = -1;
+              state_idx = dummy_state_idx;
+              srel_edge_idx = -1;
+            }
+          }
+          
+          edges[0 * n_batch + batch_idx] = state_idx; // from
+          edges[1 * n_batch + batch_idx] = to_state_idx; // to
+          edges[2 * n_batch + batch_idx] = emission_idx; // emission
+          edges[3 * n_batch + batch_idx] = batch_idx; // batch
+          
+          idx += gridDim.x * blockDim.x;
+        }
+      }
+    """
+  }
+
+  c_fw_code = """
+    assert(n_inputs == 4);
+    assert(n_outputs == 2);
+    Ndarray* targets = inputs[0];
+    Ndarray* seq_lens = inputs[1];
+    int32_t blank_idx = Ndarray_DEV_DATA_int32_scalar(inputs[2]);
+    Ndarray* weights = inputs[3];
+    Ndarray* edges = *outputs[0];
+    Ndarray* start_end_states = *outputs[1];
+    assert_cmp(Ndarray_NDIM(targets), ==, 2);
+    assert_cmp(Ndarray_NDIM(seq_lens), ==, 1);
+    assert_cmp(Ndarray_NDIM(blank_idx), ==, 0);
+    assert_cmp(Ndarray_NDIM(weights), ==, 1);
+    assert_cmp(Ndarray_NDIM(edges), ==, 2);
+    assert_cmp(Ndarray_NDIM(start_end_states), ==, 2);
+    int n_batch = Ndarray_DIMS(seq_lens)[0];
+    assert_cmp(Ndarray_DIMS(targets)[0], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(seq_lens)[0], ==, n_batch);
+    assert_cmp(Ndarray_DIMS(start_end_states)[1], ==, n_batch);
+    int n_time = Ndarray_DIMS(targets)[1];
+    int n_edges = Ndarray_DIMS(weights)[0];
+    Ndarray_memset(Ndarray_DEV_DATA_int32(edges), 255, 4 * n_edges * sizeof(int32_t));
+    Ndarray_memset(Ndarray_DEV_DATA_int32(start_end_states), 255, 2 * n_batch * sizeof(int32_t));
+    
+    start_dev_kernel(construct_kernel, (
+      n_batch, n_time, n_edges,
+      Ndarray_DEV_DATA_int32(targets), Ndarray_DEV_DATA_int32(seq_lens),
+      blank_idx,
+      Ndarray_DEV_DATA_int32(edges), Ndarray_DEV_DATA_int32(start_end_states)
+    ));
+  """
+
+
 class EditDistanceOp(NativeOpGenBase):
   # noinspection PyUnresolvedReferences
   """

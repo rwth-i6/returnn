@@ -1131,6 +1131,32 @@ def tf_fast_bw_fsa_staircase(seq_lens, **opts):
   return edges, weights, start_end_states
 
 
+def get_ctc_fsa_fast_bw(targets, seq_lens, blank_idx):
+  """
+  See :class:`NativeOp.GetCtcFsaFastBwOp`.
+  Generates a FSA with CTC topology. The output format is compatible to :func:`fast_baum_welch`.
+
+  :param tf.Tensor targets: shape (batch,time), int32
+  :param tf.Tensor seq_lens: shape (batch), int32
+  :param int blank_idx:
+  :return: edges, weights, start_end_states;
+    edges is (4,num_edges), int32, edges of the graph (from,to,emission_idx,sequence_idx).
+    weights is (num_edges,), float32. all zero.
+    start_end_states is (2,batch), int32, (start,end) state idx in FSA.
+  :rtype: (tf.Tensor,tf.Tensor,tf.Tensor)
+  """
+  assert targets.get_shape().ndims == 2
+  targets_shape = tf.shape(targets)
+  n_batch = targets_shape[0]
+  n_time = targets_shape[1]
+  n_edges = n_batch * (5 * (n_time - 1) + 10)  # see op documentation
+  weights = tf.zeros((n_edges,))
+  maker = OpMaker(OpDescription.from_gen_base(NativeOp.GetCtcFsaFastBwOp))
+  op = maker.make_op()
+  edges, start_end_states = op(targets, seq_lens, blank_idx, weights)
+  return edges, weights, start_end_states
+
+
 def fast_baum_welch_staircase(am_scores, seq_lens, **opts):
   """
   :param tf.Tensor am_scores: (time, batch, dim), in -log space
@@ -1144,41 +1170,6 @@ def fast_baum_welch_staircase(am_scores, seq_lens, **opts):
   float_idx = sequence_mask_time_major(seq_lens)
   return fast_baum_welch(
     am_scores=am_scores, edges=edges, weights=weights, start_end_states=start_end_states, float_idx=float_idx)
-
-
-def tf_fast_bw_fsa_ctc(targets, seq_lens, blank_idx):
-  """
-  :param tf.Tensor targets: shape (batch,time)
-  :param tf.Tensor seq_lens: shape (batch,)
-  :param int blank_idx:
-  :return: edges, weights, start_end_states
-  :rtype: (tf.Tensor, tf.Tensor, tf.Tensor)
-  """
-  from Fsa import get_ctc_fsa_fast_bw
-
-  def py_fast_bw_fsa_ctc_wrapper(targets_, seq_lens_):
-    """
-    :param numpy.ndarray targets_:
-    :param numpy.ndarray seq_lens_:
-    :rtype: (numpy.ndarray,numpy.ndarray,numpy.ndarray)
-    """
-    fsa = get_ctc_fsa_fast_bw(targets=targets_, seq_lens=seq_lens_, blank_idx=blank_idx)
-    assert fsa.start_end_states.shape == (2, len(seq_lens_)), "shape mismatch %r, n_batch %r, seq lens %r" % (
-      fsa.start_end_states.shape, len(seq_lens_), seq_lens_)
-    return fsa.edges.astype("int32"), fsa.weights.astype("float32"), fsa.start_end_states.astype("int32")
-
-  edges, weights, start_end_states = tf.py_func(
-    py_fast_bw_fsa_ctc_wrapper,
-    [targets, seq_lens],
-    [tf.int32, tf.float32, tf.int32],
-    stateful=False)
-  # edges: (4, num_edges), edges of the graph (from,to,emission_idx,sequence_idx)
-  # weights: (num_edges,), weights of the edges
-  # start_end_states: (2, batch), (start,end) state idx in automaton.
-  edges.set_shape((4, None))
-  weights.set_shape((None,))
-  start_end_states.set_shape((2, None))
-  return edges, weights, start_end_states
 
 
 def ctc_loss(logits, logits_seq_lens, time_major, targets, targets_seq_lens):
@@ -1203,7 +1194,7 @@ def ctc_loss(logits, logits_seq_lens, time_major, targets, targets_seq_lens):
   from TFUtil import sequence_mask_time_major
   seq_mask = sequence_mask_time_major(logits_seq_lens)  # (time,batch)
 
-  edges, weights, start_end_states = tf_fast_bw_fsa_ctc(
+  edges, weights, start_end_states = get_ctc_fsa_fast_bw(
     targets=targets, seq_lens=targets_seq_lens, blank_idx=dim - 1)
   fwdbwd, obs_scores = fast_baum_welch(
     am_scores=-log_sm, float_idx=seq_mask,
