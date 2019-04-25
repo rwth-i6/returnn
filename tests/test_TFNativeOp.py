@@ -1386,7 +1386,7 @@ def _log_softmax(x, axis=-1):
 
 def test_ctc_fsa():
   """
-  This is used by :func:`ctc_loss`.
+  This (:func:`Fsa.get_ctc_fsa_fast_bw`) is used by :func:`ctc_loss`.
   """
   targets = numpy.array([
     [1, 3, 4, 2, 1, 0],
@@ -1395,17 +1395,19 @@ def test_ctc_fsa():
   target_seq_lens = numpy.array([6, 4, 3], dtype="int32")
   n_classes = 8  # +1 because of blank
 
-  # Simpler...
-  targets = numpy.array([
-    [0, 1]], dtype="int32")
-  target_seq_lens = numpy.array([2], dtype="int32")
-  n_classes = 3  # +1 because of blank
+  if False:
+    # Simpler...
+    targets = numpy.array([
+      [0, 1]], dtype="int32")
+    target_seq_lens = numpy.array([2], dtype="int32")
+    n_classes = 3  # +1 because of blank
 
-  # Simpler...
-  targets = numpy.array([
-    [0]], dtype="int32")
-  target_seq_lens = numpy.array([1], dtype="int32")
-  n_classes = 2  # +1 because of blank
+  if False:
+    # Simpler...
+    targets = numpy.array([
+      [0]], dtype="int32")
+    target_seq_lens = numpy.array([1], dtype="int32")
+    n_classes = 2  # +1 because of blank
 
   blank_idx = n_classes - 1
   n_batch, n_target_time = targets.shape
@@ -1418,15 +1420,15 @@ def test_ctc_fsa():
   start_end_states = fsa.start_end_states.astype("int32")
   n_time = n_target_time * 3
   # am_scores are logits, unnormalized, i.e. the values before softmax.
-  # am_scores = numpy.random.normal(size=(n_time, n_batch, n_classes)).astype("float32")
-  am_scores = numpy.zeros((n_time, n_batch, n_classes), dtype="float32")
+  am_scores = numpy.random.RandomState(42).normal(size=(n_time, n_batch, n_classes)).astype("float32")
+  # am_scores = numpy.zeros((n_time, n_batch, n_classes), dtype="float32")
   int_idx = numpy.zeros((n_time, n_batch), dtype="int32")
   seq_lens = numpy.array([n_time, n_time - 4, n_time - 5], dtype="int32")[:n_batch]
   for t in range(n_time):
     int_idx[t] = t < seq_lens
   float_idx = int_idx.astype("float32")
   fwdbwd, obs_scores = _py_baum_welch(
-    am_scores=_log_softmax(am_scores), float_idx=float_idx,
+    am_scores=-_log_softmax(am_scores), float_idx=float_idx,
     edges=edges, weights=weights, start_end_states=start_end_states)
   fwdbwd = numpy.exp(-fwdbwd)  # -log space -> prob space
   print(fwdbwd)
@@ -1453,6 +1455,12 @@ def test_ctc_fsa():
   ref_fwdbwd, ref_obs_score = session.run((soft_align_tf, ref_ctc_loss_tf))
   print(ref_fwdbwd)
   print(ref_obs_score)
+
+  for b in range(n_batch):
+    for t in range(seq_lens[b]):
+      numpy.testing.assert_almost_equal(fwdbwd[t, b], ref_fwdbwd[t, b], decimal=5)
+  for b in range(n_batch):
+    numpy.testing.assert_almost_equal(obs_scores[0, b], ref_obs_score[b], decimal=5)
 
 
 def test_edit_distance():
