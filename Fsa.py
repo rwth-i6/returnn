@@ -1118,6 +1118,19 @@ def get_ctc_fsa_fast_bw(targets, seq_lens, blank_idx):
   edges = []  # type: typing.List[typing.Tuple[int,int,int,int]]  # list of (from,to,emission_idx,sequence_idx)
   start_end_states = []  # type: typing.List[typing.Tuple[int,int]]  # list of (start,end), same len as batch
   state_idx = 0
+  # Note: We don't use weights on the edges, i.e. they are all set to zero.
+  # I.e. we want that all strings for some given length T have the same probability.
+  # In a probabilistic interpretation, this means that for some given length T,
+  # the probability mass of all strings Σ^T is > 1. This does not matter too much,
+  # because it cancels out for most usages (e.g. when calculating Baum-Welch).
+  # But important is that any string in Σ^T has exactly one unique path through the FSA.
+  # Otherwise, if there are strings which have more paths than others,
+  # the probability mass would not be evenly distributed.
+  # The FSA for CTC is kind of straight-forward, up to the final label.
+  # For the final label, to have this property of a unique path for every string,
+  # we need to add some extra handling (see below).
+  # It would be a bit simpler if we would have multiple final states,
+  # but the current interface does not allow this.
   for batch_idx in range(n_batch):
     initial_state_idx = state_idx
     edges.append((state_idx, state_idx, blank_idx, batch_idx))  # initial blank loop
@@ -1128,16 +1141,29 @@ def get_ctc_fsa_fast_bw(targets, seq_lens, blank_idx):
       next_label_idx = None if is_final_label else targets[batch_idx, i + 1]
       edges.append((state_idx, state_idx + 1, label_idx, batch_idx))  # label
       if is_final_label:
-        # Skip directly to final state.
-        edges.append((state_idx, state_idx + 2, label_idx, batch_idx))  # label
+        # Case 1a: no blank at the end, exactly 1 label.
+        # Skip directly to final state (state_idx + 3).
+        edges.append((state_idx, state_idx + 3, label_idx, batch_idx))  # label
       state_idx += 1
       edges.append((state_idx, state_idx, label_idx, batch_idx))  # label loop
       edges.append((state_idx, state_idx + 1, blank_idx, batch_idx))  # blank
       if not is_final_label and label_idx != next_label_idx:
         # Skip over blank is allowed in this case.
         edges.append((state_idx, state_idx + 2, next_label_idx, batch_idx))  # next label
+      if is_final_label:
+        # Case 1b: no blank at the end, 2 or more labels.
+        # Skip directly to final state (state_idx + 2).
+        edges.append((state_idx, state_idx + 2, label_idx, batch_idx))  # label
+        # Case 2: exactly one blank at the end, 1 or more labels.
+        # Skip directly to final state (state_idx + 2).
+        edges.append((state_idx, state_idx + 2, blank_idx, batch_idx))  # blank
       state_idx += 1
       edges.append((state_idx, state_idx, blank_idx, batch_idx))  # blank loop
+      if is_final_label:
+        # Case 3: 2 or more blank at the end, 1 or more labels.
+        # Go to final state (state_idx + 1).
+        edges.append((state_idx, state_idx + 1, blank_idx, batch_idx))  # blank
+        state_idx += 1
     final_state_idx = state_idx
     start_end_states.append((initial_state_idx, final_state_idx))
     state_idx += 1
