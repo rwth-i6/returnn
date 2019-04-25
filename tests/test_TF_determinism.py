@@ -9,14 +9,10 @@ with: CUDA 10.0, tf: 1.13.0 nvcc:
 - demos/demo-tf-vanilla-lstm.12ax.config
 - demos/demo-tf-native-lstm-lowmem.12ax.config
 
-The following seem to be deterministic on GPU and CPU:
-
 - demos/demo-tf-native-lstm.12ax.config
-- demos/demo-tf-native-lstm2.12ax.config
-- demos/demo-tf-native-lstm2.tuned.12ax.config
-
 
 this test can be used on all lstm demos:
+
 to run this test you might need to apply workaround: https://github.com/rwth-i6/returnn/issues/87
 Example:
 
@@ -27,6 +23,7 @@ Example:
 """
 
 import sys
+
 sys.path += ["."]  # Python 3 hack
 
 from TFEngine import *
@@ -44,8 +41,10 @@ else:
 
 def load_data():
   from rnn import load_data
-  dev_data, _ = load_data(config, 0, 'dev', chunking=config.value("chunking",""), seq_ordering="sorted", shuffle_frames_of_nseqs=0)
-  eval_data, _ = load_data(config, 0, 'eval', chunking=config.value("chunking",""), seq_ordering="sorted", shuffle_frames_of_nseqs=0)
+  dev_data, _ = load_data(config, 0, 'dev', chunking=config.value("chunking", ""), seq_ordering="sorted",
+                          shuffle_frames_of_nseqs=0)
+  eval_data, _ = load_data(config, 0, 'eval', chunking=config.value("chunking", ""), seq_ordering="sorted",
+                           shuffle_frames_of_nseqs=0)
   train_data, _ = load_data(config, 0, 'train')
   return dev_data, eval_data, train_data
 
@@ -74,9 +73,11 @@ def test_determinism_of_vanillalstm():
     trainer = Runner(engine=engine, dataset=engine.train_data, batches=engine.train_batches, train=True)
     feed_dict, _ = data_provider.get_feed_dict(single_threaded=True)
     trainer.run(report_prefix="One Run")
-    return [x.eval(session=engine.tf_session)
-            for x in (tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='fw0') +
-                      tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='output'))]
+
+    # all variables of all layers
+    return [[x.eval(session=engine.tf_session)
+             for x in (tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=layer_name))]
+            for layer_name in engine.network.layers]
 
   e1 = create_engine()
   r1 = train_engine_fetch_vars(e1)
@@ -84,12 +85,9 @@ def test_determinism_of_vanillalstm():
   e2 = create_engine()
   r2 = train_engine_fetch_vars(e2)
 
-  for a1, a2 in zip(r1[0], r2[0]):
-    assert_array_equal(a1, a2)
-
-  for v1, v2 in zip(r1[1], r2[1]):
-    assert_equal(v1, v2)
-
+  for layer_vars1, layer_vars2 in zip(r1, r2):
+    if layer_vars1 is not None and layer_vars2 is not None:
+      assert_array_equal(layer_vars1, layer_vars2)
 
 
 test_determinism_of_vanillalstm()
