@@ -1138,6 +1138,7 @@ def get_ctc_fsa_fast_bw(targets, seq_lens, blank_idx):
     for i in range(seq_lens[batch_idx]):
       label_idx = targets[batch_idx, i]
       is_final_label = i == seq_lens[batch_idx] - 1
+      next_is_final_label = i == seq_lens[batch_idx] - 2
       next_label_idx = None if is_final_label else targets[batch_idx, i + 1]
       edges.append((state_idx, state_idx + 1, label_idx, batch_idx))  # label
       if is_final_label:
@@ -1150,6 +1151,10 @@ def get_ctc_fsa_fast_bw(targets, seq_lens, blank_idx):
       if not is_final_label and label_idx != next_label_idx:
         # Skip over blank is allowed in this case.
         edges.append((state_idx, state_idx + 2, next_label_idx, batch_idx))  # next label
+        if next_is_final_label:
+          # We miss now the case of having: exactly one label, no blank.
+          # Skip directly to the final state (state_idx + 4).
+          edges.append((state_idx, state_idx + 4, next_label_idx, batch_idx))  # next label
       if is_final_label:
         # Case 1b: no blank at the end, 2 or more labels.
         # Skip directly to final state (state_idx + 2).
@@ -1163,7 +1168,7 @@ def get_ctc_fsa_fast_bw(targets, seq_lens, blank_idx):
         # Case 3: 2 or more blank at the end, 1 or more labels.
         # Go to final state (state_idx + 1).
         edges.append((state_idx, state_idx + 1, blank_idx, batch_idx))  # blank
-        state_idx += 1
+        state_idx += 1  # this is the final state now
     final_state_idx = state_idx
     start_end_states.append((initial_state_idx, final_state_idx))
     state_idx += 1
