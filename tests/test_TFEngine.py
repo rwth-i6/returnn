@@ -66,7 +66,7 @@ def _get_tmp_file(suffix):
   return fn
 
 
-session = tf.InteractiveSession()
+tf_interactive_session = tf.InteractiveSession()
 
 
 def test_DataProvider():
@@ -98,7 +98,7 @@ def test_DataProvider():
   batches = BatchSetGenerator(dataset, generator=batch_generator)
   from TFDataPipeline import FeedDictDataProvider
   data_provider = FeedDictDataProvider(
-    tf_session=session, extern_data=extern_data,
+    tf_session=tf_interactive_session, extern_data=extern_data,
     data_keys=["data", "classes"],
     dataset=dataset, batches=batches)
 
@@ -1749,6 +1749,90 @@ def test_preload_from_files():
   engine.finalize()
 
 
+def test_preload_from_files_layer_mapping():
+  import tempfile
+  model_tmp_dir = tempfile.mkdtemp("tmp-checkpoint")
+  model_filename = model_tmp_dir + "/model"
+  with make_scope() as session:
+    config = Config()
+    n_in, n_hidden, n_out = 2, 2, 3
+    config.update({
+      "num_outputs": n_out,
+      "num_inputs": n_in,
+      "network": {
+        "l1": {"class": "linear", "activation": None, "n_out": n_hidden, 'bias_init': 1.0,
+               'forward_weights_init': 'orthogonal'},
+        "l2": {"class": "linear", "activation": None, "n_out": n_hidden, 'bias_init': 1.0,
+               'forward_weights_init': 'orthogonal', "from": ["l1"]},
+        "output": {"class": "linear", "activation": None, "n_out": n_out, "from": ["l2"], 'bias_init': 2.0,
+                   'forward_weights_init': 'orthogonal'}
+      }
+    })
+    network = TFNetwork(config=config, train_flag=True)
+    network.construct_from_dict(config.typed_dict["network"])
+    network.initialize_params(session)
+    params_orig_dump = network.get_params_serialized(session)
+    assert params_orig_dump.values_dict["l1"]["W"].any()
+    assert params_orig_dump.values_dict["l2"]["W"].any()
+    assert params_orig_dump.values_dict["output"]["W"].any()
+    network.save_params_to_file(filename=model_filename, session=session)
+
+  config = Config()
+  config.update({
+    "num_outputs": n_out,
+    "num_inputs": n_in,
+    "network": {
+      "swap_l1": {"class": "linear", "activation": None, "n_out": n_in},
+      "swap_l2": {"class": "linear", "activation": None, "n_out": n_hidden, "from": ["swap_l1"]},
+      "output": {"is_output_layer": True, "class": "linear", "activation": None, "n_out": n_out, "from": ["swap_l2"]},
+    },
+    "preload_from_files": {
+      'train_base': {
+        'filename': model_filename,
+        'prefix': 'swap_',
+        'init_for_train': True,
+        'layer_mapping': {
+          'l1': 'l2',
+          'l2': 'l1'
+        }
+      }
+    },
+    "device": "cpu",
+    "start_epoch": 1,
+    "num_epochs": 1,
+    "batch_size": 50,
+    "model": model_tmp_dir + "/clone_model",
+  })
+
+  from GeneratingDataset import DummyDataset
+  from TFEngine import Engine
+  seq_len = 5
+  n_data_dim = n_in
+  n_classes_dim = n_out
+  train_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=4, seq_len=seq_len)
+  train_data.init_seq_order(epoch=1)
+  cv_data = DummyDataset(input_dim=n_data_dim, output_dim=n_classes_dim, num_seqs=2, seq_len=seq_len)
+  cv_data.init_seq_order(epoch=1)
+
+  engine = Engine(config=config)
+  engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
+
+  network = engine.network
+  params_dump = network.get_params_serialized(engine.tf_session)
+  for layer_name, orig_layer_name in [("swap_l1", "l2"), ("swap_l2", "l1")]:
+    layer_orig = params_orig_dump.values_dict[orig_layer_name]
+    layer_clone_main = params_dump.values_dict[layer_name]
+    for param_name in ["W", "b"]:
+      param_orig = layer_orig[param_name]
+      param_clone_main = layer_clone_main[param_name]
+      numpy.testing.assert_array_equal(param_orig, param_clone_main)
+
+    main = engine.network.layers[layer_name]
+    assert_equal(set(main.params.keys()), {"W", "b"})
+
+  engine.finalize()
+
+
 def test_preload_from_files_with_reuse():
   import tempfile
   model_tmp_dir = tempfile.mkdtemp("tmp-checkpoint")
@@ -2232,8 +2316,8 @@ if __name__ == "__main__":
         else:
           eval(arg)  # assume Python code and execute
   finally:
-    session.close()
-    del session
+    tf_interactive_session.close()
+    del tf_interactive_session
     tf.reset_default_graph()
     import threading
     if len(list(threading.enumerate())) > 1:

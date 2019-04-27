@@ -921,7 +921,7 @@ class Engine(EngineBase):
         else:  # default: init for recog
           if is_training:
             continue
-        model_filename = opts['filename']
+        model_filename = opts.get('filename', model_epoch_filename)
         print("loading weights from", model_filename, file=log.v2)
         self_prefix = self.network.get_absolute_name_scope_prefix()  # "" if root, otherwise with "/" at end
         load_if_prefix = opts.get('prefix', '')  # prefix to identify the variables to be restored from the file
@@ -930,7 +930,8 @@ class Engine(EngineBase):
           filename=model_filename,
           saveable_params=self.network.get_params_list(),
           params_prefix=self_prefix, load_if_prefix=load_if_prefix,
-          ignore_missing=opts.get("ignore_missing", False))
+          ignore_missing=opts.get("ignore_missing", False),
+          layer_mapping=opts.get('layer_mapping', {}))
         loader.set_as_custom_init()
       self.network.initialize_params(session=self.tf_session)
 

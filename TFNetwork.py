@@ -1947,7 +1947,7 @@ class CustomCheckpointLoader:
   """
 
   def __init__(self, filename, saveable_params, params_prefix="", load_if_prefix="", ignore_missing=False,
-               network=None):
+               network=None, layer_mapping=None):
     """
     :param str filename: filepattern for NewCheckpointReader
     :param list[tf.Variable|tensorflow.python.training.saver.BaseSaverBuilder.SaveableObject] saveable_params:
@@ -1964,14 +1964,23 @@ class CustomCheckpointLoader:
     self.params_prefix = params_prefix
     self.load_if_prefix = load_if_prefix
     self.saveable_params = []
+    self.param_mapping = {}
+    layer_mapping = layer_mapping or {}
     for param in saveable_params:
       custom_post_init = getattr(param, "custom_post_init", None)
       if custom_post_init:
         print("Not loading pre-initialized variables %s" % param, file=log.v2)
         continue
-      if load_if_prefix and self._get_param_name(param, assert_load_if_prefix_match=False) is None:
+      param_name = self._get_param_name(param, assert_load_if_prefix_match=False)
+      if load_if_prefix and param_name is None:
         continue
       self.saveable_params.append(param)
+      param_layer_name = "/".join(param_name.split("/")[:-1])
+      if param_layer_name in layer_mapping:
+        self.param_mapping[param_name] = layer_mapping[param_layer_name] + "/" + param_name.split("/")[-1]
+      else:
+        self.param_mapping[param_name] = param_name
+
     assert self.saveable_params, "no saveable vars"
     self.reader = tf.train.NewCheckpointReader(filename)
     self.net_vars = [v for v in self.saveable_params if isinstance(v, tf.Variable)]
@@ -1981,9 +1990,10 @@ class CustomCheckpointLoader:
     # All variables of the model to be loaded:
     self.var_net_names = set([self._get_param_name(v) for v in self.saveable_params])
     # Model variables missing in the checkpoint:
-    self.missing_var_names = [v for v in sorted(self.var_net_names) if v not in self.var_ckpt_names]
+    self.missing_var_names = [v for v in sorted(self.var_net_names) if self.param_mapping[v] not in self.var_ckpt_names]
     # Checkpoint variables which are not used in this model:
-    self.obsolete_var_names = [v for v in sorted(self.var_ckpt_names) if v not in self.var_net_names]
+    self.obsolete_var_names = [v for v in sorted(self.var_ckpt_names) if v not in self.var_net_names and
+                               v not in self.param_mapping.values()]
     self.custom_param_importers = [
       self.CustomParamImporter(layer=layer, checkpoint_loader=self)
       for layer in network.layers.values() if layer.custom_param_importer] if network else []
@@ -2116,7 +2126,7 @@ class CustomCheckpointLoader:
       for v in self.saveable_params:
         assert isinstance(v, tf.Variable), "not yet implemented otherwise..."
         v_name = self._get_param_name(v)
-        value = self.reader.get_tensor(v_name)
+        value = self.reader.get_tensor(self.param_mapping[v_name])
         variable_values[v] = self.VariableValue(value=value)
       return variable_values
 
@@ -2154,6 +2164,10 @@ class CustomCheckpointLoader:
         return reader.get_tensor(old_name)
 
       return load_old
+
+    for new_param_name, old_param_name in self.param_mapping.items():
+      if new_param_name != old_param_name:
+        var_name_map[new_param_name] = make_load_renamed(old_param_name)
 
     def make_load_weights_nativelstm_to_basic(new_name):
       """
