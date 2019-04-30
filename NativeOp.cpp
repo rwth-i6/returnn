@@ -524,7 +524,7 @@ typedef Ndarray_DIM_Type const* Ndarray_DIMS_Type;
 
 #define DEF_KERNEL
 #define DEV_FUNC
-#define DEF_SHARED(type, name) std::vector<type> name(_shared_size);
+#define DEF_SHARED(type, name) assert_cmp(_shared_size, >, 0); std::vector<type> name(_shared_size / sizeof(type));
 
 
 // Call without dim assumes that the kernel is written in a way that it works correct with any dim.
@@ -554,6 +554,10 @@ static void resetVec3(T& v) {
     v.x = v.y = v.z = 0;
 }
 
+#if __cplusplus <= 199711L
+#define thread_local static
+#endif
+
 thread_local size_t _shared_size;
 thread_local _uint3 _threadIdx;
 thread_local _uint3 _blockIdx;
@@ -566,17 +570,19 @@ thread_local _int3 _gridDim;
 #define gridDim _gridDim
 
 struct _KernelLoop {
-	_KernelLoop(int dim_grid = 1, int dim_block = 1, size_t shared_size = 0) {
+	_KernelLoop(unsigned int dim_grid = 1, unsigned int dim_block = 1, size_t shared_size = 0) {
 	    _shared_size = shared_size;
+	    if(shared_size > 0)
+	        assert_cmp(dim_block, ==, 1); // otherwise not supported currently, see DEF_SHARED
 		// When we can choose whatever we want here, this loops becomes trivial,
 		// there will only be one iteration.
 		resetVec3(gridDim); gridDim.x = dim_grid; // numBlocks
 		resetVec3(blockDim); blockDim.x = dim_block; // threadsPerBlock
-		resetVec3(threadIdx);
 		resetVec3(blockIdx);
+		resetVec3(threadIdx);
 	}
 	bool finished() {
-		// TODO: x/z
+		// TODO: y/z
 		return blockIdx.x >= gridDim.x;
 	}
 	void next() {
@@ -584,7 +590,7 @@ struct _KernelLoop {
 		threadIdx.x++;
 		if(threadIdx.x == blockDim.x) {
 		    threadIdx.x = 0;
-		    blockIdx.x += 1;
+		    blockIdx.x++;
 		}
 	}
 };

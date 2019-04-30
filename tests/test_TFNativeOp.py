@@ -1289,7 +1289,7 @@ def test_FastBaumWelch():
   edges = tf.constant(fast_bw_fsa.edges, dtype=tf.int32)
   weights = tf.constant(fast_bw_fsa.weights, dtype=tf.float32)
   start_end_states = tf.constant(fast_bw_fsa.start_end_states, dtype=tf.int32)
-  am_scores_np = numpy.random.normal(size=(seq_len, n_batch, n_classes)).astype("float32")
+  am_scores_np = numpy.random.RandomState(42).normal(size=(seq_len, n_batch, n_classes)).astype("float32")
   am_scores = tf.constant(am_scores_np, dtype=tf.float32)  # in -log space
   float_idx_np = numpy.ones((seq_len, n_batch), dtype="float32")
   float_idx = tf.ones((seq_len, n_batch), dtype=tf.float32)
