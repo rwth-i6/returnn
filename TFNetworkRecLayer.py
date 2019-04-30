@@ -6005,59 +6005,65 @@ class TwoDLSTMLayer(LayerBase):
 
 
 class ZoneoutLSTMCell(BaseRNNCell):
-  '''Wrapper for tf LSTM to create Zoneout LSTM Cell
+  """
+  Wrapper for tf LSTM to create Zoneout LSTM Cell.
+  This code is an adapted version of Rayhane Mamas version of Tacotron-2
 
-  inspired by:
-  https://github.com/teganmaharaj/zoneout/blob/master/zoneout_tensorflow.py
+  Refs:
 
-  Published by one of 'https://arxiv.org/pdf/1606.01305.pdf' paper writers.
+    https://github.com/Rayhane-mamah/Tacotron-2
+    https://arxiv.org/pdf/1606.01305.pdf
+  """
 
-  Many thanks to @Ondal90 for pointing this out. You sir are a hero!
-  '''
+  def __init__(self, num_units, zoneout_factor_cell=0., zoneout_factor_output=0.):
+    """
+    Initializer with possibility to set different zoneout values for cell/hidden states.
 
-  def __init__(self, num_units, zoneout_factor_cell=0., zoneout_factor_output=0., state_is_tuple=True, name=None, **kwargs):
-    '''Initializer with possibility to set different zoneout values for cell/hidden states.
-    '''
+    :param int num_units: number of hidden units
+    :param float zoneout_factor_cell: cell zoneout factor
+    :param float zoneout_factor_output: output zoneout factor 
+    """
     zm = min(zoneout_factor_output, zoneout_factor_cell)
     zs = max(zoneout_factor_output, zoneout_factor_cell)
 
     if zm < 0. or zs > 1.:
       raise ValueError('One/both provided Zoneout factors are not in [0, 1]')
 
-    self._cell = tf.nn.rnn_cell.LSTMCell(num_units, state_is_tuple=state_is_tuple, name=name)
+    self._cell = tf.nn.rnn_cell.LSTMCell(num_units, state_is_tuple=True)
     self._zoneout_cell = zoneout_factor_cell
     self._zoneout_outputs = zoneout_factor_output
-    if kwargs.get('is_training', None) is None:
-      from TFNetwork import TFNetwork
-      self.is_training = TFNetwork.get_current_network().train_flag
-    else:
-      self.is_training = kwargs['is_training']
-
-    self.state_is_tuple = state_is_tuple
+    from TFNetwork import TFNetwork
+    self.is_training = TFNetwork.get_current_network().train_flag
 
   @property
   def state_size(self):
+    """
+    :rtype: int 
+    """
     return self._cell.state_size
 
   @property
   def output_size(self):
+    """
+    :rtype: int 
+    """
     return self._cell.output_size
 
   def __call__(self, inputs, state, scope=None):
-    '''Runs vanilla LSTM Cell and applies zoneout.
-    '''
+    """
+    Apply ZoneoutLSTM on input with given state
+     
+    :param tf.Tensor inputs: input tensor to the cell
+    :param tf.nn.rnn_cell.LSTMStateTuple state: previous state of the LSTM
+    :param tf.VariableScope scope: VariableScope for the created subgraph
+    :return: tuple of output and LSTMStateTuple 
+    :rtype: (tf.Tensor, tf.nn.rnn_cell.LSTMStateTuple)
+    """
     # Apply vanilla LSTM
     output, new_state = self._cell(inputs, state, scope)
 
-    if self.state_is_tuple:
-      (prev_c, prev_h) = state
-      (new_c, new_h) = new_state
-    else:
-      num_proj = self._cell._num_units if self._cell._num_proj is None else self._cell._num_proj
-      prev_c = tf.slice(state, [0, 0], [-1, self._cell._num_units])
-      prev_h = tf.slice(state, [0, self._cell._num_units], [-1, num_proj])
-      new_c = tf.slice(new_state, [0, 0], [-1, self._cell._num_units])
-      new_h = tf.slice(new_state, [0, self._cell._num_units], [-1, num_proj])
+    (prev_c, prev_h) = state
+    (new_c, new_h) = new_state
 
     from TFUtil import cond
     c = cond(self.is_training,
@@ -6068,6 +6074,6 @@ class ZoneoutLSTMCell(BaseRNNCell):
              lambda: (1 - self._zoneout_outputs) * tf.nn.dropout(new_h - prev_h, (1 - self._zoneout_outputs)) + prev_h,
              lambda: (1 - self._zoneout_outputs) * new_h + self._zoneout_outputs * prev_h)
 
-    new_state = tf.nn.rnn_cell.LSTMStateTuple(c, h) if self.state_is_tuple else tf.concat(1, [c, h])
+    new_state = tf.nn.rnn_cell.LSTMStateTuple(c, h)
 
     return output, new_state
