@@ -1275,7 +1275,6 @@ def test_py_baum_welch():
   print("Done.")
 
 
-@unittest.skipIf(not is_gpu_available(), "no gpu on this system")
 def test_FastBaumWelch():
   print("Make op...")
   op = make_fast_baum_welch_op(compiler_opts=dict(verbose=True))  # will be cached, used inside :func:`fast_baum_welch`
@@ -1314,7 +1313,6 @@ def test_FastBaumWelch():
   numpy.testing.assert_allclose(fwdbwd_np, fwdbwd_np2, rtol=1e-5)
 
 
-@unittest.skipIf(not is_gpu_available(), "no gpu on this system")
 def test_fast_bw_uniform():
   print("Make op...")
   op = make_fast_baum_welch_op(compiler_opts=dict(verbose=True))  # will be cached, used inside :func:`fast_baum_welch`

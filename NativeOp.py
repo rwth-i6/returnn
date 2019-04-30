@@ -3447,14 +3447,14 @@ def crossentropy_softmax_and_gradient_z_sparse__slow(z, z_mask, y_target_t, y_ta
 
 common_fast_bw_kernels = {
   "001_set_start_states" : """
-    __global__
+    DEF_KERNEL
     void set_start_states(float* states, unsigned* start_states) {
       unsigned state_idx = start_states[blockIdx.x * blockDim.x + threadIdx.x];
       states[state_idx] = 0.0;
     }
   """,
   "010_fill_array" : """
-    __global__
+    DEF_KERNEL
     void fill_array(float* array, float value, unsigned size) {
       unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
       if (idx < size) {
@@ -3463,7 +3463,7 @@ common_fast_bw_kernels = {
     }
   """,
   "011_remove_inf": """
-  __global__
+  DEF_KERNEL
   void remove_inf(float* array, unsigned size) {
     unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < size) {
@@ -3472,26 +3472,26 @@ common_fast_bw_kernels = {
   }
   """,
   "012_prob_add": """
-    __device__
+    DEV_FUNC
     float prob_add(float a, float b) {
       float diff = a - b;
       if (isnan(diff)) {
-        return CUDART_INF_F;
+        return INF_F;
       }
       else {
-        return -log1p(exp(-abs(diff))) + min(a, b);
+        return -log1p(exp(-abs(diff))) + fminf(a, b);
       }
     }
   """,
   "013_atomic_prob_add": """
-    __device__
+    DEV_FUNC
     void atomic_prob_add(float* a, float b) {
       int* addr = (int*)a;
-      int old   = __float_as_int(*a);
+      int old   = float_as_int(*a);
       int assumed;
       do {
         assumed = old;
-        old     = atomicCAS(addr, assumed, __float_as_int(prob_add(__int_as_float(old), b)));
+        old     = elem_atomic_cas(addr, assumed, float_as_int(prob_add(int_as_float(old), b)));
       } while (old != assumed);
     }
   """,
@@ -3499,7 +3499,7 @@ common_fast_bw_kernels = {
     template<typename T>
     void dump_to_file_1d(T* d_mem, unsigned n_d1, std::string const& path) {
       std::vector<T> buffer(n_d1);
-      cudaMemcpy(buffer.data(), d_mem, buffer.size() * sizeof(T), cudaMemcpyDeviceToHost);
+      //cudaMemcpy(buffer.data(), d_mem, buffer.size() * sizeof(T), cudaMemcpyDeviceToHost);
 
       std::ofstream output(path.c_str(), std::ios::trunc | std::ios::out);
       for (size_t i1 = 0ul; i1 < n_d1; i1++) {
@@ -3513,7 +3513,7 @@ common_fast_bw_kernels = {
     template<typename T>
     void dump_to_file_2d(T* d_mem, unsigned n_d1, unsigned n_d2, std::string const& path) {
       std::vector<T> buffer(n_d1 * n_d2);
-      cudaMemcpy(buffer.data(), d_mem, buffer.size() * sizeof(T), cudaMemcpyDeviceToHost);
+      //cudaMemcpy(buffer.data(), d_mem, buffer.size() * sizeof(T), cudaMemcpyDeviceToHost);
 
       std::ofstream output(path.c_str(), std::ios::trunc | std::ios::out);
       for (size_t i1 = 0ul; i1 < n_d1; i1++) {
@@ -3529,7 +3529,7 @@ common_fast_bw_kernels = {
     template<typename T>
     void dump_to_file_3d(T* d_mem, unsigned n_d1, unsigned n_d2, unsigned n_d3, std::string const& path) {
       std::vector<T> buffer(n_d1 * n_d2 * n_d3);
-      cudaMemcpy(buffer.data(), d_mem, buffer.size() * sizeof(T), cudaMemcpyDeviceToHost);
+      //cudaMemcpy(buffer.data(), d_mem, buffer.size() * sizeof(T), cudaMemcpyDeviceToHost);
 
       std::ofstream output(path.c_str(), std::ios::trunc | std::ios::out);
       for (size_t i1 = 0ul; i1 < n_d1; i1++) {
@@ -3572,7 +3572,7 @@ class FastBaumWelchOp(NativeOpGenBase):
   c_extra_support_code = copy.copy(common_fast_bw_kernels)
   c_extra_support_code.update({
     "100_init_bwd_state_buffer": """
-      __global__
+      DEF_KERNEL
       void init_bwd_state_buffer(float* states, unsigned* end_states, unsigned t, unsigned max_t, float* index, unsigned index_stride) {
         unsigned idx = blockIdx.x * blockDim.x + threadIdx.x;
         if (index[t * index_stride + idx] == 1.0 && (t == max_t || index[(t + 1) * index_stride + idx] == 0.0)) {
@@ -3582,7 +3582,7 @@ class FastBaumWelchOp(NativeOpGenBase):
       }
     """,
     "101_next_frame": """
-      __global__
+      DEF_KERNEL
       void next_frame(bool fwd, unsigned num_edges, unsigned  num_emissions,
                       unsigned* sequence_idxs, unsigned* from_buffer, unsigned* to_buffer, float* weight_buffer, unsigned* emission_idxs,
                       float* prev_frame, float* next_frame, float* am_scores, float* edge_buffer) {
@@ -3594,7 +3594,7 @@ class FastBaumWelchOp(NativeOpGenBase):
         unsigned from     = from_buffer  [idx];
         float    prev_val = prev_frame[from];
         if (isinf(prev_val)) {
-          edge_buffer[idx] = CUDART_INF_F;
+          edge_buffer[idx] = INF_F;
           return;
         }
 
@@ -3615,14 +3615,14 @@ class FastBaumWelchOp(NativeOpGenBase):
       }
     """,
     "102_normalize": """
-      __global__
+      DEF_KERNEL
       void normalize(float* buffer, unsigned* sequence_idxs, unsigned num_edges, unsigned num_seqs, float* sum_output) {
-        extern __shared__ float sum[];
+        DEF_SHARED(float, sum);
 
         buffer += blockIdx.x * num_edges;
 
         for (unsigned s = 0u; s < num_seqs; s++) {
-          sum[s] = CUDART_INF_F;
+          sum[s] = INF_F;
         }
 
         for (unsigned e = 0u; e < num_edges; e++) {
@@ -3647,7 +3647,7 @@ class FastBaumWelchOp(NativeOpGenBase):
       }
     """,
     "103_compute_result": """
-      __global__
+      DEF_KERNEL
       void compute_result(float* edge_buffer, float* out, unsigned* emission_idxs, unsigned* sequence_idxs,
                           unsigned frame_stride, unsigned seq_stride,
                           unsigned num_frames, unsigned num_seqs, unsigned num_edges) {
@@ -3674,10 +3674,10 @@ class FastBaumWelchOp(NativeOpGenBase):
         std::vector<unsigned> start_states(n_seqs);
         std::vector<unsigned> end_states  (n_seqs);
 
-        HANDLE_ERROR(cudaMemcpy(state_buffer.data(), d_state_buffer, state_buffer.size() * sizeof(float), cudaMemcpyDeviceToHost));
-        HANDLE_ERROR(cudaMemcpy(index.data(),        d_index,        index.size()        * sizeof(float), cudaMemcpyDeviceToHost));
-        HANDLE_ERROR(cudaMemcpy(start_states.data(), d_start_states, start_states.size() * sizeof(float), cudaMemcpyDeviceToHost));
-        HANDLE_ERROR(cudaMemcpy(end_states.data(),   d_end_states,   end_states.size()   * sizeof(float), cudaMemcpyDeviceToHost));
+        //HANDLE_ERROR(cudaMemcpy(state_buffer.data(), d_state_buffer, state_buffer.size() * sizeof(float), cudaMemcpyDeviceToHost));
+        //HANDLE_ERROR(cudaMemcpy(index.data(),        d_index,        index.size()        * sizeof(float), cudaMemcpyDeviceToHost));
+        //HANDLE_ERROR(cudaMemcpy(start_states.data(), d_start_states, start_states.size() * sizeof(float), cudaMemcpyDeviceToHost));
+        //HANDLE_ERROR(cudaMemcpy(end_states.data(),   d_end_states,   end_states.size()   * sizeof(float), cudaMemcpyDeviceToHost));
 
         for (unsigned seq = 0u; seq < n_seqs; seq++) {
           std::stringstream filename;
@@ -3692,7 +3692,7 @@ class FastBaumWelchOp(NativeOpGenBase):
               const float val = state_buffer[t * n_states + s];
               float diff = val - sum;
               if (!isnan(diff)) {
-                sum = -log1p(exp(-abs(diff))) + min(sum, val);
+                sum = -log1p(exp(-abs(diff))) + fminf(sum, val);
               }
             }
             for (unsigned s = start_states[seq]; s <= end_states[seq]; s++) {
@@ -3711,8 +3711,8 @@ class FastBaumWelchOp(NativeOpGenBase):
         std::vector<float> buffer(n_frames * n_seqs * n_emissions);
         std::vector<float> index (n_frames * index_stride);
 
-        HANDLE_ERROR(cudaMemcpy(buffer.data(), d_out,   buffer.size() * sizeof(float), cudaMemcpyDeviceToHost));
-        HANDLE_ERROR(cudaMemcpy(index.data(),  d_index, index.size()  * sizeof(float), cudaMemcpyDeviceToHost));
+        //HANDLE_ERROR(cudaMemcpy(buffer.data(), d_out,   buffer.size() * sizeof(float), cudaMemcpyDeviceToHost));
+        //HANDLE_ERROR(cudaMemcpy(index.data(),  d_index, index.size()  * sizeof(float), cudaMemcpyDeviceToHost));
 
         for (unsigned seq = 0u; seq < n_seqs; seq++) {
           std::stringstream filename;
@@ -3815,14 +3815,15 @@ class FastBaumWelchOp(NativeOpGenBase):
     float* d_edge_buffer = reinterpret_cast<float*>(device_malloc(n_edges * n_frames * sizeof(float)));
     if(!d_edge_buffer) return;  // error should have been set in device_malloc
     unsigned n_fill_blocks = (n_edges * n_frames + n_threads - 1u) / n_threads;
-    fill_array<<<n_fill_blocks, n_threads>>>(d_edge_buffer, 0.0, n_edges * n_frames);
+    start_dev_kernel2(fill_array, n_fill_blocks, n_threads, 0, (d_edge_buffer, 0.0, n_edges * n_frames));
     HANDLE_LAST_ERROR();
 
     // initialize the state buffer
     n_fill_blocks = (n_states + n_threads - 1u) / n_threads;
-    fill_array<<<n_fill_blocks, n_threads>>>(d_state_buffer_prev, std::numeric_limits<float>::infinity(), n_states);
+    start_dev_kernel2(fill_array, n_fill_blocks, n_threads, 0,
+      (d_state_buffer_prev, std::numeric_limits<float>::infinity(), n_states));
     HANDLE_LAST_ERROR();
-    set_start_states<<<1, n_seqs>>>(d_state_buffer_prev, d_start_states);
+    start_dev_kernel2(set_start_states, 1, n_seqs, 0, (d_state_buffer_prev, d_start_states));
     HANDLE_LAST_ERROR();
 
     // initialize full state buffer (only used to dump the alignment)
@@ -3830,50 +3831,58 @@ class FastBaumWelchOp(NativeOpGenBase):
     if (dump_alignment && batch_idx %% dump_every == 0) {
       d_state_buffer_all = reinterpret_cast<float*>(device_malloc(n_states * (n_frames + 1u) * sizeof(float)));
       if(!d_state_buffer_all) return;  // error should have been set in device_malloc
-      cudaMemcpy(d_state_buffer_all, d_state_buffer_prev, n_states * sizeof(float), cudaMemcpyDeviceToDevice);
+      Ndarray_memcpy(d_state_buffer_all, d_state_buffer_prev, n_states * sizeof(float));
       HANDLE_LAST_ERROR();
     }
 
     // fwd pass
     for (unsigned t = 0u; t < n_frames; t++) {
-      fill_array<<<n_fill_blocks, n_threads>>>(d_state_buffer_next, std::numeric_limits<float>::infinity(), n_states);
+      start_dev_kernel2(fill_array, n_fill_blocks, n_threads, 0,
+        (d_state_buffer_next, std::numeric_limits<float>::infinity(), n_states));
       HANDLE_LAST_ERROR();
-      next_frame<<<n_blocks, n_threads>>>(true, n_edges, sequence_stride,
-                                          d_sequence_idxs, d_from, d_to, d_weights, d_emission_idxs,
-                                          d_state_buffer_prev, d_state_buffer_next, d_am_scores + t * frame_stride, d_edge_buffer + t * n_edges);
+      start_dev_kernel2(next_frame, n_blocks, n_threads, 0,
+        (true, n_edges, sequence_stride,
+         d_sequence_idxs, d_from, d_to, d_weights, d_emission_idxs,
+         d_state_buffer_prev, d_state_buffer_next, d_am_scores + t * frame_stride, d_edge_buffer + t * n_edges));
       HANDLE_LAST_ERROR();
       if (dump_alignment && batch_idx %% dump_every == 0) {
-        cudaMemcpy(d_state_buffer_all + (t + 1u) * n_states, d_state_buffer_next, n_states * sizeof(float), cudaMemcpyDeviceToDevice);
+        Ndarray_memcpy(d_state_buffer_all + (t + 1u) * n_states, d_state_buffer_next, n_states * sizeof(float));
         HANDLE_LAST_ERROR();
       }
       std::swap(d_state_buffer_prev, d_state_buffer_next);
     }
 
     // bwd pass
-    fill_array<<<n_fill_blocks, n_threads>>>(d_state_buffer_prev, std::numeric_limits<float>::infinity(), n_states);
+    start_dev_kernel2(fill_array, n_fill_blocks, n_threads, 0,
+      (d_state_buffer_prev, std::numeric_limits<float>::infinity(), n_states));
     HANDLE_LAST_ERROR();
     for (unsigned t = n_frames; t > 0; t--) {
-      init_bwd_state_buffer<<<1, n_seqs>>>(d_state_buffer_prev, d_end_states, t - 1, n_frames - 1, d_index, index_stride);
+      start_dev_kernel2(init_bwd_state_buffer, 1, n_seqs, 0,
+        (d_state_buffer_prev, d_end_states, t - 1, n_frames - 1, d_index, index_stride));
       HANDLE_LAST_ERROR();
       if (dump_alignment && batch_idx %% dump_every == 0) {
         float alpha = 1.0f;
-        HANDLE_ERROR(cublasSaxpy(handle, n_states, &alpha, d_state_buffer_prev, 1, d_state_buffer_all + t * n_states, 1));
+        //HANDLE_ERROR(cublasSaxpy(handle, n_states, &alpha, d_state_buffer_prev, 1, d_state_buffer_all + t * n_states, 1));
       }
-      fill_array<<<n_fill_blocks, n_threads>>>(d_state_buffer_next, std::numeric_limits<float>::infinity(), n_states);
+      start_dev_kernel2(fill_array, n_fill_blocks, n_threads, 0,
+        (d_state_buffer_next, std::numeric_limits<float>::infinity(), n_states));
       HANDLE_LAST_ERROR();
-      next_frame<<<n_blocks, n_threads>>>(false, n_edges, sequence_stride,
-                                          d_sequence_idxs, d_to, d_from, d_weights, d_emission_idxs,
-                                          d_state_buffer_prev, d_state_buffer_next, d_am_scores + (t - 1) * frame_stride, d_edge_buffer + (t - 1) * n_edges);
+      start_dev_kernel2(next_frame, n_blocks, n_threads, 0,
+        (false, n_edges, sequence_stride,
+         d_sequence_idxs, d_to, d_from, d_weights, d_emission_idxs,
+         d_state_buffer_prev, d_state_buffer_next, d_am_scores + (t - 1) * frame_stride,
+         d_edge_buffer + (t - 1) * n_edges));
       HANDLE_LAST_ERROR();
       std::swap(d_state_buffer_prev, d_state_buffer_next);
     }
     if (dump_alignment && batch_idx %% dump_every == 0) {
       float alpha = 1.0f;
-      HANDLE_ERROR(cublasSaxpy(handle, n_states, &alpha, d_state_buffer_prev, 1, d_state_buffer_all, 1));
+      //HANDLE_ERROR(cublasSaxpy(handle, n_states, &alpha, d_state_buffer_prev, 1, d_state_buffer_all, 1));
     }
 
     // normalize at each time frame
-    normalize<<<n_frames, 1, n_seqs * sizeof(float)>>>(d_edge_buffer, d_sequence_idxs, n_edges, n_seqs, d_sum_output);
+    start_dev_kernel2(normalize, n_frames, 1, n_seqs * sizeof(float),
+      (d_edge_buffer, d_sequence_idxs, n_edges, n_seqs, d_sum_output));
     HANDLE_LAST_ERROR();
 
     // dump alignment
@@ -3883,14 +3892,16 @@ class FastBaumWelchOp(NativeOpGenBase):
     }
 
     n_fill_blocks = (n_frames * n_seqs * n_emissions + n_threads - 1u) / n_threads;
-    fill_array<<<n_fill_blocks, n_threads>>>(d_out, std::numeric_limits<float>::infinity(), n_frames * n_seqs * n_emissions);
+    start_dev_kernel2(fill_array, n_fill_blocks, n_threads, 0,
+      (d_out, INF_F, n_frames * n_seqs * n_emissions));
     HANDLE_LAST_ERROR();
 
     frame_stride    = Ndarray_STRIDE(out, 0);
     sequence_stride = Ndarray_STRIDE(out, 1);
     n_blocks        = (n_frames * n_edges + n_threads - 1u) / n_threads;
-    compute_result<<<n_blocks, n_threads>>>(d_edge_buffer, d_out, d_emission_idxs, d_sequence_idxs,
-                                            frame_stride, sequence_stride, n_frames, n_seqs, n_edges);
+    start_dev_kernel2(compute_result, n_blocks, n_threads, 0,
+      (d_edge_buffer, d_out, d_emission_idxs, d_sequence_idxs,
+       frame_stride, sequence_stride, n_frames, n_seqs, n_edges));
     HANDLE_LAST_ERROR();
 
     #if TENSORFLOW
@@ -3898,7 +3909,7 @@ class FastBaumWelchOp(NativeOpGenBase):
     // which is helpful for debugging.
     // We replace it by a very high number, so that tf.exp(-out) will still result in 0.0.
     n_blocks = (n_frames * n_seqs * n_emissions + n_threads - 1u) / n_threads;
-    remove_inf<<<n_blocks, n_threads>>>(d_out, n_frames * n_seqs * n_emissions);
+    start_dev_kernel2(remove_inf, n_blocks, n_threads, 0, (d_out, n_frames * n_seqs * n_emissions));
     //debug_print(context, out, "out");
     #endif
     if (dump_output && batch_idx %% dump_every == 0) {
@@ -3913,8 +3924,6 @@ class FastBaumWelchOp(NativeOpGenBase):
   """
 
   c_bw_code = None
-
-  cpu_support = False  # TODO: fix CPU support...
 
 
 class MultiEndFastBaumWelchOp(NativeOpGenBase):
