@@ -27,8 +27,12 @@
 // GOOGLE_CUDA is defined <=> CUDA headers are included
 // CUDA headers define all the math functions, also for host code.
 // I.e., here, we don't have the math functions.
-using std::isnan;
-using std::isinf;
+
+// Now, for isnan/isinf, we might have another problem with name collisions in some cases,
+// see here: https://bugs.webkit.org/show_bug.cgi?id=59249
+// Thus, we define it as a macro instead.
+#define isnan std::isnan
+#define isinf std::isinf
 #endif
 
 
@@ -880,9 +884,9 @@ void check_inf_or_nan_cpu(tensorflow::Tensor* v, const std::string& name) {
     int fp_props =
         std::accumulate(data, data + size, 0, [](const int& x, const T& y) {
           int result = x;
-          if (Eigen::numext::isinf(y)) {
+          if (isinf(y)) {
             result |= kInfBit;
-          } else if (Eigen::numext::isnan(y)) {
+          } else if (isnan(y)) {
             result |= kNaNBit;
           }
           return result;
@@ -969,4 +973,11 @@ void debug_print_shape(OpKernelContext* context, tensorflow::Tensor* tensor, con
     printf("  data: %p\n", Ndarray_DEV_DATA(tensor));
 }
 
+#endif
+
+#ifdef isinf
+#undef isinf
+#endif
+#ifdef isnan
+#undef isnan
 #endif
