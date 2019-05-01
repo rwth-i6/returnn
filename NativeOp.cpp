@@ -24,6 +24,9 @@
 #endif
 
 #if !GOOGLE_CUDA
+// GOOGLE_CUDA is defined <=> CUDA headers are included
+// CUDA headers define all the math functions, also for host code.
+// I.e., here, we don't have the math functions.
 using std::isnan;
 using std::isinf;
 #endif

@@ -3479,7 +3479,7 @@ common_fast_bw_kernels = {
         return INF_F;
       }
       else {
-        return -log1p(exp(-abs(diff))) + fminf(a, b);
+        return -log1pf(expf(-fabsf(diff))) + fminf(a, b);
       }
     }
   """,
