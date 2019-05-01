@@ -6,7 +6,7 @@
 #include <sstream>
 #include <string.h>
 #include <vector>
-#include <math.h>
+#include <cmath>
 
 #define ARRAY_LEN(x) (sizeof(x) / sizeof(x[0]))
 
@@ -22,6 +22,12 @@
 #ifndef TENSORFLOW
 #define TENSORFLOW 0
 #endif
+
+#if !GOOGLE_CUDA
+using std::isnan;
+using std::isinf;
+#endif
+
 
 /*
 Reference: https://en.wikipedia.org/wiki/Row-_and_column-major_order
@@ -451,14 +457,16 @@ static void _cudaHandleError(cublasStatus_t status, const char *file, int line) 
 #define elem_atomic_add(x, v) (*x += v)  // ignore atomic for now...
 #define elem_atomic_min(x, v) (*x = (v < *x) ? v : *x)  // ignore atomic for now...
 
-static inline int elem_atomic_cas(int* address, int compare, int val) {
+#define elem_atomic_cas _host_elem_atomic_cas
+static inline int _host_elem_atomic_cas(int* address, int compare, int val) {
     int old = *address;
     if(old == compare)
         *address = val;
     return old;
 }
 
-static inline float int_as_float(int x) {
+#define int_as_float _host_int_as_float
+static inline float _host_int_as_float(int x) {
     union {
       int i;
       float f;
@@ -467,7 +475,8 @@ static inline float int_as_float(int x) {
     return u.f;
 }
 
-static inline int float_as_int(float x) {
+#define float_as_int _host_float_as_int
+static inline int _host_float_as_int(float x) {
     union {
       int i;
       float f;

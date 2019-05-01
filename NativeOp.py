@@ -3687,11 +3687,11 @@ class FastBaumWelchOp(NativeOpGenBase):
             if (t > 0u && index[seq * index_stride + t] <= 0.0) {
               break;
             }
-            float sum = INF_F;
+            float sum = std::numeric_limits<float>::infinity();
             for (unsigned s = start_states[seq]; s <= end_states[seq]; s++) {
               const float val = state_buffer[t * n_states + s];
               float diff = val - sum;
-              if (!isnan(diff)) {
+              if (!std::isnan(diff)) {
                 sum = -log1p(exp(-abs(diff))) + fminf(sum, val);
               }
             }
@@ -3820,7 +3820,7 @@ class FastBaumWelchOp(NativeOpGenBase):
 
     // initialize the state buffer
     n_fill_blocks = (n_states + n_threads - 1u) / n_threads;
-    start_dev_kernel2(fill_array, n_fill_blocks, n_threads, 0, (d_state_buffer_prev, INF_F, n_states));
+    start_dev_kernel2(fill_array, n_fill_blocks, n_threads, 0, (d_state_buffer_prev, std::numeric_limits<float>::infinity(), n_states));
     HANDLE_LAST_ERROR();
     start_dev_kernel2(set_start_states, 1, n_seqs, 0, (d_state_buffer_prev, d_start_states));
     HANDLE_LAST_ERROR();
@@ -3836,7 +3836,7 @@ class FastBaumWelchOp(NativeOpGenBase):
 
     // fwd pass
     for (unsigned t = 0u; t < n_frames; t++) {
-      start_dev_kernel2(fill_array, n_fill_blocks, n_threads, 0, (d_state_buffer_next, INF_F, n_states));
+      start_dev_kernel2(fill_array, n_fill_blocks, n_threads, 0, (d_state_buffer_next, std::numeric_limits<float>::infinity(), n_states));
       HANDLE_LAST_ERROR();
       start_dev_kernel2(next_frame, n_blocks, n_threads, 0,
         (true, n_edges, sequence_stride,
@@ -3851,7 +3851,7 @@ class FastBaumWelchOp(NativeOpGenBase):
     }
 
     // bwd pass
-    start_dev_kernel2(fill_array, n_fill_blocks, n_threads, 0, (d_state_buffer_prev, INF_F, n_states));
+    start_dev_kernel2(fill_array, n_fill_blocks, n_threads, 0, (d_state_buffer_prev, std::numeric_limits<float>::infinity(), n_states));
     HANDLE_LAST_ERROR();
     for (unsigned t = n_frames; t > 0; t--) {
       start_dev_kernel2(init_bwd_state_buffer, 1, n_seqs, 0,
@@ -3861,7 +3861,7 @@ class FastBaumWelchOp(NativeOpGenBase):
         float alpha = 1.0f;
         //HANDLE_ERROR(cublasSaxpy(handle, n_states, &alpha, d_state_buffer_prev, 1, d_state_buffer_all + t * n_states, 1));
       }
-      start_dev_kernel2(fill_array, n_fill_blocks, n_threads, 0, (d_state_buffer_next, INF_F, n_states));
+      start_dev_kernel2(fill_array, n_fill_blocks, n_threads, 0, (d_state_buffer_next, std::numeric_limits<float>::infinity(), n_states));
       HANDLE_LAST_ERROR();
       start_dev_kernel2(next_frame, n_blocks, n_threads, 0,
         (false, n_edges, sequence_stride,
@@ -3888,7 +3888,7 @@ class FastBaumWelchOp(NativeOpGenBase):
     }
 
     n_fill_blocks = (n_frames * n_seqs * n_emissions + n_threads - 1u) / n_threads;
-    start_dev_kernel2(fill_array, n_fill_blocks, n_threads, 0, (d_out, INF_F, n_frames * n_seqs * n_emissions));
+    start_dev_kernel2(fill_array, n_fill_blocks, n_threads, 0, (d_out, std::numeric_limits<float>::infinity(), n_frames * n_seqs * n_emissions));
     HANDLE_LAST_ERROR();
 
     frame_stride    = Ndarray_STRIDE(out, 0);
