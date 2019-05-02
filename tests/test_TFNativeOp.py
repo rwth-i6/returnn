@@ -1690,6 +1690,128 @@ def test_ctc_fsa_batch1_len1_native():
   check_ctc_fsa(targets=targets, target_seq_lens=target_seq_lens, n_classes=n_classes, with_native_fsa=True)
 
 
+def _py_viterbi(am_scores, am_seq_len, edges, weights, start_end_states):
+  """
+  Pure Python Viterbi algorithm, to find the best path/alignment.
+  The parameters are in the same format as our native fast_baum_welch op.
+
+  :param numpy.ndarray am_scores: (time, batch, dim), in +log space
+  :param numpy.ndarray am_seq_len: (batch,) -> int32
+  :param numpy.ndarray edges: (4,num_edges), edges of the graph (from,to,emission_idx,sequence_idx)
+  :param numpy.ndarray weights: (num_edges,), weights of the edges
+  :param numpy.ndarray start_end_states: (2, batch), (start,end) state idx in FSA. there is only one single FSA.
+  :return: (alignment, obs_scores), alignment is (time, batch), obs_scores is (batch,), in +log space
+  :rtype: (numpy.ndarray, numpy.ndarray)
+  """
+  n_time, n_batch, dim = am_scores.shape
+  assert am_seq_len.shape == (n_batch,)
+  assert edges.ndim == 2 and weights.ndim == 1
+  n_edges, = weights.shape
+  assert edges.shape == (4, n_edges)
+  assert start_end_states.shape == (2, n_batch)
+  from collections import defaultdict
+  zero_score = float("-inf")
+  alignment = numpy.zeros((n_time, n_batch), dtype="int32")
+  obs_scores = numpy.zeros((n_batch,), dtype=am_scores.dtype) + zero_score
+
+  def search():
+    """
+    :rtype: list[dict[int,(float,int)]]
+    """
+    start_idx, _ = start_end_states[:, sequence_idx]
+    states = defaultdict(lambda: (zero_score, -1))  # type: typing.Dict[int,typing.Tuple[float,int]]  # state-idx -> score/edge  # nopep8
+    states[start_idx] = (0.0, -1)
+    res = []  # type: typing.List[typing.Dict[int,typing.Tuple[float,int]]]
+    for t in range(n_time):
+      if t >= am_seq_len[sequence_idx]:
+        break
+      scores = defaultdict(list)  # type: typing.Dict[int,typing.List[typing.Tuple[float,int]]]  # state-idx -> list[score/edge]  # nopep8
+      for edge_idx in range(n_edges):
+        from_idx, to_idx, emission_idx, sequence_idx_ = edges[:, edge_idx]
+        if sequence_idx_ != sequence_idx:
+          continue
+        if from_idx not in states or states[from_idx] == zero_score:
+          continue
+        assert 0 <= emission_idx < dim
+        score = states[from_idx][0] + weights[edge_idx] + am_scores[t, sequence_idx, emission_idx]
+        scores[to_idx].append((score, edge_idx))
+      states.clear()
+      for state_idx in scores.keys():
+        states[state_idx] = max(scores[state_idx], key=lambda _item: (_item[0], -_item[1]))
+      res.append(dict(states))
+    assert len(res) == am_seq_len[sequence_idx]
+    return res
+
+  def select_best():
+    """
+    :return: nothing, fill alignment and obs_scores
+    """
+    _, end_idx = start_end_states[:, sequence_idx]
+    state_idx = end_idx
+    for t in reversed(range(am_seq_len[sequence_idx])):
+      assert state_idx in fwd_search_res[t]
+      score, edge_idx = fwd_search_res[t][state_idx]
+      if t == am_seq_len[sequence_idx] - 1:
+        obs_scores[sequence_idx] = score
+      from_idx, to_idx, emission_idx, sequence_idx_ = edges[:, edge_idx]
+      assert sequence_idx_ == sequence_idx
+      alignment[t, sequence_idx] = emission_idx
+      state_idx = from_idx
+
+  for sequence_idx in range(n_batch):
+    fwd_search_res = search()
+    select_best()
+
+  return alignment, obs_scores
+
+
+def test_py_viterbi():
+  n_batch = 3
+  seq_len = 7
+  n_classes = 5
+  from Fsa import FastBwFsaShared
+  fsa = FastBwFsaShared()
+  for i in range(n_classes):
+    fsa.add_edge(i, i + 1, emission_idx=i)  # fwd
+    fsa.add_edge(i + 1, i + 1, emission_idx=i)  # loop
+  assert n_classes <= seq_len
+  fast_bw_fsa = fsa.get_fast_bw_fsa(n_batch=n_batch)
+  edges = fast_bw_fsa.edges
+  weights = fast_bw_fsa.weights
+  start_end_states = fast_bw_fsa.start_end_states
+  am_scores = numpy.eye(n_classes, n_classes, dtype="float32")  # (dim,dim)
+  import scipy.ndimage
+  am_scores = scipy.ndimage.zoom(am_scores, zoom=(float(seq_len) / n_classes, 1), order=1, prefilter=False)
+  assert am_scores.shape == (seq_len, n_classes)
+  am_scores = am_scores[:, None]
+  am_scores = am_scores + numpy.zeros((seq_len, n_batch, n_classes), dtype="float32")
+  print(am_scores[:, 0])
+  # am_scores = numpy.ones((seq_len, n_batch, n_classes), dtype="float32") * numpy.float32(1.0 / n_classes)
+  am_scores = numpy.log(am_scores)  # in +log space
+  print("Construct call...")
+  alignment, obs_scores = _py_viterbi(
+    am_scores=am_scores, am_seq_len=numpy.array([seq_len] * n_batch),
+    edges=edges, weights=weights, start_end_states=start_end_states)
+  print("Done.")
+  print("score:")
+  print(repr(obs_scores))
+  assert_equal(obs_scores.shape, (n_batch,))
+  print("Hard alignment:")
+  print(repr(alignment))
+  assert_equal(alignment.shape, (seq_len, n_batch))
+  if seq_len == n_classes:
+    print("Extra check identity...")
+    for i in range(n_batch):
+      for t in range(seq_len):
+        assert alignment[t, i] == t
+  if seq_len == 7 and n_classes == 5:
+    print("Extra check ref_align (7,5)...")
+    assert_allclose(obs_scores, -1.6218603, rtol=1e-5)  # should be the same everywhere
+    for i in range(n_batch):
+      assert_equal(alignment[:, i].tolist(), [0, 1, 1, 2, 3, 3, 4])
+  print("Done.")
+
+
 def test_edit_distance():
   rnd = numpy.random.RandomState(42)
   n_batch = 15
