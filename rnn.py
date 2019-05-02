@@ -455,7 +455,7 @@ def execute_main_task():
       engine.epoch = epoch
       config.set('load_epoch', engine.epoch)
     else:
-      assert load_epoch, "specify epoch or load_epoch"
+      assert load_epoch >= 0, "specify epoch or load_epoch"
       engine.epoch = load_epoch
     engine.init_train_from_config(config, train_data, dev_data, eval_data)
     print("Evaluate epoch", engine.epoch, file=log.v4)

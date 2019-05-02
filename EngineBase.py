@@ -88,8 +88,8 @@ class EngineBase(object):
 
     existing_models = cls.get_existing_models(config)
     if not load_model_epoch_filename:
-      if config.has("load_epoch"):
-        load_epoch = config.int("load_epoch", 0)
+      load_epoch = config.int("load_epoch", -1)
+      if load_epoch > 0:  # ignore if load_epoch == 0
         assert load_epoch in existing_models
         load_model_epoch_filename = existing_models[load_epoch]
         assert model_epoch_from_filename(load_model_epoch_filename) == load_epoch
