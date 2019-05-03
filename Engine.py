@@ -373,7 +373,8 @@ class Engine(EngineBase):
       return " ".join(["%s %s" % (key.split(':')[-1], str(score[key]))
                        for key in sorted(score.keys())])
 
-  def eval_model(self, output_file=None, output_per_seq_file=None):
+  def eval_model(self, output_file=None, output_per_seq_file=None, loss_name=None,
+                 output_per_seq_format=None, output_per_seq_file_format="txt"):
     assert not output_file and not output_per_seq_file, "not implemented"
     eval_dump_str = []
     for dataset_name, dataset in self.get_eval_datasets().items():
