@@ -1749,7 +1749,9 @@ def _py_viterbi(am_scores, am_seq_len, edges, weights, start_end_states):
     _, end_idx = start_end_states[:, sequence_idx]
     state_idx = end_idx
     for t in reversed(range(am_seq_len[sequence_idx])):
-      assert state_idx in fwd_search_res[t]
+      if state_idx not in fwd_search_res[t]:  # no path?
+        alignment[t, sequence_idx] = 0
+        continue
       score, edge_idx = fwd_search_res[t][state_idx]
       if t == am_seq_len[sequence_idx] - 1:
         obs_scores[sequence_idx] = score
@@ -1809,6 +1811,99 @@ def test_py_viterbi():
     assert_allclose(obs_scores, -1.6218603, rtol=1e-5)  # should be the same everywhere
     for i in range(n_batch):
       assert_equal(alignment[:, i].tolist(), [0, 1, 1, 2, 3, 3, 4])
+  print("Done.")
+
+
+def test_fast_viterbi():
+  n_batch = 3
+  seq_len = 7
+  n_classes = 5
+  from Fsa import FastBwFsaShared
+  fsa = FastBwFsaShared()
+  for i in range(n_classes):
+    fsa.add_edge(i, i + 1, emission_idx=i)  # fwd
+    fsa.add_edge(i + 1, i + 1, emission_idx=i)  # loop
+  assert n_classes <= seq_len
+  fast_bw_fsa = fsa.get_fast_bw_fsa(n_batch=n_batch)
+  edges = fast_bw_fsa.edges
+  weights = fast_bw_fsa.weights
+  start_end_states = fast_bw_fsa.start_end_states
+  am_scores = numpy.eye(n_classes, n_classes, dtype="float32")  # (dim,dim)
+  import scipy.ndimage
+  am_scores = scipy.ndimage.zoom(am_scores, zoom=(float(seq_len) / n_classes, 1), order=1, prefilter=False)
+  assert am_scores.shape == (seq_len, n_classes)
+  am_scores = am_scores[:, None]
+  am_scores = am_scores + numpy.zeros((seq_len, n_batch, n_classes), dtype="float32")
+  print(am_scores[:, 0])
+  # am_scores = numpy.ones((seq_len, n_batch, n_classes), dtype="float32") * numpy.float32(1.0 / n_classes)
+  am_scores = numpy.log(am_scores)  # in +log space
+  print("Construct call...")
+  alignment, obs_scores = fast_viterbi(
+    am_scores=tf.constant(am_scores), am_seq_len=tf.constant(numpy.array([seq_len] * n_batch, dtype="int32")),
+    edges=tf.constant(edges), weights=tf.constant(weights), start_end_states=tf.constant(start_end_states))
+  alignment, obs_scores = session.run((alignment, obs_scores))
+  print("Done.")
+  print("score:")
+  print(repr(obs_scores))
+  assert_equal(obs_scores.shape, (n_batch,))
+  print("Hard alignment:")
+  print(repr(alignment))
+  assert_equal(alignment.shape, (seq_len, n_batch))
+  if seq_len == n_classes:
+    print("Extra check identity...")
+    for i in range(n_batch):
+      for t in range(seq_len):
+        assert alignment[t, i] == t
+  if seq_len == 7 and n_classes == 5:
+    print("Extra check ref_align (7,5)...")
+    assert_allclose(obs_scores, -1.6218603, rtol=1e-5)  # should be the same everywhere
+    for i in range(n_batch):
+      assert_equal(alignment[:, i].tolist(), [0, 1, 1, 2, 3, 3, 4])
+  print("Done.")
+
+
+def test_fast_viterbi_rnd():
+  n_batch = 4
+  seq_len = 23
+  n_classes = 5
+  from Fsa import FastBwFsaShared
+  fsa = FastBwFsaShared()
+  for i in range(n_classes):
+    fsa.add_edge(i, i + 1, emission_idx=i)  # fwd
+    fsa.add_edge(i + 1, i + 1, emission_idx=i)  # loop
+  assert n_classes <= seq_len
+  fast_bw_fsa = fsa.get_fast_bw_fsa(n_batch=n_batch)
+  edges = fast_bw_fsa.edges
+  weights = fast_bw_fsa.weights
+  start_end_states = fast_bw_fsa.start_end_states
+  am_scores = numpy.random.RandomState(42).normal(size=(seq_len, n_batch, n_classes)).astype("float32")
+  am_seq_len = numpy.array([seq_len] * n_batch, dtype="int32")
+  am_seq_len[1] -= 1
+  am_seq_len[-1] -= 2
+  am_seq_len[-2] = max(n_classes - 1, 1)  # no path possible
+  ref_alignment, ref_scores = _py_viterbi(
+    am_scores=am_scores, am_seq_len=am_seq_len,
+    edges=edges, weights=weights, start_end_states=start_end_states)
+  print("ref score:")
+  print(repr(ref_scores))
+  assert_equal(ref_scores.shape, (n_batch,))
+  print("ref hard alignment:")
+  print(repr(ref_alignment))
+  assert_equal(ref_alignment.shape, (seq_len, n_batch))
+  print("Construct fast_viterbi call...")
+  alignment, scores = fast_viterbi(
+    am_scores=tf.constant(am_scores), am_seq_len=tf.constant(am_seq_len),
+    edges=tf.constant(edges), weights=tf.constant(weights), start_end_states=tf.constant(start_end_states))
+  alignment, scores = session.run((alignment, scores))
+  print("Done.")
+  print("score:")
+  print(repr(scores))
+  assert_equal(scores.shape, (n_batch,))
+  print("Hard alignment:")
+  print(repr(alignment))
+  assert_equal(alignment.shape, (seq_len, n_batch))
+  assert_allclose(scores, ref_scores, rtol=1e-5)
+  assert_allclose(alignment, ref_alignment, rtol=1e-5)
   print("Done.")
 
 

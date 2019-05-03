@@ -465,8 +465,9 @@ static void _cudaHandleError(cublasStatus_t status, const char *file, int line) 
 #define elem_atomic_min(x, v) (*x = (v < *x) ? v : *x)  // ignore atomic for now...
 
 #define elem_atomic_cas _host_elem_atomic_cas
-static inline int _host_elem_atomic_cas(int* address, int compare, int val) {
-    int old = *address;
+template<typename T>
+static inline T _host_elem_atomic_cas(T* address, T compare, T val) {
+    T old = *address;
     if(old == compare)
         *address = val;
     return old;

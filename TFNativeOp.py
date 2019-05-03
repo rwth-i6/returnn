@@ -1211,6 +1211,24 @@ def ctc_loss(logits, logits_seq_lens, logits_time_major, targets, targets_seq_le
   return loss
 
 
+def fast_viterbi(am_scores, am_seq_len, edges, weights, start_end_states):
+  """
+  :param tf.Tensor am_scores: (time, batch, dim), in +log space (unlike fast_baum_welch)
+  :param tf.Tensor am_seq_len: (batch,), int32
+  :param tf.Tensor edges: (4,num_edges), edges of the graph (from,to,emission_idx,sequence_idx)
+  :param tf.Tensor weights: (num_edges,), weights of the edges
+  :param tf.Tensor start_end_states: (2, batch), (start,end) state idx in automaton. there is only one single automaton.
+  :return: (alignment, scores), alignment is (time, batch), scores is (batch,), in +log space
+  :rtype: (tf.Tensor, tf.Tensor)
+  """
+  last_state_idx = tf.reduce_max(start_end_states[1])
+  n_states = last_state_idx + 1
+  maker = OpMaker(OpDescription.from_gen_base(NativeOp.FastViterbiOp))
+  op = maker.make_op()
+  alignment, scores = op(am_scores, am_seq_len, edges, weights, start_end_states, n_states)
+  return alignment, scores
+
+
 def edit_distance(a, a_len, b, b_len):
   """
   Wraps :class:`NativeOp.EditDistanceOp`.
