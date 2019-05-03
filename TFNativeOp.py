@@ -1229,6 +1229,60 @@ def fast_viterbi(am_scores, am_seq_len, edges, weights, start_end_states):
   return alignment, scores
 
 
+def ctc_loss_viterbi(logits, logits_seq_lens, logits_time_major, targets, targets_seq_lens):
+  """
+  Similar to :func:`ctc_loss`.
+  However, instead of using the full sum, we use the best path (i.e. Viterbi instead of Baum-Welch).
+  We use our :func:`fast_viterbi`.
+
+  :param tf.Tensor logits: (time,batch,dim) or (batch,time,dim). unnormalized (before softmax)
+  :param tf.Tensor logits_seq_lens: shape (batch,) of int32|int64
+  :param bool logits_time_major:
+  :param tf.Tensor targets: batch-major, [batch,time]
+  :param tf.Tensor targets_seq_lens: (batch,)
+  :return: loss, shape (batch,)
+  :rtype: tf.Tensor
+  """
+  assert logits.get_shape().ndims == 3 and logits.get_shape().dims[-1].value
+  dim = logits.get_shape().dims[-1].value
+  if not logits_time_major:
+    logits = tf.transpose(logits, [1, 0, 2])  # (time,batch,dim)
+  log_sm = tf.nn.log_softmax(logits)  # (time,batch,dim)
+
+  edges, weights, start_end_states = get_ctc_fsa_fast_bw(
+    targets=targets, seq_lens=targets_seq_lens, blank_idx=dim - 1)
+  alignment, scores = fast_viterbi(
+    am_scores=log_sm, am_seq_len=logits_seq_lens,
+    edges=edges, weights=weights, start_end_states=start_end_states)
+  loss = -scores
+
+  # We make use of the original TF sparse CE function,
+  # which also calculates the gradient.
+  # The CE op works on the flat tensor, thus we first convert it here, to get the op directly.
+  logits_flat = tf.reshape(logits, [-1, dim])
+  alignment_flat = tf.reshape(alignment, tf.shape(logits_flat)[:-1])
+  loss_ce = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits_flat, labels=alignment_flat)
+  assert loss_ce.op.type == "SparseSoftmaxCrossEntropyWithLogits"
+  # See _SparseSoftmaxCrossEntropyWithLogitsGrad.
+  from tensorflow.python.ops import array_ops
+  ce_grad = array_ops.prevent_gradient(
+    loss_ce.op.outputs[1], message="No second order grad for CE.")
+  assert isinstance(ce_grad, tf.Tensor)
+  ce_grad.set_shape(logits_flat.get_shape())  # (time*batch,dim)
+  ce_grad = tf.reshape(ce_grad, tf.shape(logits))  # (time,batch,dim)
+  from TFUtil import sequence_mask_time_major
+  seq_mask = sequence_mask_time_major(logits_seq_lens)  # (time,batch)
+  seq_mask_bc_float = tf.cast(tf.expand_dims(seq_mask, 2), tf.float32)  # (time,batch,1)
+  ce_grad *= seq_mask_bc_float
+
+  from TFUtil import custom_gradient
+  n_batch = tf.shape(loss)[0]
+  loss = tf.reshape(loss, [1, n_batch, 1])  # (1,batch,1), such that we can broadcast to logits/ce_grad
+  loss = custom_gradient.generic_loss_and_error_signal(loss=loss, x=logits, grad_x=ce_grad)
+  loss = tf.reshape(loss, [n_batch])
+  return loss
+
+
 def edit_distance(a, a_len, b, b_len):
   """
   Wraps :class:`NativeOp.EditDistanceOp`.

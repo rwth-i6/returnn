@@ -60,6 +60,7 @@ print("TF version:", tf.__version__)
 
 CudaEnv.verbose_find_cuda = True
 session = tf.InteractiveSession()
+tf.set_random_seed(42)
 
 
 def sys_exec(*args, **kwargs):
@@ -1905,6 +1906,40 @@ def test_fast_viterbi_rnd():
   assert_allclose(scores, ref_scores, rtol=1e-5)
   assert_allclose(alignment, ref_alignment, rtol=1e-5)
   print("Done.")
+
+
+def test_ctc_viterbi_loss():
+  n_batch = 3
+  seq_len = 13
+  n_input_dim = 6
+  n_classes = 5
+
+  x = tf.constant(numpy.random.RandomState(42).normal(size=(seq_len, n_batch, n_input_dim)).astype("float32"))
+  x_seq_len = tf.constant([seq_len, seq_len - 1, seq_len - 2])
+  weights = tf.get_variable(
+    "ctc_viterbi_weights", shape=(n_input_dim, n_classes), initializer=tf.random_normal_initializer())
+  bias = tf.get_variable("ctc_viterbi_bias", shape=(n_classes,))
+  var_list = [weights, bias]
+  session.run(tf.initialize_variables(var_list))
+  from TFUtil import dot
+  logits = dot(x, weights) + bias
+  targets = tf.constant([[0, 1, 2, 0, 0], [3, 2, 4, 1, 1], [2, 0, 1, 2, 0]])
+  targets.set_shape((n_batch, None))
+  targets_seq_len = tf.constant([3, 5, 4])
+  targets_seq_len.set_shape((n_batch,))
+  loss = ctc_loss_viterbi(
+    logits=logits, logits_seq_lens=x_seq_len, logits_time_major=True,
+    targets=targets, targets_seq_lens=targets_seq_len)
+  loss.set_shape((n_batch,))
+  loss = tf.reduce_mean(loss)
+  opt = tf.train.GradientDescentOptimizer(learning_rate=0.1)
+  minimize = opt.minimize(loss, var_list=var_list)
+  loss_vals = []
+  for step in range(10):
+    loss_val, _ = session.run((loss, minimize))
+    print("step %i, loss %f" % (step, loss_val))
+    loss_vals.append(loss_val)
+  assert loss_vals[-1] < loss_vals[0]
 
 
 def test_edit_distance():
