@@ -4723,7 +4723,7 @@ class FastViterbiOp(NativeOpGenBase):
         // So instead, we use double-wide compare-and-swap.
         union U {
           IdxAndVal s;
-          uint64_t v64;
+          unsigned long long int v64;
         };
         while(true) {
           U prev;
@@ -4736,7 +4736,7 @@ class FastViterbiOp(NativeOpGenBase):
           updated.s = b;
           
           U old;
-          old.v64 = elem_atomic_cas((uint64_t*) a, prev.v64, updated.v64);
+          old.v64 = elem_atomic_cas((unsigned long long int*) a, prev.v64, updated.v64);
           if(old.v64 == prev.v64)
             return;
           // Not the same, so repeat.
@@ -4804,15 +4804,15 @@ class FastViterbiOp(NativeOpGenBase):
         int idx = threadIdx.x + blockDim.x * blockIdx.x;
         while(idx < n_edges) {
           int from_idx = d_edge_from[idx];
-          assert_cmp(0, <=, from_idx); assert_cmp(from_idx, <, n_states);
-          
+          //assert_cmp(0, <=, from_idx); assert_cmp(from_idx, <, n_states);
+
           int seq_idx = d_edge_seq_idx[idx];
           if(t < d_am_seq_len[seq_idx]) {
             float prev_val = prev_frame[from_idx].val;
             int emission_idx = d_edge_emission_idx[idx];
-            assert_cmp(0, <=, emission_idx); assert_cmp(emission_idx, <, n_classes);            
+            //assert_cmp(0, <=, emission_idx); assert_cmp(emission_idx, <, n_classes);
             int to_idx = d_edge_to[idx];
-            assert_cmp(0, <=, to_idx); assert_cmp(to_idx, <, n_states);
+            //assert_cmp(0, <=, to_idx); assert_cmp(to_idx, <, n_states);
             IdxAndVal candidate;
             candidate.val = prev_val + d_edge_weights[idx] + d_am_scores[seq_idx * n_classes + emission_idx];
             candidate.idx = idx;
@@ -4820,7 +4820,7 @@ class FastViterbiOp(NativeOpGenBase):
           }
 
           idx += gridDim.x * blockDim.x;
-        }      
+        }
       }
     """,
     "11_select_scores":
@@ -4842,7 +4842,7 @@ class FastViterbiOp(NativeOpGenBase):
           const IdxAndVal* last_frame = buffer + d_am_seq_len[idx] * buffer_stride;
           int end_state_idx = d_end_states[idx];
           d_score[idx] = last_frame[end_state_idx].val;
-        
+
           idx += gridDim.x * blockDim.x;
         }
       }
@@ -4869,11 +4869,11 @@ class FastViterbiOp(NativeOpGenBase):
         while(idx < n_batch) {
           if(t < d_am_seq_len[idx]) {
             int state_idx = cur_state[idx];
-            assert_cmp(0, <=, state_idx); assert_cmp(state_idx, <, n_states);
+            //assert_cmp(0, <=, state_idx); assert_cmp(state_idx, <, n_states);
             int edge_idx = frame[state_idx].idx;
-            if(edge_idx >= 0) { 
-              assert_cmp(0, <=, edge_idx); assert_cmp(edge_idx, <, n_edges);
-              assert_cmp(state_idx, ==, d_edge_to[edge_idx]);
+            if(edge_idx >= 0) {
+              //assert_cmp(0, <=, edge_idx); assert_cmp(edge_idx, <, n_edges);
+              //assert_cmp(state_idx, ==, d_edge_to[edge_idx]);
               cur_state[idx] = d_edge_from[edge_idx];
               output[idx] = d_edge_emission_idx[edge_idx];
             }
