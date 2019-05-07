@@ -74,10 +74,7 @@ def test_determinism_of_vanillalstm():
     feed_dict, _ = data_provider.get_feed_dict(single_threaded=True)
     trainer.run(report_prefix="One Run")
 
-    # all variables of all layers
-    return [[x.eval(session=engine.tf_session)
-             for x in (tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=layer_name))]
-            for layer_name in engine.network.layers]
+    return [e.eval(engine.tf_session) for e in engine.network.get_params_list()]
 
   e1 = create_engine()
   r1 = train_engine_fetch_vars(e1)
@@ -85,9 +82,7 @@ def test_determinism_of_vanillalstm():
   e2 = create_engine()
   r2 = train_engine_fetch_vars(e2)
 
-  for layer_vars1, layer_vars2 in zip(r1, r2):
-    if layer_vars1 is not None and layer_vars2 is not None:
-      assert_array_equal(layer_vars1, layer_vars2)
+  assert_array_equal(r1, r2)
 
 
 test_determinism_of_vanillalstm()
