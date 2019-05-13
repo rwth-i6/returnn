@@ -138,11 +138,20 @@ if os.environ.get("DEBUG", "") == "1":
   debug_print_file("PKG-INFO")
 
 
+if os.path.exists("MANIFEST"):
+  # print("package_data via MANIFEST")
+  package_data = open("MANIFEST").read().splitlines()
+else:
+  # print("dummy package_data, does not matter, likely you are running sdist")
+  package_data = []
+
+
 setup(
   name='returnn',
   version=version,
   packages=['returnn'],
   package_dir={'returnn': ''},
+  package_data={'returnn': package_data},  # filtered via MANIFEST.in
   description='The RWTH extensible training framework for universal recurrent neural networks',
   author='Albert Zeyer',
   author_email='albzey@gmail.com',
