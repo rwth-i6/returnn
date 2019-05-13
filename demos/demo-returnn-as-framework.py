@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 
-import os
-import sys
-sys.path.insert(0, os.path.dirname(__file__) + "/..")  # parent dir for Returnn
+"""
+This demonstrates how to use RETURNN as a framework.
+"""
 
-import better_exchook
+import returnn  # pip install returnn
+from returnn.TFEngine import Engine
+from returnn.Dataset import init_dataset
+from returnn.Config import get_global_config
+from returnn.Util import get_login_username
+from returnn import better_exchook
+
+
 better_exchook.install()
 
-from pprint import pprint
-from TFEngine import Engine
-from Dataset import init_dataset
-from Config import get_global_config
-from Util import get_login_username
 
 config = get_global_config(auto_create=True)
 config.update(dict(
