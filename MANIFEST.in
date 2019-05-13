@@ -1,0 +1,17 @@
+include *.rst
+include *.md
+include *.txt
+include *.cpp
+recursive-include . *.txt *.py *.cpp *.rst *.md
+include LICENSE
+include CODEOWNERS
+include tools
+include docs
+include demos
+include tests
+include c_support_code
+include cuda_implementation
+prune dist
+prune extern
+prune extern_private
+prune __pycache__
