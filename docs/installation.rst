@@ -32,7 +32,8 @@ For some specific datasets or special layers, additional dependencies might be n
 such as ``librosa``.
 For running the tests, you need ``nose``.
 
-You can also install RETURNN as a framework, via ``pip``, like::
+You can also install RETURNN as a framework, via ``pip`` (`PyPI entry <https://pypi.org/project/returnn/>`__),
+like::
 
     pip install returnn
 
