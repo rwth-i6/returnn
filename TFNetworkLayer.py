@@ -7270,18 +7270,22 @@ class MeanSquaredError(Loss):
     """
     :rtype: tf.Tensor
     """
-    assert not self.target.sparse, "sparse is not supported yet"
     with tf.name_scope("loss_mse"):
-      if self.target_flat is not None:
-        assert self.output_flat is not None
-        out = tf.squared_difference(self.output_flat, self.target_flat)
-        assert out.get_shape().ndims == 2
-        out = self.reduce_func(tf.reduce_mean(out, axis=1))
+      if self.output_before_softmax_flat is not None:
+        x = tf.nn.softmax(self.output_before_softmax_flat)
       else:
-        assert self.output is not None and self.target is not None
-        out = tf.squared_difference(self.output, self.target)
-        assert out.get_shape().ndims == 1
-        out = self.reduce_func(out)
+        assert self.output_flat is not None
+        x = self.output_flat
+      assert x.get_shape().ndims == 2
+      assert self.target_flat is not None
+      if self.target.sparse:
+        y = tf.one_hot(self.target_flat, self.target.dim)
+      else:
+        y = self.target_flat
+      assert y.get_shape().ndims == 2
+      out = tf.squared_difference(x, y)
+      assert out.get_shape().ndims == 2
+      out = self.reduce_func(tf.reduce_mean(out, axis=1))
       return out
 
 
