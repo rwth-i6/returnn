@@ -50,7 +50,7 @@ def debug_print_file(fn):
     return
   if os.path.isdir(fn):
     print("<dir:>")
-    pprint(os.listdir(fn))
+    pprint(sorted(os.listdir(fn)))
     return
   print(open(fn).read())
 
@@ -136,14 +136,21 @@ else:
 if os.environ.get("DEBUG", "") == "1":
   debug_print_file(".")
   debug_print_file("PKG-INFO")
+  debug_print_file("pip-egg-info")
+  debug_print_file("pip-egg-info/returnn.egg-info")
+  debug_print_file("pip-egg-info/returnn.egg-info/SOURCES.txt")  # like MANIFEST
 
 
-if os.path.exists("MANIFEST"):
-  # print("package_data via MANIFEST")
-  package_data = open("MANIFEST").read().splitlines()
+if os.path.exists("PKG-INFO"):
+  if os.path.exists("MANIFEST"):
+    print("package_data, found PKG-INFO and MANIFEST")
+    package_data = open("MANIFEST").read().splitlines()
+  else:
+    print("package_data, found PKG-INFO, no MANIFEST, use *")
+    package_data = ["*"]
 else:
-  # print("dummy package_data, does not matter, likely you are running sdist")
-  package_data = []
+  print("dummy package_data, does not matter, likely you are running sdist")
+  package_data = ["MANIFEST"]
 
 
 setup(
