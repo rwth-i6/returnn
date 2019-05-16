@@ -130,6 +130,13 @@ class TestDemos(object):
     print("Success.")
     subprocess.check_call(["echo", "travis_fold:end:test_demo_returnn_as_framework"])
 
+  def test_demo_sprint_interface(self):
+    import subprocess
+    # echo via subprocess, because this stdout as well as the other will always be visible.
+    subprocess.check_call(["echo", "travis_fold:start:test_demo_sprint_interface"])
+    subprocess.check_call([py, "demo-sprint-interface.py"], cwd="demos")
+    subprocess.check_call(["echo", "travis_fold:end:test_demo_sprint_interface"])
+
 
 if __name__ == '__main__':
   better_exchook.install()
