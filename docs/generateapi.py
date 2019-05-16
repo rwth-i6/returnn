@@ -19,10 +19,15 @@ import os
 
 exclude = {"autonet", "mod"}
 
+
 def generate():
+  if not os.path.exists("crnn"):
+    os.symlink("..", "crnn")
+
   def makeapi(modname):
     fn = "api/%s.rst" % modname
-    if os.path.exists(fn): return
+    if os.path.exists(fn):
+      return
     f = open(fn, "w")
     title = ":mod:`%s`" % modname
     f.write("\n%s\n%s\n\n" % (title, "-" * len(title)))
@@ -30,8 +35,11 @@ def generate():
     f.close()
 
   for fn in sorted(os.listdir("crnn")):
-    if not fn.endswith(".py"): continue
-    if fn.startswith("_"): continue
+    if not fn.endswith(".py"):
+      continue
+    if fn.startswith("_"):
+      continue
     modname, _ = os.path.splitext(fn)
-    if modname in exclude: continue
+    if modname in exclude:
+      continue
     makeapi(modname)
