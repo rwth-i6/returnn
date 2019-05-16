@@ -117,7 +117,12 @@ class TestDemos(object):
     dist_fn = os.path.abspath(dist_fns[0])
     pip_path = which("pip")
     print("Pip install Returnn.")
-    subprocess.check_call([py, pip_path, "install", "--user", "-v", dist_fn], cwd="/")
+    in_virtual_env = hasattr(sys, 'real_prefix')  # https://stackoverflow.com/questions/1871549/
+    cmd = [py, pip_path, "install"]
+    if not in_virtual_env:
+      cmd += ["--user"]
+    cmd += ["-v", dist_fn]
+    subprocess.check_call(cmd, cwd="/")
     print("Running demo now.")
     subprocess.check_call([py, "demo-returnn-as-framework.py"], cwd="demos")
 
