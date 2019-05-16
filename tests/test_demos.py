@@ -102,6 +102,8 @@ class TestDemos(object):
     import subprocess
     from glob import glob
     from Util import which, get_login_username
+    # echo via subprocess, because this stdout as well as the other will always be visible.
+    subprocess.check_call(["echo", "travis_fold:start:test_demo_returnn_as_framework"])
     assert os.path.exists("setup.py")
     if glob("dist/*.tar.gz"):
       subprocess.check_call(["rm"] + glob("dist/*.tar.gz"))  # we want it unique below
@@ -125,6 +127,8 @@ class TestDemos(object):
     subprocess.check_call(cmd, cwd="/")
     print("Running demo now.")
     subprocess.check_call([py, "demo-returnn-as-framework.py"], cwd="demos")
+    print("Success.")
+    subprocess.check_call(["echo", "travis_fold:end:test_demo_returnn_as_framework"])
 
 
 if __name__ == '__main__':
