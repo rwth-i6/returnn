@@ -118,67 +118,75 @@ def git_head_version(git_dir="."):
   return "1.%s" % commit_date
 
 
-if os.path.exists("PKG-INFO"):
-  print("Found existing PKG-INFO.")
-  info = parse_pkg_info("PKG-INFO")
-  version = info["Version"]
-  print("Version via PKG-INFO:", version)
-else:
-  try:
-    version = git_head_version()
-    print("Version via Git:", version)
-  except Exception as exc:
-    print("Exception while getting Git version:", exc)
-    sys.excepthook(*sys.exc_info())
-    version = time.strftime("1.%Y%m%d.%H%M%S", time.gmtime())
-    print("Version via current time:", version)
+def main():
+  """
+  Setup main entry
+  """
 
-
-if os.environ.get("DEBUG", "") == "1":
-  debug_print_file(".")
-  debug_print_file("PKG-INFO")
-  debug_print_file("pip-egg-info")
-  debug_print_file("pip-egg-info/returnn.egg-info")
-  debug_print_file("pip-egg-info/returnn.egg-info/SOURCES.txt")  # like MANIFEST
-
-
-if os.path.exists("PKG-INFO"):
-  if os.path.exists("MANIFEST"):
-    print("package_data, found PKG-INFO and MANIFEST")
-    package_data = open("MANIFEST").read().splitlines()
+  if os.path.exists("PKG-INFO"):
+    print("Found existing PKG-INFO.")
+    info = parse_pkg_info("PKG-INFO")
+    version = info["Version"]
+    print("Version via PKG-INFO:", version)
   else:
-    print("package_data, found PKG-INFO, no MANIFEST, use *")
-    package_data = ["*"]
-else:
-  print("dummy package_data, does not matter, likely you are running sdist")
-  package_data = ["MANIFEST"]
+    try:
+      version = git_head_version()
+      print("Version via Git:", version)
+    except Exception as exc:
+      print("Exception while getting Git version:", exc)
+      sys.excepthook(*sys.exc_info())
+      version = time.strftime("1.%Y%m%d.%H%M%S", time.gmtime())
+      print("Version via current time:", version)
 
 
-setup(
-  name='returnn',
-  version=version,
-  packages=['returnn'],
-  package_dir={'returnn': ''},
-  package_data={'returnn': package_data},  # filtered via MANIFEST.in
-  description='The RWTH extensible training framework for universal recurrent neural networks',
-  author='Albert Zeyer',
-  author_email='albzey@gmail.com',
-  url='https://github.com/rwth-i6/returnn/',
-  license='RETURNN license',
-  long_description=open('README.rst').read(),
-  # https://pypi.python.org/pypi?%3Aaction=list_classifiers
-  classifiers=[
-    'Development Status :: 5 - Production/Stable',
-    'Intended Audience :: Developers',
-    'Intended Audience :: Education',
-    'Intended Audience :: Science/Research',
-    'License :: OSI Approved :: BSD License',
-    'Operating System :: MacOS :: MacOS X',
-    'Operating System :: Microsoft :: Windows',
-    'Operating System :: POSIX',
-    'Operating System :: Unix',
-    'Programming Language :: Python',
-    'Topic :: Software Development :: Libraries :: Python Modules',
-  ]
-)
+  if os.environ.get("DEBUG", "") == "1":
+    debug_print_file(".")
+    debug_print_file("PKG-INFO")
+    debug_print_file("pip-egg-info")
+    debug_print_file("pip-egg-info/returnn.egg-info")
+    debug_print_file("pip-egg-info/returnn.egg-info/SOURCES.txt")  # like MANIFEST
 
+
+  if os.path.exists("PKG-INFO"):
+    if os.path.exists("MANIFEST"):
+      print("package_data, found PKG-INFO and MANIFEST")
+      package_data = open("MANIFEST").read().splitlines()
+    else:
+      print("package_data, found PKG-INFO, no MANIFEST, use *")
+      package_data = ["*"]
+  else:
+    print("dummy package_data, does not matter, likely you are running sdist")
+    package_data = ["MANIFEST"]
+
+
+  setup(
+    name='returnn',
+    version=version,
+    packages=['returnn'],
+    package_dir={'returnn': ''},
+    package_data={'returnn': package_data},  # filtered via MANIFEST.in
+    description='The RWTH extensible training framework for universal recurrent neural networks',
+    author='Albert Zeyer',
+    author_email='albzey@gmail.com',
+    url='https://github.com/rwth-i6/returnn/',
+    license='RETURNN license',
+    long_description=open('README.rst').read(),
+    # https://pypi.python.org/pypi?%3Aaction=list_classifiers
+    classifiers=[
+      'Development Status :: 5 - Production/Stable',
+      'Intended Audience :: Developers',
+      'Intended Audience :: Education',
+      'Intended Audience :: Science/Research',
+      'License :: OSI Approved :: BSD License',
+      'Operating System :: MacOS :: MacOS X',
+      'Operating System :: Microsoft :: Windows',
+      'Operating System :: POSIX',
+      'Operating System :: Unix',
+      'Programming Language :: Python',
+      'Topic :: Software Development :: Libraries :: Python Modules',
+    ]
+  )
+
+
+if __name__ == "__main__":
+  main()
