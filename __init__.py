@@ -111,6 +111,13 @@ class _LazyLoader(_types.ModuleType):
     module = self._load()
     return dir(module)
 
+  def __setattr__(self, key, value):
+    if key in ["__file__"]:
+      super(_LazyLoader, self).__setattr__(key, value)
+      return
+    module = self._load()
+    setattr(module, key, value)
+
 
 _setup()
 
