@@ -32,6 +32,7 @@ pip3 install --user dist/*.tar.gz -v
 
 """
 
+from __future__ import print_function
 from distutils.core import setup
 import time
 from pprint import pprint

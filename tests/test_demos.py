@@ -1,4 +1,5 @@
 
+from __future__ import print_function
 import sys
 sys.path += ["."]  # Python 3 hack
 
@@ -13,6 +14,7 @@ better_exchook.replace_traceback_format_tb()
 
 
 py = sys.executable
+print("Python:", py)
 
 
 def build_env():
@@ -94,3 +96,46 @@ class TestDemos(object):
     cleanup_tmp_models("demos/demo-task12ax.config")
     out = run(py, "demos/demo-iter-dataset.py", "demos/demo-task12ax.config")
     assert_in("Epoch 5.", out.splitlines())
+
+  def test_demo_returnn_as_framework(self):
+    print("Prepare.")
+    import subprocess
+    from glob import glob
+    from Util import which, get_login_username
+    assert os.path.exists("setup.py")
+    if glob("dist/*.tar.gz"):
+      subprocess.check_call(["rm"] + glob("dist/*.tar.gz"))  # we want it unique below
+    if os.path.exists("docs/crnn"):
+      os.remove("docs/crnn")  # this is auto-generated, and confuses setup.py sdist
+    tmp_model_dir = "/tmp/%s/returnn-demo-as-framework" % get_login_username()
+    if os.path.exists(tmp_model_dir):
+      subprocess.check_call(["rm", "-rf", tmp_model_dir])
+    print("setup.py sdist, to create package.")
+    subprocess.check_call([py, "setup.py", "sdist"])
+    dist_fns = glob("dist/*.tar.gz")
+    assert len(dist_fns) == 1
+    dist_fn = os.path.abspath(dist_fns[0])
+    pip_path = which("pip")
+    print("Pip install Returnn.")
+    subprocess.check_call([py, pip_path, "install", "--user", "-v", dist_fn], cwd="/")
+    print("Running demo now.")
+    subprocess.check_call([py, "demo-returnn-as-framework.py"], cwd="demos")
+
+
+if __name__ == '__main__':
+  better_exchook.install()
+  TestDemos.setup_class()
+  tests = TestDemos()
+  import sys
+  fns = sys.argv[1:]
+  if not fns:
+    fns = [arg for arg in dir(tests) if arg.startswith("test_")]
+  for arg in fns:
+    f = getattr(tests, arg)
+    print("-" * 20)
+    print("Run:", f)
+    print("-" * 20)
+    f()
+    print("-" * 20)
+    print("Ok.")
+    print("-" * 20)

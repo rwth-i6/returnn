@@ -44,10 +44,12 @@ import Config
 # TODO: Look into making these non-global.
 _max_amount_engines = 4
 
+
 class ClassificationRequest:
   def __init__(self, data):
     self.data = data
     self.future = Future()
+
 
 class Model:
   def __init__(self, config_file):
@@ -149,7 +151,7 @@ class Model:
     yield self.classification_queue.put(request)
     yield request.future
 
-    return request.future.result()
+    # return request.future.result()
 
 
 class Server:

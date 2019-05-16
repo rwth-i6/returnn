@@ -30,7 +30,7 @@ config.update(dict(
   # training
   nadam=True,
   learning_rate=0.01,
-  num_epochs=100,
+  num_epochs=5,
   debug_add_check_numerics_ops=True,
 
   model="/tmp/%s/returnn-demo-as-framework/model" % get_login_username(),

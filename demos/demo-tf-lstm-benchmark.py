@@ -47,6 +47,7 @@ GeForce GTX 680:
     CPU:BasicLSTM: 0:03:58.1545
 """
 
+from __future__ import print_function
 import sys
 import os
 import time

@@ -18,6 +18,10 @@ import types as _types
 import os as _os
 
 
+if globals().get("__package__", None) is None:
+  __package__ = __name__  # https://www.python.org/dev/peps/pep-0366/
+
+
 _my_dir = _os.path.dirname(_os.path.abspath(__file__))
 _mod_cache = {}  # mod_name -> mod
 
