@@ -568,10 +568,19 @@ def getModNameForModDict(obj):
   :rtype: str | None
   :returns The module name or None. It will not return '__main__' in any case
   because that likely will not be the same in the unpickling environment.
+  Also see: https://stackoverflow.com/questions/56171796/
   """
-  mods = {id(mod.__dict__): modname for (modname, mod) in list(sys.modules.items()) if mod and modname != "__main__"}
-  modname = mods.get(id(obj), None)
-  return modname
+  if "__name__" not in obj:
+    return None  # this is not a module
+  mod_name = obj["__name__"]
+  if mod_name == "__main__":
+    return None
+  if mod_name not in sys.modules:
+    return None  # does not look like we have it loaded
+  mod = sys.modules[mod_name]
+  if mod.__dict__ is obj:
+    return mod_name
+  return None
 
 def getNormalDict(d):
   """
