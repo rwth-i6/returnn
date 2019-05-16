@@ -569,7 +569,7 @@ def getModNameForModDict(obj):
   :returns The module name or None. It will not return '__main__' in any case
   because that likely will not be the same in the unpickling environment.
   """
-  mods = {id(mod.__dict__): modname for (modname, mod) in sys.modules.items() if mod and modname != "__main__"}
+  mods = {id(mod.__dict__): modname for (modname, mod) in list(sys.modules.items()) if mod and modname != "__main__"}
   modname = mods.get(id(obj), None)
   return modname
 
