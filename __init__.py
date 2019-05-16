@@ -57,6 +57,10 @@ class _LazyLoader(_types.ModuleType):
   Lazily import a module, mainly to avoid pulling in large dependencies.
   Code borrowed from TensorFlow, and simplified, and extended.
   """
+  def __init__(self, name):
+    super(_LazyLoader, self).__init__(name)
+    self.__file__ = "%s/%s.py" % (_my_dir, name)
+
   def _load(self):
     name = self.__name__
     if name in _mod_cache:
@@ -66,8 +70,14 @@ class _LazyLoader(_types.ModuleType):
     import sys
     import importlib
     full_mod_name = "%s.%s" % (__package__, name)
-    del sys.modules[full_mod_name]  # make sure that we really load it
-    module = importlib.import_module("." + name, __package__)  # relative import
+    sys.modules.pop(full_mod_name, None)  # Make sure that we really load it.
+    try:
+      module = importlib.import_module("." + name, __package__)  # relative import
+    except Exception:
+      # Note: If we get any exception in the module itself (e.g. No module named 'theano' or so),
+      # just pass it on. But this can happen.
+      sys.modules[full_mod_name] = self  # Make sure that the next import again reaches us again.
+      raise
     _mod_cache[name] = module
     _mod_cache[full_mod_name] = module
     sys.modules[name] = module  # shortcut for absolute import
@@ -79,7 +89,17 @@ class _LazyLoader(_types.ModuleType):
   def __getattribute__(self, item):
     # Implement also __getattribute__ such that early access to just self.__dict__ (e.g. via vars(self)) also works.
     if item == "__dict__":
-      mod = self._load()
+      # noinspection PyBroadException
+      try:
+        mod = self._load()
+      except Exception:  # many things could happen
+        print("WARNING: %s cannot be imported, __dict__ not available" % self.__name__)
+        # In many cases, this is not so critical, because we likely just checked the dict content or so.
+        # This should be safe, as we have this registered in sys.modules, and some code just iterates
+        # through all sys.modules to check for something.
+        # Any other attribute access will lead to the real exception.
+        # We ignore this for __dict__, and just return a dummy empty dict.
+        return {}
       return getattr(mod, "__dict__")
     return super(_LazyLoader, self).__getattribute__(item)
 

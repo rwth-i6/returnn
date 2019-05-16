@@ -137,6 +137,13 @@ class TestDemos(object):
     subprocess.check_call([py, os.path.abspath("demos/demo-sprint-interface.py")], cwd="/")
     subprocess.check_call(["echo", "travis_fold:end:test_demo_sprint_interface"])
 
+  def test_returnn_as_framework_TaskSystem(self):
+    import subprocess
+    # echo via subprocess, because this stdout as well as the other will always be visible.
+    subprocess.check_call(["echo", "travis_fold:start:test_returnn_as_framework_TaskSystem"])
+    subprocess.check_call([py, os.path.abspath("tests/returnn-as-framework.py"), "test_TaskSystem_Pickler()"], cwd="/")
+    subprocess.check_call(["echo", "travis_fold:end:test_returnn_as_framework_TaskSystem"])
+
 
 if __name__ == '__main__':
   better_exchook.install()
