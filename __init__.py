@@ -73,13 +73,14 @@ class _LazyLoader(_types.ModuleType):
     sys.modules[name] = module  # shortcut for absolute import
     sys.modules[full_mod_name] = module  # shortcut for relative import
     globals()[name] = module  # shortcut the lazy loader
-    self.__dict__.update(module.__dict__)  # shortcut self.__getattr__
+    # Do not set self.__dict__, because the module itself could later update itself.
     return module
 
   def __getattribute__(self, item):
     # Implement also __getattribute__ such that early access to just self.__dict__ (e.g. via vars(self)) also works.
     if item == "__dict__":
-      self._load()
+      mod = self._load()
+      return getattr(mod, "__dict__")
     return super(_LazyLoader, self).__getattribute__(item)
 
   def __getattr__(self, item):

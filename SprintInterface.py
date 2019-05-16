@@ -433,6 +433,8 @@ def init_python_trainer(inputDim, outputDim, config, targetMode, **kwargs):
   elif action == "forward":
     assert targetMode in ["criterion-by-sprint", "forward-only"]
     targetMode = "forward"
+  elif action == "nop":
+    targetMode = None
   else:
     assert False, "unknown action: %r" % action
 
