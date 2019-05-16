@@ -495,8 +495,11 @@ def execute_main_task():
     engine.init_network_from_config(config)
     engine.compute_priors(dataset=train_data, config=config)
   elif task == 'theano_graph':
+    # noinspection PyPackageRequirements,PyUnresolvedReferences
     import theano.printing
+    # noinspection PyPackageRequirements,PyUnresolvedReferences
     import theano.compile.io
+    # noinspection PyPackageRequirements,PyUnresolvedReferences
     import theano.compile.function_module
     engine.start_epoch = 1
     engine.init_network_from_config(config)
