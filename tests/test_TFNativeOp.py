@@ -1146,7 +1146,7 @@ def _py_baum_welch(am_scores, float_idx, edges, weights, start_end_states):
   assert edges.shape == (4, n_edges)
   assert start_end_states.shape == (2, n_batch)
   from collections import defaultdict
-  from scipy.misc import logsumexp
+  from scipy.special import logsumexp
   zero_score = float("-inf")
   fwdbwd = numpy.zeros((n_time, n_batch, dim), dtype=am_scores.dtype) + zero_score
   obs_scores = numpy.zeros((n_time, n_batch), dtype=am_scores.dtype) + zero_score
