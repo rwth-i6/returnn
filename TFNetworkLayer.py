@@ -4890,7 +4890,7 @@ class CombineLayer(LayerBase):
       assert eval
       assert all([layer.output_loss is not None for layer in sources])
       self.output_loss = self._op_kind_eval(
-        sources=[layer.output_loss for layer in sources],
+        sources=[InternalLayer(name=layer.name, network=self.network, output=Data.from_tensor(layer.output_loss)) for layer in sources],
         eval_str=eval, eval_locals=eval_locals)
     if with_bias:
       with self.var_creation_scope():

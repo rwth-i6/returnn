@@ -381,6 +381,15 @@ class Data(object):
         self.get_dim_tag(_axis).declare_same_as(_dim_tag)
     self.sanity_check()
 
+  @classmethod
+  def from_tensor(cls, x):
+    """
+    :param tf.Tensor x:
+    :rtype: Data
+    """
+    assert x.get_shape().ndims == 0, "currently only scalars supported"
+    return Data(name=str(x.op.name), shape=(), batch_dim_axis=None, dtype=x.dtype.name, placeholder=x)
+
   def sanity_check(self, ignore_placeholder=False):
     """
     Performs some sanity checks on self, and raises exceptions if something is not sane.
