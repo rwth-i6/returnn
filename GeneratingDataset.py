@@ -1390,7 +1390,16 @@ class TimitDataset(CachedDataset2):
 
       for seq_tag in self._seq_tags:
         audio_filename = "%s/%s.wav" % (self._timit_dir, seq_tag)
-        audio, sample_rate = librosa.load(audio_filename, sr=None)
+        # Don't use librosa.load which internally uses audioread which would use Gstreamer as a backend,
+        # which has multiple issues:
+        # https://github.com/beetbox/audioread/issues/62
+        # https://github.com/beetbox/audioread/issues/63
+        # Instead, use PySoundFile, which is also faster. See here for discussions:
+        # https://github.com/beetbox/audioread/issues/64
+        # https://github.com/librosa/librosa/issues/681
+        # noinspection PyPackageRequirements
+        import soundfile  # pip install pysoundfile
+        audio, sample_rate = soundfile.read(audio_filename)
         with self._lock:
           self._audio_data[seq_tag] = (audio, sample_rate)
         phone_seq = self._read_phone_seq(seq_tag)
