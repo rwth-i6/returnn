@@ -4646,6 +4646,11 @@ class PositionalEncodingLayer(_ConcatInputLayer):
       signal = tf.expand_dims(signal, axis=self.output.batch_dim_axis)  # e.g. (len,batch,n_out)
     if add_to_input:
       signal += source.placeholder
+    else:
+      # tile to batch dimension explicitely, as batch_dim=1 will not be automatically unbroadcasted
+      tiles = [1] * self.output.batch_ndim
+      tiles[self.output.batch_dim_axis] = tf.shape(source.placeholder)[source.batch_dim_axis]
+      signal = tf.tile(signal, tiles)
     self.output.placeholder = signal
 
   @classmethod
