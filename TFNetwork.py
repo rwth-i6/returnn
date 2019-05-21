@@ -1203,6 +1203,7 @@ class TFNetwork(object):
     """
     Will save the model parameters to the filename.
     Note that the model parameters live inside the current TF session.
+
     :param str filename:
     :param tf.Session session:
     """
@@ -1229,8 +1230,9 @@ class TFNetwork(object):
 
   def load_params_from_file(self, filename, session):
     """
-    Will save the model parameters to the filename.
+    Will load the model parameters from the filename.
     Note that the model parameters live inside the current TF session.
+
     :param str filename:
     :param tf.Session session:
     """
@@ -1396,6 +1398,7 @@ class TFNetwork(object):
   def set_rec_step_info(self, i, end_flag=None, seq_lens=None):
     """
     Used by _SubnetworkRecCell.
+
     :param tf.Tensor i: scalar, int32, current step (time)
     :param tf.Tensor|None end_flag: (batch,), bool, says that the current sequence has ended
     :param tf.Tensor|None seq_lens: (batch,) int32, seq lens
