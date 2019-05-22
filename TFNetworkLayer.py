@@ -3345,12 +3345,14 @@ class ExpandDimsLayer(_ConcatInputLayer):
     data = self.input_data
     if isinstance(axis, int):
       data = data.copy_as_batch_major()
-    axis = self._get_axis(data=data, axis=axis)
+    axis_index = self._get_axis(data=data, axis=axis)
     from TFUtil import expand_dims_unbroadcast
-    self.output.placeholder = expand_dims_unbroadcast(data.placeholder, axis=axis, dim=dim)
+    self.output.placeholder = expand_dims_unbroadcast(data.placeholder, axis=axis_index, dim=dim)
     self.output.size_placeholder = {
-      (i if (data.get_batch_axis(i) < axis) else i + 1): v
+      (i if (data.get_batch_axis(i) < axis_index) else i + 1): v
       for (i, v) in data.size_placeholder.items()}
+    if axis.lower() in ["spatial", "time", "t"] and self.output.time_dim_axis is None:
+      self.output.time_dim_axis = axis_index
 
   @classmethod
   def _get_axis(cls, data, axis):
