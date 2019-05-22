@@ -119,11 +119,15 @@ class LearningRateControl(object):
   __repr__ = simple_obj_repr
 
   def __str__(self):
-    return (
-      "%r, epoch data: %s, error key: %s" %
-      (self, ", ".join(["%i: %s" % (epoch, self.epoch_data[epoch])
-                        for epoch in sorted(self.epoch_data.keys())]),
-       self.get_error_key(epoch=1)))
+    epochs = sorted(self.epoch_data.keys())
+    if len(epochs) > 6:
+      epoch_str = ", ".join(
+        ["%i: %s" % (epoch, self.epoch_data[epoch]) for epoch in epochs[:3]] +
+        ["..."] +
+        ["%i: %s" % (epoch, self.epoch_data[epoch]) for epoch in epochs[-3:]])
+    else:
+      epoch_str = ", ".join(["%i: %s" % (epoch, self.epoch_data[epoch]) for epoch in epochs])
+    return "%r, epoch data: %s, error key: %s" % (self, epoch_str, self.get_error_key(epoch=1))
 
   def calc_learning_rate_for_epoch(self, epoch):
     """
