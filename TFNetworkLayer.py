@@ -3938,7 +3938,7 @@ class ReduceLayer(_ConcatInputLayer):
     x_ = x.placeholder
     # Check if we should ignore some frames, e.g. via masking.
     if use_time_mask:
-      if f is tf.reduce_sum:
+      if f in (tf.reduce_sum, tf.reduce_min, tf.reduce_max):
         # For sum, the fastest and simplest way is masking.
         for axis in axes:
           if axis == x.batch_dim_axis:
@@ -3951,8 +3951,15 @@ class ReduceLayer(_ConcatInputLayer):
           mask = expand_multiple_dims(
             mask, [i for i in range(x.batch_ndim) if i not in [x.batch_dim_axis, axis]])  # e.g. (B,1,T) with axis=-1
           mask = tf.logical_and(mask, tf.ones_like(x_, dtype=mask.dtype))
-          x_ = tf.where(mask, x_, tf.zeros_like(x.placeholder), "x_masked_axis_%i" % axis)
-      elif f in (tf.reduce_min, tf.reduce_mean, tf.reduce_max):
+
+          replacement_value = {
+            tf.reduce_sum: tf.zeros_like(x.placeholder),
+            tf.reduce_min: tf.zeros_like(x.placeholder) + x.placeholder.dtype.max,
+            tf.reduce_max: tf.zeros_like(x.placeholder) + x.placeholder.dtype.min
+          }
+
+          x_ = tf.where(mask, x_, replacement_value[f], "x_masked_axis_%i" % axis)
+      elif f == tf.reduce_mean:
         # Flattening.
         if x.time_dim_axis in axes:
           assert not keep_dims, "not yet implemented otherwise"
