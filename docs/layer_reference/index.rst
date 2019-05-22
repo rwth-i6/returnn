@@ -25,17 +25,20 @@ If a loss is given, it will set ``n_out`` to the value provided by :func:`TFNetw
 
 **out_type** [:class:`dict[str]`] specifies the output shape in more details. The keys are ``dim`` and ``shape``.
 If ``output`` is specified, the values are used to check if the output matches the given dimension and shape. Otherwise, it
-is passed to :func:TFNetworkLayer.LayerBase.get_out_data_from_opts`.
+is passed to :func:`TFNetworkLayer.LayerBase.get_out_data_from_opts`.
 
 **loss** [:class:`str`] every layer can have its output connected to a loss function. For available loss functions,
 see :ref:`loss`. When specifying a loss, also ``target`` has to be set (see below). In addition, ``loss_scale`` (defaults to 1)
 and ``loss_opts`` can be specified.
 
-**target** [:class:`str`] specifies the loss target in the dataset.
+**target** [:class:`str`] specifies the loss target in the dataset. If the target is not part of extern_data,
+but another layer in the network, add 'layer:' as prefix.
 
 **loss_scale** [:class:`float`] specifies a loss scale. Before adding all losses, this factor will be used as scaling.
 
 **loss_opts** [:class:`dict`] specifies additional loss arguments. For details, see the documentation of the loss functions :ref:`loss`
+
+**loss_only_on_non_search** [:class:`bool`] specifies that the loss should not be calculated during search.
 
 **trainable** [:class:`bool`] (default ``True``) if set to ``False``, the layer parameters will not be updated during training (parameter freezing).
 

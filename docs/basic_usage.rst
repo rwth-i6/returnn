@@ -40,18 +40,25 @@ train / dev
     Or it can be a dict with an entry ``class`` where you can choose a from a variety
     of other dataset implementations, including many synthetic generated data.
 
-num_inputs / num_outputs
+extern_data (former num_outputs)
     Defines the source/target dimensions of the data. Both can be integers.
-    num_outputs can also be a dict if your dataset has other data streams.
+    extern_data can also be a dict if your dataset has other data streams.
     The standard source data is called "``data``" by default,
     and the standard target data is called "``classes``" by default.
     You can also specify whether your data is dense or sparse (i.e. it is just the index),
     which is specified by the number of dimensions, i.e. 2 (time-dim + feature-dim) or 1 (just time-dim).
+    When using no explicit definition, it is assumed that the data contains a time axis.
 
-    Example: :code:`num_outputs = {"data": [100, 2], "classes": [5000, 1]}`.
+    Example: :code:`extern_data = {"data": [100, 2], "classes": [5000, 1]}`.
     This defines an input dimension of 100, and the input is dense (2),
     and an output dimension of 5000, and the output provided by the dataset is sparse (1).
-    If "``classes``" is provided by ``num_outputs``, then you can omit ``num_inputs``.
+
+    For a more explicit definition of the shapes, you can provide a dict instead of a list or tuple. This dict may
+    contain information to create "Data" objects. For extern_data, only ``dim`` and ``shape`` are required.
+    Example: :code:`'speaker_classes': {'dim': 1172, 'shape': (), 'sparse': True}`
+    This defines a sparse input for e.g. speaker classes that do not have a time axis.
+
+    In general, all input parameters to :class:`TFUtil.Data` can be provided.
 
 batching
     The sorting variant when the mini-batches are created. E.g. ``random``.
