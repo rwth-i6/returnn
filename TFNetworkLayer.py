@@ -1797,18 +1797,19 @@ def get_concat_sources_data_template(src_layers, name=None):
   return data
 
 
-def concat_sources_with_opt_dropout(src_layers, dropout=0, dropout_noise_shape=None):
+def concat_sources_with_opt_dropout(src_layers, dropout=0, dropout_noise_shape=None, dropout_on_forward=False):
   """
   :param list[LayerBase] src_layers:
   :param float dropout: will be applied if train_flag is set
   :param tuple|list|dict|None dropout_noise_shape:
+  :param bool dropout_on_forward: apply dropout during inference
   :return: data with placeholders set
   :rtype: Data
   """
   assert src_layers, "need source layers"
   data = concat_sources(src_layers)
   network = src_layers[0].network
-  if network.train_flag is False:
+  if network.train_flag is False and not dropout_on_forward:
     # If we know that we are not training, we always disable dropout.
     dropout = 0
   if not dropout:
@@ -1825,13 +1826,20 @@ def concat_sources_with_opt_dropout(src_layers, dropout=0, dropout_noise_shape=N
   assert 0.0 < dropout < 1.0
   with _name_scope_for_concat_src_layers(src_layers, "dropout_in_train"):
     import TFUtil
-    data.placeholder = network.cond_on_train(
-      fn_train=lambda: TFUtil.dropout(
-        data.placeholder,
-        keep_prob=1 - dropout,
-        noise_shape=dropout_noise_shape,
-        seed=network.random.randint(2 ** 31)),
-      fn_eval=lambda: data.placeholder)
+    if dropout_on_forward:
+      data.placeholder = TFUtil.dropout(
+          data.placeholder,
+          keep_prob=1 - dropout,
+          noise_shape=dropout_noise_shape,
+          seed=network.random.randint(2 ** 31))
+    else:
+      data.placeholder = network.cond_on_train(
+        fn_train=lambda: TFUtil.dropout(
+          data.placeholder,
+          keep_prob=1 - dropout,
+          noise_shape=dropout_noise_shape,
+          seed=network.random.randint(2 ** 31)),
+        fn_eval=lambda: data.placeholder)
   network.concat_sources_dropout_cache[cache_key] = data.copy()
   return data
 
@@ -1845,10 +1853,11 @@ class _ConcatInputLayer(LayerBase):
   This layer also optionally can do dropout on the input.
   """
 
-  def __init__(self, dropout=0, dropout_noise_shape=None, mask=None, **kwargs):
+  def __init__(self, dropout=0, dropout_noise_shape=None, dropout_on_forward=False, mask=None, **kwargs):
     """
     :param float dropout: 0.0 means to apply no dropout. dropout will only be applied during training
     :param dict[str|tuple,int|None] dropout_noise_shape: see :func:`TFUtil.get_bc_shape`
+    :param bool dropout_on_foward: apply dropout during inference
     :param str|None mask: "dropout" or "unity" or None. this is obsolete and only here for historical reasons
     """
     super(_ConcatInputLayer, self).__init__(**kwargs)
@@ -1861,7 +1870,7 @@ class _ConcatInputLayer(LayerBase):
     self.input_data = None
     if self.sources:
       self.input_data = concat_sources_with_opt_dropout(
-        self.sources, dropout=dropout, dropout_noise_shape=dropout_noise_shape)
+        self.sources, dropout=dropout, dropout_noise_shape=dropout_noise_shape, dropout_on_forward=dropout_on_forward)
 
 
 class CopyLayer(_ConcatInputLayer):
