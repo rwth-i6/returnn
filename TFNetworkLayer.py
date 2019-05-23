@@ -2886,7 +2886,7 @@ class PadLayer(_ConcatInputLayer):
   """
   layer_class = "pad"
 
-  def __init__(self, axes, padding, value=None, mode="constant", **kwargs):
+  def __init__(self, axes, padding, value=0, mode="constant", **kwargs):
     """
     :param str|list[str] axes: e.g. "F" etc. see :func:`Dataset.get_axes_from_description`.
     :param list[(int,int)]|(int,int)|int padding: how much to pad left/right in each axis
@@ -2900,11 +2900,7 @@ class PadLayer(_ConcatInputLayer):
     for i, a in enumerate(axes):
       paddings[a] = padding[i]
     mode = mode.upper()
-    if mode == "CONSTANT":
-      assert value is None or value == 0, "not yet implemented otherwise..."
-    else:
-      assert value is None
-    self.output.placeholder = tf.pad(self.input_data.placeholder, paddings=paddings, mode=mode)
+    self.output.placeholder = tf.pad(self.input_data.placeholder, paddings=paddings, mode=mode, constant_values=value)
     self.output.size_placeholder = self.input_data.size_placeholder.copy()
     for a in axes:
       p = sum(paddings[a])
