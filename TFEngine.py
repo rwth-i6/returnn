@@ -473,6 +473,8 @@ class Runner(object):
       if self.engine.use_search_flag:
         logdir += "-search"
       logdir += "-%s" % get_utc_start_time_filename_part()
+      if self.engine.config.is_true("dry_run"):
+        logdir += "-dryrun"
       # noinspection PyProtectedMember
       if self.engine._do_save():
         log_runtime_info_to_dir(logdir, config=self.engine.config)
@@ -1333,6 +1335,8 @@ class Engine(EngineBase):
       import horovod.tensorflow as hvd
       if hvd.rank() != 0:
         return False
+    if self.config.is_true("dry_run"):
+      return False
     return True
 
   def eval_model(self, output_file=None, output_per_seq_file=None, loss_name=None,
