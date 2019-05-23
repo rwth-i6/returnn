@@ -580,10 +580,6 @@ class Runner(object):
         elapsed_time_tf += self._horovod_sync_params(local_step=step)
         duration = time.time() - start_time
         self._print_process(report_prefix=report_prefix, step=step, step_duration=duration, eval_info=eval_info)
-        if step <= 10 and writer:
-          writer.flush()
-          if PY3:
-            os.sync()
         step += 1
         if self.cancel_flag:
           raise CancelTrainingException("cancel_flag is set")
