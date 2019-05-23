@@ -1101,6 +1101,12 @@ class Engine(EngineBase):
         if l.name in old_network_params.values_dict:
           print("suspend copying of output layer: " + l.name, file=log.v2)
           old_network_params.values_dict.pop(l.name)
+    # Optionally call some callback from config.
+    # Do this before we call network.set_params_by_serialized, to allow to remove entries from old_network_params.
+    if self.config.has("init_new_network_callback"):
+      self.config.typed_value("init_new_network_callback")(
+        session=self.tf_session, new_epoch=self.epoch,
+        new_network=self.network, old_network_params=old_network_params)
     # This copy will copy the old params over and leave the rest randomly initialized.
     # This also works if the old network has just the same topology,
     # e.g. if it is the initial model from self.init_network_from_config().
