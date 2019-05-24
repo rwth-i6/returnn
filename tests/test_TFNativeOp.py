@@ -1123,6 +1123,202 @@ def test_tensorarray_grad_simple():
   assert_allclose(vdy, vdx)
 
 
+def pure_tf_chunk(x, index, chunk_size, chunk_step):
+  """
+  :param tf.Tensor x: (time,batch,dim)
+  :param tf.Tensor index:
+  :param int|tf.Tensor chunk_size:
+  :param int|tf.Tensor chunk_step:
+  :return: out, oindex.
+    out is of shape (chunk_size, n_batch * n_chunks, n_dim), oindex of shape (chunk_size, n_batch * n_chunks).
+  :rtype: (tf.Tensor,tf.Tensor)
+  """
+  from TFUtil import windowed_nd, get_shape_dim
+  assert x.get_shape().ndims == 3
+  n_time = get_shape_dim(x, 0)
+  n_batch = get_shape_dim(x, 1)
+  n_dim = get_shape_dim(x, 2)
+  n_chunks = max(n_time - chunk_size + chunk_step - 1, 0) // chunk_step + 1
+
+  x_win = windowed_nd(
+    x, window_size=chunk_size, window_left=0, time_axis=0, new_window_axis=0)  # (chunk_size,time,batch,dim)
+  out = x_win[:, ::chunk_step]  # (chunk_size,n_chunks+...,batch,dim)
+  out = out[:, :n_chunks]  # (chunk_size,n_chunks,batch,dim)
+  out = tf.transpose(out, [0, 2, 1, 3])
+  out = tf.reshape(out, [chunk_size, n_chunks * n_batch, n_dim])
+
+  i_win = windowed_nd(
+    index, window_size=chunk_size, window_left=0, time_axis=0, new_window_axis=0)  # (chunk_size,time,batch)
+  oindex = i_win[:, ::chunk_step]  # (chunk_size,n_chunks+...,batch)
+  oindex = oindex[:, :n_chunks]  # (chunk_size,n_chunks,batch)
+  oindex = tf.transpose(oindex, [0, 2, 1])
+  oindex = tf.reshape(oindex, [chunk_size, n_chunks * n_batch])
+
+  return out, oindex
+
+
+def check_chunk(x, index, chunk_size, chunk_step):
+  """
+  :param tf.Tensor x: (time,batch,dim)
+  :param tf.Tensor index:
+  :param int|tf.Tensor chunk_size:
+  :param int|tf.Tensor chunk_step:
+
+  Expected return from op:
+    out, oindex.
+    out is of shape (chunk_size, n_batch * n_chunks, n_dim), oindex of shape (chunk_size, n_batch * n_chunks).
+  """
+  x = tf.convert_to_tensor(x)
+  out1, oindex1 = pure_tf_chunk(x, index=index, chunk_size=chunk_size, chunk_step=chunk_step)
+  dout = tf.random_normal(tf.shape(out1))
+  dx1, = tf.gradients(ys=[out1], xs=[x], grad_ys=[dout])
+  out2, oindex2 = chunk(x, index=index, chunk_size=chunk_size, chunk_step=chunk_step)
+  dx2, = tf.gradients(ys=[out2], xs=[x], grad_ys=[dout])
+  index, out1, oindex1, dx1, out2, oindex2, dx2 = session.run((index, out1, oindex1, dx1, out2, oindex2, dx2))
+  time_, batch_, dim = out1.shape
+  assert out1.shape == out2.shape == (time_, batch_, dim)
+  assert oindex1.shape == oindex2.shape == (time_, batch_)
+  for t in range(time_):
+    for b in range(batch_):
+      assert_almost_equal(oindex1[t, b], oindex2[t, b])
+      if oindex1[t, b] < 0.5:
+        continue
+      assert_almost_equal(out1[t, b], out2[t, b], decimal=5)
+  time, batch, _ = dx1.shape
+  assert dx1.shape == dx2.shape == (time, batch, dim)
+  assert index.shape == (time, batch)
+  for t in range(time):
+    for b in range(batch):
+      if index[t, b] < 0.5:
+        continue
+      assert_almost_equal(dx1[t, b], dx2[t, b], decimal=5)
+
+
+def test_chunk_simple():
+  n_batch = 1
+  n_time = 17
+  n_dim = 3
+  x = tf.random_normal((n_time, n_batch, n_dim))
+  index = [[1.] * n_time] * n_batch
+  index = tf.convert_to_tensor(index)
+  index = tf.transpose(index)
+  check_chunk(x=x, index=index, chunk_size=2, chunk_step=1)
+  check_chunk(x=x, index=index, chunk_size=2, chunk_step=2)
+  check_chunk(x=x, index=index, chunk_size=4, chunk_step=2)
+  check_chunk(x=x, index=index, chunk_size=4, chunk_step=3)
+  check_chunk(x=x, index=index, chunk_size=4, chunk_step=4)
+  check_chunk(x=x, index=index, chunk_size=10, chunk_step=4)
+  check_chunk(x=x, index=index, chunk_size=20, chunk_step=4)
+
+
+def test_chunk():
+  n_batch = 3
+  n_time = 17
+  n_dim = 5
+  x = tf.random_normal((n_time, n_batch, n_dim))
+  index = [[1.] * n_time] * n_batch
+  index[-1][-1] = 0.
+  index[-1][-2] = 0.
+  index[-2][-1] = 0.
+  index = tf.convert_to_tensor(index)
+  index = tf.transpose(index)
+  check_chunk(x=x, index=index, chunk_size=4, chunk_step=2)
+  check_chunk(x=x, index=index, chunk_size=4, chunk_step=3)
+  check_chunk(x=x, index=index, chunk_size=4, chunk_step=4)
+  check_chunk(x=x, index=index, chunk_size=10, chunk_step=4)
+  check_chunk(x=x, index=index, chunk_size=20, chunk_step=4)
+
+
+def pure_tf_unchunk(x, index, chunk_size, chunk_step, n_time, n_batch):
+  """
+  :param tf.Tensor x: output e.g. from :func:`chunk`
+  :param tf.Tensor index:
+  :param int|tf.Tensor chunk_size:
+  :param int|tf.Tensor chunk_step:
+  :param tf.Tensor n_time:
+  :param tf.Tensor n_batch:
+  :return: out, oindex, ofactors
+  :rtype: (tf.Tensor,tf.Tensor,tf.Tensor)
+  """
+  from TFUtil import where_bc
+  assert x.get_shape().ndims == 3
+  n_dim = tf.shape(x)[2]
+  # Hack via tf.gradients.
+  chunk_x_n = tf.cast(tf.reshape(tf.range(n_time * n_batch), [n_time, n_batch, 1]), dtype=x.dtype)
+  chunk_idx0 = tf.ones((n_time, n_batch))
+  chunk_y0_n, _ = pure_tf_chunk(chunk_x_n, index=chunk_idx0, chunk_size=chunk_size, chunk_step=chunk_step)
+  dx0n, = tf.gradients(ys=[chunk_y0_n], xs=[chunk_x_n], grad_ys=[tf.expand_dims(index, axis=2)])
+  chunk_idx = where_bc(tf.greater_equal(tf.squeeze(dx0n, axis=2), 1.0), 1.0, 0.0)
+  chunk_y_n, _ = pure_tf_chunk(chunk_x_n, index=chunk_idx, chunk_size=chunk_size, chunk_step=chunk_step)
+  dxn, = tf.gradients(ys=[chunk_y_n], xs=[chunk_x_n], grad_ys=[tf.ones_like(chunk_y_n)])
+  factors = where_bc(tf.equal(chunk_idx, 1.), 1. / tf.squeeze(dxn, axis=2), 0.)
+  chunk_x = tf.zeros((n_time, n_batch, n_dim))
+  chunk_y, _ = pure_tf_chunk(chunk_x, index=chunk_idx, chunk_size=chunk_size, chunk_step=chunk_step)
+  dx, = tf.gradients(ys=[chunk_y], xs=[chunk_x], grad_ys=[x])
+  return dx * tf.expand_dims(factors, axis=2), chunk_idx, factors
+
+
+def check_unchunk(x, index, chunk_size, chunk_step):
+  """
+  :param tf.Tensor x: (time,batch,dim)
+  :param tf.Tensor index:
+  :param int|tf.Tensor chunk_size:
+  :param int|tf.Tensor chunk_step:
+
+  Expected return from op:
+    out, oindex.
+    out is of shape (chunk_size, n_batch * n_chunks, n_dim), oindex of shape (chunk_size, n_batch * n_chunks).
+  """
+  n_time, n_batch = tf.shape(x)[0], tf.shape(x)[1]
+  x, index = chunk(x, index, chunk_size=chunk_size, chunk_step=chunk_step)
+  x = tf.random_normal(tf.shape(x))
+  out1, oindex1, ofactors1 = pure_tf_unchunk(
+    x, index=index, chunk_size=chunk_size, chunk_step=chunk_step, n_time=n_time, n_batch=n_batch)
+  dout = tf.random_normal(tf.shape(out1))
+  dx1, = tf.gradients(ys=[out1], xs=[x], grad_ys=[dout])
+  out2, oindex2, ofactors2 = unchunk(
+    x, index=index, chunk_size=chunk_size, chunk_step=chunk_step, n_time=n_time, n_batch=n_batch)
+  dx2, = tf.gradients(ys=[out2], xs=[x], grad_ys=[dout])
+  index, out1, oindex1, ofactors1, dx1, out2, oindex2, ofactors2, dx2 = session.run(
+    (index, out1, oindex1, ofactors1, dx1, out2, oindex2, ofactors2, dx2))
+  time_, batch_, dim = out1.shape
+  assert out1.shape == out2.shape == (time_, batch_, dim)
+  assert oindex1.shape == ofactors1.shape == oindex2.shape == ofactors2.shape == (time_, batch_)
+  for t in range(time_):
+    for b in range(batch_):
+      assert_almost_equal(oindex1[t, b], oindex2[t, b])
+      if oindex1[t, b] < 0.5:
+        continue
+      assert_almost_equal(ofactors1[t, b], ofactors2[t, b])
+      assert_almost_equal(out1[t, b], out2[t, b], decimal=5)
+  time, batch, _ = dx1.shape
+  assert dx1.shape == dx2.shape == (time, batch, dim)
+  assert index.shape == (time, batch)
+  for t in range(time):
+    for b in range(batch):
+      if index[t, b] < 0.5:
+        continue
+      assert_almost_equal(dx1[t, b], dx2[t, b], decimal=5)
+
+
+def test_unchunk():
+  n_batch = 3
+  n_time = 17
+  n_dim = 5
+  x = tf.random_normal((n_time, n_batch, n_dim))
+  index = [[1.] * n_time] * n_batch
+  index[-1][-1] = 0.
+  index[-1][-2] = 0.
+  index[-2][-1] = 0.
+  index = tf.convert_to_tensor(index)
+  index = tf.transpose(index)
+  check_unchunk(x=x, index=index, chunk_size=4, chunk_step=2)
+  check_unchunk(x=x, index=index, chunk_size=4, chunk_step=3)
+  check_unchunk(x=x, index=index, chunk_size=4, chunk_step=4)
+  check_unchunk(x=x, index=index, chunk_size=10, chunk_step=4)
+  check_unchunk(x=x, index=index, chunk_size=20, chunk_step=4)
+
+
 def _py_baum_welch(am_scores, float_idx, edges, weights, start_end_states):
   """
   Pure Python Forward-backward (Baum Welch) algorithm.

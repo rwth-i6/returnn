@@ -4891,7 +4891,10 @@ def windowed_nd(source, window_size, window_left=None, window_right=None,
     if padding == "same":
       n_out_time = n_time
       if window_right is None:
-        window_right = window_size // 2
+        if window_left is not None:
+          window_right = window_size - window_left - 1
+        else:
+          window_right = window_size // 2
       if window_left is None:
         window_left = window_size - window_right - 1
       else:

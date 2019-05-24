@@ -30,7 +30,6 @@ class OpDescription(NativeOp.NativeOpBaseMixin):
     assert gen_base.in_info is not None
     assert gen_base.out_info is not None
     assert gen_base.c_fw_code is not None
-    assert gen_base.custom_grad is None  # not supported for TF currently
     return OpDescription(
       in_info=gen_base.in_info, out_info=gen_base.out_info,
       c_fw_code=gen_base.c_fw_code, c_bw_code=gen_base.c_bw_code,
@@ -518,8 +517,9 @@ class OpMaker(object):
     self.mod_cache[self.cache_key] = mod
     return mod
 
-  def make_op(self):
+  def make_op(self, grad_func=None):
     """
+    :param None|(tf.Operation,*tf.Tensor)->tf.Tensor grad_func:
     :return: op
     """
     with self.global_lock:
@@ -532,15 +532,14 @@ class OpMaker(object):
       self.op_cache[self.cache_key] = op
 
       if self.description.is_grad_defined:
+        assert not grad_func
         grad_description = self.description.grad()
         grad_op_maker = OpMaker(description=grad_description, compiler_opts=self.compiler_opts,
                                 search_for_numpy_blas=self.search_for_numpy_blas,
                                 blas_lib=self.blas_lib)
         grad_op = grad_op_maker.make_op()
 
-        from tensorflow.python.framework import ops
-
-        def grad_wrapper(fwd_op, *bwd_grads):
+        def grad_func(fwd_op, *bwd_grads):
           """
           :param tf.Operation fwd_op: for fwd_op.inputs and fwd_op.outputs
           :param list[tf.Tensor] bwd_grads:
@@ -558,11 +557,13 @@ class OpMaker(object):
           grad_outputs = self.description.make_results_of_gradient(grad_outputs)
           return grad_outputs
 
-        grad_wrapper.__name__ = grad_description.name
-        grad_wrapper.grad_op = grad_op
-        ops.RegisterGradient(self.name)(grad_wrapper)
-        op.grad_wrapper = grad_wrapper
-        op.grad_op = grad_op
+        grad_func.__name__ = grad_description.name
+        grad_func.grad_op = grad_op
+
+      if grad_func:
+        from tensorflow.python.framework import ops
+        ops.RegisterGradient(self.name)(grad_func)
+        op.grad_func = grad_func
 
     return op
 
@@ -1045,6 +1046,92 @@ class TwoDNativeLstmCell(RecSeqCellOp):
       output = last_pooling(src_mask, outComplete)
 
     return output, outComplete, final_state
+
+
+def chunk(x, index, chunk_size, chunk_step):
+  """
+  :param tf.Tensor x: (time,batch,dim)
+  :param tf.Tensor index:
+  :param int|tf.Tensor chunk_size:
+  :param int|tf.Tensor chunk_step:
+  :return: out, oindex.
+    out is of shape (chunk_size, n_batch * n_chunks, n_dim), oindex of shape (chunk_size, n_batch * n_chunks).
+  :rtype: (tf.Tensor,tf.Tensor)
+  """
+  assert x.get_shape().ndims == 3
+  x_shape = tf.shape(x)
+  n_time = x_shape[0]
+  n_batch = x_shape[1]
+  n_dim = x_shape[2]
+  n_chunks = tf.maximum(n_time - chunk_size + chunk_step - 1, 0) // chunk_step + 1
+  chunk_params = [chunk_size, chunk_step]
+  out_buffer = tf.zeros((chunk_size, n_batch * n_chunks, n_dim), dtype=x.dtype)
+  oindex_buffer = tf.zeros((chunk_size, n_batch * n_chunks), dtype=index.dtype)
+  chunk_op = OpMaker(OpDescription.from_gen_base(NativeOp.Chunking)).make_op(grad_func=_chunk_grad)
+  out, oindex = chunk_op(x, index, out_buffer, oindex_buffer, chunk_params)
+  return out, oindex
+
+
+def _chunk_grad(op, *output_grads):
+  """
+  :param tf.Operation op:
+  :param tf.Tensor output_grads:
+  :return: input_grads
+  :rtype: tuple[tf.Tensor]
+  """
+  x, index, _, _, chunk_params = op.inputs  # type: tf.Tensor
+  out_grad, _ = output_grads
+  assert x.get_shape().ndims == 3
+  x_shape = tf.shape(x)
+  n_time = x_shape[0]
+  n_batch = x_shape[1]
+  chunk_size = tf.cast(chunk_params[0], tf.int32)
+  chunk_step = tf.cast(chunk_params[1], tf.int32)
+  out, oindex = op.outputs
+  x_grad, _, factors = unchunk(
+    out_grad, index=oindex, chunk_size=chunk_size, chunk_step=chunk_step, n_time=n_time, n_batch=n_batch)
+  # We applied the factor in unchunk, but for this gradient, we actually don't want that, so undo it.
+  x_grad /= tf.expand_dims(factors, axis=2)
+  return x_grad, None, None, None, None
+
+
+def unchunk(x, index, chunk_size, chunk_step, n_time, n_batch):
+  """
+  :param tf.Tensor x: output e.g. from :func:`chunk`
+  :param tf.Tensor index:
+  :param int|tf.Tensor chunk_size:
+  :param int|tf.Tensor chunk_step:
+  :param tf.Tensor n_time:
+  :param tf.Tensor n_batch:
+  :return: out, oindex, ofactors
+  :rtype: (tf.Tensor,tf.Tensor,tf.Tensor)
+  """
+  assert x.get_shape().ndims == 3
+  n_dim = tf.shape(x)[2]
+  chunk_params = [chunk_size, chunk_step]
+  out_buffer = tf.zeros((n_time, n_batch, n_dim), dtype=x.dtype)
+  oindex_buffer = tf.zeros((n_time, n_batch), dtype=index.dtype)
+  ofactors_buffer = tf.zeros((n_time, n_batch), dtype=x.dtype)
+  unchunk_op = OpMaker(OpDescription.from_gen_base(NativeOp.UnChunking)).make_op(grad_func=_unchunk_grad)
+  out, oindex, ofactors = unchunk_op(x, index, out_buffer, oindex_buffer, ofactors_buffer, chunk_params)
+  return out, oindex, ofactors
+
+
+def _unchunk_grad(op, *output_grads):
+  """
+  :param tf.Operation op:
+  :param tf.Tensor output_grads:
+  :return: input_grads
+  :rtype: tuple[tf.Tensor]
+  """
+  x, index, _, _, _, chunk_params = op.inputs
+  out_grad, _, _ = output_grads
+  chunk_size = tf.cast(chunk_params[0], tf.int32)
+  chunk_step = tf.cast(chunk_params[1], tf.int32)
+  out, oindex, factors = op.outputs
+  out_grad *= tf.expand_dims(factors, axis=2)
+  x_grad, _ = chunk(out_grad, index=oindex, chunk_size=chunk_size, chunk_step=chunk_step)
+  return x_grad, None, None, None, None, None
 
 
 def make_fast_baum_welch_op(**kwargs):

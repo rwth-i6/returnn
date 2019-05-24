@@ -4392,6 +4392,84 @@ class PrefixInTimeLayer(CopyLayer):
     self.output.size_placeholder[self.output.time_dim_axis_excluding_batch] += repeat
 
 
+class TimeChunkingLayer(_ConcatInputLayer):
+  """
+  Performs chunking in time. See :func:`TFNativeOp.chunk`.
+  """
+  layer_class = "time_chunking"
+  recurrent = True
+
+  def __init__(self, chunk_size, chunk_step, **kwargs):
+    """
+    :param int chunk_size:
+    :param int chunk_step:
+    """
+    super(TimeChunkingLayer, self).__init__(**kwargs)
+    self.chunk_size = chunk_size
+    self.chunk_step = chunk_step
+    from TFNativeOp import chunk
+    x = self.input_data.copy_as_time_major()
+    index = tf.cast(x.get_sequence_mask(), tf.float32)
+    out, oindex = chunk(x.placeholder, index=index, chunk_step=chunk_step, chunk_size=chunk_size)
+    self.output.placeholder = out
+    self.output.size_placeholder = {0: tf.reduce_sum(tf.cast(oindex, tf.int32), axis=0)}
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :rtype: Data
+    """
+    data = get_concat_sources_data_template(sources, name="%s_output" % name).copy_as_time_major()
+    assert data.batch_shape == (None, None, data.dim)
+    return data
+
+
+class TimeUnChunkingLayer(_ConcatInputLayer):
+  """
+  Performs chunking in time. See :func:`TFNativeOp.chunk`.
+  """
+  layer_class = "time_unchunking"
+  recurrent = True
+
+  def __init__(self, chunking_layer, **kwargs):
+    """
+    :param TimeChunkingLayer chunking_layer:
+    """
+    super(TimeUnChunkingLayer, self).__init__(**kwargs)
+    assert isinstance(chunking_layer, TimeChunkingLayer)
+    chunk_size = chunking_layer.chunk_size
+    chunk_step = chunking_layer.chunk_step
+    orig_shape = tf.shape(chunking_layer.input_data.placeholder)
+    n_time = orig_shape[chunking_layer.input_data.time_dim_axis]
+    n_batch = orig_shape[chunking_layer.input_data.batch_dim_axis]
+    from TFNativeOp import unchunk
+    x = self.input_data.copy_as_time_major()
+    index = tf.cast(x.get_sequence_mask(), tf.float32)
+    out, oindex, factors = unchunk(
+      x.placeholder, index=index, chunk_step=chunk_step, chunk_size=chunk_size, n_time=n_time, n_batch=n_batch)
+    self.output.placeholder = out
+    self.output.size_placeholder = {0: chunking_layer.input_data.get_sequence_lengths()}
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    super(TimeUnChunkingLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    if "chunking_layer" in d:
+      d["chunking_layer"] = get_layer(d["chunking_layer"])
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :rtype: Data
+    """
+    data = get_concat_sources_data_template(sources, name="%s_output" % name).copy_as_time_major()
+    assert data.batch_shape == (None, None, data.dim)
+    return data
+
+
 class DotLayer(LayerBase):
   """
   This performs a dot-product of two sources.
