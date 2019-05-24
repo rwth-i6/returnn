@@ -4647,7 +4647,7 @@ class PositionalEncodingLayer(_ConcatInputLayer):
     if add_to_input:
       signal += source.placeholder
     else:
-      # tile to batch dimension explicitely, as batch_dim=1 will not be automatically unbroadcasted
+      # tile to batch dimension explicitly, as batch_dim=1 will not be automatically unbroadcasted
       tiles = [1] * self.output.batch_ndim
       tiles[self.output.batch_dim_axis] = tf.shape(source.placeholder)[source.batch_dim_axis]
       signal = tf.tile(signal, tiles)
@@ -6026,7 +6026,7 @@ class ZoneoutLSTMCell(BaseRNNCell):
 
     :param int num_units: number of hidden units
     :param float zoneout_factor_cell: cell zoneout factor
-    :param float zoneout_factor_output: output zoneout factor 
+    :param float zoneout_factor_output: output zoneout factor
     """
     zm = min(zoneout_factor_output, zoneout_factor_cell)
     zs = max(zoneout_factor_output, zoneout_factor_cell)
@@ -6043,25 +6043,25 @@ class ZoneoutLSTMCell(BaseRNNCell):
   @property
   def state_size(self):
     """
-    :rtype: int 
+    :rtype: int
     """
     return self._cell.state_size
 
   @property
   def output_size(self):
     """
-    :rtype: int 
+    :rtype: int
     """
     return self._cell.output_size
 
   def __call__(self, inputs, state, scope=None):
     """
     Apply ZoneoutLSTM on input with given state
-     
+
     :param tf.Tensor inputs: input tensor to the cell
     :param tf.nn.rnn_cell.LSTMStateTuple state: previous state of the LSTM
     :param tf.VariableScope scope: VariableScope for the created subgraph
-    :return: tuple of output and LSTMStateTuple 
+    :return: tuple of output and LSTMStateTuple
     :rtype: (tf.Tensor, tf.nn.rnn_cell.LSTMStateTuple)
     """
     # Apply vanilla LSTM
