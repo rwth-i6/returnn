@@ -4388,11 +4388,16 @@ class SelfAttentionLayer(_ConcatInputLayer):
   layer_class = "self_attention"
   recurrent = True
 
-  def __init__(self, num_heads, total_key_dim, forward_weights_init="glorot_uniform", attention_dropout=0.0,
+  def __init__(self, num_heads, total_key_dim,
+               key_shift=None,
+               forward_weights_init="glorot_uniform", attention_dropout=0.0,
                attention_left_only=False, initial_state=None, restrict_state_to_last_seq=False, **kwargs):
     """
     :param int num_heads:
-    :param int total_key_dim:
+    :param int total_key_dim: i.e. key_dim == total_key_dim // num_heads
+    :param LayerBase|None key_shift: additive term to the key. can be used for relative positional encoding.
+      Should be of shape (num_queries,num_keys,key_dim), currently without batch-dimension.
+      I.e. that should be shape (1,t,key_dim) inside rec-layer or (T,T,key_dim) outside.
     :param str forward_weights_init: see :func:`TFUtil.get_initializer`
     :param float attention_dropout:
     :param bool attention_left_only: will mask out the future. see Attention is all you need.
@@ -4448,7 +4453,7 @@ class SelfAttentionLayer(_ConcatInputLayer):
     x = tf.reshape(x, x_shape)  # (batch,time|1)|(time|1,batch) + (heads,qkv-dim//heads)
     x.set_shape(tf.TensorShape([None, None, num_heads, mat_n_out // num_heads]))
     assert self.input_data.batch_dim_axis in (0, 1)
-    # (batch,heads,time,qkv-dim//heads)
+    # (batch,heads,time|1,qkv-dim//heads)
     x = tf.transpose(x, [self.input_data.batch_dim_axis, 2, 1 - self.input_data.batch_dim_axis, 3])
     x.set_shape((None, num_heads, None, mat_n_out // num_heads))
     q, k, v = tf.split(
@@ -4477,7 +4482,23 @@ class SelfAttentionLayer(_ConcatInputLayer):
         self.rec_vars_outputs["kv_left"] = kv
       k, v = tf.split(kv, [total_key_dim // num_heads, total_value_dim // num_heads], axis=-1)
     # Dot-attention. Resulting last time dimension will be used to perform the softmax over, and will the be reduced.
-    energy = tf.matmul(q, k, transpose_b=True)  # (batch,heads,num_queries,num_keys), usually (batch,heads,time,time)
+    energy = tf.matmul(q, k, transpose_b=True)  # (batch,heads,num_queries|1,num_keys), e.g. (batch,heads,time|1,time)
+    if key_shift:
+      # We could add it to `k`, but instead, to avoid unbroadcasting, we do it as an additional matmul.
+      # key_shift expected to be of shape (num_queries|1,num_keys,key_dim).
+      key_shift_data = key_shift.output
+      assert key_shift_data.batch_dim_axis is None and key_shift_data.dim == total_key_dim // num_heads
+      # See also _relative_attention_inner here: https://github.com/tensorflow/tensor2tensor
+      q_t = tf.transpose(q, [2, 0, 1, 3])  # [num_queries|1,batch,heads,key_dim]
+      # q_t_r is [length or 1, batch_size * heads, length or depth]
+      q_t_r = tf.reshape(
+        q_t, [tf.shape(q_t)[0], batch_dim * num_heads, total_key_dim // num_heads])  # [num_queries|1,batch*heads,k-dim]
+      energy_ = tf.matmul(
+        q_t_r, key_shift_data.placeholder, transpose_b=True)  # [num_queries|1,batch*heads,num_keys]
+      energy_ = tf.reshape(
+        energy_, [tf.shape(q_t)[0], batch_dim, num_heads, tf.shape(energy)[-1]])  # [num_queries|1,batch,heads,num_keys]
+      energy_ = tf.transpose(energy_, [1, 2, 0, 3])  # [batch,heads,num_queries|1,num_keys]
+      energy += energy_
     if self.input_data.time_dim_axis is not None:
       if attention_left_only:
         # We also ignore the input data sequence length, because we expect that frames outside the seq length
@@ -4513,6 +4534,17 @@ class SelfAttentionLayer(_ConcatInputLayer):
       v = tf.squeeze(v, axis=1)
     self.output.placeholder = v
     self.output.size_placeholder = self.input_data.size_placeholder.copy()
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d:
+    :param TFNetwork.TFNetwork network:
+    :param get_layer:
+    """
+    super(SelfAttentionLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    if d.get("key_shift", None):
+      d["key_shift"] = get_layer(d["key_shift"])
 
   @classmethod
   def get_out_data_from_opts(cls, n_out, name, sources, **kwargs):
