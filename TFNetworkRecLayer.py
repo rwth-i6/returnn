@@ -4488,13 +4488,15 @@ class SelfAttentionLayer(_ConcatInputLayer):
       # key_shift expected to be of shape (num_queries|1,num_keys,key_dim).
       key_shift_data = key_shift.output
       assert key_shift_data.batch_dim_axis is None and key_shift_data.dim == total_key_dim // num_heads
+      k_ = key_shift_data.placeholder
       # See also _relative_attention_inner here: https://github.com/tensorflow/tensor2tensor
       q_t = tf.transpose(q, [2, 0, 1, 3])  # [num_queries|1,batch,heads,key_dim]
-      # q_t_r is [length or 1, batch_size * heads, length or depth]
       q_t_r = tf.reshape(
         q_t, [tf.shape(q_t)[0], batch_dim * num_heads, total_key_dim // num_heads])  # [num_queries|1,batch*heads,k-dim]
-      energy_ = tf.matmul(
-        q_t_r, key_shift_data.placeholder, transpose_b=True)  # [num_queries|1,batch*heads,num_keys]
+      with tf.control_dependencies(tf.assert_equal(
+            message="check_shape_of_key_shift:",
+            x=tf.shape(k_), y=[tf.shape(q_t)[0], tf.shape(energy)[-1], total_key_dim // num_heads])):
+        energy_ = tf.matmul(q_t_r, k_, transpose_b=True)  # [num_queries|1,batch*heads,num_keys]
       energy_ = tf.reshape(
         energy_, [tf.shape(q_t)[0], batch_dim, num_heads, tf.shape(energy)[-1]])  # [num_queries|1,batch,heads,num_keys]
       energy_ = tf.transpose(energy_, [1, 2, 0, 3])  # [batch,heads,num_queries|1,num_keys]
