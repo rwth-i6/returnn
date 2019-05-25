@@ -8,20 +8,108 @@
 #include <vector>
 #include <cmath>
 
+
 #define ARRAY_LEN(x) (sizeof(x) / sizeof(x[0]))
-
-
-#define assert_cmp(a, cmp, b) \
-    if(!((a) cmp (b))) { \
-        std::cerr << "Assertion failed: " << a << " " << #cmp << " " << b << std::endl; \
-        assert((a) cmp (b)); \
-    }
-
-
 
 #ifndef TENSORFLOW
 #define TENSORFLOW 0
 #endif
+
+
+#if CUDA
+#define DEF_KERNEL __global__
+#define DEV_FUNC __device__
+#define HOST_FUNC __host__
+#else
+#define DEF_KERNEL
+#define DEV_FUNC
+#define HOST_FUNC
+#endif
+
+
+
+#define assert_cmp(a, cmp, b) \
+    if(!((a) cmp (b))) { \
+        printf("Assertion failed: "); \
+        printf(_ns::_format_for_type(a), a); \
+        printf(" " #cmp " "); \
+        printf(_ns::_format_for_type(b), b); \
+        printf("\n"); \
+        assert((a) cmp (b)); \
+    }
+
+
+template<typename T> DEV_FUNC HOST_FUNC const char* _format_for_type(const T&) {
+    printf("ERROR: _format_for_type(%s) not implemented, aborting\n", typeid(T).name());
+    abort();
+}
+template<> DEV_FUNC HOST_FUNC const char* _format_for_type(const char&) { return "%c"; }
+template<> DEV_FUNC HOST_FUNC const char* _format_for_type(const unsigned char&) { return "%u"; }
+template<> DEV_FUNC HOST_FUNC const char* _format_for_type(const short&) { return "%hi"; }
+template<> DEV_FUNC HOST_FUNC const char* _format_for_type(const unsigned short&) { return "%hu"; }
+template<> DEV_FUNC HOST_FUNC const char* _format_for_type(const int&) { return "%i"; }
+template<> DEV_FUNC HOST_FUNC const char* _format_for_type(const unsigned int&) { return "%u"; }
+template<> DEV_FUNC HOST_FUNC const char* _format_for_type(const long&) { return "%li"; }
+template<> DEV_FUNC HOST_FUNC const char* _format_for_type(const unsigned long&) { return "%lu"; }
+template<> DEV_FUNC HOST_FUNC const char* _format_for_type(const long long&) { return "%lli"; }
+template<> DEV_FUNC HOST_FUNC const char* _format_for_type(const unsigned long long&) { return "%llu"; }
+template<> DEV_FUNC HOST_FUNC const char* _format_for_type(const float&) { return "%f"; }
+template<> DEV_FUNC HOST_FUNC const char* _format_for_type(const double&) { return "%f"; }
+template<> DEV_FUNC HOST_FUNC const char* _format_for_type(const long double&) { return "%Lf"; }
+
+
+
+#if CUDA
+#define elem_atomic_add(x, v) atomicAdd(x, v)
+#define elem_atomic_min(x, v) atomicMin(x, v)
+#define elem_atomic_cas(a, c, v) atomicCAS(a, c, v)
+
+#define int_as_float __int_as_float
+#define float_as_int __float_as_int
+
+#define INF_F CUDART_INF_F
+#define NAN_F CUDART_NAN_F
+
+#else  // no CUDA
+
+#define elem_atomic_add(x, v) (*x += v)  // ignore atomic for now...
+#define elem_atomic_min(x, v) (*x = (v < *x) ? v : *x)  // ignore atomic for now...
+
+#define elem_atomic_cas _host_elem_atomic_cas
+template<typename T>
+static inline T _host_elem_atomic_cas(T* address, T compare, T val) {
+    T old = *address;
+    if(old == compare)
+        *address = val;
+    return old;
+}
+
+#define int_as_float _host_int_as_float
+static inline float _host_int_as_float(int x) {
+    union {
+      int i;
+      float f;
+    } u;
+    u.i = x;
+    return u.f;
+}
+
+#define float_as_int _host_float_as_int
+static inline int _host_float_as_int(float x) {
+    union {
+      int i;
+      float f;
+    } u;
+    u.f = x;
+    return u.i;
+}
+
+#define INF_F int_as_float(0x7f800000)
+#define NAN_F int_as_float(0x7fffffff)
+
+#endif
+
+
 
 #if !GOOGLE_CUDA
 // GOOGLE_CUDA is defined <=> CUDA headers are included
@@ -154,6 +242,7 @@ static perftools::gputools::blas::Transpose get_transpose(char t) {
         return perftools::gputools::blas::Transpose::kNoTranspose;
     default:
         assert("invalid transpose option" || 0);
+        return perftools::gputools::blas::Transpose::kNoTranspose;
     }
 }
 #endif  // GOOGLE_CUDA
@@ -335,15 +424,6 @@ static void tf_cuda_sgemm_batched(
 
 #if CUDA
 
-#define elem_atomic_add(x, v) atomicAdd(x, v)
-#define elem_atomic_min(x, v) atomicMin(x, v)
-#define elem_atomic_cas(a, c, v) atomicCAS(a, c, v)
-
-#define int_as_float __int_as_float
-#define float_as_int __float_as_int
-
-#define INF_F CUDART_INF_F
-#define NAN_F CUDART_NAN_F
 
 #if TENSORFLOW
 // Ndarray and friends already declared above, they are same for CUDA and non-CUDA
@@ -402,8 +482,6 @@ typedef Ndarray_DIM_Type const* Ndarray_DIMS_Type;
 #define DIM_GRID 128
 #define DIM_BLOCK 512
 
-#define DEF_KERNEL __global__
-#define DEV_FUNC __device__
 // <<<DimGrid,DimBlock,ShmemSize|0,Stream|0>>>. http://docs.nvidia.com/cuda/cuda-c-programming-guide/#execution-configuration
 #define start_dev_kernel(kernel, args) \
 	(kernel<<<DIM_GRID,DIM_BLOCK,0,CUDA_CUR_STREAM>>>  args);
@@ -461,40 +539,6 @@ static void _cudaHandleError(cublasStatus_t status, const char *file, int line) 
 
 #else   // not CUDA
 
-#define elem_atomic_add(x, v) (*x += v)  // ignore atomic for now...
-#define elem_atomic_min(x, v) (*x = (v < *x) ? v : *x)  // ignore atomic for now...
-
-#define elem_atomic_cas _host_elem_atomic_cas
-template<typename T>
-static inline T _host_elem_atomic_cas(T* address, T compare, T val) {
-    T old = *address;
-    if(old == compare)
-        *address = val;
-    return old;
-}
-
-#define int_as_float _host_int_as_float
-static inline float _host_int_as_float(int x) {
-    union {
-      int i;
-      float f;
-    } u;
-    u.i = x;
-    return u.f;
-}
-
-#define float_as_int _host_float_as_int
-static inline int _host_float_as_int(float x) {
-    union {
-      int i;
-      float f;
-    } u;
-    u.f = x;
-    return u.i;
-}
-
-#define INF_F int_as_float(0x7f800000)
-#define NAN_F int_as_float(0x7fffffff)
 
 #if !TENSORFLOW
 // Numpy, see: http://docs.scipy.org/doc/numpy/reference/c-api.array.html
@@ -539,8 +583,6 @@ typedef Ndarray_DIM_Type const* Ndarray_DIMS_Type;
 #define Ndarray_memcpy(y, x, size) (memcpy(y, x, size))
 #define Ndarray_memset(s, c, size) (memset(s, c, size))
 
-#define DEF_KERNEL
-#define DEV_FUNC
 #define DEF_SHARED(type, name) assert_cmp(_shared_size, >, 0); std::vector<type> name(_shared_size / sizeof(type));
 
 
@@ -975,6 +1017,7 @@ void debug_print_shape(OpKernelContext* context, tensorflow::Tensor* tensor, con
 }
 
 #endif
+
 
 #ifdef isinf
 #undef isinf
