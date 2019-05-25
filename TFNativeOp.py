@@ -57,7 +57,7 @@ class OpDescription(NativeOp.NativeOpBaseMixin):
 
 class OpMaker(object):
   """
-  https://www.tensorflow.org/versions/master/how_tos/adding_an_op/
+  https://www.tensorflow.org/guide/extend/op
   """
   with_cuda = None  # type: None|bool
   # https://github.com/tensorflow/tensorflow/issues/6602
@@ -149,7 +149,7 @@ class OpMaker(object):
     # int n_inputs; int n_outputs;
     # Ndarray* inputs[n_inputs]; Ndarray** outputs[n_outputs];
     # Reference:
-    # https://www.tensorflow.org/extend/adding_an_op
+    # https://www.tensorflow.org/guide/extend/op
     # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/g3doc/how_tos/adding_an_op/
     # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/op_kernel.h
     # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/op_def_builder.h

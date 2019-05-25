@@ -97,7 +97,7 @@ class Device(object):
     """
     :param str device: name, "gpu*" or "cpu*"
     :param Config.Config config: config
-    :param bool blocking: False -> multiprocessing, otherwise its blocking
+    :param bool blocking: False -> multiprocessing, otherwise it's blocking
     :param int num_batches: num batches to train on this device
     :param dict update_specs
     """

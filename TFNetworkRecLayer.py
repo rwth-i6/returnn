@@ -69,7 +69,7 @@ class RecLayer(_ConcatInputLayer):
   Examples for such layers are :class:`LinearLayer`, :class:`RnnCellLayer`
   or :class:`SelfAttentionLayer` with option `attention_left_only`.
 
-  This layer can also be inside another RecLayer. In that case, it behaves similar as :class:`RnnCellLayer`.
+  This layer can also be inside another RecLayer. In that case, it behaves similar to :class:`RnnCellLayer`.
   (This support is somewhat incomplete yet. It should work for the native units such as NativeLstm.)
   """
 
@@ -140,8 +140,8 @@ class RecLayer(_ConcatInputLayer):
     #   thus with in=input_data.dim, out=output.dim,
     #   for forward weights: uniform sqrt(6. / (in + out*8)), for rec. weights: uniform sqrt(6. / (out*5)).
     # TensorFlow initializers:
-    #   https://www.tensorflow.org/api_guides/python/contrib.layers#Initializers
-    #   https://www.tensorflow.org/api_docs/python/tf/orthogonal_initializer
+    #   https://www.tensorflow.org/api_docs/python/tf/initializers
+    #   https://www.tensorflow.org/api_docs/python/tf/keras/initializers/Orthogonal
     #   https://github.com/tensorflow/tensorflow/blob/master/tensorflow/python/ops/init_ops.py
     #   xavier_initializer with uniform=True: uniform sqrt(6 / (fan_in + fan_out)),
     #     i.e. uniform sqrt(6. / (in + out*4)) for forward, sqrt(6./(out*5)) for rec.
@@ -1504,7 +1504,7 @@ class _SubnetworkRecCell(object):
       # Note: tf.while_loop() will not give us all intermediate outputs, but we want them.
       # tf.scan() would do that but tf.scan() will loop over some input sequence -
       # however, that would not work because the input sequence is not fixed initially.
-      # So, similar as tf.scan() does it, we collect all intermediate values.
+      # So, similar to tf.scan() does it, we collect all intermediate values.
 
       # In the while-loop, what we need to output is:
       # * next step counter (i)
@@ -2019,7 +2019,7 @@ class _SubnetworkRecCell(object):
         This starts at i == seq_len - 1.
         choice_beams are from the previous step, shape (batch, beam_out) -> beam idx of output,
         output is of shape (batch * beam, n_out).
-        Similar as tf.contrib.seq2seq.GatherTree.
+        Similar to tf.contrib.seq2seq.GatherTree.
 
         :param tf.Tensor i:
         :param tf.Tensor choice_beams:
@@ -2328,7 +2328,7 @@ class _SubnetworkRecCell(object):
         layer = self.input_layers_net.add_layer(name="prev:%s" % name, output=output, layer_class=InternalLayer)
         return layer
 
-    # get_layer similar as in self._construct() but simplified.
+    # get_layer similar to in self._construct() but simplified.
     def get_layer(name):
       """
       :param str name: layer name
@@ -2433,7 +2433,7 @@ class _SubnetworkRecCell(object):
         prev_layers[name] = layer
         return layer
 
-    # get_layer similar as in self._construct() but simplified.
+    # get_layer similar to in self._construct() but simplified.
     def get_layer(name):
       """
       :param str name:
@@ -5781,8 +5781,8 @@ class TwoDLSTMLayer(LayerBase):
     #   thus with in=input_data.dim, out=output.dim,
     #   for forward weights: uniform sqrt(6. / (in + out*8)), for rec. weights: uniform sqrt(6. / (out*5)).
     # TensorFlow initializers:
-    #   https://www.tensorflow.org/api_guides/python/contrib.layers#Initializers
-    #   https://www.tensorflow.org/api_docs/python/tf/orthogonal_initializer
+    #   https://www.tensorflow.org/api_docs/python/tf/initializers
+    #   https://www.tensorflow.org/api_docs/python/tf/keras/initializers/Orthogonal
     #   https://github.com/tensorflow/tensorflow/blob/master/tensorflow/python/ops/init_ops.py
     #   xavier_initializer with uniform=True: uniform sqrt(6 / (fan_in + fan_out)),
     #     i.e. uniform sqrt(6. / (in + out*4)) for forward, sqrt(6./(out*5)) for rec.

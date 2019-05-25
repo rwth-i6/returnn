@@ -7,11 +7,11 @@ and related things in TensorFlow, i.e. the TensorFlow data pipeline from the Dat
 
 Some related documents:
 
-https://www.tensorflow.org/programmers_guide/reading_data
-https://www.tensorflow.org/programmers_guide/threading_and_queues
-https://www.tensorflow.org/performance/performance_models
-https://www.tensorflow.org/api_guides/python/io_ops
-https://www.tensorflow.org/versions/r1.2/api_docs/python/tf/contrib/data
+https://www.tensorflow.org/guide/datasets
+https://www.tensorflow.org/versions/r1.12/api_guides/python/threading_and_queues
+https://www.tensorflow.org/guide/performance/overview
+https://www.tensorflow.org/guide/performance/datasets
+https://github.com/tensorflow/docs/tree/r1.10/site/en/api_docs/python/tf/contrib/data
 https://github.com/tensorflow/tensorflow/issues/4535
 https://github.com/tensorflow/tensorflow/blob/master/tensorflow/contrib/data/README.md
 https://stackoverflow.com/questions/41187745/tensorflow-how-can-i-evaluate-a-validation-data-queue

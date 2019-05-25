@@ -277,7 +277,7 @@ class NativeOp(NativeOpBase, NativeOpBaseMixin):
 
   All output variables are created automatically with the right shape
    but their content is not initialized,
-   except when its used by some input variable as the inplace output
+   except when it's used by some input variable as the inplace output
    - in that case, it is either the input variable or it has a copy of its data.
   """
 

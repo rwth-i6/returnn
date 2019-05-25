@@ -121,7 +121,7 @@ def delta_batch(source, window):
   :param theano.TensorVariable source: 3d tensor of shape (n_time, n_batch, n_dim)
   :param int|theano.Variable window: window size
   :return: tensor of shape (n_time, n_batch, window * n_dim)
-  Similar as numpy.diff. Also called delta.
+  Similar to numpy.diff. Also called delta.
   TODO with conv op
   """
   assert source.ndim == 3  # (time,batch,dim). not sure how to handle other cases

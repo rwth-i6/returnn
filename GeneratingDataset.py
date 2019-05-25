@@ -898,7 +898,7 @@ class CopyTaskDataset(GeneratingDataset):
 class _TFKerasDataset(CachedDataset2):
   """
   Wraps around any dataset from tf.contrib.keras.datasets.
-  See: https://www.tensorflow.org/versions/master/api_docs/python/tf/contrib/keras/datasets
+  See: https://www.tensorflow.org/api_docs/python/tf/keras/datasets
   TODO: Should maybe be moved to a separate file. (Only here because of tf.contrib.keras.datasets.reuters).
   """
   # TODO...
@@ -1979,9 +1979,9 @@ class CharacterTargets(Vocabulary):
 
 class BlissDataset(CachedDataset2):
   """
-  Reads in a Bliss XML corpus (similar as :class:`LmDataset`),
-  and provides the features (similar as :class:`TimitDataset`)
-  and the orthography as words, subwords or chars (similar as :class:`TranslationDataset`).
+  Reads in a Bliss XML corpus (similar to :class:`LmDataset`),
+  and provides the features (similar to :class:`TimitDataset`)
+  and the orthography as words, subwords or chars (similar to :class:`TranslationDataset`).
 
   Example:
     ./tools/dump-dataset.py "
@@ -2131,7 +2131,7 @@ class LibriSpeechCorpus(CachedDataset2):
     :param float|int|None fixed_random_subset:
       Value in [0,1] to specify the fraction, or integer >=1 which specifies number of seqs.
       If given, will use this random subset. This will be applied initially at loading time,
-      i.e. not dependent on the epoch. It will use an internally hardcoded fixed random seed, i.e. its deterministic.
+      i.e. not dependent on the epoch. It will use an internally hardcoded fixed random seed, i.e. it's deterministic.
     :param dict|None epoch_wise_filter: see init_seq_order
     """
     if not name:

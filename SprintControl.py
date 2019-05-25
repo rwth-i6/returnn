@@ -5,7 +5,7 @@ concretely for Sprint PythonControl, Sprint PythonSegmentOrder and Sprint Sprint
 For reference, in Sprint code, see:
  * src/Nn/PythonControl.cc
  * src/Tools/NnTrainer/python_control_demo.py
-This interface will behave similar as SprintExternInterface.
+This interface will behave similar to SprintExternInterface.
 See SprintErrorSignals for the other end.
 It can also be used as a PythonSegmentOrdering interface.
 It also supports SprintNnPythonLayer.

@@ -11,7 +11,7 @@ import tensorflow as tf
 returnn_dir = os.path.dirname(os.path.abspath(__file__))
 kenlm_dir = returnn_dir + "/extern/kenlm"
 
-# https://www.tensorflow.org/extend/adding_an_op
+# https://www.tensorflow.org/guide/extend/op
 # Also see TFUitl.TFArrayContainer for TF resources.
 # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/tensor.h
 # https://github.com/tensorflow/tensorflow/blob/master/tensorflow/core/framework/tensor_shape.h

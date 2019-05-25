@@ -4790,7 +4790,7 @@ class ResizeLayer(_ConcatInputLayer):
     if fill_dropout:
       from TFUtil import expand_dims_unbroadcast
       # We are going to build a mask over the axis. This mask will be shared over all seqs in the batch.
-      # Similar as in tf.nn.dropout. Build random_tensor as uniform [keep_prob, 1.0 + keep_prob).
+      # Similar to in tf.nn.dropout. Build random_tensor as uniform [keep_prob, 1.0 + keep_prob).
       random_tensor = 1.0 - fill_dropout  # keep_prop
       random_tensor += tf.random_uniform(
         [shape[axis], factor - 1], seed=self.network.random.randint(2**31))  # (old_size, factor - 1)

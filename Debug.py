@@ -262,7 +262,7 @@ def init_faulthandler(sigusr1_chain=False):
     # for SIGUSR1, and then this will not overwrite this handler.
     if install_signal_handler_if_default(signal.SIGUSR1):
       # There is already some handler or we installed our own handler now,
-      # so in any case, it's save that we chain then handler.
+      # so in any case, it's safe that we chain then handler.
       sigusr1_chain = True
     # Why not also SIGUSR2... SGE can also send this signal.
     install_signal_handler_if_default(signal.SIGUSR2)

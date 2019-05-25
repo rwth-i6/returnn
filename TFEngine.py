@@ -744,7 +744,7 @@ class Engine(EngineBase):
     else:
       opts["device_count"].setdefault("GPU", 0)
     # Note: We don't set intra_op_parallelism_threads and inter_op_parallelism_threads here anymore
-    # because it is saver to do it via setup_tf_thread_pools() which we call very early.
+    # because it is safer to do it via setup_tf_thread_pools() which we call very early.
     print("Setup tf.Session with options %r ..." % opts, file=log.v2)
     config = tf.ConfigProto(**opts)
     # config.gpu_options.allow_growth=True
@@ -2383,7 +2383,7 @@ class Engine(EngineBase):
 
 def get_global_engine():
   """
-  Similar as :func:`Config.get_global_config`.
+  Similar to :func:`Config.get_global_config`.
 
   :rtype: Engine
   """

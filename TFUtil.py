@@ -226,10 +226,10 @@ class DimensionTag(object):
 class Data(object):
   """
   This class is to describe a tensor,
-  i.e. it's shape and properties like
-  whether we should consider it as sparse data (i.e. it represents indices).
+  i.e. its shape and properties like
+  whether we should consider it sparse data (i.e. it represents indices).
   This is used in TFNetwork to describe the dataset external data
-  as well as for every layer output.
+  as well as in every layer's output.
   """
 
   size_dtype = "int32"
@@ -2633,7 +2633,7 @@ class _DeviceAttributes:
     self.physical_device_desc = physical_device_desc.decode("utf8")
 
   def __str__(self):
-    # Similar as tensorflow.core.framework.device_attributes_pb2.DeviceAttributes.
+    # Similar to tensorflow.core.framework.device_attributes_pb2.DeviceAttributes.
     return "".join([
       "%s: %r\n" % (k, getattr(self, k))
       for k in ["name", "device_type", "memory_limit_bytes", "physical_device_desc"]])
@@ -3967,8 +3967,8 @@ class CudaEnv(object):
 
 class OpCodeCompiler(NativeCodeCompiler):
   """
-  Helper class to compile TF ops on-the-fly, similar as Theano.
-  https://www.tensorflow.org/versions/master/how_tos/adding_an_op/
+  Helper class to compile TF ops on-the-fly, similar to Theano.
+  https://www.tensorflow.org/guide/extend/op
   https://github.com/tensorflow/tensorflow/blob/master/tensorflow/docs_src/extend/adding_an_op.md
   """
 
@@ -4539,8 +4539,8 @@ def cond(pred, fn1, fn2, name=None):
   This will be a branched execution, i.e. either fn1() or fn2() will be executed,
   or at least the resulting graph will be evaluated.
   If pred can is constant at the call, only the corresponding fn will be called.
-  This is similar as the TF internal _smart_cond().
-  And similar as tf.contrib.framework.smart_cond.
+  This is similar to the TF internal _smart_cond().
+  And similar to tf.contrib.framework.smart_cond.
 
   :param tf.Tensor|bool pred:
   :param ()->(tf.Tensor|list[tf.Tensor]|T) fn1:
@@ -5595,7 +5595,7 @@ def copy_op(op, op_type=None, inputs=None):
 
 def copy_tensor(x):
   """
-  Similar as tf.identity, but we ensure here that the return value has its own memory.
+  Similar to tf.identity, but we ensure here that the return value has its own memory.
   This can be relevant when you want to keep a copy of the original variable value.
   See :func:`get_variable_value_copy_before_update_ops` for usage.
 
@@ -6950,7 +6950,7 @@ def get_op_input_names(op):
   """
   num_inputs = len(op.inputs)
   if op.op_def is None:
-    # We could maybe do a lookup via the C++ API, similar as kernels_registered_for_op.
+    # We could maybe do a lookup via the C++ API, similar to kernels_registered_for_op.
     # Or we could return None.
     # But this is simpler for now.
     names = []

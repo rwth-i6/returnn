@@ -44,7 +44,7 @@ class NeuralTransducerLayer(_ConcatInputLayer):
         # Ensure encoder is time major
         encoder_outputs = self.input_data.get_placeholder_as_time_major()
 
-        # Pad encoder outputs with zeros so that it its cleanly divisible by the input_block_size
+        # Pad encoder outputs with zeros so that it is divisible by the input_block_size
         batch_size = tf.shape(encoder_outputs)[1]
         time_length_to_append = input_block_size - tf.mod(tf.shape(encoder_outputs)[0], input_block_size)
         padding_tensor = tf.zeros([time_length_to_append, batch_size, tf.shape(encoder_outputs)[2]],
@@ -220,7 +220,7 @@ class NeuralTransducerLayer(_ConcatInputLayer):
 
             # Process outputs
             with tf.device('/cpu:0'):
-              logits = outputs_final.concat()  # And now its [max_output_time, batch_size, num_outputs]
+              logits = outputs_final.concat()  # And now it's [max_output_time, batch_size, num_outputs]
 
             # For loading the model later on
             logits = tf.identity(logits, name='logits')
