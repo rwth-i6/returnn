@@ -3813,7 +3813,7 @@ class FastBaumWelchOp(NativeOpGenBase):
 
     // initialize edge buffer
     float* d_edge_buffer = reinterpret_cast<float*>(device_malloc(n_edges * n_frames * sizeof(float)));
-    if(!d_edge_buffer) return;  // error should have been set in device_malloc
+    if(!d_edge_buffer) { HANDLE_LAST_ERROR(); abort(); }  // error should have been set in device_malloc
     unsigned n_fill_blocks = (n_edges * n_frames + n_threads - 1u) / n_threads;
     start_dev_kernel2(fill_array, n_fill_blocks, n_threads, 0, (d_edge_buffer, 0.0, n_edges * n_frames));
     HANDLE_LAST_ERROR();
@@ -3829,7 +3829,7 @@ class FastBaumWelchOp(NativeOpGenBase):
     float* d_state_buffer_all = NULL;
     if (dump_alignment && batch_idx %% dump_every == 0) {
       d_state_buffer_all = reinterpret_cast<float*>(device_malloc(n_states * (n_frames + 1u) * sizeof(float)));
-      if(!d_state_buffer_all) return;  // error should have been set in device_malloc
+      if(!d_state_buffer_all) { HANDLE_LAST_ERROR(); abort(); }  // error should have been set in device_malloc
       Ndarray_memcpy(d_state_buffer_all, d_state_buffer_prev, n_states * sizeof(float));
       HANDLE_LAST_ERROR();
     }

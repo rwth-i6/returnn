@@ -15,6 +15,9 @@
 #define TENSORFLOW 0
 #endif
 
+#ifndef _ns
+#define _ns
+#endif
 
 #if CUDA
 #define DEF_KERNEL __global__
@@ -576,6 +579,9 @@ typedef Ndarray_DIM_Type const* Ndarray_DIMS_Type;
 		sgemm_(&transa, &transb, \
 			&m_, &n_, &k_, alpha, (float*) A, &lda_, (float*) B, &ldb_, beta, C, &ldc_); \
 	}
+
+static inline void* device_malloc(size_t size) { return malloc(size); }
+static inline void device_free(void* ptr) { free(ptr); }
 #endif
 
 #define HANDLE_LAST_ERROR() (0)
