@@ -560,10 +560,14 @@ class OpMaker(object):
         grad_func.__name__ = grad_description.name
         grad_func.grad_op = grad_op
 
+      else:
+        grad_op = None
+
       if grad_func:
         from tensorflow.python.framework import ops
         ops.RegisterGradient(self.name)(grad_func)
         op.grad_func = grad_func
+        op.grad_op = grad_op
 
     return op
 
