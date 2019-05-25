@@ -1138,7 +1138,11 @@ def pure_tf_chunk(x, index, chunk_size, chunk_step):
   n_time = get_shape_dim(x, 0)
   n_batch = get_shape_dim(x, 1)
   n_dim = get_shape_dim(x, 2)
-  n_chunks = max(n_time - chunk_size + chunk_step - 1, 0) // chunk_step + 1
+  if all([isinstance(x, int) for x in [n_time, chunk_size, chunk_step]]):
+    max_func = max
+  else:
+    max_func = tf.maximum
+  n_chunks = max_func(n_time - chunk_size + chunk_step - 1, 0) // chunk_step + 1
 
   x_win = windowed_nd(
     x, window_size=chunk_size, window_left=0, time_axis=0, new_window_axis=0)  # (chunk_size,time,batch,dim)

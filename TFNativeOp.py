@@ -1064,7 +1064,7 @@ def chunk(x, index, chunk_size, chunk_step):
   n_batch = x_shape[1]
   n_dim = x_shape[2]
   n_chunks = tf.maximum(n_time - chunk_size + chunk_step - 1, 0) // chunk_step + 1
-  chunk_params = [chunk_size, chunk_step]
+  chunk_params = tf.cast([chunk_size, chunk_step], tf.float32)  # that's currently the API...
   out_buffer = tf.zeros((chunk_size, n_batch * n_chunks, n_dim), dtype=x.dtype)
   oindex_buffer = tf.zeros((chunk_size, n_batch * n_chunks), dtype=index.dtype)
   chunk_op = OpMaker(OpDescription.from_gen_base(NativeOp.Chunking)).make_op(grad_func=_chunk_grad)
@@ -1108,7 +1108,7 @@ def unchunk(x, index, chunk_size, chunk_step, n_time, n_batch):
   """
   assert x.get_shape().ndims == 3
   n_dim = tf.shape(x)[2]
-  chunk_params = [chunk_size, chunk_step]
+  chunk_params = tf.cast([chunk_size, chunk_step], tf.float32)  # that's currently the API...
   out_buffer = tf.zeros((n_time, n_batch, n_dim), dtype=x.dtype)
   oindex_buffer = tf.zeros((n_time, n_batch), dtype=index.dtype)
   ofactors_buffer = tf.zeros((n_time, n_batch), dtype=x.dtype)
