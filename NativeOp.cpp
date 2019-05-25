@@ -4,6 +4,7 @@
 #include <fstream>
 #include <limits>
 #include <sstream>
+#include <typeinfo>
 #include <string.h>
 #include <vector>
 #include <cmath>
