@@ -6452,7 +6452,7 @@ class Loss(object):
       self.target_flat = None
       self.output_seq_lens = None
       self.target_seq_lens = None
-      self.loss_norm_factor = 1.0
+      self.loss_norm_factor = tf.constant(1.0)
       if self.output.have_time_axis():
         self.output_seq_lens = output.get_sequence_lengths()
         time_and_batch_dims = (self.output.time_dim_axis, self.output.batch_dim_axis)
@@ -6479,7 +6479,7 @@ class Loss(object):
           self.loss_norm_factor = (
             1.0 / tf.cast(tf.shape(self.output.placeholder)[self.output.batch_dim_axis], tf.float32))
         else:
-          self.loss_norm_factor = 1.0
+          self.loss_norm_factor = tf.constant(1.0)
         if target:
           assert not self.target.have_time_axis()
           self.target_flat = target.placeholder
