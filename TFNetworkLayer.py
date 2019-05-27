@@ -3486,7 +3486,7 @@ class ReinterpretDataLayer(_ConcatInputLayer):
     """
     :param str|list[str] switch_axes: e.g. "bt" to switch batch and time axes
     :param LayerBase|None size_base:
-    :param dict[str,int] set_axes:
+    :param dict[str,int|str] set_axes: the key is "B","T","F", value is via :func:`Data.get_axis_from_description`
     :param bool enforce_batch_major:
     :param bool enforce_time_major:
     """
@@ -3535,7 +3535,9 @@ class ReinterpretDataLayer(_ConcatInputLayer):
         return "batch_dim_axis"
       if s.upper() == "T":
         return "time_dim_axis"
-      assert s in ["batch_dim_axis", "time_dim_axis"]
+      if s.upper() == "F":
+        return "feature_dim_axis"
+      assert s in ["batch_dim_axis", "time_dim_axis", "feature_dim_axis"]
       return s
 
     if switch_axes:
@@ -3545,9 +3547,14 @@ class ReinterpretDataLayer(_ConcatInputLayer):
       for i in range(len(axes)):
         setattr(out, axes_s[i], axes[(i + 1) % len(axes)])
     if set_axes:
-      assert enforce_batch_major or enforce_time_major
       for s, i in sorted(set_axes.items()):
-        setattr(out, map_axis_name(s), i)
+        s = map_axis_name(s)
+        if isinstance(i, int):
+          assert enforce_batch_major or enforce_time_major, "%r: explicit set_axes %r" % (name, set_axes)
+        i = out.get_axis_from_description(i)
+        setattr(out, s, i)
+        if s == "feature_dim_axis":
+          out.dim = out.batch_shape[out.feature_dim_axis]
     if size_base:
       out.size_placeholder = size_base.output.size_placeholder.copy()
     if increase_sparse_dim:
