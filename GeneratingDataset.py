@@ -857,9 +857,17 @@ class StaticDataset(GeneratingDataset):
 class CopyTaskDataset(GeneratingDataset):
   """
   Copy task.
+  Input/output is exactly the same random sequence of sparse labels.
   """
 
   def __init__(self, nsymbols, minlen=0, maxlen=0, minlen_epoch_factor=0, maxlen_epoch_factor=0, **kwargs):
+    """
+    :param int nsymbols:
+    :param int minlen:
+    :param int maxlen:
+    :param float minlen_epoch_factor:
+    :param float maxlen_epoch_factor:
+    """
     # Sparse data.
     super(CopyTaskDataset, self).__init__(input_dim=nsymbols,
                                           output_dim={"data": (nsymbols, 1),
