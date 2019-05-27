@@ -2499,13 +2499,15 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
   """
   layer_class = "softmax_over_spatial"
 
-  def __init__(self, axis=None, energy_factor=None, window_start=None, window_size=None, use_time_mask=None, **kwargs):
+  def __init__(self, axis=None, energy_factor=None,
+               start=None, window_start=None, window_size=None, use_time_mask=None, **kwargs):
     """
     :param str|None axis: which axis to do the softmax over
     :param float|None energy_factor: the energy will be scaled by this factor.
       This is like a temperature for the softmax.
       In Attention-is-all-you-need, this is set to 1/sqrt(base_ctx.dim).
-    :param LayerBase|None window_start: Tensor of shape (B,1) indicating the window start
+    :param LayerBase|None start: Tensor of shape (B,dim) indicating the start frame
+    :param LayerBase|None window_start: Tensor of shape (B,dim) indicating the window start
     :param int|None window_size:
     :param bool use_time_mask: if True, assumes dyn seq len, and use it for masking.
       By default, if dyn seq len exists, it uses it.
@@ -2525,11 +2527,20 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
     # if the time-axis is static, we can skip the masking
     if use_time_mask is None:
       use_time_mask = energy_data.is_axis_dynamic(axis)
+    if start or window_start or window_size is not None:
+      assert use_time_mask
     if use_time_mask:
       assert energy_data.is_axis_dynamic(axis), "%s: use_time_mask True, dyn time axis expected" % self
       energy_mask = energy_data.get_sequence_mask_broadcast(axis=axis)
-      if window_start is not None:
-        assert window_size is not None, "set window_size explicitly"
+      if start:
+        idxs_shape = [1] * energy_data.batch_ndim  # type: typing.List[typing.Union[int,tf.Tensor]]
+        idxs_shape[axis] = energy_shape[axis]
+        idxs = tf.reshape(tf.range(energy_shape[axis]), idxs_shape)
+        start_data = start.output.copy_compatible_to(
+          energy_data, check_sparse=False, check_dtype=False)  # adds dummy time-dim
+        energy_mask = tf.logical_and(energy_mask, tf.greater_equal(start_data.placeholder, idxs))
+      if window_start:
+        assert window_size, "set window_size explicitly"
         from TFUtil import nd_indices, expand_dims_unbroadcast
         # handle edge cases correctly:
         # 1. if the energy time-dim is less than `window_size`, we adjust the window size.
@@ -2591,6 +2602,8 @@ class SoftmaxOverSpatialLayer(_ConcatInputLayer):
     :param get_layer:
     """
     super(SoftmaxOverSpatialLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    if d.get("start", None):
+      d["start"] = get_layer(d["start"])
     if d.get("window_start", None):
       d["window_start"] = get_layer(d["window_start"])
 
