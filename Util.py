@@ -67,6 +67,17 @@ class NotSpecified(object):
   def __repr__(self):
     return "<NotSpecified>"
 
+  @classmethod
+  def resolve(cls, value, default):
+    """
+    :param T|NotSpecified|type[NotSpecified] value:
+    :param U default:
+    :rtype: T|U
+    """
+    if value is NotSpecified:
+      return default
+    return value
+
 
 class OptionalNotImplementedError(NotImplementedError):
   """
