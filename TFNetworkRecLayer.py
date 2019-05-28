@@ -2621,7 +2621,9 @@ class _TemplateLayer(LayerBase):
     # TODO: extend if this is a subnet or whatever
     if not self.network.search_flag:
       return False
-    return issubclass(self.layer_class_type, ChoiceLayer)
+    if issubclass(self.layer_class_type, ChoiceLayer):
+      return NotSpecified.resolve(self.kwargs.get("search", NotSpecified), self.network.search_flag)
+    return False
 
   def _get_search_choices_beam_size(self):
     """
@@ -3300,34 +3302,46 @@ class ChoiceLayer(LayerBase):
 
   _debug_out = None  # type: typing.Optional[list]
 
-  def __init__(self, beam_size, input_type="prob", explicit_search_source=None, length_normalization=True,
+  def __init__(self, beam_size,
+               search=NotSpecified,
+               input_type="prob",
                prob_scale=1.0, base_beam_score_scale=1.0, random_sample_scale=0.0,
-               source_beam_sizes=None, scheduled_sampling=False, cheating=False, **kwargs):
+               length_normalization=True,
+               source_beam_sizes=None, scheduled_sampling=False, cheating=False,
+               explicit_search_source=None,
+               **kwargs):
     """
     :param int beam_size: the outgoing beam size. i.e. our output will be (batch * beam_size, ...)
+    :param NotSpecified|bool search: whether to perform search, or use the ground truth (`target` option).
+      If not specified, it will depend on `network.search_flag`.
     :param str input_type: "prob" or "log_prob", whether the input is in probability space, log-space, etc.
       or "regression", if it is a prediction of the data as-is. If there are several inputs, same format
       for all is assumed.
-    :param LayerBase|None explicit_search_source: will mark it as an additional dependency
-    :param bool length_normalization: evaluates score_t/len in search
     :param float prob_scale: factor for prob (score in +log space from source)
     :param float base_beam_score_scale: factor for beam base score (i.e. prev prob scores)
     :param float random_sample_scale: if >0, will add Gumbel scores. you might want to set base_beam_score_scale=0
+    :param bool length_normalization: evaluates score_t/len in search
     :param list[int]|None source_beam_sizes: If there are several sources, they are pruned with these beam sizes
        before combination. If None, 'beam_size' is used for all sources. Has to have same length as number of sources.
     :param dict|None scheduled_sampling:
     :param bool cheating: if True, will always add the true target in the beam
+    :param LayerBase|None explicit_search_source: will mark it as an additional dependency
     """
     super(ChoiceLayer, self).__init__(**kwargs)
     from Util import CollectionReadCheckCovered
     from TFUtil import optional_add, optional_mul
+    search = NotSpecified.resolve(search, default=self.network.search_flag)
+    assert isinstance(search, bool)
+    if search:
+      assert self.network.search_flag, "%s: cannot use search if network.search_flag disabled" % self
+    self.search_flag = search
     self.input_type = input_type
     self.explicit_search_source = explicit_search_source
     self.scheduled_sampling = CollectionReadCheckCovered.from_bool_or_dict(scheduled_sampling)
     # We assume log-softmax here, inside the rec layer.
     assert self.target and self.targets
 
-    if self.network.search_flag:
+    if self.search_flag:
       if cheating:
         print("%s: cheating enabled, i.e. we add the ground truth to the beam" % self, file=log.v2)
       assert len(self.targets) == len(self.sources), "Provide a target for each of the sources."
@@ -3596,7 +3610,6 @@ class ChoiceLayer(LayerBase):
     :return: combined scores, dim of combined scores, labels that survived pruning
     :rtype: (tf.Tensor, int, list[tf.Tensor])
     """
-
     # Calculate the product of beam_sizes. This will be the length (i.e. 'dim') of combined_pruned_scores.
     combined_scores_dim = 1
 
@@ -3615,7 +3628,7 @@ class ChoiceLayer(LayerBase):
         combined_scores_dim *= beam_size
 
       # all possible combinations of scores from source 0 and 1 via broadcasting
-      # TODO: generalize to more than two sources
+      assert len(pruned_scores) == 2, "not yet implemented otherwise..."
       scores_0 = tf.expand_dims(pruned_scores[0], -1)  # (batch, beam_sizes[0], 1)
       scores_1 = tf.expand_dims(pruned_scores[1], -2)  # (batch, 1, beam_sizes[1])
       combined_pruned_scores = scores_0 + scores_1  # (batch, beam_sizes[0], beam_sizes[1])
@@ -3639,8 +3652,7 @@ class ChoiceLayer(LayerBase):
     :return: final labels for all sources
     :rtype: list[tf.Tensor]
     """
-    # TODO: generalize to more than two sources
-
+    assert len(pruned_labels) == 2, "not yet implemented otherwise..."
     # We can recover the ids for the unflattened shape by using integer division and modulo operations.
     # (similar to numpy.unravel_index())
     with tf.name_scope("get_combined_labels"):
@@ -3648,12 +3660,8 @@ class ChoiceLayer(LayerBase):
       ids_1 = tf.floormod(combined_ids, beam_sizes[1])
 
       # Now get the final target labels by indexing the labels.
-      # TODO probably we cannot use tf.batch_gather...
-      # noinspection PyUnresolvedReferences
       labels_0 = tf.squeeze(tf.batch_gather(pruned_labels[0], tf.expand_dims(ids_0, axis=-1)), axis=-1)
-      # noinspection PyUnresolvedReferences
       labels_1 = tf.squeeze(tf.batch_gather(pruned_labels[1], tf.expand_dims(ids_1, axis=-1)), axis=-1)
-
       return [labels_0, labels_1]
 
   @classmethod
@@ -3665,30 +3673,42 @@ class ChoiceLayer(LayerBase):
     """
     if isinstance(d["target"], str):
       d["target"] = [d["target"]]
-    if not network.search_flag and not d.get("scheduled_sampling"):
+    search = NotSpecified.resolve(d.get("search", NotSpecified), network.search_flag)
+    if not search and not d.get("scheduled_sampling"):
       # In the dependency graph, we don't want it.
       # This can enable some optimizations in the RecLayer.
       # We do it here because we should know about the deps early in the template creation in RecLayer.
       d["from"] = []
     if d.get("explicit_search_source"):
-      d["explicit_search_source"] = get_layer(d["explicit_search_source"]) if network.search_flag else None
+      d["explicit_search_source"] = get_layer(d["explicit_search_source"]) if search else None
     super(ChoiceLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
 
   @classmethod
-  def get_out_data_from_opts(cls, target, network, beam_size, **kwargs):
+  def get_out_data_from_opts(cls, name, sources, target, network, beam_size, search=NotSpecified, **kwargs):
     """
+    :param str name:
+    :param list[LayerBase] sources:
     :param str target:
     :param TFNetwork.TFNetwork network:
     :param int beam_size:
+    :param NotSpecified|bool search:
     :rtype: Data
     """
-    first_target = target[0] if isinstance(target, list) else target
-    out_data = cls._static_get_target_value(target=first_target, network=network, mark_data_key_as_used=False).copy()
-
-    out_data.available_for_inference = True  # in inference, we would do search
-    if network.search_flag:
+    search = NotSpecified.resolve(search, network.search_flag)
+    target = target[0] if isinstance(target, list) else target  # only the first matters here
+    if target:
+      out_data = cls._static_get_target_value(target=target, network=network, mark_data_key_as_used=False).copy()
+      out_data.available_for_inference = True  # in inference, we would do search
+    else:  # no target. i.e. we must do search
+      assert search, "%s %r: no target given, must do search" % (cls.__name__, name)
+      # Output will be the sparse version of the input.
+      out_data = sources[0].output.copy_template().copy_as_batch_major()
+      shape = list(out_data.batch_shape)
+      del shape[out_data.feature_dim_axis]
+      del shape[out_data.batch_dim_axis]
+      out_data = Data(name="%s_output" % name, shape=shape, sparse=True, dim=out_data.dim)
+    if search:
       out_data.beam_size = beam_size
-
     return out_data
 
   def get_sub_layer(self, layer_name):
@@ -3701,13 +3721,11 @@ class ChoiceLayer(LayerBase):
     :return: internal layer that outputs labels for the target corresponding to layer_name
     :rtype: InternalLayer
     """
+    from TFNetworkLayer import InternalLayer
     assert layer_name.startswith("out_")
     index = int(layer_name[len("out_"):])
-    full_layer_name = self.name + '/' + layer_name
-
-    from TFNetworkLayer import InternalLayer
     sub_layer = InternalLayer(
-      name=full_layer_name, network=self.network, output=self.output_list[index], sources=[self])
+      name="%s/%s" % (self.name, layer_name), network=self.network, output=self.output_list[index], sources=[self])
     return sub_layer
 
   @classmethod
@@ -3733,13 +3751,15 @@ class ChoiceLayer(LayerBase):
 
   # noinspection PyMethodOverriding
   @classmethod
-  def get_rec_initial_extra_outputs(cls, network, beam_size, **kwargs):
+  def get_rec_initial_extra_outputs(cls, network, beam_size, search=NotSpecified, **kwargs):
     """
     :param TFNetwork.TFNetwork network:
     :param int beam_size:
+    :param NotSpecified|bool search:
     :rtype: dict[str,tf.Tensor]
     """
-    if not network.search_flag:
+    search = NotSpecified.resolve(search, network.search_flag)
+    if not search:
       return {}
     batch_dim = network.get_data_batch_dim()
     # Note: Use beam_size 1 for the initial as there are no competing hypotheses yet.
