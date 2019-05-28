@@ -1452,8 +1452,8 @@ class _SubnetworkRecCell(object):
         assert "end" in self.layer_data_templates, "length not defined, provide 'end' layer"
         max_seq_len = None
         have_known_seq_len = False
-      # if not self.input_data and self.network.search_flag:
-      #   assert not have_known_seq_len  # at least for the moment
+      if not rec_layer.input_data and rec_layer.network.search_flag:
+        assert not have_known_seq_len  # at least for the moment
 
       common_data_len = None  # used to check whether all extern data have same length
       used_keys = self.net.used_data_keys.copy()
