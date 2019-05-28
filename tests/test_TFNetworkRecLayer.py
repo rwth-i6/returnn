@@ -3061,11 +3061,13 @@ def test_BlocksparseLSTM_load_params_from_native_lstm():
         print("source layer:", src_layer)
         with tf.name_scope("nativelstm"):
           layer1 = RecLayer(
-            name='nativelstm', network=net, output=Data("out", shape=(None, num_outputs)), sources=[src_layer],
+            name='nativelstm', network=net,
+            output=Data("out", shape=(None, num_outputs), time_dim_axis=0, batch_dim_axis=1), sources=[src_layer],
             unit='NativeLSTM2')
         with tf.name_scope("blocksparselstm"):
           layer2 = RecLayer(
-            name='blocksparselstm', network=net, output=Data("out", shape=(None, num_outputs_sparse)),
+            name='blocksparselstm', network=net,
+            output=Data("out", shape=(None, num_outputs_sparse), time_dim_axis=0, batch_dim_axis=1),
             sources=[src_layer],
             unit='BlocksparseLSTM',
             unit_opts={'seed': 5, 'connectivity': 1, 'connectivity_dense': 2, 'layer_norm': False})
