@@ -2000,7 +2000,7 @@ def test_rec_layer_search_select_src():
   loop_out_layer = loop_net.layers["output"]
   assert isinstance(loop_out_layer, ChoiceLayer)
   assert isinstance(loop_out_layer.search_choices, SearchChoices)
-  all_src_choices = loop_out_layer.search_choices.get_all_src_choices()
+  all_src_choices = loop_out_layer.search_choices.get_src_choices_seq()
   assert len(all_src_choices) == 2
   cur_out_choice, prev_out_choice = all_src_choices
   assert isinstance(cur_out_choice, SearchChoices)
@@ -3179,7 +3179,7 @@ def test_rec_layer_search_select_src_reuse_layer():
     loop_out_layer = loop_net.layers["output"]
     assert isinstance(loop_out_layer, ChoiceLayer)
     assert isinstance(loop_out_layer.search_choices, SearchChoices)
-    all_src_choices = loop_out_layer.search_choices.get_all_src_choices()
+    all_src_choices = loop_out_layer.search_choices.get_src_choices_seq()
     assert len(all_src_choices) == 2
     cur_out_choice, prev_out_choice = all_src_choices
     assert isinstance(cur_out_choice, SearchChoices)

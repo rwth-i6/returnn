@@ -358,7 +358,7 @@ class TFNetwork(object):
 
   def get_absolute_name_scope_prefix(self):
     """
-    :return: scope, always with "/" at the end, or ""
+    :return: TF scope name, always with "/" at the end, or ""
     :rtype: str
     """
     if self.parent_layer:
@@ -367,6 +367,19 @@ class TFNetwork(object):
       return self.parent_net.get_absolute_name_scope_prefix()
     if self.extra_parent_net:
       return self.extra_parent_net.get_absolute_name_scope_prefix()
+    return ""
+
+  def get_absolute_name_prefix(self):
+    """
+    :return: name, always with "/" at the end, or ""
+    :rtype: str
+    """
+    if self.parent_layer:
+      return self.parent_layer.get_absolute_name() + "/"
+    if self.parent_net:
+      return self.parent_net.get_absolute_name_prefix()
+    if self.extra_parent_net:
+      return self.extra_parent_net.get_absolute_name_prefix()
     return ""
 
   def construct_from(self, list_or_dict):
@@ -1296,7 +1309,7 @@ class TFNetwork(object):
   def get_search_choices(self, sources=None, src=None, base_search_choice=None, _visited=None):
     """
     Recursively searches through all sources,
-    and if there is a ChoiceLayer / any layer with search_choices, returns it.
+    and if there is a :class:`ChoiceLayer` / any layer with search_choices, returns it.
     Could also go to the parent network.
     If there are multiple, it assumes they are on the same search-sequence in the search-tree
     and it will return the last one.
@@ -1304,36 +1317,120 @@ class TFNetwork(object):
     :param LayerBase|None src:
     :param LayerBase|None base_search_choice:
     :param list[LayerBase]|None sources:
-    :param set[LayerBase]|None _visited: keep track about visited layers in case there are circular deps
+    :param dict[LayerBase]|None _visited: keep track about visited layers in case there are circular deps
     :return: (direct or indirect) source LayerBase which has search_choices, or None
     :rtype: LayerBase|None
     """
+    from TFNetworkLayer import SearchChoices
+    from functools import cmp_to_key
+    if _visited is None:
+      _visited = {}  # type: typing.Dict[LayerBase,typing.List[LayerBase]]
+    layers = self._get_all_search_choices(
+      sources=sources, src=src, base_search_choice=base_search_choice, _visited=_visited)
+    if not layers:
+      return None
+
+    def full_trace_for_layer(layer, _layer_trace=None):
+      """
+      :param LayerBase layer: with search choices
+      :param list[LayerBase]|None _layer_trace:
+      :return: layers with search choices
+      :rtype: list[LayerBase]
+      """
+      assert isinstance(layer, LayerBase) and isinstance(layer.search_choices, SearchChoices)
+      if _layer_trace is None:
+        _layer_trace = []  # type: typing.List[LayerBase]
+      if layer not in _layer_trace:
+        _layer_trace.append(layer)
+      else:
+        return _layer_trace
+      if layer not in _visited:
+        self._get_all_search_choices(base_search_choice=layer, _visited=_visited)
+      for dep in _visited[layer]:
+        full_trace_for_layer(dep, _layer_trace=_layer_trace)
+      return _layer_trace
+
+    def compare_layer(l1, l2):
+      """
+      Compares two layers with search_choices, to sort them.
+      See also: :func:`SearchChoices.compare`.
+
+      :param LayerBase l1:
+      :param LayerBase l2:
+      :return: 0 if equal, -1 if l1 <= l2, else 1 if l1 >= l2
+      :rtype: int
+      """
+      assert isinstance(l1, LayerBase) and isinstance(l1.search_choices, SearchChoices)
+      assert isinstance(l2, LayerBase) and isinstance(l2.search_choices, SearchChoices)
+      if l1 is l2:
+        return 0
+      l1trace_ = full_trace_for_layer(l1)
+      l2trace_ = full_trace_for_layer(l2)
+      l1trace, l2trace = set(l1trace_), set(l2trace_)
+      if l1trace.issubset(l2trace) and not l2trace.issubset(l1trace):
+        return -1
+      if l2trace.issubset(l1trace) and not l1trace.issubset(l2trace):
+        return 1
+      from pprint import pformat
+      relevant_map = {}
+      for key, values in _visited.items():
+        relevant_map[key.get_absolute_name()] = [value.get_absolute_name() for value in values]
+      raise Exception(
+        ("Search choices cannot be compared.\n"
+         "layer 1 %r\n  choice trace %r\n"
+         "layer 2 %r\n  choice trace %r\n"
+         "Full dependency map:\n%s") % (l1, l1trace_, l2, l2trace_, pformat(relevant_map)))
+
+    layers = sorted(layers, key=cmp_to_key(compare_layer))
+    return layers[-1]
+
+  def _get_all_search_choices(self, sources=None, src=None, base_search_choice=None, _visited=None):
+    """
+    Recursively searches through all sources,
+    and if there is a :class:`ChoiceLayer` / any layer with search_choices, returns it.
+    Could also go to the parent network.
+    If there are multiple, it assumes they are on the same search-sequence in the search-tree
+    and it will return the last one.
+
+    :param LayerBase|None src:
+    :param LayerBase|None base_search_choice:
+    :param list[LayerBase]|None sources:
+    :param dict[LayerBase,list[LayerBase]]|None _visited: tracks visited layers in case there are circular deps
+    :return: (direct or indirect) source LayerBase which has search_choices, or None
+    :rtype: list[LayerBase]
+    """
+    if _visited is None:
+      _visited = {}  # type: typing.Dict[LayerBase,typing.List[LayerBase]]
     if src is not None:
       assert isinstance(src, LayerBase)
       if src.search_choices:
         if src.search_choices.is_decided:
-          return None
-        return src
+          return []
+        return [src]
       assert base_search_choice is None
       base_search_choice = src
     if base_search_choice is not None:
+      if base_search_choice in _visited:
+        return _visited[base_search_choice]
+      else:
+        _visited[base_search_choice] = []  # we visit it now
       assert sources is None
       sources = base_search_choice.get_dep_layers()
-    if _visited is None:
-      _visited = set()
     assert sources is not None
-    sources = [src for src in sources if src not in _visited]
-    _visited.update(sources)
-    layers = [self.get_search_choices(src=src, _visited=_visited) for src in sources]
-    layers = [layer for layer in layers if layer is not None]  # type: typing.List[LayerBase]
+    layers = []  # type: typing.List[LayerBase]
+    for src_ in sources:
+      src_choice_layers = self._get_all_search_choices(src=src_, _visited=_visited)
+      for layer in src_choice_layers:
+        if base_search_choice and layer not in _visited[base_search_choice]:
+          _visited[base_search_choice].append(layer)
+        if layer not in layers:
+          layers.append(layer)
     if not layers:
       if self.parent_layer:
-        return self.parent_layer.network.get_search_choices(sources=self.parent_layer.get_dep_layers())
-      return None
-    from TFNetworkLayer import SearchChoices
-    from functools import cmp_to_key
-    layers = sorted(layers, key=cmp_to_key(lambda l1, l2: SearchChoices.compare(l1.search_choices, l2.search_choices)))
-    return layers[-1]
+        # noinspection PyProtectedMember
+        return self.parent_layer.network._get_all_search_choices(sources=self.parent_layer.get_dep_layers())
+      return []
+    return layers
 
   def debug_search_choices(self, base_search_choice):
     """
@@ -1345,16 +1442,13 @@ class TFNetwork(object):
     for _, layer in sorted(self.layers.items()):
       print("    layer:", layer)
 
-    class Visitor(set):
+    class Visitor(dict):
       """
-      Wraps around `set`, to catch any `update` calls.
+      Wraps around `dict`, to catch any `__setitem__` calls.
       """
-      def update(self, others):
-        """
-        :param set others:
-        """
-        print("  visit: %r" % (others,))
-        super(Visitor, self).update(others)
+      def __setitem__(self, key, value):
+        print("  visit: %r" % (key,))
+        super(Visitor, self).__setitem__(key, value)
 
     self.get_search_choices(base_search_choice=base_search_choice, _visited=Visitor())
 

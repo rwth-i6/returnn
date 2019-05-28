@@ -2063,6 +2063,7 @@ class _SubnetworkRecCell(object):
             assert src_choice_layer is not None  # must be one, e.g. from prev time frame
             if isinstance(src_choice_layer, _TemplateLayer):
               assert src_choice_layer.is_prev_time_frame
+              assert src_choice_layer.name == "prev:%s" % output_choice_base.name
               return (
                 i - 1,
                 src_choice_beams,

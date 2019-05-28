@@ -537,6 +537,13 @@ class LayerBase(object):
     """
     return self.get_base_absolute_name_scope_prefix()
 
+  def get_absolute_name(self):
+    """
+    :return: e.g. "output" or "subnet/output"
+    :rtype: str
+    """
+    return self.network.get_absolute_name_prefix() + self.name
+
   def is_output_layer(self):
     """
     Some code differs between an output layer and other layers.
@@ -1563,7 +1570,7 @@ class SearchChoices(object):
     self.beam_scores = scores
     self.owner.rec_vars_outputs["choice_scores"] = scores
 
-  def get_all_src_choices(self):
+  def get_src_choices_seq(self):
     """
     :return: all SearchChoices we depend on up to the root, including self
     :rtype: list[SearchChoices]
@@ -1601,8 +1608,8 @@ class SearchChoices(object):
       return -1
     if other is None:
       return 1
-    self_src_choices = self.get_all_src_choices()
-    other_src_choices = other.get_all_src_choices()
+    self_src_choices = self.get_src_choices_seq()
+    other_src_choices = other.get_src_choices_seq()
     assert len(self_src_choices) != len(other_src_choices)
     if len(self_src_choices) < len(other_src_choices):
       res = -1
@@ -1997,7 +2004,7 @@ class SelectSearchSourcesLayer(InternalLayer):
       pass
     else:
       assert search_choices and search_choices != src_search_choices
-      search_choices_seq = search_choices.get_all_src_choices()
+      search_choices_seq = search_choices.get_src_choices_seq()
       assert src_search_choices in search_choices_seq, "no common search base"
       search_choices_seq = search_choices_seq[:search_choices_seq.index(src_search_choices)]
       assert src_search_choices not in search_choices_seq
