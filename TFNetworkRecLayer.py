@@ -2177,9 +2177,8 @@ class _SubnetworkRecCell(object):
       # Special case: end-layer, which is added if the seq-len is unknown, cannot be moved out.
       if layer.name == "end":
         return False
-      if self.parent_net.search_flag:
-        if issubclass(layer.layer_class_type, ChoiceLayer):
-          return False  # need to perform the search inside the loop currently
+      if self.parent_net.search_flag and layer.search_choices:
+        return False  # need to perform the search inside the loop currently
       # layer.output is used by other layers?
       for other_layer in layers_in_loop:
         if layer in other_layer.get_dep_layers():
@@ -2211,9 +2210,8 @@ class _SubnetworkRecCell(object):
       :rtype: bool
       """
       assert isinstance(layer, _TemplateLayer)
-      if self.parent_net.search_flag:
-        if issubclass(layer.layer_class_type, ChoiceLayer):
-          return False  # need to perform the search inside the loop currently
+      if self.parent_net.search_flag and layer.search_choices:
+        return False  # need to perform the search inside the loop currently
       layer_deps = layer.get_dep_layers()
       # We depend on other layers from this sub-network?
       for other_layer in layers_in_loop:
