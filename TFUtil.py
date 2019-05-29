@@ -767,7 +767,7 @@ class Data(object):
     v.sanity_check()
     return v
 
-  def copy_compatible_to(self, data, unbroadcast=False, data_dyn_shape=None):
+  def copy_compatible_to(self, data, unbroadcast=False, data_dyn_shape=None, check_sparse=True, check_dtype=True):
     """
     :param Data data: other data which the returned tensor should be compatible to
       It would add any missing axes with a dim 1 axis for automatic broadcasting.
@@ -775,13 +775,16 @@ class Data(object):
     :param bool unbroadcast: if True, all broadcast axes (axes with dim 1) will be tiled such that they match
     :param tf.Tensor|list[tf.Tensor|int]|tuple[tf.Tensor|int]|None data_dyn_shape:
       For unbroadcast, if we do not want to rely on tf.shape(data.placeholder).
+    :param bool check_sparse:
+    :param bool check_dtype:
     :returns: Data, might add broadcast dimensions
     :rtype: Data
     """
-    assert self.sparse == data.sparse
-    assert self.dtype == data.dtype
+    assert not check_sparse or self.sparse == data.sparse
+    assert not check_dtype or self.dtype == data.dtype
     _, dim_tags = DimensionTag.get_all_dimension_tags([self, data], allow_same_feature_dim=True)
     v = self.copy()
+    v.sparse = data.sparse  # we will later reset it. this is to better count the axes (feature and spatial)
     if data.batch_dim_axis is not None and v.batch_dim_axis is None:
       v = v.copy_add_batch_dim(0)  # later we might move the axis
     # Add feature dim, if needed.
@@ -823,6 +826,9 @@ class Data(object):
       # Now we have both equal.
       break
     assert data.get_spatial_batch_axes() == v.get_spatial_batch_axes()
+    if self.sparse and v.feature_dim_axis is not None:  # we probably added it now
+      v.feature_dim_axis = NotSpecified
+    v.sparse = self.sparse  # reset
     if unbroadcast and any([d1 != 1 and d2 == 1 for (d1, d2) in zip(data.batch_shape, v.batch_shape)]):
       v.size_placeholder.update(data.size_placeholder or {})
       if v.placeholder is not None:
