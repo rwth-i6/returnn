@@ -7379,6 +7379,21 @@ class MeanSquaredError(Loss):
       return out
 
 
+class MeanL1Loss(Loss):
+  """
+  Like MSE loss, but with absolute difference
+  """
+  class_name = "mean_l1"
+
+  def get_value(self):
+    """
+    :rtype: tf.Tensor
+    """
+    assert not self.target.sparse, "sparse target values are not yet supported"
+    with tf.name_scope("loss_mean_l1"):
+      return self.reduce_func(tf.reduce_mean(tf.abs(self.target_flat - self.output_flat), axis=1))
+
+
 class ExternSprintLoss(Loss):
   """
   The loss is calculated by an extern Sprint instance.
