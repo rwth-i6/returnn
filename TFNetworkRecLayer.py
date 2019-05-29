@@ -1401,8 +1401,15 @@ class _SubnetworkRecCell(object):
     :return: output of shape (time, batch, dim), search choices
     :rtype: (tf.Tensor, SearchChoices)
     """
-    self._check_output_template_shape()
     from TFUtil import check_input_dim, tensor_array_stack
+
+    # The template network is already constructed at this point, but nothing else.
+    self._check_output_template_shape()
+    output_template = self.layer_data_templates["output"]
+    output_template_search_choices = output_template.get_search_choices()
+    if output_template_search_choices and output_template_search_choices.owner.network is not self.net:
+      # We are only interested in search choices happening inside this rec layer.
+      output_template_search_choices = None
 
     # dict to collect all data that will be fed from outside of the rec_layer. If present, this includes
     # the input ('source') and the target, but maybe also other additional extern data that is used inside the subnet.
@@ -1430,7 +1437,7 @@ class _SubnetworkRecCell(object):
           assert self.parent_rec_layer.input_data.beam_size == input_beam_size
       else:
         input_seq_len = None
-      if rec_layer.output.size_placeholder and not self.parent_net.search_flag:
+      if rec_layer.output.size_placeholder and not output_template_search_choices:
         # See LayerBase._post_init_output(). could be set via target or size_target...
         # This should only be the case in training.
         fixed_seq_len = rec_layer.output.size_placeholder[0]
@@ -1452,7 +1459,7 @@ class _SubnetworkRecCell(object):
         assert "end" in self.layer_data_templates, "length not defined, provide 'end' layer"
         max_seq_len = None
         have_known_seq_len = False
-      if not rec_layer.input_data and rec_layer.network.search_flag:
+      if not rec_layer.input_data and output_template_search_choices:
         assert not have_known_seq_len  # at least for the moment
 
       common_data_len = None  # used to check whether all extern data have same length
@@ -1464,7 +1471,7 @@ class _SubnetworkRecCell(object):
         # Maybe more generic via sampling options later.
         # noinspection PyProtectedMember
         if key == rec_layer.target and (
-              rec_layer.network.train_flag is False or self.parent_net.search_flag) and not rec_layer._cheating:
+              rec_layer.network.train_flag is False or output_template_search_choices) and not rec_layer._cheating:
           continue
         data = rec_layer.network.get_extern_data(key, mark_data_key_as_used=True)
         data_placeholder = data.get_placeholder_as_time_major()
@@ -1601,8 +1608,9 @@ class _SubnetworkRecCell(object):
 
         if collected_choices:
           output_beam_size = self.layer_data_templates["output"].get_search_beam_size()
-          assert output_beam_size is not None
-          if fixed_seq_len is not None:
+          # Note: output_beam_size can be None, if output itself does not depend on any choice,
+          # which might be uncommon, but is valid.
+          if fixed_seq_len is not None and output_beam_size is not None:
             assert input_beam_size in (1, None)
             from TFUtil import tile_transposed
             fixed_seq_len = tile_transposed(fixed_seq_len, axis=0, multiples=output_beam_size)  # (batch * beam,)
@@ -1995,10 +2003,12 @@ class _SubnetworkRecCell(object):
       assert layer.search_choices
 
     search_choices = None
-    if collected_choices:
+    output_choice_base = None
+    if "output" in rec_layer.cell.net.layers:
+      output_choice_base = self.net.get_search_choices(src=rec_layer.cell.net.layers["output"])
+    if collected_choices and output_choice_base:
       # Find next choice layer. Then iterate through its source choice layers through time
       # and resolve the output over time to be in line with the final output search choices.
-      output_choice_base = self.net.get_search_choices(src=rec_layer.cell.net.layers["output"])
       assert isinstance(output_choice_base, LayerBase)
       assert output_beam_size == output_choice_base.search_choices.beam_size
       initial_beam_choices = tf.range(0, output_beam_size)  # (beam_out,)
