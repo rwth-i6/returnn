@@ -1498,17 +1498,18 @@ class TFNetwork(object):
           return batch_dim
     raise Exception("We cannot tell the batch dim.")
 
-  def set_rec_step_info(self, i, end_flag=None, seq_lens=None):
+  def set_rec_step_info(self, i, end_flag=None, end_flag_source=None, seq_lens=None):
     """
     Used by _SubnetworkRecCell.
 
     :param tf.Tensor i: scalar, int32, current step (time)
     :param tf.Tensor|None end_flag: (batch,), bool, says that the current sequence has ended
+    :param LayerBase|None end_flag_source:
     :param tf.Tensor|None seq_lens: (batch,) int32, seq lens
     """
     from TFNetworkRecLayer import RecStepInfoLayer
     self.layers[":i"] = RecStepInfoLayer(
-      name=":i", network=self, i=i, end_flag=end_flag, seq_lens=seq_lens)
+      name=":i", network=self, i=i, end_flag=end_flag, end_flag_source=end_flag_source, seq_lens=seq_lens)
 
   def is_inside_rec_layer(self):
     """

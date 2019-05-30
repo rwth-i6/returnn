@@ -2001,6 +2001,8 @@ class SelectSearchSourcesLayer(InternalLayer):
     if search_choices:
       self.output = self.output.copy_extend_with_beam(search_choices.beam_size)
     src_search_choices = src.get_search_choices()
+    self.transform_func = None  # type: typing.Optional[typing.Callable[[tf.Tensor],tf.Tensor]]
+    self.search_choices_seq = None  # type: typing.Optional[typing.List[SearchChoices]]
     if not search_choices or search_choices == src_search_choices or not src_search_choices:
       pass
     else:
@@ -2027,6 +2029,8 @@ class SelectSearchSourcesLayer(InternalLayer):
           self.used_search_choices_beams = True
         return v
 
+      self.search_choices_seq = search_choices_seq
+      self.transform_func = transform
       # It's possible that src.output.placeholder is not set, e.g. in a prev-layer where the
       # prev output is not needed, only the prev state. See _TemplateLayer.copy_as_prev_time_frame.
       if src.output.placeholder is not None:

@@ -1153,6 +1153,8 @@ class _SubnetworkRecCell(object):
 
     prev_layers = {}  # type: typing.Dict[str,_TemplateLayer]
     for name in set(list(prev_outputs.keys()) + list(prev_extra.keys())):
+      if "prev:%s" % name in self.net.layers:
+        continue
       self.net.layers["prev:%s" % name] = prev_layers[name] = self.layer_data_templates[name].copy_as_prev_time_frame(
         prev_output=prev_outputs.get(name, None),
         rec_vars_prev_outputs=prev_extra.get(name, None))
@@ -1199,7 +1201,7 @@ class _SubnetworkRecCell(object):
         else:
           output.placeholder = inputs_moved_out_tas[layer_name].read(i)
         output.sanity_check()
-      layer = self.net.add_layer(name=name, output=output, layer_class=InternalLayer)
+      layer = self.net.add_layer(name=name, output=output, layer_class=InternalLayer, sources=[layer])
       inputs_moved_out[name] = layer
       return layer
 
@@ -1610,10 +1612,6 @@ class _SubnetworkRecCell(object):
           output_beam_size = self.layer_data_templates["output"].get_search_beam_size()
           # Note: output_beam_size can be None, if output itself does not depend on any choice,
           # which might be uncommon, but is valid.
-          if fixed_seq_len is not None and output_beam_size is not None:
-            assert input_beam_size in (1, None)
-            from TFUtil import tile_transposed
-            fixed_seq_len = tile_transposed(fixed_seq_len, axis=0, multiples=output_beam_size)  # (batch * beam,)
 
       if not have_known_seq_len:
         assert "end" in self.layer_data_templates, "You need to have an 'end' layer in your rec subnet."
@@ -1775,10 +1773,17 @@ class _SubnetworkRecCell(object):
           step_info_i += global_tensor(
             lambda: tf.placeholder(tf.int32, (), name="global_rec_step_offset"),
             name="global_rec_step_offset")
-        self.net.set_rec_step_info(
-          step_info_i, end_flag=seq_len_info[0] if seq_len_info else None, seq_lens=fixed_seq_len)
+        rec_step_info = dict(i=step_info_i, end_flag=None, seq_lens=fixed_seq_len)
+        end_flag, dyn_seq_len, prev_end_layer = None, None, None
+        if seq_len_info:
+          end_flag, dyn_seq_len = seq_len_info
+          rec_step_info["end_flag"] = end_flag
+          prev_end_layer = self.layer_data_templates["end"].copy_as_prev_time_frame(prev_output=end_flag)
+          self.net.layers["prev:end"] = prev_end_layer
+          rec_step_info["end_flag_source"] = prev_end_layer
+        self.net.set_rec_step_info(**rec_step_info)
         # get next loop vars (net_vars)
-        from TFUtil import identity_op_nested, select_src_beams
+        from TFUtil import identity_op_nested
         from Util import sorted_values_from_dict, dict_zip
         prev_outputs_flat, prev_extra_flat = net_vars
         assert len(prev_outputs_flat) == len(self._initial_outputs)  # subset of self.prev_layers_needed
@@ -1837,19 +1842,24 @@ class _SubnetworkRecCell(object):
         net_vars = (outputs_flat, extra_flat)
 
         if seq_len_info is not None:
-          end_flag, dyn_seq_len = seq_len_info
           choices = self.net.layers["end"].get_search_choices()
           assert choices, "no search choices in layer %r" % self.net.layers["end"]
+          from TFNetworkLayer import SelectSearchSourcesLayer
+          cur_end_layer = choices.translate_to_this_search_beam(prev_end_layer)
+          assert isinstance(cur_end_layer, SelectSearchSourcesLayer), (
+            "unexpected search choices: cur end %r, prev end %r" % (choices, prev_end_layer.get_search_choices()))
+          assert len(cur_end_layer.search_choices_seq) >= 1
           with tf.name_scope("end_flag"):
-            end_flag = select_src_beams(end_flag, src_beams=choices.src_beams)
+            end_flag = cur_end_layer.output.placeholder
             end_flag = tf.logical_or(end_flag, self.net.layers["end"].output.placeholder)  # (batch * beam,)
           with tf.name_scope("dyn_seq_len"):
-            dyn_seq_len = select_src_beams(dyn_seq_len, src_beams=choices.src_beams)
+            dyn_seq_len = cur_end_layer.transform_func(dyn_seq_len)
             dyn_seq_len += tf.where(
               end_flag,
               constant_with_shape(0, shape=tf.shape(end_flag)),
               constant_with_shape(1, shape=tf.shape(end_flag)))  # (batch * beam,)
             seq_len_info = (end_flag, dyn_seq_len)
+
         assert len(acc_tas) == len(outputs_to_accumulate)
         acc_tas = [
           acc_ta.write(i, out.get(), name="%s_acc_ta_write" % out.name)
@@ -1926,9 +1936,13 @@ class _SubnetworkRecCell(object):
         shape_invariants=shape_invariants,
         back_prop=self.net.train_flag is not False)
       if have_known_seq_len:
+        _, final_net_vars, final_acc_tas = final_loop_vars
         assert fixed_seq_len is not None
         seq_len = fixed_seq_len
-        _, final_net_vars, final_acc_tas = final_loop_vars
+        if output_beam_size is not None:
+          assert input_beam_size in (1, None)
+          from TFUtil import tile_transposed
+          seq_len = tile_transposed(seq_len, axis=0, multiples=output_beam_size)  # (batch * beam,)
       else:
         _, final_net_vars, final_acc_tas, (_, seq_len) = final_loop_vars
         max_seq_len = tf.reduce_max(seq_len, name="dyn_max_seq_len")
@@ -2334,7 +2348,8 @@ class _SubnetworkRecCell(object):
         # output.size_placeholder[0] = tf.minimum(output.size_placeholder[0] + 1, tf.shape(x)[0])
         # However, often we assume that we keep the same seq lens as the output layer.
         assert isinstance(self.input_layers_net, TFNetwork)
-        layer = self.input_layers_net.add_layer(name="prev:%s" % name, output=output, layer_class=InternalLayer)
+        layer = self.input_layers_net.add_layer(
+          name="prev:%s" % name, output=output, layer_class=InternalLayer, sources=[cur_layer])
         return layer
 
     # get_layer similar to in self._construct() but simplified.
@@ -2414,7 +2429,8 @@ class _SubnetworkRecCell(object):
             if not has_control_flow_context(size):  # copy if this size comes from outside the loop
               output.size_placeholder[i + 1] = size
         assert isinstance(self.output_layers_net, TFNetwork)
-        layer = self.output_layers_net.add_layer(name=name, output=output, layer_class=InternalLayer)
+        layer = self.output_layers_net.add_layer(
+          name=name, output=output, layer_class=InternalLayer, sources=[inner_layer])
         loop_acc_layers[name] = layer
         return layer
 
@@ -2438,7 +2454,8 @@ class _SubnetworkRecCell(object):
         # However, often we assume that we keep the same seq lens as the output layer.
         # output.size_placeholder[0] = seq_len. just don't modify. assert seq_len is not None
         assert isinstance(self.output_layers_net, TFNetwork)
-        layer = self.output_layers_net.add_layer(name="prev:%s" % name, output=output, layer_class=InternalLayer)
+        layer = self.output_layers_net.add_layer(
+          name="prev:%s" % name, output=output, layer_class=InternalLayer, sources=[cur_layer])
         prev_layers[name] = layer
         return layer
 
@@ -2714,34 +2731,57 @@ class RecStepInfoLayer(LayerBase):
   """
   Used by _SubnetworkRecCell.
   Represents the current step number.
+  Usually via :func:`TFNetwork.set_rec_step_info`.
   """
 
   layer_class = ":i"
 
-  def __init__(self, i, end_flag=None, seq_lens=None, **kwargs):
+  def __init__(self, i, end_flag=None, end_flag_source=None, seq_lens=None, **kwargs):
     """
     :param tf.Tensor i: scalar, int32, current step (time)
-    :param tf.Tensor|None end_flag: (batch,), bool, says that the current sequence has ended
+    :param tf.Tensor|None end_flag: (batch,), bool, says that the current sequence has ended.
+      Can be with beam. In that case, end_flag_source should be "prev:end", and define the search choices.
+    :param LayerBase|None end_flag_source:
     :param tf.Tensor|None seq_lens: (batch,) int32, seq lens
     """
     super(RecStepInfoLayer, self).__init__(
       output=Data(name="i", shape=(), dtype="int32", sparse=False, placeholder=tf.expand_dims(i, axis=0)),
       **kwargs)
     self.step = i
-    self.end_flag = end_flag
-    self.seq_lens = seq_lens
+    self._end_flag = end_flag
+    self.end_flag_source = end_flag_source
+    self._seq_lens = seq_lens
+    if seq_lens is None:
+      assert end_flag_source
 
-  def get_end_flag(self):
+  def get_end_flag(self, target_search_choices):
     """
+    :param SearchChoices|None target_search_choices:
     :return: (batch,) of type bool. batch might include beam size
     :rtype: tf.Tensor
     """
-    if self.end_flag is None:
-      assert self.seq_lens is not None
+    if self._end_flag is not None:
+      end_flag = self._end_flag
+    else:
+      assert self._seq_lens is not None
       from TFUtil import reuse_name_scope_of_tensor
       with reuse_name_scope_of_tensor(self.step, postfix="/end_flag"):
-        self.end_flag = tf.greater_equal(self.step, self.seq_lens)
-    return self.end_flag
+        end_flag = tf.greater_equal(self.step, self._seq_lens)
+    source_search_choices = None
+    if self.end_flag_source:
+      source_search_choices = self.end_flag_source.get_search_choices()
+    if target_search_choices:
+      if source_search_choices:
+        assert self.end_flag_source
+        end_flag_transformed_layer = target_search_choices.translate_to_this_search_beam(self.end_flag_source)
+        assert isinstance(end_flag_transformed_layer, LayerBase)
+        end_flag = end_flag_transformed_layer.output.placeholder
+      else:
+        from TFUtil import tile_transposed
+        end_flag = tile_transposed(end_flag, axis=0, multiples=target_search_choices.beam_size)
+    else:
+      assert not self.end_flag_source or not source_search_choices
+    return end_flag
 
 
 class RnnCellLayer(_ConcatInputLayer):
@@ -3397,8 +3437,9 @@ class ChoiceLayer(LayerBase):
           self.network.debug_search_choices(base_search_choice=self),
           "Not implemented yet. In rec-layer, we would always have our prev-frame as one previous search choice. "
           "Our deps: %r" % self.get_dep_layers())
-        scores_base = self.search_choices.src_layer.search_choices.beam_scores  # (batch, beam_in)
-        assert scores_base.get_shape().ndims == 2, "%r invalid" % self.search_choices.src_layer.search_choices
+        base_search_choices = self.search_choices.src_layer.search_choices
+        scores_base = base_search_choices.beam_scores  # (batch, beam_in)
+        assert scores_base.get_shape().ndims == 2, "%r invalid" % base_search_choices
         base_beam_in = tf.shape(scores_base)[1]  # 1 in first frame, then beam_in (beam_size)
         scores_beam_in = tf.shape(scores_in)[0] // net_batch_dim
         beam_size = self.sources[0].output.beam_size
@@ -3415,7 +3456,8 @@ class ChoiceLayer(LayerBase):
         if length_normalization:
           assert self.network.have_rec_step_info()
           t = self.network.get_rec_step_index()  # scalar
-          end_flags_flat = self.network.get_rec_step_info().get_end_flag()  # (batch * beam_in,)
+          end_flags_flat = self.network.get_rec_step_info().get_end_flag(
+            target_search_choices=base_search_choices)  # (batch * beam_in,)
           with tf.name_scope("length_normalization"):
             end_flags = tf.reshape(end_flags_flat, [net_batch_dim, beam_size])  # (batch, beam_in)
             end_flags = end_flags[:, :base_beam_in]  # see scores_in below
@@ -3430,7 +3472,8 @@ class ChoiceLayer(LayerBase):
         from TFUtil import filter_ended_scores
         if self.network.have_rec_step_info():
           scores_in = filter_ended_scores(
-            scores_in, end_flags=self.network.get_rec_step_info().get_end_flag(),
+            scores_in,
+            end_flags=self.network.get_rec_step_info().get_end_flag(target_search_choices=base_search_choices),
             dim=scores_in_dim, batch_dim=net_batch_dim * scores_beam_in)  # (batch * beam_in, dim)
         scores_in = tf.reshape(scores_in, [net_batch_dim, scores_beam_in, scores_in_dim])  # (batch, beam_in, dim)
         with tf.control_dependencies([
@@ -4937,7 +4980,9 @@ class EditDistanceTableLayer(LayerBase):
     self._last_row = self._rec_previous_layer.rec_vars_outputs["state"]
     from TFNativeOp import next_edit_distance_row
     self._next_row = next_edit_distance_row(
-      last_row=self._last_row, a=source_data.placeholder, a_n=rec_step_info.step, a_ended=rec_step_info.get_end_flag(),
+      last_row=self._last_row,
+      a=source_data.placeholder, a_n=rec_step_info.step,
+      a_ended=rec_step_info.get_end_flag(target_search_choices=self.get_search_choices()),
       b=target_data.placeholder, b_len=target_data.get_sequence_lengths())
     if debug:
       from TFUtil import py_print, vocab_idx_repr
@@ -4948,7 +4993,8 @@ class EditDistanceTableLayer(LayerBase):
           "choice", choice.owner.name,
           "src_beams", choice.src_beams if choice.src_beams is not None else "None"]
       print_out += [
-        "a_n", rec_step_info.step, "a_ended", rec_step_info.get_end_flag(),
+        "a_n", rec_step_info.step,
+        "a_ended", rec_step_info.get_end_flag(target_search_choices=self.get_search_choices()),
         "a", vocab_idx_repr(source_data.placeholder, target_data),
         "b", vocab_idx_repr(target_data.placeholder, target_data),
         "b_len", target_data.get_sequence_lengths(),
@@ -5059,7 +5105,9 @@ class OptimalCompletionsLayer(LayerBase):
     successors = tf.expand_dims(tf.range(target_data.dim), axis=0)
     rec_step_info = self.network.get_rec_step_info()
     reduce_out = next_edit_distance_reduce(
-      last_row=last_row, a=successors, a_n=rec_step_info.step, a_ended=rec_step_info.get_end_flag(),
+      last_row=last_row,
+      a=successors, a_n=rec_step_info.step,
+      a_ended=rec_step_info.get_end_flag(target_search_choices=self.get_search_choices()),
       b=target_data.placeholder, b_len=target_data.get_sequence_lengths(),
       optimal_completion=True)
     reduce_out.set_shape((None, target_data.dim))
@@ -5074,7 +5122,8 @@ class OptimalCompletionsLayer(LayerBase):
       top_values, top_indices = tf.nn.top_k(-reduce_out, k=5)  # (batch,K)
       top_values = -top_values
       print_out += [
-        "a_n", rec_step_info.step, "a_ended", rec_step_info.get_end_flag(),
+        "a_n", rec_step_info.step,
+        "a_ended", rec_step_info.get_end_flag(target_search_choices=self.get_search_choices()),
         "a best", vocab_idx_repr(top_indices, target_data), top_values,
         "b", vocab_idx_repr(target_data.placeholder, target_data),
         "b_len", target_data.get_sequence_lengths(),
