@@ -138,14 +138,12 @@ def main():
       version = time.strftime("1.%Y%m%d.%H%M%S", time.gmtime())
       print("Version via current time:", version)
 
-
   if os.environ.get("DEBUG", "") == "1":
     debug_print_file(".")
     debug_print_file("PKG-INFO")
     debug_print_file("pip-egg-info")
     debug_print_file("pip-egg-info/returnn.egg-info")
     debug_print_file("pip-egg-info/returnn.egg-info/SOURCES.txt")  # like MANIFEST
-
 
   if os.path.exists("PKG-INFO"):
     if os.path.exists("MANIFEST"):
@@ -157,7 +155,6 @@ def main():
   else:
     print("dummy package_data, does not matter, likely you are running sdist")
     package_data = ["MANIFEST"]
-
 
   setup(
     name='returnn',

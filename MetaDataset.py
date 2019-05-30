@@ -194,8 +194,8 @@ class MetaDataset(CachedDataset2):
     assert self.shuffle_frames_of_nseqs == 0  # not implemented. anyway only for non-recurrent nets
 
     self.data_map = data_map
-    self.dataset_keys = set([m[0] for m in self.data_map.values()]); ":type: set[str]"
-    self.data_keys = set(self.data_map.keys()); ":type: set[str]"
+    self.dataset_keys = set([m[0] for m in self.data_map.values()])  # type: typing.Set[str]
+    self.data_keys = set(self.data_map.keys())  # type: typing.Set[str]
     assert "data" in self.data_keys
     self.target_list = sorted(self.data_keys - {"data"})
     self.default_dataset_key = seq_order_control_dataset or self.data_map["data"][0]
@@ -382,7 +382,7 @@ class MetaDataset(CachedDataset2):
     :rtype: numpy.ndarray
     """
     dataset_key, dataset_data_key = self.data_map[data_key]
-    dataset = self.datasets[dataset_key]; ":type: Dataset"
+    dataset = self.datasets[dataset_key]  # type: Dataset
     return dataset.get_data(seq_idx, dataset_data_key)
 
   def _collect_single_seq(self, seq_idx):
@@ -779,9 +779,9 @@ class CombinedDataset(CachedDataset2):
     assert self.shuffle_frames_of_nseqs == 0  # not implemented. anyway only for non-recurrent nets
 
     self.rnd = Random(self.epoch)
-    self.dataset_keys = set([m[0] for m in data_map.keys()]); ":type: set[str]"
+    self.dataset_keys = set([m[0] for m in data_map.keys()])  # type: typing.Set[str]
     self.dataset_idx2key_map = dict(enumerate(sorted(self.dataset_keys)))  # idx -> dataset-key
-    self.data_keys = set(data_map.values()); ":type: set[str]"
+    self.data_keys = set(data_map.values())  # type: typing.Set[str]
     assert "data" in self.data_keys
     self.target_list = sorted(self.data_keys - {"data"})
 
@@ -804,8 +804,11 @@ class CombinedDataset(CachedDataset2):
     # noinspection PyBroadException
     try:
       self._num_seqs = sum([self.datasets[k].num_seqs for k in sorted(self.datasets.keys())])
+      self._estimated_num_seqs = None
+      self.estimated_num_seq_per_subset = None
       self.know_num_seqs_beforehand = True
     except Exception:
+      self._num_seqs = None
       self._estimated_num_seqs = sum([self.datasets[k].estimated_num_seqs for k in sorted(self.datasets.keys())])
       self.estimated_num_seq_per_subset = [self.datasets[k].estimated_num_seqs for k in sorted(self.datasets.keys())]
       self.know_num_seqs_beforehand = False
@@ -1041,7 +1044,7 @@ class CombinedDataset(CachedDataset2):
     :rtype: numpy.ndarray
     """
     dataset_data_key = self.target_lookup_table[dataset_key][data_key]
-    dataset = self.datasets[dataset_key]; ":type: Dataset"
+    dataset = self.datasets[dataset_key]  # type: Dataset
     if dataset_data_key is not None:
       return dataset.get_data(dataset_seq_idx, dataset_data_key)
     else:

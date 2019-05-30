@@ -4468,6 +4468,11 @@ class TimeUnChunkingLayer(_ConcatInputLayer):
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d:
+    :param TFNetwork.TFNetwork network:
+    :param get_layer:
+    """
     super(TimeUnChunkingLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
     if "chunking_layer" in d:
       d["chunking_layer"] = get_layer(d["chunking_layer"])
@@ -4994,7 +4999,8 @@ class CombineLayer(LayerBase):
       assert eval
       assert all([layer.output_loss is not None for layer in sources])
       self.output_loss = self._op_kind_eval(
-        sources=[InternalLayer(name=layer.name, network=self.network, output=Data.from_tensor(layer.output_loss)) for layer in sources],
+        sources=[InternalLayer(name=layer.name, network=self.network, output=Data.from_tensor(layer.output_loss))
+                 for layer in sources],
         eval_str=eval, eval_locals=eval_locals)
     if with_bias:
       with self.var_creation_scope():

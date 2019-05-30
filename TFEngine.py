@@ -34,7 +34,7 @@ from Log import log
 from Pretrain import pretrain_from_config
 from TFNetwork import TFNetwork, help_on_tf_exception
 from TFUpdater import Updater
-from Util import hms, NumbersDict, PY3, BackendEngine
+from Util import hms, NumbersDict, BackendEngine
 from pprint import pprint
 
 
