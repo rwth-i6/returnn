@@ -1995,6 +1995,7 @@ class SelectSearchSourcesLayer(InternalLayer):
     assert len(self.sources) == 1
     src = self.sources[0]
     self.search_choices_layer = search_choices
+    self.used_search_choices_beams = False
     search_choices = search_choices.get_search_choices()
     self.output = src.output.copy_as_batch_major()
     if search_choices:
@@ -2023,6 +2024,7 @@ class SelectSearchSourcesLayer(InternalLayer):
         for base_src_choices in reversed(search_choices_seq):
           assert isinstance(base_src_choices, SearchChoices)
           v = select_src_beams(v, src_beams=base_src_choices.src_beams)
+          self.used_search_choices_beams = True
         return v
 
       # It's possible that src.output.placeholder is not set, e.g. in a prev-layer where the
@@ -2035,7 +2037,10 @@ class SelectSearchSourcesLayer(InternalLayer):
     """
     :rtype: list[LayerBase]
     """
-    return super(SelectSearchSourcesLayer, self).get_dep_layers() + [self.search_choices_layer]
+    dep_layers = super(SelectSearchSourcesLayer, self).get_dep_layers()
+    if self.used_search_choices_beams:  # only in that case, it is really a dependency
+      dep_layers.append(self.search_choices_layer)
+    return dep_layers
 
   @classmethod
   def transform_config_dict(cls, d, network, get_layer):
