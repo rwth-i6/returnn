@@ -1448,10 +1448,18 @@ class TFNetwork(object):
       Wraps around `dict`, to catch any `__setitem__` calls.
       """
       def __setitem__(self, key, value):
+        """
+        :param LayerBase key:
+        :param value:
+        """
         print("  visit: %r" % (key,))
+        print("    sources: %s" % ", ".join([
+          "%r search choices %r" % (dep.get_absolute_name(), dep.search_choices)
+          for dep in key.get_dep_layers()] or ["None"]))
         super(Visitor, self).__setitem__(key, value)
 
-    self.get_search_choices(base_search_choice=base_search_choice, _visited=Visitor())
+    search_choices = self.get_search_choices(base_search_choice=base_search_choice, _visited=Visitor())
+    print("  search choices:", search_choices)
 
   def get_data_batch_dim(self):
     """
