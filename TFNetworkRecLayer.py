@@ -3338,12 +3338,10 @@ class ChoiceLayer(LayerBase):
     self.explicit_search_source = explicit_search_source
     self.scheduled_sampling = CollectionReadCheckCovered.from_bool_or_dict(scheduled_sampling)
     # We assume log-softmax here, inside the rec layer.
-    assert self.target and self.targets
 
     if self.search_flag:
       if cheating:
         print("%s: cheating enabled, i.e. we add the ground truth to the beam" % self, file=log.v2)
-      assert len(self.targets) == len(self.sources), "Provide a target for each of the sources."
       for source in self.sources:
         assert not source.output.sparse
       assert self.sources[0].output.dim == self.output.dim
@@ -3381,6 +3379,8 @@ class ChoiceLayer(LayerBase):
         else:
           scores_in = self._get_scores(self.sources[0])  # (batch * beam_size, dim)
           scores_in_dim = self.sources[0].output.dim
+          if scores_in_dim is None:  # can happen if variable length
+            scores_in_dim = tf.shape(self.sources[0].output.placeholder)[self.sources[0].output.feature_dim_axis]
           pruned_labels = None
 
         assert self.search_choices.src_layer, (
@@ -3670,8 +3670,12 @@ class ChoiceLayer(LayerBase):
     :param TFNetwork.TFNetwork network:
     :param ((str) -> LayerBase) get_layer: function to get or construct another layer
     """
-    if isinstance(d["target"], str):
-      d["target"] = [d["target"]]
+    if d.get("target", NotSpecified) is not None:
+      assert "target" in d, "%s: specify 'target' explicitly" % (cls.__name__,)
+      if isinstance(d["target"], str):
+        d["target"] = [d["target"]]
+      assert isinstance(d["target"], list)
+      assert len(d["target"]) == len(d["from"])
     search = NotSpecified.resolve(d.get("search", NotSpecified), network.search_flag)
     if not search and not d.get("scheduled_sampling"):
       # In the dependency graph, we don't want it.
