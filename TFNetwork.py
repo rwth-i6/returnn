@@ -465,6 +465,7 @@ class TFNetwork(object):
 
     if self.extra_net.recurrent:
       self.recurrent = True
+    self.used_data_keys.update(self.extra_net.used_data_keys)
 
   def _flat_construction_enabled(self):
     """
