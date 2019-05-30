@@ -403,6 +403,7 @@ class OpMaker(object):
       namespace _gpu {
         #ifdef _ns
           #undef _ns
+          #define _ns _ns
         #endif
         namespace _ns = ::_gpu;
         #undef CUDA
