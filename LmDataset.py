@@ -148,7 +148,6 @@ class LmDataset(CachedDataset2):
 
     if word_end_symbol and not word_based:  # Character-based modeling and word_end_symbol is specified.
       self.orth_replace_map[" "] = [word_end_symbol]  # Replace all spaces by word_end_symbol.
-      self.seq_end_symbol = word_end_symbol + " " + seq_end_symbol
 
     num_labels = len(self.labels["data"])
     use_uint_types = False
