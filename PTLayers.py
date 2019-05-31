@@ -399,12 +399,14 @@ class DataLayer(Layer):
 
 class PoolLayer(Layer):
   layer_class = "pool"
-  def __init__(self, factor, method="average", axis=0, padding=False, sample_target=False, **kwargs):
+  def __init__(self, factor, method="average", target='classes', axis=0, padding=False, sample_target=False, **kwargs):
     super(PoolLayer, self).__init__(**kwargs)
     self.attrs['method'] = method
     self.attrs['factor'] = factor
     self.attrs['padding'] = padding
     self.attrs['axis'] = axis
+    self.attrs['sample_target'] = sample_target
+    self.attrs['target'] = target
     self.attrs['n_out'] = sum([x.attrs['n_out'] for x in self.sources])
     self.avg = nn.AvgPool1d(factor, factor, factor // 2 if padding else 0)
     self.max = nn.MaxPool1d(factor, factor, factor // 2 if padding else 0)
@@ -427,6 +429,11 @@ class PoolLayer(Layer):
     else:
       raise NotImplementedError
     i = -self.max(-i.view(i.size(0), 1, i.size(1)).float())
+
+    if self.attrs['sample_target']:
+      y = self.network.data[self.attrs['target']].permute(1,0)
+      self.network.data[self.attrs['target']] = self.max(
+        y.view(y.size(0),1,y.size(1)).float()).view(y.size(0),-1).permute(1,0).long()
 
     if self.attrs['axis'] == 0:
       axes = [2, 0, 1]

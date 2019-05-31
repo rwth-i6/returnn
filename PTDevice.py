@@ -510,9 +510,9 @@ class Device(object):
         for k in target_keys:
           self.network.update_data(k, torch.from_numpy(self.data[k]).to(self.device),
                                    torch.from_numpy(self.index[k]).to(self.device))
-        self.network.tags = torch.from_numpy(
-          numpy.array(self.tags).astype('uint8').reshape(
-            (len(self.tags), max(map(len, self.tags))))).to(self.device)
+        #self.network.tags = torch.from_numpy(
+        #  numpy.asarray(self.tags).astype('uint8').reshape(
+        #    (len(self.tags), max(map(len, self.tags))))).to(self.device)
         self.update_total_time += time.time() - update_start_time
       elif cmd == "set-learning-rate":  # via self.set_learning_rate()
         learning_rate = input_queue.recv()

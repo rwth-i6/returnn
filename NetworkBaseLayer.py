@@ -601,7 +601,8 @@ class Layer(Container):
 
   def add_param(self, param, name="", constraints=True,
                 custom_update=None, custom_update_normalized=False, custom_update_exp_average=0,
-                custom_update_condition=None, custom_update_accumulate_batches=None):
+                custom_update_condition=None, custom_update_accumulate_batches=None,
+                live_update=None):
     """
     :type param: theano.SharedVariable
     :type name: str
@@ -615,6 +616,7 @@ class Layer(Container):
       param.custom_update_exp_average = custom_update_exp_average
       param.custom_update_condition = custom_update_condition
       param.custom_update_accumulate_batches = custom_update_accumulate_batches
+    param.live_update = live_update
     if constraints:
       if 'L1' in self.attrs and self.attrs['L1'] > 0:
         self.constraints += T.constant(self.attrs['L1'], name="L1", dtype='floatX') * abs(param).sum()

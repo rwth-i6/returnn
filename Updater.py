@@ -217,8 +217,8 @@ class Updater:
     else:
       self.update_on_device = False
       self.net_train_param_deltas = {p : theano.shared(numpy.zeros(p.get_value(borrow=True,
-                                                                              return_internal_type=True).shape,
-                                                                  dtype=theano.config.floatX))
+                                                                               return_internal_type=True).shape,
+                                                                               dtype=theano.config.floatX))
                                      for p in network.train_params_vars}
       " :type: dict[theano.compile.sharedvalue.SharedVariable,theano.compile.sharedvalue.SharedVariable] "
     self.learning_rate_var = theano.shared(value=numpy.cast[theano.config.floatX](0), name="learning_rate")
@@ -422,6 +422,9 @@ class Updater:
             accumulated_param_new / numpy.float32(param.custom_update_accumulate_batches),
             T.zeros_like(param)
           )
+        continue
+
+      if hasattr(param, 'live_update') and param.live_update is not None:
         continue
 
       if param.layer.device != self.device and param.layer.device is not None:
