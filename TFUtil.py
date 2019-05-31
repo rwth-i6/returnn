@@ -2918,6 +2918,17 @@ def gelu(x):
   return 0.5 * x * (1 + tf.tanh(numpy.sqrt(2 / numpy.pi) * (x + 0.044715 * tf.pow(x, 3))))
 
 
+def gelu2(x):
+  """
+  Another approximation of the GELU (https://github.com/hendrycks/GELUs).
+  Faster but less accurate than `gelu` (https://github.com/hendrycks/GELUs).
+
+  :param tf.Tensor x:
+  :rtype: tf.Tensor
+  """
+  return x * tf.sigmoid(1.702 * x)
+
+
 def random_uniform_abs_initializer(limit, **kwargs):
   """
   :param float|int|tf.Tensor limit:
