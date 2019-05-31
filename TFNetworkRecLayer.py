@@ -2643,7 +2643,8 @@ class _TemplateLayer(LayerBase):
     if not self.network.search_flag:
       return False
     if issubclass(self.layer_class_type, ChoiceLayer):
-      return NotSpecified.resolve(self.kwargs.get("search", NotSpecified), self.network.search_flag)
+      # Always has search_choices if we do search, even if search option is False explicitly.
+      return True
     return False
 
   def _get_search_choices_beam_size(self):
@@ -3373,7 +3374,7 @@ class ChoiceLayer(LayerBase):
     """
     super(ChoiceLayer, self).__init__(**kwargs)
     from Util import CollectionReadCheckCovered
-    from TFUtil import optional_add, optional_mul
+    from TFUtil import optional_add, optional_mul, batch_gather, expand_dims_unbroadcast
     search = NotSpecified.resolve(search, default=self.network.search_flag)
     assert isinstance(search, bool)
     if search:
@@ -3574,21 +3575,11 @@ class ChoiceLayer(LayerBase):
       # This is different from what we do here. There is no second pass.
       # Currently there is also no gradient through tf.multinomial but we could add that later.
       assert len(self.sources) == 1
-      scores_in = self.sources[0].output.get_placeholder_as_batch_major()  # (batch, dim)
-      # We present the scores in +log space, and we will add them up along the path.
-      if input_type == "prob":
-        scores_in = tf.log(scores_in)
-      elif input_type == "log_prob":
-        pass
-      elif input_type == "regression":
-        pass
-      else:
-        raise Exception("%r: invalid input type %r" % (self, input_type))
-
       if input_type == "regression":
-        feedback_output = scores_in
+        feedback_output = self.sources[0].output.get_placeholder_as_batch_major()  # (batch, dim)
       else:
         # sample from scores
+        scores_in = self._get_scores(self.sources[0])  # +log scores, (batch, dim)
         feedback_output = tf.multinomial(
           scores_in, num_samples=1, seed=get_random_seed())  # (batch, num_samples), int64
         feedback_output = tf.to_int32(tf.reshape(feedback_output, [-1]))  # (batch,), int32
@@ -3611,7 +3602,8 @@ class ChoiceLayer(LayerBase):
         available_for_inference=True)
 
     else:  # no search, and no scheduled-sampling
-      assert len(self.sources) == 0  # will be filtered out in transform_config_dict
+      if not self.network.search_flag:
+        assert len(self.sources) == 0  # will be filtered out in transform_config_dict
       # Note: If you want to do forwarding, without having the reference,
       # that wont work. You must do search in that case.
       # Put all targets in a list.
@@ -3627,12 +3619,30 @@ class ChoiceLayer(LayerBase):
       # We use the labels of the first target as "normal" output.
       self.output = self.output_list[0]
 
+    if self.network.search_flag and not search and input_type != "regression":
+      # We perform search, but this layer does not do search.
+      # But we still add our scores to the beam scores.
+      net_batch_dim = self.network.get_data_batch_dim()
+      base_search_choices = self.network.get_search_choices(base_search_choice=self).search_choices
+      self.search_choices = SearchChoices(
+        owner=self,
+        beam_size=base_search_choices.beam_size)
+      scores_base = base_search_choices.beam_scores  # (batch, beam_in|1)
+      scores_in = self._get_scores(self.sources[0])  # +log scores, (batch*beam_in, dim)
+      assert len(self.sources) == 1
+      scores_in_ = batch_gather(scores_in, self.output.placeholder)  # (batch*beam_in,)
+      scores_in_ = tf.reshape(scores_in_, (net_batch_dim, base_search_choices.beam_size))  # (batch,beam_in)
+      self.search_choices.src_beams = expand_dims_unbroadcast(
+        tf.range(base_search_choices.beam_size), axis=0, dim=net_batch_dim)
+      self.search_choices.set_beam_scores(scores_base + scores_in_)
+
   def _get_scores(self, source):
     """
     :param LayerBase source:
-    :return: scores in +log space
+    :return: scores in +log space, (batch,feature), batch might include beam
     :rtype: tf.Tensor
     """
+    assert source.output.is_batch_major
     scores_in = source.output.placeholder
     # We present the scores in +log space, and we will add them up along the path.
     if self.input_type == "prob":
@@ -3725,14 +3735,15 @@ class ChoiceLayer(LayerBase):
         d["target"] = [d["target"]]
       assert isinstance(d["target"], list)
       assert len(d["target"]) == len(d["from"])
-    search = NotSpecified.resolve(d.get("search", NotSpecified), network.search_flag)
-    if not search and not d.get("scheduled_sampling"):
+    if not network.search_flag and not d.get("scheduled_sampling"):
       # In the dependency graph, we don't want it.
       # This can enable some optimizations in the RecLayer.
       # We do it here because we should know about the deps early in the template creation in RecLayer.
+      # Note that we don't look at d.get("search") here, because in case of search,
+      # if there are other choice layers, we still need to add the scores to the beam.
       d["from"] = []
     if d.get("explicit_search_source"):
-      d["explicit_search_source"] = get_layer(d["explicit_search_source"]) if search else None
+      d["explicit_search_source"] = get_layer(d["explicit_search_source"]) if network.search_flag else None
     super(ChoiceLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
 
   @classmethod
