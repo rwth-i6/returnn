@@ -2388,7 +2388,7 @@ class _SubnetworkRecCell(object):
       return
 
     max_len = tf.reduce_max(seq_len) if seq_len is not None else None
-    from TFUtil import tensor_array_stack, has_control_flow_context, concat_with_opt_broadcast
+    from TFUtil import tensor_array_stack, has_control_flow_context, concat_with_opt_broadcast, tile_transposed
     from TFNetwork import TFNetwork, ExternData
     from TFNetworkLayer import InternalLayer
     self.output_layers_net = TFNetwork(
@@ -2420,10 +2420,13 @@ class _SubnetworkRecCell(object):
       with tf.name_scope(self.layer_data_templates[name].layer_class_type.cls_get_tf_scope_name(name)):
         inner_layer = self.net.layers[name]
         output = self.layer_data_templates[name].output.copy_template_adding_time_dim(time_dim_axis=0)
+        output.beam_size = inner_layer.output.beam_size
         # We should have accumulated it.
         output.placeholder = tensor_array_stack(
           loop_accumulated["output_%s" % name], stop=max_len)  # e.g. (time,batch,dim)
         output.size_placeholder = {0: seq_len}
+        if output.beam_size:
+          output.size_placeholder[0] = tile_transposed(seq_len, axis=0, multiples=output.beam_size)
         if inner_layer.output.size_placeholder:
           for i, size in inner_layer.output.size_placeholder.items():
             if not has_control_flow_context(size):  # copy if this size comes from outside the loop
