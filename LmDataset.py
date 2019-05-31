@@ -34,6 +34,7 @@ class LmDataset(CachedDataset2):
                orth_symbols_map_file=None,
                orth_replace_map_file=None,
                word_based=False,
+               word_end_symbol=None,
                seq_end_symbol="[END]",
                unknown_symbol="[UNKNOWN]",
                parse_orth_opts=None,
@@ -52,23 +53,26 @@ class LmDataset(CachedDataset2):
     mapping from symbol to integer index.
 
     :param str|()->str|list[str]|()->list[str] corpus_file: Bliss XML or line-based txt. optionally can be gzip.
-    :param dict|None phone_info: if you want to get phone seqs, dict with lexicon_file etc. see PhoneSeqGenerator
-    :param str|()->str|None orth_symbols_file: list of orthography symbols, if you want to get orth symbol seqs
-    :param str|()->str|None orth_symbols_map_file: list of orth symbols, each line: "symbol index"
-    :param str|()->str|None orth_replace_map_file: JSON file with replacement dict for orth symbols
-    :param bool word_based: whether to parse single words, or otherwise will be char-based
+    :param dict|None phone_info: if you want to get phone seqs, dict with lexicon_file etc. see PhoneSeqGenerator.
+    :param str|()->str|None orth_symbols_file: list of orthography symbols, if you want to get orth symbol seqs.
+    :param str|()->str|None orth_symbols_map_file: list of orth symbols, each line: "symbol index".
+    :param str|()->str|None orth_replace_map_file: JSON file with replacement dict for orth symbols.
+    :param bool word_based: whether to parse single words, or otherwise will be character based.
+    :param str|None word_end_symbol: If provided and if word_based is False (character based modeling), token to be used
+      to represent word ends.
     :param str|None seq_end_symbol: what to add at the end, if given.
       will be set as postfix=[seq_end_symbol] or postfix=[] for parse_orth_opts.
-    :param dict[str]|None parse_orth_opts: kwargs for parse_orthography()
-    :param int add_random_phone_seqs: will add random seqs with the same len as the real seq as additional data
+    :param str|None unknown_symbol: token to represent unknown words.
+    :param dict[str]|None parse_orth_opts: kwargs for parse_orthography().
+    :param int add_random_phone_seqs: will add random seqs with the same len as the real seq as additional data.
     :param bool|int log_auto_replace_unknown_symbols: write about auto-replacements with unknown symbol.
       if this is an int, it will only log the first N replacements, and then keep quiet.
     :param bool|int log_skipped_seqs: write about skipped seqs to logging, due to missing lexicon entry or so.
       if this is an int, it will only log the first N entries, and then keep quiet.
-    :param bool error_on_invalid_seq: if there is a seq we would have to skip, error
-    :param bool add_delayed_seq_data: will add another data-key "delayed" which will have the sequence
-      delayed_seq_data_start_symbol + original_sequence[:-1]
-    :param str delayed_seq_data_start_symbol: used for add_delayed_seq_data
+    :param bool error_on_invalid_seq: if there is a seq we would have to skip, error.
+    :param bool add_delayed_seq_data: will add another data-key "delayed" which will have the sequence.
+      delayed_seq_data_start_symbol + original_sequence[:-1].
+    :param str delayed_seq_data_start_symbol: used for add_delayed_seq_data.
     """
     super(LmDataset, self).__init__(**kwargs)
 
@@ -84,11 +88,17 @@ class LmDataset(CachedDataset2):
     print("LmDataset, loading file", corpus_file, file=log.v4)
 
     self.word_based = word_based
+    self.word_end_symbol = word_end_symbol
     self.seq_end_symbol = seq_end_symbol
     self.unknown_symbol = unknown_symbol
     self.parse_orth_opts = parse_orth_opts or {}
     self.parse_orth_opts.setdefault("word_based", self.word_based)
-    self.parse_orth_opts.setdefault("postfix", [self.seq_end_symbol] if self.seq_end_symbol is not None else [])
+    if self.word_end_symbol and not self.word_based:  # Character-based modeling and word_end_symbol is specified.
+      # In this case, sentences end with self.word_end_symbol followed by the self.seq_end_symbol.
+      self.parse_orth_opts.setdefault("postfix", [self.word_end_symbol, self.seq_end_symbol]
+                                      if self.seq_end_symbol is not None else [self.word_end_symbol])
+    else:
+      self.parse_orth_opts.setdefault("postfix", [self.seq_end_symbol] if self.seq_end_symbol is not None else [])
 
     if orth_symbols_file:
       assert not phone_info
@@ -135,6 +145,10 @@ class LmDataset(CachedDataset2):
           print("  orth_replace_map: %i entries" % len(self.orth_replace_map), file=log.v5)
     else:
       self.orth_replace_map = {}
+
+    if word_end_symbol and not word_based:  # Character-based modeling and word_end_symbol is specified.
+      self.orth_replace_map[" "] = [word_end_symbol]  # Replace all spaces by word_end_symbol.
+      self.seq_end_symbol = word_end_symbol + " " + seq_end_symbol
 
     num_labels = len(self.labels["data"])
     use_uint_types = False
@@ -297,9 +311,11 @@ class LmDataset(CachedDataset2):
         while True:
           orth_syms = sum([self.orth_replace_map.get(s, [s]) for s in orth_syms], [])
           i = 0
+          # For the character-based case, spaces have been replaced by word_end_symbol.
+          space_symbol = self.word_end_symbol if self.word_end_symbol and not self.word_based else " "
           while i < len(orth_syms) - 1:
-            if orth_syms[i:i+2] == [" ", " "]:
-              orth_syms[i:i+2] = [" "]  # collapse two spaces
+            if orth_syms[i:i+2] == [space_symbol, space_symbol]:
+              orth_syms[i:i+2] = [space_symbol]  # collapse two spaces
             else:
               i += 1
           if self.auto_replace_unknown_symbol:
