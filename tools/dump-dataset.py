@@ -156,33 +156,39 @@ def dump_dataset(dataset, options):
     stats.dump(output_file_prefix=options.dump_stats, stream_prefix="Data %r " % options.key, stream=log.v1)
 
 
-def init(config_str, verbosity):
+def init(config_str, config_dataset, verbosity):
   """
   :param str config_str: either filename to config-file, or dict for dataset
+  :param str|None config_dataset:
   :param int verbosity:
   """
   rnn.init_better_exchook()
   rnn.init_thread_join_hack()
-  datasetDict = None
-  configFilename = None
+  dataset_dict = None
+  config_filename = None
   if config_str.strip().startswith("{"):
     print("Using dataset %s." % config_str)
-    datasetDict = eval(config_str.strip())
+    dataset_dict = eval(config_str.strip())
   elif config_str.endswith(".hdf"):
-    datasetDict = {"class": "HDFDataset", "files": [config_str]}
-    print("Using dataset %r." % datasetDict)
+    dataset_dict = {"class": "HDFDataset", "files": [config_str]}
+    print("Using dataset %r." % dataset_dict)
     assert os.path.exists(config_str)
   else:
-    configFilename = config_str
-    print("Using config file %r." % configFilename)
-    assert os.path.exists(configFilename)
-  rnn.init_config(config_filename=configFilename, default_config={"cache_size": "0"})
+    config_filename = config_str
+    print("Using config file %r." % config_filename)
+    assert os.path.exists(config_filename)
+  rnn.init_config(config_filename=config_filename, default_config={"cache_size": "0"})
   global config
   config = rnn.config
   config.set("log", None)
   config.set("log_verbosity", verbosity)
-  if datasetDict:
-    config.set("train", datasetDict)
+  if dataset_dict:
+    assert not config_dataset
+    config.set("train", dataset_dict)
+  elif config_dataset:
+    config.set("train", "config:%s" % config_dataset)
+  else:
+    assert config.value("train", None)
   rnn.init_log()
   print("Returnn dump-dataset starting up.", file=log.v2)
   rnn.returnn_greeting()
@@ -195,6 +201,7 @@ def init(config_str, verbosity):
 def main():
   argparser = argparse.ArgumentParser(description='Dump something from dataset.')
   argparser.add_argument('crnn_config', help="either filename to config-file, or dict for dataset")
+  argparser.add_argument("--dataset", help="if given the config, specifies the dataset. e.g. 'dev'")
   argparser.add_argument('--epoch', type=int, default=1)
   argparser.add_argument('--startseq', type=int, default=0, help='start seq idx (inclusive) (default: 0)')
   argparser.add_argument('--endseq', type=int, default=10, help='end seq idx (inclusive) or -1 (default: 10)')
@@ -209,7 +216,7 @@ def main():
   argparser.add_argument('--stats', action="store_true", help="calculate mean/stddev stats")
   argparser.add_argument('--dump_stats', help="file-prefix to dump stats to")
   args = argparser.parse_args()
-  init(config_str=args.crnn_config, verbosity=args.verbosity)
+  init(config_str=args.crnn_config, config_dataset=args.dataset, verbosity=args.verbosity)
   try:
     dump_dataset(rnn.train_data, args)
   except KeyboardInterrupt:
