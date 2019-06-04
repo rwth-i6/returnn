@@ -2215,6 +2215,7 @@ class SliceNdLayer(_ConcatInputLayer):
   e.g. ``x[start:start + size]``.
   This layers allows a different start slice point for each batch,
   in contrast to :class:`SliceLayer`, and the start is variable.
+  See also :class:`GatherNdLayer`.
   """
   layer_class = "slice_nd"
 
@@ -2263,6 +2264,54 @@ class SliceNdLayer(_ConcatInputLayer):
     """
     super(SliceNdLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
     d["start"] = get_layer(d["start"])
+
+
+class GatherNdLayer(_ConcatInputLayer):
+  """
+  This takes out a position from some axis, e.g. ``x[pos]``.
+  This layers allows a different position for each batch.
+  See also :class:`SliceNdLayer`.
+  """
+  layer_class = "gather_nd"
+
+  def __init__(self, position, **kwargs):
+    """
+    :param LayerBase position:
+    """
+    super(GatherNdLayer, self).__init__(**kwargs)
+    from TFUtil import batch_gather
+    x = self.input_data.copy_as_batch_major()
+    position = position.output.get_placeholder_as_batch_major()
+    self.output.size_placeholder = x.size_placeholder.copy()
+    self.output.size_placeholder.pop(0, None)  # static time axis
+    self.output.placeholder = batch_gather(x.placeholder, position)  # (B,...)
+
+  @classmethod
+  def get_out_data_from_opts(cls, name, sources, position, **kwargs):
+    """
+    :param str name:
+    :param list[LayerBase] sources:
+    :param LayerBase position:
+    :rtype: Data
+    """
+    input_data = get_concat_sources_data_template(sources).copy_as_batch_major()
+    position_data = position.output.copy_template().copy_as_batch_major()
+    shape = list(position_data.shape) + list(input_data.shape)  # (B, ...) (w/o batch)
+    out_type = input_data.get_kwargs()
+    out_type["name"] = "%s_output" % name
+    out_type["shape"] = shape
+    out_type["batch_dim_axis"] = 0
+    return Data(**out_type)
+
+  @classmethod
+  def transform_config_dict(cls, d, network, get_layer):
+    """
+    :param dict[str] d:
+    :param TFNetwork.TFNetwork network:
+    :param get_layer:
+    """
+    super(GatherNdLayer, cls).transform_config_dict(d, network=network, get_layer=get_layer)
+    d["position"] = get_layer(d["position"])
 
 
 class LinearLayer(_ConcatInputLayer):
