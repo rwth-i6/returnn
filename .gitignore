@@ -22,3 +22,6 @@ ipython-kernel-*.json
 /MANIFEST
 /build
 /dist
+
+# via test cases run directly in this directory
+/dataset_id*
