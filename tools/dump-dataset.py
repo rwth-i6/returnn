@@ -65,6 +65,7 @@ def dump_dataset(dataset, options):
     print("Done.")
     return
 
+  dump_file = None
   if options.type == "numpy":
     print("Dump files: %r*%r" % (options.dump_prefix, options.dump_postfix), file=log.v3)
   elif options.type == "stdout":
@@ -77,6 +78,9 @@ def dump_dataset(dataset, options):
       Util.set_pretty_print_as_bytes(options.stdout_as_bytes)
   elif options.type == "print_tag":
     print("Dump seq tag to stdout", file=log.v3)
+  elif options.type == "dump_tag":
+    dump_file = open("%sseq-tags.txt" % options.dump_prefix, "w")
+    print("Dump seq tag to file: %s" % (dump_file.name,), file=log.v3)
   elif options.type == "print_shape":
     print("Dump shape to stdout", file=log.v3)
   elif options.type == "plot":
@@ -111,6 +115,9 @@ def dump_dataset(dataset, options):
       progress += " (%s)" % hms(remaining_estimated)
     if options.type == "print_tag":
       print("seq %s tag:" % (progress if log.verbose[2] else progress_prefix), dataset.get_tag(seq_idx))
+    elif options.type == "dump_tag":
+      print("seq %s tag:" % (progress if log.verbose[2] else progress_prefix), dataset.get_tag(seq_idx))
+      dump_file.write("%s\n" % dataset.get_tag(seq_idx))
     else:
       data = dataset.get_data(seq_idx, options.key)
       if options.type == "numpy":
@@ -154,6 +161,9 @@ def dump_dataset(dataset, options):
     seq_len_stats[key].dump(stream_prefix="Seq-length %r " % key, stream=log.v2)
   if stats:
     stats.dump(output_file_prefix=options.dump_stats, stream_prefix="Data %r " % options.key, stream=log.v1)
+  if dump_file:
+    print("Dumped to file:", dump_file.name, file=log.v2)
+    dump_file.close()
 
 
 def init(config_str, config_dataset, verbosity):
