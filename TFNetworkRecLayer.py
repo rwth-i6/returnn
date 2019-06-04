@@ -1466,15 +1466,7 @@ class _SubnetworkRecCell(object):
 
       common_data_len = None  # used to check whether all extern data have same length
       used_keys = self.net.used_data_keys.copy()
-      if rec_layer.target:
-        used_keys.add(rec_layer.target)  # we always need the target of the recurrent layer
       for key in sorted(used_keys):
-        # TODO: Better check for train_flag.
-        # Maybe more generic via sampling options later.
-        # noinspection PyProtectedMember
-        if key == rec_layer.target and (
-              rec_layer.network.train_flag is False or output_template_search_choices) and not rec_layer._cheating:
-          continue
         data = rec_layer.network.get_extern_data(key, mark_data_key_as_used=True)
         data_placeholder = data.get_placeholder_as_time_major()
         with tf.name_scope("check_data_len"):
@@ -3629,6 +3621,7 @@ class ChoiceLayer(LayerBase):
         target_out_data = self._static_get_target_value(
           target=target, network=self.network, mark_data_key_as_used=True).copy()
         target_out_data.available_for_inference = True  # in inference, we should do search
+        assert target_out_data.placeholder is not None
         self.output_list.append(target_out_data)
 
       # We use the labels of the first target as "normal" output.
