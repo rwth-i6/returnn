@@ -66,6 +66,19 @@ def _get_tmp_file(suffix):
   return fn
 
 
+def _cleanup_old_models(config):
+  """
+  :param Config config:
+  """
+  model_prefix = config.value("model", None)
+  from glob import glob
+  files = glob("%s.*" % model_prefix)
+  if files:
+    print("Delete old models:", files)
+    for fn in files:
+      os.remove(fn)
+
+
 session = tf.InteractiveSession()
 
 
@@ -147,6 +160,7 @@ def test_engine_train():
     "start_epoch": 1,
     "num_epochs": 2
   })
+  _cleanup_old_models(config)
   engine = Engine(config=config)
   engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
   engine.train()
@@ -193,6 +207,7 @@ def test_engine_train_uneven_batches():
     "tf_log_memory_usage": True,
     "log_batch_size": True
   })
+  _cleanup_old_models(config)
   engine = Engine(config=config)
   engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
   engine.train()
@@ -225,6 +240,7 @@ def test_engine_train_subnet_loss():
     "num_epochs": 1,
     "batch_size": 50
   })
+  _cleanup_old_models(config)
   engine = Engine(config=config)
   engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
   engine.train()
@@ -257,6 +273,7 @@ def test_engine_train_rec_subnet_loss_optimized():
     "num_epochs": 1,
     "batch_size": 50
   })
+  _cleanup_old_models(config)
   engine = Engine(config=config)
   engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
   engine.train()
@@ -290,6 +307,7 @@ def test_engine_train_rec_subnet_loss_non_optimized():
     "num_epochs": 1,
     "batch_size": 50
   })
+  _cleanup_old_models(config)
   engine = Engine(config=config)
   engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
   engine.train()
@@ -316,6 +334,7 @@ def test_engine_train_accum_grad_multiple_step():
     "num_epochs": 2,
     "accum_grad_multiple_step": 3,
   })
+  _cleanup_old_models(config)
   engine = Engine(config=config)
   engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
   engine.train()
@@ -342,6 +361,7 @@ def test_engine_train_accum_grad_multiple_step_sparse():
     "num_epochs": 2,
     "accum_grad_multiple_step": 3,
   })
+  _cleanup_old_models(config)
   engine = Engine(config=config)
   engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
   engine.train()
@@ -399,6 +419,7 @@ def test_engine_train_grad_noise_sparse():
     "gradient_noise": 0.3,
     "batch_size": 100
   })
+  _cleanup_old_models(config)
   engine = Engine(config=config)
   engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
   engine.train()
@@ -421,6 +442,7 @@ def test_engine_analyze():
     "network": {"output": {"class": "softmax", "loss": "ce"}},
     "sil_label_idx": 0,
   })
+  _cleanup_old_models(config)
   engine = Engine(config=config)
   # Normally init_network_from_config but that requires an existing network model.
   # engine.init_network_from_config(config=config)
@@ -446,6 +468,7 @@ def test_engine_forward_single():
     "num_inputs": n_data_dim,
     "network": {"output": {"class": "softmax", "loss": "ce"}}
   })
+  _cleanup_old_models(config)
   engine = Engine(config=config)
   engine.init_train_from_config(config=config, train_data=dataset, dev_data=None, eval_data=None)
 
@@ -474,6 +497,7 @@ def test_engine_forward_to_hdf():
     "network": {"output": {"class": "softmax", "loss": "ce"}},
     "output_file": output_file,
   })
+  _cleanup_old_models(config)
 
   engine = Engine(config=config)
   engine.init_train_from_config(config=config, train_data=dataset, dev_data=None, eval_data=None,)
@@ -528,6 +552,7 @@ def test_engine_rec_subnet_count():
           "out_type": {"dim": 1, "dtype": "int32"}}
       }}}
   })
+  _cleanup_old_models(config)
   engine = Engine(config=config)
   engine.init_train_from_config(config=config, train_data=dataset, dev_data=None, eval_data=None)
 
@@ -570,6 +595,7 @@ def check_engine_search(extra_rec_kwargs=None):
       "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance"}
     }
   })
+  _cleanup_old_models(config)
   engine = Engine(config=config)
   # Normally init_network can be used. We only do init_train here to randomly initialize the network.
   engine.init_train_from_config(config=config, train_data=dataset, dev_data=None, eval_data=None)
@@ -654,6 +680,7 @@ def check_engine_search_attention(extra_rec_kwargs=None):
     "debug_print_layer_output_template": True,
     "debug_print_layer_output_shape": True
   })
+  _cleanup_old_models(config)
   engine = Engine(config=config)
   print("Init network...")
   engine.start_epoch = 1
@@ -744,6 +771,7 @@ def check_engine_train_simple_attention(lstm_unit):
     "debug_print_layer_output_shape": True,
     "debug_add_check_numerics_on_output": True,
   })
+  _cleanup_old_models(config)
   engine = Engine(config=config)
   engine.init_train_from_config(config=config, train_data=dataset, dev_data=dataset, eval_data=None)
   print("Extern data:")
@@ -805,6 +833,7 @@ def test_attention_train_then_search():
     },
     "debug_print_layer_output_template": True,
   })
+  _cleanup_old_models(config)
   engine = Engine(config=config)
   print("Train...")
   engine.init_train_from_config(config=config, train_data=train_data, dev_data=dev_data)
@@ -881,6 +910,7 @@ def test_attention_search_in_train_then_search():
     "search_output_layer": "decision",
     "debug_print_layer_output_template": True
   })
+  _cleanup_old_models(config)
   engine = Engine(config=config)
   print("Train...")
   engine.init_train_from_config(config=config, train_data=train_data, dev_data=dev_data)
@@ -927,6 +957,7 @@ def test_rec_optim_all_out():
       "decision": {"class": "decide", "from": ["output"], "loss": "edit_distance"}
     }
   })
+  _cleanup_old_models(config)
   engine = Engine(config=config)
   # Normally init_network can be used. We only do init_train here to randomly initialize the network.
   engine.init_train_from_config(config=config, train_data=dataset, dev_data=None, eval_data=None)
@@ -1025,6 +1056,7 @@ def test_rec_subnet_train_t3b():
     "learning_rate": 0.01,
     "debug_add_check_numerics_ops": True
   })
+  _cleanup_old_models(config)
   engine = Engine(config=config)
   engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
   engine.train()
@@ -1080,6 +1112,7 @@ def test_rec_subnet_train_t3d():
     "learning_rate": 0.01,
     "debug_add_check_numerics_ops": True
   })
+  _cleanup_old_models(config)
   engine = Engine(config=config)
   engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
   engine.train()
@@ -1124,6 +1157,7 @@ def test_rec_subnet_train_t3d_simple():
     "learning_rate": 0.01,
     "debug_add_check_numerics_ops": True
   })
+  _cleanup_old_models(config)
   engine = Engine(config=config)
   engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
   engine.train()
@@ -1152,6 +1186,7 @@ def deterministic_train_check(layer_opts):
     "learning_rate": 0.01,
     "debug_add_check_numerics_ops": True
   })
+  _cleanup_old_models(config)
 
   from GeneratingDataset import DummyDataset
   seq_len = 5
@@ -1294,6 +1329,7 @@ def test_rec_subnet_auto_optimize():
     # Will always reinit the TF session and all random generators,
     # thus it should be deterministic.
     config = create_config(optimize_move_layers_out=optimize_move_layers_out)
+    _cleanup_old_models(config)
     engine = Engine(config=config)
     engine.init_train_from_config(config=config, train_data=train_data, dev_data=cv_data, eval_data=None)
 
@@ -1611,6 +1647,7 @@ def test_rec_subnet_eval_init_out_apply0():
     "learning_rate": 0.01,
     "debug_print_layer_output_template": True
   })
+  _cleanup_old_models(config)
 
   print("Create engine.")
   engine = Engine(config=config)
@@ -1970,6 +2007,7 @@ def test_TikhonovRegularizationLayer():
     "adam": True,
     "debug_print_layer_output_template": True,
   })
+  _cleanup_old_models(config)
   engine = Engine(config=config)
   engine.init_train_from_config(config=config, train_data=train_data, dev_data=dev_data, eval_data=None)
   print("Extern data:")
